@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 
 const GENESIS: &[u8; 23] = b"ZXS-PORTABLE-1/GENESIS\0";
 const CONFIRMED: &[u8; 25] = b"ZXS-PORTABLE-1/CONFIRMED\0";
-const FLOOR_LEN: usize = CONFIRMED.len() + 32 + 8 + 8 + 32;
+pub(crate) const FLOOR_LEN: usize = CONFIRMED.len() + 32 + 8 + 8 + 32;
 const MAX_ROWS: usize = 64;
-const MAX_GENESIS: usize = 77 + MAX_ROWS * (20 + MAX_PATH_BYTES) + 32;
+pub(crate) const MAX_GENESIS: usize = 77 + MAX_ROWS * (20 + MAX_PATH_BYTES) + 32;
 type Id = [u8; 16];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -110,7 +110,7 @@ impl<'a> Initial<'a> {
         Ok((row.path, row.limit, claim))
     }
 
-    fn check_zero_floor(&self, floor: &[u8]) -> Result<(), Invalid> {
+    pub(crate) fn check_zero_floor(&self, floor: &[u8]) -> Result<(), Invalid> {
         if floor.len() != FLOOR_LEN { return Err(Invalid::Floor); }
         let rest = floor.strip_prefix(CONFIRMED.as_slice()).ok_or(Invalid::Floor)?;
         if rest[..32] != self.digest || rest[32..48] != [0; 16] || rest[48..] != self.digest {
@@ -119,12 +119,18 @@ impl<'a> Initial<'a> {
         Ok(())
     }
 
+    /// A logical SYSTEM row; its path/owner still need an independent local origin.
+    pub(crate) fn system_row(&self, selected: &[u8], uid: u32) -> Result<(u8, Claim), Invalid> {
+        let (path, limit, claim) = self.row(0)?;
+        if self.uid != uid || path != selected { return Err(Invalid::System); }
+        Ok((limit, claim))
+    }
+
     /// Bytes supplied from a selected SYSTEM only; this does not observe a
     /// publication name, grant a lock, inspect other roots or issue a receipt.
     pub(crate) fn check_system_fields(&self, selected: &[u8], uid: u32, marker: &[u8],
                                       floor: &[u8]) -> Result<(), Invalid> {
-        let (path, _, claim) = self.row(0)?;
-        if self.uid != uid || path != selected { return Err(Invalid::System); }
+        let (_, claim) = self.system_row(selected, uid)?;
         claim.check_row(marker).map_err(|_| Invalid::Feedback)?;
         self.check_zero_floor(floor)
     }

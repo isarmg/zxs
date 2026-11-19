@@ -79,9 +79,18 @@ fn encoded_name_max(value: libc::c_long) -> io::Result<u8> {
 /// Component budget of this exact open directory, not a path-based guess.
 /// POSIX permits -1 without setting errno. Both indeterminate and error refuse
 /// the observation; never report an unrelated stale errno, zero, or default 255.
-#[allow(unsafe_code)]
 pub fn component_limit(dir: &File) -> io::Result<u8> {
-    if !local_object(dir)?.is_dir() { return Err(unsupported("NAME_MAX requires a held local directory")); }
+    local_object(dir)?; // preserve the historical MAINT-1 input boundary
+    portable_component_limit(dir)
+}
+
+/// Ordinary POSIX limit at this real directory; no filesystem brand or UUID
+/// is involved. This cannot establish whether a mount is suitable for storage.
+#[allow(unsafe_code)]
+pub fn portable_component_limit(dir: &File) -> io::Result<u8> {
+    if !dir.metadata()?.is_dir() || fcntl_getfl(dir)?.contains(OFlags::PATH) {
+        return Err(unsupported("NAME_MAX requires a real open directory"));
+    }
     // SAFETY: the borrowed real directory FD stays open. This fixed POSIX
     // query takes no pointer and changes neither directory nor filesystem.
     let raw = unsafe { libc::fpathconf(dir.as_raw_fd(), libc::_PC_NAME_MAX) };

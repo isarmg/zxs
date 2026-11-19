@@ -1,5 +1,6 @@
 //! Path resolution is through held directories. No operation here writes or adopts a path.
 pub(crate) mod storage_status;
+pub(crate) mod portable_pending;
 pub(crate) use crate::path_rules::Kind;
 
 use rustix::fs::{AtFlags, Mode, OFlags, PROC_SUPER_MAGIC, StatxAttributes, StatxFlags, fstatfs, open, openat, readlinkat, statx};
@@ -94,7 +95,9 @@ impl Pinned {
         if self.chain != now.chain || Mount::on(&now.fd)?.is_none_or(|m| m.id != original_mount.id) {
             return Err(invalid("original storage path, visible ancestry or mount changed"));
         }
-        let f = File::from(openat(&now.fd, c".", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW
+        // The fresh name is evidence only. Open "." relative to the FIRST held
+        // directory, so revalidation never changes the object receiving the open.
+        let f = File::from(openat(&self.fd, c".", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW
             | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
         if self.entity() != Entity::of(&f.metadata()?)?
             || Mount::on(&f)?.is_none_or(|m| m.id != original_mount.id) {
@@ -125,7 +128,7 @@ impl LocalDataFile {
     // Selection keeps the admitted regular-file handle alive. Reopening the operand's
     // pathname instead could read a different object or open a device or FIFO.
     pub(crate) fn reader(&self) -> io::Result<File> {
-        reopen_admitted_reader(&self.pin.fd, self.pin.entity(), self.magic)
+        reopen_admitted_reader(&self.pin.fd, self.pin.entity(), ReaderBoundary::DataFilesystem(self.magic))
     }
 }
 
@@ -138,14 +141,28 @@ pub(crate) fn private_inode_reader(pin: &File, uid: u32, expected_mount: u64) ->
         || Mount::on(pin)?.is_none_or(|v| v.id != expected_mount) {
         return Err(invalid("expected a singly linked private file pinned on its original mount"));
     }
-    let file = reopen_admitted_reader(pin, Entity::of(&m)?, local_data_filesystem(pin)?)?;
+    let file = reopen_admitted_reader(pin, Entity::of(&m)?, ReaderBoundary::DataFilesystem(local_data_filesystem(pin)?))?;
     if Mount::on(&file)?.is_none_or(|v| v.id != expected_mount) {
         return Err(invalid("opened file no longer has the selected mount"));
     }
     Ok(file)
 }
 
-fn reopen_admitted_reader(pin: &File, entity: Entity, magic: u32) -> io::Result<File> {
+// Unknown comparison inputs still have their prior filesystem allowlist. The other
+// caller only reads fixed private control names below a separately selected, held
+// storage directory. A current mount ID binds its descriptors, not its provenance.
+#[derive(Copy, Clone)]
+enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64) }
+impl ReaderBoundary {
+    fn matches(self, fd: &File) -> io::Result<bool> {
+        match self {
+            Self::DataFilesystem(magic) => Ok(filesystem(fd)? == Some(magic)),
+            Self::SelectedControlMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
+        }
+    }
+}
+
+fn reopen_admitted_reader(pin: &File, entity: Entity, boundary: ReaderBoundary) -> io::Result<File> {
     let proc = open("/proc", dir_flags(), Mode::empty())?;
     if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC {
         return Err(invalid("a genuine procfs for this process is required"));
@@ -175,7 +192,7 @@ fn reopen_admitted_reader(pin: &File, entity: Entity, magic: u32) -> io::Result<
     let original = check.metadata()?;
     if !original.is_file()
         || Entity::of(&original)? != entity
-        || filesystem(&check)? != Some(magic)
+        || !boundary.matches(&check)?
     {
         return Err(invalid("descriptor no longer selects the original regular file"));
     }
@@ -185,7 +202,7 @@ fn reopen_admitted_reader(pin: &File, entity: Entity, magic: u32) -> io::Result<
     if !observed.is_file() || Entity::of(&observed)? != entity {
         return Err(invalid("read descriptor did not resolve to the original regular file"));
     }
-    if filesystem(&result)? != Some(magic) {
+    if !boundary.matches(&result)? {
         return Err(invalid("read descriptor no longer belongs to the selected data filesystem"));
     }
     Ok(result)
