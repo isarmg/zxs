@@ -2,6 +2,8 @@
  * Source-only fixture. No Samba daemon, user credentials or actual share.
  * Call the native dispatcher used by smbd, not a duplicate deny predicate. */
 #include "includes.h"
+#include "smbd/smbd.h"
+#include "smbd/fd_handle.h"
 #include "smbd/zxs_file_vfs.h"
 
 int main(void)
@@ -10,6 +12,7 @@ int main(void)
 	const char *extra[] = {"zxs_file", "shadow_copy2", NULL};
 	const char *path[] = {"/tmp/zxs_file.so", NULL};
 	connection_struct *conn = talloc_zero(NULL, connection_struct);
+	files_struct fsp = {.conn = conn};
 	SMB_STRUCT_STAT untouched = {.st_ex_size = 42};
 	uint8_t marker = 0x35, id[16];
 	const char lower[] = "zxs-0102030405060708090a0b0c0d0e0fff";
@@ -66,6 +69,19 @@ int main(void)
 	    errno != ENOSYS ||
 	    smb_vfs_call_unlinkat(conn->vfs_handles,NULL,NULL,0) != -1 ||
 	    errno != ENOSYS) {
+		return 1;
+	}
+	/* Even a zero-length read on the installed business stack goes to
+	 * its real PREAD. The unbound terminal denies instead of reporting a
+	 * fabricated success. No native disk fd is provided to the FSP. */
+	fsp.fh = fd_handle_create(conn);
+	if (fsp.fh == NULL ||
+	    smb_vfs_call_strict_lock_check(conn->vfs_handles, &fsp, NULL) ||
+	    errno != ENOSYS ||
+	    read_file(&fsp, NULL, 17, 0) != -1 ||
+	    errno != ENOSYS ||
+	    read_file(&fsp, (char *)&marker, 17, 1) != -1 ||
+	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
 	TALLOC_FREE(conn);

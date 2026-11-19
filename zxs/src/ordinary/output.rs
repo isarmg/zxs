@@ -1,7 +1,7 @@
 //! A checked sink never retransmits accepted bytes when its post-write observation is interrupted.
 use std::io::{self,Write};
 pub(super) struct CheckedOutput<W,C>{pub(super) out:W,pub(super) check:C}
-fn after_output(check:&mut impl FnMut()->io::Result<()>)->io::Result<()>{
+pub(crate) fn after_output(check:&mut impl FnMut()->io::Result<()>)->io::Result<()>{
     // The sink has already accepted bytes. An interrupted fstat can retry
     // only that observation, never signal write_all to repeat the payload.
     loop{match check(){Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,r=>return r}}

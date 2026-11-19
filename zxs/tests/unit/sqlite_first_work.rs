@@ -224,3 +224,6 @@ fn compatible_read_snapshots_cross_a_real_first_writer_in_both_directions(){
 
 #[path="sqlite_directory.rs"]
 mod directory;
+
+#[path="sqlite_smb_read.rs"]
+mod smb_read;

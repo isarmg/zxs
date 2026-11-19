@@ -1801,3 +1801,74 @@
  	if (NT_STATUS_EQUAL(status, NT_STATUS_SHARING_VIOLATION)) {
  		sharing_violation = true;
  		status = NT_STATUS_OK; /* handled later */
+--- a/source3/smbd/smb2_read.c
++++ b/source3/smbd/smb2_read.c
+@@ -22,6 +22,7 @@
+ #include "system/filesys.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_file_vfs.h"
+ #include "../libcli/smb/smb_common.h"
+ #include "libcli/security/security.h"
+ #include "../lib/util/tevent_ntstatus.h"
+@@ -341,6 +342,10 @@
+ {
+ 	files_struct *fsp = state->fsp;
+ 
++	/* Stored business bytes must be checked before native signing and
++	 * output. Never select a raw/sendfile or fake-sendfile route. */
++	if (zxs_file_vfs_active(fsp->conn)) { return NT_STATUS_RETRY; }
++
+ 	/*
+ 	 * We cannot use sendfile if...
+ 	 * We were not configured to do so OR
+@@ -549,13 +554,21 @@
+ 		return tevent_req_post(req, ev);
+ 	}
+ 
+-	status = schedule_smb2_aio_read(fsp->conn,
+-				smbreq,
+-				fsp,
+-				state,
+-				&state->out_data,
+-				(off_t)in_offset,
+-				(size_t)in_length);
++	if (zxs_file_vfs_active(conn)) {
++		/* Select the original buffered READ path, not an unimplemented
++		 * PREAD_SEND or a silent fallback after it failed. Preserve the
++		 * same range rejection Samba normally performs in the AIO gate. */
++		status = vfs_valid_pread_range((off_t)in_offset,(size_t)in_length) ?
++			NT_STATUS_RETRY : NT_STATUS_INVALID_PARAMETER;
++	} else {
++		status = schedule_smb2_aio_read(fsp->conn,
++					smbreq,
++					fsp,
++					state,
++					&state->out_data,
++					(off_t)in_offset,
++					(size_t)in_length);
++	}
+ 
+ 	if (NT_STATUS_IS_OK(status)) {
+ 		/*
+--- a/source3/smbd/fileio.c
++++ b/source3/smbd/fileio.c
+@@ -23,6 +23,7 @@
+ #include "printing.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_file_vfs.h"
+ #include "smbprofile.h"
+ 
+ /****************************************************************************
+@@ -49,7 +50,9 @@
+ 
+ 	fh_set_pos(fsp->fh, pos);
+ 
+-	if (n > 0) {
++	/* Even an empty read of a business FSP needs a current grant. No
++	 * payload pointer is required when n == 0. Other stacks unchanged. */
++	if (n > 0 || zxs_file_vfs_active(fsp->conn)) {
+ 		ret = SMB_VFS_PREAD(fsp,data,n,pos);
+ 
+ 		if (ret == -1) {

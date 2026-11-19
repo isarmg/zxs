@@ -255,6 +255,44 @@ impl Current<'_,'_,'_>{
         match unsafe{sqlite3_step(q.0)}{100=>{},rc=>{check(rc)?;return Err(invalid("cannot observe SQLite data version"));}}
         let n=q.integer(0)?;q.done()?;Ok(n)
     }
+    /// One buffered synchronous SMB READ. Native negotiation, credits, FILE
+    /// access, byte range locks and MinimumCount/NT status are Samba's.
+    /// Keep partial checksum output private; hand off to the original native
+    /// request only after this entire window and its current source qualify.
+    pub(crate) fn smb_read_window<T>(&self,offset:u64,count:u32,consume:impl FnOnce(&[u8])->io::Result<T>)->io::Result<T>{
+        // Hard maximum of the pinned upstream negotiation (not the default
+        // 8 MiB). The actual connection may have negotiated less.
+        if count>0xffff00||offset.checked_add(u64::from(count)).is_none_or(|end|end>i64::MAX as u64){
+            return Err(invalid("invalid native SMB read request"));
+        }
+        let size=self.size();let start=offset.min(size);
+        let n=(size-start).min(u64::from(count)) as usize;
+        // The first write here occurs only after range_to's current SQL and
+        // held FILE checks. Reserve once, not once per verified fragment;
+        // an empty result allocates nothing.
+        struct Buffer{data:Vec<u8>,limit:usize}
+        impl Write for Buffer{
+            fn write(&mut self,bytes:&[u8])->io::Result<usize>{
+                if bytes.len()>self.limit-self.data.len(){return Err(invalid("oversized checked SMB read window"));}
+                if !bytes.is_empty()&&self.data.capacity()<self.limit{
+                    self.data.try_reserve_exact(self.limit-self.data.len())
+                        .map_err(|_|io::Error::other("cannot reserve a complete SMB read window"))?;
+                }
+                self.data.extend_from_slice(bytes);Ok(bytes.len())
+            }
+            fn flush(&mut self)->io::Result<()>{Ok(())}
+        }
+        let mut buffer=Buffer{data:Vec::new(),limit:n};
+        self.range_to(start,n as u64,&mut buffer)?;
+        if buffer.data.len()!=n{return Err(invalid("incomplete checked SMB read window"));}
+        // Even an empty/past-EOF result must pass the original grant. The
+        // handoff is only into the native request's pending reply, never a
+        // direct socket write. Retry an interrupted final check, not delivery.
+        let result=consume(&buffer.data)?;
+        crate::ordinary::after_output(&mut ||self.require())?;
+        Ok(result)
+    }
+
     pub(crate) fn range_to(&self,offset:u64,count:u64,mut out:impl Write)->io::Result<()>{
         if offset.checked_add(count).is_none_or(|end|end>self.size()){return Err(invalid("range outside this confirmed working EOF"));}
         let seen=Cell::new(None);

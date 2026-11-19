@@ -13,6 +13,7 @@ mod indexed;
 mod flat;
 pub(crate) use flat::work as working_sql;
 mod output;
+pub(crate) use output::after_output;
 mod interval;
 pub use interval::{save_interval,interval_receipt,read_current_range_to,SpanObservation};
 pub use interval::types::{SpanEdit,LengthPolicy,SpanReceipt};
