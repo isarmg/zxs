@@ -91,7 +91,7 @@ fn exact_bytes(a: &mut impl Read, mut remaining_a: u64, b: &mut impl Read, mut r
         let nb = remaining_b.min(right.len() as u64) as usize;
         a.read_exact(&mut left[..na])?;
         b.read_exact(&mut right[..nb])?;
-        same &= left[..na] == right[..nb];
+        same = same && left[..na] == right[..nb];
         remaining_a -= na as u64;
         remaining_b -= nb as u64;
     }
