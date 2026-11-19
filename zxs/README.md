@@ -2,6 +2,8 @@
 
 ZXS 是独立的 Linux 文件容器存储服务。**面向用户的入口只有 Web 管理界面和 SMB 文件共享。Web 不上传、预览、下载或转发普通文件正文；普通文件 I/O 走 SMB。当前主线已有本地存储内核，还没有可用的 Web 页面、HTTP 服务或 Samba VFS 接入。** 安装、systemd 配置和停机维护由独立的 helper 负责，不属于 ZXS 在线业务。
 
+**新存储方向：** SYSTEM、普通数据卷和回收卷只支持 Btrfs。手动首改 reflink 成一个可写稿，不后台全量复制；自动每个真实变更确认即有可独立读的正式节点，后台再做真实完整复制并切换同节点表示。Linux 在产品外挂载；ZXS 不格式化磁盘。以下是原内核当前源码，不能据此认为新格式已接通。[实施与替换计划](docs/btrfs-storage.md)
+
 ## 已有的业务源码
 
 - **名字和目录。** 在已登记普通卷根或已安装的子目录里创建、列出和精确定位 FILE。区分大小写，保留 UTF-8 原拼写；同层 `Report.xlsx` 与 `report.xlsx` 是两个名字，同层普通目录则会挡完全同名的 FILE。用户看到 `方案.xlsx`，真实容器为 `方案-<完整32位FileId>.xlsx`。不会从名字猜身份，也不会覆盖同名异物。[存储命名](docs/storage-names.md) · [目录中的 FILE](docs/files-in-directories.md)
