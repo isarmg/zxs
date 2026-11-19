@@ -13,6 +13,9 @@ impl Builder{
     fn new(path:&Path)->Self{
         let f=OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(path).unwrap();
         f.sync_all().unwrap();File::open(path.parent().unwrap()).unwrap().sync_all().unwrap();drop(f);
+        Self::existing(path)
+    }
+    fn existing(path:&Path)->Self{
         let p=CString::new(path.as_os_str().as_bytes()).unwrap();let mut db=ptr::null_mut();
         // Test fixture only. OS reservation already exists; no SQLite CREATE.
         check(unsafe{sqlite3_open_v2(p.as_ptr(),&mut db,2|0x01000000,c"unix".as_ptr())}).unwrap();Self(Connection(db))
@@ -91,4 +94,18 @@ fn readonly_wal_header_without_named_sidecars_is_rejected_without_creating_them(
     raw.sync_all().unwrap();drop(raw);let original=std::fs::read(&main).unwrap();
     assert!(InitialReader::open(&s,p).is_err());assert!(!wal.exists()&&!shm.exists());
     assert_eq!(std::fs::read(main).unwrap(),original);
+}
+
+#[test]
+#[ignore="source-only schema-change regression with non-root storage UID"]
+fn current_database_is_not_authorized_by_an_old_schema_match(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=record(&t,InitState::Committed,"");
+    let online=InitialReader::open(&s,p).unwrap();
+    // Fault injected via another connection to the SAME SQLite engine, not
+    // a raw file opener/closer. No maintenance permission is inferred.
+    let other=Builder::existing(&s.join("SYSTEM.sqlite3"));
+    other.exec("CREATE TABLE unforeseen(s INTEGER) STRICT;");
+    assert!(online.snapshot().is_err());
+    other.exec("DROP TABLE unforeseen;");
+    assert_eq!(online.snapshot().unwrap().state(),InitState::Committed);
 }

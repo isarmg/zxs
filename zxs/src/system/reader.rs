@@ -11,7 +11,8 @@ unsafe extern "C"{
     fn zxs_sql_path_limit()->c_int;
     fn zxs_sql_open_read(path:*const c_char,db:*mut *mut Db)->c_int;
     fn zxs_sql_named(db:*mut Db)->c_int;
-    fn zxs_sql_schema(db:*mut Db,ddl:*const c_char)->c_int;
+    fn zxs_sql_template(ddl:*const c_char,db:*mut *mut Db)->c_int;
+    fn zxs_sql_family(db:*mut Db)->c_int;
     fn sqlite3_prepare_v2(db:*mut Db,sql:*const c_char,n:c_int,s:*mut *mut Stmt,tail:*mut *const c_char)->c_int;
     fn sqlite3_bind_blob(s:*mut Stmt,k:c_int,x:*const c_void,n:c_int,drop_value:Option<unsafe extern "C" fn(*mut c_void)>)->c_int;
     fn sqlite3_step(s:*mut Stmt)->c_int;
@@ -19,6 +20,7 @@ unsafe extern "C"{
     fn sqlite3_close(db:*mut Db)->c_int;
     fn sqlite3_column_type(s:*mut Stmt,k:c_int)->c_int;
     fn sqlite3_column_blob(s:*mut Stmt,k:c_int)->*const c_void;
+    fn sqlite3_column_text(s:*mut Stmt,k:c_int)->*const u8;
     fn sqlite3_column_bytes(s:*mut Stmt,k:c_int)->c_int;
     fn sqlite3_column_int64(s:*mut Stmt,k:c_int)->i64;
     fn sqlite3_get_autocommit(db:*mut Db)->c_int;
@@ -42,6 +44,41 @@ impl Connection{
         let mut p=ptr::null_mut();
         check(unsafe{sqlite3_prepare_v2(self.0,sql.as_ptr(),-1,&mut p,ptr::null_mut())})?;
         if p.is_null(){return Err(invalid("SQLite returned no statement"));}Ok(Statement(p,self))
+    }
+    /// Call only for a fixed internal shape SELECT, never for FILE data or
+    /// user rows. No schema text, SQLite pointer or borrowed row escapes.
+    fn shape(&self)->io::Result<[u8;32]>{
+        use crate::hash::Sha256;
+        let s=self.prepare(c"SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT 65")?;
+        let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/SCHEMA-ROWS\0")?;
+        let mut count=0u16;let mut remaining=256*1024usize;
+        loop{match unsafe{sqlite3_step(s.0)}{
+            100=>{
+                count+=1;if count>64{return Err(invalid("unexpected schema object count"));}
+                for k in 0..4{
+                    match unsafe{sqlite3_column_type(s.0,k)}{
+                        5=>h.update(&[0])?, // NULL automatic index SQL is not empty text.
+                        3=>{
+                            let p=unsafe{sqlite3_column_text(s.0,k)};
+                            let n=usize::try_from(unsafe{sqlite3_column_bytes(s.0,k)}).map_err(|_|invalid("invalid schema cell size"))?;
+                            if p.is_null()||n>65536||n>remaining{return Err(invalid("schema metadata exceeds its qualified bound"));}
+                            remaining-=n;h.update(&[1])?;h.update(&(n as u32).to_be_bytes())?;
+                            // Same actual row bytes while the original statement is on SQLITE_ROW.
+                            h.update(unsafe{std::slice::from_raw_parts(p,n)})?;
+                        }
+                        _=>return Err(invalid("unexpected schema storage class")),
+                    }
+                }
+            }
+            101=>break,rc=>{check(rc)?;return Err(invalid("unexpected SQLite schema step"));}
+        }}
+        h.update(&count.to_be_bytes())?;Ok(h.finish())
+    }
+    fn expected_schema()->io::Result<[u8;32]>{
+        let ddl=CString::new(SCHEMA).expect("compiled static SQL is NUL-free");
+        let mut p=ptr::null_mut();check(unsafe{zxs_sql_template(ddl.as_ptr(),&mut p)})?;
+        if p.is_null(){return Err(invalid("SQLite returned no fixed in-memory template"));}
+        Connection(p).shape() // reference connection closes here, before any real read transaction
     }
     fn fixed(&self,sql:&CStr)->io::Result<()>{
         let s=self.prepare(sql)?;let rc=unsafe{sqlite3_step(s.0)};
@@ -96,7 +133,7 @@ impl Statement<'_>{
 pub(crate) struct InitialReader{
     // Drop order: SQLite closes FIRST, before either physical proof or the
     // last lifetime directory SH can be released. No borrowed DB is public.
-    conn:Connection,marker:ControlRead,dir:SystemDir,pool:PoolId,
+    conn:Connection,marker:ControlRead,dir:SystemDir,pool:PoolId,expected_schema:[u8;32],
 }
 impl InitialReader{
     pub(crate) fn open(system:&Path,expected:PoolId)->io::Result<Self>{
@@ -107,7 +144,8 @@ impl InitialReader{
         // non-DB control file. Only SQLite ever opens the DB or its journal.
         let marker=ControlRead::open(&dir.root,ROOT_MARK,101)?;dir.require()?;
         let conn=Connection::read(dir.path())?;
-        let s=Self{conn,marker,dir,pool:expected};
+        let expected_schema=Connection::expected_schema()?;
+        let s=Self{conn,marker,dir,pool:expected,expected_schema};
         s.snapshot()?;Ok(s)
     }
     pub(crate) fn snapshot(&self)->io::Result<Catalog>{
@@ -115,8 +153,8 @@ impl InitialReader{
         if unsafe{sqlite3_get_autocommit(self.conn.0)}==0{return Err(invalid("previous SQLite transaction did not close"));}
         self.conn.fixed(c"BEGIN")?;
         let result=(||{
-            let ddl=CString::new(SCHEMA).expect("compiled static SQL is NUL-free");
-            check(unsafe{zxs_sql_schema(self.conn.0,ddl.as_ptr())})?;
+            check(unsafe{zxs_sql_family(self.conn.0)})?;
+            if self.conn.shape()?!=self.expected_schema{return Err(invalid("SQLite schema differs from the exact qualified DDL"));}
             let select=CString::new(CATALOG).expect("compiled static SELECT is NUL-free");
             let s=self.conn.prepare(&select)?;
             // NULL destructor = SQLITE_STATIC; these 16 bytes belong to self
