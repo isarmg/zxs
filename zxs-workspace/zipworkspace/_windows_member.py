@@ -7,13 +7,15 @@ import zipfile
 from .archive import read_managed_document, stamp
 from .document import archive_sha
 from .model import CHUNK, Rejected, check_id, member_name
+from ._windows_access import OutputProtection
 from ._windows_output import PinnedParent, leaf, _NTError
 from ._windows_origin import check_mark, read_mark
 
 
 class _Member:
-    def __init__(self, src, dst, staging, doc, h, source_zone, snapshot, name, output, operation):
+    def __init__(self, src, dst, staging, protection, doc, h, source_zone, snapshot, name, output, operation):
         self.src, self.dst, self.staging, self.doc, self.h = src, dst, staging, doc, h
+        self.protection = protection
         self.snapshot, self.name, self.output = snapshot, name, output
         # A literal DOS 8.3 name avoids generating a second short spelling. The staging
         # parent is physically separate: even an old NTFS tunnel cannot expose the final name.
@@ -38,6 +40,7 @@ class _Member:
         self.check_source()
         staging.check()
         dst.check()
+        self.protection.check()
         dst.api.absent(dst.handle, output)  # Advisory; the atomic rename never replaces an occupant.
 
     def source_object(self):
@@ -92,23 +95,27 @@ class _Member:
         staging.check()
         dst.check()
         api.absent(dst.handle, self.output)
+        self.protection.check()
         # Establish both original directories admit normal local sync before creating a file.
         api.flush(staging.handle)
         api.flush(dst.handle)
         staging.check()
         dst.check()
+        self.protection.check()
         self.started = True
         try:
             with ExitStack() as new:
                 h = new.enter_context(api.new_file(staging.handle, self.stage))
                 stage_id = api.ordinary(h, staging.volume, staging.name(self.stage)).file_id
                 self._name_matches(h, staging, self.stage, stage_id, 0)
+                self.protection.check(h)  # Check the actual new file before writing even its zone.
                 api.absent(dst.handle, self.output)
                 zone = new.enter_context(api.new_zone(h))
                 api.write(zone, self.origin)
                 api.flush(zone)
                 self._name_matches(h, staging, self.stage, stage_id, 0, zone)
                 self.check_source()  # No member payload is written before both original marks pass.
+                self.protection.check(h)
                 self._copy(h)
                 api.flush(h)
                 api.verify_bytes(h, self.size, self.sha)  # Read back the held physical file, not the ZIP.
@@ -116,6 +123,7 @@ class _Member:
                 self.check_source()
                 staging.check()
                 dst.check()
+                self.protection.check(h)
                 self.renaming = True
                 try:
                     api.rename_new(h, dst.handle, self.output)
@@ -132,6 +140,7 @@ class _Member:
                 self.check_source()
                 staging.check()
                 dst.check()
+                self.protection.check(h)  # After both real directory barriers; never repair by name.
             return {"node": self.marker.operation, "archive_sha256": self.raw, "member": self.name,
                     "bytes": self.size, "sha256": self.sha, "new_file": dst.name(self.output)}
         except BaseException as err:
@@ -154,9 +163,10 @@ def selected_export(snapshot, member, destination_parent, filename, operation, *
 
     The caller must explicitly grant BOTH existing directories (including retained staging files)
     and keep them across consent. No writes at preparation. No implicit temp location or copy
-    fallback. Precondition for synthetic qualification: both locations are equally protected,
-    exclusive and unsynchronized. A rename need not inherit the destination ACL; this code
-    neither equates nor edits ACLs. Internal only, pending Windows and attachment qualification.
+    fallback. Only a matching narrow owner/DACL/default-integrity profile is admitted and the
+    new file itself must have the expected inherited grants. Existing holders, privileged or
+    same-user writers are not excluded by DACL observations; synthetic directories must remain
+    exclusive and unsynchronized. No account settings or ACL edits. Not a public writer.
     """
     if os.name != "nt": raise Rejected("this internal exporter requires a fixed local Windows NTFS volume")
     import msvcrt
@@ -172,6 +182,7 @@ def selected_export(snapshot, member, destination_parent, filename, operation, *
             if (staging.guid != dst.guid or staging.volume != dst.volume or
                     staging.chain[-1][1] == dst.chain[-1][1]):
                 raise Rejected("select separate staging and output directories on the same fixed local NTFS volume")
+            protection = OutputProtection(staging.handle, dst.handle)
             src = stack.enter_context(PinnedParent(snapshot.path.parent))
             own = src.api.input_file(src.handle, snapshot.path.name)
             h = stack.enter_context(own)
@@ -183,7 +194,7 @@ def selected_export(snapshot, member, destination_parent, filename, operation, *
             doc = stack.enter_context(os.fdopen(fd, "rb", closefd=False))
             # Opening this existing stream does not create, synthesize or infer a zone.
             source_zone = stack.enter_context(src.api.source_zone(h))
-            plan = _Member(src, dst, staging, doc, h, source_zone, snapshot, member, filename, operation)
+            plan = _Member(src, dst, staging, protection, doc, h, source_zone, snapshot, member, filename, operation)
             try: yield plan
             finally: plan.live = False
     except BaseException as err:

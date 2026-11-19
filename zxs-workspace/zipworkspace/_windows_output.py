@@ -5,6 +5,7 @@ import hashlib
 import os
 
 from .model import CHUNK, Rejected, member_name
+from ._windows_access import READ_CONTROL
 from ._windows_origin import DATA, ZONE, LIMIT, stream_lengths
 from .windows_folder import drive_path
 from .windows_nt import (Handle, Native, P, U16, U32, I32, I64, U64, _Object, _String,
@@ -77,14 +78,14 @@ class OutputNative(Native):
         # LIST_DIRECTORY participates in sharing. Pin each live ancestor without DELETE share.
         # FILE_ADD_FILE on the actual output directory also permits its normal NTFS flush request.
         return self._request(parent, name if parent is None else leaf(name),
-                             SYNC | ATTR | READ | 0x20 | (WRITE if output else 0), 3, OPEN, 0)
+                             SYNC | ATTR | READ | 0x20 | ((WRITE | READ_CONTROL) if output else 0), 3, OPEN, 0)
 
     def input_file(self, parent, name):
         return self._request(parent, leaf(name), SYNC | ATTR | READ, 1, OPEN, FILE_ONLY)
 
     def new_file(self, parent, name):
         # FILE_CREATE never opens an occupied leaf. Deny others data read/write/delete access.
-        return self._request(parent, leaf(name), SYNC | ATTR | READ | WRITE | DELETE, 0, CREATE, FILE_ONLY)
+        return self._request(parent, leaf(name), SYNC | ATTR | READ | WRITE | DELETE | READ_CONTROL, 0, CREATE, FILE_ONLY)
 
     def witness(self, parent, name):
         # Metadata only, sharing all access used by the original still-open data handle.

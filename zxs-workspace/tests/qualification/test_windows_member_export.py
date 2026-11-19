@@ -9,11 +9,11 @@ from dataclasses import replace
 import hashlib
 import os
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
 
+from zipworkspace._windows_access import NativeSecurity, OutputProtection
 from zipworkspace._windows_member import selected_export
 from zipworkspace._windows_output import PinnedParent
 from zipworkspace.desktop.selection import Selection
@@ -34,15 +34,29 @@ class OriginalMemberExport(unittest.TestCase):
         # Only an operator-owned, quiescent, disposable location appointed for this qualification.
         scratch = PinnedParent(SCRATCH, output=True)
         self.addCleanup(scratch.close)  # Keep every approved ancestor from setup to teardown.
-        native = Path(tempfile.mkdtemp(prefix="zw-test-", dir=scratch.chain[-1][2]))
-        self.root = Path(SCRATCH) / native.name
+        # Do not change the operator's ACL or create synthetic bytes in an unqualified scratch.
+        proof = NativeSecurity()
+        try: proof.read(scratch.handle, proof.caller(), directory=True)
+        except Rejected as err: self.skipTest(f"existing scratch/profile not applicable: {err}")
+        # Windows mkdtemp/mkdir(0700) can install a special Owner Rights ACL instead of
+        # inheriting this approved scratch. One new ordinary directory; never retry a collision.
+        name = "zw-test-" + new_id()
+        native = Path(scratch.chain[-1][2]) / name
+        native.mkdir()  # Default create security: no explicit descriptor or ACL mutation.
+        self.root = Path(SCRATCH) / name
         case = PinnedParent(self.root, output=True)
         self.addCleanup(case.close)
         if case.chain[-1][2] != str(native): raise Rejected("the synthetic case changed scope")
-        self.dst = self.root / "outer" / "destination"
-        self.dst.mkdir(parents=True)
-        self.staging = self.root / "staging"
+        proof.read(case.handle, proof.caller(), directory=True)
+        outer = self.root / "outer"
+        outer.mkdir()
+        self.dst, self.staging = outer / "destination", self.root / "staging"
+        self.dst.mkdir()
         self.staging.mkdir()
+        # Verify the real pair BEFORE constructing even the synthetic source payload. Do
+        # not retain these setup witnesses: the product must pin the selections for itself.
+        with PinnedParent(self.dst, output=True) as dst, PinnedParent(self.staging, output=True) as stage:
+            OutputProtection(stage.handle, dst.handle)
         self.archive = self.root / "loose.zxs"
         files = {"first/same.bin":b"not the chosen file", "second/same.bin":PAYLOAD, "zero":b""}
         manifest = Manifest()
@@ -194,6 +208,55 @@ class OriginalMemberExport(unittest.TestCase):
                 plan.dst.api.absent(plan.dst.handle, final)
             with patch.object(plan, "_copy", side_effect=actual_file): plan.publish()
         self.assertEqual((self.dst / final).read_bytes(), PAYLOAD)
+
+    def test_file_permissions_are_read_before_zone_and_final_profile_is_checked_after_real_rename(self):
+        with self.choice() as plan:
+            check = plan.protection.api.read
+            def refuse_file(handle, actor, *, directory):
+                actual = check(handle, actor, directory=directory)
+                if not directory: raise Rejected("injected refusal reading actual new file ACL")
+                return actual
+            with patch.object(plan.protection.api, "read", side_effect=refuse_file), \
+                    patch.object(plan.dst.api, "new_zone") as mark, patch.object(plan, "_copy") as copy:
+                with self.assertRaises(Rejected): plan.publish()
+                mark.assert_not_called()
+                copy.assert_not_called()
+        stage = self.staging / plan.stage
+        self.assertEqual(stage.stat().st_size, 0)
+        self.assertEqual(list(self.dst.iterdir()), [])
+
+        self.op = new_id()
+        with self.choice() as plan:
+            api, published = plan.dst.api, False
+            rename, read = api.rename_new, plan.protection.api.read
+            def move(*args):
+                nonlocal published
+                rename(*args)
+                published = True
+            def changed(handle, actor, *, directory):
+                actual = read(handle, actor, directory=directory)
+                if published and not directory: raise Rejected("injected changed final file permissions")
+                return actual
+            with patch.object(api, "rename_new", side_effect=move), \
+                    patch.object(plan.protection.api, "read", side_effect=changed):
+                with self.assertRaises(Rejected) as error: plan.publish()
+                self.assertTrue(any("Final name" in n for n in error.exception.__notes__))
+                with self.assertRaises(Rejected): plan.publish()
+        self.assertEqual((self.dst / "result.bin").read_bytes(), PAYLOAD)
+
+    def test_changed_original_directory_permissions_stop_before_creating_a_file(self):
+        with self.choice() as plan:
+            read = plan.protection.api.read
+            def changed(handle, actor, *, directory):
+                actual = read(handle, actor, directory=directory)
+                if handle == plan.dst.handle: raise Rejected("injected loss of approved directory profile")
+                return actual
+            with patch.object(plan.protection.api, "read", side_effect=changed), \
+                    patch.object(plan.dst.api, "new_file") as create:
+                with self.assertRaises(Rejected): plan.publish()
+                create.assert_not_called()
+        self.assertEqual(list(self.staging.iterdir()), [])
+        self.assertEqual(list(self.dst.iterdir()), [])
 
     def test_efs_observation_on_original_staging_directory_refuses_before_native_create(self):
         # Exercise the decision without changing the operator's encryption or access settings.
