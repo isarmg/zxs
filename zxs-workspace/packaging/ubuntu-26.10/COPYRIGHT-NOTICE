@@ -1,0 +1,31 @@
+ZIP Workspace – local packaging source and rights notice
+
+Source: https://github.com/isarmg/zxs/tree/main/zxs-workspace
+Project: ZIP Workspace, source version 0.1.0.dev0.
+The application and this recipe are provided in this source tree. This
+profile has not established a standalone redistribution license for the
+application. It does not grant one. Only package an authorized working
+copy for your own authorized use. A public binary distribution needs
+permission from the rights holder and an audit of the exact release.
+The package Maintainer is the contact provided by the local packager;
+it is not a copyright attribution or a statement of upstream endorsement.
+
+System components are obtained independently; none of the following
+implementations is copied into these three application packages.
+Ubuntu publishes per-source copyright and license notices:
+* CPython: https://docs.python.org/3.14/license.html
+  Installed interpreter: /usr/share/doc/python3.14/copyright
+* Qt for Python (PySide6), Qt 6 and platform plugins:
+  https://doc.qt.io/qtforpython-6/licenses.html
+  /usr/share/doc/python3-pyside6.qtwidgets/copyright
+  /usr/share/doc/qt6-qpa-plugins/copyright
+* pyfuse3, Trio and libfuse/fuse3:
+  /usr/share/doc/python3-pyfuse3/copyright
+  /usr/share/doc/python3-trio/copyright
+  /usr/share/doc/fuse3/copyright
+* dpkg-deb is a host packaging tool only:
+  /usr/share/doc/dpkg/copyright
+
+Dependency versions, Ubuntu source-package links and verification gates
+are listed in the packaging profile's README. Those dependencies retain
+their own licenses, not a shared application-wide license.

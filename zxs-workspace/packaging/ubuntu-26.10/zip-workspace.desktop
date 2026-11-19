@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ZIP Workspace
+Name[zh_CN]=ZIP 工作树
+Comment=Browse ZIP snapshots and manage local worktrees
+Comment[zh_CN]=浏览 ZIP 快照并管理本机工作树
+Exec=/usr/bin/zip-workspace-desktop
+TryExec=/usr/bin/zip-workspace-desktop
+Icon=package-x-generic
+Terminal=false
+Categories=Utility;Archiving;

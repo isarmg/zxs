@@ -1,4 +1,6 @@
 """The Linux desktop controls one explicit, independently served read-only snapshot."""
+from importlib.util import find_spec
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
@@ -10,6 +12,8 @@ class MountPane(QWidget):
     def __init__(self, owner):
         super().__init__()
         self.owner, self.selection = owner, None
+        # Presence only: do not import the native binding, probe /dev/fuse or install anything.
+        self.component = all(find_spec(n) is not None for n in ("zipworkspace._fuse3", "pyfuse3", "trio"))
         self.planning, self.process, self.origin = False, None, None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
@@ -26,14 +30,14 @@ class MountPane(QWidget):
         self.cancel = button("取消只读挂载的归档核验", self.abort)
         bar.addWidget(self.banner_note); bar.addWidget(self.cancel)
         self.banner.hide()
-        self.result = label("尚未请求挂载。")
+        self.result = label("尚未请求挂载。" if self.component else "未装完整的可选挂载组件；仍可浏览及比较归档。")
         layout.addWidget(self.result)
         layout.addStretch()
         self.buttons()
 
     def buttons(self):
         p = self.process
-        self.pick.setEnabled(not self.planning and p is None and self.selection is not None
+        self.pick.setEnabled(self.component and not self.planning and p is None and self.selection is not None
                              and self.selection.held is not None and not self.selection.held.closed)
         can_cancel = p is not None and not p.sent and not p.cancelled and not p.exited
         self.cancel.setEnabled(can_cancel)
@@ -57,7 +61,7 @@ class MountPane(QWidget):
 
     def choose(self):
         s = self.selection
-        if s is None or self.planning or self.process is not None or self.owner.pending is not None: return
+        if not self.component or s is None or self.planning or self.process is not None or self.owner.pending is not None: return
         self.planning = True
         self.buttons()
         plan = None

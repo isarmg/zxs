@@ -186,7 +186,8 @@ class DesktopMount(unittest.TestCase):
         from zipworkspace.desktop import mount_pane as ui
         from zipworkspace.desktop.window import Window
         app = QApplication.instance() or QApplication([])
-        win = Window(); self.addCleanup(win.close)
+        with mock.patch.object(ui, "find_spec", return_value=object()): win = Window()
+        self.addCleanup(win.close)
         pane = win.archive.mount
         def dispatch(title, work, done, **kw):
             f = Future()
@@ -206,6 +207,22 @@ class DesktopMount(unittest.TestCase):
         self.link.send(b"R"); pane.set_snapshot(None); self.proc.poll.return_value = 0
         pane.poll()
         self.assertIsNone(pane.process); self.assertIn("未向助手发出挂载授权",pane.result.text())
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra")
+    def test_gui_without_mount_component_never_reaches_picker_or_native_binding(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import mount_pane as ui
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with mock.patch.object(ui, "find_spec", return_value=None): win = Window()
+        self.addCleanup(win.close)
+        pane = win.archive.mount
+        pane.set_snapshot(self.selection)
+        self.assertFalse(pane.pick.isEnabled())
+        self.assertIn("可选挂载组件", pane.result.text())
+        with mock.patch.object(ui.QFileDialog, "getExistingDirectory", side_effect=AssertionError("no component")):
+            pane.choose()
+        self.assertIsNone(pane.process)
 
     @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra")
     def test_actual_window_keeps_cancel_enabled_with_ready_helper_and_an_unrelated_pending_job(self):
