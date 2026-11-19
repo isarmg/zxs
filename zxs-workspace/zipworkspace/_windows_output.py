@@ -3,9 +3,9 @@ from contextlib import ExitStack
 import ctypes as c
 import hashlib
 import os
-import struct
 
 from .model import CHUNK, Rejected, member_name
+from ._windows_origin import DATA, ZONE, LIMIT, stream_lengths
 from .windows_folder import drive_path
 from .windows_nt import (Handle, Native, P, U16, U32, I32, I64, U64, _Object, _String,
                          _Standard, _IO, _function)
@@ -47,6 +47,7 @@ class OutputNative(Native):
         n = c.WinDLL("ntdll.dll", use_last_error=True, winmode=0x800)
         k = c.WinDLL("kernel32.dll", use_last_error=True, winmode=0x800)
         self.set_info = _function(n, "NtSetInformationFile", I32, P, c.POINTER(_IO), P, U32, I32)
+        self.query_info = _function(n, "NtQueryInformationFile", I32, P, c.POINTER(_IO), P, U32, I32)
         self.flush_ex = _function(n, "NtFlushBuffersFileEx", I32, P, U32, P, U32, c.POINTER(_IO))
         self.write_file = _function(k, "WriteFile", I32, P, P, U32, c.POINTER(U32), P)
 
@@ -104,16 +105,34 @@ class OutputNative(Native):
             raise Rejected("not the original ordinary single-link named NTFS file")
         return row
 
-    def only_default_stream(self, h, size):
-        # No alternate source evidence (including Zone.Identifier) is silently stripped.
-        # This is not an attachment trust/signing policy for a released Windows extractor.
-        buf = (U64 * 64)()
-        if not self.file_info(h, 7, c.byref(buf), c.sizeof(buf)):
-            raise Rejected("cannot prove the complete native stream list")
-        nxt, n, length, allocation = struct.unpack_from("<IIqq", bytes(buf))
-        default = "::$DATA".encode("utf-16-le")
-        if nxt or n != len(default) or bytes(buf)[24:24+n] != default or length != size or allocation < 0:
-            raise Rejected("a named stream, unverified origin or unexpected data length is present")
+    def streams(self, primary):
+        # Fixed local NTFS, synchronous original: refuse overflow or a partial/unknown shape.
+        buf, io = (U64 * (LIMIT // 8))(), _IO()
+        rc = self.query_info(primary, c.byref(io), c.byref(buf), c.sizeof(buf), 22)
+        _ok("enumerate original NTFS streams", rc, io)
+        if io.information > c.sizeof(buf): raise Rejected("invalid NTFS stream extent")
+        return stream_lengths(bytes(buf)[:io.information])
+
+    def only_default_stream(self, primary, size):
+        if self.streams(primary) != {DATA:size}:
+            raise Rejected("new output already carries other data streams")
+
+    # The related FILE_OBJECT for an ADS can be the already open primary data stream.
+    # Never open an adjacent pathname or accept an archive-controlled stream name.
+    def source_zone(self, primary):
+        try: return self._request(primary, ZONE, SYNC | ATTR | READ, 1, OPEN, FILE_ONLY)
+        except _NTError as err:
+            if err.code in (0xc0000034, 0xc000000f):
+                raise Rejected("unmarked archive: local storage alone is not proof of trust") from err
+            raise
+
+    def new_zone(self, primary):
+        # DELETE sharing is required by our already-held primary DELETE handle; data writes
+        # by another opener are denied. FILE_CREATE only: never replace or repair a mark.
+        return self._request(primary, ZONE, SYNC | ATTR | READ | WRITE, 5, CREATE, FILE_ONLY)
+
+    def zone_witness(self, primary):
+        return self._request(primary, ZONE, SYNC | ATTR | READ, 7, OPEN, FILE_ONLY)
 
     def require_case_insensitive(self, h):
         flags = U32(0xffffffff)
@@ -132,10 +151,13 @@ class OutputNative(Native):
             raise c.WinError(c.get_last_error())
         if got.value != len(data): raise Rejected("incomplete native write; nothing was retried")
 
-    def verify_bytes(self, h, size, sha):
+    def rewind(self, h):
         io, position = _IO(), I64(0)
         rc = self.set_info(h, c.byref(io), c.byref(position), c.sizeof(position), 14)
-        _ok("rewind held output", rc, io)
+        _ok("rewind held data stream", rc, io)
+
+    def verify_bytes(self, h, size, sha):
+        self.rewind(h)
         out, left = hashlib.sha256(), size
         while left:
             b = self.read(h, min(left, CHUNK))

@@ -8,10 +8,11 @@ from .archive import read_managed_document, stamp
 from .document import archive_sha
 from .model import CHUNK, Rejected, check_id, member_name
 from ._windows_output import PinnedParent, leaf, _NTError
+from ._windows_origin import check_mark, read_mark
 
 
 class _Member:
-    def __init__(self, src, dst, staging, doc, h, snapshot, name, output, operation):
+    def __init__(self, src, dst, staging, doc, h, source_zone, snapshot, name, output, operation):
         self.src, self.dst, self.staging, self.doc, self.h = src, dst, staging, doc, h
         self.snapshot, self.name, self.output = snapshot, name, output
         # A literal DOS 8.3 name avoids generating a second short spelling. The staging
@@ -20,7 +21,9 @@ class _Member:
         self.stage = key[:8] + "." + key[8:11]  # 44-bit lookup only; FILE_CREATE collision always stops.
         self.live, self.used, self.started, self.renaming = True, False, False, False
         self.marker = snapshot.browser.commit
-        self.original = self.check_source()
+        self.source_zone = source_zone
+        self.original = self.source_object()
+        self.origin = read_mark(src.api, h, source_zone)
         record = next((row for path,row in snapshot.browser.verified_entries() if path == name), None)
         if record is None or record.kind != "file": raise Rejected("select one original regular member, not a directory")
         self.size, self.sha = record.size_bytes, record.sha256
@@ -37,17 +40,20 @@ class _Member:
         dst.check()
         dst.api.absent(dst.handle, output)  # Advisory; the atomic rename never replaces an occupant.
 
-    def check_source(self):
+    def source_object(self):
         self.src.check()
         api, original = self.src.api, self.snapshot
         pathname = self.src.name(original.path.name)
         row = api.ordinary(self.h, self.src.volume, pathname)
-        api.only_default_stream(self.h, row.size)
         with api.witness(self.src.handle, original.path.name) as named:
             if (api.ordinary(named, self.src.volume, pathname) != row or
                     stamp(self.doc) != original.observed or row != getattr(self, "original", row)):
                 raise Rejected("not the same selected archive instance and generation")
         return row
+
+    def check_source(self):
+        self.source_object()
+        check_mark(self.src.api, self.h, self.source_zone, self.origin)
 
     def _copy(self, output):
         # The source has been fully admitted; its held handle denies external data writers/deletion.
@@ -67,7 +73,7 @@ class _Member:
                 if member.read(1) or digest.hexdigest() != self.sha:
                     raise Rejected("the copied member differs from its verified size or SHA-256")
 
-    def _name_matches(self, h, parent, leafname, first_id, size):
+    def _name_matches(self, h, parent, leafname, first_id, size, zone=None):
         api, exact = self.dst.api, parent.name(leafname)
         held = api.ordinary(h, parent.volume, exact)
         if held.file_id != first_id or held.size != size:
@@ -75,7 +81,8 @@ class _Member:
         with api.witness(parent.handle, leafname) as witness:
             if api.ordinary(witness, parent.volume, exact) != held:
                 raise Rejected("the relative output name no longer identifies the held new file")
-        api.only_default_stream(h, held.size)
+        if zone is None: api.only_default_stream(h, held.size)
+        else: check_mark(api, h, zone, self.origin)
 
     def publish(self):
         if not self.live or self.used: raise Rejected("this exact member export was closed or already attempted")
@@ -92,14 +99,20 @@ class _Member:
         dst.check()
         self.started = True
         try:
-            with api.new_file(staging.handle, self.stage) as h:
+            with ExitStack() as new:
+                h = new.enter_context(api.new_file(staging.handle, self.stage))
                 stage_id = api.ordinary(h, staging.volume, staging.name(self.stage)).file_id
                 self._name_matches(h, staging, self.stage, stage_id, 0)
-                api.absent(dst.handle, self.output)  # Recheck the actual namespace BEFORE any member bytes.
+                api.absent(dst.handle, self.output)
+                zone = new.enter_context(api.new_zone(h))
+                api.write(zone, self.origin)
+                api.flush(zone)
+                self._name_matches(h, staging, self.stage, stage_id, 0, zone)
+                self.check_source()  # No member payload is written before both original marks pass.
                 self._copy(h)
                 api.flush(h)
                 api.verify_bytes(h, self.size, self.sha)  # Read back the held physical file, not the ZIP.
-                self._name_matches(h, staging, self.stage, stage_id, self.size)
+                self._name_matches(h, staging, self.stage, stage_id, self.size, zone)
                 self.check_source()
                 staging.check()
                 dst.check()
@@ -108,13 +121,13 @@ class _Member:
                     api.rename_new(h, dst.handle, self.output)
                 except _NTError as err:
                     if err.code == 0xc0000035:  # STATUS_OBJECT_NAME_COLLISION, not a generic failure.
-                        self._name_matches(h, staging, self.stage, stage_id, self.size)
+                        self._name_matches(h, staging, self.stage, stage_id, self.size, zone)
                         self.renaming = False
                         raise FileExistsError("another file already occupies the output name") from err
                     raise
                 api.flush(dst.handle)
                 api.flush(staging.handle)
-                self._name_matches(h, dst, self.output, stage_id, self.size)
+                self._name_matches(h, dst, self.output, stage_id, self.size, zone)
                 api.absent(staging.handle, self.stage)
                 self.check_source()
                 staging.check()
@@ -168,7 +181,9 @@ def selected_export(snapshot, member, destination_parent, filename, operation, *
             stack.callback(os.close, fd)
             msvcrt.setmode(fd, os.O_BINARY)  # A CRT descriptor mode, not a system or file setting.
             doc = stack.enter_context(os.fdopen(fd, "rb", closefd=False))
-            plan = _Member(src, dst, staging, doc, h, snapshot, member, filename, operation)
+            # Opening this existing stream does not create, synthesize or infer a zone.
+            source_zone = stack.enter_context(src.api.source_zone(h))
+            plan = _Member(src, dst, staging, doc, h, source_zone, snapshot, member, filename, operation)
             try: yield plan
             finally: plan.live = False
     except BaseException as err:

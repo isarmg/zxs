@@ -24,6 +24,8 @@ from zipworkspace.refs import Node
 
 SCRATCH = os.environ.get("ZIPWORKSPACE_NTFS_EXPORT_SCRATCH")
 PAYLOAD = b"the selected subdirectory's ordinary member\0\r\n\x1a\xff\xfe" * 137
+MARK = b"[ZoneTransfer]\r\nZoneId=3\r\n"
+RESTRICTED = b"[ZoneTransfer]\nZoneId=4"
 
 
 @unittest.skipUnless(os.name == "nt" and SCRATCH, "explicit disposable Windows fixed-local NTFS scratch required")
@@ -50,6 +52,8 @@ class OriginalMemberExport(unittest.TestCase):
         with zipfile.ZipFile(self.archive, "x", compression=zipfile.ZIP_STORED) as z:
             for name, body in files.items(): z.writestr(name, body)
             z.comment = marker.encode()
+        with open(str(self.archive) + ":Zone.Identifier", "xb") as evidence:
+            evidence.write(MARK)
         self.picked = Selection.open(self.archive)
         self.op = new_id()
 
@@ -67,6 +71,8 @@ class OriginalMemberExport(unittest.TestCase):
                 self.assertEqual((result["member"], result["sha256"]), (path, hashlib.sha256(body).hexdigest()))
                 with self.assertRaises(Rejected): plan.publish()
             self.assertEqual((self.dst / output).read_bytes(), body)
+            with open(str(self.dst / output) + ":Zone.Identifier", "rb") as evidence:
+                self.assertEqual(evidence.read(), MARK)  # Exact CRLF bytes; no regenerated zone.
             self.assertFalse((self.staging / plan.stage).exists())
             self.op = new_id()
         with self.choice(output="cancelled.bin") as discarded: pass
@@ -78,11 +84,78 @@ class OriginalMemberExport(unittest.TestCase):
         bad = ("1" if sha[0] != "1" else "0") + sha[1:]
         foreign = Node(marker=self.picked.browser.commit, path=self.archive, sha256=bad, observed=self.picked.observed)
         with self.assertRaises(Rejected), self.choice(selected=replace(self.picked, exact=foreign)): pass
-        # Changing source evidence does not silently export an unmarked default stream.
-        with open(str(self.archive) + ":Zone.Identifier", "xb") as ads:
-            ads.write(b"[ZoneTransfer]\r\nZoneId=3\r\n")
+        # Never discard an unrelated source stream to make the archive acceptable.
+        with open(str(self.archive) + ":other", "xb") as ads: ads.write(b"unrecognized synthetic metadata")
         with self.assertRaises(Rejected), self.choice(selected=Selection.open(self.archive)): pass
         self.assertEqual(list(self.dst.iterdir()), [])
+        self.assertEqual(list(self.staging.iterdir()), [])
+
+    def test_unmarked_ambiguous_unapproved_and_oversized_evidence_is_never_inferred_or_stripped(self):
+        # All files below are newly created synthetic copies; never alter an existing mark.
+        for i, mark in enumerate((None, b"", b"[ZoneTransfer]\nZoneId=9", MARK + b"ZoneId=4\r\n",
+                                  MARK + b"HostUrl=https://example.invalid/private\r\n", b"x" * 512)):
+            path = self.root / f"badmark{i}.zxs"
+            with path.open("xb") as f: f.write(self.archive.read_bytes())
+            if mark is not None:
+                with open(str(path) + ":Zone.Identifier", "xb") as ads: ads.write(mark)
+            with self.assertRaises(Rejected), self.choice(selected=Selection.open(path)): pass
+        self.assertEqual(list(self.dst.iterdir()), [])
+        self.assertEqual(list(self.staging.iterdir()), [])
+
+    def test_restricted_mark_is_preserved_byte_for_byte_and_its_held_stream_is_flushed_before_copy(self):
+        path = self.root / "restricted.zxs"
+        with path.open("xb") as f: f.write(self.archive.read_bytes())
+        with open(str(path) + ":Zone.Identifier", "xb") as zone: zone.write(RESTRICTED)
+        with self.choice(selected=Selection.open(path)) as plan:
+            original, events = plan.dst.api.flush, []
+            def flush(h):
+                outcome = original(h)
+                events.append(h)
+                return outcome
+            copy = plan._copy
+            def member(h):
+                self.assertEqual(len(events), 3)  # Two real parent preflights, then the ADS flush.
+                self.assertNotIn(events[-1], (plan.staging.handle, plan.dst.handle, h))
+                return copy(h)
+            with patch.object(plan.dst.api, "flush", side_effect=flush), patch.object(plan, "_copy", side_effect=member):
+                plan.publish()
+        with open(str(self.dst / "result.bin") + ":Zone.Identifier", "rb") as zone:
+            self.assertEqual(zone.read(), RESTRICTED)  # Exact LF and lack of final newline also preserved.
+
+    def test_origin_flush_failure_never_enters_copy_or_creates_unmarked_final(self):
+        with self.choice() as plan:
+            original = plan.dst.api.flush
+            def barrier(h):
+                if h not in (plan.staging.handle, plan.dst.handle):
+                    raise OSError("injected refusal to flush the original new origin stream")
+                original(h)
+            with patch.object(plan.dst.api, "flush", side_effect=barrier), patch.object(plan, "_copy") as copy:
+                with self.assertRaises(OSError): plan.publish()
+                copy.assert_not_called()
+        self.assertEqual((self.staging / plan.stage).stat().st_size, 0)
+        self.assertEqual(list(self.dst.iterdir()), [])
+
+    def test_final_origin_cannot_be_rechecked_reports_uncertain_and_never_repairs_by_name(self):
+        with self.choice() as plan:
+            api, renamed = plan.dst.api, False
+            rename, witness = api.rename_new, api.zone_witness
+            def native_rename(*args):
+                nonlocal renamed
+                rename(*args)
+                renamed = True
+            def verify(primary):
+                if renamed: raise OSError("injected final stream name verification failure")
+                return witness(primary)
+            with patch.object(api, "new_zone", wraps=api.new_zone) as create, \
+                    patch.object(api, "rename_new", side_effect=native_rename), \
+                    patch.object(api, "zone_witness", side_effect=verify):
+                with self.assertRaises(OSError) as error: plan.publish()
+                self.assertTrue(any("Final name" in note for note in error.exception.__notes__))
+                create.assert_called_once()  # Never reattach the mark to a path to obtain "success".
+                with self.assertRaises(Rejected): plan.publish()
+        self.assertEqual((self.dst / "result.bin").read_bytes(), PAYLOAD)
+        with open(str(self.dst / "result.bin") + ":Zone.Identifier", "rb") as evidence:
+            self.assertEqual(evidence.read(), MARK)
 
     def test_missing_or_directory_member_and_occupied_leaf_or_stage_do_not_write_an_existing_file(self):
         for nonfile in ("same.bin", "first", "First/same.bin"):
@@ -113,6 +186,10 @@ class OriginalMemberExport(unittest.TestCase):
             def actual_file(h):
                 self.assertEqual(plan.dst.api.guid_name(h), plan.staging.name(short))
                 plan.dst.api.absent(plan.dst.handle, final)
+                # This is the original staged primary handle, not a path that might have changed.
+                with plan.dst.api.zone_witness(h) as ads:
+                    from zipworkspace._windows_origin import read_mark
+                    self.assertEqual(read_mark(plan.dst.api, h, ads), MARK)
                 copy(h)
                 plan.dst.api.absent(plan.dst.handle, final)
             with patch.object(plan, "_copy", side_effect=actual_file): plan.publish()
@@ -148,6 +225,7 @@ class OriginalMemberExport(unittest.TestCase):
         with self.choice() as plan:
             write = plan.dst.api.write
             def incomplete(h, data):
+                if data == MARK: return write(h, data)  # Only truncate the payload, not the origin.
                 with self.assertRaises(OSError): (self.staging / plan.stage).open("r+b").close()
                 write(h, data[:-1])
             with patch.object(plan.dst.api, "write", side_effect=incomplete), self.assertRaises(Rejected):
