@@ -64,3 +64,53 @@ fn browse_one_parent_then_reuse_only_the_explicit_original_published_version(){
     assert_eq!(io::Error::from(original.try_lock().unwrap_err()).kind(),io::ErrorKind::WouldBlock);
     drop(v);original.try_lock().unwrap();original.unlock().unwrap();
 }
+
+// Captures the actual representation response fields and body given to a
+// transport. No listener, HTTP parser, session or SMB server is simulated.
+fn download(v:&PublishedVersion,method:zxs::web::ReadMethod,range:&[&[u8]],condition:&[&[u8]])
+    ->(u16,std::collections::BTreeMap<String,String>,Vec<u8>){
+    let mut status=0;let mut fields=std::collections::BTreeMap::new();let mut body=Vec::new();
+    let (s,h,w)=(&mut status,&mut fields,&mut body);
+    zxs::web::send_published(v,method,range,condition,move |code,items|{
+        *s=code;for (k,val) in items{assert!(h.insert((*k).to_owned(),(*val).to_owned()).is_none());}Ok(w)
+    }).unwrap();
+    (status,fields,body)
+}
+#[test]
+#[ignore="original registered native roots and two real documents; no HTTP listener or credentials"]
+fn the_web_download_uses_one_selected_version_for_headers_range_and_real_body(){
+    use zxs::web::{ReadMethod::{Get,Head},send_published};
+    use std::io::Write;
+    let home=support::PrivateTemp::under(&std::env::temp_dir());
+    let other=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
+    let sys=home.child("system");let data=home.child("data");let bin=other.child("bin");
+    let reg=zxs::initialize(op(),&sys,&bin,std::slice::from_ref(&data)).unwrap();
+    let root=DirectoryParent::Root(reg.volumes.iter().find(|v|v.volume.path==data).unwrap().id);
+    let(a,f)=seed(&sys,root,"Report.xlsx",b"abc",ABC);
+    let(b,g)=seed(&sys,root,"report.xlsx",b"hello",HELLO);
+    let selected=PublishedVersion::open_listed(&sys,reg.id,root,&a,f.node).unwrap();
+    let unrelated=PublishedVersion::open_listed(&sys,reg.id,root,&b,g.node).unwrap();
+    let(code,h,body)=download(&selected,Head,&[b"bytes=1-2"],&[]);
+    assert_eq!(code,200);assert_eq!(h["Content-Length"],"3");assert!(!h.contains_key("Content-Range"));assert!(body.is_empty());
+    let tag=h["ETag"].as_bytes();let(_,other_h,_)=download(&unrelated,Head,&[],&[]);assert_ne!(tag,other_h["ETag"].as_bytes());
+    let(s,h,body)=download(&selected,Get,&[b"bytes=1-2"],&[tag]);
+    assert_eq!(s,206);assert_eq!(h["Content-Length"],"2");assert_eq!(h["Content-Range"],"bytes 1-2/3");assert_eq!(body,b"bc");
+    let(s,h,body)=download(&selected,Get,&[b"bytes=1-2"],&[other_h["ETag"].as_bytes()]);
+    assert_eq!(s,200);assert_eq!(h["Content-Length"],"3");assert!(!h.contains_key("Content-Range"));assert_eq!(body,b"abc");
+    let(s,h,body)=download(&selected,Get,&[b"bytes=3-"],&[]);
+    assert_eq!(s,416);assert_eq!(h["Content-Length"],"0");assert_eq!(h["Content-Range"],"bytes */3");assert!(body.is_empty());
+
+    // Once a response has begun a later error must reach the caller. No
+    // recovery full response, second head, or appended plaintext error body.
+    let raw=data.join(support::physical(&a.name,a.file)).join(format!("{}-{}",f.storage,f.creation_name));
+    let mut started=0;let mut bytes=Vec::new();let (hits,body)=(&mut started,&mut bytes);let corrupt=&raw;
+    let failed=send_published(&selected,Get,&[b"bytes=1-2"],&[],move |code,_|{
+        assert_eq!(code,206);*hits+=1;
+        let mut held=fs::OpenOptions::new().write(true).open(corrupt)?;held.write_all(b"zzz")?;held.sync_all()?;Ok(body)
+    });
+    assert!(failed.is_err());assert_eq!(started,1);assert!(bytes.is_empty());
+    // A definite size change is observable even with coarse timestamp
+    // precision; HEAD does not hash every body byte to make a health claim.
+    fs::OpenOptions::new().write(true).open(&raw).unwrap().set_len(2).unwrap();
+    assert!(send_published(&selected,Head,&[],&[],|_,_|->io::Result<io::Sink>{panic!("reported a changed selection as healthy")}).is_err());
+}

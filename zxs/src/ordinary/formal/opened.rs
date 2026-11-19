@@ -35,6 +35,8 @@ impl PublishedVersion {
     /// The authenticated original node metadata, not proof of a fresh login
     /// or of the health of every untouched byte.
     pub fn receipt(&self)->&FormalNode{self.0.get().receipt()}
+    pub(crate) fn require_held(&self)->io::Result<()>{self.0.get().unchanged()}
+    pub(crate) fn finish_headers(&self,out:&mut impl Write)->io::Result<()>{self.0.get().finish_output(out)}
     pub fn read_range_to(&self,offset:u64,length:u64,mut out:impl Write)->io::Result<()>{
         let body=self.0.get();body.write_range(offset,length,&mut out)?;body.finish_output(&mut out)
     }
