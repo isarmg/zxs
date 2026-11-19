@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import stat
+from threading import Lock
 
 from ..archive import stamp
 from ..browser import ArchiveBrowser
@@ -16,16 +17,22 @@ class _DisplayFD:
     """Sole owner of one display duplicate; not a buffered body reader."""
     _fd = -1
 
-    def __init__(self, doc): self._fd = os.dup(doc.fileno())
+    def __init__(self, doc):
+        self._lock = Lock()
+        self._fd = os.dup(doc.fileno())
     @property
     def closed(self): return self._fd < 0
     def fileno(self):
         if self.closed: raise ValueError("the display descriptor is closed")
         return self._fd
+    def duplicate(self):
+        with self._lock: return os.dup(self.fileno())
     def close(self):
-        if not self.closed:
+        if self.closed: return  # also safe after a failed construction
+        with self._lock:
+            if self.closed: return
             fd, self._fd = self._fd, -1
-            os.close(fd)
+        os.close(fd)
     __del__ = close  # Fallback for an undelivered result; normal ownership is explicit.
 
 
@@ -68,7 +75,7 @@ class Selection:
                 browser = ArchiveBrowser(doc, display_name=path.name)
                 if expected is not None and (browser.commit != expected.marker or archive_sha(doc) != expected.sha256):
                     raise Rejected("the selected original archive changed; select it again")
-                # Only a real Linux window asks to hold the very open description that it displayed.
+                # Only an explicit consumer asks to retain this same open object for handoff.
                 held = None
                 if retain:
                     held = _DisplayFD(doc)
