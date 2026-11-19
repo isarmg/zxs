@@ -2,8 +2,9 @@
 use super::*;
 use crate::maintenance::register_flock::UnpublishedRegisterFlock;
 use crate::test_area::{data_directory, recycle_directory};
-use rustix::fs::{FlockOperation, XattrFlags, fremovexattr, fsetxattr};
+use rustix::fs::{FlockOperation, XattrFlags, fgetxattr, fremovexattr, fsetxattr};
 use sha2::{Digest, Sha256};
+use rustix::io::Errno;
 use std::{ffi::OsString, fs, os::unix::fs::MetadataExt, path::{Path, PathBuf}};
 
 fn own(parent: &Path, name: &str) -> PathBuf {
@@ -121,6 +122,30 @@ fn claim_appearing_after_eof_on_the_same_original_cannot_be_counted_as_absent() 
     busy(&system); drop(roots); available(&system);
 }
 
+#[test]
+fn an_unselected_ancestor_acquiring_even_an_empty_label_invalidates_the_real_group() {
+    let data = data_directory(); let bin = recycle_directory();
+    let system = own(data.path(), "system");
+    let ancestor = own(data.path(), "unselected");
+    let leaf = own(&ancestor, "candidate");
+    let recycle = own(bin.path(), "recycle");
+    let selected = selected(&system, &recycle, &[&leaf]);
+    let uid = private_uid(&system);
+    let group = positive(&selected, uid);
+    let samples = group.sample_empty_roots().unwrap();
+    group.finish_empty_roots(&samples).unwrap();
+
+    let parent = File::open(&ancestor).unwrap();
+    fsetxattr(&parent, c"user.zxs.volume", b"", XattrFlags::CREATE).unwrap();
+    assert!(group.finish_empty_roots(&samples).is_err());
+    busy(&leaf); drop(group);
+    assert!(FreshRootLocks::try_lock(&selected, uid).is_err());
+    let mut byte = [0u8; 1];
+    assert_eq!(fgetxattr(&parent, c"user.zxs.volume", &mut byte[..]).unwrap(), 0);
+    assert_eq!(std::fs::read_dir(&leaf).unwrap().count(), 0);
+    available(&leaf); available(&system); available(&recycle);
+}
+
 // Encode only an in-memory proposal using independently held private test roots.
 // No tag is issued and no bytes are written to REGISTRATION/INITIALIZING.
 fn proposal(locked: &FreshRootLocks, allocation: &UnpublishedRegisterFlock<'_>, other_limit: bool) -> Vec<u8> {
@@ -163,4 +188,28 @@ fn all_locked_roots_and_the_distinct_anonymous_register_check_the_same_in_memory
     register.check_image_origins(&wrong).unwrap();
     assert!(roots.check_image_roots(&wrong).is_err(), "a valid SHA must not lend a different NAME_MAX");
     for r in &roots.roots { assert_eq!(fs::read_dir(r.name.path()).unwrap().count(), 0); }
+}
+
+#[test]
+fn a_proposal_holds_the_same_empty_originals_and_never_adopts_a_pending_name() {
+    let data = data_directory(); let bin = recycle_directory();
+    let system = own(data.path(), "s"); let leaf = own(data.path(), "f"); let recycle = own(bin.path(), "r");
+    let selection = selected(&system, &recycle, &[&leaf]);
+    let mut group = positive(&selection, private_uid(&system));
+    assert!(group.prepare_unpublished([0; 16]).is_err());
+    let op = [0x91; 16];
+    let proposal = group.prepare_unpublished(op).unwrap();
+    proposal.recheck().unwrap();
+    for path in [&system, &leaf, &recycle] {
+        busy(path);
+        assert_eq!(fs::read_dir(path).unwrap().count(), 0, "no registration or other entry was published");
+        let f = File::open(path).unwrap(); let mut b = [0u8; 1];
+        assert_eq!(fgetxattr(&f, c"user.zxs.volume", &mut b[..]), Err(Errno::NODATA));
+    }
+    drop(proposal); busy(&system); // leaving the proposal does not unlock the still-held group
+    let foreign = system.join("INITIALIZING");
+    fs::write(&foreign, b"test-owned existing content").unwrap();
+    assert!(group.prepare_unpublished(op).is_err(), "fresh preparation is not resume");
+    assert_eq!(fs::read(&foreign).unwrap(), b"test-owned existing content");
+    drop(group); available(&system); available(&leaf); available(&recycle);
 }

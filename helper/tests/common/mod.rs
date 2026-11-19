@@ -14,6 +14,13 @@ pub fn recycle_directory() -> TempDir {
     private_directory(PathBuf::from(parent))
 }
 
+#[allow(dead_code)]
+pub fn subtree_bind_directory() -> TempDir {
+    let parent = std::env::var_os("HELPER_TEST_SUBTREE_BIND_PARENT")
+        .expect("provide a dedicated private test parent under a real pre-provisioned subtree bind mount");
+    private_directory(PathBuf::from(parent))
+}
+
 fn private_directory(parent: PathBuf) -> TempDir {
     use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
     assert!(parent.is_absolute(), "data test area must be absolute");

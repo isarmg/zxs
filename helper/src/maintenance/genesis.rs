@@ -3,6 +3,9 @@
 use crate::path_rules::{Kind, MAX_PATH_BYTES};
 use sha2::{Digest, Sha256};
 
+mod encoding;
+pub(super) use encoding::{InitialBytes, RootInput};
+
 const GENESIS: &[u8] = b"ZXS/FILE-POOL/MAINT-1\0";
 const VOLUME: &[u8] = b"ZXS/VOLUME/MAINT-1\0";
 const MAX_IMAGE: usize = 64 * (MAX_PATH_BYTES + 64 + 148) + 256;

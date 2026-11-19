@@ -1,9 +1,11 @@
-//! One real exclusive flock per explicitly selected directory; no allocation,
-//! naming, repair, attribute writing or operation issuance is available here.
-use super::{genesis::FreshGenesis, identity::ObservedOriginal};
+//! Taking the selected directory locks allocates no registration. A separate
+//! internal proposal can allocate one unnamed inode; it writes no bytes or
+//! attributes, publishes no name and issues no operation receipt.
+mod proposal;
+pub(super) use proposal::UnpublishedProposal;
+use super::{ancestry::Mounts, genesis::FreshGenesis, identity::ObservedOriginal};
 use crate::pinned::{Kind, Pinned, invalid, storage_status::Selection};
-use rustix::fs::{FlockOperation::NonBlockingLockExclusive, RawDir, fgetxattr, flock};
-use rustix::io::Errno;
+use rustix::fs::{FlockOperation::NonBlockingLockExclusive, RawDir, flock};
 use std::{fs::File, io, mem::MaybeUninit, os::unix::{ffi::OsStrExt, fs::MetadataExt}};
 
 struct Root { name: Pinned, dir: File, observed: ObservedOriginal, component_limit: u8 }
@@ -12,6 +14,7 @@ struct Root { name: Pinned, dir: File, observed: ObservedOriginal, component_lim
 // Do not count reads through NOATIME as changes or treat a stamp as a lock.
 #[derive(PartialEq, Eq)]
 struct DirectoryStamp { links: u64, size: u64, mtime: (i64, i64), ctime: (i64, i64) }
+struct RootSample { stamp: DirectoryStamp, mounts: Vec<u64> }
 impl DirectoryStamp {
     fn on(dir: &File) -> io::Result<Self> {
         let m = dir.metadata()?;
@@ -49,7 +52,7 @@ impl FreshRootLocks {
         }
         if !(3..=64).contains(&roots.len()) { return Err(invalid("invalid number of storage roots")); }
         // Record order is NOT lock order. Identical prefixes without a component
-        // boundary are fine. Bind-hidden ancestry is a further separate gate.
+        // boundary are fine. The full original ancestry is checked with all locks held.
         roots[2..].sort_by(|a,b| a.name.path().as_os_str().as_bytes().cmp(b.name.path().as_os_str().as_bytes()));
         for (i, a) in roots.iter().enumerate() {
             for (j, b) in roots[..i].iter().enumerate() {
@@ -75,24 +78,26 @@ impl FreshRootLocks {
         Ok(locked)
     }
 
-    fn sample_empty_roots(&self) -> io::Result<Vec<DirectoryStamp>> {
+    fn sample_empty_roots(&self) -> io::Result<Vec<RootSample>> {
+        let mounts = Mounts::current()?;
         self.roots.iter().map(|r| {
             let named = r.checked_name(self.uid)?;
             let before = DirectoryStamp::on(&named)?;
-            no_claim(&named)?;
+            let chain = mounts.unclaimed_chain(&r.name, &named)?;
             read_empty(named)?;
-            Ok(before)
+            Ok(RootSample { stamp: before, mounts: chain })
         }).collect()
     }
 
     // A genuine EOF is not evidence that the original is still named: the
     // selected directory, even a previously scanned row, may have disappeared.
-    fn finish_empty_roots(&self, samples: &[DirectoryStamp]) -> io::Result<()> {
+    fn finish_empty_roots(&self, samples: &[RootSample]) -> io::Result<()> {
         if samples.len() != self.roots.len() { return Err(invalid("incomplete storage root observation")); }
+        let mounts = Mounts::current()?;
         for (r, before) in self.roots.iter().zip(samples) {
             let named = r.checked_name(self.uid)?;
-            no_claim(&named)?;
-            if &DirectoryStamp::on(&named)? != before || &DirectoryStamp::on(&r.dir)? != before {
+            if DirectoryStamp::on(&named)? != before.stamp || DirectoryStamp::on(&r.dir)? != before.stamp
+                || mounts.unclaimed_chain(&r.name, &named)? != before.mounts {
                 return Err(invalid("storage directory changed during observation"));
             }
         }
@@ -105,8 +110,8 @@ impl FreshRootLocks {
     }
 
     /// Check all observed volume origins/role positions, component limits and path bytes, not
-    /// prospective VolumeIds, hidden physical ancestors or
-    /// future first-name publication. Cannot expose a directory FD to a writer.
+    /// prospective VolumeIds or future first-name publication. Cannot expose
+    /// a directory FD to a writer or adopt a hidden ancestor.
     pub(super) fn check_image_roots(&self, image: &FreshGenesis<'_>) -> io::Result<()> {
         self.check_empty_selection()?;
         if !image.has_root_count(self.uid, self.roots.len()) || self.roots.iter().enumerate().any(|(i,r)|
@@ -114,15 +119,6 @@ impl FreshRootLocks {
             return Err(invalid("new image differs from the held original root selection"));
         }
         Ok(())
-    }
-}
-
-fn no_claim(dir: &File) -> io::Result<()> {
-    let mut v = [0u8; 1];
-    match fgetxattr(dir, c"user.zxs.volume", &mut v[..]) {
-        Err(Errno::NODATA) => Ok(()),
-        Ok(_) | Err(Errno::RANGE) => Err(invalid("storage root already has a volume attribute")),
-        Err(e) => Err(e.into()),
     }
 }
 

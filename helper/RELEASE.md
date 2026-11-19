@@ -15,7 +15,7 @@
    cargo +1.100.0 test --workspace --locked --offline --target x86_64-unknown-linux-gnu
    ```
 
-   测试与发行构建是两项证据。正向文件用例需要允许的文件系统、私有专用测试目录和相应只读权限；`HELPER_TEST_DATA_PARENT` 只供测试，不能指向真实业务数据。记录实际用例数、失败、跳过及原因。原生身份与互斥用例还需该测试文件系统支持 O_TMPFILE、真实 FS UUID / 文件句柄及指定的首次具名权限。全组锁的正向用例另需 `HELPER_TEST_RECYCLE_PARENT` 明确指定另一独立的本地专用测试区域，dev 和真实文件系统 UUID 都须与数据测试区不同；没有这个区域时不能把两目录伪装成两盘。缺少前提不是通过；没有用同一配置复建比对，不声称可复现。[Cargo 参数说明](https://doc.rust-lang.org/cargo/commands/cargo-build.html#manifest-options)
+   测试与发行构建是两项证据。正向文件用例需要允许的文件系统、私有专用测试目录和相应只读权限；`HELPER_TEST_DATA_PARENT` 只供测试，不能指向真实业务数据。记录实际用例数、失败、跳过及原因。原生身份与互斥用例还需该测试文件系统支持 O_TMPFILE、真实 FS UUID / 文件句柄及指定的首次具名权限。全组锁的正向用例另需 `HELPER_TEST_RECYCLE_PARENT` 明确指定另一独立的本地专用测试区域，dev 和真实文件系统 UUID 都须与数据测试区不同；没有这个区域时不能把两目录伪装成两盘。完整祖先阳性要求所选根到当前维护进程的根目录可逐级核对、支持读固定卷标签、各所用挂载露出完整本地文件系统根，实际命名空间根行须 self-parent。即使普通宿主，也不能把缺失的 initramfs 父行当作终点正证。子树 bind 反例另需预置私有 HELPER_TEST_SUBTREE_BIND_PARENT，用例不创建挂载，也不读取测试区其他数据。缺少前提不是通过；没有用同一配置复建比对，不声称可复现。[Cargo 参数说明](https://doc.rust-lang.org/cargo/commands/cargo-build.html#manifest-options)
 
 ## H08：在交付文件之前，需要什么证据
 

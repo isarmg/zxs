@@ -188,3 +188,33 @@ fn decoded_and_operator_selected_storage_paths_share_exact_raw_bounds() {
         check(bad.to_vec(), false);
     }
 }
+
+#[test]
+fn a_fresh_encoding_matches_every_byte_of_the_independent_four_root_vector() {
+    fn birth(fs: u8, ino: u64) -> Vec<u8> {
+        let mut b = vec![fs; 16]; b.extend_from_slice(&1u32.to_be_bytes());
+        b.extend_from_slice(&ino.to_be_bytes()); b
+    }
+    let original = birth(0xA1, 100);
+    let proofs = [birth(0xA1, 101), birth(0xB2, 102), birth(0xA1, 103), birth(0xA1, 104)];
+    let mut rows = [
+        RootInput { id: [0x31; 16], origin: (0x801, 101, &proofs[0]), limit: 255, path: b"/m/sys" },
+        RootInput { id: [0x32; 16], origin: (0x802, 102, &proofs[1]), limit: 255, path: b"/m/bin" },
+        RootInput { id: [0x33; 16], origin: (0x801, 103, &proofs[2]), limit: 255, path: b"/m/data" },
+        RootInput { id: [0x34; 16], origin: (0x801, 104, &proofs[3]), limit: 255, path: b"/m/\xffvol" },
+    ];
+    let pool = [0x11; 16]; let op = [0x22; 16]; let reg = (0x801, 100, original.as_slice());
+    let bytes = InitialBytes::encode(pool, op, 1001, reg, &rows).unwrap();
+    assert_eq!(bytes.image.len(), 423);
+    assert_eq!(bytes.image, wire("genesis"));
+    assert_eq!(bytes.labels, ["label_system","label_recycle","label_file_0","label_file_1"].map(wire).to_vec());
+    assert_eq!(bytes.frontier.as_slice(), wire("lower_bound"));
+    let checked = bytes.checked().unwrap();
+    assert_eq!(checked.operation, op); assert_eq!(checked.pool, pool);
+    assert_eq!(checked.digest.as_slice(), wire("sha256_prefix"));
+
+    rows[1].id = rows[0].id;
+    assert_eq!(InitialBytes::encode(pool, op, 1001, reg, &rows).err(), Some(Invalid::Identity));
+    rows[1].id = [0x32; 16]; rows[2].origin = reg;
+    assert_eq!(InitialBytes::encode(pool, op, 1001, reg, &rows).err(), Some(Invalid::Identity));
+}

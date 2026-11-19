@@ -77,6 +77,7 @@ impl Pinned {
     }
 
     pub(crate) fn entity(&self) -> Entity { *self.chain.last().expect("root and leaf are present") }
+    pub(crate) fn visible_chain(&self) -> &[Entity] { &self.chain }
     pub(crate) fn entity_is_visible_ancestor_of(&self, other: &Self) -> bool {
         other.chain[..other.chain.len() - 1].contains(&self.entity())
     }
