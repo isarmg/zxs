@@ -1,33 +1,28 @@
-//! Read-only, source-gated first cold admission. This original register SH
-//! survives the short SYSTEM transaction and every slower per-root query.
+//! Pin one original MAINT register for the whole admitted read. Neither a
+//! decoded account nor a valid label on a different inode can mint this holder.
 use super::*;
 use crate::fs::stream::PinnedRegular;
 use crate::pool::READY;
 
-/// No writable FD, registration installer or derived business capability
-/// escapes. Existing business entry points continue to reject this format.
-pub(in crate::pool) struct OnlineEmpty{
-    system:HeldDir,
-    register:PinnedRegular,
-    record:Record,
+struct Ready{
+    system:HeldDir,register:PinnedRegular,record:Record,frontier:fs::Frontier,
 }
-impl OnlineEmpty{
-    /// The only externally chosen path is SYSTEM. Parse bytes under the original
-    /// regular file flock; never open a root named by an untrusted registration.
-    pub(in crate::pool) fn open(path:&Path)->io::Result<Self>{
+impl Ready{
+    fn open<T>(path:&Path,max:usize,admit:impl FnOnce(&Record,&[u8],fs::Frontier)->io::Result<T>)->io::Result<(Self,T)>{
+        // Acquire regular SH first, then the short SYSTEM cut; no data roots
+        // are opened from parsed paths until every original SYSTEM fact holds.
         let system=HeldDir::open(path)?;
-        let register=system.shared_original(READY,MAX_RECORD as u64)?;
-        system.share()?;let bytes=register.original_bytes(&system,READY)?;
-        let record=decode_empty(&bytes,fs::local_uid(),&register.opening_frontier()?)?;
+        let register=system.shared_original(READY,max as u64)?;system.share()?;
+        let bytes=register.original_bytes(&system,READY)?;let frontier=register.opening_frontier()?;
+        let(record,tail)=decode_genesis(&bytes,fs::local_uid())?;
         if register.stamp.stat.entity()!=record.origin||register.stamp.birth!=record.origin_birth{
             return Err(invalid("registration is not its committed original regular inode"));}
-        let admitted=Self{system,register,record};
-        admitted.require_system(&admitted.system)?;
-        // Only sync a positively identified register, not a foreign candidate.
-        admitted.register.file.sync_all()?;admitted.system.file.sync_all()?;
-        admitted.register.named(&admitted.system,READY)?;
-        admitted.system.file.unlock()?; // short directory SH only; register SH remains
-        Ok(admitted)
+        let held=Self{system,register,record,frontier};held.require_system(&held.system)?;
+        let value=admit(&held.record,tail,frontier)?;
+        held.register.file.sync_all()?;held.system.file.sync_all()?;
+        held.register.named(&held.system,READY)?;
+        held.system.file.unlock()?; // retain regular SH; no long SYSTEM lock
+        Ok((held,value))
     }
     fn original_root(&self,i:usize,root:&HeldDir)->io::Result<()>{
         let r=&self.record;let row=&r.info.volumes[i];
@@ -43,20 +38,34 @@ impl OnlineEmpty{
     fn require_system(&self,root:&HeldDir)->io::Result<()>{
         if !self.system.same_mount(root)?{return Err(invalid("changed selected SYSTEM mount"));}
         self.original_root(0,root)?;root.only(Some(READY))?;self.register.named(root,READY)?;
-        if self.register.opening_frontier()?!=fs::frontier(0,0,self.record.digest()){
-            return Err(invalid("selected register is no longer an empty confirmed prefix"));}
+        if self.register.opening_frontier()?!=self.frontier{
+            return Err(invalid("selected original REGISTRATION no longer has the admitted frontier"));}
         Ok(())
     }
-    /// Only a checked row from the original SYSTEM can select a data root.
-    /// The returned row is an observation, not an assertion that all volumes
-    /// or the future service are healthy. No unrelated data root is opened.
-    pub(in crate::pool) fn observe(&self,id:VolumeId)->io::Result<RegisteredVolume>{
+    fn at_cut<T>(&self,observe:impl FnOnce()->io::Result<T>)->io::Result<T>{
         let cut=HeldDir::open(&self.system.path)?;cut.share()?;self.require_system(&cut)?;
-        let i=self.record.info.volumes.iter().position(|v|v.id==id).ok_or_else(||invalid("unknown original volume"))?;
-        if i!=0{
-            let root=HeldDir::open(&self.record.info.volumes[i].volume.path)?;
-            root.share()?;self.original_root(i,&root)?;root.only(None)?;root.require_named()?;
-        }
-        self.register.named(&cut,READY)?;Ok(self.record.info.volumes[i].clone())
+        let result=observe()?;cut.require_named()?;self.register.named(&cut,READY)?;Ok(result)
     }
 }
+
+pub(in crate::pool) struct OnlineEmpty(Ready);
+impl OnlineEmpty{
+    pub(in crate::pool) fn open(path:&Path)->io::Result<Self>{
+        Ready::open(path,MAX_RECORD,|r,tail,f|require_empty_tail(r,tail,&f)).map(|(held,())|Self(held))
+    }
+    /// Only a checked row from the original SYSTEM can select a data root.
+    pub(in crate::pool) fn observe(&self,id:VolumeId)->io::Result<RegisteredVolume>{
+        let held=&self.0;
+        held.at_cut(||{
+            let i=held.record.info.volumes.iter().position(|v|v.id==id).ok_or_else(||invalid("unknown original volume"))?;
+            if i!=0{
+                let root=HeldDir::open(&held.record.info.volumes[i].volume.path)?;
+                root.share()?;held.original_root(i,&root)?;root.only(None)?;root.require_named()?;
+            }
+            Ok(held.record.info.volumes[i].clone())
+        })
+    }
+}
+
+#[path="maintenance_account.rs"]
+pub(crate) mod accounts;

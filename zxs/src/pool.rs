@@ -5,6 +5,7 @@ use super::*;
 use std::ffi::CStr;
 use std::os::unix::ffi::OsStrExt;
 mod format;
+pub(crate) use format::maintenance::native::accounts;
 pub(crate) mod lease;
 use format::{MAX_RECORD, Record};
 

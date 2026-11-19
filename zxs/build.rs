@@ -1,4 +1,5 @@
-// The only native dependency is the target Linux C ABI. Let its own headers
+// This shim needs only the target Linux C ABI. Internal password verification
+// separately links the upstream target libargon2 from Rust. Let Linux headers
 // supply flags and dirent layout rather than embedding architecture constants.
 use std::{env, path::PathBuf, process::Command};
 

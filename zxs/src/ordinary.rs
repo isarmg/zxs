@@ -5,6 +5,7 @@ pub(crate) use custody::{LifecycleSource,IncomingSelection,KnownStage,LifecycleT
 pub(crate) use custody::admission::{LifecycleGrant,Side};
 pub use custody::{apply_recycle,recycle_receipt,list_retained,DeletionKey,DeletionTime,RestoreTarget,RecycleAction,RecycleKind,RecycleReceipt,RecycleCursor,RecycleFilter,RecyclePage,RetainedEntry,move_file,move_file_at,move_receipt,move_receipt_at,MoveReceipt,MoveStatus};
 mod wire;
+pub(crate) mod first_account;
 mod storage_name;
 mod file_parent;
 mod content;
