@@ -1,6 +1,57 @@
 --- a/source3/param/loadparm.c
 +++ b/source3/param/loadparm.c
-@@ -4225,6 +4225,83 @@
+@@ -82,6 +82,7 @@
+ #include "source3/librpc/gen_ndr/ads.h"
+ #include "lib/util/time_basic.h"
+ #include "libds/common/flags.h"
++#include "param/zxs_runtime.h"
+ 
+ #ifdef HAVE_SYS_SYSCTL_H
+ #include <sys/sysctl.h>
+@@ -2820,6 +2821,22 @@
+ static bool do_parameter(const char *pszParmName, const char *pszParmValue,
+ 			 void *userdata)
+ {
++	struct parm_struct *p = lpcfg_parm_struct(userdata,pszParmName);
++	static const char *const reserved[] = {"include","config file","config backend","registry shares"};
++	size_t j;
++
++	/* Block source substitution before Samba can recurse/read registry.
++	 * Permit only the explicit inert forms of the last two parameters. */
++	if (p != NULL) {
++		for (j=0;j<ARRAY_SIZE(reserved);j++) {
++			struct parm_struct *q=lpcfg_parm_struct(userdata,reserved[j]);
++			if (q==NULL) { return false; }
++			if (q->p_class!=p->p_class || q->offset!=p->offset) { continue; }
++			if (j==2 && strwicmp(pszParmValue,"file")==0) { break; }
++			if (j==3 && strwicmp(pszParmValue,"no")==0) { break; }
++			return false;
++		}
++	}
+ 	if (!bInGlobalSection && bGlobalOnly)
+ 		return true;
+ 
+@@ -4056,6 +4073,10 @@
+ 	/* We get sections first, so have to start 'behind' to make up */
+ 	iServiceIndex = -1;
+ 
++	if (strcmp(pszFname,"/instance/smb.conf")!=0 || !lp_config_backend_is_file()) {
++		TALLOC_FREE(frame);
++		return false;
++	}
+ 	if (lp_config_backend_is_file()) {
+ 		n2 = talloc_sub_basic(talloc_tos(), get_current_username(),
+ 					get_current_user_info_domain(),
+@@ -4066,7 +4087,7 @@
+ 
+ 		add_to_file_list(NULL, &file_lists, pszFname, n2);
+ 
+-		bRetval = pm_process(n2, lp_do_section, do_parameter, lp_ctx);
++		bRetval = zxs_runtime_config(n2, lp_do_section, do_parameter, lp_ctx);
+ 		TALLOC_FREE(n2);
+ 
+ 		/* finish up the last section */
+@@ -4225,6 +4246,83 @@
  		       true);  /* reinit_globals */
  }
  
@@ -84,7 +135,7 @@
  /**
   * The typical lp_load wrapper with shares, loads global and
   * shares, including IPC, but does not force immediate
-@@ -4232,11 +4309,19 @@
+@@ -4232,11 +4330,19 @@
   */
  bool lp_load_with_shares(const char *file_name)
  {
@@ -165,7 +216,17 @@
  NTSTATUS make_auth3_context_for_netlogon(TALLOC_CTX *mem_ctx,
 --- a/source3/passdb/secrets.c
 +++ b/source3/passdb/secrets.c
-@@ -60,7 +60,7 @@
+@@ -44,6 +44,9 @@
+ 	char *fname = NULL;
+ 	TALLOC_CTX *frame;
+ 
++	if (private_dir == NULL || strcmp(private_dir,"/instance/private")!=0) {
++		return false;
++	}
+ 	if (db_ctx != NULL) {
+ 		return True;
+ 	}
+@@ -60,7 +63,7 @@
  	}
  
  	db_ctx = db_open(NULL, fname, 0,
@@ -176,7 +237,15 @@
  	if (db_ctx == NULL) {
 --- a/source3/passdb/machine_sid.c
 +++ b/source3/passdb/machine_sid.c
-@@ -34,194 +34,32 @@
+@@ -23,6 +23,7 @@
+ #include "includes.h"
+ #include "passdb/machine_sid.h"
+ #include "secrets.h"
++#include "param/zxs_runtime.h"
+ #include "dbwrap/dbwrap.h"
+ #include "../libcli/security/security.h"
+ 
+@@ -34,194 +35,58 @@
  #undef DBGC_CLASS
  #define DBGC_CLASS DBGC_PASSDB
  
@@ -187,10 +256,13 @@
 +/* In the isolated ZXS online build, only helper provisions a domain.
 + * Do not import MACHINE.SID, generate an identifier, start a secrets write
 + * transaction or repair anything. A local SID is public, not a login. */
-+struct dom_sid *get_global_sam_sid(void)
++static bool zxs_read_declared_domain(void)
 +{
-+	static const uint8_t nt_authority[6] = { 0, 0, 0, 0, 0, 5 };
 +	struct dom_sid existing = { 0 };
++	/* For this exact Debian local TDB backend, db_tdb_id returns the
++	 * dev_t/ino_t recorded from the real tdb_fd. No raw TDB open or read. */
++	struct { dev_t dev; ino_t ino; } id = { 0 };
++	struct db_context *db;
  
 -static bool read_sid_from_file(const char *fname, struct dom_sid *sid)
 -{
@@ -202,24 +274,42 @@
 -
 -	f = fopen(fname, "r");
 -	if (f == NULL) {
--		return false;
--	}
++	if (lp_server_role()!=ROLE_STANDALONE || strcmp(lp_netbios_name(),"ZXSLOCAL")!=0 ||
++	    (db=secrets_db_ctx())==NULL ||
++	    dbwrap_db_id(db,(uint8_t *)&id,sizeof(id))!=sizeof(id) ||
++	    !zxs_runtime_store(id.dev,id.ino) ||
++	    !secrets_fetch_domain_sid(lp_netbios_name(),&existing) ||
++	    !zxs_runtime_domain(&existing) || !zxs_runtime_store(id.dev,id.ino)) {
+ 		return false;
+ 	}
 -
 -	len = getline(&line, &n, f);
 -	if (len >= 0) {
 -		ret = string_to_sid(sid, line);
 -		SAFE_FREE(line);
--	}
++	if (global_sam_sid != NULL) {
++		return dom_sid_equal(global_sam_sid,&existing);
+ 	}
 -
 -	fclose(f);
 -	return ret;
--}
--
++	global_sam_sid = SMB_MALLOC_P(struct dom_sid);
++	if (global_sam_sid != NULL) {
++		*global_sam_sid = existing;
++	}
++	return global_sam_sid != NULL;
+ }
+ 
 -/*
 -  generate a random sid - used to build our own sid if we don't have one
 -*/
 -static void generate_random_sid(struct dom_sid *sid)
--{
++/* Only configured service transitions call the fresh check. A temporary
++ * unprivileged client must never be granted search of private/secrets.tdb.
++ * Existing smbd credential push/pop surrounds only fixed local evidence;
++ * no client name, SHARE/SQL access or caller callback runs in this scope. */
++void zxs_sam_require_current(void)
+ {
 -	int i;
 -	uchar raw_sid_data[12];
 -
@@ -233,8 +323,17 @@
 -	generate_random_buffer(raw_sid_data, 12);
 -	for (i = 0; i < 3; i++)
 -		sid->sub_auths[sid->num_auths++] = IVAL(raw_sid_data, i*4);
--}
--
++	const bool push = geteuid() != 0;
++	bool ok;
++	if (push) { become_root(); }
++	ok = geteuid()==0 && zxs_read_declared_domain();
++	if (push) { unbecome_root(); }
++	if (!ok) {
++		DBG_ERR("Dedicated SAM origin is not verified; stopping process\n");
++		_exit(1); /* no panic/core dump on an ordinary admission failure */
++	}
+ }
+ 
 -/****************************************************************************
 - Generate the global machine sid.
 -****************************************************************************/
@@ -292,10 +391,8 @@
 -	/* check for an old MACHINE.SID file for backwards compatibility */
 -	if (asprintf(&fname, "%s/MACHINE.SID", lp_private_dir()) == -1) {
 -		SAFE_FREE(sam_sid);
-+	if (lp_server_role() != ROLE_STANDALONE ||
-+	    strcmp(lp_netbios_name(), "ZXSLOCAL") != 0) {
- 		return NULL;
- 	}
+-		return NULL;
+-	}
 -
 -	if (read_sid_from_file(fname, sam_sid)) {
 -		/* remember it for future reference and unlink the old MACHINE.SID */
@@ -318,9 +415,7 @@
 -		/* Stored the old sid from MACHINE.SID successfully.*/
 -		SAFE_FREE(fname);
 -		return sam_sid;
-+	if (global_sam_sid != NULL) {
-+		return global_sam_sid;
- 	}
+-	}
 -
 -	SAFE_FREE(fname);
 -
@@ -331,30 +426,25 @@
 -	if (!secrets_store_domain_sid(lp_netbios_name(), sam_sid)) {
 -		DEBUG(0,("pdb_generate_sam_sid: Failed to store generated machine SID.\n"));
 -		SAFE_FREE(sam_sid);
-+	if (!secrets_fetch_domain_sid(lp_netbios_name(), &existing) ||
-+	    existing.sid_rev_num != 1 || existing.num_auths != 4 ||
-+	    memcmp(existing.id_auth, nt_authority, sizeof(nt_authority)) != 0 ||
-+	    existing.sub_auths[0] != 21 ||
-+	    (existing.sub_auths[1] | existing.sub_auths[2] | existing.sub_auths[3]) == 0) {
- 		return NULL;
- 	}
+-		return NULL;
+-	}
 -	if ( IS_DC ) {
 -		if (!secrets_store_domain_sid(lp_workgroup(), sam_sid)) {
 -			DEBUG(0,("pdb_generate_sam_sid: Failed to store generated domain SID.\n"));
 -			SAFE_FREE(sam_sid);
 -			return NULL;
 -		}
-+	global_sam_sid = SMB_MALLOC_P(struct dom_sid);
-+	if (global_sam_sid != NULL) {
-+		*global_sam_sid = existing;
- 	}
+-	}
 -
 -	return sam_sid;
 -}
 -
 -/* return our global_sam_sid */
--struct dom_sid *get_global_sam_sid(void)
--{
++/* Many real passdb callers immediately dereference this pointer. Its local
++ * SID is immutable for this process. Do not return NULL or probe a root-only
++ * directory on every unprivileged SID formatting/identity operation. */
+ struct dom_sid *get_global_sam_sid(void)
+ {
 -	struct db_context *db;
 -
 -	if (global_sam_sid != NULL)
@@ -387,31 +477,72 @@
 -		smb_panic("could not start commit secrets db");
 -	}
 -
++	if (global_sam_sid==NULL) { zxs_sam_require_current(); }
  	return global_sam_sid;
  }
  
 --- a/source3/smbd/server.c
 +++ b/source3/smbd/server.c
-@@ -2038,7 +2038,9 @@
+@@ -34,6 +34,7 @@
+ #include "registry/reg_init_full.h"
+ #include "libcli/auth/schannel.h"
+ #include "secrets.h"
++#include "passdb/machine_sid.h"
+ #include "../lib/util/memcache.h"
+ #include "ctdbd_conn.h"
+ #include "lib/util/util_process.h"
+@@ -983,6 +984,7 @@
+ 			exit_server("reinit_after_fork() failed");
+ 			return;
+ 		}
++		zxs_sam_require_current();
+ 		smbd_process(ev, msg_ctx, fd, true);
+ 		exit_server_cleanly("end of interactive mode");
+ 		return;
+@@ -1036,6 +1038,7 @@
+ 		print_sockaddr(addrstr, sizeof(addrstr), &addr);
+ 		process_set_title("smbd[%s]", "client [%s]", addrstr);
+ 
++		zxs_sam_require_current();
+ 		smbd_process(ev, msg_ctx, fd, false);
+ 	 exit:
+ 		exit_server_cleanly("end of child");
+@@ -1843,6 +1846,12 @@
+ 	};
+ 	bool ok;
+ 
++	/* Only the dedicated supervised foreground process; do not accept
++	 * popt --option overrides or a second configuration/environment source. */
++	if (argc!=2 || strcmp(argv[1],"--foreground")!=0 || getenv("SMB_CONF_PATH")!=NULL) {
++		return 1;
++	}
++	set_dyn_CONFIGFILE("/instance/smb.conf");
+ 	setproctitle_init(argc, discard_const(argv), environ);
+ 
+ 	/*
+@@ -2038,7 +2047,10 @@
  
  	DEBUG(3,("loaded services\n"));
  
 -	init_structs();
-+	if (!init_structs() || get_global_sam_sid() == NULL) {
-+		exit_daemon("ZXS requires its preprovisioned private SAM domain", EACCES);
++	if (!init_structs()) {
++		exit_daemon("ZXS cannot initialize its dedicated structures", EACCES);
 +	}
++	zxs_sam_require_current();
  
  	if (!profile_setup(msg_ctx, False)) {
  		DEBUG(0,("ERROR: failed to setup profiling\n"));
-@@ -2167,7 +2169,7 @@
+@@ -2166,9 +2178,7 @@
+ 		TALLOC_FREE(lp_ctx);
  	}
  
- 	if(!get_global_sam_sid()) {
+-	if(!get_global_sam_sid()) {
 -		exit_daemon("Samba cannot create a SAM SID", EACCES);
-+		exit_daemon("ZXS cannot read its preprovisioned SAM SID", EACCES);
- 	}
+-	}
++	zxs_sam_require_current();
  
  	server_id = messaging_server_id(msg_ctx);
+ 	status = smbXsrv_version_global_init(&server_id);
 --- a/source3/smbd/smb2_sesssetup.c
 +++ b/source3/smbd/smb2_sesssetup.c
 @@ -30,6 +30,7 @@
@@ -437,7 +568,7 @@
  
  	if (in_flags & SMB2_SESSION_FLAG_BINDING) {
  		if (in_session_id == 0) {
-@@ -912,6 +921,21 @@
+@@ -912,6 +921,23 @@
  	return req;
  }
  
@@ -445,10 +576,12 @@
 + * the credential generation used by this particular password check. */
 +static bool zxs_normal_token(const struct auth_session_info *info)
 +{
-+	const struct dom_sid *domain = get_global_sam_sid();
++	const struct dom_sid *domain;
 +	uint32_t rid = 0;
 +
-+	return domain != NULL && info != NULL &&
++	zxs_sam_require_current();
++	domain = get_global_sam_sid();
++	return info != NULL &&
 +		info->security_token != NULL && info->security_token->num_sids > 0 &&
 +		info->security_token->sids != NULL &&
 +		security_session_user_level(info, NULL) == SECURITY_USER &&
@@ -459,7 +592,7 @@
  static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq)
  {
  	struct tevent_req *req =
-@@ -944,6 +968,11 @@
+@@ -944,6 +970,11 @@
  				     state,
  				     &state->session_info);
  	if (tevent_req_nterror(req, status)) {
@@ -471,3 +604,71 @@
  		return;
  	}
  
+--- a/source3/smbd/server_reload.c
++++ b/source3/smbd/server_reload.c
+@@ -29,6 +29,7 @@
+ #include "printing/printer_list.h"
+ #include "printing/load.h"
+ #include "auth.h"
++#include "passdb/machine_sid.h"
+ #include "messages.h"
+ #include "lib/param/loadparm.h"
+ 
+@@ -145,12 +146,19 @@
+ 
+ 	reopen_logs();
+ 
+-	if (test && !lp_file_list_changed())
+-		return(True);
++	if (test && !lp_file_list_changed()) {
++		zxs_sam_require_current();
++		return true;
++	}
+ 
+ 	lp_killunused(sconn, snumused);
+ 
+ 	ret = lp_load_with_shares(get_dyn_CONFIGFILE());
++	if (!ret) {
++		DBG_ERR("Dedicated configuration was not reloaded\n");
++		_exit(1);
++	}
++	zxs_sam_require_current();
+ 
+ 	/* perhaps the config filename is now set */
+ 	if (!test) {
+--- a/source3/wscript_build
++++ b/source3/wscript_build
+@@ -490,6 +490,7 @@
+                    deps='''
+                         ndr-samba4
+                         smbconf
++                        smbd_shim
+                         samba3util
+                         dbwrap
+                         krb5samba
+@@ -558,12 +559,15 @@
+ bld.SAMBA3_SUBSYSTEM('SMBCONF_PARAM',
+                    source='''
+                           param/loadparm.c
++                          param/zxs_runtime.c
+                           lib/sharesec.c
+                           lib/ldap_debug_handler.c
+                           lib/util_names.c
+                           ''',
+                    deps='''
+                         samba-util
++                        tini
++                        gnutls
+                         PARAM_UTIL
+                         ldap
+                         lber
+--- a/source3/passdb/machine_sid.h
++++ b/source3/passdb/machine_sid.h
+@@ -25,6 +25,7 @@
+ #ifndef _PASSDB_MACHINE_SID_H_
+ #define _PASSDB_MACHINE_SID_H_
+ 
++void zxs_sam_require_current(void);
+ struct dom_sid  *get_global_sam_sid(void);
+ void reset_global_sam_sid(void) ;
+ bool sid_check_is_our_sam(const struct dom_sid  *sid);
