@@ -25,9 +25,22 @@ int main(void)
 	    zxs_file_vfs_route(3,1,false,true,false,file) != ZXS_VFS_REJECT) {
 		return 1;
 	}
-	if (!zxs_file_vfs_install(conn) || conn->vfs_handles == NULL ||
+	if (zxs_file_vfs_active(conn) || !zxs_file_vfs_install(conn) || conn->vfs_handles == NULL ||
 	    conn->vfs_handles->next == NULL || conn->vfs_handles->next->next != NULL ||
-	    zxs_file_vfs_install(conn)) {
+	    !zxs_file_vfs_active(conn) || zxs_file_vfs_install(conn)) {
+		return 1;
+	}
+	/* Orthogonal to ShareAccess: if both clients allow all sharing,
+	 * their write/append opens still conflict. A plain reader takes no
+	 * business writer slot in either ordering. Original independent
+	 * ShareAccess checks and byte locks still apply. */
+	if (!zxs_data_writer_conflict(true, FILE_WRITE_DATA, FILE_APPEND_DATA) ||
+	    !zxs_data_writer_conflict(true, FILE_APPEND_DATA, FILE_WRITE_DATA) ||
+	    !zxs_data_writer_conflict(true, FILE_READ_DATA|FILE_WRITE_DATA, FILE_WRITE_DATA) ||
+	    zxs_data_writer_conflict(true, FILE_WRITE_DATA, FILE_READ_DATA) ||
+	    zxs_data_writer_conflict(true, FILE_READ_DATA, FILE_APPEND_DATA) ||
+	    zxs_data_writer_conflict(true, FILE_READ_ATTRIBUTES, FILE_READ_DATA) ||
+	    zxs_data_writer_conflict(false, FILE_WRITE_DATA, FILE_WRITE_DATA)) {
 		return 1;
 	}
 	if (smb_vfs_call_connect(conn->vfs_handles,"unused","files.smb") != -1 ||

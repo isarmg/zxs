@@ -1713,3 +1713,71 @@
  }
  
  bool vfs_valid_pread_range(off_t offset, size_t length)
+--- a/source3/smbd/open.c
++++ b/source3/smbd/open.c
+@@ -26,6 +26,7 @@
+ #include "printing.h"
+ #include "locking/share_mode_lock.h"
+ #include "smbd/smbd.h"
++#include "smbd/zxs_file_vfs.h"
+ #include "smbd/globals.h"
+ #include "fake_file.h"
+ #include "../libcli/security/security.h"
+@@ -1345,7 +1346,8 @@
+ 	FILE_EXECUTE|
+ 	DELETE_ACCESS;
+ 
+-static bool share_conflict(uint32_t e_access_mask,
++static bool share_conflict(bool one_writer,
++			   uint32_t e_access_mask,
+ 			   uint32_t e_share_access,
+ 			   uint32_t access_mask,
+ 			   uint32_t share_access)
+@@ -1373,6 +1375,11 @@
+ 		return false;
+ 	}
+ 
++	/* Original semantic FILE key is locked here. Add a write/write
++	 * conflict, never change either client's share access bits. */
++	if (zxs_data_writer_conflict(one_writer, e_access_mask, access_mask)) {
++		return true;
++	}
+ 	conflict = mask_conflict(
+ 		access_mask, e_access_mask, FILE_WRITE_DATA | FILE_APPEND_DATA,
+ 		share_access, e_share_access, FILE_SHARE_WRITE);
+@@ -1587,6 +1594,7 @@
+ }
+ 
+ static NTSTATUS open_mode_check(connection_struct *conn,
++				bool one_writer,
+ 				struct file_id fid,
+ 				struct share_mode_lock *lck,
+ 				uint32_t access_mask,
+@@ -1623,6 +1631,7 @@
+ 		lck, &state.access_mask, &state.share_access, NULL);
+ 
+ 	conflict = share_conflict(
++		one_writer,
+ 		state.access_mask,
+ 		state.share_access,
+ 		access_mask,
+@@ -1664,6 +1673,7 @@
+ 	}
+ 
+ 	conflict = share_conflict(
++		one_writer,
+ 		state.access_mask,
+ 		state.share_access,
+ 		access_mask,
+@@ -2597,7 +2607,10 @@
+ 	*pgranted = 0;
+ 
+ 	status = open_mode_check(
+-		fsp->conn, fsp->file_id, lck, access_mask, share_access);
++		fsp->conn,
++		S_ISREG(fsp->fsp_name->st.st_ex_mode) &&
++			zxs_file_vfs_active(fsp->conn),
++		fsp->file_id, lck, access_mask, share_access);
+ 	if (NT_STATUS_EQUAL(status, NT_STATUS_SHARING_VIOLATION)) {
+ 		sharing_violation = true;
+ 		status = NT_STATUS_OK; /* handled later */

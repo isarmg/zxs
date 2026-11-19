@@ -15,6 +15,24 @@ static const struct vfs_fn_pointers zxs_file_front = {
 	.connect_fn = zxs_file_connect,
 };
 
+/* Pure pointer checks on the exact installed pair. This runs inside
+ * Samba's native share-mode critical section: no VFS callbacks or I/O. */
+_PUBLIC_
+bool zxs_file_vfs_active(const connection_struct *conn)
+{
+	const vfs_handle_struct *front, *terminal;
+	if (conn == NULL || conn->ipc || conn->printer) {
+		return false;
+	}
+	front = conn->vfs_handles;
+	if (front == NULL || front->conn != conn || front->fns != &zxs_file_front) {
+		return false;
+	}
+	terminal = front->next;
+	return terminal != NULL && terminal->conn == conn &&
+	       terminal->fns == &vfs_not_implemented_fns && terminal->next == NULL;
+}
+
 _PUBLIC_
 bool zxs_file_vfs_install(connection_struct *conn)
 {

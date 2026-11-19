@@ -23,4 +23,11 @@ static inline enum zxs_vfs_route zxs_file_vfs_route(
 		ZXS_VFS_FILE : ZXS_VFS_REJECT;
 }
 bool zxs_file_vfs_install(struct connection_struct *conn);
+bool zxs_file_vfs_active(const struct connection_struct *conn);
+static inline bool zxs_data_writer_conflict(bool one_writer,
+					    uint32_t existing, uint32_t incoming)
+{
+	const uint32_t data = FILE_WRITE_DATA | FILE_APPEND_DATA;
+	return one_writer && (existing & data) != 0 && (incoming & data) != 0;
+}
 #endif
