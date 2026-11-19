@@ -36,3 +36,22 @@ fn exact_guest_boot_profile_is_not_a_live_service_or_a_systemwide_configuration(
         assert_eq!(conf.lines().map(str::trim).filter(|a|*a==line).count(),1);
     }
 }
+
+#[test]
+fn default_live_profile_and_original_public_record_are_exact_not_physical_login_proofs(){
+    let live=include_bytes!("../../resources/samba-domain/initial-live.conf");
+    let sha:[u8;32]=Sha256::digest(live).into();
+    assert_eq!(live.len(),1277);
+    assert_eq!(sha.as_slice(),bytes("0154cff9b9d2f9be1f5ab7b374f36ee10530d7d1fe08f72ac2eaf19f32116406"));
+    let text=std::str::from_utf8(live).unwrap();
+    assert_eq!(text.lines().filter(|s|s.starts_with('[')).collect::<Vec<_>>(),["[global]"]);
+    for key in ["interfaces = 127.0.0.1","bind interfaces only = yes","multicast dns register = no","map to guest = Never","restrict anonymous = 2",
+        "server signing = mandatory","ntlm auth = ntlmv2-only","passdb backend = zxs_sqlite","usershare path =","usershare max shares = 0"]{
+        assert_eq!(text.lines().filter(|l|l.trim()==key).count(),1);
+    }
+    let mut expected=sample();expected[64..96].copy_from_slice(&sha);
+    let domain=match_install(&sample()).unwrap();
+    let exact=domain.encode_binding(&[0x11;16],&[0x22;16],&[0x33;16],&sha).unwrap();
+    assert_eq!(exact.as_slice(),expected);
+    assert!(LocalDomain::expected_binding(&exact,&[0x11;16],&[0x22;16],&[0x33;16],&[0x44;32]).is_err());
+}

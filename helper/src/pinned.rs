@@ -157,6 +157,17 @@ pub(crate) fn sqlite_claim_reader(pin:&File,entity:Entity,mount:u64)->io::Result
     reopen_admitted_reader(pin,entity,ReaderBoundary::SelectedControlMount(mount))
 }
 
+/// Only the root-owned nonsecret initial smb.conf below a separately
+/// admitted instance root. The worker may update atime; no arbitrary path.
+pub(crate) fn sam_live_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{
+    let m=pin.metadata()?;
+    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)||!m.is_file()||m.uid()!=0||m.mode()&0o7777!=0o444||m.nlink()!=1
+        ||length==0||length>1<<20||m.len()!=length||Mount::on(pin)?.is_none_or(|v|v.id!=mount){
+        return Err(invalid("not the selected root-owned public live configuration"));
+    }
+    reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::PublicSamMount(mount))
+}
+
 /// After Samba has exited: synchronize the original O_PATH-selected store on
 /// the separately approved private mount. No content is read or returned.
 pub(crate) fn sync_sam_store(pin:&File,uid:u32,mount:u64)->io::Result<()>{
@@ -200,12 +211,12 @@ pub(crate) fn installed_regular_reader(pin:&File)->io::Result<File>{
 // caller only reads fixed private control names below a separately selected, held
 // storage directory. A current mount ID binds its descriptors, not its provenance.
 #[derive(Copy, Clone)]
-enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64), InstalledRegular(u32) }
+enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64), PublicSamMount(u64), InstalledRegular(u32) }
 impl ReaderBoundary {
     fn matches(self, fd: &File) -> io::Result<bool> {
         match self {
             Self::DataFilesystem(magic)|Self::InstalledRegular(magic) => Ok(filesystem(fd)? == Some(magic)),
-            Self::SelectedControlMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
+            Self::SelectedControlMount(id)|Self::PublicSamMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
         }
     }
 }
@@ -245,7 +256,7 @@ fn reopen_admitted_reader(pin: &File, entity: Entity, boundary: ReaderBoundary) 
         return Err(invalid("descriptor no longer selects the original regular file"));
     }
     let flags=OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
-    let flags=if matches!(boundary,ReaderBoundary::InstalledRegular(_)){flags}else{flags|OFlags::NOATIME};
+    let flags=if matches!(boundary,ReaderBoundary::InstalledRegular(_)|ReaderBoundary::PublicSamMount(_)){flags}else{flags|OFlags::NOATIME};
     let result = File::from(openat(&fds, number.as_str(),flags,Mode::empty())?);
     let observed = result.metadata()?;
     if !observed.is_file() || Entity::of(&observed)? != entity {

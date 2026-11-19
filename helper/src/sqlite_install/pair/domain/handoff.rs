@@ -74,20 +74,35 @@ impl OriginChannel {
         original.recheck(parent)?;Ok(original)
     }
 }
+// Keep the evidence straddling the real sync, not just the inode: reopening
+// the same name or sampling the attributes for the first time later is not a
+// continuation of that observation.
+#[derive(Copy,Clone,Eq,PartialEq)]
+struct SyncStamp{entity:Entity,mount:u64,links:u64,len:u64,mode:u32,uid:u32,mtime:(i64,i64),ctime:(i64,i64)}
+impl SyncStamp{
+    fn on(f:&File)->io::Result<Self>{let m=f.metadata()?;Ok(Self{entity:Entity::of(&m)?,mount:held_mount(f)?,
+        links:m.nlink(),len:m.len(),mode:m.mode(),uid:m.uid(),mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})}
+}
+pub(super) struct SyncedStore{original:HeldOrigin,file:SyncStamp,parent:SyncStamp}
+impl SyncedStore{
+    pub(super) fn require(&self,dir:&File)->io::Result<&HeldOrigin>{
+        self.original.recheck(dir)?;
+        if SyncStamp::on(&self.original.local)?!=self.file||SyncStamp::on(dir)?!=self.parent{
+            return Err(bad("private store or parent no longer matches the completed synchronization"));}
+        Ok(&self.original)
+    }
+}
 impl HeldOrigin {
     /// The private store is touched only AFTER the real payload and its
     /// entire original process group have been successfully collected.
-    pub(super) fn sync_finished(&self,parent:&File,ended:&super::provision::Finished)->io::Result<()>{
+    pub(super) fn sync_finished(self,parent:&File,ended:&super::provision::Finished)->io::Result<SyncedStore>{
         if ended.pid()!=self.payload{return Err(bad("different original provisioning payload"));}
         self.recheck(parent)?;
-        let stamp=|f:&File|->io::Result<_>{let m=f.metadata()?;Ok((Entity::of(&m)?,m.nlink(),m.len(),
-            m.uid(),m.mode(),m.mtime(),m.mtime_nsec(),m.ctime(),m.ctime_nsec(),held_mount(f)?))};
-        let (file_before,dir_before)=(stamp(&self.local)?,stamp(parent)?);
+        let file=SyncStamp::on(&self.local)?;let parent_stamp=SyncStamp::on(parent)?;
         crate::pinned::sync_sam_store(&self.local,self.uid,self.mount)?;
         parent.sync_all()?;
-        self.recheck(parent)?;
-        if stamp(&self.local)?!=file_before||stamp(parent)?!=dir_before{return Err(bad("original private store or directory changed across synchronization"));}
-        Ok(())
+        let synced=SyncedStore{original:self,file,parent:parent_stamp};
+        synced.require(parent)?;Ok(synced)
     }
     pub(super) fn recheck(&self,parent:&File)->io::Result<()>{
         let p=parent.metadata()?;

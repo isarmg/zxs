@@ -60,3 +60,17 @@ fn same_uid_and_gid_do_not_authorize_a_different_payload_process(){
         assert_eq!(rx.receive(&p,uid,gid,expected).is_ok(),expected==self_pid);
     }
 }
+
+#[test]
+fn unchanged_original_and_same_inode_changed_after_a_stamp_are_distinct(){
+    use std::fs::FileTimes;use std::time::{Duration,UNIX_EPOCH};
+    let (d,p,uid,gid,b)=fixture();let (rx,tx)=OriginChannel::open().unwrap();let pin=fixed_name(&p).unwrap();
+    send(&tx,&b,&[&pin]);drop(tx);let h=rx.receive(&p,uid,gid,rustix::process::getpid()).unwrap();
+    // These are explicit fixture timestamps, not a fake public process-exit
+    // proof or a substitute for the real synchronization constructor.
+    let file=SyncStamp::on(&h.local).unwrap();let parent=SyncStamp::on(&p).unwrap();
+    let s=SyncedStore{original:h,file,parent};s.require(&p).unwrap();
+    let same=File::options().write(true).open(d.path().join("secrets.tdb")).unwrap();
+    same.set_times(FileTimes::new().set_modified(UNIX_EPOCH+Duration::from_secs(1))).unwrap();
+    assert!(s.original.recheck(&p).is_ok());assert!(s.require(&p).is_err());
+}

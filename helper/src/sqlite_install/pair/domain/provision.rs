@@ -2,7 +2,8 @@
 //! neither a path, an approval string, nor classifying an empty directory
 //! supplies the host authorization and authenticated capsule required below.
 mod monitor;
-use super::handoff::{HeldOrigin,OriginChannel};
+mod live;
+use super::handoff::{HeldOrigin,OriginChannel,SyncedStore};
 use crate::{fs_tools::RuntimeFile,isolated_group::Group,pinned::{Entity,Mount,Pinned},
     sqlite_install::{bad,originals::LockedSystem,request::Id}};
 use rustix::{fd::{AsFd,AsRawFd,OwnedFd},fs::{FlockOperation,Mode,OFlags,RawDir,flock,openat},
@@ -30,7 +31,7 @@ pub(super) struct FreshApproval<'a>{
 pub(super) struct Finished(rustix::process::Pid);
 impl Finished{pub(super) fn pid(&self)->rustix::process::Pid{self.0}}
 pub(super) struct Unpublished<'a>{
-    _approval:FreshApproval<'a>,_site:Instance,_original:HeldOrigin,
+    approval:FreshApproval<'a>,site:Instance,original:SyncedStore,live:live::Live,
 }
 fn mark(fd:&File)->io::Result<(Entity,u64)>{
     Ok((Entity::of(&fd.metadata()?)?,Mount::on(fd)?.ok_or_else(||bad("missing original mount identity"))?.id))
@@ -147,6 +148,7 @@ impl<'a> FreshApproval<'a>{
         let mut elf=[0;20];bwrap.file.read_exact_at(&mut elf,0)?;
         if &elf[..7]!=b"\x7fELF\x02\x01\x01"||elf[18..20]!=[62,0]{return Err(bad("not the selected x86-64 launcher"));}
         let site=Instance::lock(&self)?;
+        let live=live::Live::select(&site.base,&self.live_config)?;
         let (origin,tx)=OriginChannel::open()?;let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
         let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin);
         let (script,boot,bpf)=(sealed(SCRIPT)?,sealed(BOOT)?,sealed(&helper_linux_evidence::diagnostic_process::diagnostic_group_filter())?);
@@ -155,17 +157,27 @@ impl<'a> FreshApproval<'a>{
         let mut cmd=Command::new("/no-path-execution-for-helper-sam");
         cmd.env_clear().current_dir("/").stdin(Stdio::from(File::from(stdin))).stdout(Stdio::from(tx)).stderr(Stdio::piped());
         fixed_args(&mut cmd,self.uid,self.gid,&ns);
-        named(self.usr,&usr)?;bwrap.recheck()?;site.require(&self,None)?;cancelled()?;
+        named(self.usr,&usr)?;bwrap.recheck()?;site.require(&self,None)?;live.require(&site.base)?;cancelled()?;
         helper_linux_evidence::diagnostic_process::prepare_diagnostic_exec(&mut cmd,&bwrap.file)?;
         let group=Group::new(cmd.spawn()?);
         drop(cmd);drop(fds);drop(wstatus);
         let finished=monitor::reap(group,File::from(rstatus))?;
         cancelled()?;named(self.usr,&usr)?;bwrap.recheck()?;
         let h=origin.receive(&site.private,self.uid,self.gid,finished.pid())?;
-        site.require(&self,Some(&h))?;
-        h.sync_finished(&site.private,&finished)?;
-        site.require(&self,Some(&h))?;cancelled()?;
-        Ok(Unpublished{_approval:self,_site:site,_original:h})
+        site.require(&self,Some(&h))?;live.require(&site.base)?;
+        let h=h.sync_finished(&site.private,&finished)?;
+        site.require(&self,Some(h.require(&site.private)?))?;live.require(&site.base)?;cancelled()?;
+        Ok(Unpublished{approval:self,site,original:h,live})
+    }
+}
+
+impl Unpublished<'_>{
+    /// Nonsecret candidate for the host parent, not a persistent publication.
+    /// This value cannot be reached from a user-supplied SID or rebooted TDB.
+    pub(super) fn original_record(&self)->io::Result<[u8;128]>{
+        let a=&self.approval;let origin=self.original.require(&self.site.private)?;self.site.require(a,Some(origin))?;self.live.require(&self.site.base)?;
+        let bytes=origin.domain.encode_binding(&a.pool,&a.instance_id,&a.op,&a.live_config)?;
+        self.live.require(&self.site.base)?;self.site.require(a,Some(self.original.require(&self.site.private)?))?;cancelled()?;Ok(bytes)
     }
 }
 

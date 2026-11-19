@@ -32,6 +32,13 @@ impl LocalDomain {
             return Err(bad("not the selected pool, dedicated instance, original operation and live configuration"));}
         Self::from_name_and_domain(&v[80..])
     }
+    fn encode_binding(&self,pool:&Id,instance:&Id,op:&Id,live:&[u8;32])->io::Result<[u8;128]>{
+        let mut b=[0;128];b[..16].copy_from_slice(BOUND);b[16..32].copy_from_slice(pool);
+        b[32..48].copy_from_slice(instance);b[48..64].copy_from_slice(op);b[64..96].copy_from_slice(live);
+        b[96..104].copy_from_slice(NAME);b[104..].copy_from_slice(&self.0);
+        if Self::expected_binding(&b,pool,instance,op,live)?!=*self{return Err(bad("wrong original instance binding"));}
+        Ok(b)
+    }
     pub(super) fn expected_smb_sid(&self)->[u8;28]{
         let mut result=[0;28];result[..24].copy_from_slice(&self.0);result[1]=5;
         result[24..].copy_from_slice(&1000u32.to_le_bytes());result
