@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from pathlib import Path
+import os
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -20,6 +22,51 @@ class OriginalCheckout(unittest.TestCase):
 
     def create(self,state, *, automatic=True):
         return opening.begin(self.archive,self.parent,"Project",self.store,state,automatic=automatic)
+
+    def test_copy_verification_reads_the_exclusive_output_not_a_rebound_name(self):
+        verify = opening.read_managed_document
+        seen = []
+        def replace_then_read(doc, *, display_name):
+            name = next(self.root.glob(".zip-opening-*/original.zxs"))
+            old = name.with_name("displaced")
+            name.rename(old); name.write_bytes(b"unrelated")
+            self.assertTrue(os.path.samestat(os.fstat(doc.fileno()), old.stat()))
+            result = verify(doc, display_name=display_name); seen.append(result[0])
+            return result
+        with patch.object(opening, "read_managed_document", side_effect=replace_then_read):
+            with self.assertRaises(Rejected): self.create(self.root/"unregistered", automatic=False)
+        self.assertEqual(seen, [self.marker])
+        name = next(self.root.glob(".zip-opening-*/original.zxs"))
+        self.assertEqual(name.read_bytes(), b"unrelated")
+        self.assertEqual(name.with_name("displaced").read_bytes(), self.archive.read_bytes())
+        self.assertFalse((name.parent/"opening.sqlite").exists())
+        self.assertFalse((self.root/"unregistered").exists()); self.assertFalse((self.parent/"Project").exists())
+
+    def test_equal_byte_replacement_at_original_copy_directory_sync_prevents_registration(self):
+        sync = os.fsync
+        def replace_on_directory(fd):
+            sync(fd)
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                name = next(self.root.glob(".zip-opening-*/original.zxs"))
+                self.assertTrue(os.path.samestat(os.fstat(fd), name.parent.stat()))
+                old = name.with_name("displaced")
+                name.rename(old); name.write_bytes(old.read_bytes())
+        with patch.object(opening.os, "fsync", side_effect=replace_on_directory):
+            with self.assertRaises(Rejected): self.create(self.root/"missing-state")
+        name = next(self.root.glob(".zip-opening-*/original.zxs"))
+        self.assertNotEqual(name.stat().st_ino, name.with_name("displaced").stat().st_ino)
+        self.assertFalse((name.parent/"opening.sqlite").exists()); self.assertFalse((self.parent/"Project").exists())
+
+    def test_existing_private_leaf_is_never_overwritten_or_cleaned_as_scratch(self):
+        make = tempfile.mkdtemp
+        def occupied(**kwargs):
+            seed = Path(make(**kwargs)); (seed/"original.zxs").write_bytes(b"preexisting")
+            return str(seed)
+        with patch.object(opening.tempfile, "mkdtemp", side_effect=occupied):
+            with self.assertRaises(FileExistsError): self.create(self.root/"not-created")
+        name = next(self.root.glob(".zip-opening-*/original.zxs"))
+        self.assertEqual(name.read_bytes(), b"preexisting")
+        self.assertFalse((name.parent/"opening.sqlite").exists()); self.assertFalse((self.root/"not-created").exists())
 
     def test_real_name_collisions_allocate_independent_original_identities_and_do_not_delete(self):
         existing = self.parent/"Project"; existing.mkdir(); (existing/"foreign").write_text("keep")

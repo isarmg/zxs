@@ -7,10 +7,12 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
-from .archive import read_archive, stamp
+from .archive import read_archive, read_managed_document, stamp
+from .document import archive_sha, named_document
 from .freeze import observe_tree
 from .lifecycle import instance, locations, who
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, check_id, member_name, new_id
+from .private_candidates import held_candidates
 from .publish import digest_file, rename_new, require_native_writer, sync_dir
 
 MAX_AUTO = 256
@@ -31,32 +33,57 @@ def _parent(path):
     return entry
 
 
-def _source(source, copy, expected):
-    source = Path(source)
-    if source.suffix.lower() != ".zxs": raise Rejected("repository checkout requires the .zxs extension")
-    fd = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as inp:
-        original_file = os.fstat(inp.fileno())
-        admitted = stamp(inp)
-        size = original_file.st_size
-        if not stat.S_ISREG(original_file.st_mode) or size > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
-            raise Rejected("checkout source must be a bounded ordinary archive")
-        h = hashlib.sha256()
-        with copy.open("xb") as out:
-            left = size
+def _save_original(inp, size, area, expected):
+    """Copy to one exclusive leaf in the already selected private seed directory."""
+    name = "original.zxs"
+    area.check_state()
+    fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 0o600, dir_fd=area.parent)
+    try:
+        with os.fdopen(fd, "w+b", closefd=False) as out:
+            if area.check_file(name, fd)[2] != 0: raise Rejected("checkout copy is not new")
+            left, h = size, hashlib.sha256()
             while left:
-                data = inp.read(min(CHUNK,left))
-                if not data: raise Rejected("selected source shrank")
-                out.write(data); h.update(data); left -= len(data)
+                data = inp.read(min(CHUNK, left))
+                if not data or out.write(data) != len(data):
+                    raise Rejected("incomplete copy of the selected checkout source")
+                h.update(data); left -= len(data)
             if inp.read(1): raise Rejected("selected source grew")
-            out.flush(); os.fsync(out.fileno())
-        digest = h.hexdigest()
-        if expected is not None and digest != expected.sha256: raise Rejected("selected original was replaced")
-        original, _ = read_archive(copy)
-        if digest_file(copy) != digest or stamp(inp) != admitted or not os.path.samestat(original_file,source.stat(follow_symlinks=False)):
-            raise Rejected("source changed before the original checkout decision")
-        if expected is not None and original != expected.marker: raise Rejected("selected source is not the original directory node")
-    return original, digest
+            digest = h.hexdigest()
+            if expected is not None and digest != expected.sha256: raise Rejected("selected original was replaced")
+            out.flush(); os.fsync(fd)
+            observed = area.check_file(name, fd)
+            if observed[2] != size: raise Rejected("checkout copy length changed")
+            marker = read_managed_document(out, display_name=name)[0]
+            if archive_sha(out) != digest or expected is not None and marker != expected.marker:
+                raise Rejected("checkout copy does not represent the selected original")
+            area.check_file(name, fd, observed)
+            os.fsync(area.parent)
+            area.check_file(name, fd, observed)
+            return marker, digest
+    finally:
+        os.close(fd)
+
+
+def _source(source, seed_parent, expected):
+    source = Path(source).absolute()  # A different spelling isn't the selected catalog slot.
+    if source.suffix.lower() != ".zxs": raise Rejected("repository checkout requires the .zxs extension")
+    seed = None
+    try:
+        with named_document(source) as inp:
+            observed = stamp(inp)
+            if expected is not None and (str(source) != str(expected.path) or observed != expected.observed):
+                raise Rejected("checkout source is not the selected catalog entry")
+            if observed[2] > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
+                raise Rejected("checkout source is outside the archive size budget")
+            seed = Path(tempfile.mkdtemp(prefix=".zip-opening-", dir=seed_parent))
+            with held_candidates(seed) as area:
+                marker, digest = _save_original(inp, observed[2], area, expected)
+        return seed, marker, digest
+    except Exception as error:
+        if seed is not None:
+            error.add_note(f"签出准备目录可能仍在 {seed}。尚未登记该操作；保留现场，不自动删除。")
+        raise
 
 
 @contextmanager
@@ -96,8 +123,7 @@ def begin(source, parent, stem, store, state, *, automatic, expected=None):
     if os.path.lexists(state) or not automatic and os.path.lexists(dest):
         raise Rejected("checkout state or requested destination is occupied")
     owner = _parent(parent)
-    seed = Path(tempfile.mkdtemp(prefix=".zip-opening-", dir=state.parent))
-    marker, sha = _source(source,seed/"original.zxs",expected)
+    seed, marker, sha = _source(source, state.parent, expected)
     operation, worktree = new_id(), new_id()
     con = sqlite3.connect(seed/"opening.sqlite")
     try:

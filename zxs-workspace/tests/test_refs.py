@@ -1,6 +1,7 @@
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
+import os
 import tempfile
 import unittest
 import zipfile
@@ -59,15 +60,38 @@ class DirectoryRefs(unittest.TestCase):
         self.assertFalse((self.root/"other").exists())
         self.assertFalse((self.root/"other-state").exists())
 
+    def test_identical_new_inode_cannot_replace_original_catalog_selection(self):
+        node = refs.Catalog(self.oldfile, self.store).select_node(self.old.operation)
+        substitute = self.root/"copy.zxs"
+        substitute.write_bytes(self.oldfile.read_bytes())
+        self.assertNotEqual(substitute.stat().st_ino, node.observed[1])
+        substitute.replace(self.oldfile)
+        with self.assertRaisesRegex(Rejected, "selected catalog entry"):
+            refs.checkout(node, self.root/"work-copy", self.store, self.root/"no-state")
+        self.assertFalse((self.root/"no-state").exists())
+        self.assertFalse((self.root/"work-copy").exists())
+        self.assertEqual(list(self.root.glob(".zip-opening-*")), [])
+
+    def test_same_inode_under_another_name_is_not_the_selected_slot(self):
+        from zipworkspace import opening
+        alias = self.root/"alias.zxs"
+        os.link(self.oldfile, alias)  # Before selection: generations as well as bytes are identical.
+        selected = refs.Catalog(self.oldfile, self.store).select_node(self.old.operation)
+        with self.assertRaisesRegex(Rejected, "selected catalog entry"):
+            opening.begin(alias, self.root, "no-copy", self.store, self.root/"no-state",
+                          automatic=False, expected=selected)
+        self.assertEqual(list(self.root.glob(".zip-opening-*")), [])
+        self.assertFalse((self.root/"no-copy").exists())
+
     def test_changed_original_during_private_extraction_never_exposes_wrong_destination(self):
         selected = refs.Catalog(self.oldfile, self.store).select_node(self.old.operation)
         from zipworkspace import opening
-        original = opening.read_archive
+        original = opening.read_managed_document
         def swap_after_read(archive, **args):
             result = original(archive, **args)
             self.oldfile.write_bytes(self.newfile.read_bytes())
             return result
-        with patch.object(opening, "read_archive", side_effect=swap_after_read):
+        with patch.object(opening, "read_managed_document", side_effect=swap_after_read):
             with self.assertRaises(Rejected):
                 refs.checkout(selected, self.root/"no-destination", self.store, self.root/"no-state")
         self.assertFalse((self.root/"no-destination").exists())
