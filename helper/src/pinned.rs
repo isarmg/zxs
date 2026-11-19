@@ -85,6 +85,7 @@ impl Pinned {
     pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.fd.metadata() }
 
     pub(crate) fn path(&self) -> &Path { &self.path }
+    pub(crate) fn mount(&self) -> io::Result<Mount> { Mount::on(&self.fd)?.ok_or_else(||invalid("live mount identity unavailable")) }
 
     /// Return an independent, real open description for this selected storage
     /// directory. Never lock a duplicate of somebody else's open description.

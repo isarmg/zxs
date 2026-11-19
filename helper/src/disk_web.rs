@@ -98,7 +98,7 @@ fn supported_terminal(mode:u32,dev:u64,magic:u64)->bool{
 fn foreground(tty_sid:i32,our_sid:i32,tty_group:i32,our_group:i32)->bool{
     tty_sid>0 && tty_group>0 && tty_sid==our_sid && tty_group==our_group
 }
-fn require_terminal(fd:impl AsFd)->io::Result<()>{
+pub(crate) fn require_terminal(fd:impl AsFd)->io::Result<()>{
     use rustix::{fs::{fstat,fstatfs},process::{getpgrp,getsid},termios::{tcgetpgrp,tcgetsid}};
     let deny=||io::Error::new(io::ErrorKind::PermissionDenied,"disk-web requires stderr on this operator's supported foreground controlling terminal");
     let stat=fstat(&fd)?;

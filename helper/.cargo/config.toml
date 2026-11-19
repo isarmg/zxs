@@ -1,0 +1,5 @@
+# Build from this independent helper directory. Actual native capabilities and
+# the upstream source ID are also checked before opening a storage path.
+[env]
+LIBSQLITE3_SYS_USE_PKG_CONFIG = { value = "0", force = true }
+LIBSQLITE3_FLAGS = { value = "-USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_WAL -USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_USE_URI -DSQLITE_TEMP_STORE=3", force = true }

@@ -14,6 +14,7 @@ mod path_rules;
 mod portable_claim;
 mod portable_genesis;
 mod pinned;
+mod sqlite_install;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod test_area;

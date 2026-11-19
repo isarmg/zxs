@@ -9,7 +9,7 @@ mod thread_evidence;
 
 // These two host observations have no dependence on the experimental MAINT-1 medium.
 pub(crate) use ancestry::Mounts as HostMounts;
-pub(crate) use thread_evidence::{WorkerPolicy,diagnostic_worker};
+pub(crate) use thread_evidence::{WorkerPolicy,diagnostic_worker,thread_file};
 
 /// Fixed entries of the same registration, never names supplied by a caller.
 #[derive(Clone, Copy, PartialEq, Eq)]

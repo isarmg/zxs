@@ -5,7 +5,7 @@ use std::{ffi::CStr, fs::File, io::{self, Read}};
 
 fn unsupported(reason: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Unsupported, reason) }
 
-fn thread_file(name: &CStr) -> io::Result<File> {
+pub(crate) fn thread_file(name: &CStr) -> io::Result<File> {
     let proc = File::from(open("/proc", OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?);
     let mount = Mount::on(&proc)?.ok_or_else(|| unsupported("proc mount identity unavailable"))?;
     if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC || mount.at_root != Some(true) {
