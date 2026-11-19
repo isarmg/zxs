@@ -1,6 +1,6 @@
 # ZXS
 
-ZXS 是独立的 Linux 文件容器存储服务。**面向用户的入口只有 Web 和 SMB。当前主线已有本地存储内核，还没有可用的 Web 页面、HTTP 服务或 Samba VFS 接入。** 安装、systemd 配置和停机维护由独立的 helper 负责，不属于 ZXS 在线业务。
+ZXS 是独立的 Linux 文件容器存储服务。**面向用户的入口只有 Web 管理界面和 SMB 文件共享。Web 不上传、预览、下载或转发普通文件正文；普通文件 I/O 走 SMB。当前主线已有本地存储内核，还没有可用的 Web 页面、HTTP 服务或 Samba VFS 接入。** 安装、systemd 配置和停机维护由独立的 helper 负责，不属于 ZXS 在线业务。
 
 ## 已有的业务源码
 
