@@ -2,6 +2,7 @@
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from .commit_choice import CommitChoice
+from .retry_choice import PendingRetry
 from .widgets import button, confirm, label
 
 
@@ -14,13 +15,17 @@ class CommitControls(QWidget):
         box = QVBoxLayout(self); row = QHBoxLayout()
         self.save = button("提交本次工作目录…", self.begin)
         self.query = button("查询该次提交的原回执", self.inspect)
+        self.retry = button("核对并续作原待决操作…", self.resume)
         row.addWidget(self.save); row.addWidget(self.query); box.addLayout(row)
+        box.addWidget(self.retry)
         self.output = label(); box.addWidget(self.output)
         self.set_session(None)
 
     def buttons(self):
         self.save.setEnabled(self.session is not None and self.running is None and not self.blocked)
-        self.query.setEnabled(self.session is not None and self.running is None and self.last is not None)
+        free = self.session is not None and self.running is None and self.last is not None
+        self.query.setEnabled(free)
+        self.retry.setEnabled(free and self.last.pending_seen and not self.last.conflict)
 
     def set_session(self, live):
         if self.last is not None and self.last is not self.running: self.last.release()
@@ -105,3 +110,42 @@ class CommitControls(QWidget):
             self.output.setText(f"{text}\nSTATE：{job.live.state}\n操作号：{job.operation}")
         self.submit(job, "正在只读查询本次原操作…", job.result,
                     lambda result: end(*result), lambda error: end("unknown", f"原结果未知：{error}。未发布或重试。"))
+
+    def resume(self):
+        original, live = self.last, self.session
+        if (not original or live is None or self.running is not None or self.owner.pending is not None
+                or not original.pending_seen or original.conflict): return
+        try: attempt = PendingRetry(original)
+        except Exception as err:
+            self.output.setText(str(err)); self.buttons(); return
+        self.running = attempt; self.buttons()
+
+        def finish_view(message, *, completed=False):
+            current = self.session is live and self.last is original
+            try:
+                if current:
+                    self.blocked = not completed
+                    self.output.setText(f"{message}\n原 STATE：{attempt.live.state}\n原操作：{attempt.operation}")
+                else:
+                    self.owner.inform("原操作核对已返回；当前工作树已切换，未把回执用于新的选择。")
+            finally: self.discard(attempt)
+            if current and completed: self.refresh_status()
+
+        def reviewed(details):
+            try:
+                if self.session is not live or self.last is not original:
+                    finish_view("工作树已切换，未提交续作。"); return
+                ack_only = attempt.ack_fd is not None
+                if not confirm(self, "只处理原冻结操作", details,
+                        attestation="原 STATE 仍由本人独占，STORE 不同步、无人改动本次暂存名。我确认只处理所列原操作。",
+                        action_text="仅确认原回执" if ack_only else "续作原冻结候选"):
+                    finish_view("未确认，未续作。再次尝试须先查询原回执。"); return
+                if self.session is not live or self.last is not original:
+                    finish_view("工作树已切换，未提交续作。"); return
+                self.submit(attempt, "正在处理这笔原冻结操作…", attempt.run,
+                            lambda outcome: finish_view(f"已确认原操作的正式槽：{outcome[0]}",completed=True),
+                            lambda err: finish_view(f"{err}\n未自动重试，请只读查询原回执。"))
+            except Exception as exc:
+                finish_view(f"{exc}\n请只读查询原回执。")
+        self.submit(attempt, "正在只读核对原候选、分支基线和正式槽…", attempt.prepare, reviewed,
+                    lambda err: finish_view(f"不能同意续作：{err}。未上传或自动分叉。"))

@@ -9,7 +9,7 @@ from pathlib import Path
 import stat
 import sys
 from .archive import read_managed_document, stamp
-from .document import archive_sha as hash_document, named_document, native_identity, relative_document
+from .document import archive_sha as hash_document, named_document, native_identity
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, new_id
 
 
@@ -95,7 +95,9 @@ class StoreReadback:
         if native_identity(named, stat.S_IFDIR) != self.identity:
             raise Uncertain("the selected archive store changed; original outcome unknown")
 
-    def confirm(self, marker, expected_sha, *, uploaded_fd=None):
+    @contextmanager
+    def verified_slot(self, marker, expected_sha, *, uploaded_fd=None):
+        """Read-only evidence. Only the first original-parent openat can yield absence; no reservation."""
         self.check_store()
         name = marker.filename
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
@@ -107,7 +109,8 @@ class StoreReadback:
             self.check_store()
             if uploaded_fd is not None:
                 raise Uncertain("published slot is unavailable after the original rename") from err
-            return False
+            yield None
+            return
         try:
             with os.fdopen(fd, "rb", closefd=False) as doc:
                 identity = native_identity(os.fstat(fd), stat.S_IFREG)
@@ -135,14 +138,19 @@ class StoreReadback:
                 check_slot()
                 if actual != marker:
                     raise Conflict("another commit occupies this immutable slot")
-                # Flush the actual verified file and its actual directory. A
-                # failure (including unsupported provider durability) is not success.
-                os.fsync(fd)
-                os.fsync(self.fd)
+                yield fd, check_slot  # Keep this same observed generation through a user confirmation if needed.
                 check_slot()
-                return True
         finally:
             os.close(fd)
+
+    def confirm(self, marker, expected_sha, *, uploaded_fd=None):
+        with self.verified_slot(marker, expected_sha, uploaded_fd=uploaded_fd) as original:
+            if original is None: return False
+            fd, _ = original
+            # Only the writer's acknowledgement supplies these real durability barriers.
+            os.fsync(fd)
+            os.fsync(self.fd)
+        return True
 
 
 @contextmanager
@@ -195,18 +203,21 @@ def _new_upload(scope):
     return fd, name
 
 
-def _publish(local, scope, marker, archive_sha, *, private_fd=None):
+def _publish(local, scope, marker, archive_sha, *, source=None, confirm_only_fd=None):
     store = scope.path
     target = store / marker.filename
+    if confirm_only_fd is not None:
+        # This decision authorizes acknowledgement of a particular already-visible file, never an upload.
+        if not scope.confirm(marker, archive_sha, uploaded_fd=confirm_only_fd):
+            raise Uncertain("original slot no longer present; refusing to upload on acknowledgement only")
+        return target
     if scope.confirm(marker, archive_sha): return target
     # No path deletion or replacement if a temporary entry is lost. Pin the
     # independent read FD while the actual writer is still alive, then close
     # ALL writable handles before checking even the first ZIP byte for publication.
     with ExitStack() as reader:
         with ExitStack() as writer:
-            source = (named_document(local) if private_fd is None else
-                      relative_document(private_fd, marker.operation+".zxs", single=True))
-            with source as src:
+            with (named_document(local) if source is None else source) as src:
                 if hash_document(src) != archive_sha or read_managed_document(src, display_name=marker.filename)[0] != marker:
                     raise Rejected("saved local candidate does not match the original operation")
                 size = stamp(src)[2]

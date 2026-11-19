@@ -14,6 +14,7 @@ from zipworkspace import private_stage, publish, worktree
 from zipworkspace.desktop.checkout_action import CheckoutChoice
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.selection import Selection
+from zipworkspace.desktop.retry_choice import PendingRetry
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
@@ -189,6 +190,143 @@ class ExplicitDesktopCommit(unittest.TestCase):
         self.store.rmdir(); old.rename(self.store)
         self.assertEqual(choice.result()[0], "pending")
 
+    def test_prepared_but_unconfirmed_fresh_choice_cannot_create_a_pending_via_direct_business_entry(self):
+        choice = self.choice()
+        self.assertTrue(choice.ready); self.assertFalse(choice.used)
+        with patch.object(worktree,"anonymous_capture",side_effect=AssertionError("no freeze without confirmation")), \
+             patch.object(worktree,"locked",side_effect=AssertionError("no writer before confirmation")), \
+             patch.object(publish,"_new_upload",side_effect=AssertionError("no upload before confirmation")), \
+             self.assertRaises(Rejected):
+            worktree.commit(self.state,selected=choice)
+        self.assertFalse((self.state/(choice.operation+".zxs")).exists())
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(list(self.store.iterdir()),[self.original])
+
+    def pending_choice(self):
+        (self.tree/"story").write_bytes(b"original frozen body")
+        original = self.choice()
+        with patch.object(publish, "rename_new_at", side_effect=OSError("unconfirmed write")), \
+                self.assertRaises(publish.Uncertain): original.run()
+        return original
+
+    def retry_choice(self, original):
+        self.assertEqual(original.result()[0],"pending")  # Explicit read-only request, not a retry.
+        retry = PendingRetry(original); self.addCleanup(retry.release)
+        return retry
+
+    def test_resume_requires_a_separate_query_and_replays_only_the_original_still_held_copy(self):
+        original = self.pending_choice()
+        with self.assertRaises(Rejected): PendingRetry(original)
+        retry = self.retry_choice(original)
+        with self.assertRaises(Rejected): PendingRetry(original)
+        with self.assertRaises(Rejected): retry.run()
+        with patch.object(os,"fsync",side_effect=AssertionError("read-only preparation cannot sync")):
+            self.assertIn("正式槽不存在",retry.prepare())
+        self.assertEqual(retry.operation,original.operation)
+        (self.tree/"story").write_bytes(b"edits after freezing are not part of retry")
+        self.assertIsNone(retry.ack_fd)
+        with patch.object(worktree,"commit",side_effect=AssertionError("not a fresh commit")), \
+             patch.object(worktree,"anonymous_capture",side_effect=AssertionError("no spool")), \
+             patch.object(worktree,"frozen_tree",side_effect=AssertionError("no worktree scan")), \
+             patch.object(publish,"named_document",side_effect=AssertionError("read held candidate only")):
+            saved, record = retry.run()
+        self.assertEqual(record,original.marker)
+        with zipfile.ZipFile(saved) as doc: self.assertEqual(doc.read("story"),b"original frozen body")
+        self.assertEqual(original.result()[0],"completed")
+        with self.assertRaises(Rejected): retry.run()
+        with self.assertRaises(Rejected): PendingRetry(original)
+
+    def test_approval_only_for_existing_result_cannot_fall_back_to_upload_on_loss_or_replacement(self):
+        original = self.pending_choice()
+        target = self.store/original.marker.filename
+        target.write_bytes((self.state/(original.operation+".zxs")).read_bytes())
+        for replaced in (False,True):
+            with self.subTest(replaced=replaced):
+                retry = self.retry_choice(original)
+                with patch.object(os,"fsync",side_effect=AssertionError("preview is not a durability barrier")):
+                    self.assertIn("只确认这个原文件",retry.prepare())
+                self.assertIsNotNone(retry.ack_fd)
+                kept = self.root/"confirmed-original.zxs"; target.rename(kept)
+                if replaced: target.write_bytes(kept.read_bytes())
+                with patch.object(publish,"_new_upload",side_effect=AssertionError("no fallback upload")), \
+                        self.assertRaises(Rejected): retry.run()
+                self.assertEqual(original.result()[0],"pending")
+                if replaced:
+                    self.assertNotEqual(kept.stat().st_ino,target.stat().st_ino)
+                    target.unlink()
+                else: self.assertFalse(target.exists())
+                kept.rename(target)
+        retry = self.retry_choice(original); retry.prepare()
+        with patch.object(publish,"_new_upload",side_effect=AssertionError("only acknowledge existing file")):
+            self.assertEqual(retry.run(),(target,original.marker))
+        self.assertEqual(original.result()[0],"completed")
+
+    def test_ack_leaf_generation_rechecked_after_real_sync_before_the_database_receipt(self):
+        original = self.pending_choice()
+        target = self.store/original.marker.filename
+        raw = (self.state/(original.operation+".zxs")).read_bytes(); target.write_bytes(raw)
+        retry = self.retry_choice(original); retry.prepare()
+        actual = retry.store.confirm
+        def after_sync(*args, **kwargs):
+            result = actual(*args,**kwargs)
+            meta = target.stat()
+            os.utime(target,ns=(meta.st_atime_ns,meta.st_mtime_ns+1_000_000_000))
+            return result
+        with patch.object(retry.store,"confirm",side_effect=after_sync), \
+             patch.object(publish,"_new_upload",side_effect=AssertionError("never upload")), \
+             self.assertRaises(publish.Uncertain): retry.run()
+        self.assertEqual(target.read_bytes(),raw)
+        self.assertEqual(original.result()[0],"pending")
+
+    def test_equal_byte_different_private_candidate_after_review_does_not_enter_writer(self):
+        original = self.pending_choice()
+        retry = self.retry_choice(original); retry.prepare()
+        candidate = self.state/(original.operation+".zxs")
+        kept = self.state/"held-candidate.zxs"; candidate.rename(kept)
+        candidate.write_bytes(kept.read_bytes())
+        self.assertNotEqual(candidate.stat().st_ino,kept.stat().st_ino)
+        with patch.object(worktree,"finish",side_effect=AssertionError("unverified original before writer")), \
+                self.assertRaises(Rejected): retry.run()
+        self.assertEqual(original.result()[0],"pending")
+        self.assertFalse((self.store/original.marker.filename).exists())
+
+    def test_external_cli_completed_during_confirmation_causes_only_original_receipt_lookup(self):
+        original = self.pending_choice()
+        retry = self.retry_choice(original); retry.prepare()
+        target, _ = worktree.finish(self.state, original.operation)
+        target.rename(self.root/"no-longer-at-store.zxs")
+        with patch.object(worktree,"_publish",side_effect=AssertionError("completed by other client")), \
+                self.assertRaisesRegex(Rejected,"已登记完成"): retry.run()
+        self.assertEqual(original.result()[0],"completed")
+        self.assertFalse(target.exists())
+
+    def test_cli_fork_intent_after_review_is_not_mistaken_for_authority_to_replay_or_follow_it(self):
+        original = self.pending_choice()
+        retry = self.retry_choice(original); retry.prepare()
+        winner = replace(self.first, generation=2, operation="d"*32, parent=self.first.operation)
+        target = self.store/winner.filename; snapshot(target,winner); winner_bytes = target.read_bytes()
+        with patch.object(worktree,"finish",side_effect=OSError("stop after new intent")), self.assertRaises(OSError):
+            worktree.fork_pending(self.state,original.operation)
+        with patch.object(worktree,"_publish",side_effect=AssertionError("must not follow successor")), \
+                self.assertRaisesRegex(Rejected,"separate explicit fork"): retry.run()
+        self.assertEqual(original.result()[0],"forked")
+        self.assertEqual(target.read_bytes(),winner_bytes)
+        with self.assertRaises(Rejected): PendingRetry(original)
+
+    def test_conflict_seen_during_readonly_review_does_not_offer_replay_or_mutate_the_slot(self):
+        original = self.pending_choice()
+        retry = self.retry_choice(original)
+        winner = replace(self.first, generation=2, operation="d"*32, parent=self.first.operation)
+        target = self.store/winner.filename; snapshot(target,winner); before=target.read_bytes()
+        with patch.object(os,"fsync",side_effect=AssertionError("no sync on review")), \
+             patch.object(publish,"_new_upload",side_effect=AssertionError("no upload")), \
+             self.assertRaises(publish.Conflict): retry.prepare()
+        with self.assertRaises(Rejected): retry.run()
+        self.assertEqual(original.result()[0],"pending")
+        self.assertTrue(original.conflict); self.assertFalse(original.pending_seen)
+        with self.assertRaises(Rejected): PendingRetry(original)
+        self.assertEqual(target.read_bytes(),before)
+
     @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
     def test_window_cancels_without_writing_then_commits_once_after_fresh_consent(self):
         from PySide6.QtWidgets import QApplication
@@ -225,4 +363,45 @@ class ExplicitDesktopCommit(unittest.TestCase):
                 controls.inspect()
                 self.assertIn("历史回执",controls.output.text())
             self.assertEqual(len(tuple(self.store.iterdir())),2)
+        finally: win.close()
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_window_retry_requires_query_and_its_own_consent_and_cancel_never_publishes(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        original = self.pending_choice()
+        win = Window()
+        def immediate(_title, fn, apply, *, failed=None):
+            try: outcome = fn()
+            except Exception as error:
+                if failed is None: raise
+                failed(error)
+            else: apply(outcome)
+            return object()
+        try:
+            controls = win.archive.checkout.commits; controls.set_session(self.live)
+            controls.last,controls.blocked = original,True; controls.buttons()
+            self.assertFalse(controls.retry.isEnabled())
+            with patch.object(win,"job",side_effect=immediate), patch.object(controls,"refresh_status"), \
+                    patch.object(commit_controls,"confirm",return_value=False) as ask:
+                controls.resume(); ask.assert_not_called()
+                controls.inspect(); self.assertTrue(controls.retry.isEnabled())
+                controls.resume(); ask.assert_called_once()
+                self.assertFalse(controls.retry.isEnabled())
+                self.assertFalse((self.store/original.marker.filename).exists())
+            def approve(_parent,_title,detail,*,attestation,action_text):
+                self.assertIn(original.operation,detail)
+                self.assertIn("不读取或冻结当前工作文件",detail)
+                self.assertIn("STATE",attestation); self.assertIn("STORE",attestation)
+                self.assertEqual(action_text,"续作原冻结候选")
+                self.assertFalse(controls.retry.isEnabled()); controls.resume()
+                return True
+            with patch.object(win,"job",side_effect=immediate), patch.object(controls,"refresh_status"), \
+                    patch.object(commit_controls,"confirm",side_effect=approve):
+                controls.inspect(); controls.resume()
+            self.assertTrue((self.store/original.marker.filename).is_file())
+            self.assertFalse(controls.retry.isEnabled())
+            self.assertEqual(original.result()[0],"completed")
         finally: win.close()

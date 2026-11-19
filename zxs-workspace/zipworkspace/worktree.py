@@ -129,7 +129,9 @@ def checkout(archive, dest, store, state, *, expected=None, private_stage=False)
 def finish(state, operation, *, selected=None):
     operation = check_id(operation)
     live = None if selected is None else selected.live
-    if selected is not None and operation != selected.operation: raise Rejected("not the reviewed original operation")
+    if selected is not None and (operation != selected.operation or selected.closed
+                                 or not selected.used or not selected.ready):
+        raise Rejected("not the reviewed original operation")
     with locked(state, live=live) as (con, row, state):
         if live is not None: live.check_instance(row, lifecycle.instance(con))
         done = con.execute("SELECT marker,digest FROM completed WHERE operation=?", (operation,)).fetchone()
@@ -137,7 +139,10 @@ def finish(state, operation, *, selected=None):
             marker = Commit.decode(done["marker"])
             target = Path(row["store"]) / marker.filename
             if marker.operation != operation: raise Rejected("completed record does not name the original operation")
-            if selected is not None: selected.check_marker(marker, done["digest"])
+            if selected is not None:
+                selected.check_marker(marker, done["digest"])
+                if selected.replay:
+                    raise Rejected("原操作已登记完成；本次没有上传，请只读查询其历史回执")
             matched = (confirm_final(target, marker, done["digest"]) if selected is None else
                        selected.store.confirm(marker, done["digest"]))
             if not matched:
@@ -154,7 +159,8 @@ def finish(state, operation, *, selected=None):
         else:
             selected.check_row(con, row)
             selected.check_marker(marker, row["pending_sha"])
-            target = _publish(local, selected.store, marker, row["pending_sha"], private_fd=live.state_fd)
+            target = _publish(local, selected.store, marker, row["pending_sha"],
+                              source=selected.candidate_source(marker), confirm_only_fd=selected.ack_fd)
             selected.check_row(con, row)
         con.execute("INSERT INTO completed(operation,marker,digest) VALUES(?,?,?)", (operation, marker.encode(), row["pending_sha"]))
         con.execute("""UPDATE checkout SET branch=?,generation=?,parent=?,base_sha=?,pending=NULL,pending_sha=NULL
@@ -167,7 +173,8 @@ def commit(state, *, fork=False, selected=None):
     require_native_writer()
     live = None if selected is None else selected.live
     if selected is not None:
-        if fork or Path(state).absolute() != live.state: raise Rejected("not the reviewed ordinary commit")
+        if selected.replay or not selected.used or fork or Path(state).absolute() != live.state:
+            raise Rejected("not the reviewed ordinary fresh commit")
         selected.check_base()
     # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
     with anonymous_capture(state, held=None if selected is None else selected.area) as capture, locked(state, live=live) as (con, row, state):

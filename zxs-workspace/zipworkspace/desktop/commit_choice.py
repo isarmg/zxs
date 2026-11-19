@@ -9,7 +9,7 @@ from ..document import archive_sha, check_relative, native_identity, relative_do
 from ..model import Commit, Rejected, check_id, new_id
 from ..private_candidates import CandidateDirectory
 from ..private_freeze import local_mount
-from ..publish import StoreReadback, require_native_writer
+from ..publish import Conflict, StoreReadback, require_native_writer
 
 
 def _baseline(row):
@@ -17,12 +17,19 @@ def _baseline(row):
 
 
 class CommitChoice:
+    replay = False
+
     def __init__(self, live):
-        self.operation = new_id()
+        self._bind(live, new_id())
+
+    def _bind(self, live, operation):
+        self.operation = check_id(operation)
         self.live = live.borrow()
         self.stack = ExitStack()
         self.base = self.original = self.marker = self.digest = None
-        self.used = self.closed = False
+        self.used = self.closed = self.ready = self.pending_seen = False
+        self.conflict = False
+        self.ack_fd = None
 
     def close(self):
         if self.closed: return
@@ -35,7 +42,7 @@ class CommitChoice:
 
     def qualify(self):
         require_native_writer()
-        if not getattr(os, "O_TMPFILE", 0): raise Rejected("本机没有所需匿名冻结能力")
+        if not self.replay and not getattr(os, "O_TMPFILE", 0): raise Rejected("本机没有所需匿名冻结能力")
         self.live.check_catalog(self.live.state / "worktree.sqlite")
         if local_mount(self.live.work_fd) != local_mount(self.live.state_fd):
             raise Rejected("原工作树与私有 STATE 不再处于同一已准入挂载")
@@ -43,8 +50,11 @@ class CommitChoice:
         self.store.check_store()
 
     def prepare(self):
-        if self.closed or self.base is not None: raise Rejected("不能重用旧的提交确认")
-        try: return self._prepare()
+        if self.closed or self.ready: raise Rejected("不能重用旧的提交确认")
+        try:
+            detail = self._prepare()
+            self.ready = True
+            return detail
         except BaseException:
             self.close()  # A failed admission never leaves authority to commit or try this decision again.
             raise
@@ -59,6 +69,15 @@ class CommitChoice:
             lifecycle.require_visible(con, row)
             if row["pending"] is not None: raise Rejected("有原提交待决；不要重新冻结工作目录")
             self.base = _baseline(row)
+        self._open_base()
+        _, branch, gen, node, digest = self.base
+        return (f"工作树：{self.live.work}\n命令行 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
+                f"分支：{branch}\n基线：第 {gen} 代 · {node}\n原包 SHA-256：{digest}\n"
+                f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n"
+                "提交整个工作目录，生成新的不可变归档。不改写原代，不自动解决同代冲突。"
+                "STATE 的冻结和新整包会同时占空间，STORE 还需一份整包；这里不保证容量。")
+
+    def _open_base(self):
         repo, branch, gen, node, digest = self.base
         check_id(repo); check_id(branch); check_id(node)
         if type(gen) is not int or not 0 < gen < (1 << 63) - 1:
@@ -77,14 +96,9 @@ class CommitChoice:
         self.qualify()
         check_relative(self.live.store_fd, self.name, doc, observed)
         self.observed, self.original = observed, doc  # Only a fully verified baseline can authorize run().
-        return (f"工作树：{self.live.work}\n命令行 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
-                f"分支：{branch}\n基线：第 {gen} 代 · {node}\n原包 SHA-256：{digest}\n"
-                f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n"
-                "提交整个工作目录，生成新的不可变归档。不改写原代，不自动解决同代冲突。"
-                "STATE 的冻结和新整包会同时占空间，STORE 还需一份整包；这里不保证容量。")
 
     def check_base(self):
-        if self.closed or self.original is None: raise Rejected("未持有本次已核验的原基线")
+        if self.closed or not self.ready or self.original is None: raise Rejected("未持有本次已核验的原基线")
         self.qualify()
         check_relative(self.live.store_fd, self.name, self.original, self.observed)
 
@@ -99,7 +113,19 @@ class CommitChoice:
         if self.marker is None or marker != self.marker or sha != self.digest or marker.operation != self.operation:
             raise Rejected("记录并非本次已核验的冻结候选")
 
+    def candidate_source(self, marker):
+        return relative_document(self.live.state_fd, marker.operation+".zxs", single=True)
+
     def result(self):
+        # Do not hand out a replay decision unless this particular original's read txn actually returned.
+        self.pending_seen = False
+        outcome = self._result()
+        if self.conflict and outcome[0] == "pending":
+            return "pending", "原候选仍在，但本窗口已核到同代冲突。不会覆盖、续传或自动分叉。"
+        self.pending_seen = outcome[0] == "pending"
+        return outcome
+
+    def _result(self):
         # Metadata only. Never run finish(), read user bodies or publish while querying an outcome.
         with worktree.locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
             self.live.check_instance(row, lifecycle.instance(con))
@@ -115,15 +141,18 @@ class CommitChoice:
                 pending = Commit.decode(row["pending"])
                 if pending.operation == self.operation:
                     self.check_marker(pending, row["pending_sha"])
-                    return "pending", "本次原提交仍待决。可用 CLI status STATE 核对；需续作时只用 resume STATE OPERATION。"
+                    return "pending", "本次原提交仍待决。不重新冻结；可另行核对并确认续作，也可用 CLI resume STATE OPERATION。"
                 return "other", "当前有另一笔待决提交；不能作为本次回执。"
             return "unrecorded", "此原登记中未查到本次受理；可能有未登记的私有候选，不另发、不清除。"
 
     def run(self):
-        if self.closed or self.used or self.original is None: raise Rejected("不能重复提交本次决定")
+        if self.closed or not self.ready or self.used: raise Rejected("不能重复提交本次决定")
         self.used = True
         try:
             self.check_base()
             return worktree.commit(self.live.state, selected=self)
+        except Conflict:
+            self.conflict = True
+            raise
         finally:
             self.close()
