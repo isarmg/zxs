@@ -51,13 +51,25 @@ impl Sealed {
         eof(&mut original)?;
         source.recheck(&original)?;
         fcntl_add_seals(&copy,seals())?;
-        if !fcntl_get_seals(&copy)?.contains(seals()) || copy.metadata()?.len()!=length {
-            return Err(invalid("could not seal the complete independent diagnostic image"));
+        let result=Self::from_sealed(copy,expected)?;
+        if result.geometry.length!=length{return Err(invalid("sealed copy length mismatch"));}
+        source.recheck(&original)?;
+        Ok(result)
+    }
+
+    // Re-exec receives only this anonymous, non-executable tmpfs file as stdin.
+    // Reject regular named files, devices, pipes and incomplete seals before reading.
+    pub(super) fn from_sealed(mut copy:File,expected:&[u8;32])->io::Result<Self>{
+        use std::os::unix::fs::MetadataExt;
+        let meta=copy.metadata()?;
+        let length=meta.len();
+        if !meta.is_file() || meta.nlink()!=0 || meta.mode()&0o111!=0 || !(512..=MAX).contains(&length)
+            || rustix::fs::fstatfs(&copy)?.f_type as u64!=0x0102_1994 // Linux TMPFS_MAGIC (memfd)
+            || !fcntl_get_seals(&copy)?.contains(seals()|SealFlags::EXEC) {
+            return Err(invalid("expected a complete, non-executable, write-sealed anonymous image"));
         }
-        // Verify the independent bytes actually available to the checker, not merely
-        // the input stream the helper intended to copy.
         copy.rewind()?;
-        let mut hash=Sha256::new();let mut left=length;
+        let mut buf=[0u8;32768];let mut hash=Sha256::new();let mut left=length;
         while left!=0 {
             let n=left.min(buf.len() as u64) as usize;
             copy.read_exact(&mut buf[..n])?;hash.update(&buf[..n]);left-=n as u64;
@@ -65,9 +77,8 @@ impl Sealed {
         eof(&mut copy)?;
         let actual:[u8;32]=hash.finalize().into();
         if actual!=*expected{return Err(invalid("sealed image differs from the supplied SHA-256"));}
-        let mut boot=[0_u8;512];copy.read_exact_at(&mut boot,0)?;
+        let mut boot=[0u8;512];copy.read_exact_at(&mut boot,0)?;
         let geometry=geometry(&boot,length)?;
-        source.recheck(&original)?;
         copy.rewind()?;
         Ok(Self{fd:copy,geometry})
     }

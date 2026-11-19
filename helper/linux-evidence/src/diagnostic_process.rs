@@ -1,5 +1,5 @@
 //! Fixed child lifetime primitives for a one-shot CLI, never a generic shell.
-//! The high-level caller supplies only the approved bubblewrap File and closed argv.
+//! Only the approved bubblewrap invocation or the separate, fixed helper copy-check worker.
 use linux_raw_sys::general as uapi;
 use std::{ffi::CString,fs::File,io,mem::MaybeUninit,os::{fd::AsRawFd,unix::{ffi::OsStrExt,process::CommandExt}},process::Command};
 
@@ -53,16 +53,50 @@ pub fn require_waitable_children()->io::Result<()> {
 /// On any error pre_exec returns Err, never Ok: std cannot execute its nominal path.
 #[allow(unsafe_code)]
 pub fn prepare_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
-    let executable=original.try_clone()?;
     let mut args=vec![CString::new("bwrap").expect("literal")];
     for arg in cmd.get_args() {
         if args.len()>=63{return Err(io::Error::other("fixed diagnostic launcher argument budget exceeded"));}
         args.push(CString::new(arg.as_bytes()).map_err(|_|io::Error::other("invalid diagnostic launcher argument"))?);
     }
+    pinned_exec(cmd,original,args,None)
+}
+
+/// Spawn only the copy checker present in the same protected installation as the
+/// calling panel. The only argument is the digest of the *already sealed* stdin.
+pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,digest:&[u8;32])->io::Result<()>{
+    use std::fmt::Write;
+    let mut hex=String::with_capacity(64);for byte in digest{write!(&mut hex,"{byte:02x}").expect("String formatting");}
+    let args=vec![CString::new("helper").expect("literal"),CString::new("__fat32-sealed-v1").expect("literal"),
+        CString::new(hex).expect("hex digest")];
+    pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t))
+}
+
+#[allow(unsafe_code)]
+fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<libc::pid_t>)->io::Result<()> {
+    let executable=original.try_clone()?;
     // SAFETY: all memory and C strings are owned and allocated before fork.
     // The closure only builds pointer arrays on the stack and uses async-safe
-    // Linux syscalls: setsid and execveat. No lock, allocation or unwinding.
+    // Linux syscalls. No lock, allocation or unwinding. The copy worker
+    // alone inherits sealed stdin + stdout/stderr pipes; never the listener.
     unsafe {cmd.pre_exec(move||{
+        if let Some(parent)=panel {
+            // SIG_IGN and the signal mask can survive exec. Make termination
+            // effective *before* arming PDEATHSIG; a lost parent before arming
+            // is detected by the getppid check. No checker exists in this window.
+            let mut action:libc::sigaction=std::mem::zeroed();action.sa_sigaction=libc::SIG_DFL;
+            let mut term:libc::sigset_t=std::mem::zeroed();
+            if libc::sigemptyset(&mut action.sa_mask)!=0 || libc::sigemptyset(&mut term)!=0
+                || libc::sigaddset(&mut term,libc::SIGTERM)!=0
+                || libc::sigaction(libc::SIGTERM,&action,std::ptr::null_mut())!=0
+                || libc::sigprocmask(libc::SIG_UNBLOCK,&term,std::ptr::null_mut())!=0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::syscall(libc::SYS_close_range,3u32,u32::MAX,libc::CLOSE_RANGE_CLOEXEC)!=0
+                || libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGTERM as libc::c_ulong,0 as libc::c_ulong,0 as libc::c_ulong,0 as libc::c_ulong)!=0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::getppid()!=parent{return Err(io::Error::from_raw_os_error(libc::ECANCELED));}
+        }
         if libc::setsid()<0{return Err(io::Error::last_os_error());}
         let mut argv=[std::ptr::null::<libc::c_char>();64];
         for (dst,src) in argv.iter_mut().zip(args.iter()){*dst=src.as_ptr();}

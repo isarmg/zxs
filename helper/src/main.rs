@@ -26,7 +26,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: read-only local diagnostics (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -37,7 +37,8 @@ enum Command {
     Compare(PathBuf, PathBuf),
     Storage(Selection),
     Disks(block_tools::Query),
-    DiskWeb,
+    DiskWeb(Option<fat32_check::Request>),
+    SealedWorker([u8;32]),
     FsTools(fs_tools::Query),
     Fat32(fat32_check::Request),
 }
@@ -50,7 +51,16 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
     if op == "disk-web" {
-        return if args.next().is_none() { Ok(Command::DiskWeb) } else { Err("disk-web takes no address, paths, or other arguments") };
+        return match args.next(){
+            None=>Ok(Command::DiskWeb(None)),
+            Some(arg) if arg=="--fat32-copy"=>fat32_check::Request::parse(args).map(|r|Command::DiskWeb(Some(r))),
+            _=>Err("disk-web accepts only a terminal-selected --fat32-copy IMAGE --sha256 HEX"),
+        };
+    }
+    if op=="__fat32-sealed-v1"{
+        let expected=args.next().and_then(|s|fs_tools::hex(s.to_str()?)).ok_or("invalid internal worker")?;
+        if args.next().is_some(){return Err("invalid internal worker");}
+        return Ok(Command::SealedWorker(expected));
     }
     if op == "inspect-dirs" {
         let dirs: Vec<_> = args.take(inspect::MAX_DIRS + 1).map(PathBuf::from).collect();
@@ -78,7 +88,8 @@ fn line(s: &str) -> io::Result<()> {
 
 fn run(command: Command) -> io::Result<ExitCode> {
     match command {
-        Command::DiskWeb => disk_web::serve()?,
+        Command::DiskWeb(image) => disk_web::serve(image)?,
+        Command::SealedWorker(digest) => return Ok(ExitCode::from(fat32_check::panel::worker(digest).unwrap_or(2))),
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,

@@ -1,5 +1,5 @@
-//! Explicit local disk observations, denied until terminal pairing. The panel never
-//! inherits permission to execute a disk checker or perform a repair.
+//! Explicit local disk panel. Pairing alone never authorizes a checker or repair.
+mod check;
 mod http;
 mod view;
 
@@ -26,12 +26,12 @@ fn matches(s:&[u8],d:&[u8;32])->bool{
 struct Session{bearer:[u8;32],csrf:[u8;32]}
 struct Panel {
     host:String, origin:String, pairing:Option<[u8;32]>, failed:u8, session:Option<Session>,
-    expires:Instant, closed:bool,
+    expires:Instant, closed:bool, check:Option<check::Check>,
 }
 impl Panel {
     fn new(host:String,code:&[u8],now:Instant)->Self{
         Self{origin:format!("http://{host}"),host,pairing:Some(digest(code)),failed:0,
-            session:None,expires:now+PAIR,closed:false}
+            session:None,expires:now+PAIR,closed:false,check:None}
     }
     fn handle(&mut self,r:Request,now:Instant)->Reply{
         if self.closed||now>=self.expires{return Reply::plain(403,"会话已结束，请重新在终端启动。");}
@@ -69,10 +69,19 @@ impl Panel {
             || !r.csrf.as_deref().is_some_and(|v|matches(v.as_bytes(),&session.csrf)){
             return Reply::plain(403,"会话凭据无效。");
         }
+        if matches!(r.path.as_str(),"/api/fat32/check"|"/api/fat32/result"){
+            if r.content_type.as_deref()!=Some("application/octet-stream")||r.body.len()!=64{
+                return Reply::plain(400,"只接受本会话的固定长度预览票。");
+            }
+            return match self.check.as_mut(){Some(c)=>c.action(r.path=="/api/fat32/check",&r.body,now),
+                None=>Reply::plain(403,"终端未为本次面板授权任何镜像检查。")};
+        }
         if !r.body.is_empty()||r.content_type.is_some(){return Reply::plain(400,"不接受路径、设备号、选项或请求正文。");}
         match r.path.as_str() {
+            "/api/fat32/preview"=>match self.check.as_mut(){Some(c)=>c.preview(now),
+                None=>Reply::plain(403,"本次终端只开放观察，没有预选 FAT32 镜像。")},
             "/api/disks"=>view::disks(false),"/api/rates"=>view::disks(true),"/api/tools"=>view::tools(),
-            "/api/close"=>{self.closed=true;Reply::plain(200,"已结束。")},
+            "/api/close"=>{self.closed=true;Reply::plain(200,"不再接受操作；终端可能仍在等工作进程收尾。此回复不能作为升级许可。")},
             _=>Reply::plain(404,"没有该操作。"),
         }
     }
@@ -99,24 +108,30 @@ fn require_terminal(fd:impl AsFd)->io::Result<()>{
     Ok(())
 }
 
-pub(crate) fn serve()->io::Result<()>{
+pub(crate) fn serve(image:Option<crate::fat32_check::Request>)->io::Result<()>{
     // This command owns a fresh single-threaded process. No privileged Web
     // worker, inherited admin groups, ambient capabilities or fallback listener.
     rustix::thread::set_no_new_privs(true)?;
     crate::maintenance::diagnostic_worker(getuid().as_raw(),getgid().as_raw())?;
     let stderr=io::stderr();let mut tty=stderr.lock();
     require_terminal(stderr.as_fd())?;
+    let selected=if let Some(job)=image{
+        writeln!(tty,"正在读取终端指定的镜像并核对完整 SHA-256。仅保存封存副本；浏览器确认前不会运行检查器。")?;tty.flush()?;
+        Some(check::Check::new(crate::fat32_check::panel::Operand::capture(job)?))
+    }else{None};
     let listener=TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,0))?;
     listener.set_nonblocking(true)?;
     let host=listener.local_addr()?.to_string();
-    let code=token()?;let mut panel=Panel::new(host,code.as_bytes(),Instant::now());
+    let code=token()?;let mut panel=Panel::new(host,code.as_bytes(),Instant::now());panel.check=selected;
     require_terminal(stderr.as_fd())?;
     writeln!(tty,"磁盘工具（本机只读）：{}\n一次性配对码（2 分钟有效，请勿分享）：{}",panel.origin,code)?;
     tty.flush()?;drop(code);drop(tty);
-    // No listener thread, inherited child process, automatic probe or timer
+    // No listener thread, automatic probe or timer
     // refresh. Each connection has its own total read and write budgets.
+    let transport=(|| -> io::Result<()>{
     let mut served=0usize;
     while !panel.closed && Instant::now()<panel.expires && served<512{
+        if let Some(c)=&mut panel.check{c.poll();}
         match listener.accept() {
             Ok((mut socket,peer))=>{
                 if !peer.ip().is_loopback(){continue;}
@@ -131,6 +146,9 @@ pub(crate) fn serve()->io::Result<()>{
         }
     }
     Ok(())
+    })();
+    let disposition=panel.check.take().map_or(Ok(()),check::Check::finish);
+    disposition.and(transport)
 }
 
 #[cfg(test)]

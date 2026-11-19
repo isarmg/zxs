@@ -1,6 +1,7 @@
 //! One locally requested FAT32 diagnostic. Applies no repair.
 mod group;
 mod image;
+pub(crate) mod panel;
 mod runner;
 mod runtime;
 use crate::fs_tools::hex;
@@ -10,7 +11,7 @@ use std::{ffi::OsString,fmt,io,path::{Path,PathBuf}};
 pub(crate) struct Request { image:PathBuf, digest:[u8;32] }
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub(crate) enum Outcome {NoFindingsReported,ReportedMessages,FindingsOrToolError}
-pub(crate) struct Report {state:Outcome, files:u32, used:u32, total:u32}
+pub(crate) struct Report {pub(crate) state:Outcome,pub(crate) files:u32,pub(crate) used:u32,pub(crate) total:u32}
 impl Report {
     pub(crate) fn exit(&self)->u8 {if self.state==Outcome::NoFindingsReported {0}else{1}}
 }

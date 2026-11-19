@@ -17,7 +17,7 @@ helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin
 
 ## 本机磁盘面板
 
-`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可分别查看设备与挂载、被动 I/O 速率、七类工具的固定安装位置。不会启动检查器或修复，也不接受镜像路径。见[用法和访问边界](docs/disk-web.md)。
+`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可分别查看设备与挂载、被动 I/O 速率、七类工具的固定安装位置。普通启动不会执行检查。若在终端明确使用 `helper disk-web --fat32-copy IMAGE --sha256 HEX`，启动时就读取并封存这一份镜像；配对后可核对摘要、确认一次只读检查并查回结果。网页不收路径/上传，没有修复。见[用法和访问边界](docs/disk-web.md)。
 
 ## 查看选定的存储根
 

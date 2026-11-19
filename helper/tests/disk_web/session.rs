@@ -21,7 +21,7 @@ fn no_disk_observation_or_close_via_wrong_origin_missing_bearer_or_arbitrary_tar
     assert_eq!(p.handle(approved("/api/tools?format=zfs"),now).code,404);
     assert_eq!(p.handle(approved("/api/run"),now).code,404);
     assert_eq!(p.handle(approved("/api/repair"),now).code,404);
-    assert_eq!(p.handle(approved("/api/close"),now).code,200);assert!(p.closed);
+    let ack=p.handle(approved("/api/close"),now);assert_eq!(ack.code,200);assert!(ack.body.contains("此回复不能作为升级许可"));assert!(p.closed);
 }
 #[test]
 fn pairing_has_a_short_deadline_six_attempts_and_no_second_use(){
@@ -68,4 +68,17 @@ fn pairing_requires_a_supported_terminal_and_the_callers_actual_foreground_sessi
     assert!(foreground(31,31,47,47));
     assert!(!foreground(30,31,47,47));assert!(!foreground(31,31,42,47));
     assert!(!foreground(0,0,47,47));assert!(!foreground(31,31,0,0));
+}
+
+#[test]
+fn pairing_or_a_user_supplied_path_cannot_create_a_fat32_grant(){
+    let now=Instant::now();let mut p=logged(now);
+    assert_eq!(p.handle(approved("/api/fat32/preview"),now).code,403);
+    let mut supplied=approved("/api/fat32/preview");supplied.body=b"/dev/sda".to_vec();
+    assert_eq!(p.handle(supplied,now).code,400);
+    for endpoint in ["/api/fat32/check","/api/fat32/result"]{
+        let mut r=approved(endpoint);r.content_type=Some("application/octet-stream".into());r.body=vec![b'f';64];
+        assert_eq!(p.handle(r,now).code,403);
+        let mut r=approved(endpoint);r.body=b"--fix".to_vec();assert_eq!(p.handle(r,now).code,400);
+    }
 }
