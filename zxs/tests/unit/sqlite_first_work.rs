@@ -172,3 +172,45 @@ fn new_rw_can_supersede_only_a_revoked_unconfirmed_attempt_without_adopting_its_
         }
     }
 }
+
+#[test]
+#[ignore="real SQLite and private ordinary files; does not exercise SMB share-access or a Windows client"]
+fn compatible_read_snapshots_cross_a_real_first_writer_in_both_directions(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,_,rw,ro)=enrollment(&t);
+    let a=InitialReader::open(&s,p).unwrap();let b=InitialReader::open(&s,p).unwrap();
+    let sa=SmbSession::fixture_authenticated(&a,"files.smb").unwrap();
+    let sb=SmbSession::fixture_authenticated(&b,"files.smb").unwrap();
+    let writer=sa.connect(rw).unwrap();let reader=sb.connect(ro).unwrap();let competing=sb.connect(rw).unwrap();
+    let id=writer.create_file(OperationId([0xd1;16]),NAME).unwrap().file;
+    let file=input(&t,"received",b"never disclose this before its original SQL commit");
+    let old=reader.open_current(NAME).unwrap();assert_eq!((old.file(),old.working_revision(),old.size()),(id,0,0));
+    let mut cuts=0;
+    let at=writer.save_first_after(SAVE,NAME,id,&file,|cut|{
+        // The original writer still holds the preparation EX. Even after
+        // all four true files have been synced, a second independently
+        // opened connection may read the confirmed empty predecessor.
+        assert_eq!(pending(&b,SAVE),Some(0));
+        let early=reader.open_current(NAME)?;assert_eq!((early.file(),early.size(),early.working_revision()),(id,0,0));
+        let mut sent=Vec::new();early.range_to(0,0,&mut sent)?;
+        assert!(early.range_to(0,1,&mut sent).is_err());assert!(sent.is_empty());
+        old.range_to(0,0,&mut sent)?;
+        // Two true writers never prepare the identical Op concurrently.
+        assert!(competing.save_first(SAVE,NAME,id,&file).is_err());
+        if cut==Cut::BytesSynced{
+            assert!(competing.save_first(OperationId([0xd2;16]),NAME,id,&file).is_err());
+            assert_eq!(pending(&b,OperationId([0xd2;16])),None);
+        }
+        cuts+=1;Ok(())
+    }).unwrap();
+    assert_eq!((cuts,at.revision,pending(&b,SAVE)),(2,1,Some(1)));
+    // The still-open older handle does not follow HEAD to new bytes. Its
+    // real header/root, source lease and current read authority remain in
+    // force. A later independent selection sees the new revision instead.
+    let mut old_bytes=Vec::new();old.range_to(0,0,&mut old_bytes).unwrap();
+    assert!(old.range_to(0,1,&mut old_bytes).is_err());assert!(old_bytes.is_empty());
+    let now=reader.open_current(NAME).unwrap();let mut read=Vec::new();now.range_to(0,now.size(),&mut read).unwrap();
+    assert_eq!((now.file(),now.working_revision()),(id,1));assert_eq!(read,b"never disclose this before its original SQL commit");
+    let manager=b.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let prior=manager.share_setting(ro).unwrap();manager.set_share_mode(OperationId([0xd3;16]),ro,prior.op,Mode::Disabled).unwrap();
+    assert!(old.range_to(0,0,Vec::new()).is_err());assert!(now.range_to(0,1,Vec::new()).is_err());
+}

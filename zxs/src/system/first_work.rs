@@ -184,16 +184,25 @@ pub(crate) struct Current<'t,'s,'r>{body:Option<HeldWork>,container:Installed,ro
 impl<'s,'r> Tree<'s,'r>{
     pub(crate) fn open_current<'t>(&'t self,name:&str)->io::Result<Current<'t,'s,'r>>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
-        let(c,b,selected,kept)=src.at(|db,c|{
+        let(c,b)=src.at(|db,c|{
             self.require(db,&c,false)?;
             let s=db.prepare(c"SELECT file_id FROM main.root_entry WHERE volume_id=?1 AND display=?2")?;
             s.bind_bytes(1,&self.setting.volume.0)?;s.bind_bytes(2,name.as_bytes())?;
             match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("cannot select SMB member"));}}
-            let file=FileId(s.array(0)?);s.done()?;let b=self.birth(db,&c,name,file)?;let selected=by_file(db,&b)?;let kept=retained(db,&b)?;Ok((c,b,selected,kept))
+            let file=FileId(s.array(0)?);s.done()?;let b=self.birth(db,&c,name,file)?;Ok((c,b))
         })?;
-        let live=selected.filter(|x|x.done).map(|x|x.spec);
         let root=OrdinaryRoot::for_body(src,&c,b.volume)?;let sample=root.root.names()?.into_iter().collect();
-        let container=b.working_at(&root.root,&sample,false,selected.map(|x|(x.spec,x.done)),&kept)?;
+        // Revalidate the precise FILE/authority after opening the volume.
+        // Capture revision and short native header/name membership in one
+        // SQL cut; the potentially slow independent block-directory read
+        // and all data delivery are outside it. A reserved writer may add
+        // only this attempt's four declared names; none are served yet.
+        let(container,live,kept)=src.at(|db,c|{
+            self.current_birth(db,&c,&b,false)?;
+            let selected=by_file(db,&b)?;let kept=retained(db,&b)?;
+            let container=b.working_at(&root.root,&sample,false,selected.map(|x|(x.spec,x.done)),&kept)?;
+            Ok((container,selected.filter(|x|x.done).map(|x|x.spec),kept))
+        })?;
         let body=live.map(|s|HeldWork::open(container.directory(),s,&kept)).transpose()?;
         let h=Current{body,container,root,tree:self,birth:b,live};h.require()?;Ok(h)
     }
@@ -207,7 +216,12 @@ impl Current<'_,'_,'_>{
         src.at(|db,c|{
             self.tree.current_birth(db,&c,&self.birth,false)?;
             let state=by_file(db,&self.birth)?;let kept=retained(db,&self.birth)?;
-            if state.filter(|x|x.done).map(|x|x.spec)!=self.live{return Err(invalid("confirmed working revision changed"));}
+            // A genuinely opened revision zero stays empty after revision
+            // one commits; it does not upgrade to the newly published
+            // bytes. This schema has only one immutable manual revision.
+            if self.live.is_some_and(|s|state.filter(|x|x.done).map(|x|x.spec)!=Some(s)){
+                return Err(invalid("selected confirmed working original changed"));
+            }
             file_create::display_free(db,&c,&self.root.root,&self.birth)?;
             match state{Some(x)=>x.spec.members(&crate::fs::WitnessRead::at(self.container.directory())?,x.done,&kept)?,
                 None=>self.container.require_newborn(&self.root.root)?,}

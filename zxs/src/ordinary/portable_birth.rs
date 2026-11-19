@@ -48,20 +48,23 @@ impl Birth{
         self.newborn_at(parent,sample,&self.container()?)
     }
     fn newborn_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr)->io::Result<Installed>{
-        self.physical_at(parent,sample,leaf,false,|scope|scope.only_header())
+        self.physical_at(parent,sample,leaf,HeldDir::share,|scope|scope.only_header())
     }
     pub(crate) fn working_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,write:bool,
         spec:Option<(crate::ordinary::working_sql::Spec,bool)>,kept:&crate::ordinary::working_sql::Retained)->io::Result<Installed>{
-        self.physical_at(parent,sample,&self.container()?,write,|scope|match spec {
+        // Same native directory EX serializes preparers of this one first
+        // revision. It is not a network-handle lock. A selected read holds
+        // the original header and its immutable materials, never this lock.
+        self.physical_at(parent,sample,&self.container()?,|dir|if write{dir.exclusive()}else{Ok(())},|scope|match spec {
             None=>scope.only_header(),
             Some((s,all)) if s.pool==self.pool && s.file==self.file=>s.members(scope,all,kept),
             _=>Err(invalid("working materials belong to a different FILE")),
         })
     }
-    fn physical_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr,write:bool,
+    fn physical_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr,lock:impl FnOnce(&HeldDir)->io::Result<()>,
         members:impl FnOnce(&WitnessRead<'_>)->io::Result<()>)->io::Result<Installed>{
         let dir=parent.directory_in_sample(leaf,sample)?.ok_or_else(||invalid("original FILE container not installed"))?;
-        if write{dir.exclusive()?;}else{dir.share()?;}
+        lock(&dir)?;
         let scope=WitnessRead::at(&dir)?;members(&scope)?;
         let expected=self.header();
         let witness=self.witness()?;
