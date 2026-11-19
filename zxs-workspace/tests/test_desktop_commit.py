@@ -12,6 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import private_stage, publish, worktree
+from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.selection import Selection
@@ -34,7 +35,9 @@ def snapshot(path, marker=None, *, year=1980):
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "real admitted Linux ext4/XFS required")
-class ExplicitDesktopCommit(unittest.TestCase):
+class OriginalCheckoutFixture(unittest.TestCase):
+    needs_freeze = False
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
@@ -44,21 +47,29 @@ class ExplicitDesktopCommit(unittest.TestCase):
         try:
             try:
                 publish.require_native_writer(); private_stage.same_mount(a, b)
-                if not getattr(os, "O_TMPFILE", 0): self.skipTest("anonymous file unsupported")
-                os.close(os.open(".", os.O_TMPFILE | os.O_EXCL | os.O_RDWR, 0o600, dir_fd=a))
+                if self.needs_freeze:
+                    if not getattr(os, "O_TMPFILE", 0): self.skipTest("anonymous file unsupported")
+                    os.close(os.open(".", os.O_TMPFILE | os.O_EXCL | os.O_RDWR, 0o600, dir_fd=a))
             except (OSError, Rejected) as err:
                 self.skipTest("actual drive not admitted for this fixture: " + str(err))
         finally: os.close(b); os.close(a)
         self.loose = self.root/"loose.zxs"; self.first = snapshot(self.loose)
         self.original = self.store/self.first.filename
         self.original.write_bytes(self.loose.read_bytes())
-        plan = CheckoutChoice(Selection.open(self.loose), keep_session=True)
-        self.addCleanup(plan.close)
-        plan.pick_store(self.store); plan.pick_target(parent); plan.pick_private(private)
-        plan.review("Active"); plan.run()
-        self.live = plan.take_session(); self.assertIsNotNone(self.live)
-        self.addCleanup(self.live.close)
         self.tree, self.state = parent/"Active", private/"Active"
+        self.live = self.open_live(self.loose, "Active")
+
+    def open_live(self, source, leaf):
+        plan = CheckoutChoice(Selection.open(source), keep_session=True); self.addCleanup(plan.close)
+        plan.pick_store(self.store); plan.pick_target(self.tree.parent); plan.pick_private(self.state.parent)
+        plan.review(leaf); plan.run()
+        live = plan.take_session(); self.assertIsNotNone(live)
+        self.addCleanup(live.close)
+        return live
+
+
+class ExplicitDesktopCommit(OriginalCheckoutFixture):
+    needs_freeze = True
 
     def choice(self, *, review=True):
         choice = CommitChoice(self.live); self.addCleanup(choice.release)
@@ -434,4 +445,232 @@ class ExplicitDesktopCommit(unittest.TestCase):
             self.assertTrue((self.store/original.marker.filename).is_file())
             self.assertFalse(controls.retry.isEnabled())
             self.assertEqual(original.result()[0],"completed")
+        finally: win.close()
+
+
+class DisplayedNodeBranch(OriginalCheckoutFixture):
+    def proposal(self, live=None):
+        job = SnapshotBranch(live or self.live); self.addCleanup(job.release)
+        return job
+
+    def test_explicit_fork_uses_the_displayed_parent_not_the_advancing_head_or_dirty_files(self):
+        from zipworkspace.refs import Catalog
+        (self.tree/"story").write_bytes(b"my uncommitted edits")
+        (self.tree/"new").write_bytes(b"not in the displayed node")
+        old = self.original.read_bytes(); job = self.proposal()
+        with patch.object(os, "O_TMPFILE", 0, create=True), \
+             patch.object(worktree, "anonymous_capture", side_effect=AssertionError("no anonymous spool")), \
+             patch.object(worktree, "frozen_tree", side_effect=AssertionError("do not read or freeze the working files")):
+            with patch.object(os, "fsync", side_effect=AssertionError("confirmation must be read-only")):
+                detail = job.prepare()
+            for expected in (self.first.operation, self.first.branch, job.operation, job.branch_id,
+                             job.proposed.filename, self.state, self.store):
+                self.assertIn(str(expected), detail)
+            self.assertEqual(list(self.store.iterdir()), [self.original])
+            self.assertIsNone(self.live.status()["pending_operation"])
+            later = replace(self.first, generation=2, operation="e"*32, parent=self.first.operation)
+            advanced = self.store/later.filename; snapshot(advanced, later)
+            path, node = job.run()
+        self.assertEqual((node.repo,node.branch,node.generation,node.operation,node.parent,node.tree),
+                         (self.first.repo,job.branch_id,1,job.operation,self.first.operation,self.first.tree))
+        self.assertNotEqual(node.branch, self.first.branch)
+        self.assertEqual(path, self.store/node.filename); self.assertEqual(self.original.read_bytes(), old)
+        self.assertEqual(path.read_bytes(), (self.state/(job.operation+".zxs")).read_bytes())
+        self.assertNotEqual(path.read_bytes(), old)
+        with zipfile.ZipFile(path) as z:
+            self.assertEqual(z.read("story"), b"original story"); self.assertIn("empty/", z.namelist())
+            self.assertNotIn("new", z.namelist())
+        self.assertEqual((self.tree/"story").read_bytes(), b"my uncommitted edits")
+        self.assertEqual((self.tree/"new").read_bytes(), b"not in the displayed node")
+        catalog = Catalog(self.original, self.store)
+        self.assertEqual(catalog.select_branch(self.first.branch).marker, later)
+        self.assertEqual(catalog.select_branch(node.branch).marker, node)
+        self.assertEqual(self.live.status()["branch"], node.branch)
+        self.assertEqual(job.result()[0], "completed")
+        with worktree.locked(self.state, read_only=True) as (con, _, __):
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM forked_original").fetchone()[0], 0)
+
+    def test_a_byte_identical_replacement_of_the_displayed_loose_archive_is_not_the_selected_source(self):
+        job = self.proposal(); job.prepare()
+        preserved = self.root/"previous-source.zxs"
+        self.loose.rename(preserved); self.loose.write_bytes(preserved.read_bytes())
+        with patch.object(worktree, "locked", side_effect=AssertionError("no SQL writer")), self.assertRaises(Rejected):
+            job.run()
+        self.assertEqual(list(self.store.iterdir()), [self.original]); self.assertFalse((self.state/(job.operation+".zxs")).exists())
+
+    def test_displayed_canonical_slot_reuses_its_verified_handle_and_only_its_original_generation(self):
+        canonical = self.open_live(self.original, "Canonical")
+        job = self.proposal(canonical)
+        with patch("zipworkspace.desktop.branch_choice.named_document", side_effect=AssertionError("same slot already held")):
+            job.prepare()
+        self.assertIs(job.original, job.source)
+        old = self.root/"old-canonical.zxs"; self.original.rename(old); self.original.write_bytes(old.read_bytes())
+        with self.assertRaises(Rejected): job.run()
+        self.assertIsNone(canonical.status()["pending_operation"])
+
+    def test_same_tree_with_different_canonical_zip_bytes_never_supplies_the_parent(self):
+        self.original.rename(self.root/"first-canonical")
+        snapshot(self.original, self.first, year=1995)
+        self.assertNotEqual(self.original.read_bytes(), self.loose.read_bytes())
+        job = self.proposal()
+        with self.assertRaisesRegex(Rejected, "SHA-256"): job.prepare()
+        with patch.object(worktree, "locked", side_effect=AssertionError("no new operation after refusal")), self.assertRaises(Rejected):
+            job.run()
+        self.assertFalse((self.state/(job.operation+".zxs")).exists())
+
+    def test_unconfirmed_cancelled_and_wrong_purpose_decisions_cannot_cross_into_another_writer(self):
+        job = self.proposal(); job.prepare()
+        with patch.object(worktree, "anonymous_capture", side_effect=AssertionError("must not freeze")), \
+             patch.object(worktree, "locked", side_effect=AssertionError("must not enter writer")):
+            with self.assertRaises(Rejected): worktree.branch_from_snapshot(self.state, selected=job)
+            with self.assertRaises(Rejected): PendingRetry(job)
+            with patch.object(worktree, "branch_from_snapshot", side_effect=lambda path, *, selected:
+                              worktree.commit(path, selected=selected)), self.assertRaises(Rejected):
+                job.run()  # used=True, but consent to branch is not consent to freeze.
+        cancelled = self.proposal(); cancelled.prepare(); cancelled.close()
+        with self.assertRaises(Rejected): cancelled.run()
+        self.assertIsNone(self.live.status()["pending_operation"]); self.assertEqual(list(self.store.iterdir()), [self.original])
+
+    def test_raced_sqlite_baseline_refuses_without_reading_a_new_head_or_writing_another_candidate(self):
+        first, other = self.proposal(), self.proposal()
+        first.prepare(); other.prepare(); _, winner = other.run()
+        with self.assertRaisesRegex(Rejected, "基线已改变"): first.run()
+        next_job = self.proposal()
+        with patch.object(next_job,"_open_base",side_effect=AssertionError("do not inspect another node")), self.assertRaises(Rejected):
+            next_job.prepare()
+        self.assertFalse((self.state/(first.operation+".zxs")).exists())
+        self.assertEqual(self.live.status()["base_operation"], winner.operation)
+
+    def test_other_original_pending_wins_without_consuming_it_or_making_a_second_candidate(self):
+        first, other = self.proposal(), self.proposal()
+        first.prepare(); other.prepare()
+        with patch.object(worktree, "finish", side_effect=OSError(errno.EIO, "after original intent")), self.assertRaises(OSError):
+            other.run()
+        with patch.object(first.area, "copy_with_marker", side_effect=AssertionError("do not capture competing operation")), \
+                self.assertRaisesRegex(Rejected, "已有待决"):
+            first.run()
+        self.assertEqual(self.live.status()["pending_operation"], other.operation)
+        self.assertEqual(first.result()[0], "other")
+        self.assertTrue((self.state/(other.operation+".zxs")).is_file())
+        self.assertFalse((self.state/(first.operation+".zxs")).exists())
+        self.assertEqual(list(self.store.iterdir()), [self.original])
+
+    def test_new_first_generation_occupied_before_or_during_promotion_is_never_replaced_or_renumbered(self):
+        early = self.proposal(); early.prepare()
+        early_slot = self.store/early.proposed.filename; early_slot.write_bytes(b"belongs to somebody else")
+        with self.assertRaises(publish.Conflict): early.run()
+        self.assertEqual(early_slot.read_bytes(), b"belongs to somebody else")
+        self.assertFalse((self.state/(early.operation+".zxs")).exists())
+        later = self.proposal(); later.prepare()
+        target, rename = self.store/later.proposed.filename, publish.rename_new_at
+        def win_at_rename(fd, stage, name):
+            self.assertEqual(name, target.name)
+            target.write_bytes(b"race winner")
+            rename(fd, stage, name)
+        with patch.object(publish, "rename_new_at", side_effect=win_at_rename), self.assertRaises(publish.Conflict):
+            later.run()
+        self.assertEqual(target.read_bytes(), b"race winner")
+        self.assertEqual((later.result()[0], later.pending_seen), ("pending", False))
+        self.assertEqual(self.live.status()["branch"], self.first.branch)
+        self.assertEqual(self.live.status()["pending_operation"], later.operation)
+        self.assertTrue((self.state/(later.operation+".zxs")).exists())
+        with self.assertRaises(Rejected): PendingRetry(later)
+
+    def test_exact_published_branch_slot_needs_new_consent_to_switch_without_a_second_upload(self):
+        job = self.proposal(); job.prepare()
+        actual_publish = worktree._publish
+        def visible_before_lost_receipt(*args, **kwargs):
+            target = actual_publish(*args, **kwargs)
+            self.assertEqual(target, self.store/job.proposed.filename)
+            raise OSError(errno.EIO, "formal slot durable; local result not recorded")
+        with patch.object(worktree, "_publish", side_effect=visible_before_lost_receipt), self.assertRaises(OSError):
+            job.run()
+        before = self.live.status()
+        self.assertEqual((before["branch"], before["pending_operation"]), (self.first.branch, job.operation))
+        target = self.store/job.proposed.filename; original = target.stat()
+        self.assertEqual(target.read_bytes(), (self.state/(job.operation+".zxs")).read_bytes())
+        (self.tree/"story").write_bytes(b"my edits after publication")
+        self.assertEqual(job.result()[0], "pending")
+        retry = PendingRetry(job); self.addCleanup(retry.release)
+        with patch.object(os,"fsync",side_effect=AssertionError("preview is not acknowledgement")):
+            detail = retry.prepare()
+        self.assertIn(f"当前分支：{self.first.branch}", detail)
+        self.assertIn(f"目标分支：{job.branch_id} · 第 1 代", detail)
+        self.assertIn("不上传", detail); self.assertIn("工作目录文件不改", detail)
+        self.assertEqual(retry.confirmation_label, "确认原槽并切换工作树分支")
+        self.assertIsNotNone(retry.ack_fd)
+        self.assertEqual(self.live.status()["branch"], self.first.branch)
+        with patch.object(publish,"_new_upload",side_effect=AssertionError("ack cannot upload")), \
+             patch.object(publish,"rename_new_at",side_effect=AssertionError("ack cannot rename")), \
+             patch.object(worktree,"frozen_tree",side_effect=AssertionError("ack cannot inspect working files")):
+            saved, marker = retry.run()
+        self.assertEqual((saved, marker), (target, job.proposed)); self.assertTrue(os.path.samestat(original, target.stat()))
+        after = self.live.status()
+        self.assertEqual((after["branch"], after["pending_operation"]), (job.branch_id, None))
+        self.assertEqual((self.tree/"story").read_bytes(), b"my edits after publication")
+
+    def test_unknown_then_explicit_original_receipt_replay_never_freezes_or_chooses_a_new_branch(self):
+        job = self.proposal(); job.prepare()
+        with patch.object(publish, "rename_new_at", side_effect=OSError(errno.EIO, "no original answer")), \
+                self.assertRaises(publish.Uncertain): job.run()
+        self.assertFalse((self.store/job.proposed.filename).exists())
+        self.assertEqual(self.live.status()["branch"], self.first.branch)
+        self.loose.rename(self.root/"not-needed-for-recorded-replay.zxs")
+        (self.tree/"story").write_bytes(b"changed again")
+        with patch.object(worktree,"finish", side_effect=AssertionError("query is not publication")):
+            self.assertEqual(job.result()[0], "pending")
+        retry = PendingRetry(job); self.addCleanup(retry.release); detail = retry.prepare()
+        self.assertIn(f"当前分支：{self.first.branch}", detail); self.assertIn(f"目标分支：{job.branch_id}", detail)
+        self.assertEqual(retry.confirmation_label, "发布原候选并切换工作树分支"); self.assertIsNone(retry.ack_fd)
+        with patch.object(worktree, "anonymous_capture", side_effect=AssertionError("never freeze on replay")), \
+             patch.object(worktree, "branch_from_snapshot", side_effect=AssertionError("no second branch proposal")):
+            path, marker = retry.run()
+        self.assertEqual(marker, job.proposed); self.assertEqual(path, self.store/job.proposed.filename)
+        self.assertEqual(self.live.status()["branch"], job.branch_id)
+        self.assertEqual((self.tree/"story").read_bytes(), b"changed again")
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_branch_button_requires_its_own_approval_and_a_still_selected_original_session(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        def immediate(_title, call, accept, *, failed=None):
+            try: value = call()
+            except Exception as err:
+                if failed is None: raise
+                failed(err)
+            else: accept(value)
+            return object()
+        try:
+            controls = win.archive.checkout.commits; controls.set_session(self.live)
+            def switch(_parent, title, text, *, attestation, action_text):
+                self.assertEqual(action_text, "创建、发布并切换")
+                self.assertIn(self.first.operation, text); self.assertIn("不含当前编辑", attestation)
+                controls.set_session(None)
+                return True  # Consent for a vanished window selection is not a new authorization.
+            with patch.object(win, "job", side_effect=immediate), patch.object(controls, "refresh_status"), \
+                 patch.object(commit_controls, "confirm", side_effect=switch), \
+                 patch.object(worktree, "branch_from_snapshot", side_effect=AssertionError("stale selection")):
+                controls.branch()
+            self.assertFalse(controls.new_branch.isEnabled())
+            controls.set_session(self.live)
+            with patch.object(win,"job", side_effect=immediate), patch.object(controls,"refresh_status"), \
+                 patch.object(commit_controls,"confirm",return_value=False), \
+                 patch.object(worktree,"branch_from_snapshot",side_effect=AssertionError("not confirmed")):
+                controls.branch()
+            self.assertEqual(list(self.store.iterdir()), [self.original]); self.assertIsNone(controls.last)
+            def approve(_parent, title, text, *, attestation, action_text):
+                self.assertIn("从所选原节点", title); self.assertIn(str(self.store), text)
+                self.assertEqual(action_text, "创建、发布并切换"); self.assertFalse(controls.new_branch.isEnabled())
+                controls.branch()  # No second job or ID while the first decision is active.
+                return True
+            with patch.object(win,"job", side_effect=immediate), patch.object(controls,"refresh_status"), \
+                 patch.object(commit_controls,"confirm", side_effect=approve) as ask:
+                controls.branch()
+            self.assertEqual(ask.call_count, 1); self.assertIn("新分支已发布", controls.output.text())
+            self.assertIn(controls.last.branch_id, controls.output.text())
+            self.assertEqual(self.live.status()["pending_operation"], None)
+            self.assertEqual(len(list(self.store.iterdir())), 2)
         finally: win.close()

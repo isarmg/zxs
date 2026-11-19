@@ -17,7 +17,7 @@ def _baseline(row):
 
 
 class CommitChoice:
-    replay = False
+    purpose = "commit"
 
     def __init__(self, live):
         self._bind(live, new_id())
@@ -42,7 +42,7 @@ class CommitChoice:
 
     def qualify(self):
         require_native_writer()
-        if not self.replay and not getattr(os, "O_TMPFILE", 0): raise Rejected("本机没有所需匿名冻结能力")
+        if self.purpose == "commit" and not getattr(os, "O_TMPFILE", 0): raise Rejected("本机没有所需匿名冻结能力")
         self.live.check_catalog(self.live.state / "worktree.sqlite")
         if local_mount(self.live.work_fd) != local_mount(self.live.state_fd):
             raise Rejected("原工作树与私有 STATE 不再处于同一已准入挂载")
@@ -59,17 +59,25 @@ class CommitChoice:
             self.close()  # A failed admission never leaves authority to commit or try this decision again.
             raise
 
-    def _prepare(self):
+    def _idle_base(self):
+        with worktree.locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
+            self.live.check_instance(row, lifecycle.instance(con))
+            lifecycle.require_visible(con, row)
+            if row["pending"] is not None: raise Rejected("有原提交待决；不能另发操作")
+            return _baseline(row)
+
+    def _prepare_base(self, *, required=None):
         self.store = StoreReadback(self.live.store, self.live.store_fd)
         self.area = CandidateDirectory(self.live.state, self.live.state_fd,
                                       native_identity(os.fstat(self.live.state_fd), stat.S_IFDIR))
         self.qualify()
-        with worktree.locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
-            self.live.check_instance(row, lifecycle.instance(con))
-            lifecycle.require_visible(con, row)
-            if row["pending"] is not None: raise Rejected("有原提交待决；不要重新冻结工作目录")
-            self.base = _baseline(row)
+        self.base = self._idle_base()
+        if required is not None and self.base != required:
+            raise Rejected("本工作树的当前基线不再是窗口所选原节点；不打开其他代")
         self._open_base()
+
+    def _prepare(self):
+        self._prepare_base()
         _, branch, gen, node, digest = self.base
         return (f"工作树：{self.live.work}\n命令行 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
                 f"分支：{branch}\n基线：第 {gen} 代 · {node}\n原包 SHA-256：{digest}\n"
@@ -80,7 +88,8 @@ class CommitChoice:
     def _open_base(self):
         repo, branch, gen, node, digest = self.base
         check_id(repo); check_id(branch); check_id(node)
-        if type(gen) is not int or not 0 < gen < (1 << 63) - 1:
+        if (type(gen) is not int or not 0 < gen < (1 << 63)
+                or self.purpose == "commit" and gen == (1 << 63) - 1):
             raise Rejected("工作树没有可继续的原基线")
         self.name = f"{repo}.{branch}.{gen:016x}.zxs"
         # No SQLite writer or lock persists across this potentially long read / consent dialog.
@@ -95,7 +104,7 @@ class CommitChoice:
             raise Rejected("STORE 中原基线的节点或整包 SHA-256 不符")
         self.qualify()
         check_relative(self.live.store_fd, self.name, doc, observed)
-        self.observed, self.original = observed, doc  # Only a fully verified baseline can authorize run().
+        self.base_marker, self.observed, self.original = marker, observed, doc  # Only after both checks.
 
     def check_base(self):
         if self.closed or not self.ready or self.original is None: raise Rejected("未持有本次已核验的原基线")

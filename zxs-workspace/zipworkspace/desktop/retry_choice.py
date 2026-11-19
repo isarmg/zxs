@@ -10,10 +10,10 @@ from .commit_choice import CommitChoice, _baseline
 
 
 class PendingRetry(CommitChoice):
-    replay = True
+    purpose = "retry"
 
     def __init__(self, submitted):
-        if (submitted.replay or not submitted.used or not submitted.pending_seen or submitted.conflict
+        if (submitted.purpose not in ("commit", "branch") or not submitted.used or not submitted.pending_seen or submitted.conflict
                 or submitted.marker is None or submitted.digest is None):
             raise Rejected("需要先只读查到本窗口这笔无已知冲突的待决原操作")
         submitted.pending_seen = False  # A cancellation, refusal or loss requires another explicit query.
@@ -56,13 +56,21 @@ class PendingRetry(CommitChoice):
         self._pending()  # Expensive archive reads never run with a SQLite lock held.
         self.check_candidate()
         check_relative(self.live.store_fd, self.name, self.original, self.observed)
-        action = ("该正式槽已是核验过的原归档。本次只确认这个原文件的回执，不上传；它若消失或被换就停止。"
-                  if self.ack_fd is not None else
-                  "核验时正式槽不存在。只用这份已冻结的原候选尝试不可覆盖发布；相同结果只确认，不同结果不覆盖。")
+        existing = self.ack_fd is not None
+        action = ("该正式槽已是核验过的原归档。在 STORE 中只确认这个原文件，不上传；它若消失或被换就停止。"
+                  if existing else
+                  "核验时正式槽不存在。只用这份已冻结的原候选尝试不可覆盖发布；相同结果只核认，不同结果不覆盖。")
+        if self.origin.purpose == "branch":
+            self.confirmation_label = "确认原槽并切换工作树分支" if existing else "发布原候选并切换工作树分支"
+            effect = "只有本次原操作登记完成后，本工作树才从所列当前分支切到目标分支；工作目录文件不改。"
+        else:
+            self.confirmation_label = "确认原槽并登记基线" if existing else "续作原冻结候选"
+            effect = "只有本次原操作登记完成后，本工作树才以所列目标代为基线。"
         return (f"原工作树：{self.live.work}\n原 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
                 f"原操作：{self.operation}\n冻结归档 SHA-256：{self.digest}\n"
-                f"原分支：{self.marker.branch} · 第 {self.marker.generation} 代\n正式槽：{self.marker.filename}\n\n"
-                f"{action}\n不读取或冻结当前工作文件，后来保存的编辑不会进入这笔原操作。")
+                f"当前分支：{self.base[1]} · 第 {self.base[2]} 代\n目标分支：{self.marker.branch} · 第 {self.marker.generation} 代\n"
+                f"正式槽：{self.marker.filename}\n\n{action}\n{effect}\n"
+                "不读取或冻结当前工作文件，后来保存的编辑不会进入这笔原操作。")
 
     @contextmanager
     def candidate_source(self, marker):

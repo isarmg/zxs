@@ -7,7 +7,7 @@ import stat
 import zipfile
 
 from .archive import read_managed_document, stamp
-from .capacity import close_output_fd, note, writing
+from .capacity import buffered_output, close_output_fd, note, writing
 from .document import archive_sha, native_identity
 from .model import CHUNK, Rejected, check_id
 
@@ -37,7 +37,7 @@ class CandidateDirectory:
         return observed
 
     @contextmanager
-    def candidate(self, operation, *, editable=False):
+    def candidate(self, operation, *, editable=False, mixed_source=False):
         self.check_state()
         name = check_id(operation) + ".zxs"
         access = os.O_RDWR if editable else os.O_WRONLY
@@ -45,11 +45,14 @@ class CandidateDirectory:
             fd = os.open(name, os.O_CREAT | os.O_EXCL | access | os.O_NOFOLLOW | os.O_CLOEXEC,
                          0o600, dir_fd=self.parent)
         try:
-            with os.fdopen(fd, "w+b" if editable else "wb", closefd=False) as stream:
+            with buffered_output(os.fdopen(fd, "w+b" if editable else "wb", closefd=False),
+                                 "STATE", self.path/name, operation, self.parent) as stream:
                 self.check_file(name, fd)
                 yield name, fd, stream
         except Exception as error:
-            note(error,"STATE",self.path/name,"制作或同步原私有命名候选；它可能保留且尚未登记",operation,self.parent)
+            # The shared copy helper can read a different volume. It annotates its actual output writes.
+            if not mixed_source:
+                note(error,"STATE",self.path/name,"制作或同步原私有命名候选；它可能保留且尚未登记",operation,self.parent)
             error.add_note(f"原私有候选可能残留于 {self.path / name}，也可能尚未登记。保留现场，不自动删除或重试。")
             raise
         finally:
@@ -88,31 +91,38 @@ class CandidateDirectory:
                 if archive_sha(src) != expected_sha or read_managed_document(src, display_name=name)[0] != old:
                     raise Rejected("original frozen candidate is unavailable")
                 self.check_file(name, fd, before)
-                with self.candidate(new.operation, editable=True) as (new_name, new_fd, dst):
-                    # No pathname supplies the source or ever reopens the successor for writing.
-                    src.seek(0)
-                    left, digest = before[2], hashlib.sha256()
-                    while left:
-                        block = src.read(min(left, CHUNK))
-                        if not block or dst.write(block) != len(block):
-                            raise Rejected("incomplete copy of the original frozen candidate")
-                        digest.update(block)
-                        left -= len(block)
-                    if src.read(1) or digest.hexdigest() != expected_sha:
-                        raise Rejected("original candidate changed while copying")
-                    self.check_file(name, fd, before)
-                    dst.flush()
-                    self.check_file(new_name, new_fd)
-                    with zipfile.ZipFile(dst, "a", allowZip64=True) as z:
-                        z.comment = new.encode()
-                    dst.flush()
-                    os.fsync(new_fd)
-                    dst.close()  # File descriptor stays held until the with block exits.
-                    raw = self.verify_candidate(new_name, new_fd, new)
-                    self.check_file(name, fd, before)
-                    return raw
+                return self.copy_with_marker(src, expected_sha, new, lambda: self.check_file(name, fd, before))
         finally:
             os.close(fd)
+
+    def copy_with_marker(self, src, expected_sha, new, check_source):
+        """Copy exact authenticated bytes and replace only the logical commit, on the exclusive output fd."""
+        check_source()
+        length = stamp(src)[2]
+        src.seek(0)
+        with self.candidate(new.operation, editable=True, mixed_source=True) as (name, fd, dst):
+            left, digest = length, hashlib.sha256()
+            while left:
+                block = src.read(min(left, CHUNK))
+                if not block: raise Rejected("incomplete copy of the original frozen candidate")
+                try: count = dst.write(block)
+                except OSError as error:
+                    note(error, "STATE", self.path/name, "复制已核原包为私有分支候选", new.operation, self.parent)
+                    raise
+                if count != len(block): raise Rejected("incomplete copy of the original frozen candidate")
+                digest.update(block); left -= len(block)
+            if src.read(1) or digest.hexdigest() != expected_sha:
+                raise Rejected("original candidate changed while copying")
+            check_source()
+            with writing("STATE", self.path/name, "写入并完整核验新分支候选", new.operation, self.parent):
+                dst.flush()
+                self.check_file(name, fd)
+                with zipfile.ZipFile(dst, "a", allowZip64=True) as z: z.comment = new.encode()
+                dst.flush(); os.fsync(fd)
+                dst.close()  # The actual fd is retained through complete marker/tree/byte verification.
+                raw = self.verify_candidate(name, fd, new)
+            check_source()
+            return raw
 
 
 @contextmanager

@@ -17,6 +17,9 @@ class LiveCheckout:
         self.work, self.state, self.store = choice.destination, choice.state, choice.store.path
         self.instance, self.repo = row["worktree"], choice.snapshot.browser.commit.repo
         self.checkout_operation = choice.operation
+        # Evidence from this window's completed checkout, not a loose path that can select a new node.
+        self.checkout_marker, self.checkout_sha = choice.snapshot.browser.commit, choice.verified_sha
+        self.source_path, self.source_stamp = choice.snapshot.path, choice.snapshot.observed
         self.stack, self.db, self.closed = ExitStack(), None, False
         try:
             self.work_fd, self.state_fd, self.store_fd = (

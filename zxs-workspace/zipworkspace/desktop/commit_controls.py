@@ -1,7 +1,8 @@
-"""One explicit, non-forking save for a live CLI checkout. A query never uploads."""
+"""Separate live-tree commit, selected-node branch, and original-operation recovery decisions."""
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from ..capacity import describe
+from .branch_choice import SnapshotBranch
 from .commit_choice import CommitChoice
 from .retry_choice import PendingRetry
 from .widgets import button, confirm, label
@@ -15,15 +16,17 @@ class CommitControls(QWidget):
         self.blocked = False
         box = QVBoxLayout(self); row = QHBoxLayout()
         self.save = button("提交本次工作目录…", self.begin)
-        self.query = button("查询该次提交的原回执", self.inspect)
+        self.new_branch = button("从所选原节点创建新分支…", self.branch)
+        self.query = button("查询该次操作的原回执", self.inspect)
         self.retry = button("核对并续作原待决操作…", self.resume)
         row.addWidget(self.save); row.addWidget(self.query); box.addLayout(row)
-        box.addWidget(self.retry)
+        box.addWidget(self.new_branch); box.addWidget(self.retry)
         self.output = label(); box.addWidget(self.output)
         self.set_session(None)
 
     def buttons(self):
         self.save.setEnabled(self.session is not None and self.running is None and not self.blocked)
+        self.new_branch.setEnabled(self.save.isEnabled())
         free = self.session is not None and self.running is None and self.last is not None
         self.query.setEnabled(free)
         self.retry.setEnabled(free and self.last.pending_seen and not self.last.conflict)
@@ -31,7 +34,7 @@ class CommitControls(QWidget):
     def set_session(self, live):
         if self.last is not None and self.last is not self.running: self.last.release()
         self.session, self.last, self.blocked = live, None, False
-        self.output.setText("只提交本窗口刚创建的原工作树，不从 STATE 路径补领。")
+        self.output.setText("只操作本窗口刚创建的原工作树，不从 STATE 路径补领。")
         self.buttons()
 
     def discard(self, job):
@@ -51,9 +54,15 @@ class CommitControls(QWidget):
             failed(RuntimeError("另一个任务正在执行；本步骤未启动。"))
 
     def begin(self):
+        self._begin(branch=False)
+
+    def branch(self):
+        self._begin(branch=True)
+
+    def _begin(self, *, branch):
         original = self.session
         if original is None or self.running is not None or self.blocked or self.owner.pending is not None: return
-        try: job = CommitChoice(original)
+        try: job = SnapshotBranch(original) if branch else CommitChoice(original)
         except Exception as err:
             self.output.setText(describe(err)); return
         self.running = job; self.buttons()
@@ -75,10 +84,14 @@ class CommitControls(QWidget):
 
         def reviewed(detail):
             try:
-                if self.session is not original or not confirm(self, "确认提交整个工作目录", detail,
-                        attestation="我已停止所有工作树写入者。STATE 由本人独占，STORE 不同步、不会有其他程序改动本次上传暂存名。",
-                        action_text="确认并提交"):
-                    refused("未确认，未冻结或提交。"); return
+                if branch:
+                    question, action = "从所选原节点创建并发布新分支", "创建、发布并切换"
+                    agree = "我确认发布的是所列原快照，不含当前编辑。STATE 由本人独占；STORE 不同步，无其他程序改动本次暂存名。"
+                else:
+                    question, action = "确认提交整个工作目录", "确认并提交"
+                    agree = "我已停止所有工作树写入者。STATE 由本人独占，STORE 不同步、不会有其他程序改动本次上传暂存名。"
+                if self.session is not original or not confirm(self, question, detail, attestation=agree, action_text=action):
+                    refused("未确认，没有制作候选或发布。"); return
                 if self.session is not original:
                     refused("原窗口工作树已切换，未提交。"); return
                 if self.last is not None:
@@ -90,9 +103,11 @@ class CommitControls(QWidget):
                     after_submit(f"{describe(error)}\n尚不能从此次返回确定结果；只读查询本次原回执。", uncertain=True)
                 def done(result):
                     path, marker = result
-                    after_submit(f"新快照已存入：{path}\n分支：{marker.branch} · 第 {marker.generation} 代\n原节点：{marker.operation}",
+                    saved = "新分支已发布，原操作回执已完成（当前基线以刷新状态为准）" if branch else "新快照已存入"
+                    after_submit(f"{saved}：{path}\n分支：{marker.branch} · 第 {marker.generation} 代\n新节点：{marker.operation}",
                                  uncertain=False)
-                self.submit(job, "正在冻结、核对并发布本次工作树…", job.run, done, failed)
+                title = "正在从所选原节点创建并发布新分支…" if branch else "正在冻结、核对并发布本次工作树…"
+                self.submit(job, title, job.run, done, failed)
             except Exception as err:
                 if job.used: after_submit(f"{describe(err)}\n结果待核。", uncertain=True)
                 else: refused(err)
@@ -136,15 +151,15 @@ class CommitControls(QWidget):
             try:
                 if self.session is not live or self.last is not original:
                     finish_view("工作树已切换，未提交续作。"); return
-                ack_only = attempt.ack_fd is not None
+                terms = "原 STATE 仍由本人独占，STORE 不同步、无人改动本次暂存名。我确认只处理所列原操作。"
+                if original.purpose == "branch": terms += " 我同意登记完成后把这个工作树切到所列目标分支。"
                 if not confirm(self, "只处理原冻结操作", details,
-                        attestation="原 STATE 仍由本人独占，STORE 不同步、无人改动本次暂存名。我确认只处理所列原操作。",
-                        action_text="仅确认原回执" if ack_only else "续作原冻结候选"):
+                        attestation=terms, action_text=attempt.confirmation_label):
                     finish_view("未确认，未续作。再次尝试须先查询原回执。"); return
                 if self.session is not live or self.last is not original:
                     finish_view("工作树已切换，未提交续作。"); return
                 self.submit(attempt, "正在处理这笔原冻结操作…", attempt.run,
-                            lambda outcome: finish_view(f"已确认原操作的正式槽：{outcome[0]}",completed=True),
+                            lambda outcome: finish_view(f"原操作回执已完成：{outcome[0]}（当前基线以刷新状态为准）",completed=True),
                             lambda err: finish_view(f"{describe(err)}\n未自动重试，请只读查询原回执。"))
             except Exception as exc:
                 finish_view(f"{describe(exc)}\n请只读查询原回执。")

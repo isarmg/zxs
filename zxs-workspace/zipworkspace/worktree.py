@@ -148,7 +148,7 @@ def finish(state, operation, *, selected=None):
             if marker.operation != operation: raise Rejected("completed record does not name the original operation")
             if selected is not None:
                 selected.check_marker(marker, done["digest"])
-                if selected.replay:
+                if selected.purpose == "retry":
                     raise Rejected("原操作已登记完成；本次没有上传，请只读查询其历史回执")
             matched = (confirm_final(target, marker, done["digest"]) if selected is None else
                        selected.store.confirm(marker, done["digest"]))
@@ -180,7 +180,7 @@ def commit(state, *, fork=False, selected=None):
     require_native_writer()
     live = None if selected is None else selected.live
     if selected is not None:
-        if selected.replay or not selected.used or fork or Path(state).absolute() != live.state:
+        if selected.purpose != "commit" or not selected.used or fork or Path(state).absolute() != live.state:
             raise Rejected("not the reviewed ordinary fresh commit")
         selected.check_base()
     # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
@@ -220,6 +220,30 @@ def commit(state, *, fork=False, selected=None):
     # candidate, regardless of later writes to the local working directory.
     if selected is not None: return finish(state, marker.operation, selected=selected)
     return finish(state, marker.operation)
+
+
+def branch_from_snapshot(state, *, selected):
+    """An existing desktop decision copies its selected snapshot; it cannot capture live edits."""
+    if selected.purpose != "branch" or not selected.used or Path(state).absolute() != selected.live.state:
+        raise Rejected("not a confirmed original-node branch decision")
+    selected.check_base()  # Also rejects a closed or unprepared decision before opening a writer.
+    op, new, old = selected.operation, selected.proposed, selected.live.checkout_marker
+    if new != Commit(old.repo, selected.branch_id, 1, op, old.operation, old.tree) or new.branch == old.branch:
+        raise Rejected("branch marker does not represent the original reviewed node")
+    with locked(state, live=selected.live, operation=op, phase="登记从原节点创建的新分支待决") as (con, row, _):
+        selected.check_row(con, row)
+        if row["pending"] is not None or con.execute(
+                "SELECT 1 FROM completed WHERE operation=? UNION ALL "
+                "SELECT 1 FROM forked_original WHERE operation=? OR successor=?", (op,op,op)).fetchone():
+            raise Rejected("已有待决或该操作号已使用；不另建分支")
+        selected.check_empty_slot()
+        sha = selected.area.copy_with_marker(selected.source, selected.live.checkout_sha, new, selected.check_base)
+        selected.check_row(con, row)
+        selected.check_empty_slot()
+        selected.marker, selected.digest = new, sha
+        con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (new.encode(), sha))
+    # Exactly the existing pending/completed protocol. Only a confirmed result switches this base.
+    return finish(state, op, selected=selected)
 
 
 def status(state, *, live=None):
