@@ -97,7 +97,7 @@ impl<'a> Grant<'a>{
         writeln!(out,"专用实例 {}；原操作 {}；维护主体 {}；审批参考 {}；存储 UID/GID {}/{}。",
             hex_id(&originals.instance),hex_id(&originals.op),hex_id(&originals.actor),hex_id(&reference),originals.uid,originals.gid)?;
         writeln!(out,"正式配置 SHA-256 {}；核准的软件发行材料 {}；本次完整范围 {}。",hex_id(&originals.config),hex_id(&originals.release.key()),hex_id(&scope))?;out.flush()?;drop(out);
-        terminal.confirm()?;
+        terminal.confirm_domain()?;
         terminal.check()?;originals.fresh()?;originals.release.require()?;
         if originals.scope(&reference)?!=scope{return Err(bad("approved originals changed; do not start provisioning"));}
         Ok(Self{originals,reference,scope,terminal})

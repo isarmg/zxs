@@ -3,7 +3,7 @@
 mod handoff;
 mod provision;
 pub(crate) use provision::exec_child;
-pub(super) use provision::SelectedSetup;
+pub(super) use provision::{InstalledSetup,SelectedSetup};
 use crate::sqlite_install::{bad,request::Id};
 use std::io;
 

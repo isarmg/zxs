@@ -5,7 +5,7 @@
 mod issue;
 mod worker;
 mod installed;
-pub(in crate::sqlite_install::pair) use installed::SelectedSetup;
+pub(in crate::sqlite_install::pair) use installed::{InstalledSetup,SelectedSetup};
 mod start;
 pub(crate) use worker::exec_child;
 use super::{FRESH_SITE,PRIVATE_STORE,Unpublished,child,contents,live,mark};

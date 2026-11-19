@@ -1,9 +1,11 @@
-//! Nonsecret SETUP_PAIR request and read-only historical receipt only. A
+//! The fixed SETUP_PAIR request, receipt lookup and internal one-time setup. A
 //! structurally valid SID or an SQL match is not a Samba domain proof, a
 //! maintenance approval, a password check, or a privilege to create credentials.
 mod web_secret;
 mod terminal;
 mod observed;
+mod publish;
+pub(super) use publish::ReadyPair;
 mod domain;
 pub(crate) use domain::exec_child;
 

@@ -6,7 +6,7 @@ use rustix::rand::{GetRandomFlags,getrandom};
 use std::{io,os::unix::ffi::OsStrExt};
 pub(super) const SCHEMA:&str=include_str!("schema.sql");
 
-fn random<const N:usize>()->io::Result<[u8;N]>{
+pub(super) fn random<const N:usize>()->io::Result<[u8;N]>{
     let mut v=[0;N];
     loop{
         match getrandom(&mut v,GetRandomFlags::NONBLOCK){

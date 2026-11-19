@@ -1,6 +1,7 @@
 //! One Web-specific, in-memory preparation. Not a CLI, input channel, passdb
 //! provider, authentication result, setup authority, or database writer.
 use argon2::{Algorithm, Argon2, Block, Params, Version};
+use rusqlite::{params, Transaction};
 use rustix::rand::{getrandom, GetRandomFlags};
 use std::io;
 use zeroize::Zeroizing;
@@ -29,12 +30,30 @@ pub(super) struct PreparedWeb {
     verifier: Zeroizing<Box<[u8]>>,
 }
 
+// Construct only after mlockall(CURRENT|FUTURE), before entering any password.
+pub(super) struct WebWorkspace { blocks: Zeroizing<Vec<Block>>, params: Params }
+impl WebWorkspace {
+    pub(super) fn reserve() -> io::Result<Self> {
+        let params = Params::new(KIB, PASSES, LANES, Some(OUTPUT))
+            .map_err(|_| io::Error::other("invalid fixed Web credential parameters"))?;
+        let count = params.block_count();
+        if count != KIB as usize || Block::SIZE != 1024 {
+            return Err(io::Error::other("unexpected Argon2 workspace shape"));
+        }
+        let mut blocks = Zeroizing::new(Vec::<Block>::new());
+        blocks.try_reserve_exact(count)
+            .map_err(|_| io::Error::other("cannot reserve the complete locked 64 MiB Web workspace"))?;
+        blocks.resize(count, Block::new());
+        Ok(Self { blocks, params })
+    }
+}
+
 impl PreparedWeb {
     /// Accept only an owned, non-reallocating input that will be wiped on drop.
     /// Its future production producer must also provide a protected terminal /
     /// process and prevent plaintext spill before this boundary. No argv/env,
     /// conversion through a String, external parameters, or password digest.
-    pub(super) fn fresh(bytes: Zeroizing<Box<[u8]>>) -> io::Result<Self> {
+    pub(super) fn fresh(bytes: Zeroizing<Box<[u8]>>, workspace: WebWorkspace) -> io::Result<Self> {
         let input = WebInput::take(bytes)?;
         let mut salt = [0; 16];
         loop {
@@ -45,29 +64,29 @@ impl PreparedWeb {
                 _ => return Err(io::Error::other("OS did not supply one complete, nonzero random Web salt")),
             }
         }
-        Self::derive(input, salt)
+        Self::derive(input, salt, workspace)
     }
 
     // Deterministic only for the exact already-chosen salt; never offered as an
     // operator choice. A lost or unknown account transaction is a history query,
     // not grounds to re-enter this function, rehash or mint another salt.
-    fn derive(input: WebInput, salt: [u8; 16]) -> io::Result<Self> {
+    fn derive(input: WebInput, salt: [u8; 16], workspace: WebWorkspace) -> io::Result<Self> {
+        let WebWorkspace { mut blocks, params } = workspace;
         let fail = |_| io::Error::other("fixed Web credential derivation did not complete");
-        let params = Params::new(KIB, PASSES, LANES, Some(OUTPUT)).map_err(fail)?;
-        let count = params.block_count();
-        if count != KIB as usize || Block::SIZE != 1024 {
-            return Err(io::Error::other("unexpected Argon2 workspace shape"));
-        }
-        // Allocate the whole workspace before any blocks can contain password-
-        // dependent state. The RustCrypto Block implements Zeroize; this owner
-        // clears the entire allocation on success, ordinary errors or unwind.
-        let mut workspace = Zeroizing::new(Vec::<Block>::new());
-        workspace.try_reserve_exact(count).map_err(|_| io::Error::other("no room for the fixed 64 MiB Web workspace"))?;
-        workspace.resize(count, Block::new());
         let mut verifier = Zeroizing::new(vec![0u8; OUTPUT].into_boxed_slice());
         Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-            .hash_password_into_with_memory(&input.0, &salt, &mut verifier, workspace.as_mut_slice()).map_err(fail)?;
+            .hash_password_into_with_memory(&input.0, &salt, &mut verifier, blocks.as_mut_slice()).map_err(fail)?;
         Ok(Self { salt, verifier })
+    }
+    // Bind only to the fixed first Web credential row. Never return verifier
+    // bytes to the generic operation receipt or to the SMB provider.
+    pub(super) fn insert(&self, tx: &Transaction<'_>, op: &[u8;16]) -> rusqlite::Result<usize> {
+        tx.execute("INSERT INTO main.web_password(slot,credential_op,generation,salt,verifier) VALUES(1,?1,1,?2,?3)",
+            params![&op[..],&self.salt[..],&self.verifier[..]])
+    }
+    #[cfg(test)]
+    pub(super) fn synthetic(salt: [u8;16], verifier: [u8;32]) -> Self {
+        Self { salt, verifier: Zeroizing::new(verifier.to_vec().into_boxed_slice()) }
     }
 }
 
@@ -85,7 +104,7 @@ mod tests {
     fn upstream_raw_web_verifier_matches_the_other_implementations_public_example() {
         let salt: [u8;16]=value("web_salt").try_into().unwrap();
         let secret=WebInput::take(input(b"correct horse battery staple")).unwrap();
-        let made=PreparedWeb::derive(secret,salt).unwrap();
+        let made=PreparedWeb::derive(secret,salt,WebWorkspace::reserve().unwrap()).unwrap();
         assert_eq!(made.salt,salt);
         // Do not make a real issuer's secret-bearing type printable to run this fixture.
         assert!(&**made.verifier == value("web_verifier").as_slice());

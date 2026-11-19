@@ -1,5 +1,7 @@
 //! Single nonsecret host-installation confirmation on this exact foreground
 //! Linux N_TTY. The four fixed credential prompts in Channel are unchanged.
+use crate::sqlite_install::pair::{Id,PairRequest};
+use std::{os::unix::ffi::OsStrExt,path::Path};
 use super::{Channel,Surface,failure,fs,nonblocking_prompt,own_descriptor_table,refuse};
 use helper_linux_evidence::prompt_signals::PromptSignals;
 use rustix::{fs::{Mode,OFlags},io::Errno,rand::{GetRandomFlags,getrandom},
@@ -40,13 +42,31 @@ impl PublicConfirmation{
             return Err(refuse("the original nonblocking foreground canonical terminal is required"));}
         Ok(())
     }
-    pub(in crate::sqlite_install::pair) fn confirm(&self)->io::Result<()>{
-        let fresh=challenge()?;let answer=format!("PROVISION {fresh}\n");
-        let prompt=format!("同意以上完整范围时，输入 PROVISION {fresh} 并回车。此处不输入口令。\n");
+    pub(in crate::sqlite_install::pair) fn confirm_domain(&self)->io::Result<()>{self.ask(None)}
+    pub(in crate::sqlite_install::pair) fn confirm_pair(&self,r:&PairRequest,system:&Path,instance:&Id,provision:&Id)->io::Result<()>{
+        let raw=system.as_os_str().as_bytes();
+        if raw.len()>4096{return Err(failure("installation origin path exceeds display limit"));}
+        let hx=|b:&[u8]|b.iter().map(|v|format!("{v:02x}")).collect::<String>();
+        let esc=|b:&[u8]|b.iter().copied().flat_map(std::ascii::escape_default).map(char::from).collect::<String>();
+        let preview=format!("仅首次设置：同一数据库一次建立唯一 Web 管理员和不同的 SMB 用户；不开放共享、访客或匿名，不启动服务，也不重设已有账户。\nSYSTEM {}，池 {}，已确认 INIT {}；专用实例 {}，原域供给 {}。\nWeb 名 {}；SMB 名 {}，已备案用户 SID {}；原操作 {}，本机维护主体 {}，审批参考 {}。\n仅当此宿主为该实例批准 NTLMv2 时才可首设。此处不输入口令；若最终回执不明，只查此原单。\n",
+            esc(raw),hx(&r.pool),hx(&r.init),hx(instance),hx(provision),esc(&r.web),esc(&r.smb),hx(&r.sid),hx(&r.op),hx(&r.actor),hx(&r.approval));
+        self.ask(Some(preview))
+    }
+    fn ask(&self,preview:Option<String>)->io::Result<()>{
+        let verb=if preview.is_some(){"SETUP"}else{"PROVISION"};
+        let fresh=challenge()?;let answer=format!("{verb} {fresh}\n");
+        let prompt=format!("同意以上完整范围时，输入 {verb} {fresh} 并回车。此处不输入口令。\n");
         let sig=PromptSignals::begin()?;let end=Instant::now()+Duration::from_secs(120);
         let check=||{sig.check()?;self.check()};
         let result=(||->io::Result<()>{
             check()?;clear(&self.reader)?; // stale lines cannot provide this confirmation
+            if let Some(text)=preview.as_ref(){
+                // The pair preview and challenge use one nonblocking OFD and
+                // the same real deadline while the original two EXs are held.
+                if text.len()>20*1024{return Err(failure("fixed account preview exceeds its budget"));}
+                nonblocking_prompt(self.terminal.out.as_fd(),text.as_bytes(),end,&check)?;
+                clear(&self.reader)?;
+            }
             nonblocking_prompt(self.terminal.out.as_fd(),prompt.as_bytes(),end,&check)?;
             let mut line=[0u8;96];
             while Instant::now()<end{

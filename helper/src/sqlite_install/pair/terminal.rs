@@ -4,6 +4,7 @@ mod audit;
 mod channel;
 pub(super) use channel::PublicConfirmation;
 use audit::UnauditedInput;
+use super::web_secret::{PreparedWeb,WebWorkspace};
 use super::super::approval::{host_admin,same_terminal};
 use crate::maintenance::{diagnostic_worker, thread_file};
 use helper_linux_evidence::prompt_signals::PromptSignals;
@@ -171,11 +172,17 @@ impl SelectedInput {
 /// One guard across all four prompts: a pasted next line cannot be echoed
 /// between entries. All ordinary completions clear and restore the terminal
 /// before reinstating the signal mask, including on a prompt write timeout.
-pub(super) struct PairInputs {web:Secret,smb:Secret}
+pub(super) struct PairInputs {web:Secret,smb:Secret,workspace:WebWorkspace}
 impl PairInputs {
-    pub(super) fn into_parts(self)->(Secret,Secret){(self.web,self.smb)}
+    pub(super) fn prepare_web(self)->io::Result<(PreparedWeb,Secret)>{
+        Ok((PreparedWeb::fresh(self.web,self.workspace)?,self.smb))
+    }
     pub(super) fn foreground(selected:SelectedInput,uid:u32,gid:u32)->io::Result<Self> {
         selected.audit.require_current()?; protected_process(uid,gid)?;selected.channel.require()?;
+        // MCL_FUTURE alone reserves no KDF budget. Allocate and initialise the
+        // exact blocks before switching terminal mode or showing the first prompt.
+        let workspace=WebWorkspace::reserve()?;
+        selected.audit.require_current()?;selected.channel.require()?;
         let mut entries:[Entry;4]=std::array::from_fn(|_|Entry::new());
         let stdin=io::stdin(); let signals=PromptSignals::begin()?;
         let mut tty=Quiet::begin(stdin.as_fd())?;
@@ -184,7 +191,7 @@ impl PairInputs {
         let pending=signals.check();let mask=signals.finish();
         restored?;mask?;pending?;captured?;
         let [web,_,smb,_]=entries;
-        Ok(Self{web:web.take(),smb:smb.take()})
+        Ok(Self{web:web.take(),smb:smb.take(),workspace})
     }
 }
 

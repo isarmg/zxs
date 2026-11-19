@@ -9,11 +9,11 @@ fn field(key: &str) -> &'static str {
         .filter_map(|line| line.split_once('='))
         .find(|(k, _)| *k == key).unwrap().1
 }
-fn hex(key: &str) -> Vec<u8> {
+pub(super) fn hex(key: &str) -> Vec<u8> {
     field(key).as_bytes().chunks_exact(2)
         .map(|x| u8::from_str_radix(std::str::from_utf8(x).unwrap(), 16).unwrap()).collect()
 }
-fn fixed() -> PairRequest {
+pub(super) fn fixed() -> PairRequest {
     let id = |s| hex(s).try_into().unwrap();
     PairRequest::new(id("pool"), id("init_op"), id("setup_op"), id("offline_actor"), id("approval_ref"),
         &hex("web_login_hex"), &hex("smb_login_hex"), hex("smb_sid").try_into().unwrap()).unwrap()
@@ -53,7 +53,7 @@ fn no_guest_shared_name_unknown_sid_domain_or_builtin_rid_gets_a_valid_request()
     assert!(PairRequest::new(r.pool, r.init, r.init, r.actor, r.approval, &r.web, &r.smb, r.sid).is_err());
 }
 
-fn database() -> Connection {
+pub(super) fn database() -> Connection {
     let mut db = Connection::open_in_memory().unwrap();
     db.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     let tx=db.transaction().unwrap(); tx.execute_batch(SCHEMA).unwrap();

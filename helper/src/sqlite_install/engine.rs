@@ -46,6 +46,14 @@ pub(super) enum Access { Read, Write }
 pub(super) fn existing(origin:&Existing<'_>,mode:Access)->io::Result<Connection>{
     let ro=matches!(mode,Access::Read);
     if !ro&&!origin.allows_install_write(){return Err(bad("an account observation cannot open the database for writing"));}
+    open_existing(origin,ro)
+}
+// The account reader cannot upgrade itself. This branch accepts only a bound,
+// presently verified, operator-approved original; never a raw path or UID.
+pub(super) fn new_pair(permit:&super::pair::ReadyPair<'_>)->io::Result<Connection>{
+    open_existing(permit.writable_database()?,false)
+}
+fn open_existing(origin:&Existing<'_>,ro:bool)->io::Result<Connection>{
     path_limit()?;origin.sidecars_absent()?;
     let flags=OpenFlags::SQLITE_OPEN_NO_MUTEX|OpenFlags::SQLITE_OPEN_NOFOLLOW|
         if ro { OpenFlags::SQLITE_OPEN_READ_ONLY } else { OpenFlags::SQLITE_OPEN_READ_WRITE };

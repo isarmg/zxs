@@ -78,6 +78,7 @@ impl SelectedSetup{
         names.require()?;let system=SelectedSystem::from_origin(pin,host,uid,gid)?;
         Ok(Self{system,names})
     }
+    pub(in crate::sqlite_install::pair) fn storage_identity(&self)->(u32,u32){(self.names.uid,self.names.gid)}
     /// S first, then instance, both independent nonblocking EX. No new opens
     /// of private SAM files or of the SMB service process are involved.
     pub(in crate::sqlite_install::pair) fn after_drop(self)->io::Result<InstalledSetup>{
@@ -101,7 +102,7 @@ pub(in crate::sqlite_install::pair) struct InstalledSetup{
     names:Names,system:LockedSystem,base:File,live:Live,bound:File,bytes:[u8;128],domain:LocalDomain,
 }
 impl InstalledSetup{
-    fn require(&self)->io::Result<()>{
+    pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
         self.system.require()?;self.names.require()?;
         if mark(&self.base)?!=mark(self.names.site.base())?{return Err(bad("lost original installed instance"));}
         contents(&self.base,SLOTS)?;self.live.require(&self.base)?;
@@ -110,12 +111,17 @@ impl InstalledSetup{
         confirm_name(&self.base,c"domain.bound",&self.bound,self.names.bound.stamp)?;
         self.names.require()
     }
+    pub(in crate::sqlite_install::pair) fn system(&self)->&LockedSystem{&self.system}
+    pub(in crate::sqlite_install::pair) fn installation(&self)->(Id,Id){(self.names.instance,self.names.provision)}
+    pub(in crate::sqlite_install::pair) fn request(&self,op:Id,approval:Id,web:&[u8],smb:&[u8])->io::Result<PairRequest>{
+        self.require()?;let n=&self.names;
+        if op==n.provision{return Err(bad("the original domain operation cannot be reused as setup"));}
+        PairRequest::new(n.pool,n.init,op,n.actor,approval,web,smb,self.domain.expected_smb_sid())
+    }
     /// This returns a historical result (or absence), never a writer. The SMB
     /// SID is derived from the installation record, never supplied by a user.
     pub(in crate::sqlite_install::pair) fn history(&self,op:Id,approval:Id,web:&[u8],smb:&[u8])->io::Result<(PairRequest,History)>{
-        self.require()?;let n=&self.names;
-        if op==n.provision{return Err(bad("the original domain operation cannot be reused as setup"));}
-        let r=PairRequest::new(n.pool,n.init,op,n.actor,approval,web,smb,self.domain.expected_smb_sid())?;
+        let r=self.request(op,approval,web,smb)?;
         let h=r.observe_offline(&self.system)?;self.require()?;Ok((r,h))
     }
 }

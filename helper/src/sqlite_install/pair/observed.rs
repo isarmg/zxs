@@ -7,7 +7,7 @@ use std::{io,os::unix::ffi::OsStrExt};
 
 fn sql(_:rusqlite::Error)->io::Error {bad("original account setup observation could not be completed")}
 
-fn first_marker(pool:&Id,init:&Id,tx:&Transaction<'_>,root:HeldRoot<'_>)->io::Result<[u8;101]>{
+pub(super) fn first_marker(pool:&Id,init:&Id,tx:&Transaction<'_>,root:HeldRoot<'_>)->io::Result<[u8;101]>{
     // Only row zero, in this exact successful original INIT. Neither a claim
     // copied to a volume nor the present name of a mounted data disk is
     // evidence for this private account lookup. No R/F pathname is selected.
@@ -34,15 +34,34 @@ fn with_origin<T>(pool:&Id,init:&Id,locked:&LockedSystem,read:impl FnOnce(&Trans
     // Hold the actual admitted private marker *before* SQLite opens. Inside
     // the transaction only statx its name and read its already-held FD;
     // never open/close another raw FD for the underlying database inode.
-    let mark=SystemMark::before_sql(source)?;db.sidecars_absent()?;
-    let mut c=engine::existing(&db,Access::Read)?;
+    let mark=SystemMark::before_sql(source)?;
+    Ok(at_original(pool,init,locked,&db,&template,&mark,read)?.1)
+}
+
+// Reuse the *same* original DB identity, held SYSTEM marker and exact
+// schema when an action requires more than one short, independent connection.
+pub(super) fn at_original<T>(pool:&Id,init:&Id,locked:&LockedSystem,db:&Existing<'_>,template:&Canonical,mark:&SystemMark,
+    read:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<([u8;101],T)> {
+    let mut c=engine::existing(db,Access::Read)?;
+    let result=snapshot(&mut c,pool,init,locked,db,template,mark,read)?;
+    c.close().map_err(|_|bad("original readonly account observation did not close cleanly"))?;
+    db.sidecars_absent()?;mark.verify(locked.source(),&result.0)?;Ok(result)
+}
+
+// A caller may retain this actual standard-VFS connection, with *no active
+// transaction*, to keep the original database inode alive across human input.
+pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&LockedSystem,db:&Existing<'_>,template:&Canonical,
+    mark:&SystemMark,read:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<([u8;101],T)>{
+    let source=locked.source();db.sidecars_absent()?;engine::original_name(c)?;
+    if !c.is_autocommit(){return Err(bad("unexpected open SQLite transaction before the account observation"));}
     let tx=c.transaction().map_err(sql)?;template.require(&tx)?;
     let actual=first_marker(pool,init,&tx,source)?;mark.verify(source,&actual)?;
     let result=read(&tx)?;
     mark.verify(source,&actual)?;engine::original_name(&tx)?;db.sidecars_absent()?;
-    tx.commit().map_err(sql)?;c.close().map_err(|_|bad("original readonly account observation did not close cleanly"))?;
-    locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
-    Ok(result)
+    tx.commit().map_err(sql)?;
+    if !c.is_autocommit(){return Err(bad("original account snapshot did not end"));}
+    engine::original_name(c)?;locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
+    Ok((actual,result))
 }
 pub(super) fn original_pool(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<()>{
     with_origin(pool,init,locked,|_|Ok(()))
