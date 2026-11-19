@@ -2,15 +2,44 @@ import Foundation
 
 struct MemberCRC {
     let declared: UInt32, actual: UInt32
+    let text: String? // nil for CRC-only, mismatch or an unsupported text profile; "" is valid
     var matches: Bool { declared == actual }
+}
+
+enum PlainText {
+    static let byteLimit = 32 * 1024
+    static func decode(_ bytes: [UInt8]) -> String? {
+        guard bytes.count <= byteLimit, let text = String(bytes: bytes, encoding: .utf8),
+              text.utf8.elementsEqual(bytes) else { return nil } // never repair malformed bytes
+        var cr = false, hasCR = false
+        for scalar in text.unicodeScalars {
+            if cr {
+                guard scalar.value == 10 else { return nil }
+                cr = false; continue
+            }
+            switch scalar.value {
+            case 9, 10: continue
+            case 13: cr = true; hasCR = true; continue
+            default: break
+            }
+            guard !scalar.properties.isDefaultIgnorableCodePoint else { return nil }
+            switch scalar.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .unassigned, .surrogate: return nil
+            default: break
+            }
+        }
+        guard !cr else { return nil }
+        return hasCR ? text.replacingOccurrences(of: "\r\n", with: "\n", options: .literal) : text
+    }
 }
 
 // One deliberately selected ordinary Store member, never a whole-archive or version credential.
 enum StoredBody {
     static func check(central cd: [UInt8], centralAt: Int, ending: [UInt8], record p: Int, offset: Int,
-                      limit: Int, centralWide: Bool, size: Int, check: () throws -> Void,
+                      limit: Int, centralWide: Bool, size: Int, previewText: Bool, check: () throws -> Void,
                       fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
         let u16 = DirectoryIndex.u16, u32 = DirectoryIndex.u32, max32 = DirectoryIndex.u32max
+        try requirePreview(!previewText || (0...PlainText.byteLimit).contains(size))
         var block = [UInt8](repeating: 0, count: 65_536)
         func take(_ at: Int, _ count: Int) throws -> [UInt8] {
             try check(); try requirePreview(count >= 0 && count <= 65_535 + 1024 && at >= offset && at <= limit - count)
@@ -70,16 +99,22 @@ enum StoredBody {
             descriptor = try take(end, length)
             try requirePreview(try descriptorLength(descriptor, wide: wideDD, crc: crc, size: size) == length)
         }
+        var capture: [UInt8]? = previewText ? [] : nil
+        capture?.reserveCapacity(size) // no allocation on the original CRC-only path
         var sum = crc32(0, nil, 0), pos = body
         while pos < end {
             let n = min(block.count, end - pos)
             try chunk(pos, n)
             sum = block.withUnsafeBufferPointer { crc32(sum, $0.baseAddress, uInt(n)) }
+            capture?.append(contentsOf: block[..<n])
             pos += n
         }
         try check(); try match(offset, h); try match(offset + 30, fields); try match(end, descriptor)
         try checkDirectory(); try check()
-        return MemberCRC(declared: UInt32(crc), actual: UInt32(sum))
+        let expected = UInt32(crc), actual = UInt32(sum)
+        let text = expected == actual ? capture.flatMap(PlainText.decode) : nil
+        try check()
+        return MemberCRC(declared: expected, actual: actual, text: text)
     }
 
     static func descriptorLength(_ d: [UInt8], wide: Bool, crc: Int, size: Int) throws -> Int {

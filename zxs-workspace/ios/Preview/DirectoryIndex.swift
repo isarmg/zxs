@@ -38,13 +38,13 @@ struct DirectoryIndex {
     // Actual explicit file objects from this observation only; no pathname lookup on a later selection.
     private var files = Set<ObjectIdentifier>()
 
-    func checkMember(_ file: Member, check: () throws -> Void,
+    func checkMember(_ file: Member, previewText: Bool = false, check: () throws -> Void,
                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
         try requirePreview(file.children == nil && files.contains(ObjectIdentifier(file)))
         guard let slot = file.slot else { throw PreviewError.format }
         return try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
             record: slot.central, offset: slot.offset, limit: slot.limit, centralWide: slot.wide,
-            size: file.size, check: check, fill: fill)
+            size: file.size, previewText: previewText, check: check, fill: fill)
     }
 
     // Callers establish enclosing structure bounds before accessing fixed-width fields.

@@ -174,11 +174,12 @@ final class DocumentRead {
             return Report(archive: archive, directory: index)
         }
     }
-    func verify(_ report: Report, file: Member) throws -> MemberCRC {
+    func verify(_ report: Report, file: Member, previewText: Bool) throws -> MemberCRC {
         let archive = report.archive // hold original FD and scope through the whole accessor, including invalidation
         return try coordinated(archive.scope) { name in
             try archive.withReads(at: name, check: self.check) { fill in
-                try report.directory.checkMember(file, check: { try self.check(); try archive.scope.check() }, fill: fill)
+                try report.directory.checkMember(file, previewText: previewText,
+                    check: { try self.check(); try archive.scope.check() }, fill: fill)
             }
         }
     }

@@ -116,6 +116,82 @@ final class DirectoryIndexTests: XCTestCase {
     private func verify(_ index: DirectoryIndex, _ file: Member, _ b: [UInt8]) throws -> MemberCRC {
         try index.checkMember(file, check: {}, fill: { try self.copy(b, $0, $1) })
     }
+    // Build a short, ordinary Store fixture; the test's independent bitwise CRC is not a product decoder.
+    private func textArchive(_ payload: [UInt8]) -> [UInt8] {
+        var crc = UInt32.max
+        for byte in payload {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = (crc >> 1) ^ ((crc & 1) == 0 ? 0 : 0xedb88320) }
+        }
+        var b = zip(["x"])
+        b.replaceSubrange(31..<34, with: payload)
+        let cd = 31 + payload.count
+        for at in [14, cd + 16] { b.replaceSubrange(at..<(at + 4), with: le(Int(~crc), 4)) }
+        for at in [18, 22, cd + 20, cd + 24] { b.replaceSubrange(at..<(at + 4), with: le(payload.count, 4)) }
+        b.replaceSubrange((b.count - 6)..<(b.count - 2), with: le(cd, 4))
+        return b
+    }
+    private func preview(_ b: [UInt8]) throws -> MemberCRC {
+        let index = try read(b), file = try XCTUnwrap(index.root.children?["x"])
+        return try index.checkMember(file, previewText: true, check: {}) { try self.copy(b, $0, $1) }
+    }
+    func testLiteralUnicodePreviewUsesTheCrcBodyOnceAndOnlyConvertsCRLF() throws {
+        let sample = "读我\t𠮷 / é / e\u{301}\r\n<b>https://example.invalid</b>\n"
+        let payload = Array(sample.utf8), b = textArchive(payload), index = try read(b)
+        let file = try XCTUnwrap(index.root.children?["x"])
+        var reads = 0
+        let result = try index.checkMember(file, previewText: true, check: {}) { off, dst in
+            if off == 31 { reads += 1; XCTAssertEqual(dst.count, payload.count) }
+            try self.copy(b, off, dst)
+        }
+        XCTAssertTrue(result.matches); XCTAssertEqual(reads, 1)
+        let text = try XCTUnwrap(result.text)
+        XCTAssertTrue(text.utf8.elementsEqual(sample.replacingOccurrences(of: "\r\n", with: "\n").utf8))
+        XCTAssertNil(try verify(index, file, b).text) // normal CRC never returns a display string
+    }
+    func testTextPreviewRawByteLimitAndEmptyFile() throws {
+        XCTAssertEqual(try preview(textArchive([])).text, "")
+        let exact = [UInt8](repeating: 120, count: PlainText.byteLimit)
+        XCTAssertEqual(try preview(textArchive(exact)).text?.utf8.count, PlainText.byteLimit)
+        let b = textArchive(exact + [120]), doc = try read(b), file = try XCTUnwrap(doc.root.children?["x"])
+        XCTAssertThrowsError(try doc.checkMember(file, previewText: true, check: {}) { _, _ in XCTFail("over budget read") })
+        XCTAssertTrue(try verify(doc, file, b).matches)
+    }
+    func testNewlineDense32KiBRetainsTheFinalMarkerForScrolling() throws {
+        let tail = Array("末尾 · END".utf8)
+        let payload = [UInt8](repeating: 10, count: PlainText.byteLimit - tail.count) + tail
+        let result = try preview(textArchive(payload))
+        XCTAssertTrue(result.matches)
+        XCTAssertTrue(try XCTUnwrap(result.text).utf8.elementsEqual(payload))
+        // Actual viewport scrolling and VoiceOver at large type require iPhone/iPad qualification.
+    }
+    func testOnlyValidLiteralTextWithMatchingCrcCanDisplay() throws {
+        for cp in ["\u{0}", "\r", "\u{1b}", "\u{85}", "\u{202e}", "\u{2066}", "\u{34f}",
+                   "\u{fe0f}", "\u{feff}", "\u{2028}", "\u{e000}"] {
+            let r = try preview(textArchive(Array(("start" + cp + "!").utf8)))
+            XCTAssertTrue(r.matches); XCTAssertNil(r.text)
+        }
+        let malformed: [[UInt8]] = [[0xc0, 0xaf], [0xe2, 0x82], [0xed, 0xa0, 0x80]]
+        for bad in malformed {
+            let r = try preview(textArchive(bad)); XCTAssertTrue(r.matches); XCTAssertNil(r.text)
+        }
+        var b = textArchive([97, 98]); b[31] = 99
+        let r = try preview(b); XCTAssertFalse(r.matches); XCTAssertNil(r.text)
+    }
+    func testCancelledChangedAndFormerSelectionCannotReturnPreviewText() throws {
+        let b = textArchive([111, 107]), doc = try read(b), other = try read(b)
+        let file = try XCTUnwrap(doc.root.children?["x"])
+        XCTAssertThrowsError(try other.checkMember(file, previewText: true, check: {}) { _, _ in XCTFail("former index") })
+        for cancel in [false, true] {
+            let job = DocumentRead(); var input = b
+            XCTAssertThrowsError(try doc.checkMember(file, previewText: true, check: job.check) { off, dst in
+                try self.copy(input, off, dst)
+                if off == 31 {
+                    if cancel { job.cancel() } else { input[input.count - 10] ^= 1 }
+                }
+            })
+        }
+    }
     // Forced small ZIP64 records and an offset-only central extra with an ordinary local version.
     private func streamed(empty: Bool, wide: Bool, offsetOnly: Bool, signed: Bool,
                           narrowOffsetDescriptor: Bool = false, origin: Int = 0) -> [UInt8] {
