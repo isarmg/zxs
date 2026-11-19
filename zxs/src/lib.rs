@@ -6,6 +6,7 @@ mod password;
 mod display;
 mod system;
 pub mod management;
+pub use system::reader::smb::runtime::serve as serve_smb_storage;
 mod identity;
 mod pool;
 mod ordinary;

@@ -483,15 +483,16 @@
  
 --- a/source3/smbd/server.c
 +++ b/source3/smbd/server.c
-@@ -34,6 +34,7 @@
+@@ -34,6 +34,8 @@
  #include "registry/reg_init_full.h"
  #include "libcli/auth/schannel.h"
  #include "secrets.h"
 +#include "passdb/machine_sid.h"
++#include "param/zxs_runtime.h"
  #include "../lib/util/memcache.h"
  #include "ctdbd_conn.h"
  #include "lib/util/util_process.h"
-@@ -983,6 +984,7 @@
+@@ -983,6 +985,7 @@
  			exit_server("reinit_after_fork() failed");
  			return;
  		}
@@ -499,7 +500,7 @@
  		smbd_process(ev, msg_ctx, fd, true);
  		exit_server_cleanly("end of interactive mode");
  		return;
-@@ -1036,6 +1038,7 @@
+@@ -1036,6 +1039,7 @@
  		print_sockaddr(addrstr, sizeof(addrstr), &addr);
  		process_set_title("smbd[%s]", "client [%s]", addrstr);
  
@@ -507,20 +508,40 @@
  		smbd_process(ev, msg_ctx, fd, false);
  	 exit:
  		exit_server_cleanly("end of child");
-@@ -1843,6 +1846,12 @@
+@@ -1412,6 +1416,18 @@
+ 		return False;
+ 
+ 	return True;
++}
++
++/* After the startup exchange, readability (including EOF/half-close) is
++ * always a revocation. This also wakes an otherwise idle parent. Its normal
++ * exit closes Samba's existing parent-watch pipe; each participating child
++ * is separately watched by the trusted process supervisor. */
++static void smbd_zxs_storage_revoked(struct tevent_context *ev,
++				     struct tevent_fd *fde,
++				     uint16_t flags, void *private_data)
++{
++	(void)ev; (void)fde; (void)flags; (void)private_data;
++	exit_server_cleanly("dedicated ZXS storage stopped");
+ }
+ 
+ static void smbd_parent_sig_term_handler(struct tevent_context *ev,
+@@ -1843,6 +1859,13 @@
  	};
  	bool ok;
  
 +	/* Only the dedicated supervised foreground process; do not accept
 +	 * popt --option overrides or a second configuration/environment source. */
-+	if (argc!=2 || strcmp(argv[1],"--foreground")!=0 || getenv("SMB_CONF_PATH")!=NULL) {
++	if (argc!=2 || strcmp(argv[1],"--foreground")!=0 || getenv("SMB_CONF_PATH")!=NULL ||
++	    !zxs_runtime_control_take()) {
 +		return 1;
 +	}
 +	set_dyn_CONFIGFILE("/instance/smb.conf");
  	setproctitle_init(argc, discard_const(argv), environ);
  
  	/*
-@@ -2038,7 +2047,10 @@
+@@ -2038,7 +2061,14 @@
  
  	DEBUG(3,("loaded services\n"));
  
@@ -529,10 +550,26 @@
 +		exit_daemon("ZXS cannot initialize its dedicated structures", EACCES);
 +	}
 +	zxs_sam_require_current();
++	if (!zxs_runtime_connect_storage()) {
++		DBG_ERR("Dedicated storage origin/account could not be confirmed\n");
++		_exit(1);
++	}
  
  	if (!profile_setup(msg_ctx, False)) {
  		DEBUG(0,("ERROR: failed to setup profiling\n"));
-@@ -2166,9 +2178,7 @@
+@@ -2122,6 +2152,11 @@
+ 	parent->ev_ctx = ev_ctx;
+ 	parent->msg_ctx = msg_ctx;
+ 	am_parent = parent;
++	if (zxs_runtime_watch_fd()<0 ||
++	    tevent_add_fd(ev_ctx,parent,zxs_runtime_watch_fd(),TEVENT_FD_READ,
++			  smbd_zxs_storage_revoked,NULL)==NULL) {
++		exit_server_cleanly("cannot watch dedicated ZXS storage");
++	}
+ 
+ 	se = tevent_add_signal(parent->ev_ctx,
+ 			       parent,
+@@ -2166,9 +2201,7 @@
  		TALLOC_FREE(lp_ctx);
  	}
  
@@ -545,15 +582,16 @@
  	status = smbXsrv_version_global_init(&server_id);
 --- a/source3/smbd/smb2_sesssetup.c
 +++ b/source3/smbd/smb2_sesssetup.c
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,8 @@
  #include "../libcli/security/security.h"
  #include "../lib/util/tevent_ntstatus.h"
  #include "source3/lib/substitute.h"
 +#include "passdb/machine_sid.h"
++#include "param/zxs_runtime.h"
  
  #include "lib/crypto/gnutls_helpers.h"
  #include <gnutls/gnutls.h>
-@@ -713,6 +714,14 @@
+@@ -713,6 +715,14 @@
  	state->in_security_mode = in_security_mode;
  	state->in_previous_session_id = in_previous_session_id;
  	state->in_security_buffer = in_security_buffer;
@@ -568,7 +606,7 @@
  
  	if (in_flags & SMB2_SESSION_FLAG_BINDING) {
  		if (in_session_id == 0) {
-@@ -912,6 +921,23 @@
+@@ -912,6 +922,23 @@
  	return req;
  }
  
@@ -581,7 +619,7 @@
 +
 +	zxs_sam_require_current();
 +	domain = get_global_sam_sid();
-+	return info != NULL &&
++	return zxs_runtime_storage_live() && info != NULL &&
 +		info->security_token != NULL && info->security_token->num_sids > 0 &&
 +		info->security_token->sids != NULL &&
 +		security_session_user_level(info, NULL) == SECURITY_USER &&
@@ -592,7 +630,7 @@
  static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq)
  {
  	struct tevent_req *req =
-@@ -944,6 +970,11 @@
+@@ -944,6 +971,11 @@
  				     state,
  				     &state->session_info);
  	if (tevent_req_nterror(req, status)) {
@@ -646,11 +684,12 @@
                          samba3util
                          dbwrap
                          krb5samba
-@@ -558,12 +559,15 @@
+@@ -558,12 +559,16 @@
  bld.SAMBA3_SUBSYSTEM('SMBCONF_PARAM',
                     source='''
                            param/loadparm.c
 +                          param/zxs_runtime.c
++                          param/zxs_smb_control.c
                            lib/sharesec.c
                            lib/ldap_debug_handler.c
                            lib/util_names.c

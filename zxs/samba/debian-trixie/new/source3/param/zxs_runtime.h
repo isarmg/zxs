@@ -3,6 +3,10 @@
 #ifndef ZXS_SAMBA_RUNTIME_H
 #define ZXS_SAMBA_RUNTIME_H
 struct dom_sid;
+bool zxs_runtime_control_take(void);
+bool zxs_runtime_connect_storage(void);
+bool zxs_runtime_storage_live(void);
+int zxs_runtime_watch_fd(void);
 bool zxs_runtime_config(const char *name, bool (*section)(const char *, void *),
 			bool (*param)(const char *, const char *, void *), void *ctx);
 bool zxs_runtime_store(dev_t dev, ino_t ino);

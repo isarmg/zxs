@@ -4,6 +4,7 @@
  * Debian 13 Linux/amd64; not a probe of the system Samba installation. */
 #include "includes.h"
 #include "param/zxs_runtime.h"
+#include "param/zxs_smb_control.h"
 #include "lib/util/tini.h"
 #include "libcli/security/security.h"
 #include <gnutls/crypto.h>
@@ -34,6 +35,9 @@ struct selected {
  * seek position. A replacement must not refresh this process's identity. */
 static struct selected held;
 static bool active;
+static int control_fd = -1;
+static int lifetime_writer = -1; /* deliberately retained across participating forks */
+static bool qualified;
 
 static bool observed(int fd, const char *name, unsigned flags, struct statx *o)
 {
@@ -200,7 +204,7 @@ bool zxs_runtime_store(dev_t dev, ino_t ino)
 	struct statx named;
 	/* Native dbwrap has already opened the exact TDB. Metadata only: never
 	 * open/close the database in parallel with its native lock holder. */
-	return record_intact() &&
+	return (!qualified || zxs_runtime_storage_live()) && record_intact() &&
 		observed(held.fd[ZXS_FD_PRIV],"secrets.tdb",AT_SYMLINK_NOFOLLOW,&named) &&
 		identical(&held.store,&named,true) && held.store.stx_ino==ino &&
 		held.store.stx_dev_major==(unsigned)major(dev) &&
@@ -215,5 +219,44 @@ bool zxs_runtime_domain(const struct dom_sid *s)
 	for (i=0;i<4;i++) {
 		if (s->sub_auths[i]!=IVAL(b,8+4*i)) { return false; }
 	}
+	return true;
+}
+
+/* Claim the anonymous supervisor-created channel once, before Samba might
+ * reuse descriptor 3. The duplicate is inherited across fork, not exec.
+ * No smbd opens SYSTEM.sqlite3 or interprets host client passwords here. */
+bool zxs_runtime_control_take(void)
+{
+	if (control_fd!=-1 || zxs_smb_ctl_claim(3)!=0) { return false; }
+	control_fd=fcntl(3,F_DUPFD_CLOEXEC,5);
+	if (control_fd<0) { return false; }
+	return close(3)==0;
+}
+int zxs_runtime_watch_fd(void)
+{
+	return qualified ? control_fd : -1;
+}
+bool zxs_runtime_storage_live(void)
+{
+	return qualified && control_fd>=0 && lifetime_writer>=0 && zxs_smb_ctl_live(control_fd)==0;
+}
+bool zxs_runtime_connect_storage(void)
+{
+	static const uint8_t first_generation[8]={0,0,0,0,0,0,0,1};
+	uint8_t reply[ZXS_SMB_READY_LEN];
+	if (qualified || lifetime_writer>=0 || control_fd<0 || !record_intact()) { return false; }
+	lifetime_writer=zxs_smb_ctl_hello(control_fd,held.binding);
+	if (lifetime_writer<0 ||
+	    zxs_smb_ctl_read(control_fd,reply,sizeof(reply))!=0 ||
+	    memcmp(reply,"ZXS-SAM/READY-1",16)!=0 ||
+	    memcmp(reply+16,held.binding,sizeof(held.binding))!=0 ||
+	    !nonzero(reply+144,16) || !nonzero(reply+160,16) ||
+	    memcmp(reply+176,first_generation,8)!=0 ||
+	    reply[184]!=1 || reply[185]!=5 ||
+	    memcmp(reply+186,held.binding+106,22)!=0 || IVAL(reply,208)!=1000 ||
+	    !record_intact() || zxs_smb_ctl_live(control_fd)!=0) {
+		return false;
+	}
+	qualified=true;
 	return true;
 }

@@ -1,0 +1,166 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#define _GNU_SOURCE 1
+#include "zxs_smb_control.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/magic.h>
+#include <sys/vfs.h>
+#include <poll.h>
+#include <stdbool.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <sys/stat.h>
+#include <sys/statvfs.h>
+#include <sys/un.h>
+#include <time.h>
+#include <unistd.h>
+
+static int bad(void) { errno=EPROTO; return -1; }
+static bool unnamed(int fd, bool peer)
+{
+    struct sockaddr_un a={0};socklen_t n=sizeof(a);
+    int rc=peer?getpeername(fd,(struct sockaddr *)&a,&n):getsockname(fd,(struct sockaddr *)&a,&n);
+    return rc==0 && n==offsetof(struct sockaddr_un,sun_path) && a.sun_family==AF_UNIX;
+}
+static bool opt(int fd,int k,int expected)
+{
+    int v=-1;socklen_t n=sizeof(v);
+    return getsockopt(fd,SOL_SOCKET,k,&v,&n)==0 && n==sizeof(v) && v==expected;
+}
+int zxs_smb_ctl_claim(int fd)
+{
+    int flags=fcntl(fd,F_GETFD);struct ucred creator={0};socklen_t n=sizeof(creator);
+    /* With a socketpair SO_PEERCRED identifies the creator, NOT the exec'd
+     * peer. Identity and sole delivery of opposite endpoints are the trusted
+     * launcher's job; there is no connectable name or UID-only guest path. */
+    int open_flags=fcntl(fd,F_GETFL);
+    if(flags<0 || open_flags<0 || (open_flags&O_NONBLOCK)!=0 || !opt(fd,SO_TYPE,SOCK_SEQPACKET) || !opt(fd,SO_ACCEPTCONN,0) ||
+       !unnamed(fd,false) || !unnamed(fd,true) ||
+       getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&creator,&n)<0 || n!=sizeof(creator) ||
+       creator.uid!=0) {return bad();}
+    return fcntl(fd,F_SETFD,flags|FD_CLOEXEC);
+}
+static int millis(int64_t *out)
+{
+    struct timespec t;
+    if(clock_gettime(CLOCK_MONOTONIC,&t)<0)return -1;
+    *out=(int64_t)t.tv_sec*1000+t.tv_nsec/1000000;return 0;
+}
+/* Only the exact first request can carry one newly-created kernel pipe
+ * read end. Never accept a pathname, regular file, directory or writable fd. */
+static bool life_reader(int fd)
+{
+    struct stat st;struct statfs fs;int f=fcntl(fd,F_GETFL),d=fcntl(fd,F_GETFD);
+    return f>=0 && d>=0 && (f&O_ACCMODE)==O_RDONLY && (f&O_PATH)==0 &&
+           (f&O_NONBLOCK)!=0 && (d&FD_CLOEXEC)!=0 &&
+           fstat(fd,&st)==0 && S_ISFIFO(st.st_mode) && fstatfs(fd,&fs)==0 &&
+           (unsigned long)fs.f_type==PIPEFS_MAGIC;
+}
+static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take)
+{
+    int64_t now,stop;bool sending=sendbuf!=NULL;
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN)return bad();
+    if(millis(&now)<0)return -1;
+    stop=now+10000;
+    for(;;) {
+        struct pollfd pollfd={.fd=fd,.events=sending?POLLOUT:POLLIN};
+        if(millis(&now)<0)return -1;
+        if(now>=stop){errno=ETIMEDOUT;return -1;}
+        int r=poll(&pollfd,1,(int)(stop-now));
+        if(r<0 && errno==EINTR)continue;
+        if(r<0)return -1;
+        if(r==0){errno=ETIMEDOUT;return -1;}
+        if((pollfd.revents&pollfd.events)==0)return bad();
+        ssize_t got;int received=-1;
+        if(sending && offer>=0){
+            struct iovec iov={.iov_base=(void *)sendbuf,.iov_len=len};
+            union { struct cmsghdr align; unsigned char buf[CMSG_SPACE(sizeof(int))]; } ctrl={0};
+            struct msghdr msg={.msg_iov=&iov,.msg_iovlen=1,.msg_control=ctrl.buf,.msg_controllen=sizeof(ctrl.buf)};
+            struct cmsghdr *c=CMSG_FIRSTHDR(&msg);
+            c->cmsg_level=SOL_SOCKET;c->cmsg_type=SCM_RIGHTS;c->cmsg_len=CMSG_LEN(sizeof(int));
+            memcpy(CMSG_DATA(c),&offer,sizeof(offer));
+            got=sendmsg(fd,&msg,MSG_DONTWAIT|MSG_NOSIGNAL);
+        }else if(sending){got=send(fd,sendbuf,len,MSG_DONTWAIT|MSG_NOSIGNAL);}
+        else{
+            struct iovec iov={.iov_base=recvbuf,.iov_len=len};
+            struct msghdr msg={.msg_iov=&iov,.msg_iovlen=1};
+            union { struct cmsghdr align; unsigned char buf[CMSG_SPACE(4*sizeof(int))]; } ctrl={0};
+            if(take!=NULL){msg.msg_control=ctrl.buf;msg.msg_controllen=sizeof(ctrl.buf);}
+            got=recvmsg(fd,&msg,MSG_DONTWAIT|MSG_TRUNC|MSG_CMSG_CLOEXEC);
+            if(got>=0){
+                struct cmsghdr *c;bool extra=(msg.msg_flags&(MSG_CTRUNC|MSG_TRUNC))!=0;
+                for(c=CMSG_FIRSTHDR(&msg);c!=NULL;c=CMSG_NXTHDR(&msg,c)){
+                    if(c->cmsg_level!=SOL_SOCKET || c->cmsg_type!=SCM_RIGHTS ||
+                       c->cmsg_len<CMSG_LEN(0)){extra=true;continue;}
+                    size_t n=c->cmsg_len-CMSG_LEN(0);
+                    if(n!=sizeof(int))extra=true;
+                    for(size_t j=0;j+sizeof(int)<=n;j+=sizeof(int)){
+                        int v;memcpy(&v,(unsigned char *)CMSG_DATA(c)+j,sizeof(v));
+                        if(received<0){received=v;}else{close(v);extra=true;}
+                    }
+                }
+                if(extra || (take!=NULL && (received<0 || !life_reader(received))) ||
+                   (size_t)got!=len){
+                    if(received>=0)close(received);
+                    return bad();
+                }
+            }
+        }
+        if(got<0 && (errno==EINTR || errno==EAGAIN))continue;
+        if(got<0)return -1;
+        if(take!=NULL)*take=received;
+        return (size_t)got==len?0:bad(); /* no fragment joining, oversize, empty or reflected ack */
+    }
+}
+int zxs_smb_ctl_read(int fd,uint8_t *p,size_t n){return transfer(fd,NULL,p,n,-1,NULL);}
+int zxs_smb_ctl_write(int fd,const uint8_t *p,size_t n){return transfer(fd,p,NULL,n,-1,NULL);}
+/* Return only the write end locally; it stays open through every participating
+ * smbd fork. The stdin/stdout of a client and the main SQLite directory are
+ * never handed over. Loss of a socket direction is not end of this lease. */
+int zxs_smb_ctl_hello(int fd,const uint8_t *bound)
+{
+    int p[2];if(pipe2(p,O_NONBLOCK|O_CLOEXEC)<0)return -1;
+    int rc=transfer(fd,bound,NULL,ZXS_SMB_BIND_LEN,p[0],NULL),err=errno;close(p[0]);
+    if(rc!=0){close(p[1]);errno=err;return -1;}
+    return p[1];
+}
+int zxs_smb_ctl_bound(int fd,uint8_t *bound)
+{
+    int rd=-1;if(transfer(fd,NULL,bound,ZXS_SMB_BIND_LEN,-1,&rd)!=0)return -1;
+    return rd;
+}
+int zxs_smb_ctl_live(int fd)
+{
+    struct pollfd p={.fd=fd,.events=POLLIN|POLLRDHUP};
+    int n;do {n=poll(&p,1,0);}while(n<0 && errno==EINTR);
+    /* Once qualified the startup stream carries no further messages.
+     * Readable data, EOF, half-close and descriptor errors all revoke it. */
+    return n==0?0:bad();
+}
+int zxs_smb_ctl_drain(int fd){return shutdown(fd,SHUT_WR);}
+/* A kernel anonymous pipe has no socket-style half-close. On its read
+ * end POLLHUP means the *last* reference to the write end went away. It
+ * says nothing about work in another service that never held that end. */
+int zxs_smb_ctl_life(int fd,int timeout)
+{
+    if(timeout!=0 && timeout!=500)return bad();
+    struct pollfd p={.fd=fd,.events=0};
+    int r=poll(&p,1,timeout);
+    if(r<0 && errno==EINTR)return 0;
+    if(r<0)return -1;
+    if(r==0)return 0;
+    if((p.revents&(POLLERR|POLLNVAL))!=0)return bad();
+    return (p.revents&POLLHUP)!=0?1:bad();
+}
+
+int zxs_smb_bound_fd(int fd)
+{
+    struct stat st;struct statvfs vs;
+    int flags=fcntl(fd,F_GETFL),f=fcntl(fd,F_GETFD);
+    if(flags<0 || f<0 || (flags&O_ACCMODE)!=O_RDONLY || (flags&O_PATH)!=0 ||
+       fstat(fd,&st)<0 || !S_ISREG(st.st_mode) || st.st_uid!=0 ||
+       (st.st_mode&0022)!=0 || st.st_nlink!=1 || st.st_size!=ZXS_SMB_BIND_LEN ||
+       fstatvfs(fd,&vs)<0 || (vs.f_flag&ST_RDONLY)==0){return bad();}
+    return fcntl(fd,F_SETFD,f|FD_CLOEXEC);
+}

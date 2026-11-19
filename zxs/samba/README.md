@@ -7,7 +7,7 @@
 
 ## 源码已接到哪里
 
-该私有源码覆盖由[Debian 原文件补丁](debian-trixie/0001-managed-standalone.patch)和[两个新源文件](debian-trixie/new/source3/param/)组成。组装时将 `new/` 下这两个文件按相对路径放入同一已验证的专用 Debian 源树，再应用原文件补丁；Waf 已列出实际源及 tini/GnuTLS 依赖。缺件不构建，没有回落系统 smbd 的第二条路。没有新增网络服务或自写 NTLM：
+该私有源码覆盖由[Debian 原文件补丁](debian-trixie/0001-managed-standalone.patch)和[专用运行及控制通道的源文件](debian-trixie/new/source3/param/)组成。组装时将 `new/` 下这些文件按相对路径放入同一已验证的专用 Debian 源树，再应用原文件补丁；Waf 已列出实际源及 tini/GnuTLS 依赖。缺件不构建，没有回落系统 smbd 的第二条路。没有新增网络服务或自写 NTLM：
 
 | 实际切点 | 这段代码能判的事 |
 | --- | --- |
@@ -23,7 +23,17 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 
 私有 smbd 只接受固定前台启动方式，不接受替代配置环境或额外 `--option`；对同一份已持 BOUND 及普通 live 文件，先核类型、权限、现场原物/挂载和原配置摘要，再以这**同一缓冲**送 Samba 原始 `tini_parse`（不另开路径、不重写配置解释器）。配置需 1..1 MiB、没有内嵌 NUL；拒 include、config file 重定向、注册表配置或动态注册表共享在解析时加载其他来源。原约定的两个目录、两个文件和真正具名、单链接 0600 的专用 SAM 状态持续同物。只用 dbwrap 提供的原 TDB 现场标识与当前受保护名字相比，不额外打开 TDB 来算摘要或枚举键。子进程继承原描述符、只用带偏移读取。真正的运行资格切口单独复验域；核固定私有 TDB 时才短暂用 Samba 已有的可信服务身份，及时恢复，不给客户端任何宿主路径/SQLite 权限。普通 SID 格式化可用已核不可变缓存，不签新登录。原物失效干净终止该专进程，不对既有上游调用者泄出 NULL、也不以 panic 或 core 当正常拒绝。运行中换挂载/原件、改配置、替换 BOUND 或缺域都不能用新名字刷新信任。需要变更由宿主另行授权、替换并重新启动；不干扰管理员通过 SQLite 改共享 RO/RW。
 
-**接线顺序。** 宿主须先持有经批准、互相吻合的 PoolId、InstanceId、ProvisionOp、上线配置原件 SHA-256、`ZXSLOCAL` 和原 SAM 域；引导配置/工作组名不是上线原件。启动端必须核实际加载的专用实例、配置/依赖、private/state 和 SQLite 内该域 + RID 1000 的 SMB 行，之后才接受连接。禁不受控 include、配置重定向及任意插件。仅看到配置字段、读到域或对完整拷贝算得相同摘要不足以鉴别宿主。当前已接受管配置/原目录与 SAM 域这部分；Pool/Instance/原单的独立在线对证、同池 SMB 凭据核验和会话交接未齐，不能据此启用对外服务。实际口令验证取用的**第一份** SMB 行要在本次认证上下文中绑定 Pool/AccountId/SID、凭据原操作及代次；后续重查用户名或凭 SID 命中缓存不得替它签发。通过账户策略、真实非 guest 安全令牌并成功发布这一 SMB2 session 后才向对应 tree 打开 FILE。无相应证明的恢复/新通道不受理。
+**接线顺序。** 宿主须先持有经批准、互相吻合的 PoolId、InstanceId、ProvisionOp、上线配置原件 SHA-256、`ZXSLOCAL` 和原 SAM 域；引导配置/工作组名不是上线原件。启动端必须核实际加载的专用实例、配置/依赖、private/state 和 SQLite 内该域 + RID 1000 的 SMB 行，之后才接受连接。禁不受控 include、配置重定向及任意插件。仅看到配置字段、读到域或对完整拷贝算得相同摘要不足以鉴别宿主。当前已接以上受管配置和 SAM，以及下面的原池/固定 SMB 账户启动核对；真正 SMB 口令验证与最终会话交接仍未齐，不能据此启用文件服务。实际口令验证取用的**第一份** SMB 行要在本次认证上下文中绑定 Pool/AccountId/SID、凭据原操作及代次；后续重查用户名或凭 SID 命中缓存不得替它签发。通过账户策略、真实非 guest 安全令牌并成功发布这一 SMB2 session 后才向对应 tree 打开 FILE。无相应证明的恢复/新通道不受理。
+
+### 仅两端的启动控制通道
+
+宿主监管者新建阻塞的匿名 Linux AF_UNIX/SOCK_SEQPACKET socketpair，严格只将一端作为 fd 3 给受保护的专用 smbd，另一端作为 fd 3 给本项目独立的非 root `zxs-smb-storage` 进程；不给 Web、系统级 Samba、其他实例或客户端。后者的 fd 4 另由宿主打开为已批准实例的**原 BOUND 只读投射**（root 属主、原单链接普通文件）。宿主分别提供 `ZXS_SYSTEM_ROOT`、`ZXS_POOL_ID`、`ZXS_SAMBA_INSTANCE_ID`、`ZXS_SAMBA_PROVISION_OP`、`ZXS_SAMBA_LIVE_CONFIG_SHA256`；必须来自原安装的独立选择，不从 socket 对端或所读记录反填。两个端点无文件名、无监听、不可连接；SO_PEERCRED 在 socketpair 上属于创建者，不能证明后来执行哪套二进制。宿主须验证实际启动的两份发行件，且在各自 exec 后关闭自己及其他进程不需要的副本；不得跨 UID 映射辨不出该 root 创建者却放宽准入。此通道与离线域供给不相通。
+
+只有在 smbd 已用同一配置字节并从真实专用 SAM 复验时，才向原通道发其 128B BOUND，并用同一消息只交接一件内核原物：专 smbd 刚建的匿名 Linux pipe 的只读端。写端不携数据，留在 smbd 及其 fork 的参与进程，禁止转交给第三方。存储进程独立持原 SYSTEM 目录 SH，用同一 SQLite 短读切面核 INIT/原卷标、唯一配对及其当前 SMB AccountId/凭据单和代次，域须为原本地域＋RID1000。受管 BOUND 在整个核对中保持原 FD、戳与相同字节。答复固定 212B：16B `ZXS-SAM/READY-1\0`、所核同一 BOUND、16B SMB AccountId、16B 凭据原单、8B 大端代次、28B 账户 SID。先完成字节数和原件核对才回复；不会选取或发送口令、NT 验证材料或 Web 凭据。成功仅描述启动瞬间证实的这份账户；不是 NTLM 验证、正面登录票、共享授权或目录就绪。
+
+握手有截止时间，只在第一条 BOUND 接收精确一个 kernel pipefs 的只读、非阻塞读端，拒普通文件、目录、可写/具名 FIFO、额外或截短的辅助数据；READY 不收 FD。以后不能经此通道查询账户或 FILE。存储停止先半关控制 socket，连空闲的专 smbd 父进程也由真实 tevent 读事件触发正常退出，子进程沿 Samba 原本的父死亡管道收尾。无论控制端仅半关还是整个 socket 已关，皆不证明所有参与者已关闭。非 root 存储进程不跨空闲持 SQL 事务，直到内核报告这根匿名 pipe **全部写端已经关闭**才正常释放本次原 S SH。宿主监督者另负责停止并回收整套受管进程（异常/卡住的不宣称已经排空）；未来各实际读写任务还必须持自己的原 S 租约到同步/flush/关闭，不能拿管道 EOF 当作其他服务已完成 FILE 的证据。私端断开、额外输入、换配置/实例，不能用另找的服务代替。一次握手不会让未来文件 I/O 绕过当时的账户和共享权限。
+
+待联调：由受信 supervisor 只交上述两端及原 BOUND；无账户、他池/实例、同形异域、错误控制地址、可写 BOUND、smbd/存储端异常关闭均不取得操作许可，双方关完真 FD 后 helper 才可取同一 S EX。当前只编写了真实 Linux 消息与 SQLite 行选择的源码用例；没有部署、运行或验过 Windows 登录。
 
 ## 文件并发要求（未接 VFS）
 
