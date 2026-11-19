@@ -1,9 +1,0 @@
-[package]
-name = "zxs-naming"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
-[dependencies]
-zxs-contract.workspace = true
-tinyvec = { path = "../foundation/tinyvec", version = "1", features = ["alloc"] }

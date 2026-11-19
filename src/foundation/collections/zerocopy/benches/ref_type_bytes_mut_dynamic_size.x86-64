@@ -1,4 +1,0 @@
-bench_ref_type_bytes_mut_dynamic_size:
-	mov rax, qword ptr [rdi]
-	mov rdx, qword ptr [rdi + 8]
-	ret

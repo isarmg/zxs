@@ -1,38 +1,4 @@
-# 验证结果不入库；验证代码保留，说明统一维护在 docs/validation/。
-# 先重开目录和已知脚本类型，后续通用规则继续排除缓存与本地环境文件。
-/test/evidence/**
-!/test/evidence/**/
-!/test/evidence/**/*.rs
-!/test/evidence/**/*.mjs
-!/test/evidence/**/*.py
-!/test/evidence/**/*.sh
-# 源码分类清单属于验证输入。
-!/test/evidence/probes.json
-
-# 单仓库的编译缓存与交付产物。
-# 根 Cargo.lock、.cargo/config.toml 和 rust-toolchain.toml 属于源码。
-target/
-.rustc_info.json
-**/.cargo/registry/
-**/.cargo/git/
-/build/
-/dist/
-/out/
-/artifacts/
-/release-assets/
-
-# 本地运行池和数据只按仓库根目录忽略，保留源码中的固定数据样本。
-/runtime/
-/zxs-data/
-/xcs-data/
-/logs/
-/tmp/
-/.tmp/
-.cache/
-.direnv/
-.envrc
-
-# 本地凭据及环境覆盖；可共享的示例配置保留。
+# Repository-wide local credentials and editor/OS debris.
 .env
 .env.*
 !.env.example
@@ -41,88 +7,18 @@ target/
 !.env.*.sample
 !.env.template
 !.env.*.template
+.envrc
 !.envrc.example
-.aws/
-.ssh/
-/.codex/
-/secrets/
-/credentials/
+.direnv/
 **/.cargo/credentials
 **/.cargo/credentials.toml
-
-# 浏览器验证依赖、报告与覆盖率缓存。
-node_modules/
-playwright-report/
-test-results/
-blob-report/
-coverage/
-.nyc_output/
-*.profraw
-*.profdata
-lcov.info
-tarpaulin-report.html
-cobertura.xml
-
-# Python 工具缓存。
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.tox/
-.venv/
-venv/
-.coverage
-.coverage.*
-htmlcov/
-
-# 本地日志、临时文件和补丁残留；中央来源归档使用 *.txt 保留原文。
-*.log
-*.log.*
-*.tmp
-*.temp
-*.bak
-*.orig
-*.rej
-*.rs.bk
-*.pid
-*.pid.lock
-*.sock
-
-# 编辑器与操作系统缓存；共享 VS Code 配置保留。
+.aws/
+.ssh/
+.codex/
+secrets/
+credentials/
 .idea/
-**/.vscode/*
-!**/.vscode/extensions.json
-!**/.vscode/settings.json
-!**/.vscode/tasks.json
-!**/.vscode/launch.json
-*.sw[a-p]
-.#*
-\#*#
+*.swp
 *~
 .DS_Store
-._*
-.AppleDouble/
-.LSOverride
 Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# 经原始来源哈希核验的编译输入：精确例外，不放行整个基础源码目录。
-!/src/foundation/tooling/cc/src/target/
-/src/foundation/tooling/cc/src/target/*
-!/src/foundation/tooling/cc/src/target/apple.rs
-!/src/foundation/tooling/cc/src/target/generated.rs
-!/src/foundation/tooling/cc/src/target/llvm.rs
-!/src/foundation/tooling/cc/src/target/parser.rs
-!/test/foundation/sqlite-access/facade/tests/.env
-
-# 外置的 cc 目标解析单元测试属于源码，不是 target 编译缓存。
-!/test/foundation/cc/unit/src/target/
-/test/foundation/cc/unit/src/target/*
-!/test/foundation/cc/unit/src/target/llvm/
-/test/foundation/cc/unit/src/target/llvm/*
-!/test/foundation/cc/unit/src/target/llvm/tests_120.rs
-!/test/foundation/cc/unit/src/target/parser/
-/test/foundation/cc/unit/src/target/parser/*
-!/test/foundation/cc/unit/src/target/parser/tests_475.rs

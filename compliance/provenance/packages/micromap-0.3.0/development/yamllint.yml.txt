@@ -1,7 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023-2026 Yegor Bugayenko
-# SPDX-License-Identifier: MIT
----
-rules:
-  line-length:
-    max: 120
-    allow-non-breakable-words: true

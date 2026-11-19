@@ -1,6 +1,0 @@
-Development simulation; timing ratios are observations, never gates.
-history=1: entity writes 11 -> 11; save_us: 1.646x, restart_us: 1.443x, range_open_read_8_us: 1.075x
-history=16: entity writes 9 -> 9; save_us: 1.264x, restart_us: 1.321x, range_open_read_8_us: 1.110x
-history=32: entity writes 9 -> 9; save_us: 1.264x, restart_us: 1.297x, range_open_read_8_us: 1.120x
-history=64: entity writes 9 -> 9; save_us: 1.036x, restart_us: 1.077x, range_open_read_8_us: 1.066x
-PASS: bounded entity writes and correctness checks

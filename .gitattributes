@@ -1,4 +1,4 @@
-# Maintained source and build inputs use stable line endings on every platform.
+# Stable line endings for maintained source and documentation.
 *.rs text eol=lf
 *.py text eol=lf
 *.sh text eol=lf
@@ -6,34 +6,3 @@
 *.toml text eol=lf
 *.md text eol=lf
 **/Cargo.lock text eol=lf
-/tools/rust-sources/workspaces.json text eol=lf
-
-# Source receipts and archived upstream materials preserve exact original bytes.
-# These overrides include source files and mixed-line-ending legal texts.
-/src/foundation/** -text
-/tools/web-bindings/** -text
-/compliance/** -text
-/docs/upstream/** -text
-
-# Exact upstream test vectors retain original header whitespace and terminal
-# blank lines. Hash verification, not cosmetic rewriting, protects these bytes.
-/src/foundation/ring/**/*tests.txt whitespace=-blank-at-eof
-/src/foundation/ring/cavp/third_party/NIST/SHAVS/*.rsp whitespace=-blank-at-eol,-blank-at-eof
-
-# Relocated upstream tests remain byte-exact under their current source receipts.
-/test/foundation/** -text
-/test/tools/web-bindings/** -text
-/test/foundation/ring/**/*tests.txt whitespace=-blank-at-eof
-/test/foundation/ring/cavp/third_party/NIST/SHAVS/*.rsp whitespace=-blank-at-eol,-blank-at-eof
-
-# Exact extracted upstream fragments contain original literal/comment whitespace.
-# Their preserved bytes are authenticated by the external-test receipts.
-/test/foundation/find-msvc-tools/unit/src/vs_instances/tests__94.rs whitespace=-blank-at-eol
-/test/foundation/jsonschema/unit/src/error/tests_1859.rs whitespace=-blank-at-eol
-/test/foundation/rstml/unit/src/node/atoms/test_304.rs whitespace=-blank-at-eol
-/test/foundation/sysinfo/unit/src/unix/linux/cpu/test_886.rs whitespace=-blank-at-eol
-/test/foundation/winnow/unit/examples/ndjson/parser/test_210.rs whitespace=-blank-at-eol
-
-# Preserve the original CRLF source without treating its CR as trailing space.
-/src/foundation/allocator-api2/src/stable/boxed.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
-/src/foundation/allocator-api2/src/stable/vec/mod.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

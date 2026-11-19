@@ -1,0 +1,24 @@
+# Build output and local-only files.
+/target/
+.rustc_info.json
+/.cargo/registry/
+/.cargo/git/
+/build/
+/dist/
+/out/
+/artifacts/
+/release-assets/
+/runtime/
+/zxs-data/
+/logs/
+/tmp/
+.env
+.env.*
+!.env.example
+!.env.*.example
+/.cargo/credentials
+/.cargo/credentials.toml
+/secrets/
+/credentials/
+*.profraw
+*.log

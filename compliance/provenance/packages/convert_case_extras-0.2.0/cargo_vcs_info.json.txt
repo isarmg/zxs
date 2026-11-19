@@ -1,6 +1,0 @@
-{
-  "git": {
-    "sha1": "d523585a01afddd13944be1d88faa4d1db6a3eb4"
-  },
-  "path_in_vcs": ""
-}

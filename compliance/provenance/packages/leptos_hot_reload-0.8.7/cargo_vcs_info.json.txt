@@ -1,6 +1,0 @@
-{
-  "git": {
-    "sha1": "58fe6c1ad0cd175e9c8ec204895a9739d52fda16"
-  },
-  "path_in_vcs": "leptos_hot_reload"
-}

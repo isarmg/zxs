@@ -1,3 +1,0 @@
-[submodule "walrus-tests/tests/spec-tests"]
-	path = crates/tests/tests/spec-tests
-	url = https://github.com/WebAssembly/testsuite

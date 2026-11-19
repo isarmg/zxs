@@ -1,6 +1,0 @@
-{
-  "git": {
-    "sha1": "a993c0ba50db6510d8db15a6219572de65115438"
-  },
-  "path_in_vcs": "ctutils"
-}

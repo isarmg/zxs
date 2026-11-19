@@ -1,6 +1,0 @@
-    Finished `dev` profile [unoptimized] target(s) in 0.05s
-     Running `target/web-tools/debug/xcs-web-build build --product-root .`
-   Compiling xcs-web v0.1.0 (/mnt/sarmg.org/xcs/web/runtime)
-   Compiling xcs-web-app v0.1.0 (/mnt/sarmg.org/xcs/web)
-    Finished `release` profile [optimized] target(s) in 29.47s
-{"dist":"/mnt/sarmg.org/xcs/web/dist","event":"built","runtime":"xcs-web"}
