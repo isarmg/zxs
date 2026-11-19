@@ -1,0 +1,6 @@
+// Shared by the app's Debug and Release targets. No team, keys or signing profile.
+PRODUCT_BUNDLE_IDENTIFIER = org.zipworkspace.preview
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+SKIP_INSTALL = NO
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon

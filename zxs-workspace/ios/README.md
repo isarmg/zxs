@@ -18,7 +18,7 @@
 
 ## 工程与发行
 
-独立打开 `ZipPreview.xcodeproj`，应用及 XCTest 源目标均包含在 `ZipPreview` 方案内。最低系统为 iOS / iPadOS 16；源码使用 UIKit、Foundation、Uniform Type Identifiers、Darwin 和系统 SDK 自带的 libz（仅取 CRC-32），不下载第三方包。工程不预设开发团队、证书、云容器或发布账户。
+独立打开 `ZipPreview.xcodeproj`，应用及 XCTest 源目标均包含在 `ZipPreview` 方案内。最低系统为 iOS / iPadOS 16；源码使用 UIKit、Foundation、Uniform Type Identifiers、Darwin 和系统 SDK 自带的 libz（仅取 CRC-32），不下载第三方包。工程不预设开发团队、证书、云容器或发布账户。 参见[版本化本地归档候选与签发门槛](RELEASE.md)：当前 App 目标已有共享版本、独立图标和原选档文件元数据的隐私清单；不注册外部文件处理。
 
 **本次只编写/静审：** 没有用 Xcode 构建、运行测试、安装到设备或生成签名包。可发行前须在获准的 macOS/Xcode 环境独立构建并签名，在真实 iPhone/iPad 上验证本机和外部文件提供方、无授权/失联/等待下载、取消/换选/转入后台、外部改名/删除/占用、目录导航、读不完和 CRC 不符、文本字节边界、大字号下滚至换行密集的 32 KiB 文末并读到末尾标记、VoiceOver 阅读、关闭或失效后不显示旧正文，以及超过 4 GiB 的 ZIP64；另核正常使用的辅助功能、图标、隐私披露与发行配置。
 
