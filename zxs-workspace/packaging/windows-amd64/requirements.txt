@@ -1,0 +1,11 @@
+# Windows 11 x64, official CPython 3.14.10 (normal GIL build).
+# One exact PyPI wheel per line. No sdist, URL, option, or environment fallback.
+altgraph==0.17.5 --hash=sha256:f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597  # altgraph-0.17.5-py2.py3-none-any.whl
+packaging==26.2 --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e  # packaging-26.2-py3-none-any.whl
+pefile==2024.8.26 --hash=sha256:76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f  # pefile-2024.8.26-py3-none-any.whl
+pyinstaller==6.22.3 --hash=sha256:500bd58c7bf7e584a8435adccbd763a0b918d5c12b08d74ff50fd79b2915458b  # pyinstaller-6.22.3-py3-none-win_amd64.whl
+pyinstaller-hooks-contrib==2026.7 --hash=sha256:24257a04c7a5a7a034cf28e39dcee20fbeeb9f043076729480f2e1b69904408a  # pyinstaller_hooks_contrib-2026.7-py3-none-any.whl
+pyside6-essentials==6.11.2 --hash=sha256:c8a29def77032773a30879f7f24415b5395ad08592d147c170824ef4c735dfc1  # pyside6_essentials-6.11.2-cp310-abi3-win_amd64.whl
+pywin32-ctypes==0.2.3 --hash=sha256:8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8  # pywin32_ctypes-0.2.3-py3-none-any.whl
+setuptools==84.1.0 --hash=sha256:5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9  # setuptools-84.1.0-py3-none-any.whl
+shiboken6==6.11.2 --hash=sha256:6ab0eba1c904455df621f9a6df3ca2bb896bab8670572d2bc4e37804ae91f19a  # shiboken6-6.11.2-cp310-abi3-win_amd64.whl

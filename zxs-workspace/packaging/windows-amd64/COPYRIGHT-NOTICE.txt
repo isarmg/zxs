@@ -1,0 +1,27 @@
+ZIP Workspace — local Windows GUI candidate source notice
+
+Application source: https://github.com/isarmg/zxs/tree/main/zxs-workspace
+This folder is for a candidate made from an authorized working copy.
+It does not grant an application redistribution license or imply
+endorsement by Python, Qt, Microsoft, PyInstaller, or the signing owner.
+
+The recipe uses the official CPython Windows x64 interpreter and the
+PyPI wheels named and hashed in requirements.txt. Parts of CPython,
+PySide6/Shiboken and Qt, PyInstaller's bootloader and runtime hook code,
+and possibly runtime libraries from the build system enter the bundle.
+Build-only wheel metadata is not a list of everything redistributed.
+
+Review the actual produced files and preserve applicable license texts,
+attributions and source/relinking obligations before any distribution:
+* Python and included components: https://docs.python.org/3.14/license.html
+* Qt for Python and Qt components: https://doc.qt.io/qtforpython-6/licenses.html
+  https://www.qt.io/development/open-source-lgpl-obligations
+  A one-folder DLL layout does not, by itself, satisfy those obligations.
+* PyInstaller and its bootloader exception:
+  https://pyinstaller.org/en/v6.22.3/license.html
+* Any Microsoft runtime or other bundled library: verify its exact
+  redistributable terms separately; this recipe does not provision it.
+
+This notice is not a replacement for the licenses of the actual files.
+No part of issuing signed ZIP Workspace releases is authorized by the
+presence of this local recipe.
