@@ -6,3 +6,12 @@ mod pending;
 mod root_set;
 mod register_flock;
 mod thread_evidence;
+
+/// Fixed entries of the same registration, never names supplied by a caller.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegisterName { Pending, Ready }
+impl RegisterName {
+    fn entry(self) -> &'static std::ffi::CStr {
+        match self { Self::Pending => c"INITIALIZING", Self::Ready => c"REGISTRATION" }
+    }
+}

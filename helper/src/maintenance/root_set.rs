@@ -5,7 +5,7 @@ mod proposal;
 mod pending;
 pub(super) use pending::{PendingRootSet, SystemLabelCreated};
 pub(super) use proposal::UnpublishedProposal;
-use super::{ancestry::Mounts, genesis::FreshGenesis, identity::ObservedOriginal};
+use super::{RegisterName, ancestry::Mounts, genesis::FreshGenesis, identity::ObservedOriginal};
 use crate::pinned::{Kind, Pinned, invalid, storage_status::Selection};
 use rustix::fs::{FlockOperation::NonBlockingLockExclusive, RawDir, flock};
 use std::{fs::File, io, mem::MaybeUninit, os::unix::{ffi::OsStrExt, fs::MetadataExt}};
@@ -140,16 +140,19 @@ fn leaf_observation(mounts: &Mounts, r: &Root, named: &File, image: Option<&Fres
     }
 }
 
-fn sample_roots(roots: &[Root], uid: u32, image: Option<&FreshGenesis<'_>>) -> io::Result<Vec<RootSample>> {
+fn sample_roots(roots: &[Root], uid: u32, image: Option<(&FreshGenesis<'_>, RegisterName)>) -> io::Result<Vec<RootSample>> {
     let mounts = Mounts::current()?;
     roots.iter().enumerate().map(|(i, r)| sample_one(&mounts, r, uid, image, i)).collect()
 }
 
-fn sample_one(mounts: &Mounts, r: &Root, uid: u32, image: Option<&FreshGenesis<'_>>, i: usize) -> io::Result<RootSample> {
+fn sample_one(mounts: &Mounts, r: &Root, uid: u32, image: Option<(&FreshGenesis<'_>, RegisterName)>, i: usize) -> io::Result<RootSample> {
     let named = r.checked_name(uid)?;
     let stamp = DirectoryStamp::on(&named)?;
-    let (chain, labelled) = leaf_observation(mounts, r, &named, image, i)?;
-    if image.is_some() && i == 0 { read_pending_only(named)?; } else { read_empty(named)?; }
+    let (chain, labelled) = leaf_observation(mounts, r, &named, image.map(|(g, _)| g), i)?;
+    match (i, image) {
+        (0, Some((_, name))) => read_only_register(named, name)?,
+        _ => read_empty(named)?,
+    }
     Ok(RootSample { stamp, mounts: chain, labelled })
 }
 
@@ -175,25 +178,25 @@ fn finish_one(mounts: &Mounts, r: &Root, uid: u32, image: Option<&FreshGenesis<'
 // A newly opened directory description starts at offset zero on each scan;
 // never advance the original locked description. RawDir preserves getdents
 // errors (including ENOENT on removal); only its real end counts as EOF.
-fn read_empty(dir: File) -> io::Result<()> { read_directory(dir, false) }
-pub(super) fn read_pending_only(dir: File) -> io::Result<()> { read_directory(dir, true) }
+fn read_empty(dir: File) -> io::Result<()> { read_directory(dir, None) }
+pub(super) fn read_only_register(dir: File, name: RegisterName) -> io::Result<()> { read_directory(dir, Some(name)) }
 
-fn read_directory(dir: File, pending_only: bool) -> io::Result<()> {
+fn read_directory(dir: File, expected: Option<RegisterName>) -> io::Result<()> {
     let mut buffer = [MaybeUninit::<u8>::uninit(); 4096];
     let mut stream = RawDir::new(dir, &mut buffer);
     let mut dot = false;
     let mut parent = false;
-    let mut pending = false;
+    let mut found = false;
     while let Some(entry) = stream.next() {
         let entry = entry?;
         match entry.file_name().to_bytes() {
             b"." if !dot => dot = true,
             b".." if !parent => parent = true,
-            b"INITIALIZING" if pending_only && !pending => pending = true,
+            entry if !found && expected.is_some_and(|name| name.entry().to_bytes() == entry) => found = true,
             _ => return Err(invalid("unexpected entry or inconsistent storage directory stream")),
         }
     }
-    if pending != pending_only { return Err(invalid("the original pending registration name is absent")); }
+    if found != expected.is_some() { return Err(invalid("the required original registration name is absent")); }
     Ok(())
 }
 

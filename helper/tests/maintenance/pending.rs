@@ -107,3 +107,6 @@ fn byte_identical_name_replacement_never_rebinds_the_original_pending_or_its_lea
 
 #[path = "pending_roots.rs"]
 mod pending_roots;
+
+#[path = "empty_ready.rs"]
+mod empty_ready;

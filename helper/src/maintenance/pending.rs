@@ -1,9 +1,12 @@
-//! Original SYSTEM + pending register only. This is not a complete-root proof or a resume permit.
-//! No stored path is opened. No tags, file bytes, names or synchronization are written here.
+//! One caller-selected SYSTEM and one fixed original register. Observation never syncs,
+//! follows embedded paths, or authorizes a write. Only an explicit label application may
+//! ask its held pending source to synchronize the first name.
+mod ready;
+pub(super) use ready::ColdEmptyReady;
 use super::{
-    genesis::{FreshGenesis, MAX_IMAGE},
+    RegisterName, genesis::{FreshGenesis, MAX_IMAGE},
     identity::{Here, ObservedOriginal, mount_id},
-    root_set::{DirectoryStamp, read_pending_only},
+    root_set::{DirectoryStamp, read_only_register},
     register_flock::staging::first_name::FirstLinkedRegister,
 };
 use crate::pinned::{Entity, Kind, Pinned, invalid, private_inode_reader};
@@ -16,24 +19,31 @@ use std::{fs::File, io, os::unix::{ffi::OsStrExt, fs::{FileExt, MetadataExt}}, p
 #[derive(PartialEq, Eq)]
 struct Mark { at: Here, length: u64, mtime: (i64, i64), ctime: (i64, i64) }
 impl Mark {
-    fn on(fd: &File, system: &Here, uid: u32) -> io::Result<Self> {
+    fn on(fd: &File, system: &Here, uid: u32, known: RegisterName) -> io::Result<Self> {
         let m = fd.metadata()?;
         if !m.is_file() || m.uid() != uid || m.mode() & 0o7777 != 0o600 || m.nlink() != 1
-            || m.len() == 0 || m.len() > MAX_IMAGE as u64 || m.dev() != system.entity.dev {
-            return Err(invalid("pending register is not a bounded singly linked private regular original"));
+            || m.len() == 0 || m.dev() != system.entity.dev {
+            return Err(invalid("register is not a nonempty singly linked private regular original"));
         }
         let at = Here { entity: Entity::of(&m)?, mount: mount_id(fd)? };
         if at.mount != system.mount || at.entity == system.entity {
-            return Err(invalid("pending register is not a distinct inode on the original SYSTEM mount"));
+            return Err(invalid("register is not a distinct inode on the original SYSTEM mount"));
+        }
+        if m.len() > MAX_IMAGE as u64 {
+            return Err(match known {
+                RegisterName::Ready => io::Error::new(io::ErrorKind::Unsupported,
+                    "published register exceeds the empty-registration inspection window; it was not read"),
+                RegisterName::Pending => invalid("pending register exceeds its initial image bound"),
+            });
         }
         Ok(Self { at, length: m.len(), mtime: (m.mtime(), m.mtime_nsec()),
             ctime: (m.ctime(), m.ctime_nsec()) })
     }
 }
 
-fn pin_pending(dir: &File) -> io::Result<File> {
+fn pin_register(dir: &File, known: RegisterName) -> io::Result<File> {
     // Inspect kind BEFORE upgrading: even a FIFO, device or link cannot be opened for data.
-    Ok(File::from(openat(dir, c"INITIALIZING",
+    Ok(File::from(openat(dir, known.entry(),
         OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?))
 }
 
@@ -46,17 +56,17 @@ impl Registration {
 
 struct Source {
     name: Pinned, system: File, s: ObservedOriginal,
-    register: Registration, r: ObservedOriginal, uid: u32, op: [u8; 16],
+    register: Registration, r: ObservedOriginal, uid: u32, op: [u8; 16], known: RegisterName,
 }
 
 /// The original ordinary register FD holds EX (independent read-only cold open, or the
 /// very same open description handed over after its first link) for this
 /// object's lifetime. This does not authorize maintenance or prove the online service is off.
 #[must_use]
-pub(super) struct ColdPending { source: Source, observed: PendingImage }
+pub(super) struct ColdPending { source: Source, observed: InitialImage }
 
 #[derive(PartialEq, Eq)]
-struct PendingImage { bytes: Vec<u8>, system_labeled: bool }
+struct InitialImage { bytes: Vec<u8>, system_labeled: bool }
 impl ColdPending {
     pub(super) fn inspect(system_path: &Path, storage_uid: u32, init_op: [u8; 16]) -> io::Result<Self> {
         Self::inspect_held(system_path, storage_uid, init_op, None)
@@ -75,26 +85,7 @@ impl ColdPending {
     }
 
     fn inspect_held(system_path: &Path, storage_uid: u32, init_op: [u8; 16], prior: Option<FirstLinkedRegister>) -> io::Result<Self> {
-        if init_op == [0; 16] { return Err(invalid("a nonzero original initialization operation is required")); }
-        let name = Pinned::open(system_path, Kind::StorageRoot)?;
-        let system = name.storage_directory()?;
-        let s = ObservedOriginal::root(&system, storage_uid)?;
-        let pin = pin_pending(&system)?;
-        let selected = Mark::on(&pin, &s.at, storage_uid)?;
-        let register = match prior {
-            Some(original) => Registration::First(original),
-            None => {
-                let file = private_inode_reader(&pin, storage_uid, s.at.mount)?;
-                flock(&file, NonBlockingLockExclusive)?;
-                Registration::Cold(file)
-            }
-        };
-        let held = Mark::on(register.reader(), &s.at, storage_uid)?;
-        if held != selected { return Err(invalid("pending register changed before its original lock was acquired")); }
-        let birth = read_birth(register.reader(), held.at.mount)?;
-        let r = ObservedOriginal { at: held.at, birth };
-        let source = Source { name, system, s, register, r, uid: storage_uid, op: init_op };
-        let observed = source.read_original()?;
+        let (source, observed) = Source::open(system_path, storage_uid, init_op, RegisterName::Pending, prior)?;
         Ok(Self { source, observed })
     }
 
@@ -122,6 +113,7 @@ impl ColdPending {
     }
 
     pub(super) fn storage_uid(&self) -> u32 { self.source.uid }
+    pub(super) fn is_original_op(&self, op: [u8;16]) -> bool { self.source.op == op }
 
     /// Couple the complete group's row 0 to THIS retained SYSTEM, including its
     /// in-process mount ID and label state (neither is implied by the stored row).
@@ -146,64 +138,96 @@ impl ColdPending {
 }
 
 impl Source {
+    fn open(system_path: &Path, storage_uid: u32, init_op: [u8; 16], known: RegisterName,
+            prior: Option<FirstLinkedRegister>) -> io::Result<(Self, InitialImage)> {
+        if init_op == [0; 16] { return Err(invalid("a nonzero original initialization operation is required")); }
+        let name = Pinned::open(system_path, Kind::StorageRoot)?;
+        let system = name.storage_directory()?;
+        let s = ObservedOriginal::root(&system, storage_uid)?;
+        let pin = pin_register(&system, known)?;
+        let selected = Mark::on(&pin, &s.at, storage_uid, known)?;
+        let register = match prior {
+            Some(original) => Registration::First(original),
+            None => {
+                let file = private_inode_reader(&pin, storage_uid, s.at.mount)?;
+                flock(&file, NonBlockingLockExclusive)?;
+                Registration::Cold(file)
+            }
+        };
+        let held = Mark::on(register.reader(), &s.at, storage_uid, known)?;
+        if held != selected { return Err(invalid("register changed before its original lock was acquired")); }
+        let birth = read_birth(register.reader(), held.at.mount)?;
+        let r = ObservedOriginal { at: held.at, birth };
+        let source = Source { name, system, s, register, r, uid: storage_uid, op: init_op, known };
+        let observed = source.read_original()?;
+        Ok((source, observed))
+    }
+
     fn named_system(&self) -> io::Result<File> {
         let named = self.name.storage_directory()?;
         if ObservedOriginal::root(&named, self.uid)? != self.s
             || ObservedOriginal::root(&self.system, self.uid)? != self.s {
-            return Err(invalid("pending SYSTEM no longer has its original name and birth"));
+            return Err(invalid("SYSTEM no longer has its original name and birth"));
         }
         Ok(named)
     }
 
     fn named_register(&self) -> io::Result<Mark> {
-        let held = Mark::on(self.register.reader(), &self.s.at, self.uid)?;
+        let held = Mark::on(self.register.reader(), &self.s.at, self.uid, self.known)?;
         if held.at != self.r.at || read_birth(self.register.reader(), held.at.mount)? != self.r.birth {
-            return Err(invalid("held pending registration is not its original birth"));
+            return Err(invalid("held registration is not its original birth"));
         }
-        let named = pin_pending(&self.system)?;
-        if Mark::on(&named, &self.s.at, self.uid)? != held
-            || Mark::on(self.register.reader(), &self.s.at, self.uid)? != held {
-            return Err(invalid("pending name and held original differ"));
+        let named = pin_register(&self.system, self.known)?;
+        if Mark::on(&named, &self.s.at, self.uid, self.known)? != held
+            || Mark::on(self.register.reader(), &self.s.at, self.uid, self.known)? != held {
+            return Err(invalid("selected fixed name and held register differ"));
         }
         Ok(held)
     }
 
-    fn read_original(&self) -> io::Result<PendingImage> {
+    fn read_original(&self) -> io::Result<InitialImage> {
         let named = self.named_system()?;
         let before_dir = DirectoryStamp::on(&named)?;
         let before = self.named_register()?;
-        read_pending_only(named)?; // Reject READY, an extra entry, an inconsistent stream or a missing name.
+        read_only_register(named, self.known)?; // Reject the other phase, double names and foreign entries.
         let mut image = vec![0; before.length as usize]; // Mark already bounded it
         self.register.reader().read_exact_at(&mut image, 0)?;
         loop {
             match self.register.reader().read_at(&mut [0], before.length) {
                 Ok(0) => break,
-                Ok(_) => return Err(invalid("unexpected tail on pending GENESIS")),
+                Ok(_) => return Err(invalid("unexpected tail on initial registration")),
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e),
             }
         }
-        let g = FreshGenesis::decode(&image).map_err(|_| invalid("not one intact MAINT-1 pending GENESIS"))?;
+        let g = FreshGenesis::decode(&image).map_err(|_| match self.known {
+            RegisterName::Pending => invalid("not one intact MAINT-1 pending GENESIS"),
+            RegisterName::Ready => io::Error::new(io::ErrorKind::Unsupported,
+                "only the exact empty MAINT-1 registration is supported; later or unknown contents were not interpreted"),
+        })?;
         if !g.has_init_operation(&self.op) || !g.matches_origin_pair(self.uid, self.r.fields(), self.s.fields())
             || !g.matches_root_origin(0, self.name.path().as_os_str().as_bytes(),
                 component_limit(&self.system)?, self.s.fields()) {
-            return Err(invalid("pending operation or original register/SYSTEM does not match the explicit selection"));
+            return Err(invalid("initial operation or original register/SYSTEM does not match the explicit selection"));
         }
 
         let mut frontier = [0; 48];
         let n = fgetxattr(self.register.reader(), c"user.zxs.confirmed-frontier", &mut frontier[..])?;
-        g.check_initial_frontier(Some(&frontier[..n])).map_err(|_| invalid("pending original lacks its exact zero frontier"))?;
+        g.check_initial_frontier(Some(&frontier[..n])).map_err(|_| invalid("original register lacks its exact zero frontier"))?;
         let system_labeled = super::identity::original_pending_label(&self.system, &g, 0)?;
+        if self.known == RegisterName::Ready && !system_labeled {
+            return Err(invalid("published SYSTEM lacks its original label binding the GENESIS digest"));
+        }
 
         // The directory can change even with an advisory flock on the regular file.
         // Only an unchanged named original and unchanged sampled intervals qualify.
-        read_pending_only(self.named_system()?)?;
+        read_only_register(self.named_system()?, self.known)?;
         let end = self.named_system()?;
         if self.named_register()? != before || DirectoryStamp::on(&end)? != before_dir
             || DirectoryStamp::on(&self.system)? != before_dir {
-            return Err(invalid("pending SYSTEM, register, or attributes changed during observation"));
+            return Err(invalid("SYSTEM, register, or attributes changed during observation"));
         }
-        Ok(PendingImage { bytes: image, system_labeled })
+        Ok(InitialImage { bytes: image, system_labeled })
     }
 }
 // The private fixtures exercise genuinely cold opens, independently of the warm handoff.

@@ -1,7 +1,8 @@
 //! Apply only this persistent original request. No public command or operator
 //! grant is implemented. An error can leave an honest partial set of labels;
 //! never remove a label, overwrite another owner, or generate replacement IDs.
-use super::{FreshGenesis, PendingRootSet};
+mod publish;
+use super::{FreshGenesis, PendingRootSet, RegisterName};
 use crate::{maintenance::{ancestry::Mounts, thread_evidence::WorkerPolicy}, pinned::invalid};
 use rustix::fs::{XattrFlags, fsetxattr};
 use std::io;
@@ -13,14 +14,26 @@ impl SystemLabelCreated<'_> {
     pub(in crate::maintenance) fn bytes(&self) -> &[u8] { self.0 }
 }
 
-impl PendingRootSet<'_> {
+/// Constructed here only after every actual original volume was synchronized
+/// and its exact label read back in this call. A cold observation of even a
+/// complete set does not supply this object. Still not authorization or READY.
+#[must_use]
+struct SyncedLabels<'r>(PendingRootSet<'r>);
+impl SyncedLabels<'_> {
+    fn recheck(&self) -> io::Result<()> {
+        if self.0.labels.iter().any(|present| !present) { return Err(invalid("incomplete synchronized label set")); }
+        self.0.recheck()
+    }
+}
+impl<'r> PendingRootSet<'r> {
     // A read-only check never calls this method; the outward maintenance
     // dispatcher must not enable it before real original-request authorization.
-    fn apply_labels(mut self, op: [u8; 16], worker: &WorkerPolicy) -> io::Result<Self> {
+    fn apply_labels(mut self, op: [u8; 16], worker: &WorkerPolicy) -> io::Result<SyncedLabels<'r>> {
         let wanted = self.prepare_labels(op, worker)?;
         for (i, label) in wanted.iter().enumerate() { self.apply_one(i, label, worker)?; }
-        self.recheck()?; // all original names, entries, labels, register and frontier together
-        Ok(self)
+        let synced = SyncedLabels(self);
+        synced.recheck()?; // all original names, entries, labels, register and frontier together
+        Ok(synced)
     }
 
     fn prepare_labels(&self, op: [u8; 16], worker: &WorkerPolicy) -> io::Result<Vec<Vec<u8>>> {
@@ -41,7 +54,7 @@ impl PendingRootSet<'_> {
         g.check_label(i, wanted).map_err(|_| invalid("not the original volume label"))?;
         let r = self.roots.all().get(i).ok_or_else(|| invalid("unknown original volume row"))?;
         let uid = self.source.storage_uid();
-        let before = sample_one(&Mounts::current()?, r, uid, Some(&g), i)?;
+        let before = sample_one(&Mounts::current()?, r, uid, Some((&g, RegisterName::Pending)), i)?;
         finish_one(&Mounts::current()?, r, uid, Some(&g), i, &before)?;
         if before.labelled != expected { return Err(invalid("unexpected original label change")); }
         if i == 0 { self.source.check_system_observation(&r.observed, expected)?; }

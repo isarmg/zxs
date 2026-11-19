@@ -3,7 +3,7 @@ mod labels;
 pub(in crate::maintenance) use labels::SystemLabelCreated;
 use crate::maintenance::register_flock::staging::first_name::FirstPending;
 use super::{FreshGenesis, FreshRootLocks, Root, Selection, acquire, finish_roots, invalid, sample_roots};
-use crate::maintenance::pending::ColdPending;
+use crate::maintenance::{RegisterName, pending::ColdPending};
 use std::io;
 
 // A cold open owns newly acquired volume descriptions; a just-named original still
@@ -57,9 +57,14 @@ impl FreshRootLocks {
 }
 
 fn inspect_locked(source: &ColdPending, roots: &[Root], uid: u32, image: &FreshGenesis<'_>) -> io::Result<Vec<bool>> {
-    let samples = sample_roots(roots, uid, Some(image))?;
-    finish_roots(roots, uid, Some(image), &samples)?;
+    let labels = inspect_volumes(roots, uid, image, RegisterName::Pending)?;
     // acquire already requires the complete, nonempty S/R/F set in row order.
-    source.check_system_observation(&roots[0].observed, samples[0].labelled)?;
+    source.check_system_observation(&roots[0].observed, labels[0])?;
+    Ok(labels)
+}
+
+fn inspect_volumes(roots: &[Root], uid: u32, image: &FreshGenesis<'_>, name: RegisterName) -> io::Result<Vec<bool>> {
+    let samples = sample_roots(roots, uid, Some((image, name)))?;
+    finish_roots(roots, uid, Some(image), &samples)?;
     Ok(samples.iter().map(|s| s.labelled).collect())
 }
