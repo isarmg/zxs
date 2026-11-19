@@ -20,7 +20,7 @@ CRC 相符仅表示这次读出的这一个成员与包内给出的校验码相�
 
 ### 构建与验收状态
 
-本目录是独立 Gradle 根。使用 JDK 17、Gradle 8.13、Android SDK 36 和清单中固定的 Android Gradle Plugin；产品源码仅用 Android/Java 平台 API。仪器回归源码在 `src/androidTest`，只在测试构建中引用 AndroidX Runner 与 JUnit。没有生成、安装或发布 APK，也没有运行编译或测试。
+本目录是独立 Gradle 根。参见[版本化 APK 候选与签名前核对](RELEASE.md)：在已备妥的 JDK 17 / Gradle 8.13 环境，只提取当前 release 的一份 APK，按真实版本命名并记录 SHA-256。产品源码仅用 Android/Java 平台 API；AndroidX Runner 与 JUnit 仅供 `src/androidTest`。没有生成或安装 APK，没有运行编译、签名或测试。
 
 发行前须在干净环境构建、核查许可并签名；在实际 Android 15+ 设备验证主存储选档/授权撤销、取消与旋转、受限提供方、空目录/多页、超过 4 GiB 的 Store/ZIP64，逐项校验的破损正文、本地头与描述符不一致、取消后迟到和授权撤回，文本的 32 KiB 边界、严格解码与临时窗口关闭，以及文件变化和资源上限的拒绝。没有实机证据时不承诺支持某家文件管理器、云盘、可移除盘或下载目录提供方。
 

@@ -1,11 +1,24 @@
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.variant.BuiltArtifactsLoader
+import com.android.build.api.variant.VariantOutputConfiguration
+import org.gradle.api.tasks.UntrackedTask
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.util.HexFormat
+import java.security.MessageDigest
+
 plugins {
     id 'com.android.application' version '8.13.2'
 }
+def viewerId = 'org.zipworkspace.preview'
 android {
-    namespace 'org.zipworkspace.preview'
+    namespace viewerId
     compileSdk 36
+    buildToolsVersion '35.0.0'
     defaultConfig {
-        applicationId 'org.zipworkspace.preview'
+        applicationId viewerId
         minSdk 35
         targetSdk 36
         versionCode 1
@@ -20,4 +33,97 @@ android {
 dependencies {
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'junit:junit:4.13.2'
+}
+
+// Optional owner handoff, not attached to assemble, install, publish, or signing.
+@UntrackedTask(because = 'Hand off only into a NEW directory, never replay a cached copy')
+abstract class ExportWorkspaceApk extends DefaultTask {
+    @InputDirectory @PathSensitive(PathSensitivity.RELATIVE)
+    abstract DirectoryProperty getApkDirectory()
+    @Internal abstract Property<BuiltArtifactsLoader> getArtifactsLoader()
+    @Input abstract Property<String> getExpectedId()
+    @Input abstract Property<String> getExpectedVersion()
+    @Input abstract Property<Integer> getExpectedCode()
+    @Input abstract Property<String> getNewDirectory()
+
+    private static void need(boolean ok, String why) {
+        if (!ok) throw new GradleException(why)
+    }
+
+    @TaskAction void handoff() {
+        def dir = apkDirectory.get()
+        def artifacts = artifactsLoader.get().load(dir)
+        need(artifacts != null && artifacts.artifactType == SingleArtifact.APK.INSTANCE &&
+             artifacts.variantName == 'release' && artifacts.applicationId == expectedId.get() &&
+             artifacts.elements.size() == 1, 'Expected exactly one APK of this release application')
+        def apk = artifacts.elements.iterator().next()
+        def version = expectedVersion.get()
+        def code = expectedCode.get()
+        need(apk.outputType == VariantOutputConfiguration.OutputType.SINGLE && apk.filters.isEmpty() &&
+             apk.versionName == version && apk.versionCode == code && code > 0 &&
+             (version ==~ /[A-Za-z0-9][A-Za-z0-9._-]{0,63}/), 'Wrong version or split output')
+        Path base = dir.asFile.toPath().toAbsolutePath().normalize()
+        Path source = Path.of(apk.outputFile)
+        need(base == base.toRealPath() && source.isAbsolute() && source == source.normalize() &&
+             source.parent == base && source == source.toRealPath() &&
+             Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS) && source.fileName.toString().endsWith('.apk'),
+             'AGP output must be an ordinary APK directly in its original artifact directory')
+
+        // Trusted stable checkout, build output and private destination parent, not a shared upload area.
+        Path output = Path.of(newDirectory.get())
+        need(output.isAbsolute() && output == output.normalize() &&
+             output.parent != null && output.parent == output.parent.toRealPath(), 'Choose a real absolute new destination')
+        Files.createDirectory(output)  // do not reuse any previous handoff or recursively clean it
+        String name = 'zip-workspace-android-' + version + '-vc' + code + '-release-candidate.apk'
+        Path dest = output.resolve(name)
+        def digest = MessageDigest.getInstance('SHA-256')
+        long total = 0
+        Files.newInputStream(source, LinkOption.NOFOLLOW_LINKS).withCloseable { raw ->
+            Files.newOutputStream(dest, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).withCloseable { writer ->
+                byte[] buffer = new byte[65536]
+                int count
+                while ((count = raw.read(buffer)) != -1) {
+                    writer.write(buffer, 0, count)
+                    digest.update(buffer, 0, count)
+                    total += count
+                }
+            }
+        }
+        need(total > 0 && Files.size(dest) == total && Files.mismatch(source, dest) == -1L,
+             'Incomplete or changed APK handoff')
+        String sha = HexFormat.of().formatHex(digest.digest())
+        // Receipt last; no key, certificate, signature, APK install or network operation.
+        String record = groovy.json.JsonOutput.toJson([applicationId: expectedId.get(), variant: 'release',
+            versionCode: code, versionName: version, file: name, bytes: total, sha256: sha])
+        Files.writeString(output.resolve('candidate.json'), record + '\n',
+                          StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+    }
+}
+
+def handoff = providers.gradleProperty('workspaceApkHandoff')
+if (handoff.present) {
+    androidComponents.finalizeDsl { dsl ->
+        def release = dsl.buildTypes.getByName('release')
+        if (release.debuggable || release.signingConfig != null || dsl.defaultConfig.signingConfig != null ||
+            !dsl.productFlavors.isEmpty()) {
+            throw new GradleException('Handoff accepts only the plain non-debuggable release without configured signing')
+        }
+    }
+    androidComponents.onVariants(androidComponents.selector().withBuildType('release')) { variant ->
+        if (variant.name != 'release' || variant.applicationId.get() != viewerId || variant.debuggable || variant.outputs.size() != 1)
+            throw new GradleException('Handoff requires the single release variant')
+        def only = variant.outputs.iterator().next()
+        if (only.outputType != VariantOutputConfiguration.OutputType.SINGLE || !only.filters.isEmpty())
+            throw new GradleException('Split APKs are not supported by this handoff')
+        def files = variant.artifacts.get(SingleArtifact.APK.INSTANCE)
+        def loader = variant.artifacts.getBuiltArtifactsLoader()
+        tasks.register('exportReleaseApk', ExportWorkspaceApk) {
+            apkDirectory.set(files)
+            artifactsLoader.set(loader)
+            expectedId.set(variant.applicationId)
+            expectedVersion.set(only.versionName)
+            expectedCode.set(only.versionCode)
+            newDirectory.set(handoff)
+        }
+    }
 }

@@ -6,3 +6,28 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = 'ZipWorkspacePreview'
+
+// Candidate mode is explicit. Reject signing/IDE injection before configuring the Android producer.
+if (providers.gradleProperty('workspaceApkHandoff').present) {
+    def requested = gradle.startParameter.taskNames
+    if (requested.size() != 1 || !(requested[0] in ['exportReleaseApk', ':exportReleaseApk']) ||
+        !gradle.startParameter.excludedTaskNames.isEmpty() || gradle.startParameter.dryRun ||
+        gradle.startParameter.buildCacheEnabled || !gradle.startParameter.offline || gradle.gradleVersion != '8.13' ||
+        JavaVersion.current() != JavaVersion.VERSION_17 ||
+        providers.gradleProperty('android.builder.sdkDownload').getOrElse('') != 'false') {
+        throw new GradleException('Use only exportReleaseApk, no -x/dry-run/build cache, Gradle 8.13/JDK 17, --offline and disabled SDK downloads')
+    }
+    def forbidden = ['android.injected.signing.store.file', 'android.injected.signing.store.password',
+        'android.injected.signing.key.alias', 'android.injected.signing.key.password',
+        'android.injected.signing.store.type', 'android.injected.signing.v1-enabled',
+        'android.injected.signing.v2-enabled', 'android.injected.invoked.from.ide', 'android.injected.testOnly',
+        'android.injected.build.api', 'android.injected.build.density', 'android.injected.build.abi',
+        'android.injected.version.code', 'android.injected.version.name']
+    if (forbidden.any { providers.gradleProperty(it).present })
+        throw new GradleException('IDE, signing and version overrides are not accepted; no property value is reported')
+    def dest = java.nio.file.Path.of(providers.gradleProperty('workspaceApkHandoff').get())
+    if (!dest.isAbsolute() || dest != dest.normalize() || dest.parent == null ||
+        dest.parent != dest.parent.toRealPath() || dest.startsWith(settingsDir.toPath().toRealPath()) ||
+        !java.nio.file.Files.notExists(dest, java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        throw new GradleException('Choose a NEW directory outside this Android project under an existing stable private parent')
+}
