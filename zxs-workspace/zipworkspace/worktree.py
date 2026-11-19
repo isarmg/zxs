@@ -61,16 +61,21 @@ def create_catalog(work, store, state, base, instance_id):
 
 
 @contextmanager
-def locked(state):
+def locked(state, *, read_only=False):
+    """Open the existing catalog with either a read snapshot or a reserved writer."""
     state = Path(state).absolute()
     if not state.is_dir() or state.is_symlink() or (state.stat().st_mode & 0o077):
         raise Rejected("use the existing private worktree state directory")
-    # mode=rw will not create a blank authority if an original catalog goes missing.
-    con = sqlite3.connect((state / "worktree.sqlite").as_uri() + "?mode=rw", uri=True, isolation_level=None)
+    mode = "ro" if read_only else "rw"  # Neither may create a missing catalog.
+    con = sqlite3.connect((state / "worktree.sqlite").as_uri() + "?mode=" + mode,
+                          uri=True, isolation_level=None)
     con.row_factory = sqlite3.Row
     try:
-        con.execute("PRAGMA synchronous=FULL")
-        con.execute("BEGIN IMMEDIATE")
+        if read_only:
+            con.execute("BEGIN")  # Both checkout and instance reads see the same committed state.
+        else:
+            con.execute("PRAGMA synchronous=FULL")
+            con.execute("BEGIN IMMEDIATE")
         row = con.execute("SELECT * FROM checkout WHERE singleton=1").fetchone()
         if row is None: raise Rejected("worktree record missing")
         yield con, row, state
@@ -149,7 +154,7 @@ def commit(state, *, fork=False):
 
 
 def status(state):
-    with locked(state) as (con, row, _):
+    with locked(state, read_only=True) as (con, row, _):
         rec = lifecycle.instance(con)
         return {"visibility":rec["phase"], "pending_visibility_operation":rec["active"], "worktree": row["worktree"], "repo": row["repo"], "branch": row["branch"],
                 "base_generation": row["generation"], "base_operation": row["parent"],
