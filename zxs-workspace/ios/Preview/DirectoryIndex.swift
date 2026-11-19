@@ -1,0 +1,176 @@
+import Foundation
+
+// A list of declarations, not a snapshot validator or content-reading API.
+enum PreviewError: Error { case format, unavailable, cancelled }
+
+func requirePreview(_ ok: Bool) throws {
+    if !ok { throw PreviewError.format }
+}
+
+final class Member {
+    let name: String
+    let size: Int
+    var children: [String: Member]?
+    var explicit = false
+
+    init(_ name: String, size: Int = 0, folder: Bool = true) {
+        self.name = name; self.size = size
+        children = folder ? [:] : nil
+    }
+}
+
+struct DirectoryIndex {
+    static let maxSize = (256 << 30) + (32 << 20)
+    static let maxDirectory = 2 << 20
+    private static let u32max = 0xffff_ffff
+    let root = Member("")
+    private var nameBytes = 0, nodes = 0, total = 0
+
+    // Callers establish enclosing structure bounds before accessing fixed-width fields.
+    private static func u16(_ b: [UInt8], _ i: Int) -> Int { Int(b[i]) | Int(b[i + 1]) << 8 }
+    private static func u32(_ b: [UInt8], _ i: Int) -> Int { u16(b, i) | u16(b, i + 2) << 16 }
+    private static func u64(_ b: [UInt8], _ i: Int) throws -> Int {
+        let high = u32(b, i + 4)
+        try requirePreview(high < 0x8000_0000)
+        return high << 32 | u32(b, i)
+    }
+
+    static func read(size: Int, check: () throws -> Void,
+                     bytes: (Int, Int) throws -> [UInt8]) throws -> DirectoryIndex {
+        try requirePreview(size >= 22 && size <= maxSize)
+        func get(_ at: Int, _ length: Int) throws -> [UInt8] {
+            try check()
+            try requirePreview(length >= 0 && length <= maxDirectory && at >= 0 && at <= size - length)
+            let b = try bytes(at, length)
+            try requirePreview(b.count == length)
+            return b
+        }
+
+        let window = min(65_557, size), tail = try get(size - window, window)
+        var matches: Int?
+        for i in stride(from: window - 22, through: 0, by: -1) {
+            if u32(tail, i) == 0x06054b50 && u16(tail, i + 20) == window - i - 22 {
+                try requirePreview(matches == nil); matches = i
+            }
+        }
+        guard let e = matches else { throw PreviewError.format }
+        try requirePreview(u16(tail, e + 4) == 0 && u16(tail, e + 6) == 0)
+        var counts = [u16(tail, e + 8), u16(tail, e + 10), u32(tail, e + 12), u32(tail, e + 16)]
+        let sentinels = [65535, 65535, u32max, u32max]
+        var end = size - window + e
+        let loc = end >= 20 ? try get(end - 20, 20) : []
+        if !loc.isEmpty && u32(loc, 0) == 0x07064b50 {
+            let z = try u64(loc, 8)
+            try requirePreview(u32(loc, 4) == 0 && u32(loc, 16) == 1 && end >= 76 && z == end - 76)
+            let rec = try get(z, 56), declaredSize = try u64(rec, 4)
+            try requirePreview(u32(rec, 0) == 0x06064b50 && declaredSize == 44 && u16(rec, 14) <= 45
+                               && u32(rec, 16) == 0 && u32(rec, 20) == 0)
+            for i in counts.indices {
+                let wide = try u64(rec, 24 + 8 * i)
+                try requirePreview(counts[i] == sentinels[i] || counts[i] == wide)
+                counts[i] = wide
+            }
+            end = z
+        } else {
+            for i in counts.indices { try requirePreview(counts[i] != sentinels[i]) }
+        }
+        let count = counts[0], length = counts[2], at = counts[3]
+        try requirePreview(count == counts[1] && count <= 8192 && length <= maxDirectory
+                           && at <= end && length == end - at && count <= length / 46)
+        let cd = try get(at, length)
+        var out = DirectoryIndex(), p = 0
+        var spans: [(start: Int, end: Int)] = []
+        for _ in 0..<count {
+            try check()
+            try requirePreview(cd.count - p >= 46 && u32(cd, p) == 0x02014b50)
+            let host = cd[p + 5], flags = u16(cd, p + 8)
+            try requirePreview([0, 3, 10].contains(host) && u16(cd, p + 6) <= 45 && flags & ~0x808 == 0
+                               && u16(cd, p + 10) == 0 && u16(cd, p + 34) == 0)
+            let name = p + 46, nl = u16(cd, p + 28), extra = name + nl
+            let stop = extra + u16(cd, p + 30), next = stop + u16(cd, p + 32)
+            try requirePreview(nl > 0 && nl <= 1024 && next <= cd.count)
+            var values = [u32(cd, p + 24), u32(cd, p + 20), u32(cd, p + 42)], hasWide = false, x = extra
+            while x < stop {
+                try requirePreview(stop - x >= 4)
+                let kind = u16(cd, x), n = u16(cd, x + 2); x += 4
+                try requirePreview(n <= stop - x)
+                if kind == 1 {
+                    try requirePreview(!hasWide); hasWide = true
+                    var q = x
+                    for i in values.indices where values[i] == u32max {
+                        try requirePreview(x + n - q >= 8); values[i] = try u64(cd, q); q += 8
+                    }
+                    try requirePreview(q == x + n)
+                } else { try requirePreview(kind == 0x5455 || kind == 0x7875) }
+                x += n
+            }
+            try requirePreview(hasWide || !values.contains(u32max))
+            let body = values[0], off = values[2], header = 30 + nl + (flags & 8 == 0 ? 0 : 12)
+            try requirePreview(body == values[1] && body <= (128 << 30)
+                               && off <= at - header && body <= at - header - off)
+            spans.append((off, off + header + body))
+            let raw = cd[name..<extra]
+            try requirePreview(flags & 0x800 != 0 || raw.allSatisfy { $0 < 128 })
+            let folder = raw.last == 47
+            guard let path = String(bytes: folder ? raw.dropLast() : raw, encoding: .utf8)
+            else { throw PreviewError.format }
+            let attr = u32(cd, p + 38), type = (attr >> 28) & 15
+            try requirePreview(attr & 0x448 == 0 && (attr & 16 == 0 || folder)
+                               && (host == 3 ? type == 0 || type == (folder ? 4 : 8) : type == 0)
+                               && (!folder || body == 0))
+            try out.add(path: path, folder: folder, size: body, nameBytes: nl)
+            p = next
+        }
+        try requirePreview(p == cd.count)
+        var previous = 0
+        for span in spans.sorted(by: { $0.start < $1.start }) {
+            try check(); try requirePreview(previous <= span.start); previous = span.end
+        }
+        try check()
+        return out
+    }
+
+    static func safe(_ s: String) -> Bool {
+        guard !s.isEmpty, s.utf8.count <= 240,
+              s.utf8.elementsEqual(s.precomposedStringWithCanonicalMapping.utf8),
+              s.utf8.first != 32, s.utf8.last != 32, s.utf8.last != 46 else { return false }
+        let forbidden = CharacterSet(charactersIn: "<>:\"/\\|?*")
+        for u in s.unicodeScalars {
+            switch u.properties.generalCategory {
+            case .control, .format, .lineSeparator, .paragraphSeparator: return false
+            default: if forbidden.contains(u) { return false }
+            }
+        }
+        let base = String(decoding: s.utf8.prefix(while: { $0 != 46 }), as: UTF8.self)
+            .trimmingCharacters(in: .whitespaces).uppercased()
+        if ["CON","PRN","AUX","NUL","CLOCK$","CONIN$","CONOUT$"].contains(base) { return false }
+        if (base.hasPrefix("COM") || base.hasPrefix("LPT")), base.count == 4,
+           let last = base.last, "123456789¹²³".contains(last) { return false }
+        return true
+    }
+
+    private mutating func add(path: String, folder: Bool, size: Int, nameBytes: Int) throws {
+        self.nameBytes += nameBytes; total += size
+        try requirePreview(self.nameBytes <= 512 * 1024 && total <= (256 << 30))
+        // Split at the actual ASCII slash; grapheme-cluster segmentation is not a ZIP delimiter.
+        let parts = path.utf8.split(separator: 47, omittingEmptySubsequences: false)
+        try requirePreview(!parts.isEmpty && parts.count <= 48)
+        var parent = root
+        for (i, raw) in parts.enumerated() {
+            let s = String(decoding: raw, as: UTF8.self)
+            try requirePreview(Self.safe(s))
+            let key = s.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+            let leaf = i + 1 == parts.count, dir = !leaf || folder
+            let item: Member
+            if let old = parent.children?[key] {
+                try requirePreview(s.utf8.elementsEqual(old.name.utf8) && (old.children != nil) == dir)
+                item = old
+            } else {
+                nodes += 1; try requirePreview(nodes <= 12288)
+                item = Member(s, size: leaf ? size : 0, folder: dir); parent.children?[key] = item
+            }
+            if leaf { try requirePreview(!item.explicit); item.explicit = true }
+            parent = item
+        }
+    }
+}
