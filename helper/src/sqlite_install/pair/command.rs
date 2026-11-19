@@ -1,12 +1,17 @@
 //! The two explicit stages of first enrollment share one local CLI. An
 //! invocation never falls through from lookup into domain allocation, issues
 //! only this fixed product pair, and has no input for a password or a SID.
-use super::{domain::{provision_fresh_domain,SelectedSetup},publish::{Session,Start},History};
+use super::{domain::{create_layout,provision_fresh_domain,SelectedSetup},publish::{Session,Start},History};
 use crate::{path_rules::Kind,sqlite_install::{approval,bad,id,request::Id}};
 use std::{ffi::{OsStr,OsString},io,path::PathBuf};
 
 #[derive(Debug)]
-pub(crate) struct Setup{system:PathBuf,pool:Id,init:Id,instance:Id,action:Action}
+pub(crate) struct Setup(Form);
+#[derive(Debug)]
+enum Form{
+    Layout{instance:Id,reference:Id},
+    Pool{system:PathBuf,pool:Id,init:Id,instance:Id,action:Action},
+}
 #[derive(Debug)]
 enum Action{
     Provision{op:Id,reference:Id},
@@ -25,9 +30,15 @@ fn name(it:&mut impl Iterator<Item=OsString>,flag:&str)->Result<Vec<u8>,&'static
     if !super::login(b){return Err("expected a bounded lowercase ASCII login name");}Ok(b.to_vec())
 }
 impl Setup{
-    pub(crate) fn parse(mut it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
+    pub(crate) fn parse(it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
+        let mut it=it.peekable();
         let mode=it.next().ok_or("choose provision or enroll")?;
         if mode!="provision"&&mode!="enroll"{return Err("choose provision or enroll");}
+        if mode=="provision" && it.peek().is_some_and(|f|f=="--create-layout"){
+            it.next();let instance=key(&mut it,"--instance")?;let reference=key(&mut it,"--approval")?;
+            if it.next().is_some(){return Err("layout accepts only its instance and approval reference");}
+            return Ok(Self(Form::Layout{instance,reference}));
+        }
         let system=PathBuf::from(value(&mut it,"--system")?);
         Kind::StorageRoot.check_path(system.as_os_str().as_encoded_bytes())?;
         if system.to_str().is_none(){return Err("SYSTEM is not losslessly representable by the SQLite VFS");}
@@ -44,10 +55,16 @@ impl Setup{
             let receipt_only=match it.next(){None=>false,Some(f) if f=="--receipt-only"&&it.next().is_none()=>true,
                 _=>return Err("only the final --receipt-only flag is accepted")};
             Action::Enroll{domain,op,reference,web,smb,receipt_only}
-        };Ok(Self{system,pool,init,instance,action})
+        };Ok(Self(Form::Pool{system,pool,init,instance,action}))
     }
     pub(crate) fn run(self)->io::Result<(u8,String)>{
-        let Self{system,pool,init,instance,action}=self;
+        let (system,pool,init,instance,action)=match self.0{
+            Form::Layout{instance,reference}=>{
+                create_layout(instance,reference)?;
+                return Ok((0,format!("layout=prepared instance={}; no pool, SAM domain, accounts or service changed",hex(&instance))));
+            }
+            Form::Pool{system,pool,init,instance,action}=>(system,pool,init,instance,action),
+        };
         match action{
             Action::Provision{op,reference}=>{
                 // No alternative location, imported domain, replacement, default
@@ -96,9 +113,9 @@ mod tests{
         base(),"04".repeat(16),"05".repeat(16),"06".repeat(16))}
     #[test]fn the_three_paths_are_explicit_and_never_accept_bare_passwords_or_sids(){
         let p=format!("provision {} --op {} --approval {}",base(),"04".repeat(16),"06".repeat(16));
-        assert!(matches!(Setup::parse(args(&p)).unwrap().action,Action::Provision{..}));
-        assert!(matches!(Setup::parse(args(&enroll())).unwrap().action,Action::Enroll{receipt_only:false,..}));
-        assert!(matches!(Setup::parse(args(&format!("{} --receipt-only",enroll()))).unwrap().action,Action::Enroll{receipt_only:true,..}));
+        assert!(matches!(Setup::parse(args(&p)).unwrap().0,Form::Pool{action:Action::Provision{..},..}));
+        assert!(matches!(Setup::parse(args(&enroll())).unwrap().0,Form::Pool{action:Action::Enroll{receipt_only:false,..},..}));
+        assert!(matches!(Setup::parse(args(&format!("{} --receipt-only",enroll()))).unwrap().0,Form::Pool{action:Action::Enroll{receipt_only:true,..},..}));
         for bad in [format!("{p} --receipt-only"),format!("{p} --import-domain any"),format!("{} --password test",enroll()),
             format!("{} --sid S-1-5-21-1-2-3-1000",enroll()),format!("{} --receipt-only --receipt-only",enroll()),
             enroll().replace("network.user","guest"),enroll().replace("network.user","web.admin"),
@@ -106,6 +123,14 @@ mod tests{
             enroll().replace("/pool/system","/pool/../pool"),enroll().replace("0606","0000"),enroll().replace("--web-login","--other")]{
             assert!(Setup::parse(args(&bad)).is_err());
         }
+    }
+    #[test]fn layout_has_no_path_pool_service_or_identity_override(){
+        let s=format!("provision --create-layout --instance {} --approval {}","03".repeat(16),"06".repeat(16));
+        assert!(matches!(Setup::parse(args(&s)).unwrap().0,Form::Layout{..}));
+        for tail in [" --system /chosen"," --uid 0"," --mode 777"," --overwrite"," --receipt-only"]{
+            assert!(Setup::parse(args(&format!("{s}{tail}"))).is_err());
+        }
+        assert!(Setup::parse(args(&s.replace("provision","enroll"))).is_err());
     }
     #[test]fn exact_absence_is_not_success_and_never_claims_two_new_accounts(){
         let op=[32;16];let a=[1;16];let b=[2;16];

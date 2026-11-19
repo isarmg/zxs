@@ -23,7 +23,7 @@ impl Stamp{
 fn source_at(parent:&File)->io::Result<File>{
     Ok(File::from(openat(parent,c"smb.conf",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?))
 }
-fn exact(bytes:&File)->io::Result<()>{
+pub(super) fn exact(bytes:&File)->io::Result<()>{
     let mut seen=vec![0;PROFILE.len()];bytes.read_exact_at(&mut seen,0)?;
     if seen!=PROFILE{return Err(bad("installed live configuration is not the fixed first-install profile"));}
     let mut extra=[0];

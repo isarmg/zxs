@@ -7,11 +7,16 @@
 先完成 [install-pool](sqlite-first-install.md) 并保存 PoolId 和 INIT 原单。在可信宿主的同一前台控制终端进入唯一的 `setup-pair` 命令。参数顺序固定，以下是源码中的语法；本轮未打包、部署或采集口令。
 
 ```text
+helper setup-pair provision --create-layout --instance ID --approval ID
 helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID
 helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only]
 ```
 
-1. **准备。** 仅受控 Debian 13 amd64。需要已独立验签、登记的整套 helper/域生成软件，可信本机维护主体和非 root 存储 UID/GID。宿主须事先准备 `/var/lib/local-ops-helper/samba-instances/<InstanceId>/`：沿途祖先对专用存储身份可搜索且受保护；实例根由 root 所有，存储身份能够搜索、列目录但不能写（例如 root:专用存储组、0750），组和其他人不得有写权。新实例中只有准确模板 `smb.conf`（root 所有、0444、单链接）及同一挂载上两个不同的空目录 `private` 和 `state`（存储 UID 所有、0700）。发行配方将模板以只读文件 `/usr/share/local-ops-helper/initial-live.conf` 随包提供；它不是已经安装好的实例。本命令不创建宿主目录/策略、不安装模块或 systemd 服务。InstanceId、原操作和审批参考由安装者事先确定、保存，均为非零 32 位小写十六进制；实例标识不是域或登录权。
+1. **准备本机目录。** 管理员可用上面的 `--create-layout` 明确批准新建实例；这不是预演，也不开始生成域。只收独立的实例 ID 和本次审批参考，没有任意路径、属主或口令输入。从固定的 `/var/lib` 沿已核实的原目录创建尚缺的 `local-ops-helper/samba-instances/<InstanceId>`；只有需新建的两个容器目录才设 root:root 0711。现有容器仅核对，不改其权限。对已选原父只读有界目录项以确认固定分量的准确拼写；不进入、记录或显示无关项。新实例为 root:专用存储组 0750，只含 root:root 0444 单链接的 `smb.conf`（与发行模板完全相同）和各归备案存储 UID/GID、0700 的空 `private`、`state`。已有实例即使为空也拒；已有相应暂存名不接管。
+
+   创建前须有独立确认的整套发行软件、受保护的安装主体和非 root 存储 UID/GID；本动作不建立身份、策略或信任记录。原前台显示实际固定父、dev/inode/本次挂载、ID、审批、属主、配置及发行摘要；新随机答复只批准这一次。仅支持可查普通 Unix 模式、无额外 POSIX 访问 ACL 的受保护本地原链；新建父还不得有默认 ACL。既有祖先须允许降权后的存储身份搜索。首次写目前从宿主 PID 1 的实际根沿同一设备与挂载到达原父；正常单独挂载的 /var、/var/lib、子树 bind 或其它中间挂载一律不支持，不是磁盘损坏。此检查不遍历其它命名空间，也不证明没有外部使用者；维护者另须确认该位置专用。若直接创建父为 setgid、本进程 umask 掩去 owner 位或实际权限不足，则在暂存前拒绝；不改原父或主机设置。现阶段复用宿主已支持的 ext2/3/4、XFS、Btrfs、F2FS 普通目录识别，不使用其专有功能，不规定 ZXS 池的格式；远程、叠加或无法归属的宿主路径不试写。宿主额外强制访问策略仍由部署者核准。
+
+   布局先在原父中新建 `.layout-<首个缺失分量>.new`，持新实例目录的 EX，核全部名字、属主/模式、确切配置和原件，逐件和自下而上同步；仅用原父内的 `RENAME_NOREPLACE` 发表，父同步并按最终名独立读回后才报 `layout=prepared`。不锁全机 `/var/lib`，不改服务、网络、宿主用户、SYSTEM 数据库或账户。失电/取消可能保留暂存名，或最终名已出现但父同步/读回未确认；未确认不自动删除、接管、重做或生成域。依赖受保护的宿主父和遵约管理者，不能抵抗恶意 root 的同时替换。也可由独立宿主部署事先提供同等合格的目录和模板，而后直接选下一步。InstanceId、原操作和审批参考为非零 32 位小写十六进制，不是身份或登录权。
 2. **provision 只建立此实例的本机域。** 选择确切的已提交 INIT，使用独立的 DOMAIN_OP 并另做前台确认。只由受限的固定 Samba 生成器创建原状态，再由受限宿主阶段同步并不覆盖地发表 `domain.bound`。不输入两个账户的口令，也不启动服务。任何已有/中断现场不能当作全新实例重试；保留原件，不换新号再做。
 3. **enroll 一次设置两个固定账号。** 指定同一 SYSTEM、Pool/INIT、InstanceId、原 DOMAIN_OP，使用与前两项不同的 SETUP_OP，以及本次审批参考和两个准确登录名。登录名为 1–64 个小写 ASCII 字母/数字或 `._-`，必须以字母或数字开头，二者不能相同；SMB 不接受 guest、anonymous、nobody 或 root。现有准确回执只列原 Web/SMB AccountId，不校验密码；若无原单，须核一次前台确认、下述独立站点准许和输入保护，才从原终端分别输入并确认两种不同口令。一笔短事务同时建立两行凭据和两身份的登记、最后记同一原操作。任何参数都不是密码、SID、验证材料或通行证；Web、管道和环境不能发起此操作。
 4. **只查或收到模糊结果。** 用完全相同的 enroll 参数附上 `--receipt-only`。它不加载凭据库、索取口令、补登记或发起恢复。退出 `0` 并见 `pair=original` 是查到原两 ID；`1 / pair=absent` 是在已核原池/实例没有该原单且无冲突，**不授写**；退出 `2` 表示前提、冲突或最终结果未能确认，并非可安全重试。首次成功写才输出 `pair=confirmed`；终端或提交后确认丢失时只查原单，不能换 ID、重新设密或假定已回滚。查回执也需要同一受保护宿主、原 S 和实例停用且可独占，不需要数据/回收卷在线。

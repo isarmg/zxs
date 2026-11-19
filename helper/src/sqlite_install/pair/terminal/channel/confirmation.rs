@@ -42,7 +42,7 @@ impl PublicConfirmation{
             return Err(refuse("the original nonblocking foreground canonical terminal is required"));}
         Ok(())
     }
-    pub(in crate::sqlite_install::pair) fn confirm_domain(&self)->io::Result<()>{self.ask(None)}
+    pub(in crate::sqlite_install::pair) fn confirm_domain(&self)->io::Result<()>{self.ask("PROVISION",None)}
     pub(in crate::sqlite_install::pair) fn confirm_pair(&self,r:&PairRequest,system:&Path,instance:&Id,provision:&Id)->io::Result<()>{
         let raw=system.as_os_str().as_bytes();
         if raw.len()>4096{return Err(failure("installation origin path exceeds display limit"));}
@@ -50,10 +50,16 @@ impl PublicConfirmation{
         let esc=|b:&[u8]|b.iter().copied().flat_map(std::ascii::escape_default).map(char::from).collect::<String>();
         let preview=format!("仅首次设置：同一数据库一次建立唯一 Web 管理员和不同的 SMB 用户；不开放共享、访客或匿名，不启动服务，也不重设已有账户。\nSYSTEM {}，池 {}，已确认 INIT {}；专用实例 {}，原域供给 {}。\nWeb 名 {}；SMB 名 {}，已备案用户 SID {}；原操作 {}，本机维护主体 {}，审批参考 {}。\n仅当此宿主为该实例批准 NTLMv2 时才可首设。此处不输入口令；若最终回执不明，只查此原单。\n",
             esc(raw),hx(&r.pool),hx(&r.init),hx(instance),hx(provision),esc(&r.web),esc(&r.smb),hx(&r.sid),hx(&r.op),hx(&r.actor),hx(&r.approval));
-        self.ask(Some(preview))
+        self.ask("SETUP",Some(preview))
     }
-    fn ask(&self,preview:Option<String>)->io::Result<()>{
-        let verb=if preview.is_some(){"SETUP"}else{"PROVISION"};
+    pub(in crate::sqlite_install::pair) fn confirm_layout(&self, ids:[&Id;3], subject:(u32,u32), parent:&str,
+        parent_id:crate::pinned::Entity,mount:u64,config:&[u8;32],release:&[u8;32])->io::Result<()>{
+        let hx=|v:&[u8]|v.iter().map(|b|format!("{b:02x}")).collect::<String>();
+        let preview=format!("仅创建新宿主实例布局 /var/lib/local-ops-helper/samba-instances/{}，以及从 {} 起缺少的固定父目录。只有缺失的中间目录为 root:root 0711；新实例为 root:存储组 0750，private/state 归存储 UID/GID、0700；smb.conf 为 root:root 0444。请核这一宿主位置专用、未被其它业务当作数据目录。不会查询池、生成域、设置账户、变更网络或启动服务。已有名字不接管；中断可能留下暂存或最终名，请保留。\n原父 dev {} / inode {} / mount {}；维护主体 {}、审批参考 {}；存储 UID/GID {}/{}。配置 SHA-256 {}；已登记软件发行 {}。\n",
+            hx(ids[0]),parent,parent_id.dev,parent_id.ino,mount,hx(ids[1]),hx(ids[2]),subject.0,subject.1,hx(config),hx(release));
+        self.ask("LAYOUT",Some(preview))
+    }
+    fn ask(&self,verb:&'static str,preview:Option<String>)->io::Result<()>{
         let fresh=challenge()?;let answer=format!("{verb} {fresh}\n");
         let prompt=format!("同意以上完整范围时，输入 {verb} {fresh} 并回车。此处不输入口令。\n");
         let sig=PromptSignals::begin()?;let end=Instant::now()+Duration::from_secs(120);
@@ -61,9 +67,9 @@ impl PublicConfirmation{
         let result=(||->io::Result<()>{
             check()?;clear(&self.reader)?; // stale lines cannot provide this confirmation
             if let Some(text)=preview.as_ref(){
-                // The pair preview and challenge use one nonblocking OFD and
-                // the same real deadline while the original two EXs are held.
-                if text.len()>20*1024{return Err(failure("fixed account preview exceeds its budget"));}
+                // The bounded action preview and challenge share one
+                // nonblocking OFD and the same real deadline.
+                if text.len()>20*1024{return Err(failure("fixed installation preview exceeds its budget"));}
                 nonblocking_prompt(self.terminal.out.as_fd(),text.as_bytes(),end,&check)?;
                 clear(&self.reader)?;
             }

@@ -5,6 +5,8 @@
 mod issue;
 mod worker;
 mod installed;
+mod layout;
+pub(in crate::sqlite_install::pair) use layout::create_layout;
 pub(in crate::sqlite_install::pair) use installed::{InstalledSetup,SelectedSetup};
 mod start;
 pub(crate) use worker::exec_child;
@@ -41,10 +43,20 @@ fn pin_dir(parent:&File,n:&std::ffi::CStr)->io::Result<File>{
 struct Site{host:File,chain:Vec<File>,leaf:CString}
 impl Site{
     fn select(host:File,instance:&Id)->io::Result<Self>{
+        Self::walk(host,instance,false)
+    }
+    // Only layout preparation may stop at the first absent component below
+    // an already verified /var/lib. All existing operational users require
+    // the complete protected chain, including the instance itself.
+    fn walk(host:File,instance:&Id,missing_suffix:bool)->io::Result<Self>{
         let leaf=CString::new(instance.iter().map(|b|format!("{b:02x}")).collect::<String>()).expect("lower hex");
         let mut chain=Vec::with_capacity(PREFIX.len()+1);safe_dir(&host)?;
         for name in PREFIX.iter().copied().chain(std::iter::once(leaf.as_c_str())){
-            let original=pin_dir(chain.last().unwrap_or(&host),name)?;safe_dir(&original)?;chain.push(original);
+            let original=match pin_dir(chain.last().unwrap_or(&host),name){
+                Err(e) if missing_suffix && chain.len()>=2 && e.kind()==io::ErrorKind::NotFound=>break,
+                r=>r?,
+            };
+            safe_dir(&original)?;chain.push(original);
         }
         let this=Self{host,chain,leaf};this.check()?;Ok(this)
     }
