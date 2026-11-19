@@ -1,15 +1,19 @@
-# Synthetic interoperation data only. profile 1 and 2 are ALTERNATIVE pools,
-# never two first accounts in one pool. No passwords/secrets enter either SHA.
+# Sole fixed-pair request, non-secret fields. The 16-byte SMB format sample
+# below is an opaque synthetic pattern, not a sampled account/working password.
 pool=04040404040404040404040404040404
 init_op=01010101010101010101010101010101
-first_op=44444444444444444444444444444444
+setup_op=44444444444444444444444444444444
 offline_actor=66666666666666666666666666666666
 approval_ref=77777777777777777777777777777777
-login_hex=66697273742e61646d696e
-profile1_sha=f1ab3125584e5fc68c81a078b055e98f4a68e6daaedfe4f23fc1fd3484cbcfc0
-profile2_sha=26458e204160217ab8dbfc347787302b9d7ce59b3e94619ddb370a095be47347
-result_account=55555555555555555555555555555555
-# Public argon2-cffi 25.1.0 howto example, not a product credential or default.
-# https://argon2-cffi.readthedocs.io/en/stable/howto.html ; pwd: correct horse battery staple
-salt=308211aa0be041b823db6d237e9d0c3c
-verifier=61fc094958ed8d2534cf357f3f74bd9e743f512adedb0bc93237c2223ad341b8
+web_login_hex=66697273742e61646d696e
+smb_login_hex=66696c65732e736d62
+smb_sid=010500000000000515000000010000000200000003000000e8030000
+preimage_bytes=154
+request_sha=810b20fdcd27fa5c2a18943c465fdb8cfa698e74000306c7157aaf7b4ef4b2d0
+result_web_id=55555555555555555555555555555555
+result_smb_id=56565656565656565656565656565656
+# Only the Web KDF vector is from a public working example: argon2-cffi 25.1.0,
+# https://argon2-cffi.readthedocs.io/en/stable/howto.html (correct horse battery staple).
+web_salt=308211aa0be041b823db6d237e9d0c3c
+web_verifier=61fc094958ed8d2534cf357f3f74bd9e743f512adedb0bc93237c2223ad341b8
+synthetic_smb_field=0123456789abcdeffedcba9876543210

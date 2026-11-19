@@ -16,6 +16,7 @@ unsafe extern "C"{
     fn zxs_sql_template(ddl:*const c_char,db:*mut *mut Db)->c_int;
     fn zxs_sql_family(db:*mut Db)->c_int;
     fn sqlite3_prepare_v2(db:*mut Db,sql:*const c_char,n:c_int,s:*mut *mut Stmt,tail:*mut *const c_char)->c_int;
+    fn sqlite3_bind_int64(s:*mut Stmt,k:c_int,v:i64)->c_int;
     fn sqlite3_bind_blob(s:*mut Stmt,k:c_int,x:*const c_void,n:c_int,drop_value:Option<unsafe extern "C" fn(*mut c_void)>)->c_int;
     fn sqlite3_step(s:*mut Stmt)->c_int;
     fn sqlite3_finalize(s:*mut Stmt)->c_int;
@@ -100,6 +101,7 @@ impl Drop for Connection{
 struct Statement<'a>(*mut Stmt,#[allow(dead_code)] &'a Connection);
 impl Drop for Statement<'_>{fn drop(&mut self){let _=unsafe{sqlite3_finalize(self.0)};}}
 impl Statement<'_>{
+    fn bind_integer(&self,k:i32,n:i64)->io::Result<()>{check(unsafe{sqlite3_bind_int64(self.0,k,n)})}
     fn bind_bytes(&self,k:i32,b:&[u8])->io::Result<()>{
         let n=i32::try_from(b.len()).map_err(|_|invalid("oversize SQLite parameter"))?;
         // SQLITE_TRANSIENT: SQLite takes its own bytes before this function returns.

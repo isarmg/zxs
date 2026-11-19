@@ -1,105 +1,120 @@
-//! Online first-account authentication from the very same SQLite cut as
-//! the original pool. No issuing, remote bearer, volume or FILE grant here.
+//! Two and only two protocol identities in one SQLite pool. Web never selects
+//! the Samba secret. Neither an account row nor a share definition opens FILE.
 use super::{Catalog,Connection,InitialReader,check,sqlite3_step};
 use crate::{OperationId,PoolId,fs::invalid,hash::Sha256,identity::AccountId,password::{Verifier,login_name}};
 use std::io;
 
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum Management{ReadAcl,ReadAndWriteAcl}
-impl Management{
-    fn decode(v:u8)->io::Result<Self>{match v{1=>Ok(Self::ReadAcl),2=>Ok(Self::ReadAndWriteAcl),_=>Err(invalid("unknown first-account management scope"))}}
-    fn tag(self)->u8{match self{Self::ReadAcl=>1,Self::ReadAndWriteAcl=>2}}
+const DOMAIN:&[u8]=b"ZXS-SQLITE-1/SETUP-PAIR\0";
+const SID_PREFIX:[u8;12]=[1,5,0,0,0,0,0,5,21,0,0,0];
+/// Standalone Samba domain SID S-1-5-21-x-y-z plus the dedicated normal RID
+/// 1000. This nonsecret mapping is not a token or proof of authentication.
+fn check_names(web:&[u8],smb:&[u8],sid:&[u8;28])->io::Result<()>{
+    login_name(web)?;let s=login_name(smb)?;
+    if web==smb||matches!(s,"guest"|"anonymous"|"root"|"nobody")||
+        sid[..12]!=SID_PREFIX||sid[12..24]==[0;12]||sid[24..]!=1000u32.to_le_bytes(){
+        return Err(invalid("invalid or colliding fixed-protocol identities"));
+    }Ok(())
 }
-pub(crate) fn request(pool:PoolId,init:OperationId,op:OperationId,actor:[u8;16],approval:[u8;16],scope:Management,login:&[u8])->io::Result<[u8;32]>{
-    login_name(login)?;
-    if [pool.0,init.0,op.0,actor,approval].contains(&[0;16])||op==init{
-        return Err(invalid("invalid first-account origin"));
-    }
-    let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/FIRST-ADMIN\0")?;
+pub(crate) fn setup_request(pool:PoolId,init:OperationId,op:OperationId,actor:[u8;16],approval:[u8;16],
+    web:&[u8],smb:&[u8],sid:&[u8;28])->io::Result<[u8;32]>{
+    check_names(web,smb,sid)?;
+    if [pool.0,init.0,op.0,actor,approval].contains(&[0;16])||op==init{return Err(invalid("invalid account setup origin"));}
+    let mut h=Sha256::new();h.update(DOMAIN)?;
     for id in [pool.0,init.0,op.0,actor,approval]{h.update(&id)?;}
-    h.update(&[scope.tag(),login.len() as u8])?;h.update(login)?;Ok(h.finish())
+    for name in [web,smb]{h.update(&[name.len() as u8])?;h.update(name)?;}
+    h.update(sid)?;Ok(h.finish())
 }
 
 #[derive(Eq,PartialEq)]
-struct First{
-    account:AccountId,op:OperationId,scope:Management,login:String,verifier:Verifier,
-}
-impl First{
-    fn select(db:&Connection,cut:&Catalog)->io::Result<Option<Self>>{
-        // There is precisely one accepted bootstrap action. Unknown versions,
-        // incomplete credentials and an altered non-secret request never log in.
-        let s=db.prepare(c"SELECT o.op_id,o.actor_id,o.request_sha,a.account_id,a.login,a.approval_ref,a.boot_profile,p.credential_op,p.generation,p.salt,p.verifier FROM main.operation o JOIN main.account a ON a.birth_op=o.op_id JOIN main.account_password p ON p.account_id=a.account_id WHERE o.kind=2 AND o.state=1")?;
-        match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("unexpected SQLite account step"));}}
-        let op=OperationId(s.array(0)?);let actor=s.array(1)?;let recorded=s.array::<32>(2)?;
-        let account=AccountId(s.array(3)?);let login=login_name(s.blob(4,64)?)?.to_owned();
-        let approval=s.array(5)?;let scope=Management::decode(s.byte(6)?)?;
-        if account.0==[0;16]||s.array::<16>(7)?!=op.0||s.integer(8)?!=1||
-            request(cut.birth.pool,cut.birth.op,op,actor,approval,scope,login.as_bytes())?!=recorded{
-            return Err(invalid("first-account relation disagrees with its origin"));
+struct WebCurrent{account:AccountId,op:OperationId,login:String,verifier:Verifier}
+impl WebCurrent{
+    fn select(db:&Connection,c:&Catalog)->io::Result<Option<Self>>{
+        let s=db.prepare(c"SELECT o.op_id,o.actor_id,o.request_sha,a.approval_ref,a.web_id,a.web_login,a.smb_id,a.smb_login,a.smb_sid,w.credential_op,w.generation,w.salt,w.verifier FROM main.account_pair a JOIN main.operation o ON o.op_id=a.birth_op JOIN main.web_password w ON w.slot=a.singleton WHERE a.singleton=1 AND o.kind=2 AND o.state=1")?;
+        match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("unexpected Web credential query"));}}
+        let op=OperationId(s.array(0)?);let actor=s.array(1)?;let request=s.array::<32>(2)?;let approval=s.array(3)?;
+        let account=AccountId(s.array(4)?);let login=s.blob(5,64)?;let smb_id=s.array::<16>(6)?;
+        if account.0==[0;16]||smb_id==[0;16]||smb_id==account.0||s.array::<16>(9)?!=op.0||s.integer(10)?!=1||
+            setup_request(c.birth.pool,c.birth.op,op,actor,approval,login,s.blob(7,64)?,&s.array(8)?)?!=request{
+            return Err(invalid("Web credential not bound to the original fixed pair"));
         }
-        let verifier=Verifier::new(s.array(9)?,s.array(10)?);
-        match unsafe{sqlite3_step(s.0)}{101=>Ok(Some(Self{account,op,scope,login,verifier})),
-           100=>Err(invalid("more than one original first account")),rc=>{check(rc)?;Err(invalid("unexpected end of first account"))}}
+        let row=Self{account,op,login:login_name(login)?.to_owned(),verifier:Verifier::new(s.array(11)?,s.array(12)?)};
+        s.done()?;Ok(Some(row))
     }
 }
-fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"account credentials unavailable or not accepted")}
+fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"Web credentials not accepted")}
 
-/// Not a FILE capability. Holding this keeps the same true S lifecycle SH,
-/// not an open SQL transaction. Re-observe the current account for each use.
-pub(crate) struct Manager<'a>{source:&'a InitialReader,account:AccountId,origin:OperationId}
+/// Only this type can issue a Web management operation. It has no data-open
+/// methods, never accepts a Samba SID or a claimed remote account id.
+pub(crate) struct WebAdmin<'a>{source:&'a InitialReader,account:AccountId,origin:OperationId}
 impl InitialReader{
-    pub(crate) fn authenticate_first(&self,login:&str,password:&str)->io::Result<Manager<'_>>{
-        self.authenticate_first_after(login,password,||Ok(()))
+    pub(crate) fn authenticate_web(&self,login:&str,password:&str)->io::Result<WebAdmin<'_>>{
+        self.authenticate_web_after(login,password,||Ok(()))
     }
-    pub(super) fn authenticate_first_after(&self,login:&str,password:&str,after_verify:impl FnOnce()->io::Result<()>)->io::Result<Manager<'_>>{
-        if login.len()>64||password.is_empty()||password.len()>1024{return Err(denied());}
-        let first=self.at(|db,c|First::select(db,&c))?.ok_or_else(denied)?;
-        // Even a different well-sized login goes through the same first
-        // account KDF. Neither the SQL transaction nor its rows survive here.
-        if !first.verifier.matches(password)? || first.login.as_bytes()!=login.as_bytes(){return Err(denied());}
-        after_verify()?;
+    pub(super) fn authenticate_web_after(&self,login:&str,password:&str,after:impl FnOnce()->io::Result<()>)->io::Result<WebAdmin<'_>>{
+        if login.is_empty()||login.len()>64||password.is_empty()||password.len()>1024{return Err(denied());}
+        let m=self.at(|db,c|WebCurrent::select(db,&c))?.ok_or_else(denied)?;
+        if !m.verifier.matches(password)?||m.login.as_bytes()!=login.as_bytes(){return Err(denied());}
+        after()?;
         self.at(|db,c|{
-            if First::select(db,&c)?.as_ref()!=Some(&first){return Err(denied());}
-            Ok(Manager{source:self,account:first.account,origin:first.op})
+            if WebCurrent::select(db,&c)?.as_ref()!=Some(&m){return Err(denied());}
+            Ok(WebAdmin{source:self,account:m.account,origin:m.op})
         })
     }
 }
-impl Manager<'_>{
-    /// Use the supplied transaction, never a detached copy of the profile.
-    fn current(&self,db:&Connection,c:&Catalog)->io::Result<Management>{
-        let m=First::select(db,c)?.ok_or_else(denied)?;
-        if m.account!=self.account||m.op!=self.origin{return Err(denied());}
-        Ok(m.scope)
+// Metadata-only transaction: don't hold a SQL lock during KDF, OS I/O, or
+// entropy acquisition. Retry an ambiguous write only by its exact original.
+enum Choice<T,P>{Original(T),New(P)}
+impl WebAdmin<'_>{
+    fn metadata_change<T,P,N>(&self,
+        select:impl Fn(&Connection,&Catalog)->io::Result<Choice<T,P>>,
+        prepare:impl FnOnce()->io::Result<N>,
+        insert:impl FnOnce(&Connection,P,N)->io::Result<T>
+    )->io::Result<T>{
+        let choose=|db:&Connection,c:&Catalog|{self.current(db,c)?;select(db,c)};
+        let read=||self.source.at(|db,c|choose(db,&c));
+        if let Choice::Original(old)=read()?{return Ok(old);}
+        let prepared=prepare()?;
+        self.source.dir.require()?;
+        let result={
+            let w=Connection::open(&self.source.dir,true)?;
+            self.source.transaction(&w,c"BEGIN IMMEDIATE",|db,c|match choose(db,&c)?{
+                Choice::Original(old)=>Ok(old),Choice::New(base)=>insert(db,base,prepared),
+            })
+        };
+        match result{
+            Ok(value)=>Ok(value),
+            Err(cause)=>match read(){
+                Ok(Choice::Original(old))=>Ok(old),Ok(Choice::New(_))=>Err(cause),
+                Err(_)=>Err(io::Error::other("outcome not confirmed; check this exact operation at the original pool")),
+            }
+        }
     }
-    pub(crate) fn profile(&self)->io::Result<(AccountId,Management)>{
-        self.source.at(|db,c|Ok((self.account,self.current(db,&c)?)))
+    fn current(&self,db:&Connection,c:&Catalog)->io::Result<()>{
+        let m=WebCurrent::select(db,c)?.ok_or_else(denied)?;
+        if (m.account,m.op)!=(self.account,self.origin){return Err(denied());}Ok(())
     }
+    #[cfg(test)]
+    pub(super) fn id(&self)->io::Result<AccountId>{self.source.at(|db,c|{self.current(db,&c)?;Ok(self.account)})}
 }
 
-/// Sole public-query shape for a separately authorized original-operation
-/// reader (helper implements its own trusted actor checks). Parameters are
-/// borrowed for the lifetime of the statement, never interpolated.
+/// Same nonsecret request and receipt helper must implement independently.
+/// Do not ask for either password merely to resolve a lost setup response.
 #[cfg(test)]
-pub(super) fn first_receipt(src:&InitialReader,op:OperationId,actor:[u8;16],approval:[u8;16],scope:Management,login:&[u8])->io::Result<Option<(AccountId,Management)>>{
-    use super::sqlite3_bind_blob;
-    use std::{ffi::CString,os::raw::c_int};
-    unsafe extern "C"{fn sqlite3_bind_int(s:*mut super::Stmt,k:c_int,v:c_int)->c_int;}
-    const SQL:&str=include_str!("original-first.sql");
-    let q=CString::new(SQL).expect("fixed statement");
+pub(super) fn setup_receipt(src:&InitialReader,op:OperationId,actor:[u8;16],approval:[u8;16],
+    web:&[u8],smb:&[u8],sid:&[u8;28])->io::Result<Option<(AccountId,AccountId)>>{
+    let q=std::ffi::CString::new(include_str!("original-first.sql")).expect("fixed SQL");
     src.at(|db,c|{
-        let sha=request(c.birth.pool,c.birth.op,op,actor,approval,scope,login)?;let s=db.prepare(&q)?;
-        // All SQLITE_STATIC arrays live beyond the Statement, including sha.
-        for(k,b)in [(1,c.birth.pool.0.as_slice()),(2,op.0.as_slice()),(3,actor.as_slice()),(4,sha.as_slice()),
-                    (5,c.birth.op.0.as_slice()),(6,approval.as_slice()),(8,login)]{
-            check(unsafe{sqlite3_bind_blob(s.0,k,b.as_ptr().cast(),b.len() as i32,None)})?;
-        }
-        check(unsafe{sqlite3_bind_int(s.0,7,c_int::from(scope.tag()))})?;
+        let sha=setup_request(c.birth.pool,c.birth.op,op,actor,approval,web,smb,sid)?;let s=db.prepare(&q)?;
+        for(i,b)in [c.birth.pool.0.as_slice(),op.0.as_slice(),actor.as_slice(),sha.as_slice(),c.birth.op.0.as_slice(),
+                    approval.as_slice(),web,smb,sid.as_slice()].into_iter().enumerate(){s.bind_bytes(i as i32+1,b)?;}
         match unsafe{sqlite3_step(s.0)}{101=>Ok(None),100=>{
-            let value=(AccountId(s.array(0)?),Management::decode(s.byte(1)?)?);
-            match unsafe{sqlite3_step(s.0)}{101=>Ok(Some(value)),rc=>{check(rc)?;Err(invalid("non-unique first receipt"))}}
-        },rc=>{check(rc)?;Err(invalid("unexpected first receipt result"))}}
+            let result=(AccountId(s.array(0)?),AccountId(s.array(1)?));s.done()?;Ok(Some(result))
+        },rc=>{check(rc)?;Err(invalid("unexpected original pair result"))}}
     })
 }
 
 #[path="publication.rs"]
 pub(crate) mod publication;
+
+#[path="share_mode.rs"]
+pub(crate) mod share_mode;

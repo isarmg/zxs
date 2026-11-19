@@ -1,6 +1,6 @@
 //! First online metadata writer. An actual management identity may publish
-//! one logical ordinary root. This action cannot grant or use any FILE ACL.
-use super::{Management,Manager};
+//! one logical ordinary root. A new share is disabled for the dedicated SMB account.
+use super::{Choice,WebAdmin};
 use super::super::{Catalog,Connection,check,sqlite3_step};
 use crate::{OperationId,PoolId,Role,VolumeId,display,fs::invalid,hash::Sha256,identity::{AccountId,ShareId}};
 use std::io;
@@ -13,7 +13,7 @@ struct Request<'a>{
     pool:PoolId,op:OperationId,actor:AccountId,credential:OperationId,volume:VolumeId,label:&'a str,sha:[u8;32],
 }
 impl<'a> Request<'a>{
-    fn new(m:&Manager<'_>,op:OperationId,volume:VolumeId,label:&'a str)->io::Result<Self>{
+    fn new(m:&WebAdmin<'_>,op:OperationId,volume:VolumeId,label:&'a str)->io::Result<Self>{
         let pool=m.source.pool;let actor=m.account;let credential=m.origin;
         display::component(label.as_bytes(),display::MAX)?;
         if op.0==[0;16]||volume.0==[0;16]{return Err(invalid("missing publication operation or volume"));}
@@ -38,10 +38,7 @@ impl<'a> Request<'a>{
         Ok(Some(self.result(share)))
     }
     fn result(&self,share:ShareId)->PublishedRoot{PublishedRoot{op:self.op,share,volume:self.volume,label:self.label.to_owned()}}
-    fn at(&self,m:&Manager<'_>,db:&Connection,c:&Catalog)->io::Result<Option<PublishedRoot>>{
-        // Both *current* first-account profiles manage share definitions.
-        // A future profile must make that judgment explicitly.
-        match m.current(db,c)?{Management::ReadAcl|Management::ReadAndWriteAcl=>{}}
+    fn at(&self,db:&Connection,c:&Catalog)->io::Result<Option<PublishedRoot>>{
         if c.birth.pool!=self.pool || !c.rows().iter().any(|v|v.role==Role::File&&v.volume==self.volume){
             return Err(invalid("share requires an ordinary registered root in this pool"));
         }
@@ -58,7 +55,7 @@ impl<'a> Request<'a>{
         Ok(self.result(share)) // not an externally successful result until COMMIT
     }
 }
-impl Manager<'_>{
+impl WebAdmin<'_>{
     pub(crate) fn publish_root(&self,op:OperationId,volume:VolumeId,label:&str)->io::Result<PublishedRoot>{
         self.publish_root_after_selection(op,volume,label,||Ok(()))
     }
@@ -66,26 +63,8 @@ impl Manager<'_>{
         &self,op:OperationId,volume:VolumeId,label:&str,after:impl FnOnce()->io::Result<()>
     )->io::Result<PublishedRoot>{
         let r=Request::new(self,op,volume,label)?;
-        // An unauthorized/invalid request does not even ask for a RW connection.
-        let read_original=||self.source.at(|db,c|r.at(self,db,&c));
-        if let Some(old)=read_original()?{return Ok(old);}
-        after()?;
-        let candidate=ShareId::new()?; // non-reserving; no SQL write transaction during entropy acquisition
-        self.source.dir.require()?;
-        let result={
-            let w=Connection::open(&self.source.dir,true)?;
-            self.source.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-                if let Some(old)=r.at(self,db,&c)?{return Ok(old);}
-                r.insert(db,candidate)
-            })
-        }; // close this SQLite writer before resolving any uncertain outcome
-        match result{
-            Ok(published)=>Ok(published),
-            Err(cause)=>match read_original(){
-                Ok(Some(old))=>Ok(old),
-                Ok(None)=>Err(cause),
-                Err(_)=>Err(io::Error::other("publication not confirmed; verify this exact operation on its original pool before retrying")),
-            }
-        }
+        self.metadata_change(|db,c|Ok(match r.at(db,c)?{
+            Some(old)=>Choice::Original(old),None=>Choice::New(()),
+        }),||{after()?;ShareId::new()},|db,(),candidate|r.insert(db,candidate))
     }
 }
