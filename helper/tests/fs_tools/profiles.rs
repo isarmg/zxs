@@ -41,3 +41,17 @@ fn missing_unchecked_mismatch_and_unavailable_versions_are_not_device_results(){
     assert!(s.contains("sha256=matches-reference version=unverified signature=unverified"));
     assert!(s.contains("preview=zpool status <pool>"));
 }
+
+#[test]
+fn only_supported_bundled_slots_are_private_and_detection_is_not_execution(){
+    for p in PROFILES {
+        let path = p.slots().join("/");
+        if p.format=="fat32" || p.format=="exfat" {
+            assert!(path.starts_with("usr/lib/local-ops-helper/disk-tools-v1/bin/"));
+        } else {
+            assert!(!p.private());assert!(!path.contains("disk-tools-v1"));
+        }
+    }
+    assert_eq!(PROFILES[5].action(),"planned-check-not-enabled");
+    assert_eq!(PROFILES[2].action(),"host-version-and-loaded-module-required-not-enabled");
+}

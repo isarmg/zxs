@@ -1,0 +1,28 @@
+{
+  "releases": {
+    "debian": {"suite":"trixie","inrelease":"0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"},
+    "debian-security": {"suite":"trixie-security","inrelease":"04b0a435801d3b6798c397526d528892183080ebadec7d39b95e6df671441da4"}
+  },
+  "packages": {
+    "bubblewrap": ["debian","0.12.0-1~deb13u1","70aca4fa8daeacb677ec00e8063eb586f08ae3d94b1f11e684370b5524c43431"],
+    "dosfstools": ["debian","4.2-1.2","628551496a02e80eee83054b9c696b06ba8177159bf0afe9a5b4ab2fb94b1b41"],
+    "exfatprogs": ["debian","1.2.9-1+deb13u1","b48c77643a13fa6e33d362b993a251c6528cfec158b772b1d115df59117be32f"],
+    "libc6": ["debian","2.41-12+deb13u4","967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9"],
+    "libcap2": ["debian","1:2.75-10+deb13u1+b3","89fc4d34fc7a28ad6f0fcd0c561ab253b9dedf6f77f5a000b47c276c8295bf67"],
+    "libselinux1": ["debian","3.8.1-1","68bb8d32bd8d6d7d2f5952a169db03d1484b46ae1e52abccdec42a19dccea5d5"],
+    "libpcre2-8-0": ["debian-security","10.46-1~deb13u3","e226f661d918f04daf38cdbc4806b7ed7d6ef95c7eb0ade692fc350e31970040"],
+    "libgcc-s1": ["debian","14.2.0-19","3c71917b490d1a17aed43196a2787a256ecf060526cdb20216a74bedc061b150"],
+    "gcc-14-base": ["debian","14.2.0-19","5b6825de4263824b78c4c51f6476414f3b4e89c2ab63e81dc8b9b5501e867cf6"],
+    "base-files": ["debian","13.8+deb13u7","fcd42bb5cb63f7bfc4326a92541247872206d60a192fdff65ca14eb83ed408b9"]
+  },
+  "payload": {
+    "bubblewrap":{"usr/bin/bwrap":"bin/bwrap"},
+    "dosfstools":{"usr/sbin/fsck.fat":"bin/fsck.fat"},
+    "exfatprogs":{"usr/sbin/fsck.exfat":"bin/fsck.exfat"},
+    "libc6":{"usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2":"lib/ld-linux-x86-64.so.2","usr/lib/x86_64-linux-gnu/libc.so.6":"lib/libc.so.6"},
+    "libcap2":{"usr/lib/x86_64-linux-gnu/libcap.so.2.75":"lib/libcap.so.2"},
+    "libselinux1":{"usr/lib/x86_64-linux-gnu/libselinux.so.1":"lib/libselinux.so.1"},
+    "libpcre2-8-0":{"usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.14.0":"lib/libpcre2-8.so.0"},
+    "libgcc-s1":{"usr/lib/x86_64-linux-gnu/libgcc_s.so.1":"lib/libgcc_s.so.1"}
+  }
+}

@@ -22,6 +22,17 @@ pub(crate) struct Profile {
     pub(crate) directory:&'static str, pub(crate) tool:&'static str,
     pub(crate) options:&'static [&'static str], pub(crate) target:Target, pub(crate) limit:&'static str,
 }
+impl Profile {
+    fn private(self)->bool {matches!(self.format,"fat32"|"exfat")}
+    fn slots(self)->Vec<&'static str>{
+        if self.private(){vec!["usr","lib","local-ops-helper","disk-tools-v1","bin",self.tool]}
+        else{vec!["usr",self.directory,self.tool]}
+    }
+    fn action(self)->&'static str {match self.format {
+        "fat32"=>"sealed-copy-readonly", "exfat"=>"planned-check-not-enabled",
+        "zfs"=>"host-version-and-loaded-module-required-not-enabled", _=>"planned-not-enabled"
+    }}
+}
 const PROFILES:[Profile;7]=[
     Profile{format:"ext4",package:"e2fsprogs",directory:"sbin",tool:"e2fsck",
         options:&["-f","-n"],target:Target::OfflineImage,limit:"unmounted; no external journal for a single-image plan; unresolved journal is not clean"},
@@ -83,8 +94,9 @@ impl fmt::Display for Report {
         write!(f,"source=fixed-local-install-slots checker=not-executed device=not-opened repair=not-enabled")?;
         for row in &self.rows {
             let p=row.profile;
-            write!(f,"\nformat={} package={} tool=/usr/{}/{} slot={} sha256={} version=unverified signature=unverified",
-                p.format,p.package,p.directory,p.tool,row.installed.slot(),row.installed.digest())?;
+            write!(f,"\nformat={} package={} source={} action={} tool=/{} slot={} sha256={} version=unverified signature=unverified",
+                p.format,p.package,if p.private(){"private-pack-slot"}else{"host-observation-only"},
+                p.action(),p.slots().join("/"),row.installed.slot(),row.installed.digest())?;
             write!(f,"\n  target={} preview={}",p.target.name(),p.tool)?;
             for opt in p.options{write!(f," {opt}")?;}
             write!(f," {}\n  scope={}",p.target.operand(),p.limit)?;

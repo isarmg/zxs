@@ -2,22 +2,23 @@
 use crate::{fs_tools::{RuntimeFile,hex},pinned::invalid};
 use std::{io::{self,Read},os::unix::fs::FileExt};
 
-pub(super) const PROFILE:&str="debian13-amd64/bubblewrap-0.12/dosfstools-4.2";
-const KEYS:[&str;4]=["bwrap","fsck.fat","ld-linux-x86-64","libc"];
-const SLOTS:[&[&str];4]=[
-    &["usr","bin","bwrap"],&["usr","sbin","fsck.fat"],
-    &["usr","lib","x86_64-linux-gnu","ld-linux-x86-64.so.2"],
-    &["usr","lib","x86_64-linux-gnu","libc.so.6"],
+pub(super) const PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/dosfstools-4.2";
+const KEYS:[&str;8]=["bwrap","fsck.fat","ld-linux-x86-64","libc","libcap","libselinux","libpcre2","libgcc"];
+macro_rules! pack {($($name:literal),+) => {&["usr","lib","local-ops-helper","disk-tools-v1",$($name),+]};}
+const SLOTS:[&[&str];8]=[
+    pack!("bin","bwrap"),pack!("bin","fsck.fat"),pack!("lib","ld-linux-x86-64.so.2"),
+    pack!("lib","libc.so.6"),pack!("lib","libcap.so.2"),pack!("lib","libselinux.so.1"),
+    pack!("lib","libpcre2-8.so.0"),pack!("lib","libgcc_s.so.1"),
 ];
-const POLICY:&[&str]=&["etc","local-ops-helper","fat32-check-v1"];
+const POLICY:&[&str]=pack!("fat32-check-v1");
 const MAX_ELF:u64=32<<20;
 
-pub(super) struct Runtime { policy:RuntimeFile, files:[RuntimeFile;4] }
-fn pins(bytes:&[u8])->io::Result<[[u8;32];4]> {
+pub(super) struct Runtime { policy:RuntimeFile, files:[RuntimeFile;8] }
+fn pins(bytes:&[u8])->io::Result<[[u8;32];8]> {
     let bad=||invalid("missing or unsupported protected FAT32 checker profile");
     let mut lines=std::str::from_utf8(bytes).map_err(|_|bad())?.split('\n');
     if lines.next()!=Some(PROFILE){return Err(bad());}
-    let mut digests=[[0;32];4];
+    let mut digests=[[0;32];8];
     for (i,k) in KEYS.iter().enumerate(){
         let (key,value)=lines.next().and_then(|s|s.split_once(' ')).ok_or_else(bad)?;
         if key!=*k{return Err(bad());}digests[i]=hex(value).ok_or_else(bad)?;
@@ -45,7 +46,7 @@ impl Runtime {
     }
     pub(super) fn launcher(&self)->&std::fs::File { &self.files[0].file }
     pub(super) fn sandbox_files(&self)->impl Iterator<Item=(&std::fs::File,&'static str)>{
-        self.files[1..].iter().map(|f|&f.file).zip(["/checker","/lib64/ld-linux-x86-64.so.2","/lib/x86_64-linux-gnu/libc.so.6"])
+        self.files[1..4].iter().map(|f|&f.file).zip(["/checker","/lib64/ld-linux-x86-64.so.2","/lib/x86_64-linux-gnu/libc.so.6"])
     }
     pub(super) fn recheck(&self)->io::Result<()>{
         self.policy.recheck()?; for f in &self.files{f.recheck()?;}Ok(())
@@ -55,7 +56,7 @@ impl Runtime {
 mod tests {
     use super::*;
     #[test]
-    fn protected_profile_has_exact_version_four_named_digests_and_no_paths_or_extra_switches(){
+    fn protected_profile_has_exact_version_eight_named_digests_and_no_paths_or_extra_switches(){
         let lines=KEYS.iter().map(|k|format!("{k} {}\n","12".repeat(32))).collect::<String>();
         let valid=format!("{PROFILE}\n{lines}");assert!(pins(valid.as_bytes()).is_ok());
         for bad in [valid.replace("libc ","../lib "),valid.replace("4.2","4.1"),valid.replace("bwrap ","fsck.fat "),valid.clone()+"--share-net\n",valid.trim_end().to_string()]{

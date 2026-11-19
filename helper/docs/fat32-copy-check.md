@@ -4,17 +4,9 @@
 
 ## 固定受信发行配置
 
-目标仅 Debian 13 amd64 的 bubblewrap 0.12 和 dosfstools 4.2。需由宿主管理员通过独立可信发行来源核对确切安装的构建及匹配库（含发行商的安全更新）。配置不是由 helper 下载/生成，不接受命令行替它指定工具或摘要。此处没有发行包摘要，也没有预置授权。下例中的占位文字不可直接使用。
+目标是 Debian 13 amd64。正常发行包自行携带固定启动器、上游检查器及私有运行库；不要求用户手配摘要或安装 dosfstools，不使用同名宿主命令替补。构建/发行者须先独立核 Debian 的发行签名、实际程序、配套库、补丁/许可证与完整对应源码，并对最终发行物签名；见[工具包配方](../packaging/debian13-amd64/README.md)。本次没有生成可安装物或签名。
 
-```text
-debian13-amd64/bubblewrap-0.12/dosfstools-4.2
-bwrap <64位十六进制>
-fsck.fat <64位十六进制>
-ld-linux-x86-64 <64位十六进制>
-libc <64位十六进制>
-```
-
-配置固定为 `/etc/local-ops-helper/fat32-check-v1`，包含最后一个换行；四行分别绑定 `/usr/bin/bwrap`、`/usr/sbin/fsck.fat`、`/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`、`/usr/lib/x86_64-linux-gnu/libc.so.6` 的**完整单文件 SHA-256**。每段实际目录及叶均须保护为 root 所有、组和其他人不可写，不能经符号链接；不要在检查进行中替换或写这些运行时组件。名单不代验发行签名或证明整个宿主可信。启动器由已核的原文件描述符直接 exec（不重新解析路径），它自己在宿主上用到的动态加载环境和系统库仍是宿主信任前提；四项摘要并非整个宿主的软件清单。对已安装的公开程序/库和配置正常只读访问可能更新其 atime。缺件、非受信配置、错误体系或摘要、用户命名空间不能用都报告未完成，不提权、不降级重跑。
+固定根是 `/usr/lib/local-ops-helper/disk-tools-v1`。其中 `fat32-check-v1` 首行为 `debian13-amd64/private-pack-1/bubblewrap-0.12/dosfstools-4.2`；接下来八行必须依次给出 bwrap、fsck.fat、ld-linux-x86-64、libc、libcap、libselinux、libpcre2、libgcc 的最终 SHA-256。每段实际路径及叶均须受保护、root 所有、组/其他人不可写，拒绝符号链接、漏件/漏项、错架构和散列不符。启动器用已核的原文件描述符 exec；只有 fsck.fat、装载器及 libc 会进入检查沙箱。运行中的发行目录、宿主内核和启动环境仍须可信。此处并不动态验证发布签名，实际部署须先核收件来源。读取公开安装文件可能更新它们的 atime。
 
 ## 检查权限与输出
 

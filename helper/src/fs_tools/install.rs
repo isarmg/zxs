@@ -57,7 +57,6 @@ impl Slot {
 }
 enum Lookup { Present(Slot), Absent{parent:Slot, component:usize} }
 fn path_flags()->OFlags { OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC }
-fn slot(p:&Profile)->Result<Lookup>{lookup(&["usr",p.directory,p.tool],true)}
 fn lookup(parts:&[&str],executable:bool)->Result<Lookup>{
     let mut held=Slot{fds:Vec::with_capacity(4),marks:Vec::with_capacity(4)};
     let root=File::from(open(c"/",path_flags()|OFlags::DIRECTORY,Mode::empty()).map_err(|e|Evidence::from_io(e.into()))?);
@@ -102,9 +101,10 @@ fn full_hash(file:&mut impl Read,size:u64)->io::Result<[u8;32]>{
 }
 
 pub(super) fn inspect(p:&Profile,expected:Option<&[u8;32]>)->Evidence{
-    let first=match slot(p){
+    let parts=p.slots();
+    let first=match lookup(&parts,true){
         Ok(Lookup::Present(s))=>s,
-        Ok(Lookup::Absent{parent,component})=>return confirm_absence(&parent,component,slot(p),["usr",p.directory,p.tool][component]),
+        Ok(Lookup::Absent{parent,component})=>return confirm_absence(&parent,component,lookup(&parts,true),parts[component]),
         Err(e)=>return e,
     };
     let leaf=*first.marks.last().expect("fixed leaf");
@@ -113,7 +113,7 @@ pub(super) fn inspect(p:&Profile,expected:Option<&[u8;32]>)->Evidence{
     let result=expected.map_or(Evidence::Observed(Record::MetadataOnly),|h|{
         let read=(||{
             if leaf.size>MAX_HASH{return Err(Evidence::DigestUnavailable);}
-            let path=PathBuf::from("/usr").join(p.directory).join(p.tool);
+            let path=PathBuf::from("/").join(parts.join("/"));
             let selected=LocalDataFile::select(&path).map_err(|_|Evidence::DigestUnavailable)?;
             let pre=selected.metadata().map_err(|_|Evidence::DigestUnavailable)?;
             if Entity::of(&pre).map_err(|_|Evidence::DigestUnavailable)?!=leaf.entity{return Err(Evidence::Changed);}
@@ -127,7 +127,7 @@ pub(super) fn inspect(p:&Profile,expected:Option<&[u8;32]>)->Evidence{
         })();
         read.unwrap_or_else(|e|e)
     });
-    let now=match slot(p){Ok(Lookup::Present(s))=>s,_=>return Evidence::Changed};
+    let now=match lookup(&parts,true){Ok(Lookup::Present(s))=>s,_=>return Evidence::Changed};
     if first.marks!=now.marks || !first.unchanged() || !now.unchanged(){
         return Evidence::Changed;
     }

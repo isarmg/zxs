@@ -42,11 +42,11 @@ helper disks --device 259:1 --rates
 
 ## 查看检查工具是否在位
 
-`helper fs-tools` 显示 ext4、NTFS、ZFS、XFS、Btrfs、exFAT、FAT32 各自的只读检查方案、对象和本机固定程序位置。可用 `helper fs-tools xfs` 只看一种，或对单个工具加 `--sha256` 与独立发行材料的摘要比较。**不会打开设备、调用检查器或修盘**，版本与签名仍为未核。详情见[七格式能力表、检测限制和返回码](docs/filesystem-tools.md)。
+`helper fs-tools` 显示 ext4、NTFS、ZFS、XFS、Btrfs、exFAT、FAT32 各自的只读检查方案、对象和固定程序位置：FAT32/exFAT 查私有发行工具槽，其他仅观察宿主槽，不能据此调用。可用 `helper fs-tools xfs` 只看一种，或对单个工具加 `--sha256` 与独立发行材料的摘要比较。**不会打开设备、调用检查器或修盘**，版本与签名仍为未核。详情见[七格式能力表、检测限制和返回码](docs/filesystem-tools.md)。
 
 ## 检查一份 FAT32 镜像（只读）
 
-`helper check-fat32-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。只接受已保存、最多 128 MiB 的普通 FAT32 卷镜像，不接受设备、分区表或任意工具参数。检查器只看到已核摘要的独立副本，在独立的 Linux 命名空间中运行 `fsck.fat -n`；不会修复或改写原镜像。需要受保护的 Debian 13 amd64 工具配置，未配置或隔离不成立就拒绝，不会自动安装。详见[配置、结果和限制](docs/fat32-copy-check.md)。本批只写源码，尚无实跑证据。
+`helper check-fat32-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。只接受已保存、最多 128 MiB 的普通 FAT32 卷镜像，不接受设备、分区表或任意工具参数。检查器只看到已核摘要的独立副本，在独立的 Linux 命名空间中运行 `fsck.fat -n`；不会修复或改写原镜像。[Debian 13 amd64 的发行配方](packaging/debian13-amd64/README.md)将上游工具与其运行库放在 helper 私有目录；不借用宿主同名程序，不自动安装。缺件或隔离不成立就拒绝。详见[配置、结果和限制](docs/fat32-copy-check.md)。本批只写源码，尚无实跑证据。
 
 ## 本机部署与离线维护（设计）
 
