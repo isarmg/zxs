@@ -1,0 +1,12 @@
+# 管理 Web：浏览器 HTTPS → 本机 ZXS → SQLite
+
+**这是一条有实际处理器的源码路径，不是已部署的网站。** 由宿主受保护的 HTTPS 前端接收浏览器请求；ZXS 从唯一具名的本机 Unix 监听描述符接收 [SCGI/1](https://python.ca/scgi/protocol.txt)，自己验证 Web 管理员的 Argon2id，既不接收前端宣称的用户也不访问 SMB 密码。服务、测试、证书、浏览器和真实网络均未运行。此端无文件上传、预览、下载、FILE 静态目录或通用 SQL API。
+
+**能做什么。** `GET /login` 只给不含账号或池资料的登录页；未登录访问 `/` 只重定向。登录成功可以看同一短 SQLite 切面的登记卷、固定两账号的非秘密名称与每页最多 32 个共享（按 ShareId 续页），通过表单登记新的**停用**普通卷共享，再明确设为停用、只读或读写。本页只可确认 SYSTEM 原登记/卷标，不访问无关 F/R，不将登记数量显示成在线数量。健康、速率、文件系统 UUID、正式版本元数据均未在此页读取。页面复用旧项目[登录卡/应用壳与导航](../web/NOTICE.md)，系统字体、无脚本或外联。密码恢复及停机运维不属于业务表单。
+
+**浏览器边界。** 固定 HTTPS origin（小写 DNS/IPv4，可带非默认端口），精确 Host；每个 POST 都要求同一个浏览器 Origin。页面发送 `Referrer-Policy: same-origin`，使同源 HTML 表单的普通 POST 可提交真实 Origin；缺失、`null` 或其它源仍拒绝，不用 Referer 兜底。见 [Fetch 的 Origin 规则](https://fetch.spec.whatwg.org/#append-a-request-origin-header)。共享修改和退出还须独立的会话 CSRF token。新登录由内核随机数生成全新会话，不采纳浏览器指定的身份；cookie 仅 `__Host-zxs`、Secure、HttpOnly、SameSite=Strict、Path=/，无 Domain。会话仅在本进程，15 分钟闲置/8 小时绝对超时，退出或重启后不可重用。每池服务最多 32 个同时会话、每分钟最多 12 次登录验证，宿主仍应限制到此本机通路的连接数。每页/修改在真实 SQL 再验原 Web 身份；新的共享权限不来自网页字段、Cookie 自述或首设回执。每个写表单有独立 Op，重复同参数不产生第二笔操作；修改模式还绑定显示时原设置。若结果未知且原会话仍有效，只能以同一原表单重试；超时、重启或退出后，旧 CSRF 无效，重新登录先查当前设置。网页尚无跨会话的按 Op 历史结果查询，不以新 Op 自动重放。动态标签作为文本转义，无任意 HTML、URL、宿主路径或第三方资源。没有匿名元数据或任何正文。
+
+**给独立安装器的契约（此项目不安装/修改宿主）。**
+- 单一受信本机服务管理器向无业务参数的 `zxs` 传 fd 3：`LISTEN_PID` 等于进程 PID、`LISTEN_FDS=1`、`LISTEN_FDNAMES=zxs-management`。验真实的 filesystem AF_UNIX/SOCK_STREAM/SO_ACCEPTCONN；没有 TCP、抽象地址、自动 bind 或目录换址退路。仅从受保护服务配置读取 `ZXS_SYSTEM_ROOT`、`ZXS_POOL_ID`、`ZXS_WEB_ORIGIN`（HTTPS）、`ZXS_WEB_PROXY_UID`（终结服务专有非 root、不是存储 UID）。这些不是凭据，不取自 HTTP。宿主负责可信目录/套接字权限，专用 UID 不得同时出租给不可信软件。
+- 终结服务必须真正验证其 HTTPS 主机并持证书，HTTP 明文不得接收登录表单；不能把浏览器提供的 TLS/Remote-User/转发头当宿主事实。ZXS 对每次 accept 独立核 Linux SO_PEERCRED，非指定 peer 连请求体都不读。只接受一个有界 SCGI 请求/连接：首字段 CONTENT_LENGTH，SCGI=1、REQUEST_METHOD、原 REQUEST_URI、HTTPS（真实 TLS 为 on）、HTTP_HOST、HTTP_ORIGIN、HTTP_COOKIE 和 CONTENT_TYPE；不接用户名或其它环境，拒重复字段。字段区 ≤8192 B，表单体 ≤4096 B；读取及发送分别有 4 秒总时限。前端需拒公共请求中的重复 Host/Origin/有歧义的请求框架，关闭自动重放、缓存、磁盘 spooling 和包含口令/Cookie/CSRF 的日志；仅路由到本机受保护套接字，不映射池目录。以 [nginx SCGI 参数与 Unix 地址](https://nginx.org/en/docs/http/ngx_http_scgi_module.html#scgi_param)实现时，关闭自动转发原头，该模块自动在首位生成 CONTENT_LENGTH，不再手写重复参数；仅显式配置其余八项，不直接包含带额外 CGI 字段的默认配置。先限制表单体大小，内存缓冲至少覆盖完整上限；关缓存/存储，禁将请求及回复落临时文件。受控传输凭据不代替 Web 身份认证。
+- 空闲也持原 SYSTEM 目录 SH。SIGTERM/SIGINT 收到后不再开始新请求，给已受理操作完成提交/明确失败与原应答，再释放会话/SQLite 连接与原目录。数据库是否可打开不是宿主 TLS/磁盘健康证明。真实资格要用不同进程的原目录 EX 争锁、TLS 浏览器、真实代理身份和真实 systemd 停止作最后验证；这次只写源码。

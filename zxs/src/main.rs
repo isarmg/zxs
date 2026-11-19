@@ -1,3 +1,4 @@
+mod management_start;
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
 const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | dir-mkdir OP SYSTEM VOLUME root|DIR NAME | dir-list SYSTEM VOLUME root|DIR | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-lookup SYSTEM VOLUME NAME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | file-create-at OP SYSTEM VOLUME root|DIR NAME | file-lookup-at SYSTEM VOLUME root|DIR NAME | file-move-at[-receipt] OP SYSTEM FILE FROM root|DIR TO root|DIR EPOCH | file-delete-at[-receipt] OP SYSTEM FILE FROM root|DIR EPOCH | file-restore-at[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 EPOCH original|VOLUME root|DIR | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
@@ -39,7 +40,7 @@ fn show_directory(d:&zxs::DirectoryInfo){
 }
 fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
-    let action=args.next().ok_or_else(||bad(USAGE))?;
+    let Some(action)=args.next() else{return management_start::run();};
     match action.to_str(){
         Some("new-id") if args.next().is_none()=>{println!("{}",zxs::OperationId::new()?);Ok(())}
         Some("dir-mkdir")=>{

@@ -223,3 +223,6 @@ pub(crate) mod account;
 
 #[path="smb.rs"]
 pub(crate) mod smb;
+
+#[cfg(test)]
+pub(crate) use tests::web_pool;

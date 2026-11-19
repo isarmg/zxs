@@ -19,22 +19,39 @@ pub(crate) struct Setting{
     pub(crate) revision:i64,pub(crate) mode:Mode,
 }
 
+// An exact SMB/management selection and a management-only keyset page use
+// the same current-mode row. Both bounds use the BLOB primary key; a page
+// doesn't enumerate the previous pages or make one extra SELECT per share.
+fn selected(db:&Connection,c:&Catalog,lo:ShareId,hi:ShareId,skip_lo:bool,limit:u8,
+            mut visit:impl FnMut(Setting,&str))->io::Result<()>{
+    let s=db.prepare(c"SELECT r.volume_id,r.publish_op,p.kind,p.state,m.change_op,m.revision,m.mode,o.kind,o.state,r.share_id,r.display_label FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op LEFT JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=(SELECT max(h.revision) FROM main.share_mode h WHERE h.share_id=r.share_id) LEFT JOIN main.operation o ON o.op_id=m.change_op WHERE r.share_id>=?1 AND r.share_id<=?2 AND (?3=0 OR r.share_id>?1) ORDER BY r.share_id LIMIT ?4")?;
+    s.bind_bytes(1,&lo.0)?;s.bind_bytes(2,&hi.0)?;s.bind_integer(3,i64::from(u8::from(skip_lo)))?;s.bind_integer(4,i64::from(limit))?;
+    loop{
+        match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(()),rc=>{check(rc)?;return Err(invalid("cannot select share"));}}
+        let share=ShareId(s.array(9)?);if share.0==[0;16]{return Err(invalid("invalid share identity"));}
+        let volume=VolumeId(s.array(0)?);let publish=OperationId(s.array(1)?);
+        if publish.0==[0;16]||s.integer(2)?!=3||s.integer(3)?!=1||
+            !c.rows().iter().any(|v|v.volume==volume&&v.role==Role::File){return Err(invalid("share has no active ordinary-root origin"));}
+        let (op,revision,mode)=if unsafe{sqlite3_column_type(s.0,4)}==5{
+            (publish,0,Mode::Disabled)
+        }else{
+            let op=OperationId(s.array(4)?);let rev=s.integer(5)?;
+            if op.0==[0;16]||rev<1||s.integer(7)?!=4||s.integer(8)?!=1{return Err(invalid("share setting has no committed origin"));}
+            (op,rev,Mode::parse(s.byte(6)?)?)
+        };
+        visit(Setting{share,volume,op,revision,mode},crate::display::component(s.blob(10,crate::display::MAX)?,crate::display::MAX)?);
+    }
+}
 pub(in crate::system::reader) fn current(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Setting>{
     if share.0==[0;16]{return Err(invalid("missing share identity"));}
-    let s=db.prepare(c"SELECT r.volume_id,r.publish_op,p.kind,p.state,m.change_op,m.revision,m.mode,o.kind,o.state FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op LEFT JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=(SELECT max(h.revision) FROM main.share_mode h WHERE h.share_id=r.share_id) LEFT JOIN main.operation o ON o.op_id=m.change_op WHERE r.share_id=?1")?;
-    s.bind_bytes(1,&share.0)?;
-    match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(invalid("share has not been published")),rc=>{check(rc)?;return Err(invalid("cannot select share"));}}
-    let volume=VolumeId(s.array(0)?);let publish=OperationId(s.array(1)?);
-    if publish.0==[0;16]||s.integer(2)?!=3||s.integer(3)?!=1||
-        !c.rows().iter().any(|v|v.volume==volume&&v.role==Role::File){return Err(invalid("share has no active ordinary-root origin"));}
-    let (op,revision,mode)=if unsafe{sqlite3_column_type(s.0,4)}==5{
-        (publish,0,Mode::Disabled)
-    }else{
-        let op=OperationId(s.array(4)?);let rev=s.integer(5)?;
-        if op.0==[0;16]||rev<1||s.integer(7)?!=4||s.integer(8)?!=1{return Err(invalid("share setting has no committed origin"));}
-        (op,rev,Mode::parse(s.byte(6)?)?)
-    };
-    s.done()?;Ok(Setting{share,volume,op,revision,mode})
+    let mut found=None;selected(db,c,share,share,false,1,|s,_|found=Some(s))?;
+    found.ok_or_else(||invalid("share has not been published"))
+}
+pub(super) fn page(db:&Connection,c:&Catalog,after:Option<ShareId>)->io::Result<(Vec<(Setting,String)>,Option<ShareId>)>{
+    const LIMIT:usize=32;let mut rows=Vec::new();
+    selected(db,c,after.unwrap_or(ShareId([0;16])),ShareId([255;16]),true,(LIMIT+1) as u8,|s,name|rows.push((s,name.to_owned())))?;
+    let next=if rows.len()>LIMIT{rows.truncate(LIMIT);rows.last().map(|r|r.0.share)}else{None};
+    Ok((rows,next))
 }
 
 struct Change{pool:PoolId,actor:AccountId,auth:OperationId,op:OperationId,share:ShareId,previous:OperationId,mode:Mode,sha:[u8;32]}

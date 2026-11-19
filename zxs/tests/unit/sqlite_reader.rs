@@ -158,3 +158,6 @@ mod create_file;
 
 #[path="sqlite_first_work.rs"]
 mod first_work;
+
+/// Synthetic committed pool and fixed pair for the Web transport fixture.
+pub(crate) fn web_pool(t:&PrivateTemp)->(PathBuf,PoolId){publication::first(t)}

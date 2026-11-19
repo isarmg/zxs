@@ -26,7 +26,7 @@ pub(crate) fn setup_request(pool:PoolId,init:OperationId,op:OperationId,actor:[u
 }
 
 #[derive(Eq,PartialEq)]
-struct WebCurrent{account:AccountId,op:OperationId,login:String,verifier:Verifier}
+struct WebCurrent{account:AccountId,op:OperationId,login:String,smb_login:String,verifier:Verifier}
 impl WebCurrent{
     fn select(db:&Connection,c:&Catalog)->io::Result<Option<Self>>{
         let s=db.prepare(c"SELECT o.op_id,o.actor_id,o.request_sha,a.approval_ref,a.web_id,a.web_login,a.smb_id,a.smb_login,a.smb_sid,w.credential_op,w.generation,w.salt,w.verifier FROM main.account_pair a JOIN main.operation o ON o.op_id=a.birth_op JOIN main.web_password w ON w.slot=a.singleton WHERE a.singleton=1 AND o.kind=2 AND o.state=1")?;
@@ -37,7 +37,7 @@ impl WebCurrent{
             setup_request(c.birth.pool,c.birth.op,op,actor,approval,login,s.blob(7,64)?,&s.array(8)?)?!=request{
             return Err(invalid("Web credential not bound to the original fixed pair"));
         }
-        let row=Self{account,op,login:login_name(login)?.to_owned(),verifier:Verifier::new(s.array(11)?,s.array(12)?)};
+        let row=Self{account,op,login:login_name(login)?.to_owned(),smb_login:login_name(s.blob(7,64)?)?.to_owned(),verifier:Verifier::new(s.array(11)?,s.array(12)?)};
         s.done()?;Ok(Some(row))
     }
 }
@@ -89,9 +89,9 @@ impl WebAdmin<'_>{
             }
         }
     }
-    fn current(&self,db:&Connection,c:&Catalog)->io::Result<()>{
+    fn current(&self,db:&Connection,c:&Catalog)->io::Result<WebCurrent>{
         let m=WebCurrent::select(db,c)?.ok_or_else(denied)?;
-        if (m.account,m.op)!=(self.account,self.origin){return Err(denied());}Ok(())
+        if (m.account,m.op)!=(self.account,self.origin){return Err(denied());}Ok(m)
     }
     #[cfg(test)]
     pub(super) fn id(&self)->io::Result<AccountId>{self.source.at(|db,c|{self.current(db,&c)?;Ok(self.account)})}
@@ -118,3 +118,6 @@ pub(crate) mod publication;
 
 #[path="share_mode.rs"]
 pub(crate) mod share_mode;
+
+#[path="overview.rs"]
+pub(crate) mod overview;

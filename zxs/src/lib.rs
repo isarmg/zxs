@@ -5,6 +5,7 @@ mod hash;
 mod password;
 mod display;
 mod system;
+pub mod management;
 mod identity;
 mod pool;
 mod ordinary;
