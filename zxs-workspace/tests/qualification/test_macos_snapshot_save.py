@@ -9,6 +9,7 @@ from pathlib import Path
 import errno
 import os
 import sys
+import stat
 import unittest
 from unittest.mock import patch
 
@@ -136,3 +137,55 @@ class SnapshotSave(unittest.TestCase):
             with self.assertRaisesRegex(Uncertain, "正式名称可能已出现"): self.plan.run(confirmed=True)
         with self.assertRaises(Rejected): self.plan.run(confirmed=True)
         self.assertTrue(self.out.is_file())
+
+
+COMPRESSED = os.environ.get("ZIPWORKSPACE_APFS_SYNTHETIC_COMPRESSED_MARKED_ZXS")
+# Operator-prepared inert evidence on the synthetic source. Never create, strip or
+# decompress a real file merely to satisfy this qualification.
+_FIXTURE_XATTR = b"org.zipworkspace.qualification"
+
+
+@unittest.skipUnless(sys.platform == "darwin" and COMPRESSED and SCRATCH,
+                     "requires a pre-existing, system-compressed and quarantined synthetic APFS snapshot")
+class ResidentCompressedSource(unittest.TestCase):
+    def test_resident_but_compressed_is_not_dataless_and_currently_refuses_without_a_clone(self):
+        source = Path(COMPRESSED).absolute()
+        with macos_read.no_materialization(), ExitStack() as held:
+            folder = copy.Folder.choose(Path(SCRATCH).absolute())
+            held.callback(folder.close)
+            p = folder.check()
+            copy._attributes(p, directory=True)
+            doc = held.enter_context(named_document(source))
+            fd = doc.fileno()
+            api = copy.native()
+            self.assertEqual(copy.apfs(fd), copy.apfs(p))  # Includes resident and ownership-enabled checks.
+            meta = os.fstat(fd)
+            self.assertEqual((meta.st_uid, stat.S_IMODE(meta.st_mode), meta.st_nlink),
+                             (os.geteuid(), 0o600, 1))
+            self.assertEqual(meta.st_flags, stat.UF_COMPRESSED)
+            self.assertFalse(source.name.startswith("."))
+            copy.check_spelling(fd, source.name)
+            api.no_acl(fd)
+            def tag():
+                import ctypes
+                buf = ctypes.create_string_buffer(64)
+                n = api.value(fd, _FIXTURE_XATTR, buf, len(buf), 0, 0)
+                self.assertGreater(n, 0)
+                return buf.raw[:n]
+            self.assertEqual(tag(), b"harmless source qualification")
+            selected = Selection.open(source)
+            expected = archive_sha(doc)  # Whole logical ZIP read, not a measure of clone creation time.
+            with self.assertRaises(FileNotFoundError):
+                os.stat(source.name, dir_fd=p, follow_symlinks=False)
+            with api.quarantine(source, fd) as before, patch.object(api, "clone") as clone:
+                # st_flags=UF_COMPRESSED is outside this version's admitted ordinary source.
+                # This is a negative policy case, NOT evidence of successful compressed copying.
+                with self.assertRaisesRegex(Rejected, "0600 普通文件"):
+                    unexpected = copy.SnapshotCopy(selected, folder.evidence.path)
+                    unexpected.close()  # Do not leak if future policy starts admitting this case.
+                clone.assert_not_called()
+                with api.quarantine(source, fd) as after: self.assertTrue(api.equal(before, after))
+            with self.assertRaises(FileNotFoundError):
+                os.stat(source.name, dir_fd=p, follow_symlinks=False)
+            self.assertEqual((tag(), archive_sha(doc), os.fstat(fd).st_flags),
+                             (b"harmless source qualification", expected, stat.UF_COMPRESSED))
