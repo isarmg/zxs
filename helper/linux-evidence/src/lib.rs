@@ -5,6 +5,7 @@
 compile_error!("helper-linux-evidence supports x86_64 Linux LP64 only");
 
 pub mod diagnostic_process;
+pub mod prompt_signals;
 pub mod sqlite_vfs;
 
 use linux_raw_sys::general as uapi;

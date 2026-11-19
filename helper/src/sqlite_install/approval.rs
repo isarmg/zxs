@@ -55,7 +55,7 @@ impl Approved{
 fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 fn escaped(raw:&[u8])->String{raw.iter().copied().flat_map(std::ascii::escape_default).map(char::from).collect()}
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"exact protected host administrator, profile and controlling terminal required")}
-fn same_terminal(input:&io::Stdin,output:&io::Stderr)->io::Result<()>{
+pub(super) fn same_terminal(input:&io::Stdin,output:&io::Stderr)->io::Result<()>{
     let stdout=io::stdout();
     require_terminal(input.as_fd())?;require_terminal(output.as_fd())?;require_terminal(stdout.as_fd())?;
     let a=rustix::fs::fstat(input)?;
@@ -63,7 +63,7 @@ fn same_terminal(input:&io::Stdin,output:&io::Stderr)->io::Result<()>{
         if a.st_dev!=b.st_dev||a.st_ino!=b.st_ino||a.st_rdev!=b.st_rdev{return Err(denied());}
     }Ok(())
 }
-fn no_inherited_descriptors()->io::Result<()>{
+pub(super) fn own_descriptor_table()->io::Result<(File,File)>{
     let flags=OFlags::PATH|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC;
     let proc=File::from(open(c"/proc",flags,Mode::empty())?);
     let mount=Mount::on(&proc)?.filter(|m|m.at_root==Some(true)).ok_or_else(denied)?;
@@ -71,6 +71,10 @@ fn no_inherited_descriptors()->io::Result<()>{
     let dir=File::from(openat2(&proc,c"thread-self/fd",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC,
         Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_MAGICLINKS)?);
     if Mount::on(&dir)?.is_none_or(|m|m.id!=mount.id)||fstatfs(&dir)?.f_type!=PROC_SUPER_MAGIC{return Err(denied());}
+    Ok((proc,dir))
+}
+fn no_inherited_descriptors()->io::Result<()>{
+    let (proc,dir)=own_descriptor_table()?;
     let mut buf=[MaybeUninit::uninit();4096];let mut entries=RawDir::new(&dir,&mut buf);
     while let Some(e)=entries.next(){
         let e=e?;let bytes=e.file_name().to_bytes();if bytes==b"."||bytes==b".."{continue;}
@@ -94,7 +98,7 @@ fn require_host_namespaces(current:[Entity;3],pid1:[Entity;3])->io::Result<()>{
     }
     Ok(())
 }
-fn host_admin()->io::Result<File>{
+pub(super) fn host_admin()->io::Result<File>{
     if !(getuid().is_root()&&geteuid().is_root()&&getgid().is_root()&&getegid().is_root()){return Err(denied());}
     let s=kernel(c"thread-self/status",65536)?;
     for (key,value) in [("Threads:","1"),("Uid:","0 0 0 0"),("Gid:","0 0 0 0")]{
