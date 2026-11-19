@@ -136,7 +136,7 @@ fn missing_changed_or_untrusted_controls_are_not_repaired_or_treated_as_an_empty
     flock(&lookalike,FlockOperation::NonBlockingLockExclusive).unwrap();
     let denied=a.observe().err().unwrap();
     assert_eq!(denied.kind(),io::ErrorKind::InvalidData);
-    assert_eq!(denied.to_string(),"published, foreign or repeated entry in initial-registration SYSTEM");
+    assert_eq!(denied.to_string(),"foreign entry in the initial-registration SYSTEM");
     drop(lookalike);
     fs::remove_file(a.entry(b"initializing")).unwrap();
     fs::rename(saved,a.entry(PENDING)).unwrap();
@@ -154,4 +154,43 @@ fn missing_changed_or_untrusted_controls_are_not_repaired_or_treated_as_an_empty
     appended.write_all(&[0xde,0xad]).unwrap(); drop(appended);
     assert_eq!(a.observe().err().unwrap().kind(),io::ErrorKind::Unsupported);
     assert_eq!(fs::read(a.entry(PENDING)).unwrap(),[a.reg.as_slice(),&[0xde,0xad]].concat());
+}
+
+#[test]
+fn cold_published_observation_holds_the_same_original_without_touching_other_roots() {
+    let a=Fixture::new();
+    a.put(FLOOR,&a.floor); a.put(ROOT_SLOT,&a.mark);
+    fs::rename(a.entry(PENDING),a.entry(READY)).unwrap();
+    let fd=File::open(a.entry(READY)).unwrap();
+    let reg=Stamp::on(&fd).unwrap(); let parent=Stamp::on(&a.host).unwrap();
+    assert!(a.observe().is_err()); // never recover a published register through PENDING
+    let held=HeldReady::observe(&a.host,&a.path,a.uid,&a.request).unwrap();
+    held.check_system(&a.request).unwrap();
+    assert_eq!(flock(&fd,FlockOperation::NonBlockingLockShared).unwrap_err(),rustix::io::Errno::WOULDBLOCK);
+    assert!(reg==Stamp::on(&fd).unwrap() && parent==Stamp::on(&a.host).unwrap());
+    assert!(!a.area.path().join("unmounted-recycler").exists());
+    let mut wrong=a.request.clone(); wrong[55]^=12;
+    assert!(held.check_system(&wrong).is_err());
+    drop(held);
+    flock(&fd,FlockOperation::NonBlockingLockShared).unwrap();
+}
+
+#[test]
+fn missing_or_dual_names_and_small_or_large_published_tails_are_not_empty_ready() {
+    let a=Fixture::new();
+    let observe=||HeldReady::observe(&a.host,&a.path,a.uid,&a.request);
+    fs::rename(a.entry(PENDING),a.entry(READY)).unwrap();
+    a.put(FLOOR,&a.floor); assert!(observe().is_err());
+    a.put(ROOT_SLOT,&a.mark); assert!(observe().is_ok());
+    a.put(PENDING,&a.reg); assert!(observe().is_err());
+    fs::remove_file(a.entry(PENDING)).unwrap();
+    let fd=OpenOptions::new().read(true).write(true).open(a.entry(READY)).unwrap();
+    for at in [a.reg.len() as u64,MAX_GENESIS as u64] {
+        fd.write_all_at(&[0xa5],at).unwrap();
+        let before=Stamp::on(&fd).unwrap();
+        assert_eq!(observe().err().unwrap().kind(),io::ErrorKind::Unsupported);
+        assert!(before==Stamp::on(&fd).unwrap());
+        let mut byte=[0]; fd.read_exact_at(&mut byte,at).unwrap(); assert_eq!(byte,[0xa5]);
+    }
+    assert!(!a.entry(PENDING).exists());
 }

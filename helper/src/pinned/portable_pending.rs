@@ -11,6 +11,7 @@ use std::{
 };
 
 const PENDING: &[u8] = b"INITIALIZING";
+const READY: &[u8] = b"REGISTRATION";
 const FLOOR: &[u8] = b"CONFIRMED";
 
 fn bad(message: &'static str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message) }
@@ -55,8 +56,14 @@ impl Record {
             || s.links != 1 || s.mount != parent.mount || s.entity.dev != parent.entity.dev {
             return Err(bad("control name does not designate a private, singly linked regular file on SYSTEM"));
         }
+        // A grown published register may have ordinary business history. Do
+        // not allocate/read an oversized file or call it corrupt merely for
+        // exceeding this empty-pool observer's window.
+        if name==READY && s.len>MAX_GENESIS as u64 {
+            return Err(unsupported("published register exceeds the empty-registration observation window"));
+        }
         let size_ok = match name {
-            PENDING => (1..=MAX_GENESIS as u64).contains(&s.len),
+            PENDING | READY => (1..=MAX_GENESIS as u64).contains(&s.len),
             FLOOR => s.len == FLOOR_LEN as u64,
             ROOT_SLOT => s.len == CLAIM_LEN as u64,
             _ => false,
@@ -96,24 +103,29 @@ impl Record {
 #[derive(Copy, Clone, Eq, PartialEq)]
 struct Names { floor: bool, marker: bool }
 impl Names {
-    fn read(directory: File) -> io::Result<Self> {
+    fn read(directory: File) -> io::Result<Self> { Self::for_name(directory,PENDING) }
+
+    fn for_name(directory: File, original_name: &'static [u8]) -> io::Result<Self> {
         // This fresh independent description starts at offset zero. RawDir
         // propagates directory read errors rather than calling them a clean EOF.
         let mut buf = [MaybeUninit::<u8>::uninit(); 4096];
         let mut entries = RawDir::new(directory, &mut buf);
-        let (mut dot, mut parent, mut pending, mut floor, mut marker) = (false, false, false, false, false);
+        let (mut dot, mut parent, mut register, mut floor, mut marker) = (false, false, false, false, false);
         while let Some(entry) = entries.next() {
             match entry?.file_name().to_bytes() {
                 b"." if !dot => dot = true,
                 b".." if !parent => parent = true,
-                PENDING if !pending => pending = true,
+                name if name==original_name && !register => register=true,
+                PENDING | READY => return Err(bad("wrong or repeated initial register name on SYSTEM")),
                 FLOOR if !floor => floor = true,
                 ROOT_SLOT if !marker => marker = true,
-                _ => return Err(bad("published, foreign or repeated entry in initial-registration SYSTEM")),
+                FLOOR | ROOT_SLOT => return Err(bad("repeated control name on SYSTEM")),
+                _ if original_name==READY => return Err(unsupported("additional SYSTEM entries are outside empty-registration observation")),
+                _ => return Err(bad("foreign entry in the initial-registration SYSTEM")),
             }
         }
-        if !pending || (marker && !floor) {
-            return Err(bad("no unique pending name, or SYSTEM marker without its confirmation file"));
+        if !register || (marker && !floor) || (original_name==READY && (!floor || !marker)) {
+            return Err(bad("missing the exact register or the required SYSTEM feedback"));
         }
         Ok(Self {floor,marker})
     }
@@ -123,17 +135,39 @@ impl Names {
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub(crate) enum SystemPhase { NoFloor, ZeroFloor, ZeroFloorAndSystemMarker }
 
-/// Keeps the observed registration's nonblocking EX on the very same read-only OFD.
-/// No FD/writer is exposed. The short SYSTEM lock is taken afresh for each sample.
+/// Both observations hold the same original registration OFD exclusively
+/// while offline. A published observation does not enter pending-only actions.
+pub(crate) type HeldPending=SystemRegister<false>;
+pub(crate) type HeldReady=SystemRegister<true>;
 #[must_use]
-pub(crate) struct HeldPending {
+pub(crate) struct SystemRegister<const PUBLISHED: bool> {
     path: Pinned, system: File, uid:u32, register: Record, floor: Option<Record>, marker: Option<Record>,
 }
 impl HeldPending {
+    pub(crate) fn open(host_origin:&File, selected:&Path, uid:u32, expected_body:&[u8])
+        -> io::Result<(Self,SystemPhase)> { Self::open_original(host_origin,selected,uid,expected_body) }
+
+    pub(crate) fn recheck(&self, expected_body:&[u8]) -> io::Result<SystemPhase> {
+        self.sample_in_short_cut(expected_body)
+    }
+}
+impl HeldReady {
+    /// Only original published SYSTEM/GENESIS, its zero floor and SYSTEM's
+    /// marker. No external root is followed, no fsync or confirmation issued.
+    pub(crate) fn observe(host_origin:&File, selected:&Path, uid:u32, expected_body:&[u8])
+        -> io::Result<Self> { Self::open_original(host_origin,selected,uid,expected_body).map(|(held,_)|held) }
+
+    pub(crate) fn check_system(&self,expected_body:&[u8]) -> io::Result<()> {
+        self.sample_in_short_cut(expected_body).map(|_|())
+    }
+}
+impl<const PUBLISHED:bool> SystemRegister<PUBLISHED> {
+    const NAME: &'static [u8]=if PUBLISHED { READY } else { PENDING };
+
     /// host_origin must come from the trusted deployment's independently held
     /// original directory, NOT by reopening a pathname from GENESIS. Equality
     /// below is real-time attribution, not authentication of whoever supplied it.
-    pub(crate) fn open(host_origin: &File, selected: &Path, uid: u32, expected_body: &[u8])
+    fn open_original(host_origin: &File, selected: &Path, uid: u32, expected_body: &[u8])
         -> io::Result<(Self, SystemPhase)> {
         if uid == 0 || uid == u32::MAX || expected_body.is_empty() || expected_body.len() > MAX_GENESIS-32 {
             return Err(bad("expected the original request and protected non-root storage owner"));
@@ -152,14 +186,14 @@ impl HeldPending {
         // Lookup may fold case or normalize names. Do not open/lock a
         // lookalike whose exact raw directory entry was never present. This
         // precheck is not a cut: enumerate again under the actual two locks.
-        Names::read(path.storage_directory()?)?;
-        let register = Record::open(&system, &here, PENDING)?;
+        Names::for_name(path.storage_directory()?,Self::NAME)?;
+        let register = Record::open(&system,&here,Self::NAME)?;
         flock(&register.fd, FlockOperation::NonBlockingLockExclusive)?;
         let cut = path.storage_directory()?;
         flock(&cut, FlockOperation::NonBlockingLockShared)?;
         let before = Stamp::root(&cut, uid)?;
         if before != Stamp::root(&system, uid)? { return Err(bad("SYSTEM changed at lock acquisition")); }
-        let names = Names::read(path.storage_directory()?)?;
+        let names = Names::for_name(path.storage_directory()?,Self::NAME)?;
         let floor = names.floor.then(|| Record::open(&cut, &before, FLOOR)).transpose()?;
         let marker = names.marker.then(|| Record::open(&cut, &before, ROOT_SLOT)).transpose()?;
         let held = Self {path,system,uid,register,floor,marker};
@@ -167,7 +201,7 @@ impl HeldPending {
         Ok((held, stage))
     }
 
-    pub(crate) fn recheck(&self, expected_body:&[u8]) -> io::Result<SystemPhase> {
+    fn sample_in_short_cut(&self, expected_body:&[u8]) -> io::Result<SystemPhase> {
         let cut = self.path.storage_directory()?;
         flock(&cut, FlockOperation::NonBlockingLockShared)?;
         let before = Stamp::root(&cut,self.uid)?;
@@ -179,7 +213,7 @@ impl HeldPending {
         self.register.require_name(cut)?;
         let bytes = self.register.bytes()?;
         let initial = Initial::decode(&bytes).map_err(|e| match e {
-            Invalid::TailNotCovered => unsupported("a register with successor bytes is not an empty pending operation"),
+            Invalid::TailNotCovered => unsupported("an initial register with successor bytes is outside empty-registration observation"),
             _ => bad("not one intact portable initial registration"),
         })?;
         initial.check_request(expected_body).map_err(|_| bad("not the independently selected original request"))?;
@@ -196,10 +230,10 @@ impl HeldPending {
         }
         let named = self.path.storage_directory()?;
         let expected = Names { floor: self.floor.is_some(), marker: self.marker.is_some() };
-        if Names::read(named)? != expected { return Err(bad("SYSTEM controls changed")); }
+        if Names::for_name(named,Self::NAME)? != expected { return Err(bad("SYSTEM controls changed")); }
         for r in [Some(&self.register),self.floor.as_ref(),self.marker.as_ref()].into_iter().flatten() { r.require_name(cut)?; }
         if Stamp::root(cut,self.uid)? != *before || Stamp::root(&self.path.storage_directory()?,self.uid)? != *before {
-            return Err(bad("SYSTEM changed while checking the pending registration"));
+            return Err(bad("SYSTEM changed while checking the original registration"));
         }
         match (expected.floor,expected.marker) {
             (false,false) => Ok(SystemPhase::NoFloor),

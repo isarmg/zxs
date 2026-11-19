@@ -14,8 +14,15 @@ impl<'a> SyncedFloor<'a> {
     }
 }
 
-impl MarkerRun<'_> {
+impl<'a> MarkerRun<'a> {
     pub(super) fn synced_rows(&self) -> usize { self.next }
+
+    pub(super) fn into_fully_synced(self) -> io::Result<LockedGroup<'a>> {
+        if self.next!=self.group.roots.len() {
+            return Err(bad("this operation did not synchronize every original row"));
+        }
+        Ok(self.group)
+    }
 
     fn inventory(&self, row: usize, present: bool) -> io::Result<()> {
         let root=&self.group.roots[row];

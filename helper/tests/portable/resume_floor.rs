@@ -228,3 +228,78 @@ fn full_visible_prefix_with_one_foreign_operation_cannot_be_resumed_or_repaired(
     for i in 0..3 { assert_eq!(fs::read(a.at(i,ROOT_SLOT)).unwrap(),a.claim(i)); }
     assert!(!a.at(0,b"REGISTRATION").exists());
 }
+
+fn synced_marks<'a>(a:&'a Fixture, choices:&'a [(&'a Path,&'a File)], worker:&'a WorkerPolicy)
+    -> super::markers::MarkerRun<'a> {
+    let mut completed=LockedGroup::acquire(a.open(),a.order(choices,worker)).unwrap()
+        .persist_zero().unwrap().markers();
+    for _ in 0..a.names.len() { completed=completed.sync_next().unwrap(); }
+    completed
+}
+
+#[test]
+fn only_all_synchronized_rows_can_publish_and_the_original_ex_survives_the_rename() {
+    use super::publication::PublishError;
+    let a=Fixture::new(false); let choices=a.choices(); let worker=WorkerPolicy::fixture();
+    let original=File::open(a.at(0,PENDING)).unwrap();
+    let mark=Stamp::on(&original).unwrap();
+    let partial=LockedGroup::acquire(a.open(),a.order(&choices,&worker)).unwrap()
+        .persist_zero().unwrap().markers().sync_next().unwrap();
+    assert!(matches!(partial.publish(),Err(PublishError::BeforeRename(_))));
+    assert!(a.at(0,PENDING).exists() && !a.at(0,READY).exists());
+    let all=synced_marks(&a,&choices,&worker); busy(&original);
+    let receipt=all.publish().unwrap();
+    assert!(!a.at(0,PENDING).exists());
+    let named=File::open(a.at(0,READY)).unwrap();
+    assert_eq!(Stamp::on(&named).unwrap().entity,mark.entity);
+    assert_eq!(fs::read(a.at(0,READY)).unwrap(),a.image);
+    assert_eq!(fs::read(a.at(0,FLOOR)).unwrap(),a.zero);
+    for i in 0..a.names.len() { assert_eq!(fs::read(a.at(i,ROOT_SLOT)).unwrap(),a.claim(i)); }
+    busy(&original); busy(&named); for root in &a.origins { busy(root); }
+    receipt.recheck().unwrap(); drop(receipt);
+    flock(&original,FlockOperation::NonBlockingLockShared).unwrap(); drop(original);
+    let ready=HeldReady::observe(&a.origins[0],&a.names[0],a.uid,&a.request).unwrap();
+    let checked=PublishedGroup::confirm(ready,a.order(&choices,&worker)).unwrap(); checked.recheck().unwrap();
+    busy(&named); for root in &a.origins { busy(root); }
+    drop(checked); flock(&named,FlockOperation::NonBlockingLockShared).unwrap();
+}
+
+#[test]
+fn an_occupied_publish_name_leaves_both_it_and_the_original_pending_intact() {
+    use super::publication::PublishError;
+    let a=Fixture::new(false); let choices=a.choices(); let worker=WorkerPolicy::fixture();
+    let all=synced_marks(&a,&choices,&worker);
+    let pending=File::open(a.at(0,PENDING)).unwrap(); let old=Stamp::on(&pending).unwrap();
+    put(&a.at(0,READY),b"foreign owner content");
+    let victim=File::open(a.at(0,READY)).unwrap(); let exact=Stamp::on(&victim).unwrap();
+    assert!(matches!(all.publish(),Err(PublishError::BeforeRename(_))));
+    assert!(Stamp::on(&File::open(a.at(0,PENDING)).unwrap()).unwrap()==old);
+    assert!(Stamp::on(&File::open(a.at(0,READY)).unwrap()).unwrap()==exact);
+    assert_eq!(fs::read(a.at(0,READY)).unwrap(),b"foreign owner content");
+    assert_eq!(fs::read(a.at(0,PENDING)).unwrap(),a.image);
+}
+
+#[test]
+fn visible_renamed_original_without_a_known_parent_sync_is_only_observed_until_full_confirmation() {
+    let a=Fixture::new(false); let choices=a.choices(); let worker=WorkerPolicy::fixture();
+    let all=synced_marks(&a,&choices,&worker); drop(all);
+    let named=File::open(a.at(0,PENDING)).unwrap();
+    // Model the named state after an interruption. This is NOT a power-loss test;
+    // do not sync the parent here or act as if a receipt was already delivered.
+    fs::rename(a.at(0,PENDING),a.at(0,READY)).unwrap();
+    let pool=HeldReady::observe(&a.origins[0],&a.names[0],a.uid,&a.request).unwrap();
+    pool.check_system(&a.request).unwrap(); drop(pool);
+    let missing=a.at(1,ROOT_SLOT);
+    let keep=a._recycle.path().join("unavailable-test-marker"); fs::rename(&missing,&keep).unwrap();
+    let observed=HeldReady::observe(&a.origins[0],&a.names[0],a.uid,&a.request).unwrap();
+    assert!(PublishedGroup::confirm(observed,a.order(&choices,&worker)).is_err());
+    assert!(!missing.exists() && !a.at(0,PENDING).exists());
+    assert_eq!(fs::read(&keep).unwrap(),a.claim(1));
+    // The test owner restores its very same inode. The helper did not recreate, choose or rename it.
+    fs::rename(&keep,&missing).unwrap();
+    let observed=HeldReady::observe(&a.origins[0],&a.names[0],a.uid,&a.request).unwrap();
+    let result=PublishedGroup::confirm(observed,a.order(&choices,&worker)).unwrap();
+    result.recheck().unwrap(); busy(&named); drop(result);
+    assert_eq!(fs::read(a.at(0,READY)).unwrap(),a.image);
+    assert_eq!(fs::read(missing).unwrap(),a.claim(1));
+}

@@ -2,6 +2,7 @@
 //! A storage worker's OS identity is not approval of a particular operation.
 mod feedback_file;
 mod markers;
+mod publication;
 mod zero_floor;
 
 use super::*;
@@ -108,14 +109,20 @@ impl Root<'_> {
     }
 }
 
-struct LockedGroup<'a> { source: HeldPending, order: FloorOrder<'a>, roots: Vec<Root<'a>> }
+// Pending-only feedback methods are implemented on LockedGroup, never on a
+// published selection. Both selections use the same original-root checks.
+type LockedGroup<'a>=RootSession<'a,false>;
+type PublishedGroup<'a>=RootSession<'a,true>;
+struct RootSession<'a,const PUBLISHED:bool> {
+    source:SystemRegister<PUBLISHED>, order:FloorOrder<'a>, roots:Vec<Root<'a>>,
+}
 
-impl<'a> LockedGroup<'a> {
-    fn acquire(source:HeldPending, order:FloorOrder<'a>) -> io::Result<Self> {
+impl<'a,const PUBLISHED:bool> RootSession<'a,PUBLISHED> {
+    fn acquire(source:SystemRegister<PUBLISHED>, order:FloorOrder<'a>) -> io::Result<Self> {
         order.worker.require(source.uid)?;
         // Re-establish the original S and exact request before the first open
         // of even a caller-selected R/F. This short SH is gone before root EXs.
-        source.recheck(order.request)?;
+        source.sample_in_short_cut(order.request)?;
         let bytes = source.register.bytes()?;
         let original = Initial::decode(&bytes).map_err(|_| bad("not an empty portable pending request"))?;
         original.check_request(order.request).map_err(|_| bad("wrong original request"))?;
@@ -190,7 +197,11 @@ impl<'a> LockedGroup<'a> {
         }
         let floor=source.floor.as_ref().map(Record::bytes).transpose()?;
         let marks=markers.iter().map(Option::as_deref).collect::<Vec<_>>();
-        original.pending_feedback(floor.as_deref(),&marks).map_err(|_| bad("foreign or out-of-order feedback on a selected original"))?;
+        let matched=original.pending_feedback(floor.as_deref(),&marks)
+            .map_err(|_| bad("foreign or out-of-order feedback on a selected original"))?;
+        if PUBLISHED && matched!=self.roots.len() {
+            return Err(bad("published empty registration lacks a matching marker on every selected original"));
+        }
         let end=HostMounts::current()?;
         for (i,(r,before)) in self.roots.iter().zip(&stamps).enumerate() {
             if r.ancestry(&end,self.order.host_root)?!=mounts[i] || r.require_origin(source.uid)?!=*before {
