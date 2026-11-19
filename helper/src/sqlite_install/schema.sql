@@ -3,15 +3,16 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 
 -- Both INIT (1) and SETUP_PAIR (2) name a separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
 -- SET_SHARE_MODE (4) changes one share; no per-user ACL.
+-- CREATE_FILE (5) reserves one ordinary root member before any media write.
 -- An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4)),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
@@ -121,10 +122,47 @@ BEGIN SELECT RAISE(ABORT,'share mode requires this predecessor, a different mode
 CREATE TRIGGER keep_share_mode BEFORE UPDATE ON share_mode BEGIN SELECT RAISE(ABORT,'immutable share mode origin'); END;
 CREATE TRIGGER retain_share_mode BEFORE DELETE ON share_mode BEGIN SELECT RAISE(ABORT,'retain share mode origin'); END;
 
+-- One physical ordinary root, one byte-exact namespace even if it has many
+-- share definitions. The first issuer creates only manual, unborn FILEs;
+-- future directory membership must occupy this same (volume,display) domain.
+CREATE TABLE root_entry (
+  create_op    BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  share_id     BLOB NOT NULL REFERENCES root_share(share_id),
+  setting_op   BLOB NOT NULL REFERENCES share_mode(change_op),
+  auth_op      BLOB NOT NULL REFERENCES smb_password(credential_op),
+  volume_id    BLOB NOT NULL REFERENCES volume_claim(volume_id),
+  display      BLOB NOT NULL CHECK(length(display) BETWEEN 1 AND 222 AND instr(display,X'00')=0),
+  terminal     BLOB NOT NULL CHECK(length(terminal)=length(display)+33 AND instr(terminal,X'00')=0),
+  entry_id     BLOB NOT NULL UNIQUE CHECK(length(entry_id)=16 AND entry_id<>zeroblob(16)),
+  file_id      BLOB NOT NULL UNIQUE CHECK(length(file_id)=16 AND file_id<>zeroblob(16)),
+  history_id   BLOB NOT NULL UNIQUE CHECK(length(history_id)=16 AND history_id<>zeroblob(16)),
+  branch_id    BLOB NOT NULL UNIQUE CHECK(length(branch_id)=16 AND branch_id<>zeroblob(16)),
+  ticket       BLOB NOT NULL UNIQUE CHECK(length(ticket)=16 AND ticket<>zeroblob(16) AND ticket<>create_op
+                          AND ticket<>X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'),
+  UNIQUE(volume_id, display),
+  UNIQUE(volume_id, terminal)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER start_root_entry BEFORE INSERT ON root_entry
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
+  OR EXISTS(SELECT 1 FROM root_entry WHERE create_op=NEW.create_op OR entry_id=NEW.entry_id OR file_id=NEW.file_id
+             OR history_id=NEW.history_id OR branch_id=NEW.branch_id OR ticket=NEW.ticket
+             OR (volume_id=NEW.volume_id AND (display=NEW.display OR terminal=NEW.terminal)))
+  OR NOT EXISTS(SELECT 1 FROM root_share r JOIN share_mode m ON m.share_id=r.share_id
+       JOIN operation p ON p.op_id=m.change_op JOIN smb_password a ON a.credential_op=NEW.auth_op
+       WHERE r.share_id=NEW.share_id AND r.volume_id=NEW.volume_id AND m.change_op=NEW.setting_op AND m.mode=2
+         AND p.kind=4 AND p.state=1 AND m.revision=(SELECT max(x.revision) FROM share_mode x WHERE x.share_id=r.share_id))
+BEGIN SELECT RAISE(ABORT,'FILE requires this live read-write share, original SMB credential and vacant root member'); END;
+CREATE TRIGGER keep_entry BEFORE UPDATE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE birth'); END;
+CREATE TRIGGER retain_entry BEFORE DELETE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE reservation'); END;
+
 -- SETUP_PAIR prepares both fixed slots in one transaction. Deferred FKs
 -- force their kind-2 receipt before commit; no half-provisioned identity.
 CREATE TRIGGER new_origin BEFORE INSERT ON operation
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) AND kind=NEW.kind))
+  OR (NEW.kind<>5 AND EXISTS(SELECT 1 FROM root_entry WHERE create_op=NEW.op_id))
+  OR (NEW.kind=5 AND (NEW.state<>0 OR NOT EXISTS(
+    SELECT 1 FROM root_entry e JOIN smb_password s ON s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
+    WHERE e.create_op=NEW.op_id AND a.smb_id=NEW.actor_id)))
   OR (NEW.kind<>4 AND EXISTS(SELECT 1 FROM share_mode WHERE change_op=NEW.op_id))
   OR (NEW.kind<>3 AND EXISTS(SELECT 1 FROM root_share WHERE publish_op=NEW.op_id))
   OR (NEW.kind<>2 AND EXISTS(SELECT 1 FROM account_pair WHERE birth_op=NEW.op_id))
@@ -196,8 +234,12 @@ CREATE TRIGGER retain_claim BEFORE DELETE ON volume_claim BEGIN SELECT RAISE(ABO
 -- Schema-level shape only: cannot prove authorization, actual labels, full
 -- file/parent sync or an independent R filesystem. The offline writer must
 -- already hold those independent proofs at its final conditional update.
-CREATE TRIGGER complete_init BEFORE UPDATE OF state ON operation
-WHEN OLD.state<>0 OR NEW.state<>1 OR NOT EXISTS(
-  SELECT 1 FROM pool_birth AS b
-  WHERE b.init_op=OLD.op_id AND b.root_count=(SELECT count(*) FROM volume_claim WHERE claim_op=OLD.op_id))
-BEGIN SELECT RAISE(ABORT,'incomplete or already completed INIT'); END;
+CREATE TRIGGER confirm_origin BEFORE UPDATE OF state ON operation
+WHEN OLD.state<>0 OR NEW.state<>1 OR NOT (
+  (OLD.kind=1 AND EXISTS(SELECT 1 FROM pool_birth b WHERE b.init_op=OLD.op_id
+    AND b.root_count=(SELECT count(*) FROM volume_claim WHERE claim_op=OLD.op_id))) OR
+  (OLD.kind=5 AND EXISTS(SELECT 1 FROM root_entry e JOIN share_mode m ON m.change_op=e.setting_op
+    JOIN smb_password s ON s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
+    WHERE e.create_op=OLD.op_id AND a.smb_id=OLD.actor_id AND m.mode=2
+      AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=e.share_id))))
+BEGIN SELECT RAISE(ABORT,'incomplete, revoked or already completed operation'); END;

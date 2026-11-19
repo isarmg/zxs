@@ -51,6 +51,11 @@ impl Group{
     pub(super) fn limits(&self)->&[u8]{&self.limits}
     pub(super) fn uid(&self)->u32{self.uid}
     pub(super) fn scan_names(&self,i:usize,allowed:&[&[u8]])->io::Result<()>{
+        if self.controls(i,allowed)?.contains(&false){return Err(bad("missing expected root control name"));}Ok(())
+    }
+    // Presence and raw spelling come from a complete independent directory
+    // stream, not case-insensitive name lookup or an ENOENT from an old parent.
+    pub(super) fn controls(&self,i:usize,allowed:&[&[u8]])->io::Result<Vec<bool>>{
         let mut seen=vec![false;allowed.len()];
         // Independent directory offset; NEVER iterate with a dup of the EX OFD.
         let again=self.originals.selected[i].storage_directory()?;
@@ -62,9 +67,8 @@ impl Group{
             let j=allowed.iter().position(|s|*s==name).ok_or_else(||bad("original root holds an unknown entry; no takeover"))?;
             if std::mem::replace(&mut seen[j],true){return Err(bad("duplicated root control name"));}
         }
-        if seen.contains(&false){return Err(bad("missing expected root control name"));}
         self.check_root(i)?;
-        Ok(())
+        Ok(seen)
     }
     fn check_root(&self,i:usize)->io::Result<()>{
         let r=&self.originals.selected[i];let f=&self.dirs[i];let m=f.metadata()?;

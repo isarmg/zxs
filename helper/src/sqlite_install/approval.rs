@@ -1,16 +1,20 @@
 //! One foreground local administrator authorizes one already-pinned set. No
 //! browser, environment, SQL row, plain UID argument or saved grant can issue it.
-use super::{originals::Originals,request::{Id,Request}};
+use super::{Purpose,originals::Originals,request::{Id,Request}};
 use crate::{disk_web::require_terminal,fs_tools::RuntimeFile,maintenance::{diagnostic_worker,thread_file},pinned::{Entity,Mount}};
-use rustix::{fs::{Mode,OFlags,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2},process::{Gid,Uid,getgid,getuid,getegid,geteuid},
+use rustix::{fs::{Mode,OFlags,RawDir,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2},process::{Gid,Uid,getgid,getuid,getegid,geteuid},
     thread::{set_keep_capabilities,set_no_new_privs,set_thread_groups,set_thread_res_gid,set_thread_res_uid}};
-use std::{ffi::CStr,fs::File,io::{self,BufRead,Read,Write},os::{fd::AsFd,unix::{ffi::OsStrExt,fs::MetadataExt}},path::PathBuf};
+use std::{ffi::CStr,fs::File,io::{self,BufRead,Read,Write},mem::MaybeUninit,os::{fd::{AsFd,AsRawFd},unix::{ffi::OsStrExt,fs::MetadataExt}},path::PathBuf};
 const PROFILE:&[&str]=&["etc","local-ops-helper","installer.identity"];
 
-pub(super) struct Approved {request:Request, originals:Originals}
+pub(super) struct Approved {request:Request, originals:Originals, purpose:Purpose}
 impl Approved{
     /// Non-secret op/reference may be recorded BEFORE any write; they are not authority.
-    pub(super) fn foreground(op:Id,reference:Id,paths:Vec<PathBuf>)->io::Result<Self>{
+    pub(super) fn foreground(purpose:Purpose,op:Id,reference:Id,paths:Vec<PathBuf>)->io::Result<Self>{
+        // A privileged FD inherited across lowering credentials retains its
+        // original rights. A fresh terminal tool accepts only stdio, no inherited
+        // file/socket/cwd-like authority from a shell, web worker or supervisor.
+        no_inherited_descriptors()?;
         let host=host_admin()?;let (actor,uid,gid)=profile()?;
         let request=Request::new(op,actor,reference,uid,paths)?;
         // Check paths/SQLite capabilities before even showing a proposal. No SQL
@@ -20,15 +24,19 @@ impl Approved{
         let stdin=io::stdin();let stderr=io::stderr();
         same_terminal(&stdin,&stderr)?;
         let mut tty=stderr.lock();let dig=hex(&request.sha());
-        writeln!(tty,"仅本机首次建池。不会格式化或清空卷；将新建唯一 SYSTEM.sqlite3 并认领下面所有专用目录。")?;
+        let verb=match purpose {
+            Purpose::Fresh=>{writeln!(tty,"新建空池：将创建 SYSTEM.sqlite3、写入原卷标并提交初始卷组。不会格式化、清空或覆盖。")?;"INIT"}
+            Purpose::Original=>{writeln!(tty,"续原单：仅当下面仍是原先确认的原目录/介质时，才可重同步并补齐该原单的卷标；已提交则只读历史回执。不新建数据库。")?;"RESUME"}
+        };
         writeln!(tty,"原操作 {}，审批参考 {}，本机维护主体 {}，存储 UID/GID {uid}/{gid}。请先保存这两个操作参考。",hex(&op),hex(&reference),hex(&actor))?;
         for (i,n) in originals.selected.iter().enumerate(){
             let label=match i {0=>"SYSTEM",1=>"RECYCLE",_=>"FILE"};
             writeln!(tty,"{label}  {}  [dev {}, inode {}, mount {}]",escaped(n.path().as_os_str().as_bytes()),n.entity().dev,n.entity().ino,n.mount()?.id)?;
         }
-        writeln!(tty,"仅当以上为本机受控的全新专用目录、承载可靠本地锁/同步、回收卷与所有其他角色确为独立文件系统时，输入 INIT {dig}。其他输入不操作。")?;tty.flush()?;
-        let mut text=Vec::new();let n=stdin.lock().take(72).read_until(b'\n',&mut text)?;
-        if n!=70 || text!=format!("INIT {dig}\n").as_bytes(){return Err(io::Error::new(io::ErrorKind::PermissionDenied,"the local operator did not approve this exact installation"));}
+        writeln!(tty,"请独立核实这些精确原件、受控的本机目录/锁/同步，以及回收卷确为独立文件系统后，输入 {verb} {dig}。不确定就取消。")?;tty.flush()?;
+        let confirm=format!("{verb} {dig}\n");let mut text=Vec::new();
+        stdin.lock().take(confirm.len() as u64+1).read_until(b'\n',&mut text)?;
+        if text!=confirm.as_bytes(){return Err(io::Error::new(io::ErrorKind::PermissionDenied,"the local operator did not approve this exact installation"));}
         drop(tty);same_terminal(&stdin,&stderr)?;
         let host_again=host_admin()?;originals.require_host(&host_again)?;drop(host_again);
         if profile()? != (actor,uid,gid){return Err(denied());}
@@ -39,18 +47,37 @@ impl Approved{
         let g=Gid::from_raw(gid);let u=Uid::from_raw(uid);
         set_thread_res_gid(g,g,g)?;set_thread_res_uid(u,u,u)?;
         diagnostic_worker(uid,gid)?;  // all four UIDs/GIDs, no extra groups, caps, or threads
-        Ok(Self{request,originals})
+        Ok(Self{request,originals,purpose})
     }
-    pub(super) fn into_parts(self)->(Request,Originals){(self.request,self.originals)}
+    pub(super) fn into_parts(self)->(Purpose,Request,Originals){(self.purpose,self.request,self.originals)}
 }
 
 fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 fn escaped(raw:&[u8])->String{raw.iter().copied().flat_map(std::ascii::escape_default).map(char::from).collect()}
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"exact protected host administrator, profile and controlling terminal required")}
 fn same_terminal(input:&io::Stdin,output:&io::Stderr)->io::Result<()>{
-    require_terminal(input.as_fd())?;require_terminal(output.as_fd())?;
-    let a=rustix::fs::fstat(input)?;let b=rustix::fs::fstat(output)?;
-    if a.st_dev!=b.st_dev||a.st_ino!=b.st_ino||a.st_rdev!=b.st_rdev{return Err(denied());}Ok(())
+    let stdout=io::stdout();
+    require_terminal(input.as_fd())?;require_terminal(output.as_fd())?;require_terminal(stdout.as_fd())?;
+    let a=rustix::fs::fstat(input)?;
+    for b in [rustix::fs::fstat(output)?,rustix::fs::fstat(stdout)?]{
+        if a.st_dev!=b.st_dev||a.st_ino!=b.st_ino||a.st_rdev!=b.st_rdev{return Err(denied());}
+    }Ok(())
+}
+fn no_inherited_descriptors()->io::Result<()>{
+    let flags=OFlags::PATH|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC;
+    let proc=File::from(open(c"/proc",flags,Mode::empty())?);
+    let mount=Mount::on(&proc)?.filter(|m|m.at_root==Some(true)).ok_or_else(denied)?;
+    if fstatfs(&proc)?.f_type!=PROC_SUPER_MAGIC{return Err(denied());}
+    let dir=File::from(openat2(&proc,c"thread-self/fd",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC,
+        Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_MAGICLINKS)?);
+    if Mount::on(&dir)?.is_none_or(|m|m.id!=mount.id)||fstatfs(&dir)?.f_type!=PROC_SUPER_MAGIC{return Err(denied());}
+    let mut buf=[MaybeUninit::uninit();4096];let mut entries=RawDir::new(&dir,&mut buf);
+    while let Some(e)=entries.next(){
+        let e=e?;let bytes=e.file_name().to_bytes();if bytes==b"."||bytes==b".."{continue;}
+        let fd=std::str::from_utf8(bytes).ok().and_then(|s|s.parse::<i32>().ok()).ok_or_else(denied)?;
+        if !matches!(fd,0..=2)&&fd!=proc.as_raw_fd()&&fd!=dir.as_raw_fd(){return Err(denied());}
+    }
+    Ok(())
 }
 fn fields(raw:&[u8])->impl Iterator<Item=&[u8]>{raw.split(u8::is_ascii_whitespace).filter(|s|!s.is_empty())}
 fn kernel(name:&CStr,max:u64)->io::Result<Vec<u8>>{

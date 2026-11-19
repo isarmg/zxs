@@ -25,9 +25,9 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "helper: read-only local diagnostics (Linux x86_64)\n\
+const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper install-pool new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -37,6 +37,7 @@ enum Command {
     Directories(Vec<PathBuf>),
     Compare(PathBuf, PathBuf),
     Storage(Selection),
+    Install(sqlite_install::Installation),
     Disks(block_tools::Query),
     DiskWeb(Option<fat32_check::Request>),
     SealedWorker([u8;32]),
@@ -51,6 +52,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if args.next().is_some() { return Err("unexpected argument"); }
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
+    if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "disk-web" {
         return match args.next(){
             None=>Ok(Command::DiskWeb(None)),
@@ -91,6 +93,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
     match command {
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::SealedWorker(digest) => return Ok(ExitCode::from(fat32_check::panel::worker(digest).unwrap_or(2))),
+        Command::Install(i)=>line(&i.run()?)?,
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,

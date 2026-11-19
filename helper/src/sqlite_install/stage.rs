@@ -29,13 +29,31 @@ impl Issue{
     }
 }
 
-pub(super) struct Pending{pub(super) pool:Id,pub(super) op:Id}
-pub(super) fn begin(approved:Approved)->io::Result<Pending>{
-    let (request,originals)=approved.into_parts();let group=originals.lock(request.uid())?;
-    let issue=Issue::new(group.dirs().len())?;
-    first(&request,&group,&issue)
+pub(super) struct Pending<'g>{pub(super) pool:Id,pub(super) op:Id,
+    source:Reserved<'g>,result:Vec<(Id,[u8;32])>}
+impl Pending<'_>{
+    pub(super) fn require(&self,db:&super::reservation::Existing<'_>,cat:&super::catalog::Catalog,r:&Request)->io::Result<()>{
+        if self.op!=r.op()||self.pool!=cat.pool||cat.committed||!self.source.same_existing(db)
+          ||self.result.len()!=cat.markers.len()||self.result.iter().zip(&cat.markers).any(|((v,t),m)| &m[37..53]!=v.as_slice()||&m[69..]!=t.as_slice()){
+            return Err(bad("fresh original database or its issued results changed before material enrollment"));
+        }
+        Ok(())
+    }
 }
-fn first(request:&Request,group:&Group,issue:&Issue)->io::Result<Pending>{
+pub(super) fn install(approved:Approved)->io::Result<super::complete::Receipt>{
+    let (purpose,request,originals)=approved.into_parts();
+    // Ensure the exact bounded release schema is accepted before reserving a real DB.
+    let template=super::catalog::Canonical::new()?;
+    let group=originals.lock(request.uid())?;
+    if matches!(purpose,super::Purpose::Fresh){
+        let p=first(&request,&group,&Issue::new(group.dirs().len())?)?;
+        let done=super::complete::original(&template,&request,&group,Some(&p))?;
+        if done.pool!=p.pool||done.op!=p.op||done.previous{return Err(bad("fresh result did not agree with its own pending original"));}
+        return Ok(done);
+    }
+    super::complete::original(&template,&request,&group,None)
+}
+fn first<'g>(request:&Request,group:&'g Group,issue:&Issue)->io::Result<Pending<'g>>{
     if group.limits().len()!=issue.rows.len()||issue.rows.len()!=request.paths().len(){return Err(bad("incomplete proposed original result"));}
     let reserved=Reserved::create(group,request)?;
     // Both the original group and its S OFD outlive this connection and all its
@@ -62,7 +80,7 @@ fn first(request:&Request,group:&Group,issue:&Issue)->io::Result<Pending>{
     {let slice=db.transaction().map_err(fail)?;
      let app:i64=slice.query_row("PRAGMA main.application_id",[],|r|r.get(0)).map_err(fail)?;
      let version:i64=slice.query_row("PRAGMA main.user_version",[],|r|r.get(0)).map_err(fail)?;
-     if (app,version)!=(0x5a585331,4){return Err(bad("fresh database does not identify the agreed schema"));}
+     if (app,version)!=(0x5a585331,super::catalog::SCHEMA_VERSION){return Err(bad("fresh database does not identify the agreed schema"));}
      let mut stmt=slice.prepare(include_str!("initial-catalog.sql")).map_err(fail)?;
      let mut rows=stmt.query([&issue.pool[..]]).map_err(fail)?;
      for(i,((id,token),path))in issue.rows.iter().zip(request.paths()).enumerate(){
@@ -80,7 +98,7 @@ fn first(request:&Request,group:&Group,issue:&Issue)->io::Result<Pending>{
     reserved.sync_parent()?;group.scan_names(0,&[super::DATABASE.as_bytes()])?;
     for i in 1..issue.rows.len(){group.scan_names(i,&[])?;}
     group.recheck()?;reserved.require_name(false)?;
-    Ok(Pending{pool:issue.pool,op})
+    Ok(Pending{pool:issue.pool,op,source:reserved,result:issue.rows.clone()})
 }
 
 #[cfg(test)]

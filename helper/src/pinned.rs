@@ -133,6 +133,17 @@ impl LocalDataFile {
     }
 }
 
+/// A fixed 101-byte SQLite claim, only below a separately authorized and
+/// held storage directory. Never a data/backup/health or caller-path reader.
+pub(crate) fn sqlite_claim_reader(pin:&File,entity:Entity,mount:u64)->io::Result<File>{
+    let m=pin.metadata()?;
+    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)||!m.is_file()||m.mode()&0o7777!=0o600||
+        m.nlink()!=1||m.len()!=101||Entity::of(&m)?!=entity||Mount::on(pin)?.is_none_or(|v|v.id!=mount){
+        return Err(invalid("not an original SQLite enrollment marker"));
+    }
+    reopen_admitted_reader(pin,entity,ReaderBoundary::SelectedControlMount(mount))
+}
+
 /// Upgrade an original O_PATH private regular inode only; never use its mutable pathname.
 /// The caller must independently recheck the original name, held birth, protocol and lock.
 pub(crate) fn private_inode_reader(pin: &File, uid: u32, expected_mount: u64) -> io::Result<File> {

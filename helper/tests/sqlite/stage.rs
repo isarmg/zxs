@@ -89,3 +89,82 @@ fn empty_old_attribute_on_selected_leaf_or_ancestor_never_creates_a_new_db(){
         let mut buf=[0u8;1];assert_eq!(fgetxattr(&before,c"user.zxs.volume",&mut buf[..]).unwrap(),0);
     }
 }
+
+fn deterministic_issue()->Issue{Issue{pool:[4;16],rows:(0..3).map(|i|([0x11+i;16],[0x21+i;32])).collect()}}
+fn expected_marker(i:usize)->Vec<u8>{
+    // Independent literal of the public SQL protocol, not the production encoder.
+    let mut b=b"ZXS-SQLITE-1/VOLUME\0".to_vec();b.push([0,1,2][i]);b.extend([4;16]);
+    b.extend([0x11+i as u8;16]);b.extend([1;16]);b.extend([0x21+i as u8;32]);b
+}
+fn mark_path(a:&Area,i:usize)->PathBuf{a.roots[i].join(std::ffi::OsStr::from_bytes(super::super::MARKER))}
+fn private_contents(p:&std::path::Path,b:&[u8]){
+    let mut f=OpenOptions::new().write(true).create_new(true).mode(0o600).open(p).unwrap();
+    std::io::Write::write_all(&mut f,b).unwrap();f.sync_all().unwrap();
+    File::open(p.parent().unwrap()).unwrap().sync_all().unwrap();
+}
+#[test]
+fn cold_same_op_finishes_partially_labeled_roots_and_retry_does_not_recreate_missing_marker(){
+    use super::super::complete;
+    let a=Area::new();let r=a.request();let g=a.pin(&r).lock(a.uid).unwrap();
+    let pending=first(&r,&g,&deterministic_issue()).unwrap();
+    assert_eq!(pending.pool,[4;16]);drop(pending);drop(g);
+    private_contents(&mark_path(&a,0),&expected_marker(0));let s=fs::metadata(mark_path(&a,0)).unwrap();
+    let mut wrong=r.paths().to_vec();wrong[2]=a._f.path().join("other");
+    fs::create_dir(&wrong[2]).unwrap();fs::set_permissions(&wrong[2],fs::Permissions::from_mode(0o700)).unwrap();
+    let q=Request::new([1;16],[2;16],[3;16],a.uid,wrong).unwrap();
+    let g=a.pin(&q).lock(a.uid).unwrap();assert!(complete::original(&super::super::catalog::Canonical::new().unwrap(),&q,&g,None).is_err());drop(g);
+    assert!(!mark_path(&a,1).try_exists().unwrap());
+    let g=a.pin(&r).lock(a.uid).unwrap();let other=File::open(&a.roots[0]).unwrap();
+    let done=complete::original(&super::super::catalog::Canonical::new().unwrap(),&r,&g,None).unwrap();assert!(!done.previous);assert_eq!(done.pool,[4;16]);
+    assert_eq!(flock(&other,FlockOperation::NonBlockingLockShared).unwrap_err(),rustix::io::Errno::WOULDBLOCK);
+    for i in 0..3{assert_eq!(fs::read(mark_path(&a,i)).unwrap(),expected_marker(i));}
+    assert_eq!(fs::metadata(mark_path(&a,0)).unwrap().ino(),s.ino());drop(g);
+    let g=a.pin(&r).lock(a.uid).unwrap();fs::remove_file(mark_path(&a,1)).unwrap();
+    let history=complete::original(&super::super::catalog::Canonical::new().unwrap(),&r,&g,None).unwrap();assert!(history.previous);assert_eq!(history.op,r.op());
+    assert!(!mark_path(&a,1).try_exists().unwrap());drop(g);flock(&other,FlockOperation::NonBlockingLockShared).unwrap();
+}
+#[test]
+fn unknown_last_marker_or_truncated_first_marker_neither_gets_overwritten_nor_publishes(){
+    use super::super::complete;
+    for (i,data) in [(2,expected_marker(1)),(0,b"partial".to_vec())]{
+        let a=Area::new();let r=a.request();let g=a.pin(&r).lock(a.uid).unwrap();
+        let p=first(&r,&g,&deterministic_issue()).unwrap();private_contents(&mark_path(&a,i),&data);
+        let m=fs::metadata(mark_path(&a,i)).unwrap();assert!(complete::original(&super::super::catalog::Canonical::new().unwrap(),&r,&g,Some(&p)).is_err());
+        assert_eq!(fs::read(mark_path(&a,i)).unwrap(),data);assert_eq!(fs::metadata(mark_path(&a,i)).unwrap().ino(),m.ino());
+        for j in (0..3).filter(|&j|j!=i){assert!(!mark_path(&a,j).try_exists().unwrap());}
+        let db=rusqlite::Connection::open_with_flags_and_vfs(a.db(),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY|rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,c"unix").unwrap();
+        assert_eq!(db.query_row("SELECT state FROM operation WHERE kind=1",[],|row|row.get::<_,i64>(0)).unwrap(),0);
+    }
+}
+#[test]
+fn original_authorization_never_creates_an_absent_db_or_recovers_an_unknown_journal(){
+    use super::super::complete;
+    let a=Area::new();let r=a.request();let g=a.pin(&r).lock(a.uid).unwrap();
+    assert!(complete::original(&super::super::catalog::Canonical::new().unwrap(),&r,&g,None).is_err());assert!(!a.db().try_exists().unwrap());
+    let p=first(&r,&g,&deterministic_issue()).unwrap();
+    let j=a.roots[0].join("SYSTEM.sqlite3-journal");private_contents(&j,b"leave foreign rollback evidence");
+    assert!(complete::original(&super::super::catalog::Canonical::new().unwrap(),&r,&g,Some(&p)).is_err());assert_eq!(fs::read(&j).unwrap(),b"leave foreign rollback evidence");
+    assert!(!mark_path(&a,0).try_exists().unwrap());
+}
+#[test]
+fn real_sqlite_schema_for_the_same_version_must_not_have_undeclared_objects(){
+    use super::super::complete;
+    let a=Area::new();let r=a.request();let g=a.pin(&r).lock(a.uid).unwrap();
+    let p=first(&r,&g,&deterministic_issue()).unwrap();
+    let db=rusqlite::Connection::open_with_flags_and_vfs(a.db(),rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE|rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,c"unix").unwrap();
+    db.execute_batch("CREATE TABLE alien(x BLOB);").unwrap();db.close().unwrap();
+    assert!(complete::original(&super::super::catalog::Canonical::new().unwrap(),&r,&g,Some(&p)).is_err());assert!(!mark_path(&a,0).try_exists().unwrap());
+}
+#[test]
+fn unrelated_file_appearing_after_marker_sync_blocks_sql_completion_and_stays_intact(){
+    use super::super::{catalog::Canonical,complete,markers::Synced,reservation::Existing};
+    let a=Area::new();let r=a.request();let g=a.pin(&r).lock(a.uid).unwrap();
+    let p=first(&r,&g,&deterministic_issue()).unwrap();let db=Existing::observe(&g,&r).unwrap();
+    let tpl=Canonical::new().unwrap();let claim=complete::snapshot(&db,&tpl,&g,&r).unwrap();
+    p.require(&db,&claim,&r).unwrap();let marks=Synced::install(&g,&db,&claim.markers).unwrap();
+    let other=a.roots[1].join("belongs-to-operator");private_contents(&other,b"keep me");
+    assert!(complete::publish(&db,&tpl,&g,&r,&claim,&marks).is_err());
+    assert!(!complete::snapshot(&db,&tpl,&g,&r).unwrap().committed);
+    assert_eq!(fs::read(&other).unwrap(),b"keep me");
+    for i in 0..3{assert_eq!(fs::read(mark_path(&a,i)).unwrap(),expected_marker(i));}
+}

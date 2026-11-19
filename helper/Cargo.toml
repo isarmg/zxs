@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2024"
 rust-version = "1.100"
 license = "Apache-2.0"
-description = "Read-only diagnostics for explicitly selected local directories and files"
+description = "Local storage diagnostics and explicitly authorized offline pool installation"
 publish = false
 
 [workspace]
@@ -16,7 +16,7 @@ name = "helper"
 path = "src/main.rs"
 
 [dependencies]
-rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled"] }
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled", "limits"] }
 httparse = "=1.10.1"
 helper-linux-evidence = { path = "linux-evidence" }
 rustix = { version = "=1.1.5", features = ["fs", "pipe", "process", "rand", "termios", "thread"] }
