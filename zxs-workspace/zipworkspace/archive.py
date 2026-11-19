@@ -2,6 +2,7 @@
 from __future__ import annotations
 from contextlib import nullcontext
 import hashlib
+import io
 import os
 from pathlib import Path
 import stat
@@ -14,13 +15,14 @@ LOC = struct.Struct("<4sIQI")
 EOCD64 = struct.Struct("<4sQ2H2I4Q")
 
 
-def bounded_directory(f):
-    end = f.seek(0, os.SEEK_END)
+def bounded_directory(f, end=None):
+    if end is None: end = f.seek(0, os.SEEK_END)
     if end < EOCD.size or end > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
         raise Rejected("archive length outside budget")
     f.seek(max(0, end - 65535 - EOCD.size))
     tail_start = f.tell()
-    tail = f.read()
+    tail = f.read(end - tail_start)
+    if len(tail) != end - tail_start: raise Rejected("archive ended before its selected length")
     i = tail.rfind(b"PK\x05\x06")
     if i < 0 or len(tail) - i < EOCD.size:
         raise Rejected("missing end of central directory")
@@ -30,12 +32,16 @@ def bounded_directory(f):
     pos = tail_start + i
     if pos >= LOC.size:
         f.seek(pos - LOC.size)
-        loc = LOC.unpack(f.read(LOC.size))
+        raw = f.read(LOC.size)
+        if len(raw) != LOC.size: raise Rejected("incomplete ZIP64 locator window")
+        loc = LOC.unpack(raw)
         if loc[0] == b"PK\x06\x07":
             if loc[1] or loc[3] != 1 or loc[2] + EOCD64.size != pos - LOC.size:
                 raise Rejected("unsupported or inconsistent ZIP64 layout")
             f.seek(loc[2])
-            z = EOCD64.unpack(f.read(EOCD64.size))
+            raw = f.read(EOCD64.size)
+            if len(raw) != EOCD64.size: raise Rejected("incomplete ZIP64 directory end")
+            z = EOCD64.unpack(raw)
             if z[0] != b"PK\x06\x06" or z[1] != 44 or z[4:6] != (0, 0) or z[6] != z[7]:
                 raise Rejected("invalid ZIP64 directory")
             for narrow, full, sentinel in ((count, z[7], 0xffff), (cd_size, z[8], 0xffffffff), (cd_offset, z[9], 0xffffffff)):
@@ -46,6 +52,11 @@ def bounded_directory(f):
         raise Rejected("invalid or oversized central directory")
     if count * 46 > cd_size:
         raise Rejected("invalid declared member count")
+    _check_records(f, count, cd_offset, pos)
+    return count, cd_offset
+
+
+def _check_records(f, count, cd_offset, pos):
     # Do not let a lying EOCD count cause ZipFile to materialize an unbounded
     # number of objects from the central directory. Check each fixed record.
     f.seek(cd_offset)
@@ -57,7 +68,32 @@ def bounded_directory(f):
         if not name_len or volume or f.seek(name_len + extra_len + comment_len, os.SEEK_CUR) > pos:
             raise Rejected("invalid central directory lengths or volume")
     if f.tell() != pos: raise Rejected("extra central directory entries")
-    return count, cd_offset
+
+
+class _IndexedInput:
+    """Constrain zipfile's own, second footer/directory read to the selected EOF and budgets."""
+    def __init__(self, file, end, count, central):
+        self.file, self.end, self.count, self.central = file, end, count, central
+
+    def tell(self): return self.file.tell()
+    def seekable(self): return True
+    def seek(self, n, whence=os.SEEK_SET):
+        if whence == os.SEEK_END: return self.file.seek(self.end + n)
+        return self.file.seek(n, whence)
+
+    def read(self, n=-1):
+        pos = self.tell()
+        left = max(0, self.end - pos)
+        if n == -1: n = left
+        if not 0 <= n <= MAX_CD: raise Rejected("ZIP input read exceeds its allocation budget")
+        n = min(n, left)
+        # Member reads never exceed CHUNK. A larger read is only legal for the original
+        # central table. Smaller buffers cannot contain MAX_MEMBERS fixed-size records.
+        if n > CHUNK and pos != self.central: raise Rejected("central directory moved during admission")
+        data = self.file.read(n)
+        if len(data) != n: raise Rejected("selected ZIP changed length during admission")
+        if n > CHUNK: _check_records(io.BytesIO(data), self.count, 0, n)
+        return data
 
 
 LOCAL = struct.Struct("<4s5H3I2H")
@@ -101,7 +137,8 @@ def _local_header(f, item, central_at):
     sig, version, flags, method, _, __, crc, compressed, size, nlen, xlen = LOCAL.unpack(raw)
     if sig != b"PK\x03\x04" or flags != item.flag_bits or method != zipfile.ZIP_STORED:
         raise Rejected("local and central Store/encryption declarations disagree")
-    end = item.header_offset + LOCAL.size + nlen + xlen + item.compress_size
+    start = item.header_offset + LOCAL.size + nlen + xlen
+    end = start + item.compress_size
     if nlen > 4096 or end > central_at: raise Rejected("local member outside archive budget")
     name = f.read(nlen)
     if name.decode("utf-8" if flags & 0x800 else "cp437") != item.orig_filename:
@@ -111,7 +148,7 @@ def _local_header(f, item, central_at):
     if not flags & 8:
         if crc != item.CRC or tuple(sizes) != targets:
             raise Rejected("local sizes or CRC disagree with central record")
-        return
+        return start
     if crc not in (0,item.CRC) or any(a not in (0,b) for a,b in zip(sizes,targets)):
         raise Rejected("streamed local member disagrees with central record")
     if item.file_size >= ZIP64_LIMIT or item.compress_size >= ZIP64_LIMIT: big = True
@@ -121,6 +158,7 @@ def _local_header(f, item, central_at):
     after = f.read(remaining)
     if not (after.startswith(descriptor) or after.startswith(b"PK\x07\x08"+descriptor)):
         raise Rejected("streamed ZIP descriptor does not describe its actual member")
+    return start
 
 
 def stamp(f):
@@ -140,13 +178,24 @@ def read_archive(path, *, managed=True, sink: Path | None = None, internal=False
 
 def read_managed_document(document, *, display_name: str):
     """Verify one selected open file without closing it, reopening its name, or extracting."""
+    return _managed_document(document, display_name, None)
+
+
+def read_indexed_document(document, *, display_name: str):
+    """Same full admission, additionally retaining verified Store offsets and block hashes for pread."""
+    blocks = {}
+    marker, manifest = _managed_document(document, display_name, blocks)
+    return marker, manifest, blocks  # Never expose the partial index of a rejected archive.
+
+
+def _managed_document(document, display_name, blocks):
     if not display_name or "/" in display_name or "\\" in display_name or Path(display_name).suffix.lower() != ".zxs":
         raise Rejected("select a managed .zxs document")
     if not document.seekable() or not stat.S_ISREG(os.fstat(document.fileno()).st_mode):
         raise Rejected("select a seekable regular file or a completed private copy")
     position = document.tell()
     try:
-        return _read_checked(nullcontext(document), managed=True, sink=None)
+        return _read_checked(nullcontext(document), managed=True, sink=None, blocks=blocks)
     finally:
         document.seek(position)
 
@@ -169,13 +218,14 @@ def read_plain_document(document):
     return _read_checked(nullcontext(document), managed=False, sink=None)[1]
 
 
-def _read_checked(source, *, managed, sink):
+def _read_checked(source, *, managed, sink, blocks=None):
     if not managed and sink is not None:
         raise Rejected("ordinary ZIP extraction is not admitted")
     with source as f:
         before = stamp(f)
-        expected_count, central_at = bounded_directory(f)
-        with zipfile.ZipFile(f, "r") as z:
+        expected_count, central_at = bounded_directory(f, before[2] if blocks is not None else None)
+        reader = _IndexedInput(f, before[2], expected_count, central_at) if blocks is not None else f
+        with zipfile.ZipFile(reader, "r") as z:
             if len(z.filelist) != expected_count:
                 raise Rejected("central directory member count disagrees with its footer")
             marker = Commit.decode(z.comment) if managed else None
@@ -191,22 +241,29 @@ def _read_checked(source, *, managed, sink):
                 if kind not in (0, stat.S_IFDIR if d else stat.S_IFREG) or item.external_attr & 0x400:
                     raise Rejected("links, devices and reparse entries are not accepted")
                 _zip64_extra(item.extra)
-                _local_header(f, item, central_at)
+                start = _local_header(f, item, central_at)
                 name = item.filename[:-1] if d else item.filename
                 manifest.add(name, d, item.file_size, None)
                 items.append((item, name, d))
+                # Only the optional mount index holds offsets; ordinary browse/checkout keeps no extra table.
+                if blocks is not None and not d: blocks[name] = start
             if sink is not None:
                 # Only private freshly created sinks are passed by our callers.
                 for name, (is_dir, _, _) in sorted(manifest.rows.items()):
                     if is_dir:
                         sink.mkdir(name)
             for info, name, directory in items:
+                leaves = bytearray() if blocks is not None and not directory else None
                 h = hashlib.sha256()
                 written = 0
                 with z.open(info) as source:
                     target = sink.file(name) if sink is not None and not directory else None
                     try:
                         while block := source.read(CHUNK):
+                            if leaves is not None:
+                                if len(block) != min(CHUNK, info.file_size - written):
+                                    raise Rejected("incomplete verification block in Store member")
+                                leaves.extend(hashlib.sha256(block).digest())
                             written += len(block)
                             if written > info.file_size:
                                 raise Rejected("data exceeds declared size")
@@ -221,6 +278,7 @@ def _read_checked(source, *, managed, sink):
                 if written != info.file_size:
                     raise Rejected("incomplete member")
                 if not directory: manifest.rows[name] = (False, written, h.hexdigest())
+                if leaves is not None: blocks[name] = (blocks[name], bytes(leaves))
             if sink is not None:
                 # Child data/name durability precedes publishing a visible checkout.
                 sink.sync(manifest.rows)

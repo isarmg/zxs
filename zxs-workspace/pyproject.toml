@@ -11,12 +11,14 @@ dependencies = []
 
 [project.optional-dependencies]
 desktop = ["PySide6-Essentials>=6.8,<7"]
+mount = ["pyfuse3>=3.5,<4; sys_platform == 'linux'", "trio>=0.22,<1; sys_platform == 'linux'"]
 
 [project.gui-scripts]
 zip-workspace-desktop = "zipworkspace.desktop:main"
 
 [project.scripts]
 zip-workspace = "zipworkspace.cli:main"
+zip-workspace-mount-ro = "zipworkspace.linux_mount:main"
 
 [tool.setuptools]
 packages = ["zipworkspace", "zipworkspace.desktop"]
