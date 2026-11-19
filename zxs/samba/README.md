@@ -42,6 +42,12 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 
 每次受管进程配对最多同时保留 32 个待处理挑战，按各自的 30 秒期限清退；满时只拒新的一次；原 BEGIN 完整但内核未能交出一件正确的 FD 时也只拒本次。坏控制帧/关闭仍撤销整次运行配对。超时、对端结束或私端额外输入即放弃原尝试。内核 poll 最长每 500ms 清理，不能据仍有一个 FD 声称已经验证。停止时全撤，仍等原生命周期 pipe 的最后写端真正关闭。此处不查密码、不接收客户端证明、不计算会话密钥或写 SQL；挑战是非秘密数值。本阶段原生密码回调对这种上下文明确失败，不能回落到 SAM/guest 或拿挑战换会话。未运行的源码用例覆盖独立的本机端点、队列、缺 FD 和过期；专用源码构建的 tevent 小夹具让第二个真实可读回调先于仍无答复的第一个执行。未实测系统 FD 枯竭，也不是 Windows 登录验收。
 
+### 原生 NTLMv2 输入与诊断边界
+
+这份专用 Samba 的 GENSEC 只将经过原生 NDR 解码、两个版本字段均为 1 的 NTLMv2 结构交给后续口令判断。保留上游对服务端目标信息、通道绑定、时效及协商的 MIC 的检查，不凭长度识别；同包可以携带 LM 字段，但不将它交给口令判断，也不改原消息用于完整性核验。原生后验只接受确切长度的 NT 会话基钥，不接受 LM 替代。依据 [MS-NLMP §2.2.2.7](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/aee311d6-21a7-4470-92a5-c4ecb022a87b)，保留字段不用于授权。结构合格不是已经验密；现有业务会话入口仍关闭。
+
+同一私有发行禁编译密码调试，原诊断入口的编译上限及运行时实际读取的调试级别均不高于 0，即使有高等级类设置也不打印 SPNEGO 报文或 NTLM 的详细结构。专用配置同时拒绝 `debug encryption = yes`：原 Samba 的这一选项甚至会在 0 级打印 SMB3 密钥，不能只靠降低日志级别。专用日志的二进制转储入口也明确拒绝 0 级：即使 SMB2 签名不符，仍按原协议拒绝，但不打印收到的或计算出的 MAC。保留失败结果文字；不改变签名比较、协议字节、非日志回调或正文。不改宿主其他 Samba 的日志设置；这里未验证外围监督者、主机转储或第三方日志。只写了真实日志回调和无秘密结构的源码用例，未运行。
+
 ## 文件并发要求（未接 VFS）
 
 **只限制单写，不额外禁读。** 跨进程、路径别名及不同共享，写者键是 `(PoolId, FileId)`；拥有者是真正成功打开的那一笔业务 handle，不是账号、连接、共享名、底层 RAW inode 或当前物理表示。创建/接管写句柄先验当前 RW 和 SMB 原生 ShareAccess；存在别的写者时写类打开明确拒，不降为只读。同一 FileId 的写、截短、删除、覆盖/替换目标不能绕过。可在 CREATE 返回句柄前已经截断的 OVERWRITE/SUPERSEDE 必须在第一个副作用前准确暂占，失败只放本次占位。DELETE_ON_CLOSE 的设置和最终 unlink、服务器 COPYCHUNK 的目的端也受同一限制，不支持就明确拒绝。不同 FileId 不相互上锁。
@@ -57,6 +63,6 @@ SQLite 首份手动 SAVE 的真实库路径已分开准备写者与读者：容�
 
 ## 来源与验收
 
-- 正式输入是 [Debian trixie 的 samba 源包](https://packages.debian.org/source/trixie/samba) `2:4.22.11+dfsg-0+deb13u1`。按 [Debian .dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc) 核对 orig 25,620,416 B 的 SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`，Debian 源补丁 189,836 B 的 SHA-256 `0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。[固定输入清单](debian-trixie/inputs.sha256)绑定 16 份被改的原文件及 1 份未改的 passdb ABI 头；其中 `source3/param/loadparm.c` 的输入已含 Debian `usershare.patch`（默认 0→100）；ZXS 仍要求有效值为 0。其他列出的 Debian 原文件未被该补丁集更改。当前仅来源字节与补丁静审，**没有**替代 Debian 信任链验签；最终发行应验镜像/包签名及修补支持。源版本或补丁改变，必须重新独立适配，不换回任意同名 smbd。
+- 正式输入是 [Debian trixie 的 samba 源包](https://packages.debian.org/source/trixie/samba) `2:4.22.11+dfsg-0+deb13u1`。按 [Debian .dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc) 核对 orig 25,620,416 B 的 SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`，Debian 源补丁 189,836 B 的 SHA-256 `0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。[固定输入清单](debian-trixie/inputs.sha256)逐项绑定被改的原文件及未改的 passdb ABI 头；其中 `source3/param/loadparm.c` 的输入已含 Debian `usershare.patch`（默认 0→100）；ZXS 仍要求有效值为 0。其他列出的 Debian 原文件未被该补丁集更改。当前仅来源字节与补丁静审，**没有**替代 Debian 信任链验签；最终发行应验镜像/包签名及修补支持。源版本或补丁改变，必须重新独立适配，不换回任意同名 smbd。
 - 此补丁只针对隔离的专用构建及其私有 Samba 库，**不得替换**宿主发行版的 smbd 或共享库；helper 首次供给使用它自己核定的正常 Samba 供给接口。补丁按原文件的 GPL-3.0-or-later 条款，见 [COPYING](debian-trixie/COPYING)。无包安装/编译/运行。
 - 待验：截短/多字节/错误域/用户 SID 的 BOUND、错/可写配置，带 include 或重定向的配置，以及相同文本换新 inode、父进程/子进程重新检查时换 secrets.tdb（保留原文件），均拒。没有真实预配时须先拒，未读任何真实密钥；坏配置首次启动及热重载；空私目录不得产域、正确原域启动、同名其他实例不可替代；错误密码与**完全无凭据**的 IPC$/枚举分别拒，Web 用户跨入拒，唯一 SMB 用户从冷 Windows 连接在 RO/RW 上读/写符合 SQL；两独立打开与断线见上。每一项都要在完整受管发行及真实 handler 上取得证据，不能以配置文本、STATUS_OK 或源码审阅冒充通过。

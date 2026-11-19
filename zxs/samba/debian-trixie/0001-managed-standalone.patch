@@ -84,7 +84,7 @@
 +	    lp_map_to_guest() != NEVER_MAP_TO_GUEST || lp_restrict_anonymous() != 2 ||
 +	    strcmp(lp_passdb_backend(), "zxs_sqlite") != 0 ||
 +	    lp_server_min_protocol() < PROTOCOL_SMB2_02 ||
-+	    lp_server_multi_channel_support() || lp_load_printers() || lp_enable_asu_support() ||
++	    lp_debug_encryption() || lp_server_multi_channel_support() || lp_load_printers() || lp_enable_asu_support() ||
 +	    lp_server_signing() != SMB_SIGNING_REQUIRED ||
 +	    !zxs_empty(lp_usershare_path(mem_ctx, sub)) ||
 +	    lp_usershare_max_shares() != 0 ||
@@ -862,10 +862,15 @@
                          PARAM_UTIL
                          ldap
                          lber
-@@ -594,6 +600,16 @@
+@@ -594,6 +600,21 @@
                     public_headers='../lib/smbconf/smbconf.h',
                     pc_files=[],
                     vnum='0.0.1')
++
++bld.SAMBA3_BINARY('test_zxs_native_auth_policy',
++                   source='torture/test_zxs_native_auth_policy.c',
++                   deps='samba-debug samba-util NDR_NTLMSSP',
++                   for_selftest=True)
 +
 +bld.SAMBA3_BINARY('test_zxs_pdb',
 +                   source='torture/test_zxs_pdb.c',
@@ -1283,3 +1288,142 @@
 +	}
 +	return NT_STATUS_OK;
 +}
+--- a/auth/ntlmssp/ntlmssp_server.c
++++ b/auth/ntlmssp/ntlmssp_server.c
+@@ -28,6 +28,7 @@
+ #include "auth/ntlmssp/ntlmssp_private.h"
+ #include "../librpc/gen_ndr/ndr_ntlmssp.h"
+ #include "auth/ntlmssp/ntlmssp_ndr.h"
++#include "auth/ntlmssp/zxs_server_policy.h"
+ #include "../libcli/auth/libcli_auth.h"
+ #include "auth/gensec/gensec.h"
+ #include "auth/gensec/gensec_internal.h"
+@@ -514,7 +515,12 @@
+ 	file_save("lmhash1.dat",  &ntlmssp_state->lm_resp.data,  &ntlmssp_state->lm_resp.length);
+ #endif
+ 
+-	if (ntlmssp_state->nt_resp.length > 24) {
++	/* Only the complete typed NTLMv2 branch may create this private
++	 * server's user_info. An LM/LMv2 value is not an alternative. */
++	if (ntlmssp_state->nt_resp.length <= 24) {
++		return NT_STATUS_LOGON_FAILURE;
++	}
++	{
+ 		struct NTLMv2_RESPONSE v2_resp;
+ 		enum ndr_err_code err;
+ 		uint32_t i = 0;
+@@ -547,8 +553,8 @@
+ 			return nt_status;
+ 		}
+ 
+-		if (DEBUGLVL(10)) {
+-			NDR_PRINT_DEBUG(NTLMv2_RESPONSE, &v2_resp);
++		if (!zxs_native_v2_type(&v2_resp)) {
++			return NT_STATUS_LOGON_FAILURE;
+ 		}
+ 
+ 		eol = ndr_ntlmssp_find_av(&v2_resp.Challenge.AvPairs,
+@@ -829,7 +835,9 @@
+ 	user_info->auth_description = gensec_final_auth_type(gensec_security);
+ 
+ 	user_info->password_state = AUTH_PASSWORD_RESPONSE;
+-	user_info->password.response.lanman = ntlmssp_state->lm_resp;
++	/* Some legitimate v2 messages also carry a legacy field. It remains
++	 * in the original authenticated transcript but is not proof input. */
++	user_info->password.response.lanman = data_blob_null;
+ 	user_info->password.response.nt = ntlmssp_state->nt_resp;
+ 
+ 	state->user_info = user_info;
+@@ -901,6 +909,12 @@
+ 	struct auth_session_info *session_info = NULL;
+ 
+ 	TALLOC_FREE(state->user_info);
++
++	/* Successful password validation must have supplied the native NT
++	 * session base key. No guest, LM-only, missing or alternate key. */
++	if (state->doing_ntlm2 || !zxs_native_v2_base_key(&user_session_key, &lm_session_key)) {
++		return NT_STATUS_LOGON_FAILURE;
++	}
+ 
+ 	if (lpcfg_map_to_guest(gensec_security->settings->lp_ctx) != NEVER_MAP_TO_GUEST
+ 	    && auth_context->generate_session_info != NULL)
+--- a/lib/util/debug.h
++++ b/lib/util/debug.h
+@@ -39,8 +39,13 @@
+    for embedded or low-memory systems set this to a value like 2 to get
+    only important messages. This gives *much* smaller binaries
+ */
++/* This copy belongs only to the dedicated ZXS service. Authentication
++ * messages and key material must never become verbose diagnostics. */
++#if defined(DEBUG_PASSWORD) || (defined(MAX_DEBUG_LEVEL) && MAX_DEBUG_LEVEL != 0)
++#error "ZXS private Samba does not support credential or verbose debug builds"
++#endif
+ #ifndef MAX_DEBUG_LEVEL
+-#define MAX_DEBUG_LEVEL 1000
++#define MAX_DEBUG_LEVEL 0
+ #endif
+ 
+ bool dbgtext_va(const char *, va_list ap) PRINTF_ATTRIBUTE(1,0);
+--- a/lib/util/debug.c
++++ b/lib/util/debug.c
+@@ -705,7 +705,10 @@
+ 
+ int debuglevel_get_class(size_t idx)
+ {
+-	return dbgc_config[idx].loglevel;
++	/* Some native NDR callers test DEBUGLEVEL directly instead of using
++	 * the compile-time DEBUG macros. Runtime class changes cannot raise
++	 * the effective ceiling of this private build. */
++	return MIN(dbgc_config[idx].loglevel, MAX_DEBUG_LEVEL);
+ }
+ 
+ void debuglevel_set_class(size_t idx, int level)
+--- a/lib/util/util.c
++++ b/lib/util/util.c
+@@ -487,6 +487,10 @@
+ 
+ void print_asc(int level, const uint8_t *buf,int len)
+ {
++	/* Private server: no binary material in its outcome-only log. */
++	if (level <= 0) {
++		return;
++	}
+ 	print_asc_cb(buf, len, debugadd_cb, &level);
+ }
+ 
+@@ -577,7 +581,7 @@
+  */
+ _PUBLIC_ void dump_data(int level, const uint8_t *buf, int len)
+ {
+-	if (!DEBUGLVL(level)) {
++	if (level <= 0 || !DEBUGLVL(level)) {
+ 		return;
+ 	}
+ 	dump_data_cb(buf, len, false, debugadd_cb, &level);
+@@ -593,7 +597,7 @@
+ {
+ 	struct debug_channel_level dcl = { dbgc_class, level };
+ 
+-	if (!DEBUGLVLC(dbgc_class, level)) {
++	if (level <= 0 || !DEBUGLVLC(dbgc_class, level)) {
+ 		return;
+ 	}
+ 	dump_data_cb(buf, len, false, debugadd_channel_cb, &dcl);
+@@ -607,7 +611,7 @@
+  */
+ _PUBLIC_ void dump_data_skip_zeros(int level, const uint8_t *buf, int len)
+ {
+-	if (!DEBUGLVL(level)) {
++	if (level <= 0 || !DEBUGLVL(level)) {
+ 		return;
+ 	}
+ 	dump_data_cb(buf, len, true, debugadd_cb, &level);
+@@ -695,7 +699,7 @@
+ {
+ 	struct debug_channel_level dcl = { dbgc_class, level };
+ 
+-	if (!DEBUGLVLC(dbgc_class, level)) {
++	if (level <= 0 || !DEBUGLVLC(dbgc_class, level)) {
+ 		return;
+ 	}
+ 	dump_data_diff_cb(buf1, len1, buf2, len2, true, debugadd_channel_cb, &dcl);
