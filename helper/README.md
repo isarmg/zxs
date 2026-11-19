@@ -19,4 +19,4 @@ helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin
 
 本目录有独立 Cargo 工程、Rust 工具链和[依赖来源记录](DEPENDENCIES.md)。允许验证时，入口为 `cargo build --locked` 和 `cargo test --locked`。后者的正向文件用例须在上述受支持文件系统上的专用临时位置创建自己的测试文件；如系统临时目录不满足，可由操作者设置 `HELPER_TEST_DATA_PARENT` 指向合格的专用目录。该变量仅供测试使用；先决条件缺失是测试失败，不算验证通过。
 
-这次提交是源码与测试源码，未执行 CLI、依赖解析、构建、测试或 CI，也未安装或操作实际介质。后续的验证条件和待写事项见[项目任务清单](TASKS.md)。
+当前未执行 CLI、依赖解析、构建、测试或 CI，也未安装或操作实际介质。独立构建和发行需要哪些输入与证据，见[交付核对表](RELEASE.md)；待办见[项目任务清单](TASKS.md)。
