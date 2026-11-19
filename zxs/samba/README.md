@@ -1,6 +1,6 @@
 # 专用 Samba：启动守卫和接入边界
 
-目标是 **Debian 13 amd64 的专用 standalone 实例**，不是把文件系统目录直接共享给 Windows。helper 装配实例并在单独获准的首次供给中初始化其 SAM 域；ZXS 在线消费该实例的认证结果并实现 FILE 业务。唯一用户权威仍是 SYSTEM 的 SQLite：
+目标是 **Debian 13 amd64 的专用 standalone 实例**，不是把文件系统目录直接共享给 Windows。helper 装配实例并在单独获准的首次供给中初始化其 SAM 域；ZXS 在线消费该实例的认证结果并实现 FILE 业务。[新模型](../docs/smb-native-session.md)中，专用 Samba tdbsam 是唯一 SMB 密验库；SQLite 只持 Web 密验和两种身份的业务映射／授权。下面是**现有 v6 的受限实现**，不是新后端已经启用：
 
 - Web 管理员不能登录 SMB；SMB 用户不能登录管理页。禁止匿名、guest 和错密码后转 guest，包括匿名 IPC$ 登录和共享枚举。
 - 每个共享只取当前 SQL 设定（停用/只读/读写）。一个已成功的 Samba 身份不等于任意共享可用，更不等于可直接打开宿主路径。
@@ -56,7 +56,7 @@ helper 供给的 `/instance/domain.bound` 正好 128 字节：`ZXS-SAM/BOUND-1\0
 2. 服务实际 accept/fork 后，在同一父级事件回调里，直接取这个尚未被回收的**亲生**子进程的 pidfd（拒自动回收配置；对 pidfd 作不消费的非阻塞子状态检查），用 `ZXS-SAM/CHILD-1\0 | net-cookie | socket-cookie` 向 fd 3 交这一个原 pidfd，只含非秘密调度信息。父不等存储或业务；成功将消息排入队列后才放本子继续，提前调度的子只等自己的一次启动闸；拒绝/超时发生在 Samba 子进程重初始化前，此时只以 `_exit` 结束该子，不运行继承的监听父清理、更不删除父 pidfile。待实机验拒绝一笔后原父 pidfile 不变、其他已接入连接仍可服务。别的 fork 不会被计入。
 3. 存储只在最后一次发 READY 后开启 Linux `SO_PASSPIDFD`，此后该主端只收不发，避免 Unix socket 自动绑定名字。两种角色消息均由发送进程附**自己**的内核校验身份，即使刚好已在 READY 后的队列也能取到该条消息的 `SCM_PIDFD`。父登记的发送者必须与独立 fd 5 是同一个仍存活的 pidfs 进程；子送 BEGIN 则核其真实发送者、所报原 TCP 和本次独立私端的 `SO_PEERPIDFD` 都对上这份登记。进程号、UID、socketpair 创建者、同名程序、上一条 READY 或仅持有 fd 3 都不够。重复/晚到/错件不替换原登记；最多 256 个登记、32 个进行中的挑战，进程消亡、超时及停机撤销。没有新监听或用户可查询的本机接口。参见 [Linux 6.12 的发送者记录](https://github.com/torvalds/linux/blob/v6.12/net/unix/af_unix.c#L1799-L1821)、[凭据的命名空间限制](https://github.com/torvalds/linux/blob/v6.12/net/core/scm.c#L43-L59) 和 [pidfd 的现场原物](https://github.com/torvalds/linux/blob/v6.12/fs/pidfs.c#L374-L387)。
 
-该登记只确定“哪一个真实接入进程为哪条 TCP 进行这一次挑战”。它不提供口令、密码等价物、正向会话或 FILE 权。后续专用认证处理仅可在这个受管 smbd 客户进程的原 GENSEC 中使用唯一 SMB 账号当前那一代验证资料，禁止独立查询接口/公开 fd 3/日志/另一个账户库输出；原登录失败、过期、凭据变化均不能靠调度证明放行。需保留原生签名与完整性后验，待准确 SMB2 session 发表成功后才可绑定当前共享和 FILE。宿主 fd 5 的实际交付、真实 Windows 登录和数据访问仍未验收。
+该登记只确定“哪一个真实接入进程为哪条 TCP 进行这一次挑战”。它不提供口令、密码等价物、正向会话或 FILE 权。后续在这个受管 smbd 客户进程的原 GENSEC 中，只准由唯一原生 tdbsam 为本次登录使用该原账号的当前代，禁止独立查询接口/公开 fd 3/日志/另一个账户库输出；原登录失败、过期、凭据变化均不能靠调度证明放行。需保留原生签名与完整性后验，待准确 SMB2 session 发表成功后才可绑定当前共享和 FILE。宿主 fd 5 的实际交付、真实 Windows 登录和数据访问仍未验收。
 
 ### 原生 NTLMv2 输入与诊断边界
 
