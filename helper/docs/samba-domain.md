@@ -100,3 +100,10 @@ SITE-ALLOW-SETUP-NTLMV2-1 POOL_ID INSTANCE_ID DOMAIN_OP LIVE_SHA256 HELPER_SHA25
 凭据路径只在永久降权后加载锁定 Debian 两库；先核静态原件、批准的完整 SHA，先拒绝进程里已加载的任一同 SONAME 库，再核所选 Libgcrypt 的依赖解析确实指向原配套库，并从真实 procfs 核各个固定函数映射到这两份原物。装载器、内核与受保护的安装维护过程是独立可信前提。内核要求 FIPS、系统强制 FIPS、库处于 FIPS 模式或无法获得安全内存时，两项账户都不写。内核不提供可选 FIPS 标志不表示已准许。先完成锁页预算、固定库非秘密的公开能力样本及专用摘要句柄，再提示输入；只把严格 UTF-8 派生成协议所需的 UTF-16LE，不替换字符或回退原字节。协议专属结果按可冒用身份的秘密保护，只绑定初始 SMB 行，不可打印、导出或交 Web。没有调用者自选算法/加载器路径、临时放宽模式、访问系统 Samba 密码库或网络认证验证。上线仍由受管 Samba 自己核域、真实认证和当前凭据代。
 
 这部分不提供可信宿主/物理取证保证。已获管理员授权的终端主控者、内核、休眠、异常退出、SQL 最终提交的不确定性须按部署文档处理。未执行库、KDF、组包、账户创建或真实认证。依据：[固定 Libgcrypt API](https://github.com/gpg/libgcrypt/blob/libgcrypt-1.11.0/src/gcrypt.h.in)、[锁页初始化返回语义](https://github.com/gpg/libgcrypt/blob/libgcrypt-1.11.0/src/global.c)、[Microsoft NTLMv2 协议](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/5e550938-91d4-459f-b67d-75d70009e3f3)。
+
+### 专用 native SAM 新契约的内部观察（尚未启用）
+
+[新的两个固定账户契约](https://github.com/isarmg/zxs/blob/2f40e4645cd4c1985c45a051fa5c1d98652371da/zxs/docs/first-account-v1.md)将 SMB 凭据单独交给专用 Samba。当前只加入宿主内部的原物观察及公开的非秘密凭据代号，不改变上文现有 v6 入口、数据库、上线模板或安装布局。
+
+- 内部宿主观察要求本机维护者已经实际持有原 SYSTEM 及原实例两个独立的目录 EX，复核每一份 OFD 上确实有原锁；不重新取长锁，不从卷内记录获得授权。验证受保护原路径和同一宿主根挂载，认同一原实例内固定 `accountdb`（root:root 0700、无额外 POSIX ACL）及 `passdb.tdb`（root:root 0600、单链接、有界普通文件，非空且不超过 16 MiB）。目录内原始名字只接受该原 TDB 名，不接管旁物或假名；只为 ACL 检查打开已钉定的普通 inode，不读取秘密正文，不运行 Samba。这里的大小不是数据库识别或首次初始化条件。
+- 只认公共样例中的 153 字节 ASCII 代号及原生字段唯一尾 NUL；检查是在解包尚有字段实际长度时进行，不接受 getter 截断后的前缀。以精确原请求的预期值区分同一目标或其确切前驱。文件不存在、普通读取看到目标、或代号匹配都不能发起设密或激活 SQL；原生完整两索引核验、受准恢复和同原文件/父真实同步尚须另行接入。未运行或实机验收。

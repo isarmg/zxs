@@ -2,6 +2,8 @@
 //! structurally valid SID or an SQL match is not a Samba domain proof, a
 //! maintenance approval, a password check, or a privilege to create credentials.
 mod command;
+#[allow(dead_code)] // Internal until the separately reviewed native worker and v7 handoff are enabled.
+mod native_epoch;
 pub(crate) use command::Setup;
 mod web_secret;
 mod smb_policy;

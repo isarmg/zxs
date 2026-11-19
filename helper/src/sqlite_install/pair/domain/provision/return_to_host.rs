@@ -5,6 +5,8 @@
 mod issue;
 mod worker;
 mod installed;
+#[allow(dead_code)] // Native account storage is not part of the currently published v6 setup path.
+mod accountdb;
 mod layout;
 pub(in crate::sqlite_install::pair) use layout::create_layout;
 pub(in crate::sqlite_install::pair) use installed::{InstalledSetup,SelectedSetup};

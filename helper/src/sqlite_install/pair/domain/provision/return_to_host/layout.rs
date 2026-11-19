@@ -29,7 +29,7 @@ fn same_name(parent:&File,n:&CStr,original:&File)->io::Result<()>{
 // Do not infer write/search rights from group bits while a named Linux POSIX
 // ACL or inherited default ACL may alter them. Unknown on this host is not
 // permission to chown/chmod an existing object.
-fn bare_acl(f:&File,key:&CStr)->io::Result<()>{
+pub(super) fn bare_acl(f:&File,key:&CStr)->io::Result<()>{
     match fgetxattr(f,key,&mut [0u8;0][..]){
         Err(Errno::NODATA)=>Ok(()),
         Ok(_)|Err(Errno::RANGE)=>Err(bad("extended POSIX ACL is outside the first-install layout profile")),
@@ -40,7 +40,7 @@ fn bare_acl(f:&File,key:&CStr)->io::Result<()>{
 // Read only directory entries on the already-selected parent's own stream;
 // never open or return an unrelated entry. The independent lookup must still
 // resolve to the held directory (a mount point need not have its dirent ino).
-fn exact_component(parent:&File,name:&CStr,selected:&File)->io::Result<()>{
+pub(super) fn exact_component(parent:&File,name:&CStr,selected:&File)->io::Result<()>{
     let before=Times::on(parent)?;
     let f=File::from(openat(parent,c".",OFlags::RDONLY|OFlags::CLOEXEC|OFlags::DIRECTORY
         |OFlags::NOFOLLOW|OFlags::NOATIME|OFlags::NONBLOCK,Mode::empty())?);
@@ -107,6 +107,15 @@ fn access_chain(site:&Site,gid:u32)->io::Result<()>{
     for (f,name) in site.chain.iter().zip(PREFIX){
         exact_component(p,name,f)?;p=f;
     }
+    site.check()
+}
+#[allow(dead_code)] // Used only by the dormant native account-store evidence.
+pub(super) fn verify_registered_instance(site:&Site, gid:u32)->io::Result<()>{
+    if site.chain.len()!=PREFIX.len()+1{return Err(bad("the full original instance path is required"));}
+    access_chain(site,gid)?;
+    let base=site.base();let m=base.metadata()?;
+    if m.gid()!=gid||m.mode()&0o7777!=0o750{return Err(bad("not the protected original instance parent"));}
+    exact_component(&site.chain[PREFIX.len()-1],&site.leaf,base)?;
     site.check()
 }
 fn check_template(template:&RuntimeFile)->io::Result<()>{
