@@ -53,6 +53,18 @@ fn plan(method:ReadMethod,ranges:&[&[u8]],if_ranges:&[&[u8]],tag:&str,total:u64)
     }
     text_field(raw).map_or(Body::Full,|v|single(v,total))
 }
+/// RFC 6266 / RFC 8187: the ASCII fallback is constant. The extended value
+/// encodes the node's verified creation-time business name, never its native
+/// storage leaf, current display alias or an untrusted request component.
+fn disposition(creation_name:&str)->String{
+    const HEX:&[u8;16]=b"0123456789ABCDEF";
+    let mut s=String::from("attachment; filename=\"download.bin\"; filename*=UTF-8''");
+    for b in creation_name.bytes(){
+        if b.is_ascii_alphanumeric()||matches!(b,b'-'|b'.'|b'_'|b'~'){s.push(char::from(b));}
+        else{s.push('%');s.push(char::from(HEX[(b>>4) as usize]));s.push(char::from(HEX[(b&15) as usize]));}
+    }
+    s
+}
 fn etag(open:&PublishedVersion)->io::Result<String>{
     let n=open.receipt();let mut b=b"ZXS/HTTP/EXPLICIT-NODE/IDENTITY\0".to_vec();
     b.extend_from_slice(&n.file.0);b.extend_from_slice(&n.node.0);b.extend_from_slice(&n.version.0);
@@ -80,10 +92,10 @@ pub fn send_published<W:Write>(
         Body::Part(a,b)=>(206,b-a+1,Some(format!("bytes {a}-{b}/{total}"))),
         Body::Unsatisfied=>(416,0,Some(format!("bytes */{total}"))),
     };
-    let length=count.to_string();
+    let length=count.to_string();let name=disposition(&open.receipt().creation_name);
     let mut fields=vec![("ETag",tag.as_str()),("Accept-Ranges","bytes"),("Content-Length",length.as_str()),
         ("Cache-Control","private, no-store, no-transform"),("Content-Type","application/octet-stream"),
-        ("Content-Disposition","attachment"),("X-Content-Type-Options","nosniff")];
+        ("Content-Disposition",name.as_str()),("X-Content-Type-Options","nosniff")];
     if let Some(value)=range.as_deref(){fields.push(("Content-Range",value));}
     let mut out=begin(status,&fields)?;
     match choice{
@@ -95,6 +107,15 @@ pub fn send_published<W:Write>(
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn disposition_has_only_the_two_fixed_parameters(){
+        let prefix="attachment; filename=\"download.bin\"; filename*=UTF-8''";
+        for (name,suffix) in [("方案.xlsx","%E6%96%B9%E6%A1%88.xlsx"),("a;b%'c.xlsx","a%3Bb%25%27c.xlsx"),
+            ("x\"\r\nX:y","x%22%0D%0AX%3Ay"),("Report.xlsx","Report.xlsx"),("report.xlsx","report.xlsx"),
+            ("backup-0123456789abcdef0123456789abcdef.xlsx","backup-0123456789abcdef0123456789abcdef.xlsx")]{
+            assert_eq!(disposition(name),format!("{prefix}{suffix}"));
+        }
+    }
     #[test]
     fn byte_ranges_are_inclusive_bounded_and_only_apply_to_get(){
         const TAG:&str="\"original\"";

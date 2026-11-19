@@ -92,7 +92,14 @@ fn the_web_download_uses_one_selected_version_for_headers_range_and_real_body(){
     let unrelated=PublishedVersion::open_listed(&sys,reg.id,root,&b,g.node).unwrap();
     let(code,h,body)=download(&selected,Head,&[b"bytes=1-2"],&[]);
     assert_eq!(code,200);assert_eq!(h["Content-Length"],"3");assert!(!h.contains_key("Content-Range"));assert!(body.is_empty());
+    let fixed="attachment; filename=\"download.bin\"; filename*=UTF-8''";
+    assert_eq!(h["Content-Disposition"],format!("{fixed}Report.xlsx"));
+    let (ch,cn)=seed(&sys,root,"方案.xlsx",b"abc",ABC);
+    let original=PublishedVersion::open_listed(&sys,reg.id,root,&ch,cn.node).unwrap();
+    let(_,headers,_)=download(&original,Head,&[],&[]);
+    assert_eq!(headers["Content-Disposition"],format!("{fixed}%E6%96%B9%E6%A1%88.xlsx"));
     let tag=h["ETag"].as_bytes();let(_,other_h,_)=download(&unrelated,Head,&[],&[]);assert_ne!(tag,other_h["ETag"].as_bytes());
+    assert_eq!(other_h["Content-Disposition"],format!("{fixed}report.xlsx"));
     let(s,h,body)=download(&selected,Get,&[b"bytes=1-2"],&[tag]);
     assert_eq!(s,206);assert_eq!(h["Content-Length"],"2");assert_eq!(h["Content-Range"],"bytes 1-2/3");assert_eq!(body,b"bc");
     let(s,h,body)=download(&selected,Get,&[b"bytes=1-2"],&[other_h["ETag"].as_bytes()]);

@@ -13,7 +13,7 @@
 
 **已写的第一段内核。** `PublishedVersion::open_listed` 在同一操作切面核对受选池、普通父、上次列出的精确 FILE/Entry 及指定已提交 NodeId；持原登记和确切版本材料到句柄释放，可连续独立取多个范围。没有读入网络账户、签发共享权限或监听协议，也不替代 SMB 打开通常的“当前文件”。`tests/open_published_version.rs` 是真实原物/兄弟目录/大小写与分离 OFD 的库级源码场景，未执行。
 
-**已写的 Web 应答层。** 完成鉴权及其它 HTTP 前置条件后，`web::send_published` 可把同一已选正式版本的状态、ETag、长度/区间及真实流式正文交给传输层。支持 GET、无正文 HEAD 及单段 Range/If-Range；无内容时忽略 Range，不支持多段合并。回调发出响应头后若原件或下游失败，只传错误给传输层中止，不能第二次发送响应。这不是已接网络的路由、浏览器页面或账户服务。
+**已写的 Web 应答层。** 完成鉴权及其它 HTTP 前置条件后，`web::send_published` 可把同一已选正式版本的状态、ETag、长度/区间及真实流式正文交给传输层。支持 GET、无正文 HEAD 及单段 Range/If-Range；无内容时忽略 Range，不支持多段合并。下载建议名按正式节点的提交时业务名编码为 UTF-8 `filename*`，保留大小写；旧客户端只获固定 ASCII 后备名，不暴露容器的 FileId（[RFC 6266](https://www.rfc-editor.org/rfc/rfc6266.html)、[RFC 8187](https://www.rfc-editor.org/rfc/rfc8187.html)）。回调发出响应头后若原件或下游失败，只传错误给传输层中止，不能第二次发送响应。这不是已接网络的路由、浏览器页面或账户服务。
 
 ## 此后才接写，不伪造协议动作
 
