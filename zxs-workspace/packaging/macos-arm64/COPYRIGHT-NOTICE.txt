@@ -1,0 +1,23 @@
+ZIP Workspace: local macOS app candidate source notice
+
+Application source: https://github.com/isarmg/zxs/tree/main/zxs-workspace
+This recipe is for an authorized working copy. It does not establish
+an application redistribution license, Apple program membership or
+endorsement by Apple, Python, Qt or PyInstaller.
+
+Inputs include the official CPython macOS installer and specific wheels
+listed in requirements.txt. Parts of CPython, Qt/PySide6/Shiboken, the
+PyInstaller bootloader and runtime hooks may be copied. The build wheel
+list is not a complete list of redistributed components.
+
+Before distributing any resulting file, inspect the actual bundle and
+meet the applicable licenses, source/attribution and relinking duties:
+* Python and bundled parts: https://docs.python.org/3.14/license.html
+* Qt and PySide6: https://doc.qt.io/qtforpython-6/licenses.html
+  https://www.qt.io/development/open-source-lgpl-obligations
+* PyInstaller runtime and bootloader exception:
+  https://pyinstaller.org/en/v6.22.3/license.html
+* Any other included runtime, plugin or resources: verify separately.
+
+A local ad-hoc signature and a ZIP SHA-256 are not a publisher identity,
+notarization, validation of security policy, or permission to distribute.

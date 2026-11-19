@@ -10,6 +10,8 @@
 
 [Windows 11 x64 本地便携配方](packaging/windows-amd64/README.md)使用锁定的离线工具和当前 Qt 入口，产物为一个独立目录，不打包驱动、CLI 写入或虚拟盘。仅源码，未构建成品。
 
+[macOS 26 Apple Silicon 本地归档配方](packaging/macos-arm64/README.md)从同一桌面入口制备 arm64 `.app` 的独立 ZIP 候选，不带 macFUSE，不宣称 Developer ID、公证或 Universal。未实际构建。
+
 ## 先试用
 
 本次源码验证环境：Linux、Python 3.12。项目运行时只用标准库。从已经签出的本仓库运行，无需安装依赖：
