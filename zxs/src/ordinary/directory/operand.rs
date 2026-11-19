@@ -1,7 +1,7 @@
 //! The mkdir operand occupies the existing single SYSTEM allocation name.
 //! Bytes identify the issuing native inode. Its bounded stage attribute binds
 //! at most one freshly created child, never an existing directory by spelling.
-//! Decoding is not admission, nor does this module publish an allocation.
+//! Decoding is not admission; the issuing writer lives in prepare.rs.
 use super::types::{self,Created,Origin};
 use crate::{PoolId,fs::{self,HeldDir,invalid},ordinary::{allocation::{self,Stage},wire::{In,NativeObject}}};
 use std::io;
@@ -15,7 +15,7 @@ pub(in crate::ordinary) struct Operand{
 }
 impl Operand{
     /// Prepare bounded payload bytes only. No register/descriptor is handed
-    /// out; an eventual issuer must check the live writer, namespace and capacity.
+    /// out; the issuer checks the live writer, namespace and capacity.
     pub(super) fn image(pool:PoolId,issuer:&NativeObject,origin:&Origin,seq:u64,previous:[u8;32])->io::Result<(Vec<u8>,[u8;32])>{
         if seq==0||origin.parent.object.entity==issuer.entity||origin.parent.object.birth==issuer.birth{
             return Err(invalid("mkdir must reserve a new SYSTEM record, not its parent"));}

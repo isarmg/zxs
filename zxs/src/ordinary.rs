@@ -20,6 +20,7 @@ mod draft;
 pub use draft::{save_first,first_save_receipt,read_current_to,current_info,CurrentFile,FirstSaveObservation};
 pub use draft::types::{DraftClaim,DraftReceipt,DRAFT_CHUNK};
 mod directory;
+pub use directory::{DirectoryParent,DirectoryEntry,DirectoryInfo,DirectoryListing,make_directory,list_directory};
 mod material;
 mod placement;
 mod allocation;
@@ -52,7 +53,7 @@ pub struct CreationReceipt{pub status:CreationStatus,pub file:FileInfo}
 pub struct RootFiles{pub files:Vec<FileInfo>,pub reserved_private_entries:usize,pub pending_moves:Vec<MoveReceipt>,pub pending_lifecycle:Vec<RecycleReceipt>}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-enum Cut { Reservation,UnboundMkdir,MoveLeafLinked,MoveInstalled,MoveTargetFlagBeforeSync,MoveTargetChecked,MoveRetireFlagBeforeSync,MoveSourceAdmitted,MoveSourceIsolated,MoveEraseFlagBeforeSync,MoveLeafRetired,MoveEmptyFlagBeforeSync,MoveEmptyConfirmed,MoveDirectoryUnlinked,FormalIndex,FormalRaw,FormalReadback,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
+enum Cut { Reservation,UnboundMkdir,DirectoryBoundBeforeSync,DirectoryRenamed,MoveLeafLinked,MoveInstalled,MoveTargetFlagBeforeSync,MoveTargetChecked,MoveRetireFlagBeforeSync,MoveSourceAdmitted,MoveSourceIsolated,MoveEraseFlagBeforeSync,MoveLeafRetired,MoveEmptyFlagBeforeSync,MoveEmptyConfirmed,MoveDirectoryUnlinked,FormalIndex,FormalRaw,FormalReadback,IncrLinked,WorkUnlinked,WorkReleased,BeforeIntent,Intent,FrameSynced,MarkedBeforeSync,Decision,Installation,IntentReleased,Release }
 
 fn expected(pool:&LocalPool,op:OperationId,v:VolumeId,name:&str)->io::Result<[u8;32]>{
     wire::request_digest(pool.id(),op,fs::local_uid(),v,name)
@@ -219,8 +220,10 @@ pub fn read_initial_file(system:&Path,id:FileId)->io::Result<(FileInfo,Vec<u8>)>
 /// name is never skipped. Only original issued private slots can be separated
 /// from that namespace, and observed residues are explicitly counted.
 pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
-    let cut=formal::ParentCut::open(system,Access::Read)?;let(pool,state)=cut.originals();
-    let volume=pool.ordinary(id)?;
+    let cut=formal::ParentCut::open(system,Access::Read)?;root_listing(&cut,id).map(|(files,_)|files)
+}
+fn root_listing(cut:&formal::ParentCut,id:VolumeId)->io::Result<(RootFiles,Vec<DirectoryInfo>)>{
+    let(pool,state)=cut.originals();let volume=pool.ordinary(id)?;
     let mut names=BTreeSet::new();let mut tickets=BTreeMap::new();let mut files=Vec::new();
     for f in state.on_all().filter(|f|f.create.volume==id){
         // A CREATE-private ticket was issued forever on that original root,
@@ -237,16 +240,18 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
         names.insert(f.create.name.as_bytes().to_vec());files.push(FileInfo::at(f,id));
     }
     let actual:BTreeSet<_>=volume.root.names()?.into_iter().collect();
-    let mut observed=BTreeSet::new();let mut reserved_private_entries=0;
+    let dirs=directory::inventory::observe(state,directory::types::Parent::Root(id),&volume.root,&actual)?;
+    if dirs.pending_install{return Err(invalid("published ordinary directory still needs its original installation to finish"));}
+    let mut observed=BTreeSet::new();let mut reserved_private_entries=dirs.private_count;
     for raw in &actual{
-        if handoff.hidden.contains(raw){continue;}
+        if handoff.hidden.contains(raw)||dirs.consumed.contains(raw){continue;}
         if handoff.named_stage.as_ref()==Some(raw)||material::private_slot(raw).is_some_and(|(ticket,slot)|tickets.get(&ticket).is_some_and(|&limit|slot<limit)){
             reserved_private_entries+=1;
         }else{observed.insert(raw.clone());}
     }
     if observed!=names{return Err(invalid("missing or unrecognized business inventory; refusing a partial list"));}
     for f in state.on(id).filter(|f|handoff.deferred!=Some(f.create.file)){
-        let _=draft::admit_current_held(&cut,&volume,f)?;
+        let _=draft::admit_current_held(cut,&volume,f)?;
         if state.head(f.create.file).is_some()&&state.committing.as_ref().is_some_and(|a|a.original.file==f.create.file){
             let saved=state.saved(f.create.file).ok_or_else(||invalid("no original saved source for formal cleanup inventory"))?;
             let dir=formal::directory(&volume,&state,f,saved)?;
@@ -260,7 +265,10 @@ pub fn list_initial_files(system:&Path,id:VolumeId)->io::Result<RootFiles>{
     }
     volume.root.file.sync_all()?;volume.require_current()?;
     if volume.root.names()?.into_iter().collect::<BTreeSet<_>>()!=actual{return Err(invalid("root changed during FILE enumeration"));}
-    files.sort_by(|a,b|a.name.cmp(&b.name));Ok(RootFiles{files,reserved_private_entries,pending_moves:handoff.pending,pending_lifecycle:handoff.lifecycle})
+    let again=directory::inventory::observe(state,DirectoryParent::Root(id),&volume.root,&actual)?;
+    if again.pending_install||again.consumed!=dirs.consumed{return Err(invalid("ordinary directories changed during enumeration"));}
+    let folders=again.rows.into_iter().map(DirectoryInfo::original).collect();
+    files.sort_by(|a,b|a.name.cmp(&b.name));Ok((RootFiles{files,reserved_private_entries,pending_moves:handoff.pending,pending_lifecycle:handoff.lifecycle},folders))
 }
 
 #[cfg(test)]

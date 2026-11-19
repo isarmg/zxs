@@ -7,7 +7,7 @@ pub(in crate::ordinary) const KIND:u8=7;
 /// An address, never a live grant. A child's own birth names the same volume;
 /// no spelling or missing tag turns a child selection into the volume root.
 #[derive(Clone,Copy,Debug,Eq,PartialEq,Ord,PartialOrd)]
-pub(in crate::ordinary) enum Parent{Root(VolumeId),Child(VolumeId,DirectoryId)}
+pub enum Parent{Root(VolumeId),Child(VolumeId,DirectoryId)}
 impl Parent{
     pub(in crate::ordinary) fn volume(self)->VolumeId{match self{Self::Root(v)|Self::Child(v,_)=>v}}
     fn put(self,b:&mut Vec<u8>){

@@ -1,5 +1,5 @@
 use std::{env, ffi::OsStr, io, path::PathBuf, process::ExitCode};
-const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
+const USAGE:&str="usage: zxs new-id | check-new SYSTEM RECYCLE FILE... | init OP SYSTEM RECYCLE FILE... | inspect SYSTEM | dir-mkdir OP SYSTEM VOLUME root|DIR NAME | dir-list SYSTEM VOLUME root|DIR | file-create OP SYSTEM VOLUME NAME | file-receipt SYSTEM OP | file-list SYSTEM VOLUME | file-save OP SYSTEM FILE LENGTH SHA256 | file-save-receipt SYSTEM OP | file-info SYSTEM FILE | file-read SYSTEM FILE | file-commit OP SYSTEM FILE WORKING-REV | file-commit-receipt SYSTEM OP | file-node-read SYSTEM FILE NODE | file-node-range SYSTEM FILE NODE OFFSET LENGTH | file-write-range OP SYSTEM FILE REV OFFSET LENGTH SHA256 keep|NEW_SIZE | file-range-receipt SYSTEM OP | file-read-range SYSTEM FILE OFFSET LENGTH | file-move OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-move-receipt OP SYSTEM FILE FROM TO PLACEMENT_EPOCH | file-delete[-receipt] OP SYSTEM FILE FROM EPOCH | file-restore[-receipt] OP SYSTEM FILE DELETE_OP DELETE_SHA256 RETAINED_EPOCH original|VOLUME | recycle-list SYSTEM LIMIT SOURCE_OR_ALL SINCE_OR_DASH THROUGH_OR_DASH [CURSOR]";
 fn bad(message:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidInput,message)}
 fn show(scope:&str,info:zxs::PoolInfo) {
     println!("{scope}");
@@ -22,11 +22,31 @@ fn show_file(f:&zxs::FileInfo){
     println!("file {}  entry {}  history {}  volume {}  name {}  original {}  published-sequence {:?}",
         f.file,f.entry,f.history,f.volume,f.name,f.created_by,f.decision_sequence);
 }
+fn parent(args:&mut impl Iterator<Item=std::ffi::OsString>)->io::Result<zxs::DirectoryParent>{
+    let v=word(args)?.parse()?;let address=word(args)?;
+    Ok(if address=="root"{zxs::DirectoryParent::Root(v)}else{zxs::DirectoryParent::Child(v,address.parse()?)})
+}
+fn show_directory(d:&zxs::DirectoryInfo){
+    println!("directory {}  entry {}  name {}  original {}  published-sequence {}",d.directory,d.entry,d.name,d.created_by,d.sequence);
+}
 fn run() -> io::Result<()> {
     let mut args = env::args_os().skip(1);
     let action=args.next().ok_or_else(||bad(USAGE))?;
     match action.to_str(){
         Some("new-id") if args.next().is_none()=>{println!("{}",zxs::OperationId::new()?);Ok(())}
+        Some("dir-mkdir")=>{
+            let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let address=parent(&mut args)?;
+            let name=word(&mut args)?;end(&mut args)?;let d=zxs::make_directory(&system,op,address,&name)?;
+            println!("Original directory creation published (not current availability):");show_directory(&d);Ok(())
+        }
+        Some("dir-list")=>{
+            let system=path(&mut args)?;let address=parent(&mut args)?;end(&mut args)?;let list=zxs::list_directory(&system,address)?;
+            for e in &list.entries{match e{zxs::DirectoryEntry::File(f)=>show_file(f),zxs::DirectoryEntry::Directory(d)=>show_directory(d)}}
+            for m in &list.pending_moves{eprintln!("Original MOVE {}: {:?}; use file-move-receipt.",m.operation,m.status);}
+            for m in &list.pending_lifecycle{eprintln!("Original {:?} {}: {:?}; query its original receipt.",m.kind,m.operation,m.status);}
+            if list.reserved_private_entries!=0{eprintln!("{} issued private entries; not business directories or FILEs.",list.reserved_private_entries);}
+            Ok(())
+        }
         Some("file-create")=>{
             let op=word(&mut args)?.parse()?;let system=path(&mut args)?;let volume=word(&mut args)?.parse()?;
             let name=word(&mut args)?;end(&mut args)?;

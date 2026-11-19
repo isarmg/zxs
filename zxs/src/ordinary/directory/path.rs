@@ -15,6 +15,7 @@ impl<'v,'p> HeldParent<'v,'p>{
         for row in s.directory_lineage(address)?{
             let previous=chain.last().map(|(d,_)|d);
             row.relation(&v.pool.journal_registration(),previous)?;
+            if s.making.as_ref().is_some_and(|a|a.origin.id==row.origin.id){return Err(invalid("original mkdir has not finished installing this parent"));}
             if row.origin.parent!=basis{return Err(invalid("directory did not descend from its exact selected original parent"));}
             let parent=chain.last().map_or(&v.root,|(_,h)|h);
             let held=installed(parent,row)?;
@@ -26,6 +27,7 @@ impl<'v,'p> HeldParent<'v,'p>{
         if basis.address!=address{return Err(invalid("original directory chain did not reach selected address"));}
         Ok(Self{v,address,basis,chain})
     }
+    pub(super) fn volume(&self)->&FileVolume<'p>{self.v}
     pub(super) fn basis(&self)->&Basis{&self.basis}
     pub(super) fn directory(&self)->&HeldDir{self.chain.last().map_or(&self.v.root,|(_,h)|h)}
     pub(super) fn require(&self)->io::Result<()>{
@@ -36,6 +38,7 @@ impl<'v,'p> HeldParent<'v,'p>{
         let rows=s.directory_lineage(self.address)?;if rows.len()!=self.chain.len(){return Err(invalid("different confirmed directory depth"));}
         let mut parent=&self.v.root;
         for ((original,held),now) in self.chain.iter().zip(rows){
+            if s.making.as_ref().is_some_and(|a|a.origin.id==now.origin.id){return Err(invalid("ordinary parent installation pending"));}
             if original!=now{return Err(invalid("physical directory is not its original confirmed entry"));}
             let actual=installed(parent,original)?;
             if actual.entity!=held.entity||fs::Birth::read(&held.file)?!=original.object.birth||!actual.same_mount(held)?{
@@ -47,7 +50,7 @@ impl<'v,'p> HeldParent<'v,'p>{
 }
 /// Checks a settled child, not its contents or the right to make a new
 /// change. This directory may have had real authorized children since birth.
-fn installed(parent:&HeldDir,row:&Created)->io::Result<HeldDir>{
+pub(super) fn installed(parent:&HeldDir,row:&Created)->io::Result<HeldDir>{
     let o=&row.origin;
     if parent.entry_present(&material::staging(o.ticket,row.slot))?{return Err(invalid("original directory private slot is still occupied"));}
     let leaf=CString::new(o.name.as_bytes()).map_err(|_|invalid("invalid original directory name"))?;

@@ -44,6 +44,16 @@ impl Journal{
         if self.genesis!=reg.basis().2{return Err(invalid("not the same original SYSTEM prefix"));}
         new_origin(&self.directory_rows,&self.entries,&self.names,&self.decisions,reg,o,|v|self.ticket_used(v))
     }
+    pub(in crate::ordinary) fn directories_at(&self,parent:DirParent)->impl Iterator<Item=&DirCreated>{
+        self.directory_rows.values().filter_map(move |&(i,_)|self.decisions.get(i).and_then(|d|d.directory().ok())
+            .filter(|d|d.origin.parent.address==parent))
+    }
+    pub(in crate::ordinary) fn new_directory_slot(&self,o:&DirOrigin,reg:&Allowed<'_>)->io::Result<()>{
+        if self.making.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||
+            self.editing.is_some()||self.incrementing.is_some()||self.moving.is_some()||self.pending.is_some()||self.tail!=0{
+            return Err(invalid("a different original command occupies this SYSTEM slot"));}
+        self.new_directory_origin(o,reg)?;self.room_for(MAX_FRAME)
+    }
     /// Root to selected child, bounded before touching any physical child.
     /// An arbitrary decoded Created is not an argument. A still-unconfirmed
     /// final frame was removed from these very indexes before Journal exists.

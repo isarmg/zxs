@@ -7,6 +7,7 @@ use super::{allocation::{self,Allocation},draft::{allocation::{self as save_allo
     wire::{self,Frame,In,NativeObject,MAX_FRAME}};
 use super::directory::types::{Created as DirCreated,Origin as DirOrigin,Parent as DirParent};
 use crate::identity::DirectoryId;
+use super::directory::operand::{self as directory_operand,Operand as DirOperand};
 use super::custody::{Method,allocation::{self as move_allocation,MoveAllocation},transfer::{self as transfer,Origin as MoveOrigin,Moved}};
 use super::delta::{allocation::{self as delta_allocation,DeltaAllocation},map::Map as DeltaMap,types::{self as delta_types,Delta}};
 use crate::{BranchId,NodeId,VersionId,VersionStorageId,fs::{self,HeldDir,invalid},EntryId,HistoryId,PoolId,OperationId,FileId,VolumeId};
@@ -39,6 +40,7 @@ impl Decision{
             3=>Ok(Self::Formal(Commit::from_envelope(pool,bytes,e)?)),
             4=>Ok(Self::Span(Saved::from_envelope(pool,bytes,e)?)),
             5=>Ok(Self::Delta(Delta::from_envelope(pool,bytes,e)?)),
+            super::directory::types::KIND=>Ok(Self::Directory(DirCreated::read(pool,bytes)?)),
             transfer::KIND=>Ok(Self::Move(Moved::read(pool,bytes,e)?)),
             _=>Err(invalid("unknown original SYSTEM command")),
         }
@@ -251,7 +253,7 @@ fn registered_handoff<'a>(o:&MoveOrigin,reg:&Allowed<'_>,before:Placement<'a>,gr
 
 pub(crate) struct Journal{
     credits:Credits,names:Names,entries:BTreeSet<EntryId>,directory_rows:directories::DirectoryRows,directory_tokens:BTreeSet<OperationId>,
-    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,
+    decisions:Vec<Decision>,originals:BTreeMap<FileId,usize>,working:BTreeMap<FileId,usize>,formal:BTreeMap<FileId,usize>,nodes:BTreeMap<NodeId,usize>,spans:BTreeMap<FileId,Vec<usize>>,deltas:BTreeMap<FileId,Vec<usize>>,moves:BTreeMap<FileId,usize>,pub(super) moving:Option<MoveAllocation>,pub(super) pending:Option<Intent>,pub(super) allocated:Option<Allocation>,pub(in crate::ordinary) making:Option<DirOperand>,
     pub(super) saving:Option<SaveAllocation>,pub(super) committing:Option<FormalAllocation>,pub(super) editing:Option<SpanAllocation>,pub(super) incrementing:Option<DeltaAllocation>,pub(super) tail:usize,genesis:[u8;32],frame_bytes:usize,
 }
 impl Journal{
@@ -264,7 +266,7 @@ impl Journal{
             let f=Decision::read(pool,&input[..n])?;idx.admit(&f,&ds,tail.len()-input.len(),prev,&allowed)?;
             prev=f.digest();idx.remember(&f,ds.len(),&allowed)?;ds.push(f);input=&input[n..];
         }
-        let (mut allocated,mut saving,mut committing,mut editing,mut incrementing,mut moving)=(None,None,None,None,None,None);
+        let (mut allocated,mut saving,mut committing,mut editing,mut incrementing,mut moving,mut making)=(None,None,None,None,None,None,None);
         if let Some((stamp,bytes))=system.record(allocation::NAME,move_allocation::MAX)?{
             if bytes.starts_with(move_allocation::MAGIC){
                 let a=MoveAllocation::from_bytes(system,pool,stamp,bytes)?;
@@ -280,7 +282,18 @@ impl Journal{
                 }
                 moving=Some(a);
             }else if bytes.len()>allocation::MAX{return Err(invalid("original non-MOVE FILE allocation exceeds its own bound"));}
-            else if bytes.starts_with(delta_allocation::MAGIC){
+            else if bytes.starts_with(directory_operand::MAGIC){
+                let a=DirOperand::from_bytes(system,pool,stamp,bytes)?;
+                let last=ds.last().is_some_and(|d|matches!(d,Decision::Directory(row) if a.matches(row)));
+                if !last{
+                    if a.seq!=ds.len() as u64+1||a.previous!=prev{return Err(invalid("mkdir reservation is not at the original frontier"));}
+                    idx.new_directory(&a.origin,&ds,&allowed)?;
+                    if a.stage.as_ref().is_some_and(|s|idx.native.contains(&s.object.birth)||
+                        !allowed.directory_child(a.origin.parent.address.volume(),a.origin.uid,s.object.entity,&s.object.birth)){
+                        return Err(invalid("mkdir reservation claims another native role"));}
+                }
+                making=Some(a);
+            }else if bytes.starts_with(delta_allocation::MAGIC){
                 let a=DeltaAllocation::from_bytes(pool,stamp,bytes)?;
                 let last=ds.last().is_some_and(|d|matches!(d,Decision::Delta(f) if a.matches(f)));
                 if !last{
@@ -330,13 +343,13 @@ impl Journal{
         // all original return credits. If it is the exact complete last frame,
         // admission already checked its predecessor; never charge it twice.
         let slot=moving.as_ref().map(|a|(a.seq,a.original.effect())).or_else(||
-            [allocated.as_ref().map(|a|a.seq),saving.as_ref().map(|a|a.seq),committing.as_ref().map(|a|a.seq),
+            [making.as_ref().map(|a|a.seq),allocated.as_ref().map(|a|a.seq),saving.as_ref().map(|a|a.seq),committing.as_ref().map(|a|a.seq),
              editing.as_ref().map(|a|a.seq),incrementing.as_ref().map(|a|a.seq)].into_iter().flatten().next().map(|seq|(seq,Effect::Ordinary)));
         if let Some((seq,e))=slot{if seq==ds.len() as u64+1{idx.credits.room(ds.len(),tail.len()-input.len(),MAX_FRAME,e)?;}}
         let pending=Intent::read(system,pool)?;
         if let Some(p)=&pending{
             let matches=match &p.frame{
-                Decision::Directory(_)=>false, // No directory operand/issuer can be admitted at this stage.
+                Decision::Directory(d)=>making.as_ref().is_some_and(|a|a.matches(d)),
                 Decision::Move(m)=>moving.as_ref().is_some_and(|a|a.matches(m)),
                 Decision::Create(f)=>allocated.as_ref().is_some_and(|a|a.matches(f)),
                 Decision::Save(f)=>saving.as_ref().is_some_and(|a|a.matches(f)),
@@ -390,7 +403,7 @@ impl Journal{
                 Decision::Save(f)=>{idx.saved.remove(&f.original.file);},Decision::Create(f)=>{let c=&f.create;idx.names.hide_created(c.volume,&c.name,c.entry,c.file)?;idx.files.remove(&c.file);idx.entries.remove(&c.entry);}}
             ds.pop();
         }
-        Ok(Self{credits:idx.credits,names:idx.names,entries:idx.entries,directory_rows:idx.directory_rows,directory_tokens:idx.directory_tokens,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
+        Ok(Self{credits:idx.credits,names:idx.names,entries:idx.entries,directory_rows:idx.directory_rows,directory_tokens:idx.directory_tokens,decisions:ds,originals:idx.files,working:idx.saved,formal:idx.formal,nodes:idx.nodes,spans:idx.spans,deltas:idx.deltas,moves:idx.moves,moving,pending,allocated,making,saving,committing,editing,incrementing,tail:unconfirmed,genesis,frame_bytes})
     }
     pub(super) fn frontier(&self)->(u64,[u8;32]){
         (self.decisions.len() as u64,self.decisions.last().map_or(self.genesis,Decision::digest))
@@ -470,7 +483,7 @@ impl Journal{
     pub(in crate::ordinary) fn check_new_lifecycle_origin(&self,reg:&Allowed<'_>,o:&MoveOrigin)->io::Result<()>{
         let(_,init,genesis)=reg.basis();
         if self.genesis!=genesis||o.purpose==super::custody::purpose::Purpose::Ordinary||o.op==init||o.ticket==init||
-            self.moving.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||
+            self.making.is_some()||self.moving.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||
             self.editing.is_some()||self.incrementing.is_some()||self.pending.is_some()||self.tail!=0||
             self.ticket_used(o.op)||self.ticket_used(o.ticket){return Err(invalid("not an unused dedicated proposal at its original SYSTEM prefix"));}
         self.room_for_effect(MAX_FRAME,o.effect())?;
@@ -483,7 +496,7 @@ impl Journal{
     pub(in crate::ordinary) fn admit_new_handoff(&self,p:&crate::pool::lease::LocalPool,op:OperationId,id:FileId,from:VolumeId,to:VolumeId)->io::Result<()>{
         p.require_business_op(op)?;self.room_for(MAX_FRAME)?;
         let c=self.file(id).ok_or_else(||invalid("no original FILE for handoff"))?;
-        if self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
+        if self.making.is_some()||self.pending.is_some()||self.allocated.is_some()||self.saving.is_some()||self.committing.is_some()||self.editing.is_some()||
             self.incrementing.is_some()||self.moving.is_some()||self.ticket_used(op)||from==to||c.create.volume!=from||
             !self.clean_initial_handoff(id)||self.names.root(from,&c.create.name)!=Some(Member::File{entry:c.create.entry,file:id})||
             self.occupied_root(to,&c.create.name){
@@ -496,6 +509,7 @@ impl Journal{
     /// Neither a completed mkdir's private name ticket nor its public Op
     /// can be reissued as a FILE command. Historical readers do not use this.
     pub(super) fn require_file_token(&self,op:OperationId)->io::Result<()>{
+        if self.making.is_some(){return Err(invalid("an original mkdir must finish before another FILE write"));}
         if self.directory_tokens.contains(&op){return Err(invalid("operation belongs to an original ordinary directory"));}Ok(())
     }
     pub(super) fn entry_used(&self,id:EntryId)->bool{self.entries.contains(&id)}

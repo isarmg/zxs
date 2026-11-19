@@ -1,6 +1,10 @@
-//! Genuine ordinary directory birth. These records use the existing SYSTEM
-//! envelope; the public/cold dispatch does not admit their kind until the
-//! native reservation, installation and exact parent-chain checks are paired.
+//! Directory identities and direct children belong to the original SYSTEM
+//! prefix. An ordinary directory contains no private FILE metadata.
 pub(in crate::ordinary) mod types;
 pub(in crate::ordinary) mod operand;
 mod path;
+pub(in crate::ordinary) mod inventory;
+mod prepare;
+mod command;
+pub use command::{DirectoryEntry,DirectoryInfo,DirectoryListing,make_directory,list_directory};
+pub use types::Parent as DirectoryParent;

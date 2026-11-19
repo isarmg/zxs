@@ -8,6 +8,7 @@ pub(super) const SLOTS:u8=8;
 const MAGIC:&[u8]=b"ZXS/ORIGINAL-ALLOCATE-EMPTY\0";
 pub(super) const MAX:usize=1024;
 
+#[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Stage{pub slot:u8,pub object:NativeObject}
 pub(super) struct Allocation {
     pub op:OperationId,pub uid:u32,pub volume:VolumeId,pub name:String,

@@ -7,7 +7,7 @@ fn origin(p:Basis,name:&str)->Origin{Origin{op:id(),uid:fs::local_uid(),parent:p
 
 #[test]
 #[ignore="real ordinary roots and separate registered recycle filesystem"]
-fn directory_frame_binds_the_exact_root_or_prior_directory_and_cannot_yet_enter_the_business_journal(){
+fn directory_frame_decodes_against_the_exact_root_or_prior_directory_without_proving_installation(){
     let t=PrivateTemp::under(&std::env::temp_dir());let r=PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
     let s=t.child("system");let a=t.child("ordinary");let b=t.child("another");let recycle=r.child("recycle");
     let info=initialize(id(),&s,&recycle,&[a.clone(),b.clone()]).unwrap();
@@ -54,5 +54,5 @@ fn directory_frame_binds_the_exact_root_or_prior_directory_and_cannot_yet_enter_
         let(raw,_)=wire::encode(p.id(),e.seq,e.previous,kind,req,data).unwrap();
         assert!(Created::read(p.id(),&raw).is_err());
     }
-    assert!(Decision::read(p.id(),&top.bytes).is_err());assert!(p.snapshot().unwrap().1.frontier()==(seq,prev));
+    assert_eq!(Decision::read(p.id(),&top.bytes).unwrap().directory().unwrap(),&top);assert!(p.snapshot().unwrap().1.frontier()==(seq,prev));
 }

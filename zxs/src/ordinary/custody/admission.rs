@@ -90,7 +90,7 @@ impl<'p> LifecycleGrant<'p>{
                     return Err(invalid("another original custody operation must complete"));}
                 Some(&a.original)
             }else{
-                if s.pending.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||
+                if s.making.is_some()||s.pending.is_some()||s.allocated.is_some()||s.saving.is_some()||s.committing.is_some()||
                     s.editing.is_some()||s.incrementing.is_some()||s.ticket_used(r.op){
                     return Err(invalid("another original operation needs the current slot"));}
                 None
@@ -99,7 +99,7 @@ impl<'p> LifecycleGrant<'p>{
             // RESTORE that needs its own final reserved position or bytes.
             s.room_for_effect(MAX_FRAME,r.call.effect(r.id,r.op))?;
             if matches!(r.call,Call::Restore{..})&&s.occupied_root(r.to,&c.create.name){
-                return Err(invalid("a different active FILE owns the restore destination name"));}
+                return Err(invalid("a current FILE or ordinary directory occupies the restore destination name"));}
             (prior,child,original)
         };
         if prior.volume()!=r.from||prior.epoch()!=r.epoch{return Err(invalid("lifecycle no longer selects this original FILE placement"));}
