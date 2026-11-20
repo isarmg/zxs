@@ -63,7 +63,9 @@ class OriginalCheckoutFixture(unittest.TestCase):
         self.live = self.open_live(self.loose, "Active")
 
     def open_live(self, source, leaf):
-        plan = CheckoutChoice(Selection.open(source), keep_session=True); self.addCleanup(plan.close)
+        archive = Selection.open(source, retain=True)
+        self.addCleanup(archive.release_display)
+        plan = CheckoutChoice(archive, keep_session=True); self.addCleanup(plan.close)
         plan.pick_store(self.store); plan.pick_target(self.tree.parent); plan.pick_private(self.state.parent)
         plan.review(leaf); plan.run()
         live = plan.take_session(); self.assertIsNotNone(live)

@@ -162,7 +162,8 @@ class CheckoutPane(QWidget):
         try:
             plan = CheckoutChoice(snapshot, keep_session=True)
             previous = self.current_store()
-            name = self._directory("为这份新工作树选择归档存储目录", str(previous.path) if previous else "")
+            name = self._directory("为这份新工作树选择已有的归档存储目录", str(previous.path) if previous else "",
+                                   read_only=True)
             if not name: return
             plan.pick_store(name)
             if previous is not None and plan.store.path == previous.path:

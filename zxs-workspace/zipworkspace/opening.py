@@ -37,7 +37,7 @@ def _parent(path):
 
 
 @contextmanager
-def _save_original(inp, size, area, expected, operation):
+def _save_original(read, size, area, expected, operation):
     """Copy to one exclusive leaf in the already selected private seed directory."""
     name = "original.zxs"
     area.check_state()
@@ -50,15 +50,16 @@ def _save_original(inp, size, area, expected, operation):
             if area.check_file(name, fd)[2] != 0: raise Rejected("checkout copy is not new")
             left, h = size, hashlib.sha256()
             while left:
-                data = inp.read(min(CHUNK, left))
-                if not data: raise Rejected("incomplete copy of the selected checkout source")
+                count = min(CHUNK, left)
+                data = read(count)
+                if not 0 < len(data) <= count: raise Rejected("incomplete copy of the selected checkout source")
                 try: count = out.write(data)
                 except OSError as error:
                     note(error, "STATE", area.path/name, "写入原始包副本", operation, area.parent)
                     raise
                 if count != len(data): raise Rejected("incomplete copy of the selected checkout source")
                 h.update(data); left -= len(data)
-            if inp.read(1): raise Rejected("selected source grew")
+            if read(1): raise Rejected("selected source grew")
             digest = h.hexdigest()
             if expected is not None and digest != expected.sha256: raise Rejected("selected original was replaced")
             with writing("STATE", area.path/name, "刷新并同步原始包副本", operation, area.parent):
@@ -77,6 +78,19 @@ def _save_original(inp, size, area, expected, operation):
         close_output_fd(fd, "STATE", area.path/name, operation, area.parent)
 
 
+def _read_selected(fd):
+    """An independent sequential cursor on a borrowed read FD (dup shares lseek state)."""
+    offset = 0
+
+    def read(size):
+        nonlocal offset
+        data = os.pread(fd, size, offset)
+        offset += len(data)
+        return data
+
+    return read
+
+
 @contextmanager
 def _source(source, seed_parent, expected, *, exclusive=None, mount=None, selected=None, operation=None):
     source = Path(source).absolute()  # A different spelling isn't the selected catalog slot.
@@ -84,11 +98,12 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
     seed = None
     try:
         with ExitStack() as held:
-            with (named_document(source) if selected is None else nullcontext(selected.document)) as inp:
-                if selected is not None:
-                    selected.check_source()
-                    inp.seek(0)
-                observed = stamp(inp)
+            with (named_document(source) if selected is None else nullcontext()) as inp:
+                if selected is None:
+                    observed, read = stamp(inp), inp.read
+                else:
+                    observed = selected.check_source()
+                    read = _read_selected(selected.source_fd)
                 if expected is not None and (str(source) != str(expected.path) or observed != expected.observed):
                     raise Rejected("checkout source is not the selected catalog entry")
                 if observed[2] > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
@@ -101,7 +116,7 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
                     seed = exclusive.path / (".zip-opening-" + new_id())
                     with writing("STATE", seed_parent, "建立私有签出准备目录", operation, exclusive.parent):
                         area = held.enter_context(staging.new_child(exclusive, seed.name, mount))
-                marker, digest, copy = held.enter_context(_save_original(inp, observed[2], area, expected, operation))
+                marker, digest, copy = held.enter_context(_save_original(read, observed[2], area, expected, operation))
                 if selected is not None:
                     selected.check_source()
                     if marker != selected.snapshot.browser.commit:

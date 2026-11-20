@@ -1,4 +1,5 @@
 from dataclasses import replace
+import errno
 import hashlib
 from importlib.util import find_spec
 import os
@@ -370,7 +371,9 @@ class OriginalDesktopCheckout(unittest.TestCase):
 
     def choice(self, snapshot=None, *, review=True, keep_session=False):
         from zipworkspace.desktop.checkout_action import CheckoutChoice
-        plan = CheckoutChoice(snapshot or Selection.open(self.loose), keep_session=keep_session)
+        source = Selection.open(self.loose, retain=True) if snapshot is None else snapshot
+        self.addCleanup(source.release_display)
+        plan = CheckoutChoice(source, keep_session=keep_session)
         self.addCleanup(plan.close)
         plan.pick_store(self.store); plan.pick_target(self.parent); plan.pick_private(self.private)
         if review:
@@ -434,10 +437,35 @@ class OriginalDesktopCheckout(unittest.TestCase):
 
     def test_loose_selected_original_creates_an_actual_cli_checkout_without_reopening_source(self):
         from zipworkspace import opening, worktree
-        plan = self.choice()
-        self.assertFalse(self.target.exists()); self.assertFalse(any(self.private.iterdir()))
-        with patch.object(opening, "named_document", side_effect=AssertionError("must borrow original file")):
+        display = Selection.open(self.loose, retain=True)
+        fd = display.held.fileno()
+        os.lseek(fd, 13, os.SEEK_SET)
+        original_open, original_read, ranges = os.open, os.pread, []
+        data_length = self.loose.stat().st_size
+
+        def guarded(path, flags, *args, **kwargs):
+            if os.fspath(path) == str(self.loose):
+                self.assertTrue(flags & os.O_PATH)  # Name/actual mount evidence, no second body open.
+            return original_open(path, flags, *args, **kwargs)
+
+        def short_read(handle, size, offset):
+            self.assertTrue(os.path.samestat(os.fstat(handle), os.fstat(fd)))
+            self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 13)
+            data = original_read(handle, min(17, size), offset)
+            ranges.append((offset, offset + len(data), size))
+            return data
+
+        with patch.object(os, "open", new=guarded), \
+             patch.object(os, "supports_dir_fd", os.supports_dir_fd | {guarded}), \
+             patch.object(os, "pread", side_effect=short_read), \
+             patch.object(opening, "named_document", side_effect=AssertionError("must borrow original file")):
+            plan = self.choice(display)
+            self.assertFalse(self.target.exists()); self.assertFalse(any(self.private.iterdir()))
             self.assertEqual(plan.run(), (self.target, self.marker))
+        self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 13)
+        self.assertEqual(ranges[0][0], 0)
+        self.assertEqual(ranges[-1], (data_length, data_length, 1))
+        self.assertEqual([r[1] for r in ranges[:-1]], [r[0] for r in ranges[1:]])
         self.assertEqual((self.target / "design/notes").read_bytes(), b"desktop selection")
         self.assertTrue((self.target / "empty").is_dir())
         self.assertEqual((self.state / "original.zxs").read_bytes(), self.loose.read_bytes())
@@ -445,6 +473,71 @@ class OriginalDesktopCheckout(unittest.TestCase):
         self.assertEqual(opening.status(self.state)["operation"], plan.operation)
         self.assertFalse(any(self.store.iterdir()))
         with self.assertRaises(Rejected): plan.run()
+
+
+    def test_prepared_original_read_rejects_disconnect_or_early_eof_without_publication(self):
+        from zipworkspace import opening
+        for broken in (b"", OSError(errno.EIO, "read connection lost")):
+            with self.subTest(broken=broken):
+                plan = self.choice()
+                positioned = os.pread
+                def read(fd, size, offset):
+                    self.assertEqual(fd, plan.source_fd)
+                    if offset == 0: return positioned(fd, min(17, size), 0)
+                    if isinstance(broken, Exception): raise broken
+                    return broken
+                with patch.object(opening, "named_document", side_effect=AssertionError("never retry a new source")), \
+                     patch.object(os, "pread", side_effect=read):
+                    with self.assertRaisesRegex(Rejected, "尚未安装原登记"): plan.run()
+                self.assertFalse(self.target.exists())
+                self.assertFalse(self.state.exists())
+                self.assertEqual(list(self.store.iterdir()), [])
+
+    def test_missing_or_closed_display_fd_and_different_source_mount_refuse_before_prepare(self):
+        from zipworkspace import private_stage
+        from zipworkspace.desktop.checkout_action import CheckoutChoice
+        detached = Selection.open(self.loose)
+        closed = Selection.open(self.loose, retain=True)
+        closed.release_display()
+        for choice in (detached, closed):
+            with self.subTest(choice=choice), self.assertRaisesRegex(Rejected, "首次核验的原归档句柄"):
+                CheckoutChoice(choice)
+        plan = self.choice()
+        seen = self.loose.stat()
+        native = private_stage.mount_id
+        def another_mount(fd):
+            if fd != plan.source_fd and os.path.samestat(os.fstat(fd), seen):
+                return b"another-mount-same-inode"
+            return native(fd)
+        with patch.object(private_stage, "mount_id", side_effect=another_mount):
+            with self.assertRaisesRegex(Rejected, "原挂载"): plan.run()
+        self.assertFalse(self.state.exists())
+        self.assertEqual(list(self.private.iterdir()), [])
+
+    def test_listed_slot_requires_exact_raw_bytes_and_checks_the_real_end_of_input(self):
+        original = self.store / self.marker.filename
+        self.loose.rename(original)
+        current = Selection.open(original)
+        exact = current.catalog(StoreSelection.open(self.store)).select_branch(self.marker.branch)
+        display = Selection.open(exact.path, expected=exact, retain=True)
+        other = self.root/"reencoded.zxs"
+        write_snapshot(other, marker=self.marker, year=2001)
+        alternative = other.read_bytes()
+        self.assertEqual(len(alternative), exact.observed[2])
+        self.assertNotEqual(hashlib.sha256(alternative).hexdigest(), exact.sha256)
+        for wrong_eof, why in ((False, "selected original was replaced"), (True, "selected source grew")):
+            plan = self.choice(display)
+            positioned = os.pread
+            def read(fd, size, offset):
+                self.assertEqual(fd, plan.source_fd)
+                if wrong_eof:
+                    return b"x" if offset == exact.observed[2] else positioned(fd, size, offset)
+                return alternative[offset: offset + size]
+            with self.subTest(wrong_eof=wrong_eof), patch.object(os, "pread", side_effect=read):
+                with self.assertRaisesRegex(Rejected, why): plan.run()
+            self.assertFalse(self.target.exists())
+            self.assertFalse(self.state.exists())
+            self.assertEqual(list(self.store.iterdir()), [original])
 
     def test_checkout_hint_uses_only_the_exact_store_entry_and_never_promotes_its_bytes_to_a_verified_base(self):
         slot = self.store/self.marker.filename
@@ -484,7 +577,7 @@ class OriginalDesktopCheckout(unittest.TestCase):
         self.loose.rename(original)
         current = Selection.open(original)
         exact = current.catalog(StoreSelection.open(self.store)).select_branch(self.marker.branch)
-        plan = self.choice(Selection.open(exact.path, expected=exact))
+        plan = self.choice(Selection.open(exact.path, expected=exact, retain=True))
         newer = replace(self.marker, generation=2, operation="4"*32, parent=self.marker.operation)
         write_snapshot(self.store / newer.filename, marker=newer)
         with patch.object(Selection, "catalog", side_effect=AssertionError("not another head selection")):
@@ -712,7 +805,7 @@ class OriginalDesktopCheckout(unittest.TestCase):
             return future
         for mode in ("cancel", "selection_changed", "accept"):
             with self.subTest(mode=mode):
-                win.archive.show_selection(Selection.open(self.loose))
+                win.archive.show_selection(Selection.open(self.loose, retain=True))
                 def decide(_parent, _title, detail, *, attestation):
                     self.assertIn(str(self.target), detail); self.assertIn("独占", attestation)
                     pane.pick()  # The confirmation is already active; must not open another picker.
@@ -725,6 +818,8 @@ class OriginalDesktopCheckout(unittest.TestCase):
                      patch.object(ui, "confirm", side_effect=decide):
                     pane.pick()
                 self.assertEqual(picks.call_count, 3)
+                opts = picks.call_args_list[0].kwargs["options"]
+                self.assertTrue(opts & ui.QFileDialog.Option.ReadOnly)
                 self.assertFalse(pane.active)
                 self.assertEqual(self.target.is_dir(), mode == "accept")
                 self.assertEqual(self.state.is_dir(), mode == "accept")
@@ -732,7 +827,11 @@ class OriginalDesktopCheckout(unittest.TestCase):
         self.assertEqual((self.target/"design/notes").read_bytes(), b"desktop selection")
         self.assertIn(pane.live.instance, pane.details.text())
         self.assertIn("未检查工作文件", pane.details.text())
-        active = pane.live
+        active, displayed = pane.live, pane.snapshot
         win.archive.clear_document()
+        self.assertTrue(displayed.held.closed)
+        self.assertIs(pane.live, active)  # Leaving this display does not close the existing CLI worktree.
+        self.assertFalse(active.closed)
+        pane.close_session()
         self.assertTrue(active.closed); self.assertIsNone(pane.live)
         self.assertFalse(pane.refresh.isEnabled())

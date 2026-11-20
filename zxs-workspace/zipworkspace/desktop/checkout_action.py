@@ -6,10 +6,9 @@ import stat
 import sys
 
 from .. import opening, private_stage
-from ..archive import stamp
 from ..comparison import Folder
 from ..capacity import describe
-from ..document import named_document, native_identity
+from ..document import native_identity
 from ..model import Rejected, member_name, new_id
 from ..private_candidates import generation, held_candidates
 from ..publish import held_store, require_native_writer
@@ -17,6 +16,7 @@ from ..publish import held_store, require_native_writer
 
 def available():
     return (sys.platform.startswith("linux") and os.name == "posix"
+            and hasattr(os, "O_PATH") and callable(getattr(os, "pread", None))
             and callable(getattr(sqlite3.Connection, "serialize", None))
             and os.scandir in os.supports_fd)
 
@@ -40,22 +40,22 @@ class CheckoutChoice:
     """Handles live from the individual picks through confirmation, job and original result."""
     def __init__(self, snapshot, *, keep_session=False):
         if not available(): raise Rejected("此平台不能从桌面创建 Linux CLI 工作树")
+        if snapshot.held is None or snapshot.held.closed:
+            raise Rejected("本窗口未保留首次核验的原归档句柄；请重新明确选择快照，不按旧名重开")
         require_native_writer()
         self.stack = ExitStack()
         self.snapshot = snapshot
         self.operation = new_id()
         self.store = self.target = self.base = self.state = None
-        self.keep_session = keep_session and hasattr(os, "O_PATH")
+        self.keep_session = keep_session
         self.provisional = self.session = self.verified_sha = None
         self.publication = None  # Only the actual private STATE installation boundary sets this.
         self.used = self.closed = self.initial_opened = False
         try:
-            # Transfer a read descriptor while named_document holds and checks the SAME object.
-            with named_document(snapshot.path) as original:
-                fd = os.dup(original.fileno())
-                self.stack.callback(os.close, fd)
-                self.document = self.stack.enter_context(os.fdopen(fd, "rb", closefd=False))
-                self.check_source()
+            # Transfer the exact input already verified for display. Do not
+            # access a slow/rebound archive name during this GUI-thread handoff.
+            self.source_fd = snapshot.held.duplicate()
+            self.stack.callback(os.close, self.source_fd)
         except BaseException:
             self.close()
             raise
@@ -74,11 +74,21 @@ class CheckoutChoice:
 
     def check_source(self):
         s = self.snapshot
-        if (self.closed or stamp(self.document) != s.observed or
-                native_identity(s.path.stat(follow_symlinks=False), stat.S_IFREG) != s.observed[:2] or
-                s.exact is not None and (s.exact.path != s.path or s.exact.observed != s.observed or
-                                         s.exact.marker != s.browser.commit)):
-            raise Rejected("所选节点的原归档已变化；未重新选择分支头")
+        if self.closed: raise Rejected("原归档读取能力已经关闭")
+        # O_PATH compares the actual live mount and final name without opening
+        # a second data stream (or following a leaf symlink).
+        named = os.open(s.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            for fd in (self.source_fd, named):
+                m = os.fstat(fd)
+                if native_identity(m, stat.S_IFREG) != s.observed[:2] or generation(m) != s.observed:
+                    raise Rejected("所选节点的原归档已变化；未重新选择分支头")
+            if (private_stage.mount_id(named) != private_stage.mount_id(self.source_fd)
+                    or s.exact is not None and (str(s.exact.path) != str(s.path) or s.exact.observed != s.observed
+                                                or s.exact.marker != s.browser.commit)):
+                raise Rejected("所选节点已不在原挂载或原归档中；不会重新打开正文")
+        finally: os.close(named)
+        return s.observed
 
     def _select(self, old):
         if self.closed or self.used or old is not None: raise Rejected("请重新开始一次明确的目录选择")
@@ -155,8 +165,9 @@ class CheckoutChoice:
         return (f"归档：{self.snapshot.path}\n仓库：{m.repo}\n分支：{m.branch} · 第 {m.generation} 代\n"
                 f"原节点：{m.operation}\n整树 SHA-256：{m.tree}\n{exact}\n\n新工作目录：{self.destination}\n"
                 f"归档存储：{self.store.path}\n{hint}\n新 CLI 状态目录（STATE）：{self.state}\n{space}\n本次操作号：{self.operation}\n\n"
-                "此操作将写入完整快照，并在所选专用位置创建可由命令行管理的状态；两个新名称都不能已存在。"
-                "请保留 STATE 与操作号。不会覆盖、自动换名或将现有工作树登记为桌面托管实例。")
+                "只从首次核验时持有的原归档读取正文；本次仅写本机工作目录与私有 STATE，STORE 只读。"
+                "远端 STORE 可以作为本次读取来源；这不授予远端提交或同步资格。后续窗口提交仍要求已准入的本机 STORE。"
+                "两个新名称都不能已存在。请保留 STATE 与操作号；不覆盖、不自动换名或登记已有工作树。")
 
     def check_roots(self):
         if self.closed: raise Rejected("原目录选择已经关闭")
