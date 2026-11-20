@@ -2,7 +2,7 @@
 //! username, flag, raw key, success template or replacement final GSS token.
 use super::{FinalGss,MechanismProof,ProtectedRevision,Rejected,Result,challenge::ChallengeService};
 use crate::smb::session::{FinalKeys,VerifiedExchange};
-use std::sync::Arc;
+use std::{num::NonZeroU64,sync::{Arc,Weak}};
 
 /// Still NOT a live entry or file authority. The original connection must own
 /// this candidate, keep its real Claim and publish only on confirmed send.
@@ -26,7 +26,28 @@ impl MechanismProof {
 impl BoundSession {
     pub(in crate::smb) fn current(&self,service:&ChallengeService)->bool {service.current(&self.revision)}
 }
-// There is deliberately no production packet/key getter at this stage.
+/// Weak currency marker in the run-wide index. It conveys no key, subject,
+/// storage right or way to make a session. The connection owns the keys.
+pub(in crate::smb) struct LiveMark(Weak<ProtectedRevision>);
+impl LiveMark {
+    pub(in crate::smb) fn current(&self,s:&ChallengeService)->bool {
+        self.0.upgrade().is_some_and(|r|s.current(&r))
+    }
+}
+impl SealedFinal {
+    /// The caller binds these owned, already-signed bytes to the original
+    /// reply ledger. Failed binding drops the same sealed state and all keys.
+    pub(in crate::smb) fn bind_to<T,E>(self,bind:impl FnOnce(Vec<u8>)->std::result::Result<T,E>)
+        ->std::result::Result<(T,BoundSession),E> {Ok((bind(self.bytes)?,self.bound))}
+}
+impl BoundSession {
+    pub(in crate::smb) fn same_id(&self,id:NonZeroU64)->bool {self.keys.signer.id==id}
+    pub(in crate::smb) fn install_while_current<R>(self,s:&ChallengeService,install:impl FnOnce(Self,LiveMark)->R)
+        ->Option<R> {
+        let rev=Arc::clone(&self.revision);
+        s.while_current(&rev,||install(self,LiveMark(Arc::downgrade(&rev))))
+    }
+}
 
 #[cfg(test)]
 #[path = "../../../test/smb/final_keys.rs"]

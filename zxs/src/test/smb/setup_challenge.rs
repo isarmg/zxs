@@ -8,7 +8,7 @@ use crate::smb::connection::{
 use std::sync::Mutex;
 
 pub(in crate::smb::connection::sessions) fn provider()->RunningServerGuid {
-    RunningServerGuid{run:Arc::new(Run{guid:[17;16],index:Mutex::new(Global{next:1,live:Vec::new()}),
+    RunningServerGuid{run:Arc::new(Run{guid:[17;16],index:Mutex::new(Global::empty()),
         verifier:Some(ChallengeService::fixture())})}
 }
 fn one()->Vec<u8> {

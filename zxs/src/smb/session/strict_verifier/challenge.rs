@@ -23,7 +23,15 @@ impl ChallengeService {
         self.revision.read().map_err(|_|Rejected)?.as_ref().cloned().ok_or(Rejected)
     }
     pub(super) fn current(&self,rev:&Arc<ProtectedRevision>)->bool {
-        self.revision.read().is_ok_and(|g|g.as_ref().is_some_and(|v|v.epoch==rev.epoch && Arc::ptr_eq(v,rev)))
+        self.while_current(rev,||()).is_some()
+    }
+    /// Only short in-memory publication uses the held read lock. A future
+    /// credential writer must never take a transport/registry lock while
+    /// holding the write lock; the shared order is registry -> revision.
+    pub(super) fn while_current<R>(&self,rev:&Arc<ProtectedRevision>,f:impl FnOnce()->R)->Option<R> {
+        let g=self.revision.read().ok()?;
+        if !g.as_ref().is_some_and(|v|v.epoch==rev.epoch && Arc::ptr_eq(v,rev)) {return None;}
+        let out=f();drop(g);Some(out)
     }
     /// No production branch accepts a nonce, timestamp, caller-supplied key
     /// or substitute provider. Failure of the actual kernel fill aborts.

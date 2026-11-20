@@ -29,7 +29,7 @@
 
 选择标准允许的**空 GSS 安全缓冲区**（起点 128，长度零），由客户端发起认证；不编造 Kerberos、NTLM 或 GSS 服务器广告，不从空缓冲区放行匿名。原生源码方面，[Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L1237-L1268)在空缓冲区启用 raw NTLMSSP 选择，[Apple SMBClient](https://github.com/apple-oss-distributions/SMBClient/blob/99da2d9a4bbe17cde3cee382ad3edc16e25f5535/kernel/netsmb/smb_smb_2.c#L6891-L6951)可继续解析协商 context；均不能代替后续严格 MIC 或三端挂载验收。 `src/test/smb/negotiate_reply.rs` 保留默认／显式两套完整应答及下一条原请求哈希固定值、无共同签名、未知能力、时钟边界和本地失败源码例；没有运行构建、测试或客户端。
 
-## SHA-512 原字节记录（尚未接到网络或身份认证）
+## SHA-512 原字节记录（已用于严格认证，尚未接网络）
 
 `wire/preauth` 从已解析的单条 3.1.1 NEGOTIATE 出发，连接只保留请求和实际序列化回复的链式哈希。每个新的 SESSION_SETUP 尝试从该连接值单独起步；接收完整原请求，并且仅在同一 MessageId、同一已分配 SessionId 的 MORE_PROCESSING_REQUIRED 回复时继续。固定的 Rust SHA-512 实现见[上游来源及许可](../../vendor/rust/README.md)。TCP 长度头不入哈希，原 SMB2 消息头、正文、间隙/填充均入哈希。最后成功的 SESSION_SETUP 回复将使用由最后一个请求哈希派生的密钥签名，因此它不会再次进入这份 KDF 上下文。该值不是口令证明、签名或有权访问文件的会话。预认证层本身不运行 GSS/KDF，不编码应答，不查询凭据或启动生产监听。依据：[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[新会话](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)、[GSS 处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)。
 
@@ -41,7 +41,7 @@
 
 ### 正在协商的 SID 和第一个 request-mic MORE
 
-每次服务初始化对应唯一不透明运行对象，包含 GUID 和所有连接共用的 in-progress 索引；知道相同的 GUID 字节不能重建这个对象。根据[新会话及双表规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)，在真正的 `Select` 编码 MORE 时，全服务登记从未使用的非零、非全 1 SID，原连接登记自己的阶段；连接之间不重复发号，号码不是认证凭证。全运行最多 64 个、每连接最多 8 个进行中槽，初始选择有效期 30 秒（单调时钟）；过期、撤销和错误不能使编号复用。全局表只弱引用阶段注册；连接私有表才持有令牌状态。狭小的索引锁不跨 GSS、哈希或发送。
+每次服务初始化对应唯一不透明运行对象，包含 GUID 和所有连接共用的 in-progress 索引；知道相同的 GUID 字节不能重建这个对象。根据[新会话及双表规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)，在真正的 `Select` 编码 MORE 时，全服务登记从未使用的非零、非全 1 SID，原连接登记自己的阶段；连接之间不重复发号，号码不是认证凭证。全运行最多 64 个、每连接最多 8 个会话槽（进行中或已确认）；初始握手有效期 30 秒（单调时钟），并不作为已确认会话的有效期；过期、撤销和错误不能使编号复用。全局表只弱引用阶段注册；连接私有表才持有令牌状态。狭小的索引锁不跨 GSS、哈希或发送。
 
 首包需要选机制时，发出的[SESSION_SETUP 正文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/0324190f-a31b-4666-9fa9-5c624273a694)是真正的 STATUS_MORE_PROCESSING_REQUIRED，加[SPNEGO request-mic](https://www.rfc-editor.org/rfc/rfc4178#section-4.2.2)和唯一选中的 NTLM OID，不捏造 Type 2、用户名、guest 或成功。保留原 MID、charge 和阶段专属应回额度。用同份最终字节同时核原 transcript／GSS 和额度。只有原发送者确认这份不可变包已成功提交，才把原连接该槽从“待发送”改为“等 Type 1”并公布信用；未提交、结果不明或临界时过期则关闭本连接，不留下可续阶段。
 
@@ -67,14 +67,14 @@
 
 ## 严格 NTLMv2 机制证明（开发资料，未启用）
 
-`session/strict_verifier` 消费同一次握手的原 Type 1、服务器实际序列化并逐字核对的 Type 2、最后一个 SMB 请求与其 Type 3。受保护的材料是针对**一个确切账户、域和代次**的预派生 ResponseKeyNT，等同该身份的秘密，不是 Web 哈希，不从网络接收；本模块没有此材料或挑战的生产构造器、密码输入、账户库或发包函数。候选挑战只能消耗一次，包括出错；核对原 SID／MORE 的原 MID 和有限期，把最终请求的原 SMB transcript 随证明保留。连接 owner 今后还须实际生成不可预测挑战、限额／防重复 MessageId、从原连接独占取出、终验原凭据代和同一实例。未完成这些，不得宣布身份成立。
+`session/strict_verifier` 消费同一次握手的原 Type 1、服务器实际序列化并逐字核对的 Type 2、最后一个 SMB 请求与其 Type 3。受保护的材料是针对**一个确切账户、域和代次**的预派生 ResponseKeyNT，等同该身份的秘密，不是 Web 哈希，不从网络接收；没有生产账户提供者、密码输入／读取、账户库或网络发包函数；仅在受保护的实际凭据代存在时，内部挑战器才取新的系统熵。候选挑战只能消耗一次，包括出错；核对原 SID／MORE 的原 MID 和有限期，把最终请求的原 SMB transcript 随证明保留。连接 owner 已把不可预测挑战、限额／防重复 MessageId、独占取出和原凭据代／实例终验连在同一请求上；缺真实凭据来源或尚未完成最终提交都不产生可用身份。
 
 | 层 | 规范与本开发配置的决定 |
 | --- | --- |
 | NTLMv2 响应 | 使用[原服务器挑战及客户端原始 v2 blob](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/5e550938-91d4-459f-b67d-75d70009e3f3)校验 NTProofStr，匹配受保护账户／域、服务器目标信息、时间及配置的 CIFS SPN。拒绝 LM/NTLMv1、匿名、替换账户或凑出的备用域。仅接受 Unicode、签名、ESS、VERSION 和 128 位等本配置的协商结果；标志不一致即拒。没选 KEY_EXCH 时用原 SessionBaseKey；选了时仅从本次 16 字节加密字段恢复导出键。这里只接普通无 TLS 通道绑定的 profile，不假造 CBT 或 SMB 数据加密。 |
 | NTLM 内层 MIC | [MS-NLMP 客户端规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/c0250a97-2940-40c7-82fb-20d208c71e96)：带服务器时间戳时客户端 SHOULD 发送；[AV_FLAGS 的 0x2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/83f5e789-660d-4781-8491-5f8c6641f75e)是客户端表示已经包含 MIC，不是身份或服务器强制开关。[服务端规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/f9e6fbc4-a953-4f24-b229-ccdcc213b9ec)要求核已标注 MIC；[安全说明](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/1e846608-4c5f-41f4-8454-1b91af8a755b)区分未标注的通用允许范围与篡改风险。**本版直接、SPNEGO 两路均硬性要求并实际核验；未标、缺失或算错全拒**，不以三平台兼容为由降级。原 Type 1＋2＋3 只清零 Type 3 的 MIC 本身；三报文均已确定带 VERSION，不猜 16 字节缺口。 |
 | SPNEGO mechListMIC | [RFC 4178 §5(c)](https://www.rfc-editor.org/rfc/rfc4178#section-5) 与[微软产品说明 <8>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-spng/211417c4-11ef-46c0-a8fb-f178a51c2088)：保护的对象是首个客户端原 MechTypeList DER SEQUENCE，不是 Type 1＋2＋3。当本严格配置选择 SPNEGO 时还必须独立校验客户端方向，并生成服务端方向的最终名单 MIC；方向、序号、签名键均不能混用。NTLM [ESS 签名](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/a92716d5-d164-4960-9e15-300f4eef44a8)的可选 RC4 仅按协商保护短校验和、封装会话键，不用于文件、密码存储或新功能。最初就是直接 NTLM 时没有名单可签；已选择 SPNEGO 后不允许回退。 |
-| SMB3.1.1 | SHA-512 preauth 绑定原 SMB 报文；它不是 NTLM MIC 或名单 MIC。未来只准持原 `MechanismProof` 的连接 owner 在同代复核后，把确切最终 GSS 输出写入成功应答、再用同次导出键及请求 transcript 为该真实应答签名；所有普通命令仍走强制 AES-CMAC。当前无钥匙读取器、`VerifiedExchange` 签发者、成功会话、业务树、监听或线上口令。 |
+| SMB3.1.1 | SHA-512 preauth 绑定原 SMB 报文；它不是 NTLM MIC 或名单 MIC。只有持原 `MechanismProof` 的连接 owner 在同代复核后才可准备签名成功应答；提交原消息才发布本连接身份。普通命令另需强制 AES-CMAC、原活会话与业务授权。本实现无生产凭据来源、业务树、监听或线上口令。 |
 
 Windows、macOS 及 Linux 均没有通过原生验收。[Linux v6.12 的 raw NTLMSSP 构造](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/sess.c#L1075-L1171)在这条普通路径构造 Type 3 而不计算本版要求的 NTLM MIC，故**该版本该路径不能通过严格配置**；能解析 raw token 不代表能挂载。未来不同 profile 须独立说明和审查，不能识别客户端名称后放宽或试错回退。
 
@@ -84,13 +84,15 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 `src/test/smb/strict_verifier.rs` 只存公开合成的完整原消息和固定答案。固定材料不对应实际账户，包含有／无 KEY_EXCH 的导出键、双方向名单 MIC，以及 v2 证明虽正确但无内层 MIC、错 SPN／时间等拒绝例；另列[微软规范公开的 SessionBaseKey 答案](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/54973495-20d2-49e8-9925-c399a403ed4a)作交叉基准，不给生产补造凭据、连接或权限。仅静审源码，未构建、运行测试或实际认证。
 
-### 末次回复的密钥和签名（封存，尚未发布到连接）
+### 末次回复的密钥、签名与原连接发布
 
-只有严格证明仍对应原凭据代，才能用该证明的原末请求头和机制实际输出组装最终回复。根据 [MS-SMB2 §3.3.5.5.3 第 6 至 12 步](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)，从同一次 NTLM ExportedSessionKey 和截至末请求的 SHA-512 分开派生 SMBSigningKey 与 SMBAppKey，各自的标签含终止 NUL；最终回复不再进入 KDF。单通道引用同一签名密钥，保留私有会话密钥和应用密钥，不导出给存储或 RPC。服务器按原请求的 MID、SID、charge、Reserved、优先级和应回额度，对零 guest/null/encrypt 标志、真实 GSS token（直接 NTLM 为零长，SPNEGO 有独立服务端名单 MIC）及整份原消息做 AES-CMAC 后设置 SIGNED。两条签名／分离密钥固定向量从同一原连接机制证明确认，不是实机结果。此片只在受保护机制内封存已签消息，不给调用方发送器、可用会话或文件权限；实际限额、客户端方言登记、发送边界和本地有效状态另行接线。
+只有严格证明仍对应原凭据代，才能用该证明的原末请求头和机制实际输出组装最终回复。根据 [MS-SMB2 §3.3.5.5.3 第 6 至 12 步](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)，从同一次 NTLM ExportedSessionKey 和截至末请求的 SHA-512 分开派生 SMBSigningKey 与 SMBAppKey，各自的标签含终止 NUL；最终回复不再进入 KDF。单通道引用同一签名密钥，保留私有会话密钥和应用密钥，不导出给存储或 RPC。服务器按原请求的 MID、SID、charge、Reserved、优先级和应回额度，对零 guest/null/encrypt 标志、真实 GSS token（直接 NTLM 为零长，SPNEGO 有独立服务端名单 MIC）及整份原消息做 AES-CMAC 后设置 SIGNED。两条签名／分离密钥固定向量从同一原连接机制证明确认，不是实机结果。机制内封存的消息本身不授会话。只有持同一原 Claim 的连接能按下述顺序处理，文件授权不在这一步。
 
-## 认证后的明文消息签名（未接认证、网络或存储）
+同一次服务运行另对最多 128 个协商成功的连接登记弱引用，按实收 ClientGuid 和实际选中的 dialect 建有界客户端表。在真实 GSS 末轮检索／插入方言；不一致不能接收成功，也不影响同 GUID 的其他会话。根据[连接丢失规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/eb5bfe99-47fe-4e87-8e87-08a084dcefb6)，只有该 GUID 的最后一条已协商连接消失，才在整理登记时允许清掉客户端项；GUID 不是主体。原 ProofTaken 项只归该收到的请求。最终签名包仍要核原本应回的额度，交给原发送者之前复核凭据和原期限；仅当**原发送者已完整提交同一不可变消息**，在同一注册／凭据代的短临界区内以该 Claim 转为 Valid，再结清原额度。提交不明、过期、断连或撤代不产生可用状态。密钥和主体只留在所属连接，本运行全局只留可撤销的弱标记；没有开放后台构造器、密钥 getter、实际传输、原生监听或生产凭据读取。普通消息的授权与树／打开表未接线；不支持重新认证或绑定，不会借它刷新原有效会话。部署时真实传输必须按提交合同处理部分写／断开，并主动回收静默连接。
 
-`session/` 实现[规范 KDF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/da4e579e-02ce-4e27-bbce-3fc816a3ff92) 的一个 HMAC-SHA-256 计数块，从同一新 NTLM 会话的 16 字节导出键和最后一个请求的 64 字节 transcript 派生 128 位签名键。标签含结尾 NUL，KDF 自己的分隔零字节另算。真实认证的完成凭据没有生产构造器；以后只有完成挑战、主体、MIC 和当前代检查的原尝试才能交出这一对，不能从报文、Web 身份或布尔值制造会话。密钥缓冲使用 zeroize；不承诺清除所有栈临时副本。没有使用宿主加密服务。
+## 认证后的明文消息签名（未接普通命令派发、网络或存储）
+
+`session/` 实现[规范 KDF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/da4e579e-02ce-4e27-bbce-3fc816a3ff92) 的一个 HMAC-SHA-256 计数块，从同一新 NTLM 会话的 16 字节导出键和最后一个请求的 64 字节 transcript 派生 128 位签名键。标签含结尾 NUL，KDF 自己的分隔零字节另算。当前没有生产账户或凭据来源；只有完成挑战、主体、MIC 和当前代检查的原尝试才能交出这一对，不能从报文、Web 身份或布尔值制造会话。密钥缓冲使用 zeroize；不承诺清除所有栈临时副本。没有使用宿主加密服务。
 
 [协商](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)没有 Signing Capabilities context 时仍强制 CMAC；显式 CMAC 或合法非空但无共同算法时应答须回且只回 CMAC。计数为零、被截断或串错请求/回复不能作“无签名”处理。最终回复的签名函数只接收与最终请求同 MessageId、同已分配 SessionId 的实际未签成功响应；拒绝 guest/null/encrypt 标记。它给该响应签名，不把成功响应再加入 KDF。普通明文请求只有签名位和全部 16 字节 [AES-CMAC 校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5b570c0b-0854-4324-8fb5-d410692dde3e)均成立才通过签名检查。每段用原 SMB 消息和自己的尾填充，只有 Signature 16 字节置零；关联链继承的实际 SessionId 只用来选键，不改变验签字节。不相关链可涉及多个有效会话。整批验完才可能进入独立的 credits、当前会话/树、命令、原打开和存储终验；没有这里发出的成功应答或文件授权。普通回复头的生成/签名、CANCEL 和加密 transform 不由此入站函数处理。
 

@@ -5,7 +5,7 @@ use crate::smb::connection::{Opening,OpeningSend,setup::{Start,tests::{PICK,body
 use crate::smb::wire::preauth::tests::synthetic_exchange;
 
 pub(in crate::smb::connection) fn running(guid:[u8;16])->RunningServerGuid {
-    RunningServerGuid {run:Arc::new(Run{guid,index:Mutex::new(Global{next:1,live:Vec::new()}),verifier:None})}
+    RunningServerGuid {run:Arc::new(Run{guid,index:Mutex::new(Global::empty()),verifier:None})}
 }
 impl Opening {
     // For the existing ledger-only fixtures. Its known server wire bytes are
@@ -14,10 +14,11 @@ impl Opening {
         self.bind(actual,&running(std::array::from_fn(|i|0xa0+i as u8)))
     }
 }
-pub(super) fn connected(run:&RunningServerGuid)->Connection {
+pub(super) fn connected(run:&RunningServerGuid)->Connection {try_connected(run).unwrap()}
+pub(super) fn try_connected(run:&RunningServerGuid)->Result<Connection> {
     let [mut q,mut r,..]=synthetic_exchange();r[72..88].copy_from_slice(run.wire());
     q[14..16].copy_from_slice(&4u16.to_le_bytes());r[14..16].copy_from_slice(&4u16.to_le_bytes());
-    let raw=frame(&q);Opening::received(&parsed(&raw)).unwrap().bind(r,run).unwrap().submitted().unwrap()
+    let raw=frame(&q);Opening::received(&parsed(&raw))?.bind(r,run)?.submitted()
 }
 pub(super) fn selected(c:&mut Connection,mid:u64,now:Instant)->Result<u64> {
     let bytes=frame(&body(PICK,mid,0));let f=parsed(&bytes);

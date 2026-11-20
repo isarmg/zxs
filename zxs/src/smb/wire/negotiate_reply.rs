@@ -25,6 +25,7 @@ impl OriginalHeader {
 }
 
 pub(in crate::smb) struct Selection {
+    pub(in crate::smb) dialect:u16,
     pub(in crate::smb) guid: [u8;16],
     pub(in crate::smb) security_mode: u16,
     pub(in crate::smb) capabilities: u32,
@@ -32,8 +33,8 @@ pub(in crate::smb) struct Selection {
 impl Selection {
     /// Local sender's actual bytes, not the client's capabilities or a grant.
     pub(in crate::smb) fn emitted(p: &[u8]) -> Result<Self> {
-        let fields = Self { guid: field(p,72)?, security_mode: u16le(p,66)?, capabilities: u32le(p,88)? };
-        if fields.guid == [0;16] || fields.security_mode != MODE || fields.capabilities != LARGE_MTU {
+        let fields = Self { dialect:u16le(p,68)?, guid: field(p,72)?, security_mode: u16le(p,66)?, capabilities: u32le(p,88)? };
+        if fields.dialect!=0x0311 || fields.guid == [0;16] || fields.security_mode != MODE || fields.capabilities != LARGE_MTU {
             return Err(Error::InvalidRequest);
         }
         Ok(fields)

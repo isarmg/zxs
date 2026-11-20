@@ -1,5 +1,5 @@
 //! Credit/sequence state for one direct-TCP/445 transport. No socket,
-//! credential, live session, file table or command/response authority here.
+//! production credential source, listener, file table or storage authority.
 //! It is intentionally impossible to construct a negotiated state from
 //! peer-supplied IDs, a grant integer or an externally supplied transcript.
 use super::wire::{
@@ -21,7 +21,7 @@ const K64: u64 = 65_536;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Fault {
     Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, SetupPhase, Closed, Range, FrameSize,
-    Resources, Exhausted, WrongBatch, NoReply, WrongReply, SessionLimit, SessionState, NoVerifier,
+    Resources, Exhausted, WrongBatch, NoReply, WrongReply, SessionLimit, SessionState, NoVerifier, ClientDialect,
 }
 pub(in crate::smb) type Result<T> = std::result::Result<T, Fault>;
 
@@ -80,9 +80,10 @@ impl OpeningSend {
         // conformant client rejects it. Do not expose a usable session fork
         // on this server even if a client ignores its own list.
         if self.signing == CmacChoice::NoCommon { return Err(Fault::NoCommonSigning); }
-        Ok(Connection { limits: self.limits, client: self.client, server: self.server, in_flight: 0,
+        let conn=Connection { limits: self.limits, client: self.client, server: self.server, in_flight: 0,
             sessions: Vec::new(), origin: Arc::new(Origin { closed: AtomicBool::new(false), hash: self.hash, run:self.run }),
-            window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } })
+            window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } };
+        conn.register_transport()?;Ok(conn)
     }
 }
 
@@ -170,7 +171,7 @@ impl Received<'_> {
 #[must_use]
 pub(in crate::smb) struct Connection {
     origin: Arc<Origin>, window: Window, limits: Limits, client: ClientOffer, server: Selection, in_flight: u16,
-    sessions: Vec<sessions::Local>, // same run / original transport; InProgress entries only for now
+    sessions: Vec<sessions::Local>, // both fresh in-progress and submitted, authenticated, single-channel entries
 }
 impl Drop for Connection {
     fn drop(&mut self) { self.origin.closed.store(true,Ordering::Release); }
@@ -240,7 +241,7 @@ impl Connection {
     /// order, up to the requested amount and local sparse-window/slot budget.
     /// Never strand a responsive client at zero. An outstanding debit is not
     /// a credit advertised to the client. No asynchronous grants on this path.
-    pub(in crate::smb) fn plan<'a,'b>(&'a mut self, original: &'b mut Received<'_>) -> Result<ReplyPlan<'a,'b>> {
+    fn plan<'a,'b>(&'a mut self, original: &'b mut Received<'_>) -> Result<ReplyPlan<'a,'b>> {
         self.alive()?;
         if !Arc::ptr_eq(&self.origin,&original.debit.origin) { return Err(Fault::WrongBatch); }
         // A generic accounting consumer cannot bind a forged SETUP success
@@ -280,7 +281,7 @@ impl<'a,'b> ReplyPlan<'a,'b> {
     }
     /// Validate the fully serialized, immutable reply/compound. Does NOT
     /// decide success, sign it, validate a session, or perform any command.
-    pub(in crate::smb) fn bind<'p>(self, actual: &'p [u8]) -> Result<ReplySend<'a,'b,'p>> {
+    fn bind<'p>(self, actual: &'p [u8]) -> Result<ReplySend<'a,'b,'p>> {
         self.bind_bytes(std::borrow::Cow::Borrowed(actual))
     }
     fn bind_owned(self, actual: Vec<u8>) -> Result<ReplySend<'a,'b,'static>> {
@@ -313,7 +314,7 @@ impl ReplySend<'_,'_,'_> {
     /// Only after successful submission of these bytes on THIS transport.
     /// The exclusive borrow holds its ledger between selecting and publishing
     /// credits; no competing response can publish the same sequence range.
-    pub(in crate::smb) fn submitted(self) -> Result<()> { self.publish_with(|_| Ok(())) }
+    fn submitted(self) -> Result<()> { self.publish_with(|_| Ok(())) }
     // Stage-specific callers can install only state already prepared for the
     // exact bytes. Any late failure drops this uncertain transport and clears
     // its pending sessions; no new credit range or active phase survives.

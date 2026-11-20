@@ -1,11 +1,13 @@
-//! In-progress registration for SPNEGO selection and strict NTLM Type 2. The
-//! running server owns the globally unique IDs; the originating transport
-//! alone owns each protocol phase. Neither table has authenticated sessions.
+//! Registration through selection, strict authentication and final submission.
+//! The running server indexes unique IDs with weak currency markers; only
+//! the original connection holds the mechanism phases and final session keys.
 pub(in crate::smb) mod challenge;
 pub(in crate::smb) mod proof;
+pub(in crate::smb) mod finish;
+mod clients;
 use super::{Connection,Fault,Origin,Received,ReplySend,Result,setup::{Existing,Select}};
 use crate::smb::{session::envelope::{AwaitNegotiate,HaveNegotiate},wire::setup_reply};
-use std::{num::NonZeroU64,sync::{Arc,Mutex,Weak,atomic::Ordering},time::{Duration,Instant}};
+use std::{num::NonZeroU64,sync::{Arc,Mutex,OnceLock,Weak,atomic::Ordering},time::{Duration,Instant}};
 
 const PER_CONNECTION: usize=8;
 const PER_RUN: usize=64;
@@ -20,11 +22,15 @@ impl RunningServerGuid {
     pub(super) fn share(&self)->Arc<Run> { Arc::clone(&self.run) }
 }
 pub(super) struct Run { guid:[u8;16], index:Mutex<Global>, verifier:Option<crate::smb::session::ChallengeService> }
-struct Global { next:u64, live:Vec<Weak<Claim>> }
-struct Claim { id:NonZeroU64, origin:Weak<Origin>, expires:Instant }
+struct Global {next:u64,live:Vec<Weak<Claim>>,transports:Vec<clients::Tracked>,clients:Vec<clients::Dialect>}
+impl Global {fn empty()->Self {Self{next:1,live:Vec::new(),transports:Vec::new(),clients:Vec::new()}}}
+struct Claim { id:NonZeroU64, origin:Weak<Origin>, expires:Instant, valid:OnceLock<crate::smb::session::LiveMark> }
 impl Claim {
     fn active(&self,now:Instant)->bool {
-        now<self.expires && self.origin.upgrade().is_some_and(|o|!o.closed.load(Ordering::Acquire))
+        self.origin.upgrade().is_some_and(|o|!o.closed.load(Ordering::Acquire) && match self.valid.get() {
+            None=>now<self.expires,
+            Some(mark)=>o.run.verifier.as_ref().is_some_and(|s|mark.current(s)),
+        })
     }
 }
 struct Registration { run:Arc<Run>, claim:Arc<Claim> }
@@ -38,7 +44,7 @@ impl Registration {
             if table.live.len()>=PER_RUN {return Err(Fault::SessionLimit);}
             let id=NonZeroU64::new(table.next).filter(|n|n.get()!=u64::MAX).ok_or(Fault::Exhausted)?;
             table.live.try_reserve(1).map_err(|_|Fault::Resources)?;
-            let claim=Arc::new(Claim { id, origin:Arc::downgrade(origin),expires });
+            let claim=Arc::new(Claim { id, origin:Arc::downgrade(origin),expires,valid:OnceLock::new() });
             table.next+=1; // checked strictly below u64::MAX; IDs never recycled within this run
             table.live.push(Arc::downgrade(&claim));
             claim
@@ -61,7 +67,7 @@ impl Drop for Registration {
 }
 
 pub(super) struct Local { reg:Registration, phase:Phase }
-enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending), ProofTaken }
+enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending), ProofTaken, SendingFinal, Valid(crate::smb::session::BoundSession) }
 impl Connection {
     fn reserve_pending(&mut self,now:Instant)->Result<Registration> {
         self.alive()?;
@@ -120,6 +126,7 @@ impl SelectionSend<'_,'_> {
 pub(in crate::smb) enum Resume<'raw> {
     AnotherConnection(Existing<'raw>),
     NoSession(Declined<'raw>),
+    EstablishedSetupUnsupported(Declined<'raw>), // no reauth/binding, never reset an existing live session
     InvalidToken(Declined<'raw>),
     Type1(ContinuedType1<'raw>),
     Proven(proof::Proven<'raw>), // mechanism result only; no success or usable session
@@ -147,6 +154,9 @@ impl<'raw> Existing<'raw> {
             Ok(true)=>{},
             Ok(false)=>{owner.sessions.swap_remove(i);return Resume::NoSession(Declined{original:self.original});},
             Err(_)=>{owner.origin.closed.store(true,Ordering::Release);owner.sessions.clear();return Resume::TransportGone;},
+        }
+        if matches!(&owner.sessions[i].phase,Phase::Valid(_)) {
+            return Resume::EstablishedSetupUnsupported(Declined{original:self.original});
         }
         if matches!(&owner.sessions[i].phase,Phase::WaitingAuth(_)) {
             return proof::received(self.original,owner,i);
