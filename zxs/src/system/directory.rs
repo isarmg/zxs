@@ -1,6 +1,6 @@
 //! Exact business children, never the host's directory stream. Ordinary
 //! directory and FILE rows occupy the same parent-local byte name.
-use super::{Catalog,Connection,Tree,check,file_create,file_number,ordinary_directory::{self,Route},sqlite3_step};
+use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,Route},sqlite3_step};
 use super::super::{file_location::Placed,volume::OrdinaryRoot,work_record::{self,Members,ReadRecord}};
 use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,
     fs::{WitnessRead,invalid,directory_birth::{DirectoryBirth,DirectoryHold,DirectoryParent}},
@@ -66,14 +66,18 @@ pub(in crate::system::reader) fn check_alias_name(root:&OrdinaryRoot<'_>,name:&s
     let names=match sample{Some(x)=>x,None=>{fresh=parent.names()?.into_iter().collect();&fresh}};
     owner.check(parent,names).map(Some)
 }
-fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:bool)->io::Result<Vec<Pick>>{
-    tree.require(db,c,false)?;
+// These are catalog coordinates, not an SMB authorization. The owning
+// caller verifies its actual live grant on each of the two short cuts.
+#[derive(Clone,Copy)]
+struct PageAt<'a>{source:&'a InitialReader,volume:VolumeId,parent:DirectoryParent}
+
+fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:bool)->io::Result<Vec<Pick>>{
     let q=db.prepare(c"SELECT p.display AS name,p.file_id,0 FROM main.file_location p JOIN main.operation o ON o.op_id=p.position_op
         WHERE p.role=2 AND p.volume_id=?1 AND p.parent_id=?2 AND p.display>?3 AND o.state=1
         UNION ALL SELECT d.display,d.directory_id,1 FROM main.directory_slot d
           WHERE ?4=1 AND d.volume_id=?1 AND d.parent_id=?2 AND d.display>?3 AND d.state=1
         ORDER BY name LIMIT ?5")?;
-    q.bind_bytes(1,&tree.setting.volume.0)?;q.bind_bytes(2,&tree.parent.bytes())?;q.bind_bytes(3,after)?;
+    q.bind_bytes(1,&at.volume.0)?;q.bind_bytes(2,&at.parent.bytes())?;q.bind_bytes(3,after)?;
     q.bind_integer(4,i64::from(u8::from(mixed)))?;q.bind_integer(5,i64::from(limit))?;let mut page:Vec<Pick>=Vec::new();
     loop{match unsafe{sqlite3_step(q.0)}{
         101=>return Ok(page),
@@ -83,7 +87,7 @@ fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed
             if page.len()>=usize::from(limit)||name.as_bytes()<=prior{return Err(invalid("unordered or oversized ordinary page"));}
             match q.byte(2)?{
                 0=>{
-                    let placed=tree.placed(db,c,name,Some(FileId(q.array(1)?)))?;
+                    let placed=file_create::placed_at(db,c,at.volume,at.parent,name,Some(FileId(q.array(1)?)))?;
                     let birth=&placed.birth;
                     let members=work_record::members(db,c,birth)?;
                     let visible=work_record::selected(db,birth)?;
@@ -93,7 +97,7 @@ fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed
                     page.push(Pick::File(Plan{placed,members,visible,display_owner,number}));
                 },
                 1 if mixed=>{
-                    let row=ordinary_directory::lookup(db,c,tree.setting.volume,tree.parent,name)?
+                    let row=ordinary_directory::lookup(db,c,at.volume,at.parent,name)?
                         .ok_or_else(||invalid("selected directory is no longer published"))?;
                     if row.id.0!=q.array::<16>(1)?{return Err(invalid("different selected directory"));}
                     page.push(Pick::Directory(row));
@@ -106,12 +110,14 @@ fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed
 }
 /// A cursor is an ordering key, never a pathname, principal or grant. No
 /// physical inode or storage name is returned from either listing route.
-fn read_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed:bool,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
+fn read_page_bound(at:PageAt<'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed:bool,
+    require:impl Fn(&Connection,&Catalog)->io::Result<()>,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
     if !(1..=MAX_PAGE).contains(&limit){return Err(invalid("invalid ordinary page limit"));}
     if !after.is_empty(){display::component(after,if mixed{255}else{222})?;}
-    let src=tree.session.source;
-    if !root.for_tree(src,tree.setting.volume)||root.parent()!=tree.parent{return Err(invalid("different original ordinary parent"));}
-    let selected=src.at(|db,c|select(tree,db,&c,after,limit,mixed))?;
+    let src=at.source;
+    if !root.for_tree(src,at.volume)||root.parent()!=at.parent{return Err(invalid("different original ordinary parent"));}
+    let select_current=|db:&Connection,c:&Catalog|{require(db,c)?;select(at,db,c,after,limit,mixed)};
+    let selected=src.at(|db,c|select_current(db,&c))?;
     let parent=root.folder();
     let native_sample=||if selected.is_empty(){Ok(BTreeSet::<Vec<u8>>::new())}
         else{parent.names().map(|v|v.into_iter().collect())};
@@ -142,7 +148,7 @@ fn read_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed
     }
     root.require_streaming()?;
     src.at(|db,c|{
-        if select(tree,db,&c,after,limit,mixed)?!=selected{
+        if select_current(db,&c)?!=selected{
             return Err(io::Error::new(io::ErrorKind::WouldBlock,"the selected directory page changed; retry this cursor"));
         }
         Ok(())
@@ -158,6 +164,10 @@ fn read_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed
                 revision:visible.map_or(0,|r|r.key().revision),size:visible.map_or(0,|r|r.logical())})
         }
     }).collect())
+}
+fn read_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed:bool,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
+    let at=PageAt{source:tree.session.source,volume:tree.setting.volume,parent:tree.parent};
+    read_page_bound(at,root,after,limit,mixed,|db,c|tree.require(db,c,false),at_cut)
 }
 pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Entry>>{
     read_page(tree,root,after,limit,false,at_cut)?.into_iter().map(|item|match item{

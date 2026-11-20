@@ -316,9 +316,7 @@ impl<'s,'r> Tree<'s,'r>{
     }
 
     pub(super) fn placed(&self,db:&Connection,c:&Catalog,name:&str,id:Option<FileId>)->io::Result<Placed>{
-        let p=Place::named(db,c,self.setting.volume,self.parent,name)?.ok_or(io::ErrorKind::NotFound)?;
-        if id.is_some_and(|id|p.file!=id){return Err(io::ErrorKind::NotFound.into());}
-        p.bind(db,c)
+        placed_at(db,c,self.setting.volume,self.parent,name,id)
     }
     // The legacy first-SAVE fixture and the newborn diagnostic address
     // only the immutable ordinary birth, not an arbitrary current placement.
@@ -342,6 +340,15 @@ impl<'s,'r> Tree<'s,'r>{
         src.at(|db,c|{self.require(db,&c,false)?;if self.birth(db,&c,name,id)?!=b{return Err(invalid("FILE membership changed during open"));}
             display_free(db,&c,f.folder(),&b,self.parent)?;f.require()?;real.require_newborn(f.folder())?;Ok(NewFile::from(&b))})
     }
+}
+
+// Resolve one exact parent-local business name in the caller's already
+// authorized current cut. A matched placement is neither an OPEN nor a vote.
+pub(super) fn placed_at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str,id:Option<FileId>)
+    ->io::Result<Placed>{
+    let p=Place::named(db,c,volume,parent,name)?.ok_or(io::ErrorKind::NotFound)?;
+    if id.is_some_and(|id|p.file!=id){return Err(io::ErrorKind::NotFound.into());}
+    p.bind(db,c)
 }
 
 #[cfg(test)]
