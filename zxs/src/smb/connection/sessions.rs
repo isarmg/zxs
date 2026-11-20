@@ -1,6 +1,7 @@
-//! In-progress registration for the first SPNEGO server selection. The
+//! In-progress registration for SPNEGO selection and strict NTLM Type 2. The
 //! running server owns the globally unique IDs; the originating transport
 //! alone owns each protocol phase. Neither table has authenticated sessions.
+pub(in crate::smb) mod challenge;
 use super::{Connection,Fault,Origin,Received,ReplySend,Result,setup::{Existing,Select}};
 use crate::smb::{session::envelope::{AwaitNegotiate,HaveNegotiate},wire::setup_reply};
 use std::{num::NonZeroU64,sync::{Arc,Mutex,Weak,atomic::Ordering},time::{Duration,Instant}};
@@ -17,7 +18,7 @@ impl RunningServerGuid {
     pub(super) fn wire(&self)->&[u8;16] { &self.run.guid }
     pub(super) fn share(&self)->Arc<Run> { Arc::clone(&self.run) }
 }
-pub(super) struct Run { guid:[u8;16], index:Mutex<Global> }
+pub(super) struct Run { guid:[u8;16], index:Mutex<Global>, verifier:Option<crate::smb::session::ChallengeService> }
 struct Global { next:u64, live:Vec<Weak<Claim>> }
 struct Claim { id:NonZeroU64, origin:Weak<Origin>, expires:Instant }
 impl Claim {
@@ -59,9 +60,9 @@ impl Drop for Registration {
 }
 
 pub(super) struct Local { reg:Registration, phase:Phase }
-enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken }
+enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending) }
 impl Connection {
-    fn reserve_selection(&mut self,now:Instant)->Result<Registration> {
+    fn reserve_pending(&mut self,now:Instant)->Result<Registration> {
         self.alive()?;
         self.sessions.retain(|x|x.reg.claim.active(now));
         if self.sessions.len()>=PER_CONNECTION {return Err(Fault::SessionLimit);}
@@ -84,7 +85,7 @@ impl Select<'_> {
         owner.alive()?;
         if !Arc::ptr_eq(&owner.origin,&self.original.debit.origin) {return Err(Fault::WrongBatch);}
         if self.phase.is_none() || !self.original.debit.owed {return Err(Fault::SessionState);}
-        let reg=owner.reserve_selection(now)?;
+        let reg=owner.reserve_pending(now)?;
         let claim=Arc::clone(&reg.claim);
         let plan=owner.plan_debit(&mut self.original.debit)?;
         let [m]=self.original.frame.messages() else {return Err(Fault::SetupPhase);};
@@ -123,7 +124,7 @@ pub(in crate::smb) enum Resume<'raw> {
     TransportGone,
 }
 pub(in crate::smb) struct Declined<'raw> { original:Received<'raw> }
-pub(in crate::smb) struct ContinuedType1<'raw> { original:Received<'raw>, phase:HaveNegotiate, claim:Arc<Claim> }
+pub(in crate::smb) struct ContinuedType1<'raw> { original:Received<'raw>, phase:Option<HaveNegotiate>, claim:Arc<Claim> }
 impl<'raw> Existing<'raw> {
     /// Existing only means the packet carried a nonzero SID. Never allocate
     /// or reconstruct a session or challenge from a client's number.
@@ -153,7 +154,7 @@ impl<'raw> Existing<'raw> {
             else { Err(crate::smb::session::envelope::Failure::Stage) };
         if owner.alive().is_err() {owner.sessions.clear();return Resume::TransportGone;}
         match result {
-            Ok(phase)=>Resume::Type1(ContinuedType1 { original:self.original,phase,claim:Arc::clone(&owner.sessions[i].reg.claim) }),
+            Ok(phase)=>Resume::Type1(ContinuedType1 { original:self.original,phase:Some(phase),claim:Arc::clone(&owner.sessions[i].reg.claim) }),
             Err(_)=>{owner.sessions.swap_remove(i);Resume::InvalidToken(Declined{original:self.original})}
         }
     }

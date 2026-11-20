@@ -5,7 +5,7 @@ use crate::smb::connection::{Opening,OpeningSend,setup::{Start,tests::{PICK,body
 use crate::smb::wire::preauth::tests::synthetic_exchange;
 
 pub(in crate::smb::connection) fn running(guid:[u8;16])->RunningServerGuid {
-    RunningServerGuid {run:Arc::new(Run{guid,index:Mutex::new(Global{next:1,live:Vec::new()})})}
+    RunningServerGuid {run:Arc::new(Run{guid,index:Mutex::new(Global{next:1,live:Vec::new()}),verifier:None})}
 }
 impl Opening {
     // For the existing ledger-only fixtures. Its known server wire bytes are
@@ -14,12 +14,12 @@ impl Opening {
         self.bind(actual,&running(std::array::from_fn(|i|0xa0+i as u8)))
     }
 }
-fn connected(run:&RunningServerGuid)->Connection {
+pub(super) fn connected(run:&RunningServerGuid)->Connection {
     let [mut q,mut r,..]=synthetic_exchange();r[72..88].copy_from_slice(run.wire());
     q[14..16].copy_from_slice(&4u16.to_le_bytes());r[14..16].copy_from_slice(&4u16.to_le_bytes());
     let raw=frame(&q);Opening::received(&parsed(&raw)).unwrap().bind(r,run).unwrap().submitted().unwrap()
 }
-fn selected(c:&mut Connection,mid:u64,now:Instant)->Result<u64> {
+pub(super) fn selected(c:&mut Connection,mid:u64,now:Instant)->Result<u64> {
     let bytes=frame(&body(PICK,mid,0));let f=parsed(&bytes);
     let Start::Select(mut phase)=c.receive(&f)?.start_setup() else {panic!("expected omitted optimistic token")};
     let s=phase.prepare_at(c,now)?;

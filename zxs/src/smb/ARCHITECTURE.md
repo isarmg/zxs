@@ -45,11 +45,13 @@
 
 首包需要选机制时，发出的[SESSION_SETUP 正文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/0324190f-a31b-4666-9fa9-5c624273a694)是真正的 STATUS_MORE_PROCESSING_REQUIRED，加[SPNEGO request-mic](https://www.rfc-editor.org/rfc/rfc4178#section-4.2.2)和唯一选中的 NTLM OID，不捏造 Type 2、用户名、guest 或成功。保留原 MID、charge 和阶段专属应回额度。用同份最终字节同时核原 transcript／GSS 和额度。只有原发送者确认这份不可变包已成功提交，才把原连接该槽从“待发送”改为“等 Type 1”并公布信用；未提交、结果不明或临界时过期则关闭本连接，不留下可续阶段。
 
-下一条非零 SID 请求须已在**同一原连接**消费自己的新 MID，再从双方索引找到同一未超时对象、恰处于等 Type 1。仅一次移出该阶段，按同一 transcript 校验原 token；坏 token 只移除这个槽，无权触碰别的会话。跨连接借来的同号码不能接管或取消。不在表的 SID 或过期不会创建新会话。当前仅这条需要先选机制的路径走到有效 Type 1；尚无 Type 2 发行、口令校验发布、成功会话或原生监听。生产错误回复、主动定时唤醒和其他 [GSS 完成／清理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)仍属后续；每次查找与增发都在原处检查期限，不能用被动清理延长权限。
+下一条非零 SID 请求须已在**同一原连接**消费自己的新 MID，再从双方索引找到同一未超时对象、恰处于等 Type 1。仅一次移出该阶段，按同一 transcript 校验原 token；坏 token 只移除这个槽，无权触碰别的会话。跨连接借来的同号码不能接管或取消。不在表的 SID 或过期不会创建新会话。单独的机制选择只推进到有效 Type 1；下节的 Type 2 仅由持有原连接和受保护凭据代的代码签发，仍无成功会话或原生监听。生产错误回复、主动定时唤醒和其他 [GSS 完成／清理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)仍属后续；每次查找与增发都在原处检查期限，不能用被动清理延长权限。
 
 ### 本次机制挑战的生成（不签发会话）
 
 严格机制只从原 Type 1 选已经支持的标志。按 [MS-NLMP 服务器处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/81d15e3e-3ac3-41f0-920d-846149f3a814)、[Type 2 格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/801a4681-8809-4be9-ab0d-61dcfe762786)与[协商标志](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/99d90ff4-957f-4c8a-80e4-5bfe5a9a9832)，独立服务器返回本机的 NetBIOS TargetName、受信的名称 AV、UTC FILETIME 和内核新取的 8 字节一次性挑战；不反射客户端名字、不冒充域控制器、不把 NTLM SEAL 当作 SMB 加密。原 standalone Type 2、第一次 SPNEGO 的 request-mic/NTLM OID/Type 2、已有选择后的仅 accept-incomplete/Type 2 分开编码。MORE 不同于认证成功。基础库仅接受归属本服务的一份受保护凭据代，与已签发的确切挑战、原 GSS 包和原绝对截止绑定；凭据替换后相同数字、名字或 SID 不能代替同一原对象。没有生产凭据构造、收集器、导入用户密码或认证回退。源码夹具有独立固定的完整 Type 2、短/长 DER 边界、错封装、拒绝和撤代例，无实跑。
+
+连接现在能把这份机制挑战变成真实 SMB2 MORE，但没有启用任何服务。直接 Type 1/首个乐观 token 在本连接预留新 SID；经上一次 request-mic 得到的 Type 1 只消费当时那同一项，不延期、不另发 SID。只从本次运行持有的受保护提供者取凭据代和 Type 2，不接收单独传入的密钥、提供者或 SID。原接收票决定 MID、额度和不可换包的回复；只有提交原字节、同一代未撤销且原截止没到，状态才从 SendingChallenge 进入 WaitingAuth。未配提供者没有挑战，放弃或不确定发送终止原连接。本片不消费 Type 3、不回成功、不授 Tree；全局注册只限制有效弱项，部署时仍需终结静默到期连接。
 
 ## SESSION_SETUP 的机制封装（止于未验证的 Type 3）
 

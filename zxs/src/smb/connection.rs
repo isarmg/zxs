@@ -21,7 +21,7 @@ const K64: u64 = 65_536;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Fault {
     Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, SetupPhase, Closed, Range, FrameSize,
-    Resources, Exhausted, WrongBatch, NoReply, WrongReply, SessionLimit, SessionState,
+    Resources, Exhausted, WrongBatch, NoReply, WrongReply, SessionLimit, SessionState, NoVerifier,
 }
 pub(in crate::smb) type Result<T> = std::result::Result<T, Fault>;
 

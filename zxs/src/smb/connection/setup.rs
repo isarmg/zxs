@@ -24,7 +24,7 @@ pub(in crate::smb) enum Why { SetupCompound, Mechanism(Failure) }
 pub(in crate::smb) struct Existing<'raw> { pub(super) original: Received<'raw> }
 pub(in crate::smb) struct Refused<'raw> { original: Received<'raw>, reason: Why }
 pub(in crate::smb) struct Select<'raw> { pub(super) original: Received<'raw>, pub(super) phase: Option<NeedSelection> }
-pub(in crate::smb) struct Type1<'raw> { original: Received<'raw>, phase: HaveNegotiate }
+pub(in crate::smb) struct Type1<'raw> { pub(super) original:Received<'raw>, pub(super) phase:Option<HaveNegotiate> }
 impl Refused<'_> {
     pub(in crate::smb) fn reason(&self) -> Why { self.reason }
 }
@@ -48,7 +48,7 @@ impl<'raw> Received<'raw> {
         if self.debit.origin.closed.load(Ordering::Acquire) { return Start::TransportGone; }
         match phase {
             Ok(envelope::First::Select(phase)) => Start::Select(Select { original:self,phase:Some(phase) }),
-            Ok(envelope::First::Negotiate(phase)) => Start::Type1(Type1 { original:self,phase }),
+            Ok(envelope::First::Negotiate(phase)) => Start::Type1(Type1 { original:self,phase:Some(phase) }),
             Err(why) => Start::Refused(Refused { original:self,reason:Why::Mechanism(why) }),
         }
     }
