@@ -303,7 +303,7 @@ class CheckoutPane(QWidget):
         no_commit = record.get("pending_operation") is None
         self.changes.setEnabled(idle and visible and committed and no_commit)
         self.commits.allow_visible(visible)
-        self.move.setText("恢复原工作目录…" if phase == "hidden" else "临时收起工作目录…")
+        self.move.setText("恢复原路径并保留改动…" if phase == "hidden" else "临时收起工作目录…")
         self.move.setEnabled(bool(idle and committed and no_commit and phase in ("visible", "hidden")
                                   and not self.visibility_blocked and not self.commits.blocked))
         self.move_query.setEnabled(idle and self.visibility_last is not None)
@@ -321,7 +321,7 @@ class CheckoutPane(QWidget):
 
     def _visibility_message(self, plan, message):
         self.move_result.setText(f"{message}\n原 STATE：{plan.live.state}\n原操作：{plan.operation}\n"
-                                 f"旧名：{plan.source}\n目标：{plan.target}")
+                                 f"本次两个名称（不表示当前位置）：\n旧名：{plan.source}\n目标：{plan.target}")
 
     def move_live(self):
         live, record = self.live, self.live_record
@@ -336,7 +336,7 @@ class CheckoutPane(QWidget):
             self.move_result.setText(describe(error)); return
         self.active = True
         self._worktree_actions()
-        words = "临时收起" if action == "hide" else "恢复原名"
+        words = "临时收起" if action == "hide" else "恢复原路径并保留改动"
 
         def current():
             return self.live is live and self.active
@@ -374,8 +374,10 @@ class CheckoutPane(QWidget):
             if error is not None:
                 done((None, error)); return
             try:
-                terms = ("我已停止所有工作树写入；原父、STATE 与 STORE 不移动、不由其他人、CLI 或同步程序改动。")
-                if not confirm(self, words + "本窗口原工作目录", details, attestation=terms, action_text=words):
+                terms = ("我已关闭编辑器，暂停后台同步和其他写入。操作完成前由本人独占，"
+                         "不移动原父、STATE 或 STORE，不允许其他人、命令行或后台程序改动。")
+                title = "临时收起本窗口原工作目录" if action == "hide" else "恢复原路径并保留改动"
+                if not confirm(self, title, details, attestation=terms, action_text=words):
                     done(("没有确认。", None)); return
                 if not current() or self.live_record is not record or self.owner.pending is not None:
                     done(("确认时原工作树或任务已改变。", None)); return

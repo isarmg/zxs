@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from zipworkspace import lifecycle, worktree
+from zipworkspace.capacity import describe
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.initialize_choice import InitializeChoice
 from zipworkspace.linux_authority import ProcView, owned_directory
@@ -126,6 +127,98 @@ class LinuxVisibility(unittest.TestCase):
         self.assertFalse(pending.started)
         self.assertEqual(self.live.status()["visibility"], "visible")
         self.assertFalse(self.hidden.exists())
+
+    def test_restore_preserves_a_real_write_through_an_editor_fd_open_before_hiding(self):
+        self.commit()
+        baseline = self.live.status()
+        file_id = (self.tree/"story").stat()
+        hide = self.plan("hide")
+        with (self.tree/"story").open("r+b", buffering=0) as editor:
+            self.assertEqual(hide.run(confirmed=True), "hidden")
+            self.assertFalse(self.tree.exists())
+            self.assertEqual(editor.write(b"edited!"), 7)
+        with worktree.locked(self.state, read_only=True) as (con, _, __):
+            history = tuple(lifecycle._visibility_row(con, hide.operation))
+        with self.assertRaisesRegex(Rejected, "CLI restore requires the committed tree"):
+            lifecycle.start(self.state, "restore")
+        self.assertEqual((self.hidden/"story").read_bytes(), b"edited!")
+        self.assertEqual(self.live.status()["visibility"], "hidden")
+        self.assertIsNone(self.live.status()["pending_visibility_operation"])
+
+        restore = self.plan("restore")
+        self.assertEqual(restore.run(confirmed=True), "visible")
+        self.assertTrue(os.path.samestat(self.tree.stat(), os.fstat(self.live.work_fd)))
+        self.assertTrue(os.path.samestat((self.tree/"story").stat(), file_id))
+        self.assertFalse(self.hidden.exists())
+        self.assertEqual((self.tree/"story").read_bytes(), b"edited!")
+        self.assertEqual(self.live.status(), baseline)
+        with worktree.locked(self.state, read_only=True) as (con, _, __):
+            self.assertEqual(tuple(lifecycle._visibility_row(con, hide.operation)), history)
+            accepted = lifecycle._visibility_row(con, restore.operation)
+            self.assertEqual((accepted["action"], accepted["result"]), ("restore", "visible"))
+            self.assertNotEqual(accepted["original_tree"], self.marker.tree)
+        self.assertEqual(sorted(self.store.iterdir()), [self.archive])
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
+        marker, changes = lifecycle.observe_live_changes(self.live)
+        self.assertEqual(marker, self.marker)
+        self.assertEqual([row.path for row in changes.rows], ["story"])
+
+    def test_interrupted_restore_can_only_complete_the_same_accepted_tree(self):
+        self.commit()
+        self.plan("hide").run(confirmed=True)
+        (self.hidden/"story").write_bytes(b"edited!")
+        fd = self.live.work_fd
+        held = os.fstat(fd)
+        observed = lifecycle.observe_held(fd, (held.st_dev, held.st_ino)).digest()
+        restore = self.plan("restore")
+        actual = os.fsync
+        def fail_parent(fd):
+            if os.path.samestat(os.fstat(fd), self.work_parent.stat()):
+                self.assertTrue(os.path.samestat(self.tree.stat(), held))
+                raise OSError(errno.EIO, "failed restore parent barrier")
+            actual(fd)
+        with patch.object(lifecycle.os, "fsync", side_effect=fail_parent):
+            with self.assertRaisesRegex(OSError, "failed restore parent barrier"): restore.run(confirmed=True)
+        self.assertEqual(self.live.status()["pending_visibility_operation"], restore.operation)
+        with worktree.locked(self.state, read_only=True) as (con, _, __):
+            receipt = lifecycle._visibility_row(con, restore.operation)
+            self.assertEqual((receipt["original_tree"], receipt["result"]), (observed, None))
+        outcome, detail = restore.result()
+        self.assertEqual(outcome, "pending")
+        self.assertIn(f"resume-visibility STATE {restore.operation}", detail)
+        with patch.object(lifecycle, "rename_new", side_effect=AssertionError("already moved")), \
+             patch.object(lifecycle, "observe_tree", side_effect=AssertionError("resume must read the held original")):
+            (self.tree/"story").write_bytes(b"newer!!")
+            with self.assertRaisesRegex(Rejected, "accepted by this exact visibility operation"):
+                lifecycle.finish(self.state, restore.operation)
+            self.assertEqual((self.tree/"story").read_bytes(), b"newer!!")
+            self.assertEqual(self.live.status()["pending_visibility_operation"], restore.operation)
+            (self.tree/"story").write_bytes(b"edited!")
+            self.assertEqual(lifecycle.finish(self.state, restore.operation)["original_outcome"], "visible")
+        self.assertEqual(self.live.status()["base_operation"], self.marker.operation)
+        self.assertEqual((self.tree/"story").read_bytes(), b"edited!")
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
+
+    def test_restore_only_gives_hidden_location_when_it_still_names_the_original(self):
+        self.commit()
+        self.plan("hide").run(confirmed=True)
+        self.tree.mkdir(mode=0o700)
+        (self.tree/"untouched").write_bytes(b"occupied")
+        with self.assertRaises(Rejected) as conflict:
+            self.plan("restore", prepare=False).prepare()
+        note = describe(conflict.exception)
+        self.assertIn(f"本次核到原隐藏目录：{str(self.hidden)!r}", note)
+        self.assertIn("独立的新目录，不覆盖任何文件", note)
+        original = self.hidden.with_name("saved-original")
+        self.hidden.rename(original)
+        self.hidden.mkdir(mode=0o700)
+        (self.hidden/"story").write_bytes(b"initial")
+        with self.assertRaises(Rejected) as replacement:
+            self.plan("restore", prepare=False).prepare()
+        self.assertNotIn(str(self.hidden), describe(replacement.exception))
+        self.assertEqual((original/"story").read_bytes(), b"initial")
+        self.assertEqual((self.tree/"untouched").read_bytes(), b"occupied")
+        self.assertIsNone(worktree.status(self.state)["pending_visibility_operation"])
 
     def test_does_not_use_a_replacement_work_parent_even_with_the_same_work_inode(self):
         self.commit()
@@ -310,3 +403,7 @@ class LinuxVisibility(unittest.TestCase):
             self.assertFalse(self.hidden.exists())
             self.assertIs(pane.live, self.live)
             self.assertEqual(confirm.call_count, 3)
+            self.assertIn("已关闭编辑器", confirm.call_args.kwargs["attestation"])
+            self.assertIn("暂停后台同步", confirm.call_args.kwargs["attestation"])
+            self.assertEqual(confirm.call_args.kwargs["action_text"], "恢复原路径并保留改动")
+            self.assertIn("仍未提交", confirm.call_args.args[2])

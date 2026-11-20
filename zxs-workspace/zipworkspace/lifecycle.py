@@ -61,9 +61,14 @@ def base_tree(row):
     return tree
 
 
-def clean_at(path, state, tree_id):
+def clean_at(path, state, tree_id, *, restore=False):
     if observe_tree(path).digest() != tree_id:
-        raise Rejected("worktree is dirty; its existing directory and contents were preserved")
+        message = "worktree is dirty; its existing directory and contents were preserved"
+        if restore:
+            message += (". CLI restore requires the committed tree. Close editors and pause sync. "
+                        "If the original window still holds this worktree, request restore there to keep changes. "
+                        "Do not replace either directory name or edit STATE.")
+        raise Rejected(message)
 
 
 def changes(state):
@@ -214,6 +219,18 @@ class LiveVisibility:
         if self._pair() != (self.work_key, None):
             raise Rejected("原目录不可确认，或目的名称已被占用；不会覆盖")
 
+    def _hidden_help(self):
+        return (f"本次核到原隐藏目录：{str(self.source)!r}。如需先保住改动，请关闭编辑器、暂停后台同步；"
+                "仅从仍能确认的原件把所需文件另存到独立的新目录，不覆盖任何文件。"
+                "不要手工改名这棵登记树或修改 STATE。")
+
+    def _note_hidden(self, error):
+        if self.action != "restore" or not hasattr(self, "source"): return
+        try: source, _ = self._pair()
+        except Exception: return  # Diagnostic only; keep the original error if this recheck fails.
+        if source == self.work_key:
+            error.add_note(self._hidden_help())
+
     def _base_name(self):
         check_relative(self.live.store_fd, self.leaf, self.archive, self.observed)
         if self._name(self.leaf, parent=self.live.store_fd) != self._key(self.archive.fileno()):
@@ -282,17 +299,23 @@ class LiveVisibility:
             self._expect_source()
             self._base_name()
             self.ready = True
+            if self.action == "hide":
+                check = (f"确认后完整读取工作目录并核对基线（约 {base.total:,} B 文件正文）；"
+                         "只在内容相符时收起。改名不会撤销已打开的写入句柄，也不是保密。")
+            else:
+                check = ("确认后完整读取并检查原隐藏目录，可能耗时。恢复的是同一目录；"
+                         "已经写到这棵树的改动会一起带回，仍未提交，不会用基线覆盖文件。")
             return (f"从：{str(self.source)!r}\n到：{str(self.target)!r}\n"
                     f"原 STATE：{str(self.live.state)!r}\n原 STORE：{str(self.live.store)!r}\n"
                     f"基线：第 {self.marker.generation} 代 · {self.marker.operation}\n操作号：{self.operation}\n\n"
-                    f"确认后还要读取原工作目录并核对基线（约 {base.total:,} B 文件正文）；"
-                    "只在内容相符时改名，不能用旧对照结果代替。不会删除、覆盖、提交、释放数据空间或改变访问权限。"
-                    "同目录改名后旧路径不再可用；收起不是保密。确认后请等待，不自动重试。")
-        except BaseException:
+                    + check + "不会删除、覆盖、提交、释放数据空间或改变访问权限。"
+                    "同目录改名后旧路径不再可用。确认后请等待，不自动重试。")
+        except BaseException as error:
+            if isinstance(error, Exception): self._note_hidden(error)
             self.close()
             raise
 
-    def _clean(self):
+    def _observe(self):
         fd = self.live.work_fd
         before = _sig(os.fstat(fd))
         _distinct_roots((fd, self.live.state_fd, self.live.store_fd))
@@ -303,16 +326,17 @@ class LiveVisibility:
             if obs[:2] in excluded or obs[3] != self.mount:
                 raise Rejected("工作树含 STATE/STORE 别名或子挂载；不能移动")
 
-        if observe_held(fd, self.work_key[:2], require_ids=True, check_held=member).digest() != self.marker.tree:
+        tree = observe_held(fd, self.work_key[:2], require_ids=True, check_held=member).digest()
+        if self.action == "hide" and tree != self.marker.tree:
             raise Rejected("工作目录有未提交改动；保留原路径与文件")
         self._expect_source()
         self._base_name()
         if _sig(os.fstat(fd)) != before: raise Rejected("原工作目录在核对时已变化")
-        return before
+        return before, tree
 
     def _log(self, con):
         item = _visibility_row(con, self.operation)
-        if item is not None and (item["action"] != self.action or item["original_tree"] != self.marker.tree
+        if item is not None and (item["action"] != self.action or item["original_tree"] != self.original_tree
                                  or item["result"] not in (None, self.after)):
             raise Rejected("日志与本次确认的原操作不符；不接管其他结果")
         return item
@@ -341,6 +365,9 @@ class LiveVisibility:
             raise Rejected("只允许明确确认一次的原目录改名")
         self.used = True
         try: return self._run()
+        except Exception as error:
+            self._note_hidden(error)
+            raise
         finally: self.archive_handles.close()  # Receipt lookup must not pin a large deleted STORE archive.
 
     def _run(self):
@@ -357,9 +384,11 @@ class LiveVisibility:
                 raise Rejected("确认的原基线已改变；不给另一代改名")
             if _visibility_row(con, self.operation) is not None:
                 raise Rejected("操作号已在原日志中使用，未登记或移动")
-            before = self._clean()  # One full read and two inventories after the stop-writers consent.
+            before, self.original_tree = self._observe()  # One full read and two inventories after consent.
             self.started = True  # From here an uncertain answer may have a durable intent.
-            _start_visibility(con, self.operation, self.action, self.marker.tree)
+            # A restore may move late edits, but exact-operation resume must
+            # check the tree this decision actually accepted, not the ZIP base.
+            _start_visibility(con, self.operation, self.action, self.original_tree)
 
         self._sync_state("同步原改名意图；失败不移动目录")
         self.intent_synced = True
@@ -413,16 +442,18 @@ class LiveVisibility:
                 return "completed", f"原回执已记录{word}完成。它是历史结果，不代表此刻仍在该名称。"
             self._pending(row, rec)
             pair = self._pair()
+        hidden_help = "\n" + self._hidden_help() if self.action == "restore" and pair[0] == self.work_key else ""
         if pair == (self.work_key, None):
             detail = "核到原目录仍在旧名，目标未见占用。"
         elif pair == (None, self.work_key):
             detail = "核到原目录已在目标名，但没有完成回执，不能据此确认耐久。"
         else:
-            return "pending", "原记录待决，但两个名称无法构成准确原件与空位；保留现场，不继续。"
+            return "pending", "原记录待决，但两个名称无法构成准确原件与空位；保留现场，不继续。" + hidden_help
+        detail += hidden_help + "\n"
         if not self.intent_synced:
             return "pending", detail + "只读见原记录待决，但没有确认原意图已同步；保留现场，不续作。"
         return "pending", (detail + "只读查询时原记录仍待决，窗口不会续作。"
-                           "\n如需继续，在原件不变且再次停写后，用 CLI 原号命令（会写入，不是查看）：\n"
+                           "\n只有原件、两名及本次核验的内容未变、关闭编辑器并停止同步后，才用 CLI 原号续作（会写入）：\n"
                            f"resume-visibility STATE {self.operation} --writers-stopped\n请使用下列原 STATE。")
 
 
@@ -431,14 +462,15 @@ def start(state, action):
     phase, _ = _phases(action)
     with locked(state) as (con, row, state):
         rec = instance(con)
-        if rec["phase"] != phase or rec["active"] is not None or row["pending"] is not None:
+        if (rec["phase"] != phase or rec["active"] is not None
+                or row["pending"] is not None or row["pending_sha"] is not None):
             raise Rejected("not an idle worktree in the required visible/hidden state")
         visible, hidden = locations(row)
         src, dst = (visible, hidden) if action == "hide" else (hidden, visible)
         if who(src) != identity(rec) or who(dst) is not None:
             raise Rejected("original worktree unavailable or destination occupied; nothing was moved")
         tree = base_tree(row).digest()
-        clean_at(src, state, tree)
+        clean_at(src, state, tree, restore=action == "restore")
         operation = new_id()
         _start_visibility(con, operation, action, tree)
     # This is a separate transaction: a failure after the rename cannot lose the intent.
@@ -460,8 +492,9 @@ def finish(state, operation):
             return {"operation":operation, "original_outcome":item["result"], "recorded_phase":rec["phase"],
                     "current_original_named":loc is not None and who(loc) == identity(rec)}
         action = item["action"]
-        if rec["active"] != operation or rec["phase"] != action+"-pending":
-            raise Rejected("incomplete visibility evidence belongs to a different original operation")
+        if (rec["active"] != operation or rec["phase"] != action+"-pending"
+                or row["pending"] is not None or row["pending_sha"] is not None):
+            raise Rejected("incomplete visibility evidence does not match this original operation or conflicts with a pending commit")
         visible, hidden = locations(row)
         src, dst = (visible, hidden) if action == "hide" else (hidden, visible)
         pair = who(src), who(dst)
@@ -473,7 +506,9 @@ def finish(state, operation):
             held = os.fstat(fd)
             if (str(held.st_dev),str(held.st_ino),stat.S_IFMT(held.st_mode)) != identity(rec):
                 raise Rejected("held checkout is not the registered directory")
-            clean_at(current, state, item["original_tree"])
+            if observe_held(fd, (held.st_dev, held.st_ino)).digest() != item["original_tree"]:
+                raise Rejected("worktree no longer matches the tree accepted by this exact visibility operation; "
+                               "its directory and contents were preserved. Close editors and pause sync; do not overwrite either name.")
             if needs_move:
                 if who(src) != identity(rec) or who(dst) is not None: raise Rejected("worktree names changed")
                 rename_new(src, dst)
