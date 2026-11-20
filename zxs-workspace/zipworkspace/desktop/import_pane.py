@@ -4,7 +4,7 @@ import sys
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from .. import plain_import
-from .selection import PlainSelection
+from .selection import PlainSelection, submit_verification
 from .widgets import Table, button, confirm, label
 
 
@@ -15,6 +15,7 @@ class ImportPane(QWidget):
         super().__init__()
         self.owner = owner
         self.selected = self.file_page = self.search_dialog = None
+        self.verification = None
         self.number = 0
         layout = QVBoxLayout(self)
         layout.addWidget(label("选择普通 Store ZIP，核验全部成员、整树摘要及原包摘要。不提取文件，不登记工作树。"))
@@ -51,6 +52,7 @@ class ImportPane(QWidget):
         layout.addLayout(nav)
 
     def release_display(self):
+        self.verification = None
         dialog, self.search_dialog = self.search_dialog, None
         if dialog is not None: dialog.reject()
         if self.selected is not None:
@@ -72,8 +74,10 @@ class ImportPane(QWidget):
         self.release_display()
         self.details.setText("尚无本次核验结果。")
         keep_original = self.extract is not None
-        self.owner.job("正在只读核验整个 ZIP；不会写入文件…",
-                       lambda: PlainSelection.open(source, retain=keep_original), self.show_selection)
+        request = self.verification = object()
+        submit_verification(self.owner, "正在只读核验整个 ZIP；不会写入文件…",
+                            lambda observer: PlainSelection.open(source, retain=keep_original, observer=observer),
+                            self.show_selection, current=lambda: request is self.verification)
 
     def show_selection(self, selected):
         self.release_display()

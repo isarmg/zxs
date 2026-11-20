@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout,
 
 from .comparison_pane import ComparisonPane
 from .checkout_pane import CheckoutPane
-from .selection import Selection, StoreSelection
+from .selection import Selection, StoreSelection, submit_verification
 from .widgets import Table, button, confirm, label
 
 
@@ -18,6 +18,7 @@ class ArchivePane(QWidget):
         super().__init__()
         self.owner = owner
         self.selection = self.store = self.catalog = self.file_page = None
+        self.verification = None
         self.directory, self.page_number, self.search_dialog = "", 0, None
         self.text_dialog = None
         layout = QVBoxLayout(self)
@@ -109,6 +110,7 @@ class ArchivePane(QWidget):
         if self.copy_history is not None: self.copy_history.setEnabled(False)
 
     def clear_document(self):
+        self.verification = None
         self.close_search()
         self.close_text()
         if self.mount is not None: self.mount.set_snapshot(None)
@@ -145,7 +147,10 @@ class ArchivePane(QWidget):
         if self.owner.pending is not None: return
         self.clear_document()
         self.views.setCurrentIndex(0)
-        self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name, retain=True), self.show_selection)
+        request = self.verification = object()
+        submit_verification(self.owner, "正在核验所选快照中的全部成员…",
+                            lambda observer: Selection.open(name, retain=True, observer=observer),
+                            self.show_selection, current=lambda: request is self.verification)
 
     def update_member_action(self, *_):
         entry = self.files.item() if self.file_page is not None else None
@@ -442,6 +447,7 @@ class ArchivePane(QWidget):
         self.owner.inform("已登记本次选择的存储目录。读取分支与历史时将复核原目录。")
 
     def show_selection(self, selected):
+        self.verification = None
         self.close_search()
         self.close_text()
         if self.mount is not None: self.mount.set_snapshot(selected)
@@ -492,22 +498,28 @@ class ArchivePane(QWidget):
         self.owner.inform("历史不完整。缺少原始父节点：" + missing if missing else "已沿原始父节点读到仓库起点。")
 
     def open_row(self, table):
+        if self.owner.pending is not None: return
         node = table.item()
-        if node is None:
+        chosen, catalog, store = self.selection, self.catalog, self.store
+        if node is None or store is None or catalog is None:
             self.owner.inform("请选择有原始证明的节点；缺少祖先的分支头不可选。")
             return
         if self.mount is not None: self.mount.changing()
-        store = self.store
-        def read_original():
+        request = self.verification = object()
+        def read_original(observer):
             store.check()
-            original = Selection.open(node.path, expected=node, retain=True)
+            observer.check()
+            original = Selection.open(node.path, expected=node, retain=True, observer=observer)
             try:
                 store.check()
+                observer.check()
                 return original
             except BaseException:
                 original.release_display()
                 raise
-        self.owner.job("正在复核所选原节点的归档字节…", read_original, self.show_selection)
+        submit_verification(self.owner, "正在复核所选原节点的归档字节…", read_original, self.show_selection,
+                            current=lambda: (request is self.verification and self.selection is chosen
+                                             and self.catalog is catalog and self.store is store))
 
     def compare_row(self, table):
         node, catalog, store, left = table.item(), self.catalog, self.store, self.selection

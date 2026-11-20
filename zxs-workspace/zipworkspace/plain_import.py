@@ -18,11 +18,12 @@ class Preview:
     size: int
 
 
-def _inspect_document(doc, source):
+def _inspect_document(doc, source, *, observer=None):
     if source.suffix.lower() != ".zip": raise Rejected("普通 ZIP 核验只接受 .zip 文件。")
     observed = stamp(doc)
-    tree = read_plain_document(doc)
-    sha = archive_sha(doc)
+    tree = read_plain_document(doc, observer=observer)
+    sha = archive_sha(doc, observer=observer)
+    if observer is not None: observer.begin("identity")
     if stamp(doc) != observed: raise Rejected("ordinary ZIP changed during the original inspection")
     return Preview(source, sha, tree.digest(), len(tree.rows), tree.total), tree, observed
 

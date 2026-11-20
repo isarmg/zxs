@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import stat
-from threading import Lock
+from threading import Event, Lock
 from types import MappingProxyType
 
 from .. import plain_import
@@ -14,6 +14,67 @@ from ..browser import ArchiveBrowser, DirectoryIndex
 from ..document import archive_sha, named_document, native_identity
 from ..model import Rejected
 from ..refs import Catalog, Node
+
+
+class Verification:
+    """One read-only verification; visible counts are for the actual current pass."""
+    PHASE = {"layout": "正在检查 ZIP 布局和目录",
+             "members": "正在读取并核验成员正文",
+             "raw": "正在核对原 ZIP 字节摘要",
+             "identity": "正在核对原件与目录"}
+
+    def __init__(self):
+        self._lock, self._stop = Lock(), Event()
+        self._progress = (self.PHASE["layout"], 0, None)
+
+    def cancel(self):
+        self._stop.set()
+        return True
+
+    @property
+    def cancelled(self): return self._stop.is_set()
+
+    def check(self):
+        if self.cancelled: raise Rejected("已取消本次只读核验")
+
+    def begin(self, phase, total=None):
+        self.check()
+        with self._lock: self._progress = (self.PHASE[phase], 0, total)
+
+    def advance(self, size):
+        self.check()
+        with self._lock:
+            phase, done, total = self._progress
+            self._progress = phase, done + size, total
+
+    def progress(self):
+        with self._lock: return self._progress
+
+
+def submit_verification(owner, title, select, accepted, *, current):
+    """Never publish a partial display, even if cancel arrives after the read finishes."""
+    observer = Verification()
+
+    def work():
+        try:
+            observer.check()
+            return select(observer), None
+        except Exception as err: return None, err
+
+    def done(outcome):
+        selection, failure = outcome
+        active = current()
+        if observer.cancelled or not active:
+            if selection is not None: selection.release_display()
+            if active and observer.cancelled: owner.inform("已取消核验；没有显示该归档，也未写入或提取。")
+            return
+        if failure is not None:
+            owner.inform(str(failure))
+        else:
+            accepted(selection)
+
+    return owner.job(title, work, done, cancel=observer.cancel, cancel_text="取消本次只读核验",
+                     progress_report=observer.progress)
 
 
 class _DisplayFD:
@@ -69,13 +130,14 @@ class PlainSelection:
         if self.held is not None: self.held.close()
 
     @classmethod
-    def open(cls, path, *, retain=True):
+    def open(cls, path, *, retain=True, observer=None):
         path = Path(path).absolute()
         if path.suffix.lower() != ".zip": raise Rejected("只能选择普通 .zip 文件")
         with ExitStack() as guard:
             with named_document(path) as doc:
-                preview, manifest, observed = plain_import._inspect_document(doc, path)
+                preview, manifest, observed = plain_import._inspect_document(doc, path, observer=observer)
                 index = DirectoryIndex(manifest.rows)
+                if observer is not None: observer.check()
                 held = _DisplayFD(doc) if retain else None
                 if held is not None: guard.callback(held.close)
             choice = cls(preview, observed, MappingProxyType(manifest.rows), index, held)
@@ -110,7 +172,7 @@ class Selection:
         if self.held is not None: self.held.close()
 
     @classmethod
-    def open(cls, path, *, expected: Node | None = None, retain=False):
+    def open(cls, path, *, expected: Node | None = None, retain=False, observer=None):
         path = Path(path).absolute()
         if expected is not None and expected.path != path:
             raise Rejected("selected original belongs to a different archive path")
@@ -119,9 +181,11 @@ class Selection:
                 original = stamp(doc)
                 if expected is not None and original != expected.observed:
                     raise Rejected("the listed archive instance changed; choose or inspect it again")
-                browser = ArchiveBrowser(doc, display_name=path.name)
-                if expected is not None and (browser.commit != expected.marker or archive_sha(doc) != expected.sha256):
+                browser = ArchiveBrowser(doc, display_name=path.name, observer=observer)
+                options = {} if observer is None else {"observer": observer}
+                if expected is not None and (browser.commit != expected.marker or archive_sha(doc, **options) != expected.sha256):
                     raise Rejected("the selected original archive changed; select it again")
+                if observer is not None: observer.begin("identity")
                 # Only an explicit consumer asks to retain this same open object for handoff.
                 held = None
                 if retain:

@@ -126,8 +126,9 @@ class DirectoryIndex:
 class ArchiveBrowser(DirectoryIndex):
     """A verified .zxs tree and its managed marker, never of live archive bytes."""
 
-    def __init__(self, document: BinaryIO, *, display_name: str):
-        self._commit, tree = read_managed_document(document, display_name=display_name)
+    def __init__(self, document: BinaryIO, *, display_name: str, observer=None):
+        options = {} if observer is None else {"observer": observer}
+        self._commit, tree = read_managed_document(document, display_name=display_name, **options)
         self._data_bytes = tree.total
         self._key = hexdigest(self._commit.encode())
         super().__init__(tree.rows)

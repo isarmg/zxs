@@ -229,6 +229,66 @@ class DesktopTextPreview(unittest.TestCase):
                 with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                     startup_snapshot(arguments)
 
+    def test_first_verification_reports_actual_bytes_and_can_stop_on_a_member_chunk(self):
+        from zipworkspace.desktop.selection import Verification
+        from zipworkspace.refs import Node
+        from zipworkspace import archive
+
+        payload = b"x" * (archive.CHUNK + 23)
+        chosen = self.archive(payload)
+        expected = Node(chosen.browser.commit, chosen.path, hashlib.sha256(chosen.path.read_bytes()).hexdigest(),
+                        chosen.observed)
+
+        class Watch(Verification):
+            def __init__(self, stop_after_body=False):
+                super().__init__()
+                self.last, self.stop_after_body = [], stop_after_body
+
+            def begin(self, phase, total=None):
+                if hasattr(self, "phase"): self.last.append((self.phase, self.progress()[1:]))
+                self.phase = phase
+                super().begin(phase, total)
+
+            def advance(self, size):
+                super().advance(size)
+                if self.stop_after_body and self.phase == "members": self.cancel()
+
+        stopped = Watch(stop_after_body=True)
+        with patch("zipworkspace.desktop.selection._DisplayFD",
+                   side_effect=AssertionError("not a verified display yet")):
+            with self.assertRaisesRegex(Rejected, "取消"):
+                Selection.open(chosen.path, retain=True, observer=stopped)
+        self.assertEqual(stopped.progress()[1:], (archive.CHUNK, len(payload) + len(b"unselected")))
+
+        normal = Watch()
+        read = Selection.open(chosen.path, expected=expected, retain=True, observer=normal)
+        self.addCleanup(read.release_display)
+        self.assertEqual(read.exact, expected)
+        self.assertIn(("members", (len(payload) + len(b"unselected"),) * 2), normal.last)
+        self.assertIn(("raw", (chosen.observed[2],) * 2), normal.last)
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_first_open_cancelled_after_worker_return_releases_original_before_display(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        window = Window()
+        self.addCleanup(window.close)
+        requested = self.archive(b"do not show this archive")
+        future = Future()
+        with patch.object(window.pool, "submit", return_value=future) as task:
+            window.archive.open_snapshot(str(requested.path))
+        selection, error = result = task.call_args.args[0]()
+        self.assertIsNone(error)
+        self.assertFalse(selection.held.closed)
+        future.set_result(result)
+        window.transfer_cancel.click()
+        window.poll()
+        self.assertIsNone(window.archive.selection)
+        self.assertTrue(selection.held.closed)
+        self.assertIn("已取消核验", window.note.text())
+
     @unittest.skipUnless(find_spec("PySide6"), "requires the Qt file-open event type")
     def test_finder_delivers_only_one_absolute_zxs_to_the_existing_confirmation_gate(self):
         from PySide6.QtCore import QEvent, QUrl

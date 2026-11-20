@@ -33,18 +33,23 @@ def named_document(path):
             raise Rejected("selected archive changed during verification")
 
 
-def archive_sha(doc):
+def archive_sha(doc, *, observer=None):
     """Include archive headers/comment; do not chase a growing file."""
     left = os.fstat(doc.fileno()).st_size
     if left > MAX_TOTAL + 2 * MAX_CD + (1 << 20): raise Rejected("archive length outside budget")
+    if observer is not None: observer.begin("raw", left)
     digest = hashlib.sha256()
     doc.seek(0)
     while left:
+        if observer is not None: observer.check()
         data = doc.read(min(left, CHUNK))
         if not data: raise Rejected("selected archive shrank")
         digest.update(data)
         left -= len(data)
+        if observer is not None: observer.advance(len(data))
+    if observer is not None: observer.check()
     if doc.read(1): raise Rejected("selected archive grew")
+    if observer is not None: observer.check()
     return digest.hexdigest()
 
 
