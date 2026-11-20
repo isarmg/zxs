@@ -62,8 +62,8 @@ impl SealedFinal {
 impl BoundSession {
     /// A closed command-specific codec, not a signing oracle over arbitrary
     /// buffers. The connection separately verifies the current original Claim.
-    pub(in crate::smb) fn sign_echo(&self,stamp:&BatchRevision,reply:crate::smb::wire::echo_reply::PayableEcho)
-        ->std::result::Result<crate::smb::wire::echo_reply::SignedEcho,crate::smb::session::Fault> {
+    pub(in crate::smb) fn sign_small_reply(&self,stamp:&BatchRevision,reply:crate::smb::wire::fixed_reply::PayableSmall)
+        ->std::result::Result<crate::smb::wire::fixed_reply::SignedSmall,crate::smb::session::Fault> {
         use hmac::Mac;
         let signer=self.signer_for(stamp).filter(|s|s.id==reply.sid()).ok_or(crate::smb::session::Fault::UnknownSession)?;
         let mut mac=signer.mac()?;mac.update(reply.for_mac());let result=mac.finalize();

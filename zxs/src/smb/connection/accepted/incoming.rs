@@ -8,7 +8,7 @@ use crate::smb::{
 use std::time::Instant;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(in crate::smb) enum Turn {Idle,SelectionWritten,ChallengeWritten,FinalWritten,ErrorWritten,EchoWritten,Routed}
+pub(in crate::smb) enum Turn {Idle,SelectionWritten,ChallengeWritten,FinalWritten,ErrorWritten,EchoWritten,TreeRefused,Routed}
 /// A real future handler must either settle its own original receipt or stop.
 /// In particular an unsigned error reply is NOT a substitute for checking a
 /// signed reauth, binding or an unrelated protected session.
@@ -103,6 +103,10 @@ impl Peer {
                 match x.preflight(c) {
                     Admission::Ready(mut batch) if echo=>{
                         let tx=batch.echoes()?.ok_or(Fault::SessionState)?;tx.send()?;Ok(Turn::EchoWritten)
+                    }
+                    Admission::Ready(mut batch)=>{
+                        if batch.try_send_tree_refusal()? {return Ok(Turn::TreeRefused);}
+                        other(Outstanding::Ordinary(Admission::Ready(batch)))?;Ok(Turn::Routed)
                     }
                     Admission::TransportGone=>Err(Fault::Closed),
                     work=>{other(Outstanding::Ordinary(work))?;Ok(Turn::Routed)}

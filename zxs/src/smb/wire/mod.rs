@@ -2,7 +2,7 @@
 //! issue credits, authenticate, call a ZXS operation or send a reply.
 pub(in crate::smb) mod credit_fields;
 pub(in crate::smb) mod direct;
-pub(in crate::smb) mod echo_reply;
+pub(in crate::smb) mod fixed_reply;
 pub(in crate::smb) mod io_fields;
 pub(in crate::smb) mod io_reply;
 pub(in crate::smb) mod message;

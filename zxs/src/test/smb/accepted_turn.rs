@@ -1,5 +1,5 @@
 //! No listener or accounts. A single synthetic full-duplex stream carries
-//! negotiation through the final strict packet and exactly one signed ECHO.
+//! negotiation through the final strict packet and signed ordinary replies.
 //! The test-only challenge is public fixed data; the salt/time in the real
 //! NEGOTIATE serializer are not predicted. Compare against the bytes written.
 use super::*;
@@ -54,6 +54,24 @@ fn tag_for_this_fixture(key:&[u8],smb:&[u8])->[u8;16] {
     Mac::update(&mut mac,&clear);let mut tag=[0;16];tag.copy_from_slice(mac.finalize().as_bytes());tag
 }
 
+fn signing_key_for_this_fixture(h:&[u8;64])->[u8;16] {
+    // Exported key of the published synthetic exchange, not read from the owner.
+    let known=[0xf7,0xbc,0xf4,0x5a,0x16,0x7d,0x64,0xd4,0x09,0x65,0x48,0xda,0xf3,0xc0,0x59,0x5a];
+    let mut kdf=Hmac::<Sha256>::new_from_slice(&known).unwrap();
+    for part in [&[0,0,0,1][..],b"SMBSigningKey\0\0",&h[..],&[0,0,0,128]] {Mac::update(&mut kdf,part);}
+    kdf.finalize().as_bytes()[..16].try_into().unwrap()
+}
+fn tree_request(key:&[u8],mid:u64,path:&str,offset:u16)->Vec<u8> {
+    let mut request=vec![0;72];request[..4].copy_from_slice(b"\xfeSMB");
+    request[4]=64;request[6]=1;request[12]=3;request[14]=2;request[16]=0x28;
+    request[24..32].copy_from_slice(&mid.to_le_bytes());request[32..36].copy_from_slice(&0x44332211u32.to_le_bytes());
+    request[40]=1;request[64]=9;request[68..70].copy_from_slice(&offset.to_le_bytes());
+    for unit in path.encode_utf16() {request.extend_from_slice(&unit.to_le_bytes());}
+    let n=(request.len()-72) as u16;request[70..72].copy_from_slice(&n.to_le_bytes());
+    let tag=tag_for_this_fixture(key,&request);request[48..64].copy_from_slice(&tag);
+    frame(&request)
+}
+
 #[test]
 fn accepted_socket_reads_and_submits_each_of_the_three_strict_exchange_forms_then_a_signed_echo() {
     for style in 0..3 {
@@ -71,12 +89,7 @@ fn accepted_socket_reads_and_submits_each_of_the_three_strict_exchange_forms_the
         };
         let reply=one_turn(&mut p,&t,&last,mid,1,Turn::FinalWritten,&mut h);
         assert_eq!(&reply[12..16],&[0;4]);assert_eq!(reply[20]&9,9);
-        // Sole public exported key for this invented reference exchange. Do
-        // not ask the server for a key, sign with a live session or hash its final response.
-        let known=[0xf7,0xbc,0xf4,0x5a,0x16,0x7d,0x64,0xd4,0x09,0x65,0x48,0xda,0xf3,0xc0,0x59,0x5a];
-        let mut kdf=Hmac::<Sha256>::new_from_slice(&known).unwrap();
-        for part in [&[0,0,0,1][..],b"SMBSigningKey\0\0",&h[..],&[0,0,0,128]] {Mac::update(&mut kdf,part);}
-        let block=kdf.finalize();let key=&block.as_bytes()[..16];
+        let key=&signing_key_for_this_fixture(&h);
         assert_eq!(&reply[52..68],&tag_for_this_fixture(key,&reply[4..]));
         assert_eq!(p.poll(step_unexpected).unwrap(),Turn::Idle);
         let mut echo=vec![0;68];echo[..4].copy_from_slice(b"\xfeSMB");echo[4]=64;echo[6]=1;echo[12]=13;
@@ -138,4 +151,42 @@ fn quiet_boundary_partial_timeout_negotiated_limit_and_unsettled_special_setup_a
     q[66]=1;give(&t,&frame(&q)); // binding must NOT become a new unsigned login
     let err=p.poll(|item|{assert!(matches!(item,Outstanding::SpecialSetup(_)));Ok(())});
     assert_eq!(err,Err(Fault::Closed));assert!(take(&t).is_empty());assert_eq!(t.lock().unwrap().drops,1);
+}
+
+#[test]
+fn paid_tree_refusals_are_signed_and_a_valid_name_is_neither_consumed_nor_granted() {
+    use crate::smb::connection::sessions::ordinary::Step;
+    let run=provider();let (mut p,t,neg,rep)=peer(&run);
+    let mut h=[0;64];fold(&mut h,&neg);fold(&mut h,&rep);
+    let (one,three)=ChallengeService::fixture_messages(false);
+    one_turn(&mut p,&t,&one,1,0,Turn::ChallengeWritten,&mut h);
+    one_turn(&mut p,&t,&three,2,1,Turn::FinalWritten,&mut h);
+    let key=&signing_key_for_this_fixture(&h);
+    for (mid,path,offset,status) in [(3,r"\\fixture\IPC$",72,0xc000_00ccu32),
+                                     (4,r"\\fixture\ZXS",71,0xc000_000d)] {
+        let before=p.connection.window.available();
+        give(&t,&tree_request(key,mid,path,offset));
+        assert_eq!(p.poll(step_unexpected).unwrap(),Turn::TreeRefused);
+        let actual=take(&t);let raw=&actual[4..];
+        assert_eq!(&actual[..4],&72u32.to_be_bytes());
+        assert_eq!(&raw[..8],b"\xfeSMB\x40\x00\x01\x00");
+        assert_eq!(&raw[8..12],&status.to_le_bytes());
+        assert_eq!(&raw[12..16],&[3,0,2,0]);
+        assert_eq!(&raw[16..24],&[0x29,0,0,0,0,0,0,0]); // original priority retained; no compound
+        assert_eq!(&raw[24..32],&mid.to_le_bytes());
+        assert_eq!(&raw[32..36],&0x44332211u32.to_le_bytes());
+        assert_eq!(&raw[36..40],&[0;4]); // no TreeId for negative response
+        assert_eq!(&raw[40..48],&1u64.to_le_bytes());
+        assert_eq!(&raw[48..64],&tag_for_this_fixture(key,raw));
+        assert_eq!(&raw[64..],&[9,0,0,0,0,0,0,0]);
+        assert_eq!(p.connection.in_flight,0);assert_eq!(p.connection.window.available(),before+1);
+    }
+    give(&t,&tree_request(key,5,r"\\fixture\ZXS",72));
+    let settled=p.poll(|x|{
+        let Outstanding::Ordinary(Admission::Ready(mut batch))=x else {panic!("a real request is still owed");};
+        let Some(Step::Verified(v))=batch.next()? else {panic!("valid request was consumed");};
+        assert_eq!(v.message().header.message,5);
+        v.session().recheck()?;Ok(()) // no Core root in this source fixture; no claimed success
+    });
+    assert_eq!(settled,Err(Fault::Closed));assert!(take(&t).is_empty());
 }
