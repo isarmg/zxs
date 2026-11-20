@@ -193,6 +193,30 @@ archive = "https://static.crates.io/crates/libc/libc-0.2.191.crate"
 sha256 = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/hashes"
+commit = "b5051e5a5e7dc86a6c27c1ec7a390744ebcfb97a"
+upstream_subdirectory = "md5"
+archive = "https://static.crates.io/crates/md-5/md-5-0.11.0.crate"
+sha256 = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+
+[[package]]
+name = "rc4"
+version = "0.2.0"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/stream-ciphers"
+commit = "b516422ebb49ff0d9140b22ac8c2a627d10a452e"
+upstream_subdirectory = "rc4"
+archive = "https://static.crates.io/crates/rc4/rc4-0.2.0.crate"
+sha256 = "840038b674daa9f7a7957440d937951d15c0143c056e631e529141fd780e0c92"
+
+[[package]]
 name = "sha2"
 version = "0.11.1"
 edition = "2024"

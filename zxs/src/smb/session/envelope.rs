@@ -17,7 +17,7 @@ pub(in crate::smb) type Result<T> = std::result::Result<T, Failure>;
 /// SMB security field (list additionally <=4096); do not log token bytes.
 pub(super) struct Saved(Vec<u8>);
 impl Saved {
-    fn from_wire(p: &[u8]) -> Result<Self> {
+    pub(super) fn from_wire(p: &[u8]) -> Result<Self> {
         if p.len() > usize::from(u16::MAX) { return Err(Failure::Limit); }
         let mut v = Vec::new();
         v.try_reserve_exact(p.len()).map_err(|_| Failure::Limit)?;
@@ -51,8 +51,8 @@ pub(in crate::smb) struct AwaitAuthenticate {
     next: AwaitingRequest, layer: Layer, type1: Saved, type2: Saved,
 }
 
-/// These fields must be consumed TOGETHER by the future, separately reviewed
-/// mechanism verifier with its own original issued challenge/expiry and
+/// These fields must be consumed TOGETHER by the strictly bound
+/// mechanism verifier with its own originally issued challenge/expiry and
 /// configured account epoch. Neither this object, its SID, nor a structurally
 /// valid MIC is proof. There is no conversion from this to VerifiedExchange.
 #[must_use]
@@ -135,6 +135,8 @@ impl HaveNegotiate {
 }
 
 impl AwaitAuthenticate {
+    pub(super) fn actual_challenge(&self) -> &[u8] { self.type2.bytes() }
+
     pub(in crate::smb) fn received<'a>(self, input: &Compound<'a>) -> Result<Unverified<'a>> {
         let (request, blob) = self.next.received_token(input).map_err(|_| Failure::Stage)?;
         let mut layer = self.layer;
@@ -163,4 +165,4 @@ impl AwaitAuthenticate {
 
 #[cfg(test)]
 #[path = "../../test/smb/envelope.rs"]
-mod tests;
+pub(super) mod tests;

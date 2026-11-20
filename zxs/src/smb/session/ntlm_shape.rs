@@ -54,18 +54,30 @@ fn fields<const N: usize>(p: &[u8], at: [usize; N], floor: usize, active: [bool;
     Ok(out)
 }
 
-pub(super) fn negotiate(p: &[u8]) -> Result<()> {
+pub(super) fn negotiate_flags(p: &[u8]) -> Result<u32> {
     let (f, floor) = head(p, 1, 12, 32)?;
     fields(p, [16, 24], floor, [f & DOMAIN_SUPPLIED != 0, f & WORKSTATION_SUPPLIED != 0])?;
-    Ok(())
+    Ok(f)
 }
 
-/// Return the advertised NTLM MIC presence bit, never a verified MIC.
+pub(super) fn negotiate(p: &[u8]) -> Result<()> { negotiate_flags(p).map(|_| ()) }
+
+pub(super) struct Avs<'a> { items: [Option<&'a [u8]>; 11] }
+impl<'a> Avs<'a> {
+    pub(super) fn get(&self, id: usize) -> Option<&'a [u8]> {
+        self.items.get(id).copied().flatten()
+    }
+    pub(super) fn flags(&self) -> u32 {
+        self.get(6).and_then(|v| v.try_into().ok()).map(u32::from_le_bytes).unwrap_or(0)
+    }
+}
+
+/// Return bounded AV values, never a verified MIC.
 /// §3.3.2 may append one extra reserved Z(4) after the client's EOL.
 /// Keep the original bytes for the later proof; don't normalize them.
-fn av(mut p: &[u8], client: bool) -> Result<bool> {
+fn av(mut p: &[u8], client: bool) -> Result<Avs<'_>> {
     let mut seen = 0u16;
-    let mut indicated = false;
+    let mut items = [None; 11];
     for _ in 0..64 {
         let id = le16(p, 0)?;
         let n = usize::from(le16(p, 2)?);
@@ -77,7 +89,7 @@ fn av(mut p: &[u8], client: bool) -> Result<bool> {
             // exact issued data is a later proof check, not an AV-shape check.
             let required = (1 << 1) | (1 << 2) | (1 << 7);
             if !client && seen & required != required { return Err(Failure::Malformed); }
-            return Ok(indicated);
+            return Ok(Avs { items });
         }
         if id > 10 { return Err(Failure::Unsupported); }
         let bit = 1u16 << id;
@@ -85,27 +97,35 @@ fn av(mut p: &[u8], client: bool) -> Result<bool> {
         seen |= bit;
         match id {
             1..=5 | 9 if n % 2 == 0 => {}
-            6 if n == 4 => indicated = le32(v, 0)? & 2 != 0,
+            6 if n == 4 => {}
             7 if n == 8 => {}
             8 if n >= 48 => {} // ignore remote Single_Host_Data after MachineID (§2.2.2.2)
             10 if n == 16 => {}
             _ => return Err(Failure::Malformed),
         }
+        items[usize::from(id)] = Some(v);
         p = tail;
     }
     Err(Failure::Limit)
 }
 
-pub(super) fn challenge(p: &[u8]) -> Result<()> {
+pub(super) struct Challenge<'a> {
+    pub(super) flags: u32,
+    pub(super) nonce: &'a [u8],
+    pub(super) avs: Avs<'a>,
+}
+
+pub(super) fn challenge_fields(p: &[u8]) -> Result<Challenge<'_>> {
     let (f, floor) = head(p, 2, 20, 48)?;
     if f & TARGET_INFO == 0 { return Err(Failure::Mechanism); }
     let [target, info] = fields(p, [12, 40], floor, [f & REQUEST_TARGET != 0, true])?;
     if !target.is_empty() && (target.len() % 2 != 0 || le32(p, 16)? % 2 != 0) {
         return Err(Failure::Malformed);
     }
-    av(info, false)?;
-    Ok(())
+    Ok(Challenge { flags: f, nonce: &p[24..32], avs: av(info, false)? })
 }
+
+pub(super) fn challenge(p: &[u8]) -> Result<()> { challenge_fields(p).map(|_| ()) }
 
 pub(super) struct Authenticate<'a> {
     pub(super) raw: &'a [u8],
@@ -113,6 +133,10 @@ pub(super) struct Authenticate<'a> {
     pub(super) domain_utf16: &'a [u8],
     pub(super) user_utf16: &'a [u8],
     pub(super) mic_indicated: bool,
+    pub(super) flags: u32,
+    pub(super) lm: &'a [u8],
+    pub(super) encrypted_key: &'a [u8],
+    pub(super) avs: Avs<'a>,
 }
 
 pub(super) fn authenticate(p: &[u8]) -> Result<Authenticate<'_>> {
@@ -132,7 +156,8 @@ pub(super) fn authenticate(p: &[u8]) -> Result<Authenticate<'_>> {
             return Err(Failure::Malformed);
         }
     }
-    let mic_indicated = av(&nt[44..], true)?;
+    let avs = av(&nt[44..], true)?;
+    let mic_indicated = avs.flags() & 2 != 0;
     if mic_indicated {
         // Prove there is room at least for the MIC before the payload.
         // Its exact placement (incl. the optional VERSION field), actual
@@ -140,5 +165,6 @@ pub(super) fn authenticate(p: &[u8]) -> Result<Authenticate<'_>> {
         // mechanism verifier, NEVER to a flag or a guessed 16-byte gap.
         fields(p, descriptors, floor + 16, active)?;
     }
-    Ok(Authenticate { raw: p, nt_response: nt, domain_utf16: domain, user_utf16: user, mic_indicated })
+    Ok(Authenticate { raw: p, nt_response: nt, domain_utf16: domain, user_utf16: user,
+                      mic_indicated, flags: f, lm, encrypted_key: wrapped_key, avs })
 }

@@ -1,7 +1,10 @@
 # ZXS-owned Rust dependency sources
 
 The private SMB implementation uses RustCrypto SHA-512, HMAC-SHA-256 and
-AES-128-CMAC. These are the complete
+AES-128-CMAC. Its strict, offline NTLMv2 verifier additionally needs the legacy
+MD5/HMAC-MD5 and RC4 primitives prescribed by MS-NLMP; they are not SMB file
+encryption, a password-storage recommendation, or general crypto primitives
+for new ZXS features. These are the complete
 **library/build sources** of its pinned graph, including every published CPU
 backend, not executable archives, a new product/workspace, or an alternative
 registry. Paths are relative to the importing manifest; neither the invocation
@@ -11,12 +14,12 @@ directory, another project nor a host cryptographic service supplies a crate.
 
 [SOURCES.toml](SOURCES.toml) records the archive URL, SHA-256 from the
 crates.io index, upstream repository/revision, license, edition and minimum
-Rust version of each package. All 19 archive checksums were verified before
-import (2,524,873 compressed bytes in total). No .crate archive or prebuilt
+Rust version of each package. All 21 archive checksums were verified before
+import (2,557,868 compressed bytes in total). No .crate archive or prebuilt
 object is committed. Inside each package the published src/**, build.rs where
 present, .cargo_vcs_info.json, README, LICENSE files, Cargo.toml.orig (author
 manifest) and Cargo.toml.upstream (registry-normalized manifest) are unchanged.
-The 716 original files can be compared by Git blob ID with the same paths in
+The 735 original files can be compared by Git blob ID with the same paths in
 the checksum-matching source archives (map Cargo.toml.upstream to Cargo.toml).
 
 An active Cargo.toml starts from Cargo.toml.upstream, then adds a relative
@@ -40,22 +43,36 @@ and [RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385.html),
 respectively. The advisory/source review is not a
 certification, claim of no other vulnerabilities or substitute for future review.
 
+[md-5 0.11.0](https://github.com/RustCrypto/hashes/tree/b5051e5a5e7dc86a6c27c1ec7a390744ebcfb97a/md5) and
+[rc4 0.2.0](https://github.com/RustCrypto/stream-ciphers/tree/b516422ebb49ff0d9140b22ac8c2a627d10a452e/rc4) are unyanked
+Rust 1.85 releases; the two additional archives are 17,404 and 15,591 bytes.
+No package directory for either was found at the reviewed
+[RustSec snapshot](https://github.com/rustsec/advisory-db/tree/074ea9a7ed619f511b5b7374c7a97e98d1e98be4/crates).
+That is not an assertion that these primitives are safe for new protocols.
+Upstream explicitly warns about RC4 and MD5. The ZXS verifier limits their use
+to NTLM's keyed proof and MIC, standard key derivations and optional key
+exchange/MIC wrapping. No MD4/password processing or host crypto provider
+is added here. The source uses the existing cipher/digest cohorts; the one
+newly enabled cipher/stream-wrapper path points to the existing block-buffer.
+
 ## Active paths and build scope
 
 The ZXS workspace excludes each vendored package, so its own upstream dev and
 unselected optional dependencies do not enter the normal ZXS graph. The direct
-dependencies are aes, cmac, hmac, sha2 and zeroize, all with defaults off;
-the first four use their upstream zeroize features. No derive, alloc/oid, C
+dependencies are aes, cmac, hmac, md-5, rc4, sha2 and zeroize, all with
+defaults off; the first six use their upstream zeroize features. No derive, alloc/oid, C
 provider, generated binding, system crypto or external service is required by
 this selection. Enabled path edges, also spelled out in Cargo.lock:
 
 ```text
-zxs -> aes, cmac, hmac, sha2, zeroize
+zxs -> aes, cmac, hmac, md-5, rc4, sha2, zeroize
 aes -> cipher, cpubits, cpufeatures [target cfg], zeroize
 cmac -> cipher, dbl, digest
 hmac -> digest
+md-5 -> cfg-if, digest
+rc4 -> cipher [stream-wrapper]
 sha2 -> cfg-if, cpufeatures [target cfg], digest
-cipher -> crypto-common [alias common], inout, zeroize
+cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 digest -> block-buffer, crypto-common [alias common], ctutils, zeroize
 block-buffer -> hybrid-array, zeroize
 crypto-common -> hybrid-array

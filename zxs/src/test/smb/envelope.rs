@@ -6,8 +6,8 @@ use crate::smb::wire::{
     preauth::{NegotiateRequestHash, tests::synthetic_exchange},
 };
 
-const NTLM: &[u8] = &[0x2b, 6, 1, 4, 1, 0x82, 0x37, 2, 2, 10];
-const KRB: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 1, 2, 2];
+pub(in crate::smb::session) const NTLM: &[u8] = &[0x2b, 6, 1, 4, 1, 0x82, 0x37, 2, 2, 10];
+pub(in crate::smb::session) const KRB: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 1, 2, 2];
 const SPNEGO: &[u8] = &[0x2b, 6, 1, 5, 5, 2];
 const NF: u32 = 0x0208_0201; // Unicode + NTLM + ESS + VERSION
 
@@ -31,10 +31,10 @@ fn init_with(oids: &[&[u8]], extra: &[u8]) -> Vec<u8> {
     body.extend(tlv(0xa0, &tlv(0x30, &seq)));
     tlv(0x60, &body)
 }
-fn init(oids: &[&[u8]], optimistic: Option<&[u8]>) -> Vec<u8> {
+pub(in crate::smb::session) fn init(oids: &[&[u8]], optimistic: Option<&[u8]>) -> Vec<u8> {
     init_with(oids, &optimistic.map_or_else(Vec::new, |v| tlv(0xa2, &tlv(4, v))))
 }
-fn resp(state: Option<u8>, selected: bool, token: Option<&[u8]>, mic: Option<&[u8]>) -> Vec<u8> {
+pub(in crate::smb::session) fn resp(state: Option<u8>, selected: bool, token: Option<&[u8]>, mic: Option<&[u8]>) -> Vec<u8> {
     let mut seq = Vec::new();
     if let Some(s) = state { seq.extend(tlv(0xa0, &tlv(10, &[s]))); }
     if selected { seq.extend(tlv(0xa1, &tlv(6, NTLM))); }
@@ -88,7 +88,7 @@ fn three_ntlm(mic: bool) -> Vec<u8> {
 
 // NegReq/Rsp and the client/server SMB2 headers are from the synthetic SHA
 // fixtures, not from a service. GAP and suffix are outside the declared blob.
-fn smb(token: &[u8], response: bool, mid: u64, sid: u64, gap: u8) -> Vec<u8> {
+pub(in crate::smb::session) fn smb(token: &[u8], response: bool, mid: u64, sid: u64, gap: u8) -> Vec<u8> {
     let seeds = synthetic_exchange();
     let (idx, fixed, fields) = if response { (3,72,68) } else { (2,88,76) };
     let mut v = seeds[idx][..fixed].to_vec();
@@ -101,12 +101,12 @@ fn smb(token: &[u8], response: bool, mid: u64, sid: u64, gap: u8) -> Vec<u8> {
     v.push(0xee);
     v
 }
-fn framed(p: &[u8]) -> Vec<u8> {
+pub(in crate::smb::session) fn framed(p: &[u8]) -> Vec<u8> {
     let mut v = (p.len() as u32).to_be_bytes().to_vec();
     v.extend_from_slice(p);
     v
 }
-fn compound(frame: &[u8]) -> Compound<'_> {
+pub(in crate::smb::session) fn compound(frame: &[u8]) -> Compound<'_> {
     let (f, rest) = Frame::split(frame).unwrap().unwrap();
     assert!(rest.is_empty());
     Compound::parse(f).unwrap()
@@ -121,7 +121,7 @@ fn first(blob: &[u8]) -> Result<First> {
     let bytes = framed(&smb(blob, false, 1, 0, 0));
     begin(&conn(), &compound(&bytes))
 }
-fn seen(blob: &[u8]) -> HaveNegotiate {
+pub(in crate::smb::session) fn seen(blob: &[u8]) -> HaveNegotiate {
     let First::Negotiate(n) = first(blob).unwrap() else { panic!("expected original Type1") };
     n
 }

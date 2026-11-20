@@ -1,6 +1,6 @@
 # ZXS 内部 Rust SMB 服务
 
-**当前是未接线的协议、签名与权限前置，不是可挂载的服务。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。不生成协商成功包，不监听 445，不认证、不分配会话或授予共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
+**当前是未接线的协议、严格机制校验、签名与权限前置，不是可挂载的服务。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。不生成协商成功包，不监听 445，不签发生产认证、会话或共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
 
 `wire/path_fields` 从单条 CREATE / SET_INFO 普通 rename 消息的声明范围提取名字，`backend/path` 是唯一业务名字解析：严格 UTF-16、以同一共享为根，逐部件调用现有显示名规则，保留大小写和 Unicode 原拼写，不从名字判断数据盘／回收站，不解释宿主路径。CREATE 空名和未处理的 contexts 一起保留，不把重连请求误作根权限。rename 源是本次协议句柄，目标的替换标志不是覆盖授权。关于多部件目标，[微软 SET_INFO 条文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/43cf22fe-84cb-49cf-b3e7-e3d7d766a7b7) 的分隔符限制与 full pathname 表述并存；[Linux 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2inode.c#L1076-L1112) 会编码目标路径。此处为 ZXS 同树移位保留这个目标形状，不表示任何原生客户端已完成还原。具体成员字节额度、当前盘和删除原单仍由 Core 选择和复核。
 
@@ -16,11 +16,26 @@
 
 `session/envelope` 只处理一次新的连接型 NTLMv2 尝试。它取原请求或已序列化 MORE 回复的同一个 security buffer 和预认证状态，不收另传的 token。第一次选定 RFC 4178 的 GSS-SPNEGO 或直接 NTLMSSP 后不得换层；不扫描尾部、不从坏 DER 回退、不把客户端的账户名、目标、MIC 标志或非零 SessionId 当证明。[Linux v6.12 的原生 SMB 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L1708-L1846) 确有直接传两段 NTLMSSP 的代码，两种封装最终必须满足同一账户、挑战及签名要求。本段不接收 SMB1、NTLMv1 或匿名。
 
-[初始 GSS 封装](https://www.rfc-editor.org/rfc/rfc2743#section-3.1) 只在客户端首条使用；[RFC 4178 §§4–6](https://www.rfc-editor.org/rfc/rfc4178#section-4.2) 的后续 NegTokenResp 不重复包装。保存客户端机制顺序及原 DER SEQUENCE（不含显式 [0]）给将来的 mechListMIC 校验。若 NTLM 不在首位，不使用其他机制的乐观 token 或早期 MIC，必先用实际 MORE 选择 NTLM 并请求名单 MIC；此后收到新的 Type 1 才接收 Type 2。优先 NTLM 无乐观 token 时也要先走机制选择。后续客户端不能再选机制，未知 DER 扩展有界跳过但不授予能力；即使客户端首条带有 Init2 的 NegHints，也只忽略其有界 SEQUENCE，不从提示名推出目标或身份。首答已 request-mic 而末条没有相应 MIC，按 §5(c)(V) 终止；即使形状和长度都正确也须实际核验，不能由“有字段”推出认证。
+[初始 GSS 封装](https://www.rfc-editor.org/rfc/rfc2743#section-3.1) 只在客户端首条使用；[RFC 4178 §§4–6](https://www.rfc-editor.org/rfc/rfc4178#section-4.2) 的后续 NegTokenResp 不重复包装。保存客户端机制顺序及原 DER SEQUENCE（不含显式 [0]）给独立的 mechListMIC 校验。若 NTLM 不在首位，不使用其他机制的乐观 token 或早期 MIC，必先用实际 MORE 选择 NTLM 并请求名单 MIC；此后收到新的 Type 1 才接收 Type 2。优先 NTLM 无乐观 token 时也要先走机制选择。后续客户端不能再选机制，未知 DER 扩展有界跳过但不授予能力；即使客户端首条带有 Init2 的 NegHints，也只忽略其有界 SEQUENCE，不从提示名推出目标或身份。首答已 request-mic 而末条没有相应 MIC，按 §5(c)(V) 终止；即使形状和长度都正确也须实际核验，不能由“有字段”推出认证。
 
 [MS-NLMP 三种报文与字段](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/033d32cc-88f9-4483-9bf2-b273055038ce) 的有界视图保留原始 Type 1/2/3、目标信息及客户端声明；启用字段不超出本条、不别名固定头或其它有效字段，不解释按标志应忽略的描述符。[MS-SPNG 微软产品说明 <8>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-spng/211417c4-11ef-46c0-a8fb-f178a51c2088) 区分最优先 NTLM 且带 NTLM MIC 的保护与原生直接 token 行为；本版对已选 SPNEGO 的这类输入也要求名单 MIC，不能切到直接封装来逃避。未宣告 Negotiate Late Fallback，不在半途重选。没有 GSS 分片重组、Kerberos、原生客户端验收或跨连接恢复；服务端 NEGOTIATE 所需的机制广告／NegHints 与出站封装并非这个入站切片。
 
-产物只是 `Unverified`，不会生成挑战、校验口令、导出密钥、创建 `VerifiedExchange`、授予 Tree 或发送成功。真正的接受端还须拥有安全随机的一次性限时挑战与原连接/凭据代，校验原协商标志、目标/时间、NTLMv2 证明、所需 NTLM MIC 和双向 mechListMIC，并复核当前业务身份，再把该次最后请求的 transcript 和导出键一起交给签名器。不能只相信客户端的 MIC 指示位。所有合成测试素材无真实账户或有效口令证明。
+该封装层产物只是 `Unverified`，不会生成挑战、校验口令、导出密钥、创建 `VerifiedExchange`、授予 Tree 或发送成功。真正的接受端还须拥有安全随机的一次性限时挑战与原连接/凭据代，校验原协商标志、目标/时间、NTLMv2 证明、所需 NTLM MIC 和双向 mechListMIC，并复核当前业务身份，再把该次最后请求的 transcript 和导出键一起交给签名器。不能只相信客户端的 MIC 指示位。该封装层的形状夹具不是有效口令证明。
+
+## 严格 NTLMv2 机制证明（开发资料，未启用）
+
+`session/strict_verifier` 消费同一次握手的原 Type 1、服务器实际序列化并逐字核对的 Type 2、最后一个 SMB 请求与其 Type 3。受保护的材料是针对**一个确切账户、域和代次**的预派生 ResponseKeyNT，等同该身份的秘密，不是 Web 哈希，不从网络接收；本模块没有此材料或挑战的生产构造器、密码输入、账户库或发包函数。候选挑战只能消耗一次，包括出错；核对原 SID／MORE 的原 MID 和有限期，把最终请求的原 SMB transcript 随证明保留。连接 owner 今后还须实际生成不可预测挑战、限额／防重复 MessageId、从原连接独占取出、终验原凭据代和同一实例。未完成这些，不得宣布身份成立。
+
+| 层 | 规范与本开发配置的决定 |
+| --- | --- |
+| NTLMv2 响应 | 使用[原服务器挑战及客户端原始 v2 blob](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/5e550938-91d4-459f-b67d-75d70009e3f3)校验 NTProofStr，匹配受保护账户／域、服务器目标信息、时间及配置的 CIFS SPN。拒绝 LM/NTLMv1、匿名、替换账户或凑出的备用域。仅接受 Unicode、签名、ESS、VERSION 和 128 位等本配置的协商结果；标志不一致即拒。没选 KEY_EXCH 时用原 SessionBaseKey；选了时仅从本次 16 字节加密字段恢复导出键。这里只接普通无 TLS 通道绑定的 profile，不假造 CBT 或 SMB 数据加密。 |
+| NTLM 内层 MIC | [MS-NLMP 客户端规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/c0250a97-2940-40c7-82fb-20d208c71e96)：带服务器时间戳时客户端 SHOULD 发送；[AV_FLAGS 的 0x2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/83f5e789-660d-4781-8491-5f8c6641f75e)是客户端表示已经包含 MIC，不是身份或服务器强制开关。[服务端规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/f9e6fbc4-a953-4f24-b229-ccdcc213b9ec)要求核已标注 MIC；[安全说明](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/1e846608-4c5f-41f4-8454-1b91af8a755b)区分未标注的通用允许范围与篡改风险。**本版直接、SPNEGO 两路均硬性要求并实际核验；未标、缺失或算错全拒**，不以三平台兼容为由降级。原 Type 1＋2＋3 只清零 Type 3 的 MIC 本身；三报文均已确定带 VERSION，不猜 16 字节缺口。 |
+| SPNEGO mechListMIC | [RFC 4178 §5(c)](https://www.rfc-editor.org/rfc/rfc4178#section-5) 与[微软产品说明 <8>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-spng/211417c4-11ef-46c0-a8fb-f178a51c2088)：保护的对象是首个客户端原 MechTypeList DER SEQUENCE，不是 Type 1＋2＋3。当本严格配置选择 SPNEGO 时还必须独立校验客户端方向，并生成服务端方向的最终名单 MIC；方向、序号、签名键均不能混用。NTLM [ESS 签名](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/a92716d5-d164-4960-9e15-300f4eef44a8)的可选 RC4 仅按协商保护短校验和、封装会话键，不用于文件、密码存储或新功能。最初就是直接 NTLM 时没有名单可签；已选择 SPNEGO 后不允许回退。 |
+| SMB3.1.1 | SHA-512 preauth 绑定原 SMB 报文；它不是 NTLM MIC 或名单 MIC。未来只准持原 `MechanismProof` 的连接 owner 在同代复核后，把确切最终 GSS 输出写入成功应答、再用同次导出键及请求 transcript 为该真实应答签名；所有普通命令仍走强制 AES-CMAC。当前无钥匙读取器、`VerifiedExchange` 签发者、成功会话、业务树、监听或线上口令。 |
+
+Windows、macOS 及 Linux 均没有通过原生验收。[Linux v6.12 的 raw NTLMSSP 构造](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/sess.c#L1075-L1171)在这条普通路径构造 Type 3 而不计算本版要求的 NTLM MIC，故**该版本该路径不能通过严格配置**；能解析 raw token 不代表能挂载。未来不同 profile 须独立说明和审查，不能识别客户端名称后放宽或试错回退。
+
+`src/test/smb/strict_verifier.rs` 只存公开合成的完整原消息和固定答案。固定材料不对应实际账户，包含有／无 KEY_EXCH 的导出键、双方向名单 MIC，以及 v2 证明虽正确但无内层 MIC、错 SPN／时间等拒绝例；另列[微软规范公开的 SessionBaseKey 答案](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/54973495-20d2-49e8-9925-c399a403ed4a)作交叉基准，不给生产补造凭据、连接或权限。仅静审源码，未构建、运行测试或实际认证。
 
 ## 认证后的明文消息签名（未接认证、网络或存储）
 

@@ -26,6 +26,7 @@ version = "1.0.5"
 name = "cipher"
 version = "0.5.2"
 dependencies = [
+ "block-buffer",
  "crypto-common",
  "inout",
  "zeroize",
@@ -113,6 +114,21 @@ name = "libc"
 version = "0.2.191"
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
+name = "rc4"
+version = "0.2.0"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "sha2"
 version = "0.11.1"
 dependencies = [
@@ -136,6 +152,8 @@ dependencies = [
  "aes",
  "cmac",
  "hmac",
+ "md-5",
+ "rc4",
  "sha2",
  "zeroize",
 ]

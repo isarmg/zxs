@@ -1,9 +1,10 @@
 //! Plaintext SMB 3.1.1, fresh authenticated NTLM session, AES-128-CMAC only.
-//! No authenticator, constructor from a wire key, credential lookup, connection
+//! No live authentication issuer, constructor from a wire key, credential lookup, connection
 //! table or service entry point. Verification alone confers no storage rights.
 mod der;
 pub(in crate::smb) mod envelope;
 mod ntlm_shape;
+mod strict_verifier;
 
 use crate::smb::wire::{
     message::{Compound, RELATED, SIGNED},
