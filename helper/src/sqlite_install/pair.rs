@@ -32,6 +32,11 @@ pub(super) use native_sql::WriteGate as NativeWriteGate;
 pub(super) use domain::{require_lent_ex,require_lent_sh};
 use super::{bad,request::Id};
 
+// A nonsecret repair confirmation, not an installer role or root approval.
+pub(crate) fn confirm_ext_repair(preview:String)->std::io::Result<()>{
+    terminal::PublicConfirmation::select()?.confirm_ext_repair(preview)
+}
+
 fn login(s: &[u8]) -> bool {
     let basic = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     (1..=64).contains(&s.len()) && basic(s[0])

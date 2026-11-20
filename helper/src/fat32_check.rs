@@ -1,4 +1,4 @@
-//! Locally selected, isolated saved-volume checks and observations. No repairs.
+//! Isolated saved-volume diagnostics and a separate, explicitly approved ext work-copy path.
 mod btrfs;
 mod exfat;
 mod ext4;
@@ -9,6 +9,7 @@ mod ntfs;
 pub(crate) mod panel;
 mod runner;
 mod runtime;
+pub(crate) mod repair;
 mod xfs;
 pub(crate) use helper_linux_evidence::diagnostic_process::{CopyFormat as Format,LeasedFormat};
 use crate::fs_tools::hex;

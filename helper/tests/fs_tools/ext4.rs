@@ -127,3 +127,14 @@ fn a_readable_original_changed_after_preview_does_not_reach_the_worker(){
     assert!(original.require().is_err());
     assert!(original.reader().is_err());
 }
+
+#[test]
+fn preen_needs_an_actual_final_summary_but_does_not_misread_corrections_as_readonly_passes(){
+    let extent=frame(&base(),512<<20).unwrap();
+    let valid=b"/image: 11/16384 files (0.0% non-contiguous), 4568/131072 blocks\n";
+    assert!(preen_summary(valid,extent));
+    assert!(preen_summary(&[b"some earlier correction\n".as_slice(),valid].concat(),extent));
+    assert!(!preen_summary(&valid[..valid.len()-1],extent));
+    assert!(!preen_summary(&[valid.as_slice(),b"not the native final stats\n"].concat(),extent));
+    assert!(!preen_summary(b"/image: 11/16384 files (0.0% non-contiguous), 4568/131073 blocks\n",extent));
+}

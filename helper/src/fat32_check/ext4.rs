@@ -111,6 +111,15 @@ fn complete(out:&[u8],extent:Extent)->bool{
     let Some(row)=rows.next().and_then(|r|r.strip_prefix(b"/image: "))else{return false;};
     rows.next().is_none() && counts(row,extent).is_some()
 }
+pub(super) fn preen_summary(out:&[u8],extent:Extent)->bool{
+    // e2fsprogs 1.47.2 prints its actual final counts even in preen.
+    // Corrections may produce additional messages; never interpret or relay
+    // them. Success still also needs a distinct real readonly five-pass check.
+    out.strip_suffix(b"\n")
+        .and_then(|v|v.rsplit(|&b|b==b'\n').next())
+        .and_then(|line|line.strip_prefix(b"/image: "))
+        .and_then(|row|counts(row,extent)).is_some()
+}
 fn counts(row:&[u8],extent:Extent)->Option<()>{
     let s=std::str::from_utf8(row).ok()?;
     let (i,rest)=s.split_once(" files (")?;

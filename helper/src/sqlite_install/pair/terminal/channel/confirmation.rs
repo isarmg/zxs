@@ -65,6 +65,9 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install::pair) fn confirm_web_control(&self,start:bool,review:String)->io::Result<()>{
         self.ask(if start{"START-WEB-UNIT"}else{"STOP-WEB-UNIT"},Some(review),24*1024)
     }
+    pub(in crate::sqlite_install::pair) fn confirm_ext_repair(&self,preview:String)->io::Result<()>{
+        self.ask("REPAIR-EXT-COPY",Some(preview),64*1024)
+    }
     pub(in crate::sqlite_install::pair) fn confirm_start(&self,review:String)->io::Result<()>{self.ask("START-SMB",Some(review),96*1024)}
     pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
         nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),&||self.check())

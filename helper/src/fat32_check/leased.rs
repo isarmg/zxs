@@ -42,6 +42,13 @@ impl<F:Copy> Image<F>{
         Self::verify(file,expected,None,frame)
     }
     fn verify(file:File,expected:&[u8;32],named:Option<Selected>,frame:impl FnOnce(&File,u64)->io::Result<F>)->io::Result<Self>{
+        let original=Self::hold(file,named,frame)?;
+        if digest(&original.file,original.stamp.len(),|_,_|Ok(()))?!=*expected{
+            return Err(invalid("saved copy does not match the supplied SHA-256"));
+        }
+        original.require()?;Ok(original)
+    }
+    fn hold(file:File,named:Option<Selected>,frame:impl FnOnce(&File,u64)->io::Result<F>)->io::Result<Self>{
         // Never acquire a lease or probe a header on an arbitrary inherited
         // endpoint. No memfd or scratch copy, and no reopening its pathname.
         let flags=fcntl_getfl(&file)?;
@@ -61,10 +68,14 @@ impl<F:Copy> Image<F>{
         }
         if let Some(ref selected)=named{selected.require()?;}
         let extent=frame(&file,stamp.len())?;
-        if digest(&file,stamp.len())?!=*expected{return Err(invalid("saved copy does not match the supplied SHA-256"));}
-        let original=Self{named,file,stamp,mount,extent};
-        original.require()?;
-        Ok(original)
+        Ok(Self{named,file,stamp,mount,extent})
+    }
+    // Only the separate repair CLI supplies the independently reopened
+    // original of a newly created working file, never a direct caller path.
+    pub(super) fn measure_work(file:File,frame:impl FnOnce(&File,u64)->io::Result<F>)->io::Result<(Self,[u8;32])>{
+        let image=Self::hold(file,None,frame)?;
+        let sha=digest(&image.file,image.stamp.len(),|_,_|Ok(()))?;
+        image.require()?;Ok((image,sha))
     }
     pub(super) fn file(&self)->&File{&self.file}
     pub(super) fn extent(&self)->F{self.extent}
@@ -79,7 +90,23 @@ impl<F:Copy> Image<F>{
         require_copy_read_lease(&self.file)
     }
 }
-fn digest(file:&File,length:u64)->io::Result<[u8;32]>{
+// Until all source bytes have been written and the supplied digest matches,
+// the new file is unconfirmed staging. An unchecked source cannot reach a
+// tool or serve as readonly post-repair evidence.
+pub(super) struct CopySource<F>(Image<F>);
+impl<F:Copy> CopySource<F>{
+    pub(super) fn select(named:Selected,frame:impl FnOnce(&File,u64)->io::Result<F>)->io::Result<Self>{
+        let f=named.reader()?;Ok(Self(Image::hold(f,Some(named),frame)?))
+    }
+    pub(super) fn stream(self,expected:&[u8;32],write:impl FnMut(u64,&[u8])->io::Result<()>)->io::Result<Image<F>>{
+        let original=self.0;
+        if digest(&original.file,original.stamp.len(),write)?!=*expected{
+            return Err(invalid("saved copy does not match the supplied SHA-256; no repair was run"));
+        }
+        original.require()?;Ok(original)
+    }
+}
+fn digest(file:&File,length:u64,mut observe:impl FnMut(u64,&[u8])->io::Result<()>)->io::Result<[u8;32]>{
     let mut hash=Sha256::new();let mut buf=[0;128*1024];let mut at=0;
     while at!=length{
         require_copy_read_lease(file)?;
@@ -88,7 +115,7 @@ fn digest(file:&File,length:u64)->io::Result<[u8;32]>{
             Ok(0)=>return Err(invalid("saved copy ended before the expected length")),
             Ok(n)=>n,Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e),
         };
-        hash.update(&buf[..n]);at+=n as u64;
+        observe(at,&buf[..n])?;hash.update(&buf[..n]);at+=n as u64;
     }
     // A positional read of the actual endpoint in Image::require also checks EOF.
     Ok(hash.finalize().into())

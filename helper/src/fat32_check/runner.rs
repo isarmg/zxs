@@ -1,7 +1,7 @@
 //! One isolated invocation. The checker never gets host /dev, the caller's
 //! namespace/terminal, any host directory, or an arbitrary option. Only the
 //! leased branches bind just the explicitly saved copy.
-use super::{Format,btrfs,ext4,ntfs,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
+use super::{Format,btrfs,ext4,ntfs,repair,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -18,10 +18,11 @@ const LIMIT:Duration=Duration::from_secs(30);
 const LEASED_LIMIT:Duration=Duration::from_secs(10*60);
 
 #[derive(Clone,Copy,PartialEq,Eq)]
-enum Budget{Sealed,Leased,Xfs}
+enum Budget{Sealed,Leased,Xfs,Repair(u64)}
 pub(super) fn prepare_worker()->io::Result<()> {prepare(Budget::Sealed)}
 pub(super) fn prepare_leased_worker()->io::Result<()> {prepare(Budget::Leased)}
 pub(super) fn prepare_xfs_worker()->io::Result<()> {prepare(Budget::Xfs)}
+pub(super) fn prepare_ext_repair(length:u64)->io::Result<()> {prepare(Budget::Repair(length))}
 fn prepare(budget:Budget)->io::Result<()> {
     // This command owns the entire CLI process. Never lower process rlimits or
     // manipulate descriptor inheritance in an embedding service.
@@ -35,10 +36,21 @@ fn prepare(budget:Budget)->io::Result<()> {
     if budget==Budget::Xfs&&getrlimit(Resource::Fsize).current.is_some(){
         return Err(invalid("upstream XFS requires an inherited unlimited file-size limit; nothing was raised"));
     }
+    let size_cap=match budget{
+        Budget::Repair(n)=>{
+            let old=getrlimit(Resource::Fsize);
+            if old.current.is_some_and(|s|s<n)||old.maximum.is_some_and(|h|h<n){
+                return Err(invalid("the original file-size limit cannot contain this independent repair copy"));
+            }
+            n
+        }
+        Budget::Sealed=>140<<20,
+        _=>64<<10,
+    };
     // The ext guest has thirteen authenticated slots with each original
     // ancestry held, not eight. Allow those fds plus temporary probes/pipes.
     for (r,n) in [(Resource::Cpu,12),(Resource::As,if leased{2<<30}else{512<<20}),
-                  (Resource::Fsize,if leased{64<<10}else{140<<20}),
+                  (Resource::Fsize,size_cap),
                   (Resource::Core,0),(Resource::Nofile,if leased{192}else{128}),(Resource::Nproc,if leased{256}else{64})]{
         if leased&&r==Resource::Cpu || budget==Budget::Xfs&&r==Resource::Fsize{continue;}
         let old=getrlimit(r);
@@ -75,6 +87,17 @@ pub(super) fn check_ext4(runtime:&Runtime,image:&ext4::Image)->io::Result<ext4::
     if !delivered(&status,code){return Err(invalid("e2fsck delivery or actual exit not confirmed"));}
     Ok(ext4::classify(code,&out,&err,image.extent()))
 }
+pub(super) fn repair_ext4(runtime:&Runtime,work:&repair::Writable<'_>,source:&ext4::Image)->io::Result<i32>{
+    runtime.require_ext4()?;source.require()?;work.require()?;
+    let (code,out,_err,status)=invoke(runtime,Operand::RepairExt4{work,source})?;
+    source.require()?;work.require()?;
+    if !preen_exit(&status,code)
+        ||!ext4::preen_summary(&out,ext4::read_frame(work.file(),work.length())?){
+        return Err(invalid("e2fsck preen is unconfirmed or needs manual attention; no final copy published"));
+    }
+    Ok(code)
+}
+fn preen_exit(status:&[u8],code:i32)->bool{matches!(code,0|1)&&delivered(status,code)}
 pub(super) fn check_xfs(runtime:&Runtime,image:&xfs::Image)->io::Result<xfs::Report>{
     runtime.require_xfs()?;
     let (code,out,err,status)=invoke(runtime,Operand::LeasedXfs(image))?;
@@ -97,10 +120,13 @@ pub(super) fn check_btrfs(runtime:&Runtime,image:&btrfs::Image)->io::Result<btrf
     Ok(btrfs::classify(code,&out,&err,image.extent()))
 }
 #[derive(Clone,Copy)]
-enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image),LeasedNtfs(&'a ntfs::Image),LeasedBtrfs(&'a btrfs::Image)}
+enum Operand<'a>{
+    Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image),LeasedNtfs(&'a ntfs::Image),LeasedBtrfs(&'a btrfs::Image),
+    RepairExt4{work:&'a repair::Writable<'a>,source:&'a ext4::Image},
+}
 impl<'a> Operand<'a>{
     fn lease(self)->Option<&'a File>{
-        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file()),Self::LeasedBtrfs(i)=>Some(i.file())}
+        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file()),Self::LeasedBtrfs(i)=>Some(i.file()),Self::RepairExt4{source,..}=>Some(source.file())}
     }
     fn sandbox(self,cmd:&mut Command)->io::Result<OwnedFd>{
         match self{
@@ -108,6 +134,15 @@ impl<'a> Operand<'a>{
                 // The sealed readback has rewound this description to zero.
                 let fd=give(copy)?;
                 cmd.args(["--perms","0400","--ro-bind-data",&fd.as_raw_fd().to_string(),"/image"]);
+                Ok(fd)
+            }
+            Self::RepairExt4{work,..}=>{
+                work.require()?;
+                // The original readonly source is watched by the parent but
+                // never duplicated into bubblewrap. Only the newborn inode
+                // is writable inside the sandbox, under one fixed name.
+                let fd=give(work.file())?;
+                cmd.args(["--bind-fd",&fd.as_raw_fd().to_string(),"/image"]);
                 Ok(fd)
             }
             _=>{
@@ -119,7 +154,8 @@ impl<'a> Operand<'a>{
     }
 }
 fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
-    let ext=matches!(copy,Operand::LeasedExt4(_));
+    let repairing=matches!(copy,Operand::RepairExt4{..});
+    let ext=repairing||matches!(copy,Operand::LeasedExt4(_));
     let xfs=matches!(copy,Operand::LeasedXfs(_));
     let ntfs=matches!(copy,Operand::LeasedNtfs(_));
     let btrfs=matches!(copy,Operand::LeasedBtrfs(_));
@@ -172,7 +208,8 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     let filter=give(&filter_read)?;b.args(["--seccomp",&filter.as_raw_fd().to_string()]);
     let operand=copy.sandbox(&mut b)?;let status=give(&wstatus)?;
     b.args(["--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),"--","/checker"]);
-    if ext{b.args(["-fn","-N","/image","/image"]);}
+    if repairing{b.args(["-fp","-N","/image","/image"]);}
+    else if ext{b.args(["-fn","-N","/image","/image"]);}
     else if xfs{b.args(["-n","-f","-P","-t","0","-o","phase2_threads=1","/image"]);}
     else if btrfs{b.args(["check","--readonly","/image"]);}
     else{b.args(["-n","/image"]);} // includes the limited NTFS observer
@@ -185,6 +222,7 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
         Operand::LeasedNtfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedBtrfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedXfs(image)=>{image.require()?;prepare_xfs_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::RepairExt4{work,source}=>{work.require()?;source.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
     }
     let mut group=Group::new(b.spawn()?);
     // Only the sandbox monitor and its explicitly selected setup descriptions
@@ -274,6 +312,20 @@ fn classify(code:i32,out:&[u8],err:&[u8],status:&[u8],clusters:u32)->io::Result<
         _=>return Err(invalid("filesystem check did not complete with a supported result")),
     };
     Ok(super::Report{state,files,used,total:clusters})
+}
+
+#[cfg(test)]
+mod repair_tests{
+    use super::*;
+    #[test]
+    fn only_actual_success_or_safe_corrections_can_proceed_to_the_independent_recheck(){
+        for code in [0,1,2,3,4,5,8,16,32,128,137]{
+            let terminal=format!("{{ \"exit-code\": {code} }}\n");
+            assert_eq!(preen_exit(terminal.as_bytes(),code),matches!(code,0|1));
+            assert!(!preen_exit(terminal.trim_end().as_bytes(),code));
+            assert!(!preen_exit(b"",code));
+        }
+    }
 }
 
 #[cfg(test)]
