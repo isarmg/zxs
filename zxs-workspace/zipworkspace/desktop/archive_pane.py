@@ -23,7 +23,10 @@ class ArchivePane(QWidget):
         actions.addWidget(button("选择归档存储目录…", self.choose_store))
         self.reload = button("读取分支与历史", self.load_catalog)
         actions.addWidget(self.reload)
-        self.save_copy = None
+        self.save_copy = self.save_zip = None
+        if sys.platform == "linux":
+            self.save_zip = button("另存完整快照为 ZIP…", self.choose_zip)
+            actions.addWidget(self.save_zip)
         if sys.platform == "darwin":
             self.save_copy = button("另存同名完整归档…", self.choose_copy)
             actions.addWidget(self.save_copy)
@@ -100,6 +103,7 @@ class ArchivePane(QWidget):
         self.selection = self.file_page = None
         self.directory, self.page_number = "", 0
         if self.save_copy is not None: self.save_copy.setEnabled(False)
+        if self.save_zip is not None: self.save_zip.setEnabled(False)
         self.comparison.set_snapshot(None)
         self.clear_catalog()
         self.details.setText("尚未打开快照")
@@ -188,6 +192,44 @@ class ArchivePane(QWidget):
 
         submit("正在核对原归档和选定目录；尚未写入…", plan.review, review)
 
+    def choose_zip(self):
+        selected = self.selection
+        if self.save_zip is None or selected is None or self.owner.pending is not None: return
+        from .member_copy import ZipCopy
+        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
+        name, _ = QFileDialog.getSaveFileName(self, "选择现有本机目录和全新 .zip 名称",
+                                               selected.path.with_suffix(".zip").name, "ZIP 文件 (*.zip)", options=opts)
+        if not name or selected is not self.selection: return
+        try: plan = ZipCopy(selected, name)
+        except Exception as error:
+            self.owner.inform(str(error))
+            return
+
+        def submit(title, work, done):
+            try:
+                future = self.owner.job(title, work, done, failed=lambda _error: plan.close())
+                if future is None: plan.close()
+                else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
+            except BaseException:
+                plan.close()
+                raise
+
+        def reviewed(details):
+            try:
+                if (selected is self.selection and confirm(self, "另存完整原包，不解压", details,
+                        attestation="我选择这个全新位置，原归档和目的目录在操作期间不被移动或改写。",
+                        action_text="另存 ZIP") and selected is self.selection):
+                    submit("正在逐字节复制原包、核验并读回…", lambda: plan.run(confirmed=True), self.owner.inform)
+                else:
+                    plan.close()
+                    self.owner.inform("没有写入 ZIP 副本。")
+            except BaseException:
+                plan.close()
+                raise
+
+        submit("正在只读核对原归档和目的位置，尚未写入…", plan.review, reviewed)
+
     def choose_copy(self):
         selected = self.selection
         if sys.platform != "darwin" or selected is None or self.owner.pending is not None: return
@@ -249,6 +291,7 @@ class ArchivePane(QWidget):
         if self.selection is not None and self.selection is not selected: self.selection.release_display()
         self.selection = selected
         if self.save_copy is not None: self.save_copy.setEnabled(True)
+        if self.save_zip is not None: self.save_zip.setEnabled(selected.held is not None)
         self.comparison.set_snapshot(selected)
         marker = selected.browser.commit
         evidence = (f"原归档 SHA-256：{selected.exact.sha256}" if selected.exact is not None

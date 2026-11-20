@@ -1,4 +1,4 @@
-"""Linux Qt copies one selected archive member, with native non-overwrite publication."""
+"""Linux Qt exports a selected snapshot or archive entry without overwriting."""
 from contextlib import ExitStack, closing
 import hashlib
 import os
@@ -7,13 +7,14 @@ import stat
 import sys
 
 from .. import private_stage
-from ..archive import copy_body, stored_member, stored_subtree
+from ..archive import copy_body, read_managed_document, stored_member, stored_subtree
 from ..comparison import Folder
 from ..document import native_identity
 from ..freeze import _distinct_roots, observe_held
 from ..linux_authority import ProcView as _ProcView, owned_directory as _directory
 from ..linux_mount import _ordinary_user
-from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected, member_name, new_id
+from ..model import CHUNK, MAX_CD, MAX_FILE, MAX_TOTAL, Rejected, member_name, new_id
+from ..opening import _read_selected
 from ..private_candidates import held_candidates
 from ..private_freeze import local_mount, mount_id
 from ..publish import Uncertain, rename_new_at, require_native_writer
@@ -65,17 +66,13 @@ def _unoccupied(parent, name):
     raise Rejected("目的名称已有文件、目录或链接；不覆盖")
 
 
-class MemberCopy:
-    """A one-use choice: prepare only observes; run writes only with explicit consent."""
-    def __init__(self, selected, directory, entry, spelling):
+class _AnonymousCopy:
+    """One genuine unnamed inode until the fully verified result can be linked."""
+    def __init__(self, selected, spelling, size):
         if sys.platform != "linux" or selected.held is None:
-            raise Rejected("另存单个成员需要 Linux 上当前仍持有原件的快照")
-        if (entry.kind != "file" or selected.browser.entry(directory, entry.name) is not entry or
-                type(entry.size_bytes) is not int or not 0 <= entry.size_bytes <= MAX_FILE):
-            raise Rejected("只能另存本次已核验的一条普通成员")
+            raise Rejected("另存需要 Linux 上当前仍持有原件的快照")
         self.path = _new_path(spelling)
-        self.selected, self.entry = selected, entry
-        self.member = f"{directory}/{entry.name}" if directory else entry.name
+        self.selected, self.size = selected, size
         self.stack = ExitStack()
         self.ready = self.used = self.closed = False
         self.source = selected.held.duplicate()
@@ -87,7 +84,14 @@ class MemberCopy:
             self.stack.close()
 
     def _source(self):
-        _check_source(self.selected, self.source)
+        named = os.open(self.selected.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            read = self.proc.read
+            if (_generation(os.fstat(self.source)) != self.selected.observed or
+                    _generation(os.fstat(named)) != self.selected.observed or
+                    mount_id(self.source, read_proc=read) != mount_id(named, read_proc=read)):
+                raise Rejected("选中的原归档已被移走、替换或修改了挂载；不重开正文")
+        finally: os.close(named)
 
     def _parent(self):
         with ExitStack() as check:
@@ -99,7 +103,7 @@ class MemberCopy:
         _unoccupied(self.parent, self.path.name)
 
     def review(self):
-        if self.closed or self.ready or self.used: raise Rejected("请重新选择一次成员和目的文件")
+        if self.closed or self.ready or self.used: raise Rejected("请重新选择一次快照内容和目的文件")
         try:
             if (not getattr(os, "O_TMPFILE", 0) or not hasattr(os, "pread") or
                     os.link not in os.supports_dir_fd or os.link not in os.supports_follow_symlinks):
@@ -117,10 +121,10 @@ class MemberCopy:
             self._parent()
             self.ready = True
             return (f"原归档：{str(self.selected.path)!r}\n节点：{self.selected.browser.commit.operation}\n"
-                    f"成员：{self.member!r}\n正文：{self.entry.size_bytes:,} 字节\nSHA-256：{self.entry.sha256}\n"
-                    f"新文件：{str(self.path)!r}\n\n仅保存这一项的字节，需容纳一份正文。"
-                    "核完这一成员并读回新文件后才公开名称；不覆盖、不创建工作树、不打开结果。"
-                    "提交这次确认后须等待结果，不能从窗口中途取消。"
+                    + self._selection_details() +
+                    f"新文件：{str(self.path)!r}\n\n需要容纳一份副本。"
+                    "完整核验及读回后才公开名称；不覆盖、不创建工作树、不打开结果。"
+                    "确认后须等待，不能从窗口中途取消。"
                     "不会复制权限、时间或来源元数据；内容校验不代表来源可信。")
         except BaseException:
             self.close()
@@ -134,13 +138,13 @@ class MemberCopy:
             raise Rejected("未核到原目的卷上本人所有、0600 的普通新文件")
         return generation
 
-    def _copy(self, body, fd):
-        size, sha = self.entry.size_bytes, self.entry.sha256
+    def _copy(self, read, fd):
         digest = hashlib.sha256()
-        left = size
+        left = self.size
         while left:
-            data = body.read(min(left, CHUNK))
-            if not data or len(data) > left: raise Rejected("成员没有达到原核验长度")
+            count = min(left, CHUNK)
+            data = read(count)
+            if not 0 < len(data) <= count: raise Rejected("没有达到这次选择的原核验长度")
             digest.update(data)
             left -= len(data)
             view = memoryview(data)
@@ -148,11 +152,11 @@ class MemberCopy:
                 written = os.write(fd, view)
                 if not 0 < written <= len(view): raise Rejected("未能写完匿名文件")
                 view = view[written:]
-        # ZipExtFile checks CRC upon EOF, including empty members.
-        if body.read(1) or digest.hexdigest() != sha: raise Rejected("成员与原核验的长度或 SHA-256 不符")
+        if read(1): raise Rejected("实际 EOF 与原长度不符")
+        return digest.hexdigest()
 
-    def _verify(self, fd):
-        size = self.entry.size_bytes
+    def _verify(self, fd, sha):
+        size = self.size
         before = self._output(fd, 0, size)
         os.fsync(fd)
         digest, read = hashlib.sha256(), 0
@@ -161,13 +165,13 @@ class MemberCopy:
             if not data: raise Rejected("匿名副本读回提前结束")
             read += len(data)
             digest.update(data)
-        if os.pread(fd, 1, size) or digest.hexdigest() != self.entry.sha256 or self._output(fd, 0, size) != before:
-            raise Rejected("匿名副本读回不等于原成员")
+        if os.pread(fd, 1, size) or digest.hexdigest() != sha or self._output(fd, 0, size) != before:
+            raise Rejected("匿名副本读回不等于原数据")
         return before
 
     def run(self, *, confirmed=False):
         if confirmed is not True or not self.ready or self.closed or self.used:
-            raise Rejected("只允许明确确认一次已核验的成员和目的文件")
+            raise Rejected("只允许明确确认一次已核验的快照内容和目的文件")
         self.used = True
         may_be_linked = False
         try:
@@ -177,15 +181,16 @@ class MemberCopy:
                 self._source()
                 self._parent()
                 self._absent()
-                reader = _Positional(self.source, self.selected.observed[2])
-                size = self.entry.size_bytes
-                with stored_member(reader, reader.end, self.selected.browser.commit, self.member, size) as body:
+                def create():
                     # O_EXCL would forbid linking this O_TMPFILE; no named fallback.
                     out = os.open(".", os.O_TMPFILE | os.O_RDWR | os.O_CLOEXEC, 0o600, dir_fd=self.parent)
                     temp.callback(os.close, out)
                     self._output(out, 0, 0)
-                    self._copy(body, out)
-                sealed = self._verify(out)
+                    return out
+
+                out, sha = self._payload(create)
+                size = self.size
+                sealed = self._verify(out, sha)
                 self._source()
                 self._parent()
                 name = str(out)
@@ -205,9 +210,11 @@ class MemberCopy:
 
                 def recheck():
                     self._parent()
-                    if (self._output(out, 1, size, (self.parent, self.path.name)) != published or
-                            self._output(out, 1, size) != published):
-                        raise Rejected("正式名称或原成员副本在确认时改变")
+                    named = os.open(self.path.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.parent)
+                    try:
+                        if self._output(named, 1, size) != published or self._output(out, 1, size) != published:
+                            raise Rejected("正式名称或原副本在确认时改变")
+                    finally: os.close(named)
 
                 recheck()
                 os.fsync(self.parent)
@@ -220,6 +227,58 @@ class MemberCopy:
             raise
         finally:
             self.closed = True
+
+
+class MemberCopy(_AnonymousCopy):
+    """Only the selected ordinary member, not its siblings or the whole tree."""
+    def __init__(self, selected, directory, entry, spelling):
+        if (entry.kind != "file" or selected.browser.entry(directory, entry.name) is not entry or
+                type(entry.size_bytes) is not int or not 0 <= entry.size_bytes <= MAX_FILE):
+            raise Rejected("只能另存本次已核验的一条普通成员")
+        self.entry = entry
+        self.member = f"{directory}/{entry.name}" if directory else entry.name
+        super().__init__(selected, spelling, entry.size_bytes)
+
+    def _selection_details(self):
+        return f"成员：{self.member!r}\n正文：{self.size:,} 字节\nSHA-256：{self.entry.sha256}\n"
+
+    def _payload(self, create):
+        reader = _Positional(self.source, self.selected.observed[2])
+        with stored_member(reader, reader.end, self.selected.browser.commit, self.member, self.size) as body:
+            fd = create()
+            sha = self._copy(body.read, fd)  # ZipExtFile verifies the member's CRC at EOF.
+            if sha != self.entry.sha256: raise Rejected("成员与原核验的 SHA-256 不符")
+        return fd, sha
+
+
+class ZipCopy(_AnonymousCopy):
+    """An unchanged ordinary Store/ZIP64 file with a .zip name for other extractors."""
+    def __init__(self, selected, spelling):
+        path = _new_path(spelling)
+        size = selected.observed[2]
+        if path.suffix.lower() != ".zip" or not 0 < size <= MAX_TOTAL + 2*MAX_CD + (1 << 20):
+            raise Rejected("请选择新的 .zip 文件名；原 ZIP 长度必须在归档上限内")
+        super().__init__(selected, spelling, size)
+
+    def _selection_details(self):
+        exact = self.selected.exact
+        return (f"完整原包：{self.size:,} 字节\n"
+                + (f"原整包 SHA-256：{exact.sha256}\n" if exact is not None else "")
+                + "逐字节另存原 Store ZIP，保留标准 ZIP 注释与所有目录；可用普通 ZIP 工具解压。"
+                  "不解包、不改原归档。\n")
+
+    def _payload(self, create):
+        fd = create()
+        sha = self._copy(_read_selected(self.source), fd)
+        if self.selected.exact is not None and sha != self.selected.exact.sha256:
+            raise Rejected("复制的原始字节不等于列表中已核验的节点")
+        self._output(fd, 0, self.size)
+        # The private readback uses the one new inode, before publishing the .zip name.
+        with os.fdopen(fd, "rb", closefd=False) as actual:
+            marker, _ = read_managed_document(actual, display_name=self.selected.path.name)
+        if marker != self.selected.browser.commit:
+            raise Rejected("原始字节不再表示选中的目录快照")
+        return fd, sha
 
 
 class DirectoryCopy:

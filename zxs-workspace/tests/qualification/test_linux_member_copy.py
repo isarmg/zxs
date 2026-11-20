@@ -66,6 +66,58 @@ class LinuxMemberCopy(unittest.TestCase):
         self.addCleanup(plan.close)
         return plan
 
+    def zip_plan(self, name="portable.zip"):
+        plan = member_copy.ZipCopy(self.selected, str(self.dest/name))
+        self.addCleanup(plan.close)
+        return plan
+
+    def test_plain_zip_copy_is_the_complete_original_bytes_and_ordinary_readers_open_it(self):
+        plan = self.zip_plan()
+        fd = self.selected.held.fileno()
+        os.lseek(fd, 11, os.SEEK_SET)
+        details = plan.review()
+        self.assertIn("逐字节另存原 Store ZIP", details)
+        self.assertFalse(plan.path.exists())
+        with self.assertRaises(Rejected): plan.run()
+        real_link = os.link
+        def link(source, name, **kwargs):
+            m = os.fstat(int(source))
+            self.assertEqual((m.st_size, m.st_nlink), (len(self.original), 0))
+            self.assertFalse(plan.path.exists())
+            real_link(source, name, **kwargs)
+        with patch.object(member_copy.os, "link", side_effect=link) as native:
+            self.assertIn("已另存并核验", plan.run(confirmed=True))
+            native.assert_called_once()
+        self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 11)
+        self.assertEqual(plan.path.read_bytes(), self.original)
+        self.assertEqual(self.archive.read_bytes(), self.original)
+        self.assertEqual(stat.S_IMODE(plan.path.stat().st_mode), 0o600)
+        with zipfile.ZipFile(plan.path) as ordinary:
+            self.assertIsNone(ordinary.testzip())
+            self.assertEqual(ordinary.read("original/same.bin"), self.data)
+            self.assertTrue(ordinary.getinfo("empty-root/").is_dir())
+            self.assertEqual(ordinary.comment, self.selected.browser.commit.encode())
+
+    def test_raw_copy_with_a_damaged_member_never_links_even_if_the_source_name_is_unchanged(self):
+        plan = self.zip_plan()
+        plan.review()
+        from zipworkspace.archive import LOCAL
+        with self.archive.open("rb") as fh:
+            fixed = LOCAL.unpack(fh.read(LOCAL.size))
+        body = LOCAL.size + fixed[-2] + fixed[-1]
+        actual = os.pread
+        def damaged(fd, size, offset):
+            data = actual(fd, size, offset)
+            if fd == plan.source and offset <= body < offset+len(data):
+                at = body-offset
+                return data[:at]+bytes([data[at]^1])+data[at+1:]
+            return data
+        with patch.object(member_copy.os, "pread", side_effect=damaged), \
+             patch.object(member_copy.os, "link", side_effect=AssertionError("reject before exposing a ZIP")):
+            with self.assertRaises(zipfile.BadZipFile): plan.run(confirmed=True)
+        self.assertEqual(list(self.dest.iterdir()), [])
+        self.assertEqual(self.archive.read_bytes(), self.original)
+
     def subtree_plan(self, name="tree", *, output="tree-copy", scratch=None):
         entry = self.selected.browser.entry("", name)
         plan = member_copy.DirectoryCopy(self.selected, "", entry, str(self.dest/output))
