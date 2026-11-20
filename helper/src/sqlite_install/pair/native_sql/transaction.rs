@@ -1,6 +1,6 @@
-//! Real v9 SQL phases for the dedicated offline storage-UID worker. No
-//! native password, hash, SAM buffer, TDB file, or writable host descriptor
-//! is an input. The original Unix VFS inode remains anchored across phases.
+//! Real SQL phases for the dedicated offline storage-UID worker. This
+//! transaction never sees an SMB password, SAM buffer or writable host
+//! descriptor. The original Unix VFS inode remains anchored across phases.
 use super::{Birth, Core, Ids, Original, Reset, activate, first_ordinary::Selected, sql};
 use crate::smb_profile::first::Plan;
 use crate::sqlite_install::{DATABASE, MARKER, bad, catalog::Canonical, engine, markers::SystemMark,
@@ -78,15 +78,14 @@ pub(in crate::sqlite_install::pair) enum Enrollment<'a> { Setup { ids: Ids, web:
 /// authorization is not derivable from Connection, uid, or a decoded PENDING.
 /// Only the private native worker or role-specific Web reset invokes it.
 pub(in crate::sqlite_install::pair) struct Session<'s> {
-    order: Order, locked: &'s LockedSystem, database: Existing<'s>, schema: Canonical,
-    marker: SystemMark, want: [u8;101], anchor: Connection, first: Option<(&'s Plan, &'s [u8;128])>,
+    order: Order, cut: AccountCut<'s>, first: Option<(&'s Plan, &'s [u8;128])>,
 }
 
 pub(in crate::sqlite_install) struct WriteGate<'a,'s> {
-    session: &'a Session<'s>, until: Instant,
+    source: &'a AccountCut<'s>, until: Instant,
 }
 
-fn expired(until:Instant)->io::Result<()> {
+pub(super) fn expired(until:Instant)->io::Result<()> {
     if Instant::now()>=until { Err(bad("the current offline credential operation expired")) } else { Ok(()) }
 }
 
@@ -106,14 +105,9 @@ impl<'s> Session<'s> {
         Self::at(locked,order,first)
     }
     fn at(locked:&'s LockedSystem,order:Order,first:Option<(&'s Plan,&'s [u8;128])>)->io::Result<Self>{
-        if !locked.allows_account_write(){return Err(bad("a runtime shared lease is not authorized for account maintenance"));}
-        let schema=Canonical::new()?;
-        let database=Existing::observed_system(locked)?;
-        let marker=SystemMark::before_sql(locked.source())?;
-        let mut anchor=engine::existing(&database,engine::Access::Read)?;
         let c=order.core();
-        let (want,())=observed::snapshot(&mut anchor,&c.pool,&c.init,locked,&database,&schema,&marker,|_|Ok(()))?;
-        Ok(Self { order, locked, database, schema, marker, want, anchor, first })
+        let cut=AccountCut::at(locked,c.pool,c.init)?;
+        Ok(Self{order,cut,first})
     }
     fn initial(&self)->io::Result<Option<Selected<'_>>>{
         match (&self.order,self.first) {
@@ -123,24 +117,8 @@ impl<'s> Session<'s> {
         }
     }
     pub(in crate::sqlite_install::pair) fn order(&self) -> &Order { &self.order }
-    fn unchanged(&self) -> io::Result<()> {
-        if !self.anchor.is_autocommit() { return Err(bad("original anchor has a transaction across maintenance actions")); }
-        engine::original_name(&self.anchor)?;
-        self.locked.require()?;
-        self.database.require()?;
-        self.marker.verify(self.locked.source(),&self.want)
-    }
-    fn clean(&self) -> io::Result<()> { self.unchanged()?; self.database.sidecars_absent() }
-    fn read<T>(&self,f:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<T>{
-        self.clean()?;
-        let c=self.order.core();
-        let (mark,value)=observed::at_original(&c.pool,&c.init,self.locked,&self.database,&self.schema,&self.marker,f)?;
-        self.clean()?;
-        if mark!=self.want { return Err(bad("the original SYSTEM claim changed during credential maintenance")); }
-        Ok(value)
-    }
     pub(in crate::sqlite_install::pair) fn original(&self) -> io::Result<Original<ResultRow>> {
-        self.read(|tx|{
+        self.cut.read(|tx|{
             let result=self.order.original(tx)?;
             if let (Some(first),Original::Committed(ResultRow::Setup(ids)))=(self.initial()?,result){first.history(tx,ids)?;}
             Ok(result)
@@ -152,53 +130,84 @@ impl<'s> Session<'s> {
         Ok(())
     }
     pub(in crate::sqlite_install::pair) fn check_new(&self) -> io::Result<()> {
-        self.read(|tx|self.check_new_in(tx))
+        self.cut.read(|tx|self.check_new_in(tx))
     }
 
     pub(in crate::sqlite_install::pair) fn sync_pending(&self, row: ResultRow, until: Instant)
         -> io::Result<Pending<'_, 's>> {
         expired(until)?;
-        self.clean()?;
+        self.cut.clean()?;
         // A previously visible PENDING is not a previous successful fsync.
         // Only explicit current authority uses this exact VFS main handle,
         // then the original parent, then an independent SQLite open.
-        helper_linux_evidence::sqlite_vfs::sync_held_unix_main(&self.anchor)?;
-        self.locked.source().dir().sync_all()?;
+        self.cut.sync()?;
         if self.original()?!=Original::Pending(row) { return Err(uncertain()); }
         expired(until)?;
         Ok(Pending { session:self, row, until })
     }
     pub(in crate::sqlite_install::pair) fn reserve(&self, material: Enrollment<'_>, until: Instant,
         live: impl Fn()->io::Result<()>) -> io::Result<Pending<'_, 's>> {
-        let row=self.write(until,live,|tx|{self.check_new_in(tx)?;self.order.reserve(tx,material)})?;
+        let row=self.cut.write(until,live,|tx|{self.check_new_in(tx)?;self.order.reserve(tx,material)})?;
         self.sync_pending(row,until).map_err(|_|uncertain())
     }
     pub(in crate::sqlite_install::pair) fn web_eligible(&self)->io::Result<Vec<u8>>{
         let Order::WebReset(r)=&self.order else{return Err(bad("wrong dedicated Web action"));};
-        self.read(|tx|r.eligible(tx))
+        self.cut.read(|tx|r.eligible(tx))
     }
     pub(in crate::sqlite_install::pair) fn reset_web(&self,material:&PreparedWeb,until:Instant,live:impl Fn()->io::Result<()>)
         ->io::Result<i64>{
         let Order::WebReset(r)=&self.order else{return Err(bad("wrong dedicated Web action"));};
-        let generation=self.write(until,live,|tx|r.update(tx,material))?;
+        let generation=self.cut.write(until,live,|tx|r.update(tx,material))?;
         (||->io::Result<i64>{
-            helper_linux_evidence::sqlite_vfs::sync_held_unix_main(&self.anchor)?;
-            self.locked.source().dir().sync_all()?;
+            self.cut.sync()?;
             if self.original()?!=Original::Committed(ResultRow::Reset(generation)){return Err(uncertain());}
             Ok(generation)
         })().map_err(|_|uncertain())
     }
+}
+/// One actual low-UID original-S writer cut, only after a kernel-backed
+/// offline account write lease. No requested credential family or protocol
+/// state can bypass the same existing Sqlite/marker/path/commit checks.
+pub(super) struct AccountCut<'s>{
+    locking:&'s LockedSystem, database:Existing<'s>,schema:Canonical,marker:SystemMark,want:[u8;101],
+    anchor:Connection,pool:Id,init:Id,
+}
+impl<'s> AccountCut<'s>{
+    pub(super) fn at(locked:&'s LockedSystem,pool:Id,init:Id)->io::Result<Self>{
+        if !locked.allows_account_write(){return Err(bad("a runtime shared lease is not authorized for account maintenance"));}
+        let schema=Canonical::new()?;
+        let database=Existing::observed_system(locked)?;
+        let marker=SystemMark::before_sql(locked.source())?;
+        let mut anchor=engine::existing(&database,engine::Access::Read)?;
+        let (want,())=observed::snapshot(&mut anchor,&pool,&init,locked,&database,&schema,&marker,|_|Ok(()))?;
+        Ok(Self { locking:locked, database, schema, marker, want, anchor, pool, init })
+    }
+    fn unchanged(&self) -> io::Result<()> {
+        if !self.anchor.is_autocommit() { return Err(bad("original anchor has a transaction across maintenance actions")); }
+        engine::original_name(&self.anchor)?;
+        self.locking.require()?;
+        self.database.require()?;
+        self.marker.verify(self.locking.source(),&self.want)
+    }
+    fn clean(&self) -> io::Result<()> { self.unchanged()?; self.database.sidecars_absent() }
+    pub(super) fn read<T>(&self,f:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<T>{
+        self.clean()?;
+        let (mark,value)=observed::at_original(&self.pool,&self.init,self.locking,&self.database,&self.schema,&self.marker,f)?;
+        self.clean()?;
+        if mark!=self.want { return Err(bad("the original SYSTEM claim changed during credential maintenance")); }
+        Ok(value)
+    }
     // Pre- and post-commit concerns are separate. An unknown commit result
     // stops at the original operation, while the RO anchor still pins SQLite.
-    fn write<T>(&self,until:Instant,confirm:impl Fn()->io::Result<()>,
+    pub(super) fn write<T>(&self,until:Instant,confirm:impl Fn()->io::Result<()>,
         f:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<T>{
         confirm()?;
-        let gate=WriteGate { session:self, until };
+        let gate=WriteGate { source:self, until };
         let mut c=engine::native_pair(&gate)?;
         let tx=c.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sql)?;
         self.schema.require(&tx)?;
-        let r=self.order.core();let root=self.locked.source();
-        if observed::first_marker(&r.pool,&r.init,&tx,root)?!=self.want {
+        let root=self.locking.source();
+        if observed::first_marker(&self.pool,&self.init,&tx,root)?!=self.want {
             return Err(bad("wrong original SYSTEM claim inside the credential transaction"));
         }
         gate.database()?;engine::original_name(&tx)?;confirm()?;
@@ -212,16 +221,20 @@ impl<'s> Session<'s> {
         c.close().map_err(|_|uncertain())?;
         Ok(result)
     }
+    pub(super) fn sync(&self)->io::Result<()>{
+        helper_linux_evidence::sqlite_vfs::sync_held_unix_main(&self.anchor)?;
+        self.locking.source().dir().sync_all()
+    }
 }
 impl<'s> WriteGate<'_, 's> {
     pub(in crate::sqlite_install) fn database(&self)->io::Result<&Existing<'s>> {
         expired(self.until)?;
-        self.session.clean()?;
+        self.source.clean()?;
         use rustix::fs::{StatVfsMountFlags, fstatvfs};
-        if fstatvfs(self.session.locked.source().dir())?.f_flag.contains(StatVfsMountFlags::RDONLY) {
+        if fstatvfs(self.source.locking.source().dir())?.f_flag.contains(StatVfsMountFlags::RDONLY) {
             return Err(bad("cannot write the original SYSTEM mount"));
         }
-        Ok(&self.session.database)
+        Ok(&self.source.database)
     }
 }
 
@@ -240,7 +253,7 @@ impl Pending<'_, '_> {
         live: impl Fn()->io::Result<()>) ->io::Result<ResultRow> {
         self.require()?;
         confirmed.require(&self.session.order.sha(),self.row)?;
-        self.session.write(self.until,||{
+        self.session.cut.write(self.until,||{
             live()?;
             confirmed.require(&self.session.order.sha(),self.row)
         },|tx|match (self.session.initial()?,self.row) {
@@ -249,8 +262,7 @@ impl Pending<'_, '_> {
             _=>Err(bad("no matching approved first plan or exact reset")),
         })?;
         (||->io::Result<ResultRow>{
-            helper_linux_evidence::sqlite_vfs::sync_held_unix_main(&self.session.anchor)?;
-            self.session.locked.source().dir().sync_all()?;
+            self.session.cut.sync()?;
             if self.session.original()?!=Original::Committed(self.row){return Err(uncertain());}
             confirmed.require(&self.session.order.sha(),self.row)?;
             live()?;

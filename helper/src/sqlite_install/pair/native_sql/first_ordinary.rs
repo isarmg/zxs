@@ -25,26 +25,11 @@ impl<'p> Selected<'p> {
     fn volumes(&self,tx:&Transaction<'_>)->io::Result<()>{
         let c=self.birth.scope;
         require_init(tx,&c)?;
-        let mut s=tx.prepare("SELECT EXISTS(SELECT 1 FROM main.volume_claim v
-              JOIN main.operation o ON o.op_id=v.claim_op
-              WHERE v.claim_op=?1 AND v.volume_id=?2 AND v.role=2 AND o.kind=1 AND o.state=1)").map_err(sql)?;
-        for (f,_) in self.plan.folders(){
-            let exact:bool=s.query_row(params![&c.init[..],&f.volume[..]],|r|r.get(0)).map_err(sql)?;
-            if !exact{return Err(bad("first publication is limited to selected ordinary claims of this original INIT"));}
-        }
-        Ok(())
+        volumes(tx,&c.init,self.plan.folders())
     }
     pub(super) fn vacant(&self,tx:&Transaction<'_>)->io::Result<()>{
         self.volumes(tx)?;
-        let seen:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.root_share)
-                       OR EXISTS(SELECT 1 FROM main.share_mode)",[],|r|r.get(0)).map_err(sql)?;
-        if seen{return Err(bad("the initial publisher never overwrites or renews previously confirmed shares"));}
-        for (_,k) in self.plan.folders(){
-            if collision(tx,&k.publish)?||collision(tx,&k.setting)?{
-                return Err(bad("one original first-share operation is already in use"));
-            }
-        }
-        Ok(())
+        vacant(tx,self.plan.folders())
     }
 
     /// Call with the actual original pending setup, native proof and live
@@ -58,13 +43,7 @@ impl<'p> Selected<'p> {
         let c=self.birth.scope;
         activate(tx,&c,c.op,&self.birth.binding,&self.birth.sha(),ids.smb,&self.birth.smb,1,None)?;
         let a=Authority{pool:c.pool,setup:c.op,web:ids.web};
-        let new_web:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.active_credential w
-                JOIN main.account_pair a ON a.singleton=w.slot
-                JOIN main.web_password v ON v.slot=w.slot AND v.credential_op=w.credential_op
-                   AND v.generation=w.generation
-                WHERE w.role=0 AND w.credential_op=?1 AND w.generation=1
-                  AND a.birth_op=?1 AND a.web_id=?2)",params![&a.setup[..],&a.web[..]],|r|r.get(0)).map_err(sql)?;
-        if !new_web{return Err(bad("the original approved first Web account and verifier are not active together"));}
+        a.require_first_web(tx)?;
         for (f,k) in self.plan.folders(){a.insert(tx,f,*k)?;}
         self.history(tx,ids)
     }
@@ -80,9 +59,42 @@ impl<'p> Selected<'p> {
     }
 }
 
+// Exact transactional helpers for the same original SQL publication. The
+// two external credential families do not share a disk credential or grant.
+pub(super) fn volumes(tx:&Transaction<'_>,init:&Id,folders:&[(Folder,FolderIds)])->io::Result<()>{
+    let mut s=tx.prepare("SELECT EXISTS(SELECT 1 FROM main.volume_claim v
+              JOIN main.operation o ON o.op_id=v.claim_op
+              WHERE v.claim_op=?1 AND v.volume_id=?2 AND v.role=2 AND o.kind=1 AND o.state=1)").map_err(sql)?;
+    for (f,_) in folders{
+        let exact:bool=s.query_row(params![&init[..],&f.volume[..]],|r|r.get(0)).map_err(sql)?;
+        if !exact{return Err(bad("first publication is limited to selected ordinary claims of this original INIT"));}
+    }
+    Ok(())
+}
+pub(super) fn vacant(tx:&Transaction<'_>,folders:&[(Folder,FolderIds)])->io::Result<()>{
+    let seen:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.root_share)
+                   OR EXISTS(SELECT 1 FROM main.share_mode)",[],|r|r.get(0)).map_err(sql)?;
+    if seen{return Err(bad("the initial publisher never overwrites or renews previously confirmed shares"));}
+    for (_,k) in folders{
+        if collision(tx,&k.publish)?||collision(tx,&k.setting)?{
+            return Err(bad("one original first-share operation is already in use"));
+        }
+    }
+    Ok(())
+}
 #[derive(Clone,Copy)]
-struct Authority { pool:Id, setup:Id, web:Id }
+pub(super) struct Authority { pub(super) pool:Id, pub(super) setup:Id, pub(super) web:Id }
 impl Authority {
+    pub(super) fn require_first_web(self,tx:&Transaction<'_>)->io::Result<()>{
+        let new_web:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.active_credential w
+                JOIN main.account_pair a ON a.singleton=w.slot
+                JOIN main.web_password v ON v.slot=w.slot AND v.credential_op=w.credential_op
+                   AND v.generation=w.generation
+                WHERE w.role=0 AND w.credential_op=?1 AND w.generation=1
+                  AND a.birth_op=?1 AND a.web_id=?2)",params![&self.setup[..],&self.web[..]],|r|r.get(0)).map_err(sql)?;
+        if !new_web{return Err(bad("the original approved first Web account and verifier are not active together"));}
+        Ok(())
+    }
     fn prefix(self,domain:&[u8],op:&Id)->Sha256{
         let mut h=Sha256::new();h.update(domain);
         for piece in [&self.pool,op,&self.web,&self.setup]{h.update(piece);}
@@ -101,7 +113,7 @@ impl Authority {
         one(tx.execute("INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,?2,?3,?4,1)",
             params![&op[..],kind,&self.web[..],&digest[..]]))
     }
-    fn insert(self,tx:&Transaction<'_>,f:&Folder,k:FolderIds)->io::Result<()>{
+    pub(super) fn insert(self,tx:&Transaction<'_>,f:&Folder,k:FolderIds)->io::Result<()>{
         one(tx.execute("INSERT INTO main.root_share(share_id,publish_op,author_auth_op,volume_id,display_label)
                          VALUES(?1,?2,?3,?4,?5)",
             params![&k.share[..],&k.publish[..],&self.setup[..],&f.volume[..],f.name.as_bytes()]))?;
@@ -111,7 +123,7 @@ impl Authority {
             params![&k.setting[..],&k.share[..],&k.publish[..],&self.setup[..],i64::from(f.mode.code())]))?;
         self.op(tx,&k.setting,4,&self.mode(f,k))
     }
-    fn original(self,tx:&Transaction<'_>,f:&Folder,k:FolderIds)->io::Result<()>{
+    pub(super) fn original(self,tx:&Transaction<'_>,f:&Folder,k:FolderIds)->io::Result<()>{
         let mut s=tx.prepare("SELECT o.kind,o.state,o.actor_id,o.request_sha,r.share_id,r.author_auth_op,r.volume_id,r.display_label
                          FROM main.operation o JOIN main.root_share r ON r.publish_op=o.op_id WHERE o.op_id=?1").map_err(sql)?;
         let mut rows=s.query([&k.publish[..]]).map_err(sql)?;
