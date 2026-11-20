@@ -1,15 +1,52 @@
 version = 4
 
 [[package]]
+name = "aes"
+version = "0.9.4"
+dependencies = [
+ "cipher",
+ "cpubits",
+ "cpufeatures",
+ "zeroize",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.12.1"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
 name = "cfg-if"
 version = "1.0.5"
+
+[[package]]
+name = "cipher"
+version = "0.5.2"
+dependencies = [
+ "crypto-common",
+ "inout",
+ "zeroize",
+]
+
+[[package]]
+name = "cmac"
+version = "0.8.0"
+dependencies = [
+ "cipher",
+ "dbl",
+ "digest",
+]
+
+[[package]]
+name = "cmov"
+version = "0.5.4"
+
+[[package]]
+name = "cpubits"
+version = "0.1.1"
 
 [[package]]
 name = "cpufeatures"
@@ -26,11 +63,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctutils"
+version = "0.4.8"
+dependencies = [
+ "cmov",
+]
+
+[[package]]
+name = "dbl"
+version = "0.5.0"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "ctutils",
+ "zeroize",
+]
+
+[[package]]
+name = "hmac"
+version = "0.13.0"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
@@ -38,6 +98,14 @@ name = "hybrid-array"
 version = "0.4.15"
 dependencies = [
  "typenum",
+ "zeroize",
+]
+
+[[package]]
+name = "inout"
+version = "0.2.6"
+dependencies = [
+ "hybrid-array",
 ]
 
 [[package]]
@@ -58,8 +126,16 @@ name = "typenum"
 version = "1.20.1"
 
 [[package]]
+name = "zeroize"
+version = "1.9.2"
+
+[[package]]
 name = "zxs"
 version = "0.1.0"
 dependencies = [
+ "aes",
+ "cmac",
+ "hmac",
  "sha2",
+ "zeroize",
 ]

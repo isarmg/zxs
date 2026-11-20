@@ -1,6 +1,6 @@
 # ZXS 内部 Rust SMB 服务
 
-**当前只有未接线的协议与权限前置。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。不生成协商成功包，不监听 445，不认证、不分配会话或授予共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
+**当前是未接线的协议、签名与权限前置，不是可挂载的服务。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。不生成协商成功包，不监听 445，不认证、不分配会话或授予共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
 
 `wire/path_fields` 从单条 CREATE / SET_INFO 普通 rename 消息的声明范围提取名字，`backend/path` 是唯一业务名字解析：严格 UTF-16、以同一共享为根，逐部件调用现有显示名规则，保留大小写和 Unicode 原拼写，不从名字判断数据盘／回收站，不解释宿主路径。CREATE 空名和未处理的 contexts 一起保留，不把重连请求误作根权限。rename 源是本次协议句柄，目标的替换标志不是覆盖授权。关于多部件目标，[微软 SET_INFO 条文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/43cf22fe-84cb-49cf-b3e7-e3d7d766a7b7) 的分隔符限制与 full pathname 表述并存；[Linux 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2inode.c#L1076-L1112) 会编码目标路径。此处为 ZXS 同树移位保留这个目标形状，不表示任何原生客户端已完成还原。具体成员字节额度、当前盘和删除原单仍由 Core 选择和复核。
 
@@ -10,9 +10,15 @@
 
 ## SHA-512 原字节记录（尚未接到网络或身份认证）
 
-`wire/preauth` 从已解析的单条 3.1.1 NEGOTIATE 出发，连接只保留请求和实际序列化回复的链式哈希。每个新的 SESSION_SETUP 尝试从该连接值单独起步；接收完整原请求，并且仅在同一 MessageId、同一已分配 SessionId 的 MORE_PROCESSING_REQUIRED 回复时继续。固定的 Rust SHA-512 实现见[上游来源及许可](../../vendor/rust/README.md)。TCP 长度头不入哈希，原 SMB2 消息头、正文、间隙/填充均入哈希。最后成功的 SESSION_SETUP 回复将使用由最后一个请求哈希派生的密钥签名，因此它不会再次进入这份 KDF 上下文。该值不是口令证明、签名或有权访问文件的会话。本片不编码应答，也不运行 GSS、KDF、CMAC、凭据查询或生产监听。依据：[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[新会话](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)、[GSS 处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)。
+`wire/preauth` 从已解析的单条 3.1.1 NEGOTIATE 出发，连接只保留请求和实际序列化回复的链式哈希。每个新的 SESSION_SETUP 尝试从该连接值单独起步；接收完整原请求，并且仅在同一 MessageId、同一已分配 SessionId 的 MORE_PROCESSING_REQUIRED 回复时继续。固定的 Rust SHA-512 实现见[上游来源及许可](../../vendor/rust/README.md)。TCP 长度头不入哈希，原 SMB2 消息头、正文、间隙/填充均入哈希。最后成功的 SESSION_SETUP 回复将使用由最后一个请求哈希派生的密钥签名，因此它不会再次进入这份 KDF 上下文。该值不是口令证明、签名或有权访问文件的会话。预认证层本身不运行 GSS/KDF，不编码应答，不查询凭据或启动生产监听。依据：[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[新会话](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)、[GSS 处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)。
 
-下个签名切片的两条独立验收：客户端未给 Signing Capabilities 时按规范回落到 **AES-128-CMAC 算法**，不是关闭签名；显式提议并选择 AES-128-CMAC 时也一样。处理了合法非空但无共同算法的 context 时，规范也指定 AES-CMAC；计数为零或被截断的 context 不是这条回落，应拒绝。两条都要在真实认证成功后的第一条普通命令上分别验证正确签名放行、缺失或错误签名拒绝。原生三端验收必须分开“无缓存端点的首次访问”和“同一身份重连”；记录 Windows 冷访问有无 multi-protocol opener，旧服务缓存的热路径不是首连通过。不增加 SMB1 文件操作或降级。这些均为待验收条件，未实施在线验证。
+## 认证后的明文消息签名（未接认证、网络或存储）
+
+`session/` 实现[规范 KDF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/da4e579e-02ce-4e27-bbce-3fc816a3ff92) 的一个 HMAC-SHA-256 计数块，从同一新 NTLM 会话的 16 字节导出键和最后一个请求的 64 字节 transcript 派生 128 位签名键。标签含结尾 NUL，KDF 自己的分隔零字节另算。真实认证的完成凭据没有生产构造器；以后只有完成挑战、主体、MIC 和当前代检查的原尝试才能交出这一对，不能从报文、Web 身份或布尔值制造会话。密钥缓冲使用 zeroize；不承诺清除所有栈临时副本。没有使用宿主加密服务。
+
+[协商](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)没有 Signing Capabilities context 时仍强制 CMAC；显式 CMAC 或合法非空但无共同算法时应答须回且只回 CMAC。计数为零、被截断或串错请求/回复不能作“无签名”处理。最终回复的签名函数只接收与最终请求同 MessageId、同已分配 SessionId 的实际未签成功响应；拒绝 guest/null/encrypt 标记。它给该响应签名，不把成功响应再加入 KDF。普通明文请求只有签名位和全部 16 字节 [AES-CMAC 校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5b570c0b-0854-4324-8fb5-d410692dde3e)均成立才通过签名检查。每段用原 SMB 消息和自己的尾填充，只有 Signature 16 字节置零；关联链继承的实际 SessionId 只用来选键，不改变验签字节。不相关链可涉及多个有效会话。整批验完才可能进入独立的 credits、当前会话/树、命令、原打开和存储终验；没有这里发出的成功应答或文件授权。普通回复头的生成/签名、CANCEL 和加密 transform 不由此入站函数处理。
+
+`src/test/smb/signing.rs` 保留两种协商下首个 TREE_CONNECT 的独立固定值、无签/错签拒绝，以及同链/异会话 compound 的原字节向量。测试只使用公开合成值，没有执行，不是实际登录或互通。原生三端验收仍须分开“无缓存端点的首次访问”和“同一身份重连”；记录 Windows 冷访问有无 multi-protocol opener，旧服务缓存的热路径不是首连通过。不增加 SMB1 文件操作或降级。
 
 ## 文件 I/O 请求与原打开边界（未接线）
 

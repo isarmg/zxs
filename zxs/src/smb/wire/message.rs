@@ -7,8 +7,8 @@ pub(in crate::smb) const MAX_COMMANDS: usize = 32;
 const HEADER: usize = 64;
 const SERVER_TO_REDIR: u32 = 1;
 const ASYNC: u32 = 2;
-pub(super) const RELATED: u32 = 4;
-pub(super) const SIGNED: u32 = 8;
+pub(in crate::smb) const RELATED: u32 = 4;
+pub(in crate::smb) const SIGNED: u32 = 8;
 const CANCEL: u16 = 0x000c;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

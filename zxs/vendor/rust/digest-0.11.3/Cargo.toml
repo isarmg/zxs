@@ -79,10 +79,12 @@ version = "0.10"
 optional = true
 
 [dependencies.ctutils]
+path = "../ctutils-0.4.8"
 version = "0.4"
 optional = true
 
 [dependencies.zeroize]
+path = "../zeroize-1.9.2"
 version = "1.7"
 optional = true
 default-features = false

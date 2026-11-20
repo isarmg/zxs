@@ -12,16 +12,30 @@ build = "build.rs"
 resolver = "3"
 # Vendored upstream libraries are dependencies, not ZXS workspace/test members.
 exclude = [
+    "vendor/rust/aes-0.9.4",
     "vendor/rust/block-buffer-0.12.1",
     "vendor/rust/cfg-if-1.0.5",
+    "vendor/rust/cipher-0.5.2",
+    "vendor/rust/cmac-0.8.0",
+    "vendor/rust/cmov-0.5.4",
+    "vendor/rust/cpubits-0.1.1",
     "vendor/rust/cpufeatures-0.3.1",
     "vendor/rust/crypto-common-0.2.2",
+    "vendor/rust/ctutils-0.4.8",
+    "vendor/rust/dbl-0.5.0",
     "vendor/rust/digest-0.11.3",
+    "vendor/rust/hmac-0.13.0",
     "vendor/rust/hybrid-array-0.4.15",
+    "vendor/rust/inout-0.2.6",
     "vendor/rust/libc-0.2.191",
     "vendor/rust/sha2-0.11.1",
     "vendor/rust/typenum-1.20.1",
+    "vendor/rust/zeroize-1.9.2",
 ]
 
 [dependencies]
-sha2 = { version = "=0.11.1", path = "vendor/rust/sha2-0.11.1", default-features = false }
+aes = { version = "=0.9.4", path = "vendor/rust/aes-0.9.4", default-features = false, features = ["zeroize"] }
+cmac = { version = "=0.8.0", path = "vendor/rust/cmac-0.8.0", default-features = false, features = ["zeroize"] }
+hmac = { version = "=0.13.0", path = "vendor/rust/hmac-0.13.0", default-features = false, features = ["zeroize"] }
+sha2 = { version = "=0.11.1", path = "vendor/rust/sha2-0.11.1", default-features = false, features = ["zeroize"] }
+zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }

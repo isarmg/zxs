@@ -44,6 +44,7 @@ path = "../hybrid-array-0.4.15"
 version = "0.4"
 
 [dependencies.zeroize]
+path = "../zeroize-1.9.2"
 version = "1.8"
 optional = true
 default-features = false

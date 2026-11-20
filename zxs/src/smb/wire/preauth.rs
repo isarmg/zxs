@@ -4,7 +4,7 @@
 //! This slice has no network issuer. The future dispatcher must associate
 //! each state with its original connection/attempt, consume credits and pass
 //! the actual immutable serialized response, not a prediction of that reply.
-use super::{Error, Result, bytes, message::{Compound, Routing, SIGNED}, negotiate::Offer,
+use super::{Error, Result, bytes, message::{Compound, Routing, SIGNED}, negotiate::{CmacChoice, Offer},
             u16le, u32le, u64le};
 use sha2::{Digest, Sha512};
 
@@ -56,8 +56,8 @@ fn server_header(p: &[u8], cmd: u16, status: u32, mid: u64) -> Result<u64> {
     u64le(p, 40)
 }
 
-fn selected_sha512(p: &[u8]) -> Result<()> {
-    if u16le(p, 64)? != 65 || u16le(p, 68)? != 0x0311 { return invalid(); }
+fn selected_suite(p: &[u8], choice: CmacChoice) -> Result<()> {
+    if u16le(p, 64)? != 65 || u16le(p, 66)? != 3 || u16le(p, 68)? != 0x0311 { return invalid(); }
     let n = usize::from(u16le(p, 70)?);
     if n == 0 { return invalid(); }
     if n > 64 { return Err(Error::Limit); }
@@ -65,26 +65,32 @@ fn selected_sha512(p: &[u8]) -> Result<()> {
     let mut at = u32le(p, 124)? as usize;
     if at % 8 != 0 || at < token_end { return invalid(); }
     let mut selected = false;
+    let mut cmac = false;
     for i in 0..n {
         let hdr = bytes(p, at, 8)?;
         let start = at + hdr.len();
         let data = bytes(p, start, usize::from(u16le(hdr, 2)?))?;
-        if u16le(hdr, 0)? == 1 {
+        let kind = u16le(hdr, 0)?;
+        if kind == 1 {
             if selected || u16le(data, 0)? != 1 || u16le(data, 4)? != 1 {
                 return invalid();
             }
             // Response has exactly one selected algorithm and its declared salt.
             if data.len() != 6 + usize::from(u16le(data, 2)?) { return invalid(); }
             selected = true;
+        } else if kind == 8 {
+            // The sender is ours. Require exactly one CMAC ID and no other bytes.
+            if cmac || data != [1, 0, 1, 0] { return invalid(); }
+            cmac = true;
         }
         if i + 1 != n { at = (start + data.len() + 7) & !7; }
     }
-    if !selected { return invalid(); }
+    if !selected || cmac != (choice != CmacChoice::Absent) { return invalid(); }
     Ok(())
 }
 
 #[must_use]
-pub(in crate::smb) struct NegotiateRequestHash { value: Hash, mid: u64 }
+pub(in crate::smb) struct NegotiateRequestHash { value: Hash, mid: u64, choice: CmacChoice }
 
 impl NegotiateRequestHash {
     pub(in crate::smb) fn received(offer: &Offer<'_>) -> Result<Self> {
@@ -93,12 +99,12 @@ impl NegotiateRequestHash {
         // opener as a fresh connection. It needs a separate, reviewed path.
         let mid = u64le(offer.request, 24)?;
         if mid != 0 || u32le(offer.request, 36)? != 0 { return invalid(); }
-        Ok(Self { value: extend(&[0; 64], offer.request), mid })
+        Ok(Self { value: extend(&[0; 64], offer.request), mid, choice: offer.cmac_choice()? })
     }
 
     pub(in crate::smb) fn reply(self, serialized: &[u8]) -> Result<ConnectionHash> {
         if server_header(serialized, 0, 0, self.mid)? != 0 { return invalid(); }
-        selected_sha512(serialized)?;
+        selected_suite(serialized, self.choice)?;
         Ok(ConnectionHash(extend(&self.value, serialized)))
     }
 }
@@ -154,21 +160,34 @@ impl SetupRequestHash {
     }
 
     /// KDF input when the *separate* authenticator proves this same exchange
-    /// and releases its session key. No method accepts a final success reply:
+    /// and releases its session key. No hash step accepts a final success reply:
     /// that reply is signed USING a key derived from this request-side hash.
     /// Dropping this value on auth failure publishes neither a session nor a key.
     pub(in crate::smb) fn into_kdf_context(self) -> RequestKeyContext {
-        RequestKeyContext(self.value)
+        RequestKeyContext { value: self.value, sid: self.sid, mid: self.mid }
     }
 }
 
 /// Deliberately not a session key or authentication result. No public constructor.
-pub(in crate::smb) struct RequestKeyContext(Hash);
+pub(in crate::smb) struct RequestKeyContext { value: Hash, sid: u64, mid: u64 }
 
 impl RequestKeyContext {
-    pub(in crate::smb) fn as_bytes(&self) -> &[u8; 64] { &self.0 }
+    pub(in crate::smb) fn as_bytes(&self) -> &[u8; 64] { &self.value }
+
+    /// This profile's NTLM new session has already received a non-zero
+    /// server session ID in its MORE reply. Only the successful unsigned
+    /// serialized response to that exact final request can be signed next.
+    pub(in crate::smb) fn check_final_reply(&self, p: &[u8]) -> Result<u64> {
+        let sid = server_header(p, 1, 0, self.mid)?;
+        if self.sid == 0 || sid != self.sid || u32le(p, 16)? != 1 ||
+            bytes(p, 48, 16)? != [0; 16] || u16le(p, 64)? != 9 || u16le(p, 66)? != 0 {
+            return invalid();
+        }
+        security_end(p, 68, 72)?;
+        Ok(sid)
+    }
 }
 
 #[cfg(test)]
 #[path = "../../test/smb/preauth.rs"]
-mod tests;
+pub(in crate::smb) mod tests;

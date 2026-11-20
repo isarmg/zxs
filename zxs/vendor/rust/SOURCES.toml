@@ -1,6 +1,18 @@
 # crates.io source archive inventory; no downloaded archive is an executable input here.
 
 [[package]]
+name = "aes"
+version = "0.9.4"
+edition = "2024"
+rust_version = "1.89"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/block-ciphers"
+commit = "9a84f2f8b581f62bcd00e16b5e11a2f6251916ee"
+upstream_subdirectory = "aes"
+archive = "https://static.crates.io/crates/aes/aes-0.9.4.crate"
+sha256 = "fc0fc36d7440d015b45468ba08a21e80e056ebbd014c611c6298bb7503e04bd1"
+
+[[package]]
 name = "block-buffer"
 version = "0.12.1"
 edition = "2024"
@@ -23,6 +35,54 @@ commit = "8b0a2b0fc1fa3b3741b9e72895f390cf499fe36f"
 upstream_subdirectory = ""
 archive = "https://static.crates.io/crates/cfg-if/cfg-if-1.0.5.crate"
 sha256 = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+
+[[package]]
+name = "cipher"
+version = "0.5.2"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/traits"
+commit = "f836f71fadb3b975b577a293d57851d044f0a44b"
+upstream_subdirectory = "cipher"
+archive = "https://static.crates.io/crates/cipher/cipher-0.5.2.crate"
+sha256 = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
+
+[[package]]
+name = "cmac"
+version = "0.8.0"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/MACs"
+commit = "192737458879ba34d822c84950b1cca001c8a73e"
+upstream_subdirectory = "cmac"
+archive = "https://static.crates.io/crates/cmac/cmac-0.8.0.crate"
+sha256 = "ac78aa94ce13e432b332a4d1bf2eff167d3a2520188ee05b337180a42fd2e62e"
+
+[[package]]
+name = "cmov"
+version = "0.5.4"
+edition = "2024"
+rust_version = "1.85"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/RustCrypto/utils"
+commit = "5c7e4f9bb31af81bf766360e836b6d633b84dbff"
+upstream_subdirectory = "cmov"
+archive = "https://static.crates.io/crates/cmov/cmov-0.5.4.crate"
+sha256 = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
+name = "cpubits"
+version = "0.1.1"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/utils"
+commit = "bff92a8c33629ae8e9d1407f3b7fea604992dd0f"
+upstream_subdirectory = "cpubits"
+archive = "https://static.crates.io/crates/cpubits/cpubits-0.1.1.crate"
+sha256 = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
 
 [[package]]
 name = "cpufeatures"
@@ -49,6 +109,30 @@ archive = "https://static.crates.io/crates/crypto-common/crypto-common-0.2.2.cra
 sha256 = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 
 [[package]]
+name = "ctutils"
+version = "0.4.8"
+edition = "2024"
+rust_version = "1.87"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/RustCrypto/utils"
+commit = "ddefdcacb3414980b5105a967a1413eaaf385541"
+upstream_subdirectory = "ctutils"
+archive = "https://static.crates.io/crates/ctutils/ctutils-0.4.8.crate"
+sha256 = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
+
+[[package]]
+name = "dbl"
+version = "0.5.0"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/utils"
+commit = "303c9e8e8fd5e08de4719bd6614935bc68c63a55"
+upstream_subdirectory = "dbl"
+archive = "https://static.crates.io/crates/dbl/dbl-0.5.0.crate"
+sha256 = "f0d7a944e61df464668c5f51f56cc667396a8821434273112948ea0b66e405d7"
+
+[[package]]
 name = "digest"
 version = "0.11.3"
 edition = "2024"
@@ -61,6 +145,18 @@ archive = "https://static.crates.io/crates/digest/digest-0.11.3.crate"
 sha256 = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 
 [[package]]
+name = "hmac"
+version = "0.13.0"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/MACs"
+commit = "0236c8eb50098dd7f277a71ab89caaeb1e7314df"
+upstream_subdirectory = "hmac"
+archive = "https://static.crates.io/crates/hmac/hmac-0.13.0.crate"
+sha256 = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 edition = "2024"
@@ -71,6 +167,18 @@ commit = "09310c55b75e2cd408951c7e2e86dba16c63fc68"
 upstream_subdirectory = ""
 archive = "https://static.crates.io/crates/hybrid-array/hybrid-array-0.4.15.crate"
 sha256 = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
+
+[[package]]
+name = "inout"
+version = "0.2.6"
+edition = "2024"
+rust_version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/RustCrypto/utils"
+commit = "d730578e69d68e185d07cb55e32eff1691133a46"
+upstream_subdirectory = "inout"
+archive = "https://static.crates.io/crates/inout/inout-0.2.6.crate"
+sha256 = "3a580c13f0ffc335ef42dd3f6b1a41b726051c5e1656d9a3aa6fddb3c5dfbbf9"
 
 [[package]]
 name = "libc"
@@ -107,3 +215,15 @@ commit = "0db9a0f731981f29266b63586c29fa07e4477b1a"
 upstream_subdirectory = ""
 archive = "https://static.crates.io/crates/typenum/typenum-1.20.1.crate"
 sha256 = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "zeroize"
+version = "1.9.2"
+edition = "2024"
+rust_version = "1.85"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/RustCrypto/utils"
+commit = "c66481d9952cb8f363e7140c7122e3d238581ca6"
+upstream_subdirectory = "zeroize"
+archive = "https://static.crates.io/crates/zeroize/zeroize-1.9.2.crate"
+sha256 = "85ccff8a4805aba1eaa4cd4afcd49f7557dd2cf5fd79ffc37f8959466effc5aa"

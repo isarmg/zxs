@@ -54,6 +54,10 @@ fn hex(s: &str) -> Vec<u8> {
     }).collect()
 }
 
+pub(in crate::smb) fn synthetic_exchange() -> [Vec<u8>; 5] {
+    [NEG_REQ, NEG_RSP, SETUP_1, CONTINUE, SETUP_2].map(hex)
+}
+
 fn expected(i: usize) -> Hash { hex(HASHES[i]).try_into().unwrap() }
 
 fn envelope<T>(p: &[u8], read: impl FnOnce(&Compound<'_>) -> T) -> T {
@@ -125,7 +129,7 @@ fn no_cross_session_message_or_final_reply_in_request_side_key_input() {
 }
 
 #[test]
-fn default_and_explicit_signing_offers_do_not_select_or_disable_signatures() {
+fn default_and_explicit_signing_offers_do_not_disable_signatures() {
     envelope(&hex(NEG_REQ), |c| {
         let offer = Offer::parse(c).unwrap();
         assert!(offer.signing_algorithms().unwrap().is_none());
@@ -139,8 +143,7 @@ fn default_and_explicit_signing_offers_do_not_select_or_disable_signatures() {
         assert!(offer.signing_algorithms().unwrap().unwrap().contains(1));
         assert_ne!(NegotiateRequestHash::received(&offer).unwrap().value, expected(0));
     });
-    // No key or sign/verify exists in this slice. The later mandatory-signing
-    // tests must separately reject an unsigned first ordinary command for BOTH.
+    // The two actual first-command MAC cases are in src/test/smb/signing.rs.
 }
 
 #[test]

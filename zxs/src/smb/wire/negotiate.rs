@@ -37,6 +37,16 @@ impl<'a> AlgorithmIds<'a> {
     }
 }
 
+/// This profile signs with AES-128-CMAC in every case. When a syntactically
+/// valid signing context is processed, the response must contain exactly one
+/// selected ID, even if the peers had no common ID (MS-SMB2 §3.3.5.4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::smb) enum CmacChoice {
+    Absent,
+    Offered,
+    NoCommon,
+}
+
 pub(in crate::smb) struct Offer<'a> {
     // Exact received bytes. Neither the raw request nor its security material
     // should be printed; no Debug or serialization for these views.
@@ -134,6 +144,14 @@ impl<'a> Offer<'a> {
     /// that context; a syntactically valid wire envelope grants no capability.
     pub(in crate::smb) fn signing_algorithms(&self) -> Result<Option<AlgorithmIds<'a>>> {
         AlgorithmIds::optional(self.signing)
+    }
+
+    pub(in crate::smb) fn cmac_choice(&self) -> Result<CmacChoice> {
+        Ok(match self.signing_algorithms()? {
+            None => CmacChoice::Absent,
+            Some(ids) if ids.contains(1) => CmacChoice::Offered,
+            Some(_) => CmacChoice::NoCommon,
+        })
     }
 
     pub(in crate::smb) fn ciphers(&self) -> Result<Option<AlgorithmIds<'a>>> {
