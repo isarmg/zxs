@@ -23,7 +23,7 @@ class Inputs(unittest.TestCase):
         from build import PROJECT,LIVE_TEMPLATE,LIVE_TEMPLATE_SHA,ship_live_template
         from unittest.mock import patch
         profile=(PROJECT/"resources/samba-domain/initial-live.conf").read_bytes()
-        self.assertEqual((len(profile),hashlib.sha256(profile).hexdigest()),(1277,LIVE_TEMPLATE_SHA))
+        self.assertEqual((len(profile),hashlib.sha256(profile).hexdigest()),(1349,LIVE_TEMPLATE_SHA))
         with tempfile.TemporaryDirectory() as d:
             directory=Path(d); pkg=directory/"package"; f=ship_live_template(pkg)
             self.assertEqual(f,pkg/LIVE_TEMPLATE)

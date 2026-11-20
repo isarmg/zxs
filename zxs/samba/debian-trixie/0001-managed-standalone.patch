@@ -51,7 +51,7 @@
  		TALLOC_FREE(n2);
  
  		/* finish up the last section */
-@@ -4225,6 +4246,83 @@
+@@ -4225,6 +4246,84 @@
  		       true);  /* reinit_globals */
  }
  
@@ -79,10 +79,11 @@
 +	    strcmp(lp_state_directory(), "/instance/state") != 0 ||
 +	    !lp_config_backend_is_file() || lp_registry_shares() ||
 +	    lp_kerberos_method() != KERBEROS_VERIFY_SECRETS ||
-+	    !lp_encrypt_passwords() || lp_ntlm_auth() != NTLM_AUTH_NTLMV2_ONLY ||
++	    !lp_encrypt_passwords() || lp_lanman_auth() || lp_ntlm_auth() != NTLM_AUTH_NTLMV2_ONLY ||
 +	    lp_null_passwords() || lp_allow_trusted_domains() || lp_obey_pam_restrictions() ||
++	    lp_nt_pipe_support() || /* IPC$ is present even with no data shares. */
 +	    lp_map_to_guest() != NEVER_MAP_TO_GUEST || lp_restrict_anonymous() != 2 ||
-+	    strcmp(lp_passdb_backend(), "zxs_sqlite") != 0 ||
++	    strcmp(lp_passdb_backend(), ZXS_NATIVE_BACKEND) != 0 ||
 +	    lp_server_min_protocol() < PROTOCOL_SMB2_02 ||
 +	    lp_debug_encryption() || lp_server_multi_channel_support() || lp_load_printers() || lp_enable_asu_support() ||
 +	    lp_server_signing() != SMB_SIGNING_REQUIRED ||
@@ -135,7 +136,7 @@
  /**
   * The typical lp_load wrapper with shares, loads global and
   * shares, including IPC, but does not force immediate
-@@ -4232,11 +4330,19 @@
+@@ -4232,11 +4331,19 @@
   */
  bool lp_load_with_shares(const char *file_name)
  {
@@ -162,7 +163,15 @@
  /**
 --- a/source3/auth/auth.c
 +++ b/source3/auth/auth.c
-@@ -540,42 +540,15 @@
+@@ -18,6 +18,7 @@
+ */
+ 
+ #include "includes.h"
++#include "param/zxs_runtime.h"
+ #include "auth.h"
+ #include "../lib/tsocket/tsocket.h"
+ 
+@@ -540,42 +541,15 @@
  NTSTATUS make_auth3_context_for_ntlm(TALLOC_CTX *mem_ctx,
  				     struct auth_context **auth_context)
  {
@@ -207,7 +216,7 @@
 +	if (lp_server_role() != ROLE_STANDALONE || lp_security() != SEC_USER ||
 +	    !lp_encrypt_passwords() || lp_map_to_guest() != NEVER_MAP_TO_GUEST ||
 +	    lp_restrict_anonymous() != 2 ||
-+	    strcmp(lp_passdb_backend(), "zxs_sqlite") != 0) {
++	    strcmp(lp_passdb_backend(), ZXS_NATIVE_BACKEND) != 0) {
 +		return NT_STATUS_INVALID_SERVER_STATE;
 +	}
 +	return make_auth_context_specific(mem_ctx, auth_context, "sam");
@@ -623,27 +632,61 @@
  	status = smbXsrv_version_global_init(&server_id);
 --- a/source3/smbd/smb2_sesssetup.c
 +++ b/source3/smbd/smb2_sesssetup.c
-@@ -30,6 +30,12 @@
+@@ -30,6 +30,14 @@
  #include "../libcli/security/security.h"
  #include "../lib/util/tevent_ntstatus.h"
  #include "source3/lib/substitute.h"
 +#include "passdb/machine_sid.h"
 +#include "param/zxs_runtime.h"
++#include "smbd/zxs_business.h"
 +#include "param/zxs_smb_control.h"
 +#include <fcntl.h>
++#include <sys/socket.h>
 +#include <pwd.h>
 +#include "../lib/async_req/async_sock.h"
  
  #include "lib/crypto/gnutls_helpers.h"
  #include <gnutls/gnutls.h>
-@@ -190,11 +196,17 @@
+@@ -190,11 +198,49 @@
  	}
  }
  
 +struct zxs_smb_local_origin {
 +	struct zxs_smb_generation identity; /* no proof or key */
 +	uint32_t native_seq;
++	int fd; /* owned duplicate of this attempt's original OFD */
++	uint8_t challenge[8];
 +};
++static int zxs_origin_destroy(struct zxs_smb_local_origin *o)
++{
++	if (o->fd>=0) {
++		shutdown(o->fd,SHUT_RDWR);
++		close(o->fd);
++		o->fd=-1;
++	}
++	return 0;
++}
++void zxs_smb_session_retire(struct smbXsrv_session *s)
++{
++	if (s!=NULL && s->zxs_origin!=NULL) {
++		/* The session may still have borrowed talloc refs. Revoke now. */
++		zxs_origin_destroy(s->zxs_origin);
++		TALLOC_FREE(s->zxs_origin);
++	}
++}
++int zxs_smb_session_channel(struct smbd_smb2_request *req)
++{
++	struct smbXsrv_session *s=req->session,*found=NULL;
++	NTSTATUS status;
++	if (s==NULL || s->global==NULL || s->global->auth_session_info==NULL ||
++	    !NT_STATUS_IS_OK(s->status) || s->zxs_origin==NULL || s->zxs_origin->fd<0 ||
++	    s->zxs_origin->native_seq!=s->global->auth_session_info_seqnum ||
++	    !zxs_runtime_child_on(req->xconn->transport.sock)) { return -1; }
++	status=smb2srv_session_lookup_conn(req->xconn,s->global->session_wire_id,
++		timeval_to_nttime(&req->request_time),&found);
++	return NT_STATUS_IS_OK(status) && found==s && zxs_smb_ctl_live(s->zxs_origin->fd)==0 ?
++		s->zxs_origin->fd : -1;
++}
 +
  static NTSTATUS smbd_smb2_auth_generic_return(struct smbXsrv_session *session,
  					struct smbXsrv_session_auth0 **_auth,
@@ -654,7 +697,7 @@
  					uint16_t *out_session_flags,
  					uint64_t *out_session_id)
  {
-@@ -209,6 +221,10 @@
+@@ -209,6 +255,10 @@
  	};
  	DATA_BLOB preauth_hash = data_blob_null;
  
@@ -665,7 +708,7 @@
  	*_auth = NULL;
  
  	if (xconn->protocol >= PROTOCOL_SMB3_11) {
-@@ -431,10 +447,9 @@
+@@ -431,10 +481,9 @@
  
  	smb2req->sconn->num_users++;
  
@@ -679,7 +722,7 @@
  
  	set_current_user_info(session_info->unix_info->sanitized_username,
  			      session_info->unix_info->unix_name,
-@@ -471,6 +486,12 @@
+@@ -471,6 +520,16 @@
  			  nt_errstr(status)));
  		return NT_STATUS_LOGON_FAILURE;
  	}
@@ -687,12 +730,16 @@
 +	/* Only the successful NEW session update above, after claim. Neither
 +	 * preauth's earlier update nor the global record owns this object.
 +	 * talloc_move does not allocate after the native update. */
++	if ((*staged)->fd<0 || zxs_smb_active_send((*staged)->fd,(*staged)->challenge)!=0) {
++		session->status=NT_STATUS_USER_SESSION_DELETED;
++		return NT_STATUS_LOGON_FAILURE;
++	}
 +	(*staged)->native_seq=session->global->auth_session_info_seqnum;
 +	session->zxs_origin=talloc_move(session,staged);
  
  	/*
  	 * we attach the session to the request
-@@ -664,7 +685,14 @@
+@@ -664,7 +723,14 @@
  	return NT_STATUS_OK;
  }
  
@@ -707,7 +754,7 @@
  	struct tevent_context *ev;
  	struct smbd_smb2_request *smb2req;
  	uint64_t in_session_id;
-@@ -681,7 +709,6 @@
+@@ -681,7 +747,6 @@
  };
  
  static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq);
@@ -715,7 +762,7 @@
  static void smbd_smb2_session_setup_auth_return(struct tevent_req *req);
  
  static struct tevent_req *smbd_smb2_session_setup_send(TALLOC_CTX *mem_ctx,
-@@ -691,7 +718,8 @@
+@@ -691,7 +756,8 @@
  					uint8_t in_flags,
  					uint8_t in_security_mode,
  					uint64_t in_previous_session_id,
@@ -725,7 +772,7 @@
  {
  	struct tevent_req *req;
  	struct smbd_smb2_session_setup_state *state;
-@@ -713,6 +741,14 @@
+@@ -713,6 +779,14 @@
  	state->in_security_mode = in_security_mode;
  	state->in_previous_session_id = in_previous_session_id;
  	state->in_security_buffer = in_security_buffer;
@@ -740,7 +787,7 @@
  
  	if (in_flags & SMB2_SESSION_FLAG_BINDING) {
  		if (in_session_id == 0) {
-@@ -874,10 +910,9 @@
+@@ -874,10 +948,9 @@
  	}
  
  	if (state->auth->gensec == NULL) {
@@ -752,7 +799,7 @@
  					      &state->auth->gensec);
  		if (tevent_req_nterror(req, status)) {
  			return tevent_req_post(req, ev);
-@@ -910,6 +945,132 @@
+@@ -910,6 +983,141 @@
  	tevent_req_set_callback(subreq, smbd_smb2_session_setup_gensec_done, req);
  
  	return req;
@@ -842,7 +889,13 @@
 +	ok=a!=NULL && a->cut_requested && zxs_final_same_pending(s) &&
 +		zxs_runtime_child_on(s->smb2req->xconn->transport.sock) &&
 +		zxs_smb_cut_read(s->cut->fd,a->started_msec,a->challenge,&s->staged->identity)==0 &&
++		zxs_runtime_native_epoch(&s->staged->identity) &&
 +		zxs_same_identity(&s->staged->identity,s->session_info);
++	if (ok) {
++		memcpy(s->staged->challenge,a->challenge,8);
++		s->staged->fd=s->cut->fd;
++		s->cut->fd=-1;
++	}
 +	TALLOC_FREE(s->cut);
 +	if (ok) { smbd_smb2_session_setup_auth_return(req); }
 +	unbecome_root();
@@ -865,8 +918,11 @@
 +	if (a==NULL || a->cut_requested || s->cut!=NULL || s->staged!=NULL) { return false; }
 +	a->cut_requested=true;
 +	s->staged=talloc_zero(s,struct zxs_smb_local_origin);
++	if (s->staged==NULL) { return false; }
++	s->staged->fd=-1;
++	talloc_set_destructor(s->staged,zxs_origin_destroy);
 +	s->cut=talloc_zero(s,struct zxs_cut_wait);
-+	if (s->staged==NULL || s->cut==NULL) { return false; }
++	if (s->cut==NULL) { return false; }
 +	s->cut->wire_id=s->session->global->session_wire_id;
 +	s->cut->fd=fcntl(a->fd,F_DUPFD_CLOEXEC,3);
 +	talloc_set_destructor(s->cut,zxs_cut_destroy);
@@ -885,7 +941,7 @@
  }
  
  static void smbd_smb2_session_setup_gensec_done(struct tevent_req *subreq)
-@@ -947,41 +1108,17 @@
+@@ -947,41 +1155,17 @@
  		return;
  	}
  
@@ -938,7 +994,7 @@
  }
  
  static void smbd_smb2_session_setup_auth_return(struct tevent_req *req)
-@@ -1024,6 +1161,7 @@
+@@ -1024,6 +1208,7 @@
  					       state->smb2req,
  					       state->in_security_mode,
  					       state->session_info,
@@ -946,7 +1002,7 @@
  					       &state->out_session_flags,
  					       &state->out_session_id);
  	if (tevent_req_nterror(req, status)) {
-@@ -1065,6 +1203,8 @@
+@@ -1065,6 +1250,8 @@
  
  struct smbd_smb2_session_setup_wrap_state {
  	struct tevent_context *ev;
@@ -955,7 +1011,7 @@
  	struct smbd_smb2_request *smb2req;
  	uint64_t in_session_id;
  	uint8_t in_flags;
-@@ -1080,6 +1220,67 @@
+@@ -1080,6 +1267,67 @@
  static void smbd_smb2_session_setup_wrap_setup_done(struct tevent_req *subreq);
  static void smbd_smb2_session_setup_wrap_shutdown_done(struct tevent_req *subreq);
  
@@ -1023,7 +1079,7 @@
  static struct tevent_req *smbd_smb2_session_setup_wrap_send(TALLOC_CTX *mem_ctx,
  					struct tevent_context *ev,
  					struct smbd_smb2_request *smb2req,
-@@ -1091,7 +1292,7 @@
+@@ -1091,7 +1339,7 @@
  {
  	struct tevent_req *req;
  	struct smbd_smb2_session_setup_wrap_state *state;
@@ -1032,7 +1088,7 @@
  
  	req = tevent_req_create(mem_ctx, &state,
  				struct smbd_smb2_session_setup_wrap_state);
-@@ -1106,18 +1307,41 @@
+@@ -1106,18 +1354,41 @@
  	state->in_previous_session_id = in_previous_session_id;
  	state->in_security_buffer = in_security_buffer;
  
@@ -1086,7 +1142,7 @@
  
  	return req;
  }
-@@ -1132,6 +1356,7 @@
+@@ -1132,6 +1403,7 @@
  		struct smbd_smb2_session_setup_wrap_state);
  	NTSTATUS status;
  
@@ -1128,15 +1184,29 @@
  	if (!test) {
 --- a/source3/wscript_build
 +++ b/source3/wscript_build
-@@ -177,6 +177,7 @@
+@@ -139,6 +139,7 @@
+ private_pdb_match.append('!pdb_nds_*')
+ private_pdb_match.append('!pdb_ldapsam_init*')
+ private_pdb_match.append('!pdb_*_init')
++private_pdb_match.append('!zxs_*')
+ private_pdb_match = private_pdb_match + ldapsam_pdb_match
+ 
+ bld.SAMBA3_LIBRARY('samba-passdb',
+@@ -174,9 +175,13 @@
+                           lib/winbind_util.c
+                           passdb/pdb_util.c
+                           passdb/pdb_interface.c
++                          passdb/pdb_tdb.c
                            passdb/pdb_secrets.c''',
                     deps='''
                          secrets3
 +                        smbconf
++                        dbwrap
++                        tdb
                          GROUPDB
                          SERVER_MUTEX
                          wbclient
-@@ -490,6 +491,7 @@
+@@ -490,6 +495,7 @@
                     deps='''
                          ndr-samba4
                          smbconf
@@ -1144,7 +1214,7 @@
                          samba3util
                          dbwrap
                          krb5samba
-@@ -558,12 +560,16 @@
+@@ -558,12 +564,16 @@
  bld.SAMBA3_SUBSYSTEM('SMBCONF_PARAM',
                     source='''
                            param/loadparm.c
@@ -1161,14 +1231,19 @@
                          PARAM_UTIL
                          ldap
                          lber
-@@ -594,6 +600,31 @@
+@@ -594,6 +604,36 @@
                     public_headers='../lib/smbconf/smbconf.h',
                     pc_files=[],
                     vnum='0.0.1')
 +
 +bld.SAMBA3_BINARY('test_zxs_file_vfs',
 +                   source='torture/test_zxs_file_vfs.c',
-+                   deps='smbd_base vfs_not_implemented smbconf',
++                   deps='smbd_base vfs_not_implemented smbconf samba-hostconfig',
++                   for_selftest=True)
++
++bld.SAMBA3_BINARY('test_zxs_native_password_path',
++                   source='torture/test_zxs_native_password_path.c',
++                   deps='NTLM_CHECK LIBCLI_AUTH samba-util gnutls',
 +                   for_selftest=True)
 +
 +bld.SAMBA3_BINARY('test_zxs_native_auth_policy',
@@ -1193,7 +1268,7 @@
  
  bld.SAMBA3_SUBSYSTEM('sysquotas',
                       source='''
-@@ -740,6 +771,7 @@
+@@ -740,6 +780,7 @@
                          msrpc3
                          vfs
                          vfs_default
@@ -1213,7 +1288,7 @@
  bool sid_check_is_our_sam(const struct dom_sid  *sid);
 --- a/source3/include/auth.h
 +++ b/source3/include/auth.h
-@@ -81,7 +81,22 @@
+@@ -81,7 +81,24 @@
  					  TALLOC_CTX *mem_ctx,
  					  struct auth4_context **auth4_context);
  
@@ -1225,6 +1300,8 @@
 +	uint8_t challenge[8];
 +	struct tevent_req *wait;
 +	bool ready;
++	bool password_started;
++	bool password_verified; /* set only by the original, successful native request */
 +	/* Both are borrowed from this one real native authentication. */
 +	const struct auth_serversupplied_info *returned;
 +	const struct auth_session_info *token;
@@ -1251,6 +1328,28 @@
  NTSTATUS auth_generic_prepare(TALLOC_CTX *mem_ctx,
  			      const struct tsocket_address *remote_address,
  			      const struct tsocket_address *local_address,
+@@ -137,6 +143,13 @@
+ 				   void **server_returned_info,
+ 				   DATA_BLOB *nt_session_key,
+ 				   DATA_BLOB *lm_session_key);
++
++/* Dedicated private auth3 subsystem. No general account/credential selection. */
++NTSTATUS zxs_auth3_native_request(TALLOC_CTX *mem_ctx,struct auth_context *ctx,
++	const struct auth_usersupplied_info *user,struct auth_serversupplied_info **out);
++NTSTATUS zxs_auth3_native_token(TALLOC_CTX *mem_ctx,struct zxs_smb2_attempt *a,
++	const struct auth_serversupplied_info *si,const char *username,uint32_t flags,
++	struct auth_session_info **out);
+ 
+ /* The following definitions come from auth/auth_sam.c  */
+ 
+@@ -393,6 +406,7 @@
+ 					    int num_groupsids,
+ 					    const struct dom_sid *groupsids,
+ 					    struct security_token **token);
++NTSTATUS zxs_finalize_managed_token(struct security_token *result,uint32_t flags);
+ NTSTATUS finalize_local_nt_token(struct security_token *result,
+ 				 uint32_t session_info_flags);
+ NTSTATUS get_user_sid_info3_and_extra(const struct netr_SamInfo3 *info3,
 --- a/source3/auth/auth_generic.c
 +++ b/source3/auth/auth_generic.c
 @@ -27,6 +27,7 @@
@@ -1346,7 +1445,23 @@
  
  	/*
  	 * This is a hack, some callers...
-@@ -86,6 +95,10 @@
+@@ -75,17 +84,21 @@
+ 
+ 	server_info = talloc_get_type_abort(server_returned_info,
+ 					    struct auth_serversupplied_info);
+-	nt_status = create_local_token(mem_ctx,
+-				       server_info,
+-				       NULL,
+-				       original_user_name,
+-				       session_info);
++	if (a!=NULL) {
++		nt_status=zxs_auth3_native_token(mem_ctx,a,server_info,original_user_name,session_info_flags,session_info);
++	} else {
++		nt_status=create_local_token(mem_ctx,server_info,NULL,original_user_name,session_info);
++	}
+ 	if (!NT_STATUS_IS_OK(nt_status)) {
+ 		DEBUG(10, ("create_local_token failed: %s\n",
+ 			   nt_errstr(nt_status)));
  		return nt_status;
  	}
  
@@ -1417,22 +1532,127 @@
  	uint8_t authoritative;
  	void *server_info;
  	DATA_BLOB nt_session_key;
-@@ -167,6 +185,14 @@
- 	 * Be authoritative by default.
- 	 */
- 	state->authoritative = 1;
+@@ -151,110 +169,15 @@
+ 	struct auth3_check_password_state *state = NULL;
+ 	struct auth_context *auth_context = talloc_get_type_abort(
+ 		auth4_context->private_data, struct auth_context);
+-	struct auth_usersupplied_info *mapped_user_info = NULL;
+-	struct auth_serversupplied_info *server_info = NULL;
+-	char *sanitized_username = NULL;
+-	NTSTATUS nt_status;
+-	bool username_was_mapped;
+-
+-	req = tevent_req_create(
+-		mem_ctx, &state, struct auth3_check_password_state);
+-	if (req == NULL) {
+-		return NULL;
+-	}
+-
+-	/*
+-	 * Be authoritative by default.
+-	 */
+-	state->authoritative = 1;
+-
+-	/* The client has given us its machine name (which we only get over NBT transport).
+-	   We need to possibly reload smb.conf if smb.conf includes depend on the machine name. */
+-
+-	set_remote_machine_name(user_info->workstation_name, True);
+-
+-	nt_status = make_user_info_map(talloc_tos(),
+-                                       &mapped_user_info,
+-				       user_info->client.account_name,
+-				       user_info->client.domain_name,
+-				       user_info->workstation_name,
+-				       user_info->remote_host,
+-				       user_info->local_host,
+-				       user_info->service_description,
+-	                               user_info->password.response.lanman.data ? &user_info->password.response.lanman : NULL,
+-	                               user_info->password.response.nt.data ? &user_info->password.response.nt : NULL,
+-				       NULL, NULL, user_info->password.plaintext,
+-				       AUTH_PASSWORD_RESPONSE);
+-
+-	if (tevent_req_nterror(req, nt_status)) {
+-		return tevent_req_post(req, ev);
+-	}
+-
+-	mapped_user_info->logon_parameters = user_info->logon_parameters;
+-
+-	mapped_user_info->flags = user_info->flags;
+-
+-	sanitized_username = talloc_alpha_strcpy(
+-		state,
+-		user_info->client.account_name,
+-		SAFE_NETBIOS_CHARS "$");
+-	if (sanitized_username == NULL) {
+-		tevent_req_nterror(req, NT_STATUS_NO_MEMORY);
+-		return tevent_req_post(req, ev);
+-	}
+-
+-	nt_status = auth_check_ntlm_password(state,
+-					     auth_context,
+-					     mapped_user_info,
+-					     &server_info,
+-					     &state->authoritative);
+-
+-	if (!NT_STATUS_IS_OK(nt_status)) {
+-		DBG_INFO("Checking NTLMSSP password for %s\\%s failed: "
+-			 "%s, authoritative=%"PRIu8"\n",
+-			 user_info->client.domain_name,
+-			 user_info->client.account_name,
+-			 nt_errstr(nt_status),
+-			 state->authoritative);
+-	}
+-
+-	username_was_mapped = mapped_user_info->was_mapped;
+-
+-	TALLOC_FREE(mapped_user_info);
+-
+-	if (!NT_STATUS_IS_OK(nt_status)) {
+-		nt_status = do_map_to_guest_server_info(
+-			state,
+-			nt_status,
+-			user_info->client.account_name,
+-			user_info->client.domain_name,
+-			&server_info);
+-		if (!tevent_req_nterror(req, nt_status)) {
+-			state->authoritative = 1;
+-
+-			/* setup the string used by %U */
+-			set_current_user_info(
+-				sanitized_username,
+-				server_info->unix_name,
+-				server_info->info3->base.logon_domain.string);
+-
+-			lp_load_with_shares(get_dyn_CONFIGFILE());
+-
+-			tevent_req_done(req);
+-		}
+-		state->server_info = server_info;
+-		return tevent_req_post(req, ev);
+-	}
+-
+-	server_info->nss_token |= username_was_mapped;
+-
+-	/* setup the string used by %U */
+-	set_current_user_info(sanitized_username,
+-			      server_info->unix_name,
+-			      server_info->info3->base.logon_domain.string);
+-
+-	lp_load_with_shares(get_dyn_CONFIGFILE());
+-
++	struct auth_serversupplied_info *server_info=NULL;
++	NTSTATUS status;
++	req=tevent_req_create(mem_ctx,&state,struct auth3_check_password_state);
++	if (req==NULL) return NULL;
++	state->authoritative=1;
 +	state->attempt=auth_context->zxs_attempt;
-+	if (state->attempt!=NULL) {
-+		/* Negotiating a server challenge cannot authorize a password,
-+		 * a guest mapping, or a FILE session. Until the source-bound
-+		 * checker exists, stop before reading or forwarding responses. */
-+		tevent_req_nterror(req,NT_STATUS_LOGON_FAILURE);
-+		return tevent_req_post(req,ev);
-+	}
- 
- 	/* The client has given us its machine name (which we only get over NBT transport).
- 	   We need to possibly reload smb.conf if smb.conf includes depend on the machine name. */
-@@ -303,6 +329,23 @@
++	/* No anonymous, guest, other auth backend, username map or Unix password fallback. */
++	status=zxs_auth3_native_request(state,auth_context,user_info,&server_info);
++	if (tevent_req_nterror(req,status)) return tevent_req_post(req,ev);
+ 	/* Clear out the session keys, and pass them to the caller.
+ 	 * They will not be used in this form again - instead the
+ 	 * NTLMSSP code will decide on the final correct session key,
+@@ -303,6 +226,21 @@
  		return status;
  	}
  
@@ -1440,10 +1660,8 @@
 +		struct zxs_smb2_attempt *a=state->attempt;
 +		struct auth_serversupplied_info *si=talloc_get_type(state->server_info,
 +							       struct auth_serversupplied_info);
-+		/* The managed sender cannot succeed until its real storage
-+		 * credential supplier is present. Continue only from the
-+		 * original authoritative success, never a SID or cached token. */
-+		if (si==NULL || si->guest || si->cached_session_info!=NULL ||
++		/* Only the exact native source/check can set this bit. */
++		if (!a->password_verified || si==NULL || si->guest || si->cached_session_info!=NULL ||
 +		    !state->authoritative || server_returned_info==NULL ||
 +		    nt_session_key==NULL || lm_session_key==NULL ||
 +		    state->nt_session_key.length!=16 || state->nt_session_key.data==NULL ||
@@ -1458,7 +1676,15 @@
  			mem_ctx, &state->server_info);
 --- a/source3/auth/wscript_build
 +++ b/source3/auth/wscript_build
-@@ -21,7 +21,7 @@
+@@ -14,14 +14,14 @@
+ 			      server_info.c
+ 			      server_info_sam.c
+ 			      user_info.c''',
+-                     deps='TOKEN_UTIL DCUTIL USER_UTIL common_auth')
++                     deps='TOKEN_UTIL DCUTIL USER_UTIL common_auth tdb smbconf pdb NTLM_CHECK secrets3 smbd_shim')
+ 
+ bld.SAMBA3_LIBRARY('auth',
+                    source='''auth.c
                     user_krb5.c
                     auth_ntlmssp.c
                     auth_generic.c''',
@@ -1469,17 +1695,18 @@
  bld.SAMBA3_MODULE('auth_sam',
 --- a/source3/passdb/pdb_interface.c
 +++ b/source3/passdb/pdb_interface.c
-@@ -23,6 +23,9 @@
+@@ -23,6 +23,10 @@
  #include "includes.h"
  #include "system/passwd.h"
  #include "passdb.h"
 +#include "passdb/machine_sid.h"
 +#include "param/zxs_runtime.h"
-+#include "passdb/pdb_zxs_sqlite_table.h"
++#include "passdb/pdb_tdb.h"
++#include "passdb/zxs_native_tdb.h"
  #include "secrets.h"
  #include "messages.h"
  #include "serverid.h"
-@@ -43,18 +46,47 @@
+@@ -43,18 +47,26 @@
  #undef DBGC_CLASS
  #define DBGC_CLASS DBGC_PASSDB
  
@@ -1506,48 +1733,27 @@
 +	return zxs_runtime_storage_live();
 +}
 +
-+static NTSTATUS zxs_sqlite_init(struct pdb_methods **methods, const char *location)
-+{
-+	struct pdb_methods *m;
-+
-+	if (methods == NULL) {
-+		return NT_STATUS_INVALID_PARAMETER;
-+	}
-+	*methods = NULL;
-+	if (location != NULL || !zxs_pdb_origin()) {
-+		return NT_STATUS_ACCESS_DENIED;
-+	}
-+	m = talloc(NULL, struct pdb_methods);
-+	if (m == NULL) {
-+		return NT_STATUS_NO_MEMORY;
-+	}
-+	*m = zxs_sqlite_methods;
-+	*methods = m;
-+	return NT_STATUS_OK;
-+}
-+
 +static bool lazy_initialize_passdb(void)
 +{
 +	static bool initialized;
 +	if (!initialized) {
-+		initialized = NT_STATUS_IS_OK(smb_register_passdb(
-+			PASSDB_INTERFACE_VERSION, "zxs_sqlite", zxs_sqlite_init));
++		initialized = NT_STATUS_IS_OK(pdb_tdbsam_init(NULL));
 +	}
 +	return initialized;
  }
  
  static bool lookup_global_sam_rid(TALLOC_CTX *mem_ctx, uint32_t rid,
-@@ -74,7 +106,8 @@
+@@ -74,7 +86,8 @@
  		return NT_STATUS_OBJECT_TYPE_MISMATCH;
  	}
  
 -	if (!name || !init) {
-+	if (name == NULL || strcmp(name, "zxs_sqlite") != 0 ||
-+	    init != zxs_sqlite_init) {
++	if (name == NULL || strcmp(name, "tdbsam") != 0 ||
++	    init != zxs_native_tdb_install) {
  		return NT_STATUS_INVALID_PARAMETER;
  	}
  
-@@ -136,60 +169,21 @@
+@@ -136,60 +149,21 @@
  
  NTSTATUS make_pdb_method_name(struct pdb_methods **methods, const char *selected)
  {
@@ -1607,20 +1813,20 @@
 -
 -	return nt_status;
 +	*methods = NULL;
-+	if (selected == NULL || strcmp(selected, "zxs_sqlite") != 0 ||
++	if (selected == NULL || strcmp(selected, ZXS_NATIVE_BACKEND) != 0 ||
 +	    !lazy_initialize_passdb()) {
 +		return NT_STATUS_INVALID_PARAMETER;
 +	}
-+	entry = pdb_find_backend_entry(selected);
-+	if (entry == NULL || entry->init != zxs_sqlite_init) {
++	entry = pdb_find_backend_entry("tdbsam");
++	if (entry == NULL || entry->init != zxs_native_tdb_install) {
 +		return NT_STATUS_INVALID_PARAMETER;
 +	}
 +	/* Do not trim a location suffix or call smb_probe_module(). */
-+	return entry->init(methods, NULL);
++	return entry->init(methods, ZXS_NATIVE_STORE);
  }
  
  /******************************************************************
-@@ -200,23 +194,16 @@
+@@ -200,23 +174,16 @@
  {
  	static struct pdb_methods *pdb = NULL;
  	const char *backend = lp_passdb_backend();
@@ -1642,8 +1848,8 @@
 +		NTSTATUS status = make_pdb_method_name(&pdb, backend);
 +		return NT_STATUS_IS_OK(status) ? pdb : NULL;
 +	}
-+	if (backend == NULL || strcmp(backend, "zxs_sqlite") != 0 ||
-+	    !zxs_runtime_storage_live() || (reload && !zxs_pdb_origin())) {
++	if (backend == NULL || strcmp(backend, ZXS_NATIVE_BACKEND) != 0 ||
++	    !zxs_runtime_storage_live() || (reload && (!zxs_pdb_origin() || !zxs_native_tdb_audit(ZXS_NATIVE_STORE)))) {
  		return NULL;
  	}
 -
@@ -1652,7 +1858,7 @@
  	return pdb;
  }
  
-@@ -226,14 +213,8 @@
+@@ -226,14 +193,8 @@
  
  	pdb = pdb_get_methods_reload(false);
  	if (!pdb) {
@@ -1671,7 +1877,7 @@
  	return pdb;
 --- a/source3/smbd/server_exit.c
 +++ b/source3/smbd/server_exit.c
-@@ -258,6 +258,11 @@
+@@ -258,6 +258,14 @@
  	NTSTATUS ret;
  	am_parent = NULL;
  	ret = reinit_after_fork(msg_ctx, ev_ctx, parent_longlived);
@@ -1682,7 +1888,10 @@
 +		return ret;
 +	}
 +	if (!initialize_password_db(true, ev_ctx)) {
-+		return NT_STATUS_ACCESS_DENIED;
++		/* An expected loss of this child's original read-only account
++		 * is not a Samba internal error; never run the accept caller's
++		 * panic/core path after the native TDB was inspected. */
++		_exit(EXIT_FAILURE);
 +	}
 +	return NT_STATUS_OK;
 +}
@@ -2053,7 +2262,7 @@
 +	}
 +	switch (zxs_file_vfs_route(snum, lp_servicenumber("IPC$"), conn->ipc,
 +				   conn->printer, lp_widelinks(snum),
-+				   lp_vfs_objects(snum))) {
++				   lp_vfs_objects(snum), lp_nt_pipe_support())) {
 +	case ZXS_VFS_IPC:
 +		return vfs_init_custom(conn, DEFAULT_VFS_MODULE_NAME);
 +	case ZXS_VFS_FILE:
@@ -2216,3 +2425,804 @@
  		[ignore] smbXsrv_tcon_table		*tcon_table;
  		[ignore] uint32				homes_snum;
  		smbXsrv_session_auth0			*pending_auth;
+@@ -398,6 +400,8 @@
+ 		NTSTATUS				status;
+ 		NTTIME					idle_time;
+ 		[ignore] connection_struct		*compat;
++		/* Original accepted SQL setting; local only, not an IO grant. */
++		[ignore] struct zxs_smb_tree_cut	*zxs_tree_choice;
+ 	} smbXsrv_tcon;
+ 
+ 	typedef union {
+--- a/source3/passdb/pdb_tdb.c
++++ b/source3/passdb/pdb_tdb.c
+@@ -30,6 +30,10 @@
+ #include "../libcli/security/security.h"
+ #include "util_tdb.h"
+ #include "passdb/pdb_tdb.h"
++#include <tdb.h>
++#include "param/zxs_runtime.h"
++#include "passdb/zxs_native_tdb.h"
++#include "passdb/pdb_zxs_restricted_table.h"
+ #include "lib/util/smb_strtox.h"
+ #include "lib/util/string_wrappers.h"
+ 
+@@ -57,6 +61,7 @@
+ #define PRIVPREFIX		"PRIV_"
+ #define NEXT_RID_STRING		"NEXT_RID"
+ 
++#if 0 /* Generic conversion, backup and mutation are not in this online build. */
+ /* GLOBAL TDB SAM CONTEXT */
+ 
+ static struct db_context *db_sam;
+@@ -437,131 +442,13 @@
+  Uses a reference count to allow multiple open calls.
+ *********************************************************************/
+ 
+-static bool tdbsam_open( const char *name )
+-{
+-	int32_t version;
+-	int32_t minor_version;
+-	NTSTATUS status;
+-
+-	/* check if we are already open */
+-
+-	if ( db_sam ) {
+-		return true;
+-	}
+-
+-	/* Try to open tdb passwd.  Create a new one if necessary */
+-
+-	db_sam = db_open(NULL, name, 0, TDB_DEFAULT, O_CREAT|O_RDWR, 0600,
+-			 DBWRAP_LOCK_ORDER_1, DBWRAP_FLAG_NONE);
+-	if (db_sam == NULL) {
+-		DEBUG(0, ("tdbsam_open: Failed to open/create TDB passwd "
+-			  "[%s]\n", name));
+-		return false;
+-	}
+-
+-	/* Check the version */
+-	status = dbwrap_fetch_int32_bystring(db_sam, TDBSAM_VERSION_STRING,
+-					     &version);
+-	if (!NT_STATUS_IS_OK(status)) {
+-		version = 0;	/* Version not found, assume version 0 */
+-	}
+-
+-	/* Get the minor version */
+-	status = dbwrap_fetch_int32_bystring(
+-		db_sam, TDBSAM_MINOR_VERSION_STRING, &minor_version);
+-	if (!NT_STATUS_IS_OK(status)) {
+-		minor_version = 0; /* Minor version not found, assume 0 */
+-	}
+-
+-	/* Compare the version */
+-	if (version > TDBSAM_VERSION) {
+-		/* Version more recent than the latest known */
+-		DEBUG(0, ("tdbsam_open: unknown version => %d\n", version));
+-		TALLOC_FREE(db_sam);
+-		return false;
+-	}
+-
+-	if ( version < TDBSAM_VERSION ||
+-			(version == TDBSAM_VERSION &&
+-			 minor_version < TDBSAM_MINOR_VERSION) ) {
+-		/*
+-		 * Ok - we think we're going to have to convert.
+-		 * Due to the backup process we now must do to
+-		 * upgrade we have to get a mutex and re-check
+-		 * the version. Someone else may have upgraded
+-		 * whilst we were checking.
+-		 */
+-
+-		struct named_mutex *mtx = grab_named_mutex(NULL,
+-						"tdbsam_upgrade_mutex",
+-						600);
+-
+-		if (!mtx) {
+-			DEBUG(0, ("tdbsam_open: failed to grab mutex.\n"));
+-			TALLOC_FREE(db_sam);
+-			return false;
+-		}
+-
+-		/* Re-check the version */
+-		status = dbwrap_fetch_int32_bystring(
+-			db_sam, TDBSAM_VERSION_STRING, &version);
+-		if (!NT_STATUS_IS_OK(status)) {
+-			version = 0;	/* Version not found, assume version 0 */
+-		}
+-
+-		/* Re-check the minor version */
+-		status = dbwrap_fetch_int32_bystring(
+-			db_sam, TDBSAM_MINOR_VERSION_STRING, &minor_version);
+-		if (!NT_STATUS_IS_OK(status)) {
+-			minor_version = 0; /* Minor version not found, assume 0 */
+-		}
+-
+-		/* Compare the version */
+-		if (version > TDBSAM_VERSION) {
+-			/* Version more recent than the latest known */
+-			DEBUG(0, ("tdbsam_open: unknown version => %d\n", version));
+-			TALLOC_FREE(db_sam);
+-			TALLOC_FREE(mtx);
+-			return false;
+-		}
+-
+-		if ( version < TDBSAM_VERSION ||
+-				(version == TDBSAM_VERSION &&
+-				 minor_version < TDBSAM_MINOR_VERSION) ) {
+-			/*
+-			 * Note that minor versions we read that are greater
+-			 * than the current minor version we have hard coded
+-			 * are assumed to be compatible if they have the same
+-			 * major version. That allows previous versions of the
+-			 * passdb code that don't know about minor versions to
+-			 * still use this database. JRA.
+-			 */
+-
+-			DEBUG(1, ("tdbsam_open: Converting version %d.%d database to "
+-				  "version %d.%d.\n",
+-					version,
+-					minor_version,
+-					TDBSAM_VERSION,
+-					TDBSAM_MINOR_VERSION));
+-
+-			if ( !tdbsam_convert(&db_sam, name, version) ) {
+-				DEBUG(0, ("tdbsam_open: Error when trying to convert "
+-					  "tdbsam [%s]\n",name));
+-				TALLOC_FREE(db_sam);
+-				TALLOC_FREE(mtx);
+-				return false;
+-			}
+-
+-			DEBUG(3, ("TDBSAM converted successfully.\n"));
+-		}
+-		TALLOC_FREE(mtx);
+-	}
+-
+-	DEBUG(4,("tdbsam_open: successfully opened %s\n", name ));
+-
+-	return true;
+-}
+-
++#endif
++#include "passdb/zxs_native_gate.inc"
++
++/* The stock generic name/SID enumeration and mutators are not compiled in
++ * the restricted online build. An NTLM attempt does not use a public PDB
++ * lookup to retrieve an account. */
++#if 0
+ /******************************************************************
+  Lookup a name in the SAM TDB
+ ******************************************************************/
+@@ -1310,60 +1197,20 @@
+  open the tdb, etc...
+ *********************************************************************/
+ 
+-static NTSTATUS pdb_init_tdbsam(struct pdb_methods **pdb_method, const char *location)
+-{
+-	NTSTATUS nt_status;
+-	char *tdbfile = NULL;
+-	const char *pfile = location;
+-
+-	if (!NT_STATUS_IS_OK(nt_status = make_pdb_method( pdb_method ))) {
+-		return nt_status;
+-	}
+-
+-	(*pdb_method)->name = "tdbsam";
+-
+-	(*pdb_method)->getsampwnam = tdbsam_getsampwnam;
+-	(*pdb_method)->getsampwsid = tdbsam_getsampwsid;
+-	(*pdb_method)->add_sam_account = tdbsam_add_sam_account;
+-	(*pdb_method)->update_sam_account = tdbsam_update_sam_account;
+-	(*pdb_method)->delete_sam_account = tdbsam_delete_sam_account;
+-	(*pdb_method)->rename_sam_account = tdbsam_rename_sam_account;
+-	(*pdb_method)->search_users = tdbsam_search_users;
+-
+-	(*pdb_method)->capabilities = tdbsam_capabilities;
+-	(*pdb_method)->new_rid = tdbsam_new_rid;
+-
+-	(*pdb_method)->is_responsible_for_builtin =
+-					tdbsam_is_responsible_for_builtin;
+-	map_builtin = lp_parm_bool(-1, "tdbsam", "map builtin", true);
+-
+-	/* save the path for later */
+-
+-	if (!location) {
+-		if (asprintf(&tdbfile, "%s/%s", lp_private_dir(),
+-			     PASSDB_FILE_NAME) < 0) {
+-			return NT_STATUS_NO_MEMORY;
+-		}
+-		pfile = tdbfile;
+-	}
+-
+-	/* Do not leak memory if the init function is called more than once */
+-	SAFE_FREE(tdbsam_filename);
+-	tdbsam_filename = SMB_STRDUP(pfile);
+-	if (!tdbsam_filename) {
+-		return NT_STATUS_NO_MEMORY;
+-	}
+-	SAFE_FREE(tdbfile);
+-
+-	/* no private data */
+-
+-	(*pdb_method)->private_data      = NULL;
+-	(*pdb_method)->free_private_data = NULL;
+-
+-	return NT_STATUS_OK;
++#endif
++NTSTATUS zxs_native_tdb_install(struct pdb_methods **out,const char *location)
++{
++    struct pdb_methods *m;
++    if(out==NULL) return NT_STATUS_INVALID_PARAMETER;
++    *out=NULL;
++    if(!zxs_native_tdb_audit(location)) return NT_STATUS_ACCESS_DENIED;
++    m=talloc(NULL,struct pdb_methods);
++    if(m==NULL) return NT_STATUS_NO_MEMORY;
++    *m=zxs_restricted_methods;
++    *out=m;return NT_STATUS_OK;
+ }
+ 
+ NTSTATUS pdb_tdbsam_init(TALLOC_CTX *ctx)
+ {
+-	return smb_register_passdb(PASSDB_INTERFACE_VERSION, "tdbsam", pdb_init_tdbsam);
+-}
++    return smb_register_passdb(PASSDB_INTERFACE_VERSION,"tdbsam",zxs_native_tdb_install);
++}
+--- a/source3/passdb/passdb.c
++++ b/source3/passdb/passdb.c
+@@ -24,6 +24,8 @@
+ 
+ #include "includes.h"
+ #include "passdb.h"
++#include "param/zxs_runtime.h"
++#include "passdb/zxs_native_tdb.h"
+ #include "system/passwd.h"
+ #include "../libcli/auth/libcli_auth.h"
+ #include "secrets.h"
+@@ -1560,7 +1562,11 @@
+ /*********************************************************************
+ *********************************************************************/
+ 
+-static bool init_samu_from_buffer_v3(struct samu *sampass, uint8_t *buf, uint32_t buflen)
++static bool zxs_empty_sam_string(const char *s,uint32_t n)
++{
++    return n==0 || (n==1 && s!=NULL && s[0]==0);
++}
++static bool zxs_unpack_samu_v4(struct samu *sampass,uint8_t *buf,uint32_t buflen,bool audit)
+ {
+ 
+ 	/* times are stored as 32bit integer
+@@ -1597,12 +1603,12 @@
+ 	uint8_t	*lm_pw_ptr = NULL, *nt_pw_ptr = NULL, *nt_pw_hist_ptr = NULL;
+ 	uint32_t		len = 0;
+ 	uint32_t		lm_pw_len, nt_pw_len, nt_pw_hist_len, hourslen;
+-	uint32_t pwHistLen = 0;
++
+ 	bool ret = True;
+ 	fstring tmp_string;
+ 	bool expand_explicit = lp_passdb_expand_explicit();
+ 
+-	if(sampass == NULL || buf == NULL) {
++	if((sampass == NULL && !audit) || buf == NULL || buflen==0 || buflen>1024U*1024) {
+ 		DEBUG(0, ("init_samu_from_buffer_v3: NULL parameters found!\n"));
+ 		return False;
+ 	}
+@@ -1632,10 +1638,10 @@
+ 		&munged_dial_len, &munged_dial,				/* B */
+ 		&user_rid,						/* d */
+ 		&group_rid,						/* d */
+-		&lm_pw_len, &lm_pw_ptr,					/* B */
+-		&nt_pw_len, &nt_pw_ptr,					/* B */
++		&lm_pw_len, (char **)NULL,					/* B */
++		&nt_pw_len, audit ? (char **)NULL : (char **)&nt_pw_ptr,					/* B */
+ 		/* Change from V1 is addition of password history field. */
+-		&nt_pw_hist_len, &nt_pw_hist_ptr,			/* B */
++		&nt_pw_hist_len, (char **)NULL,			/* B */
+ 		/* Change from V2 is the uint32_t acb_mask */
+ 		&acct_ctrl,						/* d */
+ 		/* Also "remove_me" field was removed. */
+@@ -1646,12 +1652,25 @@
+ 		&logon_count,						/* w */
+ 		&unknown_6);						/* d */
+ 
+-	if (len == (uint32_t) -1)  {
+-		ret = False;
+-		goto done;
+-	}
+-
+-	pdb_set_logon_time(sampass, convert_uint32_t_to_time_t(logon_time), PDB_SET);
++	if (len!=buflen || !zxs_runtime_native_fields(username,username_len,domain,domain_len,acct_desc,acct_desc_len) ||
++        !(zxs_empty_sam_string(nt_username,nt_username_len) || (nt_username_len==username_len && nt_username!=NULL && memcmp(nt_username,username,username_len)==0)) ||
++        !zxs_empty_sam_string(fullname,fullname_len) || !zxs_empty_sam_string(homedir,homedir_len) ||
++        !zxs_empty_sam_string(dir_drive,dir_drive_len) || !zxs_empty_sam_string(logon_script,logon_script_len) ||
++        !zxs_empty_sam_string(profile_path,profile_path_len) || !zxs_empty_sam_string(workstations,workstations_len) ||
++        !zxs_empty_sam_string(comment,comment_len) || !zxs_empty_sam_string(munged_dial,munged_dial_len) ||
++        logoff_time!=0x7fffffffU || kickoff_time!=0x7fffffffU || pass_last_set_time==0 ||
++        pass_last_set_time==0x7fffffffU || pass_last_set_time==0x80000000U ||
++        user_rid!=1000 || group_rid!=513 || acct_ctrl!=ACB_NORMAL || lm_pw_len!=0 || nt_pw_hist_len!=0 ||
++        nt_pw_len!=NT_HASH_LEN || logon_divs!=168 || hours_len!=21 || hourslen!=MAX_HOURS_LEN || hours==NULL) {
++        ret=false; goto done;
++    }
++    for(size_t i=0;i<hours_len;i++) if(hours[i]!=0xff) {ret=false;goto done;}
++    if (pass_must_change_time!=0x7fffffffU) {ret=false;goto done;}
++    /* This single-role installation is explicitly provisioned with no
++     * password deadline; it never inherits a host account_policy.tdb. */
++    if (audit) goto done; /* metadata only; even tdb_unpack skipped credential bytes */
++
++    pdb_set_logon_time(sampass, convert_uint32_t_to_time_t(logon_time), PDB_SET);
+ 	pdb_set_logoff_time(sampass, convert_uint32_t_to_time_t(logoff_time), PDB_SET);
+ 	pdb_set_kickoff_time(sampass, convert_uint32_t_to_time_t(kickoff_time), PDB_SET);
+ 	pdb_set_bad_password_time(sampass, convert_uint32_t_to_time_t(bad_password_time), PDB_SET);
+@@ -1731,35 +1750,10 @@
+ 		}
+ 	}
+ 
+-	pdb_get_account_policy(PDB_POLICY_PASSWORD_HISTORY, &pwHistLen);
+-	if (pwHistLen) {
+-		uint8_t *pw_hist = (uint8_t *)SMB_MALLOC(pwHistLen * PW_HISTORY_ENTRY_LEN);
+-		if (!pw_hist) {
+-			ret = False;
+-			goto done;
+-		}
+-		memset(pw_hist, '\0', pwHistLen * PW_HISTORY_ENTRY_LEN);
+-		if (nt_pw_hist_ptr && nt_pw_hist_len) {
+-			int i;
+-			SMB_ASSERT((nt_pw_hist_len % PW_HISTORY_ENTRY_LEN) == 0);
+-			nt_pw_hist_len /= PW_HISTORY_ENTRY_LEN;
+-			for (i = 0; (i < pwHistLen) && (i < nt_pw_hist_len); i++) {
+-				memcpy(&pw_hist[i*PW_HISTORY_ENTRY_LEN],
+-					&nt_pw_hist_ptr[i*PW_HISTORY_ENTRY_LEN],
+-					PW_HISTORY_ENTRY_LEN);
+-			}
+-		}
+-		if (!pdb_set_pw_history(sampass, pw_hist, pwHistLen, PDB_SET)) {
+-			SAFE_FREE(pw_hist);
+-			ret = False;
+-			goto done;
+-		}
+-		SAFE_FREE(pw_hist);
+-	} else {
+-		pdb_set_pw_history(sampass, NULL, 0, PDB_SET);
+-	}
+-
+-	pdb_set_user_sid_from_rid(sampass, user_rid, PDB_SET);
++	/* No implicit policy database, LM or password history. */
++    if (!pdb_set_pw_history(sampass,NULL,0,PDB_SET)) { ret=false; goto done; }
++
++    pdb_set_user_sid_from_rid(sampass, user_rid, PDB_SET);
+ 	pdb_set_hours_len(sampass, hours_len, PDB_SET);
+ 	pdb_set_bad_password_count(sampass, bad_password_count, PDB_SET);
+ 	pdb_set_logon_count(sampass, logon_count, PDB_SET);
+@@ -1784,6 +1778,7 @@
+ 	SAFE_FREE(munged_dial);
+ 	SAFE_FREE(comment);
+ 	SAFE_FREE(lm_pw_ptr);
++	if (nt_pw_ptr!=NULL) { explicit_bzero(nt_pw_ptr,nt_pw_len); }
+ 	SAFE_FREE(nt_pw_ptr);
+ 	SAFE_FREE(nt_pw_hist_ptr);
+ 	SAFE_FREE(hours);
+@@ -1793,6 +1788,15 @@
+ 
+ /*********************************************************************
+ *********************************************************************/
++
++bool zxs_samu_epoch_v4(uint8_t *buf,uint32_t length)
++{
++    return zxs_unpack_samu_v4(NULL,buf,length,true);
++}
++static bool init_samu_from_buffer_v3(struct samu *sampass,uint8_t *buf,uint32_t length)
++{
++    return zxs_unpack_samu_v4(sampass,buf,length,false);
++}
+ 
+ static uint32_t init_buffer_from_samu_v3 (uint8_t **buf, struct samu *sampass, bool size_only)
+ {
+--- a/source3/passdb/wscript_build
++++ b/source3/passdb/wscript_build
+@@ -1,12 +1,6 @@
+ #!/usr/bin/env python
+ 
+-bld.SAMBA3_MODULE('pdb_tdbsam',
+-                 subsystem='pdb',
+-                 source='pdb_tdb.c',
+-                 deps='samba-util dbwrap tdb-wrap3',
+-                 init_function='',
+-                 internal_module=bld.SAMBA3_IS_STATIC_MODULE('pdb_tdbsam'),
+-                 enabled=bld.SAMBA3_IS_ENABLED_MODULE('pdb_tdbsam'))
++# Dedicated package: the only tdbsam TU is linked directly into pdb.
+ 
+ bld.SAMBA3_MODULE('pdb_ldapsam',
+                  subsystem='pdb',
+--- a/source3/lib/util_tdb.c
++++ b/source3/lib/util_tdb.c
+@@ -216,7 +216,7 @@
+ 				goto no_space;
+ 			*i = IVAL(buf, 0);
+ 			if (! *i) {
+-				*b = NULL;
++				if (b != NULL) { *b = NULL; }
+ 				break;
+ 			}
+ 			len += *i;
+--- a/source3/auth/check_samsec.c
++++ b/source3/auth/check_samsec.c
+@@ -24,6 +24,11 @@
+ #include "auth.h"
+ #include "../libcli/auth/libcli_auth.h"
+ #include "passdb.h"
++#include "param/zxs_runtime.h"
++#include "passdb/machine_sid.h"
++#include "libcli/security/security.h"
++#include <tdb.h>
++#include <fcntl.h>
+ #include "lib/util/memcache.h"
+ 
+ #undef DBGC_CLASS
+@@ -118,6 +123,8 @@
+ 	return status;
+ }
+ 
++#include "zxs_native_request.inc"
++
+ /****************************************************************************
+  Check if a user is allowed to logon at this time. Note this is the
+  servers local time, as logon hours are just specified as a weekly
+--- a/source3/auth/auth_util.c
++++ b/source3/auth/auth_util.c
+@@ -39,6 +39,8 @@
+ #include "rpc_client/util_netlogon.h"
+ #include "source4/auth/auth.h"
+ #include "auth/auth_util.h"
++#include "param/zxs_runtime.h"
++#include "passdb/machine_sid.h"
+ #include "source3/lib/substitute.h"
+ 
+ #undef DBGC_CLASS
+@@ -795,7 +797,8 @@
+ 	const struct auth_user_info_dc *user_info_dc,
+ 	const char *original_user_name,
+ 	uint32_t session_info_flags,
+-	struct auth_session_info **session_info_out)
++	struct auth_session_info **session_info_out,
++	bool only_native_principal)
+ {
+ 	TALLOC_CTX *frame = talloc_stackframe();
+ 	struct auth_session_info *session_info = NULL;
+@@ -971,8 +974,11 @@
+ 		session_info_flags |= AUTH_SESSION_INFO_AUTHENTICATED;
+ 	}
+ 
+-	status = finalize_local_nt_token(session_info->security_token,
+-					 session_info_flags);
++	if (only_native_principal) {
++		status=zxs_finalize_managed_token(session_info->security_token,session_info_flags);
++	} else {
++		status=finalize_local_nt_token(session_info->security_token,session_info_flags);
++	}
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		TALLOC_FREE(frame);
+ 		return status;
+@@ -1279,6 +1285,8 @@
+ 	return NT_STATUS_OK;
+ }
+ 
++#include "zxs_native_token.inc"
++
+ /***************************************************************************
+  Make (and fill) a server_info struct from a 'struct passwd' by conversion
+  to a struct samu
+@@ -1530,7 +1538,7 @@
+ 	status = auth3_session_info_create(mem_ctx, user_info_dc,
+ 					   user_info_dc->info->account_name,
+ 					   session_info_flags,
+-					   session_info);
++					   session_info,false);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		DEBUG(0, ("auth3_session_info_create failed: %s\n",
+ 			  nt_errstr(status)));
+@@ -1611,7 +1619,7 @@
+ 	status = auth3_session_info_create(mem_ctx, user_info_dc,
+ 					   "",
+ 					   session_info_flags,
+-					   session_info);
++					   session_info,false);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		DEBUG(0, ("auth3_session_info_create failed: %s\n",
+ 			  nt_errstr(status)));
+--- a/libcli/auth/ntlm_check.c
++++ b/libcli/auth/ntlm_check.c
+@@ -23,6 +23,7 @@
+ #include "lib/crypto/md4.h"
+ #include "librpc/gen_ndr/netlogon.h"
+ #include "libcli/auth/libcli_auth.h"
++#include <gnutls/gnutls.h>
+ 
+ /****************************************************************************
+  Core of smb password checking routine.
+@@ -344,6 +345,30 @@
+ {
+ 	DATA_BLOB tmp_sess_key;
+ 	const char *upper_client_domain = NULL;
++
++	/* Narrow the existing public routine on this private edition. The
++	 * managed native GENSEC has already decoded the exact v2 response
++	 * via NDR; here no LM/session, altered/empty domain or legacy proof
++	 * is an alternative to its NT field. Use Samba's own v2 verifier. */
++	if (ntlm_auth==NTLM_AUTH_NTLMV2_ONLY) {
++		if (user_sess_key==NULL || lm_sess_key==NULL) return NT_STATUS_LOGON_FAILURE;
++		*user_sess_key=data_blob_null; *lm_sess_key=data_blob_null;
++		if (lanman_auth || stored_lanman!=NULL || stored_nt==NULL ||
++		    lm_response==NULL || lm_response->length!=0 || challenge==NULL ||
++		    challenge->data==NULL || challenge->length!=8 || all_zero(challenge->data,8) ||
++		    nt_response==NULL || nt_response->data==NULL || nt_response->length<48 ||
++		    nt_response->length>UINT16_MAX || username==NULL || client_username==NULL ||
++		    strcmp(username,client_username)!=0 || client_domain==NULL ||
++		    strcmp(client_domain,"ZXSLOCAL")!=0 ||
++		    (logon_parameters & (MSV1_0_CLEARTEXT_PASSWORD_ALLOWED|MSV1_0_ALLOW_MSVCHAPV2))!=0 ||
++		    gnutls_fips140_mode_enabled()!=0) return NT_STATUS_LOGON_FAILURE;
++		if (!smb_pwd_check_ntlmv2(mem_ctx,nt_response,stored_nt->hash,challenge,
++					 client_username,client_domain,user_sess_key) ||
++		    user_sess_key->data==NULL || user_sess_key->length!=16) {
++			data_blob_clear_free(user_sess_key); return NT_STATUS_WRONG_PASSWORD;
++		}
++		return NT_STATUS_OK;
++	}
+ 
+ 	if (ntlm_auth == NTLM_AUTH_DISABLED) {
+ 		DBG_WARNING("ntlm_password_check: NTLM authentication not "
+--- a/source3/auth/token_util.c
++++ b/source3/auth/token_util.c
+@@ -641,8 +641,8 @@
+ 	return NT_STATUS_OK;
+ }
+ 
+-NTSTATUS finalize_local_nt_token(struct security_token *result,
+-				 uint32_t session_info_flags)
++static NTSTATUS finalize_local_nt_token_mode(struct security_token *result,
++				 uint32_t session_info_flags,bool managed_ordinary)
+ {
+ 	struct dom_sid _dom_sid = { 0, };
+ 	struct dom_sid *domain_sid = NULL;
+@@ -696,6 +696,11 @@
+ 			return status;
+ 		}
+ 	}
++
++	/* The paired ordinary SMB principal has a frozen, verified user and
++	 * primary group. No SID mappings, BUILTIN alias creation, host
++	 * privilege DB or winbind lookup may turn it into a host account. */
++	if (managed_ordinary) goto add_ntlm_sid;
+ 
+ 	/* Add in BUILTIN sids */
+ 
+@@ -851,6 +856,7 @@
+ 		unbecome_root();
+ 	}
+ 
++add_ntlm_sid:
+ 	if (session_info_flags & AUTH_SESSION_INFO_NTLM) {
+ 		struct dom_sid tmp_sid = { 0, };
+ 
+@@ -1336,3 +1342,21 @@
+ }
+ 
+ /* END */
++
++NTSTATUS finalize_local_nt_token(struct security_token *result,uint32_t flags)
++{
++	return finalize_local_nt_token_mode(result,flags,false);
++}
++/* Only narrows how an already authenticated native identity receives its
++ * standard groups. It cannot authenticate, add a user, or issue a session. */
++NTSTATUS zxs_finalize_managed_token(struct security_token *result,uint32_t flags)
++{
++	const uint32_t required=AUTH_SESSION_INFO_AUTHENTICATED|AUTH_SESSION_INFO_SIMPLE_PRIVILEGES|
++		AUTH_SESSION_INFO_DEFAULT_GROUPS|AUTH_SESSION_INFO_NTLM|AUTH_SESSION_INFO_UNIX_TOKEN;
++	uint32_t u=0,g=0;
++	const struct dom_sid *d=get_global_sam_sid();
++	if (flags!=required || d==NULL || result==NULL || result->num_sids!=2 || result->sids==NULL ||
++	    !sid_peek_check_rid(d,&result->sids[0],&u) || u!=1000 ||
++	    !sid_peek_check_rid(d,&result->sids[1],&g) || g!=513) return NT_STATUS_INVALID_TOKEN;
++	return finalize_local_nt_token_mode(result,flags,true);
++}
+--- a/source3/smbd/smbXsrv_session.c
++++ b/source3/smbd/smbXsrv_session.c
+@@ -20,6 +20,7 @@
+ 
+ #include "includes.h"
+ #include "smbXsrv_session.h"
++#include "smbd/zxs_business.h"
+ #include "system/filesys.h"
+ #include <tevent.h>
+ #include "lib/util/server_id.h"
+@@ -1768,6 +1769,7 @@
+ 	 * Make sure that no new request will be able to use this session.
+ 	 */
+ 	session->status = NT_STATUS_USER_SESSION_DELETED;
++	zxs_smb_session_retire(session);
+ 
+ 	req = tevent_req_create(mem_ctx, &state,
+ 				struct smb2srv_session_shutdown_state);
+@@ -1882,6 +1884,7 @@
+ 	sconn = session->client->sconn;
+ 	session->client = NULL;
+ 	session->status = NT_STATUS_USER_SESSION_DELETED;
++	zxs_smb_session_retire(session);
+ 
+ 	/*
+ 	 * For SMB2 this is a bit redundant as files are also close
+--- a/source3/smbd/smb2_tcon.c
++++ b/source3/smbd/smb2_tcon.c
+@@ -27,6 +27,10 @@
+ #include "lib/param/loadparm.h"
+ #include "../lib/util/tevent_ntstatus.h"
+ #include "smbd/smbXsrv_session.h"
++#include "smbd/zxs_business.h"
++#include "source3/lib/substitute.h"
++#include "param/zxs_smb_control.h"
++#include "../lib/async_req/async_sock.h"
+ 
+ #undef DBGC_CLASS
+ #define DBGC_CLASS DBGC_SMB2
+@@ -194,6 +198,7 @@
+ 
+ static NTSTATUS smbd_smb2_tree_connect(struct smbd_smb2_request *req,
+ 				       const char *in_path,
++				       const struct zxs_smb_tree_cut *decision,
+ 				       uint8_t *out_share_type,
+ 				       uint32_t *out_share_flags,
+ 				       uint32_t *out_capabilities,
+@@ -291,6 +296,18 @@
+ 		return NT_STATUS_BAD_NETWORK_NAME;
+ 	}
+ 
++	/* Recheck the actual configured service selected by native name handling.
++	 * Only the built-in IPC$ may lack a SQL data-tree selection. */
++	if (decision==NULL) {
++		if (snum!=lp_servicenumber("IPC$")) { return NT_STATUS_BAD_NETWORK_NAME; }
++	} else {
++		const char *actual=lp_const_servicename(snum);
++		uint8_t id[16];
++		if (snum==lp_servicenumber("IPC$") || actual==NULL ||
++		    !zxs_smb_service_id((const uint8_t *)actual,strlen(actual),id) ||
++		    memcmp(decision->share,id,16)!=0) { return NT_STATUS_BAD_NETWORK_NAME; }
++	}
++
+ 	/* Handle non-DFS clients attempting connections to msdfs proxy */
+ 	if (lp_host_msdfs()) {
+ 		char *proxy = lp_msdfs_proxy(talloc_tos(), lp_sub, snum);
+@@ -371,6 +388,10 @@
+ 		return status;
+ 	}
+ 
++	if (decision!=NULL) {
++		tcon->zxs_tree_choice=talloc_memdup(tcon,decision,sizeof(*decision));
++		if (tcon->zxs_tree_choice==NULL) { TALLOC_FREE(tcon); return NT_STATUS_NO_MEMORY; }
++	}
+ 	compat_conn = make_connection_smb2(req,
+ 					tcon, snum,
+ 					"???",
+@@ -514,6 +535,13 @@
+ 
+ struct smbd_smb2_tree_connect_state {
+ 	const char *in_path;
++	struct smbd_smb2_request *native;
++	struct smbXsrv_session *session;
++	struct tevent_req *wait;
++	struct zxs_smb_tree_cut choice;
++	uint8_t share[16];
++	uint32_t seq;
++	int reply;
+ 	uint8_t out_share_type;
+ 	uint32_t out_share_flags;
+ 	uint32_t out_capabilities;
+@@ -522,6 +550,49 @@
+ 	bool disconnect;
+ };
+ 
++static int zxs_tcon_end(struct smbd_smb2_tree_connect_state *s)
++{
++	TALLOC_FREE(s->wait);
++	if (s->reply>=0) { close(s->reply);s->reply=-1; }
++	return 0;
++}
++static bool zxs_tcon_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_tree_connect_state *s=tevent_req_data(req,struct smbd_smb2_tree_connect_state);
++	if (s->wait==NULL) { return false; }
++	zxs_tcon_end(s);tevent_req_nterror(req,NT_STATUS_CANCELLED);return true;
++}
++static NTSTATUS zxs_tcon_continue(struct smbd_smb2_tree_connect_state *s,
++				  const struct zxs_smb_tree_cut *choice)
++{
++	return smbd_smb2_tree_connect(s->native,s->in_path,choice,
++		&s->out_share_type,&s->out_share_flags,&s->out_capabilities,
++		&s->out_maximal_access,&s->out_tree_id,&s->disconnect);
++}
++static void zxs_tcon_selected(struct tevent_req *subreq)
++{
++	struct tevent_req *req=tevent_req_callback_data(subreq,struct tevent_req);
++	struct smbd_smb2_tree_connect_state *s=tevent_req_data(req,struct smbd_smb2_tree_connect_state);
++	NTSTATUS status=NT_STATUS_BAD_NETWORK_NAME;
++	int err=0;bool ready=wait_for_read_recv(subreq,&err);
++	s->wait=NULL;TALLOC_FREE(subreq);
++	/* TCON is dispatched as_root. Do not preserve an elevated credential
++	 * while waiting: re-enter only for the synchronous native continuation. */
++	become_root();
++	if (ready && s->native->session==s->session &&
++	    zxs_smb_session_channel(s->native)>=0 &&
++	    s->session->global->auth_session_info_seqnum==s->seq &&
++	    zxs_smb_tree_read(s->reply,s->share,&s->choice)==0) {
++		struct auth_session_info *info=s->session->global->auth_session_info;
++		set_current_user_info(info->unix_info->sanitized_username,
++			info->unix_info->unix_name,info->info->domain_name);
++		status=zxs_tcon_continue(s,&s->choice);
++	}
++	unbecome_root();
++	zxs_tcon_end(s);
++	if (!tevent_req_nterror(req,status)) { tevent_req_done(req); }
++}
++
+ static struct tevent_req *smbd_smb2_tree_connect_send(TALLOC_CTX *mem_ctx,
+ 					struct tevent_context *ev,
+ 					struct smbd_smb2_request *smb2req,
+@@ -531,6 +602,8 @@
+ 	struct tevent_req *req;
+ 	struct smbd_smb2_tree_connect_state *state;
+ 	NTSTATUS status;
++	const char *leaf=in_path;
++	int channel;
+ 
+ 	req = tevent_req_create(mem_ctx, &state,
+ 				struct smbd_smb2_tree_connect_state);
+@@ -538,21 +611,35 @@
+ 		return NULL;
+ 	}
+ 	state->in_path = in_path;
+-
+-	status = smbd_smb2_tree_connect(smb2req,
+-					state->in_path,
+-					&state->out_share_type,
+-					&state->out_share_flags,
+-					&state->out_capabilities,
+-					&state->out_maximal_access,
+-					&state->out_tree_id,
+-					&state->disconnect);
+-	if (tevent_req_nterror(req, status)) {
+-		return tevent_req_post(req, ev);
+-	}
+-
+-	tevent_req_done(req);
+-	return tevent_req_post(req, ev);
++	state->native=smb2req;state->session=smb2req->session;state->reply=-1;
++	talloc_set_destructor(state,zxs_tcon_end);
++	if (strncmp(leaf,"\\\\",2)==0) {
++		const char *sep=strchr(leaf+2,'\\');
++		if (sep==NULL || sep==leaf+2) { goto no_share; }
++		leaf=sep+1;
++	}
++	channel=zxs_smb_session_channel(smb2req);
++	if (channel<0 || (!smb2req->do_signing && !smb2req->was_encrypted)) { goto no_share; }
++	if (strequal(leaf,"IPC$")) {
++		status=zxs_tcon_continue(state,NULL);
++		if (!tevent_req_nterror(req,status)) { tevent_req_done(req); }
++		return tevent_req_post(req,ev);
++	}
++	if (!zxs_smb_service_id((const uint8_t *)leaf,strlen(leaf),state->share) ||
++	    talloc_reference(state,state->session)==NULL) { goto no_share; }
++	state->seq=state->session->global->auth_session_info_seqnum;
++	state->reply=zxs_smb_tree_ask(channel,state->share);
++	if (state->reply<0) { goto no_share; }
++	state->wait=wait_for_read_send(state,ev,state->reply,false);
++	if (state->wait==NULL || !tevent_req_set_endtime(state->wait,ev,tevent_timeval_current_ofs(10,0))) {
++		zxs_tcon_end(state);goto no_share;
++	}
++	tevent_req_set_cancel_fn(req,zxs_tcon_cancel);
++	tevent_req_set_callback(state->wait,zxs_tcon_selected,req);
++	return req;
++no_share:
++	tevent_req_nterror(req,NT_STATUS_BAD_NETWORK_NAME);
++	return tevent_req_post(req,ev);
+ }
+ 
+ static NTSTATUS smbd_smb2_tree_connect_recv(struct tevent_req *req,

@@ -10,7 +10,7 @@
 int zxs_smb_service_id(const uint8_t *s, size_t n, uint8_t id[16]);
 int zxs_smb_direct_service(const char *name, int browseable, int native_pipes, int host_dfs);
 #define ZXS_SMB_BIND_LEN 128
-#define ZXS_SMB_READY_LEN 212
+#define ZXS_SMB_READY_LEN 277
 int zxs_smb_ctl_claim(int fd);
 int zxs_smb_ctl_read(int fd, uint8_t *buf, size_t size);
 int zxs_smb_ctl_write(int fd,const uint8_t *buf,size_t size);
@@ -19,6 +19,7 @@ int zxs_smb_ctl_hello(int fd,const uint8_t *bound);
 int zxs_smb_ctl_bound(int fd,uint8_t *bound);
 int zxs_smb_ctl_life(int pipe_reader,int timeout);
 #define ZXS_SMB_MAX_ATTEMPTS 32
+#define ZXS_SMB_MAX_SESSIONS 64
 /* No network event-loop call waits for storage. Submission and receive
  * both use MSG_DONTWAIT. Only the original readiness callback receives. */
 int zxs_smb_try_open(int original_control,uint64_t net,uint64_t sk,int64_t *started_msec);
@@ -42,10 +43,25 @@ struct zxs_smb_generation {
     uint64_t generation;
     char login[65];
 };
+int zxs_smb_public_generation(const uint8_t id[ZXS_SMB_CUT_BYTES],struct zxs_smb_generation *out);
 int zxs_smb_cut_ask(int fd,int64_t started,const uint8_t challenge[8]);
 int zxs_smb_cut_take(int fd,const uint8_t challenge[8]);
 int zxs_smb_cut_reply(int fd,const uint8_t challenge[8],const uint8_t identity[ZXS_SMB_CUT_BYTES]);
 int zxs_smb_cut_read(int fd,int64_t started,const uint8_t challenge[8],struct zxs_smb_generation *out);
+/* Business exchange on the same private endpoint only after native final
+ * session_update. These functions carry no authentication material. */
+int zxs_smb_active_send(int fd,const uint8_t challenge[8]);
+int zxs_smb_active_take(int fd,const uint8_t challenge[8]);
+struct zxs_smb_tree_cut {
+    uint8_t share[16],volume[16],setting[16];
+    uint64_t revision;
+    uint8_t mode;
+};
+#define ZXS_SMB_TREE_CUT_BYTES 57
+int zxs_smb_tree_ask(int session,const uint8_t share[16]);
+int zxs_smb_tree_take(int session,int worker,uint8_t share[16]);
+int zxs_smb_tree_reply(int fd,const uint8_t decision[ZXS_SMB_TREE_CUT_BYTES]);
+int zxs_smb_tree_read(int fd,const uint8_t share[16],struct zxs_smb_tree_cut *out);
 /* events: bit 1 readable, bit 2 terminal. Index 0 control, 1 lifetime,
  * then the same bounded list of independent attempt sockets. */
 int zxs_smb_try_wait(int ctl,int lifetime,const int *attempt,size_t n,uint8_t *events);

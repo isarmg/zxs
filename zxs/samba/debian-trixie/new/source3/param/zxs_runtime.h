@@ -13,7 +13,8 @@ static inline bool zxs_fixed_unix_mapping(const struct passwd *pw,const char *na
 {
     return pw!=NULL && pw->pw_name!=NULL && name!=NULL &&
            strcmp(pw->pw_name,"zxs-smb-client")==0 && strcmp(name,pw->pw_name)==0 &&
-           uid!=0 && gid!=0 && uid!=(uid_t)-1 && gid!=(gid_t)-1 &&
+           uid!=0 && gid!=0 && uid!=65534 && gid!=65534 &&
+           uid!=(uid_t)-1 && gid!=(gid_t)-1 &&
            uid==pw->pw_uid && gid==pw->pw_gid;
 }
 struct dom_sid;
@@ -31,5 +32,16 @@ int zxs_runtime_attempt(int transport,int64_t *started_msec);
 bool zxs_runtime_config(const char *name, bool (*section)(const char *, void *),
 			bool (*param)(const char *, const char *, void *), void *ctx);
 bool zxs_runtime_store(dev_t dev, ino_t ino);
+#define ZXS_NATIVE_PARENT "/instance/accountdb"
+#define ZXS_NATIVE_STORE ZXS_NATIVE_PARENT "/passdb.tdb"
+#define ZXS_NATIVE_BACKEND "tdbsam:" ZXS_NATIVE_STORE
+/* Only public, generation-bound metadata. Checking it grants no session.
+ * These operations never take an arbitrary path or return native SAM data. */
+bool zxs_runtime_native_store(dev_t dev, ino_t ino);
+int zxs_runtime_native_pin(char label[64]);
+const char *zxs_runtime_native_login(void);
+bool zxs_runtime_native_epoch(const struct zxs_smb_generation *cut);
+bool zxs_runtime_native_fields(const char *login,size_t login_len,
+    const char *domain,size_t domain_len,const char *description,size_t description_len);
 bool zxs_runtime_domain(const struct dom_sid *actual);
 #endif

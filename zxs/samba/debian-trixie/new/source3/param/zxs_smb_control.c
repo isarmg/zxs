@@ -99,11 +99,11 @@ static bool life_reader(int fd)
            fstat(fd,&st)==0 && S_ISFIFO(st.st_mode) && fstatfs(fd,&fs)==0 &&
            (unsigned long)fs.f_type==PIPEFS_MAGIC;
 }
-enum inbound { ZXS_NO_FD, ZXS_LIFE_FD };
+enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD };
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {
@@ -147,7 +147,8 @@ static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,in
                     }
                 }
                 if(extra || (take!=NULL && (received<0 ||
-                   (kind!=ZXS_LIFE_FD || !life_reader(received)))) ||
+                   (kind==ZXS_LIFE_FD ? !life_reader(received) :
+                    (kind!=ZXS_TREE_FD || zxs_smb_ctl_claim(received)!=0)))) ||
                    (size_t)got!=len){
                     if(received>=0)close(received);
                     return bad();
@@ -217,8 +218,8 @@ int zxs_smb_try_issue(int fd,const uint8_t challenge[8])
 }
 int zxs_smb_try_wait(int ctl,int life,const int *attempt,size_t n,uint8_t *events)
 {
-    if(n>ZXS_SMB_MAX_ATTEMPTS)return bad();
-    struct pollfd p[2+ZXS_SMB_MAX_ATTEMPTS]={0};
+    if(n>ZXS_SMB_MAX_ATTEMPTS+ZXS_SMB_MAX_SESSIONS)return bad();
+    struct pollfd p[2+ZXS_SMB_MAX_ATTEMPTS+ZXS_SMB_MAX_SESSIONS]={0};
     p[0]=(struct pollfd){.fd=ctl,.events=POLLIN|POLLRDHUP};
     p[1]=(struct pollfd){.fd=life,.events=0}; /* ONLY pipe last-write loss */
     for(size_t i=0;i<n;i++)p[i+2]=(struct pollfd){.fd=attempt[i],.events=POLLIN|POLLRDHUP};
@@ -298,14 +299,11 @@ static bool cut_id(const uint8_t id[16])
 {
     uint8_t n=0;for(size_t i=0;i<16;i++)n|=id[i];return n!=0;
 }
-int zxs_smb_cut_read(int fd,int64_t started,const uint8_t challenge[8],struct zxs_smb_generation *out)
+int zxs_smb_public_generation(const uint8_t id[ZXS_SMB_CUT_BYTES],struct zxs_smb_generation *out)
 {
-    uint8_t b[24+ZXS_SMB_CUT_BYTES];const uint8_t *id=b+24;
     static const uint8_t sid_header[]={1,5,0,0,0,0,0,5,21,0,0,0};
     struct zxs_smb_generation tmp={0};
-    if(out==NULL || !within(started,30000))return bad();
-    if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
-    if(memcmp(b,cut_answer,16)!=0 || memcmp(b+16,challenge,8)!=0 ||
+    if(out==NULL || id==NULL ||
        !cut_id(id) || !cut_id(id+16) || !cut_id(id+32) ||
        memcmp(id+56,sid_header,sizeof(sid_header))!=0 || memcmp(id+80,"\xe8\x03\0\0",4)!=0 ||
        id[84]==0 || id[84]>64)return bad();
@@ -322,6 +320,67 @@ int zxs_smb_cut_read(int fd,int64_t started,const uint8_t challenge[8],struct zx
     }
     memcpy(tmp.pool,id,16);memcpy(tmp.account,id+16,16);memcpy(tmp.credential_op,id+32,16);
     memcpy(tmp.sid,id+56,28);
-    if(zxs_smb_try_current(fd,started)!=0)return -1;
+    if (!strcmp(tmp.login,"guest") || !strcmp(tmp.login,"anonymous") ||
+        !strcmp(tmp.login,"root") || !strcmp(tmp.login,"nobody"))return bad();
     *out=tmp;return 0;
+}
+int zxs_smb_cut_read(int fd,int64_t started,const uint8_t challenge[8],struct zxs_smb_generation *out)
+{
+    uint8_t b[24+ZXS_SMB_CUT_BYTES]; struct zxs_smb_generation tmp;
+    if(out==NULL || !within(started,30000))return bad();
+    if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    if(memcmp(b,cut_answer,16)!=0 || memcmp(b+16,challenge,8)!=0 ||
+       zxs_smb_public_generation(b+24,&tmp)!=0 || zxs_smb_try_current(fd,started)!=0)return bad();
+    *out=tmp;return 0;
+}
+
+/* A worker keeps this exact endpoint only in its original live session; no
+ * second control listener, client-chosen user, credential, or database path. */
+static const uint8_t active_tag[16]="ZXS-SAM/ACTIVE1";
+static const uint8_t tree_tag[16]="ZXS-SAM/TREE-1";
+static const uint8_t tree_ok[16]="ZXS-SAM/TRSEL-1";
+int zxs_smb_active_send(int fd,const uint8_t ch[8])
+{
+    uint8_t b[24];memcpy(b,active_tag,16);memcpy(b+16,ch,8);
+    return transfer(fd,b,NULL,sizeof(b),-1,NULL,ZXS_NO_FD,true);
+}
+int zxs_smb_active_take(int fd,const uint8_t ch[8])
+{
+    uint8_t b[24];
+    if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    return !memcmp(b,active_tag,16)&&!memcmp(b+16,ch,8)?0:bad();
+}
+int zxs_smb_tree_ask(int session,const uint8_t share[16])
+{
+    uint8_t b[32];int p[2],rc,e;
+    if(!cut_id(share))return bad();
+    if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)<0)return -1;
+    memcpy(b,tree_tag,16);memcpy(b+16,share,16);
+    rc=transfer(session,b,NULL,sizeof(b),p[1],NULL,ZXS_NO_FD,true);e=errno;close(p[1]);
+    if(rc<0){close(p[0]);errno=e;return -1;}return p[0];
+}
+int zxs_smb_tree_take(int session,int worker,uint8_t share[16])
+{
+    uint8_t b[32];int reply=-1;
+    if(transfer(session,NULL,b,sizeof(b),-1,&reply,ZXS_TREE_FD,true)!=0)return -1;
+    if(memcmp(b,tree_tag,16)||!cut_id(b+16)||zxs_smb_attempt_peer(reply,worker)!=0){
+        close(reply);return bad();
+    }
+    memcpy(share,b+16,16);return reply;
+}
+int zxs_smb_tree_reply(int fd,const uint8_t decision[ZXS_SMB_TREE_CUT_BYTES])
+{
+    uint8_t b[16+ZXS_SMB_TREE_CUT_BYTES];memcpy(b,tree_ok,16);memcpy(b+16,decision,ZXS_SMB_TREE_CUT_BYTES);
+    return transfer(fd,b,NULL,sizeof(b),-1,NULL,ZXS_NO_FD,true);
+}
+int zxs_smb_tree_read(int fd,const uint8_t share[16],struct zxs_smb_tree_cut *out)
+{
+    uint8_t b[16+ZXS_SMB_TREE_CUT_BYTES];struct zxs_smb_tree_cut x={0};
+    if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    if(memcmp(b,tree_ok,16)||!cut_id(share)||memcmp(b+16,share,16)||
+       !cut_id(b+32)||!cut_id(b+48)||(b[72]!=1&&b[72]!=2))return bad();
+    for(size_t i=64;i<72;i++)x.revision=(x.revision<<8)|b[i];
+    if(x.revision==0 || x.revision>INT64_MAX)return bad();
+    memcpy(x.share,share,16);memcpy(x.volume,b+32,16);memcpy(x.setting,b+48,16);
+    x.mode=b[72];*out=x;return 0;
 }

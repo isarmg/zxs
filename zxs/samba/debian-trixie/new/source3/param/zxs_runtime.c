@@ -4,6 +4,7 @@
  * Debian 13 Linux/amd64; not a probe of the system Samba installation. */
 #include "includes.h"
 #include "param/zxs_runtime.h"
+#include "param/zxs_native_public.h"
 #include "param/zxs_receiver.h"
 #include "param/zxs_smb_control.h"
 #include "lib/util/tini.h"
@@ -23,14 +24,14 @@
 #define ZXS_BOUND_BYTES 128
 #define ZXS_LIVE "/instance/smb.conf"
 
-enum { ZXS_FD_ROOT, ZXS_FD_BOUND, ZXS_FD_CFG, ZXS_FD_PRIV, ZXS_FD_STATE, ZXS_FD_COUNT };
+enum { ZXS_FD_ROOT, ZXS_FD_BOUND, ZXS_FD_CFG, ZXS_FD_PRIV, ZXS_FD_STATE, ZXS_FD_ACCOUNT, ZXS_FD_COUNT };
 static const char *const names[ZXS_FD_COUNT] = {
-	"/instance", "domain.bound", "smb.conf", "private", "state"
+	"/instance", "domain.bound", "smb.conf", "private", "state", "accountdb"
 };
 struct selected {
 	int fd[ZXS_FD_COUNT];
 	struct statx original[ZXS_FD_COUNT];
-	struct statx store;
+	struct statx store,account;
 	uint8_t binding[ZXS_BOUND_BYTES];
 };
 /* The supervisor starts this private smbd with one host selection. Its
@@ -41,6 +42,7 @@ static bool active;
 static int control_fd = -1;
 static int lifetime_writer = -1; /* deliberately retained across participating forks */
 static bool qualified;
+static struct zxs_smb_generation audited_slot;
 static bool receiver_sealed;
 static struct zxs_client_role client_role;
 
@@ -83,7 +85,7 @@ static bool still_here(const struct selected *x)
 		if (!observed(x->fd[i],"",AT_EMPTY_PATH,&fd) ||
 		    !observed(parent,names[i],AT_SYMLINK_NOFOLLOW,&name) ||
 		    !identical(&x->original[i],&fd,file) || !identical(&fd,&name,file) ||
-		    (file && !readonly_file(x->fd[i]))) {
+		    ((file || i==ZXS_FD_ACCOUNT) && !readonly_file(x->fd[i]))) {
 			return false;
 		}
 	}
@@ -161,8 +163,22 @@ static bool select_original(void)
 			if (x.fd[i]<0) { goto fail; }
 		}
 	}
+    /* The dedicated credential subtree is root-only at its host origin
+     * and read-only in this daemon. Check its object, not merely a name. */
+    if (x.original[ZXS_FD_ROOT].stx_uid!=0 ||
+        x.original[ZXS_FD_ACCOUNT].stx_mode!=(S_IFDIR|0700) ||
+        x.original[ZXS_FD_ACCOUNT].stx_uid!=0 || x.original[ZXS_FD_ACCOUNT].stx_gid!=0 ||
+        !readonly_file(x.fd[ZXS_FD_ACCOUNT]) ||
+        !observed(x.fd[ZXS_FD_ACCOUNT],"passdb.tdb",AT_SYMLINK_NOFOLLOW,&x.account) ||
+        x.account.stx_mode!=(S_IFREG|0600) || x.account.stx_uid!=0 || x.account.stx_gid!=0 ||
+        x.account.stx_nlink!=1 || x.account.stx_size==0 || x.account.stx_size>64U*1024*1024 ||
+        x.account.stx_mnt_id!=x.original[ZXS_FD_ACCOUNT].stx_mnt_id) {goto fail;}
+    for(i=0;i<ZXS_FD_ACCOUNT;i++) {
+        if (entity(&x.original[ZXS_FD_ACCOUNT],&x.original[i]) ||
+            entity(&x.account,&x.original[i])) {goto fail;}
+    }
 	if (!observed(x.fd[ZXS_FD_PRIV],"secrets.tdb",AT_SYMLINK_NOFOLLOW,&x.store) ||
-	    !S_ISREG(x.store.stx_mode) || (x.store.stx_mode&07777)!=0600 ||
+	    entity(&x.account,&x.store) || !S_ISREG(x.store.stx_mode) || (x.store.stx_mode&07777)!=0600 ||
 	    x.store.stx_nlink!=1 || x.store.stx_size==0 ||
 	    x.store.stx_mnt_id!=x.original[ZXS_FD_PRIV].stx_mnt_id ||
 	    entity(&x.original[ZXS_FD_PRIV],&x.original[ZXS_FD_STATE]) ||
@@ -215,6 +231,56 @@ bool zxs_runtime_store(dev_t dev, ino_t ino)
 		held.store.stx_dev_major==(unsigned)major(dev) &&
 		held.store.stx_dev_minor==(unsigned)minor(dev);
 }
+bool zxs_runtime_native_store(dev_t dev,ino_t ino)
+{
+    struct statx current;
+    return zxs_runtime_storage_live() && record_intact() &&
+        observed(held.fd[ZXS_FD_ACCOUNT],"passdb.tdb",AT_SYMLINK_NOFOLLOW,&current) &&
+        identical(&held.account,&current,true) && current.stx_ino==ino &&
+        current.stx_dev_major==(unsigned)major(dev) && current.stx_dev_minor==(unsigned)minor(dev);
+}
+/* Obtain a temporary path-only pin, not a raw data read. Use the original
+ * procfs magic link to let the native TDB opener consume only this inode,
+ * so it cannot read even a header from a same-named replacement. Neither
+ * the pin nor a TDB fd is left in the listening parent after the audit. */
+int zxs_runtime_native_pin(char label[64])
+{
+    int fd,proc,n; struct statx got;struct statfs fs;
+    if (label==NULL || !zxs_runtime_storage_live() || !record_intact()) return -1;
+    fd=openat(held.fd[ZXS_FD_ACCOUNT],"passdb.tdb",O_PATH|O_NOFOLLOW|O_CLOEXEC);
+    if(fd<0) return -1;
+    proc=open("/proc/self/fd",O_PATH|O_DIRECTORY|O_CLOEXEC);
+    if(proc<0 || fstatfs(proc,&fs)!=0 || (unsigned long)fs.f_type!=PROC_SUPER_MAGIC ||
+       !observed(fd,"",AT_EMPTY_PATH,&got) || !identical(&got,&held.account,true) ||
+       !readonly_file(fd)) {if(proc>=0) close(proc);close(fd);return -1;}
+    close(proc);
+    n=snprintf(label,64,"/proc/self/fd/%d",fd);
+    if(n<=0 || n>=64) {close(fd);return -1;}
+    return fd;
+}
+const char *zxs_runtime_native_login(void)
+{
+    return zxs_runtime_storage_live() ? audited_slot.login : NULL;
+}
+bool zxs_runtime_native_epoch(const struct zxs_smb_generation *c)
+{
+    struct statx current;
+    /* The asynchronous SESSION_SETUP completion is back in the native
+     * as-root scope. Check the still-selected, read-only original name,
+     * not just two agreeing public copies of its generation. */
+    return c!=NULL && zxs_runtime_storage_live() && record_intact() &&
+        observed(held.fd[ZXS_FD_ACCOUNT],"passdb.tdb",AT_SYMLINK_NOFOLLOW,&current) &&
+        identical(&held.account,&current,true) &&
+        memcmp(c->pool,audited_slot.pool,16)==0 && memcmp(c->account,audited_slot.account,16)==0 &&
+        memcmp(c->credential_op,audited_slot.credential_op,16)==0 &&
+        c->generation==audited_slot.generation && memcmp(c->sid,audited_slot.sid,28)==0 &&
+        memcmp(c->login,audited_slot.login,sizeof(c->login))==0;
+}
+bool zxs_runtime_native_fields(const char *login,size_t nl,const char *domain,size_t nd,
+                               const char *description,size_t ns)
+{
+    return qualified && zxs_native_public_fields(&audited_slot,held.binding+32,login,nl,domain,nd,description,ns);
+}
 bool zxs_runtime_domain(const struct dom_sid *s)
 {
 	const uint8_t *b=held.binding+104;
@@ -248,21 +314,24 @@ bool zxs_runtime_storage_live(void)
 }
 bool zxs_runtime_connect_storage(void)
 {
-	static const uint8_t first_generation[8]={0,0,0,0,0,0,0,1};
+	uint8_t identity[ZXS_SMB_CUT_BYTES];
+	struct zxs_smb_generation selected_slot;
 	uint8_t reply[ZXS_SMB_READY_LEN];
 	if (qualified || lifetime_writer>=0 || control_fd<0 || !record_intact()) { return false; }
 	lifetime_writer=zxs_smb_ctl_hello(control_fd,held.binding);
 	if (lifetime_writer<0 ||
 	    zxs_smb_ctl_read(control_fd,reply,sizeof(reply))!=0 ||
-	    memcmp(reply,"ZXS-SAM/READY-1",16)!=0 ||
+	    memcmp(reply,"ZXS-SAM/READY-2",16)!=0 ||
 	    memcmp(reply+16,held.binding,sizeof(held.binding))!=0 ||
-	    !nonzero(reply+144,16) || !nonzero(reply+160,16) ||
-	    memcmp(reply+176,first_generation,8)!=0 ||
 	    reply[184]!=1 || reply[185]!=5 ||
 	    memcmp(reply+186,held.binding+106,22)!=0 || IVAL(reply,208)!=1000 ||
 	    !record_intact() || zxs_smb_ctl_live(control_fd)!=0) {
 		return false;
 	}
+    memcpy(identity,held.binding+16,16);
+    memcpy(identity+16,reply+144,sizeof(identity)-16);
+    if (zxs_smb_public_generation(identity,&selected_slot)!=0) { return false; }
+    audited_slot=selected_slot;
 	client_role.parent=getpid();
 	qualified=true;
 	return true;

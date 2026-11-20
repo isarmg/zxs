@@ -7,8 +7,8 @@ use crate::sqlite_install::{bad,request::Id};
 use rustix::fs::{Mode,OFlags,RenameFlags,fchmod,openat,renameat_with};
 use std::{ffi::CStr,fs::File,io::{self,Write},thread,time::{Duration,Instant},os::unix::{ffi::OsStrExt,fs::FileExt},process::{Child,Command,Stdio}};
 
-const MIDDLE:&[&[u8]]=&[b"private",b"state",b"smb.conf",b".domain.bound.new"];
-const END:&[&[u8]]=&[b"private",b"state",b"smb.conf",b"domain.bound"];
+const MIDDLE:&[&[u8]]=&[b"private",b"state",b"smb.conf",b"accountdb",b".domain.bound.new"];
+const END:&[&[u8]]=&[b"private",b"state",b"smb.conf",b"accountdb",b"domain.bound"];
 #[derive(Copy,Clone)] enum Name{Stage,Bound}
 impl Name{fn name(self)->&'static CStr{match self{Self::Stage=>c".domain.bound.new",Self::Bound=>c"domain.bound"}}}
 pub(super) fn hex_id(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}

@@ -1,6 +1,6 @@
 //! A readonly cut of one explicitly selected, offline SYSTEM. No remote volume
 //! paths, credentials, network domains or proposed catalogue choices are inputs.
-use super::{PairRequest,History,Id};
+use super::Id;
 use crate::sqlite_install::{bad,catalog::Canonical,engine::{self,Access},markers::SystemMark,originals::{HeldRoot,LockedSystem},reservation::Existing};
 use rusqlite::{params,Transaction};
 use std::{io,os::unix::ffi::OsStrExt};
@@ -65,10 +65,4 @@ pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&
 }
 pub(super) fn original_pool(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<()>{
     with_origin(pool,init,locked,|_|Ok(()))
-}
-impl PairRequest {
-    /// Exact historical result or absence. Neither issues a maintenance grant.
-    pub(in crate::sqlite_install) fn observe_offline(&self,locked:&LockedSystem)->io::Result<History>{
-        with_origin(&self.pool,&self.init,locked,|tx|self.original_after_init(tx))
-    }
 }

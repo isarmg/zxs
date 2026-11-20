@@ -1,8 +1,8 @@
-//! The two explicit stages of first enrollment share one local CLI. An
-//! invocation never falls through from lookup into domain allocation, issues
-//! only this fixed product pair, and has no input for a password or a SID.
-use super::{domain::{create_layout,provision_fresh_domain,SelectedSetup},publish::{Session,Start},History};
-use crate::{path_rules::Kind,sqlite_install::{approval,bad,id,request::Id}};
+//! Fixed foreground setup and role-specific resets. Neither a bare SID,
+//! password, alternate program/path nor arbitrary switch can be supplied.
+use super::{Id,bad,domain::{create_layout,provision_fresh_domain},native_run::{self,Intent,Role},
+    native_sql::{Original,transaction::ResultRow,web_reset}};
+use crate::{path_rules::Kind,sqlite_install::id};
 use std::{ffi::{OsStr,OsString},io,path::PathBuf};
 
 #[derive(Debug)]
@@ -10,14 +10,10 @@ pub(crate) struct Setup(Form);
 #[derive(Debug)]
 enum Form{
     Layout{instance:Id,reference:Id},
-    Pool{system:PathBuf,pool:Id,init:Id,instance:Id,action:Action},
+    Provision{system:PathBuf,pool:Id,init:Id,instance:Id,op:Id,reference:Id},
+    Smb(native_run::Selection),
+    Web(web_reset::Selection),
 }
-#[derive(Debug)]
-enum Action{
-    Provision{op:Id,reference:Id},
-    Enroll{domain:Id,op:Id,reference:Id,web:Vec<u8>,smb:Vec<u8>,receipt_only:bool},
-}
-
 fn value(it:&mut impl Iterator<Item=OsString>,flag:&str)->Result<OsString,&'static str>{
     if it.next().as_deref()!=Some(OsStr::new(flag)){return Err("expected named setup fields in the displayed order");}
     it.next().ok_or("missing setup field")
@@ -29,12 +25,27 @@ fn name(it:&mut impl Iterator<Item=OsString>,flag:&str)->Result<Vec<u8>,&'static
     let s=value(it,flag)?;let b=s.as_encoded_bytes();
     if !super::login(b){return Err("expected a bounded lowercase ASCII login name");}Ok(b.to_vec())
 }
+fn generation(it:&mut impl Iterator<Item=OsString>)->Result<i64,&'static str>{
+    let v=value(it,"--previous-generation")?;
+    let t=v.to_str().ok_or("expected canonical positive decimal generation")?;
+    t.parse::<i64>().ok().filter(|n|(1..i64::MAX).contains(n)&&n.to_string()==t).ok_or("expected the exact prior, incrementable generation")
+}
+fn intent(it:&mut impl Iterator<Item=OsString>,resume:bool)->Result<Intent,&'static str>{
+    match it.next(){
+        None=>Ok(Intent::New),
+        Some(f) if f=="--receipt-only"&&it.next().is_none()=>Ok(Intent::Lookup),
+        Some(f) if resume&&f=="--resume"&&it.next().is_none()=>Ok(Intent::Resume),
+        _=>Err("one final explicit --receipt-only or supported --resume only"),
+    }
+}
 impl Setup{
     pub(crate) fn parse(it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        let mut it=it.peekable();
-        let mode=it.next().ok_or("choose provision or enroll")?;
-        if mode!="provision"&&mode!="enroll"{return Err("choose provision or enroll");}
-        if mode=="provision" && it.peek().is_some_and(|f|f=="--create-layout"){
+        let mut it=it.peekable();let m=it.next().ok_or("choose provision, enroll, reset-web or reset-smb")?;
+        let mode=m.to_str().ok_or("invalid setup command")?;
+        if !["provision","enroll","reset-web","reset-smb"].contains(&mode){
+            return Err("choose provision, enroll, reset-web or reset-smb");
+        }
+        if mode=="provision"&&it.peek().is_some_and(|v|v=="--create-layout"){
             it.next();let instance=key(&mut it,"--instance")?;let reference=key(&mut it,"--approval")?;
             if it.next().is_some(){return Err("layout accepts only its instance and approval reference");}
             return Ok(Self(Form::Layout{instance,reference}));
@@ -42,102 +53,97 @@ impl Setup{
         let system=PathBuf::from(value(&mut it,"--system")?);
         Kind::StorageRoot.check_path(system.as_os_str().as_encoded_bytes())?;
         if system.to_str().is_none(){return Err("SYSTEM is not losslessly representable by the SQLite VFS");}
-        let pool=key(&mut it,"--pool")?;let init=key(&mut it,"--init")?;let instance=key(&mut it,"--instance")?;
-        let action=if mode=="provision"{
+        let pool=key(&mut it,"--pool")?;let init=key(&mut it,"--init")?;
+        if mode=="reset-web"{
+            let setup=key(&mut it,"--setup-op")?;let op=key(&mut it,"--op")?;let reference=key(&mut it,"--approval")?;
+            let account=key(&mut it,"--web-account")?;let previous=key(&mut it,"--previous-op")?;
+            let generation=generation(&mut it)?;let lookup=intent(&mut it,false)?==Intent::Lookup;
+            return Ok(Self(Form::Web(web_reset::Selection{system,pool,init,setup,op,reference,account,previous,generation,lookup})));
+        }
+        let instance=key(&mut it,"--instance")?;
+        if mode=="provision"{
             let op=key(&mut it,"--op")?;let reference=key(&mut it,"--approval")?;
             if init==op||it.next().is_some(){return Err("provision requires its own operation and no other fields");}
-            Action::Provision{op,reference}
+            return Ok(Self(Form::Provision{system,pool,init,instance,op,reference}));
+        }
+        let provision=key(&mut it,"--domain-op")?;
+        let setup=if mode=="reset-smb"{Some(key(&mut it,"--setup-op")?)}else{None};
+        let op=key(&mut it,"--op")?;let reference=key(&mut it,"--approval")?;
+        let role=if let Some(setup)=setup{
+            let account=key(&mut it,"--smb-account")?;let smb=name(&mut it,"--smb-login")?;
+            let previous=key(&mut it,"--previous-op")?;let generation=generation(&mut it)?;
+            if !super::distinct_roles(&[],&smb){return Err("not the single ordinary SMB login name");}
+            Role::Reset{setup,account,previous,generation,smb}
         }else{
-            let domain=key(&mut it,"--domain-op")?;let op=key(&mut it,"--op")?;let reference=key(&mut it,"--approval")?;
             let web=name(&mut it,"--web-login")?;let smb=name(&mut it,"--smb-login")?;
-            if init==domain||op==init||op==domain||!super::distinct_roles(&web,&smb){
-                return Err("require distinct original operations and two different non-guest protocol roles");}
-            let receipt_only=match it.next(){None=>false,Some(f) if f=="--receipt-only"&&it.next().is_none()=>true,
-                _=>return Err("only the final --receipt-only flag is accepted")};
-            Action::Enroll{domain,op,reference,web,smb,receipt_only}
-        };Ok(Self(Form::Pool{system,pool,init,instance,action}))
+            if !super::distinct_roles(&web,&smb){return Err("expected two different non-guest protocol names");}
+            Role::Birth{web,smb}
+        };
+        if init==provision||op==init||op==provision{return Err("select distinct original operations");}
+        let intent=intent(&mut it,true)?;
+        Ok(Self(Form::Smb(native_run::Selection{system,pool,init,instance,provision,op,reference,role,intent})))
     }
     pub(crate) fn run(self)->io::Result<(u8,String)>{
-        let (system,pool,init,instance,action)=match self.0{
+        match self.0{
             Form::Layout{instance,reference}=>{
                 create_layout(instance,reference)?;
-                return Ok((0,format!("layout=prepared instance={}; no pool, SAM domain, accounts or service changed",hex(&instance))));
+                Ok((0,format!("layout=prepared instance={}; no pool, SAM domain, accounts or service changed",hex(&instance))))
             }
-            Form::Pool{system,pool,init,instance,action}=>(system,pool,init,instance,action),
-        };
-        match action{
-            Action::Provision{op,reference}=>{
-                // No alternative location, imported domain, replacement, default
-                // permission or prior nonempty instance accepted.
-                let _=provision_fresh_domain(&system,pool,init,instance,op,reference)?;
+            Form::Provision{system,pool,init,instance,op,reference}=>{
+                provision_fresh_domain(&system,pool,init,instance,op,reference)?;
                 Ok((0,format!("domain-binding=confirmed pool={} instance={} domain_op={}; no accounts or service started",
                     hex(&pool),hex(&instance),hex(&op))))
             }
-            Action::Enroll{domain,op,reference,web,smb,receipt_only:true}=>{
-                // No credential policy/DSO, KDF budget, secret-interaction
-                // channel, approval for a write, or RW connection on this arm.
-                let selected=SelectedSetup::select(&system,pool,init,instance,domain)?;
-                let(uid,gid)=selected.storage_identity();approval::drop_to_storage(uid,gid)?;
-                let installed=selected.after_drop()?;let(_,history)=installed.history(op,reference,&web,&smb)?;
-                receipt(history,&op,Outcome::Lookup)
+            Form::Smb(selection)=>{
+                let id=selection.op;
+                let role=if matches!(&selection.role,Role::Birth{..}){"pair"}else{"smb-reset"};
+                receipt(&id,role,native_run::run(selection)?)
             }
-            Action::Enroll{domain,op,reference,web,smb,receipt_only:false}=>{
-                let mut session=Session::select(&system,pool,init,instance,domain)?;
-                let (history,outcome)=match session.original_or_confirm(op,reference,&web,&smb)?{
-                    Start::Original(h)=>(h,Outcome::Lookup),
-                    Start::New(order)=>(order.complete()?,Outcome::Created),
+            Form::Web(selection)=>{
+                let id=selection.op;
+                let row=match selection.run()?{
+                    Original::Absent=>Original::Absent,
+                    Original::Committed(n)=>Original::Committed(ResultRow::Reset(n)),
+                    Original::Pending(_)=>return Err(bad("Web reset cannot be a native pending order")),
                 };
-                receipt(history,&op,outcome)
+                receipt(&id,"web-reset",row)
             }
         }
     }
 }
-enum Outcome{Lookup,Created}
 fn hex(x:&Id)->String{x.iter().map(|b|format!("{b:02x}")).collect()}
-fn receipt(h:History,op:&Id,action:Outcome)->io::Result<(u8,String)>{
-    match(h,action){
-        (History::Absent,Outcome::Lookup)=>Ok((1,format!("pair=absent setup_op={}; no passwords requested, nothing changed",hex(op)))),
-        (History::Absent,Outcome::Created)=>Err(bad("no original receipt after the setup attempt; query the same operation")),
-        (History::Committed{web,smb},outcome)=>Ok((0,format!("pair={} setup_op={} web_account={} smb_account={}; not a login or file-access check",
-            match outcome{Outcome::Lookup=>"original",Outcome::Created=>"confirmed"},hex(op),hex(&web),hex(&smb)))),
-    }
+fn receipt(op:&Id,role:&str,h:Original<ResultRow>)->io::Result<(u8,String)>{
+    let r=match h{
+        Original::Absent=>(1,format!("{role}=absent op={}; no effect is confirmed",hex(op))),
+        Original::Pending(_)=>(1,format!("{role}=pending op={}; not active; only an explicitly authorized original resume may advance it",hex(op))),
+        Original::Committed(ResultRow::Setup(ids))=>(0,format!("pair=confirmed op={} web_account={} smb_account={}; not a login check",
+            hex(op),hex(&ids.web_value()),hex(&ids.smb_value()))),
+        Original::Committed(ResultRow::Reset(generation))=>(0,format!("{role}=confirmed op={} generation={generation}; not a login check",hex(op))),
+    };Ok(r)
 }
 
 #[cfg(test)]
 mod tests{
     use super::*;
     fn args(s:&str)->impl Iterator<Item=OsString>+'_{s.split_ascii_whitespace().map(OsString::from)}
-    fn base()->String{format!("--system /pool/system --pool {} --init {} --instance {}",
-        "01".repeat(16),"02".repeat(16),"03".repeat(16))}
-    fn enroll()->String{format!("enroll {} --domain-op {} --op {} --approval {} --web-login web.admin --smb-login network.user",
-        base(),"04".repeat(16),"05".repeat(16),"06".repeat(16))}
-    #[test]fn the_three_paths_are_explicit_and_never_accept_bare_passwords_or_sids(){
-        let p=format!("provision {} --op {} --approval {}",base(),"04".repeat(16),"06".repeat(16));
-        assert!(matches!(Setup::parse(args(&p)).unwrap().0,Form::Pool{action:Action::Provision{..},..}));
-        assert!(matches!(Setup::parse(args(&enroll())).unwrap().0,Form::Pool{action:Action::Enroll{receipt_only:false,..},..}));
-        assert!(matches!(Setup::parse(args(&format!("{} --receipt-only",enroll()))).unwrap().0,Form::Pool{action:Action::Enroll{receipt_only:true,..},..}));
-        for bad in [format!("{p} --receipt-only"),format!("{p} --import-domain any"),format!("{} --password test",enroll()),
-            format!("{} --sid S-1-5-21-1-2-3-1000",enroll()),format!("{} --receipt-only --receipt-only",enroll()),
-            enroll().replace("network.user","guest"),enroll().replace("network.user","web.admin"),
-            enroll().replace("0404","0202"),enroll().replace("0505","0404"),
-            enroll().replace("/pool/system","/pool/../pool"),enroll().replace("0606","0000"),enroll().replace("--web-login","--other")]{
-            assert!(Setup::parse(args(&bad)).is_err());
+    fn k(n:u8)->String{hex(&[n;16])}
+    fn root()->String{format!("--system /pool/system --pool {} --init {}",k(1),k(2))}
+    fn view()->String{format!("{} --instance {} --domain-op {}",root(),k(3),k(4))}
+    #[test]fn role_actions_never_accept_passwords_or_alternate_targets(){
+        let birth=format!("enroll {} --op {} --approval {} --web-login web.admin --smb-login files.user",view(),k(5),k(6));
+        let smb=format!("reset-smb {} --setup-op {} --op {} --approval {} --smb-account {} --smb-login files.user --previous-op {} --previous-generation 1",
+            view(),k(5),k(7),k(8),k(9),k(5));
+        let web=format!("reset-web {} --setup-op {} --op {} --approval {} --web-account {} --previous-op {} --previous-generation 1",
+            root(),k(5),k(7),k(8),k(9),k(5));
+        for form in [&birth,&smb,&web]{
+            assert!(Setup::parse(args(form)).is_ok());
+            assert!(Setup::parse(args(&format!("{form} --receipt-only"))).is_ok());
+            assert!(Setup::parse(args(&format!("{form} --password ignore"))).is_err());
+            assert!(Setup::parse(args(&format!("{form} --sid 0000"))).is_err());
         }
-    }
-    #[test]fn layout_has_no_path_pool_service_or_identity_override(){
-        let s=format!("provision --create-layout --instance {} --approval {}","03".repeat(16),"06".repeat(16));
-        assert!(matches!(Setup::parse(args(&s)).unwrap().0,Form::Layout{..}));
-        for tail in [" --system /chosen"," --uid 0"," --mode 777"," --overwrite"," --receipt-only"]{
-            assert!(Setup::parse(args(&format!("{s}{tail}"))).is_err());
-        }
-        assert!(Setup::parse(args(&s.replace("provision","enroll"))).is_err());
-    }
-    #[test]fn exact_absence_is_not_success_and_never_claims_two_new_accounts(){
-        let op=[32;16];let a=[1;16];let b=[2;16];
-        assert_eq!(receipt(History::Absent,&op,Outcome::Lookup).unwrap().0,1);
-        assert!(receipt(History::Absent,&op,Outcome::Created).is_err());
-        let older=receipt(History::Committed{web:a,smb:b},&op,Outcome::Lookup).unwrap();
-        let new=receipt(History::Committed{web:a,smb:b},&op,Outcome::Created).unwrap();
-        assert_eq!((older.0,new.0),(0,0));assert!(older.1.starts_with("pair=original "));assert!(new.1.starts_with("pair=confirmed "));
+        assert!(Setup::parse(args(&format!("{smb} --resume"))).is_ok());
+        assert!(Setup::parse(args(&format!("{web} --resume"))).is_err());
+        assert!(Setup::parse(args(&smb.replace("--previous-generation 1","--previous-generation 01"))).is_err());
+        assert!(Setup::parse(args(&birth.replace("files.user","guest"))).is_err());
     }
 }

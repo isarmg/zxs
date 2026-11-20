@@ -12,7 +12,7 @@ pub(crate) struct WorkReceipt{pub(crate) file:FileId,pub(crate) save:OperationId
     pub(crate) bytes:u64,pub(crate) sha256:[u8;32]}
 impl From<Spec> for WorkReceipt{fn from(x:Spec)->Self{Self{file:x.file,save:x.op,revision:1,bytes:x.bytes,sha256:x.content_sha}}}
 #[derive(Clone,Copy,Eq,PartialEq)]
-struct Row{done:bool,actor:AccountId,auth:OperationId,share:ShareId,mode:OperationId,spec:Spec,attempt:i64,previous:Option<OperationId>,mask:u8}
+struct Row{done:bool,actor:AccountId,auth:OperationId,generation:i64,share:ShareId,mode:OperationId,spec:Spec,attempt:i64,previous:Option<OperationId>,mask:u8}
 /// Only the live writer below, after the reservation has actually committed,
 /// can grant its two exact role pairs to the native writer.
 pub(crate) struct Reserved<'a>{installed:&'a Installed,spec:Spec,kept:&'a Retained}
@@ -20,9 +20,9 @@ impl Reserved<'_>{pub(crate) fn retained(&self)->&Retained{self.kept}
     pub(crate) fn parts(&self)->(&Installed,Spec){(self.installed,self.spec)}}
 
 fn request(b:&Birth,x:Row)->io::Result<[u8;32]>{
-    if b.pool!=x.spec.pool||b.file!=x.spec.file{return Err(invalid("working bytes do not belong to this FILE"));}
+    if x.generation<1||b.pool!=x.spec.pool||b.file!=x.spec.file{return Err(invalid("working bytes do not belong to this FILE"));}
     let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/FIRST-WORK\0")?;
-    for id in [b.pool.0,x.spec.op.0,x.actor.0,x.auth.0]{h.update(&id)?;}h.update(&1u64.to_be_bytes())?;
+    for id in [b.pool.0,x.spec.op.0,x.actor.0,x.auth.0]{h.update(&id)?;}h.update(&x.generation.to_be_bytes())?;
     for id in [x.share.0,x.mode.0,b.volume.0,b.operation.0,b.entry.0,b.file.0,b.history.0,b.branch.0]{h.update(&id)?;}
     h.update(&0u64.to_be_bytes())?; // exact unborn business revision; all attempts here are manual
     h.update(&x.attempt.to_be_bytes())?;h.update(&[u8::from(x.previous.is_some())])?;
@@ -30,13 +30,13 @@ fn request(b:&Birth,x:Row)->io::Result<[u8;32]>{
     h.update(&x.spec.bytes.to_be_bytes())?;h.update(&x.spec.content_sha)?;h.update(&x.spec.directory_sha)?;Ok(h.finish())
 }
 fn original(db:&Connection,b:&Birth,op:OperationId)->io::Result<Option<Row>>{
-    let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,w.file_id,w.share_id,w.setting_op,w.auth_op,w.logical_bytes,w.content_sha,w.directory_sha,r.volume_id,m.share_id,m.mode,a.smb_id,k.credential_op,w.attempt_no,w.previous_save,w.retained_mask FROM main.operation o LEFT JOIN main.first_work w ON w.save_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=w.share_id LEFT JOIN main.share_mode m ON m.change_op=w.setting_op LEFT JOIN main.smb_password k ON k.credential_op=w.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
+    let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,w.file_id,w.share_id,w.setting_op,w.auth_op,w.logical_bytes,w.content_sha,w.directory_sha,r.volume_id,m.share_id,m.mode,a.smb_id,k.credential_op,w.attempt_no,w.previous_save,w.retained_mask,k.generation FROM main.operation o LEFT JOIN main.first_work w ON w.save_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=w.share_id LEFT JOIN main.share_mode m ON m.change_op=w.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=w.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
     s.bind_bytes(1,&op.0)?;
     match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("cannot select working original"));}}
     if s.integer(0)?!=6||s.array::<16>(4)?!=b.file.0{return Err(invalid("operation does not belong to this working FILE"));}
     let done=match s.byte(1)?{0=>false,1=>true,_=>return Err(invalid("unknown working state"))};
     let len=u64::try_from(s.integer(8)?).map_err(|_|invalid("negative working extent"))?;
-    let x=Row{done,actor:AccountId(s.array(2)?),auth:OperationId(s.array(7)?),share:ShareId(s.array(5)?),
+    let x=Row{done,actor:AccountId(s.array(2)?),auth:OperationId(s.array(7)?),generation:s.integer(19)?,share:ShareId(s.array(5)?),
         mode:OperationId(s.array(6)?),attempt:s.integer(16)?,previous:if unsafe{sqlite3_column_type(s.0,17)}==5{None}else{Some(OperationId(s.array(17)?))},mask:s.byte(18)?,spec:Spec::checked(b.pool,b.file,op,len,s.array(9)?,s.array(10)?)?};
     if x.attempt<1||x.mask>15||(x.attempt==1)!=(x.previous.is_none())||(x.previous.is_none()&&x.mask!=0)||s.array::<16>(11)?!=b.volume.0||s.array::<16>(12)?!=x.share.0||s.byte(13)?!=2||
         s.array::<16>(14)?!=x.actor.0||s.array::<16>(15)?!=x.auth.0||request(b,x)?!=s.array::<32>(3)?{
@@ -63,14 +63,14 @@ pub(super) fn membership(db:&Connection,_:&Catalog,b:&Birth)->io::Result<(Option
     Ok((by_file(db,b)?.map(|x|(x.spec,x.done)),retained(db,b)?))
 }
 fn replaceable(db:&Connection,c:&Catalog,x:Row)->io::Result<bool>{
-    Ok(!x.done&&super::share_mode::current(db,c,x.share)?.op!=x.mode)
+    Ok(!x.done&&(super::share_mode::current(db,c,x.share)?.op!=x.mode||super::Credential::current(db,c)?.op!=x.auth))
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]
 pub(in crate::system::reader) enum Cut{Reserved,BytesSynced}
 impl Tree<'_,'_>{
     fn writer_row(&self,spec:Spec)->Row{
-        Row{done:false,actor:self.session.original.account,auth:self.session.original.op,
+        Row{done:false,actor:self.session.original.account,auth:self.session.original.op,generation:self.session.original.generation,
             share:self.setting.share,mode:self.setting.op,spec,attempt:1,previous:None,mask:0}
     }
     fn match_input(&self,seen:Row,spec:Spec)->io::Result<Row>{

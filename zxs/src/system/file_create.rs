@@ -18,12 +18,12 @@ impl From<&Birth> for NewFile{fn from(b:&Birth)->Self{Self{file:b.file,entry:b.e
 #[derive(PartialEq,Eq)]
 struct Origin{committed:bool,actor:AccountId,auth:OperationId,share:ShareId,mode:OperationId,birth:Birth}
 
-fn request(pool:PoolId,op:OperationId,actor:AccountId,auth:OperationId,share:ShareId,mode:OperationId,volume:VolumeId,name:&str)->io::Result<[u8;32]>{
+fn request(pool:PoolId,op:OperationId,actor:AccountId,auth:OperationId,generation:i64,share:ShareId,mode:OperationId,volume:VolumeId,name:&str)->io::Result<[u8;32]>{
     display::component(name.as_bytes(),222)?;
-    if [pool.0,op.0,actor.0,auth.0,share.0,mode.0,volume.0].contains(&[0;16]){return Err(invalid("missing FILE creation origin"));}
+    if generation<=0||[pool.0,op.0,actor.0,auth.0,share.0,mode.0,volume.0].contains(&[0;16]){return Err(invalid("missing FILE creation origin"));}
     let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/CREATE-ROOT-FILE\0")?;
     for v in [pool.0,op.0,actor.0,auth.0]{h.update(&v)?;}
-    h.update(&1u64.to_be_bytes())?;
+    h.update(&generation.to_be_bytes())?;
     for v in [share.0,mode.0,volume.0]{h.update(&v)?;}
     h.update(&[name.len() as u8])?;h.update(name.as_bytes())?;Ok(h.finish())
 }
@@ -33,7 +33,7 @@ fn geometry(c:&Catalog,b:&Birth)->io::Result<()>{
     let r=&c.rows()[1];b.validate_geometry((&f.path,f.limit),(&r.path,r.limit),ROOT_MARK)
 }
 fn by_op(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Origin>>{
-    let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,b.share_id,b.setting_op,b.auth_op,b.volume_id,b.display,b.terminal,b.entry_id,b.file_id,b.history_id,b.branch_id,b.ticket,r.volume_id,m.mode,m.share_id,a.smb_id,k.credential_op FROM main.operation o LEFT JOIN main.root_entry b ON b.create_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=b.share_id LEFT JOIN main.share_mode m ON m.change_op=b.setting_op LEFT JOIN main.smb_password k ON k.credential_op=b.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
+    let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,b.share_id,b.setting_op,b.auth_op,b.volume_id,b.display,b.terminal,b.entry_id,b.file_id,b.history_id,b.branch_id,b.ticket,r.volume_id,m.mode,m.share_id,a.smb_id,k.credential_op,k.generation FROM main.operation o LEFT JOIN main.root_entry b ON b.create_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=b.share_id LEFT JOIN main.share_mode m ON m.change_op=b.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=b.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
     s.bind_bytes(1,&op.0)?;
     match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("failed to inspect original FILE operation"));}}
     if s.integer(0)?!=5{return Err(invalid("operation belongs to a different business object"));}
@@ -46,7 +46,7 @@ fn by_op(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Origin>>{
     if b.container()?.to_bytes()!=s.blob(9,255)?||s.array::<16>(15)?!=volume.0||s.byte(16)?!=2||
        s.array::<16>(17)?!=share.0||s.array::<16>(18)?!=actor.0||s.array::<16>(19)?!=auth.0||
        [b.entry.0,b.file.0,b.history.0,b.branch.0,b.ticket.0].contains(&[0;16])||
-       sha!=request(b.pool,op,actor,auth,share,mode,volume,&b.name)?{return Err(invalid("FILE membership disagrees with its original creation"));}
+       sha!=request(b.pool,op,actor,auth,s.integer(20)?,share,mode,volume,&b.name)?{return Err(invalid("FILE membership disagrees with its original creation"));}
     geometry(c,&b)?;s.done()?;Ok(Some(Origin{committed,actor,auth,share,mode,birth:b}))
 }
 
@@ -120,7 +120,7 @@ impl Tree<'_,'_>{
     }
     pub(in crate::system::reader) fn create_after(&self,op:OperationId,name:&str,mut point:impl FnMut(Point)->io::Result<()>)->io::Result<NewFile>{
         let src=self.session.source;let a=&self.session.original;let setting=self.setting;
-        let sha=request(src.pool,op,a.account,a.op,setting.share,setting.op,setting.volume,name)?;
+        let sha=request(src.pool,op,a.account,a.op,a.generation,setting.share,setting.op,setting.volume,name)?;
         let (catalog,seen)=src.at(|db,c|{self.require(db,&c,true)?;let old=self.origin(db,&c,op,name)?;Ok((c,old))})?;
         if let Some(ref x)=seen{if x.committed{return Ok(NewFile::from(&x.birth));}} // receipt, not a live file check
         let root=OrdinaryRoot::at(src,&catalog,setting.volume,true)?;

@@ -47,7 +47,7 @@ class Sources(unittest.TestCase):
         self.assertNotIn(b"[Install]",data)
         self.assertNotIn(b"ExecStop=",data)
         self.assertIn(b"TemporaryFileSystem=/run:",data)
-        self.assertEqual(data.count(b"BindReadOnlyPaths="),2)
+        self.assertEqual(data.count(b"BindReadOnlyPaths="),3)
         self.assertIn(b"PrivateNetwork=yes",data)
         self.assertNotIn("/usr/sbin/smbd",p.ELFS)
 
@@ -55,7 +55,7 @@ class Sources(unittest.TestCase):
         s,b=self.sample()
         seen=[]
         prefix=p.SOURCE+s["INSTANCE"]
-        lengths={"domain.bound":128,"smb.conf":1277}
+        lengths={"domain.bound":128,"smb.conf":1349}
         class Held:
             def __init__(self,_stack,path,accept):
                 self.path,self.accept=path,accept
@@ -69,6 +69,9 @@ class Sources(unittest.TestCase):
                     ino=41;owner=(0,1002);mode=stat.S_IFDIR|0o750
                 elif leaf in ("private","state"):
                     ino=42+(leaf=="state");owner=(1001,1002);mode=stat.S_IFDIR|0o700
+                elif leaf=="accountdb":
+                    ino=46;owner=(0,0);mode=stat.S_IFDIR|0o700
+                    mnt=9 if path.startswith(prefix+"/") else 57
                 elif self.length:
                     ino=44+(leaf=="smb.conf");mnt=9 if path.startswith(prefix+"/") else 57
                 elif path in p.ELFS:
@@ -85,13 +88,13 @@ class Sources(unittest.TestCase):
                 if not self.accept(self.info): raise AssertionError(self.path)
                 if self.length:
                     swapped=SimpleNamespace(**vars(self.info))
-                    swapped.st_size=1277 if self.length==128 else 128
+                    swapped.st_size=1349 if self.length==128 else 128
                     if self.accept(swapped): raise AssertionError("accepted other public length")
                     seen.append((self.path,self.length))
         with patch.object(p,"Original",Held), patch.object(p.os,"fstatvfs",return_value=SimpleNamespace(f_flag=p.os.ST_RDONLY)):
             p.candidates(s,None)
         self.assertEqual(seen,[(prefix+"/domain.bound",128),(p.VIEW+"domain.bound",128),
-                               (prefix+"/smb.conf",1277),(p.VIEW+"smb.conf",1277)])
+                               (prefix+"/smb.conf",1349),(p.VIEW+"smb.conf",1349)])
 
     def test_untrusted_substitutions_refused_as_whole(self):
         s,_=self.sample()

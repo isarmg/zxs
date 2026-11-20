@@ -1,11 +1,15 @@
 //! One bounded, nonsecret server challenge for one original SMB2 auth context.
 //! A one-time nonsecret generation cut is also available to that same attempt.
 //! No network input, password, response, user name or FILE claim is
-//! accepted here. All outcomes leave authentication and SQL permissions unchanged.
+//! accepted here. The original worker may promote only its own consumed cut,
+//! after Samba's final successful local update. Share access is a separate cut.
 use super::{Slot,os};
+use super::super::{InitialReader,SmbSession,denied,share_mode::Setting};
+use crate::identity::ShareId;
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd,RawFd},time::{Duration,Instant}};
 
 const LIMIT:usize=32;
+const SESSIONS:usize=64;
 const TTL:Duration=Duration::from_secs(30);
 unsafe extern "C"{
     fn zxs_random(p:*mut u8,n:usize)->i32;
@@ -14,6 +18,9 @@ unsafe extern "C"{
     fn zxs_smb_process_live(fd:i32)->i32;
     fn zxs_smb_same_process(a:i32,b:i32)->i32;
     fn zxs_smb_attempt_peer(fd:i32,sender:i32)->i32;
+    fn zxs_smb_active_take(fd:i32,challenge:*const u8)->i32;
+    fn zxs_smb_tree_take(fd:i32,worker:i32,share:*mut u8)->i32;
+    fn zxs_smb_tree_reply(fd:i32,result:*const u8)->i32;
     fn zxs_smb_cut_take(fd:i32,challenge:*const u8)->i32;
     fn zxs_smb_cut_reply(fd:i32,challenge:*const u8,identity:*const u8)->i32;
     fn zxs_smb_try_issue(fd:i32,challenge:*const u8)->i32;
@@ -49,31 +56,84 @@ impl Active{
         // One fresh short cut for all attempts. No periodic query when idle.
         match select(){Ok(slot)=>self.0.retain(|a|a.slot==slot),Err(_)=>self.0.clear()}
     }
-    fn observe(&mut self,now:Instant,events:&[u8],select:impl Fn()->io::Result<Slot>){
-        // Original poll order, before retain compacts the vector. A client
-        // cannot select which account/challenge is looked up. A batch gets
-        // at most one short SQL cut, only after a valid request on a live fd.
+    fn observe_with(&mut self,now:Instant,events:&[u8],select:impl Fn()->io::Result<Slot>,live:&mut Sessions){
         let mut i=0;let mut current:Option<Option<Slot>>=None;
-        self.0.retain_mut(|a|{
-            let e=events[i];i+=1;
-            if e&2!=0 || now.saturating_duration_since(a.issued)>=TTL ||
-                unsafe{zxs_smb_process_live(a.origin.worker.as_raw_fd())}!=0{return false;}
-            if e==0{return true;}
-            let fd=a.origin.peer.as_raw_fd();
-            if e!=1 || a.cut_sent || unsafe{zxs_smb_cut_take(fd,a.challenge.as_ptr())}!=0{return false;}
-            if current.get_or_insert_with(||select().ok()).as_ref()!=Some(&a.slot){return false;}
-            let Some(bytes)=generation_bytes(&a.slot) else{return false};
-            a.cut_sent=true; // no repeat on the same endpoint, even after a lost reply
-            a.issued.elapsed()<TTL && unsafe{zxs_smb_cut_reply(fd,a.challenge.as_ptr(),bytes.as_ptr())==0}
-        });
+        for &e in events{
+            let a=&mut self.0[i];let fd=a.origin.peer.as_raw_fd();
+            let mut promote=false;
+            let keep=if e&2!=0||now.saturating_duration_since(a.issued)>=TTL||
+                unsafe{zxs_smb_process_live(a.origin.worker.as_raw_fd())}!=0{false}
+            else if e==0{true}
+            else if e!=1{false}
+            else if a.cut_sent{
+                // Native sent this on precisely this endpoint, after committing
+                // the NEW local Samba session. A second generation request,
+                // another attempt's challenge, expiry, or full budget denies.
+                promote=live.0.len()<SESSIONS && unsafe{zxs_smb_active_take(fd,a.challenge.as_ptr())}==0 &&
+                    current.get_or_insert_with(||select().ok()).as_ref()==Some(&a.slot) && a.issued.elapsed()<TTL;
+                false
+            }else if unsafe{zxs_smb_cut_take(fd,a.challenge.as_ptr())}!=0 ||
+                current.get_or_insert_with(||select().ok()).as_ref()!=Some(&a.slot){false}
+            else if let Some(bytes)=generation_bytes(&a.slot){
+                a.cut_sent=true;
+                a.issued.elapsed()<TTL && unsafe{zxs_smb_cut_reply(fd,a.challenge.as_ptr(),bytes.as_ptr())==0}
+            }else{false};
+            if keep{i+=1;}else{
+                let a=self.0.remove(i);
+                if promote{live.0.push(NativeSession{peer:a.origin,slot:a.slot});}
+            }
+        }
+    }
+    #[cfg(test)]
+    fn observe(&mut self,now:Instant,events:&[u8],select:impl Fn()->io::Result<Slot>){
+        self.observe_with(now,events,select,&mut Sessions::new());
     }
     #[cfg(test)]
     fn expire(&mut self,now:Instant,events:&[u8]){self.observe(now,events,||Err(io::ErrorKind::PermissionDenied.into()));}
 
 }
+/// Exists only while the private endpoint of this one native session survives.
+/// Two sessions on the same worker/TCP do not share an endpoint or identity.
+pub(super) struct NativeSession{peer:Registered,slot:Slot}
+impl NativeSession{
+    pub(super) fn select(&self,src:&InitialReader,share:ShareId)->io::Result<Setting>{
+        if src.pool!=self.slot.pool{return Err(denied());}
+        let s=SmbSession{source:src,original:self.slot.original.clone()};
+        let t=s.connect_id(share)?;Ok(t.setting)
+    }
+}
+struct Sessions(Vec<NativeSession>);
+impl Sessions{
+    fn new()->Self{Self(Vec::with_capacity(SESSIONS))}
+    fn observe(&mut self,events:&[u8],open:impl Fn(&NativeSession,ShareId)->io::Result<Setting>){
+        let mut i=0;
+        self.0.retain(|session|{
+            let e=events[i];i+=1;
+            if e&2!=0||unsafe{zxs_smb_process_live(session.peer.worker.as_raw_fd())}!=0{return false;}
+            if e==1{
+                let mut id=[0;16];
+                let n=unsafe{zxs_smb_tree_take(session.peer.peer.as_raw_fd(),session.peer.worker.as_raw_fd(),id.as_mut_ptr())};
+                // Bad/truncated/closed fresh return fd: do not disclose or
+                // cancel unrelated trees/SMB sessions. No answer on the master.
+                if n>=0{
+                    let reply=unsafe{OwnedFd::from_raw_fd(n)};let share=ShareId(id);
+                    if let Ok(s)=open(session,share){
+                        if s.share==share && s.revision>0 && matches!(s.mode as u8,1|2){
+                            let mut b=[0;57];b[..16].copy_from_slice(&id);b[16..32].copy_from_slice(&s.volume.0);
+                            b[32..48].copy_from_slice(&s.op.0);b[48..56].copy_from_slice(&s.revision.to_be_bytes());
+                            b[56]=s.mode as u8;
+                            let _=unsafe{zxs_smb_tree_reply(reply.as_raw_fd(),b.as_ptr())};
+                        }
+                    }
+                }
+            }
+            true
+        });
+    }
+}
 /// One fixed nonsecret tuple; the slot was selected by the storage process,
 /// not from the SMB client or request. Layout is independent of native padding.
-fn generation_bytes(s:&Slot)->Option<[u8;149]>{
+pub(super) fn generation_bytes(s:&Slot)->Option<[u8;149]>{
     let c=&s.original;
     if c.generation<=0 || crate::password::login_name(&c.login).is_err(){return None;}
     let mut out=[0;149];out[..16].copy_from_slice(&s.pool.0);
@@ -121,22 +181,25 @@ impl<'a> Workers<'a>{
         }
     }
 }
-pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->bool,select:impl Fn()->io::Result<Slot>)->io::Result<()>{
-    let mut active=Active::new();let mut workers=Workers::new(master);let mut swept=Instant::now();let mut draining=false;
-    let revoke=|a:&mut Active|{
-        let _=unsafe{super::zxs_smb_ctl_drain(ctl)};a.0.clear();
+pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->bool,select:impl Fn()->io::Result<Slot>,open:impl Fn(&NativeSession,ShareId)->io::Result<Setting>)->io::Result<()>{
+    let mut active=Active::new();let mut sessions=Sessions::new();let mut workers=Workers::new(master);let mut swept=Instant::now();let mut draining=false;
+    let revoke=|a:&mut Active,s:&mut Sessions|{
+        let _=unsafe{super::zxs_smb_ctl_drain(ctl)};a.0.clear();s.0.clear();
     };
     loop{
         if !draining && swept.elapsed()>=Duration::from_secs(1){workers.sweep();active.recheck(&select);swept=Instant::now();}
-        if !draining && (stopping()||unsafe{zxs_smb_process_live(master.as_raw_fd())}!=0){revoke(&mut active);workers.live.clear();draining=true;}
-        let mut fds=[-1;LIMIT];
-        for (slot,a) in fds.iter_mut().zip(&active.0){*slot=a.origin.peer.as_raw_fd();}
-        let n=active.0.len();let mut events=[0u8;LIMIT+2];
+        if !draining && (stopping()||unsafe{zxs_smb_process_live(master.as_raw_fd())}!=0){revoke(&mut active,&mut sessions);workers.live.clear();draining=true;}
+        let mut fds=[-1;LIMIT+SESSIONS];let na=active.0.len();let n=na+sessions.0.len();
+        for (slot,a) in fds[..na].iter_mut().zip(&active.0){*slot=a.origin.peer.as_raw_fd();}
+        for (slot,s) in fds[na..n].iter_mut().zip(&sessions.0){*slot=s.peer.peer.as_raw_fd();}
+        let mut events=[0u8;LIMIT+SESSIONS+2];
         os(unsafe{zxs_smb_try_wait(if draining{-1}else{ctl},life.as_raw_fd(),fds.as_ptr(),n,events.as_mut_ptr())})?;
         if events[1]&2!=0{return Ok(());} // genuine lifetime pipe lost every writer
         if draining{continue;}
-        if events[0]&2!=0 || stopping(){revoke(&mut active);draining=true;continue;}
-        active.observe(Instant::now(),&events[2..2+n],&select);
+        if events[0]&2!=0 || stopping() || unsafe{zxs_smb_process_live(master.as_raw_fd())}!=0{revoke(&mut active,&mut sessions);draining=true;continue;}
+        // Only the original poll participants consume these result slots.
+        sessions.observe(&events[2+na..2+n],&open);
+        active.observe_with(Instant::now(),&events[2..2+na],&select,&mut sessions);
         if events[0]&1!=0{
             match accepted(ctl){
                 Ok(Some(d))=>{
@@ -146,7 +209,7 @@ pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->
                 }
                 Ok(None)=>(),
                 Err(e) if matches!(e.kind(),io::ErrorKind::WouldBlock|io::ErrorKind::Interrupted)=>(),
-                Err(_)=>{revoke(&mut active);draining=true;}
+                Err(_)=>{revoke(&mut active,&mut sessions);draining=true;}
             }
         }
     }
@@ -162,7 +225,7 @@ mod tests{
     }
     fn synthetic()->io::Result<Slot>{
         Ok(Slot{pool:crate::PoolId([4;16]),original:super::super::Credential{
-            account:crate::identity::AccountId([9;16]),op:crate::OperationId([8;16]),generation:1,
+            account:crate::identity::AccountId([9;16]),instance:[7;16],op:crate::OperationId([8;16]),generation:1,
             login:b"only.smb".to_vec(),sid:[7;28]}})
     }
     fn scope(peer:OwnedFd)->Registered{
@@ -206,6 +269,44 @@ mod tests{
         assert!(active.0.is_empty());
     }
     #[test]
+    #[ignore="source-only: synthetic native completion event and real non-root SQLite; not SMB authentication"]
+    fn one_original_post_update_peer_can_select_only_current_published_business_shares(){
+        use crate::{OperationId,VolumeId,system::reader::{InitialReader,web_pool},test_support::PrivateTemp};
+        use super::super::super::share_mode::Mode;
+        unsafe extern "C"{fn zxs_smb_active_send(fd:i32,ch:*const u8)->i32;}
+        let tmp=PrivateTemp::under(&std::env::temp_dir());let (path,p)=web_pool(&tmp);
+        let src=InitialReader::open(&path,p).unwrap();let peer=InitialReader::open(&path,p).unwrap();
+        let web=peer.authenticate_web("first.admin","correct horse battery staple").unwrap();
+        let share=web.publish_root(OperationId([0x98;16]),VolumeId([0x13;16]),"Root").unwrap();
+        let select=||src.at(|db,c|Ok(Slot{pool:p,original:super::super::super::Credential::current(db,&c)?}));
+        let mut active=Active::new();let mut live=Sessions::new();
+        let(c,s)=pair();active.admit(scope(s),select).unwrap();let ch=read(&c);
+        // Fixture sends a native message before the late cut. The ordinary
+        // challenge alone cannot construct the production business session.
+        os(unsafe{zxs_smb_active_send(c.as_raw_fd(),ch.as_ptr())}).unwrap();
+        active.observe_with(Instant::now(),&[1],select,&mut live);
+        assert!(live.0.is_empty()&&active.0.is_empty());drop(c);
+        let(c,s)=pair();active.admit(scope(s),select).unwrap();let ch=read(&c);
+        let mut msg=[0;24];msg[..15].copy_from_slice(b"ZXS-SAM/GNCUT-1");msg[16..].copy_from_slice(&ch);
+        os(unsafe{super::super::zxs_smb_ctl_write(c.as_raw_fd(),msg.as_ptr(),24)}).unwrap();
+        active.observe_with(Instant::now(),&[1],select,&mut live);assert!(live.0.is_empty());
+        let mut cut=[0;173];os(unsafe{super::super::zxs_smb_ctl_read(c.as_raw_fd(),cut.as_mut_ptr(),173)}).unwrap();
+        os(unsafe{zxs_smb_active_send(c.as_raw_fd(),ch.as_ptr())}).unwrap();
+        active.observe_with(Instant::now(),&[1],select,&mut live);
+        assert!(active.0.is_empty());assert_eq!(live.0.len(),1);
+        let s=&live.0[0];
+        assert!(s.select(&src,share.share).is_err());
+        assert!(s.select(&src,ShareId([0x91;16])).is_err());
+        let allowed=web.set_share_mode(OperationId([0x99;16]),share.share,share.op,Mode::ReadOnly).unwrap();
+        assert_eq!(s.select(&src,share.share).unwrap(),allowed);
+        let off=web.set_share_mode(OperationId([0x9a;16]),share.share,allowed.op,Mode::Disabled).unwrap();
+        assert!(s.select(&src,share.share).is_err());
+        let again=web.set_share_mode(OperationId([0x9b;16]),share.share,off.op,Mode::ReadWrite).unwrap();
+        assert_ne!(again.op,allowed.op);assert_eq!(s.select(&src,share.share).unwrap(),again);
+        drop(c);live.observe(&[2],|_,_|panic!("closed original session must not access SQL"));
+        assert!(live.0.is_empty());
+    }
+    #[test]
     #[ignore="source-only; original non-root synthetic SQLite pool, not a Samba logon"]
     fn only_the_original_current_smb_slot_can_receive_and_keep_its_challenge(){
         use crate::{system::reader::{InitialReader,web_pool},test_support::PrivateTemp};
@@ -214,12 +315,12 @@ mod tests{
         domain[..12].copy_from_slice(&super::super::DOMAIN);
         for(i,v)in [1u32,2,3].into_iter().enumerate(){domain[12+4*i..16+4*i].copy_from_slice(&v.to_le_bytes());}
         let sid=super::super::expected_user(domain);
-        let select=||super::super::current_slot(&src,p,&sid);
+        let select=||super::super::current_slot(&src,p,[7;16],&sid);
         let mut active=Active::new();let (first,peer)=pair();
         active.admit(scope(peer),select).unwrap();
         assert_ne!(read(&first),[0;8]);assert_eq!(active.0[0].slot.original.account.0,[0x56;16]);
         let mut wrong=sid;wrong[12]^=1;let (never,peer)=pair();
-        assert!(active.admit(scope(peer),||super::super::current_slot(&src,p,&wrong)).is_err());
+        assert!(active.admit(scope(peer),||super::super::current_slot(&src,p,[7;16],&wrong)).is_err());
         assert!(unsafe{super::super::zxs_smb_ctl_live(never.as_raw_fd())}<0);
         let away=tmp.0.join("held-system-away");std::fs::rename(&s,&away).unwrap();
         active.recheck(select);assert!(active.0.is_empty());
@@ -227,7 +328,7 @@ mod tests{
         std::fs::rename(&away,&s).unwrap();let (fresh,peer)=pair();
         active.admit(scope(peer),select).unwrap();assert_ne!(read(&fresh),[0;8]);
         let different=||{let mut x=select()?;x.original.generation+=1;Ok(x)};
-        active.recheck(different);assert!(active.0.is_empty()); // simulated NEW generation, not an implemented reset
+        active.recheck(different);assert!(active.0.is_empty()); // explicit injection for this challenge fixture; not a real reset
         assert!(unsafe{super::super::zxs_smb_ctl_live(fresh.as_raw_fd())}<0);
     }
     #[test]
@@ -239,7 +340,7 @@ mod tests{
         domain[..12].copy_from_slice(&super::super::DOMAIN);
         for(i,v)in [1u32,2,3].into_iter().enumerate(){domain[12+4*i..16+4*i].copy_from_slice(&v.to_le_bytes());}
         let sid=super::super::expected_user(domain);
-        let select=||super::super::current_slot(&src,p,&sid);
+        let select=||super::super::current_slot(&src,p,[7;16],&sid);
         let request=|fd:&OwnedFd,ch:[u8;8]|{
             let mut frame=[0u8;24];frame[..15].copy_from_slice(b"ZXS-SAM/GNCUT-1");
             frame[16..].copy_from_slice(&ch);

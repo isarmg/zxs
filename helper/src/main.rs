@@ -29,7 +29,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper install-pool new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --instance ID --approval ID\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper install-pool new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --instance ID --approval ID\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -45,6 +45,7 @@ enum Command {
     DiskWeb(Option<(fat32_check::Format,fat32_check::Request)>),
     SealedWorker(fat32_check::Format,[u8;32]),
     SamWorker,
+    NativeSqlWorker,
     FsTools(fs_tools::Query),
     Fat32(fat32_check::Request),
     Exfat(fat32_check::Request),
@@ -66,6 +67,10 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
             Some(arg) if arg=="--exfat-copy"=>fat32_check::Request::parse_exfat(args).map(|r|Command::DiskWeb(Some((fat32_check::Format::Exfat,r)))),
             _=>Err("disk-web accepts one terminal-selected --fat32-copy or --exfat-copy IMAGE --sha256 HEX"),
         };
+    }
+    if op=="__native-account-sql-v7"{
+        if args.next().is_some(){return Err("invalid internal worker");}
+        return Ok(Command::NativeSqlWorker);
     }
     if op=="__sam-fresh-v1"{
         if args.next().is_some(){return Err("invalid internal worker");}
@@ -105,6 +110,7 @@ fn line(s: &str) -> io::Result<()> {
 fn run(command: Command) -> io::Result<ExitCode> {
     match command {
         Command::DiskWeb(image) => disk_web::serve(image)?,
+        Command::NativeSqlWorker=>return Ok(ExitCode::from(if sqlite_install::native_sql_worker().is_ok(){0}else{2})),
         Command::SamWorker=>return Ok(ExitCode::from(if sqlite_install::sam_worker().is_ok(){0}else{2})),
         Command::SealedWorker(fmt,digest) => return Ok(ExitCode::from(fat32_check::panel::worker(fmt,digest).unwrap_or(2))),
         Command::Install(i)=>line(&i.run()?)?,

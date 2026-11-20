@@ -9,6 +9,8 @@ pub mod smb_process;
 pub mod smb_spawn;
 pub mod prompt_signals;
 pub mod first_smb;
+pub mod native_sam;
+pub mod native_confinement;
 pub mod sqlite_vfs;
 
 use linux_raw_sys::general as uapi;

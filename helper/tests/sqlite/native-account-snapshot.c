@@ -29,7 +29,7 @@ static struct pack sample(const uint8_t *marker, size_t width, uint32_t flags, b
     narrow(&p, 4, 0); /* last logon */
     narrow(&p, 4, 0x7fffffff); narrow(&p, 4, 0x7fffffff); /* logoff and kickoff */
     narrow(&p, 4, 0); narrow(&p, 4, 1700000000); /* last bad and last set */
-    narrow(&p, 4, 0); narrow(&p, 4, 0); /* policy dates as stored, not derived */
+    narrow(&p, 4, 0); narrow(&p, 4, 0x7fffffff); /* fixed credential has no change deadline */
     blob(&p, TEST_LOGIN, sizeof(TEST_LOGIN));
     blob(&p, "ZXSLOCAL", sizeof("ZXSLOCAL"));
     for (int i = 0; i < 6; ++i) blob(&p, NULL, 0);
@@ -102,6 +102,10 @@ int main(void) {
     struct pack expiring = newer;
     memset(expiring.bytes + 8, 0, 4); expiring.bytes[8] = 1;
     put(db, "USER_" TEST_LOGIN, expiring.bytes, expiring.head, TDB_MODIFY);
+    assert(inspect(db, &want) == HELPER_NATIVE_UNCONFIRMED);
+    struct pack must_change = newer;
+    memset(must_change.bytes + 24, 0, 4);
+    put(db, "USER_" TEST_LOGIN, must_change.bytes, must_change.head, TDB_MODIFY);
     assert(inspect(db, &want) == HELPER_NATIVE_UNCONFIRMED);
     put(db, "USER_" TEST_LOGIN, newer.bytes, newer.head, TDB_MODIFY);
     assert(inspect(db, &want) == HELPER_NATIVE_TARGET);

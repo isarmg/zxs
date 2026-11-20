@@ -180,10 +180,10 @@ def release_history(version,first,previous):
 # This passive release template is NOT an installed smb.conf, instance, NTLM
 # policy, or service. The site must supply the actual approved instance target.
 LIVE_TEMPLATE = "usr/share/local-ops-helper/initial-live.conf"
-LIVE_TEMPLATE_SHA = "0154cff9b9d2f9be1f5ab7b374f36ee10530d7d1fe08f72ac2eaf19f32116406"
+LIVE_TEMPLATE_SHA = "a4724d2af6596303e9bccf5db9456629328ad6c575d88adcd8c55481b57708d2"
 def ship_live_template(root):
     f=copy_checked(PROJECT/"resources/samba-domain/initial-live.conf",root/LIVE_TEMPLATE,
-                   LIVE_TEMPLATE_SHA,1277,cap=1277)
+                   LIVE_TEMPLATE_SHA,1349,cap=1349)
     f.chmod(0o444)
     return f
 
@@ -205,8 +205,8 @@ def ship_web_templates(root):
     return {"base":rel,"sha256":WEB_INPUTS,"active_units":[]}
 
 SMB_HOST_INPUTS = {
-    "check.py": "98b88600ae8e8c704d329efba68d36bba0bbeafcebeaeca52f612dec9191c869",
-    "zxs-smb-preflight.service.in": "1c729d0f912d4e9040ac3a674329186e7899eadc673673d13d1b619673aef85e",
+    "check.py": "ddb3a5bb7ceb618e43785040a5df8e448e17aa7de8d9cbe7caac33108a1a39ed",
+    "zxs-smb-preflight.service.in": "7938f39003e526b858c242c14fe339e5157f7a4a4458420b7e56e14879b4ebc0",
 }
 def ship_smb_host_preflight(root):
     rel="usr/share/local-ops-helper/smb-host"
@@ -214,6 +214,33 @@ def ship_smb_host_preflight(root):
         f=copy_checked(PROJECT/"resources/smb-host"/name,root/rel/name,d,cap=32768)
         f.chmod(0o444)
     return {"base":rel,"sha256":SMB_HOST_INPUTS,"active_units":[],"ships_online_executables":False}
+
+# The eligible manifest and its corresponding source bundle come only from
+# the independently witnessed native build, never a path supplied to runtime.
+def ship_account_role(a,root,home):
+    role="usr/lib/local-ops-helper/account-native-v7"
+    inputs=a.native_account_role
+    require(inputs.is_absolute() and inputs.is_dir() and not inputs.is_symlink(),"expected the independently verified private role staging")
+    index=copy_checked(inputs/"ELF-INDEX-1",root/role/"ELF-INDEX-1",a.native_account_index_sha256,cap=48<<10)
+    index.chmod(0o444)
+    raw=index.read_text("ascii")
+    lines=raw.splitlines()
+    require(raw.endswith("\n") and lines[0:1]==["NATIVE-ELF-1"] and 5<=len(lines)<=121,"invalid eligible native index")
+    previous="";expected={"ELF-INDEX-1"};core={}
+    for line in lines[1:]:
+        name,key=line.split(" ")
+        require(name>previous and re.fullmatch(r"[0-9a-f]{64}",key),"noncanonical native closure manifest")
+        previous=name
+        if name in {"@libc","@loader"}:
+            core[name]=key;continue
+        require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,146}\.so",name)
+                and name not in {"libc.so","ld-linux-x86-64.so"},"not a private exact library name")
+        leaf=copy_checked(inputs/name,root/role/name,key,cap=64<<20);leaf.chmod(0o644);expected.add(name)
+    require(core=={"@libc":digest(home/"lib/libc.so.6"),"@loader":digest(home/"lib"/LOADER)}
+            and "helper-account-native.so" in expected and len(expected)>=3
+            and {k.name for k in inputs.iterdir()}==expected,"native role does not match this package's own glibc/originals")
+    require(sum(x.stat().st_size for x in (root/role).iterdir())<=512<<20,"native role exceeds total bound")
+    return {"path":role,"index_sha256":digest(index),"files":sorted(expected)}
 
 def build(args):
     require(os.geteuid()!=0,"the offline package builder must run unprivileged")
@@ -253,6 +280,10 @@ def build(args):
                 for lic in COMMON:
                     selected[f"usr/share/common-licenses/{lic}"]=docs/"common-licenses"/lic
             unpack_selected(deb,selected)
+        native=ship_account_role(args,root,home)
+        material=copy_checked(args.native_account_sources,out/"source/native-account-corresponding-sources.archive",
+            args.native_account_sources_sha256,cap=2<<30)
+        native["source_archive_sha256"]=digest(material)
         shutil.copyfile(docs/"copyrights/gcc-14-base",docs/"copyrights/libgcc-s1")
         cap=root/samba_capsule.ROOT
         recipe=samba_capsule.assemble({k:debs[k] for k in sam},cap,docs/"samba-copyrights",mkdir(Path(scratch)/"sam-input"))
@@ -292,7 +323,8 @@ def build(args):
         info={"debian_version":version,"abi":"debian13-amd64-gnu","source_commit":rev,"helper_input_sha256":args.helper_sha256,
               "helper_distributed_sha256":digest(binary),"stdlib_notices_sha256":args.stdlib_notices_sha256,"packages":lock["packages"],"needed":requires,
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
-              "scope_sam":"explicit local setup-pair provision/enroll; no daemon or login validation",
+              "scope_sam":"explicit local setup-pair provision/enroll and role-specific reset; no daemon or login validation",
+              "standalone_native_account":native,
               "inactive_management_frontend":management,
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
@@ -307,8 +339,8 @@ def build(args):
         # Signed release inputs, never a site decision to enable NTLMv2. The
         # independently maintained per-installation policy is deliberately NOT
         # included in the Debian contents and is not generated by an install script.
-        with (out/"PAIR-RELEASE").open("x",encoding="ascii") as r:
-            r.write("PAIR-RELEASE-1 "+info["helper_distributed_sha256"]+" "+
+        with (out/"NATIVE-ACCOUNT-RELEASE").open("x",encoding="ascii") as r:
+            r.write("NATIVE-ACCOUNT-RELEASE-1 "+info["helper_distributed_sha256"]+" "+native["index_sha256"]+" "+
                     digest(home/"lib/libgcrypt.so.20")+" "+digest(home/"lib/libgpg-error.so.0")+"\n")
         (docs/"BUNDLE.json").write_text(json.dumps(info,sort_keys=True,indent=2)+"\n")
         control=mkdir(root/"DEBIAN")/"control"
@@ -328,6 +360,10 @@ if __name__=="__main__":
     p.add_argument("--helper-sha256",required=True,help="digest from independent exact-revision build evidence")
     p.add_argument("--stdlib-notices",type=Path,required=True,help="reviewed complete license/notice material for the actual Rust sysroot and linked non-registry inputs")
     p.add_argument("--stdlib-notices-sha256",required=True,help="independently recorded digest of the toolchain notice material")
+    p.add_argument("--native-account-role",type=Path,required=True,help="fixed closure stage of native_account_build.py")
+    p.add_argument("--native-account-index-sha256",required=True,help="independently verified exact ELF-INDEX-1")
+    p.add_argument("--native-account-sources",type=Path,required=True,help="corresponding source/notice archive from the native build")
+    p.add_argument("--native-account-sources-sha256",required=True,help="independently verified exact source archive")
     history=p.add_mutually_exclusive_group(required=True)
     history.add_argument("--first-release",action="store_true",help="release owner has verified no earlier distribution exists")
     history.add_argument("--previous-version",help="refresh from the preceding signed distribution's exact Debian version")

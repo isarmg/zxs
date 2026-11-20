@@ -108,7 +108,7 @@ fn originals(system: &Pinned, system_ex: &File, site: &Site, site_ex: &File, sub
     Ok(())
 }
 
-pub(super) struct AccountParent<'a> {
+pub(in crate::sqlite_install::pair) struct AccountParent<'a> {
     system: &'a Pinned,
     system_ex: &'a File,
     site: &'a Site,
@@ -117,8 +117,8 @@ pub(super) struct AccountParent<'a> {
     location: Location,
     subject: Subject,
 }
-pub(super) enum Seen<'a, 'orig> { NotPresent, Present(Store<'a, 'orig>) }
-pub(super) struct Store<'a, 'orig> {
+pub(in crate::sqlite_install::pair) enum Seen<'a, 'orig> { NotPresent, Present(Store<'a, 'orig>) }
+pub(in crate::sqlite_install::pair) struct Store<'a, 'orig> {
     parent: &'a AccountParent<'orig>,
     pin: File,
     file: Stamp,
@@ -159,7 +159,14 @@ impl<'orig> AccountParent<'orig> {
         Ok(())
     }
 
-    pub(super) fn observe(&self) -> io::Result<Seen<'_, 'orig>> {
+    pub(in crate::sqlite_install::pair) fn leaf_pin(&self)->io::Result<File>{
+        self.require()?;
+        let pinned=pin_dir(self.site_ex,DIRECTORY)?;
+        if mark(&pinned)?!=self.location||!Stamp::on(&pinned)?.directory(mark(self.site_ex)?){
+            return Err(bad("wrong original account directory operation pin"));
+        }Ok(pinned)
+    }
+    pub(in crate::sqlite_install::pair) fn observe(&self) -> io::Result<Seen<'_, 'orig>> {
         self.require()?;
         let directory = Stamp::on(&self.dir)?;
         let listed = inventory(&self.dir, directory)?;
@@ -184,7 +191,8 @@ impl<'orig> AccountParent<'orig> {
     }
 }
 impl Store<'_, '_> {
-    pub(super) fn require(&self) -> io::Result<()> {
+    pub(in crate::sqlite_install::pair) fn pin(&self)->&File{&self.pin}
+    pub(in crate::sqlite_install::pair) fn require(&self) -> io::Result<()> {
         let d = &self.parent.dir;
         self.parent.require()?;
         if !self.file.database(self.directory.place) || Stamp::on(&self.pin)? != self.file

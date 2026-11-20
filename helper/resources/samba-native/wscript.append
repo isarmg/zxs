@@ -1,0 +1,11 @@
+
+# Local Ops Helper maintenance role only. This target is not part of smbd,
+# the Samba module path, or ZXS; no Samba service loads it.
+bld.SAMBA3_PLUGIN('helper-native-account',
+                  source='local_ops_native/account-snapshot.c',
+                  includes='../lib/tdb/include',
+                  deps='tdb tdb-wrap3',
+                  cflags='-DHELPER_ACCOUNT_ISSUER=1 -fvisibility=default',
+                  require_builtin_deps=False,
+                  realname='helper-account-native.so',
+                  install_path='${LIBDIR}/samba')

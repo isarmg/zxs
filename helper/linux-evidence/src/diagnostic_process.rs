@@ -82,6 +82,53 @@ pub fn prepare_sam_worker_exec(cmd:&mut Command,original:&File)->io::Result<()>{
         CString::new("__sam-fresh-v1").expect("literal")],Some(std::process::id() as libc::pid_t))
 }
 
+/// The one account SQL child retains the operator's TERMINAL session (not
+/// the unrelated diagnostic worker session). Only 3=private seqpacket and
+/// 4=sealed nonsecret order are introduced; all other caller FDs close.
+#[allow(unsafe_code)]
+pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,order:&File)->io::Result<()>{
+    use std::os::fd::AsFd;
+    let high=|f:&File|rustix::io::fcntl_dupfd_cloexec(f.as_fd(),16).map(File::from).map_err(io::Error::from);
+    let executable=high(original)?;let channel=high(channel)?;let order=high(order)?;
+    let parent=std::process::id() as libc::pid_t;
+    // SAFETY: Owned, distinct high fds prevent dup3 clobbering the selected ELF.
+    // The child calls only async-safe syscalls on fixed memory before exec,
+    // never enables shell fallback, reallocates or uses a caller-supplied arg.
+    unsafe{cmd.pre_exec(move||{
+        let mut action:libc::sigaction=std::mem::zeroed();action.sa_sigaction=libc::SIG_DFL;
+        let mut term:libc::sigset_t=std::mem::zeroed();
+        if libc::sigemptyset(&mut action.sa_mask)!=0||libc::sigemptyset(&mut term)!=0
+            ||libc::sigaddset(&mut term,libc::SIGTERM)!=0
+            ||libc::sigaction(libc::SIGTERM,&action,std::ptr::null_mut())!=0
+            ||libc::sigprocmask(libc::SIG_UNBLOCK,&term,std::ptr::null_mut())!=0
+            ||libc::syscall(libc::SYS_close_range,3u32,u32::MAX,libc::CLOSE_RANGE_CLOEXEC)!=0
+            ||libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGTERM as libc::c_ulong,0 as libc::c_ulong,0 as libc::c_ulong,0 as libc::c_ulong)!=0{
+            return Err(io::Error::last_os_error());
+        }
+        if libc::getppid()!=parent{return Err(io::Error::from_raw_os_error(libc::ECANCELED));}
+        if libc::dup3(channel.as_raw_fd(),3,0)!=3||libc::dup3(order.as_raw_fd(),4,0)!=4{
+            return Err(io::Error::last_os_error());
+        }
+        let argv=[c"helper".as_ptr(),c"__native-account-sql-v7".as_ptr(),std::ptr::null()];
+        let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
+        libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),
+            argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);
+        Err(io::Error::last_os_error())
+    });}
+    Ok(())
+}
+
+/// Only the fixed exec-child entry uses this, after proving that exactly 3/4
+/// already exist. Mark both CLOEXEC before any future system action.
+#[allow(unsafe_code)]
+pub fn account_sql_descriptors()->io::Result<[File;2]>{
+    use std::os::fd::FromRawFd;
+    if unsafe{libc::fcntl(3,libc::F_SETFD,libc::FD_CLOEXEC)}<0
+        ||unsafe{libc::fcntl(4,libc::F_SETFD,libc::FD_CLOEXEC)}<0{return Err(io::Error::last_os_error());}
+    // SAFETY: application-specific startup inherits 3 and 4 by ownership,
+    // both accepted by the kernel above, and no other owner was constructed.
+    Ok(unsafe{[File::from_raw_fd(3),File::from_raw_fd(4)]})
+}
 #[allow(unsafe_code)]
 fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<libc::pid_t>)->io::Result<()> {
     let executable=original.try_clone()?;

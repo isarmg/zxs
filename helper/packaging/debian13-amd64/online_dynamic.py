@@ -21,11 +21,39 @@ SWITCH="etc/nsswitch.conf"
 DATABASES=("aliases","ethers","group","group_compat","gshadow","hosts","initgroups","netgroup",
            "networks","passwd","passwd_compat","protocols","publickey","rpc","services","shadow","shadow_compat")
 POLICY="".join(n+": files\n" for n in DATABASES).encode("ascii")
-# Internal Samba tokens only. The trusted host has to reserve both identities;
+# Built-in Samba initialization tokens. The trusted host has to reserve both identities;
 # neither is the SQL SMB account. Do not import or create host users, guest
 # access, shell binaries, password verifiers or extra group memberships.
 PASSWD=b"root:!:0:0::/nonexistent:/usr/sbin/nologin\nnobody:!:65534:65534::/nonexistent:/usr/sbin/nologin\n"
 GROUP=b"root:!:0:\nnogroup:!:65534:\n"
+IDENTITIES="etc/zxs-smb-identities"
+SITE_HEADER=b"ZXS-SMB-UNIX-1"
+SITE_ROLES=(b"storage",b"web-proxy",b"smb-execution")
+MAX_SITE=256
+
+def site_profile(raw):
+    require(0<len(raw)<=MAX_SITE and raw.endswith(b"\n"),"invalid site identity length")
+    lines=raw[:-1].split(b"\n")
+    require(len(lines)==4 and lines[0]==SITE_HEADER,"invalid site identity profile")
+    pairs=[]
+    for line,expected in zip(lines[1:],SITE_ROLES,strict=True):
+        words=line.split(b" ")
+        require(len(words)==3 and words[0]==expected and
+                all(re.fullmatch(rb"[1-9][0-9]{0,9}",v) for v in words[1:]),"invalid site role or numeric identity")
+        uid,gid=map(int,words[1:])
+        require(all(x<0xffffffff and x!=65534 for x in (uid,gid)),"reserved execution identity")
+        pairs.append((uid,gid))
+    require(len({p[0] for p in pairs})==len({p[1] for p in pairs})==3,"site roles must have distinct users and groups")
+    return tuple(pairs)
+
+def site_nss(raw):
+    _storage,_web,(user,group)=site_profile(raw)
+    # No shell is in this role, no password is set, and no membership list
+    # is emitted. Only the primary execution group is private to this UID.
+    passwd=PASSWD+f"zxs-smb-client:!:{user}:{group}::/nonexistent:/usr/sbin/nologin\n".encode("ascii")
+    groups=GROUP+f"zxs-smb-client:!:{group}:\n".encode("ascii")
+    return passwd,groups
+
 ROWS={
     BASE:(("module","UTF-16LE//","INTERNAL","UTF-16","1"),
           ("module","INTERNAL","UTF-16LE//","UTF-16","1")),
@@ -63,7 +91,9 @@ def has_gconv_export(symbols):
                             r"(?:DEFAULT|PROTECTED)\s+[1-9][0-9]*\s+gconv(?:@@[^\s]+)?\s*",line)
                for line in symbols.splitlines())
 
-def data_files(root,catalog):
+def data_files(root,catalog,site):
+    passwd,groups=site_nss(site)
+    approval={"approved_site_sha256":hashlib.sha256(site).hexdigest()}
     tables={};sources={}
     for n in ROWS:
         f,origin=catalog.libc_member(n)
@@ -74,8 +104,9 @@ def data_files(root,catalog):
     files={}
     for name,data,source in ((BASE,conversion_table(tables),{"signed_table_inputs":sources}),
                              (SWITCH,POLICY,{"recipe":"online_dynamic.py:files-only"}),
-                             ("etc/passwd",PASSWD,{"recipe":"online_dynamic.py:internal-tokens-only"}),
-                             ("etc/group",GROUP,{"recipe":"online_dynamic.py:internal-tokens-only"})):
+                             (IDENTITIES,site,approval),
+                             ("etc/passwd",passwd,dict(approval,recipe="online_dynamic.py:private-locked-identities")),
+                             ("etc/group",groups,dict(approval,recipe="online_dynamic.py:private-locked-identities"))):
         p=root/name;p.parent.mkdir(parents=True,exist_ok=True)
         with p.open("xb") as dst:dst.write(data)
         p.chmod(0o644)

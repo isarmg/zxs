@@ -2,6 +2,8 @@
 import unittest
 import online_dynamic as d
 
+SITE=b"ZXS-SMB-UNIX-1\nstorage 2001 2002\nweb-proxy 3001 3002\nsmb-execution 4001 4002\n"
+
 def tables():
     return {n:"".join(" ".join(r)+"\n" for r in rules).encode() for n,rules in d.ROWS.items()}
 
@@ -41,3 +43,15 @@ class Dynamic(unittest.TestCase):
         self.assertEqual(set(d.POLICY.splitlines()),{s.encode()+b": files" for s in d.DATABASES})
         self.assertTrue({b"hosts: files",b"networks: files",b"passwd: files",b"group: files",
                          b"initgroups: files"}.issubset(d.POLICY.splitlines()))
+
+    def test_only_approved_execution_identity_is_added(self):
+        self.assertEqual(d.site_profile(SITE),((2001,2002),(3001,3002),(4001,4002)))
+        passwd,groups=d.site_nss(SITE)
+        self.assertEqual(passwd,d.PASSWD+b"zxs-smb-client:!:4001:4002::/nonexistent:/usr/sbin/nologin\n")
+        self.assertEqual(groups,d.GROUP+b"zxs-smb-client:!:4002:\n")
+        for record in (SITE.replace(b"4001",b"2001"),SITE.replace(b"4002",b"3002"),
+                       SITE.replace(b"4002",b"65534"),SITE.replace(b"4001",b"4294967295"),
+                       SITE.replace(b"4001",b"04001"),SITE.replace(b"4001",b"0"),
+                       SITE.replace(b"web-proxy",b"storage"),SITE.replace(b"\n",b"\r\n"),
+                       SITE.replace(b" 4001",b"  4001"),SITE[:-1],SITE+b"\n"):
+            with self.assertRaises(ValueError):d.site_nss(record)

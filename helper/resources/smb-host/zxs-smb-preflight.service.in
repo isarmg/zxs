@@ -10,6 +10,7 @@ UMask=0077
 TemporaryFileSystem=/run:mode=0755
 BindReadOnlyPaths=/var/lib/local-ops-helper/samba-instances/@INSTANCE@/domain.bound:/run/zxs-smb-held/domain.bound:norbind
 BindReadOnlyPaths=/var/lib/local-ops-helper/samba-instances/@INSTANCE@/smb.conf:/run/zxs-smb-held/smb.conf:norbind
+BindReadOnlyPaths=/var/lib/local-ops-helper/samba-instances/@INSTANCE@/accountdb:/run/zxs-smb-held/accountdb:norbind
 ExecStart=/usr/bin/python3 -I -S -B /usr/share/local-ops-helper/smb-host/check.py check @SYSTEM@ @POOL@ @INSTANCE@ @PROVISION@ @UID@ @GID@ @BOUND@ @SMBD@ @STORAGE@
 NoNewPrivileges=yes
 CapabilityBoundingSet=

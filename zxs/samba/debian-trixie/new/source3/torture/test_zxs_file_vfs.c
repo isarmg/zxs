@@ -4,7 +4,32 @@
 #include "includes.h"
 #include "smbd/smbd.h"
 #include "smbd/fd_handle.h"
+#include "param/loadparm.h"
+#include "lib/param/param.h"
 #include "smbd/zxs_file_vfs.h"
+
+/* Use the native globals and parameter setter, not a copy of the
+ * documented default. No config file, data share or listener is used. */
+static bool ipc_only_pipe_policy(void)
+{
+	struct loadparm_context *lp = loadparm_init_s3(NULL, loadparm_s3_helpers());
+	bool ok = false;
+	if (lp == NULL) {
+		return false;
+	}
+	if (!lp_nt_pipe_support() ||
+	    zxs_file_vfs_route(1, 1, true, false, false, NULL, lp_nt_pipe_support()) != ZXS_VFS_REJECT ||
+	    !lp_do_parameter(-1, "nt pipe support", "yes") || !lp_nt_pipe_support() ||
+	    zxs_file_vfs_route(1, 1, true, false, false, NULL, lp_nt_pipe_support()) != ZXS_VFS_REJECT ||
+	    !lp_do_parameter(-1, "nt pipe support", "no") || lp_nt_pipe_support() ||
+	    zxs_file_vfs_route(1, 1, true, false, false, NULL, lp_nt_pipe_support()) != ZXS_VFS_IPC) {
+		goto done;
+	}
+	ok = true;
+done:
+	TALLOC_FREE(lp);
+	return ok;
+}
 
 int main(void)
 {
@@ -28,17 +53,17 @@ int main(void)
 	    zxs_smb_direct_service("IPC$", 0, 0, 0)) {
 		return 1;
 	}
-	if (conn == NULL ||
-	    zxs_file_vfs_route(3,1,false,false,false,file) != ZXS_VFS_FILE ||
-	    zxs_file_vfs_route(1,1,true,false,false,NULL) != ZXS_VFS_IPC ||
-	    zxs_file_vfs_route(3,1,true,false,false,NULL) != ZXS_VFS_REJECT ||
-	    zxs_file_vfs_route(1,1,false,false,false,file) != ZXS_VFS_REJECT ||
-	    zxs_file_vfs_route(1,1,true,false,false,file) != ZXS_VFS_REJECT ||
-	    zxs_file_vfs_route(3,1,false,false,false,NULL) != ZXS_VFS_REJECT ||
-	    zxs_file_vfs_route(3,1,false,false,false,extra) != ZXS_VFS_REJECT ||
-	    zxs_file_vfs_route(3,1,false,false,false,path) != ZXS_VFS_REJECT ||
-	    zxs_file_vfs_route(3,1,false,false,true,file) != ZXS_VFS_REJECT ||
-	    zxs_file_vfs_route(3,1,false,true,false,file) != ZXS_VFS_REJECT) {
+	if (!ipc_only_pipe_policy() || conn == NULL ||
+	    zxs_file_vfs_route(3,1,false,false,false,file,false) != ZXS_VFS_FILE ||
+	    zxs_file_vfs_route(1,1,true,false,false,NULL,false) != ZXS_VFS_IPC ||
+	    zxs_file_vfs_route(3,1,true,false,false,NULL,false) != ZXS_VFS_REJECT ||
+	    zxs_file_vfs_route(1,1,false,false,false,file,false) != ZXS_VFS_REJECT ||
+	    zxs_file_vfs_route(1,1,true,false,false,file,false) != ZXS_VFS_REJECT ||
+	    zxs_file_vfs_route(3,1,false,false,false,NULL,false) != ZXS_VFS_REJECT ||
+	    zxs_file_vfs_route(3,1,false,false,false,extra,false) != ZXS_VFS_REJECT ||
+	    zxs_file_vfs_route(3,1,false,false,false,path,false) != ZXS_VFS_REJECT ||
+	    zxs_file_vfs_route(3,1,false,false,true,file,false) != ZXS_VFS_REJECT ||
+	    zxs_file_vfs_route(3,1,false,true,false,file,false) != ZXS_VFS_REJECT) {
 		return 1;
 	}
 	if (zxs_file_vfs_active(conn) || !zxs_file_vfs_install(conn) || conn->vfs_handles == NULL ||

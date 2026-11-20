@@ -63,7 +63,7 @@ impl Change{
         let pool=m.source.pool;let actor=m.account;let auth=m.origin;
         let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/SHARE-MODE\0")?;
         for x in [pool.0,op.0,actor.0,auth.0]{h.update(&x)?;}
-        h.update(&1u64.to_be_bytes())?;h.update(&share.0)?;h.update(&previous.0)?;h.update(&[mode as u8])?;
+        h.update(&m.generation.to_be_bytes())?;h.update(&share.0)?;h.update(&previous.0)?;h.update(&[mode as u8])?;
         Ok(Self{pool,actor,auth,op,share,previous,mode,sha:h.finish()})
     }
     fn select(&self,db:&Connection,c:&Catalog)->io::Result<Choice<Setting,Setting>>{

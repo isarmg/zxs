@@ -7,9 +7,11 @@ pub(super) fn first(t:&PrivateTemp)->(PathBuf,PoolId){
     let (s,p)=record(t,InitState::Committed,"");
     let selected=HeldDir::trusted_system(&s).unwrap();selected.exclusive().unwrap();
     let writer=Builder::existing(&s.join("SYSTEM.sqlite3"));
-    let [pair,web,smb,receipt]=first_account::rows();
+    let [pair,web,pending,activate]=first_account::rows();
     writer.exec("PRAGMA foreign_keys=ON; PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE;");
-    writer.exec(&pair);writer.exec(&web);writer.exec(&smb);writer.exec(&receipt);writer.exec("COMMIT");
+    writer.exec(&pair);writer.exec(&web);writer.exec(&pending);writer.exec("COMMIT");
+    // Synthetic SQL evidence only: this fixture does not create or open a native SAM.
+    writer.exec("BEGIN IMMEDIATE");writer.exec(&activate);writer.exec("COMMIT");
     (s,p)
 }
 fn share_count(online:&InitialReader)->i64{

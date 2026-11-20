@@ -227,3 +227,28 @@ mod directory;
 
 #[path="sqlite_smb_read.rs"]
 mod smb_read;
+
+#[test]
+#[ignore="public synthetic SQL credential transition; real ordinary files; no native authentication or maintenance locks"]
+fn changing_smb_epoch_keeps_old_file_bytes_but_never_promotes_an_old_save(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,_f,rw,_ro)=enrollment(&t);
+    let src=InitialReader::open(&s,p).unwrap();let old=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let tree=old.connect(rw).unwrap();let data=input(&t,"captured",b"old confirmed body");
+    let saved=tree.create_file(OperationId([0xd1;16]),"read").unwrap();
+    let stale=tree.create_file(OperationId([0xd2;16]),"write").unwrap();
+    tree.save_first(OperationId([0xd3;16]),"read",saved.file,&data).unwrap();
+    let h=tree.open_current("read").unwrap();let mut at=false;
+    let err=tree.save_first_after(OperationId([0xd4;16]),"write",stale.file,&data,|cut|{
+        if cut==Cut::BytesSynced{at=true;return Err(io::Error::other("after named work sync"));}Ok(())
+    }).unwrap_err();assert!(at);assert_eq!(err.to_string(),"after named work sync");
+    let db=Builder::existing(&s.join("SYSTEM.sqlite3"));first_account::fixture_rotate_smb(&db);drop(db);
+    assert!(h.range_to(0,1,Vec::new()).is_err());assert!(tree.save_first(OperationId([0xd4;16]),"write",stale.file,&data).is_err());
+    drop(h);drop(tree);drop(old);drop(src);
+    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let fresh=smb.connect(rw).unwrap();let h=fresh.open_current("read").unwrap();let mut b=Vec::new();
+    h.range_to(0,h.size(),&mut b).unwrap();assert_eq!(b,b"old confirmed body");assert_eq!(h.file(),saved.file);
+    assert!(fresh.save_first(OperationId([0xd4;16]),"write",stale.file,&data).is_err());
+    let next=input(&t,"new",b"only new bytes");let made=fresh.save_first(OperationId([0xd5;16]),"write",stale.file,&next).unwrap();
+    assert_eq!(made.file,stale.file);let h=fresh.open_current("write").unwrap();let mut b=Vec::new();
+    h.range_to(0,h.size(),&mut b).unwrap();assert_eq!(b,b"only new bytes");
+}

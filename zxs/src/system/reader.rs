@@ -218,6 +218,9 @@ mod tests;
 #[path="volume.rs"]
 pub(crate) mod volume;
 
+#[path="credential.rs"]
+mod credential;
+
 #[path="account.rs"]
 pub(crate) mod account;
 

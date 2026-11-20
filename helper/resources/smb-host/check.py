@@ -11,12 +11,12 @@ import sys
 
 BASE = "/usr/share/local-ops-helper/smb-host/"
 UNIT = "zxs-smb-preflight.service.in"
-UNIT_SHA = "1c729d0f912d4e9040ac3a674329186e7899eadc673673d13d1b619673aef85e"
+UNIT_SHA = "7938f39003e526b858c242c14fe339e5157f7a4a4458420b7e56e14879b4ebc0"
 ELFS = ("/usr/lib/zxs-smb-runtime/debian13-amd64/sbin/smbd",
         "/usr/lib/zxs-smb-runtime/debian13-amd64/bin/zxs-smb-storage")
 SOURCE = "/var/lib/local-ops-helper/samba-instances/"
 VIEW = "/run/zxs-smb-held/"
-LIVE = "0154cff9b9d2f9be1f5ab7b374f36ee10530d7d1fe08f72ac2eaf19f32116406"
+LIVE = "a4724d2af6596303e9bccf5db9456629328ad6c575d88adcd8c55481b57708d2"
 KEYS = ("SYSTEM", "POOL", "INSTANCE", "PROVISION", "UID", "GID", "BOUND", "SMBD", "STORAGE")
 CAP = 128 << 20
 
@@ -151,11 +151,17 @@ def candidates(s,st):
                          and stat.S_IMODE(m.st_mode)==0o700))
     need(root.stamps[-1][:2] not in [m[:2] for m in site_dir.stamps] and site_dir.stamps[-1][:2] not in [m[:2] for m in root.stamps],
          "SYSTEM and site must not contain each other")
-    local=[root,site_dir,*priv]
+    account_shape=lambda m: protected(m) and m.st_gid==0 and stat.S_IMODE(m.st_mode)==0o700
+    account=slot(site+"/accountdb",account_shape)
+    projected=slot(VIEW+"accountdb",account_shape)
+    need(account.stamps[-1][2]==site_dir.stamps[-1][2] and projection(account.stamps[-1],projected.stamps[-1],
+         bool(os.fstatvfs(projected.fds[-1]).f_flag&os.ST_RDONLY)), "wrong or writable native account directory projection")
+    # Metadata only. Never permit this non-root preflight to traverse passdb.
+    local=[root,site_dir,*priv,account]
     need(len({x.stamps[-1][:2] for x in local})==len(local) and all(
-        x.stamps[-1][2]==site_dir.stamps[-1][2] for x in priv),"aliased installed directories or submount")
+        x.stamps[-1][2]==site_dir.stamps[-1][2] for x in [*priv,account]),"aliased installed directories or submount")
     results=[]
-    for name,length in (("domain.bound",128),("smb.conf",1277)):
+    for name,length in (("domain.bound",128),("smb.conf",1349)):
         accept=fixed_public_file(length)
         orig=slot(site+"/"+name,accept)
         view=slot(VIEW+name,accept)

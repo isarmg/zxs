@@ -79,13 +79,14 @@ pub(super) fn own_descriptor_table()->io::Result<(File,File)>{
     if Mount::on(&dir)?.is_none_or(|m|m.id!=mount.id)||fstatfs(&dir)?.f_type!=PROC_SUPER_MAGIC{return Err(denied());}
     Ok((proc,dir))
 }
-pub(super) fn no_inherited_descriptors()->io::Result<()>{
+pub(super) fn no_inherited_descriptors()->io::Result<()>{ only_inherited_descriptors(&[]) }
+pub(super) fn only_inherited_descriptors(already_verified:&[i32])->io::Result<()>{
     let (proc,dir)=own_descriptor_table()?;
     let mut buf=[MaybeUninit::uninit();4096];let mut entries=RawDir::new(&dir,&mut buf);
     while let Some(e)=entries.next(){
         let e=e?;let bytes=e.file_name().to_bytes();if bytes==b"."||bytes==b".."{continue;}
         let fd=std::str::from_utf8(bytes).ok().and_then(|s|s.parse::<i32>().ok()).ok_or_else(denied)?;
-        if !matches!(fd,0..=2)&&fd!=proc.as_raw_fd()&&fd!=dir.as_raw_fd(){return Err(denied());}
+        if !matches!(fd,0..=2)&&fd!=proc.as_raw_fd()&&fd!=dir.as_raw_fd()&&!already_verified.contains(&fd){return Err(denied());}
     }
     Ok(())
 }

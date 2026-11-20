@@ -3,7 +3,9 @@
 mod handoff;
 mod provision;
 pub(crate) use provision::exec_child;
-pub(super) use provision::{InstalledSetup,SelectedSetup,create_layout,provision_fresh_domain};
+pub(super) use provision::{create_layout,provision_fresh_domain};
+pub(in crate::sqlite_install) use provision::require_lent_ex;
+pub(super) use provision::{give_live_approval,request_live_approval,NativeSite,NativeSeen,sealed};
 use crate::sqlite_install::{bad,request::Id};
 use std::io;
 

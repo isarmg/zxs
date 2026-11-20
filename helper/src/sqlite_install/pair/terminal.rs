@@ -26,6 +26,10 @@ fn failure(s: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Invalid
 /// capture or hibernation trusted: those are independent deployment gates.
 fn protected_process(uid: u32, gid: u32) -> io::Result<()> {
     diagnostic_worker(uid, gid)?;
+    protect_memory()
+}
+
+fn protect_memory()->io::Result<()>{
     setrlimit(Resource::Core, Rlimit { current: Some(0), maximum: Some(0) })?;
     set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
     let lim = getrlimit(Resource::Core);
@@ -131,27 +135,25 @@ impl<'a> Quiet<'a> {
 }
 impl Drop for Quiet<'_> { fn drop(&mut self) { let _ = self.restore(); } }
 
-fn capture(entries:&mut [Entry;4],selected:&SelectedInput,tty:&Quiet<'_>,signals:&PromptSignals)->io::Result<()> {
-    let check=|| {signals.check()?; selected.audit.require_current()?; selected.channel.require()?;tty.verify()};
+fn capture(entries:&mut [Entry],offset:usize,selected:&SelectedInput,fd:BorrowedFd<'_>,
+           verify:impl Fn()->io::Result<()>,signals:&PromptSignals)->io::Result<()> {
+    let check=|| {signals.check()?; selected.audit.require_current()?; selected.channel.require()?;verify()};
     let mut scratch=Zeroizing::new([0u8;1]);
     for i in 0..entries.len() {
-        check()?;tty.next_prompt()?; // never accept leftovers from another prompt
+        check()?;tcflush(fd,QueueSelector::IFlush)?; // never accept leftovers from another prompt
         let end=Instant::now()+Duration::from_secs(120);
-        selected.channel.prompt(i,end,&check)?;
+        selected.channel.prompt(offset+i,end,&check)?;
         loop {
             check()?;
             if Instant::now()>=end{return Err(io::Error::new(io::ErrorKind::TimedOut,"credential prompt expired"));}
-            let n=match rustix::io::read(tty.fd,&mut scratch[..]) {
+            let n=match rustix::io::read(fd,&mut scratch[..]) {
                 Err(rustix::io::Errno::INTR)=>continue,other=>other?,
             };
             if n==0 {continue;} // VMIN=0/VTIME=2: timeout or hangup, never a complete password
             let done=entries[i].key(scratch[0]);scratch.zeroize();
             if done? {break;}
         }
-        if i==1&&!bool::from(entries[0].bytes().ct_eq(entries[1].bytes())){return Err(failure("Web entries did not match"));}
-        if i==3&&(!bool::from(entries[2].bytes().ct_eq(entries[3].bytes()))||bool::from(entries[0].bytes().ct_eq(entries[2].bytes()))) {
-            return Err(failure("SMB entries must match each other and differ from the Web password"));
-        }
+        if i==1&&!bool::from(entries[0].bytes().ct_eq(entries[1].bytes())){return Err(failure("the two protected password entries did not match"));}
     }
     check()
 }
@@ -167,37 +169,91 @@ impl SelectedInput {
         let audit=UnauditedInput::query_current()?;
         drop(host);Ok(Self{audit,channel})
     }
-}
-
-/// One guard across all four prompts: a pasted next line cannot be echoed
-/// between entries. All ordinary completions clear and restore the terminal
-/// before reinstating the signal mask, including on a prompt write timeout.
-pub(super) struct PairInputs {web:Secret,smb:Secret,workspace:WebWorkspace}
-impl PairInputs {
-    pub(super) fn prepare_web(self)->io::Result<(PreparedWeb,Secret)>{
-        Ok((PreparedWeb::fresh(self.web,self.workspace)?,self.smb))
+    /// Actual offline native process only, after loading the approved native
+    /// closed role and applying its process restrictions.
+    pub(super) fn smb_only(&self,ready:helper_linux_evidence::first_smb::Enrollment)
+        ->io::Result<helper_linux_evidence::first_smb::FirstSlot>{
+        let [smb,_]=self.pair_for(2)?;
+        ready.prepare(&smb.take())
     }
-}
-// First establish process restrictions and the complete Web workspace. The
-// separate SMB provider must also have qualified before opening the hidden prompts.
-pub(super) struct InputBudget<'a>{selected:&'a SelectedInput,workspace:WebWorkspace}
-impl<'a> InputBudget<'a>{
-    pub(super) fn reserve(selected:&'a SelectedInput,uid:u32,gid:u32)->io::Result<Self>{
-        selected.audit.require_current()?;protected_process(uid,gid)?;selected.channel.require()?;
-        let workspace=WebWorkspace::reserve()?;Ok(Self{selected,workspace})
+    pub(super) fn lock_native_memory(&self)->io::Result<()>{
+        self.audit.require_current()?;
+        self.channel.require()?;
+        protect_memory()
     }
-    pub(super) fn read(self, _smb:&helper_linux_evidence::first_smb::Enrollment)->io::Result<PairInputs>{
-        let Self{selected,workspace}=self;
-        selected.audit.require_current()?;selected.channel.require()?;
-        let mut entries:[Entry;4]=std::array::from_fn(|_|Entry::new());
-        let stdin=io::stdin(); let signals=PromptSignals::begin()?;
+    pub(super) fn web_only(&self,uid:u32,gid:u32)->io::Result<PreparedWeb>{
+        let WebEntry{workspace,..}=self.reserve_web(uid,gid)?;
+        let [web,_]=self.pair_for(0)?;
+        PreparedWeb::fresh(web.take(),workspace)
+    }
+    pub(super) fn reserve_web(&self,uid:u32,gid:u32)->io::Result<WebEntry<'_>>{
+        self.audit.require_current()?;self.channel.require()?;
+        protected_process(uid,gid)?;
+        let workspace=WebWorkspace::reserve()?;
+        Ok(WebEntry{selected:self,workspace})
+    }
+    pub(super) fn hold_for_birth<'a>(&'a self,tty:&'a io::Stdin)->io::Result<HeldQuiet<'a>>{
+        self.audit.require_current()?;self.channel.require()?;
+        let signals=PromptSignals::begin()?;
+        let tty=Quiet::begin(tty.as_fd())?;
+        Ok(HeldQuiet{tty,signals,selected:self})
+    }
+    fn pair_for(&self,offset:usize)->io::Result<[Entry;2]>{
+        if offset!=0&&offset!=2{return Err(failure("wrong fixed credential role"));}
+        let mut entries=std::array::from_fn(|_|Entry::new());
+        self.capture(&mut entries,offset)?;
+        Ok(entries)
+    }
+    fn capture(&self,entries:&mut [Entry],offset:usize)->io::Result<()>{
+        self.audit.require_current()?;self.channel.require()?;
+        let stdin=io::stdin();let signals=PromptSignals::begin()?;
         let mut tty=Quiet::begin(stdin.as_fd())?;
-        let captured=capture(&mut entries,selected,&tty,&signals);
+        let captured=capture(entries,offset,self,tty.fd,||tty.verify(),&signals);
         let restored=tty.restore();drop(tty);
         let pending=signals.check();let mask=signals.finish();
-        restored?;mask?;pending?;captured?;
-        let [web,_,smb,_]=entries;
-        Ok(PairInputs{web:web.take(),smb:smb.take(),workspace})
+        restored?;mask?;pending?;captured
+    }
+}
+
+// Quiet is dropped BEFORE the original signal mask (including errors).
+pub(super) struct HeldQuiet<'a>{tty:Quiet<'a>,signals:PromptSignals,selected:&'a SelectedInput}
+impl HeldQuiet<'_>{
+    pub(super) fn require(&self)->io::Result<()>{
+        self.signals.check()?;self.selected.audit.require_current()?;self.selected.channel.require()?;self.tty.verify()
+    }
+    pub(super) fn smb(&self,provider:helper_linux_evidence::first_smb::Enrollment)
+        ->io::Result<helper_linux_evidence::first_smb::FirstSlot>{
+        self.require()?;
+        let mut entries=std::array::from_fn::<_,2,_>(|_|Entry::new());
+        capture(&mut entries,2,self.selected,self.tty.fd,||self.tty.verify(),&self.signals)?;
+        let [smb,_]=entries;provider.prepare(&smb.take())
+    }
+    pub(super) fn finish(mut self)->io::Result<()>{
+        self.tty.restore()?;let pending=self.signals.check();self.signals.finish()?;pending
+    }
+}
+
+pub(super) struct WebEntry<'a>{selected:&'a SelectedInput,workspace:WebWorkspace}
+impl WebEntry<'_>{
+    // Parent owns the quiet terminal across both protocol prompts.
+    // This child verifies the actual selected mode but cannot restore it or
+    // pass a Web secret back. The parent collects this original child first.
+    pub(super) fn read_held(self)->io::Result<PreparedWeb>{
+        let stdin=io::stdin();let f=stdin.as_fd();
+        let state=tcgetattr(f)?;
+        if state.line_discipline!=0||state.input_modes!=InputModes::empty()
+            ||state.local_modes!=(LocalModes::ISIG|(state.local_modes&LocalModes::TOSTOP))
+            ||state.special_codes[Cc::VMIN]!=0||state.special_codes[Cc::VTIME]!=2||fcntl_getfl(f)?.contains(OFlags::NONBLOCK){
+            return Err(refuse("the exact parent-held hidden input mode is not in force"));
+        }
+        let same=|| {
+            if same_mode(&state,&tcgetattr(f)?){Ok(())}else{Err(refuse("parent-held hidden mode changed"))}
+        };
+        let signals=PromptSignals::begin()?;
+        let mut entries=std::array::from_fn::<_,2,_>(|_|Entry::new());
+        capture(&mut entries,0,self.selected,f,same,&signals)?;
+        signals.check()?;signals.finish()?;
+        let [web,_]=entries;PreparedWeb::fresh(web.take(),self.workspace)
     }
 }
 

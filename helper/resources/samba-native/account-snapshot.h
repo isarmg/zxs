@@ -31,4 +31,23 @@ struct helper_native_expected {
 enum helper_native_match helper_native_observe(int parent_pin, int store_pin,
     const struct helper_native_expected *expected);
 
+#ifdef HELPER_ACCOUNT_ISSUER
+#define HELPER_NATIVE_API __attribute__((visibility("default")))
+HELPER_NATIVE_API enum helper_native_match helper_native_predecessor(int site, int parent_pin, int store_pin,
+    const struct helper_native_expected *expected);
+HELPER_NATIVE_API bool helper_native_machine_domain(int site, int private_dir, int machine,
+    uint32_t uid, uint32_t gid, const uint8_t expected_domain[24]);
+/* Only the initiated, approved, protected issuer can call this. If successful,
+ * the returned O_PATH is to the original edited file, not a durable receipt.
+ * Failure is not evidence of rollback. No library or CLI exports the secret.
+ */
+HELPER_NATIVE_API int helper_native_change(int site, int parent_pin, int previous_pin, const struct helper_native_expected *expected,
+    const uint8_t private_nt[16], int *original_out);
+/* Explicitly approved completion only. Read the original target, sync the
+ * original file and original parent, close raw sync handles, independently
+ * reopen and verify that same native target. No password or write API.
+ */
+HELPER_NATIVE_API bool helper_native_confirm_target(int site, int parent_pin, int store_pin, const struct helper_native_expected *expected);
+#endif
+
 #endif

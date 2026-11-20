@@ -10,6 +10,8 @@
 2. 预先提供只读目录：`debian/`、`debian-security/` 各保留标准 `dists/.../InRelease`、`main/binary-amd64/Packages.xz`、`main/source/Sources.xz` 及所选包的 `pool/...` 原路径。另有 `rust/名称-版本.crate`，与本工程 Cargo.lock 的每份归档一一对应。[基础锁](lock.json)和[专用域的候选原包锁](samba-packages.json)记录了本次实际对照的两份 InRelease 摘要和每个准确二进制包/版本/摘要，不用“latest”。索引日期分别是 2026-09-12（trixie）和 2026-11-19（trixie-security）。过期后仍可另行审读保存的旧证据，本组包器不会用已过期的安全索引再发新候选；每次新发行须复核仍在有效期内的安全索引及修补版，过期或已被修订时须重新评审锁，不能把一个固定哈希当永久安全保证。
 3. 构建器用本机独立维护的 Debian 发行公钥验证 InRelease，然后核**签名内容里的**索引散列/大小，再从索引核每个原 .deb 及 Sources 中匹配版本的完整 .dsc、上游源码包、Debian 补丁/打包源码和其他列出的源文件。不会下载文件、运行 .deb 的脚本、执行任何随包 ELF，或将未知源码换成首页链接。缺一项即失败，不是“精简发行”。
 
+还需经独立核验的[固定离线原生账号角色及其对应源码](native-account.md)。普通组包须得到其 `role/`、完整 `ELF-INDEX-1` 和对应源码归档的独立摘要，核相同发行实际私有加载器及 libc，不自行给软件签名。
+
 在上述输入已核、获准实际打包时才执行：
 ```sh
 python3 packaging/debian13-amd64/build.py \
@@ -18,13 +20,17 @@ python3 packaging/debian13-amd64/build.py \
   --helper-sha256 <已核原二进制的64位十六进制> --source-commit <准确完整提交> \
   --stdlib-notices /release/build/rust-stdlib-and-linked-notices \
   --stdlib-notices-sha256 <与工具链和实际链接输入对应的材料摘要> \
+  --native-account-role /release/native/role \
+  --native-account-index-sha256 <ELF-INDEX-1 独立摘要> \
+  --native-account-sources /release/native/corresponding-sources.archive \
+  --native-account-sources-sha256 <完整对应源码归档摘要> \
   --output /release/candidates/helper-toolpack-1
 ```
 
 ## 实际形成的东西
 
-- 一份 `local-ops-helper_*_amd64.deb` 包含 `/usr/bin/helper` 与受保护的磁盘工具前缀 `/usr/lib/local-ops-helper/disk-tools-v1`。用户安装经核发行物后无需另行安装 fsck 工具，也不依赖 PATH。没有运行期下载器或自动安装包管理器。该磁盘工具前缀仅含明确允许的普通文件：三个上游程序、GNU ELF 解释器、libc、libcap、libselinux、PCRE2、libgcc_s，以及仅在新账户首设时按固定路径加载的 Libgcrypt 与 libgpg-error。解包不继承包条目的符号链接、SUID、capabilities、设备文件和脚本；不捆绑 mkfs、smartd、e2scrub、udev/sudo 配置、内核模块或 systemd 单元。
-- 实际检查器与所有库的字节不作改写。仅对发行副本的 helper 和启动器用标准 patchelf 重定位 **ELF 解释器及 DT_RPATH** 到这一受保护的绝对目录，并设置 NODEFLIB。构建经 readelf 检查所有直接/传递 ELF NEEDED 均有对应私有库，检查器只需 libc；不调用 ldd。动态装载仍以受信宿主内核/安装根和启动环境为前提，不能用签名证明整个宿主可信或无同权限篡改。两种检查动作在实际开动前各按自己的八槽摘要文件（`fat32-check-v1` 或 `exfat-check-v1`）重新核固定最终字节及路径；只把工具、解释器和 libc 交给检查器，不交出完整工具包目录。包内 BUNDLE.json 记录源码、版本、输入/输出哈希、重定位和依赖。
+- 一份 `local-ops-helper_*_amd64.deb` 包含 `/usr/bin/helper` 与受保护的磁盘工具前缀 `/usr/lib/local-ops-helper/disk-tools-v1`。用户安装经核发行物后无需另行安装 fsck 工具，也不依赖 PATH。没有运行期下载器或自动安装包管理器。该磁盘工具前缀仅含明确允许的普通文件：三个上游程序、GNU ELF 解释器、libc、libcap、libselinux、PCRE2、libgcc_s，以及只在明确离线原生维护动作中按固定路径加载的 Libgcrypt 与 libgpg-error。解包不继承包条目的符号链接、SUID、capabilities、设备文件和脚本；不捆绑 mkfs、smartd、e2scrub、udev/sudo 配置、内核模块或 systemd 单元。
+- 实际检查器和磁盘运行库的字节不作改写；单独原生账号角色中固定 ELF 依赖名的处理见其配方。仅对发行副本的 helper 和启动器用标准 patchelf 重定位 **ELF 解释器及 DT_RPATH** 到这一受保护的绝对目录，并设置 NODEFLIB。构建经 readelf 检查所有直接/传递 ELF NEEDED 均有对应私有库，检查器只需 libc；不调用 ldd。动态装载仍以受信宿主内核/安装根和启动环境为前提，不能用签名证明整个宿主可信或无同权限篡改。两种检查动作在实际开动前各按自己的八槽摘要文件（`fat32-check-v1` 或 `exfat-check-v1`）重新核固定最终字节及路径；只把工具、解释器和 libc 交给检查器，不交出完整工具包目录。包内 BUNDLE.json 记录源码、版本、输入/输出哈希、重定位和依赖。
 - 同一发行目录中提供签名索引、原始二进制包、准确对应源码、原补丁、本项目源归档（含组包脚本）、锁内 Rust 原档与 SHA256SUMS。安装包里随附 Debian 原版权/例外与常用许可全文、锁内每份 Rust 原包的署名/许可，以及根据精确工具链、实际链接输入另行审过并带独立摘要的声明；libgcc-s1 的 Debian 版权取同版 gcc-14-base 的原件。GPL/LGPL 等部件仍有各自义务，不能只交付 .deb、短许可名或仅给上游链接。[Debian 源包规范](https://www.debian.org/doc/debian-policy/ch-source.html) · [GNU 对应源码说明](https://www.gnu.org/licenses/gpl-faq.en.html#GPLInProprietarySystem)。
 - 输出只在一个全新目录产生。有 `INCOMPLETE` 即禁止使用；完成也仅是未签候选。正式发行前须独立核构建过程、ABI、源码/许可证和归档、安装/冲突处理、已签清单及带外可信签名公钥，在干净受控 Debian 13 环境实测再发布；本次均未执行。不给 Web 安装任意系统软件或 root 身份。
 
@@ -41,11 +47,11 @@ python3 packaging/debian13-amd64/build.py \
 
 资料：[Debian python3-samba 文件清单](https://packages.debian.org/trixie/amd64/python3-samba/filelist)、[python3-ldb 文件清单](https://packages.debian.org/trixie/amd64/python3-ldb/filelist)、[Debian 的 Samba 源文件](https://packages.debian.org/source/trixie/samba)。
 
-## SMB 首设的可选发行材料
+## 两账户的离线维护发行材料
 
 另从 Debian 13 amd64 的 [libgcrypt20](https://packages.debian.org/trixie/libgcrypt20) 与 [libgpg-error0](https://packages.debian.org/trixie/libgpg-error0) 固定原包解出两个真正共享库的完整字节。保留原包的对应源码、补丁与版权；不打包配置器、系统服务或启用兼容模式。它们不是普通诊断及原回执查询的启动依赖。交付前应在清洁 Debian 上核全包来源、目标 ELF 形状和实际原库；对缺库、受保护策略和 FIPS 模式分别验证，不以“能调用旧算法”替代政策许可。
 
-输出目录的 `PAIR-RELEASE` 只记 `PAIR-RELEASE-1`、最终 helper、Libgcrypt、libgpg-error 的三个 SHA-256。它列入发行签名材料，**不是**主机准许 NTLMv2 首设的配置。按[专实例首设范围](../../docs/samba-domain.md)须另有管理者预先在此池/实例签出的本机政策。包不会直接安装这份许可，亦不自动开服务。
+输出目录的 `NATIVE-ACCOUNT-RELEASE` 只记 `NATIVE-ACCOUNT-RELEASE-1`、最终 helper、原生闭包索引、Libgcrypt、libgpg-error 的四个 SHA-256。它列入发行签名材料，**不是**主机准许 NTLMv2 首设的配置。按[专实例首设范围](../../docs/samba-domain.md)须另有管理者预先在此池/实例签出的本机政策。包不会直接安装这份许可，亦不自动开服务。
 
 ## 私有运行库的安全更新
 

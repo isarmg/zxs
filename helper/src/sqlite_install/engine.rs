@@ -48,10 +48,8 @@ pub(super) fn existing(origin:&Existing<'_>,mode:Access)->io::Result<Connection>
     if !ro&&!origin.allows_install_write(){return Err(bad("an account observation cannot open the database for writing"));}
     open_existing(origin,ro)
 }
-// The account reader cannot upgrade itself. This branch accepts only a bound,
-// presently verified, operator-approved original; never a raw path or UID.
-pub(super) fn new_pair(permit:&super::pair::ReadyPair<'_>)->io::Result<Connection>{
-    open_existing(permit.writable_database()?,false)
+pub(super) fn native_pair(permit:&super::pair::NativeWriteGate<'_, '_>)->io::Result<Connection>{
+    open_existing(permit.database()?,false)
 }
 fn open_existing(origin:&Existing<'_>,ro:bool)->io::Result<Connection>{
     path_limit()?;origin.sidecars_absent()?;

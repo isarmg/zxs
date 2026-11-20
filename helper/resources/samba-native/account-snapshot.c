@@ -105,16 +105,20 @@ static bool expectations(const struct helper_native_expected *want) {
  * bytes. Examine only the extents of NT/LM/history. Do not create a SAMU
  * through getters that consult or initialize the instance account policies.
  */
-static enum helper_native_match samu(struct field b, const struct helper_native_expected *want) {
+struct change_fields { size_t description, nt; };
+static enum helper_native_match samu(struct field b, const struct helper_native_expected *want,
+    struct change_fields *locations) {
     struct field strings[12], hours;
+    const uint8_t *const start = b.p;
     uint32_t rid, group, lm, nt, history, flags, divisions, advertised, ignored;
-    uint32_t logoff, kickoff, last_set;
+    uint32_t logoff, kickoff, last_set, must_change;
     if (b.n > SAMU_LIMIT || !little(&b, 4, &ignored)
         || !little(&b, 4, &logoff) || logoff != SAMU_NEVER_EXPIRES
         || !little(&b, 4, &kickoff) || kickoff != SAMU_NEVER_EXPIRES
         || !little(&b, 4, &ignored) || !little(&b, 4, &last_set)
         || last_set == 0 || last_set == SAMU_MIN_TIME || last_set == SAMU_NEVER_EXPIRES
-        || !little(&b, 4, &ignored) || !little(&b, 4, &ignored))
+        || !little(&b, 4, &ignored) || !little(&b, 4, &must_change)
+        || must_change != SAMU_NEVER_EXPIRES)
         return HELPER_NATIVE_UNCONFIRMED;
     for (size_t i = 0; i < 12; ++i) {
         if (!counted(&b, &strings[i])) return HELPER_NATIVE_UNCONFIRMED;
@@ -127,7 +131,10 @@ static enum helper_native_match samu(struct field b, const struct helper_native_
         if (i != 8 && !empty_optional(strings[i])) return HELPER_NATIVE_UNCONFIRMED;
     }
     if (!little(&b, 4, &rid) || rid != USER_RID || !little(&b, 4, &group) || group != ORDINARY_GROUP_RID
-        || !little(&b, 4, &lm) || lm != 0 || !little(&b, 4, &nt) || nt != 16 || !take(&b, nt, NULL)
+        || !little(&b, 4, &lm) || lm != 0 || !little(&b, 4, &nt) || nt != 16)
+        return HELPER_NATIVE_UNCONFIRMED;
+    const size_t nt_offset = (size_t)(b.p - start);
+    if (!take(&b, nt, NULL)
         || !little(&b, 4, &history) || history != 0 || !little(&b, 4, &flags) || flags != ACB_NORMAL_ONLY
         || !little(&b, 2, &divisions) || divisions != 168 || !little(&b, 4, &advertised) || advertised != 21
         || !counted(&b, &hours) || hours.n != 32 || !little(&b, 2, &ignored)
@@ -138,6 +145,10 @@ static enum helper_native_match samu(struct field b, const struct helper_native_
         if (hours.p[i] != 0xff) return HELPER_NATIVE_UNCONFIRMED;
     }
     if (strings[8].n != sizeof(want->target)) return HELPER_NATIVE_UNCONFIRMED;
+    if (locations != NULL) {
+        locations->description = (size_t)(strings[8].p - start);
+        locations->nt = nt_offset;
+    }
     if (memcmp(strings[8].p, want->target, sizeof(want->target)) == 0) return HELPER_NATIVE_TARGET;
     if (want->has_previous && memcmp(strings[8].p, want->previous, sizeof(want->previous)) == 0)
         return HELPER_NATIVE_PREVIOUS;
@@ -162,7 +173,7 @@ static bool record(TDB_DATA key, TDB_DATA data, struct traversal *s) {
         if (string_field(v, s->want->login, s->want->login_len)) bit = 4;
     } else if (k.n > 5 && memcmp(k.p, "USER_", 5) == 0
                && string_field((struct field){k.p + 5, k.n - 5}, s->want->login, s->want->login_len)) {
-        s->matched = samu(v, s->want);
+        s->matched = samu(v, s->want, NULL);
         if (s->matched != HELPER_NATIVE_UNCONFIRMED) bit = 8;
     }
     if (bit == 0 || (s->seen & bit) != 0) {
@@ -192,38 +203,48 @@ static enum helper_native_match inspect(struct tdb_context *db, const struct hel
 }
 
 /* Compare this instant's full quiet original, never reuse it as a reboot ID. */
-static bool stamp(int fd, struct statx *out, bool directory) {
+static bool owned_stamp(int fd, struct statx *out, bool directory, bool read_only, uint32_t uid, uint32_t gid) {
     const unsigned mask = STATX_TYPE | STATX_MODE | STATX_UID | STATX_GID | STATX_NLINK |
                           STATX_INO | STATX_SIZE | STATX_MTIME | STATX_CTIME | STATX_MNT_ID;
     struct statvfs fs;
-    return fstatvfs(fd, &fs) == 0 && (fs.f_flag & ST_RDONLY) != 0
+    return fstatvfs(fd, &fs) == 0 && ((fs.f_flag & ST_RDONLY) != 0) == read_only
         && statx(fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT, mask, out) == 0
         && (out->stx_mask & mask) == mask && out->stx_mnt_id != 0 && out->stx_ino != 0
-        && out->stx_uid == 0 && out->stx_gid == 0
+        && out->stx_uid == uid && out->stx_gid == gid
         && (directory ? out->stx_mode == (S_IFDIR | 0700) && out->stx_nlink > 0
                        : out->stx_mode == (S_IFREG | 0600) && out->stx_nlink == 1
                          && out->stx_size > 0 && out->stx_size <= STORE_LIMIT);
+}
+static bool stamp(int fd, struct statx *out, bool directory, bool read_only) {
+    return owned_stamp(fd, out, directory, read_only, 0, 0);
 }
 static bool same_mount(const struct statx *a, const struct statx *b) {
     return a->stx_dev_major == b->stx_dev_major && a->stx_dev_minor == b->stx_dev_minor
         && a->stx_mnt_id == b->stx_mnt_id;
 }
-static bool quiet(int fd, const struct statx *old, bool directory) {
+static bool quiet(int fd, const struct statx *old, bool directory, bool read_only) {
     struct statx now;
-    return stamp(fd, &now, directory) && same_mount(old, &now) && old->stx_ino == now.stx_ino
+    return owned_stamp(fd, &now, directory, read_only, old->stx_uid, old->stx_gid)
+        && same_mount(old, &now) && old->stx_ino == now.stx_ino
         && old->stx_nlink == now.stx_nlink && old->stx_size == now.stx_size
         && old->stx_mtime.tv_sec == now.stx_mtime.tv_sec && old->stx_mtime.tv_nsec == now.stx_mtime.tv_nsec
         && old->stx_ctime.tv_sec == now.stx_ctime.tv_sec && old->stx_ctime.tv_nsec == now.stx_ctime.tv_nsec;
 }
-static bool names(const struct statx *directory, const struct statx *store) {
-    const int flags = O_PATH | O_CLOEXEC | O_NOFOLLOW;
-    int instance = open("/instance", flags | O_DIRECTORY);
-    if (instance < 0) return false;
-    int dir = openat(instance, "accountdb", flags | O_DIRECTORY);
+static int account_directory(int original_site) {
+    const int flags = O_PATH | O_CLOEXEC | O_NOFOLLOW | O_DIRECTORY;
+    if (original_site >= 3) return openat(original_site, "accountdb", flags);
+    int instance = open("/instance", flags);
+    if (instance < 0) return -1;
+    int dir = openat(instance, "accountdb", flags);
     close(instance);
+    return dir;
+}
+static bool names(int site, const struct statx *directory, const struct statx *store, bool read_only) {
+    const int flags = O_PATH | O_CLOEXEC | O_NOFOLLOW;
+    int dir = account_directory(site);
     if (dir < 0) return false;
     int pin = openat(dir, ACCOUNT_FILE, flags);
-    bool result = pin >= 0 && quiet(dir, directory, true) && quiet(pin, store, false);
+    bool result = pin >= 0 && quiet(dir, directory, true, read_only) && quiet(pin, store, false, read_only);
     if (pin >= 0) close(pin); /* O_PATH only, no competing lock-bearing open */
     close(dir);
     return result;
@@ -243,7 +264,8 @@ static bool proc_member(int fd, struct statx *where, unsigned type) {
         && (where->stx_mask & mask) == mask && where->stx_mnt_id != 0
         && (where->stx_mode & S_IFMT) == type;
 }
-static bool original_proc_path(int original, const struct statx *expected, char path[64]) {
+static bool original_proc_path(int original, const struct statx *expected, bool directory,
+    bool read_only, char path[64]) {
     const int pin = O_PATH | O_CLOEXEC | O_NOFOLLOW, dir = pin | O_DIRECTORY;
     char pid[16], number[16], actual[16];
     int n = snprintf(pid, sizeof(pid), "%ld", (long)getpid());
@@ -266,7 +288,7 @@ static bool original_proc_path(int original, const struct statx *expected, char 
     link = openat(table, number, pin);
     if (link < 0 || !proc_member(link, &child, S_IFLNK) || !same_mount(&root, &child)) goto done;
     target = openat(table, number, O_PATH | O_CLOEXEC);
-    if (target < 0 || !quiet(target, expected, false)) goto done;
+    if (target < 0 || !quiet(target, expected, directory, read_only)) goto done;
     n = snprintf(path, 64, "/proc/%s/fd/%s", pid, number);
     valid = n > 0 && n < 64;
 done:
@@ -277,15 +299,15 @@ done:
     close(proc);
     return valid;
 }
-enum helper_native_match helper_native_observe(int parent_pin, int store_pin,
-    const struct helper_native_expected *want) {
+static enum helper_native_match observe_mount(int site, int parent_pin, int store_pin,
+    const struct helper_native_expected *want, bool read_only) {
     struct statx p, f;
     const int directory_mode = fcntl(parent_pin, F_GETFL);
     const int file_mode = fcntl(store_pin, F_GETFL);
     if (!expectations(want) || directory_mode == -1 || file_mode == -1
         || !(directory_mode & O_PATH) || !(file_mode & O_PATH)
-        || !stamp(parent_pin, &p, true) || !stamp(store_pin, &f, false)
-        || !same_mount(&p, &f) || p.stx_ino == f.stx_ino || !names(&p, &f))
+        || !stamp(parent_pin, &p, true, read_only) || !stamp(store_pin, &f, false, read_only)
+        || !same_mount(&p, &f) || p.stx_ino == f.stx_ino || !names(site, &p, &f, read_only))
         return HELPER_NATIVE_UNCONFIRMED;
 
     /* Native O_RDONLY refuses recovery if writes are needed; no CREATE,
@@ -295,7 +317,7 @@ enum helper_native_match helper_native_observe(int parent_pin, int store_pin,
      * The released build must omit TDB_TRACE; this worker has no log callback.
      */
     char alias[64];
-    if (!original_proc_path(store_pin, &f, alias)) return HELPER_NATIVE_UNCONFIRMED;
+    if (!original_proc_path(store_pin, &f, false, read_only, alias)) return HELPER_NATIVE_UNCONFIRMED;
     struct tdb_context *db = tdb_open_ex(alias, 0, TDB_NOMMAP,
         O_RDONLY | O_CLOEXEC | O_NOATIME | O_NONBLOCK, 0, NULL, NULL);
     if (db == NULL) return HELPER_NATIVE_UNCONFIRMED;
@@ -303,11 +325,25 @@ enum helper_native_match helper_native_observe(int parent_pin, int store_pin,
     int mode = fcntl(data_fd, F_GETFL);
     enum helper_native_match result = HELPER_NATIVE_UNCONFIRMED;
     if (mode != -1 && !(mode & O_PATH) && (mode & O_ACCMODE) == O_RDONLY && (mode & O_NOATIME)
-        && quiet(data_fd, &f, false) && quiet(parent_pin, &p, true) && names(&p, &f)) {
+        && quiet(data_fd, &f, false, read_only) && quiet(parent_pin, &p, true, read_only) && names(site, &p, &f, read_only)) {
         result = inspect(db, want);
-        if (!quiet(data_fd, &f, false)) result = HELPER_NATIVE_UNCONFIRMED;
+        if (!quiet(data_fd, &f, false, read_only)) result = HELPER_NATIVE_UNCONFIRMED;
     }
-    if (tdb_close(db) != 0 || !quiet(store_pin, &f, false) || !quiet(parent_pin, &p, true)
-        || !names(&p, &f)) return HELPER_NATIVE_UNCONFIRMED;
+    if (tdb_close(db) != 0 || !quiet(store_pin, &f, false, read_only) || !quiet(parent_pin, &p, true, read_only)
+        || !names(site, &p, &f, read_only)) return HELPER_NATIVE_UNCONFIRMED;
     return result;
 }
+
+
+enum helper_native_match helper_native_observe(int parent_pin, int store_pin,
+    const struct helper_native_expected *want) {
+    return observe_mount(-1, parent_pin, store_pin, want, true);
+}
+
+/* The observer is not built with a write entry. The separate future issuer
+ * makes this private code reachable only in its fixed, approved host worker.
+ */
+#ifdef HELPER_ACCOUNT_ISSUER
+#include "account-domain.inc"
+#include "account-change.inc"
+#endif

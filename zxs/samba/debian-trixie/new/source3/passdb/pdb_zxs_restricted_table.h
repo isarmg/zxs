@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Private overlay for the exact Debian Samba passdb ABI. Included by its
  * native dispatcher and the source-only ABI fixture. This is not a generic
- * password database: SQLite under the separate storage UID is the authority.
+ * password query interface: the only SMB credential belongs to native tdbsam.
  * Never start with make_pdb_method(): its "defaults" can alter UNIX users,
  * groups, policy or Samba's secrets store. All 65 operation slots below
  * have their real C prototype; there are no casted or NULL deny callbacks. */
-#ifndef ZXS_SQLITE_PDB_TABLE_H
-#define ZXS_SQLITE_PDB_TABLE_H
+#ifndef ZXS_MANAGED_PDB_TABLE_H
+#define ZXS_MANAGED_PDB_TABLE_H
 
 #if PASSDB_INTERFACE_VERSION != 25
 #error "Re-audit every struct pdb_methods callback for this private build"
@@ -170,8 +170,8 @@ ZXS_PDB_FIELDS(ZXS_PDB_CALLBACK)
 #undef ZXS_PDB_CALLBACK
 
 #define ZXS_PDB_SLOT(type, field, answer, params) .field = zxs_##field,
-static const struct pdb_methods zxs_sqlite_methods = {
-	.name = "zxs_sqlite",
+static const struct pdb_methods zxs_restricted_methods = {
+	.name = "tdbsam",
 	ZXS_PDB_FIELDS(ZXS_PDB_SLOT)
 	/* No allocated private state or destructor. */
 };

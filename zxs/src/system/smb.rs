@@ -1,26 +1,19 @@
-//! The business side of a positively authenticated SMB session. No network
-//! adapter is active yet. A SID, a table row, a name, a WebAdmin or a true-ish
-//! argument cannot create a session. Only the source qualification fixture can
-//! supply that boundary until the actual Samba authentication bridge exists.
-use super::{Catalog,Connection,InitialReader,account::{setup_request,share_mode::{self,Mode,Setting}},check,sqlite3_step};
-use crate::{OperationId,fs::invalid,identity::{AccountId,ShareId}};
+//! Business authority belongs to the original authenticated session. Production
+//! construction is private to its storage-side endpoint after the managed SMB
+//! worker's successful final native update; a SID, name or WebAdmin is not proof.
+use super::{Catalog,Connection,InitialReader,account::share_mode::{self,Mode,Setting},credential::{Pair,Role},check,sqlite3_step};
+use crate::{OperationId,identity::{AccountId,ShareId}};
 use std::io;
 
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"no current authenticated SMB access")}
 #[derive(Clone,Debug,Eq,PartialEq)]
-struct Credential{account:AccountId,op:OperationId,generation:i64,sid:[u8;28],login:Vec<u8>}
+struct Credential{account:AccountId,instance:[u8;16],op:OperationId,generation:i64,sid:[u8;28],login:Vec<u8>}
 impl Credential{
-    // Only the public identity/generation of the original credential, never
-    // the NT password-equivalent and never the Web verifier. Not a login.
+    // Nonsecret mapping only. Native authentication never reads or opens SQL.
     fn current(db:&Connection,c:&Catalog)->io::Result<Self>{
-        let s=db.prepare(c"SELECT b.birth_op,x.actor_id,x.request_sha,b.approval_ref,b.web_login,b.smb_id,b.smb_login,b.smb_sid,b.web_id,k.credential_op,k.generation FROM main.account_pair b JOIN main.operation x ON x.op_id=b.birth_op JOIN main.smb_password k ON k.slot=b.singleton WHERE b.singleton=1 AND x.kind=2 AND x.state=1")?;
-        match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(denied()),rc=>{check(rc)?;return Err(denied());}}
-        let op=OperationId(s.array(0)?);let account=AccountId(s.array(5)?);let login=s.blob(6,64)?.to_vec();let sid=s.array(7)?;
-        let generation=s.integer(10)?;
-        if account.0==[0;16]||s.array::<16>(8)?==account.0||s.array::<16>(9)?!=op.0||generation!=1||
-           setup_request(c.birth.pool,c.birth.op,op,s.array(1)?,s.array(3)?,s.blob(4,64)?,&login,&sid)?!=s.array::<32>(2)?{
-            return Err(invalid("SMB origin is not the exact committed protocol credential"));}
-        s.done()?;Ok(Self{account,op,generation,sid,login})
+        let pair=Pair::confirmed(db,c)?.ok_or_else(denied)?;
+        let epoch=pair.epoch(db,c,Role::Smb)?.ok_or_else(denied)?;
+        Ok(Self{account:pair.smb,instance:pair.instance,op:epoch.op,generation:epoch.generation,sid:pair.sid,login:pair.smb_login.into_bytes()})
     }
 }
 pub(crate) struct SmbSession<'r>{source:&'r InitialReader,original:Credential}
@@ -38,7 +31,9 @@ impl<'r> SmbSession<'r>{
     /// Only the service portion already separated by SMB, never an entire
     /// UNC, display label or host path. Resolving an ID isn't authentication.
     pub(crate) fn connect_service(&self,name:&[u8])->io::Result<Tree<'_,'r>>{
-        let share=ShareId::from_smb_service(name).ok_or_else(denied)?;
+        self.connect_id(ShareId::from_smb_service(name).ok_or_else(denied)?)
+    }
+    fn connect_id(&self,share:ShareId)->io::Result<Tree<'_,'r>>{
         self.source.at(|db,c|{
             if Credential::current(db,&c)?!=self.original{return Err(denied());}
             let setting=share_mode::find(db,&c,share)?.ok_or_else(denied)?;

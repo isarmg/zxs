@@ -7,7 +7,7 @@ use std::{io,os::unix::ffi::OsStrExt};
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=6;
+pub(super) const SCHEMA_VERSION:i64=7;
 pub(super) const MAX_OBJECTS:i32=128; // includes SQLite's implicit indexes
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
@@ -28,20 +28,21 @@ fn shape(c:&Connection)->io::Result<Shape>{
     }
     Ok(result)
 }
-pub(super) struct Canonical(Shape);
+pub(super) struct Canonical(Shape, i64);
 impl Canonical{
-    pub(super) fn new()->io::Result<Self>{
+    pub(super) fn new()->io::Result<Self>{ Self::from_source(SCHEMA, SCHEMA_VERSION) }
+    fn from_source(schema:&str,version:i64)->io::Result<Self>{
         // Only a private in-memory template. No file fallback, ATTACH or second
         // source of product state. Use the same upstream parsing/normalization.
         let db=Connection::open_in_memory().map_err(sql)?;
         super::engine::limits(&db)?;
-        db.execute_batch(SCHEMA).map_err(sql)?;
-        let s=shape(&db)?;db.close().map_err(|_|bad("schema template close failed"))?;Ok(Self(s))
+        db.execute_batch(schema).map_err(sql)?;
+        let s=shape(&db)?;db.close().map_err(|_|bad("schema template close failed"))?;Ok(Self(s,version))
     }
     pub(super) fn require(&self,tx:&rusqlite::Transaction<'_>)->io::Result<()>{
         let app:i64=tx.query_row("PRAGMA main.application_id",[],|row|row.get(0)).map_err(sql)?;
         let v:i64=tx.query_row("PRAGMA main.user_version",[],|row|row.get(0)).map_err(sql)?;
-        if (app,v)!=(0x5a585331,SCHEMA_VERSION)||shape(tx)?!=self.0{return Err(bad("not the exact released database schema"));}
+        if (app,v)!=(0x5a585331,self.1)||shape(tx)?!=self.0{return Err(bad("not the exact released database schema"));}
         Ok(())
     }
 }

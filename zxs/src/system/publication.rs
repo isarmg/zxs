@@ -19,7 +19,7 @@ impl<'a> Request<'a>{
         if op.0==[0;16]||volume.0==[0;16]{return Err(invalid("missing publication operation or volume"));}
         let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/PUBLISH-ROOT\0")?;
         for raw in [pool.0,op.0,actor.0,credential.0]{h.update(&raw)?;}
-        h.update(&1u64.to_be_bytes())?; // only this first credential generation is implemented
+        h.update(&m.generation.to_be_bytes())?;
         h.update(&volume.0)?;h.update(&(label.len() as u16).to_be_bytes())?;h.update(label.as_bytes())?;
         Ok(Self{pool,op,actor,credential,volume,label,sha:h.finish()})
     }

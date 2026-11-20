@@ -1,0 +1,16 @@
+# Dedicated native Samba authentication
+# Source-side acceptance matrix. No daemon, user, client, credential, packet, or service
+# is created by reading this file. It does not stand in for the separate upstream build
+# check and Windows/SMB3 integration run, which have not been performed.
+generation-start: genuinely selected READY-2, physical original sole 4.0 account, native signed session
+valid: originally accepted TCP + fresh primary login, exact ZXSLOCAL and canonical SMB account, own correct password, native signing
+expect: original GENSEC produces ordinary native token and negotiated signing key; same SQL generation and named account after final cut; only after original claim and final update retain source
+no-elevation: no scope, wrong account/domain/password, anonymous including IPC$, Web account, FIPS prohibiting this mechanism, stale tag, rejected MIC, expired private attempt, replaced root account name or failed final update
+expect: no business session and no guest or fallback; never return a password or key on the storage socket
+decline-mapping: missing or ambiguous dedicated execution identity; UID/GID match but wrong Unix name; extra groups or privileges
+expect: login not issued even with right password, and do not consult a host password provider
+profile-matrix: bind each exact candidate live config independently; global-only with generated IPC$, no data shares, cold startup or real config reload
+expect: omitted "nt pipe support" (native default yes) and explicit yes reject before accepting sessions; explicit no passes this one gate only. No named-pipe RPC is offered on IPC$ even after ordinary authentication; normal direct data shares still require their separate SQL and VFS authority
+independence: the same correct native user can have no enabled share; an ordinary data tree without authorized VFS must still deny
+rotation: the original SQL history or a successful earlier login is not the new generation; complete helper rotates only while host and SYSTEM are exclusively offline
+not-tested: compiler or ABI, actual native database, process isolation, LAN, TCP negotiation, login, signing, backend writes, Windows clients, VFS, file locks, filesystem

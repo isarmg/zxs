@@ -84,6 +84,10 @@ impl PreparedWeb {
         tx.execute("INSERT INTO main.web_password(slot,credential_op,generation,salt,verifier) VALUES(1,?1,1,?2,?3)",
             params![&op[..],&self.salt[..],&self.verifier[..]])
     }
+    pub(super) fn reset(&self,tx:&Transaction<'_>,op:&[u8;16],previous:&[u8;16],generation:i64,old:i64)->rusqlite::Result<usize>{
+        tx.execute("UPDATE main.web_password SET credential_op=?1,generation=?2,salt=?3,verifier=?4
+            WHERE slot=1 AND credential_op=?5 AND generation=?6",params![&op[..],generation,&self.salt[..],&self.verifier[..],&previous[..],old])
+    }
     #[cfg(test)]
     pub(super) fn synthetic(salt: [u8;16], verifier: [u8;32]) -> Self {
         Self { salt, verifier: Zeroizing::new(verifier.to_vec().into_boxed_slice()) }

@@ -32,7 +32,7 @@ fn request(fd:&impl AsFd,cred:UCred,scope:&[u8;32])->io::Result<Option<[u8;32]>>
 }
 /// Called ONLY by the parent that still owns this consumed foreground grant
 /// and the unreaped real child. Ignore no received malformed/extra fields.
-pub(super) fn respond(fd:&impl AsFd,cred:UCred,scope:&[u8;32],permit:impl FnOnce()->io::Result<()>)->io::Result<bool>{
+pub(in crate::sqlite_install::pair) fn respond(fd:&impl AsFd,cred:UCred,scope:&[u8;32],permit:impl FnOnce()->io::Result<()>)->io::Result<bool>{
     let Some(n)=request(fd,cred,scope)?else{return Ok(false)};
     permit()?;put(fd,&frame(b'!',&n,scope))?;Ok(true)
 }
@@ -43,7 +43,7 @@ fn check_reply(fd:&impl AsFd,cred:UCred,n:&[u8;32],scope:&[u8;32])->io::Result<b
         Ok(_)=>Err(bad("different or replayed host start reply")),Err(e)=>Err(e),
     }
 }
-pub(super) fn child(fd:&impl AsFd,pid:Pid,scope:&[u8;32],alive:impl Fn()->io::Result<()>)->io::Result<()>{
+pub(in crate::sqlite_install::pair) fn child(fd:&impl AsFd,pid:Pid,scope:&[u8;32],alive:impl Fn()->io::Result<()>)->io::Result<()>{
     // Enable per-message attribution BEFORE the parent can know our nonce.
     sockopt::set_socket_passcred(fd,true)?;if !sockopt::socket_passcred(fd)?{return Err(bad("cannot attribute the live host reply"));}
     let start=Instant::now();let n=nonce()?;alive()?;put(fd,&frame(b'?',&n,scope))?;

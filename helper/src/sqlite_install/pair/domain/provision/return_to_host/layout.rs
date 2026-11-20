@@ -109,7 +109,6 @@ fn access_chain(site:&Site,gid:u32)->io::Result<()>{
     }
     site.check()
 }
-#[allow(dead_code)] // Used only by the dormant native account-store evidence.
 pub(super) fn verify_registered_instance(site:&Site, gid:u32)->io::Result<()>{
     if site.chain.len()!=PREFIX.len()+1{return Err(bad("the full original instance path is required"));}
     access_chain(site,gid)?;
@@ -146,7 +145,7 @@ fn owned(f:&File,u:u32,g:u32,m:Mode)->io::Result<()>{
     fchown(f,Some(Uid::from_raw(u)),Some(Gid::from_raw(g)))?;fchmod(f,m)?;Ok(())
 }
 
-struct NewTree{dirs:Vec<File>,private:File,state:File,cfg:File,uid:u32,gid:u32}
+struct NewTree{dirs:Vec<File>,private:File,state:File,account:File,cfg:File,uid:u32,gid:u32}
 impl NewTree{
     fn base(&self)->&File{self.dirs.last().expect("first newly created directory")}
     fn build(top:File,names:&[&CStr],uid:u32,gid:u32)->io::Result<Self>{
@@ -158,6 +157,7 @@ impl NewTree{
         // No lock on /var/lib or other global host directories.
         flock(base,FlockOperation::NonBlockingLockExclusive)?;
         let private=new_dir(base,c"private")?;let state=new_dir(base,c"state")?;
+        let account=new_dir(base,c"accountdb")?;owned(&account,0,0,OWNER)?;
         let cfg=File::from(openat(base,c"smb.conf",OFlags::CREATE|OFlags::EXCL|OFlags::RDWR|OFlags::NOFOLLOW
             |OFlags::NONBLOCK|OFlags::CLOEXEC,Mode::RUSR|Mode::WUSR)?);
         same_name(base,c"smb.conf",&cfg)?;let m=cfg.metadata()?;
@@ -172,7 +172,7 @@ impl NewTree{
             let (g,m)=if i+1==count{(gid,INSTANCE)}else{(0,SEARCH)};
             owned(f,0,g,m)?;
         }
-        Ok(Self{dirs,private,state,cfg,uid,gid})
+        Ok(Self{dirs,private,state,account,cfg,uid,gid})
     }
     fn verify(&self,parent:&File,top:&CStr,names:&[&CStr])->io::Result<()>{
         let base=self.base();let mut prior=parent;
@@ -187,7 +187,11 @@ impl NewTree{
             same_name(base,name,f)?;attrs(f,self.uid,self.gid,OWNER,true)?;
             bare_acl(f,c"system.posix_acl_access")?;bare_acl(f,c"system.posix_acl_default")?;contents(f,&[])?;
         }
-        if mark(&self.private)?==mark(&self.state)?{return Err(bad("aliased private and state directories"));}
+        same_name(base,c"accountdb",&self.account)?;attrs(&self.account,0,0,OWNER,true)?;
+        bare_acl(&self.account,c"system.posix_acl_access")?;bare_acl(&self.account,c"system.posix_acl_default")?;
+        contents(&self.account,&[])?;
+        let roles=[mark(&self.private)?,mark(&self.state)?,mark(&self.account)?];
+        if roles.iter().enumerate().any(|(i,x)|roles[..i].contains(x)){return Err(bad("aliased dedicated directories"));}
         same_name(base,c"smb.conf",&self.cfg)?;attrs(&self.cfg,0,0,PUBLIC,false)?;
         live::exact(&self.cfg)?;
         // Reopen only this selected regular public record independently.
@@ -195,11 +199,11 @@ impl NewTree{
         live::Live::select(base,&sha)?.require(base)
     }
     fn stamps(&self)->io::Result<Vec<Times>>{
-        self.dirs.iter().chain([&self.private,&self.state,&self.cfg]).map(Times::on).collect()
+        self.dirs.iter().chain([&self.private,&self.state,&self.account,&self.cfg]).map(Times::on).collect()
     }
     fn sync(&self,parent:&File,stage:&CStr,names:&[&CStr])->io::Result<Vec<Times>>{
         self.verify(parent,stage,names)?;let stamp=self.stamps()?;
-        self.cfg.sync_all()?;self.private.sync_all()?;self.state.sync_all()?;
+        self.cfg.sync_all()?;self.private.sync_all()?;self.state.sync_all()?;self.account.sync_all()?;
         for f in self.dirs.iter().rev(){f.sync_all()?;}
         self.verify(parent,stage,names)?;
         if self.stamps()?!=stamp{return Err(bad("new layout changed while synchronizing"));}

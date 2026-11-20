@@ -9,9 +9,9 @@
 enum zxs_vfs_route { ZXS_VFS_REJECT, ZXS_VFS_IPC, ZXS_VFS_FILE };
 static inline enum zxs_vfs_route zxs_file_vfs_route(
 	int snum, int ipc, bool request_ipc, bool printer, bool wide,
-	const char *const *objects)
+	const char *const *objects, bool native_pipes)
 {
-	if (snum < 0 || ipc < 0 || printer || wide ||
+	if (snum < 0 || ipc < 0 || printer || wide || native_pipes ||
 	    ((snum == ipc) != request_ipc)) {
 		return ZXS_VFS_REJECT;
 	}

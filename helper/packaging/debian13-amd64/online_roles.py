@@ -32,7 +32,7 @@ def select(name,search,rebuilt):
             "Samba family must come from this rebuild")
     return LIB+"/"+name
 
-def role(root,program,objects,catalog,built):
+def role(root,program,objects,catalog,built,site):
     expected=built["objects"];seen={};provided={};total=0
     smbd=program==PREFIX+"/"+ROLES[0]
     require(smbd or program==PREFIX+"/"+ROLES[1],"unrecognized program role")
@@ -84,18 +84,18 @@ def role(root,program,objects,catalog,built):
     require(all(n in seen for r in seen.values() for _,n in r.get("needed",[])) and
             sum(n.startswith(PREFIX+"/") for n in seen)==1,"unresolved role or second program")
     if smbd:
-        data=data_files(root,catalog)
+        data=data_files(root,catalog,site)
         require(seen.keys().isdisjoint(data),"generated files collide with ELF inputs")
         seen.update(data)
     verify_view(root,seen,RAW_LOADER,INTERP)
     return dict(sorted(seen.items()))
 
-def assemble(roots,objects,materials,catalog,built):
+def assemble(roots,objects,materials,catalog,built,site):
     roots.mkdir();catalog.current()
     results={};used=set()
     for ident,p in zip(("smbd","storage"),ROLES,strict=True):
         selected=PREFIX+"/"+p;root=roots/ident;root.mkdir()
-        rows=role(root,selected,objects,catalog,built)
+        rows=role(root,selected,objects,catalog,built,site)
         results[ident]={"program":selected,"interpreter":INTERP,"files":rows}
         used.update(n for n in rows if n in built["objects"])
     require(used==set(built["objects"]),"rebuilt intermediate not attributable to either role")

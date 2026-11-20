@@ -85,6 +85,10 @@ int main(void)
 	    zxs_fixed_unix_mapping(&fixed,"ZXSLOCAL\\user",1234,1235) ||
 	    zxs_fixed_unix_mapping(&fixed,"zxs-smb-client",1234,1236) ||
 	    zxs_fixed_unix_mapping(&fixed,NULL,1234,1235)) { return 1; }
+	fixed.pw_uid=65534;
+	if (zxs_fixed_unix_mapping(&fixed,"zxs-smb-client",65534,1235)) { return 1; }
+	fixed.pw_uid=1234;fixed.pw_gid=65534;
+	if (zxs_fixed_unix_mapping(&fixed,"zxs-smb-client",1234,65534)) { return 1; }
 	if (!rejected_before_reinit() || !no_inherited_receiver()) { return 1; }
 	a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
 	l=socket(AF_INET,SOCK_STREAM|SOCK_CLOEXEC,IPPROTO_TCP);

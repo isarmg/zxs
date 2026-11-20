@@ -4,9 +4,10 @@
 mod capsule;
 mod monitor;
 mod return_to_host;
+pub(in crate::sqlite_install::pair) use return_to_host::{give_live_approval,request_live_approval,NativeSite,NativeSeen};
+pub(in crate::sqlite_install) use return_to_host::lease as require_lent_ex;
 pub(crate) use return_to_host::exec_child;
 pub(in crate::sqlite_install::pair) use return_to_host::create_layout;
-pub(in crate::sqlite_install::pair) use return_to_host::{InstalledSetup,SelectedSetup};
 mod live;
 use super::handoff::{HeldOrigin,OriginChannel,SyncedStore};
 use crate::{fs_tools::RuntimeFile,isolated_group::Group,pinned::{Entity,Mount,Pinned},
@@ -62,7 +63,7 @@ fn named(pin:&Pinned,fd:&File)->io::Result<()>{
 struct Times{links:u64,len:u64,mtime:(i64,i64),ctime:(i64,i64)}
 impl Times{fn on(f:&File)->io::Result<Self>{let m=f.metadata()?;Ok(Self{links:m.nlink(),len:m.len(),
     mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})}}
-const FRESH_SITE:&[&[u8]]=&[b"private",b"state",b"smb.conf"];
+const FRESH_SITE:&[&[u8]]=&[b"private",b"state",b"smb.conf",b"accountdb"];
 const PRIVATE_STORE:&[&[u8]]=&[b"secrets.tdb"];
 fn contents(dir:&File,expected:&[&[u8]])->io::Result<()>{
     // All lists are small fixed constants. A raw, complete inventory rejects
@@ -124,7 +125,7 @@ fn limits()->io::Result<()>{
         let soft=old.current.map_or(hard,|s|s.min(hard));setrlimit(r,Rlimit{current:Some(soft),maximum:Some(hard)})?;
     }Ok(())
 }
-fn sealed(bytes:&[u8])->io::Result<File>{
+pub(in crate::sqlite_install::pair) fn sealed(bytes:&[u8])->io::Result<File>{
     use rustix::fs::{MemfdFlags,SealFlags,fcntl_add_seals,fcntl_get_seals,memfd_create};
     let mut f=File::from(memfd_create(c"helper-sam-fixed",MemfdFlags::CLOEXEC|MemfdFlags::ALLOW_SEALING|MemfdFlags::NOEXEC_SEAL)?);
     f.write_all(bytes)?;let seals=SealFlags::WRITE|SealFlags::GROW|SealFlags::SHRINK|SealFlags::SEAL;
@@ -263,7 +264,8 @@ mod tests{
     fn existing_bound_or_unfinished_staging_refuses_a_fresh_selection_even_with_empty_private(){
         let d=tempfile::tempdir().unwrap();let root=File::open(d.path()).unwrap();
         for n in ["private","state"]{std::fs::create_dir(d.path().join(n)).unwrap();}
-        File::create_new(d.path().join("smb.conf")).unwrap(); contents(&root,FRESH_SITE).unwrap();
+        File::create_new(d.path().join("smb.conf")).unwrap();
+        std::fs::create_dir(d.path().join("accountdb")).unwrap();contents(&root,FRESH_SITE).unwrap();
         for name in ["domain.bound","DOMAIN.BOUND",".domain.bound.new","other"]{
             let p=d.path().join(name);std::fs::write(&p,b"preserve me").unwrap();
             assert!(contents(&root,FRESH_SITE).is_err());assert_eq!(std::fs::read(&p).unwrap(),b"preserve me");

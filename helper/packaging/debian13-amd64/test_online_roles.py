@@ -9,6 +9,7 @@ from online_catalog import SRC, Catalog, installed, source_key, pool_path
 from online_objects import PREFIX, ROLES
 import online_roles as native
 import online_dynamic as dyn
+from test_online_dynamic import SITE
 
 def sha(b):return hashlib.sha256(b).hexdigest()
 
@@ -46,7 +47,7 @@ class Closure(unittest.TestCase):
             with patch.object(native,"release_profile",profile),patch.object(native,"inspected",return_value=symbol):
                 for i,r in enumerate((smbd,storage)):
                     root=base/str(i);root.mkdir()
-                    rows=native.role(root,r,objects,Bank(),{"objects":records})
+                    rows=native.role(root,r,objects,Bank(),{"objects":records},SITE)
                     self.assertEqual((root/native.RAW_LOADER).stat().st_nlink,2)
                     self.assertTrue((root/native.INTERP).samefile(root/native.RAW_LOADER))
                     self.assertEqual(rows[native.INTERP]["hardlink_to"],native.RAW_LOADER)
@@ -54,12 +55,15 @@ class Closure(unittest.TestCase):
                     self.assertEqual(native.LIB+"/libextra.so.3" in rows,i==0)
                     self.assertNotIn((storage,smbd)[i],rows)
                     self.assertEqual(codec_dep in rows,i==0)
-                    for file in (*dyn.CODECS,dyn.BASE,dyn.SWITCH,"etc/passwd","etc/group"):
+                    for file in (*dyn.CODECS,dyn.BASE,dyn.SWITCH,dyn.IDENTITIES,"etc/passwd","etc/group"):
                         self.assertEqual(file in rows,i==0)
                     if i==0:
                         self.assertEqual(rows[dyn.CODECS[0]]["needed"],[("libcodec-fixture.so.2",codec_dep)])
                         self.assertEqual(rows[dyn.BASE]["signed_table_inputs"].keys(),set(dyn.ROWS))
                         self.assertEqual((root/dyn.SWITCH).read_bytes(),dyn.POLICY)
+                        self.assertEqual((root/dyn.IDENTITIES).read_bytes(),SITE)
+                        self.assertEqual(rows["etc/passwd"]["approved_site_sha256"],sha(SITE))
+                        self.assertEqual(((root/"etc/passwd").read_bytes(),(root/"etc/group").read_bytes()),dyn.site_nss(SITE))
                         for unexpected in (dyn.GDIR+"gconv-modules.cache","etc/shadow","etc/ld.so.preload",
                                            native.LIB+"/libnss_winbind.so.2"):
                             # These are files in the test's own temporary role, never host paths.
@@ -71,7 +75,7 @@ class Closure(unittest.TestCase):
                 # The smbd's direct NEEDED set itself is unchanged, but the external
                 # ELF several steps away can no longer be supplied. No partial graph.
                 del external["libc.so.6"];fresh=base/"missing";fresh.mkdir()
-                with self.assertRaises(KeyError):native.role(fresh,smbd,objects,Bank(),{"objects":records})
+                with self.assertRaises(KeyError):native.role(fresh,smbd,objects,Bank(),{"objects":records},SITE)
     def test_stock_samba_unreachable_original_and_duplicate_soname_are_never_alternatives(self):
         pub,private=native.DIRECTORIES;n="libnamed.so.4"
         self.assertEqual(native.select(n,[pub],{}),pub+"/"+n)

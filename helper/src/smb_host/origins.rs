@@ -23,12 +23,13 @@ pub(super) struct Inputs<'a>{
     pub(super) uid:u32,pub(super) gid:u32,pub(super) pool:[u8;16],pub(super) instance:[u8;16],
     pub(super) operation:[u8;16],pub(super) bound_sha:[u8;32],
     pub(super) smbd_sha:[u8;32],pub(super) storage_sha:[u8;32],
+    pub(super) approved_nss_sha:[u8;32],pub(super) web_uid:u32,pub(super) web_gid:u32,
 }
-fn file_at(f:&File,path:&str,flags:OFlags)->io::Result<File>{Ok(File::from(openat2(f,path,flags,Mode::empty(),SAFE)?))}
+pub(super) fn file_at(f:&File,path:&str,flags:OFlags)->io::Result<File>{Ok(File::from(openat2(f,path,flags,Mode::empty(),SAFE)?))}
 fn dir(f:&File,p:&str)->io::Result<File>{file_at(f,p,DIR)}
-fn ident(f:&File)->io::Result<Entity>{Entity::of(&f.metadata()?)}
-fn mid(f:&File)->io::Result<u64>{Ok(Mount::on(f)?.ok_or_else(no)?.id)}
-fn ro(f:&File)->io::Result<bool>{Ok(fstatvfs(f)?.f_flag.contains(StatVfsMountFlags::RDONLY))}
+pub(super) fn ident(f:&File)->io::Result<Entity>{Entity::of(&f.metadata()?)}
+pub(super) fn mid(f:&File)->io::Result<u64>{Ok(Mount::on(f)?.ok_or_else(no)?.id)}
+pub(super) fn ro(f:&File)->io::Result<bool>{Ok(fstatvfs(f)?.f_flag.contains(StatVfsMountFlags::RDONLY))}
 fn directory(f:&File,unowned:bool)->io::Result<()>{
     let m=f.metadata()?;if !m.is_dir() ||unowned&&(m.uid()!=0||m.mode()&0o022!=0){return Err(no());}Ok(())
 }
@@ -48,8 +49,11 @@ fn projected(site:&File,role:&File,name:&str,len:u64)->io::Result<File>{
     if mid(&raw)?!=mid(site)?||ident(&raw)?!=ident(&show)?||mid(&raw)?==mid(&show)?||!ro(&show)?{return Err(no());}
     // Only after pinning and validating both: read from this immutable role
     // projection, never from a client path or the original secret SAM database.
-    let f=file_at(role,name,OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC)?;
-    exact_public(&f,len)?;if !super::same(&f,&show)?{return Err(no());}Ok(f)
+    let f=crate::pinned::sam_public_reader(&show,mid(&show)?,len)?;
+    exact_public(&f,len)?;
+    if !super::same(&f,&show)?||!ro(&f)?||!super::same(&file_at(role,name,pin)?,&show)?||
+       !super::same(&file_at(site,name,pin)?,&raw)?{return Err(no());}
+    Ok(f)
 }
 fn exact<const N:usize>(f:&File)->io::Result<[u8;N]>{
     exact_public(f,N as u64)?;let m=f.metadata()?;let mut b=[0;N];f.read_exact_at(&mut b,0)?;
@@ -93,6 +97,7 @@ impl<'a> Selected<'a>{
         if ident(&self.daemon.0.file)?==ident(&self.storage.0.file)?{return Err(no());}
         let host=File::from(open(c"/",DIR,Mode::empty())?);
         view(a.daemon_root,&host)?;view(a.storage_root,&host)?;
+        super::identity::require(a.daemon_root,a.storage_root,a.approved_nss_sha,(a.uid,a.gid),(a.web_uid,a.web_gid))?;
         let ids=[ident(a.daemon_root)?,ident(a.storage_root)?,ident(a.site)?,ident(a.system)?];
         if ids.iter().enumerate().any(|(i,k)|ids[..i].contains(k)){return Err(no());}
         let role=dir(a.daemon_root,"instance")?;directory(&role,true)?;directory(a.site,true)?;
@@ -105,6 +110,23 @@ impl<'a> Selected<'a>{
                 m.mode()&0o7777!=0o700||m.uid()!=a.uid||m.gid()!=a.gid||ro(&projected)?{return Err(no());}
         }
         if ident(&dir(a.site,"private")?)?==ident(&dir(a.site,"state")?)?{return Err(no());}
+        // TDB has no presence in either Web or storage. The isolated
+        // smbd sees one read-only directory projection of the actual host
+        // inode; a same-byte copy or read-only file alone is not sufficient.
+        let account=dir(a.site,"accountdb")?;let account_view=dir(&role,"accountdb")?;
+        let m=account.metadata()?;
+        if m.mode()!=0o040700||m.uid()!=0||m.gid()!=0||m.nlink()==0||mid(&account)?!=mid(a.site)?||
+            ident(&account)?!=ident(&account_view)?||mid(&account)?==mid(&account_view)?||!ro(&account_view)?||
+            ["private","state"].iter().any(|n|dir(a.site,n).and_then(|f|ident(&f)).ok()==ident(&account).ok()){
+            return Err(no());
+        }
+        let db_path=OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC;
+        let store=file_at(&account,"passdb.tdb",db_path)?;let shown=file_at(&account_view,"passdb.tdb",db_path)?;
+        let f=store.metadata()?;
+        if f.mode()!=0o100600||f.uid()!=0||f.gid()!=0||f.nlink()!=1||!(1..=64<<20).contains(&f.len())||
+            mid(&store)?!=mid(&account)?||mid(&shown)?!=mid(&account_view)?||ident(&store)?!=ident(&shown)?||!ro(&shown)?{
+            return Err(no());
+        }
         for n in ["run","cache","lock"]{
             let d=dir(&role,n)?;directory(&d,true)?;if mid(&d)?!=mid(&role)?||!ro(&d)?{return Err(no());}
         }

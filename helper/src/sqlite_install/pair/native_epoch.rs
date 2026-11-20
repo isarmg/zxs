@@ -94,6 +94,9 @@ impl ExpectedMarkers {
         Ok(Self { previous, target })
     }
 
+    pub(super) fn fields(&self) -> (Option<[u8; NATIVE_WIDTH]>, [u8; NATIVE_WIDTH]) {
+        (self.previous.map(Epoch::native), self.target.native())
+    }
     pub(super) fn classify(&self, field: &[u8]) -> io::Result<Match> {
         let observed = Epoch::parse_native(field)?;
         if observed == self.target { return Ok(Match::Target); }

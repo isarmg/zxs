@@ -3,17 +3,19 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 
 -- Both INIT (1) and SETUP_PAIR (2) name a separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
 -- SET_SHARE_MODE (4) changes one share; no per-user ACL.
 -- CREATE_FILE (5) reserves one ordinary root member before any media write.
 -- FIRST_WORK (6) selects the first manual working revision, never a formal Node.
+-- RESET_SMB (7) is pending until its single native SAM account is durable.
+-- RESET_WEB (8) changes only the Web verifier in one SQL commit.
 -- An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6)),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6,7,8)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
@@ -47,12 +49,14 @@ CREATE TABLE volume_claim (
   UNIQUE(claim_op,root_path)
 ) STRICT, WITHOUT ROWID;
 
--- Exactly one indivisible pair per pool. Public identities and two credential
--- payloads are separate; a Web query never selects the SMB password-equivalent.
+-- Exactly one immutable protocol identity pair per pool. This database contains
+-- only the Web credential. Samba alone holds the SMB credential, never a copy here.
 CREATE TABLE account_pair (
   singleton     INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),
   birth_op      BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
   approval_ref  BLOB NOT NULL CHECK(length(approval_ref)=16 AND approval_ref<>zeroblob(16)),
+  instance_id   BLOB NOT NULL CHECK(length(instance_id)=16 AND instance_id<>zeroblob(16)),
+  setup_bound_sha BLOB NOT NULL CHECK(length(setup_bound_sha)=32),
   web_id        BLOB NOT NULL CHECK(length(web_id)=16 AND web_id<>zeroblob(16)),
   web_login     BLOB NOT NULL CHECK(length(web_login) BETWEEN 1 AND 64 AND instr(web_login,X'00')=0 AND
        CAST(substr(web_login,1,1) AS TEXT) GLOB '[a-z0-9]' AND CAST(web_login AS TEXT) NOT GLOB '*[^a-z0-9._-]*'),
@@ -66,17 +70,42 @@ CREATE TABLE account_pair (
 CREATE TABLE web_password (
   slot          INTEGER NOT NULL PRIMARY KEY REFERENCES account_pair(singleton) CHECK(slot=1),
   credential_op BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
-  generation    INTEGER NOT NULL CHECK(generation=1),
+  generation    INTEGER NOT NULL CHECK(generation>=1),
   salt          BLOB NOT NULL CHECK(length(salt)=16),
   verifier      BLOB NOT NULL CHECK(length(verifier)=32)
 ) STRICT, WITHOUT ROWID;
-CREATE TABLE smb_password (
-  slot          INTEGER NOT NULL PRIMARY KEY REFERENCES account_pair(singleton) CHECK(slot=1),
-  credential_op BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
-  generation    INTEGER NOT NULL CHECK(generation=1),
-  nt_owf        BLOB NOT NULL CHECK(length(nt_owf)=16 AND nt_owf<>zeroblob(16)
-                 AND nt_owf<>X'31D6CFE0D16AE931B73C59D7E0C089C0')
+-- Immutable public revisions, one chain per protocol. A NULL bound_sha is
+-- mandatory for Web: Web reset never reads the native SAM or its credentials.
+CREATE TABLE credential_reset (
+  op_id        BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  role         INTEGER NOT NULL CHECK(role IN (0,1)), -- 0 Web, 1 SMB
+  previous_op  BLOB NOT NULL REFERENCES operation(op_id) CHECK(previous_op<>op_id),
+  generation   INTEGER NOT NULL CHECK(generation>=2),
+  approval_ref BLOB NOT NULL CHECK(length(approval_ref)=16 AND approval_ref<>zeroblob(16)),
+  bound_sha    BLOB CHECK((role=0 AND bound_sha IS NULL) OR
+                           (role=1 AND bound_sha IS NOT NULL AND length(bound_sha)=32)),
+  UNIQUE(role,generation), UNIQUE(role,previous_op)
 ) STRICT, WITHOUT ROWID;
+CREATE VIEW credential_epoch(role,slot,credential_op,generation) AS
+  SELECT 0,singleton,birth_op,1 FROM account_pair UNION ALL
+  SELECT 1,singleton,birth_op,1 FROM account_pair UNION ALL
+  SELECT role,1,op_id,generation FROM credential_reset;
+-- A newer PENDING row makes every older credential of that role inactive;
+-- NEVER choose the latest *committed* generation as a fallback.
+CREATE VIEW active_credential(role,slot,credential_op,generation) AS
+  SELECT e.role,e.slot,e.credential_op,e.generation FROM credential_epoch e
+  JOIN operation o ON o.op_id=e.credential_op AND o.state=1
+   AND o.kind=CASE WHEN e.generation=1 THEN 2 WHEN e.role=1 THEN 7 ELSE 8 END
+  WHERE NOT EXISTS(SELECT 1 FROM credential_reset r WHERE r.role=e.role AND r.generation>e.generation);
+CREATE TRIGGER start_reset BEFORE INSERT ON credential_reset
+WHEN EXISTS(SELECT 1 FROM credential_reset WHERE op_id=NEW.op_id OR
+            (role=NEW.role AND (generation=NEW.generation OR previous_op=NEW.previous_op)))
+  OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id)
+  OR NOT EXISTS(SELECT 1 FROM active_credential WHERE role=NEW.role AND credential_op=NEW.previous_op
+                AND generation=NEW.generation-1)
+BEGIN SELECT RAISE(ABORT,'reset requires the precise active predecessor and a fresh original'); END;
+CREATE TRIGGER keep_reset BEFORE UPDATE ON credential_reset BEGIN SELECT RAISE(ABORT,'immutable credential reset'); END;
+CREATE TRIGGER retain_reset BEFORE DELETE ON credential_reset BEGIN SELECT RAISE(ABORT,'retain credential reset'); END;
 
 -- A published metadata object, not a filesystem-health observation or
 -- an ACL. The management label is exact UTF-8 bytes, not a host pathname.
@@ -116,7 +145,7 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.change_op)
                 WHERE r.share_id=NEW.share_id AND o.kind=3 AND o.state=1)
   OR NEW.previous_op<>COALESCE((SELECT change_op FROM share_mode WHERE share_id=NEW.share_id ORDER BY revision DESC LIMIT 1),
                                 (SELECT publish_op FROM root_share WHERE share_id=NEW.share_id))
-  OR NOT EXISTS(SELECT 1 FROM web_password WHERE credential_op=NEW.author_auth_op)
+  OR NOT EXISTS(SELECT 1 FROM active_credential WHERE role=0 AND credential_op=NEW.author_auth_op)
   OR NEW.revision-1<>COALESCE((SELECT MAX(revision) FROM share_mode WHERE share_id=NEW.share_id),0)
   OR NEW.mode=COALESCE((SELECT mode FROM share_mode WHERE share_id=NEW.share_id ORDER BY revision DESC LIMIT 1),0)
 BEGIN SELECT RAISE(ABORT,'share mode requires this predecessor, a different mode and fresh operation'); END;
@@ -130,7 +159,7 @@ CREATE TABLE root_entry (
   create_op    BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
   share_id     BLOB NOT NULL REFERENCES root_share(share_id),
   setting_op   BLOB NOT NULL REFERENCES share_mode(change_op),
-  auth_op      BLOB NOT NULL REFERENCES smb_password(credential_op),
+  auth_op      BLOB NOT NULL REFERENCES operation(op_id),
   volume_id    BLOB NOT NULL REFERENCES volume_claim(volume_id),
   display      BLOB NOT NULL CHECK(length(display) BETWEEN 1 AND 222 AND instr(display,X'00')=0),
   terminal     BLOB NOT NULL CHECK(length(terminal)=length(display)+33 AND instr(terminal,X'00')=0),
@@ -149,7 +178,7 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
              OR history_id=NEW.history_id OR branch_id=NEW.branch_id OR ticket=NEW.ticket
              OR (volume_id=NEW.volume_id AND (display=NEW.display OR terminal=NEW.terminal)))
   OR NOT EXISTS(SELECT 1 FROM root_share r JOIN share_mode m ON m.share_id=r.share_id
-       JOIN operation p ON p.op_id=m.change_op JOIN smb_password a ON a.credential_op=NEW.auth_op
+       JOIN operation p ON p.op_id=m.change_op JOIN active_credential a ON a.role=1 AND a.credential_op=NEW.auth_op
        WHERE r.share_id=NEW.share_id AND r.volume_id=NEW.volume_id AND m.change_op=NEW.setting_op AND m.mode=2
          AND p.kind=4 AND p.state=1 AND m.revision=(SELECT max(x.revision) FROM share_mode x WHERE x.share_id=r.share_id))
 BEGIN SELECT RAISE(ABORT,'FILE requires this live read-write share, original SMB credential and vacant root member'); END;
@@ -165,7 +194,7 @@ CREATE TABLE first_work (
   file_id       BLOB NOT NULL REFERENCES root_entry(file_id),
   share_id      BLOB NOT NULL REFERENCES root_share(share_id),
   setting_op    BLOB NOT NULL REFERENCES share_mode(change_op),
-  auth_op       BLOB NOT NULL REFERENCES smb_password(credential_op),
+  auth_op       BLOB NOT NULL REFERENCES operation(op_id),
   logical_bytes INTEGER NOT NULL CHECK(logical_bytes BETWEEN 0 AND 1125899906842624),
   content_sha   BLOB NOT NULL CHECK(length(content_sha)=32),
   directory_sha BLOB NOT NULL CHECK(length(directory_sha)=32),
@@ -186,10 +215,11 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.save_op)
        SELECT 1 FROM first_work old JOIN operation o ON o.op_id=old.save_op
        JOIN share_mode m ON m.change_op=old.setting_op
        WHERE old.save_op=NEW.previous_save AND old.file_id=NEW.file_id AND old.attempt_no=NEW.attempt_no-1
-         AND o.kind=6 AND o.state=0 AND m.revision<(SELECT MAX(z.revision) FROM share_mode z WHERE z.share_id=old.share_id)))
+         AND o.kind=6 AND o.state=0 AND (m.revision<(SELECT MAX(z.revision) FROM share_mode z WHERE z.share_id=old.share_id)
+           OR NOT EXISTS(SELECT 1 FROM active_credential WHERE role=1 AND credential_op=old.auth_op))))
  OR NOT EXISTS(SELECT 1 FROM root_entry e JOIN operation b ON b.op_id=e.create_op
        JOIN root_share r ON r.volume_id=e.volume_id JOIN share_mode m ON m.share_id=r.share_id
-       JOIN operation p ON p.op_id=m.change_op JOIN smb_password s ON s.credential_op=NEW.auth_op
+       JOIN operation p ON p.op_id=m.change_op JOIN active_credential s ON s.role=1 AND s.credential_op=NEW.auth_op
        WHERE e.file_id=NEW.file_id AND b.kind=5 AND b.state=1 AND r.share_id=NEW.share_id
          AND m.change_op=NEW.setting_op AND m.mode=2 AND p.kind=4 AND p.state=1
          AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=r.share_id))
@@ -197,31 +227,36 @@ BEGIN SELECT RAISE(ABORT,'first working revision requires the actual born file a
 CREATE TRIGGER keep_work BEFORE UPDATE ON first_work BEGIN SELECT RAISE(ABORT,'immutable first working input'); END;
 CREATE TRIGGER retain_work BEFORE DELETE ON first_work BEGIN SELECT RAISE(ABORT,'retain original working input'); END;
 
--- SETUP_PAIR prepares both fixed slots in one transaction. Deferred FKs
--- force their kind-2 receipt before commit; no half-provisioned identity.
+-- Setup reserves the pair before native IO. Neither role is active until the
+-- same setup commits; role-specific resets never change the other role.
 CREATE TRIGGER new_origin BEFORE INSERT ON operation
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) AND kind=NEW.kind))
+  OR EXISTS(SELECT 1 FROM credential_reset r WHERE r.op_id=NEW.op_id AND NEW.kind<>CASE r.role WHEN 0 THEN 8 ELSE 7 END)
+  OR (NEW.kind=7 AND (NEW.state<>0 OR NOT EXISTS(SELECT 1 FROM credential_reset WHERE op_id=NEW.op_id AND role=1)))
+  OR (NEW.kind=8 AND (NEW.state<>1 OR NOT EXISTS(SELECT 1 FROM credential_reset r
+        JOIN web_password w ON w.credential_op=r.op_id AND w.generation=r.generation
+        WHERE r.op_id=NEW.op_id AND r.role=0)))
   OR (NEW.kind<>6 AND EXISTS(SELECT 1 FROM first_work WHERE save_op=NEW.op_id))
   OR (NEW.kind=6 AND (NEW.state<>0 OR NOT EXISTS(
-    SELECT 1 FROM first_work f JOIN smb_password s ON s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
+    SELECT 1 FROM first_work f JOIN active_credential s ON s.role=1 AND s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE f.save_op=NEW.op_id AND a.smb_id=NEW.actor_id)))
   OR (NEW.kind<>5 AND EXISTS(SELECT 1 FROM root_entry WHERE create_op=NEW.op_id))
   OR (NEW.kind=5 AND (NEW.state<>0 OR NOT EXISTS(
-    SELECT 1 FROM root_entry e JOIN smb_password s ON s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
+    SELECT 1 FROM root_entry e JOIN active_credential s ON s.role=1 AND s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE e.create_op=NEW.op_id AND a.smb_id=NEW.actor_id)))
   OR (NEW.kind<>4 AND EXISTS(SELECT 1 FROM share_mode WHERE change_op=NEW.op_id))
   OR (NEW.kind<>3 AND EXISTS(SELECT 1 FROM root_share WHERE publish_op=NEW.op_id))
   OR (NEW.kind<>2 AND EXISTS(SELECT 1 FROM account_pair WHERE birth_op=NEW.op_id))
   OR (NEW.kind=1 AND NEW.state<>0)
-  OR (NEW.kind=2 AND (NEW.state<>1 OR NOT EXISTS(
-     SELECT 1 FROM account_pair a JOIN web_password w ON w.slot=a.singleton JOIN smb_password s ON s.slot=a.singleton
-     WHERE a.birth_op=NEW.op_id AND w.credential_op=NEW.op_id AND s.credential_op=NEW.op_id)))
+  OR (NEW.kind=2 AND (NEW.state<>0 OR NOT EXISTS(
+     SELECT 1 FROM account_pair a JOIN web_password w ON w.slot=a.singleton
+     WHERE a.birth_op=NEW.op_id AND w.credential_op=NEW.op_id AND w.generation=1)))
   OR (NEW.kind=3 AND (NEW.state<>1 OR NOT EXISTS(
-     SELECT 1 FROM root_share r JOIN web_password w ON w.credential_op=r.author_auth_op
+     SELECT 1 FROM root_share r JOIN active_credential w ON w.role=0 AND w.credential_op=r.author_auth_op
      JOIN account_pair a ON a.singleton=w.slot JOIN operation o ON o.op_id=a.birth_op
      WHERE r.publish_op=NEW.op_id AND a.web_id=NEW.actor_id AND o.kind=2 AND o.state=1)))
   OR (NEW.kind=4 AND (NEW.state<>1 OR NOT EXISTS(
-     SELECT 1 FROM share_mode x JOIN web_password w ON w.credential_op=x.author_auth_op
+     SELECT 1 FROM share_mode x JOIN active_credential w ON w.role=0 AND w.credential_op=x.author_auth_op
      JOIN account_pair a ON a.singleton=w.slot JOIN operation o ON o.op_id=a.birth_op
      WHERE x.change_op=NEW.op_id AND a.web_id=NEW.actor_id AND o.kind=2 AND o.state=1)))
 BEGIN SELECT RAISE(ABORT,'duplicate, incomplete or wrongly staged origin'); END;
@@ -234,19 +269,17 @@ BEGIN SELECT RAISE(ABORT,'account pair requires committed INIT and a fresh exact
 CREATE TRIGGER retain_pair BEFORE DELETE ON account_pair BEGIN SELECT RAISE(ABORT,'retain account pair'); END;
 CREATE TRIGGER keep_pair BEFORE UPDATE ON account_pair BEGIN SELECT RAISE(ABORT,'immutable account identities'); END;
 CREATE TRIGGER start_web_credential BEFORE INSERT ON web_password
-WHEN EXISTS(SELECT 1 FROM web_password)
+WHEN EXISTS(SELECT 1 FROM web_password) OR NEW.generation<>1
   OR NOT EXISTS(SELECT 1 FROM account_pair WHERE singleton=NEW.slot AND birth_op=NEW.credential_op)
   OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.credential_op)
 BEGIN SELECT RAISE(ABORT,'new web credential must belong to this pair setup'); END;
 CREATE TRIGGER retain_web_credential BEFORE DELETE ON web_password BEGIN SELECT RAISE(ABORT,'retain web credential'); END;
-CREATE TRIGGER change_web_credential BEFORE UPDATE ON web_password BEGIN SELECT RAISE(ABORT,'reset requires its separate authorized operation'); END;
-CREATE TRIGGER start_smb_credential BEFORE INSERT ON smb_password
-WHEN EXISTS(SELECT 1 FROM smb_password)
-  OR NOT EXISTS(SELECT 1 FROM account_pair WHERE singleton=NEW.slot AND birth_op=NEW.credential_op)
-  OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.credential_op)
-BEGIN SELECT RAISE(ABORT,'new smb credential must belong to this pair setup'); END;
-CREATE TRIGGER retain_smb_credential BEFORE DELETE ON smb_password BEGIN SELECT RAISE(ABORT,'retain smb credential'); END;
-CREATE TRIGGER change_smb_credential BEFORE UPDATE ON smb_password BEGIN SELECT RAISE(ABORT,'reset requires its separate authorized operation'); END;
+CREATE TRIGGER change_web_credential BEFORE UPDATE ON web_password
+WHEN NEW.slot<>OLD.slot OR NOT EXISTS(
+  SELECT 1 FROM credential_reset r WHERE r.op_id=NEW.credential_op AND r.role=0
+    AND r.previous_op=OLD.credential_op AND r.generation=NEW.generation
+    AND r.generation-1=OLD.generation AND NOT EXISTS(SELECT 1 FROM operation WHERE op_id=r.op_id))
+BEGIN SELECT RAISE(ABORT,'Web reset requires its staged original and exact old credential'); END;
 CREATE TRIGGER keep_op_identity BEFORE UPDATE OF op_id,kind,actor_id,request_sha ON operation
 BEGIN SELECT RAISE(ABORT,'operation identity is immutable'); END;
 CREATE TRIGGER keep_operation BEFORE DELETE ON operation
@@ -284,13 +317,17 @@ CREATE TRIGGER confirm_origin BEFORE UPDATE OF state ON operation
 WHEN OLD.state<>0 OR NEW.state<>1 OR NOT (
   (OLD.kind=1 AND EXISTS(SELECT 1 FROM pool_birth b WHERE b.init_op=OLD.op_id
     AND b.root_count=(SELECT count(*) FROM volume_claim WHERE claim_op=OLD.op_id))) OR
+  (OLD.kind=2 AND EXISTS(SELECT 1 FROM account_pair a JOIN web_password w ON w.slot=a.singleton
+    WHERE a.birth_op=OLD.op_id AND w.credential_op=OLD.op_id AND w.generation=1)) OR
+  (OLD.kind=7 AND EXISTS(SELECT 1 FROM credential_reset r WHERE r.op_id=OLD.op_id AND r.role=1
+    AND NOT EXISTS(SELECT 1 FROM credential_reset later WHERE later.role=1 AND later.generation>r.generation))) OR
   (OLD.kind=6 AND EXISTS(SELECT 1 FROM first_work f JOIN share_mode m ON m.change_op=f.setting_op
-    JOIN smb_password s ON s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
+    JOIN active_credential s ON s.role=1 AND s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE f.save_op=OLD.op_id AND NOT EXISTS(SELECT 1 FROM first_work nxt WHERE nxt.previous_save=f.save_op)
       AND a.smb_id=OLD.actor_id AND m.mode=2
       AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=f.share_id))) OR
   (OLD.kind=5 AND EXISTS(SELECT 1 FROM root_entry e JOIN share_mode m ON m.change_op=e.setting_op
-    JOIN smb_password s ON s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
+    JOIN active_credential s ON s.role=1 AND s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE e.create_op=OLD.op_id AND a.smb_id=OLD.actor_id AND m.mode=2
       AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=e.share_id))))
 BEGIN SELECT RAISE(ABORT,'incomplete, revoked or already completed operation'); END;

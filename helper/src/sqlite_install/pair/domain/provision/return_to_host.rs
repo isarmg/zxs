@@ -4,13 +4,14 @@
 //! directory authority is granted to the worker. Not an online smbd channel.
 mod issue;
 mod worker;
-mod installed;
-#[allow(dead_code)] // Native account storage is not part of the currently published v6 setup path.
+mod native_site;
+pub(in crate::sqlite_install::pair) use native_site::NativeSite;
+pub(in crate::sqlite_install::pair) use accountdb::Seen as NativeSeen;
 mod accountdb;
 mod layout;
 pub(in crate::sqlite_install::pair) use layout::create_layout;
-pub(in crate::sqlite_install::pair) use installed::{InstalledSetup,SelectedSetup};
 mod start;
+pub(in crate::sqlite_install::pair) use start::{child as request_live_approval, respond as give_live_approval};
 pub(crate) use worker::exec_child;
 use super::{FRESH_SITE,PRIVATE_STORE,Unpublished,child,contents,live,mark};
 use super::super::{LocalDomain,handoff::{OriginChannel,SyncedStore}};
@@ -123,7 +124,20 @@ impl HostOrigins{
             if !m.is_dir()||m.uid()!=u||m.mode()&0o7777!=0o700||m.nlink()==0
                 ||mark(dir)?.1!=mount||mark(&pin_dir(root,n)?)?!=mark(dir)?{return Err(bad("changed private/state original"));}
         }
-        self.live.require(root)?;contents(&self.state,&[])?;Ok(())
+        self.live.require(root)?;contents(&self.state,&[])?;
+        // The domain bootstrap only works on a known empty companion account
+        // directory. It neither hands it to the low guest nor creates a user.
+        let account=pin_dir(root,c"accountdb")?;
+        let stat=account.metadata()?;
+        if stat.mode()!=0o040700||stat.uid()!=0||stat.gid()!=0||stat.nlink()==0||mark(&account)?.1!=mount{
+            return Err(bad("not the dedicated, root-only, empty account directory"));
+        }
+        let opened=child(&account,c".")?;
+        if mark(&opened)?!=mark(&account)?{return Err(bad("unexpected account directory change"));}
+        layout::exact_component(root,c"accountdb",&account)?;
+        layout::bare_acl(&opened,c"system.posix_acl_access")?;
+        layout::bare_acl(&opened,c"system.posix_acl_default")?;
+        contents(&opened,&[])?;Ok(())
     }
     fn marks(&self)->io::Result<[(Entity,u64);6]>{
         Ok([(self.system.entity(),self.system.mount()?.id),mark(self.site.base())?,mark(&self.private)?,mark(&self.state)?,self.live.origin(),self.release.original()?])
@@ -188,7 +202,7 @@ fn require_owned(fd:&File,id:(Entity,u64))->io::Result<()>{
     if !owns_flock(&bytes,id.0.ino,id.1){return Err(bad("no exact whole-file exclusive flock on the received open description"));}
     Ok(())
 }
-fn lease(fd:&File,id:(Entity,u64))->io::Result<()>{
+pub(in crate::sqlite_install) fn lease(fd:&File,id:(Entity,u64))->io::Result<()>{
     let flags=fcntl_getfl(fd)?;
     if flags.contains(OFlags::PATH)||!flags.contains(OFlags::DIRECTORY)||flags&OFlags::ACCMODE!=OFlags::RDONLY
         ||mark(fd)?!=id||!fd.metadata()?.is_dir(){return Err(bad("not the expected original worker lease"));}

@@ -3,6 +3,7 @@
 //! There is no public path from a preflight result to a start grant.
 mod process;
 mod origins;
+mod identity;
 mod supervisor;
 use crate::fs_tools::{RuntimeFile,hash_upto};
 use crate::pinned::{Entity,Mount};

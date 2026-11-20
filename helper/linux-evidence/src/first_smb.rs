@@ -1,6 +1,6 @@
 //! Debian 13 amd64, fixed Libgcrypt 1.11 ABI. Not a hash or login service.
-//! The only consumer of password-equivalent material is the fixed INSERT for
-//! the initial SMB slot; no export, comparison, formatting or reset API.
+//! The only consumer of password-equivalent material is the protected native
+//! Samba account operation in the same process. Never SQL, IPC or output.
 #![allow(unsafe_code)]
 use core::{ffi::{c_char,c_int,c_uint,c_void,CStr},ptr::{self,NonNull}};
 use std::{io,slice,sync::atomic::{AtomicBool,Ordering}};
@@ -200,11 +200,15 @@ fn utf16le(input:&[u8],out:&mut [u8;2048])->io::Result<usize>{
 /// Only the selected transaction's initial, non-overwriting SMB slot is bound.
 pub struct FirstSlot(Handle);
 impl FirstSlot{
-    pub fn insert(&mut self,tx:&rusqlite::Transaction<'_>,op:&[u8;16])->io::Result<usize>{
-        permitted(&self.0.lib)?;let v=self.0.value()?;
-        tx.execute("INSERT INTO main.smb_password(slot,credential_op,generation,nt_owf) VALUES(1,?1,1,?2)",
-            rusqlite::params![&op[..],&v[..]]).map_err(|_|io::Error::other("fixed SMB enrollment row not inserted"))
+    /// Use only the signed, fixed native recipient at the exact account
+    /// directory. No general callback returns the password equivalent.
+    pub fn native_change(mut self, provider:&super::native_sam::Library,
+        site:&std::fs::File,parent:&std::fs::File,previous:Option<&std::fs::File>,
+        expected:&super::native_sam::Expected)->io::Result<std::fs::File>{
+        permitted(&self.0.lib)?;
+        provider.change(site,parent,previous,expected,self.0.value()?)
     }
+
 }
 
 #[cfg(test)]mod tests{

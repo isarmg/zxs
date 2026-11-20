@@ -21,7 +21,7 @@ ZXS 是独立的 Linux 文件容器存储服务。**面向用户的入口只有 
 
 [Web / SMB 接入与测试迁移](docs/web-and-smb.md)区分计划、源码和真实协议验收。`src/main.rs` 仍是 Cargo 会默认打包、能实际读写的**过渡开发验收驱动**，不是产品 CLI，不再新增命令，也不是 HTTP/SMB 或 helper 的调用协议。旧根式测试只选卷根；库中的有类型父是卷根或确切已安装的 DirectoryId。日常文件操作保留在同一业务内核，不转给 helper。
 
-新池采用[两种固定协议身份](docs/first-account-v1.md)：一位 Web 管理员和一位 SMB 用户，新设计只由专用 Samba tdbsam 保管 SMB 密码，SQLite 保管 Web 密码和非秘密身份/权限。现有 v6 尚未切换，两边须配套更新，不能从 SQL 口令回退。新发布共享初始停用，管理员按共享选择只读或读写；匿名、guest、错凭据、不在已启用共享内都拒绝。没有多用户或逐人 ACL。SQLite 及内部 Web 验证属于库层源码，不表示网站或 Samba 已上线。
+新池采用[两种固定协议身份](docs/first-account-v1.md)：一位 Web 管理员和一位 SMB 用户，新设计只由专用 Samba tdbsam 保管 SMB 密码，SQLite 保管 Web 密码和非秘密身份/权限。v7 SQL 无 SMB 密验列。维护端及原生运行时须配套，不能从旧 SQL 口令回退。新发布共享初始停用，管理员按共享选择只读或读写；匿名、guest、错凭据、不在已启用共享内都拒绝。没有多用户或逐人 ACL。SQLite 及内部 Web 验证属于库层源码，不表示网站或 Samba 已上线。
 
 同一 SQLite 普通共享下，已接到[首份手动工作稿](docs/sqlite-system.md#首份工作修订)：按业务名创建容器、保存实际二进制、关闭后从只读共享按原名重新打开并按 offset 读取。空保存也有自己的 revision 1；重复原单不会新建版本，保存不是正式提交。当前源码夹具仅代入 SMB 已验真事件，未运行；真实 Windows 登录、新工作修订的后续编辑与自动模式尚待接入；管理 Web 的源码已接 Unix 套接字，未部署。专用 smbd 的[原生启动/重载守卫和并发边界](samba/README.md)只是网络准入的前置，并非已验证的 SMB 会话。
 

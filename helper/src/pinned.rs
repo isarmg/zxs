@@ -168,6 +168,31 @@ pub(crate) fn sam_public_reader(pin:&File,mount:u64,length:u64)->io::Result<File
     reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::PublicSamMount(mount))
 }
 
+/// Only a bounded public NSS member already selected beneath the dedicated
+/// smbd's independently approved readonly execution root. Do not data-open
+/// a second path lookup or require this private root image to be ext4/etc.
+pub(crate) fn smb_nss_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{
+    use rustix::fs::{fstatvfs,StatVfsMountFlags};
+    let qualify=|f:&File|->io::Result<Entity>{
+        let m=f.metadata()?;
+        if m.mode()!=0o100644||m.uid()!=0||m.gid()!=0||m.nlink()!=1||
+            !(1..=512).contains(&length)||m.len()!=length||Mount::on(f)?.is_none_or(|v|v.id!=mount)||
+            !fstatvfs(f)?.f_flag.contains(StatVfsMountFlags::RDONLY){
+            return Err(invalid("not the selected original readonly NSS member"));
+        }
+        Entity::of(&m)
+    };
+    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH){
+        return Err(invalid("expected the actual NSS pin"));
+    }
+    let entity=qualify(pin)?;
+    let reader=reopen_admitted_reader(pin,entity,ReaderBoundary::PublicSamMount(mount))?;
+    if qualify(&reader)?!=entity||qualify(pin)?!=entity{
+        return Err(invalid("selected NSS member changed before its read"));
+    }
+    Ok(reader)
+}
+
 /// After Samba has exited: synchronize the original O_PATH-selected store on
 /// the separately approved private mount. No content is read or returned.
 pub(crate) fn sync_sam_store(pin:&File,uid:u32,mount:u64)->io::Result<()>{
@@ -319,6 +344,22 @@ mod tests {
         assert_ne!(original_parent.entity(), super::Pinned::open(&parent, super::Kind::Directory).unwrap().entity());
         assert!(selected.require_same_path().is_err());
         assert!(current.require_same_path().is_ok());
+    }
+    #[test]
+    fn reopening_a_pinned_public_object_does_not_open_its_replacement_by_name() {
+        use super::{Entity,Kind,Mount,Pinned,ReaderBoundary,reopen_admitted_reader};
+        use std::io::Read;
+        let area=tempfile::tempdir().unwrap();
+        let named=area.path().join("original");let retained=area.path().join("retained");
+        std::fs::write(&named,b"selected bytes").unwrap();
+        let old=Pinned::open(&named,Kind::Regular).unwrap();
+        let id=Mount::on(&old.fd).unwrap().unwrap().id;
+        std::fs::rename(&named,retained).unwrap();
+        std::os::unix::fs::symlink("does-not-exist",&named).unwrap();
+        let mut reopened=reopen_admitted_reader(&old.fd,old.entity(),ReaderBoundary::PublicSamMount(id)).unwrap();
+        let mut b=Vec::new();reopened.read_to_end(&mut b).unwrap();
+        assert_eq!(b,b"selected bytes");assert_eq!(Entity::of(&reopened.metadata().unwrap()).unwrap(),old.entity());
+        assert!(old.require_same_path().is_err());
     }
     #[test]
     fn filesystem_allowlist_returns_the_admitted_type_or_rejects_it() {

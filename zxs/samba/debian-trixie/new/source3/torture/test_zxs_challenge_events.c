@@ -29,12 +29,28 @@ static bool watch(struct tevent_context *ev,struct observed *o)
 	if (!r || !tevent_req_set_endtime(r,ev,tevent_timeval_current_ofs(2,0))) { return false; }
 	tevent_req_set_callback(r,notified,o);return true;
 }
+/* This part covers the two *reply* sockets, not native login. It uses
+ * public dummy numbers only and does not require a database or peer UID. */
+static bool separate_tree_replies(void)
+{
+	int a[2],b[2];uint8_t wanted[16]={1},other[16]={2},cut[ZXS_SMB_TREE_CUT_BYTES]={0};
+	struct zxs_smb_tree_cut decision={0};
+	if (socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,a)!=0 ||
+	    socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,b)!=0) { return false; }
+	memcpy(cut,wanted,16);cut[16]=3;cut[32]=4;cut[55]=9;cut[56]=1;
+	bool ok=zxs_smb_tree_reply(a[1],cut)==0 && zxs_smb_tree_read(b[0],wanted,&decision)!=0 &&
+		zxs_smb_tree_read(a[0],wanted,&decision)==0 && decision.volume[0]==3 &&
+		decision.setting[0]==4 && decision.revision==9 && decision.mode==1;
+	ok=ok && zxs_smb_tree_reply(b[1],cut)==0 && zxs_smb_tree_read(b[0],other,&decision)!=0;
+	cut[56]=0;ok=ok && zxs_smb_tree_reply(a[1],cut)==0 && zxs_smb_tree_read(a[0],wanted,&decision)!=0;
+	close(a[0]);close(a[1]);close(b[0]);close(b[1]);return ok;
+}
 int main(void)
 {
 	struct tevent_context *ev=tevent_context_init(NULL);
 	int a[2],b[2];struct timespec now;int64_t start;
 	uint8_t x[8],y[8];
-	if (!ev || socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,a)!=0 ||
+	if (!ev || !separate_tree_replies() || socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,a)!=0 ||
 	    socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,b)!=0 ||
 	    clock_gettime(CLOCK_MONOTONIC,&now)!=0) {return 1;}
 	start=(int64_t)now.tv_sec*1000+now.tv_nsec/1000000;
