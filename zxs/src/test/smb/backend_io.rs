@@ -6,6 +6,7 @@ use crate::{
         wire::{
             direct::Frame,
             io_fields::{IoFieldError, OpenReference, WireOpenId},
+            io_reply::FileReply,
             message::Compound,
         },
     },
@@ -180,13 +181,13 @@ fn read_requires_an_open_data_grant_not_list_execute_share_or_zero_length() {
         (FILE, 1, range(17, 4, 0, 0), 3, ReadFault::ResponseSpace),
     ] {
         let h = original(&table, facts(obj, access), Reader { called: &called, storage: Ok(body) }, 7);
-        assert_eq!(h.read(request, room), Err(fault));
+        assert_eq!(h.read(request, room).err(), Some(fault));
         assert_eq!(called.get(), None);
     }
 }
 
 #[test]
-fn checked_short_data_zero_length_and_real_eof_remain_distinct() {
+fn checked_short_data_zero_length_and_real_eof_follow_wire_status() {
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let called = Cell::new(None);
     let grant = facts(FILE, 1);
@@ -195,14 +196,18 @@ fn checked_short_data_zero_length_and_real_eof_remain_distinct() {
         (range(17, 4, 3, 0), Ok(&b"ab"[..]), Err(ReadFault::EndOfFile)),
         (range(17, 4, 5, 0), Ok(&b"abcd"[..]), Err(ReadFault::EndOfFile)),
         (range(17, 4, 0, 0), Ok(&b""[..]), Err(ReadFault::EndOfFile)),
-        (range(17, 0, 0, 0), Ok(&b""[..]), Ok(&b""[..])),
+        (range(17, 0, 0, 0), Ok(&b""[..]), Err(ReadFault::EndOfFile)),
         (range(17, 0, 0, 0), Err("revoked"), Err(ReadFault::Original("revoked"))),
         (range(17, 4, 0, 0), Err("medium offline"), Err(ReadFault::Original("medium offline"))),
         (range(17, 4, 0, 0), Ok(&b"abcde"[..]), Err(ReadFault::InconsistentLength)),
     ] {
         called.set(None);
         let h = original(&table, grant, Reader { called: &called, storage }, 7);
-        assert_eq!(h.read(request, 4), result);
+        let checked = h.read(request, 4);
+        match result {
+            Ok(data) => assert_eq!(checked.unwrap().data(), data),
+            Err(fault) => assert_eq!(checked.err(), Some(fault)),
+        }
         assert_eq!(called.get(), Some((request.offset(), request.length())));
     }
 }
@@ -211,6 +216,7 @@ struct Closer<'a> {
     owner: &'a OpenCoordinator,
     called: &'a Cell<Option<CloseMode>>,
     failure: bool,
+    attributes_available: bool,
 }
 impl CheckedClose for Closer<'_> {
     type Error = &'static str;
@@ -221,6 +227,7 @@ impl CheckedClose for Closer<'_> {
         assert_eq!(self.owner.reserve(&op, rhs, Share::from_bits(7).unwrap()).err(),
             Some(ReserveError::SharingViolation)); // original still owns its vote
         if self.failure { return Err("unconfirmed close"); }
+        if !self.attributes_available { return Ok(None); }
         Ok(Some(CloseAttributes { created: 1, accessed: 2, written: 3, changed: 4,
             allocation_size: 8, end_of_file: 5, file_attributes: 0x20 }))
     }
@@ -231,13 +238,13 @@ fn explicit_close_consumes_the_hold_while_drop_never_auto_closes_or_flushes() {
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let called = Cell::new(None);
     let open = |failure| original(&table, facts(FILE, 1),
-        Closer { owner: &table, called: &called, failure }, 1);
+        Closer { owner: &table, called: &called, failure, attributes_available: true }, 1);
     drop(open(false));
     assert_eq!(called.get(), None); // unexpected disconnect is not a normal close
 
-    assert!(open(false).close(CloseMode::Plain).unwrap().is_none());
+    assert!(open(false).close(CloseMode::Plain).unwrap().attributes().is_none());
     assert_eq!(called.get(), Some(CloseMode::Plain));
-    assert_eq!(open(false).close(CloseMode::PostQueryAttributes).unwrap().unwrap().end_of_file, 5);
+    assert_eq!(open(false).close(CloseMode::PostQueryAttributes).unwrap().attributes().unwrap().end_of_file, 5);
     assert_eq!(called.get(), Some(CloseMode::PostQueryAttributes));
     assert_eq!(open(true).close(CloseMode::Plain).err(), Some("unconfirmed close"));
     drop(open(false)); // error released the old vote, without publishing success
@@ -440,4 +447,75 @@ fn empty_write_and_actual_flush_never_imply_history_or_a_new_open() {
     assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0)]);
     assert_eq!(h.flush(), Ok(()));
     assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0), Flush]);
+}
+
+
+#[test]
+fn read_reply_uses_actual_short_count_and_borrows_the_original_payload() {
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let called = Cell::new(None);
+    let prepared = b"Hi";
+    let open = original(&table, facts(FILE, 1), Reader { called: &called, storage: Ok(prepared) }, 7);
+    let checked = open.read(range(4, 8, 2, 0), 8);
+    let reply = FileReply::read(&checked).unwrap();
+    assert_eq!((reply.command(), reply.status()), (0x08, 0));
+    let (fixed, payload) = reply.parts();
+    assert_eq!(fixed, &[17, 0, 80, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(payload, prepared);
+    assert!(std::ptr::eq(payload.as_ptr(), prepared.as_ptr()));
+    assert_eq!(called.get(), Some((4, 8)));
+}
+
+#[test]
+fn read_eof_uses_error_body_for_zero_or_insufficient_data_and_not_for_core_failure() {
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let called = Cell::new(None);
+    for (range_, payload) in [
+        (range(9, 4, 0, 0), &b""[..]),  // positive read, no bytes at EOF
+        (range(9, 0, 0, 0), &b""[..]),  // zero request must still pass Core
+        (range(9, 4, 3, 0), &b"xy"[..]), // bytes below minimum never appear in reply
+    ] {
+        let open = original(&table, facts(FILE, 1), Reader { called: &called, storage: Ok(payload) }, 7);
+        called.set(None);
+        let checked = open.read(range_, 4);
+        let reply = FileReply::read(&checked).unwrap();
+        assert_eq!((reply.command(), reply.status()), (0x08, 0xc000_0011));
+        let (fixed, payload) = reply.parts();
+        assert_eq!(fixed, &[9, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(payload.is_empty());
+        assert_eq!(called.get(), Some((range_.offset(), range_.length())));
+    }
+    let open = original(&table, facts(FILE, 1),
+        Reader { called: &called, storage: Err("view revoked") }, 7);
+    let result = open.read(range(9, 0, 0, 0), 4);
+    assert_eq!(FileReply::read(&result).err(), Some(&"view revoked"));
+}
+
+#[test]
+fn optional_close_attributes_have_a_real_flag_and_fixed_layout() {
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let called = Cell::new(None);
+    let open = |attributes_available| original(&table, facts(FILE, 1),
+        Closer { owner: &table, called: &called, failure: false, attributes_available }, 1);
+    for (mode, available, flagged) in [
+        (CloseMode::Plain, true, false),
+        (CloseMode::PostQueryAttributes, false, false),
+        (CloseMode::PostQueryAttributes, true, true),
+    ] {
+        let reply = FileReply::close(open(available).close(mode).unwrap());
+        assert_eq!((reply.command(), reply.status()), (0x06, 0));
+        let (fixed, payload) = reply.parts();
+        assert_eq!(fixed.len(), 60);
+        assert!(payload.is_empty());
+        assert_eq!(&fixed[..8], &[60, 0, u8::from(flagged), 0, 0, 0, 0, 0]);
+        if flagged {
+            let [created, accessed, written, changed, allocation, eof] = [1u64, 2, 3, 4, 8, 5];
+            for (i, value) in [created, accessed, written, changed, allocation, eof].into_iter().enumerate() {
+                assert_eq!(&fixed[8 + 8*i..16 + 8*i], &value.to_le_bytes());
+            }
+            assert_eq!(&fixed[56..60], &[0x20, 0, 0, 0]);
+        } else {
+            assert_eq!(&fixed[8..], &[0; 52]);
+        }
+    }
 }

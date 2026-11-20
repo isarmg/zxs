@@ -24,9 +24,11 @@
 
 [READ](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/21e8b343-34e9-4fca-8d93-03dd2d3e961e) 和 [CLOSE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/f2b4183a-29c2-4fc0-a5de-fe290408f68c) 从各自命令取得范围或关闭意图；普通引用携两半 SMB2_FILEID，关联引用只继承同一链紧邻前件的已证实 ID，不能以客户端填入的另一组 ID 或最近打开回退。实际入口仍须验签、验 credits 与当前连接／会话／树，再以两半与原代次匹配唯一真实 OPEN；本片没有认证发行者或第二张路由表。后端入口只接已成功绑定的 Held，不收线上的 FileId、路径或替代对象。
 
-READ 保持原请求长度供 MaxReadSize／credits／范围锁核验，偏移与终点不得超出有符号文件范围。仅 FILE 的实际 FILE_READ_DATA 可读，不把目录的列出权、执行权或共享票当读许可；原会话、媒体／视图、范围锁及输出前后的资格由真实适配复核。只在原适配确认后区分零长度成功、满足最低计数的短读、EOF／小于 MinimumCount、权限或 I/O 错误。TCP 不接受 RDMA 描述符，不把实际无法提供的直接读冒作成功；压缩提示本身不协商能力。回复容量不足不伪装成 EOF，也不暴露不完整校验的正文。
+READ 保持原请求长度供 MaxReadSize／credits／范围锁核验，偏移与终点不得超出有符号文件范围。仅 FILE 的实际 FILE_READ_DATA 可读，不把目录的列出权、执行权或共享票当读许可；原会话、媒体／视图、范围锁及输出前后的资格由真实适配复核。只在原适配确认后区分满足最低计数且非空的短读、EOF／小于 MinimumCount、权限或 I/O 错误。TCP 不接受 RDMA 描述符，不把实际无法提供的直接读冒作成功；压缩提示本身不协商能力。回复容量不足不伪装成 EOF，也不暴露不完整校验的正文。
 
-显式 CLOSE 消耗原打开的持有权，不等于异常断连。以后接线须先令该 OPEN 不可再路由并结束在途操作；`POSTQUERY_ATTRIB` 只返回原句柄可获且有权的真实属性。属性取不到不冒充有效；关闭与脏普通写句柄的最后确认失败单独保留，正常写关闭时由 Core 在原写权内收尾，释放底层对象后才退共享票。丢连接／撤权只清理，绝不能隐式写穿、flush 或发布历史。这部分只定义请求和原对象调用边界，没有真正后端接线或成功响应编码。
+显式 CLOSE 消耗原打开的持有权，不等于异常断连。以后接线须先令该 OPEN 不可再路由并结束在途操作；`POSTQUERY_ATTRIB` 只返回原句柄可获且有权的真实属性。属性取不到不冒充有效；关闭与脏普通写句柄的最后确认失败单独保留，正常写关闭时由 Core 在原写权内收尾，释放底层对象后才退共享票。丢连接／撤权只清理，绝不能隐式写穿、flush 或发布历史。这部分没有真正后端接线。
+
+成功 READ／CLOSE 应答体只能消费 Held 产生的私有结果，不能用任意正文、请求计数或属性生成成功。READ 保持真实返回长度，固定体后仅借已核正文；[MS-FSA](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/aa57e052-40d4-4d9f-837d-2b0ce7c87cf4) 的零长底层成功不等于线上空成功，[MS-SMB2 §2.2.20](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/3e3d2f2c-0e2f-41ea-ad07-fbca6ffdfd90) 规定实际返回 0 字节应答 EOF，包括合法的零长度请求。EOF 或未达 MinimumCount 用 ERROR 体，不夹带部分正文；原始 Core 错误保留给真实状态映射。CLOSE 只在请求且有实际可获属性时标记有效，其他成功关闭的属性／标志为零。这里只定义命令、状态和体，不构造协议头或发包；未来唯一应答出口核同一已验证请求与会话，确定长度、复合对齐及原字节后才签名。当前无监听、认证发行者或实际 Core 调用。
 
 [WRITE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/829f93f5-ed10-4f12-8347-42d235019459) 只借用本命令声明的正文，不含其他命令、预填字节或尾随填充；原请求长度供 MaxWriteSize 和 credits，TCP 不消费 RDMA 描述符。追加位置来自同一个仍获权的实际写者的当前稿 EOF，不看旧读句柄的长度，不把对 EOF 写或空写当作 SET_END_OF_FILE。仅追加的权限不改写或填出空洞，只能命中该 EOF；跨出原长需要明确追加权。普通写确认原写者已接收该范围，不承诺已经持久化。
 

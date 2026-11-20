@@ -1,7 +1,8 @@
-//! Incoming bytes only. Parsing never issues credits, sends a reply, authenticates
-//! an account or calls a ZXS operation.
+//! Structural parsing and command-body encoding only. This module does not
+//! issue credits, authenticate, call a ZXS operation or send a reply.
 pub(in crate::smb) mod direct;
 pub(in crate::smb) mod io_fields;
+pub(in crate::smb) mod io_reply;
 pub(in crate::smb) mod message;
 pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod path_fields;
