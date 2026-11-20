@@ -4,8 +4,10 @@
 //! real storage open. There is deliberately no production authenticator or
 //! storage implementation in this slice. These votes alone do not implement
 //! CREATE. Before admitting directories, the adapter must also order the
-//! MS-FSA 2.1.5.1.2 first-directory-open rule (including FILE_DISALLOW_EXCLUSIVE)
-//! with real directory rights and other opens; a lock-free guess is not evidence.
+//! MS-FSA 2.1.5.1.2 first-directory-open rule with real directory rights and
+//! other opens; a lock-free guess is not evidence. MS-SMB2 2.2.13 requires
+//! ignoring the wire FILE_DISALLOW_EXCLUSIVE option, not forwarding it as a local flag.
+pub(in crate::smb) mod path;
 use crate::{DirectoryId, FileId, OperationId, PoolId, VolumeId};
 use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
 
