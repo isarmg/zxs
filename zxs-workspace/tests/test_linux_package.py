@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock, skipUnless
+from xml.etree import ElementTree
 
 RECIPE = Path(__file__).resolve().parents[1] / "packaging/ubuntu-26.10/package.py"
 spec = importlib.util.spec_from_file_location("workspace_deb_recipe", RECIPE)
@@ -44,9 +45,21 @@ class UbuntuProfile(TestCase):
                 self.assertIn(f"from {pkg.ENTRY[name].split(':')[0]} import main", (stage / "usr/bin" / name).read_text())
                 self.assertEqual(pkg.ROOT + "zipworkspace/_fuse3.py" in files, name == pkg.MOUNT)
                 self.assertEqual("usr/share/applications/zip-workspace.desktop" in files, name == pkg.GUI)
+                self.assertEqual("usr/share/mime/packages/zip-workspace.xml" in files, name == pkg.GUI)
+                self.assertFalse(any(p.endswith("/mimeapps.list") for p in files))
                 self.assertEqual(pkg.ROOT + "zipworkspace/_mount_child.py" in files, name == pkg.BASE)
                 self.assertEqual("pyfuse3" in pkg.DEPENDS[name], name == pkg.MOUNT)
                 self.assertEqual("pyside6" in pkg.DEPENDS[name], name == pkg.GUI)
+                self.assertEqual("shared-mime-info" in pkg.DEPENDS[name], name == pkg.GUI)
+                self.assertEqual("desktop-file-utils" in pkg.DEPENDS[name], name == pkg.GUI)
+                if name == pkg.GUI:
+                    mime_file = stage / "usr/share/mime/packages/zip-workspace.xml"
+                    mime, = ElementTree.parse(mime_file).getroot()
+                    self.assertEqual(mime.attrib, {"type": "application/x-zip-workspace-snapshot"})
+                    self.assertEqual([el.attrib["pattern"] for el in mime.findall("{*}glob")], ["*.zxs"])
+                    desktop = (stage / "usr/share/applications/zip-workspace.desktop").read_text()
+                    self.assertIn("Exec=/usr/bin/zip-workspace-desktop %f\n", desktop)
+                    self.assertIn("MimeType=application/x-zip-workspace-snapshot;\n", desktop)
 
     def test_bad_checksum_or_injected_path_never_becomes_a_package_input(self):
         with TemporaryDirectory() as t:

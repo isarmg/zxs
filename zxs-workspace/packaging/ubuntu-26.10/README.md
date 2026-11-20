@@ -9,7 +9,7 @@
 | 仅挂一个只读快照 | 基础包＋`zip-workspace-mount-ro` | `zip-workspace-mount-ro ARCHIVE MOUNTPOINT`；不依赖 Qt |
 | 在桌面明确发起挂载 | 同版本的全部三包 | 打开快照后，在窗口里另选空挂载点并确认 |
 
-桌面未装可选挂载组件时仍能浏览，挂载按钮不可用。菜单不注册文件关联、不添加开机启动项。不会自动挂载、设置用户组、修改系统权限或加载驱动。使用挂载仍需操作者事先配好可用的 FUSE3 用户态和内核环境；这份配方不安装它们。
+桌面未装可选挂载组件时仍能浏览，挂载按钮不可用。桌面包另提供 [freedesktop 文件类型](https://specifications.freedesktop.org/shared-mime-info/latest-single/)和「打开方式」声明，只接一份 `.zxs`。文件管理器交给应用一个路径后仍须确认；若管理器先为非本地文件准备本机副本，应用只核交到手的实际文件，不验证它与远端对象的同一性。普通 ZIP 和网址不注册。候选安装时由发行版的 MIME 与桌面数据库工具处理缓存；本项目无安装脚本，不设置用户默认应用或开机启动项。不会自动挂载、设置用户组、修改系统权限或加载驱动。使用挂载仍需操作者事先配好可用的 FUSE3 用户态和内核环境；这份配方不安装它们。
 
 ## 取得本地候选包
 
@@ -30,12 +30,13 @@
 | [Python 默认解释器包](https://packages.ubuntu.com/da/stonking/amd64/python3) | 3.14.7-3 |
 | [PySide6 QtCore、QtWidgets](https://packages.ubuntu.com/zh-cn/stonking/python3-pyside6.qtwidgets) | 6.11.2-1build1 |
 | [Qt 平台插件](https://packages.ubuntu.com/eu/stonking/qt6-qpa-plugins) | 6.11.2+dfsg-4ubuntu2 |
+| 桌面关联数据库：[shared-mime-info](https://packages.ubuntu.com/stonking/shared-mime-info)、[desktop-file-utils](https://packages.ubuntu.com/stonking/desktop-file-utils) | 2.4-5build3、0.28-1build1 |
 | [pyfuse3](https://packages.ubuntu.com/stonking/python3-pyfuse3)、[Trio](https://packages.ubuntu.com/en/stonking/python3-trio)、[FUSE3 工具](https://packages.ubuntu.com/stonking/fuse3) | 3.5.0-3、0.34.0-1、3.18.3-1 |
 
 ## 哪一步才算可以发行
 
 1. 在获准的干净参考机核对 Ubuntu 已签名软件源中的实际版本、依赖闭包及工具链。记录构建主机、配方和输入清单的版本、安装包的摘要。检查每个包的 `dpkg-deb --info` 和 `--contents`，尤其是仅一份代码、菜单/入口和没有安装钩子。
-2. 分别验证：只装基础包能用 CLI；基础＋桌面可从应用菜单启动并浏览、缺 FUSE 不可挂载；基础＋挂载不需要 Qt；在 `apt --no-install-recommends` 的最小组合中也有由硬依赖 `fuse3` 提供的 `/usr/bin/fusermount3`；三包在已授权的真实 FUSE 环境都能沿本次明确选择的原件工作。测试普通桌面会话、升级和移除可选包，卸载不得清除包外归档、工作树或私有状态。不同发行版、架构和 Wayland/X11 会话分别验收，不从本配方推定。
+2. 分别验证：只装基础包能用 CLI；基础＋桌面可从应用菜单启动并浏览、从文件管理器只交接所选的 `.zxs`（验证空格、中文、取消以及普通 `.zip` 不被认领）、缺 FUSE 不可挂载；基础＋挂载不需要 Qt；在 `apt --no-install-recommends` 的最小组合中也有由硬依赖 `fuse3` 提供的 `/usr/bin/fusermount3`；三包在已授权的真实 FUSE 环境都能沿本次明确选择的原件工作。测试普通桌面会话、升级和移除可选包，卸载不得清除包外归档、工作树或私有状态。不同发行版、架构和 Wayland/X11 会话分别验收，不从本配方推定。
 3. 核定产品版权与对外分发许可，处理实际使用的第三方义务，再另行签名和公开发布。[来源与许可说明](COPYRIGHT-NOTICE)不是新增的产品许可。
 
 本批只交付封装源码。没有构建、安装、签名、实机验收或公开二进制。

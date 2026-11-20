@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-zip-workspace-snapshot">
+    <comment>ZIP Workspace snapshot</comment>
+    <comment xml:lang="zh-CN">ZIP 工作树快照</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.zxs"/>
+  </mime-type>
+</mime-info>

@@ -19,7 +19,8 @@ ENTRY = {BASE: "zipworkspace.cli:main", GUI: "zipworkspace.desktop:main", MOUNT:
 DEPENDS = {
     BASE: "python3 (= 3.14.7-3)",
     GUI: f"{BASE} (= {VERSION}), python3-pyside6.qtcore (= 6.11.2-1build1), "
-         "python3-pyside6.qtwidgets (= 6.11.2-1build1), qt6-qpa-plugins (= 6.11.2+dfsg-4ubuntu2)",
+         "python3-pyside6.qtwidgets (= 6.11.2-1build1), qt6-qpa-plugins (= 6.11.2+dfsg-4ubuntu2), "
+         "shared-mime-info (= 2.4-5build3), desktop-file-utils (= 0.28-1build1)",
     MOUNT: f"{BASE} (= {VERSION}), python3-pyfuse3 (= 3.5.0-3), python3-trio (= 0.34.0-1), fuse3 (= 3.18.3-1)",
 }
 SUMMARY = {BASE: "Local whole-directory ZIP worktrees and command line",
@@ -95,6 +96,7 @@ def build(out, who):
     inputs = read_inputs(PROJECT, (HERE / "INPUTS.sha256").read_text("ascii").splitlines())
     copyright_text = (HERE / "COPYRIGHT-NOTICE").read_bytes()
     desktop = (HERE / "zip-workspace.desktop").read_bytes()
+    mime = (HERE / "zip-workspace-mime.xml").read_bytes()
     out = out.absolute()
     require(out == out.resolve() and not out.is_relative_to(PROJECT), "use a new real directory outside the project")
     # The caller owns this new tree and its stable parent. Never reuse or recursively clean it.
@@ -109,6 +111,7 @@ def build(out, who):
         put(stage, f"usr/share/doc/{pkg}/copyright", copyright_text)
         if pkg == GUI:
             put(stage, "usr/share/applications/zip-workspace.desktop", desktop)
+            put(stage, "usr/share/mime/packages/zip-workspace.xml", mime)
         control = (f"Package: {pkg}\nVersion: {VERSION}\nArchitecture: amd64\nSection: utils\nPriority: optional\n"
                    f"Maintainer: {who}\nDepends: {DEPENDS[pkg]}\nDescription: {SUMMARY[pkg]}\n")
         put(stage, "DEBIAN/control", control.encode("ascii"))
