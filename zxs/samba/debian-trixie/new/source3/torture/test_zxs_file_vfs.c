@@ -172,6 +172,13 @@ static bool native_directory_projection(connection_struct *c)
 fail:
 	c->params=NULL;return false;
 }
+static bool native_empty_search(void)
+{
+	return NT_STATUS_EQUAL(zxs_empty_search_status(NT_STATUS_NO_SUCH_FILE,"*",true),STATUS_NO_MORE_FILES) &&
+	       NT_STATUS_EQUAL(zxs_empty_search_status(NT_STATUS_NO_SUCH_FILE,"*",false),NT_STATUS_NO_SUCH_FILE) &&
+	       NT_STATUS_EQUAL(zxs_empty_search_status(NT_STATUS_NO_SUCH_FILE,"missing",true),NT_STATUS_NO_SUCH_FILE) &&
+	       NT_STATUS_EQUAL(zxs_empty_search_status(NT_STATUS_ACCESS_DENIED,"*",true),NT_STATUS_ACCESS_DENIED);
+}
 /* The real native CREATE type decision does not create an object. */
 static bool typeless_top_open(void)
 {
@@ -549,7 +556,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
+	if (!native_empty_search() || !typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

@@ -95,7 +95,7 @@ QUERY_DIRECTORY 复用原真实会话、FID、FILE_LIST_DIRECTORY、输出额度
 
 合法的传统 oplock 意向统一降为 NONE；不宣告文件/目录 leasing，且只忽略格式完整的单个 RqLs（[MS-SMB2 CREATE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/8c61e928-9242-44ed-96a0-98d1032d0d39)），不产生缓存授权。[MxAc](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/828a4d2d-0c9b-4c1c-8d2b-cc474172baa5) 需要真正权限响应，仍未接；不因此声称 Finder 可用。
 
-普通路径可选已发表的沿级真实目录，例如 `盘目录\项目\稿件.xlsx`。原生目录 CREATE/OPEN_IF 只在当前 RW 和真实 ADD_SUBDIR 下发表；先装完整 DirectoryId 的不可用原生柄，收到同原双名同步及 SQL 确认的私端答复才可用。每个子级只按准确父和名称选择，不能把原案、历史的 FileId 锁或 R 路径转为新权限。目录页每行带独立类型，实际物理 inode 不过线；普通目录不宣告唯一64位号。支持原签名目录 GETINFO 的五个文件信息类；没有 ADS、原生重连或任意宿主路径。已确认 FILE 可用 FILE_OPEN 或 FILE_OPEN_IF 非截断打开。新生 FILE_CREATE/OPEN_IF 要求当前 RW 和原生添加权，使用本次真正原生 FSP/share-mode 后的私端 ACK 确认；完成前持 `closing` 禁止客户端操作，确认后才报告 FILE_WAS_CREATED。原私双名/SQL 待办不被任意下一请求认领。没有 ACK 不发原单；已确认后断线不报告确定失败。所有具名句柄各自保留原权限与独立 ShareAccess。
+普通路径可选已发表的沿级真实目录，例如 `盘目录\项目\稿件.xlsx`。原生目录 CREATE/OPEN_IF 只在当前 RW 和真实 ADD_SUBDIR 下发表；先装完整 DirectoryId 的不可用原生柄，收到同原双名同步及 SQL 确认的私端答复才可用。每个子级只按准确父和名称选择，不能把原案、历史的 FileId 锁或 R 路径转为新权限。目录页每行带独立类型，实际物理 inode 不过线；普通目录不宣告唯一64位号。已获授权、真实确认空的目录首次列 `*` 返回枚举结束，不把离线或选名不匹配解释为空。支持原签名目录 GETINFO 的五个文件信息类；没有 ADS、原生重连或任意宿主路径。已确认 FILE 可用 FILE_OPEN 或 FILE_OPEN_IF 非截断打开。新生 FILE_CREATE/OPEN_IF 要求当前 RW 和原生添加权，使用本次真正原生 FSP/share-mode 后的私端 ACK 确认；完成前持 `closing` 禁止客户端操作，确认后才报告 FILE_WAS_CREATED。原私双名/SQL 待办不被任意下一请求认领。没有 ACK 不发原单；已确认后断线不报告确定失败。所有具名句柄各自保留原权限与独立 ShareAccess。
 
 ### 目录和 FILE 的原生 QUERY_INFO
 

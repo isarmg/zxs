@@ -37,7 +37,10 @@ static void zxs_search_commit(struct tevent_req *req,bool ended)
 	memcpy(d->after,s->zxs_after,sizeof(d->after));
 	memcpy(d->mask,s->zxs_mask,sizeof(d->mask));
 	zxs_search_release(s);
-	if(s->num==0){tevent_req_nterror(req,s->empty_status);return;}
+	if(s->num==0){
+		NTSTATUS empty=zxs_empty_search_status(s->empty_status,s->zxs_mask,ended&&s->zxs_after[0]==0);
+		tevent_req_nterror(req,empty);return;
+	}
 	SIVAL(s->out_output_buffer.data,s->last_entry_off,0);
 	tevent_req_done(req);
 }

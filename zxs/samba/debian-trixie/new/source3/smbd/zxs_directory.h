@@ -62,6 +62,13 @@ static inline bool zxs_directory_same_id(const struct files_struct *fsp,const st
 	return fsp->file_id.devid==n.devid && fsp->file_id.extid==n.extid && fsp->file_id.inode==n.inode &&
 		fsp->fsp_name!=NULL && fsp->fsp_name->st.st_ex_ino==number;
 }
+/* An authorized, physically observed zero-row initial scan of '*' is
+ * exhaustion, not a failed search for a specific name. */
+static inline NTSTATUS zxs_empty_search_status(NTSTATUS otherwise,const char *mask,bool empty)
+{
+	return NT_STATUS_EQUAL(otherwise,NT_STATUS_NO_SUCH_FILE) && empty && strcmp(mask,"*")==0?
+		STATUS_NO_MORE_FILES:otherwise;
+}
 struct zxs_dir_search {
 	const struct smbXsrv_session *session;
 	const struct smbXsrv_tcon *tcon;
