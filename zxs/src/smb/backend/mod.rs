@@ -8,6 +8,7 @@
 //! other opens; a lock-free guess is not evidence. MS-SMB2 2.2.13 requires
 //! ignoring the wire FILE_DISALLOW_EXCLUSIVE option, not forwarding it as a local flag.
 pub(in crate::smb) mod path;
+mod query;
 use crate::{DirectoryId, FileId, OperationId, PoolId, VolumeId};
 use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
 

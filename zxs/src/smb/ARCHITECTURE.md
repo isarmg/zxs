@@ -1,8 +1,12 @@
 # ZXS 内部 Rust SMB 服务
 
-**当前只有输入层、文件名解析和未接线的共享打开表。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。不生成协商成功包，不监听 445，不认证、不分配会话或授予共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
+**当前只有未接线的协议与权限前置。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。不生成协商成功包，不监听 445，不认证、不分配会话或授予共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
 
 `wire/path_fields` 从单条 CREATE / SET_INFO 普通 rename 消息的声明范围提取名字，`backend/path` 是唯一业务名字解析：严格 UTF-16、以同一共享为根，逐部件调用现有显示名规则，保留大小写和 Unicode 原拼写，不从名字判断数据盘／回收站，不解释宿主路径。CREATE 空名和未处理的 contexts 一起保留，不把重连请求误作根权限。rename 源是本次协议句柄，目标的替换标志不是覆盖授权。关于多部件目标，[微软 SET_INFO 条文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/43cf22fe-84cb-49cf-b3e7-e3d7d766a7b7) 的分隔符限制与 full pathname 表述并存；[Linux 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2inode.c#L1076-L1112) 会编码目标路径。此处为 ZXS 同树移位保留这个目标形状，不表示任何原生客户端已完成还原。具体成员字节额度、当前盘和删除原单仍由 Core 选择和复核。
+
+目录和元数据查询目前只取请求与预算，不调用文件系统，也不产生成功应答。按 [QUERY_DIRECTORY](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/29dfcc9b-3aec-406b-abb5-0b4fe96712e2) 与 [QUERY_INFO](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/abb48417-27e5-4a16-82e0-3e5981db97e8) 保留原请求长度供 credits 核验，不把客户端 FileIndex 或 SMB2_FILEID 变成 Core 游标。查询目录的模式是单个分量，不可当路径；没有新模式不能让续页丢失原筛选条件。[Apple 原生实现](https://github.com/apple-oss-distributions/smb/blob/a4320c1ed655fe99ca882a43c84cd820ea10d2af/kernel/netsmb/smb_smb_2.c#L5788-L5842) 会给空模式留 offset 96 和两个零字节，当前仅和标准的零 offset 一并识别为空模式。[Linux 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L5358-L5394) 与 [Apple 客户端](https://github.com/apple-oss-distributions/smb/blob/a4320c1ed655fe99ca882a43c84cd820ea10d2af/kernel/smbfs/smbfs_smb_2.c#L5261-L5273) 的源码分别给出目录信息类选择；这是格式依据，不是原生挂载通过证据。
+
+一页只为有权、匹配的逻辑顺序前缀预算，独立限制条数、客户长度和复合应答剩余字节。只在记录之间算 8 字节对齐；首条装不全、下一条装不下、固定部分都装不下不是同一结果。真实适配须按原 OPEN 重核列出权，再按来源的真实排序与集合结束标记推进，不消费未回的匹配条目；不能直接用 main v7 取页即推进的旧游标后丢弃尾部，也不把过滤致空当结束。[MS-FSA 目录查询](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/fa8194e0-53ec-413b-8315-e8fa85396fd8) 的模式延续、匹配、点记录、溢出数据和结束状态仍须接线。元数据按已持对象区分虚拟根、目录和 FILE；访问属性和具体卷必须来自原始授权对象。虚拟根不挑任意实体盘冒充总容量，不对下线盘填假数据，不返回宿主路径或私有标识。
 
 ## 目标与分工
 
