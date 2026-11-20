@@ -81,6 +81,9 @@ fn reset_state(db:&Builder,op_smb:bool,role_smb:bool,storage_bound:Option<[u8;32
     if let Some(d)=storage_bound{s.bind_bytes(12,&bytes::<16>("instance")).unwrap();s.bind_bytes(13,&d).unwrap();}
     match unsafe{sqlite3_step(s.0)}{101=>None,100=>{let r=(s.integer(0).unwrap(),s.integer(1).unwrap());s.done().unwrap();Some(r)},x=>panic!("unexpected SQLite {x}")}
 }
+pub(super) fn fixture_rotate_web(db:&Builder){
+    db.exec("PRAGMA foreign_keys=ON; PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE");record_reset(db,false);db.exec("COMMIT");
+}
 pub(super) fn fixture_rotate_smb(db:&Builder){
     db.exec("PRAGMA foreign_keys=ON; PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE");record_reset(db,true);db.exec("COMMIT");
     db.exec("BEGIN IMMEDIATE");assert!(activate(db,false,&bytes("smb_reset_bound_sha")));db.exec("COMMIT");

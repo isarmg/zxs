@@ -1,6 +1,6 @@
 //! Built-in HTML only. Dynamic values never become markup, CSS or arbitrary
 //! URLs. The public sign-in view has no parameter capable of carrying metadata.
-use crate::{FileId,OperationId,Role,system::reader::account::{manual_work,overview::Overview,share_mode::Mode}};
+use crate::{FileId,OperationId,Role,system::reader::account::{manual_work,overview::Overview,share_mode::Mode,volume_status::Report}};
 use super::Reply;
 use std::{fmt::Write,io};
 
@@ -24,12 +24,13 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
     out.push_str(include_str!("../../web/shell-start.html"));
     out.push_str(r#"<section id="zxs-status" class="zxs-panel"><h2>系统与磁盘</h2><div class="zxs-metric-grid"><article class="zxs-metric-card"><h3>SYSTEM 登记</h3><strong class="zxs-metric-current">已核对</strong><small>本次 SQLite 读取与原 SYSTEM 卷标相符。</small></article>"#);
     write!(out,r#"<article class="zxs-metric-card"><h3>普通数据卷</h3><strong class="zxs-metric-current">{}</strong><small>已登记数量，不是在线数量。</small></article></div><p>PoolId：<code>{}</code></p>"#,data.volumes.iter().filter(|(r,_)|*r==Role::File).count(),data.pool).unwrap();
-    out.push_str(r#"<div class="zxs-table-scroll"><table class="zxs-table"><caption>本池登记卷</caption><thead><tr><th scope="col">角色</th><th scope="col">VolumeId</th><th scope="col">本次观察</th></tr></thead><tbody>"#);
+    out.push_str(r#"<div class="zxs-table-scroll"><table class="zxs-table"><caption>本池登记卷</caption><thead><tr><th scope="col">角色</th><th scope="col">VolumeId</th><th scope="col">登记核对</th><th scope="col">容量与 UUID</th></tr></thead><tbody>"#);
     for &(r,id) in &data.volumes{
-        let (label,state)=match r{Role::System=>("SYSTEM","已核登记与卷标"),Role::File=>("普通数据","仅有登记"),Role::Recycle=>("专用回收","仅有登记")};
-        write!(out,"<tr><td>{label}</td><td><code>{id}</code></td><td>{state}</td></tr>").unwrap();
+        let state=if r==Role::System{"已核登记与卷标"}else{"仅有登记"};
+        write!(out,r#"<tr><td>{}</td><td><code>{id}</code></td><td>{state}</td><td><form method="post" action="{}"><input type="hidden" name="volume" value="{id}"><input type="hidden" name="csrf" value=""#,volume_role(r),super::observe::TARGET).unwrap();
+        text(&mut out,csrf);out.push_str(r#""><button class="zxs-button" type="submit">检查此卷</button></form></td></tr>"#);
     }
-    out.push_str(r#"</tbody></table></div><p class="zxs-status">本页未采集文件系统 UUID、健康及读写速率，不能据此判定健康或空闲。</p></section><section id="zxs-shares" class="zxs-panel"><h2>共享配置</h2>"#);
+    out.push_str(r#"</tbody></table></div><p class="zxs-status">概览不探测数据盘。检查只采样所选卷，不判断磁盘健康、读写速率或 SMB 在线状态。</p></section><section id="zxs-shares" class="zxs-panel"><h2>共享配置</h2>"#);
     out.push_str(r#"<p>SMB 只有 <code>\\服务器\ZXS</code> 一个业务入口。这里管理首装已选的数据盘目录及其访问模式，不新建共享或暴露宿主路径。</p>"#);
     if data.shares.is_empty(){out.push_str("<p>本页没有首装已选的数据盘目录。</p>");}
     else{
@@ -51,6 +52,32 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
     text(&mut out,&data.web);out.push_str(r#"</bdi><small>仅用于管理，不能读取文件正文。</small></article><article class="zxs-account-card"><h3>SMB 文件账号</h3><bdi>"#);text(&mut out,&data.smb);
     out.push_str(r#"</bdi><small>只能按已启用共享的模式访问文件。</small></article></div></section><form method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
     text(&mut out,csrf);out.push_str(r#""><button class="zxs-button" type="submit">退出管理</button></form></main></div></div></body></html>"#);Ok(out)
+}
+
+fn volume_role(role:Role)->&'static str{
+    match role{Role::System=>"SYSTEM",Role::File=>"普通数据",Role::Recycle=>"专用回收"}
+}
+pub(super) fn volume_status(report:&Report)->Reply{
+    let mut out=String::from(HEAD);
+    write!(out,"<title>卷检查 · ZXS</title></head><body><main data-zxs-scope><h1>卷检查</h1><p>{} · <code>{}</code></p>",
+        volume_role(report.role),report.volume).unwrap();
+    let status=if let Some(r)=&report.current{
+        write!(out,"<p>Web 服务已核对所选登记卷。本次文件系统采样：</p><dl><dt>总容量</dt><dd>{} 字节</dd><dt>当前可用</dt><dd>{} 字节</dd><dt>文件系统 UUID</dt><dd>",r.bytes,r.available).unwrap();
+        if let Some(uuid)=r.uuid{
+            out.push_str("<code>");
+            for (i,b) in uuid.iter().enumerate(){
+                if matches!(i,4|6|8|10){out.push('-');}write!(out,"{b:02x}").unwrap();
+            }
+            out.push_str("</code>");
+        }else{out.push_str("未取得");}
+        out.push_str("</dd></dl><p>容量是该文件系统的即时采样，不是目录配额。此结果不证明磁盘健康或 SMB 可用。</p>");
+        "200 OK"
+    }else{
+        out.push_str("<p>此卷有登记，但 Web 服务本次未能核对原卷和容量。不能据此判断磁盘故障或回收内容。</p>");
+        "503 Service Unavailable"
+    };
+    out.push_str(r#"<p><a href="/#zxs-status">返回磁盘列表</a></p></main></body></html>"#);
+    Reply::html(status,out)
 }
 
 fn hidden(out:&mut String,csrf:&str)->io::Result<()>{

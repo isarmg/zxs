@@ -6,6 +6,7 @@ mod pages;
 mod transport;
 mod access;
 mod manual;
+mod observe;
 pub use access::ExternalHttps;
 use access::Audience;
 

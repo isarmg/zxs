@@ -137,6 +137,63 @@ fn partial_first_request_does_not_hold_the_application_or_another_browser(){
 }
 
 #[test]
+#[ignore="source-only real loopback HTTP, SQLite and volume FD; no production disks or browser"]
+fn explicitly_check_only_a_registered_volume_without_exposing_disk_paths(){
+    use crate::system::reader::ordinary_pool;
+    use std::sync::atomic::{AtomicBool,Ordering};
+    let t=PrivateTemp::under(&std::env::temp_dir());let(p,id,_,_,_)=ordinary_pool(&t);
+    let source=InitialReader::open(&p,id).unwrap();
+    let ls=TcpListener::bind(("127.0.0.1",0)).unwrap();let addr=ls.local_addr().unwrap();
+    let stop=AtomicBool::new(false);
+    struct Stop<'a>(&'a AtomicBool);impl Drop for Stop<'_>{fn drop(&mut self){self.0.store(true,Ordering::Release);}}
+    std::thread::scope(|scope|{
+        let client=scope.spawn(||{
+            let _end=Stop(&stop);
+            let host=addr.to_string();let origin=format!("http://{host}");
+            let req=|method:&str,target:&str,c:&str,o:&str,body:&str|->String{
+                let mut io=TcpStream::connect(addr).unwrap();
+                io.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+                io.write_all(wire(method,target,&host,c,o,body,"").as_bytes()).unwrap();
+                io.shutdown(Shutdown::Write).unwrap();let mut result=String::new();io.read_to_string(&mut result).unwrap();result
+            };
+            let target=observe::TARGET;
+            let f=crate::VolumeId([0x13;16]);let r=crate::VolumeId([0x12;16]);
+            let login=req("POST","/login","",&origin,"login=first.admin&password=correct+horse+battery+staple");
+            let cookie=login.lines().find_map(|v|v.strip_prefix("Set-Cookie: ")).unwrap().split(';').next().unwrap();
+            let page=req("GET","/",cookie,"","");
+            assert!(page.contains("检查此卷")&&!page.contains("文件系统采样"));
+            let csrf=hidden(&page,target,"csrf");
+            let form=format!("csrf={csrf}&volume={f}");
+            assert!(req("GET",target,cookie,"","").starts_with("HTTP/1.1 404"));
+            assert!(req("POST",target,"",&origin,&form).starts_with("HTTP/1.1 403"));
+            assert!(req("POST",target,cookie,"https://other.example",&form).starts_with("HTTP/1.1 403"));
+            assert!(req("POST",target,cookie,&origin,&form.replace(csrf,&"0".repeat(64))).starts_with("HTTP/1.1 403"));
+            assert!(req("POST",target,cookie,&origin,&format!("{form}&path=outside")).starts_with("HTTP/1.1 400"));
+            let checked=|body:&str|{
+                let end=Instant::now()+Duration::from_secs(2);
+                loop{
+                    let out=req("POST",target,cookie,&origin,body);
+                    if !out.contains("未能完成本次磁盘核对")||Instant::now()>=end{return out;}
+                    std::thread::yield_now(); // only the real worker's initial rendezvous can be busy
+                }
+            };
+            let good=checked(&form);
+            assert!(good.starts_with("HTTP/1.1 200")&&good.contains("总容量")&&good.contains("文件系统 UUID"));
+            assert!(good.contains(&format!("<code>{f}</code>"))&&!good.contains("unmounted-"));
+            let missing=checked(&format!("csrf={csrf}&volume={r}"));
+            assert!(missing.starts_with("HTTP/1.1 503")&&missing.contains("本次未能核对原卷和容量"));
+            assert!(!missing.contains("unmounted-")&&!missing.contains("<dt>总容量"));
+            assert!(checked(&format!("csrf={csrf}&volume={}",crate::VolumeId([0xee;16])))
+                .starts_with("HTTP/1.1 404"));
+            assert!(req("POST","/logout",cookie,&origin,&format!("csrf={csrf}")).starts_with("HTTP/1.1 303"));
+            assert!(req("POST",target,cookie,&origin,&form).starts_with("HTTP/1.1 403"));
+        });
+        transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
+        client.join().unwrap()
+    });
+}
+
+#[test]
 #[ignore="isolated real HTTP, SQLite and file OFDs, not deployment; source only"]
 fn only_the_displayed_manual_form_can_publish_one_formal_version(){
     use crate::system::reader::{ordinary_pool,stage_managed_file};

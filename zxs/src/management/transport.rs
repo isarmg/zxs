@@ -1,6 +1,6 @@
 //! One bounded HTTP/1.1 origin-form request per connection. No re-use,
 //! transfer codings, upstream user claims, file serving or forwarding trust.
-use super::{access::{self,ExternalHttps},manual,App,BAD,REJECT,Reply,Request,Token};
+use super::{access::{self,ExternalHttps},manual,observe,App,BAD,REJECT,Reply,Request,Token};
 use crate::fs::invalid;
 use std::{io::{self,Read,Write},net::{IpAddr,SocketAddr,TcpListener,TcpStream},os::fd::AsRawFd,
     sync::{atomic::{compiler_fence,AtomicBool,Ordering},mpsc},time::{Duration,Instant}};
@@ -102,7 +102,7 @@ pub(super) fn respond(stream:TcpStream,proxy:Option<&ExternalHttps>,handle:impl 
         Err(e)if matches!(e.kind(),io::ErrorKind::InvalidData|io::ErrorKind::InvalidInput)=>BAD(),Err(e)=>return Err(e)};
     result.write(Timed(&stream,Instant::now()+IO_TIME))
 }
-enum Job{Call(Request,mpsc::SyncSender<Reply>),Fault(io::Error)}
+enum Job{Call(Request,mpsc::SyncSender<Reply>),Volume(Request,mpsc::SyncSender<Reply>,Instant),Fault(io::Error)}
 unsafe extern "C"{
     fn zxs_web_retry_accept(err:std::os::raw::c_int)->std::os::raw::c_int;
     fn zxs_web_readable(fd:std::os::raw::c_int)->std::os::raw::c_int;
@@ -130,7 +130,17 @@ fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,jobs:
         };
         if closing.load(Ordering::Acquire){break;}
         let _=respond(s,proxy,|q|{
-            let(tx,rx)=mpsc::sync_channel(1);jobs.send(Job::Call(q,tx)).map_err(|_|io::ErrorKind::BrokenPipe)?;
+            let(tx,rx)=mpsc::sync_channel(1);
+            if q.method=="POST"&&q.target==observe::TARGET{
+                let until=Instant::now()+observe::WAIT;
+                if jobs.try_send(Job::Volume(q,tx,until)).is_err(){return Ok(observe::unconfirmed());}
+                return match rx.recv_timeout(until.saturating_duration_since(Instant::now())){
+                    Ok(r)=>Ok(r),
+                    Err(mpsc::RecvTimeoutError::Timeout)=>Ok(observe::unconfirmed()),
+                    Err(_)=>Err(io::ErrorKind::BrokenPipe.into()),
+                };
+            }
+            jobs.send(Job::Call(q,tx)).map_err(|_|io::ErrorKind::BrokenPipe)?;
             rx.recv().map_err(|_|io::ErrorKind::BrokenPipe.into())
         });
     }
@@ -142,6 +152,11 @@ pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_
         let (manual,orders)=mpsc::sync_channel(1);let origin=app.source;let site=origin.manual_site();let closed=&closing;
         let original_stop=&stopping;
         std::thread::Builder::new().name("zxs-manual-work".into()).spawn_scoped(scope,move||manual::run(site,closed,original_stop,orders))?;
+        // No pending filesystem jobs: a wedged probe cannot consume more
+        // threads, hold up the app owner or take the manual worker's lane.
+        let (volumes,observations)=mpsc::sync_channel(0);
+        let site=origin.manual_site();
+        std::thread::Builder::new().name("zxs-volume-observe".into()).spawn_scoped(scope,move||observe::run(site,closed,original_stop,observations))?;
         for _ in 0..WORKERS{let jobs=tx.clone();let closed=&closing;
             if let Err(e)=std::thread::Builder::new().name("zxs-http-io".into()).spawn_scoped(scope,move||worker(ls,proxy,closed,jobs)){
                 closing.store(true,Ordering::Release);failure=Some(e);break;
@@ -162,11 +177,21 @@ pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_
                         }
                     }else{let _=reply.send(admission(&closing,&stopping,||app.handle(q,Instant::now())));}
                 }
+                Ok(Job::Volume(q,reply,until))=>{
+                    if !admitted(&closing,&stopping){let _=reply.send(stopped());continue;}
+                    match app.volume_order(q,reply,Instant::now(),until){
+                        Err((reply,rejected))=>{let _=reply.send(rejected);},
+                        Ok(order)=>if let Err(err)=volumes.try_send(order){
+                            let order=match err{mpsc::TrySendError::Full(o)|mpsc::TrySendError::Disconnected(o)=>o};
+                            let _=order.reply.send(observe::unconfirmed());
+                        },
+                    }
+                }
                 Ok(Job::Fault(e))=>{closing.store(true,Ordering::Release);failure.get_or_insert(e);}
                 Err(mpsc::RecvTimeoutError::Timeout)=>continue,Err(mpsc::RecvTimeoutError::Disconnected)=>break,
             }
         }
-        drop(manual);
+        drop(manual);drop(volumes);
         failure.map_or(Ok(()),Err)
     })
 }

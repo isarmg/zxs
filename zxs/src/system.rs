@@ -46,7 +46,7 @@ pub(crate) fn init_request(op:OperationId,actor:[u8;16],approval:[u8;16],uid:u32
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(crate) enum InitState {PendingIo,Committed}
-#[derive(Clone,Debug)]
+#[derive(Clone,Debug,Eq,PartialEq)]
 pub(crate) struct ClaimRow {
     pub(crate) ordinal:u8,pub(crate) role:Role,pub(crate) volume:VolumeId,
     pub(crate) path:PathBuf,pub(crate) limit:ComponentLimit,pub(crate) token:[u8;32],

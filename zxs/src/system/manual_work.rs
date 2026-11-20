@@ -39,13 +39,16 @@ impl InitialReader{
 impl Site<'_>{
     pub(crate) fn freeze(&self,who:Who,op:OperationId,target:Target,authorized:impl Fn()->io::Result<()>)->io::Result<Receipt>{
         authorized()?;
+        self.with_admin(who,|admin|admin.freeze_authorized(op,target,authorized,||Ok(())))
+    }
+    pub(super) fn with_admin<T>(&self,who:Who,f:impl FnOnce(WebAdmin<'_>)->io::Result<T>)->io::Result<T>{
         let src=InitialReader::alongside(self.original,self.marker,self.pool,self.schema)?;
         let admin=src.at(|db,c|{
             let current=WebCurrent::select(db,&c)?.ok_or_else(denied)?;
             if (current.account,current.op,current.generation)!=(who.account,who.credential,who.generation){return Err(denied());}
             Ok(WebAdmin{source:&src,account:who.account,origin:who.credential,generation:who.generation})
         })?;
-        admin.freeze_authorized(op,target,authorized,||Ok(()))
+        f(admin)
     }
 }
 pub(crate) struct Item {pub(crate) file:FileId,pub(crate) name:String,pub(crate) volume:VolumeId}

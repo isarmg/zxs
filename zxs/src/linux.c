@@ -173,6 +173,18 @@ int zxs_open_mountinfo(void) { return open_proc_child("mountinfo",O_RDONLY); }
 #include <stdlib.h>
 #include <sys/ioctl.h>
 
+int zxs_storage_uuid(int fd,unsigned char *out) {
+#ifdef FS_IOC_GETFSUUID
+    struct fsuuid2 fs = {0};
+    if (ioctl(fd, FS_IOC_GETFSUUID, &fs) < 0) return -1;
+    if (fs.len != 16) { errno = ENOTSUP; return -1; }
+    memcpy(out,fs.uuid,16);
+    return 0;
+#else
+    (void)fd; (void)out; errno=ENOTSUP; return -1;
+#endif
+}
+
 /* Queried on the actual live FD. The mount ID returned by name_to_handle_at
  * is intentionally not a durable identifier. We never open arbitrary handles. */
 ssize_t zxs_native_birth(int fd, unsigned char *out, size_t cap) {
