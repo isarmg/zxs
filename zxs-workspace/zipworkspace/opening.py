@@ -241,6 +241,7 @@ def _seed_names(area, *names):
 
 
 def _install_initial(area, copy, image, state, *, base=None, stage=None, selected=None):
+    mount = staging.mount_id(base.parent) if base is not None else None
     if base is not None:
         staging.check_private(base)
         staging.check_private(area)
@@ -266,6 +267,8 @@ def _install_initial(area, copy, image, state, *, base=None, stage=None, selecte
                 staging.check_private(base)
                 staging.check_private(held)
                 staging.check_named(held.parent, staging.LEAF, stage.parent)
+                staging.check_mount_name(base.parent, held.path.name, held.identity, mount)
+                staging.check_mount_name(held.parent, staging.LEAF, stage.identity, mount)
             held.check_file("original.zxs", *copy)
             if db is not None:
                 held.check_file(name, db, observed)
@@ -452,6 +455,7 @@ def finish(state, operation, *, selected=None):
                     source_fd = private.parent
                     current_store = held.enter_context(held_store(Path(row["store"])))
                     if selected is not None: selected.check_reopened(base.parent, pfd, current_store.fd)
+                    original_tree = int(row["stage_dev"]), int(row["stage_ino"])
 
                 def check_parent():
                     if selected is not None: selected.check_registered(state)
@@ -459,12 +463,17 @@ def finish(state, operation, *, selected=None):
                         staging.check_private(base)
                         staging.check_named(base.parent, state.name, private.parent)
                         staging.check_private(private)
+                        staging.check_mount_name(base.parent, state.name, private.identity, mount)
                         current_store.check_store()
                     if who(parent) != pid: raise Rejected("checkout parent no longer names its original directory")
 
                 def pair(name):
                     check_parent()
                     names = who(stage, dir_fd=source_fd), who(name, dir_fd=pfd)
+                    if private_id is not None:
+                        first, second = names
+                        if first == sid: staging.check_mount_name(source_fd, stage, original_tree, mount)
+                        if second == sid: staging.check_mount_name(pfd, name, original_tree, mount)
                     check_parent()
                     return names
 
@@ -505,6 +514,8 @@ def finish(state, operation, *, selected=None):
                     current = stage if from_stage else dest.name
                     receipt_name = dest.name
                 child, m = held.enter_context(_held_directory(current, sid, parent_fd=source_fd if from_stage else pfd))
+                if private_id is not None and staging.mount_id(child) != mount:
+                    raise Rejected("original checkout directory is on another mount")
 
                 if private_id is not None:
                     staging.separate_roots(base.parent, pfd, current_store, mount)

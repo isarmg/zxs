@@ -111,6 +111,66 @@ class PrivateCheckoutStage(unittest.TestCase):
                     self.assertEqual(opening.finish(self.state, op), (dest, self.marker))
                 self.assertEqual(barriers, {"private", "target"}); self.assertEqual(dest.stat().st_ino, inode)
 
+    @contextmanager
+    def another_named_mount(self, name):
+        # Simulate only the kernel mount identity returned for a named O_PATH
+        # reopen. The inode, the original held FDs and the actual I/O stay real.
+        native_open, native_mount = os.open, staging.mount_id
+        named = set()
+
+        def opened(path, flags, *args, dir_fd=None):
+            fd = native_open(path, flags, *args, dir_fd=dir_fd)
+            if (dir_fd is not None and path == name.name and flags & os.O_PATH
+                    and os.path.samestat(os.fstat(dir_fd), name.parent.stat())):
+                named.add(fd)
+            return fd
+
+        def mount(fd):
+            if fd in named:
+                self.assertTrue(os.path.samestat(os.fstat(fd), name.stat()))
+                return native_mount(fd) + b"000"
+            return native_mount(fd)
+
+        with patch.object(os, "supports_dir_fd", os.supports_dir_fd | {opened}), \
+             patch.object(os, "open", new=opened), patch.object(staging, "mount_id", side_effect=mount):
+            yield named
+
+    def test_same_inode_at_a_different_mount_cannot_install_the_prepared_worktree(self):
+        self.qualified(); operation = self.prepare(); source = self.state/staging.LEAF
+        for leaf in (self.state, source):
+            with self.subTest(leaf=leaf), self.another_named_mount(leaf) as checked:
+                with patch.object(opening, "rename_new_at", side_effect=AssertionError("no worktree move")), \
+                     self.assertRaisesRegex(Rejected, "original mount"):
+                    opening.finish(self.state, operation)
+                self.assertTrue(checked)
+        self.assertTrue(source.is_dir()); self.assertFalse((self.out/"Chosen").exists())
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "verified_stage")
+
+    def test_rebound_final_name_after_the_real_move_cannot_complete_the_receipt(self):
+        self.qualified(); operation = self.prepare()
+        target = self.out/"Chosen"; inode = (self.state/staging.LEAF).stat().st_ino
+        native = staging.check_mount_name
+        checks = []
+
+        def named(parent, leaf, identity, mount):
+            if leaf == target.name and os.path.samestat(os.fstat(parent), self.out.stat()):
+                self.assertEqual(target.stat().st_ino, inode)
+                with self.another_named_mount(target) as checked:
+                    try: return native(parent, leaf, identity, mount)
+                    finally: checks.extend(checked)
+            return native(parent, leaf, identity, mount)
+
+        with patch.object(staging, "check_mount_name", side_effect=named), \
+             self.assertRaisesRegex(Rejected, "original mount"):
+            opening.finish(self.state, operation)
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(target.stat().st_ino, inode); self.assertFalse((self.state/staging.LEAF).exists())
+        self.assertFalse((self.state/"worktree.sqlite").exists())
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "verified_stage")
+        with patch.object(opening, "rename_new_at", side_effect=AssertionError("must acknowledge the same move")):
+            self.assertEqual(opening.finish(self.state, operation), (target, self.marker))
+        self.assertEqual(target.stat().st_ino, inode)
+
     def test_unqualified_mount_or_nonexclusive_state_parent_never_captures_or_falls_back(self):
         for gate in ("mode", "mount"):
             with self.subTest(gate=gate):

@@ -55,6 +55,8 @@ python3 -m zipworkspace commit demo/states/second --fork --writers-stopped
 **如果不希望目标位置出现解包中的目录：** Linux 的四个签出命令都可加 `--private-stage`，例如 `zip-workspace checkout design.zxs worktrees/design archives private-states/design --private-stage`。先准备互不包含的 `worktrees`、`archives`、`private-states` 三个目录；后者须由当前用户独占（0700），在整个操作及恢复期间不允许其他程序同步、搬动或修改。私有父与目标父必须是同一实际 Linux ext4/XFS 挂载，目标父不能是符号链接。恢复前也按当前实际 STORE 复查隔离；同一设备经另一挂载暴露的 STORE 别名不予接纳。这不是对远端存储历史身份的登记。条件不满足就拒绝，不改在目标目录解包，也不改用复制。
 
 新目录在私处逐级按已持有的目录句柄创建；全部内容核验、同步后，才与原包和唯一的签出记录一起安装为 STATE。此时目标仍未出现；接着只用跨父目录不可覆盖改名发布，并同步两个原父目录。STATE 已安装而确认中断时仍用 `resume-checkout STATE OPERATION`；更早中断可能在 `private-states/.zip-opening-…` 留下原包、部分或完整解包内容，尚无可自动续的回执，不扫描认领或清除。此选项不改变旧操作，不提供普通 ZIP 导入、桌面托管登记或 Windows 写入能力；源码未经实机验收。
+
+私处签出在安装前后还会从各个原父相对打开原 STATE、暂存树或正式树的实际目录，核对原挂载与目录身份。同一目录的设备和 inode 看似相同，也不能用另一个绑定挂载冒充原位置；若在改名后失去这种证据，保留原件，不宣告完成。
 - `changes STATE` 对照原提交显示真实新增、修改和删除的普通路径。工作树只能由其登记的原目录继续提交；同名同内容的新目录不能冒充。
 - `hide STATE --writers-stopped` 和 CLI 新发的 `restore STATE --writers-stopped` 只移动已提交且干净的原工作树，归档不变。操作前关闭编辑器、暂停同步及其他后台写入；[Linux 改名不会撤销已打开的句柄](https://man7.org/linux/man-pages/man2/rename.2.html)。原名占用时拒绝覆盖，不删除任何一方。仍有原件凭据的 Linux 桌面可保留修改恢复；**CLI 不新发这种恢复**。已受理的中断只按原 STATE、原操作号及该笔核验的内容核对或继续，不换目录、不将后续修改当作原操作批准的内容。
 - 同代竞争留下的未发布候选可用 `fork-pending STATE OPERATION` 明确另起分支。按已登记的完整 SHA-256 和节点核验原候选；从同一打开的文件复制，在独占创建的新 ZIP 句柄中改写节点标记，不重新按路径打开文件修改。冲突后的工作树编辑不包含在内，原件保留。若原件或新名称变化，拒绝把新包登记为成功；保留可能未登记的候选，不自动删除。已有分叉的重试仍只核对原后继操作。此保护不代替稳定的原归档存储与私有状态目录。

@@ -56,6 +56,17 @@ def check_named(parent, name, fd):
     return identity
 
 
+def check_mount_name(parent, name, identity, mount):
+    """The actual directory at this relative name must still be on the original mount."""
+    # st_dev/ino alone also match a bind mount of that same directory.
+    fd = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=parent)
+    try:
+        if native_identity(os.fstat(fd), stat.S_IFDIR) != identity or mount_id(fd) != mount:
+            raise Rejected("checkout name no longer denotes the original directory on its original mount")
+    finally:
+        os.close(fd)
+
+
 @contextmanager
 def new_child(area, name, mount, *, read_proc=None):
     # mkdirat does not return a handle. Use only an already-held, explicitly
