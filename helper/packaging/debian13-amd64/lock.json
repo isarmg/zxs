@@ -1,5 +1,5 @@
 {
-  "debian_version": "1.0.0+diskpack20261120.4",
+  "debian_version": "1.0.0+diskpack20261120.5",
   "releases": {
     "debian": {"suite":"trixie","inrelease":"0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"},
     "debian-security": {"suite":"trixie-security","inrelease":"4bcc789fc8cf9d937b6d721b04f3687984e282ea848c8ecbdb234ebe851e748c"}
@@ -12,6 +12,11 @@
     "xfsprogs": ["debian","6.13.0-2+deb13u1","79e00160bfc45d25a46d2709edd364afb41723d9b96713de8f6c80b6a17f2d74"],
     "ntfs-3g": ["debian-security","1:2022.10.3-5+deb13u3","2e2f42d3051f5ddd6f5c0d449543f23fc0e3fc4631a8a82207dfaab9213bdfaa"],
     "libntfs-3g89t64": ["debian-security","1:2022.10.3-5+deb13u3","eac375d5e7b0c0a4bfba7f228218e61296362bd19f2851a48f292ec417a6d690"],
+    "btrfs-progs": ["debian","6.14-1","ae3ab86d467b8b765ea1ea3e264c11a07a6f8a73e6b3df665c787d45b9b3491f"],
+    "libudev1": ["debian","257.13-1~deb13u1","5d41c284f5a93b05bc7d648b61a02dd2bb9ff05b2261ad1a8b7d96044a0cfa88"],
+    "zlib1g": ["debian-security","1:1.3.dfsg+really1.3.1-1+deb13u1","8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb"],
+    "liblzo2-2": ["debian","2.10-3+b1","f3032201fe2928a87e13f05ce256ff3ac2a7860c7e594dc51ae6d7348a4466ce"],
+    "libzstd1": ["debian","1.5.7+dfsg-1","2f6a2aeacfc925eba8b00ac9139bc4bfccf8cacb09eb93de067074b26948eef9"],
     "liburcu8t64": ["debian","0.15.2-2","bf6d8fe515004a491947c72af8ce2c015c5f9b4e8d024b81952ee8f372d507e9"],
     "libext2fs2t64": ["debian","1.47.2-3+b12","9f5783fa48239e42260d41846fbc6c8b19c233251063524456096195660eaa09"],
     "libcom-err2": ["debian","1.47.2-3+b12","bd43e020b8fed399db3eebf098111f10fba4c436fff99ccad72cc7e27c9764ec"],
@@ -35,6 +40,11 @@
     "xfsprogs":{"usr/sbin/xfs_repair":"bin/xfs_repair"},
     "ntfs-3g":{"usr/bin/ntfsfix":"bin/ntfsfix"},
     "libntfs-3g89t64":{"usr/lib/x86_64-linux-gnu/libntfs-3g.so.89.0.0":"lib/libntfs-3g.so.89"},
+    "btrfs-progs":{"usr/bin/btrfs":"bin/btrfs"},
+    "libudev1":{"usr/lib/x86_64-linux-gnu/libudev.so.1.7.10":"lib/libudev.so.1"},
+    "zlib1g":{"usr/lib/x86_64-linux-gnu/libz.so.1.3.1":"lib/libz.so.1"},
+    "liblzo2-2":{"usr/lib/x86_64-linux-gnu/liblzo2.so.2.0.0":"lib/liblzo2.so.2"},
+    "libzstd1":{"usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7":"lib/libzstd.so.1"},
     "liburcu8t64":{"usr/lib/x86_64-linux-gnu/liburcu.so.8.1.0":"lib/liburcu.so.8"},
     "libext2fs2t64":{"usr/lib/x86_64-linux-gnu/libext2fs.so.2.4":"lib/libext2fs.so.2","usr/lib/x86_64-linux-gnu/libe2p.so.2.3":"lib/libe2p.so.2"},
     "libcom-err2":{"usr/lib/x86_64-linux-gnu/libcom_err.so.2.1":"lib/libcom_err.so.2"},

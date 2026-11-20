@@ -1,7 +1,7 @@
 //! One isolated invocation. The checker never gets host /dev, the caller's
 //! namespace/terminal, any host directory, or an arbitrary option. Only the
 //! leased branches bind just the explicitly saved copy.
-use super::{Format,ext4,ntfs,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
+use super::{Format,btrfs,ext4,ntfs,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -89,11 +89,18 @@ pub(super) fn observe_ntfs(runtime:&Runtime,image:&ntfs::Image)->io::Result<ntfs
     if !delivered(&status,code){return Err(invalid("ntfsfix delivery or actual exit not confirmed"));}
     Ok(ntfs::classify(code,&out,&err,image.extent()))
 }
+pub(super) fn check_btrfs(runtime:&Runtime,image:&btrfs::Image)->io::Result<btrfs::Report>{
+    runtime.require_btrfs()?;
+    let (code,out,err,status)=invoke(runtime,Operand::LeasedBtrfs(image))?;
+    image.require()?;
+    if !delivered(&status,code){return Err(invalid("Btrfs checker delivery or actual exit not confirmed"));}
+    Ok(btrfs::classify(code,&out,&err,image.extent()))
+}
 #[derive(Clone,Copy)]
-enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image),LeasedNtfs(&'a ntfs::Image)}
+enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image),LeasedNtfs(&'a ntfs::Image),LeasedBtrfs(&'a btrfs::Image)}
 impl<'a> Operand<'a>{
     fn lease(self)->Option<&'a File>{
-        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file())}
+        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file()),Self::LeasedBtrfs(i)=>Some(i.file())}
     }
     fn sandbox(self,cmd:&mut Command)->io::Result<OwnedFd>{
         match self{
@@ -115,8 +122,9 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     let ext=matches!(copy,Operand::LeasedExt4(_));
     let xfs=matches!(copy,Operand::LeasedXfs(_));
     let ntfs=matches!(copy,Operand::LeasedNtfs(_));
+    let btrfs=matches!(copy,Operand::LeasedBtrfs(_));
     let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin); // real EOF, never a terminal
-    let empty=if ext||ntfs{Some(give(&stdin)?)}else{None};
+    let empty=if ext||ntfs||btrfs{Some(give(&stdin)?)}else{None};
     let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
     let mut b=Command::new("/no-path-execution-for-helper-checker");
     b.env_clear().env("LC_ALL","C").current_dir("/")
@@ -136,12 +144,18 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
             // is supplied to the guest, which only sees the saved regular image.
             b.args(["--setenv","EXT2FS_NO_MTAB_OK","1","--size","65536","--tmpfs","/dev",
                     "--perms","0600","--file",&fd.as_raw_fd().to_string(),"/dev/null"]);
-        }else{
+        }else if ntfs{
             // The pinned ntfsfix queries /proc/mounts then /etc/mtab.
             // Supply an empty file from this guest's EOF pipe, not a host
             // table, and seal it with the guest root. It says nothing
             // about the original disk's mount or Windows state.
             b.args(["--perms","0444","--file",&fd.as_raw_fd().to_string(),"/etc/mtab"]);
+        }else{
+            // btrfs-progs 6.14 check_mounted_where only opens this path.
+            // Give it only a fixed, empty ordinary file in this new guest
+            // (nothing mounted from the image), never procfs or a host
+            // table. This does not infer that an original device is idle.
+            b.args(["--perms","0444","--file",&fd.as_raw_fd().to_string(),"/proc/self/mounts"]);
         }
     }
     if xfs{
@@ -160,6 +174,7 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     b.args(["--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),"--","/checker"]);
     if ext{b.args(["-fn","-N","/image","/image"]);}
     else if xfs{b.args(["-n","-f","-P","-t","0","-o","phase2_threads=1","/image"]);}
+    else if btrfs{b.args(["check","--readonly","/image"]);}
     else{b.args(["-n","/image"]);} // includes the limited NTFS observer
     runtime.recheck()?;
     not_cancelled()?;
@@ -168,6 +183,7 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
         Operand::Sealed(_)=>prepare_diagnostic_exec(&mut b,runtime.launcher())?,
         Operand::LeasedExt4(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedNtfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::LeasedBtrfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedXfs(image)=>{image.require()?;prepare_xfs_diagnostic_exec(&mut b,runtime.launcher())?;},
     }
     let mut group=Group::new(b.spawn()?);

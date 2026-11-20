@@ -1,6 +1,6 @@
 # helper
 
-目前的宿主只读诊断包括：目录关系、文件比较、选定存储根的容量/挂载、Linux 块设备清单与被动 I/O 速率，文件系统检查工具清单，以及隔离调用 FAT32、exFAT、ext4、XFS 或 NTFS 的上游工具。目标平台为 Linux x86_64。不接管设备或服务，没有后台服务；只有显式启动 `helper disk-web` 才开临时本机面板。无参数只显示用法。
+目前的宿主只读诊断包括：目录关系、文件比较、选定存储根的容量/挂载、Linux 块设备清单与被动 I/O 速率，文件系统检查工具清单，以及隔离调用 FAT32、exFAT、ext4、XFS、NTFS 或 Btrfs 的上游工具。目标平台为 Linux x86_64。不接管设备或服务，没有后台服务；只有显式启动 `helper disk-web` 才开临时本机面板。无参数只显示用法。
 
 ZXS 的业务管理页由 [ZXS 原生 HTTP](docs/management-http.md) 直接提供，默认监听 0.0.0.0:8443，无需域名、证书、nginx 或套接字激活。可选的非 root systemd 单元只作为不启用的候选；如需 HTTPS，使用站点的外部软件。本包不会启动或改网络。
 
@@ -21,7 +21,7 @@ helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin
 
 ## 本机磁盘面板
 
-`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可查看设备与挂载、被动 I/O 速率及七类工具的固定安装位置。普通启动不会执行检查。终端用 `--fat32-copy`、`--exfat-copy`、`--ext4-copy`、`--xfs-copy` 或 `--ntfs-copy` 加 `IMAGE --sha256 HEX` 只选定一份卷镜像，配对后预览并确认一次。两种 FAT 在启动时封存，ext4/XFS/NTFS 只在确认后持只读租约并比对整份摘要，不复制。网页不收路径、上传、工具参数或修复请求。见[用法和访问边界](docs/disk-web.md)。配对后还可打开[首次安装向导](docs/disk-web.md#首次安装向导本机命令与原回执)：比较固定模板并提供可复制的本机命令；真正建池、域供给、口令和启停确认仍只在终端。
+`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可查看设备与挂载、被动 I/O 速率及七类工具的固定安装位置。普通启动不会执行检查。终端用 `--fat32-copy`、`--exfat-copy`、`--ext4-copy`、`--xfs-copy`、`--ntfs-copy` 或 `--btrfs-copy` 加 `IMAGE --sha256 HEX` 只选定一份卷镜像，配对后预览并确认一次。两种 FAT 在启动时封存，ext4/XFS/NTFS/Btrfs 只在确认后持只读租约并比对整份摘要，不复制。网页不收路径、上传、工具参数或修复请求。见[用法和访问边界](docs/disk-web.md)。配对后还可打开[首次安装向导](docs/disk-web.md#首次安装向导本机命令与原回执)：比较固定模板并提供可复制的本机命令；真正建池、域供给、口令和启停确认仍只在终端。
 
 ## 查看选定的存储根
 
@@ -50,7 +50,7 @@ helper disks --device 259:1 --rates
 
 ## 查看检查工具是否在位
 
-`helper fs-tools` 显示 ext4、NTFS、ZFS、XFS、Btrfs、exFAT、FAT32 各自的只读检查方案、对象和固定程序位置：FAT32/exFAT/ext4/XFS/NTFS 查私有发行工具槽，其他仅观察宿主槽，不能据此调用。可用 `helper fs-tools xfs` 只看一种，或对单个工具加 `--sha256` 与独立发行材料的摘要比较。**不会打开设备、调用检查器或修盘**，版本与签名仍为未核。详情见[七格式能力表、检测限制和返回码](docs/filesystem-tools.md)。
+`helper fs-tools` 显示 ext4、NTFS、ZFS、XFS、Btrfs、exFAT、FAT32 各自的只读检查方案、对象和固定程序位置：FAT32/exFAT/ext4/XFS/NTFS/Btrfs 查私有发行工具槽，其他仅观察宿主槽，不能据此调用。可用 `helper fs-tools xfs` 只看一种，或对单个工具加 `--sha256` 与独立发行材料的摘要比较。**不会打开设备、调用检查器或修盘**，版本与签名仍为未核。详情见[七格式能力表、检测限制和返回码](docs/filesystem-tools.md)。
 
 ## 检查一份 FAT32 或 exFAT 镜像（只读）
 
@@ -69,6 +69,10 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 ## 查看一份 NTFS 保存副本（有限只读）
 
 `helper check-ntfs-copy /绝对路径/volume.img --sha256 可信SHA256`。包内 `ntfsfix -n` 仅观察独立单卷副本的有限 MFT/镜像记录和备用启动扇区；配对网页也可确认一次。未验证日志/Windows 休眠或正文完整性，不是 chkdsk，不修复、不打开原盘。[用法与结果](docs/ntfs-copy-check.md)。
+
+## 检查一份 Btrfs 保存副本（只读、单设备）
+
+`helper check-btrfs-copy /绝对路径/volume.img --sha256 可信SHA256`。固定上游 `btrfs check --readonly` 只对自包含的单设备完整原始副本做结构检查；也可通过配对面板确认。不会查宿主其他设备，不支持多设备、恢复或修复，也不证明普通文件或每份镜像无误。[用法与边界](docs/btrfs-copy-check.md)。
 
 ## 本机部署与离线维护（设计）
 

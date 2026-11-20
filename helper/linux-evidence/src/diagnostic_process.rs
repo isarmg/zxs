@@ -136,7 +136,7 @@ fn prepare_checker_exec(cmd:&mut Command,original:&File,cpu:Option<libc::rlim_t>
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum CopyFormat{Fat32,Exfat}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum LeasedFormat{Ext4,Xfs,Ntfs}
+pub enum LeasedFormat{Ext4,Xfs,Ntfs,Btrfs}
 /// Spawn only the copy checker present in the same protected installation as the
 /// calling panel. The only argument is the digest of the *already sealed* stdin.
 pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyFormat,digest:&[u8;32])->io::Result<()>{
@@ -147,7 +147,7 @@ pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyForm
 /// stdin is the selected saved volume's new readonly
 /// description, not a sealed copy. Only this particular worker can lease it.
 pub fn prepare_leased_panel_exec(cmd:&mut Command,original:&File,format:LeasedFormat,digest:&[u8;32])->io::Result<()>{
-    let action=match format{LeasedFormat::Ext4=>"__ext4-leased-v1",LeasedFormat::Xfs=>"__xfs-leased-v1",LeasedFormat::Ntfs=>"__ntfs-leased-v1"};
+    let action=match format{LeasedFormat::Ext4=>"__ext4-leased-v1",LeasedFormat::Xfs=>"__xfs-leased-v1",LeasedFormat::Ntfs=>"__ntfs-leased-v1",LeasedFormat::Btrfs=>"__btrfs-leased-v1"};
     prepare_fixed_panel_exec(cmd,original,action,digest)
 }
 fn prepare_fixed_panel_exec(cmd:&mut Command,original:&File,action:&'static str,digest:&[u8;32])->io::Result<()>{

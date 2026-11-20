@@ -4,6 +4,12 @@
   let bearer = "", csrf = "", ticket = "", busy = false;
   const labels = {disks:"设备与挂载", rates:"被动 I/O 速率", tools:"随包与宿主工具"};
   const buttons = ["pair","disks","rates","tools","guide","guide-refresh","preview","confirm","receipt","close"].map(el);
+  const leasedTools=new Map([
+    ["ext4",["ext 文件系统（ext2/3/4） · e2fsck -fn","check-ext4-copy"]],
+    ["XFS",["XFS · xfs_repair -n -f","check-xfs-copy"]],
+    ["NTFS",["NTFS · ntfsfix -n（有限元数据观察）","check-ntfs-copy"]],
+    ["Btrfs",["Btrfs 单设备副本 · btrfs check --readonly","check-btrfs-copy"]]
+  ]);
   const setupRows=["setup-sam","setup-smb","setup-http"];
   const setupLabels=new Map([
     ["equal","与当前 helper 内置的模板字节一致"],
@@ -67,22 +73,21 @@
     const response=await post("/api/copy/preview",auth());const msg=await response.text();
     if(!response.ok){ticket="";show("selection",false);state(msg);return;}
     const [key,hash,format,bytes,sector,detail,phase,...extra]=msg.split("\n");
-    const ext=format==="ext4", xfs=format==="XFS", ntfs=format==="NTFS", held=ext||xfs||ntfs;
+    const leased=leasedTools.get(format);
     const knownSector=["512","1024","2048","4096"].includes(sector);
     const sizeValid=/^[1-9][0-9]{0,18}$/.test(bytes)&&(bytes.length<19||bytes<="9223372036854775807");
-    const validShape=held?sector==="-"&&detail==="-":
+    const validShape=leased?sector==="-"&&detail==="-":
       knownSector&&(format==="FAT32"&&/^[0-9]{1,10}$/.test(detail)||format==="exFAT"&&detail==="-");
     if(extra.length||![key,hash].every(x=>/^[0-9a-f]{64}$/.test(x))||
        !sizeValid||!["prepared","claimed"].includes(phase)||!validShape)throw Error("invalid preview");
     ticket=key;el("imgdigest").textContent=hash;
     const check=format==="FAT32"?detail+" 个数据簇；fsck.fat -n":"单 FAT；fsck.exfat -n";
-    el("imggeometry").textContent=held ?
-      (ext?"ext 文件系统（ext2/3/4） · e2fsck -fn":xfs?"XFS · xfs_repair -n -f":"NTFS · ntfsfix -n（有限元数据观察）")
-        +" · "+bytes+" 字节；确认后才读取并核对摘要" :
+    el("imggeometry").textContent=leased ?
+      leased[0]+" · "+bytes+" 字节；确认后才读取并核对摘要" :
       format+" · "+bytes+" 字节；逻辑扇区 "+sector+" 字节；"+check;
     show("selection",true);show("confirm",phase==="prepared");
-    const remainder=held?"读完整摘要和检查共用配对后剩余时间；大镜像可另在终端用 helper "+
-      (ext?"check-ext4-copy":xfs?"check-xfs-copy":"check-ntfs-copy")+" IMAGE --sha256 HEX。":"";
+    const remainder=leased?"读完整摘要和检查共用配对后剩余时间；大镜像可另在终端用 helper "+
+      leased[1]+" IMAGE --sha256 HEX。":"";
     state(phase==="prepared"?"请对照你的独立摘要。90 秒内确认才会开始；不确认不会执行。"+remainder:"此目标已认领，只能查询原结果。");
   }
   async function check(submit) {

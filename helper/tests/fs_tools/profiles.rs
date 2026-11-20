@@ -7,7 +7,7 @@ fn all_seven_plans_have_a_typed_target_fixed_argv_and_no_repair_control() {
     let expected:[(&str,&str,&[&str],Target);7]=[
         ("ext4","e2fsck",&["-f","-n"],OfflineImage), ("ntfs","ntfsfix",&["-n"],OfflineImage),
         ("zfs","zpool",&["status"],ImportedPool), ("xfs","xfs_repair",&["-n","-f"],OfflineImage),
-        ("btrfs","btrfs",&["check","--readonly"],IsolatedMembers),
+        ("btrfs","btrfs",&["check","--readonly"],SingleDeviceImage),
         ("exfat","fsck.exfat",&["-n"],OfflineImage), ("fat32","fsck.fat",&["-n"],OfflineImage),
     ];
     for (p,(format,tool,opts,scope)) in PROFILES.iter().zip(expected) {
@@ -46,7 +46,7 @@ fn missing_unchecked_mismatch_and_unavailable_versions_are_not_device_results(){
 fn only_supported_bundled_slots_are_private_and_detection_is_not_execution(){
     for p in PROFILES {
         let path = p.slots().join("/");
-        if matches!(p.format,"fat32"|"exfat"|"ext4"|"xfs"|"ntfs") {
+        if matches!(p.format,"fat32"|"exfat"|"ext4"|"xfs"|"ntfs"|"btrfs") {
             assert!(path.starts_with("usr/lib/local-ops-helper/disk-tools-v1/bin/"));
         } else {
             assert!(!p.private());assert!(!path.contains("disk-tools-v1"));
@@ -56,6 +56,8 @@ fn only_supported_bundled_slots_are_private_and_detection_is_not_execution(){
     assert_eq!(PROFILES[0].action(),"leased-saved-copy-readonly");
     assert_eq!(PROFILES[1].slots().last(),Some(&"ntfsfix"));
     assert_eq!(PROFILES[1].action(),"leased-saved-copy-limited-readonly");
+    assert_eq!(PROFILES[4].slots().last(),Some(&"btrfs"));
+    assert_eq!(PROFILES[4].action(),"leased-single-device-copy-readonly");
     assert_eq!(PROFILES[5].action(),"sealed-copy-readonly");
     assert_eq!(PROFILES[2].action(),"host-version-and-loaded-module-required-not-enabled");
 }

@@ -6,14 +6,14 @@ use std::{ffi::OsString, fmt};
 pub(crate) use install::{Evidence, Record, RuntimeFile,hash_upto};
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub(crate) enum Target { OfflineImage, IsolatedMembers, ImportedPool }
+pub(crate) enum Target { OfflineImage, SingleDeviceImage, ImportedPool }
 impl Target {
     fn name(self)->&'static str {match self {
         Self::OfflineImage=>"independent-unmounted-complete-image",
-        Self::IsolatedMembers=>"isolated-complete-unmounted-member-set",
+        Self::SingleDeviceImage=>"independent-unmounted-single-device-image",
         Self::ImportedPool=>"one-explicit-already-imported-pool",
     }}
-    fn operand(self)->&'static str{match self{Self::OfflineImage=>"<image>",Self::IsolatedMembers=>"<member>",Self::ImportedPool=>"<pool>"}}
+    fn operand(self)->&'static str{match self{Self::OfflineImage=>"<image>",Self::SingleDeviceImage=>"<single-device-image>",Self::ImportedPool=>"<pool>"}}
 }
 
 #[derive(Clone,Copy)]
@@ -23,7 +23,7 @@ pub(crate) struct Profile {
     pub(crate) options:&'static [&'static str], pub(crate) target:Target, pub(crate) limit:&'static str,
 }
 impl Profile {
-    pub(crate) fn private(self)->bool {matches!(self.format,"fat32"|"exfat"|"ext4"|"xfs"|"ntfs")}
+    pub(crate) fn private(self)->bool {matches!(self.format,"fat32"|"exfat"|"ext4"|"xfs"|"ntfs"|"btrfs")}
     fn slots(self)->Vec<&'static str>{
         if self.private(){vec!["usr","lib","local-ops-helper","disk-tools-v1","bin",self.tool]}
         else{vec!["usr",self.directory,self.tool]}
@@ -31,6 +31,7 @@ impl Profile {
     pub(crate) fn action(self)->&'static str {match self.format {
         "fat32"|"exfat"=>"sealed-copy-readonly", "ext4"|"xfs"=>"leased-saved-copy-readonly",
         "ntfs"=>"leased-saved-copy-limited-readonly",
+        "btrfs"=>"leased-single-device-copy-readonly",
         "zfs"=>"host-version-and-loaded-module-required-not-enabled", _=>"planned-not-enabled"
     }}
 }
@@ -44,7 +45,7 @@ const PROFILES:[Profile;7]=[
     Profile{format:"xfs",package:"xfsprogs",directory:"sbin",tool:"xfs_repair",
         options:&["-n","-f"],target:Target::OfflineImage,limit:"self-contained image only; external log/realtime device outside scope; dirty log means incomplete, never zero it"},
     Profile{format:"btrfs",package:"btrfs-progs",directory:"bin",tool:"btrfs",
-        options:&["check","--readonly"],target:Target::IsolatedMembers,limit:"may look up other devices with the same FSID; an isolated full member set is required, no repair"},
+        options:&["check","--readonly"],target:Target::SingleDeviceImage,limit:"isolated full single-device image only; no device set, seed/metadata dump or repair"},
     Profile{format:"exfat",package:"exfatprogs",directory:"sbin",tool:"fsck.exfat",
         options:&["-n"],target:Target::OfflineImage,limit:"confirm exFAT; never apply dosfstools exit meanings"},
     Profile{format:"fat32",package:"dosfstools",directory:"sbin",tool:"fsck.fat",

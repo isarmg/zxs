@@ -1,4 +1,5 @@
 //! Locally selected, isolated saved-volume checks and observations. No repairs.
+mod btrfs;
 mod exfat;
 mod ext4;
 mod group;
@@ -58,6 +59,9 @@ impl Request {
     pub(crate) fn parse_ntfs(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
         Self::parse_image(&mut args,"expected one absolute saved NTFS volume image and --sha256 HEX; no devices or checker options")
     }
+    pub(crate) fn parse_btrfs(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
+        Self::parse_image(&mut args,"expected one absolute saved single-device Btrfs image and --sha256 HEX; no devices or checker options")
+    }
     fn parse_image(args:&mut impl Iterator<Item=OsString>,usage:&'static str)->Result<Self,&'static str>{
         let image=args.next().ok_or(usage)?;
         if !Path::new(&image).is_absolute()||args.next().as_deref()!=Some(std::ffi::OsStr::new("--sha256")){return Err(usage);}
@@ -82,6 +86,12 @@ impl Request {
         let runtime=runtime::Runtime::ntfs()?;
         let image=ntfs::Image::capture(&self.image,&self.digest,ntfs::read_frame)?;
         runner::observe_ntfs(&runtime,&image)
+    }
+    pub(crate) fn run_btrfs(self)->io::Result<btrfs::Report>{
+        runner::prepare_leased_worker()?;
+        let runtime=runtime::Runtime::btrfs()?;
+        let image=btrfs::Image::capture(&self.image,&self.digest,btrfs::read_frame)?;
+        runner::check_btrfs(&runtime,&image)
     }
     pub(crate) fn run_exfat(self)->io::Result<exfat::Report>{
         runner::prepare_worker()?;

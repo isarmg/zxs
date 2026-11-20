@@ -97,5 +97,7 @@ mod tests{
         assert_eq!(c.preview(now).body,answer.body.replace("\next4\n","\nXFS\n"));
         c.info.detail=Detail::Ntfs;
         assert_eq!(c.preview(now).body,answer.body.replace("\next4\n","\nNTFS\n"));
+        c.info.detail=Detail::Btrfs;
+        assert_eq!(c.preview(now).body,answer.body.replace("\next4\n","\nBtrfs\n"));
     }
 }

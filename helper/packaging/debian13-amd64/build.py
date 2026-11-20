@@ -45,7 +45,15 @@ XFS_NEEDED = {
 }
 NTFS_LIBS = ("libntfs-3g.so.89",)
 NTFS_NEEDED = {"ntfsfix":{"libc.so.6",*NTFS_LIBS}, "libntfs-3g.so.89":{"libc.so.6"}}
-CHECKER_NEEDED = EXT4_NEEDED | XFS_NEEDED | NTFS_NEEDED  # shared libuuid/blkid already exact above
+BTRFS_LIBS = ("libuuid.so.1","libblkid.so.1","libudev.so.1","libz.so.1","liblzo2.so.2","libzstd.so.1")
+BTRFS_NEEDED = {
+    "btrfs":{"libc.so.6",LOADER,*BTRFS_LIBS},
+    "libudev.so.1":{"libcap.so.2","libc.so.6",LOADER},
+    "libz.so.1":{"libc.so.6"},
+    "liblzo2.so.2":{"libc.so.6"},
+    "libzstd.so.1":{"libc.so.6"},
+}
+CHECKER_NEEDED = EXT4_NEEDED | XFS_NEEDED | NTFS_NEEDED | BTRFS_NEEDED  # shared libuuid/blkid already exact above
 
 
 def textout(args, cwd=None):
@@ -308,10 +316,10 @@ def build(args):
         cap_manifest=cap/"CAPSULE"
         with cap_manifest.open("xb") as mf: mf.write(samba_capsule.manifest_bytes(recipe))
         binary=copy_checked(args.helper,root/"usr/bin/helper",args.helper_sha256,cap=64<<20)
-        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat",home/"bin/e2fsck",home/"bin/xfs_repair",home/"bin/ntfsfix"]
+        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat",home/"bin/e2fsck",home/"bin/xfs_repair",home/"bin/ntfsfix",home/"bin/btrfs"]
         libs=sorted((home/"lib").iterdir())
         allowed={p.name for p in libs}
-        extras=set(EXT4_LIBS)|set(XFS_LIBS)|set(NTFS_LIBS)
+        extras=set(EXT4_LIBS)|set(XFS_LIBS)|set(NTFS_LIBS)|set(BTRFS_LIBS)
         base=allowed-extras
         require(extras<=allowed,"missing leased-copy guest library")
         requires={}
@@ -340,7 +348,8 @@ def build(args):
                 ("exfat-check-v1","exfatprogs-1.2.9","fsck.exfat",()),
                 ("ext4-check-v1","e2fsprogs-1.47.2","e2fsck",EXT4_LIBS),
                 ("xfs-check-v1","xfsprogs-6.13.0","xfs_repair",XFS_LIBS),
-                ("ntfs-check-v1","ntfs-3g-2022.10.3-deb13u3","ntfsfix",NTFS_LIBS)):
+                ("ntfs-check-v1","ntfs-3g-2022.10.3-deb13u3","ntfsfix",NTFS_LIBS),
+                ("btrfs-check-v1","btrfs-progs-6.14","btrfs",BTRFS_LIBS)):
             keys=(PROFILE[0],tool,*PROFILE[2:],*extra)
             files=(FILES[0],"bin/"+tool,*FILES[2:],*(f"lib/{name}" for name in extra))
             lines=[f"{key} {digest(home/leaf)}" for key,leaf in zip(keys,files,strict=True)]
@@ -355,7 +364,7 @@ def build(args):
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
-              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly","e2fsck":"leased-saved-copy-readonly","xfs_repair":"leased-saved-copy-readonly","ntfsfix":"leased-saved-copy-limited-readonly"}}
+              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly","e2fsck":"leased-saved-copy-readonly","xfs_repair":"leased-saved-copy-readonly","ntfsfix":"leased-saved-copy-limited-readonly","btrfs":"leased-single-device-copy-readonly"}}
         # Candidate NON-privileged material for the release signer. Do not
         # install it as its own authorization: the package owner is not the site's
         # authority. It and the exact .deb are covered by the external signed sums.

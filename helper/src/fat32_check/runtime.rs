@@ -25,6 +25,10 @@ const XFS_CHECKER:&[&str]=pack!("bin","xfs_repair");
 const NTFS_PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/ntfs-3g-2022.10.3-deb13u3";
 const NTFS_POLICY:&[&str]=pack!("ntfs-check-v1");
 const NTFS_CHECKER:&[&str]=pack!("bin","ntfsfix");
+const BTRFS_PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/btrfs-progs-6.14";
+const BTRFS_POLICY:&[&str]=pack!("btrfs-check-v1");
+const BTRFS_POLICY_BYTES:u64=1116;
+const BTRFS_CHECKER:&[&str]=pack!("bin","btrfs");
 // Only these five extra DSOs are part of the exact e2fsck and guest libc
 // closure. They are not replacement host loaders or Samba dependencies.
 const EXT_LIBS:[(&str,&[&str],&str);5]=[
@@ -42,19 +46,29 @@ const XFS_LIBS:[(&str,&[&str],&str);3]=[
 const NTFS_LIBS:[(&str,&[&str],&str);1]=[
     ("libntfs-3g.so.89",pack!("lib","libntfs-3g.so.89"),"/lib/x86_64-linux-gnu/libntfs-3g.so.89"),
 ];
+const BTRFS_LIBS:[(&str,&[&str],&str);6]=[
+    EXT_LIBS[3], // libuuid
+    EXT_LIBS[2], // libblkid
+    ("libudev.so.1",pack!("lib","libudev.so.1"),"/lib/x86_64-linux-gnu/libudev.so.1"),
+    ("libz.so.1",pack!("lib","libz.so.1"),"/lib/x86_64-linux-gnu/libz.so.1"),
+    ("liblzo2.so.2",pack!("lib","liblzo2.so.2"),"/lib/x86_64-linux-gnu/liblzo2.so.2"),
+    ("libzstd.so.1",pack!("lib","libzstd.so.1"),"/lib/x86_64-linux-gnu/libzstd.so.1"),
+];
+// The libcap dependency of libudev is already pinned as a launcher slot.
+const HOST_LIBCAP_SLOT:usize=4;
 const MAX_ELF:u64=32<<20;
 
 #[derive(Clone,Copy,PartialEq,Eq)]
-pub(super) enum Engine{Copy(Format),Ext4,Xfs,Ntfs}
+pub(super) enum Engine{Copy(Format),Ext4,Xfs,Ntfs,Btrfs}
 impl Engine{
-    fn profile(self)->&'static str{match self{Self::Copy(Format::Fat32)=>PROFILE,Self::Copy(Format::Exfat)=>EX_PROFILE,Self::Ext4=>EXT_PROFILE,Self::Xfs=>XFS_PROFILE,Self::Ntfs=>NTFS_PROFILE}}
-    fn policy(self)->&'static [&'static str]{match self{Self::Copy(Format::Fat32)=>POLICY,Self::Copy(Format::Exfat)=>EX_POLICY,Self::Ext4=>EXT_POLICY,Self::Xfs=>XFS_POLICY,Self::Ntfs=>NTFS_POLICY}}
+    fn profile(self)->&'static str{match self{Self::Copy(Format::Fat32)=>PROFILE,Self::Copy(Format::Exfat)=>EX_PROFILE,Self::Ext4=>EXT_PROFILE,Self::Xfs=>XFS_PROFILE,Self::Ntfs=>NTFS_PROFILE,Self::Btrfs=>BTRFS_PROFILE}}
+    fn policy(self)->&'static [&'static str]{match self{Self::Copy(Format::Fat32)=>POLICY,Self::Copy(Format::Exfat)=>EX_POLICY,Self::Ext4=>EXT_POLICY,Self::Xfs=>XFS_POLICY,Self::Ntfs=>NTFS_POLICY,Self::Btrfs=>BTRFS_POLICY}}
     fn checker(self)->(&'static str,&'static [&'static str]){
         match self{Self::Copy(Format::Fat32)=>(KEYS[1],SLOTS[1]),Self::Copy(Format::Exfat)=>("fsck.exfat",EX_CHECKER),
-            Self::Ext4=>("e2fsck",EXT_CHECKER),Self::Xfs=>("xfs_repair",XFS_CHECKER),Self::Ntfs=>("ntfsfix",NTFS_CHECKER)}
+            Self::Ext4=>("e2fsck",EXT_CHECKER),Self::Xfs=>("xfs_repair",XFS_CHECKER),Self::Ntfs=>("ntfsfix",NTFS_CHECKER),Self::Btrfs=>("btrfs",BTRFS_CHECKER)}
     }
     fn private_guest(self)->&'static [(&'static str,&'static [&'static str],&'static str)]{
-        match self{Self::Ext4=>&EXT_LIBS,Self::Xfs=>&XFS_LIBS,Self::Ntfs=>&NTFS_LIBS,Self::Copy(_)=>&[]}
+        match self{Self::Ext4=>&EXT_LIBS,Self::Xfs=>&XFS_LIBS,Self::Ntfs=>&NTFS_LIBS,Self::Btrfs=>&BTRFS_LIBS,Self::Copy(_)=>&[]}
     }
     fn slots(self)->impl Iterator<Item=(&'static str,&'static [&'static str])>{
         KEYS.into_iter().zip(SLOTS).enumerate().map(move |(i,(label,slot))|if i==1{self.checker()}else{(label,slot)})
@@ -86,9 +100,10 @@ impl Runtime {
     pub(super) fn ext4()->io::Result<Self>{Ok(Self::selected(Engine::Ext4,None)?.0)}
     pub(super) fn xfs()->io::Result<Self>{Ok(Self::selected(Engine::Xfs,None)?.0)}
     pub(super) fn ntfs()->io::Result<Self>{Ok(Self::selected(Engine::Ntfs,None)?.0)}
+    pub(super) fn btrfs()->io::Result<Self>{Ok(Self::selected(Engine::Btrfs,None)?.0)}
     fn selected(kind:Engine,release:Option<&[u8;32]>)->io::Result<(Self,[u8;32])>{
         use sha2::{Digest,Sha256};
-        let limit=if kind==Engine::Ext4{EXT_POLICY_BYTES}else{1024};
+        let limit=match kind{Engine::Ext4=>EXT_POLICY_BYTES,Engine::Btrfs=>BTRFS_POLICY_BYTES,_=>1024};
         let mut policy=RuntimeFile::open(kind.policy(),false,limit)?;
         let mut bytes=Vec::new();(&mut policy.file).take(limit+1).read_to_end(&mut bytes)?;
         if bytes.len() as u64>limit{return Err(invalid("protected checker profile exceeded its size budget"));}
@@ -124,11 +139,16 @@ impl Runtime {
         if self.kind!=Engine::Ntfs{return Err(invalid("not the approved NTFS observer profile"));}
         Ok(())
     }
+    pub(super) fn require_btrfs(&self)->io::Result<()>{
+        if self.kind!=Engine::Btrfs{return Err(invalid("not the approved Btrfs checker profile"));}
+        Ok(())
+    }
     pub(super) fn launcher(&self)->&std::fs::File { &self.files[0].file }
     pub(super) fn sandbox_files(&self)->impl Iterator<Item=(&std::fs::File,&'static str)>{
         self.files[1..4].iter().map(|f|&f.file).zip(["/checker","/lib64/ld-linux-x86-64.so.2","/lib/x86_64-linux-gnu/libc.so.6"])
             .chain(self.files[8..].iter().map(|f|&f.file).zip(self.kind.private_guest().iter().map(|&(_,_,dest)|dest)))
             .chain((!self.kind.private_guest().is_empty()).then(||(&self.files[2].file,"/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")))
+            .chain((self.kind==Engine::Btrfs).then(||(&self.files[HOST_LIBCAP_SLOT].file,"/lib/x86_64-linux-gnu/libcap.so.2")))
     }
     pub(super) fn recheck(&self)->io::Result<()>{
         self.policy.recheck()?; for f in &self.files{f.recheck()?;}Ok(())
@@ -137,6 +157,17 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn btrfs_profile_pins_all_its_guest_libraries_without_another_device():
+        let line=|k|format!("{k} {}\n","ab".repeat(32));
+        let full=format!("{BTRFS_PROFILE}\n{}",Engine::Btrfs.slots().map(|(k,_)|line(k)).collect::<String>());
+        assert_eq!(full.len() as u64,BTRFS_POLICY_BYTES);
+        assert_eq!(pins_for(Engine::Btrfs,full.as_bytes()).unwrap().len(),14);
+        assert_eq!(SLOTS[HOST_LIBCAP_SLOT].last(),Some(&"libcap.so.2"));
+        assert!(pins_for(Engine::Xfs,full.as_bytes()).is_err());
+        assert!(pins_for(Engine::Btrfs,full.replace(&line("libudev.so.1"),"").as_bytes()).is_err());
+        assert!(pins_for(Engine::Btrfs,(full+&line("/dev/loop0")).as_bytes()).is_err());
+    }
     #[test]
     fn ntfs_profile_requires_its_exact_guest_library_and_never_a_host_mount_tool(){
         let line=|k|format!("{k} {}\n","ab".repeat(32));
