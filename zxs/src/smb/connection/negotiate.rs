@@ -4,34 +4,15 @@
 use super::{Fault,Opening,OpeningSend,Result};
 use crate::smb::wire::{Error,negotiate_reply};
 pub(in crate::smb) use super::sessions::RunningServerGuid;
-use std::time::{Duration,SystemTime,UNIX_EPOCH};
-
-fn fresh_salt(dst: &mut [u8;32]) -> Result<()> {
-    // Existing ZXS Linux getrandom(0) wrapper; handles EINTR and short fills.
-    // No pathname, host crypto library, architecture-specific syscall number
-    // or weaker fallback. The bytes are a fresh public salt, NOT a session key.
-    unsafe extern "C" { fn zxs_random(out: *mut u8, length: usize) -> std::os::raw::c_int; }
-    // SAFETY: dst is live/writable for the exact synchronous fill.
-    if unsafe { zxs_random(dst.as_mut_ptr(),dst.len()) } != 0 { return Err(Fault::Entropy); }
-    Ok(())
-}
-
-fn filetime_delta(delta: std::result::Result<Duration,Duration>) -> Option<u64> {
-    const UNIX_TICKS: u128 = 116_444_736_000_000_000;
-    let ticks = match delta {
-        Ok(after) => UNIX_TICKS.checked_add(after.as_nanos()/100)?,
-        // Floor on the absolute timeline; an instant 1 ns before the Unix
-        // epoch is one FILETIME tick earlier, not the epoch itself.
-        Err(before) => UNIX_TICKS.checked_sub(before.as_nanos().div_ceil(100))?,
-    };
-    ticks.try_into().ok()
-}
+use crate::smb::local::{filetime_delta,random};
+use std::time::{SystemTime,UNIX_EPOCH};
+#[cfg(test)] use std::time::Duration;
 
 impl Opening {
     /// No externally supplied clock, random bytes, grant or algorithm switch.
     /// A locally complete byte buffer is still NOT a published connection.
     pub(in crate::smb) fn respond(self, server: &RunningServerGuid) -> Result<OpeningSend> {
-        self.respond_from(server,fresh_salt,SystemTime::now)
+        self.respond_from(server,|salt| if random(salt) {Ok(())} else {Err(Fault::Entropy)},SystemTime::now)
     }
     fn respond_from(self, server: &RunningServerGuid, draw: impl FnOnce(&mut [u8;32])->Result<()>,
         now: impl FnOnce()->SystemTime) -> Result<OpeningSend> {

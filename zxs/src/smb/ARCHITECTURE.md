@@ -47,6 +47,10 @@
 
 下一条非零 SID 请求须已在**同一原连接**消费自己的新 MID，再从双方索引找到同一未超时对象、恰处于等 Type 1。仅一次移出该阶段，按同一 transcript 校验原 token；坏 token 只移除这个槽，无权触碰别的会话。跨连接借来的同号码不能接管或取消。不在表的 SID 或过期不会创建新会话。当前仅这条需要先选机制的路径走到有效 Type 1；尚无 Type 2 发行、口令校验发布、成功会话或原生监听。生产错误回复、主动定时唤醒和其他 [GSS 完成／清理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)仍属后续；每次查找与增发都在原处检查期限，不能用被动清理延长权限。
 
+### 本次机制挑战的生成（不签发会话）
+
+严格机制只从原 Type 1 选已经支持的标志。按 [MS-NLMP 服务器处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/81d15e3e-3ac3-41f0-920d-846149f3a814)、[Type 2 格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/801a4681-8809-4be9-ab0d-61dcfe762786)与[协商标志](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/99d90ff4-957f-4c8a-80e4-5bfe5a9a9832)，独立服务器返回本机的 NetBIOS TargetName、受信的名称 AV、UTC FILETIME 和内核新取的 8 字节一次性挑战；不反射客户端名字、不冒充域控制器、不把 NTLM SEAL 当作 SMB 加密。原 standalone Type 2、第一次 SPNEGO 的 request-mic/NTLM OID/Type 2、已有选择后的仅 accept-incomplete/Type 2 分开编码。MORE 不同于认证成功。基础库仅接受归属本服务的一份受保护凭据代，与已签发的确切挑战、原 GSS 包和原绝对截止绑定；凭据替换后相同数字、名字或 SID 不能代替同一原对象。没有生产凭据构造、收集器、导入用户密码或认证回退。源码夹具有独立固定的完整 Type 2、短/长 DER 边界、错封装、拒绝和撤代例，无实跑。
+
 ## SESSION_SETUP 的机制封装（止于未验证的 Type 3）
 
 `session/envelope` 只处理一次新的连接型 NTLMv2 尝试。它取原请求或已序列化 MORE 回复的同一个 security buffer 和预认证状态，不收另传的 token。第一次选定 RFC 4178 的 GSS-SPNEGO 或直接 NTLMSSP 后不得换层；不扫描尾部、不从坏 DER 回退、不把客户端的账户名、目标、MIC 标志或非零 SessionId 当证明。[Linux v6.12 的原生 SMB 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L1708-L1846) 确有直接传两段 NTLMSSP 的代码，两种封装最终必须满足同一账户、挑战及签名要求。本段不接收 SMB1、NTLMv1 或匿名。

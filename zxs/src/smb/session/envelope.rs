@@ -112,7 +112,16 @@ impl AwaitNegotiate {
     }
 }
 
+pub(super) enum ChallengeLayer { Direct, FirstSpnego, LaterSpnego }
 impl HaveNegotiate {
+    pub(super) fn challenge_offer(&self) -> Result<(u32,ChallengeLayer)> {
+        let layer=match &self.layer {
+            Layer::Direct => ChallengeLayer::Direct,
+            Layer::Spnego { .. } if self.first_reply => ChallengeLayer::FirstSpnego,
+            Layer::Spnego { .. } => ChallengeLayer::LaterSpnego,
+        };
+        Ok((ntlm::negotiate_flags(self.type1.bytes())?,layer))
+    }
     /// Parse only the already serialized server MORE reply. This does not
     /// generate, register, expire or authenticate a challenge.
     pub(in crate::smb) fn challenged(self, serialized: &[u8]) -> Result<AwaitAuthenticate> {

@@ -79,13 +79,14 @@ fn hex(s: &str) -> Vec<u8> {
 fn utf(s: &str) -> Box<[u8]> {
     s.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>().into_boxed_slice()
 }
-fn revision() -> ProtectedRevision {
-    ProtectedRevision {
+pub(super) fn revision() -> Arc<ProtectedRevision> {
+    Arc::new(ProtectedRevision {
         user: utf("WireFixture"), domain: utf("SYNTH"), spn: utf("cifs/fixture.invalid"),
         epoch: NonZeroU64::new(17).unwrap(),
         response_key: Zeroizing::new(std::array::from_fn(|i| 0x60 + i as u8)),
-    }
+    })
 }
+pub(super) fn challenge_vector()->(Vec<u8>,Vec<u8>) {(hex(PLAIN_ONE),hex(PLAIN_TWO))}
 struct Example { one: Vec<u8>, two: Vec<u8>, three: Vec<u8>, exported: Vec<u8>,
                  client_list: Vec<u8>, server_list: Vec<u8> }
 fn example(exch: bool) -> Example {
@@ -98,13 +99,13 @@ fn example(exch: bool) -> Example {
               client_list: hex(i), server_list: hex(o) }
 }
 // None = direct NTLM; wrapped = NTLM alone or followed by offered Kerberos.
-fn issued<'a>(revision: &'a ProtectedRevision, e: &Example, wrapped: Option<bool>) -> Issued<'a> {
+fn issued(revision: &Arc<ProtectedRevision>, e: &Example, wrapped: Option<bool>) -> Issued {
     let first = match wrapped {
         None => e.one.clone(),
         Some(false) => frame::init(&[frame::NTLM], Some(&e.one)),
         Some(true) => frame::init(&[frame::NTLM,frame::KRB], Some(&e.one)),
     };
-    Issued { start: frame::seen(&first), revision, assigned: NonZeroU64::new(42).unwrap(),
+    Issued { start: frame::seen(&first), revision:Arc::clone(revision), assigned: NonZeroU64::new(42).unwrap(),
              expected_type2: Saved::from_wire(&e.two).unwrap(),
              expires: Instant::now() + Duration::from_secs(60) }
 }
@@ -113,10 +114,10 @@ fn more(two: &[u8], wrapped: bool, mid: u64, sid: u64) -> Vec<u8> {
         frame::smb(&frame::resp(Some(1),true,Some(two),None),true,mid,sid,0)
     } else { frame::smb(two,true,mid,sid,0) }
 }
-fn done<'a>(
-    revision: &'a ProtectedRevision, e: &Example, wrapped: Option<bool>,
+fn done(
+    revision: &Arc<ProtectedRevision>, e: &Example, wrapped: Option<bool>,
     mic: Option<&[u8]>, sid: u64, gap: u8,
-) -> Result<MechanismProof<'a>> {
+) -> Result<MechanismProof> {
     let w = wrapped.is_some();
     let pending = issued(revision,e,wrapped).sent(&more(&e.two,w,1,42))?;
     let token = if w { frame::resp(None,false,Some(&e.three),mic) } else { e.three.clone() };
@@ -131,7 +132,7 @@ fn fixed_proof_inner_mic_exported_key_and_two_directions_with_or_without_key_exc
         let e = example(kx);
         let raw = done(&v,&e,None,None,42,0).unwrap();
         assert_eq!(&raw.exported[..], e.exported.as_slice());
-        assert!(std::ptr::eq(raw.revision,&v));
+        assert!(Arc::ptr_eq(&raw.revision,&v));
         assert_eq!(raw.revision.epoch.get(),17);
         assert!(matches!(raw.final_gss,FinalGss::Direct));
         let wrapped = done(&v,&e,Some(true),Some(&e.client_list),42,0).unwrap();
@@ -194,11 +195,12 @@ fn valid_proof_is_not_enough_without_strict_mic_original_inputs_and_bound_target
     let e = example(false);
     for mismatch in [0,1,2,3] {
         let mut other = revision();
+        let slot=Arc::get_mut(&mut other).unwrap();
         match mismatch {
-            0 => other.response_key[0] ^= 1,
-            1 => other.domain = utf("OTHER"),
-            2 => other.user = utf("OtherFixture"),
-            _ => other.spn = utf("cifs/other.invalid"),
+            0 => slot.response_key[0] ^= 1,
+            1 => slot.domain = utf("OTHER"),
+            2 => slot.user = utf("OtherFixture"),
+            _ => slot.spn = utf("cifs/other.invalid"),
         }
         assert!(done(&other,&e,None,None,42,0).is_err());
     }

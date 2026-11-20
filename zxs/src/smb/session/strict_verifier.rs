@@ -1,6 +1,7 @@
 //! Strict development profile for one connection-oriented NTLMv2 exchange.
-//! No enrollment, credential reader, challenge issuer, live-session authority,
+//! No enrollment, credential reader, production provider, live-session authority,
 //! wire-key constructor, listener or conversion into a storage/session grant.
+pub(super) mod challenge;
 use super::{
     Secret, envelope::{AwaitAuthenticate, HaveNegotiate, Layer, Saved, Unverified},
     ntlm_shape::{self as ntlm, Authenticate, Challenge},
@@ -9,7 +10,7 @@ use crate::smb::wire::{message::Compound, preauth::RequestKeyContext};
 use hmac::{Hmac, KeyInit, Mac};
 use md5::{Digest, Md5, digest::{FixedOutput, Output}};
 use rc4::{Rc4, StreamCipher};
-use std::{num::NonZeroU64, time::Instant};
+use std::{num::NonZeroU64, sync::Arc, time::Instant};
 use zeroize::{Zeroize, Zeroizing};
 
 type H = Hmac<Md5>;
@@ -44,29 +45,27 @@ struct ProtectedRevision {
     response_key: Secret,
 }
 
-/// The future real connection owner must reserve a nonzero/non-sentinel SID,
-/// quota and one-use unpredictable challenge, hold its exact issued Type2,
-/// original start and current credential revision together, and set a finite
-/// monotonic expiry. No interface here to inject app-supplied challenges or
-/// credentials. Tests are descendants, not an alternative production issuer.
+/// Sealed mechanism state. The actual connection reserves the SID and lifetime;
+/// challenge::ChallengeService pins its own revision and original Type2. No
+/// interface for application-supplied challenges, verifiers or credentials.
 #[must_use]
-pub(in crate::smb) struct Issued<'a> {
+pub(super) struct Issued {
     start: HaveNegotiate,
-    revision: &'a ProtectedRevision,
+    revision: Arc<ProtectedRevision>,
     assigned: NonZeroU64,
     expected_type2: Saved,
     expires: Instant,
 }
 
 #[must_use]
-pub(in crate::smb) struct Pending<'a> {
+pub(in crate::smb) struct Pending {
     phase: AwaitAuthenticate,
-    revision: &'a ProtectedRevision,
+    revision: Arc<ProtectedRevision>,
     expires: Instant,
 }
 
-impl<'a> Issued<'a> {
-    pub(in crate::smb) fn sent(self, serialized: &[u8]) -> Result<Pending<'a>> {
+impl Issued {
+    pub(in crate::smb) fn sent(self, serialized: &[u8]) -> Result<Pending> {
         if Instant::now() >= self.expires || self.assigned.get() == u64::MAX ||
             serialized.get(40..48) != Some(&self.assigned.get().to_le_bytes()[..]) {
             return Err(Rejected);
@@ -79,11 +78,11 @@ impl<'a> Issued<'a> {
     }
 }
 
-impl<'a> Pending<'a> {
+impl Pending {
     /// A single terminal consumption, including on malformed input or expiry.
     /// Future runtime must remove this instance from its original connection
     /// (and check MessageId/credits) before this call. No retries with it.
-    pub(in crate::smb) fn received(self, p: &Compound<'_>) -> Result<MechanismProof<'a>> {
+    pub(in crate::smb) fn received(self, p: &Compound<'_>) -> Result<MechanismProof> {
         if Instant::now() >= self.expires { return Err(Rejected); }
         let u = self.phase.received(p).map_err(|_| Rejected)?;
         let proof = verify(self.revision, u)?;
@@ -98,8 +97,8 @@ impl<'a> Pending<'a> {
 /// this same request/key, and enforce signing before any file operation.
 /// No external field access, key getter, Clone, or VerifiedExchange issuer.
 #[must_use]
-pub(in crate::smb) struct MechanismProof<'a> {
-    revision: &'a ProtectedRevision,
+pub(in crate::smb) struct MechanismProof {
+    revision: Arc<ProtectedRevision>,
     request: RequestKeyContext,
     exported: Secret,
     final_gss: FinalGss,
@@ -209,13 +208,13 @@ fn list_exchange(exported: &Secret, key_exch: bool, list: &[u8], inbound: &[u8])
     Ok(FinalGss::Spnego(der))
 }
 
-fn verify<'a>(v: &'a ProtectedRevision, u: Unverified<'_>) -> Result<MechanismProof<'a>> {
+fn verify(v: Arc<ProtectedRevision>, u: Unverified<'_>) -> Result<MechanismProof> {
     let original1 = u.type1.bytes();
     let original2 = u.type2.bytes();
     let c = ntlm::challenge_fields(original2).map_err(|_| Rejected)?;
     let a = &u.type3;
     selected(ntlm::negotiate_flags(original1).map_err(|_| Rejected)?, c.flags, a.flags)?;
-    bind_targets(v, &c, a)?;
+    bind_targets(&v, &c, a)?;
     let (proof, client_blob) = a.nt_response.split_at_checked(16).ok_or(Rejected)?;
     // Only NTLMv2, never LM as a fallback. The responding client's raw blob
     // includes the actual terminator/trailing reserved bytes that it sent.
