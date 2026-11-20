@@ -7,7 +7,7 @@ use crate::smb::connection::{
 };
 use std::sync::Mutex;
 
-fn provider()->RunningServerGuid {
+pub(in crate::smb::connection::sessions) fn provider()->RunningServerGuid {
     RunningServerGuid{run:Arc::new(Run{guid:[17;16],index:Mutex::new(Global{next:1,live:Vec::new()}),
         verifier:Some(ChallengeService::fixture())})}
 }
@@ -61,7 +61,7 @@ fn previous_selection_uses_original_claim_deadline_and_only_the_next_token() {
     let id=selected(&mut c,1,now).unwrap();let old=Arc::clone(&c.sessions[0].reg.claim);
     let packet=frame(&body(&continued(&one()),2,id));let f=parsed(&packet);
     let Start::Existing(x)=c.receive(&f).unwrap().start_setup() else {panic!("not an existing setup");};
-    let Resume::Type1(mut bound)=x.continue_selection(&mut c) else {panic!("lost original selection");};
+    let Resume::Type1(mut bound)=x.continue_setup(&mut c) else {panic!("lost original selection");};
     let s=prepare(&mut bound.original,&mut bound.phase,Some(&bound.claim),&mut c,now,ChallengeService::fixture_issue).unwrap();
     assert!(Arc::ptr_eq(&s.claim,&old));assert_eq!(s.claim.expires,now+LIFETIME);
     assert_eq!(&s.bytes()[24..32],&2u64.to_le_bytes());assert_eq!(&s.bytes()[40..48],&id.to_le_bytes());
@@ -91,4 +91,12 @@ fn no_provider_no_challenge_and_changed_revision_or_uncertain_send_never_publish
         assert!(matches!(c.alive(),Err(Fault::Closed)));assert!(c.sessions.is_empty());
         assert!(srv.run.index.lock().unwrap().live.is_empty());
     }
+}
+
+pub(in crate::smb::connection::sessions) fn challenged(c:&mut Connection,wrapped:bool)->(u64,Vec<u8>) {
+    let (one,last)=ChallengeService::fixture_messages(wrapped);
+    let packet=frame(&body(&one,1,0));let f=parsed(&packet);
+    let Start::Type1(mut x)=c.receive(&f).unwrap().start_setup() else {panic!("fixture must start with actual Type 1")};
+    let send=prepare(&mut x.original,&mut x.phase,None,c,Instant::now(),ChallengeService::fixture_issue).unwrap();
+    let sid=send.claim.id.get();send.submitted().unwrap();(sid,last)
 }

@@ -82,7 +82,7 @@ impl Pending {
     /// A single terminal consumption, including on malformed input or expiry.
     /// Future runtime must remove this instance from its original connection
     /// (and check MessageId/credits) before this call. No retries with it.
-    pub(in crate::smb) fn received(self, p: &Compound<'_>) -> Result<MechanismProof> {
+    fn received(self, p: &Compound<'_>) -> Result<MechanismProof> {
         if Instant::now() >= self.expires { return Err(Rejected); }
         let u = self.phase.received(p).map_err(|_| Rejected)?;
         let proof = verify(self.revision, u)?;

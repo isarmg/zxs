@@ -2,6 +2,7 @@
 //! running server owns the globally unique IDs; the originating transport
 //! alone owns each protocol phase. Neither table has authenticated sessions.
 pub(in crate::smb) mod challenge;
+pub(in crate::smb) mod proof;
 use super::{Connection,Fault,Origin,Received,ReplySend,Result,setup::{Existing,Select}};
 use crate::smb::{session::envelope::{AwaitNegotiate,HaveNegotiate},wire::setup_reply};
 use std::{num::NonZeroU64,sync::{Arc,Mutex,Weak,atomic::Ordering},time::{Duration,Instant}};
@@ -60,7 +61,7 @@ impl Drop for Registration {
 }
 
 pub(super) struct Local { reg:Registration, phase:Phase }
-enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending) }
+enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending), ProofTaken }
 impl Connection {
     fn reserve_pending(&mut self,now:Instant)->Result<Registration> {
         self.alive()?;
@@ -121,6 +122,7 @@ pub(in crate::smb) enum Resume<'raw> {
     NoSession(Declined<'raw>),
     InvalidToken(Declined<'raw>),
     Type1(ContinuedType1<'raw>),
+    Proven(proof::Proven<'raw>), // mechanism result only; no success or usable session
     TransportGone,
 }
 pub(in crate::smb) struct Declined<'raw> { original:Received<'raw> }
@@ -128,7 +130,7 @@ pub(in crate::smb) struct ContinuedType1<'raw> { original:Received<'raw>, phase:
 impl<'raw> Existing<'raw> {
     /// Existing only means the packet carried a nonzero SID. Never allocate
     /// or reconstruct a session or challenge from a client's number.
-    pub(in crate::smb) fn continue_selection(self,owner:&mut Connection)->Resume<'raw> {
+    pub(in crate::smb) fn continue_setup(self,owner:&mut Connection)->Resume<'raw> {
         self.continue_at(owner,Instant::now())
     }
     fn continue_at(self,owner:&mut Connection,now:Instant)->Resume<'raw> {
@@ -145,6 +147,9 @@ impl<'raw> Existing<'raw> {
             Ok(true)=>{},
             Ok(false)=>{owner.sessions.swap_remove(i);return Resume::NoSession(Declined{original:self.original});},
             Err(_)=>{owner.origin.closed.store(true,Ordering::Release);owner.sessions.clear();return Resume::TransportGone;},
+        }
+        if matches!(&owner.sessions[i].phase,Phase::WaitingAuth(_)) {
+            return proof::received(self.original,owner,i);
         }
         if !matches!(&owner.sessions[i].phase,Phase::Waiting(_)) {
             return Resume::NoSession(Declined{original:self.original});

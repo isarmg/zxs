@@ -50,7 +50,20 @@ impl ChallengeService {
         Ok(ChallengeStep{gss,issued:Issued{start,revision,assigned:sid,expected_type2,expires}})
     }
 }
+impl super::MechanismProof {
+    pub(in crate::smb) fn current(&self,service:&ChallengeService)->bool {service.current(&self.revision)}
+}
 impl Pending {
+    /// Sole non-test proof entry: consume the original challenge once, only
+    /// while its own provider still names that exact revision. Never hold a
+    /// provider lock across the mechanism verification.
+    pub(in crate::smb) fn prove_current(self,service:&ChallengeService,p:&crate::smb::wire::message::Compound<'_>)
+        ->Result<super::MechanismProof> {
+        if !self.current_at(service,Instant::now()) {return Err(Rejected);}
+        let until=self.expires;let proof=self.received(p)?;
+        if Instant::now()>=until || !proof.current(service) {return Err(Rejected);}
+        Ok(proof)
+    }
     pub(in crate::smb) fn current_at(&self,service:&ChallengeService,now:Instant)->bool {
         now<self.expires && service.current(&self.revision)
     }

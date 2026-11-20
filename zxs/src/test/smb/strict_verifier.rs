@@ -239,3 +239,13 @@ fn microsoft_section_4_2_4_public_session_base_key() {
     let base = finish_hmac(hmac(&response_key,&[&nt_proof]).unwrap());
     assert_eq!(&base[..],hex("8de40ccadbc14a82f15cb0ad0de95ca3").as_slice());
 }
+
+impl challenge::ChallengeService {
+    /// Only public fixed bytes, never an NTLM response generator or a key API.
+    pub(in crate::smb) fn fixture_messages(wrapped:bool)->(Vec<u8>,Vec<u8>) {
+        let e=example(false);
+        if wrapped {(frame::init(&[frame::NTLM,frame::KRB],Some(&e.one)),
+                     frame::resp(None,false,Some(&e.three),Some(&e.client_list)))}
+        else {(e.one,e.three)}
+    }
+}

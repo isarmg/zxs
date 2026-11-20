@@ -5,7 +5,7 @@ mod der;
 pub(in crate::smb) mod envelope;
 mod ntlm_shape;
 mod strict_verifier;
-pub(in crate::smb) use strict_verifier::{Pending,Rejected as ChallengeRejected,challenge::{ChallengeService,ChallengeStep}};
+pub(in crate::smb) use strict_verifier::{MechanismProof,Pending,Rejected as ChallengeRejected,challenge::{ChallengeService,ChallengeStep}};
 
 use crate::smb::wire::{
     message::{Compound, RELATED, SIGNED},

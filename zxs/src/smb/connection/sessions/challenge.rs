@@ -80,4 +80,4 @@ impl ChallengeSend<'_,'_> {
 
 #[cfg(test)]
 #[path = "../../../test/smb/setup_challenge.rs"]
-mod tests;
+pub(super) mod tests;
