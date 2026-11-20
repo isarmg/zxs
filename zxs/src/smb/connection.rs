@@ -146,7 +146,10 @@ impl Drop for Debits {
     }
 }
 
-struct Origin { closed: AtomicBool, hash: ConnectionHash, run:Arc<sessions::Run> }
+struct Origin {
+    closed: AtomicBool, hash: ConnectionHash, run:Arc<sessions::Run>,
+    accepted_local: Option<accepted::AcceptedLocal>,
+}
 
 /// The immutable parsed frame, its ledger and that exact connection's
 /// negotiated transcript travel together. No public raw/debit pair, no Clone,

@@ -50,6 +50,12 @@ pub(in crate::smb) struct SessionView<'step> {
     reg:&'step Registration,origin:&'step Arc<Origin>,revision:&'step BatchRevision,max_transact:u32,
 }
 impl SessionView<'_> {
+    /// Root name resolution must compare this exact local address against
+    /// the installation's approved listener/alias scope. Not authority
+    /// by itself, and a script-only fixture never asserts a local socket.
+    pub(in crate::smb) fn accepted_local(&self)->Option<std::net::SocketAddr> {
+        self.origin.accepted_local.as_ref().map(|local|local.address())
+    }
     /// Call again at use/commit. No registry or credential lock survives this
     /// function, in particular none may be held across Core storage or network.
     pub(in crate::smb) fn recheck(&self)->Result<()> {

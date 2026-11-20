@@ -42,6 +42,12 @@ impl<'step, 'raw> TreeConnectRequest<'step, 'raw> {
     /// Client spelling only, not a canonical hostname or an authority for
     /// a pool. The eventual resolver uses only trusted service/alias scope.
     pub(in crate::smb) fn server_spelling(&self) -> &str { &self.server }
+
+    /// Kernel metadata through this same member, never a separate endpoint
+    /// from a different connection or a name from this client's UNC.
+    pub(in crate::smb) fn accepted_local(&self) -> Option<std::net::SocketAddr> {
+        self.original.session().accepted_local()
+    }
 }
 
 // Apply the share-name rules from MS-FSCC 2.1.6, not the ZXS business-file

@@ -41,7 +41,7 @@ fn one_received_stream_one_complete_reply_one_actual_transcript_and_no_session()
     let run=running([0x93;16]);let [mut q,_,setup,..]=synthetic_exchange();q[14]=4;
     let first=frame(&q);let later=frame(&setup);let mut joined=first.clone();joined.extend_from_slice(&later);
     let (stream,trace)=script(joined,None);let mut p=Peer::open(&run,stream,ip()).unwrap();
-    assert_eq!(p.remote,ip());assert!(p.connection.sessions.is_empty());assert_eq!(p.connection.window.available(),4);
+    assert_eq!(p.remote,ip());assert!(p.connection.origin.accepted_local.is_none());assert!(p.connection.sessions.is_empty());assert_eq!(p.connection.window.available(),4);
     let out={let t=trace.lock().unwrap();
         assert_eq!(t.pos,first.len());assert_eq!(t.drops,0);assert!(t.reads>3 && t.writes>3);t.out.clone()};
     assert_eq!(&out[..4],&174u32.to_be_bytes());assert_eq!(out.len(),178);
@@ -100,4 +100,16 @@ fn incompatible_signing_list_is_answered_in_full_without_exposing_a_negotiated_p
     assert!(matches!(Peer::open(&run,stream,ip()),Err(Fault::NoCommonSigning)));
     let seen=t.lock().unwrap();assert_eq!(seen.out.len(),192);assert_eq!(&seen.out[..4],&188u32.to_be_bytes());
     assert_eq!(&seen.out[180..],&[8,0,4,0,0,0,0,0,1,0,1,0]);assert_eq!(seen.drops,1);
+}
+
+#[test]
+fn concrete_local_address_preserves_family_and_interface_scope() {
+    use std::net::{Ipv6Addr, SocketAddrV6};
+    let scoped=SocketAddr::V6(SocketAddrV6::new("fe80::1".parse::<Ipv6Addr>().unwrap(),445,0,9));
+    assert!(concrete_445(scoped));
+    assert!(concrete_445("192.0.2.50:445".parse().unwrap()));
+    for s in ["0.0.0.0:445","[::]:445","192.0.2.50:139","224.0.0.1:445","[ff02::1]:445","255.255.255.255:445",
+        "[::ffff:0.0.0.0]:445","[::ffff:224.0.0.1]:445"] {
+        assert!(!concrete_445(s.parse().unwrap()));
+    }
 }
