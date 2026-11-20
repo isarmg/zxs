@@ -59,7 +59,7 @@ class ArchivePane(QWidget):
         self.comparison = ComparisonPane(owner)
         self.views.addTab(self.comparison, "只读对比")
         self.checkout = CheckoutPane(owner, lambda: self.store)
-        self.views.addTab(self.checkout, "签出工作树")
+        self.views.addTab(self.checkout, "工作树")
         self.mount = None
         if sys.platform == "linux":
             from .mount_pane import MountPane

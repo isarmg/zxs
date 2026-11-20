@@ -55,7 +55,7 @@ class PendingRetry(CommitChoice):
             raise
         self._pending()  # Expensive archive reads never run with a SQLite lock held.
         self.check_candidate()
-        check_relative(self.live.store_fd, self.name, self.original, self.observed)
+        self._check_base_evidence()
         existing = self.ack_fd is not None
         action = ("该正式槽已是核验过的原归档。在 STORE 中只确认这个原文件，不上传；它若消失或被换就停止。"
                   if existing else
@@ -66,9 +66,10 @@ class PendingRetry(CommitChoice):
         else:
             self.confirmation_label = "确认原槽并登记基线" if existing else "续作原冻结候选"
             effect = "只有本次原操作登记完成后，本工作树才以所列目标代为基线。"
+        base = "尚无已提交的快照" if self.base[2] == 0 else f"第 {self.base[2]} 代"
         return (f"原工作树：{self.live.work}\n原 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
                 f"原操作：{self.operation}\n冻结归档 SHA-256：{self.digest}\n"
-                f"当前分支：{self.base[1]} · 第 {self.base[2]} 代\n目标分支：{self.marker.branch} · 第 {self.marker.generation} 代\n"
+                f"当前分支：{self.base[1]} · {base}\n目标分支：{self.marker.branch} · 第 {self.marker.generation} 代\n"
                 f"正式槽：{self.marker.filename}\n\n{action}\n{effect}\n"
                 "不读取或冻结当前工作文件，后来保存的编辑不会进入这笔原操作。")
 

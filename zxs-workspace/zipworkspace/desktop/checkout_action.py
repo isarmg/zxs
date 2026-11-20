@@ -207,7 +207,11 @@ class CheckoutChoice:
     def new_session(self, row, work_fd, state_fd, store_fd):
         if not self.keep_session: return None
         from .live_checkout import LiveCheckout
-        self.provisional = LiveCheckout(self, row, work_fd, state_fd, store_fd)
+        snapshot = self.snapshot
+        self.provisional = LiveCheckout(self.destination, self.state, self.store.path, row["worktree"],
+                                        snapshot.browser.commit.repo, work_fd, state_fd, store_fd,
+                                        source=(self.operation, snapshot.browser.commit, self.verified_sha,
+                                                snapshot.path, snapshot.observed))
         return self.provisional
 
     def take_session(self):

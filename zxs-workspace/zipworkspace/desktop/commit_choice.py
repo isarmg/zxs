@@ -63,7 +63,8 @@ class CommitChoice:
         with worktree.locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
             self.live.check_instance(row, lifecycle.instance(con))
             lifecycle.require_visible(con, row)
-            if row["pending"] is not None: raise Rejected("有原提交待决；不能另发操作")
+            if row["pending"] is not None or row["pending_sha"] is not None:
+                raise Rejected("有待决提交或不一致的原登记；不能另发操作")
             return _baseline(row)
 
     def _prepare_base(self, *, required=None):
@@ -79,15 +80,25 @@ class CommitChoice:
     def _prepare(self):
         self._prepare_base()
         _, branch, gen, node, digest = self.base
+        if gen == 0:
+            self.check_first_slot()
+            base_detail = f"尚无已提交的快照。此次将建立第 1 代，没有父节点。\n新槽：{self.live.store / self.first_slot}"
+        else:
+            base_detail = f"基线：第 {gen} 代 · {node}\n原包 SHA-256：{digest}"
         return (f"工作树：{self.live.work}\n命令行 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
-                f"分支：{branch}\n基线：第 {gen} 代 · {node}\n原包 SHA-256：{digest}\n"
+                f"分支：{branch}\n{base_detail}\n"
                 f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n"
                 "提交整个工作目录，生成新的不可变归档。不改写原代，不自动解决同代冲突。"
                 "STATE 的冻结和新整包会同时占空间，STORE 还需一份整包；这里不保证容量。")
 
     def _open_base(self):
         repo, branch, gen, node, digest = self.base
-        check_id(repo); check_id(branch); check_id(node)
+        check_id(repo); check_id(branch)
+        if type(gen) is int and gen == 0:
+            self._check_base_evidence()
+            self.first_slot = f"{repo}.{branch}.{1:016x}.zxs"
+            return
+        check_id(node)
         if (type(gen) is not int or not 0 < gen < (1 << 63)
                 or self.purpose == "commit" and gen == (1 << 63) - 1):
             raise Rejected("工作树没有可继续的原基线")
@@ -106,10 +117,27 @@ class CommitChoice:
         check_relative(self.live.store_fd, self.name, doc, observed)
         self.base_marker, self.observed, self.original = marker, observed, doc  # Only after both checks.
 
-    def check_base(self):
-        if self.closed or not self.ready or self.original is None: raise Rejected("未持有本次已核验的原基线")
-        self.qualify()
+    def _check_base_evidence(self):
+        if (self.base is not None and self.live.initial_base is not None and self.base == self.live.initial_base
+                and self.purpose in ("commit", "retry")):
+            return  # Only the actual creator of this original catalog carries this evidence.
+        if self.original is None: raise Rejected("未持有本次已核验的原基线")
         check_relative(self.live.store_fd, self.name, self.original, self.observed)
+
+    def check_base(self):
+        if self.closed or not self.ready: raise Rejected("未持有本次已核验的原基线")
+        self.qualify()
+        self._check_base_evidence()
+
+    def check_first_slot(self):
+        if self.purpose != "commit" or self.base != self.live.initial_base:
+            raise Rejected("只能检查本次新登记的原第 1 代")
+        self.store.check_store()
+        try: os.stat(self.first_slot, dir_fd=self.live.store_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            self.store.check_store()
+            return  # Not a reservation. The final publisher still refuses overwrite.
+        raise Rejected("所选 STORE 中的第 1 代名称已占用；不覆盖或更换标识")
 
     def check_row(self, con, row):
         self.live.check_instance(row, lifecycle.instance(con))
@@ -130,8 +158,11 @@ class CommitChoice:
         self.pending_seen = self.conflict_pending_seen = False
         outcome = self._result()
         if self.conflict and outcome[0] == "pending":
-            self.conflict_pending_seen = self.purpose == "commit"
-            action = ("可另行核对竞争者及原冻结归档。" if self.conflict_pending_seen else "请保留原操作号。")
+            self.conflict_pending_seen = self.purpose == "commit" and self.base[2] > 0
+            if self.purpose == "commit" and self.base[2] == 0:
+                action = "请保留原 STATE 和操作号；第 1 代冲突不在窗口另造另一仓库起点。"
+            else:
+                action = "可另行核对竞争者及原冻结归档。" if self.conflict_pending_seen else "请保留原操作号。"
             return "pending", ("此操作仍待决，原槽核对曾发现冲突；不是已核实的竞争节点。"
                                "不会覆盖或续传。" + action)
         self.pending_seen = outcome[0] == "pending"

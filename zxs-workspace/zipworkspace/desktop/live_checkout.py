@@ -1,4 +1,4 @@
-"""A live checkout receipt, not a path-based opener or a durable desktop registry."""
+"""Handles delivered by the actual CLI-format creator, never a path-based opener."""
 from contextlib import ExitStack
 from copy import copy
 import os
@@ -14,13 +14,18 @@ from .checkout_action import _named_mount
 
 class LiveCheckout:
     """Only the actual creator of a new catalog can supply a session."""
-    def __init__(self, choice, row, work_fd, private_fd, store_fd):
-        self.work, self.state, self.store = choice.destination, choice.state, choice.store.path
-        self.instance, self.repo = row["worktree"], choice.snapshot.browser.commit.repo
-        self.checkout_operation = choice.operation
-        # Evidence from this window's completed checkout, not a loose path that can select a new node.
-        self.checkout_marker, self.checkout_sha = choice.snapshot.browser.commit, choice.verified_sha
-        self.source_path, self.source_stamp = choice.snapshot.path, choice.snapshot.observed
+    def __init__(self, work, state, store, instance, repo, work_fd, private_fd, store_fd,
+                 *, source=None, initial_branch=None):
+        self.work, self.state, self.store = work, state, store
+        self.instance, self.repo = check_id(instance), check_id(repo)
+        self.initial_base = ((self.repo, check_id(initial_branch), 0, None, None)
+                             if initial_branch is not None else None)
+        # Only a checkout has a displayed source node. A fresh registration is
+        # defined by its own actual, newly created catalog and empty baseline.
+        if (source is None) == (self.initial_base is None):
+            raise Rejected("必须明确交接已签出的原节点或本次新登记的空基线")
+        (self.checkout_operation, self.checkout_marker, self.checkout_sha,
+         self.source_path, self.source_stamp) = source if source is not None else (None,)*5
         # Shared by borrowed views, but does not retain the browser or its archive FD.
         self._branch_source_revoked = Event()
         self.stack, self.db, self.closed = ExitStack(), None, False
@@ -34,7 +39,7 @@ class LiveCheckout:
 
     @property
     def branch_source_available(self):
-        return not self.closed and not self._branch_source_revoked.is_set()
+        return self.checkout_marker is not None and not self.closed and not self._branch_source_revoked.is_set()
 
     def revoke_branch_source(self):
         self._branch_source_revoked.set()

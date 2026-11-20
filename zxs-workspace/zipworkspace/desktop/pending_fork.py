@@ -21,6 +21,8 @@ class PendingFork(CommitChoice):
                 or not original.conflict_pending_seen or not original.conflict or old is None or not original.digest):
             raise Rejected("请先只读查询本窗口发生冲突的原待决提交")
         repo, branch, generation, parent, _ = original.base
+        if generation == 0:
+            raise Rejected("第 1 代冲突不另造同一仓库的第二个起点；保留原待决")
         if (old.repo, old.branch, old.generation, old.parent) != (repo, branch, generation + 1, parent):
             raise Rejected("待决不是原分支的下一代普通提交")
         successor, branch_id = new_id(), new_id()

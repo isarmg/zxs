@@ -36,7 +36,18 @@ def enroll(work, store, state, base=None):
 
 
 def create_catalog(work, store, state, base, instance_id, *, checked_root=None, live=None):
-    if live is not None and checked_root is None: raise Rejected("live catalog requires the actual checked checkout root")
+    if live is not None and checked_root is None: raise Rejected("live catalog requires the actual checked worktree root")
+    if base is not None:
+        root, source_sha = base
+        baseline = root.repo, root.branch, root.generation, root.operation, source_sha
+    elif live is None:
+        baseline = new_id(), new_id(), 0, None, None
+    else:
+        baseline = live.initial_base
+        if baseline is None: raise Rejected("live initialization must use its one proposed empty baseline")
+    if live is not None and (live.instance, live.repo, live.work, live.store, live.state) != (
+            instance_id, baseline[0], work, store, state):
+        raise Rejected("new catalog does not name this original live session")
     if live is None:
         fd, tmp = tempfile.mkstemp(prefix=".catalog-", dir=state)
         temp = Path(tmp)
@@ -59,11 +70,8 @@ def create_catalog(work, store, state, base, instance_id, *, checked_root=None, 
         con.execute("CREATE TABLE completed(operation TEXT PRIMARY KEY, marker BLOB NOT NULL, digest TEXT NOT NULL)")
         lifecycle.install(con, work, original=checked_root() if checked_root is not None else None)
         con.execute("CREATE TABLE forked_original(operation TEXT PRIMARY KEY, successor TEXT NOT NULL)")
-        root, source_sha = base if base else (None, None)
-        con.execute("INSERT INTO checkout VALUES(1,?,?,?,?,?,?,?,?,NULL,NULL)", (
-            instance_id, str(work), str(store), root.repo if root else new_id(),
-            root.branch if root else new_id(), root.generation if root else 0,
-            root.operation if root else None, source_sha))
+        con.execute("INSERT INTO checkout VALUES(1,?,?,?,?,?,?,?,?,NULL,NULL)",
+                    (instance_id, str(work), str(store), *baseline))
         con.commit()
     finally: con.close()
     name = state / "worktree.sqlite"
@@ -193,11 +201,15 @@ def commit(state, *, fork=False, selected=None):
         capture.check_state()
         if row["pending"] is not None:
             raise Rejected("an original operation is pending; resume it rather than recapturing")
+        if row["pending_sha"] is not None:
+            raise Rejected("incomplete original pending record; no worktree was captured")
         lifecycle.require_visible(con, row)
         work, store, state = paths(Path(row["location"]), Path(row["store"]), state)
         gen, branch, repo = row["generation"], row["branch"], row["repo"]
         if selected is not None:
             selected.check_row(con, row)  # Baseline CAS under the actual SQLite writer; never reselect HEAD.
+            if gen == 0:
+                selected.check_first_slot()  # Only before capture, not on a genuine original retry.
         elif gen:
             base_path = store / f"{repo}.{branch}.{gen:016x}.zxs"
             saved, _ = read_archive(base_path)
