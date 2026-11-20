@@ -2,7 +2,8 @@
 //! Samba invocation, password, persistent approval or service configuration.
 use super::{PREFIX,Site,approval,bad,child,contents,live,mark,pin_dir,safe_dir};
 use super::super::{FRESH_SITE,Times,cancelled,capsule};
-use crate::{fs_tools::RuntimeFile,sqlite_install::{pair::terminal::PublicConfirmation,request::Id}};
+use crate::{fs_tools::RuntimeFile,maintenance::HostMounts,pinned::Mount,
+    sqlite_install::{pair::terminal::PublicConfirmation,request::Id}};
 use rustix::{fs::{FlockOperation,Mode,OFlags,RawDir,RenameFlags,StatVfsMountFlags,fchmod,fchown,
     fgetxattr,flock,fstatvfs,mkdirat,openat,renameat_with},io::Errno,process::{Gid,Uid}};
 use sha2::{Digest,Sha256};
@@ -57,20 +58,29 @@ pub(super) fn exact_component(parent:&File,name:&CStr,selected:&File)->io::Resul
     }
     Err(bad("fixed host directory spelling not confirmed within the bounded original parent listing"))
 }
-// A stable mount ID alone does not distinguish an independently selected
-// host installation from a pre-existing subtree bind onto the fixed name.
-// First version: no mount/device transition anywhere below the actual host /.
-// This also deliberately excludes separate normal /var or /var/lib mounts.
+// An already configured /var or /var/lib is an operating-system mount
+// boundary, not an instruction to write through any existing bind at the
+// instance's package/site directories. Keep every original descriptor.
 fn one_mount(host:(crate::pinned::Entity,u64),d:(crate::pinned::Entity,u64))->bool{
     host.0.dev==d.0.dev && host.1==d.1
 }
 fn host_mount(site:&Site)->io::Result<()>{
-    let root=mark(&site.host)?;
-    for d in &site.chain{
-        if !one_mount(root,mark(d)?){
-            return Err(io::Error::new(io::ErrorKind::Unsupported,
-                "layout creation requires the original host root mount throughout; a separate or bind-mounted parent is not supported"));
+    let mut parent=mark(&site.host)?;
+    let mut seen=vec![parent.0];let mut table=None;
+    for (level,d) in site.chain.iter().enumerate(){
+        let current=mark(d)?;
+        if seen.contains(&current.0){return Err(bad("aliased original instance ancestors"));}
+        if !one_mount(parent,current){
+            if level>=2||parent.1==current.1{
+                return Err(io::Error::new(io::ErrorKind::Unsupported,
+                    "an extra mount or device change at or below the dedicated package installation directories is not supported"));
+            }
+            let mount=Mount::on(d)?.filter(|m|m.id==current.1).ok_or_else(||bad("layout mount identity changed"))?;
+            if table.is_none(){table=Some(HostMounts::current()?);}
+            table.as_ref().expect("bounded mount snapshot").require_instance_parent_mount(level,mount,parent.1,current.0,
+                crate::pinned::local_data_filesystem(d)?)?;
         }
+        seen.push(current.0);parent=current;
     }
     Ok(())
 }
@@ -270,7 +280,7 @@ pub(in crate::sqlite_install::pair) fn create_layout(instance:Id,reference:Id)->
 #[cfg(test)]
 mod tests{
     use super::*;
-    #[test]fn a_prior_bind_is_not_a_dedicated_host_parent_even_if_it_looks_identical(){
+    #[test]fn a_mount_or_device_change_is_not_plain_ancestry_even_if_objects_match(){
         let root=crate::pinned::Entity{dev:8,ino:2};let subtree=crate::pinned::Entity{dev:8,ino:71};
         assert!(one_mount((root,15),(subtree,15)));assert!(!one_mount((root,15),(subtree,16)));
         assert!(!one_mount((root,15),(crate::pinned::Entity{dev:9,ino:71},15)));

@@ -78,3 +78,44 @@ fn directly_matching_mount_ids_include_bind_rows_without_inventing_lower_devices
     assert!(!m.is_full_devtmpfs(101,makedev(0,7))); // same mount ID alone cannot authenticate the alias source
     assert!(!m.is_full_devtmpfs(103,makedev(0,4))&&!m.is_full_devtmpfs(12,makedev(8,1)));
 }
+
+#[test]
+fn normal_fixed_os_parents_may_have_either_or_both_distinct_original_mounts(){
+    let mounts=Mounts::parse(b"41 1 8:1 / / rw - ext4 /dev/root rw\n\
+        52 41 8:2 / /var rw - xfs /dev/var rw\n\
+        63 52 8:3 / /var/lib rw - ext4 /dev/lib rw\n").unwrap();
+    let root=|id|Mount{id,at_root:Some(true)};
+    let entity=|minor,ino|Entity{dev:makedev(8,minor),ino};
+    mounts.require_instance_parent_mount(0,root(52),41,entity(2,2),XFS_SUPER_MAGIC).unwrap();
+    mounts.require_instance_parent_mount(1,root(63),52,entity(3,2),EXT4_SUPER_MAGIC).unwrap();
+    let independent_lib=Mounts::parse(b"41 1 8:1 / / rw - ext4 /dev/root rw\n\
+         64 41 8:3 / /var/lib rw - ext4 /dev/lib rw\n").unwrap();
+    independent_lib.require_instance_parent_mount(1,root(64),41,entity(3,2),EXT4_SUPER_MAGIC).unwrap();
+
+    for (level,mount,parent,object,magic) in [
+        (0,root(52),52,entity(2,2),XFS_SUPER_MAGIC), // cannot be its own parent
+        (1,root(63),41,entity(3,2),EXT4_SUPER_MAGIC), // false parent
+        (1,root(52),41,entity(2,2),XFS_SUPER_MAGIC), // wrong visible name
+        (0,root(52),41,entity(1,2),XFS_SUPER_MAGIC), // wrong superblock device
+        (0,root(52),41,entity(2,2),EXT4_SUPER_MAGIC), // wrong real fstatfs type
+        (2,root(52),41,entity(2,2),XFS_SUPER_MAGIC), // not an OS parent level
+        (0,Mount{id:52,at_root:None},41,entity(2,2),XFS_SUPER_MAGIC),
+        (0,Mount{id:52,at_root:Some(false)},41,entity(2,2),XFS_SUPER_MAGIC),
+    ]{assert!(mounts.require_instance_parent_mount(level,mount,parent,object,magic).is_err());}
+}
+
+#[test]
+fn bind_subtree_and_alias_fail_at_named_boundary_but_btrfs_has_two_device_meanings(){
+    let mounts=Mounts::parse(b"41 1 8:1 / / rw - ext4 /dev/root rw\n\
+        51 41 8:1 /someone-elses-live-dir /var rw - ext4 /dev/root rw\n\
+        52 41 0:20 /@varlib /var/lib rw - btrfs /dev/tree rw\n\
+        53 41 0:20 /@varlib /var/lib/local-ops-helper rw - btrfs /dev/tree rw\n").unwrap();
+    let root=|id|Mount{id,at_root:Some(true)};
+    // Linux Btrfs reports the subvolume's anon_dev in stat, not 0:20.
+    let subvolume=Entity{dev:makedev(0,42),ino:256};
+    assert!(mounts.require_instance_parent_mount(0,root(51),41,Entity{dev:makedev(8,1),ino:888},
+        EXT4_SUPER_MAGIC).is_err());
+    assert!(mounts.require_instance_parent_mount(1,root(52),41,subvolume,BTRFS_SUPER_MAGIC).is_ok());
+    assert!(mounts.require_instance_parent_mount(1,root(52),41,Entity{ino:257,..subvolume},BTRFS_SUPER_MAGIC).is_err());
+    assert!(mounts.require_instance_parent_mount(1,root(53),41,subvolume,BTRFS_SUPER_MAGIC).is_err());
+}
