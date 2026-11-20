@@ -10,7 +10,7 @@ const WIRE:usize=8+1+32+32+65;
 pub(super) type Payload=[u8;65];
 
 #[derive(Clone,Copy)]
-pub(super) enum Kind{Inspect=1,Act=2,Reserved=3,NativeSynced=4,Complete=5,Lease=6,Warm=7,Prepared=8,ChosenFolder=9,VolumeClaim=10}
+pub(super) enum Kind{Inspect=1,Act=2,Reserved=3,NativeSynced=4,Complete=5,Lease=6,Warm=7,Prepared=8,ChosenFolder=9,VolumeClaim=10,ConfirmedWeb=11}
 
 pub(super) struct Channel {fd:File,peer:UCred,scope:[u8;32]}
 pub(super) fn pair()->io::Result<(File,File)>{

@@ -10,6 +10,10 @@ mod terminal;
 mod observed;
 mod online;
 mod recycle;
+mod inactive_web_unit;
+mod web_systemd;
+mod install_web_unit;
+pub(crate) use install_web_unit::InstallWebUnit;
 pub(crate) use online::{StartSmb,Online};
 mod domain;
 

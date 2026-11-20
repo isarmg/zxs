@@ -63,6 +63,18 @@ pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&
     engine::original_name(c)?;locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
     Ok((actual,result))
 }
+/// The fixed Web unit may be associated with this exact enrolled SYSTEM.
+/// No verifier, login, alternate path or non-Web credential leaves the cut.
+pub(super) fn confirmed_web(pool:&Id,init:&Id,setup:&Id,locked:&LockedSystem)->io::Result<()> {
+    with_origin(pool,init,locked,|tx,_|{
+        let qualified:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.account_pair a
+                JOIN main.operation o ON o.op_id=a.birth_op AND o.kind=2 AND o.state=1
+                JOIN main.active_credential e ON e.role=0 AND e.slot=a.singleton
+                WHERE a.singleton=1 AND a.birth_op=?1)",params![&setup[..]],|r|r.get(0)).map_err(sql)?;
+        if !qualified{return Err(bad("the original Web administrator is not confirmed"));}
+        Ok(())
+    })
+}
 pub(super) fn init_claims(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<Vec<Initial>>{
     with_origin(pool,init,locked,|tx,template|catalog::initial_metadata(tx,template,locked.source(),pool,init))
 }

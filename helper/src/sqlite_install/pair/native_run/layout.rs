@@ -16,6 +16,7 @@ use std::{collections::BTreeSet,ffi::OsString,fmt::Write,fs::File,io,os::unix::{
 const HELPER:&[&str]=&["usr","bin","helper"];
 const ONLINE:&[u8]=b"helper exact host runtime selection v10\0";
 const DOMAIN:&[u8]=b"helper exact init selection v10\0";
+const WEB:&[u8]=b"helper exact enrolled Web unit 1\0";
 const BUDGET:usize=DOMAIN.len()+32+3*16+3*8+1+(MAX_FOLDERS+1)*(2+MAX_PATH_BYTES);
 
 #[derive(Debug)]
@@ -236,6 +237,43 @@ pub(in crate::sqlite_install::pair) fn online_roots(site:&NativeSite)->io::Resul
     })
 }
 
+// Give the existing permanently lowered worker only the three original
+// immutable identities, same-path evidence and one non-replayable check.
+// The answer just says that an active original Web role exists.
+struct WebQuestion{nonce:[u8;32],actor:Id,pool:Id,init:Id,setup:Id,location:[u64;3],system:PathBuf}
+impl WebQuestion{
+    fn encode(&self)->io::Result<Vec<u8>>{
+        let path=self.system.to_str().ok_or_else(bad_question)?.as_bytes();
+        crate::path_rules::Kind::StorageRoot.check_path(path).map_err(bad)?;
+        let ids=[self.pool,self.init,self.setup];
+        if self.nonce==[0;32]||self.actor==[0;16]||ids.contains(&[0;16])||ids[0]==ids[1]||ids[0]==ids[2]||ids[1]==ids[2]
+            ||self.location[1..].contains(&0){return Err(bad_question());}
+        let mut out=WEB.to_vec();out.extend(self.nonce);out.extend(self.actor);
+        for id in ids{out.extend(id);}for n in self.location{out.extend(n.to_be_bytes());}
+        out.extend(path);Ok(out)
+    }
+    fn decode(raw:&[u8])->io::Result<Self>{
+        const HEAD:usize=32+4*16+3*8;
+        let b=raw.strip_prefix(WEB).ok_or_else(bad_question)?;
+        let (head,path)=b.split_at_checked(HEAD).ok_or_else(bad_question)?;
+        if path.len()>MAX_PATH_BYTES{return Err(bad_question());}
+        let sel=Self{nonce:head[..32].try_into().expect("fixed"),actor:head[32..48].try_into().expect("fixed"),
+            pool:head[48..64].try_into().expect("fixed"),init:head[64..80].try_into().expect("fixed"),setup:head[80..96].try_into().expect("fixed"),
+            location:std::array::from_fn(|i|u64::from_be_bytes(head[96+i*8..104+i*8].try_into().expect("fixed"))),
+            system:PathBuf::from(std::str::from_utf8(path).map_err(|_|bad_question())?)};
+        if sel.encode()?.as_slice()!=raw{return Err(bad_question());}Ok(sel)
+    }
+}
+pub(in crate::sqlite_install::pair) fn verify_web_unit(pin:&Pinned,ex:&File,subject:(Id,u32,u32),ids:[Id;3],
+    check:impl Fn()->io::Result<()>)->io::Result<()> {
+    let [pool,init,setup]=ids;
+    let mut nonce=[0;32];nonce[..16].copy_from_slice(&random()?);nonce[16..].copy_from_slice(&random()?);
+    let fish=WebQuestion{nonce,actor:subject.0,pool,init,setup,location:place(pin)?,system:pin.path().to_path_buf()};
+    query(&fish.encode()?,ex,subject,&check,|channel,scope,until|{
+        let (report,[])=channel.wait_checked::<0>(Kind::ConfirmedWeb,scope,until,&check)?;
+        if report!=[0;65]{return Err(bad_question());}Ok(())
+    })
+}
 pub(crate) fn worker()->io::Result<()>{
     let [fd,meta]=account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3,4])?;
@@ -250,12 +288,14 @@ pub(crate) fn worker()->io::Result<()>{
     set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
     if dumpable_behavior()?!=DumpableBehavior::NotDumpable{return Err(bad_question());}
     let raw=read_sealed(&meta,BUDGET)?;drop(meta);
-    let mode=if raw.starts_with(ONLINE){(None,Some(LiveQuery::decode(&raw)?))}
-        else{(Some(Question::decode(&raw)?),None)};
+    enum Mode{Online(LiveQuery),Layout(Question),WebUnit(WebQuestion)}
+    let mode=if raw.starts_with(WEB){Mode::WebUnit(WebQuestion::decode(&raw)?)}
+        else if raw.starts_with(ONLINE){Mode::Online(LiveQuery::decode(&raw)?)}
+        else{Mode::Layout(Question::decode(&raw)?)};
     let source=match &mode{
-        (Some(q),None)=>(q.actor,q.location,&q.system),
-        (None,Some(q))=>(q.actor,q.location,&q.system),
-        _=>return Err(bad_question()),
+        Mode::Layout(q)=>(q.actor,q.location,&q.system),
+        Mode::Online(q)=>(q.actor,q.location,&q.system),
+        Mode::WebUnit(q)=>(q.actor,q.location,&q.system),
     };
     if source.0!=actor{return Err(bad_question());}
     let scope:[u8;32]=Sha256::digest(&raw).into();
@@ -266,14 +306,20 @@ pub(crate) fn worker()->io::Result<()>{
     let pin=Pinned::open(source.2,PathKind::StorageRoot)?;
     if place(&pin)?!=source.1{return Err(bad_question());}
     let open=SelectedSystem::from_origin(pin,host,uid,gid)?;
-    if let (None,Some(q))=&mode{
+    if let Mode::WebUnit(q)=&mode{
+        let system=open.from_lent_ex(lease)?;
+        observed::confirmed_web(&q.pool,&q.init,&q.setup,&system)?;
+        if getppid()!=Some(parent){return Err(bad_question());}system.require()?;
+        return channel.send(Kind::ConfirmedWeb,&scope,&[0;65]);
+    }
+    if let Mode::Online(q)=&mode{
         let system=open.from_lent_sh(lease)?;
         let chosen=observed::startup_claims(&q.plan,&Sha256::digest(q.bound).into(),&system)?;
         if getppid()!=Some(parent){return Err(bad_question());}system.require()?;
         for (i,m) in chosen.ordinary.iter().enumerate(){send_media(&channel,&scope,i,m)?;}
         return send_media(&channel,&scope,chosen.ordinary.len(),&chosen.recycle);
     }
-    let (Some(q),None)=mode else{return Err(bad_question());};
+    let Mode::Layout(q)=mode else{return Err(bad_question());};
     let system=open.from_lent_ex(lease)?;
     let catalogue=observed::init_claims(&q.pool,&q.init,&system)?;
     let chosen=q.paths.iter().map(|p|{

@@ -4,7 +4,7 @@ mod transport;
 mod manifest;
 mod worker;
 mod layout;
-pub(super) use layout::{Choice,Resolved,online_roots};
+pub(super) use layout::{Choice,Resolved,online_roots,verify_web_unit};
 pub(crate) use layout::worker as exec_layout_sql_child;
 mod release;
 mod host;

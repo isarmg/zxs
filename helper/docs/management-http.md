@@ -27,16 +27,21 @@ ZXS_POOL_ID="${POOL_ID:?先设原 PoolId}" /usr/bin/zxs
   "${STORAGE_UID:?先设池的存储 UID}" "${STORAGE_GID:?先设池的存储 GID}"
 ```
 
-只写新的 `./zxs-management.candidate/zxs-management-http.service`，不读数据库/密钥、不验现场账号或端口、不装或启任何服务。失败留下的候选不是成功。生成器只核有界的原公开模板与四个参数；将路径作为带转义的 systemd 值，不拼 shell。 可选单元受 systemd 的含尾 NUL 路径长度限制；生成器不限制原生前台入口。管理员应独立复核原池与身份、单位内容和实际将生效的配置，没有重定向、旧配置、未知同名或 drop-in 后才将这个新名字以 root:root 0644 安装到受保护的 `/etc/systemd/system/`。已装的旧站点由其管理员另行决定停用，不会自动覆盖；旧站点若占相同端口，先解决冲突。只选择前台运行或这个单元之一。
+只写新的 `./zxs-management.candidate/zxs-management-http.service`，不读数据库/密钥、不验现场账号或端口、不装或启任何服务。失败留下的候选不是成功。生成器只核有界的原公开模板与四个参数；将路径作为带转义的 systemd 值，不拼 shell。 可选单元受 systemd 的含尾 NUL 路径长度限制；生成器不限制原生前台入口。这是可预览的样本，不是上传入口。正式安装可在受信本机 root 前台选择同一个真池、首设原单和独立已验的 ZXS ELF 摘要：
+
+```sh
+/usr/bin/helper install-web-unit \
+  --system "${SYSTEM:?先设为原 SYSTEM 的绝对路径}" \
+  --pool "${POOL_ID:?先设原 PoolId}" --init "${INIT_OP:?先设原 INIT}" \
+  --setup-op "${SETUP_OP:?先设原首设}" --approval "${UNIT_APPROVAL:?先记本次审批参考}" \
+  --zxs-sha256 "${ZXS_SHA256:?先取得受信发行的独立 ELF SHA-256}"
+```
+
+低权限工人只读核已提交 INIT 和该次原首设的活动 Web 管理员；宿主持同一原 SYSTEM 的非阻塞独占锁，只安装给同一非 root 存储身份。它不读取口令或密验、不拿浏览器或旧候选授权。宿主核真实 PID 1 管理器当前未解析同名服务，并核固定原目录；在前台显示站点、身份范围、实际 ELF 和新主片段的摘要，再要求一次本地确认。正式名字 `/etc/systemd/system/zxs-management-http.service` 仅以同父无覆盖方式发表、同步、按原名完整读回；未知同名不接管。在没有主片段时，systemd 可能没有读取已经存在的覆盖片段（drop-in）；本次不证明以后实际加载的配置，也不保证没有其他独立系统配置会触发它。已有旧站点或其他服务占端口时由管理员另行处置。本操作不执行 `daemon-reload`，不启动、停止或启用任何服务。中断可能已经留有暂存名或最后名字；保留原件，不自动删或重试。这不是管理上线或独占业务证明；如只需要基本 HTTP，可继续用原前台方式，不必安装单元。
 
 原生 HTTP 不要求 Web 环境参数。只有明确使用外部 HTTPS 代理时，才按 ZXS 的部署约定成对设置 `ZXS_WEB_PUBLIC_ORIGIN`（浏览器使用的准确 HTTPS 站点）和 `ZXS_WEB_TRUSTED_PROXY`（与原生服务直接连接的代理 IP）。代理仍须保留实际 Host 与 Origin；不单凭任意 `Forwarded` 或 `X-Forwarded-*` 头承认 HTTPS。这个可选模板不选代理或代你写这两个值。
 
-这个单元仅启动无参数的 `/usr/bin/zxs`，不含 `[Install]`、子进程代理、证书命令或数据库操作。其服务身份与目录限制不替代 ZXS 对原 SYSTEM、账户和权限的实际核验。管理员另行同意启动后，才可执行：
-
-```sh
-systemctl daemon-reload
-systemctl start zxs-management-http.service
-```
+本包准备的主片段仅含无参数的 `/usr/bin/zxs`，不含 `[Install]`、子进程代理、证书命令或数据库操作。其声明不证明 PID 1 的有效配置或 ZXS 已核验原池。不要把片段安装回执当作启动许可；必须另行核对真实加载的主片段、覆盖项、执行身份及站点，再决定加载和启动。暂未核妥时使用上面的前台方式。
 
 维护时先停止管理进程，确认真实存储租约已释放。前台终端送正常退出信号或由管理员停止这一独立单元；超时、信号或浏览器断开不当作独占权证明。SMB 及其他在线持有者的状态与这个 Web 进程分开判断。
 

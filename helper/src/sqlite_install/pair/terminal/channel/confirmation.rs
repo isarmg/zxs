@@ -56,6 +56,9 @@ impl PublicConfirmation{
             hx(ids[0]),parent,parent_id.dev,parent_id.ino,mount,hx(ids[1]),hx(ids[2]),subject.0,subject.1,hx(config),hx(release));
         self.ask("LAYOUT",Some(preview),1100*1024)
     }
+    pub(in crate::sqlite_install::pair) fn confirm_web_unit(&self,review:String)->io::Result<()>{
+        self.ask("INSTALL-WEB-UNIT",Some(review),24*1024)
+    }
     pub(in crate::sqlite_install::pair) fn confirm_start(&self,review:String)->io::Result<()>{self.ask("START-SMB",Some(review),96*1024)}
     pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
         nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),&||self.check())
