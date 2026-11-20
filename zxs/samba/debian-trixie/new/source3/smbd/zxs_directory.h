@@ -102,6 +102,40 @@ bool zxs_dir_wait_cancel(struct tevent_req *,struct tevent_context *,
 struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,
 				    const struct zxs_smb_tree_cut *,unsigned limit,const uint8_t *after,size_t size);
 NTSTATUS zxs_dir_cut_recv(struct tevent_req *,uint8_t *optional_rows);
+struct tevent_req *zxs_root_capacity_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,bool may_write);
+NTSTATUS zxs_root_capacity_recv(struct tevent_req *,struct zxs_ns_space *);
+#define ZXS_INFO_FS_SIZE 3u
+#define ZXS_INFO_FS_FULL_SIZE 7u
+static inline bool zxs_capacity_info_class(uint8_t cls)
+{
+	return cls==ZXS_INFO_FS_SIZE || cls==ZXS_INFO_FS_FULL_SIZE;
+}
+static inline bool zxs_capacity_may_write(const struct connection_struct *c)
+{
+	return !c->read_only && (c->share_access&SEC_DIR_ADD_FILE)!=0;
+}
+/* Standard FileFs(Size/FullSize)Information. Use a virtual 4 KiB
+ * reporting unit, not an assertion about the disk's physical sector
+ * size or an allocation promise for a different directory/volume. */
+static inline NTSTATUS zxs_format_capacity(TALLOC_CTX *ctx,const struct zxs_ns_space *cap,
+	uint8_t cls,uint32_t max,bool caller_can_write,DATA_BLOB *out)
+{
+	if(!zxs_capacity_info_class(cls))return NT_STATUS_NOT_SUPPORTED;
+	const bool full=cls==ZXS_INFO_FS_FULL_SIZE;
+	const uint32_t length=full?32:24,dimensions=full?24:16;
+	if(max<length)return NT_STATUS_INFO_LENGTH_MISMATCH;
+	if(cap->status==ZXS_NS_CAP_NO_MEDIA)return NT_STATUS_DEVICE_NOT_READY;
+	if(cap->status==ZXS_NS_CAP_BUSY)return NT_STATUS_INSUFFICIENT_RESOURCES;
+	if(cap->status!=ZXS_NS_CAP_READY)return NT_STATUS_ACCESS_DENIED;
+	DATA_BLOB b=data_blob_talloc_zero(ctx,length);
+	if(b.data==NULL)return NT_STATUS_NO_MEMORY;
+	SBVAL(b.data,0,cap->total/UINT64_C(4096));
+	SBVAL(b.data,8,caller_can_write?cap->available/UINT64_C(4096):0);
+	if(full)SBVAL(b.data,16,cap->free/UINT64_C(4096));
+	SIVAL(b.data,dimensions,8);
+	SIVAL(b.data,dimensions+4,512);
+	*out=b;return NT_STATUS_OK;
+}
 struct tevent_req *zxs_odir_cut_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,
 	const struct zxs_smb_tree_cut *,uint8_t mode,const uint8_t *path,size_t size);
 NTSTATUS zxs_odir_cut_recv(struct tevent_req *,struct zxs_smb_tree_cut *,bool *offered,bool *file_kind);

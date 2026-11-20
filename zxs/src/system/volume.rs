@@ -4,7 +4,13 @@ use super::{Catalog,InitialReader,check,smb::ordinary_directory::{self,Route},zx
 use crate::{Role,VolumeId,fs::{ComponentLimit,ControlRead,HeldDir,invalid,directory_birth::{DirectoryHold,DirectoryParent}}};
 use std::{io,os::{fd::AsRawFd,raw::c_int}};
 
-unsafe extern "C"{fn zxs_storage_capacity(fd:c_int,total:*mut u64,available:*mut u64)->c_int;}
+unsafe extern "C"{
+    fn zxs_storage_capacity(fd:c_int,total:*mut u64,available:*mut u64)->c_int;
+    fn zxs_storage_capacity_full(fd:c_int,total:*mut u64,available:*mut u64,free:*mut u64,read_only:*mut c_int)->c_int;
+}
+pub(super) struct Capacity {
+    pub(super) total:u64,pub(super) available:u64,pub(super) free:u64,pub(super) read_only:bool,
+}
 
 #[derive(Debug,Eq,PartialEq)]
 pub(crate) struct DiskSpace{
@@ -93,6 +99,17 @@ impl<'a> OrdinaryRoot<'a>{
     }
     pub(super) fn for_tree(&self,source:&InitialReader,volume:VolumeId)->bool{
         std::ptr::eq(self.source,source)&&self.volume==volume
+    }
+    /// The SMB metadata worker holds this actual F, without taking a
+    /// namespace or FILE lock. A positive snapshot gives no write grant.
+    pub(super) fn sampled_capacity(&self)->io::Result<Capacity>{
+        self.require_streaming()?;
+        let (mut total,mut available,mut free,mut read_only)=(0,0,0,0);
+        if unsafe{zxs_storage_capacity_full(self.root.file.as_raw_fd(),&mut total,&mut available,&mut free,&mut read_only)}<0{
+            return Err(io::Error::last_os_error());
+        }
+        self.require_streaming()?;
+        Ok(Capacity{total,available,free,read_only:read_only!=0})
     }
     pub(super) fn space(&self)->io::Result<DiskSpace>{
         self.require()?;let(mut total,mut available)=(0,0);

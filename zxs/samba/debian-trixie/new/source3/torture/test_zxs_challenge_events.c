@@ -316,6 +316,36 @@ end:
 	if(peer>=0)close(peer);if(native>=0)close(native);if(pid>=0)close(pid);close(p[1]);return ok;
 }
 
+static bool exact_root_capacity_envelope(void)
+{
+	int p[2],ref=-1,peer=-1,pid=-1;
+	uint8_t scope=0,name[ZXS_DIR_NAME+1];
+	struct zxs_ns_space got={0};
+	bool ok=false;
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)!=0)return false;
+	pid=(int)syscall(SYS_pidfd_open,getpid(),0);if(pid<0)goto end;
+	ref=zxs_ns_capacity_query(p[0],false);if(ref<0)goto end;
+	peer=zxs_dir_take(p[1],pid,&scope,name);
+	if(peer<0 || scope!=ZXS_NS_CAPACITY_RO || name[0]!=0 ||
+	   zxs_ns_capacity_reply(peer,ZXS_NS_CAP_NO_MEDIA,4096,0,0)==0 ||
+	   zxs_ns_capacity_reply(peer,ZXS_NS_CAP_NO_MEDIA,0,0,0)!=0 ||
+	   zxs_ns_capacity_read(ref,&got)!=0 || got.status!=ZXS_NS_CAP_NO_MEDIA || got.total!=0)goto end;
+	close(ref);ref=-1;close(peer);peer=-1;
+	ref=zxs_ns_capacity_query(p[0],true);if(ref<0)goto end;
+	peer=zxs_dir_take(p[1],pid,&scope,name);
+	if(peer<0 || scope!=ZXS_NS_CAPACITY_RW || name[0]!=0 ||
+	   zxs_ns_capacity_reply(peer,ZXS_NS_CAP_READY,16384,8192,4096)==0 ||
+	   zxs_ns_capacity_reply(peer,ZXS_NS_CAP_READY,16384,4096,8192)!=0 ||
+	   zxs_ns_capacity_read(ref,&got)!=0 || got.status!=ZXS_NS_CAP_READY ||
+	   got.total!=16384 || got.available!=4096 || got.free!=8192)goto end;
+	uint8_t wrong[48]={0};memcpy(wrong,"ZXS-NS/CAPRES1",14);wrong[17]=1;
+	if(send(peer,wrong,sizeof(wrong),0)!=sizeof(wrong) || zxs_ns_capacity_read(ref,&got)==0)goto end;
+	ok=true;
+end:
+	if(ref>=0)close(ref);if(peer>=0)close(peer);if(pid>=0)close(pid);
+	close(p[0]);close(p[1]);return ok;
+}
+
 static bool exact_transfer_envelope(void)
 {
 	int p[2],proc=-1,native=-1,store=-1;bool ok=false;
@@ -352,7 +382,7 @@ end:
 
 int main(void)
 {
-	if(!exact_ordinary_parent_and_rows() || !retained_round_parent_pair() || !exact_transfer_envelope() || !exact_birth_packet() || !one_namespace_root_packet() || !boot_plan_packets() || !directory_pairs() || !held_member_pair() || !staged_writer_pair())return 1;
+	if(!exact_ordinary_parent_and_rows() || !exact_root_capacity_envelope() || !retained_round_parent_pair() || !exact_transfer_envelope() || !exact_birth_packet() || !one_namespace_root_packet() || !boot_plan_packets() || !directory_pairs() || !held_member_pair() || !staged_writer_pair())return 1;
 	struct tevent_context *ev=tevent_context_init(NULL);
 	int a[2],b[2];struct timespec now;int64_t start;
 	uint8_t x[8],y[8];

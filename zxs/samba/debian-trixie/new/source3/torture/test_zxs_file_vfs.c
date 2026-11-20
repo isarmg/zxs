@@ -172,6 +172,29 @@ static bool native_directory_projection(connection_struct *c)
 fail:
 	c->params=NULL;return false;
 }
+static bool native_reference_capacity_counts(TALLOC_CTX *ctx)
+{
+	struct zxs_ns_space cap={.total=16385,.available=4097,.free=8195,.status=ZXS_NS_CAP_READY};
+	DATA_BLOB b=data_blob_null;
+	if(!NT_STATUS_EQUAL(zxs_format_capacity(ctx,&cap,ZXS_INFO_FS_SIZE,23,true,&b),
+	   NT_STATUS_INFO_LENGTH_MISMATCH) || b.data!=NULL)return false;
+	if(!NT_STATUS_IS_OK(zxs_format_capacity(ctx,&cap,ZXS_INFO_FS_SIZE,24,true,&b)) ||
+	   b.length!=24 || BVAL(b.data,0)!=4 || BVAL(b.data,8)!=1 ||
+	   IVAL(b.data,16)!=8 || IVAL(b.data,20)!=512)goto fail;
+	TALLOC_FREE(b.data);
+	if(!NT_STATUS_IS_OK(zxs_format_capacity(ctx,&cap,ZXS_INFO_FS_FULL_SIZE,32,true,&b)) ||
+	   b.length!=32 || BVAL(b.data,0)!=4 || BVAL(b.data,8)!=1 || BVAL(b.data,16)!=2 ||
+	   IVAL(b.data,24)!=8 || IVAL(b.data,28)!=512)goto fail;
+	TALLOC_FREE(b.data);
+	if(!NT_STATUS_IS_OK(zxs_format_capacity(ctx,&cap,ZXS_INFO_FS_FULL_SIZE,32,false,&b)) ||
+	   BVAL(b.data,0)!=4 || BVAL(b.data,8)!=0 || BVAL(b.data,16)!=2)goto fail;
+	TALLOC_FREE(b.data);
+	cap.status=ZXS_NS_CAP_NO_MEDIA;
+	return NT_STATUS_EQUAL(zxs_format_capacity(ctx,&cap,ZXS_INFO_FS_SIZE,24,true,&b),
+		NT_STATUS_DEVICE_NOT_READY)&&b.data==NULL;
+fail:
+	TALLOC_FREE(b.data);return false;
+}
 static bool native_empty_search(void)
 {
 	return NT_STATUS_EQUAL(zxs_empty_search_status(NT_STATUS_NO_SUCH_FILE,"*",true),STATUS_NO_MORE_FILES) &&
@@ -642,7 +665,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!native_maximal_access(conn) || !native_empty_search() || !typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
+	if (!native_reference_capacity_counts(conn) || !native_maximal_access(conn) || !native_empty_search() || !typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

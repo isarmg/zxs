@@ -4829,7 +4829,7 @@
  #include "../libcli/smb/smb_common.h"
  #include "trans2.h"
  #include "../lib/util/tevent_ntstatus.h"
-@@ -216,7 +220,129 @@
+@@ -216,7 +220,144 @@
  	struct smbd_smb2_request *smb2req;
  	NTSTATUS status;
  	DATA_BLOB out_output_buffer;
@@ -4838,7 +4838,7 @@
 +	struct aio_req_fsp_link *zxs_link;
 +	uint8_t zxs_class;
 +	uint32_t zxs_max;
-+	bool zxs_member;
++	bool zxs_member,zxs_filesystem;
 +	uint64_t zxs_size;
  };
 +
@@ -4903,7 +4903,9 @@
 +	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
 +	struct smbd_smb2_getinfo_state *s=tevent_req_data(req,struct smbd_smb2_getinfo_state);
 +	NTSTATUS status;
-+	if(s->zxs_member){
++	struct zxs_ns_space capacity={0};
++	if(s->zxs_filesystem){status=zxs_root_capacity_recv(sub,&capacity);}
++	else if(s->zxs_member){
 +		uint8_t *private=NULL;size_t n=0;
 +		status=zxs_delivery_recv(sub,s,&private,&n);
 +		TALLOC_FREE(private);
@@ -4912,6 +4914,8 @@
 +	s->zxs_wait=NULL;TALLOC_FREE(sub);
 +	if(NT_STATUS_IS_OK(status)){
 +		if(!zxs_getinfo_current(s)){status=NT_STATUS_ACCESS_DENIED;}
++		else if(s->zxs_filesystem){status=zxs_format_capacity(s,&capacity,s->zxs_class,s->zxs_max,
++			zxs_capacity_may_write(s->zxs_fsp->conn),&s->out_output_buffer);}
 +		else if(s->zxs_member){status=zxs_getinfo_format_member(s);}
 +		else{status=zxs_format_root_info(s,s->zxs_fsp,s->zxs_class,s->zxs_max,
 +						&s->out_output_buffer,&s->status);}
@@ -4926,12 +4930,21 @@
 +{
 +	struct smbd_smb2_getinfo_state *s=tevent_req_data(req,struct smbd_smb2_getinfo_state);
 +	s->zxs_member=!fsp->fsp_flags.is_directory;
-+	if(type!=SMB2_0_INFO_FILE || !(s->zxs_member?zxs_member_info_class(cls):zxs_root_info_class(cls)))
++	s->zxs_filesystem=type==SMB2_0_INFO_FILESYSTEM && zxs_capacity_info_class(cls);
++	if(s->zxs_filesystem){
++		const struct zxs_dir_search *d=zxs_find_dir(fsp);
++		/* This query reports the one virtual export's reference. Do
++		 * not substitute total capacity of S, R, or any host cwd. */
++		if(d==NULL || d->folder.mode!=0)return NT_STATUS_NOT_SUPPORTED;
++		if(max<(cls==ZXS_INFO_FS_FULL_SIZE?32u:24u))return NT_STATUS_INFO_LENGTH_MISMATCH;
++	}else if(type!=SMB2_0_INFO_FILE || !(s->zxs_member?zxs_member_info_class(cls):zxs_root_info_class(cls))){
 +		return NT_STATUS_NOT_SUPPORTED;
++	}
 +	if(input.length!=0 || additional!=0 || flags!=0)return NT_STATUS_INVALID_PARAMETER;
 +	s->zxs_fsp=fsp;s->zxs_class=cls;s->zxs_max=max;
 +	if(!zxs_getinfo_current(s))return NT_STATUS_ACCESS_DENIED;
-+	const bool attributes=s->zxs_member?zxs_member_info_needs_attributes(cls):zxs_root_info_needs_attributes(cls);
++	const bool attributes=!s->zxs_filesystem &&
++		(s->zxs_member?zxs_member_info_needs_attributes(cls):zxs_root_info_needs_attributes(cls));
 +	if(attributes && (fsp->access_mask&SEC_FILE_READ_ATTRIBUTE)==0)return NT_STATUS_ACCESS_DENIED;
 +	const struct zxs_read_fsp *m=s->zxs_member?zxs_find_read(fsp):NULL;
 +	if(m!=NULL){
@@ -4941,7 +4954,9 @@
 +	s->zxs_link=aio_add_req_to_fsp(fsp,req);
 +	if(s->zxs_link==NULL)return NT_STATUS_NO_MEMORY;
 +	talloc_steal(s,s->zxs_link);
-+	if(m!=NULL){
++	if(s->zxs_filesystem){
++		s->zxs_wait=zxs_root_capacity_send(s,ev,s->smb2req,zxs_capacity_may_write(fsp->conn));
++	}else if(m!=NULL){
 +		/* The storage worker proves this exact member's held view and
 +		 * current authority, but no FILE_READ_DATA or data I/O is needed. */
 +		s->zxs_wait=zxs_delivery_send(s,ev,m->fd,0,0,0);
@@ -4959,7 +4974,7 @@
  
  static void smb2_ipc_getinfo(struct tevent_req *req,
  				struct smbd_smb2_getinfo_state *state,
-@@ -273,6 +399,13 @@
+@@ -273,6 +414,13 @@
  	state->smb2req = smb2req;
  	state->status = NT_STATUS_OK;
  	state->out_output_buffer = data_blob_null;

@@ -1,8 +1,8 @@
 //! One authenticated SMB business root. Root listing uses only the original
 //! plan and current SQL; no selected drive has to be online merely to list it.
-use super::{InitialReader,Site,SmbSession,TreeOrigin,denied,live,os,serve_folder};
-use super::super::super::{share_mode::{Mode,Setting}};
-use crate::display;
+use super::{InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,os,serve_folder};
+use super::super::super::share_mode::{Mode,Setting};
+use crate::{display,fs::directory_birth::DirectoryParent,system::reader::{Catalog,volume::{Capacity,OrdinaryRoot}}};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering},thread};
 
 const NAME:usize=255;
@@ -11,6 +11,12 @@ const ROW:usize=16;
 const OPEN_READ:u8=253;
 const OPEN_WRITE:u8=252;
 const OPEN_MAX:u8=247;
+const CAPACITY_RW:u8=242;
+const CAPACITY_RO:u8=241;
+const CAP_READY:u8=0;
+const CAP_NO_MEDIA:u8=1;
+const CAP_BUSY:u8=2;
+static CAPACITY_JOBS:AtomicUsize=AtomicUsize::new(0);
 static READS:AtomicUsize=AtomicUsize::new(0);
 static WRITES:AtomicUsize=AtomicUsize::new(0);
 
@@ -19,6 +25,7 @@ unsafe extern "C"{
     fn zxs_smb_root_wait(tree:i32,session:i32,timeout:i32)->i32;
     fn zxs_dir_take(tree:i32,worker:i32,special:*mut u8,name:*mut u8)->i32;
     fn zxs_ns_dir_reply(fd:i32,body:*const u8)->i32;
+    fn zxs_ns_capacity_reply(fd:i32,status:u8,total:u64,available:u64,free:u64)->i32;
 }
 struct Limit{used:&'static AtomicUsize}
 impl Limit{
@@ -61,6 +68,83 @@ fn selected(site:Site<'_>,session:&SmbSession<'_>,name:&[u8])->io::Result<Settin
     })
 }
 
+struct CapacityPermit;
+impl CapacityPermit{
+    fn take()->Option<Self>{
+        CAPACITY_JOBS.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<2).then_some(n+1)).ok()?;
+        Some(Self)
+    }
+}
+impl Drop for CapacityPermit{fn drop(&mut self){CAPACITY_JOBS.fetch_sub(1,Ordering::AcqRel);}}
+fn no_capacity(fd:i32,status:u8){
+    let _=unsafe{zxs_ns_capacity_reply(fd,status,0,0,0)};
+}
+
+struct Reference<'r>{root:OrdinaryRoot<'r>,grant:Setting,bytes:Capacity,writable:bool}
+impl Reference<'_>{
+    fn confirm(&self,session:&SmbSession<'_>,catalog:&Catalog,validate:impl FnOnce()->io::Result<()>,
+        live:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        if !self.root.for_tree(session.source,self.grant.volume){return Err(denied());}
+        self.root.require_streaming()?;
+        validate()?;
+        let original=catalog.rows().iter().find(|r|r.volume==self.grant.volume).ok_or_else(denied)?;
+        let exact=Tree{session,setting:self.grant,parent:DirectoryParent::Root};
+        session.source.at(|db,c|{
+            exact.require(db,&c,false)?;
+            if c.rows().iter().find(|r|r.volume==self.grant.volume)!=Some(original){return Err(denied());}
+            live()
+        })
+    }
+}
+
+/// Sample only authorized ordinary candidates, never an aggregate volume.
+/// Plan order is stable by original VolumeId inside each class. A SQL RW
+/// entry on a read-only mount is only a fallback, never RW.
+fn pick_reference<'r>(src:&'r InitialReader,catalog:&Catalog,mut choices:Vec<Setting>,
+    can_write:bool,live:impl Fn()->io::Result<()>)->io::Result<Option<Reference<'r>>>{
+    choices.retain(|s|s.mode!=Mode::Disabled);
+    if can_write{choices.sort_by_key(|s|s.mode!=Mode::ReadWrite);}
+    let mut chosen=None;
+    for grant in choices{
+        live()?;
+        if chosen.is_some() && grant.mode!=Mode::ReadWrite{break;}
+        let Ok(root)=OrdinaryRoot::for_body(src,catalog,grant.volume)else{continue;};
+        let Ok(bytes)=root.sampled_capacity()else{continue;};
+        if bytes.total<4096{continue;}
+        let writable=can_write&&grant.mode==Mode::ReadWrite&&!bytes.read_only;
+        if writable||chosen.is_none(){chosen=Some(Reference{root,grant,bytes,writable});}
+        if writable||!can_write{break;}
+    }
+    Ok(chosen)
+}
+fn reference_capacity(site:Site<'_>,origin:&TreeOrigin,answer:&OwnedFd,can_write:bool)->io::Result<()>{
+    let fd=answer.as_raw_fd();
+    let current=||->io::Result<()>{
+        if (site.stopping)()||!live(origin,answer,0){return Err(denied());}
+        Ok(())
+    };
+    current()?;site.validate()?;
+    let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
+    let session=SmbSession{source:&src,original:origin.slot.original.clone()};
+    let (catalog,choices)=src.at(|db,c|{
+        session.require_current(db,&c)?;
+        let selected=site.plan.folders().iter().map(|f|site.plan.current(db,&c,f.name())?.ok_or_else(denied))
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok((c,selected))
+    })?;
+    let Some(chosen)=pick_reference(&src,&catalog,choices,can_write,&current)? else{
+        site.validate()?;
+        src.at(|db,c|{session.require_current(db,&c)?;current()})?;
+        current()?;no_capacity(fd,CAP_NO_MEDIA);return Ok(());
+    };
+    chosen.confirm(&session,&catalog,||site.validate(),&current)?;
+    current()?;
+    // Keep the original F and marker through the private terminal reply.
+    let b=&chosen.bytes;
+    let result=os(unsafe{zxs_ns_capacity_reply(fd,CAP_READY,b.total,if chosen.writable{b.available}else{0},b.free)});
+    drop(chosen);result
+}
+
 pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()>{
     if origin.slot.pool!=site.pool || (site.stopping)() || !live(&origin,&root,0){return Err(denied());}
     site.validate()?;
@@ -82,6 +166,7 @@ pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()
     thread::scope(|scope|{
         let _stop=Stop(&running);
         let mut jobs=Vec::new();
+        let mut capacity:Option<thread::ScopedJoinHandle<'_,()>>=None;
         loop{
             if alive(){break;}
             let status=unsafe{zxs_smb_root_wait(root.as_raw_fd(),origin.session.as_raw_fd(),500)};
@@ -92,7 +177,18 @@ pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()
             if fd<0{break;}
             let answer=unsafe{OwnedFd::from_raw_fd(fd)};
             let label=&name[1..1+usize::from(name[0])];
-            if matches!(role,OPEN_READ|OPEN_WRITE|OPEN_MAX){
+            if matches!(role,CAPACITY_RO|CAPACITY_RW){
+                if !label.is_empty(){continue;}
+                if capacity.as_ref().is_some_and(|job|!job.is_finished()){
+                    no_capacity(fd,CAP_BUSY);continue;
+                }
+                let Some(permit)=CapacityPermit::take()else{no_capacity(fd,CAP_BUSY);continue;};
+                let peer=origin.duplicate()?;
+                if let Ok(job)=thread::Builder::new().name("zxs-root-capacity".into()).spawn_scoped(scope,move||{
+                    let _permit=permit;
+                    let _=reference_capacity(child,&peer,&answer,role==CAPACITY_RW);
+                }){capacity=Some(job);}
+            }else if matches!(role,OPEN_READ|OPEN_WRITE|OPEN_MAX){
                 let (grant,writer)=if label==site.plan.retained_label().as_bytes(){
                     if role==OPEN_WRITE{continue;}
                     (None,false)
@@ -123,6 +219,37 @@ pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    #[ignore="source-only: fresh SQLite fixture and unprivileged isolated ordinary F; no listener"]
+    fn real_reference_uses_one_confirmed_volume_and_rejects_a_late_change_of_grant(){
+        use crate::{OperationId,fs::HeldDir,system::reader::{ordinary_pool,sqlite3_get_autocommit},test_support::PrivateTemp};
+        let tmp=PrivateTemp::under(&std::env::temp_dir());
+        let(path,pool,f,rw,ro)=ordinary_pool(&tmp);
+        let src=InitialReader::open(&path,pool).unwrap();
+        let original=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let (_,c)=original.select_with_catalog(rw).unwrap();
+        // Two known grants address the same F in this fixture. It must never
+        // be counted twice. Reference sampling does not take its parent lock.
+        let rw=original.connect(rw).unwrap().setting;
+        let ro=original.connect(ro).unwrap().setting;
+        let peer=HeldDir::open(&f).unwrap();peer.exclusive().unwrap();
+        let ready=||{assert_eq!(unsafe{sqlite3_get_autocommit(src.conn.0)},1);Ok(())};
+        let writable=pick_reference(&src,&c,vec![ro,rw],true,&ready).unwrap().unwrap();
+        assert_eq!(writable.grant,rw);assert!(writable.writable);
+        assert!(writable.bytes.available<=writable.bytes.free&&writable.bytes.free<=writable.bytes.total);
+        let locked=pick_reference(&src,&c,vec![ro,rw],false,&ready).unwrap().unwrap();
+        assert_eq!(locked.grant,ro);assert!(!locked.writable);
+        assert_eq!(writable.bytes.total,locked.bytes.total);
+        writable.confirm(&original,&c,&ready,||Ok(())).unwrap();
+        let web=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
+        web.set_share_mode(OperationId([0xaf;16]),rw.share,rw.op,Mode::Disabled).unwrap();
+        assert!(writable.confirm(&original,&c,&ready,||Ok(())).is_err());
+        drop(peer);
+        let gone=tmp.0.join("F-offline");std::fs::rename(&f,&gone).unwrap();
+        assert!(pick_reference(&src,&c,vec![ro],true,&ready).unwrap().is_none());
+        std::fs::rename(&gone,&f).unwrap();
+    }
+
     #[test]
     fn maximum_on_read_only_folder_uses_separate_capacity(){
         let writes:Vec<_>=(0..64).map(|_|Limit::acquire(true).unwrap()).collect();

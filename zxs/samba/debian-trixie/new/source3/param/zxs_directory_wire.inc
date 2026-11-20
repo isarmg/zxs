@@ -7,6 +7,8 @@ static const uint8_t dirq[16]="ZXS-DIR/PAGE-1";
 static const uint8_t dira[16]="ZXS-DIR/ROWS-1";
 static const uint8_t nsa[16]="ZXS-NS/ROWS-1";
 static const uint8_t nsq[16]="ZXS-NS/FOLDER-1";
+static const uint8_t capq[16]="ZXS-NS/CAPREQ1";
+static const uint8_t capa[16]="ZXS-NS/CAPRES1";
 static const uint8_t rounds[16]="ZXS-R/ROUNDS1";
 static const uint8_t retainedq[16]="ZXS-R/MEMBER-1";
 static const uint8_t openq[16]="ZXS-FILE/OPEN-1";
@@ -156,8 +158,9 @@ static bool zxs_retained_path(const uint8_t *name,size_t n)
 }
 static int zxs_tree_request(int tree,const uint8_t tag[16],unsigned limit,const uint8_t *after,size_t n)
 {
-    uint8_t b[18+ZXS_DIR_NAME]={0};int p[2],rc,e;bool file=tag!=dirq;
-    if(limit>ZXS_DIR_ROWS || n>ZXS_DIR_NAME ||
+    uint8_t b[18+ZXS_DIR_NAME]={0};int p[2],rc,e;
+    const bool capacity=tag==capq,file=tag!=dirq&&!capacity;
+    if(limit>ZXS_DIR_ROWS || n>ZXS_DIR_NAME || (capacity && (limit>1 || n!=0)) ||
        (file && (n==0 || (tag==nsq?limit>2:tag==retainedq?(limit>1||!zxs_retained_path(after,n)):
                     (n>ZXS_FILE_NAME || (tag==birthq?limit>3:limit!=0))))) ||
        (n!=0 && ((!file && limit==0) || after==NULL || memchr(after,0,n))))return bad();
@@ -170,6 +173,10 @@ static int zxs_tree_request(int tree,const uint8_t tag[16],unsigned limit,const 
 int zxs_dir_query(int tree,unsigned limit,const uint8_t *after,size_t n)
 {
     return zxs_tree_request(tree,dirq,limit,after,n);
+}
+int zxs_ns_capacity_query(int tree,bool may_write)
+{
+    return zxs_tree_request(tree,capq,may_write?1:0,NULL,0);
 }
 int zxs_r_member_query(int tree,const uint8_t *name,size_t n,bool share_delete)
 {
@@ -200,11 +207,14 @@ int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+
     bool file=edit || memcmp(b,openq,16)==0;
     bool folder=memcmp(b,nsq,16)==0,birth=memcmp(b,birthq,16)==0;
     bool retained=memcmp(b,retainedq,16)==0,path=memcmp(b,odreq,16)==0;
-    if((!file && !folder && !birth && !retained && !path && memcmp(b,dirq,16)!=0) || b[16]>ZXS_DIR_ROWS || n>ZXS_DIR_NAME ||
-       (path?(b[16]!=0||n!=0):folder?(b[16]>2||!n):retained?(b[16]>1||!zxs_retained_path(b+18,n)):
+    bool capacity=memcmp(b,capq,16)==0;
+    if((!file && !folder && !birth && !retained && !path && !capacity && memcmp(b,dirq,16)!=0) ||
+       b[16]>ZXS_DIR_ROWS || n>ZXS_DIR_NAME ||
+       (capacity?(b[16]>1||n!=0):path?(b[16]!=0||n!=0):folder?(b[16]>2||!n):retained?(b[16]>1||!zxs_retained_path(b+18,n)):
           (file||birth)?(b[16]>(birth?3:0)||!n||n>ZXS_FILE_NAME):(b[16]==0 && n)) ||
        (n && memchr(b+18,0,n)!=NULL) || same_endpoint_process(reply,worker,false)!=0)goto invalid;
     for(size_t i=n;i<ZXS_DIR_NAME;i++)if(b[18+i]!=0)goto invalid;
+    if(capacity){*limit=b[16]?ZXS_NS_CAPACITY_RW:ZXS_NS_CAPACITY_RO;cursor[0]=0;return reply;}
     *limit=path?ZXS_OD_PATH:retained?(ZXS_RETAINED_OPEN+b[16]):birth?(ZXS_FILE_BIRTH+b[16]):folder?(b[16]==0?ZXS_NS_OPEN:(b[16]==1?ZXS_NS_WRITE:ZXS_NS_MAXIMUM)):edit?ZXS_MEMBER_WRITE_OPEN:(file?ZXS_MEMBER_OPEN:b[16]);cursor[0]=(uint8_t)n;if(n)memcpy(cursor+1,b+18,n);return reply;
 invalid:
     close(reply);return bad();
@@ -257,6 +267,31 @@ int zxs_r_round_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]){re
 static uint64_t zxs_member_u64(const uint8_t b[8])
 {
     uint64_t v=0;for(size_t i=0;i<8;i++)v=(v<<8)|b[i];return v;
+}
+static bool zxs_capacity_shape(uint8_t status,uint64_t total,uint64_t available,uint64_t free_bytes)
+{
+    return status==ZXS_NS_CAP_READY?(total>=4096 && available<=free_bytes && free_bytes<=total):
+        ((status==ZXS_NS_CAP_NO_MEDIA || status==ZXS_NS_CAP_BUSY) && total==0 && available==0 && free_bytes==0);
+}
+int zxs_ns_capacity_reply(int fd,uint8_t status,uint64_t total,uint64_t available,uint64_t free_bytes)
+{
+    uint8_t wire[48]={0};
+    const uint64_t fields[]={total,available,free_bytes};
+    if(!zxs_capacity_shape(status,total,available,free_bytes))return bad();
+    memcpy(wire,capa,16);wire[16]=status;
+    for(size_t i=0;i<3;i++)for(size_t j=0;j<8;j++){wire[24+8*i+j]=(uint8_t)(fields[i]>>(8*(7-j)));}
+    return transfer(fd,wire,NULL,sizeof(wire),-1,NULL,ZXS_NO_FD,true);
+}
+int zxs_ns_capacity_read(int fd,struct zxs_ns_space *out)
+{
+    uint8_t wire[48];
+    if(out==NULL || transfer(fd,NULL,wire,sizeof(wire),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    if(memcmp(wire,capa,16)!=0)return bad();
+    for(size_t i=17;i<24;i++)if(wire[i]!=0)return bad();
+    struct zxs_ns_space got={.total=zxs_member_u64(wire+24),.available=zxs_member_u64(wire+32),
+        .free=zxs_member_u64(wire+40),.status=wire[16]};
+    if(!zxs_capacity_shape(got.status,got.total,got.available,got.free))return bad();
+    *out=got;return 0;
 }
 int zxs_member_reply(int fd,const uint8_t data[ZXS_MEMBER_BYTES])
 {

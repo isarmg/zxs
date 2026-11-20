@@ -80,6 +80,15 @@ int zxs_dir_query(int tree,unsigned limit,const uint8_t *after,size_t n);
 int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+1]);
 #define ZXS_NS_OPEN 253
 #define ZXS_NS_WRITE 252
+#define ZXS_NS_CAPACITY_RW 242u
+#define ZXS_NS_CAPACITY_RO 241u
+#define ZXS_NS_CAP_READY 0u
+#define ZXS_NS_CAP_NO_MEDIA 1u
+#define ZXS_NS_CAP_BUSY 2u
+struct zxs_ns_space {uint64_t total,available,free;uint8_t status;};
+int zxs_ns_capacity_query(int tree,bool may_write);
+int zxs_ns_capacity_reply(int fd,uint8_t status,uint64_t total,uint64_t available,uint64_t free_bytes);
+int zxs_ns_capacity_read(int fd,struct zxs_ns_space *out);
 /* Private only; a fresh original FILE operation reply socket, not a
  * native SMB packet or an independent business authority. */
 #define ZXS_XFER_DELETE 1u

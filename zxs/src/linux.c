@@ -305,13 +305,25 @@ int zxs_sql_private_name(int parent,const char *name,uint64_t *ino) {
 }
 
 #include <sys/statvfs.h>
-/* Capacity of this currently mounted FS, not a per-folder quota or promise. */
-int zxs_storage_capacity(int fd,uint64_t *total,uint64_t *available) {
+/* Capacity of this currently mounted FS, not a per-folder quota or promise.
+ * In the extended observation the caller/volume counts and mount RO bit
+ * are from the same statvfs sample, not separate views. */
+static int zxs_capacity_at(int fd,uint64_t *total,uint64_t *available,uint64_t *free_bytes,int *read_only) {
     struct statvfs v;
     if (fstatvfs(fd,&v)<0) return -1;
-    uint64_t unit=(uint64_t)v.f_frsize,blocks=(uint64_t)v.f_blocks,avail=(uint64_t)v.f_bavail;
-    if (unit==0 || avail>blocks || blocks>UINT64_MAX/unit) { errno=EOVERFLOW; return -1; }
-    *total=unit*blocks;*available=unit*avail;return 0;
+    uint64_t unit=(uint64_t)v.f_frsize,blocks=(uint64_t)v.f_blocks,avail=(uint64_t)v.f_bavail,free=(uint64_t)v.f_bfree;
+    if (unit==0 || avail>blocks || blocks>UINT64_MAX/unit ||
+        (free_bytes!=NULL && (avail>free || free>blocks))) { errno=EOVERFLOW; return -1; }
+    *total=unit*blocks;*available=unit*avail;
+    if(free_bytes!=NULL)*free_bytes=unit*free;
+    if(read_only!=NULL)*read_only=(v.f_flag&ST_RDONLY)!=0;
+    return 0;
+}
+int zxs_storage_capacity(int fd,uint64_t *total,uint64_t *available) {
+    return zxs_capacity_at(fd,total,available,NULL,NULL);
+}
+int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_t *free_bytes,int *read_only) {
+    return zxs_capacity_at(fd,total,available,free_bytes,read_only);
 }
 
 #include <sys/socket.h>
