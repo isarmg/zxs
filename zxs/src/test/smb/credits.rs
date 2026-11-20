@@ -39,7 +39,9 @@ fn chain(mut list: Vec<Vec<u8>>) -> Vec<u8> {
     out
 }
 fn accept(c: &mut Connection, members: Vec<Vec<u8>>) -> Result<Debits> {
-    parsed(&chain(members), |f| c.receive(f))
+    // Ledger-only fixtures deliberately need no retained network frame. The
+    // production entry always keeps it; setup_origin.rs exercises that boundary.
+    parsed(&chain(members), |f| c.debit(f))
 }
 fn response(cmd: u16, mid: u64, grant: u16, status: u32) -> Vec<u8> {
     let mut p = request(cmd,mid,0,grant); p32(&mut p,8,status); p32(&mut p,16,1); p
@@ -47,7 +49,7 @@ fn response(cmd: u16, mid: u64, grant: u16, status: u32) -> Vec<u8> {
 fn settle(c: &mut Connection, b: &mut Debits) -> Vec<u16> {
     let batch: Vec<_> = b.entries.iter().enumerate().filter(|(_,m)| m.cmd != CANCEL)
         .map(|(i,m)| (i,m.cmd,m.mid,m.payload)).collect();
-    let plan = c.plan(b).unwrap();
+    let plan = c.plan_debit(b).unwrap();
     let mut ns = Vec::new();
     let replies = batch.into_iter().map(|(i,cmd,mid,payload)| {
         let n = plan.credit_response(i).unwrap(); ns.push(n);
@@ -76,7 +78,8 @@ fn fresh_445_admits_only_message_zero_and_exact_negotiated_grant() {
     assert!(matches!(x.bind(p), Err(Fault::Opening))); // cannot receive a whole advertised write
     let (x,mut p) = opening(1);
     p32(&mut p,92,128*1024); p32(&mut p,96,256*1024); p32(&mut p,100,96*1024);
-    let limits = x.bind(p).unwrap().submitted().unwrap().limits;
+    let connected = x.bind(p).unwrap().submitted().unwrap();
+    let limits = &connected.limits;
     assert_eq!((limits.transact,limits.read,limits.write),(128*1024,256*1024,96*1024));
     let [mut multi,rsp,..] = synthetic_exchange();
     p16(&mut multi,66,2); p16(&mut multi,100,0x0302); p16(&mut multi,102,0x0311);
@@ -139,7 +142,7 @@ fn cancel_is_unchecked_for_sequence_only_and_never_answers_or_allocates() {
         if flag == 2 { p64(&mut m,32,99); }
         let mut exempt = accept(&mut c,vec![m]).unwrap();
         assert_eq!(exempt.payload(0),Some(Payload::CancelExempt));
-        assert!(matches!(c.plan(&mut exempt),Err(Fault::NoReply)));
+        assert!(matches!(c.plan_debit(&mut exempt),Err(Fault::NoReply)));
     }
     assert_eq!((c.window.available(),c.in_flight),(0,1));
     assert_eq!(settle(&mut c,&mut original),[1]);
@@ -156,7 +159,7 @@ fn payload_uses_original_lengths_and_fails_member_not_transport() {
             let mut c = ready(4); let mut m = request(cmd,1,charge,1); p32(&mut m,at,n);
             let mut b = accept(&mut c,vec![m]).unwrap(); assert_eq!(b.payload(0),Some(want));
             if want == Payload::InvalidParameter {
-                let plan = c.plan(&mut b).unwrap(); let g = plan.credit_response(0).unwrap();
+                let plan = c.plan_debit(&mut b).unwrap(); let g = plan.credit_response(0).unwrap();
                 assert!(matches!(plan.bind(&response(cmd,1,g,0)),Err(Fault::WrongReply)));
             }
             settle(&mut c,&mut b); assert!(c.negotiation().is_ok());
@@ -177,9 +180,9 @@ fn payload_uses_original_lengths_and_fails_member_not_transport() {
 fn only_matching_actual_synchronous_reply_can_publish_grants_exactly_once() {
     let mut c = ready(2); let mut other = ready(2);
     let mut b = accept(&mut c,vec![request(13,1,1,2),request(4,2,1,2)]).unwrap();
-    assert!(matches!(other.plan(&mut b),Err(Fault::WrongBatch)));
+    assert!(matches!(other.plan_debit(&mut b),Err(Fault::WrongBatch)));
     for variant in 0..7 {
-        let plan = c.plan(&mut b).unwrap();
+        let plan = c.plan_debit(&mut b).unwrap();
         let (g,h) = (plan.credit_response(0).unwrap(),plan.credit_response(1).unwrap());
         let mut a = response(13,1,g,0); let mut z = response(4,2,h,0);
         match variant {
@@ -194,9 +197,9 @@ fn only_matching_actual_synchronous_reply_can_publish_grants_exactly_once() {
     assert_eq!((c.window.available(),c.in_flight),(0,2));
     assert_eq!(settle(&mut c,&mut b),[2,2]);
     assert_eq!((c.window.available(),c.in_flight),(4,0));
-    assert!(matches!(c.plan(&mut b),Err(Fault::NoReply)));
+    assert!(matches!(c.plan_debit(&mut b),Err(Fault::NoReply)));
     let mut second = accept(&mut c,vec![request(13,3,1,1)]).unwrap();
-    let plan = c.plan(&mut second).unwrap(); let g = plan.credit_response(0).unwrap();
+    let plan = c.plan_debit(&mut second).unwrap(); let g = plan.credit_response(0).unwrap();
     let bytes = response(13,3,g,0); drop(plan.bind(&bytes).unwrap()); // ambiguous send
     assert!(matches!(c.negotiation(),Err(Fault::Closed)));
     assert!(other.negotiation().is_ok());
@@ -217,7 +220,7 @@ fn forgotten_ordinary_reply_frame_limits_and_number_exhaustion_end_only_that_tra
     let mut c = ready(1);
     c.window = Window { low:u64::MAX-1,next:u64::MAX,bits:1 }; // last possible usable ID
     let mut last = accept(&mut c,vec![request(13,u64::MAX-1,1,1)]).unwrap();
-    assert!(matches!(c.plan(&mut last),Err(Fault::Exhausted)));
+    assert!(matches!(c.plan_debit(&mut last),Err(Fault::Exhausted)));
     assert!(matches!(c.negotiation(),Err(Fault::Closed)));
     let mut n = Window { low:u64::MAX-1,next:u64::MAX,bits:1 };
     assert!(!n.take(u64::MAX-1,2)); assert!(!n.take(u64::MAX,1));

@@ -11,6 +11,7 @@ use super::wire::{negotiate::CmacChoice, negotiate_reply::{OriginalHeader, Selec
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 pub(in crate::smb) mod negotiate;
+pub(in crate::smb) mod setup;
 
 const CAP: u16 = 64; // bound on live number span AND advertised + in-flight requests
 const CANCEL: u16 = 0x000c;
@@ -18,7 +19,7 @@ const K64: u64 = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Fault {
-    Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, Closed, Range, FrameSize,
+    Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, SetupPhase, Closed, Range, FrameSize,
     Resources, Exhausted, WrongBatch, NoReply, WrongReply,
 }
 pub(in crate::smb) type Result<T> = std::result::Result<T, Fault>;
@@ -77,8 +78,8 @@ impl OpeningSend {
         // conformant client rejects it. Do not expose a usable session fork
         // on this server even if a client ignores its own list.
         if self.signing == CmacChoice::NoCommon { return Err(Fault::NoCommonSigning); }
-        Ok(Connection { hash: self.hash, limits: self.limits, client: self.client, server: self.server, in_flight: 0,
-            closed: Arc::new(AtomicBool::new(false)),
+        Ok(Connection { limits: self.limits, client: self.client, server: self.server, in_flight: 0,
+            origin: Arc::new(Origin { closed: AtomicBool::new(false), hash: self.hash }),
             window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } })
     }
 }
@@ -136,11 +137,11 @@ struct Member { mid: u64, cmd: u16, ask: u16, payload: Payload }
 /// order. No authorization, request execution, cancellation action, key or
 /// Open. Async/cancel processing still requires the real RequestList/owner.
 #[must_use]
-pub(in crate::smb) struct Debits {
-    origin: Arc<AtomicBool>, entries: Vec<Member>, owed: bool,
+struct Debits {
+    origin: Arc<Origin>, entries: Vec<Member>, owed: bool,
 }
 impl Debits {
-    pub(in crate::smb) fn payload(&self, index: usize) -> Option<Payload> {
+    fn payload(&self, index: usize) -> Option<Payload> {
         self.entries.get(index).map(|m| m.payload)
     }
 }
@@ -148,24 +149,46 @@ impl Drop for Debits {
     fn drop(&mut self) {
         // Abandoning an ordinary debit without a reply cannot recycle IDs or
         // fabricate a grant. A live owner must discard this transport.
-        if self.owed { self.origin.store(true, Ordering::Release); }
+        if self.owed { self.origin.closed.store(true, Ordering::Release); }
     }
+}
+
+struct Origin { closed: AtomicBool, hash: ConnectionHash }
+
+/// The immutable parsed frame, its ledger and that exact connection's
+/// negotiated transcript travel together. No public raw/debit pair, no Clone,
+/// no self-reference: the original TCP buffer and parsed view outlive this
+/// synchronous receipt. A future asynchronous path must own immutable bytes.
+#[must_use]
+pub(in crate::smb) struct Received<'raw> { frame: &'raw Compound<'raw>, debit: Debits }
+impl Received<'_> {
+    pub(in crate::smb) fn payload(&self, i: usize) -> Option<Payload> { self.debit.payload(i) }
 }
 
 #[must_use]
 pub(in crate::smb) struct Connection {
-    hash: ConnectionHash, window: Window, limits: Limits, client: ClientOffer, server: Selection, in_flight: u16,
-    closed: Arc<AtomicBool>, // instance identity and terminal latch, not a login
+    origin: Arc<Origin>, window: Window, limits: Limits, client: ClientOffer, server: Selection, in_flight: u16,
+}
+impl Drop for Connection {
+    fn drop(&mut self) { self.origin.closed.store(true,Ordering::Release); }
 }
 impl Connection {
     fn alive(&self) -> Result<()> {
-        if self.closed.load(Ordering::Acquire) { Err(Fault::Closed) } else { Ok(()) }
+        if self.origin.closed.load(Ordering::Acquire) { Err(Fault::Closed) } else { Ok(()) }
     }
     fn stop<T>(&self, f: Fault) -> Result<T> {
-        self.closed.store(true,Ordering::Release); Err(f)
+        self.origin.closed.store(true,Ordering::Release); Err(f)
     }
-    pub(in crate::smb) fn negotiation(&self) -> Result<&ConnectionHash> {
-        self.alive()?; Ok(&self.hash)
+    #[cfg(test)]
+    fn negotiation(&self) -> Result<&ConnectionHash> {
+        self.alive()?; Ok(&self.origin.hash)
+    }
+
+    /// This is the ordinary entry. No separately supplied transcript or raw
+    /// message can be substituted on the subsequent SESSION_SETUP path.
+    pub(in crate::smb) fn receive<'raw>(&mut self, frame: &'raw Compound<'raw>) -> Result<Received<'raw>> {
+        let debit = self.debit(frame)?;
+        Ok(Received { frame, debit })
     }
 
     /// Try every original member against ONLY the credits already submitted
@@ -173,7 +196,7 @@ impl Connection {
     /// dispatch, no replenishment from later/prospective replies. All members
     /// (including related ones) retain their own header's MID. A correctly
     /// spent but insufficient payload charge is a command error, not a replay.
-    pub(in crate::smb) fn receive(&mut self, frame: &Compound<'_>) -> Result<Debits> {
+    fn debit(&mut self, frame: &Compound<'_>) -> Result<Debits> {
         self.alive()?;
         let total: usize = frame.messages().iter().map(|m| m.raw.len()).sum();
         if total as u64 > u64::from(self.limits.transact) + 256 { return self.stop(Fault::FrameSize); }
@@ -207,16 +230,25 @@ impl Connection {
         }
         self.window = shadow;
         self.in_flight = pending;
-        Ok(Debits { origin: Arc::clone(&self.closed), entries: out, owed })
+        Ok(Debits { origin: Arc::clone(&self.origin), entries: out, owed })
     }
 
     /// One policy: grant separately per synchronous original response, in
     /// order, up to the requested amount and local sparse-window/slot budget.
     /// Never strand a responsive client at zero. An outstanding debit is not
     /// a credit advertised to the client. No asynchronous grants on this path.
-    pub(in crate::smb) fn plan<'a,'b>(&'a mut self, batch: &'b mut Debits) -> Result<ReplyPlan<'a,'b>> {
+    pub(in crate::smb) fn plan<'a,'b>(&'a mut self, original: &'b mut Received<'_>) -> Result<ReplyPlan<'a,'b>> {
         self.alive()?;
-        if !Arc::ptr_eq(&self.closed,&batch.origin) { return Err(Fault::WrongBatch); }
+        if !Arc::ptr_eq(&self.origin,&original.debit.origin) { return Err(Fault::WrongBatch); }
+        // A generic accounting consumer cannot bind a forged SETUP success
+        // (or turn setup+I/O into an authenticated command chain). The phase
+        // owner will settle its original request with the verified reply.
+        if original.frame.messages().iter().any(|m| m.header.command == 1) { return Err(Fault::SetupPhase); }
+        self.plan_debit(&mut original.debit)
+    }
+    fn plan_debit<'a,'b>(&'a mut self, batch: &'b mut Debits) -> Result<ReplyPlan<'a,'b>> {
+        self.alive()?;
+        if !Arc::ptr_eq(&self.origin,&batch.origin) { return Err(Fault::WrongBatch); }
         if !batch.owed { return Err(Fault::NoReply); }
         let mut shadow = self.window;
         let mut pending = self.in_flight;
@@ -283,7 +315,7 @@ impl ReplySend<'_,'_,'_> {
 }
 impl Drop for ReplySend<'_,'_,'_> {
     fn drop(&mut self) {
-        if !self.settled { self.plan.owner.closed.store(true, Ordering::Release); }
+        if !self.settled { self.plan.owner.origin.closed.store(true, Ordering::Release); }
     }
 }
 

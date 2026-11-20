@@ -79,13 +79,12 @@ fn default_and_explicit_cmac_encode_true_reply_publish_real_credits_and_hash_the
         assert_eq!(conn.window.available(),5);
         // Debit the actual original MID=1 before the independent transcript fork;
         // no SMB session, keystore or file operation is published by either.
-        let first = framed(&setup,|c| {
-            let debit=conn.receive(c).unwrap();
-            let hash=conn.negotiation().unwrap().new_attempt().received(c).unwrap().into_kdf_context();
-            (debit,hash)
+        framed(&setup,|c| {
+            let held=conn.receive(c).unwrap();
+            let actual=held.debit.origin.hash.new_attempt().received(held.frame).unwrap().into_kdf_context();
+            assert_eq!(actual.as_bytes().as_slice(),decode(hash).as_slice());
+            drop(held); // no reply: source fixture closes only this connection
         });
-        assert_eq!(first.1.as_bytes().as_slice(),decode(hash).as_slice());
-        drop(first); // no reply: source fixture closes only this connection
     }
 }
 

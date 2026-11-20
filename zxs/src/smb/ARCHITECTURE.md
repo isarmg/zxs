@@ -12,7 +12,7 @@
 
 `connection` 从原始 3.1.1 NEGOTIATE 请求建立一次性起点：这时只允许 MessageId 0。保留真实客户端 GUID、安全模式、capabilities 及**完整原序的 dialect 数组**，而非仅记录是否见过 3.1.1。根据[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)，TCP/445 上 3.1.1 必须支持多额度，服务器成功回复须含 LARGE_MTU；客户端初始请求即使要 0 也至少回 1。仅已序列化且匹配本次请求、SHA-512 transcript、应发额度、实际读／写／事务大小的回复才能绑定；原发送者提交了这份字节后，才产生仅限原连接的可用窗口。已协商的连接不能再次走 NEGOTIATE。现在由同一个 Opening 生成下节所述的实际成功消息，但不写网络、不启用传输服务。
 
-- [服务端窗口](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dec8e905-9477-4c3f-bc64-b18d97c9f905)和[序号验证](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/0326f784-0baf-45fd-9687-626859ef5a9b)：额度对应已实际发出的、单调新发的编号。可乱序接收，不能重用、跨空洞，或在 u64 末端回绕。每成员从自身 MessageId 消耗至少一格，正多额度需整个连续区间仍可用；关联成员不继承 MessageId。整批只能在同一**事前已发**窗口上扣减；任何范围无效即关本连接，不逐项执行后再发现越界。本地最多 64 格跨度，且可用额度加未完成普通请求不超过 64；不能靠不断填高编号扩张内存。这是额度记录，不替代原连接的 RequestList、会话签名或业务权。将来真正的 RequestList 须按 §3.3.5.2 为每个非 CANCEL 成员先登记自己的原请求，并把同一不可换包的原字节、该项账务与后续验签／派发绑定；不能拿账务结果另配 SESSION_SETUP 或业务帧。 本端只公布可兑现的 MaxWriteSize，不超过约束整个入站 SMB 消息的 MaxTransactSize；这是本地入站边界的约定，不要求三种协议上限相等。MaxReadSize 的数据方向相反。
+- [服务端窗口](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dec8e905-9477-4c3f-bc64-b18d97c9f905)和[序号验证](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/0326f784-0baf-45fd-9687-626859ef5a9b)：额度对应已实际发出的、单调新发的编号。可乱序接收，不能重用、跨空洞，或在 u64 末端回绕。每成员从自身 MessageId 消耗至少一格，正多额度需整个连续区间仍可用；关联成员不继承 MessageId。整批只能在同一**事前已发**窗口上扣减；任何范围无效即关本连接，不逐项执行后再发现越界。本地最多 64 格跨度，且可用额度加未完成普通请求不超过 64；不能靠不断填高编号扩张内存。这是额度记录，不替代原连接的 RequestList、会话签名或业务权。同步票已把不可换包的原字节与该项账务合在一起。将来的 RequestList 仍须按 §3.3.5.2 给每个非 CANCEL 成员登记原请求，并与后续验签、派发和在途取消绑定；不能拿账务结果另配 SESSION_SETUP 或业务帧。 本端只公布可兑现的 MaxWriteSize，不超过约束整个入站 SMB 消息的 MaxTransactSize；这是本地入站边界的约定，不要求三种协议上限相等。MaxReadSize 的数据方向相反。
 - [载荷校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/fba3123b-f566-4d8f-9715-0f529e856d25)独立于序号：零计费不表示零消费，最多覆盖 64 KiB；正计费按每格 65,536 字节。READ、WRITE、QUERY_DIRECTORY、CHANGE_NOTIFY、QUERY_INFO、SET_INFO、IOCTL 用原始声明值。查询信息按入／出最大值，IOCTL 两边分别在 u64 相加后再比较。错误或截断不能变成少计费的成功。已花合法编号但载荷不足是成员参数错误，不归还旧编号、不伪称已操作文件；前序认证、树／原 OPEN 失败仍按对应命令的规范顺序处理。
 - [CANCEL](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/57bae3d3-5dd7-4a5f-92cb-fc52e2087dad)只豁免这一步的序号消费：同步／异步形式不占新格、不产生本命令应答、不赠额度。查找同连接的原在途请求、核原签名／身份、是否取消及原操作结果留给唯一 RequestList；不能仅凭重用的 MID/AsyncId 取消工作。
 - [授额](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/2e366edb-b006-47e7-aa94-ef6f71043ced)与[同步复合回复](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf)按成员对账。候选额度尚不可花；服务端先对最终不可变回复整链核同一次批次的原 MID／command／CreditResponse，待原传输确认成功提交才一次公布。跨连接的批次、重复公布、丢失普通应答、传输结果不明、编号耗尽都不能恢复旧额度。当没有剩余额度时，服务器须补至少一格或关闭耗尽的连接，不能留下无法继续的伪活动连接。此出口不允许异步 interim/final 冒充同步回复；未来异步只允许在 interim 发一次额度。该模块只核信用，不把正确签名、可用状态或授权视作已成立。
@@ -32,6 +32,14 @@
 ## SHA-512 原字节记录（尚未接到网络或身份认证）
 
 `wire/preauth` 从已解析的单条 3.1.1 NEGOTIATE 出发，连接只保留请求和实际序列化回复的链式哈希。每个新的 SESSION_SETUP 尝试从该连接值单独起步；接收完整原请求，并且仅在同一 MessageId、同一已分配 SessionId 的 MORE_PROCESSING_REQUIRED 回复时继续。固定的 Rust SHA-512 实现见[上游来源及许可](../../vendor/rust/README.md)。TCP 长度头不入哈希，原 SMB2 消息头、正文、间隙/填充均入哈希。最后成功的 SESSION_SETUP 回复将使用由最后一个请求哈希派生的密钥签名，因此它不会再次进入这份 KDF 上下文。该值不是口令证明、签名或有权访问文件的会话。预认证层本身不运行 GSS/KDF，不编码应答，不查询凭据或启动生产监听。依据：[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[新会话](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)、[GSS 处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)。
+
+## 原连接的 SESSION_SETUP 第一阶段（未签发 SID 或身份）
+
+`Connection::receive` 先审完本帧全部成员的额度，将**这同一个已解析的不可变帧、其额度账单、原连接的 SHA‑512 基准和终止标记**一起交付。同步处理借用原接收缓冲，不复制每个大报文，也不让业务方拿另一帧搭配已花的 MessageId、签名或 transcript。连接对象释放会使尚在手中的票失效；放弃该原连接尚欠的普通回复也只终止它自己。未来真正异步保留完整独占或共享只读缓冲和有界范围，不能将同步借用延长到失效之后。
+
+`Received::start_setup` 只能消费一次：没有 SETUP 的帧原样保留给别的处理器；含 SETUP 的复合帧在本配置整批拒绝，不顺带执行后面的文件命令。单条且头内 SessionId 为零的合法开局，从票内原 transcript 和同一 security field 得到“先选择 SPNEGO 机制”或“已有 Type 1，待真实挑战”；令牌不合法时仍保留该帧的已消费额度供今后准确失败回复，不能混成匿名或倒回 raw。非零 SID 只表示待真实注册表判定，不是重连或身份。通用额度回复入口明确不接受任何 SETUP；当前只到该状态，不创建挑战、签发 SID、发送 MORE／成功回复或建立会话。
+
+下一步按[新会话与 SessionId 分配](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)在同次服务运行的全局表及原连接表中登记 InProgress；0 和全 1 不能发行，SessionId 不可由每条连接单独从 1 开始。按[验证与回复](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)，先选机制时必须随原请求发真实 MORE 并请求名单 MIC；新的原请求、同一 SID 与一次性限时挑战完整通过后才可能签末次成功。不凭已知 SID、账务成功或可解析 Type 1 创建 Tree、Open 或后端权。验证和接线只写源码，不运行项目或客户端。
 
 ## SESSION_SETUP 的机制封装（止于未验证的 Type 3）
 
