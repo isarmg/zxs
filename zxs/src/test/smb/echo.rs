@@ -146,3 +146,33 @@ fn a_valid_tree_connect_is_not_answered_as_echo_or_consumed_by_this_handler() {
     let Some(Step::Verified(t))=batch.next().unwrap() else {panic!("original unrelated handler lost its ticket")};
     assert_eq!(t.message().header.command,3);assert!(capture.lock().unwrap().bytes.is_empty());
 }
+
+#[test]
+fn a_completely_written_record_still_does_not_publish_before_original_owner_commit() {
+    for revoke in [false,true] {
+        let srv=provider();
+        let mut c=connected_as(&srv,false).unwrap();
+        assert_eq!(publish_at(&mut c,1),1);
+        let sink=attach_fixture(&mut c,Mode::Normal);
+        let input=framed_cases(&[0],true);
+        let original=parsed(&input);
+        let debit=c.receive(&original).unwrap();
+        let Admission::Ready(mut batch)=debit.preflight(&mut c) else {panic!("original preflight");};
+        let written=batch.echoes().unwrap().unwrap().write_original().unwrap();
+        assert_eq!(sink.lock().unwrap().bytes,framed_cases(&[0],false));
+        assert_eq!(written.0.tx.plan.owner.window.available(),3);
+        assert_eq!(written.0.tx.plan.owner.in_flight,1);
+        if revoke {
+            srv.run.verifier.as_ref().unwrap().fixture_revoke();
+            assert!(matches!(written.publish_ledger(),Err(Fault::SessionState)));
+        } else {
+            drop(written); // uncertain local state after full socket write
+        }
+        drop(batch);
+        assert!(matches!(c.alive(),Err(Fault::Closed)));
+        assert!(c.sessions.is_empty());
+        assert!(c.stream.is_none());
+        assert_eq!(c.window.available(),3);
+        assert_eq!(c.in_flight,1);
+    }
+}

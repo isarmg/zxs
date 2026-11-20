@@ -107,18 +107,38 @@ impl CheckedBatch<'_,'_> {
         Ok(SyncReply{tx,ids,revision,count})
     }
 }
-impl SyncReply<'_> {
-    /// No caller-supplied sink, bytes or completion bit. Do not grant a
-    /// credit until the immutable record reached the original local TCP
-    /// send path in full and the original session set is still current.
+/// Inaccessible to dispatch callers. This value means only that the exact
+/// bound bytes were completely written on their own still-current stream.
+/// It owns the unresolved ledger; dropping it closes this connection.
+#[must_use]
+struct FullyWrittenSync<'a>(SyncReply<'a>);
+
+impl<'a> SyncReply<'a> {
+    /// No caller-supplied sink, bytes or completion bit. A complete transport
+    /// write is followed by a separate actual state/credit publication.
     pub(in crate::smb) fn send(self)->Result<()> {
+        self.write_original()?.publish_ledger()
+    }
+
+    fn write_original(self)->Result<FullyWrittenSync<'a>> {
         let Self{tx,ids,revision,count}=self;
         if tx.start!=4 {return Err(Fault::WrongReply);}
         current(tx.plan.owner,ids,revision,count)?;
         let mut out=tx.plan.owner.stream.take().ok_or(Fault::Transport)?;
         let c:&Connection=&*tx.plan.owner;
         out.write_record(tx.actual.as_ref(),||current(c,ids,revision,count))?;
+        // Also check after the last successful write, not just before it.
+        current(c,ids,revision,count)?;
         tx.plan.owner.stream=Some(out);
+        Ok(FullyWrittenSync(Self{tx,ids,revision,count}))
+    }
+}
+
+impl FullyWrittenSync<'_> {
+    fn publish_ledger(self)->Result<()> {
+        let SyncReply{tx,ids,revision,count}=self.0;
+        // Already written bytes cannot be recalled. A last loss of the
+        // original session only closes this connection without new credits.
         tx.publish_with(|c|current(c,ids,revision,count))
     }
 }

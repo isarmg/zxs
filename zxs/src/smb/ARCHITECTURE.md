@@ -146,6 +146,8 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 按[成功头](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d39a64be-b8f8-424d-b8e5-a2cf5257459e)、[同步复合](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf)与[出站签名](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a3e9ea1e-53c8-4cff-94bd-d98fb20417c0)逐项保留原 MID／优先级／Reserved／charge，填真实授额、有效 SID 和零树标识，每个成员用各自通道 CMAC 覆盖整个应答段，包含中间和末段零填充。只保留一份带 Direct TCP 前缀的不可变记录：原连接私有写端限时完整写入，部分写继续、被中断重试，错误／零写／撤代／去向不明均关闭原连接；仅整条写入本地 TCP 发送端且复核原登记后结清额度，不等同对端已经收到。无外部可注入的生产 writer，也没有 `submitted=true` 替代。下述受托入口从 NEGOTIATE 前持有原收发流；没有生产 accept/监听或账号来源。`src/test/smb/echo.rs` 保存默认／显式 CMAC、错误、相关尾填充、两会话及短写失败的合成固定答案，未运行。
 
+原同步发送只有原连接内部可获得 `FullyWrittenSync`：它随原签名整帧、原请求账和原流一起，经末字节后的原会话复核才成立；本地写完不是账户/对象权限，也不是已发额度。最后复核才结该帧账，若原代失效或丢掉该票，关闭原流、无新额度；没有一般的“已发送”布尔值或外部发布回调。现只用于既有 ECHO 与确定的 TCON 拒绝，不提供业务成功或模拟业务提交。
+
 ## 首个 TREE_CONNECT 入口（确定错误可签回，不发树）
 
 [MS-SMB2 §2.2.9](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/832d2130-22e8-4afb-aafd-b30bb0901798) 的名称字段以本成员头为原点；范围不能借下一复合成员的字节。只接受有界、无 NUL 的 UTF-16LE 普通 UNC `\\服务器\ZXS`；ASCII 共享名不分大小写，盘和文件名规则不变。拒绝超限或确定非法的普通 ASCII DNS 标签；短 NetBIOS 和非 ASCII 拼写仍交实际可信别名／共享作用域核对，不改写名称、不进行 DNS。不重新解释集群重连、请求扩展、DFS 或相关后件；普通盘共享无重定向，客户端能接受重定向的提示不授能力。同一已支付、整批已验签的 `VerifiedMember` 保留在每个结果里，重核原会话代。字段非法、共享名不符、会话失效各有独立失败域，不拿一个假 `TreeId` 或默认状态代替。活的 3.1.1 非访客／匿名会话缺少应有的明文签名时，原连接按 [§3.3.5.7](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/652e0c14-5014-4470-999d-b174d7b2da87) 断连，不会有这个已验成员。
