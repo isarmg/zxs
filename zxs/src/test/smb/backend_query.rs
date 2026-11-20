@@ -538,4 +538,25 @@ mod root_pages {
         let next = page(&mut root, 0, 512, 4096, "").unwrap();
         assert!(matches!(next.output(), Selection::NoMatch { first_query: false }));
     }
+
+    #[test]
+    fn query_directory_header_wraps_only_the_exact_complete_page_without_advancing_open() {
+        use crate::smb::wire::query_reply::DirectoryReply;
+        let owner = coordinator();
+        let (mut open, _) = opened(&owner, Object::Namespace(pool()), 1, &[("A", 3), ("盘", 64)]);
+        for _ in 0..2 {
+            let proposal = page(&mut open, 0, 30, 4096, "").unwrap().encode_complete().unwrap();
+            let reply = DirectoryReply::complete_root(proposal).unwrap();
+            let (body, records) = reply.parts();
+            assert_eq!(body, &[9, 0, 72, 0, 30, 0, 0, 0]);
+            assert_eq!(&records[..16], &[16, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, b'A', 0, 0, 0]);
+            assert_eq!(&records[16..], &[0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0xd8, 0x76]);
+            // An encoded response body is not even signed, much less written.
+            // Dropping it must not move or replace the same original position.
+            drop(reply);
+        }
+        let short = page(&mut open, 0, 12, 4096, "").unwrap();
+        assert!(matches!(short.encode_complete(), Err(EncodeFault::NotComplete)));
+    }
+
 }

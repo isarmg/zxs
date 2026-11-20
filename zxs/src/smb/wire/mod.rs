@@ -11,6 +11,7 @@ pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod negotiate_reply;
 pub(in crate::smb) mod path_fields;
 pub(in crate::smb) mod query_fields;
+pub(in crate::smb) mod query_reply;
 pub(in crate::smb) mod preauth;
 pub(in crate::smb) mod setup_reply;
 
