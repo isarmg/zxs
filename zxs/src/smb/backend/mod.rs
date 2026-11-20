@@ -192,7 +192,7 @@ impl<'s, Q: OriginalRequest> Pending<'s, '_, Q> {
             drop(held); // close the core handle before releasing its vote
             return Err(e);
         }
-        Ok(Held { original: held, _slot: self.slot, grant: self.planned.grant, root_position: None })
+        Ok(Held { original: held, _slot: self.slot, grant: self.planned.grant, root_search: query::root::Search::default() })
     }
 }
 
@@ -203,7 +203,7 @@ struct Held<'s, H> {
     original: H,
     _slot: Slot<'s>,
     grant: Grant,
-    root_position: Option<query::root::Position>,
+    root_search: query::root::Search,
 }
 
 #[cfg(test)]

@@ -8,18 +8,18 @@ const EMPTY_ERROR: [u8; 8] = [9, 0, 0, 0, 0, 0, 0, 0];
 const NO_SUCH_FILE: u32 = 0xc000_000f;
 const NO_MORE_FILES: u32 = 0x8000_0006;
 
-enum ResultBody<'open> {
-    Complete { body: [u8; 8], records: FullRootRecords<'open> },
-    End(RootScanEnd<'open>),
+enum ResultBody {
+    Complete { body: [u8; 8], records: FullRootRecords },
+    End(RootScanEnd),
 }
 
 #[must_use]
-pub(in crate::smb) struct DirectoryReply<'open>(ResultBody<'open>);
+pub(in crate::smb) struct DirectoryReply(ResultBody);
 
-impl<'open> DirectoryReply<'open> {
+impl DirectoryReply {
     /// MS-SMB2 §2.2.34. The count covers these records, not any padding
     /// later needed between SMB2 compound response members.
-    pub(in crate::smb) fn complete_root(records: FullRootRecords<'open>) -> Result<Self> {
+    pub(in crate::smb) fn complete_root(records: FullRootRecords) -> Result<Self> {
         let n = u32::try_from(records.data().len()).map_err(|_| Error::Limit)?;
         if n == 0 {
             return Err(Error::InvalidRequest);
@@ -34,7 +34,7 @@ impl<'open> DirectoryReply<'open> {
     /// MS-FSA §2.1.5.6.3 / MS-SMB2 §§2.2.2, 3.3.4.4. A real no-match
     /// outcome has an ERROR body and no directory data, including the
     /// NO_MORE_FILES warning. An overflow never passes this constructor.
-    pub(in crate::smb) fn no_matching_root(end: RootScanEnd<'open>) -> Self {
+    pub(in crate::smb) fn no_matching_root(end: RootScanEnd) -> Self {
         Self(ResultBody::End(end))
     }
 

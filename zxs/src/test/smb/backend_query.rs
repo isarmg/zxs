@@ -330,8 +330,8 @@ mod root_pages {
         (pending.bind(source).unwrap(), observe)
     }
 
-    fn page<'a>(open: &'a mut Held<'_, FixtureRoot>, flags: u8, output: u32, room: usize, pattern: &str)
-        -> Result<RootPage<'a>, Fault>
+    fn page(open: &mut Held<'_, FixtureRoot>, flags: u8, output: u32, room: usize, pattern: &str)
+        -> Result<RootPage, Fault>
     {
         let frame = framed(&[&directory(12, flags, output, &utf16(pattern))]);
         let batch = parsed(&frame);
@@ -339,7 +339,7 @@ mod root_pages {
         open.prepare_root_query(&q, room)
     }
 
-    fn names<'p>(page: &'p RootPage<'_>, end: bool) -> Vec<(&'p str, u64, usize)> {
+    fn names(page: &RootPage, end: bool) -> Vec<(&str, u64, usize)> {
         let Selection::Rows { entries, exhausted, .. } = page.output() else { panic!("expected real selected rows"); };
         assert_eq!(*exhausted, end);
         entries.iter().map(|e| (e.child.name.as_str(), e.child.number, e.space.offset)).collect()
@@ -357,7 +357,7 @@ mod root_pages {
         drop(first); // failed, cancelled or unsent reply
         let first = page(&mut open, 0, 30, 4096, "*").unwrap();
         assert_eq!(names(&first, false), [("A", 11, 0)]);
-        first.written_for_fixture();
+        assert!(first.written_for_fixture(&mut open));
 
         observe.denied.set(true);
         assert!(matches!(page(&mut open, 2, 64, 4096, ""), Err(Fault::Original(e))
@@ -367,10 +367,10 @@ mod root_pages {
         // value is ignored) and starts at the first NOT returned member.
         let second = page(&mut open, 2, 64, 4096, "z").unwrap();
         assert_eq!(names(&second, false), [("bbbbbbbb", 44, 0)]);
-        second.written_for_fixture();
+        assert!(second.written_for_fixture(&mut open));
         let last = page(&mut open, 0, 30, 4096, "").unwrap();
         assert_eq!(names(&last, true), [("z", 59, 0), ("盘", 62, 16)]);
-        last.written_for_fixture();
+        assert!(last.written_for_fixture(&mut open));
         let end = page(&mut open, 0, 30, 4096, "").unwrap();
         assert!(matches!(end.output(), Selection::NoMatch { first_query: false }));
         assert_eq!(observe.calls.get(), 6);
@@ -383,7 +383,7 @@ mod root_pages {
             &[("A.txt", 12), ("B.abc.TXT", 2), ("Z", 3), ("a.txt", 4), ("e\u{301}", 5), ("é", 6), ("𐐀档", 7)]);
         let first = page(&mut open, 0, 256, 4096, "a.txt").unwrap();
         assert_eq!(names(&first, true), [("a.txt", 4, 0)]);
-        first.written_for_fixture();
+        assert!(first.written_for_fixture(&mut open));
         let other = page(&mut open, 0, 256, 4096, "B*").unwrap();
         assert!(matches!(other.output(), Selection::NoMatch { first_query: false }));
         drop(other);
@@ -393,7 +393,7 @@ mod root_pages {
         drop(restart);
         let reopen = page(&mut open, 16, 256, 4096, "<.TXT").unwrap();
         assert_eq!(names(&reopen, true), [("B.abc.TXT", 2, 0)]);
-        reopen.written_for_fixture();
+        assert!(reopen.written_for_fixture(&mut open));
         let restart = page(&mut open, 1, 256, 4096, "").unwrap();
         assert_eq!(names(&restart, true), [("B.abc.TXT", 2, 0)]);
         drop(restart);
@@ -426,10 +426,10 @@ mod root_pages {
         let partial = page(&mut open, 0, 14, 4096, "").unwrap();
         let Selection::FirstOverflow { child, name_space } = partial.output() else { panic!("expected overflow"); };
         assert_eq!((child.name.as_str(), child.number, *name_space), ("𐐀", 3, 2));
-        partial.written_for_fixture();
+        assert!(partial.written_for_fixture(&mut open));
         let full = page(&mut open, 0, 16, 4096, "").unwrap();
         assert_eq!(names(&full, false), [("𐐀", 3, 0)]);
-        full.written_for_fixture();
+        assert!(full.written_for_fixture(&mut open));
         assert_eq!(names(&page(&mut open, 0, 16, 4096, "").unwrap(), true), [("𐐁", 2, 0)]);
     }
 
@@ -444,7 +444,7 @@ mod root_pages {
             let p = page(&mut open, 0, 4000, 4096, "*.*").unwrap();
             let returned: Vec<u64> = names(&p, end == 63).into_iter().map(|(_, number, _)| number).collect();
             assert_eq!(returned, (start + 2..end + 2).map(u64::from).collect::<Vec<_>>());
-            p.written_for_fixture();
+            assert!(p.written_for_fixture(&mut open));
         }
         let exhausted = page(&mut open, 0, 4000, 4096, "").unwrap();
         assert!(matches!(exhausted.output(), Selection::NoMatch { first_query: false }));
@@ -491,7 +491,7 @@ mod root_pages {
             drop(encoded); // bytes prepared but not submitted: first page unchanged
             let encoded = open.prepare_root_query(&q, 512).unwrap().encode_complete().unwrap();
             assert_eq!(encoded.data().len(), next + fixed + 6);
-            encoded.written_for_fixture();
+            assert!(encoded.written_for_fixture(&mut open));
             let end = open.prepare_root_query(&q, 512).unwrap();
             assert!(matches!(end.output(), Selection::NoMatch { first_query: false }));
             assert!(matches!(end.encode_complete(), Err(EncodeFault::NotComplete)));
@@ -534,7 +534,7 @@ mod root_pages {
         let (mut root, _) = opened(&owner, Object::Namespace(pool()), 1, &[]);
         let first = page(&mut root, 0, 512, 4096, "").unwrap();
         assert!(matches!(first.output(), Selection::NoMatch { first_query: true }));
-        first.written_for_fixture();
+        assert!(first.written_for_fixture(&mut root));
         let next = page(&mut root, 0, 512, 4096, "").unwrap();
         assert!(matches!(next.output(), Selection::NoMatch { first_query: false }));
     }
@@ -574,7 +574,7 @@ mod root_pages {
             assert_eq!(encoded.parts(), (&[9, 0, 0, 0, 0, 0, 0, 0][..], &[][..]));
             drop(encoded);
         }
-        page(&mut open, 0, 512, 4096, "B").unwrap().written_for_fixture();
+        assert!(page(&mut open, 0, 512, 4096, "B").unwrap().written_for_fixture(&mut open));
         // A new spelling in a continuation does not replace the original.
         let later = page(&mut open, 0, 512, 4096, "A").unwrap();
         let encoded = DirectoryReply::no_matching_root(later.seal_end().ok().unwrap());
@@ -596,5 +596,50 @@ mod root_pages {
         let short = page(&mut clipped, 0, 12, 4096, "").unwrap();
         let overflow = short.seal_end().err().unwrap();
         assert!(matches!(overflow.output(), Selection::FirstOverflow { .. }));
+    }
+
+    #[test]
+    fn owned_root_record_blocks_only_the_same_open_until_abandoned() {
+        use crate::smb::wire::query_reply::DirectoryReply;
+        let owner = coordinator();
+        let rows = [("A", 3), ("B", 4)];
+        let (mut origin, observed) = opened(&owner, Object::Namespace(pool()), 1, &rows);
+        let (mut other, observed_other) = opened(&owner, Object::Namespace(pool()), 1, &rows);
+        let page1 = page(&mut origin, 2, 30, 4096, "*").unwrap();
+        let response = DirectoryReply::complete_root(page1.encode_complete().unwrap()).unwrap();
+
+        // The previous Rust Open borrow ended. Neither a second live query,
+        // a rewind nor a sibling preparing its own response can replace it.
+        assert!(matches!(page(&mut origin, 0, 30, 4096, ""), Err(Fault::PendingReply)));
+        assert!(matches!(page(&mut origin, 0x10, 30, 4096, "B"), Err(Fault::PendingReply)));
+        assert_eq!(observed.calls.get(), 1);
+        let independent = page(&mut other, 2, 30, 4096, "B").unwrap();
+        assert_eq!(names(&independent, true), [("B", 4, 0)]);
+        assert_eq!(observed_other.calls.get(), 1);
+
+        drop(response); // not written: no state or cursor advanced
+        let retry = page(&mut origin, 2, 30, 4096, "*").unwrap();
+        assert_eq!(names(&retry, false), [("A", 3, 0)]);
+        assert!(retry.written_for_fixture(&mut origin));
+        assert_eq!(names(&page(&mut origin, 2, 30, 4096, "").unwrap(), true), [("B", 4, 0)]);
+        assert!(matches!(page(&mut other, 0, 30, 4096, ""), Err(Fault::PendingReply)));
+    }
+
+    #[test]
+    fn no_identical_or_reopened_handle_can_commit_a_different_proposal() {
+        let owner = coordinator();
+        let rows = [("A", 3), ("B", 4)];
+        let (mut origin, _) = opened(&owner, Object::Namespace(pool()), 1, &rows);
+        let departed = page(&mut origin, 2, 30, 4096, "A").unwrap().encode_complete().unwrap();
+        drop(origin); // reply bytes held no live storage handle or SMB share vote
+        let (mut replacement, _) = opened(&owner, Object::Namespace(pool()), 1, &rows);
+        let current = page(&mut replacement, 2, 30, 4096, "B").unwrap();
+
+        // Same original domain object's spelling/number is not same OPEN.
+        assert!(!departed.written_for_fixture(&mut replacement));
+        assert!(matches!(page(&mut replacement, 0, 30, 4096, ""), Err(Fault::PendingReply)));
+        assert!(current.written_for_fixture(&mut replacement));
+        let end = page(&mut replacement, 0, 30, 4096, "").unwrap();
+        assert!(matches!(end.output(), Selection::NoMatch { first_query: false }));
     }
 }

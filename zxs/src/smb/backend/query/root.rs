@@ -2,7 +2,7 @@
 //! of the native bridge, business grant, record encoder, or socket here.
 use super::{DirectoryPage, MAX_RECORDS, PageStop, Pattern, PatternError, QueryObject, RecordSpace};
 use crate::{display, smb::{backend::Held, wire::query_fields::{DirectoryClass, DirectoryQuery, Scan}}};
-use std::io;
+use std::{io, sync::{Arc, Weak}};
 
 pub(in crate::smb::backend) mod records;
 
@@ -28,15 +28,28 @@ pub(in crate::smb::backend) trait OriginalNamespace {
     fn root_projection(&self) -> io::Result<Vec<Child>>;
 }
 
-pub(in crate::smb::backend) struct Position {
+struct Position {
     pattern: Pattern,
     after: Option<String>,
+}
+
+// This identity has no numeric constructor or relationship to a wire ID.
+struct Proposal;
+
+/// The only committed position and outstanding-page indicator of the OPEN.
+/// A result owns the strong marker; this weak reference cannot keep an
+/// abandoned result, OPEN, or Core lease alive. No lock or second cursor.
+#[derive(Default)]
+pub(in crate::smb::backend) struct Search {
+    position: Option<Position>,
+    pending: Weak<Proposal>,
 }
 
 #[derive(Debug)]
 pub(in crate::smb::backend) enum Fault {
     NotNamespace,
     ListDenied,
+    PendingReply,
     Pattern(PatternError),
     Budget(PageStop),
     Original(io::Error),
@@ -55,14 +68,13 @@ pub(in crate::smb::backend) enum Selection {
     NoMatch { first_query: bool },
 }
 
-/// One proposal exclusively borrows the original OPEN's only search position.
-/// The future reply owner must check its original request and current scope,
-/// then commit only after writing the exact protected reply on that stream.
-/// Dropping this proposal, including after a failed write, leaves no change.
-/// There is deliberately no production acknowledgement method yet.
+/// An owned response proposal. It may survive the command's short borrow of
+/// the real OPEN, but cannot keep it open or select another OPEN by wire ID.
+/// Only the reply owner can later pair it with the same live OPEN, original
+/// request and full protected write. Dropping it never moves the cursor.
 #[must_use]
-pub(in crate::smb::backend) struct RootPage<'open> {
-    position: &'open mut Option<Position>,
+pub(in crate::smb::backend) struct RootPage {
+    stamp: Arc<Proposal>,
     replacement: Option<Pattern>,
     restart: bool,
     class: DirectoryClass,
@@ -77,17 +89,17 @@ pub(in crate::smb) enum EndOfRoot { NoInitialMatch, Exhausted }
 /// Keep the same uncommitted pattern/position available for the eventual
 /// write owner; there is no independently usable cursor acknowledgement.
 #[must_use]
-pub(in crate::smb) struct RootScanEnd<'open> {
+pub(in crate::smb) struct RootScanEnd {
     kind: EndOfRoot,
-    _proposal: RootPage<'open>,
+    _proposal: RootPage,
 }
 
-impl RootScanEnd<'_> {
+impl RootScanEnd {
     pub(in crate::smb) fn kind(&self) -> EndOfRoot { self.kind }
 }
 
-impl<'open> RootPage<'open> {
-    pub(in crate::smb::backend) fn seal_end(self) -> Result<RootScanEnd<'open>, Self> {
+impl RootPage {
+    pub(in crate::smb::backend) fn seal_end(self) -> Result<RootScanEnd, Self> {
         let kind = match self.output() {
             Selection::NoMatch { first_query: true } => EndOfRoot::NoInitialMatch,
             Selection::NoMatch { first_query: false } => EndOfRoot::Exhausted,
@@ -95,16 +107,20 @@ impl<'open> RootPage<'open> {
         };
         Ok(RootScanEnd { kind, _proposal: self })
     }
-}
 
-impl RootPage<'_> {
     pub(in crate::smb::backend) fn output(&self) -> &Selection { &self.output }
 
     #[cfg(test)]
-    pub(in crate::smb::backend) fn written_for_fixture(self) {
-        // A test explicitly models submission; production must not use this
-        // to move the one original cursor independently of the reply owner.
-        let Self { position, replacement, restart, output, .. } = self;
+    pub(in crate::smb::backend) fn written_for_fixture<H>(self, open: &mut Held<'_, H>) -> bool {
+        // Test-only stand-in for a completely written original reply.
+        // No fixture may commit the result against a different OPEN.
+        let search = &mut open.root_search;
+        if !search.pending.ptr_eq(&Arc::downgrade(&self.stamp)) {
+            return false;
+        }
+        search.pending = Weak::new();
+        let Self { replacement, restart, output, .. } = self;
+        let position = &mut search.position;
         let after = match output {
             Selection::Rows { mut entries, .. } => entries.pop().map(|e| e.child.name),
             _ => None, // Neither a partial name nor no match consumes a row.
@@ -115,28 +131,30 @@ impl RootPage<'_> {
         } else if let Some(pattern) = replacement {
             *position = Some(Position { pattern, after });
         }
+        true
     }
 }
 
 impl<H: OriginalNamespace> Held<'_, H> {
     pub(in crate::smb::backend) fn prepare_root_query(
         &mut self, query: &DirectoryQuery<'_>, response_room: usize,
-    ) -> Result<RootPage<'_>, Fault> {
+    ) -> Result<RootPage, Fault> {
         // The dispatcher must first resolve both wire ID words in its actual
         // current session/tree. Here only that original bound OPEN is used.
         if self.query_object() != QueryObject::LogicalRoot { return Err(Fault::NotNamespace); }
         if self.grant.0 & FILE_LIST_DIRECTORY == 0 { return Err(Fault::ListDenied); }
+        if self.root_search.pending.strong_count() != 0 { return Err(Fault::PendingReply); }
         let mut budget = DirectoryPage::start(QueryObject::LogicalRoot, query, response_room)
             .map_err(Fault::Budget)?;
-        let first_query = self.root_position.is_none();
+        let first_query = self.root_search.position.is_none();
         let restart = first_query || query.scan != Scan::Continue;
         let mut replacement = if restart { Pattern::from_query(query).map_err(Fault::Pattern)? } else { None };
         if first_query && replacement.is_none() { replacement = Some(Pattern::All); }
-        let pattern = replacement.as_ref().or_else(|| self.root_position.as_ref().map(|p| &p.pattern))
+        let pattern = replacement.as_ref().or_else(|| self.root_search.position.as_ref().map(|p| &p.pattern))
             .expect("first query has a default pattern");
         // FSA 2.1.5.6.3: absent replacement on a rewind keeps the old
         // pattern; an ordinary continuation ignores even a supplied pattern.
-        let after = if restart { None } else { self.root_position.as_ref().and_then(|p| p.after.as_deref()) };
+        let after = if restart { None } else { self.root_search.position.as_ref().and_then(|p| p.after.as_deref()) };
         let rows = self.original.root_projection().map_err(Fault::Original)?;
         if rows.len() > MAX_CHILDREN || rows.windows(2).any(|r| r[0].name.as_bytes() >= r[1].name.as_bytes()) {
             return Err(Fault::InvalidProjection);
@@ -181,6 +199,10 @@ impl<H: OriginalNamespace> Held<'_, H> {
         } else {
             Selection::Rows { entries, bytes: budget.bytes(), exhausted }
         };
-        Ok(RootPage { position: &mut self.root_position, replacement, restart, class: query.class, output })
+        // Nothing failed after claiming this one seat. It remains occupied
+        // even when the response body is separated from the OPEN borrow.
+        let stamp = Arc::new(Proposal);
+        self.root_search.pending = Arc::downgrade(&stamp);
+        Ok(RootPage { stamp, replacement, restart, class: query.class, output })
     }
 }

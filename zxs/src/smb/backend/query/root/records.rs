@@ -11,19 +11,21 @@ pub(in crate::smb::backend) enum EncodeFault { NotComplete, Resources, Inconsist
 /// The bytes cannot be separated from the same pending search position.
 /// The final signed transport may only advance it after writing this result.
 #[must_use]
-pub(in crate::smb) struct FullRootRecords<'open> {
-    proposal: RootPage<'open>,
+pub(in crate::smb) struct FullRootRecords {
+    proposal: RootPage,
     bytes: Vec<u8>,
 }
-impl FullRootRecords<'_> {
+impl FullRootRecords {
     pub(in crate::smb) fn data(&self) -> &[u8] { &self.bytes }
 
     #[cfg(test)]
-    pub(in crate::smb::backend) fn written_for_fixture(self) { self.proposal.written_for_fixture(); }
+    pub(in crate::smb::backend) fn written_for_fixture<H>(self, open: &mut crate::smb::backend::Held<'_, H>) -> bool {
+        self.proposal.written_for_fixture(open)
+    }
 }
 
-impl<'open> RootPage<'open> {
-    pub(in crate::smb::backend) fn encode_complete(self) -> Result<FullRootRecords<'open>, EncodeFault> {
+impl RootPage {
+    pub(in crate::smb::backend) fn encode_complete(self) -> Result<FullRootRecords, EncodeFault> {
         use DirectoryClass::*;
         let Selection::Rows { entries, bytes, .. } = self.output() else { return Err(EncodeFault::NotComplete); };
         if entries.is_empty() { return Err(EncodeFault::InconsistentPage); }
