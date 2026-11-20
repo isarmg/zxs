@@ -24,7 +24,10 @@ impl Worker {
         require_waitable_children()?;
         let mut cmd=Command::new("/not-an-account-program"); // only pinned execveat in pre_exec
         cmd.env_clear();
-        if matches!(mode,OfflineSql::FirstLayout){cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());}
+        if matches!(mode,OfflineSql::FirstBrowser){
+            let null=helper_linux_evidence::smb_views::null_device()?;
+            cmd.stdin(Stdio::from(null.try_clone()?)).stdout(Stdio::from(null.try_clone()?)).stderr(Stdio::from(null));
+        }else if matches!(mode,OfflineSql::FirstLayout){cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());}
         prepare_account_sql_exec(&mut cmd,exe,peer,order,mode)?;
         let mut child=cmd.spawn()?;
         let actual=i32::try_from(child.id()).ok().and_then(Pid::from_raw);

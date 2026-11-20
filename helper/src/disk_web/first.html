@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZXS 本机首次安装</title>
+<link rel="stylesheet" href="/panel.css">
+<script defer src="/panel.js"></script>
+<main>
+  <h1>ZXS 本机首次安装</h1>
+  <p>这里仅预览终端已选的安装范围，并把请求交回同一个终端。网页不能选盘、输入管理员口令、写盘或启动服务。</p>
+  <form id="pair-form">
+    <label for="code">终端显示的一次性配对码</label>
+    <input id="code" type="password" pattern="[0-9a-f]{64}" maxlength="64" autocomplete="off" required>
+    <button>配对</button>
+  </form>
+  <section id="scoped" hidden>
+    <p id="plan"></p>
+    <button id="continue" type="button">请求在原终端确认</button>
+    <button id="cancel" type="button">取消并关闭</button>
+  </section>
+  <p id="status" role="status"></p>
+</main>
+</html>

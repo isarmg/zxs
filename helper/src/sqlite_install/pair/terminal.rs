@@ -2,7 +2,7 @@
 //! this is not maintenance authorization, Samba-domain evidence or an issuer.
 mod audit;
 mod channel;
-pub(super) use channel::PublicConfirmation;
+pub(in crate::sqlite_install) use channel::PublicConfirmation;
 use audit::UnauditedInput;
 use super::web_secret::{PreparedWeb,WebWorkspace};
 use super::super::approval::{host_admin,same_terminal};

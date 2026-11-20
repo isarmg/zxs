@@ -8,7 +8,7 @@ use rustix::{fs::{Mode,OFlags},io::Errno,rand::{GetRandomFlags,getrandom},
     termios::{LocalModes,QueueSelector,tcflush,tcgetattr}};
 use std::{fs::File,io,os::fd::AsFd,time::{Duration,Instant}};
 
-pub(in crate::sqlite_install::pair) struct PublicConfirmation{terminal:Channel,reader:File}
+pub(in crate::sqlite_install) struct PublicConfirmation{terminal:Channel,reader:File}
 fn readable(f:OFlags)->bool{
     matches!(f&OFlags::ACCMODE,OFlags::RDONLY|OFlags::RDWR)&&!f.contains(OFlags::PATH)
 }
@@ -21,7 +21,7 @@ fn challenge()->io::Result<String>{
 }
 fn clear(f:&File)->io::Result<()>{Ok(tcflush(f,QueueSelector::IFlush)?)}
 impl PublicConfirmation{
-    pub(in crate::sqlite_install::pair) fn select()->io::Result<Self>{
+    pub(in crate::sqlite_install) fn select()->io::Result<Self>{
         let terminal=Channel::select()?; // rejects /dev/tty aliases; holds original stderr slave/VT
         if !readable(fs::fcntl_getfl(&io::stdin())?){return Err(refuse("standard input must already have read access"));}
         let (_proc,table)=own_descriptor_table()?;
@@ -33,7 +33,7 @@ impl PublicConfirmation{
         let reader=File::from(fs::openat(&table,c"0",OFlags::RDONLY|OFlags::NONBLOCK|OFlags::NOCTTY|OFlags::CLOEXEC,Mode::empty())?);
         let selected=Self{terminal,reader};selected.check()?;Ok(selected)
     }
-    pub(in crate::sqlite_install::pair) fn check(&self)->io::Result<()>{
+    pub(in crate::sqlite_install) fn check(&self)->io::Result<()>{
         self.terminal.require()?;
         let key=tcgetattr(&self.reader)?;
         if !readable(fs::fcntl_getfl(&io::stdin())?)||Surface::at(&self.reader)?!=self.terminal.original
@@ -41,6 +41,9 @@ impl PublicConfirmation{
             ||key.line_discipline!=0||!key.local_modes.contains(LocalModes::ICANON){
             return Err(refuse("the original nonblocking foreground canonical terminal is required"));}
         Ok(())
+    }
+    pub(in crate::sqlite_install) fn confirm_init(&self,fresh:bool,preview:String)->io::Result<()>{
+        self.ask(if fresh{"INIT"}else{"RESUME"},Some(preview),1100*1024)
     }
     pub(in crate::sqlite_install::pair) fn confirm_domain(&self,preview:String)->io::Result<()>{self.ask("PROVISION",Some(preview),96*1024)}
     pub(in crate::sqlite_install::pair) fn confirm_web_reset(&self,preview:String)->io::Result<()>{
@@ -109,12 +112,15 @@ mod tests{
         let slave=File::from(ioctl_tiocgptpeer(&master,flags).unwrap());
         fcntl_setfl(&slave,fcntl_getfl(&slave).unwrap()|OFlags::NONBLOCK).unwrap();
         let mut buf=[0u8;96];assert!(tcgetattr(&slave).unwrap().local_modes.contains(LocalModes::ICANON));
-        rustix::io::write(&master,b"old approval\n").unwrap();clear(&slave).unwrap();
+        let old=format!("INIT {}\n","a".repeat(64)); // old exact request SHA was repeatable
+        rustix::io::write(&master,old.as_bytes()).unwrap();clear(&slave).unwrap();
         assert_eq!(rustix::io::read(&slave,&mut buf[..]),Err(Errno::AGAIN));
         let mut text=vec![b'x';140];text.extend(b"\na later line\n");rustix::io::write(&master,&text).unwrap();
         assert_eq!(rustix::io::read(&slave,&mut buf[..]).unwrap(),96);clear(&slave).unwrap();
         assert_eq!(rustix::io::read(&slave,&mut buf[..]),Err(Errno::AGAIN));
-        rustix::io::write(&master,b"PROVISION new\n").unwrap();
-        let n=rustix::io::read(&slave,&mut buf[..]).unwrap();assert_eq!(&buf[..n],b"PROVISION new\n");
+        let fresh=format!("INIT {}\n","b".repeat(32));
+        rustix::io::write(&master,fresh.as_bytes()).unwrap();
+        let n=rustix::io::read(&slave,&mut buf[..]).unwrap();
+        assert_eq!(&buf[..n],fresh.as_bytes());assert_ne!(fresh,old);
     }
 }

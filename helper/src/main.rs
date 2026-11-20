@@ -30,7 +30,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --approval ID --recycle-name NAME --listen ADDR/PREFIX [--listen ADDR/PREFIX ...] --share DIR NAME ro|rw [--share DIR NAME ro|rw ...]\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --setup-op SETUP_OP --approval ID --live-sha256 HEX\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --bound-sha256 HEX --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --bound-sha256 HEX --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper install-web-unit --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper start-smb --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --bound-sha256 HEX\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper install-pool web new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --approval ID --recycle-name NAME --listen ADDR/PREFIX [--listen ADDR/PREFIX ...] --share DIR NAME ro|rw [--share DIR NAME ro|rw ...]\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --setup-op SETUP_OP --approval ID --live-sha256 HEX\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --bound-sha256 HEX --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --bound-sha256 HEX --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper install-web-unit --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper start-smb --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --bound-sha256 HEX\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -51,6 +51,7 @@ enum Command {
     SamWorker,
     NativeSqlWorker,
     LayoutSqlWorker,
+    FirstBrowserWorker,
     FsTools(fs_tools::Query),
     Fat32(fat32_check::Request),
     Exfat(fat32_check::Request),
@@ -87,6 +88,10 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op=="__native-account-sql-v9"{
         if args.next().is_some(){return Err("invalid internal worker");}
         return Ok(Command::NativeSqlWorker);
+    }
+    if op=="__first-install-browser-v1"{
+        if args.next().is_some(){return Err("unexpected browser worker argument");}
+        return Ok(Command::FirstBrowserWorker);
     }
     if op=="__first-layout-sql-v9"{
         if args.next().is_some(){return Err("invalid internal worker");}
@@ -149,6 +154,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::InstallWebUnit(authority)=>authority.run()?,
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::NativeSqlWorker=>return Ok(ExitCode::from(if sqlite_install::native_sql_worker().is_ok(){0}else{2})),
+        Command::FirstBrowserWorker=>return Ok(ExitCode::from(if sqlite_install::exec_first_browser().is_ok(){0}else{2})),
         Command::LayoutSqlWorker=>return Ok(ExitCode::from(if sqlite_install::layout_sql_worker().is_ok(){0}else{2})),
         Command::SamWorker=>return Ok(ExitCode::from(if sqlite_install::sam_worker().is_ok(){0}else{2})),
         Command::SealedWorker(fmt,digest) => return Ok(ExitCode::from(fat32_check::panel::worker(fmt,digest).unwrap_or(2))),

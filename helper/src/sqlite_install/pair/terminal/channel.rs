@@ -7,7 +7,7 @@ use rustix::{fs::{self,AtFlags,Mode,OFlags,StatxFlags},io::Errno,termios::{tcget
 use std::{fs::File,io,os::fd::{AsFd,BorrowedFd},time::{Duration,Instant}};
 
 mod confirmation;
-pub(in crate::sqlite_install::pair) use confirmation::PublicConfirmation;
+pub(in crate::sqlite_install) use confirmation::PublicConfirmation;
 
 const PROMPTS:[&[u8];4]=[
     "请输入 Web 管理员口令（不回显），然后按回车。\n".as_bytes(), "请再次输入同一 Web 管理员口令。\n".as_bytes(),

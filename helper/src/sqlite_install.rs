@@ -10,7 +10,7 @@ mod markers;
 mod complete;
 mod receipt;
 mod pair;
-pub(crate) use pair::{InstallWebUnit, Setup,exec_child as sam_worker,exec_sql_child as native_sql_worker,exec_layout_sql_child as layout_sql_worker,Online,StartSmb};
+pub(crate) use pair::{InstallWebUnit, Setup,exec_child as sam_worker,exec_sql_child as native_sql_worker,exec_layout_sql_child as layout_sql_worker,exec_first_browser,Online,StartSmb};
 
 const DATABASE:&str="SYSTEM.sqlite3";
 const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";
@@ -25,7 +25,7 @@ enum Purpose{Fresh,Original}
 #[derive(Clone,Copy,Debug)]
 enum InitAction{Apply(Purpose),Receipt}
 #[derive(Debug)]
-pub(crate) struct Installation{action:InitAction,op:Id,approval:Id,paths:Vec<PathBuf>}
+pub(crate) struct Installation{action:InitAction,browser:bool,op:Id,approval:Id,paths:Vec<PathBuf>}
 fn id(s:OsString)->Option<Id>{
     let text=s.to_str()?;
     if text.len()!=32 || !text.bytes().all(|c|c.is_ascii_digit()||(b'a'..=b'f').contains(&c)){return None;}
@@ -34,9 +34,12 @@ fn id(s:OsString)->Option<Id>{
 }
 impl Installation{
     pub(crate) fn parse(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        let action=match args.next().and_then(|s|s.into_string().ok()).as_deref(){
+        let mut first=args.next().and_then(|s|s.into_string().ok());
+        let browser=first.as_deref()==Some("web");
+        if browser{first=args.next().and_then(|s|s.into_string().ok());}
+        let action=match first.as_deref(){
             Some("new")=>InitAction::Apply(Purpose::Fresh),Some("resume")=>InitAction::Apply(Purpose::Original),
-            Some("receipt")=>InitAction::Receipt,
+            Some("receipt") if !browser=>InitAction::Receipt,
             _=>return Err("choose new, resume or receipt explicitly; never automatically switch")};
         let mut tag=|label:&str|->Result<Id,&'static str>{
             if args.next().as_deref()!=Some(std::ffi::OsStr::new(label)){return Err("expected --op ID --approval ID");}
@@ -56,14 +59,18 @@ impl Installation{
         // The wire hashes F in raw byte order; neither path normalization nor a
         // local filename encoding is used. Request::new rejects duplicate/nested roots.
         paths[2..].sort_by(|a,b|a.as_os_str().as_encoded_bytes().cmp(b.as_os_str().as_encoded_bytes()));
-        Ok(Self{action,op,approval,paths})
+        Ok(Self{action,browser,op,approval,paths})
     }
     pub(crate) fn run(self)->io::Result<(u8,String)>{
         let hex=|v:Id|v.iter().map(|b|format!("{b:02x}")).collect::<String>();
         match self.action{
             InitAction::Apply(purpose)=>{
-                let grant=approval::Approved::foreground(purpose,self.op,self.approval,self.paths)?;
-                let result=stage::install(grant)?;
+                let proposal=approval::Proposal::select(purpose,self.op,self.approval,self.paths)?;
+                let terminal=pair::PublicConfirmation::select()?;
+                if self.browser{
+                    pair::offer_init_web(&terminal,proposal.browser_scope(),||proposal.require())?;
+                }
+                let result=stage::install(proposal.authorize(terminal)?)?;
                 Ok((0,format!("{} pool={} operation={}; neither network login nor current disk health is certified",
                     if result.previous{"original INIT was already committed (historical receipt only)"}else{"original INIT committed after all initial volume markers were synchronized"},
                     hex(result.pool),hex(result.op))))
@@ -90,6 +97,9 @@ mod command_cases{
             assert_eq!(matches!(x.action,InitAction::Apply(Purpose::Fresh)),new);
             assert_eq!(x.paths,[PathBuf::from("/s"),"/r".into(),"/a".into(),"/z".into()]);
         }
+        let via=Installation::parse(args(&format!("web new {fields}"))).unwrap();
+        assert!(via.browser&&matches!(via.action,InitAction::Apply(Purpose::Fresh)));
+        assert!(Installation::parse(args(&format!("web receipt {fields}"))).is_err());
         let history=Installation::parse(args(&format!("receipt {fields}"))).unwrap();
         assert!(matches!(history.action,InitAction::Receipt));
         assert_eq!(history.paths,[PathBuf::from("/s"),"/r".into(),"/a".into(),"/z".into()]);
