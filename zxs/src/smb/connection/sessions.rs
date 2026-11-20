@@ -70,7 +70,19 @@ impl Drop for Registration {
 
 pub(super) struct Local { reg:Registration, phase:Phase }
 enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending), ProofTaken, SendingFinal, Valid(crate::smb::session::BoundSession) }
+#[derive(Clone,Copy)]
+enum Sending {Selection,Challenge,Final}
 impl Connection {
+    fn sending(&self,claim:&Arc<Claim>,expected:Sending,now:Instant)->Result<()> {
+        self.alive()?;
+        let item=self.sessions.iter().find(|v|Arc::ptr_eq(&v.reg.claim,claim)).ok_or(Fault::SessionState)?;
+        if claim.valid.get().is_some() || !matches!((expected,&item.phase),
+            (Sending::Selection,Phase::Sending)|(Sending::Challenge,Phase::SendingChallenge)|
+            (Sending::Final,Phase::SendingFinal)) || !item.reg.current(&self.origin,now)? {
+            return Err(Fault::SessionState);
+        }
+        Ok(())
+    }
     fn reserve_pending(&mut self,now:Instant)->Result<Registration> {
         self.alive()?;
         self.sessions.retain(|x|x.reg.claim.active(now));
@@ -110,17 +122,33 @@ impl Select<'_> {
     }
 }
 impl SelectionSend<'_,'_> {
-    pub(in crate::smb) fn bytes(&self)->&[u8] {self.tx.bytes()}
-    /// Only after submitting those exact bytes to the original connection.
-    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
-    fn submitted_at(self,now:Instant)->Result<()> {
+    pub(in crate::smb::connection) fn send(self)->Result<()> {
         let Self{tx,claim,next}=self;
-        tx.publish_with(|c|{
-            let origin=Arc::clone(&c.origin);
-            let item=c.sessions.iter_mut().find(|x|Arc::ptr_eq(&x.reg.claim,&claim)).ok_or(Fault::SessionState)?;
-            if !matches!(&item.phase,Phase::Sending) || !item.reg.current(&origin,now)? {return Err(Fault::SessionState);}
-            item.phase=Phase::Waiting(next); Ok(())
+        // Only offer this mechanism on the real transport while a protected
+        // provider actually exists. Selection sends no challenge or identity.
+        let stamp=tx.plan.owner.origin.run.verifier.as_ref().and_then(|s|s.batch_revision()).ok_or(Fault::NoVerifier)?;
+        tx.send_setup((claim,next,stamp),|c,(claim,_,stamp),now|{
+            c.sending(claim,Sending::Selection,now)?;
+            let s=c.origin.run.verifier.as_ref().ok_or(Fault::NoVerifier)?;
+            if !stamp.current(s) {return Err(Fault::SessionState);}Ok(())
+        },|c,(claim,next,stamp),now|{
+            let s=c.origin.run.verifier.as_ref().ok_or(Fault::NoVerifier)?;
+            if !stamp.current(s) {return Err(Fault::SessionState);}
+            Self::install(c,&claim,next,now)
         })
+    }
+    fn install(c:&mut Connection,claim:&Arc<Claim>,next:AwaitNegotiate,now:Instant)->Result<()> {
+        c.sending(claim,Sending::Selection,now)?;
+        let item=c.sessions.iter_mut().find(|x|Arc::ptr_eq(&x.reg.claim,claim)).ok_or(Fault::SessionState)?;
+        item.phase=Phase::Waiting(next);Ok(())
+    }
+    #[cfg(test)]
+    pub(in crate::smb) fn bytes(&self)->&[u8] {self.tx.bytes()}
+    #[cfg(test)]
+    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
+    #[cfg(test)]
+    fn submitted_at(self,now:Instant)->Result<()> {
+        let Self{tx,claim,next}=self;tx.publish_with(|c|Self::install(c,&claim,next,now))
     }
 }
 

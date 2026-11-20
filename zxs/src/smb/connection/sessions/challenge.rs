@@ -1,6 +1,6 @@
 //! Move one exact paid Type 1 into a real unsigned MORE bound to this
 //! transport, this run's protected service and this one absolute deadline.
-use super::{Claim,ContinuedType1,Local,Phase};
+use super::{Claim,ContinuedType1,Local,Phase,Sending};
 use crate::smb::{
     connection::{Connection,Fault,Received,ReplySend,Result,setup::Type1},
     session::{ChallengeService,ChallengeStep,Pending,envelope::HaveNegotiate},
@@ -63,21 +63,37 @@ fn prepare<'c,'b>(original:&'b mut Received<'_>,phase:&mut Option<HaveNegotiate>
     Ok(ChallengeSend{tx,claim,next})
 }
 impl ChallengeSend<'_,'_> {
-    pub(in crate::smb) fn bytes(&self)->&[u8] {self.tx.bytes()}
-    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
-    fn submitted_at(self,now:Instant)->Result<()> {
+    pub(in crate::smb::connection) fn send(self)->Result<()> {
         let Self{tx,claim,next}=self;
-        tx.publish_with(|c|{
-            let origin=Arc::clone(&c.origin);
-            let service=origin.run.verifier.as_ref().ok_or(Fault::NoVerifier)?;
-            let item=c.sessions.iter_mut().find(|x|Arc::ptr_eq(&x.reg.claim,&claim)).ok_or(Fault::SessionState)?;
-            if !matches!(&item.phase,Phase::SendingChallenge) || !item.reg.current(&origin,now)? ||
-                !next.current_at(service,now) {return Err(Fault::SessionState);}
-            item.phase=Phase::WaitingAuth(next);Ok(())
-        })
+        tx.send_setup((claim,next),|c,(claim,next),now|{
+            c.sending(claim,Sending::Challenge,now)?;
+            let service=c.origin.run.verifier.as_ref().ok_or(Fault::NoVerifier)?;
+            if !next.current_at(service,now) {return Err(Fault::SessionState);}Ok(())
+        },|c,(claim,next),now|Self::install(c,&claim,next,now))
+    }
+    fn install(c:&mut Connection,claim:&Arc<Claim>,next:Pending,now:Instant)->Result<()> {
+        c.sending(claim,Sending::Challenge,now)?;
+        let origin=Arc::clone(&c.origin);
+        let service=origin.run.verifier.as_ref().ok_or(Fault::NoVerifier)?;
+        let item=c.sessions.iter_mut().find(|x|Arc::ptr_eq(&x.reg.claim,claim)).ok_or(Fault::SessionState)?;
+        next.install_while_current(service,now,|pending|{
+            item.phase=Phase::WaitingAuth(pending);
+        }).ok_or(Fault::SessionState)
+    }
+    #[cfg(test)]
+    pub(in crate::smb) fn bytes(&self)->&[u8] {self.tx.bytes()}
+    #[cfg(test)]
+    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
+    #[cfg(test)]
+    fn submitted_at(self,now:Instant)->Result<()> {
+        let Self{tx,claim,next}=self;tx.publish_with(|c|Self::install(c,&claim,next,now))
     }
 }
 
 #[cfg(test)]
 #[path = "../../../test/smb/setup_challenge.rs"]
 pub(super) mod tests;
+
+#[cfg(test)]
+#[path = "../../../test/smb/setup_send.rs"]
+mod send_tests;

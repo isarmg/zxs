@@ -321,9 +321,28 @@ pub(in crate::smb) struct ReplySend<'a,'b,'p> {
 }
 impl ReplySend<'_,'_,'_> {
     pub(in crate::smb) fn bytes(&self) -> &[u8] { &self.actual[self.start..] }
+    /// These three SETUP emitters own different phase values. This helper
+    /// borrows only the originating stream and its already bound, immutable
+    /// single reply. Ownership of the pending value passes to install only
+    /// after the whole framed write. Failure drops the ledger/transport.
+    fn send_setup<T>(self,state:T,
+        check:impl Fn(&Connection,&T,std::time::Instant)->Result<()>,
+        install:impl FnOnce(&mut Connection,T,std::time::Instant)->Result<()>)->Result<()> {
+        if self.start!=0 || self.plan.batch.entries.len()!=1 || self.plan.batch.entries[0].cmd!=1 {
+            return Err(Fault::WrongReply);
+        }
+        let mut stream=self.plan.owner.stream.take().ok_or(Fault::Transport)?;
+        let c:&Connection=&*self.plan.owner;
+        check(c,&state,std::time::Instant::now())?;
+        stream.write_smb(self.bytes(),||check(c,&state,std::time::Instant::now()))?;
+        check(c,&state,std::time::Instant::now())?;
+        self.plan.owner.stream=Some(stream);
+        self.publish_with(|c|install(c,state,std::time::Instant::now()))
+    }
     /// Only after successful submission of these bytes on THIS transport.
     /// The exclusive borrow holds its ledger between selecting and publishing
     /// credits; no competing response can publish the same sequence range.
+    #[cfg(test)]
     fn submitted(self) -> Result<()> { self.publish_with(|_| Ok(())) }
     // Stage-specific callers can install only state already prepared for the
     // exact bytes. Any late failure drops this uncertain transport and clears

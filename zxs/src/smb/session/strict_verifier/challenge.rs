@@ -72,6 +72,15 @@ impl Pending {
         if Instant::now()>=until || !proof.current(service) {return Err(Rejected);}
         Ok(proof)
     }
+    /// The original challenge becomes usable only inside this short, same-
+    /// revision operation after the full network write. No I/O under the lock.
+    pub(in crate::smb) fn install_while_current<R>(self,service:&ChallengeService,now:Instant,
+        install:impl FnOnce(Self)->R)->Option<R> {
+        let original=Arc::clone(&self.revision);
+        service.while_current(&original,||{
+            (now.max(Instant::now())<self.expires).then(||install(self))
+        }).flatten()
+    }
     pub(in crate::smb) fn current_at(&self,service:&ChallengeService,now:Instant)->bool {
         now<self.expires && service.current(&self.revision)
     }

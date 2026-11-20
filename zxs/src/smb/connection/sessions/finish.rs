@@ -1,6 +1,6 @@
 //! Sole publisher of a freshly authenticated, signed, one-channel SMB
 //! session. A successful local return is never a Tree or a Core FILE grant.
-use super::{Claim,Local,Phase,Registration,proof::Proven};
+use super::{Claim,Local,Phase,Registration,Sending,proof::Proven};
 use crate::smb::{connection::{Connection,Fault,Origin,ReplySend,Result},session::BoundSession};
 use std::{sync::{Arc,Weak,atomic::Ordering},time::Instant};
 
@@ -38,29 +38,32 @@ impl Proven<'_> {
     }
 }
 impl FinalSend<'_,'_> {
-    /// Only the originating transport may write this exact immutable SMB
-    /// packet. Recheck before releasing bytes. An earlier borrow cannot prove
-    /// that the packet was submitted, or that the revision remains current.
-    pub(in crate::smb) fn bytes(&self)->Result<&[u8]> {
-        let c=&*self.tx.plan.owner;c.alive()?;
+    fn check(c:&Connection,claim:&Arc<Claim>,next:&BoundSession,now:Instant)->Result<()> {
+        c.sending(claim,Sending::Final,now)?;
         let service=c.origin.run.verifier.as_ref().ok_or(Fault::NoVerifier)?;
-        let item=c.sessions.iter().find(|v|Arc::ptr_eq(&v.reg.claim,&self.claim)).ok_or(Fault::SessionState)?;
-        if !matches!(&item.phase,Phase::SendingFinal) || !self.next.current(service) ||
-            !item.reg.current(&c.origin,Instant::now())? {return Err(Fault::SessionState);}
-        Ok(self.tx.bytes())
+        if !next.same_id(claim.id) || !next.current(service) {return Err(Fault::SessionState);}Ok(())
     }
-    /// Transport contract: only after complete submission on the original
-    /// transport. A partial or uncertain write drops the connection instead.
-    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
-    fn submitted_at(self,now:Instant)->Result<()> {
+    pub(in crate::smb::connection) fn send(self)->Result<()> {
         let Self{tx,claim,next}=self;
-        tx.publish_with(|c|{
-            let origin=Arc::clone(&c.origin);let guid=c.client.guid;let dialect=c.server.dialect;
-            let item=c.sessions.iter_mut().find(|v|Arc::ptr_eq(&v.reg.claim,&claim)).ok_or(Fault::SessionState)?;
-            if !matches!(&item.phase,Phase::SendingFinal) {return Err(Fault::SessionState);}
-            let Local{reg,phase}=item;
-            reg.publish(&origin,guid,dialect,now,next,|state|*phase=Phase::Valid(state))
-        })
+        tx.send_setup((claim,next),|c,(claim,next),now|Self::check(c,claim,next,now),
+            |c,(claim,next),now|Self::install(c,&claim,next,now))
+    }
+    fn install(c:&mut Connection,claim:&Arc<Claim>,next:BoundSession,now:Instant)->Result<()> {
+        let origin=Arc::clone(&c.origin);let guid=c.client.guid;let dialect=c.server.dialect;
+        let item=c.sessions.iter_mut().find(|v|Arc::ptr_eq(&v.reg.claim,claim)).ok_or(Fault::SessionState)?;
+        if !matches!(&item.phase,Phase::SendingFinal) {return Err(Fault::SessionState);}
+        let Local{reg,phase}=item;
+        reg.publish(&origin,guid,dialect,now,next,|state|*phase=Phase::Valid(state))
+    }
+    #[cfg(test)]
+    pub(in crate::smb) fn bytes(&self)->Result<&[u8]> {
+        Self::check(self.tx.plan.owner,&self.claim,&self.next,Instant::now())?;Ok(self.tx.bytes())
+    }
+    #[cfg(test)]
+    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
+    #[cfg(test)]
+    fn submitted_at(self,now:Instant)->Result<()> {
+        let Self{tx,claim,next}=self;tx.publish_with(|c|Self::install(c,&claim,next,now))
     }
 }
 impl Registration {

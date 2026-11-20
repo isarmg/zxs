@@ -249,3 +249,13 @@ impl challenge::ChallengeService {
         else {(e.one,e.three)}
     }
 }
+
+impl challenge::ChallengeService {
+    /// The same exact public list and three original NTLM fixture messages,
+    /// without an optimistic first token. No secret, generator or service.
+    pub(in crate::smb) fn fixture_selected_messages()->(Vec<u8>,Vec<u8>,Vec<u8>) {
+        let e=example(false);
+        (frame::init(&[frame::NTLM,frame::KRB],None),frame::resp(None,false,Some(&e.one),None),
+         frame::resp(None,false,Some(&e.three),Some(&e.client_list)))
+    }
+}

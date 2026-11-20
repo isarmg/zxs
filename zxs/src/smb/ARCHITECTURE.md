@@ -12,7 +12,11 @@
 
 未来已启用的服务所有者只能交付一条**尚未读取、独占**的 TCP/445 连接以及同次运行的私有实例。这里不建监听、不接收外部传来的已登录连接、不克隆或替换流；OS 提供的原对端 IP 只作连接元数据。[接入状态](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/91e2ec0b-530b-4558-aee0-2ca4d586f66a)与认证身份是两回事。每个未协商的入口在首次阻塞读之前与已协商连接共享最多 128 席；失败释放，成功将同一席转为原连接登记，不在注册锁内做 I/O。
 
-按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。后续 SESSION_SETUP 的真实传输提交与业务分派单独接线。源码夹具在 `src/test/smb/accepted.rs`，未运行或开 socket。
+按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。三类 SESSION_SETUP 回复的完整写入见下；后续原帧读取及业务分派单独接线。源码夹具在 `src/test/smb/accepted.rs`，未运行或开 socket。
+
+### SESSION_SETUP 不能手工确认发送
+
+机制选择 MORE、实际 Type 2 挑战 MORE 和最后经严格证明签出的成功回复，只能把原额度账绑定的完整 SMB 字节加上前缀，写入原连接独占的同一流。每次短写前及写完后检查原登记、阶段、期限与所需凭据代，不在网络写入时持注册或凭据锁。选择 MORE 并不证明账号，实际挑战要在原凭据代下才转为可用；最终成功仍在同一注册和原代原子发布后才是有效会话。部分写、完整最后一字节时已撤代、失败或流丢失均不补信用、不转阶段，终止原连接。仅测试保留人工拨动完成态的原单元夹具；`src/test/smb/setup_send.rs` 另以实际完整写口覆盖三种过程与失败。暂不表示已收到可信账号来源、接上全部入站命令或可挂载。
 
 ## 每条直连 TCP/445 的 MessageId 和 credits（未接监听）
 
