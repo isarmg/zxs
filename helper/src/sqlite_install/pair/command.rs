@@ -3,6 +3,7 @@
 use super::{Id,bad,domain::{create_layout,provision_fresh_domain},native_run::{self,Intent,Role},
     native_sql::{Original,transaction::ResultRow,web_reset}};
 use crate::{path_rules::Kind,sqlite_install::id};
+use sha2::{Digest,Sha256};
 use std::{ffi::{OsStr,OsString},io,path::PathBuf};
 
 #[derive(Debug)]
@@ -90,9 +91,8 @@ impl Setup{
                 Ok((0,format!("layout=prepared instance={}; no pool, SAM domain, accounts or service changed",hex(&instance))))
             }
             Form::Provision{system,pool,init,instance,op,reference}=>{
-                provision_fresh_domain(&system,pool,init,instance,op,reference)?;
-                Ok((0,format!("domain-binding=confirmed pool={} instance={} domain_op={}; no accounts or service started",
-                    hex(&pool),hex(&instance),hex(&op))))
+                let original=provision_fresh_domain(&system,pool,init,instance,op,reference)?;
+                Ok((0,domain_receipt(&pool,&instance,&op,&original)))
             }
             Form::Smb(selection)=>{
                 let id=selection.op;
@@ -111,7 +111,12 @@ impl Setup{
         }
     }
 }
-fn hex(x:&Id)->String{x.iter().map(|b|format!("{b:02x}")).collect()}
+fn hex(x:&[u8])->String{x.iter().map(|b|format!("{b:02x}")).collect()}
+fn domain_receipt(pool:&Id,instance:&Id,op:&Id,original:&[u8;128])->String{
+    let hash:[u8;32]=Sha256::digest(original).into();
+    format!("domain-binding=confirmed pool={} instance={} domain_op={} bound_sha256={}; no accounts or service started",
+        hex(pool),hex(instance),hex(op),hex(&hash))
+}
 fn receipt(op:&Id,role:&str,h:Original<ResultRow>)->io::Result<(u8,String)>{
     let r=match h{
         Original::Absent=>(1,format!("{role}=absent op={}; no effect is confirmed",hex(op))),
@@ -129,6 +134,13 @@ mod tests{
     fn k(n:u8)->String{hex(&[n;16])}
     fn root()->String{format!("--system /pool/system --pool {} --init {}",k(1),k(2))}
     fn view()->String{format!("{} --instance {} --domain-op {}",root(),k(3),k(4))}
+    #[test]fn successful_domain_receipt_exports_only_the_digest_of_the_verified_original(){
+        let original=[0x5a;128];
+        let reply=domain_receipt(&[1;16],&[2;16],&[3;16],&original);
+        assert_eq!(reply,format!("domain-binding=confirmed pool={} instance={} domain_op={} bound_sha256={}; no accounts or service started",
+            k(1),k(2),k(3),"349d65e9ba1de7b0a13f9a3eadcc5b0202f15d6008fe9477f2a7b80f6194b20f"));
+        assert!(!reply.contains(&"5a".repeat(128)));
+    }
     #[test]fn role_actions_never_accept_passwords_or_alternate_targets(){
         let birth=format!("enroll {} --op {} --approval {} --web-login web.admin --smb-login files.user",view(),k(5),k(6));
         let smb=format!("reset-smb {} --setup-op {} --op {} --approval {} --smb-account {} --smb-login files.user --previous-op {} --previous-generation 1",

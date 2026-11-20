@@ -1,6 +1,7 @@
 //! Explicit local disk panel. Pairing alone never authorizes a checker or repair.
 mod check;
 mod http;
+mod setup;
 mod view;
 
 use http::{Reply,Request};
@@ -34,6 +35,9 @@ impl Panel {
             session:None,expires:now+PAIR,closed:false,check:None}
     }
     fn handle(&mut self,r:Request,now:Instant)->Reply{
+        self.handle_with_guide(r,now,setup::observe)
+    }
+    fn handle_with_guide(&mut self,r:Request,now:Instant,guide:impl FnOnce()->Reply)->Reply{
         if self.closed||now>=self.expires{return Reply::plain(403,"会话已结束，请重新在终端启动。");}
         if r.host!=self.host{return Reply::plain(403,"需要本机准确的回环地址和端口。");}
         if r.method=="GET" && r.body.is_empty(){
@@ -80,6 +84,7 @@ impl Panel {
         match r.path.as_str() {
             "/api/copy/preview"=>match self.check.as_mut(){Some(c)=>c.preview(now),
                 None=>Reply::plain(403,"本次终端只开放观察，没有预选卷镜像。")},
+            "/api/install/guide"=>guide(),
             "/api/disks"=>view::disks(false),"/api/rates"=>view::disks(true),"/api/tools"=>view::tools(),
             "/api/close"=>{self.closed=true;Reply::plain(200,"不再接受操作；终端可能仍在等工作进程收尾。此回复不能作为升级许可。")},
             _=>Reply::plain(404,"没有该操作。"),
