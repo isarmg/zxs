@@ -277,8 +277,10 @@ def copy_body(source, size, target, *, leaves=None, observer=None):
             raise Rejected("short private member write")
     if written != size: raise Rejected("incomplete member")
     if target is not None:
+        if observer is not None: observer.check()
         target.flush()
         os.fsync(target.fileno())
+        if observer is not None: observer.check()
     return digest.hexdigest()
 
 
@@ -326,9 +328,10 @@ class _PathSink:
     def __init__(self, path): self.path = path
     def mkdir(self, name): (self.path / name).mkdir(mode=0o700, exist_ok=False)
     def file(self, name): return (self.path / name).open("xb")
-    def sync(self, rows):
+    def sync(self, rows, *, checkpoint=None):
         dirs = [self.path/name for name,(directory,_,__) in rows.items() if directory]
         for directory in sorted(dirs, key=lambda p:len(p.parts), reverse=True) + [self.path]:
+            if checkpoint is not None: checkpoint()
             fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try: os.fsync(fd)
             finally: os.close(fd)
@@ -367,6 +370,7 @@ def _read_checked(source, *, managed, sink, blocks=None, observer=None):
                 # Only private freshly created sinks are passed by our callers.
                 for name, (is_dir, _, _) in sorted(manifest.rows.items()):
                     if is_dir:
+                        if check is not None: check()
                         sink.mkdir(name)
             if observer is not None: observer.begin("members", manifest.total)
             for info, name, directory in items:
@@ -379,7 +383,10 @@ def _read_checked(source, *, managed, sink, blocks=None, observer=None):
                 if leaves is not None: blocks[name] = (blocks[name], bytes(leaves))
             if sink is not None:
                 # Child data/name durability precedes publishing a visible checkout.
-                sink.sync(manifest.rows)
+                if check is None: sink.sync(manifest.rows)
+                else:
+                    observer.begin("sync")
+                    sink.sync(manifest.rows, checkpoint=check)
             if observer is not None: observer.begin("identity")
             if marker and manifest.digest() != marker.tree:
                 raise Rejected("repository marker disagrees with the complete directory")

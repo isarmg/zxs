@@ -13,6 +13,57 @@ from ..model import Rejected, member_name, new_id
 from ..private_candidates import generation, held_candidates
 from ..publish import held_store, require_native_writer
 
+from .selection import Verification
+
+
+class CancelledCheckout(Rejected):
+    """A preparation stopped before making the new STATE name."""
+
+
+class _Preparation(Verification):
+    PHASE = dict(Verification.PHASE,
+                 capture="正在把所选原包写入私有准备目录",
+                 sync="正在同步私有准备材料",
+                 tree="正在读回并核验私有工作目录",
+                 record="正在准备新 STATE 的原记录",
+                 install="正在安装原 STATE 并完成这笔签出；现在不能撤销")
+
+    def __init__(self):
+        super().__init__()
+        self._irreversible = False
+        self._section = ""
+        self.begin("identity")
+
+    def check(self):
+        if self.cancelled:
+            raise CancelledCheckout("已取消本次签出。没有安装本次 STATE，也没有发布工作目录。"
+                                    "私有准备材料可能保留，不能按续作回执使用。")
+
+    def cancel(self):
+        with self._lock:
+            if self._irreversible: return False
+            self._stop.set()
+            return True
+
+    def section(self, label):
+        # Only the preparation worker changes phases or sections.
+        self._section = label + " · " if label else ""
+
+    def begin(self, phase, total=None):
+        self.check()
+        with self._lock:
+            self._progress = (self._section + self.PHASE[phase], 0, total)
+
+    def before_install(self):
+        # Only the cancellation decision is locked, not any syscall.
+        with self._lock:
+            self.check()
+            self._irreversible = True
+            self._progress = (self.PHASE["install"], 0, None)
+
+    def finish(self):
+        with self._lock: self._irreversible = True
+
 
 def available():
     return (sys.platform.startswith("linux") and os.name == "posix"
@@ -51,6 +102,7 @@ class CheckoutChoice:
         self.provisional = self.session = self.verified_sha = None
         self.publication = None  # Only the actual private STATE installation boundary sets this.
         self.used = self.closed = self.initial_opened = False
+        self.preparation = _Preparation()
         try:
             # Transfer the exact input already verified for display. Do not
             # access a slow/rebound archive name during this GUI-thread handoff.
@@ -62,8 +114,12 @@ class CheckoutChoice:
 
     def _close_picks(self):
         if not self.closed:
+            self.preparation.finish()
             self.closed = True
             self.stack.close()
+
+    def cancel(self):
+        return self.preparation.cancel()
 
     def close(self):
         # Explicit discard: any successfully created but not handed-off session is still ours.
@@ -159,7 +215,9 @@ class CheckoutChoice:
                 f"归档存储：{self.store.path}\n{hint}\n新 CLI 状态目录（STATE）：{self.state}\n{space}\n本次操作号：{self.operation}\n\n"
                 "只从首次核验时持有的原归档读取正文；本次仅写本机工作目录与私有 STATE，STORE 只读。"
                 "远端 STORE 可以作为本次读取来源；这不授予远端提交或同步资格。后续窗口提交仍要求已准入的本机 STORE。"
-                "两个新名称都不能已存在。请保留 STATE 与操作号；不覆盖、不自动换名或登记已有工作树。")
+                "两个新名称都不能已存在，不覆盖或自动换名。可以在安装新 STATE 前请求停止；"
+                "停下可能保留私有材料，不公开工作目录。"
+                "开始安装后只完成或查询原操作，不撤销；请保留 STATE 与操作号。")
 
     def check_roots(self):
         if self.closed: raise Rejected("原目录选择已经关闭")
@@ -187,8 +245,10 @@ class CheckoutChoice:
         # Only called after verified preparation. Keep the SEED DIR, never a raw SQLite file
         # descriptor: closing a second DB fd can cancel native POSIX locks in this process.
         self.check_new()
+        self.preparation.check()
         fd = os.dup(area.parent)
         self.stack.callback(os.close, fd)
+        self.preparation.before_install()
         self.publication = (fd, area.identity, db_generation)
 
     def check_registered(self, state):
@@ -246,12 +306,15 @@ class CheckoutChoice:
         if self.closed or self.used or self.state is None: raise Rejected("本次签出决定不能重复提交")
         self.used = True
         try:
+            self.preparation.check()
             self.check_new()
             result = opening.begin(self.snapshot.path, self.target.evidence.path, self.destination.name,
                                    self.store.path, self.state, automatic=False, expected=self.snapshot.exact,
                                    private_stage=True, selected=self)
             self.session, self.provisional = self.provisional, None  # Original transaction has returned.
             return result
+        except CancelledCheckout as error:
+            raise Rejected(describe(error)) from error  # Preserve the exact private seed note, if there is one.
         except Exception as error:
             raise Rejected(self._failure(error)) from error
         finally:

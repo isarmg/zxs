@@ -146,18 +146,24 @@ class _Output:
 
 
 @contextmanager
-def materialize(area, copy, marker, mount):
+def materialize(area, copy, marker, mount, *, observer=None):
+    if observer is not None:
+        observer.section("私有工作目录")
+        observer.begin("layout")
     area.check_file("original.zxs", *copy)
     with new_child(area, LEAF, mount) as stage:
         output = _Output(stage, mount)
         # Same original FD whose immutable generation, marker and whole-ZIP SHA
         # _save_original verified. No reopen of the source or output by a full path.
         with os.fdopen(copy[0], "rb", closefd=False) as package:
-            actual, _ = _read_checked(nullcontext(package), managed=True, sink=output)
+            actual, _ = _read_checked(nullcontext(package), managed=True, sink=output, observer=observer)
         area.check_file("original.zxs", *copy)
+        if observer is not None: observer.begin("tree")
         if (actual != marker or
-                observe_held(stage.parent, stage.identity, require_ids=True, check_held=output.check).digest() != marker.tree):
+                observe_held(stage.parent, stage.identity, require_ids=True, check_held=output.check,
+                             checkpoint=observer.check if observer is not None else None).digest() != marker.tree):
             raise Rejected("private checkout stage differs from the selected original archive")
+        if observer is not None: observer.begin("sync")
         check_named(area.parent, LEAF, stage.parent)
         os.fsync(area.parent)
         check_named(area.parent, LEAF, stage.parent)

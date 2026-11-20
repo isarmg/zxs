@@ -180,7 +180,7 @@ class Window(QMainWindow):
         if stop():
             self.inform("已请求取消。请等待正在进行的系统调用返回。")
         else:
-            self.inform("复制已开始正式发布或已经结束，不能撤销。正在核对本次结果。")
+            self.inform("操作已进入不可取消的阶段，或已结束。正在核对本次结果。")
 
     def progress_tick(self):
         if self.cancel_requested or self.transfer_progress is None: return

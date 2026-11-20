@@ -629,6 +629,108 @@ class OriginalDesktopCheckout(unittest.TestCase):
         seed, = self.private.iterdir()
         self.assertEqual((seed / "original.zxs").read_bytes(), self.loose.read_bytes())
 
+    def test_stopping_raw_copy_counts_only_captured_bytes_and_leaves_no_state_or_worktree(self):
+        from zipworkspace import opening
+        plan = self.choice()
+        positioned, count = os.pread, self.loose.stat().st_size
+        seen = []
+
+        def read(fd, size, offset):
+            self.assertEqual(fd, plan.source_fd)
+            data = positioned(fd, min(size, 17), offset)
+            if offset:
+                seen.append(plan.preparation.progress())
+                self.assertTrue(plan.cancel())
+            return data
+
+        with patch.object(os, "pread", side_effect=read), +             patch.object(opening, "rename_new_at", side_effect=AssertionError("no installation after cancel")), +             self.assertRaisesRegex(Rejected, "没有安装本次 STATE") as failure:
+            plan.run()
+        self.assertEqual(len(seen), 1)
+        self.assertIn("写入私有准备目录", seen[0][0])
+        self.assertEqual(seen[0][1:], (17, count))
+        seed, = self.private.iterdir()
+        self.assertEqual((seed/"original.zxs").read_bytes(), self.loose.read_bytes()[:17])
+        self.assertIn(str(seed), str(failure.exception))
+        self.assertNotIn("resume-checkout", str(failure.exception))
+        self.assertIsNone(plan.publication); self.assertIsNone(plan.take_session())
+        self.assertFalse(self.state.exists()); self.assertFalse(self.target.exists())
+        self.assertFalse(plan.cancel())
+        with self.assertRaises(Rejected): plan.run()
+
+    def test_stop_after_private_database_sync_prevents_even_the_first_native_rename(self):
+        from zipworkspace import opening
+        plan = self.choice()
+        native_sync = os.fsync
+        cancelled = []
+
+        def sync(fd):
+            native_sync(fd)
+            for seed in self.private.iterdir():
+                record = seed/"opening.sqlite"
+                if record.is_file() and os.path.samestat(os.fstat(fd), record.stat()):
+                    self.assertIn("准备新 STATE", plan.preparation.progress()[0])
+                    self.assertTrue(plan.cancel())
+                    cancelled.append(seed)
+
+        with patch.object(os, "fsync", side_effect=sync), +             patch.object(opening, "rename_new_at", side_effect=AssertionError("original STATE must not be installed")), +             self.assertRaisesRegex(Rejected, "已取消本次签出"):
+            plan.run()
+        seed, = cancelled
+        self.assertEqual(list(self.private.iterdir()), [seed])
+        self.assertTrue((seed/"opening.sqlite").is_file())
+        self.assertEqual((seed/"prepared-worktree/design/notes").read_bytes(), b"desktop selection")
+        self.assertIsNone(plan.publication)
+        self.assertFalse(self.state.exists()); self.assertFalse(self.target.exists())
+
+    def test_cancellation_at_the_native_install_does_not_suppress_the_original_result(self):
+        from zipworkspace import opening
+        plan = self.choice(keep_session=True)
+        native = opening.rename_new_at
+        attempted = []
+
+        def rename(fd, src, dst, **details):
+            if os.path.samestat(os.fstat(fd), self.private.stat()):
+                self.assertEqual(dst, self.state.name)
+                self.assertFalse(plan.cancel())
+                self.assertIn("现在不能撤销", plan.preparation.progress()[0])
+                attempted.append(dst)
+            return native(fd, src, dst, **details)
+
+        with patch.object(opening, "rename_new_at", side_effect=rename):
+            self.assertEqual(plan.run(), (self.target, self.marker))
+        self.assertEqual(attempted, [self.state.name])
+        self.assertEqual(opening.status(self.state)["operation"], plan.operation)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "attached")
+        self.assertIsNotNone(plan.session)
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
+    def test_stop_control_remains_available_outside_the_disabled_worktree_tab(self):
+        from concurrent.futures import Future
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        window = Window(); self.addCleanup(window.close)
+        pane, plan = window.archive.checkout, self.choice()
+        pane.set_snapshot(plan.snapshot)
+        pane.active = True
+        pending, jobs = Future(), []
+
+        def queue(work):
+            jobs.append(work)
+            return pending
+
+        with patch.object(window.pool, "submit", side_effect=queue):
+            pane._submit(plan, "准备签出", plan.run, lambda _: self.fail("nothing should attach"),
+                         preparation=plan.preparation)
+        self.assertFalse(window.tabs.isEnabled())
+        self.assertTrue(window.transfer_cancel.isEnabled())
+        window.transfer_cancel.click()
+        self.assertTrue(plan.preparation.cancelled)
+        with self.assertRaisesRegex(Rejected, "已取消本次签出") as failure: jobs[0]()
+        pending.set_exception(failure.exception); window.poll()
+        self.assertFalse(pane.active); self.assertFalse(pane.unresolved)
+        self.assertIsNone(pane.live); self.assertFalse(any(self.private.iterdir()))
+        self.assertIn("没有安装本次 STATE", pane.result.text())
+
     def test_lost_reply_after_real_cross_parent_move_names_only_original_durable_operation(self):
         from zipworkspace import opening, private_stage
         plan = self.choice(); native = opening.rename_new_at

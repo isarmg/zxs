@@ -37,9 +37,10 @@ def _parent(path):
 
 
 @contextmanager
-def _save_original(read, size, area, expected, operation):
+def _save_original(read, size, area, expected, operation, *, observer=None):
     """Copy to one exclusive leaf in the already selected private seed directory."""
     name = "original.zxs"
+    if observer is not None: observer.begin("capture", size)
     area.check_state()
     with writing("STATE", area.path/name, "独占建立原始包副本", operation, area.parent):
         fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -50,8 +51,10 @@ def _save_original(read, size, area, expected, operation):
             if area.check_file(name, fd)[2] != 0: raise Rejected("checkout copy is not new")
             left, h = size, hashlib.sha256()
             while left:
+                if observer is not None: observer.check()
                 count = min(CHUNK, left)
                 data = read(count)
+                if observer is not None: observer.check()
                 if not 0 < len(data) <= count: raise Rejected("incomplete copy of the selected checkout source")
                 try: count = out.write(data)
                 except OSError as error:
@@ -59,17 +62,22 @@ def _save_original(read, size, area, expected, operation):
                     raise
                 if count != len(data): raise Rejected("incomplete copy of the selected checkout source")
                 h.update(data); left -= len(data)
+                if observer is not None: observer.advance(len(data))
+            if observer is not None: observer.check()
             if read(1): raise Rejected("selected source grew")
             digest = h.hexdigest()
             if expected is not None and digest != expected.sha256: raise Rejected("selected original was replaced")
+            if observer is not None: observer.begin("sync")
             with writing("STATE", area.path/name, "刷新并同步原始包副本", operation, area.parent):
                 out.flush(); os.fsync(fd)
             observed = area.check_file(name, fd)
             if observed[2] != size: raise Rejected("checkout copy length changed")
-            marker = read_managed_document(out, display_name=name)[0]
-            if archive_sha(out) != digest or expected is not None and marker != expected.marker:
+            if observer is not None: observer.section("私有原包读回")
+            marker = read_managed_document(out, display_name=name, observer=observer)[0]
+            if archive_sha(out, observer=observer) != digest or expected is not None and marker != expected.marker:
                 raise Rejected("checkout copy does not represent the selected original")
             area.check_file(name, fd, observed)
+            if observer is not None: observer.begin("sync")
             with writing("STATE", area.path, "同步原始包副本的目录项", operation, area.parent):
                 os.fsync(area.parent)
             area.check_file(name, fd, observed)
@@ -96,6 +104,7 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
     source = Path(source).absolute()  # A different spelling isn't the selected catalog slot.
     if source.suffix.lower() != ".zxs": raise Rejected("repository checkout requires the .zxs extension")
     seed = None
+    observer = None if selected is None else selected.preparation
     try:
         with ExitStack() as held:
             with (named_document(source) if selected is None else nullcontext()) as inp:
@@ -108,6 +117,7 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
                     raise Rejected("checkout source is not the selected catalog entry")
                 if observed[2] > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
                     raise Rejected("checkout source is outside the archive size budget")
+                if observer is not None: observer.check()
                 if exclusive is None:
                     with writing("STATE", seed_parent, "建立私有签出准备目录", operation):
                         seed = Path(tempfile.mkdtemp(prefix=".zip-opening-", dir=seed_parent))
@@ -116,7 +126,8 @@ def _source(source, seed_parent, expected, *, exclusive=None, mount=None, select
                     seed = exclusive.path / (".zip-opening-" + new_id())
                     with writing("STATE", seed_parent, "建立私有签出准备目录", operation, exclusive.parent):
                         area = held.enter_context(staging.new_child(exclusive, seed.name, mount))
-                marker, digest, copy = held.enter_context(_save_original(read, observed[2], area, expected, operation))
+                marker, digest, copy = held.enter_context(
+                    _save_original(read, observed[2], area, expected, operation, observer=observer))
                 if selected is not None:
                     selected.check_source()
                     if marker != selected.snapshot.browser.commit:
@@ -329,8 +340,12 @@ def begin(source, parent, stem, store, state, *, automatic, expected=None, priva
             with writing("STATE", state, "写入、安装并同步首笔签出登记", operation, area.parent):
                 _install_initial(area, copy, image, state)
         else:
+            observer = None if selected is None else selected.preparation
             with writing("STATE", area.path/staging.LEAF, "在原私处解包并同步完整工作树", operation, area.parent):
-                stage = held.enter_context(staging.materialize(area, copy, marker, mount))
+                stage = held.enter_context(staging.materialize(area, copy, marker, mount, observer=observer))
+            if observer is not None:
+                observer.section("")
+                observer.begin("record")
             image = _initial_image(fields, prepared=(*stage.identity, *area.identity, base.identity[1]))
             if _parent(parent) != owner: raise Rejected("chosen target parent changed")
             staging.separate_roots(base.parent, target, store_root, mount)

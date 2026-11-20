@@ -193,7 +193,7 @@ class CheckoutPane(QWidget):
                         return
                     self.result.setText(f"本次操作：{plan.operation}\nSTATE：{plan.state}\n正在创建；请勿重复提交。")
                     self._submit(plan, "正在按原节点创建新的 CLI 工作树…", plan.run,
-                                 lambda result: self._complete(plan, result))
+                                 lambda result: self._complete(plan, result), preparation=plan.preparation)
                 except Exception as err:
                     self._discard(plan, str(err))
             self._submit(plan, "正在核验三处目录及新名称（只读）…", lambda: plan.review(leaf), reviewed)
@@ -214,10 +214,13 @@ class CheckoutPane(QWidget):
         self.owner.inform(message)
         self._release()
 
-    def _submit(self, plan, title, work, accept):
+    def _submit(self, plan, title, work, accept, *, preparation=None):
         def failed(err):
             self._discard(plan, str(err) or "任务未完成；未自动重试。")
-        future = self.owner.job(title, work, accept, failed=failed)
+        controls = ({} if preparation is None else
+                    {"cancel": plan.cancel, "cancel_text": "停止签出准备（安装 STATE 前）",
+                     "progress_report": preparation.progress})
+        future = self.owner.job(title, work, accept, failed=failed, **controls)
         if future is None:
             self._discard(plan, "另一个操作正在执行；本步骤未开始。")
             return
