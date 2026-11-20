@@ -2,20 +2,67 @@
 from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWidgets import QMainWindow, QProgressBar, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QMainWindow, QProgressBar,
+                               QTabWidget, QVBoxLayout, QWidget)
 
+from . import requested_snapshot
 from .archive_pane import ArchivePane
 from .import_pane import ImportPane
 from .widgets import button, label
 
 
+class SnapshotDrop(QFrame):
+    """Receive only a pathname posted by a drag. Do not grant move or open it here."""
+    def __init__(self, offer):
+        super().__init__()
+        self.offer = offer
+        self.setAcceptDrops(True)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setAccessibleName("拖入一份 .zxs 快照以在新窗口只读打开")
+        layout = QVBoxLayout(self)
+        layout.addWidget(label("将一份 .zxs 拖到这里，在新窗口确认后只读打开。"))
+
+    @staticmethod
+    def pathname(event):
+        if not event.possibleActions() & Qt.DropAction.CopyAction: return None
+        data = event.mimeData()
+        if not data.hasUrls() or data.data("text/uri-list").size() > 64 * 1024: return None
+        urls = data.urls()
+        if len(urls) != 1: return None
+        url = urls[0]
+        if (not url.isValid() or not url.isLocalFile() or url.authority() or
+                url.hasQuery() or url.hasFragment()):
+            return None
+        try: return requested_snapshot(url.toLocalFile())
+        except ValueError: return None
+
+    @staticmethod
+    def accept_name(event):
+        # Explorer/Finder may propose Move. Copy in the GUI protocol means
+        # the source keeps its file; Workspace itself only takes the name.
+        event.setDropAction(Qt.DropAction.CopyAction)
+        event.accept()
+
+    def dragEnterEvent(self, event):
+        if self.pathname(event) is None: event.ignore()
+        else: self.accept_name(event)
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        path = self.pathname(event)
+        if path is None or not self.offer(path): event.ignore()
+        else: self.accept_name(event)
+
+
 class DesktopWindows:
     """Each top-level window starts without inherited archive or writer authority."""
     def __init__(self):
-        self.windows = {}
+        self.windows, self.request = {}, None
 
     def open(self):
-        window = Window(new_window=self.open)
+        window = Window(new_window=self.open, offer_snapshot=self.offer_snapshot)
         token = object()
         self.windows[token] = window
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -23,9 +70,46 @@ class DesktopWindows:
         window.show()
         return window
 
+    def offer_snapshot(self, raw):
+        """Prompt in one isolated window, with no I/O before the user accepts."""
+        if self.request is not None: return False
+        path = requested_snapshot(raw)
+        window = self.open()
+        prompt = QDialog(window)
+        prompt.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        prompt.setObjectName("open-offered-snapshot")
+        prompt.setWindowTitle("在新窗口打开目录快照")
+        contents = QVBoxLayout(prompt)
+        contents.addWidget(label(f"将只读核验这一个 .zxs 的全部成员：\n{path!r}\n"
+                                 "不接管其他窗口的工作树，不写入或挂载。已挂载路径可能由系统访问远端。"))
+        choice = QDialogButtonBox(QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel)
+        accept = choice.button(QDialogButtonBox.StandardButton.Open)
+        accept.setText("只读打开并核验")
+        accept.setAutoDefault(False)
+        choice.button(QDialogButtonBox.StandardButton.Cancel).setDefault(True)
+        contents.addWidget(choice)
+        choice.accepted.connect(prompt.accept)
+        choice.rejected.connect(prompt.reject)
+        token = self.request = object()
+
+        def clear():
+            if self.request is not token: return False
+            self.request = None
+            return True
+
+        def finish(result):
+            if not clear() or not window.isVisible(): return
+            if result == QDialog.DialogCode.Accepted: window.archive.open_snapshot(path)
+            else: window.close()
+
+        prompt.finished.connect(finish)
+        prompt.destroyed.connect(lambda *_: clear())
+        prompt.open()
+        return True
+
 
 class Window(QMainWindow):
-    def __init__(self, *, new_window=None):
+    def __init__(self, *, new_window=None, offer_snapshot=None):
         super().__init__()
         self.setWindowTitle("ZIP Workspace")
         self.resize(1000, 700)
@@ -49,6 +133,9 @@ class Window(QMainWindow):
         open_snapshot.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         open_snapshot.triggered.connect(lambda _checked=False: self.archive.choose())
         files.addAction("关闭当前快照").triggered.connect(lambda _checked=False: self.archive.close_snapshot())
+        if offer_snapshot is not None:
+            self.snapshot_drop = SnapshotDrop(offer_snapshot)
+            layout.addWidget(self.snapshot_drop)
         layout.addWidget(self.tabs)
         if self.archive.mount is not None: layout.addWidget(self.archive.mount.banner)
         self.progress = QProgressBar()

@@ -136,7 +136,10 @@ class ArchivePane(QWidget):
         if self.owner.pending is not None: return
         if self.mount is not None: self.mount.changing()
         name, _ = QFileDialog.getOpenFileName(self, "选择要核验的目录快照", "", "目录快照 (*.zxs *.ZXS);;所有文件 (*)")
-        if not name: return
+        if name: self.open_snapshot(name)
+
+    def open_snapshot(self, name):
+        if self.owner.pending is not None: return
         self.clear_document()
         self.views.setCurrentIndex(0)
         self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name, retain=True), self.show_selection)

@@ -1,4 +1,4 @@
-"""Source fixtures for the desktop's read-only, original-member literal preview."""
+"""Source fixtures for held desktop browsing and original-member literal preview."""
 from concurrent.futures import Future
 import hashlib
 from importlib.util import find_spec
@@ -157,6 +157,83 @@ class DesktopTextPreview(unittest.TestCase):
         self.assertIsNone(left.archive.selection)
         self.assertTrue(chosen.held.closed)
         self.assertIsNone(right.archive.selection)
+
+    def test_external_startup_accepts_one_literal_absolute_path_without_file_io(self):
+        from zipworkspace.desktop import startup_snapshot
+
+        selected = str(self.root / "with spaces 目录.ZXS")
+        with patch.object(os, "stat", side_effect=AssertionError("no path IO before confirmation")):
+            self.assertIsNone(startup_snapshot([]))
+            self.assertEqual(startup_snapshot([selected]), selected)
+            for arguments in (["--platform", selected], ["-style:evil.zxs"], [selected, selected],
+                              ["some.zxs"], ["https://example.invalid/a.zxs"], ["file://" + selected],
+                              [str(self.root / "file.zip")], [selected + os.sep], [selected + "\x00"]):
+                with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                    startup_snapshot(arguments)
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_drop_cannot_move_or_read_before_consent_and_opens_only_an_isolated_window(self):
+        from PySide6.QtCore import QMimeData, QPointF, QUrl, Qt
+        from PySide6.QtGui import QDropEvent
+        from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
+        from zipworkspace.desktop.window import DesktopWindows
+
+        app = QApplication.instance() or QApplication([])
+        manager = DesktopWindows()
+        left = manager.open()
+        self.addCleanup(left.close)
+        original = self.archive(b"original window")
+        offered = self.archive(b"opened only by explicit assent")
+        offered.release_display()  # Only the real worker may acquire the new browsing handle.
+        left.archive.show_selection(original)
+
+        here = QUrl.fromLocalFile(str(offered.path))
+        copy, move = Qt.DropAction.CopyAction, Qt.DropAction.MoveAction
+
+        def drop(urls, actions=copy | move):
+            data = QMimeData()
+            data.setUrls(urls)
+            evt = QDropEvent(QPointF(5, 5), actions, data,
+                             Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier)
+            left.snapshot_drop.dropEvent(evt)
+            return evt.isAccepted(), evt.dropAction()
+
+        with patch.object(Selection, "open", side_effect=AssertionError("before readiness and consent")):
+            for urls, actions in (([here], move), ([here, here], copy),
+                                  ([QUrl("https://example.invalid/a.zxs")], copy),
+                                  ([QUrl("file://example.invalid/a.zxs")], copy),
+                                  ([QUrl.fromLocalFile(str(self.root / "file.zip"))], copy)):
+                self.assertFalse(drop(urls, actions)[0])
+            self.assertEqual(len(manager.windows), 1)
+            self.assertEqual(drop([here]), (True, copy))
+            cancelled = list(manager.windows.values())[-1]
+            self.assertIsNone(cancelled.pending)
+            self.assertFalse(drop([here])[0])  # don't enqueue repeated unattended offers
+            first = cancelled.findChild(QDialog, "open-offered-snapshot")
+            first.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Cancel).click()
+            self.assertFalse(cancelled.isVisible())
+            self.assertIsNone(manager.request)
+            self.assertEqual(drop([here]), (True, copy))
+            right = list(manager.windows.values())[-1]
+            self.addCleanup(right.close)
+            self.assertIsNone(right.archive.selection)
+            self.assertIsNone(right.pending)
+
+        self.assertIsNone(right.archive.store)
+        self.assertIsNone(right.archive.checkout.live)
+        confirm = right.findChild(QDialog, "open-offered-snapshot")
+        pending = Future()
+        with patch.object(right.pool, "submit", return_value=pending) as submit:
+            confirm.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Open).click()
+            submit.assert_called_once()
+        pending.set_result(submit.call_args.args[0]())
+        right.poll()
+        self.assertEqual(right.archive.selection.path, offered.path)
+        self.assertFalse(right.archive.selection.held.closed)
+        self.assertIs(left.archive.selection, original)
+        self.assertFalse(original.held.closed)
+        self.assertIsNone(manager.request)
 
     @unittest.skipUnless(os.name == "posix", "replace a read-open name on POSIX")
     def test_equal_bytes_replacement_is_not_the_held_original(self):
