@@ -97,9 +97,9 @@ QUERY_DIRECTORY 复用原真实会话、FID、FILE_LIST_DIRECTORY、输出额度
 
 普通路径可选已发表的沿级真实目录，例如 `盘目录\项目\稿件.xlsx`。原生目录 CREATE/OPEN_IF 只在当前 RW 和真实 ADD_SUBDIR 下发表；先装完整 DirectoryId 的不可用原生柄，收到同原双名同步及 SQL 确认的私端答复才可用。每个子级只按准确父和名称选择，不能把原案、历史的 FileId 锁或 R 路径转为新权限。目录页每行带独立类型，实际物理 inode 不过线；普通目录不宣告唯一64位号。支持原签名目录 GETINFO 的五个文件信息类；没有 ADS、原生重连或任意宿主路径。已确认 FILE 可用 FILE_OPEN 或 FILE_OPEN_IF 非截断打开。新生 FILE_CREATE/OPEN_IF 要求当前 RW 和原生添加权，使用本次真正原生 FSP/share-mode 后的私端 ACK 确认；完成前持 `closing` 禁止客户端操作，确认后才报告 FILE_WAS_CREATED。原私双名/SQL 待办不被任意下一请求认领。没有 ACK 不发原单；已确认后断线不报告确定失败。所有具名句柄各自保留原权限与独立 ShareAccess。
 
-### 根目录的原生 QUERY_INFO
+### 目录和 FILE 的原生 QUERY_INFO
 
-在已授权且已打开的普通逻辑根句柄上，支持 FileAllInformation、Basic、Standard、Internal 和 NetworkOpen 五类文件属性。复用 Samba 对请求长度、协商上限、credits 和 FID 的实际检查；用该原 TCON 的零行查询再核 SMB 当前代、共享与实际已持 F，待回调再核同一会话和根柄。由 Samba 原信息编码器返回逻辑目录、逻辑序号、零数据长度与未提供的时间；不回退宿主 stat，不返回底层文件系统信息、EA 或安全描述符。这包括 Linux SMB 客户端挂载时查询的根 FileAllInformation，并非已验证 Linux 可完整挂载；普通 FILE 的 QUERY_INFO 等其余类仍未接，也未执行源码用例。
+在已授权且已打开的普通逻辑根句柄上，支持 FileAllInformation、Basic、Standard、Internal 和 NetworkOpen 五类文件属性。复用 Samba 对请求长度、协商上限、credits 和 FID 的实际检查；用该原 TCON 的零行查询再核 SMB 当前代、共享与实际已持 F，待回调再核同一会话和根柄。由 Samba 原信息编码器返回逻辑目录、逻辑序号、零数据长度与未提供的时间；不回退宿主 stat，不返回底层文件系统信息、EA 或安全描述符。普通及回收 FILE 的已选真实柄也支持这五类，并可查询本柄实际已授 Access 与无重解析点的 AttributeTag。成员用同一私端的零字节确认再核原授权和已选图，不读正文，也不借 FILE_READ_DATA 授权；需要 READ_ATTRIBUTES 的类仍核该权。EOF 来自本柄实际显示的逻辑长度；分配字段和 CREATE/目录页一样是逻辑长度按 4 KiB 取整的 SMB 展示值（到带符号上限时用最大可表示的 4 KiB 倍数），不是宿主磁盘占用、目录配额或预留。普通名的 DeletePending 取真实原生共享状态；FileAll 不带路径或文件名。未知类、文件系统属性、EA、安全描述符等不借宿主实现。此片没有增加 CREATE 上下文或改变根打开策略，未验证 Linux/Windows/macOS 客户端挂载或应用保存，也未执行用例。
 
 ### 普通 FILE 的一次 SMB2 READ
 

@@ -202,6 +202,50 @@ static bool virtual_root_attributes(connection_struct *c)
 	return ok&&NT_STATUS_EQUAL(r,NT_STATUS_ACCESS_DENIED);
 }
 
+/* Native FILE result from the same formatter used after the zero-byte
+ * private proof. No VFS path, real fd, time, file system quota or EA here. */
+static bool virtual_member_attributes(connection_struct *c)
+{
+	struct smb_filename name={.base_name=discard_const_p(char,"Docs\\Folder\\draft.xls"),
+		.st={.st_ex_mode=S_IFREG,.st_ex_size=4097,.st_ex_ino=999,.st_ex_nlink=42}};
+	struct files_struct fsp={.conn=c,.fsp_name=&name,.file_id={.inode=300},
+		.access_mask=SEC_FILE_READ_ATTRIBUTE};
+	DATA_BLOB out=data_blob_null;NTSTATUS call=NT_STATUS_INTERNAL_ERROR;
+	NTSTATUS r=zxs_format_member_info(c,&fsp,FSCC_FILE_ALL_INFORMATION,104,false,&out,&call);
+	bool ok=NT_STATUS_IS_OK(r)&&NT_STATUS_IS_OK(call)&&out.length==104&&
+		BVAL(out.data,0)==0&&IVAL(out.data,32)==FILE_ATTRIBUTE_NORMAL&&
+		BVAL(out.data,40)==8192&&BVAL(out.data,48)==4097&&IVAL(out.data,56)==1&&
+		out.data[60]==0&&out.data[61]==0&&BVAL(out.data,64)==300&&
+		IVAL(out.data,72)==0&&IVAL(out.data,76)==SEC_FILE_READ_ATTRIBUTE&&
+		BVAL(out.data,96)==0; /* no name, four explicit padding bytes */
+	TALLOC_FREE(out.data);
+	r=zxs_format_member_info(c,&fsp,FSCC_FILE_ALL_INFORMATION,103,false,&out,&call);
+	ok=ok&&NT_STATUS_EQUAL(r,NT_STATUS_INFO_LENGTH_MISMATCH);
+	r=zxs_format_member_info(c,&fsp,FSCC_FILE_STANDARD_INFORMATION,24,true,&out,&call);
+	ok=ok&&NT_STATUS_IS_OK(r)&&NT_STATUS_IS_OK(call)&&out.length==24&&
+		BVAL(out.data,0)==8192&&BVAL(out.data,8)==4097&&IVAL(out.data,16)==0&&
+		out.data[20]==1&&out.data[21]==0;
+	TALLOC_FREE(out.data);
+	r=zxs_format_member_info(c,&fsp,FSCC_FILE_ATTRIBUTE_TAG_INFORMATION,8,false,&out,&call);
+	ok=ok&&NT_STATUS_IS_OK(r)&&NT_STATUS_IS_OK(call)&&out.length==8&&
+		IVAL(out.data,0)==FILE_ATTRIBUTE_NORMAL&&IVAL(out.data,4)==0;
+	TALLOC_FREE(out.data);
+	r=zxs_format_member_info(c,&fsp,FSCC_FILE_ACCESS_INFORMATION,4,false,&out,&call);
+	ok=ok&&NT_STATUS_IS_OK(r)&&NT_STATUS_IS_OK(call)&&out.length==4&&
+		IVAL(out.data,0)==SEC_FILE_READ_ATTRIBUTE;
+	TALLOC_FREE(out.data);
+	name.st.st_ex_size=INT64_MAX;
+	r=zxs_format_member_info(c,&fsp,FSCC_FILE_STANDARD_INFORMATION,24,false,&out,&call);
+	ok=ok&&NT_STATUS_IS_OK(r)&&NT_STATUS_IS_OK(call)&&out.length==24&&
+		BVAL(out.data,0)==(UINT64_C(0x7ffffffffffff000))&&BVAL(out.data,8)==(uint64_t)INT64_MAX;
+	TALLOC_FREE(out.data);
+	r=zxs_format_member_info(c,&fsp,FSCC_FILE_FULL_EA_INFORMATION,1024,false,&out,&call);
+	ok=ok&&NT_STATUS_EQUAL(r,NT_STATUS_NOT_SUPPORTED);
+	fsp.fsp_flags.is_directory=true;
+	r=zxs_format_member_info(c,&fsp,FSCC_FILE_INTERNAL_INFORMATION,8,false,&out,&call);
+	return ok&&NT_STATUS_EQUAL(r,NT_STATUS_ACCESS_DENIED);
+}
+
 /* The linked, real waiter is canceled through the same terminal function
  * as root CREATE/QUERY. The outer request survives the CLOSE/TDIS walk;
  * the real FSP's AIO list has already shrunk before its callback runs. */
@@ -448,7 +492,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
+	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

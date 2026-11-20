@@ -85,7 +85,17 @@ bool zxs_request_folder_current(struct smbd_smb2_request *,const struct zxs_smb_
 NTSTATUS zxs_folder_cut_recv(struct tevent_req *,struct zxs_smb_tree_cut *);
 bool zxs_root_info_class(uint8_t);
 bool zxs_root_info_needs_attributes(uint8_t);
+bool zxs_member_info_class(uint8_t);
+bool zxs_member_info_needs_attributes(uint8_t);
 NTSTATUS zxs_format_root_info(TALLOC_CTX *,struct files_struct *,uint8_t,uint32_t,DATA_BLOB *,NTSTATUS *);
+NTSTATUS zxs_format_member_info(TALLOC_CTX *,struct files_struct *,uint8_t,uint32_t,bool,DATA_BLOB *,NTSTATUS *);
+/* Virtual allocation as reported by CREATE, QUERY_DIRECTORY and QUERY_INFO.
+ * Not Linux allocated blocks, available capacity, or reserved storage. */
+static inline uint64_t zxs_logical_allocation(uint64_t eof)
+{
+	const uint64_t max=(uint64_t)INT64_MAX & ~UINT64_C(4095);
+	return eof>max?max:(eof+UINT64_C(4095)) & ~UINT64_C(4095);
+}
 NTSTATUS zxs_open_access(connection_struct *,bool directory,const struct zxs_smb_tree_cut *,uint32_t *desired,uint32_t share);
 struct tevent_req *zxs_work_send(TALLOC_CTX *,struct tevent_context *,struct tevent_req *outer,
 	struct smbd_smb2_request *,struct files_struct *,uint8_t,uint64_t,DATA_BLOB,bool settle,bool closing);

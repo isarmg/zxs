@@ -69,7 +69,7 @@ static uint64_t zxs_root_alloc(vfs_handle_struct *h,struct files_struct *fsp,con
 	if(h!=NULL && fsp!=NULL && fsp->conn!=NULL && fsp->fsp_name!=NULL && h==fsp->conn->vfs_handles && b==&fsp->fsp_name->st){
 		if(zxs_own_root_fsp(h,fsp))return 0;
 		struct zxs_read_fsp *f=zxs_find_read(fsp);
-		if(f!=NULL && f->tcon==fsp->conn->tcon)return (f->member.size+4095)&~UINT64_C(4095);
+		if(f!=NULL && f->tcon==fsp->conn->tcon)return zxs_logical_allocation(f->member.size);
 	}
 	errno=ENOSYS;return UINT64_MAX;
 }
