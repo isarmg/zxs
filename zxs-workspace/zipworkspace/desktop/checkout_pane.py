@@ -1,9 +1,13 @@
 """Explicitly launch a new CLI-format working tree; never open or discover previous state."""
-from PySide6.QtWidgets import QFileDialog, QInputDialog, QVBoxLayout, QWidget
+from contextlib import closing
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QVBoxLayout, QWidget
+
+from ..lifecycle import observe_live_changes
+from ..model import Rejected
 
 from .checkout_action import CheckoutChoice, available
 from .commit_controls import CommitControls
-from .widgets import button, confirm, label
+from .widgets import Table, button, confirm, label
 
 
 class CheckoutPane(QWidget):
@@ -11,7 +15,7 @@ class CheckoutPane(QWidget):
         super().__init__()
         self.owner, self.current_store = owner, current_store
         self.snapshot, self.active, self.unresolved = None, False, False
-        self.live = None
+        self.live = self.changes_dialog = None
         layout = QVBoxLayout(self)
         self.selected = label()
         layout.addWidget(self.selected)
@@ -23,6 +27,8 @@ class CheckoutPane(QWidget):
         layout.addWidget(self.result)
         self.refresh = button("刷新本窗口工作树的状态", self.refresh_live)
         layout.addWidget(self.refresh)
+        self.changes = button("查看工作目录相对基线的改动…", self.compare_live)
+        layout.addWidget(self.changes)
         self.details = label()
         layout.addWidget(self.details)
         self.commits = CommitControls(owner, self.refresh_live)
@@ -128,6 +134,7 @@ class CheckoutPane(QWidget):
             self.close_session()
             self.owner.inform("新的 CLI 工作树已创建；不会因为切换页面或关闭窗口而再次签出。")
             self.refresh.setEnabled(incoming is not None)
+            self.changes.setEnabled(incoming is not None)
             self.commits.set_session(incoming)
             self.live, incoming = incoming, None
         finally:
@@ -136,11 +143,84 @@ class CheckoutPane(QWidget):
         if self.live is not None: self.refresh_live()
 
     def close_session(self):
+        if self.changes_dialog is not None: self.changes_dialog.reject()
         self.commits.set_session(None)
         if self.live is not None: self.live.close()
         self.live = None
         self.refresh.setEnabled(False)
+        self.changes.setEnabled(False)
         self.details.setText("本窗口未持有当前工作树；不会按路径搜索或接管已有 STATE。")
+
+    def compare_live(self):
+        live = self.live
+        if (live is None or self.owner.pending is not None or self.active
+                or self.commits.running is not None or self.changes_dialog is not None): return
+        def done(outcome):
+            if self.live is not live: return
+            result, error = outcome
+            if error is not None:
+                self.owner.inform(f"未取得完整工作树对照：{error}。未启动冻结、提交或恢复。")
+                return
+            self.owner.inform("工作树只读对照已完成；后续编辑不会自动刷新。")
+            self.show_changes(live, *result)
+
+        loan = None
+        try:
+            loan = live.borrow()  # Only dup here; filesystem and catalog qualification are on the worker.
+            def read():
+                # Route a late refusal through the same session check as a late success.
+                try:
+                    with closing(loan): return observe_live_changes(loan), None
+                except Exception as error: return None, error
+            future = self.owner.job("正在只读核验实际基线及本次工作目录…", read, done)
+            if future is None: raise Rejected("另一个任务正在执行；未开始对照")
+        except BaseException as error:
+            if loan is not None: loan.close()
+            if not isinstance(error, Exception): raise
+            done((None, error))
+        else:
+            future.add_done_callback(lambda task: loan.close() if task.cancelled() else None)
+
+    def show_changes(self, live, marker, report):
+        # The read-only result exists only in this modal view. Once closed it
+        # cannot linger into a later commit, recovery, or baseline switch.
+        dialog = QDialog(self)
+        dialog.setWindowTitle("工作目录相对基线的改动")
+        dialog.resize(820, 510)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label(
+            f"原工作目录：{live.work}\n当前登记基线：分支 {marker.branch} · 第 {marker.generation} 代\n"
+            f"基线节点：{marker.operation}\n新增 {report.added} · 修改 {report.changed} · 缺少 {report.missing}。"
+            + ("本次未发现差异。" if not report.rows else "")))
+        layout.addWidget(label("这是一次观察，不是实时或原子快照，也不能代替提交前停止写入者。"))
+        table = Table(("相对路径", "差异", "登记基线", "工作目录"), "本工作树的只读改动")
+        layout.addWidget(table)
+        nav = QHBoxLayout(); layout.addLayout(nav)
+        number, count = 0, max(1, (len(report.rows) + report.PAGE - 1) // report.PAGE)
+        change = {"added":"新增", "changed":"修改", "missing":"缺少"}
+        def side(kind, size):
+            return f"文件 · {size:,} B" if kind == "file" else "目录" if kind == "directory" else "无"
+        def page(i):
+            nonlocal number
+            table.rows.replace(((r.path, change[r.change], side(r.before, r.before_bytes),
+                                 side(r.after, r.after_bytes)), r) for r in report.page(i))
+            number = i
+            at.setText(f"第 {i+1}/{count} 页")
+            back.setEnabled(i > 0); next_.setEnabled(i+1 < count)
+        back = button("上一页", lambda: page(number-1))
+        next_ = button("下一页", lambda: page(number+1))
+        at = label()
+        for item in (back, next_, at): nav.addWidget(item)
+        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        controls.rejected.connect(dialog.reject)
+        layout.addWidget(controls)
+        page(0)
+        def dismissed(_):
+            self.changes_dialog = None
+            dialog.deleteLater()
+        dialog.finished.connect(dismissed)
+        self.changes_dialog = dialog
+        dialog.open()  # Window-modal, no nested event loop.
 
     def refresh_live(self):
         live = self.live

@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import stat
-from .archive import read_archive
-from .freeze import observe_tree
+from .archive import read_archive, read_managed_document, stamp
+from .document import archive_sha, check_relative, native_identity, relative_document
+from .freeze import _distinct_roots, observe_held, observe_tree
 from .model import Rejected, check_id, new_id
 from .publish import digest_file, rename_new, sync_dir
 
@@ -72,6 +73,58 @@ def changes(state):
             return {"count": len(keys), "first_paths": keys[:100]}
         return {"added":report(cur.keys() - base.keys()), "removed":report(base.keys() - cur.keys()),
                 "changed":report(k for k in cur.keys() & base.keys() if cur[k] != base[k])}
+
+
+def _idle_live_base(live):
+    from .worktree import locked
+    with locked(live.state, read_only=True, live=live) as (con, row, _):
+        rec = instance(con)
+        live.check_instance(row, rec)
+        if (rec["phase"] != "visible" or rec["active"] is not None
+                or row["pending"] is not None or row["pending_sha"] is not None):
+            raise Rejected("原工作树必须可见且无待决操作；不提供本次对照")
+        return row["repo"], row["branch"], row["generation"], row["parent"], row["base_sha"]
+
+
+def observe_live_changes(live):
+    """One observation against this still-held CLI checkout's last recorded base."""
+    from .comparison import compare_manifests
+    from .private_freeze import mount_id
+    from .private_stage import same_mount
+
+    expected = _idle_live_base(live)
+    repo, branch, generation, node, digest = expected
+    if type(generation) is not int or not 0 < generation < (1 << 63) or not digest:
+        raise Rejected("没有可核验的已提交基线")
+    check_id(repo); check_id(branch); check_id(node)
+    name = f"{repo}.{branch}.{generation:016x}.zxs"
+    working_mount = same_mount(live.state_fd, live.work_fd)
+    store_mount = mount_id(live.store_fd)
+    _distinct_roots((live.work_fd, live.state_fd, live.store_fd))
+    work = native_identity(os.fstat(live.work_fd), stat.S_IFDIR)
+    excluded = {native_identity(os.fstat(fd), stat.S_IFDIR) for fd in (live.state_fd, live.store_fd)}
+
+    def work_member(_, child):
+        m = os.fstat(child)
+        if (m.st_dev, m.st_ino) in excluded or mount_id(child) != working_mount:
+            raise Rejected("工作目录含子挂载或 STATE/STORE 别名；没有完整观察")
+
+    # Both SQLite snapshots are short. Only original archive/work descriptors,
+    # not a SQLite transaction, stay held across the potentially large reads.
+    with relative_document(live.store_fd, name) as doc:
+        observed = stamp(doc)
+        if mount_id(doc.fileno()) != store_mount:
+            raise Rejected("基线归档不在原 STORE 挂载")
+        marker, base = read_managed_document(doc, display_name=name)
+        if ((marker.repo, marker.branch, marker.generation, marker.operation) != expected[:4]
+                or archive_sha(doc) != digest):
+            raise Rejected("STORE 原基线的节点或整包 SHA-256 不符")
+        check_relative(live.store_fd, name, doc, observed)
+        current = observe_held(live.work_fd, work, require_ids=True, check_held=work_member)
+        result = compare_manifests(base, current)
+        if _idle_live_base(live) != expected:
+            raise Rejected("观察期间原登记基线改变；请重新查看")
+    return marker, result
 
 
 def start(state, action):

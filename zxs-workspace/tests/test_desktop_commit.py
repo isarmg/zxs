@@ -1,4 +1,6 @@
 """Native Linux fixtures for explicit commit from one live desktop checkout, not a registry."""
+from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import replace
 import errno
 import hashlib
@@ -11,7 +13,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from zipworkspace import private_stage, publish, worktree
+from zipworkspace import lifecycle, private_stage, publish, worktree
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
 from zipworkspace.desktop.commit_choice import CommitChoice
@@ -68,6 +70,112 @@ class OriginalCheckoutFixture(unittest.TestCase):
         return live
 
 
+class LiveChangesEvidence(OriginalCheckoutFixture):
+    def test_changes_rejects_a_repacked_base_even_with_the_same_tree_and_marker(self):
+        self.original.rename(self.root/"kept-original.zxs")
+        snapshot(self.original, self.first, year=1981)
+        with patch.object(lifecycle, "observe_held", side_effect=AssertionError("no scan from the wrong base")):
+            with self.assertRaisesRegex(Rejected, "整包 SHA-256 不符"):
+                lifecycle.observe_live_changes(self.live)
+
+    def test_same_bytes_at_the_original_leaf_or_the_work_dir_are_not_adopted_mid_scan(self):
+        real = lifecycle.observe_held
+        archive_bytes = self.original.read_bytes()
+        for entry in (self.original, self.tree):
+            saved = self.root/("saved-" + entry.name)
+            def substitute(*args, **kw):
+                seen = real(*args, **kw)
+                entry.rename(saved)
+                if entry == self.tree: entry.mkdir()  # Same name, a different directory.
+                else: entry.write_bytes(archive_bytes)  # Same exact bytes, a different inode.
+                return seen
+            with self.subTest(entry=entry), patch.object(lifecycle, "observe_held", side_effect=substitute):
+                with self.assertRaises(Rejected): lifecycle.observe_live_changes(self.live)
+            self.assertTrue(saved.exists()); self.assertTrue(entry.exists())
+            if entry == self.tree: entry.rmdir()
+            else: entry.unlink()
+            saved.rename(entry)
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_window_poll_uses_the_original_session_for_success_and_failure_and_releases_the_loan(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import checkout_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        pane = win.archive.checkout
+        native = lifecycle.observe_live_changes
+        for stale, refused in ((False, False), (False, True), (True, False), (True, True)):
+            live = self.open_live(self.loose, f"view-{stale}-{refused}")
+            pane.live = live
+            pane.changes.setEnabled(True)
+            jobs, loans = [], []
+            def queue(work):
+                future = Future()
+                jobs.append((future, work))
+                return future
+            def read(loan):
+                loans.append(loan)
+                self.assertIsNot(loan, live)
+                if refused: raise Rejected("原读请求被拒")
+                return native(loan)
+            with self.subTest(stale=stale, refused=refused), \
+                 patch.object(win.pool, "submit", side_effect=queue), \
+                 patch.object(checkout_pane, "observe_live_changes", side_effect=read), \
+                 patch.object(pane, "show_changes") as opened:
+                pane.changes.click()
+                future, work = jobs.pop()
+                if stale:
+                    pane.close_session()
+                    win.inform("另一选择的提示")
+                self.assertTrue(future.set_running_or_notify_cancel())
+                future.set_result(work())
+                win.poll()
+                self.assertIsNone(win.pending)
+                self.assertTrue(loans[0].closed)
+                if stale:
+                    opened.assert_not_called()
+                    self.assertEqual(win.note.text(), "另一选择的提示")
+                elif refused:
+                    opened.assert_not_called()
+                    self.assertIn("原读请求被拒", win.note.text())
+                else:
+                    opened.assert_called_once()
+                    observed_live, marker, report = opened.call_args.args
+                    self.assertIs(observed_live, live)
+                    self.assertEqual(marker, self.first)
+                    self.assertEqual(report.rows, ())
+                pane.close_session()
+
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_worktree_dialog_pages_full_relative_names_and_closes_with_the_session(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from zipworkspace.desktop.widgets import Table
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        pane = win.archive.checkout; pane.live = self.live
+        for i in range(101): (self.tree/f"file-{i:03}").write_bytes(b"")
+        marker, report = lifecycle.observe_live_changes(self.live)
+        pane.show_changes(self.live, marker, report)
+        dialog = pane.changes_dialog
+        table = dialog.findChild(Table)
+        pages = {b.text(): b for b in dialog.findChildren(QPushButton)}
+        def names():
+            return [row.path for _, row in table.rows.rows]
+        self.assertTrue(dialog.isModal())
+        self.assertEqual(names(), [f"file-{i:03}" for i in range(100)])
+        pages["下一页"].click()
+        self.assertEqual(names(), ["file-100"])
+        self.assertFalse(pages["下一页"].isEnabled())
+        pages["上一页"].click()
+        self.assertEqual(names(), [f"file-{i:03}" for i in range(100)])
+        pane.close_session()
+        self.assertIsNone(pane.changes_dialog)
+        self.assertFalse(dialog.isVisible())
+
+
 class ExplicitDesktopCommit(OriginalCheckoutFixture):
     needs_freeze = True
 
@@ -101,6 +209,68 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         self.assertEqual(state, "completed"); self.assertIn("历史回执", message)
         self.assertFalse(path.exists())
         with self.assertRaises(Rejected): choice.run()
+
+    def test_changes_uses_the_current_committed_base_not_the_loose_checkout_and_holds_no_read_lock_during_scan(self):
+        story = self.tree/"story"
+        story.write_bytes(b"revised  story")
+        committed_path, marker = self.choice().run()
+        story.write_bytes(b"original story")  # Same size as revision two, but equal to revision one.
+        (self.tree/"empty").rmdir()
+        (self.tree/"new-empty").mkdir()
+        self.loose.rename(self.root/"original-loose-kept.zxs")
+        initial_status = self.live.status()
+        self.assertEqual(self.live.checkout_marker, self.first)
+        opened, active = [], []
+        real_locked, real_observe = worktree.locked, lifecycle.observe_held
+        @contextmanager
+        def read_only(state, *, read_only, live):
+            self.assertEqual((state, read_only, live), (self.state, True, self.live))
+            with real_locked(state, read_only=read_only, live=live) as data:
+                opened.append(data[1]["parent"]); active.append(True)
+                try: yield data
+                finally: active.pop()
+        def observe(*args, **kwargs):
+            self.assertFalse(active)
+            self.assertEqual(args[0], self.live.work_fd)
+            return real_observe(*args, **kwargs)
+        with patch.object(worktree, "locked", side_effect=read_only), \
+             patch.object(lifecycle, "observe_held", side_effect=observe), \
+             patch.object(worktree, "anonymous_capture", side_effect=AssertionError("no frozen copy")), \
+             patch.object(worktree, "finish", side_effect=AssertionError("no publish/recovery")), \
+             patch.object(os, "fsync", side_effect=AssertionError("read-only comparison")):
+            base, report = lifecycle.observe_live_changes(self.live)
+        self.assertEqual((base, opened), (marker, [marker.operation, marker.operation]))
+        self.assertEqual((report.added, report.changed, report.missing), (1, 1, 1))
+        self.assertEqual([(r.path, r.change, r.before, r.after) for r in report.page(0)], [
+            ("empty", "missing", "directory", None), ("new-empty", "added", None, "directory"),
+            ("story", "changed", "file", "file")])
+        self.assertEqual([(r.before_bytes, r.after_bytes) for r in report.rows[-1:]], [(14, 14)])
+        self.assertEqual(self.live.status(), initial_status)
+        self.assertEqual(set(self.store.iterdir()), {self.original, committed_path})
+
+    def test_changes_refuses_if_a_real_cli_commit_advances_the_base_during_the_scan(self):
+        (self.tree/"story").write_bytes(b"edited")
+        real = lifecycle.observe_held
+        advanced = []
+        def interleaved(*args, **kw):
+            seen = real(*args, **kw)
+            advanced.append(worktree.commit(self.state)[1].operation)
+            return seen
+        with patch.object(lifecycle, "observe_held", side_effect=interleaved):
+            with self.assertRaisesRegex(Rejected, "基线改变"):
+                lifecycle.observe_live_changes(self.live)
+        self.assertEqual(len(advanced), 1)
+        self.assertEqual(self.live.status()["base_operation"], advanced[0])
+
+    def test_changes_rejects_an_existing_pending_without_reading_work_files(self):
+        choice = self.choice()
+        with patch.object(worktree, "_publish", side_effect=publish.Uncertain("reply lost")):
+            with self.assertRaises(publish.Uncertain): choice.run()
+        with patch.object(lifecycle, "observe_held", side_effect=AssertionError("no scan")):
+            with self.assertRaisesRegex(Rejected, "无待决"):
+                lifecycle.observe_live_changes(self.live)
+        self.assertEqual(self.live.status()["pending_operation"], choice.operation)
+        self.assertEqual(list(self.store.iterdir()), [self.original])
 
     def test_missing_canonical_base_does_not_publish_the_visible_loose_document(self):
         self.original.unlink()

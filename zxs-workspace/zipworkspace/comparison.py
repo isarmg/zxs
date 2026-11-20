@@ -130,26 +130,40 @@ def _value(entry):
     return is_dir, 0 if is_dir else entry.size_bytes, entry.sha256
 
 
+def _rows(browser):
+    return ((path, _value(entry)) for path, entry in browser.verified_entries())
+
+
+def _side(value):
+    if value is None: return None, None
+    return ("directory", None) if value[0] else ("file", value[1])
+
+
 def _changes(before, other):
-    # This mapping belongs to this comparison. Work with exact ZIP paths, not
-    # the host's path spelling rules or a guessed rename/chronological direction.
+    # Consume the transient right-hand inventory. Use exact portable paths, not
+    # the host's spelling rules or a guessed rename/chronological direction.
     changes = []
     added = changed = missing = 0
-    for path, row in before.verified_entries():
+    for path, row in before:
         value = other.pop(path, None)
-        if value is None:
-            changes.append(Difference(path, "missing", row.kind, None, row.size_bytes, None))
-            missing += 1
-        elif value != _value(row):
-            changes.append(Difference(path, "changed", row.kind, "directory" if value[0] else "file",
-                                      row.size_bytes, None if value[0] else value[1]))
-            changed += 1
-    for path, (is_dir, size, _) in other.items():
-        changes.append(Difference(path, "added", None, "directory" if is_dir else "file",
-                                  None, None if is_dir else size))
+        if value == row: continue
+        change = "missing" if value is None else "changed"
+        missing += value is None
+        changed += value is not None
+        old_kind, old_size = _side(row)
+        new_kind, new_size = _side(value)
+        changes.append(Difference(path, change, old_kind, new_kind, old_size, new_size))
+    for path, value in other.items():
+        kind, size = _side(value)
+        changes.append(Difference(path, "added", None, kind, None, size))
         added += 1
     changes.sort(key=lambda item: item.path)
     return added, changed, missing, tuple(changes)
+
+
+def compare_manifests(base, observed):
+    """Compare verified content; consumes the transient observed Manifest's rows."""
+    return Changes(*_changes(base.rows.items(), observed.rows))
 
 
 def compare_snapshots(before, other):
@@ -158,7 +172,7 @@ def compare_snapshots(before, other):
         raise Rejected("the two snapshots are not from one archive repository")
     if before.commit.tree == other.commit.tree:
         return Changes(0, 0, 0, ())
-    return Changes(*_changes(before, {path: _value(entry) for path, entry in other.verified_entries()}))
+    return Changes(*_changes(_rows(before), dict(_rows(other))))
 
 
 def compare(selected, folder: Folder):
@@ -181,7 +195,7 @@ def _compare(selected, folder, darwin=None):
         # The scan does not return payload bytes. Its own Manifest rows can be
         # consumed without making a third copy of the path inventory.
         tree = folder.observe()
-        delta = _changes(selected.browser, tree.rows)
+        delta = _changes(_rows(selected.browser), tree.rows)
         folder.check()
         if darwin: darwin.local_object(selected.path, doc.fileno())
     return Report(*delta, folder.evidence, selected.browser.commit.operation)
