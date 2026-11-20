@@ -15,7 +15,11 @@ unsafe extern "C"{
     fn zxs_dir_take(tree:i32,worker:i32,limit:*mut u8,cursor:*mut u8)->i32;
     fn zxs_dir_reply(fd:i32,page:*const u8)->i32;
     fn zxs_member_reply(fd:i32,info:*const u8)->i32;
-    fn zxs_smb_ctl_live(fd:i32)->i32;
+    fn zxs_tree_events(tree:i32,session:i32,members:*const i32,n:usize,events:*mut u8)->i32;
+    fn zxs_member_held(member:i32)->i32;
+    fn zxs_read_take(member:i32,worker:i32,offset:*mut u64,count:*mut u32)->i32;
+    fn zxs_read_fill(fd:i32,data:*const u8,len:usize)->i32;
+    fn zxs_read_accept(fd:i32)->i32;
 }
 #[derive(Clone,Copy)]
 pub(super) struct Site<'a>{dir:&'a SystemDir,mark:&'a ControlRead,pool:PoolId,shape:[u8;32],binding:&'a File,stamp:&'a Stamp}
@@ -80,14 +84,34 @@ fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Resul
     let tree=Tree{session:&session,setting};
     // Exact member/header/working materials survive on this tree's one
     // worker. Closing the FSP closes its private peer. No thread, writable
-    // permit, SQLite connection or data transfer is created per open FILE.
+    // permit or SQLite connection is created per open FILE.
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
     const MAX_MEMBERS:usize=16;
     while live(&origin,&reply,0){
-        members.retain(|(endpoint,_)|unsafe{zxs_smb_ctl_live(endpoint.as_raw_fd())}==0);
-        match unsafe{zxs_smb_root_wait(reply.as_raw_fd(),origin.session.as_raw_fd(),500)}{
-            0=>continue,1=>{},_=>break,
+        let mut channels=[-1;MAX_MEMBERS];let mut events=[0u8;MAX_MEMBERS+1];
+        for(i,(m,_))in members.iter().enumerate(){channels[i]=m.as_raw_fd();}
+        if unsafe{zxs_tree_events(reply.as_raw_fd(),origin.session.as_raw_fd(),channels.as_ptr(),members.len(),events.as_mut_ptr())}<0{break;}
+        // One native FSP owns one exact Current. Replies have independent stream
+        // endpoints: one incomplete/error response cannot become another READ.
+        for i in (0..members.len()).rev(){
+            if !live(&origin,&reply,0){return Err(denied());}
+            match events[i+1]{
+                0=>continue,2=>{members.remove(i);continue;},1=>{},_=>return Err(denied())
+            }
+            let member=members[i].0.as_raw_fd();let (mut offset,mut count)=(0,0);
+            let fd=unsafe{zxs_read_take(member,origin.worker.as_raw_fd(),&mut offset,&mut count)};
+            if fd<0{members.remove(i);continue;} // malformed or dead FSP: retire only this member
+            let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+            if site.validate().is_err()||unsafe{zxs_member_held(member)}!=0{continue;}
+            let checked=members[i].1.smb_read_window(offset,count,|bytes|
+                os(unsafe{zxs_read_fill(answer.as_raw_fd(),bytes.as_ptr(),bytes.len())}));
+            // The private stream may contain tentative bytes, but its positive
+            // trailer is sent only after the *post*-copy original F/SQL checks.
+            if checked.is_ok() && site.validate().is_ok() && live(&origin,&reply,0) && unsafe{zxs_member_held(member)}==0{
+                let _=unsafe{zxs_read_accept(answer.as_raw_fd())};
+            }
         }
+        if events[0]==0{continue;}
         let mut limit=0;let mut cursor=[0;223];
         let fd=unsafe{zxs_dir_take(reply.as_raw_fd(),origin.worker.as_raw_fd(),&mut limit,cursor.as_mut_ptr())};
         if fd<0{break;} // original session remains usable on its other trees

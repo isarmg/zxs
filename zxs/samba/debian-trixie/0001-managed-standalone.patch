@@ -51,7 +51,7 @@
  		TALLOC_FREE(n2);
  
  		/* finish up the last section */
-@@ -4225,6 +4246,92 @@
+@@ -4225,6 +4246,94 @@
  		       true);  /* reinit_globals */
  }
  
@@ -105,6 +105,7 @@
 +		return false;
 +	}
 +	for (i = 0; i < lp_numservices(); i++) {
++		struct share_params lock_params = {.service=i};
 +		const char **vfs = NULL;
 +		const char *path = NULL;
 +		if (!lp_snum_ok(i)) {
@@ -130,7 +131,8 @@
 +		vfs = lp_vfs_objects(i);
 +		path = lp_path(mem_ctx,sub,i);
 +		if (!zxs_smb_direct_service(lp_const_servicename(i), lp_browseable(i), lp_nt_pipe_support(), lp_host_msdfs()) || lp_administrative_share(i) || strequal(lp_fstype(i), "IPC") ||
-+		    lp_change_notify() || lp_kernel_oplocks(i) ||
++		    lp_change_notify() || lp_kernel_oplocks(i) || !lp_locking(&lock_params) ||
++		    lp_strict_locking(&lock_params) != true || lp_posix_locking(&lock_params) ||
 +		    !zxs_empty(lp_magic_script(mem_ctx,sub,i)) || !zxs_empty(lp_magic_output(mem_ctx,sub,i)) ||
 +		    path==NULL || strcmp(path,ZXS_SMB_VIRTUAL_ROOT)!=0 ||
 +		    lp_case_sensitive(i) != true || vfs == NULL || vfs[0] == NULL ||
@@ -144,7 +146,7 @@
  /**
   * The typical lp_load wrapper with shares, loads global and
   * shares, including IPC, but does not force immediate
-@@ -4232,11 +4339,19 @@
+@@ -4232,11 +4341,19 @@
   */
  bool lp_load_with_shares(const char *file_name)
  {
@@ -2390,15 +2392,44 @@
  			  struct files_struct *dirfsp,
 --- a/source3/smbd/smb2_read.c
 +++ b/source3/smbd/smb2_read.c
-@@ -22,6 +22,7 @@
+@@ -22,6 +22,9 @@
  #include "system/filesys.h"
  #include "smbd/smbd.h"
  #include "smbd/globals.h"
-+#include "smbd/zxs_file_vfs.h"
++#include "smbd/zxs_directory.h"
++#include "locking/proto.h"
++#include "lib/async_req/async_sock.h"
  #include "../libcli/smb/smb_common.h"
  #include "libcli/security/security.h"
  #include "../lib/util/tevent_ntstatus.h"
-@@ -341,6 +342,10 @@
+@@ -97,6 +100,17 @@
+ 		return smbd_smb2_request_error(req, NT_STATUS_FILE_CLOSED);
+ 	}
+ 
++	/* A compound-related FSP must still be from this precise tree, including
++	 * across the IPC boundary. The private reader does not implement RDMA. */
++	if (zxs_file_vfs_active(req->tcon->compat) || zxs_file_vfs_active(in_fsp->conn)) {
++		if (in_fsp->conn!=req->tcon->compat || !zxs_file_vfs_active(in_fsp->conn)) {
++			return smbd_smb2_request_error(req,NT_STATUS_ACCESS_DENIED);
++		}
++		if (IVAL(inbody,0x24)!=0 || SVAL(inbody,0x2c)!=0 || SVAL(inbody,0x2e)!=0) {
++			return smbd_smb2_request_error(req,NT_STATUS_NOT_SUPPORTED);
++		}
++	}
++
+ 	subreq = smbd_smb2_read_send(req, req->sconn->ev_ctx,
+ 				     req, in_fsp,
+ 				     in_flags,
+@@ -186,6 +200,8 @@
+ 	struct smbd_smb2_request *smb2req;
+ 	struct smb_request *smbreq;
+ 	struct tevent_req *ipc_subreq;
++	struct tevent_req *zxs_wait;
++	struct aio_req_fsp_link *zxs_link;
+ 	files_struct *fsp;
+ 	uint8_t in_flags;
+ 	uint32_t in_length;
+@@ -341,6 +357,10 @@
  {
  	files_struct *fsp = state->fsp;
  
@@ -2409,35 +2440,29 @@
  	/*
  	 * We cannot use sendfile if...
  	 * We were not configured to do so OR
-@@ -549,13 +554,21 @@
- 		return tevent_req_post(req, ev);
+@@ -429,6 +449,8 @@
+ 	return NT_STATUS_OK;
+ }
+ 
++#include "smbd/zxs_native_read.inc"
++
+ static bool smbd_smb2_read_ipc_cancel(struct tevent_req *req)
+ {
+ 	struct smbd_smb2_read_state *state =
+@@ -544,6 +566,13 @@
+ 		return req;
  	}
  
--	status = schedule_smb2_aio_read(fsp->conn,
--				smbreq,
--				fsp,
--				state,
--				&state->out_data,
--				(off_t)in_offset,
--				(size_t)in_length);
++	/* This exact native virtual FSP has no POSIX data fd. Do not weaken
++	 * the stock CHECK_READ_SMB2 predicate for any other handle. */
 +	if (zxs_file_vfs_active(conn)) {
-+		/* Select the original buffered READ path, not an unimplemented
-+		 * PREAD_SEND or a silent fallback after it failed. Preserve the
-+		 * same range rejection Samba normally performs in the AIO gate. */
-+		status = vfs_valid_pread_range((off_t)in_offset,(size_t)in_length) ?
-+			NT_STATUS_RETRY : NT_STATUS_INVALID_PARAMETER;
-+	} else {
-+		status = schedule_smb2_aio_read(fsp->conn,
-+					smbreq,
-+					fsp,
-+					state,
-+					&state->out_data,
-+					(off_t)in_offset,
-+					(size_t)in_length);
++		if (zxs_read_begin(req,ev)) {return req;}
++		return tevent_req_post(req,ev);
 +	}
- 
- 	if (NT_STATUS_IS_OK(status)) {
- 		/*
++
+ 	if (!CHECK_READ_SMB2(fsp)) {
+ 		tevent_req_nterror(req, NT_STATUS_ACCESS_DENIED);
+ 		return tevent_req_post(req, ev);
 --- a/source3/smbd/fileio.c
 +++ b/source3/smbd/fileio.c
 @@ -23,6 +23,7 @@
@@ -3640,12 +3665,13 @@
  #include "source3/smbd/smbXsrv_session.h"
  #include "smbd/smbXsrv_open.h"
  #include "lib/param/param.h"
-@@ -3381,6 +3382,10 @@
+@@ -3381,6 +3382,11 @@
  		} else if (encryption_desired) {
  			req->do_encryption = true;
  		}
 +		if (zxs_file_vfs_active(req->tcon->compat) && opcode!=SMB2_OP_CREATE &&
-+		    opcode!=SMB2_OP_QUERY_DIRECTORY && opcode!=SMB2_OP_CLOSE && opcode!=SMB2_OP_TDIS) {
++		    opcode!=SMB2_OP_QUERY_DIRECTORY && opcode!=SMB2_OP_READ &&
++		    opcode!=SMB2_OP_CLOSE && opcode!=SMB2_OP_TDIS) {
 +			return smbd_smb2_request_error(req, NT_STATUS_NOT_SUPPORTED);
 +		}
  	} else if (call->need_session) {
@@ -3873,3 +3899,53 @@
  		tmp = check_magic(fsp);
  		status = ntstatus_keeperror(status, tmp);
  	}
+--- a/source3/locking/locking.c
++++ b/source3/locking/locking.c
+@@ -129,7 +129,8 @@
+ 	state->ret = brl_locktest(br_lck, state->plock, true);
+ }
+ 
+-bool strict_lock_check_default(files_struct *fsp, struct lock_struct *plock)
++static bool strict_lock_check_impl(files_struct *fsp,struct lock_struct *plock,
++                                   bool require_known_state)
+ {
+ 	struct byte_range_lock *br_lck;
+ 	int strict_locking = lp_strict_locking(fsp->conn->params);
+@@ -169,7 +170,9 @@
+ 
+ 	br_lck = brl_get_locks_readonly(fsp);
+ 	if (!br_lck) {
+-		return true;
++		/* NOT_FOUND already returns an empty lock record. NULL includes
++		 * an allocation, parse or lock-DB failure, not proof of no locks. */
++		return !require_known_state;
+ 	}
+ 	ret = brl_locktest(br_lck, plock, false);
+ 	if (!ret) {
+@@ -205,6 +208,16 @@
+ 		  fsp_str_dbg(fsp));
+ 
+ 	return ret;
++}
++
++bool strict_lock_check_default(files_struct *fsp, struct lock_struct *plock)
++{
++	return strict_lock_check_impl(fsp,plock,false);
++}
++
++bool zxs_strict_lock_check(files_struct *fsp, struct lock_struct *plock)
++{
++	return strict_lock_check_impl(fsp,plock,true);
+ }
+ 
+ /****************************************************************************
+--- a/source3/locking/proto.h
++++ b/source3/locking/proto.h
+@@ -117,6 +117,7 @@
+ 				enum brl_type lock_type,
+ 				enum brl_flavour lock_flav,
+ 				struct lock_struct *plock);
++bool zxs_strict_lock_check(files_struct *fsp, struct lock_struct *plock);
+ bool strict_lock_check_default(files_struct *fsp,
+ 			       struct lock_struct *plock);
+ NTSTATUS query_lock(files_struct *fsp,

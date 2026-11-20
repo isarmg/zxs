@@ -7,6 +7,7 @@ fn main() {
     println!("cargo:rerun-if-changed=samba/debian-trixie/new/source3/param/zxs_smb_control.h");
     println!("cargo:rerun-if-changed=samba/debian-trixie/new/source3/param/zxs_smb_workers.inc");
     println!("cargo:rerun-if-changed=samba/debian-trixie/new/source3/param/zxs_directory_wire.inc");
+    println!("cargo:rerun-if-changed=samba/debian-trixie/new/source3/param/zxs_read_wire.inc");
     assert_eq!(env::var("CARGO_CFG_TARGET_OS").unwrap(), "linux", "ZXS requires Linux");
     for p in [CONTROL,"src/linux.c","src/sqlite_read.c","vendor/sqlite/sqlite3.c","vendor/sqlite/sqlite3.h"]{
         println!("cargo:rerun-if-changed={p}");

@@ -70,19 +70,20 @@ static bool opt(int fd,int k,int expected)
     int v=-1;socklen_t n=sizeof(v);
     return getsockopt(fd,SOL_SOCKET,k,&v,&n)==0 && n==sizeof(v) && v==expected;
 }
-static int claim_socket(int fd,bool root_creator)
+static int claim_socket_kind(int fd,bool root_creator,int kind)
 {
     int flags=fcntl(fd,F_GETFD);struct ucred creator={0};socklen_t n=sizeof(creator);
     /* With a socketpair SO_PEERCRED identifies the creator, NOT the exec'd
      * peer. Identity and sole delivery of opposite endpoints are the trusted
      * launcher's job; there is no connectable name or UID-only guest path. */
     int open_flags=fcntl(fd,F_GETFL);
-    if(flags<0 || open_flags<0 || (open_flags&O_NONBLOCK)!=0 || !opt(fd,SO_TYPE,SOCK_SEQPACKET) || !opt(fd,SO_ACCEPTCONN,0) || !opt(fd,SO_PASSCRED,0) || !opt(fd,SO_PASSPIDFD,0) ||
+    if(flags<0 || open_flags<0 || (open_flags&O_NONBLOCK)!=0 || !opt(fd,SO_TYPE,kind) || !opt(fd,SO_ACCEPTCONN,0) || !opt(fd,SO_PASSCRED,0) || !opt(fd,SO_PASSPIDFD,0) ||
        !unnamed(fd,false) || !unnamed(fd,true) ||
        getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&creator,&n)<0 || n!=sizeof(creator) ||
        (root_creator && creator.uid!=0)) {return bad();}
     return fcntl(fd,F_SETFD,flags|FD_CLOEXEC);
 }
+static int claim_socket(int fd,bool root){return claim_socket_kind(fd,root,SOCK_SEQPACKET);}
 int zxs_smb_ctl_claim(int fd){return claim_socket(fd,true);}
 static int millis(int64_t *out)
 {
@@ -100,7 +101,7 @@ static bool life_reader(int fd)
            fstat(fd,&st)==0 && S_ISFIFO(st.st_mode) && fstatfs(fd,&fs)==0 &&
            (unsigned long)fs.f_type==PIPEFS_MAGIC;
 }
-enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD, ZXS_DATA_FD };
+enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD, ZXS_DATA_FD, ZXS_READ_STREAM };
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
@@ -149,7 +150,8 @@ static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,in
                 }
                 if(extra || (take!=NULL && (received<0 ||
                    (kind==ZXS_LIFE_FD ? !life_reader(received) :
-                    (kind==ZXS_DATA_FD ? claim_socket(received,false)!=0 : (kind!=ZXS_TREE_FD || zxs_smb_ctl_claim(received)!=0))))) ||
+                    (kind==ZXS_READ_STREAM ? claim_socket_kind(received,false,SOCK_STREAM)!=0 :
+                     (kind==ZXS_DATA_FD ? claim_socket(received,false)!=0 : (kind!=ZXS_TREE_FD || zxs_smb_ctl_claim(received)!=0)))))) ||
                    (size_t)got!=len){
                     if(received>=0)close(received);
                     return bad();
@@ -410,3 +412,4 @@ int zxs_smb_root_release(struct zxs_smb_tree_cut *owned)
 }
 
 #include "zxs_directory_wire.inc"
+#include "zxs_read_wire.inc"

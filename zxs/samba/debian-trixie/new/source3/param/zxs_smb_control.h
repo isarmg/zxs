@@ -74,6 +74,17 @@ int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[223]);
 #define ZXS_MEMBER_BYTES 88
 struct zxs_member_info {uint8_t pool[16],volume[16],entry[16],file[16];uint64_t number,revision,size;};
 int zxs_member_query(int tree,const uint8_t *name,size_t n);
+#define ZXS_READ_HEADER "ZXS-READ/DATA-1"
+#define ZXS_READ_COMMIT "ZXS-READ/DONE-1"
+#define ZXS_READ_LIMIT UINT32_C(0xffff00)
+/* One original member FSP, one request, one private bounded reply stream.
+ * Header/data are tentative; only the exact terminal marker releases a reply. */
+int zxs_read_query(int member,uint64_t offset,uint32_t count);
+int zxs_read_take(int member,int worker,uint64_t *offset,uint32_t *count);
+int zxs_read_fill(int answer,const uint8_t *bytes,size_t n);
+int zxs_read_accept(int answer);
+int zxs_member_held(int fd);
+int zxs_tree_events(int tree,int session,const int *members,size_t n,uint8_t *events);
 int zxs_member_reply(int fd,const uint8_t data[ZXS_MEMBER_BYTES]);
 int zxs_member_result(int fd,const struct zxs_smb_tree_cut *root,struct zxs_member_info *out);
 int zxs_dir_reply(int fd,const uint8_t data[ZXS_DIR_PACKET-16]);

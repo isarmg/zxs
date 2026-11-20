@@ -7,6 +7,7 @@
 #include "../lib/util/tevent_ntstatus.h"
 #include "../lib/async_req/async_sock.h"
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include "smbd/fd_handle.h"
 #include "param/loadparm.h"
 #include "lib/substitute.h"
@@ -162,6 +163,48 @@ out:
 	if(!ok && req!=NULL && seen.callbacks==0)TALLOC_FREE(req);
 	conn->sconn=NULL;close(sv[0]);close(sv[1]);TALLOC_FREE(ctx);return ok;
 }
+/* Drive the exact tevent receiver installed by SMB2 READ. All payloads are
+ * public fixture bytes. Only one of two reads sharing a native FSP gets
+ * a completion trailer; its sibling cannot borrow that result. */
+#include "smbd/zxs_read_delivery.inc"
+static bool private_delivery(TALLOC_CTX *parent)
+{
+    TALLOC_CTX *ctx=talloc_new(parent);
+    struct tevent_context *ev=tevent_context_init(ctx);
+    int m[2],pid=-1,x=-1,y=-1;bool ok=false;
+    const uint64_t at=UINT64_C(0x123456789);
+    uint64_t off=0;uint32_t len=0;
+    struct tevent_req *a=NULL,*b=NULL,*c=NULL;
+    uint8_t *bytes=NULL;size_t size=22;NTSTATUS status;
+    if(ctx==NULL || ev==NULL || socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,m)!=0){
+        TALLOC_FREE(ctx);return false;
+    }
+    pid=(int)syscall(SYS_pidfd_open,getpid(),0);if(pid<0)goto out;
+    if(zxs_read_query(m[0],(uint64_t)INT64_MAX,1)>=0 || zxs_read_query(m[0],0,ZXS_READ_LIMIT+1)>=0)goto out;
+    a=zxs_delivery_send(ctx,ev,m[0],at,3,3);
+    b=zxs_delivery_send(ctx,ev,m[0],0,0,0);
+    if(a==NULL || b==NULL || zxs_member_held(m[1])!=0)goto out;
+    x=zxs_read_take(m[1],pid,&off,&len);if(x<0 || off!=at || len!=3)goto out;
+    y=zxs_read_take(m[1],pid,&off,&len);if(y<0 || off!=0 || len!=0)goto out;
+    if(zxs_read_fill(x,(const uint8_t *)"abc",3)!=0 || zxs_read_fill(y,NULL,0)!=0 || zxs_read_accept(y)!=0)goto out;
+    close(y);y=-1;close(x);x=-1; /* x was revoked after copying, before release */
+    if(!tevent_req_poll(b,ev) || !NT_STATUS_IS_OK(zxs_delivery_recv(b,ctx,&bytes,&size)) || size!=0)goto out;
+    TALLOC_FREE(bytes);size=22;
+    if(!tevent_req_poll(a,ev))goto out;
+    status=zxs_delivery_recv(a,ctx,&bytes,&size);
+    if(!NT_STATUS_EQUAL(status,NT_STATUS_ACCESS_DENIED) || bytes!=NULL || size!=22)goto out;
+    c=zxs_delivery_send(ctx,ev,m[0],7,9,3);if(c==NULL)goto out; /* short read at EOF */
+    x=zxs_read_take(m[1],pid,&off,&len);if(x<0 || off!=7 || len!=9)goto out;
+    if(zxs_read_fill(x,(const uint8_t *)"xyz",3)!=0 || zxs_read_accept(x)!=0)goto out;
+    close(x);x=-1;
+    ok=tevent_req_poll(c,ev) && NT_STATUS_IS_OK(zxs_delivery_recv(c,ctx,&bytes,&size)) &&
+        size==3 && bytes!=NULL && memcmp(bytes,"xyz",3)==0;
+out:
+    if(x>=0)close(x);
+    if(y>=0)close(y);
+    if(pid>=0)close(pid);
+    close(m[0]);close(m[1]);TALLOC_FREE(ctx);return ok;
+}
 int main(void)
 {
 	const char *file[] = {"zxs_file", NULL};
@@ -240,7 +283,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!native_cancel_walk(conn) || !native_directory_projection(conn) || !only_the_attached_virtual_root(conn,lower)) { return 1; }
+	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_directory_projection(conn) || !only_the_attached_virtual_root(conn,lower)) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }
