@@ -2,10 +2,12 @@
 //! send capability. The owner must pair the command and status with the
 //! original authenticated request, set final compound offsets/padding, and
 //! sign that exact member, including its header, before any transmission.
-use crate::smb::backend::{CloseCompletion, ReadCompletion, ReadFault};
+use crate::smb::backend::{CloseCompletion, FlushCompletion, ReadCompletion, ReadFault, WriteCompletion, WriteFault};
 
 const READ: u16 = 0x0008;
 const CLOSE: u16 = 0x0006;
+const WRITE: u16 = 0x0009;
+const FLUSH: u16 = 0x0007;
 
 // MS-SMB2 §§2.2.2 and 3.3.4.4: StructureSize 9, eight actual fixed
 // bytes, ErrorContextCount = ByteCount = 0. Only for the explicit
@@ -14,8 +16,9 @@ const NO_ERROR_DATA: [u8; 8] = [9, 0, 0, 0, 0, 0, 0, 0];
 
 #[derive(Clone, Copy)]
 #[repr(u32)]
-enum PlainReadError {
+enum PlainError {
     EndOfFile = 0xc000_0011,
+    InvalidParameter = 0xc000_000d,
     AccessDenied = 0xc000_0022,
     InsufficientResources = 0xc000_009a,
     FileIsADirectory = 0xc000_00ba,
@@ -26,7 +29,9 @@ enum PlainReadError {
 enum Form<'a> {
     Read { fixed: [u8; 16], data: &'a [u8] },
     Close([u8; 60]),
-    ReadError(PlainReadError),
+    Write([u8; 16]),
+    Flush([u8; 4]),
+    Failure { command: u16, code: PlainError },
 }
 
 /// An immutable command/status/body tuple. Success cannot be built from
@@ -45,21 +50,21 @@ impl<'a> FileReply<'a> {
             Ok(receipt) => receipt,
             Err(fault) => {
                 let status = match fault {
-                    ReadFault::EndOfFile => PlainReadError::EndOfFile,
-                    ReadFault::AccessDenied => PlainReadError::AccessDenied,
-                    ReadFault::ResponseSpace => PlainReadError::InsufficientResources,
-                    ReadFault::NotDataFile => PlainReadError::FileIsADirectory,
-                    ReadFault::UnbufferedUnavailable => PlainReadError::NotSupported,
-                    ReadFault::InconsistentLength => PlainReadError::InternalError,
+                    ReadFault::EndOfFile => PlainError::EndOfFile,
+                    ReadFault::AccessDenied => PlainError::AccessDenied,
+                    ReadFault::ResponseSpace => PlainError::InsufficientResources,
+                    ReadFault::NotDataFile => PlainError::FileIsADirectory,
+                    ReadFault::UnbufferedUnavailable => PlainError::NotSupported,
+                    ReadFault::InconsistentLength => PlainError::InternalError,
                     ReadFault::Original(e) => return Err(e),
                 };
-                return Ok(Self(Form::ReadError(status)));
+                return Ok(Self(Form::Failure { command: READ, code: status }));
             }
         };
         let data = receipt.data();
         let count = receipt.count();
         if u32::try_from(data.len()).ok() != Some(count.get()) {
-            return Ok(Self(Form::ReadError(PlainReadError::InternalError)));
+            return Ok(Self(Form::Failure { command: READ, code: PlainError::InternalError }));
         }
         let mut fixed = [0; 16];
         fixed[..2].copy_from_slice(&17u16.to_le_bytes());
@@ -87,15 +92,61 @@ impl<'a> FileReply<'a> {
         Self(Form::Close(fixed))
     }
 
+    /// MS-SMB2 §§2.2.22 and 3.3.5.13. Count is the checked accepted count
+    /// from the original writer, never the request's unverified Length.
+    pub(in crate::smb) fn write<E>(
+        result: &Result<WriteCompletion, WriteFault<E>>,
+    ) -> Result<Self, &WriteFault<E>> {
+        let receipt = match result {
+            Ok(receipt) => receipt,
+            Err(fault) => return Self::write_failure(WRITE, fault),
+        };
+        let mut fixed = [0; 16];
+        fixed[..2].copy_from_slice(&17u16.to_le_bytes());
+        fixed[4..8].copy_from_slice(&receipt.count().to_le_bytes());
+        // Remaining, reserved and WriteChannelInfo are zero.
+        Ok(Self(Form::Write(fixed)))
+    }
+
+    /// MS-SMB2 §§2.2.18 and 3.3.5.11. No success before the actual flush.
+    pub(in crate::smb) fn flush<E>(
+        result: &Result<FlushCompletion, WriteFault<E>>,
+    ) -> Result<Self, &WriteFault<E>> {
+        match result {
+            Ok(_checked) => Ok(Self(Form::Flush([4, 0, 0, 0]))),
+            Err(fault) => Self::write_failure(FLUSH, fault),
+        }
+    }
+
+    fn write_failure<E>(command: u16, fault: &WriteFault<E>) -> Result<Self, &WriteFault<E>> {
+        let code = match fault {
+            WriteFault::AccessDenied => PlainError::AccessDenied,
+            WriteFault::NotDataFile => PlainError::FileIsADirectory,
+            WriteFault::UnbufferedUnavailable | WriteFault::DirectoryFlushUnavailable => PlainError::NotSupported,
+            WriteFault::InvalidRange | WriteFault::InvalidWriteCombination => PlainError::InvalidParameter,
+            WriteFault::InconsistentLength => PlainError::InternalError,
+            // Keep failed mutation and failed confirmation apart. Only the
+            // actual adapter knows their NTSTATUS and recovery semantics.
+            WriteFault::Original(_) | WriteFault::Confirmation(_) => return Err(fault),
+        };
+        Ok(Self(Form::Failure { command, code }))
+    }
+
     pub(in crate::smb) fn command(&self) -> u16 {
-        match &self.0 { Form::Read { .. } | Form::ReadError(_) => READ, Form::Close(_) => CLOSE }
+        match &self.0 {
+            Form::Read { .. } => READ,
+            Form::Close(_) => CLOSE,
+            Form::Write(_) => WRITE,
+            Form::Flush(_) => FLUSH,
+            Form::Failure { command, .. } => *command,
+        }
     }
 
     /// NTSTATUS for the eventual SMB2 response header, not part of its body.
     pub(in crate::smb) fn status(&self) -> u32 {
         match &self.0 {
-            Form::ReadError(code) => *code as u32,
-            _ => 0, // STATUS_SUCCESS, only for the receipt-derived forms
+            Form::Failure { code, .. } => *code as u32,
+            Form::Read { .. } | Form::Close(_) | Form::Write(_) | Form::Flush(_) => 0,
         }
     }
 
@@ -104,7 +155,9 @@ impl<'a> FileReply<'a> {
         match &self.0 {
             Form::Read { fixed, data } => (fixed.as_slice(), data),
             Form::Close(body) => (body.as_slice(), &[]),
-            Form::ReadError(_) => (&NO_ERROR_DATA, &[]),
+            Form::Write(body) => (body.as_slice(), &[]),
+            Form::Flush(body) => (body.as_slice(), &[]),
+            Form::Failure { .. } => (&NO_ERROR_DATA, &[]),
         }
     }
 }

@@ -10,7 +10,7 @@
 pub(in crate::smb) mod path;
 mod query;
 mod io;
-pub(super) use io::{CloseCompletion, ReadCompletion, ReadFault};
+pub(super) use io::{CloseCompletion, FlushCompletion, ReadCompletion, ReadFault, WriteCompletion, WriteFault};
 use crate::{DirectoryId, FileId, OperationId, PoolId, VolumeId};
 use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
 

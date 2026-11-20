@@ -345,6 +345,7 @@ struct Writer<'a> {
     eof: u64,
     mode: WriteOpenMode,
     fail_flush: bool,
+    reported_count: Option<u32>,
 }
 impl CheckedWrite for Writer<'_> {
     type Error = &'static str;
@@ -353,12 +354,12 @@ impl CheckedWrite for Writer<'_> {
         Ok(self.eof)
     }
     fn write_open_mode(&self) -> WriteOpenMode { self.mode }
-    fn write_checked(&mut self, offset: u64, input: &[u8]) -> Result<(), Self::Error> {
+    fn write_checked(&mut self, offset: u64, input: &[u8]) -> Result<u32, Self::Error> {
         self.seen.borrow_mut().push(WriteStep::Write(offset, input.len()));
         if !input.is_empty() {
             self.eof = self.eof.max(offset + input.len() as u64);
         }
-        Ok(())
+        Ok(self.reported_count.unwrap_or(input.len() as u32))
     }
     fn flush_checked(&mut self) -> Result<(), Self::Error> {
         self.seen.borrow_mut().push(WriteStep::Flush);
@@ -373,11 +374,11 @@ fn append_and_overwrite_use_original_staged_eof_and_separate_grants() {
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let seen = std::cell::RefCell::new(Vec::new());
     let open = |rights, eof| original(&table, facts(FILE, rights),
-        Writer { seen: &seen, eof, mode: WriteOpenMode::Buffered, fail_flush: false }, 7);
+        Writer { seen: &seen, eof, mode: WriteOpenMode::Buffered, fail_flush: false, reported_count: None }, 7);
     let append = framed(&[&write_packet(112, u64::MAX, 0, b"ab")]);
     let mut h = open(4, 19); // append only, exact original EOF, not a snapshot
-    assert_eq!(h.write(data(&append)), Ok(WriteCompletion::Applied(2)));
-    assert_eq!(h.write(data(&append)), Ok(WriteCompletion::Applied(2)));
+    assert_eq!(h.write(data(&append)), Ok(WriteCompletion { count: 2, confirmed: false }));
+    assert_eq!(h.write(data(&append)), Ok(WriteCompletion { count: 2, confirmed: false }));
     assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(19, 2), CheckEof, Write(21, 2)]);
     for at in [18, 24] {
         let frame = framed(&[&write_packet(112, at, 0, b"x")]);
@@ -389,7 +390,7 @@ fn append_and_overwrite_use_original_staged_eof_and_separate_grants() {
     let mut h = open(2, 19); // can overwrite, can't extend
     let old = framed(&[&write_packet(112, 17, 0, b"ab")]);
     let overlap = framed(&[&write_packet(112, 18, 0, b"ab")]);
-    assert_eq!(h.write(data(&old)), Ok(WriteCompletion::Applied(2)));
+    assert_eq!(h.write(data(&old)), Ok(WriteCompletion { count: 2, confirmed: false }));
     assert_eq!(h.write(data(&overlap)), Err(WriteFault::AccessDenied));
     assert_eq!(h.write(data(&append)), Err(WriteFault::AccessDenied));
     drop(h);
@@ -404,7 +405,7 @@ fn reserved_mode_combinations_do_not_write_and_write_through_waits_for_core() {
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let seen = std::cell::RefCell::new(Vec::new());
     let open = |mode, fail_flush| original(&table, facts(FILE, 6),
-        Writer { seen: &seen, eof: 4, mode, fail_flush }, 7);
+        Writer { seen: &seen, eof: 4, mode, fail_flush, reported_count: None }, 7);
     for (mode, flags, err) in [
         (Buffered, 1, WriteFault::InvalidWriteCombination),
         (BufferedWriteThrough, 1, WriteFault::InvalidWriteCombination),
@@ -419,14 +420,14 @@ fn reserved_mode_combinations_do_not_write_and_write_through_waits_for_core() {
 
     let wire = framed(&[&write_packet(112, 1, 0, b"ab")]);
     assert_eq!(open(BufferedWriteThrough, false).write(data(&wire)),
-        Ok(WriteCompletion::Confirmed(2)));
+        Ok(WriteCompletion { count: 2, confirmed: true }));
     assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(1, 2), Flush]);
     seen.borrow_mut().clear();
     let mut h = open(BufferedWriteThrough, true);
     assert_eq!(h.write(data(&wire)), Err(WriteFault::Confirmation("original flush failed")));
     assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(1, 2), Flush]);
     // A confirmation failure does not silently drop or close this original.
-    assert_eq!(h.flush(), Err(WriteFault::Confirmation("original flush failed")));
+    assert_eq!(h.flush().err(), Some(WriteFault::Confirmation("original flush failed")));
 }
 
 #[test]
@@ -435,17 +436,17 @@ fn empty_write_and_actual_flush_never_imply_history_or_a_new_open() {
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let seen = std::cell::RefCell::new(Vec::new());
     let open = |object, rights| original(&table, facts(object, rights),
-        Writer { seen: &seen, eof: 4, mode: WriteOpenMode::Buffered, fail_flush: false }, 7);
+        Writer { seen: &seen, eof: 4, mode: WriteOpenMode::Buffered, fail_flush: false, reported_count: None }, 7);
     let wire = framed(&[&write_packet(0, 52, 0, b"")]);
     assert_eq!(open(FILE, 1).write(data(&wire)), Err(WriteFault::AccessDenied));
-    assert_eq!(open(FILE, 1).flush(), Err(WriteFault::AccessDenied));
-    assert_eq!(open(Object::Namespace(POOL), 2).flush(), Err(WriteFault::DirectoryFlushUnavailable));
+    assert_eq!(open(FILE, 1).flush().err(), Some(WriteFault::AccessDenied));
+    assert_eq!(open(Object::Namespace(POOL), 2).flush().err(), Some(WriteFault::DirectoryFlushUnavailable));
     assert!(seen.borrow().is_empty());
     let mut h = open(FILE, 6);
-    assert_eq!(h.write(data(&wire)), Ok(WriteCompletion::Applied(0)));
+    assert_eq!(h.write(data(&wire)), Ok(WriteCompletion { count: 0, confirmed: false }));
     assert_eq!(h.original.eof, 4);
     assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0)]);
-    assert_eq!(h.flush(), Ok(()));
+    assert!(h.flush().is_ok());
     assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0), Flush]);
 }
 
@@ -518,4 +519,67 @@ fn optional_close_attributes_have_a_real_flag_and_fixed_layout() {
             assert_eq!(&fixed[8..], &[0; 52]);
         }
     }
+}
+
+
+#[test]
+fn write_reply_count_is_actual_and_zero_is_not_read_eof() {
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let mut open = original(&table, facts(FILE, 6),
+        Writer { seen: &seen, eof: 1024, mode: WriteOpenMode::Buffered,
+                 fail_flush: false, reported_count: None }, 7);
+    let block = [0x33; 257];
+    for (payload, count) in [(&block[..], [1, 1, 0, 0]), (&b""[..], [0, 0, 0, 0])] {
+        let frame = framed(&[&write_packet(112, 3, 0, payload)]);
+        let checked = open.write(data(&frame));
+        let reply = FileReply::write(&checked).unwrap();
+        assert_eq!((reply.command(), reply.status()), (0x09, 0));
+        let (fixed, tail) = reply.parts();
+        assert_eq!(fixed, &[17, 0, 0, 0, count[0], count[1], count[2], count[3], 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(tail.is_empty());
+    }
+}
+
+#[test]
+fn contradicting_write_counts_never_produce_a_success() {
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let frame = framed(&[&write_packet(112, 3, 0, b"abc")]);
+    for n in [2, 4] {
+        let mut open = original(&table, facts(FILE, 6),
+            Writer { seen: &seen, eof: 8, mode: WriteOpenMode::BufferedWriteThrough,
+                     fail_flush: false, reported_count: Some(n) }, 7);
+        seen.borrow_mut().clear();
+        let checked = open.write(data(&frame));
+        assert_eq!(checked.as_ref().err(), Some(&WriteFault::InconsistentLength));
+        assert_eq!(seen.borrow().as_slice(), &[WriteStep::CheckEof, WriteStep::Write(3, 3)]);
+        let reply = FileReply::write(&checked).unwrap();
+        assert_eq!((reply.command(), reply.status()), (0x09, 0xc000_00e5));
+        assert_eq!(reply.parts(), (&[9, 0, 0, 0, 0, 0, 0, 0][..], &[][..]));
+    }
+}
+
+#[test]
+fn flush_and_required_write_confirmation_keep_original_errors_out_of_success() {
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let open = |rights, fail_flush| original(&table, facts(FILE, rights),
+        Writer { seen: &seen, eof: 8, mode: WriteOpenMode::BufferedWriteThrough,
+                 fail_flush, reported_count: None }, 7);
+    let ok = open(6, false).flush();
+    let reply = FileReply::flush(&ok).unwrap();
+    assert_eq!((reply.command(), reply.status()), (0x07, 0));
+    assert_eq!(reply.parts(), (&[4, 0, 0, 0][..], &[][..]));
+    assert_eq!(seen.borrow().as_slice(), &[WriteStep::Flush]);
+
+    let failed = open(6, true).flush();
+    assert_eq!(FileReply::flush(&failed).err(), Some(&WriteFault::Confirmation("original flush failed")));
+    let frame = framed(&[&write_packet(112, 3, 0, b"abc")]);
+    let write_failed = open(6, true).write(data(&frame));
+    assert_eq!(FileReply::write(&write_failed).err(), Some(&WriteFault::Confirmation("original flush failed")));
+    let denied = open(1, false).flush();
+    let reply = FileReply::flush(&denied).unwrap();
+    assert_eq!((reply.command(), reply.status()), (0x07, 0xc000_0022));
+    assert_eq!(reply.parts(), (&[9, 0, 0, 0, 0, 0, 0, 0][..], &[][..]));
 }

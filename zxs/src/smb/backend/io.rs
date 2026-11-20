@@ -11,6 +11,7 @@ use crate::smb::wire::io_fields::{CloseMode, ReadRange, WriteData, WritePosition
 /// have been checked. This includes empty windows, EOF and any check after
 /// staging output. A success is the exact available prefix of the held
 /// logical view, not an incomplete physical read or a suppressed Core error.
+/// Body must own or borrow an immutable snapshot of those same verified bytes.
 /// The prepared bytes can be the actual response's data, without another
 /// store or a duplicate persistent copy. No socket output occurs here.
 pub(super) trait CheckedRead {
@@ -137,7 +138,7 @@ pub(super) trait CheckedWrite {
     fn write_open_mode(&self) -> WriteOpenMode; // actual CREATE mode
     /// All exact bytes accepted to this writer, or error. Zero bytes still
     /// check current authority but do not write, resize or invent a revision.
-    fn write_checked(&mut self, offset: u64, input: &[u8]) -> Result<(), Self::Error>;
+    fn write_checked(&mut self, offset: u64, input: &[u8]) -> Result<u32, Self::Error>;
     /// On success the original working revision is clean or confirmed by
     /// Core. This is neither a named history node nor an operation retry.
     fn flush_checked(&mut self) -> Result<(), Self::Error>;
@@ -150,20 +151,31 @@ pub(super) enum WriteOpenMode {
     Unbuffered, // FILE_NO_INTERMEDIATE_BUFFERING; no such IO implemented here
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum WriteCompletion {
-    Applied(u32),
-    Confirmed(u32),
+/// Acknowledgement of an exact original WRITE; not a history commit.
+#[must_use]
+#[derive(Debug, Eq, PartialEq)]
+pub(in crate::smb) struct WriteCompletion {
+    count: u32,
+    confirmed: bool,
 }
 
+impl WriteCompletion {
+    pub(in crate::smb) fn count(&self) -> u32 { self.count }
+}
+
+/// Explicit original FLUSH completed, either already clean or confirmed.
+#[must_use]
+pub(in crate::smb) struct FlushCompletion { _checked: () }
+
 #[derive(Debug, Eq, PartialEq)]
-pub(super) enum WriteFault<E> {
+pub(in crate::smb) enum WriteFault<E> {
     AccessDenied,
     NotDataFile,
     DirectoryFlushUnavailable,
     InvalidWriteCombination,
     UnbufferedUnavailable,
     InvalidRange,
+    InconsistentLength,
     Original(E),
     Confirmation(E),
 }
@@ -207,16 +219,19 @@ impl<H: CheckedWrite> Held<'_, H> {
             return Err(AccessDenied);
         }
         let confirm = mode == WriteOpenMode::BufferedWriteThrough;
-        self.original.write_checked(offset, request.payload()).map_err(Original)?;
+        let count = self.original.write_checked(offset, request.payload()).map_err(Original)?;
+        if count != request.length() {
+            // This Core contract admits the exact range or fails. Do not
+            // invent a full count, assume rollback, or resend a partial write.
+            return Err(InconsistentLength);
+        }
         if confirm {
             self.original.flush_checked().map_err(Confirmation)?;
-            Ok(WriteCompletion::Confirmed(request.length()))
-        } else {
-            Ok(WriteCompletion::Applied(request.length()))
         }
+        Ok(WriteCompletion { count, confirmed: confirm })
     }
 
-    pub(super) fn flush(&mut self) -> Result<(), WriteFault<H::Error>> {
+    pub(super) fn flush(&mut self) -> Result<FlushCompletion, WriteFault<H::Error>> {
         use WriteFault::*;
         // For a FILE these are WRITE/APPEND_DATA; for a directory these are
         // ADD_FILE/ADD_SUBDIRECTORY. Never use directory rights to flush FILE
@@ -227,7 +242,8 @@ impl<H: CheckedWrite> Held<'_, H> {
         if !matches!(self._slot.object, Object::File(..)) {
             return Err(DirectoryFlushUnavailable);
         }
-        self.original.flush_checked().map_err(Confirmation)
+        self.original.flush_checked().map_err(Confirmation)?;
+        Ok(FlushCompletion { _checked: () })
     }
 }
 

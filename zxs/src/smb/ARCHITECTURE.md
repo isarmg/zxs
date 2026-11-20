@@ -32,7 +32,9 @@ READ 保持原请求长度供 MaxReadSize／credits／范围锁核验，偏移�
 
 [WRITE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/829f93f5-ed10-4f12-8347-42d235019459) 只借用本命令声明的正文，不含其他命令、预填字节或尾随填充；原请求长度供 MaxWriteSize 和 credits，TCP 不消费 RDMA 描述符。追加位置来自同一个仍获权的实际写者的当前稿 EOF，不看旧读句柄的长度，不把对 EOF 写或空写当作 SET_END_OF_FILE。仅追加的权限不改写或填出空洞，只能命中该 EOF；跨出原长需要明确追加权。普通写确认原写者已接收该范围，不承诺已经持久化。
 
-逐请求 WRITE_THROUGH 不是 CREATE 的 FILE_WRITE_THROUGH 模式。按 3.1.1 组合规则，普通缓冲打开上只有逐请求写穿标志时返回参数错误；真正的直接写没有接，不退化成缓冲成功。[Apple 原生源码](https://github.com/apple-oss-distributions/smb/blob/a4320c1ed655fe99ca882a43c84cd820ea10d2af/kernel/netsmb/smb_smb_2.c#L7338-L7367) 有特定错误后的重试，不代表该平台已验收。原持有打开要求写穿时，实际写入后还必须等同一写者完成确认；[显式 FLUSH](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/026984f6-38af-4408-8200-50557eb0a286) 也只让实际有写权的原 FILE 写者确认；目录权限不变成卷同步。失败仍留在原写者与原批次的状态机，不冒充刷盘、成功关闭或正式提交。不提供伪造写者、额外正文、响应编码或实际调度。
+逐请求 WRITE_THROUGH 不是 CREATE 的 FILE_WRITE_THROUGH 模式。按 3.1.1 组合规则，普通缓冲打开上只有逐请求写穿标志时返回参数错误；真正的直接写没有接，不退化成缓冲成功。[Apple 原生源码](https://github.com/apple-oss-distributions/smb/blob/a4320c1ed655fe99ca882a43c84cd820ea10d2af/kernel/netsmb/smb_smb_2.c#L7338-L7367) 有特定错误后的重试，不代表该平台已验收。原持有打开要求写穿时，实际写入后还必须等同一写者完成确认；[显式 FLUSH](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/026984f6-38af-4408-8200-50557eb0a286) 也只让实际有写权的原 FILE 写者确认；目录权限不变成卷同步。失败仍留在原写者与原批次的状态机，不冒充刷盘、成功关闭或正式提交。不提供伪造写者、额外正文或实际调度。
+
+WRITE 和 FLUSH 成功各有私有 Held 收据。按 [WRITE 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/7b80a339-f4d3-4575-8ce2-70a06f24f133)，Count 来自原写者核实的实际接收字节数，不从请求的 Length 生成；当前业务要求整段成功，计数矛盾不给成功，也不推断回退或自动重写。合法空 WRITE 可回实际 Count=0，这与 READ 的 EOF 不同。[FLUSH 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/42f78e6a-e25f-48f5-8f08-b4f1bb4c4fa4) 只在原确认完成后能生成；原 I/O 失败与确认失败分开传给真实状态映射，不能包装成成功体。编码仍不构造协议头、不签发会话、不发包。
 
 ## 目标与分工
 
