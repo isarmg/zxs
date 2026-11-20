@@ -301,6 +301,102 @@ final class DirectoryIndexTests: XCTestCase {
             })
         }
     }
+    func testFullIndexReadsBodyOnceAndCanJumpBackFromLastPageAcrossTheOriginalCuts() throws {
+        let block = IndexedText.blockBytes, start = 31
+        var body = [UInt8](repeating: 97, count: 3 * block + 15)
+        let crlf = Array("\r\nNEXT".utf8), scalar = Array("𠮷NEXT".utf8), end = Array("LAST".utf8)
+        body.replaceSubrange((block - 1)..<(block - 1 + crlf.count), with: crlf)
+        body.replaceSubrange((2 * block - 3)..<(2 * block - 3 + scalar.count), with: scalar)
+        let tail = body.count
+        body.replaceSubrange((tail - end.count)..<tail, with: end)
+        let b = textArchive(body), index = try read(b), item = try XCTUnwrap(index.root.children?["x"])
+        var offsets: [Int] = [], sizes: [Int] = []
+        func fill(_ off: Int, _ buffer: UnsafeMutableRawBufferPointer) throws {
+            if (start..<(start + body.count)).contains(off) {
+                XCTAssertLessThanOrEqual(off + buffer.count, start + body.count)
+                offsets.append(off - start); sizes.append(buffer.count)
+            }
+            try copy(b, off, buffer)
+        }
+        let verified = try index.checkMember(item, mode: .indexed, check: {}, fill: fill)
+        XCTAssertTrue(verified.matches); XCTAssertNil(verified.text)
+        let proof = try XCTUnwrap(verified.indexed)
+        XCTAssertEqual(offsets, [0, block, 2 * block, 3 * block])
+        XCTAssertEqual(sizes, [block, block, block, 15])
+        offsets = []; sizes = []
+        let last = try index.textPage(item, proof: proof, page: proof.count - 1, check: {}, fill: fill)
+        XCTAssertTrue(last.hasSuffix("LAST")); XCTAssertEqual(offsets, [3 * block]); XCTAssertEqual(sizes, [15])
+        offsets = []; sizes = []
+        let second = try index.textPage(item, proof: proof, page: 128, check: {}, fill: fill)
+        XCTAssertTrue(second.hasPrefix("\nNEXT")); XCTAssertEqual(second.utf16.count, PlainText.pageUnits)
+        XCTAssertEqual(offsets, [0, block]); XCTAssertEqual(sizes, [block, block])
+        offsets = []
+        let third = try index.textPage(item, proof: proof, page: 256, check: {}, fill: fill)
+        XCTAssertTrue(third.hasPrefix("𠮷NEXT")); XCTAssertEqual(third.utf16.count, PlainText.pageUnits)
+        XCTAssertEqual(offsets, [block, 2 * block])
+        XCTAssertThrowsError(try index.textPage(item, proof: proof, page: -1, check: {}, fill: fill))
+        XCTAssertThrowsError(try index.textPage(item, proof: proof, page: proof.count, check: {}, fill: fill))
+    }
+
+    func testIndexRejectsNonTextBeyondThePrefixAndNeverPublishesOnBadCRC() throws {
+        let block = IndexedText.blockBytes
+        let endings: [[UInt8]] = [[0xe2, 0x82], [13], [0xc0, 0xaf], Array("\u{202e}".utf8)]
+        for end in endings {
+            let b = textArchive([UInt8](repeating: 97, count: block) + end)
+            let index = try read(b), item = try XCTUnwrap(index.root.children?["x"])
+            let verified = try index.checkMember(item, mode: .indexed, check: {}) { try self.copy(b, $0, $1) }
+            XCTAssertTrue(verified.matches); XCTAssertNil(verified.indexed)
+            XCTAssertNotNil(try preview(b).text) // explicitly chosen old prefix remains distinct
+        }
+        var b = textArchive([UInt8](repeating: 10, count: block + 7))
+        let index = try read(b), item = try XCTUnwrap(index.root.children?["x"])
+        let result = try index.checkMember(item, mode: .indexed, check: {}) { try self.copy(b, $0, $1) }
+        let proof = try XCTUnwrap(result.indexed)
+        XCTAssertEqual(proof.count, block / PlainText.pageNewlines + 1)
+        let dense = try index.textPage(item, proof: proof, page: 4000, check: {}) { try self.copy(b, $0, $1) }
+        let last = try index.textPage(item, proof: proof, page: proof.count - 1, check: {}) { try self.copy(b, $0, $1) }
+        XCTAssertEqual(dense, String(repeating: "\n", count: PlainText.pageNewlines))
+        XCTAssertEqual(last, String(repeating: "\n", count: 7))
+        b[31 + block + 6] = 90 // valid text, wrong CRC, later than the old preview prefix
+        let changed = try index.checkMember(item, mode: .indexed, check: {}) { try self.copy(b, $0, $1) }
+        XCTAssertFalse(changed.matches); XCTAssertNil(changed.indexed); XCTAssertNil(changed.text)
+    }
+
+    func testIndexedPageRejectsFormerSelectionChangedExactLayoutAndUnshownBytesInTouchedBlocks() throws {
+        let block = IndexedText.blockBytes, start = 31
+        var body = [UInt8](repeating: 97, count: 2 * block + 7)
+        body[block - 1] = 13; body[block] = 10
+        var b = textArchive(body)
+        let index = try read(b), other = try read(b), item = try XCTUnwrap(index.root.children?["x"])
+        let result = try index.checkMember(item, mode: .indexed, check: {}) { try self.copy(b, $0, $1) }
+        let proof = try XCTUnwrap(result.indexed), otherItem = try XCTUnwrap(other.root.children?["x"])
+        XCTAssertThrowsError(try other.textPage(otherItem, proof: proof, page: 128, check: {}) {
+            _, _ in XCTFail("old proof reached a different selection")
+        })
+        for offset in [start - 1, b.count - 23, b.count - 1, start, start + 2 * block - 1] {
+            let original = b[offset]; b[offset] ^= 1
+            XCTAssertThrowsError(try index.textPage(item, proof: proof, page: 128, check: {}) { try self.copy(b, $0, $1) })
+            b[offset] = original
+        }
+        var late = b
+        XCTAssertThrowsError(try index.textPage(item, proof: proof, page: 128, check: {}) { off, out in
+            try self.copy(late, off, out)
+            if off == start + block { late[late.count - 1] ^= 1 }
+        })
+        for initial in [false, true] {
+            let job = DocumentRead()
+            func stop(_ off: Int, _ out: UnsafeMutableRawBufferPointer) throws {
+                try copy(b, off, out)
+                if off == start + block { job.cancel() }
+            }
+            if initial {
+                XCTAssertThrowsError(try index.checkMember(item, mode: .indexed, check: job.check, fill: stop))
+            } else {
+                XCTAssertThrowsError(try index.textPage(item, proof: proof, page: 128, check: job.check, fill: stop))
+            }
+        }
+    }
+
     // Forced small ZIP64 records and an offset-only central extra with an ordinary local version.
     private func streamed(empty: Bool, wide: Bool, offsetOnly: Bool, signed: Bool,
                           narrowOffsetDescriptor: Bool = false, origin: Int = 0) -> [UInt8] {

@@ -1,8 +1,11 @@
 import Foundation
 
+enum MemberReadMode: Equatable { case crc, preview, indexed }
+
 struct MemberCRC {
     let declared: UInt32, actual: UInt32
-    let text: PlainText.Pages? // nil for CRC-only, mismatch or an unsupported text profile
+    let text: PlainText.Pages?
+    let indexed: DirectoryIndex.TextIndex?
     var matches: Bool { declared == actual }
 }
 
@@ -15,123 +18,172 @@ enum PlainText {
         private let text: NSString
         private let ranges: [NSRange]
 
-        fileprivate init(_ value: String, displayed: Int, total: Int) {
-            text = value as NSString
+        fileprivate init(_ value: String, displayed: Int, total: Int, ranges: [NSRange]) {
+            text = value as NSString; self.ranges = ranges
             displayedBytes = displayed; totalBytes = total
-            var cuts: [NSRange] = []
-            var start = 0, point = 0, newlines = 0
-            func cut() {
-                cuts.append(NSRange(location: start, length: point - start))
-                start = point; newlines = 0
-            }
-            for scalar in value.unicodeScalars {
-                let units = scalar.value <= 0xffff ? 1 : 2
-                if point - start + units > PlainText.pageUnits { cut() }
-                point += units
-                if scalar.value == 10 {
-                    newlines += 1
-                    if newlines == PlainText.pageNewlines { cut() }
-                }
-            }
-            if point != start || cuts.isEmpty { cut() } // an empty file still has a single empty page
-            ranges = cuts
         }
 
         var complete: Bool { displayedBytes == totalBytes }
         var count: Int { ranges.count }
-        func page(_ index: Int) -> String { text.substring(with: ranges[index]) }
+        func page(_ index: Int) -> String { PlainText.literal(text, ranges[index]) }
     }
 
     static func captureLength(_ total: Int) -> Int { min(total, byteLimit + 3) }
 
-    static func decode(_ bytes: [UInt8], total: Int) -> Pages? {
+    private static func scalarWidth(_ first: UInt8) -> Int {
+        switch first {
+        case 0xc2...0xdf: return 2
+        case 0xe0...0xef: return 3
+        case 0xf0...0xf4: return 4
+        default: return 1
+        }
+    }
+
+    // A nonfinal raw block may leave one scalar or CRLF for the following segment.
+    static func trailingUnit(_ bytes: [UInt8], length: Int) -> Int {
+        guard length > 0 else { return 0 }
+        if bytes[length - 1] == 13 { return 1 }
+        var start = length - 1
+        let floor = max(0, length - 4)
+        while start > floor && bytes[start] & 0xc0 == 0x80 { start -= 1 }
+        return scalarWidth(bytes[start]) > length - start ? length - start : 0
+    }
+
+    static func strict(_ bytes: ArraySlice<UInt8>) -> String? {
+        guard let value = String(bytes: bytes, encoding: .utf8),
+              value.utf8.elementsEqual(bytes) else { return nil }
+        return value
+    }
+
+    private static func permitted(_ scalar: Unicode.Scalar) -> Bool {
+        let value = scalar.value
+        if value == 9 || value == 10 || (32...126).contains(value) { return true }
+        guard !scalar.properties.isDefaultIgnorableCodePoint else { return false }
+        switch scalar.properties.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .unassigned, .surrogate: return false
+        default: return true
+        }
+    }
+
+    // Count pages without constructing a table for large members. NSRange
+    // uses the raw UTF-16 positions; budgets count CRLF as one visible LF.
+    static func scan(_ text: String, check: () throws -> Void,
+                     emit: ((Int, NSRange) -> Void)? = nil) throws -> Int? {
+        var start = 0, raw = 0, units = 0, lines = 0, count = 0, pendingCR = false
+        func cut() throws {
+            try check()
+            emit?(count, NSRange(location: start, length: raw - start))
+            count += 1; start = raw; units = 0; lines = 0
+        }
+        try check()
+        for scalar in text.unicodeScalars {
+            let cp = scalar.value, shown = cp > 0xffff ? 2 : 1
+            var input = shown
+            if pendingCR {
+                guard cp == 10 else { return nil }
+                pendingCR = false; input = 2
+            } else if cp == 13 {
+                pendingCR = true; continue
+            } else if !permitted(scalar) { return nil }
+            if units + shown > pageUnits { try cut() }
+            raw += input; units += shown
+            if cp == 10 {
+                lines += 1
+                if lines == pageNewlines { try cut() }
+            }
+        }
+        guard !pendingCR else { return nil }
+        if raw != start || count == 0 { try cut() }
+        return count
+    }
+
+    static func literal(_ text: NSString, _ range: NSRange) -> String {
+        text.substring(with: range).replacingOccurrences(of: "\r\n", with: "\n", options: .literal)
+    }
+
+    static func decode(_ bytes: [UInt8], total: Int, check: () throws -> Void) throws -> Pages? {
         guard total >= 0, bytes.count == captureLength(total) else { return nil }
         var kept = min(total, byteLimit), checked = kept
         if total > byteLimit {
-            // Recognize only a scalar whose first byte is in the visible budget.
-            // If the prefix is complete, the next arbitrary byte is not text evidence.
-            var start = kept - 1
-            let floor = max(0, kept - 4)
-            while start > floor && bytes[start] & 0xc0 == 0x80 { start -= 1 }
-            let width: Int
-            switch bytes[start] {
-            case 0xc2...0xdf: width = 2
-            case 0xe0...0xef: width = 3
-            case 0xf0...0xf4: width = 4
-            default: width = 1
-            }
-            if width > kept - start {
-                checked = start + width; kept = start
-                guard checked <= bytes.count else { return nil }
-            } else if bytes[kept - 1] == 13 {
-                // A real adjacent LF, not an isolated CR we could silently drop.
-                guard kept < bytes.count, bytes[kept] == 10 else { return nil }
-                kept -= 1; checked = kept
+            let crossing = trailingUnit(bytes, length: kept)
+            if crossing > 0 {
+                if bytes[kept - 1] == 13 {
+                    // Do not discard an isolated CR at the budget boundary.
+                    guard kept < bytes.count, bytes[kept] == 10 else { return nil }
+                    kept -= 1; checked = kept
+                } else {
+                    kept -= crossing; checked = kept + scalarWidth(bytes[kept])
+                    guard checked <= bytes.count else { return nil }
+                }
             }
         }
-        let candidate = bytes[..<checked]
-        guard var text = String(bytes: candidate, encoding: .utf8),
-              text.utf8.elementsEqual(candidate) else { return nil }
-        var cr = false, hasCR = false
-        for scalar in text.unicodeScalars {
-            if cr {
-                guard scalar.value == 10 else { return nil }
-                cr = false; continue
-            }
-            switch scalar.value {
-            case 9, 10: continue
-            case 13: cr = true; hasCR = true; continue
-            default: break
-            }
-            guard !scalar.properties.isDefaultIgnorableCodePoint else { return nil }
-            switch scalar.properties.generalCategory {
-            case .control, .format, .lineSeparator, .paragraphSeparator, .privateUse, .unassigned, .surrogate: return nil
-            default: break
-            }
+        guard var text = strict(bytes[..<checked]) else { return nil }
+        if checked > kept {
+            guard let last = text.unicodeScalars.last, permitted(last),
+                  let prefix = strict(bytes[..<kept]) else { return nil }
+            text = prefix
         }
-        guard !cr else { return nil }
-        if kept < checked {
-            // The omitted scalar was checked above; this is the preceding exact byte boundary.
-            let prefix = bytes[..<kept]
-            guard let clipped = String(bytes: prefix, encoding: .utf8),
-                  clipped.utf8.elementsEqual(prefix) else { return nil }
-            text = clipped
-        }
-        if hasCR { text = text.replacingOccurrences(of: "\r\n", with: "\n", options: .literal) }
-        return Pages(text, displayed: kept, total: total)
+        var ranges: [NSRange] = []
+        guard try scan(text, check: check, emit: { _, range in ranges.append(range) }) != nil else { return nil }
+        return Pages(text, displayed: kept, total: total, ranges: ranges)
     }
 }
 
 // One deliberately selected ordinary Store member, never a whole-archive or version credential.
 enum StoredBody {
+    struct Geometry {
+        let offset: Int, body: Int, end: Int
+        let header: [UInt8], fields: [UInt8], descriptor: [UInt8]
+
+        func match(scratch: inout [UInt8], check: () throws -> Void,
+                   fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws {
+            try StoredBody.match(offset, header[...], scratch: &scratch, check: check, fill: fill)
+            try StoredBody.match(offset + 30, fields[...], scratch: &scratch, check: check, fill: fill)
+            try StoredBody.match(end, descriptor[...], scratch: &scratch, check: check, fill: fill)
+        }
+    }
+
+    struct Checked {
+        let declared: UInt32, actual: UInt32
+        let text: PlainText.Pages?
+        let indexed: (Geometry, IndexedText)?
+    }
+
+    static func chunk(_ at: Int, _ length: Int, into block: inout [UInt8], check: () throws -> Void,
+                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws {
+        try check()
+        try block.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
+            try fill(at, UnsafeMutableRawBufferPointer(rebasing: raw[..<length]))
+        }
+    }
+
+    static func match(_ at: Int, _ expected: ArraySlice<UInt8>, scratch: inout [UInt8], check: () throws -> Void,
+                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws {
+        var i = 0
+        while i < expected.count {
+            let n = min(scratch.count, expected.count - i), start = expected.startIndex + i
+            try chunk(at + i, n, into: &scratch, check: check, fill: fill)
+            try requirePreview(scratch[..<n].elementsEqual(expected[start..<(start + n)]))
+            i += n
+        }
+    }
+
     static func check(central cd: [UInt8], centralAt: Int, ending: [UInt8], record p: Int, offset: Int,
-                      limit: Int, centralWide: Bool, size: Int, previewText: Bool, check: () throws -> Void,
-                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
+                      limit: Int, centralWide: Bool, size: Int, mode: MemberReadMode, check: () throws -> Void,
+                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> Checked {
         let u16 = DirectoryIndex.u16, u32 = DirectoryIndex.u32, max32 = DirectoryIndex.u32max
-        try requirePreview(size >= 0)
-        var block = [UInt8](repeating: 0, count: 65_536)
+        try requirePreview(size >= 0 && size <= DirectoryIndex.maxMember)
+        var scratch = [UInt8](repeating: 0, count: 65_536)
         func take(_ at: Int, _ count: Int) throws -> [UInt8] {
             try check(); try requirePreview(count >= 0 && count <= 65_535 + 1024 && at >= offset && at <= limit - count)
             var out = [UInt8](repeating: 0, count: count)
             if count > 0 { try out.withUnsafeMutableBytes { try fill(at, $0) } }
             return out
         }
-        func chunk(_ at: Int, _ count: Int) throws {
-            try check()
-            try block.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
-                try fill(at, UnsafeMutableRawBufferPointer(rebasing: raw[..<count]))
-            }
+        func checkDirectory() throws {
+            try match(centralAt, cd[...], scratch: &scratch, check: check, fill: fill)
+            try match(centralAt + cd.count, ending[...], scratch: &scratch, check: check, fill: fill)
         }
-        func match(_ at: Int, _ expected: [UInt8]) throws {
-            var i = 0
-            while i < expected.count {
-                let n = min(block.count, expected.count - i)
-                try chunk(at + i, n)
-                try requirePreview(block[..<n].elementsEqual(expected[i..<(i + n)]))
-                i += n
-            }
-        }
-        func checkDirectory() throws { try match(centralAt, cd); try match(centralAt + cd.count, ending) }
         try checkDirectory()
         let flags = u16(cd, p + 8), crc = u32(cd, p + 16), nl = u16(cd, p + 28), streaming = flags & 8 != 0
         let h = try take(offset, 30), version = u16(h, 4), name = u16(h, 26), extra = u16(h, 28)
@@ -168,24 +220,32 @@ enum StoredBody {
             descriptor = try take(end, length)
             try requirePreview(try descriptorLength(descriptor, wide: wideDD, crc: crc, size: size) == length)
         }
-        let captureLimit = previewText ? PlainText.captureLength(size) : 0
-        var capture: [UInt8]? = previewText ? [] : nil
+        let local = Geometry(offset: offset, body: body, end: end, header: h, fields: fields, descriptor: descriptor)
+        let captureLimit = mode == .preview ? PlainText.captureLength(size) : 0
+        var capture: [UInt8]? = mode == .preview ? [] : nil
         capture?.reserveCapacity(captureLimit) // CRC-only never allocates a text buffer
+        let builder = try (mode == .indexed ? IndexedText.Build(size: size) : nil)
+        var block = [UInt8](repeating: 0, count: builder == nil ? 65_536 : IndexedText.blockBytes)
         var sum = crc32(0, nil, 0), pos = body
         while pos < end {
             let n = min(block.count, end - pos)
-            try chunk(pos, n)
+            try chunk(pos, n, into: &block, check: check, fill: fill)
             sum = block.withUnsafeBufferPointer { crc32(sum, $0.baseAddress, uInt(n)) }
-            let beforeBudget = captureLimit - (pos - body)
+            let relative = pos - body, beforeBudget = captureLimit - relative
             if beforeBudget > 0 { capture?.append(contentsOf: block[..<min(n, beforeBudget)]) }
+            try builder?.append(block, count: n, relative: relative, check: check)
             pos += n
         }
-        try check(); try match(offset, h); try match(offset + 30, fields); try match(end, descriptor)
+        try local.match(scratch: &scratch, check: check, fill: fill)
         try checkDirectory(); try check()
         let expected = UInt32(crc), actual = UInt32(sum)
-        let text = expected == actual ? capture.flatMap { PlainText.decode($0, total: size) } : nil
+        var text: PlainText.Pages? = nil, indexed: (Geometry, IndexedText)? = nil
+        if expected == actual {
+            if let capture = capture { text = try PlainText.decode(capture, total: size, check: check) }
+            if let pages = try builder?.finish() { indexed = (local, pages) }
+        }
         try check()
-        return MemberCRC(declared: expected, actual: actual, text: text)
+        return Checked(declared: expected, actual: actual, text: text, indexed: indexed)
     }
 
     static func descriptorLength(_ d: [UInt8], wide: Bool, crc: Int, size: Int) throws -> Int {

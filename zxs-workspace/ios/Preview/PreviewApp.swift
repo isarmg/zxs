@@ -76,13 +76,15 @@ private final class NameResults: UITableViewController {
 @MainActor
 private final class TextReading {
     weak var archive: HeldArchive?
-    let member: Member, contents: PlainText.Pages
-    let back = UIButton(type: .system), next = UIButton(type: .system)
+    let member: Member, contents: PlainText.Pages?, proof: DirectoryIndex.TextIndex?
+    let back = UIButton(type: .system), next = UIButton(type: .system), jump = UIButton(type: .system)
+    weak var jumpAlert: UIAlertController?
     var index = 0
 
-    init(archive: HeldArchive, member: Member, contents: PlainText.Pages) {
-        self.archive = archive; self.member = member; self.contents = contents
+    init(archive: HeldArchive, member: Member, contents: PlainText.Pages?, proof: DirectoryIndex.TextIndex?) {
+        self.archive = archive; self.member = member; self.contents = contents; self.proof = proof
     }
+    var count: Int { proof?.count ?? contents?.count ?? 0 }
 }
 
 final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate,
@@ -140,7 +142,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         wire(next, "下一页", #selector(nextPage))
         for button in [up, previous, next] { directoryNav.addArrangedSubview(button) }
         directoryNav.distribution = .fillEqually
-        textNav.distribution = .fillEqually
+        textNav.axis = .vertical; textNav.spacing = 3
         // The text view occupies the available viewport, not a view as tall as every line.
         literal.isScrollEnabled = true; literal.alwaysBounceHorizontal = false
         literal.isEditable = false; literal.isSelectable = false; literal.dataDetectorTypes = []
@@ -174,14 +176,14 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     }
 
     func clearSelection() {
-        awaiting = nil; active?.cancel(); active = nil
-        retireSearch()
-        clearDraft()
-        queue.cancelAllOperations()
-        memberConsent = nil
-        decision?.dismiss(animated: false); decision = nil
-        let previous = selection; selection = nil; previous?.retire()
+        let oldRead = active, oldScope = selection
+        awaiting = nil; active = nil; selection = nil; memberConsent = nil
+        // Revoke and clear text before releasing the Report's last strong held FD.
+        if isViewLoaded { clearText(); clearDraft() }
         report = nil
+        decision?.dismiss(animated: false); decision = nil
+        retireSearch()
+        oldRead?.cancel(); queue.cancelAllOperations(); oldScope?.retire()
         if isViewLoaded { reset("没有保留上次选择。") }
     }
     @objc private func cancelRead() {
@@ -345,26 +347,29 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         let path = "/" + (trail.dropFirst().map(\.name) + [file.name]).joined(separator: "/")
         let whole = file.size <= PlainText.byteLimit
         let choice = whole ? "只有 CRC 相符且全文符合 UTF-8 显示规则时才显示全文。"
-            : "前部预览也要完成整项 CRC，只显示开头最多 256 KiB；不判断后文是否为文本。"
+            : "按页跳读要求全文符合 UTF-8 显示规则；前部只判断开头最多 256 KiB。"
         let alert = UIAlertController(title: "查看这个归档成员",
-            message: "两种核验都要读取本项全部 \(file.size) 字节。较大文件可能耗时，可以取消。\n"
+            message: "所有选项都先读取本项全部 \(file.size) 字节。较大文件可能耗时，可以取消。\n"
                 + "\(choice)\n不保存或上传。外部提供方可能自行下载。\n\(view.name)\n\(path)", preferredStyle: .alert)
         let consent = NSObject()
-        func action(_ title: String, text: Bool) -> UIAlertAction {
-            UIAlertAction(title: title, style: .default) { [weak self, weak archive = view.archive] _ in
-                guard let self = self, self.memberConsent === consent else { return }
+        func action(_ title: String, mode: MemberReadMode) -> UIAlertAction {
+            UIAlertAction(title: title, style: .default) { [weak self, weak alert, weak archive = view.archive] _ in
+                guard let self = self, let alert = alert,
+                      self.memberConsent === consent, self.decision === alert else { return }
                 self.memberConsent = nil; self.decision = nil
                 guard let current = self.report, current.archive === archive, self.active == nil,
                       self.showing(current, file: file), (try? current.archive.scope.check()) != nil else { return }
-                self.verify(current, file: file, path: path, previewText: text)
+                self.verify(current, file: file, path: path, mode: mode)
             }
         }
-        alert.addAction(UIAlertAction(title: "返回目录", style: .cancel) { [weak self] _ in
-            guard let self = self, self.memberConsent === consent else { return }
+        alert.addAction(UIAlertAction(title: "返回目录", style: .cancel) { [weak self, weak alert] _ in
+            guard let self = self, let alert = alert,
+                  self.memberConsent === consent, self.decision === alert else { return }
             self.memberConsent = nil; self.decision = nil
         })
-        alert.addAction(action("只核验 CRC", text: false))
-        alert.addAction(action(whole ? "核验后看全文" : "完整核验后预览前部", text: true))
+        alert.addAction(action("只核验 CRC", mode: .crc))
+        alert.addAction(action(whole ? "核验后看全文" : "完整核验后预览前部", mode: .preview))
+        if !whole { alert.addAction(action("完整核验后按页跳读全文", mode: .indexed)) }
         memberConsent = consent; decision = alert; present(alert, animated: true)
     }
     private func showing(_ record: Report, file: Member) -> Bool {
@@ -372,12 +377,13 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         let first = page * pageSize
         return first < children.count && children[first..<min(first + pageSize, children.count)].contains { $0 === file }
     }
-    private func verify(_ view: Report, file: Member, path: String, previewText: Bool) {
+    private func verify(_ view: Report, file: Member, path: String, mode: MemberReadMode) {
         let job = DocumentRead(); active = job
-        let mode = !previewText ? "" : file.size <= PlainText.byteLimit ? " · CRC 相符后显示全文" : " · CRC 相符后只显示前部"
-        status.text = "正在核验全部 \(file.size) 字节\(mode)，可取消。\n\(path)"; render()
+        let hint = mode == .crc ? "" : mode == .indexed ? " · 同时核验全文与定位索引"
+            : file.size <= PlainText.byteLimit ? " · CRC 相符后显示全文" : " · CRC 相符后只显示前部"
+        status.text = "正在核验全部 \(file.size) 字节\(hint)，可取消。\n\(path)"; render()
         queue.addOperation { [weak self] in
-            let outcome = Result { try job.verify(view, file: file, previewText: previewText) }
+            let outcome = Result { try job.verify(view, file: file, mode: mode) }
             DispatchQueue.main.async { [weak self] in
                 guard let self = self, self.active === job, self.selection === view.archive.scope else { return }
                 self.active = nil
@@ -386,11 +392,13 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
                 case .success(let result):
                     let verdict = result.matches ? "该项 CRC-32 与 ZIP 声明相符。" : "该项 CRC-32 与 ZIP 声明不符。"
                     let values = String(format: "声明 %08X，实读 %08X。", result.declared, result.actual)
-                    let plainNotice = previewText && result.matches && result.text == nil
-                        ? "\n本次预览范围不符合 UTF-8 显示规则，不显示正文。" : ""
-                    self.status.text = "\(verdict)\n\(values) 不证明整包或其他项。\(plainNotice)\n\(path)（\(file.size) B）"
+                    let show = result.text != nil || result.indexed != nil
+                    let plainNotice = mode != .crc && result.matches && !show
+                        ? (mode == .indexed ? "\n全文不符合 UTF-8 显示规则，不提供跳读。"
+                                            : "\n本次预览范围不符合 UTF-8 显示规则，不显示正文。") : ""
+                    self.status.text = "\(verdict)\n\(values) 不是签名，不证明整包或其他项。\(plainNotice)\n\(path)（\(file.size) B）"
                     self.render()
-                    if previewText && result.matches, let text = result.text { self.showText(text, view: view, file: file) }
+                    if mode != .crc && result.matches && show { self.showText(result, view: view, file: file) }
                 case .failure:
                     self.clearSelection()
                     self.reset("没有完整核验结果：布局不符、原文件变化或读取不可用。请重新选择。")
@@ -398,52 +406,138 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
             }
         }
     }
-    private func showText(_ text: PlainText.Pages, view: Report, file: Member) {
-        let reading = TextReading(archive: view.archive, member: file, contents: text)
+    private func showText(_ result: MemberCRC, view: Report, file: Member) {
+        let reading = TextReading(archive: view.archive, member: file, contents: result.text, proof: result.indexed)
         textReading = reading
-        func wire(_ button: UIButton, _ title: String, step: Int) {
+        func wire(_ button: UIButton, _ title: String, _ action: @escaping (PreviewController, TextReading) -> Void) {
             button.setTitle(title, for: .normal)
             button.titleLabel?.adjustsFontForContentSizeCategory = true
             button.titleLabel?.numberOfLines = 0; button.titleLabel?.font = .preferredFont(forTextStyle: .body)
+            // Each action belongs to the original reading, never to whichever page is visible later.
             button.addAction(UIAction { [weak self, weak reading] _ in
                 guard let self = self, let reading = reading, self.textReading === reading else { return }
-                if step == 0 { self.closePreview() } else { self.showTextPage(reading, reading.index + step) }
+                action(self, reading)
             }, for: .touchUpInside)
-            textNav.addArrangedSubview(button)
         }
-        // Fresh buttons belong only to this view of the original member.
-        wire(reading.back, "上一文本页", step: -1)
-        wire(reading.next, "下一文本页", step: 1)
-        wire(UIButton(type: .system), "关闭文本", step: 0)
+        func row(_ buttons: [UIButton]) {
+            let bar = UIStackView(arrangedSubviews: buttons)
+            bar.distribution = .fillEqually
+            textNav.addArrangedSubview(bar)
+        }
+        wire(reading.back, "上一文本页") { $0.showTextPage($1, $1.index - 1) }
+        wire(reading.next, "下一文本页") { $0.showTextPage($1, $1.index + 1) }
+        let close = UIButton(type: .system)
+        wire(close, "关闭文本") { view, _ in view.closePreview() }
+        if reading.proof != nil {
+            wire(reading.jump, "跳到页码…") { $0.offerJump($1) }
+            row([reading.back, reading.next]); row([reading.jump, close])
+        } else { row([reading.back, reading.next, close]) }
         status.numberOfLines = 3; tableHost.isHidden = true; directoryNav.isHidden = true
         find.isHidden = true; notice.isHidden = true
         literal.isHidden = false; textNav.isHidden = false
         showTextPage(reading, 0)
     }
-    private func showTextPage(_ reading: TextReading, _ index: Int) {
-        guard textReading === reading, (0..<reading.contents.count).contains(index) else { return }
-        guard active == nil, let view = report, view.archive === reading.archive,
-              showing(view, file: reading.member), (try? view.archive.checkPreview()) != nil else {
-            clearSelection(); reset("原文件已变化或授权不可用，已关闭文本。请重新选择。"); return
+    private func displayedReport(_ reading: TextReading) -> Report? {
+        guard textReading === reading, active == nil, let view = report, view.archive === reading.archive,
+              showing(view, file: reading.member), (try? view.archive.checkPreview()) != nil else { return nil }
+        return view
+    }
+    private func unavailableText() {
+        clearSelection()
+        reset("无法复核原件、授权或本页字节，已关闭文本。请重新选择。")
+    }
+    private func offerJump(_ reading: TextReading) {
+        guard textReading === reading, reading.proof != nil, active == nil,
+              presentedViewController == nil else { return }
+        guard displayedReport(reading) != nil else { unavailableText(); return }
+        let alert = UIAlertController(title: "跳到页码", message: "输入 1 至 \(reading.count) 之间的页码。",
+                                      preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "页码（0–9）"; field.keyboardType = .numberPad
+            field.autocorrectionType = .no; field.spellCheckingType = .no
+            field.accessibilityLabel = "文本页码"
         }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self, weak reading, weak alert] _ in
+            guard let self = self, let reading = reading, let alert = alert,
+                  self.textReading === reading, self.decision === alert else { return }
+            alert.textFields?.first?.text = nil
+            self.decision = nil; reading.jumpAlert = nil
+        })
+        alert.addAction(UIAlertAction(title: "跳转", style: .default) { [weak self, weak reading, weak alert] _ in
+            guard let self = self, let reading = reading, let alert = alert,
+                  self.textReading === reading, self.decision === alert else { return }
+            let input = alert.textFields?.first?.text ?? ""
+            alert.textFields?.first?.text = nil
+            self.decision = nil; reading.jumpAlert = nil
+            guard self.displayedReport(reading) != nil else { self.unavailableText(); return }
+            let digits = input.utf8.prefix(10)
+            guard !digits.isEmpty, digits.count <= 9, digits.allSatisfy({ (48...57).contains($0) }),
+                  let number = Int(input), (1...reading.count).contains(number) else {
+                self.location.text = "页码不在 1–\(reading.count) 内。仍在第 \(reading.index + 1) 页。"; return
+            }
+            self.showTextPage(reading, number - 1)
+        })
+        reading.jumpAlert = alert; decision = alert
+        present(alert, animated: true)
+    }
+    private func navigation(_ reading: TextReading, ready: Bool) {
+        reading.back.isEnabled = ready && reading.index > 0
+        reading.next.isEnabled = ready && reading.index + 1 < reading.count
+        reading.jump.isEnabled = ready
+    }
+    private func drawTextPage(_ reading: TextReading, _ index: Int, _ body: String) {
+        guard textReading === reading else { return }
+        guard displayedReport(reading) != nil else { unavailableText(); return }
         reading.index = index
         let text = reading.contents
-        let kind = text.complete ? (text.totalBytes == 0 ? "空文本" : "核验后的全文") : "核验后仅看前部"
-        let portion = text.complete ? "" : "，只显示前 \(text.displayedBytes) B"
-        location.text = "\(kind) · \(index + 1)/\(text.count) 页\n已核全部 \(text.totalBytes) B\(portion)"
-        literal.text = text.page(index) // only this bounded page; never links, markup or an external-open action
+        let kind = text.map { $0.complete ? ($0.totalBytes == 0 ? "空文本" : "核验后的全文") : "核验后仅看前部" }
+            ?? "核验后按页跳读"
+        let portion = text.map { $0.complete ? "" : "，只显示前 \($0.displayedBytes) B" } ?? ""
+        location.text = "\(kind) · \(index + 1)/\(reading.count) 页\n已核全部 \(reading.member.size) B\(portion)"
+        literal.text = body // only this bounded page; never links, markup or an external-open action
         literal.setContentOffset(.zero, animated: false)
-        reading.back.isEnabled = index > 0; reading.next.isEnabled = index + 1 < text.count
+        navigation(reading, ready: true)
+    }
+    private func showTextPage(_ reading: TextReading, _ index: Int) {
+        guard textReading === reading, active == nil, (0..<reading.count).contains(index) else { return }
+        if let small = reading.contents { drawTextPage(reading, index, small.page(index)); return }
+        guard let proof = reading.proof else { return }
+        guard let view = displayedReport(reading) else { unavailableText(); return }
+        let job = DocumentRead(), file = reading.member
+        active = job
+        literal.text = nil; navigation(reading, ready: false)
+        location.text = "正在复核第 \(index + 1)/\(reading.count) 页；关闭文本可取消。"
+        // The worker keeps the original grant/FD alive only until the coordinated read drains.
+        queue.addOperation { [weak self, weak reading] in
+            let outcome = Result { try job.page(view, file: file, proof: proof, index: index) }
+            DispatchQueue.main.async { [weak self, weak reading] in
+                guard let self = self, let reading = reading,
+                      self.textReading === reading, self.active === job else { return }
+                self.active = nil
+                switch outcome {
+                case .success(let body): self.drawTextPage(reading, index, body)
+                case .failure: self.unavailableText()
+                }
+            }
+        }
     }
     private func clearText() {
-        textReading = nil; literal.text = nil; literal.isHidden = true; textNav.isHidden = true
+        let previous = textReading; textReading = nil
+        literal.text = nil; literal.isHidden = true; textNav.isHidden = true
+        let page = previous == nil ? nil : active
+        if previous != nil { active = nil } // only a page job can coexist with this reading
+        if let alert = previous?.jumpAlert {
+            alert.textFields?.first?.text = nil
+            if decision === alert { decision = nil; alert.dismiss(animated: false) }
+        }
+        page?.cancel()
         for child in textNav.arrangedSubviews { child.removeFromSuperview() }
         tableHost.isHidden = false; directoryNav.isHidden = false; notice.isHidden = false; find.isHidden = false
         status.numberOfLines = 5
     }
     private func closePreview() {
         clearText()
-        if let report = report, selection === report.archive.scope, (try? report.archive.scope.check()) != nil {
+        if let report = report, selection === report.archive.scope, (try? report.archive.checkPreview()) != nil {
             render()
         } else { clearSelection() }
     }

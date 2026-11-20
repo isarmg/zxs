@@ -31,21 +31,22 @@ final class DocumentPresentation: NSObject, NSFilePresenter {
         return first
     }
     func retire() {
-        _ = invalidate()
-        NSFileCoordinator.removeFilePresenter(self) // documented no-op if already unregistered
+        // The invalidator owns unregistering, including when a presenter callback
+        // has already notified the UI but is still relinquishing the original.
+        if invalidate() { NSFileCoordinator.removeFilePresenter(self) }
     }
     private func changed() {
-        let first = invalidate()
+        guard invalidate() else { return }
+        onLoss(self) // schedules UI cleanup without waiting for UI or coordination
         NSFileCoordinator.removeFilePresenter(self)
-        if first { onLoss(self) } // schedules UI cleanup; never wait for the UI or its worker here
     }
     func presentedItemDidChange() { changed() }
     func presentedItemDidMove(to newURL: URL) { changed() } // never follow a replacement
     func relinquishPresentedItem(toWriter writer: @escaping ((() -> Void)?) -> Void) {
         let first = invalidate()
+        if first { onLoss(self) } // revoke visible plaintext before waiting for native teardown
         writer(nil)
-        NSFileCoordinator.removeFilePresenter(self)
-        if first { onLoss(self) }
+        if first { NSFileCoordinator.removeFilePresenter(self) }
     }
     func accommodatePresentedItemDeletion(completionHandler: @escaping (Error?) -> Void) {
         changed(); completionHandler(nil)
@@ -182,11 +183,21 @@ final class DocumentRead {
             return Report(archive: archive, directory: index)
         }
     }
-    func verify(_ report: Report, file: Member, previewText: Bool) throws -> MemberCRC {
+    func verify(_ report: Report, file: Member, mode: MemberReadMode) throws -> MemberCRC {
         let archive = report.archive // hold original FD and scope through the whole accessor, including invalidation
         return try coordinated(archive.scope) { name in
             try archive.withReads(at: name, check: self.check) { fill in
-                try report.directory.checkMember(file, previewText: previewText,
+                try report.directory.checkMember(file, mode: mode,
+                    check: { try self.check(); try archive.scope.check() }, fill: fill)
+            }
+        }
+    }
+
+    func page(_ report: Report, file: Member, proof: DirectoryIndex.TextIndex, index: Int) throws -> String {
+        let archive = report.archive
+        return try coordinated(archive.scope) { name in
+            try archive.withReads(at: name, check: self.check) { fill in
+                try report.directory.textPage(file, proof: proof, page: index,
                     check: { try self.check(); try archive.scope.check() }, fill: fill)
             }
         }

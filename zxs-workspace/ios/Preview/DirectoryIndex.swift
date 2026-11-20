@@ -21,15 +21,16 @@ final class Member {
 }
 
 fileprivate final class PhysicalSlot {
-    let central: Int, offset: Int, minimum: Int, wide: Bool
+    let central: Int, centralEnd: Int, offset: Int, minimum: Int, wide: Bool
     var limit = 0
-    init(_ central: Int, _ offset: Int, _ minimum: Int, _ wide: Bool) {
-        self.central = central; self.offset = offset; self.minimum = minimum; self.wide = wide
+    init(_ central: Int, _ centralEnd: Int, _ offset: Int, _ minimum: Int, _ wide: Bool) {
+        self.central = central; self.centralEnd = centralEnd
+        self.offset = offset; self.minimum = minimum; self.wide = wide
     }
 }
 
 struct DirectoryIndex {
-    static let maxSize = (256 << 30) + (32 << 20)
+    static let maxSize = (256 << 30) + (32 << 20), maxMember = 128 << 30
     static let maxDirectory = 2 << 20
     static let maxSearchUnits = 128
     static let u32max = 0xffff_ffff
@@ -86,11 +87,46 @@ struct DirectoryIndex {
 
     func checkMember(_ file: Member, previewText: Bool = false, check: () throws -> Void,
                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
-        try requirePreview(file.children == nil && files.contains(ObjectIdentifier(file)))
-        guard let slot = file.slot else { throw PreviewError.format }
-        return try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
+        try checkMember(file, mode: previewText ? .preview : .crc, check: check, fill: fill)
+    }
+
+    struct TextIndex {
+        fileprivate let root: Member, member: Member
+        fileprivate let local: StoredBody.Geometry, pages: IndexedText
+        var count: Int { pages.count }
+    }
+
+    private func originalSlot(_ file: Member) throws -> PhysicalSlot {
+        guard file.children == nil, files.contains(ObjectIdentifier(file)), let slot = file.slot
+        else { throw PreviewError.format }
+        return slot
+    }
+
+    func checkMember(_ file: Member, mode: MemberReadMode, check: () throws -> Void,
+                     fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
+        let slot = try originalSlot(file)
+        let read = try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
             record: slot.central, offset: slot.offset, limit: slot.limit, centralWide: slot.wide,
-            size: file.size, previewText: previewText, check: check, fill: fill)
+            size: file.size, mode: mode, check: check, fill: fill)
+        let proof = read.indexed.map { TextIndex(root: root, member: file, local: $0.0, pages: $0.1) }
+        return MemberCRC(declared: read.declared, actual: read.actual, text: read.text, indexed: proof)
+    }
+
+    func textPage(_ file: Member, proof: TextIndex, page: Int, check: () throws -> Void,
+                  fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> String {
+        try requirePreview(proof.root === root && proof.member === file && (0..<proof.count).contains(page))
+        let slot = try originalSlot(file)
+        var scratch = [UInt8](repeating: 0, count: 65_536)
+        func match() throws {
+            try StoredBody.match(centralAt + slot.central, central[slot.central..<slot.centralEnd],
+                                 scratch: &scratch, check: check, fill: fill)
+            try StoredBody.match(centralAt + central.count, ending[...], scratch: &scratch, check: check, fill: fill)
+            try proof.local.match(scratch: &scratch, check: check, fill: fill)
+        }
+        try match()
+        let text = try proof.pages.page(page, bodyAt: proof.local.body, check: check, fill: fill)
+        try match(); try check()
+        return text
     }
 
     // Callers establish enclosing structure bounds before accessing fixed-width fields.
@@ -175,9 +211,9 @@ struct DirectoryIndex {
             }
             try requirePreview(hasWide || !values.contains(u32max))
             let body = values[0], off = values[2], header = 30 + nl + (flags & 8 == 0 ? 0 : 12)
-            try requirePreview(body == values[1] && body <= (128 << 30)
+            try requirePreview(body == values[1] && body <= maxMember
                                && off <= at - header && body <= at - header - off)
-            let slot = PhysicalSlot(p, off, off + header + body, hasWide); spans.append(slot)
+            let slot = PhysicalSlot(p, next, off, off + header + body, hasWide); spans.append(slot)
             let raw = cd[name..<extra]
             try requirePreview(flags & 0x800 != 0 || raw.allSatisfy { $0 < 128 })
             let folder = raw.last == 47
