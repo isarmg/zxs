@@ -15,6 +15,7 @@ pub(super) struct Work {
     pub(super) reply:mpsc::SyncSender<Reply>,
 }
 fn conflict()->Reply{Reply::text("409 Conflict","工作稿已变化、正在打开写入或尚未确认。请先关闭写入程序，再核对当前工作稿。")}
+fn stale_form()->Reply{Reply::text("409 Conflict","表单已失效：这次没有提交，也未核对上一次的结果。如果没看到带版本 ID 的成功页，不要用新表单重试上一次提交。")}
 fn live(stopping:&impl Fn()->bool,closing:&AtomicBool,session:&AtomicBool,before:Instant)->io::Result<()>{
     if stopping(){closing.store(true,Ordering::Release);}
     if closing.load(Ordering::Acquire)||!session.load(Ordering::Acquire)||Instant::now()>=before{
@@ -76,8 +77,8 @@ impl App<'_>{
         self.expire(now);
         let Some(s)=q.cookie.as_ref().and_then(|key|self.sessions.get_mut(key))else{return Err((reply,REJECT()))};
         if s.audience!=q.audience||!s.csrf.matches(&csrf){return Err((reply,REJECT()));}
-        let Some((selected,target))=s.chosen else{return Err((reply,conflict()))};
-        if selected!=op{return Err((reply,conflict()));}
+        let Some((selected,target))=s.chosen else{return Err((reply,stale_form()))};
+        if selected!=op{return Err((reply,stale_form()));}
         s.last=now;
         Ok(Work{op,target,who:s.admin.manual_author(),session:s.permit.clone(),
             before:(s.born+super::ABSOLUTE).min(s.last+super::IDLE),reply})
