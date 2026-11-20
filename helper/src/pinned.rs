@@ -138,6 +138,14 @@ impl LocalDataFile {
 
     pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.pin.metadata() }
     pub(crate) fn require_same_path(&self) -> io::Result<()> { self.pin.require_same_path() }
+    pub(crate) fn require_named_mount(&self)->io::Result<Mount>{
+        let current=Pinned::open(&self.pin.path,Kind::Regular)?;
+        let original=self.pin.mount()?;
+        if self.pin.chain!=current.chain||current.mount()?!=original {
+            return Err(invalid("selected copy name, ancestry or mount changed"));
+        }
+        Ok(original)
+    }
 
     // Selection keeps the admitted regular-file handle alive. Reopening the operand's
     // pathname instead could read a different object or open a device or FIFO.

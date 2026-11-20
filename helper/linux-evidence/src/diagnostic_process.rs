@@ -10,8 +10,11 @@ pub fn cancelled()->bool{CANCELLED.load(Ordering::Relaxed)}
 
 /// Only for the dedicated CLI process. Cancellation is recorded without
 /// allocation or non-signal-safe I/O. exec resets caught signals in the child.
-#[allow(unsafe_code)]
 pub fn watch_cancellation()->io::Result<()>{
+    watch(&[libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT])
+}
+#[allow(unsafe_code)]
+fn watch(signals:&[libc::c_int])->io::Result<()>{
     // SAFETY: fully initialized Linux sigaction with a C-ABI handler that
     // only sets a lock-free x86-64 atomic bool. This does not send a signal.
     unsafe{
@@ -23,12 +26,45 @@ pub fn watch_cancellation()->io::Result<()>{
         }
         let current=current.assume_init();
         if libc::sigemptyset(&mut action.sa_mask)!=0{return Err(io::Error::last_os_error());}
-        for sig in [libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT]{
+        for &sig in signals{
             // A blocked inherited cancellation signal is not observable by our handler.
             if libc::sigismember(&current,sig)!=0{return Err(io::Error::other("diagnostic cancellation signals must be unblocked"));}
             if libc::sigaction(sig,&action,std::ptr::null_mut())!=0{return Err(io::Error::last_os_error());}
         }
     } Ok(())
+}
+
+/// Only a dedicated image-check CLI uses this, on its own new readonly
+/// description of a previously admitted local regular copy. No replacement
+/// lease is taken when a break request has started.
+#[allow(unsafe_code)]
+pub fn acquire_copy_read_lease(file:&File)->io::Result<()>{
+    use rustix::fs::{OFlags,fcntl_getfl};
+    let flags=fcntl_getfl(file)?;
+    if flags.intersects(OFlags::PATH) || flags & OFlags::ACCMODE != OFlags::RDONLY
+        || !file.metadata()?.is_file() || cancelled(){
+        return Err(io::Error::other("expected the original readonly diagnostic copy"));
+    }
+    watch(&[libc::SIGIO])?;
+    // Linux uses SIGIO on a newly opened description and initially selects
+    // the calling process as recipient. F_SETLEASE is not a waiting lock.
+    // SAFETY: fcntl takes an integer lease type and an already open fd.
+    if unsafe{libc::fcntl(file.as_raw_fd(),libc::F_SETLEASE,libc::F_RDLCK)}!=0{
+        return Err(io::Error::other("cannot lease this copy for reading; it may be in use or leases are unavailable"));
+    }
+    require_copy_read_lease(file)
+}
+
+#[allow(unsafe_code)]
+pub fn require_copy_read_lease(file:&File)->io::Result<()>{
+    // F_GETLEASE reads this exact open description and reports the target
+    // of a pending break as UNLCK, even before any new writer can open it.
+    // SAFETY: F_GETLEASE takes no extra argument or buffer.
+    let observed=unsafe{libc::fcntl(file.as_raw_fd(),libc::F_GETLEASE)};
+    if observed!=libc::F_RDLCK || cancelled(){
+        return Err(io::Error::new(io::ErrorKind::Interrupted,"image check cancelled or its read lease was interrupted"));
+    }
+    Ok(())
 }
 
 /// The group leader must stay waitable (therefore its numeric PGID pinned)
@@ -51,14 +87,23 @@ pub fn require_waitable_children()->io::Result<()> {
 /// In the spawned child, establish a new session/group *before* any launcher
 /// setup, then exec the verified ELF by descriptor. No /proc path or PATH lookup.
 /// On any error pre_exec returns Err, never Ok: std cannot execute its nominal path.
-#[allow(unsafe_code)]
 pub fn prepare_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
+    prepare_checker_exec(cmd,original,None)
+}
+
+// A full copy hash need not share the checker's CPU allowance. Lower the
+// sandbox child's ceiling only, before its landscape or executable changes.
+pub fn prepare_ext4_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
+    prepare_checker_exec(cmd,original,Some(300))
+}
+fn prepare_checker_exec(cmd:&mut Command,original:&File,cpu:Option<libc::rlim_t>)->io::Result<()>{
     let mut args=vec![CString::new("bwrap").expect("literal")];
+    let ceiling=if cpu.is_some(){79}else{63};
     for arg in cmd.get_args() {
-        if args.len()>=63{return Err(io::Error::other("fixed diagnostic launcher argument budget exceeded"));}
+        if args.len()>=ceiling{return Err(io::Error::other("fixed diagnostic launcher argument budget exceeded"));}
         args.push(CString::new(arg.as_bytes()).map_err(|_|io::Error::other("invalid diagnostic launcher argument"))?);
     }
-    pinned_exec(cmd,original,args,None)
+    pinned_exec(cmd,original,args,None,cpu)
 }
 
 /// No string from a request can become a subcommand or a program name.
@@ -72,14 +117,14 @@ pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyForm
     let action=match format{CopyFormat::Fat32=>"__fat32-sealed-v1",CopyFormat::Exfat=>"__exfat-sealed-v1"};
     let args=vec![CString::new("helper").expect("literal"),CString::new(action).expect("literal"),
         CString::new(hex).expect("hex digest")];
-    pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t))
+    pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t),None)
 }
 
 /// First-install child: no caller-selected operation or argument. The parent
 /// hands off a sealed scope and one local result endpoint, not root files.
 pub fn prepare_sam_worker_exec(cmd:&mut Command,original:&File)->io::Result<()>{
     pinned_exec(cmd,original,vec![CString::new("helper").expect("literal"),
-        CString::new("__sam-fresh-v1").expect("literal")],Some(std::process::id() as libc::pid_t))
+        CString::new("__sam-fresh-v1").expect("literal")],Some(std::process::id() as libc::pid_t),None)
 }
 
 /// The one account SQL child retains the operator's TERMINAL session (not
@@ -130,7 +175,7 @@ pub fn account_sql_descriptors()->io::Result<[File;2]>{
     Ok(unsafe{[File::from_raw_fd(3),File::from_raw_fd(4)]})
 }
 #[allow(unsafe_code)]
-fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<libc::pid_t>)->io::Result<()> {
+fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<libc::pid_t>,cpu:Option<libc::rlim_t>)->io::Result<()> {
     let executable=original.try_clone()?;
     // SAFETY: all memory and C strings are owned and allocated before fork.
     // The closure only builds pointer arrays on the stack and uses async-safe
@@ -156,7 +201,15 @@ fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<li
             if libc::getppid()!=parent{return Err(io::Error::from_raw_os_error(libc::ECANCELED));}
         }
         if libc::setsid()<0{return Err(io::Error::last_os_error());}
-        let mut argv=[std::ptr::null::<libc::c_char>();64];
+        if let Some(limit)=cpu{
+            let mut value=MaybeUninit::<libc::rlimit>::uninit();
+            if libc::getrlimit(libc::RLIMIT_CPU,value.as_mut_ptr())!=0{return Err(io::Error::last_os_error());}
+            let mut value=value.assume_init();
+            value.rlim_max=value.rlim_max.min(limit);
+            value.rlim_cur=value.rlim_cur.min(value.rlim_max);
+            if libc::setrlimit(libc::RLIMIT_CPU,&value)!=0{return Err(io::Error::last_os_error());}
+        }
+        let mut argv=[std::ptr::null::<libc::c_char>();80];
         for (dst,src) in argv.iter_mut().zip(args.iter()){*dst=src.as_ptr();}
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
         libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),
@@ -167,9 +220,16 @@ fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<li
 }
 
 /// Native x86-64 classic BPF for --seccomp. Only group-lifetime constraints,
-/// not a general syscall security policy. The actual checker needs no child.
-/// Reject alternate audit architectures/x32 instead of interpreting their numbers as amd64.
-pub fn diagnostic_group_filter()->Vec<u8>{
+/// not a general syscall security policy. Never allow independent children.
+pub fn diagnostic_group_filter()->Vec<u8>{group_filter(false)}
+
+// The pinned libext2fs checks bitmaps in threads on a sufficiently large
+// filesystem. Allow only the actual glibc 2.41 NPTL thread in this profile.
+pub fn ext4_group_filter()->Vec<u8>{group_filter(true)}
+const NPTL_CLONE:u32=uapi::CLONE_VM|uapi::CLONE_FS|uapi::CLONE_FILES|uapi::CLONE_SIGHAND
+    |uapi::CLONE_THREAD|uapi::CLONE_SYSVSEM|uapi::CLONE_SETTLS|uapi::CLONE_PARENT_SETTID
+    |uapi::CLONE_CHILD_CLEARTID;
+fn group_filter(threads:bool)->Vec<u8>{
     const LD_W_ABS:u16=0x20;const JEQ:u16=0x15;const JGE:u16=0x35;const RET:u16=0x06;
     const KILL:u32=0x8000_0000;const EPERM:u32=0x0005_0001;const ALLOW:u32=0x7fff_0000;
     let mut out=Vec::with_capacity(192);
@@ -179,8 +239,20 @@ pub fn diagnostic_group_filter()->Vec<u8>{
     op(LD_W_ABS,0,0,4);op(JEQ,1,0,0xc000_003e);op(RET,0,0,KILL); // seccomp_data.arch
     op(LD_W_ABS,0,0,0);op(JGE,0,1,0x4000_0000);op(RET,0,0,KILL); // seccomp_data.nr, reject x32
     for number in [uapi::__NR_setsid,uapi::__NR_setpgid,uapi::__NR_fork,uapi::__NR_vfork,
-                   uapi::__NR_clone,uapi::__NR_clone3,uapi::__NR_unshare,uapi::__NR_setns] {
+                   uapi::__NR_unshare,uapi::__NR_setns] {
         op(JEQ,0,1,number);op(RET,0,0,EPERM);
+    }
+    if threads{
+        // Do not dereference clone3's hidden argument struct. Its defined
+        // ENOSYS path in glibc uses the inspectable x86-64 clone syscall.
+        op(JEQ,0,1,uapi::__NR_clone3);op(RET,0,0,0x0005_0000|libc::ENOSYS as u32);
+        op(JEQ,0,6,uapi::__NR_clone);
+        op(LD_W_ABS,0,0,20);op(JEQ,1,0,0);op(RET,0,0,EPERM); // flags high
+        op(LD_W_ABS,0,0,16);op(JEQ,1,0,NPTL_CLONE);op(RET,0,0,EPERM); // low, including zero exit signal
+    }else{
+        for number in [uapi::__NR_clone,uapi::__NR_clone3]{
+            op(JEQ,0,1,number);op(RET,0,0,EPERM);
+        }
     }
     op(RET,0,0,ALLOW);out
 }
@@ -189,19 +261,38 @@ pub fn diagnostic_group_filter()->Vec<u8>{
 mod tests {
     use super::*;
     // Independent interpreter restricted to the four emitted classic-BPF operations.
-    fn decision(p:&[u8],arch:u32,nr:u32)->u32{
+    fn decision_with_flags(p:&[u8],arch:u32,nr:u32,flags:u64)->u32{
         let (mut a,mut pc)=(0,0usize);
         loop {
             let f=&p[pc*8..(pc+1)*8];pc+=1;
             let ins=u16::from_ne_bytes(f[..2].try_into().unwrap());
             let k=u32::from_ne_bytes(f[4..].try_into().unwrap());
             match ins{
-                0x20=>a=match k{0=>nr,4=>arch,_=>panic!("unexpected seccomp_data offset")},
+                0x20=>a=match k{0=>nr,4=>arch,16=>flags as u32,20=>(flags>>32) as u32,_=>panic!("unexpected seccomp_data offset")},
                 0x15=>pc+=usize::from(if a==k{f[2]}else{f[3]}),
                 0x35=>pc+=usize::from(if a>=k{f[2]}else{f[3]}),
                 0x06=>return k,_=>panic!("unexpected fixed diagnostic instruction"),
             }
         }
+    }
+    fn decision(p:&[u8],arch:u32,nr:u32)->u32{decision_with_flags(p,arch,nr,0)}
+    #[test]
+    fn only_ext_can_create_an_exact_glibc_same_process_thread(){
+        let arch=0xc000_003e;
+        let glibc_flags=0x003d_0f00;
+        let ext=ext4_group_filter();
+        let raw=|flags|decision_with_flags(&ext,arch,uapi::__NR_clone,flags);
+        assert_eq!(raw(glibc_flags),0x7fff_0000);
+        for flags in [0,17,glibc_flags|17,glibc_flags&!u64::from(uapi::CLONE_THREAD),
+                      glibc_flags|u64::from(uapi::CLONE_NEWUSER),glibc_flags|(1<<32)]{
+            assert_eq!(raw(flags),0x0005_0001);
+        }
+        assert_eq!(decision(&ext,arch,uapi::__NR_clone3),0x0005_0026);
+        for nr in [uapi::__NR_fork,uapi::__NR_vfork,uapi::__NR_setpgid,uapi::__NR_setsid,uapi::__NR_unshare,uapi::__NR_setns]{
+            assert_eq!(decision(&ext,arch,nr),0x0005_0001);
+        }
+        assert_eq!(decision(&ext,arch,uapi::__NR_fstat),0x7fff_0000);
+        assert_eq!(decision_with_flags(&diagnostic_group_filter(),arch,uapi::__NR_clone,glibc_flags),0x0005_0001);
     }
     #[test]
     fn tool_cannot_fork_or_leave_the_launchers_process_group_in_another_abi(){

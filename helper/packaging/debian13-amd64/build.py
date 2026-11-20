@@ -27,6 +27,18 @@ COMMON = ("GPL-1","GPL-2","GPL-3","LGPL-2","LGPL-2.1","LGPL-3","Apache-2.0","BSD
 PROFILE = ("bwrap","fsck.fat","ld-linux-x86-64","libc","libcap","libselinux","libpcre2","libgcc")
 FILES = ("bin/bwrap","bin/fsck.fat",f"lib/{LOADER}","lib/libc.so.6","lib/libcap.so.2",
          "lib/libselinux.so.1","lib/libpcre2-8.so.0","lib/libgcc_s.so.1")
+# Exact Debian e2fsprogs 1.47.2-3+b12 ELF closure, not all of its Depends.
+# Keep this order in the protected ext4 profile. libss/logsave/mkfs are absent.
+EXT4_LIBS = ("libext2fs.so.2","libcom_err.so.2","libblkid.so.1","libuuid.so.1","libe2p.so.2")
+EXT4_NEEDED = {
+    "e2fsck": {"libc.so.6",*EXT4_LIBS},
+    "libext2fs.so.2": {"libcom_err.so.2","libc.so.6"},
+    "libcom_err.so.2": {"libc.so.6",LOADER},
+    "libblkid.so.1": {"libc.so.6",LOADER},
+    "libuuid.so.1": {"libc.so.6",LOADER},
+    "libe2p.so.2": {"libc.so.6"},
+}
+
 
 def textout(args, cwd=None):
     return run(args, cwd=cwd, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL).stdout.decode("ascii").strip()
@@ -288,12 +300,17 @@ def build(args):
         cap_manifest=cap/"CAPSULE"
         with cap_manifest.open("xb") as mf: mf.write(samba_capsule.manifest_bytes(recipe))
         binary=copy_checked(args.helper,root/"usr/bin/helper",args.helper_sha256,cap=64<<20)
-        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat"]
+        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat",home/"bin/e2fsck"]
         libs=sorted((home/"lib").iterdir())
         allowed={p.name for p in libs}
+        base=allowed-set(EXT4_LIBS)
+        require(set(EXT4_LIBS)<=allowed,"missing e2fsck guest library")
         requires={}
         for path in programs+libs:
-            requires[str(path.relative_to(root))]=elf(path,allowed,engine=path.name in {"fsck.fat","fsck.exfat"},library=path in libs)
+            expected=EXT4_NEEDED.get(path.name)
+            needed=elf(path,allowed if expected else base,engine=path.name in {"fsck.fat","fsck.exfat"},library=path in libs)
+            require(expected is None or set(needed)==expected,"e2fsck guest DT_NEEDED differs from the fixed Debian closure")
+            requires[str(path.relative_to(root))]=needed
             path.chmod(0o755 if path in programs or path.name==LOADER else 0o644)
         # Provider is loaded only for an allowed NEW first setup. Even an
         # accidentally hard-linked build must not make a receipt depend on it.
@@ -308,11 +325,13 @@ def build(args):
             require(textout(["/usr/bin/patchelf","--print-interpreter",str(checker)])==SYSTEM_LOADER,"unexpected sandbox loader")
         for path in programs[:2]:
             bind_private_loader(path)
-        # Keep the established FAT32 profile (also independently pinned by the
-        # SAM launcher) byte-identical. exFAT selects its own exact second slot.
-        for policy,version_label,tool in (("fat32-check-v1","dosfstools-4.2","fsck.fat"),
-                                          ("exfat-check-v1","exfatprogs-1.2.9","fsck.exfat")):
-            keys=(PROFILE[0],tool,*PROFILE[2:]);files=(FILES[0],"bin/"+tool,*FILES[2:])
+        # Keep the established two profiles byte-identical. Samba separately
+        # pins the original FAT32 profile, not this new ext4 guest.
+        for policy,version_label,tool,extra in (("fat32-check-v1","dosfstools-4.2","fsck.fat",()),
+                ("exfat-check-v1","exfatprogs-1.2.9","fsck.exfat",()),
+                ("ext4-check-v1","e2fsprogs-1.47.2","e2fsck",EXT4_LIBS)):
+            keys=(PROFILE[0],tool,*PROFILE[2:],*extra)
+            files=(FILES[0],"bin/"+tool,*FILES[2:],*(f"lib/{name}" for name in extra))
             lines=[f"{key} {digest(home/leaf)}" for key,leaf in zip(keys,files,strict=True)]
             with (home/policy).open("x",encoding="ascii",newline="\n") as f:
                 f.write("debian13-amd64/private-pack-1/bubblewrap-0.12/"+version_label+"\n"+"\n".join(lines)+"\n")
@@ -325,7 +344,7 @@ def build(args):
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
-              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly"}}
+              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly","e2fsck":"leased-saved-copy-readonly"}}
         # Candidate NON-privileged material for the release signer. Do not
         # install it as its own authorization: the package owner is not the site's
         # authority. It and the exact .deb are covered by the external signed sums.

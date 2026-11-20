@@ -1,6 +1,7 @@
-//! One isolated invocation. The checker never gets /dev, the caller's
-//! namespace/terminal, a host directory, the source file or a caller-selected option.
-use super::{Format,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
+//! One isolated invocation. The checker never gets host /dev, the caller's
+//! namespace/terminal, any host directory, or an arbitrary option. Only the
+//! ext4 branch binds the explicitly saved copy itself and holds a read lease.
+use super::{Format,ext4,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -14,16 +15,23 @@ use std::{fs::File,io::{self,Read,Write},process::{Command,Stdio},thread,time::{
 const OUTPUT:usize=64*1024;
 const STATUS:usize=4096;
 const LIMIT:Duration=Duration::from_secs(30);
+const EXT4_LIMIT:Duration=Duration::from_secs(10*60);
 
-pub(super) fn prepare_worker()->io::Result<()> {
+pub(super) fn prepare_worker()->io::Result<()> {prepare(false)}
+pub(super) fn prepare_ext4_worker()->io::Result<()> {prepare(true)}
+fn prepare(ext4:bool)->io::Result<()> {
     // This command owns the entire CLI process. Never lower process rlimits or
     // manipulate descriptor inheritance in an embedding service.
     rustix::thread::set_no_new_privs(true)?;
     crate::maintenance::diagnostic_worker(getuid().as_raw(),getgid().as_raw())?;
     helper_linux_evidence::isolate_check_descriptors()?;
     super::group::prepare()?;
-    for (r,n) in [(Resource::Cpu,12),(Resource::As,512<<20),(Resource::Fsize,140<<20),
-                  (Resource::Core,0),(Resource::Nofile,128),(Resource::Nproc,64)]{
+    // The ext guest has thirteen authenticated slots with each original
+    // ancestry held, not eight. Allow those fds plus temporary probes/pipes.
+    for (r,n) in [(Resource::Cpu,12),(Resource::As,if ext4{2<<30}else{512<<20}),
+                  (Resource::Fsize,if ext4{64<<10}else{140<<20}),
+                  (Resource::Core,0),(Resource::Nofile,if ext4{192}else{128}),(Resource::Nproc,if ext4{256}else{64})]{
+        if ext4&&r==Resource::Cpu{continue;} // only the sandbox child has its own CPU ceiling
         let old=getrlimit(r);
         let hard=old.maximum.map_or(n,|h|h.min(n));let soft=old.current.map_or(hard,|s|s.min(hard));
         setrlimit(r,Rlimit{current:Some(soft),maximum:Some(hard)})?;
@@ -39,17 +47,45 @@ fn give(fd:&impl AsFd)->io::Result<OwnedFd> {
 
 pub(super) fn check(runtime:&Runtime,image:&Sealed)->io::Result<super::Report> {
     runtime.require_format(Format::Fat32)?;
-    let (code,out,err,status)=invoke(runtime,image.file())?;
+    let (code,out,err,status)=invoke(runtime,Operand::Sealed(image.file()))?;
     classify(code,&out,&err,&status,image.geometry().data_clusters)
 }
 pub(super) fn check_exfat(runtime:&Runtime,image:&ExfatSealed)->io::Result<super::exfat::Report>{
     runtime.require_format(Format::Exfat)?;
-    let (code,out,err,status)=invoke(runtime,image.file())?;
+    let (code,out,err,status)=invoke(runtime,Operand::Sealed(image.file()))?;
     if !delivered(&status,code){return Err(invalid("exFAT checker delivery and actual exit not confirmed"));}
     super::exfat::classify(code,&out,&err,image.frame())
 }
-fn invoke(runtime:&Runtime,copy:&File)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
+pub(super) fn check_ext4(runtime:&Runtime,image:&ext4::Image)->io::Result<ext4::Report>{
+    runtime.require_ext4()?;
+    let (code,out,err,status)=invoke(runtime,Operand::LeasedExt4(image))?;
+    image.require()?;
+    if !delivered(&status,code){return Err(invalid("e2fsck delivery or actual exit not confirmed"));}
+    Ok(ext4::classify(code,&out,&err,image.extent()))
+}
+#[derive(Clone,Copy)]
+enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image)}
+impl Operand<'_>{
+    fn sandbox(self,cmd:&mut Command)->io::Result<OwnedFd>{
+        match self{
+            Self::Sealed(copy)=>{
+                // The sealed readback has rewound this description to zero.
+                let fd=give(copy)?;
+                cmd.args(["--perms","0400","--ro-bind-data",&fd.as_raw_fd().to_string(),"/image"]);
+                Ok(fd)
+            }
+            Self::LeasedExt4(image)=>{
+                let fd=give(image.file())?;
+                cmd.args(["--ro-bind-fd",&fd.as_raw_fd().to_string(),"/image"]);
+                Ok(fd)
+            }
+        }
+    }
+}
+fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
+    let ext=matches!(copy,Operand::LeasedExt4(_));
     let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin); // real EOF, never a terminal
+    let null=if ext{Some(give(&stdin)?)}else{None};
     let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
     let mut b=Command::new("/no-path-execution-for-helper-checker");
     b.env_clear().env("LC_ALL","C").current_dir("/")
@@ -61,23 +97,38 @@ fn invoke(runtime:&Runtime,copy:&File)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)
     for (f,dest) in runtime.sandbox_files(){
         let fd=give(f)?;b.args(["--ro-bind-fd",&fd.as_raw_fd().to_string(),dest]);given.push(fd);
     }
-    // ro-bind-data copies from the current offset to a private read-only
-    // file. The sealed readback has rewound the description to exactly zero.
+    if let Some(ref fd)=null{
+        // This e2fsck opens /dev/null O_RDWR only for open/close fd checks.
+        // It is an empty regular file on a dedicated tiny tmpfs, never a
+        // node or a path to host /dev. No mount table or other host resource
+        // is supplied to the guest, which only sees the saved regular image.
+        b.args(["--setenv","EXT2FS_NO_MTAB_OK","1","--size","65536","--tmpfs","/dev",
+                "--perms","0600","--file",&fd.as_raw_fd().to_string(),"/dev/null"]);
+    }
     let (filter_read,filter_write)=pipe_with(PipeFlags::CLOEXEC)?;
-    {let mut w=File::from(filter_write); w.write_all(&helper_linux_evidence::diagnostic_process::diagnostic_group_filter())?;}
+    {
+        use helper_linux_evidence::diagnostic_process::{diagnostic_group_filter,ext4_group_filter};
+        let mut w=File::from(filter_write);
+        w.write_all(&if ext{ext4_group_filter()}else{diagnostic_group_filter()})?;
+    }
     let filter=give(&filter_read)?;b.args(["--seccomp",&filter.as_raw_fd().to_string()]);
-    let operand=give(copy)?;let status=give(&wstatus)?;
-    b.args(["--perms","0400","--ro-bind-data",&operand.as_raw_fd().to_string(),"/image",
-            "--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),
-            "--","/checker","-n","/image"]);
+    let operand=copy.sandbox(&mut b)?;let status=give(&wstatus)?;
+    b.args(["--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),"--","/checker"]);
+    if ext{b.args(["-fn","-N","/image","/image"]);}else{b.args(["-n","/image"]);}
     runtime.recheck()?;
     not_cancelled()?;
-    helper_linux_evidence::diagnostic_process::prepare_diagnostic_exec(&mut b,runtime.launcher())?;
+    if let Operand::LeasedExt4(image)=copy{
+        image.require()?;
+        helper_linux_evidence::diagnostic_process::prepare_ext4_diagnostic_exec(&mut b,runtime.launcher())?;
+    }else{
+        helper_linux_evidence::diagnostic_process::prepare_diagnostic_exec(&mut b,runtime.launcher())?;
+    }
     let mut group=Group::new(b.spawn()?);
     // Only the sandbox monitor and its explicitly selected setup descriptions
     // retain writers. In particular the parent must not keep the status pipe open.
-    drop(b);drop(given);drop(operand);drop(status);drop(wstatus);drop(filter);drop(filter_read);
-    let result=collect(&mut group,File::from(rstatus));
+    drop(b);drop(given);drop(operand);drop(status);drop(wstatus);drop(filter);drop(filter_read);drop(null);
+    let lease=match copy{Operand::LeasedExt4(image)=>Some(image.file()),Operand::Sealed(_)=>None};
+    let result=collect(&mut group,File::from(rstatus),if ext{EXT4_LIMIT}else{LIMIT},lease);
     let reaped=group.finish()?;
     let (code,out,err,status)=result?;
     not_cancelled()?;
@@ -102,7 +153,7 @@ fn drain(f:&mut impl Read,v:&mut Vec<u8>,max:usize)->io::Result<bool>{
         Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e),
     }} Ok(false)
 }
-fn collect(group:&mut Group,mut status:File)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
+fn collect(group:&mut Group,mut status:File,limit:Duration,lease:Option<&File>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
     let mut out=group.child.stdout.take().ok_or_else(||invalid("missing checker output pipe"))?;
     let mut err=group.child.stderr.take().ok_or_else(||invalid("missing checker error pipe"))?;
     nonblock(&out)?;nonblock(&err)?;nonblock(&status)?;
@@ -110,7 +161,8 @@ fn collect(group:&mut Group,mut status:File)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     let start=Instant::now();
     loop{
         not_cancelled()?;
-        if start.elapsed()>LIMIT{return Err(io::Error::new(io::ErrorKind::TimedOut,"isolated checker timed out"));}
+        if let Some(file)=lease{helper_linux_evidence::diagnostic_process::require_copy_read_lease(file)?;}
+        if start.elapsed()>limit{return Err(io::Error::new(io::ErrorKind::TimedOut,"isolated checker timed out"));}
         let a=drain(&mut out,&mut o,OUTPUT-e.len())?;let b=drain(&mut err,&mut e,OUTPUT-o.len())?;
         let c=drain(&mut status,&mut s,STATUS)?;
         if let Some(code)=group.peek_exit()? && a && b && c {

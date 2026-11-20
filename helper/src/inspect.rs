@@ -1,4 +1,4 @@
-use crate::pinned::{Entity, Kind, LocalDataFile, Pinned, invalid};
+use crate::pinned::{Entity, Kind, LocalDataFile, Mount, Pinned, invalid};
 use std::fmt::Write as _;
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
@@ -39,7 +39,7 @@ pub(crate) fn directories(paths: &[PathBuf]) -> io::Result<String> {
 struct Stamp { entity: Entity, size: u64, mode: u32, modified: (i64,i64), changed: (i64,i64) }
 impl Stamp {
     fn of(meta: Metadata) -> io::Result<Self> {
-        if !meta.is_file() || meta.nlink() != 1 || meta.len() > MAX_COMPARE { return Err(invalid("expected a single-linked regular file of at most 256 MiB")); }
+        if !meta.is_file() || meta.nlink() != 1 { return Err(invalid("expected a singly linked regular file")); }
         Ok(Self { entity: Entity::of(&meta)?, size: meta.len(), mode: meta.mode(),
             modified: (meta.mtime(), meta.mtime_nsec()), changed: (meta.ctime(), meta.ctime_nsec()) })
     }
@@ -53,14 +53,16 @@ impl Input {
     // Check the operation's budget on its original metadata before data access.
     pub(crate) fn select_in(path:&Path,sizes:std::ops::RangeInclusive<u64>)->io::Result<Self>{
         let pinned=LocalDataFile::select(path)?;
-        let meta=pinned.metadata()?;
-        if meta.is_file() && meta.nlink()==1 && !sizes.contains(&meta.len()){
+        let stamp=Stamp::of(pinned.metadata()?)?;
+        if !sizes.contains(&stamp.size){
             return Err(io::Error::new(io::ErrorKind::Unsupported,"regular input size is outside this operation's supported range"));
         }
-        let stamp=Stamp::of(meta)?;
         Ok(Self { pinned, stamp })
     }
     pub(crate) fn len(&self) -> u64 { self.stamp.size }
+    // An ext image is carried through a name-resolving readonly bind, not
+    // copied into a second file. Also require the current name's original mount.
+    pub(crate) fn copy_mount(&self)->io::Result<Mount>{self.pinned.require_named_mount()}
     pub(crate) fn reader(&self) -> io::Result<File> {
         let file = self.pinned.reader()?;
         if Stamp::of(file.metadata()?)? != self.stamp { return Err(invalid("file changed before the comparison")); }

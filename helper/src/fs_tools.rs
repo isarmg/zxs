@@ -23,19 +23,19 @@ pub(crate) struct Profile {
     pub(crate) options:&'static [&'static str], pub(crate) target:Target, pub(crate) limit:&'static str,
 }
 impl Profile {
-    pub(crate) fn private(self)->bool {matches!(self.format,"fat32"|"exfat")}
+    pub(crate) fn private(self)->bool {matches!(self.format,"fat32"|"exfat"|"ext4")}
     fn slots(self)->Vec<&'static str>{
         if self.private(){vec!["usr","lib","local-ops-helper","disk-tools-v1","bin",self.tool]}
         else{vec!["usr",self.directory,self.tool]}
     }
     pub(crate) fn action(self)->&'static str {match self.format {
-        "fat32"=>"sealed-copy-readonly", "exfat"=>"sealed-copy-readonly",
+        "fat32"|"exfat"=>"sealed-copy-readonly", "ext4"=>"leased-saved-copy-readonly",
         "zfs"=>"host-version-and-loaded-module-required-not-enabled", _=>"planned-not-enabled"
     }}
 }
 const PROFILES:[Profile;7]=[
     Profile{format:"ext4",package:"e2fsprogs",directory:"sbin",tool:"e2fsck",
-        options:&["-f","-n"],target:Target::OfflineImage,limit:"unmounted; no external journal for a single-image plan; unresolved journal is not clean"},
+        options:&["-f","-n"],target:Target::OfflineImage,limit:"saved local copy only; no external journal or remaining journal/orphan recovery"},
     Profile{format:"ntfs",package:"ntfs-3g",directory:"bin",tool:"ntfsfix",
         options:&["-n"],target:Target::OfflineImage,limit:"limited NTFS checks only; full diagnosis/repair belongs to Windows chkdsk"},
     Profile{format:"zfs",package:"zfsutils-linux",directory:"sbin",tool:"zpool",
