@@ -14,7 +14,7 @@ import java.util.TreeMap;
 
 /** Bounded, untrusted directory declarations. No tree identity or automatic member reads. */
 final class ArchiveIndex {
-    static final long MAX_ARCHIVE = (256L << 30) + (32L << 20);
+    static final long MAX_ARCHIVE = (256L << 30) + (32L << 20), MAX_MEMBER = 128L << 30;
     static final int MAX_CD = 2 << 20, MAX_ENTRIES = 8192, MAX_NODES = 12288;
     static final int MAX_QUERY = 128; // UTF-16 code units; name search never interprets a path.
     static final long U32 = 0xffffffffL;
@@ -29,13 +29,13 @@ final class ArchiveIndex {
         void fill(long offset, byte[] buffer, int length) throws IOException; // exact, reusable buffer
     }
     static final class Slot {
-        final int record;          // original central record, not a reconstructed filename
+        final int record, recordLength; // original central bytes, not a reconstructed filename
         final long offset, minimumEnd;
         final boolean centralZip64;
         long limit;                // next physical local header, or central directory
-        Slot(int record, long offset, long minimumEnd, boolean centralZip64) {
-            this.record = record; this.offset = offset; this.minimumEnd = minimumEnd;
-            this.centralZip64 = centralZip64;
+        Slot(int record, int recordLength, long offset, long minimumEnd, boolean centralZip64) {
+            this.record = record; this.recordLength = recordLength;
+            this.offset = offset; this.minimumEnd = minimumEnd; this.centralZip64 = centralZip64;
         }
     }
     static final class Item {
@@ -85,22 +85,57 @@ final class ArchiveIndex {
         }
     }
 
+    static final class TextIndex {
+        private final Item item;
+        private final StoredMember.Layout local;
+        private final IndexedText pages;
+        private TextIndex(Item item, StoredMember.Layout local, IndexedText pages) {
+            this.item = item; this.local = local; this.pages = pages;
+        }
+        int pages() { return pages.pages(); }
+    }
+
     StoredMember.Result checkMember(MemberSource src, Item file) throws IOException {
-        return checkMember(src, file, false);
+        return checkMember(src, file, StoredMember.Mode.CRC);
     }
     StoredMember.Result checkMember(MemberSource src, Item file, boolean previewText) throws IOException {
+        return checkMember(src, file, previewText ? StoredMember.Mode.PREVIEW : StoredMember.Mode.CRC);
+    }
+    StoredMember.Result checkMember(MemberSource src, Item file, StoredMember.Mode mode) throws IOException {
         require(file != null && file.children == null && file.slot != null);
-        require(file.bytes >= 0);
+        require(file.bytes >= 0 && file.bytes <= MAX_MEMBER);
         require(owns(file)); // a row from a former selection is not a capability on this index
-        byte[] block = new byte[64 * 1024];
-        checkDirectory(src, block);
-        byte[] capture = previewText ? new byte[PlainText.captureLength(file.bytes)] : null;
-        StoredMember.Result result = StoredMember.check(src, central, file.slot, file.bytes, block, capture);
-        checkDirectory(src, block); src.check();
-        if (capture == null || !result.matches()) return result;
-        PlainText.Preview text = PlainText.decode(capture, file.bytes);
+        byte[] scratch = new byte[64 * 1024];
+        checkDirectory(src, scratch);
+        StoredMember.Layout local = StoredMember.layout(src, central, file.slot, file.bytes);
+        byte[] prefix = mode == StoredMember.Mode.PREVIEW ? new byte[PlainText.captureLength(file.bytes)] : null;
+        IndexedText.Build build = mode == StoredMember.Mode.INDEXED ? new IndexedText.Build(file.bytes) : null;
+        long actual = StoredMember.crc(src, local, build == null ? scratch : new byte[IndexedText.BLOCK], prefix, build);
+        checkDirectory(src, scratch); src.check();
+        PlainText.Preview text = null;
+        IndexedText indexed = null;
+        if (local.crc == actual) {
+            if (prefix != null) text = PlainText.decode(prefix, file.bytes, src::check);
+            if (build != null) indexed = build.finish();
+        }
         src.check();
-        return new StoredMember.Result(result.expected, result.actual, text);
+        return new StoredMember.Result(local.crc, actual, text, indexed == null ? null : new TextIndex(file, local, indexed));
+    }
+
+    String textPage(MemberSource src, Item file, TextIndex original, int page) throws IOException {
+        require(original != null && original.item == file && owns(file));
+        require(page >= 0 && page < original.pages());
+        byte[] scratch = new byte[64 * 1024];
+        checkSelectedRecord(src, file.slot, original.local, scratch);
+        String result = original.pages.page(src, original.local.body, page);
+        checkSelectedRecord(src, file.slot, original.local, scratch); src.check();
+        return result;
+    }
+
+    private void checkSelectedRecord(MemberSource src, Slot slot, StoredMember.Layout local, byte[] scratch) throws IOException {
+        StoredMember.match(src, centralAt + slot.record, central, slot.record, slot.recordLength, scratch);
+        StoredMember.match(src, centralAt + central.length, ending, scratch);
+        local.match(src, scratch);
     }
     boolean owns(Item node) {
         if (node == null) return false;
@@ -206,9 +241,9 @@ final class ArchiveIndex {
             // Local headers have a 30-byte minimum and the same encoded name in this profile.
             // With bit 3, even the smallest descriptor without its optional signature uses 12 bytes.
             long overhead = 30L + nl + ((flags & 8) == 0 ? 0 : 12);
-            require(v[0] == v[1] && v[0] <= (128L << 30) && v[2] <= at - overhead
+            require(v[0] == v[1] && v[0] <= MAX_MEMBER && v[2] <= at - overhead
                     && v[0] <= at - overhead - v[2]);
-            Slot slot = new Slot(p, v[2], v[2] + overhead + v[0], zip64);
+            Slot slot = new Slot(p, stop + cl - p, v[2], v[2] + overhead + v[0], zip64);
             require(spans.put(v[2], slot) == null);
             if ((flags & 0x800) == 0) for (int k = start; k < extra; k++) require(cd[k] >= 0);
             String name;

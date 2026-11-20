@@ -44,18 +44,31 @@ final class PickedDocument implements AutoCloseable {
         ParcelFileDescriptor old = held; held = null;
         try { old.close(); } catch (IOException ignored) { /* no retry of a closed descriptor number */ }
     }
-    StoredMember.Result checkMember(Context ctx, ArchiveIndex.Item item, CancellationSignal cancel, boolean previewText) throws IOException {
+    StoredMember.Result checkMember(Context ctx, ArchiveIndex.Item item, CancellationSignal cancel, StoredMember.Mode mode)
+            throws IOException {
         cancel.throwIfCanceled();
         try (ParcelFileDescriptor lease = borrow()) {
             Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
             reader.validate();
-            StoredMember.Result result = index.checkMember(reader, item, previewText);
+            StoredMember.Result result = index.checkMember(reader, item, mode);
             reader.validate();
             return result;
         }
     }
 
-    /** Page drawing rechecks the existing grant and original FD, never the body or a new URI. */
+    String textPage(Context ctx, ArchiveIndex.Item item, ArchiveIndex.TextIndex proof, int page, CancellationSignal cancel)
+            throws IOException {
+        cancel.throwIfCanceled();
+        try (ParcelFileDescriptor lease = borrow()) {
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
+            reader.validate();
+            String result = index.textPage(reader, item, proof, page);
+            reader.validate();
+            return result;
+        }
+    }
+
+    /** Final page drawing rechecks the existing grant and original FD, never a new URI. */
     synchronized void checkTextPresentation(Context ctx) throws IOException {
         ArchiveIndex.require(held != null);
         checkObserved(ctx, uri, held.getFileDescriptor(), observed);

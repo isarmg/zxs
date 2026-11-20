@@ -7,27 +7,48 @@ import static org.zipworkspace.preview.ArchiveIndex.*;
 
 /** One stored body from one displayed central record. Neither authentication nor extraction. */
 final class StoredMember {
+    enum Mode { CRC, PREVIEW, INDEXED }
     static final class Result {
         final long expected, actual;
         final PlainText.Preview text; // null for CRC-only, nonmatching CRC, or unsupported display text
-        Result(long expected, long actual) { this(expected, actual, null); }
-        Result(long expected, long actual, PlainText.Preview text) {
-            this.expected = expected; this.actual = actual; this.text = text;
+        final TextIndex indexed;
+        Result(long expected, long actual, PlainText.Preview text, TextIndex indexed) {
+            this.expected = expected; this.actual = actual; this.text = text; this.indexed = indexed;
         }
         boolean matches() { return expected == actual; }
     }
 
     static void match(MemberSource src, long at, byte[] expected, byte[] block) throws IOException {
-        for (int i = 0; i < expected.length;) {
+        match(src, at, expected, 0, expected.length, block);
+    }
+
+    static void match(MemberSource src, long at, byte[] expected, int from, int length, byte[] block) throws IOException {
+        for (int i = 0; i < length;) {
             src.check();
-            int n = Math.min(block.length, expected.length - i);
+            int n = Math.min(block.length, length - i);
             src.fill(at + i, block, n);
-            require(Arrays.equals(block, 0, n, expected, i, i + n));
+            require(Arrays.equals(block, 0, n, expected, from + i, from + i + n));
             i += n;
         }
     }
 
-    static Result check(MemberSource src, byte[] cd, Slot slot, long bytes, byte[] block, byte[] capture) throws IOException {
+    /** Exact bytes and body geometry selected before the first CRC pass. */
+    static final class Layout {
+        private final long offset, end;
+        final long body, crc;
+        private final byte[] header, fields, descriptor;
+        private Layout(long offset, long body, long end, long crc, byte[] header, byte[] fields, byte[] descriptor) {
+            this.offset = offset; this.body = body; this.end = end; this.crc = crc;
+            this.header = header; this.fields = fields; this.descriptor = descriptor;
+        }
+        void match(MemberSource src, byte[] block) throws IOException {
+            StoredMember.match(src, offset, header, block);
+            StoredMember.match(src, offset + 30, fields, block);
+            StoredMember.match(src, end, descriptor, block);
+        }
+    }
+
+    static Layout layout(MemberSource src, byte[] cd, Slot slot, long bytes) throws IOException {
         final int p = slot.record, flags = u16(cd, p + 8), nameLength = u16(cd, p + 28);
         final long crc = u32(cd, p + 16);
         final boolean streaming = (flags & 8) != 0;
@@ -73,13 +94,18 @@ final class StoredMember {
             require(descriptorLength(descriptor, sizes64, crc, bytes) == remaining);
         }
 
+        return new Layout(slot.offset, body, end, crc, h, fields, descriptor);
+    }
+
+    static long crc(MemberSource src, Layout local, byte[] block, byte[] capture, IndexedText.Build indexed) throws IOException {
         CRC32 computed = new CRC32();
-        for (long pos = body; pos < end;) {
+        for (long pos = local.body; pos < local.end;) {
             src.check();
-            int n = (int)Math.min(block.length, end - pos);
+            int n = (int)Math.min(block.length, local.end - pos);
             src.fill(pos, block, n);
             computed.update(block, 0, n);
-            long relative = pos - body;
+            long relative = pos - local.body;
+            if (indexed != null) indexed.accept(relative, block, n, src::check);
             if (capture != null && relative < capture.length) {
                 int at = (int)relative; // only after the bound: the CRC may cover well over 2 GiB
                 System.arraycopy(block, 0, capture, at, Math.min(n, capture.length - at));
@@ -87,10 +113,8 @@ final class StoredMember {
             pos += n;
         }
         src.check();
-        match(src, slot.offset, h, block);
-        match(src, slot.offset + 30, fields, block);
-        match(src, end, descriptor, block);
-        return new Result(crc, computed.getValue());
+        local.match(src, block);
+        return computed.getValue();
     }
 
     static int descriptorLength(byte[] d, boolean wide, long crc, long bytes) throws IOException {

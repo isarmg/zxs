@@ -6,7 +6,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.zip.CRC32;
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -296,6 +298,126 @@ public final class StoredMemberTest {
             else assertThrows(IOException.class, () -> a.checkMember(src, row(a), true));
         }
     }
+    private static final class WitnessReads extends Bytes {
+        final int body, length;
+        final List<Long> starts = new ArrayList<>();
+        final List<Integer> lengths = new ArrayList<>();
+        WitnessReads(byte[] original, int body, int length) { super(original); this.body = body; this.length = length; }
+        @Override public void fill(long off, byte[] buf, int n) throws IOException {
+            if (off >= body && off < (long) body + length) {
+                assertTrue(off + n <= (long) body + length);
+                starts.add(off - body); lengths.add(n);
+            }
+            super.fill(off, buf, n);
+        }
+        void resetReads() { starts.clear(); lengths.clear(); }
+    }
+
+    @Test public void indexedPagesReadExactlyTheWitnessedBlocksAndKeepCrossingScalarsAndPairs() throws IOException {
+        int block = IndexedText.BLOCK;
+        byte[] body = new byte[3 * block + 15];
+        Arrays.fill(body, (byte)'a');
+        byte[] crlf = "\r\nNEXT".getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(crlf, 0, body, block - 1, crlf.length);
+        byte[] scalar = "𠮷NEXT".getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(scalar, 0, body, 2 * block - 3, scalar.length);
+        byte[] end = "LAST".getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(end, 0, body, body.length - end.length, end.length);
+        byte[] zip = archive(body, true, true, true);
+        WitnessReads src = new WitnessReads(zip, 30 + NAME.length + 20, body.length);
+        ArchiveIndex index = ArchiveIndex.read(src, zip.length);
+        ArchiveIndex.Item file = row(index);
+        StoredMember.Result result = index.checkMember(src, file, StoredMember.Mode.INDEXED);
+        assertTrue(result.matches()); assertNull(result.text); assertNotNull(result.indexed);
+        assertEquals(List.of(0L, (long)block, 2L * block, 3L * block), src.starts);
+        assertEquals(List.of(block, block, block, 15), src.lengths); // same one pass as the CRC
+
+        src.resetReads();
+        String far = index.textPage(src, file, result.indexed, result.indexed.pages() - 1);
+        assertTrue(far.endsWith("LAST"));
+        assertEquals(List.of(3L * block), src.starts); assertEquals(List.of(15), src.lengths);
+
+        src.resetReads();
+        String second = index.textPage(src, file, result.indexed, 128);
+        assertTrue(second.startsWith("\nNEXT"));
+        assertEquals(PlainText.PAGE_UNITS, second.length());
+        assertEquals(List.of(0L, (long)block), src.starts); assertEquals(List.of(block, block), src.lengths);
+
+        src.resetReads();
+        String third = index.textPage(src, file, result.indexed, 256);
+        assertTrue(third.startsWith("𠮷NEXT"));
+        assertEquals(PlainText.PAGE_UNITS, third.length());
+        assertEquals(List.of((long)block, 2L * block), src.starts);
+        assertThrows(IOException.class, () -> index.textPage(src, file, result.indexed, -1));
+        assertThrows(IOException.class, () -> index.textPage(src, file, result.indexed, result.indexed.pages()));
+    }
+
+    @Test public void indexedTextRequiresWellFormedWholeBodyAndCrcEvenBeyondThePrefix() throws IOException {
+        for (byte[] ending : new byte[][]{ {(byte)0xe2, (byte)0x82}, {'\r'},
+                "\u202e".getBytes(StandardCharsets.UTF_8), {(byte)0xc0, (byte)0xaf} }) {
+            byte[] body = new byte[IndexedText.BLOCK + ending.length];
+            Arrays.fill(body, (byte)'a');
+            System.arraycopy(ending, 0, body, IndexedText.BLOCK, ending.length);
+            byte[] zip = archive(body, false, false, false);
+            Bytes src = new Bytes(zip);
+            ArchiveIndex index = ArchiveIndex.read(src, zip.length);
+            StoredMember.Result rejected = index.checkMember(src, row(index), StoredMember.Mode.INDEXED);
+            assertTrue(rejected.matches()); assertNull(rejected.indexed); assertNull(rejected.text);
+            assertNotNull(index.checkMember(src, row(index), true).text); // explicitly chosen prefix remains distinct
+        }
+        byte[] body = new byte[IndexedText.BLOCK + 7]; Arrays.fill(body, (byte)'\n');
+        byte[] zip = archive(body, false, true, false);
+        Bytes src = new Bytes(zip);
+        ArchiveIndex index = ArchiveIndex.read(src, zip.length);
+        ArchiveIndex.Item item = row(index);
+        StoredMember.Result good = index.checkMember(src, item, StoredMember.Mode.INDEXED);
+        assertEquals(IndexedText.BLOCK / PlainText.PAGE_NEWLINES + 1, good.indexed.pages());
+        assertEquals("\n".repeat(PlainText.PAGE_NEWLINES), index.textPage(src, item, good.indexed, 4000));
+        assertEquals("\n".repeat(7), index.textPage(src, item, good.indexed, good.indexed.pages() - 1));
+
+        zip[30 + NAME.length + body.length - 1] = 'Z'; // valid UTF-8 outside the prefix, but wrong CRC
+        StoredMember.Result bad = index.checkMember(src, item, StoredMember.Mode.INDEXED);
+        assertFalse(bad.matches()); assertNull(bad.indexed); assertNull(bad.text);
+    }
+
+    @Test public void indexedPageRejectsOtherIndexAlteredGeometryAndChangedUnshownBytesOfItsBlock() throws IOException {
+        int block = IndexedText.BLOCK, start = 30 + NAME.length;
+        byte[] body = new byte[2 * block + 17]; Arrays.fill(body, (byte)'a');
+        body[block - 1] = '\r'; body[block] = '\n';
+        byte[] zip = archive(body, false, true, true);
+        Bytes src = new Bytes(zip);
+        ArchiveIndex index = ArchiveIndex.read(src, zip.length), other = ArchiveIndex.read(src, zip.length);
+        ArchiveIndex.Item item = row(index);
+        ArchiveIndex.TextIndex proof = index.checkMember(src, item, StoredMember.Mode.INDEXED).indexed;
+        assertNotNull(proof);
+        assertThrows(IOException.class, () -> other.textPage(src, row(other), proof, 128));
+
+        for (int offset : new int[]{start - 1, start + body.length + 15, zip.length - 22 - 1, zip.length - 1,
+                start, start + 2 * block - 1}) {
+            byte old = zip[offset]; zip[offset] ^= 1;
+            assertThrows(IOException.class, () -> index.textPage(src, item, proof, 128));
+            zip[offset] = old;
+        }
+        assertTrue(index.textPage(src, item, proof, 128).startsWith("\n"));
+
+        Bytes late = new Bytes(zip.clone()) {
+            @Override public void fill(long off, byte[] output, int n) throws IOException {
+                super.fill(off, output, n);
+                if (off == start + block) bytes[bytes.length - 1] = 1; // changed after the selected block
+            }
+        };
+        assertThrows(IOException.class, () -> index.textPage(late, item, proof, 128));
+        Bytes stopped = new Bytes(zip.clone()) {
+            @Override public void fill(long off, byte[] output, int n) throws IOException {
+                super.fill(off, output, n);
+                if (off == start + block) stop.cancel();
+            }
+        };
+        assertThrows(OperationCanceledException.class, () -> index.textPage(stopped, item, proof, 128));
+        assertThrows(OperationCanceledException.class,
+                () -> index.checkMember(stopped, item, StoredMember.Mode.INDEXED));
+    }
+
     @Test public void optionalSignatureIsNotChosenFromFirstWordAlone() throws IOException {
         long sig = 0x08074b50;
         ByteBuffer z = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN);
