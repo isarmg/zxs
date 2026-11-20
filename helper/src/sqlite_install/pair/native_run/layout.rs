@@ -16,7 +16,7 @@ use std::{collections::BTreeSet,ffi::OsString,fmt::Write,fs::File,io,os::unix::{
 const HELPER:&[&str]=&["usr","bin","helper"];
 const ONLINE:&[u8]=b"helper exact host runtime selection v10\0";
 const DOMAIN:&[u8]=b"helper exact init selection v10\0";
-const WEB:&[u8]=b"helper exact enrolled Web unit 1\0";
+const WEB:&[u8]=b"helper exact enrolled Web unit 2\0";
 const BUDGET:usize=DOMAIN.len()+32+3*16+3*8+1+(MAX_FOLDERS+1)*(2+MAX_PATH_BYTES);
 
 #[derive(Debug)]
@@ -240,7 +240,7 @@ pub(in crate::sqlite_install::pair) fn online_roots(site:&NativeSite)->io::Resul
 // Give the existing permanently lowered worker only the three original
 // immutable identities, same-path evidence and one non-replayable check.
 // The answer just says that an active original Web role exists.
-struct WebQuestion{nonce:[u8;32],actor:Id,pool:Id,init:Id,setup:Id,location:[u64;3],system:PathBuf}
+struct WebQuestion{nonce:[u8;32],actor:Id,pool:Id,init:Id,setup:Id,location:[u64;3],system:PathBuf,shared:bool}
 impl WebQuestion{
     fn encode(&self)->io::Result<Vec<u8>>{
         let path=self.system.to_str().ok_or_else(bad_question)?.as_bytes();
@@ -250,25 +250,26 @@ impl WebQuestion{
             ||self.location[1..].contains(&0){return Err(bad_question());}
         let mut out=WEB.to_vec();out.extend(self.nonce);out.extend(self.actor);
         for id in ids{out.extend(id);}for n in self.location{out.extend(n.to_be_bytes());}
-        out.extend(path);Ok(out)
+        out.push(u8::from(self.shared));out.extend(path);Ok(out)
     }
     fn decode(raw:&[u8])->io::Result<Self>{
-        const HEAD:usize=32+4*16+3*8;
+        const HEAD:usize=32+4*16+3*8+1;
         let b=raw.strip_prefix(WEB).ok_or_else(bad_question)?;
         let (head,path)=b.split_at_checked(HEAD).ok_or_else(bad_question)?;
         if path.len()>MAX_PATH_BYTES{return Err(bad_question());}
         let sel=Self{nonce:head[..32].try_into().expect("fixed"),actor:head[32..48].try_into().expect("fixed"),
             pool:head[48..64].try_into().expect("fixed"),init:head[64..80].try_into().expect("fixed"),setup:head[80..96].try_into().expect("fixed"),
             location:std::array::from_fn(|i|u64::from_be_bytes(head[96+i*8..104+i*8].try_into().expect("fixed"))),
-            system:PathBuf::from(std::str::from_utf8(path).map_err(|_|bad_question())?)};
+            system:PathBuf::from(std::str::from_utf8(path).map_err(|_|bad_question())?),
+            shared:match head[120]{0=>false,1=>true,_=>return Err(bad_question())}};
         if sel.encode()?.as_slice()!=raw{return Err(bad_question());}Ok(sel)
     }
 }
-pub(in crate::sqlite_install::pair) fn verify_web_unit(pin:&Pinned,ex:&File,subject:(Id,u32,u32),ids:[Id;3],
+pub(in crate::sqlite_install::pair) fn verify_web_unit(pin:&Pinned,ex:&File,subject:(Id,u32,u32),ids:[Id;3],shared:bool,
     check:impl Fn()->io::Result<()>)->io::Result<()> {
     let [pool,init,setup]=ids;
     let mut nonce=[0;32];nonce[..16].copy_from_slice(&random()?);nonce[16..].copy_from_slice(&random()?);
-    let fish=WebQuestion{nonce,actor:subject.0,pool,init,setup,location:place(pin)?,system:pin.path().to_path_buf()};
+    let fish=WebQuestion{nonce,actor:subject.0,pool,init,setup,location:place(pin)?,system:pin.path().to_path_buf(),shared};
     query(&fish.encode()?,ex,subject,&check,|channel,scope,until|{
         let (report,[])=channel.wait_checked::<0>(Kind::ConfirmedWeb,scope,until,&check)?;
         if report!=[0;65]{return Err(bad_question());}Ok(())
@@ -307,7 +308,7 @@ pub(crate) fn worker()->io::Result<()>{
     if place(&pin)?!=source.1{return Err(bad_question());}
     let open=SelectedSystem::from_origin(pin,host,uid,gid)?;
     if let Mode::WebUnit(q)=&mode{
-        let system=open.from_lent_ex(lease)?;
+        let system=if q.shared{open.from_lent_sh(lease)?}else{open.from_lent_ex(lease)?};
         observed::confirmed_web(&q.pool,&q.init,&q.setup,&system)?;
         if getppid()!=Some(parent){return Err(bad_question());}system.require()?;
         return channel.send(Kind::ConfirmedWeb,&scope,&[0;65]);

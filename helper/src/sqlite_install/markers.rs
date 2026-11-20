@@ -29,11 +29,11 @@ fn feedback_shape(file:&Stamp,dir:&Stamp,uid:u32,len:u64)->io::Result<()>{
         return Err(bad("existing or new enrollment slot is not the exact private regular marker"));
     }Ok(())
 }
-fn bytes(f:&File,expected:&[u8;101])->io::Result<()>{
+fn exact_bytes(f:&File)->io::Result<[u8;101]>{
     let mut b=[0;101];f.read_exact_at(&mut b,0)?;
     loop{match f.read_at(&mut [0],101){Ok(0)=>break,Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,
         Err(e)=>return Err(e),_=>return Err(bad("extra bytes on original marker")),}}
-    if &b!=expected{return Err(bad("existing enrollment marker disagrees with this original SQL claim; left intact"));}Ok(())
+    Ok(b)
 }
 struct Mark{fd:File,s:Stamp}
 impl Mark{
@@ -56,7 +56,9 @@ impl Mark{
     }
     fn verify(&self,dir:&File,wanted:&[u8;101])->io::Result<()>{
         if held(&self.fd)?!=self.s||stamp(dir,slot())?!=self.s{return Err(bad("original enrollment marker or name changed"));}
-        bytes(&self.fd,wanted)?;
+        if &exact_bytes(&self.fd)?!=wanted{
+            return Err(bad("existing enrollment marker disagrees with this original claim; left intact"));
+        }
         if held(&self.fd)?!=self.s||stamp(dir,slot())?!=self.s{return Err(bad("enrollment marker changed during read"));}
         Ok(())
     }
@@ -107,6 +109,41 @@ impl SystemMark {
         self.0.verify(root.dir(),wanted)
     }
 }
+/// Non-SQL pool evidence for the explicitly selected Web unit. It never
+/// confers a claim or a write gate. The caller holds the original SYSTEM SH
+/// and separately matches this very inode in an active process's descriptor
+/// table. No need to open the live database or its rollback journal.
+pub(super) struct LiveSystemMark{mark:Mark,body:[u8;101]}
+impl LiveSystemMark{
+    pub(super) fn select(dir:&File,uid:u32,pool:&[u8;16])->io::Result<Self>{
+        let mark=Mark::pin_original(dir,uid)?;
+        let body=exact_bytes(&mark.fd)?;
+        if !system_body(&body,pool){return Err(bad("the actual SYSTEM marker does not belong to this pool"));}
+        let kept=Self{mark,body};kept.verify(dir)?;Ok(kept)
+    }
+    pub(super) fn verify(&self,dir:&File)->io::Result<()>{self.mark.verify(dir,&self.body)}
+    pub(super) fn entity(&self)->Entity{Entity{dev:self.mark.s.dev,ino:self.mark.s.ino}}
+}
+fn system_body(body:&[u8;101],pool:&[u8;16])->bool{
+    body[..20]==*b"ZXS-SQLITE-1/VOLUME\0"&&body[20]==0&&*pool!=[0;16]&&body[21..37]==pool[..]
+        &&body[37..53]!=[0;16]&&body[37..53]!=pool[..]&&body[53..69]!=[0;16]&&body[69..]!=[0;32]
+}
+#[cfg(test)]
+mod live_web_tests{
+    use super::*;
+    #[test]
+    fn a_same_directory_with_another_reported_pool_does_not_match_the_original_mark(){
+        let raw=crate::sqlite_install::catalog::claimed_marker(0,&[1;16],&[2;16],&[3;16],&[4;32]);
+        assert!(system_body(&raw,&[1;16]));
+        assert!(!system_body(&raw,&[5;16]));
+        for at in [0,20,37,53,69]{
+            let mut wrong=raw;
+            match at{0|20=>wrong[at]^=1,37|53=>wrong[at..at+16].fill(0),_=>wrong[at..].fill(0)}
+            assert!(!system_body(&wrong,&[1;16]));
+        }
+    }
+}
+
 /// Only after every originally selected file+parent has been synchronized and
 /// independently reopened. Keep the actual marker FDs alive through final SQL.
 pub(super) struct Synced(Vec<Mark>);

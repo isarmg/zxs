@@ -11,7 +11,7 @@ import sys
 
 BASE = "/usr/share/local-ops-helper/web-management"
 TEMPLATE = "zxs-management-http.service.in"
-TEMPLATE_SHA = "e83b2c59a5a15b9ba9e8b50549b358b5f2e2fb1bf345442b724c29910c45677a"
+TEMPLATE_SHA = "153bb8021c7b35865d831454b535521043c25a3ed5aec6b1f83943e506a34d30"
 CAP = 8192
 
 class Refused(ValueError):

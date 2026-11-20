@@ -1,5 +1,10 @@
 [Unit]
 Description=ZXS management HTTP for the enrolled pool
+DefaultDependencies=no
+Requisite=sysinit.target
+After=sysinit.target basic.target
+Before=shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=exec
@@ -8,6 +13,7 @@ Group=@STORAGE_GID@
 UMask=0077
 Environment="ZXS_SYSTEM_ROOT=@SYSTEM@"
 Environment=ZXS_POOL_ID=@POOL@
+UnsetEnvironment=ZXS_WEB_PUBLIC_ORIGIN ZXS_WEB_TRUSTED_PROXY
 ExecStart=/usr/bin/zxs
 NoNewPrivileges=yes
 CapabilityBoundingSet=

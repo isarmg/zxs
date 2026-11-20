@@ -218,8 +218,8 @@ def ship_live_template(root):
 # The optional native management HTTP unit does not install or start ZXS.
 # No nginx, Unix activation unit, fixed site, TLS key or certificate input.
 WEB_INPUTS = {
-    "profile.py": "f902b5d322aa1f9bcb9bf8c6c51ed9153ef7eb89d1f61e657e717addcc3b7db6",
-    "zxs-management-http.service.in": "e83b2c59a5a15b9ba9e8b50549b358b5f2e2fb1bf345442b724c29910c45677a",
+    "profile.py": "1e1e4435f6d6673c53370b2f30c795c7d9fc4f7f96ea810162656869b53c9322",
+    "zxs-management-http.service.in": "153bb8021c7b35865d831454b535521043c25a3ed5aec6b1f83943e506a34d30",
 }
 def ship_web_service(root):
     rel="usr/share/local-ops-helper/web-management"

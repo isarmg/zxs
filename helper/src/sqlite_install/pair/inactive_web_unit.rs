@@ -110,18 +110,26 @@ impl Target{
     pub(super) fn select(host:&File)->io::Result<Self>{
         let chain=walk(host)?;let ids=chain.iter().map(protected).collect::<io::Result<Vec<_>>>()?;
         let parent=File::from(openat(chain.last().ok_or_else(no)?,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?);
-        let this=Self{chain,parent,ids};this.enforce()?;Ok(this)
+        let this=Self{chain,parent,ids};this.enforce(false)?;Ok(this)
     }
-    fn enforce(&self)->io::Result<()>{
+    fn enforce(&self,for_write:bool)->io::Result<()>{
         let current=super::super::approval::host_admin()?;
         let fresh=walk(&current)?;
         if protected(&self.parent)?!=*self.ids.last().ok_or_else(no)?
             ||self.chain.iter().map(protected).collect::<io::Result<Vec<_>>>()?!=self.ids
             ||fresh.iter().map(protected).collect::<io::Result<Vec<_>>>()?!=self.ids
-            ||fstatvfs(&self.parent)?.f_flag.contains(StatVfsMountFlags::RDONLY){return Err(no());}
+            ||for_write&&fstatvfs(&self.parent)?.f_flag.contains(StatVfsMountFlags::RDONLY){return Err(no());}
         no_acl(&self.parent)
     }
-    pub(super) fn vacancy(&self)->io::Result<()>{self.enforce()?;no_entry(&self.parent,NAME)?;no_entry(&self.parent,STAGING)}
+    pub(super) fn vacancy(&self)->io::Result<()>{self.enforce(true)?;no_entry(&self.parent,NAME)?;no_entry(&self.parent,STAGING)}
+    /// An already-installed fragment may be checked from a read-only /etc.
+    /// Keep that original leaf pinned, including its true name, across action.
+    pub(super) fn require_installed(&self,wanted:&Fragment,prior:Option<&File>)->io::Result<File>{
+        self.enforce(false)?;no_entry(&self.parent,STAGING)?;
+        let current=matching(&self.parent,NAME,wanted)?;
+        if let Some(prior)=prior {if identity(prior)?!=identity(&current)?{return Err(no());}}
+        self.enforce(false)?;Ok(current)
+    }
     /// A separate caller grant checks real PID1 unit scope, the original pool
     /// and foreground confirmation. Before rename only it may authorize the
     /// final byte publication. Error leaves any touched names intact.
@@ -135,10 +143,10 @@ impl Target{
         rustix::fs::fchmod(&opened,Mode::RUSR|Mode::WUSR|Mode::RGRP|Mode::ROTH)?;
         opened.sync_all()?;
         if identity(&matching(p,STAGING,wanted)?)?!=id{return Err(no());}
-        revalidate()?;self.enforce()?;no_entry(p,NAME)?;
+        revalidate()?;self.enforce(true)?;no_entry(p,NAME)?;
         if identity(&matching(p,STAGING,wanted)?)?!=id{return Err(no());}
         renameat_with(p,STAGING,p,NAME,RenameFlags::NOREPLACE)?;
-        p.sync_all()?;self.enforce()?;no_entry(p,STAGING)?;
+        p.sync_all()?;self.enforce(true)?;no_entry(p,STAGING)?;
         if identity(&matching(p,NAME,wanted)?)?!=id{return Err(no());}
         Ok(())
     }

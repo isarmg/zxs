@@ -38,7 +38,7 @@ impl InstallWebUnit{
         // The only database read is in the original authenticated storage-UID
         // process. This root writer holds the real exclusively locked root,
         // but never opens SQLite, credential files, or business media.
-        verify_web_unit(&pin,&original,who,self.ids,&check)?;
+        verify_web_unit(&pin,&original,who,self.ids,false,&check)?;
         let mut program=RuntimeFile::open(PROGRAM,true,LIMIT)?;let n=program.file.metadata()?.len();
         require_amd64_elf(&program.file)?;
         if hash_upto(&mut program.file,n,LIMIT)?!=self.elf{return Err(no());}
@@ -51,7 +51,7 @@ impl InstallWebUnit{
             pin.entity().dev,pin.entity().ino,pin.require_same_named_mount()?.id,who.1,who.2,
             hex(&self.ids[0]),hex(&self.ids[1]),hex(&self.ids[2]),hex(&who.0),hex(&self.reference),hex(&fragment.sha()),hex(&self.elf));
         terminal.confirm_web_unit(review)?;
-        verify_web_unit(&pin,&original,who,self.ids,&check)?;
+        verify_web_unit(&pin,&original,who,self.ids,false,&check)?;
         target.publish(&fragment,||{program.recheck()?;web_systemd::require_unresolved(&check)})
             .map_err(|e|io::Error::new(e.kind(),format!("unit installation not confirmed; preserve any original stage or final name: {e}")))?;
         // A lost display acknowledgement cannot undo an exact durable file.
