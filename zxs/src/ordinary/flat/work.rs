@@ -2,7 +2,7 @@
 //! format selected by SQL, not a formal node. The caller supplies a completed
 //! staging FD: its measured bytes/stamps are checked, not OS write sealing.
 //! A network transport must not accept a native path from the SMB client.
-use super::{Material,blocks::{self,Buffers,Reader,Ref},local::Located};
+use super::{Index,Leaf,Material,blocks::{self,Buffers,Reader,Ref},local::Located};
 use crate::{FileId,OperationId,PoolId,fs::{HeldDir,LiveStamp,WitnessRead,WorkPair,invalid},hash::Sha256,
     ordinary::output::CheckedOutput,system::reader::smb::first_work::Reserved};
 use std::{collections::BTreeSet,ffi::CString,fs::File,io::{self,Write}};
@@ -80,9 +80,10 @@ impl<'a> Incoming<'a>{
 struct Digest(Sha256);
 impl Write for Digest{fn write(&mut self,b:&[u8])->io::Result<usize>{self.0.update(b)?;Ok(b.len())}fn flush(&mut self)->io::Result<()>{Ok(())}}
 
-/// Created from the SQL-selected original (including directory SHA), never
-/// from the names/bytes that happen to be found in a directory.
-pub(crate) struct HeldWork{spec:Spec,reader:Reader,roles:[CString;4]}
+/// A fixed, already selected logical view, inseparable from its real
+/// material and original checksum directory. No caller may give range()
+/// another map, learn its EOF from a disk name, or select today's head.
+pub(crate) struct HeldWork{view:Index,material:Ref,reader:Reader,roles:[CString;4]}
 enum Use{Confirming,ConfirmedReader}
 impl HeldWork{
     pub(crate) fn confirmed(dir:&HeldDir,spec:Spec,kept:&Retained)->io::Result<Self>{
@@ -99,17 +100,25 @@ impl HeldWork{
         // has succeeded. It keeps both complete, original stamps until then.
         let raw=match usage{Use::Confirming=>raw,Use::ConfirmedReader=>raw.checked_prefix()?};
         let checks=scope.open(&roles[2],&roles[3],original.table_len()?)?;
-        let h=Self{spec,reader:Reader::open(original,raw,checks)?,roles};h.require(dir)?;Ok(h)
+        // v7 represents this first confirmed snapshot as one entire material.
+        // Construct its direct map in memory; no new disk bytes or DB column.
+        let view=Index::full(original.material)?;
+        let h=Self{view,material:original,reader:Reader::open(original,raw,checks)?,roles};h.require(dir)?;Ok(h)
     }
+    pub(crate) fn size(&self)->u64{self.view.len()}
     pub(crate) fn require(&self,dir:&HeldDir)->io::Result<()>{
         WitnessRead::require_parent(dir)?;self.reader.require_names(dir,&self.roles)
     }
     pub(crate) fn range(&self,at:u64,n:u64,mut out:impl Write,check:impl Fn()->io::Result<()>)->io::Result<()>{
-        if at.checked_add(n).is_none_or(|end|end>self.spec.bytes){return Err(invalid("read past original working EOF"));}
-        let(page,block)=if n==0{(0,0)}else{let(_,p,b)=self.spec.reference()?.read_bytes(at)?;(p,b)};
+        if at.checked_add(n).is_none_or(|end|end>self.size()){return Err(invalid("read past original working EOF"));}
+        let(page,block)=if n==0{(0,0)}else{let(_,p,b)=self.material.read_bytes(at)?;(p,b)};
         let mut scratch=Buffers::new(page,block)?;
         let mut checked=CheckedOutput{out:&mut out,check};
-        self.reader.range(at,n,&mut scratch,&mut checked)?;
+        self.reader.unchanged()?;
+        self.view.visit(at,n,|leaf,offset,len|match leaf{
+            Leaf::Data(m) if m==self.material.material=>self.reader.range(offset,len,&mut scratch,&mut checked),
+            _=>Err(invalid("selected first view refers to unissued material")),
+        })?;
         self.reader.unchanged()?;checked.flush()?;self.reader.unchanged()
     }
 }

@@ -231,7 +231,7 @@ impl<'s,'r> Tree<'s,'r>{
 }
 impl Current<'_,'_,'_>{
     pub(crate) fn file(&self)->FileId{self.birth.file}
-    pub(crate) fn size(&self)->u64{self.live.map_or(0,|s|s.bytes)}
+    pub(crate) fn size(&self)->u64{self.body.as_ref().map_or(0,HeldWork::size)}
     pub(crate) fn working_revision(&self)->u64{u64::from(self.live.is_some())}
     pub(super) fn original_ids(&self)->(crate::PoolId,crate::VolumeId,crate::EntryId,FileId){
         (self.birth.pool,self.birth.volume,self.birth.entry,self.birth.file)

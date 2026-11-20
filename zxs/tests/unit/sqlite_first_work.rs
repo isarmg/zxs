@@ -54,6 +54,13 @@ fn first_manual_save_reads_by_name_after_all_handles_close_and_retry_returns_onl
     let mut all=Vec::new();h.range_to(0,h.size(),&mut all).unwrap();assert_eq!(all,data);
     let mut tail=Vec::new();h.range_to(3,4,&mut tail).unwrap();assert_eq!(tail,&data[3..7]);
     assert!(h.range_to(first.bytes,1,Vec::new()).is_err());drop(h);
+    let empty=tree.open_current(&format!("方案-{}.xlsx",made.file)).unwrap();
+    assert_eq!((empty.size(),empty.working_revision()),(0,1));
+    let mut selected=0;
+    empty.smb_read_window(17,4,|data|{assert!(data.is_empty());selected+=1;Ok(())}).unwrap();
+    assert_eq!(selected,1); // a committed empty view still passes the real read gate
+    assert!(empty.range_to(1,0,Vec::new()).is_err());
+    drop(empty);
     assert_eq!(smb.connect(rw).unwrap().save_first(SAVE,NAME,made.file,&body).unwrap(),first);
     let d=f.join(format!("方案-{}.xlsx",made.file));let raw=d.join(format!("change-{SAVE}-00000000"));
     let pin=d.join(format!("pin-data-{SAVE}-00000000"));assert_eq!(std::fs::metadata(&raw).unwrap().ino(),std::fs::metadata(&pin).unwrap().ino());
