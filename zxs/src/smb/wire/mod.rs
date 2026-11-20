@@ -1,6 +1,7 @@
 //! Incoming bytes only. Parsing never issues credits, sends a reply, authenticates
 //! an account or calls a ZXS operation.
 pub(in crate::smb) mod direct;
+pub(in crate::smb) mod io_fields;
 pub(in crate::smb) mod message;
 pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod path_fields;

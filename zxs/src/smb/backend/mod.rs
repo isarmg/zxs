@@ -9,6 +9,7 @@
 //! ignoring the wire FILE_DISALLOW_EXCLUSIVE option, not forwarding it as a local flag.
 pub(in crate::smb) mod path;
 mod query;
+mod io;
 use crate::{DirectoryId, FileId, OperationId, PoolId, VolumeId};
 use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
 
@@ -188,14 +189,14 @@ impl<'s, Q: OriginalRequest> Pending<'s, '_, Q> {
             drop(held); // close the core handle before releasing its vote
             return Err(e);
         }
-        Ok(Held { original: held, _slot: self.slot })
+        Ok(Held { original: held, _slot: self.slot, grant: self.planned.grant })
     }
 }
 
 /// Declaration order matters: drop the actual storage handle before the vote.
 /// There is no unpair, publish-by-ID, auto-flush, or automatic history commit.
 #[must_use = "dropping the held pair closes the original and releases its share vote"]
-struct Held<'s, H> { original: H, _slot: Slot<'s> }
+struct Held<'s, H> { original: H, _slot: Slot<'s>, grant: Grant }
 
 #[cfg(test)]
 #[path = "../../test/smb/backend_open.rs"]
