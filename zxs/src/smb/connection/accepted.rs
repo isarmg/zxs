@@ -1,6 +1,7 @@
 //! Trusted, pre-negotiation handoff only. The installation/session issuer and
 //! the service listener do not exist here. A TCP peer's address is metadata,
 //! not an identity; a completely written NEGOTIATE is not authentication.
+pub(in crate::smb) mod incoming;
 use super::{Connection,Fault,Opening,OpeningSend,Origin,Result,Window,ones,
     sessions::{AcceptSeat,RunningServerGuid},transport::{DirectStream,deadline}};
 use crate::smb::wire::{direct::Frame,message::Compound,negotiate::{CmacChoice,MAX_OPENING_BYTES}};
@@ -9,7 +10,7 @@ use std::{net::{IpAddr,TcpStream},sync::{Arc,atomic::AtomicBool}};
 /// Exclusive protocol owner. No raw Connection getter, stream replacement,
 /// separate response sink or numeric-ID constructor.
 #[must_use]
-pub(in crate::smb) struct Peer { connection:Connection, remote:IpAddr }
+pub(in crate::smb) struct Peer { connection:Connection, remote:IpAddr, first_login_by:Option<std::time::Instant> }
 
 impl RunningServerGuid {
     /// Future enabled TCP/445 service supplies its sole accepted, unread
@@ -44,7 +45,8 @@ impl Peer {
         // A partial prefix/body, EOF or uncertain submission returns no Peer.
         stream.write_smb(tx.bytes(),||Ok(()))?;
         let connection=tx.after_write(Completion::Written(stream),seat)?;
-        Ok(Self{connection,remote})
+        let first_login_by=std::time::Instant::now().checked_add(std::time::Duration::from_secs(60)).ok_or(Fault::Clock)?;
+        Ok(Self{connection,remote,first_login_by:Some(first_login_by)})
     }
 }
 enum Completion { Written(DirectStream), #[cfg(test)] WithoutSocket }

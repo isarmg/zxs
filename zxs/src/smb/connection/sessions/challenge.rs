@@ -92,7 +92,7 @@ impl ChallengeSend<'_,'_> {
 
 #[cfg(test)]
 #[path = "../../../test/smb/setup_challenge.rs"]
-pub(super) mod tests;
+pub(in crate::smb::connection) mod tests;
 
 #[cfg(test)]
 #[path = "../../../test/smb/setup_send.rs"]

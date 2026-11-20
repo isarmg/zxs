@@ -12,11 +12,19 @@
 
 未来已启用的服务所有者只能交付一条**尚未读取、独占**的 TCP/445 连接以及同次运行的私有实例。这里不建监听、不接收外部传来的已登录连接、不克隆或替换流；OS 提供的原对端 IP 只作连接元数据。[接入状态](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/91e2ec0b-530b-4558-aee0-2ca4d586f66a)与认证身份是两回事。每个未协商的入口在首次阻塞读之前与已协商连接共享最多 128 席；失败释放，成功将同一席转为原连接登记，不在注册锁内做 I/O。
 
-按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。三类 SESSION_SETUP 回复的完整写入见下；后续原帧读取及业务分派单独接线。源码夹具在 `src/test/smb/accepted.rs`，未运行或开 socket。
+按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。三类 SESSION_SETUP 回复和后续原帧读取见下；业务持有者与通用派发仍未启用。源码夹具在 `src/test/smb/accepted.rs`，未运行或开 socket。
 
 ### SESSION_SETUP 不能手工确认发送
 
-机制选择 MORE、实际 Type 2 挑战 MORE 和最后经严格证明签出的成功回复，只能把原额度账绑定的完整 SMB 字节加上前缀，写入原连接独占的同一流。每次短写前及写完后检查原登记、阶段、期限与所需凭据代，不在网络写入时持注册或凭据锁。选择 MORE 并不证明账号，实际挑战要在原凭据代下才转为可用；最终成功仍在同一注册和原代原子发布后才是有效会话。部分写、完整最后一字节时已撤代、失败或流丢失均不补信用、不转阶段，终止原连接。仅测试保留人工拨动完成态的原单元夹具；`src/test/smb/setup_send.rs` 另以实际完整写口覆盖三种过程与失败。暂不表示已收到可信账号来源、接上全部入站命令或可挂载。
+机制选择 MORE、实际 Type 2 挑战 MORE 和最后经严格证明签出的成功回复，只能把原额度账绑定的完整 SMB 字节加上前缀，写入原连接独占的同一流。每次短写前及写完后检查原登记、阶段、期限与所需凭据代，不在网络写入时持注册或凭据锁。选择 MORE 并不证明账号，实际挑战要在原凭据代下才转为可用；最终成功仍在同一注册和原代原子发布后才是有效会话。部分写、完整最后一字节时已撤代、失败或流丢失均不补信用、不转阶段，终止原连接。仅测试保留人工拨动完成态的原单元夹具；`src/test/smb/setup_send.rs` 另以实际完整写口覆盖三种过程与失败。这不是生产账号来源、全部入站命令或可挂载服务。
+
+### 原流入站到真实握手与 ECHO
+
+协商后的原 `Peer` 自行从同一套接字读下一条，不接受外部提供的字节、Connection 或另一个输出端。空闲轮询（一秒未收到首字节）保留连接，已开始但超时／EOF 的半包必须关闭。先按 [MaxTransactSize+256](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ef8e06ba-c921-46c9-9780-a2e9843e1d30) 核长度，再分配；轮询会清理期限已过的原握手，首次登录等待在六十秒边界检查。该预算不是已登录会话空闲超时，真正的服务调度者仍须轮询或释放连接。
+
+在单条新建／续接认证时，原 MID 先消费，选择 MORE、真实挑战 MORE 或最终签名成功依原阶段返回。已认证普通 ECHO 仍须原整帧强签。依[会话查找](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/e545352b-9f2b-4c5e-9350-db46e4f6755e)、[GSS 失败](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)及[出错应答](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/41295064-be3f-41dc-9aa5-f68545f945f0)，仅对上述无签、无既有认证权的独立尝试，实际返回原 SID/MID、原额度及明确失败：找不到原登记、严格证明不通过、无可用凭据及坏 token 等分别处理；错误报文既不发权也不收回同连接另一有效会话。部分或去向不明的写绝不再补第二份回复。带签重认证、binding、旧 SID 接管、含 SETUP 的复合以及未接业务都不退回这个无签错误路径。普通业务只交原短借的受检对象，不给可重新喂包的连接；遗弃欠账要关原流，不会假装已响应。
+
+`src/test/smb/accepted_turn.rs` 只含公开合成验证材料：三种握手走同一双工流、以实际协商盐和往返算终签、再核一个真实强签 ECHO；另区分首字节前空闲与半包超时、错连接 SID、错误证明和可继续的新尝试。无生产发行者、监听、文件权或实机结论，未运行。
 
 ## 每条直连 TCP/445 的 MessageId 和 credits（未接监听）
 

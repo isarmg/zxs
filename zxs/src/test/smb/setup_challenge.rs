@@ -7,7 +7,7 @@ use crate::smb::connection::{
 };
 use std::sync::Mutex;
 
-pub(in crate::smb::connection::sessions) fn provider()->RunningServerGuid {
+pub(in crate::smb::connection) fn provider()->RunningServerGuid {
     RunningServerGuid{run:Arc::new(Run{guid:[17;16],index:Mutex::new(Global::empty()),
         verifier:Some(ChallengeService::fixture())})}
 }
@@ -102,4 +102,17 @@ pub(in crate::smb::connection::sessions) fn challenged_at(c:&mut Connection,wrap
     let Start::Type1(mut x)=c.receive(&f).unwrap().start_setup() else {panic!("fixture must start with actual Type 1")};
     let send=prepare(&mut x.original,&mut x.phase,None,c,Instant::now(),ChallengeService::fixture_issue).unwrap();
     let sid=send.claim.id.get();send.submitted().unwrap();(sid,last)
+}
+
+// Fixed public challenge source only for the original accepted-stream fixture.
+// Still prepares, emits and registers through the real phase/writer code.
+impl Type1<'_> {
+    pub(in crate::smb::connection) fn fixture_send(&mut self,c:&mut Connection)->Result<()> {
+        prepare(&mut self.original,&mut self.phase,None,c,Instant::now(),ChallengeService::fixture_issue)?.send()
+    }
+}
+impl ContinuedType1<'_> {
+    pub(in crate::smb::connection) fn fixture_send(&mut self,c:&mut Connection)->Result<()> {
+        prepare(&mut self.original,&mut self.phase,Some(&self.claim),c,Instant::now(),ChallengeService::fixture_issue)?.send()
+    }
 }

@@ -83,6 +83,14 @@ impl Connection {
         }
         Ok(())
     }
+    pub(in crate::smb::connection) fn has_protected_provider(&self)->bool {
+        self.origin.run.verifier.as_ref().and_then(|s|s.batch_revision()).is_some()
+    }
+    /// Resource cleanup only; it conveys no session handle or store grant.
+    pub(in crate::smb::connection) fn reap_and_has_valid(&mut self,now:Instant)->bool {
+        self.sessions.retain(|item|item.reg.claim.active(now));
+        self.sessions.iter().any(|item|matches!(&item.phase,Phase::Valid(_)))
+    }
     fn reserve_pending(&mut self,now:Instant)->Result<Registration> {
         self.alive()?;
         self.sessions.retain(|x|x.reg.claim.active(now));
@@ -158,12 +166,13 @@ pub(in crate::smb) enum Resume<'raw> {
     NoSession(Declined<'raw>),
     EstablishedSetupUnsupported(Declined<'raw>), // no reauth/binding, never reset an existing live session
     InvalidToken(Declined<'raw>),
+    ProofRejected(Declined<'raw>), // uniform strict mechanism error; never identify a password or principal
     Type1(ContinuedType1<'raw>),
     Proven(proof::Proven<'raw>), // mechanism result only; no success or usable session
     TransportGone,
 }
-pub(in crate::smb) struct Declined<'raw> { original:Received<'raw> }
-pub(in crate::smb) struct ContinuedType1<'raw> { original:Received<'raw>, phase:Option<HaveNegotiate>, claim:Arc<Claim> }
+pub(in crate::smb) struct Declined<'raw> { pub(in crate::smb::connection) original:Received<'raw> }
+pub(in crate::smb) struct ContinuedType1<'raw> { pub(in crate::smb::connection) original:Received<'raw>, phase:Option<HaveNegotiate>, claim:Arc<Claim> }
 impl<'raw> Existing<'raw> {
     /// Existing only means the packet carried a nonzero SID. Never allocate
     /// or reconstruct a session or challenge from a client's number.

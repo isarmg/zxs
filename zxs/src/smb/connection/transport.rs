@@ -35,6 +35,37 @@ impl DirectStream {
     /// The caller must discard this stream on an error (position ambiguous).
     pub(super) fn read_record(&mut self,limit:usize,end:Instant)->Result<Vec<u8>> {
         let mut prefix=[0;4];self.fill(&mut prefix,end)?;
+        self.body(prefix,limit,end)
+    }
+    /// At an established message boundary a quiet socket is not a failed
+    /// record. Yield after one bounded idle poll, without consuming any byte.
+    /// Once the first byte arrives the entire remaining prefix/body has one
+    /// absolute framing deadline. A timeout then is an uncertain partial read.
+    pub(super) fn poll_record(&mut self,limit:usize)->Result<Option<Vec<u8>>> {
+        let idle=Instant::now().checked_add(Duration::from_secs(1)).ok_or(Fault::Clock)?;
+        let mut prefix=[0;4];
+        loop {
+            let left=idle.saturating_duration_since(Instant::now());
+            if left.is_zero() {return Ok(None);}
+            let first=match self {
+                Self::Tcp(s)=>{
+                    s.set_read_timeout(Some(left)).map_err(|_|Fault::Transport)?;
+                    s.read(&mut prefix[..1])
+                }
+                #[cfg(test)]
+                Self::Fixture(s)=>s.read(&mut prefix[..1]),
+            };
+            match first {
+                Ok(1)=>break,
+                Err(e) if e.kind()==ErrorKind::Interrupted=>continue,
+                Err(e) if matches!(e.kind(),ErrorKind::WouldBlock|ErrorKind::TimedOut)=>return Ok(None),
+                _=>return Err(Fault::Transport), // including real EOF at a record boundary
+            }
+        }
+        let end=deadline()?;self.fill(&mut prefix[1..],end)?;
+        self.body(prefix,limit,end).map(Some)
+    }
+    fn body(&mut self,prefix:[u8;4],limit:usize,end:Instant)->Result<Vec<u8>> {
         let n=Frame::payload_len(prefix).map_err(|_|Fault::FrameSize)?;
         if n>limit {return Err(Fault::FrameSize);}
         let mut record=Vec::new();

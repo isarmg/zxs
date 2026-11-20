@@ -22,7 +22,7 @@ pub(in crate::smb) enum Why { SetupCompound, Mechanism(Failure) }
 /// construction. Later phase transitions must consume the wrapper and recheck
 /// this original connection before publishing anything.
 pub(in crate::smb) struct Existing<'raw> { pub(super) original: Received<'raw> }
-pub(in crate::smb) struct Refused<'raw> { original: Received<'raw>, reason: Why }
+pub(in crate::smb) struct Refused<'raw> { pub(super) original: Received<'raw>, reason: Why }
 pub(in crate::smb) struct Select<'raw> { pub(super) original: Received<'raw>, pub(super) phase: Option<NeedSelection> }
 pub(in crate::smb) struct Type1<'raw> { pub(super) original:Received<'raw>, pub(super) phase:Option<HaveNegotiate> }
 impl Refused<'_> {

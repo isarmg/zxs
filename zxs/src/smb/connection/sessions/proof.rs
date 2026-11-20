@@ -8,7 +8,7 @@ use std::{sync::{Arc,atomic::Ordering},time::Instant};
 
 #[must_use]
 pub(in crate::smb) struct Proven<'raw> {
-    pub(super) original:Received<'raw>, pub(super) proof:Option<MechanismProof>, pub(super) claim:Arc<Claim>,
+    pub(in crate::smb::connection) original:Received<'raw>, pub(super) proof:Option<MechanismProof>, pub(super) claim:Arc<Claim>,
 }
 pub(super) fn received<'raw>(original:Received<'raw>,owner:&mut Connection,i:usize)->Resume<'raw> {
     // Caller has located and checked this very registration using the paid
@@ -32,7 +32,7 @@ pub(super) fn received<'raw>(original:Received<'raw>,owner:&mut Connection,i:usi
         return Resume::Proven(Proven{original,proof:Some(proof),claim:Arc::clone(&owner.sessions[i].reg.claim)});
     }
     owner.sessions.swap_remove(i);
-    Resume::InvalidToken(Declined{original})
+    Resume::ProofRejected(Declined{original})
 }
 
 #[cfg(test)]

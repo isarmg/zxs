@@ -35,7 +35,7 @@ fn bad_terminal_proof_or_revoked_provider_consumes_only_that_sessions_slot() {
         if revoke {run.run.verifier.as_ref().unwrap().fixture_revoke();} else {last[72]^=1;}
         let pkt=frame(&body(&last,2,sid));let f=parsed(&pkt);
         let Start::Existing(x)=c.receive(&f).unwrap().start_setup() else {panic!("not terminal setup")};
-        let Resume::InvalidToken(reject)=x.continue_setup(&mut c) else {panic!("failed proof advanced")};
+        let Resume::ProofRejected(reject)=x.continue_setup(&mut c) else {panic!("failed proof advanced")};
         assert!(c.sessions.is_empty());assert_eq!(neighbor.sessions[0].reg.claim.id.get(),other);
         assert_eq!(run.run.index.lock().unwrap().live.len(),1);drop(reject);
     }
