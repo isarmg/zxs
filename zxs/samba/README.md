@@ -2,6 +2,9 @@
 
 目标是 **Debian 13 amd64 的专用 standalone 实例**，不是把文件系统目录直接共享给 Windows。helper 装配实例并在单独获准的首次供给中初始化其 SAM 域；ZXS 在线消费该实例的认证结果并实现 FILE 业务。[新模型](../docs/smb-native-session.md)中，专用 Samba tdbsam 是唯一 SMB 密验库；SQLite 只持 Web 密验和两种身份的业务映射／授权。下面列出 v7 受管源码的实际切点。严格校验原生账户不等于已经验证了一次客户端口令：
 
+**仅支持 SMB 3.1.1（线值 `0x0311`）。** 专用实例首次加载与真实重载都要求有效 `server min protocol = SMB3_11` 且 `server max protocol = SMB3_11`。SMB NEGOTIATE 保留上游长度、方言列表、预认证上下文、签名与后续认证检查；即使客户端同时列出较早方言，原生匹配只能选 3.1.1。不含 3.1.1（含仅报 2.??? 的旧兼容引导）不建立业务连接。源码里的 `SMB2 CREATE/READ` 等是 3.1.1 沿用的命令名称，不代表兼容 SMB 2.x。Windows、macOS、Linux 的 3.1.1 客户端是验收目标，未实测。参见 [Samba 协议上下限](https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html#SERVERMINPROTOCOL) 和 [微软 NEGOTIATE 请求](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/e14db7ff-763a-4263-8b10-0c3944f52fc5)。
+
+
 - Web 管理员不能登录 SMB；SMB 用户不能登录管理页。禁止匿名、guest 和错密码后转 guest，包括匿名 IPC$ 登录和共享枚举。
 - 每个共享只取当前 SQL 设定（停用/只读/读写）。一个已成功的 Samba 身份不等于任意共享可用，更不等于可直接打开宿主路径。
 

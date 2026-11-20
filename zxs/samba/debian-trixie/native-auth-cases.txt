@@ -14,3 +14,7 @@ expect: omitted "nt pipe support" (native default yes) and explicit yes reject b
 independence: the same correct native user can have no enabled share; an ordinary data tree without authorized VFS must still deny
 rotation: the original SQL history or a successful earlier login is not the new generation; complete helper rotates only while host and SYSTEM are exclusively offline
 not-tested: compiler or ABI, actual native database, process isolation, LAN, TCP negotiation, login, signing, backend writes, Windows clients, VFS, file locks, filesystem
+
+dialect-only: real loaded minimum and maximum are both SMB3_11 on every approved configuration; a broader minimum, a lower maximum, or a former live BOUND is not an authorized runtime
+negotiate: offer only 0202/0210/0300/0302 or only 02ff -> not supported, no session; mixed earlier offers and 0311 -> native selects 0311 only, then requires valid 3.1.1 preauthentication contexts (no compatibility fallback)
+client-acceptance (not run): independently on Windows, macOS and Linux, inspect negotiated 0x0311 then authenticate ordinary user; a negotiated dialect alone is not authorization for a tree or a FILE

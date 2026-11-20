@@ -1,14 +1,15 @@
 --- a/source3/param/loadparm.c
 +++ b/source3/param/loadparm.c
-@@ -82,6 +82,7 @@
+@@ -82,6 +82,8 @@
  #include "source3/librpc/gen_ndr/ads.h"
  #include "lib/util/time_basic.h"
  #include "libds/common/flags.h"
 +#include "param/zxs_runtime.h"
++#include "param/zxs_dialect.h"
  
  #ifdef HAVE_SYS_SYSCTL_H
  #include <sys/sysctl.h>
-@@ -2820,6 +2821,22 @@
+@@ -2820,6 +2822,22 @@
  static bool do_parameter(const char *pszParmName, const char *pszParmValue,
  			 void *userdata)
  {
@@ -31,7 +32,7 @@
  	if (!bInGlobalSection && bGlobalOnly)
  		return true;
  
-@@ -4056,6 +4073,10 @@
+@@ -4056,6 +4074,10 @@
  	/* We get sections first, so have to start 'behind' to make up */
  	iServiceIndex = -1;
  
@@ -42,7 +43,7 @@
  	if (lp_config_backend_is_file()) {
  		n2 = talloc_sub_basic(talloc_tos(), get_current_username(),
  					get_current_user_info_domain(),
-@@ -4066,7 +4087,7 @@
+@@ -4066,7 +4088,7 @@
  
  		add_to_file_list(NULL, &file_lists, pszFname, n2);
  
@@ -51,7 +52,7 @@
  		TALLOC_FREE(n2);
  
  		/* finish up the last section */
-@@ -4225,6 +4246,94 @@
+@@ -4225,6 +4247,94 @@
  		       true);  /* reinit_globals */
  }
  
@@ -87,7 +88,7 @@
 +	    lp_nt_pipe_support() || /* IPC$ is present even with no data shares. */
 +	    lp_map_to_guest() != NEVER_MAP_TO_GUEST || lp_restrict_anonymous() != 2 ||
 +	    strcmp(lp_passdb_backend(), ZXS_NATIVE_BACKEND) != 0 ||
-+	    lp_server_min_protocol() < PROTOCOL_SMB2_02 ||
++	    !zxs_smb311_bounds(lp_server_min_protocol(),lp_server_max_protocol()) ||
 +	    lp_debug_encryption() || lp_server_multi_channel_support() || lp_load_printers() || lp_enable_asu_support() ||
 +	    lp_server_signing() != SMB_SIGNING_REQUIRED ||
 +	    !zxs_empty(lp_usershare_path(mem_ctx, sub)) ||
@@ -146,7 +147,7 @@
  /**
   * The typical lp_load wrapper with shares, loads global and
   * shares, including IPC, but does not force immediate
-@@ -4232,11 +4341,19 @@
+@@ -4232,11 +4342,19 @@
   */
  bool lp_load_with_shares(const char *file_name)
  {
@@ -3949,3 +3950,53 @@
  bool strict_lock_check_default(files_struct *fsp,
  			       struct lock_struct *plock);
  NTSTATUS query_lock(files_struct *fsp,
+--- a/source3/smbd/smb2_negprot.c
++++ b/source3/smbd/smb2_negprot.c
+@@ -21,6 +21,7 @@
+ #include "includes.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "param/zxs_dialect.h"
+ #include "../libcli/smb/smb_common.h"
+ #include "../libcli/smb/smb2_negotiate_context.h"
+ #include "../lib/tsocket/tsocket.h"
+@@ -127,6 +128,25 @@
+ 	}
+ 
+ 	return PROTOCOL_NONE;
++}
++
++/* Called only after smbd's original NEGOTIATE length/count validation.
++ * Do not enter the legacy 2.??? intermediate fallback without an explicitly
++ * offered 3.1.1. Authentication has not started at this point. */
++_PUBLIC_
++enum protocol_types zxs_smb311_offer(const uint8_t *dialects,int count,uint16_t *selected)
++{
++	enum protocol_types result;
++	if (selected==NULL) return PROTOCOL_NONE;
++	*selected=0;
++	if (dialects==NULL || count<=0 ||
++	    !zxs_smb311_bounds(lp_server_min_protocol(),lp_server_max_protocol())) return PROTOCOL_NONE;
++	result=smbd_smb2_protocol_dialect_match(dialects,count,selected);
++	if (result!=PROTOCOL_SMB3_11 || *selected!=SMB3_DIALECT_REVISION_311) {
++		*selected=0;
++		return PROTOCOL_NONE;
++	}
++	return result;
+ }
+ 
+ static NTSTATUS smb2_negotiate_context_process_posix(
+@@ -265,9 +285,10 @@
+ 	}
+ 	indyn = SMBD_SMB2_IN_DYN_PTR(req);
+ 
+-	protocol = smbd_smb2_protocol_dialect_match(indyn,
+-					dialect_count,
+-					&dialect);
++	protocol = zxs_smb311_offer(indyn,dialect_count,&dialect);
++	if (protocol!=PROTOCOL_SMB3_11) {
++		return smbd_smb2_request_error(req,NT_STATUS_NOT_SUPPORTED);
++	}
+ 
+ 	for (c=0; protocol == PROTOCOL_NONE && c < dialect_count; c++) {
+ 		if (lp_server_max_protocol() < PROTOCOL_SMB2_10) {

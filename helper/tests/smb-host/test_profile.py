@@ -31,6 +31,12 @@ class Sources(unittest.TestCase):
             t=bytearray(b); t[off]^=1
             self.assertFalse(p.bound(bytes(t),s))
 
+    def test_older_dialect_cannot_reuse_a_known_looking_binding(self):
+        s,b=self.sample()
+        # Treat its new exact digest as operator-supplied; still refuse the old live bytes.
+        old=b[:64]+bytes.fromhex("a4724d2af6596303e9bccf5db9456629328ad6c575d88adcd8c55481b57708d2")+b[96:]
+        self.assertFalse(p.bound(old,{**s,"BOUND":hashlib.sha256(old).hexdigest()}))
+
     def test_true_readonly_projection_not_a_same_byte_copy(self):
         a=(31,835,9,0o100444,0,0,128,110,120,1)
         good=a[:2]+(12,)+a[3:]
@@ -55,7 +61,7 @@ class Sources(unittest.TestCase):
         s,b=self.sample()
         seen=[]
         prefix=p.SOURCE+s["INSTANCE"]
-        lengths={"domain.bound":128,"smb.conf":1349}
+        lengths={"domain.bound":128,"smb.conf":1383}
         class Held:
             def __init__(self,_stack,path,accept):
                 self.path,self.accept=path,accept
@@ -88,13 +94,13 @@ class Sources(unittest.TestCase):
                 if not self.accept(self.info): raise AssertionError(self.path)
                 if self.length:
                     swapped=SimpleNamespace(**vars(self.info))
-                    swapped.st_size=1349 if self.length==128 else 128
+                    swapped.st_size=1383 if self.length==128 else 128
                     if self.accept(swapped): raise AssertionError("accepted other public length")
                     seen.append((self.path,self.length))
         with patch.object(p,"Original",Held), patch.object(p.os,"fstatvfs",return_value=SimpleNamespace(f_flag=p.os.ST_RDONLY)):
             p.candidates(s,None)
         self.assertEqual(seen,[(prefix+"/domain.bound",128),(p.VIEW+"domain.bound",128),
-                               (prefix+"/smb.conf",1349),(p.VIEW+"smb.conf",1349)])
+                               (prefix+"/smb.conf",1383),(p.VIEW+"smb.conf",1383)])
 
     def test_untrusted_substitutions_refused_as_whole(self):
         s,_=self.sample()

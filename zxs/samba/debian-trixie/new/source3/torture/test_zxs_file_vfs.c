@@ -12,6 +12,7 @@
 #include "param/loadparm.h"
 #include "lib/substitute.h"
 #include "lib/param/loadparm.h"
+#include "param/zxs_dialect.h"
 #include "lib/param/param.h"
 #include "smbd/zxs_file_vfs.h"
 #include "smbd/zxs_directory.h"
@@ -26,6 +27,26 @@ static bool ipc_only_pipe_policy(void)
 	bool ok = false;
 	if (lp == NULL) {
 		return false;
+	}
+	/* Real source3 parameters + the exact NEGOTIATE selector. Older dialects
+	 * in a list do not disqualify a real 3.1.1 client. A standalone wildcard
+	 * is not evidence the peer can negotiate 3.1.1. No sockets or keys. */
+	{
+		const uint8_t earlier[]={0x02,0x02,0x10,0x02,0x00,0x03,0x02,0x03}, wildcard[]={0xff,0x02};
+		const uint8_t mixed[]={0x00,0x03,0x11,0x03,0x02,0x03}, only[]={0x11,0x03};
+		uint16_t selected=0;
+		if (!lp_do_parameter(-1,"server max protocol","SMB3_11") ||
+		    !lp_do_parameter(-1,"server min protocol","SMB2_02") ||
+		    zxs_smb311_offer(only,1,&selected)!=PROTOCOL_NONE ||
+		    !lp_do_parameter(-1,"server min protocol","SMB3_11") ||
+		    !zxs_smb311_bounds(lp_server_min_protocol(),lp_server_max_protocol()) ||
+		    zxs_smb311_offer(earlier,4,&selected)!=PROTOCOL_NONE || selected!=0 ||
+		    zxs_smb311_offer(wildcard,1,&selected)!=PROTOCOL_NONE || selected!=0 ||
+		    zxs_smb311_offer(mixed,3,&selected)!=PROTOCOL_SMB3_11 || selected!=0x0311 ||
+		    zxs_smb311_offer(only,1,&selected)!=PROTOCOL_SMB3_11 || selected!=0x0311 ||
+		    !lp_do_parameter(-1,"server max protocol","SMB3_02") ||
+		    zxs_smb311_offer(only,1,&selected)!=PROTOCOL_NONE ||
+		    !lp_do_parameter(-1,"server max protocol","SMB3_11")) goto done;
 	}
 	if (!lp_nt_pipe_support() ||
 	    zxs_file_vfs_route(1, 1, true, false, false, NULL, lp_nt_pipe_support()) != ZXS_VFS_REJECT ||

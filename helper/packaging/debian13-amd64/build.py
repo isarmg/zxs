@@ -180,10 +180,10 @@ def release_history(version,first,previous):
 # This passive release template is NOT an installed smb.conf, instance, NTLM
 # policy, or service. The site must supply the actual approved instance target.
 LIVE_TEMPLATE = "usr/share/local-ops-helper/initial-live.conf"
-LIVE_TEMPLATE_SHA = "a4724d2af6596303e9bccf5db9456629328ad6c575d88adcd8c55481b57708d2"
+LIVE_TEMPLATE_SHA = "89cfd6cbd9285bd066ffcdfd53c9707cb2e7ce655301fbb66fc1821eeca4763f"
 def ship_live_template(root):
     f=copy_checked(PROJECT/"resources/samba-domain/initial-live.conf",root/LIVE_TEMPLATE,
-                   LIVE_TEMPLATE_SHA,1349,cap=1349)
+                   LIVE_TEMPLATE_SHA,1383,cap=1383)
     f.chmod(0o444)
     return f
 
@@ -201,7 +201,7 @@ def ship_web_service(root):
     return {"base":rel,"sha256":WEB_INPUTS,"active_units":[]}
 
 SMB_HOST_INPUTS = {
-    "check.py": "ddb3a5bb7ceb618e43785040a5df8e448e17aa7de8d9cbe7caac33108a1a39ed",
+    "check.py": "16ac3201357137b708862ebcaaab831cb8a6d3d066f761843d77e187b62dd591",
     "zxs-smb-preflight.service.in": "7938f39003e526b858c242c14fe339e5157f7a4a4458420b7e56e14879b4ebc0",
 }
 def ship_smb_host_preflight(root):

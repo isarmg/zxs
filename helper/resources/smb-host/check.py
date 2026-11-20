@@ -16,7 +16,7 @@ ELFS = ("/usr/lib/zxs-smb-runtime/debian13-amd64/sbin/smbd",
         "/usr/lib/zxs-smb-runtime/debian13-amd64/bin/zxs-smb-storage")
 SOURCE = "/var/lib/local-ops-helper/samba-instances/"
 VIEW = "/run/zxs-smb-held/"
-LIVE = "a4724d2af6596303e9bccf5db9456629328ad6c575d88adcd8c55481b57708d2"
+LIVE = "89cfd6cbd9285bd066ffcdfd53c9707cb2e7ce655301fbb66fc1821eeca4763f"
 KEYS = ("SYSTEM", "POOL", "INSTANCE", "PROVISION", "UID", "GID", "BOUND", "SMBD", "STORAGE")
 CAP = 128 << 20
 
@@ -161,7 +161,7 @@ def candidates(s,st):
     need(len({x.stamps[-1][:2] for x in local})==len(local) and all(
         x.stamps[-1][2]==site_dir.stamps[-1][2] for x in [*priv,account]),"aliased installed directories or submount")
     results=[]
-    for name,length in (("domain.bound",128),("smb.conf",1349)):
+    for name,length in (("domain.bound",128),("smb.conf",1383)):
         accept=fixed_public_file(length)
         orig=slot(site+"/"+name,accept)
         view=slot(VIEW+name,accept)

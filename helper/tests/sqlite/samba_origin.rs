@@ -41,17 +41,23 @@ fn exact_guest_boot_profile_is_not_a_live_service_or_a_systemwide_configuration(
 fn default_live_profile_and_original_public_record_are_exact_not_physical_login_proofs(){
     let live=include_bytes!("../../resources/samba-domain/initial-live.conf");
     let sha:[u8;32]=Sha256::digest(live).into();
-    assert_eq!(live.len(),1349);
-    assert_eq!(sha.as_slice(),bytes("a4724d2af6596303e9bccf5db9456629328ad6c575d88adcd8c55481b57708d2"));
+    assert_eq!(live.len(),1383);
+    assert_eq!(sha.as_slice(),bytes("89cfd6cbd9285bd066ffcdfd53c9707cb2e7ce655301fbb66fc1821eeca4763f"));
     let text=std::str::from_utf8(live).unwrap();
     assert_eq!(text.lines().filter(|s|s.starts_with('[')).collect::<Vec<_>>(),["[global]"]);
-    for key in ["interfaces = 127.0.0.1","bind interfaces only = yes","multicast dns register = no","map to guest = Never","restrict anonymous = 2",
+    for key in ["server min protocol = SMB3_11","server max protocol = SMB3_11","interfaces = 127.0.0.1","bind interfaces only = yes","multicast dns register = no","map to guest = Never","restrict anonymous = 2",
         "server signing = mandatory","ntlm auth = ntlmv2-only","passdb backend = tdbsam:/instance/accountdb/passdb.tdb","nt pipe support = no","host msdfs = no","usershare path =","usershare max shares = 0"]{
         assert_eq!(text.lines().filter(|l|l.trim()==key).count(),1);
     }
+    let prior=b"    server min protocol = SMB2_02\n";
+    let active=b"    server min protocol = SMB3_11\n    server max protocol = SMB3_11\n";
+    assert!(live.windows(active.len()).any(|v|v==active) && !live.windows(prior.len()).any(|v|v==prior));
+    let legacy_sha=Sha256::digest(text.replace(std::str::from_utf8(active).unwrap(),std::str::from_utf8(prior).unwrap()));
+    assert_eq!(legacy_sha.as_slice(),bytes("a4724d2af6596303e9bccf5db9456629328ad6c575d88adcd8c55481b57708d2")); // source-only old binding contrast
     let mut expected=sample();expected[64..96].copy_from_slice(&sha);
     let domain=match_install(&sample()).unwrap();
     let exact=domain.encode_binding(&[0x11;16],&[0x22;16],&[0x33;16],&sha).unwrap();
     assert_eq!(exact.as_slice(),expected);
+    assert!(LocalDomain::expected_binding(&exact,&[0x11;16],&[0x22;16],&[0x33;16],&legacy_sha.into()).is_err());
     assert!(LocalDomain::expected_binding(&exact,&[0x11;16],&[0x22;16],&[0x33;16],&[0x44;32]).is_err());
 }
