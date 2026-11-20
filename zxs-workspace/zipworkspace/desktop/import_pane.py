@@ -86,7 +86,8 @@ class ImportPane(QWidget):
 
         def submit(title, call, apply, *, cancellable=False):
             try:
-                options = {"cancel": plan.cancel, "cancel_text": "取消本次提取（发布前）"} if cancellable else {}
+                options = {"cancel": plan.cancel, "progress_report": plan.progress,
+                           "cancel_text": "取消本次提取（发布前）"} if cancellable else {}
                 future = self.owner.job(title, call, apply, failed=lambda _error: plan.close(), **options)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)

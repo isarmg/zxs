@@ -245,7 +245,7 @@ class ArchivePane(QWidget):
 
         def submit(title, call, apply, *, cancellable=False):
             try:
-                requested = {"cancel": plan.cancel} if cancellable else {}
+                requested = {"cancel": plan.cancel, "progress_report": plan.progress} if cancellable else {}
                 future = self.owner.job(title, call, apply, failed=lambda _error: plan.close(), **requested)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda f: plan.close() if f.cancelled() else None)
@@ -288,7 +288,7 @@ class ArchivePane(QWidget):
 
         def submit(title, work, done, *, cancellable=False):
             try:
-                requested = {"cancel": plan.cancel} if cancellable else {}
+                requested = {"cancel": plan.cancel, "progress_report": plan.progress} if cancellable else {}
                 future = self.owner.job(title, work, done, failed=lambda _error: plan.close(), **requested)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
@@ -378,7 +378,8 @@ class ArchivePane(QWidget):
 
         def submit(title, call, apply, *, cancellable=False):
             try:
-                options = {"cancel": plan.cancel, "cancel_text": "取消本机历史复制（发布前）"} if cancellable else {}
+                options = {"cancel": plan.cancel, "progress_report": plan.progress,
+                           "cancel_text": "取消本机历史复制（发布前）"} if cancellable else {}
                 future = self.owner.job(title, call, apply, failed=lambda _error: plan.close(), **options)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)

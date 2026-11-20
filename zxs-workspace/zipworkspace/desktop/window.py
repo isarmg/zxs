@@ -30,7 +30,8 @@ class Window(QMainWindow):
         self.setWindowTitle("ZIP Workspace")
         self.resize(1000, 700)
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="workspace-operation")
-        self.pending = self.stop_transfer = None
+        self.pending = self.stop_transfer = self.transfer_progress = None
+        self.last_progress, self.cancel_requested = None, False
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -65,10 +66,12 @@ class Window(QMainWindow):
     def inform(self, message):
         self.note.setText(str(message))
 
-    def job(self, title, work, apply, *, failed=None, cancel=None, cancel_text=None):
+    def job(self, title, work, apply, *, failed=None, cancel=None, cancel_text=None, progress_report=None):
         if self.pending is not None: return
         self.tabs.setEnabled(False)
         self.inform(title)
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("%p%")
         self.progress.show()
         self.timer.start(125)
         try:
@@ -78,6 +81,8 @@ class Window(QMainWindow):
             raise
         self.pending = (future, apply, failed)
         self.stop_transfer = cancel
+        self.transfer_progress = progress_report
+        self.last_progress, self.cancel_requested = None, False
         self.transfer_cancel.setText(cancel_text or "取消本次复制（发布前）")
         self.transfer_cancel.setEnabled(cancel is not None)
         self.transfer_cancel.setVisible(cancel is not None)
@@ -88,17 +93,37 @@ class Window(QMainWindow):
         stop = self.stop_transfer
         self.stop_transfer = None
         self.transfer_cancel.setEnabled(False)
+        self.cancel_requested = True
+        self.progress.setRange(0, 0)
         if stop():
             self.inform("已请求取消。请等待正在进行的系统调用返回。")
         else:
             self.inform("复制已开始正式发布或已经结束，不能撤销。正在核对本次结果。")
 
+    def progress_tick(self):
+        if self.cancel_requested or self.transfer_progress is None: return
+        phase = self.transfer_progress()
+        if phase == self.last_progress: return
+        self.last_progress = phase
+        label, done, total = phase
+        if not label: return
+        if total is None or total <= 0:
+            self.progress.setRange(0, 0)
+            self.inform(label + "…")
+            return
+        self.progress.setRange(0, 1_000)
+        self.progress.setValue(min(1_000, done * 1_000 // total))
+        self.progress.setFormat(f"{done:,} / {total:,} B")
+        self.inform(label + "；本阶段计数，不代表已经完成。")
+
     def poll(self):
         if self.pending is None: return
         future, apply, failed = self.pending
-        if not future.done(): return
+        if not future.done():
+            self.progress_tick()
+            return
         self.timer.stop()
-        self.pending = self.stop_transfer = None
+        self.pending = self.stop_transfer = self.transfer_progress = None
         self.transfer_cancel.hide()
         self.progress.hide()
         self.tabs.setEnabled(True)

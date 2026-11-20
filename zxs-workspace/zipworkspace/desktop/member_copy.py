@@ -91,7 +91,7 @@ class CancelledCopy(Rejected):
 
 
 class _CheckedReads:
-    def __init__(self, raw, check): self.raw, self.check = raw, check
+    def __init__(self, raw, check, on_read=None): self.raw, self.check, self.on_read = raw, check, on_read
 
     def __getattr__(self, name): return getattr(self.raw, name)
 
@@ -99,6 +99,7 @@ class _CheckedReads:
         self.check()
         data = self.raw.read(*args)
         self.check()
+        if self.on_read is not None: self.on_read(len(data))
         return data
 
 
@@ -107,6 +108,18 @@ class _BeforePublication:
 
     def _init_cancellation(self):
         self.cancelled, self._publication_lock, self.publishing = Event(), Lock(), False
+        self._progress = ("", 0, None)
+
+    def _phase(self, name, total=None):
+        with self._publication_lock: self._progress = (name, 0, total)
+
+    def _bytes_processed(self, amount):
+        with self._publication_lock:
+            label, done, total = self._progress
+            self._progress = label, done + amount, total
+
+    def progress(self):
+        with self._publication_lock: return self._progress
 
     def cancel(self):
         """Return true only if cancellation won before the unique native publication."""
@@ -195,6 +208,7 @@ class _AnonymousCopy(_BeforePublication):
         return generation
 
     def _copy(self, read, fd):
+        self._phase("正在写入未发布的匿名副本", self.size)
         digest = hashlib.sha256()
         left = self.size
         while left:
@@ -210,6 +224,7 @@ class _AnonymousCopy(_BeforePublication):
                 self._checkpoint()
                 written = os.write(fd, view)
                 if not 0 < written <= len(view): raise Rejected("未能写完匿名文件")
+                self._bytes_processed(written)
                 view = view[written:]
         self._checkpoint()
         if read(1): raise Rejected("实际 EOF 与原长度不符")
@@ -220,8 +235,10 @@ class _AnonymousCopy(_BeforePublication):
         size = self.size
         self._checkpoint()
         before = self._output(fd, 0, size)
+        self._phase("正在同步未发布的匿名副本")
         os.fsync(fd)
         self._checkpoint()
+        self._phase("正在读回未发布的匿名副本", size)
         digest, read = hashlib.sha256(), 0
         while read < size:
             self._checkpoint()
@@ -229,6 +246,7 @@ class _AnonymousCopy(_BeforePublication):
             self._checkpoint()
             if not data: raise Rejected("匿名副本读回提前结束")
             read += len(data)
+            self._bytes_processed(len(data))
             digest.update(data)
         if os.pread(fd, 1, size) or digest.hexdigest() != sha or self._output(fd, 0, size) != before:
             raise Rejected("匿名副本读回不等于原数据")
@@ -266,6 +284,7 @@ class _AnonymousCopy(_BeforePublication):
                         self._output(out, 0, size, (self.proc.fds, name), follow=True) != sealed):
                     raise Rejected("procfs 中没有核验通过的原匿名文件")
                 self._begin_publication()
+                self._phase("正在正式发布并同步所选父目录")
                 may_be_linked = True
                 try:
                     os.link(name, self.path.name, src_dir_fd=self.proc.fds, dst_dir_fd=self.parent, follow_symlinks=True)
@@ -342,6 +361,7 @@ class ZipCopy(_AnonymousCopy):
             raise Rejected("复制的原始字节不等于列表中已核验的节点")
         self._output(fd, 0, self.size)
         # The private readback uses the one new inode, before publishing the .zip name.
+        self._phase("正在核验匿名 ZIP 里的完整目录和成员")
         with os.fdopen(fd, "rb", closefd=False) as actual:
             marker, _ = read_managed_document(_CheckedReads(actual, self._checkpoint), display_name=self.selected.path.name)
         if marker != self.selected.browser.commit:
@@ -478,12 +498,15 @@ class _AtomicDirectoryCopy(_BeforePublication):
                         for name, (directory, _, _) in sorted(self.rows.items()):
                             self._checkpoint()
                             if directory: sink.mkdir(name)
+                        self._phase("正在读取将复制的文件内容，尚未发布", self.size)
                         for name, original in files:
                             self._checkpoint()
                             _, size, sha = self.rows[name]
                             with archive.open(original) as body, sink.file(name) as dest:
-                                if copy_body(_CheckedReads(body, self._checkpoint), size, dest) != sha:
+                                source = _CheckedReads(body, self._checkpoint, self._bytes_processed)
+                                if copy_body(source, size, dest) != sha:
                                     raise Rejected("私有副本与原预览中成员的 SHA-256 不符")
+                        self._phase("正在同步并完整读回私处，尚未发布")
                         sink.sync(self.rows, checkpoint=self._checkpoint)
                         sealed = self._sealed_tree(stage, sink)
                         self._bound_source()
@@ -492,6 +515,7 @@ class _AtomicDirectoryCopy(_BeforePublication):
                         if _directory_generation(stage.parent) != sealed:
                             raise Rejected("原私有暂存目录已改变")
                         self._begin_publication()
+                        self._phase("正在正式发布完整目录并同步两个原父")
                         may_have_moved = True
                         try:
                             rename_new_at(self.private.parent, self.stage_name, self.path.name,

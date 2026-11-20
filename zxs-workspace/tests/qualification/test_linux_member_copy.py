@@ -155,6 +155,22 @@ class LinuxMemberCopy(unittest.TestCase):
         self.assertFalse(subtree.path.exists())
         self.assertEqual(list(self.private.iterdir()), [])
 
+    def test_copy_stage_byte_counts_use_actual_writes_and_full_readback_not_a_success_percentage(self):
+        plan = self.zip_plan()
+        plan.review()
+        real_phase, seen = plan._phase, []
+        def phase(label, total=None):
+            seen.append(plan.progress())
+            real_phase(label, total)
+        with patch.object(plan, "_phase", side_effect=phase):
+            plan.run(confirmed=True)
+        physical = len(self.original)
+        self.assertIn(("正在写入未发布的匿名副本", physical, physical), seen)
+        self.assertIn(("正在核验匿名 ZIP 里的完整目录和成员", 0, None), seen)
+        self.assertIn(("正在读回未发布的匿名副本", physical, physical), seen)
+        self.assertEqual(plan.progress(), ("正在正式发布并同步所选父目录", 0, None))
+        self.assertEqual(plan.path.read_bytes(), self.original)
+
     def test_copy_can_cancel_after_copying_but_before_complete_zip_readback(self):
         plan = self.zip_plan()
         plan.review()
@@ -191,15 +207,21 @@ class LinuxMemberCopy(unittest.TestCase):
         win = Window()
         self.addCleanup(win.close)
         pending, taps = Future(), []
+        phase = [("读取原档", 3, 20)]
         with patch.object(win.pool, "submit", return_value=pending):
             win.job("复制原包", lambda: self.fail("fixture only controls the Future"),
                     lambda _: self.fail("cancelled is not a completed result"),
-                    cancel=lambda: taps.append(True) or True)
+                    cancel=lambda: taps.append(True) or True, progress_report=lambda: phase[0])
+        win.poll()
+        self.assertEqual(win.progress.format(), "3 / 20 B")
+        self.assertIn("不代表已经完成", win.note.text())
         self.assertFalse(win.tabs.isEnabled())
         self.assertTrue(win.transfer_cancel.isEnabled())
         self.assertFalse(win.transfer_cancel.isHidden())
         win.transfer_cancel.click()
         self.assertEqual(taps, [True])
+        phase[0] = ("不应覆盖已受理取消", 8, 20)
+        win.poll()
         self.assertIn("等待正在进行的系统调用", win.note.text())
         pending.set_exception(member_copy.CancelledCopy("已取消，未发布"))
         win.poll()
