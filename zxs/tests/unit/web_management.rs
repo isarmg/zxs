@@ -156,7 +156,7 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
     let ls=TcpListener::bind(("127.0.0.1",0)).unwrap();let addr=ls.local_addr().unwrap();
     let stop=AtomicBool::new(false);
     struct Stop<'a>(&'a AtomicBool);impl Drop for Stop<'_>{fn drop(&mut self){self.0.store(true,Ordering::Release);}}
-    let (old_op,new_op,result)=std::thread::scope(|scope|{
+    let (old_op,new_op,result,history_result)=std::thread::scope(|scope|{
         let client=scope.spawn(||{
             let _end=Stop(&stop);
             let host=addr.to_string();let origin=format!("http://{host}");
@@ -169,9 +169,13 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
             let login=req("POST","/login","",&origin,"login=first.admin&password=correct+horse+battery+staple");
             let c=login.lines().find_map(|v|v.strip_prefix("Set-Cookie: ")).unwrap().split(';').next().unwrap();
             let view=format!("/versions?file={file}");
+            let history=format!("/versions/history?file={file}");
+            assert!(req("GET",&history,"","","").starts_with("HTTP/1.1 303"));
+            assert!(req("GET",&format!("{history}&before=01"),c,"","").starts_with("HTTP/1.1 400"));
             assert!(req("GET","/versions","","","").starts_with("HTTP/1.1 303"));
             let entries=req("GET","/versions",c,"","");
             assert!(entries.contains(format!("href=\"{view}\"").as_str())&&entries.contains("Web&#39;).xlsx"));
+            assert!(entries.contains(format!("href=\"{history}\"").as_str()));
             let page=req("GET",&view,c,"","");
             assert!(page.contains("Web&#39;).xlsx")&&page.contains("数据卷"));
             let previous=format!("csrf={}&op={}",hidden(&page,"/versions/commit","csrf"),hidden(&page,"/versions/commit","op"));
@@ -187,14 +191,18 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
             let bad=format!("csrf={}&op={}", "b".repeat(64),new_op);
             assert!(req("POST","/versions/commit",c,&origin,&bad).starts_with("HTTP/1.1 403"));
             assert!(req("GET","/versions/commit",c,"","").starts_with("HTTP/1.1 404"));
+            let no_nodes=req("GET",&history,c,"","");
+            assert!(no_nodes.starts_with("HTTP/1.1 200")&&no_nodes.contains("尚无已提交版本")); // not a preview; keeps the chosen original form
             let result=req("POST","/versions/commit",c,&origin,&good);
             assert!(result.starts_with("HTTP/1.1 200")&&result.contains("正式版本已提交"));
+            let history_result=req("GET",&history,c,"","");
+            assert!(history_result.starts_with("HTTP/1.1 200")&&history_result.contains("Web&#39;).xlsx")&&history_result.contains("逻辑字节")&&!history_result.contains("/download"));
             assert_eq!(req("POST","/versions/commit",c,&origin,&good),result);
             let preview=req("GET",&view,c,"","");
             assert!(preview.starts_with("HTTP/1.1 409")&&preview.contains("工作稿已变化"));
             let stale=req("POST","/versions/commit",c,&origin,&good);
             assert!(stale.starts_with("HTTP/1.1 409")&&stale.contains("这次没有提交，也未核对上一次的结果"));
-            (old_op,new_op,result)
+            (old_op,new_op,result,history_result)
         });
         transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
         client.join().unwrap()
@@ -204,4 +212,5 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
     let frozen=admin.freeze(new_op,target).unwrap();
     assert_eq!((frozen.target.file,frozen.ord),(file,1));
     assert!(result.contains(&format!("版本 ID：<code>{}</code>",frozen.version)));
+    assert!(history_result.contains(&format!("<code>{}</code>",frozen.version))&&history_result.contains(&format!("<code>{}</code>",frozen.node)));
 }

@@ -51,6 +51,24 @@ impl App<'_>{
             Err(_)=>UNAVAILABLE(),
         }
     }
+    pub(super) fn manual_history(&mut self,q:&Request,target:&str,now:Instant)->Reply{
+        let Some(key)=q.cookie.as_ref()else{return Reply::redirect("/login")};
+        let Some(s)=self.sessions.get_mut(key)else{return Reply::redirect("/login")};
+        let (id,upper)=match target.split_once("&before="){
+            Some((id,raw))=>{
+                if raw.is_empty()||raw.starts_with('0')||!raw.as_bytes().iter().all(u8::is_ascii_digit){return BAD();}
+                let Ok(cursor)=raw.parse::<i64>() else{return BAD()};(id,Some(cursor))
+            },
+            None=>(target,None),
+        };
+        let Ok(file)=id.parse::<FileId>() else{return BAD()};
+        match s.admin.manual_timeline(file,upper){
+            Ok(history)=>{s.last=now;pages::version_history(&history)},
+            Err(e) if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);Reply::redirect("/login")},
+            Err(e) if e.kind()==io::ErrorKind::NotFound=>Reply::text("404 Not Found","没有此文件。"),
+            Err(_)=>UNAVAILABLE(),
+        }
+    }
     pub(super) fn manual_page(&mut self,q:&Request,id:&str,now:Instant)->Reply{
         let Ok(file)=id.parse::<FileId>() else{return BAD()};
         let Some(key)=q.cookie.as_ref()else{return Reply::redirect("/login")};

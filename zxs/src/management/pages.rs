@@ -65,10 +65,10 @@ pub(super) fn manual_index(items:&[manual_work::Item],next:Option<FileId>)->Repl
     out.push_str(r#"<title>选择文件 · ZXS</title></head><body><main data-zxs-scope><h1>选择文件</h1><p>仅显示已登记并确认的文件，不探测数据盘或打开正文。</p>"#);
     if items.is_empty(){out.push_str("<p>没有已确认的文件。</p>");}
     else{
-        out.push_str(r#"<table class="zxs-table"><thead><tr><th>文件名</th><th>数据卷</th></tr></thead><tbody>"#);
+        out.push_str(r#"<table class="zxs-table"><thead><tr><th>文件名</th><th>数据卷</th><th>工作稿</th></tr></thead><tbody>"#);
         for i in items{
-            write!(out,r#"<tr><td><a href="/versions?file={}"><bdi>"#,i.file).unwrap();
-            text(&mut out,&i.name);write!(out,"</bdi></a></td><td><code>{}</code></td></tr>",i.volume).unwrap();
+            write!(out,r#"<tr><td><a href="/versions/history?file={}"><bdi>"#,i.file).unwrap();
+            text(&mut out,&i.name);write!(out,r#"</bdi></a></td><td><code>{}</code></td><td><a href="/versions?file={}">手动提交</a></td></tr>"#,i.volume,i.file).unwrap();
         }
         out.push_str("</tbody></table>");
     }
@@ -76,6 +76,31 @@ pub(super) fn manual_index(items:&[manual_work::Item],next:Option<FileId>)->Repl
     out.push_str(r#"<p><a href="/">返回概览</a></p></main></body></html>"#);
     Reply::html("200 OK",out)
 }
+
+pub(super) fn version_history(history:&crate::system::reader::account::history::Timeline)->Reply{
+    let mut out=String::from(HEAD);
+    out.push_str("<title>已提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>已提交版本</h1><p>当前名称 <bdi>");
+    text(&mut out,&history.name);
+    let role=if history.retained{"回收卷"}else{"数据卷"};
+    write!(out,"</bdi> · {role} <code>{}</code></p><p>这里只列已提交的版本，不读取正文或核验磁盘。</p>",history.volume).unwrap();
+    if history.rows.is_empty(){out.push_str("<p>尚无已提交版本。</p>");}
+    else{
+        out.push_str(r#"<table class="zxs-table"><thead><tr><th>序号</th><th>版本 ID</th><th>节点 ID</th><th>父节点</th><th>工作修订</th><th>逻辑字节</th></tr></thead><tbody>"#);
+        for v in &history.rows{
+            write!(out,"<tr><td>{}</td><td><code>{}</code></td><td><code>{}</code></td><td>",v.order,v.version,v.node).unwrap();
+            if let Some(parent)=v.parent{write!(out,"<code>{parent}</code>").unwrap();}else{out.push('—');}
+            write!(out,"</td><td>{}</td><td>{}</td></tr>",v.revision,v.length).unwrap();
+        }
+        out.push_str("</tbody></table>");
+    }
+    if let Some(upper)=history.next{
+        write!(out,r#"<p><a href="/versions/history?file={}&amp;before={upper}">更早的版本</a></p>"#,history.file).unwrap();
+    }
+    if !history.retained{write!(out,r#"<p><a href="/versions?file={}">打开手动提交表单</a></p>"#,history.file).unwrap();}
+    out.push_str(r#"<p><a href="/versions">返回文件列表</a></p></main></body></html>"#);
+    Reply::html("200 OK",out)
+}
+
 pub(super) fn manual(item:&manual_work::Item,t:manual_work::Target,op:OperationId,csrf:&str)->Reply{
     let mut out=String::from(HEAD);
     out.push_str("<title>手动提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>手动提交版本</h1>");

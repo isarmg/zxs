@@ -75,6 +75,7 @@ impl<'s> App<'s>{
             if q.target=="/management.css"{
                 let mut r=Reply::text("200 OK",pages::CSS);r.ty="text/css; charset=utf-8";return r;
             }
+            if let Some(args)=q.target.strip_prefix("/versions/history?file="){return self.manual_history(&q,args,now);}
             if let Some(id)=q.target.strip_prefix("/versions?file="){return self.manual_page(&q,id,now);}
             if q.target=="/versions"{return self.manual_index(&q,None,now);}
             if let Some(after)=q.target.strip_prefix("/versions?after="){return self.manual_index(&q,Some(after),now);}

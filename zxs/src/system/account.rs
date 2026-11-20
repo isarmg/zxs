@@ -105,3 +105,5 @@ pub(crate) mod overview;
 
 #[path="manual_work.rs"]
 pub(crate) mod manual_work;
+#[path="history.rs"]
+pub(crate) mod history;
