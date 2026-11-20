@@ -22,7 +22,7 @@ impl ChallengeService {
     fn snapshot(&self)->Result<Arc<ProtectedRevision>> {
         self.revision.read().map_err(|_|Rejected)?.as_ref().cloned().ok_or(Rejected)
     }
-    fn current(&self,rev:&Arc<ProtectedRevision>)->bool {
+    pub(super) fn current(&self,rev:&Arc<ProtectedRevision>)->bool {
         self.revision.read().is_ok_and(|g|g.as_ref().is_some_and(|v|v.epoch==rev.epoch && Arc::ptr_eq(v,rev)))
     }
     /// No production branch accepts a nonce, timestamp, caller-supplied key
@@ -51,7 +51,7 @@ impl ChallengeService {
     }
 }
 impl super::MechanismProof {
-    pub(in crate::smb) fn current(&self,service:&ChallengeService)->bool {service.current(&self.revision)}
+    pub(in crate::smb) fn current(&self,service:&ChallengeService)->bool {Instant::now()<self.expires && service.current(&self.revision)}
 }
 impl Pending {
     /// Sole non-test proof entry: consume the original challenge once, only

@@ -32,26 +32,27 @@ pub(in crate::smb) enum Fault {
     InvalidFinalResponse,
 }
 
-/// The type deliberately has **no production issuer**. Only the future
-/// authenticating mechanism inside this module may produce it, atomically
-/// finishing its original attempt (subject, epoch, same connection and exact
-/// final request) and releasing that attempt's exported NTLM session key.
+/// Only the strictly authenticating mechanism inside this module may produce
+/// this from its complete proof, original request and that same exchange's
+/// exported NTLM session key after rechecking its protected revision.
 /// Never construct this from a username, a bool, a wire key or two independent
 /// lookup results. No Debug, Clone or key-byte getter.
 #[must_use]
-pub(in crate::smb) struct VerifiedExchange {
+struct VerifiedExchange {
     request: RequestKeyContext,
     exported: Secret,
 }
 
 impl VerifiedExchange {
-    fn signing_key(&self) -> Result<Secret, Fault> {
+    fn signing_key(&self) -> Result<Secret, Fault> {self.derive(b"SMBSigningKey\0")}
+    fn application_key(&self)->Result<Secret,Fault> {self.derive(b"SMBAppKey\0")}
+    fn derive(&self,label:&'static [u8]) -> Result<Secret, Fault> {
         // MS-SMB2 §§3.1.4.2, 3.3.5.5.3: SP800-108 counter mode with
         // HMAC-SHA-256, one block, 128 output bits. The LABEL includes its
         // terminator; the KDF's own zero separator is a *different* byte.
         let mut prf = KdfMac::new_from_slice(&self.exported[..]).map_err(|_| Fault::UnusableKey)?;
         prf.update(&1u32.to_be_bytes());
-        prf.update(b"SMBSigningKey\0");
+        prf.update(label);
         prf.update(&[0]);
         prf.update(self.request.as_bytes());
         prf.update(&128u32.to_be_bytes());
@@ -66,15 +67,16 @@ impl VerifiedExchange {
     /// Complete only with our actual, fully serialized, standalone successful
     /// response to the exact final request. It is signed, NOT included in the
     /// KDF context. A failure changes no response bytes and yields no signer.
-    pub(in crate::smb) fn sign_final(self, reply: &mut [u8]) -> Result<SessionSigner, Fault> {
+    fn complete(self, reply: &mut [u8]) -> Result<FinalKeys, Fault> {
         let sid = self.request.check_final_reply(reply).map_err(|_| Fault::InvalidFinalResponse)?;
         let id = NonZeroU64::new(sid).ok_or(Fault::InvalidFinalResponse)?;
         let signer = SessionSigner { id, key: self.signing_key()? };
+        let application=self.application_key()?;
         let mut mac = signer.mac()?;
-        // check_final_reply proves a whole unsigned server header with Flags=1.
+        // check_final_reply proved the original priority plus SERVER_TO_REDIR.
         // Substitute only its signed flag and Signature; all other bytes,
         // including the actual GSS output and padding, are exactly as sent.
-        let flags = (1 | SIGNED).to_le_bytes();
+        let flags = (u32::from(reply[16]) | SIGNED).to_le_bytes();
         mac.update(&reply[..16]);
         mac.update(&flags);
         mac.update(&reply[20..48]);
@@ -83,9 +85,15 @@ impl VerifiedExchange {
         let tag = mac.finalize();
         reply[16..20].copy_from_slice(&flags);
         reply[48..64].copy_from_slice(tag.as_bytes());
-        Ok(signer)
+        Ok(FinalKeys {signer,application,session:self.exported,context:self.request})
     }
 }
+
+/// One original single-channel session: Session.SigningKey and the channel's
+/// SigningKey refer to the same signer; the application/session keys are kept
+/// private, never used as proofs of identity or exposed to file operations.
+struct FinalKeys { signer:SessionSigner, application:Secret, session:Secret, context:RequestKeyContext }
+
 
 /// Only for a live, valid, current-epoch session on its original connection.
 /// The connection/epoch checks and insertion/removal belong to that owner's

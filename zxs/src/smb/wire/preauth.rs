@@ -5,7 +5,7 @@
 //! each state with its original connection/attempt, consume credits and pass
 //! the actual immutable serialized response, not a prediction of that reply.
 use super::{Error, Result, bytes, message::{Compound, Routing, SIGNED}, negotiate::{CmacChoice, Offer},
-            u16le, u32le, u64le};
+            setup_reply::Echo, u16le, u32le, u64le};
 use sha2::{Digest, Sha512};
 
 const MAX_PACKET: usize = 68 * 1024;
@@ -131,7 +131,7 @@ impl ConnectionHash {
 pub(in crate::smb) struct AwaitingRequest { value: Hash, expected_sid: u64, continues: u8 }
 
 #[must_use]
-pub(in crate::smb) struct SetupRequestHash { value: Hash, mid: u64, sid: u64, continues: u8 }
+pub(in crate::smb) struct SetupRequestHash { value: Hash, mid: u64, sid: u64, echo:Echo, continues: u8 }
 
 impl AwaitingRequest {
     pub(in crate::smb) fn received(self, envelope: &Compound<'_>) -> Result<SetupRequestHash> {
@@ -157,7 +157,7 @@ impl AwaitingRequest {
         }
         let (_, token) = security_window(p, 76, 88)?;
         Ok((SetupRequestHash { value: extend(&self.value, p), mid: m.header.message,
-                               sid: self.expected_sid, continues: self.continues }, token))
+                               sid: self.expected_sid, echo:Echo::from_request(m)?, continues: self.continues }, token))
     }
 }
 
@@ -183,22 +183,27 @@ impl SetupRequestHash {
     /// that reply is signed USING a key derived from this request-side hash.
     /// Dropping this value on auth failure publishes neither a session nor a key.
     pub(in crate::smb) fn into_kdf_context(self) -> RequestKeyContext {
-        RequestKeyContext { value: self.value, sid: self.sid, mid: self.mid }
+        RequestKeyContext { value:self.value, sid:self.sid, mid:self.mid, echo:self.echo }
     }
 }
 
 /// Deliberately not a session key or authentication result. No public constructor.
-pub(in crate::smb) struct RequestKeyContext { value: Hash, sid: u64, mid: u64 }
+pub(in crate::smb) struct RequestKeyContext { value:Hash, sid:u64, mid:u64, echo:Echo }
 
 impl RequestKeyContext {
     pub(in crate::smb) fn as_bytes(&self) -> &[u8; 64] { &self.value }
+
+    /// Unsigned template only. No caller can transmit or authenticate with a hash.
+    pub(in crate::smb) fn final_template(&self,credits:u16,gss:&[u8])->Result<Vec<u8>> {
+        self.echo.unsigned_final(credits,gss)
+    }
 
     /// This profile's NTLM new session has already received a non-zero
     /// server session ID in its MORE reply. Only the successful unsigned
     /// serialized response to that exact final request can be signed next.
     pub(in crate::smb) fn check_final_reply(&self, p: &[u8]) -> Result<u64> {
         let sid = server_header(p, 1, 0, self.mid)?;
-        if self.sid == 0 || sid != self.sid || u32le(p, 16)? != 1 ||
+        if self.sid == 0 || sid != self.sid || !self.echo.same_unsigned(p) ||
             bytes(p, 48, 16)? != [0; 16] || u16le(p, 64)? != 9 || u16le(p, 66)? != 0 {
             return invalid();
         }

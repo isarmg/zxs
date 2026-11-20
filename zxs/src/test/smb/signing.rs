@@ -40,6 +40,10 @@ const EXPECT: [[&str; 5]; 2] = [
      "7a0d8eca9ea9703c8529cf2423e61da1", "a190ca2e83edc1e1eed500717c7dbd10"],
 ];
 
+impl VerifiedExchange {
+    // Low-level invalid-template checks only; the real proof supplies its own template.
+    fn sign_final(self,reply:&mut [u8])->Result<SessionSigner,Fault>{self.complete(reply).map(|k|k.signer)}
+}
 fn hex(s: &str) -> Vec<u8> {
     s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
 }
@@ -72,7 +76,7 @@ fn exchange(explicit: bool, id: u64) -> VerifiedExchange {
     let first = envelope(&a, |c| conn.new_attempt().received(c).unwrap());
     let next = first.more(&more).unwrap();
     let last = envelope(&b, |c| next.received(c).unwrap());
-    // This fixture lives only in cfg(test). No production issuer exists.
+    // This unbound construction lives only in cfg(test), never in the connection owner.
     VerifiedExchange { request: last.into_kdf_context(), exported: Zeroizing::new(std::array::from_fn(|i| i as u8)) }
 }
 
@@ -180,7 +184,7 @@ fn unrelated_compound_resolves_two_distinct_live_sessions_and_both_signatures() 
 
 #[test]
 fn invalid_final_response_is_not_mutated_and_wrong_phase_does_not_verify() {
-    for (at, value) in [(8, 1), (12, 3), (16, 9), (24, 9), (36, 1),
+    for (at, value) in [(6, 2), (8, 1), (12, 3), (16, 9), (16, 0x21), (24, 9), (32, 1), (36, 1),
                         (40, 43), (48, 5), (66, 1), (66, 2), (66, 4), (70, 100)] {
         let mut final_bytes = final_reply(42);
         final_bytes[at] = value;

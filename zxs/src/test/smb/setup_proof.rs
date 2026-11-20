@@ -40,3 +40,13 @@ fn bad_terminal_proof_or_revoked_provider_consumes_only_that_sessions_slot() {
         assert_eq!(run.run.index.lock().unwrap().live.len(),1);drop(reject);
     }
 }
+
+pub(in crate::smb) fn fixture_terminal(wrapped:bool,check:impl FnOnce(MechanismProof,&crate::smb::session::ChallengeService)) {
+    let run=provider();let mut c=connected(&run);let (sid,last)=challenged(&mut c,wrapped);
+    let mut original=body(&last,2,sid);original[16..20].copy_from_slice(&0x20u32.to_le_bytes());
+    original[32..36].copy_from_slice(&0x44332211u32.to_le_bytes());
+    let pkt=frame(&original);let f=parsed(&pkt);
+    let Start::Existing(x)=c.receive(&f).unwrap().start_setup() else {panic!("not terminal SETUP")};
+    let Resume::Proven(mut ctx)=x.continue_setup(&mut c) else {panic!("fixture failed actual proof");};
+    check(ctx.proof.take().unwrap(),run.run.verifier.as_ref().unwrap());
+}

@@ -84,6 +84,10 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 `src/test/smb/strict_verifier.rs` 只存公开合成的完整原消息和固定答案。固定材料不对应实际账户，包含有／无 KEY_EXCH 的导出键、双方向名单 MIC，以及 v2 证明虽正确但无内层 MIC、错 SPN／时间等拒绝例；另列[微软规范公开的 SessionBaseKey 答案](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/54973495-20d2-49e8-9925-c399a403ed4a)作交叉基准，不给生产补造凭据、连接或权限。仅静审源码，未构建、运行测试或实际认证。
 
+### 末次回复的密钥和签名（封存，尚未发布到连接）
+
+只有严格证明仍对应原凭据代，才能用该证明的原末请求头和机制实际输出组装最终回复。根据 [MS-SMB2 §3.3.5.5.3 第 6 至 12 步](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)，从同一次 NTLM ExportedSessionKey 和截至末请求的 SHA-512 分开派生 SMBSigningKey 与 SMBAppKey，各自的标签含终止 NUL；最终回复不再进入 KDF。单通道引用同一签名密钥，保留私有会话密钥和应用密钥，不导出给存储或 RPC。服务器按原请求的 MID、SID、charge、Reserved、优先级和应回额度，对零 guest/null/encrypt 标志、真实 GSS token（直接 NTLM 为零长，SPNEGO 有独立服务端名单 MIC）及整份原消息做 AES-CMAC 后设置 SIGNED。两条签名／分离密钥固定向量从同一原连接机制证明确认，不是实机结果。此片只在受保护机制内封存已签消息，不给调用方发送器、可用会话或文件权限；实际限额、客户端方言登记、发送边界和本地有效状态另行接线。
+
 ## 认证后的明文消息签名（未接认证、网络或存储）
 
 `session/` 实现[规范 KDF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/da4e579e-02ce-4e27-bbce-3fc816a3ff92) 的一个 HMAC-SHA-256 计数块，从同一新 NTLM 会话的 16 字节导出键和最后一个请求的 64 字节 transcript 派生 128 位签名键。标签含结尾 NUL，KDF 自己的分隔零字节另算。真实认证的完成凭据没有生产构造器；以后只有完成挑战、主体、MIC 和当前代检查的原尝试才能交出这一对，不能从报文、Web 身份或布尔值制造会话。密钥缓冲使用 zeroize；不承诺清除所有栈临时副本。没有使用宿主加密服务。

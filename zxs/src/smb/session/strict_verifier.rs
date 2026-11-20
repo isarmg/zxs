@@ -2,6 +2,7 @@
 //! No enrollment, credential reader, production provider, live-session authority,
 //! wire-key constructor, listener or conversion into a storage/session grant.
 pub(super) mod challenge;
+pub(super) mod completion;
 use super::{
     Secret, envelope::{AwaitAuthenticate, HaveNegotiate, Layer, Saved, Unverified},
     ntlm_shape::{self as ntlm, Authenticate, Challenge},
@@ -85,7 +86,7 @@ impl Pending {
     fn received(self, p: &Compound<'_>) -> Result<MechanismProof> {
         if Instant::now() >= self.expires { return Err(Rejected); }
         let u = self.phase.received(p).map_err(|_| Rejected)?;
-        let proof = verify(self.revision, u)?;
+        let proof = verify(self.revision, u, self.expires)?;
         if Instant::now() >= self.expires { return Err(Rejected); }
         Ok(proof)
     }
@@ -102,6 +103,7 @@ pub(in crate::smb) struct MechanismProof {
     request: RequestKeyContext,
     exported: Secret,
     final_gss: FinalGss,
+    expires: Instant, // original pending challenge; not a live-session expiry
 }
 
 enum FinalGss { Direct, Spnego([u8; 29]) }
@@ -208,7 +210,7 @@ fn list_exchange(exported: &Secret, key_exch: bool, list: &[u8], inbound: &[u8])
     Ok(FinalGss::Spnego(der))
 }
 
-fn verify(v: Arc<ProtectedRevision>, u: Unverified<'_>) -> Result<MechanismProof> {
+fn verify(v: Arc<ProtectedRevision>, u: Unverified<'_>, expires:Instant) -> Result<MechanismProof> {
     let original1 = u.type1.bytes();
     let original2 = u.type2.bytes();
     let c = ntlm::challenge_fields(original2).map_err(|_| Rejected)?;
@@ -242,7 +244,7 @@ fn verify(v: Arc<ProtectedRevision>, u: Unverified<'_>) -> Result<MechanismProof
         }
         _ => return Err(Rejected),
     };
-    Ok(MechanismProof { revision: v, request: u.request, exported, final_gss })
+    Ok(MechanismProof { revision: v, request: u.request, exported, final_gss, expires })
 }
 
 #[cfg(test)]
