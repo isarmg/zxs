@@ -137,8 +137,22 @@ fn selected(offered: u32, s: u32, claimed: u32) -> Result<()> {
     Ok(())
 }
 
+// MS-NLMP 3.2.5.1.2: match a user's name case-insensitively. Our account
+// owner admits one canonical lower-ASCII login; only the received name's
+// comparison changes. The wire octets still enter the original inner MIC.
+fn same_local_login(configured:&[u8],sent:&[u8])->bool {
+    let n=configured.len()/2;
+    let mut canonical=[0u8;64];
+    if !(1..=canonical.len()).contains(&n) || configured.len()!=sent.len() || configured.len()%2!=0 {return false;}
+    for ((dest,local),remote) in canonical[..n].iter_mut().zip(configured.chunks_exact(2)).zip(sent.chunks_exact(2)) {
+        if local[1]!=0 || remote[1]!=0 || local[0]!=remote[0].to_ascii_lowercase() {return false;}
+        *dest=local[0];
+    }
+    crate::password::login_name(&canonical[..n]).is_ok()
+}
+
 fn bind_targets(v: &ProtectedRevision, c: &Challenge<'_>, a: &Authenticate<'_>) -> Result<()> {
-    if v.user.is_empty() || v.spn.is_empty() || a.user_utf16 != &*v.user || a.domain_utf16 != &*v.domain {
+    if !same_local_login(&v.user,a.user_utf16) || v.spn.is_empty() || a.domain_utf16 != &*v.domain {
         return Err(Rejected);
     }
     // Keep all server-owned AVs (including the required Type 2 AV7) bound

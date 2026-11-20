@@ -98,7 +98,7 @@ fn utf(s: &str) -> Box<[u8]> {
 }
 pub(super) fn revision() -> Arc<ProtectedRevision> {
     Arc::new(ProtectedRevision {
-        user: utf("WireFixture"), domain: utf("SYNTH"), spn: utf("cifs/fixture.invalid"),
+        user: utf("wirefixture"), domain: utf("SYNTH"), spn: utf("cifs/fixture.invalid"),
         epoch: NonZeroU64::new(17).unwrap(),
         response_key: Zeroizing::new(std::array::from_fn(|i| 0x60 + i as u8)),
     })
@@ -263,6 +263,44 @@ fn only_header_clock_may_differ_and_the_exact_ntlm_and_spnego_proofs_still_apply
     expired.expires=Instant::now();
     let request=frame::framed(&frame::smb(&e.three,false,2,42,0));
     assert!(expired.received(&frame::compound(&request),header).is_err());
+}
+
+#[test]
+fn ascii_case_matches_the_one_canonical_ntlm_identity_without_rewriting_the_message() {
+    let v=revision();let expected=hex(PLAIN_EXPORTED);
+    let user=258..280; // original public fixture's 11 UTF-16LE units
+    // Both name spellings retain the same NTProofStr and session key. These
+    // are fixed, independent HMAC answers over the changed original Type 3.
+    for (spelling,mic) in [
+        ("57004900520045004600490058005400550052004500","cf41a72555b3d277320da0b5e9b4d66d"),
+        ("77006900720065006600690078007400750072006500","7cd68f8607dc7898163ae3ef0de091ce"),
+    ] {
+        let mut e=example(false);e.three[user.clone()].copy_from_slice(&hex(spelling));
+        // Matching the configured account is NOT authorization to skip MIC.
+        assert!(done(&v,&e,None,None,42,0).is_err());
+        e.three[72..88].copy_from_slice(&hex(mic));
+        let proof=done(&v,&e,None,None,42,0).unwrap();
+        assert_eq!(&proof.exported[..],expected.as_slice());
+        assert!(Arc::ptr_eq(&proof.revision,&v));
+        assert!(done(&v,&e,Some(true),Some(&e.client_list),42,0).is_ok());
+    }
+
+    let mut e=example(false);
+    e.three[user].copy_from_slice(&hex("57ff6900720065006600690078007400750072006500"));
+    e.three[72..88].copy_from_slice(&hex("fc52ea72e04c6d5676ede0509da342ff"));
+    // A Unicode lookalike with the same low W byte is not this ASCII account.
+    assert!(done(&v,&e,None,None,42,0).is_err());
+    let mut e=example(false);
+    e.three[248..258].copy_from_slice(&utf("synth"));
+    e.three[72..88].copy_from_slice(&hex("4f16102492c5054454487e6233c1f467"));
+    assert!(done(&v,&e,None,None,42,0).is_err()); // domain bytes remain exact
+
+    for (configured,sent) in [("",""),("WireFixture","WIREFIXTURE"),("a.b","A_B"),("a:b","A:B"),(".a",".A")] {
+        assert!(!same_local_login(&utf(configured),&utf(sent)));
+    }
+    assert!(same_local_login(&utf("one-2._"),&utf("ONE-2._")));
+    assert!(!same_local_login(&utf("a"),&[b'A']));
+    assert!(!same_local_login(&utf("a"),&[b'A',0,0,0])); // no odd-width or padded aliases
 }
 
 #[test]

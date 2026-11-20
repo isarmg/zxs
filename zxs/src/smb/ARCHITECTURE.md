@@ -100,6 +100,8 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 [MS-NLMP 客户端规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/c0250a97-2940-40c7-82fb-20d208c71e96)建议使用服务器发出的时间戳；[服务端核验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/34a9417d-7cc0-43b0-b61c-1f19740df66f)比较的是客户端 NTLMv2 响应**头**时间和服务端当前时间。原验证器现只在这个字段上采用固定的双向 120 秒偏差（本地策略，不是规范常量），每次证明验证只读一次服务端 UTC；不是拿发挑战时的 AV7 作为“现在”。原 Type 2 的 AV7 与全部原绑定的服务器 AV、SPN、原单调时间的 30 秒一次性挑战、原客户端 blob/NTProof、内层 MIC、应有的 SPNEGO 名单 MIC 和 SMB 强签均不变。无需按系统或名字选择分支，不改写原签过的时间或放开空 MIC。
 
+按 [MS-NLMP 用户名规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/f9e6fbc4-a953-4f24-b229-ccdcc213b9ec)，登录名比较只接受本地唯一已规范的 ASCII 账户，ASCII 字母大小写等价。原 Type 3 字节仍完整参与 MIC；不重新派生 ResponseKeyNT、不试另一个域或空域，同域、SPN、NTLM 内层 MIC、应有的名单 MIC 及 SMB 强签规则保持不变。这是认证账户名，不改变 ZXS 文件／目录的大小写语义。
+
 `src/test/smb/strict_verifier.rs` 只存公开合成的完整原消息和固定答案。固定材料不对应实际账户，包含有／无 KEY_EXCH 的导出键、双方向名单 MIC，以及 v2 证明虽正确但无内层 MIC、不同但仍有效的头时间、双向边界、错 SPN、被换的原 AV7 或头/证明/MIC 等正反例；另列[微软规范公开的 SessionBaseKey 答案](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/54973495-20d2-49e8-9925-c399a403ed4a)作交叉基准，不给生产补造凭据、连接或权限。仅静审源码，未构建、运行测试或实际认证。
 
 ### 末次回复的密钥、签名与原连接发布
