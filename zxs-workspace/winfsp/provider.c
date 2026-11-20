@@ -2,12 +2,122 @@
 #include "provider.h"
 #include <stdint.h>
 #include <string.h>
+#pragma comment(lib, "Advapi32.lib")
 
-#define V(fs) ((PyObject *)(fs)->UserContext)
+typedef union { ULONG_PTR align; BYTE bytes[256]; } AlignedBuffer;
+typedef struct {
+    AlignedBuffer sid, file, directory;
+    DWORD file_bytes, directory_bytes;
+} SessionPolicy;
+typedef struct {
+    PyObject *volume;
+    SessionPolicy *session;
+} Binding;
+
+#define B(fs) ((Binding *)(fs)->UserContext)
+#define V(fs) (B(fs) ? B(fs)->volume : NULL)
 #define INDEX(fc) ((unsigned long long)((UINT_PTR)(fc) >> 1))
 #define CAN_READ(fc) ((UINT_PTR)(fc) & 1)
 #define MAX_READ (16U << 20)
 #define MAX_UNITS 240
+
+static PSID bounded_sid(const AlignedBuffer *data, DWORD length, PSID sid)
+{
+    uintptr_t lo = (uintptr_t)data->bytes, at = (uintptr_t)sid;
+    if (length > sizeof data->bytes || at < lo || at-lo > length || length-(at-lo) < 8)
+        return NULL;
+    BYTE count = *GetSidSubAuthorityCount(sid);
+    if (count > SID_MAX_SUB_AUTHORITIES || GetSidLengthRequired(count) > length-(at-lo))
+        return NULL;
+    return IsValidSid(sid) ? sid : NULL;
+}
+
+static BOOL token_flag(HANDLE token, TOKEN_INFORMATION_CLASS kind, DWORD wanted, BOOL nonzero)
+{
+    DWORD value = 0, n = 0;
+    return GetTokenInformation(token, kind, &value, sizeof value, &n) && n == sizeof value &&
+        (nonzero ? value != 0 : value == wanted);
+}
+
+static PSID local_logon(HANDLE token, AlignedBuffer *logon)
+{
+    AlignedBuffer label;
+    DWORD n = 0;
+    if (!token || !token_flag(token, TokenSessionId, 0, TRUE) ||
+        !token_flag(token, TokenElevation, 0, FALSE) || !token_flag(token, TokenUIAccess, 0, FALSE) ||
+        !token_flag(token, TokenIsAppContainer, 0, FALSE) || IsTokenRestricted(token) ||
+        !GetTokenInformation(token, TokenIntegrityLevel, label.bytes, sizeof label.bytes, &n) ||
+        n < sizeof(TOKEN_MANDATORY_LABEL))
+        return NULL;
+    PSID level = bounded_sid(&label, n, ((TOKEN_MANDATORY_LABEL *)label.bytes)->Label.Sid);
+    if (!level || !IsWellKnownSid(level, WinMediumLabelSid)) return NULL;
+    if (!GetTokenInformation(token, TokenLogonSid, logon->bytes, sizeof logon->bytes, &n) ||
+        n < sizeof(TOKEN_GROUPS))
+        return NULL;
+    const TOKEN_GROUPS *groups = (const TOKEN_GROUPS *)logon->bytes;
+    if (groups->GroupCount != 1 ||
+        (groups->Groups[0].Attributes & (SE_GROUP_LOGON_ID | SE_GROUP_ENABLED | SE_GROUP_USE_FOR_DENY_ONLY)) !=
+            (SE_GROUP_LOGON_ID | SE_GROUP_ENABLED))
+        return NULL;
+    PSID sid = bounded_sid(logon, n, groups->Groups[0].Sid);
+    const SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    return sid && !memcmp(GetSidIdentifierAuthority(sid), &nt, sizeof nt) &&
+        *GetSidSubAuthorityCount(sid) == 3 && *GetSidSubAuthority(sid, 0) == SECURITY_LOGON_IDS_RID ? sid : NULL;
+}
+
+static BOOL descriptor(PSID logon, PSID system, DWORD access, AlignedBuffer *output, DWORD *length)
+{
+    SECURITY_DESCRIPTOR abs;
+    AlignedBuffer a;
+    PACL acl = (PACL)a.bytes;
+    if (!InitializeAcl(acl, sizeof a.bytes, ACL_REVISION) ||
+        !AddAccessAllowedAce(acl, ACL_REVISION, access, logon) ||
+        !InitializeSecurityDescriptor(&abs, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorOwner(&abs, system, FALSE) ||
+        !SetSecurityDescriptorGroup(&abs, system, FALSE) ||
+        !SetSecurityDescriptorDacl(&abs, TRUE, acl, FALSE))
+        return FALSE;
+    *length = sizeof output->bytes;
+    return MakeSelfRelativeSD(&abs, output->bytes, length) &&
+        *length > 0 && *length <= sizeof output->bytes && IsValidSecurityDescriptor(output->bytes);
+}
+
+static BOOL session_policy(SessionPolicy *policy)
+{
+    HANDLE token = NULL;
+    /* Never choose a process logon if this thread is already impersonating. */
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token)) {
+        CloseHandle(token); return FALSE;
+    }
+    if (GetLastError() != ERROR_NO_TOKEN || !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return FALSE;
+    AlignedBuffer actual, system;
+    PSID sid = local_logon(token, &actual);
+    DWORD n = sizeof system.bytes;
+    BOOL ok = sid && CopySid(sizeof policy->sid.bytes, policy->sid.bytes, sid) &&
+        CreateWellKnownSid(WinLocalSystemSid, NULL, system.bytes, &n) &&
+        descriptor(sid, system.bytes, FILE_GENERIC_READ, &policy->file, &policy->file_bytes) &&
+        descriptor(sid, system.bytes, FILE_GENERIC_READ | FILE_TRAVERSE, &policy->directory, &policy->directory_bytes);
+    CloseHandle(token);
+    return ok;
+}
+
+static NTSTATUS local_enter(FSP_FILE_SYSTEM *fs, FSP_FSCTL_TRANSACT_REQ *req, FSP_FSCTL_TRANSACT_RSP *rsp)
+{
+    if (!V(fs) || !B(fs)->session) return STATUS_ACCESS_DENIED;
+    if (req->Kind == FspFsctlTransactCreateKind) {
+        UINT32 opts = req->Req.Create.CreateOptions;
+        if (!req->Req.Create.UserMode || req->Req.Create.OpenTargetDirectory ||
+            req->Req.Create.NamedStream || (opts >> 24) != FILE_OPEN ||
+            (opts & (FILE_DELETE_ON_CLOSE | FILE_OPEN_BY_FILE_ID)))
+            return STATUS_ACCESS_DENIED;
+        AlignedBuffer logon;
+        PSID sid = local_logon(FSP_FSCTL_TRANSACT_REQ_TOKEN_HANDLE(req->Req.Create.AccessToken), &logon);
+        if (!sid || !EqualSid(sid, B(fs)->session->sid.bytes)) return STATUS_ACCESS_DENIED;
+        /* The v2.1 Create dispatcher still evaluates the requested access against GetSecurityByName. */
+    }
+    return FspFileSystemOpEnter(fs, req, rsp);
+}
 
 /* Map exceptions within a callback. No traceback, member data or local paths go to system logs. */
 static NTSTATUS exception(void)
@@ -180,6 +290,47 @@ static NTSTATUS deny_name(FSP_FILE_SYSTEM *fs, PWSTR name, PUINT32 attr,
                           PSECURITY_DESCRIPTOR sd, SIZE_T *size) { return STATUS_ACCESS_DENIED; }
 static NTSTATUS deny_security(FSP_FILE_SYSTEM *fs, PVOID fc, PSECURITY_DESCRIPTOR sd, SIZE_T *size)
 { return STATUS_ACCESS_DENIED; }
+
+static NTSTATUS put_descriptor(FSP_FILE_SYSTEM *fs, UINT32 attrs, PSECURITY_DESCRIPTOR sd, SIZE_T *size)
+{
+    if (!V(fs) || !B(fs)->session) return STATUS_ACCESS_DENIED;
+    const SessionPolicy *p = B(fs)->session;
+    BOOL directory = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    SIZE_T needed = directory ? p->directory_bytes : p->file_bytes;
+    if (!needed) return STATUS_ACCESS_DENIED;  /* Never return a NULL DACL or a zero descriptor. */
+    if (!size) return sd ? STATUS_INVALID_PARAMETER : STATUS_SUCCESS; /* Attributes only. */
+    SIZE_T supplied = *size;
+    *size = needed;
+    if (!sd || supplied < needed) return STATUS_BUFFER_OVERFLOW;
+    memcpy(sd, directory ? p->directory.bytes : p->file.bytes, needed);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS session_name(FSP_FILE_SYSTEM *fs, PWSTR name, PUINT32 attrs,
+                             PSECURITY_DESCRIPTOR sd, SIZE_T *size)
+{
+    if (!V(fs) || !B(fs)->session) return STATUS_ACCESS_DENIED;
+    FSP_FSCTL_FILE_INFO info;
+    PyGILState_STATE g = PyGILState_Ensure();
+    PyObject *path = PyUnicode_FromWideChar(name, -1);
+    PyObject *row = path ? PyObject_CallMethod(V(fs), "lookup", "O", path) : NULL;
+    NTSTATUS s = info_from(row, &info);
+    Py_XDECREF(row); Py_XDECREF(path);
+    PyGILState_Release(g);
+    if (s != STATUS_SUCCESS) return s;
+    if (attrs) *attrs = info.FileAttributes;
+    return put_descriptor(fs, info.FileAttributes, sd, size);
+}
+
+static NTSTATUS session_security(FSP_FILE_SYSTEM *fs, PVOID fc, PSECURITY_DESCRIPTOR sd, SIZE_T *size)
+{
+    if (!V(fs) || !B(fs)->session) return STATUS_ACCESS_DENIED;
+    FSP_FSCTL_FILE_INFO info;
+    NTSTATUS s = get_info(fs, fc, &info);
+    if (s != STATUS_SUCCESS) return s;
+    return put_descriptor(fs, info.FileAttributes, sd, size);
+}
+
 /* The 2.1 dispatcher requires both handlers even to dispatch a FILE_OPEN. */
 static NTSTATUS deny_create(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 granted,
                             UINT32 attrs, PSECURITY_DESCRIPTOR sd, UINT64 alloc,
@@ -206,16 +357,45 @@ void ZwSnapshotDataInterface(FSP_FSCTL_VOLUME_PARAMS *p, FSP_FILE_SYSTEM_INTERFA
     /* No writable callback or handler for alternate streams, EAs or reparse data. */
 }
 
-int ZwSnapshotBind(FSP_FILE_SYSTEM *fs, PyObject *volume)
+void ZwSnapshotSessionInterface(FSP_FSCTL_VOLUME_PARAMS *p, FSP_FILE_SYSTEM_INTERFACE *ops)
+{
+    ZwSnapshotDataInterface(p, ops);
+    p->PersistentAcls = 1;
+    p->AllowOpenInKernelMode = 0;  /* No SDK bypass allowed for this profile. */
+    ops->GetSecurityByName = session_name;
+    ops->GetSecurity = session_security;
+}
+
+static int bind_volume(FSP_FILE_SYSTEM *fs, PyObject *volume, BOOL scoped)
 {
     if (!fs || fs->UserContext || !volume) return 0;
-    fs->UserContext = Py_NewRef(volume);
+    if (scoped && (!fs->Interface || fs->Interface->GetSecurityByName != session_name ||
+                   fs->Interface->GetSecurity != session_security))
+        return 0;
+    Binding *binding = PyMem_Calloc(1, sizeof *binding);
+    if (!binding) return 0;
+    if (scoped) {
+        binding->session = PyMem_Calloc(1, sizeof *binding->session);
+        if (!binding->session || !session_policy(binding->session)) {
+            PyMem_Free(binding->session); PyMem_Free(binding); return 0;
+        }
+        FspFileSystemSetOperationGuard(fs, local_enter, FspFileSystemOpLeave);
+    }
+    binding->volume = Py_NewRef(volume);
+    fs->UserContext = binding;
     return 1;
 }
 
+int ZwSnapshotBind(FSP_FILE_SYSTEM *fs, PyObject *volume) { return bind_volume(fs, volume, FALSE); }
+int ZwSnapshotBindSession(FSP_FILE_SYSTEM *fs, PyObject *volume) { return bind_volume(fs, volume, TRUE); }
+
 void ZwSnapshotUnbind(FSP_FILE_SYSTEM *fs)
 {
-    PyObject *volume = V(fs);
+    Binding *binding = B(fs);
     fs->UserContext = NULL;
-    Py_XDECREF(volume);
+    if (binding) {
+        Py_DECREF(binding->volume);
+        PyMem_Free(binding->session);
+        PyMem_Free(binding);
+    }
 }

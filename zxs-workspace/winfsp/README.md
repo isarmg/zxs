@@ -10,11 +10,11 @@
 
 `provider.c` 包含正式 SDK 头文件与 CPython C API，不仿制 WinFsp 二进制结构。目标是 x64、常规带 GIL 的 CPython 3.12+ 主解释器。宿主必须保持 `selected_snapshot()` 域存活，绑定一个强引用，停掉并等完所有回调后才解除绑定和关闭原件。运行时不要求另装第三方 Python 绑定；[winfspy 0.8.4 的发布文件](https://pypi.org/project/winfspy/0.8.4/#files)有源码，但预编 wheel 最高到 CPython 3.11。
 
-这不是一个放开挂载的库：查询安全描述符一律拒绝，不返回 NULL DACL；没有可写回调实现，常规文件请求执行权也拒绝。只读数据回调本身不能证明最终 Windows 调用者已获准、阻止可读脚本被解释或维持附件来源。普通安装没有创建卷、发布挂载点或移除盘符的入口。
+这不是一个放开挂载的库：默认数据面和下述封闭生命周期仍拒绝安全描述符查询，不返回 NULL DACL。另有不创建卷的本机登录会话资格接口：由当下非模拟、非提升的普通中完整性用户令牌取得实际 [logon SID](https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-token_groups)，为每项提供 [Windows 自相对描述符](https://learn.microsoft.com/windows/win32/api/securitybaseapi/nf-securitybaseapi-makeselfrelativesd)。文件只读，目录可遍历；不授文件执行、写入、更改 ACL 或删除。WinFsp 的 Create guard 拒绝内核绕行、缺令牌、受限或非同一登录会话；对允许的请求仍由 [SDK 的原生访问检查](https://github.com/winfsp/winfsp/blob/v2.1/src/dll/security.c)判定所请求权限。它是访问层源码，不是来源证明、全系统缓存隔离或可挂载入口；已交给授权调用者的正文无法撤回。普通安装不创建卷、发布挂载点或移除盘符。
 
-**下一道门是宿主实测，而非再加一个按钮。** 先在受授权的独立 Windows 环境，用匹配的官方 SDK/已由操作者另装的驱动，核验普通账号的源身份、并发回调、EOF/分页以及断开后不泄漏句柄。用于真实盘符之前，还需实现并实测实际调用者的最小权限、安全描述符与附件来源/执行策略；验证缓存、映射、驱动和盘符身份、停止并等待所有回调及卸载回执。打包时单独核实 WinFsp [使用及发布条款](https://github.com/winfsp/winfsp/blob/v2.1/License.txt)。不把本批写成驱动、二进制或 Windows 验收。
+**下一道门是宿主实测，而非再加一个按钮。** 先在受授权的独立 Windows 环境，用匹配的官方 SDK/已由操作者另装的驱动，核验普通账号的源身份、并发回调、EOF/分页以及断开后不泄漏句柄。用于真实盘符之前，仍需在真驱动上测账号/登录会话隔离、安全描述符、缓存/映射、来源标记到虚拟成员及执行策略、发布与读回盘符身份、停止并排空回调及卸载回执。不能以当前合成回调或只设 ReadOnlyVolume 代替。打包时单独核实 WinFsp [使用及发布条款](https://github.com/winfsp/winfsp/blob/v2.1/License.txt)。不把本批写成驱动、二进制或 Windows 验收。
 
-`tests/test_windows_snapshot.py` 是不挂载的数据面用例。可选 `tests/qualification/winfsp_callbacks.c` 对厂商结构直接发起读回调，不创建卷。它不是默认扩展，须在受信测试环境按同版本 SDK 与当前 CPython 独立构建；仅对操作者明确指定的合成归档启用。没有运行这些用例。
+`tests/test_windows_snapshot.py` 是不挂载的数据面用例。可选 `tests/qualification/winfsp_callbacks.c` 对厂商结构直接发起读及访问回调，不创建卷。它不是默认扩展，须在受信的普通 Windows 会话以同版本 SDK、当前 CPython 与系统 Advapi32 独立构建；仅对操作者明确指定的合成归档启用。原生夹具检查限定只读描述符、真实 AccessCheck、受限请求拒绝和内核模式门；没有运行这些用例。
 
 ## 单实例生命周期（只供单独授权的合成资格）
 

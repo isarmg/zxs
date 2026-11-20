@@ -127,5 +127,6 @@ class NativeCallbacks(unittest.TestCase):
             native = msvcrt.get_osfhandle(source.view.document.fileno())
             self.assertNotEqual(native, -1)
             _test_winfsp_callbacks.check(source)
+            _test_winfsp_callbacks.check_session(source)
         with selected_snapshot(path, expected=exact) as again:
             self.assertEqual(again.lookup("\\folder\\sample.bin")[2], CHUNK+2)
