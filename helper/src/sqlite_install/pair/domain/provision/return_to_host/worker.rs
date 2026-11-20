@@ -113,7 +113,7 @@ pub(crate) fn exec_child()->io::Result<()>{
     let usr=w.select(Path::new(CAPSULE_USR),Kind::StorageRoot,5)?;
     require_parent(&out,pid)?;
     let system=SelectedSystem::from_origin(s,host,uid,gid)?.lock()?;
-    for p in [&site,&private,&state,&live,&usr]{p.require_same_path()?;}
+    for p in [&site,&private,&state,&live,&usr]{p.require_same_named_mount()?;}
     require_parent(&out,pid)?;
     FreshApproval{system:&system,pool,init,instance_id,op,actor,reference,live_config:w.config,host_order:w.scope,
         site:&site,usr:&usr,expected_bwrap:w.launcher,release:keys,uid,gid}.provision()?.send_to_host(&out)

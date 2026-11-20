@@ -125,6 +125,21 @@ impl Pinned {
         if now.chain != self.chain { return Err(invalid("selected path or parent changed during observation")); }
         Ok(())
     }
+
+    /// Rewalk using O_PATH and require the original leaf mount as well as all
+    /// visible entities. A bind of the same inode is not the original mount.
+    /// The newly named FD is evidence only; keep using the first held FD.
+    pub(crate) fn require_same_named_mount(&self) -> io::Result<Mount> {
+        let now = Self::open(&self.path, self.kind)?;
+        check_named_mount(&self.chain, self.mount()?, &now.chain, now.mount()?)
+    }
+}
+
+fn check_named_mount(original: &[Entity], mount: Mount, named: &[Entity], current: Mount) -> io::Result<Mount> {
+    if original != named || current != mount {
+        return Err(invalid("selected name, ancestry or original mount changed"));
+    }
+    Ok(mount)
 }
 
 /// Keeps the original selected comparison operand and its admitted filesystem.
@@ -139,12 +154,7 @@ impl LocalDataFile {
     pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.pin.metadata() }
     pub(crate) fn require_same_path(&self) -> io::Result<()> { self.pin.require_same_path() }
     pub(crate) fn require_named_mount(&self)->io::Result<Mount>{
-        let current=Pinned::open(&self.pin.path,Kind::Regular)?;
-        let original=self.pin.mount()?;
-        if self.pin.chain!=current.chain||current.mount()?!=original {
-            return Err(invalid("selected copy name, ancestry or mount changed"));
-        }
-        Ok(original)
+        self.pin.require_same_named_mount()
     }
 
     // Selection keeps the admitted regular-file handle alive. Reopening the operand's
@@ -323,14 +333,26 @@ mod tests {
     use super::require_local_data_fs;
     use linux_raw_sys::general as fs;
     #[test]
+    fn same_inodes_do_not_substitute_another_named_mount() {
+        use super::{check_named_mount, Entity, Mount};
+        let originals = [Entity { dev: 1, ino: 2 }, Entity { dev: 3, ino: 4 }];
+        let mount = Mount { id: 10, at_root: Some(true) };
+        assert_eq!(check_named_mount(&originals, mount, &originals, mount).unwrap(), mount);
+        assert!(check_named_mount(&originals, mount, &originals, Mount { id: 11, ..mount }).is_err());
+        let other_parent = [Entity { dev: 1, ino: 5 }, originals[1]];
+        assert!(check_named_mount(&originals, mount, &other_parent, mount).is_err());
+    }
+    #[test]
     fn new_directory_at_the_same_spelling_cannot_replace_a_held_observation() {
         let area = tempfile::tempdir().unwrap();
         let dir = area.path().join("original");
         std::fs::create_dir(&dir).unwrap();
         let original = super::Pinned::open(&dir, super::Kind::Directory).unwrap();
+        assert_eq!(original.require_same_named_mount().unwrap(), original.mount().unwrap());
         std::fs::rename(&dir, area.path().join("retained")).unwrap();
         std::fs::create_dir(&dir).unwrap();
         assert!(original.require_same_path().is_err());
+        assert!(original.require_same_named_mount().is_err());
         assert_ne!(original.entity(), super::Pinned::open(&dir, super::Kind::Directory).unwrap().entity());
     }
     #[test]

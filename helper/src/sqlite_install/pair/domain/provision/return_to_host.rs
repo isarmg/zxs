@@ -107,7 +107,7 @@ impl HostOrigins{
         this.fresh()?;Ok(this)
     }
     fn common(&self)->io::Result<()>{
-        self.site.check()?;self.system.require_same_path()?;self.release.slots()?;
+        self.site.check()?;self.system.require_same_named_mount()?;self.release.slots()?;
         let (a,u,g)=approval::profile()?;
         let s=self.system.metadata()?;let root=self.site.base();
         if (a,u,g)!=(self.actor,self.uid,self.gid)||!s.is_dir()||s.uid()!=u||s.mode()&0o7777!=0o700||s.nlink()==0{
