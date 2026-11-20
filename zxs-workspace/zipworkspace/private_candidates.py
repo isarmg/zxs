@@ -58,7 +58,7 @@ class CandidateDirectory:
         finally:
             close_output_fd(fd, "STATE", self.path/name, operation, self.parent)
 
-    def verify_candidate(self, name, original, marker):
+    def verify_candidate(self, name, original, marker, *, observer=None):
         observed = self.check_file(name, original)
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                      dir_fd=self.parent)
@@ -69,12 +69,14 @@ class CandidateDirectory:
                     if os.fstat(fd).st_nlink != 1 or stamp(doc) != observed:
                         raise Rejected("different private ZIP, link or generation at the candidate name")
                 check_original()
-                actual, _ = read_managed_document(doc, display_name=name)
-                raw = archive_sha(doc)
+                actual, _ = read_managed_document(doc, display_name=name, observer=observer)
+                raw = archive_sha(doc, observer=observer)
                 if actual != marker: raise Rejected("original candidate marker mismatch")
                 check_original()
+                if observer is not None: observer.begin("sync")
                 os.fsync(self.parent)
                 check_original()
+                if observer is not None: observer.check()
                 return raw
         finally:
             os.close(fd)

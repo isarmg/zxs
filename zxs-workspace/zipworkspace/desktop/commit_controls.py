@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from ..capacity import describe
 from .branch_choice import SnapshotBranch
-from .commit_choice import CommitChoice
+from .commit_choice import CommitChoice, CommitStopped
 from .pending_fork import PendingFork
 from .retry_choice import PendingRetry
 from .widgets import button, confirm, label
@@ -63,9 +63,12 @@ class CommitControls(QWidget):
             if self.running is job: self.running = None
             self.buttons()
 
-    def submit(self, job, title, run, apply, failed):
+    def submit(self, job, title, run, apply, failed, *, preparation=None, cancel_text=None):
         try:
-            future = self.owner.job(title, run, apply, failed=failed)
+            controls = ({} if preparation is None else
+                        {"cancel": preparation.cancel, "cancel_text": cancel_text,
+                         "progress_report": preparation.progress})
+            future = self.owner.job(title, run, apply, failed=failed, **controls)
         except Exception as exc:
             failed(exc); return
         if future is None:
@@ -87,6 +90,7 @@ class CommitControls(QWidget):
         try: job = SnapshotBranch(original) if branch else CommitChoice(original)
         except Exception as err:
             self.output.setText(describe(err)); return
+        preparation = job.preparation
         self.running = job; self.buttons()
 
         def refused(err):
@@ -98,7 +102,9 @@ class CommitControls(QWidget):
                 self.discard(job)
                 self.owner.inform(f"原工作树提交操作 {job.operation} 已返回；未把它用于新的选择。")
                 return
+            previous = self.last
             self.last, self.running, self.blocked = job, None, True
+            if previous is not None and previous is not job: self.discard(previous)
             self.buttons()  # Keep query available even if rendering the durable reply fails.
             self.output.setText(f"{message}\n原 STATE：{job.live.state}\n操作号：{job.operation}")
             self.blocked = uncertain; self.buttons()
@@ -106,6 +112,7 @@ class CommitControls(QWidget):
 
         def reviewed(detail):
             try:
+                if preparation is not None: preparation.check()
                 if branch:
                     question, action = "从签出时的原节点创建并发布新分支", "创建、发布并切换"
                     agree = "我确认发布的是所列原快照，不含当前编辑。STATE 由本人独占；STORE 不同步，无其他程序改动本次暂存名。"
@@ -118,11 +125,9 @@ class CommitControls(QWidget):
                     refused("未确认，没有制作候选或发布。"); return
                 if not same_decision():
                     refused("确认期间原工作树会话或原分支来源已变；没有制作候选。"); return
-                if self.last is not None:
-                    self.last.release(); self.last = None
                 self.output.setText(f"已确认原操作 {job.operation}；不要重复提交。")
                 def failed(error):
-                    if not job.used:
+                    if isinstance(error, CommitStopped) or not job.used:
                         refused(error); return
                     after_submit(f"{describe(error)}\n尚不能从此次返回确定结果；只读查询本次原回执。", uncertain=True)
                 def done(result):
@@ -131,11 +136,13 @@ class CommitControls(QWidget):
                     after_submit(f"{saved}：{path}\n分支：{marker.branch} · 第 {marker.generation} 代\n新节点：{marker.operation}",
                                  uncertain=False)
                 title = "正在从所选原节点创建并发布新分支…" if branch else "正在冻结、核对并发布本次工作树…"
-                self.submit(job, title, job.run, done, failed)
+                self.submit(job, title, job.run, done, failed, preparation=preparation,
+                            cancel_text="停止本次提交（登记待决前）")
             except Exception as err:
                 if job.used: after_submit(f"{describe(err)}\n结果待核。", uncertain=True)
                 else: refused(err)
-        self.submit(job, "正在只读核对原登记及 STORE 基线…", job.prepare, reviewed, refused)
+        self.submit(job, "正在只读核对原登记及 STORE 基线…", job.prepare, reviewed, refused,
+                    preparation=preparation, cancel_text="取消这次只读基线核对")
 
     def inspect(self):
         job, original = self.last, self.session

@@ -226,12 +226,16 @@ def finish(state, operation, *, selected=None):
 def commit(state, *, fork=False, selected=None):
     require_native_writer()
     live = None if selected is None else selected.live
+    observer = None
     if selected is not None:
         if selected.purpose != "commit" or not selected.used or fork or Path(state).absolute() != live.state:
             raise Rejected("not the reviewed ordinary fresh commit")
         selected.check_base()
+        observer = selected.preparation
+        observer.check()
     # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
     proposal = selected.operation if selected is not None else None
+    watch = {} if observer is None else {"observer": observer}
     with anonymous_capture(state, held=None if selected is None else selected.area, operation=proposal) as capture, \
          locked(state, live=live, operation=lambda: capture.operation or proposal, journal_delete=live is not None,
                 phase="登记原 pending；冻结候选可能已存在，不能据此认定已受理") as (con, row, state):
@@ -256,16 +260,17 @@ def commit(state, *, fork=False, selected=None):
         capture.operation = operation
         registered = lifecycle.instance(con)
         expected = (int(registered["device"]),int(registered["inode"]))
-        with frozen_tree(work, capture, expected, store, selected=live) as (frozen, manifest):
+        with frozen_tree(work, capture, expected, store, selected=live, **watch) as (frozen, manifest):
             marker = Commit(repo, new_id() if fork else branch, 1 if fork else gen + 1,
                             operation, row["parent"], manifest.digest())
             with capture.candidate(operation) as (name, original, stream):
-                pack(frozen, manifest, marker, stream)
+                pack(frozen, manifest, marker, stream, **watch)
                 stream.close()
-                digest = capture.verify_candidate(name, original, marker)
+                digest = capture.verify_candidate(name, original, marker, **watch)
         if selected is not None:
             selected.check_row(con, row)
             selected.marker, selected.digest = marker, digest
+            observer.before_intent()
         con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (marker.encode(), digest))
     # Durable client intent precedes any remote bytes. A retry uses this exact
     # candidate, regardless of later writes to the local working directory.

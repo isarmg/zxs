@@ -73,8 +73,9 @@ def _save_original(read, size, area, expected, operation, *, observer=None):
             observed = area.check_file(name, fd)
             if observed[2] != size: raise Rejected("checkout copy length changed")
             if observer is not None: observer.section("私有原包读回")
-            marker = read_managed_document(out, display_name=name, observer=observer)[0]
-            if archive_sha(out, observer=observer) != digest or expected is not None and marker != expected.marker:
+            watch = {} if observer is None else {"observer": observer}
+            marker = read_managed_document(out, display_name=name, **watch)[0]
+            if archive_sha(out, **watch) != digest or expected is not None and marker != expected.marker:
                 raise Rejected("checkout copy does not represent the selected original")
             area.check_file(name, fd, observed)
             if observer is not None: observer.begin("sync")

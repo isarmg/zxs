@@ -23,7 +23,7 @@ def _dir_flags():
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
-def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None, checkpoint=None):
+def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None, checkpoint=None, on_frozen=None):
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
@@ -74,7 +74,9 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                             count += len(block)
                             if count > before.st_size: raise Rejected("source grew while freezing")
                             h.update(block)
-                            if frozen is not None: frozen.append(block)
+                            if frozen is not None:
+                                frozen.append(block)
+                                if on_frozen is not None: on_frozen(len(block))
                         if count != before.st_size: raise Rejected("source shrank while freezing")
                         if frozen is not None: frozen.spans[path] = (start,count)
                         manifest.rows[path] = (False, count, h.hexdigest())
@@ -136,8 +138,9 @@ def _distinct_roots(fds):
 
 
 @contextlib.contextmanager
-def frozen_tree(source, capture, expected, store, *, selected=None):
+def frozen_tree(source, capture, expected, store, *, selected=None, observer=None):
     _native()
+    if observer is not None: observer.begin("freeze")
     fd = os.open(source, _dir_flags()) if selected is None else os.dup(selected.work_fd)
     try:
         root_sig = _sig(os.fstat(fd))
@@ -154,22 +157,26 @@ def frozen_tree(source, capture, expected, store, *, selected=None):
                 if not m.st_ino or (m.st_dev,m.st_ino) in excluded or mount_id(child)!=source_mount:
                     raise Rejected("cannot capture aliased state, archive store, or a nested mount")
             capture.check_state()
-            tree = _scan(fd,capture,check_held=check_held)
+            tree = _scan(fd, capture, check_held=check_held, checkpoint=None if observer is None else observer.check,
+                         on_frozen=None if observer is None else observer.advance)
             if (root_sig!=_sig(os.stat(source,follow_symlinks=False)) or
                     native_identity(os.stat(store,follow_symlinks=False),stat.S_IFDIR)!=store_id):
                 raise Rejected("a selected location changed while freezing; no snapshot packed")
             capture.validate(tree)
             capture.check_state()
+            if observer is not None: observer.check()
             yield capture,tree
         finally: os.close(store_fd)
     finally: os.close(fd)
 
 
-def pack(frozen, tree: Manifest, marker: Commit, destination):
+def pack(frozen, tree: Manifest, marker: Commit, destination, *, observer=None):
+    if observer is not None: observer.begin("pack", tree.total)
     if marker.tree != tree.digest(): raise Rejected("wrong frozen generation")
     frozen.validate(tree)
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
         for name, (directory,size,digest) in sorted(tree.rows.items()):
+            if observer is not None: observer.check()
             info = zipfile.ZipInfo(name + ("/" if directory else ""), (1980,1,1,0,0,0))
             info.create_system = 3
             info.external_attr = ((0o40755 if directory else 0o100644) << 16) | (16 if directory else 0)
@@ -180,7 +187,13 @@ def pack(frozen, tree: Manifest, marker: Commit, destination):
             else:
                 h = hashlib.sha256()
                 with archive.open(info,"w") as out:
-                    for block in frozen.blocks(name,size): h.update(block); out.write(block)
+                    for block in frozen.blocks(name,size):
+                        if observer is not None: observer.check()
+                        h.update(block)
+                        if out.write(block) != len(block): raise Rejected("short write while packing the private member")
+                        if observer is not None: observer.advance(len(block))
                 if h.hexdigest()!=digest: raise Rejected("frozen bytes no longer match the captured file")
         archive.comment = marker.encode()
+    if observer is not None: observer.begin("sync")
     destination.flush(); os.fsync(destination.fileno())
+    if observer is not None: observer.check()

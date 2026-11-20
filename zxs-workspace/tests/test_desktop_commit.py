@@ -16,7 +16,7 @@ import zipfile
 from zipworkspace import lifecycle, private_stage, publish, worktree
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
-from zipworkspace.desktop.commit_choice import CommitChoice
+from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped
 from zipworkspace.desktop.pending_fork import PendingFork
 from zipworkspace.desktop.selection import Selection
 from zipworkspace.desktop.retry_choice import PendingRetry
@@ -458,6 +458,103 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         self.assertIsNone(self.live.status()["pending_operation"])
         self.assertEqual(list(self.store.iterdir()),[self.original])
 
+    def test_stop_during_held_worktree_freeze_never_creates_a_named_candidate(self):
+        from zipworkspace.private_freeze import Capture
+        choice = self.choice()
+        genuine = Capture.append
+        def append(capture, data):
+            genuine(capture, data)
+            self.assertIn("正在冻结本次选中的原工作目录", choice.preparation.progress()[0])
+            self.assertTrue(choice.preparation.cancel())
+        with patch.object(Capture, "append", new=append), \
+             patch.object(worktree, "pack", side_effect=AssertionError("do not pack after stop")), \
+             self.assertRaisesRegex(CommitStopped, "没有登记本次待决"):
+            choice.run()
+        self.assertFalse((self.state/(choice.operation+".zxs")).exists())
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(list(self.store.iterdir()), [self.original])
+
+    def test_private_pack_completed_before_stop_does_not_authorize_publication(self):
+        from zipworkspace.private_candidates import CandidateDirectory
+        choice = self.choice()
+        genuine = CandidateDirectory.verify_candidate
+        def verify(area, leaf, fd, marker, **options):
+            digest = genuine(area, leaf, fd, marker, **options)
+            self.assertIn("同步私有候选", choice.preparation.progress()[0])
+            self.assertTrue(choice.preparation.cancel())
+            return digest
+        with patch.object(CandidateDirectory, "verify_candidate", new=verify), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("do not touch STORE after stop")), \
+             self.assertRaisesRegex(CommitStopped, "没有登记本次待决"):
+            choice.run()
+        self.assertTrue((self.state/(choice.operation+".zxs")).is_file())
+        self.assertEqual(choice.result()[0], "unrecorded")
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(list(self.store.iterdir()), [self.original])
+
+    def test_cannot_stop_after_original_pending_is_recorded_or_create_a_second_operation(self):
+        choice = self.choice()
+        publisher = worktree._publish
+        seen = []
+        def publish_with_stop(*args, **kwargs):
+            self.assertEqual(self.live.status()["pending_operation"], choice.operation)
+            self.assertFalse(choice.preparation.cancel())
+            self.assertIn("现在不能撤销", choice.preparation.progress()[0])
+            seen.append(choice.operation)
+            return publisher(*args, **kwargs)
+        with patch.object(worktree, "_publish", side_effect=publish_with_stop):
+            output, marker = choice.run()
+        self.assertEqual(marker.operation, choice.operation)
+        self.assertEqual(seen, [choice.operation])
+        self.assertTrue(output.is_file())
+        self.assertEqual(choice.result()[0], "completed")
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_window_can_stop_during_read_review_or_before_freeze_and_keeps_the_last_real_receipt(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        previous = self.choice()
+        previous.run()
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        pane = win.archive.checkout.commits
+        pane.set_session(self.live)
+        pane.last = previous
+        pane.buttons()
+        for stage in ("late review", "first freeze"):
+            with self.subTest(stage=stage):
+                queued = []
+                def execute(call):
+                    future = Future()
+                    queued.append((future, call))
+                    return future
+                with patch.object(win.pool, "submit", side_effect=execute), \
+                     patch.object(commit_controls, "confirm", return_value=True) as confirm:
+                    pane.save.click()
+                    read, call = queued[0]
+                    read.set_result(call())
+                    self.assertFalse(win.tabs.isEnabled()); self.assertTrue(win.transfer_cancel.isEnabled())
+                    if stage == "late review":
+                        win.transfer_cancel.click()
+                        win.poll()
+                        confirm.assert_not_called()
+                        self.assertEqual(len(queued), 1)
+                    else:
+                        win.poll()
+                        confirm.assert_called_once()
+                        write, call = queued[1]
+                        self.assertFalse(win.tabs.isEnabled()); self.assertTrue(win.transfer_cancel.isEnabled())
+                        win.transfer_cancel.click()
+                        with self.assertRaises(CommitStopped) as stopped: call()
+                        write.set_exception(stopped.exception)
+                        win.poll()
+                self.assertIs(pane.last, previous)
+                self.assertTrue(pane.save.isEnabled())
+                self.assertIn("没有登记本次待决", pane.output.text())
+                self.assertIsNone(self.live.status()["pending_operation"])
+                self.assertEqual(self.live.status()["base_operation"], previous.operation)
+
     def test_original_pending_directory_barrier_precedes_any_store_attempt_and_exact_retry(self):
         original = self.choice()
         real_sync, real_publish = os.fsync, worktree._publish
@@ -748,7 +845,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         win = Window()
         try:
             controls = win.archive.checkout.commits; controls.set_session(self.live)
-            def immediate(_title, fn, apply, *, failed=None):
+            def immediate(_title, fn, apply, *, failed=None, **options):
                 try: result = fn()
                 except Exception as e:
                     if failed is None: raise
@@ -784,7 +881,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         from zipworkspace.desktop.window import Window
         app = QApplication.instance() or QApplication([])
         win = Window()
-        def immediate(_title, call, result, *, failed=None):
+        def immediate(_title, call, result, *, failed=None, **options):
             try: value = call()
             except Exception as error:
                 if failed is None: raise

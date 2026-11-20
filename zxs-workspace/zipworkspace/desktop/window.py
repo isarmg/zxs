@@ -191,7 +191,7 @@ class Window(QMainWindow):
         if not label: return
         if total is None or total <= 0:
             self.progress.setRange(0, 0)
-            self.inform(label + "…")
+            self.inform(f"{label}；已处理 {done:,} B（本阶段总量未预扫）。" if done else label + "…")
             return
         self.progress.setRange(0, 1_000)
         self.progress.setValue(min(1_000, done * 1_000 // total))

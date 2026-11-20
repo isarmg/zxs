@@ -11,6 +11,8 @@ from ..private_candidates import CandidateDirectory
 from ..private_freeze import local_mount
 from ..publish import Conflict, StoreReadback, require_native_writer
 
+from .selection import Verification
+
 
 def _baseline(row):
     return (row["repo"], row["branch"], row["generation"], row["parent"], row["base_sha"])
@@ -23,6 +25,41 @@ class _Receipt:
 
     def completed_barrier(self):
         self.completion_started = self.directory_remaining = False
+
+
+class CommitStopped(Rejected):
+    """The user's stop request won before registering this operation."""
+
+
+class _CommitPreparation(Verification):
+    PHASE = dict(Verification.PHASE,
+                 freeze="正在冻结本次选中的原工作目录",
+                 pack="正在从匿名冻结件写完整私有快照",
+                 sync="正在同步私有候选并核对原工作树")
+
+    def __init__(self):
+        super().__init__()
+        self._past_stop = False
+
+    def cancel(self):
+        with self._lock:
+            if self._past_stop: return False
+            self._stop.set()
+            return True
+
+    def check(self):
+        if self.cancelled:
+            raise CommitStopped("已停止本次提交。没有登记本次待决或向 STORE 发布；"
+                                "可能保留私有候选，不自动删除，也不能当作已受理的回执。")
+
+    def before_intent(self):
+        with self._lock:
+            self.check()
+            self._past_stop = True
+            self._progress = ("正在登记本次原待决并继续同号发布；现在不能撤销", 0, None)
+
+    def finish(self):
+        with self._lock: self._past_stop = True
 
 
 class CommitChoice:
@@ -40,11 +77,13 @@ class CommitChoice:
         self.conflict = self.conflict_pending_seen = False
         self.receipt = _Receipt()
         self.local_receipt_seen = False
+        self.preparation = _CommitPreparation() if self.purpose == "commit" else None
         self.ack_fd = None
 
     def close(self):
         if self.closed: return
         self.closed = True
+        if self.preparation is not None: self.preparation.finish()
         self.stack.close()
 
     def release(self):
@@ -63,7 +102,9 @@ class CommitChoice:
     def prepare(self):
         if self.closed or self.ready: raise Rejected("不能重用旧的提交确认")
         try:
+            if self.preparation is not None: self.preparation.check()
             detail = self._prepare()
+            if self.preparation is not None: self.preparation.check()
             self.ready = True
             return detail
         except BaseException:
@@ -100,6 +141,7 @@ class CommitChoice:
                 f"分支：{branch}\n{base_detail}\n"
                 f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n"
                 "提交整个工作目录，生成新的不可变归档。不改写原代，不自动解决同代冲突。"
+                "登记本次原待决前可请求停止；可能保留私有候选。开始登记后不能用取消撤回，只查原号。"
                 "STATE 的冻结和新整包会同时占空间，STORE 还需一份整包；这里不保证容量。")
 
     def _open_base(self):
@@ -120,9 +162,9 @@ class CommitChoice:
         except FileNotFoundError as exc:
             raise Rejected("所选 STORE 中缺少原基线，不用窗口打开的散包代替，也不自动补发") from exc
         observed = stamp(doc)
-        marker = read_managed_document(doc, display_name=self.name)[0]
+        marker = read_managed_document(doc, display_name=self.name, observer=self.preparation)[0]
         if ((marker.repo, marker.branch, marker.generation, marker.operation) != self.base[:4]
-                or archive_sha(doc) != digest):
+                or archive_sha(doc, observer=self.preparation) != digest):
             raise Rejected("STORE 中原基线的节点或整包 SHA-256 不符")
         self.qualify()
         check_relative(self.live.store_fd, self.name, doc, observed)
@@ -234,8 +276,12 @@ class CommitChoice:
         if self.closed or not self.ready or self.used: raise Rejected("不能重复提交本次决定")
         self.used = True
         try:
+            if self.preparation is not None: self.preparation.check()
             self.check_base()
             return worktree.commit(self.live.state, selected=self)
+        except CommitStopped as error:
+            error.add_note(f"本次未登记的可能私有候选：{self.live.state / (self.operation + '.zxs')}")
+            raise
         except Conflict:
             self.conflict = True
             raise
