@@ -103,7 +103,7 @@ pub(super) fn walk(raw:&File,pool:PoolId,m:Material,mut data_at:impl FnMut(u64,&
 
 /// One buffer for each kind, shared only within a single request. The page
 /// cache includes the actual table's live stamp, not just its payload digest.
-pub(super) struct Buffers{page:Vec<u8>,block:Vec<u8>,page_key:Option<(Ref,Stamp,u64)>}
+pub(super) struct Buffers{page:Vec<u8>,block:Vec<u8>,page_key:Option<(Ref,Stamp,u64,u64)>}
 impl Buffers{
     pub(super) fn new(page:usize,block:usize)->io::Result<Self>{
         let mut p=scratch(page)?;p.resize(page,0);let mut b=scratch(block)?;b.resize(block,0);
@@ -111,38 +111,92 @@ impl Buffers{
     }
 }
 
-pub(super) struct Reader{
-    original:Ref,raw:HeldBytes,table:HeldBytes,g:Geometry,directory:Vec<u8>,
+/// Physically separate ceilings and start positions, selected before any
+/// I/O. A packed material's length is not its logical FILE length or EOF.
+#[derive(Clone,Copy)]
+pub(super) struct Ends{pub(super) raw:u64,pub(super) checks:u64}
+
+/// Authenticated material within the selected ranges of two held originals.
+/// No file is opened here; a caller can reuse that pair for many materials.
+/// A directory/page/last block never extends to the next physical fragment.
+pub(super) struct Segment{
+    original:Ref,start:Ends,raw:Stamp,table:Stamp,g:Geometry,directory:Vec<u8>,
 }
-impl Reader{
-    /// Enclosing FILE/name/permission selection belongs to the caller.
-    /// This method checks the actual byte-index against its external original
-    /// reference. It never treats this reference or an identical clone as
-    /// independent evidence that a particular physical name is authorized.
-    pub(super) fn open(original:Ref,raw:HeldBytes,table:HeldBytes)->io::Result<Self>{
+impl Segment{
+    pub(super) fn open(original:Ref,raw:&HeldBytes,table:&HeldBytes,start:Ends,selected:Ends)->io::Result<Self>{
         let m=original.material;let g=Geometry::new(original.pool,m)?;
-        raw.unchanged()?;table.unchanged()?;let raw_stamp=raw.stamp();let table_stamp=table.stamp();
-        if raw_stamp.same(table_stamp)||raw_stamp.len!=m.size||table_stamp.len!=g.table_bytes{
-            return Err(invalid("portable payload and index are not the expected two regular extents"));}
-        let mut header=[0;HEADER];table.file().read_exact_at(&mut header,0)?;
+        raw.unchanged()?;table.unchanged()?;let source=raw.stamp();let index=table.stamp();
+        if source.same(index)||selected.raw>source.len||selected.checks>index.len||
+           selected.raw>i64::MAX as u64||selected.checks>i64::MAX as u64||
+           start.raw.checked_add(m.size).is_none_or(|v|v>selected.raw)||
+           start.checks.checked_add(g.table_bytes).is_none_or(|v|v>selected.checks){
+            return Err(invalid("material exceeds the selected original data or checksum extent"));
+        }
+        let mut header=[0;HEADER];table.file().read_exact_at(&mut header,start.checks)?;
         if header.as_slice()!=Geometry::header(original.pool,m).as_slice(){return Err(invalid("wrong portable material header"));}
         let mut directory=scratch(g.pages*32)?;directory.resize(g.pages*32,0);
-        table.file().read_exact_at(&mut directory,g.dir_at)?;
+        table.file().read_exact_at(&mut directory,start.checks+g.dir_at)?;
         if dir_hash(&header,&directory)?!=original.directory_sha{return Err(invalid("wrong original portable checksum directory"));}
-        raw.unchanged()?;table.unchanged()?;Ok(Self{original,raw,table,g,directory})
+        let checked=Self{original,start,raw:source,table:index,g,directory};
+        checked.require(raw,table)?;Ok(checked)
     }
-    /// Only the COMPLETE material, never a subrange/offset. Uses the actual
-    /// authenticated directory held by this Reader. No payload is read here.
+    fn require(&self,raw:&HeldBytes,table:&HeldBytes)->io::Result<()>{
+        if raw.stamp()!=self.raw||table.stamp()!=self.table{
+            return Err(invalid("sealed material belongs to a different selected original pair"));
+        }
+        raw.unchanged()?;table.unchanged()
+    }
+    fn block_hash(&self,table:&HeldBytes,i:u64,buffers:&mut Buffers)->io::Result<[u8;32]>{
+        let p=i/PER_PAGE;let key=(self.original,self.table,self.start.checks,p);
+        let n=self.g.page_bytes(p);let bytes=buffers.page.get_mut(..n)
+            .ok_or_else(||invalid("portable checksum page exceeds the request budget"))?;
+        if buffers.page_key!=Some(key){
+            buffers.page_key=None;table.file().read_exact_at(bytes,self.start.checks+HEADER as u64+p*PER_PAGE*32)?;
+            let start=p as usize*32;
+            if hash::digest(bytes)?.as_slice()!=&self.directory[start..start+32]{return Err(invalid("changed portable checksum page"));}
+            buffers.page_key=Some(key);
+        }
+        let off=(i%PER_PAGE) as usize*32;let mut hash=[0;32];hash.copy_from_slice(&bytes[off..off+32]);Ok(hash)
+    }
+    pub(super) fn range(&self,raw:&HeldBytes,table:&HeldBytes,at:u64,n:u64,buffers:&mut Buffers,out:&mut impl Write)->io::Result<()>{
+        let size=self.original.material.size;
+        let end=at.checked_add(n).filter(|v|*v<=size).ok_or_else(||invalid("range leaves the exact portable material"))?;
+        self.require(raw,table)?;if n==0{return Ok(());}
+        for i in at/BLOCK..=(end-1)/BLOCK{
+            let expected=self.block_hash(table,i,buffers)?;
+            let start=i*BLOCK;let count=(size-start).min(BLOCK) as usize;
+            let bytes=SealedExtent::original(self.start.raw+start,count,expected)?.checked(raw.file(),&mut buffers.block)?;
+            let lo=at.saturating_sub(start) as usize;let hi=(end-start).min(count as u64) as usize;
+            CheckedOutput{out:&mut *out,check:||self.require(raw,table)}.write_all(&bytes[lo..hi])?;
+        }
+        self.require(raw,table)
+    }
+}
+
+pub(super) struct Reader{raw:HeldBytes,table:HeldBytes,segment:Segment}
+impl Reader{
+    /// Ordinary whole files keep their original exact length and stamps.
+    /// The same authenticated segment core also supports a window selected
+    /// independently of EOF; this constructor does not authorize one.
+    pub(super) fn open(original:Ref,raw:HeldBytes,table:HeldBytes)->io::Result<Self>{
+        let ends=Ends{raw:original.material.size,checks:original.table_len()?};
+        if raw.stamp().len!=ends.raw||table.stamp().len!=ends.checks{
+            return Err(invalid("portable payload and index are not the expected two regular extents"));
+        }
+        let segment=Segment::open(original,&raw,&table,Ends{raw:0,checks:0},ends)?;
+        Ok(Self{raw,table,segment})
+    }
+    /// Only the complete authenticated material; no payload is read here.
     pub(super) fn material_commitment(&self)->io::Result<super::logical::LogicalV1>{
         self.unchanged()?;
-        let result=super::logical::LogicalV1::from_pages(self.original.material.size,&self.directory)?;
+        let result=super::logical::LogicalV1::from_pages(self.segment.original.material.size,&self.segment.directory)?;
         self.unchanged()?;Ok(result)
     }
     #[cfg(test)]
     pub(super) fn from_test_files(original:Ref,raw:File,table:File)->io::Result<Self>{
         Self::open(original,HeldBytes::separate_format_fixture(raw)?,HeldBytes::separate_format_fixture(table)?)
     }
-    pub(super) fn unchanged(&self)->io::Result<()>{self.raw.unchanged()?;self.table.unchanged()}
+    pub(super) fn unchanged(&self)->io::Result<()>{self.segment.require(&self.raw,&self.table)}
     pub(super) fn same_issued_pair(&self,raw:Stamp,table:Stamp)->io::Result<()>{
         if self.raw.stamp()!=raw||self.table.stamp()!=table{return Err(invalid("independent reopen did not retain the actual issued working pair"));}
         self.unchanged()
@@ -151,29 +205,11 @@ impl Reader{
         self.raw.require_name(dir,&roles[0])?;self.raw.require_name(dir,&roles[1])?;
         self.table.require_name(dir,&roles[2])?;self.table.require_name(dir,&roles[3])
     }
-    fn block_hash(&self,i:u64,buffers:&mut Buffers)->io::Result<[u8;32]>{
-        let p=i/PER_PAGE;let key=(self.original,self.table.stamp(),p);
-        let n=self.g.page_bytes(p);let bytes=buffers.page.get_mut(..n)
-            .ok_or_else(||invalid("portable checksum page exceeds the request budget"))?;
-        if buffers.page_key!=Some(key){
-            buffers.page_key=None;self.table.file().read_exact_at(bytes,HEADER as u64+p*PER_PAGE*32)?;
-            let start=p as usize*32;
-            if hash::digest(bytes)?.as_slice()!=&self.directory[start..start+32]{return Err(invalid("changed portable checksum page"));}
-            buffers.page_key=Some(key);
-        }
-        let off=(i%PER_PAGE) as usize*32;let mut hash=[0;32];hash.copy_from_slice(&bytes[off..off+32]);Ok(hash)
-    }
     pub(super) fn range(&self,at:u64,n:u64,buffers:&mut Buffers,out:&mut impl Write)->io::Result<()>{
-        let size=self.original.material.size;
-        let end=at.checked_add(n).filter(|v|*v<=size).ok_or_else(||invalid("range leaves the exact portable material"))?;
-        self.unchanged()?;if n==0{return Ok(());}
-        for i in at/BLOCK..=(end-1)/BLOCK{
-            let expected=self.block_hash(i,buffers)?;
-            let start=i*BLOCK;let count=(size-start).min(BLOCK) as usize;
-            let bytes=SealedExtent::original(start,count,expected)?.checked(self.raw.file(),&mut buffers.block)?;
-            let lo=at.saturating_sub(start) as usize;let hi=(end-start).min(count as u64) as usize;
-            CheckedOutput{out:&mut *out,check:||self.unchanged()}.write_all(&bytes[lo..hi])?;
-        }
-        self.unchanged()
+        self.segment.range(&self.raw,&self.table,at,n,buffers,out)
     }
 }
+
+#[cfg(test)]
+#[path="../../../tests/unit/flat_segment.rs"]
+mod tests;
