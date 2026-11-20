@@ -12,6 +12,43 @@ pub(super) struct Capacity {
     pub(super) total:u64,pub(super) available:u64,pub(super) free:u64,pub(super) read_only:bool,
 }
 
+/// The already selected folder's proof, not another open of its catalog
+/// path. The bounded metadata task borrows it without borrowing SQLite.
+#[derive(Clone,Copy)]
+pub(super) struct CapacityOrigin<'a>{
+    root:&'a HeldDir,mark:&'a ControlRead,expected:&'a [u8;101],
+    volume:VolumeId,ordinal:u8,ancestors:&'a [DirectoryHold],
+}
+impl CapacityOrigin<'_>{
+    pub(super) fn require_catalog(&self,c:&Catalog,id:VolumeId)->io::Result<()>{
+        let i=usize::from(self.ordinal);
+        if id!=self.volume||!c.rows().get(i).is_some_and(|r|
+            r.role==Role::File&&r.volume==id&&r.ordinal==self.ordinal&&r.path==self.root.path)
+            ||c.expected_marker(i).as_ref()!=Some(self.expected){
+            return Err(invalid("different original ordinary volume claim"));
+        }
+        Ok(())
+    }
+    pub(super) fn require_held(&self)->io::Result<()>{
+        crate::fs::WitnessRead::require_parent(self.root)?;
+        self.mark.require(self.root)?;
+        ordinary_directory::keep_chain(self.root,self.ancestors)
+    }
+    pub(super) fn sample(&self)->io::Result<Capacity>{
+        self.require_held()?;
+        let sample=measure(self.root)?;
+        self.require_held()?;
+        Ok(sample)
+    }
+}
+fn measure(root:&HeldDir)->io::Result<Capacity>{
+    let (mut total,mut available,mut free,mut read_only)=(0,0,0,0);
+    if unsafe{zxs_storage_capacity_full(root.file.as_raw_fd(),&mut total,&mut available,&mut free,&mut read_only)}<0{
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Capacity{total,available,free,read_only:read_only!=0})
+}
+
 #[derive(Debug,Eq,PartialEq)]
 pub(crate) struct DiskSpace{
     pub(crate) volume:VolumeId,
@@ -104,12 +141,13 @@ impl<'a> OrdinaryRoot<'a>{
     /// namespace or FILE lock. A positive snapshot gives no write grant.
     pub(super) fn sampled_capacity(&self)->io::Result<Capacity>{
         self.require_streaming()?;
-        let (mut total,mut available,mut free,mut read_only)=(0,0,0,0);
-        if unsafe{zxs_storage_capacity_full(self.root.file.as_raw_fd(),&mut total,&mut available,&mut free,&mut read_only)}<0{
-            return Err(io::Error::last_os_error());
-        }
+        let sample=measure(&self.root)?;
         self.require_streaming()?;
-        Ok(Capacity{total,available,free,read_only:read_only!=0})
+        Ok(sample)
+    }
+    pub(super) fn capacity_origin(&self)->CapacityOrigin<'_>{
+        CapacityOrigin{root:&self.root,mark:&self.mark,expected:&self.expected,volume:self.volume,
+            ordinal:self.ordinal,ancestors:&self.ancestors}
     }
     pub(super) fn space(&self)->io::Result<DiskSpace>{
         self.require()?;let(mut total,mut available)=(0,0);

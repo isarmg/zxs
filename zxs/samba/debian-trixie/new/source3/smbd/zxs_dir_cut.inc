@@ -145,7 +145,9 @@ static struct tevent_req *zxs_dir_cut_begin(TALLOC_CTX *ctx,struct tevent_contex
 	s->in_folder=folder!=NULL;if(folder!=NULL)s->folder=*folder;
 	int fd=folder==NULL?s->tcon->zxs_tree_choice->root_fd:folder->root_fd;
 	if(limit==ZXS_NS_CAPACITY_RW){
-		if(folder!=NULL || size!=0 || mode>1)goto reject;
+		if(size!=0 || mode>1 || (folder!=NULL && zxs_folder_retained(folder)))goto reject;
+		/* An ordinary FSP sends only to its own original folder lease.
+		 * The total-root endpoint alone can choose a reference volume. */
 		s->fd=zxs_ns_capacity_query(fd,mode!=0);
 	}else if(limit==ZXS_OD_PATH){
 		if(folder==NULL || zxs_folder_retained(folder) || zxs_folder_ordinary_child(folder))goto reject;
@@ -190,12 +192,12 @@ struct tevent_req *zxs_odir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,s
 {
 	return zxs_dir_cut_begin(ctx,ev,n,folder,ZXS_OD_PATH,path,size,mode);
 }
-struct tevent_req *zxs_root_capacity_send(TALLOC_CTX *ctx,struct tevent_context *ev,
-	struct smbd_smb2_request *n,bool may_write)
+struct tevent_req *zxs_capacity_send(TALLOC_CTX *ctx,struct tevent_context *ev,
+	struct smbd_smb2_request *n,const struct zxs_smb_tree_cut *ordinary,bool may_write)
 {
-	return zxs_dir_cut_begin(ctx,ev,n,NULL,ZXS_NS_CAPACITY_RW,NULL,0,may_write?1:0);
+	return zxs_dir_cut_begin(ctx,ev,n,ordinary,ZXS_NS_CAPACITY_RW,NULL,0,may_write?1:0);
 }
-NTSTATUS zxs_root_capacity_recv(struct tevent_req *req,struct zxs_ns_space *out)
+NTSTATUS zxs_capacity_recv(struct tevent_req *req,struct zxs_ns_space *out)
 {
 	struct zxs_dir_cut_state *s=tevent_req_data(req,struct zxs_dir_cut_state);
 	NTSTATUS status;

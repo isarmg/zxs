@@ -2,7 +2,7 @@
 //! plan and current SQL; no selected drive has to be online merely to list it.
 use super::{InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,os,serve_folder};
 use super::super::super::share_mode::{Mode,Setting};
-use crate::{display,fs::directory_birth::DirectoryParent,system::reader::{Catalog,volume::{Capacity,OrdinaryRoot}}};
+use crate::{display,fs::directory_birth::DirectoryParent,system::reader::{Catalog,volume::{Capacity,CapacityOrigin,OrdinaryRoot}}};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering},thread};
 
 const NAME:usize=255;
@@ -11,8 +11,8 @@ const ROW:usize=16;
 const OPEN_READ:u8=253;
 const OPEN_WRITE:u8=252;
 const OPEN_MAX:u8=247;
-const CAPACITY_RW:u8=242;
-const CAPACITY_RO:u8=241;
+pub(super) const CAPACITY_RW:u8=242;
+pub(super) const CAPACITY_RO:u8=241;
 const CAP_READY:u8=0;
 const CAP_NO_MEDIA:u8=1;
 const CAP_BUSY:u8=2;
@@ -68,16 +68,36 @@ fn selected(site:Site<'_>,session:&SmbSession<'_>,name:&[u8])->io::Result<Settin
     })
 }
 
-struct CapacityPermit;
-impl CapacityPermit{
-    fn take()->Option<Self>{
-        CAPACITY_JOBS.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<2).then_some(n+1)).ok()?;
-        Some(Self)
+struct CapacityPermit<'a>(&'a AtomicBool);
+impl<'a> CapacityPermit<'a>{
+    fn take(tcon:&'a AtomicBool)->Option<Self>{
+        tcon.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).ok()?;
+        if CAPACITY_JOBS.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<2).then_some(n+1)).is_err(){
+            tcon.store(false,Ordering::Release);return None;
+        }
+        Some(Self(tcon))
     }
 }
-impl Drop for CapacityPermit{fn drop(&mut self){CAPACITY_JOBS.fetch_sub(1,Ordering::AcqRel);}}
+impl Drop for CapacityPermit<'_>{fn drop(&mut self){
+    CAPACITY_JOBS.fetch_sub(1,Ordering::AcqRel);self.0.store(false,Ordering::Release);
+}}
 fn no_capacity(fd:i32,status:u8){
     let _=unsafe{zxs_ns_capacity_reply(fd,status,0,0,0)};
+}
+
+/// The same single slot covers the original root and all folders of a
+/// TCON. None of their read/write or enumeration workers waits on disk here.
+pub(super) fn start_capacity<'scope,'env:'scope>(
+    scope:&'scope thread::Scope<'scope,'env>,slot:&mut Option<thread::ScopedJoinHandle<'scope,()>>,
+    site:Site<'env>,origin:&TreeOrigin,answer:OwnedFd,task:impl FnOnce(TreeOrigin,OwnedFd)+Send+'scope,
+){
+    let fd=answer.as_raw_fd();
+    if slot.as_ref().is_some_and(|job|!job.is_finished()){no_capacity(fd,CAP_BUSY);return;}
+    let Some(permit)=site.capacity_slot.and_then(CapacityPermit::take)else{no_capacity(fd,CAP_BUSY);return;};
+    let Ok(peer)=origin.duplicate()else{no_capacity(fd,CAP_BUSY);return;};
+    if let Ok(job)=thread::Builder::new().name("zxs-smb-capacity".into()).spawn_scoped(scope,move||{
+        let _permit=permit;task(peer,answer);
+    }){*slot=Some(job);}
 }
 
 struct Reference<'r>{root:OrdinaryRoot<'r>,grant:Setting,bytes:Capacity,writable:bool}
@@ -145,6 +165,47 @@ fn reference_capacity(site:Site<'_>,origin:&TreeOrigin,answer:&OwnedFd,can_write
     drop(chosen);result
 }
 
+fn finish_ordinary_capacity(held:CapacityOrigin<'_>,sample:Option<Capacity>,
+    before_cut:impl FnOnce()->io::Result<()>,cut:impl FnOnce()->io::Result<()>,
+    send:impl FnOnce(Option<Capacity>)->io::Result<()>)->io::Result<()>{
+    if sample.is_some(){held.require_held()?;}
+    before_cut()?;
+    // Original F/marker lookup can block. Never put it after the last
+    // current-grant cut. Only a nonblocking liveness check and reply follow.
+    cut()?;
+    send(sample)
+}
+pub(super) fn ordinary_capacity(site:Site<'_>,origin:&TreeOrigin,answer:&OwnedFd,parent:&OwnedFd,
+    active:&AtomicBool,held:CapacityOrigin<'_>,grant:Setting,can_write:bool)->io::Result<()>{
+    let current=||->io::Result<()>{
+        if !active.load(Ordering::Acquire)||(site.stopping)()||!live(origin,parent,0)||!live(origin,answer,0){
+            return Err(denied());
+        }
+        Ok(())
+    };
+    current()?;site.validate()?;
+    let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
+    let session=SmbSession{source:&src,original:origin.slot.original.clone()};
+    let exact=Tree{session:&session,setting:grant,parent:DirectoryParent::Root};
+    let cut=||src.at(|db,c|{
+        exact.require(db,&c,false)?;held.require_catalog(&c,grant.volume)?;current()
+    });
+    cut()?;
+    // No path supplied by the client or a fresh volume selected from SQL.
+    // This uses the open F itself and the actual ordinary ancestry of the FSP.
+    let sample=held.sample().ok().filter(|s|s.total>=4096);
+    let fd=answer.as_raw_fd();
+    finish_ordinary_capacity(held,sample,||site.validate(),cut,|found|{
+        current()?;
+        if let Some(b)=found{
+            let writable=can_write&&grant.mode==Mode::ReadWrite&&!b.read_only;
+            os(unsafe{zxs_ns_capacity_reply(fd,CAP_READY,b.total,if writable{b.available}else{0},b.free)})
+        }else{
+            no_capacity(fd,CAP_NO_MEDIA);Ok(())
+        }
+    })
+}
+
 pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()>{
     if origin.slot.pool!=site.pool || (site.stopping)() || !live(&origin,&root,0){return Err(denied());}
     site.validate()?;
@@ -162,7 +223,8 @@ pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()
     let alive=||{
         !running.load(Ordering::Acquire)||(site.stopping)()||!live(&origin,&root,0)
     };
-    let child=Site{stopping:&alive,..site};
+    let capacity_slot=AtomicBool::new(false);
+    let child=Site{stopping:&alive,capacity_slot:Some(&capacity_slot),..site};
     thread::scope(|scope|{
         let _stop=Stop(&running);
         let mut jobs=Vec::new();
@@ -179,15 +241,9 @@ pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()
             let label=&name[1..1+usize::from(name[0])];
             if matches!(role,CAPACITY_RO|CAPACITY_RW){
                 if !label.is_empty(){continue;}
-                if capacity.as_ref().is_some_and(|job|!job.is_finished()){
-                    no_capacity(fd,CAP_BUSY);continue;
-                }
-                let Some(permit)=CapacityPermit::take()else{no_capacity(fd,CAP_BUSY);continue;};
-                let peer=origin.duplicate()?;
-                if let Ok(job)=thread::Builder::new().name("zxs-root-capacity".into()).spawn_scoped(scope,move||{
-                    let _permit=permit;
+                start_capacity(scope,&mut capacity,child,&origin,answer,move|peer,answer|{
                     let _=reference_capacity(child,&peer,&answer,role==CAPACITY_RW);
-                }){capacity=Some(job);}
+                });
             }else if matches!(role,OPEN_READ|OPEN_WRITE|OPEN_MAX){
                 let (grant,writer)=if label==site.plan.retained_label().as_bytes(){
                     if role==OPEN_WRITE{continue;}
@@ -248,6 +304,44 @@ mod tests{
         let gone=tmp.0.join("F-offline");std::fs::rename(&f,&gone).unwrap();
         assert!(pick_reference(&src,&c,vec![ro],true,&ready).unwrap().is_none());
         std::fs::rename(&gone,&f).unwrap();
+    }
+
+    #[test]
+    #[ignore="source only: original nested F and real name replacement; no SMB listener"]
+    fn ordinary_capacity_reuses_held_ancestry_and_never_a_fresh_reference(){
+        use crate::{OperationId,system::reader::ordinary_pool,test_support::PrivateTemp};
+        let tmp=PrivateTemp::under(&std::env::temp_dir());
+        let (path,pool,f,rw,_)=ordinary_pool(&tmp);
+        let src=InitialReader::open(&path,pool).unwrap();
+        let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let tree=session.connect(rw).unwrap();
+        let (_,base)=tree.ordinary_route(&[],true).unwrap();
+        tree.make_ordinary_directory(&base,OperationId([0xd3;16]),"Reports",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+        let (catalog,route)=tree.ordinary_route(&["Reports".into()],false).unwrap();
+        let root=OrdinaryRoot::at_parent(&src,&catalog,&route,None).unwrap();
+        let holder=root.capacity_origin();holder.require_catalog(&catalog,tree.setting.volume).unwrap();
+        assert!(holder.sample().unwrap().total>=4096);
+        let away=f.join("Reports-away");
+        std::fs::rename(f.join("Reports"),&away).unwrap();
+        assert!(holder.sample().is_err());
+        assert!(pick_reference(&src,&catalog,vec![tree.setting],true,||Ok(())).unwrap().is_some());
+        std::fs::rename(&away,f.join("Reports")).unwrap();
+        let cut=||src.at(|db,c|{tree.require(db,&c,false)?;holder.require_catalog(&c,tree.setting.volume)});
+        let sample=holder.sample().unwrap();
+        let replied=std::cell::Cell::new(false);
+        finish_ordinary_capacity(holder,Some(sample),||Ok(()),&cut,|result|{
+            assert!(result.is_some());replied.set(true);Ok(())
+        }).unwrap();
+        assert!(replied.replace(false));
+        let observer=InitialReader::alongside(&src.dir,&src.marker,pool,src.expected_schema).unwrap();
+        let admin=observer.authenticate_web("first.admin","correct horse battery staple").unwrap();
+        let sample=holder.sample().unwrap();
+        let changed=std::cell::Cell::new(false);
+        assert!(finish_ordinary_capacity(holder,Some(sample),||{
+            admin.set_share_mode(OperationId([0xd4;16]),rw,tree.setting.op,Mode::ReadOnly)?;
+            changed.set(true);Ok(())
+        },cut,|_|{replied.set(true);Ok(())}).is_err());
+        assert!(changed.get()&&!replied.get(),"never invoke the private reply after the original grant changed");
     }
 
     #[test]

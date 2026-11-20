@@ -37,10 +37,12 @@ unsafe extern "C"{
     fn zxs_read_accept(fd:i32)->i32;
 }
 #[derive(Clone,Copy)]
-pub(super) struct Site<'a>{dir:&'a SystemDir,mark:&'a ControlRead,pool:PoolId,shape:[u8;32],binding:&'a File,stamp:&'a Stamp,stopping:&'a(dyn Fn()->bool+Sync),plan:&'a super::first::InstalledPlan}
+pub(super) struct Site<'a>{dir:&'a SystemDir,mark:&'a ControlRead,pool:PoolId,shape:[u8;32],binding:&'a File,stamp:&'a Stamp,stopping:&'a(dyn Fn()->bool+Sync),plan:&'a super::first::InstalledPlan,
+    capacity_slot:Option<&'a AtomicBool>,
+}
 impl<'a> Site<'a>{
     pub(super) fn from_reader(src:&'a InitialReader,binding:&'a File,stamp:&'a Stamp,stopping:&'a(dyn Fn()->bool+Sync),plan:&'a super::first::InstalledPlan)->Self{
-        Self{dir:&src.dir,mark:&src.marker,pool:src.pool,shape:src.expected_schema,binding,stamp,stopping,plan}
+        Self{dir:&src.dir,mark:&src.marker,pool:src.pool,shape:src.expected_schema,binding,stamp,stopping,plan,capacity_slot:None}
     }
     fn validate(&self)->io::Result<()>{
         if Stamp::read(self.binding)?!=*self.stamp{return Err(denied());}Ok(())
@@ -235,6 +237,8 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
     const MAX_MEMBERS:usize=16;
     let mut writers=Vec::new();let mut births=Vec::new();let mut moves=Vec::new();let mut paths=Vec::new();
+    let mut capacity=None;
+    let held_capacity=root.capacity_origin();
     while !(site.stopping)()&&live(origin,reply,0){
         let mut channels=[-1;MAX_MEMBERS];let mut events=[0u8;MAX_MEMBERS+1];
         for(i,(m,_))in members.iter().enumerate(){channels[i]=m.as_raw_fd();}
@@ -278,6 +282,15 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
         let fd=unsafe{zxs_dir_take(reply.as_raw_fd(),origin.worker.as_raw_fd(),&mut limit,cursor.as_mut_ptr())};
         if fd<0{break;} // original session remains usable on its other trees
         let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+        if matches!(limit,namespace::CAPACITY_RO|namespace::CAPACITY_RW){
+            if cursor[0]!=0{continue;}
+            let grant=tree.setting;
+            namespace::start_capacity(scope,&mut capacity,site,origin,answer,move|peer,answer|{
+                let _=namespace::ordinary_capacity(site,&peer,&answer,reply,tree_live,held_capacity,grant,
+                    limit==namespace::CAPACITY_RW);
+            });
+            continue;
+        }
         if limit==ORDINARY_PATH{
             if tree.parent!=DirectoryParent::Root{continue;}
             paths.retain(|h:&thread::ScopedJoinHandle<'_,()>|!h.is_finished());

@@ -4829,7 +4829,7 @@
  #include "../libcli/smb/smb_common.h"
  #include "trans2.h"
  #include "../lib/util/tevent_ntstatus.h"
-@@ -216,7 +220,148 @@
+@@ -216,7 +220,162 @@
  	struct smbd_smb2_request *smb2req;
  	NTSTATUS status;
  	DATA_BLOB out_output_buffer;
@@ -4904,7 +4904,7 @@
 +	struct smbd_smb2_getinfo_state *s=tevent_req_data(req,struct smbd_smb2_getinfo_state);
 +	NTSTATUS status;
 +	struct zxs_ns_space capacity={0};
-+	if(s->zxs_filesystem){status=zxs_root_capacity_recv(sub,&capacity);}
++	if(s->zxs_filesystem){status=zxs_capacity_recv(sub,&capacity);}
 +	else if(s->zxs_member){
 +		uint8_t *private=NULL;size_t n=0;
 +		status=zxs_delivery_recv(sub,s,&private,&n);
@@ -4926,6 +4926,19 @@
 +	if(tevent_req_nterror(req,status))return;
 +	tevent_req_done(req); /* terminal: native recv can release state now */
 +}
++static bool zxs_getinfo_volume_scope(const struct files_struct *fsp,const struct zxs_smb_tree_cut **scope)
++{
++	if(fsp->fsp_flags.is_directory){
++		const struct zxs_dir_search *dir=zxs_find_dir(fsp);
++		if(dir==NULL)return false;
++		*scope=dir->folder.mode==0?NULL:&dir->folder;
++	}else{
++		const struct zxs_read_fsp *member=zxs_find_read(fsp);
++		if(member==NULL)return false;
++		*scope=&member->folder;
++	}
++	return *scope==NULL || !zxs_folder_retained(*scope);
++}
 +static NTSTATUS zxs_getinfo_logical(struct tevent_req *req,struct tevent_context *ev,
 +				  struct files_struct *fsp,uint8_t type,uint8_t cls,
 +				  uint32_t max,DATA_BLOB input,uint32_t additional,uint32_t flags)
@@ -4934,11 +4947,12 @@
 +	s->zxs_member=!fsp->fsp_flags.is_directory;
 +	s->zxs_filesystem=type==SMB2_0_INFO_FILESYSTEM && zxs_capacity_info_class(cls);
 +	s->zxs_fs_attributes=type==SMB2_0_INFO_FILESYSTEM && cls==ZXS_INFO_FS_ATTRIBUTE;
++	const struct zxs_smb_tree_cut *scope=NULL;
 +	if(s->zxs_filesystem || s->zxs_fs_attributes){
-+		const struct zxs_dir_search *d=zxs_find_dir(fsp);
-+		/* This query reports the one virtual export's reference. Do
-+		 * not substitute total capacity of S, R, or any host cwd. */
-+		if(d==NULL || d->folder.mode!=0)return NT_STATUS_NOT_SUPPORTED;
++		/* A true ordinary selection pins its own F. No S/R, cwd or
++		 * reference fallback is allowed when a body scope is known. */
++		if(!zxs_getinfo_volume_scope(fsp,&scope) ||
++		   (s->zxs_fs_attributes && scope!=NULL))return NT_STATUS_NOT_SUPPORTED;
 +		const uint32_t minimum=s->zxs_fs_attributes?12u:(cls==ZXS_INFO_FS_FULL_SIZE?32u:24u);
 +		if(max<minimum)return NT_STATUS_INFO_LENGTH_MISMATCH;
 +	}else if(type!=SMB2_0_INFO_FILE || !(s->zxs_member?zxs_member_info_class(cls):zxs_root_info_class(cls))){
@@ -4951,7 +4965,7 @@
 +		(s->zxs_member?zxs_member_info_needs_attributes(cls):zxs_root_info_needs_attributes(cls));
 +	if(attributes && (fsp->access_mask&SEC_FILE_READ_ATTRIBUTE)==0)return NT_STATUS_ACCESS_DENIED;
 +	const struct zxs_read_fsp *m=s->zxs_member?zxs_find_read(fsp):NULL;
-+	if(m!=NULL){
++	if(m!=NULL && !s->zxs_filesystem){
 +		if(m->busy)return NT_STATUS_SHARING_VIOLATION;
 +		s->zxs_size=m->member.size;
 +	}
@@ -4959,7 +4973,7 @@
 +	if(s->zxs_link==NULL)return NT_STATUS_NO_MEMORY;
 +	talloc_steal(s,s->zxs_link);
 +	if(s->zxs_filesystem){
-+		s->zxs_wait=zxs_root_capacity_send(s,ev,s->smb2req,zxs_capacity_may_write(fsp->conn));
++		s->zxs_wait=zxs_capacity_send(s,ev,s->smb2req,scope,zxs_capacity_may_write(fsp->conn));
 +	}else if(m!=NULL){
 +		/* The storage worker proves this exact member's held view and
 +		 * current authority, but no FILE_READ_DATA or data I/O is needed. */
@@ -4978,7 +4992,7 @@
  
  static void smb2_ipc_getinfo(struct tevent_req *req,
  				struct smbd_smb2_getinfo_state *state,
-@@ -273,6 +418,13 @@
+@@ -273,6 +432,13 @@
  	state->smb2req = smb2req;
  	state->status = NT_STATUS_OK;
  	state->out_output_buffer = data_blob_null;

@@ -102,8 +102,9 @@ bool zxs_dir_wait_cancel(struct tevent_req *,struct tevent_context *,
 struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,
 				    const struct zxs_smb_tree_cut *,unsigned limit,const uint8_t *after,size_t size);
 NTSTATUS zxs_dir_cut_recv(struct tevent_req *,uint8_t *optional_rows);
-struct tevent_req *zxs_root_capacity_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,bool may_write);
-NTSTATUS zxs_root_capacity_recv(struct tevent_req *,struct zxs_ns_space *);
+struct tevent_req *zxs_capacity_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,
+	const struct zxs_smb_tree_cut *ordinary,bool may_write);
+NTSTATUS zxs_capacity_recv(struct tevent_req *,struct zxs_ns_space *);
 #define ZXS_INFO_FS_SIZE 3u
 #define ZXS_INFO_FS_ATTRIBUTE 5u
 #define ZXS_INFO_FS_FULL_SIZE 7u
