@@ -3,6 +3,20 @@
 #define ZXS_SMB_DIRECTORY_H
 #include "smbd/zxs_file_vfs.h"
 #include "smbd/zxs_business.h"
+#include "libcli/smb/smb_constants.h"
+/* Empty and one-component names in the signed ZXS namespace can only
+ * select the one root or an enrolled top directory. For an existing-only
+ * open they need no directory hint from the client. No inference below it. */
+static inline bool zxs_create_directory_shape(const char *name,uint32_t options,uint32_t disposition,bool *directory)
+{
+	if(name==NULL)return false;
+	if(options==FILE_DIRECTORY_FILE ||
+	   (options==0 && disposition==FILE_OPEN && strchr(name,'\\')==NULL)){
+		*directory=true;return true;
+	}
+	if(name[0]==0 || (options!=0 && options!=FILE_NON_DIRECTORY_FILE))return false;
+	*directory=false;return true;
+}
 static inline bool zxs_folder_retained(const struct zxs_smb_tree_cut *f)
 {
 	return f!=NULL && f->volume_ordinal==1 && f->mode==1 && f->revision==1;

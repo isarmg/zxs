@@ -3540,7 +3540,7 @@
  	in_file_attributes &= ~FILE_FLAG_POSIX_SEMANTICS;
  
  	is_dfs = (smb1req->flags2 & FLAGS2_DFS_PATHNAMES);
-@@ -1010,6 +1057,35 @@
+@@ -1010,6 +1057,34 @@
  		return tevent_req_post(req, state->ev);
  	}
  
@@ -3550,9 +3550,8 @@
 +			tevent_req_nterror(req,NT_STATUS_BAD_IMPERSONATION_LEVEL);
 +			return tevent_req_post(req,state->ev);
 +		}
-+		bool dir=in_name[0]==0 || (state->in_create_options&FILE_DIRECTORY_FILE)!=0;
-+		if ((dir ? state->in_create_options!=FILE_DIRECTORY_FILE :
-+		     (state->in_create_options!=0 && state->in_create_options!=FILE_NON_DIRECTORY_FILE)) ||
++		bool dir=false;
++		if (!zxs_create_directory_shape(state->fname,state->in_create_options,in_create_disposition,&dir) ||
 +		    (in_create_disposition!=FILE_OPEN &&
 +		     in_create_disposition!=FILE_CREATE && in_create_disposition!=FILE_OPEN_IF) ||
 +		    in_oplock_level!=SMB2_OPLOCK_LEVEL_NONE ||
@@ -3576,7 +3575,7 @@
  	if (IS_IPC(smb1req->conn)) {
  		const char *pipe_name = in_name;
  
-@@ -1031,7 +1107,7 @@
+@@ -1031,7 +1106,7 @@
  		state->info = FILE_WAS_OPENED;
  
  		smbd_smb2_create_finish(req);
@@ -3585,7 +3584,7 @@
  	}
  
  	if (CAN_PRINT(smb1req->conn)) {
-@@ -1055,7 +1131,7 @@
+@@ -1055,7 +1130,7 @@
  		state->info = FILE_WAS_CREATED;
  
  		smbd_smb2_create_finish(req);
@@ -3594,7 +3593,7 @@
  	}
  
  	/* Check for trailing slash specific directory handling. */
-@@ -1084,13 +1160,13 @@
+@@ -1084,13 +1159,13 @@
  		state->update_open = false;
  		state->info = state->op->create_action;
  
@@ -3611,7 +3610,7 @@
  	}
  
  	if (state->do_durable_reconnect) {
-@@ -1163,13 +1239,13 @@
+@@ -1163,13 +1238,13 @@
  
  		state->info = FILE_WAS_OPENED;
  
@@ -3628,7 +3627,7 @@
  	}
  
  	if (state->requested_oplock_level == SMB2_OPLOCK_LEVEL_LEASE) {
-@@ -1318,13 +1394,13 @@
+@@ -1318,13 +1393,13 @@
  	}
  	state->op = state->result->op;
  
@@ -3645,7 +3644,7 @@
  }
  
  static void smbd_smb2_create_purge_replay_cache(struct tevent_req *req,
-@@ -1654,7 +1730,7 @@
+@@ -1654,7 +1729,7 @@
  	}
  }
  
@@ -3654,7 +3653,7 @@
  {
  	struct smbd_smb2_create_state *state = tevent_req_data(
  		req, struct smbd_smb2_create_state);
-@@ -1923,11 +1999,11 @@
+@@ -1923,11 +1998,11 @@
  		}
  	}
  
@@ -3668,7 +3667,7 @@
  }
  
  static void smbd_smb2_create_finish(struct tevent_req *req)
-@@ -1940,7 +2016,9 @@
+@@ -1940,7 +2015,9 @@
  
  	smb2req->compat_chain_fsp = smb1req->chain_fsp;
  
@@ -3679,7 +3678,7 @@
  		state->out_oplock_level = state->in_oplock_level;
  	} else if (lp_fake_oplocks(SNUM(smb2req->tcon->compat))) {
  		state->out_oplock_level	= state->in_oplock_level;
-@@ -1982,12 +2060,14 @@
+@@ -1982,12 +2059,14 @@
  
  	DBG_DEBUG("%s - %s\n", fsp_str_dbg(result), fsp_fnum_dbg(result));
  
@@ -3695,7 +3694,7 @@
  			uint8_t *out_oplock_level,
  			uint32_t *out_create_action,
  			struct timespec *out_creation_ts,
-@@ -2057,6 +2137,7 @@
+@@ -2057,6 +2136,7 @@
  		return status;
  	}
  

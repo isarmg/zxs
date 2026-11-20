@@ -172,6 +172,22 @@ static bool native_directory_projection(connection_struct *c)
 fail:
 	c->params=NULL;return false;
 }
+/* The real native CREATE type decision does not create an object. */
+static bool typeless_top_open(void)
+{
+	bool dir=false;
+	if(!zxs_create_directory_shape("",0,FILE_OPEN,&dir) || !dir)return false;
+	if(!zxs_create_directory_shape("Data",0,FILE_OPEN,&dir) || !dir)return false;
+	if(!zxs_create_directory_shape("Data\\name",0,FILE_OPEN,&dir) || dir)return false;
+	if(!zxs_create_directory_shape("Data\\dir",FILE_DIRECTORY_FILE,FILE_OPEN,&dir) || !dir)return false;
+	if(!zxs_create_directory_shape("Data",FILE_NON_DIRECTORY_FILE,FILE_OPEN,&dir) || dir)return false;
+	if(zxs_create_directory_shape("",FILE_NON_DIRECTORY_FILE,FILE_OPEN,&dir) ||
+	   zxs_create_directory_shape("",0,FILE_OPEN_IF,&dir) ||
+	   zxs_create_directory_shape("",0,FILE_CREATE,&dir) ||
+	   zxs_create_directory_shape("Data",FILE_OPEN_FOR_BACKUP_INTENT,FILE_OPEN,&dir))return false;
+	return true;
+}
+
 /* The actual native wire marshaller must describe a virtual directory,
  * independent of bogus stand-in inode/size/times, and accept only supported
  * file classes. This fixture does not claim an SMB logon or a live grant. */
@@ -492,7 +508,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
+	if (!typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }
