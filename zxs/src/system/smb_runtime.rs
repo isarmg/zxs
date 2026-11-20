@@ -8,6 +8,8 @@ use std::{fs::File,io,os::{fd::{AsRawFd,FromRawFd,OwnedFd},unix::fs::{FileExt,Me
 
 #[path="smb_attempt.rs"]
 mod attempts;
+#[path="smb_trees.rs"]
+mod trees;
 
 const BIND:&[u8;16]=b"ZXS-SAM/BOUND-1\0";
 const READY:&[u8;16]=b"ZXS-SAM/READY-2\0";
@@ -126,18 +128,18 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
         // No further sends on this anonymous endpoint (shutdown is not a
         // send). Authentic role frames always supplied their own kernel-
         // checked credentials, including ones already queued on this edge.
+        let authority=trees::Site::from_reader(&src,&binding,&stamp);
+        std::thread::scope(|scope|{
+        let mut jobs=trees::Workers::new(scope,authority);
         until_peer_drained(fd,||{
         os(unsafe{zxs_smb_origin_enable(fd)})?;
         attempts::serve(fd,&life,&master,stopping,||{
             if Stamp::read(&binding)?!=stamp{return Err(denied());}
             let selected=current_slot(&src,pool,e.instance,&sid)?;
             if Stamp::read(&binding)?!=stamp{return Err(denied());}Ok(selected)
-        },|native,share|{
-            if Stamp::read(&binding)?!=stamp{return Err(denied());}
-            let setting=native.select(&src,share)?;
-            if Stamp::read(&binding)?!=stamp{return Err(denied());}Ok(setting)
-        })
+        },|origin,share,reply|jobs.submit(origin,share,reply))
         },||unsafe{zxs_smb_ctl_life(life.as_raw_fd(),500)})
+        }) // all admitted threads and their original S/F objects are now joined
     })();
     drop(endpoint); // revoke the smbd end before releasing the original S, on errors too
     drop(src);result

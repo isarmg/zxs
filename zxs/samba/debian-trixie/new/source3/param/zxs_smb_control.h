@@ -55,9 +55,13 @@ int zxs_smb_active_take(int fd,const uint8_t challenge[8]);
 struct zxs_smb_tree_cut {
     uint8_t share[16],volume[16],setting[16];
     uint64_t revision;
-    uint8_t mode;
+    uint8_t mode,pool[16],volume_ordinal;
+    int root_fd; /* local only: owned by tcon; never serialized */
 };
-#define ZXS_SMB_TREE_CUT_BYTES 57
+#define ZXS_SMB_TREE_CUT_BYTES 74
+#define ZXS_SMB_VIRTUAL_ROOT "/zxs-root"
+int zxs_smb_root_wait(int tree,int session,int timeout);
+int zxs_smb_root_release(struct zxs_smb_tree_cut *owned);
 int zxs_smb_tree_ask(int session,const uint8_t share[16]);
 int zxs_smb_tree_take(int session,int worker,uint8_t share[16]);
 int zxs_smb_tree_reply(int fd,const uint8_t decision[ZXS_SMB_TREE_CUT_BYTES]);

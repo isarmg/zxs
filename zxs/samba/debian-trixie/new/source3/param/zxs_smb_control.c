@@ -338,7 +338,7 @@ int zxs_smb_cut_read(int fd,int64_t started,const uint8_t challenge[8],struct zx
  * second control listener, client-chosen user, credential, or database path. */
 static const uint8_t active_tag[16]="ZXS-SAM/ACTIVE1";
 static const uint8_t tree_tag[16]="ZXS-SAM/TREE-1";
-static const uint8_t tree_ok[16]="ZXS-SAM/TRSEL-1";
+static const uint8_t tree_ok[16]="ZXS-SAM/TRROOT-2";
 int zxs_smb_active_send(int fd,const uint8_t ch[8])
 {
     uint8_t b[24];memcpy(b,active_tag,16);memcpy(b+16,ch,8);
@@ -378,9 +378,31 @@ int zxs_smb_tree_read(int fd,const uint8_t share[16],struct zxs_smb_tree_cut *ou
     uint8_t b[16+ZXS_SMB_TREE_CUT_BYTES];struct zxs_smb_tree_cut x={0};
     if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
     if(memcmp(b,tree_ok,16)||!cut_id(share)||memcmp(b+16,share,16)||
-       !cut_id(b+32)||!cut_id(b+48)||(b[72]!=1&&b[72]!=2))return bad();
+       !cut_id(b+32)||!cut_id(b+48)||(b[72]!=1&&b[72]!=2)||
+       !cut_id(b+73)||b[89]<2||b[89]>=64)return bad();
     for(size_t i=64;i<72;i++)x.revision=(x.revision<<8)|b[i];
     if(x.revision==0 || x.revision>INT64_MAX)return bad();
     memcpy(x.share,share,16);memcpy(x.volume,b+32,16);memcpy(x.setting,b+48,16);
-    x.mode=b[72];*out=x;return 0;
+    x.mode=b[72];memcpy(x.pool,b+73,16);x.volume_ordinal=b[89];x.root_fd=-1;
+    *out=x;return 0;
+}
+/* Storage-side only. Never consume another tree request on the session
+ * socket. Its readable data is for the master dispatcher, not a close. */
+int zxs_smb_root_wait(int tree,int session,int timeout)
+{
+    if(timeout!=0 && timeout!=500)return bad();
+    struct pollfd p[2]={{.fd=tree,.events=POLLIN|POLLRDHUP},{.fd=session,.events=POLLRDHUP}};
+    int r;
+    do{r=poll(p,2,timeout);}while(r<0 && errno==EINTR && timeout==0);
+    if(r<0 && errno==EINTR)return 0;
+    if(r<0)return -1;
+    return r==0?0:1; /* no post-CONNECT operation protocol yet; no unverified reply */
+}
+int zxs_smb_root_release(struct zxs_smb_tree_cut *owned)
+{
+    if(owned!=NULL && owned->root_fd>=0){
+        shutdown(owned->root_fd,SHUT_RDWR);
+        close(owned->root_fd);owned->root_fd=-1;
+    }
+    return 0;
 }

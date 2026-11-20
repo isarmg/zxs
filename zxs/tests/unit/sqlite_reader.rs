@@ -161,3 +161,8 @@ mod first_work;
 
 /// Synthetic committed pool and fixed pair for the Web transport fixture.
 pub(crate) fn web_pool(t:&PrivateTemp)->(PathBuf,PoolId){publication::first(t)}
+
+pub(crate) fn ordinary_pool(t:&PrivateTemp)->(PathBuf,PoolId,PathBuf,crate::identity::ShareId,crate::identity::ShareId){
+    let (s,p)=publication::first(t);let src=InitialReader::open(&s,p).unwrap();
+    let f=create_file::open_root(&src);let(rw,ro)=create_file::configure(&src);(s,p,f,rw,ro)
+}

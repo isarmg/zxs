@@ -42,6 +42,14 @@ impl SystemDir{
         }
         ControlRead::open(selected,ROOT_MARK,101)
     }
+    /// Two live independently locked directory OFDs, with the same original
+    /// DB and marker names. statx only: never open the DB to compare inodes.
+    pub(super) fn matches_held(&self,other:&Self)->io::Result<()>{
+        self.require()?;other.require()?;
+        if self.root.entity!=other.root.entity||!self.root.same_mount(&other.root)?||
+            self.ino!=other.ino||self.marker_ino!=other.marker_ino{return Err(invalid("different original SYSTEM"));}
+        Ok(())
+    }
     pub(super) fn path(&self)->&CStr{&self.db}
     pub(super) fn component_limit(&self)->io::Result<ComponentLimit>{ComponentLimit::held(&self.root)}
     pub(super) fn require(&self)->io::Result<()>{

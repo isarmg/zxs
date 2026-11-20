@@ -14,7 +14,7 @@ pub(crate) struct DiskSpace{
     pub(crate) filesystem_bytes:u64,pub(crate) available_bytes:u64,
 }
 pub(super) struct OrdinaryRoot<'a>{
-    source:&'a InitialReader,pub(super) root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId,
+    source:&'a InitialReader,pub(super) root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId,pub(super) ordinal:u8,
 }
 impl InitialReader{
     /// A fresh SQL selection for exactly one mounted-FS capacity sample.
@@ -49,7 +49,7 @@ impl<'a> OrdinaryRoot<'a>{
             return Err(invalid("selected original F aliases S or has different native geometry"));
         }
         let mark=source.dir.hold_marker(&root)?;
-        let b=Self{source,root,mark,expected,volume:id};b.require()?;Ok(b)
+        let b=Self{source,root,mark,expected,volume:id,ordinal:row.ordinal};b.require()?;Ok(b)
     }
     pub(super) fn require(&self)->io::Result<()>{
         self.source.dir.require()?;check(unsafe{zxs_sql_named(self.source.conn.0)})?;
@@ -65,9 +65,15 @@ impl<'a> OrdinaryRoot<'a>{
     /// Check its held names, both exact private parents and marker stamps
     /// without re-enumerating S, re-reading its SQL schema or probing R.
     pub(super) fn require_streaming(&self)->io::Result<()>{
+        self.require_streaming_at(||Ok(()))
+    }
+    /// The caller's physical phase. No target-root lookup belongs inside a
+    /// SYSTEM rollback-journal transaction; a blocked F must not pin it.
+    pub(super) fn require_streaming_at(&self,at_target:impl FnOnce()->io::Result<()>)->io::Result<()>{
         crate::fs::WitnessRead::require_parent(&self.source.dir.root)?;
         check(unsafe{zxs_sql_named(self.source.conn.0)})?;
         self.source.marker.require(&self.source.dir.root)?;
+        at_target()?;
         crate::fs::WitnessRead::require_parent(&self.root)?;self.mark.require(&self.root)
     }
     pub(super) fn space(&self)->io::Result<DiskSpace>{

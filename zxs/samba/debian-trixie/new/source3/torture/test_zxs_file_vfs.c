@@ -7,6 +7,7 @@
 #include "param/loadparm.h"
 #include "lib/param/param.h"
 #include "smbd/zxs_file_vfs.h"
+#include "librpc/gen_ndr/smbXsrv.h"
 
 /* Use the native globals and parameter setter, not a copy of the
  * documented default. No config file, data share or listener is used. */
@@ -31,6 +32,37 @@ done:
 	return ok;
 }
 
+/* Fixture supplies a synthetic *already selected* tree/endpoint, not a
+ * Samba login or SQL decision. The Rust source separately exercises actual F. */
+static bool only_the_attached_virtual_root(connection_struct *conn,const char *service)
+{
+	int sock[2];struct smbXsrv_tcon *t=talloc_zero(conn,struct smbXsrv_tcon);
+	struct zxs_smb_tree_cut *s=talloc_zero(t,struct zxs_smb_tree_cut);
+	struct smb_filename name={.base_name=discard_const_p(char,ZXS_SMB_VIRTUAL_ROOT)};
+	struct smb_filename bad={.base_name=discard_const_p(char,"/etc")};
+	struct smb_filename *rp=NULL;bool ok=false;enum timestamp_set_resolution resolution;
+	if (t==NULL||s==NULL || !zxs_smb_service_id((const uint8_t *)service,strlen(service),s->share) ||
+	    socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,sock)!=0) {return false;}
+	conn->tcon=t;conn->connectpath=talloc_strdup(conn,ZXS_SMB_VIRTUAL_ROOT);t->zxs_tree_choice=s;
+	s->root_fd=sock[0];s->volume_ordinal=2;s->pool[7]=17;
+	if (conn->connectpath==NULL ||
+	    smb_vfs_call_connect(conn->vfs_handles,service,"zxs-smb-client")!=0 ||
+	    smb_vfs_call_connect(conn->vfs_handles,service,"files.smb")!=-1 ||
+	    smb_vfs_call_realpath(conn->vfs_handles,conn,&bad)!=NULL) {goto done;}
+	rp=smb_vfs_call_realpath(conn->vfs_handles,conn,&name);
+	if (rp==NULL || strcmp(rp->base_name,ZXS_SMB_VIRTUAL_ROOT)!=0 ||
+	    smb_vfs_call_stat(conn->vfs_handles,&name)!=0 || !S_ISDIR(name.st.st_ex_mode) ||
+	    name.st.st_ex_dev!=17 || name.st.st_ex_ino!=3 ||
+	    smb_vfs_call_fs_capabilities(conn->vfs_handles,&resolution)!=0 || resolution!=TIMESTAMP_SET_SECONDS) {goto done;}
+	conn->tcon_done=true;
+	if (smb_vfs_call_stat(conn->vfs_handles,&name)!=-1 || errno!=EACCES ||
+	    vfs_ChDir(conn,&name)!=0 || vfs_ChDir(conn,&bad)!=-1) {goto done;}
+	smb_vfs_call_disconnect(conn->vfs_handles);
+	ok=s->root_fd<0 && zxs_smb_ctl_live(sock[1])<0;
+done:
+	zxs_smb_root_release(s);close(sock[1]);conn->tcon_done=false;conn->tcon=NULL;TALLOC_FREE(t);
+	return ok;
+}
 int main(void)
 {
 	const char *file[] = {"zxs_file", NULL};
@@ -109,6 +141,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
+	if (!only_the_attached_virtual_root(conn,lower)) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

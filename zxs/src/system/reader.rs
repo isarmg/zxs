@@ -163,6 +163,18 @@ impl InitialReader{
         let s=Self{conn,marker,dir,pool:expected,expected_schema};
         s.snapshot()?;Ok(s)
     }
+    /// An independent read-only SQLite connection on another storage thread.
+    /// Validate both still-held original names before invoking the real VFS;
+    /// no SQLite connection or database FD is transferred across threads.
+    fn alongside(current:&SystemDir,old_mark:&ControlRead,pool:PoolId,expected_schema:[u8;32])->io::Result<Self>{
+        let limit=usize::try_from(unsafe{zxs_sql_path_limit()}).map_err(|_|invalid("unknown SQLite Unix VFS"))?;
+        let dir=SystemDir::hold(&current.root.path,limit)?;
+        current.matches_held(&dir)?;old_mark.require(&dir.root)?;
+        let marker=dir.hold_marker(&dir.root)?;
+        let conn=Connection::open(&dir,false)?;
+        let s=Self{conn,marker,dir,pool,expected_schema};
+        current.matches_held(&s.dir)?;old_mark.require(&s.dir.root)?;Ok(s) // first business cut checks actual schema/catalog
+    }
     pub(crate) fn snapshot(&self)->io::Result<Catalog>{self.at(|_,catalog|Ok(catalog))}
     /// Only bounded metadata may be selected here. KDF, disk transfer and
     /// slow streams are outside the SQL transaction. A later action rechecks.
@@ -228,4 +240,4 @@ pub(crate) mod account;
 pub(crate) mod smb;
 
 #[cfg(test)]
-pub(crate) use tests::web_pool;
+pub(crate) use tests::{web_pool,ordinary_pool};

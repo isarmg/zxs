@@ -4,8 +4,9 @@
 //! accepted here. The original worker may promote only its own consumed cut,
 //! after Samba's final successful local update. Share access is a separate cut.
 use super::{Slot,os};
-use super::super::{InitialReader,SmbSession,denied,share_mode::Setting};
+#[cfg(test)] use super::super::{InitialReader,SmbSession,denied,share_mode::Setting};
 use crate::identity::ShareId;
+use std::sync::{Arc,atomic::{AtomicBool,Ordering}};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd,RawFd},time::{Duration,Instant}};
 
 const LIMIT:usize=32;
@@ -20,7 +21,7 @@ unsafe extern "C"{
     fn zxs_smb_attempt_peer(fd:i32,sender:i32)->i32;
     fn zxs_smb_active_take(fd:i32,challenge:*const u8)->i32;
     fn zxs_smb_tree_take(fd:i32,worker:i32,share:*mut u8)->i32;
-    fn zxs_smb_tree_reply(fd:i32,result:*const u8)->i32;
+
     fn zxs_smb_cut_take(fd:i32,challenge:*const u8)->i32;
     fn zxs_smb_cut_reply(fd:i32,challenge:*const u8,identity:*const u8)->i32;
     fn zxs_smb_try_issue(fd:i32,challenge:*const u8)->i32;
@@ -80,7 +81,7 @@ impl Active{
             }else{false};
             if keep{i+=1;}else{
                 let a=self.0.remove(i);
-                if promote{live.0.push(NativeSession{peer:a.origin,slot:a.slot});}
+                if promote{live.0.push(NativeSession{peer:a.origin,slot:a.slot,alive:Arc::new(AtomicBool::new(true))});}
             }
         }
     }
@@ -94,8 +95,18 @@ impl Active{
 }
 /// Exists only while the private endpoint of this one native session survives.
 /// Two sessions on the same worker/TCP do not share an endpoint or identity.
-pub(super) struct NativeSession{peer:Registered,slot:Slot}
+pub(super) struct NativeSession{peer:Registered,slot:Slot,alive:Arc<AtomicBool>}
+impl Drop for NativeSession{fn drop(&mut self){self.alive.store(false,Ordering::Release);}}
+pub(super) struct TreeOrigin{
+    pub(super) slot:Slot,pub(super) alive:Arc<AtomicBool>,
+    pub(super) session:OwnedFd,pub(super) worker:OwnedFd,
+}
 impl NativeSession{
+    fn claim(&self)->io::Result<TreeOrigin>{
+        Ok(TreeOrigin{slot:self.slot.clone(),alive:self.alive.clone(),session:self.peer.peer.try_clone()?,
+            worker:self.peer.worker.try_clone()?})
+    }
+    #[cfg(test)]
     pub(super) fn select(&self,src:&InitialReader,share:ShareId)->io::Result<Setting>{
         if src.pool!=self.slot.pool{return Err(denied());}
         let s=SmbSession{source:src,original:self.slot.original.clone()};
@@ -105,7 +116,7 @@ impl NativeSession{
 struct Sessions(Vec<NativeSession>);
 impl Sessions{
     fn new()->Self{Self(Vec::with_capacity(SESSIONS))}
-    fn observe(&mut self,events:&[u8],open:impl Fn(&NativeSession,ShareId)->io::Result<Setting>){
+    fn observe(&mut self,events:&[u8],mut open:impl FnMut(TreeOrigin,ShareId,OwnedFd)){
         let mut i=0;
         self.0.retain(|session|{
             let e=events[i];i+=1;
@@ -117,14 +128,9 @@ impl Sessions{
                 // cancel unrelated trees/SMB sessions. No answer on the master.
                 if n>=0{
                     let reply=unsafe{OwnedFd::from_raw_fd(n)};let share=ShareId(id);
-                    if let Ok(s)=open(session,share){
-                        if s.share==share && s.revision>0 && matches!(s.mode as u8,1|2){
-                            let mut b=[0;57];b[..16].copy_from_slice(&id);b[16..32].copy_from_slice(&s.volume.0);
-                            b[32..48].copy_from_slice(&s.op.0);b[48..56].copy_from_slice(&s.revision.to_be_bytes());
-                            b[56]=s.mode as u8;
-                            let _=unsafe{zxs_smb_tree_reply(reply.as_raw_fd(),b.as_ptr())};
-                        }
-                    }
+                    // Admission/slow real-F work belongs to a bounded worker.
+                    // Never block dispatch of another session on a volume.
+                    if let Ok(origin)=session.claim(){open(origin,share,reply);}
                 }
             }
             true
@@ -181,7 +187,7 @@ impl<'a> Workers<'a>{
         }
     }
 }
-pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->bool,select:impl Fn()->io::Result<Slot>,open:impl Fn(&NativeSession,ShareId)->io::Result<Setting>)->io::Result<()>{
+pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->bool,select:impl Fn()->io::Result<Slot>,mut open:impl FnMut(TreeOrigin,ShareId,OwnedFd))->io::Result<()>{
     let mut active=Active::new();let mut sessions=Sessions::new();let mut workers=Workers::new(master);let mut swept=Instant::now();let mut draining=false;
     let revoke=|a:&mut Active,s:&mut Sessions|{
         let _=unsafe{super::zxs_smb_ctl_drain(ctl)};a.0.clear();s.0.clear();
@@ -198,7 +204,7 @@ pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->
         if draining{continue;}
         if events[0]&2!=0 || stopping() || unsafe{zxs_smb_process_live(master.as_raw_fd())}!=0{revoke(&mut active,&mut sessions);draining=true;continue;}
         // Only the original poll participants consume these result slots.
-        sessions.observe(&events[2+na..2+n],&open);
+        sessions.observe(&events[2+na..2+n],&mut open);
         active.observe_with(Instant::now(),&events[2..2+na],&select,&mut sessions);
         if events[0]&1!=0{
             match accepted(ctl){
@@ -303,7 +309,7 @@ mod tests{
         assert!(s.select(&src,share.share).is_err());
         let again=web.set_share_mode(OperationId([0x9b;16]),share.share,off.op,Mode::ReadWrite).unwrap();
         assert_ne!(again.op,allowed.op);assert_eq!(s.select(&src,share.share).unwrap(),again);
-        drop(c);live.observe(&[2],|_,_|panic!("closed original session must not access SQL"));
+        drop(c);live.observe(&[2],|_,_,_|panic!("closed original session must not access SQL"));
         assert!(live.0.is_empty());
     }
     #[test]

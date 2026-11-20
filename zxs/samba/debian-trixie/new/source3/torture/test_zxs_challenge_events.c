@@ -37,12 +37,14 @@ static bool separate_tree_replies(void)
 	struct zxs_smb_tree_cut decision={0};
 	if (socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,a)!=0 ||
 	    socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,b)!=0) { return false; }
-	memcpy(cut,wanted,16);cut[16]=3;cut[32]=4;cut[55]=9;cut[56]=1;
+	memcpy(cut,wanted,16);cut[16]=3;cut[32]=4;cut[55]=9;cut[56]=1;cut[57]=5;cut[73]=2;
 	bool ok=zxs_smb_tree_reply(a[1],cut)==0 && zxs_smb_tree_read(b[0],wanted,&decision)!=0 &&
 		zxs_smb_tree_read(a[0],wanted,&decision)==0 && decision.volume[0]==3 &&
-		decision.setting[0]==4 && decision.revision==9 && decision.mode==1;
+		decision.setting[0]==4 && decision.revision==9 && decision.mode==1 &&
+		decision.pool[0]==5 && decision.volume_ordinal==2 && decision.root_fd==-1;
 	ok=ok && zxs_smb_tree_reply(b[1],cut)==0 && zxs_smb_tree_read(b[0],other,&decision)!=0;
-	cut[56]=0;ok=ok && zxs_smb_tree_reply(a[1],cut)==0 && zxs_smb_tree_read(a[0],wanted,&decision)!=0;
+	cut[73]=1;ok=ok && zxs_smb_tree_reply(a[1],cut)==0 && zxs_smb_tree_read(a[0],wanted,&decision)!=0;
+	cut[73]=2;cut[56]=0;ok=ok && zxs_smb_tree_reply(a[1],cut)==0 && zxs_smb_tree_read(a[0],wanted,&decision)!=0;
 	close(a[0]);close(a[1]);close(b[0]);close(b[1]);return ok;
 }
 int main(void)

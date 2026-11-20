@@ -34,10 +34,13 @@ impl<'r> SmbSession<'r>{
         self.connect_id(ShareId::from_smb_service(name).ok_or_else(denied)?)
     }
     fn connect_id(&self,share:ShareId)->io::Result<Tree<'_,'r>>{
+        self.select_with_catalog(share).map(|(tree,_)|tree)
+    }
+    fn select_with_catalog(&self,share:ShareId)->io::Result<(Tree<'_,'r>,Catalog)>{
         self.source.at(|db,c|{
             if Credential::current(db,&c)?!=self.original{return Err(denied());}
             let setting=share_mode::find(db,&c,share)?.ok_or_else(denied)?;
-            if setting.mode==Mode::Disabled{return Err(denied());}Ok(Tree{session:self,setting})
+            if setting.mode==Mode::Disabled{return Err(denied());}Ok((Tree{session:self,setting},c))
         })
     }
 }
