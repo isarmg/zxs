@@ -141,6 +141,8 @@ def finish(state, operation, *, selected=None):
     with locked(state, live=live, operation=operation,
                 phase="记原提交回执；正式归档可能已出现，不能按返回失败判断是否发布") as (con, row, state):
         if live is not None: live.check_instance(row, lifecycle.instance(con))
+        if selected is not None and selected.purpose == "conflict-fork":
+            selected.require_link(con)
         done = con.execute("SELECT marker,digest FROM completed WHERE operation=?", (operation,)).fetchone()
         if done is not None:
             marker = Commit.decode(done["marker"])
@@ -148,7 +150,7 @@ def finish(state, operation, *, selected=None):
             if marker.operation != operation: raise Rejected("completed record does not name the original operation")
             if selected is not None:
                 selected.check_marker(marker, done["digest"])
-                if selected.purpose == "retry":
+                if selected.purpose in ("retry", "conflict-fork"):
                     raise Rejected("原操作已登记完成；本次没有上传，请只读查询其历史回执")
             matched = (confirm_final(target, marker, done["digest"]) if selected is None else
                        selected.store.confirm(marker, done["digest"]))
@@ -263,10 +265,41 @@ def history(archive, store):
     return catalog.history(catalog.anchor.marker.operation)
 
 
-def fork_pending(state, operation):
+def _record_fork(con, operation, marker, digest):
+    con.execute("INSERT INTO forked_original VALUES(?,?)", (operation, marker.operation))
+    con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (marker.encode(), digest))
+
+
+def _fork_reviewed(state, operation, selected):
+    if (selected.purpose != "conflict-fork" or operation != selected.old.operation
+            or Path(state).absolute() != selected.live.state or not selected.used):
+        raise Rejected("not the confirmed conflict-fork decision for this original operation")
+    selected.check_inputs()  # Refuses a closed/unprepared choice before opening a writer.
+    old, proposed = selected.old, selected.proposed
+    if (proposed != Commit(old.repo, proposed.branch, 1, selected.operation, old.parent, old.tree)
+            or proposed.branch == old.branch or proposed.operation == old.operation):
+        raise Rejected("new marker does not preserve the reviewed frozen candidate's ancestry")
+    with locked(state, live=selected.live, operation=proposed.operation,
+                phase="登记原冲突操作的指定后继；不能仅从私有副本判断是否已受理") as (con, row, _):
+        selected.check_pending(con, row)
+        selected.check_inputs()
+        selected.check_empty_slot()
+        sha = selected.area.copy_with_marker(selected.candidate, selected.old_sha, proposed, selected.check_inputs)
+        selected.check_pending(con, row)
+        selected.check_empty_slot()
+        selected.check_inputs()
+        selected.marker, selected.digest = proposed, sha
+        _record_fork(con, operation, proposed, sha)
+    # Same durable successor and held non-overwrite publication path, never the old branch slot.
+    return finish(state, proposed.operation, selected=selected)
+
+
+def fork_pending(state, operation, *, selected=None):
     """Explicitly rebranch the actual original frozen candidate, never today's worktree."""
     check_id(operation)
     require_native_writer()  # Reject an unavailable native primitive before opening/recovering SQLite.
+    if selected is not None:
+        return _fork_reviewed(state, operation, selected)
     with held_candidates(state) as area, locked(state) as (con, row, state):
         area.check_state()
         prior = con.execute("SELECT successor FROM forked_original WHERE operation=?", (operation,)).fetchone()
@@ -284,6 +317,5 @@ def fork_pending(state, operation):
             marker = Commit(old.repo, new_id(), 1, new_id(), old.parent, old.tree)
             successor = marker.operation
             digest = area.fork(old, row["pending_sha"], marker)
-            con.execute("INSERT INTO forked_original VALUES(?,?)", (operation, successor))
-            con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (marker.encode(), digest))
+            _record_fork(con, operation, marker, digest)
     return finish(state, successor)

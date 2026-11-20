@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from ..capacity import describe
 from .branch_choice import SnapshotBranch
 from .commit_choice import CommitChoice
+from .pending_fork import PendingFork
 from .retry_choice import PendingRetry
 from .widgets import button, confirm, label
 
@@ -19,8 +20,9 @@ class CommitControls(QWidget):
         self.new_branch = button("从签出时的原节点创建新分支…", self.branch)
         self.query = button("查询该次操作的原回执", self.inspect)
         self.retry = button("核对并续作原待决操作…", self.resume)
+        self.conflict_fork = button("核对同代冲突，用原冻结归档另建分支…", self.fork_conflict)
         row.addWidget(self.save); row.addWidget(self.query); box.addLayout(row)
-        box.addWidget(self.new_branch); box.addWidget(self.retry)
+        box.addWidget(self.new_branch); box.addWidget(self.retry); box.addWidget(self.conflict_fork)
         self.output = label(); box.addWidget(self.output)
         self.set_session(None)
 
@@ -31,6 +33,13 @@ class CommitControls(QWidget):
         free = self.session is not None and self.running is None and self.last is not None
         self.query.setEnabled(free)
         self.retry.setEnabled(free and self.last.pending_seen and not self.last.conflict)
+        self.conflict_fork.setEnabled(free and self.last.conflict_pending_seen)
+
+    @staticmethod
+    def operation_numbers(job):
+        if isinstance(job, PendingFork):
+            return f"原冲突操作：{job.old.operation}\n指定后继：{job.operation}"
+        return f"操作号：{job.operation}"
 
     def set_session(self, live):
         if self.last is not None and self.last is not self.running: self.last.release()
@@ -129,7 +138,7 @@ class CommitControls(QWidget):
             self.running = None
             self.blocked = kind != "completed"
             self.buttons()
-            self.output.setText(f"{text}\nSTATE：{job.live.state}\n操作号：{job.operation}")
+            self.output.setText(f"{text}\nSTATE：{job.live.state}\n{self.operation_numbers(job)}")
         self.submit(job, "正在只读查询本次原操作…", job.result,
                     lambda result: end(*result), lambda error: end("unknown", f"原结果未知：{describe(error)}。未发布或重试。"))
 
@@ -171,3 +180,57 @@ class CommitControls(QWidget):
                 finish_view(f"{describe(exc)}\n请只读查询原回执。")
         self.submit(attempt, "正在只读核对原候选、分支基线和正式槽…", attempt.prepare, reviewed,
                     lambda err: finish_view(f"不能同意续作：{describe(err)}。未上传或自动分叉。"))
+
+    def fork_conflict(self):
+        original, live = self.last, self.session
+        if (original is None or live is None or self.running is not None or self.owner.pending is not None
+                or not original.conflict_pending_seen): return
+        try: attempt = PendingFork(original)
+        except Exception as err:
+            self.output.setText(describe(err)); self.buttons(); return
+        self.running = attempt; self.buttons()
+
+        def current():
+            return self.session is live and self.last is original and self.running is attempt
+
+        def record(message, *, completed=False):
+            receipt = f"{message}\n原 STATE：{attempt.live.state}\n{self.operation_numbers(attempt)}"
+            if not current():
+                self.discard(attempt)
+                self.owner.inform("原窗口已变，不将这笔回执用于其他工作树。\n" + receipt)
+                return
+            self.last, self.running, self.blocked = attempt, None, True
+            self.discard(original)
+            self.output.setText(receipt)
+            self.blocked = not completed
+            self.buttons()
+            if completed: self.refresh_status()
+
+        def failed(error):
+            if attempt.used:
+                record(f"{describe(error)}\n请只读查询原冲突操作和指定后继，不会另发。")
+            else:
+                if current(): self.output.setText(f"{describe(error)}\n没有产生已受理后继。")
+                self.discard(attempt)
+
+        def reviewed(details):
+            try:
+                if not current() or self.owner.pending is not None:
+                    failed("已离开原工作树或原操作；未分叉。"); return
+                terms = ("我确认使用上面这份冻结归档。STATE 由本人独占，STORE 不同步、无人改动本次暂存名。"
+                         "我同意后继登记完成后切换该工作树的基线，不发布冻结后的编辑。")
+                if not confirm(self, "把已冻结的冲突提交发布为新分支", details,
+                               attestation=terms, action_text="发布原候选到指定新分支"):
+                    failed("未确认；没有制作后继或上传。"); return
+                if not current() or self.owner.pending is not None:
+                    failed("确认期间原工作树或原操作已改变；未分叉。"); return
+                self.output.setText(f"已确认这次冲突分叉，请勿重发。\n{self.operation_numbers(attempt)}")
+                def done(result):
+                    path, marker = result
+                    record(f"该后继的新分支已发布：{path}\n分支：{marker.branch} · 第 1 代。"
+                           "已记录完成，当前基线以刷新状态为准。", completed=True)
+                self.submit(attempt, "正在复制原冻结归档并发布到指定新分支…", attempt.run, done, failed)
+            except Exception as err:
+                failed(err)
+
+        self.submit(attempt, "正在只读核实真正的同代竞争及原冻结归档…", attempt.prepare, reviewed, failed)

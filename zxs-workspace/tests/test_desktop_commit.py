@@ -17,6 +17,7 @@ from zipworkspace import lifecycle, private_stage, publish, worktree
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
 from zipworkspace.desktop.commit_choice import CommitChoice
+from zipworkspace.desktop.pending_fork import PendingFork
 from zipworkspace.desktop.selection import Selection
 from zipworkspace.desktop.retry_choice import PendingRetry
 from zipworkspace.model import Commit, Manifest, Rejected
@@ -616,6 +617,253 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
             self.assertFalse(controls.retry.isEnabled())
             self.assertEqual(original.result()[0],"completed")
         finally: win.close()
+
+
+class FrozenConflictBranch(OriginalCheckoutFixture):
+    needs_freeze = True
+
+    def conflicted(self, mode="valid"):
+        (self.tree/"story").write_bytes(b"losing attempt, already frozen")
+        original = CommitChoice(self.live); self.addCleanup(original.release)
+        original.prepare()
+        winner = replace(self.first, generation=2, operation="d"*32,
+                         parent="e"*32 if mode == "wrong-parent" else self.first.operation)
+        slot = self.store/winner.filename
+        if mode == "corrupt":
+            slot.write_bytes(b"not a ZIP, but bytes differ from the original")
+        else:
+            snapshot(slot, winner)
+        with self.assertRaises(publish.Conflict): original.run()
+        self.assertFalse(original.conflict_pending_seen)  # A publish error is not the requested readback.
+        self.assertEqual(original.result()[0], "pending")
+        self.assertTrue(original.conflict_pending_seen)
+        self.assertFalse(original.pending_seen)
+        with self.assertRaises(Rejected): PendingRetry(original)
+        return original, slot, winner
+
+    def review_fork(self, original):
+        attempt = PendingFork(original); self.addCleanup(attempt.release)
+        text = attempt.prepare()
+        return attempt, text
+
+    def test_confirmed_fork_keeps_exact_losing_tree_and_never_opens_live_edits(self):
+        original, slot, winner = self.conflicted()
+        old_path = self.state/(original.operation+".zxs")
+        old_bytes, winner_bytes = old_path.read_bytes(), slot.read_bytes()
+        (self.tree/"story").write_bytes(b"later editor changes")
+        self.live.revoke_branch_source()  # No dependency on the initial browser selection.
+        with patch.object(os, "fsync", side_effect=AssertionError("prepare is read-only")):
+            attempt, detail = self.review_fork(original)
+        for value in (original.operation, original.digest, winner.operation, attempt.operation,
+                      attempt.proposed.branch, self.store/attempt.proposed.filename):
+            self.assertIn(str(value), detail)
+        with patch.object(worktree, "locked", side_effect=AssertionError("unconfirmed writer")):
+            with self.assertRaises(Rejected):
+                worktree.fork_pending(self.state, original.operation, selected=attempt)
+        with patch.object(worktree, "anonymous_capture", side_effect=AssertionError("must not freeze")), \
+             patch.object(worktree, "frozen_tree", side_effect=AssertionError("must not scan worktree")), \
+             patch.object(worktree, "publish", side_effect=AssertionError("must publish through held STORE")):
+            path, marker = attempt.run()
+        self.assertEqual((marker.operation, marker.parent, marker.tree, marker.generation),
+                         (attempt.operation, original.marker.parent, original.marker.tree, 1))
+        self.assertEqual((path, marker.branch), (self.store/attempt.proposed.filename, attempt.proposed.branch))
+        self.assertNotEqual(marker.branch, original.marker.branch)
+        with zipfile.ZipFile(path) as doc:
+            self.assertEqual(doc.read("story"), b"losing attempt, already frozen")
+            self.assertIn("empty/", doc.namelist())
+        self.assertEqual((self.tree/"story").read_bytes(), b"later editor changes")
+        self.assertEqual((old_path.read_bytes(), slot.read_bytes()), (old_bytes, winner_bytes))
+        self.assertEqual(self.live.status()["base_operation"], attempt.operation)
+        self.assertEqual(original.result()[0], "forked")
+        self.assertEqual(attempt.result()[0], "completed")
+        with self.assertRaises(Rejected): attempt.run()
+
+    def reject_bad_winner(self, mode):
+        original, slot, _ = self.conflicted(mode)
+        before = {p.name for p in self.state.iterdir()}
+        saved = slot.read_bytes()
+        attempt = PendingFork(original); self.addCleanup(attempt.release)
+        with patch.object(os, "fsync", side_effect=AssertionError("no output for an invalid winner")), \
+             self.assertRaises((Rejected, zipfile.BadZipFile)):
+            attempt.prepare()
+        self.assertTrue(attempt.closed)
+        with self.assertRaises(Rejected): attempt.run()
+        self.assertEqual({p.name for p in self.state.iterdir()}, before)
+        self.assertEqual(slot.read_bytes(), saved)
+        self.assertEqual(self.live.status()["pending_operation"], original.operation)
+
+    def test_different_bytes_without_valid_zip_are_not_a_conflict_authorization(self):
+        self.reject_bad_winner("corrupt")
+
+    def test_valid_zip_from_the_wrong_parent_is_not_this_conflict(self):
+        self.reject_bad_winner("wrong-parent")
+
+    def test_equal_byte_replacements_of_both_reviewed_names_are_rejected(self):
+        original, slot, _ = self.conflicted()
+        for leaf in (self.state/(original.operation+".zxs"), slot):
+            with self.subTest(name=leaf.name):
+                self.assertEqual(original.result()[0], "pending")
+                attempt, _ = self.review_fork(original)
+                content = leaf.read_bytes()
+                held = self.root/("held-"+leaf.name); leaf.rename(held)
+                leaf.write_bytes(content)
+                with patch.object(worktree, "locked", side_effect=AssertionError("cannot reach a writer")), \
+                     self.assertRaises(Rejected):
+                    attempt.run()
+                leaf.rename(self.root/("replacement-"+leaf.name))
+                held.rename(leaf)
+                self.assertEqual(attempt.result()[0], "unaccepted")
+                self.assertFalse((self.state/(attempt.operation+".zxs")).exists())
+
+    def test_an_intervening_different_successor_is_not_adopted(self):
+        original, slot, _ = self.conflicted()
+        attempt, _ = self.review_fork(original)
+        with patch.object(worktree, "finish", side_effect=OSError("CLI intent only")), self.assertRaises(OSError):
+            worktree.fork_pending(self.state, original.operation)  # Deliberate separate CLI decision.
+        successor = self.live.status()["pending_operation"]
+        self.assertNotIn(successor, (original.operation, attempt.operation))
+        with patch.object(worktree, "_publish", side_effect=AssertionError("do not follow another successor")), \
+             self.assertRaises(Rejected):
+            attempt.run()
+        self.assertEqual(attempt.result()[0], "other")
+        self.assertFalse((self.state/(attempt.operation+".zxs")).exists())
+        self.assertCountEqual(self.store.iterdir(), (self.original, slot))
+
+    def test_new_slot_collision_never_replaces_or_picks_a_different_name(self):
+        original, slot, _ = self.conflicted()
+        attempt, _ = self.review_fork(original)
+        new_leaf = self.store/attempt.proposed.filename
+        new_leaf.write_bytes(b"reserved by someone else")
+        with self.assertRaises(publish.Conflict): attempt.run()
+        self.assertEqual(new_leaf.read_bytes(), b"reserved by someone else")
+        self.assertEqual(self.live.status()["pending_operation"], original.operation)
+        self.assertEqual(attempt.result()[0], "unaccepted")
+        self.assertFalse((self.state/(attempt.operation+".zxs")).exists())
+        self.assertCountEqual(self.store.iterdir(), (self.original, slot, new_leaf))
+
+    def test_lost_reply_after_durable_acceptance_only_observes_the_original_pair(self):
+        original, _, _ = self.conflicted()
+        attempt, _ = self.review_fork(original)
+        with patch.object(worktree, "finish", side_effect=publish.Uncertain("owner stops after SQLite COMMIT")), \
+             self.assertRaises(publish.Uncertain): attempt.run()
+        self.assertEqual(self.live.status()["pending_operation"], attempt.operation)
+        self.assertFalse((self.store/attempt.proposed.filename).exists())
+        with patch.object(worktree, "finish", side_effect=AssertionError("receipt query cannot resume")), \
+             patch.object(os, "fsync", side_effect=AssertionError("receipt query cannot sync")):
+            kind, text = attempt.result()
+        self.assertEqual(kind, "pending")
+        self.assertIn(attempt.operation, text); self.assertIn("不能当作完成", text)
+        self.assertEqual(original.result()[0], "forked")
+
+    def test_losing_inputs_are_no_longer_required_after_durable_successor_acceptance(self):
+        original, slot, _ = self.conflicted()
+        attempt, _ = self.review_fork(original)
+        old_private = self.state/(original.operation+".zxs")
+        real = worktree.finish
+        def originals_moved(state, operation, *, selected=None):
+            for proof in (slot, old_private):
+                proof.rename(self.root/("moved-"+proof.name))
+            return real(state, operation, selected=selected)
+        with patch.object(worktree, "finish", side_effect=originals_moved):
+            target, marker = attempt.run()
+        self.assertEqual((target, marker), (self.store/attempt.proposed.filename, attempt.proposed))
+        self.assertEqual(attempt.result()[0], "completed")
+
+    def test_new_slot_claimed_after_acceptance_keeps_exact_successor_pending(self):
+        original, _, _ = self.conflicted()
+        attempt, _ = self.review_fork(original)
+        formerly_empty = self.store/attempt.proposed.filename
+        real = worktree.finish
+        def claim(state, operation, *, selected=None):
+            formerly_empty.write_bytes(b"other data at the accepted successor slot")
+            return real(state, operation, selected=selected)
+        with patch.object(worktree, "finish", side_effect=claim), self.assertRaises(publish.Conflict):
+            attempt.run()
+        self.assertEqual(formerly_empty.read_bytes(), b"other data at the accepted successor slot")
+        self.assertEqual(self.live.status()["pending_operation"], attempt.operation)
+        self.assertEqual(attempt.result()[0], "pending")
+
+    def test_completed_by_another_client_between_transactions_never_runs_store_readback_twice(self):
+        original, _, _ = self.conflicted()
+        attempt, _ = self.review_fork(original)
+        real = worktree.finish
+        def concurrent(state, operation, *, selected=None):
+            real(state, operation)  # The same already accepted successor finished via CLI.
+            with patch.object(publish.StoreReadback, "confirm", side_effect=AssertionError("completed must only be queried")):
+                return real(state, operation, selected=selected)
+        with patch.object(worktree, "finish", side_effect=concurrent), self.assertRaisesRegex(Rejected,"已登记完成"):
+            attempt.run()
+        self.assertEqual(attempt.result()[0], "completed")
+        self.assertEqual(self.live.status()["base_operation"], attempt.operation)
+
+    def test_visible_store_file_without_receipt_is_pending_and_later_only_confirms_that_successor(self):
+        original, _, _ = self.conflicted()
+        attempt, _ = self.review_fork(original)
+        real = worktree._publish
+        def lost(*args, **kw):
+            real(*args, **kw)
+            raise publish.Uncertain("final archive is visible, original receipt not recorded")
+        with patch.object(worktree, "_publish", side_effect=lost), self.assertRaises(publish.Uncertain):
+            attempt.run()
+        target = self.store/attempt.proposed.filename
+        seen = target.stat()
+        self.assertEqual(attempt.result()[0], "pending")
+        with patch.object(publish, "_new_upload", side_effect=AssertionError("no second upload")):
+            returned, marker = worktree.finish(self.state, attempt.operation)  # Outside GUI; explicit original ID.
+        self.assertEqual((returned, marker), (target, attempt.proposed))
+        self.assertTrue(os.path.samestat(seen, target.stat()))
+        self.assertEqual(attempt.result()[0], "completed")
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_window_cancel_and_a_stale_confirmation_cannot_publish_then_fresh_confirmation_runs_once(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        controls = win.archive.checkout.commits
+        original, slot, _ = self.conflicted()
+        def immediate(_title, call, accept, *, failed=None):
+            try: answer = call()
+            except Exception as error:
+                if failed is None: raise
+                failed(error)
+            else: accept(answer)
+            return object()
+        controls.set_session(self.live); controls.last, controls.blocked = original, True
+        controls.buttons()
+        self.assertTrue(controls.conflict_fork.isEnabled()); self.assertFalse(controls.retry.isEnabled())
+        def stale(*args, **kw):
+            win.pending = object()  # An intervening event during the actual confirmation.
+            return True
+        with patch.object(win, "job", side_effect=immediate), patch.object(controls, "refresh_status"), \
+             patch.object(worktree, "fork_pending", side_effect=AssertionError("not authorized")):
+            with patch.object(commit_controls, "confirm", return_value=False):
+                controls.conflict_fork.click()
+            self.assertFalse(controls.conflict_fork.isEnabled())
+            self.assertIs(controls.last, original)
+            controls.query.click()
+            try:
+                with patch.object(commit_controls, "confirm", side_effect=stale):
+                    controls.conflict_fork.click()
+            finally: win.pending = None
+        self.assertCountEqual(self.store.iterdir(), (self.original, slot))
+        def approve(_parent, _question, text, *, attestation, action_text):
+            self.assertIn(original.operation, text); self.assertIn("不发布冻结后的编辑", attestation)
+            self.assertEqual(action_text, "发布原候选到指定新分支")
+            self.assertFalse(controls.conflict_fork.isEnabled())
+            controls.conflict_fork.click()
+            return True
+        with patch.object(win, "job", side_effect=immediate), patch.object(controls, "refresh_status"), \
+             patch.object(commit_controls, "confirm", side_effect=approve) as ask:
+            controls.query.click()
+            controls.conflict_fork.click()
+            self.assertEqual(ask.call_count, 1)
+        self.assertIsInstance(controls.last, PendingFork)
+        self.assertIn(original.operation, controls.output.text())
+        self.assertIn(controls.last.operation, controls.output.text())
+        self.assertFalse(controls.retry.isEnabled())
+        self.assertEqual(self.live.status()["pending_operation"], None)
 
 
 class DisplayedNodeBranch(OriginalCheckoutFixture):

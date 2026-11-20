@@ -168,7 +168,7 @@ class CheckoutPane(QWidget):
         details = (f"原工作目录：{live.work}\n原 STATE：{live.state}\n原 STORE：{live.store}\n"
                    f"签出操作：{live.checkout_operation}\n")
         if last is not None:
-            details += f"本窗口最近提交或分支操作：{last.operation}（操作号不代表已受理或已完成）\n"
+            details += f"本窗口最近的操作（不代表已受理或已完成）：\n{self.commits.operation_numbers(last)}\n"
         details += ("\n只关闭本窗口的会话，不删除、隐藏、提交或恢复任何内容，也不取消已有待决。"
                     "需要继续时，请先用命令行 status 或 checkout-status 核对原 STATE；窗口不会重新接管。")
         if not confirm(self, "关闭本窗口的工作树会话", details,

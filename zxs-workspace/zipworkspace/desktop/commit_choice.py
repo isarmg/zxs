@@ -28,7 +28,7 @@ class CommitChoice:
         self.stack = ExitStack()
         self.base = self.original = self.marker = self.digest = None
         self.used = self.closed = self.ready = self.pending_seen = False
-        self.conflict = False
+        self.conflict = self.conflict_pending_seen = False
         self.ack_fd = None
 
     def close(self):
@@ -127,10 +127,13 @@ class CommitChoice:
 
     def result(self):
         # Do not hand out a replay decision unless this particular original's read txn actually returned.
-        self.pending_seen = False
+        self.pending_seen = self.conflict_pending_seen = False
         outcome = self._result()
         if self.conflict and outcome[0] == "pending":
-            return "pending", "原候选仍在，但本窗口已核到同代冲突。不会覆盖、续传或自动分叉。"
+            self.conflict_pending_seen = self.purpose == "commit"
+            action = ("可另行核对竞争者及原冻结归档。" if self.conflict_pending_seen else "请保留原操作号。")
+            return "pending", ("此操作仍待决，原槽核对曾发现冲突；不是已核实的竞争节点。"
+                               "不会覆盖或续传。" + action)
         self.pending_seen = outcome[0] == "pending"
         return outcome
 
