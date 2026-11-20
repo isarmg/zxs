@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // Displaying the declarations never reads member bodies or grants snapshot identity.
 enum PreviewError: Error { case format, unavailable, cancelled }
@@ -37,6 +38,9 @@ struct DirectoryIndex {
     let root = Member("")
     private var nameBytes = 0, nodes = 0, total = 0
     private var centralAt = 0, central: [UInt8] = [], ending: [UInt8] = []
+    private var comment = [UInt8]()
+    var bodyBytes: Int { total }
+    var entryCount: Int { nodes }
     // Actual explicit file objects from this observation only; no pathname lookup on a later selection.
     private var files = Set<ObjectIdentifier>()
 
@@ -104,12 +108,99 @@ struct DirectoryIndex {
 
     func checkMember(_ file: Member, mode: MemberReadMode, check: () throws -> Void,
                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
+        try requirePreview(mode != .snapshot)
         let slot = try originalSlot(file)
         let read = try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
             record: slot.central, offset: slot.offset, limit: slot.limit, centralWide: slot.wide,
             size: file.size, mode: mode, check: check, fill: fill)
         let proof = read.indexed.map { TextIndex(root: root, member: file, local: $0.0, pages: $0.1) }
         return MemberCRC(declared: read.declared, actual: read.actual, text: read.text, indexed: proof)
+    }
+
+    struct SnapshotMarker {
+        let repo: String, branch: String, operation: String, parent: String?, tree: String
+        let generation: Int64
+
+        fileprivate static func parse(_ comment: [UInt8]) throws -> SnapshotMarker {
+            let prefix = Array("zip-workspace/1\n".utf8)
+            try requirePreview(comment.starts(with: prefix) && comment.count <= 1024)
+            let encoded = comment.dropFirst(prefix.count)
+            guard let decoded = try JSONSerialization.jsonObject(with: Data(encoded)) as? [String: Any],
+                  Set(decoded.keys) == Set(["branch", "generation", "operation", "parent", "repo", "tree"]),
+                  let generation = decoded["generation"] as? Int64, generation > 0
+            else { throw PreviewError.format }
+            func hex(_ key: String, _ length: Int) throws -> String {
+                guard let s = decoded[key] as? String, s.utf8.count == length,
+                      s.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+                else { throw PreviewError.format }
+                return s
+            }
+            let repo = try hex("repo", 32), branch = try hex("branch", 32), operation = try hex("operation", 32)
+            let parent: String?
+            if decoded["parent"] is NSNull { parent = nil } else { parent = try hex("parent", 32) }
+            try requirePreview((generation == 1 || parent != nil) && parent != Optional(operation))
+            let tree = try hex("tree", 64)
+            let parentJSON = parent.map { "\"\($0)\"" } ?? "null"
+            let canonical = "{\"branch\":\"\(branch)\",\"generation\":\(generation),\"operation\":\"\(operation)\","
+                + "\"parent\":\(parentJSON),\"repo\":\"\(repo)\",\"tree\":\"\(tree)\"}"
+            try requirePreview(canonical.utf8.elementsEqual(encoded))
+            return SnapshotMarker(repo: repo, branch: branch, operation: operation, parent: parent,
+                                  tree: tree, generation: generation)
+        }
+    }
+
+    func snapshotMarker() throws -> SnapshotMarker { try SnapshotMarker.parse(comment) }
+
+    func verifySnapshot(check: () throws -> Void,
+                        fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> SnapshotMarker {
+        let marker = try snapshotMarker()
+        var scratch = [UInt8](repeating: 0, count: 65_536)
+        func recheckIndex() throws {
+            try StoredBody.match(centralAt, central[...], scratch: &scratch, check: check, fill: fill)
+            try StoredBody.match(centralAt + central.count, ending[...], scratch: &scratch, check: check, fill: fill)
+        }
+        try recheckIndex()
+        var rows: [(String, Member)] = []
+        rows.reserveCapacity(nodes)
+        func add(_ directory: Member, path: String) throws {
+            try check()
+            guard let children = directory.children else { throw PreviewError.format }
+            for member in children.values {
+                try check()
+                let full = path.isEmpty ? member.name : path + "/" + member.name
+                rows.append((full, member))
+                if member.children != nil { try add(member, path: full) }
+            }
+        }
+        try add(root, path: "")
+        try requirePreview(rows.count == nodes)
+        rows.sort { $0.0.utf8.lexicographicallyPrecedes($1.0.utf8) }
+        var tree = SHA256()
+        tree.update(data: Data("zip-workspace tree 1\u{0}".utf8))
+        for (path, member) in rows {
+            // Portable names admitted above have no characters requiring JSON escapes.
+            // The canonical tree format separates entries with a 4-byte length.
+            try check()
+            let directory = member.children != nil
+            var sha = "null"
+            if let slot = member.slot {
+                let proof = try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
+                    record: slot.central, offset: slot.offset, limit: slot.limit, centralWide: slot.wide,
+                    size: member.size, mode: .snapshot, check: check, fill: fill)
+                guard proof.declared == proof.actual, let digest = proof.sha256 else { throw PreviewError.format }
+                if !directory { sha = "\"\(digest)\"" }
+            } else {
+                try requirePreview(directory && !member.explicit)
+            }
+            let kind = directory ? "d" : "f"
+            let row = Data("[\"\(path)\",\"\(kind)\",\(member.size),\(sha)]".utf8)
+            var length = UInt32(row.count).bigEndian
+            withUnsafeBytes(of: &length) { tree.update(bufferPointer: $0) }
+            tree.update(data: row)
+        }
+        try recheckIndex(); try check()
+        try requirePreview(tree.finalize().map { String(format: "%02x", $0) }.joined() == marker.tree)
+        return marker
     }
 
     func textPage(_ file: Member, proof: TextIndex, page: Int, check: () throws -> Void,
@@ -184,6 +275,7 @@ struct DirectoryIndex {
         let cd = try get(at, length)
         var out = DirectoryIndex(), p = 0
         out.centralAt = at; out.central = cd; out.ending = ending
+        out.comment = Array(tail[(e + 22)...])
         var spans: [PhysicalSlot] = []
         for _ in 0..<count {
             try check()
@@ -224,7 +316,8 @@ struct DirectoryIndex {
                                && (host == 3 ? type == 0 || type == (folder ? 4 : 8) : type == 0)
                                && (!folder || body == 0))
             let row = try out.add(path: path, folder: folder, size: body, nameBytes: nl)
-            if !folder { row.slot = slot; out.files.insert(ObjectIdentifier(row)) }
+            row.slot = slot
+            if !folder { out.files.insert(ObjectIdentifier(row)) }
             p = next
         }
         try requirePreview(p == cd.count)

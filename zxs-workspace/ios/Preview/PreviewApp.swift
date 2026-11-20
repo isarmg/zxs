@@ -95,6 +95,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     private let notice = UILabel(), status = UILabel(), location = UILabel(), tableHost = UIStackView()
     private var table = UITableView()
     private let cancelButton = UIButton(type: .system), up = UIButton(type: .system)
+    private let checkAll = UIButton(type: .system)
     private let find = UIButton(type: .system), form = UIStackView(), query = UITextField()
     private var search: NameSearch?
     private let previous = UIButton(type: .system), next = UIButton(type: .system)
@@ -113,7 +114,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         view.backgroundColor = .systemBackground
         for label in [notice, status, location] { label.numberOfLines = 0; label.adjustsFontForContentSizeCategory = true }
         notice.font = .preferredFont(forTextStyle: .headline)
-        notice.text = "ZIP 目录预览\n目录只显示声明；可核验单项 CRC-32 后分页看全文或前部。不认证快照；外部提供方可能自行下载。"
+        notice.text = "ZIP 目录预览\n打开目录只看声明。可另行核验成员或整个 .zxs；不认证来源。外部提供方可能下载。"
         status.font = .preferredFont(forTextStyle: .body); status.numberOfLines = 5
         location.font = .preferredFont(forTextStyle: .footnote)
         location.numberOfLines = 2
@@ -124,6 +125,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         wire(pick, "选择 .zxs 或 Store ZIP", #selector(choose))
         wire(cancelButton, "取消并关闭文件", #selector(cancelRead))
         wire(find, "按名称查找…", #selector(offerFind))
+        wire(checkAll, "核验整个 .zxs…", #selector(offerSnapshot))
         let submit = UIButton(type: .system), fold = UIButton(type: .system)
         wire(submit, "查找", #selector(beginFind))
         wire(fold, "收起", #selector(clearDraft))
@@ -155,7 +157,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         literal.font = .preferredFont(forTextStyle: .body); literal.adjustsFontForContentSizeCategory = true
         literal.isAccessibilityElement = true
         tableHost.axis = .vertical
-        let stack = UIStackView(arrangedSubviews: [notice, pick, find, form, cancelButton, status, location, directoryNav,
+        let stack = UIStackView(arrangedSubviews: [notice, pick, find, form, checkAll, cancelButton, status, location, directoryNav,
                                                    textNav, literal, tableHost])
         stack.axis = .vertical; stack.spacing = 5; stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
@@ -340,6 +342,60 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         }
     }
 
+    @objc private func offerSnapshot() {
+        guard mayNavigate, let view = report, view.isManagedSnapshotName, selection === view.archive.scope,
+              (try? view.archive.checkPreview()) != nil else { return }
+        guard let marker = try? view.directory.snapshotMarker() else {
+            status.text = "这份 .zxs 没有可识别的规范快照标记。仍可浏览目录或核验单项。"
+            return
+        }
+        clearDraft()
+        let alert = UIAlertController(title: "核验整个 .zxs 快照",
+            message: "\(view.name)\n节点 \(marker.operation)\n将读取全部成员正文 \(view.directory.bodyBytes) 字节并复核 ZIP 元数据。可能耗时，可取消。只核内容与包内标记是否一致，不认证作者或分支头；不保存、不上传。外部提供方可能下载。",
+            preferredStyle: .alert)
+        let consent = NSObject()
+        alert.addAction(UIAlertAction(title: "返回目录", style: .cancel) { [weak self, weak alert] _ in
+            guard let self = self, let alert = alert,
+                  self.memberConsent === consent, self.decision === alert else { return }
+            self.memberConsent = nil; self.decision = nil
+        })
+        alert.addAction(UIAlertAction(title: "核验完整内容", style: .default) { [weak self, weak alert, weak origin = view.archive] _ in
+            guard let self = self, let alert = alert,
+                  self.memberConsent === consent, self.decision === alert else { return }
+            self.memberConsent = nil; self.decision = nil
+            guard let current = self.report, current.archive === origin, self.selection === current.archive.scope,
+                  self.active == nil, self.search == nil, (try? current.archive.checkPreview()) != nil else { return }
+            self.verifySnapshot(current)
+        })
+        memberConsent = consent; decision = alert; present(alert, animated: true)
+    }
+
+    private func verifySnapshot(_ view: Report) {
+        let job = DocumentRead(); active = job
+        status.text = "正在读取并核验全部 \(view.directory.bodyBytes) 字节，可取消。"; render()
+        queue.addOperation { [weak self] in
+            let outcome = Result { try job.verifySnapshot(view) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.active === job, self.report?.archive === view.archive,
+                      self.selection === view.archive.scope else { return }
+                self.active = nil
+                guard (try? view.archive.checkPreview()) != nil else { self.clearSelection(); return }
+                switch outcome {
+                case .success(let marker):
+                    self.status.text = "整树内容与包内标记一致。未认证来源。\n第 \(marker.generation) 代 · 节点 \(marker.operation)\n已核 \(view.directory.entryCount) 项、\(view.directory.bodyBytes) B 正文。"
+                    self.render()
+                case .failure(let error):
+                    self.clearSelection()
+                    if case PreviewError.format = error {
+                        self.reset("没有通过整包内容核验：ZIP 布局或实读内容与声明不符。")
+                    } else {
+                        self.reset("没有完整核验结果：原文件变化、权限失效或读取不可用。请重新选择。")
+                    }
+                }
+            }
+        }
+    }
+
     private func offer(_ file: Member) {
         guard mayNavigate, let view = report, selection === view.archive.scope,
               (try? view.archive.scope.check()) != nil else { return }
@@ -433,7 +489,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
             row([reading.back, reading.next]); row([reading.jump, close])
         } else { row([reading.back, reading.next, close]) }
         status.numberOfLines = 3; tableHost.isHidden = true; directoryNav.isHidden = true
-        find.isHidden = true; notice.isHidden = true
+        find.isHidden = true; checkAll.isHidden = true; notice.isHidden = true
         literal.isHidden = false; textNav.isHidden = false
         showTextPage(reading, 0)
     }
@@ -546,7 +602,8 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         trail = []; children = []; page = 0
         status.text = message; location.text = nil; cancelButton.isHidden = active == nil
         cancelButton.setTitle("取消并关闭文件", for: .normal)
-        find.isEnabled = false; up.isEnabled = false; previous.isEnabled = false; next.isEnabled = false
+        find.isEnabled = false; checkAll.isHidden = true
+        up.isEnabled = false; previous.isEnabled = false; next.isEnabled = false
         replacePage(canSelect: false, focus: 0)
     }
     private func enter() {
@@ -561,6 +618,8 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         let idle = active == nil && search == nil
         let finding = search.map { $0.sheet == nil && !$0.consumed } ?? false
         find.isEnabled = idle && report != nil && literal.isHidden
+        checkAll.isHidden = report?.isManagedSnapshotName != true || !literal.isHidden
+        checkAll.isEnabled = idle && !checkAll.isHidden
         cancelButton.setTitle(finding ? "取消查找" : "取消并关闭文件", for: .normal)
         cancelButton.isHidden = active == nil && !finding
         up.isEnabled = idle && trail.count > 1; previous.isEnabled = idle && page > 0

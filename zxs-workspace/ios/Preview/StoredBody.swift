@@ -1,6 +1,7 @@
 import Foundation
+import CryptoKit
 
-enum MemberReadMode: Equatable { case crc, preview, indexed }
+enum MemberReadMode: Equatable { case crc, preview, indexed, snapshot }
 
 struct MemberCRC {
     let declared: UInt32, actual: UInt32
@@ -147,6 +148,7 @@ enum StoredBody {
         let declared: UInt32, actual: UInt32
         let text: PlainText.Pages?
         let indexed: (Geometry, IndexedText)?
+        let sha256: String?
     }
 
     static func chunk(_ at: Int, _ length: Int, into block: inout [UInt8], check: () throws -> Void,
@@ -184,7 +186,9 @@ enum StoredBody {
             try match(centralAt, cd[...], scratch: &scratch, check: check, fill: fill)
             try match(centralAt + cd.count, ending[...], scratch: &scratch, check: check, fill: fill)
         }
-        try checkDirectory()
+        // A whole-snapshot caller compares the entire index once on either
+        // side of all members. Ordinary isolated CRC checks keep their own gates.
+        if mode != .snapshot { try checkDirectory() }
         let flags = u16(cd, p + 8), crc = u32(cd, p + 16), nl = u16(cd, p + 28), streaming = flags & 8 != 0
         let h = try take(offset, 30), version = u16(h, 4), name = u16(h, 26), extra = u16(h, 28)
         try requirePreview(u32(h, 0) == 0x04034b50 && (10...45).contains(version)
@@ -227,17 +231,22 @@ enum StoredBody {
         let builder = try (mode == .indexed ? IndexedText.Build(size: size) : nil)
         var block = [UInt8](repeating: 0, count: builder == nil ? 65_536 : IndexedText.blockBytes)
         var sum = crc32(0, nil, 0), pos = body
+        var hash = mode == .snapshot ? SHA256() : nil
         while pos < end {
             let n = min(block.count, end - pos)
             try chunk(pos, n, into: &block, check: check, fill: fill)
             sum = block.withUnsafeBufferPointer { crc32(sum, $0.baseAddress, uInt(n)) }
+            if hash != nil {
+                block.withUnsafeBytes { raw in hash?.update(bufferPointer: UnsafeRawBufferPointer(rebasing: raw[..<n])) }
+            }
             let relative = pos - body, beforeBudget = captureLimit - relative
             if beforeBudget > 0 { capture?.append(contentsOf: block[..<min(n, beforeBudget)]) }
             try builder?.append(block, count: n, relative: relative, check: check)
             pos += n
         }
         try local.match(scratch: &scratch, check: check, fill: fill)
-        try checkDirectory(); try check()
+        if mode != .snapshot { try checkDirectory() }
+        try check()
         let expected = UInt32(crc), actual = UInt32(sum)
         var text: PlainText.Pages? = nil, indexed: (Geometry, IndexedText)? = nil
         if expected == actual {
@@ -245,7 +254,8 @@ enum StoredBody {
             if let pages = try builder?.finish() { indexed = (local, pages) }
         }
         try check()
-        return Checked(declared: expected, actual: actual, text: text, indexed: indexed)
+        let sha256 = hash.map { $0.finalize().map { String(format: "%02x", $0) }.joined() }
+        return Checked(declared: expected, actual: actual, text: text, indexed: indexed, sha256: sha256)
     }
 
     static func descriptorLength(_ d: [UInt8], wide: Bool, crc: Int, size: Int) throws -> Int {

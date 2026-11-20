@@ -32,6 +32,82 @@ final class DirectoryIndexTests: XCTestCase {
     private func read(_ b: [UInt8]) throws -> DirectoryIndex {
         try DirectoryIndex.read(size: b.count, check: {}, bytes: { Array(b[$0..<($0 + $1)]) })
     }
+    private func marked(_ archive: [UInt8], tree: String, generation: String = "1", parent: String = "null") -> [UInt8] {
+        let json = "{\"branch\":\"\(String(repeating: "b", count: 32))\",\"generation\":\(generation),"
+            + "\"operation\":\"\(String(repeating: "a", count: 32))\",\"parent\":\(parent),"
+            + "\"repo\":\"\(String(repeating: "c", count: 32))\",\"tree\":\"\(tree)\"}"
+        let comment = Array(("zip-workspace/1\n" + json).utf8)
+        return Array(archive.dropLast(2)) + le(comment.count, 2) + comment
+    }
+    private func snapshot(_ b: [UInt8]) throws -> DirectoryIndex.SnapshotMarker {
+        try read(b).verifySnapshot(check: {}) { try self.copy(b, $0, $1) }
+    }
+    func testWholeSnapshotChecksOneBodyPassAndTheCanonicalTreeInFullPathOrder() throws {
+        // Independent canonical tree vector: a (implicit), a-.txt, a/图, 空 (explicit).
+        // A depth-first walk would hash a/图 before its root-level neighbor, despite the canonical order.
+        let names = ["a/图", "空/", "a-.txt"]
+        let tree = "986825f62ec0a8d1a13e92f30ebd203b825fd433d0109eac51f385e71e4473cd"
+        let b = marked(zip(names, reverse: true), tree: tree)
+        let index = try read(b)
+        var position = 0, bodies: [Range<Int>] = []
+        for name in names {
+            let body = position + 30 + name.utf8.count
+            if !name.hasSuffix("/") { bodies.append(body..<(body + 3)) }
+            position = name.hasSuffix("/") ? body : body + 3
+        }
+        var bytes = 0
+        let item = try index.verifySnapshot(check: {}) { offset, out in
+            for range in bodies {
+                bytes += max(0, min(range.upperBound, offset + out.count) - max(range.lowerBound, offset))
+            }
+            try self.copy(b, offset, out)
+        }
+        XCTAssertEqual(item.tree, tree)
+        XCTAssertEqual(item.generation, 1)
+        XCTAssertEqual(item.operation, String(repeating: "a", count: 32))
+        XCTAssertNil(item.parent)
+        XCTAssertEqual(index.entryCount, 4)
+        XCTAssertEqual(index.bodyBytes, 6)
+        XCTAssertEqual(bytes, 6)
+        var badDirectory = b
+        let secondHeader = 30 + names[0].utf8.count + 3
+        badDirectory[secondHeader + 8] = 8 // Explicit empty directory with false local compression.
+        XCTAssertEqual(try read(badDirectory).root.children?["空"]?.children?.count, 0)
+        XCTAssertThrowsError(try snapshot(badDirectory))
+        XCTAssertEqual(try snapshot(marked(zip([]),
+            tree: "ead0d74a9b1110a6e8aa7b227316376cc0883c3fb6b8404f31b0b2719d015657")).generation, 1)
+    }
+    func testWholeSnapshotCannotBeReducedToCrcOrAnUnprovedMarker() throws {
+        let tree = "55b10481df5b6450c7095890b16f73507981d82b55923c290d705c3bff429441"
+        let archive = zip(["x"]), b = marked(archive, tree: tree)
+        XCTAssertEqual(try snapshot(b).tree, tree)
+        // Changing the payload and both CRC declarations is not a matching tree digest.
+        let different = marked(textArchive([7, 8, 9]), tree: tree), changed = try read(different)
+        XCTAssertTrue(try verify(changed, XCTUnwrap(changed.root.children?["x"]), different).matches)
+        XCTAssertThrowsError(try snapshot(different))
+        XCTAssertThrowsError(try snapshot(archive)) // Still a normal directory preview, no typed marker.
+        XCTAssertThrowsError(try snapshot(marked(archive, tree: tree, generation: "true")))
+        XCTAssertThrowsError(try snapshot(marked(archive, tree: tree, generation: "2"))) // Missing parent.
+        let next = marked(archive, tree: tree, generation: "2", parent: "\"\(String(repeating: "d", count: 32))\"")
+        XCTAssertEqual(try snapshot(next).parent, String(repeating: "d", count: 32))
+    }
+    func testWholeSnapshotStopsBeforeBodiesIfTheOriginalFooterChangedAndCanCancel() throws {
+        let tree = "55b10481df5b6450c7095890b16f73507981d82b55923c290d705c3bff429441"
+        let b = marked(zip(["x"]), tree: tree), index = try read(b)
+        var changed = b; changed[changed.count - 3] ^= 1
+        XCTAssertThrowsError(try index.verifySnapshot(check: {}) { off, out in
+            XCTAssertGreaterThanOrEqual(off, 34)
+            try self.copy(changed, off, out)
+        })
+        var cancelled = false
+        XCTAssertThrowsError(try index.verifySnapshot(check: { if cancelled { throw PreviewError.cancelled } }) { off, out in
+            try self.copy(b, off, out)
+            if off == 31 { cancelled = true }
+        }) { error in
+            guard case PreviewError.cancelled = error else { return XCTFail("unexpected error") }
+        }
+        XCTAssertTrue(cancelled)
+    }
     func testEmptyAndNestedStoredDirectoriesInReversePhysicalOrder() throws {
         let b = zip(["设计/选项/图纸", "空/", "设计/"], reverse: true), index = try read(b)
         let r = index.root

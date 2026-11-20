@@ -124,6 +124,7 @@ final class HeldArchive {
 struct Report {
     let archive: HeldArchive, directory: DirectoryIndex
     var name: String { archive.scope.selected.lastPathComponent }
+    var isManagedSnapshotName: Bool { archive.scope.selected.pathExtension.lowercased() == "zxs" }
 }
 
 final class DocumentRead {
@@ -189,6 +190,16 @@ final class DocumentRead {
             try archive.withReads(at: name, check: self.check) { fill in
                 try report.directory.checkMember(file, mode: mode,
                     check: { try self.check(); try archive.scope.check() }, fill: fill)
+            }
+        }
+    }
+
+    func verifySnapshot(_ report: Report) throws -> DirectoryIndex.SnapshotMarker {
+        let archive = report.archive
+        guard report.isManagedSnapshotName else { throw PreviewError.format }
+        return try coordinated(archive.scope) { name in
+            try archive.withReads(at: name, check: self.check) { fill in
+                try report.directory.verifySnapshot(check: { try self.check(); try archive.scope.check() }, fill: fill)
             }
         }
     }
