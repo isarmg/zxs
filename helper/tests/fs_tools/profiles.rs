@@ -46,7 +46,7 @@ fn missing_unchecked_mismatch_and_unavailable_versions_are_not_device_results(){
 fn only_supported_bundled_slots_are_private_and_detection_is_not_execution(){
     for p in PROFILES {
         let path = p.slots().join("/");
-        if matches!(p.format,"fat32"|"exfat"|"ext4"|"xfs") {
+        if matches!(p.format,"fat32"|"exfat"|"ext4"|"xfs"|"ntfs") {
             assert!(path.starts_with("usr/lib/local-ops-helper/disk-tools-v1/bin/"));
         } else {
             assert!(!p.private());assert!(!path.contains("disk-tools-v1"));
@@ -54,6 +54,8 @@ fn only_supported_bundled_slots_are_private_and_detection_is_not_execution(){
     }
     assert_eq!(PROFILES[0].slots().last(),Some(&"e2fsck"));
     assert_eq!(PROFILES[0].action(),"leased-saved-copy-readonly");
+    assert_eq!(PROFILES[1].slots().last(),Some(&"ntfsfix"));
+    assert_eq!(PROFILES[1].action(),"leased-saved-copy-limited-readonly");
     assert_eq!(PROFILES[5].action(),"sealed-copy-readonly");
     assert_eq!(PROFILES[2].action(),"host-version-and-loaded-module-required-not-enabled");
 }

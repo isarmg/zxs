@@ -87,7 +87,7 @@ fn pairing_or_a_user_supplied_format_path_or_flags_cannot_create_any_copy_grant(
 fn only_the_terminal_chooses_format_and_even_paired_clients_never_choose_a_tool(){
     let now=Instant::now();let mut p=logged(now);
     for path in ["/api/fat32/preview","/api/exfat/preview","/api/ext4/preview","/api/copy/preview?format=ext4","/api/copy/check?format=ext4",
-                 "/api/xfs/repair","/api/copy/check?format=xfs","/api/exfat/repair"]{
+                 "/api/xfs/repair","/api/copy/check?format=xfs","/api/exfat/repair","/api/ntfs/repair","/api/copy/check?format=ntfs"]{
         assert_eq!(p.handle(approved(path),now).code,404);
     }
     let mut q=approved("/api/copy/preview");q.content_type=Some("application/octet-stream".into());q.body=b"exFAT".to_vec();

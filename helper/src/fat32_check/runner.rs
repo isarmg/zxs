@@ -1,7 +1,7 @@
 //! One isolated invocation. The checker never gets host /dev, the caller's
 //! namespace/terminal, any host directory, or an arbitrary option. Only the
 //! leased branches bind just the explicitly saved copy.
-use super::{Format,ext4,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
+use super::{Format,ext4,ntfs,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -18,9 +18,9 @@ const LIMIT:Duration=Duration::from_secs(30);
 const LEASED_LIMIT:Duration=Duration::from_secs(10*60);
 
 #[derive(Clone,Copy,PartialEq,Eq)]
-enum Budget{Sealed,Ext4,Xfs}
+enum Budget{Sealed,Leased,Xfs}
 pub(super) fn prepare_worker()->io::Result<()> {prepare(Budget::Sealed)}
-pub(super) fn prepare_ext4_worker()->io::Result<()> {prepare(Budget::Ext4)}
+pub(super) fn prepare_leased_worker()->io::Result<()> {prepare(Budget::Leased)}
 pub(super) fn prepare_xfs_worker()->io::Result<()> {prepare(Budget::Xfs)}
 fn prepare(budget:Budget)->io::Result<()> {
     // This command owns the entire CLI process. Never lower process rlimits or
@@ -82,11 +82,18 @@ pub(super) fn check_xfs(runtime:&Runtime,image:&xfs::Image)->io::Result<xfs::Rep
     if !delivered(&status,code){return Err(invalid("xfs_repair delivery or actual exit not confirmed"));}
     Ok(xfs::classify(code,&out,&err,image.extent()))
 }
+pub(super) fn observe_ntfs(runtime:&Runtime,image:&ntfs::Image)->io::Result<ntfs::Report>{
+    runtime.require_ntfs()?;
+    let (code,out,err,status)=invoke(runtime,Operand::LeasedNtfs(image))?;
+    image.require()?;
+    if !delivered(&status,code){return Err(invalid("ntfsfix delivery or actual exit not confirmed"));}
+    Ok(ntfs::classify(code,&out,&err,image.extent()))
+}
 #[derive(Clone,Copy)]
-enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image)}
+enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image),LeasedNtfs(&'a ntfs::Image)}
 impl<'a> Operand<'a>{
     fn lease(self)->Option<&'a File>{
-        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file())}
+        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file())}
     }
     fn sandbox(self,cmd:&mut Command)->io::Result<OwnedFd>{
         match self{
@@ -107,8 +114,9 @@ impl<'a> Operand<'a>{
 fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
     let ext=matches!(copy,Operand::LeasedExt4(_));
     let xfs=matches!(copy,Operand::LeasedXfs(_));
+    let ntfs=matches!(copy,Operand::LeasedNtfs(_));
     let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin); // real EOF, never a terminal
-    let null=if ext{Some(give(&stdin)?)}else{None};
+    let empty=if ext||ntfs{Some(give(&stdin)?)}else{None};
     let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
     let mut b=Command::new("/no-path-execution-for-helper-checker");
     b.env_clear().env("LC_ALL","C").current_dir("/")
@@ -120,13 +128,21 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     for (f,dest) in runtime.sandbox_files(){
         let fd=give(f)?;b.args(["--ro-bind-fd",&fd.as_raw_fd().to_string(),dest]);given.push(fd);
     }
-    if let Some(ref fd)=null{
-        // This e2fsck opens /dev/null O_RDWR only for open/close fd checks.
-        // It is an empty regular file on a dedicated tiny tmpfs, never a
-        // node or a path to host /dev. No mount table or other host resource
-        // is supplied to the guest, which only sees the saved regular image.
-        b.args(["--setenv","EXT2FS_NO_MTAB_OK","1","--size","65536","--tmpfs","/dev",
-                "--perms","0600","--file",&fd.as_raw_fd().to_string(),"/dev/null"]);
+    if let Some(ref fd)=empty{
+        if ext{
+            // This e2fsck opens /dev/null O_RDWR only for open/close fd checks.
+            // It is an empty regular file on a dedicated tiny tmpfs, never a
+            // node or a path to host /dev. No mount table or other host resource
+            // is supplied to the guest, which only sees the saved regular image.
+            b.args(["--setenv","EXT2FS_NO_MTAB_OK","1","--size","65536","--tmpfs","/dev",
+                    "--perms","0600","--file",&fd.as_raw_fd().to_string(),"/dev/null"]);
+        }else{
+            // The pinned ntfsfix queries /proc/mounts then /etc/mtab.
+            // Supply an empty file from this guest's EOF pipe, not a host
+            // table, and seal it with the guest root. It says nothing
+            // about the original disk's mount or Windows state.
+            b.args(["--perms","0444","--file",&fd.as_raw_fd().to_string(),"/etc/mtab"]);
+        }
     }
     if xfs{
         // No devices or host tmp. This is just private, sized backing for
@@ -144,19 +160,20 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     b.args(["--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),"--","/checker"]);
     if ext{b.args(["-fn","-N","/image","/image"]);}
     else if xfs{b.args(["-n","-f","-P","-t","0","-o","phase2_threads=1","/image"]);}
-    else{b.args(["-n","/image"]);}
+    else{b.args(["-n","/image"]);} // includes the limited NTFS observer
     runtime.recheck()?;
     not_cancelled()?;
-    use helper_linux_evidence::diagnostic_process::{prepare_diagnostic_exec,prepare_ext4_diagnostic_exec,prepare_xfs_diagnostic_exec};
+    use helper_linux_evidence::diagnostic_process::{prepare_diagnostic_exec,prepare_leased_diagnostic_exec,prepare_xfs_diagnostic_exec};
     match copy{
         Operand::Sealed(_)=>prepare_diagnostic_exec(&mut b,runtime.launcher())?,
-        Operand::LeasedExt4(image)=>{image.require()?;prepare_ext4_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::LeasedExt4(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::LeasedNtfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedXfs(image)=>{image.require()?;prepare_xfs_diagnostic_exec(&mut b,runtime.launcher())?;},
     }
     let mut group=Group::new(b.spawn()?);
     // Only the sandbox monitor and its explicitly selected setup descriptions
     // retain writers. In particular the parent must not keep the status pipe open.
-    drop(b);drop(given);drop(operand);drop(status);drop(wstatus);drop(filter);drop(filter_read);drop(null);
+    drop(b);drop(given);drop(operand);drop(status);drop(wstatus);drop(filter);drop(filter_read);drop(empty);
     let lease=copy.lease();
     let result=collect(&mut group,File::from(rstatus),if lease.is_some(){LEASED_LIMIT}else{LIMIT},lease);
     let reaped=group.finish()?;

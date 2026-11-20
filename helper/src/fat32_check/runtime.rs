@@ -22,6 +22,9 @@ const EXT_CHECKER:&[&str]=pack!("bin","e2fsck");
 const XFS_PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/xfsprogs-6.13.0";
 const XFS_POLICY:&[&str]=pack!("xfs-check-v1");
 const XFS_CHECKER:&[&str]=pack!("bin","xfs_repair");
+const NTFS_PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/ntfs-3g-2022.10.3-deb13u3";
+const NTFS_POLICY:&[&str]=pack!("ntfs-check-v1");
+const NTFS_CHECKER:&[&str]=pack!("bin","ntfsfix");
 // Only these five extra DSOs are part of the exact e2fsck and guest libc
 // closure. They are not replacement host loaders or Samba dependencies.
 const EXT_LIBS:[(&str,&[&str],&str);5]=[
@@ -36,19 +39,22 @@ const XFS_LIBS:[(&str,&[&str],&str);3]=[
     EXT_LIBS[2], // libblkid
     ("liburcu.so.8",pack!("lib","liburcu.so.8"),"/lib/x86_64-linux-gnu/liburcu.so.8"),
 ];
+const NTFS_LIBS:[(&str,&[&str],&str);1]=[
+    ("libntfs-3g.so.89",pack!("lib","libntfs-3g.so.89"),"/lib/x86_64-linux-gnu/libntfs-3g.so.89"),
+];
 const MAX_ELF:u64=32<<20;
 
 #[derive(Clone,Copy,PartialEq,Eq)]
-pub(super) enum Engine{Copy(Format),Ext4,Xfs}
+pub(super) enum Engine{Copy(Format),Ext4,Xfs,Ntfs}
 impl Engine{
-    fn profile(self)->&'static str{match self{Self::Copy(Format::Fat32)=>PROFILE,Self::Copy(Format::Exfat)=>EX_PROFILE,Self::Ext4=>EXT_PROFILE,Self::Xfs=>XFS_PROFILE}}
-    fn policy(self)->&'static [&'static str]{match self{Self::Copy(Format::Fat32)=>POLICY,Self::Copy(Format::Exfat)=>EX_POLICY,Self::Ext4=>EXT_POLICY,Self::Xfs=>XFS_POLICY}}
+    fn profile(self)->&'static str{match self{Self::Copy(Format::Fat32)=>PROFILE,Self::Copy(Format::Exfat)=>EX_PROFILE,Self::Ext4=>EXT_PROFILE,Self::Xfs=>XFS_PROFILE,Self::Ntfs=>NTFS_PROFILE}}
+    fn policy(self)->&'static [&'static str]{match self{Self::Copy(Format::Fat32)=>POLICY,Self::Copy(Format::Exfat)=>EX_POLICY,Self::Ext4=>EXT_POLICY,Self::Xfs=>XFS_POLICY,Self::Ntfs=>NTFS_POLICY}}
     fn checker(self)->(&'static str,&'static [&'static str]){
         match self{Self::Copy(Format::Fat32)=>(KEYS[1],SLOTS[1]),Self::Copy(Format::Exfat)=>("fsck.exfat",EX_CHECKER),
-            Self::Ext4=>("e2fsck",EXT_CHECKER),Self::Xfs=>("xfs_repair",XFS_CHECKER)}
+            Self::Ext4=>("e2fsck",EXT_CHECKER),Self::Xfs=>("xfs_repair",XFS_CHECKER),Self::Ntfs=>("ntfsfix",NTFS_CHECKER)}
     }
     fn private_guest(self)->&'static [(&'static str,&'static [&'static str],&'static str)]{
-        match self{Self::Ext4=>&EXT_LIBS,Self::Xfs=>&XFS_LIBS,Self::Copy(_)=>&[]}
+        match self{Self::Ext4=>&EXT_LIBS,Self::Xfs=>&XFS_LIBS,Self::Ntfs=>&NTFS_LIBS,Self::Copy(_)=>&[]}
     }
     fn slots(self)->impl Iterator<Item=(&'static str,&'static [&'static str])>{
         KEYS.into_iter().zip(SLOTS).enumerate().map(move |(i,(label,slot))|if i==1{self.checker()}else{(label,slot)})
@@ -79,6 +85,7 @@ impl Runtime {
     pub(super) fn exfat()->io::Result<Self>{Ok(Self::selected(Engine::Copy(Format::Exfat),None)?.0)}
     pub(super) fn ext4()->io::Result<Self>{Ok(Self::selected(Engine::Ext4,None)?.0)}
     pub(super) fn xfs()->io::Result<Self>{Ok(Self::selected(Engine::Xfs,None)?.0)}
+    pub(super) fn ntfs()->io::Result<Self>{Ok(Self::selected(Engine::Ntfs,None)?.0)}
     fn selected(kind:Engine,release:Option<&[u8;32]>)->io::Result<(Self,[u8;32])>{
         use sha2::{Digest,Sha256};
         let limit=if kind==Engine::Ext4{EXT_POLICY_BYTES}else{1024};
@@ -113,6 +120,10 @@ impl Runtime {
         if self.kind!=Engine::Xfs{return Err(invalid("not the approved XFS checker profile"));}
         Ok(())
     }
+    pub(super) fn require_ntfs(&self)->io::Result<()>{
+        if self.kind!=Engine::Ntfs{return Err(invalid("not the approved NTFS observer profile"));}
+        Ok(())
+    }
     pub(super) fn launcher(&self)->&std::fs::File { &self.files[0].file }
     pub(super) fn sandbox_files(&self)->impl Iterator<Item=(&std::fs::File,&'static str)>{
         self.files[1..4].iter().map(|f|&f.file).zip(["/checker","/lib64/ld-linux-x86-64.so.2","/lib/x86_64-linux-gnu/libc.so.6"])
@@ -126,6 +137,16 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ntfs_profile_requires_its_exact_guest_library_and_never_a_host_mount_tool(){
+        let line=|k|format!("{k} {}\n","ab".repeat(32));
+        let correct=format!("{NTFS_PROFILE}\n{}",Engine::Ntfs.slots().map(|(k,_)|line(k)).collect::<String>());
+        assert!(correct.len()<=1024);assert_eq!(pins_for(Engine::Ntfs,correct.as_bytes()).unwrap().len(),9);
+        assert!(pins_for(Engine::Copy(Format::Fat32),correct.as_bytes()).is_err());
+        assert!(pins_for(Engine::Ntfs,correct.replace(&line("libntfs-3g.so.89"),"").as_bytes()).is_err());
+        assert!(pins_for(Engine::Ntfs,correct.replace(NTFS_PROFILE,EX_PROFILE).as_bytes()).is_err());
+        assert!(pins_for(Engine::Ntfs,(correct+&line("ntfs-3g")).as_bytes()).is_err());
+    }
     #[test]
     fn xfs_profile_requires_its_own_eleven_slots_no_extra_guest_libraries(){
         let line=|k|format!("{k} {}\n","ab".repeat(32));

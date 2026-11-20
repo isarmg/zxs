@@ -93,7 +93,7 @@ pub fn prepare_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
 
 // A full copy hash need not share the checker's CPU allowance. Lower the
 // sandbox child's ceiling only, before its landscape or executable changes.
-pub fn prepare_ext4_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
+pub fn prepare_leased_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
     prepare_checker_exec(cmd,original,Some(300))
 }
 #[allow(unsafe_code)]
@@ -136,7 +136,7 @@ fn prepare_checker_exec(cmd:&mut Command,original:&File,cpu:Option<libc::rlim_t>
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum CopyFormat{Fat32,Exfat}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum LeasedFormat{Ext4,Xfs}
+pub enum LeasedFormat{Ext4,Xfs,Ntfs}
 /// Spawn only the copy checker present in the same protected installation as the
 /// calling panel. The only argument is the digest of the *already sealed* stdin.
 pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyFormat,digest:&[u8;32])->io::Result<()>{
@@ -147,7 +147,7 @@ pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyForm
 /// stdin is the selected saved volume's new readonly
 /// description, not a sealed copy. Only this particular worker can lease it.
 pub fn prepare_leased_panel_exec(cmd:&mut Command,original:&File,format:LeasedFormat,digest:&[u8;32])->io::Result<()>{
-    let action=match format{LeasedFormat::Ext4=>"__ext4-leased-v1",LeasedFormat::Xfs=>"__xfs-leased-v1"};
+    let action=match format{LeasedFormat::Ext4=>"__ext4-leased-v1",LeasedFormat::Xfs=>"__xfs-leased-v1",LeasedFormat::Ntfs=>"__ntfs-leased-v1"};
     prepare_fixed_panel_exec(cmd,original,action,digest)
 }
 fn prepare_fixed_panel_exec(cmd:&mut Command,original:&File,action:&'static str,digest:&[u8;32])->io::Result<()>{

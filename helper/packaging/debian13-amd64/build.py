@@ -43,7 +43,9 @@ XFS_NEEDED = {
     "xfs_repair": {"libc.so.6", *XFS_LIBS},
     "liburcu.so.8": {"libc.so.6", LOADER},
 }
-CHECKER_NEEDED = EXT4_NEEDED | XFS_NEEDED  # shared libuuid/blkid requirements already exact above
+NTFS_LIBS = ("libntfs-3g.so.89",)
+NTFS_NEEDED = {"ntfsfix":{"libc.so.6",*NTFS_LIBS}, "libntfs-3g.so.89":{"libc.so.6"}}
+CHECKER_NEEDED = EXT4_NEEDED | XFS_NEEDED | NTFS_NEEDED  # shared libuuid/blkid already exact above
 
 
 def textout(args, cwd=None):
@@ -306,10 +308,10 @@ def build(args):
         cap_manifest=cap/"CAPSULE"
         with cap_manifest.open("xb") as mf: mf.write(samba_capsule.manifest_bytes(recipe))
         binary=copy_checked(args.helper,root/"usr/bin/helper",args.helper_sha256,cap=64<<20)
-        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat",home/"bin/e2fsck",home/"bin/xfs_repair"]
+        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat",home/"bin/e2fsck",home/"bin/xfs_repair",home/"bin/ntfsfix"]
         libs=sorted((home/"lib").iterdir())
         allowed={p.name for p in libs}
-        extras=set(EXT4_LIBS)|set(XFS_LIBS)
+        extras=set(EXT4_LIBS)|set(XFS_LIBS)|set(NTFS_LIBS)
         base=allowed-extras
         require(extras<=allowed,"missing leased-copy guest library")
         requires={}
@@ -333,11 +335,12 @@ def build(args):
         for path in programs[:2]:
             bind_private_loader(path)
         # Keep all existing profiles byte-identical. Samba separately pins the
-        # original FAT32 profile and gets no XFS checker or library.
+        # original FAT32 profile and gets no unrelated checker or library.
         for policy,version_label,tool,extra in (("fat32-check-v1","dosfstools-4.2","fsck.fat",()),
                 ("exfat-check-v1","exfatprogs-1.2.9","fsck.exfat",()),
                 ("ext4-check-v1","e2fsprogs-1.47.2","e2fsck",EXT4_LIBS),
-                ("xfs-check-v1","xfsprogs-6.13.0","xfs_repair",XFS_LIBS)):
+                ("xfs-check-v1","xfsprogs-6.13.0","xfs_repair",XFS_LIBS),
+                ("ntfs-check-v1","ntfs-3g-2022.10.3-deb13u3","ntfsfix",NTFS_LIBS)):
             keys=(PROFILE[0],tool,*PROFILE[2:],*extra)
             files=(FILES[0],"bin/"+tool,*FILES[2:],*(f"lib/{name}" for name in extra))
             lines=[f"{key} {digest(home/leaf)}" for key,leaf in zip(keys,files,strict=True)]
@@ -352,7 +355,7 @@ def build(args):
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
-              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly","e2fsck":"leased-saved-copy-readonly","xfs_repair":"leased-saved-copy-readonly"}}
+              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly","e2fsck":"leased-saved-copy-readonly","xfs_repair":"leased-saved-copy-readonly","ntfsfix":"leased-saved-copy-limited-readonly"}}
         # Candidate NON-privileged material for the release signer. Do not
         # install it as its own authorization: the package owner is not the site's
         # authority. It and the exact .deb are covered by the external signed sums.

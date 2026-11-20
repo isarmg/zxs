@@ -1,6 +1,6 @@
 //! A single terminal-selected operand. The HTTP process has no command builder
 //! with user options, and never installs the checker's process-wide limits.
-use super::{Format,LeasedFormat,Outcome,Report,Request,exfat,ext4,xfs,leased,image::{ExfatSealed,Sealed},runner,runtime::Runtime};
+use super::{Format,LeasedFormat,Outcome,Report,Request,exfat,ext4,xfs,leased,ntfs,image::{ExfatSealed,Sealed},runner,runtime::Runtime};
 use crate::{fs_tools::RuntimeFile,pinned::invalid};
 use rustix::{
     io::fcntl_dupfd_cloexec,pipe::{PipeFlags,pipe_with},
@@ -8,13 +8,14 @@ use rustix::{
 use std::{fs::File,io::{self,Read,Write},process::{Child,Command,Stdio}};
 
 #[derive(Clone,Copy)]
-pub(crate) enum Detail{Fat32Clusters(u32),Exfat,Ext4,Xfs}
+pub(crate) enum Detail{Fat32Clusters(u32),Exfat,Ext4,Xfs,Ntfs}
 #[derive(Clone,Copy)]
 pub(crate) struct Info {pub bytes:u64,pub sector:Option<u16>,pub detail:Detail,pub digest:[u8;32]}
 impl Info{
     pub(crate) fn format_fields(self)->(&'static str,String){
         match self.detail{Detail::Fat32Clusters(n)=>("FAT32",n.to_string()),
-            Detail::Exfat=>("exFAT","-".into()),Detail::Ext4=>("ext4","-".into()),Detail::Xfs=>("XFS","-".into())}
+            Detail::Exfat=>("exFAT","-".into()),Detail::Ext4=>("ext4","-".into()),Detail::Xfs=>("XFS","-".into()),
+            Detail::Ntfs=>("NTFS","-".into())}
     }
 }
 // Leased operands are not members of the two-format sealed protocol.
@@ -22,13 +23,14 @@ impl Info{
 pub(crate) enum Job{Sealed(Format,Request),Leased(LeasedFormat,Request)}
 enum Image{Fat32(Sealed),Exfat(ExfatSealed),Leased(LeasedFormat,leased::Selected)}
 enum Expected{Fat32(u32),Exfat(exfat::Framing,[u8;32]),Leased(LeasedFormat,leased::Selected,[u8;32])}
-pub(crate) enum Receipt{Fat32(Report),Exfat(exfat::Report),Ext4(ext4::Report),Xfs(xfs::Report)}
+pub(crate) enum Receipt{Fat32(Report),Exfat(exfat::Report),Ext4(ext4::Report),Xfs(xfs::Report),Ntfs(ntfs::Report)}
 impl Receipt{
     pub(crate) fn text(&self)->String{
         match self{
             Receipt::Exfat(r)=>r.panel_text(),
             Receipt::Ext4(r)=>r.panel_text(),
             Receipt::Xfs(r)=>r.panel_text(),
+            Receipt::Ntfs(r)=>r.panel_text(),
             Receipt::Fat32(r)=>{
                 let status=match r.state{Outcome::NoFindingsReported=>"上游检查器未报告问题",
                     Outcome::ReportedMessages=>"已完成，但上游检查器还给出了提示",
@@ -55,7 +57,7 @@ impl Operand {
         let(bytes,sector,detail)=match &self.image{
             Image::Fat32(s)=>{let g=s.geometry();(g.length,Some(g.sector_bytes),Detail::Fat32Clusters(g.data_clusters))},
             Image::Exfat(s)=>{let g=s.frame();(g.length,Some(g.sector),Detail::Exfat)},
-            Image::Leased(kind,s)=>(s.len(),None,match kind{LeasedFormat::Ext4=>Detail::Ext4,LeasedFormat::Xfs=>Detail::Xfs}),
+            Image::Leased(kind,s)=>(s.len(),None,match kind{LeasedFormat::Ext4=>Detail::Ext4,LeasedFormat::Xfs=>Detail::Xfs,LeasedFormat::Ntfs=>Detail::Ntfs}),
         };
         Info{bytes,sector,detail,digest:self.expected}
     }
@@ -123,7 +125,10 @@ pub(crate) fn worker(format:Format,expected:[u8;32])->io::Result<u8>{
 
 pub(crate) fn leased_worker(kind:LeasedFormat,expected:[u8;32])->io::Result<u8>{
     if parent_process_death_signal()?!=Some(Signal::TERM){return Err(invalid("no supervised leased copy-check parent"));}
-    match kind{LeasedFormat::Ext4=>runner::prepare_ext4_worker()?,LeasedFormat::Xfs=>runner::prepare_xfs_worker()?,}
+    match kind{
+        LeasedFormat::Ext4|LeasedFormat::Ntfs=>runner::prepare_leased_worker()?,
+        LeasedFormat::Xfs=>runner::prepare_xfs_worker()?,
+    }
     let file=File::from(fcntl_dupfd_cloexec(std::io::stdin(),3)?);
     let mut out=io::stdout().lock();
     // Check the exact installation before obtaining the operand lease.
@@ -142,6 +147,13 @@ pub(crate) fn leased_worker(kind:LeasedFormat,expected:[u8;32])->io::Result<u8>{
             image.require()?;out.write_all(&report.packet(&expected))?;out.flush()?;
             image.require()?;report.exit()
         }
+        LeasedFormat::Ntfs=>{
+            let runtime=Runtime::ntfs()?;
+            let image=ntfs::Image::from_panel_reader(file,&expected,ntfs::read_frame)?;
+            let report=runner::observe_ntfs(&runtime,&image)?;
+            image.require()?;out.write_all(&report.packet(&expected))?;out.flush()?;
+            image.require()?;report.exit()
+        }
     };
     Ok(code)
 }
@@ -157,7 +169,8 @@ impl Expected{
     }
     fn size(&self)->usize{
         match self{Self::Fat32(_)=>SIZE,Self::Exfat(..)=>exfat::Report::WIRE_SIZE,
-            Self::Leased(LeasedFormat::Ext4,..)=>ext4::Report::WIRE_SIZE,Self::Leased(LeasedFormat::Xfs,..)=>xfs::Report::WIRE_SIZE}
+            Self::Leased(LeasedFormat::Ext4,..)=>ext4::Report::WIRE_SIZE,Self::Leased(LeasedFormat::Xfs,..)=>xfs::Report::WIRE_SIZE,
+            Self::Leased(LeasedFormat::Ntfs,..)=>ntfs::Report::WIRE_SIZE}
     }
     fn decode(&self,bytes:&[u8],status:Option<i32>)->io::Result<Receipt>{
         // What was selected in the terminal, not a tag supplied by HTTP/the child,
@@ -170,6 +183,7 @@ impl Expected{
                 match kind{
                     LeasedFormat::Ext4=>ext4::Report::from_packet(bytes,status,original.len(),sha).map(Receipt::Ext4),
                     LeasedFormat::Xfs=>xfs::Report::from_packet(bytes,status,original.len(),sha).map(Receipt::Xfs),
+                    LeasedFormat::Ntfs=>ntfs::Report::from_packet(bytes,status,original.len(),sha).map(Receipt::Ntfs),
                 }
             }
         }

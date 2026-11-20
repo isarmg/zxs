@@ -1,6 +1,6 @@
 # Debian 13 amd64：helper、私有磁盘工具及首装 Samba 材料的离线发行目录
 
-这是**发行端的组包配置**，不是已经构建、签名、审计通过或发布的安装包。首批打包 bubblewrap 0.12、dosfstools 4.2 的 `fsck.fat`、exfatprogs 1.2.9 的 `fsck.exfat`、e2fsprogs 1.47.2 的 `e2fsck`、xfsprogs 6.13.0 的 `xfs_repair` 及实际所需的运行库。四个格式各有受限的只读副本命令；本机配对网页只可确认终端预选的一份副本，不从网页接收格式、路径或参数。没有硬盘/分区修复入口。本配方也为专用 Samba 实例的**离线初次域供给**收集私有运行材料，绝不安装或启动宿主 smbd。
+这是**发行端的组包配置**，不是已经构建、签名、审计通过或发布的安装包。打包 bubblewrap 0.12、dosfstools 4.2 的 `fsck.fat`、exfatprogs 1.2.9 的 `fsck.exfat`、e2fsprogs 1.47.2 的 `e2fsck`、xfsprogs 6.13.0 的 `xfs_repair`、Debian 安全版 NTFS-3G 的 `ntfsfix` 及实际所需的运行库。五个格式各有受限的只读副本命令；本机配对网页只可确认终端预选的一份副本，不从网页接收格式、路径或参数。没有硬盘/分区修复入口。本配方也为专用 Samba 实例的**离线初次域供给**收集私有运行材料，绝不安装或启动宿主 smbd。
 
 用于**在线**专用 smbd 和非 root 存储进程的是[另一份离线原生构建配方](online-smb.md)。它不属于下述磁盘工具包或离线建域 Python 胶囊；不会把系统 smbd、普通 Debian 包中的原服务或用户库当作专版。
 
@@ -29,12 +29,12 @@ python3 packaging/debian13-amd64/build.py \
 
 ## 实际形成的东西
 
-- 一份 `local-ops-helper_*_amd64.deb` 包含 `/usr/bin/helper` 与受保护的磁盘工具前缀 `/usr/lib/local-ops-helper/disk-tools-v1`。用户安装经核发行物后无需另行安装 fsck 工具，也不依赖 PATH。没有运行期下载器或自动安装包管理器。该磁盘工具前缀仅含明确允许的普通文件：五个上游程序、GNU ELF 解释器、libc、libcap、libselinux、PCRE2、libgcc_s、e2fsck 和 xfs_repair 实际所需库（其中 libuuid、libblkid 共享），以及只在明确离线原生维护动作中按固定路径加载的 Libgcrypt 与 libgpg-error。解包不继承包条目的符号链接、SUID、capabilities、设备文件和脚本；不捆绑 mkfs、smartd、e2scrub、udev/sudo 配置、内核模块或 systemd 单元。
-- 实际检查器和磁盘运行库的字节不作改写；单独原生账号角色中固定 ELF 依赖名的处理见其配方。仅对发行副本的 helper 和启动器用标准 patchelf 重定位 **ELF 解释器及 DT_RPATH** 到这一受保护的绝对目录，并设置 NODEFLIB。构建经 readelf 检查所有直接/传递 ELF NEEDED 均有对应私有库，FAT32/exFAT 检查器只需 libc；e2fsck 固定闭包还需同号 libext2fs、libcom_err、libblkid、libuuid、libe2p（后者在 libext2fs2t64 原包内）。不调用 ldd。动态装载仍以受信宿主内核/安装根和启动环境为前提，不能用签名证明整个宿主可信或无同权限篡改。FAT32/exFAT 各按原八槽摘要文件重新核固定最终字节及路径；ext4 使用独立 `ext4-check-v1`、十三个固定位，e2fsck 只看到它的五个依赖；XFS 使用独立 `xfs-check-v1` 与十一处固定位，仅额外投射实际的 libuuid、libblkid 和 liburcu。均只投射具体已核文件，不交出完整工具包，不依赖宿主 /etc 或工具库。包内 BUNDLE.json 记录源码、版本、输入/输出哈希、重定位和依赖。
+- 一份 `local-ops-helper_*_amd64.deb` 包含 `/usr/bin/helper` 与受保护的磁盘工具前缀 `/usr/lib/local-ops-helper/disk-tools-v1`。用户安装经核发行物后无需另行安装 fsck 工具，也不依赖 PATH。没有运行期下载器或自动安装包管理器。该磁盘工具前缀仅含明确允许的普通文件：六个上游程序、GNU ELF 解释器、libc、libcap、libselinux、PCRE2、libgcc_s、e2fsck、xfs_repair 和 ntfsfix 实际所需库（前两者共享 libuuid、libblkid），以及只在明确离线原生维护动作中按固定路径加载的 Libgcrypt 与 libgpg-error。解包不继承包条目的符号链接、SUID、capabilities、设备文件和脚本；不捆绑 mkfs、smartd、e2scrub、udev/sudo 配置、内核模块或 systemd 单元。
+- 实际检查器和磁盘运行库的字节不作改写；单独原生账号角色中固定 ELF 依赖名的处理见其配方。仅对发行副本的 helper 和启动器用标准 patchelf 重定位 **ELF 解释器及 DT_RPATH** 到这一受保护的绝对目录，并设置 NODEFLIB。构建经 readelf 检查所有直接/传递 ELF NEEDED 均有对应私有库，FAT32/exFAT 检查器只需 libc；e2fsck 固定闭包还需同号 libext2fs、libcom_err、libblkid、libuuid、libe2p（后者在 libext2fs2t64 原包内）。不调用 ldd。动态装载仍以受信宿主内核/安装根和启动环境为前提，不能用签名证明整个宿主可信或无同权限篡改。FAT32/exFAT 各按原八槽摘要文件重新核固定最终字节及路径；ext4 使用独立 `ext4-check-v1`、十三个固定位，e2fsck 只看到它的五个依赖；XFS 使用独立 `xfs-check-v1` 与十一处固定位，仅额外投射实际的 libuuid、libblkid 和 liburcu。NTFS 使用独立 `ntfs-check-v1` 和九处固定位，客体只增同版 `libntfs-3g.so.89`，不携带 FUSE、挂载程序或其它 NTFS 工具。均只投射具体已核文件，不交出完整工具包，不依赖宿主 /etc 或工具库。包内 BUNDLE.json 记录源码、版本、输入/输出哈希、重定位和依赖。
 - 同一发行目录中提供签名索引、原始二进制包、准确对应源码、原补丁、本项目源归档（含组包脚本）、锁内 Rust 原档与 SHA256SUMS。安装包里随附 Debian 原版权/例外与常用许可全文、锁内每份 Rust 原包的署名/许可，以及根据精确工具链、实际链接输入另行审过并带独立摘要的声明；libgcc-s1 的 Debian 版权取同版 gcc-14-base 的原件。GPL/LGPL 等部件仍有各自义务，不能只交付 .deb、短许可名或仅给上游链接。[Debian 源包规范](https://www.debian.org/doc/debian-policy/ch-source.html) · [GNU 对应源码说明](https://www.gnu.org/licenses/gpl-faq.en.html#GPLInProprietarySystem)。
 - 输出只在一个全新目录产生。有 `INCOMPLETE` 即禁止使用；完成也仅是未签候选。正式发行前须独立核构建过程、ABI、源码/许可证和归档、安装/冲突处理、已签清单及带外可信签名公钥，在干净受控 Debian 13 环境实测再发布；本次均未执行。不给 Web 安装任意系统软件或 root 身份。
 
-其它格式分开接：ntfs-3g/NTFS、btrfs-progs/Btrfs 及 smartmontools 尚未随本版配方提供。OpenZFS 不随应用安装模块或启动池；只有宿主已经加载并验证匹配内核/用户态、可严格限定只读状态查询且不会触发 modprobe 时才可另行开放。`zpool status` 不是通用镜像检查，当前不调用。产品无须用这些文件系统保存自己的数据。
+其它格式分开接：btrfs-progs/Btrfs 和 smartmontools 尚未随本版配方提供。OpenZFS 不随应用安装模块或启动池；只有宿主已经加载并验证匹配内核/用户态、可严格限定只读状态查询且不会触发 modprobe 时才可另行开放。`zpool status` 不是通用镜像检查，当前不调用。产品无须用这些文件系统保存自己的数据。
 
 ## 专用 Samba 供给运行时
 
