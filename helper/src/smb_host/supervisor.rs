@@ -1,45 +1,53 @@
 //! One internal start and one teardown. The only two children are the selected
 //! ELFs, not a shell, service-manager wrapper, namespace proxy or looked-up PID.
 //! Package/site policy for authorizing the actual private deployment is upstream
-//! of Inputs. No automatic start, Web/CLI command, self-approval or retry.
-use super::{Control,no,origins::{Inputs,RuntimeLease,Selected},process};
-use helper_linux_evidence::{diagnostic_process as signals,smb_spawn::{self,Born}};
+//! of Inputs. No automatic start, web request, self-approval or retry.
+use super::{Control,no,origins::{Inputs,Selected},process};
+use helper_linux_evidence::{diagnostic_process as signals,smb_ready::{self,Receipt},smb_spawn::{self,Born}};
 use std::{io,thread,time::{Duration,Instant}};
 
 /// Distinguish a verified stop of the two originals from a claim about FILEs
 /// or graceful exit of each Samba descendant. An ns init's ordinary exit may
 /// still cause Linux to kill remaining members. Only report the former.
 pub(super) struct OriginalRolesExited;
-pub(super) struct Pair<'a>{site:Selected<'a>,daemon:Born,storage:Born,_lease:RuntimeLease}
+pub(super) struct Pair<'a>{site:Selected<'a>,daemon:Born,storage:Born}
 fn cancelled()->io::Result<()>{if signals::cancelled(){Err(io::Error::new(io::ErrorKind::Interrupted,"dedicated service stop requested"))}else{Ok(())}}
 impl<'a> Pair<'a>{
     pub(super) fn start(inputs:Inputs<'a>)->io::Result<Self>{
-        process::host()?;signals::require_waitable_children()?;signals::watch_cancellation()?;
+        process::host()?;signals::require_waitable_children()?;
         let site=Selected::new(inputs)?;cancelled()?;
-        let lease=RuntimeLease::acquire(site.inputs.system,site.inputs.site)?;site.require()?;lease.require(&site.inputs)?;
+        // The typed foreground origin already owns the original S SH
+        // followed by site EX, and cannot drop them while either child exists.
+        let bound=site.require()?;
+        let want=smb_ready::expected(&bound,&site.inputs.plan.sha());
+        let (receipt,offer)=Receipt::fresh()?;
         let control=Control::fresh()?;let end=Instant::now()+Duration::from_secs(9);
-        let mut daemon=smb_spawn::daemon(&site.daemon.0.file,site.inputs.daemon_root,control.first_endpoint()?)?;
+        let mut daemon=smb_spawn::daemon(site.daemon.file,site.inputs.daemon_root,control.first_endpoint()?,&offer,site.inputs.null)?;
+        drop(offer); // the next child never inherits the receipt sender
         daemon.exec_barrier(end)?;
         // smbd can be in F_DUPFD_CLOEXEC/close(3) during the bounded scan.
         // Retry only this same living child/original, never respawn or wait on READY.
         loop{
             cancelled()?;process::waitable_live(daemon.original())?;
-            if process::qualify(daemon.original(),&site.daemon.0.file,&control.daemon,&control.storage).is_ok(){break;}
+            if process::qualify(daemon.original(),site.daemon.file,&control.daemon,&control.storage).is_ok(){break;}
             if Instant::now()>=end{return Err(no());}thread::sleep(Duration::from_millis(5));
         }
         site.require()?;cancelled()?;
         let handoff=control.for_storage(daemon.original(),&site.daemon)?;
         let (opposite,_original_master)=handoff.original_3_5()?;
-        let storage=smb_spawn::storage(&site.storage.0.file,site.inputs.storage_root,opposite,site.inputs.bound_readonly,&daemon,&site.env)?;
+        let storage=smb_spawn::storage(site.storage.file,site.inputs.storage_root,opposite,site.inputs.bound_readonly,&daemon,&site.env,site.inputs.null)?;
         drop(handoff); // supervisor keeps NO extra endpoint
-        let mut pair=Self{site,daemon,storage,_lease:lease};
+        let mut pair=Self{site,daemon,storage};
         let checked=(||{
             pair.storage.exec_barrier(end)?;let v=&pair.site;
-            process::storage_snapshot(pair.storage.original(),&v.storage.0.file,v.inputs.uid,v.inputs.gid)?;
-            process::waitable_live(pair.daemon.original())?;v.require()?;cancelled()
+            process::storage_snapshot(pair.storage.original(),v.storage.file,v.inputs.uid,v.inputs.gid)?;
+            process::waitable_live(pair.daemon.original())?;v.require()?;cancelled()?;
+            receipt.wait(&want,&pair.daemon,&pair.storage,Instant::now()+Duration::from_secs(30))?;
+            if v.require()?!=bound{return Err(no());}
+            cancelled()
         })();
         if let Err(e)=checked{pair.abort()?;return Err(e);}
-        Ok(pair) // two observed execs, not a READY acknowledgement or a login
+        Ok(pair) // actual native post-bind attestation, not authentication, reachability or I/O
     }
     fn abort(&mut self)->io::Result<()>{
         // Signal BOTH anchored namespace inits before either blocking reap.
@@ -54,7 +62,7 @@ impl<'a> Pair<'a>{
                 // A namespace PID1 can ignore TERM until its handler is installed.
                 if s.is_some()||d.is_some(){return Err(no());}
                 let a=&self.site;
-                if process::storage_snapshot(self.storage.original(),&a.storage.0.file,a.inputs.uid,a.inputs.gid)?{
+                if process::storage_snapshot(self.storage.original(),a.storage.file,a.inputs.uid,a.inputs.gid)?{
                     self.storage.term()?;requested=true;
                 }
             }else{

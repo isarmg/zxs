@@ -2,6 +2,7 @@
 //! passdb secret reads, Web actions or SMB client logins.
 use std::{env,fs::File,io,os::fd::{FromRawFd,OwnedFd},path::PathBuf,process::ExitCode};
 unsafe extern "C"{
+    fn zxs_smb_storage_privacy()->i32;
     fn zxs_smb_ctl_claim(fd:i32)->i32;
     fn zxs_smb_bound_fd(fd:i32)->i32;
     fn zxs_smb_process_claim(fd:i32)->i32;
@@ -10,7 +11,7 @@ unsafe extern "C"{
 }
 fn run()->io::Result<()>{
     let bad=||io::Error::other("incomplete dedicated SMB service launch");
-    if env::args_os().len()!=1{return Err(bad());}
+    if unsafe{zxs_smb_storage_privacy()}!=0||env::args_os().len()!=1{return Err(bad());}
     let var=|k:&str|env::var(k).map_err(|_|bad());
     let system=PathBuf::from(env::var_os("ZXS_SYSTEM_ROOT").ok_or_else(bad)?);
     let pool=var("ZXS_POOL_ID")?.parse()?;let instance=var("ZXS_SAMBA_INSTANCE_ID")?;

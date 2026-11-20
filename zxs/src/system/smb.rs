@@ -24,15 +24,12 @@ impl<'r> SmbSession<'r>{
         let original=source.at(|db,c|Credential::current(db,&c))?;
         if original.login!=login.as_bytes(){return Err(denied());}Ok(Self{source,original})
     }
+    fn require_current(&self,db:&Connection,c:&Catalog)->io::Result<()>{
+        if Credential::current(db,c)?!=self.original{return Err(denied());}Ok(())
+    }
+    /// A SQL fixture may choose a typed ShareId; it is not a wire service name.
     #[cfg(test)]
-    pub(crate) fn connect(&self,share:ShareId)->io::Result<Tree<'_,'r>>{
-        self.connect_service(share.smb_service().as_bytes())
-    }
-    /// Only the service portion already separated by SMB, never an entire
-    /// UNC, display label or host path. Resolving an ID isn't authentication.
-    pub(crate) fn connect_service(&self,name:&[u8])->io::Result<Tree<'_,'r>>{
-        self.connect_id(ShareId::from_smb_service(name).ok_or_else(denied)?)
-    }
+    pub(crate) fn connect(&self,share:ShareId)->io::Result<Tree<'_,'r>>{self.connect_id(share)}
     fn connect_id(&self,share:ShareId)->io::Result<Tree<'_,'r>>{
         self.select_with_catalog(share).map(|(tree,_)|tree)
     }
@@ -59,6 +56,12 @@ pub(crate) mod file_create;
 
 #[path="first_work.rs"]
 pub(crate) mod first_work;
+
+#[path="work_change.rs"]
+pub(crate) mod work_change;
+
+#[path="smb_stage.rs"]
+mod smb_stage;
 
 #[path="directory.rs"]
 pub(crate) mod directory;

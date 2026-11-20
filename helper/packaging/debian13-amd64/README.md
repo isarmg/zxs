@@ -61,4 +61,4 @@ python3 packaging/debian13-amd64/build.py \
 
 **可选业务管理 HTTP 单元。** 配方只向 `/usr/share/local-ops-helper/web-management/` 复制一份模板和生成脚本，均为带 BUNDLE 摘要的 0444 文件；不装 /etc、systemd 单元或 ZXS 服务。实际使用另行验签的原生 HTTP 版 ZXS，无 nginx、证书、固定域名或套接字前置；见[原生 HTTP 运行方式](../../docs/management-http.md)。
 
-可选的[专用 SMB 上线原件预检](../../docs/smb-host.md)另附在 `/usr/share/local-ops-helper/smb-host/`。发行表登记检查脚本及不可直接启用的单元模板的完整 SHA；不带在线 smbd 或 ZXS 存储程序，不将过往仅供离线建域的包闭包认作在线发行，不安装/激活任何服务。
+旧回环骨架的内部预检源码不作为[正式启动](../../docs/smb-host.md)的条件，另附在 `/usr/share/local-ops-helper/smb-host/`。发行表登记检查脚本及不可直接启用的单元模板的完整 SHA；不带在线 smbd 或 ZXS 存储程序，不将过往仅供离线建域的包闭包认作在线发行，不安装/激活任何服务。

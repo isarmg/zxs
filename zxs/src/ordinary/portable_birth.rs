@@ -61,6 +61,10 @@ impl Birth{
             _=>Err(invalid("working materials belong to a different FILE")),
         })
     }
+    pub(crate) fn working_records_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,write:bool,
+        members:impl FnOnce(&WitnessRead<'_>)->io::Result<()>)->io::Result<Installed>{
+        self.physical_at(parent,sample,&self.container()?,|dir|if write{dir.exclusive()}else{Ok(())},members)
+    }
     fn physical_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr,lock:impl FnOnce(&HeldDir)->io::Result<()>,
         members:impl FnOnce(&WitnessRead<'_>)->io::Result<()>)->io::Result<Installed>{
         let dir=parent.directory_in_sample(leaf,sample)?.ok_or_else(||invalid("original FILE container not installed"))?;

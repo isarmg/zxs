@@ -12,6 +12,7 @@ mod content;
 mod indexed;
 mod flat;
 pub(crate) use flat::work as working_sql;
+pub(crate) use flat::round as working_round;
 mod output;
 pub(crate) use output::after_output;
 mod interval;

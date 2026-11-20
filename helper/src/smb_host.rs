@@ -1,47 +1,80 @@
 //! Internal online-launch handoff, separate from offline SAM creation and from Web.
 //! Pair creation and teardown operate only on the two internally born roles.
-//! There is no public path from a preflight result to a start grant.
+//! Only a new local foreground grant plus the exact release can start it.
 mod process;
 mod origins;
 mod identity;
 mod supervisor;
-use crate::fs_tools::{RuntimeFile,hash_upto};
+mod release;
+use crate::sqlite_install::Online;
 use crate::pinned::{Entity,Mount};
-use helper_linux_evidence::smb_process::initially_no_sender_pidfd;
+use helper_linux_evidence::{diagnostic_process as signals,smb_process::initially_no_sender_pidfd,
+    smb_views::{self,Access,Source}};
 use rustix::{fs::{OFlags,fcntl_getfl,fstatfs},net::{AddressFamily,SocketFlags,SocketType,
     socketpair,sockopt::{socket_acceptconn,socket_passcred,socket_peercred,socket_type}},
     process::{getegid,geteuid,getpid,getuid}};
-use std::{fs::File,io::{self,Seek},os::{fd::{AsFd,BorrowedFd},unix::fs::{FileExt,MetadataExt}}};
+use std::{fs::File,io,os::fd::{AsFd,BorrowedFd},path::Path};
 
-const MAX_IMAGE:u64=128<<20;
-const STORAGE:&[&str]=&["usr","lib","zxs-smb-runtime","debian13-amd64","bin","zxs-smb-storage"];
-const DAEMON:&[&str]=&["usr","lib","zxs-smb-runtime","debian13-amd64","sbin","smbd"];
 fn no()->io::Error {io::Error::other("original dedicated SMB launch could not be established")}
 
-pub(crate) struct Image(RuntimeFile);
-impl Image {
-    /// Expected bytes are supplied from the separately approved online release,
-    /// never by smbd, the Web request, a filename search or this file's own hash.
-    pub(crate) fn selected(expected:[u8;32])->io::Result<Self>{
-        Self::at(DAEMON,expected)
+struct Image<'a>{ release:&'a release::Release, pub(super) file:&'a File, daemon:bool }
+impl<'a> Image<'a>{
+    fn select(release:&'a release::Release,daemon:bool)->io::Result<Self>{
+        let file=release.executable(daemon)?;
+        Ok(Self{release,file,daemon})
     }
-    fn at(parts:&'static [&'static str],expected:[u8;32])->io::Result<Self>{
-        if expected==[0;32]{return Err(no());}
-        let mut f=RuntimeFile::open(parts,true,MAX_IMAGE)?;
-        if !matches!(rustix::fs::fgetxattr(&f.file,c"security.capability",&mut [0u8;0][..]),Err(rustix::io::Errno::NODATA)){return Err(no());}
-        let m=f.file.metadata()?;
-        let mut hdr=[0;64];f.file.read_exact_at(&mut hdr,0)?;
-        if m.gid()!=0 || m.nlink()!=1 || !matches!(m.mode()&0o7777,0o555|0o755)
-            || &hdr[..7]!=b"\x7fELF\x02\x01\x01" || !matches!(u16::from_le_bytes([hdr[16],hdr[17]]),2|3)
-            || hdr[18..20]!=[62,0] {return Err(no());}
-        f.file.rewind()?;
-        if hash_upto(&mut f.file,m.len(),MAX_IMAGE)?!=expected{return Err(no());}
-        f.file.rewind()?;f.recheck()?;
-        Ok(Self(f))
+    fn original(&self)->io::Result<BorrowedFd<'_>>{
+        if !same(self.release.executable(self.daemon)?,self.file)?{return Err(no());}
+        Ok(self.file.as_fd())
     }
-    pub(crate) fn original(&self)->io::Result<BorrowedFd<'_>>{
-        self.0.recheck()?; Ok(self.0.file.as_fd())
+}
+
+/// No worker or browser can mint Online. It owns both original host locks,
+/// the exact approved public records and verified original ordinary volumes.
+pub(crate) fn foreground(approved:&Online)->io::Result<()>{
+    process::host()?;
+    let release=release::Release::select()?;
+    approved.approve(release.manifest_sha())?;
+    signals::watch_smb_cancellation()?;
+    approved.require()?;release.require()?;
+    if signals::cancelled(){return Err(no());}
+    let (pin,system,site,private,state)=approved.host()?;
+    let account=approved.account_parent()?;
+    let [live,bound]=approved.public_originals();
+    let physical=[origins::ident(site)?,origins::ident(private)?,origins::ident(state)?,origins::ident(&account)?];
+    for f in std::iter::once(system).chain(approved.roots().map(|(_,f)|f)){
+        if physical.contains(&origins::ident(f)?){return Err(no());}
     }
+    let null=smb_views::null_device()?;
+    fn src<'a>(p:&'static str,f:&'a File,access:Access)->Source<'a>{Source{path:Path::new(p),file:f,access}}
+    let mut daemon=release.sources(true);
+    for (p,f,access) in [
+            ("instance/private",private,Access::Data),("instance/state",state,Access::Data),
+            ("instance/accountdb",&account,Access::Public),("instance/smb.conf",live,Access::Public),
+            ("instance/domain.bound",bound,Access::Public),("dev/null",&null,Access::Null)
+    ]{
+        daemon.push(src(p,f,access));
+    }
+    let mut storage=release.sources(false);
+    fn relative(p:&Path)->io::Result<&Path>{p.strip_prefix("/").map_err(|_|no())}
+    storage.push(Source{path:relative(pin.path())?,file:system,access:Access::Data});
+    for (p,f) in approved.roots(){storage.push(Source{path:relative(p)?,file:f,access:Access::Data});}
+    // The assembler leaves the supervising process in its actual host
+    // namespace. All attach targets and temporary allocations are private.
+    let (daemon_root,storage_root)=smb_views::prepare(&daemon,&storage,&release.public())?;
+    let instance=origins::file_at(&daemon_root,"instance",OFlags::PATH|OFlags::DIRECTORY|OFlags::CLOEXEC|OFlags::NOFOLLOW)?;
+    let bound_readonly=origins::projected(site,&instance,"domain.bound",128)?;
+    let o=approved.plan().origin;
+    let (uid,gid)=approved.subject();
+    let pair=supervisor::Pair::start(origins::Inputs{approved,release:&release,daemon_root:&daemon_root,
+        storage_root:&storage_root,site,system,system_pin:pin,bound_readonly:&bound_readonly,
+        system_path:pin.path().to_str().ok_or_else(no)?,uid,gid,pool:o.pool,instance:o.instance,
+        operation:o.domain,bound_sha:approved.bound_sha(),live_sha:approved.live_sha(),plan:approved.plan(),
+        null:&null,approved_nss_sha:release.serial()})?;
+    if let Err(e)=approved.ready(){let _=pair.stop();return Err(e);}
+    pair.supervise()?;
+    approved.stopped();
+    Ok(())
 }
 
 pub(crate) struct Control { daemon:File, storage:File }
@@ -75,10 +108,10 @@ impl Control{
     /// or PPid: a subreaper can also wait for a child it adopted. No caller or
     /// enrollment interface for arbitrary pidfds exists. The process ref stays with its
     /// supervisor, so failure cannot consume its ability to stop/reap the child.
-    pub(crate) fn for_storage<'a>(self,birth:&'a File,image:&Image)->io::Result<StorageSide<'a>>{
-        self.untouched()?;image.0.recheck()?;
-        process::qualify(birth,&image.0.file,&self.daemon,&self.storage)?;
-        self.untouched()?;image.0.recheck()?;process::waitable_live(birth)?;
+    fn for_storage<'a>(self,birth:&'a File,image:&Image<'_>)->io::Result<StorageSide<'a>>{
+        self.untouched()?;image.original()?;
+        process::qualify(birth,image.file,&self.daemon,&self.storage)?;
+        self.untouched()?;image.original()?;process::waitable_live(birth)?;
         // No extra daemon-side reference is passed to the storage child.
         drop(self.daemon);
         Ok(StorageSide{endpoint:self.storage,master:birth})

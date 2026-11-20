@@ -156,6 +156,7 @@ pub(super) fn storage_snapshot(birth:&File,image:&File,uid:u32,gid:u32)->io::Res
     let(uid,gid)=(uid.to_string(),gid.to_string());
     if field(&b,b"Tgid:")?.as_slice()!=[id.as_bytes()]||field(&b,b"Pid:")?.as_slice()!=[id.as_bytes()]||
         field(&b,b"PPid:")?.as_slice()!=[parent.as_bytes()]||field(&b,b"NSpid:")?.as_slice()!=[id.as_bytes(),b"1"]||
+        field(&b,b"NSpgid:")?.as_slice()!=[id.as_bytes(),b"1"]||field(&b,b"NSsid:")?.as_slice()!=[id.as_bytes(),b"1"]||
         field(&b,b"Uid:")?.as_slice()!=[uid.as_bytes();4]||field(&b,b"Gid:")?.as_slice()!=[gid.as_bytes();4]||
         !field(&b,b"Groups:")?.is_empty()||field(&b,b"NoNewPrivs:")?.as_slice()!=[b"1".as_slice()]{return Err(no());}
     for k in [b"CapInh:",b"CapPrm:",b"CapEff:",b"CapBnd:",b"CapAmb:"]{

@@ -22,10 +22,10 @@ pub(crate) struct Setting{
 // An exact SMB/management selection and a management-only keyset page use
 // the same current-mode row. Both bounds use the BLOB primary key; a page
 // doesn't enumerate the previous pages or make one extra SELECT per share.
-fn selected(db:&Connection,c:&Catalog,lo:ShareId,hi:ShareId,skip_lo:bool,limit:u8,
+fn selected(db:&Connection,c:&Catalog,lo:ShareId,hi:ShareId,skip_lo:bool,limit:u8,installed_only:bool,
             mut visit:impl FnMut(Setting,&str))->io::Result<()>{
-    let s=db.prepare(c"SELECT r.volume_id,r.publish_op,p.kind,p.state,m.change_op,m.revision,m.mode,o.kind,o.state,r.share_id,r.display_label FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op LEFT JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=(SELECT max(h.revision) FROM main.share_mode h WHERE h.share_id=r.share_id) LEFT JOIN main.operation o ON o.op_id=m.change_op WHERE r.share_id>=?1 AND r.share_id<=?2 AND (?3=0 OR r.share_id>?1) ORDER BY r.share_id LIMIT ?4")?;
-    s.bind_bytes(1,&lo.0)?;s.bind_bytes(2,&hi.0)?;s.bind_integer(3,i64::from(u8::from(skip_lo)))?;s.bind_integer(4,i64::from(limit))?;
+    let s=db.prepare(c"SELECT r.volume_id,r.publish_op,p.kind,p.state,m.change_op,m.revision,m.mode,o.kind,o.state,r.share_id,r.display_label FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op LEFT JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=(SELECT max(h.revision) FROM main.share_mode h WHERE h.share_id=r.share_id) LEFT JOIN main.operation o ON o.op_id=m.change_op WHERE r.share_id>=?1 AND r.share_id<=?2 AND (?3=0 OR r.share_id>?1) AND (?5=0 OR EXISTS(SELECT 1 FROM main.account_pair a JOIN main.share_mode initial_mode ON initial_mode.share_id=r.share_id AND initial_mode.revision=1 JOIN main.operation initial_op ON initial_op.op_id=initial_mode.change_op WHERE a.birth_op=r.author_auth_op AND initial_mode.author_auth_op=a.birth_op AND initial_op.actor_id=a.web_id AND initial_op.kind=4 AND initial_op.state=1)) ORDER BY r.share_id LIMIT ?4")?;
+    s.bind_bytes(1,&lo.0)?;s.bind_bytes(2,&hi.0)?;s.bind_integer(3,i64::from(u8::from(skip_lo)))?;s.bind_integer(4,i64::from(limit))?;s.bind_integer(5,i64::from(u8::from(installed_only)))?;
     loop{
         match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(()),rc=>{check(rc)?;return Err(invalid("cannot select share"));}}
         let share=ShareId(s.array(9)?);if share.0==[0;16]{return Err(invalid("invalid share identity"));}
@@ -47,11 +47,11 @@ pub(in crate::system::reader) fn current(db:&Connection,c:&Catalog,share:ShareId
     find(db,c,share)?.ok_or_else(||invalid("share has not been published"))
 }
 pub(in crate::system::reader) fn find(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Option<Setting>>{
-    let mut found=None;selected(db,c,share,share,false,1,|s,_|found=Some(s))?;Ok(found)
+    let mut found=None;selected(db,c,share,share,false,1,false,|s,_|found=Some(s))?;Ok(found)
 }
 pub(super) fn page(db:&Connection,c:&Catalog,after:Option<ShareId>)->io::Result<(Vec<(Setting,String)>,Option<ShareId>)>{
     const LIMIT:usize=32;let mut rows=Vec::new();
-    selected(db,c,after.unwrap_or(ShareId([0;16])),ShareId([255;16]),true,(LIMIT+1) as u8,|s,name|rows.push((s,name.to_owned())))?;
+    selected(db,c,after.unwrap_or(ShareId([0;16])),ShareId([255;16]),true,(LIMIT+1) as u8,true,|s,name|rows.push((s,name.to_owned())))?;
     let next=if rows.len()>LIMIT{rows.truncate(LIMIT);rows.last().map(|r|r.0.share)}else{None};
     Ok((rows,next))
 }
@@ -97,9 +97,22 @@ impl Change{
     }
 }
 impl WebAdmin<'_>{
+    #[cfg(test)]
     pub(crate) fn share_setting(&self,share:ShareId)->io::Result<Setting>{
         self.source.at(|db,c|{self.current(db,&c)?;current(db,&c,share)})
     }
+    /// The Web surface may change modes on the installer-created
+    /// first folders only; it cannot add a new SMB route or publish a name.
+    pub(crate) fn set_installed_mode(&self,op:OperationId,share:ShareId,previous:OperationId,mode:Mode)->io::Result<Setting>{
+        let request=Change::new(self,op,share,previous,mode)?;
+        self.metadata_change(|db,c|{
+            let mut original=false;
+            selected(db,c,share,share,false,1,true,|_,_|original=true)?;
+            if !original{return Err(invalid("not an installer-selected ordinary folder"));}
+            request.select(db,c)
+        },||Ok(()),|db,next,()|request.insert(db,next))
+    }
+    #[cfg(test)]
     pub(crate) fn set_share_mode(&self,op:OperationId,share:ShareId,previous:OperationId,mode:Mode)->io::Result<Setting>{
         let request=Change::new(self,op,share,previous,mode)?;
         self.metadata_change(|db,c|request.select(db,c),||Ok(()),|db,next,()|request.insert(db,next))

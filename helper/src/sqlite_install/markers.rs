@@ -77,6 +77,16 @@ impl Mark{
         self.verify(dir,wanted)?;Ok(again)
     }
 }
+/// Fixed physical leaf proof of one independently selected approved F.
+pub(super) struct OrdinaryMark(Mark);
+impl OrdinaryMark{
+    pub(super) fn select(dir:&File,uid:u32,wanted:&[u8;101])->io::Result<Self>{
+        if wanted[20]!=2{return Err(bad("not an ordinary volume marker"));}
+        Ok(Self(Mark::read_original(dir,uid,wanted)?))
+    }
+    pub(super) fn verify(&self,dir:&File,wanted:&[u8;101])->io::Result<()>{self.0.verify(dir,wanted)}
+}
+
 /// Retains the original private marker across a short readonly SYSTEM observation.
 pub(super) struct SystemMark(Mark);
 impl SystemMark {

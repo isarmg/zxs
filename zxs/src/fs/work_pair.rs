@@ -19,6 +19,13 @@ impl<'d> WorkPair<'d>{
         let(primary,second,limit)=if table{(checks,pin_checks,spec.table_len()?)}else{(data,pin_data,spec.bytes)};
         Self::issued_window(dir,primary,second,0,limit,true)
     }
+    pub(crate) fn open_edit(work:&'d crate::system::reader::smb::work_change::ReservedEdit<'_>,table:bool)->io::Result<Self>{
+        let (installed,record)=work.original();let dir=installed.directory();
+        let [data,pin_data,checks,pin_checks]=crate::ordinary::working_round::names(record.key().round);
+        let (a,b,lo,hi)=if table{(checks,pin_checks,record.start().checks,record.end().checks)}
+                      else{(data,pin_data,record.start().data,record.end().data)};
+        Self::issued_window(dir,a,b,lo,hi,record.key().revision==1)
+    }
     /// Only a previously selected/reserved window may supply the endpoints.
     /// Starting in an existing round never creates a new file, adopts a
     /// foreign tail, fills a gap, or overwrites any byte before the window.

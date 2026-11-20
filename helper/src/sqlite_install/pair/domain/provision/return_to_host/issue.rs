@@ -5,7 +5,7 @@ use super::{HostOrigins,OriginChannel,Returned};
 use super::super::{FRESH_SITE,Times,live::Stamp};
 use crate::sqlite_install::{bad,request::Id};
 use rustix::fs::{Mode,OFlags,RenameFlags,fchmod,openat,renameat_with};
-use std::{ffi::CStr,fs::File,io::{self,Write},thread,time::{Duration,Instant},os::unix::{ffi::OsStrExt,fs::FileExt},process::{Child,Command,Stdio}};
+use std::{ffi::CStr,fs::File,io,thread,time::{Duration,Instant},os::unix::{ffi::OsStrExt,fs::FileExt},process::{Child,Command,Stdio}};
 
 const MIDDLE:&[&[u8]]=&[b"private",b"state",b"smb.conf",b"accountdb",b".domain.bound.new"];
 const END:&[&[u8]]=&[b"private",b"state",b"smb.conf",b"accountdb",b"domain.bound"];
@@ -90,14 +90,13 @@ impl<'a> Grant<'a>{
     fn foreground(originals:&'a HostOrigins,reference:Id)->io::Result<Self>{
         originals.fresh()?;originals.release.require()?;
         let scope=originals.scope(&reference)?;
-        let terminal=PublicConfirmation::select()?;let stderr=io::stderr();
-        let mut out=stderr.lock();
-        writeln!(out,"仅为此空专用实例创建 Samba 本机域与受保护的 domain.bound。不会使用全机 Samba，不建立账户，不开共享。若中断，保留现场，不重新发号。")?;
-        writeln!(out,"SYSTEM {}；池 {}；预期原 INIT {}（此时尚未查询；降权后仅当原 SYSTEM 确认同一 INIT 已提交才生成域）。",escaped(originals.system.path().as_os_str().as_bytes()),hex_id(&originals.pool),hex_id(&originals.init))?;
-        writeln!(out,"专用实例 {}；原操作 {}；维护主体 {}；审批参考 {}；存储 UID/GID {}/{}。",
-            hex_id(&originals.instance),hex_id(&originals.op),hex_id(&originals.actor),hex_id(&reference),originals.uid,originals.gid)?;
-        writeln!(out,"正式配置 SHA-256 {}；核准的软件发行材料 {}；本次完整范围 {}。",hex_id(&originals.config),hex_id(&originals.release.key()),hex_id(&scope))?;out.flush()?;drop(out);
-        terminal.confirm_domain()?;
+        let terminal=PublicConfirmation::select()?;
+        let preview=format!("仅为此空专用实例创建原 Samba 本机域与 domain.bound，不设账户、不开服务或共享。中断保留现场，不重发。\nSYSTEM {}；池 {}；原 INIT {}（降权核同一原池和所选 F，未核不能签发）。\n实例 {}；域操作 {}；计划首设 {}；维护主体 {}；审批参考 {}；存储 UID/GID {}/{}。\n正式配置 SHA-256 {}；核准发行 {}；本次范围 {}。\n{}",
+            escaped(originals.system.path().as_os_str().as_bytes()),hex_id(&originals.pool),hex_id(&originals.init),
+            hex_id(&originals.instance),hex_id(&originals.op),hex_id(&originals.setup),hex_id(&originals.actor),
+            hex_id(&reference),originals.uid,originals.gid,hex_id(&originals.config),hex_id(&originals.release.key()),
+            hex_id(&scope),crate::smb_profile::approval_text(originals.live.plan()));
+        terminal.confirm_domain(preview)?;
         terminal.check()?;originals.fresh()?;originals.release.require()?;
         if originals.scope(&reference)?!=scope{return Err(bad("approved originals changed; do not start provisioning"));}
         Ok(Self{originals,reference,scope,terminal})

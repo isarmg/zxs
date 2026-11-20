@@ -8,6 +8,7 @@ static bool zxs_search_same(struct smbd_smb2_query_directory_state *s)
 	return d!=NULL && d==s->zxs_search && zxs_request_root_current(n) && s->dirfsp->conn==n->tcon->compat &&
 		s->dirfsp->vuid==n->session->global->session_wire_id &&
 		d->tcon==n->tcon && d->session==n->session && d->seq==n->session->global->auth_session_info_seqnum &&
+		(d->folder.mode==0 || zxs_request_folder_current(n,&d->folder)) &&
 		(s->dirfsp->access_mask&SEC_DIR_LIST)!=0 &&
 		change_to_user_and_service(s->dirfsp->conn,s->dirfsp->vuid);
 }
@@ -67,7 +68,7 @@ static void zxs_search_received(struct tevent_req *sub)
 		}
 		memcpy(name,r+1,len);name[len]=0;
 		if(mask_match(name,s->zxs_mask,s->dirfsp->conn->case_sensitive)){
-			status=zxs_marshal_child(s,s->dirfsp->conn,s->info_level,name,
+			status=zxs_marshal_child(s,s->dirfsp->conn,s->info_level,name,s->zxs_search->folder.mode==0,
 				zxs_row_u64(r+1+ZXS_DIR_NAME),zxs_row_u64(r+1+ZXS_DIR_NAME+8),
 				s->in_output_buffer_length-(int)s->out_output_buffer.length,
 				s->base_data,&s->pdata,s->end_data,&off);
@@ -91,7 +92,8 @@ static void zxs_search_schedule(struct tevent_req *req)
 {
 	struct smbd_smb2_query_directory_state *s=tevent_req_data(req,struct smbd_smb2_query_directory_state);
 	if(++s->zxs_pages>512){zxs_search_release(s);tevent_req_nterror(req,NT_STATUS_RETRY);return;}
-	s->zxs_cut=zxs_dir_cut_send(s,s->ev,s->smb2req,s->zxs_eof?0:ZXS_DIR_ROWS,
+	const struct zxs_smb_tree_cut *folder=s->zxs_search->folder.mode==0?NULL:&s->zxs_search->folder;
+	s->zxs_cut=zxs_dir_cut_send(s,s->ev,s->smb2req,folder,s->zxs_eof?0:ZXS_DIR_ROWS,
 		s->zxs_eof?NULL:s->zxs_after+1,s->zxs_eof?0:s->zxs_after[0]);
 	if(s->zxs_cut==NULL){zxs_search_release(s);tevent_req_nterror(req,NT_STATUS_NO_MEMORY);return;}
 	tevent_req_set_callback(s->zxs_cut,zxs_search_received,req);

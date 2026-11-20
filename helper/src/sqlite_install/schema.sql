@@ -3,7 +3,7 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 7;
+PRAGMA user_version = 9;
 
 -- Both INIT (1) and SETUP_PAIR (2) name a separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
@@ -12,10 +12,12 @@ PRAGMA user_version = 7;
 -- FIRST_WORK (6) selects the first manual working revision, never a formal Node.
 -- RESET_SMB (7) is pending until its single native SAM account is durable.
 -- RESET_WEB (8) changes only the Web verifier in one SQL commit.
+-- WORK_EDIT (10) revises one working round; MANUAL_NODE (11) freezes it explicitly.
+-- Kind 9 is reserved for the independent first-install recycle selection.
 -- An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6,7,8)),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6,7,8,10,11)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
@@ -209,6 +211,7 @@ CREATE TABLE first_work (
 CREATE INDEX retained_work_names ON first_work(file_id,previous_save,retained_mask) WHERE retained_mask<>0;
 CREATE TRIGGER start_work BEFORE INSERT ON first_work
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.save_op)
+ OR EXISTS(SELECT 1 FROM work_edit WHERE file_id=NEW.file_id)
  OR EXISTS(SELECT 1 FROM first_work WHERE save_op=NEW.save_op OR (file_id=NEW.file_id AND attempt_no=NEW.attempt_no)
            OR (NEW.previous_save IS NOT NULL AND previous_save=NEW.previous_save))
  OR (NEW.previous_save IS NOT NULL AND NOT EXISTS(
@@ -227,6 +230,145 @@ BEGIN SELECT RAISE(ABORT,'first working revision requires the actual born file a
 CREATE TRIGGER keep_work BEFORE UPDATE ON first_work BEGIN SELECT RAISE(ABORT,'immutable first working input'); END;
 CREATE TRIGGER retain_work BEFORE DELETE ON first_work BEGIN SELECT RAISE(ABORT,'retain original working input'); END;
 
+-- Later SAVE reservations. One edit opens a new physical round exactly when
+-- the preceding logical view has been explicitly frozen, not when FULL exists.
+-- Real file exclusion, actual pair/bytes and append sync are operator-side
+-- proofs; a SQLite row can express their one authorized cut, not establish it.
+CREATE TABLE work_edit (
+  edit_op        BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  file_id        BLOB NOT NULL REFERENCES root_entry(file_id),
+  share_id       BLOB NOT NULL REFERENCES root_share(share_id),
+  setting_op     BLOB NOT NULL REFERENCES share_mode(change_op),
+  auth_op        BLOB NOT NULL REFERENCES operation(op_id),
+  writer_nonce   BLOB NOT NULL CHECK(length(writer_nonce)=16 AND writer_nonce<>zeroblob(16)),
+  issue          INTEGER NOT NULL CHECK(issue BETWEEN 1 AND 9223372036854775806),
+  round_op       BLOB NOT NULL CHECK(length(round_op)=16 AND round_op<>zeroblob(16)),
+  predecessor    BLOB REFERENCES operation(op_id),
+  parent_commit  BLOB REFERENCES operation(op_id),
+  revision       INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 9223372036854775806),
+  logical_bytes  INTEGER NOT NULL CHECK(logical_bytes>=0),
+  raw_at         INTEGER NOT NULL CHECK(raw_at>=0),
+  raw_end        INTEGER NOT NULL CHECK(raw_end>=raw_at),
+  checks_at      INTEGER NOT NULL CHECK(checks_at>=0),
+  map_at         INTEGER NOT NULL CHECK(map_at>=checks_at),
+  map_bytes      INTEGER NOT NULL CHECK(map_bytes BETWEEN 115 AND 6291571),
+  checks_end     INTEGER NOT NULL CHECK(checks_end>=map_at AND checks_end-map_at=map_bytes),
+  packed_sha     BLOB NOT NULL CHECK(length(packed_sha)=32),
+  directory_sha  BLOB NOT NULL CHECK(length(directory_sha)=32),
+  map_sha        BLOB NOT NULL CHECK(length(map_sha)=32),
+  previous_pending BLOB REFERENCES work_edit(edit_op),
+  retained_mask  INTEGER NOT NULL CHECK(retained_mask BETWEEN 0 AND 15),
+  UNIQUE(file_id,issue),
+  CHECK(previous_pending IS NOT NULL OR retained_mask=0),
+  CHECK(raw_end-raw_at<=logical_bytes AND raw_end-raw_at<=1125899906842624),
+  CHECK(map_at-checks_at=95+32*((raw_end-raw_at+4194303)/4194304)
+                          +32*((((raw_end-raw_at+4194303)/4194304)+1023)/1024)),
+  CHECK((revision=1 AND round_op=edit_op AND raw_at=0 AND checks_at=0) OR
+        (revision>1 AND round_op<>edit_op AND predecessor IS NOT NULL)),
+  CHECK(predecessor IS NULL OR predecessor<>edit_op)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX work_member_heads ON work_edit(file_id,issue) WHERE revision=1;
+CREATE INDEX work_pair_end ON work_edit(file_id,round_op,issue);
+CREATE INDEX work_retained_members ON work_edit(file_id,previous_pending,retained_mask) WHERE retained_mask<>0;
+
+-- A frozen exact view publishes one Node, with no copy and no work append.
+-- A node is not a new form of authority over this ordinary FILE/branch.
+CREATE TABLE manual_node (
+  commit_op    BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  file_id      BLOB NOT NULL REFERENCES root_entry(file_id),
+  round_op     BLOB NOT NULL CHECK(length(round_op)=16 AND round_op<>zeroblob(16)),
+  save_op      BLOB NOT NULL REFERENCES operation(op_id),
+  revision     INTEGER NOT NULL CHECK(revision>0),
+  auth_op      BLOB NOT NULL REFERENCES operation(op_id),
+  parent_op    BLOB REFERENCES manual_node(commit_op),
+  ord          INTEGER NOT NULL CHECK(ord BETWEEN 1 AND 9223372036854775806),
+  node_id      BLOB NOT NULL UNIQUE CHECK(length(node_id)=16 AND node_id<>zeroblob(16)),
+  version_id   BLOB NOT NULL UNIQUE CHECK(length(version_id)=16 AND version_id<>zeroblob(16)),
+  UNIQUE(file_id,ord),
+  UNIQUE(file_id,round_op),
+  UNIQUE(save_op),
+  CHECK((ord=1)=(parent_op IS NULL))
+) STRICT, WITHOUT ROWID;
+
+CREATE VIEW recorded_work AS
+SELECT f.file_id,f.save_op,f.save_op AS round_op,0 AS issue,1 AS revision,f.logical_bytes,
+       f.logical_bytes AS raw_end,
+       95+32*((f.logical_bytes+4194303)/4194304)+32*((((f.logical_bytes+4194303)/4194304)+1023)/1024) AS checks_end
+FROM first_work f JOIN operation o ON o.op_id=f.save_op AND o.kind=6 AND o.state=1
+UNION ALL
+SELECT w.file_id,w.edit_op,w.round_op,w.issue,w.revision,w.logical_bytes,w.raw_end,w.checks_end
+FROM work_edit w JOIN operation o ON o.op_id=w.edit_op AND o.kind=10 AND o.state=1;
+
+CREATE VIEW selected_work AS
+SELECT h.* FROM recorded_work h
+WHERE NOT EXISTS(SELECT 1 FROM recorded_work n WHERE n.file_id=h.file_id AND n.issue>h.issue);
+
+CREATE VIEW last_manual AS
+SELECT n.* FROM manual_node n JOIN operation o ON o.op_id=n.commit_op AND o.kind=11 AND o.state=1
+WHERE NOT EXISTS(SELECT 1 FROM manual_node next JOIN operation p ON p.op_id=next.commit_op AND p.kind=11 AND p.state=1
+                 WHERE next.file_id=n.file_id AND next.ord>n.ord);
+
+CREATE VIEW pending_edit AS
+SELECT w.* FROM work_edit w LEFT JOIN operation o ON o.op_id=w.edit_op
+WHERE (o.op_id IS NULL OR (o.kind=10 AND o.state=0))
+  AND NOT EXISTS(SELECT 1 FROM work_edit n WHERE n.file_id=w.file_id AND n.issue>w.issue);
+
+CREATE VIEW live_ordinary_writer AS
+SELECT r.share_id,r.volume_id,m.change_op AS setting_op,s.credential_op AS auth_op,a.smb_id AS actor_id
+FROM root_share r JOIN share_mode m ON m.share_id=r.share_id
+JOIN operation p ON p.op_id=m.change_op AND p.kind=4 AND p.state=1
+CROSS JOIN active_credential s JOIN account_pair a ON a.singleton=s.slot
+WHERE m.mode=2 AND s.role=1
+  AND NOT EXISTS(SELECT 1 FROM share_mode h WHERE h.share_id=m.share_id AND h.revision>m.revision);
+
+CREATE TRIGGER issue_work_edit BEFORE INSERT ON work_edit
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.edit_op)
+  OR EXISTS(SELECT 1 FROM work_edit WHERE edit_op=NEW.edit_op OR (file_id=NEW.file_id AND issue=NEW.issue))
+  OR NEW.issue<>1+COALESCE((SELECT max(issue) FROM work_edit WHERE file_id=NEW.file_id),0)
+  OR NEW.predecessor IS NOT (SELECT save_op FROM selected_work WHERE file_id=NEW.file_id)
+  OR NEW.parent_commit IS NOT (SELECT commit_op FROM last_manual WHERE file_id=NEW.file_id)
+  OR EXISTS(SELECT 1 FROM first_work f LEFT JOIN operation o ON o.op_id=f.save_op
+            WHERE f.file_id=NEW.file_id AND (o.op_id IS NULL OR (o.kind=6 AND o.state=0))
+              AND NOT EXISTS(SELECT 1 FROM first_work n WHERE n.previous_save=f.save_op))
+  OR NEW.previous_pending IS NOT (SELECT edit_op FROM pending_edit WHERE file_id=NEW.file_id)
+  OR EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=NEW.file_id AND p.writer_nonce=NEW.writer_nonce)
+  OR (NEW.retained_mask<>0 AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.edit_op=NEW.previous_pending
+                   AND p.file_id=NEW.file_id AND p.revision=1 AND p.round_op<>NEW.round_op))
+  OR NOT EXISTS(SELECT 1 FROM root_entry b JOIN operation o ON o.op_id=b.create_op AND o.kind=5 AND o.state=1
+       JOIN live_ordinary_writer a ON a.volume_id=b.volume_id AND a.share_id=NEW.share_id
+       WHERE b.file_id=NEW.file_id AND a.setting_op=NEW.setting_op AND a.auth_op=NEW.auth_op)
+  OR (NEW.revision=1 AND NEW.predecessor IS NOT NULL AND NOT EXISTS(
+       SELECT 1 FROM selected_work w JOIN last_manual n ON n.file_id=w.file_id
+       WHERE w.file_id=NEW.file_id AND w.round_op=n.round_op AND w.save_op=n.save_op AND n.revision=w.revision))
+  OR (NEW.revision>1 AND NOT EXISTS(
+       SELECT 1 FROM selected_work w WHERE w.file_id=NEW.file_id AND w.round_op=NEW.round_op AND w.revision+1=NEW.revision
+        AND w.raw_end<=NEW.raw_at AND w.checks_end<=NEW.checks_at
+        AND NOT EXISTS(SELECT 1 FROM last_manual n WHERE n.file_id=w.file_id AND n.round_op=w.round_op)))
+BEGIN SELECT RAISE(ABORT,'work SAVE requires the actual current view, writer and ordinary generation'); END;
+CREATE TRIGGER keep_work_edit BEFORE UPDATE ON work_edit BEGIN SELECT RAISE(ABORT,'immutable working SAVE'); END;
+CREATE TRIGGER retain_work_edit BEFORE DELETE ON work_edit BEGIN SELECT RAISE(ABORT,'retain original working SAVE'); END;
+
+-- Both the deferred child insertion and the actual kind-11 publication
+-- use this exact admission: SQL must not freeze a stale view through order.
+CREATE VIEW manual_ready AS
+SELECT h.file_id,h.save_op,h.round_op,h.revision,a.credential_op AS auth_op,
+       n.commit_op AS parent_op,1+COALESCE(n.ord,0) AS ord
+FROM selected_work h LEFT JOIN last_manual n ON n.file_id=h.file_id
+CROSS JOIN active_credential a
+WHERE a.role=0 AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=h.file_id);
+
+CREATE TRIGGER publish_manual_node BEFORE INSERT ON manual_node
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.commit_op)
+  OR EXISTS(SELECT 1 FROM manual_node n WHERE n.commit_op=NEW.commit_op OR n.node_id=NEW.node_id OR n.version_id=NEW.version_id
+       OR n.save_op=NEW.save_op OR (n.file_id=NEW.file_id AND (n.round_op=NEW.round_op OR n.ord=NEW.ord)))
+  OR NOT EXISTS(SELECT 1 FROM manual_ready h WHERE h.file_id=NEW.file_id AND h.save_op=NEW.save_op
+                AND h.round_op=NEW.round_op AND h.revision=NEW.revision AND h.auth_op=NEW.auth_op
+                AND h.ord=NEW.ord AND h.parent_op IS NEW.parent_op)
+BEGIN SELECT RAISE(ABORT,'manual publication requires one exact settled original work view and current Web authority'); END;
+CREATE TRIGGER keep_manual_node BEFORE UPDATE ON manual_node BEGIN SELECT RAISE(ABORT,'immutable manual node'); END;
+CREATE TRIGGER retain_manual_node BEFORE DELETE ON manual_node BEGIN SELECT RAISE(ABORT,'retain original manual node'); END;
+
 -- Setup reserves the pair before native IO. Neither role is active until the
 -- same setup commits; role-specific resets never change the other role.
 CREATE TRIGGER new_origin BEFORE INSERT ON operation
@@ -236,6 +378,16 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) 
   OR (NEW.kind=8 AND (NEW.state<>1 OR NOT EXISTS(SELECT 1 FROM credential_reset r
         JOIN web_password w ON w.credential_op=r.op_id AND w.generation=r.generation
         WHERE r.op_id=NEW.op_id AND r.role=0)))
+  OR (NEW.kind<>10 AND EXISTS(SELECT 1 FROM work_edit WHERE edit_op=NEW.op_id))
+  OR (NEW.kind=10 AND (NEW.state<>0 OR NOT EXISTS(
+       SELECT 1 FROM work_edit w JOIN live_ordinary_writer a ON a.setting_op=w.setting_op AND a.auth_op=w.auth_op
+       WHERE w.edit_op=NEW.op_id AND a.share_id=w.share_id AND a.actor_id=NEW.actor_id)))
+  OR (NEW.kind<>11 AND EXISTS(SELECT 1 FROM manual_node WHERE commit_op=NEW.op_id))
+  OR (NEW.kind=11 AND (NEW.state<>1 OR NOT EXISTS(
+       SELECT 1 FROM manual_node n JOIN manual_ready h ON h.file_id=n.file_id AND h.save_op=n.save_op
+           AND h.round_op=n.round_op AND h.revision=n.revision AND h.auth_op=n.auth_op
+           AND h.ord=n.ord AND h.parent_op IS n.parent_op
+       JOIN account_pair b ON b.singleton=1 WHERE n.commit_op=NEW.op_id AND b.web_id=NEW.actor_id)))
   OR (NEW.kind<>6 AND EXISTS(SELECT 1 FROM first_work WHERE save_op=NEW.op_id))
   OR (NEW.kind=6 AND (NEW.state<>0 OR NOT EXISTS(
     SELECT 1 FROM first_work f JOIN active_credential s ON s.role=1 AND s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
@@ -324,8 +476,14 @@ WHEN OLD.state<>0 OR NEW.state<>1 OR NOT (
   (OLD.kind=6 AND EXISTS(SELECT 1 FROM first_work f JOIN share_mode m ON m.change_op=f.setting_op
     JOIN active_credential s ON s.role=1 AND s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE f.save_op=OLD.op_id AND NOT EXISTS(SELECT 1 FROM first_work nxt WHERE nxt.previous_save=f.save_op)
+      AND NOT EXISTS(SELECT 1 FROM work_edit w WHERE w.file_id=f.file_id)
       AND a.smb_id=OLD.actor_id AND m.mode=2
       AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=f.share_id))) OR
+  (OLD.kind=10 AND EXISTS(SELECT 1 FROM pending_edit p
+    JOIN live_ordinary_writer a ON a.share_id=p.share_id AND a.setting_op=p.setting_op AND a.auth_op=p.auth_op
+    WHERE p.edit_op=OLD.op_id AND a.actor_id=OLD.actor_id
+      AND p.predecessor IS (SELECT save_op FROM selected_work WHERE file_id=p.file_id)
+      AND p.parent_commit IS (SELECT commit_op FROM last_manual WHERE file_id=p.file_id))) OR
   (OLD.kind=5 AND EXISTS(SELECT 1 FROM root_entry e JOIN share_mode m ON m.change_op=e.setting_op
     JOIN active_credential s ON s.role=1 AND s.credential_op=e.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE e.create_op=OLD.op_id AND a.smb_id=OLD.actor_id AND m.mode=2

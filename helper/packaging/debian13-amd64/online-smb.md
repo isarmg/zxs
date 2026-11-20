@@ -4,17 +4,16 @@
 
 ### 输入与职责
 
-1. [固定锁](online-sources.json)选择共同发行、只接受 SMB 3.1.1 的单一 ZXS 树 `63dc089fa23326d6e19322b74672b6ade4669e32`，用 `--project-commit` 提供包含它的真实已批准联合提交。发行机必须已有只读、完整的原 Git 对象库；不读工作树、不引用相邻 checkout、不 fetch、不放宽到 main 的新版本。按原路径、mode、长度、SHA-256 核全部 279 个文件。ZXS 是产品补丁的唯一作者；helper 不再维护另一套业务补丁。
+1. [固定锁](online-sources.json)选择共同发行、只接受 SMB 3.1.1 的单一 ZXS 树 `3605654ab4b7f5be7823a9845eade086a708e2a6`，用 `--project-commit` 提供包含它的真实已批准联合提交。发行机必须已有只读、完整的原 Git 对象库；不读工作树、不引用相邻 checkout、不 fetch、不放宽到 main 的新版本。按原路径、mode、长度、SHA-256 核全部 1124 个文件。ZXS 是产品补丁的唯一作者；helper 不再维护另一套业务补丁。
 2. Debian 13 amd64 的两套只读本地镜像：稳定版根下含 `dists/trixie/`、安全仓根下含 `dists/trixie-security/`，各带相应 `pool/` 原件。两份的 main Packages/Sources 及稳定版 main/Contents-amd64.gz 都需在场。核 [Debian 签名发行索引](https://www.debian.org/doc/manuals/securing-debian-manual/deb-pack-sign.en.html)、其中的 Sources 校验和及对应的完整 `samba 2:4.22.11+dfsg-0+deb13u1` 记录，保留原签名 .dsc、orig.tar.xz 和 debian.tar.xz；[dpkg-source](https://manpages.debian.org/trixie/dpkg-dev/dpkg-source.1.en.html) 还必须能以独立受信的 Debian 开发者签名密钥环（仅有 archive keyring 不够）核 .dsc 签名与强校验后才解包。保留原件便于重核，不从未修改的系统二进制、未打 Debian quilt 的上游 tar 或脱离该套源码的安全补丁拼装。固定历史快照不是“目前无漏洞”的证明。发布前另核该版及依赖的最新安全状态；需要更新时整套重钉重新复核。
 3. 干净、独占、禁网的 Debian 13 amd64 **一次性构建机**，普通非 root 账号，对业务设备/密钥/现场服务无访问。独立验证整个不可变构建镜像、Debian 软件/构建依赖与 keyring、完整 Rust 1.100.0 工具链与标准库；不能光靠版本字符串。Rust/Cargo 固定在 `/opt/zxs-rust-1.100.0/bin`，不用 rustup 在线补装。构建者独占且有权新建 `/build/zxs-smb-v1`，它须不存在，不能是其他 Git 仓库的子目录；父目录及工具配置不得含未批准的 Cargo/Git/编译器设置。配方使用固定工位路径、UTC、C locale、SOURCE_DATE_EPOCH、干净 HOME、单作业及离线锁定 Cargo，帮助复现；未做双构建比对，不能声称位对位可复现。
 4. 在独立受信参考构建镜像可先用 `online_smb_build.py --describe-environment` 取得 `BUILD-ENV-2`：实际安装的包/架构/版本、Rust/Cargo 的真实版本输出及所列构建驱动的实际文件摘要。审核后将其 SHA-256 带外给这次构建者；不要在待验机器现算现批。此记录不是启动器、也不能代替整个镜像及实际工具链/依赖的真实性证明。旧 BUILD-ENV-1 不能代替本版带 dpkg-deb/dpkg-query 的记录。另备已独立核过的工具链/链接材料的对应源和版权归档及 SHA-256；脚本仅限量保全原字节，不替发行方鉴定法律完备性。
 
-5. 站点独立批准的文件 `ZXS-SMB-UNIX-1` 和带外 SHA-256 是本次构建的必要输入；不从构建机/宿主 NSS 推断。维护者以真实原申请取存储 UID/GID、以实际 HTTPS 前端配置取 Web 代理 UID/GID，并独立分配两者以外的专用 SMB 执行 UID/GID；这些用户号和组号分别不能重叠，不能占用 0、65534、无效号或现场任何其他主体已授权的号码。批准声明只含数字，不含密码或共享权。固定格式如下（只是合成数字，不应照抄；十进制、无前置零、以 LF 结束）：
+5. 站点独立批准的文件 `ZXS-SMB-UNIX-2` 和带外 SHA-256 是本次构建的必要输入；不从构建机/宿主 NSS 推断。维护者以真实原申请取普通存储（也是 ZXS 原生 HTTP 的运行身份）UID/GID，另分配独立的 SMB 执行 UID/GID；这些用户号和组号分别不能重叠，不能占用 0、65534、无效号或现场任何其他主体已授权的号码。批准声明只含数字，不含密码或共享权。固定格式如下（只是合成数字，不应照抄；十进制、无前置零、以 LF 结束）：
 
 ```text
-ZXS-SMB-UNIX-1
+ZXS-SMB-UNIX-2
 storage 2001 2002
-web-proxy 3001 3002
 smb-execution 4001 4002
 ```
 
@@ -52,3 +51,6 @@ smb-execution 4001 4002
 - **本机编号不等于网络账户。** [原版 smbd](https://github.com/samba-team/samba/blob/samba-4.22.11/source3/smbd/server.c)在接收客户前即需建立系统和内部 guest 令牌；[其实现](https://github.com/samba-team/samba/blob/samba-4.22.11/source3/auth/auth_util.c)按本地身份查询。角色私有 passwd/group 包含初始化用的 root(0:0)、nobody(65534:65534，组 nogroup) 和独立批准的唯一 `zxs-smb-client` 数值执行身份；所有行都锁定密码，无补充组、无 shell 程序，也不复制任何宿主账户。角色还保留摘要已核的原身份证明 `/etc/zxs-smb-identities`。主管在产生两位子进程前以实际只读角色根复核这四份 NSS 文件和之前独立核的存储/代理身份；存储角色不取得该映射。这不是产品账号或登录权，也不会开放匿名登录。
 - **字符集为什么带两件。** 固定配置的 Unix 字符集是 UTF-8、DOS 是 CP850。Samba 自有 UTF-8/UTF-16 处理不覆盖此代码页；[iconv.c](https://github.com/samba-team/samba/blob/samba-4.22.11/lib/util/charset/iconv.c)会向系统请求 CP850 与 UTF-16LE 的双向转换。配方只从准确的 amd64 libc6 2.41-12+deb13u4 原包取 `IBM850.so`、`UTF-16.so`，核 ELF 中实际定义的可调用 gconv 符号，递归核两者的 NEEDED 和供应者；专路径加载不假设模块一定有 SONAME。从原包[基础表](https://github.com/bminor/glibc/blob/glibc-2.41/iconvdata/gconv-modules)与[额外表](https://github.com/bminor/glibc/blob/glibc-2.41/iconvdata/gconv-modules-extra.conf)核并仅生成五条规则（CP850 别名、IBM850/UTF-16LE 分别与 INTERNAL 双向连接），在清单内留下两份完整输入表的来源和摘要。不投射剩余模块、缓存、GCONV_PATH 或构建机的数据库。Samba 大小写表已在[codepoints.c](https://github.com/samba-team/samba/blob/samba-4.22.11/lib/util/charset/codepoints.c)编入；不需要额外的 upcase.dat/lowcase.dat。
 - **未验证的边界。** 没有把普通发行版 Samba 的 passdb、VFS 或认证插件作为候选；这份补丁固定域、只读原生 tdbsam 和 Samba 自己的认证回调与 `zxs_file`，不从宿主加载另一套实现。配方本身不验证凭据、不启动服务；正确来源和角色根仍不证明成功网络登录。存储角色不带上述 smbd 专用材料。签发前仍须在独立隔离的真实角色根验证不走宿主服务、NSS 按名称及编号都能查到准确的三个角色内身份（无附组）、以及非 ASCII 的 CP850 字节 82 与 UTF-16LE E9 00 双向一致；仅进程启动或 ASCII 通过无法排除上游悄悄退回 ASCII。以上验收、实际认证、测试和签章本次均未执行。
+
+
+运行侧仅消耗独立验证后固定安装的 `ELF-ROLES-1` 与两棵 `elf-roles/{smbd,storage}`。该窄清单逐件绑定来源整树、实际共用数据库定义、模式、字节数和 SHA-256，不从站点自报、宿主全局库或可换的 JSON 选其他原件。独立发行者签章和托管仍是必要步骤；[正式启动](../../docs/smb-host.md) 不由配方执行。

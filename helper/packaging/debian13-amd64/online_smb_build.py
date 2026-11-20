@@ -30,6 +30,17 @@ def as_json(p,data):
     with p.open("x",encoding="ascii",newline="\n") as f:
         json.dump(data,f,indent=2,sort_keys=True,ensure_ascii=True);f.write("\n")
 
+def runtime_manifest(linked,schema_sha):
+    rows=["ZXS-SMB/ELF-ROLES-1","source "+linked["project_tree"],"schema "+schema_sha,
+          "nss "+linked["site_identities_sha256"]]
+    for role in ("smbd","storage"):
+        for name,r in sorted(linked["roles"][role]["files"].items()):
+            require(re.fullmatch(r"[A-Za-z0-9._+/\\-]{1,232}",name),"invalid runtime map leaf")
+            rows.append(f'{role} {r["mode"]} {r["size"]} {r["sha256"]} {name}')
+    raw=("\n".join(rows)+"\n").encode("ascii")
+    require(len(raw)<=512<<10,"runtime manifest exceeds fixed byte budget")
+    return raw
+
 def tools_record(env,work,pin):
     # Package versions and the two Rust drivers are a cross-check. An independently
     # verified immutable image (including sysroots, std, loader, config) is required.
@@ -107,6 +118,12 @@ def main():
     for name in RECIPE:shutil.copyfile(HERE/name,recipes/name)
     shutil.copyfile(HERE.parent.parent/"LICENSE",recipes/"helper-LICENSE")
     original=srcs/"zxs";files=git_export(a.project_git,original,pin,env)
+    # The Helper candidate and actual storage must read the same database.
+    # Refuse the old frozen source pin before Waf/Cargo, not just at startup.
+    schema=member(original,"src/system/schema.sql")
+    helper_schema=HERE.parent.parent/"src/sqlite_install/schema.sql"
+    schema_sha=digest(schema)
+    require(schema.read_bytes()==helper_schema.read_bytes(),"ZXS and Helper database formats do not match")
     native=work/"samba";debian(a.debian_mirror,srcs,native,pin,env)
     zxs=work/"zxs";shutil.copytree(original,zxs)
     post=patch_source(native,original,files,pin,env)
@@ -137,6 +154,9 @@ def main():
                   toolchain_materials_sha256=a.materials_sha256)
     catalog.current()  # A long build can cross the signed Valid-Until.
     as_json(BUILD/"UNSIGNED-ELF-ROLES.json",linked)
+    runtime=BUILD/"ELF-ROLES-1"
+    with runtime.open("xb") as f:f.write(runtime_manifest(linked,schema_sha))
+    runtime.chmod(0o444)  # unsigned; authorization is separate
     flag.unlink()
     print("Created unsigned role-specific ELF and initialization materials; not deployable, no service or trust record.")
 

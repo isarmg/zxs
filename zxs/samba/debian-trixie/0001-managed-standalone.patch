@@ -52,7 +52,7 @@
  		TALLOC_FREE(n2);
  
  		/* finish up the last section */
-@@ -4225,6 +4247,94 @@
+@@ -4225,6 +4247,105 @@
  		       true);  /* reinit_globals */
  }
  
@@ -73,10 +73,18 @@
 +	/* Review the actual stored text. A substitution which expands to an
 +	 * empty string during startup may expand differently on a later CLOSE. */
 +	const struct loadparm_substitution *sub = lpcfg_noop_substitution();
-+	int i, ipc;
++	int i, ipc, business;
++	const char **ports=lp_smb_ports();
 +
 +	if (lp_server_role() != ROLE_STANDALONE || lp_security() != SEC_USER ||
++
 +	    strcmp(lp_unix_charset(), "UTF-8") != 0 ||
++	    !lp_disable_netbios() || lp_multicast_dns_register() || lp_host_msdfs() ||
++	    !lp_bind_interfaces_only() || lp_interfaces()==NULL ||
++	    ports==NULL || ports[0]==NULL || strcmp(ports[0],"445")!=0 || ports[1]!=NULL ||
++	    lp_enable_core_files() || !zxs_empty(lp_panic_action(mem_ctx,sub)) ||
++	    strcmp(lp_logging(mem_ctx,sub),"file")!=0 || strcmp(lp_logfile(mem_ctx,sub),"/dev/null")!=0 ||
++	    strcmp(lp_log_level(mem_ctx,sub),"0")!=0 ||
 +	    strcmp(lp_netbios_name(), "ZXSLOCAL") != 0 ||
 +	    !zxs_list_empty(lp_netbios_aliases()) || lp_clustering() ||
 +	    strcmp(lp_private_dir(), "/instance/private") != 0 ||
@@ -102,7 +110,8 @@
 +		return false;
 +	}
 +	ipc = lp_servicenumber("IPC$");
-+	if (ipc < 0 || !lp_snum_ok(ipc)) {
++	business=lp_servicenumber("ZXS");
++	if (ipc < 0 || !lp_snum_ok(ipc) || business<0 || business==ipc || !lp_snum_ok(business)) {
 +		return false;
 +	}
 +	for (i = 0; i < lp_numservices(); i++) {
@@ -131,7 +140,9 @@
 +		}
 +		vfs = lp_vfs_objects(i);
 +		path = lp_path(mem_ctx,sub,i);
-+		if (!zxs_smb_direct_service(lp_const_servicename(i), lp_browseable(i), lp_nt_pipe_support(), lp_host_msdfs()) || lp_administrative_share(i) || strequal(lp_fstype(i), "IPC") ||
++		const char *role=lp_parm_const_string(i,"zxs","share role",NULL);
++		if (i!=business || strcmp(lp_const_servicename(i),"ZXS")!=0 || role==NULL || strcmp(role,"namespace")!=0 ||
++		    lp_browseable(i) || lp_read_only(i) || lp_administrative_share(i) || strequal(lp_fstype(i), "IPC") ||
 +		    lp_change_notify() || lp_kernel_oplocks(i) || !lp_locking(&lock_params) ||
 +		    lp_strict_locking(&lock_params) != true || lp_posix_locking(&lock_params) ||
 +		    !zxs_empty(lp_magic_script(mem_ctx,sub,i)) || !zxs_empty(lp_magic_output(mem_ctx,sub,i)) ||
@@ -141,13 +152,13 @@
 +			return false;
 +		}
 +	}
-+	return true;
++	return zxs_runtime_lan_config(lp_parm_const_string(business,"zxs","first plan",NULL));
 +}
 +
  /**
   * The typical lp_load wrapper with shares, loads global and
   * shares, including IPC, but does not force immediate
-@@ -4232,11 +4342,19 @@
+@@ -4232,11 +4353,19 @@
   */
  bool lp_load_with_shares(const char *file_name)
  {
@@ -569,12 +580,10 @@
  	if (pid < 0) {
  		DEBUG(0,("smbd_accept_connection: fork() failed: %s\n",
  			 strerror(errno)));
-@@ -1412,6 +1430,18 @@
- 		return False;
- 
+@@ -1414,6 +1432,18 @@
  	return True;
-+}
-+
+ }
+ 
 +/* After the startup exchange, readability (including EOF/half-close) is
 + * always a revocation. This also wakes an otherwise idle parent. Its normal
 + * exit closes Samba's existing parent-watch pipe; each participating child
@@ -585,10 +594,30 @@
 +{
 +	(void)ev; (void)fde; (void)flags; (void)private_data;
 +	exit_server_cleanly("dedicated ZXS storage stopped");
- }
- 
++}
++
  static void smbd_parent_sig_term_handler(struct tevent_context *ev,
-@@ -1843,6 +1873,13 @@
+ 					 struct tevent_signal *se,
+ 					 int signum,
+@@ -1614,7 +1644,7 @@
+ 
+ static void smbd_addr_changed(struct tevent_req *req);
+ 
+-static void smbd_init_addrchange(TALLOC_CTX *mem_ctx,
++static void __attribute__((unused)) smbd_init_addrchange(TALLOC_CTX *mem_ctx,
+ 				struct tevent_context *ev,
+ 				struct messaging_context *msg_ctx,
+ 				struct smbd_parent_context *parent,
+@@ -1824,8 +1854,6 @@
+ 	struct tevent_signal *se;
+ 	int profiling_level;
+ 	char *np_dir = NULL;
+-	const struct loadparm_substitution *lp_sub =
+-		loadparm_s3_global_substitution();
+ 	static const struct smbd_shim smbd_shim_fns =
+ 	{
+ 		.change_to_root_user = smbd_change_to_root_user,
+@@ -1843,6 +1871,13 @@
  	};
  	bool ok;
  
@@ -602,7 +631,16 @@
  	setproctitle_init(argc, discard_const(argv), environ);
  
  	/*
-@@ -2038,7 +2075,14 @@
+@@ -1933,7 +1968,7 @@
+ 	gain_root_privilege();
+ 	gain_root_group_privilege();
+ 
+-	dump_core_setup("smbd", lp_logfile(talloc_tos(), lp_sub));
++	/* This installed role does not initialise a Samba core-output directory. */
+ 
+ 	/* we are never interested in SIGPIPE */
+ 	BlockSignals(True,SIGPIPE);
+@@ -2038,7 +2073,14 @@
  
  	DEBUG(3,("loaded services\n"));
  
@@ -618,7 +656,7 @@
  
  	if (!profile_setup(msg_ctx, False)) {
  		DEBUG(0,("ERROR: failed to setup profiling\n"));
-@@ -2122,6 +2166,11 @@
+@@ -2122,6 +2164,11 @@
  	parent->ev_ctx = ev_ctx;
  	parent->msg_ctx = msg_ctx;
  	am_parent = parent;
@@ -630,7 +668,7 @@
  
  	se = tevent_add_signal(parent->ev_ctx,
  			       parent,
-@@ -2166,9 +2215,7 @@
+@@ -2166,9 +2213,7 @@
  		TALLOC_FREE(lp_ctx);
  	}
  
@@ -641,6 +679,33 @@
  
  	server_id = messaging_server_id(msg_ctx);
  	status = smbXsrv_version_global_init(&server_id);
+@@ -2326,12 +2371,21 @@
+ 		return(0);
+ 	}
+ 
+-	if (lp_interfaces() && lp_bind_interfaces_only()) {
+-		smbd_init_addrchange(NULL, ev_ctx, msg_ctx, parent, ports);
+-	}
+-
++
++	/* An approved listener set is fixed for this original launch. No
++	 * interface-change callback adds a socket after the readiness proof. */
+ 	if (!open_sockets_smbd(parent, ev_ctx, msg_ctx, ports))
+-		exit_server("open_sockets_smbd() failed");
++		exit_server_cleanly("ZXS cannot bind its approved listeners");
++	uint32_t zxs_listened=0;
++	for(struct smbd_open_socket *s=parent->sockets;s!=NULL;s=s->next){
++		if(s->fde==NULL || !zxs_runtime_listener(s->fd,&zxs_listened)){
++			exit_server_cleanly("ZXS unexpected native listener");
++		}
++	}
++	zxs_sam_require_current();
++	if(!zxs_runtime_listen_ready(zxs_listened)){
++		exit_server_cleanly("ZXS listener set or original account not confirmed");
++	}
+ 
+ 	TALLOC_FREE(frame);
+ 	/* make sure we always have a valid stackframe */
 --- a/source3/smbd/smb2_sesssetup.c
 +++ b/source3/smbd/smb2_sesssetup.c
 @@ -30,6 +30,14 @@
@@ -2217,7 +2282,7 @@
  }
  
  /*****************************************************************
-@@ -356,51 +278,28 @@
+@@ -356,51 +278,30 @@
  
  bool smbd_vfs_init(connection_struct *conn)
  {
@@ -2246,7 +2311,25 @@
 -			DBG_ERR("widelinks enabled and vfs_init_custom "
 -				"failed for vfs_widelinks module\n");
 -			return false;
--		}
++	int snum;
++	if (conn == NULL || conn->params == NULL || conn->vfs_handles != NULL) {
++		errno = EACCES;
++		return false;
++	}
++	snum = SNUM(conn);
++	if (snum < 0 || !lp_snum_ok(snum)) {
++		errno = EACCES;
++		return false;
++	}
++	switch (zxs_file_vfs_route(snum, lp_servicenumber("IPC$"), conn->ipc,
++				   conn->printer, lp_widelinks(snum),
++				   lp_vfs_objects(snum), lp_nt_pipe_support())) {
++	case ZXS_VFS_IPC:
++		return vfs_init_custom(conn, DEFAULT_VFS_MODULE_NAME);
++	case ZXS_VFS_FILE:
++		if (snum!=lp_servicenumber("ZXS") || lp_browseable(snum) || lp_nt_pipe_support() || lp_host_msdfs()) {
++			errno=EACCES;return false;
+ 		}
 -	}
 -
 -	vfs_objects = lp_vfs_objects(SNUM(conn));
@@ -2266,23 +2349,6 @@
 -		}
 -	}
 -	return True;
-+	int snum;
-+	if (conn == NULL || conn->params == NULL || conn->vfs_handles != NULL) {
-+		errno = EACCES;
-+		return false;
-+	}
-+	snum = SNUM(conn);
-+	if (snum < 0 || !lp_snum_ok(snum)) {
-+		errno = EACCES;
-+		return false;
-+	}
-+	switch (zxs_file_vfs_route(snum, lp_servicenumber("IPC$"), conn->ipc,
-+				   conn->printer, lp_widelinks(snum),
-+				   lp_vfs_objects(snum), lp_nt_pipe_support())) {
-+	case ZXS_VFS_IPC:
-+		return vfs_init_custom(conn, DEFAULT_VFS_MODULE_NAME);
-+	case ZXS_VFS_FILE:
-+		if (!zxs_smb_direct_service(lp_const_servicename(snum), lp_browseable(snum), lp_nt_pipe_support(), lp_host_msdfs())) { errno=EACCES; return false; }
 +		return zxs_file_vfs_install(conn);
 +	default:
 +		errno = EACCES;
@@ -2291,7 +2357,7 @@
  }
  
  bool vfs_valid_pread_range(off_t offset, size_t length)
-@@ -899,6 +798,20 @@
+@@ -899,6 +800,20 @@
  	int ret;
  	struct smb_filename *cwd = NULL;
  
@@ -3146,7 +3212,7 @@
  				       uint8_t *out_share_type,
  				       uint32_t *out_share_flags,
  				       uint32_t *out_capabilities,
-@@ -291,6 +299,19 @@
+@@ -291,6 +299,17 @@
  		return NT_STATUS_BAD_NETWORK_NAME;
  	}
  
@@ -3156,17 +3222,15 @@
 +		if (snum!=lp_servicenumber("IPC$")) { return NT_STATUS_BAD_NETWORK_NAME; }
 +	} else {
 +		const char *actual=lp_const_servicename(snum);
-+		uint8_t id[16];
-+		if (tree_peer<0 || !zxs_smb_session_pool(session,decision->pool) ||
-+		    zxs_smb_ctl_live(tree_peer)!=0 || snum==lp_servicenumber("IPC$") || actual==NULL ||
-+		    !zxs_smb_service_id((const uint8_t *)actual,strlen(actual),id) ||
-+		    memcmp(decision->share,id,16)!=0) { return NT_STATUS_BAD_NETWORK_NAME; }
++		if (tree_peer<0 || decision->mode!=0 || !zxs_smb_session_pool(session,decision->pool) ||
++		    zxs_smb_ctl_live(tree_peer)!=0 || snum!=lp_servicenumber("ZXS") ||
++		    !zxs_smb_namespace_name(actual)) { return NT_STATUS_BAD_NETWORK_NAME; }
 +	}
 +
  	/* Handle non-DFS clients attempting connections to msdfs proxy */
  	if (lp_host_msdfs()) {
  		char *proxy = lp_msdfs_proxy(talloc_tos(), lp_sub, snum);
-@@ -371,6 +392,13 @@
+@@ -371,6 +390,13 @@
  		return status;
  	}
  
@@ -3180,7 +3244,7 @@
  	compat_conn = make_connection_smb2(req,
  					tcon, snum,
  					"???",
-@@ -514,6 +542,13 @@
+@@ -514,6 +540,13 @@
  
  struct smbd_smb2_tree_connect_state {
  	const char *in_path;
@@ -3194,7 +3258,7 @@
  	uint8_t out_share_type;
  	uint32_t out_share_flags;
  	uint32_t out_capabilities;
-@@ -522,6 +557,49 @@
+@@ -522,6 +555,51 @@
  	bool disconnect;
  };
  
@@ -3208,7 +3272,9 @@
 +{
 +	struct smbd_smb2_tree_connect_state *s=tevent_req_data(req,struct smbd_smb2_tree_connect_state);
 +	if (s->wait==NULL) { return false; }
-+	zxs_tcon_end(s);tevent_req_nterror(req,NT_STATUS_CANCELLED);return true;
++	zxs_tcon_end(s);
++	tevent_req_defer_callback(req,s->native->xconn->client->raw_ev_ctx);
++	tevent_req_nterror(req,NT_STATUS_CANCELLED);return true;
 +}
 +static NTSTATUS zxs_tcon_continue(struct smbd_smb2_tree_connect_state *s,
 +				  const struct zxs_smb_tree_cut *choice)
@@ -3286,9 +3352,9 @@
 +		if (!tevent_req_nterror(req,status)) { tevent_req_done(req); }
 +		return tevent_req_post(req,ev);
 +	}
-+	if (!zxs_smb_service_id((const uint8_t *)leaf,strlen(leaf),state->share) ||
-+	    talloc_reference(state,state->session)==NULL) { goto no_share; }
++	if (!zxs_smb_namespace_name(leaf) || talloc_reference(state,state->session)==NULL) { goto no_share; }
 +	state->seq=state->session->global->auth_session_info_seqnum;
++	memset(state->share,0,sizeof(state->share));
 +	state->reply=zxs_smb_tree_ask(channel,state->share);
 +	if (state->reply<0) { goto no_share; }
 +	state->wait=wait_for_read_send(state,ev,state->reply,false);
@@ -3304,22 +3370,24 @@
  }
  
  static NTSTATUS smbd_smb2_tree_connect_recv(struct tevent_req *req,
-@@ -796,3 +890,5 @@
+@@ -796,3 +890,6 @@
  {
  	return tevent_req_simple_recv_ntstatus(req);
  }
 +
 +#include "smbd/zxs_dir_cut.inc"
++#include "smbd/zxs_native_work.inc"
 --- a/source3/smbd/uid.c
 +++ b/source3/smbd/uid.c
-@@ -155,6 +155,13 @@
+@@ -155,6 +155,14 @@
  					readonly_share,
  					session_info->security_token);
  
-+	/* Upper bound for the first, read-only business adapter. Preserve the
-+	 * incoming native share ACL as an additional restriction, also on
-+	 * later user-context selection. SQL RW does not implement SMB writes. */
-+	if (conn->tcon!=NULL && conn->tcon->zxs_tree_choice!=NULL) {
++	/* The incoming native share ACL remains a ceiling. An original SQL
++	 * RO ceiling can only remove access; no work proceeds on this fact
++	 * alone. The private writer repeats current F and exact grants. */
++	if (conn->tcon!=NULL && conn->tcon->zxs_tree_choice!=NULL &&
++	    conn->tcon->zxs_tree_choice->mode==1) {
 +		share_access &= (SEC_RIGHTS_DIR_READ | SEC_DIR_TRAVERSE);
 +		readonly_share = true;
 +	}
@@ -3339,15 +3407,17 @@
                   enabled=bld.SAMBA3_IS_ENABLED_MODULE('vfs_not_implemented'))
 --- a/source3/smbd/smb2_create.c
 +++ b/source3/smbd/smb2_create.c
-@@ -23,6 +23,7 @@
+@@ -23,6 +23,9 @@
  #include "printing.h"
  #include "smbd/smbd.h"
  #include "smbd/globals.h"
 +#include "smbd/zxs_directory.h"
++#include "param/zxs_cache_policy.h"
++#include "libcli/security/security.h"
  #include "smbd/smbXsrv_open.h"
  #include "../libcli/smb/smb_common.h"
  #include "../librpc/gen_ndr/ndr_security.h"
-@@ -126,6 +127,7 @@
+@@ -126,6 +129,7 @@
  			struct smb2_create_blobs in_context_blobs);
  static NTSTATUS smbd_smb2_create_recv(struct tevent_req *req,
  			TALLOC_CTX *mem_ctx,
@@ -3355,15 +3425,65 @@
  			uint8_t *out_oplock_level,
  			uint32_t *out_create_action,
  			struct timespec *out_creation_ts,
-@@ -462,6 +464,7 @@
+@@ -141,6 +145,7 @@
+ 			struct reparse_data_buffer **symlink_reparse);
  
+ static void smbd_smb2_request_create_done(struct tevent_req *tsubreq);
++static bool zxs_create_without_reply(struct tevent_req *);
+ NTSTATUS smbd_smb2_request_process_create(struct smbd_smb2_request *smb2req)
+ {
+ 	const uint8_t *inbody;
+@@ -245,6 +250,23 @@
+ 		context_offset;
+ 	in_context_buffer.length = in_context_length;
+ 
++	if (zxs_file_vfs_active(smb2req->tcon->compat)) {
++		if (in_context_length != 0 &&
++		    ((in_context_offset & 7) != 0 ||
++		     (in_name_length != 0 &&
++		      (size_t)name_offset+in_name_length>context_offset &&
++		      (size_t)context_offset+in_context_length>name_offset))) {
++			return smbd_smb2_request_error(smb2req,NT_STATUS_INVALID_PARAMETER);
++		}
++		if (!zxs_smb_uncached_open(in_oplock_level,in_context_buffer)) {
++			return smbd_smb2_request_error(smb2req,NT_STATUS_NOT_SUPPORTED);
++		}
++		/* No cache grants, even with an upstream fake-oplocks setting.
++		 * No ignored context can reach the ordinary CREATE executor. */
++		in_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
++		in_context_buffer = data_blob_null;
++	}
++
+ 	/*
+ 	 * Now interpret the name and context buffers
+ 	 */
+@@ -443,7 +465,7 @@
+ 	DATA_BLOB outdyn;
+ 	uint8_t out_oplock_level = 0;
+ 	uint32_t out_create_action = 0;
+-	connection_struct *conn = smb2req->tcon->compat;
++	connection_struct *conn;
+ 	struct timespec out_creation_ts = { 0, };
+ 	struct timespec out_last_access_ts = { 0, };
+ 	struct timespec out_last_write_ts = { 0, };
+@@ -460,8 +482,16 @@
+ 	NTSTATUS status;
+ 	NTSTATUS error; /* transport error */
+ 
++	if (zxs_create_without_reply(tsubreq)) {
++		struct smbXsrv_connection *xconn = smb2req->xconn;
++		zxs_smb2_retire_birth(smb2req);
++		smbd_server_connection_terminate(xconn,"ZXS native CREATE outcome not confirmed");
++		return;
++	}
++	conn = smb2req->tcon->compat;
  	status = smbd_smb2_create_recv(tsubreq,
  				       smb2req,
 +				       &outbody,
  				       &out_oplock_level,
  				       &out_create_action,
  				       &out_creation_ts,
-@@ -505,7 +508,9 @@
+@@ -505,7 +535,9 @@
  		out_context_buffer_offset = SMB2_HDR_BODY + 0x58;
  	}
  
@@ -3374,17 +3494,22 @@
  	if (outbody.data == NULL) {
  		error = smbd_smb2_request_error(smb2req, NT_STATUS_NO_MEMORY);
  		if (!NT_STATUS_IS_OK(error)) {
-@@ -675,6 +680,9 @@
+@@ -675,6 +707,14 @@
  	struct smbd_smb2_request *smb2req;
  	struct GUID req_guid;
  	struct smb_request *smb1req;
 +	struct tevent_req *zxs_wait;
 +	DATA_BLOB zxs_reserved_body; /* outer request owns storage; may be compound */
 +	uint32_t zxs_access,zxs_share;
++	bool zxs_writer,zxs_is_dir,zxs_provisional,zxs_acknowledged,zxs_unknown;
++	uint32_t zxs_disposition;
++	struct aio_req_fsp_link *zxs_link;
++	const char *zxs_name;
++	struct zxs_smb_tree_cut zxs_route;
  	bool open_was_deferred;
  	struct tevent_immediate *im;
  	struct timeval request_time;
-@@ -884,8 +892,9 @@
+@@ -884,8 +924,9 @@
  }
  
  static void smbd_smb2_create_before_exec(struct tevent_req *req);
@@ -3395,7 +3520,7 @@
  
  static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
  			struct tevent_context *ev,
-@@ -941,6 +950,7 @@
+@@ -941,6 +982,7 @@
  
  		DBG_DEBUG("reentrant for file %s\n", in_name);
  
@@ -3403,7 +3528,7 @@
  		state->id = old_state->id;
  		state->request_time = old_state->request_time;
  		state->open_rec = talloc_move(state, &old_state->open_rec);
-@@ -963,6 +973,11 @@
+@@ -963,6 +1005,11 @@
  	state->in_create_options &= ~(0x10); /* NTCREATEX_OPTIONS_SYNC_ALERT */
  	state->in_create_options &= ~(0x20); /* NTCREATEX_OPTIONS_ASYNC_ALERT */
  
@@ -3415,7 +3540,7 @@
  	in_file_attributes &= ~FILE_FLAG_POSIX_SEMANTICS;
  
  	is_dfs = (smb1req->flags2 & FLAGS2_DFS_PATHNAMES);
-@@ -1010,6 +1025,41 @@
+@@ -1010,6 +1057,35 @@
  		return tevent_req_post(req, state->ev);
  	}
  
@@ -3425,19 +3550,18 @@
 +			tevent_req_nterror(req,NT_STATUS_BAD_IMPERSONATION_LEVEL);
 +			return tevent_req_post(req,state->ev);
 +		}
-+		bool dir=(in_name[0]==0);
++		bool dir=in_name[0]==0 || (state->in_create_options&FILE_DIRECTORY_FILE)!=0;
 +		if ((dir ? state->in_create_options!=FILE_DIRECTORY_FILE :
 +		     (state->in_create_options!=0 && state->in_create_options!=FILE_NON_DIRECTORY_FILE)) ||
-+		    in_create_disposition!=FILE_OPEN || in_oplock_level!=SMB2_OPLOCK_LEVEL_NONE ||
++		    (in_create_disposition!=FILE_OPEN && (dir ||
++		      (in_create_disposition!=FILE_CREATE && in_create_disposition!=FILE_OPEN_IF))) ||
++		    in_oplock_level!=SMB2_OPLOCK_LEVEL_NONE ||
 +		    (in_file_attributes & ~(dir?FILE_ATTRIBUTE_DIRECTORY:FILE_ATTRIBUTE_NORMAL))!=0 ||
-+		    (!dir && (strlen(in_name)>ZXS_DIR_NAME || strpbrk(in_name,"/\\:*?\"<>|")!=NULL)) ||
 +		    in_context_blobs.num_blobs!=0 ||
 +		    (flags&SMB2_HDR_FLAG_REPLAY_OPERATION)!=0) {
 +			tevent_req_nterror(req,NT_STATUS_NOT_SUPPORTED);
 +			return tevent_req_post(req,state->ev);
 +		}
-+		status=zxs_open_access(smb1req->conn,dir,&in_desired_access,in_share_access);
-+		if(tevent_req_nterror(req,status))return tevent_req_post(req,state->ev);
 +		/* With no CREATE contexts, the complete success body is fixed.
 +		 * Reserve it before issuing storage work or creating a native FSP. */
 +		if (state->zxs_reserved_body.data == NULL) {
@@ -3446,18 +3570,13 @@
 +				return tevent_req_post(req,state->ev);
 +		}
 +		state->zxs_access=in_desired_access;state->zxs_share=in_share_access;
-+		smb2_request_set_async_internal(smb2req,true);
-+		state->zxs_wait=zxs_dir_cut_send(state,ev,smb2req,dir?0:ZXS_MEMBER_OPEN,
-+			dir?NULL:(const uint8_t *)in_name,dir?0:strlen(in_name));
-+		if(tevent_req_nomem(state->zxs_wait,req))return tevent_req_post(req,state->ev);
-+		tevent_req_set_cancel_fn(req,zxs_create_wait_cancel);
-+		tevent_req_set_callback(state->zxs_wait,zxs_dir_opened,req);
-+		return req;
++		state->zxs_disposition=in_create_disposition;
++		return zxs_create_select(req,in_name,dir)?req:tevent_req_post(req,state->ev);
 +	}
  	if (IS_IPC(smb1req->conn)) {
  		const char *pipe_name = in_name;
  
-@@ -1031,7 +1081,7 @@
+@@ -1031,7 +1107,7 @@
  		state->info = FILE_WAS_OPENED;
  
  		smbd_smb2_create_finish(req);
@@ -3466,7 +3585,7 @@
  	}
  
  	if (CAN_PRINT(smb1req->conn)) {
-@@ -1055,7 +1105,7 @@
+@@ -1055,7 +1131,7 @@
  		state->info = FILE_WAS_CREATED;
  
  		smbd_smb2_create_finish(req);
@@ -3475,7 +3594,7 @@
  	}
  
  	/* Check for trailing slash specific directory handling. */
-@@ -1084,13 +1134,13 @@
+@@ -1084,13 +1160,13 @@
  		state->update_open = false;
  		state->info = state->op->create_action;
  
@@ -3492,7 +3611,7 @@
  	}
  
  	if (state->do_durable_reconnect) {
-@@ -1163,13 +1213,13 @@
+@@ -1163,13 +1239,13 @@
  
  		state->info = FILE_WAS_OPENED;
  
@@ -3509,7 +3628,7 @@
  	}
  
  	if (state->requested_oplock_level == SMB2_OPLOCK_LEVEL_LEASE) {
-@@ -1318,13 +1368,13 @@
+@@ -1318,13 +1394,13 @@
  	}
  	state->op = state->result->op;
  
@@ -3526,7 +3645,7 @@
  }
  
  static void smbd_smb2_create_purge_replay_cache(struct tevent_req *req,
-@@ -1654,7 +1704,7 @@
+@@ -1654,7 +1730,7 @@
  	}
  }
  
@@ -3535,7 +3654,7 @@
  {
  	struct smbd_smb2_create_state *state = tevent_req_data(
  		req, struct smbd_smb2_create_state);
-@@ -1923,11 +1973,11 @@
+@@ -1923,11 +1999,11 @@
  		}
  	}
  
@@ -3549,7 +3668,18 @@
  }
  
  static void smbd_smb2_create_finish(struct tevent_req *req)
-@@ -1982,12 +2032,14 @@
+@@ -1940,7 +2016,9 @@
+ 
+ 	smb2req->compat_chain_fsp = smb1req->chain_fsp;
+ 
+-	if (state->replay_operation) {
++	if (zxs_file_vfs_active(smb1req->conn)) {
++		state->out_oplock_level = SMB2_OPLOCK_LEVEL_NONE;
++	} else if (state->replay_operation) {
+ 		state->out_oplock_level = state->in_oplock_level;
+ 	} else if (lp_fake_oplocks(SNUM(smb2req->tcon->compat))) {
+ 		state->out_oplock_level	= state->in_oplock_level;
+@@ -1982,12 +2060,14 @@
  
  	DBG_DEBUG("%s - %s\n", fsp_str_dbg(result), fsp_fnum_dbg(result));
  
@@ -3565,7 +3695,7 @@
  			uint8_t *out_oplock_level,
  			uint32_t *out_create_action,
  			struct timespec *out_creation_ts,
-@@ -2057,6 +2109,7 @@
+@@ -2057,6 +2137,7 @@
  		return status;
  	}
  
@@ -3583,10 +3713,15 @@
  #include "../libcli/smb/smb_common.h"
  #include "../lib/util/tevent_ntstatus.h"
  
-@@ -44,6 +45,22 @@
+@@ -40,9 +41,25 @@
+ 				     struct timespec *out_change_ts,
+ 				     uint64_t *out_allocation_size,
+ 				     uint64_t *out_end_of_file,
+-				     uint32_t *out_file_attributes);
++				     uint32_t *out_file_attributes,DATA_BLOB *body);
  
  static void smbd_smb2_request_close_done(struct tevent_req *subreq);
- 
++
 +static bool zxs_close_same_root(struct smbd_smb2_request *req, struct files_struct *fsp)
 +{
 +	struct zxs_dir_search *dir;
@@ -3602,10 +3737,9 @@
 +	return f!=NULL && f->tcon==req->tcon && f->session==req->session &&
 +		f->seq==req->session->global->auth_session_info_seqnum;
 +}
-+
+ 
  NTSTATUS smbd_smb2_request_process_close(struct smbd_smb2_request *req)
  {
- 	const uint8_t *inbody;
 @@ -65,7 +82,7 @@
  	in_file_id_volatile	= BVAL(inbody, 0x10);
  
@@ -3615,6 +3749,33 @@
  		return smbd_smb2_request_error(req, NT_STATUS_FILE_CLOSED);
  	}
  
+@@ -84,7 +101,7 @@
+ 	struct smbd_smb2_request *req =
+ 		tevent_req_callback_data(subreq,
+ 		struct smbd_smb2_request);
+-	DATA_BLOB outbody;
++	DATA_BLOB outbody=data_blob_null;
+ 	uint16_t out_flags = 0;
+ 	connection_struct *conn = req->tcon->compat;
+ 	struct timespec out_creation_ts = { 0, };
+@@ -105,7 +122,7 @@
+ 				      &out_change_ts,
+ 				      &out_allocation_size,
+ 				      &out_end_of_file,
+-				      &out_file_attributes);
++				      &out_file_attributes,&outbody);
+ 	TALLOC_FREE(subreq);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		error = smbd_smb2_request_error(req, status);
+@@ -117,7 +134,7 @@
+ 		return;
+ 	}
+ 
+-	outbody = smbd_smb2_generate_outbody(req, 0x3C);
++	if(outbody.data==NULL)outbody=smbd_smb2_generate_outbody(req,0x3C);
+ 	if (outbody.data == NULL) {
+ 		error = smbd_smb2_request_error(req, NT_STATUS_NO_MEMORY);
+ 		if (!NT_STATUS_IS_OK(error)) {
 @@ -151,7 +168,7 @@
  	}
  }
@@ -3656,6 +3817,146 @@
  				fsp->fsp_name,
  				out_creation_ts,
  				out_last_access_ts,
+@@ -260,10 +284,53 @@
+ 	uint64_t out_end_of_file;
+ 	uint32_t out_file_attributes;
+ 	struct tevent_queue *wait_queue;
++	struct tevent_req *zxs_wait;
++	bool zxs_writer;
++	DATA_BLOB zxs_body;
+ };
+ 
+ static void smbd_smb2_close_wait_done(struct tevent_req *subreq);
+ static void smbd_smb2_close_delay_lease_break_done(struct tevent_req *subreq);
++static bool zxs_close_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_close_state *s=tevent_req_data(req,struct smbd_smb2_close_state);
++	if(s->zxs_wait==NULL)return false;
++	s->in_fsp->fsp_flags.closing=false;
++	return zxs_dir_wait_cancel(req,s->smb2req->xconn->client->raw_ev_ctx,&s->zxs_wait,NULL);
++}
++static void zxs_finish_explicit_close(struct tevent_req *req,NTSTATUS work)
++{
++	struct smbd_smb2_close_state *s=tevent_req_data(req,struct smbd_smb2_close_state);
++	NTSTATUS closed=smbd_smb2_close(s->smb2req,&s->in_fsp,s->in_flags,
++		&s->out_flags,&s->out_creation_ts,&s->out_last_access_ts,
++		&s->out_last_write_ts,&s->out_change_ts,&s->out_allocation_size,
++		&s->out_end_of_file,&s->out_file_attributes);
++	if(s->in_fsp!=NULL){s->in_fsp->fsp_flags.closing=false;}
++	if(tevent_req_nterror(req,NT_STATUS_IS_OK(work)?closed:work))return;
++	tevent_req_done(req);
++}
++static void zxs_close_flushed(struct tevent_req *sub)
++{
++	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
++	struct smbd_smb2_close_state *s=tevent_req_data(req,struct smbd_smb2_close_state);
++	NTSTATUS status=zxs_work_recv(sub);
++	s->zxs_wait=NULL;TALLOC_FREE(sub);
++	zxs_finish_explicit_close(req,status);
++}
++static void zxs_close_writer(struct tevent_req *req,struct tevent_context *ev)
++{
++	struct smbd_smb2_close_state *s=tevent_req_data(req,struct smbd_smb2_close_state);
++	struct zxs_read_fsp *member=zxs_find_read(s->in_fsp);
++	if(member==NULL || !member->writable){
++		zxs_finish_explicit_close(req,NT_STATUS_ACCESS_DENIED);return;
++	}
++	if(!member->dirty){zxs_finish_explicit_close(req,NT_STATUS_OK);return;}
++	s->zxs_wait=zxs_work_send(s,ev,req,s->smb2req,s->in_fsp,
++				  ZXS_WORK_FLUSH,0,data_blob_null,false,true);
++	if(s->zxs_wait==NULL){zxs_finish_explicit_close(req,NT_STATUS_NO_MEMORY);return;}
++	tevent_req_set_cancel_fn(req,zxs_close_cancel);
++	tevent_req_set_callback(s->zxs_wait,zxs_close_flushed,req);
++}
+ 
+ static struct tevent_req *smbd_smb2_close_send(TALLOC_CTX *mem_ctx,
+ 					       struct tevent_context *ev,
+@@ -294,10 +361,21 @@
+ 	state->in_fsp = in_fsp;
+ 	state->in_flags = in_flags;
+ 
++	struct zxs_read_fsp *member=zxs_find_read(in_fsp);
++	state->zxs_writer=member!=NULL && member->writable;
++	if(state->zxs_writer){
++		state->zxs_body=smbd_smb2_generate_outbody(smb2req,0x3c);
++		if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
++		/* A middle compound close must be internally pending from the
++		 * first wait, before marking the native FSP as closing. */
++		if(smbd_smb2_is_compound(smb2req) && !smbd_smb2_is_last_in_compound(smb2req)){
++			smb2_request_set_async_internal(smb2req,true);
++		}
++	}
+ 	in_fsp->fsp_flags.closing = true;
+ 
+ 	i = 0;
+-	while (i < in_fsp->num_aio_requests) {
++	while (!state->zxs_writer && i < in_fsp->num_aio_requests) {
+ 		bool ok = tevent_req_cancel(in_fsp->aio_requests[i]);
+ 		if (ok) {
+ 			continue;
+@@ -311,6 +389,7 @@
+ 		state->wait_queue = tevent_queue_create(state,
+ 					"smbd_smb2_close_send_wait_queue");
+ 		if (tevent_req_nomem(state->wait_queue, req)) {
++			if(state->zxs_writer)in_fsp->fsp_flags.closing=false;
+ 			return tevent_req_post(req, ev);
+ 		}
+ 		/*
+@@ -325,6 +404,7 @@
+ 					smb2req->sconn->ev_ctx,
+ 					state->wait_queue);
+ 		if (tevent_req_nomem(subreq, req)) {
++			if(state->zxs_writer)in_fsp->fsp_flags.closing=false;
+ 			return tevent_req_post(req, ev);
+ 		}
+ 
+@@ -337,13 +417,18 @@
+ 					smb2req->sconn->ev_ctx,
+ 					state->wait_queue);
+ 		if (tevent_req_nomem(subreq, req)) {
++			if(state->zxs_writer)in_fsp->fsp_flags.closing=false;
+ 			return tevent_req_post(req, ev);
+ 		}
+-
++		if(state->zxs_writer){state->zxs_wait=subreq;tevent_req_set_cancel_fn(req,zxs_close_cancel);}
+ 		tevent_req_set_callback(subreq, smbd_smb2_close_wait_done, req);
+ 		return req;
+ 	}
+ 
++	if(state->zxs_writer){
++		zxs_close_writer(req,ev);
++		return tevent_req_is_in_progress(req)?req:tevent_req_post(req,ev);
++	}
+ 	if (in_fsp->fsp_flags.initial_delete_on_close) {
+ 		struct tevent_req *subreq = NULL;
+ 		struct share_mode_lock *lck = NULL;
+@@ -427,7 +512,8 @@
+ 	NTSTATUS status;
+ 
+ 	tevent_queue_wait_recv(subreq);
+-	TALLOC_FREE(subreq);
++	state->zxs_wait=NULL;TALLOC_FREE(subreq);
++	if(state->zxs_writer){zxs_close_writer(req,state->smb2req->sconn->ev_ctx);return;}
+ 
+ 	status = smbd_smb2_close(state->smb2req,
+ 				 &state->in_fsp,
+@@ -498,7 +584,7 @@
+ 				     struct timespec *out_change_ts,
+ 				     uint64_t *out_allocation_size,
+ 				     uint64_t *out_end_of_file,
+-				     uint32_t *out_file_attributes)
++				     uint32_t *out_file_attributes,DATA_BLOB *body)
+ {
+ 	struct smbd_smb2_close_state *state =
+ 		tevent_req_data(req,
+@@ -518,6 +604,7 @@
+ 	*out_allocation_size = state->out_allocation_size;
+ 	*out_end_of_file = state->out_end_of_file;
+ 	*out_file_attributes = state->out_file_attributes;
++	*body=state->zxs_body;
+ 
+ 	tevent_req_received(req);
+ 	return NT_STATUS_OK;
 --- a/source3/smbd/smb2_server.c
 +++ b/source3/smbd/smb2_server.c
 @@ -23,6 +23,7 @@
@@ -3666,18 +3967,49 @@
  #include "source3/smbd/smbXsrv_session.h"
  #include "smbd/smbXsrv_open.h"
  #include "lib/param/param.h"
-@@ -3381,6 +3382,11 @@
+@@ -3381,6 +3382,12 @@
  		} else if (encryption_desired) {
  			req->do_encryption = true;
  		}
 +		if (zxs_file_vfs_active(req->tcon->compat) && opcode!=SMB2_OP_CREATE &&
 +		    opcode!=SMB2_OP_QUERY_DIRECTORY && opcode!=SMB2_OP_READ && opcode!=SMB2_OP_GETINFO &&
++		    opcode!=SMB2_OP_WRITE && opcode!=SMB2_OP_FLUSH && opcode!=SMB2_OP_SETINFO &&
 +		    opcode!=SMB2_OP_CLOSE && opcode!=SMB2_OP_TDIS) {
 +			return smbd_smb2_request_error(req, NT_STATUS_NOT_SUPPORTED);
 +		}
  	} else if (call->need_session) {
  		struct auth_session_info *session_info = NULL;
  
+@@ -3654,6 +3661,29 @@
+ 		SMB_ASSERT(op->pre_request_count > 0);
+ 		op->pre_request_count -= 1;
+ 	}
++}
++
++bool zxs_smb2_birth_cancel_advisory(const struct smbd_smb2_request *req,bool acked)
++{
++	/* A peer CANCEL is advisory once the storage end could have
++	 * published birth. TDIS/logoff/TCP teardown mark the original
++	 * object unavailable before walking and cancelling its requests. */
++	return acked && NT_STATUS_IS_OK(req->xconn->transport.status) &&
++	       req->session!=NULL && NT_STATUS_IS_OK(req->session->status) &&
++	       req->tcon!=NULL && NT_STATUS_IS_OK(req->tcon->status);
++}
++
++void zxs_smb2_retire_birth(struct smbd_smb2_request *req)
++{
++	struct smbXsrv_connection *xconn=req->xconn;
++	/* This is the deferred outer CREATE completion, not a cancel
++	 * callback inside the active-list walk. It cannot start another
++	 * compound member or put a false error in the wire send queue. */
++	TALLOC_FREE(req->async_te);
++	smbd_smb2_request_reply_update_counts(req);
++	SMBPROFILE_IOBYTES_ASYNC_END(req->profile,0);
++	DLIST_REMOVE(xconn->smb2.requests,req);
++	TALLOC_FREE(req);
+ }
+ 
+ static NTSTATUS smbd_smb2_request_reply(struct smbd_smb2_request *req)
 --- a/source3/smbd/smb2_query_directory.c
 +++ b/source3/smbd/smb2_query_directory.c
 @@ -22,6 +22,7 @@
@@ -3847,7 +4179,7 @@
  		p += 4;
  		SIVAL(p,0,reskey); p += 4;
  		put_long_date_full_timespec(conn->ts_res,p,&create_date_ts); p += 8;
-@@ -1755,6 +1756,21 @@
+@@ -1755,6 +1756,22 @@
  	*ppdata = p;
  
  	return NT_STATUS_OK;
@@ -3857,19 +4189,20 @@
 + * allocation units, stable pool FILE number and no fabricated history. */
 +_PUBLIC_
 +NTSTATUS zxs_marshal_child(TALLOC_CTX *ctx,connection_struct *conn,uint32_t cls,
-+	const char *name,uint64_t no,uint64_t len,int remain,char *base,char **next,char *end,uint64_t *off)
++	const char *name,bool directory,uint64_t no,uint64_t len,int remain,char *base,char **next,char *end,uint64_t *off)
 +{
-+	struct stat_ex st={.st_ex_mode=S_IFREG|0400,.st_ex_size=(off_t)len,
++	struct stat_ex st={.st_ex_mode=directory?(S_IFDIR|0500):(S_IFREG|0400),.st_ex_size=(off_t)len,
 +		.st_ex_ino=no,.st_ex_nlink=1};
 +	struct smb_filename n={.base_name=discard_const_p(char,name),.st=st};
-+	if(no<=255 || no==UINT64_MAX || len>INT64_MAX || !zxs_file_vfs_active(conn))
++	if((directory?(no<3||no>64||len!=0):(no<=255||no==UINT64_MAX||len>INT64_MAX)) ||
++	   !zxs_file_vfs_active(conn))
 +		return NT_STATUS_INVALID_PARAMETER;
 +	return smbd_marshall_dir_entry(ctx,conn,FLAGS2_UNICODE_STRINGS,cls,NULL,false,false,
-+		FILE_ATTRIBUTE_NORMAL,name,&n,remain,8,false,base,next,end,off,&no);
++		directory?FILE_ATTRIBUTE_DIRECTORY:FILE_ATTRIBUTE_NORMAL,name,&n,remain,8,false,base,next,end,off,&no);
  }
  
  NTSTATUS smbd_dirptr_lanman2_entry(TALLOC_CTX *ctx,
-@@ -1846,7 +1862,7 @@
+@@ -1846,7 +1863,7 @@
  				     base_data,
  				     ppdata,
  				     end_data,
@@ -3878,7 +4211,7 @@
  	if (NT_STATUS_EQUAL(status, NT_STATUS_ILLEGAL_CHARACTER)) {
  		DEBUG(1,("Conversion error: illegal character: %s\n",
  			 smb_fname_str_dbg(smb_fname)));
-@@ -2957,7 +2973,7 @@
+@@ -2957,7 +2974,7 @@
  	return NT_STATUS_OK;
  }
  
@@ -3887,7 +4220,7 @@
  			       TALLOC_CTX *mem_ctx,
  			       struct smb_request *req,
  			       uint16_t info_level,
-@@ -2970,7 +2986,7 @@
+@@ -2970,7 +2987,7 @@
  			       unsigned int max_data_bytes,
  			       size_t *fixed_portion,
  			       char **ppdata,
@@ -3896,7 +4229,7 @@
  {
  	char *pdata = *ppdata;
  	char *dstart, *dend;
-@@ -3017,13 +3033,13 @@
+@@ -3017,13 +3034,13 @@
  		 info_level, max_data_bytes);
  
  	smb_fname = fsp->fsp_name;
@@ -3912,7 +4245,7 @@
  
  	if (nlink && (mode&FILE_ATTRIBUTE_DIRECTORY)) {
  		nlink = 1;
-@@ -3052,12 +3068,12 @@
+@@ -3052,12 +3069,12 @@
  		update_stat_ex_mtime(psbuf, write_time_ts);
  	}
  
@@ -3931,7 +4264,7 @@
  		dos_filetime_timespec(&create_time_ts);
  		dos_filetime_timespec(&mtime_ts);
  		dos_filetime_timespec(&atime_ts);
-@@ -3096,9 +3112,9 @@
+@@ -3096,9 +3113,9 @@
  		string_replace(dos_fname, '/', '\\');
  	}
  
@@ -3944,7 +4277,7 @@
  		/* Do we have this path open ? */
  		struct file_id fileid = vfs_file_id_from_sbuf(conn, psbuf);
  		files_struct *fsp1 = file_find_di_first(
-@@ -3112,7 +3128,7 @@
+@@ -3112,7 +3129,7 @@
  		file_size = get_file_size_stat(psbuf);
  	}
  
@@ -3953,7 +4286,7 @@
  		pos = fh_get_position_information(fsp->fh);
  	}
  
-@@ -3128,7 +3144,7 @@
+@@ -3128,7 +3145,7 @@
  
  	   I think this causes us to fail the IFSKIT
  	   BasicFileInformationTest. -tpot */
@@ -3962,7 +4295,7 @@
  
  	*fixed_portion = 0;
  
-@@ -3463,8 +3479,7 @@
+@@ -3463,8 +3480,7 @@
  
  		case SMB2_FILE_ALL_INFORMATION:
  		{
@@ -3972,7 +4305,7 @@
  			DBG_DEBUG("SMB2_FILE_ALL_INFORMATION\n");
  			put_long_date_full_timespec(conn->ts_res,pdata+0x00,&create_time_ts);
  			put_long_date_full_timespec(conn->ts_res,pdata+0x08,&atime_ts);
-@@ -3482,7 +3497,7 @@
+@@ -3482,7 +3498,7 @@
  			SIVAL(pdata,	0x48, ea_size);
  			SIVAL(pdata,	0x4C, access_mask);
  			SBVAL(pdata,	0x50, pos);
@@ -3981,7 +4314,7 @@
  			SIVAL(pdata,	0x5C, 0); /* No alignment needed. */
  
  			pdata += 0x60;
-@@ -3687,6 +3702,58 @@
+@@ -3687,6 +3703,58 @@
  
  	*pdata_size = data_size;
  	return NT_STATUS_OK;
@@ -4114,15 +4447,16 @@
  NTSTATUS query_lock(files_struct *fsp,
 --- a/source3/smbd/smb2_negprot.c
 +++ b/source3/smbd/smb2_negprot.c
-@@ -21,6 +21,7 @@
+@@ -21,6 +21,8 @@
  #include "includes.h"
  #include "smbd/smbd.h"
  #include "smbd/globals.h"
 +#include "param/zxs_dialect.h"
++#include "param/zxs_cache_policy.h"
  #include "../libcli/smb/smb_common.h"
  #include "../libcli/smb/smb2_negotiate_context.h"
  #include "../lib/tsocket/tsocket.h"
-@@ -127,6 +128,25 @@
+@@ -127,6 +129,25 @@
  	}
  
  	return PROTOCOL_NONE;
@@ -4148,7 +4482,7 @@
  }
  
  static NTSTATUS smb2_negotiate_context_process_posix(
-@@ -265,9 +285,10 @@
+@@ -265,9 +286,10 @@
  	}
  	indyn = SMBD_SMB2_IN_DYN_PTR(req);
  
@@ -4162,6 +4496,15 @@
  
  	for (c=0; protocol == PROTOCOL_NONE && c < dialect_count; c++) {
  		if (lp_server_max_protocol() < PROTOCOL_SMB2_10) {
+@@ -798,6 +820,8 @@
+ 	      out_negotiate_context_count);	/* reserved/NegotiateContextCount */
+ 	memcpy(outbody.data + 0x08,
+ 	       out_guid_blob.data, 16);	/* server guid */
++	/* Keep the wire and saved server capabilities in agreement. */
++	capabilities = zxs_smb_uncached_caps(capabilities);
+ 	SIVAL(outbody.data, 0x18,
+ 	      capabilities);			/* capabilities */
+ 	SIVAL(outbody.data, 0x1C, max_trans);	/* max transact size */
 --- a/source3/smbd/smb2_getinfo.c
 +++ b/source3/smbd/smb2_getinfo.c
 @@ -22,6 +22,7 @@
@@ -4172,7 +4515,7 @@
  #include "../libcli/smb/smb_common.h"
  #include "trans2.h"
  #include "../lib/util/tevent_ntstatus.h"
-@@ -216,7 +217,73 @@
+@@ -216,7 +217,76 @@
  	struct smbd_smb2_request *smb2req;
  	NTSTATUS status;
  	DATA_BLOB out_output_buffer;
@@ -4194,7 +4537,8 @@
 +		d->seq==n->session->global->auth_session_info_seqnum &&
 +		f->fsp_flags.is_fsa && !f->fsp_flags.closing &&
 +		f->op!=NULL && f->op->global!=NULL &&
-+		f->file_id.inode==(uint64_t)n->tcon->zxs_tree_choice->volume_ordinal+1 &&
++		(d->folder.mode==0 || zxs_request_folder_current(n,&d->folder)) &&
++		f->file_id.inode==(uint64_t)d->folder.volume_ordinal+1 &&
 +		change_to_user_and_service(f->conn,f->vuid);
 +}
 +static bool zxs_getinfo_cancel(struct tevent_req *req)
@@ -4236,7 +4580,9 @@
 +	talloc_steal(s,s->zxs_link);
 +	/* Real original TCON's zero-row cut, not a new protocol or a stat
 +	 * cached at open. The non-root storage still checks the held F+SQL. */
-+	s->zxs_wait=zxs_dir_cut_send(s,ev,s->smb2req,0,NULL,0);
++	const struct zxs_dir_search *d=zxs_find_dir(fsp);
++	const struct zxs_smb_tree_cut *folder=d->folder.mode==0?NULL:&d->folder;
++	s->zxs_wait=zxs_dir_cut_send(s,ev,s->smb2req,folder,0,NULL,0);
 +	if(s->zxs_wait==NULL){TALLOC_FREE(s->zxs_link);return NT_STATUS_NO_MEMORY;}
 +	smb2_request_set_async_internal(s->smb2req,true);
 +	tevent_req_set_cancel_fn(req,zxs_getinfo_cancel);
@@ -4246,7 +4592,7 @@
  
  static void smb2_ipc_getinfo(struct tevent_req *req,
  				struct smbd_smb2_getinfo_state *state,
-@@ -273,6 +340,13 @@
+@@ -273,6 +343,13 @@
  	state->smb2req = smb2req;
  	state->status = NT_STATUS_OK;
  	state->out_output_buffer = data_blob_null;
@@ -4260,3 +4606,382 @@
  
  	DEBUG(10,("smbd_smb2_getinfo_send: %s - %s\n",
  		  fsp_str_dbg(fsp), fsp_fnum_dbg(fsp)));
+--- a/source3/smbd/smb2_write.c
++++ b/source3/smbd/smb2_write.c
+@@ -21,6 +21,7 @@
+ #include "includes.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_directory.h"
+ #include "../libcli/smb/smb_common.h"
+ #include "../lib/util/tevent_ntstatus.h"
+ #include "rpc_server/srv_pipe_hnd.h"
+@@ -37,7 +38,7 @@
+ 					       off_t in_offset,
+ 					       uint32_t in_flags);
+ static NTSTATUS smbd_smb2_write_recv(struct tevent_req *req,
+-				     uint32_t *out_count);
++				     uint32_t *out_count,DATA_BLOB *body);
+ 
+ static void smbd_smb2_request_write_done(struct tevent_req *subreq);
+ NTSTATUS smbd_smb2_request_process_write(struct smbd_smb2_request *req)
+@@ -110,6 +111,16 @@
+ 		return smbd_smb2_request_error(req, NT_STATUS_FILE_CLOSED);
+ 	}
+ 
++	if (zxs_file_vfs_active(req->tcon->compat) || zxs_file_vfs_active(in_fsp->conn)) {
++		if (in_fsp->conn!=req->tcon->compat || !zxs_file_vfs_active(in_fsp->conn)) {
++			return smbd_smb2_request_error(req, NT_STATUS_ACCESS_DENIED);
++		}
++		if (IVAL(inbody,0x20)!=0 || SVAL(inbody,0x28)!=0 || SVAL(inbody,0x2a)!=0 ||
++		    (in_data_length!=0 && in_dyn_ptr==NULL)) {
++			return smbd_smb2_request_error(req, NT_STATUS_NOT_SUPPORTED);
++		}
++	}
++
+ 	subreq = smbd_smb2_write_send(req, req->sconn->ev_ctx,
+ 				      req, in_fsp,
+ 				      in_data_buffer,
+@@ -127,13 +138,13 @@
+ {
+ 	struct smbd_smb2_request *req = tevent_req_callback_data(subreq,
+ 					struct smbd_smb2_request);
+-	DATA_BLOB outbody;
++	DATA_BLOB outbody=data_blob_null;
+ 	DATA_BLOB outdyn;
+ 	uint32_t out_count = 0;
+ 	NTSTATUS status;
+ 	NTSTATUS error; /* transport error */
+ 
+-	status = smbd_smb2_write_recv(subreq, &out_count);
++	status = smbd_smb2_write_recv(subreq,&out_count,&outbody);
+ 	TALLOC_FREE(subreq);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		error = smbd_smb2_request_error(req, status);
+@@ -145,7 +156,7 @@
+ 		return;
+ 	}
+ 
+-	outbody = smbd_smb2_generate_outbody(req, 0x10);
++	if(outbody.data==NULL)outbody=smbd_smb2_generate_outbody(req,0x10);
+ 	if (outbody.data == NULL) {
+ 		error = smbd_smb2_request_error(req, NT_STATUS_NO_MEMORY);
+ 		if (!NT_STATUS_IS_OK(error)) {
+@@ -180,6 +191,8 @@
+ 	uint32_t in_length;
+ 	off_t in_offset;
+ 	uint32_t out_count;
++	struct tevent_req *zxs_wait;
++	DATA_BLOB zxs_body;
+ };
+ 
+ static void smbd_smb2_write_pipe_done(struct tevent_req *subreq);
+@@ -252,6 +265,22 @@
+ }
+ 
+ 
++static void zxs_write_done(struct tevent_req *sub)
++{
++	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
++	struct smbd_smb2_write_state *s=tevent_req_data(req,struct smbd_smb2_write_state);
++	NTSTATUS status=zxs_work_recv(sub);
++	s->zxs_wait=NULL;TALLOC_FREE(sub);
++	if(NT_STATUS_IS_OK(status))status=smb2_write_complete_nosync(req,s->in_length,0);
++	if(tevent_req_nterror(req,status))return;
++	tevent_req_done(req);
++}
++static bool zxs_write_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_write_state *s=tevent_req_data(req,struct smbd_smb2_write_state);
++	return zxs_dir_wait_cancel(req,s->smb2req->xconn->client->raw_ev_ctx,&s->zxs_wait,NULL);
++}
++
+ static bool smbd_smb2_write_cancel(struct tevent_req *req)
+ {
+ 	struct smbd_smb2_write_state *state =
+@@ -305,6 +334,23 @@
+ 	state->smbreq = smbreq;
+ 
+ 	state->fsp = fsp;
++
++	if(zxs_file_vfs_active(conn) || zxs_file_vfs_active(fsp->conn)){
++		if(fsp->conn!=conn || in_offset<0 ||
++		   (in_flags & ~(SMB2_WRITEFLAG_WRITE_THROUGH|SMB2_WRITEFLAG_WRITE_UNBUFFERED))!=0) {
++			tevent_req_nterror(req,NT_STATUS_INVALID_PARAMETER);
++			return tevent_req_post(req,ev);
++		}
++		/* All response allocation precedes a possible admitted mutation. */
++		state->zxs_body=smbd_smb2_generate_outbody(smb2req,0x10);
++		if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
++		state->zxs_wait=zxs_work_send(state,ev,req,smb2req,fsp,ZXS_WORK_WRITE,
++					    in_offset,in_data,state->write_through,false);
++		if(tevent_req_nomem(state->zxs_wait,req))return tevent_req_post(req,ev);
++		tevent_req_set_cancel_fn(req,zxs_write_cancel);
++		tevent_req_set_callback(state->zxs_wait,zxs_write_done,req);
++		return req;
++	}
+ 
+ 	if (IS_IPC(smbreq->conn)) {
+ 		struct tevent_req *subreq = NULL;
+@@ -451,7 +497,7 @@
+ }
+ 
+ static NTSTATUS smbd_smb2_write_recv(struct tevent_req *req,
+-				     uint32_t *out_count)
++				     uint32_t *out_count,DATA_BLOB *body)
+ {
+ 	NTSTATUS status;
+ 	struct smbd_smb2_write_state *state = tevent_req_data(req,
+@@ -463,6 +509,7 @@
+ 	}
+ 
+ 	*out_count = state->out_count;
++	*body=state->zxs_body;
+ 
+ 	tevent_req_received(req);
+ 	return NT_STATUS_OK;
+--- a/source3/smbd/smb2_flush.c
++++ b/source3/smbd/smb2_flush.c
+@@ -21,6 +21,7 @@
+ #include "includes.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_directory.h"
+ #include "../libcli/smb/smb_common.h"
+ #include "../lib/util/tevent_ntstatus.h"
+ #include "libcli/security/security.h"
+@@ -32,7 +33,7 @@
+ 					       struct tevent_context *ev,
+ 					       struct smbd_smb2_request *smb2req,
+ 					       struct files_struct *fsp);
+-static NTSTATUS smbd_smb2_flush_recv(struct tevent_req *req);
++static NTSTATUS smbd_smb2_flush_recv(struct tevent_req *req,DATA_BLOB *body);
+ 
+ static void smbd_smb2_request_flush_done(struct tevent_req *subreq);
+ NTSTATUS smbd_smb2_request_process_flush(struct smbd_smb2_request *req)
+@@ -72,11 +73,11 @@
+ {
+ 	struct smbd_smb2_request *req = tevent_req_callback_data(subreq,
+ 					struct smbd_smb2_request);
+-	DATA_BLOB outbody;
++	DATA_BLOB outbody=data_blob_null;
+ 	NTSTATUS status;
+ 	NTSTATUS error; /* transport error */
+ 
+-	status = smbd_smb2_flush_recv(subreq);
++	status = smbd_smb2_flush_recv(subreq,&outbody);
+ 	TALLOC_FREE(subreq);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		error = smbd_smb2_request_error(req, status);
+@@ -88,7 +89,7 @@
+ 		return;
+ 	}
+ 
+-	outbody = smbd_smb2_generate_outbody(req, 0x04);
++	if(outbody.data==NULL)outbody=smbd_smb2_generate_outbody(req,0x04);
+ 	if (outbody.data == NULL) {
+ 		error = smbd_smb2_request_error(req, NT_STATUS_NO_MEMORY);
+ 		if (!NT_STATUS_IS_OK(error)) {
+@@ -113,9 +114,25 @@
+ struct smbd_smb2_flush_state {
+ 	struct smbd_smb2_request *smb2req;
+ 	struct files_struct *fsp;
++	struct tevent_req *zxs_wait;
++	DATA_BLOB zxs_body;
+ };
+ 
+ static void smbd_smb2_flush_done(struct tevent_req *subreq);
++static void zxs_flush_done(struct tevent_req *sub)
++{
++	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
++	struct smbd_smb2_flush_state *s=tevent_req_data(req,struct smbd_smb2_flush_state);
++	NTSTATUS status=zxs_work_recv(sub);
++	s->zxs_wait=NULL;TALLOC_FREE(sub);
++	if(tevent_req_nterror(req,status))return;
++	tevent_req_done(req);
++}
++static bool zxs_flush_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_flush_state *s=tevent_req_data(req,struct smbd_smb2_flush_state);
++	return zxs_dir_wait_cancel(req,s->smb2req->xconn->client->raw_ev_ctx,&s->zxs_wait,NULL);
++}
+ 
+ static struct tevent_req *smbd_smb2_flush_send(TALLOC_CTX *mem_ctx,
+ 					       struct tevent_context *ev,
+@@ -137,6 +154,17 @@
+ 	}
+ 	state->smb2req = smb2req;
+ 	state->fsp = fsp;
++
++	if(zxs_file_vfs_active(smb2req->tcon->compat) || zxs_file_vfs_active(fsp->conn)){
++		state->zxs_body=smbd_smb2_generate_outbody(smb2req,0x04);
++		if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
++		state->zxs_wait=zxs_work_send(state,ev,req,smb2req,fsp,ZXS_WORK_FLUSH,
++					    0,data_blob_null,false,false);
++		if(tevent_req_nomem(state->zxs_wait,req))return tevent_req_post(req,ev);
++		tevent_req_set_cancel_fn(req,zxs_flush_cancel);
++		tevent_req_set_callback(state->zxs_wait,zxs_flush_done,req);
++		return req;
++	}
+ 
+ 	DEBUG(10,("smbd_smb2_flush: %s - %s\n",
+ 		  fsp_str_dbg(fsp), fsp_fnum_dbg(fsp)));
+@@ -243,9 +271,11 @@
+ 	tevent_req_done(req);
+ }
+ 
+-static NTSTATUS smbd_smb2_flush_recv(struct tevent_req *req)
+-{
+-	NTSTATUS status;
++static NTSTATUS smbd_smb2_flush_recv(struct tevent_req *req,DATA_BLOB *body)
++{
++	struct smbd_smb2_flush_state *s=tevent_req_data(req,struct smbd_smb2_flush_state);
++	NTSTATUS status;
++	*body=s->zxs_body;
+ 
+ 	if (tevent_req_is_nterror(req, &status)) {
+ 		tevent_req_received(req);
+--- a/source3/smbd/smb2_setinfo.c
++++ b/source3/smbd/smb2_setinfo.c
+@@ -23,6 +23,7 @@
+ #include "locking/share_mode_lock.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_directory.h"
+ #include "../libcli/smb/smb_common.h"
+ #include "trans2.h"
+ #include "../lib/util/tevent_ntstatus.h"
+@@ -43,7 +44,7 @@
+ 						 uint8_t in_file_info_class,
+ 						 DATA_BLOB in_input_buffer,
+ 						 uint32_t in_additional_information);
+-static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req);
++static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req,DATA_BLOB *body);
+ 
+ static void smbd_smb2_request_setinfo_done(struct tevent_req *subreq);
+ NTSTATUS smbd_smb2_request_process_setinfo(struct smbd_smb2_request *req)
+@@ -132,11 +133,11 @@
+ {
+ 	struct smbd_smb2_request *req = tevent_req_callback_data(subreq,
+ 					struct smbd_smb2_request);
+-	DATA_BLOB outbody;
++	DATA_BLOB outbody=data_blob_null;
+ 	NTSTATUS status;
+ 	NTSTATUS error; /* transport error */
+ 
+-	status = smbd_smb2_setinfo_recv(subreq);
++	status = smbd_smb2_setinfo_recv(subreq,&outbody);
+ 	TALLOC_FREE(subreq);
+ 	if (!NT_STATUS_IS_OK(status)) {
+ 		error = smbd_smb2_request_error(req, status);
+@@ -148,7 +149,7 @@
+ 		return;
+ 	}
+ 
+-	outbody = smbd_smb2_generate_outbody(req, 0x02);
++	if(outbody.data==NULL)outbody=smbd_smb2_generate_outbody(req,0x02);
+ 	if (outbody.data == NULL) {
+ 		error = smbd_smb2_request_error(req, NT_STATUS_NO_MEMORY);
+ 		if (!NT_STATUS_IS_OK(error)) {
+@@ -181,9 +182,25 @@
+ 	bool delay;
+ 	bool rename_dst_check_done;
+ 	bool rename_dst_parent_check_done;
++	struct tevent_req *zxs_wait;
++	DATA_BLOB zxs_body;
+ };
+ 
+ static void smbd_smb2_setinfo_lease_break_check(struct tevent_req *req);
++static void zxs_set_eof_done(struct tevent_req *sub)
++{
++	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
++	struct smbd_smb2_setinfo_state *s=tevent_req_data(req,struct smbd_smb2_setinfo_state);
++	NTSTATUS status=zxs_work_recv(sub);
++	s->zxs_wait=NULL;TALLOC_FREE(sub);
++	if(tevent_req_nterror(req,status))return;
++	tevent_req_done(req);
++}
++static bool zxs_set_eof_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_setinfo_state *s=tevent_req_data(req,struct smbd_smb2_setinfo_state);
++	return zxs_dir_wait_cancel(req,s->smb2req->xconn->client->raw_ev_ctx,&s->zxs_wait,NULL);
++}
+ 
+ static void smbd_smb2_setinfo_cleanup(struct tevent_req *req,
+ 				      enum tevent_req_state req_state)
+@@ -222,6 +239,29 @@
+ 	state->smb2req = smb2req;
+ 	state->fsp = fsp;
+ 	state->data = in_input_buffer;
++
++	if(zxs_file_vfs_active(conn) || zxs_file_vfs_active(fsp->conn)){
++		uint64_t length=0;
++		if(fsp->conn!=conn || in_info_type!=SMB2_0_INFO_FILE ||
++		   in_file_info_class+1000!=SMB_FILE_END_OF_FILE_INFORMATION) {
++			tevent_req_nterror(req,NT_STATUS_NOT_SUPPORTED);
++			return tevent_req_post(req,ev);
++		}
++		if(in_additional_information!=0 || in_input_buffer.length<8 ||
++		   in_input_buffer.data==NULL ||
++		   (length=BVAL(in_input_buffer.data,0))>INT64_MAX) {
++			tevent_req_nterror(req,NT_STATUS_INVALID_PARAMETER);
++			return tevent_req_post(req,ev);
++		}
++		state->zxs_body=smbd_smb2_generate_outbody(smb2req,2);
++		if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
++		state->zxs_wait=zxs_work_send(state,ev,req,smb2req,fsp,ZXS_WORK_EOF,
++					    length,data_blob_null,false,false);
++		if(tevent_req_nomem(state->zxs_wait,req))return tevent_req_post(req,ev);
++		tevent_req_set_cancel_fn(req,zxs_set_eof_cancel);
++		tevent_req_set_callback(state->zxs_wait,zxs_set_eof_done,req);
++		return req;
++	}
+ 
+ 	tevent_req_set_cleanup_fn(req, smbd_smb2_setinfo_cleanup);
+ 
+@@ -945,9 +985,11 @@
+ 	smbd_smb2_setinfo_lease_break_check(req);
+ }
+ 
+-static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req)
+-{
++static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req,DATA_BLOB *body)
++{
++	struct smbd_smb2_setinfo_state *s=tevent_req_data(req,struct smbd_smb2_setinfo_state);
+ 	NTSTATUS status;
++	*body=s->zxs_body;
+ 
+ 	if (tevent_req_is_nterror(req, &status)) {
+ 		tevent_req_received(req);
+--- a/source3/smbd/sec_ctx.c
++++ b/source3/smbd/sec_ctx.c
+@@ -21,6 +21,7 @@
+ #include "system/passwd.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "param/zxs_runtime.h"
+ #include "libcli/security/security_token.h"
+ #include "auth.h"
+ #include "smbprofile.h"
+@@ -253,6 +254,7 @@
+ 	}
+ #endif
+ 	become_id(uid, gid);
++	zxs_runtime_after_ids();
+ 	/* end context switch */
+ }
+ 
+--- a/source3/lib/util.c
++++ b/source3/lib/util.c
+@@ -726,8 +726,9 @@
+ 
+ void smb_panic_s3(const char *why)
+ {
+-	call_panic_action(why, false);
+-	dump_core();
++	/* This dedicated image does not run panic hooks or reopen core dumps. */
++	(void)why;
++	_exit(EXIT_FAILURE);
+ }
+ 
+ void log_panic_action(const char *msg)

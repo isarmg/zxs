@@ -1,6 +1,7 @@
-//! Public request bytes and exact v7 transaction components. Parsing and
+//! Public request bytes and exact v9 transaction components. Parsing and
 //! original SQL history cannot issue native account-maintenance authority.
 use super::{Id, bad, login, distinct_roles, domain::LocalDomain};
+mod first_ordinary;
 use rusqlite::{params, Row, Transaction};
 use sha2::{Digest, Sha256};
 use std::io;
@@ -70,7 +71,7 @@ fn history<T>(state: i64, value: T) -> io::Result<Original<T>> {
 }
 fn require_init(tx: &Transaction<'_>, c: &Core) -> io::Result<()> {
     // Defence against interpreting an empty/different pool as an absent
-    // account. The calling protected transaction still verifies exact v7
+    // account. The calling protected transaction still verifies exact v9
     // canonical schema, original S marker and normal upstream Unix VFS.
     let init: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM main.pool_birth b

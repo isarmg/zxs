@@ -1,10 +1,11 @@
 //! Native management HTTP. Authentication and authorisation remain in ZXS.
-use crate::{OperationId,PoolId,VolumeId,identity::ShareId,system::reader::{InitialReader,account::WebAdmin}};
+use crate::{OperationId,PoolId,identity::ShareId,system::reader::{InitialReader,account::WebAdmin}};
 use std::{borrow::Cow,collections::{BTreeMap,VecDeque},fmt::Write as _,io::{self,Write},net::TcpListener,
-    path::Path,time::{Duration,Instant}};
+    path::Path,sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 mod pages;
 mod transport;
 mod access;
+mod manual;
 pub use access::ExternalHttps;
 use access::Audience;
 
@@ -32,7 +33,9 @@ impl Token{
     fn hex(&self)->String{let mut s=String::with_capacity(64);for x in self.0{write!(s,"{x:02x}").unwrap();}s}
     fn matches(&self,other:&Self)->bool{self.0.iter().zip(other.0).fold(0u8,|n,(a,b)|n|(a^b))==0}
 }
-struct Session<'s>{audience:Audience,admin:WebAdmin<'s>,csrf:Token,born:Instant,last:Instant}
+struct Session<'s>{audience:Audience,admin:WebAdmin<'s>,csrf:Token,born:Instant,last:Instant,
+    permit:Arc<AtomicBool>,chosen:manual::Chosen}
+impl Drop for Session<'_>{fn drop(&mut self){self.permit.store(false,Ordering::Release);}}
 struct App<'s>{source:&'s InitialReader,sessions:BTreeMap<Token,Session<'s>>,attempts:VecDeque<Instant>}
 struct Request{method:String,target:String,audience:Audience,origin:Option<String>,content_type:String,
     cookie:Option<Token>,body:transport::PrivateBytes}
@@ -56,19 +59,25 @@ const BAD:fn()->Reply=||Reply::text("400 Bad Request","请求格式不正确。"
 
 impl<'s> App<'s>{
     fn new(source:&'s InitialReader)->Self{Self{source,sessions:BTreeMap::new(),attempts:VecDeque::new()}}
+    fn expire(&mut self,now:Instant){
+        self.sessions.retain(|_,s|now.saturating_duration_since(s.born)<ABSOLUTE&&now.saturating_duration_since(s.last)<IDLE);
+    }
     fn handle(&mut self,mut q:Request,now:Instant)->Reply{
         if let Some(k)=q.cookie.as_ref(){
             // A guessed/replayed token from a different accepted origin must
             // not inspect, refresh, log out, or replace the other session.
             if self.sessions.get(k).is_some_and(|s|s.audience!=q.audience){return REJECT();}
         }
-        self.sessions.retain(|_,s|now.saturating_duration_since(s.born)<ABSOLUTE&&now.saturating_duration_since(s.last)<IDLE);
+        self.expire(now);
         if q.method=="GET"{
             if !q.body.0.is_empty(){return BAD();}
             if q.target=="/login"{return Reply::html("200 OK",pages::sign_in(false,q.audience.secure));}
             if q.target=="/management.css"{
                 let mut r=Reply::text("200 OK",pages::CSS);r.ty="text/css; charset=utf-8";return r;
             }
+            if let Some(id)=q.target.strip_prefix("/versions?file="){return self.manual_page(&q,id,now);}
+            if q.target=="/versions"{return self.manual_index(&q,None,now);}
+            if let Some(after)=q.target.strip_prefix("/versions?after="){return self.manual_index(&q,Some(after),now);}
             let after=if q.target=="/"{None}else if let Some(s)=q.target.strip_prefix("/?after="){
                 match s.parse::<ShareId>(){Ok(k)=>Some(k),Err(_)=>return BAD()}
             }else{return Reply::text("404 Not Found","没有此管理页面。");};
@@ -80,7 +89,7 @@ impl<'s> App<'s>{
                 Err(_)=>UNAVAILABLE()
             };
         }
-        if q.method!="POST"||!matches!(q.target.as_str(),"/login"|"/logout"|"/shares/publish"|"/shares/mode"){return Reply::text("404 Not Found","没有此管理页面。");}
+        if q.method!="POST"||!matches!(q.target.as_str(),"/login"|"/logout"|"/shares/mode"){return Reply::text("404 Not Found","没有此管理页面。");}
         if q.origin.as_deref()!=Some(q.audience.origin.as_str()){return REJECT();}
         if q.content_type!="application/x-www-form-urlencoded"{return BAD();}
         if q.target=="/logout"{
@@ -95,19 +104,12 @@ impl<'s> App<'s>{
             let Some(k)=q.cookie.as_ref()else{return REJECT();};
             let Some(session)=self.sessions.get_mut(k)else{return REJECT();};
             let allowed=|v:&str|Token::parse(v).is_some_and(|t|session.csrf.matches(&t));
-            let changed=if q.target=="/shares/publish"{
-                let Some([csrf,op,volume,label])=transport::fields(&mut q.body.0,["csrf","op","volume","label"])else{return BAD();};
-                if !allowed(csrf){return REJECT();}
-                let(Ok(op),Ok(volume))=(op.parse::<OperationId>(),volume.parse::<VolumeId>())else{return BAD();};
-                session.admin.publish_root(op,volume,label).map(|_|())
-            }else{
-                use crate::system::reader::account::share_mode::Mode;
-                let Some([csrf,op,share,previous,mode])=transport::fields(&mut q.body.0,["csrf","op","share","previous","mode"])else{return BAD();};
-                if !allowed(csrf){return REJECT();}
-                let(Ok(op),Ok(share),Ok(previous))=(op.parse::<OperationId>(),share.parse::<ShareId>(),previous.parse::<OperationId>())else{return BAD();};
-                let m=match mode{"off"=>Mode::Disabled,"ro"=>Mode::ReadOnly,"rw"=>Mode::ReadWrite,_=>return BAD()};
-                session.admin.set_share_mode(op,share,previous,m).map(|_|())
-            };
+            use crate::system::reader::account::share_mode::Mode;
+            let Some([csrf,op,share,previous,mode])=transport::fields(&mut q.body.0,["csrf","op","share","previous","mode"])else{return BAD();};
+            if !allowed(csrf){return REJECT();}
+            let(Ok(op),Ok(share),Ok(previous))=(op.parse::<OperationId>(),share.parse::<ShareId>(),previous.parse::<OperationId>())else{return BAD();};
+            let m=match mode{"off"=>Mode::Disabled,"ro"=>Mode::ReadOnly,"rw"=>Mode::ReadWrite,_=>return BAD()};
+            let changed=session.admin.set_installed_mode(op,share,previous,m).map(|_|());
             return match changed{Ok(())=>{session.last=now;Reply::redirect("/")},
                 Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>REJECT(),
                 Err(e)if e.kind()==io::ErrorKind::InvalidInput=>Reply::text("409 Conflict","参数、共享设置或原操作不符。请先核对当前状态。"),
@@ -126,13 +128,14 @@ impl<'s> App<'s>{
         if self.sessions.len()>=MAX_SESSIONS{return Reply::text("429 Too Many Requests","管理会话已满，请稍后再试。");}
         let mut r=Reply::redirect("/");
         r.set_cookie=Some(q.audience.set_cookie(&key.hex(),false));
-        self.sessions.insert(key,Session{audience:q.audience,admin,csrf,born:now,last:now});r
+        self.sessions.insert(key,Session{audience:q.audience,admin,csrf,born:now,last:now,
+            permit:Arc::new(AtomicBool::new(true)),chosen:None});r
     }
 }
 
 /// One business owner holds S and all WebAdmin handles. A fixed number of I/O
 /// workers frame ordinary HTTP without holding SQLite or serialising slow reads.
-pub fn serve(system:&Path,pool:PoolId,proxy:Option<ExternalHttps>,stopping:impl Fn()->bool)->io::Result<()>{
+pub fn serve(system:&Path,pool:PoolId,proxy:Option<ExternalHttps>,stopping:impl Fn()->bool+Sync)->io::Result<()>{
     let source=InitialReader::open(system,pool)?;
     let listener=TcpListener::bind(("0.0.0.0",8443))?;
     transport::serve(&listener,proxy.as_ref(),&mut App::new(&source),stopping)

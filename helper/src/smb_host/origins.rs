@@ -1,29 +1,28 @@
 //! Live, independently selected installation objects for one approved start.
 //! This is not an authority issuer. No "trust these hashes" CLI or callback.
-use super::{Image,STORAGE,no};
-use crate::pinned::{Entity,Mount};
+use super::{Image,no,release::Release};
+use crate::{sqlite_install::Online,pinned::{Entity,Mount,Pinned},smb_profile::{self,first::Plan}};
 use helper_linux_evidence::smb_spawn::StorageConfig;
-use rustix::{fs::{FlockOperation,Mode,OFlags,ResolveFlags,StatVfsMountFlags,fcntl_getfl,flock,fstatvfs,open,openat2},io::Errno};
+use rustix::{fs::{Mode,OFlags,ResolveFlags,StatVfsMountFlags,fcntl_getfl,fstatvfs,open,openat2},io::Errno};
+#[cfg(test)]
+use rustix::fs::{FlockOperation,flock};
 use sha2::{Digest,Sha256};
 use std::{fs::File,io,os::unix::fs::{FileExt,MetadataExt}};
 
 const SAFE:ResolveFlags=ResolveFlags::BENEATH.union(ResolveFlags::NO_SYMLINKS).union(ResolveFlags::NO_MAGICLINKS);
 const DIR:OFlags=OFlags::PATH.union(OFlags::DIRECTORY).union(OFlags::CLOEXEC).union(OFlags::NOFOLLOW);
-const LIVE:&[u8]=include_bytes!("../../resources/samba-domain/initial-live.conf");
 
-/// All fields are held originals from a separately authorized online installer,
-/// not descriptive strings supplied by a web client or by the daemon. In
-/// particular the prepared roots include trusted dynamic loaders/ELF closure;
-/// the ABI here independently rechecks their relevant runtime projections.
-/// There is deliberately no production issuer in the CLI or preflight tool.
+/// Held by the foreground issuer after its real native SQL observation
+/// and the operator's original local grant. Never from a preflight or web request.
 pub(super) struct Inputs<'a>{
+    pub(super) approved:&'a Online,pub(super) release:&'a Release,
     pub(super) daemon_root:&'a File,pub(super) storage_root:&'a File,
-    pub(super) site:&'a File,pub(super) system:&'a File,
+    pub(super) site:&'a File,pub(super) system:&'a File,pub(super) system_pin:&'a Pinned,
     pub(super) bound_readonly:&'a File,pub(super) system_path:&'a str,
     pub(super) uid:u32,pub(super) gid:u32,pub(super) pool:[u8;16],pub(super) instance:[u8;16],
-    pub(super) operation:[u8;16],pub(super) bound_sha:[u8;32],
-    pub(super) smbd_sha:[u8;32],pub(super) storage_sha:[u8;32],
-    pub(super) approved_nss_sha:[u8;32],pub(super) web_uid:u32,pub(super) web_gid:u32,
+    pub(super) operation:[u8;16],pub(super) bound_sha:[u8;32],pub(super) live_sha:[u8;32],
+    pub(super) plan:&'a Plan,pub(super) null:&'a File,
+    pub(super) approved_nss_sha:[u8;32],
 }
 pub(super) fn file_at(f:&File,path:&str,flags:OFlags)->io::Result<File>{Ok(File::from(openat2(f,path,flags,Mode::empty(),SAFE)?))}
 fn dir(f:&File,p:&str)->io::Result<File>{file_at(f,p,DIR)}
@@ -42,7 +41,7 @@ fn exact_public(f:&File,len:u64)->io::Result<()>{
     let m=f.metadata()?;
     if !m.is_file()||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=len||m.mode()&0o7777!=0o444{return Err(no());}Ok(())
 }
-fn projected(site:&File,role:&File,name:&str,len:u64)->io::Result<File>{
+pub(super) fn projected(site:&File,role:&File,name:&str,len:u64)->io::Result<File>{
     let pin=OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC;
     let raw=file_at(site,name,pin)?;let show=file_at(role,name,pin)?;
     exact_public(&raw,len)?;exact_public(&show,len)?;
@@ -55,6 +54,13 @@ fn projected(site:&File,role:&File,name:&str,len:u64)->io::Result<File>{
        !super::same(&file_at(site,name,pin)?,&raw)?{return Err(no());}
     Ok(f)
 }
+fn true_eof(f:&File,at:u64)->io::Result<bool>{
+    loop{match f.read_at(&mut [0],at){Ok(n)=>return Ok(n==0),Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e)}}
+}
+fn stable(before:&std::fs::Metadata,after:&std::fs::Metadata)->bool{
+    (before.ctime(),before.ctime_nsec(),before.mtime(),before.mtime_nsec(),before.len())==
+    (after.ctime(),after.ctime_nsec(),after.mtime(),after.mtime_nsec(),after.len())
+}
 fn exact<const N:usize>(f:&File)->io::Result<[u8;N]>{
     exact_public(f,N as u64)?;let m=f.metadata()?;let mut b=[0;N];f.read_exact_at(&mut b,0)?;
     let mut eof=[0];loop{match f.read_at(&mut eof,N as u64){Ok(0)=>break,Err(e) if e.kind()==io::ErrorKind::Interrupted=>{},_=>return Err(no())}}
@@ -65,7 +71,9 @@ fn exact<const N:usize>(f:&File)->io::Result<[u8;N]>{
 // The offline installer takes SYSTEM then site. Use *independent* nonblocking
 // locks on these same directory inodes before either service exists. Never
 // convert the installer's OFD or lock one of SQLite's files.
-pub(super) struct RuntimeLease{system:File,site:File}
+#[cfg(test)]
+struct RuntimeLease{_system:File,_site:File}
+#[cfg(test)]
 impl RuntimeLease{
     pub(super) fn acquire(system:&File,site:&File)->io::Result<Self>{
         if ident(system)?==ident(site)?{return Err(no());}
@@ -76,28 +84,33 @@ impl RuntimeLease{
             if !super::same(&d,pin)?||d.metadata()?.nlink()==0{return Err(no());}Ok(d)
         };
         let system=take(system,FlockOperation::NonBlockingLockShared)?;
-        let site=take(site,FlockOperation::NonBlockingLockExclusive)?;Ok(Self{system,site})
-    }
-    pub(super) fn require(&self,a:&Inputs<'_>)->io::Result<()>{
-        if !super::same(&self.system,a.system)?||!super::same(&self.site,a.site)?||
-            self.system.metadata()?.nlink()==0||self.site.metadata()?.nlink()==0{return Err(no());}Ok(())
+        let site=take(site,FlockOperation::NonBlockingLockExclusive)?;Ok(Self{_system:system,_site:site})
     }
 }
-pub(super) struct Selected<'a>{pub(super) inputs:Inputs<'a>,pub(super) daemon:Image,pub(super) storage:Image,pub(super) env:StorageConfig}
+pub(super) struct Selected<'a>{pub(super) inputs:Inputs<'a>,pub(super) daemon:Image<'a>,pub(super) storage:Image<'a>,
+    pub(super) env:StorageConfig,live:Vec<u8>}
 impl<'a> Selected<'a>{
     pub(super) fn new(inputs:Inputs<'a>)->io::Result<Self>{
-        if inputs.smbd_sha==inputs.storage_sha||inputs.bound_sha==[0;32]{return Err(no());}
-        let config:[u8;32]=Sha256::digest(LIVE).into();
+        if inputs.bound_sha==[0;32]{return Err(no());}
+        let o=inputs.plan.origin;
+        let live=smb_profile::render(inputs.plan).map_err(|_|no())?.into_bytes();
+        let config:[u8;32]=Sha256::digest(&live).into();
+        if (o.pool,o.instance,o.domain)!=(inputs.pool,inputs.instance,inputs.operation)||config!=inputs.live_sha{return Err(no());}
         let env=StorageConfig::selected(inputs.uid,inputs.gid,inputs.system_path,inputs.pool,inputs.instance,inputs.operation,config)?;
-        let daemon=Image::selected(inputs.smbd_sha)?;let storage=Image::at(STORAGE,inputs.storage_sha)?;
-        let x=Self{inputs,daemon,storage,env};x.require()?;Ok(x)
+        let release=inputs.release;
+        let daemon=Image::select(release,true)?;let storage=Image::select(release,false)?;
+        let x=Self{inputs,daemon,storage,env,live};x.require()?;Ok(x)
     }
-    pub(super) fn require(&self)->io::Result<()>{
-        let a=&self.inputs;self.daemon.original()?;self.storage.original()?;
-        if ident(&self.daemon.0.file)?==ident(&self.storage.0.file)?{return Err(no());}
+    pub(super) fn require(&self)->io::Result<[u8;128]>{
+        let a=&self.inputs;a.approved.require()?;self.daemon.original()?;self.storage.original()?;
+        if a.system_pin.path()!=std::path::Path::new(a.system_path)||
+            a.system_pin.entity()!=ident(a.system)?||a.system_pin.require_same_named_mount()?.id!=mid(a.system)?{
+            return Err(no());
+        }
+        if ident(self.daemon.file)?==ident(self.storage.file)?{return Err(no());}
         let host=File::from(open(c"/",DIR,Mode::empty())?);
         view(a.daemon_root,&host)?;view(a.storage_root,&host)?;
-        super::identity::require(a.daemon_root,a.storage_root,a.approved_nss_sha,(a.uid,a.gid),(a.web_uid,a.web_gid))?;
+        super::identity::require(a.daemon_root,a.storage_root,a.approved_nss_sha,(a.uid,a.gid))?;
         let ids=[ident(a.daemon_root)?,ident(a.storage_root)?,ident(a.site)?,ident(a.system)?];
         if ids.iter().enumerate().any(|(i,k)|ids[..i].contains(k)){return Err(no());}
         let role=dir(a.daemon_root,"instance")?;directory(&role,true)?;directory(a.site,true)?;
@@ -130,15 +143,30 @@ impl<'a> Selected<'a>{
         for n in ["run","cache","lock"]{
             let d=dir(&role,n)?;directory(&d,true)?;if mid(&d)?!=mid(&role)?||!ro(&d)?{return Err(no());}
         }
-        let path=&a.system_path[1..];
-        let s=dir(a.storage_root,path)?;
-        if ident(&s)?!=ident(a.system)?||mid(&s)?==mid(a.system)?{return Err(no());}
-        // Neither fresh role is allowed the other role's private input path.
-        for(v,p)in [(a.storage_root,"instance"),(a.daemon_root,path)]{
-            match openat2(v,p,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),SAFE){Err(Errno::NOENT)=>{},_=>return Err(no())}
+        for (path,orig) in std::iter::once((std::path::Path::new(a.system_path),a.system)).chain(a.approved.roots()){
+            let relative=path.strip_prefix("/").map_err(|_|no())?;
+            let shown=File::from(openat2(a.storage_root,relative,DIR,Mode::empty(),SAFE)?);
+            let on=orig.metadata()?;let m=shown.metadata()?;
+            if ident(&shown)?!=ident(orig)?||mid(&shown)?==mid(orig)?||m.uid()!=on.uid()||m.gid()!=on.gid()||
+                m.mode()!=on.mode()||ro(&shown)?!=ro(orig)?||Mount::on(&shown)?.is_none_or(|p|p.at_root!=Some(true)){
+                return Err(no());
+            }
+            // The daemon receives no SYSTEM/F source whatsoever. A similarly
+            // spelled generated path is not a source or authorized alias.
+            match openat2(a.daemon_root,relative,DIR,Mode::empty(),SAFE){
+                Err(Errno::NOENT|Errno::NOTDIR)=>(),
+                Ok(f)=>{if ident(&File::from(f))?==ident(orig)?{return Err(no());}}
+                _=>return Err(no()),
+            }
         }
-        let live=projected(a.site,&role,"smb.conf",LIVE.len() as u64)?;
-        if exact::<{LIVE.len()}>(&live)?.as_slice()!=LIVE{return Err(no());}
+        let live=projected(a.site,&role,"smb.conf",self.live.len() as u64)?;
+        let mut exact_live=vec![0;self.live.len()];
+        let before=live.metadata()?;
+        live.read_exact_at(&mut exact_live,0)?;
+        if exact_live!=self.live||!true_eof(&live,self.live.len() as u64)?||
+            !stable(&before,&live.metadata()?)||!super::same(&live,&projected(a.site,&role,"smb.conf",self.live.len() as u64)?)?{
+            return Err(no());
+        }
         let service_bound=projected(a.site,&role,"domain.bound",128)?;
         // Do not read a single byte from a wrong caller-supplied descriptor,
         // even when it looks like a 128B, root-owned public record.
@@ -148,9 +176,9 @@ impl<'a> Selected<'a>{
         let b=exact::<128>(a.bound_readonly)?;
         if exact::<128>(&service_bound)?!=b||<[u8;32]>::from(Sha256::digest(b))!=a.bound_sha||
             &b[..16]!=b"ZXS-SAM/BOUND-1\0"||b[16..32]!=a.pool||b[32..48]!=a.instance||b[48..64]!=a.operation||
-            b[64..96]!=Sha256::digest(LIVE)[..]||&b[96..104]!=b"ZXSLOCAL"||
+            b[64..96]!=a.live_sha||&b[96..104]!=b"ZXSLOCAL"||
             b[104..116]!=[1,4,0,0,0,0,0,5,21,0,0,0]||b[116..]==[0;12]{return Err(no());}
-        Ok(())
+        Ok(b)
     }
 }
 

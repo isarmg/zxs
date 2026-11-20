@@ -5,12 +5,12 @@ mod capsule;
 mod monitor;
 mod return_to_host;
 pub(in crate::sqlite_install::pair) use return_to_host::{give_live_approval,request_live_approval,NativeSite,NativeSeen};
-pub(in crate::sqlite_install) use return_to_host::lease as require_lent_ex;
+pub(in crate::sqlite_install) use return_to_host::{lease as require_lent_ex,shared_lease as require_lent_sh};
 pub(crate) use return_to_host::exec_child;
 pub(in crate::sqlite_install::pair) use return_to_host::create_layout;
 mod live;
 use super::handoff::{HeldOrigin,OriginChannel,SyncedStore};
-use crate::{fs_tools::RuntimeFile,isolated_group::Group,pinned::{Entity,Mount,Pinned},
+use crate::{fs_tools::RuntimeFile,smb_profile::first::Origin,isolated_group::Group,pinned::{Entity,Mount,Pinned},
     sqlite_install::{bad,originals::LockedSystem,request::Id}};
 use rustix::{fd::{AsFd,AsRawFd,OwnedFd},fs::{FlockOperation,Mode,OFlags,RawDir,flock,openat},
     io::{FdFlags,fcntl_dupfd_cloexec,fcntl_setfd},pipe::{PipeFlags,pipe_with},
@@ -27,9 +27,9 @@ const ENTRY:&str="import runpy; runpy.run_path('/provision.py',run_name='_local_
 /// This explicit first stage creates only the dedicated domain. The operator
 /// supplies its own stable nonsecret IDs. Do not use for recovery or existing
 /// instances; credentials and services are not touched by this step.
-pub(in crate::sqlite_install) fn provision_fresh_domain(system:&Path,pool:Id,init:Id,instance:Id,op:Id,approval:Id)->io::Result<[u8;128]>{
-    use sha2::{Digest,Sha256};
-    let source=return_to_host::HostOrigins::before_worker(system,pool,init,instance,op,Sha256::digest(live::PROFILE).into())?;
+pub(in crate::sqlite_install) fn provision_fresh_domain(system:&Path,pool:Id,init:Id,instance:Id,op:Id,setup:Id,approval:Id,
+    approved_live:[u8;32])->io::Result<[u8;128]>{
+    let source=return_to_host::HostOrigins::before_worker(system,pool,init,instance,op,setup,approved_live)?;
     source.issue(approval)
 }
 
@@ -39,7 +39,7 @@ pub(in crate::sqlite_install) fn provision_fresh_domain(system:&Path,pool:Id,ini
 // constructor. Merely receiving arguments, a uid or a packaging profile is NOT
 // enough. The executable actually consumed is the specific digest-verified ELF.
 pub(super) struct FreshApproval<'a>{
-    system:&'a LockedSystem, pool:Id,init:Id,instance_id:Id,op:Id,actor:Id,reference:Id,live_config:[u8;32],host_order:[u8;32],
+    system:&'a LockedSystem, pool:Id,init:Id,instance_id:Id,op:Id,setup:Id,actor:Id,reference:Id,live_config:[u8;32],host_order:[u8;32],
     site:&'a Pinned, usr:&'a Pinned, expected_bwrap:[u8;32],release:capsule::Keys,uid:u32,gid:u32,
 }
 // Only the real monitor/reaper creates this proof for its original payload.
@@ -179,9 +179,10 @@ impl<'a> FreshApproval<'a>{
         // explicitly selected original S under its EX; no SQL connection survives
         // the native process. A pool ID supplied by the caller alone is not enough.
         let site=Instance::lock(&self)?;
-        let live=live::Live::select(&site.base,&self.live_config)?;
+        let live=live::Live::select(&site.base,&self.live_config,
+            Origin{pool:self.pool,init:self.init,instance:self.instance_id,domain:self.op,setup:self.setup})?;
         let check_order=||->io::Result<()>{
-            let dig=return_to_host::order([&self.pool,&self.init,&self.instance_id,&self.op,&self.actor,&self.reference],
+            let dig=return_to_host::order([&self.pool,&self.init,&self.instance_id,&self.op,&self.actor,&self.reference],&self.setup,
                 self.uid,self.gid,s.path(),&self.live_config,&self.release.bind(&actual_bwrap),
                 [mark(s.dir())?,mark(&site.base)?,mark(&site.private)?,mark(&site.state)?,live.origin(),mark(&usr)?])?;
             if dig!=self.host_order{return Err(bad("foreground host approval referred to different original objects; not provisioning"));}
@@ -189,7 +190,7 @@ impl<'a> FreshApproval<'a>{
         };
         check_order()?;
         // Only now open the SQL file: a wrong selected inode is not even read.
-        super::super::observed::original_pool(&self.pool,&self.init,self.system)?;
+        super::super::observed::approved_folders(live.plan(),self.system)?;
         let (origin,tx)=OriginChannel::open()?;let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
         let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin);
         let (script,boot,bpf)=(sealed(SCRIPT)?,sealed(BOOT)?,sealed(&helper_linux_evidence::diagnostic_process::diagnostic_group_filter())?);

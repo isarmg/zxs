@@ -49,7 +49,9 @@ impl<'g> HeldRoot<'g> {
 /// Separate capability for *observing* one established SYSTEM. It cannot be
 /// substituted for an initial whole-group grant or constructed from SQL paths.
 pub(super) struct SelectedSystem {pin:Pinned,host:File,uid:u32,gid:u32}
-pub(super) struct LockedSystem {selected:SelectedSystem,dir:File,limit:u8,lent:bool}
+#[derive(Clone,Copy)]
+enum SystemLease{Exclusive,LentExclusive,LentRead}
+pub(super) struct LockedSystem {selected:SelectedSystem,dir:File,limit:u8,lease:SystemLease}
 impl SelectedSystem {
     /// Only O_PATH ancestor/leaf observation here, before final lowering to the
     /// configured storage worker. This is not setup/recovery authorization.
@@ -79,17 +81,21 @@ impl SelectedSystem {
     fn take_original(self)->io::Result<LockedSystem>{
         let dir=self.pin.storage_directory()?;
         flock(&dir,FlockOperation::NonBlockingLockExclusive)?;
-        self.with_descriptor(dir,false)
+        self.with_descriptor(dir,SystemLease::Exclusive)
     }
     /// The dedicated host issuer already owns this OFD and retains it through
     /// the action. Do NOT open a second EX or convert the shared description.
     pub(super) fn from_lent_ex(self,dir:File)->io::Result<LockedSystem>{
         crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
-        self.with_descriptor(dir,true)
+        self.with_descriptor(dir,SystemLease::LentExclusive)
     }
-    fn with_descriptor(self,dir:File,lent:bool)->io::Result<LockedSystem>{
+    pub(super) fn from_lent_sh(self,dir:File)->io::Result<LockedSystem>{
+        crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
+        self.with_descriptor(dir,SystemLease::LentRead)
+    }
+    fn with_descriptor(self,dir:File,lease:SystemLease)->io::Result<LockedSystem>{
         let limit=helper_linux_evidence::portable_component_limit(&dir)?;
-        let locked=LockedSystem{selected:self,dir,limit,lent};locked.require()?;Ok(locked)
+        let locked=LockedSystem{selected:self,dir,limit,lease};locked.require()?;Ok(locked)
     }
 }
 impl LockedSystem {
@@ -98,12 +104,16 @@ impl LockedSystem {
     }
     pub(super) fn require(&self)->io::Result<()> {
         self.source().require()?;
-        if self.lent {
-            super::pair::require_lent_ex(&self.dir,(self.selected.pin.entity(),self.selected.pin.mount()?.id))?;
+        let id=(self.selected.pin.entity(),self.selected.pin.require_same_named_mount()?.id);
+        match self.lease{
+            SystemLease::LentExclusive=>super::pair::require_lent_ex(&self.dir,id)?,
+            SystemLease::LentRead=>super::pair::require_lent_sh(&self.dir,id)?,
+            SystemLease::Exclusive=>(),
         }
         ancestry(&self.selected.pin,&self.dir,&HostMounts::current()?,&self.selected.host,self.selected.uid)?;
         Ok(())
     }
+    pub(super) fn allows_account_write(&self)->bool{!matches!(self.lease,SystemLease::LentRead)}
     #[cfg(test)]
     pub(super) fn from_fixture(path:&std::path::Path)->io::Result<Self>{
         SelectedSystem::from_host(path,File::open("/")?,rustix::process::getuid().as_raw(),rustix::process::getgid().as_raw())?.take_original()

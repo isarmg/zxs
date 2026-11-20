@@ -1,7 +1,8 @@
-//! Real v7 SQL phases for the dedicated offline storage-UID worker. No
+//! Real v9 SQL phases for the dedicated offline storage-UID worker. No
 //! native password, hash, SAM buffer, TDB file, or writable host descriptor
 //! is an input. The original Unix VFS inode remains anchored across phases.
-use super::{Birth, Core, Ids, Original, Reset, activate, sql};
+use super::{Birth, Core, Ids, Original, Reset, activate, first_ordinary::Selected, sql};
+use crate::smb_profile::first::Plan;
 use crate::sqlite_install::{DATABASE, MARKER, bad, catalog::Canonical, engine, markers::SystemMark,
     originals::LockedSystem, pair::{Id, observed, web_secret::PreparedWeb}, reservation::Existing};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
@@ -55,8 +56,6 @@ impl Order {
             return Err(bad("no matching exact original pending credential to finish"));
         }
         match (self, row) {
-            (Self::Setup(r), ResultRow::Setup(ids)) =>
-                activate(tx, &r.scope, r.scope.op, &r.binding, &r.sha(), ids.smb, &r.smb, 1, None),
             (Self::Reset(r), ResultRow::Reset(generation)) if generation==r.generation() =>
                 activate(tx, &r.scope, r.setup, &r.binding, &r.sha(), r.account, &r.login, generation, Some(r.previous)),
             _ => Err(bad("wrong pending credential result for this operation")),
@@ -80,7 +79,7 @@ pub(in crate::sqlite_install::pair) enum Enrollment<'a> { Setup { ids: Ids, web:
 /// Only the private native worker or role-specific Web reset invokes it.
 pub(in crate::sqlite_install::pair) struct Session<'s> {
     order: Order, locked: &'s LockedSystem, database: Existing<'s>, schema: Canonical,
-    marker: SystemMark, want: [u8;101], anchor: Connection,
+    marker: SystemMark, want: [u8;101], anchor: Connection, first: Option<(&'s Plan, &'s [u8;128])>,
 }
 
 pub(in crate::sqlite_install) struct WriteGate<'a,'s> {
@@ -93,13 +92,35 @@ fn expired(until:Instant)->io::Result<()> {
 
 impl<'s> Session<'s> {
     pub(in crate::sqlite_install::pair) fn open(locked: &'s LockedSystem, order: Order) -> io::Result<Self> {
+        if !matches!(&order,Order::WebReset(_)){return Err(bad("native maintenance requires a bound first plan"));}
+        Self::at(locked,order,None)
+    }
+    pub(in crate::sqlite_install::pair) fn open_native(locked:&'s LockedSystem,order:Order,plan:&'s Plan,bound:&'s [u8;128])->io::Result<Self>{
+        let first=match &order {
+            Order::Setup(birth)=>{Selected::bind(birth,bound,plan)?;Some((plan,bound))}
+            // Scope and current BOUND are matched by the sealed native request;
+            // resetting never invokes setup publication or restores initial modes.
+            Order::Reset(_)=>None,
+            _=>return Err(bad("wrong native maintenance role")),
+        };
+        Self::at(locked,order,first)
+    }
+    fn at(locked:&'s LockedSystem,order:Order,first:Option<(&'s Plan,&'s [u8;128])>)->io::Result<Self>{
+        if !locked.allows_account_write(){return Err(bad("a runtime shared lease is not authorized for account maintenance"));}
         let schema=Canonical::new()?;
         let database=Existing::observed_system(locked)?;
         let marker=SystemMark::before_sql(locked.source())?;
         let mut anchor=engine::existing(&database,engine::Access::Read)?;
         let c=order.core();
         let (want,())=observed::snapshot(&mut anchor,&c.pool,&c.init,locked,&database,&schema,&marker,|_|Ok(()))?;
-        Ok(Self { order, locked, database, schema, marker, want, anchor })
+        Ok(Self { order, locked, database, schema, marker, want, anchor, first })
+    }
+    fn initial(&self)->io::Result<Option<Selected<'_>>>{
+        match (&self.order,self.first) {
+            (Order::Setup(birth),Some((plan,bound)))=>Ok(Some(Selected::bind(birth,bound,plan)?)),
+            (Order::Setup(_),None)|(_,Some(_))=>Err(bad("missing or unrelated first plan authority")),
+            (_,None)=>Ok(None),
+        }
     }
     pub(in crate::sqlite_install::pair) fn order(&self) -> &Order { &self.order }
     fn unchanged(&self) -> io::Result<()> {
@@ -119,10 +140,19 @@ impl<'s> Session<'s> {
         Ok(value)
     }
     pub(in crate::sqlite_install::pair) fn original(&self) -> io::Result<Original<ResultRow>> {
-        self.read(|tx|self.order.original(tx))
+        self.read(|tx|{
+            let result=self.order.original(tx)?;
+            if let (Some(first),Original::Committed(ResultRow::Setup(ids)))=(self.initial()?,result){first.history(tx,ids)?;}
+            Ok(result)
+        })
+    }
+    fn check_new_in(&self,tx:&Transaction<'_>)->io::Result<()>{
+        self.order.free_to_start(tx)?;
+        if let Some(first)=self.initial()?{first.vacant(tx)?;}
+        Ok(())
     }
     pub(in crate::sqlite_install::pair) fn check_new(&self) -> io::Result<()> {
-        self.read(|tx|self.order.free_to_start(tx))
+        self.read(|tx|self.check_new_in(tx))
     }
 
     pub(in crate::sqlite_install::pair) fn sync_pending(&self, row: ResultRow, until: Instant)
@@ -140,7 +170,7 @@ impl<'s> Session<'s> {
     }
     pub(in crate::sqlite_install::pair) fn reserve(&self, material: Enrollment<'_>, until: Instant,
         live: impl Fn()->io::Result<()>) -> io::Result<Pending<'_, 's>> {
-        let row=self.write(until,live,|tx|self.order.reserve(tx,material))?;
+        let row=self.write(until,live,|tx|{self.check_new_in(tx)?;self.order.reserve(tx,material)})?;
         self.sync_pending(row,until).map_err(|_|uncertain())
     }
     pub(in crate::sqlite_install::pair) fn web_eligible(&self)->io::Result<Vec<u8>>{
@@ -213,7 +243,11 @@ impl Pending<'_, '_> {
         self.session.write(self.until,||{
             live()?;
             confirmed.require(&self.session.order.sha(),self.row)
-        },|tx|self.session.order.activate(tx,self.row))?;
+        },|tx|match (self.session.initial()?,self.row) {
+            (Some(first),ResultRow::Setup(ids))=>first.finish(tx,ids),
+            (None,ResultRow::Reset(_))=>self.session.order.activate(tx,self.row),
+            _=>Err(bad("no matching approved first plan or exact reset")),
+        })?;
         (||->io::Result<ResultRow>{
             helper_linux_evidence::sqlite_vfs::sync_held_unix_main(&self.session.anchor)?;
             self.session.locked.source().dir().sync_all()?;

@@ -1,6 +1,6 @@
 //! One bounded HTTP/1.1 origin-form request per connection. No re-use,
 //! transfer codings, upstream user claims, file serving or forwarding trust.
-use super::{access::{self,ExternalHttps},App,BAD,REJECT,Reply,Request,Token};
+use super::{access::{self,ExternalHttps},manual,App,BAD,REJECT,Reply,Request,Token};
 use crate::fs::invalid;
 use std::{io::{self,Read,Write},net::{IpAddr,SocketAddr,TcpListener,TcpStream},os::fd::AsRawFd,
     sync::{atomic::{compiler_fence,AtomicBool,Ordering},mpsc},time::{Duration,Instant}};
@@ -112,11 +112,15 @@ fn worker_fault(closing:&AtomicBool,jobs:&mpsc::SyncSender<Job>,e:io::Error){
     // Close the admission gate before another Call can bypass a queued Fault.
     closing.store(true,Ordering::Release);let _=jobs.send(Job::Fault(e));
 }
-fn admission(closing:&AtomicBool,stopping:&impl Fn()->bool,run:impl FnOnce()->Reply)->Reply{
-    // This sample is the admission cut, not TCP accept or insertion in the queue.
+fn admitted(closing:&AtomicBool,stopping:&impl Fn()->bool)->bool{
+    // This sample is admission, not TCP accept or insertion in the queue.
     if stopping(){closing.store(true,Ordering::Release);}
-    if closing.load(Ordering::Acquire){Reply::text("503 Service Unavailable","管理服务正在停止。")}else{run()}
+    !closing.load(Ordering::Acquire)
 }
+fn admission(closing:&AtomicBool,stopping:&impl Fn()->bool,run:impl FnOnce()->Reply)->Reply{
+    if admitted(closing,stopping){run()}else{stopped()}
+}
+fn stopped()->Reply{Reply::text("503 Service Unavailable","管理服务正在停止。")}
 fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,jobs:mpsc::SyncSender<Job>){
     while !closing.load(Ordering::Acquire){
         let s=match unsafe{zxs_web_readable(ls.as_raw_fd())}{
@@ -131,10 +135,13 @@ fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,jobs:
         });
     }
 }
-pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,stopping:impl Fn()->bool)->io::Result<()>{
+pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,stopping:impl Fn()->bool+Sync)->io::Result<()>{
     ls.set_nonblocking(true)?;let closing=AtomicBool::new(false);
     std::thread::scope(|scope|{
         let(tx,rx)=mpsc::sync_channel(WORKERS);let mut failure=None;
+        let (manual,orders)=mpsc::sync_channel(1);let origin=app.source;let site=origin.manual_site();let closed=&closing;
+        let original_stop=&stopping;
+        std::thread::Builder::new().name("zxs-manual-work".into()).spawn_scoped(scope,move||manual::run(site,closed,original_stop,orders))?;
         for _ in 0..WORKERS{let jobs=tx.clone();let closed=&closing;
             if let Err(e)=std::thread::Builder::new().name("zxs-http-io".into()).spawn_scoped(scope,move||worker(ls,proxy,closed,jobs)){
                 closing.store(true,Ordering::Release);failure=Some(e);break;
@@ -143,11 +150,23 @@ pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_
         loop{
             if stopping(){closing.store(true,Ordering::Release);}
             match rx.recv_timeout(Duration::from_millis(100)){
-                Ok(Job::Call(q,reply))=>{let _=reply.send(admission(&closing,&stopping,||app.handle(q,Instant::now())));}
+                Ok(Job::Call(q,reply))=>{
+                    if q.method=="POST" && q.target=="/versions/commit" {
+                        if !admitted(&closing,&stopping){let _=reply.send(stopped());continue;}
+                        match app.manual_order(q,reply,Instant::now()){
+                            Err((reply,rejected))=>{let _=reply.send(rejected);},
+                            Ok(order)=>if let Err(err)=manual.try_send(order){
+                                let order=match err{mpsc::TrySendError::Full(o)|mpsc::TrySendError::Disconnected(o)=>o};
+                                let _=order.reply.send(Reply::text("503 Service Unavailable","已有手动提交正在核验，请稍后重送原表单。"));
+                            },
+                        }
+                    }else{let _=reply.send(admission(&closing,&stopping,||app.handle(q,Instant::now())));}
+                }
                 Ok(Job::Fault(e))=>{closing.store(true,Ordering::Release);failure.get_or_insert(e);}
                 Err(mpsc::RecvTimeoutError::Timeout)=>continue,Err(mpsc::RecvTimeoutError::Disconnected)=>break,
             }
         }
+        drop(manual);
         failure.map_or(Ok(()),Err)
     })
 }

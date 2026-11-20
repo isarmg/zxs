@@ -159,10 +159,26 @@ mod create_file;
 #[path="sqlite_first_work.rs"]
 mod first_work;
 
+#[path="sqlite_work_cuts.rs"]
+mod manual_cuts;
+
 /// Synthetic committed pool and fixed pair for the Web transport fixture.
 pub(crate) fn web_pool(t:&PrivateTemp)->(PathBuf,PoolId){publication::first(t)}
 
 pub(crate) fn ordinary_pool(t:&PrivateTemp)->(PathBuf,PoolId,PathBuf,crate::identity::ShareId,crate::identity::ShareId){
     let (s,p)=publication::first(t);let src=InitialReader::open(&s,p).unwrap();
     let f=create_file::open_root(&src);let(rw,ro)=create_file::configure(&src);(s,p,f,rw,ro)
+}
+
+pub(crate) fn stage_managed_file(source:&InitialReader,rw:crate::identity::ShareId,ro:crate::identity::ShareId,name:&str,data:&File)
+    ->io::Result<crate::FileId>{
+    // The fake native login proof remains inside this reader-only test.
+    let session=smb::SmbSession::fixture_authenticated(source,"files.smb")?;
+    let tree=session.connect(rw)?;let read=session.connect(ro)?;
+    let file=tree.create_file(OperationId([0xbb;16]),name)?.file;
+    let writer=tree.open_writer(name,file)?;
+    let n=data.metadata()?.len();
+    writer.save(OperationId([0xbc;16]),None,Some(0),n,data)?;
+    drop(writer);assert_eq!(read.open_current(name)?.size(),n);
+    Ok(file)
 }

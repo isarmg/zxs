@@ -3,28 +3,29 @@
 //! its Unix SQLite connection and sees only public receipts/O_PATH.
 use super::{Id,Intent,Native,Work,ResultRow,choose,original_stamp,bad,release::Release,
     manifest::{Manifest,Role},transport::{self,Channel,Kind},worker::{inspect,stage_body}};
-use crate::{fs_tools::RuntimeFile,maintenance::thread_file,sqlite_install::{approval,pair::{
+use crate::{fs_tools::RuntimeFile,maintenance::thread_file,smb_profile::{self,first::Origin},sqlite_install::{approval,pair::{
     domain::{NativeSeen,NativeSite,give_live_approval,sealed},native_sql::Original,terminal::{PublicConfirmation,SelectedInput}},
     stage::random}};
-use helper_linux_evidence::{diagnostic_process::{prepare_account_sql_exec,require_waitable_children},
+use helper_linux_evidence::{diagnostic_process::{OfflineSql,prepare_account_sql_exec,require_waitable_children},
     native_confinement,native_sam::Expected};
 use rustix::{fs::{Mode,OFlags,openat2,ResolveFlags},io::Errno,net::UCred,
     process::{Gid,Pid,PidfdFlags,Signal,Uid,pidfd_open,pidfd_send_signal,waitid,WaitId,WaitIdOptions,Resource,Rlimit,getrlimit,setrlimit}};
 use std::{fs::File,io::{self,Read},os::{fd::AsFd,unix::ffi::OsStrExt},path::PathBuf,
-    process::{Child,Command},thread,time::{Duration,Instant}};
+    process::{Child,Command,Stdio},thread,time::{Duration,Instant}};
 
 const HELPER:&[&str]=&["usr","bin","helper"];
 const IDENTITY:&[&str]=&["etc","local-ops-helper","installer.identity"];
 const CPU:u64=120;
 const MEMORY:u64=512<<20;
 
-struct Worker { child:Child, fd:File, pid:Pid, done:bool }
+pub(super) struct Worker { child:Child, fd:File, pub(super) pid:Pid, done:bool }
 impl Worker {
-    fn spawn(exe:&File,peer:&File,order:&File)->io::Result<Self>{
+    pub(super) fn spawn(exe:&File,peer:&File,order:&File,mode:OfflineSql)->io::Result<Self>{
         require_waitable_children()?;
         let mut cmd=Command::new("/not-an-account-program"); // only pinned execveat in pre_exec
         cmd.env_clear();
-        prepare_account_sql_exec(&mut cmd,exe,peer,order)?;
+        if matches!(mode,OfflineSql::FirstLayout){cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());}
+        prepare_account_sql_exec(&mut cmd,exe,peer,order,mode)?;
         let mut child=cmd.spawn()?;
         let actual=i32::try_from(child.id()).ok().and_then(Pid::from_raw);
         let Some(pid)=actual else{let _=child.kill();let _=child.wait();return Err(bad("invalid exact SQLite child PID"));};
@@ -40,10 +41,10 @@ impl Worker {
             Err(Errno::INTR)=>continue,Ok(s)=>return Ok(s.map(|s|s.exit_status().unwrap_or(-1))),Err(e)=>return Err(e.into()),
         }}
     }
-    fn live(&self)->io::Result<()>{
+    pub(super) fn live(&self)->io::Result<()>{
         if !self.done&&self.peek()?.is_none(){Ok(())}else{Err(bad("the original SQLite worker ended before the next step"))}
     }
-    fn finish(&mut self,channel:&Channel,until:Instant)->io::Result<()>{
+    pub(super) fn finish(&mut self,channel:&Channel,until:Instant)->io::Result<()>{
         loop {
             if Instant::now()>=until{return Err(bad("original credential worker completion timed out"));}
             if let Some(status)=self.peek()?{
@@ -123,6 +124,7 @@ fn confined(site:&NativeSite,release:&Release,dir:&File,machine:&File,child:&Fil
 pub(in crate::sqlite_install::pair) struct Selection {
     pub(in crate::sqlite_install::pair) system:PathBuf,pub(in crate::sqlite_install::pair) pool:Id,pub(in crate::sqlite_install::pair) init:Id,pub(in crate::sqlite_install::pair) instance:Id,pub(in crate::sqlite_install::pair) provision:Id,
     pub(in crate::sqlite_install::pair) op:Id,pub(in crate::sqlite_install::pair) reference:Id,pub(in crate::sqlite_install::pair) role:Role,pub(in crate::sqlite_install::pair) intent:Intent,
+    pub(in crate::sqlite_install::pair) bound_sha:[u8;32],
 }
 
 fn review(m:&Manifest,row:ResultRow,work:Work,digest:[u8;32])->String{
@@ -136,15 +138,23 @@ fn review(m:&Manifest,row:ResultRow,work:Work,digest:[u8;32])->String{
                 esc(smb),hex(account),hex(setup),hex(previous),generation,target),
         _=>String::new(),
     };
-    let explain=if work==Work::Confirm{"仅重新核验、同步原目标并确认原待办，不询问密码。"}
-        else{"仅按原单设密，不开放共享、来宾或服务。若中断保留原两份介质并查询原单，不重填新单。"};
-    format!("{roles}\n{explain}\n池 {} / 原 INIT {}；专用实例 {} / 原域 {}；SYSTEM {} [dev {}, inode {}, mount {}]。\n本次原操作 {}，真实维护主体 {}，审批参考 {}，请求摘要 {}。\n",
+    let (explain,publication)=match (&m.role,work) {
+        (Role::Birth{..},Work::Confirm)=>("在同一原批准内复核并同步原账户，确认待办及以下原首发；不重问口令。",
+            smb_profile::approval_text(&m.plan)),
+        (Role::Birth{..},_)=>("离线首设：仅为当次新账户授权以下普通数据盘目录；无来宾。这不是 Web 登录或启动服务。",
+            smb_profile::approval_text(&m.plan)),
+        (Role::Reset{..},Work::Confirm)=>("仅重新核验、同步原目标并确认原待办；不询问密码，不改共享或服务。",String::new()),
+        _=>("仅按原单重设 SMB 口令，不改共享或服务。",String::new()),
+    };
+    format!("{roles}\n{explain}\n{publication}若中断保留两原件并查原单，不重新发行。\n池 {} / 原 INIT {}；专用实例 {} / 原域 {}；SYSTEM {} [dev {}, inode {}, mount {}]。\n本次原操作 {}，真实维护主体 {}，审批参考 {}，请求摘要 {}。\n",
         hex(&m.pool),hex(&m.init),hex(&m.instance),hex(&m.provision),esc(m.system.as_os_str().as_bytes()),
         m.origin[0],m.origin[1],m.origin[2],hex(&m.op),hex(&m.actor),hex(&m.approval),hex(&digest))
 }
 
 pub(in crate::sqlite_install::pair) fn run(selected:Selection)->io::Result<Original<ResultRow>>{
-    let site=NativeSite::acquire(&selected.system,selected.pool,selected.instance,selected.provision)?;
+    let setup=match &selected.role{Role::Birth{..}=>selected.op,Role::Reset{setup,..}=>*setup};
+    let site=NativeSite::acquire(&selected.system,Origin{pool:selected.pool,init:selected.init,instance:selected.instance,
+        domain:selected.provision,setup},&selected.bound_sha)?;
     prerequisite()?;
     let terminal=PublicConfirmation::select()?;
     let helper=RuntimeFile::open(HELPER,true,64<<20)?;
@@ -153,11 +163,11 @@ pub(in crate::sqlite_install::pair) fn run(selected:Selection)->io::Result<Origi
     let mut invocation=[0;32];invocation[..16].copy_from_slice(&random()?);invocation[16..].copy_from_slice(&random()?);
     let m=Manifest{intent:selected.intent,invocation,pool:selected.pool,init:selected.init,instance:selected.instance,
         provision:selected.provision,op:selected.op,actor,approval:selected.reference,live:site.live_digest(),
-        bound:site.bound_bytes(),system:selected.system,origin:site.system_location()?,role:selected.role};
+        bound:site.bound_bytes(),system:selected.system,origin:site.system_location()?,role:selected.role,plan:site.first_plan().clone()};
     let order=m.order()?;let digest=order.sha();let scope=m.scope()?;
     let meta=sealed(&m.encode()?)?;
     let (parent,child)=transport::pair()?;
-    let mut worker=Worker::spawn(&helper.file,&child,&meta)?;
+    let mut worker=Worker::spawn(&helper.file,&child,&meta,OfflineSql::Account)?;
     drop(child);drop(meta);
     let given=UCred{pid:worker.pid,uid:Uid::from_raw(uid),gid:Gid::from_raw(gid)};
     // This first reply only allows a read-only observation from the original

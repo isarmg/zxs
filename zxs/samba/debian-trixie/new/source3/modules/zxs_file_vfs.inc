@@ -14,18 +14,15 @@ static const struct zxs_smb_tree_cut *zxs_opening_root(vfs_handle_struct *handle
 		errno=EACCES;return NULL;
 	}
 	root=c->tcon->zxs_tree_choice;
-	if (root==NULL || root->root_fd<0 || zxs_smb_ctl_live(root->root_fd)!=0) {
+	if (root==NULL || root->mode!=0 || root->root_fd<0 || zxs_smb_ctl_live(root->root_fd)!=0) {
 		errno=EACCES;return NULL;
 	}
 	return root;
 }
 static int zxs_file_connect(vfs_handle_struct *h,const char *service,const char *user)
 {
-	uint8_t id[16];
 	const struct zxs_smb_tree_cut *r=zxs_opening_root(h);
-	if (r==NULL || user==NULL || strcmp(user,"zxs-smb-client")!=0 || service==NULL ||
-	    !zxs_smb_service_id((const uint8_t *)service,strlen(service),id) ||
-	    memcmp(id,r->share,16)!=0) {errno=EACCES;return -1;}
+	if (r==NULL || user==NULL || strcmp(user,"zxs-smb-client")!=0 || !zxs_smb_namespace_name(service)) {errno=EACCES;return -1;}
 	return 0;
 }
 static void zxs_file_disconnect(vfs_handle_struct *h)

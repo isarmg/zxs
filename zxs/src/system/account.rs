@@ -93,11 +93,15 @@ pub(super) fn setup_state(src:&InitialReader,op:OperationId,actor:[u8;16],approv
     })
 }
 
+#[cfg(test)]
 #[path="publication.rs"]
-pub(crate) mod publication;
+mod publication;
 
 #[path="share_mode.rs"]
 pub(crate) mod share_mode;
 
 #[path="overview.rs"]
 pub(crate) mod overview;
+
+#[path="manual_work.rs"]
+pub(crate) mod manual_work;

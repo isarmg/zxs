@@ -1,7 +1,7 @@
-//! A readonly cut of one explicitly selected, offline SYSTEM. No remote volume
-//! paths, credentials, network domains or proposed catalogue choices are inputs.
+//! A readonly cut of one explicitly selected, offline SYSTEM. Physical
+//! R/F paths may be compared as SQL bytes only, never resolved or opened here.
 use super::Id;
-use crate::sqlite_install::{bad,catalog::Canonical,engine::{self,Access},markers::SystemMark,originals::{HeldRoot,LockedSystem},reservation::Existing};
+use crate::sqlite_install::{bad,catalog::{self,Canonical,Initial},engine::{self,Access},markers::SystemMark,originals::{HeldRoot,LockedSystem},reservation::Existing};
 use rusqlite::{params,Transaction};
 use std::{io,os::unix::ffi::OsStrExt};
 
@@ -29,13 +29,13 @@ pub(super) fn first_marker(pool:&Id,init:&Id,tx:&Transaction<'_>,root:HeldRoot<'
 
 // All callers use exactly this read-only original S cut. The first installer
 // needs only proof of the committed INIT, not accounts or any R/F paths.
-fn with_origin<T>(pool:&Id,init:&Id,locked:&LockedSystem,read:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<T>{
+fn with_origin<T>(pool:&Id,init:&Id,locked:&LockedSystem,read:impl FnOnce(&Transaction<'_>,&Canonical)->io::Result<T>)->io::Result<T>{
     let template=Canonical::new()?;let source=locked.source();let db=Existing::observed_system(locked)?;
     // Hold the actual admitted private marker *before* SQLite opens. Inside
     // the transaction only statx its name and read its already-held FD;
     // never open/close another raw FD for the underlying database inode.
     let mark=SystemMark::before_sql(source)?;
-    Ok(at_original(pool,init,locked,&db,&template,&mark,read)?.1)
+    Ok(at_original(pool,init,locked,&db,&template,&mark,|tx|read(tx,&template))?.1)
 }
 
 // Reuse the *same* original DB identity, held SYSTEM marker and exact
@@ -63,6 +63,44 @@ pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&
     engine::original_name(c)?;locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
     Ok((actual,result))
 }
-pub(super) fn original_pool(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<()>{
-    with_origin(pool,init,locked,|_|Ok(()))
+pub(super) fn init_claims(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<Vec<Initial>>{
+    with_origin(pool,init,locked,|tx,template|catalog::initial_metadata(tx,template,locked.source(),pool,init))
+}
+pub(super) fn mounted_folders(plan:&crate::smb_profile::first::Plan,bound_sha:&[u8;32],locked:&LockedSystem)
+    ->io::Result<Vec<Initial>>{
+    let o=plan.origin;
+    with_origin(&o.pool,&o.init,locked,|tx,template|{
+        let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.account_pair a
+               JOIN main.operation s ON s.op_id=a.birth_op AND s.kind=2 AND s.state=1
+               JOIN main.active_credential e ON e.role=1 AND e.slot=a.singleton
+               WHERE a.singleton=1 AND a.birth_op=?1 AND a.instance_id=?2 AND a.setup_bound_sha=?3)",
+            params![&o.setup[..],&o.instance[..],&bound_sha[..]],|r|r.get(0)).map_err(sql)?;
+        if !live{return Err(bad("no confirmed original native account on this installation"));}
+        let claims=catalog::initial_metadata(tx,template,locked.source(),&o.pool,&o.init)?;
+        let mut selected=Vec::with_capacity(plan.folders().len());
+        for (f,key) in plan.folders(){
+            let issued:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.root_share r
+                 JOIN main.operation p ON p.op_id=r.publish_op AND p.kind=3 AND p.state=1
+                 JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=1
+                 JOIN main.operation q ON q.op_id=m.change_op AND q.kind=4 AND q.state=1
+                 WHERE r.share_id=?1 AND r.publish_op=?2 AND r.volume_id=?3 AND r.display_label=?4
+                   AND r.author_auth_op=?5 AND m.previous_op=?2 AND m.author_auth_op=?5
+                   AND m.change_op=?6 AND m.mode=?7)",
+                params![&key.share[..],&key.publish[..],&f.volume[..],f.name.as_bytes(),&o.setup[..],&key.setting[..],i64::from(f.mode.code())],
+                |r|r.get(0)).map_err(sql)?;
+            let item=claims.iter().find(|c|c.marker[20]==2&&c.marker[37..53]==f.volume)
+                .ok_or_else(||bad("a selected ordinary volume has no exact original claim"))?;
+            if !issued{return Err(bad("no confirmed original publication matching the selected folder"));}
+            selected.push(Initial{path:item.path.clone(),marker:item.marker});
+        }
+        Ok(selected)
+    })
+}
+pub(super) fn approved_folders(plan:&crate::smb_profile::first::Plan,locked:&LockedSystem)->io::Result<()>{
+    let o=plan.origin;
+    let claims=init_claims(&o.pool,&o.init,locked)?;
+    if !plan.folders().iter().all(|(f,_)|claims.iter().any(|c|c.marker[20]==2&&c.marker[37..53]==f.volume)){
+        return Err(bad("the first SMB plan is not limited to the original ordinary data volumes"));
+    }
+    Ok(())
 }

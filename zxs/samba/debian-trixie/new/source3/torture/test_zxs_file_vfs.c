@@ -13,6 +13,7 @@
 #include "lib/substitute.h"
 #include "lib/param/loadparm.h"
 #include "param/zxs_dialect.h"
+#include "param/zxs_cache_policy.h"
 #include "lib/param/param.h"
 #include "smbd/zxs_file_vfs.h"
 #include "smbd/zxs_directory.h"
@@ -86,18 +87,19 @@ static bool only_the_attached_virtual_root(connection_struct *conn,const char *s
 	struct smb_filename name={.base_name=discard_const_p(char,ZXS_SMB_VIRTUAL_ROOT)};
 	struct smb_filename bad={.base_name=discard_const_p(char,"/etc")};
 	struct smb_filename *rp=NULL;bool ok=false;enum timestamp_set_resolution resolution;
-	if (t==NULL||s==NULL || !zxs_smb_service_id((const uint8_t *)service,strlen(service),s->share) ||
+	if (t==NULL||s==NULL || !zxs_smb_namespace_name(service) ||
 	    socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,sock)!=0) {return false;}
 	conn->tcon=t;conn->connectpath=talloc_strdup(conn,ZXS_SMB_VIRTUAL_ROOT);t->zxs_tree_choice=s;
-	s->root_fd=sock[0];s->volume_ordinal=2;s->pool[7]=17;
+	s->root_fd=sock[0];s->pool[7]=17;
 	if (conn->connectpath==NULL ||
 	    smb_vfs_call_connect(conn->vfs_handles,service,"zxs-smb-client")!=0 ||
 	    smb_vfs_call_connect(conn->vfs_handles,service,"files.smb")!=-1 ||
+	    smb_vfs_call_connect(conn->vfs_handles,"zxs-0102030405060708090a0b0c0d0e0fff","zxs-smb-client")!=-1 ||
 	    smb_vfs_call_realpath(conn->vfs_handles,conn,&bad)!=NULL) {goto done;}
 	rp=smb_vfs_call_realpath(conn->vfs_handles,conn,&name);
 	if (rp==NULL || strcmp(rp->base_name,ZXS_SMB_VIRTUAL_ROOT)!=0 ||
 	    smb_vfs_call_stat(conn->vfs_handles,&name)!=0 || !S_ISDIR(name.st.st_ex_mode) ||
-	    name.st.st_ex_dev!=17 || name.st.st_ex_ino!=3 ||
+	    name.st.st_ex_dev!=17 || name.st.st_ex_ino!=1 ||
 	    smb_vfs_call_fs_capabilities(conn->vfs_handles,&resolution)!=0 || resolution!=TIMESTAMP_SET_SECONDS) {goto done;}
 	conn->tcon_done=true;
 	if (smb_vfs_call_stat(conn->vfs_handles,&name)!=-1 || errno!=EACCES ||
@@ -118,18 +120,22 @@ static bool native_directory_projection(connection_struct *c)
 	uint64_t at=123,number=UINT64_C(0xfedcba9823456789);
 	NTSTATUS status;
 	c->params=&params;
-	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",number,4097,
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",false,number,4097,
 		8,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_EQUAL(status,STATUS_MORE_ENTRIES)||next!=bytes||at!=123)goto fail;
-	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",number,4097,
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",false,number,4097,
 		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_IS_OK(status)||at!=0||BVAL(bytes,40)!=4097||BVAL(bytes,48)!=8192||
 	    IVAL(bytes,60)!=4||SVAL(bytes,68)!=0||BVAL(bytes,96)!=number||
 	    SVAL(bytes,104)!=0x62a5||SVAL(bytes,106)!=0x544a)goto fail;
 	save=next;
-	status=zxs_marshal_child(c,c,SMB_FIND_FILE_NAMES_INFO,"b",300,0,
+	status=zxs_marshal_child(c,c,SMB_FIND_FILE_NAMES_INFO,"b",false,300,0,
 		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_IS_OK(status)||at%8!=0||bytes+at<save||SVAL(bytes+at,12)!='b')goto fail;
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"Docs",true,3,0,
+		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
+	if(!NT_STATUS_IS_OK(status)||BVAL(bytes+at,40)!=0||BVAL(bytes+at,96)!=3 ||
+	   (IVAL(bytes+at,56)&FILE_ATTRIBUTE_DIRECTORY)==0)goto fail;
 	c->params=NULL;return true;
 fail:
 	c->params=NULL;return false;
@@ -256,6 +262,89 @@ out:
     if(pid>=0)close(pid);
     close(m[0]);close(m[1]);TALLOC_FREE(ctx);return ok;
 }
+/* A real tevent deferred completion retires only its currently linked
+ * CREATE. Teardown uses the same discard helper; there is no wire response.
+ * A live peer's later CANCEL cannot represent a reversal of its prior ACK. */
+struct birth_retire_probe {
+	struct smbd_smb2_request *request;
+	bool settled;
+};
+static void birth_retire_done(struct tevent_req *sub)
+{
+	struct birth_retire_probe *p=tevent_req_callback_data_void(sub);
+	p->settled=true;
+	zxs_smb2_retire_birth(p->request);
+}
+static bool native_birth_cancel_and_retire(TALLOC_CTX *mem)
+{
+	struct birth_retire_leaf { int unused; } *state;
+	struct smbXsrv_connection x={0};
+	struct smbXsrv_session session={.status=NT_STATUS_OK};
+	struct smbXsrv_tcon tcon={.status=NT_STATUS_OK};
+	TALLOC_CTX *frame=talloc_new(mem);
+	struct tevent_context *ev=tevent_context_init(frame);
+	struct smbd_smb2_request *req=talloc_zero(frame,struct smbd_smb2_request);
+	struct smbd_smb2_request *other=talloc_zero(frame,struct smbd_smb2_request);
+	struct tevent_req *sub;
+	struct tevent_queue *queue;
+	struct birth_retire_probe p={.request=req};
+	bool ok=false;
+	if(frame==NULL||ev==NULL||req==NULL||other==NULL)goto out;
+	x.transport.status=NT_STATUS_OK;
+	req->xconn=&x;req->session=&session;req->tcon=&tcon;
+	if(zxs_smb2_birth_cancel_advisory(req,false)||!zxs_smb2_birth_cancel_advisory(req,true))goto out;
+	/* TDIS marks exactly this tcon before its native cancellation walk. */
+	tcon.status=NT_STATUS_NETWORK_NAME_DELETED;
+	if(zxs_smb2_birth_cancel_advisory(req,true))goto out;
+	DLIST_ADD_END(x.smb2.requests,req);
+	DLIST_ADD_END(x.smb2.requests,other);
+	sub=tevent_req_create(req,&state,struct birth_retire_leaf);
+	if(sub==NULL)goto out;
+	req->subreq=sub;
+	queue=tevent_queue_create(frame,"birth-retire-fixture");
+	if(queue==NULL)goto out;
+	tevent_queue_stop(queue);
+	if(tevent_queue_wait_send(req,ev,queue)==NULL||tevent_queue_length(queue)!=1)goto out;
+	tevent_req_set_callback(sub,birth_retire_done,&p);
+	tevent_req_defer_callback(sub,ev);
+	tevent_req_done(sub);
+	if(p.settled||x.smb2.requests!=req||req->next!=other)goto out;
+	if(tevent_loop_once(ev)!=0||!p.settled||x.smb2.requests!=other||DLIST_TAIL(x.smb2.requests)!=other||
+	   tevent_queue_length(queue)!=0||x.smb2.send_queue!=NULL||x.smb2.send_queue_len!=0)goto out;
+	ok=true;
+out:
+	TALLOC_FREE(frame);
+	return ok;
+}
+
+static bool uncached_create_policy(void)
+{
+	uint8_t wire[24+0x34+4]={0};
+	DATA_BLOB none=data_blob_null, blob=data_blob_const(wire,sizeof(wire));
+	uint32_t live=SMB2_CAP_ENCRYPTION|SMB2_CAP_LARGE_MTU;
+	if(zxs_smb_uncached_caps(live|SMB2_CAP_LEASING|SMB2_CAP_DIRECTORY_LEASING)!=live ||
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,none) ||
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_II,none) ||
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_EXCLUSIVE,none) ||
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,none) ||
+	   zxs_smb_uncached_open(UINT8_MAX,none))return false;
+	SSVAL(wire,4,16);SSVAL(wire,6,4);SSVAL(wire,10,24);
+	memcpy(wire+16,"RqLs",4);SIVAL(wire,12,0x34);
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob) ||
+	   zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,blob))return false;
+	SIVAL(wire,12,0x20);blob.length=24+0x20;
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	blob.length--;
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	blob.length++;
+	SSVAL(wire,6,5); /* A longer raw tag is not RqLs, even with an embedded NUL. */
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	SSVAL(wire,6,4);SIVAL(wire,0,24);
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	SIVAL(wire,0,0);memcpy(wire+16,"MxAc",4);
+	return !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob);
+}
+
 int main(void)
 {
 	const char *file[] = {"zxs_file", NULL};
@@ -264,21 +353,14 @@ int main(void)
 	connection_struct *conn = talloc_zero(NULL, connection_struct);
 	files_struct fsp = {.conn = conn};
 	SMB_STRUCT_STAT untouched = {.st_ex_size = 42};
-	uint8_t marker = 0x35, id[16];
-	const char lower[] = "zxs-0102030405060708090a0b0c0d0e0fff";
-	const char upper[] = "ZxS-0102030405060708090A0B0C0D0E0Fff";
-	if (!zxs_smb_service_id((const uint8_t *)upper, sizeof(upper)-1, id) ||
-	    id[0] != 1 || id[14] != 15 || id[15] != 255 ||
-	    !zxs_smb_direct_service(lower, 0, 0, 0) ||
-	    zxs_smb_direct_service(upper, 0, 0, 0) ||
-	    zxs_smb_direct_service(lower, 1, 0, 0) ||
-	    zxs_smb_direct_service(lower, 0, 1, 0) ||
-	    zxs_smb_direct_service(lower, 0, 0, 1) ||
-	    zxs_smb_direct_service("zxs-00000000000000000000000000000000", 0, 0, 0) ||
-	    zxs_smb_direct_service("IPC$", 0, 0, 0)) {
+	uint8_t marker = 0x35;
+	if (!zxs_smb_namespace_name("ZxS") || !zxs_smb_namespace_name("ZXS") ||
+	    zxs_smb_namespace_name("zxs-0102030405060708090a0b0c0d0e0fff") ||
+	    zxs_smb_namespace_name("ZXS ") || zxs_smb_namespace_name("IPC$") ||
+	    zxs_smb_namespace_name("ZXS\\Docs")) {
 		return 1;
 	}
-	if (!ipc_only_pipe_policy() || conn == NULL ||
+	if (!ipc_only_pipe_policy() || !uncached_create_policy() || conn == NULL ||
 	    zxs_file_vfs_route(3,1,false,false,false,file,false) != ZXS_VFS_FILE ||
 	    zxs_file_vfs_route(1,1,true,false,false,NULL,false) != ZXS_VFS_IPC ||
 	    zxs_file_vfs_route(3,1,true,false,false,NULL,false) != ZXS_VFS_REJECT ||
@@ -334,7 +416,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !only_the_attached_virtual_root(conn,lower)) { return 1; }
+	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

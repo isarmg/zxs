@@ -19,7 +19,11 @@ static inline bool zxs_fixed_unix_mapping(const struct passwd *pw,const char *na
 }
 struct dom_sid;
 bool zxs_runtime_control_take(void);
+void zxs_runtime_after_ids(void);
 bool zxs_runtime_connect_storage(void);
+bool zxs_runtime_lan_config(const char *plan);
+bool zxs_runtime_listener(int fd,uint32_t *seen);
+bool zxs_runtime_listen_ready(uint32_t seen);
 bool zxs_runtime_storage_live(void);
 int zxs_runtime_watch_fd(void);
 bool zxs_runtime_prepare_gate(int fd,struct zxs_client_offer *offer,int gate[2]);

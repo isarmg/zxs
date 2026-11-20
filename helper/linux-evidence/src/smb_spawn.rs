@@ -12,17 +12,15 @@ fn bad()->io::Error{io::Error::other("dedicated service child or private launch 
 pub struct StorageConfig{uid:u32,gid:u32,env:[CString;5]}
 impl StorageConfig{
     pub fn selected(uid:u32,gid:u32,root:&str,pool:[u8;16],site:[u8;16],op:[u8;16],config:[u8;32])->io::Result<Self>{
-        if [uid,gid].iter().any(|x|matches!(*x,0|65534|u32::MAX)) || root.len()>384 ||
-            !(root.starts_with("/srv/")||root.starts_with("/mnt/")) || pool==[0;16]||site==[0;16]||op==[0;16]||config==[0;32] {return Err(bad());}
-        let parts:Vec<_>=root[1..].split('/').collect();
-        if parts.len()<2||parts.len()>17||parts.iter().any(|p|p.is_empty()||p.len()>63||
-            !p.as_bytes()[0].is_ascii_alphanumeric()&&p.as_bytes()[0]!=b'_'||
-            !p.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'_'|b'.'|b'-'))){return Err(bad());}
+        if [uid,gid].iter().any(|x|matches!(*x,0|65534|u32::MAX)) || root.len()>4095 || !root.starts_with('/') ||
+            pool==[0;16]||site==[0;16]||op==[0;16]||config==[0;32]{return Err(bad());}
+        if root[1..].split('/').enumerate().any(|(i,p)|i>=256||p.is_empty()||p.len()>255||
+            p=="."||p==".."||p.as_bytes().contains(&0)){return Err(bad());}
         let hex=|b:&[u8]|b.iter().map(|v|format!("{v:02x}")).collect::<String>();
         let texts=[format!("ZXS_SYSTEM_ROOT={root}"),format!("ZXS_POOL_ID={}",hex(&pool)),
             format!("ZXS_SAMBA_INSTANCE_ID={}",hex(&site)),format!("ZXS_SAMBA_PROVISION_OP={}",hex(&op)),
             format!("ZXS_SAMBA_LIVE_CONFIG_SHA256={}",hex(&config))];
-        Ok(Self{uid,gid,env:texts.map(|s|CString::new(s).expect("validated ASCII"))})
+        Ok(Self{uid,gid,env:texts.map(|s|CString::new(s).expect("validated NUL-free values"))})
     }
 }
 enum Role<'a>{Daemon,Storage(&'a StorageConfig)}
@@ -73,16 +71,19 @@ impl Born{
 }
 impl Drop for Born{fn drop(&mut self){let _=self.abort();}}
 
-pub fn daemon(image:&File,view:&File,endpoint:BorrowedFd<'_>)->io::Result<Born>{spawn(Role::Daemon,image,view,&[endpoint])}
-pub fn storage(image:&File,view:&File,endpoint:BorrowedFd<'_>,bound:&File,master:&Born,config:&StorageConfig)->io::Result<Born>{
+pub fn daemon(image:&File,view:&File,endpoint:BorrowedFd<'_>,listen:&File,null:&File)->io::Result<Born>{
+    spawn(Role::Daemon,image,view,&[endpoint,listen.as_fd()],null)
+}
+pub fn storage(image:&File,view:&File,endpoint:BorrowedFd<'_>,bound:&File,master:&Born,config:&StorageConfig,null:&File)->io::Result<Born>{
     if master.peek()?.is_some(){return Err(bad());}
-    spawn(Role::Storage(config),image,view,&[endpoint,bound.as_fd(),master.original.as_fd()])
+    spawn(Role::Storage(config),image,view,&[endpoint,bound.as_fd(),master.original.as_fd()],null)
 }
 fn high(fd:BorrowedFd<'_>)->io::Result<File>{Ok(File::from(fcntl_dupfd_cloexec(fd,16)?))}
 #[allow(unsafe_code)]
-fn spawn(role:Role<'_>,image:&File,view:&File,inputs:&[BorrowedFd<'_>])->io::Result<Born>{
+fn spawn(role:Role<'_>,image:&File,view:&File,inputs:&[BorrowedFd<'_>],null:&File)->io::Result<Born>{
     crate::diagnostic_process::require_waitable_children()?;
-    child::only_null_stdio()?;
+    child::verified_null(null.as_raw_fd())?;
+    let null=high(null.as_fd())?;
     let parent=pidfd_open(getpid(),PidfdFlags::empty())?;let parent=high(parent.as_fd())?;
     let image=high(image.as_fd())?;let view=high(view.as_fd())?;
     let fds=inputs.iter().map(|fd|high(*fd)).collect::<io::Result<Vec<_>>>()?;
@@ -107,7 +108,7 @@ fn spawn(role:Role<'_>,image:&File,view:&File,inputs:&[BorrowedFd<'_>])->io::Res
     if rc==0{
         // All role parameters and C strings remain alive through the syscall;
         // no Rust destructor nor any caller-selected function runs here.
-        child::exec(id,image.as_raw_fd(),view.as_raw_fd(),parent.as_raw_fd(),sink.as_raw_fd(),selected,&argv,&env)
+        child::exec(id,image.as_raw_fd(),view.as_raw_fd(),parent.as_raw_fd(),sink.as_raw_fd(),null.as_raw_fd(),selected,&argv,&env)
     }
     drop(sink);
     // Linux successfully published a unique owned pidfd as part of *this*
@@ -124,8 +125,9 @@ mod tests{
         assert_eq!(c.env[0].to_bytes(),b"ZXS_SYSTEM_ROOT=/srv/pool/S");
         assert_eq!(c.env[1].to_str().unwrap(),format!("ZXS_POOL_ID={}","01".repeat(16)));
         assert_eq!(c.env[4].to_str().unwrap(),format!("ZXS_SAMBA_LIVE_CONFIG_SHA256={}","04".repeat(32)));
+        assert!(StorageConfig::selected(2001,2002,"/home/系统 pool/S",[1;16],[2;16],[3;16],[4;32]).is_ok());
         for (uid,gid,path) in [(0,42,"/srv/p"),(42,65534,"/mnt/p"),(42,42,"/srv/x/../p"),
-            (42,42,"/srv/p/"),(42,42,"/var/v"),(42,42,"/srv/\nLD_PRELOAD")]{assert!(StorageConfig::selected(uid,gid,path,[1;16],[2;16],[3;16],[4;32]).is_err());}
+            (42,42,"/srv/p/"),(42,42,"/"),(42,42,"/srv/\0suite")]{assert!(StorageConfig::selected(uid,gid,path,[1;16],[2;16],[3;16],[4;32]).is_err());}
     }
     // A private kernel-only fixture. No smbd, filesystem mount, user
     // credential, exec, network or durable volume. Run only when explicitly

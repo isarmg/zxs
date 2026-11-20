@@ -2,7 +2,7 @@
 //! name and its issued second name must still denote one actual regular file.
 //! An exact copy of the whole namespace is not distinguishable by this fact.
 use super::*;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet,ops::RangeInclusive};
 
 /// Volatility, including current permissions and links. Never persist this
 /// as identity. Keeping it with the very first checked OFD avoids granting a
@@ -29,11 +29,10 @@ pub(crate) struct HeldBytes{file:File,original:LiveStamp,extent:Extent}
 impl HeldBytes{
     pub(crate) fn file(&self)->&File{&self.file}
     pub(crate) fn stamp(&self)->LiveStamp{self.original}
-    /// Only an already-attested **working payload** uses this view; its
-    /// checksum table, FILE header and formal immutable materials stay Whole.
-    /// Callers must verify every selected block against independent checksums.
-    /// The right to append is not implied and no byte past the original EOF
-    /// is part of this reader, even if an uncommitted tail exists.
+    /// Use only for a working extent with independently authenticated bytes.
+    /// FILE headers, formal material and candidate readback stay Whole.
+    /// The caller must keep its own confirmed endpoints; the opening length
+    /// may already include part of an unconfirmed tail.
     pub(crate) fn checked_prefix(self)->io::Result<Self>{
         self.unchanged()?;Ok(Self{extent:Extent::CheckedPrefix,..self})
     }
@@ -88,6 +87,13 @@ impl<'a> WitnessRead<'a>{
         if !self.names.contains(c"FILE".to_bytes())||self.names.iter().any(|n|n.as_slice()!=c"FILE".to_bytes()&&!retained.contains(n)&&!roles.iter().any(|r|r.to_bytes()==n.as_slice()))||
             (complete&&self.present_work_roles(roles)!=15){return Err(invalid("unexpected or incomplete member set of the working FILE"));}Ok(())
     }
+    pub(crate) fn claimed_work(&self,needed:&BTreeSet<Vec<u8>>,permitted:&BTreeSet<Vec<u8>>)->io::Result<()>{
+        if !self.names.contains(c"FILE".to_bytes())||!needed.is_subset(&self.names)||
+            self.names.iter().any(|n|n.as_slice()!=c"FILE".to_bytes()&&!permitted.contains(n)){
+            return Err(invalid("original FILE contains unissued or missing work member names"));
+        }
+        Ok(())
+    }
     pub(crate) fn only_header(&self)->io::Result<()>{
         if self.names.len()!=1||!self.names.contains(c"FILE".to_bytes()){return Err(invalid("unissued or missing member in newborn FILE"));}
         Ok(())
@@ -97,7 +103,13 @@ impl<'a> WitnessRead<'a>{
     /// are checked with O_PATH before any content FD can be opened.
     pub(crate) fn open(&self,main:&CStr,witness:&CStr,size:u64)->io::Result<HeldBytes>{
         if main==witness{return Err(invalid("original data and its witness must use separate names"));}
-        self.open_pair(main,self.dir,&self.names,witness,size)
+        self.open_pair(main,self.dir,&self.names,witness,size..=size)
+    }
+    /// Only the revision selector may supply the independently issued lower
+    /// and upper extents. The actual file length does not select a revision.
+    pub(crate) fn open_work_prefix(&self,main:&CStr,witness:&CStr,confirmed:u64,reserved:u64)->io::Result<HeldBytes>{
+        if main==witness||confirmed>reserved||reserved>i64::MAX as u64{return Err(invalid("unusable original work prefix range"));}
+        self.open_pair(main,self.dir,&self.names,witness,confirmed..=reserved)?.checked_prefix()
     }
     /// An installed FILE uses its existing inner header as the primary.
     /// Its single issued second name sits in the exact immediate parent;
@@ -105,10 +117,10 @@ impl<'a> WitnessRead<'a>{
     pub(crate) fn file_header(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
         if self.dir.path.parent()!=Some(parent.path.as_path())||!self.dir.same_mount(parent)?{
             return Err(invalid("FILE header witness is not in its actual containing parent"));}
-        parent.require_named()?;let held=self.open_pair(c"FILE",parent,sample,witness,size)?;
+        parent.require_named()?;let held=self.open_pair(c"FILE",parent,sample,witness,size..=size)?;
         parent.require_named()?;Self::require_parent(self.dir)?;held.unchanged()?;Ok(held)
     }
-    fn open_pair(&self,main:&CStr,other:&HeldDir,names:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
+    fn open_pair(&self,main:&CStr,other:&HeldDir,names:&BTreeSet<Vec<u8>>,witness:&CStr,sizes:RangeInclusive<u64>)->io::Result<HeldBytes>{
         let pin=|dir:&HeldDir,names:&BTreeSet<Vec<u8>>,name:&CStr|->io::Result<File>{
             dir.checked_child_path(name)?;
             if !names.contains(name.to_bytes()){return Err(invalid("missing exact portable object spelling"));}
@@ -117,7 +129,7 @@ impl<'a> WitnessRead<'a>{
         let observe=|file:&File|->io::Result<LiveStamp>{
             let stamp=LiveStamp::read(file)?;
             if stamp.owner!=local_uid()||stamp.mode&0o7777!=0o600||stamp.links!=2||
-                stamp.len!=size||stamp.dev!=self.dir.entity.device||mounts::id(file)?!=self.mount{
+                !sizes.contains(&stamp.len)||stamp.dev!=self.dir.entity.device||mounts::id(file)?!=self.mount{
                 return Err(invalid("wrong witnessed extent or foreign mount"));}
             Ok(stamp)
         };

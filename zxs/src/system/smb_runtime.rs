@@ -2,7 +2,7 @@
 //! The reply contains only nonsecret original identity. It cannot construct
 //! SmbSession, publish a share, validate a password or open a FILE. Only a later
 //! successful managed session update can promote its own original attempt.
-use super::{Credential,InitialReader,denied};
+use super::{Connection,Credential,InitialReader,denied};
 use crate::{OperationId,PoolId,fs::invalid};
 use std::{fs::File,io,os::{fd::{AsRawFd,FromRawFd,OwnedFd},unix::fs::{FileExt,MetadataExt}},path::Path};
 
@@ -10,6 +10,8 @@ use std::{fs::File,io,os::{fd::{AsRawFd,FromRawFd,OwnedFd},unix::fs::{FileExt,Me
 mod attempts;
 #[path="smb_trees.rs"]
 mod trees;
+#[path="smb_first_plan.rs"]
+mod first;
 
 const BIND:&[u8;16]=b"ZXS-SAM/BOUND-1\0";
 const READY:&[u8;16]=b"ZXS-SAM/READY-2\0";
@@ -24,6 +26,8 @@ unsafe extern "C"{
     #[cfg(test)] fn zxs_smb_ctl_hello(fd:i32,p:*const u8)->i32;
     fn zxs_smb_ctl_bound(fd:i32,p:*mut u8)->i32;
     fn zxs_smb_ctl_write(fd:i32,p:*const u8,n:usize)->i32;
+    fn zxs_smb_plan_take(fd:i32,plan:*mut u8)->i32;
+    fn zxs_smb_plan_reply(fd:i32,sha:*const u8)->i32;
     #[cfg(test)] fn zxs_smb_ctl_live(fd:i32)->i32;
     fn zxs_smb_ctl_life(fd:i32,timeout:i32)->i32;
     fn zxs_smb_ctl_drain(fd:i32)->i32;
@@ -85,15 +89,18 @@ fn answer(src:&InitialReader,e:&Expected,host:&[u8;128],observed:&[u8;128])->io:
     out[144..].copy_from_slice(&id[16..]);
     Ok(out)
 }
-fn exchange(fd:i32,src:&InitialReader,e:&Expected,host:&[u8;128],before_send:impl FnOnce()->io::Result<()>)->io::Result<OwnedFd>{
-    let mut obs=[0;128];let pipe=unsafe{zxs_smb_ctl_bound(fd,obs.as_mut_ptr())};
+fn receive_bound(fd:i32)->io::Result<([u8;128],OwnedFd)>{
+    let mut observed=[0;128];let pipe=unsafe{zxs_smb_ctl_bound(fd,observed.as_mut_ptr())};
     if pipe<0{return Err(io::Error::last_os_error());}
-    // recvmsg delivered a fresh CLOEXEC fd. C has rejected every other fd,
-    // extra ancillary field, named FIFO, regular file and wrong pipe direction.
-    let life=unsafe{OwnedFd::from_raw_fd(pipe)};
-    let reply=answer(src,e,host,&obs)?;before_send()?;
+    // C verified this exact lifetime pipe before handing it over. Its
+    // ownership begins before there can be a READY error or stop.
+    Ok((observed,unsafe{OwnedFd::from_raw_fd(pipe)}))
+}
+fn reply_ready(fd:i32,src:&InitialReader,e:&Expected,host:&[u8;128],observed:&[u8;128],life:&OwnedFd,
+    before_send:impl FnOnce()->io::Result<()>)->io::Result<()>{
+    let reply=answer(src,e,host,observed)?;before_send()?;
     if unsafe{zxs_smb_ctl_life(life.as_raw_fd(),0)}!=0{return Err(denied());}
-    os(unsafe{zxs_smb_ctl_write(fd,reply.as_ptr(),reply.len())})?;Ok(life)
+    os(unsafe{zxs_smb_ctl_write(fd,reply.as_ptr(),reply.len())})
 }
 /// Once HELLO supplied a real lifetime pipe, a local dispatcher error is a
 /// request to stop, never evidence that every smbd writer exited. The caller
@@ -109,31 +116,53 @@ fn until_peer_drained<T>(ctl:i32,run:impl FnOnce()->io::Result<T>,mut single:imp
         // holding S for the trusted supervisor's exceptional group handling.
     }}
 }
+fn qualify_plan(fd:i32,src:&InitialReader,bound:&[u8;128],ready:impl FnOnce()->io::Result<()>)->io::Result<first::InstalledPlan>{
+    let mut raw=[0;first::PLAN_SLOT];
+    let n=unsafe{zxs_smb_plan_take(fd,raw.as_mut_ptr())};
+    let n=usize::try_from(n).ok().filter(|n|*n<=raw.len()).ok_or_else(denied)?;
+    let plan=first::Plan::parse(&raw[..n])?.install(src,bound)?;
+    ready()?;
+    os(unsafe{zxs_smb_plan_reply(fd,plan.sha().as_ptr())})?;
+    Ok(plan)
+}
 /// These descriptors come independently from the trusted launcher. The
 /// process pidfd is the actual foreground smbd, not its supervisor's PID,
 /// a peer-provided number, or identity inferred from the control socket.
 pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config:&str,
-    endpoint:OwnedFd,binding:File,master:OwnedFd,stopping:impl Fn()->bool)->io::Result<()>{
+    endpoint:OwnedFd,binding:File,master:OwnedFd,stopping:impl Fn()->bool+Sync)->io::Result<()>{
     let fd=endpoint.as_raw_fd();
     os(unsafe{zxs_smb_ctl_claim(fd)})?;os(unsafe{zxs_smb_process_claim(master.as_raw_fd())})?;
     let e=Expected{pool,instance:hex(instance)?,provision,config:hex(config)?};
     let (host,stamp)=original(&binding)?;let sid=expected_user(e.checked(&host)?);
     let src=InitialReader::open(system,pool)?; // original S SH through close
     let result=(||{
-        let life=exchange(fd,&src,&e,&host,||{
-            let(seen,when)=original(&binding)?;
-            if seen!=host||when!=stamp||stopping(){return Err(denied());}
-            os(unsafe{zxs_smb_process_claim(master.as_raw_fd())})
-        })?; // never an NT secret or password response
+        let (observed,life)=receive_bound(fd)?;
+        let startup=||{
+            let before=||{
+                let(seen,when)=original(&binding)?;
+                if seen!=host||when!=stamp||stopping(){return Err(denied());}
+                os(unsafe{zxs_smb_process_claim(master.as_raw_fd())})
+            };
+            reply_ready(fd,&src,&e,&host,&observed,&life,&before)?;
+            qualify_plan(fd,&src,&host,||{
+                before()?;
+                if unsafe{zxs_smb_ctl_life(life.as_raw_fd(),0)}!=0{return Err(denied());}
+                Ok(())
+            })
+        };
+        let plan=match startup(){
+            Ok(plan)=>plan,
+            Err(err)=>return until_peer_drained(fd,||Err(err),||unsafe{zxs_smb_ctl_life(life.as_raw_fd(),500)}),
+        };
         // No further sends on this anonymous endpoint (shutdown is not a
         // send). Authentic role frames always supplied their own kernel-
         // checked credentials, including ones already queued on this edge.
-        let authority=trees::Site::from_reader(&src,&binding,&stamp);
+        let authority=trees::Site::from_reader(&src,&binding,&stamp,&stopping,&plan);
         std::thread::scope(|scope|{
         let mut jobs=trees::Workers::new(scope,authority);
         until_peer_drained(fd,||{
         os(unsafe{zxs_smb_origin_enable(fd)})?;
-        attempts::serve(fd,&life,&master,stopping,||{
+        attempts::serve(fd,&life,&master,&stopping,||{
             if Stamp::read(&binding)?!=stamp{return Err(denied());}
             let selected=current_slot(&src,pool,e.instance,&sid)?;
             if Stamp::read(&binding)?!=stamp{return Err(denied());}Ok(selected)
@@ -203,7 +232,8 @@ mod tests{
         let writer=unsafe{zxs_smb_ctl_hello(yfd,b.as_ptr())};assert!(writer>=0);
         let writer=unsafe{OwnedFd::from_raw_fd(writer)};
         let inherited=writer.try_clone().unwrap(); // the same OFD retained by an auxiliary child
-        let life=exchange(x.as_raw_fd(),&src,&e,&b,||Ok(())).unwrap();
+        let (observed,life)=receive_bound(x.as_raw_fd()).unwrap();
+        reply_ready(x.as_raw_fd(),&src,&e,&b,&observed,&life,||Ok(())).unwrap();
         let mut actual=[0u8;277];os(unsafe{zxs_smb_ctl_read(yfd,actual.as_mut_ptr(),actual.len())}).unwrap();
         assert_eq!(actual,ack);
         os(unsafe{zxs_smb_ctl_drain(yfd)}).unwrap(); // this is not a close of all smbd writers
@@ -211,12 +241,27 @@ mod tests{
         assert_eq!(unsafe{zxs_smb_ctl_life(life.as_raw_fd(),0)},0);
         drop(y);drop(writer);assert_eq!(unsafe{zxs_smb_ctl_life(life.as_raw_fd(),0)},0);
         drop(inherited);assert_eq!(unsafe{zxs_smb_ctl_life(life.as_raw_fd(),0)},1);
+        // Stop at the actual pre-READY cut, after a genuine HELLO and pipe.
+        let (x,y)=pair();let writer=unsafe{zxs_smb_ctl_hello(y.as_raw_fd(),b.as_ptr())};
+        assert!(writer>=0);let mut writer=Some(unsafe{OwnedFd::from_raw_fd(writer)});
+        let (observed,life)=receive_bound(x.as_raw_fd()).unwrap();
+        let other=crate::fs::HeldDir::trusted_system(&s).unwrap();let mut turns=0;
+        let early=until_peer_drained(x.as_raw_fd(),
+            ||reply_ready(x.as_raw_fd(),&src,&e,&b,&observed,&life,||Err(denied())),
+            ||{
+                turns+=1;assert!(other.exclusive().is_err());
+                assert_ne!(unsafe{zxs_smb_ctl_live(y.as_raw_fd())},0);
+                let status=unsafe{zxs_smb_ctl_life(life.as_raw_fd(),0)};
+                if turns==1{assert_eq!(status,0);drop(writer.take());}
+                status
+            });
+        assert_eq!(turns,2);assert_eq!(early.unwrap_err().kind(),io::ErrorKind::PermissionDenied);
         let (x,y)=pair();
         os(unsafe{zxs_smb_ctl_write(y.as_raw_fd(),b.as_ptr(),b.len())}).unwrap();
-        assert!(exchange(x.as_raw_fd(),&src,&e,&b,||Ok(())).is_err()); // right bytes without the original kernel lease
+        assert!(receive_bound(x.as_raw_fd()).is_err()); // right bytes without the original kernel lease
 
         let (x,y)=pair();os(unsafe{zxs_smb_ctl_write(y.as_raw_fd(),ack.as_ptr(),ack.len())}).unwrap();
-        assert!(exchange(x.as_raw_fd(),&src,&e,&b,||Ok(())).is_err()); // overlength response is not a request
+        assert!(receive_bound(x.as_raw_fd()).is_err()); // overlength response is not a request
         drop(x);assert!(unsafe{zxs_smb_ctl_live(y.as_raw_fd())}<0);
         for x in [0,16,32,48,64,96,104,116]{
             let mut bad=b;bad[x]^=1;assert!(answer(&src,&e,&b,&bad).is_err());

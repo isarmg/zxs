@@ -10,7 +10,7 @@ mod markers;
 mod complete;
 mod receipt;
 mod pair;
-pub(crate) use pair::{Setup,exec_child as sam_worker,exec_sql_child as native_sql_worker};
+pub(crate) use pair::{Setup,exec_child as sam_worker,exec_sql_child as native_sql_worker,exec_layout_sql_child as layout_sql_worker,Online,StartSmb};
 
 const DATABASE:&str="SYSTEM.sqlite3";
 const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";

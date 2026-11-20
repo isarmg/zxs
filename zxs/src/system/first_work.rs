@@ -2,9 +2,10 @@
 //! protocol login, not a confirmed formal version. All selected roots/IDs
 //! come from current business membership, never a pathname from the client.
 use super::{Catalog,Connection,Tree,check,sqlite3_step,file_create};
-use super::super::{volume::OrdinaryRoot,sqlite3_column_type};
+use super::super::{volume::OrdinaryRoot,sqlite3_column_type,work_record::{self,Members,ReadRecord}};
+use crate::ordinary::working_round::{End,Selected,Used};
 use crate::{FileId,OperationId,display,fs::invalid,hash::Sha256,identity::{AccountId,ShareId},
-    ordinary::{portable_birth::{Birth,Installed},working_sql::{self,HeldWork,Incoming,Retained,Spec}}};
+    ordinary::{portable_birth::{Birth,Installed},working_sql::{self,Incoming,Retained,Spec}}};
 use std::{cell::Cell,fs::File,io::{self,Write}};
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -43,6 +44,10 @@ fn original(db:&Connection,b:&Birth,op:OperationId)->io::Result<Option<Row>>{
         return Err(invalid("working original does not match its exact birth, writer and input"));}
     s.done()?;Ok(Some(x))
 }
+pub(in crate::system::reader) fn confirmed_record(db:&Connection,b:&Birth,op:OperationId)->io::Result<crate::ordinary::working_round::Record>{
+    let first=original(db,b,op)?.filter(|r|r.done).ok_or_else(||invalid("no original confirmed initial working material"))?;
+    crate::ordinary::working_round::Record::first(first.spec)
+}
 fn by_file(db:&Connection,b:&Birth)->io::Result<Option<Row>>{
     let s=db.prepare(c"SELECT save_op FROM main.first_work WHERE file_id=?1 ORDER BY attempt_no DESC LIMIT 1")?;s.bind_bytes(1,&b.file.0)?;
     match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("cannot select FILE working head"));}}
@@ -59,7 +64,7 @@ fn retained(db:&Connection,b:&Birth)->io::Result<Retained>{
         working_sql::include_retained(&mut names,OperationId(s.array(0)?),s.byte(1)?)?;
     },rc=>{check(rc)?;return Err(invalid("cannot read retained working names"));}}}
 }
-pub(super) fn membership(db:&Connection,_:&Catalog,b:&Birth)->io::Result<(Option<(Spec,bool)>,Retained)>{
+pub(in crate::system::reader) fn membership(db:&Connection,_:&Catalog,b:&Birth)->io::Result<(Option<(Spec,bool)>,Retained)>{
     Ok((by_file(db,b)?.map(|x|(x.spec,x.done)),retained(db,b)?))
 }
 fn replaceable(db:&Connection,c:&Catalog,x:Row)->io::Result<bool>{
@@ -184,30 +189,37 @@ impl<'r> std::ops::Deref for MemberRoot<'_,'r>{
     type Target=OrdinaryRoot<'r>;
     fn deref(&self)->&Self::Target{match self{Self::Owned(r)=>r,Self::Tree(r)=>r}}
 }
-pub(crate) struct Current<'t,'s,'r>{body:Option<HeldWork>,container:Installed,root:MemberRoot<'t,'r>,
-    tree:&'t Tree<'s,'r>,birth:Birth,live:Option<Spec>}
+pub(crate) struct Current<'t,'s,'r>{body:Option<Selected>,container:Installed,root:MemberRoot<'t,'r>,
+    tree:&'t Tree<'s,'r>,birth:Birth,live:Option<ReadRecord>}
 #[derive(Eq,PartialEq)]
-struct ReadCut{working:Option<(Spec,bool)>,kept:Retained,alias:Option<file_create::Alias>}
+struct ReadCut{selected:Option<(ReadRecord,End)>,members:Members,alias:Option<file_create::Alias>}
 impl ReadCut{
-    fn get(db:&Connection,c:&Catalog,b:&Birth)->io::Result<Self>{
-        let(working,kept)=membership(db,c,b)?;
-        Ok(Self{working,kept,alias:file_create::display_owner(db,c,b)?})
+    fn gather(db:&Connection,c:&Catalog,b:&Birth,chosen:Option<ReadRecord>)->io::Result<Self>{
+        let selected=chosen.map(|r|work_record::ceiling(db,b,r).map(|end|(r,end))).transpose()?;
+        Ok(Self{selected,members:work_record::members(db,c,b)?,alias:file_create::display_owner(db,c,b)?})
     }
-    fn published(&self)->Option<Spec>{self.working.filter(|(_,done)|*done).map(|(s,_)|s)}
 }
 impl<'s,'r> Tree<'s,'r>{
+    pub(super) fn reader_from_newborn<'t>(&'t self,born:super::file_create::NativeBorn<'r>)->io::Result<Current<'t,'s,'r>>{
+        let (root,birth,container)=born.parts(false)?;
+        let handle=Current{body:None,container,root:MemberRoot::Owned(root),tree:self,birth,live:None};
+        handle.require()?;Ok(handle)
+    }
     pub(crate) fn open_current<'t>(&'t self,name:&str)->io::Result<Current<'t,'s,'r>>{
-        self.open_member(name,None,None,|_,_|Ok(())).map(|(h,_)|h)
+        self.open_member(name,None,None,None,|_,_|Ok(())).map(|(h,_)|h)
     }
     pub(super) fn open_current_root<'t>(&'t self,root:&'t OrdinaryRoot<'r>,name:&str)
         ->io::Result<(Current<'t,'s,'r>,super::file_number::NativeKey)>{
-        self.open_member(name,None,Some(root),|db,b|super::file_number::original(db,b.pool,b.file))
+        self.open_member(name,None,Some(root),None,|db,b|super::file_number::original(db,b.pool,b.file))
     }
     /// Reopen the member, not the revision cached during enumeration.
     pub(crate) fn open_listed<'t>(&'t self,entry:&super::directory::Entry)->io::Result<Current<'t,'s,'r>>{
-        self.open_member(&entry.name,Some(entry),None,|_,_|Ok(())).map(|(h,_)|h)
+        self.open_member(&entry.name,Some(entry),None,None,|_,_|Ok(())).map(|(h,_)|h)
     }
-    fn open_member<'t,V>(&'t self,name:&str,expected:Option<&super::directory::Entry>,pinned:Option<&'t OrdinaryRoot<'r>>,
+    pub(crate) fn open_version<'t>(&'t self,name:&str,version:crate::NodeId)->io::Result<Current<'t,'s,'r>>{
+        self.open_member(name,None,None,Some(version),|_,_|Ok(())).map(|(h,_)|h)
+    }
+    fn open_member<'t,V>(&'t self,name:&str,expected:Option<&super::directory::Entry>,pinned:Option<&'t OrdinaryRoot<'r>>,version:Option<crate::NodeId>,
         result:impl FnOnce(&Connection,&Birth)->io::Result<V>)->io::Result<(Current<'t,'s,'r>,V)>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
         if pinned.is_some_and(|r|!r.for_tree(src,self.setting.volume)){return Err(invalid("different native tree root"));}
@@ -218,36 +230,43 @@ impl<'s,'r> Tree<'s,'r>{
             match unsafe{sqlite3_step(q.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("cannot select SMB member"));}}
             let file=FileId(q.array(0)?);q.done()?;let b=self.birth(db,&c,name,file)?;
             if expected.is_some_and(|e|!e.matches(&b)){return Err(invalid("listed FILE no longer names this original pool member"));}
-            let selected=ReadCut::get(db,&c,&b)?;Ok((c,b,selected))
+            let chosen=match version{Some(n)=>Some(work_record::version(db,&b,n)?),None=>work_record::selected(db,&b)?};
+            let selected=ReadCut::gather(db,&c,&b,chosen)?;Ok((c,b,selected))
         })?;
         let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::for_body(src,&c,b.volume)?)};
         let sample=root.root.names()?.into_iter().collect();
-        let container=b.working_at(&root.root,&sample,false,selected.working,&selected.kept)?;
-        let live=selected.published();
-        let body=live.map(|s|HeldWork::confirmed(container.directory(),s,&selected.kept)).transpose()?;
+        let container=b.working_records_at(&root.root,&sample,false,|scope|selected.members.require(scope))?;
+        let live=selected.selected.map(|(selected,_)|selected);
+        let body=selected.selected.map(|(r,physical)|Selected::open(container.directory(),r.record,physical)).transpose()?;
         let h=Current{body,container,root,tree:self,birth:b,live};
         let v=h.checked(&selected,||Ok(()),|db|result(db,&h.birth))?;Ok((h,v))
     }
 }
 impl Current<'_,'_,'_>{
     pub(crate) fn file(&self)->FileId{self.birth.file}
-    pub(crate) fn size(&self)->u64{self.body.as_ref().map_or(0,HeldWork::size)}
-    pub(crate) fn working_revision(&self)->u64{u64::from(self.live.is_some())}
+    pub(crate) fn size(&self)->u64{self.live.map_or(0,|r|r.record.logical())}
+    pub(crate) fn working_original(&self)->Option<OperationId>{self.live.map(|r|r.record.key().save)}
+    pub(crate) fn working_revision(&self)->u64{self.live.map_or(0,|r|r.record.key().revision)}
     pub(super) fn original_ids(&self)->(crate::PoolId,crate::VolumeId,crate::EntryId,FileId){
         (self.birth.pool,self.birth.volume,self.birth.entry,self.birth.file)
     }
-    fn selected(&self,db:&Connection,c:&Catalog)->io::Result<ReadCut>{
+    fn still_selected(&self,db:&Connection,c:&Catalog)->io::Result<()>{
         self.tree.current_birth(db,c,&self.birth,false)?;
-        let x=ReadCut::get(db,c,&self.birth)?;
-        if self.live.is_some() && self.live!=x.published(){return Err(invalid("selected working revision changed"));}
-        Ok(x)
+        if let Some(old)=self.live{
+            if work_record::confirmed(db,&self.birth,old.record.key().save)?!=old{
+                return Err(invalid("the held original work revision changed"));
+            }
+        }
+        Ok(())
+    }
+    fn selected(&self,db:&Connection,c:&Catalog)->io::Result<ReadCut>{
+        self.still_selected(db,c)?;ReadCut::gather(db,c,&self.birth,self.live)
     }
     /// Native I/O (including a slow/missing F) is bracketed by short,
     /// current SQL selections. No claim that separate disks are atomic.
     fn checked<T>(&self,x:&ReadCut,at_f:impl FnOnce()->io::Result<()>,finish:impl FnOnce(&Connection)->io::Result<T>)->io::Result<T>{
         let alias=super::directory::check_alias(&self.root,&self.birth,x.alias.as_ref(),None)?;
-        match x.working{Some((s,done))=>s.members(&crate::fs::WitnessRead::at(self.container.directory())?,done,&x.kept)?,
-            None=>self.container.require_newborn(&self.root.root)?,}
+        x.members.require(&crate::fs::WitnessRead::at(self.container.directory())?)?;
         self.root.require_streaming_at(at_f)?;self.container.require(&self.root.root)?;
         if let Some(h)=&self.body{h.require(self.container.directory())?;}
         let result=self.tree.session.source.at(|db,c|{
@@ -302,17 +321,24 @@ impl Current<'_,'_,'_>{
             fn flush(&mut self)->io::Result<()>{Ok(())}
         }
         let mut buffer=Buffer{data:Vec::new(),limit:n};
-        self.range_to(start,n as u64,&mut buffer)?;
+        let used=self.range_evidence(start,n as u64,&mut buffer)?;
         if buffer.data.len()!=n{return Err(invalid("incomplete checked SMB read window"));}
         // Even an empty/past-EOF result must pass the original grant. The
         // handoff is only into the native request's pending reply, never a
         // direct socket write. Retry an interrupted final check, not delivery.
         let result=consume(&buffer.data)?;
-        crate::ordinary::after_output(&mut ||self.require())?;
+        crate::ordinary::after_output(&mut ||self.finish_sources(&used))?;
         Ok(result)
     }
 
-    pub(crate) fn range_to(&self,offset:u64,count:u64,mut out:impl Write)->io::Result<()>{
+    pub(crate) fn range_to(&self,offset:u64,count:u64,out:impl Write)->io::Result<()>{
+        self.range_evidence(offset,count,out).map(|_|())
+    }
+    pub(super) fn finish_sources(&self,used:&Used)->io::Result<()>{
+        // Native disk checks fit between the existing short SQL cuts.
+        self.check_with(||used.require(self.container.directory()),|_|Ok(()))
+    }
+    pub(super) fn range_evidence(&self,offset:u64,count:u64,mut out:impl Write)->io::Result<Used>{
         if offset.checked_add(count).is_none_or(|end|end>self.size()){return Err(invalid("range outside this confirmed working EOF"));}
         let seen=Cell::new(None);
         let gate=||->io::Result<()>{
@@ -326,7 +352,18 @@ impl Current<'_,'_,'_>{
             if let Some(h)=&self.body{h.require(self.container.directory())?;}Ok(())
         };
         gate()?;
-        if let Some(held)=&self.body{held.range(offset,count,out,&gate)?;}else{out.flush()?;}
-        self.require() // including empty ranges/after final sink flush; never retransmit a prefix
+        let used=if let (Some(held),Some(cut))=(&self.body,self.live){
+            held.range_with(self.container.directory(),offset,count,|need|{
+                let mut result=Vec::new();result.try_reserve_exact(need.len()).map_err(|_|invalid("work origin request exceeds memory"))?;
+                for batch in need.chunks(64){
+                    self.tree.session.source.at(|db,c|{
+                        self.still_selected(db,&c)?;
+                        for n in batch{result.push(work_record::origin(db,&self.birth,cut,*n)?);}Ok(())
+                    })?;
+                }
+                Ok(result)
+            },&gate,out)?
+        }else{out.flush()?;Used::default()};
+        self.finish_sources(&used)?;Ok(used)
     }
 }

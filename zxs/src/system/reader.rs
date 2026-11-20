@@ -239,5 +239,8 @@ pub(crate) mod account;
 #[path="smb.rs"]
 pub(crate) mod smb;
 
+#[path="work_record.rs"]
+mod work_record;
+
 #[cfg(test)]
-pub(crate) use tests::{web_pool,ordinary_pool};
+pub(crate) use tests::{web_pool,ordinary_pool,stage_managed_file};

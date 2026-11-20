@@ -1,10 +1,10 @@
 //! Original business names, never the host's directory stream. All ordinary
 //! root/FILE traversal is outside SYSTEM transactions, including rare names
 //! that spell a sibling's physical terminal. Nothing is released on an error.
-use super::{Catalog,Connection,Tree,check,file_create,file_number,first_work,sqlite3_step};
-use super::super::volume::OrdinaryRoot;
+use super::{Catalog,Connection,Tree,check,file_create,file_number,sqlite3_step};
+use super::super::{volume::OrdinaryRoot,work_record::{self,Members,ReadRecord}};
 use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,fs::{WitnessRead,invalid},
-    ordinary::{portable_birth::Birth,working_sql::{Retained,Spec}}};
+    ordinary::portable_birth::Birth};
 use std::{collections::BTreeSet,ffi::CString,io};
 
 pub(super) const MAX_PAGE:u8=16;
@@ -21,7 +21,7 @@ impl Entry{
 }
 #[derive(Eq,PartialEq)]
 struct Plan{
-    birth:Birth,working:Option<(Spec,bool)>,kept:Retained,
+    birth:Birth,members:Members,visible:Option<ReadRecord>,
     display_owner:Option<file_create::Alias>,number:u64,
 }
 pub(crate) struct RootFiles<'t,'s,'r>{
@@ -38,15 +38,15 @@ impl<'s,'r> Tree<'s,'r>{
     }
 }
 /// The rare case where one business name is a sibling's physical terminal.
-pub(super) fn check_alias(root:&OrdinaryRoot<'_>,birth:&Birth,owner:Option<&file_create::Alias>,sample:Option<&BTreeSet<Vec<u8>>>)
+pub(in crate::system::reader) fn check_alias(root:&OrdinaryRoot<'_>,birth:&Birth,owner:Option<&file_create::Alias>,sample:Option<&BTreeSet<Vec<u8>>>)
     ->io::Result<Option<crate::ordinary::portable_birth::Installed>>{
     if Birth::reserved_spelling(birth.name.as_bytes()){return Ok(None);}
     let leaf=CString::new(birth.name.as_str()).map_err(|_|invalid("invalid display leaf"))?;
     if !root.root.entry_present(&leaf)?{return Ok(None);}
-    let(b,work,kept)=owner.ok_or_else(||invalid("unrecognized native occupant of FILE display name"))?;
+    let(b,work)=owner.ok_or_else(||invalid("unrecognized native occupant of FILE display name"))?;
     let fresh;
     let names=match sample{Some(x)=>x,None=>{fresh=root.root.names()?.into_iter().collect();&fresh}};
-    b.working_at(&root.root,names,false,*work,kept).map(Some)
+    b.working_records_at(&root.root,names,false,|scope|work.require(scope)).map(Some)
 }
 fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8)->io::Result<Vec<Plan>>{
     tree.require(db,c,false)?;
@@ -60,10 +60,11 @@ fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8)->io:
             let prior=page.last().map_or(after,|p|p.birth.name.as_bytes());
             if page.len()>=usize::from(limit)||name.as_bytes()<=prior{return Err(invalid("unordered or oversized FILE page"));}
             let birth=tree.confirmed_birth(db,c,OperationId(q.array(0)?),name,FileId(q.array(2)?))?;
-            let(working,kept)=first_work::membership(db,c,&birth)?;
+            let members=work_record::members(db,c,&birth)?;
+            let visible=work_record::selected(db,&birth)?;
             let display_owner=file_create::display_owner(db,c,&birth)?;
             let number=file_number::original(db,birth.pool,birth.file)?.words().1;
-            page.push(Plan{birth,working,kept,display_owner,number});
+            page.push(Plan{birth,members,visible,display_owner,number});
         }
         rc=>{check(rc)?;return Err(invalid("could not select ordinary share members"));}
     }}
@@ -81,7 +82,7 @@ pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8
     let sample=native_sample()?;
     let mut pins=Vec::with_capacity(selected.len());
     for plan in &selected{
-        pins.push(plan.birth.working_at(&root.root,&sample,false,plan.working,&plan.kept)?);
+        pins.push(plan.birth.working_records_at(&root.root,&sample,false,|scope|plan.members.require(scope))?);
     }
     at_cut()?;
     let final_names=native_sample()?;
@@ -91,7 +92,7 @@ pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8
             return Err(invalid("an original FILE spelling disappeared during enumeration"));
         }
         let scope=WitnessRead::at(h.directory())?;
-        match p.working{None=>scope.only_header()?,Some((s,done))=>s.members(&scope,done,&p.kept)?,}
+        p.members.require(&scope)?;
         h.require(&root.root)?;
         if let Some(pin)=check_alias(root,&p.birth,p.display_owner.as_ref(),Some(&final_names))?{aliases.push(pin);}
     }
@@ -104,9 +105,9 @@ pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8
     })?;
     drop(aliases);drop(pins);
     Ok(selected.into_iter().map(|p|{
-        let visible=p.working.filter(|(_,done)|*done).map(|(s,_)|s);
+        let visible=p.visible.map(|r|r.record);
         Entry{pool:p.birth.pool,volume:p.birth.volume,name:p.birth.name,file:p.birth.file,entry:p.birth.entry,number:p.number,
-            revision:u64::from(visible.is_some()),size:visible.map_or(0,|s|s.bytes)}
+            revision:visible.map_or(0,|r|r.key().revision),size:visible.map_or(0,|r|r.logical())}
     }).collect())
 }
 impl RootFiles<'_,'_,'_>{

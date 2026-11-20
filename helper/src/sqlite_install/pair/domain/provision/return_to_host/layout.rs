@@ -1,9 +1,9 @@
-//! Prepare only a never-before-named host instance. No pool path, SQL,
-//! Samba invocation, password, persistent approval or service configuration.
+//! Prepare a never-before-named host instance from the original approved
+//! ordinary plan. No Samba invocation, account, or running service.
 use super::{PREFIX,Site,approval,bad,child,contents,live,mark,pin_dir,safe_dir};
 use super::super::{FRESH_SITE,Times,cancelled,capsule};
 use crate::{fs_tools::RuntimeFile,maintenance::HostMounts,pinned::Mount,
-    sqlite_install::{pair::terminal::PublicConfirmation,request::Id}};
+    smb_profile::{self,first::Plan},sqlite_install::{pair::{terminal::PublicConfirmation,native_run::Resolved},request::Id}};
 use rustix::{fs::{FlockOperation,Mode,OFlags,RawDir,RenameFlags,StatVfsMountFlags,fchmod,fchown,
     fgetxattr,flock,fstatvfs,mkdirat,openat,renameat_with},io::Errno,process::{Gid,Uid}};
 use sha2::{Digest,Sha256};
@@ -30,7 +30,7 @@ fn same_name(parent:&File,n:&CStr,original:&File)->io::Result<()>{
 // Do not infer write/search rights from group bits while a named Linux POSIX
 // ACL or inherited default ACL may alter them. Unknown on this host is not
 // permission to chown/chmod an existing object.
-pub(super) fn bare_acl(f:&File,key:&CStr)->io::Result<()>{
+pub(in crate::sqlite_install::pair::domain::provision) fn bare_acl(f:&File,key:&CStr)->io::Result<()>{
     match fgetxattr(f,key,&mut [0u8;0][..]){
         Err(Errno::NODATA)=>Ok(()),
         Ok(_)|Err(Errno::RANGE)=>Err(bad("extended POSIX ACL is outside the first-install layout profile")),
@@ -155,10 +155,13 @@ fn owned(f:&File,u:u32,g:u32,m:Mode)->io::Result<()>{
     fchown(f,Some(Uid::from_raw(u)),Some(Gid::from_raw(g)))?;fchmod(f,m)?;Ok(())
 }
 
-struct NewTree{dirs:Vec<File>,private:File,state:File,account:File,cfg:File,uid:u32,gid:u32}
-impl NewTree{
+struct NewTree<'p>{dirs:Vec<File>,private:File,state:File,account:File,cfg:File,uid:u32,gid:u32,
+    plan:&'p Plan, live_sha:[u8;32]}
+impl<'p> NewTree<'p>{
     fn base(&self)->&File{self.dirs.last().expect("first newly created directory")}
-    fn build(top:File,names:&[&CStr],uid:u32,gid:u32)->io::Result<Self>{
+    fn build(top:File,names:&[&CStr],uid:u32,gid:u32,plan:&'p Plan)->io::Result<Self>{
+        let bytes=smb_profile::render(plan).map_err(bad)?;
+        let live_sha=Sha256::digest(bytes.as_bytes()).into();
         debug_assert!((1..=3).contains(&names.len()));
         let mut dirs=vec![top];
         for n in &names[1..]{let f=new_dir(dirs.last().expect("top"),n)?;dirs.push(f);}
@@ -173,7 +176,7 @@ impl NewTree{
         same_name(base,c"smb.conf",&cfg)?;let m=cfg.metadata()?;
         if !m.is_file()||m.uid()!=0||m.nlink()!=1||m.len()!=0||m.mode()&0o7777!=0o600{
             return Err(bad("not an empty original private smb.conf"));}
-        cfg.write_all_at(live::PROFILE,0)?;owned(&cfg,0,0,PUBLIC)?;
+        cfg.write_all_at(bytes.as_bytes(),0)?;owned(&cfg,0,0,PUBLIC)?;
         for f in [&private,&state]{owned(f,uid,gid,OWNER)?;}
         // Descendants first: the externally visible top stays root-only
         // until every name and owner beneath it has been set.
@@ -182,7 +185,7 @@ impl NewTree{
             let (g,m)=if i+1==count{(gid,INSTANCE)}else{(0,SEARCH)};
             owned(f,0,g,m)?;
         }
-        Ok(Self{dirs,private,state,account,cfg,uid,gid})
+        Ok(Self{dirs,private,state,account,cfg,uid,gid,plan,live_sha})
     }
     fn verify(&self,parent:&File,top:&CStr,names:&[&CStr])->io::Result<()>{
         let base=self.base();let mut prior=parent;
@@ -203,10 +206,10 @@ impl NewTree{
         let roles=[mark(&self.private)?,mark(&self.state)?,mark(&self.account)?];
         if roles.iter().enumerate().any(|(i,x)|roles[..i].contains(x)){return Err(bad("aliased dedicated directories"));}
         same_name(base,c"smb.conf",&self.cfg)?;attrs(&self.cfg,0,0,PUBLIC,false)?;
-        live::exact(&self.cfg)?;
-        // Reopen only this selected regular public record independently.
-        let sha=Sha256::digest(live::PROFILE).into();
-        live::Live::select(base,&sha)?.require(base)
+        // Independently reopen only this already-matched public original.
+        let found=live::Live::select(base,&self.live_sha,self.plan.origin)?;
+        if found.plan()!=self.plan{return Err(bad("different complete installed first plan"));}
+        found.require(base)
     }
     fn stamps(&self)->io::Result<Vec<Times>>{
         self.dirs.iter().chain([&self.private,&self.state,&self.account,&self.cfg]).map(Times::on).collect()
@@ -223,9 +226,12 @@ impl NewTree{
 fn publish(parent:&File,stage:&CStr,dest:&CStr)->io::Result<()>{
     renameat_with(parent,stage,parent,dest,RenameFlags::NOREPLACE)?;Ok(())
 }
-pub(in crate::sqlite_install::pair) fn create_layout(instance:Id,reference:Id)->io::Result<()>{
-    if [instance,reference].contains(&[0;16]){return Err(bad("missing host layout identifiers"));}
-    approval::no_inherited_descriptors()?;
+pub(in crate::sqlite_install::pair) fn create_layout(resolved:&Resolved,reference:Id)->io::Result<[u8;32]>{
+    let plan=resolved.plan();let instance=plan.origin.instance;
+    if reference==[0;16]{return Err(bad("missing host layout approval reference"));}
+    resolved.require()?;
+    let bytes=smb_profile::render(plan).map_err(bad)?;
+    let live_sha=Sha256::digest(bytes.as_bytes()).into();
     let host=approval::host_admin()?;let terminal=PublicConfirmation::select()?;
     let (actor,uid,gid)=approval::profile()?;
     let site=Site::walk(host,&instance,true)?;let present=site.chain.len();
@@ -240,7 +246,7 @@ pub(in crate::sqlite_install::pair) fn create_layout(instance:Id,reference:Id)->
     let release=capsule::Originals::open()?;
     helper_linux_evidence::diagnostic_process::watch_cancellation()?;
     let origin=||->io::Result<()>{
-        cancelled()?;terminal.check()?;access_chain(&site,gid)?;creation_preflight(&parent)?;check_template(&template)?;release.slots()?;
+        cancelled()?;resolved.require()?;terminal.check()?;access_chain(&site,gid)?;creation_preflight(&parent)?;check_template(&template)?;release.slots()?;
         if approval::profile()? != (actor,uid,gid)||mark(&parent)?!=parent_id||mark(site.base())?!=parent_id{
             return Err(bad("installation subject or approved parent changed"));}
         let need=stage.to_bytes().len().max(32);
@@ -252,15 +258,15 @@ pub(in crate::sqlite_install::pair) fn create_layout(instance:Id,reference:Id)->
     let unused=||->io::Result<()>{origin()?;noentry(&parent,first)?;noentry(&parent,&stage)};
     unused()?;
     terminal.confirm_layout([&instance,&actor,&reference],(uid,gid),public_name,parent_id.0,parent_id.1,
-        &Sha256::digest(live::PROFILE).into(),&release.key())?;
+        &live_sha,&release.key(),resolved.preview(),&smb_profile::approval_text(plan))?;
     release.require()?;unused()?;
     // Failure from here may leave this exact stage or the final name. We never
     // clean it, adopt it, apply permission changes to an existing destination
     // or restart domain provision. RENAME_NOREPLACE is not a source inode CAS;
     // the selected trusted host forbids concurrent privileged substitutions.
-    (||->io::Result<()>{
+    (||->io::Result<[u8;32]>{
         let top=new_dir(&parent,&stage)?;origin()?;same_name(&parent,&stage,&top)?;
-        let tree=NewTree::build(top,suffix,uid,gid)?;
+        let tree=NewTree::build(top,suffix,uid,gid,plan)?;
         let mut synced=tree.sync(&parent,&stage,suffix)?;
         origin()?;noentry(&parent,first)?;tree.verify(&parent,&stage,suffix)?;
         if tree.stamps()?!=synced{return Err(bad("layout changed before no-replace publication"));}
@@ -273,7 +279,7 @@ pub(in crate::sqlite_install::pair) fn create_layout(instance:Id,reference:Id)->
         let parent_stamp=Times::on(&parent)?;parent.sync_all()?;
         origin()?;noentry(&parent,&stage)?;tree.verify(&parent,first,suffix)?;exact_component(&parent,first,&tree.dirs[0])?;
         if tree.stamps()?!=synced||Times::on(&parent)?!=parent_stamp{return Err(bad("layout changed across final parent synchronization"));}
-        Ok(())
+        Ok(live_sha)
     })().map_err(|e|io::Error::new(e.kind(),format!("new layout not confirmed; preserve any stage or final directory, do not retry or adopt: {e}")))
 }
 
@@ -322,7 +328,11 @@ mod tests{
         let scope=tempfile::tempdir().unwrap();let p=File::open(scope.path()).unwrap();
         let names:[&CStr;3]=[c"local-ops-helper",c"samba-instances",c"0123456789abcdef0123456789abcdef"];
         let stage=c".layout-local-ops-helper.new";let top=new_dir(&p,stage).unwrap();
-        let t=NewTree::build(top,&names,65534,65534).unwrap();
+        use crate::smb_profile::first::{Endpoint,Folder,Mode,Origin};
+        let plan=Plan::selected(Origin{pool:[1;16],init:[2;16],instance:[3;16],domain:[4;16],setup:[5;16]},
+            vec![Endpoint::named("192.0.2.17/24").unwrap()],
+            vec![Folder{volume:[9;16],name:"Docs".into(),mode:Mode::ReadOnly}]).unwrap();
+        let t=NewTree::build(top,&names,65534,65534,&plan).unwrap();
         t.sync(&p,stage,&names).unwrap();noentry(&p,names[0]).unwrap();
         publish(&p,stage,names[0]).unwrap();p.sync_all().unwrap();t.verify(&p,names[0],&names).unwrap();
         let _independent=child(t.base(),c".").unwrap();

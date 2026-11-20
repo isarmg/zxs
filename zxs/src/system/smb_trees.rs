@@ -6,6 +6,13 @@ use super::super::{SmbSession,Tree,directory,share_mode::Setting};
 use crate::{PoolId,fs::ControlRead,identity::ShareId,system::{lease::SystemDir,reader::volume::OrdinaryRoot}};
 use std::{fs::File,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::{Arc,atomic::{AtomicBool,Ordering}},thread};
 
+#[path="smb_tree_writer.rs"]
+mod writer;
+#[path="smb_birth_worker.rs"]
+mod birth;
+#[path="smb_tree_namespace.rs"]
+mod namespace;
+
 const GLOBAL:usize=32;
 const PER_SESSION:usize=8;
 unsafe extern "C"{
@@ -22,10 +29,10 @@ unsafe extern "C"{
     fn zxs_read_accept(fd:i32)->i32;
 }
 #[derive(Clone,Copy)]
-pub(super) struct Site<'a>{dir:&'a SystemDir,mark:&'a ControlRead,pool:PoolId,shape:[u8;32],binding:&'a File,stamp:&'a Stamp}
+pub(super) struct Site<'a>{dir:&'a SystemDir,mark:&'a ControlRead,pool:PoolId,shape:[u8;32],binding:&'a File,stamp:&'a Stamp,stopping:&'a(dyn Fn()->bool+Sync),plan:&'a super::first::InstalledPlan}
 impl<'a> Site<'a>{
-    pub(super) fn from_reader(src:&'a InitialReader,binding:&'a File,stamp:&'a Stamp)->Self{
-        Self{dir:&src.dir,mark:&src.marker,pool:src.pool,shape:src.expected_schema,binding,stamp}
+    pub(super) fn from_reader(src:&'a InitialReader,binding:&'a File,stamp:&'a Stamp,stopping:&'a(dyn Fn()->bool+Sync),plan:&'a super::first::InstalledPlan)->Self{
+        Self{dir:&src.dir,mark:&src.marker,pool:src.pool,shape:src.expected_schema,binding,stamp,stopping,plan}
     }
     fn validate(&self)->io::Result<()>{
         if Stamp::read(self.binding)?!=*self.stamp{return Err(denied());}Ok(())
@@ -40,13 +47,14 @@ impl<'scope,'env:'scope> Workers<'scope,'env>{
         Self{scope,site,jobs:Vec::with_capacity(GLOBAL)}
     }
     pub(super) fn submit(&mut self,origin:TreeOrigin,share:ShareId,reply:OwnedFd){
+        if share.0!=[0;16]{return;} // old per-share TREE_CONNECT has no product route
         self.jobs.retain(|(_,h)|!h.is_finished());
         if self.jobs.len()>=GLOBAL || self.jobs.iter().filter(|(owner,_)|Arc::ptr_eq(owner,&origin.alive)).count()>=PER_SESSION{
             return; // fail just this tree; no SQL, F, or per-session slot
         }
         let owner=origin.alive.clone();let site=self.site;
         let job=thread::Builder::new().name("zxs-f-root".into()).spawn_scoped(self.scope,move||{
-            let _=serve(site,origin,share,reply);
+            let _=namespace::serve(site,origin,reply);
         });
         if let Ok(h)=job{self.jobs.push((owner,h));}
     }
@@ -73,28 +81,45 @@ fn attach<'r>(session:&SmbSession<'r>,share:ShareId,after:impl FnOnce()->io::Res
     session.source.at(|db,c|tree.require(db,&c,false))?; // SQL authority only; no F path or marker I/O
     Ok((root,bytes,tree.setting))
 }
-fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Result<()>{
-    if origin.slot.pool!=site.pool||!live(&origin,&reply,0){return Err(denied());}
+fn member_packet(h:&super::super::first_work::Current<'_,'_,'_>,key:super::super::file_number::NativeKey)->[u8;88]{
+    let (p,v,e,f)=h.original_ids();let mut bytes=[0u8;88];
+    for(i,id)in [p.0,v.0,e.0,f.0].iter().enumerate(){bytes[16*i..16*i+16].copy_from_slice(id);}
+    for(i,n)in [key.words().1,h.working_revision(),h.size()].iter().enumerate(){
+        bytes[64+8*i..72+8*i].copy_from_slice(&n.to_be_bytes());
+    }
+    bytes
+}
+fn serve_folder(site:Site<'_>,origin:TreeOrigin,expected:Setting,writer_class:bool,reply:OwnedFd)->io::Result<()>{
+    if origin.slot.pool!=site.pool||(site.stopping)()||!live(&origin,&reply,0){return Err(denied());}
     site.validate()?;
     let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
     let session=SmbSession{source:&src,original:origin.slot.original.clone()};
-    let (root,bytes,setting)=attach(&session,share,||site.validate())?;
+    let (root,bytes,setting)=attach(&session,expected.share,||site.validate())?;
+    if expected!=setting||(site.stopping)(){return Err(denied());}
     if !live(&origin,&reply,0){return Err(denied());}
     os(unsafe{zxs_smb_tree_reply(reply.as_raw_fd(),bytes.as_ptr())})?;
     let tree=Tree{session:&session,setting};
-    // Exact member/header/working materials survive on this tree's one
-    // worker. Closing the FSP closes its private peer. No thread, writable
-    // permit or SQLite connection is created per open FILE.
+    let tree_live=AtomicBool::new(true);
+    struct Clear<'a>(&'a AtomicBool);
+    impl Drop for Clear<'_>{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+    thread::scope(|scope|drive(scope,site,&origin,&reply,&root,&tree,writer_class,&tree_live,Clear(&tree_live)))
+}
+fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<'env>,
+    origin:&'env TreeOrigin,reply:&'env OwnedFd,root:&'env OrdinaryRoot<'_>,tree:&Tree<'_,'_>,writer_class:bool,
+    tree_live:&'env AtomicBool,_clear:impl Drop)->io::Result<()>{
+    // The drop guard ends writer admission before scoped threads are joined.
+    // Compatible readers keep their original bounded dispatcher.
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
     const MAX_MEMBERS:usize=16;
-    while live(&origin,&reply,0){
+    let mut writers=Vec::new();let mut births=Vec::new();
+    while !(site.stopping)()&&live(origin,reply,0){
         let mut channels=[-1;MAX_MEMBERS];let mut events=[0u8;MAX_MEMBERS+1];
         for(i,(m,_))in members.iter().enumerate(){channels[i]=m.as_raw_fd();}
         if unsafe{zxs_tree_events(reply.as_raw_fd(),origin.session.as_raw_fd(),channels.as_ptr(),members.len(),events.as_mut_ptr())}<0{break;}
         // One native FSP owns one exact Current. Replies have independent stream
         // endpoints: one incomplete/error response cannot become another READ.
         for i in (0..members.len()).rev(){
-            if !live(&origin,&reply,0){return Err(denied());}
+            if !live(origin,reply,0)||(site.stopping)(){return Err(denied());}
             match events[i+1]{
                 0=>continue,2=>{members.remove(i);continue;},1=>{},_=>return Err(denied())
             }
@@ -107,25 +132,44 @@ fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Resul
                 os(unsafe{zxs_read_fill(answer.as_raw_fd(),bytes.as_ptr(),bytes.len())}));
             // The private stream may contain tentative bytes, but its positive
             // trailer is sent only after the *post*-copy original F/SQL checks.
-            if checked.is_ok() && site.validate().is_ok() && live(&origin,&reply,0) && unsafe{zxs_member_held(member)}==0{
+            if checked.is_ok() && !(site.stopping)() && site.validate().is_ok() && live(&origin,&reply,0) && unsafe{zxs_member_held(member)}==0{
                 let _=unsafe{zxs_read_accept(answer.as_raw_fd())};
             }
         }
         if events[0]==0{continue;}
-        let mut limit=0;let mut cursor=[0;223];
+        let mut limit=0;let mut cursor=[0;256];
         let fd=unsafe{zxs_dir_take(reply.as_raw_fd(),origin.worker.as_raw_fd(),&mut limit,cursor.as_mut_ptr())};
         if fd<0{break;} // original session remains usable on its other trees
         let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+        if (birth::BEGIN..=birth::END).contains(&limit){
+            let flags=limit-birth::BEGIN;let writer=flags&2!=0;
+            if writer&&!writer_class{continue;}
+            births.retain(|(_,h):&(bool,thread::ScopedJoinHandle<'_,()>)|!h.is_finished());
+            if births.iter().filter(|(w,_)|*w==writer).count()>=(if writer{8}else{16}){continue;}
+            let Some(permit)=birth::Permit::acquire(writer)else{continue;};
+            let d=&root.root;let expected=tree.setting;
+            if let Ok(job)=thread::Builder::new().name("zxs-file-birth".into()).spawn_scoped(scope,move||{
+                let _=birth::serve(site,origin,reply,tree_live,expected,d,answer,cursor,flags,permit);
+            }){births.push((writer,job));}
+            continue;
+        }
+        if limit==writer::OPEN{
+            writers.retain(|h:&thread::ScopedJoinHandle<'_,()>|!h.is_finished());
+            if !writer_class||writers.len()>=8||tree.setting.mode!=super::super::share_mode::Mode::ReadWrite||
+               (site.stopping)()||!live(origin,reply,0){continue;}
+            let Some(permit)=writer::Permit::acquire()else{continue;};
+            let d=&root.root;let expected=tree.setting;
+            if let Ok(job)=thread::Builder::new().name("zxs-file-writer".into()).spawn_scoped(scope,move||{
+                let _=writer::serve(site,origin,reply,tree_live,expected,d,answer,cursor,permit);
+            }){writers.push(job);}
+            continue;
+        }
         if limit==255{
             if members.len()>=MAX_MEMBERS || site.validate().is_err() || !live(&origin,&reply,0){continue;}
             let Ok(name)=crate::display::component(&cursor[1..1+usize::from(cursor[0])],222) else{continue;};
             let Ok((handle,key))=tree.open_current_root(&root,name) else{continue;};
-            let (p,v,e,f)=handle.original_ids();
-            let mut data=[0u8;88];
-            for(i,id)in [p.0,v.0,e.0,f.0].iter().enumerate(){data[16*i..16*i+16].copy_from_slice(id);}
-            for(i,num)in [key.words().1,handle.working_revision(),handle.size()].iter().enumerate(){
-                data[64+8*i..72+8*i].copy_from_slice(&num.to_be_bytes());}
-            if !live(&origin,&reply,0)||site.validate().is_err(){break;}
+            let data=member_packet(&handle,key);
+            if (site.stopping)()||!live(&origin,&reply,0)||site.validate().is_err(){break;}
             if unsafe{zxs_member_reply(answer.as_raw_fd(),data.as_ptr())}==0{members.push((answer,handle));}
             continue;
         }
@@ -134,21 +178,21 @@ fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Resul
             if !live(&origin,&reply,0){return Err(denied());}
             if limit==0{
                 root.require_streaming()?;
-                src.at(|db,c|tree.require(db,&c,false))?;
+                tree.session.source.at(|db,c|tree.require(db,&c,false))?;
                 return Ok(Vec::new());
             }
             directory::page(&tree,&root,&cursor[1..1+usize::from(cursor[0])],limit,||Ok(()))
         })();
         let Ok(rows)=result else{continue;}; // close only this answer, never send a prefix
-        if !live(&origin,&reply,0) || site.validate().is_err(){break;}
-        let mut out=[0u8;1+16*(1+222+8+8)];out[0]=rows.len() as u8;
-        for (row,slot) in rows.iter().zip(out[1..].chunks_exact_mut(239)){
+        if (site.stopping)()||!live(&origin,&reply,0) || site.validate().is_err(){break;}
+        let mut out=[0u8;1+16*(1+255+8+8)];out[0]=rows.len() as u8;
+        for (row,slot) in rows.iter().zip(out[1..].chunks_exact_mut(272)){
             slot[0]=row.name.len() as u8;slot[1..1+row.name.len()].copy_from_slice(row.name.as_bytes());
-            slot[223..231].copy_from_slice(&row.number.to_be_bytes());slot[231..239].copy_from_slice(&row.size.to_be_bytes());
+            slot[256..264].copy_from_slice(&row.number.to_be_bytes());slot[264..272].copy_from_slice(&row.size.to_be_bytes());
         }
         let _=unsafe{zxs_dir_reply(answer.as_raw_fd(),out.as_ptr())}; // cancel lost no cursor, grant or data
     }
-    drop(members);drop(root);Ok(())
+    Ok(())
 }
 
 #[cfg(test)]

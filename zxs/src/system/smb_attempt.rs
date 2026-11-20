@@ -101,6 +101,11 @@ pub(super) struct TreeOrigin{
     pub(super) slot:Slot,pub(super) alive:Arc<AtomicBool>,
     pub(super) session:OwnedFd,pub(super) worker:OwnedFd,
 }
+impl TreeOrigin{
+    pub(super) fn duplicate(&self)->io::Result<Self>{
+        Ok(Self{slot:self.slot.clone(),alive:self.alive.clone(),session:self.session.try_clone()?,worker:self.worker.try_clone()?})
+    }
+}
 impl NativeSession{
     fn claim(&self)->io::Result<TreeOrigin>{
         Ok(TreeOrigin{slot:self.slot.clone(),alive:self.alive.clone(),session:self.peer.peer.try_clone()?,

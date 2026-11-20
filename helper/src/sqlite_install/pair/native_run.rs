@@ -1,8 +1,11 @@
-//! Host-side decisions and the authenticated result for the private v7
+//! Host-side decisions and the authenticated result for the private v9
 //! handoff. No mode can choose media by parsing a UUID or receipt.
 mod transport;
 mod manifest;
 mod worker;
+mod layout;
+pub(super) use layout::{Choice,Resolved,online_roots};
+pub(crate) use layout::worker as exec_layout_sql_child;
 mod release;
 mod host;
 pub(super) use host::{Selection,run};

@@ -46,7 +46,7 @@ def git_export(repo, out, lock, env):
                 and name not in entries and size.isdecimal() and int(size)<=16<<20,"bad source object")
         entries[name]=(mode,oid,int(size))
     count,total,expected=lock["project_files"]
-    require(count==len(entries)<=512 and total==sum(v[2] for v in entries.values())<=32<<20,
+    require(count==len(entries)<=1152 and total==sum(v[2] for v in entries.values())<=32<<20,
             "incomplete source index")
     out.mkdir()
     records=[]

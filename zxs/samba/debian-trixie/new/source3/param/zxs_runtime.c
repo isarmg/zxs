@@ -20,7 +20,7 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 
-#define ZXS_CFG_LIMIT (1024U * 1024U)
+#define ZXS_CFG_LIMIT (64U * 1024U)
 #define ZXS_BOUND_BYTES 128
 #define ZXS_LIVE "/instance/smb.conf"
 
@@ -293,12 +293,14 @@ bool zxs_runtime_domain(const struct dom_sid *s)
 	return true;
 }
 
+#include "param/zxs_native_lan.inc"
+
 /* Claim the anonymous supervisor-created channel once, before Samba might
  * reuse descriptor 3. The duplicate is inherited across fork, not exec.
  * No smbd opens SYSTEM.sqlite3 or interprets host client passwords here. */
 bool zxs_runtime_control_take(void)
 {
-	if (zxs_smb_sender_isolated()!=0) { return false; }
+	if (!zxs_privacy_begin() || !zxs_listen_report_take() || zxs_smb_sender_isolated()!=0) { return false; }
 	if (control_fd!=-1 || zxs_smb_ctl_claim(3)!=0) { return false; }
 	control_fd=fcntl(3,F_DUPFD_CLOEXEC,5);
 	if (control_fd<0) { return false; }
@@ -331,6 +333,8 @@ bool zxs_runtime_connect_storage(void)
     memcpy(identity,held.binding+16,16);
     memcpy(identity+16,reply+144,sizeof(identity)-16);
     if (zxs_smb_public_generation(identity,&selected_slot)!=0) { return false; }
+    if(zxs_lan.length==0 || zxs_smb_plan_send(control_fd,zxs_lan.raw,zxs_lan.length)!=0 ||
+       zxs_smb_plan_ack(control_fd,zxs_lan.sha)!=0 || !record_intact() || zxs_smb_ctl_live(control_fd)!=0){return false;}
     audited_slot=selected_slot;
 	client_role.parent=getpid();
 	qualified=true;
@@ -342,7 +346,8 @@ bool zxs_runtime_connect_storage(void)
  * before it takes any client requests. The parent never waits or retries. */
 bool zxs_runtime_prepare_gate(int fd,struct zxs_client_offer *o,int gate[2])
 {
-	return zxs_runtime_storage_live() && zxs_offer_accepted(&client_role,fd,o) &&
+	return zxs_listeners && zxs_runtime_storage_live() && zxs_peer_in_lane(fd) &&
+	       zxs_offer_accepted(&client_role,fd,o) &&
 	       socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC|SOCK_NONBLOCK,0,gate)==0;
 }
 void zxs_runtime_dispatch_child(const struct zxs_client_offer *o,pid_t child,int gate[2])

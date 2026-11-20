@@ -13,6 +13,11 @@ pub fn cancelled()->bool{CANCELLED.load(Ordering::Relaxed)}
 pub fn watch_cancellation()->io::Result<()>{
     watch(&[libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT])
 }
+/// A foreground SMB supervisor must also stop rather than be suspended by
+/// the tty job-control key. Fixed child setup starts with default handlers.
+pub fn watch_smb_cancellation()->io::Result<()>{
+    watch(&[libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT,libc::SIGTSTP])
+}
 #[allow(unsafe_code)]
 fn watch(signals:&[libc::c_int])->io::Result<()>{
     // SAFETY: fully initialized Linux sigaction with a C-ABI handler that
@@ -165,11 +170,16 @@ pub fn prepare_sam_worker_exec(cmd:&mut Command,original:&File)->io::Result<()>{
         CString::new("__sam-fresh-v1").expect("literal")],Some(std::process::id() as libc::pid_t),None)
 }
 
-/// The one account SQL child retains the operator's TERMINAL session (not
+/// Fixed private child kinds. Neither can execute a caller-supplied program
+/// or inherit descriptors beyond the same dedicated 3/4 layout.
+#[derive(Clone,Copy)]
+pub enum OfflineSql { Account, FirstLayout }
+
+/// The account SQL child retains the operator's TERMINAL session (not
 /// the unrelated diagnostic worker session). Only 3=private seqpacket and
 /// 4=sealed nonsecret order are introduced; all other caller FDs close.
 #[allow(unsafe_code)]
-pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,order:&File)->io::Result<()>{
+pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,order:&File,mode:OfflineSql)->io::Result<()>{
     use std::os::fd::AsFd;
     let high=|f:&File|rustix::io::fcntl_dupfd_cloexec(f.as_fd(),16).map(File::from).map_err(io::Error::from);
     let executable=high(original)?;let channel=high(channel)?;let order=high(order)?;
@@ -192,7 +202,8 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
         if libc::dup3(channel.as_raw_fd(),3,0)!=3||libc::dup3(order.as_raw_fd(),4,0)!=4{
             return Err(io::Error::last_os_error());
         }
-        let argv=[c"helper".as_ptr(),c"__native-account-sql-v7".as_ptr(),std::ptr::null()];
+        let action=match mode{OfflineSql::Account=>c"__native-account-sql-v9",OfflineSql::FirstLayout=>c"__first-layout-sql-v9"};
+        let argv=[c"helper".as_ptr(),action.as_ptr(),std::ptr::null()];
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
         libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),
             argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);

@@ -33,7 +33,7 @@ pub(super) fn reset_request(pool:PoolId,init:OperationId,setup:OperationId,op:Op
     if let Some((inst,bound))=native{h.update(&inst)?;h.update(&bound)?;}Ok(h.finish())
 }
 
-pub(super) struct Pair{setup:OperationId,pub(super) instance:[u8;16],pub(super) web:AccountId,
+pub(super) struct Pair{pub(super) setup:OperationId,pub(super) setup_bound:[u8;32],pub(super) instance:[u8;16],pub(super) web:AccountId,
     pub(super) web_login:String,pub(super) smb:AccountId,pub(super) smb_login:String,pub(super) sid:[u8;28]}
 #[derive(Clone,Copy,Eq,PartialEq)]
 pub(super) struct Epoch{pub(super) op:OperationId,pub(super) generation:i64}
@@ -42,12 +42,12 @@ impl Pair{
     pub(super) fn confirmed(db:&Connection,c:&Catalog)->io::Result<Option<Self>>{
         let s=db.prepare(c"SELECT a.birth_op,o.actor_id,o.request_sha,a.approval_ref,a.instance_id,a.setup_bound_sha,a.web_id,a.web_login,a.smb_id,a.smb_login,a.smb_sid FROM main.account_pair a JOIN main.operation o ON o.op_id=a.birth_op WHERE a.singleton=1 AND o.kind=2 AND o.state=1")?;
         match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("cannot select the original pair"));}}
-        let setup=OperationId(s.array(0)?);let instance=s.array(4)?;let web=AccountId(s.array(6)?);let smb=AccountId(s.array(8)?);
+        let setup=OperationId(s.array(0)?);let instance=s.array(4)?;let setup_bound=s.array(5)?;let web=AccountId(s.array(6)?);let smb=AccountId(s.array(8)?);
         let (wn,sn,sid)=(s.blob(7,64)?,s.blob(9,64)?,s.array(10)?);
         if web==smb||[web.0,smb.0].contains(&[0;16])||
-            setup_request(c.birth.pool,c.birth.op,setup,s.array(1)?,s.array(3)?,instance,s.array(5)?,wn,sn,&sid)?!=s.array::<32>(2)?{
+            setup_request(c.birth.pool,c.birth.op,setup,s.array(1)?,s.array(3)?,instance,setup_bound,wn,sn,&sid)?!=s.array::<32>(2)?{
             return Err(invalid("wrong original fixed-pair request"));}
-        let row=Self{setup,instance,web,smb,web_login:login_name(wn)?.to_owned(),smb_login:login_name(sn)?.to_owned(),sid};s.done()?;Ok(Some(row))
+        let row=Self{setup,setup_bound,instance,web,smb,web_login:login_name(wn)?.to_owned(),smb_login:login_name(sn)?.to_owned(),sid};s.done()?;Ok(Some(row))
     }
     pub(super) fn epoch(&self,db:&Connection,c:&Catalog,role:Role)->io::Result<Option<Epoch>>{
         // One indexed max(role,generation), not a scan of all older resets.

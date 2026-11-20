@@ -39,10 +39,23 @@ pub(super) fn choose(db:&Connection,candidates:&[FileId;8])->io::Result<FileId>{
 /// Called only after current SQL authority, the complete birth and the real
 /// FILE were verified in the same cut. Never reissue an ambiguous old name.
 pub(super) fn original(db:&Connection,pool:PoolId,file:FileId)->io::Result<NativeKey>{
-    let n=number(file).ok_or_else(||invalid("original FILE has no usable native number"))?;
     if !matches!(owners(db,file)?,Owners::One(id) if id==file){return Err(invalid("native number has no unique original FILE owner"));}
+    key(pool,file)
+}
+fn key(pool:PoolId,file:FileId)->io::Result<NativeKey>{
+    let n=number(file).ok_or_else(||invalid("original FILE has no usable native number"))?;
     let mut high=[0;8];let mut low=[0;8];high.copy_from_slice(&pool.0[..8]);low.copy_from_slice(&pool.0[8..]);
     Ok(NativeKey{device:u64::from_be_bytes(high),inode:n,extended:u64::from_be_bytes(low)})
+}
+
+pub(super) fn available(db:&Connection,pool:PoolId,candidates:&[FileId;8])->io::Result<(FileId,NativeKey)>{
+    let file=choose(db,candidates)?;Ok((file,key(pool,file)?))
+}
+pub(super) fn available_exact(db:&Connection,pool:PoolId,file:FileId)->io::Result<NativeKey>{
+    if !matches!(owners(db,file)?,Owners::None){
+        return Err(io::Error::new(io::ErrorKind::WouldBlock,"the offered native number is no longer free"));
+    }
+    key(pool,file)
 }
 
 #[cfg(test)]

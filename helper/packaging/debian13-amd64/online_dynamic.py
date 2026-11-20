@@ -27,14 +27,14 @@ POLICY="".join(n+": files\n" for n in DATABASES).encode("ascii")
 PASSWD=b"root:!:0:0::/nonexistent:/usr/sbin/nologin\nnobody:!:65534:65534::/nonexistent:/usr/sbin/nologin\n"
 GROUP=b"root:!:0:\nnogroup:!:65534:\n"
 IDENTITIES="etc/zxs-smb-identities"
-SITE_HEADER=b"ZXS-SMB-UNIX-1"
-SITE_ROLES=(b"storage",b"web-proxy",b"smb-execution")
+SITE_HEADER=b"ZXS-SMB-UNIX-2"
+SITE_ROLES=(b"storage",b"smb-execution")
 MAX_SITE=256
 
 def site_profile(raw):
     require(0<len(raw)<=MAX_SITE and raw.endswith(b"\n"),"invalid site identity length")
     lines=raw[:-1].split(b"\n")
-    require(len(lines)==4 and lines[0]==SITE_HEADER,"invalid site identity profile")
+    require(len(lines)==3 and lines[0]==SITE_HEADER,"invalid site identity profile")
     pairs=[]
     for line,expected in zip(lines[1:],SITE_ROLES,strict=True):
         words=line.split(b" ")
@@ -43,11 +43,11 @@ def site_profile(raw):
         uid,gid=map(int,words[1:])
         require(all(x<0xffffffff and x!=65534 for x in (uid,gid)),"reserved execution identity")
         pairs.append((uid,gid))
-    require(len({p[0] for p in pairs})==len({p[1] for p in pairs})==3,"site roles must have distinct users and groups")
+    require(len({p[0] for p in pairs})==len({p[1] for p in pairs})==2,"site roles must have distinct users and groups")
     return tuple(pairs)
 
 def site_nss(raw):
-    _storage,_web,(user,group)=site_profile(raw)
+    _storage,(user,group)=site_profile(raw)
     # No shell is in this role, no password is set, and no membership list
     # is emitted. Only the primary execution group is private to this UID.
     passwd=PASSWD+f"zxs-smb-client:!:{user}:{group}::/nonexistent:/usr/sbin/nologin\n".encode("ascii")

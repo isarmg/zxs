@@ -9,13 +9,14 @@ pub(in crate::sqlite_install::pair) use native_site::NativeSite;
 pub(in crate::sqlite_install::pair) use accountdb::Seen as NativeSeen;
 mod accountdb;
 mod layout;
+pub(super) use layout::bare_acl;
 pub(in crate::sqlite_install::pair) use layout::create_layout;
 mod start;
 pub(in crate::sqlite_install::pair) use start::{child as request_live_approval, respond as give_live_approval};
 pub(crate) use worker::exec_child;
 use super::{FRESH_SITE,PRIVATE_STORE,Unpublished,child,contents,live,mark};
 use super::super::{LocalDomain,handoff::{OriginChannel,SyncedStore}};
-use crate::{pinned::{Entity,Kind,Pinned},sqlite_install::{approval,bad,request::Id}};
+use crate::{pinned::{Entity,Kind,Pinned},smb_profile::first::Origin,sqlite_install::{approval,bad,request::Id}};
 use rustix::{fd::AsFd,fs::{FlockOperation,Mode,OFlags,fcntl_getfl,flock,openat},io::Errno,
     net::{AddressFamily,SendAncillaryBuffer,SendAncillaryMessage,SendFlags,SocketType,UCred,sendmsg,sockopt},
     process::{Gid,Pid,Uid,WaitId,WaitIdOptions,getppid,waitid}};
@@ -27,10 +28,12 @@ const PREFIX:[&std::ffi::CStr;4]=[c"var",c"lib",c"local-ops-helper",c"samba-inst
 // their independently selected, simultaneously live original objects; do not
 // persist dev/mount/inode as reboot-stable IDs. Only the parent's explicit
 // terminal confirmation authorizes this single future installation.
-pub(super) fn order(ids:[&Id;6],uid:u32,gid:u32,path:&Path,config:&[u8;32],release:&[u8;32],objs:[(Entity,u64);6])->io::Result<[u8;32]>{
+pub(super) fn order(ids:[&Id;6],setup:&Id,uid:u32,gid:u32,path:&Path,config:&[u8;32],release:&[u8;32],objs:[(Entity,u64);6])->io::Result<[u8;32]>{
     use sha2::{Digest,Sha256};use std::os::unix::ffi::OsStrExt;
-    let mut h=Sha256::new();h.update(b"helper: one original host SAM installation v2\0");
+    let mut h=Sha256::new();h.update(b"helper: one original host SAM installation v3\0");
     for id in ids{if *id==[0;16]{return Err(bad("missing host installation identity"));}h.update(id);}
+    if setup==&[0;16]||ids[..4].contains(&setup){return Err(bad("missing distinct original SETUP identity"));}
+    h.update(setup);
     h.update(uid.to_be_bytes());h.update(gid.to_be_bytes());let p=path.as_os_str().as_bytes();
     h.update(u16::try_from(p.len()).map_err(|_|bad("out-of-range installation root"))?.to_be_bytes());h.update(p);
     h.update(config);h.update(release);for (e,m) in objs{h.update(e.dev.to_be_bytes());h.update(e.ino.to_be_bytes());h.update(m.to_be_bytes());}
@@ -84,12 +87,12 @@ impl Site{
 // foreground issuer must separately confirm the action and identified pool.
 pub(super) struct HostOrigins{
     system:Pinned,site:Site,private:File,state:File,live:live::Live,release:super::capsule::Originals,
-    uid:u32,gid:u32,pool:Id,init:Id,instance:Id,op:Id,actor:Id,config:[u8;32],
+    uid:u32,gid:u32,pool:Id,init:Id,instance:Id,op:Id,setup:Id,actor:Id,config:[u8;32],
 }
 impl HostOrigins{
-    pub(super) fn before_worker(path:&Path,pool:Id,init:Id,instance:Id,op:Id,config:[u8;32])->io::Result<Self>{
+    pub(super) fn before_worker(path:&Path,pool:Id,init:Id,instance:Id,op:Id,setup:Id,config:[u8;32])->io::Result<Self>{
         approval::no_inherited_descriptors()?;
-        if [pool,init,instance,op].contains(&[0;16]){return Err(bad("missing original installation identities"));}
+        if [pool,init,instance,op,setup].contains(&[0;16]){return Err(bad("missing original installation identities"));}
         let host=approval::host_admin()?;let (actor,uid,gid)=approval::profile()?;
         let system=Pinned::open(path,Kind::StorageRoot)?;let site=Site::select(host,&instance)?;
         let selected=|n:&std::ffi::CStr|->io::Result<File>{
@@ -101,9 +104,9 @@ impl HostOrigins{
             Ok(f)
         };
         let private=selected(c"private")?;let state=selected(c"state")?;
-        let live=live::Live::select(site.base(),&config)?;
+        let live=live::Live::select(site.base(),&config,Origin{pool,init,instance,domain:op,setup})?;
         let release=super::capsule::Originals::open()?;
-        let this=Self{system,site,private,state,live,release,uid,gid,pool,init,instance,op,actor,config};
+        let this=Self{system,site,private,state,live,release,uid,gid,pool,init,instance,op,setup,actor,config};
         this.fresh()?;Ok(this)
     }
     fn common(&self)->io::Result<()>{
@@ -143,7 +146,7 @@ impl HostOrigins{
         Ok([(self.system.entity(),self.system.mount()?.id),mark(self.site.base())?,mark(&self.private)?,mark(&self.state)?,self.live.origin(),self.release.original()?])
     }
     fn scope(&self,reference:&Id)->io::Result<[u8;32]>{
-        order([&self.pool,&self.init,&self.instance,&self.op,&self.actor,reference],self.uid,self.gid,
+        order([&self.pool,&self.init,&self.instance,&self.op,&self.actor,reference],&self.setup,self.uid,self.gid,
               self.system.path(),&self.config,&self.release.key(),self.marks()?)
     }
     pub(super) fn issue(&self,reference:Id)->io::Result<[u8;128]>{issue::foreground(self,reference)}
@@ -173,7 +176,7 @@ impl Unpublished<'_>{
 // Linux show_fd_locks emits an entry only when the kernel file pointer is
 // exactly this open description (not merely the same inode). A lock owner
 // can have exited; the PID field and superblock device are not durable IDs.
-fn owns_flock(data:&[u8],inode:u64,mount:u64)->bool{
+fn owns_flock(data:&[u8],inode:u64,mount:u64,mode:&str)->bool{
     let Ok(text)=std::str::from_utf8(data)else{return false;};
     if text.len()>4096||!text.ends_with('\n'){return false;}
     let mut got=[false;3];
@@ -184,8 +187,8 @@ fn owns_flock(data:&[u8],inode:u64,mount:u64)->bool{
             "ino" if value.parse::<u64>()==Ok(inode)=>1,
             "lock"=>{
                 let fields:Vec<_>=value.split_ascii_whitespace().collect();
-                let [ordinal,"FLOCK","ADVISORY","WRITE",pid,device,"0","EOF"]=fields.as_slice() else{return false;};
-                if *ordinal!="1:"||pid.parse::<i32>().is_err(){return false;}
+                let [ordinal,"FLOCK","ADVISORY",got_mode,pid,device,"0","EOF"]=fields.as_slice() else{return false;};
+                if *ordinal!="1:"||*got_mode!=mode||pid.parse::<i32>().is_err(){return false;}
                 let mut dev=device.split(':');
                 let hex=|s:Option<&str>|s.is_some_and(|v|!v.is_empty()&&v.len()<=8&&v.bytes().all(|b|b.is_ascii_hexdigit()));
                 if !hex(dev.next())||!hex(dev.next())||dev.next().and_then(|n|n.parse::<u64>().ok())!=Some(inode)||dev.next().is_some(){return false;}2
@@ -196,23 +199,27 @@ fn owns_flock(data:&[u8],inode:u64,mount:u64)->bool{
     }
     got==[true;3]
 }
-fn require_owned(fd:&File,id:(Entity,u64))->io::Result<()>{
+fn require_owned(fd:&File,id:(Entity,u64),mode:&str)->io::Result<()>{
     let path=CString::new(format!("thread-self/fdinfo/{}",fd.as_raw_fd())).expect("decimal descriptor");
     let mut bytes=Vec::new();crate::maintenance::thread_file(&path)?.take(4097).read_to_end(&mut bytes)?;
-    if !owns_flock(&bytes,id.0.ino,id.1){return Err(bad("no exact whole-file exclusive flock on the received open description"));}
+    if !owns_flock(&bytes,id.0.ino,id.1,mode){return Err(bad("no exact requested whole-file flock on this open description"));}
     Ok(())
 }
-pub(in crate::sqlite_install) fn lease(fd:&File,id:(Entity,u64))->io::Result<()>{
+pub(in crate::sqlite_install) fn lease(fd:&File,id:(Entity,u64))->io::Result<()>{prove_lease(fd,id,true)}
+pub(in crate::sqlite_install) fn shared_lease(fd:&File,id:(Entity,u64))->io::Result<()>{prove_lease(fd,id,false)}
+fn prove_lease(fd:&File,id:(Entity,u64),exclusive:bool)->io::Result<()>{
+    let mode=if exclusive{"WRITE"}else{"READ"};
     let flags=fcntl_getfl(fd)?;
     if flags.contains(OFlags::PATH)||!flags.contains(OFlags::DIRECTORY)||flags&OFlags::ACCMODE!=OFlags::RDONLY
         ||mark(fd)?!=id||!fd.metadata()?.is_dir(){return Err(bad("not the expected original worker lease"));}
-    require_owned(fd,id)?;
-    // Separately this independent OFD must lose even a SH request; it must never
-    // reacquire or convert the alleged passed EX to manufacture continuity.
+    require_owned(fd,id,mode)?;
+    // Probe a competing independent OFD; never convert or reacquire the
+    // original. A READ loan can never be used as a WRITE loan.
     let other=child(fd,c".")?;
     if mark(&other)?!=id{return Err(bad("lease original changed"));}
-    match flock(&other,FlockOperation::NonBlockingLockShared){
-        Err(Errno::WOULDBLOCK)=>require_owned(fd,id),Err(e)=>Err(e.into()),Ok(())=>Err(bad("original lease is no longer exclusive")),
+    let competing=if exclusive{FlockOperation::NonBlockingLockShared}else{FlockOperation::NonBlockingLockExclusive};
+    match flock(&other,competing){
+        Err(Errno::WOULDBLOCK)=>require_owned(fd,id,mode),Err(e)=>Err(e.into()),Ok(())=>Err(bad("original lease no longer conflicts")),
     }
 }
 pub(super) struct Returned<'a>{
@@ -281,6 +288,16 @@ mod tests{
         drop(ret_site);flock(&independent,FlockOperation::NonBlockingLockShared).unwrap();
     }
     #[test]
+    fn shared_runtime_lease_is_the_live_original_but_never_an_exclusive_loan(){
+        let group=tempfile::tempdir().unwrap();let actual=File::open(group.path()).unwrap();
+        let another=File::open(group.path()).unwrap();let id=mark(&actual).unwrap();
+        flock(&actual,FlockOperation::NonBlockingLockShared).unwrap();
+        shared_lease(&actual,id).unwrap();assert!(lease(&actual,id).is_err());
+        assert!(shared_lease(&another,id).is_err());
+        drop(actual);flock(&another,FlockOperation::NonBlockingLockExclusive).unwrap();
+        assert!(shared_lease(&another,id).is_err());
+    }
+    #[test]
     fn simply_passing_the_right_directory_is_not_an_exclusive_lease(){
         let d=tempfile::tempdir().unwrap();let original=File::open(d.path()).unwrap();
         let own=child(&original,c".").unwrap();let id=mark(&own).unwrap();
@@ -295,11 +312,11 @@ mod tests{
     #[test]
     fn only_the_original_fdinfo_flock_write_and_whole_range_count(){
         let s="pos:\t0\nflags:\t0300000\nmnt_id:\t99\nino:\t101\nlock:\t1: FLOCK  ADVISORY  WRITE 0 00:6a:101 0 EOF\n";
-        assert!(owns_flock(s.as_bytes(),101,99));
+        assert!(owns_flock(s.as_bytes(),101,99,"WRITE"));
         for bad in [s.replace("FLOCK","OFDLCK"),s.replace("WRITE","READ"),s.replace("0 EOF","1 EOF"),
             s.replace("6a:101","6a:102"),s.replace("99","97"),s.replace("1: FLOCK","1: -> FLOCK"),s.replace(" 0 00:"," _ 00:"),
             s.to_owned()+"ino: 101\n",s.to_owned()+"lock: 2: FLOCK ADVISORY WRITE 61 00:6a:101 0 EOF\n"]{
-            assert!(!owns_flock(bad.as_bytes(),101,99));}
+            assert!(!owns_flock(bad.as_bytes(),101,99,"WRITE"));}
     }
     #[test]
     fn the_foreground_scope_cannot_move_between_actors_roots_or_operations(){

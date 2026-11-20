@@ -4,15 +4,12 @@ use linux_raw_sys::general as u;
 use std::{ffi::CStr,io,mem,ptr};
 
 #[allow(unsafe_code)]
-pub(super) fn only_null_stdio()->io::Result<()>{
-    for fd in 0..3{
-        let mut s:libc::stat=unsafe{mem::zeroed()};
-        let f=unsafe{libc::fcntl(fd,libc::F_GETFL)};
-        if f<0||unsafe{libc::fstat(fd,&raw mut s)}!=0||s.st_mode&libc::S_IFMT!=libc::S_IFCHR||
-            libc::major(s.st_rdev)!=1||libc::minor(s.st_rdev)!=3||f&libc::O_PATH!=0||
-            !(f&3==libc::O_RDWR || f&3==if fd==0{libc::O_RDONLY}else{libc::O_WRONLY}){
-            return Err(io::Error::other("dedicated service requires three real null standard descriptors"));
-        }
+pub(super) fn verified_null(fd:i32)->io::Result<()>{
+    let mut s:libc::stat=unsafe{mem::zeroed()};
+    let f=unsafe{libc::fcntl(fd,libc::F_GETFL)};
+    if f<0||unsafe{libc::fstat(fd,&raw mut s)}!=0||s.st_mode&libc::S_IFMT!=libc::S_IFCHR||
+        libc::major(s.st_rdev)!=1||libc::minor(s.st_rdev)!=3||f&libc::O_PATH!=0||f&3!=libc::O_RDWR{
+        return Err(io::Error::other("dedicated service requires the verified real null descriptor"));
     }
     Ok(())
 }
@@ -84,7 +81,7 @@ fn signals()->bool{unsafe{
     libc::sigprocmask(libc::SIG_SETMASK,&empty,ptr::null_mut())==0
 }}
 #[allow(unsafe_code)]
-pub(super) fn exec(id:Option<(u32,u32)>,image:i32,view:i32,parent:i32,ack:i32,fds:[i32;3],
+pub(super) fn exec(id:Option<(u32,u32)>,image:i32,view:i32,parent:i32,ack:i32,null:i32,fds:[i32;3],
     argv:&[*const libc::c_char;3],env:&[*const libc::c_char;7])->!{unsafe{
     // No error text or credential is exported. Keep the original write end
     // CLOEXEC, signal a setup/exec failure, then go directly to _exit.
@@ -92,12 +89,9 @@ pub(super) fn exec(id:Option<(u32,u32)>,image:i32,view:i32,parent:i32,ack:i32,fd
     if !parent_live(parent)||!signals()||libc::getpid()!=1||libc::syscall(libc::SYS_close_range,3u32,u32::MAX,libc::CLOSE_RANGE_CLOEXEC)!=0{fail();}
     let core=libc::rlimit{rlim_cur:0,rlim_max:0};
     if libc::setrlimit(libc::RLIMIT_CORE,&core)!=0||libc::prctl(libc::PR_SET_DUMPABLE,zero(),zero(),zero(),zero())!=0{fail();}
-    // No CLONE_FS: set only this child's root/cwd to the held original,
-    // *before* unsharing mounts. copy_mnt_ns remaps both onto its new
-    // tree. fchdir(old_host_fd) AFTER unshare would point at the old mount.
-    if libc::fchdir(view)!=0||libc::chroot(c".".as_ptr())!=0||libc::chdir(c"/".as_ptr())!=0||
-        libc::syscall(libc::SYS_unshare,libc::CLONE_NEWNS)!=0||
-        libc::mount(ptr::null(),c"/".as_ptr(),ptr::null(),libc::MS_REC|libc::MS_PRIVATE,ptr::null())!=0{fail();}
+    // The role view is an exact detached tree, not a path rooted in the
+    // host. Attach it in this child's private namespace, then enter it.
+    if crate::smb_views::enter(view).is_err(){fail();}
     let safe=libc::MS_NODEV|libc::MS_NOSUID|libc::MS_NOEXEC;
     if !mount_child(c"/proc",c"proc",safe|libc::MS_RDONLY,c"hidepid=2,subset=pid"){fail();}
     if id.is_none(){
@@ -105,9 +99,10 @@ pub(super) fn exec(id:Option<(u32,u32)>,image:i32,view:i32,parent:i32,ack:i32,fd
             if !mount_child(p,c"tmpfs",safe,c"size=32m,mode=0700,noswap"){fail();}
         }
     }
-    // smbd --foreground itself establishes its session. Do not call setsid
-    // here: the real version is not started in inetd/interactive mode.
-    for fd in 0..3{if libc::fcntl(fd,libc::F_SETFD,0)<0{fail();}} // verified null standard streams survive exec
+    // smbd --foreground establishes its own session; only storage
+    // detaches here so tty Ctrl+C can never directly signal it.
+    if id.is_some()&&libc::setsid()<0{fail();}
+    for fd in 0..3{if libc::dup3(null,fd,0)!=fd{fail();}}
     if !install_limits(id)||!parent_live(parent){fail();} // setres[ug]id clears PDEATHSIG
     libc::umask(0o077);
     for (i,src) in fds.iter().enumerate(){if *src>=0&&libc::dup3(*src,(i+3) as i32,0)<0{fail();}}

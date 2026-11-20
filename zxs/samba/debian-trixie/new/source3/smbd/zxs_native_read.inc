@@ -8,13 +8,13 @@ static bool zxs_read_same(struct smbd_smb2_read_state *s)
     if(f==NULL)return false;
     for(size_t i=0;i<8;i++){dev=(dev<<8)|f->member.pool[i];ext=(ext<<8)|f->member.pool[8+i];}
     return f->fd>=0 && zxs_member_held(f->fd)==0 &&
-        zxs_request_root_current(n) && f->tcon==n->tcon && f->session==n->session &&
+        zxs_request_folder_current(n,&f->folder) && f->tcon==n->tcon && f->session==n->session &&
         f->seq==n->session->global->auth_session_info_seqnum && fsp->conn==n->tcon->compat &&
         fsp->vuid==n->session->global->session_wire_id && fsp->op!=NULL && fsp->op->global!=NULL &&
         fsp->fsp_flags.is_fsa && !fsp->fsp_flags.is_pathref && !fsp->fsp_flags.closing &&
         fsp->fsp_flags.can_read && fsp->fsp_flags.can_lock && (fsp->access_mask&SEC_FILE_READ_DATA)!=0 &&
         fsp->file_id.devid==dev && fsp->file_id.extid==ext && fsp->file_id.inode==f->member.number && memcmp(f->member.pool,n->tcon->zxs_tree_choice->pool,16)==0 &&
-        memcmp(f->member.volume,n->tcon->zxs_tree_choice->volume,16)==0 &&
+        memcmp(f->member.volume,f->folder.volume,16)==0 &&
         change_to_user_and_service(fsp->conn,fsp->vuid);
 }
 static bool zxs_read_brl(struct smbd_smb2_read_state *s)
@@ -53,6 +53,7 @@ static bool zxs_read_begin(struct tevent_req *req,struct tevent_context *ev)
     struct smbd_smb2_read_state *s=tevent_req_data(req,struct smbd_smb2_read_state);
     const struct zxs_read_fsp *f;uint64_t remaining;
     if(!zxs_read_same(s)){tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return false;}
+    if(zxs_find_read(s->fsp)->busy){tevent_req_nterror(req,NT_STATUS_SHARING_VIOLATION);return false;}
     if(!vfs_valid_pread_range((off_t)s->in_offset,(size_t)s->in_length)){
         tevent_req_nterror(req,NT_STATUS_INVALID_PARAMETER);return false;
     }

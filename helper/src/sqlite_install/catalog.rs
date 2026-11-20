@@ -2,12 +2,12 @@
 //! SQL row describes its claim; it never supplies an unexamined storage path.
 use super::{bad,originals::Group,request::{Id,Request,role},stage::SCHEMA};
 use rusqlite::{Connection,params,types::ValueRef};
-use std::{io,os::unix::ffi::OsStrExt};
+use std::{ffi::OsString,io,os::unix::ffi::{OsStrExt,OsStringExt},path::PathBuf};
 
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=7;
+pub(super) const SCHEMA_VERSION:i64=9;
 pub(super) const MAX_OBJECTS:i32=128; // includes SQLite's implicit indexes
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
@@ -67,6 +67,44 @@ pub(super) fn initial_receipt(tx:&rusqlite::Transaction<'_>,template:&Canonical,
     read_rows(tx,template,r,|i,limit|(super::MARKER.len() as i64..=255).contains(&limit)
         &&(i!=0||i64::from(system.byte_limit())==limit))
 }
+/// Canonical committed INIT metadata. Its selected raw R/F path bytes
+/// are data, never authorizations to open them. Rebuild the original request
+/// from the immutable recorded choices and audit against its request SHA.
+/// A changed path alongside a still-valid VolumeId/marker is not adopted.
+pub(super) struct Initial { pub(super) path:PathBuf, pub(super) marker:[u8;101] }
+pub(super) fn initial_metadata(tx:&rusqlite::Transaction<'_>,template:&Canonical,system:super::originals::HeldRoot<'_>,
+    pool:&Id,init:&Id)->io::Result<Vec<Initial>>{
+    template.require(tx)?;
+    let (r,recorded)={
+        let mut s=tx.prepare(include_str!("initial-catalog.sql")).map_err(sql)?;
+        let mut rows=s.query([&pool[..]]).map_err(sql)?;
+        let first=rows.next().map_err(sql)?.ok_or_else(||bad("no original pool claims"))?;
+        let n=|i|first.get::<_,i64>(i).map_err(sql);
+        let b=|i|first.get_ref(i).map_err(sql)?.as_blob().map_err(|_|bad("invalid INIT receipt field"));
+        let count=n(7)?;
+        if !(3..=64).contains(&count)||n(4)?!=1||b(0)?!=pool||b(1)?!=init||
+            n(6)?!=i64::from(system.uid())||b(11)?!=system.path().as_os_str().as_bytes(){
+            return Err(bad("not the selected original committed INIT"));
+        }
+        let actor:Id=b(2)?.try_into().map_err(|_|bad("invalid original installer identity"))?;
+        let approval:Id=b(5)?.try_into().map_err(|_|bad("invalid original installer approval"))?;
+        let sha:[u8;32]=b(3)?.try_into().map_err(|_|bad("invalid original INIT request digest"))?;
+        let mut paths=Vec::with_capacity(count as usize);
+        paths.push(system.path().to_path_buf());
+        for _ in 1..count{
+            let row=rows.next().map_err(sql)?.ok_or_else(||bad("incomplete original claim listing"))?;
+            let bytes=row.get_ref(11).map_err(sql)?.as_blob().map_err(|_|bad("invalid original root path bytes"))?;
+            crate::path_rules::Kind::StorageRoot.check_path(bytes).map_err(bad)?;
+            paths.push(PathBuf::from(OsString::from_vec(bytes.to_vec())));
+        }
+        if rows.next().map_err(sql)?.is_some(){return Err(bad("extra original claim rows"));}
+        (Request::new(*init,actor,approval,system.uid(),paths)?,sha)
+    };
+    if r.sha()!=recorded{return Err(bad("claim paths no longer match the original INIT request"));}
+    let c=initial_receipt(tx,template,system,&r)?;
+    if !c.committed||c.pool!=*pool{return Err(bad("not the selected committed original INIT catalogue"));}
+    Ok(r.paths().iter().cloned().zip(c.markers).map(|(path,marker)|Initial{path,marker}).collect())
+}
 fn read_rows(tx:&rusqlite::Transaction<'_>,template:&Canonical,r:&Request,limit_ok:impl Fn(usize,i64)->bool)->io::Result<Catalog>{
     template.require(tx)?;
     let (pool,state)=tx.query_row(include_str!("original-init.sql"),params![&r.op()[..],&r.actor()[..],&r.sha()[..]],|row|
@@ -92,4 +130,21 @@ fn read_rows(tx:&rusqlite::Transaction<'_>,template:&Canonical,r:&Request,limit_
     }
     if rows.next().map_err(sql)?.is_some(){return Err(bad("extra original claim rows"));}
     Ok(Catalog{pool,committed:state==1,markers})
+}
+
+#[cfg(test)]
+mod v9_tests {
+    use super::*;
+    #[test]
+    fn old_version_and_different_v9_structure_are_not_the_fresh_family() {
+        let approved=Canonical::new().unwrap();
+        let mut db=Connection::open_in_memory().unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        let tx=db.transaction().unwrap();
+        assert!(approved.require(&tx).is_ok());
+        tx.execute_batch("PRAGMA main.user_version = 7;").unwrap();
+        assert!(approved.require(&tx).is_err());
+        tx.execute_batch("PRAGMA main.user_version = 9; CREATE TABLE unknown_release_origin(unused INTEGER);").unwrap();
+        assert!(approved.require(&tx).is_err());
+    }
 }

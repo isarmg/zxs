@@ -34,9 +34,17 @@ fn logged(app:&mut App<'_>)->String{
 }
 #[test]
 #[ignore="source-only private SQLite/Argon2 and real loopback HTTP fixture; not deployment, TLS or browser qualification"]
-fn login_publish_mode_and_cold_management_page_use_one_real_database_without_opening_offline_file_roots(){
+fn login_change_installed_folder_and_cold_overview_do_not_open_offline_file_roots(){
     let t=PrivateTemp::under(&std::env::temp_dir());let (p,id)=web_pool(&t);
-    let source=InitialReader::open(&p,id).unwrap();let mut app=App::new(&source);
+    let source=InitialReader::open(&p,id).unwrap();
+    // Seed the actual immutable kind3/4 rows in the first Web epoch, as
+    // the separately reviewed native installer does in its first txn.
+    let setup=source.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let v=crate::VolumeId([0x13;16]);let installed=setup.publish_root(OperationId([0xa4;16]),v,"R&D").unwrap();
+    setup.set_share_mode(OperationId([0xa5;16]),installed.share,installed.op,
+        crate::system::reader::account::share_mode::Mode::ReadOnly).unwrap();
+    let outside=setup.publish_root(OperationId([0xa6;16]),v,"not selected").unwrap();
+    drop(setup);let mut app=App::new(&source);
     let anon=hit(&mut app,"GET","/","","","");assert!(anon.contains("Location: /login")&&!anon.contains("first.admin"));
     let form=hit(&mut app,"GET","/login","","","");
     assert!(form.contains("Referrer-Policy: same-origin\r\n"));
@@ -51,26 +59,27 @@ fn login_publish_mode_and_cold_management_page_use_one_real_database_without_ope
     let cookie=logged(&mut app);let page=hit(&mut app,"GET","/",&cookie,"","");
     assert!(page.contains("Referrer-Policy: same-origin\r\n"));
     assert!(page.contains("first.admin")&&page.contains("files.smb")&&page.contains("仅有登记")&&!page.contains("unmounted-"));
-    let op=hidden(&page,"/shares/publish","op");let csrf=hidden(&page,"/shares/publish","csrf");
-    let publish=format!("csrf={csrf}&op={op}&volume={}&label=R%26D",crate::VolumeId([0x13;16]));
-    assert!(hit(&mut app,"POST","/shares/publish",&cookie,"",&publish).starts_with("HTTP/1.1 403"));
-    assert!(hit(&mut app,"POST","/shares/publish",&cookie,SITE,&publish.replace(csrf,&"0".repeat(64))).starts_with("HTTP/1.1 403"));
-    for _ in 0..2{assert!(hit(&mut app,"POST","/shares/publish",&cookie,SITE,&publish).starts_with("HTTP/1.1 303"));}
-    let page=hit(&mut app,"GET","/",&cookie,"","");
-    assert_eq!(page.matches("<bdi>R&amp;D</bdi>").count(),1);assert!(page.contains("<td>停用</td>"));
-    let service=format!("zxs-{}",hidden(&page,"/shares/mode","share"));
-    assert!(page.contains(format!("<code>{service}</code>").as_str()));assert!(!page.contains("smb://"));
-    assert!(!hit(&mut app,"GET","/login","","","").contains(service.as_str()));
+    assert_eq!(page.matches("<bdi>R&amp;D</bdi>").count(),1);assert!(page.contains("<td>只读</td>"));
+    assert!(page.contains(r"<code>\\服务器\ZXS</code>")&&!page.contains("not selected"));
+    assert!(!page.contains("smb://")&&!page.contains("action=\"/shares/publish\""));
+    assert!(hit(&mut app,"POST","/shares/publish",&cookie,SITE,"").starts_with("HTTP/1.1 404"));
+    assert!(!hit(&mut app,"GET","/login","","","").contains("R&amp;D"));
     let mode=format!("csrf={}&op={}&share={}&previous={}&mode=rw",hidden(&page,"/shares/mode","csrf"),
         hidden(&page,"/shares/mode","op"),hidden(&page,"/shares/mode","share"),hidden(&page,"/shares/mode","previous"));
-    assert!(hit(&mut app,"POST","/shares/mode",&cookie,SITE,&mode).starts_with("HTTP/1.1 303"));
+    let forged=format!("csrf={}&op={}&share={}&previous={}&mode=rw",hidden(&page,"/shares/mode","csrf"),
+        OperationId([0xa9;16]),outside.share,outside.op);
+    assert!(hit(&mut app,"POST","/shares/mode",&cookie,SITE,&forged).starts_with("HTTP/1.1 409"));
+    assert!(hit(&mut app,"POST","/shares/mode",&cookie,"",&mode).starts_with("HTTP/1.1 403"));
+    let csrf=hidden(&page,"/shares/mode","csrf");
+    assert!(hit(&mut app,"POST","/shares/mode",&cookie,SITE,&mode.replace(csrf,&"0".repeat(64))).starts_with("HTTP/1.1 403"));
+    for _ in 0..2{assert!(hit(&mut app,"POST","/shares/mode",&cookie,SITE,&mode).starts_with("HTTP/1.1 303"));}
     assert!(hit(&mut app,"GET","/file/download",&cookie,"","").starts_with("HTTP/1.1 404"));
     let absent=p.parent().unwrap().join("unmounted-r");assert!(!absent.exists());
     drop(app);drop(source);let source=InitialReader::open(&p,id).unwrap();let mut cold=App::new(&source);
     assert!(hit(&mut cold,"GET","/",&cookie,"","").contains("Location: /login"));
     let cookie=logged(&mut cold);let page=hit(&mut cold,"GET","/",&cookie,"","");
     assert!(page.contains("<bdi>R&amp;D</bdi>")&&page.contains("<td>读写</td>"));
-    assert!(page.contains(format!("<code>{service}</code>").as_str()));
+    assert!(page.contains(r"<code>\\服务器\ZXS</code>"));
     let exit=format!("csrf={}",hidden(&page,"/logout","csrf"));
     assert!(hit(&mut cold,"POST","/logout",&cookie,"https://other.example",&exit).starts_with("HTTP/1.1 403"));
     assert!(hit(&mut cold,"POST","/logout",&cookie,SITE,&exit).contains("Max-Age=0"));
@@ -125,4 +134,55 @@ fn partial_first_request_does_not_hold_the_application_or_another_browser(){
         });
         transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
     });
+}
+
+#[test]
+#[ignore="isolated real HTTP, SQLite and file OFDs, not deployment; source only"]
+fn only_the_displayed_manual_form_can_publish_one_formal_version(){
+    use crate::system::reader::{ordinary_pool,stage_managed_file};
+    use std::fs::{File,OpenOptions};
+    use std::os::unix::fs::OpenOptionsExt;
+    let temp=PrivateTemp::under(&std::env::temp_dir());
+    let(path,id,_,rw,ro)=ordinary_pool(&temp);
+    let source=InitialReader::open(&path,id).unwrap();
+    let mut data:File=OpenOptions::new().write(true).read(true).create_new(true).mode(0o600)
+        .open(temp.0.join("packed")).unwrap();
+    data.write_all(b"work").unwrap();data.sync_all().unwrap();
+    let file=stage_managed_file(&source,rw,ro,"Web').xlsx",&data).unwrap();
+    use std::sync::atomic::{AtomicBool,Ordering};
+    let ls=TcpListener::bind(("127.0.0.1",0)).unwrap();let addr=ls.local_addr().unwrap();
+    let stop=AtomicBool::new(false);
+    struct Stop<'a>(&'a AtomicBool);impl Drop for Stop<'_>{fn drop(&mut self){self.0.store(true,Ordering::Release);}}
+    std::thread::scope(|scope|{
+        scope.spawn(||{
+            let _end=Stop(&stop);
+            let host=addr.to_string();let origin=format!("http://{host}");
+            let req=|method:&str,target:&str,c:&str,o:&str,body:&str|->String{
+                let mut io=TcpStream::connect(addr).unwrap();
+                io.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+                io.write_all(wire(method,target,&host,c,o,body,"").as_bytes()).unwrap();
+                io.shutdown(Shutdown::Write).unwrap();let mut result=String::new();io.read_to_string(&mut result).unwrap();result
+            };
+            let login=req("POST","/login","",&origin,"login=first.admin&password=correct+horse+battery+staple");
+            let c=login.lines().find_map(|v|v.strip_prefix("Set-Cookie: ")).unwrap().split(';').next().unwrap();
+            let view=format!("/versions?file={file}");
+            assert!(req("GET","/versions","","","").starts_with("HTTP/1.1 303"));
+            let entries=req("GET","/versions",c,"","");
+            assert!(entries.contains(format!("href=\"{view}\"").as_str())&&entries.contains("Web&#39;).xlsx"));
+            let page=req("GET",&view,c,"","");
+            assert!(page.contains("Web&#39;).xlsx")&&page.contains("数据卷"));
+            let good=format!("csrf={}&op={}",hidden(&page,"/versions/commit","csrf"),hidden(&page,"/versions/commit","op"));
+            assert!(req("POST","/versions/commit",c,"http://other.example",&good).starts_with("HTTP/1.1 403"));
+            let bad=format!("csrf={}&op={}", "b".repeat(64),hidden(&page,"/versions/commit","op"));
+            assert!(req("POST","/versions/commit",c,&origin,&bad).starts_with("HTTP/1.1 403"));
+            assert!(req("GET","/versions/commit",c,"","").starts_with("HTTP/1.1 404"));
+            let result=req("POST","/versions/commit",c,&origin,&good);
+            assert!(result.starts_with("HTTP/1.1 200")&&result.contains("正式版本已提交"));
+            assert_eq!(req("POST","/versions/commit",c,&origin,&good),result);
+            assert!(req("GET",&view,c,"","").starts_with("HTTP/1.1 409"));
+        });
+        transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
+    });
+    let admin=source.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    assert!(admin.manual_target(file).is_err());
 }

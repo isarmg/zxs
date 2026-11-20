@@ -16,39 +16,12 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Samba share names are case-insensitive. Use only ASCII for the network
- * component: do not fold a human display label, interpolate a path, or
- * permit special native services. No output is written on mismatch. */
-static int service_hex(uint8_t c)
+/* SMB share names are case-insensitive. Folder spelling remains byte-exact. */
+int zxs_smb_namespace_name(const char *name)
 {
-    if (c>='0' && c<='9') return c-'0';
-    if (c>='A' && c<='F') c=(uint8_t)(c+('a'-'A'));
-    if (c>='a' && c<='f') return c-'a'+10;
-    return -1;
-}
-int zxs_smb_service_id(const uint8_t *s,size_t n,uint8_t id[16])
-{
-    uint8_t out[16];unsigned nonzero=0;
-    if (s==NULL || n!=36 ||
-        !(s[0]=='z' || s[0]=='Z') || !(s[1]=='x' || s[1]=='X') ||
-        !(s[2]=='s' || s[2]=='S') || s[3]!='-') return 0;
-    for (size_t i=0;i<16;i++) {
-        int a=service_hex(s[4+2*i]), b=service_hex(s[5+2*i]);
-        if (a<0 || b<0) return 0;
-        out[i]=(uint8_t)((a<<4)|b);nonzero|=out[i];
-    }
-    if (nonzero==0) return 0;
-    if (id!=NULL) memcpy(id,out,sizeof(out));
-    return 1;
-}
-/* Already loaded, BOUND-checked config uses exactly the emitted lower-case name;
- * no unfiltered export in Samba's config-based browse list. */
-int zxs_smb_direct_service(const char *name,int browseable,int native_pipes, int host_dfs)
-{
-    size_t i;
-    if (browseable || native_pipes || host_dfs || name==NULL || strnlen(name,37)!=36) return 0;
-    for (i=0;i<36;i++) if (name[i]>='A' && name[i]<='Z') return 0;
-    return zxs_smb_service_id((const uint8_t *)name,36,NULL);
+    return name!=NULL && strnlen(name,4)==3 &&
+        (name[0]=='Z'||name[0]=='z') && (name[1]=='X'||name[1]=='x') &&
+        (name[2]=='S'||name[2]=='s');
 }
 
 /* Exact UAPI of our pinned Debian amd64 / Linux 6.12. */
@@ -105,7 +78,7 @@ enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD, ZXS_DATA_FD, ZXS_READ_STREAM
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES && len!=18+ZXS_DIR_NAME && len!=ZXS_DIR_PACKET && len!=16+ZXS_MEMBER_BYTES)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=ZXS_PLAN_OFFER && len!=ZXS_PLAN_ACK && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES && len!=18+ZXS_DIR_NAME && len!=ZXS_DIR_PACKET && len!=16+ZXS_MEMBER_BYTES)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {
@@ -356,7 +329,7 @@ int zxs_smb_active_take(int fd,const uint8_t ch[8])
 int zxs_smb_tree_ask(int session,const uint8_t share[16])
 {
     uint8_t b[32];int p[2],rc,e;
-    if(!cut_id(share))return bad();
+    if(share==NULL)return bad();
     if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)<0)return -1;
     memcpy(b,tree_tag,16);memcpy(b+16,share,16);
     rc=transfer(session,b,NULL,sizeof(b),p[1],NULL,ZXS_NO_FD,true);e=errno;close(p[1]);
@@ -366,7 +339,7 @@ int zxs_smb_tree_take(int session,int worker,uint8_t share[16])
 {
     uint8_t b[32];int reply=-1;
     if(transfer(session,NULL,b,sizeof(b),-1,&reply,ZXS_TREE_FD,true)!=0)return -1;
-    if(memcmp(b,tree_tag,16)||!cut_id(b+16)||zxs_smb_attempt_peer(reply,worker)!=0){
+    if(memcmp(b,tree_tag,16)||zxs_smb_attempt_peer(reply,worker)!=0){
         close(reply);return bad();
     }
     memcpy(share,b+16,16);return reply;
@@ -376,18 +349,35 @@ int zxs_smb_tree_reply(int fd,const uint8_t decision[ZXS_SMB_TREE_CUT_BYTES])
     uint8_t b[16+ZXS_SMB_TREE_CUT_BYTES];memcpy(b,tree_ok,16);memcpy(b+16,decision,ZXS_SMB_TREE_CUT_BYTES);
     return transfer(fd,b,NULL,sizeof(b),-1,NULL,ZXS_NO_FD,true);
 }
-int zxs_smb_tree_read(int fd,const uint8_t share[16],struct zxs_smb_tree_cut *out)
+static int zxs_tree_cut_read(int fd,const uint8_t *share,const uint8_t *pool,struct zxs_smb_tree_cut *out)
 {
     uint8_t b[16+ZXS_SMB_TREE_CUT_BYTES];struct zxs_smb_tree_cut x={0};
     if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
-    if(memcmp(b,tree_ok,16)||!cut_id(share)||memcmp(b+16,share,16)||
-       !cut_id(b+32)||!cut_id(b+48)||(b[72]!=1&&b[72]!=2)||
-       !cut_id(b+73)||b[89]<2||b[89]>=64)return bad();
+    if(out==NULL || memcmp(b,tree_ok,16)!=0 || !cut_id(b+73) ||
+       (share!=NULL && memcmp(b+16,share,16)!=0) ||
+       (pool!=NULL && memcmp(b+73,pool,16)!=0))return bad();
+    if(share!=NULL && !cut_id(share)){
+        const uint8_t zero[57]={0};
+        if(memcmp(b+16,zero,sizeof(zero))!=0 || b[89]!=0)return bad();
+        memcpy(x.pool,b+73,16);x.root_fd=-1;*out=x;return 0;
+    }
+    if(!cut_id(b+16)||!cut_id(b+32)||!cut_id(b+48)||(b[72]!=1&&b[72]!=2)||
+       b[89]<2||b[89]>=64)return bad();
     for(size_t i=64;i<72;i++)x.revision=(x.revision<<8)|b[i];
     if(x.revision==0 || x.revision>INT64_MAX)return bad();
-    memcpy(x.share,share,16);memcpy(x.volume,b+32,16);memcpy(x.setting,b+48,16);
+    memcpy(x.share,b+16,16);memcpy(x.volume,b+32,16);memcpy(x.setting,b+48,16);
     x.mode=b[72];memcpy(x.pool,b+73,16);x.volume_ordinal=b[89];x.root_fd=-1;
     *out=x;return 0;
+}
+int zxs_smb_tree_read(int fd,const uint8_t share[16],struct zxs_smb_tree_cut *out)
+{
+    if(share==NULL)return bad();
+    return zxs_tree_cut_read(fd,share,NULL,out);
+}
+int zxs_ns_folder_read(int fd,const uint8_t pool[16],struct zxs_smb_tree_cut *out)
+{
+    if(pool==NULL||!cut_id(pool))return bad();
+    return zxs_tree_cut_read(fd,NULL,pool,out);
 }
 /* Storage-side only. Never consume another tree request on the session
  * socket. Its readable data is for the master dispatcher, not a close. */
@@ -411,5 +401,7 @@ int zxs_smb_root_release(struct zxs_smb_tree_cut *owned)
     return 0;
 }
 
+#include "zxs_plan_wire.inc"
 #include "zxs_directory_wire.inc"
 #include "zxs_read_wire.inc"
+#include "zxs_work_wire.inc"

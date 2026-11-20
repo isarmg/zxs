@@ -19,12 +19,12 @@ fn number(s:&str)->io::Result<u32>{
     let v=s.parse::<u32>().map_err(|_|no())?;
     if matches!(v,65534|u32::MAX){return Err(no());}Ok(v)
 }
-fn profile(raw:&[u8])->io::Result<[Pair;3]>{
+fn profile(raw:&[u8])->io::Result<[Pair;2]>{
     if raw.is_empty()||raw.len()>MAX_SITE as usize||!raw.ends_with(b"\n"){return Err(no());}
     let s=std::str::from_utf8(raw).map_err(|_|no())?;let mut lines=s.split_terminator('\n');
-    if lines.next()!=Some("ZXS-SMB-UNIX-1"){return Err(no());}
-    let mut values=[(0,0);3];
-    for ((uid,gid),name) in values.iter_mut().zip(["storage","web-proxy","smb-execution"]){
+    if lines.next()!=Some("ZXS-SMB-UNIX-2"){return Err(no());}
+    let mut values=[(0,0);2];
+    for ((uid,gid),name) in values.iter_mut().zip(["storage","smb-execution"]){
         let mut words=lines.next().ok_or_else(no)?.split(' ');
         if words.next()!=Some(name){return Err(no());}
         *uid=number(words.next().ok_or_else(no)?)?;
@@ -66,12 +66,12 @@ fn exact(root:&File,path:&str)->io::Result<Vec<u8>>{
     if b.len() as u64!=want.0{return Err(no());}
     check(&file)?;check(&original)?;check(&file_at(root,path,pin)?)?;Ok(b)
 }
-pub(super) fn require(daemon:&File,storage:&File,approved:[u8;32],owner:Pair,web:Pair)->io::Result<()>{
+pub(super) fn require(daemon:&File,storage:&File,approved:[u8;32],owner:Pair)->io::Result<()>{
     let etc=parent(daemon)?;let mark=stamp(&etc.metadata()?);
     let bytes=exact(&etc,SITE)?;
     if [0;32]==approved||<[u8;32]>::from(Sha256::digest(&bytes))!=approved{return Err(no());}
-    let [s,w,e]=profile(&bytes)?;
-    if s!=owner||w!=web{return Err(no());}
+    let [s,e]=profile(&bytes)?;
+    if s!=owner{return Err(no());}
     let (passwd,group)=records(e);
     if exact(&etc,"nsswitch.conf")?!=SWITCH||exact(&etc,"passwd")?!=passwd.as_bytes()||
         exact(&etc,"group")?!=group.as_bytes(){return Err(no());}
@@ -85,15 +85,15 @@ pub(super) fn require(daemon:&File,storage:&File,approved:[u8;32],owner:Pair,web
 #[cfg(test)]
 mod tests {
     use super::*;
-    const GOOD:&[u8]=b"ZXS-SMB-UNIX-1\nstorage 2001 2002\nweb-proxy 3001 3002\nsmb-execution 4001 4002\n";
+    const GOOD:&[u8]=b"ZXS-SMB-UNIX-2\nstorage 2001 2002\nsmb-execution 4001 4002\n";
     #[test] fn approved_fixed_fields_do_not_create_account_passwords_or_supplementary_groups(){
-        assert_eq!(profile(GOOD).unwrap(),[(2001,2002),(3001,3002),(4001,4002)]);
+        assert_eq!(profile(GOOD).unwrap(),[(2001,2002),(4001,4002)]);
         let (p,g)=records((4001,4002));
         assert_eq!(p,format!("{PASSWD}zxs-smb-client:!:4001:4002::/nonexistent:/usr/sbin/nologin\n"));
         assert_eq!(g,format!("{GROUP}zxs-smb-client:!:4002:\n"));
         let sample=std::str::from_utf8(GOOD).unwrap();
-        for (before,after) in [("4001","2001"),("4002","3002"),("4002","65534"),("4001","4294967295"),("4001","0"),
-            ("4001","04001"),("4001","4001\r"),(" 4001","  4001"),("web-proxy","storage")]{
+        for (before,after) in [("4001","2001"),("4002","2002"),("4002","65534"),("4001","4294967295"),("4001","0"),
+            ("4001","04001"),("4001","4001\r"),(" 4001","  4001"),("smb-execution","storage")]{
             assert!(profile(sample.replace(before,after).as_bytes()).is_err());
         }
         assert!(profile(&GOOD[..GOOD.len()-1]).is_err());

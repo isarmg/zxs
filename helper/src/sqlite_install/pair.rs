@@ -1,4 +1,4 @@
-//! Fixed, local maintenance for the sole Web and SMB identities in v7;
+//! Fixed, local maintenance for the sole Web and SMB identities in v9;
 //! no retired SQL SMB credential issuer, migration or protocol fallback.
 mod command;
 mod native_epoch;
@@ -8,13 +8,15 @@ mod web_secret;
 mod smb_policy;
 mod terminal;
 mod observed;
+mod online;
+pub(crate) use online::{StartSmb,Online};
 mod domain;
 
 pub(crate) use command::Setup;
 pub(crate) use domain::exec_child;
-pub(crate) use native_run::exec_sql_child;
+pub(crate) use native_run::{exec_sql_child,exec_layout_sql_child};
 pub(super) use native_sql::WriteGate as NativeWriteGate;
-pub(super) use domain::require_lent_ex;
+pub(super) use domain::{require_lent_ex,require_lent_sh};
 use super::{bad,request::Id};
 
 fn login(s: &[u8]) -> bool {

@@ -4,10 +4,22 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#include <sys/vfs.h>
+#include <linux/magic.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
 static int proc_fd_directory(void);
+
+/* Storage's new executable has not opened the pool or started workers. */
+int zxs_smb_storage_privacy(void) {
+    const struct rlimit limit={0,0};
+    return setrlimit(RLIMIT_CORE,&limit)==0 && prctl(PR_SET_DUMPABLE,0L,0L,0L,0L)==0 &&
+        prctl(PR_GET_DUMPABLE,0L,0L,0L,0L)==0 ? 0 : -1;
+}
 
 /* Input is one component relative to a live descriptor. No symlink lookup. */
 int zxs_open_directory(int parent, const char *name) {
@@ -81,6 +93,22 @@ int zxs_create_new_regular(int parent, const char *name) {
 int zxs_anonymous_file(int fd) {
     return openat(fd, ".", O_TMPFILE | O_RDWR | O_CLOEXEC, 0600);
 }
+/* NB: Rust positively caps this memory fallback; never turn permission or
+ * ordinary disk-full into an unbounded alternate destination. */
+int zxs_smb_scratch_fd(int parent, unsigned char *kind) {
+    struct statfs fs;
+    *kind=0;
+    int fd=zxs_anonymous_file(parent);
+    if (fd < 0) {
+        if (errno != EOPNOTSUPP && errno != ENOSYS && errno != EISDIR && errno != EINVAL) return -1;
+        fd=memfd_create("zxs-smb-stage", MFD_CLOEXEC);
+        if (fd < 0) return -1;
+        *kind=2; /* only the fallback is independent of the chosen F mount */
+    }
+    if (fstatfs(fd,&fs) != 0) { int saved=errno; close(fd); errno=saved; return -1; }
+    if ((unsigned long)fs.f_type==TMPFS_MAGIC || (unsigned long)fs.f_type==RAMFS_MAGIC || *kind==2) *kind|=1;
+    return fd;
+}
 /* linkat is inherently no-clobber. The proc descriptor refers only to the
  * still-owned anonymous inode, not to the registration pathname. */
 int zxs_link_anonymous(int file, int dir, const char *name) {
@@ -105,9 +133,7 @@ int zxs_claim(int fd, const unsigned char *buf, size_t n) {
 }
 
 #include <stdint.h>
-#include <linux/magic.h>
 #include <sys/stat.h>
-#include <sys/vfs.h>
 
 int zxs_mount_id(int fd, uint64_t *out) {
     struct statx observed;

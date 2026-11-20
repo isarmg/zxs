@@ -53,7 +53,7 @@ static bool separate_tree_replies(void)
 static bool directory_pairs(void)
 {
 	int p[2],proc=-1,a=-1,b=-1,reply=-1;
-	uint8_t after[223]={0},limit=42,rows[ZXS_DIR_PACKET-16]={0},got[ZXS_DIR_PACKET-16]={0};
+	uint8_t after[ZXS_DIR_NAME+1]={0},limit=42,rows[ZXS_DIR_PACKET-16]={0},got[ZXS_DIR_PACKET-16]={0};
 	bool ok=false;
 	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)!=0)return false;
 	proc=(int)syscall(SYS_pidfd_open,getpid(),0);if(proc<0)goto done;
@@ -77,7 +77,7 @@ done:
 static bool held_member_pair(void)
 {
 	struct zxs_smb_tree_cut root={0};struct zxs_member_info out={0};
-	uint8_t raw[ZXS_MEMBER_BYTES]={0},name[223]={0},op=0;int tree[2],proc=-1,fd=-1,peer=-1;bool ok=false;
+	uint8_t raw[ZXS_MEMBER_BYTES]={0},name[ZXS_DIR_NAME+1]={0},op=0;int tree[2],proc=-1,fd=-1,peer=-1;bool ok=false;
 	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,tree)!=0)return false;
 	proc=(int)syscall(SYS_pidfd_open,getpid(),0);if(proc<0)goto end;
 	fd=zxs_member_query(tree[0],(const uint8_t *)"x",1);if(fd<0)goto end;
@@ -87,16 +87,122 @@ static bool held_member_pair(void)
 	raw[79]=1;raw[87]=7;
 	if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)!=0 ||
 	   out.revision!=1 || out.size!=7 || out.number!=(UINT64_C(1)<<63) || out.entry[0]!=5)goto end;
-	raw[16]++;if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)==0)goto end;
+	raw[79]=2;if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)!=0 || out.revision!=2)goto end;
+	raw[72]=0x80;if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)==0)goto end;
+	raw[72]=0;raw[16]++;if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)==0)goto end;
 	raw[16]--;raw[79]=0;if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)==0)goto end;
 	if(zxs_smb_ctl_live(peer)!=0)goto end;
-	close(fd);fd=-1;ok=zxs_smb_ctl_live(peer)!=0;
+	close(fd);fd=-1;if(zxs_smb_ctl_live(peer)==0)goto end;
+	close(peer);peer=-1;
+	fd=zxs_member_write_query(tree[0],(const uint8_t *)"x",1);if(fd<0)goto end;
+	peer=zxs_dir_take(tree[1],proc,&op,name);
+	ok=peer>=0 && op==ZXS_MEMBER_WRITE_OPEN && name[0]==1 && name[1]=='x';
 end:
 	if(peer>=0)close(peer);if(fd>=0)close(fd);if(proc>=0)close(proc);close(tree[0]);close(tree[1]);return ok;
 }
+/* Exact work request and incoming byte extent on a real private stream.
+ * This is not a network SMB operation or a generated work SAVE. */
+static bool staged_writer_pair(void)
+{
+	int member[2],native=-1,answer=-1,proc=-1;bool ok=false;
+	uint8_t request=0,settled=0,body[4]={0},reply[ZXS_WORK_REPLY],status;
+	uint32_t count=0;uint64_t off=0,eof=0;
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,member)!=0)return false;
+	proc=(int)syscall(SYS_pidfd_open,getpid(),0);if(proc<0)goto done;
+	if(zxs_work_query(member[0],ZXS_WORK_FLUSH,0,1,0)>=0 ||
+	   zxs_work_query(member[0],ZXS_WORK_EOF,UINT64_MAX,0,0)>=0 ||
+	   zxs_work_query(member[0],ZXS_WORK_WRITE,INT64_MAX,1,0)>=0)goto done;
+	native=zxs_work_query(member[0],ZXS_WORK_WRITE,4096,4,1);if(native<0)goto done;
+	answer=zxs_work_take(member[1],proc,&request,&off,&count,&settled);
+	if(answer<0||request!=ZXS_WORK_WRITE||off!=4096||count!=4||settled!=1)goto done;
+	if(send(native,"test",4,MSG_NOSIGNAL)!=4 || shutdown(native,SHUT_WR)!=0)goto done;
+	if(zxs_work_input(answer,body,4)!=0 || memcmp(body,"test",4)!=0)goto done;
+	if(zxs_work_answer_live(answer)!=0 || zxs_work_reply(answer,0,4100)!=0)goto done;
+	if(recv(native,reply,sizeof(reply),MSG_WAITALL)!=(ssize_t)sizeof(reply)||
+	   zxs_work_result(reply,&status,&eof)!=0||status!=0||eof!=4100)goto done;
+	reply[31]=1;if(zxs_work_result(reply,&status,&eof)==0)goto done;
+	close(native);native=-1;close(answer);answer=-1;
+
+	native=zxs_work_query(member[0],ZXS_WORK_FLUSH,0,0,0);if(native<0)goto done;
+	answer=zxs_work_take(member[1],proc,&request,&off,&count,&settled);
+	if(answer<0||request!=ZXS_WORK_FLUSH||off!=0||count!=0||settled!=0)goto done;
+	if(send(native,"!",1,MSG_NOSIGNAL)!=1 || shutdown(native,SHUT_WR)!=0 || zxs_work_input(answer,NULL,0)==0)goto done;
+	close(native);native=-1;
+	if(zxs_work_answer_live(answer)==0||zxs_work_reply(answer,0,0)==0)goto done;
+	ok=true;
+done:
+	if(native>=0)close(native);
+	if(answer>=0)close(answer);
+	if(proc>=0)close(proc);
+	close(member[0]);close(member[1]);return ok;
+}
+
+static bool one_namespace_root_packet(void)
+{
+	uint8_t panel[74]={0},zero[16]={0},pool[16]={8},name[ZXS_DIR_NAME+1]={0},role=0;
+	struct zxs_smb_tree_cut slot={0};int pair[2],pid=-1,client=-1,storage=-1;
+	bool ok=false;
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,pair)!=0)return false;
+	pid=(int)syscall(SYS_pidfd_open,getpid(),0);if(pid<0)goto done;
+	client=zxs_smb_tree_ask(pair[0],zero);if(client<0)goto done;
+	storage=zxs_smb_tree_take(pair[1],pid,name);
+	if(storage<0 || memcmp(name,zero,16)!=0)goto done;
+	memcpy(panel+57,pool,16);
+	if(zxs_smb_tree_reply(storage,panel)!=0 || zxs_smb_tree_read(client,zero,&slot)!=0 ||
+	   slot.mode!=0 || memcmp(slot.pool,pool,16)!=0)goto done;
+	if(zxs_smb_tree_reply(storage,panel)!=0 || zxs_ns_folder_read(client,pool,&slot)==0)goto done;
+	close(storage);storage=-1;close(client);client=-1;
+	client=zxs_ns_folder_query(pair[0],(const uint8_t *)"Docs",4,1);if(client<0)goto done;
+	storage=zxs_dir_take(pair[1],pid,&role,name);
+	ok=storage>=0 && role==ZXS_NS_WRITE && name[0]==4 && memcmp(name+1,"Docs",4)==0;
+done:
+	if(storage>=0)close(storage);
+	if(client>=0)close(client);
+	if(pid>=0)close(pid);
+	close(pair[0]);close(pair[1]);return ok;
+}
+
+static bool exact_birth_packet(void)
+{
+	uint8_t cursor[ZXS_DIR_NAME+1]={0},raw[ZXS_MEMBER_BYTES]={0},other[16]={99},role=0;
+	int c[2],pid=-1,native=-1,store=-1;bool ok=false;
+	struct zxs_smb_tree_cut f={0};struct zxs_member_info m={0};
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,c)!=0)return false;
+	pid=(int)syscall(SYS_pidfd_open,getpid(),0);if(pid<0)goto out;
+	native=zxs_birth_query(c[0],(const uint8_t *)"file",4,3);if(native<0)goto out;
+	store=zxs_dir_take(c[1],pid,&role,cursor);
+	if(store<0 || role!=ZXS_FILE_BIRTH+3 || cursor[0]!=4 || memcmp(cursor+1,"file",4)!=0)goto out;
+	raw[0]=f.pool[0]=5;raw[16]=f.volume[0]=6;raw[32]=7;raw[48]=raw[64]=0x32;
+	if(zxs_birth_reply(store,raw,ZXS_BIRTH_ACCEPT)!=0 || zxs_birth_result(native,&f,&m)!=ZXS_BIRTH_ACCEPT ||
+	   m.file[0]!=0x32 || m.size!=0 ||
+	   zxs_birth_ack(native,other)!=0 || zxs_birth_take_ack(store,m.file)==0 ||
+	   zxs_birth_ack(native,m.file)!=0 || zxs_birth_take_ack(store,m.file)!=0 ||
+	   zxs_birth_done(store,other)!=0 || zxs_birth_read_done(native,m.file)==0 ||
+	   zxs_birth_done(store,m.file)!=0 || zxs_birth_read_done(native,m.file)!=0)goto out;
+	ok=zxs_birth_reply(store,NULL,ZXS_BIRTH_OCCUPIED)==0 &&
+		zxs_birth_result(native,&f,&m)==ZXS_BIRTH_OCCUPIED;
+out:
+	if(store>=0)close(store);
+	if(native>=0)close(native);
+	if(pid>=0)close(pid);
+	close(c[0]);close(c[1]);return ok;
+}
+
+static bool boot_plan_packets(void)
+{
+	int f[2];uint8_t plan[ZXS_PLAN_SLOT]={0};
+	const uint8_t test[]={42,17,81};uint8_t digest[32]={10},other[32]={11};
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,f)!=0)return false;
+	bool ok=zxs_smb_plan_send(f[0],test,sizeof(test))==0 &&
+		zxs_smb_plan_take(f[1],plan)==sizeof(test) && memcmp(plan,test,sizeof(test))==0 &&
+		zxs_smb_plan_reply(f[1],digest)==0 && zxs_smb_plan_ack(f[0],other)!=0 &&
+		zxs_smb_plan_reply(f[1],digest)==0 && zxs_smb_plan_ack(f[0],digest)==0;
+	close(f[0]);close(f[1]);return ok;
+}
+
 int main(void)
 {
-	if(!directory_pairs() || !held_member_pair())return 1;
+	if(!exact_birth_packet() || !one_namespace_root_packet() || !boot_plan_packets() || !directory_pairs() || !held_member_pair() || !staged_writer_pair())return 1;
 	struct tevent_context *ev=tevent_context_init(NULL);
 	int a[2],b[2];struct timespec now;int64_t start;
 	uint8_t x[8],y[8];

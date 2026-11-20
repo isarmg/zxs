@@ -14,7 +14,7 @@ use std::{fs::File,io,time::{Duration,Instant}};
 const HELPER:&[&str]=&["usr","bin","helper"];
 const MAX_WAIT:Duration=Duration::from_secs(12*60);
 
-fn original_parent(fd:&File,expected:Pid)->io::Result<()>{
+pub(super) fn original_parent(fd:&File,expected:Pid)->io::Result<()>{
     let who=sockopt::socket_peercred(fd)?;
     if who.pid!=expected||!who.uid.is_root()||!who.gid.is_root()||getppid()!=Some(expected)
         ||parent_process_death_signal()?!=Some(Signal::TERM)||sockopt::socket_domain(fd)?!=AddressFamily::UNIX
@@ -70,7 +70,7 @@ pub(crate) fn run()->io::Result<()>{
     let e=verified.entity();
     if [e.dev,e.ino,verified.mount()?.id]!=m.origin{return Err(bad("not the approved live SYSTEM original"));}
     let locked=SelectedSystem::from_origin(verified,host,uid,gid)?.from_lent_ex(leased)?;
-    let session=Session::open(&locked,order)?;
+    let session=Session::open_native(&locked,order,&m.plan,&m.bound)?;
     let original=session.original()?;
     let (tag,row)=match (m.intent,original){
         (_,Original::Committed(r))=>(3,Some(r)),

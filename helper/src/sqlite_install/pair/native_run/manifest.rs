@@ -1,20 +1,20 @@
 //! Exact nonsecret local request. This memfd cannot authorize the worker; its
 //! independent parent challenge must succeed before it looks up SYSTEM.
 use super::{Intent,Id,bad};
-use crate::{path_rules::Kind,sqlite_install::pair::{login,distinct_roles,native_sql::{Binding,Birth,Reset,transaction::Order}}};
+use crate::{path_rules::Kind,smb_profile::{self,first::{MAX_WIRE,Origin,Plan}},sqlite_install::pair::{login,distinct_roles,native_sql::{Binding,Birth,Reset,transaction::Order}}};
 use rustix::fs::{SealFlags,fcntl_get_seals};
 use sha2::{Digest,Sha256};
 use std::{fs::File,io,os::unix::fs::{FileExt,MetadataExt},path::PathBuf};
 
-const PREFIX:&[u8;8]=b"NORDV7\0\0";
-const MAX:usize=PREFIX.len()+3+32+7*16+32+128+24+4*16+8+2+4096+2*65;
+const PREFIX:&[u8;8]=b"NORDV9\0\0";
+const MAX:usize=PREFIX.len()+3+32+7*16+32+128+24+4*16+8+2+4096+2*65+2+MAX_WIRE;
 #[derive(Clone,Debug)]
 pub(in crate::sqlite_install::pair) enum Role{Birth{web:Vec<u8>,smb:Vec<u8>},Reset{setup:Id,account:Id,previous:Id,generation:i64,smb:Vec<u8>}}
 pub(super) struct Manifest{
     pub(super) intent:Intent,pub(super) invocation:[u8;32],
     pub(super) pool:Id,pub(super) init:Id,pub(super) instance:Id,pub(super) provision:Id,
     pub(super) op:Id,pub(super) actor:Id,pub(super) approval:Id,pub(super) live:[u8;32],pub(super) bound:[u8;128],
-    pub(super) system:PathBuf,pub(super) origin:[u64;3],pub(super) role:Role,
+    pub(super) system:PathBuf,pub(super) origin:[u64;3],pub(super) role:Role,pub(super) plan:Plan,
 }
 impl Manifest{
     pub(super) fn encode(&self)->io::Result<Vec<u8>>{
@@ -39,11 +39,13 @@ impl Manifest{
                 v.extend_from_slice(&generation.to_be_bytes());name(&mut v,smb)?;
             }
         }
+        v.extend_from_slice(&(self.plan.wire().len() as u16).to_be_bytes());
+        v.extend_from_slice(self.plan.wire());
         self.validate()?;
         Ok(v)
     }
     pub(super) fn scope(&self)->io::Result<[u8;32]>{
-        let mut h=Sha256::new();h.update(b"helper original offline v7 native scope\0");h.update(self.encode()?);Ok(h.finalize().into())
+        let mut h=Sha256::new();h.update(b"helper original offline v9 native scope\0");h.update(self.encode()?);Ok(h.finalize().into())
     }
     fn parse(bytes:&[u8])->io::Result<Self>{
         if bytes.len()>MAX{return Err(error());}
@@ -72,8 +74,11 @@ impl Manifest{
             2=>Role::Reset{setup:fixed(b)?,account:fixed(b)?,previous:fixed(b)?,generation:i64::from_be_bytes(fixed(b)?),smb:name(b)?},
             _=>return Err(error()),
         };
+        let n=usize::from(u16::from_be_bytes(fixed(b)?));
+        if n>MAX_WIRE{return Err(error());}
+        let plan=Plan::decode(take(b,n)?).map_err(bad)?;
         if !b.is_empty(){return Err(error());}
-        let manifest=Self{intent,invocation,pool,init,instance,provision,op,actor,approval,live,bound,system,origin,role};
+        let manifest=Self{intent,invocation,pool,init,instance,provision,op,actor,approval,live,bound,system,origin,role,plan};
         manifest.validate()?;Ok(manifest)
     }
     fn validate(&self)->io::Result<()>{
@@ -82,6 +87,12 @@ impl Manifest{
         self.order().map(|_|())
     }
     pub(super) fn order(&self)->io::Result<Order>{
+        let setup=match &self.role{Role::Birth{..}=>self.op,Role::Reset{setup,..}=>*setup};
+        let expected=Origin{pool:self.pool,init:self.init,instance:self.instance,domain:self.provision,setup};
+        if self.plan.origin!=expected||
+            <[u8;32]>::from(Sha256::digest(smb_profile::render(&self.plan).map_err(bad)?.as_bytes()))!=self.live{
+            return Err(bad("sealed request does not carry the same exact first live plan"));
+        }
         let b=Binding::expected(&self.bound,&self.pool,&self.instance,&self.provision,&self.live)?;
         match &self.role{
             Role::Birth{web,smb}=>Ok(Order::Setup(Birth::new(self.pool,self.init,self.op,self.actor,self.approval,b,web,smb)?)),
@@ -90,15 +101,17 @@ impl Manifest{
             _=>Err(error()),
         }
     }
-    pub(super) fn read(f:&File)->io::Result<Self>{
+    pub(super) fn read(f:&File)->io::Result<Self>{Self::parse(&read_sealed(f,MAX)?)}
+}
+pub(super) fn read_sealed(f:&File,max:usize)->io::Result<Vec<u8>>{sealed_owner(f,max,(0,0))}
+pub(super) fn sealed_owner(f:&File,max:usize,owner:(u32,u32))->io::Result<Vec<u8>>{
         let m=f.metadata()?;
-        if !m.is_file()||m.uid()!=0||m.gid()!=0||m.nlink()!=0||m.mode()&0o111!=0||m.len()==0||m.len()>MAX as u64
+        if !m.is_file()||(m.uid(),m.gid())!=owner||m.nlink()!=0||m.mode()&0o111!=0||m.len()==0||m.len()>max as u64
             ||!fcntl_get_seals(f)?.contains(SealFlags::SEAL|SealFlags::SHRINK|SealFlags::GROW|SealFlags::WRITE|SealFlags::EXEC){return Err(error());}
         let mut v=vec![0;m.len()as usize];f.read_exact_at(&mut v,0)?;
         loop{match f.read_at(&mut [0],m.len()){
             Ok(0)=>break,Err(e)if e.kind()==io::ErrorKind::Interrupted=>continue,_=>return Err(error()),
         }}
-        Self::parse(&v)
-    }
+        Ok(v)
 }
 fn error()->io::Error{bad("not the exact sealed nonsecret offline operation")}
