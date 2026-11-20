@@ -116,7 +116,7 @@ class LiveCheckout:
             self.check_catalog(temp)
         finally: os.close(fd)
 
-    def check_instance(self, row, original):
+    def check_instance(self, row, original, *, check_name=True):
         expected = tuple(map(str, native_identity(os.fstat(self.work_fd), stat.S_IFDIR)))
         if ((row["worktree"], row["repo"], row["location"], row["store"]) !=
                 (self.instance, self.repo, str(self.work), str(self.store)) or
@@ -125,8 +125,9 @@ class LiveCheckout:
         phase = original["phase"]
         if phase in ("visible", "hidden"):
             if original["active"] is not None: raise Rejected("原工作树状态与待决可见操作冲突")
-            visible, hidden = locations(row)
-            _named_mount(visible if phase == "visible" else hidden, self.work_fd)
+            if check_name:
+                visible, hidden = locations(row)
+                _named_mount(visible if phase == "visible" else hidden, self.work_fd)
         elif phase in ("hide-pending", "restore-pending"):
             check_id(original["active"])
         else: raise Rejected("原工作树可见状态无法核证")

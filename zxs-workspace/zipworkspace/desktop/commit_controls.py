@@ -14,7 +14,7 @@ class CommitControls(QWidget):
         super().__init__()
         self.owner, self.refresh_status = owner, refresh
         self.session = self.last = self.running = None
-        self.blocked = False
+        self.blocked = self.visible = False
         box = QVBoxLayout(self); row = QHBoxLayout()
         self.save = button("提交本次工作目录…", self.begin)
         self.new_branch = button("从签出时的原节点创建新分支…", self.branch)
@@ -27,13 +27,17 @@ class CommitControls(QWidget):
         self.set_session(None)
 
     def buttons(self):
-        idle = self.session is not None and self.running is None and not self.blocked
+        idle = self.session is not None and self.running is None and not self.blocked and self.visible
         self.save.setEnabled(idle)
         self.new_branch.setEnabled(idle and self.session.branch_source_available)
         free = self.session is not None and self.running is None and self.last is not None
         self.query.setEnabled(free)
-        self.retry.setEnabled(free and self.last.pending_seen and not self.last.conflict)
-        self.conflict_fork.setEnabled(free and self.last.conflict_pending_seen)
+        self.retry.setEnabled(free and self.visible and self.last.pending_seen and not self.last.conflict)
+        self.conflict_fork.setEnabled(free and self.visible and self.last.conflict_pending_seen)
+
+    def allow_visible(self, visible):
+        self.visible = visible
+        self.buttons()
 
     @staticmethod
     def operation_numbers(job):
@@ -44,6 +48,7 @@ class CommitControls(QWidget):
     def set_session(self, live):
         if self.last is not None and self.last is not self.running: self.last.release()
         self.session, self.last, self.blocked = live, None, False
+        self.visible = live is not None
         self.output.setText("只操作本窗口刚创建的原工作树，不从 STATE 路径补领。")
         self.buttons()
 
@@ -71,7 +76,8 @@ class CommitControls(QWidget):
 
     def _begin(self, *, branch):
         original = self.session
-        if original is None or self.running is not None or self.blocked or self.owner.pending is not None: return
+        if (original is None or self.running is not None or self.blocked or not self.visible
+                or self.owner.pending is not None): return
         def same_decision():
             return self.session is original and (not branch or original.branch_source_available)
         if not same_decision(): return
@@ -145,7 +151,7 @@ class CommitControls(QWidget):
     def resume(self):
         original, live = self.last, self.session
         if (not original or live is None or self.running is not None or self.owner.pending is not None
-                or not original.pending_seen or original.conflict): return
+                or not self.visible or not original.pending_seen or original.conflict): return
         try: attempt = PendingRetry(original)
         except Exception as err:
             self.output.setText(describe(err)); self.buttons(); return
@@ -184,7 +190,7 @@ class CommitControls(QWidget):
     def fork_conflict(self):
         original, live = self.last, self.session
         if (original is None or live is None or self.running is not None or self.owner.pending is not None
-                or not original.conflict_pending_seen): return
+                or not self.visible or not original.conflict_pending_seen): return
         try: attempt = PendingFork(original)
         except Exception as err:
             self.output.setText(describe(err)); self.buttons(); return

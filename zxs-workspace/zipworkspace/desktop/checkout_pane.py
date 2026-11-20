@@ -2,7 +2,8 @@
 from contextlib import closing
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QVBoxLayout, QWidget
 
-from ..lifecycle import observe_live_changes
+from ..capacity import describe
+from ..lifecycle import LiveVisibility, observe_live_changes
 from ..model import Rejected
 
 from .checkout_action import CheckoutChoice, available
@@ -16,7 +17,8 @@ class CheckoutPane(QWidget):
         super().__init__()
         self.owner, self.current_store = owner, current_store
         self.snapshot, self.active, self.unresolved = None, False, False
-        self.live = self.changes_dialog = None
+        self.live = self.changes_dialog = self.live_record = self.visibility_last = None
+        self.visibility_blocked = False
         layout = QVBoxLayout(self)
         self.selected = label()
         layout.addWidget(self.selected)
@@ -36,6 +38,13 @@ class CheckoutPane(QWidget):
         layout.addWidget(self.refresh)
         self.changes = button("查看工作目录相对基线的改动…", self.compare_live)
         layout.addWidget(self.changes)
+        move_line = QHBoxLayout()
+        self.move = button("临时收起工作目录…", self.move_live)
+        self.move_query = button("只读查本次收起／恢复回执", self.query_visibility)
+        move_line.addWidget(self.move); move_line.addWidget(self.move_query)
+        layout.addLayout(move_line)
+        self.move_result = label()
+        layout.addWidget(self.move_result)
         self.details = label()
         layout.addWidget(self.details)
         self.commits = CommitControls(owner, self.refresh_live)
@@ -68,7 +77,7 @@ class CheckoutPane(QWidget):
             elif not live.branch_source_available:
                 caption += "\n已离开签出时的原快照；此会话不能再从它新建分支。"
         self.session_label.setText(caption)
-        self.commits.buttons()
+        self._worktree_actions()
 
     def _release(self):
         self.active = False
@@ -211,9 +220,9 @@ class CheckoutPane(QWidget):
     def _attach(self, original):
         self.end.setEnabled(original is not None)
         self.refresh.setEnabled(original is not None)
-        self.changes.setEnabled(original is not None and original.initial_base is None)
         self.commits.set_session(original)
-        self.live = original
+        self.live, self.live_record = original, None
+        self._worktree_actions()
 
     def _complete(self, plan, result):
         # The checkout is already durable. A late or failed view may display the receipt,
@@ -238,7 +247,7 @@ class CheckoutPane(QWidget):
         if self.live is not None: self.refresh_live()
 
     def end_session(self):
-        live, last = self.live, self.commits.last
+        live, last, move = self.live, self.commits.last, self.visibility_last
         def idle():
             return (self.owner.pending is None and not self.active and self.commits.running is None
                     and self.changes_dialog is None)
@@ -247,7 +256,9 @@ class CheckoutPane(QWidget):
                   f"原登记实例：{live.instance}")
         details = f"原工作目录：{live.work}\n原 STATE：{live.state}\n原 STORE：{live.store}\n{origin}\n"
         if last is not None:
-            details += f"本窗口最近的操作（不代表已受理或已完成）：\n{self.commits.operation_numbers(last)}\n"
+            details += f"本窗口最近的提交或分支操作（不代表已受理或已完成）：\n{self.commits.operation_numbers(last)}\n"
+        if move is not None:
+            details += f"本窗口最近的收起／恢复操作（不代表完成）：{move.operation}\n"
         query = "status 或 checkout-status" if live.checkout_operation is not None else "status"
         details += ("\n只关闭本窗口的会话，不删除、隐藏、提交或恢复任何内容，也不取消已有待决。"
                     f"需要继续时，请先用命令行 {query} 核对原 STATE；窗口不会重新接管。")
@@ -255,7 +266,7 @@ class CheckoutPane(QWidget):
                        attestation="我已记录需要保留的原 STATE 和操作号。",
                        action_text="仅关闭窗口会话"):
             return
-        if self.live is not live or self.commits.last is not last or not idle():
+        if self.live is not live or self.commits.last is not last or self.visibility_last is not move or not idle():
             self.owner.inform("会话或操作已改变；没有关闭工作树会话。")
             return
         self.close_session()
@@ -264,16 +275,135 @@ class CheckoutPane(QWidget):
     def close_session(self):
         if self.changes_dialog is not None: self.changes_dialog.reject()
         live, self.live = self.live, None
+        move, self.visibility_last = self.visibility_last, None
+        self.live_record, self.visibility_blocked = None, False
         if live is not None: live.revoke_branch_source()
         try:
-            self.commits.set_session(None)
+            if move is not None: move.close()
         finally:
-            if live is not None: live.close()
-            self.end.setEnabled(False)
-            self.refresh.setEnabled(False)
-            self.changes.setEnabled(False)
-            self.details.setText("")
-            self.set_snapshot(self.snapshot)
+            try: self.commits.set_session(None)
+            finally:
+                if live is not None: live.close()
+                self.end.setEnabled(False)
+                self.refresh.setEnabled(False)
+                self.move_result.setText("")
+                self.details.setText("")
+                self.set_snapshot(self.snapshot)
+
+    def _worktree_actions(self):
+        record = self.live_record or {}
+        phase = record.get("visibility")
+        idle = self.live is not None and not self.active and self.commits.running is None
+        # Just-delivered sessions already have the creator's visible evidence;
+        # new moves still require an actual status read, and a failed read closes this gate.
+        visible = bool(self.live is not None and not self.active and not self.visibility_blocked
+                       and (phase == "visible" or phase is None and self.commits.visible))
+        committed = bool(record.get("base_generation"))
+        no_commit = record.get("pending_operation") is None
+        self.changes.setEnabled(idle and visible and committed and no_commit)
+        self.commits.allow_visible(visible)
+        self.move.setText("恢复原工作目录…" if phase == "hidden" else "临时收起工作目录…")
+        self.move.setEnabled(bool(idle and committed and no_commit and phase in ("visible", "hidden")
+                                  and not self.visibility_blocked and not self.commits.blocked))
+        self.move_query.setEnabled(idle and self.visibility_last is not None)
+
+    def _visibility_job(self, title, work, apply):
+        def task():
+            try: return work(), None
+            except Exception as error: return None, error
+        try:
+            future = self.owner.job(title, task, apply, failed=lambda error: apply((None, error)))
+        except Exception as error:
+            apply((None, error))
+        else:
+            if future is None: apply((None, Rejected("窗口正在处理另一项，没有执行本步骤")))
+
+    def _visibility_message(self, plan, message):
+        self.move_result.setText(f"{message}\n原 STATE：{plan.live.state}\n原操作：{plan.operation}\n"
+                                 f"旧名：{plan.source}\n目标：{plan.target}")
+
+    def move_live(self):
+        live, record = self.live, self.live_record
+        if (live is None or record is None or self.owner.pending is not None or self.active
+                or self.commits.running is not None or self.commits.blocked or self.visibility_blocked
+                or self.changes_dialog is not None or not record["base_generation"] or record["pending_operation"] is not None):
+            return
+        action = {"visible":"hide", "hidden":"restore"}.get(record["visibility"])
+        if action is None: return
+        try: plan = LiveVisibility(live, action)
+        except Exception as error:
+            self.move_result.setText(describe(error)); return
+        self.active = True
+        self._worktree_actions()
+        words = "临时收起" if action == "hide" else "恢复原名"
+
+        def current():
+            return self.live is live and self.active
+
+        def done(outcome):
+            result, error = outcome
+            if not current():
+                plan.close()
+                return
+            try:
+                if plan.started:
+                    old, self.visibility_last = self.visibility_last, plan
+                    if old is not None: old.close()
+                    self.visibility_blocked = error is not None
+                    self.live_record = None  # Do not reuse pre-move eligibility.
+                    if error is not None:
+                        message = f"{describe(error)}\n此次不能确认完成；请只读查这笔原回执，不要重复发起。"
+                    elif result == "historical":
+                        message = "已读到原完成记录，本次没有再移动；当前位置以刷新结果为准。"
+                    else:
+                        message = f"本次{words}的原回执已完成。当前位置以刷新结果为准。"
+                    self._visibility_message(plan, message)
+                else:
+                    plan.close()
+                    self.move_result.setText((describe(error) if error is not None else str(result))
+                                             + "\n本次未登记或移动工作目录。")
+            finally: self._release()
+            if plan.started and error is None: self.refresh_live()
+
+        def reviewed(outcome):
+            details, error = outcome
+            if not current():
+                plan.close()
+                return
+            if error is not None:
+                done((None, error)); return
+            try:
+                terms = ("我已停止所有工作树写入；原父、STATE 与 STORE 不移动、不由其他人、CLI 或同步程序改动。")
+                if not confirm(self, words + "本窗口原工作目录", details, attestation=terms, action_text=words):
+                    done(("没有确认。", None)); return
+                if not current() or self.live_record is not record or self.owner.pending is not None:
+                    done(("确认时原工作树或任务已改变。", None)); return
+                self._visibility_job(f"正在核验原树并{words}，不会复制或删除文件…",
+                                     lambda: plan.run(confirmed=True), done)
+            except Exception as error:
+                done((None, error))
+
+        self._visibility_job("正在只读核验原登记、归档基线与两个名称…", plan.prepare, reviewed)
+
+    def query_visibility(self):
+        plan, live = self.visibility_last, self.live
+        if (plan is None or live is None or self.owner.pending is not None or self.active
+                or self.commits.running is not None or self.changes_dialog is not None): return
+        self.active = True
+        self._worktree_actions()
+
+        def shown(outcome):
+            if self.live is not live or self.visibility_last is not plan: return
+            result, error = outcome
+            kind, detail = result if error is None else ("unknown", f"原回执无法核证：{describe(error)}。不续作。")
+            try:
+                self.visibility_blocked = kind not in ("completed", "unrecorded")
+                self.live_record = None
+                self._visibility_message(plan, detail)
+            finally: self._release()
+            self.refresh_live()
+
+        self._visibility_job("正在只读查询本窗口这笔原目录改名…", plan.result, shown)
 
     def compare_live(self):
         live = self.live
@@ -356,7 +486,8 @@ class CheckoutPane(QWidget):
             gen = record["base_generation"]
             base = (f"基线第 {gen} 代\n基线节点：{record['base_operation']}" if gen else
                     "尚无已提交快照")
-            self.changes.setEnabled(bool(gen))
+            self.live_record = record
+            self._worktree_actions()
             self.details.setText(
                 f"实例：{record['worktree']}\n可见状态：{phase}\n分支：{record['branch']} · {base}\n"
                 f"待决提交：{record['pending_operation'] or '无'}\n"
@@ -364,7 +495,11 @@ class CheckoutPane(QWidget):
                 "这是原登记的一次只读快照，未检查工作文件是否已修改。")
             self.owner.inform("已读取本窗口原工作树状态。")
         def failed(error):
-            if self.live is live: self.details.setText(f"无法核证原工作树状态：{error}。不会认领替件。")
+            if self.live is live:
+                self.live_record = None
+                self.commits.allow_visible(False)
+                self._worktree_actions()
+                self.details.setText(f"无法核证原工作树状态：{error}。不会认领替件。")
         try:
             self.owner.job("正在读取本次工作树状态…", live.status, shown, failed=failed)
         except Exception as error:

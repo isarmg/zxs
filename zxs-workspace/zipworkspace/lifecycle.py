@@ -1,13 +1,17 @@
 """Move an existing *local* worktree only: no archive/member mapping or deletion."""
 from __future__ import annotations
+from contextlib import ExitStack, closing
 import os
 from pathlib import Path
 import stat
+import sys
 from .archive import read_archive, read_managed_document, stamp
+from .capacity import writing
 from .document import archive_sha, check_relative, native_identity, relative_document
-from .freeze import _distinct_roots, observe_held, observe_tree
+from .freeze import _dir_flags, _distinct_roots, _sig, observe_held, observe_tree
 from .model import Rejected, check_id, new_id
-from .publish import digest_file, rename_new, sync_dir
+from .private_freeze import local_mount, mount_id
+from .publish import digest_file, rename_new, rename_new_at, require_native_writer, sync_dir
 
 
 def install(con, root: Path, *, original=None):
@@ -75,6 +79,26 @@ def changes(state):
                 "changed":report(k for k in cur.keys() & base.keys() if cur[k] != base[k])}
 
 
+def _base_values(row):
+    return row["repo"], row["branch"], row["generation"], row["parent"], row["base_sha"]
+
+
+def _base_leaf(expected):
+    repo, branch, generation, node, digest = expected
+    if type(generation) is not int or not 0 < generation < (1 << 63) or not digest:
+        raise Rejected("没有可核验的已提交基线")
+    check_id(repo); check_id(branch); check_id(node)
+    return f"{repo}.{branch}.{generation:016x}.zxs"
+
+
+def _verify_base(doc, name, expected):
+    marker, base = read_managed_document(doc, display_name=name)
+    if ((marker.repo, marker.branch, marker.generation, marker.operation) != expected[:4]
+            or archive_sha(doc) != expected[4]):
+        raise Rejected("STORE 原基线的节点或整包 SHA-256 不符")
+    return marker, base
+
+
 def _idle_live_base(live):
     from .worktree import locked
     with locked(live.state, read_only=True, live=live) as (con, row, _):
@@ -83,21 +107,16 @@ def _idle_live_base(live):
         if (rec["phase"] != "visible" or rec["active"] is not None
                 or row["pending"] is not None or row["pending_sha"] is not None):
             raise Rejected("原工作树必须可见且无待决操作；不提供本次对照")
-        return row["repo"], row["branch"], row["generation"], row["parent"], row["base_sha"]
+        return _base_values(row)
 
 
 def observe_live_changes(live):
     """One observation against this still-held CLI checkout's last recorded base."""
     from .comparison import compare_manifests
-    from .private_freeze import mount_id
     from .private_stage import same_mount
 
     expected = _idle_live_base(live)
-    repo, branch, generation, node, digest = expected
-    if type(generation) is not int or not 0 < generation < (1 << 63) or not digest:
-        raise Rejected("没有可核验的已提交基线")
-    check_id(repo); check_id(branch); check_id(node)
-    name = f"{repo}.{branch}.{generation:016x}.zxs"
+    name = _base_leaf(expected)
     working_mount = same_mount(live.state_fd, live.work_fd)
     store_mount = mount_id(live.store_fd)
     _distinct_roots((live.work_fd, live.state_fd, live.store_fd))
@@ -115,10 +134,7 @@ def observe_live_changes(live):
         observed = stamp(doc)
         if mount_id(doc.fileno()) != store_mount:
             raise Rejected("基线归档不在原 STORE 挂载")
-        marker, base = read_managed_document(doc, display_name=name)
-        if ((marker.repo, marker.branch, marker.generation, marker.operation) != expected[:4]
-                or archive_sha(doc) != digest):
-            raise Rejected("STORE 原基线的节点或整包 SHA-256 不符")
+        marker, base = _verify_base(doc, name, expected)
         check_relative(live.store_fd, name, doc, observed)
         current = observe_held(live.work_fd, work, require_ids=True, check_held=work_member)
         result = compare_manifests(base, current)
@@ -127,12 +143,294 @@ def observe_live_changes(live):
     return marker, result
 
 
+def _phases(action):
+    if action == "hide": return "visible", "hidden"
+    if action == "restore": return "hidden", "visible"
+    raise Rejected("unknown lifecycle action")
+
+
+def _start_visibility(con, operation, action, tree):
+    con.execute("INSERT INTO visibility_log VALUES(?,?,?,NULL)", (operation, action, tree))
+    con.execute("UPDATE instance SET phase=?,active=? WHERE singleton=1", (action+"-pending", operation))
+
+
+def _finish_visibility(con, operation, result):
+    con.execute("UPDATE instance SET phase=?,active=NULL WHERE singleton=1", (result,))
+    con.execute("UPDATE visibility_log SET result=? WHERE operation=?", (result, operation))
+
+
+def _visibility_row(con, operation):
+    return con.execute("SELECT * FROM visibility_log WHERE operation=?", (operation,)).fetchone()
+
+
+class LiveVisibility:
+    """One original-window decision, on the existing CLI journal, never a cold opener."""
+
+    def __init__(self, live, action):
+        if sys.platform != "linux": raise Rejected("只在 Linux 本窗口的原工作树收起或恢复目录")
+        self.action = action
+        self.before, self.after = _phases(action)
+        self.operation = new_id()
+        self.stack = ExitStack()
+        self.live = self.stack.enter_context(closing(live.borrow()))
+        self.archive_handles = self.stack.enter_context(ExitStack())
+        self.ready = self.used = self.started = self.closed = False
+        self.intent_synced = self.writing_receipt = self.receipt_synced = False
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.stack.close()
+
+    def _key(self, fd):
+        m = os.fstat(fd)
+        return m.st_dev, m.st_ino, stat.S_IFMT(m.st_mode), mount_id(fd, read_proc=self.proc.read)
+
+    def _name(self, name, *, parent=None):
+        try: fd = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+        except FileNotFoundError: return None
+        try: return self._key(fd)
+        finally: os.close(fd)
+
+    def _roots(self):
+        from .linux_authority import owned_directory
+        with ExitStack() as checked:
+            _, chain = owned_directory(checked, self.live.work.parent, self.uid, self.proc.read)
+        if chain != self.chain:
+            raise Rejected("工作目录的原父或上级路径已变化；不会改用同名目录")
+        for path, fd in ((self.live.state, self.live.state_fd), (self.live.store, self.live.store_fd),
+                         (self.live.state/"worktree.sqlite", self.live.db)):
+            if self._name(path) != self._key(fd):
+                raise Rejected("原 STATE、目录库或 STORE 不再位于原名称与挂载")
+        self.live.check_catalog(self.live.state/"worktree.sqlite")
+
+    def _pair(self):
+        self._roots()
+        result = tuple(self._name(path.name, parent=self.parent) for path in (self.source, self.target))
+        self._roots()
+        return result
+
+    def _expect_source(self):
+        if self._pair() != (self.work_key, None):
+            raise Rejected("原目录不可确认，或目的名称已被占用；不会覆盖")
+
+    def _base_name(self):
+        check_relative(self.live.store_fd, self.leaf, self.archive, self.observed)
+        if self._name(self.leaf, parent=self.live.store_fd) != self._key(self.archive.fileno()):
+            raise Rejected("STORE 原基线的名称或实际挂载已变化")
+
+    def _read_instance(self, con, row):
+        original = instance(con)
+        self.live.check_instance(row, original, check_name=False)
+        return original
+
+    def _idle(self, row, original):
+        if (original["phase"] != self.before or original["active"] is not None
+                or row["pending"] is not None or row["pending_sha"] is not None):
+            raise Rejected("不是指定可见阶段的无待决工作树；不会移动或继续其他操作")
+        return _base_values(row)
+
+    def prepare(self):
+        from .linux_authority import ProcView, owned_directory
+        from .linux_mount import _ordinary_user
+        from .worktree import locked
+        if self.closed or self.ready or self.used: raise Rejected("不能重用收起或恢复决定")
+        try:
+            require_native_writer()
+            path = self.live.work.parent
+            if path.anchor != "/" or ".." in path.parts or not 2 <= len(path.parts) <= 65:
+                raise Rejected("需要可核对的原工作目录父路径")
+            self.proc = ProcView(self.stack)
+            self.uid = _ordinary_user(read_proc=self.proc.read)
+            self.parent, self.chain = owned_directory(self.stack, path, self.uid, self.proc.read)
+            self.mount = local_mount(self.parent, read_proc=self.proc.read)
+            work = self.live.work_fd
+            actual_parent = os.open("..", _dir_flags(), dir_fd=work)
+            try:
+                if self._key(actual_parent) != self._key(self.parent):
+                    raise Rejected("指定父目录不是原工作树的真实父")
+            finally: os.close(actual_parent)
+            self.work_key = self._key(work)
+            private, store = self.live.state_fd, self.live.store_fd
+            dev = self.work_key[0]
+            store_mount = local_mount(store, read_proc=self.proc.read)
+            if (self.work_key[3] != self.mount or self._key(private)[3] != self.mount
+                    or self._key(self.live.db)[3] != self.mount
+                    or os.fstat(store).st_dev == dev and store_mount != self.mount):
+                raise Rejected("需要原 WORK 与 STATE 在同一已准入挂载，拒绝 STORE 挂载别名")
+            _distinct_roots((work, private, store))
+            self._roots()
+            with locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
+                self.expected = self._idle(row, self._read_instance(con, row))
+                visible, hidden = locations(row)
+            self.source, self.target = (visible, hidden) if self.action == "hide" else (hidden, visible)
+            self._expect_source()
+            self.leaf = _base_leaf(self.expected)
+            with relative_document(store, self.leaf) as doc:
+                self.observed = stamp(doc)
+                if self._key(doc.fileno())[3] != store_mount:
+                    raise Rejected("基线归档不在原 STORE 挂载")
+                self.marker, base = _verify_base(doc, self.leaf, self.expected)
+                # The short context still verifies the original name on exit. Long
+                # ownership only closes our FD; it cannot invalidate a receipt later.
+                fd = os.dup(doc.fileno())
+                self.archive_handles.callback(os.close, fd)
+                self.archive = self.archive_handles.enter_context(os.fdopen(fd, "rb", closefd=False))
+            with locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
+                if self._idle(row, self._read_instance(con, row)) != self.expected:
+                    raise Rejected("原基线在准备时已改变；请重新选择")
+            self._expect_source()
+            self._base_name()
+            self.ready = True
+            return (f"从：{str(self.source)!r}\n到：{str(self.target)!r}\n"
+                    f"原 STATE：{str(self.live.state)!r}\n原 STORE：{str(self.live.store)!r}\n"
+                    f"基线：第 {self.marker.generation} 代 · {self.marker.operation}\n操作号：{self.operation}\n\n"
+                    f"确认后还要读取原工作目录并核对基线（约 {base.total:,} B 文件正文）；"
+                    "只在内容相符时改名，不能用旧对照结果代替。不会删除、覆盖、提交、释放数据空间或改变访问权限。"
+                    "同目录改名后旧路径不再可用；收起不是保密。确认后请等待，不自动重试。")
+        except BaseException:
+            self.close()
+            raise
+
+    def _clean(self):
+        fd = self.live.work_fd
+        before = _sig(os.fstat(fd))
+        _distinct_roots((fd, self.live.state_fd, self.live.store_fd))
+        excluded = {self._key(self.live.state_fd)[:2], self._key(self.live.store_fd)[:2]}
+
+        def member(_, child):
+            obs = self._key(child)
+            if obs[:2] in excluded or obs[3] != self.mount:
+                raise Rejected("工作树含 STATE/STORE 别名或子挂载；不能移动")
+
+        if observe_held(fd, self.work_key[:2], require_ids=True, check_held=member).digest() != self.marker.tree:
+            raise Rejected("工作目录有未提交改动；保留原路径与文件")
+        self._expect_source()
+        self._base_name()
+        if _sig(os.fstat(fd)) != before: raise Rejected("原工作目录在核对时已变化")
+        return before
+
+    def _log(self, con):
+        item = _visibility_row(con, self.operation)
+        if item is not None and (item["action"] != self.action or item["original_tree"] != self.marker.tree
+                                 or item["result"] not in (None, self.after)):
+            raise Rejected("日志与本次确认的原操作不符；不接管其他结果")
+        return item
+
+    def _pending(self, row, original):
+        if (original["phase"] != self.action+"-pending" or original["active"] != self.operation
+                or _base_values(row) != self.expected or row["pending"] is not None or row["pending_sha"] is not None):
+            raise Rejected("当前不是这笔原待决操作及基线；不会移动或补记")
+
+    @staticmethod
+    def _journal(con):
+        mode = con.execute("PRAGMA main.journal_mode").fetchone()
+        if mode is None or mode[0] != "delete":
+            raise Rejected("原 CLI STATE 不再使用所需的 DELETE 回滚日志模式；不改模式或移动")
+
+    def _sync_state(self, phase):
+        self._roots()
+        # With SQLite's default DELETE journal, FULL need not sync the
+        # directory after removing the journal. Use the held STATE itself.
+        with writing("STATE", self.live.state, phase, self.operation, self.live.state_fd):
+            os.fsync(self.live.state_fd)
+        self._roots()
+
+    def run(self, *, confirmed=False):
+        if confirmed is not True or self.closed or not self.ready or self.used:
+            raise Rejected("只允许明确确认一次的原目录改名")
+        self.used = True
+        try: return self._run()
+        finally: self.archive_handles.close()  # Receipt lookup must not pin a large deleted STORE archive.
+
+    def _run(self):
+        from .linux_mount import _ordinary_user
+        from .worktree import locked
+        if _ordinary_user(read_proc=self.proc.read) != self.uid:
+            raise Rejected("普通用户已变化，不移动工作目录")
+        self._expect_source()
+        self._base_name()
+        with locked(self.live.state, live=self.live, operation=self.operation,
+                    phase="记录原目录改名意图；在提交本次意图前不能移动") as (con, row, _):
+            self._journal(con)
+            if self._idle(row, self._read_instance(con, row)) != self.expected:
+                raise Rejected("确认的原基线已改变；不给另一代改名")
+            if _visibility_row(con, self.operation) is not None:
+                raise Rejected("操作号已在原日志中使用，未登记或移动")
+            before = self._clean()  # One full read and two inventories after the stop-writers consent.
+            self.started = True  # From here an uncertain answer may have a durable intent.
+            _start_visibility(con, self.operation, self.action, self.marker.tree)
+
+        self._sync_state("同步原改名意图；失败不移动目录")
+        self.intent_synced = True
+        with locked(self.live.state, live=self.live, operation=self.operation,
+                    phase="完成原目录改名回执；正式名称可能已变，失败须查原号") as (con, row, _):
+            self._journal(con)
+            rec = self._read_instance(con, row)
+            item = self._log(con)
+            if item is None: raise Rejected("未核到这笔原目录改名意图")
+            if item["result"] is not None: return "historical"  # Never move it a second time.
+            self._pending(row, rec)
+            self._base_name()
+            self._expect_source()
+            fd = self.live.work_fd
+            if _sig(os.fstat(fd)) != before:
+                raise Rejected("原目录的代次在登记后改变；不尝试移动")
+            # Same parent: source-name check is not a kernel inode CAS. The
+            # confirmation requires a controlled parent and stopped writers.
+            with writing("工作目录父", self.source.parent, "原生不覆盖改名；碰撞原样保留", self.operation, self.parent):
+                try: rename_new_at(self.parent, self.source.name, self.target.name, expected_source=os.fstat(fd))
+                except FileExistsError as err:
+                    raise Rejected("目的名称刚被占用；仍保留原操作，不覆盖双方") from err
+            moved = _sig(os.fstat(fd))
+            if (moved[:3], moved[4]) != (before[:3], before[4]) or self._pair() != (None, self.work_key):
+                raise Rejected("原目录可能已换名，但实际名称或挂载未确认；保留原操作")
+            with writing("工作目录父", self.source.parent, "同步原改名；晚失败不能视为没移动", self.operation, self.parent):
+                os.fsync(self.parent)
+            if self._pair() != (None, self.work_key) or _sig(os.fstat(fd)) != moved:
+                raise Rejected("目录同步后不能核实原名称与实体；保留原操作")
+            self.writing_receipt = True
+            _finish_visibility(con, self.operation, self.after)
+        self._sync_state("同步原完成回执；失败不把可见完成行当作耐久")
+        self.receipt_synced = True
+        return self.after
+
+    def result(self):
+        from .worktree import locked
+        if self.closed or not self.started: raise Rejected("没有这笔已尝试登记的窗口原操作")
+        with locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
+            rec = self._read_instance(con, row)
+            item = self._log(con)
+            if item is None:
+                if self._idle(row, rec) != self.expected:
+                    raise Rejected("找不到这笔原回执，且原基线已变；不猜测")
+                self._expect_source()
+                return "unrecorded", "未查到本次受理记录，原目录仍在确认的旧名称。未重试。"
+            if item["result"] is not None:
+                if self.writing_receipt and not self.receipt_synced:
+                    return "recorded", "读到原完成记录，但这次没有确认原 STATE 完成屏障；保留现场，不继续移动。"
+                word = "收起" if self.after == "hidden" else "恢复"
+                return "completed", f"原回执已记录{word}完成。它是历史结果，不代表此刻仍在该名称。"
+            self._pending(row, rec)
+            pair = self._pair()
+        if pair == (self.work_key, None):
+            detail = "核到原目录仍在旧名，目标未见占用。"
+        elif pair == (None, self.work_key):
+            detail = "核到原目录已在目标名，但没有完成回执，不能据此确认耐久。"
+        else:
+            return "pending", "原记录待决，但两个名称无法构成准确原件与空位；保留现场，不继续。"
+        if not self.intent_synced:
+            return "pending", detail + "只读见原记录待决，但没有确认原意图已同步；保留现场，不续作。"
+        return "pending", (detail + "只读查询时原记录仍待决，窗口不会续作。"
+                           "\n如需继续，在原件不变且再次停写后，用 CLI 原号命令（会写入，不是查看）：\n"
+                           f"resume-visibility STATE {self.operation} --writers-stopped\n请使用下列原 STATE。")
+
+
 def start(state, action):
     from .worktree import locked
-    if action not in ("hide", "restore"): raise Rejected("unknown lifecycle action")
+    phase, _ = _phases(action)
     with locked(state) as (con, row, state):
         rec = instance(con)
-        phase = "visible" if action == "hide" else "hidden"
         if rec["phase"] != phase or rec["active"] is not None or row["pending"] is not None:
             raise Rejected("not an idle worktree in the required visible/hidden state")
         visible, hidden = locations(row)
@@ -142,8 +440,7 @@ def start(state, action):
         tree = base_tree(row).digest()
         clean_at(src, state, tree)
         operation = new_id()
-        con.execute("INSERT INTO visibility_log VALUES(?,?,?,NULL)", (operation, action, tree))
-        con.execute("UPDATE instance SET phase=?,active=? WHERE singleton=1", (action+"-pending", operation))
+        _start_visibility(con, operation, action, tree)
     # This is a separate transaction: a failure after the rename cannot lose the intent.
     return finish(state, operation)
 
@@ -152,7 +449,7 @@ def finish(state, operation):
     from .worktree import locked
     check_id(operation)
     with locked(state) as (con, row, state):
-        item = con.execute("SELECT * FROM visibility_log WHERE operation=?", (operation,)).fetchone()
+        item = _visibility_row(con, operation)
         rec = instance(con)
         if item is None: raise Rejected("no such original local visibility operation")
         if item["result"] is not None:
@@ -185,6 +482,5 @@ def finish(state, operation):
                 raise Rejected("move outcome unknown; preserve both names and the original operation")
         finally: os.close(fd)
         result = "hidden" if action == "hide" else "visible"
-        con.execute("UPDATE instance SET phase=?,active=NULL WHERE singleton=1", (result,))
-        con.execute("UPDATE visibility_log SET result=? WHERE operation=?", (result, operation))
+        _finish_visibility(con, operation, result)
         return {"operation":operation, "original_outcome":result, "recorded_phase":result, "current_original_named":True}
