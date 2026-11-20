@@ -1,6 +1,7 @@
 //! Structural parsing and command-body encoding only. This module does not
 //! issue credits, authenticate, call a ZXS operation or send a reply.
 pub(in crate::smb) mod credit_fields;
+pub(in crate::smb) mod create_fields;
 pub(in crate::smb) mod direct;
 pub(in crate::smb) mod fixed_reply;
 pub(in crate::smb) mod io_fields;
