@@ -7,7 +7,7 @@ import sys
 
 from .. import opening, private_stage
 from ..comparison import Folder
-from ..capacity import describe
+from ..capacity import describe, observed_available
 from ..document import native_identity
 from ..model import Rejected, member_name, new_id
 from ..private_candidates import generation, held_candidates
@@ -132,15 +132,7 @@ class CheckoutChoice:
             return f"{n:,} B" if n < (1 << 30) else f"{n:,} B（约 {n / (1 << 30):.2f} GiB）"
         detail = (f"本次签出新增逻辑字节：{size(needed)}（STATE 原包副本 {size(raw)}，解包正文 {size(body)}）。"
                   "工作目录同挂载改名，不再复制；已有归档和候选不重复计入。")
-        available = None
-        try:
-            v = os.fstatvfs(self.base.parent)
-            unit, blocks, free, usable = v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail
-            if (all(type(x) is int for x in (unit, blocks, free, usable))
-                    and unit > 0 and blocks > 0 and 0 <= usable <= free <= blocks):
-                available = unit * usable
-        except (OSError, AttributeError):
-            pass  # Unavailable is neither zero nor permission to proceed on another volume.
+        available = observed_available(self.base.parent)
         if available is None:
             observed = "当前无法估算该挂载普通用户的可用字节。"
         else:

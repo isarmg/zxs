@@ -7,6 +7,19 @@ import sqlite3
 _PREFIX = "容量诊断："
 
 
+def observed_available(fd):
+    """Advisory only: usable bytes the filesystem reports for this held object now."""
+    try:
+        v = os.fstatvfs(fd)
+        unit, blocks, free, usable = v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail
+    except (OSError, AttributeError):
+        return None
+    if (all(type(x) is int for x in (unit, blocks, free, usable))
+            and unit > 0 and blocks > 0 and 0 <= usable <= free <= blocks):
+        return unit * usable
+    return None
+
+
 def note(error, role, path, stage, operation=None, fd=None, *, database=False):
     if database:
         code = getattr(error, "sqlite_errorcode", None)

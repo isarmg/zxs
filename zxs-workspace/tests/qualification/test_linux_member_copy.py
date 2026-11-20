@@ -6,6 +6,7 @@ import hashlib
 from importlib.util import find_spec
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import stat
 import sys
 import unittest
@@ -127,6 +128,31 @@ class LinuxMemberCopy(unittest.TestCase):
         self.assertEqual(list((target/"empty-root").iterdir()), [])
         self.assertEqual(plan.path.read_bytes(), self.original)
         self.assertEqual(self.archive.read_bytes(), self.original)
+        self.assertEqual(list(self.private.iterdir()), [])
+
+    def test_space_advisory_uses_the_original_output_mount_and_does_not_reserve_or_block(self):
+        archive = self.zip_plan()
+        def tiny(fd):
+            self.assertTrue(os.path.samestat(os.fstat(fd), self.dest.stat()))
+            return SimpleNamespace(f_frsize=1, f_blocks=10, f_bfree=2, f_bavail=0)
+        with patch.object(member_copy.os, "fstatvfs", side_effect=tiny) as observed:
+            hint = archive.review()
+            observed.assert_called_once()
+        self.assertIn(f"新增的文件逻辑量：{len(self.original):,} B", hint)
+        self.assertIn("当前报告普通用户可用 0 B", hint)
+        self.assertIn("可能不足", hint)
+        self.assertFalse(archive.path.exists())
+        archive.run(confirmed=True)  # A reporting estimate is neither a reservation nor a hard refusal.
+        self.assertEqual(archive.path.read_bytes(), self.original)
+
+        subtree = self.subtree_plan()
+        def unavailable(fd):
+            self.assertTrue(os.path.samestat(os.fstat(fd), self.private.stat()))
+            raise OSError(errno.EIO, "unavailable capacity estimate")
+        with patch.object(member_copy.os, "fstatvfs", side_effect=unavailable) as observed:
+            self.assertIn("当前可用量未知", subtree.review())
+            observed.assert_called_once()
+        self.assertFalse(subtree.path.exists())
         self.assertEqual(list(self.private.iterdir()), [])
 
     def test_copy_can_cancel_after_copying_but_before_complete_zip_readback(self):

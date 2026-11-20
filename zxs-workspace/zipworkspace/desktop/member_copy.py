@@ -10,6 +10,7 @@ from threading import Event, Lock
 
 from .. import private_stage
 from ..archive import copy_body, read_managed_document, stored_member, stored_plain, stored_subtree
+from ..capacity import observed_available
 from ..comparison import Folder
 from ..document import archive_sha, native_identity, relative_document
 from ..freeze import _distinct_roots, observe_held
@@ -72,6 +73,17 @@ def _unoccupied(parent, name):
     try: os.stat(name, dir_fd=parent, follow_symlinks=False)
     except FileNotFoundError: return
     raise Rejected("目的名称已有文件、目录或链接；不覆盖")
+
+
+def _copy_capacity(parent, size):
+    available = observed_available(parent)
+    line = f"本次新增的文件逻辑量：{size:,} B；正式发布不再复制一份。"
+    if available is None:
+        line += "\n所选本机挂载当前可用量未知。"
+    else:
+        line += f"\n所选本机挂载当前报告普通用户可用 {available:,} B。"
+        if size > available: line += "按当前报告可能不足。"
+    return line + "未计目录、inode 等开销；不预留空间，也不保证配额或成功。"
 
 
 class CancelledCopy(Rejected):
@@ -161,11 +173,12 @@ class _AnonymousCopy(_BeforePublication):
                 raise Rejected("目的目录在选择期间改变了挂载")
             self._source()
             self._absent()
+            capacity = _copy_capacity(self.parent, self.size)
             self._parent()
             self.ready = True
             return (f"原归档：{str(self.selected.path)!r}\n节点：{self.selected.browser.commit.operation}\n"
                     + self._selection_details() +
-                    f"新文件：{str(self.path)!r}\n\n需要容纳一份副本。"
+                    f"新文件：{str(self.path)!r}\n{capacity}\n\n"
                     "完整核验及读回后才公开名称；不覆盖、不创建工作树、不打开结果。"
                     "可在正式发布前请求取消；正在进行的系统调用须先返回，发布开始后不能撤销。"
                     "不会复制权限、时间或来源元数据；内容校验不代表来源可信。")
@@ -420,10 +433,12 @@ class _AtomicDirectoryCopy(_BeforePublication):
             self._bound_source()
             self.rows = self._approved_rows()
             self.size = sum(row[1] for row in self.rows.values())
+            capacity = _copy_capacity(self.private.parent, self.size)
+            self._parents()
             self.ready = True
             return (f"原归档：{str(self.selected.path)!r}\n{self._describe()}\n"
                     f"内容：{len(self.rows):,} 项，{self.size:,} 字节（包括空目录）\n"
-                    f"新的完整目录：{str(self.path)!r}\n私有暂存：{str(self.private.path / self.stage_name)!r}\n\n"
+                    f"新的完整目录：{str(self.path)!r}\n私有暂存：{str(self.private.path / self.stage_name)!r}\n{capacity}\n\n"
                     "不登记或签出工作树。在独占私处复核全部内容后，只改名一次；同名不覆盖。"
                     "不复制来源元数据，也不打开或执行结果。"
                     "可在正式发布前请求取消；正在进行的系统调用须先返回，发布开始后不能撤销。"
