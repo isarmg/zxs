@@ -91,6 +91,10 @@ QUERY_DIRECTORY 保留原会话、协议句柄、FILE_LIST_DIRECTORY、输出预
 
 smbd 取得本次私有句柄端、稳定身份和已确认长度，不得到宿主 FILE/数据库描述符或原路径。原生 OPEN 使用同池逻辑 FILE 的三字键、独立开启标识及请求的 ShareAccess；仅只读打开，不另占业务写位。CLOSE 即使被撤权也只收回原本机端和原生分享记录，不回传可能失权的普通 FILE 后查询信息。每棵树至多持有 16 份普通读件，额满拒新件；树或会话退出收回。普通服务用无展开的原配置检查空脚本、强制映射和固定路径，要求 UTF-8；普通 CLOSE 不调用宿主 magic script。原 CREATE 的固定成功包在取得原生句柄前预留，即使是复合请求，内存不足也不留下未发送的句柄或分享记录。当前已接下面的普通 READ 源码；尚未实现网络写、删除及替换，不是客户端可完整使用的文件服务。
 
+### 根目录的原生 QUERY_INFO
+
+在已授权且已打开的普通逻辑根句柄上，支持 FileAllInformation、Basic、Standard、Internal 和 NetworkOpen 五类文件属性。复用 Samba 对请求长度、协商上限、credits 和 FID 的实际检查；用该原 TCON 的零行查询再核 SMB 当前代、共享与实际已持 F，待回调再核同一会话和根柄。由 Samba 原信息编码器返回逻辑目录、逻辑序号、零数据长度与未提供的时间；不回退宿主 stat，不返回底层文件系统信息、EA 或安全描述符。这包括 Linux SMB 客户端挂载时查询的根 FileAllInformation，并非已验证 Linux 可完整挂载；普通 FILE 的 QUERY_INFO 等其余类仍未接，也未执行源码用例。
+
 ### 普通 FILE 的一次 SMB2 READ
 
 目录不是正文。先由 Samba 的原分派验证签名/入站加密、协商上限与 credits，再核真实 TCON、该会话已经成功取得的普通只读 FSP、实际 FILE_READ_DATA 与原连接。复合请求不能把 IPC 或另一棵树的 FSP 带进来。保留整个三字逻辑 FILE 锁键；原生字节锁按本次持久句柄与所请求区间，在请求开始和就绪时各核一次。不因另一个写者给兼容读另加锁。专用数据共享须使用原生 Windows 锁（locking=yes、strict locking=yes、posix locking=no），没有可回退的物理 fd。原字节锁数据库读错不当作无锁；SMB2 LOCK 的客户端加/解锁入口尚未接通。目录、未知操作与未支持的 RDMA 均拒。

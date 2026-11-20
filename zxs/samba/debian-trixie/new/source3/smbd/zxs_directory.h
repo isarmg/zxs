@@ -33,6 +33,9 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *,struct tevent_context *,struct 
 				    unsigned limit,const uint8_t *after,size_t size);
 NTSTATUS zxs_dir_cut_recv(struct tevent_req *,uint8_t *optional_rows);
 bool zxs_request_root_current(struct smbd_smb2_request *);
+bool zxs_root_info_class(uint8_t);
+bool zxs_root_info_needs_attributes(uint8_t);
+NTSTATUS zxs_format_root_info(TALLOC_CTX *,struct files_struct *,uint8_t,uint32_t,DATA_BLOB *,NTSTATUS *);
 NTSTATUS zxs_open_access(connection_struct *,bool directory,uint32_t *desired,uint32_t share);
 NTSTATUS zxs_open_member_fsp(struct smbd_smb2_request *,struct smb_request *,uint32_t,uint32_t,
 			    const char *name,const struct zxs_member_info *,int *fd,struct files_struct **);

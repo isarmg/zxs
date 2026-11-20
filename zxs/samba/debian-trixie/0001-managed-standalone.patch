@@ -3671,7 +3671,7 @@
  			req->do_encryption = true;
  		}
 +		if (zxs_file_vfs_active(req->tcon->compat) && opcode!=SMB2_OP_CREATE &&
-+		    opcode!=SMB2_OP_QUERY_DIRECTORY && opcode!=SMB2_OP_READ &&
++		    opcode!=SMB2_OP_QUERY_DIRECTORY && opcode!=SMB2_OP_READ && opcode!=SMB2_OP_GETINFO &&
 +		    opcode!=SMB2_OP_CLOSE && opcode!=SMB2_OP_TDIS) {
 +			return smbd_smb2_request_error(req, NT_STATUS_NOT_SUPPORTED);
 +		}
@@ -3878,6 +3878,168 @@
  	if (NT_STATUS_EQUAL(status, NT_STATUS_ILLEGAL_CHARACTER)) {
  		DEBUG(1,("Conversion error: illegal character: %s\n",
  			 smb_fname_str_dbg(smb_fname)));
+@@ -2957,7 +2973,7 @@
+ 	return NT_STATUS_OK;
+ }
+ 
+-NTSTATUS smbd_do_qfilepathinfo(connection_struct *conn,
++static NTSTATUS qfilepathinfo_with_root(connection_struct *conn,
+ 			       TALLOC_CTX *mem_ctx,
+ 			       struct smb_request *req,
+ 			       uint16_t info_level,
+@@ -2970,7 +2986,7 @@
+ 			       unsigned int max_data_bytes,
+ 			       size_t *fixed_portion,
+ 			       char **ppdata,
+-			       unsigned int *pdata_size)
++			       unsigned int *pdata_size,bool logical_root)
+ {
+ 	char *pdata = *ppdata;
+ 	char *dstart, *dend;
+@@ -3017,13 +3033,13 @@
+ 		 info_level, max_data_bytes);
+ 
+ 	smb_fname = fsp->fsp_name;
+-	mode = fdos_mode(fsp);
++	mode = logical_root ? FILE_ATTRIBUTE_DIRECTORY : fdos_mode(fsp);
+ 	psbuf = &smb_fname->st;
+ 
+ 	base_sp = (fsp->base_fsp != NULL) ? &fsp->base_fsp->fsp_name->st
+ 					  : &fsp->fsp_name->st;
+ 
+-	nlink = psbuf->st_ex_nlink;
++	nlink = logical_root ? 1 : psbuf->st_ex_nlink;
+ 
+ 	if (nlink && (mode&FILE_ATTRIBUTE_DIRECTORY)) {
+ 		nlink = 1;
+@@ -3052,12 +3068,12 @@
+ 		update_stat_ex_mtime(psbuf, write_time_ts);
+ 	}
+ 
+-	create_time_ts = get_create_timespec(conn, fsp, smb_fname);
+-	mtime_ts = psbuf->st_ex_mtime;
+-	atime_ts = psbuf->st_ex_atime;
+-	ctime_ts = get_change_timespec(conn, fsp, smb_fname);
+-
+-	if (lp_dos_filetime_resolution(SNUM(conn))) {
++	create_time_ts = logical_root ? make_omit_timespec() : get_create_timespec(conn, fsp, smb_fname);
++	mtime_ts = logical_root ? make_omit_timespec() : psbuf->st_ex_mtime;
++	atime_ts = logical_root ? make_omit_timespec() : psbuf->st_ex_atime;
++	ctime_ts = logical_root ? make_omit_timespec() : get_change_timespec(conn, fsp, smb_fname);
++
++	if (!logical_root && lp_dos_filetime_resolution(SNUM(conn))) {
+ 		dos_filetime_timespec(&create_time_ts);
+ 		dos_filetime_timespec(&mtime_ts);
+ 		dos_filetime_timespec(&atime_ts);
+@@ -3096,9 +3112,9 @@
+ 		string_replace(dos_fname, '/', '\\');
+ 	}
+ 
+-	allocation_size = SMB_VFS_GET_ALLOC_SIZE(conn, fsp, psbuf);
+-
+-	if (fsp == NULL || !fsp->fsp_flags.is_fsa) {
++	allocation_size = logical_root ? 0 : SMB_VFS_GET_ALLOC_SIZE(conn, fsp, psbuf);
++
++	if (!logical_root && (fsp == NULL || !fsp->fsp_flags.is_fsa)) {
+ 		/* Do we have this path open ? */
+ 		struct file_id fileid = vfs_file_id_from_sbuf(conn, psbuf);
+ 		files_struct *fsp1 = file_find_di_first(
+@@ -3112,7 +3128,7 @@
+ 		file_size = get_file_size_stat(psbuf);
+ 	}
+ 
+-	if (fsp) {
++	if (fsp && !logical_root) {
+ 		pos = fh_get_position_information(fsp->fh);
+ 	}
+ 
+@@ -3128,7 +3144,7 @@
+ 
+ 	   I think this causes us to fail the IFSKIT
+ 	   BasicFileInformationTest. -tpot */
+-	file_id = SMB_VFS_FS_FILE_ID(conn, base_sp);
++	file_id = logical_root ? fsp->file_id.inode : SMB_VFS_FS_FILE_ID(conn, base_sp);
+ 
+ 	*fixed_portion = 0;
+ 
+@@ -3463,8 +3479,7 @@
+ 
+ 		case SMB2_FILE_ALL_INFORMATION:
+ 		{
+-			unsigned int ea_size =
+-			    estimate_ea_size(smb_fname->fsp);
++			unsigned int ea_size = logical_root ? 0 : estimate_ea_size(smb_fname->fsp);
+ 			DBG_DEBUG("SMB2_FILE_ALL_INFORMATION\n");
+ 			put_long_date_full_timespec(conn->ts_res,pdata+0x00,&create_time_ts);
+ 			put_long_date_full_timespec(conn->ts_res,pdata+0x08,&atime_ts);
+@@ -3482,7 +3497,7 @@
+ 			SIVAL(pdata,	0x48, ea_size);
+ 			SIVAL(pdata,	0x4C, access_mask);
+ 			SBVAL(pdata,	0x50, pos);
+-			SIVAL(pdata,	0x58, mode); /*TODO: mode != mode fix this!!! */
++			SIVAL(pdata,	0x58, logical_root ? 0 : mode); /* Native legacy mode fallback */
+ 			SIVAL(pdata,	0x5C, 0); /* No alignment needed. */
+ 
+ 			pdata += 0x60;
+@@ -3687,6 +3702,58 @@
+ 
+ 	*pdata_size = data_size;
+ 	return NT_STATUS_OK;
++}
++
++NTSTATUS smbd_do_qfilepathinfo(connection_struct *conn,TALLOC_CTX *mem_ctx,
++	struct smb_request *req,uint16_t info_level,files_struct *fsp,struct smb_filename *smb_fname,
++	bool delete_pending,struct timespec write_time_ts,struct ea_list *ea_list,
++	uint16_t flags2,unsigned int max_data_bytes,size_t *fixed_portion,char **ppdata,unsigned int *pdata_size)
++{
++	return qfilepathinfo_with_root(conn,mem_ctx,req,info_level,fsp,smb_fname,delete_pending,
++		write_time_ts,ea_list,flags2,max_data_bytes,fixed_portion,ppdata,pdata_size,false);
++}
++
++/* The only authorized caller has a current native directory handle and a
++ * fresh zero-row reply on its original TCON. Format the virtual root with
++ * Samba's standard wire fields, not any host stat, inode, EA or filesystem. */
++_PUBLIC_
++bool zxs_root_info_class(uint8_t info)
++{
++	return info==FSCC_FILE_BASIC_INFORMATION || info==FSCC_FILE_STANDARD_INFORMATION ||
++	       info==FSCC_FILE_INTERNAL_INFORMATION || info==FSCC_FILE_ALL_INFORMATION ||
++	       info==FSCC_FILE_NETWORK_OPEN_INFORMATION;
++}
++bool zxs_root_info_needs_attributes(uint8_t info)
++{
++	return info==FSCC_FILE_BASIC_INFORMATION || info==FSCC_FILE_ALL_INFORMATION ||
++	       info==FSCC_FILE_NETWORK_OPEN_INFORMATION;
++}
++_PUBLIC_
++NTSTATUS zxs_format_root_info(TALLOC_CTX *ctx,files_struct *fsp,uint8_t cls,uint32_t limit,
++			      DATA_BLOB *out,NTSTATUS *call_status)
++{
++	size_t fixed=0;unsigned int n=0;char *b=NULL;
++	NTSTATUS status;
++	if(!zxs_root_info_class(cls))return NT_STATUS_NOT_SUPPORTED;
++	if(fsp==NULL || !fsp->fsp_flags.is_directory || fsp->fsp_name==NULL ||
++	   strcmp(fsp->fsp_name->base_name,".") || fsp->fsp_name->stream_name!=NULL ||
++	   !zxs_file_vfs_active(fsp->conn))return NT_STATUS_ACCESS_DENIED;
++	uint16_t level=cls==FSCC_FILE_ALL_INFORMATION?SMB2_FILE_ALL_INFORMATION:cls+NT_PASSTHROUGH_OFFSET;
++	/* The root's name is exactly one UTF-16 code unit; no large allocation
++	 * based on the caller's credit allowance is needed for this projection. */
++	status=qfilepathinfo_with_root(fsp->conn,ctx,NULL,level,fsp,fsp->fsp_name,false,
++				       make_omit_timespec(),NULL,STR_UNICODE,MIN(limit,1024),
++				       &fixed,&b,&n,true);
++	if(NT_STATUS_IS_OK(status)){
++		if(limit<fixed)status=NT_STATUS_INFO_LENGTH_MISMATCH;
++		else{
++			*out=data_blob_talloc(ctx,b,MIN(n,limit));
++			*call_status=n>limit?STATUS_BUFFER_OVERFLOW:NT_STATUS_OK;
++			if(out->data==NULL)status=NT_STATUS_NO_MEMORY;
++		}
++	}
++	SAFE_FREE(b);
++	return status;
+ }
+ 
+ /****************************************************************************
 --- a/source3/smbd/close.c
 +++ b/source3/smbd/close.c
 @@ -25,6 +25,7 @@
@@ -4000,3 +4162,101 @@
  
  	for (c=0; protocol == PROTOCOL_NONE && c < dialect_count; c++) {
  		if (lp_server_max_protocol() < PROTOCOL_SMB2_10) {
+--- a/source3/smbd/smb2_getinfo.c
++++ b/source3/smbd/smb2_getinfo.c
+@@ -22,6 +22,7 @@
+ #include "includes.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_directory.h"
+ #include "../libcli/smb/smb_common.h"
+ #include "trans2.h"
+ #include "../lib/util/tevent_ntstatus.h"
+@@ -216,7 +217,73 @@
+ 	struct smbd_smb2_request *smb2req;
+ 	NTSTATUS status;
+ 	DATA_BLOB out_output_buffer;
++	struct files_struct *zxs_fsp;
++	struct tevent_req *zxs_wait;
++	struct aio_req_fsp_link *zxs_link;
++	uint8_t zxs_class;
++	uint32_t zxs_max;
+ };
++
++static bool zxs_getinfo_current(const struct smbd_smb2_getinfo_state *state)
++{
++	struct smbd_smb2_request *n=state->smb2req;
++	struct files_struct *f=state->zxs_fsp;
++	const struct zxs_dir_search *d=zxs_find_dir(f);
++	return d!=NULL && zxs_request_root_current(n) &&
++		f->conn==n->tcon->compat && f->vuid==n->session->global->session_wire_id &&
++		d->session==n->session && d->tcon==n->tcon &&
++		d->seq==n->session->global->auth_session_info_seqnum &&
++		f->fsp_flags.is_fsa && !f->fsp_flags.closing &&
++		f->op!=NULL && f->op->global!=NULL &&
++		f->file_id.inode==(uint64_t)n->tcon->zxs_tree_choice->volume_ordinal+1 &&
++		change_to_user_and_service(f->conn,f->vuid);
++}
++static bool zxs_getinfo_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_getinfo_state *s=tevent_req_data(req,struct smbd_smb2_getinfo_state);
++	return zxs_dir_wait_cancel(req,s->smb2req->xconn->client->raw_ev_ctx,
++				   &s->zxs_wait,&s->zxs_link);
++}
++static void zxs_getinfo_done(struct tevent_req *sub)
++{
++	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
++	struct smbd_smb2_getinfo_state *s=tevent_req_data(req,struct smbd_smb2_getinfo_state);
++	NTSTATUS status=zxs_dir_cut_recv(sub,NULL);
++	s->zxs_wait=NULL;TALLOC_FREE(sub);
++	if(NT_STATUS_IS_OK(status)){
++		status=zxs_getinfo_current(s)?
++			zxs_format_root_info(s,s->zxs_fsp,s->zxs_class,s->zxs_max,
++					     &s->out_output_buffer,&s->status):
++			NT_STATUS_ACCESS_DENIED;
++	}
++	TALLOC_FREE(s->zxs_link);
++	if(tevent_req_nterror(req,status))return;
++	tevent_req_done(req); /* terminal: native recv can release state now */
++}
++static NTSTATUS zxs_getinfo_root(struct tevent_req *req,struct tevent_context *ev,
++			       struct files_struct *fsp,uint8_t type,uint8_t cls,
++			       uint32_t max,DATA_BLOB input,uint32_t additional,uint32_t flags)
++{
++	struct smbd_smb2_getinfo_state *s=tevent_req_data(req,struct smbd_smb2_getinfo_state);
++	if(type!=SMB2_0_INFO_FILE || !zxs_root_info_class(cls) || !fsp->fsp_flags.is_directory)
++		return NT_STATUS_NOT_SUPPORTED;
++	if(input.length!=0 || additional!=0 || flags!=0)return NT_STATUS_INVALID_PARAMETER;
++	s->zxs_fsp=fsp;s->zxs_class=cls;s->zxs_max=max;
++	if(!zxs_getinfo_current(s))return NT_STATUS_ACCESS_DENIED;
++	if(zxs_root_info_needs_attributes(cls) && (fsp->access_mask&SEC_FILE_READ_ATTRIBUTE)==0)
++		return NT_STATUS_ACCESS_DENIED;
++	s->zxs_link=aio_add_req_to_fsp(fsp,req);
++	if(s->zxs_link==NULL)return NT_STATUS_NO_MEMORY;
++	talloc_steal(s,s->zxs_link);
++	/* Real original TCON's zero-row cut, not a new protocol or a stat
++	 * cached at open. The non-root storage still checks the held F+SQL. */
++	s->zxs_wait=zxs_dir_cut_send(s,ev,s->smb2req,0,NULL,0);
++	if(s->zxs_wait==NULL){TALLOC_FREE(s->zxs_link);return NT_STATUS_NO_MEMORY;}
++	smb2_request_set_async_internal(s->smb2req,true);
++	tevent_req_set_cancel_fn(req,zxs_getinfo_cancel);
++	tevent_req_set_callback(s->zxs_wait,zxs_getinfo_done,req);
++	return NT_STATUS_OK;
++}
+ 
+ static void smb2_ipc_getinfo(struct tevent_req *req,
+ 				struct smbd_smb2_getinfo_state *state,
+@@ -273,6 +340,13 @@
+ 	state->smb2req = smb2req;
+ 	state->status = NT_STATUS_OK;
+ 	state->out_output_buffer = data_blob_null;
++
++	if(zxs_file_vfs_active(conn) || zxs_file_vfs_active(fsp->conn)){
++		status=zxs_getinfo_root(req,ev,fsp,in_info_type,in_file_info_class,
++				in_output_buffer_length,in_input_buffer,in_additional_information,in_flags);
++		if(tevent_req_nterror(req,status))return tevent_req_post(req,ev);
++		return req;
++	}
+ 
+ 	DEBUG(10,("smbd_smb2_getinfo_send: %s - %s\n",
+ 		  fsp_str_dbg(fsp), fsp_fnum_dbg(fsp)));

@@ -134,6 +134,36 @@ static bool native_directory_projection(connection_struct *c)
 fail:
 	c->params=NULL;return false;
 }
+/* The actual native wire marshaller must describe a virtual directory,
+ * independent of bogus stand-in inode/size/times, and accept only supported
+ * file classes. This fixture does not claim an SMB logon or a live grant. */
+static bool virtual_root_attributes(connection_struct *c)
+{
+	struct smb_filename name={.base_name=discard_const_p(char,"."),
+		.st={.st_ex_mode=S_IFREG,.st_ex_size=4097,.st_ex_ino=777,.st_ex_nlink=14}};
+	struct files_struct fsp={.conn=c,.fsp_name=&name,.file_id={.inode=23},
+		.access_mask=SEC_FILE_READ_ATTRIBUTE,.fsp_flags={.is_directory=true}};
+	DATA_BLOB out=data_blob_null;NTSTATUS call=NT_STATUS_INTERNAL_ERROR;
+	NTSTATUS r=zxs_format_root_info(c,&fsp,FSCC_FILE_ALL_INFORMATION,512,&out,&call);
+	bool ok=NT_STATUS_IS_OK(r)&&NT_STATUS_IS_OK(call)&&out.length>=102&&
+		BVAL(out.data,0)==0&&IVAL(out.data,32)==FILE_ATTRIBUTE_DIRECTORY&&
+		BVAL(out.data,40)==0&&BVAL(out.data,48)==0&&IVAL(out.data,56)==1&&
+		out.data[60]==0&&out.data[61]==1&&BVAL(out.data,64)==23&&
+		IVAL(out.data,72)==0&&IVAL(out.data,76)==SEC_FILE_READ_ATTRIBUTE&&
+		IVAL(out.data,88)==0&&IVAL(out.data,96)==2&&SVAL(out.data,100)=='\\';
+	TALLOC_FREE(out.data);
+	r=zxs_format_root_info(c,&fsp,FSCC_FILE_STANDARD_INFORMATION,23,&out,&call);
+	ok=ok&&NT_STATUS_EQUAL(r,NT_STATUS_INFO_LENGTH_MISMATCH);
+	r=zxs_format_root_info(c,&fsp,FSCC_FILE_INTERNAL_INFORMATION,8,&out,&call);
+	ok=ok&&NT_STATUS_IS_OK(r)&&NT_STATUS_IS_OK(call)&&out.length==8&&BVAL(out.data,0)==23;
+	TALLOC_FREE(out.data);
+	r=zxs_format_root_info(c,&fsp,0xff,1024,&out,&call);
+	ok=ok&&NT_STATUS_EQUAL(r,NT_STATUS_NOT_SUPPORTED);
+	fsp.fsp_flags.is_directory=false;
+	r=zxs_format_root_info(c,&fsp,FSCC_FILE_ALL_INFORMATION,512,&out,&call);
+	return ok&&NT_STATUS_EQUAL(r,NT_STATUS_ACCESS_DENIED);
+}
+
 /* The linked, real waiter is canceled through the same terminal function
  * as root CREATE/QUERY. The outer request survives the CLOSE/TDIS walk;
  * the real FSP's AIO list has already shrunk before its callback runs. */
@@ -304,7 +334,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_directory_projection(conn) || !only_the_attached_virtual_root(conn,lower)) { return 1; }
+	if (!private_delivery(conn) || !native_cancel_walk(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !only_the_attached_virtual_root(conn,lower)) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }
