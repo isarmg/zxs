@@ -98,6 +98,36 @@ class PlainPreview(unittest.TestCase):
             self.assertEqual(self.dest.exists(), occupied)
         self.assertEqual(self.dest.read_bytes(), b"not an output")
 
+    def test_verified_plain_index_has_empty_leaves_same_basename_and_no_repository_authority(self):
+        from zipworkspace.desktop.selection import PlainSelection
+        from zipworkspace.model import Commit
+        view_path = self.root / "browse.zip"
+        with zipfile.ZipFile(view_path, "w", compression=zipfile.ZIP_STORED) as z:
+            for n in range(101): z.writestr(f"left/{n:03d}", b"")
+            z.writestr("left/note", b"left")
+            z.writestr("right/note", b"right")
+            z.writestr("empty/", b"")
+            # Ordinary ZIP may carry old version metadata, but do not parse it
+            # or treat it as sufficient to attach a repository in this view.
+            z.comment = Commit("1"*32, "2"*32, 1, "3"*32, None, "4"*64).encode()
+
+        with no_output():
+            view = PlainSelection.open(view_path, retain=False)
+        self.assertIsNone(view.held)
+        self.assertFalse(hasattr(view.index, "commit"))
+        with patch.object(os, "open", side_effect=AssertionError("folder navigation reads no archive")), \
+             patch.object(importer, "_inspect_document", side_effect=AssertionError("no new inspection")):
+            root = view.index.folder_page("", 0)
+            self.assertEqual([e.name for e in root.entries], ["empty", "left", "right"])
+            self.assertEqual(view.index.folder_page("empty", 0).entries, ())
+            left, right = sorted(view.index.find_names("note"), key=lambda hit: hit.path)
+            self.assertEqual((left.path, right.path), ("left/note", "right/note"))
+            number, row = view.index.locate_name(left)
+            self.assertEqual((number, row), (1, 1))
+            self.assertIs(view.index.folder_page("left", number).entries[row], left.entry)
+            self.assertEqual(right.entry.size_bytes, 5)
+            self.assertEqual(right.entry.sha256, sha256(b"right").hexdigest())
+
     def test_preview_does_not_hide_corruption_or_present_partial_metadata(self):
         bad = self.root/"malformed.zip"
         with zipfile.ZipFile(bad, "w") as z: z.writestr("../escape", b"no")
@@ -116,7 +146,9 @@ class PlainPreviewWindow(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root/"read.zip"
-            with zipfile.ZipFile(source,"w") as z: z.writestr("plain", b"ok")
+            with zipfile.ZipFile(source, "w") as z:
+                z.writestr("folder/plain", b"ok")
+                z.writestr("empty/", b"")
             win = Window(); win.show()
             try:
                 pane = win.plain_import; win.tabs.setCurrentWidget(pane)
@@ -131,13 +163,30 @@ class PlainPreviewWindow(unittest.TestCase):
                     while win.pending is not None and time.monotonic()<deadline: QTest.qWait(10)
                 self.assertIsNone(win.pending)
                 self.assertIn(sha256(source.read_bytes()).hexdigest(), pane.details.text())
+                self.assertIsNotNone(pane.selected)
+                self.assertTrue(pane.find.isEnabled())
+                controls = {pane.choose, pane.find, pane.up, pane.into, pane.back, pane.more}
                 if sys.platform == "linux":
                     self.assertIn("核验不会提取", pane.outcome.text())
-                    self.assertIsNotNone(pane.selected)
                     self.assertTrue(pane.extract.isEnabled())
-                    self.assertEqual(set(pane.findChildren(QPushButton)), {pane.choose, pane.extract})
+                    self.assertIsNotNone(pane.selected.held)
+                    controls.add(pane.extract)
                 else:
                     self.assertIn(importer.OUTPUT_UNAVAILABLE, pane.outcome.text())
-                    self.assertEqual(pane.findChildren(QPushButton), [pane.choose])
+                    self.assertIsNone(pane.extract)
+                    self.assertIsNone(pane.selected.held)
+                self.assertEqual(set(pane.findChildren(QPushButton)), controls)
+                with patch.object(os, "open", side_effect=AssertionError("browsing may not reopen the ZIP")):
+                    pane.files.selectRow(1)  # root is "empty", then "folder"
+                    pane.into.click()
+                    self.assertEqual(pane.file_page.directory, "folder")
+                    seen, = pane.file_page.entries
+                    self.assertEqual((seen.name, seen.size_bytes, seen.sha256), ("plain", 2, sha256(b"ok").hexdigest()))
+                    pane.up.click()
+                    pane.files.selectRow(0)
+                    pane.into.click()
+                    self.assertEqual(pane.file_page.directory, "empty")
+                    self.assertIn("空文件夹", pane.at.text())
+                self.assertIsNone(win.archive.selection)
                 self.assertEqual(set(root.iterdir()), {source})
             finally: win.close()

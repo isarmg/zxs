@@ -577,7 +577,7 @@ class PlainZipCopy(_AtomicDirectoryCopy):
     """Only a preview-held ordinary ZIP; no marker is trusted or created."""
     def __init__(self, selected, spelling):
         from .selection import PlainSelection
-        if not isinstance(selected, PlainSelection) or selected.held.closed:
+        if not isinstance(selected, PlainSelection) or selected.held is None or selected.held.closed:
             raise Rejected("须持有本次普通 ZIP 核验时的原文件")
         super().__init__(selected, spelling)
 

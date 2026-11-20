@@ -10,13 +10,13 @@ from .widgets import Table, button, label
 
 class NameSearch(QDialog):
     PAGE = 100
-    WORKING = "正在查找本快照的名称…"
+    WORKING = "正在查找当前已核验归档的名称…"
 
     def __init__(self, window, browser, current, go_to):
         super().__init__(window)  # Window.job only disables the tabs, never this Close button.
         self.owner, self.browser, self.current, self.go_to = window, browser, current, go_to
         self.request, self.matches, self.number, self.retired = None, (), 0, False
-        self.setWindowTitle("在本快照内按名称查找")
+        self.setWindowTitle("在当前归档内按名称查找")
         self.resize(800, 490)
         layout = QVBoxLayout(self)
         layout.addWidget(label("区分大小写，只匹配单个文件或文件夹的名称片段。定位不会打开或另存。"))
@@ -112,8 +112,8 @@ class NameSearch(QDialog):
                 self.matches = matches
                 self.page(0)
             else:
-                self.message.setText("本快照没有包含该名称片段的条目。")
-            self.owner.inform("名称查找未完成。" if error is not None else "已查找本快照的目录索引。")
+                self.message.setText("此归档没有包含该名称片段的条目。")
+            self.owner.inform("名称查找未完成。" if error is not None else "已查找此归档的目录索引。")
 
         try:
             future = self.owner.job(self.WORKING, work, done)

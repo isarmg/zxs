@@ -10,7 +10,7 @@ from types import MappingProxyType
 from .. import plain_import
 
 from ..archive import stamp
-from ..browser import ArchiveBrowser
+from ..browser import ArchiveBrowser, DirectoryIndex
 from ..document import archive_sha, named_document, native_identity
 from ..model import Rejected
 from ..refs import Catalog, Node
@@ -55,27 +55,30 @@ class _DisplayFD:
 
 @dataclass(frozen=True, slots=True)
 class PlainSelection:
-    """Ordinary ZIP display with its original read-only descriptor retained for explicit Linux export."""
+    """Verified ordinary ZIP display; only the Linux extractor needs its original FD."""
     preview: plain_import.Preview
     observed: tuple[int, int, int, int, int]
     rows: MappingProxyType
-    held: _DisplayFD
+    index: DirectoryIndex
+    held: _DisplayFD | None
 
     @property
     def path(self): return self.preview.source
 
-    def release_display(self): self.held.close()
+    def release_display(self):
+        if self.held is not None: self.held.close()
 
     @classmethod
-    def open(cls, path):
+    def open(cls, path, *, retain=True):
         path = Path(path).absolute()
         if path.suffix.lower() != ".zip": raise Rejected("只能选择普通 .zip 文件")
         with ExitStack() as guard:
             with named_document(path) as doc:
                 preview, manifest, observed = plain_import._inspect_document(doc, path)
-                held = _DisplayFD(doc)
-                guard.callback(held.close)
-            choice = cls(preview, observed, MappingProxyType(manifest.rows), held)
+                index = DirectoryIndex(manifest.rows)
+                held = _DisplayFD(doc) if retain else None
+                if held is not None: guard.callback(held.close)
+            choice = cls(preview, observed, MappingProxyType(manifest.rows), index, held)
             guard.pop_all()
             return choice
 

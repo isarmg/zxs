@@ -1,18 +1,21 @@
-"""Ordinary ZIP preview and a separate, explicit Linux extraction action."""
+"""Ordinary ZIP verification and read-only directories; Linux extraction remains separate."""
 import sys
 
-from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from .. import plain_import
 from .selection import PlainSelection
-from .widgets import button, confirm, label
+from .widgets import Table, button, confirm, label
 
 
 class ImportPane(QWidget):
+    PAGE = 100
+
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
-        self.selected = None
+        self.selected = self.file_page = self.search_dialog = None
+        self.number = 0
         layout = QVBoxLayout(self)
         layout.addWidget(label("选择普通 Store ZIP，核验全部成员、整树摘要及原包摘要。不提取文件，不登记工作树。"))
         self.choose = button("选择 ZIP…", self.pick)
@@ -28,12 +31,32 @@ class ImportPane(QWidget):
                    "核验不会提取。提取须另行选择同一实际 ext4/XFS 挂载上的两个不同目录与一个新目的名称。")
         self.outcome = label(message)
         layout.addWidget(self.outcome)
-        layout.addStretch()
+        self.at = label("尚无已核验的目录。")
+        layout.addWidget(self.at)
+        self.files = Table(("名称", "类型", "字节数", "SHA-256"), "已核验普通 ZIP 的当前目录")
+        self.files.doubleClicked.connect(lambda _index: self.enter())
+        layout.addWidget(self.files, 1)
+        nav = QHBoxLayout()
+        self.up = button("上一级", self.go_up)
+        self.into = button("打开选中的文件夹", self.enter)
+        self.back = button("上一页", lambda: self.turn(-1))
+        self.more = button("下一页", lambda: self.turn(1))
+        self.find = button("在此 ZIP 按名称查找…", self.open_search)
+        for control in (self.up, self.into, self.back, self.more, self.find):
+            control.setEnabled(False)
+            nav.addWidget(control)
+        layout.addLayout(nav)
 
     def release_display(self):
-        if self.selected is not None:
-            self.selected.release_display()
-            self.selected = None
+        dialog, self.search_dialog = self.search_dialog, None
+        if dialog is not None: dialog.reject()
+        if self.selected is not None: self.selected.release_display()
+        self.selected = self.file_page = None
+        self.number = 0
+        self.files.rows.replace(())
+        self.at.setText("尚无已核验的目录。")
+        for control in (self.up, self.into, self.back, self.more, self.find):
+            control.setEnabled(False)
         if self.extract is not None: self.extract.setEnabled(False)
 
     def pick(self):
@@ -42,24 +65,83 @@ class ImportPane(QWidget):
         if not source: return
         self.release_display()
         self.details.setText("尚无本次核验结果。")
-        if self.extract is not None:
-            self.owner.job("正在只读核验整个 ZIP；不会写入文件…",
-                           lambda: PlainSelection.open(source), self.show_selection)
-        else:
-            self.owner.job("正在核验整个 ZIP；不会写入文件…",
-                           lambda: plain_import.inspect(source), self.show_preview)
+        keep_original = self.extract is not None
+        self.owner.job("正在只读核验整个 ZIP；不会写入文件…",
+                       lambda: PlainSelection.open(source, retain=keep_original), self.show_selection)
 
     def show_selection(self, selected):
         self.release_display()
         self.selected = selected
-        self.extract.setEnabled(True)
-        self.show_preview(selected.preview)
+        if self.extract is not None:
+            self.extract.setEnabled(selected.held is not None and not selected.held.closed)
+        preview = selected.preview
+        self.show_folder("")
 
-    def show_preview(self, preview):
         self.details.setText(f"来源：{preview.source}\n完整 ZIP 的 SHA-256：{preview.sha256}\n"
                              f"整树 SHA-256：{preview.tree}\n"
                              f"{preview.count} 个目录项，{preview.size} 字节文件内容")
-        self.owner.inform("只读核验完成；没有创建或更改任何目录。")
+        self.owner.inform("只读核验完成；可以浏览已核验目录。不是仓库快照，没有创建或更改目录。")
+
+    def show_folder(self, directory, number=0):
+        if self.selected is not None:
+            self.show_page(self.selected.index.folder_page(directory, number, limit=self.PAGE), number)
+
+    def show_page(self, page, number):
+        self.file_page, self.number = page, number
+        self.at.setText(f"/{page.directory}  ·  第 {number + 1} 页" + ("" if page.entries else "  ·  空文件夹"))
+        self.files.rows.replace(((entry.name, "目录" if entry.kind == "directory" else "文件",
+                                  "" if entry.size_bytes is None else str(entry.size_bytes), entry.sha256 or ""), entry)
+                                for entry in page.entries)
+        self.up.setEnabled(bool(page.directory))
+        self.into.setEnabled(any(entry.kind == "directory" for entry in page.entries))
+        self.back.setEnabled(number > 0)
+        self.more.setEnabled(page.has_more)
+        self.find.setEnabled(True)
+
+    def enter(self):
+        page, entry = self.file_page, self.files.item()
+        if page is not None and entry is not None and entry.kind == "directory":
+            self.show_folder(f"{page.directory}/{entry.name}" if page.directory else entry.name)
+
+    def go_up(self):
+        if self.file_page is not None and self.file_page.directory:
+            self.show_folder(self.file_page.directory.rpartition("/")[0])
+
+    def turn(self, delta):
+        page = self.file_page
+        if page is None or (delta < 0 and not self.number) or (delta > 0 and not page.has_more): return
+        self.show_folder(page.directory, self.number + delta)
+
+    def open_search(self):
+        selected = self.selected
+        if selected is None or self.search_dialog is not None or self.owner.pending is not None: return
+        from .name_search import NameSearch
+
+        def current(dialog):
+            return self.search_dialog is dialog and self.selected is selected
+
+        def locate(dialog, hit):
+            if not current(dialog): return None
+            index = selected.index
+            number, row = index.locate_name(hit, limit=self.PAGE)
+            page = index.folder_page(hit.parent, number, limit=self.PAGE)
+            if row >= len(page.entries) or page.entries[row] is not hit.entry:
+                raise ValueError("不在原归档目录页内")
+            self.show_page(page, number)
+            if not current(dialog) or self.file_page is not page: return None
+            self.files.selectRow(row)
+            self.files.scrollTo(self.files.rows.index(row, 0))
+            return self.files
+
+        dialog = NameSearch(self.owner, selected.index, current, locate)
+        self.search_dialog = dialog
+
+        def dismissed(_):
+            if self.search_dialog is dialog: self.search_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(dismissed)
+        dialog.open()
 
     def choose_destination(self):
         selected = self.selected

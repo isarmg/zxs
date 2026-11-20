@@ -44,15 +44,19 @@ class DirectoryPage:
     next_cursor: str | None
 
 
-class ArchiveBrowser:
-    """An in-memory view of verified names and digests, never of live archive bytes."""
+@dataclass(frozen=True, slots=True)
+class FolderPage:
+    directory: str
+    entries: tuple[Entry, ...]
+    has_more: bool
 
-    def __init__(self, document: BinaryIO, *, display_name: str):
-        self._commit, tree = read_managed_document(document, display_name=display_name)
-        self._data_bytes = tree.total  # Already summed under the member limits and verified tree digest.
-        self._key = hexdigest(self._commit.encode())
+
+class DirectoryIndex:
+    """One admitted directory tree; no archive path, handle, marker or authority."""
+
+    def __init__(self, verified_rows):
         children: dict[str, list[Entry]] = {"": []}
-        for path, (directory, size, digest) in tree.rows.items():
+        for path, (directory, size, digest) in verified_rows.items():
             parent, _, name = path.rpartition("/")
             if directory:
                 children.setdefault(path, [])
@@ -63,21 +67,6 @@ class ArchiveBrowser:
         for rows in children.values():
             rows.sort(key=_NAME)
         self._children = children
-
-    @classmethod
-    def open(cls, path: str | os.PathLike[str]) -> ArchiveBrowser:
-        """CLI/path adapter. Refuse non-regular documents and a rebound selection."""
-        path = Path(path)
-        with named_document(path) as doc:
-            return cls(doc, display_name=path.name)
-
-    @property
-    def commit(self) -> Commit:
-        return self._commit
-
-    @property
-    def data_bytes(self) -> int:
-        return self._data_bytes
 
     def entry(self, parent, name):
         """Return the exact admitted row, not a matching name from another folder."""
@@ -121,12 +110,45 @@ class ArchiveBrowser:
             raise Rejected("requested folder does not exist in this snapshot")
         return self._children[directory]
 
-    def page_at(self, directory: str, number: int, *, limit: int = 100) -> DirectoryPage:
+    def folder_page(self, directory: str, number: int, *, limit: int = 100) -> FolderPage:
         """Index the original ordering without constructing earlier pages."""
         rows = self._listing(directory, limit)
         if type(number) is not int or not 0 <= number <= max(0, (len(rows) - 1) // limit):
             raise Rejected("page number outside this directory")
-        return self._page(directory, rows, number * limit, limit)
+        return self._items(directory, rows, number * limit, limit)
+
+    @staticmethod
+    def _items(directory, rows, start, limit):
+        entries = tuple(rows[start:start + limit])
+        return FolderPage(directory, entries, start + len(entries) < len(rows))
+
+
+class ArchiveBrowser(DirectoryIndex):
+    """A verified .zxs tree and its managed marker, never of live archive bytes."""
+
+    def __init__(self, document: BinaryIO, *, display_name: str):
+        self._commit, tree = read_managed_document(document, display_name=display_name)
+        self._data_bytes = tree.total
+        self._key = hexdigest(self._commit.encode())
+        super().__init__(tree.rows)
+
+    @classmethod
+    def open(cls, path: str | os.PathLike[str]) -> ArchiveBrowser:
+        """CLI/path adapter. Refuse non-regular documents and a rebound selection."""
+        path = Path(path)
+        with named_document(path) as doc:
+            return cls(doc, display_name=path.name)
+
+    @property
+    def commit(self) -> Commit:
+        return self._commit
+
+    @property
+    def data_bytes(self) -> int:
+        return self._data_bytes
+
+    def page_at(self, directory: str, number: int, *, limit: int = 100) -> DirectoryPage:
+        return self._page(self.folder_page(directory, number, limit=limit))
 
     def list_directory(
         self, directory: str = "", *, cursor: str | None = None, limit: int = 100
@@ -148,12 +170,12 @@ class ArchiveBrowser:
             if i == len(rows) or rows[i].name != name:
                 raise Rejected("cursor does not identify an original list entry")
             start = i + 1
-        return self._page(directory, rows, start, limit)
+        return self._page(self._items(directory, rows, start, limit))
 
-    def _page(self, directory, rows, start, limit):
-        entries = tuple(rows[start:start + limit])
+    def _page(self, page):
+        directory, entries = page.directory, page.entries
         next_cursor = None
-        if start + len(entries) < len(rows):
+        if page.has_more:
             path = f"{directory}/{entries[-1].name}" if directory else entries[-1].name
             next_cursor = f"{self._key}:{path}"
         return DirectoryPage(self._commit, directory, entries, next_cursor)
