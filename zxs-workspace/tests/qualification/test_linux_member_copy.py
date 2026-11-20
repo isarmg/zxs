@@ -13,7 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace.desktop import member_copy
-from zipworkspace.desktop.selection import Selection
+from zipworkspace.desktop.selection import PlainSelection, Selection
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected, new_id
 from zipworkspace.publish import Uncertain
 
@@ -117,6 +117,83 @@ class LinuxMemberCopy(unittest.TestCase):
             with self.assertRaises(zipfile.BadZipFile): plan.run(confirmed=True)
         self.assertEqual(list(self.dest.iterdir()), [])
         self.assertEqual(self.archive.read_bytes(), self.original)
+
+    def plain_plan(self, name="plain-output"):
+        original = self.archive.with_name("plain.zip")
+        with original.open("xb") as raw, zipfile.ZipFile(raw, "w") as archive:
+            archive.comment = b"a plain ZIP; no Workspace identity"
+            info = zipfile.ZipInfo("folder/note")
+            info.external_attr = (stat.S_IFREG | 0o755) << 16
+            archive.writestr(info, b"file payload")
+            archive.writestr("empty/", b"")
+            archive.writestr("zero", b"")
+        selected = PlainSelection.open(str(original))
+        self.addCleanup(selected.release_display)
+        plan = member_copy.PlainZipCopy(selected, str(self.dest/name))
+        plan.pick_private(str(self.private))
+        self.addCleanup(plan.close)
+        return original, selected, plan
+
+    def test_plain_zip_explicitly_extracts_all_verified_bytes_into_one_new_directory(self):
+        original, selected, plan = self.plain_plan()
+        before = original.read_bytes()
+        display = selected.held.fileno()
+        os.lseek(display, 7, os.SEEK_SET)
+        details = plan.review()
+        self.assertIn(selected.preview.tree, details)
+        self.assertFalse(plan.path.exists())
+        self.assertEqual(list(self.private.iterdir()), [])
+        with self.assertRaises(Rejected): plan.run()
+        real = member_copy.rename_new_at
+        def publish(parent, name, target, **kw):
+            stage = self.private/name
+            self.assertFalse(plan.path.exists())
+            self.assertEqual((stage/"folder/note").read_bytes(), b"file payload")
+            self.assertEqual(list((stage/"empty").iterdir()), [])
+            self.assertEqual(stat.S_IMODE((stage/"folder/note").stat().st_mode), 0o600)
+            self.assertEqual((stage/"zero").read_bytes(), b"")
+            self.assertTrue(os.path.samestat(kw["expected_source"], stage.stat()))
+            real(parent, name, target, **kw)
+        with patch.object(member_copy, "rename_new_at", side_effect=publish) as native:
+            self.assertIn("已另存并核验目录", plan.run(confirmed=True))
+            native.assert_called_once()
+        self.assertEqual(os.lseek(display, 0, os.SEEK_CUR), 7)
+        self.assertEqual(original.read_bytes(), before)
+        self.assertEqual(sorted(x.name for x in plan.path.iterdir()), ["empty", "folder", "zero"])
+        self.assertEqual(list(self.private.iterdir()), [])
+
+    def test_plain_zip_replacement_and_crc_failure_never_publish_an_extraction(self):
+        original, _, plan = self.plain_plan()
+        plan.review()
+        from zipworkspace.archive import LOCAL
+        with original.open("rb") as raw:
+            fields = LOCAL.unpack(raw.read(LOCAL.size))
+            body = LOCAL.size + fields[-2] + fields[-1]
+        real = os.pread
+        def corrupt(fd, n, offset):
+            data = real(fd, n, offset)
+            if fd == plan.source and offset <= body < offset + len(data):
+                i = body-offset
+                return data[:i] + bytes([data[i]^1]) + data[i+1:]
+            return data
+        with patch.object(member_copy.os, "pread", side_effect=corrupt), \
+             patch.object(member_copy, "rename_new_at", side_effect=AssertionError("never publish damaged data")):
+            with self.assertRaises(Rejected): plan.run(confirmed=True)
+        self.assertFalse(plan.path.exists())
+        self.assertTrue((self.private/plan.stage_name).is_dir())
+
+        # A fresh inspection still cannot adopt an equal-bytes pathname replacement.
+        selected = PlainSelection.open(str(original))
+        self.addCleanup(selected.release_display)
+        following = member_copy.PlainZipCopy(selected, str(self.dest/"second"))
+        self.addCleanup(following.close)
+        following.pick_private(str(self.private)); following.review()
+        bytes_before = original.read_bytes()
+        original.rename(original.with_name("prior.zip"))
+        original.write_bytes(bytes_before)
+        with patch.object(member_copy.private_stage, "new_child", side_effect=AssertionError("reject replaced original first")):
+            with self.assertRaises(Rejected): following.run(confirmed=True)
+        self.assertFalse(following.path.exists())
 
     def subtree_plan(self, name="tree", *, output="tree-copy", scratch=None):
         entry = self.selected.browser.entry("", name)

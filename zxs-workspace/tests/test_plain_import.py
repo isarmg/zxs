@@ -1,4 +1,4 @@
-"""The release surface is a full ZIP preview, not a filesystem writer."""
+"""A plain preview and the legacy CLI do not themselves grant write authority."""
 from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from hashlib import sha256
 from importlib.util import find_spec
@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import time
 import unittest
@@ -108,7 +109,7 @@ class PlainPreview(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
                      "opt in with a working Qt display backend")
 class PlainPreviewWindow(unittest.TestCase):
-    def test_actual_picker_only_verifies_and_reports_why_there_is_no_write_action(self):
+    def test_actual_picker_verifies_without_asking_for_output_or_creating_one(self):
         from PySide6.QtTest import QTest
         from PySide6.QtWidgets import QApplication, QPushButton
         from zipworkspace.desktop.window import Window
@@ -130,7 +131,13 @@ class PlainPreviewWindow(unittest.TestCase):
                     while win.pending is not None and time.monotonic()<deadline: QTest.qWait(10)
                 self.assertIsNone(win.pending)
                 self.assertIn(sha256(source.read_bytes()).hexdigest(), pane.details.text())
-                self.assertIn(importer.OUTPUT_UNAVAILABLE, pane.outcome.text())
-                self.assertEqual(pane.findChildren(QPushButton), [pane.choose])
+                if sys.platform == "linux":
+                    self.assertIn("核验不会提取", pane.outcome.text())
+                    self.assertIsNotNone(pane.selected)
+                    self.assertTrue(pane.extract.isEnabled())
+                    self.assertEqual(set(pane.findChildren(QPushButton)), {pane.choose, pane.extract})
+                else:
+                    self.assertIn(importer.OUTPUT_UNAVAILABLE, pane.outcome.text())
+                    self.assertEqual(pane.findChildren(QPushButton), [pane.choose])
                 self.assertEqual(set(root.iterdir()), {source})
             finally: win.close()

@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import stat
 from threading import Lock
+from types import MappingProxyType
+
+from .. import plain_import
 
 from ..archive import stamp
 from ..browser import ArchiveBrowser
@@ -34,6 +37,33 @@ class _DisplayFD:
             fd, self._fd = self._fd, -1
         os.close(fd)
     __del__ = close  # Fallback for an undelivered result; normal ownership is explicit.
+
+
+@dataclass(frozen=True, slots=True)
+class PlainSelection:
+    """Ordinary ZIP display with its original read-only descriptor retained for explicit Linux export."""
+    preview: plain_import.Preview
+    observed: tuple[int, int, int, int, int]
+    rows: MappingProxyType
+    held: _DisplayFD
+
+    @property
+    def path(self): return self.preview.source
+
+    def release_display(self): self.held.close()
+
+    @classmethod
+    def open(cls, path):
+        path = Path(path).absolute()
+        if path.suffix.lower() != ".zip": raise Rejected("只能选择普通 .zip 文件")
+        with ExitStack() as guard:
+            with named_document(path) as doc:
+                preview, manifest, observed = plain_import._inspect_document(doc, path)
+                held = _DisplayFD(doc)
+                guard.callback(held.close)
+            choice = cls(preview, observed, MappingProxyType(manifest.rows), held)
+            guard.pop_all()
+            return choice
 
 
 @dataclass(frozen=True, slots=True)

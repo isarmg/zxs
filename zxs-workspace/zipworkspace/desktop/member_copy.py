@@ -7,7 +7,7 @@ import stat
 import sys
 
 from .. import private_stage
-from ..archive import copy_body, read_managed_document, stored_member, stored_subtree
+from ..archive import copy_body, read_managed_document, stored_member, stored_plain, stored_subtree
 from ..comparison import Folder
 from ..document import native_identity
 from ..freeze import _distinct_roots, observe_held
@@ -54,10 +54,14 @@ def _new_path(spelling, *, scratch=False):
     return path
 
 
-def _check_source(selected, source):
-    if (_generation(os.fstat(source)) != selected.observed or
-            _generation(selected.path.stat(follow_symlinks=False)) != selected.observed):
-        raise Rejected("选中的原归档已被移走、替换或修改；不会打开同名文件或改选分支头")
+def _check_source(selected, source, read_proc):
+    named = os.open(selected.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        if (_generation(os.fstat(source)) != selected.observed or
+                _generation(os.fstat(named)) != selected.observed or
+                mount_id(source, read_proc=read_proc) != mount_id(named, read_proc=read_proc)):
+            raise Rejected("选中的原归档已被移走、替换或修改了挂载；不重开正文")
+    finally: os.close(named)
 
 
 def _unoccupied(parent, name):
@@ -84,14 +88,7 @@ class _AnonymousCopy:
             self.stack.close()
 
     def _source(self):
-        named = os.open(self.selected.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
-        try:
-            read = self.proc.read
-            if (_generation(os.fstat(self.source)) != self.selected.observed or
-                    _generation(os.fstat(named)) != self.selected.observed or
-                    mount_id(self.source, read_proc=read) != mount_id(named, read_proc=read)):
-                raise Rejected("选中的原归档已被移走、替换或修改了挂载；不重开正文")
-        finally: os.close(named)
+        _check_source(self.selected, self.source, self.proc.read)
 
     def _parent(self):
         with ExitStack() as check:
@@ -281,15 +278,13 @@ class ZipCopy(_AnonymousCopy):
         return fd, sha
 
 
-class DirectoryCopy:
-    """A selected subtree becomes visible only as one complete directory."""
-    def __init__(self, selected, directory, entry, spelling):
-        if (sys.platform != "linux" or selected.held is None or entry.kind != "directory"
-                or selected.browser.entry(directory, entry.name) is not entry):
-            raise Rejected("只能另存 Linux 窗口中仍持原件的一条已核验目录")
+class _AtomicDirectoryCopy:
+    """The destination becomes visible only as one complete verified directory."""
+    def __init__(self, selected, spelling):
+        if sys.platform != "linux" or selected.held is None:
+            raise Rejected("提取目录需要 Linux 窗口中仍持有核验过的原归档")
         self.path = _new_path(spelling)
         self.selected = selected
-        self.root = f"{directory}/{entry.name}" if directory else entry.name
         self.stage_name = ".zip-workspace-export-" + new_id()
         self.stack = ExitStack()
         self.private = None
@@ -363,17 +358,14 @@ class DirectoryCopy:
             self._parents()
             _unoccupied(self.parent, self.path.name)
             _unoccupied(self.private.parent, self.stage_name)
-            _check_source(self.selected, self.source)
-            prefix = self.root + "/"
-            self.rows = {path[len(prefix):]: (entry.kind == "directory", entry.size_bytes or 0, entry.sha256)
-                         for path, entry in self.selected.browser.verified_entries() if path.startswith(prefix)}
+            _check_source(self.selected, self.source, self.proc.read)
+            self.rows = self._approved_rows()
             self.size = sum(row[1] for row in self.rows.values())
             self.ready = True
-            return (f"原归档：{str(self.selected.path)!r}\n节点：{self.selected.browser.commit.operation}\n"
-                    f"所选子目录：{self.root!r}\n内容：{len(self.rows):,} 项，{self.size:,} 字节（包括空目录）\n"
+            return (f"原归档：{str(self.selected.path)!r}\n{self._describe()}\n"
+                    f"内容：{len(self.rows):,} 项，{self.size:,} 字节（包括空目录）\n"
                     f"新的完整目录：{str(self.path)!r}\n私有暂存：{str(self.private.path / self.stage_name)!r}\n\n"
-                    "仅写这棵子目录，不提取其他文件，不登记或签出工作树。"
-                    "在独占私处复核全部内容后，只改名一次；同名不覆盖。"
+                    "不登记或签出工作树。在独占私处复核全部内容后，只改名一次；同名不覆盖。"
                     "只保存普通文件字节和目录结构，不复制来源元数据，也不打开或执行结果。"
                     "本版本确认后须等待，不能中途取消。失败可能在私处留材料，不删除或另发。")
         except BaseException:
@@ -382,19 +374,19 @@ class DirectoryCopy:
 
     def run(self, *, confirmed=False):
         if confirmed is not True or not self.ready or self.used or self.closed:
-            raise Rejected("只允许明确确认一次已核验的子目录和新位置")
+            raise Rejected("只允许明确确认一次已核验的目录内容和新位置")
         self.used = True
         stage_attempted = may_have_moved = False
         try:
             with self.stack:
                 read = self.proc.read
                 if _ordinary_user(read_proc=read) != self.uid: raise Rejected("普通用户已改变，不能另存")
-                _check_source(self.selected, self.source)
+                _check_source(self.selected, self.source, read)
                 self._parents()
                 _unoccupied(self.parent, self.path.name)
                 reader = _Positional(self.source, self.selected.observed[2])
-                with stored_subtree(reader, reader.end, self.selected.browser.commit, self.root, self.rows) as (archive, files):
-                    _check_source(self.selected, self.source)
+                with self._entries(reader) as (archive, files):
+                    _check_source(self.selected, self.source, read)
                     self._parents()
                     _unoccupied(self.parent, self.path.name)
                     stage_attempted = True
@@ -406,10 +398,10 @@ class DirectoryCopy:
                             _, size, sha = self.rows[name]
                             with archive.open(original) as body, sink.file(name) as dest:
                                 if copy_body(body, size, dest) != sha:
-                                    raise Rejected("私有副本与所选原成员的 SHA-256 不符")
+                                    raise Rejected("私有副本与原预览中成员的 SHA-256 不符")
                         sink.sync(self.rows)
                         sealed = _observe_subtree(stage, sink, self.rows)
-                        _check_source(self.selected, self.source)
+                        _check_source(self.selected, self.source, read)
                         self._parents()
                         self._named_stage(self.private.parent, self.stage_name, stage)
                         if _directory_generation(stage.parent) != sealed:
@@ -448,6 +440,43 @@ class DirectoryCopy:
             raise
         finally:
             self.closed = True
+
+
+class DirectoryCopy(_AtomicDirectoryCopy):
+    """One genuine displayed managed subtree, not the rest of the archive."""
+    def __init__(self, selected, directory, entry, spelling):
+        if entry.kind != "directory" or selected.browser.entry(directory, entry.name) is not entry:
+            raise Rejected("只能另存本次窗口内的一条已核验目录")
+        self.root = f"{directory}/{entry.name}" if directory else entry.name
+        super().__init__(selected, spelling)
+
+    def _approved_rows(self):
+        prefix = self.root + "/"
+        return {path[len(prefix):]: (entry.kind == "directory", entry.size_bytes or 0, entry.sha256)
+                for path, entry in self.selected.browser.verified_entries() if path.startswith(prefix)}
+
+    def _describe(self):
+        return f"节点：{self.selected.browser.commit.operation}\n仅另存所选子目录：{self.root!r}"
+
+    def _entries(self, reader):
+        return stored_subtree(reader, reader.end, self.selected.browser.commit, self.root, self.rows)
+
+
+class PlainZipCopy(_AtomicDirectoryCopy):
+    """Only a preview-held ordinary ZIP; no marker is trusted or created."""
+    def __init__(self, selected, spelling):
+        from .selection import PlainSelection
+        if not isinstance(selected, PlainSelection) or selected.held.closed:
+            raise Rejected("须持有本次普通 ZIP 核验时的原文件")
+        super().__init__(selected, spelling)
+
+    def _approved_rows(self): return self.selected.rows
+
+    def _describe(self):
+        return f"提取完整普通 Store ZIP\n原预览整树 SHA-256：{self.selected.preview.tree}"
+
+    def _entries(self, reader):
+        return stored_plain(reader, reader.end, self.rows)
 
 
 def _directory_generation(fd):

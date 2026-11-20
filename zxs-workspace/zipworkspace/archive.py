@@ -178,7 +178,7 @@ def _member_header(f, item, central_at):
 def _selected_index(document, length, marker):
     count, central = bounded_directory(document, length)
     with zipfile.ZipFile(_IndexedInput(document, length, count, central), "r") as archive:
-        if len(archive.filelist) != count or Commit.decode(archive.comment) != marker:
+        if len(archive.filelist) != count or (marker is not None and Commit.decode(archive.comment) != marker):
             raise Rejected("the selected snapshot directory or marker changed")
         yield archive, central
 
@@ -226,6 +226,29 @@ def stored_subtree(document, length, marker, root, rows):
                 name = name.rpartition("/")[0]
         if accounted != rows.keys() or (not rows and "" not in explicit):
             raise Rejected("the selected subtree is missing an original member or empty directory")
+        yield archive, files
+
+
+@contextmanager
+def stored_plain(document, length, rows):
+    """Reconcile every local declaration with a previous read of this selected ordinary ZIP."""
+    with _selected_index(document, length, None) as (archive, central):
+        listed, files = Manifest(), []
+        limit = central
+        # The next physical local header is a stricter boundary than the
+        # central table, including for any streamed data descriptor.
+        for item in sorted(archive.infolist(), key=lambda row: row.header_offset, reverse=True):
+            if not 0 <= item.header_offset < limit:
+                raise Rejected("ordinary ZIP member ranges overlap")
+            directory, _ = _member_header(document, item, limit)
+            limit = item.header_offset
+            name = item.filename[:-1] if directory else item.filename
+            if not item.file_size and item.CRC:
+                raise Rejected("empty ZIP entry cannot have a nonzero CRC")
+            listed.add(name, directory, item.file_size, None)
+            if not directory: files.append((name, item))
+        if listed.rows != {path: (directory, size, None) for path, (directory, size, _) in rows.items()}:
+            raise Rejected("the ordinary ZIP no longer matches the original approved directory")
         yield archive, files
 
 
@@ -311,8 +334,9 @@ def _read_checked(source, *, managed, sink, blocks=None):
         raise Rejected("ordinary ZIP extraction is not admitted")
     with source as f:
         before = stamp(f)
-        expected_count, central_at = bounded_directory(f, before[2] if blocks is not None else None)
-        reader = _IndexedInput(f, before[2], expected_count, central_at) if blocks is not None else f
+        fixed_window = blocks is not None or not managed
+        expected_count, central_at = bounded_directory(f, before[2] if fixed_window else None)
+        reader = _IndexedInput(f, before[2], expected_count, central_at) if fixed_window else f
         with zipfile.ZipFile(reader, "r") as z:
             if len(z.filelist) != expected_count:
                 raise Rejected("central directory member count disagrees with its footer")

@@ -80,5 +80,6 @@ class Window(QMainWindow):
             self.archive.close_search()
             self.archive.checkout.close_session()
             if self.archive.selection is not None: self.archive.selection.release_display()
+            self.plain_import.release_display()
             self.pool.shutdown(wait=False)
             super().closeEvent(event)

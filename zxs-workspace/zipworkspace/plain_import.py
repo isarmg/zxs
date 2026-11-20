@@ -1,10 +1,10 @@
-"""Preview an ordinary Store ZIP. No destination is currently admitted for publication."""
+"""Read-only ordinary Store ZIP inspection; this CLI never grants a destination."""
 from dataclasses import dataclass
 from pathlib import Path
 import stat
 from typing import Never
 
-from .archive import read_plain_document
+from .archive import read_plain_document, stamp
 from .document import archive_sha, named_document, native_identity
 from .model import Rejected, member_name
 
@@ -18,13 +18,20 @@ class Preview:
     size: int
 
 
+def _inspect_document(doc, source):
+    if source.suffix.lower() != ".zip": raise Rejected("普通 ZIP 核验只接受 .zip 文件。")
+    observed = stamp(doc)
+    tree = read_plain_document(doc)
+    sha = archive_sha(doc)
+    if stamp(doc) != observed: raise Rejected("ordinary ZIP changed during the original inspection")
+    return Preview(source, sha, tree.digest(), len(tree.rows), tree.total), tree, observed
+
+
 def inspect(source):
     source = Path(source).absolute()
     if source.suffix.lower() != ".zip": raise Rejected("普通 ZIP 核验只接受 .zip 文件。")
     with named_document(source) as doc:
-        tree = read_plain_document(doc)
-        sha = archive_sha(doc)
-    return Preview(source, sha, tree.digest(), len(tree.rows), tree.total)
+        return _inspect_document(doc, source)[0]
 
 
 def observe_target(target):
@@ -44,10 +51,10 @@ def observe_target(target):
 
 
 class DestinationUnavailable(Rejected):
-    """No protected same-filesystem staging authority is currently implemented."""
+    """The read-only CLI has no approved original private staging parent."""
 
 
-OUTPUT_UNAVAILABLE = ("当前仅支持只读预览。尚不能证明暂存目录由本应用独占且与目标位于同一文件系统；"
+OUTPUT_UNAVAILABLE = ("此入口只支持只读预览，没有同时绑定专用私有暂存父和原目的父；"
                       "不会提取、发布或清理任何目录。")
 
 
