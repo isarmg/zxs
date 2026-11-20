@@ -94,8 +94,11 @@ fn no_provider_no_challenge_and_changed_revision_or_uncertain_send_never_publish
 }
 
 pub(in crate::smb::connection::sessions) fn challenged(c:&mut Connection,wrapped:bool)->(u64,Vec<u8>) {
+    challenged_at(c,wrapped,1)
+}
+pub(in crate::smb::connection::sessions) fn challenged_at(c:&mut Connection,wrapped:bool,mid:u64)->(u64,Vec<u8>) {
     let (one,last)=ChallengeService::fixture_messages(wrapped);
-    let packet=frame(&body(&one,1,0));let f=parsed(&packet);
+    let packet=frame(&body(&one,mid,0));let f=parsed(&packet);
     let Start::Type1(mut x)=c.receive(&f).unwrap().start_setup() else {panic!("fixture must start with actual Type 1")};
     let send=prepare(&mut x.original,&mut x.phase,None,c,Instant::now(),ChallengeService::fixture_issue).unwrap();
     let sid=send.claim.id.get();send.submitted().unwrap();(sid,last)

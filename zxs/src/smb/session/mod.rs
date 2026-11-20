@@ -1,14 +1,14 @@
 //! Plaintext SMB 3.1.1, fresh authenticated NTLM session, AES-128-CMAC only.
-//! No live authentication issuer, constructor from a wire key, credential lookup, connection
-//! table or service entry point. Verification alone confers no storage rights.
+//! The original connection owns publication and request admission. There is no
+//! production credential provider or listener. A signature alone grants no file access.
 mod der;
 pub(in crate::smb) mod envelope;
 mod ntlm_shape;
 mod strict_verifier;
-pub(in crate::smb) use strict_verifier::{MechanismProof,Pending,Rejected as ChallengeRejected,challenge::{ChallengeService,ChallengeStep},completion::{BoundSession,LiveMark}};
+pub(in crate::smb) use strict_verifier::{MechanismProof,Pending,Rejected as ChallengeRejected,challenge::{ChallengeService,ChallengeStep},completion::{BatchRevision,BoundSession,LiveMark}};
 
 use crate::smb::wire::{
-    message::{Compound, RELATED, SIGNED},
+    message::{Compound, MAX_COMMANDS, Message, RELATED, SIGNED},
     preauth::RequestKeyContext,
 };
 use aes::Aes128;
@@ -99,7 +99,7 @@ struct FinalKeys { signer:SessionSigner, application:Secret, session:Secret, con
 /// The connection/epoch checks and insertion/removal belong to that owner's
 /// table, not to this derived key. Signing is not proof of a new identity.
 #[must_use]
-pub(in crate::smb) struct SessionSigner {
+struct SessionSigner {
     id: NonZeroU64,
     key: Secret,
 }
@@ -110,39 +110,43 @@ impl SessionSigner {
     }
 }
 
-/// All-or-error signature preflight of ordinary authenticated requests on the
-/// plaintext direct transport. Never dispatch during this pass. The lookup
-/// borrows only already verified, non-revoked sessions of this connection.
-/// Credits, body semantics, effective tree/open, cancel/handshake, encrypted
-/// transforms and pending related-operation results are SEPARATE checks.
-pub(in crate::smb) fn verify_ordinary<'s>(
-    compound: &Compound<'_>, mut lookup: impl FnMut(NonZeroU64) -> Option<&'s SessionSigner>,
-) -> Result<(), Fault> {
-    let mut previous = None;
-    for m in compound.messages() {
-        // NEGOTIATE/SESSION_SETUP and CANCEL need different state/handling;
-        // don't let a specially framed command pass the ordinary check.
-        if !matches!(m.header.command, 0x0002..=0x000b | 0x000d..=0x0012) {
-            return Err(Fault::WrongPhase);
-        }
-        let flags = m.header.flags;
-        if flags & SIGNED == 0 { return Err(Fault::SignatureRequired); }
-        let id = if flags & RELATED != 0 {
-            previous
-        } else {
-            NonZeroU64::new(m.header.session).filter(|id| id.get() != u64::MAX)
-        }.ok_or(Fault::UnknownSession)?;
-        let signer = lookup(id).filter(|s| s.id == id).ok_or(Fault::UnknownSession)?;
-        let mut mac = signer.mac()?;
-        // Compound::parse proved a full header. Use each immutable segment
-        // directly: effective/inherited IDs are NOT rewritten into signed bytes.
-        mac.update(&m.raw[..48]);
-        mac.update(&[0; 16]);
-        mac.update(&m.raw[64..]); // includes every terminal/inter-member pad byte
-        mac.verify_slice(&m.raw[48..64]).map_err(|_| Fault::BadSignature)?;
-        previous = Some(id);
+/// Effective session identifiers are only lookup coordinates for the original
+/// already-checked frame, not standalone authority. Never rewrite wire fields.
+pub(in crate::smb) struct VerifiedIds([Option<NonZeroU64>; MAX_COMMANDS]);
+impl VerifiedIds {
+    pub(in crate::smb) fn at(&self,ordinal:usize)->Option<NonZeroU64> {
+        self.0.get(ordinal).copied().flatten()
     }
-    Ok(())
+}
+/// The production entry accepts only sealed strict-session state from the
+/// original connection owner, for the single protected revision this batch
+/// started on. No caller outside this module sees a signer or a key.
+pub(in crate::smb) fn verify_published<'s>(
+    frame:&Compound<'_>,revision:&BatchRevision,mut lookup:impl FnMut(NonZeroU64)->Option<&'s BoundSession>,
+)->Result<VerifiedIds,(usize,Fault)> {
+    verify_ids(frame,|sid|lookup(sid)?.signer_for(revision))
+}
+fn verify_ids<'s>(frame:&Compound<'_>,mut lookup:impl FnMut(NonZeroU64)->Option<&'s SessionSigner>)
+    ->Result<VerifiedIds,(usize,Fault)> {
+    let mut out=VerifiedIds([None;MAX_COMMANDS]);let mut previous=None;
+    for (i,m) in frame.messages().iter().enumerate() {
+        let id=verify_member(m,previous,&mut lookup).map_err(|why|(i,why))?;
+        out.0[i]=Some(id);previous=Some(id);
+    }
+    Ok(out) // a valid prefix never escapes on a later failure
+}
+fn verify_member<'s>(m:&Message<'_>,previous:Option<NonZeroU64>,
+    lookup:&mut impl FnMut(NonZeroU64)->Option<&'s SessionSigner>)->Result<NonZeroU64,Fault> {
+    if !matches!(m.header.command,0x0002..=0x000b | 0x000d..=0x0012) {return Err(Fault::WrongPhase);}
+    if m.header.flags&SIGNED==0 {return Err(Fault::SignatureRequired);}
+    let id=if m.header.flags&RELATED!=0 {previous} else {
+        NonZeroU64::new(m.header.session).filter(|v|v.get()!=u64::MAX)
+    }.ok_or(Fault::UnknownSession)?;
+    let signer=lookup(id).filter(|s|s.id==id).ok_or(Fault::UnknownSession)?;
+    let mut mac=signer.mac()?;
+    mac.update(&m.raw[..48]);mac.update(&[0;16]);mac.update(&m.raw[64..]);
+    mac.verify_slice(&m.raw[48..64]).map_err(|_|Fault::BadSignature)?;
+    Ok(id)
 }
 
 #[cfg(test)]

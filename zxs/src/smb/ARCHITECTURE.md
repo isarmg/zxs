@@ -88,15 +88,21 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 只有严格证明仍对应原凭据代，才能用该证明的原末请求头和机制实际输出组装最终回复。根据 [MS-SMB2 §3.3.5.5.3 第 6 至 12 步](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)，从同一次 NTLM ExportedSessionKey 和截至末请求的 SHA-512 分开派生 SMBSigningKey 与 SMBAppKey，各自的标签含终止 NUL；最终回复不再进入 KDF。单通道引用同一签名密钥，保留私有会话密钥和应用密钥，不导出给存储或 RPC。服务器按原请求的 MID、SID、charge、Reserved、优先级和应回额度，对零 guest/null/encrypt 标志、真实 GSS token（直接 NTLM 为零长，SPNEGO 有独立服务端名单 MIC）及整份原消息做 AES-CMAC 后设置 SIGNED。两条签名／分离密钥固定向量从同一原连接机制证明确认，不是实机结果。机制内封存的消息本身不授会话。只有持同一原 Claim 的连接能按下述顺序处理，文件授权不在这一步。
 
-同一次服务运行另对最多 128 个协商成功的连接登记弱引用，按实收 ClientGuid 和实际选中的 dialect 建有界客户端表。在真实 GSS 末轮检索／插入方言；不一致不能接收成功，也不影响同 GUID 的其他会话。根据[连接丢失规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/eb5bfe99-47fe-4e87-8e87-08a084dcefb6)，只有该 GUID 的最后一条已协商连接消失，才在整理登记时允许清掉客户端项；GUID 不是主体。原 ProofTaken 项只归该收到的请求。最终签名包仍要核原本应回的额度，交给原发送者之前复核凭据和原期限；仅当**原发送者已完整提交同一不可变消息**，在同一注册／凭据代的短临界区内以该 Claim 转为 Valid，再结清原额度。提交不明、过期、断连或撤代不产生可用状态。密钥和主体只留在所属连接，本运行全局只留可撤销的弱标记；没有开放后台构造器、密钥 getter、实际传输、原生监听或生产凭据读取。普通消息的授权与树／打开表未接线；不支持重新认证或绑定，不会借它刷新原有效会话。部署时真实传输必须按提交合同处理部分写／断开，并主动回收静默连接。
+同一次服务运行另对最多 128 个协商成功的连接登记弱引用，按实收 ClientGuid 和实际选中的 dialect 建有界客户端表。在真实 GSS 末轮检索／插入方言；不一致不能接收成功，也不影响同 GUID 的其他会话。根据[连接丢失规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/eb5bfe99-47fe-4e87-8e87-08a084dcefb6)，只有该 GUID 的最后一条已协商连接消失，才在整理登记时允许清掉客户端项；GUID 不是主体。原 ProofTaken 项只归该收到的请求。最终签名包仍要核原本应回的额度，交给原发送者之前复核凭据和原期限；仅当**原发送者已完整提交同一不可变消息**，在同一注册／凭据代的短临界区内以该 Claim 转为 Valid，再结清原额度。提交不明、过期、断连或撤代不产生可用状态。密钥和主体只留在所属连接，本运行全局只留可撤销的弱标记；没有开放后台构造器、密钥 getter、实际传输、原生监听或生产凭据读取。普通消息已能从这个 Valid 会话核签并短借原成员，树／打开表和实际命令派发仍未接线；不支持重新认证或绑定，不会借它刷新原有效会话。部署时真实传输必须按提交合同处理部分写／断开，并主动回收静默连接。
 
 ## 认证后的明文消息签名（未接普通命令派发、网络或存储）
 
 `session/` 实现[规范 KDF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/da4e579e-02ce-4e27-bbce-3fc816a3ff92) 的一个 HMAC-SHA-256 计数块，从同一新 NTLM 会话的 16 字节导出键和最后一个请求的 64 字节 transcript 派生 128 位签名键。标签含结尾 NUL，KDF 自己的分隔零字节另算。当前没有生产账户或凭据来源；只有完成挑战、主体、MIC 和当前代检查的原尝试才能交出这一对，不能从报文、Web 身份或布尔值制造会话。密钥缓冲使用 zeroize；不承诺清除所有栈临时副本。没有使用宿主加密服务。
 
-[协商](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)没有 Signing Capabilities context 时仍强制 CMAC；显式 CMAC 或合法非空但无共同算法时应答须回且只回 CMAC。计数为零、被截断或串错请求/回复不能作“无签名”处理。最终回复的签名函数只接收与最终请求同 MessageId、同已分配 SessionId 的实际未签成功响应；拒绝 guest/null/encrypt 标记。它给该响应签名，不把成功响应再加入 KDF。普通明文请求只有签名位和全部 16 字节 [AES-CMAC 校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5b570c0b-0854-4324-8fb5-d410692dde3e)均成立才通过签名检查。每段用原 SMB 消息和自己的尾填充，只有 Signature 16 字节置零；关联链继承的实际 SessionId 只用来选键，不改变验签字节。不相关链可涉及多个有效会话。整批验完才可能进入独立的 credits、当前会话/树、命令、原打开和存储终验；没有这里发出的成功应答或文件授权。普通回复头的生成/签名、CANCEL 和加密 transform 不由此入站函数处理。
+[协商](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)没有 Signing Capabilities context 时仍强制 CMAC；显式 CMAC 或合法非空但无共同算法时应答须回且只回 CMAC。计数为零、被截断或串错请求/回复不能作“无签名”处理。最终回复的签名函数只接收与最终请求同 MessageId、同已分配 SessionId 的实际未签成功响应；拒绝 guest/null/encrypt 标记。它给该响应签名，不把成功响应再加入 KDF。普通明文请求只有签名位和全部 16 字节 [AES-CMAC 校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5b570c0b-0854-4324-8fb5-d410692dde3e)均成立才通过签名检查。每段用原 SMB 消息和自己的尾填充，只有 Signature 16 字节置零；关联链继承的实际 SessionId 只用来选键，不改变验签字节。不相关链可涉及多个有效会话。入站先从已实际发出的窗口扣原整帧额度，随后整批签完才给出一次一个的会话成员短借；没有这里发出的成功应答或文件授权。普通回复头的生成/签名、CANCEL 和加密 transform 不由此入站函数处理。
 
 `src/test/smb/signing.rs` 保留两种协商下首个 TREE_CONNECT 的独立固定值、无签/错签拒绝，以及同链/异会话 compound 的原字节向量。测试只使用公开合成值，没有执行，不是实际登录或互通。原生三端验收仍须分开“无缓存端点的首次访问”和“同一身份重连”；记录 Windows 冷访问有无 multi-protocol opener，旧服务缓存的热路径不是首连通过。不增加 SMB1 文件操作或降级。
+
+### 原连接认证成员：先验整批，再逐条短借
+
+`connection/sessions/ordinary` 只消费同一原连接的 `Received`。对原帧中所有受支持的普通成员，按[签名检查](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/85df1680-2ee7-4d25-a916-a982371ddc75)与[会话检查](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b495e2da-8711-4772-b292-453be0394b49)找该连接已经真实发布的 Valid 项；同一批只认同一受保护凭据代，先核每段原始签名，末段不通过也不给前段票。无 Signing Capabilities 与明确选 CMAC 的两种情况都不准首个普通命令缺签。只完成 MORE、别的连接知道 SID、报文写了有效 TreeId 都不是授权。已发布的项不再强持 NTLM 密验材料，保有的是该会话自身密钥及可失效的原代弱标记。
+
+整批通过后仅能按顺序短借同一原消息和原会话，并在发给业务前逐项重核原登记、连接和凭据代。接线方在实际使用／提交时仍须终验，不能长期保存布尔结果；不把全局或凭据锁带入网络／存储。合法消费编号但载荷计费不足的成员没有业务票，保留成员级参数错误；后续不相关成员仍独立，相关链保留前件失败而不虚构 Tree／Open 或统一错误码。[相关链执行](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1)必须用紧邻命令的真实处理结果；验签使用的继承 SID 不发共享权限、Root/FILE 权限或 MaximalAccess。当前不派发命令、不出普通 SMB 回复、也不做 CANCEL；遗弃未结的应答账会关闭原连接。`src/test/smb/ordinary.rs` 的公开合成源例从同一次协商、挑战和签名末包进入此门，没有执行测试或实机。
 
 ## 文件 I/O 请求与原打开边界（未接线）
 

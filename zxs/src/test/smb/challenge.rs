@@ -13,6 +13,9 @@ impl ChallengeService {
     pub(in crate::smb) fn fixture_issue(&self,start:HaveNegotiate,id:NonZeroU64,expires:Instant)->Result<ChallengeStep> {
         self.issue_from(start,id,expires,||Ok(([0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18],0x01da_bc00_1122_3344)))
     }
+    pub(in crate::smb) fn fixture_revision_holders(&self)->usize {
+        self.revision.read().unwrap().as_ref().map_or(0,Arc::strong_count)
+    }
     pub(in crate::smb) fn fixture_revoke(&self) {*self.revision.write().unwrap()=None;}
 }
 fn actual(gss:&[u8],mid:u64,sid:u64)->Vec<u8> {

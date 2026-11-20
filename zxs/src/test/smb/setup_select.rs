@@ -15,9 +15,16 @@ impl Opening {
     }
 }
 pub(super) fn connected(run:&RunningServerGuid)->Connection {try_connected(run).unwrap()}
-pub(super) fn try_connected(run:&RunningServerGuid)->Result<Connection> {
+pub(super) fn try_connected(run:&RunningServerGuid)->Result<Connection> {connected_as(run,false)}
+pub(super) fn connected_as(run:&RunningServerGuid,explicit_cmac:bool)->Result<Connection> {
     let [mut q,mut r,..]=synthetic_exchange();r[72..88].copy_from_slice(run.wire());
     q[14..16].copy_from_slice(&4u16.to_le_bytes());r[14..16].copy_from_slice(&4u16.to_le_bytes());
+    if explicit_cmac {
+        for (p,at,pad) in [(&mut q,96,0xa5),(&mut r,70,0xb6)] {
+            p[at..at+2].copy_from_slice(&2u16.to_le_bytes());p.resize(p.len().next_multiple_of(8),pad);
+            p.extend_from_slice(&[8,0,4,0,0,0,0,0,1,0,1,0]);
+        }
+    }
     let raw=frame(&q);Opening::received(&parsed(&raw))?.bind(r,run)?.submitted()
 }
 pub(super) fn selected(c:&mut Connection,mid:u64,now:Instant)->Result<u64> {

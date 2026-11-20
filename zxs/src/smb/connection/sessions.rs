@@ -4,6 +4,7 @@
 pub(in crate::smb) mod challenge;
 pub(in crate::smb) mod proof;
 pub(in crate::smb) mod finish;
+pub(in crate::smb) mod ordinary;
 mod clients;
 use super::{Connection,Fault,Origin,Received,ReplySend,Result,setup::{Existing,Select}};
 use crate::smb::{session::envelope::{AwaitNegotiate,HaveNegotiate},wire::setup_reply};

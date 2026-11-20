@@ -87,6 +87,9 @@ fn final_reply(id: u64) -> Vec<u8> {
     p
 }
 
+fn verify_ordinary<'s>(frame:&Compound<'_>,lookup:impl FnMut(NonZeroU64)->Option<&'s SessionSigner>)->Result<(),Fault> {
+    verify_ids(frame,lookup).map(drop).map_err(|(_,why)|why)
+}
 fn verify(p: &[u8], signer: &SessionSigner) -> Result<(), Fault> {
     envelope(p, |c| verify_ordinary(c, |id| (id == signer.id).then_some(signer)))
 }

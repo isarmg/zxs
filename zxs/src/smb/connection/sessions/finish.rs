@@ -90,4 +90,4 @@ impl Registration {
 
 #[cfg(test)]
 #[path = "../../../test/smb/setup_finish.rs"]
-mod tests;
+pub(super) mod tests;

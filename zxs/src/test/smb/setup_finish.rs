@@ -2,19 +2,29 @@
 //! models the transport completion callback; no socket/credential operation.
 use super::*;
 use crate::smb::connection::{
-    sessions::{Resume,LIFETIME,challenge::tests::{challenged,provider},tests::connected},
+    sessions::{Resume,LIFETIME,challenge::tests::{challenged,challenged_at,provider},tests::connected},
     setup::{Start,tests::{body,frame,parsed}},
 };
 use crate::smb::wire::message::Compound;
 use std::time::Duration;
 
 fn last_body(t:&[u8],sid:u64)->Vec<u8> {
-    let mut p=body(t,2,sid);p[16..20].copy_from_slice(&0x20u32.to_le_bytes());
+    last_at(t,sid,2)
+}
+fn last_at(t:&[u8],sid:u64,mid:u64)->Vec<u8> {
+    let mut p=body(t,mid,sid);p[16..20].copy_from_slice(&0x20u32.to_le_bytes());
     p[32..36].copy_from_slice(&0x44332211u32.to_le_bytes());frame(&p)
 }
 fn proven<'a>(f:&'a Compound<'a>,c:&mut Connection)->Proven<'a> {
     let Start::Existing(x)=c.receive(f).unwrap().start_setup() else {panic!("not final scoped request");};
     let Resume::Proven(proof)=x.continue_setup(c) else {panic!("not a strict mechanism result");};proof
+}
+// Fixture setup still performs the complete paid handshake and publishes its
+// exact signed final through the original connection. No signer injection.
+pub(in crate::smb::connection::sessions) fn publish_at(c:&mut Connection,first:u64)->u64 {
+    let (sid,last)=challenged_at(c,false,first);let data=last_at(&last,sid,first+1);
+    let fr=parsed(&data);let mut proof=proven(&fr,c);
+    proof.prepare(c).unwrap().submitted().unwrap();sid
 }
 #[test]
 fn submitted_exact_signed_final_installs_only_its_live_scope_and_a_fresh_credit() {

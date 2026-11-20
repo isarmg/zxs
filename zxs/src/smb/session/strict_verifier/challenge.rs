@@ -19,7 +19,7 @@ struct ServerNames {
 pub(in crate::smb) struct ChallengeStep { gss:Vec<u8>, issued:Issued }
 
 impl ChallengeService {
-    fn snapshot(&self)->Result<Arc<ProtectedRevision>> {
+    pub(super) fn snapshot(&self)->Result<Arc<ProtectedRevision>> {
         self.revision.read().map_err(|_|Rejected)?.as_ref().cloned().ok_or(Rejected)
     }
     pub(super) fn current(&self,rev:&Arc<ProtectedRevision>)->bool {
