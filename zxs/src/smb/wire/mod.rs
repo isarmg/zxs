@@ -6,6 +6,7 @@ pub(in crate::smb) mod io_fields;
 pub(in crate::smb) mod io_reply;
 pub(in crate::smb) mod message;
 pub(in crate::smb) mod negotiate;
+pub(in crate::smb) mod negotiate_reply;
 pub(in crate::smb) mod path_fields;
 pub(in crate::smb) mod query_fields;
 pub(in crate::smb) mod preauth;

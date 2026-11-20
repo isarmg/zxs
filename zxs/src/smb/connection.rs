@@ -7,7 +7,10 @@ use super::wire::{
     direct::MAX_FRAME_BYTES, message::{Compound, MAX_COMMANDS},
     negotiate::Offer, preauth::{ConnectionHash, NegotiateRequestHash},
 };
+use super::wire::{negotiate::CmacChoice, negotiate_reply::{OriginalHeader, Selection}};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+pub(in crate::smb) mod negotiate;
 
 const CAP: u16 = 64; // bound on live number span AND advertised + in-flight requests
 const CANCEL: u16 = 0x000c;
@@ -15,7 +18,8 @@ const K64: u64 = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Fault {
-    Opening, Closed, Range, FrameSize, Resources, Exhausted, WrongBatch, NoReply, WrongReply,
+    Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, Closed, Range, FrameSize,
+    Resources, Exhausted, WrongBatch, NoReply, WrongReply,
 }
 pub(in crate::smb) type Result<T> = std::result::Result<T, Fault>;
 
@@ -28,10 +32,14 @@ struct ClientOffer { dialects_le: Vec<u8>, guid: [u8;16], security_mode: u16, ca
 /// A fresh direct 3.1.1 offer. Before NEGOTIATE the sole available MID is 0.
 /// A multi-protocol SMB1 opener is NOT accepted as a fresh direct connection.
 #[must_use]
-pub(in crate::smb) struct Opening { hash: NegotiateRequestHash, grant: u16, client: ClientOffer }
+pub(in crate::smb) struct Opening { hash: NegotiateRequestHash, grant: u16, client: ClientOffer, original: OriginalHeader }
 impl Opening {
     pub(in crate::smb) fn received(frame: &Compound<'_>) -> Result<Self> {
-        let offer = Offer::parse(frame).map_err(|_| Fault::Opening)?;
+        let offer = Offer::parse(frame).map_err(|e| match e {
+            super::wire::Error::UnsupportedDialect => Fault::NoDialect,
+            super::wire::Error::NoPreauthHashInCommon => Fault::NoPreauthHash,
+            _ => Fault::Opening,
+        })?;
         let [m] = frame.messages() else { return Err(Fault::Opening); };
         let hash = NegotiateRequestHash::received(&offer).map_err(|_| Fault::Opening)?;
         let mut dialects_le = Vec::new();
@@ -39,29 +47,39 @@ impl Opening {
         dialects_le.extend_from_slice(offer.dialects_le);
         let client = ClientOffer { dialects_le, guid: offer.client_guid, security_mode: offer.security_mode,
                                    capabilities: offer.capabilities };
-        Ok(Self { hash, grant: m.header.credit_request.clamp(1,CAP), client })
+        let original = OriginalHeader::from_offer(&offer).map_err(|_| Fault::Opening)?;
+        Ok(Self { hash, grant: m.header.credit_request.clamp(1,CAP), client, original })
     }
     /// Initial request may ask for 0; NEGOTIATE must always grant at least 1.
     pub(in crate::smb) fn credit_response(&self) -> u16 { self.grant }
-    pub(in crate::smb) fn bind(self, actual: &[u8]) -> Result<OpeningSend<'_>> {
-        let (actual_grant, limits) = direct_445_grant(actual).map_err(|_| Fault::Opening)?;
+    // Only our serializer can reach this production path. Take exclusive
+    // ownership so the bytes checked and hashed below cannot be replaced.
+    fn bind(self, actual: Vec<u8>) -> Result<OpeningSend> {
+        let (actual_grant, limits) = direct_445_grant(&actual).map_err(|_| Fault::Opening)?;
         if actual_grant != self.grant { return Err(Fault::Opening); }
-        let hash = self.hash.reply(actual).map_err(|_| Fault::Opening)?;
-        Ok(OpeningSend { actual, hash, grant: self.grant, limits, client: self.client })
+        let server = Selection::emitted(&actual).map_err(|_| Fault::Opening)?;
+        let signing = self.hash.signing_choice();
+        let hash = self.hash.reply(&actual).map_err(|_| Fault::Opening)?;
+        Ok(OpeningSend { actual, hash, signing, server, grant: self.grant, limits, client: self.client })
     }
 }
 #[must_use]
-pub(in crate::smb) struct OpeningSend<'a> {
-    actual: &'a [u8], hash: ConnectionHash, grant: u16, limits: Limits, client: ClientOffer,
+pub(in crate::smb) struct OpeningSend {
+    actual: Vec<u8>, hash: ConnectionHash, signing: CmacChoice, server: Selection,
+    grant: u16, limits: Limits, client: ClientOffer,
 }
-impl OpeningSend<'_> {
-    pub(in crate::smb) fn bytes(&self) -> &[u8] { self.actual }
+impl OpeningSend {
+    pub(in crate::smb) fn bytes(&self) -> &[u8] { &self.actual }
     /// Called by the same transport owner only after successful submission of
     /// these immutable bytes. Failure/partial send: drop, do not open.
-    pub(in crate::smb) fn submitted(self) -> Connection {
-        Connection { hash: self.hash, limits: self.limits, client: self.client, in_flight: 0,
+    pub(in crate::smb) fn submitted(self) -> Result<Connection> {
+        // MS-SMB2 returns a CMAC selection when no signer overlaps. The
+        // conformant client rejects it. Do not expose a usable session fork
+        // on this server even if a client ignores its own list.
+        if self.signing == CmacChoice::NoCommon { return Err(Fault::NoCommonSigning); }
+        Ok(Connection { hash: self.hash, limits: self.limits, client: self.client, server: self.server, in_flight: 0,
             closed: Arc::new(AtomicBool::new(false)),
-            window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } }
+            window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } })
     }
 }
 
@@ -136,7 +154,7 @@ impl Drop for Debits {
 
 #[must_use]
 pub(in crate::smb) struct Connection {
-    hash: ConnectionHash, window: Window, limits: Limits, client: ClientOffer, in_flight: u16,
+    hash: ConnectionHash, window: Window, limits: Limits, client: ClientOffer, server: Selection, in_flight: u16,
     closed: Arc<AtomicBool>, // instance identity and terminal latch, not a login
 }
 impl Connection {

@@ -97,6 +97,9 @@ fn selected_suite(p: &[u8], choice: CmacChoice) -> Result<()> {
 pub(in crate::smb) struct NegotiateRequestHash { value: Hash, mid: u64, choice: CmacChoice }
 
 impl NegotiateRequestHash {
+    /// Selected from this exact received offer, not recomputed using a client name or a second request.
+    pub(in crate::smb) fn signing_choice(&self) -> CmacChoice { self.choice }
+
     pub(in crate::smb) fn received(offer: &Offer<'_>) -> Result<Self> {
         // The initial, direct SMB2 connection has one credit / MessageId 0.
         // Do not silently accept the second leg of an SMB1 multi-protocol

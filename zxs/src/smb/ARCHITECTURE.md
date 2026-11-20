@@ -1,6 +1,6 @@
 # ZXS 内部 Rust SMB 服务
 
-**当前是未接线的协议、严格机制校验、签名与权限前置，不是可挂载的服务。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。不生成协商成功包，不监听 445，不签发生产认证、会话或共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
+**当前是未接线的协议、严格机制校验、签名与权限前置，不是可挂载的服务。** `wire/` 能分开 Direct TCP 帧、校验整条请求链的 SMB2 头和边界、读取客户端的 3.1.1 协商提议。`backend/` 能为已选对象有界预留读、写、删共享许可，兼容判定完成不等于已取得 Core 写权。此段没有生产存储句柄的签发者，也未实现目录首开特例、范围锁或删除待定。客户端说“支持”不等于服务器同意。已能生成未发送的独立 3.1.1 协商成功消息；无生产服务实例提供者，不监听 445，不签发生产认证、会话或共享。现行 Samba 运行入口不调用这里；没有编译、运行测试或进行真实客户端验收。
 
 `wire/path_fields` 从单条 CREATE / SET_INFO 普通 rename 消息的声明范围提取名字，`backend/path` 是唯一业务名字解析：严格 UTF-16、以同一共享为根，逐部件调用现有显示名规则，保留大小写和 Unicode 原拼写，不从名字判断数据盘／回收站，不解释宿主路径。CREATE 空名和未处理的 contexts 一起保留，不把重连请求误作根权限。rename 源是本次协议句柄，目标的替换标志不是覆盖授权。关于多部件目标，[微软 SET_INFO 条文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/43cf22fe-84cb-49cf-b3e7-e3d7d766a7b7) 的分隔符限制与 full pathname 表述并存；[Linux 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2inode.c#L1076-L1112) 会编码目标路径。此处为 ZXS 同树移位保留这个目标形状，不表示任何原生客户端已完成还原。具体成员字节额度、当前盘和删除原单仍由 Core 选择和复核。
 
@@ -10,7 +10,7 @@
 
 ## 每条直连 TCP/445 的 MessageId 和 credits（未接监听）
 
-`connection` 从原始 3.1.1 NEGOTIATE 请求建立一次性起点：这时只允许 MessageId 0。保留真实客户端 GUID、安全模式、capabilities 及**完整原序的 dialect 数组**，而非仅记录是否见过 3.1.1。根据[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)，TCP/445 上 3.1.1 必须支持多额度，服务器成功回复须含 LARGE_MTU；客户端初始请求即使要 0 也至少回 1。仅已序列化且匹配本次请求、SHA-512 transcript、应发额度、实际读／写／事务大小的回复才能绑定；原发送者提交了这份字节后，才产生仅限原连接的可用窗口。已协商的连接不能再次走 NEGOTIATE。此处不生成完整协商应答、稳定 ServerGuid、随机盐或机制广告，不启用传输服务。
+`connection` 从原始 3.1.1 NEGOTIATE 请求建立一次性起点：这时只允许 MessageId 0。保留真实客户端 GUID、安全模式、capabilities 及**完整原序的 dialect 数组**，而非仅记录是否见过 3.1.1。根据[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)，TCP/445 上 3.1.1 必须支持多额度，服务器成功回复须含 LARGE_MTU；客户端初始请求即使要 0 也至少回 1。仅已序列化且匹配本次请求、SHA-512 transcript、应发额度、实际读／写／事务大小的回复才能绑定；原发送者提交了这份字节后，才产生仅限原连接的可用窗口。已协商的连接不能再次走 NEGOTIATE。现在由同一个 Opening 生成下节所述的实际成功消息，但不写网络、不启用传输服务。
 
 - [服务端窗口](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dec8e905-9477-4c3f-bc64-b18d97c9f905)和[序号验证](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/0326f784-0baf-45fd-9687-626859ef5a9b)：额度对应已实际发出的、单调新发的编号。可乱序接收，不能重用、跨空洞，或在 u64 末端回绕。每成员从自身 MessageId 消耗至少一格，正多额度需整个连续区间仍可用；关联成员不继承 MessageId。整批只能在同一**事前已发**窗口上扣减；任何范围无效即关本连接，不逐项执行后再发现越界。本地最多 64 格跨度，且可用额度加未完成普通请求不超过 64；不能靠不断填高编号扩张内存。这是额度记录，不替代原连接的 RequestList、会话签名或业务权。将来真正的 RequestList 须按 §3.3.5.2 为每个非 CANCEL 成员先登记自己的原请求，并把同一不可换包的原字节、该项账务与后续验签／派发绑定；不能拿账务结果另配 SESSION_SETUP 或业务帧。 本端只公布可兑现的 MaxWriteSize，不超过约束整个入站 SMB 消息的 MaxTransactSize；这是本地入站边界的约定，不要求三种协议上限相等。MaxReadSize 的数据方向相反。
 - [载荷校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/fba3123b-f566-4d8f-9715-0f529e856d25)独立于序号：零计费不表示零消费，最多覆盖 64 KiB；正计费按每格 65,536 字节。READ、WRITE、QUERY_DIRECTORY、CHANGE_NOTIFY、QUERY_INFO、SET_INFO、IOCTL 用原始声明值。查询信息按入／出最大值，IOCTL 两边分别在 u64 相加后再比较。错误或截断不能变成少计费的成功。已花合法编号但载荷不足是成员参数错误，不归还旧编号、不伪称已操作文件；前序认证、树／原 OPEN 失败仍按对应命令的规范顺序处理。
@@ -18,6 +18,16 @@
 - [授额](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/2e366edb-b006-47e7-aa94-ef6f71043ced)与[同步复合回复](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf)按成员对账。候选额度尚不可花；服务端先对最终不可变回复整链核同一次批次的原 MID／command／CreditResponse，待原传输确认成功提交才一次公布。跨连接的批次、重复公布、丢失普通应答、传输结果不明、编号耗尽都不能恢复旧额度。当没有剩余额度时，服务器须补至少一格或关闭耗尽的连接，不能留下无法继续的伪活动连接。此出口不允许异步 interim/final 冒充同步回复；未来异步只允许在 interim 发一次额度。该模块只核信用，不把正确签名、可用状态或授权视作已成立。
 
 `src/test/smb/credits.rs` 保留初包、乱序、多额度、关联／非关联、CANCEL、原载荷边界、同步回包对账和整数末端的源级例子。未运行客户端或测试，也未对生产端口发包。
+
+## 原生 NEGOTIATE 成功应答（不含认证成功或网络发送）
+
+对一条合法的全新 Direct TCP 请求，`connection/negotiate` 从原 Opening、应授额度和同一次服务运行的 GUID 出发，使用已有的 Linux `getrandom(0)` 封装单独取 32 字节公开盐，并按 [FILETIME](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp/2c57429b-fdd4-488f-b5fc-9e4cf020fcdf) 记录服务端当前 UTC 时间；不给空标识、随机失败或越界时钟造替代值。`wire/negotiate_reply` 写[同步成功头](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d39a64be-b8f8-424d-b8e5-a2cf5257459e)与[完整协商正文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/63abf97c-0d09-47e2-88d6-6bfa552949a5)：只选 0x0311／SHA‑512，安全模式是启用且必须签名；只公布 LARGE_MTU，读／写／事务三项目前均为 64 KiB。上下文相对 SMB2 头 8 字节对齐；不宣告加密、租约、多通道、持久句柄、压缩、RDMA 或通知。客户端的 cipher 清单只是 offer，不是“强制加密”开关；要求数据加密的客户端／共享不得作为已加密使用，更不能静默退回传明文。
+
+没有 Signing Capabilities 时仍强制 AES‑128‑CMAC，但不加签名协商 context；有共同 CMAC 时只回该项。合法非空清单与本端没有共同算法时，[服务器规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)仍要求回选 CMAC，而[客户端规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/3b29f3af-86f9-4962-8cf3-43471cb59363)要求拒绝未提议的算法。原回复可形成，提交后本端也不给这一路可用连接或 SESSION_SETUP 起点。没有 3.1.1、没有共同预认证哈希、畸形 Signing 清单分别拒绝；普通错误回复、真正的 RequestList 和 socket 仍未在此处实现。成功包只保存在私有所有者中；credits 和 SHA‑512 复核的就是交给传输者的同一份不可变字节。
+
+[服务器初始化](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/04e0383e-e2b4-49c2-803f-1313d9c0b2ff)要求新生成 ServerGuid；[Windows 的启动行为 <26>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a64e55aa-1152-48e4-8206-edd96444e7f7)也是每次启动换一个。它对同一运行实例的所有连接稳定，按 [MS-DTYP 的 GUID 字节序](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp/001eec5a-7f8b-4293-9e21-ca349392db40)写入，不是永久安装 ID、池 ID、Samba instance_id 或客户端身份。本切片为将来的真实初始化所有者预留不透明 `RunningServerGuid`，没有生产构造器、磁盘变更或 per-connection 自动生成。绝不能用测试 GUID 启动服务或复用旧权限。
+
+选择标准允许的**空 GSS 安全缓冲区**（起点 128，长度零），由客户端发起认证；不编造 Kerberos、NTLM 或 GSS 服务器广告，不从空缓冲区放行匿名。原生源码方面，[Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L1237-L1268)在空缓冲区启用 raw NTLMSSP 选择，[Apple SMBClient](https://github.com/apple-oss-distributions/SMBClient/blob/99da2d9a4bbe17cde3cee382ad3edc16e25f5535/kernel/netsmb/smb_smb_2.c#L6891-L6951)可继续解析协商 context；均不能代替后续严格 MIC 或三端挂载验收。 `src/test/smb/negotiate_reply.rs` 保留默认／显式两套完整应答及下一条原请求哈希固定值、无共同签名、未知能力、时钟边界和本地失败源码例；没有运行构建、测试或客户端。
 
 ## SHA-512 原字节记录（尚未接到网络或身份认证）
 
@@ -29,7 +39,7 @@
 
 [初始 GSS 封装](https://www.rfc-editor.org/rfc/rfc2743#section-3.1) 只在客户端首条使用；[RFC 4178 §§4–6](https://www.rfc-editor.org/rfc/rfc4178#section-4.2) 的后续 NegTokenResp 不重复包装。保存客户端机制顺序及原 DER SEQUENCE（不含显式 [0]）给独立的 mechListMIC 校验。若 NTLM 不在首位，不使用其他机制的乐观 token 或早期 MIC，必先用实际 MORE 选择 NTLM 并请求名单 MIC；此后收到新的 Type 1 才接收 Type 2。优先 NTLM 无乐观 token 时也要先走机制选择。后续客户端不能再选机制，未知 DER 扩展有界跳过但不授予能力；即使客户端首条带有 Init2 的 NegHints，也只忽略其有界 SEQUENCE，不从提示名推出目标或身份。首答已 request-mic 而末条没有相应 MIC，按 §5(c)(V) 终止；即使形状和长度都正确也须实际核验，不能由“有字段”推出认证。
 
-[MS-NLMP 三种报文与字段](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/033d32cc-88f9-4483-9bf2-b273055038ce) 的有界视图保留原始 Type 1/2/3、目标信息及客户端声明；启用字段不超出本条、不别名固定头或其它有效字段，不解释按标志应忽略的描述符。[MS-SPNG 微软产品说明 <8>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-spng/211417c4-11ef-46c0-a8fb-f178a51c2088) 区分最优先 NTLM 且带 NTLM MIC 的保护与原生直接 token 行为；本版对已选 SPNEGO 的这类输入也要求名单 MIC，不能切到直接封装来逃避。未宣告 Negotiate Late Fallback，不在半途重选。没有 GSS 分片重组、Kerberos、原生客户端验收或跨连接恢复；服务端 NEGOTIATE 所需的机制广告／NegHints 与出站封装并非这个入站切片。
+[MS-NLMP 三种报文与字段](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/033d32cc-88f9-4483-9bf2-b273055038ce) 的有界视图保留原始 Type 1/2/3、目标信息及客户端声明；启用字段不超出本条、不别名固定头或其它有效字段，不解释按标志应忽略的描述符。[MS-SPNG 微软产品说明 <8>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-spng/211417c4-11ef-46c0-a8fb-f178a51c2088) 区分最优先 NTLM 且带 NTLM MIC 的保护与原生直接 token 行为；本版对已选 SPNEGO 的这类输入也要求名单 MIC，不能切到直接封装来逃避。未宣告 Negotiate Late Fallback，不在半途重选。没有 GSS 分片重组、Kerberos、原生客户端验收或跨连接恢复；若后续改用服务端先行 GSS，需单审机制广告／NegHints 与出站封装；当前协商明确选择客户发起，不靠假广告。
 
 该封装层产物只是 `Unverified`，不会生成挑战、校验口令、导出密钥、创建 `VerifiedExchange`、授予 Tree 或发送成功。真正的接受端还须拥有安全随机的一次性限时挑战与原连接/凭据代，校验原协商标志、目标/时间、NTLMv2 证明、所需 NTLM MIC 和双向 mechListMIC，并复核当前业务身份，再把该次最后请求的 transcript 和导出键一起交给签名器。不能只相信客户端的 MIC 指示位。该封装层的形状夹具不是有效口令证明。
 
@@ -98,7 +108,7 @@ WRITE 和 FLUSH 成功各有私有 Held 收据。按 [WRITE 响应](https://lear
 ## 实现与审查次序
 
 1. **本切片。** 每个 Direct TCP 帧上限 2 MiB；最多 32 条命令；初次 NEGOTIATE 上限 68 KiB / 64 个 contexts。读取四字节长度即可在分配前判断，不要求 TCP read 等于一条 SMB 消息。保留完整协商字节和每段包括 padding 的字节视图。边界正确不代表已验证所有命令体。重复 PREAUTH、加密、压缩、RDMA 变换和签名 context 不是合法的独立能力；未知 context 只按声明边界跳过。加密和签名算法列表在处理该可选 context 时按它自己的长度解析。当前不处理 SMB1 初始包装、加密或压缩 envelope，不提供明文降级。这里只解析，不回成功或架设演示服务器。
-2. **协商保护与真实认证。** TCP/445 的 3.1.1 要有实际的 multi-credit / LARGE_MTU：每连接维护不重复且可乱序的 MessageId 序号窗口，按请求/应答大小计费，CANCEL 关联原在途请求、不是新信用。资源上限不等于所有命令只能占一个 credit。主机的稳定 ServerGuid、每回合新的 CSPRNG 盐、准确安全模式与实际支持的 contexts 齐备后才构造响应。连接 preauth 从 64 个零字节开始，逐次 SHA-512(旧值 || 原始 SMB 消息)，不含 TCP 四字节。会话从已完成 NEGOTIATE 的 hash 分支，只加入该会话的 SETUP 往返以及最后的请求；用于签最终成功响应的派生快照**不含这条成功响应本身**。
+2. **协商保护与真实认证。** TCP/445 的 3.1.1 要有实际的 multi-credit / LARGE_MTU：每连接维护不重复且可乱序的 MessageId 序号窗口，按请求/应答大小计费，CANCEL 关联原在途请求、不是新信用。资源上限不等于所有命令只能占一个 credit。同次服务初始化的全局 ServerGuid、每个回复的新 CSPRNG 盐、准确安全模式与实际支持的 contexts 都由上方成功应答模块分别把关，仍欠真正启动所有者。连接 preauth 从 64 个零字节开始，逐次 SHA-512(旧值 || 原始 SMB 消息)，不含 TCP 四字节。会话从已完成 NEGOTIATE 的 hash 分支，只加入该会话的 SETUP 往返以及最后的请求；用于签最终成功响应的派生快照**不含这条成功响应本身**。
 3. **消息级保证。** SPNEGO/NTLMv2 需要真实的机制/主体选择、对应 flag 和 target-info、挑战时效、适用的 NTLM MIC 与 SPNEGO mechListMIC、导出的会话密钥。按规范的 SP800-108 和准确标签派生 SMB 密钥。AES-128-CMAC 为签名基线，未签或签名不符的需签请求不得触发业务。复合包逐段验含 padding 的签名，关联链不能从其他会话/树借句柄。标准密码原语优先选取可审的最小上游源码（例如 RustCrypto 对应原语）；记录精确版本、摘要、传递来源、许可证和改动。不得自制算法、手抄 Samba handler 或为 NTLM 关闭宿主密码策略。不记录密验、报文令牌与会话键。
 4. **真实文件访问。** 生命周期与标准错误（包括分页结束、短缓冲、权限、对象不存在、共享冲突、锁冲突及撤销），TREE/CREATE/QUERY_DIRECTORY/QUERY_INFO/READ/CLOSE 先接真实授权对象；随后是写、改长、FLUSH、SET_INFO、LOCK、删除待定、重命名/替换、正常退出与异常清理。根据三端实际行为补 ECHO、CHANGE_NOTIFY/CANCEL、真实元数据类和 IOCTL；命令不支持不回假成功。不得把客户端的普通保存次数当成仓库正式版本数。
 5. **安全互通扩展。** AES-128-GCM 的协商、每方向密钥和 nonce 生命周期、transform 数据边界及完整性是独立阶段；未实现时不宣告支持。客户端若要求加密，绝不让请求落到明文共享；供需不匹配即拒绝/无法连接，不建议客户端关闭安全策略。GMAC、其他 cipher、压缩、租约、耐久/持久句柄、多通道、RDMA、QUIC 等不能只置位不实现。可忽略的 lease/durable *申请* 必须按各 context 规则分别忽略/不授予，真实重连必须查到原资格；不是看到探针就拒整次打开。
