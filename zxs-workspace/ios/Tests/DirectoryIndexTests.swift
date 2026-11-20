@@ -188,24 +188,91 @@ final class DirectoryIndexTests: XCTestCase {
         }
         XCTAssertTrue(result.matches); XCTAssertEqual(reads, 1)
         let text = try XCTUnwrap(result.text)
-        XCTAssertTrue(text.utf8.elementsEqual(sample.replacingOccurrences(of: "\r\n", with: "\n").utf8))
+        XCTAssertTrue(displayed(text).utf8.elementsEqual(sample.replacingOccurrences(of: "\r\n", with: "\n").utf8))
         XCTAssertNil(try verify(index, file, b).text) // normal CRC never returns a display string
     }
-    func testTextPreviewRawByteLimitAndEmptyFile() throws {
-        XCTAssertEqual(try preview(textArchive([])).text, "")
-        let exact = [UInt8](repeating: 120, count: PlainText.byteLimit)
-        XCTAssertEqual(try preview(textArchive(exact)).text?.utf8.count, PlainText.byteLimit)
-        let b = textArchive(exact + [120]), doc = try read(b), file = try XCTUnwrap(doc.root.children?["x"])
-        XCTAssertThrowsError(try doc.checkMember(file, previewText: true, check: {}) { _, _ in XCTFail("over budget read") })
-        XCTAssertTrue(try verify(doc, file, b).matches)
+    private func displayed(_ pages: PlainText.Pages) -> String {
+        var result = ""
+        for index in 0..<pages.count {
+            let page = pages.page(index)
+            XCTAssertLessThanOrEqual(page.utf16.count, PlainText.pageUnits)
+            XCTAssertLessThanOrEqual(page.utf8.filter { $0 == 10 }.count, PlainText.pageNewlines)
+            if let first = page.utf16.first, let last = page.utf16.last {
+                XCTAssertFalse(first >= 0xdc00 && first <= 0xdfff)
+                XCTAssertFalse(last >= 0xd800 && last <= 0xdbff)
+            }
+            result += page
+        }
+        return result
     }
-    func testNewlineDense32KiBRetainsTheFinalMarkerForScrolling() throws {
-        let tail = Array("末尾 · END".utf8)
-        let payload = [UInt8](repeating: 10, count: PlainText.byteLimit - tail.count) + tail
-        let result = try preview(textArchive(payload))
-        XCTAssertTrue(result.matches)
-        XCTAssertTrue(try XCTUnwrap(result.text).utf8.elementsEqual(payload))
+
+    func testFullTextAtZeroAndBeyondThePrevious32KiBLimit() throws {
+        let empty = try XCTUnwrap(preview(textArchive([])).text)
+        XCTAssertTrue(empty.complete); XCTAssertEqual(empty.count, 1); XCTAssertEqual(displayed(empty), "")
+        for bytes in [32 * 1024 + 1, PlainText.byteLimit] {
+            let payload = [UInt8](repeating: 120, count: bytes)
+            let text = try XCTUnwrap(preview(textArchive(payload)).text)
+            XCTAssertTrue(text.complete); XCTAssertEqual(text.displayedBytes, bytes)
+            XCTAssertGreaterThan(text.count, 1)
+            XCTAssertTrue(displayed(text).utf8.elementsEqual(payload))
+        }
+    }
+
+    func testPageCutsPreserveSurrogatePairsDenseLinesAndTheLastMarker() throws {
+        let sample = String(repeating: "a", count: PlainText.pageUnits - 1) + "𠮷\r\n"
+            + String(repeating: "row\r\n", count: PlainText.pageNewlines + 5) + "末尾 · END"
+        let text = try XCTUnwrap(preview(textArchive(Array(sample.utf8))).text)
+        XCTAssertEqual(text.page(0).utf16.count, PlainText.pageUnits - 1)
+        XCTAssertTrue(text.page(1).hasPrefix("𠮷"))
+        XCTAssertTrue(displayed(text).utf8.elementsEqual(sample.replacingOccurrences(of: "\r\n", with: "\n").utf8))
+        XCTAssertTrue(text.page(text.count - 1).hasSuffix("末尾 · END"))
         // Actual viewport scrolling and VoiceOver at large type require iPhone/iPad qualification.
+    }
+
+    func testExplicitLargePrefixStillConsumesAllAndNeverIgnoresBadTailCRC() throws {
+        var payload = [UInt8](repeating: 120, count: 512 * 1024)
+        payload[PlainText.byteLimit] = 0x80 // first entirely unjudged text byte, after complete ASCII
+        payload[payload.count - 1] = 90
+        var b = textArchive(payload)
+        let index = try read(b), file = try XCTUnwrap(index.root.children?["x"]), bodyEnd = 31 + payload.count
+        var cursor = 31
+        let result = try index.checkMember(file, previewText: true, check: {}) { off, dst in
+            if off >= 31 && off < bodyEnd { XCTAssertEqual(off, cursor); cursor += dst.count }
+            try self.copy(b, off, dst)
+        }
+        let text = try XCTUnwrap(result.text)
+        XCTAssertTrue(result.matches); XCTAssertFalse(text.complete); XCTAssertEqual(cursor, bodyEnd)
+        XCTAssertEqual(text.displayedBytes, PlainText.byteLimit); XCTAssertEqual(text.totalBytes, payload.count)
+        XCTAssertTrue(displayed(text).utf8.elementsEqual(payload.prefix(PlainText.byteLimit)))
+        b[bodyEnd - 1] ^= 1
+        let bad = try preview(b)
+        XCTAssertFalse(bad.matches); XCTAssertNil(bad.text) // no prefix after CRC trouble in the unshown tail
+    }
+
+    func testPrefixCutRequiresExactCrossingScalarOrCrlfEvidence() throws {
+        let cap = PlainText.byteLimit
+        var payload = [UInt8](repeating: 120, count: cap + 5)
+        let four = Array("𠮷".utf8)
+        payload.replaceSubrange((cap - 1)..<(cap - 1 + four.count), with: four)
+        var text = try XCTUnwrap(preview(textArchive(payload)).text)
+        XCTAssertFalse(text.complete); XCTAssertEqual(text.displayedBytes, cap - 1)
+        XCTAssertTrue(displayed(text).utf8.elementsEqual(payload.prefix(cap - 1)))
+
+        payload[cap] = 98 // invalid continuation of the scalar that starts INSIDE the budget
+        var invalid = try preview(textArchive(payload))
+        XCTAssertTrue(invalid.matches); XCTAssertNil(invalid.text)
+        let format = Array("\u{202e}".utf8)
+        payload.replaceSubrange((cap - 1)..<(cap - 1 + format.count), with: format)
+        invalid = try preview(textArchive(payload))
+        XCTAssertTrue(invalid.matches); XCTAssertNil(invalid.text) // valid UTF-8, rejected display profile
+
+        payload = [UInt8](repeating: 120, count: cap + 5); payload[cap - 1] = 13; payload[cap] = 10
+        text = try XCTUnwrap(preview(textArchive(payload)).text)
+        XCTAssertEqual(text.displayedBytes, cap - 1)
+        XCTAssertTrue(displayed(text).utf8.elementsEqual(payload.prefix(cap - 1)))
+        payload[cap] = 98
+        invalid = try preview(textArchive(payload))
+        XCTAssertTrue(invalid.matches); XCTAssertNil(invalid.text) // an isolated CR must not be cropped away
     }
     func testOnlyValidLiteralTextWithMatchingCrcCanDisplay() throws {
         for cp in ["\u{0}", "\r", "\u{1b}", "\u{85}", "\u{202e}", "\u{2066}", "\u{34f}",

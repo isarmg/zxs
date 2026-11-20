@@ -2,15 +2,76 @@ import Foundation
 
 struct MemberCRC {
     let declared: UInt32, actual: UInt32
-    let text: String? // nil for CRC-only, mismatch or an unsupported text profile; "" is valid
+    let text: PlainText.Pages? // nil for CRC-only, mismatch or an unsupported text profile
     var matches: Bool { declared == actual }
 }
 
 enum PlainText {
-    static let byteLimit = 32 * 1024
-    static func decode(_ bytes: [UInt8]) -> String? {
-        guard bytes.count <= byteLimit, let text = String(bytes: bytes, encoding: .utf8),
-              text.utf8.elementsEqual(bytes) else { return nil } // never repair malformed bytes
+    static let byteLimit = 256 * 1024
+    static let pageUnits = 8 * 1024, pageNewlines = 256
+
+    struct Pages {
+        let displayedBytes: Int, totalBytes: Int // original UTF-8 before CRLF presentation normalization
+        private let text: NSString
+        private let ranges: [NSRange]
+
+        fileprivate init(_ value: String, displayed: Int, total: Int) {
+            text = value as NSString
+            displayedBytes = displayed; totalBytes = total
+            var cuts: [NSRange] = []
+            var start = 0, point = 0, newlines = 0
+            func cut() {
+                cuts.append(NSRange(location: start, length: point - start))
+                start = point; newlines = 0
+            }
+            for scalar in value.unicodeScalars {
+                let units = scalar.value <= 0xffff ? 1 : 2
+                if point - start + units > PlainText.pageUnits { cut() }
+                point += units
+                if scalar.value == 10 {
+                    newlines += 1
+                    if newlines == PlainText.pageNewlines { cut() }
+                }
+            }
+            if point != start || cuts.isEmpty { cut() } // an empty file still has a single empty page
+            ranges = cuts
+        }
+
+        var complete: Bool { displayedBytes == totalBytes }
+        var count: Int { ranges.count }
+        func page(_ index: Int) -> String { text.substring(with: ranges[index]) }
+    }
+
+    static func captureLength(_ total: Int) -> Int { min(total, byteLimit + 3) }
+
+    static func decode(_ bytes: [UInt8], total: Int) -> Pages? {
+        guard total >= 0, bytes.count == captureLength(total) else { return nil }
+        var kept = min(total, byteLimit), checked = kept
+        if total > byteLimit {
+            // Recognize only a scalar whose first byte is in the visible budget.
+            // If the prefix is complete, the next arbitrary byte is not text evidence.
+            var start = kept - 1
+            let floor = max(0, kept - 4)
+            while start > floor && bytes[start] & 0xc0 == 0x80 { start -= 1 }
+            let width: Int
+            switch bytes[start] {
+            case 0xc2...0xdf: width = 2
+            case 0xe0...0xef: width = 3
+            case 0xf0...0xf4: width = 4
+            default: width = 1
+            }
+            if width > kept - start {
+                checked = start + width; kept = start
+                guard checked <= bytes.count else { return nil }
+            } else if bytes[kept - 1] == 13 {
+                // A real adjacent LF, not an isolated CR we could silently drop.
+                guard kept < bytes.count, bytes[kept] == 10 else { return nil }
+                kept -= 1; checked = kept
+            }
+        }
+        let candidate = bytes[..<checked]
+        guard var text = String(bytes: candidate, encoding: .utf8),
+              text.utf8.elementsEqual(candidate) else { return nil }
         var cr = false, hasCR = false
         for scalar in text.unicodeScalars {
             if cr {
@@ -29,7 +90,15 @@ enum PlainText {
             }
         }
         guard !cr else { return nil }
-        return hasCR ? text.replacingOccurrences(of: "\r\n", with: "\n", options: .literal) : text
+        if kept < checked {
+            // The omitted scalar was checked above; this is the preceding exact byte boundary.
+            let prefix = bytes[..<kept]
+            guard let clipped = String(bytes: prefix, encoding: .utf8),
+                  clipped.utf8.elementsEqual(prefix) else { return nil }
+            text = clipped
+        }
+        if hasCR { text = text.replacingOccurrences(of: "\r\n", with: "\n", options: .literal) }
+        return Pages(text, displayed: kept, total: total)
     }
 }
 
@@ -39,7 +108,7 @@ enum StoredBody {
                       limit: Int, centralWide: Bool, size: Int, previewText: Bool, check: () throws -> Void,
                       fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
         let u16 = DirectoryIndex.u16, u32 = DirectoryIndex.u32, max32 = DirectoryIndex.u32max
-        try requirePreview(!previewText || (0...PlainText.byteLimit).contains(size))
+        try requirePreview(size >= 0)
         var block = [UInt8](repeating: 0, count: 65_536)
         func take(_ at: Int, _ count: Int) throws -> [UInt8] {
             try check(); try requirePreview(count >= 0 && count <= 65_535 + 1024 && at >= offset && at <= limit - count)
@@ -99,20 +168,22 @@ enum StoredBody {
             descriptor = try take(end, length)
             try requirePreview(try descriptorLength(descriptor, wide: wideDD, crc: crc, size: size) == length)
         }
+        let captureLimit = previewText ? PlainText.captureLength(size) : 0
         var capture: [UInt8]? = previewText ? [] : nil
-        capture?.reserveCapacity(size) // no allocation on the original CRC-only path
+        capture?.reserveCapacity(captureLimit) // CRC-only never allocates a text buffer
         var sum = crc32(0, nil, 0), pos = body
         while pos < end {
             let n = min(block.count, end - pos)
             try chunk(pos, n)
             sum = block.withUnsafeBufferPointer { crc32(sum, $0.baseAddress, uInt(n)) }
-            capture?.append(contentsOf: block[..<n])
+            let beforeBudget = captureLimit - (pos - body)
+            if beforeBudget > 0 { capture?.append(contentsOf: block[..<min(n, beforeBudget)]) }
             pos += n
         }
         try check(); try match(offset, h); try match(offset + 30, fields); try match(end, descriptor)
         try checkDirectory(); try check()
         let expected = UInt32(crc), actual = UInt32(sum)
-        let text = expected == actual ? capture.flatMap(PlainText.decode) : nil
+        let text = expected == actual ? capture.flatMap { PlainText.decode($0, total: size) } : nil
         try check()
         return MemberCRC(declared: expected, actual: actual, text: text)
     }

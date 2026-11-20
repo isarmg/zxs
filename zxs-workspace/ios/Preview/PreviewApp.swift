@@ -73,32 +73,45 @@ private final class NameResults: UITableViewController {
     }
 }
 
+@MainActor
+private final class TextReading {
+    weak var archive: HeldArchive?
+    let member: Member, contents: PlainText.Pages
+    let back = UIButton(type: .system), next = UIButton(type: .system)
+    var index = 0
+
+    init(archive: HeldArchive, member: Member, contents: PlainText.Pages) {
+        self.archive = archive; self.member = member; self.contents = contents
+    }
+}
+
 final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate,
                                UITableViewDataSource, UITableViewDelegate {
     private let queue: OperationQueue = {
         let q = OperationQueue(); q.maxConcurrentOperationCount = 1; q.qualityOfService = .userInitiated; return q
     }()
-    private let status = UILabel(), location = UILabel(), tableHost = UIStackView()
+    private let notice = UILabel(), status = UILabel(), location = UILabel(), tableHost = UIStackView()
     private var table = UITableView()
     private let cancelButton = UIButton(type: .system), up = UIButton(type: .system)
     private let find = UIButton(type: .system), form = UIStackView(), query = UITextField()
     private var search: NameSearch?
     private let previous = UIButton(type: .system), next = UIButton(type: .system)
-    private let closeText = UIButton(type: .system), literal = UITextView()
+    private let directoryNav = UIStackView(), textNav = UIStackView(), literal = UITextView()
+    private var textReading: TextReading?
     private weak var awaiting: UIDocumentPickerViewController?
     private var active: DocumentRead?
     private var selection: DocumentPresentation?, report: Report?
     private weak var decision: UIAlertController?
+    private var memberConsent: NSObject?
     private var trail: [Member] = [], children: [Member] = [], page = 0
     private let pageSize = 100
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        let notice = UILabel()
         for label in [notice, status, location] { label.numberOfLines = 0; label.adjustsFontForContentSizeCategory = true }
         notice.font = .preferredFont(forTextStyle: .headline)
-        notice.text = "ZIP 目录预览\n目录只显示声明；可核验单项 CRC-32，或校验并查看不超过 32 KiB 的 UTF-8 纯文本。不认证快照；外部提供方可能自行下载。"
+        notice.text = "ZIP 目录预览\n目录只显示声明；可核验单项 CRC-32 后分页看全文或前部。不认证快照；外部提供方可能自行下载。"
         status.font = .preferredFont(forTextStyle: .body); status.numberOfLines = 5
         location.font = .preferredFont(forTextStyle: .footnote)
         location.numberOfLines = 2
@@ -125,8 +138,9 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         wire(up, "上一级", #selector(goUp))
         wire(previous, "上一页", #selector(prevPage))
         wire(next, "下一页", #selector(nextPage))
-        let nav = UIStackView(arrangedSubviews: [up, previous, next]); nav.distribution = .fillEqually
-        wire(closeText, "关闭文本，返回目录", #selector(closePreview))
+        for button in [up, previous, next] { directoryNav.addArrangedSubview(button) }
+        directoryNav.distribution = .fillEqually
+        textNav.distribution = .fillEqually
         // The text view occupies the available viewport, not a view as tall as every line.
         literal.isScrollEnabled = true; literal.alwaysBounceHorizontal = false
         literal.isEditable = false; literal.isSelectable = false; literal.dataDetectorTypes = []
@@ -139,8 +153,8 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         literal.font = .preferredFont(forTextStyle: .body); literal.adjustsFontForContentSizeCategory = true
         literal.isAccessibilityElement = true
         tableHost.axis = .vertical
-        let stack = UIStackView(arrangedSubviews: [notice, pick, find, form, cancelButton, status, location, nav,
-                                                   closeText, literal, tableHost])
+        let stack = UIStackView(arrangedSubviews: [notice, pick, find, form, cancelButton, status, location, directoryNav,
+                                                   textNav, literal, tableHost])
         stack.axis = .vertical; stack.spacing = 5; stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
         let guide = view.safeAreaLayoutGuide
@@ -164,6 +178,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         retireSearch()
         clearDraft()
         queue.cancelAllOperations()
+        memberConsent = nil
         decision?.dismiss(animated: false); decision = nil
         let previous = selection; selection = nil; previous?.retire()
         report = nil
@@ -328,22 +343,29 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
               (try? view.archive.scope.check()) != nil else { return }
         clearDraft()
         let path = "/" + (trail.dropFirst().map(\.name) + [file.name]).joined(separator: "/")
-        let small = file.size <= PlainText.byteLimit
-        let choice = small ? "只有 CRC 相符且可显示的 UTF-8 才提供文本。" : "超过 32 KiB，仅可核验 CRC。"
+        let whole = file.size <= PlainText.byteLimit
+        let choice = whole ? "只有 CRC 相符且全文符合 UTF-8 显示规则时才显示全文。"
+            : "前部预览也要完成整项 CRC，只显示开头最多 256 KiB；不判断后文是否为文本。"
         let alert = UIAlertController(title: "查看这个归档成员",
-            message: "\(view.name)\n\(path)\n将读取全部 \(file.size) 字节。\(choice)不保存或上传。外部提供方可能自行下载。",
-            preferredStyle: .alert)
+            message: "两种核验都要读取本项全部 \(file.size) 字节。较大文件可能耗时，可以取消。\n"
+                + "\(choice)\n不保存或上传。外部提供方可能自行下载。\n\(view.name)\n\(path)", preferredStyle: .alert)
+        let consent = NSObject()
         func action(_ title: String, text: Bool) -> UIAlertAction {
-            UIAlertAction(title: title, style: .default) { [weak self] _ in
-                guard let self = self else { return }; self.decision = nil
-                guard self.active == nil, self.showing(view, file: file), (try? view.archive.scope.check()) != nil else { return }
-                self.verify(view, file: file, path: path, previewText: text)
+            UIAlertAction(title: title, style: .default) { [weak self, weak archive = view.archive] _ in
+                guard let self = self, self.memberConsent === consent else { return }
+                self.memberConsent = nil; self.decision = nil
+                guard let current = self.report, current.archive === archive, self.active == nil,
+                      self.showing(current, file: file), (try? current.archive.scope.check()) != nil else { return }
+                self.verify(current, file: file, path: path, previewText: text)
             }
         }
-        alert.addAction(UIAlertAction(title: "返回目录", style: .cancel) { [weak self] _ in self?.decision = nil })
+        alert.addAction(UIAlertAction(title: "返回目录", style: .cancel) { [weak self] _ in
+            guard let self = self, self.memberConsent === consent else { return }
+            self.memberConsent = nil; self.decision = nil
+        })
         alert.addAction(action("只核验 CRC", text: false))
-        if small { alert.addAction(action("校验并看文本", text: true)) }
-        decision = alert; present(alert, animated: true)
+        alert.addAction(action(whole ? "核验后看全文" : "完整核验后预览前部", text: true))
+        memberConsent = consent; decision = alert; present(alert, animated: true)
     }
     private func showing(_ record: Report, file: Member) -> Bool {
         guard search == nil, selection === record.archive.scope, report?.archive === record.archive else { return false }
@@ -352,7 +374,8 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     }
     private func verify(_ view: Report, file: Member, path: String, previewText: Bool) {
         let job = DocumentRead(); active = job
-        status.text = "正在读取 \(path)（\(file.size) B）…"; render()
+        let mode = !previewText ? "" : file.size <= PlainText.byteLimit ? " · CRC 相符后显示全文" : " · CRC 相符后只显示前部"
+        status.text = "正在核验全部 \(file.size) 字节\(mode)，可取消。\n\(path)"; render()
         queue.addOperation { [weak self] in
             let outcome = Result { try job.verify(view, file: file, previewText: previewText) }
             DispatchQueue.main.async { [weak self] in
@@ -364,10 +387,10 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
                     let verdict = result.matches ? "该项 CRC-32 与 ZIP 声明相符。" : "该项 CRC-32 与 ZIP 声明不符。"
                     let values = String(format: "声明 %08X，实读 %08X。", result.declared, result.actual)
                     let plainNotice = previewText && result.matches && result.text == nil
-                        ? "\n不是此预览支持的 UTF-8 纯文本，不显示正文。" : ""
+                        ? "\n本次预览范围不符合 UTF-8 显示规则，不显示正文。" : ""
                     self.status.text = "\(verdict)\n\(values) 不证明整包或其他项。\(plainNotice)\n\(path)（\(file.size) B）"
                     self.render()
-                    if previewText && result.matches, let text = result.text { self.showText(text) }
+                    if previewText && result.matches, let text = result.text { self.showText(text, view: view, file: file) }
                 case .failure:
                     self.clearSelection()
                     self.reset("没有完整核验结果：布局不符、原文件变化或读取不可用。请重新选择。")
@@ -375,18 +398,50 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
             }
         }
     }
-    private func showText(_ text: String) {
-        location.text = text.isEmpty ? "空文本（0 字节），CRC-32 相符。" : "全文预览：该项 CRC-32 相符。"
-        status.numberOfLines = 3; tableHost.isHidden = true
-        literal.text = text // never attributed text, a web view, data detector or an external-open action
-        literal.isHidden = false; closeText.isHidden = false; literal.setContentOffset(.zero, animated: false)
-        find.isEnabled = false; up.isEnabled = false; previous.isEnabled = false; next.isEnabled = false
+    private func showText(_ text: PlainText.Pages, view: Report, file: Member) {
+        let reading = TextReading(archive: view.archive, member: file, contents: text)
+        textReading = reading
+        func wire(_ button: UIButton, _ title: String, step: Int) {
+            button.setTitle(title, for: .normal)
+            button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.titleLabel?.numberOfLines = 0; button.titleLabel?.font = .preferredFont(forTextStyle: .body)
+            button.addAction(UIAction { [weak self, weak reading] _ in
+                guard let self = self, let reading = reading, self.textReading === reading else { return }
+                if step == 0 { self.closePreview() } else { self.showTextPage(reading, reading.index + step) }
+            }, for: .touchUpInside)
+            textNav.addArrangedSubview(button)
+        }
+        // Fresh buttons belong only to this view of the original member.
+        wire(reading.back, "上一文本页", step: -1)
+        wire(reading.next, "下一文本页", step: 1)
+        wire(UIButton(type: .system), "关闭文本", step: 0)
+        status.numberOfLines = 3; tableHost.isHidden = true; directoryNav.isHidden = true
+        find.isHidden = true; notice.isHidden = true
+        literal.isHidden = false; textNav.isHidden = false
+        showTextPage(reading, 0)
+    }
+    private func showTextPage(_ reading: TextReading, _ index: Int) {
+        guard textReading === reading, (0..<reading.contents.count).contains(index) else { return }
+        guard active == nil, let view = report, view.archive === reading.archive,
+              showing(view, file: reading.member), (try? view.archive.checkPreview()) != nil else {
+            clearSelection(); reset("原文件已变化或授权不可用，已关闭文本。请重新选择。"); return
+        }
+        reading.index = index
+        let text = reading.contents
+        let kind = text.complete ? (text.totalBytes == 0 ? "空文本" : "核验后的全文") : "核验后仅看前部"
+        let portion = text.complete ? "" : "，只显示前 \(text.displayedBytes) B"
+        location.text = "\(kind) · \(index + 1)/\(text.count) 页\n已核全部 \(text.totalBytes) B\(portion)"
+        literal.text = text.page(index) // only this bounded page; never links, markup or an external-open action
+        literal.setContentOffset(.zero, animated: false)
+        reading.back.isEnabled = index > 0; reading.next.isEnabled = index + 1 < text.count
     }
     private func clearText() {
-        literal.text = nil; literal.isHidden = true; closeText.isHidden = true
-        tableHost.isHidden = false; status.numberOfLines = 5
+        textReading = nil; literal.text = nil; literal.isHidden = true; textNav.isHidden = true
+        for child in textNav.arrangedSubviews { child.removeFromSuperview() }
+        tableHost.isHidden = false; directoryNav.isHidden = false; notice.isHidden = false; find.isHidden = false
+        status.numberOfLines = 5
     }
-    @objc private func closePreview() {
+    private func closePreview() {
         clearText()
         if let report = report, selection === report.archive.scope, (try? report.archive.scope.check()) != nil {
             render()

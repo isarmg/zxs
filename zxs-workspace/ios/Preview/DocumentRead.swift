@@ -83,6 +83,14 @@ final class HeldArchive {
             a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec && a.st_mtimespec.tv_nsec == b.st_mtimespec.tv_nsec &&
             a.st_ctimespec.tv_sec == b.st_ctimespec.tv_sec && a.st_ctimespec.tv_nsec == b.st_ctimespec.tv_nsec
     }
+    // Presentation never coordinates a new access, follows a name, or reads member bytes.
+    func checkPreview() throws {
+        try scope.check()
+        var held = stat()
+        guard fstat(fd, &held) == 0, same(held) else { throw PreviewError.unavailable }
+        try scope.check()
+    }
+
     func withReads<T>(at name: UnsafePointer<CChar>, check: () throws -> Void,
                       _ body: (_ fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> T) throws -> T {
         func validate() throws {
