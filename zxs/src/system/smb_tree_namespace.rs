@@ -2,7 +2,7 @@
 //! plan and current SQL; no selected drive has to be online merely to list it.
 use super::{InitialReader,Site,SmbSession,TreeOrigin,denied,live,os,serve_folder};
 use super::super::super::{share_mode::{Mode,Setting}};
-use crate::{Role,display};
+use crate::display;
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering},thread};
 
 const NAME:usize=255;
@@ -36,22 +36,7 @@ fn page(site:Site<'_>,session:&SmbSession<'_>,limit:u8,left:&[u8])->io::Result<[
     if !left.is_empty(){display::component(left,NAME)?;}
     session.source.at(|db,c|{
         session.require_current(db,&c)?;
-        let mut matches=Vec::new();
-        if limit!=0{
-            // The configured logical R is not a second service. Listing the
-            // ZXS root neither opens R nor interprets missing R as empty.
-            let retained=site.plan.retained_label().as_bytes();
-            if retained>left{matches.push((retained,2));}
-            for f in site.plan.folders(){
-                let name=f.name().as_bytes();
-                if name<=left{continue;}
-                let now=site.plan.current(db,&c,f.name())?.ok_or_else(denied)?;
-                if now.mode==Mode::Disabled{continue;}
-                let v=c.rows().iter().find(|v|v.role==Role::File&&v.volume==f.volume()).ok_or_else(denied)?;
-                matches.push((name,u64::from(v.ordinal)+1));
-            }
-            matches.sort_unstable_by_key(|r|r.0);
-        }
+        let matches=if limit==0{Vec::new()}else{site.plan.project_visible_after(db,&c,left)?};
         let count=matches.len().min(limit as usize);let mut out=[0;1+ROW*SLOT];out[0]=count as u8;
         for ((name,ino),buf) in matches.into_iter().take(count).zip(out[1..].chunks_exact_mut(SLOT)){
             buf[0]=name.len() as u8;buf[1..1+name.len()].copy_from_slice(name);

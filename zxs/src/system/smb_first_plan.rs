@@ -154,6 +154,27 @@ impl InstalledPlan{
     pub(super) fn sha(&self)->[u8;32]{self.0.sha()}
     pub(super) fn folders(&self)->&[Folder]{self.0.folders()}
     pub(super) fn retained_label(&self)->&str{&self.0.recycle}
+    /// Logical children in exact display-byte order, strictly after a cursor.
+    /// Caller must have rechecked the original live SMB subject in this same
+    /// SQL cut and validated the cursor; these rows carry no OPEN or grant.
+    /// A zero-length cursor selects the complete bounded namespace. No volume
+    /// is opened: the installed R label is not evidence that its medium is up.
+    pub(super) fn project_visible_after<'p>(&'p self,db:&Connection,c:&Catalog,left:&[u8])
+        ->io::Result<Vec<(&'p [u8],u64)>>{
+        let mut matches=Vec::new();
+        let retained=self.retained_label().as_bytes();
+        if retained>left{matches.push((retained,2));}
+        for f in self.folders(){
+            let name=f.name().as_bytes();
+            if name<=left{continue;}
+            let now=self.current(db,c,f.name())?.ok_or_else(denied)?;
+            if now.mode==Mode::Disabled{continue;}
+            let v=c.rows().iter().find(|v|v.role==Role::File&&v.volume==f.volume()).ok_or_else(denied)?;
+            matches.push((name,u64::from(v.ordinal)+1));
+        }
+        matches.sort_unstable_by_key(|r|r.0);
+        Ok(matches)
+    }
     // The original first mode is not the current permission. A later
     // action still selects the live authenticated session/grant independently.
     pub(super) fn current(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Option<Setting>>{
