@@ -109,14 +109,20 @@ impl Plan{
             return Err(denied());
         }
         let bound_sha=digest(bound)?;
-        src.at(|db,c|{
-            let pair=Pair::confirmed(db,&c)?.ok_or_else(denied)?;
-            if self.scope!=[c.birth.pool.0,c.birth.op.0,pair.instance,self.scope[3],pair.setup.0]||
-                pair.setup_bound!=bound_sha{return Err(denied());}
-            for f in self.folders(){self.original(db,&c,&pair,f)?;}
-            Ok(())
-        })?;
+        src.at(|db,c|self.qualify_native_at(db,&c,bound_sha).map(drop))?;
         Ok(InstalledPlan(self))
+    }
+    /// Qualify only the native installation baseline inside the caller's
+    /// original SYSTEM read cut. The BOUND digest comes from the already
+    /// checked public BOUND above. This is not a verifier or an SMB grant.
+    /// A reader needing the active epoch can use this same Pair before leaving
+    /// the cut; native plan installation still requires only the original rows.
+    fn qualify_native_at(&self,db:&Connection,c:&Catalog,bound_sha:[u8;32])->io::Result<Pair>{
+        let pair=Pair::confirmed(db,c)?.ok_or_else(denied)?;
+        if self.scope!=[c.birth.pool.0,c.birth.op.0,pair.instance,self.scope[3],pair.setup.0]||
+            pair.setup_bound!=bound_sha{return Err(denied());}
+        for f in self.folders(){self.original(db,c,&pair,f)?;}
+        Ok(pair)
     }
     fn original(&self,db:&Connection,c:&Catalog,pair:&Pair,f:&Folder)->io::Result<()>{
         if !c.rows().iter().any(|v|v.role==Role::File&&v.volume==f.volume){return Err(denied());}
