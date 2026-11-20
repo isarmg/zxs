@@ -51,6 +51,7 @@ pub(in crate::smb) struct Offer<'a> {
     // Exact received bytes. Neither the raw request nor its security material
     // should be printed; no Debug or serialization for these views.
     pub(in crate::smb) request: &'a [u8],
+    pub(in crate::smb) dialects_le: &'a [u8], // exact original order, not just 3.1.1 presence
     pub(in crate::smb) client_guid: [u8; 16],
     pub(in crate::smb) security_mode: u16,
     pub(in crate::smb) capabilities: u32,
@@ -134,7 +135,7 @@ impl<'a> Offer<'a> {
             return Err(Error::NoPreauthHashInCommon);
         }
         Ok(Self {
-            request: p, client_guid: field(p, 76)?, security_mode: u16le(p, 68)?,
+            request: p, dialects_le: dialects.0, client_guid: field(p, 76)?, security_mode: u16le(p, 68)?,
             capabilities: u32le(p, 72)?, salt,
             signing, encryption,
         })
