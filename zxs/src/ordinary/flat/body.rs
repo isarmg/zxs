@@ -104,51 +104,6 @@ fn write_zeroes(out:&mut impl Write,mut remaining:u64)->io::Result<()>{
     Ok(())
 }
 
-impl Contents{
-    /// Copy to DISPOSABLE storage only; not the ordinary client stream.
-    /// Each source run is authenticated against its immutable issue, then
-    /// released when the next material is selected. A complete independent
-    /// target read must still match the fixed node before this can be used.
-    /// This supplies no evidence that any old material is safe to retire.
-    pub(super) fn copy_to_fresh_job<'j>(&self,scope:&crate::fs::WitnessRead<'_>,
-        job:&'j crate::fs::FreshJob,budget:ReadBudget,after_writes:impl FnOnce()->io::Result<()>)->io::Result<crate::fs::CopiedRaw<'j>>{
-        self.unchanged()?;
-        if job.exact_bytes()!=self.len(){return Err(invalid("full copy is not the size funded for this job"));}
-        let (mut directory,mut page,mut block)=(0,0,0);
-        self.index.visit(0,self.len(),|leaf,at,_|{
-            if let Leaf::Data(m)=leaf{
-                let source=self.sources.get(&m.key()).ok_or_else(||invalid("missing original source of the copy"))?;
-                let(d,p,b)=source.reference().read_bytes(at)?;
-                directory=directory.max(d);page=page.max(p);block=block.max(b);
-            }Ok(())
-        })?;
-        if block!=0&&budget.file_descriptors<2+crate::fs::WitnessRead::OPEN_HEADROOM||
-            directory.checked_add(page).and_then(|v|v.checked_add(block)).is_none_or(|v|v>budget.buffer_bytes){
-            return Err(invalid("insufficient sequential source FD/buffer budget for full copy"));}
-        // Allocate shared scratch before opening the exclusive RAW. There is
-        // no all-material FD set, second full in-memory BODY or ancestor read.
-        let mut buffers=Buffers::new(page,block)?;let mut target=job.new_raw()?;
-        let mut last:Option<(Material,Reader)>=None;
-        self.index.visit(0,self.len(),|leaf,at,n|{
-            self.unchanged()?;
-            match leaf{
-                Leaf::Zero=>write_zeroes(&mut target,n),
-                Leaf::Data(m)=>{
-                    if last.as_ref().is_none_or(|(was,_)|*was!=m){
-                        drop(last.take()); // one pair even when opening its successor fails
-                        let located=self.sources.get(&m.key()).ok_or_else(||invalid("missing frozen full-copy origin"))?;
-                        let(raw,checks)=located.open_pair(scope)?;
-                        last=Some((m,Reader::open(located.reference(),raw,checks)?));
-                    }
-                    last.as_ref().expect("selected material").1.range(at,n,&mut buffers,&mut target)
-                }
-            }
-        })?;
-        if let Some((_,r))=last{r.unchanged()?;}
-        self.unchanged()?;after_writes()?;target.synced()
-    }
-}
-
 // File-level algorithms can be exercised independently of name selection.
 // No production consumer receives a caller-swappable data/metadata opener.
 #[cfg(test)]

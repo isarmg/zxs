@@ -87,3 +87,57 @@ fn three_hundred_changes_can_name_three_hundred_distinct_terminal_materials_with
     assert_eq!(fully_replaced.rows.len(),1);assert_eq!(fully_replaced.materials.len(),1);
     assert_eq!(segments(&i,253,1),[(Leaf::Data(m(254,2)),1,1)]);
 }
+
+/// A physical layout example, not a substitute for the SQL publication or
+/// the cross-process reader/retirement barrier. All working spans below are
+/// regions of one real file; they are NOT separate delta files or Nodes.
+#[test]
+fn same_work_file_overwrites_one_logical_range_while_an_older_read_still_uses_it() {
+    use crate::test_support::PrivateTemp;
+    use std::{fs::{File,OpenOptions},os::unix::fs::{FileExt,MetadataExt,OpenOptionsExt}};
+    let temp=PrivateTemp::under(&std::env::temp_dir());
+    let base=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600).open(temp.0.join("base")).unwrap();
+    base.write_all_at(b"012345678",0).unwrap();base.sync_all().unwrap();
+    let original=m(0,9);let first=Index::full(original).unwrap();
+    let path=temp.0.join("the-only-working-delta");
+    let working=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600).open(&path).unwrap();
+    let held=File::open(&path).unwrap();
+    let identity=|f:&File|{let m=f.metadata().unwrap();(m.dev(),m.ino())};
+    assert_eq!(identity(&held),identity(&working));
+    let read=|i:&Index,locations:&[(Material,u64)],f:&File|->Vec<u8>{
+        let mut out=Vec::new();
+        i.visit(0,i.len(),|leaf,offset,n|{
+            let at=out.len();out.resize(at+n as usize,0);
+            if let Leaf::Data(term)=leaf {
+                if term==original{base.read_exact_at(&mut out[at..],offset)?}
+                else{
+                    let start=locations.iter().find(|&&(m,_)|m==term).unwrap().1;
+                    f.read_exact_at(&mut out[at..],start+offset)?
+                }
+            } Ok(())
+        }).unwrap();out
+    };
+    // Selected editions choose different sealed ranges in the *same* delta.
+    let (a,b,c,d)=(m(1,3),m(2,3),m(3,3),m(4,3));
+    let locations=[(a,0),(b,3),(c,6),(d,0)];
+    let put=|at,bytes:&[u8]|{working.write_all_at(bytes,at).unwrap();working.sync_data().unwrap();};
+    put(0,b"aaa");let selected=first.edit(3,Some((a,0,3)),9).unwrap();
+    let old=selected.clone();drop(selected);
+    put(3,b"bbb");let second=old.edit(3,Some((b,0,3)),9).unwrap();
+    assert_eq!(read(&old,&locations,&held),b"012aaa678");assert_eq!(read(&second,&locations,&working),b"012bbb678");
+    put(6,b"ccc");let current=second.edit(3,Some((c,0,3)),9).unwrap();drop(second);
+    assert_eq!(read(&old,&locations,&held),b"012aaa678");
+    assert_eq!(read(&current,&locations,&File::open(&path).unwrap()),b"012ccc678");
+    let shortened=current.edit(0,None,5).unwrap();let grown=shortened.edit(0,None,9).unwrap();
+    assert_eq!(read(&grown,&locations,&working),b"012cc\0\0\0\0");
+    assert!(old.materials.contains(&a));assert!(!current.materials.contains(&a));
+    // This fixture owns every view; no real issuer may infer that it does
+    // just from its own handles. With the old view gone no remaining view,
+    // history or transfer in this fixture refers to [0,3).
+    drop((old,held));for view in [&first,&current,&shortened,&grown]{assert!(!view.materials.contains(&a));}
+    put(0,b"ddd");let next=grown.edit(3,Some((d,0,3)),9).unwrap();
+    assert_eq!(read(&next,&locations,&working),b"012ddd\0\0\0");
+    assert_eq!(read(&current,&locations,&working),b"012ccc678");
+    assert_eq!(working.metadata().unwrap().len(),9);assert_eq!(identity(&File::open(&path).unwrap()),identity(&working));
+    assert_eq!(std::fs::read_dir(&temp.0).unwrap().count(),2); // base + ONE incremental file
+}

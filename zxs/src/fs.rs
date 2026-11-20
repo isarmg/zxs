@@ -12,8 +12,6 @@ mod mounts;
 mod relative;
 mod control;
 pub(crate) use control::ControlRead;
-mod scratch;
-pub(crate) use scratch::{FreshJob,CopiedRaw};
 mod witnessed;
 mod work_pair;
 pub(crate) use work_pair::WorkPair;

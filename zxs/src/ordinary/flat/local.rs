@@ -60,7 +60,7 @@ pub(in crate::ordinary) fn require_resident_names(b:crate::fs::NameBudget,displa
 /// registered pool/FILE, authenticated version and read authority for the
 /// operation. Even matching both links cannot detect a replacement of *both*
 /// by a coordinated clone, or show which of two complete media is current.
-pub(in crate::ordinary) struct LocalVersion<'d>{parent:&'d HeldDir,contents:Contents,descriptor:Descriptor}
+pub(in crate::ordinary) struct LocalVersion<'d>{parent:&'d HeldDir,contents:Contents}
 impl<'d> LocalVersion<'d>{
     pub(in crate::ordinary) fn open(parent:&'d HeldDir,descriptor:Descriptor,
             origins:impl FnMut(Material)->io::Result<Located>)->io::Result<Self>{
@@ -68,7 +68,7 @@ impl<'d> LocalVersion<'d>{
         let scope=WitnessRead::at(parent)?;let(main,witness)=index_names(descriptor.key);
         let table=scope.open(&main,&witness,descriptor.index_bytes)?;
         let contents=Contents::bind(descriptor,table,origins)?;WitnessRead::require_parent(parent)?;
-        Ok(Self{parent,contents,descriptor})
+        Ok(Self{parent,contents})
     }
     /// Equality of content commitments derived from the complete RAW's
     /// authenticated checksum metadata, not verification of every body byte.
@@ -89,7 +89,7 @@ impl<'d> LocalVersion<'d>{
     /// Explicit full logical read. Compare to the originating node's distinct
     /// LogicalV1, after every intersecting real block has passed verification
     /// and the complete sink has flushed. Not called by ordinary range reads
-    /// or per-SAVE; this does NOT itself publish an automatically copied RAW.
+    /// or per-SAVE; explicit verification does not publish a version.
     pub(in crate::ordinary) fn verify_complete(&self,expected:super::logical::LogicalV1,budget:ReadBudget)->io::Result<()>{
         let length=self.contents.len();
         if length!=expected.length(){return Err(invalid("logical verification length differs from confirmed node"));}
@@ -108,9 +108,6 @@ impl<'d> LocalVersion<'d>{
     }
 }
 
-#[path="materialize.rs"]
-mod materialize;
-pub(in crate::ordinary) use materialize::{CopyJob,RawReadback};
 
 #[cfg(test)]
 #[path="../../../tests/unit/flat_local.rs"]
