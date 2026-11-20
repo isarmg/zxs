@@ -60,7 +60,16 @@ struct zxs_smb_tree_cut {
 };
 #define ZXS_SMB_TREE_CUT_BYTES 74
 #define ZXS_SMB_VIRTUAL_ROOT "/zxs-root"
+/* Single borrowed tree, bounded private request. Cursors are ordering keys only. */
+#define ZXS_DIR_ROWS 16
+#define ZXS_DIR_NAME 222
+#define ZXS_DIR_SLOT (1+ZXS_DIR_NAME+8+8)
+#define ZXS_DIR_PACKET (16+1+ZXS_DIR_ROWS*ZXS_DIR_SLOT)
 int zxs_smb_root_wait(int tree,int session,int timeout);
+int zxs_dir_query(int tree,unsigned limit,const uint8_t *after,size_t n);
+int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[223]);
+int zxs_dir_reply(int fd,const uint8_t data[ZXS_DIR_PACKET-16]);
+int zxs_dir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]);
 int zxs_smb_root_release(struct zxs_smb_tree_cut *owned);
 int zxs_smb_tree_ask(int session,const uint8_t share[16]);
 int zxs_smb_tree_take(int session,int worker,uint8_t share[16]);

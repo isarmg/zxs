@@ -7,6 +7,7 @@
 #include "param/zxs_smb_control.h"
 #include <sys/socket.h>
 #include <time.h>
+#include <sys/syscall.h>
 
 struct observed { int fd; int64_t start; uint8_t want; bool done,ok; };
 static void notified(struct tevent_req *req)
@@ -47,8 +48,34 @@ static bool separate_tree_replies(void)
 	cut[73]=2;cut[56]=0;ok=ok && zxs_smb_tree_reply(a[1],cut)==0 && zxs_smb_tree_read(a[0],wanted,&decision)!=0;
 	close(a[0]);close(a[1]);close(b[0]);close(b[1]);return ok;
 }
+/* No login or live server here: these are the actual private page transport
+ * functions on one kernel pair. Keep two overlapping replies distinct. */
+static bool directory_pairs(void)
+{
+	int p[2],proc=-1,a=-1,b=-1,reply=-1;
+	uint8_t after[223]={0},limit=42,rows[ZXS_DIR_PACKET-16]={0},got[ZXS_DIR_PACKET-16]={0};
+	bool ok=false;
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)!=0)return false;
+	proc=(int)syscall(SYS_pidfd_open,getpid(),0);if(proc<0)goto done;
+	a=zxs_dir_query(p[0],1,(const uint8_t *)"alpha",5);
+	b=zxs_dir_query(p[0],0,NULL,0);
+	if(a<0||b<0||zxs_dir_query(p[0],17,NULL,0)>=0||zxs_dir_query(p[0],0,(const uint8_t *)"a",1)>=0)goto done;
+	reply=zxs_dir_take(p[1],proc,&limit,after);
+	if(reply<0||limit!=1||after[0]!=5||memcmp(after+1,"alpha",5)!=0)goto done;
+	rows[0]=1;rows[1]=1;rows[2]='z';rows[1+1+ZXS_DIR_NAME+6]=1; /* file 256 */
+	if(zxs_dir_reply(reply,rows)!=0||zxs_dir_result(a,1,got)!=0||memcmp(rows,got,sizeof(got))!=0)goto done;
+	close(reply);reply=zxs_dir_take(p[1],proc,&limit,after);
+	if(reply<0||limit!=0||after[0]!=0)goto done;
+	/* Cannot inject an unauthorized entry into a zero-row authority cut. */
+	if(zxs_dir_reply(reply,rows)!=0||zxs_dir_result(b,0,got)>=0)goto done;
+	ok=true;
+done:
+	if(reply>=0)close(reply);if(a>=0)close(a);if(b>=0)close(b);if(proc>=0)close(proc);
+	close(p[0]);close(p[1]);return ok;
+}
 int main(void)
 {
+	if(!directory_pairs())return 1;
 	struct tevent_context *ev=tevent_context_init(NULL);
 	int a[2],b[2];struct timespec now;int64_t start;
 	uint8_t x[8],y[8];

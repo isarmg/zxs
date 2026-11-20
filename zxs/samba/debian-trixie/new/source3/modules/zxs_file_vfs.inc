@@ -61,7 +61,24 @@ static uint32_t zxs_root_capabilities(vfs_handle_struct *h,enum timestamp_set_re
 {
 	(void)h;*res=TIMESTAMP_SET_SECONDS;return 0; /* no advertised filesystem extensions */
 }
+#include "smbd/zxs_directory.h"
+static bool zxs_own_root_fsp(vfs_handle_struct *h,struct files_struct *fsp)
+{
+	struct zxs_dir_search *d=zxs_find_dir(fsp);
+	return h!=NULL && d!=NULL && h==fsp->conn->vfs_handles && d->tcon==fsp->conn->tcon;
+}
+static uint64_t zxs_root_alloc(vfs_handle_struct *h,struct files_struct *fsp,const SMB_STRUCT_STAT *b)
+{
+	if(!zxs_own_root_fsp(h,fsp) || b!=&fsp->fsp_name->st){errno=ENOSYS;return UINT64_MAX;}
+	return 0;
+}
+static NTSTATUS zxs_root_dos(vfs_handle_struct *h,struct files_struct *fsp,uint32_t *mode)
+{
+	if(!zxs_own_root_fsp(h,fsp))return NT_STATUS_NOT_SUPPORTED;
+	*mode=FILE_ATTRIBUTE_DIRECTORY;return NT_STATUS_OK;
+}
 static const struct vfs_fn_pointers zxs_file_front = {
+	.get_alloc_size_fn=zxs_root_alloc,.fget_dos_attributes_fn=zxs_root_dos,
 	.connect_fn=zxs_file_connect,.disconnect_fn=zxs_file_disconnect,
 	.realpath_fn=zxs_root_realpath,.stat_fn=zxs_root_stat,.fs_capabilities_fn=zxs_root_capabilities,
 };

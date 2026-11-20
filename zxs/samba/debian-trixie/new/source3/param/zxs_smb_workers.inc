@@ -62,15 +62,16 @@ int zxs_smb_same_process(int a,int b)
        fstat(a,&x)!=0 || fstat(b,&y)!=0)return -1;
     return x.st_dev==y.st_dev && x.st_ino!=0 && x.st_ino==y.st_ino;
 }
-int zxs_smb_attempt_peer(int endpoint,int sender)
+static int same_endpoint_process(int endpoint,int sender,bool root_creator)
 {
     int peer=-1;socklen_t n=sizeof(peer);
-    if(zxs_smb_ctl_claim(endpoint)!=0 ||
+    if(claim_socket(endpoint,root_creator)!=0 ||
        getsockopt(endpoint,SOL_SOCKET,SO_PEERPIDFD,&peer,&n)!=0)return -1;
     bool good=n==sizeof(peer) && peer>=0 && zxs_smb_same_process(peer,sender)==1;
     if(peer>=0)close(peer);
     return good?0:bad();
 }
+int zxs_smb_attempt_peer(int endpoint,int sender){return same_endpoint_process(endpoint,sender,true);}
 int zxs_smb_origin_enable(int fd)
 {
     int one=1;

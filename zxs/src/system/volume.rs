@@ -76,6 +76,9 @@ impl<'a> OrdinaryRoot<'a>{
         at_target()?;
         crate::fs::WitnessRead::require_parent(&self.root)?;self.mark.require(&self.root)
     }
+    pub(super) fn for_tree(&self,source:&InitialReader,volume:VolumeId)->bool{
+        std::ptr::eq(self.source,source)&&self.volume==volume
+    }
     pub(super) fn space(&self)->io::Result<DiskSpace>{
         self.require()?;let(mut total,mut available)=(0,0);
         // SAFETY: actual already-held ordinary root FD, two live output integers.

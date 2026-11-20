@@ -69,7 +69,11 @@ fn failed_disclosure_never_moves_the_cursor_or_refreshes_the_grant(){
     let witness=f.join(format!(".zxs-new-{}-7",a.created));let keep=f.join("held-aside");
     assert!(l.next_after(1,||std::fs::rename(&witness,&keep)).is_err());
     std::fs::rename(&keep,&witness).unwrap();assert_eq!(l.next(1).unwrap()[0].file,a.file);
-    let res=l.next_after(1,||{w.create_file(OperationId([0xe3;16]),"b")?;Ok(())}).unwrap_err();
+    let res=l.next_after(1,||{
+        assert_ne!(unsafe{crate::system::reader::sqlite3_get_autocommit(read.conn.0)},0,
+                   "ordinary name/FILE checks must not keep SYSTEM in a transaction");
+        w.create_file(OperationId([0xe3;16]),"b")?;Ok(())
+    }).unwrap_err();
     assert_eq!(res.kind(),io::ErrorKind::WouldBlock);assert_eq!(l.next(1).unwrap()[0].name,"b");
     assert!(l.next_after(1,||{
         let was=web.share_setting(ro)?;

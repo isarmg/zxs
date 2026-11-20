@@ -3,10 +3,16 @@
  * Call the native dispatcher used by smbd, not a duplicate deny predicate. */
 #include "includes.h"
 #include "smbd/smbd.h"
+#include "smbd/globals.h"
+#include "../lib/util/tevent_ntstatus.h"
+#include "../lib/async_req/async_sock.h"
+#include <sys/socket.h>
 #include "smbd/fd_handle.h"
 #include "param/loadparm.h"
 #include "lib/param/param.h"
 #include "smbd/zxs_file_vfs.h"
+#include "smbd/zxs_directory.h"
+#include "trans2.h"
 #include "librpc/gen_ndr/smbXsrv.h"
 
 /* Use the native globals and parameter setter, not a copy of the
@@ -62,6 +68,82 @@ static bool only_the_attached_virtual_root(connection_struct *conn,const char *s
 done:
 	zxs_smb_root_release(s);close(sock[1]);conn->tcon_done=false;conn->tcon=NULL;TALLOC_FREE(t);
 	return ok;
+}
+/* Real native record encoder, including ID_BOTH's 64-bit ID, alignment
+ * and UTF-16 name. The terminal VFS would return UINT64_MAX for host
+ * allocation; that value must never appear in this logical projection. */
+static bool native_directory_projection(connection_struct *c)
+{
+	struct share_params params={.service=GLOBAL_SECTION_SNUM};
+	char bytes[4608]={0},*next=bytes,*save=NULL;
+	uint64_t at=123,number=UINT64_C(0xfedcba9823456789);
+	NTSTATUS status;
+	c->params=&params;
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",number,4097,
+		8,bytes,&next,bytes+sizeof(bytes)-1,&at);
+	if(!NT_STATUS_EQUAL(status,STATUS_MORE_ENTRIES)||next!=bytes||at!=123)goto fail;
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",number,4097,
+		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
+	if(!NT_STATUS_IS_OK(status)||at!=0||BVAL(bytes,40)!=4097||BVAL(bytes,48)!=8192||
+	    IVAL(bytes,60)!=4||SVAL(bytes,68)!=0||BVAL(bytes,96)!=number||
+	    SVAL(bytes,104)!=0x62a5||SVAL(bytes,106)!=0x544a)goto fail;
+	save=next;
+	status=zxs_marshal_child(c,c,SMB_FIND_FILE_NAMES_INFO,"b",300,0,
+		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
+	if(!NT_STATUS_IS_OK(status)||at%8!=0||bytes+at<save||SVAL(bytes+at,12)!='b')goto fail;
+	c->params=NULL;return true;
+fail:
+	c->params=NULL;return false;
+}
+/* The linked, real waiter is canceled through the same terminal function
+ * as root CREATE/QUERY. The outer request survives the CLOSE/TDIS walk;
+ * the real FSP's AIO list has already shrunk before its callback runs. */
+struct cancel_probe {
+	struct tevent_context *ev;
+	struct tevent_req *wait;
+	struct aio_req_fsp_link *link;
+};
+struct cancel_seen { unsigned callbacks; bool canceled; };
+static bool probe_cancel(struct tevent_req *req)
+{
+	struct cancel_probe *s=tevent_req_data(req,struct cancel_probe);
+	return zxs_dir_wait_cancel(req,s->ev,&s->wait,&s->link);
+}
+static void probe_done(struct tevent_req *req)
+{
+	struct cancel_seen *o=tevent_req_callback_data_void(req);
+	NTSTATUS status=NT_STATUS_OK;
+	o->callbacks++;o->canceled=tevent_req_is_nterror(req,&status)&&NT_STATUS_EQUAL(status,NT_STATUS_CANCELLED);
+	tevent_req_received(req);TALLOC_FREE(req);
+}
+static bool native_cancel_walk(connection_struct *conn)
+{
+	TALLOC_CTX *ctx=talloc_new(conn);
+	struct tevent_context *ev=tevent_context_init(ctx);
+	struct smbd_server_connection sc={0};
+	struct cancel_probe *s;
+	struct cancel_seen seen={0};
+	struct tevent_req *req;
+	files_struct *fsp=talloc_zero(ctx,files_struct);
+	int sv[2];bool ok=false;
+	if(ctx==NULL || ev==NULL || fsp==NULL || socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,sv)!=0){
+		TALLOC_FREE(ctx);return false;
+	}
+	conn->sconn=&sc;sc.files=fsp;fsp->conn=conn;
+	req=tevent_req_create(ctx,&s,struct cancel_probe);
+	if(req==NULL)goto out;
+	s->ev=ev;s->wait=wait_for_read_send(s,ev,sv[0],false);
+	s->link=aio_add_req_to_fsp(fsp,req);
+	if(s->wait==NULL || s->link==NULL || fsp->num_aio_requests!=1)goto out;
+	talloc_steal(s,s->link);
+	tevent_req_set_callback(req,probe_done,&seen);tevent_req_set_cancel_fn(req,probe_cancel);
+	if(!tevent_req_cancel(fsp->aio_requests[0]) || fsp->num_aio_requests!=0 ||
+	   seen.callbacks!=0 || s->wait!=NULL || s->link!=NULL)goto out;
+	if(tevent_loop_once(ev)!=0 || seen.callbacks!=1 || !seen.canceled)goto out;
+	ok=true;
+out:
+	if(!ok && req!=NULL && seen.callbacks==0)TALLOC_FREE(req);
+	conn->sconn=NULL;close(sv[0]);close(sv[1]);TALLOC_FREE(ctx);return ok;
 }
 int main(void)
 {
@@ -141,7 +223,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!only_the_attached_virtual_root(conn,lower)) { return 1; }
+	if (!native_cancel_walk(conn) || !native_directory_projection(conn) || !only_the_attached_virtual_root(conn,lower)) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

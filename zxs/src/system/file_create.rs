@@ -92,17 +92,26 @@ pub(super) fn display_free_in_sample(db:&Connection,c:&Catalog,f:&HeldDir,b:&Bir
     if Birth::reserved_spelling(b.name.as_bytes()){return Ok(());} // never an ordinary-directory spelling
     let leaf=CString::new(b.name.as_str()).map_err(|_|invalid("bad FILE name"))?;
     if !f.entry_present(&leaf)?{return Ok(());}
-    let s=db.prepare(c"SELECT create_op FROM main.root_entry WHERE volume_id=?1 AND terminal=?2")?;
-    s.bind_bytes(1,&b.volume.0)?;s.bind_bytes(2,leaf.to_bytes())?;
-    match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(invalid("FILE display spelling occupied by an unrecognized native member")),rc=>{check(rc)?;return Err(invalid("cannot inspect a colliding native name"));}}
-    let op=OperationId(s.array(0)?);s.done()?;
-    let other=by_op(db,c,op)?.filter(|o|o.committed&&o.birth.volume==b.volume&&o.birth.name!=b.name)
-        .ok_or_else(||invalid("colliding display spelling is not another confirmed FILE terminal"))?;
-    if other.birth.container()?.as_c_str()!=leaf.as_c_str(){return Err(invalid("wrong derived terminal for displayed spelling"));}
-    let(members,kept)=super::first_work::membership(db,c,&other.birth)?;
+    let (other,members,kept)=display_owner(db,c,b)?.ok_or_else(||invalid("FILE display spelling occupied by an unrecognized native member"))?;
     let fresh;
     let sample=match held_sample{Some(s)=>s,None=>{fresh=f.names()?.into_iter().collect();&fresh}};
-    other.birth.working_at(f,sample,false,members,&kept)?.require(f)
+    other.working_at(f,sample,false,members,&kept)?.require(f)
+}
+
+/// SQLite half of an unusual display name equal to another FILE's terminal.
+/// Does not look up any path or open F; the physical half is checked by the caller.
+pub(super) fn display_owner(db:&Connection,c:&Catalog,b:&Birth)->io::Result<Option<(Birth,
+    Option<(crate::ordinary::working_sql::Spec,bool)>,crate::ordinary::working_sql::Retained)>>{
+    if Birth::reserved_spelling(b.name.as_bytes()){return Ok(None);}
+    let s=db.prepare(c"SELECT create_op FROM main.root_entry WHERE volume_id=?1 AND terminal=?2")?;
+    s.bind_bytes(1,&b.volume.0)?;s.bind_bytes(2,b.name.as_bytes())?;
+    match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(None),rc=>{check(rc)?;return Err(invalid("cannot inspect a colliding native name"));}}
+    let op=OperationId(s.array(0)?);s.done()?;
+    let Some(other)=by_op(db,c,op)?.filter(|o|o.committed)else{return Ok(None);};
+    if other.birth.volume!=b.volume||other.birth.name==b.name||other.birth.container()?.to_bytes()!=b.name.as_bytes(){
+        return Err(invalid("wrong confirmed terminal for displayed spelling"));}
+    let(members,kept)=super::first_work::membership(db,c,&other.birth)?;
+    Ok(Some((other.birth,members,kept)))
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]

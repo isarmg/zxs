@@ -70,7 +70,7 @@ static bool opt(int fd,int k,int expected)
     int v=-1;socklen_t n=sizeof(v);
     return getsockopt(fd,SOL_SOCKET,k,&v,&n)==0 && n==sizeof(v) && v==expected;
 }
-int zxs_smb_ctl_claim(int fd)
+static int claim_socket(int fd,bool root_creator)
 {
     int flags=fcntl(fd,F_GETFD);struct ucred creator={0};socklen_t n=sizeof(creator);
     /* With a socketpair SO_PEERCRED identifies the creator, NOT the exec'd
@@ -80,9 +80,10 @@ int zxs_smb_ctl_claim(int fd)
     if(flags<0 || open_flags<0 || (open_flags&O_NONBLOCK)!=0 || !opt(fd,SO_TYPE,SOCK_SEQPACKET) || !opt(fd,SO_ACCEPTCONN,0) || !opt(fd,SO_PASSCRED,0) || !opt(fd,SO_PASSPIDFD,0) ||
        !unnamed(fd,false) || !unnamed(fd,true) ||
        getsockopt(fd,SOL_SOCKET,SO_PEERCRED,&creator,&n)<0 || n!=sizeof(creator) ||
-       creator.uid!=0) {return bad();}
+       (root_creator && creator.uid!=0)) {return bad();}
     return fcntl(fd,F_SETFD,flags|FD_CLOEXEC);
 }
+int zxs_smb_ctl_claim(int fd){return claim_socket(fd,true);}
 static int millis(int64_t *out)
 {
     struct timespec t;
@@ -99,11 +100,11 @@ static bool life_reader(int fd)
            fstat(fd,&st)==0 && S_ISFIFO(st.st_mode) && fstatfs(fd,&fs)==0 &&
            (unsigned long)fs.f_type==PIPEFS_MAGIC;
 }
-enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD };
+enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD, ZXS_DATA_FD };
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES && len!=18+ZXS_DIR_NAME && len!=ZXS_DIR_PACKET)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {
@@ -148,7 +149,7 @@ static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,in
                 }
                 if(extra || (take!=NULL && (received<0 ||
                    (kind==ZXS_LIFE_FD ? !life_reader(received) :
-                    (kind!=ZXS_TREE_FD || zxs_smb_ctl_claim(received)!=0)))) ||
+                    (kind==ZXS_DATA_FD ? claim_socket(received,false)!=0 : (kind!=ZXS_TREE_FD || zxs_smb_ctl_claim(received)!=0))))) ||
                    (size_t)got!=len){
                     if(received>=0)close(received);
                     return bad();
@@ -396,7 +397,8 @@ int zxs_smb_root_wait(int tree,int session,int timeout)
     do{r=poll(p,2,timeout);}while(r<0 && errno==EINTR && timeout==0);
     if(r<0 && errno==EINTR)return 0;
     if(r<0)return -1;
-    return r==0?0:1; /* no post-CONNECT operation protocol yet; no unverified reply */
+    if(p[1].revents!=0 || (p[0].revents&~POLLIN)!=0)return -1;
+    return p[0].revents==POLLIN?1:0; /* data is consumed only by this tree worker */
 }
 int zxs_smb_root_release(struct zxs_smb_tree_cut *owned)
 {
@@ -406,3 +408,5 @@ int zxs_smb_root_release(struct zxs_smb_tree_cut *owned)
     }
     return 0;
 }
+
+#include "zxs_directory_wire.inc"

@@ -2,9 +2,9 @@
 //! own read-only SQLite connection, and the private endpoint of one TCON.
 //! No host path, physical inode, block device or FILE descriptor crosses to smbd.
 use super::{InitialReader,Stamp,attempts::TreeOrigin,denied,os};
-use super::super::{SmbSession,share_mode::Setting};
+use super::super::{SmbSession,Tree,directory,share_mode::Setting};
 use crate::{PoolId,fs::ControlRead,identity::ShareId,system::{lease::SystemDir,reader::volume::OrdinaryRoot}};
-use std::{fs::File,io,os::fd::{AsRawFd,OwnedFd},sync::{Arc,atomic::{AtomicBool,Ordering}},thread};
+use std::{fs::File,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::{Arc,atomic::{AtomicBool,Ordering}},thread};
 
 const GLOBAL:usize=32;
 const PER_SESSION:usize=8;
@@ -12,6 +12,8 @@ unsafe extern "C"{
     fn zxs_smb_tree_reply(fd:i32,result:*const u8)->i32;
     fn zxs_smb_root_wait(tree:i32,session:i32,timeout:i32)->i32;
     fn zxs_smb_process_live(pidfd:i32)->i32;
+    fn zxs_dir_take(tree:i32,worker:i32,limit:*mut u8,cursor:*mut u8)->i32;
+    fn zxs_dir_reply(fd:i32,page:*const u8)->i32;
 }
 #[derive(Clone,Copy)]
 pub(super) struct Site<'a>{dir:&'a SystemDir,mark:&'a ControlRead,pool:PoolId,shape:[u8;32],binding:&'a File,stamp:&'a Stamp}
@@ -46,7 +48,7 @@ impl<'scope,'env:'scope> Workers<'scope,'env>{
 fn live(origin:&TreeOrigin,tree:&OwnedFd,timeout:i32)->bool{
     origin.alive.load(Ordering::Acquire) &&
         unsafe{zxs_smb_process_live(origin.worker.as_raw_fd())}==0 &&
-        unsafe{zxs_smb_root_wait(tree.as_raw_fd(),origin.session.as_raw_fd(),timeout)}==0
+        unsafe{zxs_smb_root_wait(tree.as_raw_fd(),origin.session.as_raw_fd(),timeout)}>=0
 }
 fn choice(setting:Setting,pool:PoolId,ordinal:u8)->io::Result<[u8;74]>{
     if !(2..64).contains(&ordinal)||setting.revision<=0||!matches!(setting.mode as u8,1|2){return Err(denied());}
@@ -57,26 +59,50 @@ fn choice(setting:Setting,pool:PoolId,ordinal:u8)->io::Result<[u8;74]>{
 /// One SQL cut chooses the same grant and its actual F row. Take the
 /// original directory and marker outside SQL, then reselect the same grant
 /// before there can be an answer. The returned root still holds both FDs.
-fn attach<'r>(session:&SmbSession<'r>,share:ShareId,after:impl FnOnce()->io::Result<()>)->io::Result<(OrdinaryRoot<'r>,[u8;74])>{
+fn attach<'r>(session:&SmbSession<'r>,share:ShareId,after:impl FnOnce()->io::Result<()>)->io::Result<(OrdinaryRoot<'r>,[u8;74],Setting)>{
     let (tree,c)=session.select_with_catalog(share)?;
     let root=OrdinaryRoot::for_body(session.source,&c,tree.setting.volume)?;
     let bytes=choice(tree.setting,session.source.pool,root.ordinal)?;
     root.require_streaming_at(after)?;
     session.source.at(|db,c|tree.require(db,&c,false))?; // SQL authority only; no F path or marker I/O
-    Ok((root,bytes))
+    Ok((root,bytes,tree.setting))
 }
 fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Result<()>{
     if origin.slot.pool!=site.pool||!live(&origin,&reply,0){return Err(denied());}
     site.validate()?;
     let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
     let session=SmbSession{source:&src,original:origin.slot.original.clone()};
-    let (root,bytes)=attach(&session,share,||site.validate())?;
+    let (root,bytes,setting)=attach(&session,share,||site.validate())?;
     if !live(&origin,&reply,0){return Err(denied());}
     os(unsafe{zxs_smb_tree_reply(reply.as_raw_fd(),bytes.as_ptr())})?;
-    // Idle is NOT a continuous positive permission. Keep this exact root
-    // until DISCONNECT, rejected data, native session loss or controlled stop.
-    // No OPEN/LIST/READ packet is implemented through the tree channel yet.
-    while live(&origin,&reply,500){}
+    let tree=Tree{session:&session,setting};
+    while live(&origin,&reply,0){
+        match unsafe{zxs_smb_root_wait(reply.as_raw_fd(),origin.session.as_raw_fd(),500)}{
+            0=>continue,1=>{},_=>break,
+        }
+        let mut limit=0;let mut cursor=[0;223];
+        let fd=unsafe{zxs_dir_take(reply.as_raw_fd(),origin.worker.as_raw_fd(),&mut limit,cursor.as_mut_ptr())};
+        if fd<0{break;} // original session remains usable on its other trees
+        let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+        let result=(||->io::Result<_>{
+            site.validate()?;
+            if !live(&origin,&reply,0){return Err(denied());}
+            if limit==0{
+                root.require_streaming()?;
+                src.at(|db,c|tree.require(db,&c,false))?;
+                return Ok(Vec::new());
+            }
+            directory::page(&tree,&root,&cursor[1..1+usize::from(cursor[0])],limit,||Ok(()))
+        })();
+        let Ok(rows)=result else{continue;}; // close only this answer, never send a prefix
+        if !live(&origin,&reply,0) || site.validate().is_err(){break;}
+        let mut out=[0u8;1+16*(1+222+8+8)];out[0]=rows.len() as u8;
+        for (row,slot) in rows.iter().zip(out[1..].chunks_exact_mut(239)){
+            slot[0]=row.name.len() as u8;slot[1..1+row.name.len()].copy_from_slice(row.name.as_bytes());
+            slot[223..231].copy_from_slice(&row.number.to_be_bytes());slot[231..239].copy_from_slice(&row.size.to_be_bytes());
+        }
+        let _=unsafe{zxs_dir_reply(answer.as_raw_fd(),out.as_ptr())}; // cancel lost no cursor, grant or data
+    }
     drop(root);Ok(())
 }
 
