@@ -10,9 +10,9 @@ def main():
         if sys.stderr is not None:
             print("Install this project's optional desktop extra first.", file=sys.stderr)
         return 2
-    from .window import Window
+    from .window import DesktopWindows
     app = QApplication(sys.argv)
     app.setApplicationName("ZIP Workspace")
-    window = Window()
-    window.show()
+    windows = DesktopWindows()
+    windows.open()
     return app.exec()

@@ -1,6 +1,7 @@
 """One immutable request at a time; GUI objects never enter the worker thread."""
 from concurrent.futures import ThreadPoolExecutor
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QMainWindow, QProgressBar, QTabWidget, QVBoxLayout, QWidget
 
 from .archive_pane import ArchivePane
@@ -8,8 +9,23 @@ from .import_pane import ImportPane
 from .widgets import button, label
 
 
-class Window(QMainWindow):
+class DesktopWindows:
+    """Each top-level window starts without inherited archive or writer authority."""
     def __init__(self):
+        self.windows = {}
+
+    def open(self):
+        window = Window(new_window=self.open)
+        token = object()
+        self.windows[token] = window
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        window.destroyed.connect(lambda _obj=None: self.windows.pop(token, None))
+        window.show()
+        return window
+
+
+class Window(QMainWindow):
+    def __init__(self, *, new_window=None):
         super().__init__()
         self.setWindowTitle("ZIP Workspace")
         self.resize(1000, 700)
@@ -23,6 +39,15 @@ class Window(QMainWindow):
         self.tabs.addTab(self.archive, "快照与历史")
         self.plain_import = ImportPane(self)
         self.tabs.addTab(self.plain_import, "核验普通 ZIP")
+        files = self.menuBar().addMenu("文件")
+        if new_window is not None:
+            open_window = files.addAction("新窗口")
+            open_window.setShortcut(QKeySequence(QKeySequence.StandardKey.New))
+            open_window.triggered.connect(lambda _checked=False: new_window())
+        open_snapshot = files.addAction("打开 .zxs 快照…")
+        open_snapshot.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
+        open_snapshot.triggered.connect(lambda _checked=False: self.archive.choose())
+        files.addAction("关闭当前快照").triggered.connect(lambda _checked=False: self.archive.close_snapshot())
         layout.addWidget(self.tabs)
         if self.archive.mount is not None: layout.addWidget(self.archive.mount.banner)
         self.progress = QProgressBar()

@@ -133,6 +133,31 @@ class DesktopTextPreview(unittest.TestCase):
         pane.close_text()
         self.assertIsNone(pane.text_dialog)
 
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_new_window_does_not_inherit_a_selection_and_close_snapshot_only_releases_browsing(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import DesktopWindows
+        app = QApplication.instance() or QApplication([])
+        manager = DesktopWindows()
+        left = manager.open()
+        self.addCleanup(left.close)
+        chosen = self.archive(b"keep other window")
+        left.archive.show_selection(chosen)
+        right = manager.open()
+        self.addCleanup(right.close)
+        self.assertIsNot(left.pool, right.pool)
+        self.assertIsNone(right.archive.selection)
+        self.assertIsNone(right.archive.store)
+        self.assertIsNone(right.archive.checkout.live)
+        self.assertIs(left.archive.selection, chosen)
+        self.assertFalse(chosen.held.closed)
+        with patch.object(left.archive.checkout, "close_session", side_effect=AssertionError("not a window close")):
+            left.archive.close_snapshot()
+        self.assertIsNone(left.archive.selection)
+        self.assertTrue(chosen.held.closed)
+        self.assertIsNone(right.archive.selection)
+
     @unittest.skipUnless(os.name == "posix", "replace a read-open name on POSIX")
     def test_equal_bytes_replacement_is_not_the_held_original(self):
         chosen = self.archive(b"read only")

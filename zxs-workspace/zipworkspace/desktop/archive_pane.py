@@ -124,7 +124,16 @@ class ArchivePane(QWidget):
         for widget in (self.reload, self.up, self.into, self.back, self.more, self.find):
             widget.setEnabled(False)
 
+    def close_snapshot(self):
+        if self.owner.pending is not None:
+            self.owner.inform("原操作仍未返回；请等待后再关闭当前浏览快照。")
+            return
+        if self.selection is None: return
+        self.clear_document()
+        self.owner.inform("已关闭浏览快照与原浏览句柄；未关闭本窗口工作树，也未卸载已挂好的只读盘。")
+
     def choose(self):
+        if self.owner.pending is not None: return
         if self.mount is not None: self.mount.changing()
         name, _ = QFileDialog.getOpenFileName(self, "选择要核验的目录快照", "", "目录快照 (*.zxs *.ZXS);;所有文件 (*)")
         if not name: return
