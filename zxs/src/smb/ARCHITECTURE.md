@@ -28,13 +28,19 @@ READ 保持原请求长度供 MaxReadSize／credits／范围锁核验，偏移�
 
 显式 CLOSE 消耗原打开的持有权，不等于异常断连。以后接线须先令该 OPEN 不可再路由并结束在途操作；`POSTQUERY_ATTRIB` 只返回原句柄可获且有权的真实属性。属性取不到不冒充有效；关闭与脏普通写句柄的最后确认失败单独保留，正常写关闭时由 Core 在原写权内收尾，释放底层对象后才退共享票。丢连接／撤权只清理，绝不能隐式写穿、flush 或发布历史。这部分没有真正后端接线。
 
-成功 READ／CLOSE 应答体只能消费 Held 产生的私有结果，不能用任意正文、请求计数或属性生成成功。READ 保持真实返回长度，固定体后仅借已核正文；[MS-FSA](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/aa57e052-40d4-4d9f-837d-2b0ce7c87cf4) 的零长底层成功不等于线上空成功，[MS-SMB2 §2.2.20](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/3e3d2f2c-0e2f-41ea-ad07-fbca6ffdfd90) 规定实际返回 0 字节应答 EOF，包括合法的零长度请求。EOF 或未达 MinimumCount 用 ERROR 体，不夹带部分正文；原始 Core 错误保留给真实状态映射。CLOSE 只在请求且有实际可获属性时标记有效，其他成功关闭的属性／标志为零。这里只定义命令、状态和体，不构造协议头或发包；未来唯一应答出口核同一已验证请求与会话，确定长度、复合对齐及原字节后才签名。当前无监听、认证发行者或实际 Core 调用。
+成功 READ／CLOSE 应答体只能消费 Held 产生的私有结果，不能用任意正文、请求计数或属性生成成功。READ 保持真实返回长度，固定体后仅借已核正文；[MS-FSA](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/aa57e052-40d4-4d9f-837d-2b0ce7c87cf4) 的零长底层成功不等于线上空成功，[MS-SMB2 §2.2.20](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/3e3d2f2c-0e2f-41ea-ad07-fbca6ffdfd90) 规定实际返回 0 字节应答 EOF，包括合法的零长度请求。EOF 或未达 MinimumCount 用 ERROR 体，不夹带部分正文；原始 Core 错误保留给真实状态映射。CLOSE 只在请求、原 OPEN 实授 FILE_READ_ATTRIBUTES 且属性确实取得时标记有效；缺属性权的正常关闭仍执行，但不查询或回送元数据。这里只定义命令、状态和体，不构造协议头或发包；未来唯一应答出口核同一已验证请求与会话，确定长度、复合对齐及原字节后才签名。当前无监听、认证发行者或实际 Core 调用。
 
 [WRITE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/829f93f5-ed10-4f12-8347-42d235019459) 只借用本命令声明的正文，不含其他命令、预填字节或尾随填充；原请求长度供 MaxWriteSize 和 credits，TCP 不消费 RDMA 描述符。追加位置来自同一个仍获权的实际写者的当前稿 EOF，不看旧读句柄的长度，不把对 EOF 写或空写当作 SET_END_OF_FILE。仅追加的权限不改写或填出空洞，只能命中该 EOF；跨出原长需要明确追加权。普通写确认原写者已接收该范围，不承诺已经持久化。
 
 逐请求 WRITE_THROUGH 不是 CREATE 的 FILE_WRITE_THROUGH 模式。按 3.1.1 组合规则，普通缓冲打开上只有逐请求写穿标志时返回参数错误；真正的直接写没有接，不退化成缓冲成功。[Apple 原生源码](https://github.com/apple-oss-distributions/smb/blob/a4320c1ed655fe99ca882a43c84cd820ea10d2af/kernel/netsmb/smb_smb_2.c#L7338-L7367) 有特定错误后的重试，不代表该平台已验收。原持有打开要求写穿时，实际写入后还必须等同一写者完成确认；[显式 FLUSH](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/026984f6-38af-4408-8200-50557eb0a286) 也只让实际有写权的原 FILE 写者确认；目录权限不变成卷同步。失败仍留在原写者与原批次的状态机，不冒充刷盘、成功关闭或正式提交。不提供伪造写者、额外正文或实际调度。
 
 WRITE 和 FLUSH 成功各有私有 Held 收据。按 [WRITE 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/7b80a339-f4d3-4575-8ce2-70a06f24f133)，Count 来自原写者核实的实际接收字节数，不从请求的 Length 生成；当前业务要求整段成功，计数矛盾不给成功，也不推断回退或自动重写。合法空 WRITE 可回实际 Count=0，这与 READ 的 EOF 不同。[FLUSH 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/42f78e6a-e25f-48f5-8f08-b4f1bb4c4fa4) 只在原确认完成后能生成；原 I/O 失败与确认失败分开传给真实状态映射，不能包装成成功体。编码仍不构造协议头、不签发会话、不发包。
+
+## 原 OPEN 的路由与退场（接线约束，未实现）
+
+- 真实连接先预验完整复合请求的原字节签名及当前会话，再逐成员借出有当前主体与代次的票据。这个票据不从 UUID、裸 SID、SQL 布尔或单个签名器构造。当前公版还没有此发行者：签名验证、后端 Held 和应答体存在，各自不是上线权限。由原会话和树核权限，查找及失败优先级逐命令遵循规范：READ 是 Session→Tree→OPEN，CLOSE 的标准顺序为 Session→会话内 OPEN→Tree。CLOSE 查到 OPEN 仍不能绕过核对它的原树；不能把撤权、树关闭、失效 OPEN 混成 EOF。关联成员只用本链**紧邻前项**实际已确认且仍可用的 Session／Tree／OPEN；前件没有或未取得相应范围时按 [关联请求规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1) 失败，不能补猜独立 ID。
+- 每个原会话拥有唯一 OPEN 表，条目只持有其准确原树作用域下经 `Pending::bind` 核过的 Held。先限资源、取得实物和最终原权，再发服务器自己的两半 ID 并公开；Volatile 在会话范围唯一，即使表按树分区，查出后同时核 Persistent、原树与代次；同一会话代内不得把已退休的 ID 对重新发给另一个 OPEN，旧会话不能经同名目录重找。表不取代跨会话 ShareAccess 表或 Core 单写权。Core 原树须在其借用的实际文件／目录句柄之外存活，持有本地树再建立表，销毁时逆序；不靠不安全的自引用或新的业务存储。
+- 原 OPEN 可读借用，写／FLUSH 独占借用，正常 CLOSE 先摘路由阻止新请求，再取消或排空已受理操作，取得同一原件完成一次关闭。异常断连、撤权及 scope 退场是清理，不伪造显式 CLOSE 或隐式 flush；已确认和待确认由 Core 区分。底层原件保留到在途操作、相应权限和确认处理收尾，先释放它再退共享票。签出最终响应时仍核与原请求／当前会话对应，规则没有开通前不启监听。
 
 ## 目标与分工
 

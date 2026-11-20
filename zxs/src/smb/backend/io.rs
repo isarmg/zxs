@@ -50,11 +50,11 @@ impl<H: CheckedRead> Held<'_, H> {
     /// response_room is payload room after the protocol envelope is reserved.
     pub(super) fn read(&self, range: ReadRange, response_room: usize) -> Result<ReadCompletion<H::Body>, ReadFault<H::Error>> {
         use ReadFault::*;
+        if self.grant.0 & 0x0001 == 0 { // FILE_READ_DATA, MS-SMB2 §3.3.5.12
+            return Err(AccessDenied);
+        }
         if !matches!(self._slot.object, Object::File(..)) {
             return Err(NotDataFile);
-        }
-        if self.grant.0 & 0x0001 == 0 { // FILE_READ_DATA
-            return Err(AccessDenied);
         }
         if range.unbuffered() {
             // The checked logical Core reader is buffered. No claim that a
@@ -119,11 +119,14 @@ pub(super) trait CheckedClose {
 impl<H: CheckedClose> Held<'_, H> {
     #[must_use = "explicit close errors are not successful closes"]
     pub(super) fn close(mut self, mode: CloseMode) -> Result<CloseCompletion, H::Error> {
-        let finished = self.original.close_checked(mode);
+        // CLOSE itself does not grant attributes. ZXS uses the same
+        // READ_ATTRIBUTES requirement as FileNetworkOpenInformation
+        // (MS-SMB2 §3.3.5.10 app. A; MS-FSA §2.1.5.12.21).
+        let query = mode == CloseMode::PostQueryAttributes && self.grant.0 & 0x0080 != 0;
+        let effective = if query { CloseMode::PostQueryAttributes } else { CloseMode::Plain };
+        let finished = self.original.close_checked(effective);
         drop(self); // even on error, the real original closes before its share vote falls
-        finished.map(|attrs| CloseCompletion {
-            attributes: if mode == CloseMode::PostQueryAttributes { attrs } else { None },
-        })
+        finished.map(|attrs| CloseCompletion { attributes: if query { attrs } else { None } })
     }
 }
 

@@ -174,6 +174,7 @@ fn read_requires_an_open_data_grant_not_list_execute_share_or_zero_length() {
     let called = Cell::new(None);
     let body = b"";
     for (obj, access, request, room, fault) in [
+        (Object::Namespace(POOL), 0x80, range(17, 0, 0, 0), 0, ReadFault::AccessDenied),
         (Object::Namespace(POOL), 1, range(17, 0, 0, 0), 0, ReadFault::NotDataFile),
         (FILE, 0x20, range(17, 0, 0, 0), 0, ReadFault::AccessDenied),
         (FILE, 0x80, range(17, 4, 0, 0), 4, ReadFault::AccessDenied),
@@ -237,7 +238,7 @@ impl CheckedClose for Closer<'_> {
 fn explicit_close_consumes_the_hold_while_drop_never_auto_closes_or_flushes() {
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let called = Cell::new(None);
-    let open = |failure| original(&table, facts(FILE, 1),
+    let open = |failure| original(&table, facts(FILE, 0x0081),
         Closer { owner: &table, called: &called, failure, attributes_available: true }, 1);
     drop(open(false));
     assert_eq!(called.get(), None); // unexpected disconnect is not a normal close
@@ -496,14 +497,16 @@ fn read_eof_uses_error_body_for_zero_or_insufficient_data_and_not_for_core_failu
 fn optional_close_attributes_have_a_real_flag_and_fixed_layout() {
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let called = Cell::new(None);
-    let open = |attributes_available| original(&table, facts(FILE, 1),
+    let open = |rights, attributes_available| original(&table, facts(FILE, rights),
         Closer { owner: &table, called: &called, failure: false, attributes_available }, 1);
-    for (mode, available, flagged) in [
-        (CloseMode::Plain, true, false),
-        (CloseMode::PostQueryAttributes, false, false),
-        (CloseMode::PostQueryAttributes, true, true),
+    for (mode, rights, available, effective, flagged) in [
+        (CloseMode::Plain, 0x0081, true, CloseMode::Plain, false),
+        (CloseMode::PostQueryAttributes, 0x0001, true, CloseMode::Plain, false),
+        (CloseMode::PostQueryAttributes, 0x0081, false, CloseMode::PostQueryAttributes, false),
+        (CloseMode::PostQueryAttributes, 0x0081, true, CloseMode::PostQueryAttributes, true),
     ] {
-        let reply = FileReply::close(open(available).close(mode).unwrap());
+        let reply = FileReply::close(open(rights, available).close(mode).unwrap());
+        assert_eq!(called.get(), Some(effective));
         assert_eq!((reply.command(), reply.status()), (0x06, 0));
         let (fixed, payload) = reply.parts();
         assert_eq!(fixed.len(), 60);
@@ -582,4 +585,20 @@ fn flush_and_required_write_confirmation_keep_original_errors_out_of_success() {
     let reply = FileReply::flush(&denied).unwrap();
     assert_eq!((reply.command(), reply.status()), (0x07, 0xc000_0022));
     assert_eq!(reply.parts(), (&[9, 0, 0, 0, 0, 0, 0, 0][..], &[][..]));
+}
+
+
+#[test]
+fn read_refusal_checks_grant_before_shape_and_does_not_build_data() {
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let called = Cell::new(None);
+    for (rights, status) in [(0x0080, 0xc000_0022), (0x0001, 0xc000_00ba)] {
+        let open = original(&table, facts(Object::Namespace(POOL), rights),
+            Reader { called: &called, storage: Ok(&b"unexpected"[..]) }, 7);
+        let result = open.read(range(1, 8, 0, 0), 8);
+        let reply = FileReply::read(&result).unwrap();
+        assert_eq!((reply.command(), reply.status()), (0x0008, status));
+        assert_eq!(reply.parts(), (&[9u8, 0, 0, 0, 0, 0, 0, 0][..], &[][..]));
+        assert_eq!(called.get(), None);
+    }
 }
