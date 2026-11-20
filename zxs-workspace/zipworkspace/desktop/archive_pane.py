@@ -169,9 +169,10 @@ class ArchivePane(QWidget):
             self.owner.inform(str(err))
             return
 
-        def submit(title, call, apply):
+        def submit(title, call, apply, *, cancellable=False):
             try:
-                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close())
+                requested = {"cancel": plan.cancel} if cancellable else {}
+                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close(), **requested)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda f: plan.close() if f.cancelled() else None)
             except BaseException:
@@ -187,7 +188,7 @@ class ArchivePane(QWidget):
                 if still_selected() and confirm(self, f"另存这一{label}，不覆盖", detail,
                         attestation=terms, action_text="另存并核验") and still_selected():
                     title = "正在只写私有暂存并完整核验所选子目录…" if directory else "正在复核原成员并写入无名称副本…"
-                    submit(title, lambda: plan.run(confirmed=True), self.owner.inform)
+                    submit(title, lambda: plan.run(confirmed=True), self.owner.inform, cancellable=not directory)
                 else:
                     plan.close()
                     self.owner.inform("没有写入副本。")
@@ -211,9 +212,10 @@ class ArchivePane(QWidget):
             self.owner.inform(str(error))
             return
 
-        def submit(title, work, done):
+        def submit(title, work, done, *, cancellable=False):
             try:
-                future = self.owner.job(title, work, done, failed=lambda _error: plan.close())
+                requested = {"cancel": plan.cancel} if cancellable else {}
+                future = self.owner.job(title, work, done, failed=lambda _error: plan.close(), **requested)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
             except BaseException:
@@ -225,7 +227,8 @@ class ArchivePane(QWidget):
                 if (selected is self.selection and confirm(self, "另存完整原包，不解压", details,
                         attestation="我选择这个全新位置，原归档和目的目录在操作期间不被移动或改写。",
                         action_text="另存 ZIP") and selected is self.selection):
-                    submit("正在逐字节复制原包、核验并读回…", lambda: plan.run(confirmed=True), self.owner.inform)
+                    submit("正在逐字节复制原包、核验并读回…", lambda: plan.run(confirmed=True), self.owner.inform,
+                           cancellable=True)
                 else:
                     plan.close()
                     self.owner.inform("没有写入 ZIP 副本。")

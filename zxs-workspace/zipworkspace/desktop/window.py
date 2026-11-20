@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QMainWindow, QProgressBar, QTabWidget, QVBoxLayout
 
 from .archive_pane import ArchivePane
 from .import_pane import ImportPane
-from .widgets import label
+from .widgets import button, label
 
 
 class Window(QMainWindow):
@@ -14,7 +14,7 @@ class Window(QMainWindow):
         self.setWindowTitle("ZIP Workspace")
         self.resize(1000, 700)
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="workspace-operation")
-        self.pending = None
+        self.pending = self.stop_transfer = None
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -29,6 +29,9 @@ class Window(QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.hide()
         layout.addWidget(self.progress)
+        self.transfer_cancel = button("取消本次复制（发布前）", self.cancel_transfer)
+        self.transfer_cancel.hide()
+        layout.addWidget(self.transfer_cancel)
         self.note = label("选择快照开始。浏览不会签出或修改工作树。")
         layout.addWidget(self.note)
         self.timer = QTimer(self)
@@ -37,7 +40,7 @@ class Window(QMainWindow):
     def inform(self, message):
         self.note.setText(str(message))
 
-    def job(self, title, work, apply, *, failed=None):
+    def job(self, title, work, apply, *, failed=None, cancel=None):
         if self.pending is not None: return
         self.tabs.setEnabled(False)
         self.inform(title)
@@ -49,14 +52,28 @@ class Window(QMainWindow):
             self.timer.stop(); self.progress.hide(); self.tabs.setEnabled(True)
             raise
         self.pending = (future, apply, failed)
+        self.stop_transfer = cancel
+        self.transfer_cancel.setEnabled(cancel is not None)
+        self.transfer_cancel.setVisible(cancel is not None)
         return future
+
+    def cancel_transfer(self):
+        if self.pending is None or self.stop_transfer is None: return
+        stop = self.stop_transfer
+        self.stop_transfer = None
+        self.transfer_cancel.setEnabled(False)
+        if stop():
+            self.inform("已请求在正式发布前取消。请等待正在进行的系统调用返回。")
+        else:
+            self.inform("复制已开始正式发布或已经结束，不能撤销。正在核对本次结果。")
 
     def poll(self):
         if self.pending is None: return
         future, apply, failed = self.pending
         if not future.done(): return
         self.timer.stop()
-        self.pending = None
+        self.pending = self.stop_transfer = None
+        self.transfer_cancel.hide()
         self.progress.hide()
         self.tabs.setEnabled(True)
         try:

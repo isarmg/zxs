@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import stat
 import sys
+from threading import Event, Lock
 
 from .. import private_stage
 from ..archive import copy_body, read_managed_document, stored_member, stored_plain, stored_subtree
@@ -27,8 +28,8 @@ def _generation(m):
 
 class _Positional:
     """Never change the offset shared by the displayed FD and the FUSE helper."""
-    def __init__(self, fd, end):
-        self.fd, self.end, self.pos = fd, end, 0
+    def __init__(self, fd, end, check=None):
+        self.fd, self.end, self.pos, self.check = fd, end, 0, check
 
     def tell(self): return self.pos
 
@@ -41,7 +42,9 @@ class _Positional:
     def read(self, n):
         if not 0 <= n <= MAX_CD or self.pos+n > self.end:
             raise Rejected("ZIP read exceeds its selected byte window")
+        if self.check is not None: self.check()
         data = os.pread(self.fd, n, self.pos)
+        if self.check is not None: self.check()
         self.pos += len(data)
         return data
 
@@ -71,6 +74,22 @@ def _unoccupied(parent, name):
     raise Rejected("目的名称已有文件、目录或链接；不覆盖")
 
 
+class CancelledCopy(Rejected):
+    """This copy stopped before making any public name."""
+
+
+class _CheckedReads:
+    def __init__(self, raw, check): self.raw, self.check = raw, check
+
+    def __getattr__(self, name): return getattr(self.raw, name)
+
+    def read(self, *args):
+        self.check()
+        data = self.raw.read(*args)
+        self.check()
+        return data
+
+
 class _AnonymousCopy:
     """One genuine unnamed inode until the fully verified result can be linked."""
     def __init__(self, selected, spelling, size):
@@ -80,6 +99,7 @@ class _AnonymousCopy:
         self.selected, self.size = selected, size
         self.stack = ExitStack()
         self.ready = self.used = self.closed = False
+        self.cancelled, self._publication_lock, self.publishing = Event(), Lock(), False
         self.source = selected.held.duplicate()
         self.stack.callback(os.close, self.source)
 
@@ -87,6 +107,24 @@ class _AnonymousCopy:
         if not self.closed:
             self.closed = True
             self.stack.close()
+
+    def cancel(self):
+        """Return true only if cancellation won before the unique native link."""
+        with self._publication_lock:
+            if self.closed or self.publishing: return False
+            self.cancelled.set()
+            return True
+
+    def _checkpoint(self):
+        if self.cancelled.is_set():
+            raise CancelledCopy("已取消复制，未发布该文件。无名称副本在句柄关闭后释放。")
+
+    def _begin_publication(self):
+        # The same lock serializes the user's cancellation and the commitment
+        # to attempt the sole native link. No lock spans any system I/O.
+        with self._publication_lock:
+            self._checkpoint()
+            self.publishing = True
 
     def _source(self):
         _check_source(self.selected, self.source, self.proc.read)
@@ -122,7 +160,7 @@ class _AnonymousCopy:
                     + self._selection_details() +
                     f"新文件：{str(self.path)!r}\n\n需要容纳一份副本。"
                     "完整核验及读回后才公开名称；不覆盖、不创建工作树、不打开结果。"
-                    "确认后须等待，不能从窗口中途取消。"
+                    "可在正式发布前请求取消；正在进行的系统调用须先返回，发布开始后不能撤销。"
                     "不会复制权限、时间或来源元数据；内容校验不代表来源可信。")
         except BaseException:
             self.close()
@@ -140,26 +178,35 @@ class _AnonymousCopy:
         digest = hashlib.sha256()
         left = self.size
         while left:
+            self._checkpoint()
             count = min(left, CHUNK)
             data = read(count)
+            self._checkpoint()
             if not 0 < len(data) <= count: raise Rejected("没有达到这次选择的原核验长度")
             digest.update(data)
             left -= len(data)
             view = memoryview(data)
             while view:
+                self._checkpoint()
                 written = os.write(fd, view)
                 if not 0 < written <= len(view): raise Rejected("未能写完匿名文件")
                 view = view[written:]
+        self._checkpoint()
         if read(1): raise Rejected("实际 EOF 与原长度不符")
+        self._checkpoint()
         return digest.hexdigest()
 
     def _verify(self, fd, sha):
         size = self.size
+        self._checkpoint()
         before = self._output(fd, 0, size)
         os.fsync(fd)
+        self._checkpoint()
         digest, read = hashlib.sha256(), 0
         while read < size:
+            self._checkpoint()
             data = os.pread(fd, min(CHUNK, size-read), read)
+            self._checkpoint()
             if not data: raise Rejected("匿名副本读回提前结束")
             read += len(data)
             digest.update(data)
@@ -174,12 +221,14 @@ class _AnonymousCopy:
         may_be_linked = False
         try:
             with self.stack, ExitStack() as temp:
+                self._checkpoint()
                 if _ordinary_user(read_proc=self.proc.read) != self.uid:
                     raise Rejected("不再是确认这次另存的普通用户")
                 self._source()
                 self._parent()
                 self._absent()
                 def create():
+                    self._checkpoint()
                     # O_EXCL would forbid linking this O_TMPFILE; no named fallback.
                     out = os.open(".", os.O_TMPFILE | os.O_RDWR | os.O_CLOEXEC, 0o600, dir_fd=self.parent)
                     temp.callback(os.close, out)
@@ -196,6 +245,7 @@ class _AnonymousCopy:
                         self._output(out, 0, size) != sealed or
                         self._output(out, 0, size, (self.proc.fds, name), follow=True) != sealed):
                     raise Rejected("procfs 中没有核验通过的原匿名文件")
+                self._begin_publication()
                 may_be_linked = True
                 try:
                     os.link(name, self.path.name, src_dir_fd=self.proc.fds, dst_dir_fd=self.parent, follow_symlinks=True)
@@ -241,7 +291,7 @@ class MemberCopy(_AnonymousCopy):
         return f"成员：{self.member!r}\n正文：{self.size:,} 字节\nSHA-256：{self.entry.sha256}\n"
 
     def _payload(self, create):
-        reader = _Positional(self.source, self.selected.observed[2])
+        reader = _Positional(self.source, self.selected.observed[2], self._checkpoint)
         with stored_member(reader, reader.end, self.selected.browser.commit, self.member, self.size) as body:
             fd = create()
             sha = self._copy(body.read, fd)  # ZipExtFile verifies the member's CRC at EOF.
@@ -273,7 +323,7 @@ class ZipCopy(_AnonymousCopy):
         self._output(fd, 0, self.size)
         # The private readback uses the one new inode, before publishing the .zip name.
         with os.fdopen(fd, "rb", closefd=False) as actual:
-            marker, _ = read_managed_document(actual, display_name=self.selected.path.name)
+            marker, _ = read_managed_document(_CheckedReads(actual, self._checkpoint), display_name=self.selected.path.name)
         if marker != self.selected.browser.commit:
             raise Rejected("原始字节不再表示选中的目录快照")
         return fd, sha

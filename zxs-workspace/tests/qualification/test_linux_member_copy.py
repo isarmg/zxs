@@ -129,6 +129,58 @@ class LinuxMemberCopy(unittest.TestCase):
         self.assertEqual(self.archive.read_bytes(), self.original)
         self.assertEqual(list(self.private.iterdir()), [])
 
+    def test_copy_can_cancel_after_copying_but_before_complete_zip_readback(self):
+        plan = self.zip_plan()
+        plan.review()
+        real = member_copy.read_managed_document
+        def readback(doc, **kwargs):
+            self.assertTrue(plan.cancel())
+            self.assertFalse(plan.path.exists())
+            return real(doc, **kwargs)  # The actual guarded readback observes cancellation.
+        with patch.object(member_copy, "read_managed_document", side_effect=readback), \
+             patch.object(member_copy.os, "link", side_effect=AssertionError("must not publish a cancelled copy")):
+            with self.assertRaisesRegex(member_copy.CancelledCopy, "未发布"):
+                plan.run(confirmed=True)
+        self.assertFalse(plan.path.exists())
+        self.assertEqual(self.archive.read_bytes(), self.original)
+        self.assertFalse(plan.cancel())  # The consumed plan can't become a new operation.
+
+    def test_cancellation_cannot_undo_the_single_link_once_committed_to_it(self):
+        plan = self.zip_plan()
+        plan.review()
+        real = os.link
+        def link(*args, **kwargs):
+            self.assertFalse(plan.cancel())
+            return real(*args, **kwargs)
+        with patch.object(member_copy.os, "link", side_effect=link) as native:
+            plan.run(confirmed=True)
+            native.assert_called_once()
+        self.assertEqual(plan.path.read_bytes(), self.original)
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional native Qt controls")
+    def test_cancel_button_stays_reachable_when_only_archive_tabs_are_disabled(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        self.addCleanup(win.close)
+        pending, taps = Future(), []
+        with patch.object(win.pool, "submit", return_value=pending):
+            win.job("复制原包", lambda: self.fail("fixture only controls the Future"),
+                    lambda _: self.fail("cancelled is not a completed result"),
+                    cancel=lambda: taps.append(True) or True)
+        self.assertFalse(win.tabs.isEnabled())
+        self.assertTrue(win.transfer_cancel.isEnabled())
+        self.assertFalse(win.transfer_cancel.isHidden())
+        win.transfer_cancel.click()
+        self.assertEqual(taps, [True])
+        self.assertIn("等待正在进行的系统调用", win.note.text())
+        pending.set_exception(member_copy.CancelledCopy("已取消，未发布"))
+        win.poll()
+        self.assertTrue(win.transfer_cancel.isHidden())
+        self.assertTrue(win.tabs.isEnabled())
+        self.assertIn("未发布", win.note.text())
+
     def test_raw_copy_with_a_damaged_member_never_links_even_if_the_source_name_is_unchanged(self):
         plan = self.zip_plan()
         plan.review()
