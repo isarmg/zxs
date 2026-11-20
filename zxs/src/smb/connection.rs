@@ -182,6 +182,13 @@ impl Connection {
     fn alive(&self) -> Result<()> {
         if self.origin.closed.load(Ordering::Acquire) { Err(Fault::Closed) } else { Ok(()) }
     }
+    // No staged network writer or valid local authority survives a terminal
+    // transport error. Other connections (including those sharing a GUID) keep theirs.
+    fn disconnect(&mut self) {
+        self.origin.closed.store(true,Ordering::Release);
+        drop(self.output.take());
+        self.sessions.clear();
+    }
     fn stop<T>(&self, f: Fault) -> Result<T> {
         self.origin.closed.store(true,Ordering::Release); Err(f)
     }
@@ -346,9 +353,7 @@ impl ReplySend<'_,'_,'_> {
 impl Drop for ReplySend<'_,'_,'_> {
     fn drop(&mut self) {
         if !self.settled {
-            self.plan.owner.origin.closed.store(true, Ordering::Release);
-            self.plan.owner.sessions.clear();
-            drop(self.plan.owner.output.take());
+            self.plan.owner.disconnect();
         }
     }
 }

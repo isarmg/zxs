@@ -55,9 +55,10 @@ fn default_and_explicit_cmac_both_require_first_signed_request_on_its_published_
                     assert_eq!(v.ordinal(),0);assert!(std::ptr::eq(v.message(),&raw.messages()[0]));
                     v.session().recheck().unwrap();assert!(batch.next().unwrap().is_none());
                 }
-                Admission::Refused(r) if unsigned=>assert_eq!(r.failure(),(0,session::Fault::SignatureRequired)),
+                Admission::TransportGone if unsigned=>{}, // mandatory for this actual active-session TCON
                 _=>panic!("missing context must not disable signing; an explicit context cannot excuse a missing flag"),
             }
+            if unsigned {assert!(matches!(c.alive(),Err(Fault::Closed)));assert!(c.sessions.is_empty());}
         }
     }
 }
@@ -156,4 +157,27 @@ pub(in crate::smb) fn with_tree_member(revoke: bool, check: impl FnOnce(Verified
     let Some(Step::Verified(member)) = batch.next().unwrap() else { panic!("first TREE_CONNECT"); };
     if revoke { srv.run.verifier.as_ref().unwrap().fixture_revoke(); }
     check(member);
+}
+
+#[test]
+fn naked_related_tree_terminates_its_original_live_connection_not_other_sids_or_transports() {
+    let srv=provider();let mut c=connected_as(&srv,false).unwrap();let mut other=connected_as(&srv,false).unwrap();
+    assert_eq!(publish_at(&mut c,1),1);assert_eq!(publish_at(&mut other,1),2);
+    use crate::smb::connection::transport::DirectOutput;
+    c.output=Some(DirectOutput::Fixture(Box::new(std::io::sink())));
+    other.output=Some(DirectOutput::Fixture(Box::new(std::io::sink())));
+    let mut q=packet(3,3,1,false,0,FIRST[0]);q[16]=0;
+    let foreign=frame(&q);let fr=parsed(&foreign);let paid=other.receive(&fr).unwrap();
+    let Admission::Refused(denied)=paid.preflight(&mut other) else {panic!("foreign SID is not an original live grant")};
+    assert!(other.alive().is_ok());assert!(c.alive().is_ok());assert_eq!(other.sessions.len(),1);
+    assert_eq!(denied.failure().0,0);
+    let first=packet(3,3,1,false,104,RELATED_TAGS[0]);
+    let mut naked=packet(3,4,2,true,0,"00000000000000000000000000000000");naked[16]=4;
+    let bytes=pair(first,naked);let original=parsed(&bytes);let paid=c.receive(&original).unwrap();
+    assert!(matches!(paid.preflight(&mut c),Admission::TransportGone));
+    assert!(matches!(c.alive(),Err(Fault::Closed)));assert!(c.sessions.is_empty());
+    assert!(other.alive().is_ok());assert_eq!(other.sessions.len(),1);
+    assert_eq!(srv.run.index.lock().unwrap().live.len(),1);
+    assert!(c.output.is_none());assert!(other.output.is_some());
+    drop(denied); // own pending unpaid response cannot affect another transport
 }

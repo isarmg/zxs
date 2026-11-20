@@ -73,12 +73,28 @@ impl Connection {
     }
 }
 impl<'raw> Received<'raw> {
+    fn unsigned_live_tree(&self,i:usize,c:&Connection,revision:&BatchRevision)->bool {
+        let parts=self.frame.messages();
+        let Some(m)=parts.get(i) else {return false;};
+        if m.header.command!=3 || m.header.flags&crate::smb::wire::message::SIGNED!=0 {return false;}
+        // verify_published already checked every preceding signature up to i.
+        // In a related chain the preceding non-related member supplied the
+        // effective SID; never interpret literal all-ones/another SID as a new owner.
+        let Some(seed)=parts[..=i].iter().rev().find(|p|p.header.flags&RELATED==0) else {return false;};
+        let Some(sid)=NonZeroU64::new(seed.header.session).filter(|id|id.get()!=u64::MAX) else {return false;};
+        let Some((reg,bound))=c.valid_slot(sid) else {return false;};
+        if !bound.on_revision(revision) || reg.claim.valid.get().is_none() {return false;}
+        match reg.current(&c.origin,Instant::now()) {
+            Ok(is_current)=>is_current,
+            Err(_)=>{c.origin.closed.store(true,Ordering::Release);false}
+        }
+    }
     /// Preflight without callbacks into business code. All original MIDs
     /// have already been debited. Verify each exact segment, including its
     /// own padding, even for a paid member with an insufficient payload charge.
     pub(in crate::smb) fn preflight<'owner>(self,owner:&'owner mut Connection)->Admission<'owner,'raw> {
         if !Arc::ptr_eq(&self.debit.origin,&owner.origin) {return Admission::AnotherConnection(self);}
-        if owner.alive().is_err() {return Admission::TransportGone;}
+        if owner.alive().is_err() {owner.disconnect();return Admission::TransportGone;}
         if !self.debit.owed || self.frame.messages().iter().any(|m|!matches!(m.header.command,2..=11|13..=18)) {
             return Admission::Other(self);
         }
@@ -93,14 +109,24 @@ impl<'raw> Received<'raw> {
                 Err(_)=>{c.origin.closed.store(true,Ordering::Release);None},
             }
         });
-        if c.alive().is_err() {return Admission::TransportGone;}
+        if c.alive().is_err() {owner.disconnect();return Admission::TransportGone;}
         let ids=match signed {
             Ok(ids)=>ids,
-            Err((ordinal,reason))=>return Admission::Refused(Refused{original:self,ordinal,reason}),
+            Err((ordinal,reason))=>{
+                // MS-SMB2 3.3.5.7: on this plaintext-only 3.1.1 transport
+                // a naked TREE_CONNECT for our real non-guest session is a
+                // mandatory disconnect, not a reply followed by continued use.
+                // This special terminal disposition never authenticates a byte.
+                if reason==session::Fault::SignatureRequired && self.unsigned_live_tree(ordinal,c,&revision) {
+                    owner.disconnect();return Admission::TransportGone;
+                }
+                if c.alive().is_err() {owner.disconnect();return Admission::TransportGone;}
+                return Admission::Refused(Refused{original:self,ordinal,reason});
+            }
         };
         for i in 0..self.frame.messages().len() {
             let valid=ids.at(i).is_some_and(|sid|c.member_scope(sid,&revision).is_ok());
-            if c.alive().is_err() {return Admission::TransportGone;}
+            if c.alive().is_err() {owner.disconnect();return Admission::TransportGone;}
             if !valid {return Admission::Refused(Refused{original:self,ordinal:i,reason:session::Fault::UnknownSession});}
         }
         Admission::Ready(CheckedBatch{owner,original:self,ids,revision,next:0,credit_failed:false,halted:false})
