@@ -172,6 +172,25 @@ static bool native_directory_projection(connection_struct *c)
 fail:
 	c->params=NULL;return false;
 }
+static bool native_fs_attributes_bounds(TALLOC_CTX *ctx)
+{
+	const uint8_t label[]={'Z',0,'X',0,'S',0};
+	DATA_BLOB b=data_blob_null;
+	NTSTATUS result=NT_STATUS_INTERNAL_ERROR;
+	if(!NT_STATUS_EQUAL(zxs_format_fs_attributes(ctx,11,&b,&result),NT_STATUS_INFO_LENGTH_MISMATCH) ||
+	   b.data!=NULL || !NT_STATUS_EQUAL(result,NT_STATUS_INTERNAL_ERROR))return false;
+	for(uint32_t n=12;n<=20;n++){
+		const uint32_t bytes=MIN(n,18);
+		if(!NT_STATUS_IS_OK(zxs_format_fs_attributes(ctx,n,&b,&result)) ||
+		   !NT_STATUS_EQUAL(result,n<18?NT_STATUS_BUFFER_OVERFLOW:NT_STATUS_OK) ||
+		   b.length!=bytes || IVAL(b.data,0)!=7 || IVAL(b.data,4)!=255 ||
+		   IVAL(b.data,8)!=6 || memcmp(b.data+12,label,bytes-12)!=0){
+			TALLOC_FREE(b.data);return false;
+		}
+		TALLOC_FREE(b.data);
+	}
+	return true;
+}
 static bool native_reference_capacity_counts(TALLOC_CTX *ctx)
 {
 	struct zxs_ns_space cap={.total=16385,.available=4097,.free=8195,.status=ZXS_NS_CAP_READY};
@@ -665,7 +684,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!native_reference_capacity_counts(conn) || !native_maximal_access(conn) || !native_empty_search() || !typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
+	if (!native_fs_attributes_bounds(conn) || !native_reference_capacity_counts(conn) || !native_maximal_access(conn) || !native_empty_search() || !typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

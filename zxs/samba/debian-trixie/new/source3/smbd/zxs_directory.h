@@ -105,6 +105,7 @@ NTSTATUS zxs_dir_cut_recv(struct tevent_req *,uint8_t *optional_rows);
 struct tevent_req *zxs_root_capacity_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,bool may_write);
 NTSTATUS zxs_root_capacity_recv(struct tevent_req *,struct zxs_ns_space *);
 #define ZXS_INFO_FS_SIZE 3u
+#define ZXS_INFO_FS_ATTRIBUTE 5u
 #define ZXS_INFO_FS_FULL_SIZE 7u
 static inline bool zxs_capacity_info_class(uint8_t cls)
 {
@@ -135,6 +136,23 @@ static inline NTSTATUS zxs_format_capacity(TALLOC_CTX *ctx,const struct zxs_ns_s
 	SIVAL(b.data,dimensions,8);
 	SIVAL(b.data,dimensions+4,512);
 	*out=b;return NT_STATUS_OK;
+}
+/* FileFsAttributeInformation for the single, logical ZXS namespace.
+ * No filesystem-specific capabilities, DOS/NTFS ACLs or host labels. */
+static inline NTSTATUS zxs_format_fs_attributes(TALLOC_CTX *ctx,uint32_t max,DATA_BLOB *out,NTSTATUS *result)
+{
+	const uint8_t name[]={'Z',0,'X',0,'S',0};
+	const uint32_t fixed=12,full=fixed+sizeof(name);
+	if(max<fixed)return NT_STATUS_INFO_LENGTH_MISMATCH;
+	const uint32_t n=MIN(max,full);
+	DATA_BLOB b=data_blob_talloc_zero(ctx,n);
+	if(b.data==NULL)return NT_STATUS_NO_MEMORY;
+	SIVAL(b.data,0,7); /* CASE_SENSITIVE_SEARCH, CASE_PRESERVED_NAMES, UNICODE_ON_DISK */
+	SIVAL(b.data,4,ZXS_DIR_NAME); /* Namespace's longest logical directory component. */
+	SIVAL(b.data,8,sizeof(name));
+	memcpy(b.data+fixed,name,n-fixed);
+	*out=b;*result=n<full?NT_STATUS_BUFFER_OVERFLOW:NT_STATUS_OK;
+	return NT_STATUS_OK;
 }
 struct tevent_req *zxs_odir_cut_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,
 	const struct zxs_smb_tree_cut *,uint8_t mode,const uint8_t *path,size_t size);
