@@ -179,74 +179,93 @@ impl Tree<'_,'_>{
 /// A current working handle opens by exact business name, not by a guessed
 /// FILE ID. Its read authority never becomes a write/other-share capability.
 /// Drop raw/table and FILE before its registered parent and service lease.
-pub(crate) struct Current<'t,'s,'r>{body:Option<HeldWork>,container:Installed,root:OrdinaryRoot<'r>,
+enum MemberRoot<'t,'r>{Owned(OrdinaryRoot<'r>),Tree(&'t OrdinaryRoot<'r>)}
+impl<'r> std::ops::Deref for MemberRoot<'_,'r>{
+    type Target=OrdinaryRoot<'r>;
+    fn deref(&self)->&Self::Target{match self{Self::Owned(r)=>r,Self::Tree(r)=>r}}
+}
+pub(crate) struct Current<'t,'s,'r>{body:Option<HeldWork>,container:Installed,root:MemberRoot<'t,'r>,
     tree:&'t Tree<'s,'r>,birth:Birth,live:Option<Spec>}
+#[derive(Eq,PartialEq)]
+struct ReadCut{working:Option<(Spec,bool)>,kept:Retained,alias:Option<file_create::Alias>}
+impl ReadCut{
+    fn get(db:&Connection,c:&Catalog,b:&Birth)->io::Result<Self>{
+        let(working,kept)=membership(db,c,b)?;
+        Ok(Self{working,kept,alias:file_create::display_owner(db,c,b)?})
+    }
+    fn published(&self)->Option<Spec>{self.working.filter(|(_,done)|*done).map(|(s,_)|s)}
+}
 impl<'s,'r> Tree<'s,'r>{
     pub(crate) fn open_current<'t>(&'t self,name:&str)->io::Result<Current<'t,'s,'r>>{
-        self.open_member(name,None)
+        self.open_member(name,None,None,|_,_|Ok(())).map(|(h,_)|h)
     }
-    /// Open the same listed business member, using this tree's current
-    /// authority. Unlike an explicitly selected historical version, this
-    /// OPEN pins the revision confirmed at open, not the size in a listing.
+    pub(super) fn open_current_root<'t>(&'t self,root:&'t OrdinaryRoot<'r>,name:&str)
+        ->io::Result<(Current<'t,'s,'r>,super::file_number::NativeKey)>{
+        self.open_member(name,None,Some(root),|db,b|super::file_number::original(db,b.pool,b.file))
+    }
+    /// Reopen the member, not the revision cached during enumeration.
     pub(crate) fn open_listed<'t>(&'t self,entry:&super::directory::Entry)->io::Result<Current<'t,'s,'r>>{
-        self.open_member(&entry.name,Some(entry))
+        self.open_member(&entry.name,Some(entry),None,|_,_|Ok(())).map(|(h,_)|h)
     }
-    fn open_member<'t>(&'t self,name:&str,expected:Option<&super::directory::Entry>)->io::Result<Current<'t,'s,'r>>{
+    fn open_member<'t,V>(&'t self,name:&str,expected:Option<&super::directory::Entry>,pinned:Option<&'t OrdinaryRoot<'r>>,
+        result:impl FnOnce(&Connection,&Birth)->io::Result<V>)->io::Result<(Current<'t,'s,'r>,V)>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
-        let(c,b)=src.at(|db,c|{
+        if pinned.is_some_and(|r|!r.for_tree(src,self.setting.volume)){return Err(invalid("different native tree root"));}
+        let(c,b,selected)=src.at(|db,c|{
             self.require(db,&c,false)?;
-            let s=db.prepare(c"SELECT file_id FROM main.root_entry WHERE volume_id=?1 AND display=?2")?;
-            s.bind_bytes(1,&self.setting.volume.0)?;s.bind_bytes(2,name.as_bytes())?;
-            match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("cannot select SMB member"));}}
-            let file=FileId(s.array(0)?);s.done()?;let b=self.birth(db,&c,name,file)?;
-            if expected.is_some_and(|entry|!entry.matches(&b)){
-                return Err(invalid("listed FILE no longer names this original pool member"));
-            }
-            Ok((c,b))
+            let q=db.prepare(c"SELECT file_id FROM main.root_entry WHERE volume_id=?1 AND display=?2")?;
+            q.bind_bytes(1,&self.setting.volume.0)?;q.bind_bytes(2,name.as_bytes())?;
+            match unsafe{sqlite3_step(q.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("cannot select SMB member"));}}
+            let file=FileId(q.array(0)?);q.done()?;let b=self.birth(db,&c,name,file)?;
+            if expected.is_some_and(|e|!e.matches(&b)){return Err(invalid("listed FILE no longer names this original pool member"));}
+            let selected=ReadCut::get(db,&c,&b)?;Ok((c,b,selected))
         })?;
-        let root=OrdinaryRoot::for_body(src,&c,b.volume)?;let sample=root.root.names()?.into_iter().collect();
-        // Revalidate the precise FILE/authority after opening the volume.
-        // Capture revision and short native header/name membership in one
-        // SQL cut; the potentially slow independent block-directory read
-        // and all data delivery are outside it. A reserved writer may add
-        // only this attempt's four declared names; none are served yet.
-        let(container,live,kept)=src.at(|db,c|{
-            self.current_birth(db,&c,&b,false)?;
-            let selected=by_file(db,&b)?;let kept=retained(db,&b)?;
-            let container=b.working_at(&root.root,&sample,false,selected.map(|x|(x.spec,x.done)),&kept)?;
-            Ok((container,selected.filter(|x|x.done).map(|x|x.spec),kept))
-        })?;
-        let body=live.map(|s|HeldWork::open(container.directory(),s,&kept)).transpose()?;
-        let h=Current{body,container,root,tree:self,birth:b,live};h.require()?;Ok(h)
+        let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::for_body(src,&c,b.volume)?)};
+        let sample=root.root.names()?.into_iter().collect();
+        let container=b.working_at(&root.root,&sample,false,selected.working,&selected.kept)?;
+        let live=selected.published();
+        let body=live.map(|s|HeldWork::open(container.directory(),s,&selected.kept)).transpose()?;
+        let h=Current{body,container,root,tree:self,birth:b,live};
+        let v=h.checked(&selected,||Ok(()),|db|result(db,&h.birth))?;Ok((h,v))
     }
 }
 impl Current<'_,'_,'_>{
     pub(crate) fn file(&self)->FileId{self.birth.file}
     pub(crate) fn size(&self)->u64{self.live.map_or(0,|s|s.bytes)}
-    pub(crate) fn working_revision(&self)->u64{if self.live.is_some(){1}else{0}}
-    /// Stable across aliases/working revisions, but never a standalone
-    /// pathname, permission or OS file identifier. Do not bind SMB by
-    /// truncated IDs when this lookup fails.
-    pub(crate) fn native_key(&self)->io::Result<super::file_number::NativeKey>{
-        self.tree.session.source.at(|db,c|{self.require_at(db,&c)?;
-            super::file_number::original(db,self.birth.pool,self.birth.file)})
+    pub(crate) fn working_revision(&self)->u64{u64::from(self.live.is_some())}
+    pub(super) fn original_ids(&self)->(crate::PoolId,crate::VolumeId,crate::EntryId,FileId){
+        (self.birth.pool,self.birth.volume,self.birth.entry,self.birth.file)
     }
-    fn require(&self)->io::Result<()>{self.tree.session.source.at(|db,c|self.require_at(db,&c))}
-    fn require_at(&self,db:&Connection,c:&Catalog)->io::Result<()>{
+    fn selected(&self,db:&Connection,c:&Catalog)->io::Result<ReadCut>{
         self.tree.current_birth(db,c,&self.birth,false)?;
-        let state=by_file(db,&self.birth)?;let kept=retained(db,&self.birth)?;
-        // A genuinely opened revision zero stays empty after revision
-        // one commits; it does not upgrade to the newly published
-        // bytes. This schema has only one immutable manual revision.
-        if self.live.is_some_and(|s|state.filter(|x|x.done).map(|x|x.spec)!=Some(s)){
-            return Err(invalid("selected confirmed working original changed"));
-        }
-        file_create::display_free(db,c,&self.root.root,&self.birth)?;
-        match state{Some(x)=>x.spec.members(&crate::fs::WitnessRead::at(self.container.directory())?,x.done,&kept)?,
-            None=>self.container.require_newborn(&self.root.root)?,}
-        self.root.require()?;self.container.require(&self.root.root)?;
-        if let Some(h)=&self.body{h.require(self.container.directory())?;}Ok(())
+        let x=ReadCut::get(db,c,&self.birth)?;
+        if self.live.is_some() && self.live!=x.published(){return Err(invalid("selected working revision changed"));}
+        Ok(x)
     }
+    /// Native I/O (including a slow/missing F) is bracketed by short,
+    /// current SQL selections. No claim that separate disks are atomic.
+    fn checked<T>(&self,x:&ReadCut,at_f:impl FnOnce()->io::Result<()>,finish:impl FnOnce(&Connection)->io::Result<T>)->io::Result<T>{
+        let alias=super::directory::check_alias(&self.root,&self.birth,x.alias.as_ref(),None)?;
+        match x.working{Some((s,done))=>s.members(&crate::fs::WitnessRead::at(self.container.directory())?,done,&x.kept)?,
+            None=>self.container.require_newborn(&self.root.root)?,}
+        self.root.require_streaming_at(at_f)?;self.container.require(&self.root.root)?;
+        if let Some(h)=&self.body{h.require(self.container.directory())?;}
+        let result=self.tree.session.source.at(|db,c|{
+            if self.selected(db,&c)?!=*x{return Err(io::Error::new(io::ErrorKind::WouldBlock,"FILE selection changed during physical check"));}
+            finish(db)
+        });drop(alias);result
+    }
+    fn check_with<T>(&self,at_f:impl FnOnce()->io::Result<()>,finish:impl FnOnce(&Connection)->io::Result<T>)->io::Result<T>{
+        let x=self.tree.session.source.at(|db,c|self.selected(db,&c))?;self.checked(&x,at_f,finish)
+    }
+    pub(crate) fn native_key(&self)->io::Result<super::file_number::NativeKey>{
+        self.check_with(||Ok(()),|db|super::file_number::original(db,self.birth.pool,self.birth.file))
+    }
+    #[cfg(test)]
+    pub(in crate::system::reader) fn check_at_file(&self,cut:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        self.check_with(cut,|_|Ok(()))
+    }
+    fn require(&self)->io::Result<()>{self.check_with(||Ok(()),|_|Ok(()))}
     /// Same read-only connection throughout one delivery. All ZXS changes
     /// commit on separate write connections. A change indicator can only
     /// require a fresh full authorization, never supply a positive one.

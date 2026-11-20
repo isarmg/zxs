@@ -22,7 +22,7 @@ impl Entry{
 #[derive(Eq,PartialEq)]
 struct Plan{
     birth:Birth,working:Option<(Spec,bool)>,kept:Retained,
-    display_owner:Option<(Birth,Option<(Spec,bool)>,Retained)>,number:u64,
+    display_owner:Option<file_create::Alias>,number:u64,
 }
 pub(crate) struct RootFiles<'t,'s,'r>{
     tree:&'t Tree<'s,'r>,root:OrdinaryRoot<'r>,after:Vec<u8>,ended:bool,
@@ -36,6 +36,17 @@ impl<'s,'r> Tree<'s,'r>{
         src.at(|db,c|self.require(db,&c,false))?;
         Ok(RootFiles{tree:self,root,after:Vec::new(),ended:false})
     }
+}
+/// The rare case where one business name is a sibling's physical terminal.
+pub(super) fn check_alias(root:&OrdinaryRoot<'_>,birth:&Birth,owner:Option<&file_create::Alias>,sample:Option<&BTreeSet<Vec<u8>>>)
+    ->io::Result<Option<crate::ordinary::portable_birth::Installed>>{
+    if Birth::reserved_spelling(birth.name.as_bytes()){return Ok(None);}
+    let leaf=CString::new(birth.name.as_str()).map_err(|_|invalid("invalid display leaf"))?;
+    if !root.root.entry_present(&leaf)?{return Ok(None);}
+    let(b,work,kept)=owner.ok_or_else(||invalid("unrecognized native occupant of FILE display name"))?;
+    let fresh;
+    let names=match sample{Some(x)=>x,None=>{fresh=root.root.names()?.into_iter().collect();&fresh}};
+    b.working_at(&root.root,names,false,*work,kept).map(Some)
 }
 fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8)->io::Result<Vec<Plan>>{
     tree.require(db,c,false)?;
@@ -82,13 +93,7 @@ pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8
         let scope=WitnessRead::at(h.directory())?;
         match p.working{None=>scope.only_header()?,Some((s,done))=>s.members(&scope,done,&p.kept)?,}
         h.require(&root.root)?;
-        if !Birth::reserved_spelling(p.birth.name.as_bytes()){
-            let leaf=CString::new(p.birth.name.as_str()).map_err(|_|invalid("invalid display leaf"))?;
-            if root.root.entry_present(&leaf)?{
-                let (b,work,kept)=p.display_owner.as_ref().ok_or_else(||invalid("unrecognized native occupant of FILE display name"))?;
-                aliases.push(b.working_at(&root.root,&final_names,false,*work,kept)?);
-            }
-        }
+        if let Some(pin)=check_alias(root,&p.birth,p.display_owner.as_ref(),Some(&final_names))?{aliases.push(pin);}
     }
     root.require_streaming()?;
     src.at(|db,c|{

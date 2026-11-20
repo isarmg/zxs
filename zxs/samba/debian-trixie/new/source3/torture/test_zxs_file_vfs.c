@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #include "smbd/fd_handle.h"
 #include "param/loadparm.h"
+#include "lib/substitute.h"
+#include "lib/param/loadparm.h"
 #include "lib/param/param.h"
 #include "smbd/zxs_file_vfs.h"
 #include "smbd/zxs_directory.h"
@@ -31,6 +33,21 @@ static bool ipc_only_pipe_policy(void)
 	    !lp_do_parameter(-1, "nt pipe support", "no") || lp_nt_pipe_support() ||
 	    zxs_file_vfs_route(1, 1, true, false, false, NULL, lp_nt_pipe_support()) != ZXS_VFS_IPC) {
 		goto done;
+	}
+	/* Only inspect two synthetic substitution contexts: never execute
+	 * a script. The accepted effective-profile check uses the raw getter. */
+	{
+		int snum=lp_add_service("zxs-fixture", -1);
+		const struct loadparm_substitution *raw=lpcfg_noop_substitution();
+		const struct loadparm_substitution *live=loadparm_s3_global_substitution();
+		if (snum<0 || !lp_do_parameter(snum,"magic script","%U")) goto done;
+		set_current_user_info("","","");
+		if (strcmp(lp_magic_script(lp,raw,snum),"%U")!=0 ||
+		    strcmp(lp_magic_script(lp,live,snum),"")!=0) goto done;
+		set_current_user_info("sample","zxs-smb-client","ZXSLOCAL");
+		if (strcmp(lp_magic_script(lp,raw,snum),"%U")!=0 ||
+		    strcmp(lp_magic_script(lp,live,snum),"sample")!=0) goto done;
+		set_current_user_info("","","");
 	}
 	ok = true;
 done:

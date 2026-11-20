@@ -36,6 +36,7 @@ struct zxs_dir_cut_state {
 	uint32_t seq;
 	int fd;
 	unsigned limit;
+	struct zxs_member_info member;
 	uint8_t data[ZXS_DIR_PACKET-16];
 };
 static int zxs_dir_cut_close(struct zxs_dir_cut_state *s)
@@ -53,11 +54,13 @@ static void zxs_dir_cut_ready(struct tevent_req *sub)
 	s->readable=NULL;TALLOC_FREE(sub);
 	if(!ready || s->native->session!=s->session || s->native->tcon!=s->tcon ||
 	   !zxs_request_root_current(s->native) || s->session->global->auth_session_info_seqnum!=s->seq ||
-	   zxs_dir_result(s->fd,s->limit,s->data)!=0 ||
+	   (s->limit==ZXS_MEMBER_OPEN ?
+	    zxs_member_result(s->fd,s->tcon->zxs_tree_choice,&s->member) : zxs_dir_result(s->fd,s->limit,s->data))!=0 ||
 	   !change_to_user_and_service(s->tcon->compat,s->session->global->session_wire_id)){
 		zxs_dir_cut_close(s);tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
 	}
-	zxs_dir_cut_close(s);tevent_req_done(req);
+	if(s->limit!=ZXS_MEMBER_OPEN){zxs_dir_cut_close(s);}
+	tevent_req_done(req);
 }
 struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
 	struct smbd_smb2_request *n,unsigned limit,const uint8_t *after,size_t size)
@@ -68,7 +71,8 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
 	if(!zxs_request_root_current(n))goto reject;
 	s->native=n;s->session=n->session;s->tcon=n->tcon;s->seq=n->session->global->auth_session_info_seqnum;s->limit=limit;
 	if(talloc_reference(s,s->session)==NULL || talloc_reference(s,s->tcon)==NULL)goto reject;
-	s->fd=zxs_dir_query(s->tcon->zxs_tree_choice->root_fd,limit,after,size);
+	s->fd=limit==ZXS_MEMBER_OPEN ? zxs_member_query(s->tcon->zxs_tree_choice->root_fd,after,size) :
+		zxs_dir_query(s->tcon->zxs_tree_choice->root_fd,limit,after,size);
 	if(s->fd<0)goto reject;
 	s->readable=wait_for_read_send(s,ev,s->fd,false);
 	if(s->readable==NULL || !tevent_req_set_endtime(s->readable,ev,timeval_current_ofs(10,0)))goto reject;
@@ -83,4 +87,13 @@ NTSTATUS zxs_dir_cut_recv(struct tevent_req *req,uint8_t *optional_rows)
 	if(tevent_req_is_nterror(req,&status)){return status;}
 	if(optional_rows!=NULL)memcpy(optional_rows,s->data,sizeof(s->data));
 	return NT_STATUS_OK;
+}
+
+NTSTATUS zxs_member_cut_recv(struct tevent_req *req,struct zxs_member_info *out,int *fd)
+{
+	struct zxs_dir_cut_state *s=tevent_req_data(req,struct zxs_dir_cut_state);NTSTATUS status;
+	*fd=-1;
+	if(tevent_req_is_nterror(req,&status))return status;
+	if(s->limit!=ZXS_MEMBER_OPEN || s->fd<0 || zxs_smb_ctl_live(s->fd)!=0)return NT_STATUS_ACCESS_DENIED;
+	*out=s->member;*fd=s->fd;s->fd=-1;return NT_STATUS_OK;
 }

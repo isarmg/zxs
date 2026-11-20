@@ -69,13 +69,19 @@ static bool zxs_own_root_fsp(vfs_handle_struct *h,struct files_struct *fsp)
 }
 static uint64_t zxs_root_alloc(vfs_handle_struct *h,struct files_struct *fsp,const SMB_STRUCT_STAT *b)
 {
-	if(!zxs_own_root_fsp(h,fsp) || b!=&fsp->fsp_name->st){errno=ENOSYS;return UINT64_MAX;}
-	return 0;
+	if(h!=NULL && fsp!=NULL && fsp->conn!=NULL && fsp->fsp_name!=NULL && h==fsp->conn->vfs_handles && b==&fsp->fsp_name->st){
+		if(zxs_own_root_fsp(h,fsp))return 0;
+		struct zxs_read_fsp *f=zxs_find_read(fsp);
+		if(f!=NULL && f->tcon==fsp->conn->tcon)return (f->member.size+4095)&~UINT64_C(4095);
+	}
+	errno=ENOSYS;return UINT64_MAX;
 }
 static NTSTATUS zxs_root_dos(vfs_handle_struct *h,struct files_struct *fsp,uint32_t *mode)
 {
-	if(!zxs_own_root_fsp(h,fsp))return NT_STATUS_NOT_SUPPORTED;
-	*mode=FILE_ATTRIBUTE_DIRECTORY;return NT_STATUS_OK;
+	if(zxs_own_root_fsp(h,fsp)){*mode=FILE_ATTRIBUTE_DIRECTORY;return NT_STATUS_OK;}
+	struct zxs_read_fsp *f=zxs_find_read(fsp);
+	if(f!=NULL && h==fsp->conn->vfs_handles && f->tcon==fsp->conn->tcon){*mode=FILE_ATTRIBUTE_NORMAL;return NT_STATUS_OK;}
+	return NT_STATUS_NOT_SUPPORTED;
 }
 static const struct vfs_fn_pointers zxs_file_front = {
 	.get_alloc_size_fn=zxs_root_alloc,.fget_dos_attributes_fn=zxs_root_dos,

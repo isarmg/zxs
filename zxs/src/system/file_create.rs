@@ -100,8 +100,8 @@ pub(super) fn display_free_in_sample(db:&Connection,c:&Catalog,f:&HeldDir,b:&Bir
 
 /// SQLite half of an unusual display name equal to another FILE's terminal.
 /// Does not look up any path or open F; the physical half is checked by the caller.
-pub(super) fn display_owner(db:&Connection,c:&Catalog,b:&Birth)->io::Result<Option<(Birth,
-    Option<(crate::ordinary::working_sql::Spec,bool)>,crate::ordinary::working_sql::Retained)>>{
+pub(super) type Alias=(Birth,Option<(crate::ordinary::working_sql::Spec,bool)>,crate::ordinary::working_sql::Retained);
+pub(super) fn display_owner(db:&Connection,c:&Catalog,b:&Birth)->io::Result<Option<Alias>>{
     if Birth::reserved_spelling(b.name.as_bytes()){return Ok(None);}
     let s=db.prepare(c"SELECT create_op FROM main.root_entry WHERE volume_id=?1 AND terminal=?2")?;
     s.bind_bytes(1,&b.volume.0)?;s.bind_bytes(2,b.name.as_bytes())?;

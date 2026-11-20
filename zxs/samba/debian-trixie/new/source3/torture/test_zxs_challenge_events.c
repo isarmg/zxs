@@ -73,9 +73,30 @@ done:
 	if(reply>=0)close(reply);if(a>=0)close(a);if(b>=0)close(b);if(proc>=0)close(proc);
 	close(p[0]);close(p[1]);return ok;
 }
+/* Same-tree request with two independent endpoints, no OS FILE fd. */
+static bool held_member_pair(void)
+{
+	struct zxs_smb_tree_cut root={0};struct zxs_member_info out={0};
+	uint8_t raw[ZXS_MEMBER_BYTES]={0},name[223]={0},op=0;int tree[2],proc=-1,fd=-1,peer=-1;bool ok=false;
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,tree)!=0)return false;
+	proc=(int)syscall(SYS_pidfd_open,getpid(),0);if(proc<0)goto end;
+	fd=zxs_member_query(tree[0],(const uint8_t *)"x",1);if(fd<0)goto end;
+	peer=zxs_dir_take(tree[1],proc,&op,name);
+	if(peer<0 || op!=ZXS_MEMBER_OPEN || name[0]!=1 || name[1]!='x')goto end;
+	root.pool[0]=raw[0]=42;root.volume[0]=raw[16]=9;raw[32]=5;raw[48]=raw[64]=128;
+	raw[79]=1;raw[87]=7;
+	if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)!=0 ||
+	   out.revision!=1 || out.size!=7 || out.number!=(UINT64_C(1)<<63) || out.entry[0]!=5)goto end;
+	raw[16]++;if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)==0)goto end;
+	raw[16]--;raw[79]=0;if(zxs_member_reply(peer,raw)!=0 || zxs_member_result(fd,&root,&out)==0)goto end;
+	if(zxs_smb_ctl_live(peer)!=0)goto end;
+	close(fd);fd=-1;ok=zxs_smb_ctl_live(peer)!=0;
+end:
+	if(peer>=0)close(peer);if(fd>=0)close(fd);if(proc>=0)close(proc);close(tree[0]);close(tree[1]);return ok;
+}
 int main(void)
 {
-	if(!directory_pairs())return 1;
+	if(!directory_pairs() || !held_member_pair())return 1;
 	struct tevent_context *ev=tevent_context_init(NULL);
 	int a[2],b[2];struct timespec now;int64_t start;
 	uint8_t x[8],y[8];

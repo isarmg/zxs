@@ -14,6 +14,8 @@ unsafe extern "C"{
     fn zxs_smb_process_live(pidfd:i32)->i32;
     fn zxs_dir_take(tree:i32,worker:i32,limit:*mut u8,cursor:*mut u8)->i32;
     fn zxs_dir_reply(fd:i32,page:*const u8)->i32;
+    fn zxs_member_reply(fd:i32,info:*const u8)->i32;
+    fn zxs_smb_ctl_live(fd:i32)->i32;
 }
 #[derive(Clone,Copy)]
 pub(super) struct Site<'a>{dir:&'a SystemDir,mark:&'a ControlRead,pool:PoolId,shape:[u8;32],binding:&'a File,stamp:&'a Stamp}
@@ -76,7 +78,13 @@ fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Resul
     if !live(&origin,&reply,0){return Err(denied());}
     os(unsafe{zxs_smb_tree_reply(reply.as_raw_fd(),bytes.as_ptr())})?;
     let tree=Tree{session:&session,setting};
+    // Exact member/header/working materials survive on this tree's one
+    // worker. Closing the FSP closes its private peer. No thread, writable
+    // permit, SQLite connection or data transfer is created per open FILE.
+    let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
+    const MAX_MEMBERS:usize=16;
     while live(&origin,&reply,0){
+        members.retain(|(endpoint,_)|unsafe{zxs_smb_ctl_live(endpoint.as_raw_fd())}==0);
         match unsafe{zxs_smb_root_wait(reply.as_raw_fd(),origin.session.as_raw_fd(),500)}{
             0=>continue,1=>{},_=>break,
         }
@@ -84,6 +92,19 @@ fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Resul
         let fd=unsafe{zxs_dir_take(reply.as_raw_fd(),origin.worker.as_raw_fd(),&mut limit,cursor.as_mut_ptr())};
         if fd<0{break;} // original session remains usable on its other trees
         let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+        if limit==255{
+            if members.len()>=MAX_MEMBERS || site.validate().is_err() || !live(&origin,&reply,0){continue;}
+            let Ok(name)=crate::display::component(&cursor[1..1+usize::from(cursor[0])],222) else{continue;};
+            let Ok((handle,key))=tree.open_current_root(&root,name) else{continue;};
+            let (p,v,e,f)=handle.original_ids();
+            let mut data=[0u8;88];
+            for(i,id)in [p.0,v.0,e.0,f.0].iter().enumerate(){data[16*i..16*i+16].copy_from_slice(id);}
+            for(i,num)in [key.words().1,handle.working_revision(),handle.size()].iter().enumerate(){
+                data[64+8*i..72+8*i].copy_from_slice(&num.to_be_bytes());}
+            if !live(&origin,&reply,0)||site.validate().is_err(){break;}
+            if unsafe{zxs_member_reply(answer.as_raw_fd(),data.as_ptr())}==0{members.push((answer,handle));}
+            continue;
+        }
         let result=(||->io::Result<_>{
             site.validate()?;
             if !live(&origin,&reply,0){return Err(denied());}
@@ -103,7 +124,7 @@ fn serve(site:Site<'_>,origin:TreeOrigin,share:ShareId,reply:OwnedFd)->io::Resul
         }
         let _=unsafe{zxs_dir_reply(answer.as_raw_fd(),out.as_ptr())}; // cancel lost no cursor, grant or data
     }
-    drop(root);Ok(())
+    drop(members);drop(root);Ok(())
 }
 
 #[cfg(test)]
@@ -145,4 +166,37 @@ mod tests{
         assert!(attach(&s,ShareId([0x91;16]),||Ok(())).is_err());
         assert!(!other.snapshot().unwrap().rows()[1].path.exists()); // no R probe required
     }
+    #[test]
+    #[ignore="source only: original ordinary FILE and separate SQL connections; not a network authentication fixture"]
+    fn independent_read_opens_hold_the_same_member_but_not_a_replacement_volume_or_later_grant(){
+        use std::{fs::OpenOptions,os::unix::fs::{FileExt,OpenOptionsExt}};
+        let t=PrivateTemp::under(&std::env::temp_dir());let(path,p,f,rw,ro)=ordinary_pool(&t);
+        let src=InitialReader::open(&path,p).unwrap();
+        let observer=InitialReader::alongside(&src.dir,&src.marker,p,src.expected_schema).unwrap();
+        let s=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let o=SmbSession::fixture_authenticated(&observer,"files.smb").unwrap();
+        let(r1,_,_)=attach(&s,rw,||Ok(())).unwrap();let(r2,_,_)=attach(&o,ro,||Ok(())).unwrap();
+        let w=s.connect(rw).unwrap();let r=o.connect(ro).unwrap();
+        let born=w.create_file(OperationId([0xa6;16]),"文档").unwrap();
+        let(empty,k1)=r.open_current_root(&r2,"文档").unwrap();assert_eq!(empty.working_revision(),0);
+        let data=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600).open(t.0.join("input")).unwrap();
+        data.write_all_at(b"new",0).unwrap();data.sync_all().unwrap();
+        w.save_first(OperationId([0xa7;16]),"文档",born.file,&data).unwrap();
+        let(file,k2)=w.open_current_root(&r1,"文档").unwrap();assert_eq!(k1,k2);
+        assert_eq!((file.file(),file.size(),file.working_revision()),(born.file,3,1));
+        assert_eq!(empty.smb_read_window(0,3,|b|Ok(b.len())).unwrap(),0);
+        assert!(r.open_current_root(&r1,"文档").is_err(),"cannot borrow even the same path from another observer");
+        let web=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
+        empty.check_at_file(||{
+            assert_ne!(unsafe{crate::system::reader::sqlite3_get_autocommit(observer.conn.0)},0);
+            let off=web.set_share_mode(OperationId([0xa8;16]),rw,w.setting.op,Mode::Disabled)?;
+            web.set_share_mode(OperationId([0xa9;16]),rw,off.op,Mode::ReadWrite)?;Ok(())
+        }).unwrap(); // unrelated share did not stall or cancel this original read
+        assert!(file.native_key().is_err(),"stale original RW never becomes active again");
+        let dst=t.0.join("root-held-away");std::fs::rename(&f,&dst).unwrap();
+        assert!(r.open_current_root(&r2,"文档").is_err());assert!(empty.native_key().is_err());
+        std::fs::rename(&dst,&f).unwrap();let(later,k3)=r.open_current_root(&r2,"文档").unwrap();
+        assert_eq!((later.size(),k1),(3,k3));
+    }
+
 }

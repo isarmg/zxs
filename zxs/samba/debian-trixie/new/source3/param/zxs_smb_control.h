@@ -68,6 +68,14 @@ struct zxs_smb_tree_cut {
 int zxs_smb_root_wait(int tree,int session,int timeout);
 int zxs_dir_query(int tree,unsigned limit,const uint8_t *after,size_t n);
 int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[223]);
+/* The FILE-open return endpoint lives with this exact original FSP. No host
+ * file, database descriptor, Unix inode or disk pathname crosses to smbd. */
+#define ZXS_MEMBER_OPEN 255
+#define ZXS_MEMBER_BYTES 88
+struct zxs_member_info {uint8_t pool[16],volume[16],entry[16],file[16];uint64_t number,revision,size;};
+int zxs_member_query(int tree,const uint8_t *name,size_t n);
+int zxs_member_reply(int fd,const uint8_t data[ZXS_MEMBER_BYTES]);
+int zxs_member_result(int fd,const struct zxs_smb_tree_cut *root,struct zxs_member_info *out);
 int zxs_dir_reply(int fd,const uint8_t data[ZXS_DIR_PACKET-16]);
 int zxs_dir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]);
 int zxs_smb_root_release(struct zxs_smb_tree_cut *owned);
