@@ -23,7 +23,7 @@ def _dir_flags():
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
-def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None):
+def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None, checkpoint=None):
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
@@ -34,6 +34,7 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
         # Iterate streaming. Budgets take effect before retaining a full directory.
         with os.scandir(fd) as entries:
             for entry in entries:
+                if checkpoint is not None: checkpoint()
                 path = f"{prefix}/{entry.name}" if prefix else entry.name
                 before = entry.stat(follow_symlinks=False)
                 if require_ids and not before.st_ino:
@@ -65,7 +66,11 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                         h = hashlib.sha256()
                         count = 0
                         start = frozen.length if frozen is not None else 0
-                        while block := os.read(child, CHUNK):
+                        while True:
+                            if checkpoint is not None: checkpoint()
+                            block = os.read(child, CHUNK)
+                            if checkpoint is not None: checkpoint()
+                            if not block: break
                             count += len(block)
                             if count > before.st_size: raise Rejected("source grew while freezing")
                             h.update(block)
@@ -85,12 +90,12 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
     return manifest
 
 
-def observe_held(fd, expected, *, require_ids=False, check_held=None):
+def observe_held(fd, expected, *, require_ids=False, check_held=None, checkpoint=None):
     """Hash all real descendants of this particular open directory, then recheck the generation."""
     before = os.fstat(fd)
     if (before.st_dev,before.st_ino) != expected or not expected[1] or not stat.S_ISDIR(before.st_mode):
         raise Rejected("not the original held output directory")
-    tree = _scan(fd, hash_files=True, require_ids=require_ids, check_held=check_held)
+    tree = _scan(fd, hash_files=True, require_ids=require_ids, check_held=check_held, checkpoint=checkpoint)
     if _sig(before) != _sig(os.fstat(fd)):
         raise Rejected("selected directory changed during readback")
     return tree

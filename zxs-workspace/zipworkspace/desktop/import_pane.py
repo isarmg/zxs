@@ -84,9 +84,10 @@ class ImportPane(QWidget):
             self.owner.inform(str(err))
             return
 
-        def submit(title, call, apply):
+        def submit(title, call, apply, *, cancellable=False):
             try:
-                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close())
+                options = {"cancel": plan.cancel, "cancel_text": "取消本次提取（发布前）"} if cancellable else {}
+                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close(), **options)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
             except BaseException:
@@ -99,7 +100,7 @@ class ImportPane(QWidget):
                         attestation="原包及两选定目录没有其他写者或同步，不会移位；我独用此私处，并同意在此留下失败材料。",
                         action_text="提取并核验") and self.selected is selected):
                     submit("正在提取到私处、完整读回并尝试正式发布…",
-                           lambda: plan.run(confirmed=True), self.owner.inform)
+                           lambda: plan.run(confirmed=True), self.owner.inform, cancellable=True)
                 else:
                     plan.close()
                     self.owner.inform("没有提取或写入任何文件。")

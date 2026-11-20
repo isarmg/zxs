@@ -90,8 +90,33 @@ class _CheckedReads:
         return data
 
 
-class _AnonymousCopy:
+class _BeforePublication:
+    _cancel_note = "已取消这次目录复制，未发布新的正式名称。"
+
+    def _init_cancellation(self):
+        self.cancelled, self._publication_lock, self.publishing = Event(), Lock(), False
+
+    def cancel(self):
+        """Return true only if cancellation won before the unique native publication."""
+        with self._publication_lock:
+            if self.closed or self.publishing: return False
+            self.cancelled.set()
+            return True
+
+    def _checkpoint(self):
+        if self.cancelled.is_set(): raise CancelledCopy(self._cancel_note)
+
+    def _begin_publication(self):
+        # No lock spans system I/O. This is the irrevocable commitment to
+        # perform the one allowed native publication, not its success.
+        with self._publication_lock:
+            self._checkpoint()
+            self.publishing = True
+
+
+class _AnonymousCopy(_BeforePublication):
     """One genuine unnamed inode until the fully verified result can be linked."""
+    _cancel_note = "已取消复制，未发布该文件。无名称副本在句柄关闭后释放。"
     def __init__(self, selected, spelling, size):
         if sys.platform != "linux" or selected.held is None:
             raise Rejected("另存需要 Linux 上当前仍持有原件的快照")
@@ -99,7 +124,7 @@ class _AnonymousCopy:
         self.selected, self.size = selected, size
         self.stack = ExitStack()
         self.ready = self.used = self.closed = False
-        self.cancelled, self._publication_lock, self.publishing = Event(), Lock(), False
+        self._init_cancellation()
         self.source = selected.held.duplicate()
         self.stack.callback(os.close, self.source)
 
@@ -107,24 +132,6 @@ class _AnonymousCopy:
         if not self.closed:
             self.closed = True
             self.stack.close()
-
-    def cancel(self):
-        """Return true only if cancellation won before the unique native link."""
-        with self._publication_lock:
-            if self.closed or self.publishing: return False
-            self.cancelled.set()
-            return True
-
-    def _checkpoint(self):
-        if self.cancelled.is_set():
-            raise CancelledCopy("已取消复制，未发布该文件。无名称副本在句柄关闭后释放。")
-
-    def _begin_publication(self):
-        # The same lock serializes the user's cancellation and the commitment
-        # to attempt the sole native link. No lock spans any system I/O.
-        with self._publication_lock:
-            self._checkpoint()
-            self.publishing = True
 
     def _source(self):
         _check_source(self.selected, self.source, self.proc.read)
@@ -329,7 +336,7 @@ class ZipCopy(_AnonymousCopy):
         return fd, sha
 
 
-class _AtomicDirectoryCopy:
+class _AtomicDirectoryCopy(_BeforePublication):
     """The destination becomes visible only as one complete verified directory."""
     def __init__(self, selected, spelling):
         if sys.platform != "linux" or selected.held is None:
@@ -340,6 +347,7 @@ class _AtomicDirectoryCopy:
         self.stack = ExitStack()
         self.private = None
         self.ready = self.used = self.closed = False
+        self._init_cancellation()
         try:
             self.source = selected.held.duplicate()
             self.stack.callback(os.close, self.source)
@@ -418,7 +426,8 @@ class _AtomicDirectoryCopy:
                     f"新的完整目录：{str(self.path)!r}\n私有暂存：{str(self.private.path / self.stage_name)!r}\n\n"
                     "不登记或签出工作树。在独占私处复核全部内容后，只改名一次；同名不覆盖。"
                     "不复制来源元数据，也不打开或执行结果。"
-                    "本版本确认后须等待，不能中途取消。失败可能在私处留材料，不删除或另发。")
+                    "可在正式发布前请求取消；正在进行的系统调用须先返回，发布开始后不能撤销。"
+                    "取消或失败可能在私处留材料，不删除或另发。")
         except BaseException:
             self.close()
             raise
@@ -427,7 +436,7 @@ class _AtomicDirectoryCopy:
         _check_source(self.selected, self.source, self.proc.read)
 
     def _sealed_tree(self, stage, sink):
-        return _observe_subtree(stage, sink, self.rows)
+        return _observe_subtree(stage, sink, self.rows, checkpoint=self._checkpoint)
 
     def run(self, *, confirmed=False):
         if confirmed is not True or not self.ready or self.used or self.closed:
@@ -437,32 +446,37 @@ class _AtomicDirectoryCopy:
         try:
             with self.stack:
                 read = self.proc.read
+                self._checkpoint()
                 if _ordinary_user(read_proc=read) != self.uid: raise Rejected("普通用户已改变，不能另存")
                 self._bound_source()
                 self._parents()
                 _unoccupied(self.parent, self.path.name)
-                reader = _Positional(self.source, self.selected.observed[2])
+                reader = _Positional(self.source, self.selected.observed[2], self._checkpoint)
                 with self._entries(reader) as (archive, files):
                     self._bound_source()
                     self._parents()
                     _unoccupied(self.parent, self.path.name)
+                    self._checkpoint()
                     stage_attempted = True
                     with private_stage.new_child(self.private, self.stage_name, self.mount, read_proc=read) as stage:
                         sink = private_stage._Output(stage, self.mount, read_proc=read)
                         for name, (directory, _, _) in sorted(self.rows.items()):
+                            self._checkpoint()
                             if directory: sink.mkdir(name)
                         for name, original in files:
+                            self._checkpoint()
                             _, size, sha = self.rows[name]
                             with archive.open(original) as body, sink.file(name) as dest:
-                                if copy_body(body, size, dest) != sha:
+                                if copy_body(_CheckedReads(body, self._checkpoint), size, dest) != sha:
                                     raise Rejected("私有副本与原预览中成员的 SHA-256 不符")
-                        sink.sync(self.rows)
+                        sink.sync(self.rows, checkpoint=self._checkpoint)
                         sealed = self._sealed_tree(stage, sink)
                         self._bound_source()
                         self._parents()
                         self._named_stage(self.private.parent, self.stage_name, stage)
                         if _directory_generation(stage.parent) != sealed:
                             raise Rejected("原私有暂存目录已改变")
+                        self._begin_publication()
                         may_have_moved = True
                         try:
                             rename_new_at(self.private.parent, self.stage_name, self.path.name,
@@ -493,7 +507,8 @@ class _AtomicDirectoryCopy:
                 raise Uncertain(f"无法确认原目录是否完成持久发布：{str(self.path)!r}。完整副本可能已经出现；"
                                 f"请先核对该位置及原私处 {scratch!r}，不自动删除或重试。\n{err}") from err
             if stage_attempted:
-                raise Rejected(f"{err}\n原私处 {scratch!r} 可能仍有准备材料；未覆盖目的地，不自动清理或重试。") from err
+                failure = CancelledCopy if isinstance(err, CancelledCopy) else Rejected
+                raise failure(f"{err}\n原私处 {scratch!r} 可能仍有准备材料；未覆盖目的地，不自动清理或重试。") from err
             raise
         finally:
             self.closed = True
@@ -601,6 +616,7 @@ class HistoryCopy(_AtomicDirectoryCopy):
         # Check original relative names and physical mounts before creating
         # the private directory. Only one ancestor data FD is open at a time.
         for node in self.originals:
+            self._checkpoint()
             self._exact_leaf(node)
         yield self, [(node.marker.filename, node) for node in self.originals]
 
@@ -637,6 +653,7 @@ class HistoryCopy(_AtomicDirectoryCopy):
             if got != self.rows.keys(): raise Rejected("本机暂存包含缺失或额外归档")
         names()
         for leaf, (_, size, expected) in self.rows.items():
+            self._checkpoint()
             with relative_document(stage.parent, leaf, single=True) as doc:
                 def still_named():
                     fd = os.open(leaf, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=stage.parent)
@@ -645,7 +662,8 @@ class HistoryCopy(_AtomicDirectoryCopy):
                         sink.check(leaf, doc.fileno())
                     finally: os.close(fd)
                 still_named()
-                if os.fstat(doc.fileno()).st_size != size or archive_sha(doc) != expected:
+                if (os.fstat(doc.fileno()).st_size != size or
+                        archive_sha(_CheckedReads(doc, self._checkpoint)) != expected):
                     raise Rejected("本机暂存未能逐字节读回原历史归档")
                 still_named()
         names()
@@ -659,9 +677,10 @@ def _directory_generation(fd):
     return (*native_identity(meta, stat.S_IFDIR), meta.st_mtime_ns, meta.st_ctime_ns)
 
 
-def _observe_subtree(stage, sink, rows):
+def _observe_subtree(stage, sink, rows, *, checkpoint=None):
     original = _directory_generation(stage.parent)
-    if observe_held(stage.parent, stage.identity, require_ids=True, check_held=sink.check).rows != rows:
+    if observe_held(stage.parent, stage.identity, require_ids=True, check_held=sink.check,
+                    checkpoint=checkpoint).rows != rows:
         raise Rejected("原私有暂存目录读回不等于所选子目录")
     if _directory_generation(stage.parent) != original:
         raise Rejected("读回时原私有暂存目录已改变")

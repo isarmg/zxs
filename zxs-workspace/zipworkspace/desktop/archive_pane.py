@@ -253,7 +253,7 @@ class ArchivePane(QWidget):
                 if still_selected() and confirm(self, f"另存这一{label}，不覆盖", detail,
                         attestation=terms, action_text="另存并核验") and still_selected():
                     title = "正在只写私有暂存并完整核验所选子目录…" if directory else "正在复核原成员并写入无名称副本…"
-                    submit(title, lambda: plan.run(confirmed=True), self.owner.inform, cancellable=not directory)
+                    submit(title, lambda: plan.run(confirmed=True), self.owner.inform, cancellable=True)
                 else:
                     plan.close()
                     self.owner.inform("没有写入副本。")
@@ -367,9 +367,10 @@ class ArchivePane(QWidget):
             self.owner.inform(str(err))
             return
 
-        def submit(title, call, apply):
+        def submit(title, call, apply, *, cancellable=False):
             try:
-                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close())
+                options = {"cancel": plan.cancel, "cancel_text": "取消本机历史复制（发布前）"} if cancellable else {}
+                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close(), **options)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
             except BaseException:
@@ -386,7 +387,7 @@ class ArchivePane(QWidget):
                         attestation="原版本和两个本机父不移动、不改写。本机两处不属于原共享的服务器目录、别名或同步位置；本人独用私处，并同意留下失败材料。",
                         action_text="复制完整祖先到本机") and current()):
                     submit("正在从原位置逐份复制、核验原始字节并读回新本机库…",
-                           lambda: plan.run(confirmed=True), completed)
+                           lambda: plan.run(confirmed=True), completed, cancellable=True)
                 else:
                     plan.close()
                     self.owner.inform("没有创建本机库或修改原 STORE。")

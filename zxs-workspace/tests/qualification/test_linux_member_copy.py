@@ -396,6 +396,38 @@ class LinuxMemberCopy(unittest.TestCase):
         self.assertEqual(list(empty.path.iterdir()), [])
         self.assertEqual(stat.S_IMODE(empty.path.stat().st_mode), 0o700)
 
+    def test_directory_cancelled_during_actual_private_readback_never_renames(self):
+        plan = self.subtree_plan()
+        plan.review()
+        stage = self.private/plan.stage_name
+        original = os.read
+        cancelled = []
+        def read(fd, n):
+            data = original(fd, n)
+            if data == b"only this subtree" and stage.is_dir():
+                self.assertTrue(plan.cancel())
+                cancelled.append(True)
+            return data
+        with patch.object(member_copy.os, "read", side_effect=read), \
+             patch.object(member_copy, "rename_new_at", side_effect=AssertionError("no cancelled directory is public")):
+            with self.assertRaisesRegex(member_copy.CancelledCopy, "可能仍有准备材料"):
+                plan.run(confirmed=True)
+        self.assertEqual(cancelled, [True])
+        self.assertFalse(plan.path.exists())
+        self.assertEqual((stage/"nested/value").read_bytes(), b"only this subtree")
+        self.assertEqual(self.archive.read_bytes(), self.original)
+
+    def test_cancel_before_starting_an_ordinary_extraction_does_not_create_a_private_stage(self):
+        original, _, plan = self.plain_plan()
+        stored = original.read_bytes()
+        plan.review()
+        self.assertTrue(plan.cancel())
+        with patch.object(member_copy.private_stage, "new_child", side_effect=AssertionError("already cancelled")):
+            with self.assertRaises(member_copy.CancelledCopy): plan.run(confirmed=True)
+        self.assertEqual(list(self.private.iterdir()), [])
+        self.assertFalse(plan.path.exists())
+        self.assertEqual(original.read_bytes(), stored)
+
     def test_subtree_corrupt_store_body_can_leave_private_stage_but_not_a_final_name(self):
         plan = self.subtree_plan()
         plan.review()

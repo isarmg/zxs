@@ -137,9 +137,11 @@ class _Output:
                     yield output
             finally: os.close(child)
 
-    def sync(self, rows):
+    def sync(self, rows, *, checkpoint=None):
         for name in sorted((p for p, (d, _, _) in rows.items() if d), key=lambda p: p.count("/"), reverse=True):
+            if checkpoint is not None: checkpoint()
             with self._directory(name) as fd: os.fsync(fd)
+        if checkpoint is not None: checkpoint()
         os.fsync(self.stage.parent)
 
 
