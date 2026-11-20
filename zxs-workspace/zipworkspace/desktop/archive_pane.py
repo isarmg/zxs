@@ -115,13 +115,16 @@ class ArchivePane(QWidget):
     def update_member_action(self, *_):
         if self.save_member_action is not None:
             entry = self.files.item() if self.file_page is not None else None
-            self.save_member_action.setEnabled(entry is not None and entry.kind == "file")
+            self.save_member_action.setEnabled(entry is not None and entry.kind in ("directory", "file"))
+            self.save_member_action.setText("另存选中的文件夹…" if entry is not None and entry.kind == "directory" else
+                                            "另存选中的文件…")
 
     def choose_member(self):
         selected, page, entry = self.selection, self.file_page, self.files.item()
         if (self.save_member_action is None or self.owner.pending is not None or selected is None or
-                page is None or entry is None or entry.kind != "file"):
+                page is None or entry is None or entry.kind not in ("directory", "file")):
             return
+        directory = entry.kind == "directory"
 
         def still_selected():
             return selected is self.selection and page is self.file_page and entry is self.files.item()
@@ -130,14 +133,24 @@ class ArchivePane(QWidget):
         # create/reserve a file, mutate a folder, or delegate to a portal writer.
         opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
                 QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
-        name, _ = QFileDialog.getSaveFileName(self, "选择现有目录和新文件名（不覆盖）", entry.name,
-                                               "所有文件 (*)", options=opts)
+        prompt = "选择目的父目录和新文件夹名（不覆盖）" if directory else "选择现有目录和新文件名（不覆盖）"
+        name, _ = QFileDialog.getSaveFileName(self, prompt, entry.name, "所有文件 (*)", options=opts)
         if not name or not still_selected(): return
 
-        from .member_copy import MemberCopy
+        from .member_copy import DirectoryCopy, MemberCopy
+        plan = None
         try:
-            plan = MemberCopy(selected, page.directory, entry, name)
-        except (OSError, ValueError) as err:
+            plan = (DirectoryCopy if directory else MemberCopy)(selected, page.directory, entry, name)
+            if directory:
+                scratch = QFileDialog.getExistingDirectory(self, "选择同一挂载上本人独用的 0700 暂存目录",
+                                                           "", opts | QFileDialog.Option.ShowDirsOnly)
+                if not scratch or not still_selected():
+                    plan.close()
+                    return
+                plan.pick_private(scratch)
+        except BaseException as err:
+            if plan is not None: plan.close()
+            if not isinstance(err, Exception): raise
             self.owner.inform(str(err))
             return
 
@@ -152,10 +165,14 @@ class ArchivePane(QWidget):
 
         def review(detail):
             try:
-                if still_selected() and confirm(self, "另存这一文件，不覆盖", detail,
-                        attestation="我选择这个新位置，并会保持原归档和目的目录在操作期间不被移动或改写。",
-                        action_text="另存并核验") and still_selected():
-                    submit("正在复核原成员并写入无名称副本…", lambda: plan.run(confirmed=True), self.owner.inform)
+                label = "文件夹" if directory else "文件"
+                terms = "我选择这个新位置，并会保持原归档和目的目录在操作期间不被移动或改写。"
+                if directory:
+                    terms += "暂存目录由本人独占，不同步，无其他程序改动；同意在此留下失败材料。"
+                if still_selected() and confirm(self, f"另存这一{label}，不覆盖", detail,
+                        attestation=terms, action_text="另存并核验") and still_selected():
+                    title = "正在只写私有暂存并完整核验所选子目录…" if directory else "正在复核原成员并写入无名称副本…"
+                    submit(title, lambda: plan.run(confirmed=True), self.owner.inform)
                 else:
                     plan.close()
                     self.owner.inform("没有写入副本。")

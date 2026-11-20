@@ -38,16 +38,23 @@ class LinuxMemberCopy(unittest.TestCase):
             os.mkdir(leaf, mode=0o700, dir_fd=parent)
         case = scratch / leaf
         self.dest = case / "out"
+        self.private = case / "scratch"
         self.dest.mkdir(mode=0o700)
+        self.private.mkdir(mode=0o700)
         self.path = self.dest / "saved.bin"
         self.data = b"\x00original\xff" * 110_000  # crosses a real copy block and is never opened/executed
         self.archive = case / "chosen.zxs"
         tree = Manifest()
         with self.archive.open("xb") as raw, zipfile.ZipFile(raw, "w") as archive:
             for name, data in (("original/same.bin", self.data), ("other/same.bin", b"x" * (2*CHUNK)),
-                               ("original/zero", b"")):
-                tree.add(name, False, len(data), hashlib.sha256(data).hexdigest())
-                archive.writestr(name, data)
+                               ("original/zero", b""), ("tree/nested/value", b"only this subtree"),
+                               ("tree/empty/", None), ("tree/zero", b""),
+                               ("tree2/foreign", b"lookalike prefix"), ("empty-root/", None)):
+                if data is None:
+                    tree.add(name[:-1], True, 0, None)
+                else:
+                    tree.add(name, False, len(data), hashlib.sha256(data).hexdigest())
+                archive.writestr(name, data or b"")
             archive.comment = Commit("1"*32, "2"*32, 1, "3"*32, None, tree.digest()).encode()
         self.original = self.archive.read_bytes()
         self.selected = Selection.open(self.archive, retain=True)
@@ -58,6 +65,150 @@ class LinuxMemberCopy(unittest.TestCase):
         plan = member_copy.MemberCopy(self.selected, "original", entry, str(self.path))
         self.addCleanup(plan.close)
         return plan
+
+    def subtree_plan(self, name="tree", *, output="tree-copy", scratch=None):
+        entry = self.selected.browser.entry("", name)
+        plan = member_copy.DirectoryCopy(self.selected, "", entry, str(self.dest/output))
+        self.addCleanup(plan.close)
+        plan.pick_private(str(self.private if scratch is None else scratch))
+        return plan
+
+    def test_one_native_rename_after_complete_subtree_and_empty_roots(self):
+        plan = self.subtree_plan()
+        detail = plan.review()
+        stage = self.private / plan.stage_name
+        self.assertIn(repr(str(stage)), detail)
+        self.assertEqual(list(self.private.iterdir()), [])
+        self.assertEqual(list(self.dest.iterdir()), [])
+        with self.assertRaises(Rejected): plan.run()
+        real_move, real_read = member_copy.rename_new_at, os.pread
+        seen = []
+        def move(src_fd, src, dst, *, expected_source, target_fd):
+            self.assertEqual((src, dst), (plan.stage_name, plan.path.name))
+            self.assertTrue(os.path.samestat(os.fstat(src_fd), self.private.stat()))
+            self.assertTrue(os.path.samestat(os.fstat(target_fd), self.dest.stat()))
+            self.assertTrue(os.path.samestat(expected_source, stage.stat()))
+            self.assertFalse(plan.path.exists())
+            self.assertEqual((stage / "nested/value").read_bytes(), b"only this subtree")
+            self.assertEqual(list((stage / "empty").iterdir()), [])
+            self.assertEqual((stage / "zero").read_bytes(), b"")
+            real_move(src_fd, src, dst, expected_source=expected_source, target_fd=target_fd)
+            self.assertTrue(os.path.samestat(expected_source, plan.path.stat()))
+        def read(fd, size, offset):
+            if fd == plan.source: seen.append((offset, offset+size))
+            return real_read(fd, size, offset)
+        display = self.selected.held.fileno()
+        os.lseek(display, 9, os.SEEK_SET)
+        with patch.object(member_copy, "rename_new_at", side_effect=move) as moved, \
+             patch.object(member_copy.os, "pread", side_effect=read):
+            self.assertIn("已另存并核验目录", plan.run(confirmed=True))
+            self.assertEqual(moved.call_count, 1)
+        self.assertFalse(any(a <= len(self.data) + CHUNK < b for a, b in seen))
+        self.assertEqual(os.lseek(display, 0, os.SEEK_CUR), 9)
+        self.assertFalse(stage.exists())
+        self.assertEqual(sorted(x.name for x in plan.path.iterdir()), ["empty", "nested", "zero"])
+        self.assertEqual(self.archive.read_bytes(), self.original)
+
+        empty = self.subtree_plan("empty-root", output="empty-copy")
+        empty.review()
+        empty.run(confirmed=True)
+        self.assertEqual(list(empty.path.iterdir()), [])
+        self.assertEqual(stat.S_IMODE(empty.path.stat().st_mode), 0o700)
+
+    def test_subtree_corrupt_store_body_can_leave_private_stage_but_not_a_final_name(self):
+        plan = self.subtree_plan()
+        plan.review()
+        with zipfile.ZipFile(self.archive) as structure:
+            offset = structure.getinfo("tree/nested/value").header_offset
+        from zipworkspace.archive import LOCAL
+        with self.archive.open("rb") as raw:
+            raw.seek(offset)
+            fields = LOCAL.unpack(raw.read(LOCAL.size))
+        body = offset + LOCAL.size + fields[-2] + fields[-1]
+        real_read = os.pread
+        def read(fd, size, offset):
+            data = real_read(fd, size, offset)
+            if data and fd == plan.source and offset == body:
+                return b"\x00" + data[1:]
+            return data
+        with patch.object(member_copy.os, "pread", side_effect=read), \
+             patch.object(member_copy, "rename_new_at", side_effect=AssertionError("never publish a bad CRC")):
+            with self.assertRaisesRegex(Rejected, "Bad CRC") as refused:
+                plan.run(confirmed=True)
+        self.assertIn(plan.stage_name, str(refused.exception))
+        self.assertTrue((self.private / plan.stage_name / "empty").is_dir())
+        self.assertFalse(plan.path.exists())
+
+    def test_rebound_private_or_nested_final_parent_is_not_accepted(self):
+        nested = self.dest / "bad-scratch"
+        nested.mkdir(mode=0o700)
+        with self.assertRaises(Rejected): self.subtree_plan(scratch=nested).review()
+        plan = self.subtree_plan()
+        plan.review()
+        original = self.private.with_name("initial-scratch")
+        self.private.rename(original)
+        self.private.mkdir(mode=0o700)
+        with patch.object(member_copy, "rename_new_at", side_effect=AssertionError("do not adopt a replacement")):
+            with self.assertRaises(Rejected): plan.run(confirmed=True)
+        self.assertEqual(list(original.iterdir()), [])
+        self.assertEqual(list(self.private.iterdir()), [])
+        self.assertFalse(plan.path.exists())
+
+    def test_late_collision_with_an_existing_empty_directory_is_no_replace(self):
+        plan = self.subtree_plan()
+        plan.review()
+        real = member_copy.rename_new_at
+        protected = []
+        def compete(*args, **kwargs):
+            plan.path.mkdir(mode=0o700)
+            protected.append(plan.path.stat().st_ino)
+            return real(*args, **kwargs)
+        with patch.object(member_copy, "rename_new_at", side_effect=compete):
+            with self.assertRaisesRegex(Rejected, "没有覆盖"): plan.run(confirmed=True)
+        self.assertEqual(plan.path.stat().st_ino, protected[0])
+        self.assertEqual(list(plan.path.iterdir()), [])
+        self.assertEqual((self.private / plan.stage_name / "nested/value").read_bytes(), b"only this subtree")
+
+    def test_final_name_on_another_mount_is_not_acknowledged_even_with_equal_inode(self):
+        plan = self.subtree_plan()
+        plan.review()
+        real_open, real_id = os.open, member_copy.mount_id
+        latest = None
+        def opened(name, flags, *args, **kwargs):
+            nonlocal latest
+            fd = real_open(name, flags, *args, **kwargs)
+            if name == plan.path.name and flags & os.O_PATH:
+                latest = fd
+            return fd
+        def mount(fd, *, read_proc=None):
+            if fd == latest:
+                self.assertTrue(os.path.samestat(os.fstat(fd), plan.path.stat()))
+                return b"not-the-original-mount"
+            return real_id(fd, read_proc=read_proc)
+        with patch.object(member_copy.os, "open", side_effect=opened), \
+             patch.object(member_copy, "mount_id", side_effect=mount):
+            with self.assertRaisesRegex(Uncertain, "不在选定的实际挂载"):
+                plan.run(confirmed=True)
+        self.assertEqual((plan.path / "nested/value").read_bytes(), b"only this subtree")
+
+    def test_failed_source_or_final_parent_sync_after_move_never_reports_success(self):
+        for name, fail in (("source", self.private), ("target", self.dest)):
+            with self.subTest(name=name):
+                plan = self.subtree_plan(output=name)
+                plan.review()
+                actual = os.fsync
+                calls = []
+                def sync(fd):
+                    if any(os.path.samestat(os.fstat(fd), p.stat()) for p in (self.private, self.dest)):
+                        self.assertTrue(plan.path.is_dir())
+                        calls.append(fd)
+                    if os.path.samestat(os.fstat(fd), fail.stat()): raise OSError(errno.EIO, name)
+                    actual(fd)
+                with patch.object(os, "fsync", side_effect=sync):
+                    with self.assertRaisesRegex(Uncertain, "完整副本可能已经出现"): plan.run(confirmed=True)
+                self.assertEqual(len(calls), 2 if name == "source" else 1)
+                self.assertEqual((plan.path / "nested/value").read_bytes(), b"only this subtree")
+                self.assertFalse((self.private / plan.stage_name).exists())
 
     def test_non_proc_root_fails_before_any_proc_paths_are_interpreted(self):
         spoof = self.dest / "not-proc"
@@ -230,3 +381,20 @@ class LinuxMemberCopy(unittest.TestCase):
             pane.files.selectRow(0)  # Same basename from a different folder.
             return True
         start(change)
+
+        pane.show_folder("")
+        row = next(i for i, (_, item) in enumerate(pane.files.rows.rows) if item.name == "tree")
+        pane.files.selectRow(row)
+        self.assertIn("文件夹", pane.save_member_action.text())
+        queued = Future()
+        with patch.object(archive_pane.QFileDialog, "getSaveFileName", return_value=(str(self.path), "")), \
+             patch.object(archive_pane.QFileDialog, "getExistingDirectory", return_value=str(self.private)), \
+             patch.object(archive_pane, "confirm", return_value=False) as consent, \
+             patch.object(window.pool, "submit", return_value=queued) as submit:
+            pane.save_member_action.click()
+            queued.set_result(submit.call_args.args[0]())
+            window.poll()
+            self.assertIn("暂存目录由本人独占", consent.call_args.kwargs["attestation"])
+            self.assertEqual(submit.call_count, 1)
+            self.assertFalse(self.path.exists())
+            self.assertEqual(list(self.private.iterdir()), [])

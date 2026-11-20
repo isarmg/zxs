@@ -57,15 +57,16 @@ def check_named(parent, name, fd):
 
 
 @contextmanager
-def new_child(area, name, mount):
-    # mkdirat does not return a handle. This only runs below a held, explicitly
-    # exclusive STATE parent: not a shared destination, sync folder or desktop grant.
+def new_child(area, name, mount, *, read_proc=None):
+    # mkdirat does not return a handle. Use only an already-held, explicitly
+    # exclusive private parent, not a shared destination or sync folder.
     check_private(area)
     os.mkdir(name, 0o700, dir_fd=area.parent)
     fd = os.open(name, _flags(), dir_fd=area.parent)
     try:
         identity = check_named(area.parent, name, fd)
-        if mount_id(fd) != mount: raise Rejected("new private checkout directory crossed a mount")
+        if (mount_id(fd) if read_proc is None else mount_id(fd, read_proc=read_proc)) != mount:
+            raise Rejected("new private checkout directory crossed a mount")
         with os.scandir(fd) as entries:
             if next(entries, None) is not None: raise Rejected("new private checkout directory is not empty")
         check_private(area)
@@ -74,22 +75,26 @@ def new_child(area, name, mount):
         os.close(fd)
 
 
-def member_identity(fd, mount):
+def member_identity(fd, mount, *, read_proc=None):
     m = os.fstat(fd)
+    actual_mount = mount_id(fd) if read_proc is None else mount_id(fd, read_proc=read_proc)
     if (not m.st_ino or m.st_uid != os.geteuid() or m.st_mode & 0o077 or
             not (stat.S_ISDIR(m.st_mode) or stat.S_ISREG(m.st_mode) and m.st_nlink == 1) or
-            mount_id(fd) != mount):
+            actual_mount != mount):
         raise Rejected("unsafe member in the original private stage")
     return m.st_dev, m.st_ino, stat.S_IFMT(m.st_mode)
 
 
 class _Output:
     """Create each admitted member relative to checked directory FDs, at most one path deep at a time."""
-    def __init__(self, stage, mount):
-        self.stage, self.mount, self.ids = stage, mount, {}
+    def __init__(self, stage, mount, *, read_proc=None):
+        self.stage, self.mount, self.read_proc, self.ids = stage, mount, read_proc, {}
+
+    def identity(self, fd):
+        return member_identity(fd, self.mount, read_proc=self.read_proc)
 
     def check(self, name, fd):
-        if self.ids.get(name) != member_identity(fd, self.mount):
+        if self.ids.get(name) != self.identity(fd):
             raise Rejected("a different object occupies a private checkout member name")
 
     @contextmanager
@@ -117,20 +122,20 @@ class _Output:
             child = os.open(leaf, _flags(), dir_fd=fd)
             try:
                 check_named(fd, leaf, child)
-                self.ids[path] = member_identity(child, self.mount)
+                self.ids[path] = self.identity(child)
             finally: os.close(child)
 
+    @contextmanager
     def file(self, path):
         parent, _, leaf = path.rpartition("/")
         with self._directory(parent) as fd:
             child = os.open(leaf, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
                             0o600, dir_fd=fd)
             try:
-                self.ids[path] = member_identity(child, self.mount)
-                return os.fdopen(child, "wb")
-            except BaseException:
-                os.close(child)
-                raise
+                self.ids[path] = self.identity(child)
+                with os.fdopen(child, "wb", closefd=False) as output:
+                    yield output
+            finally: os.close(child)
 
     def sync(self, rows):
         for name in sorted((p for p, (d, _, _) in rows.items() if d), key=lambda p: p.count("/"), reverse=True):

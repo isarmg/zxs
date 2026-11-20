@@ -175,12 +175,18 @@ def _member_header(f, item, central_at):
 
 
 @contextmanager
-def stored_member(document, length, marker, name, size):
-    """A bounded Store reader for one already-admitted member; caller must verify its entire body."""
+def _selected_index(document, length, marker):
     count, central = bounded_directory(document, length)
     with zipfile.ZipFile(_IndexedInput(document, length, count, central), "r") as archive:
         if len(archive.filelist) != count or Commit.decode(archive.comment) != marker:
             raise Rejected("the selected snapshot directory or marker changed")
+        yield archive, central
+
+
+@contextmanager
+def stored_member(document, length, marker, name, size):
+    """A bounded Store reader for one already-admitted member; caller must verify its entire body."""
+    with _selected_index(document, length, marker) as (archive, central):
         matches = [item for item in archive.infolist() if item.filename == name]
         if len(matches) != 1: raise Rejected("cannot identify the exact original member")
         item, = matches
@@ -189,6 +195,58 @@ def stored_member(document, length, marker, name, size):
             raise Rejected("the selected ordinary member changed")
         with archive.open(item) as source:
             yield source
+
+
+@contextmanager
+def stored_subtree(document, length, marker, root, rows):
+    """Bind one admitted subtree against a single index, before creating a writer."""
+    prefix = root + "/"
+    with _selected_index(document, length, marker) as (archive, central):
+        files, explicit, accounted = [], set(), set()
+        for item in archive.infolist():
+            if item.filename == root: raise Rejected("selected directory is a file in this index")
+            if not item.filename.startswith(prefix): continue
+            directory, _ = _member_header(document, item, central)
+            relative = item.filename[len(prefix):]
+            if directory and relative: relative = relative[:-1]
+            if relative in explicit: raise Rejected("duplicated record in selected subtree")
+            explicit.add(relative)
+            if not relative:
+                if not directory or item.filename != prefix: raise Rejected("invalid selected directory root")
+                continue
+            expected = rows.get(relative)
+            if expected is None or expected[:2] != (directory, item.file_size) or not item.file_size and item.CRC:
+                raise Rejected("a selected subtree record is not in the original directory")
+            if not directory: files.append((relative, item))
+            # The original manifest includes implicit directories. Account for
+            # them only as ancestors of a real record; empty leaves need a record.
+            name = relative
+            while name and name not in accounted:
+                accounted.add(name)
+                name = name.rpartition("/")[0]
+        if accounted != rows.keys() or (not rows and "" not in explicit):
+            raise Rejected("the selected subtree is missing an original member or empty directory")
+        yield archive, files
+
+
+def copy_body(source, size, target, *, leaves=None):
+    """Read one complete Store stream (CRC by ZipExtFile), hashing and optionally syncing it."""
+    digest, written = hashlib.sha256(), 0
+    while block := source.read(CHUNK):
+        if leaves is not None:
+            if len(block) != min(CHUNK, size - written):
+                raise Rejected("incomplete verification block in Store member")
+            leaves.extend(hashlib.sha256(block).digest())
+        written += len(block)
+        if written > size: raise Rejected("data exceeds declared size")
+        digest.update(block)
+        if target is not None and target.write(block) != len(block):
+            raise Rejected("short private member write")
+    if written != size: raise Rejected("incomplete member")
+    if target is not None:
+        target.flush()
+        os.fsync(target.fileno())
+    return digest.hexdigest()
 
 
 def stamp(f):
@@ -275,30 +333,11 @@ def _read_checked(source, *, managed, sink, blocks=None):
                         sink.mkdir(name)
             for info, name, directory in items:
                 leaves = bytearray() if blocks is not None and not directory else None
-                h = hashlib.sha256()
-                written = 0
                 with z.open(info) as source:
-                    target = sink.file(name) if sink is not None and not directory else None
-                    try:
-                        while block := source.read(CHUNK):
-                            if leaves is not None:
-                                if len(block) != min(CHUNK, info.file_size - written):
-                                    raise Rejected("incomplete verification block in Store member")
-                                leaves.extend(hashlib.sha256(block).digest())
-                            written += len(block)
-                            if written > info.file_size:
-                                raise Rejected("data exceeds declared size")
-                            h.update(block)
-                            if target is not None and target.write(block) != len(block):
-                                raise Rejected("short private checkout member write")
-                        if target:
-                            target.flush()
-                            os.fsync(target.fileno())
-                    finally:
-                        if target: target.close()
-                if written != info.file_size:
-                    raise Rejected("incomplete member")
-                if not directory: manifest.rows[name] = (False, written, h.hexdigest())
+                    output = sink.file(name) if sink is not None and not directory else nullcontext()
+                    with output as target:
+                        sha = copy_body(source, info.file_size, target, leaves=leaves)
+                if not directory: manifest.rows[name] = (False, info.file_size, sha)
                 if leaves is not None: blocks[name] = (blocks[name], bytes(leaves))
             if sink is not None:
                 # Child data/name durability precedes publishing a visible checkout.
