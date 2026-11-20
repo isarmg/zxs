@@ -71,7 +71,7 @@ class LinuxMemberCopy(unittest.TestCase):
         self.addCleanup(plan.close)
         return plan
 
-    def test_plain_zip_copy_is_the_complete_original_bytes_and_ordinary_readers_open_it(self):
+    def test_managed_zip_copy_round_trips_through_standard_reader_and_plain_extraction(self):
         plan = self.zip_plan()
         fd = self.selected.held.fileno()
         os.lseek(fd, 11, os.SEEK_SET)
@@ -96,7 +96,38 @@ class LinuxMemberCopy(unittest.TestCase):
             self.assertIsNone(ordinary.testzip())
             self.assertEqual(ordinary.read("original/same.bin"), self.data)
             self.assertTrue(ordinary.getinfo("empty-root/").is_dir())
+            self.assertEqual(ordinary.read("other/same.bin"), b"x" * (2*CHUNK))
             self.assertEqual(ordinary.comment, self.selected.browser.commit.encode())
+
+        # Feed that exact output (not a second generated fixture) to the real
+        # ordinary ZIP preview and directory writer, without interpreting its marker.
+        selected_zip = PlainSelection.open(str(plan.path))
+        self.addCleanup(selected_zip.release_display)
+        target = self.dest/"round-trip"
+        extracted = member_copy.PlainZipCopy(selected_zip, str(target))
+        self.addCleanup(extracted.close)
+        extracted.pick_private(str(self.private)); extracted.review()
+        extracted.run(confirmed=True)
+        original_note, other_note = target/"original/same.bin", target/"other/same.bin"
+        self.assertEqual(original_note.read_bytes(), self.data)
+        self.assertEqual(other_note.read_bytes(), b"x" * (2*CHUNK))
+        self.assertEqual(list((target/"empty-root").iterdir()), [])
+        before_target, before_note = target.stat(), original_note.stat()
+
+        again = member_copy.PlainZipCopy(selected_zip, str(target))
+        self.addCleanup(again.close)
+        again.pick_private(str(self.private))
+        with patch.object(member_copy.private_stage, "new_child", side_effect=AssertionError("must reject before staging")):
+            with self.assertRaises(Rejected): again.review()
+            with self.assertRaises(Rejected): again.run(confirmed=True)
+        self.assertTrue(os.path.samestat(before_target, target.stat()))
+        self.assertTrue(os.path.samestat(before_note, original_note.stat()))
+        self.assertEqual(original_note.read_bytes(), self.data)
+        self.assertEqual(other_note.read_bytes(), b"x" * (2*CHUNK))
+        self.assertEqual(list((target/"empty-root").iterdir()), [])
+        self.assertEqual(plan.path.read_bytes(), self.original)
+        self.assertEqual(self.archive.read_bytes(), self.original)
+        self.assertEqual(list(self.private.iterdir()), [])
 
     def test_raw_copy_with_a_damaged_member_never_links_even_if_the_source_name_is_unchanged(self):
         plan = self.zip_plan()

@@ -261,7 +261,7 @@ class ZipCopy(_AnonymousCopy):
         exact = self.selected.exact
         return (f"完整原包：{self.size:,} 字节\n"
                 + (f"原整包 SHA-256：{exact.sha256}\n" if exact is not None else "")
-                + "逐字节另存原 Store ZIP，保留标准 ZIP 注释与所有目录；可用普通 ZIP 工具解压。"
+                + "逐字节另存原 Store ZIP，保留所有目录，以及包内版本标识等标准 ZIP 注释；可用普通 ZIP 工具解压。"
                   "不解包、不改原归档。\n")
 
     def _payload(self, create):
