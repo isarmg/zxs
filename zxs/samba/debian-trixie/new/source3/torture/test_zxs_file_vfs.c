@@ -420,7 +420,7 @@ static bool uncached_create_policy(void)
 {
 	uint8_t wire[24+0x34+4]={0};
 	DATA_BLOB none=data_blob_null, blob=data_blob_const(wire,sizeof(wire));
-	bool qfid=true;
+	uint8_t qfid=UINT8_MAX;
 	uint32_t live=SMB2_CAP_ENCRYPTION|SMB2_CAP_LARGE_MTU;
 	if(zxs_smb_uncached_caps(live|SMB2_CAP_LEASING|SMB2_CAP_DIRECTORY_LEASING)!=live ||
 	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,none,&qfid) || qfid ||
@@ -453,7 +453,7 @@ static bool native_query_file_number(void)
 {
 	uint8_t wire[24+56]={0},out[ZXS_QFID_REPLY_BYTES];
 	DATA_BLOB body={.data=out,.length=sizeof(out)};
-	bool requested=false;
+	uint8_t requested=0;
 	create_context_spelling(wire,40,"DHnQ",24,16);
 	create_context_spelling(wire+40,0,"QFid",UINT16_MAX,0);
 	/* Receiver ignores reserved bytes; no durable hint is interpreted. */
@@ -483,6 +483,71 @@ static bool native_query_file_number(void)
 	   BVAL(out,40)!=0 || BVAL(out,48)!=0)return false;
 	return zxs_qfid_response(body,UINT64_MAX) && BVAL(out,24)==UINT64_MAX &&
 	       !zxs_qfid_response(body,0);
+}
+
+/* Actual wire parser and fixed response writer for either ordering,
+ * and the same object-store admission policy that CREATE uses. The
+ * FSP fixtures model the post-selection modes, not a network login. */
+static bool native_maximal_access(connection_struct *conn)
+{
+	uint8_t wire[56]={0},out[ZXS_QFID_REPLY_BYTES+ZXS_MXAC_REPLY_BYTES],queries=0;
+	const uint8_t both=ZXS_CREATE_QFID_QUERY|ZXS_CREATE_MXAC_QUERY;
+	DATA_BLOB body={.data=out,.length=sizeof(out)};
+	const uint32_t writes=SEC_FILE_WRITE_DATA|SEC_FILE_APPEND_DATA;
+	const uint32_t minimal=SEC_FILE_READ_ATTRIBUTE;
+	const uint32_t share=minimal|writes|SEC_STD_DELETE;
+	uint32_t mask=0;
+	bool ok=false;
+	create_context_spelling(wire,24,"MxAc",UINT16_MAX,0);
+	create_context_spelling(wire+24,0,"QFid",0,0);
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,48),&queries) ||
+	   queries!=both) return false;
+	create_context_spelling(wire,24,"QFid",UINT16_MAX,0);
+	create_context_spelling(wire+24,0,"MxAc",24,8);
+	SBVAL(wire,48,UINT64_C(0x1020304050607080));
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,sizeof(wire)),&queries) ||
+	   queries!=both) return false;
+	create_context_spelling(wire+24,0,"MxAc",24,7);
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,sizeof(wire)),&queries))return false;
+	create_context_spelling(wire,24,"MxAc",0,0);
+	create_context_spelling(wire+24,0,"MxAc",0,0);
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,48),&queries))return false;
+	struct files_struct *f=talloc_zero(conn,struct files_struct);
+	struct files_struct *d=talloc_zero(conn,struct files_struct);
+	if(f==NULL || d==NULL)goto done;
+	f->conn=d->conn=conn;f->access_mask=minimal;d->fsp_flags.is_directory=true;
+	conn->share_access=share;
+	struct zxs_read_fsp *r=vfs_add_fsp_extension_notype(conn->vfs_handles,f,sizeof(*r),NULL);
+	struct zxs_dir_search *s=vfs_add_fsp_extension_notype(conn->vfs_handles,d,sizeof(*s),NULL);
+	if(r==NULL || s==NULL)goto done;
+	r->folder=(struct zxs_smb_tree_cut){.root_fd=7,.volume_ordinal=2,.mode=2,.revision=1};
+	s->folder.root_fd=-1; /* the real virtual root has no physical folder choice */
+	if(!zxs_fsp_maximum_open_access(f,&mask) || mask!=share ||
+	   !zxs_create_context_response(body,both,512,mask) ||
+	   memcmp(out+16,"QFid",4) ||
+	   IVAL(out,0)!=ZXS_QFID_REPLY_BYTES || BVAL(out,24)!=512 ||
+	   IVAL(out,ZXS_QFID_REPLY_BYTES)!=0 || SVAL(out,ZXS_QFID_REPLY_BYTES+10)!=24 ||
+	   memcmp(out+ZXS_QFID_REPLY_BYTES+16,"MxAc",4) ||
+	   IVAL(out,ZXS_QFID_REPLY_BYTES+12)!=8 || IVAL(out,ZXS_QFID_REPLY_BYTES+24)!=0 ||
+	   IVAL(out,ZXS_QFID_REPLY_BYTES+28)!=share || f->access_mask!=minimal ||
+	   !zxs_fsp_maximum_open_access(d,&mask) || mask!=minimal)goto done;
+	r->folder.mode=1;
+	if(!zxs_fsp_maximum_open_access(f,&mask)||mask!=minimal)goto done;
+	r->folder.volume_ordinal=1;
+	if(!zxs_fsp_maximum_open_access(f,&mask)||mask!=(minimal|SEC_STD_DELETE))goto done;
+	conn->read_only=true;
+	body.length=ZXS_MXAC_REPLY_BYTES;
+	if(!zxs_fsp_maximum_open_access(f,&mask)||mask!=minimal ||
+	   !zxs_create_context_response(body,ZXS_CREATE_MXAC_QUERY,0,mask) ||
+	   IVAL(out,0)!=0 || IVAL(out,24)!=0 || IVAL(out,28)!=minimal ||
+	   zxs_create_context_response(body,both,512,mask))goto done;
+	f->fsp_flags.closing=true;
+	ok=!zxs_fsp_maximum_open_access(f,&mask);
+done:
+	conn->read_only=false;conn->share_access=0;
+	if(f!=NULL)vfs_remove_fsp_extension(conn->vfs_handles,f);
+	if(d!=NULL)vfs_remove_fsp_extension(conn->vfs_handles,d);
+	TALLOC_FREE(f);TALLOC_FREE(d);return ok;
 }
 
 int main(void)
@@ -556,7 +621,7 @@ int main(void)
 	    errno != ENOSYS || marker != 0x35) {
 		return 1;
 	}
-	if (!native_empty_search() || !typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
+	if (!native_maximal_access(conn) || !native_empty_search() || !typeless_top_open() || !private_delivery(conn) || !native_cancel_walk(conn) || !native_birth_cancel_and_retire(conn) || !native_directory_projection(conn) || !virtual_root_attributes(conn) || !virtual_member_attributes(conn) || !only_the_attached_virtual_root(conn,"ZXS")) { return 1; }
 	TALLOC_FREE(conn);
 	return 0;
 }

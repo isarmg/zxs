@@ -3422,7 +3422,7 @@
  			uint32_t _in_create_options,
  			const char *in_name,
 -			struct smb2_create_blobs in_context_blobs);
-+			struct smb2_create_blobs in_context_blobs,bool zxs_qfid);
++			struct smb2_create_blobs in_context_blobs,uint8_t zxs_context_queries);
  static NTSTATUS smbd_smb2_create_recv(struct tevent_req *req,
  			TALLOC_CTX *mem_ctx,
 +			DATA_BLOB *zxs_reserved_body,DATA_BLOB *zxs_reserved_context,
@@ -3441,7 +3441,7 @@
  	struct smb2_create_blobs in_context_blobs;
  	uint32_t context_offset = 0;
  	uint32_t context_available_length = 0;
-+	bool zxs_qfid=false;
++	uint8_t zxs_context_queries=0;
  	uint32_t dyn_offset;
  	NTSTATUS status;
  	bool ok;
@@ -3457,7 +3457,7 @@
 +		      (size_t)context_offset+in_context_length>name_offset))) {
 +			return smbd_smb2_request_error(smb2req,NT_STATUS_INVALID_PARAMETER);
 +		}
-+		if (!zxs_smb_uncached_open(in_oplock_level,in_context_buffer,&zxs_qfid)) {
++		if (!zxs_smb_uncached_open(in_oplock_level,in_context_buffer,&zxs_context_queries)) {
 +			return smbd_smb2_request_error(smb2req,NT_STATUS_NOT_SUPPORTED);
 +		}
 +		/* No cache grants, even with an upstream fake-oplocks setting.
@@ -3474,7 +3474,7 @@
  				       in_create_options,
  				       in_name_string,
 -				       in_context_blobs);
-+				       in_context_blobs,zxs_qfid);
++				       in_context_blobs,zxs_context_queries);
  	if (tsubreq == NULL) {
  		smb2req->subreq = NULL;
  		return smbd_smb2_request_error(smb2req, NT_STATUS_NO_MEMORY);
@@ -3542,7 +3542,7 @@
  	if (outbody.data == NULL) {
  		error = smbd_smb2_request_error(smb2req, NT_STATUS_NO_MEMORY);
  		if (!NT_STATUS_IS_OK(error)) {
-@@ -675,6 +711,14 @@
+@@ -675,6 +711,15 @@
  	struct smbd_smb2_request *smb2req;
  	struct GUID req_guid;
  	struct smb_request *smb1req;
@@ -3550,6 +3550,7 @@
 +	DATA_BLOB zxs_reserved_body,zxs_reserved_context; /* both owned by outer request */
 +	uint32_t zxs_access,zxs_share;
 +	bool zxs_writer,zxs_is_dir,zxs_nested,zxs_provisional,zxs_acknowledged,zxs_unknown,zxs_probe_kind;
++	uint8_t zxs_context_queries;
 +	uint32_t zxs_disposition;
 +	struct aio_req_fsp_link *zxs_link;
 +	const char *zxs_name,*zxs_relative,*zxs_native_path;
@@ -3557,7 +3558,7 @@
  	bool open_was_deferred;
  	struct tevent_immediate *im;
  	struct timeval request_time;
-@@ -884,8 +928,9 @@
+@@ -884,8 +929,9 @@
  }
  
  static void smbd_smb2_create_before_exec(struct tevent_req *req);
@@ -3568,16 +3569,16 @@
  
  static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
  			struct tevent_context *ev,
-@@ -898,7 +943,7 @@
+@@ -898,7 +944,7 @@
  			uint32_t in_create_disposition,
  			uint32_t _in_create_options,
  			const char *in_name,
 -			struct smb2_create_blobs in_context_blobs)
-+			struct smb2_create_blobs in_context_blobs,bool zxs_qfid)
++			struct smb2_create_blobs in_context_blobs,uint8_t zxs_context_queries)
  {
  	struct tevent_req *req = NULL;
  	struct smbd_smb2_create_state *state = NULL;
-@@ -941,6 +986,8 @@
+@@ -941,6 +987,8 @@
  
  		DBG_DEBUG("reentrant for file %s\n", in_name);
  
@@ -3586,7 +3587,7 @@
  		state->id = old_state->id;
  		state->request_time = old_state->request_time;
  		state->open_rec = talloc_move(state, &old_state->open_rec);
-@@ -963,6 +1010,11 @@
+@@ -963,6 +1011,11 @@
  	state->in_create_options &= ~(0x10); /* NTCREATEX_OPTIONS_SYNC_ALERT */
  	state->in_create_options &= ~(0x20); /* NTCREATEX_OPTIONS_ASYNC_ALERT */
  
@@ -3598,7 +3599,7 @@
  	in_file_attributes &= ~FILE_FLAG_POSIX_SEMANTICS;
  
  	is_dfs = (smb1req->flags2 & FLAGS2_DFS_PATHNAMES);
-@@ -1010,6 +1062,40 @@
+@@ -1010,6 +1063,42 @@
  		return tevent_req_post(req, state->ev);
  	}
  
@@ -3619,13 +3620,15 @@
 +			tevent_req_nterror(req,NT_STATUS_NOT_SUPPORTED);
 +			return tevent_req_post(req,state->ev);
 +		}
-+		/* Both the fixed body and the one possible response context are
++		/* Both the fixed body and the exact requested responses are
 +		 * reserved before storage work or installing the native FSP. */
-+		if (zxs_qfid && state->zxs_reserved_context.data==NULL) {
-+			state->zxs_reserved_context.data=talloc_array(smb2req,uint8_t,ZXS_QFID_REPLY_BYTES);
++		state->zxs_context_queries=zxs_context_queries;
++		size_t reply_bytes=zxs_create_context_size(zxs_context_queries);
++		if (reply_bytes!=0 && state->zxs_reserved_context.data==NULL) {
++			state->zxs_reserved_context.data=talloc_array(smb2req,uint8_t,reply_bytes);
 +			if (tevent_req_nomem(state->zxs_reserved_context.data,req))
 +				return tevent_req_post(req,state->ev);
-+			state->zxs_reserved_context.length=ZXS_QFID_REPLY_BYTES;
++			state->zxs_reserved_context.length=reply_bytes;
 +		}
 +		if (state->zxs_reserved_body.data == NULL) {
 +			state->zxs_reserved_body = smbd_smb2_generate_outbody(smb2req,0x58);
@@ -3639,7 +3642,7 @@
  	if (IS_IPC(smb1req->conn)) {
  		const char *pipe_name = in_name;
  
-@@ -1031,7 +1117,7 @@
+@@ -1031,7 +1120,7 @@
  		state->info = FILE_WAS_OPENED;
  
  		smbd_smb2_create_finish(req);
@@ -3648,7 +3651,7 @@
  	}
  
  	if (CAN_PRINT(smb1req->conn)) {
-@@ -1055,7 +1141,7 @@
+@@ -1055,7 +1144,7 @@
  		state->info = FILE_WAS_CREATED;
  
  		smbd_smb2_create_finish(req);
@@ -3657,7 +3660,7 @@
  	}
  
  	/* Check for trailing slash specific directory handling. */
-@@ -1084,13 +1170,13 @@
+@@ -1084,13 +1173,13 @@
  		state->update_open = false;
  		state->info = state->op->create_action;
  
@@ -3674,7 +3677,7 @@
  	}
  
  	if (state->do_durable_reconnect) {
-@@ -1163,13 +1249,13 @@
+@@ -1163,13 +1252,13 @@
  
  		state->info = FILE_WAS_OPENED;
  
@@ -3691,7 +3694,7 @@
  	}
  
  	if (state->requested_oplock_level == SMB2_OPLOCK_LEVEL_LEASE) {
-@@ -1318,13 +1404,13 @@
+@@ -1318,13 +1407,13 @@
  	}
  	state->op = state->result->op;
  
@@ -3708,7 +3711,7 @@
  }
  
  static void smbd_smb2_create_purge_replay_cache(struct tevent_req *req,
-@@ -1654,7 +1740,7 @@
+@@ -1654,7 +1743,7 @@
  	}
  }
  
@@ -3717,7 +3720,7 @@
  {
  	struct smbd_smb2_create_state *state = tevent_req_data(
  		req, struct smbd_smb2_create_state);
-@@ -1923,11 +2009,11 @@
+@@ -1923,11 +2012,11 @@
  		}
  	}
  
@@ -3731,7 +3734,7 @@
  }
  
  static void smbd_smb2_create_finish(struct tevent_req *req)
-@@ -1940,7 +2026,9 @@
+@@ -1940,7 +2029,9 @@
  
  	smb2req->compat_chain_fsp = smb1req->chain_fsp;
  
@@ -3742,7 +3745,7 @@
  		state->out_oplock_level = state->in_oplock_level;
  	} else if (lp_fake_oplocks(SNUM(smb2req->tcon->compat))) {
  		state->out_oplock_level	= state->in_oplock_level;
-@@ -1982,12 +2070,14 @@
+@@ -1982,12 +2073,14 @@
  
  	DBG_DEBUG("%s - %s\n", fsp_str_dbg(result), fsp_fnum_dbg(result));
  
@@ -3758,7 +3761,7 @@
  			uint8_t *out_oplock_level,
  			uint32_t *out_create_action,
  			struct timespec *out_creation_ts,
-@@ -2057,6 +2147,8 @@
+@@ -2057,6 +2150,8 @@
  		return status;
  	}
  

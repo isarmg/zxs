@@ -27,6 +27,27 @@ NTSTATUS zxs_open_access(connection_struct *c,bool directory,const struct zxs_sm
 	if((share & ~(FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE))!=0)return NT_STATUS_INVALID_PARAMETER;
 	return NT_STATUS_OK;
 }
+/* Query the original FSP's policy, not the rights requested or granted
+ * to this specific handle: later operations must still obtain their
+ * own grant. The surrounding CREATE already verified the live original. */
+_PUBLIC_
+bool zxs_fsp_maximum_open_access(const struct files_struct *f,uint32_t *allowed)
+{
+	if(f==NULL || f->fsp_flags.closing)return false;
+	const bool directory=f->fsp_flags.is_directory;
+	const struct zxs_smb_tree_cut *folder=NULL;
+	if(directory){
+		const struct zxs_dir_search *d=zxs_find_dir(f);
+		if(d==NULL)return false;
+		if(d->folder.root_fd>=0)folder=&d->folder;
+	}else{
+		const struct zxs_read_fsp *r=zxs_find_read(f);
+		if(r==NULL || r->folder.root_fd<0)return false;
+		folder=&r->folder;
+	}
+	*allowed=SEC_FLAG_MAXIMUM_ALLOWED;
+	return NT_STATUS_IS_OK(zxs_open_access(f->conn,directory,folder,allowed,0));
+}
 NTSTATUS zxs_open_member_fsp(struct smbd_smb2_request *n,struct smb_request *req,
 			  uint32_t desired,uint32_t share,const char *display,const struct zxs_member_info *member,
 			  struct zxs_smb_tree_cut *folder,bool writable,int *owned,struct files_struct **out)

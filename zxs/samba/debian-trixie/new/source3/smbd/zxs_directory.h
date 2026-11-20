@@ -6,7 +6,7 @@
 #include "libcli/smb/smb_constants.h"
 /* Empty and one-component names in the signed ZXS namespace can only
  * select the one root or an enrolled top directory. For an existing-only
- * open they need no directory hint from the client. No inference below it. */
+ * open they need no directory hint; deeper paths select a confirmed kind. */
 static inline bool zxs_create_directory_shape(const char *name,uint32_t options,uint32_t disposition,bool *directory)
 {
 	if(name==NULL)return false;
@@ -124,6 +124,7 @@ static inline uint64_t zxs_logical_allocation(uint64_t eof)
 	return eof>max?max:(eof+UINT64_C(4095)) & ~UINT64_C(4095);
 }
 NTSTATUS zxs_open_access(connection_struct *,bool directory,const struct zxs_smb_tree_cut *,uint32_t *desired,uint32_t share);
+bool zxs_fsp_maximum_open_access(const struct files_struct *,uint32_t *allowed);
 struct tevent_req *zxs_work_send(TALLOC_CTX *,struct tevent_context *,struct tevent_req *outer,
 	struct smbd_smb2_request *,struct files_struct *,uint8_t,uint64_t,DATA_BLOB,bool settle,bool closing);
 NTSTATUS zxs_work_recv(struct tevent_req *);

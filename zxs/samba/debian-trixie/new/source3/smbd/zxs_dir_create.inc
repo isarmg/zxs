@@ -41,8 +41,11 @@ static void zxs_create_success(struct tevent_req *req,uint32_t action)
 	struct smbd_smb2_create_state *s=tevent_req_data(req,struct smbd_smb2_create_state);
 	s->op=s->result->op;s->info=action;
 	NTSTATUS status;
-	if(s->zxs_reserved_context.data!=NULL &&
-	   !zxs_qfid_response(s->zxs_reserved_context,zxs_wire_file_number(s->result))){
+	uint32_t allowed=0;
+	if(((s->zxs_context_queries&ZXS_CREATE_MXAC_QUERY)!=0 &&
+	    !zxs_fsp_maximum_open_access(s->result,&allowed)) ||
+	   !zxs_create_context_response(s->zxs_reserved_context,s->zxs_context_queries,
+				       zxs_wire_file_number(s->result),allowed)){
 		(void)close_file_free(s->smb1req,&s->result,ERROR_CLOSE);
 		status=NT_STATUS_INTERNAL_ERROR;
 	}else{status=smbd_smb2_create_after_exec(req);}
