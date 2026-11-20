@@ -66,3 +66,62 @@ fn only_the_unqualified_bit4_is_uncorrected_and_never_claimed_complete(){
         assert_eq!(classify(status,&transcript(),BANNER,extent).exit(),2,"{status}");
     }
 }
+
+#[test]
+fn private_ext_receipts_bind_original_digest_large_length_real_exit_and_exact_packet(){
+    let bytes=(1u64<<44)+4096;
+    let extent=frame(&base(),bytes).unwrap();
+    let sha=[11;32];let good=classify(0,&transcript(),BANNER,extent).packet(&sha);
+    let report=Report::from_packet(&good,Some(0),bytes,&sha).unwrap();
+    assert_eq!((report.result,report.bytes,report.filesystem_bytes),(ResultKind::NoFindings,bytes,512<<20));
+    assert!(Report::from_packet(&good,Some(0),bytes-1,&sha).is_err());
+    assert!(Report::from_packet(&good,Some(0),bytes,&[12;32]).is_err());
+    assert!(Report::from_packet(&good[..56],Some(0),bytes,&sha).is_err());
+    assert!(Report::from_packet(&[good.as_slice(),b"!"].concat(),Some(0),bytes,&sha).is_err());
+    assert!(Report::from_packet(&good,None,bytes,&sha).is_err());
+    let mut bad=good;bad[..4].copy_from_slice(b"ECR1");
+    assert!(Report::from_packet(&bad,Some(0),bytes,&sha).is_err());
+    let mut bad=good;bad[17..25].copy_from_slice(&(bytes+1).to_be_bytes());
+    assert!(Report::from_packet(&bad,Some(0),bytes,&sha).is_err());
+    let mut bad=good;bad[5..9].copy_from_slice(&4i32.to_be_bytes());
+    assert!(Report::from_packet(&bad,Some(0),bytes,&sha).is_err());
+    let unresolved=classify(4,b"",BANNER,extent).packet(&sha);
+    assert_eq!(Report::from_packet(&unresolved,Some(1),bytes,&sha).unwrap().result,ResultKind::Uncorrected);
+    assert!(Report::from_packet(&unresolved,Some(0),bytes,&sha).is_err());
+    let incomplete=classify(0,b"",BANNER,extent).packet(&sha);
+    assert_eq!(Report::from_packet(&incomplete,Some(2),bytes,&sha).unwrap().result,ResultKind::Incomplete);
+    assert!(Report::from_packet(&incomplete,Some(3),bytes,&sha).is_err()); // late worker failure
+}
+
+#[test]
+fn waiting_ext_selection_neither_needs_a_valid_header_nor_excludes_a_writer_but_will_not_handoff_a_replacement(){
+    use rustix::fs::{Mode,open};
+    let fixture=crate::test_area::data_directory();
+    let path=fixture.path().join("saved-copy");
+    let writer=std::fs::File::options().write(true).create_new(true).open(&path).unwrap();
+    writer.set_len(4096).unwrap(); // no extent or ext header: preselection must not read it
+    let selected=Selected::select(&path).unwrap();
+    assert_eq!(selected.len(),4096);
+    drop(writer);
+    let writer=open(&path,OFlags::WRONLY|OFlags::NONBLOCK|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty()).unwrap();
+    drop(writer); // a waiting selection must not hold a read lease
+    let reader=selected.reader().unwrap();
+    assert!(fcntl_getfl(&reader).unwrap().contains(OFlags::NOATIME));
+    assert_eq!(Mount::on(&reader).unwrap(),Some(selected.mount));
+    std::fs::rename(&path,fixture.path().join("still-held-original")).unwrap();
+    let replacement=std::fs::File::options().write(true).create_new(true).open(&path).unwrap();
+    replacement.set_len(4096).unwrap();
+    assert!(selected.reader().is_err());
+    assert!(selected.require().is_err()); // final parent check also refuses
+}
+
+#[test]
+fn a_readable_original_changed_after_preview_does_not_reach_the_worker(){
+    let fixture=crate::test_area::data_directory();let path=fixture.path().join("edited");
+    let writer=std::fs::File::options().write(true).create_new(true).open(&path).unwrap();
+    writer.set_len(4096).unwrap();
+    let original=Selected::select(&path).unwrap();
+    writer.set_len(8192).unwrap();
+    assert!(original.require().is_err());
+    assert!(original.reader().is_err());
+}

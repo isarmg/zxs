@@ -5,6 +5,8 @@ mod setup;
 mod view;
 
 use http::{Reply,Request};
+use helper_linux_evidence::diagnostic_process::{cancelled,watch_cancellation};
+use crate::fat32_check::panel::{Job,Operand};
 use rustix::{process::{getgid,getuid},rand::{getrandom,GetRandomFlags}};
 use sha2::{Digest,Sha256};
 use std::{io::{self,Write},net::TcpListener,os::fd::AsFd,thread,time::{Duration,Instant}};
@@ -113,16 +115,22 @@ pub(crate) fn require_terminal(fd:impl AsFd)->io::Result<()>{
     Ok(())
 }
 
-pub(crate) fn serve(image:Option<(crate::fat32_check::Format,crate::fat32_check::Request)>)->io::Result<()>{
+pub(crate) fn serve(image:Option<Job>)->io::Result<()>{
     // This command owns a fresh single-threaded process. No privileged Web
     // worker, inherited admin groups, ambient capabilities or fallback listener.
     rustix::thread::set_no_new_privs(true)?;
     crate::maintenance::diagnostic_worker(getuid().as_raw(),getgid().as_raw())?;
     let stderr=io::stderr();let mut tty=stderr.lock();
     require_terminal(stderr.as_fd())?;
-    let selected=if let Some((format,job))=image{
-        writeln!(tty,"正在读取终端指定的镜像并核对完整 SHA-256。仅保存封存副本；浏览器确认前不会运行检查器。")?;tty.flush()?;
-        Some(check::Check::new(crate::fat32_check::panel::Operand::capture(format,job)?))
+    let ext=matches!(&image,Some(Job::Ext4(_)));
+    let selected=if let Some(job)=image{
+        if ext{
+            writeln!(tty,"仅固定终端选择的 ext4 副本原件。浏览器确认后才取只读租约、核对 SHA-256 并运行检查器。")?;
+        }else{
+            writeln!(tty,"正在读取终端指定的镜像并核对完整 SHA-256。仅保存封存副本；浏览器确认前不会运行检查器。")?;
+        }
+        tty.flush()?;
+        Some(check::Check::new(Operand::capture(job)?))
     }else{None};
     let listener=TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,0))?;
     listener.set_nonblocking(true)?;
@@ -131,17 +139,22 @@ pub(crate) fn serve(image:Option<(crate::fat32_check::Format,crate::fat32_check:
     require_terminal(stderr.as_fd())?;
     writeln!(tty,"磁盘工具（本机只读）：{}\n一次性配对码（2 分钟有效，请勿分享）：{}",panel.origin,code)?;
     tty.flush()?;drop(code);drop(tty);
+    // No worker exists while the terminal writes its prompts. Once requests
+    // can run, let a foreground cancel close HTTP and reap this worker.
+    if ext{watch_cancellation()?;}
     // No listener thread, automatic probe or timer
     // refresh. Each connection has its own total read and write budgets.
     let transport=(|| -> io::Result<()>{
     let mut served=0usize;
-    while !panel.closed && Instant::now()<panel.expires && served<512{
+    while !panel.closed && !cancelled() && Instant::now()<panel.expires && served<512{
         if let Some(c)=&mut panel.check{c.poll();}
         match listener.accept() {
             Ok((mut socket,peer))=>{
                 if !peer.ip().is_loopback(){continue;}
                 served+=1;socket.set_nonblocking(false)?;
-                let reply=match http::read(&mut socket) {Ok(r)=>panel.handle(r,Instant::now()),
+                let request=http::read(&mut socket);
+                if cancelled(){break;}
+                let reply=match request {Ok(r)=>panel.handle(r,Instant::now()),
                     Err(_)=>Reply::plain(400,"请求无效或未在时限内完成。")};
                 let _=reply.send(&mut socket); // a disconnected browser does not extend the session
             },
@@ -152,6 +165,7 @@ pub(crate) fn serve(image:Option<(crate::fat32_check::Format,crate::fat32_check:
     }
     Ok(())
     })();
+    drop(listener); // Closing HTTP must not wait on the original worker's I/O or reap.
     let disposition=panel.check.take().map_or(Ok(()),check::Check::finish);
     disposition.and(transport)
 }

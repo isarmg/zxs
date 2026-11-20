@@ -29,7 +29,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --instance ID --approval ID\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy IMAGE --sha256 HEX]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --instance ID --approval ID\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --approval ID\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -42,8 +42,9 @@ enum Command {
     Install(sqlite_install::Installation),
     Setup(sqlite_install::Setup),
     Disks(block_tools::Query),
-    DiskWeb(Option<(fat32_check::Format,fat32_check::Request)>),
+    DiskWeb(Option<fat32_check::panel::Job>),
     SealedWorker(fat32_check::Format,[u8;32]),
+    Ext4PanelWorker([u8;32]),
     SamWorker,
     NativeSqlWorker,
     FsTools(fs_tools::Query),
@@ -62,11 +63,13 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(Command::Setup);}
     if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "disk-web" {
+        use fat32_check::{Format,Request,panel::Job};
         return match args.next(){
             None=>Ok(Command::DiskWeb(None)),
-            Some(arg) if arg=="--fat32-copy"=>fat32_check::Request::parse(args).map(|r|Command::DiskWeb(Some((fat32_check::Format::Fat32,r)))),
-            Some(arg) if arg=="--exfat-copy"=>fat32_check::Request::parse_exfat(args).map(|r|Command::DiskWeb(Some((fat32_check::Format::Exfat,r)))),
-            _=>Err("disk-web accepts one terminal-selected --fat32-copy or --exfat-copy IMAGE --sha256 HEX"),
+            Some(arg) if arg=="--fat32-copy"=>Request::parse(args).map(|r|Command::DiskWeb(Some(Job::Sealed(Format::Fat32,r)))),
+            Some(arg) if arg=="--exfat-copy"=>Request::parse_exfat(args).map(|r|Command::DiskWeb(Some(Job::Sealed(Format::Exfat,r)))),
+            Some(arg) if arg=="--ext4-copy"=>Request::parse_ext4(args).map(|r|Command::DiskWeb(Some(Job::Ext4(r)))),
+            _=>Err("disk-web accepts one terminal-selected --fat32-copy, --exfat-copy or --ext4-copy IMAGE --sha256 HEX"),
         };
     }
     if op=="__native-account-sql-v7"{
@@ -76,6 +79,11 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op=="__sam-fresh-v1"{
         if args.next().is_some(){return Err("invalid internal worker");}
         return Ok(Command::SamWorker);
+    }
+    if op=="__ext4-leased-v1"{
+        let expected=args.next().and_then(|s|fs_tools::hex(s.to_str()?)).ok_or("invalid internal ext worker")?;
+        if args.next().is_some(){return Err("invalid internal ext worker");}
+        return Ok(Command::Ext4PanelWorker(expected));
     }
     if op=="__fat32-sealed-v1"||op=="__exfat-sealed-v1"{
         let format=if op=="__exfat-sealed-v1"{fat32_check::Format::Exfat}else{fat32_check::Format::Fat32};
@@ -115,6 +123,9 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::NativeSqlWorker=>return Ok(ExitCode::from(if sqlite_install::native_sql_worker().is_ok(){0}else{2})),
         Command::SamWorker=>return Ok(ExitCode::from(if sqlite_install::sam_worker().is_ok(){0}else{2})),
         Command::SealedWorker(fmt,digest) => return Ok(ExitCode::from(fat32_check::panel::worker(fmt,digest).unwrap_or(2))),
+        // Code 2 can describe a confirmed, structured incomplete ext report.
+        // Internal failure must never accept an already-written ext packet.
+        Command::Ext4PanelWorker(digest) => return Ok(ExitCode::from(fat32_check::panel::ext4_worker(digest).unwrap_or(3))),
         Command::Install(i)=>{let(code,public)=i.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         Command::Setup(s)=>{let(code,public)=s.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         Command::Help => line(USAGE)?,
@@ -164,5 +175,25 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(e) => { eprintln!("helper: action not confirmed: {e}"); ExitCode::from(2) }
         },
+    }
+}
+
+#[cfg(test)]
+mod copy_arguments{
+    use super::*;
+    use fat32_check::panel::Job;
+
+    #[test]
+    fn only_the_terminal_preselects_an_ext4_copy_and_the_internal_worker_gets_no_path(){
+        let digest="35".repeat(32);
+        let cmd=|a:&[&str]|parse(a.iter().map(|&arg|OsString::from(arg)));
+        assert!(matches!(cmd(&["disk-web","--ext4-copy","/saved/volume","--sha256",&digest]),
+            Ok(Command::DiskWeb(Some(Job::Ext4(_))))));
+        assert!(cmd(&["disk-web","--ext4-copy","relative","--sha256",&digest]).is_err());
+        assert!(cmd(&["disk-web","--ext4-copy","/saved/volume","--sha256",&digest,"-y"]).is_err());
+        assert!(cmd(&["disk-web","--ext4-copy","/saved/volume","--sha256",&digest,"--fat32-copy"]).is_err());
+        assert!(matches!(cmd(&["__ext4-leased-v1",&digest]),Ok(Command::Ext4PanelWorker(_))));
+        assert!(cmd(&["__ext4-leased-v1","/saved/volume",&digest]).is_err());
+        assert!(cmd(&["__ext4-leased-v1",&digest,"--journal"]).is_err());
     }
 }

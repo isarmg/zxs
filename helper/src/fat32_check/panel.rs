@@ -1,6 +1,6 @@
 //! A single terminal-selected operand. The HTTP process has no command builder
 //! with user options, and never installs the checker's process-wide limits.
-use super::{Format,Outcome,Report,Request,exfat,image::{ExfatSealed,Sealed},runner,runtime::Runtime};
+use super::{Format,Outcome,Report,Request,exfat,ext4,image::{ExfatSealed,Sealed},runner,runtime::Runtime};
 use crate::{fs_tools::RuntimeFile,pinned::invalid};
 use rustix::{
     io::fcntl_dupfd_cloexec,pipe::{PipeFlags,pipe_with},
@@ -8,21 +8,26 @@ use rustix::{
 use std::{fs::File,io::{self,Read,Write},process::{Child,Command,Stdio}};
 
 #[derive(Clone,Copy)]
-pub(crate) enum Detail{Fat32Clusters(u32),Exfat}
+pub(crate) enum Detail{Fat32Clusters(u32),Exfat,Ext4}
 #[derive(Clone,Copy)]
-pub(crate) struct Info {pub bytes:u64,pub sector:u16,pub detail:Detail,pub digest:[u8;32]}
+pub(crate) struct Info {pub bytes:u64,pub sector:Option<u16>,pub detail:Detail,pub digest:[u8;32]}
 impl Info{
     pub(crate) fn format_fields(self)->(&'static str,String){
-        match self.detail{Detail::Fat32Clusters(n)=>("FAT32",n.to_string()),Detail::Exfat=>("exFAT","-".into())}
+        match self.detail{Detail::Fat32Clusters(n)=>("FAT32",n.to_string()),
+            Detail::Exfat=>("exFAT","-".into()),Detail::Ext4=>("ext4","-".into())}
     }
 }
-enum Image{Fat32(Sealed),Exfat(ExfatSealed)}
-enum Expected{Fat32(u32),Exfat(exfat::Framing,[u8;32])}
-pub(crate) enum Receipt{Fat32(Report),Exfat(exfat::Report)}
+// Ext4 is deliberately not a member of the older two-format sealed protocol.
+#[derive(Debug)]
+pub(crate) enum Job{Sealed(Format,Request),Ext4(Request)}
+enum Image{Fat32(Sealed),Exfat(ExfatSealed),Ext4(ext4::Selected)}
+enum Expected{Fat32(u32),Exfat(exfat::Framing,[u8;32]),Ext4(ext4::Selected,[u8;32])}
+pub(crate) enum Receipt{Fat32(Report),Exfat(exfat::Report),Ext4(ext4::Report)}
 impl Receipt{
     pub(crate) fn text(&self)->String{
         match self{
             Receipt::Exfat(r)=>r.panel_text(),
+            Receipt::Ext4(r)=>r.panel_text(),
             Receipt::Fat32(r)=>{
                 let status=match r.state{Outcome::NoFindingsReported=>"上游检查器未报告问题",
                     Outcome::ReportedMessages=>"已完成，但上游检查器还给出了提示",
@@ -34,36 +39,45 @@ impl Receipt{
 }
 pub(crate) struct Operand {image:Image,expected:[u8;32],installation:RuntimeFile}
 impl Operand {
-    pub(crate) fn capture(format:Format,job:Request)->io::Result<Self>{
+    pub(crate) fn capture(job:Job)->io::Result<Self>{
         let installation=RuntimeFile::open(&["usr","bin","helper"],true,64<<20)?;
         installation.require_running_helper()?;
-        let image=match format{
-            Format::Fat32=>Image::Fat32(Sealed::capture(&job.image,&job.digest)?),
-            Format::Exfat=>Image::Exfat(ExfatSealed::capture(&job.image,&job.digest)?),
+        let (image,expected)=match job{
+            Job::Sealed(Format::Fat32,j)=>(Image::Fat32(Sealed::capture(&j.image,&j.digest)?),j.digest),
+            Job::Sealed(Format::Exfat,j)=>(Image::Exfat(ExfatSealed::capture(&j.image,&j.digest)?),j.digest),
+            Job::Ext4(j)=>(Image::Ext4(ext4::Selected::select(&j.image)?),j.digest),
         };
         installation.recheck()?;
-        Ok(Self{image,expected:job.digest,installation})
+        Ok(Self{image,expected,installation})
     }
     pub(crate) fn info(&self)->Info{
         let(bytes,sector,detail)=match &self.image{
-            Image::Fat32(s)=>{let g=s.geometry();(g.length,g.sector_bytes,Detail::Fat32Clusters(g.data_clusters))},
-            Image::Exfat(s)=>{let g=s.frame();(g.length,g.sector,Detail::Exfat)},
+            Image::Fat32(s)=>{let g=s.geometry();(g.length,Some(g.sector_bytes),Detail::Fat32Clusters(g.data_clusters))},
+            Image::Exfat(s)=>{let g=s.frame();(g.length,Some(g.sector),Detail::Exfat)},
+            Image::Ext4(s)=>(s.len(),None,Detail::Ext4),
         };
         Info{bytes,sector,detail,digest:self.expected}
     }
     pub(crate) fn launch(self)->io::Result<Running>{
-        let(format,sealed,expected)=match &self.image{
-            Image::Fat32(s)=>(Format::Fat32,s.file(),Expected::Fat32(s.geometry().data_clusters)),
-            Image::Exfat(s)=>(Format::Exfat,s.file(),Expected::Exfat(s.frame(),self.expected)),
+        // The authenticated panel already consumed this ticket. Only here
+        // does the ext operand open the selected inode for data access.
+        let(input,expected)=match self.image{
+            Image::Fat32(s)=>(s.file().try_clone()?,Expected::Fat32(s.geometry().data_clusters)),
+            Image::Exfat(s)=>(s.file().try_clone()?,Expected::Exfat(s.frame(),self.expected)),
+            Image::Ext4(s)=>(s.reader()?,Expected::Ext4(s,self.expected)),
         };
         let (read,write)=pipe_with(PipeFlags::CLOEXEC|PipeFlags::NONBLOCK)?;
         let mut cmd=Command::new("/no-path-execution-for-helper-worker");
-        cmd.env_clear().current_dir("/").stdin(Stdio::from(sealed.try_clone()?))
+        cmd.env_clear().current_dir("/").stdin(Stdio::from(input))
             .stdout(Stdio::from(File::from(write))).stderr(Stdio::piped());
         helper_linux_evidence::diagnostic_process::require_waitable_children()?;
         self.installation.recheck()?;self.installation.require_running_helper()?;
-        helper_linux_evidence::diagnostic_process::prepare_panel_worker_exec(&mut cmd,&self.installation.file,format,&self.expected)?;
+        expected.prepare_exec(&mut cmd,&self.installation.file,&self.expected)?;
+        if helper_linux_evidence::diagnostic_process::cancelled(){return Err(io::ErrorKind::Interrupted.into());}
         let child=cmd.spawn()?;
+        // Do not keep an alias of the child's readonly OFD (and therefore
+        // its lease) in the HTTP process. Expected::Ext4 holds only O_PATH.
+        drop(cmd);
         Ok(Running{child,read:File::from(read),expected})
     }
 }
@@ -106,14 +120,43 @@ pub(crate) fn worker(format:Format,expected:[u8;32])->io::Result<u8>{
     out.flush()?;Ok(code)
 }
 
+pub(crate) fn ext4_worker(expected:[u8;32])->io::Result<u8>{
+    if parent_process_death_signal()?!=Some(Signal::TERM){return Err(invalid("no supervised ext copy-check parent"));}
+    runner::prepare_ext4_worker()?;
+    let file=File::from(fcntl_dupfd_cloexec(std::io::stdin(),3)?);
+    let runtime=Runtime::ext4()?; // no image lease while checking the installation
+    let image=ext4::Image::from_panel_reader(file,&expected)?;
+    let report=runner::check_ext4(&runtime,&image)?;
+    let mut out=io::stdout().lock();
+    image.require()?;
+    out.write_all(&report.packet(&expected))?;
+    out.flush()?;
+    image.require()?; // a late cancellation must not validate a written packet
+    Ok(report.exit())
+}
+
 impl Expected{
-    fn size(&self)->usize{match self{Self::Fat32(_)=>SIZE,Self::Exfat(_,_)=>exfat::Report::WIRE_SIZE}}
+    fn prepare_exec(&self,cmd:&mut Command,helper:&File,digest:&[u8;32])->io::Result<()>{
+        use helper_linux_evidence::diagnostic_process::{prepare_ext4_panel_exec,prepare_panel_worker_exec};
+        match self{
+            Self::Fat32(_)=>prepare_panel_worker_exec(cmd,helper,Format::Fat32,digest),
+            Self::Exfat(..)=>prepare_panel_worker_exec(cmd,helper,Format::Exfat,digest),
+            Self::Ext4(..)=>prepare_ext4_panel_exec(cmd,helper,digest),
+        }
+    }
+    fn size(&self)->usize{
+        match self{Self::Fat32(_)=>SIZE,Self::Exfat(..)=>exfat::Report::WIRE_SIZE,Self::Ext4(..)=>ext4::Report::WIRE_SIZE}
+    }
     fn decode(&self,bytes:&[u8],status:Option<i32>)->io::Result<Receipt>{
         // What was selected in the terminal, not a tag supplied by HTTP/the child,
         // chooses the decoder. No attempt to recognize or try another protocol.
         match self{
             Self::Fat32(clusters)=>result(bytes,status,*clusters).map(Receipt::Fat32),
             Self::Exfat(frame,sha)=>exfat::Report::from_packet(bytes,status,*frame,sha).map(Receipt::Exfat),
+            Self::Ext4(original,sha)=>{
+                original.require()?;
+                ext4::Report::from_packet(bytes,status,original.len(),sha).map(Receipt::Ext4)
+            }
         }
     }
 }

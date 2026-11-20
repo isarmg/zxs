@@ -21,7 +21,7 @@ helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin
 
 ## 本机磁盘面板
 
-`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可分别查看设备与挂载、被动 I/O 速率、七类工具的固定安装位置。普通启动不会执行检查。若在终端明确使用 `helper disk-web --fat32-copy IMAGE --sha256 HEX` 或 `helper disk-web --exfat-copy IMAGE --sha256 HEX`，启动时就读取并封存这一份镜像；配对后可核对格式和摘要、确认一次对应的只读检查并查回结果。网页不收路径/上传，没有修复。见[用法和访问边界](docs/disk-web.md)。 配对后还可打开[首次安装向导](docs/disk-web.md#首次安装向导本机命令与原回执)：比较固定模板并按步骤提供可复制的本机命令；真正建池、域供给、口令和启停确认仍只在终端。
+`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可查看设备与挂载、被动 I/O 速率及七类工具的固定安装位置。普通启动不会执行检查。终端用 `--fat32-copy`、`--exfat-copy` 或 `--ext4-copy` 加 `IMAGE --sha256 HEX` 只选定一份卷镜像，配对后预览并确认一次。两种 FAT 在启动时封存，ext4 只在确认后持只读租约并比对整份摘要，不复制。网页不收路径、上传、工具参数或修复请求。见[用法和访问边界](docs/disk-web.md)。配对后还可打开[首次安装向导](docs/disk-web.md#首次安装向导本机命令与原回执)：比较固定模板并提供可复制的本机命令；真正建池、域供给、口令和启停确认仍只在终端。
 
 ## 查看选定的存储根
 
@@ -60,7 +60,7 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 ## 检查一份 ext4 保存副本（只读）
 
-`helper check-ext4-copy /绝对路径/volume.img --sha256 完整副本的独立SHA256`。从用户明确选择的本地普通镜像检查，不打开原盘，也不把镜像拷入内存或限制为 128 MiB。需保持实际只读租约及原件；用隔离的 Debian 原版 `e2fsck -fn`。外部日志、需要恢复、截短或未完整检查都不报正常。当前只在独立终端命令提供，[完整边界与返回码](docs/ext4-copy-check.md)见专页。
+`helper check-ext4-copy /绝对路径/volume.img --sha256 完整副本的独立SHA256`。从用户明确选择的本地普通镜像检查，不打开原盘，也不把镜像拷入内存或限制为 128 MiB。需保持实际只读租约及原件；用隔离的 Debian 原版 `e2fsck -fn`。外部日志、需要恢复、截短或未完整检查都不报正常。也可用上面的配对面板确认同次只读检查；更长任务用终端命令。[完整边界与返回码](docs/ext4-copy-check.md)见专页。
 
 ## 本机部署与离线维护（设计）
 

@@ -112,9 +112,18 @@ pub enum CopyFormat{Fat32,Exfat}
 /// Spawn only the copy checker present in the same protected installation as the
 /// calling panel. The only argument is the digest of the *already sealed* stdin.
 pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyFormat,digest:&[u8;32])->io::Result<()>{
+    let action=match format{CopyFormat::Fat32=>"__fat32-sealed-v1",CopyFormat::Exfat=>"__exfat-sealed-v1"};
+    prepare_fixed_panel_exec(cmd,original,action,digest)
+}
+
+/// stdin is the selected, previously unopened-for-data ext copy's new readonly
+/// description, not a sealed copy. Only this particular worker can lease it.
+pub fn prepare_ext4_panel_exec(cmd:&mut Command,original:&File,digest:&[u8;32])->io::Result<()>{
+    prepare_fixed_panel_exec(cmd,original,"__ext4-leased-v1",digest)
+}
+fn prepare_fixed_panel_exec(cmd:&mut Command,original:&File,action:&'static str,digest:&[u8;32])->io::Result<()>{
     use std::fmt::Write;
     let mut hex=String::with_capacity(64);for byte in digest{write!(&mut hex,"{byte:02x}").expect("String formatting");}
-    let action=match format{CopyFormat::Fat32=>"__fat32-sealed-v1",CopyFormat::Exfat=>"__exfat-sealed-v1"};
     let args=vec![CString::new("helper").expect("literal"),CString::new(action).expect("literal"),
         CString::new(hex).expect("hex digest")];
     pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t),None)
@@ -180,7 +189,8 @@ fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<li
     // SAFETY: all memory and C strings are owned and allocated before fork.
     // The closure only builds pointer arrays on the stack and uses async-safe
     // Linux syscalls. No lock, allocation or unwinding. The copy worker
-    // alone inherits sealed stdin + stdout/stderr pipes; never the listener.
+    // alone inherits its selected operand as stdin + stdout/stderr pipes;
+    // never the listener.
     unsafe {cmd.pre_exec(move||{
         if let Some(parent)=panel {
             // SIG_IGN and the signal mask can survive exec. Make termination

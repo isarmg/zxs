@@ -1,9 +1,10 @@
 //! An explicitly saved ext-family image, checked by e2fsck; this is not a
 //! parser for directories, extents, bitmaps, backup superblocks or journals.
-use crate::{inspect::Input,pinned::{Mount,invalid}};
+use crate::{inspect::{Input,Stamp},pinned::{Mount,invalid,local_data_filesystem}};
 use helper_linux_evidence::diagnostic_process::{acquire_copy_read_lease,require_copy_read_lease};
+use rustix::fs::{OFlags,fcntl_getfl};
 use sha2::{Digest,Sha256};
-use std::{fmt,fs::File,io::{self,Read},os::unix::fs::FileExt,path::Path};
+use std::{fmt,fs::File,io,os::unix::fs::FileExt,path::Path};
 
 const SUPER_OFFSET:u64=1024;
 const SUPER_LEN:usize=1024;
@@ -43,22 +44,66 @@ fn frame(sb:&[u8;SUPER_LEN],bytes:u64)->io::Result<Extent>{
     Ok(Extent{bytes,filesystem_bytes,blocks,inodes})
 }
 
-pub(super) struct Image{source:Input,file:File,mount:Mount,extent:Extent}
-impl Image{
-    pub(super) fn capture(path:&Path,expected:&[u8;32])->io::Result<Self>{
-        // No memfd or scratch copy. The operator has supplied the saved copy;
-        // preserve it in place and never acquire or accept a write descriptor.
+// Kept by the terminal/HTTP parent, not serialized or selected by a child.
+// Only O_PATH and initial metadata: no ordinary open, header read or lease.
+pub(super) struct Selected{source:Input,mount:Mount}
+impl Selected{
+    pub(super) fn select(path:&Path)->io::Result<Self>{
         let source=Input::select_in(path,2048..=i64::MAX as u64)?;
         let mount=source.copy_mount()?;
-        let mut file=source.reader()?;
-        if Mount::on(&file)?!=Some(mount){return Err(invalid("selected ext copy mount changed"));}
+        Ok(Self{source,mount})
+    }
+    pub(super) fn len(&self)->u64{self.source.len()}
+    pub(super) fn require(&self)->io::Result<()>{
+        if self.source.copy_mount()?!=self.mount{return Err(invalid("selected ext copy mount changed"));}
+        Ok(())
+    }
+    pub(super) fn reader(&self)->io::Result<File>{
+        self.require()?;
+        let file=self.source.reader()?;
+        if Mount::on(&file)?!=Some(self.mount){return Err(invalid("selected ext copy reader mount changed"));}
+        self.require()?;
+        Ok(file)
+    }
+}
+
+pub(super) struct Image{named:Option<Selected>,file:File,stamp:Stamp,mount:Mount,extent:Extent}
+impl Image{
+    pub(super) fn capture(path:&Path,expected:&[u8;32])->io::Result<Self>{
+        let named=Selected::select(path)?;
+        let file=named.reader()?;
+        Self::verify(file,expected,Some(named))
+    }
+    // Only the dedicated worker calls this on the parent's selected readonly
+    // stdin. The parent keeps that exact operand's name/ancestry evidence and
+    // is responsible for validating it again after the worker is really reaped.
+    pub(super) fn from_panel_reader(file:File,expected:&[u8;32])->io::Result<Self>{
+        Self::verify(file,expected,None)
+    }
+    fn verify(file:File,expected:&[u8;32],named:Option<Selected>)->io::Result<Self>{
+        // Never acquire a lease or probe a header on an arbitrary inherited
+        // endpoint. No memfd or scratch copy, and no reopening its pathname.
+        let flags=fcntl_getfl(&file)?;
+        if flags.contains(OFlags::PATH)||flags&OFlags::ACCMODE!=OFlags::RDONLY
+            ||!flags.contains(OFlags::NOATIME|OFlags::NONBLOCK){
+            return Err(invalid("expected the original readonly ext copy reader"));
+        }
+        let stamp=Stamp::of(file.metadata()?)?;
+        if !(2048..=i64::MAX as u64).contains(&stamp.len()){
+            return Err(invalid("invalid ext copy length"));
+        }
+        local_data_filesystem(&file)?;
+        let mount=Mount::on(&file)?.ok_or_else(||invalid("selected ext copy mount unavailable"))?;
         acquire_copy_read_lease(&file)?;
-        source.recheck(&file)?;
+        if Stamp::of(file.metadata()?)?!=stamp || Mount::on(&file)?!=Some(mount){
+            return Err(invalid("selected ext copy changed before acquiring its lease"));
+        }
+        if let Some(ref selected)=named{selected.require()?;}
         let mut sb=[0;SUPER_LEN];
         file.read_exact_at(&mut sb,SUPER_OFFSET)?;
-        let extent=frame(&sb,source.len())?;
-        if digest(&mut file,extent.bytes)?!=*expected{return Err(invalid("saved copy does not match the supplied SHA-256"));}
-        let original=Self{source,file,mount,extent};
+        let extent=frame(&sb,stamp.len())?;
+        if digest(&file,extent.bytes)?!=*expected{return Err(invalid("saved copy does not match the supplied SHA-256"));}
+        let original=Self{named,file,stamp,mount,extent};
         original.require()?;
         Ok(original)
     }
@@ -66,25 +111,25 @@ impl Image{
     pub(super) fn extent(&self)->Extent{self.extent}
     pub(super) fn require(&self)->io::Result<()>{
         require_copy_read_lease(&self.file)?;
-        self.source.recheck(&self.file)?;
+        if let Some(ref selected)=self.named{selected.require()?;}
         let mut byte=[0];
-        if self.source.copy_mount()?!=self.mount||Mount::on(&self.file)?!=Some(self.mount)
+        if Stamp::of(self.file.metadata()?)?!=self.stamp||Mount::on(&self.file)?!=Some(self.mount)
             ||self.file.read_at(&mut byte,self.extent.bytes)?!=0{
             return Err(invalid("selected ext copy name, mount or length changed"));
         }
         require_copy_read_lease(&self.file)
     }
 }
-fn digest(file:&mut File,length:u64)->io::Result<[u8;32]>{
-    let mut hash=Sha256::new();let mut buf=[0;128*1024];let mut remaining=length;
-    while remaining!=0{
+fn digest(file:&File,length:u64)->io::Result<[u8;32]>{
+    let mut hash=Sha256::new();let mut buf=[0;128*1024];let mut at=0;
+    while at!=length{
         require_copy_read_lease(file)?;
-        let limit=remaining.min(buf.len() as u64) as usize;
-        let n=match file.read(&mut buf[..limit]){
+        let limit=(length-at).min(buf.len() as u64) as usize;
+        let n=match file.read_at(&mut buf[..limit],at){
             Ok(0)=>return Err(invalid("saved copy ended before the expected length")),
             Ok(n)=>n,Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e),
         };
-        hash.update(&buf[..n]);remaining-=n as u64;
+        hash.update(&buf[..n]);at+=n as u64;
     }
     // A positional read of the actual endpoint in Image::require also checks EOF.
     Ok(hash.finalize().into())
@@ -92,10 +137,46 @@ fn digest(file:&mut File,length:u64)->io::Result<[u8;32]>{
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 enum ResultKind{NoFindings,Uncorrected,Incomplete}
-pub(crate) struct Report{result:ResultKind,upstream:i32,extent:Extent}
+pub(crate) struct Report{result:ResultKind,upstream:i32,bytes:u64,filesystem_bytes:u64}
 impl Report{
     pub(crate) fn exit(&self)->u8{
         match self.result{ResultKind::NoFindings=>0,ResultKind::Uncorrected=>1,ResultKind::Incomplete=>2}
+    }
+
+    // Private worker pipe, not an HTTP parameter format. The parent already
+    // knows the terminal-selected digest and length and requires actual EOF.
+    pub(super) const WIRE_SIZE:usize=57;
+    pub(super) fn packet(&self,digest:&[u8;32])->[u8;Self::WIRE_SIZE]{
+        let mut p=[0;Self::WIRE_SIZE];p[..4].copy_from_slice(b"XCR1");p[4]=self.exit();
+        p[5..9].copy_from_slice(&self.upstream.to_be_bytes());
+        p[9..17].copy_from_slice(&self.bytes.to_be_bytes());
+        p[17..25].copy_from_slice(&self.filesystem_bytes.to_be_bytes());
+        p[25..57].copy_from_slice(digest);p
+    }
+    pub(super) fn from_packet(p:&[u8],exit:Option<i32>,bytes:u64,digest:&[u8;32])->io::Result<Self>{
+        let bad=||invalid("no matching complete receipt from the selected ext worker");
+        if p.len()!=Self::WIRE_SIZE||&p[..4]!=b"XCR1"||p[9..17]!=bytes.to_be_bytes()||&p[25..57]!=digest{
+            return Err(bad());
+        }
+        let upstream=i32::from_be_bytes(p[5..9].try_into().expect("four bytes"));
+        let filesystem_bytes=u64::from_be_bytes(p[17..25].try_into().expect("eight bytes"));
+        if !(2048..=bytes).contains(&filesystem_bytes)||!(0..=255).contains(&upstream){return Err(bad());}
+        let result=match(p[4],upstream,exit){
+            (0,0,Some(0))=>ResultKind::NoFindings,
+            (1,4,Some(1))=>ResultKind::Uncorrected,
+            (2,_,Some(2))=>ResultKind::Incomplete,
+            _=>return Err(bad()),
+        };
+        Ok(Self{result,upstream,bytes,filesystem_bytes})
+    }
+    pub(super) fn panel_text(&self)->String{
+        let status=match self.result{
+            ResultKind::NoFindings=>"e2fsck 本次强制只读检查未报告问题；不代表原盘健康、备用超级块或文件正文已验证",
+            ResultKind::Uncorrected=>"e2fsck 报告有未修复的问题；不能确认所有检查阶段都已完成",
+            ResultKind::Incomplete=>"未能确认完整检查；不能判为正常",
+        };
+        format!("ext 文件系统：{status}。工具退出码：{}；镜像 / 文件系统范围（字节）：{} / {}。仅检查保存副本，未修复。",
+            self.upstream,self.bytes,self.filesystem_bytes)
     }
 }
 impl fmt::Display for Report{
@@ -105,7 +186,7 @@ impl fmt::Display for Report{
             ResultKind::Uncorrected=>"errors-left-uncorrected-full-coverage-not-confirmed",
             ResultKind::Incomplete=>"check-not-completed-or-not-confirmed",
         };
-        write!(f,"format=ext-family checker=e2fsck-1.47.2 check=-fn operand=leased-readonly-saved-image repair=none result={result} checker_status={} image_bytes={} filesystem_bytes={}",self.upstream,self.extent.bytes,self.extent.filesystem_bytes)
+        write!(f,"format=ext-family checker=e2fsck-1.47.2 check=-fn operand=leased-readonly-saved-image repair=none result={result} checker_status={} image_bytes={} filesystem_bytes={}",self.upstream,self.bytes,self.filesystem_bytes)
     }
 }
 
@@ -138,7 +219,7 @@ pub(super) fn classify(code:i32,out:&[u8],err:&[u8],extent:Extent)->Report{
         4 if err.starts_with(BANNER)=>ResultKind::Uncorrected,
         _=>ResultKind::Incomplete,
     };
-    Report{result,upstream:code,extent}
+    Report{result,upstream:code,bytes:extent.bytes,filesystem_bytes:extent.filesystem_bytes}
 }
 
 #[cfg(test)]

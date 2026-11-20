@@ -36,13 +36,14 @@ pub(crate) fn directories(paths: &[PathBuf]) -> io::Result<String> {
 }
 
 #[derive(PartialEq, Eq)]
-struct Stamp { entity: Entity, size: u64, mode: u32, modified: (i64,i64), changed: (i64,i64) }
+pub(crate) struct Stamp { entity: Entity, size: u64, mode: u32, modified: (i64,i64), changed: (i64,i64) }
 impl Stamp {
-    fn of(meta: Metadata) -> io::Result<Self> {
+    pub(crate) fn of(meta: Metadata) -> io::Result<Self> {
         if !meta.is_file() || meta.nlink() != 1 { return Err(invalid("expected a singly linked regular file")); }
         Ok(Self { entity: Entity::of(&meta)?, size: meta.len(), mode: meta.mode(),
             modified: (meta.mtime(), meta.mtime_nsec()), changed: (meta.ctime(), meta.ctime_nsec()) })
     }
+    pub(crate) fn len(&self)->u64{self.size}
 }
 
 pub(crate) struct Input { pinned: LocalDataFile, stamp: Stamp }
@@ -62,7 +63,11 @@ impl Input {
     pub(crate) fn len(&self) -> u64 { self.stamp.size }
     // An ext image is carried through a name-resolving readonly bind, not
     // copied into a second file. Also require the current name's original mount.
-    pub(crate) fn copy_mount(&self)->io::Result<Mount>{self.pinned.require_named_mount()}
+    pub(crate) fn copy_mount(&self)->io::Result<Mount>{
+        let mount=self.pinned.require_named_mount()?;
+        if Stamp::of(self.pinned.metadata()?)? != self.stamp {return Err(invalid("selected copy metadata changed"));}
+        Ok(mount)
+    }
     pub(crate) fn reader(&self) -> io::Result<File> {
         let file = self.pinned.reader()?;
         if Stamp::of(file.metadata()?)? != self.stamp { return Err(invalid("file changed before the comparison")); }
