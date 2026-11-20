@@ -1,7 +1,7 @@
 //! The same SYSTEM authority selects a real ordinary parent and its original
 //! directory births. Neither physical names nor an old operation grant SMB.
 use super::{Catalog,Connection,Tree,check,denied,sqlite3_step};
-use super::super::{volume::OrdinaryRoot,work_record};
+use super::super::{file_location::Place,volume::OrdinaryRoot,work_record};
 use crate::{DirectoryId,EntryId,OperationId,PoolId,Role,VolumeId,display,
     fs::{DIRECTORY_BYTES,DIRECTORY_NAMES,HeldDir,MAX_PATH_DEPTH,invalid,path_budget,
         directory_birth::{DIRECTORY_MARK,DirectoryBirth,DirectoryHold,DirectoryParent}},
@@ -165,12 +165,34 @@ fn for_tree(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,op:OperationId,parent:Di
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub(super) enum Cut{Reserved,Installed}
+#[derive(Debug)]
+pub(super) enum NamedKind{Directory(Route),File}
 impl<'s,'r> Tree<'s,'r>{
     /// Each name is resolved against one current, authenticated SQL cut.
     pub(super) fn ordinary_route(&self,names:&[String],write:bool)->io::Result<(Catalog,Route)>{
         self.session.source.at(|db,c|{
             self.require(db,&c,write)?;
             let route=Route::by_names(db,&c,self.setting.volume,names)?;Ok((c,route))
+        })
+    }
+    /// An existing-only, untyped SMB open first selects a definite kind at
+    /// the exact ordinary parent. A missing/bad disk never picks a FILE by
+    /// exclusion, nor does a kind selection issue a native handle or grant.
+    pub(super) fn ordinary_kind(&self,names:&[String])->io::Result<(Catalog,NamedKind)>{
+        if names.len()>MAX_PATH_DEPTH{return Err(denied());}
+        let (name,parents)=names.split_last().ok_or_else(denied)?;
+        self.session.source.at(|db,c|{
+            self.require(db,&c,false)?;
+            let mut route=Route::by_names(db,&c,self.setting.volume,parents)?;
+            let dir=lookup(db,&c,route.volume,route.parent(),name)?;
+            let file=if name.len()<=222{Place::named(db,&c,route.volume,route.parent(),name)?}else{None};
+            let kind=match(dir,file){
+                (Some(d),None)=>{route.steps.push(d);route.geometry(&c)?;NamedKind::Directory(route)},
+                (None,Some(f))=>{let _=f.bind(db,&c)?;NamedKind::File},
+                (None,None)=>return Err(io::ErrorKind::NotFound.into()),
+                (Some(_),Some(_))=>return Err(invalid("two original types claim one ordinary name")),
+            };
+            Ok((c,kind))
         })
     }
     /// A new SMB create can continue an earlier selection only by its actual
@@ -387,6 +409,7 @@ mod tests{
                 assert!(f.join("Reports").is_dir());
                 assert!(!other.at(|db,c|original(db,&c,op(0x91)))?.unwrap().done);
                 assert!(tree.ordinary_route(&["Reports".into()],false).is_err());
+                assert_eq!(tree.ordinary_kind(&["Reports".into()]).err().unwrap().kind(),io::ErrorKind::WouldBlock);
                 return Err(io::ErrorKind::Interrupted.into());
             }Ok(())
         }).is_err());
@@ -440,6 +463,10 @@ mod tests{
         let new=inside.create_file(op(0x96),"Data").unwrap();
         let sibling=outside.create_file(op(0x97),"Data").unwrap();
         assert_ne!(new.file,sibling.file);
+        assert!(matches!(reader.ordinary_kind(&["Reports".into(),"2027".into()]).unwrap().1,
+            NamedKind::Directory(d) if d.parent()==route.parent()));
+        assert!(matches!(reader.ordinary_kind(&["Reports".into(),"2027".into(),"Data".into()]).unwrap().1,NamedKind::File));
+        assert_eq!(reader.ordinary_kind(&["Reports".into(),"2027".into(),"data".into()]).err().unwrap().kind(),io::ErrorKind::NotFound);
         assert!(inside.make_ordinary_directory(&route,op(0x98),"Data",|_|panic!("FILE owns logical name"),&||Ok(()),|_|Ok(())).is_err());
         assert!(tree.open_current("Data").is_err());
         let staged=OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(tmp.0.join("input")).unwrap();
@@ -471,6 +498,9 @@ mod tests{
         assert!(matches!(&listed[..],[super::super::directory::Child::File(r)] if r.file==new.file&&r.size==3));
         let swapped=f.join("Reports/2027");let away=f.join("reattach");
         std::fs::rename(&swapped,&away).unwrap();
+        let (c,selected)=reader.ordinary_kind(&["Reports".into(),"2027".into()]).unwrap();
+        let NamedKind::Directory(selected)=selected else{panic!("lost real directory cannot become a FILE hint")};
+        assert!(OrdinaryRoot::at_parent(&src,&c,&selected,None).is_err());
         assert!(inside.open_current("Data").is_err());
         std::fs::rename(&away,&swapped).unwrap();
         assert_eq!(inside.open_current("Data").unwrap().file(),new.file);

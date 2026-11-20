@@ -104,7 +104,7 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *,struct tevent_context *,struct 
 NTSTATUS zxs_dir_cut_recv(struct tevent_req *,uint8_t *optional_rows);
 struct tevent_req *zxs_odir_cut_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,
 	const struct zxs_smb_tree_cut *,uint8_t mode,const uint8_t *path,size_t size);
-NTSTATUS zxs_odir_cut_recv(struct tevent_req *,struct zxs_smb_tree_cut *,bool *offered);
+NTSTATUS zxs_odir_cut_recv(struct tevent_req *,struct zxs_smb_tree_cut *,bool *offered,bool *file_kind);
 bool zxs_request_root_current(struct smbd_smb2_request *);
 bool zxs_smb2_birth_cancel_advisory(const struct smbd_smb2_request *,bool acknowledged);
 void zxs_smb2_retire_birth(struct smbd_smb2_request *);

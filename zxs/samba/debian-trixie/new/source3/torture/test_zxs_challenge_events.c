@@ -267,6 +267,20 @@ static bool exact_ordinary_parent_and_rows(void)
 	if(!zxs_odir_relative((const char *)path,true) ||
 	   zxs_odir_relative("Reports\\\\2027",true) || zxs_odir_relative("Reports\\..\\2027",true) ||
 	   zxs_odir_relative("\\Reports",true) || zxs_odir_relative("Reports\\a:ADS",false))goto end;
+	/* A positive FILE kind deliberately has neither a directory tuple
+	 * nor a child lease. Missing status cannot become this decision. */
+	native=zxs_odir_query(p[0],ZXS_OD_SELECT_KIND,path,sizeof(path)-1);if(native<0)goto end;
+	peer=zxs_dir_take(p[1],pid,&role,after);
+	if(peer<0 || role!=ZXS_OD_PATH || after[0]!=0 ||
+	   zxs_odir_take(peer,&mode,&n,decoded)!=0 || mode!=ZXS_OD_SELECT_KIND ||
+	   n!=sizeof(path)-1 || memcmp(path,decoded,n)!=0)goto end;
+	parent.volume[0]=3;
+	if(zxs_odir_reply(peer,6,NULL,NULL,NULL)!=0 ||
+	   zxs_odir_read(native,&parent,&picked)!=6 ||
+	   zxs_odir_reply(peer,ZXS_OD_FILE_KIND,original,id,op)==0 ||
+	   zxs_odir_reply(peer,ZXS_OD_FILE_KIND,NULL,NULL,NULL)!=0 ||
+	   zxs_odir_read(native,&parent,&picked)!=ZXS_OD_FILE_KIND || picked.root_fd!=-1)goto end;
+	close(native);native=-1;close(peer);peer=-1;
 	native=zxs_odir_query(p[0],3,path,sizeof(path)-1);if(native<0)goto end;
 	peer=zxs_dir_take(p[1],pid,&role,after);
 	if(peer<0 || role!=ZXS_OD_PATH || after[0]!=0 ||

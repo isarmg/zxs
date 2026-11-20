@@ -3549,7 +3549,7 @@
 +	struct tevent_req *zxs_wait;
 +	DATA_BLOB zxs_reserved_body,zxs_reserved_context; /* both owned by outer request */
 +	uint32_t zxs_access,zxs_share;
-+	bool zxs_writer,zxs_is_dir,zxs_nested,zxs_provisional,zxs_acknowledged,zxs_unknown;
++	bool zxs_writer,zxs_is_dir,zxs_nested,zxs_provisional,zxs_acknowledged,zxs_unknown,zxs_probe_kind;
 +	uint32_t zxs_disposition;
 +	struct aio_req_fsp_link *zxs_link;
 +	const char *zxs_name,*zxs_relative,*zxs_native_path;

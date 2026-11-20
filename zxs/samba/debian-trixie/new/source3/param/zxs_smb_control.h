@@ -104,6 +104,8 @@ int zxs_xfer_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t rece
 #define ZXS_OD_PATH_REQUEST (19+ZXS_OD_PATH_MAX)
 #define ZXS_OD_PATH_RESULT (17+ZXS_SMB_TREE_CUT_BYTES+32)
 #define ZXS_OD_PATH_ACK 48
+#define ZXS_OD_SELECT_KIND 4u
+#define ZXS_OD_FILE_KIND 7u
 bool zxs_odir_component(const char *name,size_t n,size_t limit);
 bool zxs_odir_relative(const char *path,bool directory);
 int zxs_odir_query(int fd,uint8_t mode,const uint8_t *name,size_t n);

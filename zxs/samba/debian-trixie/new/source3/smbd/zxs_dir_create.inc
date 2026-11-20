@@ -178,10 +178,26 @@ static void zxs_create_ordinary_ready(struct tevent_req *sub)
 {
 	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
 	struct smbd_smb2_create_state *s=tevent_req_data(req,struct smbd_smb2_create_state);
-	struct zxs_smb_tree_cut next;bool offer=false;
-	NTSTATUS status=zxs_odir_cut_recv(sub,&next,&offer);
+	struct zxs_smb_tree_cut next;bool offer=false,file_kind=false;
+	NTSTATUS status=zxs_odir_cut_recv(sub,&next,&offer,&file_kind);
 	s->zxs_wait=NULL;TALLOC_FREE(sub);
 	if(tevent_req_nterror(req,status))return;
+	if(file_kind){
+		if(!s->zxs_probe_kind || offer || s->zxs_is_dir || s->zxs_disposition!=FILE_OPEN){
+			tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
+		}
+		s->zxs_probe_kind=false;
+		/* This is a positive original SQL kind, not a FILE grant.
+		 * The exact actual parent/FILE still uses its regular OPEN. */
+		const size_t previous=(size_t)(s->zxs_name-s->zxs_relative);
+		if(previous==0){s->zxs_nested=false;zxs_create_ordinary_file(req);return;}
+		s->zxs_wait=zxs_odir_cut_send(s,s->ev,s->smb2req,&s->zxs_route,0,
+			(const uint8_t *)s->zxs_relative,previous-1);
+		if(tevent_req_nomem(s->zxs_wait,req))return;
+		tevent_req_set_callback(s->zxs_wait,zxs_create_ordinary_ready,req);return;
+	}
+	if(s->zxs_probe_kind){s->zxs_probe_kind=false;s->zxs_is_dir=true;}
+
 	if((offer && (!s->zxs_is_dir || s->zxs_disposition==FILE_OPEN)) ||
 	   (!offer && s->zxs_is_dir && s->zxs_disposition==FILE_CREATE) ||
 	   zxs_odir_own_parent(&next,&s->zxs_route)!=0){
@@ -206,6 +222,9 @@ static void zxs_create_folder_ready(struct tevent_req *sub)
 	s->zxs_wait=NULL;TALLOC_FREE(sub);
 	if(tevent_req_nterror(req,status))return;
 	if(zxs_folder_retained(&s->zxs_route)){
+		if(s->zxs_probe_kind){
+			s->zxs_probe_kind=false;s->zxs_is_dir=strchr(s->zxs_relative,'\\')==NULL;
+		}
 		if(s->zxs_disposition!=FILE_OPEN || (!s->zxs_nested && !s->zxs_is_dir)){
 			tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
 		}
@@ -234,6 +253,12 @@ static void zxs_create_folder_ready(struct tevent_req *sub)
 		return;
 	}
 	const char *relative=s->zxs_relative;
+	if(s->zxs_probe_kind){
+		s->zxs_wait=zxs_odir_cut_send(s,s->ev,s->smb2req,&s->zxs_route,ZXS_OD_SELECT_KIND,
+			(const uint8_t *)relative,strlen(relative));
+		if(tevent_req_nomem(s->zxs_wait,req))return;
+		tevent_req_set_callback(s->zxs_wait,zxs_create_ordinary_ready,req);return;
+	}
 	size_t width=s->zxs_is_dir?strlen(relative):(size_t)(s->zxs_name-relative-1);
 	uint8_t mode=0;
 	if(s->zxs_is_dir){
@@ -267,10 +292,12 @@ static bool zxs_create_select(struct tevent_req *req,const char *name,bool direc
 		size_t length=split==NULL?strlen(name):(size_t)(split-name);
 		const char *relative=split==NULL?NULL:split+1;
 		const char *last=relative==NULL?NULL:strrchr(relative,'\\');
-		s->zxs_nested=relative!=NULL && (directory || last!=NULL);
+		s->zxs_probe_kind=relative!=NULL && !directory && s->in_create_options==0 &&
+			s->zxs_disposition==FILE_OPEN;
+		s->zxs_nested=relative!=NULL && (directory || last!=NULL || s->zxs_probe_kind);
 		if(!zxs_odir_component(name,length,ZXS_DIR_NAME) ||
 		   (relative==NULL && !directory) ||
-		   (relative!=NULL && (strlen(relative)>ZXS_OD_PATH_MAX || !zxs_odir_relative(relative,directory)))){
+		   (relative!=NULL && (strlen(relative)>ZXS_OD_PATH_MAX || !zxs_odir_relative(relative,directory||s->zxs_probe_kind)))){
 			tevent_req_nterror(req,NT_STATUS_OBJECT_PATH_INVALID);return false;
 		}
 		if(relative==NULL && s->zxs_disposition==FILE_CREATE){

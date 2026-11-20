@@ -52,7 +52,7 @@ bool zxs_odir_relative(const char *path,bool directory)
 static int zxs_odir_put_path(int fd,uint8_t mode,const uint8_t *name,size_t n)
 {
     uint8_t path[ZXS_OD_PATH_REQUEST]={0};
-    if(mode>3 || n==0 || n>ZXS_OD_PATH_MAX || name==NULL || memchr(name,0,n)!=NULL)return bad();
+    if(mode>ZXS_OD_SELECT_KIND || n==0 || n>ZXS_OD_PATH_MAX || name==NULL || memchr(name,0,n)!=NULL)return bad();
     memcpy(path,odpath,16);
     path[16]=mode;path[17]=(uint8_t)(n>>8);path[18]=(uint8_t)n;memcpy(path+19,name,n);
     return transfer(fd,path,NULL,sizeof(path),-1,NULL,ZXS_NO_FD,true);
@@ -71,7 +71,7 @@ int zxs_odir_take(int fd,uint8_t *mode,uint16_t *width,uint8_t path[ZXS_OD_PATH_
     uint8_t b[ZXS_OD_PATH_REQUEST];size_t n;
     if(transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
     n=((size_t)b[17]<<8)|b[18];
-    if(memcmp(b,odpath,16)!=0 || b[16]>3 || n==0 || n>ZXS_OD_PATH_MAX || memchr(b+19,0,n)!=NULL)return bad();
+    if(memcmp(b,odpath,16)!=0 || b[16]>ZXS_OD_SELECT_KIND || n==0 || n>ZXS_OD_PATH_MAX || memchr(b+19,0,n)!=NULL)return bad();
     for(size_t i=n;i<ZXS_OD_PATH_MAX;i++)if(b[19+i])return bad();
     *mode=b[16];*width=(uint16_t)n;memcpy(path,b+19,n);return 0;
 }
@@ -82,7 +82,7 @@ int zxs_odir_reply(int fd,uint8_t kind,const uint8_t *base,const uint8_t *id,con
     if(kind<=1 && base!=NULL && id!=NULL && op!=NULL && cut_id(id) && cut_id(op)){
         memcpy(b+17,base,ZXS_SMB_TREE_CUT_BYTES);
         memcpy(b+17+ZXS_SMB_TREE_CUT_BYTES,id,16);memcpy(b+33+ZXS_SMB_TREE_CUT_BYTES,op,16);
-    }else if(kind<2 || kind>6 || base!=NULL || id!=NULL || op!=NULL)return bad();
+    }else if(kind<2 || kind>ZXS_OD_FILE_KIND || base!=NULL || id!=NULL || op!=NULL)return bad();
     return transfer(fd,b,NULL,sizeof(b),-1,NULL,ZXS_NO_FD,true);
 }
 static bool same_ordinary_cut(const struct zxs_smb_tree_cut *a,const struct zxs_smb_tree_cut *b)
@@ -98,7 +98,7 @@ int zxs_odir_read(int fd,const struct zxs_smb_tree_cut *parent,struct zxs_smb_tr
     struct zxs_smb_tree_cut child={.root_fd=-1,.parent_fd=-1};
     if(parent==NULL || out==NULL || !cut_id(parent->volume) || cut_id(parent->directory) ||
        transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
-    if(memcmp(b,odanswer,16)!=0 || b[16]>6)return bad();
+    if(memcmp(b,odanswer,16)!=0 || b[16]>ZXS_OD_FILE_KIND)return bad();
     if(b[16]>=2){
         for(size_t i=17;i<sizeof(b);i++)if(b[i])return bad();
         return b[16];

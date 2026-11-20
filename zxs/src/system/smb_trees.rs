@@ -114,6 +114,8 @@ fn serve_folder(site:Site<'_>,origin:TreeOrigin,expected:Setting,writer_class:bo
 }
 
 const ORDINARY_PATH:u8=243;
+const SELECT_EXISTING_KIND:u8=4;
+const ORDINARY_FILE_KIND:u8=7;
 const PATH_MAX:usize=4096;
 static FOLDER_READS:AtomicUsize=AtomicUsize::new(0);
 static FOLDER_WRITES:AtomicUsize=AtomicUsize::new(0);
@@ -152,6 +154,15 @@ fn serve_nested(site:Site<'_>,origin:&TreeOrigin,top:&OwnedFd,top_live:&AtomicBo
         if tree.setting!=expected{return Err(denied());}
         let (catalog,route)=if mode==0{
             tree.ordinary_route(&names,writer_class)?
+        }else if mode==SELECT_EXISTING_KIND{
+            use super::super::ordinary_directory::NamedKind;
+            match tree.ordinary_kind(&names)?{
+                (catalog,NamedKind::Directory(route))=>(catalog,route),
+                (_,NamedKind::File)=>{
+                    site.validate()?;alive()?;
+                    return os(unsafe{zxs_odir_reply(fd,ORDINARY_FILE_KIND,std::ptr::null(),std::ptr::null(),std::ptr::null())});
+                }
+            }
         }else{
             let (leaf,parents)=names.split_last().ok_or_else(denied)?;
             let (c,parent)=tree.ordinary_route(parents,mode==2)?;

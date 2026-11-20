@@ -44,7 +44,8 @@ struct zxs_dir_cut_state {
 	uint32_t seq;
 	int fd;
 	unsigned limit;
-	bool in_folder,offered;
+	bool in_folder,offered,od_file;
+	uint8_t od_mode;
 	uint8_t expected_round[16];
 	struct zxs_smb_tree_cut folder;
 	struct zxs_member_info member;
@@ -83,6 +84,11 @@ static void zxs_dir_cut_ready(struct tevent_req *sub)
 	if(s->limit==ZXS_OD_PATH){
 		struct zxs_smb_tree_cut picked;
 		rc=zxs_odir_read(s->fd,&s->folder,&picked);
+		if(rc==ZXS_OD_FILE_KIND){
+			if(s->od_mode!=ZXS_OD_SELECT_KIND)goto reject;
+			s->od_file=true;zxs_dir_cut_close(s);tevent_req_done(req);return;
+		}
+		if(rc==1 && s->od_mode==ZXS_OD_SELECT_KIND)goto reject;
 		if(rc>=2){
 			NTSTATUS status=rc==2?NT_STATUS_OBJECT_NAME_COLLISION:
 				rc==3?NT_STATUS_SHARING_VIOLATION:rc==5?NT_STATUS_DISK_FULL:
@@ -134,7 +140,7 @@ static struct tevent_req *zxs_dir_cut_begin(TALLOC_CTX *ctx,struct tevent_contex
 	int fd=folder==NULL?s->tcon->zxs_tree_choice->root_fd:folder->root_fd;
 	if(limit==ZXS_OD_PATH){
 		if(folder==NULL || zxs_folder_retained(folder) || zxs_folder_ordinary_child(folder))goto reject;
-		s->fd=zxs_odir_query(fd,mode,after,size);
+		s->od_mode=mode;s->fd=zxs_odir_query(fd,mode,after,size);
 	}else if(limit==ZXS_RETAINED_DIR){
 		if(!zxs_folder_retained(folder) || zxs_folder_round(folder) || !zxs_delete_hex(after,size))goto reject;
 		for(size_t i=0;i<size;i++){
@@ -192,11 +198,15 @@ NTSTATUS zxs_folder_cut_recv(struct tevent_req *req,struct zxs_smb_tree_cut *out
 	if(!zxs_folder_open_limit(s->limit) || s->fd<0 || zxs_smb_ctl_live(s->fd)!=0)return NT_STATUS_ACCESS_DENIED;
 	*out=s->folder;out->root_fd=s->fd;s->fd=-1;return NT_STATUS_OK;
 }
-NTSTATUS zxs_odir_cut_recv(struct tevent_req *req,struct zxs_smb_tree_cut *out,bool *offered)
+NTSTATUS zxs_odir_cut_recv(struct tevent_req *req,struct zxs_smb_tree_cut *out,bool *offered,bool *file_kind)
 {
 	struct zxs_dir_cut_state *s=tevent_req_data(req,struct zxs_dir_cut_state);
+	NTSTATUS status;
+	*offered=false;*file_kind=false;
 	if(s->limit!=ZXS_OD_PATH)return NT_STATUS_ACCESS_DENIED;
-	NTSTATUS status=zxs_folder_cut_recv(req,out);
+	if(tevent_req_is_nterror(req,&status))return status;
+	if(s->od_file){*file_kind=true;return NT_STATUS_OK;}
+	status=zxs_folder_cut_recv(req,out);
 	if(NT_STATUS_IS_OK(status))*offered=s->offered;
 	return status;
 }
