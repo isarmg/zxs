@@ -77,6 +77,7 @@ class Window(QMainWindow):
         else:
             if self.archive.mount is not None and not self.archive.mount.close_window():
                 event.ignore(); return
+            self.archive.close_search()
             self.archive.checkout.close_session()
             if self.archive.selection is not None: self.archive.selection.release_display()
             self.pool.shutdown(wait=False)

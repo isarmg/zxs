@@ -14,14 +14,15 @@ from zipworkspace.desktop.selection import Selection, StoreSelection
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
-def write_snapshot(path, *, marker=None, year=2000):
+def write_snapshot(path, *, marker=None, year=2000, entries=None):
     rows = Manifest()
-    content = b"desktop selection"
-    rows.add("design/notes", False, len(content), hashlib.sha256(content).hexdigest())
-    rows.add("empty", True, 0, None)
+    if entries is None: entries = {"design/notes": b"desktop selection", "empty/": b""}
+    for name, data in entries.items():
+        directory = name.endswith("/")
+        rows.add(name.removesuffix("/"), directory, len(data), None if directory else hashlib.sha256(data).hexdigest())
     marker = marker or Commit("1"*32, "2"*32, 1, "3"*32, None, rows.digest())
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as out:
-        for name, data in (("design/notes", content), ("empty/", b"")):
+        for name, data in entries.items():
             entry = zipfile.ZipInfo(name, (year, 1, 1, 0, 0, 0))
             entry.external_attr = ((0o40755 if name.endswith("/") else 0o100644) << 16)
             out.writestr(entry, data)
@@ -238,6 +239,115 @@ class DesktopArchiveWidgets(unittest.TestCase):
                 self.assertEqual(pane.branches.rows.rows, ())
             finally:
                 win.close()
+
+    def test_name_hit_in_later_real_directory_page_does_not_open_or_export(self):
+        from concurrent.futures import Future
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); path = root/"chosen.zxs"
+            entries = {f"right/filler{i:03d}": b"" for i in range(211)}
+            entries.update({"left/two[1]": b"other", "right/two[1]": b"chosen", "empty/": b""})
+            write_snapshot(path, entries=entries)
+            choice = Selection.open(path)
+            path.rename(root/"preserved.zxs")
+            win = Window()
+            self.addCleanup(win.close)
+            pane = win.archive
+            pane.show_selection(choice)
+            jobs = []
+            def submit(job):
+                future = Future()
+                jobs.append((future, job))
+                return future
+            def drain():
+                future, job = jobs.pop(0)
+                self.assertTrue(future.set_running_or_notify_cancel())
+                future.set_result(job())
+                win.poll()
+                self.assertFalse(jobs)
+            with patch.object(win.pool, "submit", side_effect=submit), \
+                 patch.object(Selection, "open", side_effect=AssertionError("search must not reopen the ZIP")), \
+                 patch("zipworkspace.browser.read_managed_document", side_effect=AssertionError("no body reads")), \
+                 patch.object(pane, "enter", side_effect=AssertionError("locating is not opening")):
+                pane.find.click()
+                dialog = pane.search_dialog
+                dialog.term.setText("filler")
+                dialog.find.click()
+                self.assertFalse(win.tabs.isEnabled())
+                self.assertTrue(dialog.close_button.isEnabled())
+                drain()
+                self.assertEqual(len(dialog.hits.rows.rows), 100)
+                dialog.more.click()
+                self.assertEqual(dialog.hits.rows.rows[0][0][0], "right/filler100")
+                dialog.term.setText("two[1]")
+                dialog.find.click()
+                drain()
+                self.assertEqual([text[0] for text, _ in dialog.hits.rows.rows], ["right/two[1]", "left/two[1]"])
+                dialog.hits.selectRow(0)
+                self.assertEqual(dialog.path.text(), "right/two[1]")
+                dialog.locate.click()
+                self.assertIsNone(pane.search_dialog)
+                self.assertIs(pane.selection, choice)
+                self.assertEqual((pane.directory, pane.page_number), ("right", 2))
+                self.assertIs(pane.files.item(), choice.browser.entry("right", "two[1]"))
+                pane.back.click()
+                self.assertEqual(pane.page_number, 1)
+                self.assertEqual(pane.file_page.entries[0].name, "filler100")
+                pane.more.click()
+                self.assertEqual(pane.page_number, 2)
+                self.assertEqual(pane.file_page.entries[11].name, "two[1]")
+            self.assertEqual({p.name for p in root.iterdir()}, {"preserved.zxs"})
+
+    def test_closed_or_replaced_search_keeps_original_folder_and_drops_queued_results(self):
+        from concurrent.futures import Future
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/"chosen.zxs"
+            write_snapshot(path)
+            choices = [Selection.open(path), Selection.open(path)]
+            self.assertEqual(choices[0].browser.commit, choices[1].browser.commit)
+            win = Window()
+            self.addCleanup(win.close)
+            pane = win.archive
+            for mode in ("close-first", "late-success", "late-error"):
+                with self.subTest(mode=mode):
+                    pane.show_selection(choices[0])
+                    pane.show_folder("design")
+                    prior = pane.file_page
+                    future, submitted = Future(), []
+                    def queue(work):
+                        submitted.append(work)
+                        return future
+                    with patch.object(win.pool, "submit", side_effect=queue):
+                        pane.find.click()
+                        dialog = pane.search_dialog
+                        dialog.term.setText("notes")
+                        dialog.find.click()
+                        request = dialog.request
+                        if mode == "close-first":
+                            dialog.close_button.click()
+                            self.assertTrue(request.is_set())
+                        self.assertTrue(future.set_running_or_notify_cancel())
+                        if mode == "late-error":
+                            with patch.object(choices[0].browser, "find_names",
+                                              side_effect=Rejected("old search failure must not paint")):
+                                future.set_result(submitted[0]())
+                        else:
+                            future.set_result(submitted[0]())
+                        if mode != "close-first":
+                            pane.show_selection(choices[1])  # Same path, bytes and marker, different original selection.
+                            prior = pane.file_page
+                            self.assertTrue(request.is_set())
+                        win.inform("current view status")
+                        win.poll()
+                        self.assertIsNone(pane.search_dialog)
+                        self.assertIs(pane.file_page, prior)
+                        self.assertEqual(win.note.text(), "current view status")
+
 
 @unittest.skipUnless(os.name == "posix" and sys.platform.startswith("linux"),
                      "operator-controlled private staging is Linux-only")

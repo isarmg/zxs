@@ -22,9 +22,9 @@ class Browse(unittest.TestCase):
         self.root = Path(tmp.name)
         self.path = self.root / "original.zxs"
 
-    def write(self, path, *, operation="3" * 32, corrupt=False):
-        rows = {"a/empty/": None, "a/same": b"", "b/same": b"second",
-                "c": b"c", "z": b"not a visible first-page member"}
+    def write(self, path, *, operation="3" * 32, corrupt=False, entries=None):
+        rows = entries if entries is not None else {"a/empty/": None, "a/same": b"", "b/same": b"second",
+                                                     "c": b"c", "z": b"not a visible first-page member"}
         manifest = Manifest()
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
             for name, data in rows.items():
@@ -57,6 +57,46 @@ class Browse(unittest.TestCase):
         self.assertEqual(browser.list_directory("a/empty").entries, ())
         self.assertIsNone(browser.list_directory("a/empty").next_cursor)
         self.assertEqual(set(self.root.iterdir()), before)
+
+
+    def test_name_search_uses_literal_names_and_the_original_full_sibling_order(self):
+        names = {f"left/filler{i:03d}": b"" for i in range(205)}
+        names.update({"left/readme[1].txt": b"selected", "right/readme[1].txt": b"elsewhere",
+                      "upper/README[1].txt": b"distinct", "right/é": b"", "empty/": None})
+        self.write(self.path, entries=names)
+        browser = ArchiveBrowser.open(self.path)
+        same_snapshot = ArchiveBrowser.open(self.path)
+        self.path.rename(self.root/"retained.zxs")  # The displayed index no longer has this file name on disk.
+        with mock.patch("zipworkspace.browser.named_document", side_effect=AssertionError("search has no file open")):
+            hits = {hit.path: hit for hit in browser.find_names("readme[1]")}
+            self.assertEqual(set(hits), {"left/readme[1].txt", "right/readme[1].txt"})
+            match = hits["left/readme[1].txt"]
+            self.assertEqual(browser.locate_name(match), (2, 5))
+            page = browser.page_at("left", 2)
+            self.assertIs(page.entries[5], match.entry)
+            self.assertEqual(browser.find_names("README")[0].path, "upper/README[1].txt")
+            self.assertEqual(browser.find_names("left/readme"), ())
+            self.assertEqual(browser.find_names(" readme"), ())
+            self.assertEqual(browser.find_names("e\u0301"), ())
+            self.assertEqual(browser.find_names("é")[0].path, "right/é")
+            self.assertEqual(browser.find_names("empty")[0].entry.kind, "directory")
+            self.assertEqual(browser.find_names("left")[0].entry.kind, "directory")  # Implicit parent.
+            self.assertEqual(browser.page_at("empty", 0).entries, ())
+            with self.assertRaises(Rejected): browser.page_at("empty", 1)
+            with self.assertRaises(Rejected): browser.page_at("left", 3)
+            with self.assertRaises(Rejected): same_snapshot.locate_name(match)
+
+    def test_name_search_is_bounded_and_discardable_and_numbered_page_matches_cursor(self):
+        self.write(self.path)
+        browser = ArchiveBrowser.open(self.path)
+        with self.assertRaises(Rejected): browser.find_names("")
+        with self.assertRaises(Rejected): browser.find_names("s" * 129)
+        self.assertEqual(browser.find_names("s" * 128), ())
+        checks = iter((False, False, False, False, False, True))
+        self.assertEqual(browser.find_names("a", cancelled=lambda: next(checks)), ())
+        first = browser.page_at("", 0, limit=1)
+        self.assertEqual(browser.page_at("", 1, limit=1),
+                         browser.list_directory(cursor=first.next_cursor, limit=1))
 
     def test_continuations_reopen_only_the_same_logical_snapshot_and_folder(self):
         self.write(self.path)

@@ -14,9 +14,8 @@ from .model import Commit, Rejected, hexdigest, member_name
 
 
 MAX_PAGE = 256
+MAX_NAME_QUERY = 128
 _NAME = attrgetter("name")
-
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +24,16 @@ class Entry:
     kind: Literal["directory", "file"]
     size_bytes: int | None
     sha256: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class NameMatch:
+    parent: str
+    entry: Entry
+
+    @property
+    def path(self) -> str:
+        return f"{self.parent}/{self.entry.name}" if self.parent else self.entry.name
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,17 +91,48 @@ class ArchiveBrowser:
             for entry in children:
                 yield (f"{parent}/{entry.name}" if parent else entry.name), entry
 
-    def list_directory(
-        self, directory: str = "", *, cursor: str | None = None, limit: int = 100
-    ) -> DirectoryPage:
-        """Immediate children only. A continuation names its original snapshot and folder."""
+    def find_names(self, query: str, *, cancelled=None) -> tuple[NameMatch, ...]:
+        """One literal scan of the verified index; retain only references, not full path copies."""
+        if type(query) is not str or not 1 <= len(query) <= MAX_NAME_QUERY:
+            raise Rejected(f"请输入 1 至 {MAX_NAME_QUERY} 个字符的名称片段")
+        matches = []
+        for parent, rows in self._children.items():
+            for entry in rows:
+                if cancelled is not None and cancelled():
+                    return ()  # Caller must discard the cancelled result, not present it as empty.
+                if query in entry.name:
+                    matches.append(NameMatch(parent, entry))
+        return tuple(matches)
+
+    def locate_name(self, match: NameMatch, *, limit: int = 100) -> tuple[int, int]:
+        """Return zero-based page and row in the original parent's entire ordered listing."""
+        rows = self._listing(match.parent, limit)
+        i = bisect_left(rows, match.entry.name, key=_NAME)
+        if i == len(rows) or rows[i] is not match.entry:
+            raise Rejected("查找条目不属于当前核验的快照和目录")
+        return divmod(i, limit)
+
+    def _listing(self, directory, limit):
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
             raise Rejected(f"page size must be between 1 and {MAX_PAGE}")
         if directory != "":
             member_name(directory)
         if directory not in self._children:
             raise Rejected("requested folder does not exist in this snapshot")
-        rows = self._children[directory]
+        return self._children[directory]
+
+    def page_at(self, directory: str, number: int, *, limit: int = 100) -> DirectoryPage:
+        """Index the original ordering without constructing earlier pages."""
+        rows = self._listing(directory, limit)
+        if type(number) is not int or not 0 <= number <= max(0, (len(rows) - 1) // limit):
+            raise Rejected("page number outside this directory")
+        return self._page(directory, rows, number * limit, limit)
+
+    def list_directory(
+        self, directory: str = "", *, cursor: str | None = None, limit: int = 100
+    ) -> DirectoryPage:
+        """Immediate children only. A continuation names its original snapshot and folder."""
+        rows = self._listing(directory, limit)
         start = 0
         if cursor is not None:
             # ':' cannot occur in an admitted member. The marker includes the
@@ -108,6 +148,9 @@ class ArchiveBrowser:
             if i == len(rows) or rows[i].name != name:
                 raise Rejected("cursor does not identify an original list entry")
             start = i + 1
+        return self._page(directory, rows, start, limit)
+
+    def _page(self, directory, rows, start, limit):
         entries = tuple(rows[start:start + limit])
         next_cursor = None
         if start + len(entries) < len(rows):

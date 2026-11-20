@@ -10,11 +10,13 @@ from .widgets import Table, button, confirm, label
 
 
 class ArchivePane(QWidget):
+    FILE_PAGE = 100
+
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
         self.selection = self.store = self.catalog = self.file_page = None
-        self.directory, self.pages, self.next_cursor = "", [None], None
+        self.directory, self.page_number, self.search_dialog = "", 0, None
         layout = QVBoxLayout(self)
         actions = QHBoxLayout()
         actions.addWidget(button("打开 .zxs 快照…", self.choose))
@@ -32,10 +34,12 @@ class ArchivePane(QWidget):
         layout.addWidget(self.store_label)
         self.views = QTabWidget()
         layout.addWidget(self.views)
-        folder = QWidget()
-        fl = QVBoxLayout(folder)
+        self.folder = QWidget()
+        fl = QVBoxLayout(self.folder)
         self.at = label()
         fl.addWidget(self.at)
+        self.find = button("在本快照内按名称查找…", self.open_search)
+        fl.addWidget(self.find)
         self.files = Table(("名称", "类型", "字节数", "SHA-256"), "快照里的直接子项")
         self.files.doubleClicked.connect(lambda _index: self.enter())
         fl.addWidget(self.files)
@@ -53,7 +57,7 @@ class ArchivePane(QWidget):
         for item in (self.up, self.into, self.back, self.more):
             nav.addWidget(item)
         fl.addLayout(nav)
-        self.views.addTab(folder, "文件")
+        self.views.addTab(self.folder, "文件")
         self.history = self.make_table(("节点 ID", "分支", "代", "父节点"), "历史", "查看选中的历史快照")
         self.branches = self.make_table(("分支", "最高观察代", "已核验分支头", "缺失父节点"), "分支", "查看选中的分支头")
         self.comparison = ComparisonPane(owner)
@@ -89,10 +93,12 @@ class ArchivePane(QWidget):
         self.branches.rows.replace(())
 
     def clear_document(self):
+        self.close_search()
         if self.mount is not None: self.mount.set_snapshot(None)
         self.checkout.set_snapshot(None)  # Revoke the old branch source before releasing its display.
         if self.selection is not None: self.selection.release_display()
-        self.selection = self.next_cursor = self.file_page = None
+        self.selection = self.file_page = None
+        self.directory, self.page_number = "", 0
         if self.save_copy is not None: self.save_copy.setEnabled(False)
         self.comparison.set_snapshot(None)
         self.clear_catalog()
@@ -100,7 +106,7 @@ class ArchivePane(QWidget):
         self.at.setText("")
         self.files.rows.replace(())
         self.update_member_action()
-        for widget in (self.reload, self.up, self.into, self.back, self.more):
+        for widget in (self.reload, self.up, self.into, self.back, self.more, self.find):
             widget.setEnabled(False)
 
     def choose(self):
@@ -237,6 +243,7 @@ class ArchivePane(QWidget):
         self.owner.inform("已登记本次选择的存储目录。读取分支与历史时将复核原目录。")
 
     def show_selection(self, selected):
+        self.close_search()
         if self.mount is not None: self.mount.set_snapshot(selected)
         self.checkout.set_snapshot(selected)
         if self.selection is not None and self.selection is not selected: self.selection.release_display()
@@ -249,7 +256,8 @@ class ArchivePane(QWidget):
         self.details.setText(f"{selected.path}\n仓库 {marker.repo}  ·  分支 {marker.branch}  ·  第 {marker.generation} 代\n"
                              f"节点 {marker.operation}  ·  整树 SHA-256：{marker.tree}\n{evidence}")
         self.reload.setEnabled(self.store is not None)
-        self.views.setCurrentIndex(0)
+        self.find.setEnabled(True)
+        self.views.setCurrentWidget(self.folder)
         self.show_folder("")
         if self.catalog is not None: self.show_history()
         else: self.owner.inform("已核验完整快照。双击目录进入。")
@@ -306,24 +314,60 @@ class ArchivePane(QWidget):
         if self.comparison.compare_version(node, store, catalog):
             self.views.setCurrentWidget(self.comparison)
 
-    def show_folder(self, directory):
-        self.directory, self.pages = directory, [None]
-        self.show_page()
+    def close_search(self):
+        dialog, self.search_dialog = self.search_dialog, None
+        if dialog is not None:
+            dialog.retire()
+            dialog.reject()
 
-    def show_page(self):
+    def open_search(self):
+        selected = self.selection
+        if selected is None or self.search_dialog is not None or self.owner.pending is not None: return
+        from .name_search import NameSearch
+
+        def current(dialog):
+            return self.search_dialog is dialog and self.selection is selected
+
+        def go_to(dialog, hit):
+            if not current(dialog): return None
+            from ..model import Rejected
+            browser = selected.browser
+            number, row = browser.locate_name(hit, limit=self.FILE_PAGE)
+            page = browser.page_at(hit.parent, number, limit=self.FILE_PAGE)
+            if row >= len(page.entries) or page.entries[row] is not hit.entry:
+                raise Rejected("原结果不在该目录页")
+            self.views.setCurrentWidget(self.folder)
+            self.show_page(page, number)
+            if not current(dialog) or self.file_page is not page: return None
+            self.files.selectRow(row)
+            self.files.scrollTo(self.files.rows.index(row, 0))
+            return self.files
+
+        dialog = NameSearch(self.owner, selected.browser, current, go_to)
+        self.search_dialog = dialog
+
+        def dismissed(_):
+            if self.search_dialog is dialog: self.search_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(dismissed)
+        dialog.open()
+
+    def show_folder(self, directory, number=0):
         if self.selection is None: return
-        page = self.selection.browser.list_directory(self.directory, cursor=self.pages[-1])
-        self.file_page = page
-        self.next_cursor = page.next_cursor
-        self.at.setText(f"/{page.directory}  ·  第 {len(self.pages)} 页" + ("" if page.entries else "  ·  空文件夹"))
+        self.show_page(self.selection.browser.page_at(directory, number, limit=self.FILE_PAGE), number)
+
+    def show_page(self, page, number):
+        self.directory, self.page_number, self.file_page = page.directory, number, page
+        self.at.setText(f"/{page.directory}  ·  第 {number + 1} 页" + ("" if page.entries else "  ·  空文件夹"))
         self.files.rows.replace(((entry.name, "目录" if entry.kind == "directory" else "文件",
             "" if entry.size_bytes is None else str(entry.size_bytes), entry.sha256 or ""), entry)
             for entry in page.entries)
         self.update_member_action()
         self.up.setEnabled(bool(self.directory))
         self.into.setEnabled(any(entry.kind == "directory" for entry in page.entries))
-        self.back.setEnabled(len(self.pages) > 1)
-        self.more.setEnabled(self.next_cursor is not None)
+        self.back.setEnabled(number > 0)
+        self.more.setEnabled(page.next_cursor is not None)
 
     def enter(self):
         entry = self.files.item()
@@ -334,11 +378,9 @@ class ArchivePane(QWidget):
         if self.directory: self.show_folder(self.directory.rpartition("/")[0])
 
     def previous(self):
-        if len(self.pages) > 1:
-            self.pages.pop()
-            self.show_page()
+        if self.page_number > 0:
+            self.show_folder(self.directory, self.page_number - 1)
 
     def next(self):
-        if self.next_cursor is not None:
-            self.pages.append(self.next_cursor)
-            self.show_page()
+        if self.file_page is not None and self.file_page.next_cursor is not None:
+            self.show_folder(self.directory, self.page_number + 1)
