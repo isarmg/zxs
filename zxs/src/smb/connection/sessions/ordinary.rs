@@ -1,5 +1,6 @@
 //! From a paid frame on its original connection to short, ordered, signed
 //! session-member borrows. Not a Tree, Open, execution result or reply.
+pub(in crate::smb) mod echo;
 use super::{Phase,Registration};
 use crate::smb::{
     connection::{Connection,Fault,Origin,Payload,Received,Result},

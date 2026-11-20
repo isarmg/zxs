@@ -102,7 +102,13 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 `connection/sessions/ordinary` 只消费同一原连接的 `Received`。对原帧中所有受支持的普通成员，按[签名检查](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/85df1680-2ee7-4d25-a916-a982371ddc75)与[会话检查](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b495e2da-8711-4772-b292-453be0394b49)找该连接已经真实发布的 Valid 项；同一批只认同一受保护凭据代，先核每段原始签名，末段不通过也不给前段票。无 Signing Capabilities 与明确选 CMAC 的两种情况都不准首个普通命令缺签。只完成 MORE、别的连接知道 SID、报文写了有效 TreeId 都不是授权。已发布的项不再强持 NTLM 密验材料，保有的是该会话自身密钥及可失效的原代弱标记。
 
-整批通过后仅能按顺序短借同一原消息和原会话，并在发给业务前逐项重核原登记、连接和凭据代。接线方在实际使用／提交时仍须终验，不能长期保存布尔结果；不把全局或凭据锁带入网络／存储。合法消费编号但载荷计费不足的成员没有业务票，保留成员级参数错误；后续不相关成员仍独立，相关链保留前件失败而不虚构 Tree／Open 或统一错误码。[相关链执行](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1)必须用紧邻命令的真实处理结果；验签使用的继承 SID 不发共享权限、Root/FILE 权限或 MaximalAccess。当前不派发命令、不出普通 SMB 回复、也不做 CANCEL；遗弃未结的应答账会关闭原连接。`src/test/smb/ordinary.rs` 的公开合成源例从同一次协商、挑战和签名末包进入此门，没有执行测试或实机。
+整批通过后仅能按顺序短借同一原消息和原会话，并在发给业务前逐项重核原登记、连接和凭据代。接线方在实际使用／提交时仍须终验，不能长期保存布尔结果；不把全局或凭据锁带入网络／存储。合法消费编号但载荷计费不足的成员没有业务票，保留成员级参数错误；后续不相关成员仍独立，相关链保留前件失败而不虚构 Tree／Open 或统一错误码。[相关链执行](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1)必须用紧邻命令的真实处理结果；验签使用的继承 SID 不发共享权限、Root/FILE 权限或 MaximalAccess。此通用门本身不答复、不执行文件操作或 CANCEL；下面只有真正已签 ECHO 已接同步出口。遗弃未结的应答账会关闭原连接。`src/test/smb/ordinary.rs` 的公开合成源例从同一次协商、挑战和签名末包进入此门，没有执行测试或实机。
+
+### 第一条同步普通应答：已认证 ECHO
+
+只给尚未消费、整批均为已认证 ECHO 的原 `CheckedBatch`。每个实际短借按[处理规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/fa23e613-2768-49e5-aa68-97c4bba72379)核所在连接及原会话，[请求](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d939504d-57e2-4c0e-8ad5-1678b6fccca1)的 Reserved 不当成拒绝条件；合法返回[4 字节成功体](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/2abe9b3c-c5ab-417f-bcc3-9ab51f2fce35)，尺寸不符返回固定参数错误。没有传入任意 NTSTATUS／裸正文的成功捷径。相关链只延用上一个实际 ECHO 已核的会话，不授 Tree/Open；不相关的两项可以各自用不同真实会话。无会话、无签 ECHO 的连接级路径不在本片，不能据此判断三端可挂载。
+
+按[成功头](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d39a64be-b8f8-424d-b8e5-a2cf5257459e)、[同步复合](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf)与[出站签名](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a3e9ea1e-53c8-4cff-94bd-d98fb20417c0)逐项保留原 MID／优先级／Reserved／charge，填真实授额、有效 SID 和零树标识，每个成员用各自通道 CMAC 覆盖整个应答段，包含中间和末段零填充。只保留一份带 Direct TCP 前缀的不可变记录：原连接私有写端限时完整写入，部分写继续、被中断重试，错误／零写／撤代／去向不明均关闭原连接；仅整条写入本地 TCP 发送端且复核原登记后结清额度，不等同对端已经收到。无外部可注入的生产 writer，也没有 `submitted=true` 替代。正式接入必须自 NEGOTIATE 前持有同一已接 socket 的收发端；此处没有生产接入、accept、监听或账号来源。`src/test/smb/echo.rs` 保存默认／显式 CMAC、错误、相关尾填充、两会话及短写失败的合成固定答案，未运行。
 
 ## 首个 TREE_CONNECT 入口（只验请求，不发树）
 

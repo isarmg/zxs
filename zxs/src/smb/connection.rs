@@ -13,6 +13,7 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod setup;
 pub(in crate::smb) mod sessions;
+mod transport;
 
 const CAP: u16 = 64; // bound on live number span AND advertised + in-flight requests
 const CANCEL: u16 = 0x000c;
@@ -21,7 +22,7 @@ const K64: u64 = 65_536;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Fault {
     Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, SetupPhase, Closed, Range, FrameSize,
-    Resources, Exhausted, WrongBatch, NoReply, WrongReply, SessionLimit, SessionState, NoVerifier, ClientDialect,
+    Resources, Exhausted, WrongBatch, NoReply, WrongReply, Transport, SessionLimit, SessionState, NoVerifier, ClientDialect,
 }
 pub(in crate::smb) type Result<T> = std::result::Result<T, Fault>;
 
@@ -81,7 +82,7 @@ impl OpeningSend {
         // on this server even if a client ignores its own list.
         if self.signing == CmacChoice::NoCommon { return Err(Fault::NoCommonSigning); }
         let conn=Connection { limits: self.limits, client: self.client, server: self.server, in_flight: 0,
-            sessions: Vec::new(), origin: Arc::new(Origin { closed: AtomicBool::new(false), hash: self.hash, run:self.run }),
+            sessions: Vec::new(), output:None, origin: Arc::new(Origin { closed: AtomicBool::new(false), hash: self.hash, run:self.run }),
             window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } };
         conn.register_transport()?;Ok(conn)
     }
@@ -171,6 +172,7 @@ impl Received<'_> {
 #[must_use]
 pub(in crate::smb) struct Connection {
     origin: Arc<Origin>, window: Window, limits: Limits, client: ClientOffer, server: Selection, in_flight: u16,
+    output:Option<transport::DirectOutput>, // owned by the original TCP transport, not by an SMB operation
     sessions: Vec<sessions::Local>, // both fresh in-progress and submitted, authenticated, single-channel entries
 }
 impl Drop for Connection {
@@ -288,9 +290,21 @@ impl<'a,'b> ReplyPlan<'a,'b> {
         self.bind_bytes(std::borrow::Cow::Owned(actual))
     }
     fn bind_bytes<'p>(self, actual: std::borrow::Cow<'p,[u8]>) -> Result<ReplySend<'a,'b,'p>> {
+        self.bind_range(actual,0)
+    }
+    // One owned buffer, containing exactly one whole Direct TCP record. The
+    // same bytes (without the prefix) go through the ordinary SMB credit check.
+    fn bind_record(self,record:Vec<u8>)->Result<ReplySend<'a,'b,'static>> {
+        let Some((_,rest))=super::wire::direct::Frame::split(&record).map_err(|_|Fault::WrongReply)? else {
+            return Err(Fault::WrongReply);
+        };
+        if !rest.is_empty() {return Err(Fault::WrongReply);}
+        self.bind_range(std::borrow::Cow::Owned(record),4)
+    }
+    fn bind_range<'p>(self,actual:std::borrow::Cow<'p,[u8]>,start:usize)->Result<ReplySend<'a,'b,'p>> {
         self.owner.alive()?;
-        if actual.len() > MAX_FRAME_BYTES { return Err(Fault::WrongReply); }
-        let mut rest = actual.as_ref();
+        let mut rest=actual.get(start..).ok_or(Fault::WrongReply)?;
+        if rest.len()>MAX_FRAME_BYTES {return Err(Fault::WrongReply);}
         for (i,m) in self.batch.entries.iter().enumerate() {
             if m.cmd == CANCEL { continue; }
             let (r, tail) = split_sync_reply(rest).map_err(|_| Fault::WrongReply)?;
@@ -301,16 +315,16 @@ impl<'a,'b> ReplyPlan<'a,'b> {
             rest = tail;
         }
         if !rest.is_empty() { return Err(Fault::WrongReply); }
-        Ok(ReplySend { plan: self, actual, settled: false })
+        Ok(ReplySend { plan: self, actual, start, settled: false })
     }
 }
 
 #[must_use]
 pub(in crate::smb) struct ReplySend<'a,'b,'p> {
-    plan: ReplyPlan<'a,'b>, actual: std::borrow::Cow<'p,[u8]>, settled: bool,
+    plan: ReplyPlan<'a,'b>, actual: std::borrow::Cow<'p,[u8]>, start:usize, settled: bool,
 }
 impl ReplySend<'_,'_,'_> {
-    pub(in crate::smb) fn bytes(&self) -> &[u8] { self.actual.as_ref() }
+    pub(in crate::smb) fn bytes(&self) -> &[u8] { &self.actual[self.start..] }
     /// Only after successful submission of these bytes on THIS transport.
     /// The exclusive borrow holds its ledger between selecting and publishing
     /// credits; no competing response can publish the same sequence range.
@@ -334,6 +348,7 @@ impl Drop for ReplySend<'_,'_,'_> {
         if !self.settled {
             self.plan.owner.origin.closed.store(true, Ordering::Release);
             self.plan.owner.sessions.clear();
+            drop(self.plan.owner.output.take());
         }
     }
 }

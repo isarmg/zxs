@@ -60,6 +60,16 @@ impl SealedFinal {
         ->std::result::Result<(T,BoundSession),E> {Ok((bind(self.bytes)?,self.bound))}
 }
 impl BoundSession {
+    /// A closed command-specific codec, not a signing oracle over arbitrary
+    /// buffers. The connection separately verifies the current original Claim.
+    pub(in crate::smb) fn sign_echo(&self,stamp:&BatchRevision,reply:crate::smb::wire::echo_reply::PayableEcho)
+        ->std::result::Result<crate::smb::wire::echo_reply::SignedEcho,crate::smb::session::Fault> {
+        use hmac::Mac;
+        let signer=self.signer_for(stamp).filter(|s|s.id==reply.sid()).ok_or(crate::smb::session::Fault::UnknownSession)?;
+        let mut mac=signer.mac()?;mac.update(reply.for_mac());let result=mac.finalize();
+        let mut public_tag=[0;16];public_tag.copy_from_slice(result.as_bytes());
+        Ok(reply.signed(public_tag))
+    }
     pub(in crate::smb) fn same_id(&self,id:NonZeroU64)->bool {self.keys.signer.id==id}
     pub(in crate::smb) fn install_while_current<R>(self,s:&ChallengeService,install:impl FnOnce(Self,LiveMark)->R)
         ->Option<R> {
