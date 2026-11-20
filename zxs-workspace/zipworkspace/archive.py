@@ -1,6 +1,6 @@
 """Budget the central directory before ZipFile allocates it; verify stored data."""
 from __future__ import annotations
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import hashlib
 import io
 import os
@@ -161,6 +161,36 @@ def _local_header(f, item, central_at):
     return start
 
 
+def _member_header(f, item, central_at):
+    directory = item.is_dir()
+    if item.orig_filename != item.filename or item.compress_type != zipfile.ZIP_STORED or item.flag_bits & ~0x808:
+        raise Rejected("only ordinary unencrypted Store entries are supported")
+    if item.compress_size != item.file_size or directory and (item.file_size or item.CRC):
+        raise Rejected("inconsistent Store sizes")
+    kind = stat.S_IFMT(item.external_attr >> 16) if item.create_system == 3 else 0
+    if kind not in (0, stat.S_IFDIR if directory else stat.S_IFREG) or item.external_attr & 0x400:
+        raise Rejected("links, devices and reparse entries are not accepted")
+    _zip64_extra(item.extra)
+    return directory, _local_header(f, item, central_at)
+
+
+@contextmanager
+def stored_member(document, length, marker, name, size):
+    """A bounded Store reader for one already-admitted member; caller must verify its entire body."""
+    count, central = bounded_directory(document, length)
+    with zipfile.ZipFile(_IndexedInput(document, length, count, central), "r") as archive:
+        if len(archive.filelist) != count or Commit.decode(archive.comment) != marker:
+            raise Rejected("the selected snapshot directory or marker changed")
+        matches = [item for item in archive.infolist() if item.filename == name]
+        if len(matches) != 1: raise Rejected("cannot identify the exact original member")
+        item, = matches
+        directory, _ = _member_header(document, item, central)
+        if directory or item.file_size != size or (size == 0 and item.CRC):
+            raise Rejected("the selected ordinary member changed")
+        with archive.open(item) as source:
+            yield source
+
+
 def stamp(f):
     m = os.fstat(f.fileno())
     return m.st_dev, m.st_ino, m.st_size, m.st_mtime_ns, m.st_ctime_ns
@@ -232,16 +262,7 @@ def _read_checked(source, *, managed, sink, blocks=None):
             manifest = Manifest()
             items = []
             for item in z.infolist():
-                d = item.is_dir()
-                if item.orig_filename != item.filename or item.compress_type != zipfile.ZIP_STORED or item.flag_bits & ~0x808:
-                    raise Rejected("only ordinary unencrypted Store entries are supported")
-                if item.compress_size != item.file_size or d and (item.file_size or item.CRC):
-                    raise Rejected("inconsistent Store sizes")
-                kind = stat.S_IFMT(item.external_attr >> 16) if item.create_system == 3 else 0
-                if kind not in (0, stat.S_IFDIR if d else stat.S_IFREG) or item.external_attr & 0x400:
-                    raise Rejected("links, devices and reparse entries are not accepted")
-                _zip64_extra(item.extra)
-                start = _local_header(f, item, central_at)
+                d, start = _member_header(f, item, central_at)
                 name = item.filename[:-1] if d else item.filename
                 manifest.add(name, d, item.file_size, None)
                 items.append((item, name, d))

@@ -70,6 +70,12 @@ class ArchiveBrowser:
     def data_bytes(self) -> int:
         return self._data_bytes
 
+    def entry(self, parent, name):
+        """Return the exact admitted row, not a matching name from another folder."""
+        rows = self._children.get(parent, ())
+        i = bisect_left(rows, name, key=_NAME)
+        return rows[i] if i < len(rows) and rows[i].name == name else None
+
     def verified_entries(self):
         """Iterate the admitted rows, including empty and implicit directories; no archive I/O."""
         for parent, children in self._children.items():

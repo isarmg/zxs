@@ -13,13 +13,15 @@ from .private_freeze import local_mount, mount_id
 from .snapshot_view import SnapshotView
 
 
-def _ordinary_user():
+def _ordinary_user(*, read_proc=None):
     if sys.platform != "linux":
         raise Rejected("the snapshot mount is Linux-only")
     uid = os.getuid()
     if uid == 0 or uid != os.geteuid() or os.getgid() != os.getegid():
         raise Rejected("use an ordinary Linux user, without sudo or set-id")
-    with open("/proc/self/status", "rb") as f: data = f.read(65537)
+    if read_proc is None:
+        with open("/proc/self/status", "rb") as f: data = f.read(65537)
+    else: data = read_proc("status", 65536)
     caps = [line.split()[1:] for line in data.splitlines() if line.startswith(b"CapEff:")]
     if len(data) > 65536 or len(caps) != 1 or len(caps[0]) != 1 or int(caps[0][0], 16) != 0:
         raise Rejected("an ordinary user with no effective capabilities is required")

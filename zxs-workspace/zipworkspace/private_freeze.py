@@ -11,28 +11,39 @@ from .model import CHUNK, MAX_TOTAL, Rejected
 from .private_candidates import CandidateDirectory, held_candidates
 
 
-def mount_id(fd):
-    with open(f"/proc/self/fdinfo/{fd}", "rb") as info:
-        data = info.read(8193)
+def mount_id(fd, *, read_proc=None):
+    if read_proc is None:
+        with open(f"/proc/self/fdinfo/{fd}", "rb") as info:
+            data = info.read(8193)
+    else: data = read_proc(f"fdinfo/{fd}", 8192)
     ids = [s.split()[1:] for s in data.splitlines() if s.startswith(b"mnt_id:")]
     if len(data)>8192 or len(ids)!=1 or len(ids[0])!=1 or not ids[0][0].isdigit():
         raise Rejected("cannot verify the held Linux mount")
     return ids[0][0]
 
 
-def local_mount(fd):
-    """Qualify the actual held mount, not a user-entered path or a local-looking fstype prefix."""
-    identifier = mount_id(fd)
-    with open("/proc/self/mountinfo", "rb") as info:
-        data = info.read((2 << 20)+1)
+def mount_record(fd, *, read_proc=None):
+    """Read the single kernel mount row for this actual descriptor."""
+    identifier = mount_id(fd, read_proc=read_proc)
+    if read_proc is None:
+        with open("/proc/self/mountinfo", "rb") as info:
+            data = info.read((2 << 20)+1)
+    else: data = read_proc("mountinfo", 2 << 20)
     if len(data)>2 << 20: raise Rejected("mount inventory exceeds the admission budget")
     rows = [line for line in data.splitlines() if line.partition(b" ")[0]==identifier]
     if len(rows)!=1: raise Rejected("held mount is missing or ambiguous")
     head, sep, tail = rows[0].partition(b" - ")
     a, b = head.split(), tail.split()
     dev = os.fstat(fd).st_dev
-    if (not sep or len(a)<6 or not b or a[3]!=b"/" or b[0] not in (b"ext4",b"xfs")
-            or a[2]!=f"{os.major(dev)}:{os.minor(dev)}".encode()):
+    if not sep or len(a)<6 or not b or a[2]!=f"{os.major(dev)}:{os.minor(dev)}".encode():
+        raise Rejected("mount inventory does not describe the held filesystem")
+    return identifier, a[3], a[4], b[0]
+
+
+def local_mount(fd, *, read_proc=None):
+    """Qualify the actual held mount, not a user-entered path or a local-looking fstype prefix."""
+    identifier, root, _, filesystem = mount_record(fd, read_proc=read_proc)
+    if root != b"/" or filesystem not in (b"ext4", b"xfs"):
         raise Rejected("fresh commit requires a verified local ext4/XFS mount; no named scratch fallback")
     return identifier
 

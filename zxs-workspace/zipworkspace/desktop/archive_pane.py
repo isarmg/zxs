@@ -13,7 +13,7 @@ class ArchivePane(QWidget):
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
-        self.selection = self.store = self.catalog = None
+        self.selection = self.store = self.catalog = self.file_page = None
         self.directory, self.pages, self.next_cursor = "", [None], None
         layout = QVBoxLayout(self)
         actions = QHBoxLayout()
@@ -39,6 +39,12 @@ class ArchivePane(QWidget):
         self.files = Table(("名称", "类型", "字节数", "SHA-256"), "快照里的直接子项")
         self.files.doubleClicked.connect(lambda _index: self.enter())
         fl.addWidget(self.files)
+        self.save_member_action = None
+        if sys.platform == "linux":
+            self.save_member_action = button("另存选中的文件…", self.choose_member)
+            self.save_member_action.setObjectName("save-selected-member")
+            self.files.selectionModel().selectionChanged.connect(self.update_member_action)
+            fl.addWidget(self.save_member_action)
         nav = QHBoxLayout()
         self.up = button("上一级", self.go_up)
         self.into = button("打开选中的文件夹", self.enter)
@@ -86,13 +92,14 @@ class ArchivePane(QWidget):
         if self.mount is not None: self.mount.set_snapshot(None)
         self.checkout.set_snapshot(None)  # Revoke the old branch source before releasing its display.
         if self.selection is not None: self.selection.release_display()
-        self.selection = self.next_cursor = None
+        self.selection = self.next_cursor = self.file_page = None
         if self.save_copy is not None: self.save_copy.setEnabled(False)
         self.comparison.set_snapshot(None)
         self.clear_catalog()
         self.details.setText("尚未打开快照")
         self.at.setText("")
         self.files.rows.replace(())
+        self.update_member_action()
         for widget in (self.reload, self.up, self.into, self.back, self.more):
             widget.setEnabled(False)
 
@@ -104,6 +111,59 @@ class ArchivePane(QWidget):
         self.views.setCurrentIndex(0)
         retain = self.mount is not None
         self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name, retain=retain), self.show_selection)
+
+    def update_member_action(self, *_):
+        if self.save_member_action is not None:
+            entry = self.files.item() if self.file_page is not None else None
+            self.save_member_action.setEnabled(entry is not None and entry.kind == "file")
+
+    def choose_member(self):
+        selected, page, entry = self.selection, self.file_page, self.files.item()
+        if (self.save_member_action is None or self.owner.pending is not None or selected is None or
+                page is None or entry is None or entry.kind != "file"):
+            return
+
+        def still_selected():
+            return selected is self.selection and page is self.file_page and entry is self.files.item()
+
+        # The widget picker only supplies the chosen local string. It does not
+        # create/reserve a file, mutate a folder, or delegate to a portal writer.
+        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
+        name, _ = QFileDialog.getSaveFileName(self, "选择现有目录和新文件名（不覆盖）", entry.name,
+                                               "所有文件 (*)", options=opts)
+        if not name or not still_selected(): return
+
+        from .member_copy import MemberCopy
+        try:
+            plan = MemberCopy(selected, page.directory, entry, name)
+        except (OSError, ValueError) as err:
+            self.owner.inform(str(err))
+            return
+
+        def submit(title, call, apply):
+            try:
+                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close())
+                if future is None: plan.close()
+                else: future.add_done_callback(lambda f: plan.close() if f.cancelled() else None)
+            except BaseException:
+                plan.close()
+                raise
+
+        def review(detail):
+            try:
+                if still_selected() and confirm(self, "另存这一文件，不覆盖", detail,
+                        attestation="我选择这个新位置，并会保持原归档和目的目录在操作期间不被移动或改写。",
+                        action_text="另存并核验") and still_selected():
+                    submit("正在复核原成员并写入无名称副本…", lambda: plan.run(confirmed=True), self.owner.inform)
+                else:
+                    plan.close()
+                    self.owner.inform("没有写入副本。")
+            except BaseException:
+                plan.close()
+                raise
+
+        submit("正在核对原归档和选定目录；尚未写入…", plan.review, review)
 
     def choose_copy(self):
         selected = self.selection
@@ -236,11 +296,13 @@ class ArchivePane(QWidget):
     def show_page(self):
         if self.selection is None: return
         page = self.selection.browser.list_directory(self.directory, cursor=self.pages[-1])
+        self.file_page = page
         self.next_cursor = page.next_cursor
         self.at.setText(f"/{page.directory}  ·  第 {len(self.pages)} 页" + ("" if page.entries else "  ·  空文件夹"))
         self.files.rows.replace(((entry.name, "目录" if entry.kind == "directory" else "文件",
             "" if entry.size_bytes is None else str(entry.size_bytes), entry.sha256 or ""), entry)
             for entry in page.entries)
+        self.update_member_action()
         self.up.setEnabled(bool(self.directory))
         self.into.setEnabled(any(entry.kind == "directory" for entry in page.entries))
         self.back.setEnabled(len(self.pages) > 1)
