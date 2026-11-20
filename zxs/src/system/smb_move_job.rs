@@ -18,23 +18,25 @@ impl Drop for Permit{fn drop(&mut self){ACTIVE.fetch_sub(1,Ordering::AcqRel);}}
 
 unsafe extern "C"{
     fn zxs_member_xfer_pending(member:i32)->i32;
-    fn zxs_xfer_take(member:i32,worker:i32,kind:*mut u8,folder:*mut u8,name:*mut u8,mark:*mut u8)->i32;
+    fn zxs_xfer_take(member:i32,worker:i32,kind:*mut u8,folder:*mut u8,name:*mut u8,mark:*mut u8,parent_len:*mut u16,parents:*mut u8)->i32;
     fn zxs_xfer_reply(fd:i32,status:u8,file:*const u8,op:*const u8)->i32;
     fn zxs_member_held(member:i32)->i32;
 }
-pub(super) enum Request{Delete([u8;16]),Mark,Restore{folder:String,name:String}}
+pub(super) enum Request{Delete([u8;16]),Mark,Restore{folder:String,parents:Vec<String>,name:String}}
 pub(super) fn pending(member:i32)->i32{unsafe{zxs_member_xfer_pending(member)}}
 pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>{
     let(mut kind,mut folder,mut name,mut mark)=(0,[0u8;256],[0u8;223],[0u8;16]);
-    let fd=unsafe{zxs_xfer_take(member,origin.worker.as_raw_fd(),&mut kind,folder.as_mut_ptr(),name.as_mut_ptr(),mark.as_mut_ptr())};
+    let(mut plen,mut raw)=(0,[0u8;4096]);
+    let fd=unsafe{zxs_xfer_take(member,origin.worker.as_raw_fd(),&mut kind,folder.as_mut_ptr(),name.as_mut_ptr(),mark.as_mut_ptr(),&mut plen,raw.as_mut_ptr())};
     os(fd)?;
     let answer=unsafe{OwnedFd::from_raw_fd(fd)};
     let f=usize::from(folder[0]);let n=usize::from(name[0]);
     let ask=match kind{
-        1 if f==0&&n==0&&mark!=[0;16]=>Request::Delete(mark),
-        3 if f==0&&n==0=>Request::Mark,
+        1 if f==0&&n==0&&plen==0&&mark!=[0;16]=>Request::Delete(mark),
+        3 if f==0&&n==0&&plen==0=>Request::Mark,
         2 if f>0&&n>0&&f<=255&&n<=222=>Request::Restore{
             folder:display::component(&folder[1..1+f],255)?.to_owned(),
+            parents:if plen==0{Vec::new()}else{super::super::super::ordinary_directory::components(raw.get(..usize::from(plen)).ok_or_else(denied)?)?},
             name:display::component(&name[1..1+n],222)?.to_owned(),
         },
         _=>return Err(denied()),
@@ -50,7 +52,7 @@ fn mark_for(auth:&SmbSession<'_>,source:&Place,wanted:Setting,nonce:[u8;8])->io:
     // not a new login or on-wire capability. Its nonce distinguishes a
     // re-mark of the same link from an older still-closing native FSP.
     for v in [auth.source.pool.0,auth.original.instance,auth.original.account.0,auth.original.op.0,source.file.0,source.op.0,
-        source.volume.0,wanted.share.0,wanted.op.0]{h.update(&v)?;}
+        source.volume.0,source.parent.bytes(),wanted.share.0,wanted.op.0]{h.update(&v)?;}
     h.update(&auth.original.generation.to_be_bytes())?;h.update(&source.generation.to_be_bytes())?;
     h.update(&nonce)?;
     let mut stamp=[0u8;16];stamp[..8].copy_from_slice(&nonce);stamp[8..].copy_from_slice(&h.finish()[..8]);
@@ -69,7 +71,7 @@ pub(super) fn run(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,answer:OwnedF
         let (tree,ask)=match request{
             Request::Mark if source.role==Role::File=>{
                 let expected=ordinary.ok_or_else(denied)?;
-                let tree=auth.connect_id(expected.share)?;
+                let tree=auth.connect_id(expected.share)?.scoped(source.parent);
                 if tree.setting!=expected||expected.mode!=Mode::ReadWrite{return Err(denied());}
                 let member=tree.open_current(&source.name)?;
                 if *member.native_placement()!=source{return Err(denied());}
@@ -81,18 +83,19 @@ pub(super) fn run(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,answer:OwnedF
             },
             Request::Delete(mark) if source.role==Role::File=>{
                 let expected=ordinary.ok_or_else(denied)?;
-                let tree=auth.connect_id(expected.share)?;
+                let tree=auth.connect_id(expected.share)?.scoped(source.parent);
                 let nonce=mark[..8].try_into().expect("disposition nonce width");
                 if tree.setting!=expected||mark_for(&auth,&source,expected,nonce)?.0!=mark{return Err(denied());}
                 (tree,Handoff::Delete(source.clone()))
             },
-            Request::Restore{folder,name} if source.role==Role::Recycle&&ordinary.is_none()=>{
+            Request::Restore{folder,parents,name} if source.role==Role::Recycle&&ordinary.is_none()=>{
                 let setting=src.at(|db,c|{
                     auth.require_current(db,&c)?;
                     site.plan.current(db,&c,&folder)?.filter(|g|g.mode==Mode::ReadWrite).ok_or_else(denied)
                 })?;
-                let tree=Tree{session:&auth,setting};
-                (tree,Handoff::RestoreBound{source:source.clone(),target:name})
+                let tree=Tree{session:&auth,setting,parent:crate::fs::directory_birth::DirectoryParent::Root};
+                let (_,route)=tree.ordinary_route(&parents,true)?;
+                (tree.scoped(route.parent()),Handoff::RestoreBound{source:source.clone(),target:name})
             },
             _=>return Err(denied()),
         };

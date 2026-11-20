@@ -3504,7 +3504,7 @@
 +	bool zxs_writer,zxs_is_dir,zxs_nested,zxs_provisional,zxs_acknowledged,zxs_unknown;
 +	uint32_t zxs_disposition;
 +	struct aio_req_fsp_link *zxs_link;
-+	const char *zxs_name;
++	const char *zxs_name,*zxs_relative,*zxs_native_path;
 +	struct zxs_smb_tree_cut zxs_route;
  	bool open_was_deferred;
  	struct tevent_immediate *im;
@@ -3553,8 +3553,8 @@
 +		bool dir=in_name[0]==0 || (state->in_create_options&FILE_DIRECTORY_FILE)!=0;
 +		if ((dir ? state->in_create_options!=FILE_DIRECTORY_FILE :
 +		     (state->in_create_options!=0 && state->in_create_options!=FILE_NON_DIRECTORY_FILE)) ||
-+		    (in_create_disposition!=FILE_OPEN && (dir ||
-+		      (in_create_disposition!=FILE_CREATE && in_create_disposition!=FILE_OPEN_IF))) ||
++		    (in_create_disposition!=FILE_OPEN &&
++		     in_create_disposition!=FILE_CREATE && in_create_disposition!=FILE_OPEN_IF) ||
 +		    in_oplock_level!=SMB2_OPLOCK_LEVEL_NONE ||
 +		    (in_file_attributes & ~(dir?FILE_ATTRIBUTE_DIRECTORY:FILE_ATTRIBUTE_NORMAL))!=0 ||
 +		    in_context_blobs.num_blobs!=0 ||
@@ -3571,7 +3571,7 @@
 +		}
 +		state->zxs_access=in_desired_access;state->zxs_share=in_share_access;
 +		state->zxs_disposition=in_create_disposition;
-+		return zxs_create_select(req,in_name,dir)?req:tevent_req_post(req,state->ev);
++		return zxs_create_select(req,state->fname,dir)?req:tevent_req_post(req,state->ev);
 +	}
  	if (IS_IPC(smb1req->conn)) {
  		const char *pipe_name = in_name;
@@ -4223,7 +4223,7 @@
 +		.st_ex_ino=no,.st_ex_nlink=1};
 +	struct smb_filename n={.base_name=discard_const_p(char,name),.st=st};
 +	const bool valid=scope==ZXS_ROW_TOP?(no>=2&&no<=64&&len==0):
-+		scope==ZXS_ROW_ROUND?(no==UINT64_MAX&&len==0):
++		(scope==ZXS_ROW_ROUND||scope==ZXS_ROW_ORDINARY_DIR)?(no==UINT64_MAX&&len==0):
 +		scope==ZXS_ROW_FILE?(no>255&&no!=UINT64_MAX&&len<=INT64_MAX):false;
 +	if(!valid || !zxs_file_vfs_active(conn))
 +		return NT_STATUS_INVALID_PARAMETER;
@@ -4321,7 +4321,7 @@
  	   I think this causes us to fail the IFSKIT
  	   BasicFileInformationTest. -tpot */
 -	file_id = SMB_VFS_FS_FILE_ID(conn, base_sp);
-+	file_id = logical_root ? fsp->file_id.inode : SMB_VFS_FS_FILE_ID(conn, base_sp);
++	file_id = logical_root ? (psbuf->st_ex_ino==UINT64_MAX?UINT64_MAX:fsp->file_id.inode) : SMB_VFS_FS_FILE_ID(conn, base_sp);
  
  	*fixed_portion = 0;
  
@@ -4344,7 +4344,7 @@
  			SIVAL(pdata,	0x5C, 0); /* No alignment needed. */
  
  			pdata += 0x60;
-@@ -3687,6 +3706,58 @@
+@@ -3687,6 +3706,60 @@
  
  	*pdata_size = data_size;
  	return NT_STATUS_OK;
@@ -4360,7 +4360,7 @@
 +}
 +
 +/* The only authorized caller has a current native directory handle and a
-+ * fresh zero-row reply on its original TCON. Format the virtual root with
++ * fresh zero-row reply on its original TCON. Format the selected directory with
 + * Samba's standard wire fields, not any host stat, inode, EA or filesystem. */
 +_PUBLIC_
 +bool zxs_root_info_class(uint8_t info)
@@ -4382,13 +4382,15 @@
 +	NTSTATUS status;
 +	if(!zxs_root_info_class(cls))return NT_STATUS_NOT_SUPPORTED;
 +	if(fsp==NULL || !fsp->fsp_flags.is_directory || fsp->fsp_name==NULL ||
-+	   strcmp(fsp->fsp_name->base_name,".") || fsp->fsp_name->stream_name!=NULL ||
++	   fsp->fsp_name->base_name==NULL || fsp->fsp_name->base_name[0]==0 ||
++	   strlen(fsp->fsp_name->base_name)>ZXS_OD_PATH_MAX+ZXS_DIR_NAME+1 ||
++	   fsp->fsp_name->base_name[0]=='\\' || strchr(fsp->fsp_name->base_name,'/')!=NULL ||
++	   fsp->fsp_name->stream_name!=NULL ||
 +	   !zxs_file_vfs_active(fsp->conn))return NT_STATUS_ACCESS_DENIED;
 +	uint16_t level=cls==FSCC_FILE_ALL_INFORMATION?SMB2_FILE_ALL_INFORMATION:cls+NT_PASSTHROUGH_OFFSET;
-+	/* The root's name is exactly one UTF-16 code unit; no large allocation
-+	 * based on the caller's credit allowance is needed for this projection. */
++	/* The selected logical path is bounded independently of the caller's credits. */
 +	status=qfilepathinfo_with_root(fsp->conn,ctx,NULL,level,fsp,fsp->fsp_name,false,
-+				       make_omit_timespec(),NULL,STR_UNICODE,MIN(limit,1024),
++				       make_omit_timespec(),NULL,STR_UNICODE,MIN(limit,2*(ZXS_OD_PATH_MAX+ZXS_DIR_NAME+1)+256),
 +				       &fixed,&b,&n,true);
 +	if(NT_STATUS_IS_OK(status)){
 +		if(limit<fixed)status=NT_STATUS_INFO_LENGTH_MISMATCH;
@@ -4740,7 +4742,7 @@
 +		f->fsp_flags.is_fsa && !f->fsp_flags.closing &&
 +		f->op!=NULL && f->op->global!=NULL &&
 +		(d->folder.mode==0 || zxs_request_folder_current(n,&d->folder)) &&
-+		f->file_id.inode==(uint64_t)d->folder.volume_ordinal+1 &&
++		zxs_directory_same_id(f,d->folder.mode==0?n->tcon->zxs_tree_choice:&d->folder) &&
 +		change_to_user_and_service(f->conn,f->vuid);
 +}
 +static bool zxs_getinfo_cancel(struct tevent_req *req)

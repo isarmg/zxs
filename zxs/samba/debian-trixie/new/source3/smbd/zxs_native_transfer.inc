@@ -123,11 +123,11 @@ bool zxs_restore_input(TALLOC_CTX *ctx,DATA_BLOB input,char **folder,char **name
 	if(input.length<20||input.data==NULL||CVAL(input.data,0)!=0||BVAL(input.data,8)!=0)return false;
 	const size_t bytes=IVAL(input.data,16);
 	/* Reserved bytes and tail padding are not part of the declared name. */
-	if(bytes==0||(bytes&1)!=0||bytes>input.length-20||bytes>2*(ZXS_DIR_NAME+1+ZXS_FILE_NAME)||
+	if(bytes==0||(bytes&1)!=0||bytes>input.length-20||bytes>2*(ZXS_DIR_NAME+1+ZXS_OD_PATH_MAX)||
 	   !convert_string_talloc(ctx,CH_UTF16,CH_UNIX,input.data+20,bytes,&path,&decoded)||
 	   path==NULL||strlen(path)!=decoded)return false;
 	split=strchr(path,'\\');if(split==NULL)return false;
 	*split=0;
-	if(!zxs_xfer_label(path,ZXS_DIR_NAME)||!zxs_xfer_label(split+1,ZXS_FILE_NAME))return false;
+	if(!zxs_xfer_label(path,ZXS_DIR_NAME)||!zxs_odir_relative(split+1,false))return false;
 	*folder=path;*name=split+1;return true;
 }

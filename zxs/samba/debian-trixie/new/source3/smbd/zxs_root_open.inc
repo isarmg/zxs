@@ -13,7 +13,10 @@ static void zxs_dir_fsp_end(void *v)
 NTSTATUS zxs_open_access(connection_struct *c,bool directory,const struct zxs_smb_tree_cut *folder,uint32_t *desired,uint32_t share)
 {
 	uint32_t profile=directory?(SEC_RIGHTS_DIR_READ|SEC_DIR_TRAVERSE):SEC_RIGHTS_FILE_READ;
-	if(!directory && !c->read_only && folder!=NULL && folder->mode==2){profile|=SEC_RIGHTS_FILE_WRITE|SEC_STD_DELETE;}
+	if(!c->read_only && folder!=NULL && folder->mode==2){
+		if(directory)profile|=SEC_DIR_ADD_FILE|SEC_DIR_ADD_SUBDIR;
+		else profile|=SEC_RIGHTS_FILE_WRITE|SEC_STD_DELETE;
+	}
 	/* Retained DELETE access is for the exact FILE_RENAME_INFORMATION
 	 * restore only. No retained disposition/create/EOF/write is admitted. */
 	if(!directory && !c->read_only && zxs_folder_retained(folder)){profile|=SEC_STD_DELETE;}
@@ -72,16 +75,9 @@ NTSTATUS zxs_open_member_fsp(struct smbd_smb2_request *n,struct smb_request *req
 	fsp->fsp_flags.is_directory=directory;fsp->fsp_flags.can_read=!directory && (desired&SEC_FILE_READ_DATA)!=0;
 	fsp->fsp_flags.can_write=writable;fsp->fsp_flags.can_lock=!directory;
 	fsp->file_id=(struct file_id){.devid=dev,.inode=st.st_ex_ino,.extid=ext};
-	if(directory && zxs_folder_round(folder)){
-		/* Exact 128-bit DeleteOp in a disjoint directory-only domain.
-		 * The protocol cannot project it to unique 64 bits. */
-		fsp->fsp_name->st.st_ex_ino=UINT64_MAX;
-		fsp->file_id.devid=dev^UINT64_C(0x5a5853524f554e44);
-		fsp->file_id.inode=0;fsp->file_id.extid=0;
-		for(size_t i=0;i<8;i++){
-			fsp->file_id.inode=(fsp->file_id.inode<<8)|folder->setting[i+8];
-			fsp->file_id.extid=(fsp->file_id.extid<<8)|folder->setting[i];
-		}
+	if(directory){
+		fsp->file_id=zxs_directory_file_id(root);
+		if(zxs_folder_ordinary_child(root)||zxs_folder_round(root))fsp->fsp_name->st.st_ex_ino=UINT64_MAX;
 	}
 	fsp->oplock_type=NO_OPLOCK;fsp->sent_oplock_break=NO_BREAK_SENT;
 	if(directory){

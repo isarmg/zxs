@@ -1,10 +1,10 @@
 //! Durable handoff of a single authorized FILE between its actual F and R.
 //! The immutable birth is never reissued. Slow data, capacity and witness
 //! checks are outside SYSTEM; only the selected receipt switches placement.
-use super::{Tree,Catalog,Connection,directory,file_create};
+use super::{Tree,Catalog,Connection,directory,file_create,ordinary_directory::{self,Additional,Route as DirectoryRoute}};
 use super::super::{file_location::{Place,Placed},transfer_material::Manifest,volume::{OrdinaryRoot,RecycleRoot},work_record::{self,ReadRecord}};
-use crate::{OperationId,Role,VolumeId,display,fs::{HeldDir,invalid},hash::Sha256,
-    identity::{AccountId,ShareId},ordinary::portable_birth::{MoveInstall,MoveRoom}};
+use crate::{OperationId,Role,VolumeId,display,fs::{HeldDir,invalid,directory_birth::DirectoryParent},hash::Sha256,
+    identity::{AccountId,ShareId},ordinary::portable_birth::{Birth,MoveInstall,MoveRoom}};
 use std::io;
 
 #[derive(Clone,Debug,Eq,PartialEq)]
@@ -18,7 +18,7 @@ pub(super) enum Handoff{
 enum Direction{Delete=1,Restore=2}
 #[derive(Clone,Debug,Eq,PartialEq)]
 struct Route{
-    from:Placed,kind:Direction,to:VolumeId,name:String,work:Option<ReadRecord>,head:Option<OperationId>,
+    from:Placed,kind:Direction,to:VolumeId,parent:DirectoryParent,name:String,work:Option<ReadRecord>,head:Option<OperationId>,
     share:ShareId,setting:OperationId,auth:OperationId,actor:AccountId,epoch:i64,
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
@@ -34,7 +34,7 @@ impl Route{
         let f=tree.setting.volume;
         let (place,kind,to,name)=match ask{
             Handoff::Delete(native)=>{
-                if native.role!=Role::File||native.volume!=f||Place::current(db,c,native.file)?!=*native{
+                if native.role!=Role::File||native.volume!=f||native.parent!=tree.parent||Place::current(db,c,native.file)?!=*native{
                     return Err(io::ErrorKind::NotFound.into());
                 }
                 (native.clone(),Direction::Delete,r.volume,native.name.clone())
@@ -55,12 +55,13 @@ impl Route{
         let work=work_record::selected(db,&from.birth)?;
         let head=work_record::latest_commit(db,&from.birth)?.map(|n|n.0);
         let a=&tree.session.original;
-        Ok(Self{from,kind,to,name,work,head,share:tree.setting.share,setting:tree.setting.op,auth:a.op,actor:a.account,epoch:a.generation})
+        let parent=if kind==Direction::Restore{tree.parent}else{DirectoryParent::Root};
+        Ok(Self{from,kind,to,parent,name,work,head,share:tree.setting.share,setting:tree.setting.op,auth:a.op,actor:a.account,epoch:a.generation})
     }
     fn receipt(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,ask:&Handoff,op:OperationId)->io::Result<Option<Moved>>{
         tree.require(db,c,true)?;
         let q=db.prepare(c"SELECT m.file_id,m.direction,m.source_op,m.source_gen,m.source_id,m.source_name,
-               m.target_id,m.target_name,m.save_op,m.manual_op FROM main.operation o JOIN main.file_transfer m ON m.transfer_op=o.op_id
+               m.target_id,m.target_name,m.save_op,m.manual_op,m.source_parent,m.target_parent FROM main.operation o JOIN main.file_transfer m ON m.transfer_op=o.op_id
                WHERE o.op_id=?1 AND o.kind=12 AND o.state=1")?;
         q.bind_bytes(1,&op.0)?;
         if !work_record::start_one(&q)?{return Ok(None);}
@@ -68,45 +69,48 @@ impl Route{
         let (kind,role)=match q.byte(1)?{1=>(Direction::Delete,Role::File),2=>(Direction::Restore,Role::Recycle),
             _=>return Err(invalid("wrong original transfer direction"))};
         let src=Place{file,op:OperationId(q.array(2)?),generation:q.integer(3)?,volume:VolumeId(q.array(4)?),
-            role,name:display::component(q.blob(5,222)?,222)?.to_owned()};
+            role,name:display::component(q.blob(5,222)?,222)?.to_owned(),parent:DirectoryParent::from_bytes(q.array(10)?)};
         let to=VolumeId(q.array(6)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
-        let save=work_record::optional(&q,8)?;let head=work_record::optional(&q,9)?;q.done()?;
+        let save=work_record::optional(&q,8)?;let head=work_record::optional(&q,9)?;
+        let parent=DirectoryParent::from_bytes(q.array(11)?);q.done()?;
         let allowed=match ask{
-            Handoff::Delete(expected)=>kind==Direction::Delete&&*expected==src&&src.volume==tree.setting.volume,
+            Handoff::Delete(expected)=>kind==Direction::Delete&&*expected==src&&src.volume==tree.setting.volume&&src.parent==tree.parent&&parent==DirectoryParent::Root,
             #[cfg(test)]
             Handoff::Restore{deleted,name:show,target}=>kind==Direction::Restore&&*deleted==src.op&&*show==src.name&&
-                target==&name&&to==tree.setting.volume,
-            Handoff::RestoreBound{source,target}=>kind==Direction::Restore&&*source==src&&target==&name&&to==tree.setting.volume,
+                target==&name&&to==tree.setting.volume&&parent==tree.parent,
+            Handoff::RestoreBound{source,target}=>kind==Direction::Restore&&*source==src&&target==&name&&to==tree.setting.volume&&parent==tree.parent,
         };
         if !allowed{return Err(io::ErrorKind::PermissionDenied.into());}
         let birth=file_create::committed_file(db,c,file)?;
         let work=save.map(|v|work_record::confirmed(db,&birth,v)).transpose()?;
         let a=&tree.session.original;
-        let original=Self{from:Placed{birth,here:src.clone()},kind,to,name,work,head,
+        let original=Self{from:Placed{birth,here:src.clone()},kind,to,parent,name,work,head,
             share:tree.setting.share,setting:tree.setting.op,auth:a.op,actor:a.account,epoch:a.generation};
         if !original.exists_at(db,op,true)?{return Err(invalid("no exact result for this original transfer"));}
         Ok(Some(Moved{op,from:src,to:original.target(op)}))
     }
     fn target(&self,op:OperationId)->Place{
         Place{file:self.from.here.file,op,generation:self.from.here.generation+1,volume:self.to,
-            role:if self.kind==Direction::Delete{Role::Recycle}else{Role::File},name:self.name.clone()}
+            role:if self.kind==Direction::Delete{Role::Recycle}else{Role::File},name:self.name.clone(),parent:self.parent}
     }
-    fn geometry(&self,c:&Catalog,op:OperationId)->io::Result<()>{
+    fn geometry(&self,c:&Catalog,op:OperationId,dest:&DirectoryRoute)->io::Result<()>{
         if self.from.here.generation>i64::MAX-2{return Err(invalid("placement sequence exhausted"));}
         let r=&c.rows()[1];
         self.from.birth.validate_transfer_geometry(&self.name,(&r.path,r.limit),op)?;
         if self.kind==Direction::Restore{
             let f=c.rows().iter().find(|r|r.role==Role::File&&r.volume==self.to)
                 .ok_or_else(||invalid("restore destination is not an ordinary enrolled volume"))?;
-            self.from.birth.validate_transfer_geometry(&self.name,(&f.path,f.limit),op)?;
+            let path=dest.geometry(c)?;
+            if dest.parent()!=self.parent||dest.volume()!=self.to{return Err(invalid("restore parent differs"));}
+            self.from.birth.validate_transfer_geometry(&self.name,(&path,f.limit),op)?;
         }
         Ok(())
     }
     fn digest(&self,op:OperationId)->io::Result<[u8;32]>{
         let b=&self.from.birth;let f=&self.from.here;
-        let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/FILE-TRANSFER\0")?;
+        let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/FILE-TRANSFER-PARENT\0")?;
         for v in [b.pool.0,b.operation.0,b.file.0,b.entry.0,b.history.0,b.branch.0,
-            op.0,f.op.0,f.volume.0,self.to.0,self.share.0,self.setting.0,self.auth.0,self.actor.0]{h.update(&v)?;}
+            op.0,f.op.0,f.volume.0,self.to.0,f.parent.bytes(),self.parent.bytes(),self.share.0,self.setting.0,self.auth.0,self.actor.0]{h.update(&v)?;}
         h.update(&[self.kind as u8])?;h.update(&f.generation.to_be_bytes())?;h.update(&self.epoch.to_be_bytes())?;
         for n in [&f.name,&self.name]{h.update(&[n.len() as u8])?;h.update(n.as_bytes())?;}
         for k in [self.work.map(|v|v.record.key().save),self.head]{
@@ -116,7 +120,7 @@ impl Route{
     }
     fn exists_at(&self,db:&Connection,op:OperationId,committed:bool)->io::Result<bool>{
         let q=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,m.file_id,m.direction,m.source_op,m.source_gen,
-          m.source_id,m.source_name,m.target_id,m.target_name,m.share_id,m.setting_op,m.auth_op,m.save_op,m.manual_op
+          m.source_id,m.source_name,m.target_id,m.target_name,m.share_id,m.setting_op,m.auth_op,m.save_op,m.manual_op,m.source_parent,m.target_parent
           FROM main.operation o LEFT JOIN main.file_transfer m ON m.transfer_op=o.op_id WHERE o.op_id=?1")?;
         q.bind_bytes(1,&op.0)?;
         if !work_record::start_one(&q)?{return Ok(false);}
@@ -125,7 +129,8 @@ impl Route{
             q.array::<16>(4)?!=f.file.0||q.byte(5)?!=self.kind as u8||q.array::<16>(6)?!=f.op.0||q.integer(7)?!=f.generation||
             q.array::<16>(8)?!=f.volume.0||q.blob(9,222)?!=f.name.as_bytes()||q.array::<16>(10)?!=self.to.0||q.blob(11,222)?!=self.name.as_bytes()||
             q.array::<16>(12)?!=self.share.0||q.array::<16>(13)?!=self.setting.0||q.array::<16>(14)?!=self.auth.0||
-            work_record::optional(&q,15)?!=self.work.map(|r|r.record.key().save)||work_record::optional(&q,16)?!=self.head{
+            work_record::optional(&q,15)?!=self.work.map(|r|r.record.key().save)||work_record::optional(&q,16)?!=self.head||
+            q.array::<16>(17)?!=f.parent.bytes()||q.array::<16>(18)?!=self.parent.bytes(){
             return Err(invalid("recorded transfer differs from its original scope"));
         }
         q.done()?;Ok(true)
@@ -151,22 +156,24 @@ impl Route{
     }
     fn vacant(&self,db:&Connection,except:Option<OperationId>)->io::Result<()>{
         if self.kind!=Direction::Restore{return Ok(());}
-        let q=db.prepare(c"SELECT 1 FROM main.file_location WHERE role=2 AND volume_id=?1 AND display=?2")?;
-        q.bind_bytes(1,&self.to.0)?;q.bind_bytes(2,self.name.as_bytes())?;
+        let q=db.prepare(c"SELECT 1 FROM main.file_location WHERE role=2 AND volume_id=?1 AND display=?2 AND parent_id=?3
+          UNION ALL SELECT 1 FROM main.directory_slot WHERE volume_id=?1 AND display=?2 AND parent_id=?3 LIMIT 1")?;
+        q.bind_bytes(1,&self.to.0)?;q.bind_bytes(2,self.name.as_bytes())?;q.bind_bytes(3,&self.parent.bytes())?;
         if work_record::start_one(&q)?{return Err(occupied());}
-        let q=db.prepare(c"SELECT transfer_op FROM main.pending_transfer WHERE direction=2 AND target_id=?1 AND target_name=?2")?;
-        q.bind_bytes(1,&self.to.0)?;q.bind_bytes(2,self.name.as_bytes())?;
+        let q=db.prepare(c"SELECT transfer_op FROM main.pending_transfer WHERE direction=2 AND target_id=?1 AND target_name=?2 AND target_parent=?3")?;
+        q.bind_bytes(1,&self.to.0)?;q.bind_bytes(2,self.name.as_bytes())?;q.bind_bytes(3,&self.parent.bytes())?;
         if work_record::start_one(&q)?&&Some(OperationId(q.array(0)?))!=except{return Err(pending());}
         Ok(())
     }
     fn issue(&self,db:&Connection,op:OperationId)->io::Result<()>{
         let p=&self.from.here;
-        let q=db.prepare(c"INSERT INTO main.file_transfer VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)")?;
+        let q=db.prepare(c"INSERT INTO main.file_transfer VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)")?;
         q.bind_bytes(1,&op.0)?;q.bind_bytes(2,&p.file.0)?;q.bind_integer(3,self.kind as i64)?;
         q.bind_bytes(4,&p.op.0)?;q.bind_integer(5,p.generation)?;q.bind_bytes(6,&p.volume.0)?;q.bind_bytes(7,p.name.as_bytes())?;
         q.bind_bytes(8,&self.to.0)?;q.bind_bytes(9,self.name.as_bytes())?;
         for (i,x) in [self.share.0,self.setting.0,self.auth.0].iter().enumerate(){q.bind_bytes(i as i32+10,x)?;}
         if let Some(work)=self.work{q.bind_bytes(13,&work.record.key().save.0)?;}if let Some(head)=self.head{q.bind_bytes(14,&head.0)?;}
+        q.bind_bytes(15,&p.parent.bytes())?;q.bind_bytes(16,&self.parent.bytes())?;
         q.done()?;drop(q);
         let st=db.prepare(c"INSERT INTO main.operation VALUES(?1,12,?2,?3,0)")?;
         st.bind_bytes(1,&op.0)?;st.bind_bytes(2,&self.actor.0)?;st.bind_bytes(3,&self.digest(op)?)?;st.done()
@@ -201,16 +208,17 @@ impl Tree<'_,'_>{
         let src=self.session.source;
         live()?;
         if let Some(done)=src.at(|db,c|Route::receipt(self,db,&c,ask,supplied))?{live()?;return Ok(done);}
-        let (c,from_position)=src.at(|db,c|{
+        let (c,from_position,ordinary_parent)=src.at(|db,c|{
             let original=Route::select(self,db,&c,ask)?;
-            Ok((c,original.from))
+            let parent=DirectoryRoute::at(db,&c,self.setting.volume,self.parent)?;
+            Ok((c,original.from,parent))
         })?;
         live()?;
-        let ordinary=OrdinaryRoot::for_body(src,&c,self.setting.volume)?;
+        let ordinary=OrdinaryRoot::at_parent(src,&c,&ordinary_parent,None)?;
         let retained=RecycleRoot::at(src,&c)?;retained.separate_from(&ordinary)?;
         let gates=||->io::Result<()>{live()?;ordinary.require_streaming()?;retained.require()?;retained.separate_from(&ordinary)};
-        let (from,to)=if from_position.here.role==Role::File{(&ordinary.root,retained.root_for_read())}
-            else{(retained.root_for_read(),&ordinary.root)};
+        let (from,to)=if from_position.here.role==Role::File{(ordinary.folder(),retained.root_for_read())}
+            else{(retained.root_for_read(),ordinary.folder())};
         let source_names=from.names()?.into_iter().collect();
         let real=loop{
             gates()?;
@@ -236,8 +244,8 @@ impl Tree<'_,'_>{
             let op=retry.unwrap_or(supplied);
             if retire==Some(op){return Err(invalid("an invalidated transfer cannot be reissued under its original ID"));}
             if let Some(p)=retry{plan.still_live(db,p)?;}
-            plan.vacant(db,existing.map(|p|p.0))?;plan.geometry(&c,op)?;
-            let alias=if plan.kind==Direction::Restore{file_create::display_owner_at(db,&c,plan.to,&plan.name)?}else{None};
+            plan.vacant(db,existing.map(|p|p.0))?;plan.geometry(&c,op,&ordinary_parent)?;
+            let alias=if plan.kind==Direction::Restore{file_create::display_owner_at(db,&c,plan.to,plan.parent,&plan.name)?}else{None};
             let members=work_record::members(db,&c,&plan.from.birth)?;
             let material=Manifest::select(db,&plan.from,plan.work)?;
             Ok((plan,op,retry.is_some(),retire,alias,members,material))
@@ -281,10 +289,13 @@ impl Tree<'_,'_>{
         // In particular no CREATE, syscall reaching F/R, or peer wait
         // takes place in either short SQLite writer section.
         if !retry{
+            let census=if plan.kind==Direction::Restore{Some(locked.names()?.into_iter().collect())}else{None};
+            let pocket=Birth::placement_parent(op)?;
             let w=Connection::open(&src.dir,true)?;
             let issued=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
                 unchanged(db,&c)?;plan.vacant(db,None)?;
                 if plan.reservation(db)?.is_some(){return Err(pending());}
+                if let Some(names)=&census{ordinary_directory::budget(db,plan.to,plan.parent,names,Some(Additional::Pocket(&pocket)))?;}
                 live()?;plan.issue(db,op)
             });
             drop(w);
@@ -347,7 +358,7 @@ impl Tree<'_,'_>{
         let w=Connection::open(&src.dir,true)?;
         let result=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
             unchanged(db,&c)?;plan.still_live(db,op)?;plan.vacant(db,Some(op))?;
-            if plan.kind==Direction::Restore&&file_create::display_owner_at(db,&c,plan.to,&plan.name)?!=alias{
+            if plan.kind==Direction::Restore&&file_create::display_owner_at(db,&c,plan.to,plan.parent,&plan.name)?!=alias{
                 return Err(invalid("restore alias evidence changed"));
             }
             live()?;

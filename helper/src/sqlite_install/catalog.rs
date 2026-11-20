@@ -7,8 +7,8 @@ use std::{ffi::OsString,io,os::unix::ffi::{OsStrExt,OsStringExt},path::PathBuf};
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=10;
-pub(super) const MAX_OBJECTS:i32=128; // includes SQLite's implicit indexes
+pub(super) const SCHEMA_VERSION:i64=11;
+pub(super) const MAX_OBJECTS:i32=132; // includes SQLite's implicit indexes; v11 has 130 entries
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
 fn shape(c:&Connection)->io::Result<Shape>{
@@ -144,7 +144,7 @@ fn read_rows(tx:&rusqlite::Transaction<'_>,template:&Canonical,r:&Request,limit_
 }
 
 #[cfg(test)]
-mod v10_tests {
+mod schema_tests {
     use super::*;
     #[test]
     fn recycle_is_the_single_original_ordinal_not_an_ordinary_claim() {
@@ -155,15 +155,16 @@ mod v10_tests {
         assert!(initial_recycle(&[row(0,4),row(1,5),row(1,6)]).is_err());
     }
     #[test]
-    fn old_version_and_different_v10_structure_are_not_the_fresh_family() {
+    fn old_version_and_different_v11_structure_are_not_the_fresh_family() {
         let approved=Canonical::new().unwrap();
+        assert_eq!(approved.0.len(),130);
         let mut db=Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA).unwrap();
         let tx=db.transaction().unwrap();
         assert!(approved.require(&tx).is_ok());
-        tx.execute_batch("PRAGMA main.user_version = 9;").unwrap();
+        tx.execute_batch("PRAGMA main.user_version = 10;").unwrap();
         assert!(approved.require(&tx).is_err());
-        tx.execute_batch("PRAGMA main.user_version = 10; CREATE TABLE unknown_release_origin(unused INTEGER);").unwrap();
+        tx.execute_batch("PRAGMA main.user_version = 11; CREATE TABLE unknown_release_origin(unused INTEGER);").unwrap();
         assert!(approved.require(&tx).is_err());
     }
 }

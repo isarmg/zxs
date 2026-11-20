@@ -1,9 +1,9 @@
 //! Finish a prior confirmed transfer, not a new SMB or maintenance action.
 //! The only source unlink plan was captured from the exact dual-witness
 //! original at the moment that USER-selected transfer became durable.
-use super::{Catalog,Connection,InitialReader,file_create};
+use super::{Catalog,Connection,InitialReader,file_create,ordinary_directory::Route};
 use super::super::{file_location::Place,volume::{OrdinaryRoot,RecycleRoot},work_record};
-use crate::{FileId,OperationId,Role,VolumeId,display,fs::{HeldDir,RetireCut,RetireProof,RetireSite,MAX_RETIRE_PROOF,invalid},ordinary::portable_birth::Birth};
+use crate::{FileId,OperationId,Role,VolumeId,display,fs::{HeldDir,RetireCut,RetireProof,RetireSite,MAX_RETIRE_PROOF,invalid,directory_birth::DirectoryParent},ordinary::portable_birth::Birth};
 use std::{cell::Cell,io,thread,time::Duration};
 
 pub(super) fn record(db:&Connection,op:OperationId,proof:Option<&[u8]>,target:&[u8])->io::Result<()>{
@@ -14,11 +14,11 @@ pub(super) fn record(db:&Connection,op:OperationId,proof:Option<&[u8]>,target:&[
     q.bind_integer(4,if proof.is_some(){0}else{2})?;q.done()
 }
 
-struct Ticket{seq:i64,op:OperationId,source:Place,target:VolumeId,names:Vec<u8>}
+struct Ticket{seq:i64,op:OperationId,source:Place,target:VolumeId,parent:DirectoryParent,names:Vec<u8>}
 fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
     src.at(|db,_|{
         let q=db.prepare(c"SELECT r.seq,r.transfer_op,r.guard,m.file_id,m.source_op,m.source_gen,m.source_id,m.source_name,
-            m.direction,m.target_id FROM main.file_transfer_source r JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
+            m.direction,m.target_id,m.source_parent,m.target_parent FROM main.file_transfer_source r JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
             JOIN main.operation o ON o.op_id=r.transfer_op AND o.kind=12 AND o.state=1
             WHERE r.status=0 AND r.seq>?1 ORDER BY r.seq LIMIT 1")?;
         q.bind_integer(1,after)?;
@@ -26,9 +26,9 @@ fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
         let seq=q.integer(0)?;let op=OperationId(q.array(1)?);let names=q.blob(2,MAX_RETIRE_PROOF)?.to_vec();
         let role=match q.byte(8)?{1=>Role::File,2=>Role::Recycle,_=>return Err(invalid("wrong completed transfer direction"))};
         let source=Place{file:FileId(q.array(3)?),op:OperationId(q.array(4)?),generation:q.integer(5)?,
-            volume:VolumeId(q.array(6)?),name:display::component(q.blob(7,222)?,222)?.to_owned(),role};
-        let target=VolumeId(q.array(9)?);q.done()?;
-        Ok(Some(Ticket{seq,op,source,target,names}))
+            volume:VolumeId(q.array(6)?),name:display::component(q.blob(7,222)?,222)?.to_owned(),role,parent:DirectoryParent::from_bytes(q.array(10)?)};
+        let target=VolumeId(q.array(9)?);let parent=DirectoryParent::from_bytes(q.array(11)?);q.done()?;
+        Ok(Some(Ticket{seq,op,source,target,parent,names}))
     })
 }
 impl Ticket{
@@ -37,16 +37,17 @@ impl Ticket{
           JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
           WHERE r.seq=?1 AND r.transfer_op=?2 AND r.status=0 AND o.kind=12 AND o.state=1
             AND m.file_id=?3 AND m.source_op=?4 AND m.source_gen=?5 AND m.source_id=?6 AND m.source_name=?7
-            AND m.target_id=?8 AND m.direction=?9")?;
+            AND m.target_id=?8 AND m.direction=?9 AND m.source_parent=?10 AND m.target_parent=?11")?;
         q.bind_integer(1,self.seq)?;q.bind_bytes(2,&self.op.0)?;q.bind_bytes(3,&self.source.file.0)?;
         q.bind_bytes(4,&self.source.op.0)?;q.bind_integer(5,self.source.generation)?;q.bind_bytes(6,&self.source.volume.0)?;
         q.bind_bytes(7,self.source.name.as_bytes())?;q.bind_bytes(8,&self.target.0)?;
         q.bind_integer(9,if self.source.role==Role::File{1}else{2})?;
+        q.bind_bytes(10,&self.source.parent.bytes())?;q.bind_bytes(11,&self.parent.bytes())?;
         if !work_record::start_one(&q)?{return Err(invalid("retirement is no longer the original confirmed transfer"));}
         q.done()?;
         let p=Place::current(db,c,self.source.file)?;
         if p.generation<=self.source.generation||
-           (p.generation==self.source.generation+1&&(p.op!=self.op||p.volume!=self.target)){
+           (p.generation==self.source.generation+1&&(p.op!=self.op||p.volume!=self.target||p.parent!=self.parent)){
             return Err(invalid("no descendant selected placement for retirement"));
         }
         Ok(p)
@@ -57,17 +58,21 @@ fn applied_target(db:&Connection,place:&Place)->io::Result<RetireProof>{
         JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
         JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
         WHERE r.transfer_op=?1 AND m.file_id=?2 AND m.source_gen+1=?3 AND m.target_id=?4 AND m.target_name=?5
-          AND (CASE m.direction WHEN 1 THEN 1 ELSE 2 END)=?6")?;
+          AND (CASE m.direction WHEN 1 THEN 1 ELSE 2 END)=?6 AND m.target_parent=?7")?;
     q.bind_bytes(1,&place.op.0)?;q.bind_bytes(2,&place.file.0)?;q.bind_integer(3,place.generation)?;
     q.bind_bytes(4,&place.volume.0)?;q.bind_bytes(5,place.name.as_bytes())?;q.bind_integer(6,match place.role{Role::Recycle=>1,Role::File=>2,_=>return Err(invalid("invalid applied target role"))})?;
+    q.bind_bytes(7,&place.parent.bytes())?;
     if !work_record::start_one(&q)?{return Err(invalid("no genuine physical confirmation of current retirement target"));}
     let result=RetireProof::decode(q.blob(0,MAX_RETIRE_PROOF)?)?;q.done()?;Ok(result)
 }
 enum Volume<'a>{Ordinary(OrdinaryRoot<'a>),Retained(RecycleRoot<'a>)}
 impl<'a> Volume<'a>{
-    fn open(src:&'a InitialReader,c:&Catalog,p:&Place)->io::Result<Self>{
+    fn open(src:&'a InitialReader,c:&Catalog,p:&Place,route:Option<&Route>)->io::Result<Self>{
         match p.role{
-            Role::File=>Ok(Self::Ordinary(OrdinaryRoot::for_body(src,c,p.volume)?)),
+            Role::File=>{
+                let dir=route.filter(|r|r.volume()==p.volume&&r.parent()==p.parent).ok_or_else(||invalid("wrong actual retirement parent"))?;
+                Ok(Self::Ordinary(OrdinaryRoot::at_parent(src,c,dir,None)?))
+            },
             Role::Recycle=>{
                 let r=RecycleRoot::at(src,c)?;
                 if r.volume()!=p.volume{return Err(invalid("different original recycle role"));}
@@ -76,7 +81,7 @@ impl<'a> Volume<'a>{
             _=>Err(invalid("invalid source retirement role")),
         }
     }
-    fn root(&self)->&HeldDir{match self{Self::Ordinary(f)=>&f.root,Self::Retained(r)=>r.root_for_read()}}
+    fn root(&self)->&HeldDir{match self{Self::Ordinary(f)=>f.folder(),Self::Retained(r)=>r.root_for_read()}}
     fn require(&self)->io::Result<()>{match self{Self::Ordinary(f)=>f.require_streaming(),Self::Retained(r)=>r.require()}}
     fn distinct_roles(&self,other:&Self)->io::Result<()>{
         match (self,other){
@@ -88,13 +93,15 @@ impl<'a> Volume<'a>{
 fn run(src:&InitialReader,t:&Ticket,live:&impl Fn()->io::Result<()>,point:&impl Fn(RetireCut)->io::Result<()>)->io::Result<()>{
     live()?;
     let proof=RetireProof::decode(&t.names)?;
-    let (c,birth,selected,members)=src.at(|db,c|{
+    let (c,birth,selected,members,from_parent,to_parent)=src.at(|db,c|{
         let p=t.current(db,&c)?;
         let b=file_create::committed_file(db,&c,p.file)?;
         let m=work_record::members(db,&c,&b)?;
-        Ok((c,b,p,m))
+        let parent=|place:&Place| if place.role==Role::File{Route::at(db,&c,place.volume,place.parent).map(Some)}else{Ok(None)};
+        let old=parent(&t.source)?;let new=parent(&p)?;
+        Ok((c,b,p,m,old,new))
     })?;
-    let source=Volume::open(src,&c,&t.source)?;
+    let source=Volume::open(src,&c,&t.source,from_parent.as_ref())?;
     let has_parent=t.source.generation>1;
     let portable=Birth::placed_container(&t.source.name,t.source.file)?;
     let witness=birth.witness()?;let header=birth.header();
@@ -102,7 +109,7 @@ fn run(src:&InitialReader,t:&Ticket,live:&impl Fn()->io::Result<()>,point:&impl 
     let isolated=Birth::retirement_name(t.op)?;
     let site=RetireSite{root:source.root(),original:&original,isolation:&isolated,portable:&portable,witness:&witness,header:&header,has_parent};
     let old=proof.lease(&site)?; // no target I/O / acquisition while a former reader remains
-    let target=Volume::open(src,&c,&selected)?;
+    let target=Volume::open(src,&c,&selected,to_parent.as_ref())?;
     source.distinct_roles(&target)?;
     let target_original=super::super::file_location::Placed{birth:birth.clone(),here:selected.clone()}
         .open(target.root(),&target.root().names()?.into_iter().collect(),false,|w|members.require(w))?;

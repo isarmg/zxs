@@ -107,20 +107,21 @@ impl Tree<'_,'_>{
         mut point:impl FnMut(Cut)->io::Result<()>)->io::Result<WorkReceipt>{
         display::component(name.as_bytes(),222)?;if op.0==[0;16]{return Err(invalid("missing working operation"));}
         let src=self.session.source;
-        let(c,b,seen,kept)=src.at(|db,c|{
+        let(c,b,seen,kept,route)=src.at(|db,c|{
             self.require(db,&c,true)?;let b=self.birth(db,&c,name,id)?;let existing=by_file(db,&b)?;
             if let Some(row)=existing{if row.spec.op!=op&&!replaceable(db,&c,row)?{
                 return Err(invalid("another live or committed first working attempt owns this FILE"));}}
             if let Some(same)=original(db,&b,op)?{if Some(same)!=existing{return Err(invalid("this exact SAVE has already been superseded"));}}
-            let kept=retained(db,&b)?;Ok((c,b,existing,kept))
+            let kept=retained(db,&b)?;let route=super::ordinary_directory::Route::at(db,&c,b.volume,self.parent)?;
+            Ok((c,b,existing,kept,route))
         })?;
         // Input hashing holds neither SQL nor a shared volume/FILE namespace lock.
         let incoming=Incoming::observe(b.pool,b.file,op,input)?;let spec=incoming.spec();
         if let Some(x)=seen.filter(|x|x.spec.op==op){if self.match_input(x,spec)?.done{
             return self.first_save_receipt(op,name,id)?.ok_or_else(||invalid("lost committed working original"));}}
-        let f=OrdinaryRoot::for_body(src,&c,b.volume)?;
-        let sample=f.root.names()?.into_iter().collect();
-        let held=b.working_at(&f.root,&sample,true,seen.map(|x|(x.spec,x.done)),&kept)?;
+        let f=OrdinaryRoot::at_parent(src,&c,&route,None)?;
+        let sample=f.folder().names()?.into_iter().collect();
+        let held=b.working_at(f.folder(),&sample,true,seen.map(|x|(x.spec,x.done)),&kept)?;
         if seen.is_none_or(|x|x.spec.op!=op){
             // Count the actual retained name slots, but never read or modify
             // those files. No published working revision is being replaced.
@@ -134,7 +135,7 @@ impl Tree<'_,'_>{
                     if latest!=Some(old){return Err(invalid("this SAVE is no longer the selected attempt"));}
                     return self.match_input(old,spec).map(|_|());}
                 if latest!=seen{return Err(invalid("different first working reservation"));}
-                file_create::display_free(db,&c,&f.root,&b)?;held.require(&f.root)?;f.require()?;
+                file_create::display_free(db,&c,f.folder(),&b,self.parent)?;held.require(f.folder())?;f.require()?;
                 let mut declared=retained(db,&b)?;let mut proposed=self.writer_row(spec);
                 let scope=crate::fs::WitnessRead::at(held.directory())?;
                 if let Some(old)=latest{
@@ -160,23 +161,23 @@ impl Tree<'_,'_>{
         }
         point(Cut::Reserved)?;
         let(x,kept)=src.at(|db,c|{
-            self.current_birth(db,&c,&b,true)?;file_create::display_free(db,&c,&f.root,&b)?;
+            self.current_birth(db,&c,&b,true)?;file_create::display_free(db,&c,f.folder(),&b,self.parent)?;
             let x=by_file(db,&b)?.ok_or_else(||invalid("missing current SAVE reservation"))?;
             Ok((self.match_input(x,spec)?,retained(db,&b)?))
         })?;
         if x.done{return Ok(spec.into());}
-        f.require()?;held.require(&f.root)?;incoming.unchanged()?;
+        f.require()?;held.require(f.folder())?;incoming.unchanged()?;
         let proof=incoming.prepare(&Reserved{installed:&held,spec,kept:&kept})?;point(Cut::BytesSynced)?;
         let w=Connection::open(&src.dir,true)?;
         let committed=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-            self.current_birth(db,&c,&b,true)?;file_create::display_free(db,&c,&f.root,&b)?;
+            self.current_birth(db,&c,&b,true)?;file_create::display_free(db,&c,f.folder(),&b,self.parent)?;
             let x=self.match_input(by_file(db,&b)?.ok_or_else(||invalid("no current first working original"))?,spec)?;
             if !x.done{
                 let s=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=6 AND state=0 RETURNING op_id")?;
                 s.bind_bytes(1,&op.0)?;match unsafe{sqlite3_step(s.0)}{100 if s.array::<16>(0)?==op.0=>s.done()?,rc=>{check(rc)?;return Err(invalid("SAVE did not confirm its one pending row"));}}
             }
             spec.members(&crate::fs::WitnessRead::at(held.directory())?,true,&kept)?;
-            f.require()?;held.require(&f.root)?;proof.require(held.directory())?;Ok(WorkReceipt::from(spec))
+            f.require()?;held.require(f.folder())?;proof.require(held.directory())?;Ok(WorkReceipt::from(spec))
         });
         drop(w);
         match committed{Ok(x)=>Ok(x),Err(e)=>match self.first_save_receipt(op,name,id){Ok(Some(x))if x==WorkReceipt::from(spec)=>Ok(x),
@@ -200,13 +201,13 @@ struct ReadCut{selected:Option<(ReadRecord,End)>,members:Members,alias:Option<fi
 impl ReadCut{
     fn gather(db:&Connection,c:&Catalog,b:&Birth,at:&Place,chosen:Option<ReadRecord>)->io::Result<Self>{
         let selected=chosen.map(|r|work_record::ceiling(db,b,r).map(|end|(r,end))).transpose()?;
-        Ok(Self{selected,members:work_record::members(db,c,b)?,alias:file_create::display_owner_at(db,c,at.volume,&at.name)?})
+        Ok(Self{selected,members:work_record::members(db,c,b)?,alias:file_create::display_owner_at(db,c,at.volume,at.parent,&at.name)?})
     }
 }
 impl<'s,'r> Tree<'s,'r>{
     pub(super) fn reader_from_newborn<'t>(&'t self,born:super::file_create::NativeBorn<'r>)->io::Result<Current<'t,'s,'r>>{
         let (root,birth,container)=born.parts(false)?;
-        let place=Place::origin(&birth);
+        let place=Place::origin(&birth,root.parent());
         let handle=Current{body:None,container,root:MemberRoot::Owned(root),tree:self,birth,place,live:None};
         handle.require()?;Ok(handle)
     }
@@ -227,18 +228,20 @@ impl<'s,'r> Tree<'s,'r>{
     fn open_member<'t,V>(&'t self,name:&str,expected:Option<&super::directory::Entry>,pinned:Option<&'t OrdinaryRoot<'r>>,version:Option<crate::NodeId>,
         result:impl FnOnce(&Connection,&Birth)->io::Result<V>)->io::Result<(Current<'t,'s,'r>,V)>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
-        if pinned.is_some_and(|r|!r.for_tree(src,self.setting.volume)){return Err(invalid("different native tree root"));}
-        let(c,placed,selected)=src.at(|db,c|{
+        if pinned.is_some_and(|r|!r.for_tree(src,self.setting.volume)||r.parent()!=self.parent){return Err(invalid("different native tree root"));}
+        let(c,placed,selected,route)=src.at(|db,c|{
             self.require(db,&c,false)?;
             let placed=self.placed(db,&c,name,None)?;
             if expected.is_some_and(|e|!e.matches(&placed)){return Err(invalid("listed FILE no longer names this selected placement"));}
             let b=&placed.birth;
             let chosen=match version{Some(n)=>Some(work_record::version(db,b,n)?),None=>work_record::selected(db,b)?};
-            let selected=ReadCut::gather(db,&c,b,&placed.here,chosen)?;Ok((c,placed,selected))
+            let selected=ReadCut::gather(db,&c,b,&placed.here,chosen)?;
+            let route=if pinned.is_none(){Some(super::ordinary_directory::Route::at(db,&c,placed.here.volume,placed.here.parent)?)}else{None};
+            Ok((c,placed,selected,route))
         })?;
-        let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::for_body(src,&c,placed.here.volume)?)};
-        let sample=root.root.names()?.into_iter().collect();
-        let container=placed.open(&root.root,&sample,false,|scope|selected.members.require(scope))?;
+        let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::at_parent(src,&c,&route.ok_or_else(||invalid("lost selected FILE parent"))?,None)?)};
+        let sample=root.folder().names()?.into_iter().collect();
+        let container=placed.open(root.folder(),&sample,false,|scope|selected.members.require(scope))?;
         let live=selected.selected.map(|(selected,_)|selected);
         let body=selected.selected.map(|(r,physical)|Selected::open(container.directory(),r.record,physical)).transpose()?;
         let Placed{birth,here:place}=placed;
@@ -274,7 +277,7 @@ impl Current<'_,'_,'_>{
     fn checked<T>(&self,x:&ReadCut,at_f:impl FnOnce()->io::Result<()>,finish:impl FnOnce(&Connection)->io::Result<T>)->io::Result<T>{
         let alias=super::directory::check_alias_name(&self.root,&self.place.name,x.alias.as_ref(),None)?;
         x.members.require(&crate::fs::WitnessRead::at(self.container.directory())?)?;
-        self.root.require_streaming_at(at_f)?;self.container.require(&self.root.root)?;
+        self.root.require_streaming_at(at_f)?;self.container.require(self.root.folder())?;
         if let Some(h)=&self.body{h.require(self.container.directory())?;}
         let result=self.tree.session.source.at(|db,c|{
             if self.selected(db,&c)?!=*x{return Err(io::Error::new(io::ErrorKind::WouldBlock,"FILE selection changed during physical check"));}
@@ -315,7 +318,7 @@ impl Current<'_,'_,'_>{
                 if super::smb_buffer::data_version(self.tree.session.source)?!=before{return Err(io::Error::new(io::ErrorKind::WouldBlock,"changed SQLite cut; retry this range"));}
                 seen.set(Some(before));
             }
-            self.root.require_streaming()?;self.container.require(&self.root.root)?;
+            self.root.require_streaming()?;self.container.require(self.root.folder())?;
             if let Some(h)=&self.body{h.require(self.container.directory())?;}Ok(())
         };
         gate()?;

@@ -3,8 +3,8 @@
 //! No host path, physical inode, block device or FILE descriptor crosses to smbd.
 use super::{InitialReader,Stamp,attempts::TreeOrigin,denied,os};
 use super::super::{SmbSession,Tree,directory,share_mode::Setting};
-use crate::{PoolId,fs::ControlRead,identity::ShareId,system::{lease::SystemDir,reader::volume::OrdinaryRoot}};
-use std::{fs::File,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::{Arc,atomic::{AtomicBool,Ordering}},thread};
+use crate::{OperationId,PoolId,fs::{ControlRead,directory_birth::DirectoryParent},identity::ShareId,system::{lease::SystemDir,reader::volume::OrdinaryRoot}};
+use std::{cell::Cell,fs::File,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::{Arc,atomic::{AtomicBool,AtomicUsize,Ordering}},thread};
 
 #[path="smb_tree_writer.rs"]
 mod writer;
@@ -24,7 +24,11 @@ unsafe extern "C"{
     fn zxs_smb_root_wait(tree:i32,session:i32,timeout:i32)->i32;
     fn zxs_smb_process_live(pidfd:i32)->i32;
     fn zxs_dir_take(tree:i32,worker:i32,limit:*mut u8,cursor:*mut u8)->i32;
-    fn zxs_dir_reply(fd:i32,page:*const u8)->i32;
+    fn zxs_odir_rows(fd:i32,page:*const u8)->i32;
+    fn zxs_odir_take(fd:i32,mode:*mut u8,len:*mut u16,path:*mut u8)->i32;
+    fn zxs_odir_reply(fd:i32,code:u8,basics:*const u8,id:*const u8,op:*const u8)->i32;
+    fn zxs_odir_take_ack(fd:i32,id:*const u8,op:*const u8)->i32;
+    fn zxs_odir_done(fd:i32,id:*const u8,op:*const u8)->i32;
     fn zxs_member_reply(fd:i32,info:*const u8)->i32;
     fn zxs_tree_events(tree:i32,session:i32,members:*const i32,n:usize,events:*mut u8)->i32;
     fn zxs_member_held(member:i32)->i32;
@@ -102,12 +106,116 @@ fn serve_folder(site:Site<'_>,origin:TreeOrigin,expected:Setting,writer_class:bo
     if expected!=setting||(site.stopping)(){return Err(denied());}
     if !live(&origin,&reply,0){return Err(denied());}
     os(unsafe{zxs_smb_tree_reply(reply.as_raw_fd(),bytes.as_ptr())})?;
-    let tree=Tree{session:&session,setting};
+    let tree=Tree{session:&session,setting,parent:DirectoryParent::Root};
     let tree_live=AtomicBool::new(true);
     struct Clear<'a>(&'a AtomicBool);
     impl Drop for Clear<'_>{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
     thread::scope(|scope|drive(scope,site,&origin,&reply,&root,&tree,writer_class,&tree_live,Clear(&tree_live)))
 }
+
+const ORDINARY_PATH:u8=243;
+const PATH_MAX:usize=4096;
+static FOLDER_READS:AtomicUsize=AtomicUsize::new(0);
+static FOLDER_WRITES:AtomicUsize=AtomicUsize::new(0);
+struct PathPermit(&'static AtomicUsize);
+impl PathPermit{
+    fn obtain(write:bool)->Option<Self>{
+        let (used,cap)=if write{(&FOLDER_WRITES,32)}else{(&FOLDER_READS,64)};
+        used.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<cap).then_some(n+1)).ok()?;
+        Some(Self(used))
+    }
+}
+impl Drop for PathPermit{fn drop(&mut self){self.0.fetch_sub(1,Ordering::AcqRel);}}
+fn serve_nested(site:Site<'_>,origin:&TreeOrigin,top:&OwnedFd,top_live:&AtomicBool,expected:Setting,
+    writer_class:bool,reply:OwnedFd,_permit:PathPermit)->io::Result<()>{
+    let fd=reply.as_raw_fd();
+    let live_parent=||!top_live.load(Ordering::Acquire)||(site.stopping)()||!live(origin,top,0);
+    let alive=||->io::Result<()>{
+        if live_parent() || !live(origin,&reply,0){return Err(denied());}
+        Ok(())
+    };
+    let offered=Cell::new(false);
+    let prepare=||->io::Result<_>{
+        alive()?;site.validate()?;
+        let (mut mode,mut len)=(0,0);
+        let mut raw=[0;PATH_MAX];
+        os(unsafe{zxs_odir_take(fd,&mut mode,&mut len,raw.as_mut_ptr())})?;
+        let raw=raw.get(..usize::from(len)).ok_or_else(denied)?;
+        let names=super::super::ordinary_directory::components(raw)?;
+        Ok((mode,names))
+    };
+    let result=(||->io::Result<()>{
+        let (mode,names)=prepare()?;
+        let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
+        let auth=SmbSession{source:&src,original:origin.slot.original.clone()};
+        let tree=auth.connect_id(expected.share)?;
+        if tree.setting!=expected{return Err(denied());}
+        let (catalog,route)=if mode==0{
+            tree.ordinary_route(&names,writer_class)?
+        }else{
+            let (leaf,parents)=names.split_last().ok_or_else(denied)?;
+            let (c,parent)=tree.ordinary_route(parents,mode==2)?;
+            let existing=tree.ordinary_route(&names,false);
+            let may_make=mode==2||mode==3;
+            match existing{
+                Ok(found) if mode==1||mode==3=>found,
+                Ok(_)=>return Err(io::ErrorKind::AlreadyExists.into()),
+                Err(e) if may_make&&matches!(e.kind(),io::ErrorKind::NotFound|io::ErrorKind::WouldBlock)=>(||{
+                    let ordinary=OrdinaryRoot::at_parent(&src,&c,&parent,None)?;
+                    let info=choice(expected,src.pool,ordinary.ordinal)?;
+                    let scoped=tree.scoped(parent.parent());
+                    let op=match scoped.resumable_directory(&parent,leaf)?{Some(original)=>original,None=>OperationId::new()?};
+                    let (born,_)=scoped.make_ordinary_directory(&parent,op,leaf,|x|{
+                        alive()?;site.validate()?;
+                        os(unsafe{zxs_odir_reply(fd,1,info.as_ptr(),x.id.0.as_ptr(),x.original.0.as_ptr())})?;
+                        offered.set(true);
+                        os(unsafe{zxs_odir_take_ack(fd,x.id.0.as_ptr(),x.original.0.as_ptr())})
+                    },&alive,|_|Ok(()))?;
+                    if !offered.get()&&mode==2{return Err(io::ErrorKind::AlreadyExists.into());}
+                    let (cur,actual)=tree.ordinary_route(&names,false)?;
+                    if actual.selected()!=Some(&born){return Err(denied());}
+                    Ok((cur,actual))
+                })().or_else(|e:io::Error|{
+                    // Another request may have confirmed between the two
+                    // original observations. OPEN_IF may now open that exact
+                    // directory, but cannot return CREATED a second time.
+                    if mode==3&&!offered.get()&&e.kind()==io::ErrorKind::AlreadyExists{
+                        tree.ordinary_route(&names,false).or(Err(e))
+                    }else{Err(e)}
+                })?,
+                Err(e)=>return Err(e),
+            }
+        };
+        let root=OrdinaryRoot::at_parent(&src,&catalog,&route,None)?;
+        let registered=route.selected().ok_or_else(denied)?;
+        let brief=choice(expected,src.pool,root.ordinal)?;
+        let selected=tree.scoped(route.parent());
+        root.require_streaming()?;
+        src.at(|db,c|selected.require(db,&c,false))?;
+        site.validate()?;alive()?;
+        if offered.get(){
+            os(unsafe{zxs_odir_done(fd,registered.id.0.as_ptr(),registered.original.0.as_ptr())})?;
+        }else{
+            os(unsafe{zxs_odir_reply(fd,0,brief.as_ptr(),registered.id.0.as_ptr(),registered.original.0.as_ptr())})?;
+        }
+        let active=AtomicBool::new(true);
+        struct Clear<'a>(&'a AtomicBool);
+        impl Drop for Clear<'_>{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+        let path_site=Site{stopping:&live_parent,..site};
+        thread::scope(|scope|drive(scope,path_site,origin,&reply,&root,&selected,writer_class,&active,Clear(&active)))
+    })();
+    if let Err(e)=&result{
+        if !offered.get()&&alive().is_ok()&&site.validate().is_ok(){
+            let reason=match e.kind(){
+                io::ErrorKind::AlreadyExists=>2,io::ErrorKind::WouldBlock=>3,
+                io::ErrorKind::StorageFull=>5,io::ErrorKind::NotFound=>6,_=>4,
+            };
+            let _=unsafe{zxs_odir_reply(fd,reason,std::ptr::null(),std::ptr::null(),std::ptr::null())};
+        }
+    }
+    result
+}
+
 fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<'env>,
     origin:&'env TreeOrigin,reply:&'env OwnedFd,root:&'env OrdinaryRoot<'_>,tree:&Tree<'_,'_>,writer_class:bool,
     tree_live:&'env AtomicBool,_clear:impl Drop)->io::Result<()>{
@@ -115,7 +223,7 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
     // Compatible readers keep their original bounded dispatcher.
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
     const MAX_MEMBERS:usize=16;
-    let mut writers=Vec::new();let mut births=Vec::new();let mut moves=Vec::new();
+    let mut writers=Vec::new();let mut births=Vec::new();let mut moves=Vec::new();let mut paths=Vec::new();
     while !(site.stopping)()&&live(origin,reply,0){
         let mut channels=[-1;MAX_MEMBERS];let mut events=[0u8;MAX_MEMBERS+1];
         for(i,(m,_))in members.iter().enumerate(){channels[i]=m.as_raw_fd();}
@@ -159,15 +267,26 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
         let fd=unsafe{zxs_dir_take(reply.as_raw_fd(),origin.worker.as_raw_fd(),&mut limit,cursor.as_mut_ptr())};
         if fd<0{break;} // original session remains usable on its other trees
         let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+        if limit==ORDINARY_PATH{
+            if tree.parent!=DirectoryParent::Root{continue;}
+            paths.retain(|h:&thread::ScopedJoinHandle<'_,()>|!h.is_finished());
+            if paths.len()>=16{continue;}
+            let Some(permit)=PathPermit::obtain(writer_class)else{continue;};
+            let expected=tree.setting;
+            if let Ok(job)=thread::Builder::new().name("zxs-ordinary-directory".into()).spawn_scoped(scope,move||{
+                let _=serve_nested(site,origin,reply,tree_live,expected,writer_class,answer,permit);
+            }){paths.push(job);}
+            continue;
+        }
         if (birth::BEGIN..=birth::END).contains(&limit){
             let flags=limit-birth::BEGIN;let writer=flags&2!=0;
             if writer&&!writer_class{continue;}
             births.retain(|(_,h):&(bool,thread::ScopedJoinHandle<'_,()>)|!h.is_finished());
             if births.iter().filter(|(w,_)|*w==writer).count()>=(if writer{8}else{16}){continue;}
             let Some(permit)=birth::Permit::acquire(writer)else{continue;};
-            let d=&root.root;let expected=tree.setting;
+            let d=root.folder();let expected=tree.setting;let parent=tree.parent;
             if let Ok(job)=thread::Builder::new().name("zxs-file-birth".into()).spawn_scoped(scope,move||{
-                let _=birth::serve(site,origin,reply,tree_live,expected,d,answer,cursor,flags,permit);
+                let _=birth::serve(site,origin,reply,tree_live,expected,parent,d,answer,cursor,flags,permit);
             }){births.push((writer,job));}
             continue;
         }
@@ -176,9 +295,9 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
             if !writer_class||writers.len()>=8||tree.setting.mode!=super::super::share_mode::Mode::ReadWrite||
                (site.stopping)()||!live(origin,reply,0){continue;}
             let Some(permit)=writer::Permit::acquire()else{continue;};
-            let d=&root.root;let expected=tree.setting;
+            let d=root.folder();let expected=tree.setting;let parent=tree.parent;
             if let Ok(job)=thread::Builder::new().name("zxs-file-writer".into()).spawn_scoped(scope,move||{
-                let _=writer::serve(site,origin,reply,tree_live,expected,d,answer,cursor,permit);
+                let _=writer::serve(site,origin,reply,tree_live,expected,parent,d,answer,cursor,permit);
             }){writers.push(job);}
             continue;
         }
@@ -199,16 +318,19 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
                 tree.session.source.at(|db,c|tree.require(db,&c,false))?;
                 return Ok(Vec::new());
             }
-            directory::page(&tree,&root,&cursor[1..1+usize::from(cursor[0])],limit,||Ok(()))
+            directory::mixed_page(tree,root,&cursor[1..1+usize::from(cursor[0])],limit,||Ok(()))
         })();
         let Ok(rows)=result else{continue;}; // close only this answer, never send a prefix
         if (site.stopping)()||!live(&origin,&reply,0) || site.validate().is_err(){break;}
         let mut out=[0u8;1+16*(1+255+8+8)];out[0]=rows.len() as u8;
         for (row,slot) in rows.iter().zip(out[1..].chunks_exact_mut(272)){
-            slot[0]=row.name.len() as u8;slot[1..1+row.name.len()].copy_from_slice(row.name.as_bytes());
-            slot[256..264].copy_from_slice(&row.number.to_be_bytes());slot[264..272].copy_from_slice(&row.size.to_be_bytes());
+            let name=row.name();slot[0]=name.len() as u8;slot[1..1+name.len()].copy_from_slice(name.as_bytes());
+            match row{
+                directory::Child::Directory(_)=>{slot[256..264].fill(0xff);slot[264]=0x80;},
+                directory::Child::File(f)=>{slot[256..264].copy_from_slice(&f.number.to_be_bytes());slot[264..272].copy_from_slice(&f.size.to_be_bytes());}
+            }
         }
-        let _=unsafe{zxs_dir_reply(answer.as_raw_fd(),out.as_ptr())}; // cancel lost no cursor, grant or data
+        let _=unsafe{zxs_odir_rows(answer.as_raw_fd(),out.as_ptr())}; // cancel lost no cursor, grant or data
     }
     Ok(())
 }
@@ -217,6 +339,15 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
 mod tests{
     use super::*;
     use crate::{OperationId,system::reader::{ordinary_pool,account::share_mode::Mode},test_support::PrivateTemp};
+    #[test]
+    fn ordinary_path_write_budget_cannot_consume_compatible_reader_budget(){
+        let writers:Vec<_>=(0..32).map(|_|PathPermit::obtain(true).unwrap()).collect();
+        assert!(PathPermit::obtain(true).is_none());
+        let readers:Vec<_>=(0..64).map(|_|PathPermit::obtain(false).unwrap()).collect();
+        assert!(PathPermit::obtain(false).is_none());
+        drop(writers);assert!(PathPermit::obtain(true).is_some());
+        drop(readers);assert!(PathPermit::obtain(false).is_some());
+    }
     #[test]
     #[ignore="source only: actual private S, F and SQL; successful SMB login supplied by fixture"]
     fn successful_root_requires_original_volume_and_unchanged_authority_after_hold(){

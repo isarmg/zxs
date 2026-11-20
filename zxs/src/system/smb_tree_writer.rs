@@ -2,7 +2,7 @@
 //! is shared with the tree's compatible readers.
 use super::{mover,Site,TreeOrigin,SmbSession,Tree,InitialReader,denied,live,member_packet,os};
 use super::super::super::{smb_stage::Staged,share_mode::{Mode,Setting}};
-use crate::{display,fs::{HeldDir,invalid}};
+use crate::{display,fs::{HeldDir,invalid,directory_birth::DirectoryParent}};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering}};
 
 const MAX_WRITERS:usize=32;
@@ -51,7 +51,7 @@ fn status(e:&io::Error)->u8{
     }
 }
 pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,tree_peer:&OwnedFd,tree_live:&AtomicBool,
-    expected:Setting,root:&HeldDir,member:OwnedFd,cursor:[u8;256],_permit:Permit)->io::Result<()>{
+    expected:Setting,parent:DirectoryParent,root:&HeldDir,member:OwnedFd,cursor:[u8;256],_permit:Permit)->io::Result<()>{
     if expected.mode!=Mode::ReadWrite{return Err(denied());}
     let fd=member.as_raw_fd();
     let active=||{
@@ -65,7 +65,7 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,tree_peer:&OwnedFd,tree_liv
     let name=display::component(&cursor[1..1+usize::from(cursor[0])],222)?;
     let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
     let session=SmbSession{source:&src,original:origin.slot.original.clone()};
-    let tree=Tree{session:&session,setting:expected};
+    let tree=Tree{session:&session,setting:expected,parent};
     let writer=tree.open_named_writer(name)?;
     writer.require_tree_root(root)?;
     let staged=Staged::open(writer)?;

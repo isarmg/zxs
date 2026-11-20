@@ -65,7 +65,7 @@ pub(super) fn manual_index(items:&[manual_work::Item],next:Option<FileId>)->Repl
     out.push_str(r#"<title>选择文件 · ZXS</title></head><body><main data-zxs-scope><h1>选择文件</h1><p>仅显示已登记并确认的文件，不探测数据盘或打开正文。</p>"#);
     if items.is_empty(){out.push_str("<p>没有已确认的文件。</p>");}
     else{
-        out.push_str(r#"<table class="zxs-table"><thead><tr><th>文件名</th><th>数据卷</th><th>工作稿</th></tr></thead><tbody>"#);
+        out.push_str(r#"<table class="zxs-table"><thead><tr><th>卷内路径</th><th>数据卷</th><th>工作稿</th></tr></thead><tbody>"#);
         for i in items{
             write!(out,r#"<tr><td><a href="/versions/history?file={}"><bdi>"#,i.file).unwrap();
             text(&mut out,&i.name);write!(out,r#"</bdi></a></td><td><code>{}</code></td><td><a href="/versions?file={}">手动提交</a></td></tr>"#,i.volume,i.file).unwrap();
@@ -79,7 +79,8 @@ pub(super) fn manual_index(items:&[manual_work::Item],next:Option<FileId>)->Repl
 
 pub(super) fn version_history(history:&crate::system::reader::account::history::Timeline)->Reply{
     let mut out=String::from(HEAD);
-    out.push_str("<title>已提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>已提交版本</h1><p>当前名称 <bdi>");
+    out.push_str("<title>已提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>已提交版本</h1><p>");
+    out.push_str(if history.retained{"当前保留名称 <bdi>"}else{"当前卷内路径 <bdi>"});
     text(&mut out,&history.name);
     let role=if history.retained{"回收卷"}else{"数据卷"};
     write!(out,"</bdi> · {role} <code>{}</code></p><p>这里只列已提交的版本，不读取正文或核验磁盘。</p>",history.volume).unwrap();
@@ -104,7 +105,7 @@ pub(super) fn version_history(history:&crate::system::reader::account::history::
 pub(super) fn manual(item:&manual_work::Item,t:manual_work::Target,op:OperationId,csrf:&str)->Reply{
     let mut out=String::from(HEAD);
     out.push_str("<title>手动提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>手动提交版本</h1>");
-    out.push_str("<p>文件 <bdi>");text(&mut out,&item.name);
+    out.push_str("<p>卷内路径 <bdi>");text(&mut out,&item.name);
     write!(out,r#"</bdi>，数据卷 <code>{}</code>，当前这一轮的工作修订 {}。</p><p>提交会冻结这一版，不做全量复制。仍有写入时不会提交。</p>
 <form method="post" action="/versions/commit"><input type="hidden" name="op" value="{op}"><input type="hidden" name="csrf" value=""#,item.volume,t.revision).unwrap();
     text(&mut out,csrf);

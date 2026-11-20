@@ -2,7 +2,7 @@
 //! capability. The native FSP is not revealed before the final real receipt.
 use super::{mover,InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,member_packet,os,writer};
 use super::super::super::{first_work::Current,share_mode::Setting,smb_stage::{Scratch,Staged}};
-use crate::{OperationId,display,fs::{HeldDir,invalid},ordinary::portable_birth::Birth,system::reader::volume::OrdinaryRoot};
+use crate::{OperationId,display,fs::{HeldDir,invalid,directory_birth::DirectoryParent},ordinary::portable_birth::Birth,system::reader::volume::OrdinaryRoot};
 use std::{cell::Cell,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering}};
 
 pub(super) const BEGIN:u8=248;
@@ -42,7 +42,7 @@ fn emit_prospect(b:&Birth,num:u64)->[u8;88]{
     out[64..72].copy_from_slice(&num.to_be_bytes());out
 }
 pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,folder:&OwnedFd,running:&AtomicBool,setting:Setting,
-    expected_root:&HeldDir,member:OwnedFd,cursor:[u8;256],flags:u8,_permit:Permit)->io::Result<()>{
+    parent:DirectoryParent,expected_root:&HeldDir,member:OwnedFd,cursor:[u8;256],flags:u8,_permit:Permit)->io::Result<()>{
     let name=display::component(&cursor[1..1+usize::from(cursor[0])],222)?;
     if flags>3{return Err(invalid("unknown native birth intent"));}
     let write=flags&2!=0;let open_if=flags&1!=0;
@@ -55,10 +55,14 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,folder:&OwnedFd,running:&At
     alive()?;site.validate()?;
     let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
     let session=SmbSession{source:&src,original:origin.slot.original.clone()};
-    let tree=Tree{session:&session,setting};
-    let c=src.at(|db,c|{tree.require(db,&c,false)?;Ok(c)})?;
-    let root=OrdinaryRoot::for_body(&src,&c,setting.volume)?;
-    if root.root.entity!=expected_root.entity || !root.root.same_mount(expected_root)?{return Err(denied());}
+    let tree=Tree{session:&session,setting,parent};
+    let (c,route)=src.at(|db,c|{
+        tree.require(db,&c,false)?;
+        let route=super::super::super::ordinary_directory::Route::at(db,&c,setting.volume,parent)?;
+        Ok((c,route))
+    })?;
+    let root=OrdinaryRoot::at_parent(&src,&c,&route,None)?;
+    if root.folder().entity!=expected_root.entity || !root.folder().same_mount(expected_root)?{return Err(denied());}
     let offered=Cell::new(false);let emitted=Cell::new(false);
     let original=||{
         let found=tree.occupied_name(name,write)?;

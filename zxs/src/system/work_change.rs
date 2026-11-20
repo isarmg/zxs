@@ -38,7 +38,7 @@ impl State{
         let selected=work_record::selected(db,b)?.map(|r|work_record::ceiling(db,b,r).map(|end|(r,end))).transpose()?;
         Ok(Self{selected,latest:work_record::last_issue(db,b)?,pending:work_record::pending_current(db,b)?,
             manual:work_record::latest_commit(db,b)?,members:work_record::members(db,c,b)?,
-            alias:super::file_create::display_owner_at(db,c,at.volume,&at.name)?})
+            alias:super::file_create::display_owner_at(db,c,at.volume,at.parent,&at.name)?})
     }
     fn base(&self)->Option<OperationId>{self.selected.map(|(r,_)|r.record.key().save)}
     fn parent(&self)->Option<OperationId>{self.manual.map(|(op,_,_,_)|op)}
@@ -56,7 +56,7 @@ pub(crate) struct Writer<'t,'s,'r>{
 impl<'s,'r> Tree<'s,'r>{
     pub(super) fn writer_from_newborn<'t>(&'t self,born:super::file_create::NativeBorn<'r>,nonce:OperationId)->io::Result<Writer<'t,'s,'r>>{
         let (root,birth,installed)=born.parts(true)?;
-        let place=Place::origin(&birth);
+        let place=Place::origin(&birth,root.parent());
         let handle=Writer{installed,root,tree:self,birth,place,nonce};
         handle.require_work()?;Ok(handle)
     }
@@ -70,14 +70,16 @@ impl<'s,'r> Tree<'s,'r>{
     }
     pub(crate) fn open_writer<'t>(&'t self,name:&str,file:FileId)->io::Result<Writer<'t,'s,'r>>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
-        let (catalog,located,selected)=src.at(|db,c|{
+        let (catalog,located,selected,route)=src.at(|db,c|{
             self.require(db,&c,true)?;
             let located=self.placed(db,&c,name,Some(file))?;
-            let selected=State::at(db,&c,&located.birth,&located.here)?;Ok((c,located,selected))
+            let selected=State::at(db,&c,&located.birth,&located.here)?;
+            let route=super::ordinary_directory::Route::at(db,&c,located.here.volume,located.here.parent)?;
+            Ok((c,located,selected,route))
         })?;
-        let root=OrdinaryRoot::for_body(src,&catalog,located.here.volume)?;
-        let names=root.root.names()?.into_iter().collect();
-        let installed=located.open(&root.root,&names,true,|s|selected.members.require(s))?;
+        let root=OrdinaryRoot::at_parent(src,&catalog,&route,None)?;
+        let names=root.folder().names()?.into_iter().collect();
+        let installed=located.open(root.folder(),&names,true,|s|selected.members.require(s))?;
         let Placed{birth,here:place}=located;
         let handle=Writer{installed,root,tree:self,birth,place,nonce:OperationId::new()?};
         handle.physical(&selected)?;
@@ -90,7 +92,7 @@ impl<'s,'r> Tree<'s,'r>{
 }
 impl<'t,'s,'r> Writer<'t,'s,'r>{
     pub(super) fn require_tree_root(&self,original:&crate::fs::HeldDir)->io::Result<()>{
-        if self.root.root.entity!=original.entity||!self.root.root.same_mount(original)?{
+        if self.root.folder().entity!=original.entity||!self.root.folder().same_mount(original)?{
             return Err(invalid("writer cannot borrow a replacement native tree root"));
         }
         original.require_named()?;self.root.require_streaming()
@@ -123,7 +125,7 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
     fn physical(&self,x:&State)->io::Result<()>{
         let alias=super::directory::check_alias_name(&self.root,&self.place.name,x.alias.as_ref(),None)?;
         x.members.require(&WitnessRead::at(self.installed.directory())?)?;
-        self.root.require_streaming()?;self.installed.require(&self.root.root)?;
+        self.root.require_streaming()?;self.installed.require(self.root.folder())?;
         drop(alias);Ok(())
     }
     fn original(&self,db:&Connection,op:OperationId)->io::Result<Option<Issued>>{

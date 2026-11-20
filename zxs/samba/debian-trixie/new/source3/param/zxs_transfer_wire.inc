@@ -14,14 +14,26 @@ static bool transfer_labels(uint8_t kind,const uint8_t *folder,size_t f,const ui
 int zxs_xfer_query(int member,uint8_t kind,const uint8_t *folder,size_t f,const uint8_t *name,size_t n,const uint8_t mark[16])
 {
     uint8_t b[ZXS_XFER_ASK]={0};int p[2],rc,e;
+    const uint8_t *parents=NULL;size_t plen=0;
+    if(kind==ZXS_XFER_RESTORE && name!=NULL && n>0 && n<=ZXS_OD_PATH_MAX){
+        const uint8_t *last=NULL;
+        for(size_t i=0;i<n;i++)if(name[i]=='\\')last=name+i;
+        if(last!=NULL){
+            parents=name;plen=(size_t)(last-name);
+            n-=plen+1;name=last+1;
+            if(plen==0)return bad();
+        }
+    }
     if(!transfer_labels(kind,folder,f,name,n)||
        (kind==ZXS_XFER_DELETE?(mark==NULL||!cut_id(mark)):mark!=NULL))return bad();
-    memcpy(b,handoff_ask,16);b[16]=kind;b[17]=(uint8_t)f;b[18]=(uint8_t)n;
+    memcpy(b,handoff_ask,16);b[16]=kind;b[17]=(uint8_t)f;b[18]=(uint8_t)n;b[19]=(plen!=0);
     if(mark!=NULL)memcpy(b+20,mark,16);
     else if(f)memcpy(b+20,folder,f);
     if(n)memcpy(b+20+ZXS_DIR_NAME,name,n);
     if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)!=0)return -1;
-    rc=transfer(member,b,NULL,sizeof(b),p[1],NULL,ZXS_NO_FD,true);e=errno;close(p[1]);
+    rc=plen!=0?zxs_odir_put_path(p[0],0,parents,plen):0;
+    if(rc==0)rc=transfer(member,b,NULL,sizeof(b),p[1],NULL,ZXS_NO_FD,true);
+    e=errno;close(p[1]);
     if(rc!=0){close(p[0]);errno=e;return -1;}return p[0];
 }
 int zxs_member_xfer_pending(int member)
@@ -32,12 +44,12 @@ int zxs_member_xfer_pending(int member)
     if(n==32)return 0; /* existing exact READ decoder owns the actual tag */
     return bad();
 }
-int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAME+1],uint8_t name[ZXS_FILE_NAME+1],uint8_t mark[16])
+int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAME+1],uint8_t name[ZXS_FILE_NAME+1],uint8_t mark[16],uint16_t *parent_len,uint8_t *parents)
 {
     uint8_t b[ZXS_XFER_ASK];int answer=-1;
     if(transfer(member,NULL,b,sizeof(b),-1,&answer,ZXS_DATA_FD,true)!=0)return -1;
     size_t f=b[17],n=b[18];const uint8_t *tail=b+20+ZXS_DIR_NAME;
-    if(memcmp(b,handoff_ask,16)!=0||b[19]!=0||!transfer_labels(b[16],b+20,f,tail,n)||
+    if(memcmp(b,handoff_ask,16)!=0||b[19]>1||(b[19]!=0&&b[16]!=ZXS_XFER_RESTORE)||!transfer_labels(b[16],b+20,f,tail,n)||
        same_endpoint_process(answer,worker,false)!=0)goto reject;
     if(b[16]==ZXS_XFER_DELETE&&!cut_id(b+20))goto reject;
     for(size_t i=b[16]==ZXS_XFER_DELETE?16:f;i<ZXS_DIR_NAME;i++)if(b[20+i]!=0)goto reject;
@@ -46,6 +58,11 @@ int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAM
     memset(mark,0,16);if(b[16]==ZXS_XFER_DELETE)memcpy(mark,b+20,16);
     if(f)memcpy(folder+1,b+20,f);
     if(n)memcpy(name+1,tail,n);
+    *parent_len=0;
+    if(b[19]!=0){
+        uint8_t mode;
+        if(zxs_odir_take(answer,&mode,parent_len,parents)!=0 || mode!=0)goto reject;
+    }
     return answer;
 reject:
     close(answer);return bad();

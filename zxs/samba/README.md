@@ -95,7 +95,7 @@ QUERY_DIRECTORY 复用原真实会话、FID、FILE_LIST_DIRECTORY、输出额度
 
 合法的传统 oplock 意向统一降为 NONE；不宣告文件/目录 leasing，且只忽略格式完整的单个 RqLs（[MS-SMB2 CREATE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/8c61e928-9242-44ed-96a0-98d1032d0d39)），不产生缓存授权。[MxAc](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/828a4d2d-0c9b-4c1c-8d2b-cc474172baa5) 需要真正权限响应，仍未接；不因此声称 Finder 可用。
 
-逻辑 `盘目录\文件名` 以两段准确字节选择，没有流、原生重连、任意宿主路径或深层子目录。已确认 FILE 可用 FILE_OPEN 或 FILE_OPEN_IF 非截断打开。新生 FILE_CREATE/OPEN_IF 要求当前 RW 和原生添加权，使用本次真正原生 FSP/share-mode 后的私端 ACK 确认；完成前持 `closing` 禁止客户端操作，确认后才报告 FILE_WAS_CREATED。原私双名/SQL 待办不被任意下一请求认领。没有 ACK 不发原单；已确认后断线不报告确定失败。所有具名句柄各自保留原权限与独立 ShareAccess。
+普通路径可选已发表的沿级真实目录，例如 `盘目录\项目\稿件.xlsx`。原生目录 CREATE/OPEN_IF 只在当前 RW 和真实 ADD_SUBDIR 下发表；先装完整 DirectoryId 的不可用原生柄，收到同原双名同步及 SQL 确认的私端答复才可用。每个子级只按准确父和名称选择，不能把原案、历史的 FileId 锁或 R 路径转为新权限。目录页每行带独立类型，实际物理 inode 不过线；普通目录不宣告唯一64位号。支持原签名目录 GETINFO 的五个文件信息类；没有 ADS、原生重连或任意宿主路径。已确认 FILE 可用 FILE_OPEN 或 FILE_OPEN_IF 非截断打开。新生 FILE_CREATE/OPEN_IF 要求当前 RW 和原生添加权，使用本次真正原生 FSP/share-mode 后的私端 ACK 确认；完成前持 `closing` 禁止客户端操作，确认后才报告 FILE_WAS_CREATED。原私双名/SQL 待办不被任意下一请求认领。没有 ACK 不发原单；已确认后断线不报告确定失败。所有具名句柄各自保留原权限与独立 ShareAccess。
 
 ### 根目录的原生 QUERY_INFO
 
@@ -130,7 +130,7 @@ WRITE、写穿、SET EOF、FLUSH 或正常脏 CLOSE 使用已取得的原写柄�
 
 ### 逻辑 FILE 在 Samba 的同物键
 
-创建普通根 FILE 时，SQLite 同一写事务以现有 16 字节 FileId 的 BLOB 索引检查前八字节对应的号：包含待办和所有普通根，不按共享或是否可见过滤；只为新原单选空号（保留 0–255 及全一号），原单重试不重抽。所有未来出生或迁移须保留这个池内唯一号。打开已确认的真实 FILE 后，存储端用当前授权、原成员和当次原物复核，再给出 Samba 三个 64 位字段 `(PoolId 高半, FILE 号, PoolId 低半)`。若既有数据没有唯一合格号，该投影拒绝，不借原生 inode、路径或散列修补。两个字段的 Samba 缓存仍须按专用池隔离。这里没有新 SQL 表；具名只读/可写 OPEN 和新 FILE 的真实原生 share-mode admission 复用此键；源 fixture 不是跨进程实机验收。
+在真实普通父下创建 FILE 时，SQLite 同一写事务以现有 16 字节 FileId 的 BLOB 索引检查前八字节对应的号：包含待办和所有普通根，不按共享或是否可见过滤；只为新原单选空号（保留 0–255 及全一号），原单重试不重抽。所有未来出生或迁移须保留这个池内唯一号。打开已确认的真实 FILE 后，存储端用当前授权、原成员和当次原物复核，再给出 Samba 三个 64 位字段 `(PoolId 高半, FILE 号, PoolId 低半)`。若既有数据没有唯一合格号，该投影拒绝，不借原生 inode、路径或散列修补。两个字段的 Samba 缓存仍须按专用池隔离。这里没有新 SQL 表；具名只读/可写 OPEN 和新 FILE 的真实原生 share-mode admission 复用此键；源 fixture 不是跨进程实机验收。
 
 ## 来源与验收
 

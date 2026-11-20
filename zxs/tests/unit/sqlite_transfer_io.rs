@@ -5,6 +5,48 @@ use crate::{fs::invalid,ordinary::portable_birth::Birth,system::reader::{Initial
 use std::{path::Path,fs::OpenOptions,os::unix::fs::{DirBuilderExt,FileExt,OpenOptionsExt}};
 
 #[test]
+#[ignore="source only: exact nested ordinary storage, actual private F/R and real SQLite; no SMB listener"]
+fn nested_handoff_keeps_original_parents_and_the_same_confirmed_work(){
+    let private=PrivateTemp::under(Path::new("/tmp"));let remote=PrivateTemp::under(Path::new("/dev/shm"));
+    let recycle=remote.0.join("actual-R");let (s,p,f,rw)=transfer_pool(&private,&recycle);
+    let src=InitialReader::open(&s,p).unwrap();
+    let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let top=auth.connect(rw).unwrap();let (_,r)=top.ordinary_route(&[],true).unwrap();
+    let op=|n|OperationId([n;16]);
+    let (a,_)=top.make_ordinary_directory(&r,op(0xe0),"Draft",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let (b,_)=top.make_ordinary_directory(&r,op(0xe1),"Restored",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    use crate::fs::directory_birth::DirectoryParent::Directory;
+    let old=top.scoped(Directory(a.id));let target=top.scoped(Directory(b.id));
+    let id=old.create_file(op(0xe2),"Report.txt").unwrap().file;
+    let data=OpenOptions::new().write(true).read(true).create_new(true).mode(0o600).open(private.0.join("payload")).unwrap();
+    data.write_all_at(b"reviewed",0).unwrap();data.sync_all().unwrap();
+    let writer=old.open_writer("Report.txt",id).unwrap();
+    writer.save(op(0xe3),None,Some(0),8,&data).unwrap();drop(writer);
+    let web=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let historical=web.freeze(op(0xe4),web.manual_target(id).unwrap()).unwrap();
+    let slot=src.at(|db,c|Place::current(db,&c,id)).unwrap();
+    let handoff=Handoff::Delete(slot.clone());
+    assert_eq!(slot.parent,Directory(a.id));
+    assert!(top.transfer(&handoff,op(0xe5),||Ok(())).is_err());
+    let del=old.transfer(&handoff,op(0xe5),||Ok(())).unwrap();
+    assert_eq!(del.to.file,id);
+    assert!(old.open_current("Report.txt").is_err());
+    let same=Handoff::RestoreBound{source:del.to.clone(),target:"Resume.txt".into()};
+    let restored=target.transfer(&same,op(0xe6),||Ok(())).unwrap();
+    assert_eq!(restored.to.parent,Directory(b.id));
+    assert_eq!(target.transfer(&same,op(0xe6),||Ok(())).unwrap(),restored);
+    assert!(top.transfer(&same,op(0xe6),||Ok(())).is_err()); // not the same original target
+    let mut bytes=Vec::new();target.open_version("Resume.txt",historical.node).unwrap().range_to(0,8,&mut bytes).unwrap();
+    assert_eq!(bytes,b"reviewed");assert!(top.open_current("Resume.txt").is_err());
+    let physical=f.join("Restored").join(Birth::placement_parent(op(0xe6)).unwrap().into_string().unwrap());
+    assert!(physical.join(format!("Resume-{id}.txt/FILE")).is_file());
+    let next=InitialReader::open(&s,p).unwrap();
+    super::super::retirement::one_for_test(&next,|_|Ok(())).unwrap();
+    assert!(!f.join("Draft").join(format!("Report-{id}.txt")).exists());
+    assert!(physical.join(format!("Resume-{id}.txt/FILE")).is_file());
+}
+
+#[test]
 #[ignore="real SQLite and two separate non-root fixture filesystems; no SMB process or existing disk"]
 fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_restore() {
     let private=PrivateTemp::under(Path::new("/tmp"));let other=PrivateTemp::under(Path::new("/dev/shm"));

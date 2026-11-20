@@ -62,8 +62,9 @@ struct zxs_smb_tree_cut {
     uint8_t share[16],volume[16],setting[16];
     uint64_t revision;
     uint8_t mode,pool[16],volume_ordinal;
+    uint8_t directory[16],directory_op[16]; /* only exact ordinary child proof; zero at top / R */
     int root_fd; /* local only: owned by FSP/tcon; never serialized */
-    int parent_fd; /* for an R deletion directory, also keep its actual R parent */
+    int parent_fd; /* real authorizing folder stays live while a child is held */
     bool owns_parent;
 };
 #define ZXS_SMB_TREE_CUT_BYTES 74
@@ -95,9 +96,27 @@ int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+
 #define ZXS_XFER_UNKNOWN 7u
 int zxs_xfer_query(int member,uint8_t kind,const uint8_t *folder,size_t f,const uint8_t *name,size_t n,const uint8_t mark[16]);
 int zxs_member_xfer_pending(int member);
-int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAME+1],uint8_t name[ZXS_FILE_NAME+1],uint8_t mark[16]);
+int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAME+1],uint8_t name[ZXS_FILE_NAME+1],uint8_t mark[16],uint16_t *parent_len,uint8_t *parents);
 int zxs_xfer_reply(int fd,uint8_t status,const uint8_t file[16],const uint8_t op[16]);
 int zxs_xfer_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t receipt[16]);
+#define ZXS_OD_PATH 243
+#define ZXS_OD_PATH_MAX 4096
+#define ZXS_OD_PATH_REQUEST (19+ZXS_OD_PATH_MAX)
+#define ZXS_OD_PATH_RESULT (17+ZXS_SMB_TREE_CUT_BYTES+32)
+#define ZXS_OD_PATH_ACK 48
+bool zxs_odir_component(const char *name,size_t n,size_t limit);
+bool zxs_odir_relative(const char *path,bool directory);
+int zxs_odir_query(int fd,uint8_t mode,const uint8_t *name,size_t n);
+int zxs_odir_take(int fd,uint8_t *mode,uint16_t *width,uint8_t path[ZXS_OD_PATH_MAX]);
+int zxs_odir_reply(int fd,uint8_t kind,const uint8_t *base,const uint8_t *id,const uint8_t *op);
+int zxs_odir_read(int fd,const struct zxs_smb_tree_cut *parent,struct zxs_smb_tree_cut *out);
+int zxs_odir_own_parent(struct zxs_smb_tree_cut *child,struct zxs_smb_tree_cut *parent);
+int zxs_odir_ack(int fd,const uint8_t id[16],const uint8_t op[16]);
+int zxs_odir_take_ack(int fd,const uint8_t id[16],const uint8_t op[16]);
+int zxs_odir_done(int fd,const uint8_t id[16],const uint8_t op[16]);
+int zxs_odir_read_done(int fd,const uint8_t id[16],const uint8_t op[16]);
+int zxs_odir_rows(int fd,const uint8_t data[ZXS_DIR_PACKET-16]);
+int zxs_odir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]);
 #define ZXS_RETAINED_DIR 244
 #define ZXS_RETAINED_OPEN 245
 #define ZXS_RETAINED_SHARE_DELETE 246

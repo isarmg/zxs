@@ -251,17 +251,69 @@ end:
 	close(p[1]);close(c[1]);return ok;
 }
 
+
+static bool exact_ordinary_parent_and_rows(void)
+{
+	int p[2],pid=-1,native=-1,peer=-1;
+	uint8_t mode=0,role=0,after[ZXS_DIR_NAME+1],decoded[ZXS_OD_PATH_MAX];
+	uint8_t original[74]={0},id[16]={8},op[16]={9},wrong[16]={10};
+	uint8_t rows[ZXS_DIR_PACKET-16]={0},got[ZXS_DIR_PACKET-16];
+	uint16_t n=0;bool ok=false;
+	const uint8_t path[]="Reports\\2027";
+	struct zxs_smb_tree_cut parent={.root_fd=-1},picked={.root_fd=-1};
+	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)!=0)return false;
+	parent.root_fd=p[0];
+	pid=(int)syscall(SYS_pidfd_open,getpid(),0);if(pid<0)goto end;
+	if(!zxs_odir_relative((const char *)path,true) ||
+	   zxs_odir_relative("Reports\\\\2027",true) || zxs_odir_relative("Reports\\..\\2027",true) ||
+	   zxs_odir_relative("\\Reports",true) || zxs_odir_relative("Reports\\a:ADS",false))goto end;
+	native=zxs_odir_query(p[0],3,path,sizeof(path)-1);if(native<0)goto end;
+	peer=zxs_dir_take(p[1],pid,&role,after);
+	if(peer<0 || role!=ZXS_OD_PATH || after[0]!=0 ||
+	   zxs_odir_take(peer,&mode,&n,decoded)!=0 || mode!=3 || n!=sizeof(path)-1 ||
+	   memcmp(path,decoded,n)!=0)goto end;
+	original[0]=parent.share[0]=2;original[16]=parent.volume[0]=3;
+	original[32]=parent.setting[0]=4;original[55]=parent.revision=1;original[56]=parent.mode=2;
+	original[57]=parent.pool[0]=5;original[73]=parent.volume_ordinal=2;
+	original[32]=6;
+	if(zxs_odir_reply(peer,1,original,id,op)!=0 ||
+	   zxs_odir_read(native,&parent,&picked)>=0)goto end;
+	original[32]=4;
+	if(zxs_odir_reply(peer,1,original,id,op)!=0 ||
+	   zxs_odir_read(native,&parent,&picked)!=1 ||
+	   memcmp(id,picked.directory,16)!=0 || memcmp(op,picked.directory_op,16)!=0)goto end;
+	picked.root_fd=native;native=-1;
+	if(zxs_odir_own_parent(&picked,&parent)!=0 || parent.root_fd!=-1 ||
+	   zxs_smb_ctl_live(p[1])!=0 ||
+	   zxs_odir_ack(picked.root_fd,id,wrong)!=0 || zxs_odir_take_ack(peer,id,op)==0 ||
+	   zxs_odir_ack(picked.root_fd,id,op)!=0 || zxs_odir_take_ack(peer,id,op)!=0 ||
+	   zxs_odir_done(peer,id,op)!=0 || zxs_odir_read_done(picked.root_fd,id,op)!=0)goto end;
+	rows[0]=1;rows[1]=1;rows[2]='d';
+	memset(rows+1+1+ZXS_DIR_NAME,0xff,8);rows[1+1+ZXS_DIR_NAME+8]=0x80;
+	if(zxs_odir_rows(peer,rows)!=0 || zxs_odir_result(picked.root_fd,1,got)!=0 ||
+	   memcmp(rows,got,sizeof(got))!=0)goto end;
+	if(zxs_dir_reply(peer,rows)!=0 || zxs_dir_result(picked.root_fd,1,got)==0)goto end;
+	rows[1+1+ZXS_DIR_NAME+9]=1;
+	if(zxs_odir_rows(peer,rows)!=0 || zxs_odir_result(picked.root_fd,1,got)==0)goto end;
+	ok=true;
+end:
+	zxs_smb_root_release(&picked);zxs_smb_root_release(&parent);
+	ok=ok&&zxs_smb_ctl_live(p[1])!=0&&zxs_smb_ctl_live(peer)!=0;
+	if(peer>=0)close(peer);if(native>=0)close(native);if(pid>=0)close(pid);close(p[1]);return ok;
+}
+
 static bool exact_transfer_envelope(void)
 {
 	int p[2],proc=-1,native=-1,store=-1;bool ok=false;
-	uint8_t folder[ZXS_DIR_NAME+1],name[ZXS_FILE_NAME+1],kind=0,status=42,file[16]={3},op[16]={9},other[16]={4},mark[16];
+	uint8_t folder[ZXS_DIR_NAME+1],name[ZXS_FILE_NAME+1],kind=0,status=42,file[16]={3},op[16]={9},other[16]={4},mark[16],parents[ZXS_OD_PATH_MAX];
+	uint16_t width=0;
 	if(socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC,0,p)!=0)return false;
 	proc=(int)syscall(SYS_pidfd_open,getpid(),0);if(proc<0)goto end;
 	if(zxs_xfer_query(p[0],ZXS_XFER_DELETE,(const uint8_t *)"F",1,NULL,0,NULL)>=0)goto end;
 	native=zxs_xfer_query(p[0],ZXS_XFER_RESTORE,(const uint8_t *)"F",1,(const uint8_t *)"Report",6,NULL);
 	if(native<0||zxs_member_xfer_pending(p[1])!=1)goto end;
-	store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark);
-	if(store<0||kind!=ZXS_XFER_RESTORE||folder[0]!=1||folder[1]!='F'||name[0]!=6||memcmp(name+1,"Report",6)!=0)goto end;
+	store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark,&width,parents);
+	if(width!=0||store<0||kind!=ZXS_XFER_RESTORE||folder[0]!=1||folder[1]!='F'||name[0]!=6||memcmp(name+1,"Report",6)!=0)goto end;
 	if(zxs_xfer_reply(store,0,file,op)!=0||zxs_xfer_read(native,other,&status,NULL)==0)goto end;
 	if(zxs_xfer_reply(store,0,file,op)!=0||zxs_xfer_read(native,file,&status,mark)!=0||status!=0)goto end;
 	if(zxs_xfer_reply(store,ZXS_XFER_UNKNOWN,NULL,NULL)!=0||zxs_xfer_read(native,file,&status,NULL)!=0||
@@ -270,8 +322,15 @@ static bool exact_transfer_envelope(void)
 	if(zxs_xfer_query(p[0],ZXS_XFER_DELETE,NULL,0,NULL,0,NULL)>=0)goto end;
 	native=zxs_xfer_query(p[0],ZXS_XFER_DELETE,NULL,0,NULL,0,op);
 	if(native<0||zxs_member_xfer_pending(p[1])!=1)goto end;
-	store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark);
-	ok=store>=0&&kind==ZXS_XFER_DELETE&&folder[0]==0&&name[0]==0&&memcmp(mark,op,16)==0;
+	store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark,&width,parents);
+	if(width!=0 || store<0 || kind!=ZXS_XFER_DELETE || folder[0]!=0 || name[0]!=0 || memcmp(mark,op,16)!=0)goto end;
+	close(store);store=-1;close(native);native=-1;
+	const uint8_t nested[]="Reports\\2027\\Report";
+	native=zxs_xfer_query(p[0],ZXS_XFER_RESTORE,(const uint8_t *)"F",1,nested,sizeof(nested)-1,NULL);
+	if(native<0||zxs_member_xfer_pending(p[1])!=1)goto end;
+	store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark,&width,parents);
+	ok=store>=0&&kind==ZXS_XFER_RESTORE&&width==12&&memcmp(parents,"Reports\\2027",12)==0&&
+	   name[0]==6&&memcmp(name+1,"Report",6)==0;
 end:
 	if(store>=0)close(store);if(native>=0)close(native);if(proc>=0)close(proc);
 	close(p[0]);close(p[1]);return ok;
@@ -279,7 +338,7 @@ end:
 
 int main(void)
 {
-	if(!retained_round_parent_pair() || !exact_transfer_envelope() || !exact_birth_packet() || !one_namespace_root_packet() || !boot_plan_packets() || !directory_pairs() || !held_member_pair() || !staged_writer_pair())return 1;
+	if(!exact_ordinary_parent_and_rows() || !retained_round_parent_pair() || !exact_transfer_envelope() || !exact_birth_packet() || !one_namespace_root_packet() || !boot_plan_packets() || !directory_pairs() || !held_member_pair() || !staged_writer_pair())return 1;
 	struct tevent_context *ev=tevent_context_init(NULL);
 	int a[2],b[2];struct timespec now;int64_t start;
 	uint8_t x[8],y[8];

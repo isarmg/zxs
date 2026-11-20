@@ -124,9 +124,12 @@ impl<'a> WitnessRead<'a>{
     /// Its single issued second name sits in the exact immediate parent;
     /// no directory hardlink, third metadata database or persistent inode ID.
     pub(crate) fn file_header(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
+        self.directory_header(parent,sample,c"FILE",witness,size)
+    }
+    pub(super) fn directory_header(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,primary:&CStr,witness:&CStr,size:u64)->io::Result<HeldBytes>{
         if self.dir.path.parent()!=Some(parent.path.as_path())||!self.dir.same_mount(parent)?{
-            return Err(invalid("FILE header witness is not in its actual containing parent"));}
-        parent.require_named()?;let held=self.open_pair(c"FILE",parent,sample,witness,size..=size)?;
+            return Err(invalid("directory header witness is not in its actual containing parent"));}
+        parent.require_named()?;let held=self.open_pair(primary,parent,sample,witness,size..=size)?;
         parent.require_named()?;Self::require_parent(self.dir)?;held.unchanged()?;Ok(held)
     }
     fn open_pair(&self,main:&CStr,other:&HeldDir,names:&BTreeSet<Vec<u8>>,witness:&CStr,sizes:RangeInclusive<u64>)->io::Result<HeldBytes>{

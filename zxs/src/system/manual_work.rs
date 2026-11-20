@@ -2,12 +2,12 @@
 //! freezes the complete confirmed logical graph, not a physical whole copy.
 //! No automatic caller, write grant or anonymous directory entry is created.
 use super::{Catalog,Connection,InitialReader,WebAdmin,WebCurrent,denied};
-use super::super::{file_location::{Place,Placed},smb::{directory,file_create},volume::OrdinaryRoot,work_record::{self,Members,ReadRecord}};
+use super::super::{file_location::{Place,Placed},smb::{directory,file_create,ordinary_directory::Route},volume::OrdinaryRoot,work_record::{self,Members,ReadRecord}};
 use crate::{
     BranchId,FileId,HistoryId,NodeId,OperationId,PoolId,Role,VersionId,VolumeId,fs::{ControlRead,invalid},hash::Sha256,identity::AccountId,
     ordinary::{portable_birth::Birth,working_round::Selected},
 };
-use std::io;
+use std::{collections::{BTreeMap,btree_map::Entry as Cached},io};
 use super::super::SystemDir;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -79,14 +79,14 @@ impl Cut{
         let (target,selected,ord)=target(db,&birth)?;
         if target!=expected{return Err(busy("this FILE is no longer at the requested working revision"));}
         let members=work_record::members(db,c,&birth)?;
-        let alias=file_create::display_owner_at(db,c,place.volume,&place.name)?;
+        let alias=file_create::display_owner_at(db,c,place.volume,place.parent,&place.name)?;
         Ok(Self{birth,place,selected,target,members,alias,ord})
     }
     fn require(&self,db:&Connection,c:&Catalog)->io::Result<()>{
         if file_create::committed_file(db,c,self.birth.file)?!=self.birth||ordinary_here(db,c,self.birth.file)?!=self.place||
            target(db,&self.birth)?!=(self.target,self.selected,self.ord)||
            work_record::members(db,c,&self.birth)?!=self.members||
-           file_create::display_owner_at(db,c,self.place.volume,&self.place.name)?!=self.alias{
+           file_create::display_owner_at(db,c,self.place.volume,self.place.parent,&self.place.name)?!=self.alias{
             return Err(busy("the original manual cut changed before publication"));
         }Ok(())
     }
@@ -138,7 +138,8 @@ impl WebAdmin<'_>{
             let current=ordinary_here(db,&c,file)?;
             let b=file_create::committed_file(db,&c,file)?;
             let (choice,_,_)=target(db,&b)?;
-            Ok((choice,Item{file:b.file,name:current.name,volume:current.volume}))
+            let parent=Route::at(db,&c,current.volume,current.parent)?;
+            Ok((choice,Item{file:b.file,name:parent.show_child(&current.name),volume:current.volume}))
         })
     }
     /// Same confirmed original birth selector as ordinary directory
@@ -149,12 +150,17 @@ impl WebAdmin<'_>{
             const PAGE:usize=32;
             let q=db.prepare(c"SELECT l.file_id FROM main.file_location l JOIN main.operation o ON o.op_id=l.position_op AND o.state=1 WHERE l.role=2 AND l.file_id>?1 ORDER BY l.file_id LIMIT 33")?;
             q.bind_bytes(1,&after.unwrap_or(FileId([0;16])).0)?;
-            let mut items=Vec::new();
+            let mut items=Vec::new();let mut parents=BTreeMap::new();
             while work_record::start_one(&q)? {
                 let id=FileId(q.array(0)?);
                 let now=ordinary_here(db,&c,id)?;
                 let b=file_create::committed_file(db,&c,id)?;
-                items.push(Item{file:b.file,name:now.name,volume:now.volume});
+                let key=(now.volume,now.parent.bytes());
+                let parent=match parents.entry(key){
+                    Cached::Occupied(r)=>r.into_mut(),
+                    Cached::Vacant(r)=>r.insert(Route::at(db,&c,now.volume,now.parent)?),
+                };
+                items.push(Item{file:b.file,name:parent.show_child(&now.name),volume:now.volume});
             }
             let next=if items.len()>PAGE{items.truncate(PAGE);items.last().map(|i|i.file)}else{None};
             Ok((items,next))
@@ -168,18 +174,20 @@ impl WebAdmin<'_>{
     }
     fn freeze_authorized(&self,op:OperationId,expected:Target,authorized:impl Fn()->io::Result<()>,after:impl FnOnce()->io::Result<()>)->io::Result<Receipt>{
         authorized()?;let src=self.source;
-        let (catalog,cut,done)=src.at(|db,c|{
+        let (catalog,cut,done,route)=src.at(|db,c|{
             self.current(db,&c)?;
             let b=file_create::committed_file(db,&c,expected.file)?;
-            if let Some(result)=self.freeze_result(db,op,&b,expected)?{return Ok((c,None,Some(result)));}
-            Ok((c,Some(Cut::at(db,&c,b,expected)?),None))
+            if let Some(result)=self.freeze_result(db,op,&b,expected)?{return Ok((c,None,Some(result),None));}
+            let cut=Cut::at(db,&c,b,expected)?;
+            let route=super::super::smb::ordinary_directory::Route::at(db,&c,cut.place.volume,cut.place.parent)?;
+            Ok((c,Some(cut),None,Some(route)))
         })?;
         if let Some(old)=done{authorized()?;return Ok(old);} // historical receipt, not a disk check
         let cut=cut.ok_or_else(||invalid("missing exact new manual target"))?;
-        let root=OrdinaryRoot::for_body(src,&catalog,cut.place.volume)?;
-        let names=root.root.names()?.into_iter().collect();
+        let root=OrdinaryRoot::at_parent(src,&catalog,&route.ok_or_else(||invalid("missing selected manual parent"))?,None)?;
+        let names=root.folder().names()?.into_iter().collect();
         let placed=Placed{birth:cut.birth.clone(),here:cut.place.clone()};
-        let installed=placed.open(&root.root,&names,true,|s|cut.members.require(s))?;
+        let installed=placed.open(root.folder(),&names,true,|s|cut.members.require(s))?;
         let actual=installed.directory();
         let proof=Selected::open_settled(actual,cut.selected.record)?;
         let used=proof.verify_map(actual,|needs|{
@@ -195,7 +203,7 @@ impl WebAdmin<'_>{
         })?;
         let result=Receipt{original:op,node:NodeId::new()?,version:VersionId::new()?,ord:cut.ord,target:expected};
         after()?;authorized()?;
-        root.require_streaming()?;installed.require(&root.root)?;
+        root.require_streaming()?;installed.require(root.folder())?;
         cut.members.require(&crate::fs::WitnessRead::at(actual)?)?;
         let alias=directory::check_alias_name(&root,&cut.place.name,cut.alias.as_ref(),None)?;
         used.require(actual)?;proof.require(actual)?;

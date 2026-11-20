@@ -1,0 +1,478 @@
+//! The same SYSTEM authority selects a real ordinary parent and its original
+//! directory births. Neither physical names nor an old operation grant SMB.
+use super::{Catalog,Connection,Tree,check,denied,sqlite3_step};
+use super::super::{volume::OrdinaryRoot,work_record};
+use crate::{DirectoryId,EntryId,OperationId,PoolId,Role,VolumeId,display,
+    fs::{DIRECTORY_BYTES,DIRECTORY_NAMES,HeldDir,MAX_PATH_DEPTH,invalid,path_budget,
+        directory_birth::{DIRECTORY_MARK,DirectoryBirth,DirectoryHold,DirectoryParent}},
+    hash::Sha256,identity::{AccountId,ShareId},ordinary::portable_birth::Birth,system::ROOT_MARK};
+use std::{collections::BTreeSet,ffi::{CStr,CString},io,path::PathBuf};
+
+pub(super) fn components(raw:&[u8])->io::Result<Vec<String>>{
+    let text=std::str::from_utf8(raw).map_err(|_|denied())?;
+    let names:Vec<_>=text.split('\\').map(|x|display::component(x.as_bytes(),255).map(str::to_owned))
+        .take(MAX_PATH_DEPTH+1).collect::<io::Result<_>>()?;
+    if raw.len()>4096||names.is_empty()||names.len()>MAX_PATH_DEPTH{return Err(denied());}
+    Ok(names)
+}
+fn busy()->io::Error{io::Error::new(io::ErrorKind::WouldBlock,"original ordinary name is reserved but unconfirmed")}
+fn exists()->io::Error{io::Error::from(io::ErrorKind::AlreadyExists)}
+
+#[derive(Clone,Debug,Eq,PartialEq)]
+pub(in crate::system::reader) struct Route{pool:PoolId,volume:VolumeId,steps:Vec<DirectoryBirth>}
+impl Route{
+    pub(in crate::system::reader) fn at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent)->io::Result<Self>{
+        if !c.rows().iter().any(|r|r.role==Role::File&&r.volume==volume){return Err(denied());}
+        let mut steps=Vec::new();let mut at=parent;
+        while let DirectoryParent::Directory(id)=at{
+            if steps.len()>=MAX_PATH_DEPTH{return Err(invalid("ordinary parent ancestry is too deep"));}
+            let selected=by_id(db,c,volume,id)?;
+            at=selected.parent;steps.push(selected);
+        }
+        steps.reverse();
+        let path=Self{pool:c.birth.pool,volume,steps};
+        path.geometry(c)?;Ok(path)
+    }
+    /// Wire labels are only lookups. This returns the same verified route as
+    /// the DirectoryId construction, never an unqualified Unix path.
+    pub(super) fn by_names(db:&Connection,c:&Catalog,volume:VolumeId,names:&[String])->io::Result<Self>{
+        if names.len()>MAX_PATH_DEPTH||!c.rows().iter().any(|r|r.role==Role::File&&r.volume==volume){return Err(denied());}
+        let(mut steps,mut at)=(Vec::with_capacity(names.len()),DirectoryParent::Root);
+        for name in names{
+            let birth=lookup(db,c,volume,at,name)?.ok_or(io::ErrorKind::NotFound)?;
+            at=DirectoryParent::Directory(birth.id);steps.push(birth);
+        }
+        let path=Self{pool:c.birth.pool,volume,steps};
+        path.geometry(c)?;Ok(path)
+    }
+    pub(in crate::system::reader) fn volume(&self)->VolumeId{self.volume}
+    pub(in crate::system::reader) fn parent(&self)->DirectoryParent{
+        self.steps.last().map_or(DirectoryParent::Root,|s|DirectoryParent::Directory(s.id))
+    }
+    pub(super) fn selected(&self)->Option<&DirectoryBirth>{self.steps.last()}
+    /// SMB-relative human labels only, for the chosen VolumeId in this
+    /// database cut. No host path or file capability is returned.
+    pub(in crate::system::reader) fn show_child(&self,name:&str)->String{
+        self.steps.iter().map(|d|d.name.as_str()).chain(std::iter::once(name)).collect::<Vec<_>>().join("\\")
+    }
+    pub(in crate::system::reader) fn geometry(&self,c:&Catalog)->io::Result<PathBuf>{
+        let row=c.rows().iter().find(|r|r.role==Role::File&&r.volume==self.volume).ok_or_else(denied)?;
+        if c.birth.pool!=self.pool{return Err(denied());}
+        let mut path=row.path.clone();
+        for step in &self.steps{
+            if step.name.len()>usize::from(row.limit.encoded()){return Err(invalid("selected ordinary directory name is longer than its volume allows"));}
+            path.push(&step.name);
+        }
+        path_budget(&path)?;Ok(path)
+    }
+    pub(in crate::system::reader) fn hold(&self,root:&HeldDir)->io::Result<Vec<DirectoryHold>>{
+        let mut pins=Vec::<DirectoryHold>::with_capacity(self.steps.len());
+        for step in &self.steps{
+            let parent=pins.last().map_or(root,|h|h.directory());
+            pins.push(step.open(parent)?);
+        }
+        keep_chain(root,&pins)?;Ok(pins)
+    }
+}
+pub(in crate::system::reader) fn keep_chain(root:&HeldDir,pins:&[DirectoryHold])->io::Result<()>{
+    let mut parent=root;
+    for pin in pins{pin.require(parent)?;parent=pin.directory();}
+    Ok(())
+}
+
+fn digest(b:&DirectoryBirth,actor:AccountId,auth:OperationId,epoch:i64,share:ShareId,setting:OperationId)->io::Result<[u8;32]>{
+    b.valid()?;
+    if epoch<1||[actor.0,auth.0,share.0,setting.0].contains(&[0;16]){return Err(denied());}
+    let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/CREATE-DIRECTORY\0")?;
+    for id in [b.pool.0,b.original.0,actor.0,auth.0]{h.update(&id)?;}
+    h.update(&epoch.to_be_bytes())?;
+    for id in [share.0,setting.0,b.volume.0,b.parent.bytes(),b.id.0,b.entry.0]{h.update(&id)?;}
+    h.update(&[b.name.len() as u8])?;h.update(b.name.as_bytes())?;Ok(h.finish())
+}
+#[derive(Clone,Debug,Eq,PartialEq)]
+struct Original{birth:DirectoryBirth,done:bool,aborted:bool,actor:AccountId,share:ShareId,setting:OperationId,auth:OperationId,epoch:i64}
+fn original(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Original>>{
+    let q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,d.directory_id,d.entry_id,d.volume_id,d.parent_id,d.display,
+        d.share_id,d.setting_op,d.auth_op,e.generation,a.smb_id,s.volume_id,m.share_id,m.mode,
+        EXISTS(SELECT 1 FROM main.directory_abort a WHERE a.create_op=d.create_op)
+      FROM main.directory_entry d JOIN main.operation o ON o.op_id=d.create_op AND o.kind=13
+      JOIN main.credential_epoch e ON e.role=1 AND e.credential_op=d.auth_op JOIN main.account_pair a ON a.singleton=e.slot
+      JOIN main.root_share s ON s.share_id=d.share_id JOIN main.share_mode m ON m.change_op=d.setting_op WHERE d.create_op=?1")?;
+    q.bind_bytes(1,&op.0)?;
+    if !work_record::start_one(&q)?{return Ok(None);}
+    let state=q.byte(0)?;let actor=AccountId(q.array(1)?);
+    let birth=DirectoryBirth{pool:c.birth.pool,volume:VolumeId(q.array(5)?),parent:DirectoryParent::from_bytes(q.array(6)?),
+        id:DirectoryId(q.array(3)?),entry:EntryId(q.array(4)?),original:op,name:display::component(q.blob(7,255)?,255)?.to_owned()};
+    let share=ShareId(q.array(8)?);let setting=OperationId(q.array(9)?);let auth=OperationId(q.array(10)?);let epoch=q.integer(11)?;
+    let aborted=q.byte(16)?==1;
+    if state>1||(aborted&&state!=0)||q.array::<16>(12)?!=actor.0||q.array::<16>(13)?!=birth.volume.0||
+       q.array::<16>(14)?!=share.0||q.byte(15)?!=2||q.array::<32>(2)?!=digest(&birth,actor,auth,epoch,share,setting)?{
+        return Err(invalid("directory differs from its actual original SQLite birth"));}
+    q.done()?;Ok(Some(Original{birth,done:state==1,aborted,actor,share,setting,auth,epoch}))
+}
+fn by_id(db:&Connection,c:&Catalog,volume:VolumeId,id:DirectoryId)->io::Result<DirectoryBirth>{
+    let q=db.prepare(c"SELECT create_op FROM main.directory_slot WHERE directory_id=?1 AND volume_id=?2 AND state=1")?;
+    q.bind_bytes(1,&id.0)?;q.bind_bytes(2,&volume.0)?;
+    if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
+    let op=OperationId(q.array(0)?);q.done()?;
+    let b=original(db,c,op)?.filter(|b|b.done&&!b.aborted).ok_or_else(denied)?.birth;
+    if b.id!=id||b.volume!=volume{return Err(denied());}Ok(b)
+}
+pub(super) fn lookup(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<DirectoryBirth>>{
+    display::component(name.as_bytes(),255)?;
+    let q=db.prepare(c"SELECT create_op,COALESCE(state,0) FROM main.directory_slot
+      WHERE volume_id=?1 AND parent_id=?2 AND display=?3")?;
+    q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;q.bind_bytes(3,name.as_bytes())?;
+    if !work_record::start_one(&q)?{return Ok(None);}
+    let op=OperationId(q.array(0)?);let done=q.byte(1)?==1;q.done()?;
+    if !done{return Err(busy());}
+    let b=original(db,c,op)?.filter(|b|b.done&&!b.aborted).ok_or_else(denied)?.birth;
+    if b.volume!=volume||b.parent!=parent||b.name!=name{return Err(denied());}Ok(Some(b))
+}
+
+/// Same-slot scope for a pending or published directory, an ordinary FILE or
+/// an incoming restore. The two media representations cannot bypass it.
+fn directory_vacant(db:&Connection,c:&Catalog,parent:&Route,name:&str)->io::Result<()>{
+    if lookup(db,c,parent.volume,parent.parent(),name)?.is_some(){return Err(exists());}
+    // An SMB directory may have a wider leaf than any ordinary FILE can have.
+    if name.len()<=222&&super::super::file_location::Place::named(db,c,parent.volume,parent.parent(),name)?.is_some(){return Err(exists());}
+    // A different business leaf may be the original physical FILE's
+    // terminal. Protect that promised name even before either link exists.
+    let q=db.prepare(c"SELECT 1 FROM main.root_entry b JOIN main.file_location p ON p.file_id=b.file_id
+        WHERE b.volume_id=?1 AND b.parent_id=?2 AND b.terminal=?3 AND p.role=2 AND p.generation=1")?;
+    q.bind_bytes(1,&parent.volume.0)?;q.bind_bytes(2,&parent.parent().bytes())?;q.bind_bytes(3,name.as_bytes())?;
+    if work_record::start_one(&q)?{return Err(exists());}
+    Ok(())
+}
+fn pending_at(db:&Connection,c:&Catalog,route:&Route,name:&str)->io::Result<Option<Original>>{
+    let q=db.prepare(c"SELECT create_op,COALESCE(state,0) FROM main.directory_slot
+             WHERE volume_id=?1 AND parent_id=?2 AND display=?3")?;
+    q.bind_bytes(1,&route.volume.0)?;q.bind_bytes(2,&route.parent().bytes())?;q.bind_bytes(3,name.as_bytes())?;
+    if !work_record::start_one(&q)?{return Ok(None);}
+    let op=OperationId(q.array(0)?);let done=q.byte(1)?==1;q.done()?;
+    if done{return Err(exists());}
+    let p=original(db,c,op)?.filter(|x|!x.aborted&&!x.done).ok_or_else(denied)?;
+    if p.birth.volume!=route.volume||p.birth.parent!=route.parent()||p.birth.name!=name{return Err(denied());}
+    Ok(Some(p))
+}
+fn for_tree(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,op:OperationId,parent:DirectoryParent,name:&str)->io::Result<Option<Original>>{
+    let a=&tree.session.original;let g=tree.setting;
+    let x=original(db,c,op)?;
+    if x.as_ref().is_some_and(|x|
+        x.birth.parent!=parent||x.birth.name!=name||x.birth.volume!=g.volume||x.share!=g.share||
+        x.setting!=g.op||x.auth!=a.op||x.actor!=a.account||x.epoch!=a.generation){return Err(denied());}
+    Ok(x)
+}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub(super) enum Cut{Reserved,Installed}
+impl<'s,'r> Tree<'s,'r>{
+    /// Each name is resolved against one current, authenticated SQL cut.
+    pub(super) fn ordinary_route(&self,names:&[String],write:bool)->io::Result<(Catalog,Route)>{
+        self.session.source.at(|db,c|{
+            self.require(db,&c,write)?;
+            let route=Route::by_names(db,&c,self.setting.volume,names)?;Ok((c,route))
+        })
+    }
+    /// A new SMB create can continue an earlier selection only by its actual
+    /// original id and currently authorized source, not by a lookalike name.
+    pub(super) fn resumable_directory(&self,parent:&Route,name:&str)->io::Result<Option<OperationId>>{
+        let source=self.session.source;let g=self.setting;let a=&self.session.original;
+        if parent.volume!=g.volume{return Err(denied());}
+        let(c,pending)=source.at(|db,c|{
+            self.require(db,&c,true)?;
+            if Route::at(db,&c,g.volume,parent.parent())?!=*parent{return Err(denied());}
+            let old=pending_at(db,&c,parent,name)?.filter(|p|p.actor==a.account&&p.auth==a.op&&p.epoch==a.generation&&
+                p.setting==g.op&&p.share==g.share);
+            Ok((c,old))
+        })?;
+        let Some(old)=pending else{return Ok(None);};
+        let actual=OrdinaryRoot::at_parent(source,&c,parent,None)?;
+        if !old.birth.resumable(actual.folder())?{return Ok(None);}
+        actual.require_streaming()?;
+        source.at(|db,c|{
+            self.require(db,&c,true)?;
+            if pending_at(db,&c,parent,name)?.as_ref()!=Some(&old){return Err(busy());}
+            Ok(Some(old.birth.original))
+        })
+    }
+    /// Offer the original id to the native share-mode gate before any disk
+    /// mutation. This method returns no DirectoryHold on an unknown outcome.
+    pub(super) fn make_ordinary_directory(&self,route:&Route,op:OperationId,name:&str,
+        offer:impl FnOnce(&DirectoryBirth)->io::Result<()>,live:&impl Fn()->io::Result<()>,
+        mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<(DirectoryBirth,DirectoryHold)>{
+        let src=self.session.source;let g=self.setting;let a=&self.session.original;let parent=route.parent();
+        if route.volume!=g.volume{return Err(denied());}
+        display::component(name.as_bytes(),255)?;
+        let (catalog,old,superseded)=src.at(|db,c|{
+            self.require(db,&c,true)?;live()?;
+            if Route::at(db,&c,g.volume,parent)?!=*route{return Err(denied());}
+            let old=for_tree(self,db,&c,op,parent,name)?;
+            let earlier=if old.is_none(){pending_at(db,&c,route,name)?}else{None};
+            if old.is_none()&&earlier.is_none(){directory_vacant(db,&c,route,name)?;}
+            Ok((c,old,earlier))
+        })?;
+        let root=OrdinaryRoot::at_parent(src,&catalog,route,Some(true))?;
+        let d=root.folder();let from_disk=||d.names().map(|v|v.into_iter().collect::<BTreeSet<_>>());
+        if let Some(prior)=&superseded{
+            let (terminal,paired)=prior.birth.pending_shape(d,&from_disk()?)?;
+            if terminal{return Err(busy());}
+            let lost=prior.auth!=a.op||prior.setting!=g.op;
+            if paired&&!lost{return Err(busy());}
+            let reason=if lost{1}else{2};
+            root.require_streaming()?;
+            let sql=Connection::open(&src.dir,true)?;
+            src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|{
+                self.require(db,&c,true)?;
+                if pending_at(db,&c,route,name)?.as_ref()!=Some(prior){return Err(denied());}
+                live()?;
+                let x=db.prepare(c"INSERT INTO main.directory_abort(create_op,setting_op,auth_op,reason) VALUES(?1,?2,?3,?4)")?;
+                x.bind_bytes(1,&prior.birth.original.0)?;x.bind_bytes(2,&g.op.0)?;x.bind_bytes(3,&a.op.0)?;x.bind_integer(4,reason)?;x.done()
+            })?;
+        }
+        let birth=match &old{
+            Some(prior) if !prior.aborted=>prior.birth.clone(),
+            Some(_)=>return Err(denied()),
+            None=>DirectoryBirth{pool:src.pool,volume:g.volume,parent,id:DirectoryId::new()?,entry:EntryId::new()?,original:op,name:name.into()},
+        };
+        birth.validate_geometry(d)?;
+        if old.is_none(){birth.new_vacancy(d,&from_disk()?)?;}
+        if let Some(prior)=&old{if prior.done{
+            let held=birth.open(d)?;root.require_streaming()?;
+            src.at(|db,c|{self.require(db,&c,true)?;live()?;
+                if for_tree(self,db,&c,op,parent,name)?.as_ref()!=Some(prior){return Err(denied());}Ok(())})?;
+            return Ok((birth,held)); // already published; never a native offer
+        }}
+        live()?;offer(&birth)?;live()?;
+        let sha=digest(&birth,a.account,a.op,a.generation,g.share,g.op)?;
+        if old.is_none(){
+            let census=from_disk()?;birth.new_vacancy(d,&census)?;root.require_streaming()?;
+            let sql=Connection::open(&src.dir,true)?;
+            let reserve=src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|{
+                self.require(db,&c,true)?;
+                if Route::at(db,&c,g.volume,parent)?!=*route||for_tree(self,db,&c,op,parent,name)?.is_some(){return Err(denied());}
+                directory_vacant(db,&c,route,name)?;budget(db,g.volume,parent,&census,Some(Additional::Directory(&birth)))?;
+                live()?;
+                let q=db.prepare(c"INSERT INTO main.directory_entry(create_op,directory_id,entry_id,volume_id,parent_id,display,share_id,setting_op,auth_op)
+                                              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?;
+                for(i,v)in [op.0.as_slice(),birth.id.0.as_slice(),birth.entry.0.as_slice(),g.volume.0.as_slice(),
+                            parent.bytes().as_slice(),name.as_bytes(),g.share.0.as_slice(),g.op.0.as_slice(),a.op.0.as_slice()
+                           ].into_iter().enumerate(){q.bind_bytes(i as i32+1,v)?;}
+                q.done()?;
+                let q=db.prepare(c"INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,13,?2,?3,0)")?;
+                q.bind_bytes(1,&op.0)?;q.bind_bytes(2,&a.account.0)?;q.bind_bytes(3,&sha)?;q.done()
+            });
+            drop(sql);
+            if let Err(e)=reserve{
+                let selected=src.at(|db,c|{self.require(db,&c,true)?;for_tree(self,db,&c,op,parent,name)})?;
+                if !selected.is_some_and(|x|!x.done&&!x.aborted&&x.birth==birth){return Err(e);}
+            }
+        }
+        cut(Cut::Reserved)?;live()?;
+        let held=birth.install(d)?;cut(Cut::Installed)?;
+        held.require_newborn(d)?;root.require_streaming()?;
+        let sql=Connection::open(&src.dir,true)?;
+        let confirm=src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|{
+            self.require(db,&c,true)?;
+            if Route::at(db,&c,g.volume,parent)?!=*route||
+               !for_tree(self,db,&c,op,parent,name)?.is_some_and(|x|!x.done&&!x.aborted&&x.birth==birth){return Err(denied());}
+            live()?;
+            let q=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=13 AND state=0 RETURNING op_id")?;
+            q.bind_bytes(1,&op.0)?;
+            if !work_record::start_one(&q)?||q.array::<16>(0)?!=op.0{return Err(denied());}q.done()
+        });
+        drop(sql);
+        if let Err(e)=confirm{
+            let selected=src.at(|db,c|{self.require(db,&c,true)?;for_tree(self,db,&c,op,parent,name)})?;
+            if !selected.is_some_and(|x|x.done&&!x.aborted&&x.birth==birth){return Err(e);}
+        }
+        Ok((birth,held))
+    }
+}
+
+pub(super) enum Additional<'a>{File(&'a Birth),Directory(&'a DirectoryBirth),Pocket(&'a CStr)}
+struct NameBudget{unaccounted:BTreeSet<Vec<u8>>,promised:BTreeSet<Vec<u8>>,count:usize,bytes:usize}
+impl NameBudget{
+    fn charge(&mut self,count:usize,bytes:usize)->io::Result<()>{
+        self.count+=count;self.bytes+=bytes;
+        if self.count>DIRECTORY_NAMES||self.bytes>DIRECTORY_BYTES{return Err(io::ErrorKind::StorageFull.into());}Ok(())
+    }
+    fn pair(&mut self,pin:&CStr,stage:&CStr,terminal:&[u8],pending:bool)->io::Result<()>{
+        if terminal.is_empty()||terminal.len()>255{return Err(invalid("invalid reserved native terminal"));}
+        self.claim(pin.to_bytes())?;self.claim(terminal)?;
+        if pending{self.claim(stage.to_bytes())?;}
+        self.unaccounted.remove(pin.to_bytes());let has_end=self.unaccounted.remove(terminal);
+        if pending&&self.unaccounted.remove(stage.to_bytes())&&has_end{return Err(invalid("two native names claim the same birth slot"));}
+        self.charge(2,2+pin.to_bytes().len()+if pending{terminal.len().max(stage.to_bytes().len())}else{terminal.len()})
+    }
+    fn claim(&mut self,name:&[u8])->io::Result<()>{
+        if !self.promised.insert(name.to_vec()){return Err(exists());}Ok(())
+    }
+    fn pocket(&mut self,pocket:&CStr)->io::Result<()>{
+        self.claim(pocket.to_bytes())?;self.unaccounted.remove(pocket.to_bytes());self.charge(1,1+pocket.to_bytes().len())
+    }
+    fn finish(mut self)->io::Result<()>{
+        let n=self.unaccounted.len();let b=self.unaccounted.iter().map(|n|n.len()+1).sum();self.charge(n,b)
+    }
+}
+/// This one short metadata budget covers ordinary FILEs, native directory
+/// pairs and incoming restore pockets under the same exact held parent.
+pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,census:&BTreeSet<Vec<u8>>,more:Option<Additional<'_>>)->io::Result<()>{
+    let marker=if parent==DirectoryParent::Root{ROOT_MARK}else{DIRECTORY_MARK};
+    if !census.contains(marker.to_bytes()){return Err(invalid("selected ordinary parent has no original marker"));}
+    let mut b=NameBudget{unaccounted:census.clone(),promised:BTreeSet::new(),count:0,bytes:0};
+    let q=db.prepare(c"SELECT e.create_op,e.ticket,e.terminal,o.state FROM main.file_location l
+        JOIN main.root_entry e ON e.file_id=l.file_id JOIN main.operation o ON o.op_id=e.create_op
+        WHERE l.role=2 AND l.generation=1 AND l.volume_id=?1 AND l.parent_id=?2")?;
+    q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
+    loop{match unsafe{sqlite3_step(q.0)}{
+        100=>{let (pin,stage)=Birth::reservation_leaves(OperationId(q.array(0)?),OperationId(q.array(1)?))?;
+             b.pair(&pin,&stage,q.blob(2,255)?,q.byte(3)?==0)?;}
+        101=>break,n=>{check(n)?;return Err(denied());}
+    }}
+    let q=db.prepare(c"SELECT create_op,display,COALESCE(state,0) FROM main.directory_slot WHERE volume_id=?1 AND parent_id=?2")?;
+    q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
+    loop{match unsafe{sqlite3_step(q.0)}{
+        100=>{let op=OperationId(q.array(0)?);let(p,s)=dir_reserved(op)?;b.pair(&p,&s,q.blob(1,255)?,q.byte(2)?==0)?;}
+        101=>break,n=>{check(n)?;return Err(denied());}
+    }}
+    let q=db.prepare(c"SELECT position_op FROM main.file_location WHERE role=2 AND generation>1 AND volume_id=?1 AND parent_id=?2
+        UNION ALL SELECT transfer_op FROM main.pending_transfer WHERE direction=2 AND target_id=?1 AND target_parent=?2")?;
+    q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
+    loop{match unsafe{sqlite3_step(q.0)}{
+        100=>b.pocket(&Birth::placement_parent(OperationId(q.array(0)?))?)?,
+        101=>break,n=>{check(n)?;return Err(denied());}
+    }}
+    match more{
+        Some(Additional::File(f))=>b.pair(&f.witness()?,&f.lower(0)?,f.container()?.to_bytes(),true)?,
+        Some(Additional::Directory(d))=>b.pair(&d.witness(),&d.stage(),d.leaf()?.to_bytes(),true)?,
+        Some(Additional::Pocket(p))=>b.pocket(p)?,
+        None=>{}
+    }
+    b.finish()
+}
+fn dir_reserved(op:OperationId)->io::Result<(CString,CString)>{
+    if [ [0;16],[0xff;16] ].contains(&op.0){return Err(denied());}
+    let pin=CString::new(format!(".zxs-new-{op}-7")).map_err(|_|denied())?;
+    let stage=CString::new(format!(".zxs-new-{op}-4")).map_err(|_|denied())?;
+    Ok((pin,stage))
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use crate::{system::reader::{InitialReader,ordinary_pool,sqlite3_get_autocommit,smb::SmbSession},test_support::PrivateTemp};
+    use std::{cell::Cell,fs::OpenOptions,os::unix::fs::{FileExt,OpenOptionsExt}};
+    fn op(byte:u8)->OperationId{OperationId([byte;16])}
+    #[test]
+    #[ignore="source only: real ordinary parent, dual witnesses, SQLite, work and Web publication; no SMB listener"]
+    fn dir_and_file_share_exact_parent_name_but_not_locks_or_ancestry(){
+        let tmp=PrivateTemp::under(&std::env::temp_dir());let (path,pool,f,rw,ro)=ordinary_pool(&tmp);
+        let src=InitialReader::open(&path,pool).unwrap();
+        let other=InitialReader::alongside(&src.dir,&src.marker,pool,src.expected_schema).unwrap();
+        let s=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let tree=s.connect(rw).unwrap();let reader=s.connect(ro).unwrap();
+        let (_,root)=tree.ordinary_route(&[],true).unwrap();
+        let reached=Cell::new(false);
+        assert!(tree.make_ordinary_directory(&root,op(0x91),"Reports",|b|{
+            assert_eq!(unsafe{sqlite3_get_autocommit(src.conn.0)},1);
+            assert!(other.at(|db,c|original(db,&c,b.original))?.is_none());
+            assert!(!f.join("Reports").exists());reached.set(true);Err(io::ErrorKind::ConnectionAborted.into())
+        },&||Ok(()),|_|Ok(())).is_err());
+        assert!(reached.get());
+
+        let cut=Cell::new(false);
+        assert!(tree.make_ordinary_directory(&root,op(0x91),"Reports",|_|Ok(()),&||Ok(()),|phase|{
+            if phase==Cut::Installed{
+                cut.set(true);
+                assert!(f.join("Reports").is_dir());
+                assert!(!other.at(|db,c|original(db,&c,op(0x91)))?.unwrap().done);
+                assert!(tree.ordinary_route(&["Reports".into()],false).is_err());
+                return Err(io::ErrorKind::Interrupted.into());
+            }Ok(())
+        }).is_err());
+        assert!(cut.get());assert_eq!(tree.resumable_directory(&root,"Reports").unwrap(),Some(op(0x91)));
+        let confirmed=other.at(|db,c|original(db,&c,op(0x91))).unwrap().unwrap();
+        assert!(!confirmed.done);
+        let (capital,_)=tree.make_ordinary_directory(&root,op(0x91),"Reports",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+        // The real observer saw that prior pending cut. If it retries
+        // after the first caller confirmed, no second native OFFER exists.
+        let a2=SmbSession::fixture_authenticated(&other,"files.smb").unwrap();let second=a2.connect(rw).unwrap();
+        let (_,r2)=second.ordinary_route(&[],true).unwrap();
+        let (same,_)=second.make_ordinary_directory(&r2,confirmed.birth.original,"Reports",|_|panic!("already confirmed"),&||Ok(()),|_|Ok(())).unwrap();
+        assert_eq!(same.id,capital.id);
+        let (lower,_)=tree.make_ordinary_directory(&root,op(0x92),"reports",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+        assert_ne!(capital.id,lower.id);
+        let partial=Cell::new(None);
+        assert!(tree.make_ordinary_directory(&root,op(0xa1),"Partial",|b|{partial.set(Some(b.original));Ok(())},&||Ok(()),|phase|{
+            if phase==Cut::Reserved{
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::DirBuilder::new().mode(0o700).create(f.join(format!(".zxs-new-{}-4",op(0xa1))))?;
+                return Err(io::ErrorKind::Interrupted.into());
+            }Ok(())
+        }).is_err());assert_eq!(partial.get(),Some(op(0xa1)));
+        assert!(!f.join("Partial").exists());
+        let (fresh,_)=tree.make_ordinary_directory(&root,op(0xa2),"Partial",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+        assert_eq!(fresh.original,op(0xa2));
+        assert!(other.at(|db,c|original(db,&c,op(0xa1))).unwrap().unwrap().aborted);
+        assert!(tree.create_file(op(0x93),"Reports").is_err());
+        let stopped=Cell::new(false);
+        assert!(tree.create_after(op(0xa3),"Staged.md",|point|{
+            if point==super::super::file_create::Point::Reserved{stopped.set(true);return Err(io::ErrorKind::Interrupted.into());}
+            Ok(())
+        }).is_err());
+        assert!(stopped.get());
+        let terminal=other.at(|db,_|{
+            let q=db.prepare(c"SELECT terminal FROM main.root_entry WHERE create_op=?1")?;
+            q.bind_bytes(1,&op(0xa3).0)?;assert!(work_record::start_one(&q)?);
+            let name=display::component(q.blob(0,255)?,255)?.to_owned();q.done()?;Ok(name)
+        }).unwrap();
+        assert!(!f.join(&terminal).exists());
+        assert!(tree.make_ordinary_directory(&root,op(0xa4),&terminal,|_|panic!("pending FILE owns this physical slot"),&||Ok(()),|_|Ok(())).is_err());
+        assert_eq!(tree.create_file(op(0xa3),"Staged.md").unwrap().created,op(0xa3));
+        assert!(reader.make_ordinary_directory(&root,op(0x94),"Denied",|_|panic!("read-only"),&||Ok(()),|_|Ok(())).is_err());
+        let (_,parent)=tree.ordinary_route(&["Reports".into()],true).unwrap();
+        let (year,_)=tree.make_ordinary_directory(&parent,op(0x95),"2027",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+        let (c,route)=tree.ordinary_route(&["Reports".into(),"2027".into()],true).unwrap();
+        assert_eq!(route.parent(),DirectoryParent::Directory(year.id));
+        let dir=OrdinaryRoot::at_parent(&src,&c,&route,None).unwrap();
+        assert_eq!(dir.folder().path,f.join("Reports/2027"));
+        let inside=tree.scoped(route.parent());let outside=tree.scoped(DirectoryParent::Directory(lower.id));
+        let new=inside.create_file(op(0x96),"Data").unwrap();
+        let sibling=outside.create_file(op(0x97),"Data").unwrap();
+        assert_ne!(new.file,sibling.file);
+        assert!(inside.make_ordinary_directory(&route,op(0x98),"Data",|_|panic!("FILE owns logical name"),&||Ok(()),|_|Ok(())).is_err());
+        assert!(tree.open_current("Data").is_err());
+        let staged=OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(tmp.0.join("input")).unwrap();
+        staged.write_all_at(b"v11",0).unwrap();staged.sync_all().unwrap();
+        let writer=inside.open_writer("Data",new.file).unwrap();
+        assert!(inside.open_writer("Data",new.file).is_err());
+        let older=inside.open_current("Data").unwrap();
+        assert_eq!(older.size(),0);
+        writer.save(op(0x99),None,Some(0),3,&staged).unwrap();drop(writer);
+        let mut found=Vec::new();inside.open_current("Data").unwrap().range_to(0,3,&mut found).unwrap();
+        assert_eq!(found,b"v11");assert_eq!(older.size(),0);
+        let admin=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
+        let (chosen,item)=admin.manual_preview(new.file).unwrap();
+        assert_eq!(item.name,"Reports\\2027\\Data");
+        let page=admin.manual_files(None).unwrap().0;
+        assert!(page.iter().any(|x|x.file==new.file && x.name=="Reports\\2027\\Data"));
+        assert!(page.iter().any(|x|x.file==sibling.file && x.name=="reports\\Data"));
+        let receipt=admin.freeze(op(0x9a),chosen).unwrap();
+        assert_eq!(receipt.ord,1);
+        let shown=admin.manual_timeline(new.file,None).unwrap();
+        assert_eq!(shown.name,"Reports\\2027\\Data");
+        assert_eq!(shown.rows[0].version,receipt.version);
+        let base=OrdinaryRoot::at_parent(&src,&c,&root,None).unwrap();
+        let listing=super::super::directory::mixed_page(&tree,&base,b"",2,||Ok(())).unwrap();
+        assert_eq!(listing.iter().map(|e|e.name()).collect::<Vec<_>>(),vec!["Partial","Reports"]);
+        let tail=super::super::directory::mixed_page(&tree,&base,b"Reports",2,||Ok(())).unwrap();
+        assert_eq!(tail.iter().map(|e|e.name()).collect::<Vec<_>>(),vec!["Staged.md","reports"]);
+        let listed=super::super::directory::mixed_page(&inside,&dir,b"",2,||Ok(())).unwrap();
+        assert!(matches!(&listed[..],[super::super::directory::Child::File(r)] if r.file==new.file&&r.size==3));
+        let swapped=f.join("Reports/2027");let away=f.join("reattach");
+        std::fs::rename(&swapped,&away).unwrap();
+        assert!(inside.open_current("Data").is_err());
+        std::fs::rename(&away,&swapped).unwrap();
+        assert_eq!(inside.open_current("Data").unwrap().file(),new.file);
+    }
+}

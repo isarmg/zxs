@@ -78,7 +78,8 @@ enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD, ZXS_DATA_FD, ZXS_READ_STREAM
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=ZXS_PLAN_OFFER && len!=ZXS_PLAN_ACK && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES && len!=18+ZXS_DIR_NAME && len!=ZXS_DIR_PACKET && len!=16+ZXS_MEMBER_BYTES && len!=ZXS_XFER_ASK && len!=ZXS_XFER_RESULT)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=ZXS_PLAN_OFFER && len!=ZXS_PLAN_ACK && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES && len!=18+ZXS_DIR_NAME && len!=ZXS_DIR_PACKET && len!=16+ZXS_MEMBER_BYTES && len!=ZXS_XFER_ASK && len!=ZXS_XFER_RESULT &&
+       len!=ZXS_OD_PATH_REQUEST && len!=ZXS_OD_PATH_RESULT && len!=ZXS_OD_PATH_ACK)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {

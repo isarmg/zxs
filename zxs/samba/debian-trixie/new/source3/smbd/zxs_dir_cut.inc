@@ -18,7 +18,7 @@ bool zxs_request_folder_current(struct smbd_smb2_request *n,const struct zxs_smb
 	       (folder->mode==1 || folder->mode==2) && folder->revision!=0 &&
 	       (zxs_folder_retained(folder) || (folder->volume_ordinal>=2 && folder->volume_ordinal<64)) &&
 	       memcmp(folder->pool,n->tcon->zxs_tree_choice->pool,16)==0 &&
-	       (!zxs_folder_round(folder) || (folder->owns_parent && folder->parent_fd>=0 &&
+	       (!(zxs_folder_round(folder)||zxs_folder_ordinary_child(folder)) || (folder->owns_parent && folder->parent_fd>=0 &&
 	         zxs_smb_ctl_live(folder->parent_fd)==0)) &&
 	       zxs_smb_ctl_live(folder->root_fd)==0;
 }
@@ -61,7 +61,7 @@ static bool zxs_member_open_limit(unsigned limit)
 }
 static bool zxs_folder_open_limit(unsigned limit)
 {
-	return limit==ZXS_NS_OPEN || limit==ZXS_NS_WRITE || limit==ZXS_NS_MAXIMUM || limit==ZXS_RETAINED_DIR;
+	return limit==ZXS_NS_OPEN || limit==ZXS_NS_WRITE || limit==ZXS_NS_MAXIMUM || limit==ZXS_RETAINED_DIR || limit==ZXS_OD_PATH;
 }
 static int zxs_dir_cut_close(struct zxs_dir_cut_state *s)
 {
@@ -80,7 +80,18 @@ static void zxs_dir_cut_ready(struct tevent_req *sub)
 	   !zxs_request_root_current(s->native) || s->session->global->auth_session_info_seqnum!=s->seq ||
 	   (s->in_folder && !zxs_request_folder_current(s->native,&s->folder)) ||
 	   !change_to_user_and_service(s->tcon->compat,s->session->global->session_wire_id))goto reject;
-	if(zxs_folder_open_limit(s->limit)){
+	if(s->limit==ZXS_OD_PATH){
+		struct zxs_smb_tree_cut picked;
+		rc=zxs_odir_read(s->fd,&s->folder,&picked);
+		if(rc>=2){
+			NTSTATUS status=rc==2?NT_STATUS_OBJECT_NAME_COLLISION:
+				rc==3?NT_STATUS_SHARING_VIOLATION:rc==5?NT_STATUS_DISK_FULL:
+				rc==6?NT_STATUS_OBJECT_NAME_NOT_FOUND:NT_STATUS_ACCESS_DENIED;
+			zxs_dir_cut_close(s);tevent_req_nterror(req,status);return;
+		}
+		if(rc<0)goto reject;
+		s->folder=picked;s->offered=rc==1;rc=0;
+	}else if(zxs_folder_open_limit(s->limit)){
 		uint8_t original_volume[16];memcpy(original_volume,s->folder.volume,16);
 		rc=zxs_ns_folder_read(s->fd,s->tcon->zxs_tree_choice->pool,&s->folder);
 		if(rc==0 && s->limit==ZXS_RETAINED_DIR &&
@@ -98,8 +109,9 @@ static void zxs_dir_cut_ready(struct tevent_req *sub)
 		}
 	}else if(zxs_member_open_limit(s->limit)){rc=zxs_member_result(s->fd,&s->folder,&s->member);}
 	else if(s->in_folder){
-		rc=zxs_folder_retained(&s->folder)&&!zxs_folder_round(&s->folder)?
-			zxs_r_round_result(s->fd,s->limit,s->data):zxs_dir_result(s->fd,s->limit,s->data);
+		if(!zxs_folder_retained(&s->folder))rc=zxs_odir_result(s->fd,s->limit,s->data);
+		else if(!zxs_folder_round(&s->folder))rc=zxs_r_round_result(s->fd,s->limit,s->data);
+		else rc=zxs_dir_result(s->fd,s->limit,s->data);
 	}
 	else {rc=zxs_ns_dir_result(s->fd,s->limit,s->data);}
 	if(rc!=0)goto reject;
@@ -108,9 +120,9 @@ static void zxs_dir_cut_ready(struct tevent_req *sub)
 reject:
 	zxs_dir_cut_close(s);tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);
 }
-struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
+static struct tevent_req *zxs_dir_cut_begin(TALLOC_CTX *ctx,struct tevent_context *ev,
 	struct smbd_smb2_request *n,const struct zxs_smb_tree_cut *folder,
-	unsigned limit,const uint8_t *after,size_t size)
+	unsigned limit,const uint8_t *after,size_t size,uint8_t mode)
 {
 	struct tevent_req *req;struct zxs_dir_cut_state *s;
 	req=tevent_req_create(ctx,&s,struct zxs_dir_cut_state);if(req==NULL)return NULL;
@@ -120,7 +132,10 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
 	if(talloc_reference(s,s->session)==NULL || talloc_reference(s,s->tcon)==NULL)goto reject;
 	s->in_folder=folder!=NULL;if(folder!=NULL)s->folder=*folder;
 	int fd=folder==NULL?s->tcon->zxs_tree_choice->root_fd:folder->root_fd;
-	if(limit==ZXS_RETAINED_DIR){
+	if(limit==ZXS_OD_PATH){
+		if(folder==NULL || zxs_folder_retained(folder) || zxs_folder_ordinary_child(folder))goto reject;
+		s->fd=zxs_odir_query(fd,mode,after,size);
+	}else if(limit==ZXS_RETAINED_DIR){
 		if(!zxs_folder_retained(folder) || zxs_folder_round(folder) || !zxs_delete_hex(after,size))goto reject;
 		for(size_t i=0;i<size;i++){
 			uint8_t a=after[i];a=(a<='9')?a-'0':a-'a'+10;
@@ -149,6 +164,17 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
 reject:
 	zxs_dir_cut_close(s);tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return tevent_req_post(req,ev);
 }
+struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
+	struct smbd_smb2_request *n,const struct zxs_smb_tree_cut *folder,unsigned limit,const uint8_t *after,size_t size)
+{
+	if(limit==ZXS_OD_PATH)return NULL;
+	return zxs_dir_cut_begin(ctx,ev,n,folder,limit,after,size,0);
+}
+struct tevent_req *zxs_odir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,struct smbd_smb2_request *n,
+	const struct zxs_smb_tree_cut *folder,uint8_t mode,const uint8_t *path,size_t size)
+{
+	return zxs_dir_cut_begin(ctx,ev,n,folder,ZXS_OD_PATH,path,size,mode);
+}
 NTSTATUS zxs_dir_cut_recv(struct tevent_req *req,uint8_t *optional_rows)
 {
 	struct zxs_dir_cut_state *s=tevent_req_data(req,struct zxs_dir_cut_state);
@@ -165,6 +191,14 @@ NTSTATUS zxs_folder_cut_recv(struct tevent_req *req,struct zxs_smb_tree_cut *out
 	if(tevent_req_is_nterror(req,&status))return status;
 	if(!zxs_folder_open_limit(s->limit) || s->fd<0 || zxs_smb_ctl_live(s->fd)!=0)return NT_STATUS_ACCESS_DENIED;
 	*out=s->folder;out->root_fd=s->fd;s->fd=-1;return NT_STATUS_OK;
+}
+NTSTATUS zxs_odir_cut_recv(struct tevent_req *req,struct zxs_smb_tree_cut *out,bool *offered)
+{
+	struct zxs_dir_cut_state *s=tevent_req_data(req,struct zxs_dir_cut_state);
+	if(s->limit!=ZXS_OD_PATH)return NT_STATUS_ACCESS_DENIED;
+	NTSTATUS status=zxs_folder_cut_recv(req,out);
+	if(NT_STATUS_IS_OK(status))*offered=s->offered;
+	return status;
 }
 NTSTATUS zxs_member_cut_recv(struct tevent_req *req,struct zxs_member_info *out,int *fd,bool *offer)
 {

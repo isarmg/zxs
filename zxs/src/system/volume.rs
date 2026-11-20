@@ -1,7 +1,7 @@
 //! An original registered ordinary root, selected by VolumeId, not a
 //! FILE/account permission. Never routes a recycling root into normal I/O.
-use super::{Catalog,InitialReader,check,zxs_sql_named};
-use crate::{Role,VolumeId,fs::{ComponentLimit,ControlRead,HeldDir,invalid}};
+use super::{Catalog,InitialReader,check,smb::ordinary_directory::{self,Route},zxs_sql_named};
+use crate::{Role,VolumeId,fs::{ComponentLimit,ControlRead,HeldDir,invalid,directory_birth::{DirectoryHold,DirectoryParent}}};
 use std::{io,os::{fd::AsRawFd,raw::c_int}};
 
 unsafe extern "C"{fn zxs_storage_capacity(fd:c_int,total:*mut u64,available:*mut u64)->c_int;}
@@ -15,6 +15,7 @@ pub(crate) struct DiskSpace{
 }
 pub(super) struct OrdinaryRoot<'a>{
     source:&'a InitialReader,pub(super) root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId,pub(super) ordinal:u8,
+    parent:DirectoryParent,ancestors:Vec<DirectoryHold>,
 }
 impl InitialReader{
     /// A fresh SQL selection for exactly one mounted-FS capacity sample.
@@ -39,6 +40,19 @@ impl<'a> OrdinaryRoot<'a>{
     pub(super) fn for_body(source:&'a InitialReader,catalog:&Catalog,id:VolumeId)->io::Result<Self>{
         Self::selected(source,catalog,id,None)
     }
+    /// The volume claim still proves the enrolled F. A second exact
+    /// ancestry selects the internal parent; lock only that directory.
+    pub(super) fn at_parent(source:&'a InitialReader,c:&Catalog,route:&Route,lock:Option<bool>)->io::Result<Self>{
+        let parent=route.parent();
+        let mut f=Self::selected(source,c,route.volume(),if parent==DirectoryParent::Root{lock}else{None})?;
+        if parent!=DirectoryParent::Root{
+            f.ancestors=route.hold(&f.root)?;f.parent=parent;
+            match lock{Some(true)=>f.folder().exclusive()?,Some(false)=>f.folder().share()?,None=>{}}
+            f.require_streaming()?;
+        }Ok(f)
+    }
+    pub(super) fn folder(&self)->&HeldDir{self.ancestors.last().map_or(&self.root,|child|child.directory())}
+    pub(super) fn parent(&self)->DirectoryParent{self.parent}
     fn selected(source:&'a InitialReader,catalog:&Catalog,id:VolumeId,lock:Option<bool>)->io::Result<Self>{
         let (i,row)=catalog.rows().iter().enumerate().find(|(_,r)|r.volume==id&&r.role==Role::File)
              .ok_or_else(||invalid("not an ordinary VolumeId in this original pool"))?;
@@ -49,7 +63,7 @@ impl<'a> OrdinaryRoot<'a>{
             return Err(invalid("selected original F aliases S or has different native geometry"));
         }
         let mark=source.dir.hold_marker(&root)?;
-        let b=Self{source,root,mark,expected,volume:id,ordinal:row.ordinal};b.require()?;Ok(b)
+        let b=Self{source,root,mark,expected,volume:id,ordinal:row.ordinal,parent:DirectoryParent::Root,ancestors:Vec::new()};b.require()?;Ok(b)
     }
     pub(super) fn require(&self)->io::Result<()>{
         self.source.dir.require()?;check(unsafe{zxs_sql_named(self.source.conn.0)})?;
@@ -59,7 +73,7 @@ impl<'a> OrdinaryRoot<'a>{
             self.mark.bytes(&self.root)?.as_slice()!=self.expected.as_slice(){
             return Err(invalid("original SQL declaration does not match this current ordinary root"));
         }
-        Ok(())
+        ordinary_directory::keep_chain(&self.root,&self.ancestors)
     }
     /// A stream already selected this F from a verified short SQL snapshot.
     /// Check its held names, both exact private parents and marker stamps
@@ -74,7 +88,8 @@ impl<'a> OrdinaryRoot<'a>{
         check(unsafe{zxs_sql_named(self.source.conn.0)})?;
         self.source.marker.require(&self.source.dir.root)?;
         at_target()?;
-        crate::fs::WitnessRead::require_parent(&self.root)?;self.mark.require(&self.root)
+        crate::fs::WitnessRead::require_parent(&self.root)?;self.mark.require(&self.root)?;
+        ordinary_directory::keep_chain(&self.root,&self.ancestors)
     }
     pub(super) fn for_tree(&self,source:&InitialReader,volume:VolumeId)->bool{
         std::ptr::eq(self.source,source)&&self.volume==volume

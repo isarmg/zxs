@@ -2,7 +2,7 @@
 //! construction is private to its storage-side endpoint after the managed SMB
 //! worker's successful final native update; a SID, name or WebAdmin is not proof.
 use super::{Catalog,Connection,InitialReader,account::share_mode::{self,Mode,Setting},credential::{Pair,Role},check,sqlite3_step};
-use crate::{OperationId,identity::{AccountId,ShareId}};
+use crate::{OperationId,fs::directory_birth::DirectoryParent,identity::{AccountId,ShareId}};
 use std::io;
 
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"no current authenticated SMB access")}
@@ -17,7 +17,7 @@ impl Credential{
     }
 }
 pub(crate) struct SmbSession<'r>{source:&'r InitialReader,original:Credential}
-pub(crate) struct Tree<'s,'r>{session:&'s SmbSession<'r>,setting:Setting}
+pub(crate) struct Tree<'s,'r>{session:&'s SmbSession<'r>,setting:Setting,parent:DirectoryParent}
 impl<'r> SmbSession<'r>{
     #[cfg(test)]
     pub(in crate::system::reader) fn fixture_authenticated(source:&'r InitialReader,login:&str)->io::Result<Self>{
@@ -37,11 +37,12 @@ impl<'r> SmbSession<'r>{
         self.source.at(|db,c|{
             if Credential::current(db,&c)?!=self.original{return Err(denied());}
             let setting=share_mode::find(db,&c,share)?.ok_or_else(denied)?;
-            if setting.mode==Mode::Disabled{return Err(denied());}Ok((Tree{session:self,setting},c))
+            if setting.mode==Mode::Disabled{return Err(denied());}Ok((Tree{session:self,setting,parent:DirectoryParent::Root},c))
         })
     }
 }
-impl Tree<'_,'_>{
+impl<'s,'r> Tree<'s,'r>{
+    fn scoped(&self,parent:DirectoryParent)->Tree<'s,'r>{Tree{session:self.session,setting:self.setting,parent}}
     fn require(&self,db:&Connection,c:&Catalog,write:bool)->io::Result<()>{
         if Credential::current(db,c)?!=self.session.original||share_mode::current(db,c,self.setting.share)?!=self.setting||
            self.setting.mode==Mode::Disabled||(write&&self.setting.mode!=Mode::ReadWrite){return Err(denied());}Ok(())
@@ -75,6 +76,9 @@ mod smb_stage;
 
 #[path="directory.rs"]
 pub(crate) mod directory;
+
+#[path="ordinary_directory.rs"]
+pub(in crate::system::reader) mod ordinary_directory;
 
 #[path="smb_runtime.rs"]
 pub(crate) mod runtime;

@@ -1,7 +1,7 @@
 //! Read-only Web history: exact confirmed node metadata in the local
 //! database. It neither checks disk health nor opens a FILE or its body.
 use super::{WebAdmin,Connection};
-use super::super::{file_location::Place,smb::file_create,work_record};
+use super::super::{file_location::Place,smb::{file_create,ordinary_directory::Route},work_record};
 use crate::{FileId,NodeId,OperationId,Role,VersionId,VolumeId,fs::invalid};
 use std::io;
 
@@ -62,7 +62,8 @@ impl WebAdmin<'_>{
                 rows.push(Version{order:ord,node,version,parent,revision,length:issued.logical()});previous=Some(ord);
             }
             let next=if rows.len()>PAGE{rows.pop().map(|v|v.order)}else{None};
-            Ok(Timeline{file,name:at.name,volume:at.volume,retained,rows,next})
+            let name=if retained{at.name}else{Route::at(db,&c,at.volume,at.parent)?.show_child(&at.name)};
+            Ok(Timeline{file,name,volume:at.volume,retained,rows,next})
         })
     }
 }

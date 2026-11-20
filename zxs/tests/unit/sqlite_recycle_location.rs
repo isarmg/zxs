@@ -21,8 +21,10 @@ fn ticket(db:&Builder,op:OperationId,file:FileId,where_op:OperationId,share:Shar
     // SQL test uses a dummy digest only to check transition/freshness guards.
     let result=db.try_exec(&format!(
         "BEGIN IMMEDIATE;
-         INSERT INTO file_transfer SELECT X'{op}',l.file_id,{direction},l.position_op,l.generation,l.volume_id,l.display,
-           X'{target}',X'{name}',a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op
+         INSERT INTO file_transfer(transfer_op,file_id,direction,source_op,source_gen,source_id,source_name,
+            target_id,target_name,share_id,setting_op,auth_op,save_op,manual_op,source_parent,target_parent)
+         SELECT X'{op}',l.file_id,{direction},l.position_op,l.generation,l.volume_id,l.display,
+           X'{target}',X'{name}',a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op,l.parent_id,zeroblob(16)
          FROM transferable_location l JOIN live_ordinary_writer a ON a.share_id=X'{mode}'
          WHERE l.file_id=X'{file}' AND l.position_op=X'{place}';
          INSERT INTO operation SELECT X'{op}',12,a.actor_id,zeroblob(32),0 FROM live_ordinary_writer a WHERE a.share_id=X'{mode}';
@@ -87,8 +89,8 @@ fn one_current_location_keeps_birth_and_readers_separate_from_a_stale_delete_or_
         assert_eq!(unsafe{sqlite3_step(q.0)},100);assert_eq!(q.byte(0)?,0);
         assert_eq!(q.array::<16>(1)?,first_save.0);assert_eq!(q.integer(2)?,0);q.done()
     }).unwrap();
-    let origin=format!("SELECT file_id,create_op,1,volume_id,2,display FROM root_entry WHERE file_id=X'{file}';");
-    assert!(raw.try_exec(&format!("INSERT OR REPLACE INTO file_location {origin}")).is_err());
+    let origin=format!("SELECT file_id,create_op,1,volume_id,2,display,parent_id FROM root_entry WHERE file_id=X'{file}';");
+    assert!(raw.try_exec(&format!("INSERT OR REPLACE INTO file_location(file_id,position_op,generation,volume_id,role,display,parent_id) {origin}")).is_err());
     assert!(ticket(&raw,OperationId([0xb4;16]),b.file,b.created,rw,r_id,"Report.txt",1).is_err());
     // The old ordinary name is available for a new FileId. The two R
     // rows share a display name but never a lookup or deletion identity.

@@ -143,7 +143,11 @@ static bool native_directory_projection(connection_struct *c)
 		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_IS_OK(status)||BVAL(bytes+at,96)!=UINT64_MAX ||
 	   (IVAL(bytes+at,56)&FILE_ATTRIBUTE_DIRECTORY)==0)goto fail;
-	for(uint8_t kind=ZXS_ROW_FILE;kind<=ZXS_ROW_ROUND;kind++){
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"Reports",ZXS_ROW_ORDINARY_DIR,UINT64_MAX,0,
+		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
+	if(!NT_STATUS_IS_OK(status)||BVAL(bytes+at,96)!=UINT64_MAX ||
+	   (IVAL(bytes+at,56)&FILE_ATTRIBUTE_DIRECTORY)==0)goto fail;
+	for(uint8_t kind=ZXS_ROW_FILE;kind<=ZXS_ROW_ORDINARY_DIR;kind++){
 		status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"wrong",kind,
 			kind==ZXS_ROW_TOP?UINT64_MAX:1,0,256,bytes,&next,bytes+sizeof(bytes)-1,&at);
 		if(!NT_STATUS_EQUAL(status,NT_STATUS_INVALID_PARAMETER))goto fail;
@@ -158,6 +162,12 @@ static bool native_directory_projection(connection_struct *c)
 	raw[0]=1;if(zxs_restore_input(c,input,&folder,&name))goto fail;
 	raw[0]=0;raw[8]=1;if(zxs_restore_input(c,input,&folder,&name))goto fail;
 	raw[8]=0;SSVAL(raw,24,'\\');if(zxs_restore_input(c,input,&folder,&name))goto fail;
+	uint8_t multi[128]={0};const char exact[]="F\\Reports\\Report";
+	SIVAL(multi,16,2*(sizeof(exact)-1));
+	for(size_t i=0;i<sizeof(exact)-1;i++){SSVAL(multi,20+2*i,exact[i]);}
+	DATA_BLOB nesting={.data=multi,.length=sizeof(multi)};
+	if(!zxs_restore_input(c,nesting,&folder,&name)||strcmp(folder,"F")||strcmp(name,"Reports\\Report"))goto fail;
+	SSVAL(multi,24,'\\');if(zxs_restore_input(c,nesting,&folder,&name))goto fail;
 	c->params=NULL;return true;
 fail:
 	c->params=NULL;return false;
