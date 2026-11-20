@@ -458,6 +458,68 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         self.assertIsNone(self.live.status()["pending_operation"])
         self.assertEqual(list(self.store.iterdir()),[self.original])
 
+    def test_original_pending_directory_barrier_precedes_any_store_attempt_and_exact_retry(self):
+        original = self.choice()
+        real_sync, real_publish = os.fsync, worktree._publish
+        saw_pending = []
+
+        def sync(fd):
+            if (os.path.samestat(os.fstat(fd), os.fstat(self.live.state_fd))
+                    and self.live.status()["pending_operation"] == original.operation):
+                self.assertTrue((self.state/(original.operation+".zxs")).is_file())
+                saw_pending.append(original.operation)
+                raise OSError(errno.ENOSPC, "pending directory barrier")
+            return real_sync(fd)
+
+        with patch.object(os, "fsync", side_effect=sync), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("do not attempt STORE before STATE")), \
+             self.assertRaisesRegex(OSError, "pending directory barrier") as failed:
+            original.run()
+        self.assertEqual(saw_pending, [original.operation])
+        self.assertIn("本次尚未尝试上传或核认正式槽", "\n".join(failed.exception.__notes__))
+        self.assertEqual(list(self.store.iterdir()), [self.original])
+        frozen = self.state/(original.operation+".zxs")
+        self.assertTrue(frozen.is_file())
+        retry = self.retry_choice(original); retry.prepare()
+        ordered = []
+
+        def pending_sync(fd):
+            if os.path.samestat(os.fstat(fd), os.fstat(self.live.state_fd)):
+                self.assertEqual(self.live.status()["pending_operation"], original.operation)
+                ordered.append("STATE")
+            return real_sync(fd)
+
+        def publish_original(*args, **options):
+            self.assertEqual(ordered, ["STATE"])
+            self.assertEqual(args[2], original.marker)
+            ordered.append("STORE")
+            return real_publish(*args, **options)
+
+        with patch.object(os, "fsync", side_effect=pending_sync), \
+             patch.object(worktree, "_publish", side_effect=publish_original), \
+             patch.object(worktree, "frozen_tree", side_effect=AssertionError("no recapture")):
+            final, marker = retry.run()
+        self.assertEqual(ordered, ["STATE", "STORE"])
+        self.assertEqual(final.read_bytes(), frozen.read_bytes())
+        self.assertEqual(marker, original.marker)
+
+    def test_non_delete_journal_never_produces_a_new_frozen_pending_in_the_window(self):
+        import sqlite3
+        db = self.state/"worktree.sqlite"
+        with sqlite3.connect(db) as con:
+            self.assertEqual(con.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+        con.close()
+        original = self.choice()
+        with patch.object(worktree, "frozen_tree", side_effect=AssertionError("wrong SQLite journal")), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("no STORE attempt")), \
+             self.assertRaisesRegex(Rejected, "DELETE 回滚日志"):
+            original.run()
+        self.assertFalse((self.state/(original.operation+".zxs")).exists())
+        self.assertEqual(self.live.status()["pending_operation"], None)
+        with sqlite3.connect(db) as check:
+            self.assertEqual(check.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        check.close()
+
     def pending_choice(self):
         (self.tree/"story").write_bytes(b"original frozen body")
         original = self.choice()

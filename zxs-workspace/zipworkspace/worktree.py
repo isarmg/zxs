@@ -8,7 +8,7 @@ import sqlite3
 import tempfile
 from . import lifecycle
 from .archive import read_archive
-from .capacity import note
+from .capacity import note, writing
 from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
 from .private_candidates import held_candidates
@@ -93,10 +93,13 @@ def create_catalog(work, store, state, base, instance_id, *, checked_root=None, 
 
 
 @contextmanager
-def locked(state, *, read_only=False, live=None, local_only=False, operation=None, phase="更新原工作树登记"):
+def locked(state, *, read_only=False, live=None, local_only=False, journal_delete=False,
+           operation=None, phase="更新原工作树登记"):
     """Open the existing catalog with either a read snapshot or a reserved writer."""
     if local_only and (not read_only or live is None):
         raise Rejected("without STORE only this live session's local read is permitted")
+    if journal_delete and (read_only or live is None):
+        raise Rejected("only an original live writer uses the checked rollback-journal mode")
     state = Path(state).absolute()
     db = state / "worktree.sqlite"
     def check_catalog():
@@ -117,6 +120,8 @@ def locked(state, *, read_only=False, live=None, local_only=False, operation=Non
         if read_only:
             con.execute("BEGIN")  # Both checkout and instance reads see the same committed state.
         else:
+            if journal_delete and con.execute("PRAGMA main.journal_mode").fetchone()[0] != "delete":
+                raise Rejected("本窗口只使用原状态库的 DELETE 回滚日志，不改日志模式")
             con.execute("PRAGMA synchronous=FULL")
             con.execute("BEGIN IMMEDIATE")
         row = con.execute("SELECT * FROM checkout WHERE singleton=1").fetchone()
@@ -150,7 +155,7 @@ def finish(state, operation, *, selected=None):
     if selected is not None and (operation != selected.operation or selected.closed
                                  or not selected.used or not selected.ready):
         raise Rejected("not the reviewed original operation")
-    with locked(state, live=live, operation=operation,
+    with locked(state, live=live, operation=operation, journal_delete=live is not None,
                 phase="记原提交回执；正式归档可能已出现，不能按返回失败判断是否发布") as (con, row, state):
         if live is not None: live.check_instance(row, lifecycle.instance(con))
         if selected is not None and selected.purpose == "conflict-fork":
@@ -180,6 +185,19 @@ def finish(state, operation, *, selected=None):
         else:
             selected.check_row(con, row)
             selected.check_marker(marker, row["pending_sha"])
+            # The confirmed exact pending was committed by a prior writer,
+            # but SQLite FULL/DELETE does not require syncing journal removal.
+            # Before any STORE attempt, sync the actual original directory
+            # while this writer has re-read the same pending operation.
+            db = state/"worktree.sqlite"
+            live.check_catalog(db)
+            try:
+                with writing("STATE", state, "同步原待决的目录记录；尚未尝试 STORE", operation, live.state_fd):
+                    os.fsync(live.state_fd)
+            except OSError as error:
+                error.add_note("本次尚未尝试上传或核认正式槽；保留原待决、原冻结包和操作号。")
+                raise
+            live.check_catalog(db)
             target = _publish(local, selected.store, marker, row["pending_sha"],
                               source=selected.candidate_source(marker), confirm_only_fd=selected.ack_fd)
             selected.check_row(con, row)
@@ -200,7 +218,7 @@ def commit(state, *, fork=False, selected=None):
     # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
     proposal = selected.operation if selected is not None else None
     with anonymous_capture(state, held=None if selected is None else selected.area, operation=proposal) as capture, \
-         locked(state, live=live, operation=lambda: capture.operation or proposal,
+         locked(state, live=live, operation=lambda: capture.operation or proposal, journal_delete=live is not None,
                 phase="登记原 pending；冻结候选可能已存在，不能据此认定已受理") as (con, row, state):
         capture.check_state()
         if row["pending"] is not None:
@@ -248,7 +266,8 @@ def branch_from_snapshot(state, *, selected):
     op, new, old = selected.operation, selected.proposed, selected.live.checkout_marker
     if new != Commit(old.repo, selected.branch_id, 1, op, old.operation, old.tree) or new.branch == old.branch:
         raise Rejected("branch marker does not represent the original reviewed node")
-    with locked(state, live=selected.live, operation=op, phase="登记从原节点创建的新分支待决") as (con, row, _):
+    with locked(state, live=selected.live, operation=op, journal_delete=True,
+                phase="登记从原节点创建的新分支待决") as (con, row, _):
         selected.check_row(con, row)
         if row["pending"] is not None or con.execute(
                 "SELECT 1 FROM completed WHERE operation=? UNION ALL "
@@ -295,7 +314,7 @@ def _fork_reviewed(state, operation, selected):
     if (proposed != Commit(old.repo, proposed.branch, 1, selected.operation, old.parent, old.tree)
             or proposed.branch == old.branch or proposed.operation == old.operation):
         raise Rejected("new marker does not preserve the reviewed frozen candidate's ancestry")
-    with locked(state, live=selected.live, operation=proposed.operation,
+    with locked(state, live=selected.live, operation=proposed.operation, journal_delete=True,
                 phase="登记原冲突操作的指定后继；不能仅从私有副本判断是否已受理") as (con, row, _):
         selected.check_pending(con, row)
         selected.check_inputs()
