@@ -39,6 +39,84 @@ public final class ArchiveIndexTest {
         }, b.length);
     }
     private static void rejects(byte[] b) { assertThrows(IOException.class, () -> read(b)); }
+    private static byte[] marked(byte[] original, String tree, String generation, String parent) {
+        byte[] comment = ("zip-workspace/1\n{\"branch\":\"" + "b".repeat(32) + "\",\"generation\":" + generation
+                + ",\"operation\":\"" + "a".repeat(32) + "\",\"parent\":" + parent + ",\"repo\":\"" + "c".repeat(32)
+                + "\",\"tree\":\"" + tree + "\"}").getBytes(StandardCharsets.US_ASCII);
+        byte[] b = Arrays.copyOf(original, original.length + comment.length);
+        ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN).putShort(original.length - 2, (short)comment.length);
+        System.arraycopy(comment, 0, b, original.length, comment.length);
+        return b;
+    }
+    private static ArchiveIndex.SnapshotMarker snapshot(byte[] b) throws IOException {
+        return read(b).verifySnapshot(new StoredMemberTest.Bytes(b));
+    }
+    @Test public void explicitWholeSnapshotUsesCanonicalFullPathOrderAndReadsOnlyOneBodyPass() throws IOException {
+        // A private-use BMP name precedes the supplementary scalar in UTF-8; Java UTF-16 compareTo reverses those two.
+        byte[] base = zip("a/图", "空/", "a-.txt", "\uE010", "\uD840\uDC00");
+        byte[] b = marked(base, "963268783ba438cc7cd2087eb524fb8ccb60d9dfddfdbc92508abdfe7f27920d", "1", "null");
+        ArchiveIndex index = read(b);
+        int[] checks = {0};
+        ByteBuffer physical = ByteBuffer.wrap(base).order(ByteOrder.LITTLE_ENDIAN);
+        int central = physical.getInt(base.length - 6), namedDirectory = -1;
+        ArrayList<Long> bodies = new ArrayList<>();
+        for (int p = central; p < base.length - 22; p += recordSize(physical, p)) {
+            int local = physical.getInt(p + 42);
+            if (physical.getInt(p + 24) == 0) namedDirectory = local;
+            else bodies.add((long)local + 30 + (physical.getShort(local + 26) & 65535)
+                    + (physical.getShort(local + 28) & 65535));
+        }
+        ArchiveIndex.SnapshotMarker result = index.verifySnapshot(new StoredMemberTest.Bytes(b) {
+            @Override public void fill(long off, byte[] dest, int n) throws IOException {
+                super.fill(off, dest, n);
+                if (bodies.contains(off)) { assertEquals(3, n); checks[0]++; }
+            }
+        });
+        assertEquals("a".repeat(32), result.operation);
+        assertEquals(1L, result.generation);
+        assertNull(result.parent);
+        assertEquals(12L, index.bodyBytes());
+        assertEquals(6, index.entryCount());
+        assertEquals(4, checks[0]); // one fill at the actual body offset per ordinary file
+        byte[] badDirectory = b.clone();
+        assertTrue(namedDirectory >= 0);
+        badDirectory[namedDirectory + 8] = 8;  // still lists the directory; local method is not Store
+        assertTrue(read(badDirectory).root.children.get("空").children.isEmpty());
+        assertThrows(IOException.class, () -> snapshot(badDirectory));
+        assertEquals(1L, snapshot(marked(zip(),
+                "ead0d74a9b1110a6e8aa7b227316376cc0883c3fb6b8404f31b0b2719d015657", "1", "null")).generation);
+    }
+    @Test public void crcMatchedMemberIsNotACompleteTreeAndFooterMustStillBeOriginal() throws IOException {
+        String tree = "55b10481df5b6450c7095890b16f73507981d82b55923c290d705c3bff429441";
+        byte[] x = zip("x"), b = marked(x, tree, "1", "null");
+        ArchiveIndex index = read(b);
+        assertEquals(tree, snapshot(b).tree);
+        byte[] changed = b.clone();
+        ByteBuffer in = ByteBuffer.wrap(changed).order(ByteOrder.LITTLE_ENDIAN);
+        int body = 30 + (in.getShort(26) & 65535) + (in.getShort(28) & 65535), central = in.getInt(x.length - 6);
+        changed[body] = 9;
+        CRC32 crc = new CRC32(); crc.update(changed, body, 3);
+        in.putInt(14, (int)crc.getValue()); in.putInt(central + 16, (int)crc.getValue());
+        ArchiveIndex newIndex = read(changed);
+        assertTrue(newIndex.checkMember(new StoredMemberTest.Bytes(changed), newIndex.root.children.get("x")).matches());
+        assertThrows(IOException.class, () -> snapshot(changed));
+        assertThrows(IOException.class, () -> snapshot(x));
+        assertThrows(IOException.class, () -> snapshot(marked(x, tree, "9223372036854775808", "\""+ "d".repeat(32) + "\"")));
+        assertThrows(IOException.class, () -> snapshot(marked(x, tree, "2", "null")));
+        byte[] alteredFooter = b.clone(); alteredFooter[alteredFooter.length - 3] ^= 1;
+        assertThrows(IOException.class, () -> index.verifySnapshot(new StoredMemberTest.Bytes(alteredFooter) {
+            @Override public void fill(long off, byte[] dest, int n) throws IOException {
+                assertTrue("must reject changed footer before reading body", off >= central);
+                super.fill(off, dest, n);
+            }
+        }));
+        assertThrows(OperationCanceledException.class, () -> index.verifySnapshot(new StoredMemberTest.Bytes(b) {
+            @Override public void fill(long off, byte[] dest, int n) throws IOException {
+                super.fill(off, dest, n);
+                if (off == body) stop.cancel();
+            }
+        }));
+    }
     @Test public void actualStoredMembersEmptyDirectoryAndImplicitParents() throws IOException {
         ArchiveIndex.Item root = read(zip("设计/区域/part.txt", "空/", "设计/")).root;
         assertEquals(2, root.children.size());

@@ -7,12 +7,16 @@ import java.util.Arrays;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.text.Normalizer;
 import java.util.List;
 import java.util.Locale;
 import java.util.TreeMap;
 
-/** Bounded, untrusted directory declarations. No tree identity or automatic member reads. */
+/** Bounded untrusted declarations. Whole-snapshot verification is an explicit separate read. */
 final class ArchiveIndex {
     static final long MAX_ARCHIVE = (256L << 30) + (32L << 20), MAX_MEMBER = 128L << 30;
     static final int MAX_CD = 2 << 20, MAX_ENTRIES = 8192, MAX_NODES = 12288;
@@ -59,9 +63,12 @@ final class ArchiveIndex {
     final Item root = new Item("", 0, null, true);
     private final long centralAt;
     private final byte[] central, ending;
-    private ArchiveIndex(long centralAt, byte[] central, byte[] ending) {
-        this.centralAt = centralAt; this.central = central; this.ending = ending;
+    private final int commentLength;
+    private ArchiveIndex(long centralAt, byte[] central, byte[] ending, int commentLength) {
+        this.centralAt = centralAt; this.central = central; this.ending = ending; this.commentLength = commentLength;
     }
+    long bodyBytes() { return logicalSize; }
+    int entryCount() { return nodes; }
 
     List<Match> findNames(String query, Runnable check) {
         if (query.isEmpty() || query.length() > MAX_QUERY)
@@ -110,7 +117,7 @@ final class ArchiveIndex {
         StoredMember.Layout local = StoredMember.layout(src, central, file.slot, file.bytes);
         byte[] prefix = mode == StoredMember.Mode.PREVIEW ? new byte[PlainText.captureLength(file.bytes)] : null;
         IndexedText.Build build = mode == StoredMember.Mode.INDEXED ? new IndexedText.Build(file.bytes) : null;
-        long actual = StoredMember.crc(src, local, build == null ? scratch : new byte[IndexedText.BLOCK], prefix, build);
+        long actual = StoredMember.crc(src, local, build == null ? scratch : new byte[IndexedText.BLOCK], prefix, build, null);
         checkDirectory(src, scratch); src.check();
         PlainText.Preview text = null;
         IndexedText indexed = null;
@@ -120,6 +127,95 @@ final class ArchiveIndex {
         }
         src.check();
         return new StoredMember.Result(local.crc, actual, text, indexed == null ? null : new TextIndex(file, local, indexed));
+    }
+
+    static final class SnapshotMarker {
+        private static final Pattern CANONICAL = Pattern.compile(
+                "zip-workspace/1\n\\{\"branch\":\"([0-9a-f]{32})\",\"generation\":([1-9][0-9]{0,18}),"
+                + "\"operation\":\"([0-9a-f]{32})\",\"parent\":(?:null|\"([0-9a-f]{32})\"),"
+                + "\"repo\":\"([0-9a-f]{32})\",\"tree\":\"([0-9a-f]{64})\"\\}");
+        final String repo, branch, operation, parent, tree;
+        final long generation;
+        private SnapshotMarker(Matcher fields, long generation) {
+            branch = fields.group(1); operation = fields.group(3); parent = fields.group(4);
+            repo = fields.group(5); tree = fields.group(6); this.generation = generation;
+        }
+    }
+
+    SnapshotMarker snapshotMarker() throws IOException {
+        require(commentLength <= 1024);
+        Matcher fields = SnapshotMarker.CANONICAL.matcher(new String(
+                ending, ending.length - commentLength, commentLength, StandardCharsets.US_ASCII));
+        require(fields.matches());
+        final long generation;
+        try { generation = Long.parseLong(fields.group(2)); }
+        catch (NumberFormatException wrongRange) { throw new IOException("Snapshot generation outside the supported range", wrongRange); }
+        SnapshotMarker marker = new SnapshotMarker(fields, generation);
+        require((generation == 1 || marker.parent != null) && !marker.operation.equals(marker.parent));
+        return marker;
+    }
+
+    private static final class SnapshotRow {
+        final byte[] path;
+        final Item item;
+        SnapshotRow(String path, Item item) { this.path = path.getBytes(StandardCharsets.UTF_8); this.item = item; }
+    }
+
+    private static void collectSnapshotRows(Item parent, String prefix, ArrayList<SnapshotRow> rows, MemberSource src) {
+        for (Item child : parent.children.values()) {
+            src.check();
+            String path = prefix.isEmpty() ? child.name : prefix + "/" + child.name;
+            rows.add(new SnapshotRow(path, child));
+            if (child.children != null) collectSnapshotRows(child, path, rows, src);
+        }
+    }
+
+    private static MessageDigest sha256() {
+        try { return MessageDigest.getInstance("SHA-256"); }
+        catch (NoSuchAlgorithmException unsupported) { throw new IllegalStateException("SHA-256 unavailable", unsupported); }
+    }
+
+    private static String hex(byte[] digest) {
+        StringBuilder out = new StringBuilder(digest.length * 2);
+        for (byte b : digest) out.append(Character.forDigit((b >>> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));
+        return out.toString();
+    }
+
+    SnapshotMarker verifySnapshot(MemberSource src) throws IOException {
+        src.check();
+        SnapshotMarker marker = snapshotMarker();
+        byte[] block = new byte[64 * 1024];
+        checkDirectory(src, block);
+        ArrayList<SnapshotRow> rows = new ArrayList<>(nodes);
+        collectSnapshotRows(root, "", rows, src);
+        require(rows.size() == nodes);
+        // UTF-8 byte order is the producer's Unicode scalar order, not Java's
+        // UTF-16 ordering, display ordering, or folded directory-map keys.
+        rows.sort((a, b) -> Arrays.compareUnsigned(a.path, b.path));
+        MessageDigest tree = sha256(), memberHash = sha256();
+        tree.update("zip-workspace tree 1\0".getBytes(StandardCharsets.UTF_8));
+        for (SnapshotRow row : rows) {
+            src.check();
+            Item item = row.item;
+            boolean folder = item.children != null;
+            String checksum = "null";
+            if (item.slot != null) {
+                StoredMember.Layout local = StoredMember.layout(src, central, item.slot, item.bytes);
+                require(StoredMember.crc(src, local, block, null, null, memberHash) == local.crc);
+                byte[] digest = memberHash.digest(); // resets the hasher for the next actual member
+                if (!folder) checksum = "\"" + hex(digest) + "\"";
+            } else require(folder && !item.declared);
+            // Admitted path components do not contain JSON escape characters.
+            byte[] suffix = ("\",\"" + (folder ? "d" : "f") + "\"," + item.bytes + "," + checksum + "]")
+                    .getBytes(StandardCharsets.US_ASCII);
+            int length = 2 + row.path.length + suffix.length;
+            tree.update((byte)(length >>> 24)); tree.update((byte)(length >>> 16));
+            tree.update((byte)(length >>> 8)); tree.update((byte)length);
+            tree.update((byte)'['); tree.update((byte)'"'); tree.update(row.path); tree.update(suffix);
+        }
+        checkDirectory(src, block); src.check();
+        require(hex(tree.digest()).equals(marker.tree));
+        return marker;
     }
 
     String textPage(MemberSource src, Item file, TextIndex original, int page) throws IOException {
@@ -207,7 +303,7 @@ final class ArchiveIndex {
         require(count == localCount && count <= MAX_ENTRIES && length <= MAX_CD
                 && at <= end && length == end - at && count <= length / 46);
         byte[] cd = src.read(at, (int)length);
-        ArchiveIndex index = new ArchiveIndex(at, cd, ending);
+        ArchiveIndex index = new ArchiveIndex(at, cd, ending, u16(tail, e + 20));
         TreeMap<Long, Slot> spans = new TreeMap<>();
         int p = 0;
         for (int n = 0; n < count; n++) {
@@ -256,7 +352,7 @@ final class ArchiveIndex {
                     && (host == 3 ? type == 0 || type == (folder ? 4 : 8) : type == 0)
                     && (!folder || v[0] == 0));
             Item row = index.add(folder ? name.substring(0, name.length() - 1) : name, folder, v[0], nl);
-            if (!folder) row.slot = slot;
+            row.slot = slot;
             p = stop + cl;
         }
         require(p == cd.length);

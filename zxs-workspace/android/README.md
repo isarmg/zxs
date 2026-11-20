@@ -6,6 +6,8 @@
 
 CRC 相符仅表示这次读出的这一个成员与包内给出的校验码相符。正文和 CRC 都可能被修改；它不是数字签名，不证明整个文件一直未变，也不核验其他成员、整树摘要、版本或分支头。
 
+已选 `.zxs` 可另点「核验整个 .zxs」。确认先列原文件、节点和全部正文读取量，可取消；后台仍用本次原 PFD 和临时授权。核每个实际成员的布局、长度、CRC 和文件 SHA-256，再按完整路径计算包括空目录和隐式祖先的整树摘要，与原注释标记比较。通过只说明本次读出的逻辑树和包内标记一致，不等于签名、作者认证、原始 ZIP 外部摘要、仓库槽或分支头。普通 ZIP 不自动进入该操作；不会提取、写入或上传。换档、退后台和授权失效均不交迟到结果。
+
 ### 按名称查找并定位
 
 打开一份归档后，可点「按名称查找」并输入名称片段。查找只在本次已读取的目录记录中按文件或目录的**单个名称**匹配，区分大小写；不按完整路径、通配符、正则或文件正文查找。每页最多 100 条，显示完整路径来区分不同目录下的同名项；空目录和归档推导出的目录也可找到。输入上限为 128 个 UTF-16 单元。
@@ -31,6 +33,6 @@ CRC 相符仅表示这次读出的这一个成员与包内给出的校验码相�
 
 本目录是独立 Gradle 根。参见[版本化 APK 候选与签名前核对](RELEASE.md)：在已备妥的 JDK 17 / Gradle 8.13 环境，只提取当前 release 的一份 APK，按真实版本命名并记录 SHA-256。产品源码仅用 Android/Java 平台 API；AndroidX Runner 与 JUnit 仅供 `src/androidTest`。没有生成或安装 APK，没有运行编译、签名或测试。
 
-发行前须在干净环境构建、核查许可并签名；在实际 Android 15+ 设备验证主存储选档/授权撤销、取消与旋转、受限提供方、空目录/多页、超过 4 GiB 的 Store/ZIP64，逐项校验的破损正文、本地头与描述符不一致、取消后迟到和授权撤回，文本的 32 KiB+1、256 KiB、显式大文件前部和跳读全文的整项核验量、末尾 CRC 损坏、跨 1 MiB 的四字节 UTF-8 / CRLF、末页直跳与后半非文本、改动未展示块字节、密集换行与大字号/无障碍、换选或失权后的延迟翻页，以及文件变化和资源上限的拒绝。查找另验：两目录内同名（至少一项在所在目录第 2 页）、长路径与大字体、点击只定位、返回保持页码；搜索行点按后若先返回目录、切页或换档，延迟送达的旧点按不能作用，也不能在新页面弹核验确认。换档不显示旧查询结果，再点原文件才出现核验确认。没有实机证据时不承诺支持某家文件管理器、云盘、可移除盘或下载目录提供方。
+整份核验的合成源例包含空树、完整路径排序、BMP 与补充字符、CRC 已重算但与整树标记不符、尾部原证变化和可取消；还需实际 Android 设备检查同一原授权、用户取消和读量，再用项目生成的 `.zxs` 对照结果。发行前须在干净环境构建、核查许可并签名；在实际 Android 15+ 设备验证主存储选档/授权撤销、取消与旋转、受限提供方、空目录/多页、超过 4 GiB 的 Store/ZIP64，逐项校验的破损正文、本地头与描述符不一致、取消后迟到和授权撤回，文本的 32 KiB+1、256 KiB、显式大文件前部和跳读全文的整项核验量、末尾 CRC 损坏、跨 1 MiB 的四字节 UTF-8 / CRLF、末页直跳与后半非文本、改动未展示块字节、密集换行与大字号/无障碍、换选或失权后的延迟翻页，以及文件变化和资源上限的拒绝。查找另验：两目录内同名（至少一项在所在目录第 2 页）、长路径与大字体、点击只定位、返回保持页码；搜索行点按后若先返回目录、切页或换档，延迟送达的旧点按不能作用，也不能在新页面弹核验确认。换档不显示旧查询结果，再点原文件才出现核验确认。没有实机证据时不承诺支持某家文件管理器、云盘、可移除盘或下载目录提供方。
 
 设计依据：[Android 系统文件选择](https://developer.android.com/training/data-storage/shared/documents-files)、[AOSP ExternalStorageProvider](https://android.googlesource.com/platform/frameworks/base/+/master/packages/ExternalStorageProvider/)、[Android UTF-8 解码](https://developer.android.com/reference/java/nio/charset/CharsetDecoder)、[Android SHA-256](https://developer.android.com/reference/java/security/MessageDigest)、[PKWARE ZIP 规范](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)、[Android Gradle Plugin 8.13](https://developer.android.com/build/releases/agp-8-13-0-release-notes)。

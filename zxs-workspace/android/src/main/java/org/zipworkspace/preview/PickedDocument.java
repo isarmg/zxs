@@ -56,6 +56,19 @@ final class PickedDocument implements AutoCloseable {
         }
     }
 
+    boolean isManagedSnapshotName() { return title.toLowerCase(Locale.ROOT).endsWith(".zxs"); }
+    ArchiveIndex.SnapshotMarker verifySnapshot(Context ctx, CancellationSignal cancel) throws IOException {
+        ArchiveIndex.require(isManagedSnapshotName());
+        cancel.throwIfCanceled();
+        try (ParcelFileDescriptor lease = borrow()) {
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
+            reader.validate();
+            ArchiveIndex.SnapshotMarker result = index.verifySnapshot(reader);
+            reader.validate();
+            return result;
+        }
+    }
+
     String textPage(Context ctx, ArchiveIndex.Item item, ArchiveIndex.TextIndex proof, int page, CancellationSignal cancel)
             throws IOException {
         cancel.throwIfCanceled();
@@ -68,8 +81,8 @@ final class PickedDocument implements AutoCloseable {
         }
     }
 
-    /** Final page drawing rechecks the existing grant and original FD, never a new URI. */
-    synchronized void checkTextPresentation(Context ctx) throws IOException {
+    /** Final result drawing rechecks the existing grant and original FD, never a new URI. */
+    synchronized void checkPresentation(Context ctx) throws IOException {
         ArchiveIndex.require(held != null);
         checkObserved(ctx, uri, held.getFileDescriptor(), observed);
     }

@@ -1,6 +1,7 @@
 package org.zipworkspace.preview;
 
 import java.io.IOException;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.zip.CRC32;
 import static org.zipworkspace.preview.ArchiveIndex.*;
@@ -97,13 +98,15 @@ final class StoredMember {
         return new Layout(slot.offset, body, end, crc, h, fields, descriptor);
     }
 
-    static long crc(MemberSource src, Layout local, byte[] block, byte[] capture, IndexedText.Build indexed) throws IOException {
+    static long crc(MemberSource src, Layout local, byte[] block, byte[] capture, IndexedText.Build indexed,
+                    MessageDigest sha) throws IOException {
         CRC32 computed = new CRC32();
         for (long pos = local.body; pos < local.end;) {
             src.check();
             int n = (int)Math.min(block.length, local.end - pos);
             src.fill(pos, block, n);
             computed.update(block, 0, n);
+            if (sha != null) sha.update(block, 0, n);
             long relative = pos - local.body;
             if (indexed != null) indexed.accept(relative, block, n, src::check);
             if (capture != null && relative < capture.length) {
