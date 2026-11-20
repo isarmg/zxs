@@ -30,16 +30,20 @@ fn bound_packet(p: &[u8]) -> Result<()> {
     if p.len() > MAX_PACKET { Err(Error::Limit) } else { Ok(()) }
 }
 
-// End of the declared security buffer, relative to this one SMB2 header. Its
-// contents are deliberately not decoded and grant no authentication result.
-fn security_end(p: &[u8], fields: usize, fixed_end: usize) -> Result<usize> {
+// Return the actual declared security field and its end, relative to this
+// one SMB2 header. The wire layer does not decode it or grant authentication.
+fn security_window(p: &[u8], fields: usize, fixed_end: usize) -> Result<(usize, &[u8])> {
     let _ = bytes(p, 0, fixed_end)?;
     let at = usize::from(u16le(p, fields)?);
     let len = usize::from(u16le(p, fields + 2)?);
-    if at == 0 && len == 0 { return Ok(fixed_end); }
+    if at == 0 && len == 0 { return Ok((fixed_end, &p[..0])); }
     if at < fixed_end { return invalid(); }
     let token = bytes(p, at, len)?;
-    Ok(at + token.len())
+    Ok((at + token.len(), token))
+}
+
+fn security_end(p: &[u8], fields: usize, fixed_end: usize) -> Result<usize> {
+    security_window(p, fields, fixed_end).map(|(end, _)| end)
 }
 
 // Called only on the server's own finalized, unframed, standalone reply.
@@ -128,6 +132,14 @@ pub(in crate::smb) struct SetupRequestHash { value: Hash, mid: u64, sid: u64, co
 
 impl AwaitingRequest {
     pub(in crate::smb) fn received(self, envelope: &Compound<'_>) -> Result<SetupRequestHash> {
+        self.received_token(envelope).map(|(step, _)| step)
+    }
+
+    /// Return the security field and hash from the *same* validated message;
+    /// the mechanism layer never accepts a detached token from another request.
+    pub(in crate::smb) fn received_token<'a>(
+        self, envelope: &Compound<'a>,
+    ) -> Result<(SetupRequestHash, &'a [u8])> {
         // Only isolated new-auth requests, not binding, reauthentication,
         // reconnect labelling or setup-plus-I/O. Do not hash unrelated bytes.
         let [m] = envelope.messages() else { return invalid(); };
@@ -140,23 +152,27 @@ impl AwaitingRequest {
             u64le(p, 80)? != 0 {
             return invalid();
         }
-        security_end(p, 76, 88)?;
-        Ok(SetupRequestHash { value: extend(&self.value, p), mid: m.header.message,
-                              sid: self.expected_sid, continues: self.continues })
+        let (_, token) = security_window(p, 76, 88)?;
+        Ok((SetupRequestHash { value: extend(&self.value, p), mid: m.header.message,
+                               sid: self.expected_sid, continues: self.continues }, token))
     }
 }
 
 impl SetupRequestHash {
     pub(in crate::smb) fn more(self, serialized: &[u8]) -> Result<AwaitingRequest> {
+        self.more_token(serialized).map(|(step, _)| step)
+    }
+
+    pub(in crate::smb) fn more_token(self, serialized: &[u8]) -> Result<(AwaitingRequest, &[u8])> {
         if self.continues == MAX_CONTINUES { return Err(Error::Limit); }
         let sid = server_header(serialized, 1, MORE, self.mid)?;
         if sid == 0 || sid == u64::MAX || (self.sid != 0 && sid != self.sid) ||
             u16le(serialized, 64)? != 9 || u16le(serialized, 66)? != 0 {
             return invalid();
         }
-        security_end(serialized, 68, 72)?;
-        Ok(AwaitingRequest { value: extend(&self.value, serialized),
-                             expected_sid: sid, continues: self.continues + 1 })
+        let (_, token) = security_window(serialized, 68, 72)?;
+        Ok((AwaitingRequest { value: extend(&self.value, serialized),
+                              expected_sid: sid, continues: self.continues + 1 }, token))
     }
 
     /// KDF input when the *separate* authenticator proves this same exchange

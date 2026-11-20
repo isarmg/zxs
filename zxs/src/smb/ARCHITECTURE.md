@@ -12,6 +12,16 @@
 
 `wire/preauth` 从已解析的单条 3.1.1 NEGOTIATE 出发，连接只保留请求和实际序列化回复的链式哈希。每个新的 SESSION_SETUP 尝试从该连接值单独起步；接收完整原请求，并且仅在同一 MessageId、同一已分配 SessionId 的 MORE_PROCESSING_REQUIRED 回复时继续。固定的 Rust SHA-512 实现见[上游来源及许可](../../vendor/rust/README.md)。TCP 长度头不入哈希，原 SMB2 消息头、正文、间隙/填充均入哈希。最后成功的 SESSION_SETUP 回复将使用由最后一个请求哈希派生的密钥签名，因此它不会再次进入这份 KDF 上下文。该值不是口令证明、签名或有权访问文件的会话。预认证层本身不运行 GSS/KDF，不编码应答，不查询凭据或启动生产监听。依据：[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[新会话](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)、[GSS 处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)。
 
+## SESSION_SETUP 的机制封装（止于未验证的 Type 3）
+
+`session/envelope` 只处理一次新的连接型 NTLMv2 尝试。它取原请求或已序列化 MORE 回复的同一个 security buffer 和预认证状态，不收另传的 token。第一次选定 RFC 4178 的 GSS-SPNEGO 或直接 NTLMSSP 后不得换层；不扫描尾部、不从坏 DER 回退、不把客户端的账户名、目标、MIC 标志或非零 SessionId 当证明。[Linux v6.12 的原生 SMB 客户端](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L1708-L1846) 确有直接传两段 NTLMSSP 的代码，两种封装最终必须满足同一账户、挑战及签名要求。本段不接收 SMB1、NTLMv1 或匿名。
+
+[初始 GSS 封装](https://www.rfc-editor.org/rfc/rfc2743#section-3.1) 只在客户端首条使用；[RFC 4178 §§4–6](https://www.rfc-editor.org/rfc/rfc4178#section-4.2) 的后续 NegTokenResp 不重复包装。保存客户端机制顺序及原 DER SEQUENCE（不含显式 [0]）给将来的 mechListMIC 校验。若 NTLM 不在首位，不使用其他机制的乐观 token 或早期 MIC，必先用实际 MORE 选择 NTLM 并请求名单 MIC；此后收到新的 Type 1 才接收 Type 2。优先 NTLM 无乐观 token 时也要先走机制选择。后续客户端不能再选机制，未知 DER 扩展有界跳过但不授予能力；即使客户端首条带有 Init2 的 NegHints，也只忽略其有界 SEQUENCE，不从提示名推出目标或身份。首答已 request-mic 而末条没有相应 MIC，按 §5(c)(V) 终止；即使形状和长度都正确也须实际核验，不能由“有字段”推出认证。
+
+[MS-NLMP 三种报文与字段](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/033d32cc-88f9-4483-9bf2-b273055038ce) 的有界视图保留原始 Type 1/2/3、目标信息及客户端声明；启用字段不超出本条、不别名固定头或其它有效字段，不解释按标志应忽略的描述符。[MS-SPNG 微软产品说明 <8>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-spng/211417c4-11ef-46c0-a8fb-f178a51c2088) 区分最优先 NTLM 且带 NTLM MIC 的保护与原生直接 token 行为；本版对已选 SPNEGO 的这类输入也要求名单 MIC，不能切到直接封装来逃避。未宣告 Negotiate Late Fallback，不在半途重选。没有 GSS 分片重组、Kerberos、原生客户端验收或跨连接恢复；服务端 NEGOTIATE 所需的机制广告／NegHints 与出站封装并非这个入站切片。
+
+产物只是 `Unverified`，不会生成挑战、校验口令、导出密钥、创建 `VerifiedExchange`、授予 Tree 或发送成功。真正的接受端还须拥有安全随机的一次性限时挑战与原连接/凭据代，校验原协商标志、目标/时间、NTLMv2 证明、所需 NTLM MIC 和双向 mechListMIC，并复核当前业务身份，再把该次最后请求的 transcript 和导出键一起交给签名器。不能只相信客户端的 MIC 指示位。所有合成测试素材无真实账户或有效口令证明。
+
 ## 认证后的明文消息签名（未接认证、网络或存储）
 
 `session/` 实现[规范 KDF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/da4e579e-02ce-4e27-bbce-3fc816a3ff92) 的一个 HMAC-SHA-256 计数块，从同一新 NTLM 会话的 16 字节导出键和最后一个请求的 64 字节 transcript 派生 128 位签名键。标签含结尾 NUL，KDF 自己的分隔零字节另算。真实认证的完成凭据没有生产构造器；以后只有完成挑战、主体、MIC 和当前代检查的原尝试才能交出这一对，不能从报文、Web 身份或布尔值制造会话。密钥缓冲使用 zeroize；不承诺清除所有栈临时副本。没有使用宿主加密服务。
