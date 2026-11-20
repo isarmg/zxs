@@ -149,6 +149,14 @@ def checkout(archive, dest, store, state, *, expected=None, private_stage=False)
     return marker
 
 
+def sync_live_state(live, operation, phase, *, local_only=False):
+    db = live.state/"worktree.sqlite"
+    live.check_catalog(db, local_only=local_only)
+    with writing("STATE", live.state, phase, operation, live.state_fd):
+        os.fsync(live.state_fd)
+    live.check_catalog(db, local_only=local_only)
+
+
 def finish(state, operation, *, selected=None):
     operation = check_id(operation)
     live = None if selected is None else selected.live
@@ -189,22 +197,29 @@ def finish(state, operation, *, selected=None):
             # but SQLite FULL/DELETE does not require syncing journal removal.
             # Before any STORE attempt, sync the actual original directory
             # while this writer has re-read the same pending operation.
-            db = state/"worktree.sqlite"
-            live.check_catalog(db)
             try:
-                with writing("STATE", state, "同步原待决的目录记录；尚未尝试 STORE", operation, live.state_fd):
-                    os.fsync(live.state_fd)
+                sync_live_state(live, operation, "同步原待决的目录记录；尚未尝试 STORE")
             except OSError as error:
                 error.add_note("本次尚未尝试上传或核认正式槽；保留原待决、原冻结包和操作号。")
                 raise
-            live.check_catalog(db)
             target = _publish(local, selected.store, marker, row["pending_sha"],
                               source=selected.candidate_source(marker), confirm_only_fd=selected.ack_fd)
             selected.check_row(con, row)
+            selected.receipt.completion_started = True
         con.execute("INSERT INTO completed(operation,marker,digest) VALUES(?,?,?)", (operation, marker.encode(), row["pending_sha"]))
         con.execute("""UPDATE checkout SET branch=?,generation=?,parent=?,base_sha=?,pending=NULL,pending_sha=NULL
                        WHERE singleton=1""", (marker.branch, marker.generation, marker.operation, row["pending_sha"]))
         # The immutable private spool remains recoverable; cleanup is not part of this prototype.
+    if selected is not None:
+        # Only after SQLite COMMIT and close returned. A subsequent explicitly
+        # approved retry can recheck this exact completed row and sync only STATE.
+        selected.receipt.directory_remaining = True
+        try:
+            sync_live_state(live, operation, "同步本机原完成回执；STORE 正式槽可能已出现", local_only=True)
+        except OSError as error:
+            error.add_note("本机完成回执的目录同步未确认；不重传。请先只读查询本次原回执。")
+            raise
+        selected.receipt.completed_barrier()
     return target, marker
 
 

@@ -19,10 +19,12 @@ class CommitControls(QWidget):
         self.save = button("提交本次工作目录…", self.begin)
         self.new_branch = button("从签出时的原节点创建新分支…", self.branch)
         self.query = button("查询该次操作的原回执", self.inspect)
+        self.sync_receipt = button("只同步本机原完成回执…", self.confirm_completion)
         self.retry = button("核对并续作原待决操作…", self.resume)
         self.conflict_fork = button("核对同代冲突，用原冻结归档另建分支…", self.fork_conflict)
         row.addWidget(self.save); row.addWidget(self.query); box.addLayout(row)
         box.addWidget(self.new_branch); box.addWidget(self.retry); box.addWidget(self.conflict_fork)
+        box.addWidget(self.sync_receipt)
         self.output = label(); box.addWidget(self.output)
         self.set_session(None)
 
@@ -32,6 +34,7 @@ class CommitControls(QWidget):
         self.new_branch.setEnabled(idle and self.session.branch_source_available)
         free = self.session is not None and self.running is None and self.last is not None
         self.query.setEnabled(free)
+        self.sync_receipt.setEnabled(free and self.last.local_receipt_seen)
         self.retry.setEnabled(free and self.visible and self.last.pending_seen and not self.last.conflict)
         self.conflict_fork.setEnabled(free and self.visible and self.last.conflict_pending_seen)
 
@@ -147,6 +150,39 @@ class CommitControls(QWidget):
             self.output.setText(f"{text}\nSTATE：{job.live.state}\n{self.operation_numbers(job)}")
         self.submit(job, "正在只读查询本次原操作…", job.result,
                     lambda result: end(*result), lambda error: end("unknown", f"原结果未知：{describe(error)}。未发布或重试。"))
+
+    def confirm_completion(self):
+        job, original = self.last, self.session
+        if (job is None or original is None or self.running is not None or self.owner.pending is not None
+                or not job.local_receipt_seen): return
+        self.running = job; self.buttons()
+
+        def current():
+            return self.session is original and self.last is job and self.running is job
+
+        def finished(text, *, complete=False):
+            if not current(): self.discard(job); return
+            self.running = None; self.blocked = not complete
+            self.output.setText(f"{text}\n原 STATE：{job.live.state}\n{self.operation_numbers(job)}")
+            self.buttons()
+            if complete: self.refresh_status()
+
+        try:
+            detail = (f"原 STATE：{job.live.state}\n{self.operation_numbers(job)}\n\n"
+                      "只复核 SQLite 已返回的同号完成行并同步本机原目录。"
+                      "不读取、上传或确认 STORE 文件，不改工作文件、分支或历史。")
+            if not confirm(self, "只补本机成功回执的目录同步", detail,
+                           attestation="我确认原 STATE 仍是本会话独占，没有并行 CLI 修改。",
+                           action_text="只同步本机回执"):
+                finished("未确认，没有同步或重发。"); return
+            if not current():
+                finished("原会话或操作已变，没有同步。"); return
+            self.submit(job, "正在核验原本机回执并同步原 STATE…",
+                        lambda: job.confirm_local_receipt(confirmed=True),
+                        lambda text: finished(text, complete=True),
+                        lambda err: finished(describe(err) + "\n不重发；先重新只读核对原回执。"))
+        except Exception as err:
+            finished(describe(err))
 
     def resume(self):
         original, live = self.last, self.session

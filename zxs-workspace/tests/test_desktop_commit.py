@@ -485,8 +485,12 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
 
         def pending_sync(fd):
             if os.path.samestat(os.fstat(fd), os.fstat(self.live.state_fd)):
-                self.assertEqual(self.live.status()["pending_operation"], original.operation)
-                ordered.append("STATE")
+                readback = self.live.status()
+                if readback["pending_operation"] == original.operation:
+                    ordered.append("STATE")
+                else:
+                    self.assertEqual(readback["base_operation"], original.operation)
+                    ordered.append("RECEIPT")
             return real_sync(fd)
 
         def publish_original(*args, **options):
@@ -499,7 +503,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
              patch.object(worktree, "_publish", side_effect=publish_original), \
              patch.object(worktree, "frozen_tree", side_effect=AssertionError("no recapture")):
             final, marker = retry.run()
-        self.assertEqual(ordered, ["STATE", "STORE"])
+        self.assertEqual(ordered, ["STATE", "STORE", "RECEIPT"])
         self.assertEqual(final.read_bytes(), frozen.read_bytes())
         self.assertEqual(marker, original.marker)
 
@@ -519,6 +523,96 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         with sqlite3.connect(db) as check:
             self.assertEqual(check.execute("PRAGMA journal_mode").fetchone()[0], "wal")
         check.close()
+
+    def lose_directory_receipt(self, original, invocation):
+        real = os.fsync
+        def sync(fd):
+            if (os.path.samestat(os.fstat(fd), os.fstat(self.live.state_fd))
+                    and self.live.status()["base_operation"] == original.operation):
+                raise OSError(errno.EIO, "final original receipt barrier")
+            return real(fd)
+        with patch.object(os, "fsync", side_effect=sync), self.assertRaisesRegex(OSError, "final original receipt barrier"):
+            invocation()
+        target = self.store/original.marker.filename
+        self.assertEqual(target.read_bytes(), (self.state/(original.operation+".zxs")).read_bytes())
+        self.assertEqual(self.live.status()["base_operation"], original.operation)
+        self.assertIsNone(self.live.status()["pending_operation"])
+
+    def test_late_local_receipt_barrier_remains_uncertain_until_explicit_local_only_confirmation(self):
+        original = self.choice()
+        self.lose_directory_receipt(original, original.run)
+        self.store.rename(self.root/"offline-store")
+        with patch.object(os, "fsync", side_effect=AssertionError("query does not sync")):
+            self.assertEqual(original.result()[0], "receipt_dir")
+            with self.assertRaisesRegex(Rejected, "明确确认"): original.confirm_local_receipt()
+        self.assertTrue(original.local_receipt_seen)
+        with patch.object(worktree, "_publish", side_effect=AssertionError("nothing to transmit or read from STORE")), \
+             patch.object(worktree, "finish", side_effect=AssertionError("no writing transaction")):
+            self.assertIn("没有接触 STORE", original.confirm_local_receipt(confirmed=True))
+        self.assertEqual(original.result()[0], "completed")
+        self.assertFalse(original.local_receipt_seen)
+
+    def test_exact_retry_keeps_its_late_sync_failure_on_the_original_window_operation(self):
+        original = self.pending_choice()
+        retry = self.retry_choice(original); retry.prepare()
+        self.lose_directory_receipt(original, retry.run)
+        self.assertIs(retry.receipt, original.receipt)
+        self.assertEqual(original.result()[0], "receipt_dir")
+        self.assertFalse(original.pending_seen)
+        with self.assertRaises(Rejected): PendingRetry(original)
+
+    def test_visible_row_after_a_lost_sql_reply_never_grants_a_directory_only_recovery(self):
+        original = self.choice()
+        opened = worktree.locked
+        @contextmanager
+        def lose_reply(state, **options):
+            with opened(state, **options) as value:
+                yield value
+            if options.get("phase", "").startswith("记原提交回执"):
+                raise OSError("lost end of SQLite writer")
+        with patch.object(worktree, "locked", side_effect=lose_reply), \
+             self.assertRaisesRegex(OSError, "lost end of SQLite writer"):
+            original.run()
+        self.assertTrue((self.store/original.marker.filename).is_file())
+        self.assertEqual(original.result()[0], "completion_unsynced")
+        self.assertFalse(original.local_receipt_seen)
+        with self.assertRaises(Rejected): original.confirm_local_receipt(confirmed=True)
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_window_local_receipt_is_a_separate_explicit_choice_after_its_read_only_query(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        original = self.choice()
+        self.lose_directory_receipt(original, original.run)
+        self.store.rename(self.root/"offline-store")
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        controls = win.archive.checkout.commits
+        controls.set_session(self.live)
+        controls.last, controls.blocked = original, True
+        controls.buttons()
+        self.assertFalse(controls.sync_receipt.isEnabled())
+
+        def dispatch(_title, work, apply, *, failed):
+            try: outcome = work()
+            except Exception as err: failed(err)
+            else: apply(outcome)
+            return object()
+
+        with patch.object(win, "job", side_effect=dispatch), patch.object(controls, "refresh_status"), \
+             patch.object(commit_controls, "confirm", side_effect=[False, True]) as confirm:
+            controls.inspect()
+            self.assertTrue(controls.sync_receipt.isEnabled())
+            with patch.object(os, "fsync", side_effect=AssertionError("no sync if declined")):
+                controls.sync_receipt.click()
+            self.assertTrue(original.receipt.directory_remaining)
+            self.assertFalse(controls.save.isEnabled())
+            controls.sync_receipt.click()
+        self.assertEqual(confirm.call_count, 2)
+        self.assertFalse(controls.sync_receipt.isEnabled())
+        self.assertTrue(controls.save.isEnabled())
+        self.assertIn("没有接触 STORE", controls.output.text())
 
     def pending_choice(self):
         (self.tree/"story").write_bytes(b"original frozen body")

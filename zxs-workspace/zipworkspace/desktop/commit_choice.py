@@ -16,6 +16,15 @@ def _baseline(row):
     return (row["repo"], row["branch"], row["generation"], row["parent"], row["base_sha"])
 
 
+class _Receipt:
+    """Process-local evidence for one operation, shared with its exact retries."""
+    def __init__(self):
+        self.completion_started = self.directory_remaining = False
+
+    def completed_barrier(self):
+        self.completion_started = self.directory_remaining = False
+
+
 class CommitChoice:
     purpose = "commit"
 
@@ -29,6 +38,8 @@ class CommitChoice:
         self.base = self.original = self.marker = self.digest = None
         self.used = self.closed = self.ready = self.pending_seen = False
         self.conflict = self.conflict_pending_seen = False
+        self.receipt = _Receipt()
+        self.local_receipt_seen = False
         self.ack_fd = None
 
     def close(self):
@@ -155,7 +166,7 @@ class CommitChoice:
 
     def result(self):
         # Do not hand out a replay decision unless this particular original's read txn actually returned.
-        self.pending_seen = self.conflict_pending_seen = False
+        self.pending_seen = self.conflict_pending_seen = self.local_receipt_seen = False
         outcome = self._result()
         if self.conflict and outcome[0] == "pending":
             self.conflict_pending_seen = self.purpose == "commit" and self.base[2] > 0
@@ -166,16 +177,47 @@ class CommitChoice:
             return "pending", ("此操作仍待决，原槽核对曾发现冲突；不是已核实的竞争节点。"
                                "不会覆盖或续传。" + action)
         self.pending_seen = outcome[0] == "pending"
+        self.local_receipt_seen = outcome[0] == "receipt_dir"
         return outcome
+
+    def completion_result(self, history):
+        if not self.receipt.completion_started: return "completed", history
+        if self.receipt.directory_remaining:
+            return ("receipt_dir", "原完成行可读，SQLite 提交已返回，但本机目录同步未确认。"
+                    "可单独确认仅完成这道本机屏障，不重传。")
+        return "completion_unsynced", "原完成行可读，但这次 SQLite 提交未确认；不重新发布或当作成功。"
+
+    def confirm_local_receipt(self, *, confirmed=False):
+        if (not confirmed or not self.local_receipt_seen or not self.receipt.completion_started
+                or not self.receipt.directory_remaining):
+            raise Rejected("缺少本窗口已核到的原完成行和仅同步本机回执的明确确认")
+        self.local_receipt_seen = False  # Any next attempt needs a new observation and consent.
+
+        def check():
+            with worktree.locked(self.live.state, read_only=True, live=self.live, local_only=True) as (con, row, _):
+                self.live.check_instance(row, lifecycle.instance(con), check_name=False)
+                if con.execute("PRAGMA main.journal_mode").fetchone()[0] != "delete":
+                    raise Rejected("原库日志模式已改变，不按原方式同步")
+                if self.purpose == "conflict-fork": self.require_link(con)
+                saved = con.execute("SELECT marker,digest FROM completed WHERE operation=?",
+                                    (self.operation,)).fetchone()
+                if saved is None: raise Rejected("原完成行不再可核对，不同步或重发")
+                self.check_marker(Commit.decode(saved["marker"]), saved["digest"])
+
+        check()
+        worktree.sync_live_state(self.live, self.operation, "仅同步本机原完成回执", local_only=True)
+        check()
+        self.receipt.completed_barrier()
+        return "原完成回执已在本机确认；没有接触 STORE，不据此判断共享文件当前是否仍在。"
 
     def _result(self):
         # Metadata only. Never run finish(), read user bodies or publish while querying an outcome.
-        with worktree.locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
+        with worktree.locked(self.live.state, read_only=True, live=self.live, local_only=True) as (con, row, _):
             self.live.check_instance(row, lifecycle.instance(con))
             done = con.execute("SELECT marker,digest FROM completed WHERE operation=?", (self.operation,)).fetchone()
             if done is not None:
                 self.check_marker(Commit.decode(done["marker"]), done["digest"])
-                return "completed", "原操作已记为完成；这是历史回执，未再次验证共享中当前是否仍有此文件。"
+                return self.completion_result("原操作已记为完成；这是历史回执，未再次验证共享中当前是否仍有此文件。")
             forked = con.execute("SELECT successor FROM forked_original WHERE operation=?", (self.operation,)).fetchone()
             if forked is not None:
                 if self.marker is None: raise Rejected("未持有本次冻结候选，不能确认分叉来源")

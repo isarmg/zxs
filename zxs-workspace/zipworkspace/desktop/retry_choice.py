@@ -18,6 +18,7 @@ class PendingRetry(CommitChoice):
             raise Rejected("需要先只读查到本窗口这笔无已知冲突的待决原操作")
         submitted.pending_seen = False  # A cancellation, refusal or loss requires another explicit query.
         self._bind(submitted.live, submitted.operation)  # No new operation ID, no reopening of the old decision.
+        self.receipt = submitted.receipt
         self.base, self.marker, self.digest = submitted.base, submitted.marker, submitted.digest
         self.origin, self.candidate = submitted, None
         self.leaf = self.operation + ".zxs"

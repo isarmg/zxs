@@ -122,7 +122,13 @@ class PendingFork(CommitChoice):
 
     def result(self):
         # A link is acceptance, not publication. Do not recheck STORE or write during inquiry.
-        with worktree.locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
+        self.local_receipt_seen = False
+        outcome = self._read_successor()
+        self.local_receipt_seen = outcome[0] == "receipt_dir"
+        return outcome
+
+    def _read_successor(self):
+        with worktree.locked(self.live.state, read_only=True, live=self.live, local_only=True) as (con, row, _):
             self.live.check_instance(row, lifecycle.instance(con))
             linked = self._successor(con)
             if linked is None:
@@ -135,7 +141,7 @@ class PendingFork(CommitChoice):
             done = con.execute("SELECT marker,digest FROM completed WHERE operation=?", (self.operation,)).fetchone()
             if done is not None:
                 self.check_marker(Commit.decode(done["marker"]), done["digest"])
-                return "completed", "已核到这笔后继的完成历史回执；未重新验证 STORE 当前仍有此归档。"
+                return self.completion_result("已核到这笔后继的完成历史回执；未重新验证 STORE 当前仍有此归档。")
             if row["pending"] is not None and Commit.decode(row["pending"]).operation == self.operation:
                 self.check_marker(Commit.decode(row["pending"]), row["pending_sha"])
                 return "pending", ("原登记确有这笔后继待决；正式槽可能已出现，不能当作完成。"
