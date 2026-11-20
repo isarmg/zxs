@@ -3,6 +3,7 @@
 //! standard Python hashlib.sha512(previous + message) supplies the expected
 //! chain after request, exact encoded response and first synthetic SETUP.
 use super::*;
+use crate::smb::connection::sessions::tests::running;
 use crate::smb::wire::{direct::Frame, message::Compound, preauth::tests::synthetic_exchange};
 use std::cell::Cell;
 
@@ -58,7 +59,7 @@ fn context(p: &mut Vec<u8>, kind: u16, data: &[u8]) {
 fn opening(p: &[u8]) -> Result<Opening> { framed(p,Opening::received) }
 fn server() -> RunningServerGuid {
     // GUID 00112233-4455-4677-8899-aabbccddeeff in MS-DTYP packet ordering.
-    RunningServerGuid { wire: [0x33,0x22,0x11,0x00,0x55,0x44,0x77,0x46,0x88,0x99,0xaa,0xbb,0xcc,0xdd,0xee,0xff] }
+    running([0x33,0x22,0x11,0x00,0x55,0x44,0x77,0x46,0x88,0x99,0xaa,0xbb,0xcc,0xdd,0xee,0xff])
 }
 fn local_time() -> SystemTime { UNIX_EPOCH + Duration::from_nanos(123_456_789) }
 fn fixed(req: &[u8], guid: &RunningServerGuid, salt_start: u8) -> Result<OpeningSend> {
@@ -75,7 +76,7 @@ fn default_and_explicit_cmac_encode_true_reply_publish_real_credits_and_hash_the
         assert_eq!(tx.bytes(),decode(expected).as_slice());
         let mut conn = tx.submitted().unwrap();
         assert_eq!((conn.server.security_mode,conn.server.capabilities),(3,4));
-        assert_eq!(conn.server.guid,server().wire);
+        assert_eq!(conn.server.guid,*server().wire());
         assert_eq!(conn.window.available(),5);
         // Debit the actual original MID=1 before the independent transcript fork;
         // no SMB session, keystore or file operation is published by either.
@@ -122,9 +123,9 @@ fn same_running_guid_different_draws_and_no_credential_or_client_fallback_on_loc
     assert_eq!(calls.get(),2); assert_eq!(&a.bytes()[72..88],&b.bytes()[72..88]);
     assert_ne!(&a.bytes()[72..88],&req[76..92]); // never borrowed from client
     assert_ne!(&a.bytes()[142..174],&b.bytes()[142..174]);
-    let other=RunningServerGuid { wire: [0x33;16] }; // another synthetic runtime, not installed data
+    let other=running([0x33;16]); // another synthetic runtime, not installed data
     assert_ne!(&a.bytes()[72..88],&fixed(&req,&other,1).unwrap().bytes()[72..88]);
-    assert!(matches!(opening(&req).unwrap().respond_from(&RunningServerGuid{wire:[0;16]},
+    assert!(matches!(opening(&req).unwrap().respond_from(&running([0;16]),
         |_| panic!("invalid identity must not consume entropy"),local_time),Err(Fault::Identity)));
     assert!(matches!(opening(&req).unwrap().respond_from(&source,|_|Err(Fault::Entropy),
         ||panic!("no fabricated reply timestamp")),Err(Fault::Entropy)));

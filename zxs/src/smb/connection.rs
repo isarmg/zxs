@@ -12,6 +12,7 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod setup;
+pub(in crate::smb) mod sessions;
 
 const CAP: u16 = 64; // bound on live number span AND advertised + in-flight requests
 const CANCEL: u16 = 0x000c;
@@ -20,7 +21,7 @@ const K64: u64 = 65_536;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Fault {
     Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, SetupPhase, Closed, Range, FrameSize,
-    Resources, Exhausted, WrongBatch, NoReply, WrongReply,
+    Resources, Exhausted, WrongBatch, NoReply, WrongReply, SessionLimit, SessionState,
 }
 pub(in crate::smb) type Result<T> = std::result::Result<T, Fault>;
 
@@ -55,18 +56,19 @@ impl Opening {
     pub(in crate::smb) fn credit_response(&self) -> u16 { self.grant }
     // Only our serializer can reach this production path. Take exclusive
     // ownership so the bytes checked and hashed below cannot be replaced.
-    fn bind(self, actual: Vec<u8>) -> Result<OpeningSend> {
+    fn bind(self, actual: Vec<u8>, instance: &sessions::RunningServerGuid) -> Result<OpeningSend> {
         let (actual_grant, limits) = direct_445_grant(&actual).map_err(|_| Fault::Opening)?;
         if actual_grant != self.grant { return Err(Fault::Opening); }
         let server = Selection::emitted(&actual).map_err(|_| Fault::Opening)?;
+        if &server.guid != instance.wire() { return Err(Fault::Identity); }
         let signing = self.hash.signing_choice();
         let hash = self.hash.reply(&actual).map_err(|_| Fault::Opening)?;
-        Ok(OpeningSend { actual, hash, signing, server, grant: self.grant, limits, client: self.client })
+        Ok(OpeningSend { actual, hash, signing, server, run:instance.share(), grant: self.grant, limits, client: self.client })
     }
 }
 #[must_use]
 pub(in crate::smb) struct OpeningSend {
-    actual: Vec<u8>, hash: ConnectionHash, signing: CmacChoice, server: Selection,
+    actual: Vec<u8>, hash: ConnectionHash, signing: CmacChoice, server: Selection, run: Arc<sessions::Run>,
     grant: u16, limits: Limits, client: ClientOffer,
 }
 impl OpeningSend {
@@ -79,7 +81,7 @@ impl OpeningSend {
         // on this server even if a client ignores its own list.
         if self.signing == CmacChoice::NoCommon { return Err(Fault::NoCommonSigning); }
         Ok(Connection { limits: self.limits, client: self.client, server: self.server, in_flight: 0,
-            origin: Arc::new(Origin { closed: AtomicBool::new(false), hash: self.hash }),
+            sessions: Vec::new(), origin: Arc::new(Origin { closed: AtomicBool::new(false), hash: self.hash, run:self.run }),
             window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } })
     }
 }
@@ -153,7 +155,7 @@ impl Drop for Debits {
     }
 }
 
-struct Origin { closed: AtomicBool, hash: ConnectionHash }
+struct Origin { closed: AtomicBool, hash: ConnectionHash, run:Arc<sessions::Run> }
 
 /// The immutable parsed frame, its ledger and that exact connection's
 /// negotiated transcript travel together. No public raw/debit pair, no Clone,
@@ -168,6 +170,7 @@ impl Received<'_> {
 #[must_use]
 pub(in crate::smb) struct Connection {
     origin: Arc<Origin>, window: Window, limits: Limits, client: ClientOffer, server: Selection, in_flight: u16,
+    sessions: Vec<sessions::Local>, // same run / original transport; InProgress entries only for now
 }
 impl Drop for Connection {
     fn drop(&mut self) { self.origin.closed.store(true,Ordering::Release); }
@@ -278,9 +281,15 @@ impl<'a,'b> ReplyPlan<'a,'b> {
     /// Validate the fully serialized, immutable reply/compound. Does NOT
     /// decide success, sign it, validate a session, or perform any command.
     pub(in crate::smb) fn bind<'p>(self, actual: &'p [u8]) -> Result<ReplySend<'a,'b,'p>> {
+        self.bind_bytes(std::borrow::Cow::Borrowed(actual))
+    }
+    fn bind_owned(self, actual: Vec<u8>) -> Result<ReplySend<'a,'b,'static>> {
+        self.bind_bytes(std::borrow::Cow::Owned(actual))
+    }
+    fn bind_bytes<'p>(self, actual: std::borrow::Cow<'p,[u8]>) -> Result<ReplySend<'a,'b,'p>> {
         self.owner.alive()?;
         if actual.len() > MAX_FRAME_BYTES { return Err(Fault::WrongReply); }
-        let mut rest = actual;
+        let mut rest = actual.as_ref();
         for (i,m) in self.batch.entries.iter().enumerate() {
             if m.cmd == CANCEL { continue; }
             let (r, tail) = split_sync_reply(rest).map_err(|_| Fault::WrongReply)?;
@@ -297,14 +306,20 @@ impl<'a,'b> ReplyPlan<'a,'b> {
 
 #[must_use]
 pub(in crate::smb) struct ReplySend<'a,'b,'p> {
-    plan: ReplyPlan<'a,'b>, actual: &'p [u8], settled: bool,
+    plan: ReplyPlan<'a,'b>, actual: std::borrow::Cow<'p,[u8]>, settled: bool,
 }
 impl ReplySend<'_,'_,'_> {
-    pub(in crate::smb) fn bytes(&self) -> &[u8] { self.actual }
+    pub(in crate::smb) fn bytes(&self) -> &[u8] { self.actual.as_ref() }
     /// Only after successful submission of these bytes on THIS transport.
     /// The exclusive borrow holds its ledger between selecting and publishing
     /// credits; no competing response can publish the same sequence range.
-    pub(in crate::smb) fn submitted(mut self) -> Result<()> {
+    pub(in crate::smb) fn submitted(self) -> Result<()> { self.publish_with(|_| Ok(())) }
+    // Stage-specific callers can install only state already prepared for the
+    // exact bytes. Any late failure drops this uncertain transport and clears
+    // its pending sessions; no new credit range or active phase survives.
+    fn publish_with(mut self, install: impl FnOnce(&mut Connection)->Result<()>) -> Result<()> {
+        self.plan.owner.alive()?;
+        install(self.plan.owner)?;
         self.plan.owner.alive()?;
         self.plan.owner.window = self.plan.shadow;
         self.plan.owner.in_flight = self.plan.pending;
@@ -315,7 +330,10 @@ impl ReplySend<'_,'_,'_> {
 }
 impl Drop for ReplySend<'_,'_,'_> {
     fn drop(&mut self) {
-        if !self.settled { self.plan.owner.origin.closed.store(true, Ordering::Release); }
+        if !self.settled {
+            self.plan.owner.origin.closed.store(true, Ordering::Release);
+            self.plan.owner.sessions.clear();
+        }
     }
 }
 

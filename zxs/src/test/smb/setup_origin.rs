@@ -5,30 +5,30 @@ use crate::smb::{connection::{Connection,Fault,Opening},wire::{
     direct::Frame,message::Compound,preauth::tests::synthetic_exchange,
 }};
 
-fn frame(p: &[u8]) -> Vec<u8> {
+pub(in crate::smb::connection) fn frame(p: &[u8]) -> Vec<u8> {
     let mut out=(p.len() as u32).to_be_bytes().to_vec();out.extend_from_slice(p);out
 }
-fn parsed(p: &[u8]) -> Compound<'_> {
+pub(in crate::smb::connection) fn parsed(p: &[u8]) -> Compound<'_> {
     let (f,rest)=Frame::split(p).unwrap().unwrap();assert!(rest.is_empty());Compound::parse(f).unwrap()
 }
 fn connection() -> Connection {
     let [mut q,mut r,..]=synthetic_exchange();
     q[14..16].copy_from_slice(&4u16.to_le_bytes());r[14..16].copy_from_slice(&4u16.to_le_bytes());
-    let p=frame(&q); Opening::received(&parsed(&p)).unwrap().bind(r).unwrap().submitted().unwrap()
+    let p=frame(&q); Opening::received(&parsed(&p)).unwrap().fixture_bind(r).unwrap().submitted().unwrap()
 }
-fn body(token: &[u8], mid: u64, sid: u64) -> Vec<u8> {
+pub(in crate::smb::connection) fn body(token: &[u8], mid: u64, sid: u64) -> Vec<u8> {
     let [_,_,start,_,_]=synthetic_exchange();
     let mut p=start[..88].to_vec();
     p[24..32].copy_from_slice(&mid.to_le_bytes());p[40..48].copy_from_slice(&sid.to_le_bytes());
     p[76..78].copy_from_slice(&88u16.to_le_bytes());p[78..80].copy_from_slice(&(token.len() as u16).to_le_bytes());
     p.extend_from_slice(token);p
 }
-fn ntlm1() -> Vec<u8> {
+pub(in crate::smb::connection) fn ntlm1() -> Vec<u8> {
     let mut p=vec![0;40];p[..8].copy_from_slice(b"NTLMSSP\0");
     p[8..12].copy_from_slice(&1u32.to_le_bytes());p[12..16].copy_from_slice(&0x2208_0211u32.to_le_bytes());p
 }
 // RFC4178 initial NTLM-only MechTypeList with NO optimistic token.
-const PICK: &[u8]=&[0x60,0x1c,6,6,0x2b,6,1,5,5,2,0xa0,0x12,0x30,0x10,
+pub(in crate::smb::connection) const PICK: &[u8]=&[0x60,0x1c,6,6,0x2b,6,1,5,5,2,0xa0,0x12,0x30,0x10,
                     0xa0,0x0e,0x30,0x0c,6,10,0x2b,6,1,4,1,0x82,0x37,2,2,10];
 
 #[test]

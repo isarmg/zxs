@@ -33,13 +33,19 @@
 
 `wire/preauth` 从已解析的单条 3.1.1 NEGOTIATE 出发，连接只保留请求和实际序列化回复的链式哈希。每个新的 SESSION_SETUP 尝试从该连接值单独起步；接收完整原请求，并且仅在同一 MessageId、同一已分配 SessionId 的 MORE_PROCESSING_REQUIRED 回复时继续。固定的 Rust SHA-512 实现见[上游来源及许可](../../vendor/rust/README.md)。TCP 长度头不入哈希，原 SMB2 消息头、正文、间隙/填充均入哈希。最后成功的 SESSION_SETUP 回复将使用由最后一个请求哈希派生的密钥签名，因此它不会再次进入这份 KDF 上下文。该值不是口令证明、签名或有权访问文件的会话。预认证层本身不运行 GSS/KDF，不编码应答，不查询凭据或启动生产监听。依据：[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[新会话](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)、[GSS 处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)。
 
-## 原连接的 SESSION_SETUP 第一阶段（未签发 SID 或身份）
+## 原连接的 SESSION_SETUP 第一阶段（不签发身份）
 
 `Connection::receive` 先审完本帧全部成员的额度，将**这同一个已解析的不可变帧、其额度账单、原连接的 SHA‑512 基准和终止标记**一起交付。同步处理借用原接收缓冲，不复制每个大报文，也不让业务方拿另一帧搭配已花的 MessageId、签名或 transcript。连接对象释放会使尚在手中的票失效；放弃该原连接尚欠的普通回复也只终止它自己。未来真正异步保留完整独占或共享只读缓冲和有界范围，不能将同步借用延长到失效之后。
 
-`Received::start_setup` 只能消费一次：没有 SETUP 的帧原样保留给别的处理器；含 SETUP 的复合帧在本配置整批拒绝，不顺带执行后面的文件命令。单条且头内 SessionId 为零的合法开局，从票内原 transcript 和同一 security field 得到“先选择 SPNEGO 机制”或“已有 Type 1，待真实挑战”；令牌不合法时仍保留该帧的已消费额度供今后准确失败回复，不能混成匿名或倒回 raw。非零 SID 只表示待真实注册表判定，不是重连或身份。通用额度回复入口明确不接受任何 SETUP；当前只到该状态，不创建挑战、签发 SID、发送 MORE／成功回复或建立会话。
+`Received::start_setup` 只能消费一次：没有 SETUP 的帧原样保留给别的处理器；含 SETUP 的复合帧在本配置整批拒绝，不顺带执行后面的文件命令。单条且头内 SessionId 为零的合法开局，从票内原 transcript 和同一 security field 得到“先选择 SPNEGO 机制”或“已有 Type 1，待真实挑战”；令牌不合法时仍保留该帧的已消费额度供今后准确失败回复，不能混成匿名或倒回 raw。非零 SID 只表示待真实注册表判定，不是重连或身份。通用额度回复入口明确不接受任何 SETUP；第一阶段分类自身不签发 SID，不创建挑战或发送成功回复。下节的专用机制选择所有者才可接着准备自己的 MORE。
 
-下一步按[新会话与 SessionId 分配](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)在同次服务运行的全局表及原连接表中登记 InProgress；0 和全 1 不能发行，SessionId 不可由每条连接单独从 1 开始。按[验证与回复](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)，先选机制时必须随原请求发真实 MORE 并请求名单 MIC；新的原请求、同一 SID 与一次性限时挑战完整通过后才可能签末次成功。不凭已知 SID、账务成功或可解析 Type 1 创建 Tree、Open 或后端权。验证和接线只写源码，不运行项目或客户端。
+### 正在协商的 SID 和第一个 request-mic MORE
+
+每次服务初始化对应唯一不透明运行对象，包含 GUID 和所有连接共用的 in-progress 索引；知道相同的 GUID 字节不能重建这个对象。根据[新会话及双表规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)，在真正的 `Select` 编码 MORE 时，全服务登记从未使用的非零、非全 1 SID，原连接登记自己的阶段；连接之间不重复发号，号码不是认证凭证。全运行最多 64 个、每连接最多 8 个进行中槽，初始选择有效期 30 秒（单调时钟）；过期、撤销和错误不能使编号复用。全局表只弱引用阶段注册；连接私有表才持有令牌状态。狭小的索引锁不跨 GSS、哈希或发送。
+
+首包需要选机制时，发出的[SESSION_SETUP 正文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/0324190f-a31b-4666-9fa9-5c624273a694)是真正的 STATUS_MORE_PROCESSING_REQUIRED，加[SPNEGO request-mic](https://www.rfc-editor.org/rfc/rfc4178#section-4.2.2)和唯一选中的 NTLM OID，不捏造 Type 2、用户名、guest 或成功。保留原 MID、charge 和阶段专属应回额度。用同份最终字节同时核原 transcript／GSS 和额度。只有原发送者确认这份不可变包已成功提交，才把原连接该槽从“待发送”改为“等 Type 1”并公布信用；未提交、结果不明或临界时过期则关闭本连接，不留下可续阶段。
+
+下一条非零 SID 请求须已在**同一原连接**消费自己的新 MID，再从双方索引找到同一未超时对象、恰处于等 Type 1。仅一次移出该阶段，按同一 transcript 校验原 token；坏 token 只移除这个槽，无权触碰别的会话。跨连接借来的同号码不能接管或取消。不在表的 SID 或过期不会创建新会话。当前仅这条需要先选机制的路径走到有效 Type 1；尚无 Type 2 发行、口令校验发布、成功会话或原生监听。生产错误回复、主动定时唤醒和其他 [GSS 完成／清理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)仍属后续；每次查找与增发都在原处检查期限，不能用被动清理延长权限。
 
 ## SESSION_SETUP 的机制封装（止于未验证的 Type 3）
 

@@ -20,7 +20,7 @@ fn opening(ask: u16) -> (Opening, Vec<u8>) {
 }
 fn ready(ask: u16) -> Connection {
     let (x,p) = opening(ask);
-    let tx = x.bind(p.clone()).unwrap(); assert_eq!(tx.bytes(),p.as_slice()); tx.submitted().unwrap()
+    let tx = x.fixture_bind(p.clone()).unwrap(); assert_eq!(tx.bytes(),p.as_slice()); tx.submitted().unwrap()
 }
 fn request(cmd: u16, mid: u64, charge: u16, ask: u16) -> Vec<u8> {
     let mut p = vec![0;120]; p[..4].copy_from_slice(b"\xfeSMB");
@@ -66,25 +66,25 @@ fn settle(c: &mut Connection, b: &mut Debits) -> Vec<u16> {
 fn fresh_445_admits_only_message_zero_and_exact_negotiated_grant() {
     for (ask,want) in [(0,1),(5,5),(u16::MAX,CAP)] {
         let (x,mut p) = opening(ask); assert_eq!(x.credit_response(),want);
-        p16(&mut p,14,0); assert!(matches!(x.bind(p),Err(Fault::Opening)));
+        p16(&mut p,14,0); assert!(matches!(x.fixture_bind(p),Err(Fault::Opening)));
         let c = ready(ask); assert_eq!((c.window.low,c.window.next,c.window.available()),(1,1+u64::from(want),want));
         assert!(c.negotiation().is_ok());
     }
     for at in [88,92,96,100] {
         let (x,mut p) = opening(1); p32(&mut p,at,0);
-        assert!(matches!(x.bind(p),Err(Fault::Opening)));
+        assert!(matches!(x.fixture_bind(p),Err(Fault::Opening)));
     }
     let (x,mut p) = opening(1); p32(&mut p,100,1024*1024);
-    assert!(matches!(x.bind(p), Err(Fault::Opening))); // cannot receive a whole advertised write
+    assert!(matches!(x.fixture_bind(p), Err(Fault::Opening))); // cannot receive a whole advertised write
     let (x,mut p) = opening(1);
     p32(&mut p,92,128*1024); p32(&mut p,96,256*1024); p32(&mut p,100,96*1024);
-    let connected = x.bind(p).unwrap().submitted().unwrap();
+    let connected = x.fixture_bind(p).unwrap().submitted().unwrap();
     let limits = &connected.limits;
     assert_eq!((limits.transact,limits.read,limits.write),(128*1024,256*1024,96*1024));
     let [mut multi,rsp,..] = synthetic_exchange();
     p16(&mut multi,66,2); p16(&mut multi,100,0x0302); p16(&mut multi,102,0x0311);
     let x = parsed(&multi,|f| Opening::received(f).unwrap());
-    let mut c = x.bind(rsp).unwrap().submitted().unwrap();
+    let mut c = x.fixture_bind(rsp).unwrap().submitted().unwrap();
     assert_eq!(c.client.dialects_le.as_slice(), &[2,3,17,3]);
     assert_eq!((c.client.security_mode,c.client.capabilities,c.client.guid[0]),(3,4,0xc0));
     assert_eq!((c.limits.transact,c.limits.read,c.limits.write),(65_536,65_536,65_536));
@@ -214,7 +214,7 @@ fn forgotten_ordinary_reply_frame_limits_and_number_exhaustion_end_only_that_tra
     let mut oversized = request(9,1,1,1); oversized.resize(65_536+257,0);
     assert!(matches!(accept(&mut c,vec![oversized]),Err(Fault::FrameSize)));
     let (x,mut p) = opening(1); p32(&mut p,92,128*1024);
-    let mut c = x.bind(p).unwrap().submitted().unwrap();
+    let mut c = x.fixture_bind(p).unwrap().submitted().unwrap();
     let mut small = request(13,1,1,1); small.resize(68*1024+1,0);
     assert!(matches!(accept(&mut c,vec![small]),Err(Fault::FrameSize)));
     let mut c = ready(1);

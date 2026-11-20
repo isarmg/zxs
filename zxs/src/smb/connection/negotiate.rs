@@ -3,13 +3,8 @@
 //! installation. No production issuer or listener is added by this module.
 use super::{Fault,Opening,OpeningSend,Result};
 use crate::smb::wire::{Error,negotiate_reply};
+pub(in crate::smb) use super::sessions::RunningServerGuid;
 use std::time::{Duration,SystemTime,UNIX_EPOCH};
-
-/// All transports of one running server borrow its same nonsecret GUID in
-/// MS-DTYP packet byte order. MS-SMB2 3.3.3 generates a NEW GUID at server
-/// initialization. This is neither durable installation identity, user/SID,
-/// client GUID nor authority to authenticate. Only fixtures can mint one here.
-pub(in crate::smb) struct RunningServerGuid { wire: [u8;16] }
 
 fn fresh_salt(dst: &mut [u8;32]) -> Result<()> {
     // Existing ZXS Linux getrandom(0) wrapper; handles EINTR and short fills.
@@ -40,12 +35,12 @@ impl Opening {
     }
     fn respond_from(self, server: &RunningServerGuid, draw: impl FnOnce(&mut [u8;32])->Result<()>,
         now: impl FnOnce()->SystemTime) -> Result<OpeningSend> {
-        if server.wire == [0;16] { return Err(Fault::Identity); }
+        if server.wire() == &[0;16] { return Err(Fault::Identity); }
         let mut salt = [0;32]; draw(&mut salt)?;
         let time = filetime_delta(now().duration_since(UNIX_EPOCH).map_err(|e| e.duration())).ok_or(Fault::Clock)?;
         let bytes = negotiate_reply::encode(&self.original,self.hash.signing_choice(),self.grant,
-            &server.wire,time,&salt).map_err(|e| if e == Error::Limit { Fault::Resources } else { Fault::Opening })?;
-        self.bind(bytes)
+            server.wire(),time,&salt).map_err(|e| if e == Error::Limit { Fault::Resources } else { Fault::Opening })?;
+        self.bind(bytes,server)
     }
 }
 
