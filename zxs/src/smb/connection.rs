@@ -1,5 +1,5 @@
-//! Credit/sequence state for one direct-TCP/445 transport. No socket,
-//! production credential source, listener, file table or storage authority.
+//! Credit/sequence state for one direct-TCP/445 transport. Real accepted
+//! stream ownership is private. No credential source, listener or file authority.
 //! It is intentionally impossible to construct a negotiated state from
 //! peer-supplied IDs, a grant integer or an externally supplied transcript.
 use super::wire::{
@@ -14,6 +14,7 @@ pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod setup;
 pub(in crate::smb) mod sessions;
 mod transport;
+pub(in crate::smb) mod accepted;
 
 const CAP: u16 = 64; // bound on live number span AND advertised + in-flight requests
 const CANCEL: u16 = 0x000c;
@@ -74,18 +75,6 @@ pub(in crate::smb) struct OpeningSend {
 }
 impl OpeningSend {
     pub(in crate::smb) fn bytes(&self) -> &[u8] { &self.actual }
-    /// Called by the same transport owner only after successful submission of
-    /// these immutable bytes. Failure/partial send: drop, do not open.
-    pub(in crate::smb) fn submitted(self) -> Result<Connection> {
-        // MS-SMB2 returns a CMAC selection when no signer overlaps. The
-        // conformant client rejects it. Do not expose a usable session fork
-        // on this server even if a client ignores its own list.
-        if self.signing == CmacChoice::NoCommon { return Err(Fault::NoCommonSigning); }
-        let conn=Connection { limits: self.limits, client: self.client, server: self.server, in_flight: 0,
-            sessions: Vec::new(), output:None, origin: Arc::new(Origin { closed: AtomicBool::new(false), hash: self.hash, run:self.run }),
-            window: Window { low: 1, next: 1 + u64::from(self.grant), bits: ones(self.grant) } };
-        conn.register_transport()?;Ok(conn)
-    }
 }
 
 fn ones(n: u16) -> u64 { if n == CAP { u64::MAX } else { (1u64 << n) - 1 } }
@@ -172,7 +161,7 @@ impl Received<'_> {
 #[must_use]
 pub(in crate::smb) struct Connection {
     origin: Arc<Origin>, window: Window, limits: Limits, client: ClientOffer, server: Selection, in_flight: u16,
-    output:Option<transport::DirectOutput>, // owned by the original TCP transport, not by an SMB operation
+    stream:Option<transport::DirectStream>, // original duplex stream, never borrowed from another operation
     sessions: Vec<sessions::Local>, // both fresh in-progress and submitted, authenticated, single-channel entries
 }
 impl Drop for Connection {
@@ -186,7 +175,7 @@ impl Connection {
     // transport error. Other connections (including those sharing a GUID) keep theirs.
     fn disconnect(&mut self) {
         self.origin.closed.store(true,Ordering::Release);
-        drop(self.output.take());
+        drop(self.stream.take());
         self.sessions.clear();
     }
     fn stop<T>(&self, f: Fault) -> Result<T> {

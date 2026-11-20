@@ -4,7 +4,7 @@
 use super::*;
 use crate::smb::connection::{
     sessions::{Phase,Run,challenge::tests::provider,finish::tests::publish_at,ordinary::Admission,tests::connected_as},
-    setup::tests::{frame,parsed},transport::DirectOutput,
+    setup::tests::{frame,parsed},transport::DirectStream,
 };
 use std::{io::{self,ErrorKind,Write},sync::{Arc,Mutex}};
 const CASES:[(&str,&str);7]=[
@@ -57,6 +57,9 @@ fn packet(i:usize)->Vec<u8> {
 struct Captured {bytes:Vec<u8>,calls:usize}
 enum Mode {Normal,Fail,Zero,Revoke(Arc<Run>)}
 struct Sink {seen:Arc<Mutex<Captured>>,mode:Mode}
+impl io::Read for Sink {
+    fn read(&mut self,_:&mut [u8])->io::Result<usize> {Err(ErrorKind::Unsupported.into())}
+}
 impl Write for Sink {
     fn write(&mut self,p:&[u8])->io::Result<usize> {
         let mut s=self.seen.lock().unwrap();s.calls+=1;
@@ -73,8 +76,8 @@ impl Write for Sink {
 }
 fn attach_fixture(c:&mut Connection,mode:Mode)->Arc<Mutex<Captured>> {
     let seen=Arc::new(Mutex::new(Captured::default()));
-    assert!(c.output.is_none());
-    c.output=Some(DirectOutput::Fixture(Box::new(Sink{seen:Arc::clone(&seen),mode})));seen
+    assert!(c.stream.is_none());
+    c.stream=Some(DirectStream::Fixture(Box::new(Sink{seen:Arc::clone(&seen),mode})));seen
 }
 fn framed_cases(cases:&[usize],requests:bool)->Vec<u8> {
     let mut smb=Vec::new();

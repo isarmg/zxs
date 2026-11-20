@@ -163,9 +163,9 @@ pub(in crate::smb) fn with_tree_member(revoke: bool, check: impl FnOnce(Verified
 fn naked_related_tree_terminates_its_original_live_connection_not_other_sids_or_transports() {
     let srv=provider();let mut c=connected_as(&srv,false).unwrap();let mut other=connected_as(&srv,false).unwrap();
     assert_eq!(publish_at(&mut c,1),1);assert_eq!(publish_at(&mut other,1),2);
-    use crate::smb::connection::transport::DirectOutput;
-    c.output=Some(DirectOutput::Fixture(Box::new(std::io::sink())));
-    other.output=Some(DirectOutput::Fixture(Box::new(std::io::sink())));
+    use crate::smb::connection::transport::DirectStream;
+    c.stream=Some(DirectStream::Fixture(Box::new(std::io::Cursor::new(Vec::<u8>::new()))));
+    other.stream=Some(DirectStream::Fixture(Box::new(std::io::Cursor::new(Vec::<u8>::new()))));
     let mut q=packet(3,3,1,false,0,FIRST[0]);q[16]=0;
     let foreign=frame(&q);let fr=parsed(&foreign);let paid=other.receive(&fr).unwrap();
     let Admission::Refused(denied)=paid.preflight(&mut other) else {panic!("foreign SID is not an original live grant")};
@@ -178,6 +178,6 @@ fn naked_related_tree_terminates_its_original_live_connection_not_other_sids_or_
     assert!(matches!(c.alive(),Err(Fault::Closed)));assert!(c.sessions.is_empty());
     assert!(other.alive().is_ok());assert_eq!(other.sessions.len(),1);
     assert_eq!(srv.run.index.lock().unwrap().live.len(),1);
-    assert!(c.output.is_none());assert!(other.output.is_some());
+    assert!(c.stream.is_none());assert!(other.stream.is_some());
     drop(denied); // own pending unpaid response cannot affect another transport
 }

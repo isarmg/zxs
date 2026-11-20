@@ -73,10 +73,10 @@ impl EchoSend<'_> {
         let Self{tx,ids,revision,count}=self;
         if tx.start!=4 {return Err(Fault::WrongReply);}
         current(tx.plan.owner,ids,revision,count)?;
-        let mut out=tx.plan.owner.output.take().ok_or(Fault::Transport)?;
+        let mut out=tx.plan.owner.stream.take().ok_or(Fault::Transport)?;
         let c:&Connection=&*tx.plan.owner;
         out.write_record(tx.actual.as_ref(),||current(c,ids,revision,count))?;
-        tx.plan.owner.output=Some(out);
+        tx.plan.owner.stream=Some(out);
         // If the original scope has died, even a submitted record cannot leave
         // a reusable transport with a contradictory credit window.
         tx.publish_with(|c|current(c,ids,revision,count))

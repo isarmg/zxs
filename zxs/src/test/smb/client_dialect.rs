@@ -7,7 +7,7 @@ use crate::smb::connection::sessions::tests::{connected,running,try_connected};
 fn original_negotiated_transports_pin_one_client_and_retire_only_after_the_last_disconnect() {
     let run=running([3;16]);let a=connected(&run);let b=connected(&run);
     assert_eq!(run.run.index.lock().unwrap().transports.len(),2);
-    assert!(matches!(a.register_transport(),Err(Fault::SessionState)));
+    assert!(matches!(AcceptSeat::reserve(&run.run).unwrap().promote(&a),Err(Fault::SessionState)));
     assert!(run.run.index.lock().unwrap().clients.is_empty());
     a.pin_client_dialect().unwrap();b.pin_client_dialect().unwrap();
     {let mut g=run.run.index.lock().unwrap();assert_eq!(g.clients.len(),1);assert_eq!(g.clients[0].selected,0x0311);

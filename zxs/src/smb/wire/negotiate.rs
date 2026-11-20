@@ -1,5 +1,7 @@
 //! MS-SMB2 §§2.2.3, 2.2.3.1, 3.3.5.4. This is a *client offer*, not a
 //! selected dialect, completed transcript, signing key or authenticated peer.
+pub(in crate::smb) const MAX_OPENING_BYTES: usize = 68 * 1024;
+
 use super::{Error, Result, bytes, field, message::{Compound, SIGNED}, u16le, u32le};
 
 const DIALECTS: usize = 64 + 36;
@@ -72,7 +74,7 @@ impl<'a> Offer<'a> {
         if h.command != 0 || h.flags & SIGNED != 0 || h.session != 0 || u16le(p, 64)? != 36 {
             return Err(Error::InvalidRequest);
         }
-        if p.len() > 68 * 1024 {
+        if p.len() > MAX_OPENING_BYTES {
             return Err(Error::Limit);
         }
         let dialects = AlgorithmIds::bounded(p, DIALECTS, u16le(p, 66)?)?;

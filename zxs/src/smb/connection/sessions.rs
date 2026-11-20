@@ -6,6 +6,7 @@ pub(in crate::smb) mod proof;
 pub(in crate::smb) mod finish;
 pub(in crate::smb) mod ordinary;
 mod clients;
+pub(in crate::smb::connection) use clients::AcceptSeat;
 use super::{Connection,Fault,Origin,Received,ReplySend,Result,setup::{Existing,Select}};
 use crate::smb::{session::envelope::{AwaitNegotiate,HaveNegotiate},wire::setup_reply};
 use std::{num::NonZeroU64,sync::{Arc,Mutex,OnceLock,Weak,atomic::Ordering},time::{Duration,Instant}};
@@ -23,8 +24,8 @@ impl RunningServerGuid {
     pub(super) fn share(&self)->Arc<Run> { Arc::clone(&self.run) }
 }
 pub(super) struct Run { guid:[u8;16], index:Mutex<Global>, verifier:Option<crate::smb::session::ChallengeService> }
-struct Global {next:u64,live:Vec<Weak<Claim>>,transports:Vec<clients::Tracked>,clients:Vec<clients::Dialect>}
-impl Global {fn empty()->Self {Self{next:1,live:Vec::new(),transports:Vec::new(),clients:Vec::new()}}}
+struct Global {accepting:usize,next:u64,live:Vec<Weak<Claim>>,transports:Vec<clients::Tracked>,clients:Vec<clients::Dialect>}
+impl Global {fn empty()->Self {Self{accepting:0,next:1,live:Vec::new(),transports:Vec::new(),clients:Vec::new()}}}
 struct Claim { id:NonZeroU64, origin:Weak<Origin>, expires:Instant, valid:OnceLock<crate::smb::session::LiveMark> }
 impl Claim {
     fn active(&self,now:Instant)->bool {

@@ -1,6 +1,6 @@
 //! The MS-SMB2 3.3.5.5.3 final GSS step pins ClientGuid -> dialect per
 //! running server. This small bookkeeping table is not a principal database.
-use super::{Global,Origin};
+use super::{Global,Origin,Run};
 use crate::smb::connection::{Connection,Fault,Result};
 use std::sync::{Arc,Weak,atomic::Ordering};
 
@@ -20,15 +20,36 @@ impl Global {
         self.clients.retain(|v|transports.iter().any(|t|t.guid==v.guid));
     }
 }
-impl Connection {
-    pub(in crate::smb::connection) fn register_transport(&self)->Result<()> {
-        let mut g=self.origin.run.index.lock().map_err(|_|Fault::SessionState)?;
-        self.alive()?;g.prune_transports();
-        if g.transports.iter().any(|t|Weak::ptr_eq(&t.origin,&Arc::downgrade(&self.origin))) {return Err(Fault::SessionState);}
-        if g.transports.len()>=TRANSPORT_CAP {return Err(Fault::SessionLimit);}
-        g.transports.try_reserve(1).map_err(|_|Fault::Resources)?;
-        g.transports.push(Tracked{origin:Arc::downgrade(&self.origin),guid:self.client.guid});Ok(())
+/// A new reader consumes the same per-run capacity as a negotiated transport
+/// BEFORE its first blocking read. Promotion transfers this slot atomically;
+/// an incomplete prefix, failed reply or abandoned reader gives it back.
+#[must_use]
+pub(in crate::smb::connection) struct AcceptSeat { run:Arc<Run>, reserved:bool }
+impl AcceptSeat {
+    pub(in crate::smb::connection) fn reserve(run:&Arc<Run>)->Result<Self> {
+        let mut g=run.index.lock().map_err(|_|Fault::SessionState)?;
+        g.prune_transports();
+        if g.transports.len()+g.accepting>=TRANSPORT_CAP {return Err(Fault::SessionLimit);}
+        g.accepting+=1;Ok(Self{run:Arc::clone(run),reserved:true})
     }
+    pub(in crate::smb::connection) fn promote(mut self,c:&Connection)->Result<()> {
+        c.alive()?;
+        if !Arc::ptr_eq(&self.run,&c.origin.run) {return Err(Fault::SessionState);}
+        let mut g=self.run.index.lock().map_err(|_|Fault::SessionState)?;
+        if g.accepting==0 || g.transports.iter().any(|t|Weak::ptr_eq(&t.origin,&Arc::downgrade(&c.origin))) {
+            return Err(Fault::SessionState);
+        }
+        g.transports.try_reserve(1).map_err(|_|Fault::Resources)?;
+        g.transports.push(Tracked{origin:Arc::downgrade(&c.origin),guid:c.client.guid});
+        g.accepting-=1;self.reserved=false;Ok(())
+    }
+}
+impl Drop for AcceptSeat {
+    fn drop(&mut self) {
+        if self.reserved && let Ok(mut g)=self.run.index.lock() {g.accepting-=1;}
+    }
+}
+impl Connection {
     pub(super) fn pin_client_dialect(&self)->Result<()> {
         self.alive()?;
         let mut g=self.origin.run.index.lock().map_err(|_|Fault::SessionState)?;
