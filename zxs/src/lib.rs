@@ -1,5 +1,6 @@
 //! Standalone ZXS storage. Fresh-selection inspection is read-only: it returns
 //! what was observed, not a capability to register, publish or write later.
+mod smb;
 mod fs;
 mod hash;
 mod password;
