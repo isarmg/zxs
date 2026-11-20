@@ -290,6 +290,68 @@ class LinuxVisibility(unittest.TestCase):
         self.assertEqual(plan.result()[0], "completed")
         self.assertEqual(self.live.status()["visibility"], "hidden")
 
+    def test_window_resume_moves_only_the_original_already_synced_intent(self):
+        self.commit()
+        plan = self.plan("hide")
+        actual = lifecycle.rename_new_at
+        with patch.object(lifecycle, "rename_new_at", side_effect=OSError(errno.EIO, "move reply failed")):
+            with self.assertRaises(OSError): plan.run(confirmed=True)
+        self.assertTrue(plan.intent_synced)
+        self.assertTrue(plan.archive.closed)
+        self.assertTrue(self.tree.is_dir())
+
+        decision, details = plan.review_resume()
+        self.assertEqual(decision, ("move",))
+        self.assertIn(plan.operation, details)
+        plan.cancel_resume(decision)
+        with self.assertRaisesRegex(Rejected, "最新的一次继续确认"):
+            plan.resume(decision, confirmed=True)
+        decision, _ = plan.review_resume()
+        with patch.object(lifecycle, "rename_new_at", wraps=actual) as move, \
+             patch.object(lifecycle, "_start_visibility", side_effect=AssertionError("no second intent")), \
+             patch.object(lifecycle, "relative_document", side_effect=AssertionError("no reopened base")):
+            self.assertEqual(plan.resume(decision, confirmed=True), "hidden")
+            move.assert_called_once()
+        self.assertEqual(plan.result()[0], "completed")
+        self.assertTrue(os.path.samestat(self.hidden.stat(), os.fstat(self.live.work_fd)))
+        self.assertEqual(self.live.status()["base_operation"], self.marker.operation)
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
+
+    def test_window_restore_ack_never_switches_to_rename_or_accepts_later_contents(self):
+        self.commit()
+        self.plan("hide").run(confirmed=True)
+        (self.hidden/"story").write_bytes(b"edited!")
+        plan = self.plan("restore")
+        actual = os.fsync
+        def fail_parent(fd):
+            if os.path.samestat(os.fstat(fd), self.work_parent.stat()):
+                self.assertTrue(self.tree.is_dir())
+                raise OSError(errno.EIO, "parent barrier after move")
+            actual(fd)
+        with patch.object(lifecycle.os, "fsync", side_effect=fail_parent):
+            with self.assertRaises(OSError): plan.run(confirmed=True)
+        decision, details = plan.review_resume()
+        self.assertEqual(decision, ("ack",))
+        self.assertIn("不再次改名", details)
+        self.tree.rename(self.hidden)  # Model a changed physical pair during the confirmation.
+        with patch.object(lifecycle, "rename_new_at", side_effect=AssertionError("ACK can never move")):
+            with self.assertRaisesRegex(Rejected, "不切换"):
+                plan.resume(decision, confirmed=True)
+            self.assertTrue(self.hidden.is_dir())
+            self.hidden.rename(self.tree)
+            (self.tree/"story").write_bytes(b"later!!")
+            decision, _ = plan.review_resume()
+            with self.assertRaisesRegex(Rejected, "不等于原号接受的内容"):
+                plan.resume(decision, confirmed=True)
+            self.assertEqual((self.tree/"story").read_bytes(), b"later!!")
+            self.assertEqual(self.live.status()["pending_visibility_operation"], plan.operation)
+            (self.tree/"story").write_bytes(b"edited!")
+            decision, _ = plan.review_resume()
+            self.assertEqual(plan.resume(decision, confirmed=True), "visible")
+        self.assertEqual(plan.result()[0], "completed")
+        self.assertTrue(os.path.samestat(self.tree.stat(), os.fstat(self.live.work_fd)))
+        self.assertEqual((self.tree/"story").read_bytes(), b"edited!")
+
     def test_intent_database_directory_barrier_failure_never_moves_or_suggests_resume(self):
         self.commit()
         plan = self.plan("hide")
@@ -310,6 +372,8 @@ class LinuxVisibility(unittest.TestCase):
         self.assertEqual(outcome, "pending")
         self.assertIn("没有确认原意图已同步", readback)
         self.assertNotIn("resume-visibility", readback)
+        with patch.object(worktree, "locked", side_effect=AssertionError("no valid intent")):
+            with self.assertRaisesRegex(Rejected, "没有本窗口已确认同步"): plan.review_resume()
 
     def test_failed_state_receipt_barrier_does_not_upgrade_a_visible_completion_row(self):
         self.commit()
@@ -355,6 +419,52 @@ class LinuxVisibility(unittest.TestCase):
         self.assertFalse(plan.started)
         self.assertTrue(plan.archive.closed)
         self.assertFalse(self.hidden.exists())
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires the optional desktop Qt interface")
+    def test_real_window_resume_follows_original_query_and_requires_a_fresh_confirmation(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import checkout_pane
+        from zipworkspace.desktop.window import Window
+        self.commit()
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        self.addCleanup(win.close)
+        pane = win.archive.checkout
+        pane._attach(self.live)
+        queue = []
+        def submit(job):
+            task = Future()
+            queue.append((task, job))
+            return task
+        def drain(n):
+            for _ in range(n):
+                task, job = queue.pop(0)
+                self.assertTrue(task.set_running_or_notify_cancel())
+                task.set_result(job())
+                win.poll()
+            self.assertFalse(queue)
+        with patch.object(win.pool, "submit", side_effect=submit), \
+             patch.object(checkout_pane, "confirm", side_effect=(True, False, True)) as confirm:
+            pane.refresh_live(); drain(1)
+            pane.move.click()
+            with patch.object(lifecycle, "rename_new_at", side_effect=OSError(errno.EIO, "move not issued")):
+                drain(2)
+            original = pane.visibility_last
+            self.assertTrue(original.intent_synced)
+            self.assertFalse(pane.move_resume.isEnabled())
+            pane.move_query.click(); drain(2)
+            self.assertTrue(pane.move_resume.isEnabled())
+            pane.move_resume.click(); drain(1)
+            self.assertIsNone(original.resume_review)
+            self.assertTrue(self.tree.is_dir())
+            self.assertFalse(self.hidden.exists())
+            pane.move_resume.click(); drain(3)
+            self.assertIs(pane.visibility_last, original)
+            self.assertFalse(pane.move_resume.isEnabled())
+            self.assertFalse(self.tree.exists())
+            self.assertTrue(os.path.samestat(self.hidden.stat(), os.fstat(self.live.work_fd)))
+            self.assertEqual(confirm.call_count, 3)
+            self.assertIn(original.operation, confirm.call_args.args[2])
 
     @unittest.skipUnless(find_spec("PySide6"), "requires the optional desktop Qt interface")
     def test_real_window_click_cancel_and_confirm_then_restore_still_same_session(self):

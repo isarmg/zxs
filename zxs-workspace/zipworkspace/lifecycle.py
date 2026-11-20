@@ -202,10 +202,12 @@ class LiveVisibility:
         self.archive_handles = self.stack.enter_context(ExitStack())
         self.ready = self.used = self.started = self.closed = False
         self.intent_synced = self.writing_receipt = self.receipt_synced = False
+        self.resume_review = None
 
     def close(self):
         if not self.closed:
             self.closed = True
+            self.resume_review = None
             self.stack.close()
 
     def _key(self, fd):
@@ -246,7 +248,7 @@ class LiveVisibility:
                 "不要手工改名这棵登记树或修改 STATE。")
 
     def _note_hidden(self, error):
-        if self.action != "restore" or not hasattr(self, "source"): return
+        if self.closed or self.action != "restore" or not hasattr(self, "source"): return
         try: source, _ = self._pair()
         except Exception: return  # Diagnostic only; keep the original error if this recheck fails.
         if source == self.work_key:
@@ -336,7 +338,7 @@ class LiveVisibility:
             self.close()
             raise
 
-    def _observe(self):
+    def _observe(self, pair):
         fd = self.live.work_fd
         before = _sig(os.fstat(fd))
         _distinct_roots((fd, self.live.state_fd, self.live.store_fd))
@@ -348,10 +350,8 @@ class LiveVisibility:
                 raise Rejected("工作树含 STATE/STORE 别名或子挂载；不能移动")
 
         tree = observe_held(fd, self.work_key[:2], require_ids=True, check_held=member).digest()
-        if self.action == "hide" and tree != self.marker.tree:
-            raise Rejected("工作目录有未提交改动；保留原路径与文件")
-        self._expect_source()
-        self._base_name()
+        if self._pair() != pair:
+            raise Rejected("原目录所在名称或空位已变化；不移动或接认")
         if _sig(os.fstat(fd)) != before: raise Rejected("原工作目录在核对时已变化")
         return before, tree
 
@@ -405,7 +405,11 @@ class LiveVisibility:
                 raise Rejected("确认的原基线已改变；不给另一代改名")
             if _visibility_row(con, self.operation) is not None:
                 raise Rejected("操作号已在原日志中使用，未登记或移动")
-            before, self.original_tree = self._observe()  # One full read and two inventories after consent.
+            before, tree = self._observe((self.work_key, None))  # Full read and two inventories after consent.
+            self._base_name()
+            if self.action == "hide" and tree != self.marker.tree:
+                raise Rejected("工作目录有未提交改动；保留原路径与文件")
+            self.original_tree = tree
             self.started = True  # From here an uncertain answer may have a durable intent.
             # A restore may move late edits, but exact-operation resume must
             # check the tree this decision actually accepted, not the ZIP base.
@@ -413,27 +417,95 @@ class LiveVisibility:
 
         self._sync_state("同步原改名意图；失败不移动目录")
         self.intent_synced = True
+        return self._complete("move", before=before)
+
+    def _resume_allowed(self):
+        if self.closed or not self.started or not self.intent_synced or self.receipt_synced:
+            raise Rejected("没有本窗口已确认同步、可单独继续的原改名意图")
+
+    def review_resume(self):
+        """Read only: select either the exact remaining move or just its acknowledgement."""
+        from .worktree import locked
+        self.resume_review = None
+        try:
+            self._resume_allowed()
+            with locked(self.live.state, read_only=True, live=self.live) as (con, row, _):
+                self._journal(con)
+                rec, item = self._read_instance(con, row), self._log(con)
+                if item is None or item["result"] is not None:
+                    raise Rejected("原号不是待决；请只读查本次回执")
+                self._pending(row, rec)
+                pair = self._pair()
+            if pair == (self.work_key, None):
+                mode = "move"
+                effect = "仅尝试继续这笔无覆盖改名，不创建另一号。"
+            elif pair == (None, self.work_key):
+                mode = "ack"
+                effect = "原目录已在目标名；仅核对并同步原回执，不再次改名。"
+            else:
+                raise Rejected("无法核实原目录和空位；不覆盖、不认领、不续作")
+            decision = (mode,)  # This exact, single-use review must survive the confirmation.
+            self.resume_review = decision
+            return decision, (f"{effect}\n\n原操作：{self.operation}\n原 STATE：{str(self.live.state)!r}\n"
+                              f"原 STORE：{str(self.live.store)!r}\n旧名：{str(self.source)!r}\n目标：{str(self.target)!r}\n\n"
+                              "确认后会完整复核原操作已接受的文件内容，可能耗时。后续修改或名称变化即停止；"
+                              "不会改动文件、覆盖、提交或自动重试。")
+        except Exception as error:
+            self._note_hidden(error)
+            raise
+
+    def cancel_resume(self, decision):
+        if self.resume_review is decision: self.resume_review = None
+
+    def resume(self, decision, *, confirmed=False):
+        from .linux_mount import _ordinary_user
+        self._resume_allowed()
+        if confirmed is not True or decision is None or decision is not self.resume_review:
+            raise Rejected("需要同一原号最新的一次继续确认")
+        self.resume_review = None
+        try:
+            if _ordinary_user(read_proc=self.proc.read) != self.uid:
+                raise Rejected("普通用户已变化，不继续原改名")
+            return self._complete(decision[0])
+        except Exception as error:
+            self._note_hidden(error)
+            raise
+
+    def _complete(self, mode, *, before=None):
+        from .worktree import locked
+        pair = (self.work_key, None) if mode == "move" else (None, self.work_key)
         with locked(self.live.state, live=self.live, operation=self.operation,
                     phase="完成原目录改名回执；正式名称可能已变，失败须查原号") as (con, row, _):
             self._journal(con)
             rec = self._read_instance(con, row)
             item = self._log(con)
             if item is None: raise Rejected("未核到这笔原目录改名意图")
-            if item["result"] is not None: return "historical"  # Never move it a second time.
+            if item["result"] is not None:
+                if self.writing_receipt and not self.receipt_synced:
+                    raise Rejected("原完成行可见，但未证原 STATE 完成屏障；不把它重当成功")
+                return "historical"  # Never move it a second time.
             self._pending(row, rec)
-            self._base_name()
-            self._expect_source()
+            if before is not None:
+                self._base_name()  # Fresh decision still holds the original verified STORE archive.
+            if self._pair() != pair:
+                raise Rejected("原目录与两名不再匹配这次明确确认；不切换到另一个动作")
+            if before is None:
+                before, tree = self._observe(pair)
+                if tree != self.original_tree:
+                    raise Rejected("当前内容已不等于原号接受的内容；保留原目录，不继续")
             fd = self.live.work_fd
             if _sig(os.fstat(fd)) != before:
                 raise Rejected("原目录的代次在登记后改变；不尝试移动")
-            # Same parent: source-name check is not a kernel inode CAS. The
-            # confirmation requires a controlled parent and stopped writers.
-            with writing("工作目录父", self.source.parent, "原生不覆盖改名；碰撞原样保留", self.operation, self.parent):
-                try: rename_new_at(self.parent, self.source.name, self.target.name, expected_source=os.fstat(fd))
-                except FileExistsError as err:
-                    raise Rejected("目的名称刚被占用；仍保留原操作，不覆盖双方") from err
+            if mode == "move":
+                # Same parent: source-name check is not a kernel inode CAS. The
+                # confirmation requires a controlled parent and stopped writers.
+                with writing("工作目录父", self.source.parent, "原生不覆盖改名；碰撞原样保留", self.operation, self.parent):
+                    try: rename_new_at(self.parent, self.source.name, self.target.name, expected_source=os.fstat(fd))
+                    except FileExistsError as err:
+                        raise Rejected("目的名称刚被占用；仍保留原操作，不覆盖双方") from err
             moved = _sig(os.fstat(fd))
-            if (moved[:3], moved[4]) != (before[:3], before[4]) or self._pair() != (None, self.work_key):
+            stable = ((moved[:3], moved[4]) == (before[:3], before[4])) if mode == "move" else moved == before
+            if not stable or self._pair() != (None, self.work_key):
                 raise Rejected("原目录可能已换名，但实际名称或挂载未确认；保留原操作")
             with writing("工作目录父", self.source.parent, "同步原改名；晚失败不能视为没移动", self.operation, self.parent):
                 os.fsync(self.parent)
@@ -473,7 +545,7 @@ class LiveVisibility:
         detail += hidden_help + "\n"
         if not self.intent_synced:
             return "pending", detail + "只读见原记录待决，但没有确认原意图已同步；保留现场，不续作。"
-        return "pending", (detail + "只读查询时原记录仍待决，窗口不会续作。"
+        return "pending", (detail + "只读查询时原记录仍待决，没有继续。可在本窗口另行核对并明确确认原号续作。"
                            "\n只有原件、两名及本次核验的内容未变、关闭编辑器并停止同步后，才用 CLI 原号续作（会写入）：\n"
                            f"resume-visibility STATE {self.operation} --writers-stopped\n请使用下列原 STATE。")
 

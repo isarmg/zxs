@@ -45,8 +45,10 @@ class CheckoutPane(QWidget):
         move_line = QHBoxLayout()
         self.move = button("临时收起工作目录…", self.move_live)
         self.move_query = button("只读查本次收起／恢复回执", self.query_visibility)
+        self.move_resume = button("继续本窗口这笔待决改名…", self.resume_visibility)
         move_line.addWidget(self.move); move_line.addWidget(self.move_query)
         layout.addLayout(move_line)
+        layout.addWidget(self.move_resume)
         self.move_result = label()
         layout.addWidget(self.move_result)
         self.details = label()
@@ -316,6 +318,13 @@ class CheckoutPane(QWidget):
         self.move.setEnabled(bool(idle and committed and no_commit and phase in ("visible", "hidden")
                                   and not self.visibility_blocked and not self.commits.blocked))
         self.move_query.setEnabled(idle and self.visibility_last is not None)
+        self.move_resume.setEnabled(idle and self._may_resume())
+
+    def _may_resume(self):
+        plan, record = self.visibility_last, self.live_record or {}
+        return bool(self.visibility_blocked and plan is not None and plan.intent_synced and not plan.receipt_synced
+                    and record.get("pending_visibility_operation") == plan.operation
+                    and record.get("pending_operation") is None)
 
     def _visibility_job(self, title, work, apply):
         def task():
@@ -327,6 +336,7 @@ class CheckoutPane(QWidget):
             apply((None, error))
         else:
             if future is None: apply((None, Rejected("窗口正在处理另一项，没有执行本步骤")))
+            return future
 
     def _visibility_message(self, plan, message):
         self.move_result.setText(f"{message}\n原 STATE：{plan.live.state}\n原操作：{plan.operation}\n"
@@ -396,6 +406,65 @@ class CheckoutPane(QWidget):
                 done((None, error))
 
         self._visibility_job("正在只读核验原登记、归档基线与两个名称…", plan.prepare, reviewed)
+
+    def resume_visibility(self):
+        plan, live = self.visibility_last, self.live
+        if (not self._may_resume() or live is None or self.active or self.owner.pending is not None
+                or self.commits.running is not None or self.changes_dialog is not None):
+            return
+        self.active = True
+        self._worktree_actions()
+
+        def current():
+            return self.live is live and self.visibility_last is plan and self.active
+
+        def done(outcome):
+            if not current(): return
+            result, error = outcome
+            try:
+                self.live_record = None
+                self.visibility_blocked = error is not None
+                if error is not None:
+                    message = f"{describe(error)}\n此次未确认完成；只核原回执，不自动重试。"
+                elif result == "historical":
+                    message = "原号已有完成记录，没有再次移动；它是历史回执。"
+                else:
+                    message = "这笔原操作的回执已完成；未新建操作、未改动文件。"
+                self._visibility_message(plan, message)
+            finally: self._release()
+            self.refresh_live()
+
+        def reviewed(outcome):
+            proposal, error = outcome
+            if not current():
+                if proposal is not None: plan.cancel_resume(proposal[0])
+                return
+            if error is not None:
+                done((None, error)); return
+            decision, details = proposal
+            queued = False
+            try:
+                terms = ("我已关闭编辑器，暂停所有后台同步和其他写入，"
+                         "操作完成前不允许命令行或其他人改动两个名称、原 STATE 或 STORE。")
+                title = "确认本次原回执（不改名）" if decision[0] == "ack" else "继续原号的无覆盖改名"
+                if not confirm(self, title, details, attestation=terms, action_text=title):
+                    self._visibility_message(plan, "未确认；本次没有续作。")
+                    self._release()
+                    return
+                if not current() or self.owner.pending is not None or not self._may_resume():
+                    if current(): self._release()
+                    return
+                def completed(outcome):
+                    plan.cancel_resume(decision)
+                    done(outcome)
+                queued = self._visibility_job("正在复核并继续本窗口原改名操作…",
+                                              lambda: plan.resume(decision, confirmed=True), completed) is not None
+            except Exception as error:
+                done((None, error))
+            finally:
+                if not queued: plan.cancel_resume(decision)
+
+        self._visibility_job("正在只读区分原改名未进行或仅待确认回执…", plan.review_resume, reviewed)
 
     def query_visibility(self):
         plan, live = self.visibility_last, self.live
