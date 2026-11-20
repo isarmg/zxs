@@ -4,7 +4,7 @@
 use super::Material;
 use crate::{PoolId, fs::invalid, hash::{self,Sha256}};
 use crate::ordinary::{content::BLOCK, output::CheckedOutput};
-use crate::fs::{HeldBytes,LiveStamp as Stamp};
+use crate::fs::{HeldBytes,LiveStamp as Stamp,SealedExtent};
 use std::{fs::File, io::{self,Write}, os::unix::fs::FileExt};
 
 const MAGIC: &[u8] = b"ZXS-PORTABLE-1/BLOCK-TABLE\0";
@@ -170,9 +170,7 @@ impl Reader{
         for i in at/BLOCK..=(end-1)/BLOCK{
             let expected=self.block_hash(i,buffers)?;
             let start=i*BLOCK;let count=(size-start).min(BLOCK) as usize;
-            let bytes=buffers.block.get_mut(..count).ok_or_else(||invalid("portable block exceeds the request budget"))?;
-            self.raw.file().read_exact_at(bytes,start)?;
-            if hash::digest(bytes)?!=expected{return Err(invalid("portable payload block differs from original"));}
+            let bytes=SealedExtent::original(start,count,expected)?.checked(self.raw.file(),&mut buffers.block)?;
             let lo=at.saturating_sub(start) as usize;let hi=(end-start).min(count as u64) as usize;
             CheckedOutput{out:&mut *out,check:||self.unchanged()}.write_all(&bytes[lo..hi])?;
         }

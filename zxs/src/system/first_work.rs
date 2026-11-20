@@ -224,7 +224,7 @@ impl<'s,'r> Tree<'s,'r>{
         let sample=root.root.names()?.into_iter().collect();
         let container=b.working_at(&root.root,&sample,false,selected.working,&selected.kept)?;
         let live=selected.published();
-        let body=live.map(|s|HeldWork::open(container.directory(),s,&selected.kept)).transpose()?;
+        let body=live.map(|s|HeldWork::confirmed(container.directory(),s,&selected.kept)).transpose()?;
         let h=Current{body,container,root,tree:self,birth:b,live};
         let v=h.checked(&selected,||Ok(()),|db|result(db,&h.birth))?;Ok((h,v))
     }

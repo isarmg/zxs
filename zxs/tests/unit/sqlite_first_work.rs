@@ -222,6 +222,39 @@ fn compatible_read_snapshots_cross_a_real_first_writer_in_both_directions(){
     assert!(old.range_to(0,0,Vec::new()).is_err());assert!(now.range_to(0,1,Vec::new()).is_err());
 }
 
+#[test]
+#[ignore="two real SQL connections and one witnessed working RAW, no listener or actual device"]
+fn candidate_cannot_issue_a_receipt_over_an_unreserved_tail_but_a_confirmed_reader_keeps_its_original_last_block(){
+    let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,ro)=enrollment(&t);
+    let n=crate::DRAFT_CHUNK as u64;let mut data=vec![0x35;n as usize+1];data[n as usize]=0xa6;
+    let source=input(&t,"received",&data);
+    let (id,raw)={
+        let src=InitialReader::open(&s,p).unwrap();
+        let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let a=smb.connect(rw).unwrap();
+        let id=a.create_file(OperationId([0xc7;16]),NAME).unwrap().file;
+        let raw=f.join(format!("方案-{id}.xlsx/change-{SAVE}-00000000"));let mut touched=false;
+        let bad=a.save_first_after(SAVE,NAME,id,&source,|cut|{
+            if cut==Cut::BytesSynced{
+                let h=OpenOptions::new().write(true).open(&raw)?;h.write_all_at(&[0xd4],n+1)?;h.sync_all()?;
+                touched=true;
+            } Ok(()) // injection itself succeeds, only the true last check can refuse
+        });
+        assert!(touched&&bad.is_err());assert_eq!(pending(&src,SAVE),Some(0));
+        assert_eq!(a.first_save_receipt(SAVE,NAME,id).unwrap(),None);(id,raw)
+    };
+    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let writer=smb.connect(rw).unwrap();let reader=smb.connect(ro).unwrap();
+    let prev=reader.open_current(NAME).unwrap();assert_eq!((prev.file(),prev.working_revision(),prev.size()),(id,0,0));drop(prev);
+    assert!(writer.save_first(SAVE,NAME,id,&source).is_err());assert_eq!(pending(&cold,SAVE),Some(0));
+    let disk=OpenOptions::new().read(true).write(true).open(&raw).unwrap();
+    assert_eq!(disk.metadata().unwrap().len(),n+2);disk.set_len(n+1).unwrap();disk.sync_all().unwrap();
+    assert_eq!(writer.save_first(SAVE,NAME,id,&source).unwrap().file,id);
+    let old=reader.open_current(NAME).unwrap();assert_eq!((old.working_revision(),old.size()),(1,n+1));
+    disk.write_all_at(&[0xaa,0xbb],n+1).unwrap();disk.sync_all().unwrap();
+    let mut end=Vec::new();old.range_to(n,1,&mut end).unwrap();assert_eq!(end,[0xa6]);
+    assert!(old.range_to(n+1,1,Vec::new()).is_err());assert!(reader.open_current(NAME).is_err());
+}
+
 #[path="sqlite_directory.rs"]
 mod directory;
 

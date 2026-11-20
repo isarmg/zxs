@@ -68,7 +68,7 @@ impl<'a> Incoming<'a>{
         let reference=blocks::walk(self.file,spec.pool,spec.reference()?.material,|at,b|data.put(at,b),|at,b|table.put(at,b))?;
         if reference!=spec.reference()?{return Err(invalid("input changed after reservation"));}
         self.unchanged()?;data.finish()?;table.finish()?;let dir=installed.directory();dir.file.sync_all()?;
-        let held=HeldWork::open(dir,spec,kept)?;held.reader.same_issued_pair(data.stamp(),table.stamp())?;
+        let held=HeldWork::open(dir,spec,kept,Use::Confirming)?;held.reader.same_issued_pair(data.stamp(),table.stamp())?;
         // Independent named source-of-truth readback, not reading the
         // incoming buffer or accepting only the table's self-declaration.
         let mut digest=Digest(Sha256::new());
@@ -83,11 +83,21 @@ impl Write for Digest{fn write(&mut self,b:&[u8])->io::Result<usize>{self.0.upda
 /// Created from the SQL-selected original (including directory SHA), never
 /// from the names/bytes that happen to be found in a directory.
 pub(crate) struct HeldWork{spec:Spec,reader:Reader,roles:[CString;4]}
+enum Use{Confirming,ConfirmedReader}
 impl HeldWork{
-    pub(crate) fn open(dir:&HeldDir,spec:Spec,kept:&Retained)->io::Result<Self>{
+    pub(crate) fn confirmed(dir:&HeldDir,spec:Spec,kept:&Retained)->io::Result<Self>{
+        Self::open(dir,spec,kept,Use::ConfirmedReader)
+    }
+    fn open(dir:&HeldDir,spec:Spec,kept:&Retained,usage:Use)->io::Result<Self>{
         let original=spec.reference()?;let scope=WitnessRead::at(dir)?;
         let roles=spec.names()?;scope.work_members(&roles,true,kept)?;
+        // The first view is still admitted at its exact registered length.
+        // Once held, a later append cannot invalidate an older selected tail
+        // block: validation uses its original length and checksum, not EOF.
         let raw=scope.open(&roles[0],&roles[1],spec.bytes)?;
+        // A candidate supports no future append until its short confirmation
+        // has succeeded. It keeps both complete, original stamps until then.
+        let raw=match usage{Use::Confirming=>raw,Use::ConfirmedReader=>raw.checked_prefix()?};
         let checks=scope.open(&roles[2],&roles[3],original.table_len()?)?;
         let h=Self{spec,reader:Reader::open(original,raw,checks)?,roles};h.require(dir)?;Ok(h)
     }

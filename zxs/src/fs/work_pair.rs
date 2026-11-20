@@ -1,6 +1,9 @@
 //! A bounded, append-only receiver for one of an actually reserved first
 //! SAVE's two material roles. An existing prefix is compared, never repaired
 //! by overwriting. An unmatched name is not enough to recover an original.
+#[cfg(test)]
+#[path="../../tests/unit/working_extent.rs"]
+mod tests;
 use super::*;
 use crate::system::reader::smb::first_work::Reserved;
 use std::os::unix::fs::FileExt;
@@ -14,9 +17,16 @@ impl<'d> WorkPair<'d>{
         let (installed,spec)=work.parts();let dir=installed.directory();WitnessRead::require_parent(dir)?;
         let [data,pin_data,checks,pin_checks]=spec.names()?;
         let(primary,second,limit)=if table{(checks,pin_checks,spec.table_len()?)}else{(data,pin_data,spec.bytes)};
-        dir.checked_child_path(&primary)?;dir.checked_child_path(&second)?;
+        Self::issued_window(dir,primary,second,0,limit,true)
+    }
+    /// Only a previously selected/reserved window may supply the endpoints.
+    /// Starting in an existing round never creates a new file, adopts a
+    /// foreign tail, fills a gap, or overwrites any byte before the window.
+    fn issued_window(dir:&'d HeldDir,primary:CString,second:CString,start:u64,limit:u64,first:bool)->io::Result<Self>{
+        if primary==second||start>limit||limit>i64::MAX as u64||first&&start!=0{return Err(invalid("invalid governed working span"));}
+        WitnessRead::require_parent(dir)?;dir.checked_child_path(&primary)?;dir.checked_child_path(&second)?;
         let file=match (dir.pin_record(&primary)?,dir.pin_record(&second)?){
-            (None,None)=>{
+            (None,None) if first=>{
                 let n=unsafe{zxs_create_new_regular(dir.file.as_raw_fd(),primary.as_ptr())};
                 if n<0{return Err(io::Error::last_os_error());}let f=unsafe{File::from_raw_fd(n)};
                 let a=f.metadata()?;
@@ -27,7 +37,7 @@ impl<'d> WorkPair<'d>{
             }
             (Some(pin),Some(_))=>{
                 let size=LiveStamp::read(&pin)?.len;
-                if size>limit{return Err(invalid("pending original exceeds its fixed working extent"));}
+                if !(start..=limit).contains(&size){return Err(invalid("existing working length is outside its exact reserved window"));}
                 let original=WitnessRead::at(dir)?.open(&primary,&second,size)?;
                 // Use only the pinned, already verified private regular pair.
                 let n=unsafe{zxs_open_pinned_record(original.file().as_raw_fd(),1)};
@@ -37,7 +47,7 @@ impl<'d> WorkPair<'d>{
             _=>return Err(invalid("unproven partial work name; preserve the site and reservation")),
         };
         let stamp=LiveStamp::read(&file)?;
-        let p=Self{dir,primary,second,file,stamp,at:0,limit};p.require()?;Ok(p)
+        let p=Self{dir,primary,second,file,stamp,at:start,limit};p.require()?;Ok(p)
     }
     pub(crate) fn stamp(&self)->LiveStamp{self.stamp}
     fn require(&self)->io::Result<()>{
@@ -55,7 +65,7 @@ impl<'d> WorkPair<'d>{
     pub(crate) fn put(&mut self,offset:u64,bytes:&[u8])->io::Result<()>{
         let end=offset.checked_add(bytes.len() as u64).filter(|x|*x<=self.limit)
             .ok_or_else(||invalid("working append exceeds original funded length"))?;
-        if offset!=self.at||offset>self.stamp.len{return Err(invalid("non-contiguous first working input"));}
+        if offset!=self.at||offset>self.stamp.len{return Err(invalid("non-contiguous working window input"));}
         self.require()?;
         let overlap=(end.min(self.stamp.len)-offset) as usize;
         let mut scratch=[0u8;32768];let mut checked=0;

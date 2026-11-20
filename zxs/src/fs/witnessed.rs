@@ -23,19 +23,38 @@ impl LiveStamp{
         if Self::read(file)?!=self{return Err(invalid("portable ordinary file changed while held"));}Ok(())
     }
 }
-pub(crate) struct HeldBytes{file:File,original:LiveStamp}
+#[derive(Clone,Copy,Eq,PartialEq)]
+enum Extent{Whole,CheckedPrefix}
+pub(crate) struct HeldBytes{file:File,original:LiveStamp,extent:Extent}
 impl HeldBytes{
     pub(crate) fn file(&self)->&File{&self.file}
     pub(crate) fn stamp(&self)->LiveStamp{self.original}
-    pub(crate) fn unchanged(&self)->io::Result<()>{self.original.require(&self.file)}
+    /// Only an already-attested **working payload** uses this view; its
+    /// checksum table, FILE header and formal immutable materials stay Whole.
+    /// Callers must verify every selected block against independent checksums.
+    /// The right to append is not implied and no byte past the original EOF
+    /// is part of this reader, even if an uncommitted tail exists.
+    pub(crate) fn checked_prefix(self)->io::Result<Self>{
+        self.unchanged()?;Ok(Self{extent:Extent::CheckedPrefix,..self})
+    }
+    fn require_object(&self,file:&File)->io::Result<()>{
+        let old=self.original;
+        if self.extent==Extent::Whole{return old.require(file);}
+        let now=LiveStamp::read(file)?;
+        if now==old{return Ok(());}
+        if !now.same(old)||now.len<=old.len||now.owner!=old.owner||now.group!=old.group||
+            now.mode!=old.mode||now.links!=old.links{return Err(invalid("selected working prefix lost its original object or extent"));}
+        Ok(())
+    }
+    pub(crate) fn unchanged(&self)->io::Result<()>{self.require_object(&self.file)}
     pub(crate) fn require_name(&self,parent:&HeldDir,name:&CStr)->io::Result<()>{
         let p=parent.pin_record(name)?.ok_or_else(||invalid("portable original lost a required name"))?;
         if !parent.shares_file_mount(&p)?{return Err(invalid("portable original name is on a different mount"));}
-        self.original.require(&p)?;self.unchanged()
+        self.require_object(&p)?;self.unchanged()
     }
     #[cfg(test)]
     pub(crate) fn separate_format_fixture(file:File)->io::Result<Self>{
-        Ok(Self{original:LiveStamp::read(&file)?,file})
+        Ok(Self{original:LiveStamp::read(&file)?,file,extent:Extent::Whole})
     }
 }
 
@@ -112,6 +131,6 @@ impl<'a> WitnessRead<'a>{
         held.try_lock_shared().map_err(io::Error::from)?;
         if observe(&held)?!=expected||observe(&pin(self.dir,&self.names,main)?)?!=expected||observe(&pin(other,names,witness)?)?!=expected{
             return Err(invalid("original material changed while acquiring its shared lease"));}
-        Ok(HeldBytes{file:held,original:expected})
+        Ok(HeldBytes{file:held,original:expected,extent:Extent::Whole})
     }
 }

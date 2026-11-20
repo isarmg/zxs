@@ -14,6 +14,8 @@ mod control;
 pub(crate) use control::ControlRead;
 mod witnessed;
 mod work_pair;
+mod sealed_extent;
+pub(crate) use sealed_extent::SealedExtent;
 pub(crate) use work_pair::WorkPair;
 pub(crate) use witnessed::{HeldBytes,LiveStamp,WitnessRead};
 mod name_budget;
