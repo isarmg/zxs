@@ -33,6 +33,7 @@ PIP_CONFIG_FILE=/dev/null "$venv/bin/python" -I -B -m pip --isolated --disable-p
 ## 交接和验证
 
 - 当前版本为 `0.1.0.dev0`；bundle 标识为 `org.zipworkspace.desktop`、显示版本 `0.1.0`，构建号 `1`。只从实际生成且复核为 arm64、含 Cocoa 插件和预期 Python / Qt 组件的 `dist/ZipWorkspace.app` 打包。先验证本地 ad-hoc 签名；原生 [ditto](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow) 保留包内相对链接，不把框架展开成松散文件。
+- Bundle 只声明为 `.zxs` 的备选只读查看器。待有实际 app 时，可在 Finder 对一份文件点「打开方式 → ZIP Workspace」，在新窗口看路径、通过本次确认才读取；不注册普通 ZIP 或网址，不修改系统默认项，也不继承现有窗口的写入许可。按[Qt 文档打开事件](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QFileOpenEvent.html)接收，不启用 PyInstaller 参数模拟。须各验未启动、已启动、重复送入及取消；当前未构建或验机。
 - 成套交接的是 `zip-workspace-0.1.0.dev0-macos-arm64-candidate.zip` 和最终 `candidate.json`，以 JSON 的文件名、大小和 SHA-256 为准。不要交接未打包的中间 `dist/ZipWorkspace`、缓存或部分 ZIP。散列和本地签名不能证明证书身份、成功启动、可复现构建或系统安全放行。
 - 将来在另一个全新私有目录用系统工具解开**该 ZIP**，重验实际包内链接、主程序 slice、签名和 Qt 装载。用没有额外 Python/Qt/macFUSE 的已授权 macOS 26 Apple Silicon 普通账户核验 Finder 启动、浏览和对照、取消及受限另存。若系统安全策略阻止，保留原标记并停止，本配方不清除隔离标记或要求绕过 Gatekeeper。
 - 正式分发前核项目权属、[实际第三方组件和许可](COPYRIGHT-NOTICE.txt)。另由获权发行者确认适用的签名、公证及渠道；签过的重新打包文件须另验身份及散列。此步骤不读密钥、不调用公证或上传。**本批未构建、未签名、未在 macOS 执行或发布任何二进制。**

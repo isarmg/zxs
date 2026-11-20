@@ -39,5 +39,18 @@ exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="ZipWorkspace",
           entitlements_file=None, strip=False, upx=False)
 directory = COLLECT(exe, analysis.binaries, analysis.datas, name="ZipWorkspace", strip=False, upx=False)
 app = BUNDLE(directory, name="ZipWorkspace.app", bundle_identifier="org.zipworkspace.desktop",
-             version=marketing.group(1), info_plist={"CFBundleVersion": "1", "LSMinimumSystemVersion": "26.0",
-                                                    "NSHighResolutionCapable": True})
+             version=marketing.group(1), info_plist={
+                 "CFBundleVersion": "1", "LSMinimumSystemVersion": "26.0", "NSHighResolutionCapable": True,
+                 "CFBundleDocumentTypes": [{
+                     "CFBundleTypeName": "ZIP Workspace Snapshot",
+                     "CFBundleTypeRole": "Viewer",
+                     "LSHandlerRank": "Alternate",
+                     "LSItemContentTypes": ["org.zipworkspace.snapshot"],
+                 }],
+                 "UTExportedTypeDeclarations": [{
+                     "UTTypeIdentifier": "org.zipworkspace.snapshot",
+                     "UTTypeDescription": "ZIP Workspace Snapshot",
+                     "UTTypeConformsTo": ["public.data", "public.content", "public.archive"],
+                     "UTTypeTagSpecification": {"public.filename-extension": ["zxs"]},
+                 }],
+             })

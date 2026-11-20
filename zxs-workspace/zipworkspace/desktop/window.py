@@ -5,7 +5,7 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QMainWindow, QProgressBar,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import requested_snapshot
+from . import local_snapshot_url, requested_snapshot
 from .archive_pane import ArchivePane
 from .import_pane import ImportPane
 from .widgets import button, label
@@ -29,12 +29,7 @@ class SnapshotDrop(QFrame):
         if not data.hasUrls() or data.data("text/uri-list").size() > 64 * 1024: return None
         urls = data.urls()
         if len(urls) != 1: return None
-        url = urls[0]
-        if (not url.isValid() or not url.isLocalFile() or url.authority() or
-                url.hasQuery() or url.hasFragment()):
-            return None
-        try: return requested_snapshot(url.toLocalFile())
-        except ValueError: return None
+        return local_snapshot_url(urls[0])
 
     @staticmethod
     def accept_name(event):

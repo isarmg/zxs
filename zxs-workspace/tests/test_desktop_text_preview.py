@@ -229,6 +229,51 @@ class DesktopTextPreview(unittest.TestCase):
                 with self.subTest(arguments=arguments), self.assertRaises(ValueError):
                     startup_snapshot(arguments)
 
+    @unittest.skipUnless(find_spec("PySide6"), "requires the Qt file-open event type")
+    def test_finder_delivers_only_one_absolute_zxs_to_the_existing_confirmation_gate(self):
+        from PySide6.QtCore import QEvent, QUrl
+        from PySide6.QtGui import QFileOpenEvent
+        from zipworkspace.desktop import _FinderOffers, _finder_application
+
+        first_url = QUrl.fromLocalFile(str(self.root / "first.ZXS"))
+        second_url = QUrl.fromLocalFile(str(self.root / "second.zxs"))
+        first, second = first_url.toLocalFile(), second_url.toLocalFile()
+        scheduled, received = [], []
+
+        class ApplicationBase:
+            def __init__(self, _args): pass
+            def event(self, _event): return False
+
+        class Windows:
+            request, windows = None, {"unrelated": object()}
+            def offer_snapshot(self, path):
+                received.append(path)
+                self.request = object()
+            def open(self):
+                raise AssertionError("an offered path owns its new window")
+
+        offer, windows = _FinderOffers(None), Windows()
+        native = _finder_application(ApplicationBase, ["workspace"], offer)
+        for url in (QUrl("https://not-local.example/a.zxs"),
+                    QUrl("file://other.example/a.zxs"), QUrl.fromLocalFile(str(self.root / "other.zip"))):
+            self.assertTrue(native.event(QFileOpenEvent(url)))
+            self.assertIsNone(offer.pending)
+        self.assertTrue(native.event(QFileOpenEvent(first_url)))
+        self.assertTrue(native.event(QFileOpenEvent(second_url)))
+        self.assertEqual(offer.pending, first)  # even before the first window exists
+        self.assertEqual(received, [])
+        offer.attach(windows, scheduled.append)
+        self.assertEqual(len(scheduled), 1)
+        scheduled.pop()()
+        self.assertEqual(received, [first])
+        native.event(QFileOpenEvent(second_url))
+        self.assertFalse(scheduled)  # no queue behind an unconfirmed request
+        windows.request = None
+        native.event(QFileOpenEvent(second_url))
+        scheduled.pop()()
+        self.assertEqual(received, [first, second])
+        self.assertFalse(native.event(QEvent(QEvent.Type.User)))
+
     @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
                          "optional Qt source fixture")
     def test_drop_cannot_move_or_read_before_consent_and_opens_only_an_isolated_window(self):

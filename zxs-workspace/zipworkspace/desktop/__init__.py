@@ -24,6 +24,60 @@ def startup_snapshot(args):
     return requested_snapshot(args[0])
 
 
+def local_snapshot_url(url):
+    """Qt's file scheme alone also admits host-bearing URLs; never resolve them here."""
+    if (not url.isValid() or not url.isLocalFile() or url.authority() or
+            url.hasQuery() or url.hasFragment()):
+        return None
+    try: return requested_snapshot(url.toLocalFile())
+    except ValueError: return None
+
+
+class _FinderOffers:
+    """Accept one native path at a time, without reading or keeping a bookmark."""
+    def __init__(self, startup):
+        self.pending, self.windows, self.post = startup, None, None
+        self.scheduled = False
+
+    def receive(self, url):
+        if self.pending is not None or (self.windows is not None and self.windows.request is not None):
+            return False
+        name = local_snapshot_url(url)
+        if name is None: return False
+        self.pending = name
+        self.schedule()
+        return True
+
+    def attach(self, windows, post):
+        self.windows, self.post = windows, post
+        self.schedule()
+
+    def schedule(self):
+        if self.post is not None and not self.scheduled:
+            self.scheduled = True
+            self.post(self.present)
+
+    def present(self):
+        self.scheduled = False
+        name, self.pending = self.pending, None
+        if name is not None: self.windows.offer_snapshot(name)
+        elif not self.windows.windows: self.windows.open()
+
+
+def _finder_application(base, args, offers):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QFileOpenEvent
+
+    class Application(base):
+        def event(self, event):
+            if event.type() == QEvent.Type.FileOpen:
+                if isinstance(event, QFileOpenEvent): offers.receive(event.url())
+                return True  # No URL, shell command or automatic open fallback.
+            return super().event(event)
+
+    return Application(args)
+
+
 def main():
     try:
         requested = startup_snapshot(sys.argv[1:])
@@ -38,10 +92,18 @@ def main():
             print("Install this project's optional desktop extra first.", file=sys.stderr)
         return 2
     from .window import DesktopWindows
-    # A pathname is not a Qt option or an argument to another program.
-    app = QApplication(sys.argv[:1])
+    # The Cocoa delegate suppresses a startup OpenDocument echo for a path
+    # already in QApplication.arguments(). Pass only the validated absolute
+    # pathname, never unvetted toolkit switches or flags from a file event.
+    offers = _FinderOffers(requested) if sys.platform == "darwin" else None
+    args = sys.argv[:1]
+    if offers is not None and requested is not None: args.append(requested)
+    app = QApplication(args) if offers is None else _finder_application(QApplication, args, offers)
     app.setApplicationName("ZIP Workspace")
     windows = DesktopWindows()
-    if requested is None: windows.open()
+    if offers is not None:
+        from PySide6.QtCore import QTimer
+        offers.attach(windows, lambda work: QTimer.singleShot(0, work))
+    elif requested is None: windows.open()
     else: windows.offer_snapshot(requested)
     return app.exec()

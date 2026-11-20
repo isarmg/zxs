@@ -84,6 +84,14 @@ def verify_app(app, marketing, env):
             and info.get("CFBundleExecutable") == "ZipWorkspace" and info.get("CFBundleVersion") == "1"
             and info.get("CFBundleShortVersionString") == marketing and info.get("LSMinimumSystemVersion") == "26.0",
             "Unexpected macOS bundle identity, version or entry")
+    require(info.get("CFBundleDocumentTypes") == [{
+                "CFBundleTypeName": "ZIP Workspace Snapshot", "CFBundleTypeRole": "Viewer",
+                "LSHandlerRank": "Alternate", "LSItemContentTypes": ["org.zipworkspace.snapshot"],
+            }] and info.get("UTExportedTypeDeclarations") == [{
+                "UTTypeIdentifier": "org.zipworkspace.snapshot", "UTTypeDescription": "ZIP Workspace Snapshot",
+                "UTTypeConformsTo": ["public.data", "public.content", "public.archive"],
+                "UTTypeTagSpecification": {"public.filename-extension": ["zxs"]},
+            }] and "CFBundleURLTypes" not in info, "Expected only the read-only .zxs document handler")
     exe = app / "Contents/MacOS/ZipWorkspace"
     arch = subprocess.check_output(["/usr/bin/lipo", "-archs", str(exe)], env=env, text=True).strip()
     require(arch == "arm64", "Main executable is not a single arm64 slice")
