@@ -14,10 +14,12 @@ class SnapshotBranch(CommitChoice):
     purpose = "branch"
 
     def __init__(self, live):
+        live.require_branch_source()
         self.branch_id = new_id()  # Fixed before review; a collision never selects a different branch.
         super().__init__(live)
 
     def _prepare(self):
+        self.live.require_branch_source()
         old = self.live.checkout_marker
         self._prepare_base(required=(old.repo, old.branch, old.generation, old.operation, self.live.checkout_sha))
         if self.base_marker != old or self.base[-1] != self.live.checkout_sha:
@@ -40,6 +42,7 @@ class SnapshotBranch(CommitChoice):
                 "不更新原分支，不覆盖任何已有槽。仅在原操作完成后本工作树切到新分支，磁盘上的编辑仍保留。")
 
     def _selected_source(self):
+        self.live.require_branch_source()
         s = self.live.source_stamp
         m = self.live.source_path.stat(follow_symlinks=False)
         if (stamp(self.source) != s or native_identity(m, stat.S_IFREG) != s[:2]
@@ -47,6 +50,7 @@ class SnapshotBranch(CommitChoice):
             raise Rejected("窗口原先所选归档已被替换或改变，不能用同名文件另建分支")
 
     def check_base(self):
+        self.live.require_branch_source()
         super().check_base()  # The canonical original remains in the retained STORE.
         self._selected_source()  # The displayed name remains bound to the held input used for the copy.
 
@@ -60,8 +64,9 @@ class SnapshotBranch(CommitChoice):
 
     def run(self):
         if self.closed or not self.ready or self.used: raise Rejected("本次原节点分支决定不可重用")
-        self.used = True
         try:
+            self.live.require_branch_source()
+            self.used = True
             return worktree.branch_from_snapshot(self.live.state, selected=self)
         except Conflict:
             self.conflict = True

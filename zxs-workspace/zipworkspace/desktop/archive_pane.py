@@ -84,11 +84,11 @@ class ArchivePane(QWidget):
 
     def clear_document(self):
         if self.mount is not None: self.mount.set_snapshot(None)
+        self.checkout.set_snapshot(None)  # Revoke the old branch source before releasing its display.
         if self.selection is not None: self.selection.release_display()
         self.selection = self.next_cursor = None
         if self.save_copy is not None: self.save_copy.setEnabled(False)
         self.comparison.set_snapshot(None)
-        self.checkout.set_snapshot(None)
         self.clear_catalog()
         self.details.setText("尚未打开快照")
         self.at.setText("")
@@ -161,11 +161,11 @@ class ArchivePane(QWidget):
 
     def show_selection(self, selected):
         if self.mount is not None: self.mount.set_snapshot(selected)
+        self.checkout.set_snapshot(selected)
         if self.selection is not None and self.selection is not selected: self.selection.release_display()
         self.selection = selected
         if self.save_copy is not None: self.save_copy.setEnabled(True)
         self.comparison.set_snapshot(selected)
-        self.checkout.set_snapshot(selected)
         marker = selected.browser.commit
         evidence = (f"原归档 SHA-256：{selected.exact.sha256}" if selected.exact is not None
                     else "成员内容已完整核验；未计算原 ZIP 字节摘要。")

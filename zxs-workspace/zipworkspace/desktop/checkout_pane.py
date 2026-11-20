@@ -25,6 +25,10 @@ class CheckoutPane(QWidget):
         layout.addWidget(self.start)
         self.result = label()
         layout.addWidget(self.result)
+        self.session_label = label()
+        layout.addWidget(self.session_label)
+        self.end = button("关闭本窗口的工作树会话…", self.end_session)
+        layout.addWidget(self.end)
         self.refresh = button("刷新本窗口工作树的状态", self.refresh_live)
         layout.addWidget(self.refresh)
         self.changes = button("查看工作目录相对基线的改动…", self.compare_live)
@@ -35,16 +39,27 @@ class CheckoutPane(QWidget):
         layout.addWidget(self.commits)
         self.close_session()
         layout.addStretch()
-        self.set_snapshot(None)
 
     def set_snapshot(self, selected):
-        if self.snapshot is not selected and self.live is not None: self.close_session()
+        live = self.live
+        if live is not None and self.snapshot is not selected:
+            live.revoke_branch_source()  # Does not revoke the worktree or any recorded operation.
         self.snapshot = selected
-        if not available(): message = "当前平台未开放此写入口。可继续浏览或核验快照。"
-        elif selected is None: message = "先打开一个 .zxs，或从历史 / 分支页面打开要签出的确切节点。"
-        else: message = f"当前快照：{selected.path}\n要签出的原节点：{selected.browser.commit.operation}"
+        supported = available()
+        if not supported: message = "当前平台未开放此写入口。可继续浏览或核验快照。"
+        elif selected is None: message = "浏览区没有快照；可从 .zxs、历史或分支中选择版本。"
+        else: message = f"浏览／下次签出的候选：{selected.path}\n显示节点：{selected.browser.commit.operation}"
+        if live is not None: message += "\n已持有工作树；先关闭该会话才能再签出。"
         self.selected.setText(message)
-        self.start.setEnabled(selected is not None and not self.active and not self.unresolved and available())
+        self.start.setEnabled(supported and selected is not None and live is None and not self.active and not self.unresolved)
+        if live is None:
+            caption = "本窗口未持有工作树，不会按路径接管已有 STATE。"
+        else:
+            caption = (f"本窗口操作绑定的原工作目录：{live.work}\n原 STATE：{live.state}\n原 STORE：{live.store}\n"
+                       "切换浏览不改变本会话；关闭会话或退出窗口后，不能在窗口凭路径重新打开。")
+            if not live.branch_source_available: caption += "\n已离开签出时的原快照；此会话不能再从它新建分支。"
+        self.session_label.setText(caption)
+        self.commits.buttons()
 
     def _release(self):
         self.active = False
@@ -52,7 +67,8 @@ class CheckoutPane(QWidget):
 
     def pick(self):
         snapshot = self.snapshot
-        if snapshot is None or self.active or self.unresolved or self.owner.pending is not None or not available(): return
+        if (snapshot is None or self.live is not None or self.active or self.unresolved
+                or self.owner.pending is not None or not available()): return
         self.active = True
         self.start.setEnabled(False)
         plan = None
@@ -78,12 +94,12 @@ class CheckoutPane(QWidget):
             if not ok: return
             def reviewed(details):
                 try:
-                    if self.snapshot is not snapshot or not confirm(self, "确认本次签出", details,
+                    if self.snapshot is not snapshot or self.live is not None or not confirm(self, "确认本次签出", details,
                             attestation="我确认所选 CLI 状态父目录由本人独占，操作及恢复期间不会被同步、移动或由其他程序修改。"):
                         self._discard(plan, "未确认本次签出，没有写入。")
                         return
-                    if self.snapshot is not snapshot:
-                        self._discard(plan, "当前节点已经改变，未开始签出。")
+                    if self.snapshot is not snapshot or self.live is not None:
+                        self._discard(plan, "当前节点或工作树会话已经改变，未开始签出。")
                         return
                     self.result.setText(f"本次操作：{plan.operation}\nSTATE：{plan.state}\n正在创建；请勿重复提交。")
                     self._submit(plan, "正在按原节点创建新的 CLI 工作树…", plan.run,
@@ -124,15 +140,15 @@ class CheckoutPane(QWidget):
         incoming = plan.take_session()
         self.active = False
         try:
-            self.set_snapshot(self.snapshot)
             destination, marker = result
             self.result.setText(f"原操作已签出：{destination}\n原节点：{marker.operation}\n"
                                 f"命令行 STATE：{plan.state}\n签出操作：{plan.operation}")
-            if self.snapshot is not plan.snapshot:
-                self.owner.inform("原签出已完成；当前快照已变，未交接工作树会话。")
+            if self.snapshot is not plan.snapshot or self.live is not None:
+                self.owner.inform("原签出已完成；浏览或会话已变，未接管这份工作树。")
                 return
-            self.close_session()
-            self.owner.inform("新的 CLI 工作树已创建；不会因为切换页面或关闭窗口而再次签出。")
+            self.owner.inform("新的 CLI 工作树已创建。" if incoming is not None else
+                              "CLI 签出已完成；本窗口未获得会话凭据，请保留原 STATE。")
+            self.end.setEnabled(incoming is not None)
             self.refresh.setEnabled(incoming is not None)
             self.changes.setEnabled(incoming is not None)
             self.commits.set_session(incoming)
@@ -140,16 +156,44 @@ class CheckoutPane(QWidget):
         finally:
             if incoming is not None: incoming.close()
             plan.close()
+            self.set_snapshot(self.snapshot)
         if self.live is not None: self.refresh_live()
+
+    def end_session(self):
+        live, last = self.live, self.commits.last
+        def idle():
+            return (self.owner.pending is None and not self.active and self.commits.running is None
+                    and self.changes_dialog is None)
+        if live is None or not idle(): return
+        details = (f"原工作目录：{live.work}\n原 STATE：{live.state}\n原 STORE：{live.store}\n"
+                   f"签出操作：{live.checkout_operation}\n")
+        if last is not None:
+            details += f"本窗口最近提交或分支操作：{last.operation}（操作号不代表已受理或已完成）\n"
+        details += ("\n只关闭本窗口的会话，不删除、隐藏、提交或恢复任何内容，也不取消已有待决。"
+                    "需要继续时，请先用命令行 status 或 checkout-status 核对原 STATE；窗口不会重新接管。")
+        if not confirm(self, "关闭本窗口的工作树会话", details,
+                       attestation="我已记录需要保留的原 STATE 和操作号。",
+                       action_text="仅关闭窗口会话"):
+            return
+        if self.live is not live or self.commits.last is not last or not idle():
+            self.owner.inform("会话或操作已改变；没有关闭工作树会话。")
+            return
+        self.close_session()
+        self.owner.inform(f"只关闭了本窗口的工作树会话；原文件和 STATE 未改动。\n原 STATE：{live.state}")
 
     def close_session(self):
         if self.changes_dialog is not None: self.changes_dialog.reject()
-        self.commits.set_session(None)
-        if self.live is not None: self.live.close()
-        self.live = None
-        self.refresh.setEnabled(False)
-        self.changes.setEnabled(False)
-        self.details.setText("本窗口未持有当前工作树；不会按路径搜索或接管已有 STATE。")
+        live, self.live = self.live, None
+        if live is not None: live.revoke_branch_source()
+        try:
+            self.commits.set_session(None)
+        finally:
+            if live is not None: live.close()
+            self.end.setEnabled(False)
+            self.refresh.setEnabled(False)
+            self.changes.setEnabled(False)
+            self.details.setText("")
+            self.set_snapshot(self.snapshot)
 
     def compare_live(self):
         live = self.live
@@ -230,7 +274,6 @@ class CheckoutPane(QWidget):
             phase = {"visible":"可见", "hidden":"已隐藏", "hide-pending":"隐藏待决（位置未确认）",
                      "restore-pending":"恢复待决（位置未确认）"}[record["visibility"]]
             self.details.setText(
-                f"本次签出的原工作树：{live.work}\n命令行 STATE：{live.state}\n归档存储：{live.store}\n"
                 f"实例：{record['worktree']}\n可见状态：{phase}\n分支：{record['branch']} · 基线第 {record['base_generation']} 代\n"
                 f"基线节点：{record['base_operation']}\n待决提交：{record['pending_operation'] or '无'}\n"
                 f"待决隐藏/恢复：{record['pending_visibility_operation'] or '无'}\n"

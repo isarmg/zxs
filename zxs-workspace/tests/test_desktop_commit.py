@@ -623,6 +623,179 @@ class DisplayedNodeBranch(OriginalCheckoutFixture):
         job = SnapshotBranch(live or self.live); self.addCleanup(job.release)
         return job
 
+    def test_leaving_the_original_view_revokes_fresh_and_already_prepared_branch_choices(self):
+        unprepared, prepared = self.proposal(), self.proposal()
+        prepared.prepare()
+        self.live.revoke_branch_source()
+        with patch.object(worktree, "locked", side_effect=AssertionError("refuse before SQLite")), \
+             patch.object(worktree, "branch_from_snapshot", side_effect=AssertionError("refuse before writes")):
+            with self.assertRaisesRegex(Rejected, "已离开签出时的原浏览快照"):
+                self.proposal()
+            with self.assertRaisesRegex(Rejected, "已离开签出时的原浏览快照"):
+                unprepared.prepare()
+            with self.assertRaisesRegex(Rejected, "已离开签出时的原浏览快照"):
+                prepared.run()
+        self.assertFalse(prepared.used)
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(list(self.store.iterdir()), [self.original])
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_browsing_retains_one_original_session_pending_receipt_and_explicit_close_changes_no_files(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import checkout_pane
+        from zipworkspace.desktop.selection import StoreSelection
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        archive, pane = win.archive, win.archive.checkout
+        source = Selection.open(self.loose, retain=True)
+        self.addCleanup(source.release_display)
+        archive.show_selection(source)
+
+        def actual_checkout(leaf):
+            plan = CheckoutChoice(source, keep_session=True)
+            self.addCleanup(plan.close)
+            plan.pick_store(self.store)
+            plan.pick_target(self.tree.parent)
+            plan.pick_private(self.state.parent)
+            plan.review(leaf)
+            result = plan.run()
+            return plan, result
+
+        plan, first = actual_checkout("Window")
+        with patch.object(pane, "refresh_live"): pane._complete(plan, first)
+        live, controls = pane.live, pane.commits
+        self.assertIsNotNone(live)
+        self.assertTrue(controls.new_branch.isEnabled())
+        self.assertFalse(pane.start.isEnabled())
+        self.assertTrue(pane.end.isEnabled())
+        job = self.proposal(live)
+        job.prepare()
+        with patch.object(worktree, "_publish", side_effect=publish.Uncertain("lost reply")):
+            with self.assertRaises(publish.Uncertain): job.run()  # This real branch operation is already pending.
+        controls.last, controls.blocked = job, True
+        controls.buttons()
+
+        with patch.object(checkout_pane, "CheckoutChoice", side_effect=AssertionError("second checkout must not start")):
+            pane.pick()
+        late, late_result = actual_checkout("Late")
+        unadopted = late.session
+        pane._complete(late, late_result)
+        self.assertIs(pane.live, live)
+        self.assertIs(controls.last, job)
+        self.assertTrue(unadopted.closed)
+        self.assertTrue(late_result[0].is_dir())
+
+        # Changing the browser STORE and leaving then selecting the very same archive
+        # are normal read operations, not a new working tree or a revived branch source.
+        elsewhere = self.root/"browse-only"; elsewhere.mkdir()
+        archive.use_store(StoreSelection.open(elsewhere))
+        self.assertTrue(live.branch_source_available)
+        archive.clear_document()
+        self.assertTrue(source.held.closed)
+        self.assertIs(pane.live, live)
+        self.assertIs(controls.last, job)
+        reopened = Selection.open(self.loose, retain=True)
+        self.addCleanup(reopened.release_display)
+        archive.show_selection(reopened)
+        self.assertIsNot(reopened, source)
+        self.assertEqual(reopened.observed, source.observed)
+        self.assertIn(str(live.store), pane.session_label.text())
+        self.assertNotIn(str(elsewhere), pane.session_label.text())
+        self.assertFalse(live.branch_source_available)
+        self.assertFalse(controls.new_branch.isEnabled())
+        self.assertTrue(controls.query.isEnabled())
+        self.assertEqual(job.result()[0], "pending")
+        attempt = PendingRetry(job); self.addCleanup(attempt.release)
+        detail = attempt.prepare()
+        self.assertIn(str(live.store), detail)
+        self.assertEqual(attempt.operation, job.operation)
+        self.assertEqual(attempt.marker, job.proposed)
+        attempt.release()  # Only inspecting/approving a replay is not part of closing.
+
+        names_before = set(self.store.iterdir())
+        db = live.state/"worktree.sqlite"
+        row_before = db.read_bytes()
+        with patch.object(worktree, "locked", side_effect=AssertionError("closing must not query or update SQLite")), \
+             patch.object(checkout_pane, "confirm", return_value=False) as cancel:
+            pane.end.click()
+        details = cancel.call_args.args[2]
+        for value in (live.work, live.store, live.state, live.checkout_operation, job.operation):
+            self.assertIn(str(value), details)
+        self.assertIn("不代表已受理或已完成", details)
+        self.assertIs(pane.live, live)
+        self.assertIs(controls.last, job)
+
+        def active_after_the_question(*_args, **_kw):
+            win.pending = object()  # A nested confirmation may no longer own the original idle window.
+            return True
+        try:
+            with patch.object(checkout_pane, "confirm", side_effect=active_after_the_question):
+                pane.end.click()
+            self.assertIs(pane.live, live)
+        finally:
+            win.pending = None
+
+        with patch.object(worktree, "locked", side_effect=AssertionError("closing must not query or update SQLite")), \
+             patch.object(checkout_pane, "confirm", return_value=True):
+            pane.end.click()
+        self.assertIsNone(pane.live)
+        self.assertTrue(live.closed)
+        self.assertIsNone(controls.last)
+        self.assertTrue(job.live.closed)
+        self.assertTrue(pane.start.isEnabled())
+        self.assertFalse(pane.end.isEnabled())
+        self.assertIs(pane.snapshot, reopened)
+        self.assertEqual(set(self.store.iterdir()), names_before)
+        self.assertEqual(db.read_bytes(), row_before)
+        self.assertEqual(worktree.status(live.state)["pending_operation"], job.operation)
+        self.assertEqual((live.work/"story").read_bytes(), b"original story")
+        self.assertTrue((live.state/(job.operation+".zxs")).is_file())
+        self.assertFalse(any(elsewhere.iterdir()))
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_switching_the_browse_selection_before_or_during_branch_consent_never_enqueues_a_write(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        archive, pane = win.archive, win.archive.checkout
+        for when in ("before", "inside"):
+            archive.show_selection(Selection.open(self.loose))
+            live = self.open_live(self.loose, f"Review-{when}")
+            pane.live = live
+            controls = pane.commits
+            controls.set_session(live)
+            queued = []
+            def queue(work):
+                future = Future()
+                queued.append((future, work))
+                return future
+            def approve(*_args, **_kw):
+                self.assertEqual(when, "inside")
+                archive.show_selection(Selection.open(self.loose))  # Still the same bytes, but a different selection.
+                return True
+            with self.subTest(when=when), patch.object(win.pool, "submit", side_effect=queue), \
+                 patch.object(commit_controls, "confirm", side_effect=approve) as ask:
+                controls.new_branch.click()
+                future, read_only = queued.pop()
+                self.assertTrue(future.set_running_or_notify_cancel())
+                future.set_result(read_only())
+                if when == "before":
+                    archive.show_selection(Selection.open(self.loose))
+                win.poll()
+                self.assertEqual(ask.call_count, int(when == "inside"))
+            self.assertFalse(queued)
+            self.assertIs(pane.live, live)
+            self.assertIsNone(controls.last)
+            self.assertIsNone(controls.running)
+            self.assertFalse(controls.new_branch.isEnabled())
+            self.assertTrue(controls.save.isEnabled())  # Only the new branch depends on the old browser.
+            self.assertIsNone(live.status()["pending_operation"])
+            self.assertEqual(list(self.store.iterdir()), [self.original])
+            pane.close_session()
+
     def test_explicit_fork_uses_the_displayed_parent_not_the_advancing_head_or_dirty_files(self):
         from zipworkspace.refs import Catalog
         (self.tree/"story").write_bytes(b"my uncommitted edits")
@@ -832,7 +1005,7 @@ class DisplayedNodeBranch(OriginalCheckoutFixture):
                 controls.branch()
             self.assertEqual(list(self.store.iterdir()), [self.original]); self.assertIsNone(controls.last)
             def approve(_parent, title, text, *, attestation, action_text):
-                self.assertIn("从所选原节点", title); self.assertIn(str(self.store), text)
+                self.assertIn("从签出时的原节点", title); self.assertIn(str(self.store), text)
                 self.assertEqual(action_text, "创建、发布并切换"); self.assertFalse(controls.new_branch.isEnabled())
                 controls.branch()  # No second job or ID while the first decision is active.
                 return True

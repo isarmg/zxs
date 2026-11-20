@@ -16,7 +16,7 @@ class CommitControls(QWidget):
         self.blocked = False
         box = QVBoxLayout(self); row = QHBoxLayout()
         self.save = button("提交本次工作目录…", self.begin)
-        self.new_branch = button("从所选原节点创建新分支…", self.branch)
+        self.new_branch = button("从签出时的原节点创建新分支…", self.branch)
         self.query = button("查询该次操作的原回执", self.inspect)
         self.retry = button("核对并续作原待决操作…", self.resume)
         row.addWidget(self.save); row.addWidget(self.query); box.addLayout(row)
@@ -25,8 +25,9 @@ class CommitControls(QWidget):
         self.set_session(None)
 
     def buttons(self):
-        self.save.setEnabled(self.session is not None and self.running is None and not self.blocked)
-        self.new_branch.setEnabled(self.save.isEnabled())
+        idle = self.session is not None and self.running is None and not self.blocked
+        self.save.setEnabled(idle)
+        self.new_branch.setEnabled(idle and self.session.branch_source_available)
         free = self.session is not None and self.running is None and self.last is not None
         self.query.setEnabled(free)
         self.retry.setEnabled(free and self.last.pending_seen and not self.last.conflict)
@@ -62,6 +63,9 @@ class CommitControls(QWidget):
     def _begin(self, *, branch):
         original = self.session
         if original is None or self.running is not None or self.blocked or self.owner.pending is not None: return
+        def same_decision():
+            return self.session is original and (not branch or original.branch_source_available)
+        if not same_decision(): return
         try: job = SnapshotBranch(original) if branch else CommitChoice(original)
         except Exception as err:
             self.output.setText(describe(err)); return
@@ -85,15 +89,17 @@ class CommitControls(QWidget):
         def reviewed(detail):
             try:
                 if branch:
-                    question, action = "从所选原节点创建并发布新分支", "创建、发布并切换"
+                    question, action = "从签出时的原节点创建并发布新分支", "创建、发布并切换"
                     agree = "我确认发布的是所列原快照，不含当前编辑。STATE 由本人独占；STORE 不同步，无其他程序改动本次暂存名。"
                 else:
                     question, action = "确认提交整个工作目录", "确认并提交"
                     agree = "我已停止所有工作树写入者。STATE 由本人独占，STORE 不同步、不会有其他程序改动本次上传暂存名。"
-                if self.session is not original or not confirm(self, question, detail, attestation=agree, action_text=action):
+                if not same_decision():
+                    refused("原工作树会话或原分支来源已变；没有制作候选。"); return
+                if not confirm(self, question, detail, attestation=agree, action_text=action):
                     refused("未确认，没有制作候选或发布。"); return
-                if self.session is not original:
-                    refused("原窗口工作树已切换，未提交。"); return
+                if not same_decision():
+                    refused("确认期间原工作树会话或原分支来源已变；没有制作候选。"); return
                 if self.last is not None:
                     self.last.release(); self.last = None
                 self.output.setText(f"已确认原操作 {job.operation}；不要重复提交。")

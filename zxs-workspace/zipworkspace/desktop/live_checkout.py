@@ -3,6 +3,7 @@ from contextlib import ExitStack
 from copy import copy
 import os
 import stat
+from threading import Event
 
 from ..document import native_identity
 from ..lifecycle import locations
@@ -20,6 +21,8 @@ class LiveCheckout:
         # Evidence from this window's completed checkout, not a loose path that can select a new node.
         self.checkout_marker, self.checkout_sha = choice.snapshot.browser.commit, choice.verified_sha
         self.source_path, self.source_stamp = choice.snapshot.path, choice.snapshot.observed
+        # Shared by borrowed views, but does not retain the browser or its archive FD.
+        self._branch_source_revoked = Event()
         self.stack, self.db, self.closed = ExitStack(), None, False
         try:
             self.work_fd, self.state_fd, self.store_fd = (
@@ -28,6 +31,17 @@ class LiveCheckout:
         except BaseException:
             self.close()
             raise
+
+    @property
+    def branch_source_available(self):
+        return not self.closed and not self._branch_source_revoked.is_set()
+
+    def revoke_branch_source(self):
+        self._branch_source_revoked.set()
+
+    def require_branch_source(self):
+        if not self.branch_source_available:
+            raise Rejected("已离开签出时的原浏览快照；不能从同名或重新选择的归档新建分支")
 
     def borrow(self):
         """One in-flight job owns independent references, even if a stale UI drops its selection."""
