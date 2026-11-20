@@ -9,7 +9,8 @@ from .. import opening, private_stage
 from ..comparison import Folder
 from ..capacity import describe, observed_available
 from ..document import native_identity
-from ..model import Rejected, member_name, new_id
+from ..lifecycle import who
+from ..model import Rejected, check_id, member_name, new_id
 from ..private_candidates import generation, held_candidates
 from ..publish import held_store, require_native_writer
 
@@ -101,13 +102,15 @@ class CheckoutChoice:
         self.keep_session = keep_session
         self.provisional = self.session = self.verified_sha = None
         self.publication = None  # Only the actual private STATE installation boundary sets this.
+        self.prepared = self.resume_offer = self.resume_mode = None
+        self.registered = self.receipt_synced = self.initial_run = False
+        self.source_fd = None
         self.used = self.closed = self.initial_opened = False
         self.preparation = _Preparation()
         try:
             # Transfer the exact input already verified for display. Do not
             # access a slow/rebound archive name during this GUI-thread handoff.
             self.source_fd = snapshot.held.duplicate()
-            self.stack.callback(os.close, self.source_fd)
         except BaseException:
             self.close()
             raise
@@ -116,7 +119,12 @@ class CheckoutChoice:
         if not self.closed:
             self.preparation.finish()
             self.closed = True
-            self.stack.close()
+            try: self._close_source()
+            finally: self.stack.close()
+
+    def _close_source(self):
+        fd, self.source_fd = self.source_fd, None
+        if fd is not None: os.close(fd)
 
     def cancel(self):
         return self.preparation.cancel()
@@ -130,7 +138,7 @@ class CheckoutChoice:
 
     def check_source(self):
         s = self.snapshot
-        if self.closed: raise Rejected("原归档读取能力已经关闭")
+        if self.source_fd is None: raise Rejected("原归档读取能力已经关闭")
         # O_PATH compares the actual live mount and final name without opening
         # a second data stream (or following a leaf symlink).
         named = os.open(s.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -251,8 +259,23 @@ class CheckoutChoice:
         self.preparation.before_install()
         self.publication = (fd, area.identity, db_generation)
 
+    def witness_prepared(self, area, stage, writer, observed, worktree):
+        # The fresh DB writer and extracted root are both still held by their
+        # producers. An O_PATH witness does not acquire/drop SQLite POSIX locks.
+        if self.prepared is not None or stage is None:
+            raise Rejected("缺少此次签出的原始准备材料")
+        db = os.open("opening.sqlite", os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=area.parent)
+        self.stack.callback(os.close, db)
+        area.check_file("opening.sqlite", db, observed)
+        if (not os.path.samestat(os.fstat(writer), os.fstat(db)) or
+                private_stage.mount_id(db) != private_stage.mount_id(area.parent)):
+            raise Rejected("准备签出记录时，原库实体或挂载已改变")
+        work = os.dup(stage.parent)
+        self.stack.callback(os.close, work)
+        self.prepared = check_id(worktree), work, db, stage.identity
+
     def check_registered(self, state):
-        if self.closed or self.publication is None or state != self.state:
+        if self.closed or self.publication is None or self.prepared is None or state != self.state:
             raise Rejected("未持有本次安装的 CLI STATE")
         private_stage.check_private(self.base)
         self.target.check()
@@ -262,10 +285,113 @@ class CheckoutChoice:
         if (private_stage.check_named(self.base.parent, state.name, fd) != identity or
                 native_identity(state.stat(follow_symlinks=False), stat.S_IFDIR) != identity):
             raise Rejected("本次安装的 STATE 已移走")
-        m = os.stat("opening.sqlite", dir_fd=fd, follow_symlinks=False)
-        if (native_identity(m, stat.S_IFREG) != db_generation[:2] or m.st_nlink != 1 or
-                not self.initial_opened and generation(m) != db_generation):
-            raise Rejected("本次签出的原登记数据库已变化")
+        db = self.prepared[2]
+        named = os.open("opening.sqlite", os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+        try:
+            for m in (os.fstat(db), os.fstat(named)):
+                if (native_identity(m, stat.S_IFREG) != db_generation[:2] or m.st_nlink != 1 or
+                        m.st_uid != os.geteuid() or m.st_mode & 0o077 or
+                        not self.initial_opened and generation(m) != db_generation):
+                    raise Rejected("本次签出的原登记数据库已变化")
+            if not private_stage.mount_id(db) == private_stage.mount_id(named) == private_stage.mount_id(fd):
+                raise Rejected("本次签出的原登记数据库已离开原挂载")
+        finally: os.close(named)
+
+    def check_prepared_row(self, row):
+        worktree, _, _, tree = self.prepared
+        state_id = self.publication[1]
+        target = os.fstat(self.target.check())
+        expected = (worktree, str(self.target.evidence.path), str(target.st_dev), str(target.st_ino),
+                    private_stage.LEAF, *map(str, tree), *map(str, state_id), str(self.base.identity[1]))
+        actual = tuple(row[k] for k in ("worktree", "parent", "device", "inode", "stage", "stage_dev", "stage_ino",
+                                        "private_device", "private_inode", "private_base_inode"))
+        if actual != expected or row["done"] not in (0, 1):
+            raise Rejected("根目录或原签出记录与本窗口实际准备的内容不符")
+
+    @property
+    def can_review_recovery(self):
+        return self.keep_session and self.used and self.registered and not self.closed
+
+    def _recovery_place(self):
+        # Classify the exact same directory, never a path with equivalent content.
+        self.check_registered(self.state)
+        mount = self.check_roots()
+        _, work, _, identity = self.prepared
+        state_fd = self.publication[0]
+        target_fd = self.target.check()
+        if private_stage.member_identity(work, mount)[:2] != identity:
+            raise Rejected("无实际原工作目录，不接管同名目录")
+        if not _absent(state_fd, "worktree.sqlite"):
+            raise Rejected("STATE 已有登记库，本窗口不打开或接管它。请只核对原 CLI 回执。")
+        expected = (*map(str, identity), stat.S_IFDIR)
+        staged = who(private_stage.LEAF, dir_fd=state_fd)
+        final = who(self.destination.name, dir_fd=target_fd)
+        if (staged, final) == (expected, None):
+            private_stage.check_mount_name(state_fd, private_stage.LEAF, identity, mount)
+            place = "move"
+        elif (staged, final) == (None, expected):
+            private_stage.check_mount_name(target_fd, self.destination.name, identity, mount)
+            place = "ack"
+        else:
+            raise Rejected("原暂存或正式名称已变化或被占用；未选择其他目录")
+        self.check_registered(self.state)
+        return place
+
+    def review_recovery(self):
+        """Read only the actual original operation; never prepare a fresh checkout."""
+        if not self.can_review_recovery or self.resume_offer is not None or self.resume_mode is not None:
+            raise Rejected("没有本窗口仍持有且已同步的原签出记录")
+        with opening._record(self.state, write=False, selected=self) as (_, row, _):
+            if row["done"]:
+                return None, ("可读到这笔签出的历史完成行。没有写入或接管工作树；"
+                              "这不证明目录现在仍在或已通过本窗口的耐久确认。"
+                              f"\n原 STATE：{self.state}\n签出号：{self.operation}")
+            place = self._recovery_place()
+        offer = self.resume_offer = object(), place
+        direction = ("仍在原私处。只把这棵原树以无覆盖方式移到原工作目录名，然后同步并写入原回执。"
+                     if place == "move" else
+                     "已经在原正式路径。只核验、同步并补全同一个原登记；不会再次移动或重做原树。")
+        return offer, (f"签出号：{self.operation}\n原节点：{self.snapshot.browser.commit.operation}\n"
+                       f"原 STATE：{self.state}\n原工作目录：{self.destination}\n原 STORE（只读）：{self.store.path}\n\n"
+                       f"{direction}\n会从原工作目录实体读回核验，不重读归档、不选择新版本或覆盖任何目标。")
+
+    def cancel_recovery(self, offer):
+        if self.resume_offer is offer: self.resume_offer = None
+
+    def check_recovery_row(self, row):
+        if self.resume_mode is not None and (row["done"] or self._recovery_place() != self.resume_mode):
+            raise Rejected("原签出状态已改变；不会转换成另一种恢复方式")
+
+    def authorize_finish(self, state, operation):
+        if (not self.registered or self.closed or state != self.state or operation != self.operation or
+                not (self.initial_run or self.resume_mode is not None)):
+            raise Rejected("缺少本次签出或明确继续原操作的授权")
+
+    def verify_recovery_child(self, child, from_stage):
+        if self.resume_mode is None: return
+        root = self.prepared[1]
+        if (from_stage != (self.resume_mode == "move") or
+                not os.path.samestat(os.fstat(child), os.fstat(root)) or
+                private_stage.mount_id(child) != private_stage.mount_id(root)):
+            raise Rejected("原工作目录或确认的恢复方式不再相符")
+
+    def resume(self, offer, *, confirmed=False):
+        if (not confirmed or not self.can_review_recovery or self.resume_offer is not offer or offer is None or
+                self.resume_mode is not None):
+            raise Rejected("缺少本窗口对当前原回执的一次明确确认")
+        self.resume_offer, self.resume_mode = None, offer[1]
+        try:
+            result = opening.finish(self.state, self.operation, selected=self)
+            self.session, self.provisional = self.provisional, None
+            self._close_picks()
+            return result
+        except Exception as error:
+            raise Rejected(self._failure(error)) from error
+        finally:
+            self.resume_mode = None
+            if self.provisional is not None:
+                self.provisional.close()
+                self.provisional = None
 
     def new_session(self, row, work_fd, state_fd, store_fd):
         if not self.keep_session: return None
@@ -294,17 +420,23 @@ class CheckoutChoice:
                         original["source_node"] == self.snapshot.browser.commit.operation and
                         original["chosen_destination"] == str(self.destination)):
                     if original["recorded_stage"] == "attached":
-                        outcome = "原操作回执记为已完成；这不是对目录现在是否仍存在的保证。可用 checkout-status STATE 查询。"
-                    else:
+                        outcome = ("读到这笔原操作的完成行。" if self.receipt_synced else
+                                   "可读到原操作完成行，但本窗口未确认其耐久。")
+                        outcome += "不据此判断原目录现在是否仍在；可用 checkout-status STATE 查询。"
+                    elif self.registered:
                         outcome = ("已读到本次原登记，尚无完成回执。请先用 checkout-status STATE 核对；"
                                    "如需继续，再使用 resume-checkout STATE OPERATION，限下列原 STATE 和操作号。")
+                    else:
+                        outcome = ("能读到本次原登记，但未确认准备与父目录屏障全部完成。"
+                                   "请保留现场，先用 checkout-status STATE 查原号；不能据此开始另一笔。")
             except (OSError, ValueError, sqlite3.Error):
                 pass  # Unknown is not absence. Never select another database or issue a retry.
         return f"{describe(error)}\n{outcome}\nSTATE：{self.state}\n操作号：{self.operation}"
 
     def run(self):
         if self.closed or self.used or self.state is None: raise Rejected("本次签出决定不能重复提交")
-        self.used = True
+        self.used = self.initial_run = True
+        retained = False
         try:
             self.preparation.check()
             self.check_new()
@@ -316,7 +448,16 @@ class CheckoutChoice:
         except CancelledCheckout as error:
             raise Rejected(describe(error)) from error  # Preserve the exact private seed note, if there is one.
         except Exception as error:
+            retained = self.can_review_recovery
             raise Rejected(self._failure(error)) from error
         finally:
-            if self.provisional is not None: self.provisional.close()
-            self._close_picks()  # The successful session, if any, awaits take_session() or close().
+            self.initial_run = False
+            if self.provisional is not None:
+                self.provisional.close()
+                self.provisional = None
+            self.preparation.finish()
+            # A later review only needs the original directories and O_PATH
+            # receipt evidence, never a duplicate of a possibly large SMB ZIP.
+            try: self._close_source()
+            finally:
+                if not retained: self._close_picks()

@@ -17,6 +17,7 @@ class CheckoutPane(QWidget):
         super().__init__()
         self.owner, self.current_store = owner, current_store
         self.snapshot, self.active, self.unresolved = None, False, False
+        self.recover_checkout = None
         self.live = self.changes_dialog = self.live_record = self.visibility_last = None
         self.visibility_blocked = False
         layout = QVBoxLayout(self)
@@ -30,6 +31,8 @@ class CheckoutPane(QWidget):
         layout.addWidget(self.initialize)
         self.result = label()
         layout.addWidget(self.result)
+        self.recover = button("核对并继续本窗口的原签出…", self.resume_checkout)
+        layout.addWidget(self.recover)
         self.session_label = label()
         layout.addWidget(self.session_label)
         self.end = button("关闭本窗口的工作树会话…", self.end_session)
@@ -63,6 +66,8 @@ class CheckoutPane(QWidget):
         if live is not None and self.snapshot is not selected:
             live.revoke_branch_source()  # Does not revoke the worktree or any recorded operation.
         self.snapshot = selected
+        if self.recover_checkout is not None and selected is not self.recover_checkout.snapshot and not self.active:
+            self._close_checkout_recovery()
         supported, new_supported = available(), can_initialize()
         if not supported and not new_supported: message = "当前平台未开放此写入口。可继续浏览或核验快照。"
         elif not supported: message = "当前不能从快照签出；可从已有工作目录登记新仓库。"
@@ -73,6 +78,8 @@ class CheckoutPane(QWidget):
         vacant = live is None and not self.active and not self.unresolved
         self.start.setEnabled(supported and selected is not None and vacant)
         self.initialize.setEnabled(new_supported and vacant)
+        self.recover.setEnabled(not self.active and self.recover_checkout is not None and live is None
+                                and selected is self.recover_checkout.snapshot)
         if live is None:
             caption = "本窗口未持有工作树，不会按路径接管已有 STATE。"
         else:
@@ -209,7 +216,14 @@ class CheckoutPane(QWidget):
         if plan.used and plan.publication is not None:
             self.unresolved = True
             message += "\n本窗口已停止创建或签出工作树，避免对不明结果重复发起。"
-        plan.close()
+        if (getattr(plan, "can_review_recovery", False) and self.snapshot is plan.snapshot and self.live is None
+                and self.recover_checkout in (None, plan)):
+            self.recover_checkout = plan
+            message += "\n如有需要，可先只读核对本窗口原签出；不会自动继续。"
+        elif self.recover_checkout is plan:
+            self._close_checkout_recovery()
+        else:
+            plan.close()
         self.result.setText(message)
         self.owner.inform(message)
         self._release()
@@ -223,9 +237,55 @@ class CheckoutPane(QWidget):
         future = self.owner.job(title, work, accept, failed=failed, **controls)
         if future is None:
             self._discard(plan, "另一个操作正在执行；本步骤未开始。")
-            return
+            return False
         # A queued job cancelled before start never enters its function.
         future.add_done_callback(lambda f: plan.close() if f.cancelled() else None)
+        return True
+
+    def _close_checkout_recovery(self):
+        plan, self.recover_checkout = self.recover_checkout, None
+        if plan is not None: plan.close()
+
+    def resume_checkout(self):
+        plan = self.recover_checkout
+        if plan is None or self.active or self.owner.pending is not None: return
+        def current():
+            return self.recover_checkout is plan and self.snapshot is plan.snapshot and self.live is None
+        if not current(): return
+        self.active = True
+        self.set_snapshot(self.snapshot)
+
+        def reviewed(proposal):
+            offer, detail = proposal
+            try:
+                if not current():
+                    plan.cancel_recovery(offer)
+                    self._discard(plan, "浏览或会话已变；没有继续旧签出。")
+                    return
+                if offer is None:
+                    self._close_checkout_recovery()
+                    self.result.setText(detail)
+                    self.owner.inform("只读核对了原签出回执，没有接管工作树。")
+                    self._release()
+                    return
+                if not confirm(self, "只继续这笔原签出", detail,
+                               attestation="我已关闭编辑器并暂停其他写入或同步，不会同时用命令行继续这笔。",
+                               action_text="继续原操作") or not current():
+                    plan.cancel_recovery(offer)
+                    self._discard(plan, "没有继续原签出，也没有改动它的回执。")
+                    return
+                if not self._submit(plan, "正在核验并完成已确认的同一签出，不重读归档…",
+                                    lambda: plan.resume(offer, confirmed=True),
+                                    lambda result: self._complete(plan, result)):
+                    plan.cancel_recovery(offer)
+            except Exception as err:
+                plan.cancel_recovery(offer)
+                self._discard(plan, str(err))
+
+        try:
+            self._submit(plan, "只读核对原 STATE、签出号和目录位置…", plan.review_recovery, reviewed)
+        except Exception as err:
+            self._discard(plan, str(err))
 
     def _attach(self, original):
         self.end.setEnabled(original is not None)
@@ -239,6 +299,9 @@ class CheckoutPane(QWidget):
         # but must never leak its handles or adopt it as the currently selected worktree.
         incoming = plan.take_session()
         self.active = False
+        if self.recover_checkout is plan:
+            self.recover_checkout = None
+            self.unresolved = False
         try:
             destination, marker = result
             self.result.setText(f"原操作已签出：{destination}\n原节点：{marker.operation}\n"
@@ -283,6 +346,7 @@ class CheckoutPane(QWidget):
         self.owner.inform(f"只关闭了本窗口的工作树会话；原文件和 STATE 未改动。\n原 STATE：{live.state}")
 
     def close_session(self):
+        self._close_checkout_recovery()
         if self.changes_dialog is not None: self.changes_dialog.reject()
         live, self.live = self.live, None
         move, self.visibility_last = self.visibility_last, None

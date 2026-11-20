@@ -748,6 +748,168 @@ class OriginalDesktopCheckout(unittest.TestCase):
         self.assertEqual(self.target.stat().st_ino, inode)
         self.assertEqual(opening.status(self.state)["recorded_stage"], "attached")
 
+    def stopped_after_registration(self):
+        from zipworkspace import opening
+        plan = self.choice(keep_session=True)
+        with patch.object(opening, "finish", side_effect=InterruptedError("lost after durable STATE")), \
+             self.assertRaisesRegex(Rejected, "已读到本次原登记"):
+            plan.run()
+        self.assertTrue(plan.can_review_recovery)
+        self.assertTrue(plan.registered)
+        self.assertIsNone(plan.source_fd)
+        self.assertFalse(self.target.exists())
+        return plan
+
+    def test_same_window_can_move_only_the_original_prepared_tree_with_a_separate_confirmation(self):
+        from zipworkspace import opening, private_stage
+        plan = self.stopped_after_registration()
+        stage = self.state/private_stage.LEAF
+        inode = stage.stat().st_ino
+        self.loose.rename(self.root/"offline.zxs")
+        native = opening.sqlite3.connect
+        modes = []
+
+        def connect(name, **options):
+            modes.append(name.endswith("?mode=ro"))
+            return native(name, **options)
+
+        with patch.object(opening.sqlite3, "connect", side_effect=connect):
+            offer, body = plan.review_recovery()
+        self.assertEqual(modes, [True])
+        self.assertIn(plan.operation, body); self.assertIn(str(self.target), body)
+        self.assertIn("仍在原私处", body); self.assertFalse(self.target.exists())
+        with patch.object(opening.sqlite3, "connect", side_effect=AssertionError("no writer without confirmation")):
+            with self.assertRaisesRegex(Rejected, "明确继续"):
+                opening.finish(plan.state, plan.operation, selected=plan)
+            with self.assertRaisesRegex(Rejected, "明确确认"):
+                plan.resume(object(), confirmed=True)
+            with self.assertRaisesRegex(Rejected, "明确确认"):
+                plan.resume(offer)
+        with patch.object(opening, "_source", side_effect=AssertionError("no archive recapture")):
+            self.assertEqual(plan.resume(offer, confirmed=True), (self.target, self.marker))
+        self.assertTrue(plan.receipt_synced); self.assertFalse(plan.can_review_recovery)
+        self.assertEqual(self.target.stat().st_ino, inode)
+        self.assertEqual((self.target/"design/notes").read_bytes(), b"desktop selection")
+        self.assertFalse(stage.exists()); self.assertFalse(any(self.store.iterdir()))
+        self.assertEqual(opening.status(self.state)["operation"], plan.operation)
+        self.assertIsNotNone(plan.session)
+        with self.assertRaises(Rejected): plan.resume(offer, confirmed=True)
+
+    def test_recovery_of_a_moved_original_does_not_switch_to_a_second_rename(self):
+        from zipworkspace import opening, private_stage
+        plan = self.choice(keep_session=True)
+        original = opening.rename_new_at
+        def lose_reply(fd, source, dest, **options):
+            original(fd, source, dest, **options)
+            if source == private_stage.LEAF: raise InterruptedError("lost after exact worktree rename")
+        with patch.object(opening, "rename_new_at", side_effect=lose_reply), \
+             self.assertRaisesRegex(Rejected, "已读到本次原登记"):
+            plan.run()
+        self.assertTrue(self.target.is_dir())
+        inode = self.target.stat().st_ino
+        offer, text = plan.review_recovery()
+        self.assertIn("已经在原正式路径", text)
+        old_stage = self.state/private_stage.LEAF
+        self.target.rename(old_stage)
+        with patch.object(opening, "rename_new_at", side_effect=AssertionError("do not swap ACK for MOVE")), \
+             self.assertRaisesRegex(Rejected, "不会转换"):
+            plan.resume(offer, confirmed=True)
+        self.assertFalse(self.target.exists()); self.assertEqual(old_stage.stat().st_ino, inode)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "verified_stage")
+        old_stage.rename(self.target)
+        again, _ = plan.review_recovery()  # Now a new single decision after observing the same original.
+        with patch.object(opening, "rename_new_at", side_effect=AssertionError("only acknowledge this prior move")):
+            self.assertEqual(plan.resume(again, confirmed=True), (self.target, self.marker))
+        self.assertEqual(self.target.stat().st_ino, inode)
+        self.assertTrue(plan.receipt_synced)
+
+    def test_replaced_opening_database_is_not_reopened_for_review_even_if_the_bytes_match(self):
+        from zipworkspace import opening
+        plan = self.stopped_after_registration()
+        db, old = self.state/"opening.sqlite", self.state/"saved-opening"
+        db.rename(old); db.write_bytes(old.read_bytes()); db.chmod(0o600)
+        self.assertTrue(os.path.samestat(os.fstat(plan.prepared[2]), old.stat()))
+        with patch.object(opening.sqlite3, "connect", side_effect=AssertionError("not the creator's original DB")), \
+             self.assertRaisesRegex(Rejected, "原登记数据库已变化"):
+            plan.review_recovery()
+        self.assertFalse(self.target.exists())
+
+    def test_recovery_does_not_adopt_an_equal_copied_stage(self):
+        from shutil import copytree
+        from zipworkspace import private_stage
+        plan = self.stopped_after_registration()
+        stage, old = self.state/private_stage.LEAF, self.state/"saved-preparation"
+        stage.rename(old); copytree(old, stage)
+        self.assertTrue(os.path.samestat(os.fstat(plan.prepared[1]), old.stat()))
+        self.assertEqual((stage/"design/notes").read_bytes(), (old/"design/notes").read_bytes())
+        with self.assertRaisesRegex(Rejected, "名称已变化"):
+            plan.review_recovery()
+        self.assertFalse(self.target.exists())
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
+    def test_read_only_recovery_button_does_not_start_a_writer_on_decline(self):
+        from concurrent.futures import Future
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import checkout_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        window = Window(); self.addCleanup(window.close)
+        pane, plan = window.archive.checkout, self.stopped_after_registration()
+        pane.set_snapshot(plan.snapshot)
+        pane._discard(plan, "synthetic lost reply")
+        self.assertTrue(pane.recover.isEnabled())
+        pending, workers = Future(), []
+        def submit(work):
+            workers.append(work)
+            return pending
+        with patch.object(window.pool, "submit", side_effect=submit), \
+             patch.object(checkout_pane, "confirm", return_value=False) as confirm:
+            pane.recover.click()
+            self.assertEqual(len(workers), 1)
+            pending.set_result(workers[0]())
+            window.poll()
+        confirm.assert_called_once()
+        self.assertEqual(len(workers), 1)
+        self.assertIsNone(plan.resume_offer); self.assertIs(pane.recover_checkout, plan)
+        self.assertFalse(self.target.exists()); self.assertFalse(pane.active)
+        self.assertIn("没有继续原签出", pane.result.text())
+        pane.set_snapshot(None)
+        self.assertTrue(plan.closed); self.assertIsNone(pane.recover_checkout)
+
+    def test_first_outer_barrier_failure_does_not_offer_same_window_continuation(self):
+        from zipworkspace import opening
+        plan = self.choice(keep_session=True)
+        real = os.fsync
+        def barrier(fd):
+            if self.state.is_dir() and os.path.samestat(os.fstat(fd), self.private.stat()):
+                raise OSError("first outer STATE barrier lost")
+            return real(fd)
+        with patch.object(os, "fsync", side_effect=barrier), \
+             self.assertRaisesRegex(Rejected, "未确认准备与父目录屏障"):
+            plan.run()
+        self.assertFalse(plan.can_review_recovery)
+        self.assertEqual(opening.status(self.state)["operation"], plan.operation)
+        self.assertFalse(self.target.exists())
+
+    def test_visible_done_row_after_the_final_barrier_fails_is_only_a_read_only_receipt(self):
+        from zipworkspace import opening
+        plan = self.choice(keep_session=True)
+        real, calls = os.fsync, []
+        def barrier(fd):
+            if ((self.state/"worktree.sqlite").is_file() and os.path.samestat(os.fstat(fd), self.state.stat())):
+                calls.append(fd)
+                if len(calls) == 2: raise OSError("last original STATE barrier lost")
+            return real(fd)
+        with patch.object(os, "fsync", side_effect=barrier), \
+             self.assertRaisesRegex(Rejected, "未确认其耐久"):
+            plan.run()
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(plan.receipt_synced); self.assertIsNone(plan.session)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "attached")
+        offer, result = plan.review_recovery()
+        self.assertIsNone(offer); self.assertIn("没有写入或接管", result)
+        with self.assertRaises(Rejected): plan.resume(offer, confirmed=True)
+
     def test_substituted_state_after_initial_install_never_opens_or_resumes_the_replacement(self):
         from zipworkspace import opening
         plan = self.choice(); native = opening.finish
@@ -897,7 +1059,10 @@ class OriginalDesktopCheckout(unittest.TestCase):
         win = Window()
         self.addCleanup(win.close)
         pane = win.archive.checkout
-        def dispatch(title, work, apply, *, failed=None):
+        def dispatch(title, work, apply, *, failed=None, **controls):
+            if title.startswith("正在按原节点"):
+                self.assertTrue(callable(controls["cancel"]))
+                self.assertTrue(callable(controls["progress_report"]))
             future = Future()
             try: result = work()
             except Exception as error:

@@ -157,6 +157,8 @@ def _record(state, *, write, selected=None, operation=None):
     try:
         if selected is not None: selected.check_registered(state)
         if write:
+            if selected is not None and con.execute("PRAGMA main.journal_mode").fetchone()[0] != "delete":
+                raise Rejected("原签出登记不再使用默认 DELETE 回滚日志；不会更改日志模式")
             con.execute("PRAGMA synchronous=FULL"); con.execute("BEGIN IMMEDIATE")
         row = con.execute("SELECT * FROM opening WHERE singleton=1").fetchone()
         if row is None: raise Rejected("original checkout operation not available")
@@ -166,7 +168,9 @@ def _record(state, *, write, selected=None, operation=None):
                     row["store"] != str(selected.store.path) or
                     Commit.decode(row["marker"]) != selected.snapshot.browser.commit):
                 raise Rejected("CLI STATE does not contain the reviewed operation and node")
+            selected.check_prepared_row(row)
             selected.initial_opened = True
+            if write: selected.check_recovery_row(row)
         yield con,row,state
         if selected is not None: selected.check_registered(state)
         if write: con.commit()
@@ -240,7 +244,7 @@ def _seed_names(area, *names):
     if missing: raise Rejected("incomplete private checkout seed")
 
 
-def _install_initial(area, copy, image, state, *, base=None, stage=None, selected=None):
+def _install_initial(area, copy, image, state, *, base=None, stage=None, selected=None, worktree=None):
     mount = staging.mount_id(base.parent) if base is not None else None
     if base is not None:
         staging.check_private(base)
@@ -280,6 +284,8 @@ def _install_initial(area, copy, image, state, *, base=None, stage=None, selecte
         check_pair(area, db=fd)
         os.fsync(area.parent)
         check_pair(area, db=fd)
+        if selected is not None:
+            selected.witness_prepared(area, stage, fd, observed, worktree)
     finally:
         # Closing a non-SQLite fd while SQLite has this inode open in the same
         # process can drop its POSIX locks. Close before exposing the STATE name.
@@ -353,8 +359,10 @@ def begin(source, parent, stem, store, state, *, automatic, expected=None, priva
             if _parent(parent) != owner: raise Rejected("chosen target parent changed")
             staging.separate_roots(base.parent, target, store_root, mount)
             with writing("STATE", state, "写入、安装并同步首笔签出登记", operation, base.parent):
-                _install_initial(area, copy, image, state, base=base, stage=stage, selected=selected)
-    if selected is not None: return finish(state, operation, selected=selected)
+                _install_initial(area, copy, image, state, base=base, stage=stage, selected=selected, worktree=worktree)
+    if selected is not None:
+        selected.registered = True  # Seed/tree, outer parent, and all producer closes succeeded.
+        return finish(state, operation, selected=selected)
     return finish(state,operation)
 
 
@@ -366,9 +374,9 @@ def _verify_record(row,operation):
     return parent, Commit.decode(row["marker"])
 
 
-def _catalog_matches(state,row,dest, *, parent_fd=None):
+def _catalog_matches(state,row,dest, *, parent_fd=None, live=None):
     from .worktree import locked
-    with locked(state) as (con,attached,_):
+    with locked(state, read_only=True, live=live) as (con,attached,_):
         original = instance(con)
         if (attached["worktree"],attached["location"],attached["store"],attached["repo"]) != (
             row["worktree"],str(dest),row["store"],Commit.decode(row["marker"]).repo
@@ -397,6 +405,7 @@ def _held_directory(name, expected, *, parent_fd=None):
 def finish(state, operation, *, selected=None):
     from .worktree import create_catalog, paths
     require_native_writer()
+    if selected is not None: selected.authorize_finish(state, operation)
     with _record(state, write=True, selected=selected, operation=operation) as (con,row,state):
         parent, marker = _verify_record(row,operation)
         _private_origin(row)  # A damaged private record cannot fall through to the legacy extractor.
@@ -486,6 +495,8 @@ def finish(state, operation, *, selected=None):
                     con.execute("UPDATE opening SET ordinal=ordinal+1 WHERE singleton=1")
 
                 attached = who(state / "worktree.sqlite") is not None
+                if attached and selected is not None and selected.resume_mode is not None:
+                    raise Rejected("原操作已出现登记库，本窗口不会打开或接管它")
                 if attached:
                     # Another attempt already created this original instance. It may since have
                     # been edited or hidden, so don't hash it against the old checkout tree.
@@ -516,6 +527,7 @@ def finish(state, operation, *, selected=None):
                 child, m = held.enter_context(_held_directory(current, sid, parent_fd=source_fd if from_stage else pfd))
                 if private_id is not None and staging.mount_id(child) != mount:
                     raise Rejected("original checkout directory is on another mount")
+                if selected is not None: selected.verify_recovery_child(child, from_stage)
 
                 if private_id is not None:
                     staging.separate_roots(base.parent, pfd, current_store, mount)
@@ -581,11 +593,18 @@ def finish(state, operation, *, selected=None):
                         except sqlite3.Error as error:
                             note(error, "STATE", state/"worktree.sqlite", "建立工作树登记", operation, database=True)
                             raise
-                    if _catalog_matches(state, row, dest, parent_fd=pfd) != dest:
+                    if _catalog_matches(state, row, dest, parent_fd=pfd, live=live) != dest:
                         raise Rejected("original directory absent after new catalog publication")
                 checked_root()
                 con.execute("UPDATE opening SET done=1 WHERE singleton=1")
             checked_root()  # Original parent and child are still held through the SQLite commit.
+            if selected is not None:
+                # A visible done row is not the final directory barrier for
+                # its rollback-journal removal. Keep the actual STATE root.
+                with writing("STATE", state, "同步这笔签出的原完成回执；工作目录可能已安装", operation, private.parent):
+                    os.fsync(private.parent)
+                selected.receipt_synced = True
+                checked_root()
             if selected is not None and selected.provisional is not None:
                 selected.provisional.check_catalog(state / "worktree.sqlite")
             return dest, marker
