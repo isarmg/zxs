@@ -1,9 +1,9 @@
-//! Read and explicit-close semantics over the original published storage
+//! File IO and explicit-close semantics over the original published storage
 //! hold. No client-supplied ID, pathname, or backend substitute is accepted.
 //! The dispatcher still has to verify the current connection/session/tree
 //! and resolve both halves (or the exact previous compound OPEN) first.
 use super::{Held, Object};
-use crate::smb::wire::io_fields::{CloseMode, ReadRange};
+use crate::smb::wire::io_fields::{CloseMode, ReadRange, WriteData, WritePosition, file_range_end};
 
 /// Implement on a real Core hold only. Perform this exact read and return
 /// ONLY after the current grant, same held view/medium and any range locks
@@ -96,6 +96,111 @@ impl<H: CheckedClose> Held<'_, H> {
         let finished = self.original.close_checked(mode);
         drop(self); // even on error, the real original closes before its share vote falls
         finished.map(|attrs| if mode == CloseMode::PostQueryAttributes { attrs } else { None })
+    }
+}
+
+/// Same actual single-writer hold as CREATE. The current EOF is the private
+/// working view of that writer, checked under the current authority, not a
+/// confirmed reader's length. Calls run in order under one mutable OPEN.
+/// The adapter still checks current tree/session/medium, preserves the exact
+/// write range against any byte locks, and keeps a pending batch on failure.
+pub(super) trait CheckedWrite {
+    type Error;
+    fn writer_eof_checked(&self) -> Result<u64, Self::Error>;
+    fn write_open_mode(&self) -> WriteOpenMode; // actual CREATE mode
+    /// All exact bytes accepted to this writer, or error. Zero bytes still
+    /// check current authority but do not write, resize or invent a revision.
+    fn write_checked(&mut self, offset: u64, input: &[u8]) -> Result<(), Self::Error>;
+    /// On success the original working revision is clean or confirmed by
+    /// Core. This is neither a named history node nor an operation retry.
+    fn flush_checked(&mut self) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WriteOpenMode {
+    Buffered,
+    BufferedWriteThrough, // FILE_WRITE_THROUGH on the original open
+    Unbuffered, // FILE_NO_INTERMEDIATE_BUFFERING; no such IO implemented here
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WriteCompletion {
+    Applied(u32),
+    Confirmed(u32),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum WriteFault<E> {
+    AccessDenied,
+    NotDataFile,
+    DirectoryFlushUnavailable,
+    InvalidWriteCombination,
+    UnbufferedUnavailable,
+    InvalidRange,
+    Original(E),
+    Confirmation(E),
+}
+
+impl<H: CheckedWrite> Held<'_, H> {
+    pub(super) fn write(&mut self, request: WriteData<'_>) -> Result<WriteCompletion, WriteFault<H::Error>> {
+        use WriteFault::*;
+        const WRITE_DATA: u32 = 0x0002;
+        const APPEND_DATA: u32 = 0x0004;
+        if !matches!(self._slot.object, Object::File(..)) {
+            return Err(NotDataFile);
+        }
+        let can_write = self.grant.0 & WRITE_DATA != 0;
+        let can_append = self.grant.0 & APPEND_DATA != 0;
+        if !can_write && !can_append {
+            return Err(AccessDenied);
+        }
+        let mode = self.original.write_open_mode();
+        let unbuffered_open = mode == WriteOpenMode::Unbuffered;
+        // 3.1.1 per-request WRITE_THROUGH is not the open's FILE_WRITE_THROUGH
+        // option. Check the combination in MS-SMB2 §3.3.5.13 before IO.
+        if request.write_through() && !request.unbuffered() && !unbuffered_open {
+            return Err(InvalidWriteCombination);
+        }
+        if request.unbuffered() || unbuffered_open {
+            return Err(UnbufferedUnavailable);
+        }
+
+        let eof = self.original.writer_eof_checked().map_err(Original)?;
+        let offset = match request.position() {
+            WritePosition::At(at) => at,
+            WritePosition::EndOfFile => eof,
+        };
+        let end = file_range_end(offset, request.length()).ok_or(InvalidRange)?;
+        // Append-only can act at the original writer's current EOF, never
+        // overwrite or silently replace a different explicit offset. A real
+        // extension also requires APPEND_DATA in this profile (§3.3.5.13).
+        if (!can_write && offset != eof)
+            || (!can_append && request.length() != 0 && end > eof)
+        {
+            return Err(AccessDenied);
+        }
+        let confirm = mode == WriteOpenMode::BufferedWriteThrough;
+        self.original.write_checked(offset, request.payload()).map_err(Original)?;
+        if confirm {
+            self.original.flush_checked().map_err(Confirmation)?;
+            Ok(WriteCompletion::Confirmed(request.length()))
+        } else {
+            Ok(WriteCompletion::Applied(request.length()))
+        }
+    }
+
+    pub(super) fn flush(&mut self) -> Result<(), WriteFault<H::Error>> {
+        use WriteFault::*;
+        // For a FILE these are WRITE/APPEND_DATA; for a directory these are
+        // ADD_FILE/ADD_SUBDIRECTORY. Never use directory rights to flush FILE
+        // data or invent a host-volume sync for a logical directory.
+        if self.grant.0 & 0x0006 == 0 {
+            return Err(AccessDenied);
+        }
+        if !matches!(self._slot.object, Object::File(..)) {
+            return Err(DirectoryFlushUnavailable);
+        }
+        self.original.flush_checked().map_err(Confirmation)
     }
 }
 

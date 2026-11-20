@@ -1,6 +1,6 @@
-//! READ and CLOSE request views (MS-SMB2 §§2.2.19 and 2.2.15).
+//! READ, WRITE, FLUSH and CLOSE request views from a single SMB2 member.
 //! An OpenReference describes where to look, never what is authorized.
-use super::{message::{Message, RELATED}, u16le, u32le, u64le};
+use super::{bytes, message::{Message, RELATED}, u16le, u32le, u64le};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::smb) struct WireOpenId {
@@ -23,6 +23,7 @@ pub(in crate::smb) enum IoFieldError {
     Malformed,
     NoExplicitOpen,
     ExceedsMaxRead,
+    ExceedsMaxWrite,
     InvalidRange,
 }
 
@@ -64,7 +65,50 @@ pub(in crate::smb) struct CloseRequest {
     pub(in crate::smb) mode: CloseMode,
 }
 
-impl Message<'_> {
+/// Symbolic EOF is resolved under the original writer, never against a
+/// directory's cached length or an unrelated read handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::smb) enum WritePosition {
+    At(u64),
+    EndOfFile,
+}
+
+// No Debug: the slice is actual file data once wired.
+#[derive(Clone, Copy)]
+pub(in crate::smb) struct WriteData<'a> {
+    position: WritePosition,
+    payload: &'a [u8],
+    length: u32,
+    write_through: bool,
+    unbuffered: bool,
+}
+
+impl<'a> WriteData<'a> {
+    pub(in crate::smb) fn position(self) -> WritePosition { self.position }
+    pub(in crate::smb) fn payload(self) -> &'a [u8] { self.payload }
+    /// Charge the requested bytes, not the count that ultimately succeeds.
+    pub(in crate::smb) fn length(self) -> u32 { self.length }
+    pub(in crate::smb) fn write_through(self) -> bool { self.write_through }
+    pub(in crate::smb) fn unbuffered(self) -> bool { self.unbuffered }
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::smb) struct WriteRequest<'a> {
+    pub(in crate::smb) open: OpenReference,
+    pub(in crate::smb) data: WriteData<'a>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::smb) struct FlushRequest {
+    pub(in crate::smb) open: OpenReference,
+}
+
+/// Check just the signed wire file domain; neither a grant nor a logical EOF.
+pub(in crate::smb) fn file_range_end(offset: u64, length: u32) -> Option<u64> {
+    offset.checked_add(u64::from(length)).filter(|end| *end <= i64::MAX as u64)
+}
+
+impl<'a> Message<'a> {
     fn io_open_reference(&self, offset: usize) -> Result<OpenReference, IoFieldError> {
         // §3.3.5.2.7.2 says to use the prior operation's IDs in all
         // related members, not only if the client sent a sentinel.
@@ -100,7 +144,7 @@ impl Message<'_> {
             return Err(ExceedsMaxRead);
         }
         let offset = u64le(p, 72).map_err(|_| Malformed)?;
-        if offset.checked_add(u64::from(length)).is_none_or(|end| end > i64::MAX as u64) {
+        if file_range_end(offset, length).is_none() {
             return Err(InvalidRange);
         }
         let minimum = u32le(p, 96).map_err(|_| Malformed)?;
@@ -129,5 +173,64 @@ impl Message<'_> {
         };
         // The reserved word at 68 is ignored, not another namespace or mode.
         Ok(CloseRequest { open: self.io_open_reference(72)?, mode })
+    }
+
+    /// MS-SMB2 §§2.2.21 and 3.3.5.13. Borrow exactly Length TCP bytes of this
+    /// message, never a descriptor, an adjacent command, or compound padding.
+    pub(in crate::smb) fn write_request(&self, max_write: u32) -> Result<WriteRequest<'a>, IoFieldError> {
+        use IoFieldError::*;
+        const FIXED: usize = 112;
+        if self.header.command != 0x0009 {
+            return Err(WrongCommand);
+        }
+        let p = self.raw;
+        if p.len() < FIXED || u16le(p, 64).map_err(|_| Malformed)? != 49 {
+            return Err(Malformed);
+        }
+        if u32le(p, 96).map_err(|_| Malformed)? != 0 {
+            return Err(Malformed); // TCP only, including when Length is zero
+        }
+        let length = u32le(p, 68).map_err(|_| Malformed)?;
+        if length > max_write {
+            return Err(ExceedsMaxWrite);
+        }
+        let at = usize::from(u16le(p, 66).map_err(|_| Malformed)?);
+        let payload = if length == 0 && at == 0 {
+            &p[0..0]
+        } else {
+            if !(FIXED..=0x100).contains(&at) {
+                return Err(Malformed);
+            }
+            bytes(p, at, usize::try_from(length).map_err(|_| Malformed)?).map_err(|_| Malformed)?
+        };
+        let raw_offset = u64le(p, 72).map_err(|_| Malformed)?;
+        let position = if raw_offset == u64::MAX {
+            WritePosition::EndOfFile // FILE_WRITE_TO_END_OF_FILE
+        } else if file_range_end(raw_offset, length).is_some() {
+            WritePosition::At(raw_offset)
+        } else {
+            return Err(InvalidRange); // no implicit current-file-position mode
+        };
+        let flags = u32le(p, 108).map_err(|_| Malformed)?;
+        // §3.3.5.13 says to ignore undefined flag bits; CHANNEL_NONE also
+        // requires ignoring RemainingBytes and both channel-data fields.
+        Ok(WriteRequest {
+            open: self.io_open_reference(80)?,
+            data: WriteData {
+                position, payload, length, write_through: flags & 1 != 0, unbuffered: flags & 2 != 0,
+            },
+        })
+    }
+
+    /// MS-SMB2 §2.2.17. Neither reserved field is a flush mode.
+    pub(in crate::smb) fn flush_request(&self) -> Result<FlushRequest, IoFieldError> {
+        use IoFieldError::*;
+        if self.header.command != 0x0007 {
+            return Err(WrongCommand);
+        }
+        if self.raw.len() < 88 || u16le(self.raw, 64).map_err(|_| Malformed)? != 24 {
+            return Err(Malformed);
+        }
+        Ok(FlushRequest { open: self.io_open_reference(72)? })
     }
 }

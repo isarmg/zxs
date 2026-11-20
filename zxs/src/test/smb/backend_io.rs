@@ -242,3 +242,202 @@ fn explicit_close_consumes_the_hold_while_drop_never_auto_closes_or_flushes() {
     assert_eq!(open(true).close(CloseMode::Plain).err(), Some("unconfirmed close"));
     drop(open(false)); // error released the old vote, without publishing success
 }
+
+fn write_packet(at: usize, offset: u64, flags: u32, payload: &[u8]) -> Vec<u8> {
+    let mut req = base(9, 49, 112, 80);
+    req[66..68].copy_from_slice(&(at as u16).to_le_bytes());
+    req[68..72].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    req[72..80].copy_from_slice(&offset.to_le_bytes());
+    req[108..112].copy_from_slice(&flags.to_le_bytes());
+    if at >= 112 {
+        req.resize(at, 0);
+    }
+    req.extend_from_slice(payload);
+    req
+}
+
+fn flush_packet() -> Vec<u8> { base(7, 24, 88, 72) }
+
+fn data(frame: &[u8]) -> WriteData<'_> {
+    compound(frame).messages()[0].write_request(MAX_READ).unwrap().data
+}
+
+#[test]
+fn write_borrows_exact_tcp_data_and_flags_not_framing_or_padding() {
+    let mut req = write_packet(120, 19, 0x8000_0003, b"abc");
+    req[100..108].fill(0xff); // ignored channel data under CHANNEL_NONE
+    req.extend_from_slice(b"pad");
+    let frame = framed(&[&req]);
+    let batch = compound(&frame);
+    let command = batch.messages()[0].write_request(MAX_READ).unwrap();
+    assert_eq!(command.open, OpenReference::Explicit(WireOpenId {
+        persistent: PERSISTENT, volatile: VOLATILE,
+    }));
+    assert_eq!(command.data.position(), WritePosition::At(19));
+    assert_eq!(command.data.payload(), b"abc");
+    assert_eq!(command.data.length(), 3);
+    assert!(command.data.write_through() && command.data.unbuffered());
+    assert_eq!(batch.messages()[0].write_request(2).err(), Some(IoFieldError::ExceedsMaxWrite));
+    req[96] = 1;
+    let frame = framed(&[&req]);
+    assert_eq!(compound(&frame).messages()[0].write_request(MAX_READ).err(), Some(IoFieldError::Malformed));
+}
+
+#[test]
+fn write_checks_offsets_and_preserves_symbolic_eof_without_implicit_resize() {
+    for at in [111, 257] {
+        let frame = framed(&[&write_packet(at, 2, 0, b"x")]);
+        assert_eq!(compound(&frame).messages()[0].write_request(MAX_READ).err(), Some(IoFieldError::Malformed));
+    }
+    for offset in [u64::MAX - 1, i64::MAX as u64] {
+        let frame = framed(&[&write_packet(112, offset, 0, b"x")]);
+        assert_eq!(compound(&frame).messages()[0].write_request(MAX_READ).err(), Some(IoFieldError::InvalidRange));
+    }
+    let frame = framed(&[&write_packet(256, u64::MAX, 1, b"x")]);
+    assert_eq!(data(&frame).position(), WritePosition::EndOfFile);
+    for at in [0, 112] {
+        let frame = framed(&[&write_packet(at, i64::MAX as u64, 0, b"")]);
+        assert_eq!(data(&frame).position(), WritePosition::At(i64::MAX as u64));
+        assert!(data(&frame).payload().is_empty());
+    }
+}
+
+#[test]
+fn write_cannot_borrow_from_flush_and_flush_reserved_bits_are_ignored() {
+    let mut write = write_packet(112, 0, 0, b"abc");
+    write.truncate(112); // no body in this command
+    write[20..24].copy_from_slice(&112u32.to_le_bytes());
+    let mut flush = flush_packet();
+    flush[16..20].copy_from_slice(&4u32.to_le_bytes());
+    flush[66..72].fill(0xff);
+    flush[72..88].fill(0xff);
+    let frame = framed(&[&write, &flush]);
+    let batch = compound(&frame);
+    assert_eq!(batch.messages()[0].write_request(MAX_READ).err(), Some(IoFieldError::Malformed));
+    assert_eq!(batch.messages()[1].flush_request().unwrap().open, OpenReference::PreviousInCompound);
+    // Wire extraction of PreviousInCompound is not permission after a
+    // failing predecessor; the real signed dispatcher must propagate that error.
+    flush[16..20].fill(0);
+    flush[72..80].copy_from_slice(&PERSISTENT.to_le_bytes());
+    flush[80..88].copy_from_slice(&VOLATILE.to_le_bytes());
+    let frame = framed(&[&flush]);
+    assert_eq!(compound(&frame).messages()[0].flush_request().unwrap().open,
+        OpenReference::Explicit(WireOpenId { persistent: PERSISTENT, volatile: VOLATILE }));
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WriteStep {
+    CheckEof,
+    Write(u64, usize),
+    Flush,
+}
+
+// Synthetic receipts for source checks only; no model of Core persistence.
+struct Writer<'a> {
+    seen: &'a std::cell::RefCell<Vec<WriteStep>>,
+    eof: u64,
+    mode: WriteOpenMode,
+    fail_flush: bool,
+}
+impl CheckedWrite for Writer<'_> {
+    type Error = &'static str;
+    fn writer_eof_checked(&self) -> Result<u64, Self::Error> {
+        self.seen.borrow_mut().push(WriteStep::CheckEof);
+        Ok(self.eof)
+    }
+    fn write_open_mode(&self) -> WriteOpenMode { self.mode }
+    fn write_checked(&mut self, offset: u64, input: &[u8]) -> Result<(), Self::Error> {
+        self.seen.borrow_mut().push(WriteStep::Write(offset, input.len()));
+        if !input.is_empty() {
+            self.eof = self.eof.max(offset + input.len() as u64);
+        }
+        Ok(())
+    }
+    fn flush_checked(&mut self) -> Result<(), Self::Error> {
+        self.seen.borrow_mut().push(WriteStep::Flush);
+        if self.fail_flush { return Err("original flush failed"); }
+        Ok(())
+    }
+}
+
+#[test]
+fn append_and_overwrite_use_original_staged_eof_and_separate_grants() {
+    use WriteStep::*;
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let open = |rights, eof| original(&table, facts(FILE, rights),
+        Writer { seen: &seen, eof, mode: WriteOpenMode::Buffered, fail_flush: false }, 7);
+    let append = framed(&[&write_packet(112, u64::MAX, 0, b"ab")]);
+    let mut h = open(4, 19); // append only, exact original EOF, not a snapshot
+    assert_eq!(h.write(data(&append)), Ok(WriteCompletion::Applied(2)));
+    assert_eq!(h.write(data(&append)), Ok(WriteCompletion::Applied(2)));
+    assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(19, 2), CheckEof, Write(21, 2)]);
+    for at in [18, 24] {
+        let frame = framed(&[&write_packet(112, at, 0, b"x")]);
+        seen.borrow_mut().clear();
+        assert_eq!(h.write(data(&frame)), Err(WriteFault::AccessDenied));
+        assert_eq!(seen.borrow().as_slice(), &[CheckEof]);
+    }
+    drop(h);
+    let mut h = open(2, 19); // can overwrite, can't extend
+    let old = framed(&[&write_packet(112, 17, 0, b"ab")]);
+    let overlap = framed(&[&write_packet(112, 18, 0, b"ab")]);
+    assert_eq!(h.write(data(&old)), Ok(WriteCompletion::Applied(2)));
+    assert_eq!(h.write(data(&overlap)), Err(WriteFault::AccessDenied));
+    assert_eq!(h.write(data(&append)), Err(WriteFault::AccessDenied));
+    drop(h);
+    let mut h = open(6, i64::MAX as u64);
+    assert_eq!(h.write(data(&append)), Err(WriteFault::InvalidRange));
+}
+
+#[test]
+fn reserved_mode_combinations_do_not_write_and_write_through_waits_for_core() {
+    use WriteOpenMode::*;
+    use WriteStep::*;
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let open = |mode, fail_flush| original(&table, facts(FILE, 6),
+        Writer { seen: &seen, eof: 4, mode, fail_flush }, 7);
+    for (mode, flags, err) in [
+        (Buffered, 1, WriteFault::InvalidWriteCombination),
+        (BufferedWriteThrough, 1, WriteFault::InvalidWriteCombination),
+        (Buffered, 2, WriteFault::UnbufferedUnavailable),
+        (Buffered, 3, WriteFault::UnbufferedUnavailable),
+        (Unbuffered, 0, WriteFault::UnbufferedUnavailable),
+    ] {
+        let wire = framed(&[&write_packet(112, 0, flags, b"a")]);
+        assert_eq!(open(mode, false).write(data(&wire)), Err(err));
+        assert!(seen.borrow().is_empty());
+    }
+
+    let wire = framed(&[&write_packet(112, 1, 0, b"ab")]);
+    assert_eq!(open(BufferedWriteThrough, false).write(data(&wire)),
+        Ok(WriteCompletion::Confirmed(2)));
+    assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(1, 2), Flush]);
+    seen.borrow_mut().clear();
+    let mut h = open(BufferedWriteThrough, true);
+    assert_eq!(h.write(data(&wire)), Err(WriteFault::Confirmation("original flush failed")));
+    assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(1, 2), Flush]);
+    // A confirmation failure does not silently drop or close this original.
+    assert_eq!(h.flush(), Err(WriteFault::Confirmation("original flush failed")));
+}
+
+#[test]
+fn empty_write_and_actual_flush_never_imply_history_or_a_new_open() {
+    use WriteStep::*;
+    let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let open = |object, rights| original(&table, facts(object, rights),
+        Writer { seen: &seen, eof: 4, mode: WriteOpenMode::Buffered, fail_flush: false }, 7);
+    let wire = framed(&[&write_packet(0, 52, 0, b"")]);
+    assert_eq!(open(FILE, 1).write(data(&wire)), Err(WriteFault::AccessDenied));
+    assert_eq!(open(FILE, 1).flush(), Err(WriteFault::AccessDenied));
+    assert_eq!(open(Object::Namespace(POOL), 2).flush(), Err(WriteFault::DirectoryFlushUnavailable));
+    assert!(seen.borrow().is_empty());
+    let mut h = open(FILE, 6);
+    assert_eq!(h.write(data(&wire)), Ok(WriteCompletion::Applied(0)));
+    assert_eq!(h.original.eof, 4);
+    assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0)]);
+    assert_eq!(h.flush(), Ok(()));
+    assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0), Flush]);
+}

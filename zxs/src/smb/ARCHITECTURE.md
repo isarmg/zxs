@@ -14,13 +14,17 @@
 
 下个签名切片的两条独立验收：客户端未给 Signing Capabilities 时按规范回落到 **AES-128-CMAC 算法**，不是关闭签名；显式提议并选择 AES-128-CMAC 时也一样。处理了合法非空但无共同算法的 context 时，规范也指定 AES-CMAC；计数为零或被截断的 context 不是这条回落，应拒绝。两条都要在真实认证成功后的第一条普通命令上分别验证正确签名放行、缺失或错误签名拒绝。原生三端验收必须分开“无缓存端点的首次访问”和“同一身份重连”；记录 Windows 冷访问有无 multi-protocol opener，旧服务缓存的热路径不是首连通过。不增加 SMB1 文件操作或降级。这些均为待验收条件，未实施在线验证。
 
-## READ / CLOSE 请求与原打开边界（未接线）
+## 文件 I/O 请求与原打开边界（未接线）
 
 [READ](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/21e8b343-34e9-4fca-8d93-03dd2d3e961e) 和 [CLOSE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/f2b4183a-29c2-4fc0-a5de-fe290408f68c) 从各自命令取得范围或关闭意图；普通引用携两半 SMB2_FILEID，关联引用只继承同一链紧邻前件的已证实 ID，不能以客户端填入的另一组 ID 或最近打开回退。实际入口仍须验签、验 credits 与当前连接／会话／树，再以两半与原代次匹配唯一真实 OPEN；本片没有认证发行者或第二张路由表。后端入口只接已成功绑定的 Held，不收线上的 FileId、路径或替代对象。
 
 READ 保持原请求长度供 MaxReadSize／credits／范围锁核验，偏移与终点不得超出有符号文件范围。仅 FILE 的实际 FILE_READ_DATA 可读，不把目录的列出权、执行权或共享票当读许可；原会话、媒体／视图、范围锁及输出前后的资格由真实适配复核。只在原适配确认后区分零长度成功、满足最低计数的短读、EOF／小于 MinimumCount、权限或 I/O 错误。TCP 不接受 RDMA 描述符，不把实际无法提供的直接读冒作成功；压缩提示本身不协商能力。回复容量不足不伪装成 EOF，也不暴露不完整校验的正文。
 
 显式 CLOSE 消耗原打开的持有权，不等于异常断连。以后接线须先令该 OPEN 不可再路由并结束在途操作；`POSTQUERY_ATTRIB` 只返回原句柄可获且有权的真实属性。属性取不到不冒充有效；关闭与脏普通写句柄的最后确认失败单独保留，正常写关闭时由 Core 在原写权内收尾，释放底层对象后才退共享票。丢连接／撤权只清理，绝不能隐式写穿、flush 或发布历史。这部分只定义请求和原对象调用边界，没有真正后端接线或成功响应编码。
+
+[WRITE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/829f93f5-ed10-4f12-8347-42d235019459) 只借用本命令声明的正文，不含其他命令、预填字节或尾随填充；原请求长度供 MaxWriteSize 和 credits，TCP 不消费 RDMA 描述符。追加位置来自同一个仍获权的实际写者的当前稿 EOF，不看旧读句柄的长度，不把对 EOF 写或空写当作 SET_END_OF_FILE。仅追加的权限不改写或填出空洞，只能命中该 EOF；跨出原长需要明确追加权。普通写确认原写者已接收该范围，不承诺已经持久化。
+
+逐请求 WRITE_THROUGH 不是 CREATE 的 FILE_WRITE_THROUGH 模式。按 3.1.1 组合规则，普通缓冲打开上只有逐请求写穿标志时返回参数错误；真正的直接写没有接，不退化成缓冲成功。[Apple 原生源码](https://github.com/apple-oss-distributions/smb/blob/a4320c1ed655fe99ca882a43c84cd820ea10d2af/kernel/netsmb/smb_smb_2.c#L7338-L7367) 有特定错误后的重试，不代表该平台已验收。原持有打开要求写穿时，实际写入后还必须等同一写者完成确认；[显式 FLUSH](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/026984f6-38af-4408-8200-50557eb0a286) 也只让实际有写权的原 FILE 写者确认；目录权限不变成卷同步。失败仍留在原写者与原批次的状态机，不冒充刷盘、成功关闭或正式提交。不提供伪造写者、额外正文、响应编码或实际调度。
 
 ## 目标与分工
 
