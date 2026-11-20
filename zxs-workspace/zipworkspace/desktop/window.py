@@ -40,7 +40,7 @@ class Window(QMainWindow):
     def inform(self, message):
         self.note.setText(str(message))
 
-    def job(self, title, work, apply, *, failed=None, cancel=None):
+    def job(self, title, work, apply, *, failed=None, cancel=None, cancel_text=None):
         if self.pending is not None: return
         self.tabs.setEnabled(False)
         self.inform(title)
@@ -53,6 +53,7 @@ class Window(QMainWindow):
             raise
         self.pending = (future, apply, failed)
         self.stop_transfer = cancel
+        self.transfer_cancel.setText(cancel_text or "取消本次复制（发布前）")
         self.transfer_cancel.setEnabled(cancel is not None)
         self.transfer_cancel.setVisible(cancel is not None)
         return future
@@ -63,7 +64,7 @@ class Window(QMainWindow):
         self.stop_transfer = None
         self.transfer_cancel.setEnabled(False)
         if stop():
-            self.inform("已请求在正式发布前取消。请等待正在进行的系统调用返回。")
+            self.inform("已请求取消。请等待正在进行的系统调用返回。")
         else:
             self.inform("复制已开始正式发布或已经结束，不能撤销。正在核对本次结果。")
 
@@ -95,6 +96,7 @@ class Window(QMainWindow):
             if self.archive.mount is not None and not self.archive.mount.close_window():
                 event.ignore(); return
             self.archive.close_search()
+            self.archive.close_text()
             self.archive.checkout.close_session()
             if self.archive.selection is not None: self.archive.selection.release_display()
             self.plain_import.release_display()

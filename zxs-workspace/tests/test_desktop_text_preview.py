@@ -1,0 +1,143 @@
+"""Source fixtures for the desktop's read-only, original-member literal preview."""
+from concurrent.futures import Future
+import hashlib
+from importlib.util import find_spec
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+from zipworkspace.desktop import text_preview
+from zipworkspace.desktop.selection import Selection
+from zipworkspace.model import Commit, Manifest, Rejected
+
+
+class DesktopTextPreview(unittest.TestCase):
+    def setUp(self):
+        room = tempfile.TemporaryDirectory()
+        self.addCleanup(room.cleanup)
+        self.root = Path(room.name)
+        self.count = 0
+
+    def archive(self, payload, *, name="folder/notes"):
+        self.count += 1
+        path = self.root / f"copy-{self.count}.zxs"
+        rows = Manifest()
+        with path.open("xb") as raw, zipfile.ZipFile(raw, "w") as z:
+            for leaf, data in ((name, payload), ("other/notes", b"unselected")):
+                rows.add(leaf, False, len(data), hashlib.sha256(data).hexdigest())
+                z.writestr(leaf, data)
+            z.comment = Commit("1"*32, "2"*32, 1, "3"*32, None, rows.digest()).encode()
+        selected = Selection.open(path, retain=True)
+        self.addCleanup(selected.release_display)
+        return selected
+
+    def get(self, selected, *, check=lambda: None):
+        return text_preview.prepare(selected, "folder", selected.browser.entry("folder", "notes"), check=check)
+
+    def test_only_original_selected_body_and_plain_unicode_no_named_reopen(self):
+        raw = b"<literal>\r\n" + "中文𠀀".encode()
+        chosen = self.archive(raw)
+        fd = chosen.held.fileno()
+        os.lseek(fd, 19, os.SEEK_SET)
+        with patch.object(os, "open", side_effect=AssertionError("preview never opens the source by name")):
+            report = self.get(chosen)
+        self.assertEqual(report.path, "folder/notes")
+        self.assertEqual(report.bytes_total, len(raw))
+        self.assertEqual(report.bytes_shown, len(raw))
+        self.assertEqual(report.pages, ("<literal>\n中文𠀀",))
+        self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 19)
+        self.assertEqual(self.get(self.archive(b"")).pages, ("",))
+        wrong = chosen.browser.entry("other", "notes")
+        with self.assertRaises(Rejected):
+            text_preview.prepare(chosen, "folder", wrong, check=lambda: None)
+
+    def test_preview_never_silently_replaces_bad_or_control_utf8(self):
+        for sample in (b"a\xff", b"a\r", "a\u202eb".encode(), "a\ufe0f".encode()):
+            with self.subTest(sample=sample):
+                with self.assertRaises(Rejected): self.get(self.archive(sample))
+
+    def test_large_prefix_proves_complete_member_and_never_cuts_a_scalar_or_crlf(self):
+        pre = b"a" * (text_preview.LIMIT - 1)
+        for tail in ("𠀀tail".encode(), b"\r\nnot necessarily UTF-8\xff"):
+            with self.subTest(tail=tail):
+                raw = pre + tail
+                report = self.get(self.archive(raw))
+                self.assertEqual((report.bytes_total, report.bytes_shown), (len(raw), len(pre)))
+                self.assertEqual("".join(report.pages).encode(), pre)
+        for tail in (b"\xf0\x80bad", "\u202eafter".encode(), b"\rx"):
+            with self.assertRaises(Rejected): self.get(self.archive(pre + tail))
+
+    def test_page_geometry_is_bounded_with_an_unchanged_join_and_cancellable_scan(self):
+        text = ("a"*8191) + "𠀀" + "\n"*800 + "end"
+        report = self.get(self.archive(text.encode()))
+        self.assertEqual("".join(report.pages), text)
+        for page in report.pages:
+            self.assertLessEqual(len(page.encode("utf-16-le"))//2, text_preview.UNITS_PER_PAGE)
+            self.assertLessEqual(page.count("\n"), text_preview.LINES_PER_PAGE)
+        stop = 0
+        def check():
+            nonlocal stop
+            stop += 1
+            if stop == 4: raise Rejected("fixture cancellation")
+        with self.assertRaisesRegex(Rejected, "fixture cancellation"):
+            self.get(self.archive(text.encode()), check=check)
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_qt_reads_only_after_confirmation_and_keeps_old_result_out_of_a_new_row(self):
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit
+        from zipworkspace.desktop import archive_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        self.addCleanup(win.close)
+        pane = win.archive
+        chosen = self.archive(b"<literal>")
+        pane.show_selection(chosen)
+
+        def select_original():
+            pane.show_folder("folder")
+            pane.files.selectRow(0)
+            self.assertTrue(pane.preview_file.isEnabled())
+
+        select_original()
+        with patch.object(archive_pane, "confirm", return_value=False), \
+             patch.object(win.pool, "submit", side_effect=AssertionError("no reading without confirmation")):
+            pane.preview_file.click()
+
+        def pending():
+            select_original()
+            task = Future()
+            with patch.object(archive_pane, "confirm", return_value=True), \
+                 patch.object(win.pool, "submit", return_value=task) as worker:
+                pane.preview_file.click()
+            self.assertFalse(win.transfer_cancel.isHidden())
+            return task, worker.call_args.args[0]
+
+        first, work = pending()
+        first.set_result(work())
+        pane.show_folder("other"); pane.files.selectRow(0)  # same basename, other original row
+        win.poll()
+        self.assertIsNone(pane.text_dialog)
+
+        second, work = pending()
+        second.set_result(work())
+        win.poll()
+        self.assertIsNotNone(pane.text_dialog)
+        literal = pane.text_dialog.findChild(QPlainTextEdit)
+        self.assertTrue(literal.isReadOnly())
+        self.assertEqual(literal.toPlainText(), "<literal>")
+        pane.close_text()
+        self.assertIsNone(pane.text_dialog)
+
+    @unittest.skipUnless(os.name == "posix", "replace a read-open name on POSIX")
+    def test_equal_bytes_replacement_is_not_the_held_original(self):
+        chosen = self.archive(b"read only")
+        old = self.root / "previous.zxs"
+        chosen.path.rename(old)
+        chosen.path.write_bytes(old.read_bytes())
+        with self.assertRaisesRegex(Rejected, "原件已改变"):
+            self.get(chosen)

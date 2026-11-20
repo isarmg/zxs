@@ -1,6 +1,8 @@
 """Real archive navigation, selected store, branch head and historical node actions."""
 from pathlib import Path
 import sys
+from threading import Event
+
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout, QWidget
 
 from .comparison_pane import ComparisonPane
@@ -17,6 +19,7 @@ class ArchivePane(QWidget):
         self.owner = owner
         self.selection = self.store = self.catalog = self.file_page = None
         self.directory, self.page_number, self.search_dialog = "", 0, None
+        self.text_dialog = None
         layout = QVBoxLayout(self)
         actions = QHBoxLayout()
         actions.addWidget(button("打开 .zxs 快照…", self.choose))
@@ -46,11 +49,13 @@ class ArchivePane(QWidget):
         self.files = Table(("名称", "类型", "字节数", "SHA-256"), "快照里的直接子项")
         self.files.doubleClicked.connect(lambda _index: self.enter())
         fl.addWidget(self.files)
+        self.preview_file = button("预览选中的纯文本…", self.preview_selected)
+        fl.addWidget(self.preview_file)
+        self.files.selectionModel().selectionChanged.connect(self.update_member_action)
         self.save_member_action = None
         if sys.platform == "linux":
             self.save_member_action = button("另存选中的文件…", self.choose_member)
             self.save_member_action.setObjectName("save-selected-member")
-            self.files.selectionModel().selectionChanged.connect(self.update_member_action)
             fl.addWidget(self.save_member_action)
         nav = QHBoxLayout()
         self.up = button("上一级", self.go_up)
@@ -102,6 +107,7 @@ class ArchivePane(QWidget):
 
     def clear_document(self):
         self.close_search()
+        self.close_text()
         if self.mount is not None: self.mount.set_snapshot(None)
         self.checkout.set_snapshot(None)  # Revoke the old branch source before releasing its display.
         if self.selection is not None: self.selection.release_display()
@@ -124,15 +130,74 @@ class ArchivePane(QWidget):
         if not name: return
         self.clear_document()
         self.views.setCurrentIndex(0)
-        retain = self.mount is not None
-        self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name, retain=retain), self.show_selection)
+        self.owner.job("正在核验所选快照中的全部成员…", lambda: Selection.open(name, retain=True), self.show_selection)
 
     def update_member_action(self, *_):
+        entry = self.files.item() if self.file_page is not None else None
+        self.preview_file.setEnabled(entry is not None and entry.kind == "file" and
+                                     self.selection is not None and self.selection.held is not None)
         if self.save_member_action is not None:
-            entry = self.files.item() if self.file_page is not None else None
             self.save_member_action.setEnabled(entry is not None and entry.kind in ("directory", "file"))
             self.save_member_action.setText("另存选中的文件夹…" if entry is not None and entry.kind == "directory" else
                                             "另存选中的文件…")
+
+    def close_text(self):
+        out, self.text_dialog = self.text_dialog, None
+        if out is not None: out.reject()
+
+    def preview_selected(self):
+        selected, view, entry = self.selection, self.file_page, self.files.item()
+        if (selected is None or view is None or entry is None or entry.kind != "file" or
+                self.owner.pending is not None or self.text_dialog is not None):
+            return
+        from . import text_preview
+        from ..model import Rejected
+
+        def current():
+            return (selected is self.selection and view is self.file_page and entry is self.files.item() and
+                    selected.held is not None and not selected.held.closed)
+
+        name = f"{view.directory}/{entry.name}" if view.directory else entry.name
+        size = entry.size_bytes
+        if not current() or not confirm(self, "核验后查看纯文本",
+                f"归档：{str(selected.path)!r}\n成员：{name!r}\n将从本次原件读取全部 {size:,} 字节。"
+                + ("\n显示通过 UTF-8 核验的全文。" if size <= text_preview.LIMIT else
+                   "\n仅判断并显示通过核验的开头最多 256 KiB，后续不判定为文本。")
+                + "\n不打开外部应用、不写文件；可取消。",
+                attestation="我确认只查看所选成员，不启动任何程序。", action_text="核验后预览") or not current():
+            return
+        stopped = Event()
+
+        def cancel():
+            stopped.set()
+            return True
+
+        def check():
+            if stopped.is_set(): raise Rejected("已取消本次预览，未显示或保存正文。")
+
+        def read():
+            try: return text_preview.prepare(selected, view.directory, entry, check=check), None
+            except Exception as error: return None, error
+
+        def apply(result):
+            preview, error = result
+            if stopped.is_set():
+                self.owner.inform("已取消本次预览，未显示或保存正文。")
+            elif not current():
+                self.owner.inform("选择已变更，没有显示上一个成员的预览。")
+            elif error is not None:
+                self.owner.inform(str(error))
+            else:
+                out = text_preview.dialog(self, preview)
+                self.text_dialog = out
+                def finished(_result):
+                    if self.text_dialog is out: self.text_dialog = None
+                out.finished.connect(finished)
+                out.open()
+                self.owner.inform("本次实读内容与原成员的 SHA-256 相符；未确认来源，没有交给外部应用。")
+
+        self.owner.job(f"正在核验所选成员的全部 {size:,} 字节…",
+                       read, apply, cancel=cancel, cancel_text="取消本次文本预览")
 
     def choose_member(self):
         selected, page, entry = self.selection, self.file_page, self.files.item()
@@ -351,6 +416,7 @@ class ArchivePane(QWidget):
 
     def show_selection(self, selected):
         self.close_search()
+        self.close_text()
         if self.mount is not None: self.mount.set_snapshot(selected)
         self.checkout.set_snapshot(selected)
         if self.selection is not None and self.selection is not selected: self.selection.release_display()
@@ -404,10 +470,10 @@ class ArchivePane(QWidget):
             self.owner.inform("请选择有原始证明的节点；缺少祖先的分支头不可选。")
             return
         if self.mount is not None: self.mount.changing()
-        store, retain = self.store, self.mount is not None
+        store = self.store
         def read_original():
             store.check()
-            original = Selection.open(node.path, expected=node, retain=retain)
+            original = Selection.open(node.path, expected=node, retain=True)
             try:
                 store.check()
                 return original

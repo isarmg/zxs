@@ -1,5 +1,5 @@
 """A verified display is not authority to write or a claim about raw ZIP bytes."""
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
@@ -21,7 +21,7 @@ class _DisplayFD:
     _fd = -1
 
     def __init__(self, doc):
-        self._lock = Lock()
+        self._lock, self._seek_lock = Lock(), Lock()
         self._fd = os.dup(doc.fileno())
     @property
     def closed(self): return self._fd < 0
@@ -30,6 +30,20 @@ class _DisplayFD:
         return self._fd
     def duplicate(self):
         with self._lock: return os.dup(self.fileno())
+    @contextmanager
+    def read_lease(self):
+        # On Windows the CRT duplicate shares seek state with this original.
+        # Preview readers are serialized; other desktop tasks on Windows use
+        # their own independently opened archival streams. POSIX uses pread.
+        with self._seek_lock:
+            fd = self.duplicate()
+            try:
+                position = None if hasattr(os, "pread") else os.lseek(fd, 0, os.SEEK_CUR)
+                try: yield fd
+                finally:
+                    if position is not None: os.lseek(fd, position, os.SEEK_SET)
+            finally: os.close(fd)
+
     def close(self):
         if self.closed: return  # also safe after a failed construction
         with self._lock:
