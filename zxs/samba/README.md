@@ -99,7 +99,7 @@ QUERY_DIRECTORY 复用原真实会话、FID、FILE_LIST_DIRECTORY、输出额度
 
 ### 目录和 FILE 的原生 QUERY_INFO
 
-在已授权且已打开的普通逻辑根句柄上，支持 FileAllInformation、Basic、Standard、Internal 和 NetworkOpen 五类文件属性。复用 Samba 对请求长度、协商上限、credits 和 FID 的实际检查；用该原 TCON 的零行查询再核 SMB 当前代、共享与实际已持 F，待回调再核同一会话和根柄。由 Samba 原信息编码器返回逻辑目录、逻辑序号、零数据长度与未提供的时间；不回退宿主 stat，不返回底层文件系统信息、EA 或安全描述符。普通及回收 FILE 的已选真实柄也支持这五类，并可查询本柄实际已授 Access 与无重解析点的 AttributeTag。成员用同一私端的零字节确认再核原授权和已选图，不读正文，也不借 FILE_READ_DATA 授权；需要 READ_ATTRIBUTES 的类仍核该权。EOF 来自本柄实际显示的逻辑长度；分配字段和 CREATE/目录页一样是逻辑长度按 4 KiB 取整的 SMB 展示值（到带符号上限时用最大可表示的 4 KiB 倍数），不是宿主磁盘占用、目录配额或预留。普通名的 DeletePending 取真实原生共享状态；FileAll 不带路径或文件名。未知类、文件系统属性、EA、安全描述符等不借宿主实现。空路径或一个首装目录名的现有对象 `FILE_OPEN` 可以不带 FILE_DIRECTORY_FILE，仍须拿原 TCON 上的实际目录选择；不会因省略类型而新建，未知名称也不成为目录。它不接受额外 CREATE 上下文，不在已有深层文件/目录名之间猜类型。未验证 Linux/Windows/macOS 客户端挂载或应用保存，也未执行用例。
+在已授权且已打开的普通逻辑根句柄上，支持 FileAllInformation、Basic、Standard、Internal 和 NetworkOpen 五类文件属性。复用 Samba 对请求长度、协商上限、credits 和 FID 的实际检查；用该原 TCON 的零行查询再核 SMB 当前代、共享与实际已持 F，待回调再核同一会话和根柄。由 Samba 原信息编码器返回逻辑目录、逻辑序号、零数据长度与未提供的时间；不回退宿主 stat，不返回底层文件系统信息、EA 或安全描述符。普通及回收 FILE 的已选真实柄也支持这五类，并可查询本柄实际已授 Access 与无重解析点的 AttributeTag。成员用同一私端的零字节确认再核原授权和已选图，不读正文，也不借 FILE_READ_DATA 授权；需要 READ_ATTRIBUTES 的类仍核该权。EOF 来自本柄实际显示的逻辑长度；分配字段和 CREATE/目录页一样是逻辑长度按 4 KiB 取整的 SMB 展示值（到带符号上限时用最大可表示的 4 KiB 倍数），不是宿主磁盘占用、目录配额或预留。普通名的 DeletePending 取真实原生共享状态；FileAll 不带路径或文件名。未知类、文件系统属性、EA、安全描述符等不借宿主实现。空路径或一个首装目录名的现有对象 `FILE_OPEN` 可以不带 FILE_DIRECTORY_FILE，仍须拿原 TCON 上的实际目录选择；不会因省略类型而新建，未知名称也不成为目录。深层文件/目录名仍按显式类型，不以权限或挂载出错猜另一种对象。CREATE 可请求 QFid，返回与 FileInternalInformation 相同的逻辑文件号和单一虚拟盘编号，不能提供唯一文件号的目录用标准全 1 标记，不暴露宿主 inode/卷号；结果仍来自已选的真句柄。符合结构的初次 RqLs 或 BATCH 的 DHnQ 只是提示，不给缓存、耐久重连或 replay。其余上下文（含 MxAc）仍未开放。未验证 Linux/Windows/macOS 客户端挂载或应用保存，也未执行用例。
 
 ### 普通 FILE 的一次 SMB2 READ
 

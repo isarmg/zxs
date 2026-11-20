@@ -32,6 +32,12 @@ static inline bool zxs_folder_ordinary_child(const struct zxs_smb_tree_cut *f)
 	return f!=NULL && f->volume_ordinal>=2 && f->volume_ordinal<64 &&
 		memcmp(f->directory,zero,16)!=0 && memcmp(f->directory_op,zero,16)!=0;
 }
+/* Wire-only number for FileInternalInformation and QFid; not a lock key. */
+static inline uint64_t zxs_wire_file_number(const struct files_struct *f)
+{
+	if(f==NULL || f->fsp_name==NULL)return 0;
+	return f->fsp_name->st.st_ex_ino==UINT64_MAX?UINT64_MAX:f->file_id.inode;
+}
 /* Stable complete native lock key; a directory's wire number is a separate projection. */
 static inline struct file_id zxs_directory_file_id(const struct zxs_smb_tree_cut *f)
 {

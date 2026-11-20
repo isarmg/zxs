@@ -3417,11 +3417,15 @@
  #include "smbd/smbXsrv_open.h"
  #include "../libcli/smb/smb_common.h"
  #include "../librpc/gen_ndr/ndr_security.h"
-@@ -126,6 +129,7 @@
- 			struct smb2_create_blobs in_context_blobs);
+@@ -123,9 +126,10 @@
+ 			uint32_t in_create_disposition,
+ 			uint32_t _in_create_options,
+ 			const char *in_name,
+-			struct smb2_create_blobs in_context_blobs);
++			struct smb2_create_blobs in_context_blobs,bool zxs_qfid);
  static NTSTATUS smbd_smb2_create_recv(struct tevent_req *req,
  			TALLOC_CTX *mem_ctx,
-+			DATA_BLOB *zxs_reserved_body,
++			DATA_BLOB *zxs_reserved_body,DATA_BLOB *zxs_reserved_context,
  			uint8_t *out_oplock_level,
  			uint32_t *out_create_action,
  			struct timespec *out_creation_ts,
@@ -3433,7 +3437,15 @@
  NTSTATUS smbd_smb2_request_process_create(struct smbd_smb2_request *smb2req)
  {
  	const uint8_t *inbody;
-@@ -245,6 +250,23 @@
+@@ -165,6 +170,7 @@
+ 	struct smb2_create_blobs in_context_blobs;
+ 	uint32_t context_offset = 0;
+ 	uint32_t context_available_length = 0;
++	bool zxs_qfid=false;
+ 	uint32_t dyn_offset;
+ 	NTSTATUS status;
+ 	bool ok;
+@@ -245,6 +251,23 @@
  		context_offset;
  	in_context_buffer.length = in_context_length;
  
@@ -3445,7 +3457,7 @@
 +		      (size_t)context_offset+in_context_length>name_offset))) {
 +			return smbd_smb2_request_error(smb2req,NT_STATUS_INVALID_PARAMETER);
 +		}
-+		if (!zxs_smb_uncached_open(in_oplock_level,in_context_buffer)) {
++		if (!zxs_smb_uncached_open(in_oplock_level,in_context_buffer,&zxs_qfid)) {
 +			return smbd_smb2_request_error(smb2req,NT_STATUS_NOT_SUPPORTED);
 +		}
 +		/* No cache grants, even with an upstream fake-oplocks setting.
@@ -3457,8 +3469,20 @@
  	/*
  	 * Now interpret the name and context buffers
  	 */
-@@ -443,7 +465,7 @@
+@@ -303,7 +326,7 @@
+ 				       in_create_disposition,
+ 				       in_create_options,
+ 				       in_name_string,
+-				       in_context_blobs);
++				       in_context_blobs,zxs_qfid);
+ 	if (tsubreq == NULL) {
+ 		smb2req->subreq = NULL;
+ 		return smbd_smb2_request_error(smb2req, NT_STATUS_NO_MEMORY);
+@@ -441,9 +464,10 @@
+ 					struct smbd_smb2_request);
+ 	DATA_BLOB outbody;
  	DATA_BLOB outdyn;
++	DATA_BLOB zxs_reserved_context=data_blob_null;
  	uint8_t out_oplock_level = 0;
  	uint32_t out_create_action = 0;
 -	connection_struct *conn = smb2req->tcon->compat;
@@ -3466,7 +3490,7 @@
  	struct timespec out_creation_ts = { 0, };
  	struct timespec out_last_access_ts = { 0, };
  	struct timespec out_last_write_ts = { 0, };
-@@ -460,8 +482,16 @@
+@@ -460,8 +484,16 @@
  	NTSTATUS status;
  	NTSTATUS error; /* transport error */
  
@@ -3479,11 +3503,35 @@
 +	conn = smb2req->tcon->compat;
  	status = smbd_smb2_create_recv(tsubreq,
  				       smb2req,
-+				       &outbody,
++				       &outbody,&zxs_reserved_context,
  				       &out_oplock_level,
  				       &out_create_action,
  				       &out_creation_ts,
-@@ -505,7 +535,9 @@
+@@ -490,22 +522,26 @@
+ 		return;
+ 	}
+ 
+-	status = smb2_create_blob_push(smb2req, &out_context_buffer, out_context_blobs);
+-	if (!NT_STATUS_IS_OK(status)) {
+-		error = smbd_smb2_request_error(smb2req, status);
+-		if (!NT_STATUS_IS_OK(error)) {
+-			smbd_server_connection_terminate(smb2req->xconn,
+-							 nt_errstr(error));
++	if (outbody.data!=NULL) { /* The managed response was allocated before its possible ACK. */
++		out_context_buffer=zxs_reserved_context;
++	} else {
++		status = smb2_create_blob_push(smb2req,&out_context_buffer,out_context_blobs);
++		if (!NT_STATUS_IS_OK(status)) {
++			error = smbd_smb2_request_error(smb2req,status);
++			if (!NT_STATUS_IS_OK(error)) {
++				smbd_server_connection_terminate(smb2req->xconn,nt_errstr(error));
++			}
+ 			return;
+ 		}
+-		return;
+ 	}
+ 
+ 	if (out_context_buffer.length > 0) {
  		out_context_buffer_offset = SMB2_HDR_BODY + 0x58;
  	}
  
@@ -3494,12 +3542,12 @@
  	if (outbody.data == NULL) {
  		error = smbd_smb2_request_error(smb2req, NT_STATUS_NO_MEMORY);
  		if (!NT_STATUS_IS_OK(error)) {
-@@ -675,6 +707,14 @@
+@@ -675,6 +711,14 @@
  	struct smbd_smb2_request *smb2req;
  	struct GUID req_guid;
  	struct smb_request *smb1req;
 +	struct tevent_req *zxs_wait;
-+	DATA_BLOB zxs_reserved_body; /* outer request owns storage; may be compound */
++	DATA_BLOB zxs_reserved_body,zxs_reserved_context; /* both owned by outer request */
 +	uint32_t zxs_access,zxs_share;
 +	bool zxs_writer,zxs_is_dir,zxs_nested,zxs_provisional,zxs_acknowledged,zxs_unknown;
 +	uint32_t zxs_disposition;
@@ -3509,7 +3557,7 @@
  	bool open_was_deferred;
  	struct tevent_immediate *im;
  	struct timeval request_time;
-@@ -884,8 +924,9 @@
+@@ -884,8 +928,9 @@
  }
  
  static void smbd_smb2_create_before_exec(struct tevent_req *req);
@@ -3520,15 +3568,25 @@
  
  static struct tevent_req *smbd_smb2_create_send(TALLOC_CTX *mem_ctx,
  			struct tevent_context *ev,
-@@ -941,6 +982,7 @@
+@@ -898,7 +943,7 @@
+ 			uint32_t in_create_disposition,
+ 			uint32_t _in_create_options,
+ 			const char *in_name,
+-			struct smb2_create_blobs in_context_blobs)
++			struct smb2_create_blobs in_context_blobs,bool zxs_qfid)
+ {
+ 	struct tevent_req *req = NULL;
+ 	struct smbd_smb2_create_state *state = NULL;
+@@ -941,6 +986,8 @@
  
  		DBG_DEBUG("reentrant for file %s\n", in_name);
  
 +		state->zxs_reserved_body = old_state->zxs_reserved_body;
++		state->zxs_reserved_context = old_state->zxs_reserved_context;
  		state->id = old_state->id;
  		state->request_time = old_state->request_time;
  		state->open_rec = talloc_move(state, &old_state->open_rec);
-@@ -963,6 +1005,11 @@
+@@ -963,6 +1010,11 @@
  	state->in_create_options &= ~(0x10); /* NTCREATEX_OPTIONS_SYNC_ALERT */
  	state->in_create_options &= ~(0x20); /* NTCREATEX_OPTIONS_ASYNC_ALERT */
  
@@ -3540,7 +3598,7 @@
  	in_file_attributes &= ~FILE_FLAG_POSIX_SEMANTICS;
  
  	is_dfs = (smb1req->flags2 & FLAGS2_DFS_PATHNAMES);
-@@ -1010,6 +1057,34 @@
+@@ -1010,6 +1062,40 @@
  		return tevent_req_post(req, state->ev);
  	}
  
@@ -3561,8 +3619,14 @@
 +			tevent_req_nterror(req,NT_STATUS_NOT_SUPPORTED);
 +			return tevent_req_post(req,state->ev);
 +		}
-+		/* With no CREATE contexts, the complete success body is fixed.
-+		 * Reserve it before issuing storage work or creating a native FSP. */
++		/* Both the fixed body and the one possible response context are
++		 * reserved before storage work or installing the native FSP. */
++		if (zxs_qfid && state->zxs_reserved_context.data==NULL) {
++			state->zxs_reserved_context.data=talloc_array(smb2req,uint8_t,ZXS_QFID_REPLY_BYTES);
++			if (tevent_req_nomem(state->zxs_reserved_context.data,req))
++				return tevent_req_post(req,state->ev);
++			state->zxs_reserved_context.length=ZXS_QFID_REPLY_BYTES;
++		}
 +		if (state->zxs_reserved_body.data == NULL) {
 +			state->zxs_reserved_body = smbd_smb2_generate_outbody(smb2req,0x58);
 +			if (tevent_req_nomem(state->zxs_reserved_body.data,req))
@@ -3575,7 +3639,7 @@
  	if (IS_IPC(smb1req->conn)) {
  		const char *pipe_name = in_name;
  
-@@ -1031,7 +1106,7 @@
+@@ -1031,7 +1117,7 @@
  		state->info = FILE_WAS_OPENED;
  
  		smbd_smb2_create_finish(req);
@@ -3584,7 +3648,7 @@
  	}
  
  	if (CAN_PRINT(smb1req->conn)) {
-@@ -1055,7 +1130,7 @@
+@@ -1055,7 +1141,7 @@
  		state->info = FILE_WAS_CREATED;
  
  		smbd_smb2_create_finish(req);
@@ -3593,7 +3657,7 @@
  	}
  
  	/* Check for trailing slash specific directory handling. */
-@@ -1084,13 +1159,13 @@
+@@ -1084,13 +1170,13 @@
  		state->update_open = false;
  		state->info = state->op->create_action;
  
@@ -3610,7 +3674,7 @@
  	}
  
  	if (state->do_durable_reconnect) {
-@@ -1163,13 +1238,13 @@
+@@ -1163,13 +1249,13 @@
  
  		state->info = FILE_WAS_OPENED;
  
@@ -3627,7 +3691,7 @@
  	}
  
  	if (state->requested_oplock_level == SMB2_OPLOCK_LEVEL_LEASE) {
-@@ -1318,13 +1393,13 @@
+@@ -1318,13 +1404,13 @@
  	}
  	state->op = state->result->op;
  
@@ -3644,7 +3708,7 @@
  }
  
  static void smbd_smb2_create_purge_replay_cache(struct tevent_req *req,
-@@ -1654,7 +1729,7 @@
+@@ -1654,7 +1740,7 @@
  	}
  }
  
@@ -3653,7 +3717,7 @@
  {
  	struct smbd_smb2_create_state *state = tevent_req_data(
  		req, struct smbd_smb2_create_state);
-@@ -1923,11 +1998,11 @@
+@@ -1923,11 +2009,11 @@
  		}
  	}
  
@@ -3667,7 +3731,7 @@
  }
  
  static void smbd_smb2_create_finish(struct tevent_req *req)
-@@ -1940,7 +2015,9 @@
+@@ -1940,7 +2026,9 @@
  
  	smb2req->compat_chain_fsp = smb1req->chain_fsp;
  
@@ -3678,7 +3742,7 @@
  		state->out_oplock_level = state->in_oplock_level;
  	} else if (lp_fake_oplocks(SNUM(smb2req->tcon->compat))) {
  		state->out_oplock_level	= state->in_oplock_level;
-@@ -1982,12 +2059,14 @@
+@@ -1982,12 +2070,14 @@
  
  	DBG_DEBUG("%s - %s\n", fsp_str_dbg(result), fsp_fnum_dbg(result));
  
@@ -3690,15 +3754,16 @@
  
  static NTSTATUS smbd_smb2_create_recv(struct tevent_req *req,
  			TALLOC_CTX *mem_ctx,
-+			DATA_BLOB *zxs_reserved_body,
++			DATA_BLOB *zxs_reserved_body,DATA_BLOB *zxs_reserved_context,
  			uint8_t *out_oplock_level,
  			uint32_t *out_create_action,
  			struct timespec *out_creation_ts,
-@@ -2057,6 +2136,7 @@
+@@ -2057,6 +2147,8 @@
  		return status;
  	}
  
 +	*zxs_reserved_body = state->zxs_reserved_body; /* NULL for stock */
++	*zxs_reserved_context = state->zxs_reserved_context;
  	*out_oplock_level	= state->out_oplock_level;
  	*out_create_action	= state->out_create_action;
  	*out_creation_ts	= state->out_creation_ts;
@@ -4320,7 +4385,7 @@
  	   I think this causes us to fail the IFSKIT
  	   BasicFileInformationTest. -tpot */
 -	file_id = SMB_VFS_FS_FILE_ID(conn, base_sp);
-+	file_id = logical ? (psbuf->st_ex_ino==UINT64_MAX?UINT64_MAX:fsp->file_id.inode) : SMB_VFS_FS_FILE_ID(conn, base_sp);
++	file_id = logical ? zxs_wire_file_number(fsp) : SMB_VFS_FS_FILE_ID(conn,base_sp);
  
  	*fixed_portion = 0;
  

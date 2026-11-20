@@ -413,28 +413,69 @@ static bool uncached_create_policy(void)
 {
 	uint8_t wire[24+0x34+4]={0};
 	DATA_BLOB none=data_blob_null, blob=data_blob_const(wire,sizeof(wire));
+	bool qfid=true;
 	uint32_t live=SMB2_CAP_ENCRYPTION|SMB2_CAP_LARGE_MTU;
 	if(zxs_smb_uncached_caps(live|SMB2_CAP_LEASING|SMB2_CAP_DIRECTORY_LEASING)!=live ||
-	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,none) ||
-	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_II,none) ||
-	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_EXCLUSIVE,none) ||
-	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,none) ||
-	   zxs_smb_uncached_open(UINT8_MAX,none))return false;
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,none,&qfid) || qfid ||
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_II,none,&qfid) ||
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_EXCLUSIVE,none,&qfid) ||
+	   !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,none,&qfid) ||
+	   zxs_smb_uncached_open(UINT8_MAX,none,&qfid))return false;
 	SSVAL(wire,4,16);SSVAL(wire,6,4);SSVAL(wire,10,24);
 	memcpy(wire+16,"RqLs",4);SIVAL(wire,12,0x34);
-	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob) ||
-	   zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,blob))return false;
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob,&qfid) || qfid ||
+	   zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,blob,&qfid))return false;
 	SIVAL(wire,12,0x20);blob.length=24+0x20;
-	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob,&qfid) || qfid)return false;
 	blob.length--;
-	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob,&qfid))return false;
 	blob.length++;
-	SSVAL(wire,6,5); /* A longer raw tag is not RqLs, even with an embedded NUL. */
-	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	SSVAL(wire,6,5); /* No context is identified by a prefix. */
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob,&qfid))return false;
 	SSVAL(wire,6,4);SIVAL(wire,0,24);
-	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob))return false;
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob,&qfid))return false;
 	SIVAL(wire,0,0);memcpy(wire+16,"MxAc",4);
-	return !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob);
+	return !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,blob,&qfid);
+}
+static void create_context_spelling(uint8_t *p,uint32_t next,const char *tag,uint16_t off,uint32_t data)
+{
+	SIVAL(p,0,next);SSVAL(p,4,16);SSVAL(p,6,4);SSVAL(p,10,off);SIVAL(p,12,data);
+	memcpy(p+16,tag,4);
+}
+static bool native_query_file_number(void)
+{
+	uint8_t wire[24+56]={0},out[ZXS_QFID_REPLY_BYTES];
+	DATA_BLOB body={.data=out,.length=sizeof(out)};
+	bool requested=false;
+	create_context_spelling(wire,40,"DHnQ",24,16);
+	create_context_spelling(wire+40,0,"QFid",UINT16_MAX,0);
+	/* Receiver ignores reserved bytes; no durable hint is interpreted. */
+	wire[8]=0xff;wire[24]=0xff;
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,data_blob_const(wire,64),&requested) ||
+	   !requested)return false;
+	memcpy(wire+16,"DHnC",4);
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_BATCH,data_blob_const(wire,64),&requested))return false;
+	create_context_spelling(wire,24,"QFid",UINT16_MAX,0);
+	create_context_spelling(wire+24,0,"RqLs",24,0x20);
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,data_blob_const(wire,sizeof(wire)),&requested) ||
+	   !requested)return false;
+	create_context_spelling(wire,56,"RqLs",24,0x20);
+	create_context_spelling(wire+56,0,"QFid",0,0);
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,data_blob_const(wire,sizeof(wire)),&requested) ||
+	   !requested)return false;
+	SIVAL(wire,0,48); /* Previous context's declared data crosses its own span. */
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_LEASE,data_blob_const(wire,sizeof(wire)),&requested))return false;
+	uint8_t repeated[48]={0};
+	create_context_spelling(repeated,24,"QFid",0,0);
+	create_context_spelling(repeated+24,0,"QFid",0,0);
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(repeated,sizeof(repeated)),&requested))return false;
+	memset(out,0xff,sizeof(out));
+	if(!zxs_qfid_response(body,UINT64_C(512)) || IVAL(out,0)!=0 || SVAL(out,4)!=16 ||
+	   SVAL(out,6)!=4 || SVAL(out,8)!=0 || SVAL(out,10)!=24 || IVAL(out,12)!=32 ||
+	   memcmp(out+16,"QFid",4)!=0 || BVAL(out,24)!=512 || BVAL(out,32)!=1 ||
+	   BVAL(out,40)!=0 || BVAL(out,48)!=0)return false;
+	return zxs_qfid_response(body,UINT64_MAX) && BVAL(out,24)==UINT64_MAX &&
+	       !zxs_qfid_response(body,0);
 }
 
 int main(void)
@@ -452,7 +493,7 @@ int main(void)
 	    zxs_smb_namespace_name("ZXS\\Docs")) {
 		return 1;
 	}
-	if (!ipc_only_pipe_policy() || !uncached_create_policy() || conn == NULL ||
+	if (!ipc_only_pipe_policy() || !uncached_create_policy() || !native_query_file_number() || conn == NULL ||
 	    zxs_file_vfs_route(3,1,false,false,false,file,false) != ZXS_VFS_FILE ||
 	    zxs_file_vfs_route(1,1,true,false,false,NULL,false) != ZXS_VFS_IPC ||
 	    zxs_file_vfs_route(3,1,true,false,false,NULL,false) != ZXS_VFS_REJECT ||
