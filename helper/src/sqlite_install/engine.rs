@@ -45,7 +45,7 @@ pub(super) fn open_reserved(reserved:&super::reservation::Reserved<'_>)->io::Res
 pub(super) enum Access { Read, Write }
 pub(super) fn existing(origin:&Existing<'_>,mode:Access)->io::Result<Connection>{
     let ro=matches!(mode,Access::Read);
-    if !ro&&!origin.allows_install_write(){return Err(bad("an account observation cannot open the database for writing"));}
+    if !ro&&!origin.allows_install_write(){return Err(bad("a readonly observation cannot open the database for writing"));}
     open_existing(origin,ro)
 }
 pub(super) fn native_pair(permit:&super::pair::NativeWriteGate<'_, '_>)->io::Result<Connection>{

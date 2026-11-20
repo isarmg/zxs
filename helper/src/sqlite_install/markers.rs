@@ -77,7 +77,7 @@ impl Mark{
         self.verify(dir,wanted)?;Ok(again)
     }
 }
-/// Retains the original private marker across this one short account observation.
+/// Retains the original private marker across a short readonly SYSTEM observation.
 pub(super) struct SystemMark(Mark);
 impl SystemMark {
     pub(super) fn before_sql(root:super::originals::HeldRoot<'_>)->io::Result<Self>{

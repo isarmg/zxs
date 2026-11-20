@@ -58,7 +58,7 @@ impl SelectedSystem {
         super::approval::same_terminal(&io::stdin(),&io::stderr())?;
         Self::from_host(path,host,uid,gid)
     }
-    fn from_host(path:&std::path::Path,host:File,uid:u32,gid:u32)->io::Result<Self>{
+    pub(super) fn from_host(path:&std::path::Path,host:File,uid:u32,gid:u32)->io::Result<Self>{
         let pin=Pinned::open(path,Kind::StorageRoot)?;
         Self::from_origin(pin,host,uid,gid)
     }

@@ -9,7 +9,7 @@ pub(super) struct Reserved<'g>(DbName<'g>);
 pub(super) struct Existing<'g>(DbName<'g>,DbUse);
 struct DbName<'g>{root:HeldRoot<'g>,path:PathBuf,entity:Entity,mount:u64}
 #[derive(Clone,Copy)]
-enum DbUse{InitialGroup,AccountObservation}
+enum DbUse{InitialGroup,InitialReceipt,AccountObservation}
 impl<'g> Reserved<'g>{
     pub(super) fn create(group:&'g Group,request:&Request)->io::Result<Self>{
         let path=request.database(engine::path_limit()?)?;
@@ -48,6 +48,16 @@ impl<'g> Existing<'g>{
         if group.uid()!=r.uid()||!group.matches(r){return Err(bad("selected group does not match original INIT"));}
         let path=r.database(engine::path_limit()?)?;
         Self::from_source(group.system_source(),path,DbUse::InitialGroup)
+    }
+    /// Must never authorize a writable VFS. Pending INIT can legitimately
+    /// exist before any original marker, so this admits its optional S slot.
+    pub(super) fn initial_receipt(locked:&'g LockedSystem,r:&Request)->io::Result<Self>{
+        locked.require()?;
+        let source=locked.source();
+        if source.uid()!=r.uid()||source.path()!=r.paths()[0].as_path(){
+            return Err(bad("wrong original SYSTEM for the requested INIT receipt"));
+        }
+        Self::from_source(source,r.database(engine::path_limit()?)?,DbUse::InitialReceipt)
     }
     pub(super) fn observed_system(locked:&'g LockedSystem)->io::Result<Self>{
         locked.require()?;

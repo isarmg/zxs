@@ -168,3 +168,84 @@ fn unrelated_file_appearing_after_marker_sync_blocks_sql_completion_and_stays_in
     assert_eq!(fs::read(&other).unwrap(),b"keep me");
     for i in 0..3{assert_eq!(fs::read(mark_path(&a,i)).unwrap(),expected_marker(i));}
 }
+
+// Keep the fixture media in the same owned parents, but make the original
+// path of each external root unavailable. No mounting, raw disk or plugin.
+fn parked(a:&Area,park:bool){
+    for i in [1,2]{
+        let root=&a.roots[i];let away=root.with_extension("parked");
+        if park{fs::rename(root,&away).unwrap();assert!(!root.try_exists().unwrap());}
+        else{fs::rename(&away,root).unwrap();}
+    }
+}
+
+#[test]
+fn exact_readonly_receipt_distinguishes_pending_and_historical_when_the_two_external_roots_are_absent(){
+    use super::super::{catalog::Canonical,complete,originals::LockedSystem,receipt,reservation::Existing};
+    let a=Area::new();let r=a.request();let g=a.pin(&r).lock(a.uid).unwrap();
+    let initial=first(&r,&g,&deterministic_issue()).unwrap();drop(initial);drop(g);
+
+    parked(&a,true);
+    let before=fs::read(a.db()).unwrap();
+    let locked=LockedSystem::from_fixture(&a.roots[0]).unwrap();
+    let db=Existing::initial_receipt(&locked,&r).unwrap();
+    assert!(!db.allows_install_write());assert!(engine::existing(&db,engine::Access::Write).is_err());
+    assert_eq!(receipt::read(&locked,&r).unwrap(),receipt::Receipt{pool:[4;16],committed:false});
+    assert_eq!(fs::read(a.db()).unwrap(),before);
+    assert!(!mark_path(&a,0).try_exists().unwrap());
+    for i in [1,2]{assert!(!a.roots[i].try_exists().unwrap());}
+    drop(db);drop(locked);parked(&a,false);
+
+    let g=a.pin(&r).lock(a.uid).unwrap();
+    assert!(!complete::original(&Canonical::new().unwrap(),&r,&g,None).unwrap().previous);
+    drop(g);parked(&a,true);
+    let before=fs::read(a.db()).unwrap();
+    let lock=LockedSystem::from_fixture(&a.roots[0]).unwrap();
+    assert_eq!(receipt::read(&lock,&r).unwrap(),receipt::Receipt{pool:[4;16],committed:true});
+    assert_eq!(fs::read(a.db()).unwrap(),before);
+    assert_eq!(fs::read(mark_path(&a,0)).unwrap(),expected_marker(0));
+    drop(lock);
+
+    // SQL being committed is not success if this original S marker is gone.
+    fs::rename(mark_path(&a,0),a._f.path().join("retained-system-mark")).unwrap();
+    let lock=LockedSystem::from_fixture(&a.roots[0]).unwrap();
+    assert!(receipt::read(&lock,&r).is_err());
+    assert_eq!(fs::read(a._f.path().join("retained-system-mark")).unwrap(),expected_marker(0));
+    assert!(!mark_path(&a,0).try_exists().unwrap());
+}
+
+#[test]
+fn readonly_receipt_refuses_a_different_order_busy_system_wrong_marker_and_unknown_sidecar(){
+    use super::super::{originals::LockedSystem,receipt};
+    let a=Area::new();let r=a.request();
+    {
+        let locked=LockedSystem::from_fixture(&a.roots[0]).unwrap();
+        assert!(receipt::read(&locked,&r).is_err());assert!(!a.db().try_exists().unwrap());
+    }
+    let group=a.pin(&r).lock(a.uid).unwrap();let p=first(&r,&group,&deterministic_issue()).unwrap();
+    drop(p);drop(group);
+    let online=File::open(&a.roots[0]).unwrap();flock(&online,FlockOperation::NonBlockingLockShared).unwrap();
+    assert!(LockedSystem::from_fixture(&a.roots[0]).is_err());drop(online);
+
+    parked(&a,true);
+    let lock=LockedSystem::from_fixture(&a.roots[0]).unwrap();
+    let bad_approval=Request::new(r.op(),r.actor(),[8;16],r.uid(),r.paths().to_vec()).unwrap();
+    assert!(receipt::read(&lock,&bad_approval).is_err());
+    let mut paths=r.paths().to_vec();paths[2]=a._f.path().join("unrelated");
+    let bad_bytes=Request::new(r.op(),r.actor(),r.approval(),r.uid(),paths).unwrap();
+    assert!(receipt::read(&lock,&bad_bytes).is_err());
+    assert!(!a._f.path().join("unrelated").try_exists().unwrap());
+
+    let j=a.roots[0].join("SYSTEM.sqlite3-journal");private_contents(&j,b"foreign sidecar");
+    assert!(receipt::read(&lock,&r).is_err());assert_eq!(fs::read(&j).unwrap(),b"foreign sidecar");
+    fs::remove_file(&j).unwrap();
+    let substitute=a.roots[0].join(".ZXS-new-ffffffffffffffffffffffffffffffff-0");
+    private_contents(&substitute,&expected_marker(0));
+    assert!(receipt::read(&lock,&r).is_err());assert_eq!(fs::read(&substitute).unwrap(),expected_marker(0));
+    fs::remove_file(&substitute).unwrap();
+    let path=mark_path(&a,0);private_contents(&path,&expected_marker(1));
+    assert!(receipt::read(&lock,&r).is_err());assert_eq!(fs::read(&path).unwrap(),expected_marker(1));
+    fs::remove_file(&path).unwrap();
+    private_contents(&path,&expected_marker(0));
+    assert_eq!(receipt::read(&lock,&r).unwrap(),receipt::Receipt{pool:[4;16],committed:false});
+}

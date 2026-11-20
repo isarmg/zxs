@@ -54,6 +54,20 @@ pub(super) fn claimed_marker(role:u8,pool:&Id,volume:&Id,op:&Id,token:&[u8;32])-
 }
 pub(super) fn read(tx:&rusqlite::Transaction<'_>,template:&Canonical,group:&Group,r:&Request)->io::Result<Catalog>{
     if group.uid()!=r.uid()||!group.matches(r){return Err(bad("different approved group"));}
+    read_rows(tx,template,r,|i,limit|group.limits().get(i).is_some_and(|n|i64::from(*n)==limit))
+}
+
+/// The non-S claimed limits are recorded facts, not observed filesystem
+/// properties. Only the held S's actual limit is compared to the original.
+pub(super) fn initial_receipt(tx:&rusqlite::Transaction<'_>,template:&Canonical,system:super::originals::HeldRoot<'_>,r:&Request)
+    ->io::Result<Catalog>{
+    if system.uid()!=r.uid()||system.path()!=r.paths()[0].as_path(){
+        return Err(bad("different SYSTEM for the original INIT receipt"));
+    }
+    read_rows(tx,template,r,|i,limit|(super::MARKER.len() as i64..=255).contains(&limit)
+        &&(i!=0||i64::from(system.byte_limit())==limit))
+}
+fn read_rows(tx:&rusqlite::Transaction<'_>,template:&Canonical,r:&Request,limit_ok:impl Fn(usize,i64)->bool)->io::Result<Catalog>{
     template.require(tx)?;
     let (pool,state)=tx.query_row(include_str!("original-init.sql"),params![&r.op()[..],&r.actor()[..],&r.sha()[..]],|row|
         Ok((row.get::<_,Vec<u8>>(0)?,row.get::<_,i64>(1)?))).map_err(sql)?;
@@ -68,7 +82,7 @@ pub(super) fn read(tx:&rusqlite::Transaction<'_>,template:&Canonical,group:&Grou
         if blob(0)?!=pool||blob(1)?!=r.op()||blob(2)?!=r.actor()||blob(3)?!=r.sha()||num(4)?!=state
           ||blob(5)?!=r.approval()||num(6)?!=i64::from(r.uid())||num(7)?!=r.paths().len() as i64
           ||num(8)?!=i as i64||num(9)?!=i64::from(role(i))||blob(11)?!=path.as_os_str().as_bytes()
-          ||num(12)?!=i64::from(group.limits()[i]){return Err(bad("catalog is not the complete original operation and selected roots"));}
+          ||!limit_ok(i,num(12)?){return Err(bad("catalog is not the complete original operation and selected roots"));}
         let volume:Id=blob(10)?.try_into().map_err(|_|bad("invalid volume id"))?;
         let token:[u8;32]=blob(13)?.try_into().map_err(|_|bad("invalid original claim token"))?;
         if volume==[0;16]||volume==pool||token==[0;32]||markers.iter().any(|m:&[u8;101]|&m[37..53]==volume.as_slice()||&m[69..]==token.as_slice()){
