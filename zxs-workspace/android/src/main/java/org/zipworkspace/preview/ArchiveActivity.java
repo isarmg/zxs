@@ -3,6 +3,7 @@ package org.zipworkspace.preview;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Insets;
 import android.net.Uri;
@@ -51,6 +52,24 @@ public final class ArchiveActivity extends Activity {
     private ListView list;
     private ArchiveIndex.Item folder;
     private NameSearch search;
+    private TextPages textPages;
+
+    private static final class TextPages {
+        final PickedDocument picked;
+        final ArchiveIndex.Item item;
+        final int ticket;
+        final AlertDialog dialog;
+        final TextView body;
+        final ScrollView area;
+        PlainText.Preview checked;
+        int page;
+        TextPages(PickedDocument picked, ArchiveIndex.Item item, int ticket, AlertDialog dialog,
+                  TextView body, ScrollView area, PlainText.Preview checked) {
+            this.picked = picked; this.item = item; this.ticket = ticket; this.dialog = dialog;
+            this.body = body; this.area = area; this.checked = checked;
+        }
+        void clear() { checked = null; body.setText(""); }
+    }
 
     private static final class NameSearch {
         final PickedDocument picked;
@@ -80,7 +99,7 @@ public final class ArchiveActivity extends Activity {
             v.setPadding(i.left + gap, i.top + gap, i.right + gap, i.bottom + gap); return win;
         });
         TextView notice = new TextView(this);
-        notice.setText("ZIP 目录预览\n目录只显示声明。点普通文件可核验 CRC-32；不超过 32 KiB 的成员还可校验并查看 UTF-8 纯文本。不会解包或认证快照。");
+        notice.setText("ZIP 目录预览\n目录只显示声明。确认后可核验单项 CRC-32，并分页看 UTF-8 纯文本（全文或明确前部）。不会解包或认证快照。");
         body.addView(notice);
         pick = button(body, "选择本机 .zxs 或 Store ZIP", v -> choose());
         cancel = button(body, "取消本次操作", v -> {
@@ -148,7 +167,9 @@ public final class ArchiveActivity extends Activity {
     private void retire() {
         stopJob();
         search = null;
-        if (decision != null) decision.dismiss();
+        if (textPages != null) { textPages.clear(); textPages = null; }
+        AlertDialog old = decision; decision = null;
+        if (old != null) old.dismiss();
         if (document != null) { document.close(); document = null; }
     }
     private boolean current(int ticket, CancellationSignal signal) {
@@ -301,16 +322,20 @@ public final class ArchiveActivity extends Activity {
     }
     private void ask(PickedDocument picked, ArchiveIndex.Item row) {
         if (decision != null) return;
-        boolean small = row.bytes <= PlainText.LIMIT;
-        AlertDialog.Builder actions = new AlertDialog.Builder(this)
+        int approvedTicket = generation;
+        String total = String.format(Locale.ROOT, "%,d", row.bytes);
+        boolean whole = row.bytes <= PlainText.LIMIT;
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("查看这个归档成员")
-                .setMessage(picked.title + "\n" + pathOf(row) + "\n将读取全部 " + row.bytes
-                        + " 字节，不保存或上传。" + (small ? "文本仅在 CRC 相符且符合 UTF-8 显示规则后打开。"
-                        : "超过 32 KiB，仅可核验 CRC。"))
+                .setMessage("两种核验都要读取本项全部 " + total + " 字节。较大文件可能耗时，可以取消。\n"
+                        + (whole ? "仅当 CRC 相符且全文符合 UTF-8 显示规则时才显示全文。"
+                                 : "前部预览也必须完成整项 CRC，只显示开头最多 256 KiB；不判定后文是否为文本。")
+                        + "\n不保存、不上传。\n" + picked.title + "\n" + pathOf(row))
                 .setNegativeButton("取消", null)
-                .setPositiveButton("只核验 CRC", (d, which) -> startIfCurrent(picked, row, false));
-        if (small) actions.setNeutralButton("校验并看文本", (d, which) -> startIfCurrent(picked, row, true));
-        showDecision(actions.create(), null);
+                .setPositiveButton("只核验 CRC", (d, which) -> startIfCurrent(d, approvedTicket, picked, row, false))
+                .setNeutralButton(whole ? "核验后看全文" : "完整核验后预览前部",
+                        (d, which) -> startIfCurrent(d, approvedTicket, picked, row, true)).create();
+        showDecision(dialog, null);
     }
     private void showDecision(AlertDialog dialog, TextView body) {
         decision = dialog;
@@ -320,29 +345,74 @@ public final class ArchiveActivity extends Activity {
         });
         dialog.show();
     }
-    private void showText(String path, String text) {
+    private void showText(PickedDocument picked, ArchiveIndex.Item row, int ticket, PlainText.Preview text) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL); box.setSaveEnabled(false);
+        TextView metadata = summary(box, 5);
+        metadata.setText(String.format(Locale.ROOT, "已核验本项全部 %,d 字节。%s\n%s", text.totalBytes,
+                text.complete() ? "显示全文。" : String.format(Locale.ROOT,
+                        "只显示前 %,d 字节，不判定后文是否为文本。", text.displayedBytes), pathOf(row)));
         TextView body = new TextView(this);
         body.setAutoLinkMask(0); body.setLinksClickable(false); body.setTextIsSelectable(false);
         body.setTextClassifier(TextClassifier.NO_OP); body.setSaveEnabled(false);
         body.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         body.setImportantForContentCapture(View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS);
         int pad = (int)(16 * getResources().getDisplayMetrics().density);
-        body.setPadding(pad, pad, pad, pad);
-        body.setText(text, TextView.BufferType.NORMAL); // ordinary string, never HTML, spans or a link handler
-        ScrollView area = new ScrollView(this); area.addView(body);
+        box.setPadding(pad, pad, pad, pad);
+        box.addView(body);
+        ScrollView area = new ScrollView(this); area.setSaveEnabled(false); area.addView(box);
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle((text.isEmpty() ? "空文本 · " : "文本预览 · ") + path)
-                .setView(area).setPositiveButton("关闭", null).create();
+                .setTitle(text.complete() ? "核验后的全文" : "核验后仅看前部")
+                .setView(area).setCancelable(false).setNegativeButton("关闭", null)
+                .setNeutralButton("上一页", null).setPositiveButton("下一页", null).create();
+        TextPages opened = new TextPages(picked, row, ticket, dialog, body, area, text);
+        textPages = opened; decision = dialog;
+        dialog.setOnDismissListener(d -> {
+            opened.clear();
+            if (textPages == opened) textPages = null;
+            if (decision == dialog) decision = null;
+        });
         dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        showDecision(dialog, body);
+        dialog.show();
+        dialog.getButton(DialogInterface.BUTTON_NEGATIVE).setOnClickListener(v -> {
+            if (textPages != opened || decision != dialog) return;
+            opened.clear(); textPages = null; decision = null;
+            dialog.dismiss();
+        });
+        dialog.getButton(DialogInterface.BUTTON_NEUTRAL).setOnClickListener(v -> showTextPage(opened, opened.page - 1));
+        dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> showTextPage(opened, opened.page + 1));
+        showTextPage(opened, 0);
     }
-    private void startIfCurrent(PickedDocument picked, ArchiveIndex.Item row, boolean previewText) {
-        if (document != picked || active != null || search != null || folder != row.parent
-                || (previewText && row.bytes > PlainText.LIMIT)) return;
+    private void showTextPage(TextPages shown, int pageNumber) {
+        if (textPages != shown || decision != shown.dialog || !shown.dialog.isShowing()
+                || generation != shown.ticket || document != shown.picked || active != null
+                || folder != shown.item.parent || search != null || isDestroyed()
+                || shown.checked == null || pageNumber < 0 || pageNumber >= shown.checked.pages()) return;
+        try { shown.picked.checkTextPresentation(getApplicationContext()); }
+        catch (IOException | RuntimeException lost) {
+            retire(); reset("原文件已变化或授权不可用，已关闭文本。请重新选择。");
+            return;
+        }
+        shown.page = pageNumber;
+        PlainText.Preview preview = shown.checked;
+        String kind = preview.complete() ? (preview.totalBytes == 0 ? "空文本" : "核验后的全文") : "核验后仅看前部";
+        shown.dialog.setTitle(kind + " · " + (pageNumber + 1) + "/" + preview.pages() + " 页");
+        shown.body.setText(preview.page(pageNumber), TextView.BufferType.NORMAL); // never links or markup
+        shown.area.scrollTo(0, 0);
+        shown.dialog.getButton(DialogInterface.BUTTON_NEUTRAL).setEnabled(pageNumber > 0);
+        shown.dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(pageNumber + 1 < preview.pages());
+    }
+    private void startIfCurrent(DialogInterface approved, int approvedTicket, PickedDocument picked,
+                                ArchiveIndex.Item row, boolean previewText) {
+        if (decision == null || decision != approved || !decision.isShowing() || generation != approvedTicket
+                || document != picked || active != null || search != null || folder != row.parent) return;
+        AlertDialog used = decision; decision = null; used.dismiss();
         CancellationSignal signal = new CancellationSignal();
         int ticket = ++generation; active = signal;
         String path = pathOf(row);
-        state.setText("正在读取 " + path + "（" + row.bytes + " B）…"); render();
+        String mode = !previewText ? "" : row.bytes <= PlainText.LIMIT ? " · CRC 相符后显示全文" : " · CRC 相符后只显示前部";
+        state.setText(String.format(Locale.ROOT, "正在核验全部 %,d 字节%s，可取消。\n%s", row.bytes, mode, path));
+        render();
         submit(() -> {
             StoredMember.Result read = null;
             try { read = picked.checkMember(getApplicationContext(), row, signal, previewText); }
@@ -358,10 +428,10 @@ public final class ArchiveActivity extends Activity {
                     String verdict = (result.matches() ? "该项 CRC-32 与 ZIP 声明相符。" : "该项 CRC-32 与 ZIP 声明不符。")
                             + String.format(Locale.ROOT, "\n声明 %08X，实读 %08X。", result.expected, result.actual)
                             + "\n不是签名，也不证明整包或其他项。";
-                    if (textAllowed && result.text == null) verdict += "\n不是此预览支持的 UTF-8 纯文本，不显示正文。";
+                    if (textAllowed && result.text == null) verdict += "\n本次预览范围不符合 UTF-8 文本显示规则，不显示正文。";
                     state.setText(verdict + "\n" + path + "（" + row.bytes + " B）\n" + picked.title);
                     render();
-                    if (textAllowed && result.text != null) showText(path, result.text);
+                    if (textAllowed && result.text != null) showText(picked, row, ticket, result.text);
                 }
             });
         });

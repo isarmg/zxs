@@ -174,22 +174,94 @@ public final class StoredMemberTest {
         };
         ArchiveIndex index = ArchiveIndex.read(src, zip.length);
         StoredMember.Result r = index.checkMember(src, row(index), true);
-        assertTrue(r.matches()); assertEquals(sample.replace("\r\n", "\n"), r.text);
+        assertTrue(r.matches()); assertEquals(sample.replace("\r\n", "\n"), joined(r.text));
         assertEquals(1, payloadReads[0]);
         assertNull(index.checkMember(src, row(index)).text); // CRC-only does not return a preview
     }
-    @Test public void previewByteBudgetIncludesZeroAndExactly32KiBRejectsOneMoreBeforeIO() throws IOException {
-        assertEquals("", preview(archive(new byte[0], false, false, false)).text);
-        byte[] body = new byte[PlainText.LIMIT]; Arrays.fill(body, (byte)'a');
-        assertEquals(PlainText.LIMIT, preview(archive(body, false, false, false)).text.length());
-        byte[] large = archive(Arrays.copyOf(body, PlainText.LIMIT + 1), false, false, false);
-        ArchiveIndex index = ArchiveIndex.read(new Bytes(large), large.length);
-        Bytes noRead = new Bytes(large) {
-            @Override public byte[] read(long at, int n) { throw new AssertionError("oversize preview opened input"); }
-            @Override public void fill(long at, byte[] buf, int n) { throw new AssertionError("oversize preview read bytes"); }
+    private static String joined(PlainText.Preview text) {
+        assertNotNull(text);
+        StringBuilder all = new StringBuilder();
+        for (int i = 0; i < text.pages(); i++) {
+            String page = text.page(i);
+            assertTrue(page.length() <= PlainText.PAGE_UNITS);
+            assertTrue(page.chars().filter(c -> c == '\n').count() <= PlainText.PAGE_NEWLINES);
+            if (!page.isEmpty()) {
+                assertFalse(Character.isLowSurrogate(page.charAt(0)));
+                assertFalse(Character.isHighSurrogate(page.charAt(page.length() - 1)));
+            }
+            all.append(page);
+        }
+        return all.toString();
+    }
+    @Test public void zeroAndPastTheFormer32KiBLimitRemainCompleteAndBounded() throws IOException {
+        PlainText.Preview empty = preview(archive(new byte[0], false, false, false)).text;
+        assertTrue(empty.complete()); assertEquals(1, empty.pages()); assertEquals("", joined(empty));
+        for (int length : new int[]{32 * 1024 + 1, PlainText.LIMIT}) {
+            byte[] body = new byte[length]; Arrays.fill(body, (byte)'a');
+            PlainText.Preview text = preview(archive(body, false, false, false)).text;
+            assertTrue(text.complete()); assertEquals(length, text.displayedBytes);
+            assertTrue(text.pages() > 1); assertEquals(length, joined(text).length());
+        }
+    }
+    @Test public void pagesPreserveSurrogatePairsDenseLinesAndTheEndOfFullText() throws IOException {
+        String sample = "a".repeat(PlainText.PAGE_UNITS - 1) + "𠮷\r\n"
+                + "row\r\n".repeat(PlainText.PAGE_NEWLINES + 5) + "最后一页-marker";
+        PlainText.Preview text = preview(archive(sample.getBytes(StandardCharsets.UTF_8), false, false, false)).text;
+        assertTrue(text.complete()); assertEquals(PlainText.PAGE_UNITS - 1, text.page(0).length());
+        assertTrue(text.page(1).startsWith("𠮷"));
+        assertEquals(sample.replace("\r\n", "\n"), joined(text));
+        assertTrue(text.page(text.pages() - 1).endsWith("最后一页-marker"));
+    }
+    @Test public void largePreviewReadsExactlyOneEntireCrcStreamButRetainsOnlyThePrefix() throws IOException {
+        byte[] body = new byte[512 * 1024]; Arrays.fill(body, (byte)'a');
+        body[PlainText.LIMIT] = (byte)0x80; // cap ended after complete ASCII; this is unexamined text
+        body[body.length - 1] = 'Z';
+        byte[] zip = archive(body, false, false, false);
+        int start = 30 + NAME.length;
+        final long[] cursor = {start};
+        Bytes input = new Bytes(zip) {
+            @Override public void fill(long off, byte[] buf, int n) throws IOException {
+                if (off >= start && off < start + body.length) { assertEquals(cursor[0], off); cursor[0] += n; }
+                super.fill(off, buf, n);
+            }
         };
-        assertThrows(IOException.class, () -> index.checkMember(noRead, row(index), true));
-        assertTrue(check(large).matches()); // original streaming CRC keeps its independent limit
+        ArchiveIndex index = ArchiveIndex.read(input, zip.length);
+        StoredMember.Result r = index.checkMember(input, row(index), true);
+        assertTrue(r.matches()); assertFalse(r.text.complete());
+        assertEquals((long)body.length, r.text.totalBytes);
+        assertEquals(PlainText.LIMIT, r.text.displayedBytes);
+        assertEquals("a".repeat(PlainText.LIMIT), joined(r.text));
+        assertEquals((long)start + body.length, cursor[0]);
+        assertTrue(check(zip).matches());
+        zip[start + body.length - 1] ^= 1; // CRC must include bytes never kept in memory.
+        StoredMember.Result brokenTail = preview(zip);
+        assertFalse(brokenTail.matches()); assertNull(brokenTail.text);
+    }
+    @Test public void previewCutOnlyOmitsAConfirmedFullCrossingScalarOrCrlf() throws IOException {
+        int cap = PlainText.LIMIT;
+        byte[] body = new byte[cap + 5];
+        Arrays.fill(body, (byte)'a');
+        byte[] four = "𠮷".getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(four, 0, body, cap - 1, four.length);
+        PlainText.Preview prefix = preview(archive(body, false, false, false)).text;
+        assertFalse(prefix.complete()); assertEquals(cap - 1, prefix.displayedBytes);
+        assertEquals("a".repeat(cap - 1), joined(prefix));
+
+        body[cap] = 'b'; // malformed scalar started INSIDE the budget, not ignorable trailing data
+        StoredMember.Result invalid = preview(archive(body, false, false, false));
+        assertTrue(invalid.matches()); assertNull(invalid.text);
+
+        byte[] direction = "\u202e".getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(direction, 0, body, cap - 1, direction.length);
+        StoredMember.Result forbidden = preview(archive(body, false, false, false));
+        assertTrue(forbidden.matches()); assertNull(forbidden.text);
+
+        Arrays.fill(body, (byte)'a'); body[cap - 1] = '\r'; body[cap] = '\n';
+        prefix = preview(archive(body, false, false, false)).text;
+        assertEquals(cap - 1, prefix.displayedBytes); assertEquals("a".repeat(cap - 1), joined(prefix));
+        body[cap] = 'b'; // a real unmatched CR, not a CRLF that may be omitted
+        StoredMember.Result isolated = preview(archive(body, false, false, false));
+        assertTrue(isolated.matches()); assertNull(isolated.text);
     }
     @Test public void crcAndTextEligibilityHaveDistinctOutcomes() throws IOException {
         for (String suffix : new String[]{"\0", "\r", "\u001b", "\u0085", "\u202e", "\u2066", "\u034f",

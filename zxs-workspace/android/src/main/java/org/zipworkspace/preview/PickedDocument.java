@@ -55,6 +55,18 @@ final class PickedDocument implements AutoCloseable {
         }
     }
 
+    /** Page drawing rechecks the existing grant and original FD, never the body or a new URI. */
+    synchronized void checkTextPresentation(Context ctx) throws IOException {
+        ArchiveIndex.require(held != null);
+        checkObserved(ctx, uri, held.getFileDescriptor(), observed);
+    }
+    private static void checkObserved(Context ctx, Uri uri, FileDescriptor fd, StructStat original) throws IOException {
+        ArchiveIndex.require(ctx.checkUriPermission(uri, Process.myPid(), Process.myUid(),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED);
+        try { ArchiveIndex.require(same(original, Os.fstat(fd))); }
+        catch (ErrnoException ex) { throw new IOException("Selected file no longer available", ex); }
+    }
+
     static Intent picker() {
         return new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
                 .setType("*/*").putExtra(Intent.EXTRA_LOCAL_ONLY, true)
@@ -146,10 +158,7 @@ final class PickedDocument implements AutoCloseable {
         public void check() { cancel.throwIfCanceled(); }
         void validate() throws IOException {
             check();
-            ArchiveIndex.require(ctx.checkUriPermission(uri, Process.myPid(), Process.myUid(),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED);
-            try { ArchiveIndex.require(same(original, Os.fstat(fd))); }
-            catch (ErrnoException ex) { throw new IOException("Selected file no longer available", ex); }
+            checkObserved(ctx, uri, fd, original);
             untilCheck = 8L << 20;
         }
         public byte[] read(long off, int len) throws IOException {

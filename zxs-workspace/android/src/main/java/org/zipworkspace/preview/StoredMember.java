@@ -9,9 +9,11 @@ import static org.zipworkspace.preview.ArchiveIndex.*;
 final class StoredMember {
     static final class Result {
         final long expected, actual;
-        final String text; // null for CRC-only, nonmatching CRC, or text outside the supported profile
+        final PlainText.Preview text; // null for CRC-only, nonmatching CRC, or unsupported display text
         Result(long expected, long actual) { this(expected, actual, null); }
-        Result(long expected, long actual, String text) { this.expected = expected; this.actual = actual; this.text = text; }
+        Result(long expected, long actual, PlainText.Preview text) {
+            this.expected = expected; this.actual = actual; this.text = text;
+        }
         boolean matches() { return expected == actual; }
     }
 
@@ -77,7 +79,11 @@ final class StoredMember {
             int n = (int)Math.min(block.length, end - pos);
             src.fill(pos, block, n);
             computed.update(block, 0, n);
-            if (capture != null) System.arraycopy(block, 0, capture, (int)(pos - body), n);
+            long relative = pos - body;
+            if (capture != null && relative < capture.length) {
+                int at = (int)relative; // only after the bound: the CRC may cover well over 2 GiB
+                System.arraycopy(block, 0, capture, at, Math.min(n, capture.length - at));
+            }
             pos += n;
         }
         src.check();
