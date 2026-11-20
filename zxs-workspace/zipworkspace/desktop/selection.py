@@ -18,7 +18,8 @@ from ..refs import Catalog, Node
 
 class Verification:
     """One read-only verification; visible counts are for the actual current pass."""
-    PHASE = {"layout": "正在检查 ZIP 布局和目录",
+    PHASE = {"catalog": "正在核对存储目录与历史关系",
+             "layout": "正在检查 ZIP 布局和目录",
              "members": "正在读取并核验成员正文",
              "raw": "正在核对原 ZIP 字节摘要",
              "identity": "正在核对原件与目录"}
@@ -26,6 +27,7 @@ class Verification:
     def __init__(self):
         self._lock, self._stop = Lock(), Event()
         self._progress = (self.PHASE["layout"], 0, None)
+        self._archive = None
 
     def cancel(self):
         self._stop.set()
@@ -39,7 +41,16 @@ class Verification:
 
     def begin(self, phase, total=None):
         self.check()
-        with self._lock: self._progress = (self.PHASE[phase], 0, total)
+        with self._lock:
+            label = self.PHASE[phase]
+            if self._archive is not None:
+                position, count = self._archive
+                label = f"存储归档 {position}/{count} · {label}"
+            self._progress = (label, 0, total)
+
+    def in_archive(self, index, count):
+        self.check()
+        with self._lock: self._archive = (index, count) if index else None
 
     def advance(self, size):
         self.check()
@@ -51,7 +62,7 @@ class Verification:
         with self._lock: return self._progress
 
 
-def submit_verification(owner, title, select, accepted, *, current):
+def submit_verification(owner, title, select, accepted, *, current, discard=lambda view: view.release_display()):
     """Never publish a partial display, even if cancel arrives after the read finishes."""
     observer = Verification()
 
@@ -65,8 +76,8 @@ def submit_verification(owner, title, select, accepted, *, current):
         selection, failure = outcome
         active = current()
         if observer.cancelled or not active:
-            if selection is not None: selection.release_display()
-            if active and observer.cancelled: owner.inform("已取消核验；没有显示该归档，也未写入或提取。")
+            if selection is not None: discard(selection)
+            if active and observer.cancelled: owner.inform("已取消核验；未显示本次结果，没有写入或提取。")
             return
         if failure is not None:
             owner.inform(str(failure))
@@ -195,11 +206,11 @@ class Selection:
             guard.pop_all()
             return choice
 
-    def catalog(self, store: StoreSelection):
+    def catalog(self, store: StoreSelection, *, observer=None):
         # Catalog holds and rechecks the selected anchor through both inventories;
         # a loose display requires its exact original generation, never a bare path.
         result = Catalog(self.path, store.path, expected_store=store.identity,
-                         expected_anchor=self.observed)
+                         expected_anchor=self.observed, observer=observer)
         if (result.anchor.marker != self.browser.commit or
                 (self.exact is not None and result.anchor != self.exact)):
             raise Rejected("selected original changed before catalog inspection")

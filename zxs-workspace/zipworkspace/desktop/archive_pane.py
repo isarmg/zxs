@@ -18,7 +18,7 @@ class ArchivePane(QWidget):
         super().__init__()
         self.owner = owner
         self.selection = self.store = self.catalog = self.file_page = None
-        self.verification = None
+        self.verification = self.catalog_verification = None
         self.directory, self.page_number, self.search_dialog = "", 0, None
         self.text_dialog = None
         layout = QVBoxLayout(self)
@@ -103,6 +103,7 @@ class ArchivePane(QWidget):
         return table
 
     def clear_catalog(self):
+        self.catalog_verification = None
         self.comparison.invalidate_versions()
         self.catalog = None
         self.history.rows.replace(())
@@ -470,14 +471,18 @@ class ArchivePane(QWidget):
         else: self.owner.inform("已核验完整快照。双击目录进入。")
 
     def load_catalog(self):
-        if not self.selection or not self.store: return
+        if not self.selection or not self.store or self.owner.pending is not None: return
         chosen, store = self.selection, self.store
         self.clear_catalog()
-        def done(catalog):
-            if self.selection is chosen and self.store is store: self.show_catalog(catalog)
-        self.owner.job("正在核验存储上的归档和原始父节点…", lambda: chosen.catalog(store), done)
+        request = self.catalog_verification = object()
+        submit_verification(self.owner, "正在核验存储上的归档和原始父节点…",
+                            lambda observer: chosen.catalog(store, observer=observer), self.show_catalog,
+                            current=lambda: (request is self.catalog_verification and
+                                             self.selection is chosen and self.store is store),
+                            discard=lambda _catalog: None)
 
     def show_catalog(self, catalog):
+        self.catalog_verification = None
         if self.catalog is not catalog: self.comparison.invalidate_versions()
         self.catalog = catalog
         self.branches.rows.replace(((r["branch"], str(r["observed_generation"]),

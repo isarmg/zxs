@@ -23,21 +23,23 @@ def _origin(path):
     return (m.st_dev, m.st_ino, m.st_size, m.st_mtime_ns, m.st_ctime_ns)
 
 
-def _read_node(doc, path, expected):
+def _read_node(doc, path, expected, *, observer=None):
     observed = stamp(doc)
     if expected is not None and observed != expected:
         raise Rejected("opened archive is not the selected or inventoried slot")
-    marker, _ = read_managed_document(doc, display_name=path.name)
-    node = Node(marker, path, archive_sha(doc), observed)
+    options = {} if observer is None else {"observer": observer}
+    marker, _ = read_managed_document(doc, display_name=path.name, **options)
+    node = Node(marker, path, archive_sha(doc, **options), observed)
     if stamp(doc) != observed:
         raise Rejected("selected or inventoried archive changed while reading")
     return node
 
 
-def _members(store, repo):
+def _members(store, repo, *, check=None):
     result = {}
     with os.scandir(store) as names:
         for n, entry in enumerate(names, 1):
+            if check is not None: check()
             if n > 10_000: raise Rejected("directory catalog exceeds current scan budget")
             if entry.name.startswith(repo+".") and entry.name.endswith(".zxs"):
                 result[entry.name] = _origin(store / entry.name)
@@ -45,7 +47,8 @@ def _members(store, repo):
 
 
 class Catalog:
-    def __init__(self, anchor: Path, store: Path, *, expected_store=None, expected_anchor=None):
+    def __init__(self, anchor: Path, store: Path, *, expected_store=None, expected_anchor=None, observer=None):
+        if observer is not None: observer.begin("catalog")
         anchor = Path(anchor).absolute()  # Do not resolve aliases into canonical store slots.
         self.store = Path(store).absolute()
         store_id = native_identity(self.store.stat(follow_symlinks=False), stat.S_IFDIR)
@@ -54,15 +57,19 @@ class Catalog:
         # Keep the original file open through both inventories. named_document
         # also rechecks this name and its held generation before returning the catalog.
         with named_document(anchor) as doc:
-            self.anchor = _read_node(doc, anchor, expected_anchor)
-            self._discover(store_id)
+            self.anchor = _read_node(doc, anchor, expected_anchor, observer=observer)
+            self._discover(store_id, observer=observer)
 
-    def _discover(self, store_id):
+    def _discover(self, store_id, *, observer=None):
         self.repo = self.anchor.marker.repo
         self.nodes = {}
         self.slots = {}
-        before = _members(self.store, self.repo)
-        for name in sorted(before):
+        check = observer.check if observer is not None else None
+        scan_options = {} if check is None else {"check": check}
+        if observer is not None: observer.begin("catalog")
+        before = _members(self.store, self.repo, **scan_options)
+        for index, name in enumerate(sorted(before), 1):
+            if observer is not None: observer.in_archive(index, len(before))
             path = self.store / name
             if name == self.anchor.marker.filename and str(path) == str(self.anchor.path):
                 # Path equality alone may case-fold on Windows. An inode match
@@ -72,7 +79,7 @@ class Catalog:
                 node = self.anchor
             else:
                 with named_document(path) as doc:
-                    node = _read_node(doc, path, before[name])
+                    node = _read_node(doc, path, before[name], observer=observer)
             m = node.marker
             if m.repo != self.repo or m.filename != name:
                 raise Rejected("directory repository slot disagrees with its exact typed archive")
@@ -80,7 +87,10 @@ class Catalog:
                 raise Rejected("duplicate operation or branch generation; no branch head selected")
             self.nodes[m.operation] = node
             self.slots[m.branch, m.generation] = node
-        if before != _members(self.store, self.repo) or store_id != native_identity(self.store.stat(follow_symlinks=False), stat.S_IFDIR):
+        if observer is not None:
+            observer.in_archive(0, 0)
+            observer.begin("catalog")
+        if before != _members(self.store, self.repo, **scan_options) or store_id != native_identity(self.store.stat(follow_symlinks=False), stat.S_IFDIR):
             raise Rejected("archive store changed during branch discovery; retry the read")
         a = self.anchor.marker
         occupied = self.slots.get((a.branch, a.generation))
@@ -95,6 +105,7 @@ class Catalog:
         self.history_nodes.setdefault(a.operation, self.anchor)
         self._validate_edges()
         self.store_gaps = self._missing(self.nodes)
+        if check is not None: check()
 
     def _validate_edges(self):
         roots = 0

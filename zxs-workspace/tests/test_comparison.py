@@ -101,6 +101,55 @@ class CompareVersions(unittest.TestCase):
         self.assertEqual((names["note"].before_bytes, names["note"].after_bytes), (3, 3))
         self.assertEqual(len(view.rows), 4)  # a comparison consumes only a temporary dict
 
+    def test_catalog_cancellation_stops_before_reading_the_next_slot(self):
+        from zipworkspace import refs
+        from zipworkspace.desktop.selection import Verification
+
+        class Watch(Verification):
+            def in_archive(self, index, count):
+                # first non-anchor catalog slot, after the named anchor passed
+                self.assertion = index, count
+                self.cancel()
+                super().in_archive(index, count)
+
+        watch = Watch()
+        with patch.object(refs, "_read_node", wraps=refs._read_node) as native:
+            with self.assertRaisesRegex(Rejected, "取消"):
+                self.left.catalog(self.store, observer=watch)
+        self.assertEqual(watch.assertion, (1, 2))
+        self.assertEqual(native.call_count, 1)
+        self.assertEqual(native.call_args.args[1], self.left.path)
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_completed_but_cancelled_catalog_does_not_replace_the_left_snapshot(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        try:
+            pane = win.archive
+            pane.show_selection(self.left)
+            pane.use_store(self.store)
+            future = Future()
+            with patch.object(win.pool, "submit", return_value=future) as queued:
+                pane.reload.click()
+            result = queued.call_args.args[0]()
+            self.assertIsNone(result[1])
+            self.assertTrue(result[0].branches())
+            future.set_result(result)
+            win.transfer_cancel.click()
+            win.poll()
+            self.assertIs(pane.selection, self.left)
+            self.assertIsNone(pane.catalog)
+            self.assertEqual(pane.branches.rows.rows, ())
+            self.assertEqual(pane.history.rows.rows, ())
+            self.assertIn("已取消核验", win.note.text())
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
+
     @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
                          "optional Qt source fixture")
     def test_ordinary_zip_action_clears_late_comparison_after_switching_the_right_view(self):
