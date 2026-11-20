@@ -1,17 +1,21 @@
 //! Pure selection for the original open of the single ZXS root. No reader
 //! of the native bridge, business grant, record encoder, or socket here.
 use super::{DirectoryPage, MAX_RECORDS, PageStop, Pattern, PatternError, QueryObject, RecordSpace};
-use crate::{display, smb::{backend::Held, wire::query_fields::{DirectoryQuery, Scan}}};
+use crate::{display, smb::{backend::Held, wire::query_fields::{DirectoryClass, DirectoryQuery, Scan}}};
 use std::io;
+
+pub(in crate::smb::backend) mod records;
 
 // Catalog enrolls at most 64 roots, one of which is SYSTEM. The namespace
 // can contain the selected ordinary children and at most one recycle child.
 const MAX_CHILDREN: usize = 63;
 const FILE_LIST_DIRECTORY: u32 = 0x0000_0001;
 
-pub(in crate::smb::backend) struct Child<M> {
+pub(in crate::smb::backend) struct Child {
     pub(in crate::smb::backend) name: String,
-    pub(in crate::smb::backend) metadata: M,
+    /// The original logical folder number from the authorized projection,
+    /// not a Core FILE ID, an SMB2 OPEN ID, an inode, or a storage locator.
+    pub(in crate::smb::backend) number: u64,
 }
 
 /// Only a real original namespace OPEN may implement this in production.
@@ -21,8 +25,7 @@ pub(in crate::smb::backend) struct Child<M> {
 /// The actual opened root, active subject and installed plan are all checked
 /// by the source; this is not a permission check over caller-provided rows.
 pub(in crate::smb::backend) trait OriginalNamespace {
-    type Metadata;
-    fn root_projection(&self) -> io::Result<Vec<Child<Self::Metadata>>>;
+    fn root_projection(&self) -> io::Result<Vec<Child>>;
 }
 
 pub(in crate::smb::backend) struct Position {
@@ -41,14 +44,14 @@ pub(in crate::smb::backend) enum Fault {
     Resources,
 }
 
-pub(in crate::smb::backend) struct Pick<M> {
-    pub(in crate::smb::backend) child: Child<M>,
+pub(in crate::smb::backend) struct Pick {
+    pub(in crate::smb::backend) child: Child,
     pub(in crate::smb::backend) space: RecordSpace,
 }
 
-pub(in crate::smb::backend) enum Selection<M> {
-    Rows { entries: Vec<Pick<M>>, bytes: usize, exhausted: bool },
-    FirstOverflow { child: Child<M>, name_space: usize },
+pub(in crate::smb::backend) enum Selection {
+    Rows { entries: Vec<Pick>, bytes: usize, exhausted: bool },
+    FirstOverflow { child: Child, name_space: usize },
     NoMatch { first_query: bool },
 }
 
@@ -58,21 +61,22 @@ pub(in crate::smb::backend) enum Selection<M> {
 /// Dropping this proposal, including after a failed write, leaves no change.
 /// There is deliberately no production acknowledgement method yet.
 #[must_use]
-pub(in crate::smb::backend) struct RootPage<'open, M> {
+pub(in crate::smb::backend) struct RootPage<'open> {
     position: &'open mut Option<Position>,
     replacement: Option<Pattern>,
     restart: bool,
-    output: Selection<M>,
+    class: DirectoryClass,
+    output: Selection,
 }
 
-impl<M> RootPage<'_, M> {
-    pub(in crate::smb::backend) fn output(&self) -> &Selection<M> { &self.output }
+impl RootPage<'_> {
+    pub(in crate::smb::backend) fn output(&self) -> &Selection { &self.output }
 
     #[cfg(test)]
     pub(in crate::smb::backend) fn written_for_fixture(self) {
         // A test explicitly models submission; production must not use this
         // to move the one original cursor independently of the reply owner.
-        let Self { position, replacement, restart, output } = self;
+        let Self { position, replacement, restart, output, .. } = self;
         let after = match output {
             Selection::Rows { mut entries, .. } => entries.pop().map(|e| e.child.name),
             _ => None, // Neither a partial name nor no match consumes a row.
@@ -89,7 +93,7 @@ impl<M> RootPage<'_, M> {
 impl<H: OriginalNamespace> Held<'_, H> {
     pub(in crate::smb::backend) fn prepare_root_query(
         &mut self, query: &DirectoryQuery<'_>, response_room: usize,
-    ) -> Result<RootPage<'_, H::Metadata>, Fault> {
+    ) -> Result<RootPage<'_>, Fault> {
         // The dispatcher must first resolve both wire ID words in its actual
         // current session/tree. Here only that original bound OPEN is used.
         if self.query_object() != QueryObject::LogicalRoot { return Err(Fault::NotNamespace); }
@@ -106,11 +110,22 @@ impl<H: OriginalNamespace> Held<'_, H> {
         // pattern; an ordinary continuation ignores even a supplied pattern.
         let after = if restart { None } else { self.root_position.as_ref().and_then(|p| p.after.as_deref()) };
         let rows = self.original.root_projection().map_err(Fault::Original)?;
-        if rows.len() > MAX_CHILDREN
-            || rows.iter().any(|r| display::component(r.name.as_bytes(), display::MAX).is_err())
-            || rows.windows(2).any(|r| r[0].name.as_bytes() >= r[1].name.as_bytes())
-        {
+        if rows.len() > MAX_CHILDREN || rows.windows(2).any(|r| r[0].name.as_bytes() >= r[1].name.as_bytes()) {
             return Err(Fault::InvalidProjection);
+        }
+        let mut seen = 0u64;
+        for r in &rows {
+            // Number 1 belongs to the virtual root itself, not to a child.
+            // Root rows are enrolled ordinary folders (and, when installed,
+            // one recycle folder). Neither round IDs nor host inodes fit here.
+            if !(2..=(MAX_CHILDREN as u64 + 1)).contains(&r.number)
+                || display::component(r.name.as_bytes(), display::MAX).is_err()
+            {
+                return Err(Fault::InvalidProjection);
+            }
+            let bit = 1u64 << (r.number - 2);
+            if seen & bit != 0 { return Err(Fault::InvalidProjection); }
+            seen |= bit;
         }
         let mut entries = Vec::new();
         entries.try_reserve_exact(rows.len().min(if query.single { 1 } else { MAX_RECORDS }))
@@ -138,6 +153,6 @@ impl<H: OriginalNamespace> Held<'_, H> {
         } else {
             Selection::Rows { entries, bytes: budget.bytes(), exhausted }
         };
-        Ok(RootPage { position: &mut self.root_position, replacement, restart, output })
+        Ok(RootPage { position: &mut self.root_position, replacement, restart, class: query.class, output })
     }
 }
