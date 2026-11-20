@@ -9,9 +9,10 @@ fn text(out:&mut String,s:&str){
     for c in s.chars(){match c{'&'=>out.push_str("&amp;"),'<'=>out.push_str("&lt;"),'>'=>out.push_str("&gt;"),
         '"'=>out.push_str("&quot;"),'\''=>out.push_str("&#39;"),_=>out.push(c)}}
 }
-pub(super) fn sign_in(failed:bool)->String{
+pub(super) fn sign_in(failed:bool,secure:bool)->String{
     let mut out=String::from(HEAD);
     out.push_str(r#"<title>管理员登录 · ZXS</title></head><body><main class="authentication-shell" data-zxs-scope><div class="authentication-content"><div class="authentication-card"><p>ZXS 管理</p><h1>管理员登录</h1><p>请使用 Web 管理员账号。SMB 文件账号不能在此登录。</p>"#);
+    if !secure{out.push_str(r#"<p>此连接使用 HTTP，不加密口令。请仅在可信网络登录，或使用你自己的 HTTPS 入口。</p>"#);}
     if failed{out.push_str(r#"<p class="zxs-error" role="alert">管理员登录名或口令不正确。</p>"#);}
     out.push_str(r#"<form method="post" action="/login" accept-charset="UTF-8">"#);
     out.push_str(include_str!("../../web/login-fields.html"));

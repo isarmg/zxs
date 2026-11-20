@@ -1,0 +1,26 @@
+[Unit]
+Description=ZXS management HTTP for the enrolled pool
+
+[Service]
+Type=exec
+User=@STORAGE_UID@
+Group=@STORAGE_GID@
+UMask=0077
+Environment="ZXS_SYSTEM_ROOT=@SYSTEM@"
+Environment=ZXS_POOL_ID=@POOL@
+ExecStart=/usr/bin/zxs
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictNamespaces=yes
+PrivateDevices=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths="@SYSTEM@"
+LimitCORE=0
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+KillSignal=SIGTERM
+TimeoutStopSec=45s

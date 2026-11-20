@@ -2,7 +2,7 @@
 
 目前的宿主只读诊断包括：目录关系、文件比较、选定存储根的容量/挂载、Linux 块设备清单与被动 I/O 速率，文件系统检查工具清单，以及在隔离副本上调用 FAT32 或 exFAT 检查器。目标平台为 Linux x86_64。不接管设备或服务，没有后台服务；只有显式启动 `helper disk-web` 才开临时本机面板。无参数只显示用法。
 
-ZXS 的业务管理网页是另一个服务。可用[非 root 本机 HTTPS 部署模板](docs/management-https.md)准备专用 nginx、命名 Unix 套接字和 ZXS 后端；包本身不启用任何单元，不提供私钥、不改宿主 nginx 或网络。
+ZXS 的业务管理页由 [ZXS 原生 HTTP](docs/management-http.md) 直接提供，默认监听 0.0.0.0:8443，无需域名、证书、nginx 或套接字激活。可选的非 root systemd 单元只作为不启用的候选；如需 HTTPS，使用站点的外部软件。本包不会启动或改网络。
 
 [专用 SMB 安装预检](docs/smb-host.md)可独立核对本机已有实例和两个在线程序的原件；不启动 Samba，不等于已能从客户端登录。
 

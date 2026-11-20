@@ -187,20 +187,16 @@ def ship_live_template(root):
     f.chmod(0o444)
     return f
 
-# Inactive deployment inputs only: no /etc, installed units, keys or service
-# users. nginx/systemd/Python and the independent ZXS executable are from the
-# administrator's trusted host; not dependencies installed by the helper package.
+# The optional native management HTTP unit does not install or start ZXS.
+# No nginx, Unix activation unit, fixed site, TLS key or certificate input.
 WEB_INPUTS = {
-    "nginx.conf": "aa5c8c5ab07f5b3bcf541502069bbce043c564d5eb706c276095f71b7f82fc6c",
-    "profile.py": "536b451ab626fbada58ca501eecaf2781349d5b315729d1c5dc726742fcd0ec6",
-    "zxs-management-https.service.in": "0e2d07f6b5f6859f3618703d2492cfc6ba392de5eb2643739fbbd2336cedee79",
-    "zxs-management.service.in": "9f14b91afe7c72332a90e3c1ccace64316ae63cb4610d84ce401b1ceaede529b",
-    "zxs-management.socket.in": "f8dab08483d34f64ab6fded9ea8e69f65e2f3464bff6cae878ef7b4c163bdf22",
+    "profile.py": "f902b5d322aa1f9bcb9bf8c6c51ed9153ef7eb89d1f61e657e717addcc3b7db6",
+    "zxs-management-http.service.in": "e83b2c59a5a15b9ba9e8b50549b358b5f2e2fb1bf345442b724c29910c45677a",
 }
-def ship_web_templates(root):
+def ship_web_service(root):
     rel="usr/share/local-ops-helper/web-management"
     for name,d in WEB_INPUTS.items():
-        f=copy_checked(PROJECT/"resources/web-management"/name,root/rel/name,d,cap=32768)
+        f=copy_checked(PROJECT/"resources/web-management"/name,root/rel/name,d,cap=8192)
         f.chmod(0o444)
     return {"base":rel,"sha256":WEB_INPUTS,"active_units":[]}
 
@@ -264,7 +260,7 @@ def build(args):
         root=Path(scratch)/"data"; home=mkdir(root/PRIVATE_NAME)
         docs=mkdir(root/"usr/share/doc/local-ops-helper")
         template=ship_live_template(root)
-        management=ship_web_templates(root)
+        management=ship_web_service(root)
         smb_host=ship_smb_host_preflight(root)
         shutil.copyfile(PROJECT/"LICENSE",docs/"copyright")
         rust_notices(out,docs)
@@ -325,7 +321,7 @@ def build(args):
               "files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
               "scope_sam":"explicit local setup-pair provision/enroll and role-specific reset; no daemon or login validation",
               "standalone_native_account":native,
-              "inactive_management_frontend":management,
+              "inactive_management_http_service":management,
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),

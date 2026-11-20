@@ -102,7 +102,7 @@ fn only_the_terminal_chooses_format_and_even_paired_clients_never_choose_a_tool(
 fn the_install_guide_only_calls_the_fixed_probe_in_an_empty_approved_request(){
     use std::cell::Cell;
     let now=Instant::now();let mut panel=logged(now);let calls=Cell::new(0);
-    let probe=||{calls.set(calls.get()+1);Reply::plain(200,"helper-install-guide-1\nequal\nunconfirmed\ndifferent")};
+    let probe=||{calls.set(calls.get()+1);Reply::plain(200,"helper-install-guide-2\nequal\nunconfirmed\ndifferent")};
 
     let mut r=req("/api/install/guide");r.method="GET".into();r.origin=None;
     assert_eq!(panel.handle_with_guide(r,now,&probe).code,404);
@@ -120,7 +120,7 @@ fn the_install_guide_only_calls_the_fixed_probe_in_an_empty_approved_request(){
     }
     assert_eq!(calls.get(),0);
     let report=panel.handle_with_guide(approved("/api/install/guide"),now,&probe);
-    assert_eq!(report.code,200);assert_eq!(report.body,"helper-install-guide-1\nequal\nunconfirmed\ndifferent");
+    assert_eq!(report.code,200);assert_eq!(report.body,"helper-install-guide-2\nequal\nunconfirmed\ndifferent");
     assert_eq!(calls.get(),1);assert!(!panel.closed&&panel.check.is_none()&&panel.session.is_some());
     assert_eq!(panel.handle_with_guide(approved("/api/install/guide"),now+SESSION,&probe).code,403);
     assert_eq!(calls.get(),1);

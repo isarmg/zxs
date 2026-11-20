@@ -17,17 +17,11 @@ const SMB:&[Asset]=&[
     Asset{path:&["usr","share","local-ops-helper","smb-host","zxs-smb-preflight.service.in"],
         bytes:include_bytes!("../../resources/smb-host/zxs-smb-preflight.service.in")},
 ];
-const HTTPS:&[Asset]=&[
-    Asset{path:&["usr","share","local-ops-helper","web-management","nginx.conf"],
-        bytes:include_bytes!("../../resources/web-management/nginx.conf")},
+const MANAGEMENT:&[Asset]=&[
     Asset{path:&["usr","share","local-ops-helper","web-management","profile.py"],
         bytes:include_bytes!("../../resources/web-management/profile.py")},
-    Asset{path:&["usr","share","local-ops-helper","web-management","zxs-management.socket.in"],
-        bytes:include_bytes!("../../resources/web-management/zxs-management.socket.in")},
-    Asset{path:&["usr","share","local-ops-helper","web-management","zxs-management.service.in"],
-        bytes:include_bytes!("../../resources/web-management/zxs-management.service.in")},
-    Asset{path:&["usr","share","local-ops-helper","web-management","zxs-management-https.service.in"],
-        bytes:include_bytes!("../../resources/web-management/zxs-management-https.service.in")},
+    Asset{path:&["usr","share","local-ops-helper","web-management","zxs-management-http.service.in"],
+        bytes:include_bytes!("../../resources/web-management/zxs-management-http.service.in")},
 ];
 const LIMITED:u64=32<<10;
 
@@ -62,12 +56,12 @@ fn assets(set:&[Asset])->Observation{
     checked.unwrap_or(Observation::Unconfirmed)
 }
 pub(super) fn observe()->Reply{
-    let states=[DOMAIN,SMB,HTTPS].map(assets);
+    let states=[DOMAIN,SMB,MANAGEMENT].map(assets);
     // Fixed type tags, no filename, digest, system error or output from a child.
     Reply::plain(200,wire(states))
 }
-fn wire([sam,smb,https]:[Observation;3])->String{
-    format!("helper-install-guide-1\n{}\n{}\n{}",sam.tag(),smb.tag(),https.tag())
+fn wire([sam,smb,web]:[Observation;3])->String{
+    format!("helper-install-guide-2\n{}\n{}\n{}",sam.tag(),smb.tag(),web.tag())
 }
 
 #[cfg(test)]
@@ -85,12 +79,12 @@ mod tests{
         assert_eq!(unexpected.position(),0);
     }
     #[test]fn only_the_selected_passive_release_assets_can_reach_this_page(){
-        assert_eq!([DOMAIN.len(),SMB.len(),HTTPS.len()],[1,2,5]);
-        for a in [DOMAIN,SMB,HTTPS].into_iter().flatten(){
+        assert_eq!([DOMAIN.len(),SMB.len(),MANAGEMENT.len()],[1,2,2]);
+        for a in [DOMAIN,SMB,MANAGEMENT].into_iter().flatten(){
             assert_eq!(&a.path[..3],["usr","share","local-ops-helper"]);
             assert!(a.bytes.len() as u64<=LIMITED&&!a.bytes.is_empty());
         }
         assert_eq!(wire([Observation::Equal,Observation::Different,Observation::Unconfirmed]),
-            "helper-install-guide-1\nequal\ndifferent\nunconfirmed");
+            "helper-install-guide-2\nequal\ndifferent\nunconfirmed");
     }
 }

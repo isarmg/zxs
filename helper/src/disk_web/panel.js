@@ -4,7 +4,7 @@
   let bearer = "", csrf = "", ticket = "", busy = false;
   const labels = {disks:"设备与挂载", rates:"被动 I/O 速率", tools:"随包与宿主工具"};
   const buttons = ["pair","disks","rates","tools","guide","guide-refresh","preview","confirm","receipt","close"].map(el);
-  const setupRows=["setup-sam","setup-smb","setup-https"];
+  const setupRows=["setup-sam","setup-smb","setup-http"];
   const setupLabels=new Map([
     ["equal","与当前 helper 内置的模板字节一致"],
     ["different","与当前 helper 的模板不同；请在终端核实同版发行"],
@@ -57,7 +57,7 @@
     const msg=await response.text();
     if (!response.ok){state(msg);return;}
     const [header,...result]=msg.split("\n");
-    if (header!=="helper-install-guide-1"||result.length!==setupRows.length||!result.every(v=>setupLabels.has(v)))
+    if (header!=="helper-install-guide-2"||result.length!==setupRows.length||!result.every(v=>setupLabels.has(v)))
       throw Error("invalid fixed template observation");
     result.forEach((v,i)=>{el(setupRows[i]).textContent=setupLabels.get(v);});
     state("只观察模板字节。请用另一个本机终端完成实际安装并核对原回执。");

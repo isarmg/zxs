@@ -280,38 +280,16 @@ int zxs_storage_capacity(int fd,uint64_t *total,uint64_t *available) {
 #include <sys/un.h>
 #include <stddef.h>
 
-/* The TLS frontend is a separate, explicitly configured local service uid.
-   This proves the peer of THIS connected socket, never a browser identity. */
-int zxs_web_peer(int fd, unsigned int expected) {
-    struct ucred peer;
-    socklen_t size = sizeof(peer);
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) < 0) return -1;
-    if (size != sizeof(peer) || peer.pid <= 0 || peer.uid != expected) {
-        errno = EPERM; return -1;
-    }
-    return 0;
-}
-
-/* Validate the one systemd-supplied descriptor before Rust takes ownership.
-   Neither TCP, an abstract endpoint, nor a connected client is a listener. */
-int zxs_web_listener(int fd) {
-    struct sockaddr_un address;
-    socklen_t len = sizeof(address);
-    int yes = 0, type = 0;
-    socklen_t n = sizeof(yes), m = sizeof(type);
-    if (getsockname(fd, (struct sockaddr *)&address, &len) < 0 ||
-        getsockopt(fd,SOL_SOCKET,SO_ACCEPTCONN,&yes,&n) < 0 ||
-        getsockopt(fd,SOL_SOCKET,SO_TYPE,&type,&m) < 0) return -1;
-    if (address.sun_family != AF_UNIX || len <= offsetof(struct sockaddr_un,sun_path)
-        || address.sun_path[0] != '/' || n != sizeof(yes) || m != sizeof(type)
-        || yes != 1 || type != SOCK_STREAM) { errno = EINVAL; return -1; }
-    return fcntl(fd,F_SETFD,FD_CLOEXEC);
-}
-
 #include <poll.h>
 #include <signal.h>
-static volatile sig_atomic_t zxs_web_stop_requested;
-static void zxs_web_stop(int signum) { (void)signum; zxs_web_stop_requested = 1; }
+#include <stdatomic.h>
+/* SIGINT/SIGTERM may arrive on an I/O thread while the owner is dispatching.
+   Refuse a target that would implement this signal-handler store with a lock. */
+_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "shutdown flag must always be lock-free");
+static _Atomic unsigned int zxs_web_stop_requested;
+static void zxs_web_stop(int signum) {
+    (void)signum; atomic_store_explicit(&zxs_web_stop_requested,1u,memory_order_relaxed);
+}
 int zxs_web_signals(void) {
     struct sigaction sa;
     memset(&sa,0,sizeof(sa)); sa.sa_handler = zxs_web_stop;
@@ -319,7 +297,21 @@ int zxs_web_signals(void) {
         sigaction(SIGINT,&sa,NULL) < 0) return -1;
     return 0;
 }
-int zxs_web_stopping(void) { return zxs_web_stop_requested != 0; }
+int zxs_web_stopping(void) {
+    return atomic_load_explicit(&zxs_web_stop_requested,memory_order_relaxed) != 0;
+}
+/* On an established TCP listener Linux can report the new connection's
+   pending network error directly from accept(2). It isn't a listener fault. */
+int zxs_web_retry_accept(int e) {
+    if (e == EAGAIN || e == EWOULDBLOCK || e == EINTR) return 1;
+    switch (e) {
+    case ECONNABORTED: case ECONNRESET: case ENETDOWN: case EPROTO:
+    case ENOPROTOOPT: case EHOSTDOWN: case ENONET: case EHOSTUNREACH:
+    case EOPNOTSUPP: case ENETUNREACH: case ENETRESET: case ETIMEDOUT:
+    case ENOSR: case ESOCKTNOSUPPORT: case EPROTONOSUPPORT: return 1;
+    default: return 0;
+    }
+}
 int zxs_web_readable(int fd) {
     struct pollfd p = { .fd = fd, .events = POLLIN };
     int result = poll(&p,1,500);

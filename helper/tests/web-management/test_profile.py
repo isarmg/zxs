@@ -1,95 +1,69 @@
-"""Offline source acceptance. Reads package source inputs or synthetic public bytes.
-No fork/exec, network, host account inspection, private certificate or real pool.
+"""Synthetic source checks for the optional native HTTP unit. No launch,
+listener, package manager, real pool or host account lookup.
 """
-import errno
 import hashlib
 import importlib.util
+import stat
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-base = Path(__file__).resolve().parents[2]/"resources"/"web-management"
+base=Path(__file__).resolve().parents[2]/"resources"/"web-management"
 module=importlib.util.spec_from_file_location("web_profile",base/"profile.py")
 p=importlib.util.module_from_spec(module)
 module.loader.exec_module(p)
 
 class ProfileContract(unittest.TestCase):
-    values=["/srv/zxs/system","01"*16,"1001","2001","1002","2002"]
-    users=(b"root:x:0:0:root:/root:/bin/sh\n"
-           b"zxs-storage:x:1001:2001::/nonexistent:/usr/sbin/nologin\n"
-           b"zxs-web-proxy:x:1002:2002::/nonexistent:/usr/sbin/nologin\n")
-    groups=b"root:x:0:\nzxs-storage:x:2001:\nzxs-web-proxy:x:2002:\n"
-    def test_parameter_boundary(self):
-        p.spec(self.values)
-        for i, v in [(0,"/"),(0,"/srv/a/../b"),(0,"/srv/"),(0,"/srv/x\nUser=root"),(0,"/mnt/a%b"),
-                     (0,"/mnt/with space"),(0,"/etc/ssl"),(1,"0"*32),(2,"0"),(3,"65534"),(4,"1001"),
-                     (5,"2001"),(5,"02002"),(2,"4294967295")]:
-            a=self.values.copy();a[i]=v
-            with self.assertRaises(p.Refused):
-                p.spec(a)
+    def setUp(self):
+        self.data=(base/p.TEMPLATE).read_bytes()
+        self.settings=["/srv/zxs/system","01"*16,"1001","2001"]
 
-    def test_local_identity_not_shared_or_an_alias(self):
-        s=p.spec(self.values)
-        p.local_accounts(self.users,self.groups,s)
-        for u,g in [(self.users+b"also:x:1002:42::/:/bin/sh\n",self.groups),
-                    (self.users+b"other:x:4001:2002::/:/usr/sbin/nologin\n",self.groups),
-                    (self.users,self.groups+b"disk:x:6:zxs-web-proxy\n"),
-                    (self.users,self.groups.replace(b"2002:\n",b"2002:other\n")),
-                    (self.users,self.groups+b"same-id:x:2002:\n"),
-                    (self.users.replace(b"1002:2002",b"1002:2001"),self.groups),
-                    (self.users.replace(b"zxs-web-proxy",b"www-data"),self.groups),
-                    (self.users.replace(b"nologin",b"bash"),self.groups)]:
-            with self.assertRaises(p.Refused):p.local_accounts(u,g,s)
+    def test_fixed_unit_starts_only_native_zxs_and_has_no_site_or_socket_dependency(self):
+        self.assertEqual(hashlib.sha256(self.data).hexdigest(),p.TEMPLATE_SHA)
+        out=p.units(self.data,p.values(self.settings))
+        for line in (b"User=1001",b"Group=2001",b"Environment=ZXS_POOL_ID="+b"01"*16,
+                     b'Environment="ZXS_SYSTEM_ROOT=/srv/zxs/system"',b'ExecStart=/usr/bin/zxs',
+                     b'ReadWritePaths="/srv/zxs/system"',b"RestrictAddressFamilies=AF_UNIX AF_INET"):
+            self.assertIn(line,out.splitlines())
+        for no in (b"[Install]", b"ExecStartPre=", b"[Socket]", b".socket", b"Conflicts=", b"Proxy",
+                   b"Listen", b"TLS", b"ZXS_WEB_ORIGIN", b"ZXS_WEB_PROXY_UID", b"nginx", b"ZXS_WEB_PORT"):
+            self.assertNotIn(no,out)
+        self.assertEqual({x.name for x in base.iterdir() if x.is_file()},{p.TEMPLATE,"profile.py"})
+        with self.assertRaises(p.Refused):
+            p.units(self.data.replace(b"/usr/bin/zxs",b"/usr/bin/env"),p.values(self.settings))
 
-    def test_key_acl_requires_confirmed_absence_not_unsupported(self):
-        # Synthetic errno + bytes only; this does not inspect any actual key.
-        with patch.object(p.os,"getxattr",side_effect=OSError(errno.ENODATA,"absent")):
-            p.no_acl(12)
-        for e in (errno.EOPNOTSUPP,errno.EACCES,errno.EIO):
-            with patch.object(p.os,"getxattr",side_effect=OSError(e,"unknown")):
-                with self.assertRaises(OSError):p.no_acl(12)
-        with patch.object(p.os,"getxattr",return_value=b""):
-            with self.assertRaises(p.Refused):p.no_acl(12)
+    def test_small_walk_sample_does_not_permit_read_after_growth(self):
+        mode=stat.S_IFREG|0o444
+        first=(8,9,mode,0,0,256,1,1,1,7)
+        grown=(8,9,mode,0,0,p.CAP+1,2,2,1,7)
+        self.assertEqual(p.selected_size(first),256)
+        with patch.object(p,"walk",return_value=[10]), patch.object(p,"marks",return_value=[grown]), \
+                patch.object(p.os,"open") as reopen:
+            with self.assertRaises(p.Refused):p.template()
+            reopen.assert_not_called()
 
-    def test_passive_release_templates_and_binding(self):
-        s=p.spec(self.values)
-        for name,digest in p.PINS.items():
-            b=(base/name).read_bytes()
-            self.assertEqual(hashlib.sha256(b).hexdigest(),digest)
-            if name.endswith(".in"):
-                actual=p.render_unit(name,b,s)
-                self.assertNotIn(b"@",actual)
-                self.assertNotIn(b"[Install]",actual)
-                self.assertNotIn(b"ExecStartPost=",actual)
-        backend=p.render_unit("zxs-management.service.in",(base/"zxs-management.service.in").read_bytes(),s)
-        self.assertIn(b"User=1001\nGroup=2001\n",backend)
-        self.assertEqual(p.ORIGIN,"https://zxs-admin.test:8443")
-        self.assertIn(b"Environment=ZXS_WEB_ORIGIN=https://zxs-admin.test:8443\n",backend)
-        self.assertIn(b"\nExecStart=/usr/bin/zxs\n",backend)
-        self.assertIn(b"\nEnvironment=ZXS_WEB_PROXY_UID=1002\n",backend)
-        sock=p.render_unit("zxs-management.socket.in",(base/"zxs-management.socket.in").read_bytes(),s)
-        self.assertIn(b"AssertPathIsSymbolicLink=!/run/zxs-management.sock\n",sock)
-        self.assertIn(b"SocketUser=root\nSocketGroup=2002\nSocketMode=0660\n",sock)
-        web=p.render_unit("zxs-management-https.service.in",(base/"zxs-management-https.service.in").read_bytes(),s)
-        self.assertIn(b"User=1002\nGroup=2002\n",web)
-        self.assertIn(b"AssertPathExists=!/run/zxs-management-https\n",web)
-        self.assertIn(b"InaccessiblePaths=/srv/zxs/system\n",web)
-        self.assertNotIn(b"ZXS_POOL_ID=",web)
+    def test_literal_path_is_used_for_both_directives_and_does_not_set_service_options(self):
+        self.settings[0]='/var/lib/我的 盘/"pool"\\x%u$foo@example'
+        out=p.units(self.data,p.values(self.settings)).decode("utf-8").splitlines()
+        literal='/var/lib/我的 盘/\\"pool\\"\\\\x%%u$foo@example'
+        self.assertIn(f'Environment="ZXS_SYSTEM_ROOT={literal}"',out)
+        self.assertIn(f'ReadWritePaths="{literal}"',out)
+        self.assertEqual([x for x in out if x.startswith("ExecStart")],["ExecStart=/usr/bin/zxs"])
 
-    def test_scgi_forwarding_contract_is_an_allowlist_not_generic_proxy(self):
-        lines=[line.strip() for line in (base/"nginx.conf").read_text().splitlines() if not line.strip().startswith("#")]
-        self.assertIn("server_name zxs-admin.test;",lines)
-        self.assertIn("if ($http_host != zxs-admin.test:8443) { return 421; }",lines)
-        fields=[line.split()[1:] for line in lines if line.startswith("scgi_param ")]
-        self.assertEqual(fields,[[x,y+";"] for x,y in [
-            ("SCGI","1"),("REQUEST_METHOD","$request_method"),("REQUEST_URI","$request_uri"),
-            ("HTTPS","$https"),("HTTP_HOST","$http_host"),("HTTP_ORIGIN","$http_origin"),
-            ("HTTP_COOKIE","$http_cookie"),("CONTENT_TYPE","$http_content_type")]])
-        for line in ("scgi_pass_request_headers off;","scgi_next_upstream off;","scgi_buffering off;",
-                     "scgi_store off;","access_log off;","scgi_cache off;","scgi_max_temp_file_size 0;",
-                     "client_max_body_size 4096;","scgi_pass unix:/run/zxs-management.sock;"):
-            self.assertIn(line,lines)
-        self.assertTrue(all(line.startswith("listen 127.0.0.1:8443 ssl") for line in lines if line.startswith("listen ")))
-        self.assertFalse(any(line.startswith(("include ","root ","alias ","proxy_pass ")) for line in lines))
+    def test_optional_unit_path_max_includes_terminating_nul(self):
+        # 15 components of length 255 plus an ending component of 254.
+        within=("/"+"x"*255)*15+"/"+"y"*254
+        self.assertEqual(len(within),4095)
+        p.values([within,*self.settings[1:]])
+        with self.assertRaises(p.Refused):p.values([within+"z",*self.settings[1:]])
+
+    def test_reject_ambiguous_paths_ids_and_legacy_https_argv(self):
+        for i,v in [(0,"/"),(0,"/var//S"),(0,"/var/../S"),(0,"/var/./S"),(0,"/var/S/"),
+                    (0,"/var/x\nUser=0"),(0,"relative"),(0,"/var/\udcff"),(0,"/var/\u0085"),(0,"/var/\ufdd0"),(0,"/var/\U0010ffff"),(0,"/"+256*"a"),
+                    (1,"0"*32),(1,"AB"*16),(1,"1"),(2,"0"),(2,"4294967295"),(3,"65534"),(3,"02001")]:
+            bad=self.settings.copy()
+            bad[i]=v
+            with self.assertRaises(p.Refused):p.values(bad)
+        with self.assertRaises(p.Refused):p.values(self.settings+["example.test"])
 
 if __name__=="__main__":unittest.main()

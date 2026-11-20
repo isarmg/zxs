@@ -43,7 +43,7 @@
     <dl class="setup-status" aria-label="本次只读的模板观察">
       <dt>初始 Samba 配置模板</dt><dd id="setup-sam">未观察</dd>
       <dt>SMB 预检脚本与单元模板</dt><dd id="setup-smb">未观察</dd>
-      <dt>管理 HTTPS 的生成脚本、配置与三份单元模板</dt><dd id="setup-https">未观察</dd>
+      <dt>原生管理 HTTP 的可选启动单元与生成脚本</dt><dd id="setup-http">未观察</dd>
     </dl>
     <button id="guide-refresh" type="button" class="quiet">再次核对模板</button>
     <p class="hint">可选择并复制下列某一段固定命令。先在对应的另一个本机终端用真实、非秘密值设定该段的变量；缺值会阻止执行。不要把口令设进变量或复制到本页。每个写操作分别确认，不能用配对授权。</p>
@@ -115,16 +115,17 @@
   "${SMB_STORAGE_SHA256:?set SMB_STORAGE_SHA256 in this terminal first}"</code></pre>
         <p>只有管理员独立复核单元、来源和原件后才可另行安装并手工启动这一个预检。退出 0 只表示所选安装原件与投射相符；失败、未运行与登录是不同状态。这里没有公开的 SMB 启动动作。</p>
       </details></li>
-      <li><details><summary>管理 Web：准备非 root 的本机 HTTPS 候选</summary>
-        <p>这是完成两账户首设后的另外一个网页。以普通用户在自有的私有工作目录生成三个未启用的单元；实际代理账号、证书链、该浏览器可信的域名和正式发行须独立准备。</p>
-        <pre tabindex="0" aria-label="生成管理 HTTPS 候选的命令"><code>/usr/bin/python3 -I -B /usr/share/local-ops-helper/web-management/profile.py render \
+      <li><details><summary>管理 Web：启动 ZXS 的原生 HTTP</summary>
+        <p>两账户已确认后，用该池登记的普通存储身份启动验签版 ZXS；不需要 nginx、域名、证书或套接字激活。下列命令只是在终端运行 ZXS。需确认你愿意让管理端口在所有 IPv4 接口监听；直连没有加密，只在可信网络使用。</p>
+        <pre tabindex="0" aria-label="启动 ZXS 原生管理 HTTP 的命令"><code>ZXS_SYSTEM_ROOT="${SYSTEM:?set SYSTEM in this terminal first}" \
+ZXS_POOL_ID="${POOL_ID:?set POOL_ID in this terminal first}" /usr/bin/zxs</code></pre>
+        <p>从浏览器打开 <code>http://&lt;服务器实际 IPv4&gt;:8443/</code>，用唯一 Web 管理员登录。<code>0.0.0.0</code> 仅是监听值。若需要 HTTPS，由你的外部软件独立终结 TLS，不在 Helper 中安装或配置。若使用 systemd，可在自有私有工作目录生成不启用的候选：</p>
+        <pre tabindex="0" aria-label="生成一份可选 systemd 管理服务的命令"><code>/usr/bin/python3 -I -S -B /usr/share/local-ops-helper/web-management/profile.py render \
   "${SYSTEM:?set SYSTEM in this terminal first}" \
   "${POOL_ID:?set POOL_ID in this terminal first}" \
   "${STORAGE_UID:?set STORAGE_UID in this terminal first}" \
-  "${STORAGE_GID:?set STORAGE_GID in this terminal first}" \
-  "${PROXY_UID:?set PROXY_UID in this terminal first}" \
-  "${PROXY_GID:?set PROXY_GID in this terminal first}"</code></pre>
-        <p><code>./zxs-management.candidate/</code> 存在只说明候选已写。管理员先复核原配置与真实环境，再单独决定是否安装和启动。只有另行验收并成功登录后才有业务管理服务。</p>
+  "${STORAGE_GID:?set STORAGE_GID in this terminal first}"</code></pre>
+        <p>生成不等于安装或启动。只选择终端运行或管理员独立审核的 systemd 方式之一；没有实机登录验收。</p>
       </details></li>
     </ol>
   </section>

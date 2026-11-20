@@ -1,12 +1,21 @@
-# 管理 Web：浏览器 HTTPS → 本机 ZXS → SQLite
+# 原生 HTTP 管理页
 
-**这是一条有实际处理器的源码路径，不是已部署的网站。** 由宿主受保护的 HTTPS 前端接收浏览器请求；ZXS 从唯一具名的本机 Unix 监听描述符接收 [SCGI/1](https://python.ca/scgi/protocol.txt)，自己验证 Web 管理员的 Argon2id，既不接收前端宣称的用户也不访问 SMB 密码。服务、测试、证书、浏览器和真实网络均未运行。此端无文件上传、预览、下载、FILE 静态目录或通用 SQL API。
+已配置存储池后，直接启动无参数的 `zxs`。它用非特权存储身份持有原 SYSTEM 租约，监听 **`0.0.0.0:8443`**。在浏览器打开 `http://服务器实际IPv4:8443/`，用 Web 管理员登录。无需证书、域名、nginx、socket 激活或任何 Web 环境变量。`0.0.0.0` 是绑定地址，不是访问网址。已有池的 `ZXS_SYSTEM_ROOT` 与 `ZXS_POOL_ID` 仍来自受信服务配置，不由请求指定。服务不改防火墙、证书、DNS 或系统网络。本仓库只完成源码及未运行的用例，不声称部署过服务或用浏览器验收过。
 
-**能做什么。** `GET /login` 只给不含账号或池资料的登录页；未登录访问 `/` 只重定向。登录成功可以看同一短 SQLite 切面的登记卷、固定两账号的非秘密名称与每页最多 32 个共享（按 ShareId 续页），通过表单登记新的**停用**普通卷共享，再明确设为停用、只读或读写。本页只可确认 SYSTEM 原登记/卷标，不访问无关 F/R，不将登记数量显示成在线数量。健康、速率、文件系统 UUID、正式版本元数据均未在此页读取。页面复用旧项目[登录卡/应用壳与导航](../web/NOTICE.md)，系统字体、无脚本或外联。密码恢复及停机运维不属于业务表单。
+**直连是明文。** 同一路径上的第三方可能读到密码或会话。请在可信网络使用；需要加密时由你自己的软件提供 HTTPS。默认服务核对 HTTP Host 必须等于这一条已接受 TCP 连接的真实本地 IP 和端口；不把仅能指向它的陌生域名当作同源。仍开放所有 IPv4 接口，不预设某个站点、网卡或回环地址。
 
-**浏览器边界。** 固定 HTTPS origin（小写 DNS/IPv4，可带非默认端口），精确 Host；每个 POST 都要求同一个浏览器 Origin。页面发送 `Referrer-Policy: same-origin`，使同源 HTML 表单的普通 POST 可提交真实 Origin；缺失、`null` 或其它源仍拒绝，不用 Referer 兜底。见 [Fetch 的 Origin 规则](https://fetch.spec.whatwg.org/#append-a-request-origin-header)。共享修改和退出还须独立的会话 CSRF token。新登录由内核随机数生成全新会话，不采纳浏览器指定的身份；cookie 仅 `__Host-zxs`、Secure、HttpOnly、SameSite=Strict、Path=/，无 Domain。会话仅在本进程，15 分钟闲置/8 小时绝对超时，退出或重启后不可重用。每池服务最多 32 个同时会话、每分钟最多 12 次登录验证，宿主仍应限制到此本机通路的连接数。每页/修改在真实 SQL 再验原 Web 身份；新的共享权限不来自网页字段、Cookie 自述或首设回执。每个写表单有独立 Op，重复同参数不产生第二笔操作；修改模式还绑定显示时原设置。若结果未知且原会话仍有效，只能以同一原表单重试；超时、重启或退出后，旧 CSRF 无效，重新登录先查当前设置。网页尚无跨会话的按 Op 历史结果查询，不以新 Op 自动重放。动态标签作为文本转义，无任意 HTML、URL、宿主路径或第三方资源。没有匿名元数据或任何正文。
+## 可选的外部 HTTPS
 
-**给独立安装器的契约（此项目不安装/修改宿主）。**
-- 单一受信本机服务管理器向无业务参数的 `zxs` 传 fd 3：`LISTEN_PID` 等于进程 PID、`LISTEN_FDS=1`、`LISTEN_FDNAMES=zxs-management`。验真实的 filesystem AF_UNIX/SOCK_STREAM/SO_ACCEPTCONN；没有 TCP、抽象地址、自动 bind 或目录换址退路。仅从受保护服务配置读取 `ZXS_SYSTEM_ROOT`、`ZXS_POOL_ID`、`ZXS_WEB_ORIGIN`（HTTPS）、`ZXS_WEB_PROXY_UID`（终结服务专有非 root、不是存储 UID）。这些不是凭据，不取自 HTTP。宿主负责可信目录/套接字权限，专用 UID 不得同时出租给不可信软件。
-- 终结服务必须真正验证其 HTTPS 主机并持证书，HTTP 明文不得接收登录表单；不能把浏览器提供的 TLS/Remote-User/转发头当宿主事实。ZXS 对每次 accept 独立核 Linux SO_PEERCRED，非指定 peer 连请求体都不读。只接受一个有界 SCGI 请求/连接：首字段 CONTENT_LENGTH，SCGI=1、REQUEST_METHOD、原 REQUEST_URI、HTTPS（真实 TLS 为 on）、HTTP_HOST、HTTP_ORIGIN、HTTP_COOKIE 和 CONTENT_TYPE；不接用户名或其它环境，拒重复字段。字段区 ≤8192 B，表单体 ≤4096 B；读取及发送分别有 4 秒总时限。前端需拒公共请求中的重复 Host/Origin/有歧义的请求框架，关闭自动重放、缓存、磁盘 spooling 和包含口令/Cookie/CSRF 的日志；仅路由到本机受保护套接字，不映射池目录。以 [nginx SCGI 参数与 Unix 地址](https://nginx.org/en/docs/http/ngx_http_scgi_module.html#scgi_param)实现时，关闭自动转发原头，该模块自动在首位生成 CONTENT_LENGTH，不再手写重复参数；仅显式配置其余八项，不直接包含带额外 CGI 字段的默认配置。先限制表单体大小，内存缓冲至少覆盖完整上限；关缓存/存储，禁将请求及回复落临时文件。受控传输凭据不代替 Web 身份认证。
-- 空闲也持原 SYSTEM 目录 SH。SIGTERM/SIGINT 收到后不再开始新请求，给已受理操作完成提交/明确失败与原应答，再释放会话/SQLite 连接与原目录。数据库是否可打开不是宿主 TLS/磁盘健康证明。真实资格要用不同进程的原目录 EX 争锁、TLS 浏览器、真实代理身份和真实 systemd 停止作最后验证；这次只写源码。
+ZXS 不提供 TLS。要让应用识别你现有代理前面的 HTTPS，受信部署方**同时**设置：
+- `ZXS_WEB_PUBLIC_ORIGIN`：浏览器使用的确切 HTTPS origin，例如 `https://admin.example.org`（证书、域名与端口由站点选择）。不带路径，默认 443 不写。
+- `ZXS_WEB_TRUSTED_PROXY`：与 ZXS 建立这条 TCP 连接的那个代理的**实际源 IPv4**，不是任意客户端传的地址。只可指定专用于该可信代理且管理方能保护的源地址及路径。若同机有其他不受信进程可从该地址发起连接，或后端段可被窃听，不能把该段当作隔离/保密的生产代理链。这是可选部署信任，不是密码验证。
+
+代理须验证真实 TLS/站点并保留原 Host、Origin 和 Cookie，转给后台时使用普通 HTTP/1.1。不要向同一个入口转发未加密的客户端请求；限制请求大小，关缓存、自动重放、表单体落盘和带密日志。只有 accepted peer 与公开 Host 同时匹配才选择该 HTTPS origin 和 Secure Cookie；不认 Forwarded、X-Forwarded-* 或代填用户。只配一个变量、非法配置都会拒绝启动，不静默弱化。其他客户端仍可按真实 IPv4 直连。未配置时不自动信任某个转发域名或替用户配置代理。
+
+## 登录、共享与传输
+
+- `GET /login` 无管理数据；`GET /` 未登录只转登录页。仅 Web 管理员通过本池当前 Argon2id 核验可以建立会话。拒 SMB 账号、匿名或失败凭据。每次管理动作再核当前身份/代。管理页显示登记卷、两账号非秘密名称及分页共享，不把登记当作在线。可在 Web 登记新普通卷共享（初始停用）及调整共享模式；不接受文件正文上传/下载/预览、宿主路径或通用 SQL。停机恢复不在此服务。
+- 每个 POST 都核精确浏览器 Origin；不接受缺失、`null`、异源或用 Referer 代替。页面使用 `Referrer-Policy: same-origin`。登录签发随机会话；共享与退出另核会话自己的随机 CSRF。直连 HTTP 使用 `zxs-http`，不是会被浏览器拒收的 Secure Cookie；受信外部 HTTPS 使用 `__Host-zxs` 且必须 Secure。两者都仅限主机，`Path=/; HttpOnly; SameSite=Strict`，不设 Domain；会话还绑定确切浏览器 origin，不能换名字在另一入口、地址或端口借用。浏览器 Cookie **不按端口隔离**；同一主机名/IP 上的其它服务可能收到它。不要与不可信站点共用管理主机名/IP；上述绑定不能防止窃走 Cookie 后在它原入口重放。15 分钟闲置、8 小时绝对有效期；退出或重启失效。不超过 32 个同时会话，每分钟最多 12 次登录验证。
+- 页面值按文本转义，内置样式无外部资源。发布/设置表单的原操作 ID、当前设置及重试规则不变；当前会话仍在可重送原表单。重启/过期后先登录并核当前状态，不以新操作号自动重放。
+- 一个 TCP 连接处理一个原始目标 HTTP/1.1 请求并关闭。只接受 GET 和定长表单 POST；上限为 8 KiB 请求头、64 个字段、4 KiB 表单；拒重复 Host/Origin/长度、混用 Transfer-Encoding、折行、升级/隧道。读取和回复各限总计 4 秒，至多 8 个独立 I/O 工作者，慢客户端不在 SQLite 事务中。一个业务 owner 按序授权；SIGTERM/SIGINT 或真正监听故障关闭业务准入；TCP 已接受或排队均不算业务已开始，尚未派发的请求不再执行。已通过准入的当前工作可以收尾，所有 I/O 工作者退出后才释放原 S。单个待接受连接中止或有网络错误并不使服务停机。客户端丢响应不等于撤销已经确认的数据库操作。
+- 待实际验收：普通浏览器经两台主机直连登录、外部 TLS 代理的真实证书/原 Origin、错 peer/错 Host/跨入口 Cookie/改密后退出、Slow client 与停机排空。本次均未运行。参考 [HTTP/1.1 消息格式](https://www.rfc-editor.org/rfc/rfc9112.html)、[Fetch Origin 规则](https://fetch.spec.whatwg.org/#append-a-request-origin-header)。
