@@ -83,10 +83,10 @@ impl Pending {
     /// A single terminal consumption, including on malformed input or expiry.
     /// Future runtime must remove this instance from its original connection
     /// (and check MessageId/credits) before this call. No retries with it.
-    fn received(self, p: &Compound<'_>) -> Result<MechanismProof> {
+    fn received(self, p: &Compound<'_>, server_time: u64) -> Result<MechanismProof> {
         if Instant::now() >= self.expires { return Err(Rejected); }
         let u = self.phase.received(p).map_err(|_| Rejected)?;
-        let proof = verify(self.revision, u, self.expires)?;
+        let proof = verify(self.revision, u, self.expires, server_time)?;
         if Instant::now() >= self.expires { return Err(Rejected); }
         Ok(proof)
     }
@@ -141,10 +141,9 @@ fn bind_targets(v: &ProtectedRevision, c: &Challenge<'_>, a: &Authenticate<'_>) 
     if v.user.is_empty() || v.spn.is_empty() || a.user_utf16 != &*v.user || a.domain_utf16 != &*v.domain {
         return Err(Rejected);
     }
-    // The v2 blob header time and the server-owned AV entries must echo our
-    // actual issued data. Extra client-owned AVs cannot replace those fields.
-    if c.avs.get(7) != a.nt_response.get(24..32) ||
-        [1,2,3,4,5,7].into_iter().any(|id| c.avs.get(id) != a.avs.get(id)) {
+    // Keep all server-owned AVs (including the required Type 2 AV7) bound
+    // to this exact original challenge. AV7 is not the v2 blob header time.
+    if [1,2,3,4,5,7].into_iter().any(|id| c.avs.get(id) != a.avs.get(id)) {
         return Err(Rejected);
     }
     // Narrow single-service, non-TLS profile: a configured trusted CIFS SPN,
@@ -210,13 +209,25 @@ fn list_exchange(exported: &Secret, key_exch: bool, list: &[u8], inbound: &[u8])
     Ok(FinalGss::Spnego(der))
 }
 
-fn verify(v: Arc<ProtectedRevision>, u: Unverified<'_>, expires:Instant) -> Result<MechanismProof> {
+// [MS-NLMP] 3.2.5.2.2 bounds the client challenge header TimeStamp relative
+// to server time. 120s in either direction is local policy; this wall-clock
+// bound does not extend the original monotonic one-shot challenge deadline.
+const MAX_CLOCK_SKEW_TICKS: u64 = 120 * 10_000_000;
+fn fresh_header_time(a:&Authenticate<'_>,server_time:u64)->Result<()> {
+    // NTProofStr (16 B), then the version/reserved prefix (8 B), then FILETIME.
+    let t=a.nt_response.get(24..32).and_then(|v|v.try_into().ok()).map(u64::from_le_bytes).ok_or(Rejected)?;
+    if server_time.abs_diff(t)>MAX_CLOCK_SKEW_TICKS {return Err(Rejected);}
+    Ok(())
+}
+
+fn verify(v: Arc<ProtectedRevision>, u: Unverified<'_>, expires:Instant,server_time:u64) -> Result<MechanismProof> {
     let original1 = u.type1.bytes();
     let original2 = u.type2.bytes();
     let c = ntlm::challenge_fields(original2).map_err(|_| Rejected)?;
     let a = &u.type3;
     selected(ntlm::negotiate_flags(original1).map_err(|_| Rejected)?, c.flags, a.flags)?;
     bind_targets(&v, &c, a)?;
+    fresh_header_time(a,server_time)?;
     let (proof, client_blob) = a.nt_response.split_at_checked(16).ok_or(Rejected)?;
     // Only NTLMv2, never LM as a fallback. The responding client's raw blob
     // includes the actual terminator/trailing reserved bytes that it sent.

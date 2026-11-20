@@ -7,6 +7,8 @@ use super::*;
 use crate::smb::session::envelope::tests as frame;
 use std::time::Duration;
 
+pub(super) const FIXTURE_SERVER_TIME:u64=0x01da_bc00_1122_3344;
+
 const PLAIN_ONE: &str = "4e544c4d535350000100000015820822000000000000000000000000000000000a00654a0000000f";
 const PLAIN_TWO: &str = concat!(
     "4e544c4d5353500002000000060006003800000015828a221112131415161718000000000000000028002800",
@@ -62,11 +64,26 @@ const WRONG_SPN: &str = concat!(
     "000000000000000000000000000000000000000000000000530059004e005400480057006900720065004600",
     "6900780074007500720065004600490058005400550052004500",
 );
-const WRONG_TIME: &str = concat!(
+const INDEPENDENT_HEADER_TIME: &str = concat!(
     "4e544c4d53535000030000000000000000000000a000a000580000000a000a00f80000001600160002010000",
     "0e000e0018010000000000000000000015828a220a00654a0000000f97e45dce1f3aab6f3746b7553e0dcf4c",
     "929a1517a8b758638ca9652b8463181801010000000000004533221100bcda01414243444546474800000000",
     "0100060042004f00580002000a00530059004e0054004800070008004433221100bcda010600040002000000",
+    "0900280063006900660073002f0066006900780074007500720065002e0069006e00760061006c0069006400",
+    "0a001000000000000000000000000000000000000000000000000000530059004e0054004800570069007200",
+    "650046006900780074007500720065004600490058005400550052004500",
+);
+
+// Public fixed proof/MIC for INDEPENDENT_HEADER_TIME, and a distinct packet
+// with independently VALID HMAC/MIC but an altered server-owned TimeStamp AV.
+const INDEPENDENT_KEY:&str="89d43927145bdcbc5446b3e79c185b91";
+const INDEPENDENT_CLIENT:&str="01000000a31e5976d1ee6e6300000000";
+const INDEPENDENT_SERVER:&str="010000006e8988daa26dab5300000000";
+const ALTERED_ISSUED_AV:&str=concat!(
+    "4e544c4d53535000030000000000000000000000a000a000580000000a000a00f80000001600160002010000",
+    "0e000e0018010000000000000000000015828a220a00654a0000000fb7755aa2d0189c2817f6849632a14111",
+    "39a78b524e97c06d1fa8cc47a4f43f1901010000000000004533221100bcda01414243444546474800000000",
+    "0100060042004f00580002000a00530059004e0054004800070008004633221100bcda010600040002000000",
     "0900280063006900660073002f0066006900780074007500720065002e0069006e00760061006c0069006400",
     "0a001000000000000000000000000000000000000000000000000000530059004e0054004800570069007200",
     "650046006900780074007500720065004600490058005400550052004500",
@@ -118,11 +135,18 @@ fn done(
     revision: &Arc<ProtectedRevision>, e: &Example, wrapped: Option<bool>,
     mic: Option<&[u8]>, sid: u64, gap: u8,
 ) -> Result<MechanismProof> {
+    done_at(revision,e,wrapped,mic,sid,gap,FIXTURE_SERVER_TIME)
+}
+
+fn done_at(
+    revision: &Arc<ProtectedRevision>, e: &Example, wrapped: Option<bool>,
+    mic: Option<&[u8]>, sid: u64, gap: u8, server_time:u64,
+) -> Result<MechanismProof> {
     let w = wrapped.is_some();
     let pending = issued(revision,e,wrapped).sent(&more(&e.two,w,1,42))?;
     let token = if w { frame::resp(None,false,Some(&e.three),mic) } else { e.three.clone() };
     let buf = frame::framed(&frame::smb(&token,false,2,sid,gap));
-    pending.received(&frame::compound(&buf))
+    pending.received(&frame::compound(&buf),server_time)
 }
 
 #[test]
@@ -172,10 +196,10 @@ fn assembled_der_raw_ntlm_and_outer_smb_each_keep_their_original_scope() {
 #[test]
 fn valid_proof_is_not_enough_without_strict_mic_original_inputs_and_bound_target() {
     let v = revision();
-    // Unlike simply flipping a random packet byte, all three alternate NTLMv2
-    // proofs match this public verifier. Wrong SPN/time also have valid
-    // inner MICs under their own derived key. The strict policy still denies.
-    for sample in [NO_INNER,WRONG_SPN,WRONG_TIME] {
+    // All three alternate NTLMv2 proofs match this public verifier. Wrong
+    // SPN or altered issued AV also have valid inner MICs under their own
+    // derived key. Neither a fresh header nor proof can replace those bindings.
+    for sample in [NO_INNER,WRONG_SPN,ALTERED_ISSUED_AV] {
         let mut e = example(false); e.three = hex(sample);
         assert!(done(&v,&e,None,None,42,0).is_err());
     }
@@ -207,6 +231,41 @@ fn valid_proof_is_not_enough_without_strict_mic_original_inputs_and_bound_target
 }
 
 #[test]
+fn only_header_clock_may_differ_and_the_exact_ntlm_and_spnego_proofs_still_apply() {
+    let v=revision();let mut e=example(false);e.three=hex(INDEPENDENT_HEADER_TIME);
+    let header=FIXTURE_SERVER_TIME+1;
+    let skew=1_200_000_000; // independent local 120s expectation in FILETIME ticks
+    let parsed=ntlm::authenticate(&e.three).unwrap();
+    assert_eq!(parsed.nt_response[24..32],header.to_le_bytes());
+    assert_eq!(parsed.avs.get(7),Some(&FIXTURE_SERVER_TIME.to_le_bytes()[..]));
+    let inner=done(&v,&e,None,None,42,0).unwrap();
+    assert_eq!(&inner.exported[..],hex(INDEPENDENT_KEY).as_slice());
+    let list=hex(INDEPENDENT_CLIENT);
+    let proof=done(&v,&e,Some(true),Some(&list),42,0).unwrap();
+    let FinalGss::Spnego(both)=proof.final_gss else {panic!("must verify and answer list MIC");};
+    assert_eq!(both.as_slice(),frame::resp(Some(0),false,None,Some(&hex(INDEPENDENT_SERVER))).as_slice());
+    assert!(done(&v,&e,Some(true),None,42,0).is_err());
+
+    // Same authenticated header + ORIGINAL AV; alter only the verifier's
+    // time. Include both signed boundaries and extremes (no time overflow).
+    for now in [header-skew,header+skew] {
+        assert!(done_at(&v,&e,None,None,42,0,now).is_ok());
+    }
+    for now in [header-skew-1,header+skew+1,0,u64::MAX] {
+        assert!(done_at(&v,&e,None,None,42,0,now).is_err());
+    }
+
+    // A still-in-window but substituted header, proof or MIC cannot advance.
+    for at in [88+24,88,72] {
+        e.three[at]^=2;assert!(done(&v,&e,None,None,42,0).is_err());e.three[at]^=2;
+    }
+    let mut expired=issued(&v,&e,None).sent(&more(&e.two,false,1,42)).unwrap();
+    expired.expires=Instant::now();
+    let request=frame::framed(&frame::smb(&e.three,false,2,42,0));
+    assert!(expired.received(&frame::compound(&request),header).is_err());
+}
+
+#[test]
 fn consumed_challenge_stages_reject_expiry_reserved_sid_and_changed_security_flags() {
     let v = revision();
     let e = example(false);
@@ -217,7 +276,7 @@ fn consumed_challenge_stages_reject_expiry_reserved_sid_and_changed_security_fla
     let mut p = issued(&v,&e,None).sent(&more(&e.two,false,1,42)).unwrap();
     p.expires = Instant::now();
     let b = frame::framed(&frame::smb(&e.three,false,2,42,0));
-    assert!(p.received(&frame::compound(&b)).is_err());
+    assert!(p.received(&frame::compound(&b),FIXTURE_SERVER_TIME).is_err());
     let s = MIN | TARGET_INFO;
     assert!(selected(MIN,s,s).is_ok());
     for bit in [VERSION, SIGN, ESS, BITS128] {

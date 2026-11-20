@@ -10,6 +10,8 @@ use std::{num::NonZeroU64,sync::{Arc,RwLock},time::{Instant,SystemTime,UNIX_EPOC
 pub(in crate::smb) struct ChallengeService {
     names:ServerNames,
     revision:RwLock<Option<Arc<ProtectedRevision>>>,
+    #[cfg(test)]
+    fixture_wall_time:Option<u64>,
 }
 struct ServerNames {
     machine:Box<[u8]>, nb_domain:Box<[u8]>, dns_machine:Option<Box<[u8]>>,
@@ -33,15 +35,18 @@ impl ChallengeService {
         if !g.as_ref().is_some_and(|v|v.epoch==rev.epoch && Arc::ptr_eq(v,rev)) {return None;}
         let out=f();drop(g);Some(out)
     }
+    fn wall_time(&self)->Result<u64> {
+        #[cfg(test)]
+        if let Some(t)=self.fixture_wall_time {return Ok(t);}
+        local::filetime_delta(SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.duration())).ok_or(Rejected)
+    }
     /// No production branch accepts a nonce, timestamp, caller-supplied key
     /// or substitute provider. Failure of the actual kernel fill aborts.
     pub(in crate::smb) fn issue(&self,start:HaveNegotiate,sid:NonZeroU64,expires:Instant)->Result<ChallengeStep> {
         self.issue_from(start,sid,expires,||{
             let mut nonce=[0;8];
             if !local::random(&mut nonce) {return Err(Rejected);}
-            let time=local::filetime_delta(SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.duration()))
-                .ok_or(Rejected)?;
-            Ok((nonce,time))
+            Ok((nonce,self.wall_time()?))
         })
     }
     fn issue_from(&self,start:HaveNegotiate,sid:NonZeroU64,expires:Instant,
@@ -68,7 +73,10 @@ impl Pending {
     pub(in crate::smb) fn prove_current(self,service:&ChallengeService,p:&crate::smb::wire::message::Compound<'_>)
         ->Result<super::MechanismProof> {
         if !self.current_at(service,Instant::now()) {return Err(Rejected);}
-        let until=self.expires;let proof=self.received(p)?;
+        // One trusted wall-clock sample, not a client value, the saved Type 2
+        // timestamp, or a replacement for the original Instant deadline.
+        let server_time=service.wall_time()?;
+        let until=self.expires;let proof=self.received(p,server_time)?;
         if Instant::now()>=until || !proof.current(service) {return Err(Rejected);}
         Ok(proof)
     }

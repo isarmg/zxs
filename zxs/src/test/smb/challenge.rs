@@ -1,17 +1,17 @@
 //! Source-only public, invented inputs: the same independent reference Type 2
 //! as the strict three-message fixture. No operating-system or stored secret.
 use super::*;
-use crate::smb::session::{der,envelope::tests as frame,strict_verifier::tests::{revision,challenge_vector}};
+use crate::smb::session::{der,envelope::tests as frame,strict_verifier::tests::{revision,challenge_vector,FIXTURE_SERVER_TIME}};
 use std::time::Duration;
 
 fn utf(s:&str)->Box<[u8]> {s.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>().into_boxed_slice()}
 impl ChallengeService {
     pub(in crate::smb) fn fixture()->Self {
         Self {names:ServerNames{machine:utf("BOX"),nb_domain:utf("SYNTH"),dns_machine:None,
-            major:10,minor:0,build:19045},revision:RwLock::new(Some(revision()))}
+            major:10,minor:0,build:19045},revision:RwLock::new(Some(revision())),fixture_wall_time:Some(FIXTURE_SERVER_TIME)}
     }
     pub(in crate::smb) fn fixture_issue(&self,start:HaveNegotiate,id:NonZeroU64,expires:Instant)->Result<ChallengeStep> {
-        self.issue_from(start,id,expires,||Ok(([0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18],0x01da_bc00_1122_3344)))
+        self.issue_from(start,id,expires,||Ok(([0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18],FIXTURE_SERVER_TIME)))
     }
     pub(in crate::smb) fn fixture_revision_holders(&self)->usize {
         self.revision.read().unwrap().as_ref().map_or(0,Arc::strong_count)
