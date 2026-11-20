@@ -10,7 +10,7 @@
 pub(in crate::smb) mod path;
 pub(in crate::smb) mod tree_connect;
 mod query;
-pub(in crate::smb) use query::root::records::FullRootRecords;
+pub(in crate::smb) use query::root::{EndOfRoot, RootScanEnd, records::FullRootRecords};
 mod io;
 pub(super) use io::{CloseCompletion, FlushCompletion, ReadCompletion, ReadFault, WriteCompletion, WriteFault};
 use crate::{DirectoryId, FileId, OperationId, PoolId, VolumeId};

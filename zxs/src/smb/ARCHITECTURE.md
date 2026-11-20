@@ -20,7 +20,7 @@
 
 一页只为有权、匹配的逻辑顺序前缀预算，独立限制条数、客户长度和复合应答剩余字节。只在记录之间算 8 字节对齐；首条装不全、下一条装不下、固定部分都装不下不是同一结果。真实适配须按原 OPEN 重核列出权，再按来源的真实排序与集合结束标记推进，不消费未回的匹配条目；不能让游标先推进再丢弃未返回的尾部，也不把过滤致空当结束。[MS-FSA 目录查询](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/fa8194e0-53ec-413b-8315-e8fa85396fd8) 的模式延续、匹配、点记录、溢出数据和结束状态仍须接线。元数据按已持对象区分虚拟根、目录和 FILE；访问属性和具体卷必须来自原始授权对象。虚拟根不挑任意实体盘冒充总容量，不对下线盘填假数据，不返回宿主路径或私有标识。
 
-`wire/query_reply` 只接收原授权根 OPEN 已封存的完整非空记录，按 [MS-SMB2 §2.2.34](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/4f75351b-048c-4a0c-9ea3-addd55a71956) 编写固定 8 字节正文（StructureSize=9、输出 offset=72 及实际长度）；不把之后复合成员之间的对齐算作数据。记录和原待提交游标仍不可分。空目录、缺权限、首条溢出或来源错误都不会制造非空成功；此层不发 SMB 头、签名、提交游标或网络发送。
+`wire/query_reply` 只接收原授权根 OPEN 已封存的完整非空记录，按 [MS-SMB2 §2.2.34](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/4f75351b-048c-4a0c-9ea3-addd55a71956) 编写固定 8 字节正文（StructureSize=9、输出 offset=72 及实际长度）；不把之后复合成员之间的对齐算作数据。记录和原待提交游标仍不可分。原授权根扫描确实无匹配时，从同一待提交结果区分首次 `STATUS_NO_SUCH_FILE` 和续搜 `STATUS_NO_MORE_FILES`，用零 Context／零 ByteCount 的 [SMB2 ERROR 正文](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d4da8b67-c180-47e3-ba7a-d24214ac4aaa)，不伪造空成功。缺权限、来源错误或首条溢出不能变成结束。规范允许同一虚拟根 OPEN 上重扫；选保持原 OPEN 及首次状态，不模拟旧 Windows 的关闭重开。没有已提交原扫描前仍是第一次。此层不发 SMB 头、签名、提交游标或网络发送。
 
 ## 已接受连接的交付与协商
 

@@ -559,4 +559,42 @@ mod root_pages {
         assert!(matches!(short.encode_complete(), Err(EncodeFault::NotComplete)));
     }
 
+    #[test]
+    fn only_a_real_no_match_has_a_directory_end_status_and_no_data() {
+        use crate::smb::wire::query_reply::DirectoryReply;
+        let owner = coordinator();
+        let (mut open, _) = opened(&owner, Object::Namespace(pool()), 1, &[("A", 3)]);
+        // A restrictive exact name on a legitimate first scan, not a missing
+        // device or authorization error. As long as it isn't submitted it
+        // stays the first scan on that same original OPEN.
+        for _ in 0..2 {
+            let page = page(&mut open, 0, 512, 4096, "B").unwrap();
+            let encoded = DirectoryReply::no_matching_root(page.seal_end().ok().unwrap());
+            assert_eq!(encoded.status(), 0xc000_000f);
+            assert_eq!(encoded.parts(), (&[9, 0, 0, 0, 0, 0, 0, 0][..], &[][..]));
+            drop(encoded);
+        }
+        page(&mut open, 0, 512, 4096, "B").unwrap().written_for_fixture();
+        // A new spelling in a continuation does not replace the original.
+        let later = page(&mut open, 0, 512, 4096, "A").unwrap();
+        let encoded = DirectoryReply::no_matching_root(later.seal_end().ok().unwrap());
+        assert_eq!(encoded.status(), 0x8000_0006);
+        assert_eq!(encoded.parts(), (&[9, 0, 0, 0, 0, 0, 0, 0][..], &[][..]));
+        drop(encoded);
+
+        // The virtual root keeps its original LocalOpen for either scan
+        // restart flag. After the first submitted pattern it is not a first query.
+        let reopen = page(&mut open, 0x10, 512, 4096, "C").unwrap();
+        let encoded = DirectoryReply::no_matching_root(reopen.seal_end().ok().unwrap());
+        assert_eq!(encoded.status(), 0x8000_0006);
+        drop(encoded);
+        let rewound = page(&mut open, 1, 512, 4096, "A").unwrap();
+        let kept = rewound.seal_end().err().unwrap(); // full records are not an end
+        assert_eq!(DirectoryReply::complete_root(kept.encode_complete().unwrap()).unwrap().status(), 0);
+
+        let (mut clipped, _) = opened(&owner, Object::Namespace(pool()), 1, &[("A", 3)]);
+        let short = page(&mut clipped, 0, 12, 4096, "").unwrap();
+        let overflow = short.seal_end().err().unwrap();
+        assert!(matches!(overflow.output(), Selection::FirstOverflow { .. }));
+    }
 }

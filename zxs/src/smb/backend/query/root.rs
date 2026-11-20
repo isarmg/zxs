@@ -69,6 +69,34 @@ pub(in crate::smb::backend) struct RootPage<'open> {
     output: Selection,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::smb) enum EndOfRoot { NoInitialMatch, Exhausted }
+
+/// Can only come from an actual authorized projection with no matches.
+/// A loss of authority, short buffer or underlying I/O error is not this.
+/// Keep the same uncommitted pattern/position available for the eventual
+/// write owner; there is no independently usable cursor acknowledgement.
+#[must_use]
+pub(in crate::smb) struct RootScanEnd<'open> {
+    kind: EndOfRoot,
+    _proposal: RootPage<'open>,
+}
+
+impl RootScanEnd<'_> {
+    pub(in crate::smb) fn kind(&self) -> EndOfRoot { self.kind }
+}
+
+impl<'open> RootPage<'open> {
+    pub(in crate::smb::backend) fn seal_end(self) -> Result<RootScanEnd<'open>, Self> {
+        let kind = match self.output() {
+            Selection::NoMatch { first_query: true } => EndOfRoot::NoInitialMatch,
+            Selection::NoMatch { first_query: false } => EndOfRoot::Exhausted,
+            _ => return Err(self),
+        };
+        Ok(RootScanEnd { kind, _proposal: self })
+    }
+}
+
 impl RootPage<'_> {
     pub(in crate::smb::backend) fn output(&self) -> &Selection { &self.output }
 
