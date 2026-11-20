@@ -1,5 +1,65 @@
 version = 4
 
 [[package]]
+name = "block-buffer"
+version = "0.12.1"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
+name = "cfg-if"
+version = "1.0.5"
+
+[[package]]
+name = "cpufeatures"
+version = "0.3.1"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "crypto-common"
+version = "0.2.2"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
+name = "digest"
+version = "0.11.3"
+dependencies = [
+ "block-buffer",
+ "crypto-common",
+]
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.15"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
+name = "libc"
+version = "0.2.191"
+
+[[package]]
+name = "sha2"
+version = "0.11.1"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
+name = "typenum"
+version = "1.20.1"
+
+[[package]]
 name = "zxs"
 version = "0.1.0"
+dependencies = [
+ "sha2",
+]

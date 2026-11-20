@@ -10,5 +10,18 @@ build = "build.rs"
 # This project builds alone, including after removal of its enclosing checkout.
 [workspace]
 resolver = "3"
+# Vendored upstream libraries are dependencies, not ZXS workspace/test members.
+exclude = [
+    "vendor/rust/block-buffer-0.12.1",
+    "vendor/rust/cfg-if-1.0.5",
+    "vendor/rust/cpufeatures-0.3.1",
+    "vendor/rust/crypto-common-0.2.2",
+    "vendor/rust/digest-0.11.3",
+    "vendor/rust/hybrid-array-0.4.15",
+    "vendor/rust/libc-0.2.191",
+    "vendor/rust/sha2-0.11.1",
+    "vendor/rust/typenum-1.20.1",
+]
 
 [dependencies]
+sha2 = { version = "=0.11.1", path = "vendor/rust/sha2-0.11.1", default-features = false }

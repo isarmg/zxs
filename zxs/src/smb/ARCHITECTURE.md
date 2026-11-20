@@ -8,6 +8,12 @@
 
 一页只为有权、匹配的逻辑顺序前缀预算，独立限制条数、客户长度和复合应答剩余字节。只在记录之间算 8 字节对齐；首条装不全、下一条装不下、固定部分都装不下不是同一结果。真实适配须按原 OPEN 重核列出权，再按来源的真实排序与集合结束标记推进，不消费未回的匹配条目；不能直接用 main v7 取页即推进的旧游标后丢弃尾部，也不把过滤致空当结束。[MS-FSA 目录查询](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/fa8194e0-53ec-413b-8315-e8fa85396fd8) 的模式延续、匹配、点记录、溢出数据和结束状态仍须接线。元数据按已持对象区分虚拟根、目录和 FILE；访问属性和具体卷必须来自原始授权对象。虚拟根不挑任意实体盘冒充总容量，不对下线盘填假数据，不返回宿主路径或私有标识。
 
+## SHA-512 原字节记录（尚未接到网络或身份认证）
+
+`wire/preauth` 从已解析的单条 3.1.1 NEGOTIATE 出发，连接只保留请求和实际序列化回复的链式哈希。每个新的 SESSION_SETUP 尝试从该连接值单独起步；接收完整原请求，并且仅在同一 MessageId、同一已分配 SessionId 的 MORE_PROCESSING_REQUIRED 回复时继续。固定的 Rust SHA-512 实现见[上游来源及许可](../../vendor/rust/README.md)。TCP 长度头不入哈希，原 SMB2 消息头、正文、间隙/填充均入哈希。最后成功的 SESSION_SETUP 回复将使用由最后一个请求哈希派生的密钥签名，因此它不会再次进入这份 KDF 上下文。该值不是口令证明、签名或有权访问文件的会话。本片不编码应答，也不运行 GSS、KDF、CMAC、凭据查询或生产监听。依据：[协商处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[新会话](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ea10b7ae-b053-4e4c-ab31-a48f7d0a79af)、[GSS 处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)。
+
+下个签名切片的两条独立验收：客户端未给 Signing Capabilities 时按规范回落到 **AES-128-CMAC 算法**，不是关闭签名；显式提议并选择 AES-128-CMAC 时也一样。处理了合法非空但无共同算法的 context 时，规范也指定 AES-CMAC；计数为零或被截断的 context 不是这条回落，应拒绝。两条都要在真实认证成功后的第一条普通命令上分别验证正确签名放行、缺失或错误签名拒绝。原生三端验收必须分开“无缓存端点的首次访问”和“同一身份重连”；记录 Windows 冷访问有无 multi-protocol opener，旧服务缓存的热路径不是首连通过。不增加 SMB1 文件操作或降级。这些均为待验收条件，未实施在线验证。
+
 ## 目标与分工
 
 只协商 0x0311，直接访问一个磁盘共享 `ZXS`。只有配置的 SMB 账户可用，Web 管理员不是 SMB 账户。共享根是虚拟目录：下挂被授权的数据盘和专用回收站，不呈现 SYSTEM、真实宿主目录或容器内部。共享名匹配与文件组件的精确大小写/原拼写是两层决定；不对所有路径做不分大小写归一化。服务为现有 zxs crate 的私有模块，不依赖兄弟项目或 Samba 的协议处理器。

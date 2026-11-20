@@ -5,6 +5,7 @@ pub(in crate::smb) mod message;
 pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod path_fields;
 pub(in crate::smb) mod query_fields;
+pub(in crate::smb) mod preauth;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Error {
