@@ -3,6 +3,7 @@
 //! wire-key constructor, listener or conversion into a storage/session grant.
 pub(super) mod challenge;
 pub(super) mod completion;
+mod record;
 use super::{
     Secret, envelope::{AwaitAuthenticate, HaveNegotiate, Layer, Saved, Unverified},
     ntlm_shape::{self as ntlm, Authenticate, Challenge},
