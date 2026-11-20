@@ -1,9 +1,9 @@
 //! Exact business children, never the host's directory stream. Ordinary
 //! directory and FILE rows occupy the same parent-local byte name.
 use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,Route},sqlite3_step};
-use super::super::{file_location::Placed,volume::OrdinaryRoot,work_record::{self,Members,ReadRecord}};
+use super::super::{file_location::Placed,volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Members,ReadRecord}};
 use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,
-    fs::{WitnessRead,invalid,directory_birth::{DirectoryBirth,DirectoryHold,DirectoryParent}},
+    fs::{HeldDir,WitnessRead,invalid,directory_birth::{DirectoryBirth,DirectoryHold,DirectoryParent}},
     ordinary::portable_birth::{Birth,Installed}};
 use std::{collections::BTreeSet,ffi::CString,io};
 
@@ -57,9 +57,12 @@ pub(in crate::system::reader) fn check_alias(root:&OrdinaryRoot<'_>,birth:&Birth
 }
 pub(in crate::system::reader) fn check_alias_name(root:&OrdinaryRoot<'_>,name:&str,owner:Option<&file_create::Alias>,sample:Option<&BTreeSet<Vec<u8>>>)
     ->io::Result<Option<Installed>>{
+    check_alias_at(root.folder(),name,owner,sample)
+}
+fn check_alias_at(parent:&HeldDir,name:&str,owner:Option<&file_create::Alias>,sample:Option<&BTreeSet<Vec<u8>>>)
+    ->io::Result<Option<Installed>>{
     if Birth::reserved_spelling(name.as_bytes()){return Ok(None);}
     let leaf=CString::new(name).map_err(|_|invalid("invalid display leaf"))?;
-    let parent=root.folder();
     if !parent.entry_present(&leaf)?{return Ok(None);}
     let owner=owner.ok_or_else(||invalid("unrecognized native occupant of FILE display name"))?;
     let fresh;
@@ -110,7 +113,7 @@ fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:boo
 }
 /// A cursor is an ordering key, never a pathname, principal or grant. No
 /// physical inode or storage name is returned from either listing route.
-fn read_page_bound(at:PageAt<'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed:bool,
+fn read_page_bound(at:PageAt<'_>,root:OrdinaryView<'_>,after:&[u8],limit:u8,mixed:bool,
     require:impl Fn(&Connection,&Catalog)->io::Result<()>,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
     if !(1..=MAX_PAGE).contains(&limit){return Err(invalid("invalid ordinary page limit"));}
     if !after.is_empty(){display::component(after,if mixed{255}else{222})?;}
@@ -141,7 +144,7 @@ fn read_page_bound(at:PageAt<'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mix
                 }
                 p.members.require(&WitnessRead::at(file.directory())?)?;
                 file.require(parent)?;
-                if let Some(pin)=check_alias_name(root,&p.placed.here.name,p.display_owner.as_ref(),Some(&final_names))?{aliases.push(pin);}
+                if let Some(pin)=check_alias_at(parent,&p.placed.here.name,p.display_owner.as_ref(),Some(&final_names))?{aliases.push(pin);}
             },
             _=>return Err(invalid("different original child proof")),
         }
@@ -167,7 +170,7 @@ fn read_page_bound(at:PageAt<'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mix
 }
 fn read_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed:bool,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
     let at=PageAt{source:tree.session.source,volume:tree.setting.volume,parent:tree.parent};
-    read_page_bound(at,root,after,limit,mixed,|db,c|tree.require(db,c,false),at_cut)
+    read_page_bound(at,root.view(),after,limit,mixed,|db,c|tree.require(db,c,false),at_cut)
 }
 pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Entry>>{
     read_page(tree,root,after,limit,false,at_cut)?.into_iter().map(|item|match item{

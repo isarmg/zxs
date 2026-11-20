@@ -56,9 +56,47 @@ pub(crate) struct DiskSpace{
     /// may report the same total; neither this nor a marker is disk health.
     pub(crate) filesystem_bytes:u64,pub(crate) available_bytes:u64,
 }
-pub(super) struct OrdinaryRoot<'a>{
-    source:&'a InitialReader,pub(super) root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId,pub(super) ordinal:u8,
+/// Owns only the real F/parent descriptors. Its originating SQL reader
+/// remains a separate authority owner; no physical hold gives file rights.
+pub(super) struct OrdinaryMedia{
+    pub(super) root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId,pub(super) ordinal:u8,
     parent:DirectoryParent,ancestors:Vec<DirectoryHold>,
+}
+pub(super) struct OrdinaryRoot<'a>{source:&'a InitialReader,media:OrdinaryMedia}
+impl std::ops::Deref for OrdinaryRoot<'_>{
+    type Target=OrdinaryMedia;
+    fn deref(&self)->&OrdinaryMedia{&self.media}
+}
+/// A short reference to the same hold and its original reader. The shared
+/// pager receives this only from a checked call and independently rechecks
+/// the caller's family-specific authority before both original selections.
+#[derive(Clone,Copy)]
+pub(super) struct OrdinaryView<'a>{source:&'a InitialReader,media:&'a OrdinaryMedia}
+impl OrdinaryView<'_>{
+    pub(super) fn folder(&self)->&HeldDir{self.media.folder()}
+    pub(super) fn parent(&self)->DirectoryParent{self.media.parent()}
+    pub(super) fn for_tree(&self,source:&InitialReader,volume:VolumeId)->bool{
+        std::ptr::eq(self.source,source)&&self.media.volume==volume
+    }
+    pub(super) fn require_streaming(&self)->io::Result<()>{
+        self.require_streaming_at(||Ok(()))
+    }
+    fn require_streaming_at(&self,at_target:impl FnOnce()->io::Result<()>)->io::Result<()>{
+        crate::fs::WitnessRead::require_parent(&self.source.dir.root)?;
+        check(unsafe{zxs_sql_named(self.source.conn.0)})?;
+        self.source.marker.require(&self.source.dir.root)?;
+        at_target()?;
+        self.media.capacity_origin().require_held()
+    }
+}
+impl OrdinaryMedia{
+    fn view<'a>(&'a self,source:&'a InitialReader)->OrdinaryView<'a>{OrdinaryView{source,media:self}}
+    pub(super) fn folder(&self)->&HeldDir{self.ancestors.last().map_or(&self.root,|child|child.directory())}
+    pub(super) fn parent(&self)->DirectoryParent{self.parent}
+    pub(super) fn capacity_origin(&self)->CapacityOrigin<'_>{
+        CapacityOrigin{root:&self.root,mark:&self.mark,expected:&self.expected,volume:self.volume,
+            ordinal:self.ordinal,ancestors:&self.ancestors}
+    }
 }
 impl InitialReader{
     /// A fresh SQL selection for exactly one mounted-FS capacity sample.
@@ -89,13 +127,12 @@ impl<'a> OrdinaryRoot<'a>{
         let parent=route.parent();
         let mut f=Self::selected(source,c,route.volume(),if parent==DirectoryParent::Root{lock}else{None})?;
         if parent!=DirectoryParent::Root{
-            f.ancestors=route.hold(&f.root)?;f.parent=parent;
+            f.media.ancestors=route.hold(&f.media.root)?;f.media.parent=parent;
             match lock{Some(true)=>f.folder().exclusive()?,Some(false)=>f.folder().share()?,None=>{}}
             f.require_streaming()?;
         }Ok(f)
     }
-    pub(super) fn folder(&self)->&HeldDir{self.ancestors.last().map_or(&self.root,|child|child.directory())}
-    pub(super) fn parent(&self)->DirectoryParent{self.parent}
+    pub(super) fn view(&self)->OrdinaryView<'_>{self.media.view(self.source)}
     fn selected(source:&'a InitialReader,catalog:&Catalog,id:VolumeId,lock:Option<bool>)->io::Result<Self>{
         let (i,row)=catalog.rows().iter().enumerate().find(|(_,r)|r.volume==id&&r.role==Role::File)
              .ok_or_else(||invalid("not an ordinary VolumeId in this original pool"))?;
@@ -106,7 +143,8 @@ impl<'a> OrdinaryRoot<'a>{
             return Err(invalid("selected original F aliases S or has different native geometry"));
         }
         let mark=source.dir.hold_marker(&root)?;
-        let b=Self{source,root,mark,expected,volume:id,ordinal:row.ordinal,parent:DirectoryParent::Root,ancestors:Vec::new()};b.require()?;Ok(b)
+        let media=OrdinaryMedia{root,mark,expected,volume:id,ordinal:row.ordinal,parent:DirectoryParent::Root,ancestors:Vec::new()};
+        let b=Self{source,media};b.require()?;Ok(b)
     }
     pub(super) fn require(&self)->io::Result<()>{
         self.source.dir.require()?;check(unsafe{zxs_sql_named(self.source.conn.0)})?;
@@ -127,15 +165,10 @@ impl<'a> OrdinaryRoot<'a>{
     /// The caller's physical phase. No target-root lookup belongs inside a
     /// SYSTEM rollback-journal transaction; a blocked F must not pin it.
     pub(super) fn require_streaming_at(&self,at_target:impl FnOnce()->io::Result<()>)->io::Result<()>{
-        crate::fs::WitnessRead::require_parent(&self.source.dir.root)?;
-        check(unsafe{zxs_sql_named(self.source.conn.0)})?;
-        self.source.marker.require(&self.source.dir.root)?;
-        at_target()?;
-        crate::fs::WitnessRead::require_parent(&self.root)?;self.mark.require(&self.root)?;
-        ordinary_directory::keep_chain(&self.root,&self.ancestors)
+        self.view().require_streaming_at(at_target)
     }
     pub(super) fn for_tree(&self,source:&InitialReader,volume:VolumeId)->bool{
-        std::ptr::eq(self.source,source)&&self.volume==volume
+        self.view().for_tree(source,volume)
     }
     /// The SMB metadata worker holds this actual F, without taking a
     /// namespace or FILE lock. A positive snapshot gives no write grant.
@@ -144,10 +177,6 @@ impl<'a> OrdinaryRoot<'a>{
         let sample=measure(&self.root)?;
         self.require_streaming()?;
         Ok(sample)
-    }
-    pub(super) fn capacity_origin(&self)->CapacityOrigin<'_>{
-        CapacityOrigin{root:&self.root,mark:&self.mark,expected:&self.expected,volume:self.volume,
-            ordinal:self.ordinal,ancestors:&self.ancestors}
     }
     pub(super) fn space(&self)->io::Result<DiskSpace>{
         self.require()?;let(mut total,mut available)=(0,0);
