@@ -109,7 +109,7 @@ pub(in crate::smb) fn file_range_end(offset: u64, length: u32) -> Option<u64> {
 }
 
 impl<'a> Message<'a> {
-    fn io_open_reference(&self, offset: usize) -> Result<OpenReference, IoFieldError> {
+    pub(super) fn io_open_reference(&self, offset: usize) -> Result<OpenReference, IoFieldError> {
         // §3.3.5.2.7.2 says to use the prior operation's IDs in all
         // related members, not only if the client sent a sentinel.
         if self.header.flags & RELATED != 0 {

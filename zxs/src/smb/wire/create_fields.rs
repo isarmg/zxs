@@ -6,6 +6,7 @@ const MAX_CONTEXTS:usize=16;
 const DIRECTORY:u32=0x0000_0001;
 const NON_DIRECTORY:u32=0x0000_0040;
 const DELETE_ON_CLOSE:u32=0x0000_1000;
+const DELETE_ACCESS:u32=0x0001_0000;
 const UNBUFFERED:u32=0x0000_0008;
 const RESERVE_OPFILTER:u32=0x0010_0000;
 const NO_COMPRESSION:u32=0x0000_8000;
@@ -97,7 +98,14 @@ impl<'a> Message<'a> {
         let impersonation_level=field(u32le(p,68))?;
         let share=field(u32le(p,96))?;
         let requested_options=field(u32le(p,104))?;
+        let desired_access=field(u32le(p,88))?;
         if impersonation_level>3 || share&!7!=0 || requested_options&!KNOWN_OPTIONS!=0 {
+            return Err(Error::Malformed);
+        }
+        // An explicit requested DELETE bit is required by §2.2.13.
+        // MAXIMUM_ALLOWED (or a generic mask) isn't that request and is
+        // never expanded here. Even the bit cannot confer an actual grant.
+        if requested_options&DELETE_ON_CLOSE!=0 && desired_access&DELETE_ACCESS==0 {
             return Err(Error::Malformed);
         }
         if requested_options&RESERVE_OPFILTER!=0 {return Err(Error::Unsupported);}
@@ -112,7 +120,7 @@ impl<'a> Message<'a> {
         }
         let contexts=Contexts::parse(n.contexts)?;
         Ok(CreateFields{name:n.name,contexts,replay:self.header.flags&REPLAY!=0,disposition,
-            desired_access:field(u32le(p,88))?,file_attributes:field(u32le(p,92))?,
+            desired_access,file_attributes:field(u32le(p,92))?,
             share_access:share as u8,oplock,impersonation_level,requested_options,effective_options})
     }
 }

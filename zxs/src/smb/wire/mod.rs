@@ -13,6 +13,7 @@ pub(in crate::smb) mod path_fields;
 pub(in crate::smb) mod query_fields;
 pub(in crate::smb) mod query_reply;
 pub(in crate::smb) mod preauth;
+pub(in crate::smb) mod set_info;
 pub(in crate::smb) mod setup_reply;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

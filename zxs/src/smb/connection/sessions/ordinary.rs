@@ -43,10 +43,11 @@ impl<'step,'raw> VerifiedMember<'step,'raw> {
     pub(in crate::smb) fn message(&self)->&Message<'raw> {self.message}
     pub(in crate::smb) fn ordinal(&self)->usize {self.ordinal}
     pub(in crate::smb) fn session(&self)->&SessionView<'step> {&self.session}
+    pub(in crate::smb) fn max_transact(&self)->u32 {self.session.max_transact}
 }
 /// Not Clone, no constructor from an ID, no key or long-lived account token.
 pub(in crate::smb) struct SessionView<'step> {
-    reg:&'step Registration,origin:&'step Arc<Origin>,revision:&'step BatchRevision,
+    reg:&'step Registration,origin:&'step Arc<Origin>,revision:&'step BatchRevision,max_transact:u32,
 }
 impl SessionView<'_> {
     /// Call again at use/commit. No registry or credential lock survives this
@@ -69,7 +70,7 @@ impl Connection {
     fn member_scope<'a>(&'a self,sid:NonZeroU64,revision:&'a BatchRevision)->Result<SessionView<'a>> {
         let (reg,bound)=self.valid_slot(sid).ok_or(Fault::SessionState)?;
         if !bound.on_revision(revision) {return Err(Fault::SessionState);}
-        let view=SessionView{reg,origin:&self.origin,revision};view.recheck()?;Ok(view)
+        let view=SessionView{reg,origin:&self.origin,revision,max_transact:self.limits.transact};view.recheck()?;Ok(view)
     }
 }
 impl<'raw> Received<'raw> {

@@ -54,7 +54,9 @@ fn real_root_shape_preserves_requested_access_but_ignores_only_defined_hints() {
     for (disp,opts,kind) in [(2,DIRECTORY,SpecialOpen::RootOpenOnly),
         (3,DIRECTORY,SpecialOpen::RootOpenOnly),(1,DIRECTORY|DELETE_ON_CLOSE,SpecialOpen::RootOpenOnly),
         (1,NON_DIRECTORY,SpecialOpen::RootIsDirectory),(1,UNBUFFERED,SpecialOpen::Unbuffered)] {
-        let bytes=tcp(&packet(&[],disp,opts,&[]));
+        let mut raw=packet(&[],disp,opts,&[]);
+        if opts&DELETE_ON_CLOSE!=0 {raw[88..92].copy_from_slice(&DELETE_ACCESS.to_le_bytes());}
+        let bytes=tcp(&raw);
         assert_eq!(shape(&bytes).unwrap().current_intent().err(),Some(kind));
     }
     // A normal relative open still belongs to path/authority validation.
@@ -162,4 +164,23 @@ fn offsets_and_lengths_are_confined_to_this_context_and_this_command() {
     raw[116..120].copy_from_slice(&34u32.to_le_bytes()); // two bytes of the following SMB2 header
     raw.extend(packet(&[],1,0,&[]));
     assert_eq!(shape(&tcp(&raw)).err(),Some(Error::Field(FieldError::Malformed)));
+}
+
+#[test]
+fn current_delete_on_close_requires_an_explicit_delete_request_and_never_grants_it() {
+    let name=[b'A',0];
+    let mut raw=packet(&name,1,DELETE_ON_CLOSE,&[]);
+    // No implicit DELETE from MAXIMUM_ALLOWED, GENERIC_ALL or FILE_SHARE_DELETE.
+    for requested in [0x0200_0000u32,0x1000_0000,0x0000_0080] {
+        raw[88..92].copy_from_slice(&requested.to_le_bytes());
+        let bytes=tcp(&raw);
+        assert_eq!(shape(&bytes).err(),Some(Error::Malformed));
+    }
+    let wanted=DELETE_ACCESS|0x0010_0080;
+    raw[88..92].copy_from_slice(&wanted.to_le_bytes());
+    let bytes=tcp(&raw);
+    let fields=shape(&bytes).unwrap();
+    assert_eq!(fields.desired_access(),wanted);
+    assert_eq!(fields.effective_options(),DELETE_ON_CLOSE);
+    assert_eq!(fields.current_intent().unwrap().name(),CurrentName::Relative(&name));
 }
