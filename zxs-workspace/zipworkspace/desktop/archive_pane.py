@@ -50,8 +50,11 @@ class ArchivePane(QWidget):
         self.files.doubleClicked.connect(lambda _index: self.enter())
         fl.addWidget(self.files)
         self.preview_file = button("预览选中的纯文本…", self.preview_selected)
+        self.preview_whole = button("完整核验大文本后跳页…", lambda: self.preview_selected(indexed=True))
         fl.addWidget(self.preview_file)
+        fl.addWidget(self.preview_whole)
         self.files.selectionModel().selectionChanged.connect(self.update_member_action)
+        self.files.selectionModel().selectionChanged.connect(lambda *_: self.close_text())
         self.save_member_action = None
         if sys.platform == "linux":
             self.save_member_action = button("另存选中的文件…", self.choose_member)
@@ -146,8 +149,12 @@ class ArchivePane(QWidget):
 
     def update_member_action(self, *_):
         entry = self.files.item() if self.file_page is not None else None
-        self.preview_file.setEnabled(entry is not None and entry.kind == "file" and
-                                     self.selection is not None and self.selection.held is not None)
+        from .text_preview import LIMIT
+
+        available = (entry is not None and entry.kind == "file" and self.selection is not None and
+                     self.selection.held is not None and not self.selection.held.closed)
+        self.preview_file.setEnabled(available)
+        self.preview_whole.setEnabled(available and entry.size_bytes > LIMIT)
         if self.save_member_action is not None:
             self.save_member_action.setEnabled(entry is not None and entry.kind in ("directory", "file"))
             self.save_member_action.setText("另存选中的文件夹…" if entry is not None and entry.kind == "directory" else
@@ -157,7 +164,7 @@ class ArchivePane(QWidget):
         out, self.text_dialog = self.text_dialog, None
         if out is not None: out.reject()
 
-    def preview_selected(self):
+    def preview_selected(self, *, indexed=False):
         selected, view, entry = self.selection, self.file_page, self.files.item()
         if (selected is None or view is None or entry is None or entry.kind != "file" or
                 self.owner.pending is not None or self.text_dialog is not None):
@@ -171,11 +178,16 @@ class ArchivePane(QWidget):
 
         name = f"{view.directory}/{entry.name}" if view.directory else entry.name
         size = entry.size_bytes
+        if indexed and size <= text_preview.LIMIT: return
+        if indexed:
+            reading = "\n全文作为严格 UTF-8 检查；核完才可按页码跳读，可能耗时。"
+        elif size <= text_preview.LIMIT:
+            reading = "\n显示通过 UTF-8 核验的全文。"
+        else:
+            reading = "\n仅判断并显示通过核验的开头最多 256 KiB，后续不判定为文本。"
         if not current() or not confirm(self, "核验后查看纯文本",
                 f"归档：{str(selected.path)!r}\n成员：{name!r}\n将从本次原件读取全部 {size:,} 字节。"
-                + ("\n显示通过 UTF-8 核验的全文。" if size <= text_preview.LIMIT else
-                   "\n仅判断并显示通过核验的开头最多 256 KiB，后续不判定为文本。")
-                + "\n不打开外部应用、不写文件；可取消。",
+                + reading + "\n不打开外部应用、不写文件；可取消。",
                 attestation="我确认只查看所选成员，不启动任何程序。", action_text="核验后预览") or not current():
             return
         stopped = Event()
@@ -188,7 +200,7 @@ class ArchivePane(QWidget):
             if stopped.is_set(): raise Rejected("已取消本次预览，未显示或保存正文。")
 
         def read():
-            try: return text_preview.prepare(selected, view.directory, entry, check=check), None
+            try: return text_preview.prepare(selected, view.directory, entry, check=check, indexed=indexed), None
             except Exception as error: return None, error
 
         def apply(result):
@@ -200,7 +212,8 @@ class ArchivePane(QWidget):
             elif error is not None:
                 self.owner.inform(str(error))
             else:
-                out = text_preview.dialog(self, preview)
+                out = (text_preview.indexed_dialog(self, preview, owner=self.owner, current=current) if indexed
+                       else text_preview.dialog(self, preview))
                 self.text_dialog = out
                 def finished(_result):
                     if self.text_dialog is out: self.text_dialog = None
@@ -550,6 +563,7 @@ class ArchivePane(QWidget):
         self.show_page(self.selection.browser.page_at(directory, number, limit=self.FILE_PAGE), number)
 
     def show_page(self, page, number):
+        if page is not self.file_page: self.close_text()
         self.directory, self.page_number, self.file_page = page.directory, number, page
         self.at.setText(f"/{page.directory}  ·  第 {number + 1} 页" + ("" if page.entries else "  ·  空文件夹"))
         self.files.rows.replace(((entry.name, "目录" if entry.kind == "directory" else "文件",

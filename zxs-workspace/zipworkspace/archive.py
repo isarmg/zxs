@@ -184,17 +184,17 @@ def _selected_index(document, length, marker):
 
 
 @contextmanager
-def stored_member(document, length, marker, name, size):
-    """A bounded Store reader for one already-admitted member; caller must verify its entire body."""
+def stored_member(document, length, marker, name, size, *, locate=False):
+    """Bound one admitted Store member; optionally return the verified physical body start."""
     with _selected_index(document, length, marker) as (archive, central):
         matches = [item for item in archive.infolist() if item.filename == name]
         if len(matches) != 1: raise Rejected("cannot identify the exact original member")
         item, = matches
-        directory, _ = _member_header(document, item, central)
+        directory, start = _member_header(document, item, central)
         if directory or item.file_size != size or (size == 0 and item.CRC):
             raise Rejected("the selected ordinary member changed")
         with archive.open(item) as source:
-            yield source
+            yield (source, start) if locate else source
 
 
 @contextmanager

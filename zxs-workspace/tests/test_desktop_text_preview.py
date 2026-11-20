@@ -34,8 +34,9 @@ class DesktopTextPreview(unittest.TestCase):
         self.addCleanup(selected.release_display)
         return selected
 
-    def get(self, selected, *, check=lambda: None):
-        return text_preview.prepare(selected, "folder", selected.browser.entry("folder", "notes"), check=check)
+    def get(self, selected, *, check=lambda: None, indexed=False):
+        return text_preview.prepare(selected, "folder", selected.browser.entry("folder", "notes"),
+                                    check=check, indexed=indexed)
 
     def test_only_original_selected_body_and_plain_unicode_no_named_reopen(self):
         raw = b"<literal>\r\n" + "中文𠀀".encode()
@@ -69,6 +70,63 @@ class DesktopTextPreview(unittest.TestCase):
                 self.assertEqual("".join(report.pages).encode(), pre)
         for tail in (b"\xf0\x80bad", "\u202eafter".encode(), b"\rx"):
             with self.assertRaises(Rejected): self.get(self.archive(pre + tail))
+
+    def test_indexed_read_reuses_original_body_offset_and_only_the_two_verified_seam_blocks(self):
+        block = text_preview.CHUNK
+        payload = b"a"*(block-2) + "𠀀".encode() + b"b"*(block-3) + b"\r\nliteral end"
+        chosen = self.archive(payload)
+        fd = chosen.held.fileno()
+        os.lseek(fd, 19, os.SEEK_SET)
+        proof = self.get(chosen, indexed=True)
+        self.assertEqual(proof.bytes_total, len(payload))
+        self.assertEqual(proof.first_page, "a" * text_preview.UNITS_PER_PAGE)
+        self.assertEqual(len(proof.blocks), 3 * text_preview._BLOCK.size)
+        self.assertEqual((proof._block(0)[1], proof._block(1)[1], proof._block(2)[1]), (0, 2, 1))
+
+        original_read = text_preview._Checked.read
+        reads = []
+        def observed_read(f, size):
+            reads.append((f.tell(), size))
+            return original_read(f, size)
+
+        with patch.object(text_preview._Checked, "read", observed_read), \
+             patch.object(text_preview, "stored_member", side_effect=AssertionError("no indexed ZIP reread")), \
+             patch.object(os, "open", side_effect=AssertionError("no by-name archive opening")):
+            value = proof.page(proof.count - 1, check=lambda: None)
+        self.assertEqual(value, "\nliteral end")
+        self.assertEqual(reads, [(proof.body_at + block, block),
+                                (proof.body_at + 2*block, len(payload) - 2*block)])
+        self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 19)
+        self.assertTrue(proof.page(proof._block(1)[0], check=lambda: None).startswith("𠀀b"))
+        with self.assertRaises(Rejected):
+            proof.page(proof.count, check=lambda: None)
+
+        def cancelled():
+            raise Rejected("cancel before any page")
+        with self.assertRaisesRegex(Rejected, "cancel before"):
+            proof.page(0, check=cancelled)
+        chosen.release_display()
+        with self.assertRaises(Rejected):
+            proof.page(0, check=lambda: None)
+
+    def test_large_index_never_shows_invalid_text_or_a_mismatched_block(self):
+        for tail in (b"\xff", "\u202e".encode(), b"\rtext"):
+            with self.subTest(tail=tail):
+                chosen = self.archive(b"a"*(text_preview.CHUNK-1) + tail)
+                self.assertEqual(self.get(chosen).bytes_shown, text_preview.LIMIT)
+                with self.assertRaisesRegex(Rejected, "全文含无效"):
+                    self.get(chosen, indexed=True)
+
+        chosen = self.archive(b"v"*text_preview.CHUNK + b"correct tail")
+        proof = self.get(chosen, indexed=True)
+        original_read = text_preview._Checked.read
+        for short in (False, True):
+            def wrong(f, size):
+                actual = original_read(f, size)
+                return actual[:-1] if short else b"Z" + actual[1:]
+            with self.subTest(short=short), patch.object(text_preview._Checked, "read", wrong):
+                with self.assertRaisesRegex(Rejected, "文本块与原核验字节不同"):
+                    proof.page(proof.count - 1, check=lambda: None)
 
     def test_page_geometry_is_bounded_with_an_unchanged_join_and_cancellable_scan(self):
         text = ("a"*8191) + "𠀀" + "\n"*800 + "end"
@@ -234,6 +292,55 @@ class DesktopTextPreview(unittest.TestCase):
         self.assertIs(left.archive.selection, original)
         self.assertFalse(original.held.closed)
         self.assertIsNone(manager.request)
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_qt_large_jump_uses_the_explicit_choice_and_a_late_page_cannot_return(self):
+        from PySide6.QtWidgets import QApplication, QLineEdit, QPlainTextEdit, QPushButton
+        from zipworkspace.desktop import archive_pane
+        from zipworkspace.desktop.window import Window
+
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        self.addCleanup(win.close)
+        pane = win.archive
+        selected = self.archive(b"r" * text_preview.CHUNK + b"<verified end>")
+        pane.show_selection(selected)
+        pane.show_folder("folder")
+        pane.files.selectRow(0)
+        self.assertTrue(pane.preview_whole.isEnabled())
+        first = Future()
+        with patch.object(archive_pane, "confirm", return_value=True) as consent, \
+             patch.object(win.pool, "submit", return_value=first) as task:
+            pane.preview_whole.click()
+            self.assertIn(f"{text_preview.CHUNK + len(b'<verified end>'):,}", consent.call_args.args[2])
+        result = task.call_args.args[0]()
+        first.set_result(result)
+        win.poll()
+        authorized = pane.text_dialog
+        self.assertEqual(authorized.objectName(), "indexed-text-preview")
+        view = authorized.findChild(QPlainTextEdit)
+        jump = authorized.findChild(QLineEdit, "indexed-text-page-number")
+        button = authorized.findChild(QPushButton, "indexed-text-go")
+        self.assertEqual(view.toPlainText(), "r" * text_preview.UNITS_PER_PAGE)
+        jump.setText(str(result[0].count))
+
+        second = Future()
+        with patch.object(win.pool, "submit", return_value=second) as task:
+            button.click()
+        self.assertEqual(view.toPlainText(), "")
+        real_read = task.call_args.args[0]()
+        self.assertEqual(real_read, ("<verified end>", None))
+        pane.show_folder("other")
+        pane.files.selectRow(0)
+        self.assertIsNone(pane.text_dialog)
+        self.assertEqual(view.toPlainText(), "")
+        self.assertEqual(jump.text(), "")
+        win.inform("当前在另一个目录")
+        second.set_result(real_read)  # delivery can be delayed until the original dialog is closed.
+        win.poll()
+        self.assertIsNone(pane.text_dialog)
+        self.assertEqual(win.note.text(), "当前在另一个目录")
 
     @unittest.skipUnless(os.name == "posix", "replace a read-open name on POSIX")
     def test_equal_bytes_replacement_is_not_the_held_original(self):
