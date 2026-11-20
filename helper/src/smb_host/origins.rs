@@ -151,7 +151,7 @@ impl<'a> Selected<'a>{
                 m.mode()!=on.mode()||ro(&shown)?!=ro(orig)?||Mount::on(&shown)?.is_none_or(|p|p.at_root!=Some(true)){
                 return Err(no());
             }
-            // The daemon receives no SYSTEM/F source whatsoever. A similarly
+            // The daemon receives no SYSTEM, F, or R source whatsoever. A similarly
             // spelled generated path is not a source or authorized alias.
             match openat2(a.daemon_root,relative,DIR,Mode::empty(),SAFE){
                 Err(Errno::NOENT|Errno::NOTDIR)=>(),

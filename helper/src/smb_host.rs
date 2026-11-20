@@ -30,14 +30,15 @@ impl<'a> Image<'a>{
 }
 
 /// No worker or browser can mint Online. It owns both original host locks,
-/// the exact approved public records and verified original ordinary volumes.
-pub(crate) fn foreground(approved:&Online)->io::Result<()>{
+/// the exact approved public records and verified data roots and optional R.
+pub(crate) fn foreground(approved:&mut Online)->io::Result<()>{
     process::host()?;
     let release=release::Release::select()?;
     approved.approve(release.manifest_sha())?;
     signals::watch_smb_cancellation()?;
-    approved.require()?;release.require()?;
+    approved.check_before_attach()?;release.require()?;
     if signals::cancelled(){return Err(no());}
+    let approved:&Online=approved;
     let (pin,system,site,private,state)=approved.host()?;
     let account=approved.account_parent()?;
     let [live,bound]=approved.public_originals();

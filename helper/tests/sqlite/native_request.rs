@@ -167,11 +167,11 @@ fn only_web_reset_changes_web_and_never_creates_a_native_pending_step() {
 #[test]
 fn exact_first_publication_is_atomic_and_never_reopens_an_unselected_or_disabled_folder() {
     use super::first_ordinary::Selected;
-    use crate::smb_profile::{self,first::{Endpoint,Folder,Mode,Origin,Plan}};
+    use crate::smb_profile::{self,first::{Endpoint,Folder,Mode,Origin,Plan,RecycleName}};
 
     let o=Origin{pool:id("pool"),init:id("init_op"),instance:id("instance"),domain:[8;16],setup:id("setup_op")};
     let plan_for=|volume|Plan::selected(o,vec![Endpoint::named("192.0.2.17/24").unwrap()],
-        vec![Folder{volume,name:"Docs".into(),mode:Mode::ReadWrite}]).unwrap();
+        vec![Folder{volume,name:"Docs".into(),mode:Mode::ReadWrite}],RecycleName::new("Recycle".into()).unwrap()).unwrap();
     let plan=plan_for([82;16]); // /f; /untouched is enrolled but not selected.
     let mut bound: [u8;128]=vector("setup_bound").try_into().unwrap();
     let live:[u8;32]=Sha256::digest(smb_profile::render(&plan).unwrap().as_bytes()).into();

@@ -66,8 +66,9 @@ pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&
 pub(super) fn init_claims(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<Vec<Initial>>{
     with_origin(pool,init,locked,|tx,template|catalog::initial_metadata(tx,template,locked.source(),pool,init))
 }
-pub(super) fn mounted_folders(plan:&crate::smb_profile::first::Plan,bound_sha:&[u8;32],locked:&LockedSystem)
-    ->io::Result<Vec<Initial>>{
+pub(super) struct StartupClaims{pub(super) ordinary:Vec<Initial>,pub(super) recycle:Initial}
+pub(super) fn startup_claims(plan:&crate::smb_profile::first::Plan,bound_sha:&[u8;32],locked:&LockedSystem)
+    ->io::Result<StartupClaims>{
     let o=plan.origin;
     with_origin(&o.pool,&o.init,locked,|tx,template|{
         let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.account_pair a
@@ -93,12 +94,13 @@ pub(super) fn mounted_folders(plan:&crate::smb_profile::first::Plan,bound_sha:&[
             if !issued{return Err(bad("no confirmed original publication matching the selected folder"));}
             selected.push(Initial{path:item.path.clone(),marker:item.marker});
         }
-        Ok(selected)
+        Ok(StartupClaims{ordinary:selected,recycle:catalog::initial_recycle(&claims)?.clone()})
     })
 }
 pub(super) fn approved_folders(plan:&crate::smb_profile::first::Plan,locked:&LockedSystem)->io::Result<()>{
     let o=plan.origin;
     let claims=init_claims(&o.pool,&o.init,locked)?;
+    catalog::initial_recycle(&claims)?;
     if !plan.folders().iter().all(|(f,_)|claims.iter().any(|c|c.marker[20]==2&&c.marker[37..53]==f.volume)){
         return Err(bad("the first SMB plan is not limited to the original ordinary data volumes"));
     }

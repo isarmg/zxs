@@ -1,6 +1,6 @@
 //! One actual private writer FSP. No FILE lock, scratch, or wait
 //! is shared with the tree's compatible readers.
-use super::{Site,TreeOrigin,SmbSession,Tree,InitialReader,denied,live,member_packet,os};
+use super::{mover,Site,TreeOrigin,SmbSession,Tree,InitialReader,denied,live,member_packet,os};
 use super::super::super::{smb_stage::Staged,share_mode::{Mode,Setting}};
 use crate::{display,fs::{HeldDir,invalid}};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering}};
@@ -68,18 +68,45 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,tree_peer:&OwnedFd,tree_liv
     let tree=Tree{session:&session,setting:expected};
     let writer=tree.open_named_writer(name)?;
     writer.require_tree_root(root)?;
-    let mut staged=Staged::open(writer)?;
+    let staged=Staged::open(writer)?;
     let ready=member_packet(staged.base(),staged.base().native_key()?);
     active()?;site.validate()?;
     os(unsafe{zxs_member_reply(fd,ready.as_ptr())})?;
-    commands(site,origin,fd,&active,&mut staged)
+    commands(site,origin,tree_peer,expected,fd,&active,staged)
 }
-pub(super) fn commands(site:Site<'_>,origin:&TreeOrigin,fd:i32,active:&impl Fn()->io::Result<()>,staged:&mut Staged<'_,'_,'_>)->io::Result<()>{
+pub(super) fn commands(site:Site<'_>,origin:&TreeOrigin,tree_peer:&OwnedFd,expected:Setting,fd:i32,active:&impl Fn()->io::Result<()>,
+    mut staged:Staged<'_,'_,'_>)->io::Result<()>{
     loop{
         active()?;
         let wait=unsafe{zxs_smb_root_wait(fd,origin.session.as_raw_fd(),500)};
         if wait==0{continue;}
         if wait!=1{return Err(denied());}
+        match mover::pending(fd){
+            1=>{
+                let (request,answer)=mover::take(fd,origin)?;
+                if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
+                let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
+                let source=staged.base().native_placement().clone();
+                if matches!(&request,mover::Request::Delete(_)){
+                    if staged.transfer_ready().is_err(){mover::refuse(answer,1);continue;}
+                    // Native has already drained this explicit CLOSE and
+                    // marked the last FILE under its actual share-mode lock.
+                    // Release the original staging FILE EX before handoff.
+                    drop(staged);
+                    mover::run(site,origin,tree_peer,answer,request,source,Some(expected),permit);
+                    // The completed native CLOSE consumes the correlated
+                    // reply before it closes this still-original control FD.
+                    while active().is_ok(){
+                        if unsafe{zxs_smb_root_wait(fd,origin.session.as_raw_fd(),500)}!=0{break;}
+                    }
+                    return Ok(());
+                }
+                mover::run(site,origin,tree_peer,answer,request,source,Some(expected),permit);
+                continue;
+            },
+            0=>{},
+            _=>return Err(denied()),
+        }
         let(mut cmd,mut offset,mut count,mut settle)=(0,0,0,0);
         let answer=unsafe{zxs_work_take(fd,origin.worker.as_raw_fd(),&mut cmd,&mut offset,&mut count,&mut settle)};
         if answer<0{return Err(denied());}

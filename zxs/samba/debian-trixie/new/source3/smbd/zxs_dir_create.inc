@@ -115,6 +115,20 @@ static void zxs_dir_opened(struct tevent_req *sub)
 	}
 	zxs_create_open(req,s->zxs_is_dir?NULL:&member,&fd,offer);
 }
+static void zxs_create_round_ready(struct tevent_req *sub)
+{
+	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
+	struct smbd_smb2_create_state *s=tevent_req_data(req,struct smbd_smb2_create_state);
+	struct zxs_smb_tree_cut round;
+	NTSTATUS status=zxs_folder_cut_recv(sub,&round);
+	s->zxs_wait=NULL;TALLOC_FREE(sub);
+	if(tevent_req_nterror(req,status))return;
+	if(zxs_r_round_own_parent(&round,&s->zxs_route)!=0){
+		zxs_smb_root_release(&round);tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
+	}
+	s->zxs_route=round;
+	zxs_create_open(req,NULL,NULL,false);
+}
 static void zxs_create_folder_ready(struct tevent_req *sub)
 {
 	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
@@ -122,9 +136,37 @@ static void zxs_create_folder_ready(struct tevent_req *sub)
 	NTSTATUS status=zxs_folder_cut_recv(sub,&s->zxs_route);
 	s->zxs_wait=NULL;TALLOC_FREE(sub);
 	if(tevent_req_nterror(req,status))return;
+	if(s->zxs_nested && !zxs_folder_retained(&s->zxs_route)){
+		tevent_req_nterror(req,NT_STATUS_OBJECT_PATH_INVALID);return;
+	}
+	if(zxs_folder_retained(&s->zxs_route)){
+		if(s->zxs_disposition!=FILE_OPEN || (!s->zxs_nested && !s->zxs_is_dir)){
+			tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
+		}
+		if(!s->zxs_nested){zxs_create_open(req,NULL,NULL,false);return;}
+		if(s->zxs_is_dir){
+			s->zxs_wait=zxs_dir_cut_send(s,s->ev,s->smb2req,&s->zxs_route,ZXS_RETAINED_DIR,
+				(const uint8_t *)s->zxs_name,strlen(s->zxs_name));
+			if(tevent_req_nomem(s->zxs_wait,req))return;
+			tevent_req_set_callback(s->zxs_wait,zxs_create_round_ready,req);return;
+		}
+		status=zxs_open_access(s->smb1req->conn,false,&s->zxs_route,&s->zxs_access,s->zxs_share);
+		if(tevent_req_nterror(req,status))return;
+		const unsigned retained=(s->zxs_share&FILE_SHARE_DELETE)?ZXS_RETAINED_SHARE_DELETE:ZXS_RETAINED_OPEN;
+		s->zxs_wait=zxs_dir_cut_send(s,s->ev,s->smb2req,&s->zxs_route,retained,
+			(const uint8_t *)s->zxs_name,strlen(s->zxs_name));
+		if(tevent_req_nomem(s->zxs_wait,req))return;
+		tevent_req_set_callback(s->zxs_wait,zxs_dir_opened,req);return;
+	}
 	if(s->zxs_is_dir){zxs_create_open(req,NULL,NULL,false);return;}
+	uint32_t requested=s->zxs_access;
+	se_map_generic(&requested,&file_generic_mapping);
+	if(s->zxs_disposition!=FILE_OPEN && (requested&SEC_STD_DELETE)!=0){
+		tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
+	}
 	status=zxs_open_access(s->smb1req->conn,false,&s->zxs_route,&s->zxs_access,s->zxs_share);
 	if(tevent_req_nterror(req,status))return;
+	if(s->zxs_disposition!=FILE_OPEN)s->zxs_access&=~SEC_STD_DELETE;
 	s->zxs_writer=(s->zxs_access&(SEC_FILE_WRITE_DATA|SEC_FILE_APPEND_DATA))!=0;
 	unsigned action=s->zxs_writer?ZXS_MEMBER_WRITE_OPEN:ZXS_MEMBER_OPEN;
 	if(s->zxs_disposition!=FILE_OPEN){
@@ -153,13 +195,23 @@ static bool zxs_create_select(struct tevent_req *req,const char *name,bool direc
 		tevent_req_set_callback(s->zxs_wait,zxs_dir_opened,req);
 	}else{
 		size_t length=split==NULL?strlen(name):(size_t)(split-name);
-		if(directory!=(split==NULL) || length==0 || length>ZXS_DIR_NAME ||
-		   name[length-1]=='.' || name[length-1]==' ' ||
-		   strpbrk(name,"/:*?\"<>|")!=NULL ||
-		   (split!=NULL && !zxs_create_label(split+1,strlen(split+1),ZXS_FILE_NAME))){
+		const char *second=split==NULL?NULL:strchr(split+1,'\\');
+		s->zxs_nested=split!=NULL && (directory || second!=NULL);
+		bool shape=true;
+		if(s->zxs_nested){
+			const char *tail=second==NULL?split+1:second+1;
+			size_t n=second==NULL?strlen(split+1):(size_t)(second-(split+1));
+			shape=zxs_delete_hex((const uint8_t *)split+1,n) &&
+			      (directory?second==NULL:second!=NULL && zxs_create_label(tail,strlen(tail),ZXS_FILE_NAME));
+		}else{
+			shape=directory==(split==NULL) &&
+			      (split==NULL || zxs_create_label(split+1,strlen(split+1),ZXS_FILE_NAME));
+		}
+		if(!shape || length==0 || length>ZXS_DIR_NAME ||
+		   name[length-1]=='.' || name[length-1]==' ' || strpbrk(name,"/:*?\"<>|")!=NULL){
 			tevent_req_nterror(req,NT_STATUS_OBJECT_PATH_INVALID);return false;
 		}
-		s->zxs_name=directory?name:split+1;
+		s->zxs_name=split==NULL?name:split+1;
 		uint32_t mask=s->zxs_access;
 		se_map_generic(&mask,&file_generic_mapping);
 		/* Distinct storage scheduling capacity: an explicit compatible

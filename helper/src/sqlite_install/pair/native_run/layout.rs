@@ -1,11 +1,11 @@
-//! Resolve only explicitly selected ordinary paths as raw catalogue bytes.
-//! The privileged process holds the one S lease but never opens SQLite or F/R.
+//! Resolve explicitly selected ordinary claims plus the single original R.
+//! Only the authenticated lower-privilege process opens the actual SQLite ledger.
 use super::{bad,host::Worker,manifest::{read_sealed,sealed_owner},transport::{self,Channel,Kind},worker::original_parent};
 use crate::{fs_tools::RuntimeFile,path_rules::MAX_PATH_BYTES,pinned::{Kind as PathKind,Pinned},
-    smb_profile::{self,first::{Endpoint,Folder,Id,Mode,Origin,Plan,MAX_FOLDERS,MAX_WIRE}},
-    sqlite_install::{approval,originals::SelectedSystem,pair::{domain::{
+    smb_profile::{self,first::{Endpoint,Folder,Id,Mode,Origin,Plan,RecycleName,MAX_FOLDERS,MAX_WIRE}},
+    sqlite_install::{approval,catalog::{self,Initial},originals::SelectedSystem,pair::{domain::{
         give_live_approval,request_live_approval,require_lent_ex,sealed,LocalDomain,NativeSite},observed,terminal::PublicConfirmation},
-        stage::random}};
+        pair::recycle::Recycle,stage::random}};
 use helper_linux_evidence::diagnostic_process::{OfflineSql,account_sql_descriptors};
 use rustix::{fs::{FlockOperation,flock},net::UCred,process::{DumpableBehavior,Gid,Signal,Uid,dumpable_behavior,
     getppid,set_dumpable_behavior,set_parent_process_death_signal}};
@@ -14,8 +14,8 @@ use std::{collections::BTreeSet,ffi::OsString,fmt::Write,fs::File,io,os::unix::{
     path::{Path,PathBuf},time::{Duration,Instant}};
 
 const HELPER:&[&str]=&["usr","bin","helper"];
-const ONLINE:&[u8]=b"helper exact host runtime selection v9\0";
-const DOMAIN:&[u8]=b"helper exact init selection v9\0";
+const ONLINE:&[u8]=b"helper exact host runtime selection v10\0";
+const DOMAIN:&[u8]=b"helper exact init selection v10\0";
 const BUDGET:usize=DOMAIN.len()+32+3*16+3*8+1+(MAX_FOLDERS+1)*(2+MAX_PATH_BYTES);
 
 #[derive(Debug)]
@@ -73,17 +73,18 @@ fn place(pin:&Pinned)->io::Result<[u64;3]>{
     let e=pin.entity();Ok([e.dev,e.ino,pin.require_same_named_mount()?.id])
 }
 pub(in crate::sqlite_install::pair) struct Resolved {
-    system:Pinned,ex:File,subject:(Id,u32,u32),plan:Plan,paths_preview:String,
+    system:Pinned,ex:File,subject:(Id,u32,u32),plan:Plan,paths_preview:String,host:File,recycle:Recycle,
 }
 impl Resolved {
     pub(in crate::sqlite_install::pair) fn plan(&self)->&Plan{&self.plan}
     pub(in crate::sqlite_install::pair) fn preview(&self)->&str{&self.paths_preview}
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
-        require(&self.system,&self.ex,self.subject)
+        require(&self.system,&self.ex,self.subject)?;
+        self.recycle.require(&self.host,self.subject.1,[(&self.system,&self.ex)])
     }
-    pub(in crate::sqlite_install::pair) fn select(system:&Path,origin:Origin,endpoints:Vec<Endpoint>,choices:Vec<Choice>)->io::Result<Self>{
+    pub(in crate::sqlite_install::pair) fn select(system:&Path,origin:Origin,endpoints:Vec<Endpoint>,choices:Vec<Choice>,recycle:RecycleName)->io::Result<Self>{
         approval::no_inherited_descriptors()?;
-        approval::host_admin()?;
+        let host=approval::host_admin()?;
         let tty=PublicConfirmation::select()?;
         let subject=approval::profile()?;
         let system=Pinned::open(system,PathKind::StorageRoot)?;
@@ -93,19 +94,25 @@ impl Resolved {
         let mut nonce=[0;32];nonce[..16].copy_from_slice(&random()?);nonce[16..].copy_from_slice(&random()?);
         let req=Question{nonce,actor:subject.0,pool:origin.pool,init:origin.init,location:place(&system)?,system:system.path().to_path_buf(),
             paths:choices.iter().map(|c|c.path.clone()).collect()};
-        let folders=read_ids(req,&ex,subject,check)?;
+        let (folders,claim)=read_layout(req,&ex,subject,check,origin)?;
         let f=choices.iter().zip(&folders).map(|(c,&volume)|Folder{volume,name:c.folder.clone(),mode:c.mode}).collect();
-        let plan=Plan::selected(origin,endpoints,f).map_err(bad)?;
+        let plan=Plan::selected(origin,endpoints,f,recycle).map_err(bad)?;
+        // Setup cannot be issued for an absent, unconfirmed or read-only R.
+        // Prove its actual original before asking for the layout approval.
+        let recycle=Recycle::select(&claim,&host,subject.1,[(&system,&ex)])?;
         let mut paths_preview=String::from("本次低权限只读核对的原 SYSTEM：\"");
         smb_profile::escaped(&mut paths_preview,system.path().as_os_str().as_bytes());
-        paths_preview.push_str("\"；路径均为原登记字节，未打开任何普通盘或回收盘。\n");
+        paths_preview.push_str("\"；普通盘只核原登记字节，未读盘内容。\n");
+        paths_preview.push_str("  已核独立回收盘原路径 \"");
+        smb_profile::escaped(&mut paths_preview,recycle.source().0.as_os_str().as_bytes());
+        paths_preview.push_str("\"；只核卷身份与固定标记。\n");
         for (c,id) in choices.iter().zip(&folders){
             let hex=id.iter().map(|b|format!("{b:02x}")).collect::<String>();
             paths_preview.push_str("  已选原路径 \"");
             smb_profile::escaped(&mut paths_preview,c.path.as_os_str().as_bytes());
             writeln!(paths_preview,"\" → 原普通卷 {hex}。").expect("writing a String");
         }
-        let out=Self{system,ex,subject,plan,paths_preview};out.require()?;Ok(out)
+        let out=Self{system,ex,subject,plan,paths_preview,host,recycle};out.require()?;Ok(out)
     }
 }
 fn require(pin:&Pinned,file:&File,subject:(Id,u32,u32))->io::Result<()>{
@@ -140,7 +147,7 @@ fn query<T>(raw:&[u8],original:&File,subject:(Id,u32,u32),check:impl Fn()->io::R
     hired.finish(&channel,until)?;check()?;
     Ok(v)
 }
-fn read_ids(q:Question,ex:&File,subject:(Id,u32,u32),check:impl Fn()->io::Result<()>)->io::Result<Vec<Id>>{
+fn read_layout(q:Question,ex:&File,subject:(Id,u32,u32),check:impl Fn()->io::Result<()>,origin:Origin)->io::Result<(Vec<Id>,Initial)>{
     query(&q.encode()?,ex,subject,&check,|channel,scope,until|{
         let mut ids=Vec::with_capacity(q.paths.len());
         for i in 0..q.paths.len(){
@@ -149,7 +156,9 @@ fn read_ids(q:Question,ex:&File,subject:(Id,u32,u32),check:impl Fn()->io::Result
             if v!=body(i,id)||id==[0;16]||ids.contains(&id){return Err(bad_question());}
             ids.push(id);
         }
-        Ok(ids)
+        let r=receive_media(channel,scope,until,&check,q.paths.len(),None,origin,subject)?;
+        if ids.iter().any(|id|id.as_slice()==&r.marker[37..53]){return Err(bad_question());}
+        Ok((ids,r))
     })
 }
 struct LiveQuery{nonce:[u8;32],actor:Id,location:[u64;3],system:PathBuf,plan:Plan,bound:[u8;128]}
@@ -189,28 +198,41 @@ fn volume_reply(i:usize,raw:&[u8])->[u8;65]{
 fn media_bytes(record:&crate::sqlite_install::catalog::Initial)->Vec<u8>{
     let mut out=record.marker.to_vec();out.extend(record.path.as_os_str().as_bytes());out
 }
-fn material(raw:&[u8],expected:&Folder,origin:Origin)->io::Result<crate::sqlite_install::catalog::Initial>{
+// A missing `expected` can represent only the uniquely issued ordinal-one R.
+fn material(raw:&[u8],expected:Option<&Folder>,origin:Origin)->io::Result<Initial>{
     let (prefix,path)=raw.split_at_checked(101).ok_or_else(bad_question)?;
     let marker:[u8;101]=prefix.try_into().expect("control marker width");
     crate::path_rules::Kind::StorageRoot.check_path(path).map_err(bad)?;
-    if &marker[..20]!=b"ZXS-SQLITE-1/VOLUME\0"||marker[20]!=2||marker[21..37]!=origin.pool||
-        marker[37..53]!=expected.volume||marker[53..69]!=origin.init||marker[69..]==[0;32]{return Err(bad_question());}
-    Ok(crate::sqlite_install::catalog::Initial{path:PathBuf::from(OsString::from_vec(path.to_vec())),marker})
+    let role=if expected.is_some(){2}else{1};
+    if &marker[..20]!=b"ZXS-SQLITE-1/VOLUME\0"||marker[20]!=role||marker[21..37]!=origin.pool||
+        marker[37..53]==[0;16]||marker[37..53]==origin.pool||expected.is_some_and(|f|marker[37..53]!=f.volume)
+        ||marker[53..69]!=origin.init||marker[69..]==[0;32]{return Err(bad_question());}
+    Ok(Initial{path:PathBuf::from(OsString::from_vec(path.to_vec())),marker})
 }
-pub(in crate::sqlite_install::pair) fn online_roots(site:&NativeSite)->io::Result<Vec<crate::sqlite_install::catalog::Initial>>{
+fn receive_media(channel:&Channel,scope:&[u8;32],until:Instant,check:impl Fn()->io::Result<()>,
+    i:usize,folder:Option<&Folder>,origin:Origin,subject:(Id,u32,u32))->io::Result<Initial>{
+    let (reply,[fd])=channel.wait_checked::<1>(Kind::VolumeClaim,scope,until,check)?;
+    let value=sealed_owner(&fd,101+MAX_PATH_BYTES,(subject.1,subject.2))?;
+    if reply!=volume_reply(i,&value){return Err(bad_question());}
+    material(&value,folder,origin)
+}
+fn send_media(channel:&Channel,scope:&[u8;32],i:usize,claim:&Initial)->io::Result<()>{
+    let bytes=media_bytes(claim);let report=sealed(&bytes)?;
+    channel.send_original(Kind::VolumeClaim,scope,&volume_reply(i,&bytes),&report)
+}
+pub(in crate::sqlite_install::pair) fn online_roots(site:&NativeSite)->io::Result<observed::StartupClaims>{
     let (pin,ex,..)=site.online_sources()?;let subject=site.subject();
     let mut nonce=[0;32];nonce[..16].copy_from_slice(&random()?);nonce[16..].copy_from_slice(&random()?);
     let q=LiveQuery{nonce,actor:subject.0,location:place(pin)?,system:pin.path().into(),plan:site.first_plan().clone(),bound:site.bound_bytes()};
     let raw=q.emit()?;
     query(&raw,ex,subject,||site.require(),|channel,scope,until|{
-        let mut result=Vec::with_capacity(q.plan.folders().len());
+        let mut ordinary=Vec::with_capacity(q.plan.folders().len());
         for (i,(wanted,_)) in q.plan.folders().iter().enumerate(){
-            let (v,[reply])=channel.wait_checked::<1>(Kind::VolumeClaim,scope,until,||site.require())?;
-            let value=sealed_owner(&reply,101+MAX_PATH_BYTES,(subject.1,subject.2))?;
-            if v!=volume_reply(i,&value){return Err(bad_question());}
-            result.push(material(&value,wanted,q.plan.origin)?);
+            ordinary.push(receive_media(channel,scope,until,||site.require(),i,Some(wanted),q.plan.origin,subject)?);
         }
-        Ok(result)
+        let recycle=receive_media(channel,scope,until,||site.require(),ordinary.len(),None,q.plan.origin,subject)?;
+        if ordinary.iter().any(|c|c.marker[37..53]==recycle.marker[37..53]||c.path==recycle.path){return Err(bad_question());}
+        Ok(observed::StartupClaims{ordinary,recycle})
     })
 }
 
@@ -246,13 +268,10 @@ pub(crate) fn worker()->io::Result<()>{
     let open=SelectedSystem::from_origin(pin,host,uid,gid)?;
     if let (None,Some(q))=&mode{
         let system=open.from_lent_sh(lease)?;
-        let chosen=observed::mounted_folders(&q.plan,&Sha256::digest(q.bound).into(),&system)?;
+        let chosen=observed::startup_claims(&q.plan,&Sha256::digest(q.bound).into(),&system)?;
         if getppid()!=Some(parent){return Err(bad_question());}system.require()?;
-        for (i,m) in chosen.iter().enumerate(){
-            let bytes=media_bytes(m);let report=sealed(&bytes)?;
-            channel.send_original(Kind::VolumeClaim,&scope,&volume_reply(i,&bytes),&report)?;
-        }
-        return Ok(());
+        for (i,m) in chosen.ordinary.iter().enumerate(){send_media(&channel,&scope,i,m)?;}
+        return send_media(&channel,&scope,chosen.ordinary.len(),&chosen.recycle);
     }
     let (Some(q),None)=mode else{return Err(bad_question());};
     let system=open.from_lent_ex(lease)?;
@@ -263,8 +282,9 @@ pub(crate) fn worker()->io::Result<()>{
     }).collect::<io::Result<Vec<Id>>>()?;
     if getppid()!=Some(parent){return Err(bad_question());}
     system.require()?;
+    let recycle=catalog::initial_recycle(&catalogue)?;
     for (i,volume) in chosen.into_iter().enumerate(){channel.send(Kind::ChosenFolder,&scope,&body(i,volume))?;}
-    Ok(())
+    send_media(&channel,&scope,q.paths.len(),recycle)
 }
 
 #[cfg(test)]
@@ -278,11 +298,14 @@ mod tests {
             marker:crate::sqlite_install::catalog::claimed_marker(2,&o.pool,&chosen.volume,&o.init,&[0x31;32]),
         };
         let raw=media_bytes(&proof);
-        assert_eq!(material(&raw,&chosen,o).unwrap().path,proof.path);
-        assert!(material(&raw,&Folder{volume:[0x22;16],..chosen.clone()},o).is_err());
-        let mut wrong=raw.clone();wrong[20]=1;assert!(material(&wrong,&chosen,o).is_err());
-        let mut wrong=raw.clone();wrong[53]=0;assert!(material(&wrong,&chosen,o).is_err());
-        let mut wrong=raw;wrong.extend(b"/../other");assert!(material(&wrong,&chosen,o).is_err());
+        assert_eq!(material(&raw,Some(&chosen),o).unwrap().path,proof.path);
+        assert!(material(&raw,Some(&Folder{volume:[0x22;16],..chosen.clone()}),o).is_err());
+        assert!(material(&raw,None,o).is_err());
+        let mut recycle=raw.clone();recycle[20]=1;
+        assert!(material(&recycle,Some(&chosen),o).is_err());
+        assert_eq!(material(&recycle,None,o).unwrap().path,proof.path);
+        let mut wrong=raw.clone();wrong[53]=0;assert!(material(&wrong,Some(&chosen),o).is_err());
+        let mut wrong=raw;wrong.extend(b"/../other");assert!(material(&wrong,Some(&chosen),o).is_err());
     }
     #[test] fn exact_raw_paths_are_distinct_and_not_normalized(){
         let mut q=Question{nonce:[7;32],actor:[1;16],pool:[2;16],init:[3;16],location:[0,9,15],

@@ -68,7 +68,10 @@ static void zxs_search_received(struct tevent_req *sub)
 		}
 		memcpy(name,r+1,len);name[len]=0;
 		if(mask_match(name,s->zxs_mask,s->dirfsp->conn->case_sensitive)){
-			status=zxs_marshal_child(s,s->dirfsp->conn,s->info_level,name,s->zxs_search->folder.mode==0,
+			const struct zxs_smb_tree_cut *f=&s->zxs_search->folder;
+			const uint8_t row_kind=f->mode==0?ZXS_ROW_TOP:
+				(zxs_folder_retained(f)&&!zxs_folder_round(f))?ZXS_ROW_ROUND:ZXS_ROW_FILE;
+			status=zxs_marshal_child(s,s->dirfsp->conn,s->info_level,name,row_kind,
 				zxs_row_u64(r+1+ZXS_DIR_NAME),zxs_row_u64(r+1+ZXS_DIR_NAME+8),
 				s->in_output_buffer_length-(int)s->out_output_buffer.length,
 				s->base_data,&s->pdata,s->end_data,&off);

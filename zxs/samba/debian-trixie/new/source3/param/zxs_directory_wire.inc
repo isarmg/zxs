@@ -7,6 +7,8 @@ static const uint8_t dirq[16]="ZXS-DIR/PAGE-1";
 static const uint8_t dira[16]="ZXS-DIR/ROWS-1";
 static const uint8_t nsa[16]="ZXS-NS/ROWS-1";
 static const uint8_t nsq[16]="ZXS-NS/FOLDER-1";
+static const uint8_t rounds[16]="ZXS-R/ROUNDS1";
+static const uint8_t retainedq[16]="ZXS-R/MEMBER-1";
 static const uint8_t openq[16]="ZXS-FILE/OPEN-1";
 static const uint8_t editq[16]="ZXS-FILE/EDIT-1";
 static const uint8_t opena[16]="ZXS-FILE/HELD-1";
@@ -15,11 +17,28 @@ static const uint8_t offera[16]="ZXS-FILE/OFFER1";
 static const uint8_t rejecta[16]="ZXS-FILE/FAIL-1";
 static const uint8_t birth_ack_tag[16]="ZXS-FILE/ACK-01";
 static const uint8_t birth_done_tag[16]="ZXS-FILE/BORN-1";
+bool zxs_delete_hex(const uint8_t *name,size_t n)
+{
+    bool nonzero=false,nonmax=false;
+    if(name==NULL||n!=32)return false;
+    for(size_t i=0;i<n;i++){
+        uint8_t x=name[i];
+        if(!((x>='0'&&x<='9')||(x>='a'&&x<='f')))return false;
+        nonzero|=x!='0';nonmax|=x!='f';
+    }
+    return nonzero&&nonmax;
+}
+static bool zxs_retained_path(const uint8_t *name,size_t n)
+{
+    return name!=NULL && n>=34 && n<=ZXS_DIR_NAME &&
+        zxs_delete_hex(name,32) && name[32]=='\\' && memchr(name+33,'\\',n-33)==NULL;
+}
 static int zxs_tree_request(int tree,const uint8_t tag[16],unsigned limit,const uint8_t *after,size_t n)
 {
     uint8_t b[18+ZXS_DIR_NAME]={0};int p[2],rc,e;bool file=tag!=dirq;
     if(limit>ZXS_DIR_ROWS || n>ZXS_DIR_NAME ||
-       (file && (n==0 || (tag==nsq?limit>2:(n>ZXS_FILE_NAME || (tag==birthq?limit>3:limit!=0))))) ||
+       (file && (n==0 || (tag==nsq?limit>2:tag==retainedq?(limit>1||!zxs_retained_path(after,n)):
+                    (n>ZXS_FILE_NAME || (tag==birthq?limit>3:limit!=0))))) ||
        (n!=0 && ((!file && limit==0) || after==NULL || memchr(after,0,n))))return bad();
     memcpy(b,tag,16);b[16]=(uint8_t)limit;b[17]=(uint8_t)n;
     if(n)memcpy(b+18,after,n);
@@ -30,6 +49,10 @@ static int zxs_tree_request(int tree,const uint8_t tag[16],unsigned limit,const 
 int zxs_dir_query(int tree,unsigned limit,const uint8_t *after,size_t n)
 {
     return zxs_tree_request(tree,dirq,limit,after,n);
+}
+int zxs_r_member_query(int tree,const uint8_t *name,size_t n,bool share_delete)
+{
+    return zxs_tree_request(tree,retainedq,share_delete?1:0,name,n);
 }
 int zxs_member_query(int tree,const uint8_t *name,size_t n)
 {
@@ -55,11 +78,13 @@ int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+
     bool edit=memcmp(b,editq,16)==0;
     bool file=edit || memcmp(b,openq,16)==0;
     bool folder=memcmp(b,nsq,16)==0,birth=memcmp(b,birthq,16)==0;
-    if((!file && !folder && !birth && memcmp(b,dirq,16)!=0) || b[16]>ZXS_DIR_ROWS || n>ZXS_DIR_NAME ||
-       (folder?(b[16]>2||!n):(file||birth)?(b[16]>(birth?3:0)||!n||n>ZXS_FILE_NAME):(b[16]==0 && n)) ||
+    bool retained=memcmp(b,retainedq,16)==0;
+    if((!file && !folder && !birth && !retained && memcmp(b,dirq,16)!=0) || b[16]>ZXS_DIR_ROWS || n>ZXS_DIR_NAME ||
+       (folder?(b[16]>2||!n):retained?(b[16]>1||!zxs_retained_path(b+18,n)):
+          (file||birth)?(b[16]>(birth?3:0)||!n||n>ZXS_FILE_NAME):(b[16]==0 && n)) ||
        (n && memchr(b+18,0,n)!=NULL) || same_endpoint_process(reply,worker,false)!=0)goto invalid;
     for(size_t i=n;i<ZXS_DIR_NAME;i++)if(b[18+i]!=0)goto invalid;
-    *limit=birth?(ZXS_FILE_BIRTH+b[16]):folder?(b[16]==0?ZXS_NS_OPEN:(b[16]==1?ZXS_NS_WRITE:ZXS_NS_MAXIMUM)):edit?ZXS_MEMBER_WRITE_OPEN:(file?ZXS_MEMBER_OPEN:b[16]);cursor[0]=(uint8_t)n;if(n)memcpy(cursor+1,b+18,n);return reply;
+    *limit=retained?(ZXS_RETAINED_OPEN+b[16]):birth?(ZXS_FILE_BIRTH+b[16]):folder?(b[16]==0?ZXS_NS_OPEN:(b[16]==1?ZXS_NS_WRITE:ZXS_NS_MAXIMUM)):edit?ZXS_MEMBER_WRITE_OPEN:(file?ZXS_MEMBER_OPEN:b[16]);cursor[0]=(uint8_t)n;if(n)memcpy(cursor+1,b+18,n);return reply;
 invalid:
     close(reply);return bad();
 }
@@ -71,12 +96,15 @@ static int zxs_dir_send(int fd,const uint8_t data[ZXS_DIR_PACKET-16],const uint8
 }
 int zxs_dir_reply(int fd,const uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_send(fd,data,dira);}
 int zxs_ns_dir_reply(int fd,const uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_send(fd,data,nsa);}
-static int zxs_dir_receive(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16],bool ns)
+int zxs_r_round_rows(int fd,const uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_send(fd,data,rounds);}
+static int zxs_dir_receive(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16],const uint8_t tag[16])
+
 {
-    uint8_t b[ZXS_DIR_PACKET];size_t i;
+    uint8_t b[ZXS_DIR_PACKET];size_t i;bool recycle_seen=false;
     if(limit>ZXS_DIR_ROWS || data==NULL ||
        transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
-    if(memcmp(b,ns?nsa:dira,16)!=0 || b[16]>limit)return bad();
+    if(memcmp(b,tag,16)!=0 || b[16]>limit)return bad();
+    const bool ns=tag==nsa, retained=tag==rounds;
     for(i=0;i<ZXS_DIR_ROWS;i++){
         const uint8_t *row=b+17+i*ZXS_DIR_SLOT;size_t n=row[0];
         if(i>=b[16]){for(size_t j=0;j<ZXS_DIR_SLOT;j++)if(row[j]!=0)return bad();continue;}
@@ -84,14 +112,19 @@ static int zxs_dir_receive(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]
         for(size_t j=n;j<ZXS_DIR_NAME;j++)if(row[1+j])return bad();
         uint64_t no=0;for(size_t j=0;j<8;j++)no=(no<<8)|row[1+ZXS_DIR_NAME+j];
         if(ns){
-            if(no<3||no>64||memcmp(row+1+ZXS_DIR_NAME+8,"\0\0\0\0\0\0\0\0",8)!=0)return bad();
+            if(no<2||no>64||(no==2&&recycle_seen)||memcmp(row+1+ZXS_DIR_NAME+8,"\0\0\0\0\0\0\0\0",8)!=0)return bad();
+            recycle_seen |= no==2;
+        }else if(retained){
+            if(!zxs_delete_hex(row+1,n) || no!=UINT64_MAX ||
+               memcmp(row+1+ZXS_DIR_NAME+8,"\0\0\0\0\0\0\0\0",8)!=0)return bad();
         }else if(no<=255 || no==UINT64_MAX || (row[1+ZXS_DIR_NAME+8]&0x80)!=0)return bad();
     }
     memcpy(data,b+16,sizeof(b)-16);return 0;
 }
 
-int zxs_dir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_receive(fd,limit,data,false);}
-int zxs_ns_dir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_receive(fd,limit,data,true);}
+int zxs_dir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_receive(fd,limit,data,dira);}
+int zxs_ns_dir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_receive(fd,limit,data,nsa);}
+int zxs_r_round_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]){return zxs_dir_receive(fd,limit,data,rounds);}
 
 static uint64_t zxs_member_u64(const uint8_t b[8])
 {

@@ -2,7 +2,7 @@
 //! password, alternate program/path nor arbitrary switch can be supplied.
 use super::{Id,bad,domain::{create_layout,provision_fresh_domain},native_run::{self,Choice,Intent,Resolved,Role},
     native_sql::{Original,transaction::ResultRow,web_reset}};
-use crate::{path_rules::Kind,smb_profile::first::{Endpoint,Mode,Origin,MAX_ENDPOINTS,MAX_FOLDERS},sqlite_install::id};
+use crate::{path_rules::Kind,smb_profile::first::{Endpoint,Mode,Origin,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},sqlite_install::id};
 use sha2::{Digest,Sha256};
 use std::{ffi::{OsStr,OsString},io,path::PathBuf};
 
@@ -10,7 +10,7 @@ use std::{ffi::{OsStr,OsString},io,path::PathBuf};
 pub(crate) struct Setup(Form);
 #[derive(Debug)]
 enum Form{
-    Layout{system:PathBuf,origin:Origin,reference:Id,endpoints:Vec<Endpoint>,folders:Vec<Choice>},
+    Layout{system:PathBuf,origin:Origin,reference:Id,endpoints:Vec<Endpoint>,folders:Vec<Choice>,recycle:RecycleName},
     Provision{system:PathBuf,pool:Id,init:Id,instance:Id,op:Id,setup:Id,reference:Id,live:[u8;32]},
     Smb(native_run::Selection),
     Web(web_reset::Selection),
@@ -66,6 +66,8 @@ impl Setup{
         if layout{
             let domain=key(&mut it,"--domain-op")?;let setup=key(&mut it,"--setup-op")?;
             let reference=key(&mut it,"--approval")?;
+            let recycle=RecycleName::new(value(&mut it,"--recycle-name")?.into_string()
+                .map_err(|_|"expected the exact UTF-8 logical recycle directory name")?)?;
             let mut endpoints=Vec::new();let mut folders=Vec::new();
             while let Some(flag)=it.next(){
                 if flag=="--listen"&&endpoints.len()<MAX_ENDPOINTS{
@@ -82,7 +84,7 @@ impl Setup{
                 }else{return Err("only bounded repeated --listen ADDR/PREFIX and --share DIR NAME ro|rw are accepted");}
             }
             if endpoints.is_empty()||folders.is_empty(){return Err("select at least one LAN listener and one original ordinary folder");}
-            return Ok(Self(Form::Layout{system,origin:Origin{pool,init,instance,domain,setup},reference,endpoints,folders}));
+            return Ok(Self(Form::Layout{system,origin:Origin{pool,init,instance,domain,setup},reference,endpoints,folders,recycle}));
         }
         if mode=="provision"{
             let op=key(&mut it,"--op")?;let setup=key(&mut it,"--setup-op")?;
@@ -110,8 +112,8 @@ impl Setup{
     }
     pub(crate) fn run(self)->io::Result<(u8,String)>{
         match self.0{
-            Form::Layout{system,origin,reference,endpoints,folders}=>{
-                let resolved=Resolved::select(&system,origin,endpoints,folders)?;
+            Form::Layout{system,origin,reference,endpoints,folders,recycle}=>{
+                let resolved=Resolved::select(&system,origin,endpoints,folders,recycle)?;
                 let live=create_layout(&resolved,reference)?;
                 Ok((0,format!("layout=prepared instance={} plan_sha256={} live_sha256={}; no pool, SAM domain, account or service changed",
                     hex(&origin.instance),hex(&resolved.plan().sha()),hex(&live))))
@@ -168,8 +170,11 @@ mod tests{
         assert!(!reply.contains(&"5a".repeat(128)));
     }
     #[test]fn original_paths_and_explicit_scope_prepare_only_one_layout(){
-        let good=format!("provision --create-layout {} --instance {} --domain-op {} --setup-op {} --approval {} --listen 192.0.2.17/24 --share /original/data Photos rw",root(),k(3),k(4),k(5),k(6));
+        let good=format!("provision --create-layout {} --instance {} --domain-op {} --setup-op {} --approval {} --recycle-name Recycle --listen 192.0.2.17/24 --share /original/data Photos rw",root(),k(3),k(4),k(5),k(6));
         assert!(Setup::parse(args(&good)).is_ok());
+        assert!(Setup::parse(args(&good.replace("--recycle-name Recycle ",""))).is_err());
+        assert!(Setup::parse(args(&good.replace("--recycle-name Recycle","--recycle-name /wrong"))).is_err());
+        assert!(Setup::parse(args(&format!("{good} --recycle-name Other"))).is_err());
         assert!(Setup::parse(args(&good.replace("192.0.2.17/24","0.0.0.0/0"))).is_err());
         assert!(Setup::parse(args(&good.replace("/original/data","/../data"))).is_err());
         assert!(Setup::parse(args(&good.replace("Photos rw","Photos guest"))).is_err());

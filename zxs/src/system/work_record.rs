@@ -16,6 +16,8 @@ pub(super) struct Edit {
     pub(super) generation:i64,
     pub(super) share:ShareId,
     pub(super) setting:OperationId,
+    pub(super) position:OperationId,
+    pub(super) volume:VolumeId,
     pub(super) nonce:OperationId,
     pub(super) issue:i64,
     pub(super) predecessor:Option<OperationId>,
@@ -28,14 +30,14 @@ impl Edit {
         let k=self.record.key();let f=self.record.start();let e=self.record.end();
         let m=self.record.map().ok_or_else(||invalid("interval SAVE must specify the selected map"))?;
         if (k.pool,k.file)!=(b.pool,b.file)||self.generation<1||self.issue<1||
-           [self.actor.0,self.credential.0,self.share.0,self.setting.0,self.nonce.0].contains(&[0;16])||
+           [self.actor.0,self.credential.0,self.share.0,self.setting.0,self.position.0,self.volume.0,self.nonce.0].contains(&[0;16])||
            [self.predecessor,self.parent,self.previous_pending].into_iter().flatten().any(|id|id.0==[0;16]||id==k.save)||
            self.retained>15||self.previous_pending.is_none()&&self.retained!=0{
             return Err(invalid("wrong original authority or scope for a working SAVE"));
         }
         let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/WORK-EDIT\0")?;
-        for id in [b.pool.0,b.volume.0,b.operation.0,b.entry.0,b.file.0,b.history.0,b.branch.0,
-                   k.save.0,k.round.0,self.actor.0,self.credential.0,self.share.0,self.setting.0,self.nonce.0]{h.update(&id)?;}
+        for id in [b.pool.0,self.volume.0,b.operation.0,b.entry.0,b.file.0,b.history.0,b.branch.0,
+                   k.save.0,k.round.0,self.actor.0,self.credential.0,self.share.0,self.setting.0,self.position.0,self.nonce.0]{h.update(&id)?;}
         h.update(&self.generation.to_be_bytes())?;h.update(&self.issue.to_be_bytes())?;
         for op in [self.predecessor,self.parent,self.previous_pending]{
             h.update(&[u8::from(op.is_some())])?;if let Some(op)=op{h.update(&op.0)?;}
@@ -50,7 +52,7 @@ impl Edit {
     pub(super) fn insert(self,db:&Connection,b:&Birth)->io::Result<()>{
         let k=self.record.key();let f=self.record.start();let e=self.record.end();
         let sha=self.request(b)?;let m=self.record.map().ok_or_else(||invalid("missing working map"))?;
-        let s=db.prepare(c"INSERT INTO main.work_edit(edit_op,file_id,share_id,setting_op,auth_op,writer_nonce,issue,round_op,predecessor,parent_commit,revision,logical_bytes,raw_at,raw_end,checks_at,map_at,map_bytes,checks_end,packed_sha,directory_sha,map_sha,previous_pending,retained_mask) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)")?;
+        let s=db.prepare(c"INSERT INTO main.work_edit(edit_op,file_id,share_id,setting_op,auth_op,writer_nonce,issue,round_op,predecessor,parent_commit,revision,logical_bytes,raw_at,raw_end,checks_at,map_at,map_bytes,checks_end,packed_sha,directory_sha,map_sha,previous_pending,retained_mask,position_op) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)")?;
         for (i,v) in [k.save.0,k.file.0,self.share.0,self.setting.0,self.credential.0,self.nonce.0].iter().enumerate(){s.bind_bytes(i as i32+1,v)?;}
         s.bind_integer(7,self.issue)?;s.bind_bytes(8,&k.round.0)?;
         if let Some(p)=self.predecessor{s.bind_bytes(9,&p.0)?;}
@@ -59,7 +61,7 @@ impl Edit {
             s.bind_integer(i as i32+11,v.try_into().map_err(|_|invalid("working coordinates exceed exact SQL integers"))?)?;
         }
         for (i,v) in [self.record.packed_sha(),self.record.directory_sha(),m.sha].iter().enumerate(){s.bind_bytes(i as i32+19,v)?;}
-        if let Some(op)=self.previous_pending{s.bind_bytes(22,&op.0)?;}s.bind_integer(23,i64::from(self.retained))?;
+        if let Some(op)=self.previous_pending{s.bind_bytes(22,&op.0)?;}s.bind_integer(23,i64::from(self.retained))?;s.bind_bytes(24,&self.position.0)?;
         s.done()?;drop(s);
         let o=db.prepare(c"INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,10,?2,?3,0)")?;
         o.bind_bytes(1,&k.save.0)?;o.bind_bytes(2,&self.actor.0)?;o.bind_bytes(3,&sha)?;o.done()
@@ -81,7 +83,7 @@ pub(super) fn optional(s:&Statement<'_>,i:i32)->io::Result<Option<OperationId>>{
 }
 
 pub(super) fn edit(db:&Connection,b:&Birth,op:OperationId)->io::Result<Option<Issued>>{
-    let q=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,w.file_id,w.share_id,w.setting_op,w.auth_op,w.writer_nonce,w.issue,w.round_op,w.predecessor,w.parent_commit,w.revision,w.logical_bytes,w.raw_at,w.raw_end,w.checks_at,w.map_at,w.map_bytes,w.checks_end,w.packed_sha,w.directory_sha,w.map_sha,r.volume_id,m.share_id,m.mode,a.smb_id,k.generation,w.previous_pending,w.retained_mask FROM main.operation o LEFT JOIN main.work_edit w ON w.edit_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=w.share_id LEFT JOIN main.share_mode m ON m.change_op=w.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=w.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
+    let q=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,w.file_id,w.share_id,w.setting_op,w.auth_op,w.writer_nonce,w.issue,w.round_op,w.predecessor,w.parent_commit,w.revision,w.logical_bytes,w.raw_at,w.raw_end,w.checks_at,w.map_at,w.map_bytes,w.checks_end,w.packed_sha,w.directory_sha,w.map_sha,r.volume_id,m.share_id,m.mode,a.smb_id,k.generation,w.previous_pending,w.retained_mask,w.position_op FROM main.operation o LEFT JOIN main.work_edit w ON w.edit_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=w.share_id LEFT JOIN main.share_mode m ON m.change_op=w.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=w.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
     q.bind_bytes(1,&op.0)?;
     if !start_one(&q)?{return Ok(None);}
     if q.integer(0)?!=10||FileId(q.array(4)?)!=b.file{return Err(invalid("operation belongs to a different FILE or kind"));}
@@ -90,10 +92,10 @@ pub(super) fn edit(db:&Connection,b:&Birth,op:OperationId)->io::Result<Option<Is
         End{data:natural(&q,16)?,checks:natural(&q,20)?},natural(&q,14)?,q.array(21)?,q.array(22)?,
         Map{at:natural(&q,18)?,bytes:natural(&q,19)?,sha:q.array(23)?})?;
     let request=Edit{record,actor:AccountId(q.array(2)?),credential:OperationId(q.array(7)?),generation:q.integer(28)?,
-        share:ShareId(q.array(5)?),setting:OperationId(q.array(6)?),nonce:OperationId(q.array(8)?),issue:q.integer(9)?,
+        share:ShareId(q.array(5)?),setting:OperationId(q.array(6)?),position:OperationId(q.array(31)?),volume:VolumeId(q.array(24)?),nonce:OperationId(q.array(8)?),issue:q.integer(9)?,
         predecessor:optional(&q,11)?,parent:optional(&q,12)?,previous_pending:optional(&q,29)?,retained:q.byte(30)?};
     let confirmed=match q.byte(1)?{0=>false,1=>true,_=>return Err(invalid("invalid SAVE result phase"))};
-    if b.volume!=VolumeId(q.array(24)?)||request.share!=ShareId(q.array(25)?)||q.byte(26)?!=2||
+    if request.share!=ShareId(q.array(25)?)||q.byte(26)?!=2||
         request.actor!=AccountId(q.array(27)?)||request.request(b)?!=q.array::<32>(3)?{
         return Err(invalid("recorded SAVE differs from its bounded origin"));
     }
@@ -134,6 +136,12 @@ pub(super) fn last_issue(db:&Connection,b:&Birth)->io::Result<Option<Issued>>{
     q.bind_bytes(1,&b.file.0)?;if !start_one(&q)?{return Ok(None);}
     let op=OperationId(q.array(0)?);q.done()?;
     Ok(Some(edit(db,b,op)?.ok_or_else(||invalid("missing original working edit"))?))
+}
+pub(super) fn pending_current(db:&Connection,b:&Birth)->io::Result<Option<Issued>>{
+    let q=db.prepare(c"SELECT edit_op FROM main.pending_edit WHERE file_id=?1")?;
+    q.bind_bytes(1,&b.file.0)?;if !start_one(&q)?{return Ok(None);}
+    let op=OperationId(q.array(0)?);q.done()?;
+    Ok(Some(edit(db,b,op)?.filter(|e|!e.confirmed).ok_or_else(||invalid("missing actual pending SAVE"))?))
 }
 pub(super) fn latest_commit(db:&Connection,b:&Birth)->io::Result<Option<(OperationId,OperationId,OperationId,i64)>>{
     let q=db.prepare(c"SELECT commit_op,save_op,round_op,ord FROM main.last_manual WHERE file_id=?1")?;
@@ -198,10 +206,10 @@ pub(super) fn members(db:&Connection,c:&super::Catalog,b:&Birth)->io::Result<Mem
         m.register(crate::ordinary::working_round::names(op),15,true)?;
     }
     drop(q);
-    if let Some(p)=last_issue(db,b)?.filter(|r|!r.confirmed&&r.edit.record.key().revision==1){
+    if let Some(p)=pending_current(db,b)?.filter(|r|r.edit.record.key().revision==1){
         m.register(crate::ordinary::working_round::names(p.edit.record.key().round),15,false)?;
     }
-    let q=db.prepare(c"SELECT w.previous_pending,w.retained_mask,p.round_op,p.revision,o.state,p.file_id FROM main.work_edit w JOIN main.work_edit p ON p.edit_op=w.previous_pending JOIN main.operation o ON o.op_id=p.edit_op AND o.kind=10 WHERE w.file_id=?1 AND w.retained_mask<>0")?;
+    let q=db.prepare(c"SELECT w.previous_pending,w.retained_mask,p.round_op,p.revision,o.state,p.file_id FROM main.work_edit w JOIN main.work_edit p ON p.edit_op=w.previous_pending JOIN main.operation o ON o.op_id=p.edit_op AND o.kind=10 JOIN main.file_location l ON l.file_id=w.file_id AND l.position_op=w.position_op WHERE w.file_id=?1 AND w.retained_mask<>0")?;
     q.bind_bytes(1,&b.file.0)?;
     while start_one(&q)? {
         let p=OperationId(q.array(0)?);
@@ -220,7 +228,9 @@ pub(super) fn basis(db:&Connection,b:&Birth,save:Option<OperationId>)->io::Resul
 }
 pub(super) fn ceiling(db:&Connection,b:&Birth,selected:ReadRecord)->io::Result<End>{
     let cut=selected.record;
-    let q=db.prepare(c"SELECT edit_op FROM main.work_edit WHERE file_id=?1 AND round_op=?2 ORDER BY issue DESC LIMIT 1")?;
+    let q=db.prepare(c"SELECT w.edit_op FROM main.work_edit w JOIN main.operation o ON o.op_id=w.edit_op AND o.kind=10
+      JOIN main.file_location l ON l.file_id=w.file_id WHERE w.file_id=?1 AND w.round_op=?2
+      AND (o.state=1 OR w.position_op=l.position_op) ORDER BY w.issue DESC LIMIT 1")?;
     q.bind_bytes(1,&b.file.0)?;q.bind_bytes(2,&cut.key().round.0)?;
     if !start_one(&q)?{return Ok(cut.end());}
     let id=OperationId(q.array(0)?);q.done()?;

@@ -3,7 +3,7 @@
 //! No secondary ledger. No source pathname, credential or permission boolean
 //! is accepted from the client; a share never owns its own namespace.
 use super::{Tree,Catalog,Connection,check,sqlite3_step};
-use super::super::{volume::OrdinaryRoot,work_record::{self,Members}};
+use super::super::{file_location::{Place,Placed},volume::OrdinaryRoot,work_record::{self,Members}};
 use crate::{BranchId,EntryId,FileId,HistoryId,OperationId,PoolId,Role,VolumeId,display,
     fs::{DIRECTORY_BYTES,DIRECTORY_NAMES,HeldDir,invalid},hash::Sha256,
     identity::{AccountId,ShareId},ordinary::portable_birth::Birth,system::ROOT_MARK};
@@ -41,6 +41,11 @@ fn request(pool:PoolId,op:OperationId,actor:AccountId,auth:OperationId,generatio
 fn geometry(c:&Catalog,b:&Birth)->io::Result<()>{
     let f=c.rows().iter().find(|r|r.role==Role::File&&r.volume==b.volume).ok_or_else(||invalid("FILE is not in an enrolled ordinary volume"))?;
     let r=&c.rows()[1];b.validate_geometry((&f.path,f.limit),(&r.path,r.limit),ROOT_MARK)
+}
+fn new_geometry(c:&Catalog,b:&Birth)->io::Result<()>{
+    geometry(c,b)?;
+    let role=&c.rows()[1];
+    b.validate_transfer_geometry(&b.name,(&role.path,role.limit),b.ticket)
 }
 fn by_op(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Origin>>{
     let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,b.share_id,b.setting_op,b.auth_op,b.volume_id,b.display,b.terminal,b.entry_id,b.file_id,b.history_id,b.branch_id,b.ticket,r.volume_id,m.mode,m.share_id,a.smb_id,k.credential_op,k.generation FROM main.operation o LEFT JOIN main.root_entry b ON b.create_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=b.share_id LEFT JOIN main.share_mode m ON m.change_op=b.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=b.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
@@ -84,7 +89,7 @@ fn budget(db:&Connection,b:&Birth,live:&[Vec<u8>])->io::Result<()>{
         if count>DIRECTORY_NAMES||bytes>DIRECTORY_BYTES{return Err(invalid("registered ordinary namespace does not fit its census"));}
         Ok(())
     };
-    let s=db.prepare(c"SELECT e.create_op,e.ticket,e.terminal,o.state FROM main.root_entry e JOIN main.operation o ON o.op_id=e.create_op WHERE e.volume_id=?1")?;
+    let s=db.prepare(c"SELECT e.create_op,e.ticket,e.terminal,o.state FROM main.root_entry e JOIN main.operation o ON o.op_id=e.create_op JOIN main.file_location l ON l.file_id=e.file_id AND l.generation=1 AND l.role=2 WHERE l.volume_id=?1")?;
     s.bind_bytes(1,&b.volume.0)?;
     loop{match unsafe{sqlite3_step(s.0)}{
         100=>{let(pin,stage)=Birth::reservation_leaves(OperationId(s.array(0)?),OperationId(s.array(1)?))?;
@@ -110,26 +115,48 @@ pub(super) fn display_free_in_sample(db:&Connection,c:&Catalog,f:&HeldDir,b:&Bir
     if Birth::reserved_spelling(b.name.as_bytes()){return Ok(());} // never an ordinary-directory spelling
     let leaf=CString::new(b.name.as_str()).map_err(|_|invalid("bad FILE name"))?;
     if !f.entry_present(&leaf)?{return Ok(());}
-    let (other,members)=display_owner(db,c,b)?.ok_or_else(||invalid("FILE display spelling occupied by an unrecognized native member"))?;
+    let owner=display_owner(db,c,b)?.ok_or_else(||invalid("FILE display spelling occupied by an unrecognized native member"))?;
     let fresh;
     let sample=match held_sample{Some(s)=>s,None=>{fresh=f.names()?.into_iter().collect();&fresh}};
-    other.working_records_at(f,sample,false,|scope|members.require(scope))?.require(f)
+    owner.check(f,sample)?.require(f)
 }
 
 /// SQLite half of an unusual display name equal to another FILE's terminal.
 /// Does not look up any path or open F; the physical half is checked by the caller.
-pub(in crate::system::reader) type Alias=(Birth,Members);
+#[derive(PartialEq,Eq)]
+pub(in crate::system::reader) struct Alias{birth:Birth,members:Option<Members>}
+impl Alias{
+    pub(in crate::system::reader) fn check(&self,root:&HeldDir,shape:&BTreeSet<Vec<u8>>)
+        ->io::Result<crate::ordinary::portable_birth::Installed>{
+        self.birth.working_records_at(root,shape,false,|scope|match &self.members{
+            Some(live)=>live.require(scope),
+            // A proved former container can explain a physical spelling;
+            // it cannot grant FILE access or be inspected for its contents.
+            None=>Ok(()),
+        })
+    }
+}
 pub(in crate::system::reader) fn display_owner(db:&Connection,c:&Catalog,b:&Birth)->io::Result<Option<Alias>>{
-    if Birth::reserved_spelling(b.name.as_bytes()){return Ok(None);}
-    let s=db.prepare(c"SELECT create_op FROM main.root_entry WHERE volume_id=?1 AND terminal=?2")?;
-    s.bind_bytes(1,&b.volume.0)?;s.bind_bytes(2,b.name.as_bytes())?;
+    display_owner_at(db,c,b.volume,&b.name)
+}
+pub(in crate::system::reader) fn display_owner_at(db:&Connection,c:&Catalog,volume:VolumeId,name:&str)->io::Result<Option<Alias>>{
+    if Birth::reserved_spelling(name.as_bytes()){return Ok(None);}
+    let s=db.prepare(c"SELECT e.create_op,EXISTS(SELECT 1 FROM main.file_location l WHERE l.file_id=e.file_id
+       AND l.generation=1 AND l.position_op=e.create_op AND l.role=2 AND l.volume_id=e.volume_id)
+      FROM main.root_entry e WHERE e.volume_id=?1 AND e.terminal=?2
+        AND (EXISTS(SELECT 1 FROM main.file_location l WHERE l.file_id=e.file_id AND l.generation=1 AND l.role=2
+                        AND l.position_op=e.create_op AND l.volume_id=e.volume_id)
+          OR EXISTS(SELECT 1 FROM main.file_transfer m JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
+                     WHERE m.file_id=e.file_id AND m.direction=1 AND m.source_op=e.create_op
+                       AND m.source_gen=1 AND m.source_id=e.volume_id AND m.source_name=e.display))")?;
+    s.bind_bytes(1,&volume.0)?;s.bind_bytes(2,name.as_bytes())?;
     match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(None),rc=>{check(rc)?;return Err(invalid("cannot inspect a colliding native name"));}}
-    let op=OperationId(s.array(0)?);s.done()?;
+    let op=OperationId(s.array(0)?);let current=s.byte(1)?==1;s.done()?;
     let Some(other)=by_op(db,c,op)?.filter(|o|o.committed)else{return Ok(None);};
-    if other.birth.volume!=b.volume||other.birth.name==b.name||other.birth.container()?.to_bytes()!=b.name.as_bytes(){
+    if other.birth.volume!=volume||other.birth.name==name||other.birth.container()?.to_bytes()!=name.as_bytes(){
         return Err(invalid("wrong confirmed terminal for displayed spelling"));}
-    let members=work_record::members(db,c,&other.birth)?;
-    Ok(Some((other.birth,members)))
+    let members=if current{Some(work_record::members(db,c,&other.birth)?)}else{None};
+    Ok(Some(Alias{birth:other.birth,members}))
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]
@@ -145,14 +172,7 @@ impl<'s,'r> Tree<'s,'r>{
         })
     }
     fn name_on(&self,db:&Connection,c:&Catalog,name:&str)->io::Result<Option<FileId>>{
-        let q=db.prepare(c"SELECT create_op FROM main.root_entry WHERE volume_id=?1 AND display=?2")?;
-        q.bind_bytes(1,&self.setting.volume.0)?;q.bind_bytes(2,name.as_bytes())?;
-        if !work_record::start_one(&q)?{return Ok(None);}
-        let op=OperationId(q.array(0)?);q.done()?;
-        let row=by_op(db,c,op)?.ok_or_else(||invalid("name has no original FILE birth"))?;
-        if row.birth.name!=name||row.birth.volume!=self.setting.volume{return Err(invalid("wrong original FILE name result"));}
-        if !row.committed{return Err(io::Error::new(io::ErrorKind::WouldBlock,"this exact display name is reserved"));}
-        Ok(Some(row.birth.file))
+        Ok(Place::named(db,c,self.setting.volume,name)?.map(|p|p.file))
     }
     /// An exact native share-mode admission precedes reservation. Hold the
     /// existing F namespace lock during this process, never a SQL transaction
@@ -171,7 +191,7 @@ impl<'s,'r> Tree<'s,'r>{
             if self.name_on(db,&c,name)?.is_some(){return Err(io::ErrorKind::AlreadyExists.into());}
             let (file,key)=super::file_number::available(db,src.pool,&candidates)?;
             let b=Birth{pool:src.pool,volume:setting.volume,operation:op,entry,file,history,branch,ticket,slot:0,name:name.to_owned()};
-            geometry(&c,&b)?;let alias=display_owner(db,&c,&b)?;Ok((c,b,key,alias))
+            new_geometry(&c,&b)?;let alias=display_owner(db,&c,&b)?;Ok((c,b,key,alias))
         })?;
         let locked=OrdinaryRoot::at(src,&c,setting.volume,true)?;
         let body=OrdinaryRoot::for_body(src,&c,setting.volume)?;
@@ -270,7 +290,7 @@ impl<'s,'r> Tree<'s,'r>{
                 self.require(db,&c,true)?;if let Some(x)=self.origin(db,&c,op,name)?{return Ok(x.birth);}
                 let file=super::file_number::choose(db,&candidates)?;
                 let fresh=Birth{pool:src.pool,volume:setting.volume,operation:op,entry,file,history,branch,ticket,slot:0,name:name.to_owned()};
-                geometry(&c,&fresh)?;
+                new_geometry(&c,&fresh)?;
                 display_free(db,&c,&root.root,&fresh)?;let live=root.root.names()?;fresh.new_root_vacancy(&root.root,&live)?;budget(db,&fresh,&live)?;root.require()?;
                 let s=db.prepare(c"INSERT INTO main.root_entry(create_op,share_id,setting_op,auth_op,volume_id,display,terminal,entry_id,file_id,history_id,branch_id,ticket) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)")?;
                 let end=fresh.container()?;
@@ -314,15 +334,17 @@ impl<'s,'r> Tree<'s,'r>{
         }}
     }
 
-    pub(super) fn birth(&self,db:&Connection,c:&Catalog,name:&str,id:FileId)->io::Result<Birth>{
-            let s=db.prepare(c"SELECT create_op FROM main.root_entry WHERE volume_id=?1 AND display=?2 AND file_id=?3")?;
-            s.bind_bytes(1,&self.setting.volume.0)?;s.bind_bytes(2,name.as_bytes())?;s.bind_bytes(3,&id.0)?;
-            match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("FILE lookup failed"));}}
-            let op=OperationId(s.array(0)?);s.done()?;self.confirmed_birth(db,c,op,name,id)
+    pub(super) fn placed(&self,db:&Connection,c:&Catalog,name:&str,id:Option<FileId>)->io::Result<Placed>{
+        let p=Place::named(db,c,self.setting.volume,name)?.ok_or(io::ErrorKind::NotFound)?;
+        if id.is_some_and(|id|p.file!=id){return Err(io::ErrorKind::NotFound.into());}
+        p.bind(db,c)
     }
-    pub(super) fn confirmed_birth(&self,db:&Connection,c:&Catalog,op:OperationId,name:&str,id:FileId)->io::Result<Birth>{
-            let x=by_op(db,c,op)?.filter(|x|x.committed&&x.birth.file==id&&x.birth.volume==self.setting.volume&&x.birth.name==name)
-                .ok_or_else(||invalid("original FILE not confirmed"))?;Ok(x.birth)
+    // The legacy first-SAVE fixture and the newborn diagnostic address
+    // only the immutable ordinary birth, not an arbitrary current placement.
+    pub(super) fn birth(&self,db:&Connection,c:&Catalog,name:&str,id:FileId)->io::Result<Birth>{
+        let p=self.placed(db,c,name,Some(id))?;
+        if p.here!=Place::origin(&p.birth){return Err(invalid("expected the original ordinary FILE birth"));}
+        Ok(p.birth)
     }
 
 

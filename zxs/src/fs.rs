@@ -14,6 +14,8 @@ mod control;
 pub(crate) use control::ControlRead;
 mod witnessed;
 mod work_pair;
+mod retirement;
+pub(crate) use retirement::{RetireCut,RetireProof,RetireSite,MAX_RETIRE_PROOF};
 mod sealed_extent;
 pub(crate) use sealed_extent::SealedExtent;
 pub(crate) use work_pair::WorkPair;

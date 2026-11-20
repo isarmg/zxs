@@ -68,6 +68,9 @@ pub(crate) fn approval_text(plan: &Plan) -> String {
         escaped(&mut out,f.name.as_bytes());
         writeln!(out, "\"；原数据卷 {}；初始{}。", hex(&f.volume), mode).expect("writing a String");
     }
+    out.push_str("  逻辑回收站 \"");
+    escaped(&mut out,plan.recycle().as_str().as_bytes());
+    out.push_str("\"；仅使用原 INIT 的独立回收盘。\n");
     out
 }
 pub(crate) fn escaped(out:&mut String,name:&[u8]){
@@ -103,13 +106,14 @@ pub(crate) fn exact_plan(config: &[u8]) -> Result<Plan, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use first::{Folder, Mode, Origin};
+    use first::{Folder, Mode, Origin, RecycleName};
 
     fn plan() -> Plan {
         Plan::selected(Origin { pool: [1; 16], init: [2; 16], instance: [3; 16], domain: [4; 16], setup: [5; 16] },
             vec![Endpoint::named("2001:db8:7::2/64").unwrap(), Endpoint::named("192.0.2.17/24").unwrap()],
             vec![Folder { volume: [0x22; 16], name: "docs".into(), mode: Mode::ReadWrite },
-                 Folder { volume: [0x21; 16], name: "Docs".into(), mode: Mode::ReadOnly }]).unwrap()
+                 Folder { volume: [0x21; 16], name: "Docs".into(), mode: Mode::ReadOnly }],
+            RecycleName::new("回收站".into()).unwrap()).unwrap()
     }
     fn vector(key: &str) -> &str {
         include_str!("../tests/smb-host/first-ordinary-plan-v1.txt").lines()
@@ -127,10 +131,15 @@ mod tests {
             assert_eq!(hex(&k.publish), vector(if i == 0 { "f1_publish" } else { "f2_publish" }));
             assert_eq!(hex(&k.setting), vector(if i == 0 { "f1_mode" } else { "f2_mode" }));
         }
-        assert_eq!(&p.wire()[p.wire().len()-2..], &[0, 0]);
-        let mut with_recycle = p.wire()[..p.wire().len()-2].to_vec();
-        with_recycle.extend([0, 1, b'R']);
-        assert!(Plan::decode(&with_recycle).is_err());
+        assert_eq!(p.recycle().as_str(), "回收站");
+        let at=p.wire().len()-2-p.recycle().as_str().len();
+        let mut old=p.wire()[..at].to_vec();old.extend([0,0]);
+        assert!(Plan::decode(&old).is_err());
+        let mut duplicate=p.wire()[..at].to_vec();duplicate.extend(b"\0\x04Docs");
+        assert!(Plan::decode(&duplicate).is_err());
+        let mut different_case=p.wire()[..at].to_vec();different_case.extend(b"\0\x04DOCS");
+        assert_eq!(Plan::decode(&different_case).unwrap().recycle().as_str(), "DOCS");
+        assert!(Plan::decode(&p.wire()[..p.wire().len()-1]).is_err());
         let mut extra = p.wire().to_vec();
         extra.push(0);
         assert!(Plan::decode(&extra).is_err());

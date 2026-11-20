@@ -10,8 +10,8 @@ pub(crate) const MAX_ENDPOINTS: usize = 16;
 pub(crate) const MAX_FOLDERS: usize = 62;
 const MAX_NAME: usize = 255;
 pub(crate) const MAX_WIRE: usize = 16 + 5 * 16 + 1 + MAX_ENDPOINTS * 18
-    + 1 + MAX_FOLDERS * (16 + 1 + 2 + MAX_NAME) + 2;
-const _: () = assert!(MAX_WIRE == 17_376);
+    + 1 + MAX_FOLDERS * (16 + 1 + 2 + MAX_NAME) + 2 + MAX_NAME;
+const _: () = assert!(MAX_WIRE == 17_631);
 type Result<T> = std::result::Result<T, &'static str>;
 const BAD: &str = "not one canonical first SMB plan for this original installation";
 
@@ -70,13 +70,23 @@ fn name(s: &str) -> bool {
     !s.is_empty() && s.len() <= MAX_NAME && s != "." && s != ".." && !s.ends_with([' ', '.'])
         && !s.chars().any(|c| c.is_control() || matches!(c, '"' | '\\' | '/' | ':' | '|' | '<' | '>' | '*' | '?'))
 }
+/// One explicitly named logical route. It is neither a volume selector nor
+/// an independent ShareId, operation, or login.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RecycleName(String);
+impl RecycleName {
+    pub(crate) fn new(label: String) -> Result<Self> {
+        if name(&label) { Ok(Self(label)) } else { Err(BAD) }
+    }
+    pub(crate) fn as_str(&self) -> &str { &self.0 }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Folder { pub(crate) volume: Id, pub(crate) name: String, pub(crate) mode: Mode }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FolderIds { pub(crate) share: Id, pub(crate) publish: Id, pub(crate) setting: Id }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Plan { pub(crate) origin: Origin, endpoints: Vec<Endpoint>, folders: Vec<(Folder, FolderIds)>,
-    wire: Vec<u8>, sha: [u8; 32] }
+    recycle: RecycleName, wire: Vec<u8>, sha: [u8; 32] }
 
 fn derive(sha: &[u8; 32], kind: u8, volume: &Id) -> Id {
     let mut h = Sha256::new();
@@ -91,7 +101,7 @@ fn send_name(out: &mut Vec<u8>, s: &str) {
     out.extend_from_slice(s.as_bytes());
 }
 impl Plan {
-    pub(crate) fn selected(origin: Origin, mut endpoints: Vec<Endpoint>, mut chosen: Vec<Folder>) -> Result<Self> {
+    pub(crate) fn selected(origin: Origin, mut endpoints: Vec<Endpoint>, mut chosen: Vec<Folder>, recycle: RecycleName) -> Result<Self> {
         let mut done = BTreeSet::new();
         if !origin.ids().into_iter().all(|p| p != [0; 16] && done.insert(p))
             || !(1..=MAX_ENDPOINTS).contains(&endpoints.len()) || !(1..=MAX_FOLDERS).contains(&chosen.len()) { return Err(BAD); }
@@ -99,7 +109,7 @@ impl Plan {
         if endpoints.windows(2).any(|p| p[0].address() == p[1].address()) { return Err(BAD); }
         chosen.sort_unstable_by_key(|f| f.volume);
         {
-            let mut names = BTreeSet::new();
+            let mut names = BTreeSet::from([recycle.as_str()]);
             for f in &chosen {
                 if f.volume == [0; 16] || !done.insert(f.volume) || !name(&f.name) || !names.insert(f.name.as_str()) {
                     return Err(BAD);
@@ -116,9 +126,8 @@ impl Plan {
             wire.push(f.mode.code());
             send_name(&mut wire, &f.name);
         }
-        // No recycle publication is available in the ordinary-only cut.
-        // Keep the same length slot, but its only valid value here is zero.
-        wire.extend(0u16.to_be_bytes());
+        // Only the exact directory name, never a physical R path or ID.
+        send_name(&mut wire, recycle.as_str());
         if wire.len() > MAX_WIRE { return Err(BAD); }
         let sha = Sha256::digest(&wire).into();
         let mut next = |kind, vol: &Id| {
@@ -130,7 +139,7 @@ impl Plan {
             let v = f.volume;
             folders.push((f, FolderIds { share: next(1, &v)?, publish: next(2, &v)?, setting: next(3, &v)? }));
         }
-        Ok(Self { origin, endpoints, folders, wire, sha })
+        Ok(Self { origin, endpoints, folders, recycle, wire, sha })
     }
 
     pub(crate) fn decode(wire: &[u8]) -> Result<Self> {
@@ -168,8 +177,8 @@ impl Plan {
             let [mode] = fixed(&mut p)?;
             folders.push(Folder { volume: v, mode: Mode::parse(mode)?, name: label(&mut p)? });
         }
-        if u16::from_be_bytes(fixed(&mut p)?) != 0 { return Err(BAD); }
-        let plan = Self::selected(origin, endpoints, folders)?;
+        let recycle = RecycleName::new(label(&mut p)?)?;
+        let plan = Self::selected(origin, endpoints, folders, recycle)?;
         if !p.is_empty() || plan.wire() != wire { return Err(BAD); }
         Ok(plan)
     }
@@ -178,4 +187,5 @@ impl Plan {
     pub(crate) fn sha(&self) -> [u8; 32] { self.sha }
     pub(crate) fn endpoints(&self) -> &[Endpoint] { &self.endpoints }
     pub(crate) fn folders(&self) -> &[(Folder, FolderIds)] { &self.folders }
+    pub(crate) fn recycle(&self) -> &RecycleName { &self.recycle }
 }

@@ -328,10 +328,10 @@ mod tests{
         let scope=tempfile::tempdir().unwrap();let p=File::open(scope.path()).unwrap();
         let names:[&CStr;3]=[c"local-ops-helper",c"samba-instances",c"0123456789abcdef0123456789abcdef"];
         let stage=c".layout-local-ops-helper.new";let top=new_dir(&p,stage).unwrap();
-        use crate::smb_profile::first::{Endpoint,Folder,Mode,Origin};
+        use crate::smb_profile::first::{Endpoint,Folder,Mode,Origin,RecycleName};
         let plan=Plan::selected(Origin{pool:[1;16],init:[2;16],instance:[3;16],domain:[4;16],setup:[5;16]},
             vec![Endpoint::named("192.0.2.17/24").unwrap()],
-            vec![Folder{volume:[9;16],name:"Docs".into(),mode:Mode::ReadOnly}]).unwrap();
+            vec![Folder{volume:[9;16],name:"Docs".into(),mode:Mode::ReadOnly}],RecycleName::new("Recycle".into()).unwrap()).unwrap();
         let t=NewTree::build(top,&names,65534,65534,&plan).unwrap();
         t.sync(&p,stage,&names).unwrap();noentry(&p,names[0]).unwrap();
         publish(&p,stage,names[0]).unwrap();p.sync_all().unwrap();t.verify(&p,names[0],&names).unwrap();

@@ -63,8 +63,8 @@
   --data "${DATA:?set DATA in this terminal first}"</code></pre>
       </details></li>
       <li><details><summary>准备新的专用 Samba 实例并生成原域</summary>
-        <p>只在受信本机 root 前台运行。这里明确选择实际用于 SMB 的 LAN 地址/网段，以及原 INIT 中每个要纳入的普通数据盘路径、一级名称和只读/读写模式。只建专用配置，不启动服务；从原 <code>layout=prepared</code> 回执留存 <code>live_sha256</code>。</p>
-        <pre tabindex="0" aria-label="为原池指定首装 LAN 及普通盘"><code>/usr/bin/helper setup-pair provision --create-layout \
+        <p>只在受信本机 root 前台运行。这里明确选择实际用于 SMB 的 LAN 地址/网段，以及原 INIT 中每个要纳入的普通数据盘路径、一级名称和只读/读写模式，以及该共享内单独的逻辑回收站名称。首次布局必须能证明原 INIT 的独立 R 在位。只建专用配置，不启动服务；从原 <code>layout=prepared</code> 回执留存 <code>live_sha256</code>。</p>
+        <pre tabindex="0" aria-label="为原池指定首装 LAN、普通盘及逻辑回收站"><code>/usr/bin/helper setup-pair provision --create-layout \
   --system "${SYSTEM:?set SYSTEM in this terminal first}" \
   --pool "${POOL_ID:?set POOL_ID in this terminal first}" \
   --init "${INIT_OP:?set INIT_OP in this terminal first}" \
@@ -72,9 +72,10 @@
   --domain-op "${DOMAIN_OP:?set DOMAIN_OP in this terminal first}" \
   --setup-op "${SETUP_OP:?set SETUP_OP in this terminal first}" \
   --approval "${LAYOUT_APPROVAL:?set LAYOUT_APPROVAL in this terminal first}" \
+  --recycle-name "${RECYCLE_NAME:?set its exact logical folder name}" \
   --listen "${SMB_LISTEN:?set SMB_LISTEN to the approved local IP and prefix}" \
   --share "${DATA:?set DATA to an original data root}" "${FOLDER:?set its exact folder name}" "${MODE:?set ro or rw}"</code></pre>
-        <p>在本机需要时重复 <code>--listen</code> 或 <code>--share</code>，不要把系统盘、回收站目录或未选盘放进普通共享。初始业务只有 <code>\\服务器\ZXS</code>；各选中的名称是其中的一级文件夹。此版本不建立逻辑回收站。网页不采集这些参数。</p>
+        <p>在本机需要时重复 <code>--listen</code> 或 <code>--share</code>，不要把系统盘、回收站目录或未选盘放进普通共享。初始业务只有 <code>\\服务器\ZXS</code>；各选中的普通盘目录及一个逻辑回收站都是它的一级文件夹。不要把回收盘作为 <code>--share</code> 输入。网页不采集这些参数或显示 R 的本机启动核验结果。</p>
         <p>域供给是另一笔明确批准的写动作；域号和首设号不能沿用 INIT。它使用这次布局的原 <code>live_sha256</code>，成功回执有 <code>bound_sha256</code>，在本机留存供随后选同一原件；缺回执不换新号重做。</p>
         <pre tabindex="0" aria-label="为已核原实例生成域的命令"><code>/usr/bin/helper setup-pair provision \
   --system "${SYSTEM:?set SYSTEM in this terminal first}" \

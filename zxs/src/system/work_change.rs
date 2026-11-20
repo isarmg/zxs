@@ -2,7 +2,7 @@
 //! native directory EX is held across all saves on this handle; compatible
 //! read handles never take it. SQLite carries only the exact original decisions.
 use super::{Catalog,Connection,Tree,check,sqlite3_step};
-use super::super::{volume::OrdinaryRoot,work_record::{self,Edit,Issued,Members,ReadRecord}};
+use super::super::{file_location::{Place,Placed},volume::OrdinaryRoot,work_record::{self,Edit,Issued,Members,ReadRecord}};
 use crate::{
     FileId,OperationId,display,fs::{WitnessRead,invalid},
     ordinary::{portable_birth::{Birth,Installed},working_round::{Draft,End,Key,Record,Selected,Span}},
@@ -28,19 +28,21 @@ fn busy(message:&str)->io::Error{io::Error::new(io::ErrorKind::WouldBlock,messag
 struct State {
     selected:Option<(ReadRecord,End)>,
     latest:Option<Issued>,
+    pending:Option<Issued>,
     manual:Option<(OperationId,OperationId,OperationId,i64)>,
     members:Members,
     alias:Option<super::file_create::Alias>,
 }
 impl State{
-    fn at(db:&Connection,c:&Catalog,b:&Birth)->io::Result<Self>{
+    fn at(db:&Connection,c:&Catalog,b:&Birth,at:&Place)->io::Result<Self>{
         let selected=work_record::selected(db,b)?.map(|r|work_record::ceiling(db,b,r).map(|end|(r,end))).transpose()?;
-        Ok(Self{selected,latest:work_record::last_issue(db,b)?,manual:work_record::latest_commit(db,b)?,
-            members:work_record::members(db,c,b)?,alias:super::file_create::display_owner(db,c,b)?})
+        Ok(Self{selected,latest:work_record::last_issue(db,b)?,pending:work_record::pending_current(db,b)?,
+            manual:work_record::latest_commit(db,b)?,members:work_record::members(db,c,b)?,
+            alias:super::file_create::display_owner_at(db,c,at.volume,&at.name)?})
     }
     fn base(&self)->Option<OperationId>{self.selected.map(|(r,_)|r.record.key().save)}
     fn parent(&self)->Option<OperationId>{self.manual.map(|(op,_,_,_)|op)}
-    fn pending(&self)->Option<Issued>{self.latest.filter(|i|!i.confirmed)}
+    fn pending(&self)->Option<Issued>{self.pending}
 }
 
 pub(crate) struct Writer<'t,'s,'r>{
@@ -48,36 +50,36 @@ pub(crate) struct Writer<'t,'s,'r>{
     root:OrdinaryRoot<'r>,
     tree:&'t Tree<'s,'r>,
     birth:Birth,
+    place:Place,
     nonce:OperationId,
 }
 impl<'s,'r> Tree<'s,'r>{
     pub(super) fn writer_from_newborn<'t>(&'t self,born:super::file_create::NativeBorn<'r>,nonce:OperationId)->io::Result<Writer<'t,'s,'r>>{
         let (root,birth,installed)=born.parts(true)?;
-        let handle=Writer{installed,root,tree:self,birth,nonce};
+        let place=Place::origin(&birth);
+        let handle=Writer{installed,root,tree:self,birth,place,nonce};
         handle.require_work()?;Ok(handle)
     }
     pub(super) fn open_named_writer(&self,name:&str)->io::Result<Writer<'_,'s,'r>>{
         display::component(name.as_bytes(),222)?;
         let file=self.session.source.at(|db,c|{
             self.require(db,&c,true)?;
-            let q=db.prepare(c"SELECT file_id FROM main.root_entry WHERE volume_id=?1 AND display=?2")?;
-            q.bind_bytes(1,&self.setting.volume.0)?;q.bind_bytes(2,name.as_bytes())?;
-            if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
-            let file=FileId(q.array(0)?);q.done()?;Ok(file)
+            Ok(self.placed(db,&c,name,None)?.here.file)
         })?;
         self.open_writer(name,file)
     }
     pub(crate) fn open_writer<'t>(&'t self,name:&str,file:FileId)->io::Result<Writer<'t,'s,'r>>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
-        let (catalog,birth,selected)=src.at(|db,c|{
+        let (catalog,located,selected)=src.at(|db,c|{
             self.require(db,&c,true)?;
-            let b=self.birth(db,&c,name,file)?;
-            let selected=State::at(db,&c,&b)?;Ok((c,b,selected))
+            let located=self.placed(db,&c,name,Some(file))?;
+            let selected=State::at(db,&c,&located.birth,&located.here)?;Ok((c,located,selected))
         })?;
-        let root=OrdinaryRoot::for_body(src,&catalog,birth.volume)?;
+        let root=OrdinaryRoot::for_body(src,&catalog,located.here.volume)?;
         let names=root.root.names()?.into_iter().collect();
-        let installed=birth.working_records_at(&root.root,&names,true,|s|selected.members.require(s))?;
-        let handle=Writer{installed,root,tree:self,birth,nonce:OperationId::new()?};
+        let installed=located.open(&root.root,&names,true,|s|selected.members.require(s))?;
+        let Placed{birth,here:place}=located;
+        let handle=Writer{installed,root,tree:self,birth,place,nonce:OperationId::new()?};
         handle.physical(&selected)?;
         src.at(|db,c|{
             if handle.state(db,&c)?!=selected{return Err(busy("work changed during writer admission"));}
@@ -97,7 +99,7 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
     pub(super) fn staging_free(&self)->io::Result<u64>{Ok(self.root.space()?.available_bytes)}
     pub(super) fn current_read(&self)->io::Result<Current<'t,'s,'r>>{
         let tree:&'t Tree<'s,'r>=self.tree;
-        let found=tree.open_current(&self.birth.name)?;
+        let found=tree.open_current(&self.place.name)?;
         if found.file()!=self.birth.file{return Err(invalid("writer reader does not own the original FILE"));}
         Ok(found)
     }
@@ -112,13 +114,14 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
     }
     fn state(&self,db:&Connection,c:&Catalog)->io::Result<State>{
         self.tree.require(db,c,true)?;
-        if self.tree.birth(db,c,&self.birth.name,self.birth.file)?!=self.birth{
-            return Err(invalid("work writer lost its original FILE"));
+        let located=self.tree.placed(db,c,&self.place.name,Some(self.birth.file))?;
+        if located.birth!=self.birth||located.here!=self.place{
+            return Err(invalid("work writer lost its original FILE placement"));
         }
-        State::at(db,c,&self.birth)
+        State::at(db,c,&self.birth,&self.place)
     }
     fn physical(&self,x:&State)->io::Result<()>{
-        let alias=super::directory::check_alias(&self.root,&self.birth,x.alias.as_ref(),None)?;
+        let alias=super::directory::check_alias_name(&self.root,&self.place.name,x.alias.as_ref(),None)?;
         x.members.require(&WitnessRead::at(self.installed.directory())?)?;
         self.root.require_streaming()?;self.installed.require(&self.root.root)?;
         drop(alias);Ok(())
@@ -128,7 +131,8 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
         let row=work_record::edit(db,&self.birth,op)?;
         if row.is_some_and(|i| {
             let e=i.edit;
-            (e.actor,e.credential,e.generation,e.share,e.setting)!=(auth.account,auth.op,auth.generation,setting.share,setting.op)
+            (e.actor,e.credential,e.generation,e.share,e.setting,e.position,e.volume)!=
+                (auth.account,auth.op,auth.generation,setting.share,setting.op,self.place.op,self.place.volume)
         }){return Err(invalid("this original SAVE was not issued by the current writer authority"));}
         Ok(row)
     }
@@ -210,7 +214,7 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
             let a=&self.tree.session.original;let issue=before.latest.map_or(0,|i|i.edit.issue).checked_add(1)
                 .filter(|v|*v<i64::MAX).ok_or_else(||invalid("work issuance exhausted"))?;
             let proposed=Edit{record:prepared,actor:a.account,credential:a.op,generation:a.generation,
-                share:self.tree.setting.share,setting:self.tree.setting.op,nonce:self.nonce,issue,
+                share:self.tree.setting.share,setting:self.tree.setting.op,position:self.place.op,volume:self.place.volume,nonce:self.nonce,issue,
                 parent:before.parent(),predecessor:before.base(),previous_pending:pending.map(|p|p.edit.record.key().save),retained};
             self.physical(&before)?;
             let w=Connection::open(&src.dir,true)?;

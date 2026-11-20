@@ -10,6 +10,10 @@ use std::{fs::File,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::{Arc,atomic::{At
 mod writer;
 #[path="smb_birth_worker.rs"]
 mod birth;
+#[path="smb_move_job.rs"]
+mod mover;
+#[path="smb_retained_tree.rs"]
+mod retained;
 #[path="smb_tree_namespace.rs"]
 mod namespace;
 
@@ -111,7 +115,7 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
     // Compatible readers keep their original bounded dispatcher.
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
     const MAX_MEMBERS:usize=16;
-    let mut writers=Vec::new();let mut births=Vec::new();
+    let mut writers=Vec::new();let mut births=Vec::new();let mut moves=Vec::new();
     while !(site.stopping)()&&live(origin,reply,0){
         let mut channels=[-1;MAX_MEMBERS];let mut events=[0u8;MAX_MEMBERS+1];
         for(i,(m,_))in members.iter().enumerate(){channels[i]=m.as_raw_fd();}
@@ -123,7 +127,21 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
             match events[i+1]{
                 0=>continue,2=>{members.remove(i);continue;},1=>{},_=>return Err(denied())
             }
-            let member=members[i].0.as_raw_fd();let (mut offset,mut count)=(0,0);
+            let member=members[i].0.as_raw_fd();
+            let action=mover::pending(member);
+            if action<0{members.remove(i);continue;}
+            if action==1{
+                let Ok((request,answer))=mover::take(member,origin)else{members.remove(i);continue;};
+                if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
+                moves.retain(|job:&thread::ScopedJoinHandle<'_,()>|!job.is_finished());
+                let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
+                let source=members[i].1.native_placement().clone();let authority=tree.setting;
+                if let Ok(job)=thread::Builder::new().name("zxs-delete-to-recycle".into()).spawn_scoped(scope,move||{
+                    mover::run(site,origin,reply,answer,request,source,Some(authority),permit);
+                }){moves.push(job);}
+                continue;
+            }
+            let (mut offset,mut count)=(0,0);
             let fd=unsafe{zxs_read_take(member,origin.worker.as_raw_fd(),&mut offset,&mut count)};
             if fd<0{members.remove(i);continue;} // malformed or dead FSP: retire only this member
             let answer=unsafe{OwnedFd::from_raw_fd(fd)};

@@ -62,7 +62,9 @@ struct zxs_smb_tree_cut {
     uint8_t share[16],volume[16],setting[16];
     uint64_t revision;
     uint8_t mode,pool[16],volume_ordinal;
-    int root_fd; /* local only: owned by tcon; never serialized */
+    int root_fd; /* local only: owned by FSP/tcon; never serialized */
+    int parent_fd; /* for an R deletion directory, also keep its actual R parent */
+    bool owns_parent;
 };
 #define ZXS_SMB_TREE_CUT_BYTES 74
 #define ZXS_SMB_VIRTUAL_ROOT "/zxs-root"
@@ -77,6 +79,28 @@ int zxs_dir_query(int tree,unsigned limit,const uint8_t *after,size_t n);
 int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+1]);
 #define ZXS_NS_OPEN 253
 #define ZXS_NS_WRITE 252
+/* Private only; a fresh original FILE operation reply socket, not a
+ * native SMB packet or an independent business authority. */
+#define ZXS_XFER_DELETE 1u
+#define ZXS_XFER_RESTORE 2u
+#define ZXS_XFER_PROBE 3u
+#define ZXS_XFER_ASK (20+ZXS_DIR_NAME+ZXS_FILE_NAME)
+#define ZXS_XFER_RESULT 64u
+#define ZXS_XFER_BUSY 1u
+#define ZXS_XFER_FULL 2u
+#define ZXS_XFER_COLLISION 3u
+#define ZXS_XFER_NOT_FOUND 4u
+#define ZXS_XFER_DENIED 5u
+#define ZXS_XFER_UNAVAILABLE 6u
+#define ZXS_XFER_UNKNOWN 7u
+int zxs_xfer_query(int member,uint8_t kind,const uint8_t *folder,size_t f,const uint8_t *name,size_t n,const uint8_t mark[16]);
+int zxs_member_xfer_pending(int member);
+int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAME+1],uint8_t name[ZXS_FILE_NAME+1],uint8_t mark[16]);
+int zxs_xfer_reply(int fd,uint8_t status,const uint8_t file[16],const uint8_t op[16]);
+int zxs_xfer_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t receipt[16]);
+#define ZXS_RETAINED_DIR 244
+#define ZXS_RETAINED_OPEN 245
+#define ZXS_RETAINED_SHARE_DELETE 246
 #define ZXS_NS_MAXIMUM 247
 #define ZXS_FILE_BIRTH 248
 #define ZXS_FILE_BIRTH_LAST (ZXS_FILE_BIRTH+3)
@@ -87,8 +111,13 @@ int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+
 #define ZXS_BIRTH_FULL 5u
 int zxs_ns_folder_query(int tree,const uint8_t *name,size_t n,unsigned access);
 int zxs_ns_folder_read(int fd,const uint8_t pool[16],struct zxs_smb_tree_cut *);
+int zxs_r_round_own_parent(struct zxs_smb_tree_cut *child,struct zxs_smb_tree_cut *parent);
 int zxs_ns_dir_reply(int fd,const uint8_t data[ZXS_DIR_PACKET-16]);
 int zxs_ns_dir_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]);
+int zxs_r_round_rows(int fd,const uint8_t data[ZXS_DIR_PACKET-16]);
+int zxs_r_round_result(int fd,unsigned limit,uint8_t data[ZXS_DIR_PACKET-16]);
+bool zxs_delete_hex(const uint8_t *name,size_t n);
+int zxs_r_member_query(int tree,const uint8_t *name,size_t n,bool share_delete);
 /* The FILE-open return endpoint lives with this exact original FSP. No host
  * file, database descriptor, Unix inode or disk pathname crosses to smbd. */
 #define ZXS_MEMBER_OPEN 255

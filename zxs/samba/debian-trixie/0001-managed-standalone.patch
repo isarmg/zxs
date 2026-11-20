@@ -3501,7 +3501,7 @@
 +	struct tevent_req *zxs_wait;
 +	DATA_BLOB zxs_reserved_body; /* outer request owns storage; may be compound */
 +	uint32_t zxs_access,zxs_share;
-+	bool zxs_writer,zxs_is_dir,zxs_provisional,zxs_acknowledged,zxs_unknown;
++	bool zxs_writer,zxs_is_dir,zxs_nested,zxs_provisional,zxs_acknowledged,zxs_unknown;
 +	uint32_t zxs_disposition;
 +	struct aio_req_fsp_link *zxs_link;
 +	const char *zxs_name;
@@ -3705,20 +3705,21 @@
  	*out_creation_ts	= state->out_creation_ts;
 --- a/source3/smbd/smb2_close.c
 +++ b/source3/smbd/smb2_close.c
-@@ -21,6 +21,7 @@
+@@ -21,6 +21,8 @@
  #include "includes.h"
  #include "smbd/smbd.h"
  #include "smbd/globals.h"
 +#include "smbd/zxs_directory.h"
++#include "locking/proto.h"
  #include "../libcli/smb/smb_common.h"
  #include "../lib/util/tevent_ntstatus.h"
  
-@@ -40,9 +41,25 @@
+@@ -40,9 +42,25 @@
  				     struct timespec *out_change_ts,
  				     uint64_t *out_allocation_size,
  				     uint64_t *out_end_of_file,
 -				     uint32_t *out_file_attributes);
-+				     uint32_t *out_file_attributes,DATA_BLOB *body);
++				     uint32_t *out_file_attributes,DATA_BLOB *body,bool *unknown);
  
  static void smbd_smb2_request_close_done(struct tevent_req *subreq);
 +
@@ -3740,7 +3741,7 @@
  
  NTSTATUS smbd_smb2_request_process_close(struct smbd_smb2_request *req)
  {
-@@ -65,7 +82,7 @@
+@@ -65,7 +83,7 @@
  	in_file_id_volatile	= BVAL(inbody, 0x10);
  
  	in_fsp = file_fsp_smb2(req, in_file_id_persistent, in_file_id_volatile);
@@ -3749,25 +3750,37 @@
  		return smbd_smb2_request_error(req, NT_STATUS_FILE_CLOSED);
  	}
  
-@@ -84,7 +101,7 @@
+@@ -84,9 +102,10 @@
  	struct smbd_smb2_request *req =
  		tevent_req_callback_data(subreq,
  		struct smbd_smb2_request);
 -	DATA_BLOB outbody;
 +	DATA_BLOB outbody=data_blob_null;
  	uint16_t out_flags = 0;
- 	connection_struct *conn = req->tcon->compat;
+-	connection_struct *conn = req->tcon->compat;
++	connection_struct *conn;
++	bool unknown=false;
  	struct timespec out_creation_ts = { 0, };
-@@ -105,7 +122,7 @@
+ 	struct timespec out_last_access_ts = { 0, };
+ 	struct timespec out_last_write_ts = { 0, };
+@@ -105,8 +124,15 @@
  				      &out_change_ts,
  				      &out_allocation_size,
  				      &out_end_of_file,
 -				      &out_file_attributes);
-+				      &out_file_attributes,&outbody);
++				      &out_file_attributes,&outbody,&unknown);
  	TALLOC_FREE(subreq);
++	if(unknown){
++		struct smbXsrv_connection *xconn=req->xconn;
++		zxs_smb2_retire_birth(req);
++		smbd_server_connection_terminate(xconn,"ZXS native deletion outcome unconfirmed");
++		return;
++	}
++	conn=req->tcon->compat;
  	if (!NT_STATUS_IS_OK(status)) {
  		error = smbd_smb2_request_error(req, status);
-@@ -117,7 +134,7 @@
+ 		if (!NT_STATUS_IS_OK(error)) {
+@@ -117,7 +143,7 @@
  		return;
  	}
  
@@ -3776,7 +3789,7 @@
  	if (outbody.data == NULL) {
  		error = smbd_smb2_request_error(req, NT_STATUS_NO_MEMORY);
  		if (!NT_STATUS_IS_OK(error)) {
-@@ -151,7 +168,7 @@
+@@ -151,7 +177,7 @@
  	}
  }
  
@@ -3785,7 +3798,7 @@
  				struct smb_filename *smb_fname,
  				struct timespec *out_creation_ts,
  				struct timespec *out_last_access_ts,
-@@ -177,7 +194,7 @@
+@@ -177,7 +203,7 @@
  		*out_end_of_file = get_file_size_stat(&smb_fname->st);
  	}
  
@@ -3794,7 +3807,7 @@
  }
  
  static NTSTATUS smbd_smb2_close(struct smbd_smb2_request *req,
-@@ -196,6 +213,13 @@
+@@ -196,6 +222,13 @@
  	struct smb_request *smbreq;
  	connection_struct *conn = req->tcon->compat;
  	struct files_struct *fsp = *_fsp;
@@ -3808,7 +3821,7 @@
  	struct smb_filename *smb_fname = NULL;
  
  	*out_creation_ts = (struct timespec){0, SAMBA_UTIME_OMIT};
-@@ -231,7 +255,7 @@
+@@ -231,7 +264,7 @@
  	}
  
  	if (in_flags & SMB2_CLOSE_FLAGS_FULL_INFORMATION) {
@@ -3817,12 +3830,12 @@
  				fsp->fsp_name,
  				out_creation_ts,
  				out_last_access_ts,
-@@ -260,10 +284,53 @@
+@@ -260,10 +293,61 @@
  	uint64_t out_end_of_file;
  	uint32_t out_file_attributes;
  	struct tevent_queue *wait_queue;
 +	struct tevent_req *zxs_wait;
-+	bool zxs_writer;
++	bool zxs_writer,zxs_ordinary,zxs_unknown,zxs_moved;
 +	DATA_BLOB zxs_body;
  };
  
@@ -3843,15 +3856,20 @@
 +		&s->out_last_write_ts,&s->out_change_ts,&s->out_allocation_size,
 +		&s->out_end_of_file,&s->out_file_attributes);
 +	if(s->in_fsp!=NULL){s->in_fsp->fsp_flags.closing=false;}
++	/* An already selected move can never be reported as not done just
++	 * because native transport cleanup failed. The original receipt lives. */
++	if(s->zxs_moved&&!NT_STATUS_IS_OK(closed))s->zxs_unknown=true;
 +	if(tevent_req_nterror(req,NT_STATUS_IS_OK(work)?closed:work))return;
 +	tevent_req_done(req);
 +}
++#include "smbd/zxs_disposition_close.inc"
 +static void zxs_close_flushed(struct tevent_req *sub)
 +{
 +	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
 +	struct smbd_smb2_close_state *s=tevent_req_data(req,struct smbd_smb2_close_state);
 +	NTSTATUS status=zxs_work_recv(sub);
 +	s->zxs_wait=NULL;TALLOC_FREE(sub);
++	if(NT_STATUS_IS_OK(status)&&s->zxs_ordinary){zxs_close_ordinary(req,s->smb2req->sconn->ev_ctx);return;}
 +	zxs_finish_explicit_close(req,status);
 +}
 +static void zxs_close_writer(struct tevent_req *req,struct tevent_context *ev)
@@ -3861,7 +3879,10 @@
 +	if(member==NULL || !member->writable){
 +		zxs_finish_explicit_close(req,NT_STATUS_ACCESS_DENIED);return;
 +	}
-+	if(!member->dirty){zxs_finish_explicit_close(req,NT_STATUS_OK);return;}
++	if(!member->dirty){
++		if(s->zxs_ordinary){zxs_close_ordinary(req,ev);return;}
++		zxs_finish_explicit_close(req,NT_STATUS_OK);return;
++	}
 +	s->zxs_wait=zxs_work_send(s,ev,req,s->smb2req,s->in_fsp,
 +				  ZXS_WORK_FLUSH,0,data_blob_null,false,true);
 +	if(s->zxs_wait==NULL){zxs_finish_explicit_close(req,NT_STATUS_NO_MEMORY);return;}
@@ -3871,15 +3892,18 @@
  
  static struct tevent_req *smbd_smb2_close_send(TALLOC_CTX *mem_ctx,
  					       struct tevent_context *ev,
-@@ -294,10 +361,21 @@
+@@ -294,10 +378,24 @@
  	state->in_fsp = in_fsp;
  	state->in_flags = in_flags;
  
 +	struct zxs_read_fsp *member=zxs_find_read(in_fsp);
 +	state->zxs_writer=member!=NULL && member->writable;
-+	if(state->zxs_writer){
++	state->zxs_ordinary=member!=NULL && member->folder.volume_ordinal>=2;
++	if(state->zxs_ordinary||state->zxs_writer){
 +		state->zxs_body=smbd_smb2_generate_outbody(smb2req,0x3c);
 +		if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
++		/* The original helper caches this under smb2req->smb1req. */
++		if(tevent_req_nomem(smbd_smb2_fake_smb_request(smb2req,in_fsp),req))return tevent_req_post(req,ev);
 +		/* A middle compound close must be internally pending from the
 +		 * first wait, before marking the native FSP as closing. */
 +		if(smbd_smb2_is_compound(smb2req) && !smbd_smb2_is_last_in_compound(smb2req)){
@@ -3894,31 +3918,31 @@
  		bool ok = tevent_req_cancel(in_fsp->aio_requests[i]);
  		if (ok) {
  			continue;
-@@ -311,6 +389,7 @@
+@@ -311,6 +409,7 @@
  		state->wait_queue = tevent_queue_create(state,
  					"smbd_smb2_close_send_wait_queue");
  		if (tevent_req_nomem(state->wait_queue, req)) {
-+			if(state->zxs_writer)in_fsp->fsp_flags.closing=false;
++			if(state->zxs_writer||state->zxs_ordinary)in_fsp->fsp_flags.closing=false;
  			return tevent_req_post(req, ev);
  		}
  		/*
-@@ -325,6 +404,7 @@
+@@ -325,6 +424,7 @@
  					smb2req->sconn->ev_ctx,
  					state->wait_queue);
  		if (tevent_req_nomem(subreq, req)) {
-+			if(state->zxs_writer)in_fsp->fsp_flags.closing=false;
++			if(state->zxs_writer||state->zxs_ordinary)in_fsp->fsp_flags.closing=false;
  			return tevent_req_post(req, ev);
  		}
  
-@@ -337,13 +417,18 @@
+@@ -337,13 +437,22 @@
  					smb2req->sconn->ev_ctx,
  					state->wait_queue);
  		if (tevent_req_nomem(subreq, req)) {
-+			if(state->zxs_writer)in_fsp->fsp_flags.closing=false;
++			if(state->zxs_writer||state->zxs_ordinary)in_fsp->fsp_flags.closing=false;
  			return tevent_req_post(req, ev);
  		}
 -
-+		if(state->zxs_writer){state->zxs_wait=subreq;tevent_req_set_cancel_fn(req,zxs_close_cancel);}
++		if(state->zxs_writer||state->zxs_ordinary){state->zxs_wait=subreq;tevent_req_set_cancel_fn(req,zxs_close_cancel);}
  		tevent_req_set_callback(subreq, smbd_smb2_close_wait_done, req);
  		return req;
  	}
@@ -3927,36 +3951,39 @@
 +		zxs_close_writer(req,ev);
 +		return tevent_req_is_in_progress(req)?req:tevent_req_post(req,ev);
 +	}
++	if(state->zxs_ordinary){
++		zxs_close_ordinary(req,ev);
++		return tevent_req_is_in_progress(req)?req:tevent_req_post(req,ev);
++	}
  	if (in_fsp->fsp_flags.initial_delete_on_close) {
  		struct tevent_req *subreq = NULL;
  		struct share_mode_lock *lck = NULL;
-@@ -427,7 +512,8 @@
+@@ -427,7 +536,9 @@
  	NTSTATUS status;
  
  	tevent_queue_wait_recv(subreq);
 -	TALLOC_FREE(subreq);
 +	state->zxs_wait=NULL;TALLOC_FREE(subreq);
 +	if(state->zxs_writer){zxs_close_writer(req,state->smb2req->sconn->ev_ctx);return;}
++	if(state->zxs_ordinary){zxs_close_ordinary(req,state->smb2req->sconn->ev_ctx);return;}
  
  	status = smbd_smb2_close(state->smb2req,
  				 &state->in_fsp,
-@@ -498,7 +584,7 @@
+@@ -498,12 +609,13 @@
  				     struct timespec *out_change_ts,
  				     uint64_t *out_allocation_size,
  				     uint64_t *out_end_of_file,
 -				     uint32_t *out_file_attributes)
-+				     uint32_t *out_file_attributes,DATA_BLOB *body)
++				     uint32_t *out_file_attributes,DATA_BLOB *body,bool *unknown)
  {
  	struct smbd_smb2_close_state *state =
  		tevent_req_data(req,
-@@ -518,6 +604,7 @@
- 	*out_allocation_size = state->out_allocation_size;
- 	*out_end_of_file = state->out_end_of_file;
- 	*out_file_attributes = state->out_file_attributes;
-+	*body=state->zxs_body;
+ 		struct smbd_smb2_close_state);
+ 	NTSTATUS status;
++	*body=state->zxs_body;*unknown=state->zxs_unknown;
  
- 	tevent_req_received(req);
- 	return NT_STATUS_OK;
+ 	if (tevent_req_is_nterror(req, &status)) {
+ 		tevent_req_received(req);
 --- a/source3/smbd/smb2_server.c
 +++ b/source3/smbd/smb2_server.c
 @@ -23,6 +23,7 @@
@@ -4179,7 +4206,7 @@
  		p += 4;
  		SIVAL(p,0,reskey); p += 4;
  		put_long_date_full_timespec(conn->ts_res,p,&create_date_ts); p += 8;
-@@ -1755,6 +1756,22 @@
+@@ -1755,6 +1756,25 @@
  	*ppdata = p;
  
  	return NT_STATUS_OK;
@@ -4189,20 +4216,23 @@
 + * allocation units, stable pool FILE number and no fabricated history. */
 +_PUBLIC_
 +NTSTATUS zxs_marshal_child(TALLOC_CTX *ctx,connection_struct *conn,uint32_t cls,
-+	const char *name,bool directory,uint64_t no,uint64_t len,int remain,char *base,char **next,char *end,uint64_t *off)
++	const char *name,uint8_t scope,uint64_t no,uint64_t len,int remain,char *base,char **next,char *end,uint64_t *off)
 +{
++	const bool directory=scope!=ZXS_ROW_FILE;
 +	struct stat_ex st={.st_ex_mode=directory?(S_IFDIR|0500):(S_IFREG|0400),.st_ex_size=(off_t)len,
 +		.st_ex_ino=no,.st_ex_nlink=1};
 +	struct smb_filename n={.base_name=discard_const_p(char,name),.st=st};
-+	if((directory?(no<3||no>64||len!=0):(no<=255||no==UINT64_MAX||len>INT64_MAX)) ||
-+	   !zxs_file_vfs_active(conn))
++	const bool valid=scope==ZXS_ROW_TOP?(no>=2&&no<=64&&len==0):
++		scope==ZXS_ROW_ROUND?(no==UINT64_MAX&&len==0):
++		scope==ZXS_ROW_FILE?(no>255&&no!=UINT64_MAX&&len<=INT64_MAX):false;
++	if(!valid || !zxs_file_vfs_active(conn))
 +		return NT_STATUS_INVALID_PARAMETER;
 +	return smbd_marshall_dir_entry(ctx,conn,FLAGS2_UNICODE_STRINGS,cls,NULL,false,false,
 +		directory?FILE_ATTRIBUTE_DIRECTORY:FILE_ATTRIBUTE_NORMAL,name,&n,remain,8,false,base,next,end,off,&no);
  }
  
  NTSTATUS smbd_dirptr_lanman2_entry(TALLOC_CTX *ctx,
-@@ -1846,7 +1863,7 @@
+@@ -1846,7 +1866,7 @@
  				     base_data,
  				     ppdata,
  				     end_data,
@@ -4211,7 +4241,7 @@
  	if (NT_STATUS_EQUAL(status, NT_STATUS_ILLEGAL_CHARACTER)) {
  		DEBUG(1,("Conversion error: illegal character: %s\n",
  			 smb_fname_str_dbg(smb_fname)));
-@@ -2957,7 +2974,7 @@
+@@ -2957,7 +2977,7 @@
  	return NT_STATUS_OK;
  }
  
@@ -4220,7 +4250,7 @@
  			       TALLOC_CTX *mem_ctx,
  			       struct smb_request *req,
  			       uint16_t info_level,
-@@ -2970,7 +2987,7 @@
+@@ -2970,7 +2990,7 @@
  			       unsigned int max_data_bytes,
  			       size_t *fixed_portion,
  			       char **ppdata,
@@ -4229,7 +4259,7 @@
  {
  	char *pdata = *ppdata;
  	char *dstart, *dend;
-@@ -3017,13 +3034,13 @@
+@@ -3017,13 +3037,13 @@
  		 info_level, max_data_bytes);
  
  	smb_fname = fsp->fsp_name;
@@ -4245,7 +4275,7 @@
  
  	if (nlink && (mode&FILE_ATTRIBUTE_DIRECTORY)) {
  		nlink = 1;
-@@ -3052,12 +3069,12 @@
+@@ -3052,12 +3072,12 @@
  		update_stat_ex_mtime(psbuf, write_time_ts);
  	}
  
@@ -4264,7 +4294,7 @@
  		dos_filetime_timespec(&create_time_ts);
  		dos_filetime_timespec(&mtime_ts);
  		dos_filetime_timespec(&atime_ts);
-@@ -3096,9 +3113,9 @@
+@@ -3096,9 +3116,9 @@
  		string_replace(dos_fname, '/', '\\');
  	}
  
@@ -4277,7 +4307,7 @@
  		/* Do we have this path open ? */
  		struct file_id fileid = vfs_file_id_from_sbuf(conn, psbuf);
  		files_struct *fsp1 = file_find_di_first(
-@@ -3112,7 +3129,7 @@
+@@ -3112,7 +3132,7 @@
  		file_size = get_file_size_stat(psbuf);
  	}
  
@@ -4286,7 +4316,7 @@
  		pos = fh_get_position_information(fsp->fh);
  	}
  
-@@ -3128,7 +3145,7 @@
+@@ -3128,7 +3148,7 @@
  
  	   I think this causes us to fail the IFSKIT
  	   BasicFileInformationTest. -tpot */
@@ -4295,7 +4325,7 @@
  
  	*fixed_portion = 0;
  
-@@ -3463,8 +3480,7 @@
+@@ -3463,8 +3483,7 @@
  
  		case SMB2_FILE_ALL_INFORMATION:
  		{
@@ -4305,7 +4335,7 @@
  			DBG_DEBUG("SMB2_FILE_ALL_INFORMATION\n");
  			put_long_date_full_timespec(conn->ts_res,pdata+0x00,&create_time_ts);
  			put_long_date_full_timespec(conn->ts_res,pdata+0x08,&atime_ts);
-@@ -3482,7 +3498,7 @@
+@@ -3482,7 +3501,7 @@
  			SIVAL(pdata,	0x48, ea_size);
  			SIVAL(pdata,	0x4C, access_mask);
  			SBVAL(pdata,	0x50, pos);
@@ -4314,7 +4344,7 @@
  			SIVAL(pdata,	0x5C, 0); /* No alignment needed. */
  
  			pdata += 0x60;
-@@ -3687,6 +3703,58 @@
+@@ -3687,6 +3706,58 @@
  
  	*pdata_size = data_size;
  	return NT_STATUS_OK;
@@ -4375,15 +4405,53 @@
  /****************************************************************************
 --- a/source3/smbd/close.c
 +++ b/source3/smbd/close.c
-@@ -25,6 +25,7 @@
+@@ -24,7 +24,10 @@
+ #include "lib/util/server_id.h"
  #include "printing.h"
  #include "locking/share_mode_lock.h"
++#include "locking/proto.h"
  #include "smbd/smbd.h"
 +#include "smbd/zxs_file_vfs.h"
++#include "smbd/zxs_directory.h"
  #include "smbd/globals.h"
  #include "smbd/smbXsrv_open.h"
  #include "smbd/scavenger.h"
-@@ -1017,8 +1018,9 @@
+@@ -408,6 +411,17 @@
+ 		}
+ 	}
+ 
++	if(zxs_file_vfs_active(fsp->conn)){
++		struct zxs_read_fsp *member=zxs_find_read(fsp);
++		/* Managed disposition only moves during explicit SMB2 CLOSE.
++		 * Neither ordinary teardown nor a stock CLOSE can unlink host paths. */
++		state->delete_object=false;
++		if(member!=NULL&&member->folder.volume_ordinal>=2){
++			zxs_forget_virtual_disposition(lck,fsp,state->close_type!=NORMAL_CLOSE);
++		}
++		if(!del_share_mode(lck,fsp)){DBG_ERR("Could not release managed original share entry\n");}
++		return;
++	}
+ 	if (fsp->fsp_flags.initial_delete_on_close &&
+ 			!is_delete_on_close_set(lck, fsp->name_hash)) {
+ 		/* Initial delete on close was set and no one else
+@@ -502,6 +516,16 @@
+ 	/* Ensure any pending write time updates are done. */
+ 	if (fsp->update_write_time_event) {
+ 		fsp_flush_write_time_update(fsp);
++	}
++
++	const struct zxs_read_fsp *member=zxs_find_read(fsp);
++	if(member!=NULL&&member->share_detached){
++		/* The explicit eligibility pass removed this exact nonlast
++		 * record. The concurrently closing last owner may already
++		 * have removed the TDB key. Never reopen that absent key. */
++		locking_close_file(fsp,close_type);
++		if(fh_get_refcount(fsp->fh)<=1&&fsp->oplock_type!=NO_OPLOCK){release_file_oplock(fsp);}
++		return NT_STATUS_OK;
+ 	}
+ 
+ 	/*
+@@ -1017,8 +1041,9 @@
  	tmp = fd_close(fsp);
  	status = ntstatus_keeperror(status, tmp);
  
@@ -4435,13 +4503,147 @@
  }
  
  /****************************************************************************
+@@ -774,6 +787,7 @@
+ 	}
+ 	d->delete_tokens = tmp;
+ 	dtl = &d->delete_tokens[d->num_delete_tokens];
++	ZERO_STRUCTP(dtl);
+ 
+ 	dtl->name_hash = fsp->name_hash;
+ 
+@@ -901,6 +915,8 @@
+ 
+ 			/* Replace this token with the given tok. */
+ 			ZERO_STRUCT(dt->parent_lease_key);
++			dt->zxs_phase=0;ZERO_STRUCT(dt->zxs_owner);dt->zxs_owner_file_id=0;
++			ZERO_ARRAY(dt->zxs_mark);
+ 			lease = fsp_get_smb2_lease(fsp);
+ 			if (lease != NULL) {
+ 				dt->parent_lease_key = lease->parent_lease_key;
+@@ -1014,6 +1030,113 @@
+ 		}
+ 	}
+ 	return NULL;
++}
++
++
++/* Dedicated virtual FILEs use the original link-level marker and native
++ * share-mode lock, but never the stock unlink. These fields are stored
++ * only in this build's ephemeral native lock DB, not on SMB or S. */
++enum zxs_disposition_phase{ZXS_MARK_OWNER=1,ZXS_MARK_CLOSED=2};
++
++static bool zxs_mark_owner(const struct delete_token *tag,const struct server_id *who,uint64_t id)
++{
++	return tag->zxs_phase==ZXS_MARK_OWNER&&tag->zxs_owner_file_id==id&&server_id_equal(&tag->zxs_owner,who);
++}
++struct zxs_close_entries{
++	struct files_struct *self;
++	struct server_id worker;
++	const struct delete_token *tag;
++	bool found,other,owner;
++};
++static bool zxs_find_close_entry(struct share_mode_entry *e,bool *modified,void *private_data)
++{
++	struct zxs_close_entries *q=private_data;
++	if(e->name_hash!=q->self->name_hash||share_entry_stale_pid(e))return false;
++	if(e->share_file_id==fh_get_gen_id(q->self->fh)&&server_id_equal(&e->pid,&q->worker)){q->found=true;}
++	else{q->other=true;}
++	if(q->tag!=NULL&&zxs_mark_owner(q->tag,&e->pid,e->share_file_id))q->owner=true;
++	return false; /* inspect all entries; do not mistake a scan error for last */
++}
++
++bool zxs_store_disposition(files_struct *fsp,bool enabled,const uint8_t mark[16])
++{
++	struct share_mode_lock *lck;
++	struct share_mode_data *d=NULL;
++	struct delete_token *stamp=NULL;
++	struct zxs_close_entries q={.self=fsp};
++	const uint8_t zero[16]={0};
++	bool ok=false;
++	if(fsp==NULL||fsp->conn==NULL||fsp->conn->session_info==NULL||
++	   (fsp->access_mask&SEC_STD_DELETE)==0||fsp_get_smb2_lease(fsp)!=NULL||
++	   (enabled&&(mark==NULL||memcmp(mark,zero,16)==0)))return false;
++	q.worker=messaging_server_id(fsp->conn->sconn->msg_ctx);
++	lck=get_existing_share_mode_lock(talloc_tos(),fsp->file_id);
++	if(lck==NULL)return false;
++	if(!NT_STATUS_IS_OK(share_mode_lock_access_private_data(lck,&d))||
++	   !share_mode_forall_entries(lck,zxs_find_close_entry,&q)||!q.found)goto done;
++	if(!enabled){
++		reset_delete_on_close_lck(fsp,lck);fsp->fsp_flags.delete_on_close=false;ok=true;goto done;
++	}
++	set_delete_on_close_lck(fsp,lck,fsp->conn->session_info->security_token,fsp->conn->session_info->unix_token);
++	stamp=find_delete_on_close_token(d,fsp->name_hash);
++	if(stamp==NULL){reset_delete_on_close_lck(fsp,lck);goto done;}
++	stamp->zxs_owner=q.worker;stamp->zxs_owner_file_id=fh_get_gen_id(fsp->fh);
++	stamp->zxs_phase=ZXS_MARK_OWNER;memcpy(stamp->zxs_mark,mark,16);d->modified=true;
++	fsp->fsp_flags.delete_on_close=true;ok=true;
++done:
++	TALLOC_FREE(lck);return ok;
++}
++int zxs_claim_explicit_delete(files_struct *fsp,uint8_t mark[16])
++{
++	struct share_mode_lock *lck=NULL;
++	struct share_mode_data *d=NULL;
++	struct delete_token *tag=NULL;
++	struct zxs_close_entries q={.self=fsp};
++	const uint8_t zero[16]={0};
++	int answer=-1;
++	if(fsp==NULL||mark==NULL||fsp_get_smb2_lease(fsp)!=NULL)return -1;
++	q.worker=messaging_server_id(fsp->conn->sconn->msg_ctx);
++	lck=get_existing_share_mode_lock(talloc_tos(),fsp->file_id);
++	if(lck==NULL)return -1;
++	if(!NT_STATUS_IS_OK(share_mode_lock_access_private_data(lck,&d)))goto done;
++	tag=find_delete_on_close_token(d,fsp->name_hash);
++	if(tag==NULL){answer=0;goto done;}
++	q.tag=tag;
++	if((tag->zxs_phase!=ZXS_MARK_OWNER&&tag->zxs_phase!=ZXS_MARK_CLOSED)||
++	   memcmp(tag->zxs_mark,zero,16)==0||
++	   !share_mode_forall_entries(lck,zxs_find_close_entry,&q)||!q.found)goto done;
++	if(tag->zxs_phase==ZXS_MARK_OWNER&&!q.owner){
++		/* The issuing open vanished without passing explicit CLOSE.
++		 * A compatible reader must not inherit an abandoned request. */
++		reset_delete_on_close_lck(fsp,lck);answer=0;goto done;
++	}
++	if(q.other){
++		const bool hand= zxs_mark_owner(tag,&q.worker,fh_get_gen_id(fsp->fh));
++		/* Remove precisely this nonlast original record, and only when
++		 * the issuing native open explicitly closes can surviving opens
++		 * carry its intent to their own last explicit CLOSE. */
++		if(del_share_mode(lck,fsp)){
++			if(hand){tag->zxs_phase=ZXS_MARK_CLOSED;d->modified=true;}
++			answer=2;
++		}
++		goto done;
++	}
++	memcpy(mark,tag->zxs_mark,16);answer=1; /* marker excludes new opens until final close */
++done:
++	TALLOC_FREE(lck);return answer;
++}
++void zxs_forget_virtual_disposition(struct share_mode_lock *lck,files_struct *fsp,bool implicit)
++{
++	struct share_mode_data *d=NULL;
++	struct delete_token *tag=NULL;
++	struct zxs_close_entries q={.self=fsp,.worker=messaging_server_id(fsp->conn->sconn->msg_ctx)};
++	if(!NT_STATUS_IS_OK(share_mode_lock_access_private_data(lck,&d)))return;
++	tag=find_delete_on_close_token(d,fsp->name_hash);
++	if(tag==NULL)return;
++	if((implicit&&zxs_mark_owner(tag,&q.worker,fh_get_gen_id(fsp->fh)))||
++	   (share_mode_forall_entries(lck,zxs_find_close_entry,&q)&&q.found&&!q.other)){
++		reset_delete_on_close_lck(fsp,lck);
++	}
+ }
+ 
+ /****************************************************************************
 --- a/source3/locking/proto.h
 +++ b/source3/locking/proto.h
-@@ -117,6 +117,7 @@
+@@ -117,6 +117,10 @@
  				enum brl_type lock_type,
  				enum brl_flavour lock_flav,
  				struct lock_struct *plock);
 +bool zxs_strict_lock_check(files_struct *fsp, struct lock_struct *plock);
++bool zxs_store_disposition(files_struct *,bool,const uint8_t mark[16]);
++int zxs_claim_explicit_delete(files_struct *,uint8_t mark[16]);
++void zxs_forget_virtual_disposition(struct share_mode_lock *,files_struct *,bool implicit);
  bool strict_lock_check_default(files_struct *fsp,
  			       struct lock_struct *plock);
  NTSTATUS query_lock(files_struct *fsp,
@@ -4843,24 +5045,39 @@
  		tevent_req_received(req);
 --- a/source3/smbd/smb2_setinfo.c
 +++ b/source3/smbd/smb2_setinfo.c
-@@ -23,6 +23,7 @@
+@@ -23,6 +23,8 @@
  #include "locking/share_mode_lock.h"
  #include "smbd/smbd.h"
  #include "smbd/globals.h"
 +#include "smbd/zxs_directory.h"
++#include "locking/proto.h"
  #include "../libcli/smb/smb_common.h"
  #include "trans2.h"
  #include "../lib/util/tevent_ntstatus.h"
-@@ -43,7 +44,7 @@
+@@ -43,7 +45,7 @@
  						 uint8_t in_file_info_class,
  						 DATA_BLOB in_input_buffer,
  						 uint32_t in_additional_information);
 -static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req);
-+static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req,DATA_BLOB *body);
++static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req,DATA_BLOB *body,bool *unknown);
  
  static void smbd_smb2_request_setinfo_done(struct tevent_req *subreq);
  NTSTATUS smbd_smb2_request_process_setinfo(struct smbd_smb2_request *req)
-@@ -132,11 +133,11 @@
+@@ -125,19 +127,32 @@
+ 	 * Windows never sends async interim responses if a rename triggers a
+ 	 * lease break. See test smb2.lease.compound_rename_middle.
+ 	 */
+-	return smbd_smb2_request_pending_queue(req, subreq, 0);
++	const struct zxs_read_fsp *managed=zxs_find_read(in_fsp);
++	const bool retained_rename=managed!=NULL&&zxs_folder_retained(&managed->folder)&&
++		!zxs_folder_round(&managed->folder)&&
++		in_info_type==SMB2_0_INFO_FILE&&in_file_info_class+1000==SMB_FILE_RENAME_INFORMATION;
++	/* The dedicated filesystem has no leases. Only possibly long real
++	 * retained moves use the routine single/last async reply. */
++	return smbd_smb2_request_pending_queue(req, subreq, retained_rename?500:0);
+ }
+ 
+ static void smbd_smb2_request_setinfo_done(struct tevent_req *subreq)
  {
  	struct smbd_smb2_request *req = tevent_req_callback_data(subreq,
  					struct smbd_smb2_request);
@@ -4870,11 +5087,19 @@
  	NTSTATUS error; /* transport error */
  
 -	status = smbd_smb2_setinfo_recv(subreq);
-+	status = smbd_smb2_setinfo_recv(subreq,&outbody);
++	bool unknown=false;
++	status = smbd_smb2_setinfo_recv(subreq,&outbody,&unknown);
  	TALLOC_FREE(subreq);
++	if(unknown){
++		struct smbXsrv_connection *xconn=req->xconn;
++		zxs_smb2_retire_birth(req);
++		smbd_server_connection_terminate(xconn,"ZXS native restore outcome unconfirmed");
++		return;
++	}
  	if (!NT_STATUS_IS_OK(status)) {
  		error = smbd_smb2_request_error(req, status);
-@@ -148,7 +149,7 @@
+ 		if (!NT_STATUS_IS_OK(error)) {
+@@ -148,7 +163,7 @@
  		return;
  	}
  
@@ -4883,14 +5108,42 @@
  	if (outbody.data == NULL) {
  		error = smbd_smb2_request_error(req, NT_STATUS_NO_MEMORY);
  		if (!NT_STATUS_IS_OK(error)) {
-@@ -181,9 +182,25 @@
+@@ -181,9 +196,53 @@
  	bool delay;
  	bool rename_dst_check_done;
  	bool rename_dst_parent_check_done;
 +	struct tevent_req *zxs_wait;
 +	DATA_BLOB zxs_body;
++	bool zxs_unknown,zxs_disposition,zxs_disposition_value;
  };
  
++#include "smbd/zxs_native_transfer.inc"
++
++static void zxs_set_xfer_done(struct tevent_req *sub)
++{
++	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
++	struct smbd_smb2_setinfo_state *s=tevent_req_data(req,struct smbd_smb2_setinfo_state);
++	uint8_t proof[16]={0};
++	NTSTATUS status=zxs_xfer_recv(sub,&s->zxs_unknown,proof);
++	s->zxs_wait=NULL;TALLOC_FREE(sub);
++	if(s->zxs_disposition){
++		if(s->zxs_unknown){status=NT_STATUS_ACCESS_DENIED;s->zxs_unknown=false;}
++		if(NT_STATUS_IS_OK(status)&&!zxs_store_disposition(s->fsp,s->zxs_disposition_value,proof)){
++			status=NT_STATUS_ACCESS_DENIED;
++		}
++	}
++	if(tevent_req_nterror(req,status))return;
++	tevent_req_done(req);
++}
++static bool zxs_set_xfer_cancel(struct tevent_req *req)
++{
++	struct smbd_smb2_setinfo_state *s=tevent_req_data(req,struct smbd_smb2_setinfo_state);
++	if(s->zxs_wait==NULL || zxs_smb2_birth_cancel_advisory(s->smb2req,true))return false;
++	TALLOC_FREE(s->zxs_wait);s->zxs_unknown=true;
++	tevent_req_defer_callback(req,s->smb2req->xconn->client->raw_ev_ctx);
++	tevent_req_done(req);return true;
++}
++
  static void smbd_smb2_setinfo_lease_break_check(struct tevent_req *req);
 +static void zxs_set_eof_done(struct tevent_req *sub)
 +{
@@ -4909,15 +5162,44 @@
  
  static void smbd_smb2_setinfo_cleanup(struct tevent_req *req,
  				      enum tevent_req_state req_state)
-@@ -222,6 +239,29 @@
+@@ -222,6 +281,58 @@
  	state->smb2req = smb2req;
  	state->fsp = fsp;
  	state->data = in_input_buffer;
 +
 +	if(zxs_file_vfs_active(conn) || zxs_file_vfs_active(fsp->conn)){
 +		uint64_t length=0;
-+		if(fsp->conn!=conn || in_info_type!=SMB2_0_INFO_FILE ||
-+		   in_file_info_class+1000!=SMB_FILE_END_OF_FILE_INFORMATION) {
++		if(fsp->conn!=conn || in_info_type!=SMB2_0_INFO_FILE){
++			tevent_req_nterror(req,NT_STATUS_NOT_SUPPORTED);
++			return tevent_req_post(req,ev);
++		}
++		if(in_file_info_class+1000==SMB_FILE_DISPOSITION_INFORMATION){
++			if(in_additional_information!=0||in_input_buffer.data==NULL||in_input_buffer.length!=1||
++			   CVAL(in_input_buffer.data,0)>1){
++				tevent_req_nterror(req,NT_STATUS_INVALID_PARAMETER);return tevent_req_post(req,ev);
++			}
++			state->zxs_disposition=true;
++			state->zxs_disposition_value=CVAL(in_input_buffer.data,0)!=0;
++			state->zxs_body=smbd_smb2_generate_outbody(smb2req,2);
++			if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
++			state->zxs_wait=zxs_xfer_send(state,ev,req,smb2req,fsp,ZXS_XFER_PROBE,NULL,NULL,NULL);
++			if(tevent_req_nomem(state->zxs_wait,req))return tevent_req_post(req,ev);
++			tevent_req_set_cancel_fn(req,zxs_set_xfer_cancel);
++			tevent_req_set_callback(state->zxs_wait,zxs_set_xfer_done,req);return req;
++		}
++		if(in_file_info_class+1000==SMB_FILE_RENAME_INFORMATION){
++			char *folder=NULL,*name=NULL;
++			if(in_additional_information!=0||!zxs_restore_input(state,in_input_buffer,&folder,&name)){
++				tevent_req_nterror(req,NT_STATUS_INVALID_PARAMETER);return tevent_req_post(req,ev);
++			}
++			state->zxs_body=smbd_smb2_generate_outbody(smb2req,2);
++			if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
++			state->zxs_wait=zxs_xfer_send(state,ev,req,smb2req,fsp,ZXS_XFER_RESTORE,folder,name,NULL);
++			if(tevent_req_nomem(state->zxs_wait,req))return tevent_req_post(req,ev);
++			tevent_req_set_cancel_fn(req,zxs_set_xfer_cancel);
++			tevent_req_set_callback(state->zxs_wait,zxs_set_xfer_done,req);return req;
++		}
++		if(in_file_info_class+1000!=SMB_FILE_END_OF_FILE_INFORMATION){
 +			tevent_req_nterror(req,NT_STATUS_NOT_SUPPORTED);
 +			return tevent_req_post(req,ev);
 +		}
@@ -4939,17 +5221,17 @@
  
  	tevent_req_set_cleanup_fn(req, smbd_smb2_setinfo_cleanup);
  
-@@ -945,9 +985,11 @@
+@@ -945,9 +1056,11 @@
  	smbd_smb2_setinfo_lease_break_check(req);
  }
  
 -static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req)
 -{
-+static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req,DATA_BLOB *body)
++static NTSTATUS smbd_smb2_setinfo_recv(struct tevent_req *req,DATA_BLOB *body,bool *unknown)
 +{
 +	struct smbd_smb2_setinfo_state *s=tevent_req_data(req,struct smbd_smb2_setinfo_state);
  	NTSTATUS status;
-+	*body=s->zxs_body;
++	*body=s->zxs_body;*unknown=s->zxs_unknown;
  
  	if (tevent_req_is_nterror(req, &status)) {
  		tevent_req_received(req);
@@ -4985,3 +5267,18 @@
  }
  
  void log_panic_action(const char *msg)
+--- a/source3/librpc/idl/open_files.idl
++++ b/source3/librpc/idl/open_files.idl
+@@ -48,6 +48,12 @@
+ 		smb2_lease_key	parent_lease_key;
+ 		security_token *delete_nt_token;
+ 		security_unix_token *delete_token;
++		/* Private managed ZXS marker, never a user/lease token. The
++		 * dedicated role has an ephemeral native share-lock database. */
++		uint8 zxs_phase;
++		server_id zxs_owner;
++		udlong zxs_owner_file_id;
++		uint8 zxs_mark[16];
+ 	} delete_token;
+ 
+ 	typedef [public,bitmap16bit] bitmap {

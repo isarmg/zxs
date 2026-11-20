@@ -9,6 +9,7 @@ mod smb_policy;
 mod terminal;
 mod observed;
 mod online;
+mod recycle;
 pub(crate) use online::{StartSmb,Online};
 mod domain;
 

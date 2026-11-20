@@ -4,11 +4,13 @@
 
 **目标基线是[单一 SQLite SYSTEM](docs/sqlite-system.md)＋[普通 FILE 内容格式](docs/portable-storage.md)。** 以下先记录旧源码证据，不为旧日志继续开发功能；再列新架构必须实际联通的业务。
 
-**v9 普通文件联动。** 受管 Samba 只支持 SMB 3.1.1。首装计划把具体 LAN、唯一 `\\服务器\ZXS` 及每个明确选择的普通数据盘、名字与初始模式绑定到同一原 BOUND/SQLite；不用 Web 再开数据入口。监听回执只是实际批准地址组、原配置与账号已核，不是客户端可用性证据。ZXS 与 Helper 使用相同的 v9 DDL，不保留 v7 或旧格式迁移和回退。凭据见[原生认证](docs/smb-native-session.md)与[离线首设/重置](docs/first-account-v1.md)。
+**v10 普通文件与回收联动。** 受管 Samba 只支持 SMB 3.1.1。首装计划把具体 LAN、唯一 `\\服务器\ZXS` 及每个明确选择的普通数据盘、名字与初始模式、独立回收目录绑定到同一原 BOUND/SQLite；不用 Web 再开数据入口。监听回执只是实际批准地址组、原配置与账号已核，不是客户端可用性证据。ZXS 与 Helper 使用相同的 v10 DDL，不迁移或回退 v9/旧格式。凭据见[原生认证](docs/smb-native-session.md)与[离线首设/重置](docs/first-account-v1.md)。
 
 **首条普通文件链。** 原生 CREATE/OPEN_IF、同原 FileId 的 READ/WRITE、SET EOF、FLUSH 与显式脏 CLOSE 复用本次真正 SMB 句柄、原 share-mode 与当前原 SQL。未到 native ACK 不发出生；确认后丢应答不假作确定失败。兼容读选已确认图、不取写锁。每轮首次实际修改新建一份工作数据增量和对应校验/索引，同一轮继续使用原对，应用保存不发布历史。Web 选择实际文件并明确提交才冻结 Node；第2/3/4及后续轮次无需任何前轮全量。没有自动历史或强制后台全量。
 
-**仍待。** 在互相隔离的新会话验证 Windows/macOS/Linux 的登录、挂载、读写和应用保存；普通子目录、原生字节锁命令、额外 CREATE contexts、覆盖式替换、逻辑回收读/恢复都不能由目前源码当作已发/已验收。真实磁盘测试也未运行。
+**同树回收链源码。** 普通 RW FILE 的原生删除标记必须到最后一次显式 CLOSE 才真实迁入独立 R；同树逻辑回收按原次 DeleteOp 找同一 FileId 和已保存版本，可读或向实际 RW F 的空目标 rename 还原。断开不新发删除；仅有旧读租或证据不足，不清旧实物。未运行。
+
+**仍待。** 在互相隔离的新会话验证 Windows/macOS/Linux 的登录、挂载、读写、应用保存，以及回收与原生同树还原。普通子目录、原生字节锁命令、额外 CREATE contexts 与覆盖式替换仍未接；无真磁盘和断电试验结果。
 
 **管理 Web。** [原生 HTTP](docs/web-management.md) 默认直接监听 0.0.0.0:8443，以实际接受连接的本址、精确同源和会话 CSRF 保护真实登录/共享。无需配置 Web 即可按服务器 IPv4 使用；不提供 TLS、nginx 或证书。外部代理可单独选择及绑定，仅此通道使用 Secure Cookie。独立浏览器、实际代理、并发与停机待现场验证；库与网络源码未运行。
 

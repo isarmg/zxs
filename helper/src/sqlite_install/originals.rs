@@ -203,6 +203,18 @@ fn reject_old_claim(fd:&File)->io::Result<()>{
         Err(e)=>Err(e.into()),
     }
 }
+/// Inspect only a presently held media origin or an existing protected parent.
+/// The backing number is the kernel mount-table superblock observation, not
+/// a durable UUID or an assertion that the physical disks are independent.
+pub(super) fn named_backing(name:&Pinned,leaf:&File,table:&HostMounts,host:&File,uid:u32)->io::Result<u64>{
+    let expected=(name.entity(),name.require_same_named_mount()?);
+    if location(leaf)?!=expected{return Err(bad("substituted original volume or parent"));}
+    let backing=ancestry(name,leaf,table,host,uid)?;
+    if location(leaf)?!=expected||name.require_same_named_mount()?!=expected.1{
+        return Err(bad("original volume or protected parent changed"));
+    }
+    Ok(backing)
+}
 fn ancestry(name:&Pinned,leaf:&File,table:&HostMounts,host:&File,uid:u32)->io::Result<u64>{
     let host=location(host)?;
     let mut seen=name.visible_chain().iter().rev().peekable();let mut up=None;let mut child:Option<(Mount,u64)>=None;let mut sb=None;

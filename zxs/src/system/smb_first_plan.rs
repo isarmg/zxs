@@ -7,7 +7,7 @@ use std::{collections::BTreeSet,io,net::{IpAddr,Ipv4Addr,Ipv6Addr}};
 
 const MAGIC:&[u8;16]=b"ZXS-SMB-FIRST-1\0";
 pub(super) const PLAN_SLOT:usize=17631;
-const MAX_WIRE:usize=17_376;
+const MAX_WIRE:usize=PLAN_SLOT;
 type Id=[u8;16];
 
 #[derive(Clone,Copy,Eq,Ord,PartialEq,PartialOrd)]
@@ -39,7 +39,7 @@ impl Folder{
 }
 
 pub(super) struct Plan{
-    scope:[Id;5], sha:[u8;32], endpoints:Vec<Endpoint>, folders:Vec<Folder>,
+    scope:[Id;5], sha:[u8;32], endpoints:Vec<Endpoint>, folders:Vec<Folder>, recycle:String,
 }
 pub(super) struct InstalledPlan(Plan);
 impl Plan{
@@ -91,15 +91,15 @@ impl Plan{
             folders.push(Folder{name:name.to_owned(),volume:VolumeId(id),mode,share:ShareId(next(1)?),
                 publish:OperationId(next(2)?),first:OperationId(next(3)?)});
         }
-        // Ordinary-first cut has a zero-length recycle slot, not a
-        // fake disk, special name, or second business service.
-        if fixed::<2>(&mut p)?!=[0;2] || !p.is_empty() || sha==[0;32]{return Err(denied());}
+        let k=u16::from_be_bytes(fixed(&mut p)?) as usize;
+        let recycle=display::component(take(&mut p,k)?,display::MAX)?;
+        if names.contains(recycle)||!p.is_empty()||sha==[0;32]{return Err(denied());}
         for f in &folders{
             for id in [f.share.0,f.publish.0,f.first.0]{
                 if id==[0;16]||!seen.insert(id){return Err(denied());}
             }
         }
-        Ok(Self{scope,sha,endpoints,folders})
+        Ok(Self{scope,sha,endpoints,folders,recycle:recycle.to_owned()})
     }
     pub(super) fn sha(&self)->[u8;32]{self.sha}
     pub(super) fn endpoints(&self)->&[Endpoint]{&self.endpoints}
@@ -121,6 +121,7 @@ impl Plan{
         let pair=Pair::confirmed(db,c)?.ok_or_else(denied)?;
         if self.scope!=[c.birth.pool.0,c.birth.op.0,pair.instance,self.scope[3],pair.setup.0]||
             pair.setup_bound!=bound_sha{return Err(denied());}
+        if !c.rows().get(1).is_some_and(|r|r.ordinal==1&&r.role==Role::Recycle){return Err(denied());}
         for f in self.folders(){self.original(db,c,&pair,f)?;}
         Ok(pair)
     }
@@ -152,6 +153,7 @@ impl Plan{
 impl InstalledPlan{
     pub(super) fn sha(&self)->[u8;32]{self.0.sha()}
     pub(super) fn folders(&self)->&[Folder]{self.0.folders()}
+    pub(super) fn retained_label(&self)->&str{&self.0.recycle}
     // The original first mode is not the current permission. A later
     // action still selects the live authenticated session/grant independently.
     pub(super) fn current(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Option<Setting>>{
@@ -167,10 +169,10 @@ mod tests{
     use super::*;
     use super::super::hex;
     #[test]
-    fn ordinary_plan_fixture_has_exact_helper_digest_and_separate_case_labels(){
+    fn complete_first_plan_has_exact_helper_digest_and_separate_case_labels(){
         let entries=include_str!("first-ordinary-plan-v1.txt");
         let read=|key|entries.lines().filter_map(|x|x.split_once('=')).find(|(k,_)|*k==key).unwrap().1;
-        let mut raw=hex::<170>(read("wire_hex")).unwrap();
+        let mut raw=hex::<179>(read("wire_hex")).unwrap();
         let p=Plan::parse(&raw).unwrap();
         assert_eq!(p.scope,[[1;16],[2;16],[3;16],[4;16],[5;16]]);
         assert_eq!(p.sha(),hex(read("plan_sha256")).unwrap());
@@ -183,7 +185,11 @@ mod tests{
         assert_eq!(p.folders[1].share.0,hex(read("f2_share")).unwrap());
         assert_eq!(p.folders[1].publish.0,hex(read("f2_publish")).unwrap());
         assert_eq!(p.folders[1].first.0,hex(read("f2_mode")).unwrap());
-        raw[169]=1;assert!(Plan::parse(&raw).is_err());
-        assert!(Plan::parse(&raw[..169]).is_err());
+        assert_eq!(p.recycle,"回收站");
+        assert!(Plan::parse(&raw[..178]).is_err());
+        raw[168..170].copy_from_slice(&[0,0]);
+        assert!(Plan::parse(&raw[..170]).is_err()); // old ordinary-only ABI is not v10
+        raw[168..170].copy_from_slice(&[0,4]);raw[170..174].copy_from_slice(b"Docs");
+        assert!(Plan::parse(&raw[..174]).is_err()); // exact name already routes to F
     }
 }

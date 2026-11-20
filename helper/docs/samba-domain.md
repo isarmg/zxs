@@ -1,20 +1,20 @@
 # 专用 Samba 实例的首次域供给（宿主契约 1）
 
-适用 Debian 13 amd64。helper 只在独立获准的**全新专用实例**中调用 Samba 自己的实现产生本机 SAM 域，不能给定/导入 SID。ZXS 将来在同一运行的 standalone smbd 中重核域和实例，并验证实际用户、凭据代次和认证会话。两者都不以域记录证明有人能登录。SQLite v9 保存两个身份、Web 校验值、业务许可与凭据代次。SMB 密码等价物只留专用 Samba 的原生账号库，**不进 SQLite**；BOUND 不载凭据、不授予登录。旧账库不升级、不兼容；仅按此版为全新池建立。
+适用 Debian 13 amd64。helper 只在独立获准的**全新专用实例**中调用 Samba 自己的实现产生本机 SAM 域，不能给定/导入 SID。ZXS 将来在同一运行的 standalone smbd 中重核域和实例，并验证实际用户、凭据代次和认证会话。两者都不以域记录证明有人能登录。SQLite v10 保存两个身份、Web 校验值、业务许可与凭据代次。SMB 密码等价物只留专用 Samba 的原生账号库，**不进 SQLite**；BOUND 不载凭据、不授予登录。旧账库不升级、不兼容；仅按此版为全新池建立。
 
 ## 本机首设入口
 
 先完成 [install-pool](sqlite-first-install.md) 并保存 PoolId 和 INIT 原单。在可信宿主的同一前台控制终端进入唯一的 `setup-pair` 命令。参数顺序固定，以下是源码中的语法；本轮未打包、部署或采集口令。
 
 ```text
-helper setup-pair provision --create-layout --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --approval ID --listen ADDR/PREFIX [--listen ADDR/PREFIX ...] --share DIR NAME ro|rw [--share DIR NAME ro|rw ...]
+helper setup-pair provision --create-layout --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --approval ID --recycle-name NAME --listen ADDR/PREFIX [--listen ADDR/PREFIX ...] --share DIR NAME ro|rw [--share DIR NAME ro|rw ...]
 helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --setup-op SETUP_OP --approval ID --live-sha256 HEX
 helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --bound-sha256 HEX --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]
 helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --bound-sha256 HEX --setup-op SETUP_OP --op RESET_OP --approval ID --smb-account ID --smb-login NAME --previous-op PREVIOUS_OP --previous-generation N [--receipt-only|--resume]
 helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP --op RESET_OP --approval ID --web-account ID --previous-op PREVIOUS_OP --previous-generation N [--receipt-only]
 ```
 
-1. **准备本机目录。** 管理员可用上面的 `--create-layout` 明确批准新建实例；这不是预演，也不开始生成域。提供已确认 INIT 的原 SYSTEM、所选普通数据盘的准确登记路径、每个目录的名称与 ro/rw、明确 LAN 地址及客户前缀，以及原实例/域/首设号和本次审批参考。非 root SQL 工人借同一原 S 独占锁只读核登记；不打开 R 或 F 介质。不替未选盘发布。从固定的 `/var/lib` 沿已核实的原目录创建尚缺的 `local-ops-helper/samba-instances/<InstanceId>`；只有需新建的两个容器目录才设 root:root 0711。现有容器仅核对，不改其权限。对已选原父只读有界目录项以确认固定分量的准确拼写；不进入、记录或显示无关项。新实例为 root:专用存储组 0750，只含 root:root 0444 单链接的 `smb.conf`（按上述已核原计划规范生成）和各归备案存储 UID/GID、0700 的空 `private`、`state`，另有 root:root 0700、无额外 ACL 的空 `accountdb`。已有实例即使为空也拒；已有相应暂存名不接管。
+1. **准备本机目录。** 管理员可用上面的 `--create-layout` 明确批准新建实例；这不是预演，也不开始生成域。提供已确认 INIT 的原 SYSTEM、所选普通数据盘的准确登记路径、每个目录的名称与 ro/rw、明确 LAN 地址及客户前缀，以及原实例/域/首设号和本次审批参考。`--recycle-name` 是同一共享下的单个准确非空目录名，不是路径、盘号、权限模式或另一共享。非 root SQL 工人借同一原 S 独占锁核对登记，返回该原 INIT 的唯一 R。首次布局批准前后须由宿主核真实原 R 领标、受保护目录、可写与独立挂载；不读取其业务内容。普通 F 只查登记，不替未选盘发布。从固定的 `/var/lib` 沿已核实的原目录创建尚缺的 `local-ops-helper/samba-instances/<InstanceId>`；只有需新建的两个容器目录才设 root:root 0711。现有容器仅核对，不改其权限。对已选原父只读有界目录项以确认固定分量的准确拼写；不进入、记录或显示无关项。新实例为 root:专用存储组 0750，只含 root:root 0444 单链接的 `smb.conf`（按上述已核原计划规范生成）和各归备案存储 UID/GID、0700 的空 `private`、`state`，另有 root:root 0700、无额外 ACL 的空 `accountdb`。已有实例即使为空也拒；已有相应暂存名不接管。
 
    创建前须有独立确认的整套发行软件、受保护的安装主体和非 root 存储 UID/GID；本动作不建立身份、策略或信任记录。原前台显示实际固定父、dev/inode/本次挂载、ID、审批、属主、配置及发行摘要；新随机答复只批准这一次。仅支持可查普通 Unix 模式、无额外 POSIX 访问 ACL 的受保护本地原链；新建父还不得有默认 ACL。既有祖先须允许降权后的存储身份搜索。从宿主 PID 1 的实际根逐级持有原父。正常独立挂载的 `/var` 或 `/var/lib` 均可用（两处可以都独立）；只在这两处按实际挂载根、真实父挂载与本地文件系统证据接受转场。普通文件系统要求完整根，Btrfs 可为已挂载的子卷根，后者不把内核两种设备号混同。普通子树 bind 或 site 自身、包目录、实例处的额外挂载仍拒绝；不改现有挂载。这不区分管理员有意的整根 bind，不遍历其它命名空间，也不证明没有外部使用者；维护者须确认所示原父位置专用。若直接创建父为 setgid、本进程 umask 掩去 owner 位或实际权限不足，则在暂存前拒绝；不改原父或主机设置。现阶段复用宿主已支持的 ext2/3/4、XFS、Btrfs、F2FS 普通目录识别，不使用其专有功能，不规定 ZXS 池的格式；远程、叠加或无法归属的宿主路径不试写。宿主额外强制访问策略仍由部署者核准。
 
@@ -35,7 +35,7 @@ helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP
 
 ### 初次正式配置，不是引导配置
 
-[initial-live.conf](../resources/samba-domain/initial-live.conf) 是程序验证的 1383 字节内置骨架，不是可交付的最终配置。最终只按原计划写明确批准的局域网监听地址和限源前缀、TCP 445、**SMB 3.1.1**，只提供一个 `\\服务器\ZXS`，各选中普通数据盘各为一个精确区分大小写的一级文件夹。当前版本没有回收站逻辑路由；不会导出旧回环骨架、物理目录、系统盘、访客或第二个业务共享。安装时核该源文件完整、0444、单链接、同一原挂载；上线投射另需真正只读。旧配置/BOUND 不重签、不覆盖。
+[initial-live.conf](../resources/samba-domain/initial-live.conf) 是程序验证的 1383 字节内置骨架，不是可交付的最终配置。最终只按原计划写明确批准的局域网监听地址和限源前缀、TCP 445、**SMB 3.1.1**，只提供一个 `\\服务器\ZXS`，各选中普通数据盘各为一个精确区分大小写的一级文件夹。另有一个明确命名的逻辑回收目录，精确计划绑定原 INIT 的唯一 R，没有额外服务、共享 ID 或授权表。不会导出旧回环骨架、物理目录、系统盘、访客或第二个业务共享。安装时核该源文件完整、0444、单链接、同一原挂载；上线投射另需真正只读。旧配置/BOUND 不重签、不覆盖。
 
 在调用域生成前，宿主逐字读该实名原件至 EOF，与规范重渲染的原计划以及独立确认的配置摘要同时核对；保留 FD，直至客体退出、私有库同步和未发布候选输出时仍复核原挂载、实体、名字及内容。不能用引导 profile、另一个安装或只有同名的配置代替。128 字节 BOUND 候选只取这次正常退出并已核原件的非秘密域；没有宿主管理员通过受限父进程的不覆盖发布时，它不是磁盘正本、开户许可或登录证据。
 
@@ -85,7 +85,7 @@ helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP
 - 实际业务组件停止并排空后，主管从受控真实宿主取原 SYSTEM、原实例两个不同的实际目录 EX（固定顺序 S→实例）。低权 SQLite 工人借本次已持那一 **OFD**，不是另一主体用同一个 OFD 变锁；它再独立从原目录取真实 S 卷标和原已提交 INIT，并用标准 Unix VFS 保留最初数据库 inode，期间不持长 SQLite 事务。不裸开 SQLite inode，不搜索其他卷。只查路径止于已提交/待办/确无原单，不打开 TDB 正文。
 - 人的授权来自同一真实前台，选定一单、一个角色/明确首设两名及具体操作状态。独立签发和宿主的允许条件先于写入，不能用一个散列/口令批准号代替。固定低权 SQLite 工人从实际已核的 helper FD 执行，以密封**非秘密**原单和匿名 seqpacket 握手；使用逐条内核 PID/UID/GID，活动父的随机挑战及确切原件；只跨进程交付同一已持 S、非秘密阶段和 O_PATH，常规 EOF 不证明成功。原同一工人独立正常退出才给最终确认。
 - 正向先核实际原本地域：在本实例的机器库只读取唯一规范的 `SECRETS/SID/ZXSLOCAL` 匹配 24B 域，不调用会生成新域的 getter。原生工人确认原账号库的唯一 USER/RID 及 4/0 空间。首设先从低权工人预留完整 64 MiB Web 派生区，并证实实际 SMB 提供者。暂存密钥留各自固定进程的锁定内存，终端由父维持同一次无回显，子只核当前原终端、不恢复。中断先收确切低权读者，后清终端并恢复；强杀、主机崩溃或不可恢复终端不作保证。口令不进命令、环境、日志、IPC 或临时文件。
-- SQLite v9 先留 **PENDING**（首设还留 Web 的 Argon2id 校验，两组身份暂不活动；SMB reset 仅挡 SMB）。正常提交、该连接实际 `xSync` 的原主库及原父同步、独立从同一 VFS inode 复读之后，才在同一原生 TDB 事务提交密码等价值及非秘密原代号。新账号库只准本次原进程 `O_EXCL`，重置只能写准确前驱的同一文件。原 TDB 写句柄关闭后验证并同步原库及原 accountdb 父，再独立原生重开验同一原物、全部四项和目标，才准同一原单最终 SQL 确认；首设同一事务发行此前明确批准的普通数据目录和模式，无需 Web 二次开放。后续只查不恢复历史权限。没有密码回读、密码备份、格式升级或失败后换模式。
+- SQLite v10 先留 **PENDING**（首设还留 Web 的 Argon2id 校验，两组身份暂不活动；SMB reset 仅挡 SMB）。正常提交、该连接实际 `xSync` 的原主库及原父同步、独立从同一 VFS inode 复读之后，才在同一原生 TDB 事务提交密码等价值及非秘密原代号。新账号库只准本次原进程 `O_EXCL`，重置只能写准确前驱的同一文件。原 TDB 写句柄关闭后验证并同步原库及原 accountdb 父，再独立原生重开验同一原物、全部四项和目标，才准同一原单最终 SQL 确认；首设同一事务发行此前明确批准的普通数据目录和模式，无需 Web 二次开放。后续只查不恢复历史权限。没有密码回读、密码备份、格式升级或失败后换模式。
 - Web reset 不走 Samba、BOUND 或第二库，只在原 SYSTEM EX 下确认原精确前驱，将 Web verifier、原代和操作一笔提交、同步再独立复读，不留跨库待办。后续登录须另由实际服务重新核权。
 
 ### 独立发行与站点策略

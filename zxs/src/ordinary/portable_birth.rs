@@ -34,7 +34,29 @@ impl Birth{
         }
         Ok(())
     }
-    pub(crate) fn container(&self)->io::Result<CString>{super::storage_name::file_leaf(&self.name,self.file)}
+    // The OS I/O is relative to proved held parents; this additionally
+    // checks the existing bounded name and reopen budgets before new work.
+    // Do not apply it retroactively to immutable birth/receipt queries.
+    pub(crate) fn validate_transfer_geometry(&self,display:&str,target:(&Path,ComponentLimit),action:OperationId)->io::Result<()>{
+        let (path,limit)=target;
+        let root=NameBudget::from_original(path_budget(path)?,limit);
+        let leaf=Self::placement_parent(action)?;
+        let cavity=NameBudget::from_original(root.child(&leaf)?,limit);
+        let terminal=Self::placed_container(display,self.file)?;
+        cavity.child(&self.witness()?)?;
+        let container=NameBudget::from_original(cavity.child(&terminal)?,limit);
+        container.child(c"FILE")?;
+        super::flat::local::require_resident_names(container,&self.name)
+    }
+    pub(crate) fn container(&self)->io::Result<CString>{Self::placed_container(&self.name,self.file)}
+    pub(crate) fn placed_container(display:&str,file:FileId)->io::Result<CString>{
+        super::storage_name::file_leaf(display,file)
+    }
+    pub(crate) fn placement_parent(op:OperationId)->io::Result<CString>{
+        if op.0==[0xff;16]{return Err(invalid("transfer parent cannot be a reserved volume role"));}
+        Ok(TicketLeaf::stage(op,5)?.name())
+    }
+    pub(crate) fn retirement_name(op:OperationId)->io::Result<CString>{Ok(TicketLeaf::stage(op,6)?.name())}
     pub(crate) fn witness(&self)->io::Result<CString>{Ok(TicketLeaf::stage(self.operation,7)?.name())}
     pub(crate) fn lower(&self,i:u8)->io::Result<CString>{Ok(TicketLeaf::stage(self.ticket,i)?.name())}
     pub(crate) fn header(&self)->Vec<u8>{
@@ -63,7 +85,11 @@ impl Birth{
     }
     pub(crate) fn working_records_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,write:bool,
         members:impl FnOnce(&WitnessRead<'_>)->io::Result<()>)->io::Result<Installed>{
-        self.physical_at(parent,sample,&self.container()?,|dir|if write{dir.exclusive()}else{Ok(())},members)
+        self.working_records_in(parent,sample,&self.container()?,write,members)
+    }
+    pub(crate) fn working_records_in(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr,write:bool,
+        members:impl FnOnce(&WitnessRead<'_>)->io::Result<()>)->io::Result<Installed>{
+        self.physical_at(parent,sample,leaf,|dir|if write{dir.exclusive()}else{Ok(())},members)
     }
     fn physical_at(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,leaf:&CStr,lock:impl FnOnce(&HeldDir)->io::Result<()>,
         members:impl FnOnce(&WitnessRead<'_>)->io::Result<()>)->io::Result<Installed>{
@@ -75,14 +101,34 @@ impl Birth{
         let header=scope.file_header(parent,sample,&witness,expected.len() as u64)?;
         let mut bytes=vec![0;expected.len()];header.file().read_exact_at(&mut bytes,0)?;
         if bytes!=expected{return Err(invalid("FILE header differs from original creation identity"));}
-        let result=Installed{dir,header,witness};result.require(parent)?;Ok(result)
+        let result=Installed{dir,header,witness,placement_parent:None};result.require(parent)?;Ok(result)
     }
 }
-pub(crate) struct Installed{dir:HeldDir,header:HeldBytes,witness:CString}
+pub(crate) struct Installed{dir:HeldDir,header:HeldBytes,witness:CString,placement_parent:Option<HeldDir>}
 impl Installed{
     pub(crate) fn directory(&self)->&HeldDir{&self.dir}
+    pub(crate) fn capture_retirement(&self,root:&HeldDir)->io::Result<crate::fs::RetireProof>{
+        self.require(root)?;
+        crate::fs::RetireProof::capture(self.placement_parent.as_ref().unwrap_or(root),&self.dir,&self.header,&self.witness)
+    }
+    pub(crate) fn verified_retirement_target(&self,root:&HeldDir,used:&crate::ordinary::working_round::Used)->io::Result<crate::fs::RetireProof>{
+        self.require(root)?;
+        crate::fs::RetireProof::from_verified(self.placement_parent.as_ref().unwrap_or(root),&self.dir,&self.header,&self.witness,used)
+    }
+    pub(crate) fn still_retirement_target(&self,root:&HeldDir,p:&crate::fs::RetireProof)->io::Result<()>{
+        self.require(root)?;
+        p.requires_target(self.placement_parent.as_ref().unwrap_or(root),&self.dir,&self.witness)
+    }
     pub(crate) fn require_newborn(&self,parent:&HeldDir)->io::Result<()>{self.dir.only(Some(c"FILE"))?;self.require(parent)}
-    pub(crate) fn require(&self,parent:&HeldDir)->io::Result<()>{
+    pub(crate) fn with_placement_parent(mut self,root:&HeldDir,held:HeldDir)->io::Result<Self>{
+        if self.placement_parent.is_some(){return Err(invalid("nested FILE placement not allowed"));}
+        self.placement_parent=Some(held);self.require(root)?;Ok(self)
+    }
+    pub(crate) fn require(&self,root:&HeldDir)->io::Result<()>{
+        let parent=match &self.placement_parent{Some(p)=>{
+            if p.path.parent()!=Some(root.path.as_path())||!root.same_mount(p)?{return Err(invalid("different original placement root"));}
+            WitnessRead::require_parent(p)?;p
+        },None=>root};
         if self.dir.path.parent()!=Some(parent.path.as_path())||!parent.same_mount(&self.dir)?{return Err(invalid("different containing FILE parent"));}
         WitnessRead::require_parent(&self.dir)?;self.header.require_name(&self.dir,c"FILE")?;self.header.require_name(parent,&self.witness)
     }
@@ -90,3 +136,6 @@ impl Installed{
 
 #[path="sql_install.rs"]
 mod sql_install;
+#[path="move_install.rs"]
+mod move_install;
+pub(crate) use move_install::{MoveInstall,MoveRoom};

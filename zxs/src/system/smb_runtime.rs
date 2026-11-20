@@ -158,15 +158,30 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
         // send). Authentic role frames always supplied their own kernel-
         // checked credentials, including ones already queued on this edge.
         let authority=trees::Site::from_reader(&src,&binding,&stamp,&stopping,&plan);
+        let retiring=std::sync::atomic::AtomicBool::new(true);
         std::thread::scope(|scope|{
         let mut jobs=trees::Workers::new(scope,authority);
+        let (dir,mark,pool,shape)=(&src.dir,&src.marker,src.pool,src.expected_schema);
+        let (should_stop,cleanup_running,master_life)=(&stopping,&retiring,&life);
+        let _reaper=std::thread::Builder::new().name("zxs-original-source-retirement".into()).spawn_scoped(scope,move||{
+            let Ok(local)=InitialReader::alongside(dir,mark,pool,shape) else{return;};
+            super::retirement::serve(&local,||{
+                if should_stop()||!cleanup_running.load(std::sync::atomic::Ordering::Acquire)||
+                   unsafe{zxs_smb_ctl_life(master_life.as_raw_fd(),0)}!=0{return Err(denied());}
+                Ok(())
+            });
+        });
         until_peer_drained(fd,||{
+        let dispatched=(||{
         os(unsafe{zxs_smb_origin_enable(fd)})?;
         attempts::serve(fd,&life,&master,&stopping,||{
             if Stamp::read(&binding)?!=stamp{return Err(denied());}
             let selected=current_slot(&src,pool,e.instance,&sid)?;
             if Stamp::read(&binding)?!=stamp{return Err(denied());}Ok(selected)
         },|origin,share,reply|jobs.submit(origin,share,reply))
+        })();
+        retiring.store(false,std::sync::atomic::Ordering::Release);
+        dispatched
         },||unsafe{zxs_smb_ctl_life(life.as_raw_fd(),500)})
         }) // all admitted threads and their original S/F objects are now joined
     })();

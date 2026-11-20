@@ -179,11 +179,11 @@ impl NativeSite {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::smb_profile::first::{Endpoint,Folder,Mode};
+    use crate::smb_profile::first::{Endpoint,Folder,Mode,RecycleName};
 
     fn config(o:Origin,label:&str)->String{
         let p=Plan::selected(o,vec![Endpoint::named("192.0.2.17/24").unwrap()],
-            vec![Folder{volume:[0x21;16],name:label.to_owned(),mode:Mode::ReadOnly}]).unwrap();
+            vec![Folder{volume:[0x21;16],name:label.to_owned(),mode:Mode::ReadOnly}],RecycleName::new("Recycle".into()).unwrap()).unwrap();
         smb_profile::render(&p).unwrap()
     }
     fn bound(o:Origin,cfg:&str)->[u8;128]{

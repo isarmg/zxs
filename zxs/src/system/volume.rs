@@ -88,3 +88,47 @@ impl<'a> OrdinaryRoot<'a>{
         self.require()?;Ok(DiskSpace{volume:self.volume,filesystem_bytes:total,available_bytes:available})
     }
 }
+
+/// The native R role has its own selected proof. It cannot be passed into
+/// the ordinary volume writer or obtained by sending a path/volume to SMB.
+pub(super) struct RecycleRoot<'a>{
+    source:&'a InitialReader,root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId,
+}
+impl<'a> RecycleRoot<'a>{
+    // Call after the logical SQL selection and outside any read transaction.
+    // A missing physical root is not an empty retained namespace.
+    pub(super) fn at(source:&'a InitialReader,c:&Catalog)->io::Result<Self>{
+        if c.birth.pool!=source.pool{return Err(invalid("recycle role belongs to another pool"));}
+        let r=c.rows().get(1).filter(|r|r.ordinal==1&&r.role==Role::Recycle)
+            .ok_or_else(||invalid("missing original recycle role"))?;
+        let expected=c.expected_marker(1).ok_or_else(||invalid("missing original recycle marker"))?;
+        let root=HeldDir::trusted_storage(&r.path).map_err(|e|
+            if e.kind()==io::ErrorKind::NotFound{io::Error::new(io::ErrorKind::NotConnected,"registered recycle volume unavailable")}else{e})?;
+        if root.entity.device==source.dir.root.entity.device||root.same_mount(&source.dir.root)?||
+            ComponentLimit::held(&root)?!=r.limit{
+            return Err(invalid("recycle root is not the independently registered filesystem or geometry"));
+        }
+        let mark=source.dir.hold_marker(&root)?;
+        let held=Self{source,root,mark,expected,volume:r.volume};
+        if held.mark.bytes(&held.root)?.as_slice()!=held.expected.as_slice(){
+            return Err(invalid("wrong original recycle root marker"));
+        }
+        held.require()?;Ok(held)
+    }
+    pub(super) fn volume(&self)->VolumeId{self.volume}
+    pub(super) fn root_for_read(&self)->&HeldDir{&self.root}
+    pub(super) fn require(&self)->io::Result<()>{
+        crate::fs::WitnessRead::require_parent(&self.source.dir.root)?;
+        check(unsafe{zxs_sql_named(self.source.conn.0)})?;
+        self.source.marker.require(&self.source.dir.root)?;
+        crate::fs::WitnessRead::require_parent(&self.root)?;
+        self.mark.require(&self.root)
+    }
+    /// No assumption that two mount IDs imply different disks. Reject
+    /// known shared devices/mounts, without probing unrelated data volumes.
+    pub(super) fn separate_from(&self,f:&OrdinaryRoot<'_>)->io::Result<()>{
+        if !std::ptr::eq(self.source,f.source)||self.root.entity.device==f.root.entity.device||
+            self.root.same_mount(&f.root)?{return Err(invalid("the selected ordinary and retained roles overlap"));}
+        Ok(())
+    }
+}

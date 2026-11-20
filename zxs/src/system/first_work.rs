@@ -2,7 +2,7 @@
 //! protocol login, not a confirmed formal version. All selected roots/IDs
 //! come from current business membership, never a pathname from the client.
 use super::{Catalog,Connection,Tree,check,sqlite3_step,file_create};
-use super::super::{volume::OrdinaryRoot,sqlite3_column_type,work_record::{self,Members,ReadRecord}};
+use super::super::{file_location::{Placed,Place},volume::OrdinaryRoot,sqlite3_column_type,work_record::{self,Members,ReadRecord}};
 use crate::ordinary::working_round::{End,Selected,Used};
 use crate::{FileId,OperationId,display,fs::invalid,hash::Sha256,identity::{AccountId,ShareId},
     ordinary::{portable_birth::{Birth,Installed},working_sql::{self,Incoming,Retained,Spec}}};
@@ -64,8 +64,12 @@ fn retained(db:&Connection,b:&Birth)->io::Result<Retained>{
         working_sql::include_retained(&mut names,OperationId(s.array(0)?),s.byte(1)?)?;
     },rc=>{check(rc)?;return Err(invalid("cannot read retained working names"));}}}
 }
-pub(in crate::system::reader) fn membership(db:&Connection,_:&Catalog,b:&Birth)->io::Result<(Option<(Spec,bool)>,Retained)>{
-    Ok((by_file(db,b)?.map(|x|(x.spec,x.done)),retained(db,b)?))
+pub(in crate::system::reader) fn membership(db:&Connection,c:&Catalog,b:&Birth)->io::Result<(Option<(Spec,bool)>,Retained)>{
+    let Some(row)=by_file(db,b)? else{return Ok((None,Retained::new()));};
+    if Place::current(db,c,b.file)?.op!=b.operation{
+        return Ok((row.done.then_some((row.spec,true)),Retained::new()));
+    }
+    Ok((Some((row.spec,row.done)),retained(db,b)?))
 }
 fn replaceable(db:&Connection,c:&Catalog,x:Row)->io::Result<bool>{
     Ok(!x.done&&(super::share_mode::current(db,c,x.share)?.op!=x.mode||super::Credential::current(db,c)?.op!=x.auth))
@@ -190,19 +194,20 @@ impl<'r> std::ops::Deref for MemberRoot<'_,'r>{
     fn deref(&self)->&Self::Target{match self{Self::Owned(r)=>r,Self::Tree(r)=>r}}
 }
 pub(crate) struct Current<'t,'s,'r>{body:Option<Selected>,container:Installed,root:MemberRoot<'t,'r>,
-    tree:&'t Tree<'s,'r>,birth:Birth,live:Option<ReadRecord>}
+    tree:&'t Tree<'s,'r>,birth:Birth,place:Place,live:Option<ReadRecord>}
 #[derive(Eq,PartialEq)]
 struct ReadCut{selected:Option<(ReadRecord,End)>,members:Members,alias:Option<file_create::Alias>}
 impl ReadCut{
-    fn gather(db:&Connection,c:&Catalog,b:&Birth,chosen:Option<ReadRecord>)->io::Result<Self>{
+    fn gather(db:&Connection,c:&Catalog,b:&Birth,at:&Place,chosen:Option<ReadRecord>)->io::Result<Self>{
         let selected=chosen.map(|r|work_record::ceiling(db,b,r).map(|end|(r,end))).transpose()?;
-        Ok(Self{selected,members:work_record::members(db,c,b)?,alias:file_create::display_owner(db,c,b)?})
+        Ok(Self{selected,members:work_record::members(db,c,b)?,alias:file_create::display_owner_at(db,c,at.volume,&at.name)?})
     }
 }
 impl<'s,'r> Tree<'s,'r>{
     pub(super) fn reader_from_newborn<'t>(&'t self,born:super::file_create::NativeBorn<'r>)->io::Result<Current<'t,'s,'r>>{
         let (root,birth,container)=born.parts(false)?;
-        let handle=Current{body:None,container,root:MemberRoot::Owned(root),tree:self,birth,live:None};
+        let place=Place::origin(&birth);
+        let handle=Current{body:None,container,root:MemberRoot::Owned(root),tree:self,birth,place,live:None};
         handle.require()?;Ok(handle)
     }
     pub(crate) fn open_current<'t>(&'t self,name:&str)->io::Result<Current<'t,'s,'r>>{
@@ -223,35 +228,37 @@ impl<'s,'r> Tree<'s,'r>{
         result:impl FnOnce(&Connection,&Birth)->io::Result<V>)->io::Result<(Current<'t,'s,'r>,V)>{
         display::component(name.as_bytes(),222)?;let src=self.session.source;
         if pinned.is_some_and(|r|!r.for_tree(src,self.setting.volume)){return Err(invalid("different native tree root"));}
-        let(c,b,selected)=src.at(|db,c|{
+        let(c,placed,selected)=src.at(|db,c|{
             self.require(db,&c,false)?;
-            let q=db.prepare(c"SELECT file_id FROM main.root_entry WHERE volume_id=?1 AND display=?2")?;
-            q.bind_bytes(1,&self.setting.volume.0)?;q.bind_bytes(2,name.as_bytes())?;
-            match unsafe{sqlite3_step(q.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("cannot select SMB member"));}}
-            let file=FileId(q.array(0)?);q.done()?;let b=self.birth(db,&c,name,file)?;
-            if expected.is_some_and(|e|!e.matches(&b)){return Err(invalid("listed FILE no longer names this original pool member"));}
-            let chosen=match version{Some(n)=>Some(work_record::version(db,&b,n)?),None=>work_record::selected(db,&b)?};
-            let selected=ReadCut::gather(db,&c,&b,chosen)?;Ok((c,b,selected))
+            let placed=self.placed(db,&c,name,None)?;
+            if expected.is_some_and(|e|!e.matches(&placed)){return Err(invalid("listed FILE no longer names this selected placement"));}
+            let b=&placed.birth;
+            let chosen=match version{Some(n)=>Some(work_record::version(db,b,n)?),None=>work_record::selected(db,b)?};
+            let selected=ReadCut::gather(db,&c,b,&placed.here,chosen)?;Ok((c,placed,selected))
         })?;
-        let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::for_body(src,&c,b.volume)?)};
+        let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::for_body(src,&c,placed.here.volume)?)};
         let sample=root.root.names()?.into_iter().collect();
-        let container=b.working_records_at(&root.root,&sample,false,|scope|selected.members.require(scope))?;
+        let container=placed.open(&root.root,&sample,false,|scope|selected.members.require(scope))?;
         let live=selected.selected.map(|(selected,_)|selected);
         let body=selected.selected.map(|(r,physical)|Selected::open(container.directory(),r.record,physical)).transpose()?;
-        let h=Current{body,container,root,tree:self,birth:b,live};
+        let Placed{birth,here:place}=placed;
+        let h=Current{body,container,root,tree:self,birth,place,live};
         let v=h.checked(&selected,||Ok(()),|db|result(db,&h.birth))?;Ok((h,v))
     }
 }
 impl Current<'_,'_,'_>{
     pub(crate) fn file(&self)->FileId{self.birth.file}
+    pub(super) fn native_placement(&self)->&Place{&self.place}
     pub(crate) fn size(&self)->u64{self.live.map_or(0,|r|r.record.logical())}
     pub(crate) fn working_original(&self)->Option<OperationId>{self.live.map(|r|r.record.key().save)}
     pub(crate) fn working_revision(&self)->u64{self.live.map_or(0,|r|r.record.key().revision)}
     pub(super) fn original_ids(&self)->(crate::PoolId,crate::VolumeId,crate::EntryId,FileId){
-        (self.birth.pool,self.birth.volume,self.birth.entry,self.birth.file)
+        (self.birth.pool,self.place.volume,self.birth.entry,self.birth.file)
     }
     fn still_selected(&self,db:&Connection,c:&Catalog)->io::Result<()>{
-        self.tree.current_birth(db,c,&self.birth,false)?;
+        self.tree.require(db,c,false)?;
+        let p=self.tree.placed(db,c,&self.place.name,Some(self.birth.file))?;
+        if p.here!=self.place||p.birth!=self.birth{return Err(invalid("FILE reader lost its original placement"));}
         if let Some(old)=self.live{
             if work_record::confirmed(db,&self.birth,old.record.key().save)?!=old{
                 return Err(invalid("the held original work revision changed"));
@@ -260,12 +267,12 @@ impl Current<'_,'_,'_>{
         Ok(())
     }
     fn selected(&self,db:&Connection,c:&Catalog)->io::Result<ReadCut>{
-        self.still_selected(db,c)?;ReadCut::gather(db,c,&self.birth,self.live)
+        self.still_selected(db,c)?;ReadCut::gather(db,c,&self.birth,&self.place,self.live)
     }
     /// Native I/O (including a slow/missing F) is bracketed by short,
     /// current SQL selections. No claim that separate disks are atomic.
     fn checked<T>(&self,x:&ReadCut,at_f:impl FnOnce()->io::Result<()>,finish:impl FnOnce(&Connection)->io::Result<T>)->io::Result<T>{
-        let alias=super::directory::check_alias(&self.root,&self.birth,x.alias.as_ref(),None)?;
+        let alias=super::directory::check_alias_name(&self.root,&self.place.name,x.alias.as_ref(),None)?;
         x.members.require(&crate::fs::WitnessRead::at(self.container.directory())?)?;
         self.root.require_streaming_at(at_f)?;self.container.require(&self.root.root)?;
         if let Some(h)=&self.body{h.require(self.container.directory())?;}
@@ -285,50 +292,10 @@ impl Current<'_,'_,'_>{
         self.check_with(cut,|_|Ok(()))
     }
     fn require(&self)->io::Result<()>{self.check_with(||Ok(()),|_|Ok(()))}
-    /// Same read-only connection throughout one delivery. All ZXS changes
-    /// commit on separate write connections. A change indicator can only
-    /// require a fresh full authorization, never supply a positive one.
-    fn data_version(&self)->io::Result<i64>{
-        let q=self.tree.session.source.conn.prepare(c"PRAGMA main.data_version")?;
-        match unsafe{sqlite3_step(q.0)}{100=>{},rc=>{check(rc)?;return Err(invalid("cannot observe SQLite data version"));}}
-        let n=q.integer(0)?;q.done()?;Ok(n)
-    }
-    /// One buffered synchronous SMB READ. Native negotiation, credits, FILE
-    /// access, byte range locks and MinimumCount/NT status are Samba's.
-    /// Keep partial checksum output private; hand off to the original native
-    /// request only after this entire window and its current source qualify.
+    /// Buffer the exact original native reply. The retained reader shares
+    /// this delivery envelope but never gains FILE write or F authority.
     pub(crate) fn smb_read_window<T>(&self,offset:u64,count:u32,consume:impl FnOnce(&[u8])->io::Result<T>)->io::Result<T>{
-        // Hard maximum of the pinned upstream negotiation (not the default
-        // 8 MiB). The actual connection may have negotiated less.
-        if count>0xffff00||offset.checked_add(u64::from(count)).is_none_or(|end|end>i64::MAX as u64){
-            return Err(invalid("invalid native SMB read request"));
-        }
-        let size=self.size();let start=offset.min(size);
-        let n=(size-start).min(u64::from(count)) as usize;
-        // The first write here occurs only after range_to's current SQL and
-        // held FILE checks. Reserve once, not once per verified fragment;
-        // an empty result allocates nothing.
-        struct Buffer{data:Vec<u8>,limit:usize}
-        impl Write for Buffer{
-            fn write(&mut self,bytes:&[u8])->io::Result<usize>{
-                if bytes.len()>self.limit-self.data.len(){return Err(invalid("oversized checked SMB read window"));}
-                if !bytes.is_empty()&&self.data.capacity()<self.limit{
-                    self.data.try_reserve_exact(self.limit-self.data.len())
-                        .map_err(|_|io::Error::other("cannot reserve a complete SMB read window"))?;
-                }
-                self.data.extend_from_slice(bytes);Ok(bytes.len())
-            }
-            fn flush(&mut self)->io::Result<()>{Ok(())}
-        }
-        let mut buffer=Buffer{data:Vec::new(),limit:n};
-        let used=self.range_evidence(start,n as u64,&mut buffer)?;
-        if buffer.data.len()!=n{return Err(invalid("incomplete checked SMB read window"));}
-        // Even an empty/past-EOF result must pass the original grant. The
-        // handoff is only into the native request's pending reply, never a
-        // direct socket write. Retry an interrupted final check, not delivery.
-        let result=consume(&buffer.data)?;
-        crate::ordinary::after_output(&mut ||self.finish_sources(&used))?;
-        Ok(result)
+        super::smb_buffer::deliver(offset,count,self.size(),|at,n,b|self.range_evidence(at,n,b),consume,|x|self.finish_sources(x))
     }
 
     pub(crate) fn range_to(&self,offset:u64,count:u64,out:impl Write)->io::Result<()>{
@@ -342,10 +309,10 @@ impl Current<'_,'_,'_>{
         if offset.checked_add(count).is_none_or(|end|end>self.size()){return Err(invalid("range outside this confirmed working EOF"));}
         let seen=Cell::new(None);
         let gate=||->io::Result<()>{
-            let before=self.data_version()?;
+            let before=super::smb_buffer::data_version(self.tree.session.source)?;
             if seen.get()!=Some(before){
                 self.require()?;
-                if self.data_version()?!=before{return Err(io::Error::new(io::ErrorKind::WouldBlock,"changed SQLite cut; retry this range"));}
+                if super::smb_buffer::data_version(self.tree.session.source)?!=before{return Err(io::Error::new(io::ErrorKind::WouldBlock,"changed SQLite cut; retry this range"));}
                 seen.set(Some(before));
             }
             self.root.require_streaming()?;self.container.require(&self.root.root)?;

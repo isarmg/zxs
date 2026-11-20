@@ -13,7 +13,10 @@ static void zxs_dir_fsp_end(void *v)
 NTSTATUS zxs_open_access(connection_struct *c,bool directory,const struct zxs_smb_tree_cut *folder,uint32_t *desired,uint32_t share)
 {
 	uint32_t profile=directory?(SEC_RIGHTS_DIR_READ|SEC_DIR_TRAVERSE):SEC_RIGHTS_FILE_READ;
-	if(!directory && !c->read_only && folder!=NULL && folder->mode==2){profile|=SEC_RIGHTS_FILE_WRITE;}
+	if(!directory && !c->read_only && folder!=NULL && folder->mode==2){profile|=SEC_RIGHTS_FILE_WRITE|SEC_STD_DELETE;}
+	/* Retained DELETE access is for the exact FILE_RENAME_INFORMATION
+	 * restore only. No retained disposition/create/EOF/write is admitted. */
+	if(!directory && !c->read_only && zxs_folder_retained(folder)){profile|=SEC_STD_DELETE;}
 	uint32_t allowed=c->share_access & profile;
 	se_map_generic(desired,&file_generic_mapping);
 	if((*desired & ~(allowed|SEC_FLAG_MAXIMUM_ALLOWED))!=0)return NT_STATUS_ACCESS_DENIED;
@@ -59,24 +62,43 @@ NTSTATUS zxs_open_member_fsp(struct smbd_smb2_request *n,struct smb_request *req
 	if(name==NULL){status=NT_STATUS_NO_MEMORY;goto fail;}
 	status=fsp_set_smb_fname(fsp,name);TALLOC_FREE(name);
 	if(!NT_STATUS_IS_OK(status))goto fail;
+	/* ShareAccess stays keyed by the same complete FILE. Keep the native
+	 * link-level pending marker disjoint from a retained old read handle
+	 * that lives through a restore to the same human name. */
+	if(!directory){fsp->name_hash=(fsp->name_hash&UINT32_C(0x7fffffff))|
+		(zxs_folder_retained(folder)?UINT32_C(0x80000000):0);}
 	fsp->fsp_name->st.cached_dos_attributes=directory?FILE_ATTRIBUTE_DIRECTORY:FILE_ATTRIBUTE_NORMAL;
 	fsp->vuid=req->vuid;fsp->file_pid=req->smbpid;fsp->access_mask=desired;
 	fsp->fsp_flags.is_directory=directory;fsp->fsp_flags.can_read=!directory && (desired&SEC_FILE_READ_DATA)!=0;
 	fsp->fsp_flags.can_write=writable;fsp->fsp_flags.can_lock=!directory;
 	fsp->file_id=(struct file_id){.devid=dev,.inode=st.st_ex_ino,.extid=ext};
+	if(directory && zxs_folder_round(folder)){
+		/* Exact 128-bit DeleteOp in a disjoint directory-only domain.
+		 * The protocol cannot project it to unique 64 bits. */
+		fsp->fsp_name->st.st_ex_ino=UINT64_MAX;
+		fsp->file_id.devid=dev^UINT64_C(0x5a5853524f554e44);
+		fsp->file_id.inode=0;fsp->file_id.extid=0;
+		for(size_t i=0;i<8;i++){
+			fsp->file_id.inode=(fsp->file_id.inode<<8)|folder->setting[i+8];
+			fsp->file_id.extid=(fsp->file_id.extid<<8)|folder->setting[i];
+		}
+	}
 	fsp->oplock_type=NO_OPLOCK;fsp->sent_oplock_break=NO_BREAK_SENT;
 	if(directory){
 		d=vfs_add_fsp_extension_notype(req->conn->vfs_handles,fsp,sizeof(*d),zxs_dir_fsp_end);
 		if(d==NULL){status=NT_STATUS_NO_MEMORY;goto fail;}
 		*d=(struct zxs_dir_search){.session=n->session,.tcon=n->tcon,.seq=n->session->global->auth_session_info_seqnum,
 			.folder.root_fd=-1};
-		if(folder!=NULL){d->folder=*folder;folder->root_fd=-1;}
+		if(folder!=NULL){
+			d->folder=*folder;folder->root_fd=-1;
+			folder->owns_parent=false;folder->parent_fd=-1;
+		}
 	}else{
 		struct zxs_read_fsp *f=vfs_add_fsp_extension_notype(req->conn->vfs_handles,fsp,sizeof(*f),zxs_read_fsp_end);
 		if(f==NULL){status=NT_STATUS_NO_MEMORY;goto fail;}
 		*f=(struct zxs_read_fsp){.session=n->session,.tcon=n->tcon,.seq=n->session->global->auth_session_info_seqnum,
 			.member=*member,.fd=*owned,.writable=writable,.folder=*folder};
-		*owned=-1;folder->root_fd=-1;
+		*owned=-1;folder->root_fd=-1;folder->owns_parent=false;folder->parent_fd=-1;
 	}
 	lock.fsp=fsp;lock.object_type=directory?"directory":"file";lock.req=req;lock.create_disposition=FILE_OPEN;
 	lock.access_mask=desired;lock.open_access_mask=desired;lock.share_access=share;

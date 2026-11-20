@@ -16,8 +16,10 @@ bool zxs_request_folder_current(struct smbd_smb2_request *n,const struct zxs_smb
 {
 	return zxs_request_root_current(n) && folder!=NULL && folder->root_fd>=0 &&
 	       (folder->mode==1 || folder->mode==2) && folder->revision!=0 &&
-	       folder->volume_ordinal>=2 && folder->volume_ordinal<64 &&
+	       (zxs_folder_retained(folder) || (folder->volume_ordinal>=2 && folder->volume_ordinal<64)) &&
 	       memcmp(folder->pool,n->tcon->zxs_tree_choice->pool,16)==0 &&
+	       (!zxs_folder_round(folder) || (folder->owns_parent && folder->parent_fd>=0 &&
+	         zxs_smb_ctl_live(folder->parent_fd)==0)) &&
 	       zxs_smb_ctl_live(folder->root_fd)==0;
 }
 /* Cancellation detaches the inner watcher/AIO before the native outer
@@ -43,6 +45,7 @@ struct zxs_dir_cut_state {
 	int fd;
 	unsigned limit;
 	bool in_folder,offered;
+	uint8_t expected_round[16];
 	struct zxs_smb_tree_cut folder;
 	struct zxs_member_info member;
 	uint8_t data[ZXS_DIR_PACKET-16];
@@ -53,11 +56,12 @@ static bool zxs_make_limit(unsigned limit)
 }
 static bool zxs_member_open_limit(unsigned limit)
 {
-	return limit==ZXS_MEMBER_OPEN || limit==ZXS_MEMBER_WRITE_OPEN || zxs_make_limit(limit);
+	return limit==ZXS_MEMBER_OPEN || limit==ZXS_MEMBER_WRITE_OPEN || zxs_make_limit(limit) ||
+	       limit==ZXS_RETAINED_OPEN || limit==ZXS_RETAINED_SHARE_DELETE;
 }
 static bool zxs_folder_open_limit(unsigned limit)
 {
-	return limit==ZXS_NS_OPEN || limit==ZXS_NS_WRITE || limit==ZXS_NS_MAXIMUM;
+	return limit==ZXS_NS_OPEN || limit==ZXS_NS_WRITE || limit==ZXS_NS_MAXIMUM || limit==ZXS_RETAINED_DIR;
 }
 static int zxs_dir_cut_close(struct zxs_dir_cut_state *s)
 {
@@ -76,8 +80,14 @@ static void zxs_dir_cut_ready(struct tevent_req *sub)
 	   !zxs_request_root_current(s->native) || s->session->global->auth_session_info_seqnum!=s->seq ||
 	   (s->in_folder && !zxs_request_folder_current(s->native,&s->folder)) ||
 	   !change_to_user_and_service(s->tcon->compat,s->session->global->session_wire_id))goto reject;
-	if(zxs_folder_open_limit(s->limit)){rc=zxs_ns_folder_read(s->fd,s->tcon->zxs_tree_choice->pool,&s->folder);}
-	else if(zxs_make_limit(s->limit)){
+	if(zxs_folder_open_limit(s->limit)){
+		uint8_t original_volume[16];memcpy(original_volume,s->folder.volume,16);
+		rc=zxs_ns_folder_read(s->fd,s->tcon->zxs_tree_choice->pool,&s->folder);
+		if(rc==0 && s->limit==ZXS_RETAINED_DIR &&
+		   (!zxs_folder_round(&s->folder) || memcmp(s->folder.setting,s->expected_round,16)!=0 ||
+		    memcmp(s->folder.volume,original_volume,16)!=0))rc=-1;
+		if(rc==0 && s->limit!=ZXS_RETAINED_DIR && zxs_folder_round(&s->folder))rc=-1;
+	}else if(zxs_make_limit(s->limit)){
 		rc=zxs_birth_result(s->fd,&s->folder,&s->member);
 		if(rc==ZXS_BIRTH_ACCEPT){s->offered=true;rc=0;}
 		else if(rc>=ZXS_BIRTH_OCCUPIED){
@@ -87,7 +97,10 @@ static void zxs_dir_cut_ready(struct tevent_req *sub)
 			zxs_dir_cut_close(s);tevent_req_nterror(req,status);return;
 		}
 	}else if(zxs_member_open_limit(s->limit)){rc=zxs_member_result(s->fd,&s->folder,&s->member);}
-	else if(s->in_folder){rc=zxs_dir_result(s->fd,s->limit,s->data);}
+	else if(s->in_folder){
+		rc=zxs_folder_retained(&s->folder)&&!zxs_folder_round(&s->folder)?
+			zxs_r_round_result(s->fd,s->limit,s->data):zxs_dir_result(s->fd,s->limit,s->data);
+	}
 	else {rc=zxs_ns_dir_result(s->fd,s->limit,s->data);}
 	if(rc!=0)goto reject;
 	if(!zxs_member_open_limit(s->limit) && !zxs_folder_open_limit(s->limit)){zxs_dir_cut_close(s);}
@@ -107,14 +120,24 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
 	if(talloc_reference(s,s->session)==NULL || talloc_reference(s,s->tcon)==NULL)goto reject;
 	s->in_folder=folder!=NULL;if(folder!=NULL)s->folder=*folder;
 	int fd=folder==NULL?s->tcon->zxs_tree_choice->root_fd:folder->root_fd;
-	if(zxs_folder_open_limit(limit)){
+	if(limit==ZXS_RETAINED_DIR){
+		if(!zxs_folder_retained(folder) || zxs_folder_round(folder) || !zxs_delete_hex(after,size))goto reject;
+		for(size_t i=0;i<size;i++){
+			uint8_t a=after[i];a=(a<='9')?a-'0':a-'a'+10;
+			s->expected_round[i/2]=(uint8_t)((s->expected_round[i/2]<<4)|a);
+		}
+		s->fd=zxs_ns_folder_query(fd,after,size,0);
+	}else if(limit==ZXS_RETAINED_OPEN || limit==ZXS_RETAINED_SHARE_DELETE){
+		if(!zxs_folder_retained(folder) || zxs_folder_round(folder))goto reject;
+		s->fd=zxs_r_member_query(fd,after,size,limit==ZXS_RETAINED_SHARE_DELETE);
+	}else if(zxs_folder_open_limit(limit)){
 		if(folder!=NULL)goto reject;
 		s->fd=zxs_ns_folder_query(fd,after,size,limit==ZXS_NS_OPEN?0:(limit==ZXS_NS_WRITE?1:2));
 	}else if(zxs_make_limit(limit)){
-		if(folder==NULL)goto reject;
+		if(folder==NULL || zxs_folder_retained(folder))goto reject;
 		s->fd=zxs_birth_query(fd,after,size,limit-ZXS_FILE_BIRTH);
 	}else if(zxs_member_open_limit(limit)){
-		if(folder==NULL || (limit==ZXS_MEMBER_WRITE_OPEN&&folder->mode!=2))goto reject;
+		if(folder==NULL || zxs_folder_retained(folder) || (limit==ZXS_MEMBER_WRITE_OPEN&&folder->mode!=2))goto reject;
 		s->fd=limit==ZXS_MEMBER_WRITE_OPEN?zxs_member_write_query(fd,after,size):zxs_member_query(fd,after,size);
 	}else{
 		s->fd=zxs_dir_query(fd,limit,after,size);

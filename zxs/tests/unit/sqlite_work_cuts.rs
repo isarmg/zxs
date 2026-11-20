@@ -27,7 +27,8 @@ fn explicit_node_cannot_publish_from_a_staged_old_view_or_ignore_a_deferred_edit
     let add_child=format!(
         "INSERT INTO work_edit VALUES(X'{edit}',X'{file}',X'{sharing}',
            (SELECT setting_op FROM live_ordinary_writer WHERE share_id=X'{sharing}'),
-           (SELECT auth_op FROM live_ordinary_writer WHERE share_id=X'{sharing}'),X'{nonce}',1,
+           (SELECT auth_op FROM live_ordinary_writer WHERE share_id=X'{sharing}'),
+           (SELECT position_op FROM file_location WHERE file_id=X'{file}'),X'{nonce}',1,
            X'{prior}',X'{prior}',NULL,2,1,1,2,159,318,163,481,zeroblob(32),zeroblob(32),zeroblob(32),NULL,0);");
     let attach_and_confirm=format!(
         "INSERT INTO operation VALUES(X'{edit}',10,(SELECT smb_id FROM account_pair WHERE singleton=1),zeroblob(32),0);

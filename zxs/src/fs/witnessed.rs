@@ -18,6 +18,15 @@ impl LiveStamp{
         Ok(Self{dev:m.dev(),ino:m.ino(),len:m.len(),owner:m.uid(),group:m.gid(),mode:m.mode(),links:m.nlink(),
             mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})
     }
+    pub(super) fn retirement_stamp(self)->[u8;56]{
+        // Only originally checked named pairs pass this into a retirement
+        // guard. Mount identity is separately verified against the volume.
+        let mut b=[0;56];
+        for (i,v) in [self.ino,self.len,self.mtime.0 as u64,self.mtime.1 as u64,self.ctime.0 as u64,self.ctime.1 as u64].into_iter().enumerate(){
+            b[i*8..i*8+8].copy_from_slice(&v.to_be_bytes());
+        }
+        b[48..52].copy_from_slice(&self.owner.to_be_bytes());b[52..56].copy_from_slice(&self.group.to_be_bytes());b
+    }
     pub(crate) fn same(self,other:Self)->bool{(self.dev,self.ino)==(other.dev,other.ino)}
     pub(crate) fn require(self,file:&File)->io::Result<()>{
         if Self::read(file)?!=self{return Err(invalid("portable ordinary file changed while held"));}Ok(())

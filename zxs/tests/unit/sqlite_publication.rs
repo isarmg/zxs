@@ -4,7 +4,10 @@ use super::*;
 use crate::VolumeId;
 
 pub(super) fn first(t:&PrivateTemp)->(PathBuf,PoolId){
-    let (s,p)=record(t,InitState::Committed,"");
+    first_with_recycle(t,None)
+}
+pub(super) fn first_with_recycle(t:&PrivateTemp,recycle:Option<PathBuf>)->(PathBuf,PoolId){
+    let (s,p)=record_with_recycle(t,InitState::Committed,"",recycle);
     let selected=HeldDir::trusted_system(&s).unwrap();selected.exclusive().unwrap();
     let writer=Builder::existing(&s.join("SYSTEM.sqlite3"));
     let [pair,web,pending,activate]=first_account::rows();

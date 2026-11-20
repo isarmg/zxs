@@ -242,5 +242,11 @@ pub(crate) mod smb;
 #[path="work_record.rs"]
 mod work_record;
 
+#[path="transfer_material.rs"]
+mod transfer_material;
+
+#[path="file_location.rs"]
+mod file_location;
+
 #[cfg(test)]
 pub(crate) use tests::{web_pool,ordinary_pool,stage_managed_file};

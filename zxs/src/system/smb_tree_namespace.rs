@@ -38,6 +38,10 @@ fn page(site:Site<'_>,session:&SmbSession<'_>,limit:u8,left:&[u8])->io::Result<[
         session.require_current(db,&c)?;
         let mut matches=Vec::new();
         if limit!=0{
+            // The configured logical R is not a second service. Listing the
+            // ZXS root neither opens R nor interprets missing R as empty.
+            let retained=site.plan.retained_label().as_bytes();
+            if retained>left{matches.push((retained,2));}
             for f in site.plan.folders(){
                 let name=f.name().as_bytes();
                 if name<=left{continue;}
@@ -104,15 +108,22 @@ pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()
             let answer=unsafe{OwnedFd::from_raw_fd(fd)};
             let label=&name[1..1+usize::from(name[0])];
             if matches!(role,OPEN_READ|OPEN_WRITE|OPEN_MAX){
-                let Ok(grant)=selected(site,&session,label)else{continue;};
-                let Some(writer)=writer_class(role,grant.mode)else{continue;};
+                let (grant,writer)=if label==site.plan.retained_label().as_bytes(){
+                    if role==OPEN_WRITE{continue;}
+                    (None,false)
+                }else{
+                    let Ok(grant)=selected(site,&session,label)else{continue;};
+                    let Some(writer)=writer_class(role,grant.mode)else{continue;};
+                    (Some(grant),writer)
+                };
                 jobs.retain(|(_,h):&(bool,thread::ScopedJoinHandle<'_,()>)|!h.is_finished());
                 if jobs.iter().filter(|(w,_)|*w==writer).count()>=(if writer{16}else{64}){continue;}
                 let Some(permit)=Limit::acquire(writer)else{continue;};
                 let peer=origin.duplicate()?;
                 if let Ok(job)=thread::Builder::new().name("zxs-planned-folder".into()).spawn_scoped(scope,move||{
                     let _permit=permit;
-                    let _=serve_folder(child,peer,grant,writer,answer);
+                    if let Some(grant)=grant{let _=serve_folder(child,peer,grant,writer,answer);}
+                    else{let _=super::retained::serve(child,peer,answer);}
                 }){jobs.push((writer,job));}
             }else{
                 let data=page(site,&session,role,label);

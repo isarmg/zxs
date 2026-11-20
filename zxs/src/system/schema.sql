@@ -3,7 +3,7 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 
 -- Both INIT (1) and SETUP_PAIR (2) name a separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
@@ -13,11 +13,12 @@ PRAGMA user_version = 9;
 -- RESET_SMB (7) is pending until its single native SAM account is durable.
 -- RESET_WEB (8) changes only the Web verifier in one SQL commit.
 -- WORK_EDIT (10) revises one working round; MANUAL_NODE (11) freezes it explicitly.
--- Kind 9 is reserved for the independent first-install recycle selection.
+-- TRANSFER (12) changes one original FILE placement; it never creates a FILE or version.
+-- Kind 9 remains unallocated in this exact format.
 -- An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6,7,8,10,11)),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6,7,8,10,11,12)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
@@ -154,9 +155,8 @@ BEGIN SELECT RAISE(ABORT,'share mode requires this predecessor, a different mode
 CREATE TRIGGER keep_share_mode BEFORE UPDATE ON share_mode BEGIN SELECT RAISE(ABORT,'immutable share mode origin'); END;
 CREATE TRIGGER retain_share_mode BEFORE DELETE ON share_mode BEGIN SELECT RAISE(ABORT,'retain share mode origin'); END;
 
--- One physical ordinary root, one byte-exact namespace even if it has many
--- share definitions. The first issuer creates only manual, unborn FILEs;
--- future directory membership must occupy this same (volume,display) domain.
+-- Immutable FILE birth. Only file_location occupies a current ordinary
+-- namespace; a recycled or restored birth cannot hold its former name.
 CREATE TABLE root_entry (
   create_op    BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
   share_id     BLOB NOT NULL REFERENCES root_share(share_id),
@@ -170,15 +170,13 @@ CREATE TABLE root_entry (
   history_id   BLOB NOT NULL UNIQUE CHECK(length(history_id)=16 AND history_id<>zeroblob(16)),
   branch_id    BLOB NOT NULL UNIQUE CHECK(length(branch_id)=16 AND branch_id<>zeroblob(16)),
   ticket       BLOB NOT NULL UNIQUE CHECK(length(ticket)=16 AND ticket<>zeroblob(16) AND ticket<>create_op
-                          AND ticket<>X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'),
-  UNIQUE(volume_id, display),
-  UNIQUE(volume_id, terminal)
+                          AND ticket<>X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF')
 ) STRICT, WITHOUT ROWID;
+CREATE INDEX original_terminal_spelling ON root_entry(terminal);
 CREATE TRIGGER start_root_entry BEFORE INSERT ON root_entry
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
   OR EXISTS(SELECT 1 FROM root_entry WHERE create_op=NEW.create_op OR entry_id=NEW.entry_id OR file_id=NEW.file_id
-             OR history_id=NEW.history_id OR branch_id=NEW.branch_id OR ticket=NEW.ticket
-             OR (volume_id=NEW.volume_id AND (display=NEW.display OR terminal=NEW.terminal)))
+             OR history_id=NEW.history_id OR branch_id=NEW.branch_id OR ticket=NEW.ticket)
   OR NOT EXISTS(SELECT 1 FROM root_share r JOIN share_mode m ON m.share_id=r.share_id
        JOIN operation p ON p.op_id=m.change_op JOIN active_credential a ON a.role=1 AND a.credential_op=NEW.auth_op
        WHERE r.share_id=NEW.share_id AND r.volume_id=NEW.volume_id AND m.change_op=NEW.setting_op AND m.mode=2
@@ -186,6 +184,117 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
 BEGIN SELECT RAISE(ABORT,'FILE requires this live read-write share, original SMB credential and vacant root member'); END;
 CREATE TRIGGER keep_entry BEFORE UPDATE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE birth'); END;
 CREATE TRIGGER retain_entry BEFORE DELETE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE reservation'); END;
+
+-- A FILE's immutable birth is not its pathname. Only the selected role,
+-- name and placement generation confer current membership. The source
+-- receipt and all FILE/history/version IDs remain unchanged on a transfer.
+CREATE TABLE file_location (
+  file_id      BLOB NOT NULL PRIMARY KEY REFERENCES root_entry(file_id),
+  position_op  BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  generation   INTEGER NOT NULL CHECK(generation BETWEEN 1 AND 9223372036854775806),
+  volume_id    BLOB NOT NULL REFERENCES volume_claim(volume_id),
+  role         INTEGER NOT NULL CHECK(role IN (1,2)),
+  display      BLOB NOT NULL CHECK(length(display) BETWEEN 1 AND 222 AND instr(display,X'00')=0)
+) STRICT, WITHOUT ROWID;
+CREATE UNIQUE INDEX current_ordinary_name ON file_location(volume_id,display) WHERE role=2;
+CREATE INDEX current_recycle_deletion ON file_location(volume_id,position_op) WHERE role=1;
+
+-- DELETE is F→R, with the same exact display under its new DeleteOp.
+-- RESTORE is R→F, bound to that exact once-current DeleteOp and generation.
+-- A true eligible F setting is required on the ordinary endpoint; no
+-- generic write grant exists on R. The source and even its work/head
+-- preconditions are preserved while the candidate stays invisible.
+CREATE TABLE file_transfer (
+  transfer_op  BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED
+                    CHECK(transfer_op<>zeroblob(16) AND transfer_op<>X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'),
+  file_id      BLOB NOT NULL REFERENCES root_entry(file_id),
+  direction    INTEGER NOT NULL CHECK(direction IN (1,2)), -- 1 DELETE, 2 RESTORE
+  source_op    BLOB NOT NULL REFERENCES operation(op_id),
+  source_gen   INTEGER NOT NULL CHECK(source_gen BETWEEN 1 AND 9223372036854775805),
+  source_id    BLOB NOT NULL REFERENCES volume_claim(volume_id),
+  source_name  BLOB NOT NULL CHECK(length(source_name) BETWEEN 1 AND 222 AND instr(source_name,X'00')=0),
+  target_id    BLOB NOT NULL REFERENCES volume_claim(volume_id) CHECK(target_id<>source_id),
+  target_name  BLOB NOT NULL CHECK(length(target_name) BETWEEN 1 AND 222 AND instr(target_name,X'00')=0),
+  share_id     BLOB NOT NULL REFERENCES root_share(share_id),
+  setting_op   BLOB NOT NULL REFERENCES share_mode(change_op),
+  auth_op      BLOB NOT NULL REFERENCES operation(op_id),
+  save_op      BLOB REFERENCES operation(op_id),
+  manual_op    BLOB REFERENCES operation(op_id),
+  CHECK(transfer_op<>source_op AND (direction=2 OR source_name=target_name))
+) STRICT, WITHOUT ROWID;
+CREATE INDEX transfer_original_source ON file_transfer(file_id,source_gen);
+CREATE INDEX transfer_destination_name ON file_transfer(target_id,target_name) WHERE direction=2;
+
+-- Separate original physical cleanup, never a second selected placement.
+-- A guard is captured from the actual paired source before publish. Blocked
+-- means it was not safe to name every old object; nothing there may be erased.
+CREATE TABLE file_transfer_source (
+  seq         INTEGER PRIMARY KEY CHECK(seq>0),
+  transfer_op BLOB NOT NULL UNIQUE REFERENCES file_transfer(transfer_op),
+  guard       BLOB,
+  target_guard BLOB NOT NULL CHECK(length(target_guard) BETWEEN 84 AND 299019),
+  status      INTEGER NOT NULL CHECK(status IN (0,1,2)), -- armed, finished, unproved
+  CHECK((status=0 AND guard IS NOT NULL AND length(guard) BETWEEN 84 AND 299019)
+       OR (status IN (1,2) AND guard IS NULL))
+) STRICT;
+CREATE INDEX pending_source_retirement ON file_transfer_source(seq) WHERE status=0;
+CREATE TRIGGER arm_source_retirement BEFORE INSERT ON file_transfer_source
+WHEN NEW.status=1 OR EXISTS(SELECT 1 FROM file_transfer_source WHERE transfer_op=NEW.transfer_op OR seq=NEW.seq)
+ OR NOT EXISTS(SELECT 1 FROM operation o WHERE o.op_id=NEW.transfer_op AND o.kind=12 AND o.state=1)
+BEGIN SELECT RAISE(ABORT,'retirement requires the original committed physical handoff'); END;
+CREATE TRIGGER finish_source_retirement BEFORE UPDATE ON file_transfer_source
+WHEN NEW.seq<>OLD.seq OR NEW.transfer_op<>OLD.transfer_op OR NEW.target_guard<>OLD.target_guard
+ OR OLD.status<>0 OR NEW.status<>1
+BEGIN SELECT RAISE(ABORT,'only the selected retirement may finish'); END;
+CREATE TRIGGER keep_source_retirement BEFORE DELETE ON file_transfer_source
+BEGIN SELECT RAISE(ABORT,'retain original retirement result'); END;
+
+-- Terminating an unselected old reservation does not undo or rewrite any
+-- origin row. Only a still-current authority may release its claim; physical
+-- cleanup, if any, still needs exact independent evidence outside SQL.
+CREATE TABLE file_transfer_void (
+  transfer_op BLOB NOT NULL PRIMARY KEY REFERENCES file_transfer(transfer_op),
+  setting_op  BLOB NOT NULL REFERENCES share_mode(change_op),
+  auth_op     BLOB NOT NULL REFERENCES operation(op_id),
+  reason      INTEGER NOT NULL CHECK(reason IN (1,2)) -- 1 revoked, 2 independently proved no selected candidate
+) STRICT, WITHOUT ROWID;
+CREATE VIEW pending_transfer AS
+SELECT m.* FROM file_transfer m LEFT JOIN operation o ON o.op_id=m.transfer_op
+WHERE (o.op_id IS NULL OR (o.kind=12 AND o.state=0))
+  AND NOT EXISTS(SELECT 1 FROM file_transfer_void v WHERE v.transfer_op=m.transfer_op);
+
+CREATE TRIGGER original_location BEFORE INSERT ON file_location
+WHEN NEW.role<>2 OR NEW.generation<>1
+ OR EXISTS(SELECT 1 FROM file_location l WHERE l.file_id=NEW.file_id OR l.position_op=NEW.position_op
+                                OR (l.role=2 AND l.volume_id=NEW.volume_id AND l.display=NEW.display))
+ OR EXISTS(SELECT 1 FROM pending_transfer t
+            WHERE t.direction=2 AND t.target_id=NEW.volume_id AND t.target_name=NEW.display)
+ OR NOT EXISTS(SELECT 1 FROM root_entry b JOIN volume_claim v ON v.volume_id=b.volume_id AND v.role=2
+                WHERE b.file_id=NEW.file_id AND b.volume_id=NEW.volume_id
+                  AND b.display=NEW.display AND b.create_op=NEW.position_op)
+BEGIN SELECT RAISE(ABORT,'location requires the one original ordinary FILE name'); END;
+CREATE TRIGGER publish_birth_location AFTER INSERT ON root_entry
+BEGIN
+  INSERT INTO file_location VALUES(NEW.file_id,NEW.create_op,1,NEW.volume_id,2,NEW.display);
+END;
+CREATE TRIGGER retain_location BEFORE DELETE ON file_location
+BEGIN SELECT RAISE(ABORT,'retain the selected FILE location'); END;
+CREATE TRIGGER advance_location BEFORE UPDATE ON file_location
+WHEN NEW.file_id<>OLD.file_id OR NEW.generation<>OLD.generation+1
+ OR NOT EXISTS(SELECT 1 FROM file_transfer m JOIN operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
+   WHERE m.transfer_op=NEW.position_op AND m.file_id=OLD.file_id AND m.source_op=OLD.position_op
+     AND m.source_gen=OLD.generation AND m.source_id=OLD.volume_id AND m.source_name=OLD.display
+     AND OLD.role=CASE m.direction WHEN 1 THEN 2 ELSE 1 END AND NEW.role=CASE m.direction WHEN 1 THEN 1 ELSE 2 END
+     AND m.target_id=NEW.volume_id AND m.target_name=NEW.display)
+BEGIN SELECT RAISE(ABORT,'location may advance only from its committed original transfer'); END;
+CREATE TRIGGER retain_transfer BEFORE DELETE ON file_transfer
+BEGIN SELECT RAISE(ABORT,'retain original FILE transfer'); END;
+CREATE TRIGGER keep_transfer BEFORE UPDATE ON file_transfer
+BEGIN SELECT RAISE(ABORT,'immutable FILE transfer origin'); END;
+CREATE TRIGGER retain_transfer_void BEFORE DELETE ON file_transfer_void
+BEGIN SELECT RAISE(ABORT,'retain transfer termination'); END;
+CREATE TRIGGER keep_transfer_void BEFORE UPDATE ON file_transfer_void
+BEGIN SELECT RAISE(ABORT,'immutable transfer termination'); END;
 
 -- A single manual first working revision (revision=1, predecessor=unborn).
 -- Both digests describe the same sealed input before any named material
@@ -212,6 +321,7 @@ CREATE INDEX retained_work_names ON first_work(file_id,previous_save,retained_ma
 CREATE TRIGGER start_work BEFORE INSERT ON first_work
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.save_op)
  OR EXISTS(SELECT 1 FROM work_edit WHERE file_id=NEW.file_id)
+ OR EXISTS(SELECT 1 FROM pending_transfer WHERE file_id=NEW.file_id)
  OR EXISTS(SELECT 1 FROM first_work WHERE save_op=NEW.save_op OR (file_id=NEW.file_id AND attempt_no=NEW.attempt_no)
            OR (NEW.previous_save IS NOT NULL AND previous_save=NEW.previous_save))
  OR (NEW.previous_save IS NOT NULL AND NOT EXISTS(
@@ -221,7 +331,8 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.save_op)
          AND o.kind=6 AND o.state=0 AND (m.revision<(SELECT MAX(z.revision) FROM share_mode z WHERE z.share_id=old.share_id)
            OR NOT EXISTS(SELECT 1 FROM active_credential WHERE role=1 AND credential_op=old.auth_op))))
  OR NOT EXISTS(SELECT 1 FROM root_entry e JOIN operation b ON b.op_id=e.create_op
-       JOIN root_share r ON r.volume_id=e.volume_id JOIN share_mode m ON m.share_id=r.share_id
+       JOIN file_location l ON l.file_id=e.file_id AND l.role=2 AND l.generation=1
+       JOIN root_share r ON r.volume_id=l.volume_id JOIN share_mode m ON m.share_id=r.share_id
        JOIN operation p ON p.op_id=m.change_op JOIN active_credential s ON s.role=1 AND s.credential_op=NEW.auth_op
        WHERE e.file_id=NEW.file_id AND b.kind=5 AND b.state=1 AND r.share_id=NEW.share_id
          AND m.change_op=NEW.setting_op AND m.mode=2 AND p.kind=4 AND p.state=1
@@ -240,6 +351,7 @@ CREATE TABLE work_edit (
   share_id       BLOB NOT NULL REFERENCES root_share(share_id),
   setting_op     BLOB NOT NULL REFERENCES share_mode(change_op),
   auth_op        BLOB NOT NULL REFERENCES operation(op_id),
+  position_op    BLOB NOT NULL REFERENCES operation(op_id),
   writer_nonce   BLOB NOT NULL CHECK(length(writer_nonce)=16 AND writer_nonce<>zeroblob(16)),
   issue          INTEGER NOT NULL CHECK(issue BETWEEN 1 AND 9223372036854775806),
   round_op       BLOB NOT NULL CHECK(length(round_op)=16 AND round_op<>zeroblob(16)),
@@ -310,7 +422,8 @@ WHERE NOT EXISTS(SELECT 1 FROM manual_node next JOIN operation p ON p.op_id=next
                  WHERE next.file_id=n.file_id AND next.ord>n.ord);
 
 CREATE VIEW pending_edit AS
-SELECT w.* FROM work_edit w LEFT JOIN operation o ON o.op_id=w.edit_op
+SELECT w.* FROM work_edit w JOIN file_location l ON l.file_id=w.file_id AND l.position_op=w.position_op AND l.role=2
+LEFT JOIN operation o ON o.op_id=w.edit_op
 WHERE (o.op_id IS NULL OR (o.kind=10 AND o.state=0))
   AND NOT EXISTS(SELECT 1 FROM work_edit n WHERE n.file_id=w.file_id AND n.issue>w.issue);
 
@@ -322,13 +435,64 @@ CROSS JOIN active_credential s JOIN account_pair a ON a.singleton=s.slot
 WHERE m.mode=2 AND s.role=1
   AND NOT EXISTS(SELECT 1 FROM share_mode h WHERE h.share_id=m.share_id AND h.revision>m.revision);
 
+-- Only a settled confirmed view can acquire a position ticket. Hiding a
+-- pending ticket cannot free its source or price a missing target as ready.
+CREATE VIEW transferable_location AS
+SELECT l.*, w.save_op, n.commit_op AS manual_op
+FROM file_location l JOIN operation o ON o.op_id=l.position_op AND o.state=1
+LEFT JOIN selected_work w ON w.file_id=l.file_id LEFT JOIN last_manual n ON n.file_id=l.file_id
+WHERE o.kind=CASE l.generation WHEN 1 THEN 5 ELSE 12 END;
+-- The transfer executor holds the original FILE EX. A disconnected
+-- writer's *unconfirmed* bytes belong only to its original placement
+-- and cannot permanently pin a valid confirmed view to that volume.
+
+CREATE VIEW live_transfer AS
+SELECT m.*,a.actor_id
+FROM pending_transfer m JOIN transferable_location l ON l.file_id=m.file_id
+JOIN volume_claim v ON v.volume_id=m.target_id AND v.role=CASE m.direction WHEN 1 THEN 1 ELSE 2 END
+JOIN live_ordinary_writer a ON a.share_id=m.share_id AND a.setting_op=m.setting_op AND a.auth_op=m.auth_op
+ AND a.volume_id=CASE m.direction WHEN 1 THEN m.source_id ELSE m.target_id END
+WHERE l.position_op=m.source_op AND l.generation=m.source_gen AND l.volume_id=m.source_id AND l.display=m.source_name
+ AND l.role=CASE m.direction WHEN 1 THEN 2 ELSE 1 END AND l.save_op IS m.save_op AND l.manual_op IS m.manual_op
+ AND (m.direction=1 OR NOT EXISTS(SELECT 1 FROM file_location t
+              WHERE t.role=2 AND t.volume_id=m.target_id AND t.display=m.target_name));
+
+CREATE TRIGGER start_transfer BEFORE INSERT ON file_transfer
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.transfer_op)
+ OR EXISTS(SELECT 1 FROM file_transfer WHERE transfer_op=NEW.transfer_op)
+ OR EXISTS(SELECT 1 FROM pending_transfer m WHERE m.file_id=NEW.file_id
+       OR (m.direction=2 AND NEW.direction=2 AND m.target_id=NEW.target_id AND m.target_name=NEW.target_name))
+BEGIN SELECT RAISE(ABORT,'another original FILE/source or target name already has a transfer in progress'); END;
+CREATE TRIGGER once_transfer_void BEFORE INSERT ON file_transfer_void
+WHEN EXISTS(SELECT 1 FROM file_transfer_void v WHERE v.transfer_op=NEW.transfer_op)
+ OR NOT EXISTS(SELECT 1 FROM pending_transfer m
+      JOIN operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=0
+      JOIN file_location l ON l.file_id=m.file_id AND l.position_op=m.source_op AND l.generation=m.source_gen
+      JOIN live_ordinary_writer a ON a.volume_id=CASE m.direction WHEN 1 THEN m.source_id ELSE m.target_id END
+       AND a.share_id=m.share_id AND a.setting_op=NEW.setting_op AND a.auth_op=NEW.auth_op
+      WHERE m.transfer_op=NEW.transfer_op
+        AND (NEW.reason=2 OR NOT EXISTS(SELECT 1 FROM live_transfer v WHERE v.transfer_op=m.transfer_op)))
+BEGIN SELECT RAISE(ABORT,'original transfer termination requires the unselected source and current authority'); END;
+
+CREATE TRIGGER select_transferred_location AFTER UPDATE OF state ON operation
+WHEN NEW.kind=12 AND NEW.state=1
+BEGIN
+  UPDATE file_location SET position_op=NEW.op_id,
+    generation=generation+1,
+    (volume_id,role,display)=(SELECT target_id,CASE direction WHEN 1 THEN 1 ELSE 2 END,target_name
+                             FROM file_transfer WHERE transfer_op=NEW.op_id)
+  WHERE file_id=(SELECT file_id FROM file_transfer WHERE transfer_op=NEW.op_id);
+END;
+
 CREATE TRIGGER issue_work_edit BEFORE INSERT ON work_edit
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.edit_op)
   OR EXISTS(SELECT 1 FROM work_edit WHERE edit_op=NEW.edit_op OR (file_id=NEW.file_id AND issue=NEW.issue))
   OR NEW.issue<>1+COALESCE((SELECT max(issue) FROM work_edit WHERE file_id=NEW.file_id),0)
+  OR EXISTS(SELECT 1 FROM pending_transfer WHERE file_id=NEW.file_id)
   OR NEW.predecessor IS NOT (SELECT save_op FROM selected_work WHERE file_id=NEW.file_id)
   OR NEW.parent_commit IS NOT (SELECT commit_op FROM last_manual WHERE file_id=NEW.file_id)
-  OR EXISTS(SELECT 1 FROM first_work f LEFT JOIN operation o ON o.op_id=f.save_op
+  OR EXISTS(SELECT 1 FROM first_work f JOIN file_location l ON l.file_id=f.file_id AND l.generation=1
+            LEFT JOIN operation o ON o.op_id=f.save_op
             WHERE f.file_id=NEW.file_id AND (o.op_id IS NULL OR (o.kind=6 AND o.state=0))
               AND NOT EXISTS(SELECT 1 FROM first_work n WHERE n.previous_save=f.save_op))
   OR NEW.previous_pending IS NOT (SELECT edit_op FROM pending_edit WHERE file_id=NEW.file_id)
@@ -336,7 +500,8 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.edit_op)
   OR (NEW.retained_mask<>0 AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.edit_op=NEW.previous_pending
                    AND p.file_id=NEW.file_id AND p.revision=1 AND p.round_op<>NEW.round_op))
   OR NOT EXISTS(SELECT 1 FROM root_entry b JOIN operation o ON o.op_id=b.create_op AND o.kind=5 AND o.state=1
-       JOIN live_ordinary_writer a ON a.volume_id=b.volume_id AND a.share_id=NEW.share_id
+       JOIN file_location l ON l.file_id=b.file_id AND l.role=2 AND l.position_op=NEW.position_op
+       JOIN live_ordinary_writer a ON a.volume_id=l.volume_id AND a.share_id=NEW.share_id
        WHERE b.file_id=NEW.file_id AND a.setting_op=NEW.setting_op AND a.auth_op=NEW.auth_op)
   OR (NEW.revision=1 AND NEW.predecessor IS NOT NULL AND NOT EXISTS(
        SELECT 1 FROM selected_work w JOIN last_manual n ON n.file_id=w.file_id
@@ -355,8 +520,10 @@ CREATE VIEW manual_ready AS
 SELECT h.file_id,h.save_op,h.round_op,h.revision,a.credential_op AS auth_op,
        n.commit_op AS parent_op,1+COALESCE(n.ord,0) AS ord
 FROM selected_work h LEFT JOIN last_manual n ON n.file_id=h.file_id
+JOIN file_location l ON l.file_id=h.file_id AND l.role=2
 CROSS JOIN active_credential a
-WHERE a.role=0 AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=h.file_id);
+WHERE a.role=0 AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=h.file_id)
+ AND NOT EXISTS(SELECT 1 FROM pending_transfer m WHERE m.file_id=h.file_id);
 
 CREATE TRIGGER publish_manual_node BEFORE INSERT ON manual_node
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.commit_op)
@@ -378,9 +545,13 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) 
   OR (NEW.kind=8 AND (NEW.state<>1 OR NOT EXISTS(SELECT 1 FROM credential_reset r
         JOIN web_password w ON w.credential_op=r.op_id AND w.generation=r.generation
         WHERE r.op_id=NEW.op_id AND r.role=0)))
+  OR (NEW.kind<>12 AND EXISTS(SELECT 1 FROM file_transfer WHERE transfer_op=NEW.op_id))
+  OR (NEW.kind=12 AND (NEW.state<>0 OR NOT EXISTS(SELECT 1 FROM live_transfer m
+       WHERE m.transfer_op=NEW.op_id AND m.actor_id=NEW.actor_id)))
   OR (NEW.kind<>10 AND EXISTS(SELECT 1 FROM work_edit WHERE edit_op=NEW.op_id))
   OR (NEW.kind=10 AND (NEW.state<>0 OR NOT EXISTS(
-       SELECT 1 FROM work_edit w JOIN live_ordinary_writer a ON a.setting_op=w.setting_op AND a.auth_op=w.auth_op
+       SELECT 1 FROM work_edit w JOIN file_location l ON l.file_id=w.file_id AND l.position_op=w.position_op AND l.role=2
+       JOIN live_ordinary_writer a ON a.setting_op=w.setting_op AND a.auth_op=w.auth_op AND a.volume_id=l.volume_id
        WHERE w.edit_op=NEW.op_id AND a.share_id=w.share_id AND a.actor_id=NEW.actor_id)))
   OR (NEW.kind<>11 AND EXISTS(SELECT 1 FROM manual_node WHERE commit_op=NEW.op_id))
   OR (NEW.kind=11 AND (NEW.state<>1 OR NOT EXISTS(
@@ -473,15 +644,19 @@ WHEN OLD.state<>0 OR NEW.state<>1 OR NOT (
     WHERE a.birth_op=OLD.op_id AND w.credential_op=OLD.op_id AND w.generation=1)) OR
   (OLD.kind=7 AND EXISTS(SELECT 1 FROM credential_reset r WHERE r.op_id=OLD.op_id AND r.role=1
     AND NOT EXISTS(SELECT 1 FROM credential_reset later WHERE later.role=1 AND later.generation>r.generation))) OR
-  (OLD.kind=6 AND EXISTS(SELECT 1 FROM first_work f JOIN share_mode m ON m.change_op=f.setting_op
+  (OLD.kind=12 AND EXISTS(SELECT 1 FROM live_transfer m WHERE m.transfer_op=OLD.op_id AND m.actor_id=OLD.actor_id)) OR
+  (OLD.kind=6 AND EXISTS(SELECT 1 FROM first_work f JOIN file_location l ON l.file_id=f.file_id AND l.generation=1 AND l.role=2
+    JOIN share_mode m ON m.change_op=f.setting_op
     JOIN active_credential s ON s.role=1 AND s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE f.save_op=OLD.op_id AND NOT EXISTS(SELECT 1 FROM first_work nxt WHERE nxt.previous_save=f.save_op)
       AND NOT EXISTS(SELECT 1 FROM work_edit w WHERE w.file_id=f.file_id)
+      AND NOT EXISTS(SELECT 1 FROM pending_transfer t WHERE t.file_id=f.file_id)
       AND a.smb_id=OLD.actor_id AND m.mode=2
       AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=f.share_id))) OR
   (OLD.kind=10 AND EXISTS(SELECT 1 FROM pending_edit p
     JOIN live_ordinary_writer a ON a.share_id=p.share_id AND a.setting_op=p.setting_op AND a.auth_op=p.auth_op
     WHERE p.edit_op=OLD.op_id AND a.actor_id=OLD.actor_id
+      AND NOT EXISTS(SELECT 1 FROM pending_transfer t WHERE t.file_id=p.file_id)
       AND p.predecessor IS (SELECT save_op FROM selected_work WHERE file_id=p.file_id)
       AND p.parent_commit IS (SELECT commit_op FROM last_manual WHERE file_id=p.file_id))) OR
   (OLD.kind=5 AND EXISTS(SELECT 1 FROM root_entry e JOIN share_mode m ON m.change_op=e.setting_op

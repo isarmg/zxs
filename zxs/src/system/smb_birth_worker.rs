@@ -1,6 +1,6 @@
 //! One original FILE birth or open-if on an independently held folder
 //! capability. The native FSP is not revealed before the final real receipt.
-use super::{InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,member_packet,os,writer};
+use super::{mover,InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,member_packet,os,writer};
 use super::super::super::{first_work::Current,share_mode::Setting,smb_stage::{Scratch,Staged}};
 use crate::{OperationId,display,fs::{HeldDir,invalid},ordinary::portable_birth::Birth,system::reader::volume::OrdinaryRoot};
 use std::{cell::Cell,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering}};
@@ -72,7 +72,7 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,folder:&OwnedFd,running:&At
             },|dir|if write{Ok(Some((Scratch::before_birth(dir)?,OperationId::new()?)))}else{Ok(None)},&alive)?)
         }else{None};
         if write{
-            let mut staged=match born{
+            let staged=match born{
                 Some((birth,Some((scratch,nonce))))=>{
                     let handle=tree.writer_from_newborn(birth,nonce)?;
                     handle.require_tree_root(expected_root)?;Staged::prepared(handle,scratch)?
@@ -85,7 +85,7 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,folder:&OwnedFd,running:&At
             };
             let data=member_packet(staged.base(),staged.base().native_key()?);
             ready(site,&alive,fd,&data,offered.get())?;emitted.set(true);
-            writer::commands(site,origin,fd,&alive,&mut staged)
+            writer::commands(site,origin,folder,setting,fd,&alive,staged)
         }else{
             let current=match born{
                 Some((b,None))=>tree.reader_from_newborn(b)?,
@@ -94,7 +94,7 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,folder:&OwnedFd,running:&At
             };
             let data=member_packet(&current,current.native_key()?);
             ready(site,&alive,fd,&data,offered.get())?;emitted.set(true);
-            read_only(site,origin,fd,&alive,&current)
+            read_only(site,origin,folder,setting,fd,&alive,&current)
         }
     };
     let result=original();
@@ -110,11 +110,23 @@ fn ready(site:Site<'_>,alive:&impl Fn()->io::Result<()>,fd:i32,data:&[u8;88],bor
     os(unsafe{if born{zxs_birth_done(fd,data[48..64].as_ptr())}
         else{zxs_member_reply(fd,data.as_ptr())}})
 }
-fn read_only(site:Site<'_>,origin:&TreeOrigin,member:i32,alive:&impl Fn()->io::Result<()>,current:&Current<'_,'_,'_>)->io::Result<()>{
+fn read_only(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,expected:Setting,member:i32,
+    alive:&impl Fn()->io::Result<()>,current:&Current<'_,'_,'_>)->io::Result<()>{
     loop{
         alive()?;
         let r=unsafe{zxs_smb_root_wait(member,origin.session.as_raw_fd(),500)};
         if r==0{continue;}if r!=1{return Err(denied());}
+        match mover::pending(member){
+            1=>{
+                let (request,answer)=mover::take(member,origin)?;
+                if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
+                let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
+                mover::run(site,origin,branch,answer,request,current.native_placement().clone(),Some(expected),permit);
+                continue;
+            },
+            0=>{},
+            _=>return Err(denied()),
+        }
         let (mut at,mut count)=(0,0);
         let fd=unsafe{zxs_read_take(member,origin.worker.as_raw_fd(),&mut at,&mut count)};
         if fd<0{return Err(denied());}

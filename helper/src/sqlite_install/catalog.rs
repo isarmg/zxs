@@ -7,7 +7,7 @@ use std::{ffi::OsString,io,os::unix::ffi::{OsStrExt,OsStringExt},path::PathBuf};
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=9;
+pub(super) const SCHEMA_VERSION:i64=10;
 pub(super) const MAX_OBJECTS:i32=128; // includes SQLite's implicit indexes
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
@@ -71,7 +71,18 @@ pub(super) fn initial_receipt(tx:&rusqlite::Transaction<'_>,template:&Canonical,
 /// are data, never authorizations to open them. Rebuild the original request
 /// from the immutable recorded choices and audit against its request SHA.
 /// A changed path alongside a still-valid VolumeId/marker is not adopted.
+#[derive(Clone)]
 pub(super) struct Initial { pub(super) path:PathBuf, pub(super) marker:[u8;101] }
+/// Only a result from `initial_metadata` is accepted by the paired workers.
+/// This never interprets an arbitrary path, nor selects an ordinary claim as R.
+pub(super) fn initial_recycle(claims:&[Initial])->io::Result<&Initial>{
+    let recycle=claims.get(1).filter(|c|c.marker[20]==1)
+        .ok_or_else(||bad("no original recycle claim at the unique INIT ordinal"))?;
+    if claims.iter().enumerate().any(|(i,c)|i!=1&&c.marker[20]==1){
+        return Err(bad("ambiguous original recycle claim"));
+    }
+    Ok(recycle)
+}
 pub(super) fn initial_metadata(tx:&rusqlite::Transaction<'_>,template:&Canonical,system:super::originals::HeldRoot<'_>,
     pool:&Id,init:&Id)->io::Result<Vec<Initial>>{
     template.require(tx)?;
@@ -133,18 +144,26 @@ fn read_rows(tx:&rusqlite::Transaction<'_>,template:&Canonical,r:&Request,limit_
 }
 
 #[cfg(test)]
-mod v9_tests {
+mod v10_tests {
     use super::*;
     #[test]
-    fn old_version_and_different_v9_structure_are_not_the_fresh_family() {
+    fn recycle_is_the_single_original_ordinal_not_an_ordinary_claim() {
+        let row=|role,i|Initial{path:format!("/claim/{i}").into(),marker:claimed_marker(role,&[1;16],&[i;16],&[2;16],&[3;32])};
+        let valid=[row(0,4),row(1,5),row(2,6)];
+        assert_eq!(initial_recycle(&valid).unwrap().path,PathBuf::from("/claim/5"));
+        assert!(initial_recycle(&[row(0,4),row(2,5),row(1,6)]).is_err());
+        assert!(initial_recycle(&[row(0,4),row(1,5),row(1,6)]).is_err());
+    }
+    #[test]
+    fn old_version_and_different_v10_structure_are_not_the_fresh_family() {
         let approved=Canonical::new().unwrap();
         let mut db=Connection::open_in_memory().unwrap();
         db.execute_batch(SCHEMA).unwrap();
         let tx=db.transaction().unwrap();
         assert!(approved.require(&tx).is_ok());
-        tx.execute_batch("PRAGMA main.user_version = 7;").unwrap();
+        tx.execute_batch("PRAGMA main.user_version = 9;").unwrap();
         assert!(approved.require(&tx).is_err());
-        tx.execute_batch("PRAGMA main.user_version = 9; CREATE TABLE unknown_release_origin(unused INTEGER);").unwrap();
+        tx.execute_batch("PRAGMA main.user_version = 10; CREATE TABLE unknown_release_origin(unused INTEGER);").unwrap();
         assert!(approved.require(&tx).is_err());
     }
 }

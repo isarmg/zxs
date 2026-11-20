@@ -120,22 +120,44 @@ static bool native_directory_projection(connection_struct *c)
 	uint64_t at=123,number=UINT64_C(0xfedcba9823456789);
 	NTSTATUS status;
 	c->params=&params;
-	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",false,number,4097,
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",ZXS_ROW_FILE,number,4097,
 		8,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_EQUAL(status,STATUS_MORE_ENTRIES)||next!=bytes||at!=123)goto fail;
-	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",false,number,4097,
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"报告",ZXS_ROW_FILE,number,4097,
 		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_IS_OK(status)||at!=0||BVAL(bytes,40)!=4097||BVAL(bytes,48)!=8192||
 	    IVAL(bytes,60)!=4||SVAL(bytes,68)!=0||BVAL(bytes,96)!=number||
 	    SVAL(bytes,104)!=0x62a5||SVAL(bytes,106)!=0x544a)goto fail;
 	save=next;
-	status=zxs_marshal_child(c,c,SMB_FIND_FILE_NAMES_INFO,"b",false,300,0,
+	status=zxs_marshal_child(c,c,SMB_FIND_FILE_NAMES_INFO,"b",ZXS_ROW_FILE,300,0,
 		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_IS_OK(status)||at%8!=0||bytes+at<save||SVAL(bytes+at,12)!='b')goto fail;
-	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"Docs",true,3,0,
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"Docs",ZXS_ROW_TOP,3,0,
 		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
 	if(!NT_STATUS_IS_OK(status)||BVAL(bytes+at,40)!=0||BVAL(bytes+at,96)!=3 ||
 	   (IVAL(bytes+at,56)&FILE_ATTRIBUTE_DIRECTORY)==0)goto fail;
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"回收站",ZXS_ROW_TOP,2,0,
+		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
+	if(!NT_STATUS_IS_OK(status)||BVAL(bytes+at,96)!=2)goto fail;
+	status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"0123456789abcdef0123456789abcdef",ZXS_ROW_ROUND,UINT64_MAX,0,
+		256,bytes,&next,bytes+sizeof(bytes)-1,&at);
+	if(!NT_STATUS_IS_OK(status)||BVAL(bytes+at,96)!=UINT64_MAX ||
+	   (IVAL(bytes+at,56)&FILE_ATTRIBUTE_DIRECTORY)==0)goto fail;
+	for(uint8_t kind=ZXS_ROW_FILE;kind<=ZXS_ROW_ROUND;kind++){
+		status=zxs_marshal_child(c,c,SMB_FIND_ID_BOTH_DIRECTORY_INFO,"wrong",kind,
+			kind==ZXS_ROW_TOP?UINT64_MAX:1,0,256,bytes,&next,bytes+sizeof(bytes)-1,&at);
+		if(!NT_STATUS_EQUAL(status,NT_STATUS_INVALID_PARAMETER))goto fail;
+	}
+	/* Same-tree rename's declared UTF-16 amount does not include reserved
+	 * bytes or trailing pad. No overwrite or root-relative FID. */
+	uint8_t raw[40]={0};char *folder=NULL,*name=NULL;const char target[]="F\\Report";
+	raw[1]=0x77;raw[39]=0xff;SIVAL(raw,16,2*(sizeof(target)-1));
+	for(size_t i=0;i<sizeof(target)-1;i++){SSVAL(raw,20+2*i,target[i]);}
+	DATA_BLOB input={.data=raw,.length=sizeof(raw)};
+	if(!zxs_restore_input(c,input,&folder,&name)||strcmp(folder,"F")||strcmp(name,"Report"))goto fail;
+	raw[0]=1;if(zxs_restore_input(c,input,&folder,&name))goto fail;
+	raw[0]=0;raw[8]=1;if(zxs_restore_input(c,input,&folder,&name))goto fail;
+	raw[8]=0;SSVAL(raw,24,'\\');if(zxs_restore_input(c,input,&folder,&name))goto fail;
 	c->params=NULL;return true;
 fail:
 	c->params=NULL;return false;

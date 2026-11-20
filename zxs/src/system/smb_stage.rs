@@ -149,6 +149,14 @@ impl<'t,'s,'r> Staged<'t,'s,'r>{
     }
     pub(super) fn base(&self)->&Current<'t,'s,'r>{&self.base}
     pub(super) fn eof(&self)->u64{self.eof}
+    pub(super) fn transfer_ready(&mut self)->io::Result<()>{
+        self.refresh()?;
+        if self.eof!=self.base.size()||self.retained!=self.eof||!self.parts.is_empty()||
+           self.flush_op.is_some()||self.spool.poisoned{
+            return Err(io::Error::new(io::ErrorKind::WouldBlock,"writer still holds unconfirmed work"));
+        }
+        Ok(())
+    }
     fn writable(&self,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
         alive()?;self.writer.require_work()} // same original Tree, credential and FILE
     fn refresh(&mut self)->io::Result<()>{

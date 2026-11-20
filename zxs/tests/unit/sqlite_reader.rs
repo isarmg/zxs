@@ -2,7 +2,7 @@
 //! REGISTRATION or product CLI. Never run on existing media.
 use super::*;
 use crate::{Role,fs::HeldDir,system::{ROOT_MARK,init_request},test_support::PrivateTemp};
-use std::{ffi::c_void,fs::{File,OpenOptions},io::Write,os::unix::{ffi::OsStrExt,fs::OpenOptionsExt},ptr};
+use std::{ffi::c_void,fs::{File,OpenOptions},io::Write,os::unix::{ffi::OsStrExt,fs::{DirBuilderExt,OpenOptionsExt}},ptr};
 
 unsafe extern "C" {
     fn sqlite3_open_v2(path:*const c_char, db:*mut *mut Db, flags:c_int, vfs:*const c_char)->c_int;
@@ -26,9 +26,12 @@ impl Builder{
 }
 fn hex(b:&[u8])->String{b.iter().map(|v|format!("{v:02x}")).collect()}
 fn record(parent:&PrivateTemp,state:InitState,extra:&str)->(PathBuf,PoolId){
+    record_with_recycle(parent,state,extra,None)
+}
+fn record_with_recycle(parent:&PrivateTemp,state:InitState,extra:&str,recycle:Option<PathBuf>)->(PathBuf,PoolId){
     assert_ne!(fs::local_uid(),0,"run this fixture only as the ordinary unprivileged storage principal");
     let s=parent.child("S");let dir=HeldDir::open(&s).unwrap();dir.exclusive().unwrap();
-    let r=parent.0.join("unmounted-r");let f=parent.0.join(OsStr::from_bytes(b"unmounted-f-\xff"));
+    let r=recycle.unwrap_or_else(||parent.0.join("unmounted-r"));let f=parent.0.join(OsStr::from_bytes(b"unmounted-f-\xff"));
     let paths=[s.as_path(),r.as_path(),f.as_path()];let op=OperationId([1;16]);let pool=PoolId([4;16]);
     let uid=fs::local_uid();let actor=[2;16];let approve=[3;16];
     let sha=init_request(op,actor,approve,uid,&paths).unwrap();let n=ComponentLimit::held(&dir).unwrap().encoded();
@@ -147,6 +150,41 @@ fn just_the_declared_ordinary_root_is_observed_with_opaque_linux_path_and_withou
     assert_eq!(online.ordinary_space(f.volume).unwrap().volume,f.volume); // fresh claim/host path, not durable physical identity
 }
 
+
+fn mark_recycle(src:&InitialReader){
+    let c=src.snapshot().unwrap();let r=&c.rows()[1].path;
+    let p=r.join(OsStr::from_bytes(ROOT_MARK.to_bytes()));
+    let mut stat=OpenOptions::new().write(true).create_new(true).mode(0o600).open(p).unwrap();
+    stat.write_all(&c.expected_marker(1).unwrap()).unwrap();stat.sync_all().unwrap();drop(stat);
+    File::open(r).unwrap().sync_all().unwrap();
+}
+#[test]
+#[ignore="source-only uses separate ordinary /tmp and Linux /dev/shm test filesystems; no real volumes or SMB"]
+fn only_the_typed_original_recycle_mount_may_back_retained_access(){
+    use super::volume::{OrdinaryRoot,RecycleRoot};
+    let t=PrivateTemp::under(Path::new("/tmp"));let ram=PrivateTemp::under(Path::new("/dev/shm"));
+    let rp=ram.0.join("retained-original");
+    let(s,p)=record_with_recycle(&t,InitState::Committed,"",Some(rp.clone()));
+    let src=InitialReader::open(&s,p).unwrap();let c=src.snapshot().unwrap();
+    let fp=create_file::open_root(&src);assert!(fp.is_dir());
+    let ordinary=OrdinaryRoot::for_body(&src,&c,c.rows()[2].volume).unwrap();
+    assert!(RecycleRoot::at(&src,&c).is_err());
+    // An unavailable R never forces an ordinary F operation to access R.
+    assert!(ordinary.space().is_ok());
+    std::fs::DirBuilder::new().mode(0o700).create(&rp).unwrap();
+    assert!(RecycleRoot::at(&src,&c).is_err()); // never regard mere parent/directory as an empty retained root
+    mark_recycle(&src);
+    let retained=RecycleRoot::at(&src,&c).unwrap();assert_eq!(retained.volume(),c.rows()[1].volume);
+    assert!(retained.separate_from(&ordinary).is_ok());assert_eq!(retained.root_for_read().path,rp);
+    let moved=ram.0.join("moved-recycle");std::fs::rename(&rp,&moved).unwrap();
+    assert!(retained.require().is_err());assert!(ordinary.space().is_ok());
+
+    let s=PrivateTemp::under(Path::new("/tmp"));let(home,p)=record(&s,InitState::Committed,"");
+    let src=InitialReader::open(&home,p).unwrap();let c=src.snapshot().unwrap();
+    std::fs::DirBuilder::new().mode(0o700).create(&c.rows()[1].path).unwrap();mark_recycle(&src);
+    assert!(RecycleRoot::at(&src,&c).is_err()); // exact-role bytes on a sibling of S do not qualify as separate media
+}
+
 #[path="sqlite_first_account.rs"]
 mod first_account;
 
@@ -162,12 +200,22 @@ mod first_work;
 #[path="sqlite_work_cuts.rs"]
 mod manual_cuts;
 
+#[path="sqlite_recycle_location.rs"]
+mod recycle_location;
+
 /// Synthetic committed pool and fixed pair for the Web transport fixture.
 pub(crate) fn web_pool(t:&PrivateTemp)->(PathBuf,PoolId){publication::first(t)}
 
 pub(crate) fn ordinary_pool(t:&PrivateTemp)->(PathBuf,PoolId,PathBuf,crate::identity::ShareId,crate::identity::ShareId){
     let (s,p)=publication::first(t);let src=InitialReader::open(&s,p).unwrap();
     let f=create_file::open_root(&src);let(rw,ro)=create_file::configure(&src);(s,p,f,rw,ro)
+}
+
+pub(super) fn transfer_pool(t:&PrivateTemp,path:&Path)->(PathBuf,PoolId,PathBuf,crate::identity::ShareId){
+    let(s,p)=publication::first_with_recycle(t,Some(path.to_owned()));
+    let src=InitialReader::open(&s,p).unwrap();let f=create_file::open_root(&src);
+    std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();mark_recycle(&src);
+    let(rw,_)=create_file::configure(&src);(s,p,f,rw)
 }
 
 pub(crate) fn stage_managed_file(source:&InitialReader,rw:crate::identity::ShareId,ro:crate::identity::ShareId,name:&str,data:&File)

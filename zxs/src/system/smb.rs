@@ -57,6 +57,16 @@ pub(crate) mod file_create;
 #[path="first_work.rs"]
 pub(crate) mod first_work;
 
+#[path="smb_buffer.rs"]
+mod smb_buffer;
+#[path="retained_read.rs"]
+mod retained_read;
+
+#[path="file_transfer.rs"]
+mod file_transfer;
+#[path="file_retirement.rs"]
+mod retirement;
+
 #[path="work_change.rs"]
 pub(crate) mod work_change;
 

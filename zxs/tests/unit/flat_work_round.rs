@@ -60,6 +60,52 @@ fn selected_prefix_does_not_select_or_read_a_physically_present_unconfirmed_tail
 }
 
 #[test]
+#[ignore="real two-name work file pairs, copying only authenticated source windows, not run"]
+fn move_copies_confirmed_windows_without_adopting_real_unselected_data_or_table_gaps(){
+    use std::os::unix::ffi::OsStrExt;
+    let temp=PrivateTemp::under(&std::env::temp_dir());
+    let from=HeldDir::open(&temp.child("source")).unwrap();let to=HeldDir::open(&temp.child("target")).unwrap();
+    let pair=|dir:&HeldDir|{
+        let n=names(ROUND);let path=|i:usize|dir.path.join(std::ffi::OsStr::from_bytes(n[i].to_bytes()));
+        let data=open(&path(0));std::fs::hard_link(path(0),path(1)).unwrap();
+        let table=open(&path(2));std::fs::hard_link(path(2),path(3)).unwrap();
+        (data,table)
+    };
+    let (data,table)=pair(&from);let (target_data,target_table)=pair(&to);
+    let (first,ix)=add(&from,&data,&table,ROUND,ROUND,1,End::ZERO,0,b"ABC",3,None);
+    let (abandoned,_)=add(&from,&data,&table,ROUND,PENDING,2,first.end(),0,b"ignored",7,Some(&ix));
+    let (last,ix)=add(&from,&data,&table,ROUND,NEXT,2,abandoned.end(),1,b"x",3,Some(&ix));
+    let (pending,_)=add(&from,&data,&table,ROUND,OperationId([6;16]),3,last.end(),2,b"z",3,Some(&ix));
+    let (fs,ts)=(WitnessRead::at(&from).unwrap(),WitnessRead::at(&to).unwrap());
+    let mut hold=TransferRound::open(&from,&fs,last,Some(pending.end())).unwrap();
+    let target=Some((&target_data,&target_table));
+    assert!(hold.step(&from,last,target,||Ok(())).is_err()); // missing exact predecessor
+    hold.step(&from,first,target,||Ok(())).unwrap();
+    assert!(hold.step(&from,abandoned,target,||Ok(())).is_err());
+    hold.step(&from,last,target,||Ok(())).unwrap();
+    assert!(hold.step(&from,pending,target,||Ok(())).is_err()); // existing tail is not proof
+    let mut used=Used::default();hold.finish(&from,&mut used).unwrap();used.require(&from).unwrap();
+    target_data.sync_all().unwrap();target_table.sync_all().unwrap();to.file.sync_all().unwrap();
+    let mut cold=TransferRound::open(&to,&ts,last,None).unwrap();
+    cold.step(&to,first,None,||Ok(())).unwrap();cold.step(&to,last,None,||Ok(())).unwrap();
+    cold.finish(&to,&mut Used::default()).unwrap();
+    let mut physical=vec![0;last.end().data as usize];
+    target_data.read_exact_at(&mut physical,0).unwrap();
+    assert_eq!(&physical,b"ABC\0\0\0\0\0\0\0x");
+    let mut gap=vec![1;(abandoned.end().checks-first.end().checks) as usize];
+    target_table.read_exact_at(&mut gap,first.end().checks).unwrap();assert!(gap.iter().all(|x|*x==0));
+    let held=Selected::open_settled(&to,last).unwrap();let mut logical=Vec::new();
+    held.range_with(&to,0,3,|needs|Ok(needs.iter().map(|n|Origin{record:if n.issuer==ROUND{first}else{last},physical:last.end()}).collect()),
+        ||Ok(()),&mut logical).unwrap();
+    assert_eq!(&logical,b"AxC");
+    table.write_all_at(b"!",last.map().unwrap().at).unwrap();table.sync_all().unwrap();
+    assert!(used.require(&from).is_err());
+    let mut changed=TransferRound::open(&from,&fs,last,Some(pending.end())).unwrap();
+    changed.step(&from,first,None,||Ok(())).unwrap();
+    assert!(changed.step(&from,last,None,||Ok(())).is_err());
+}
+
+#[test]
 #[ignore="actual private two-round ordinary files, not executed in static source review"]
 fn a_used_older_round_is_rechecked_after_final_sink_without_materializing_a_full_version(){
     use std::os::unix::ffi::OsStrExt;

@@ -78,7 +78,7 @@ enum inbound { ZXS_NO_FD, ZXS_LIFE_FD, ZXS_TREE_FD, ZXS_DATA_FD, ZXS_READ_STREAM
 static int transfer(int fd,const uint8_t *sendbuf,uint8_t *recvbuf,size_t len,int offer,int *take,enum inbound kind,bool nowait)
 {
     int64_t now,stop;bool sending=sendbuf!=NULL;
-    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=ZXS_PLAN_OFFER && len!=ZXS_PLAN_ACK && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES && len!=18+ZXS_DIR_NAME && len!=ZXS_DIR_PACKET && len!=16+ZXS_MEMBER_BYTES)return bad();
+    if(len!=ZXS_SMB_BIND_LEN && len!=ZXS_SMB_READY_LEN && len!=ZXS_PLAN_OFFER && len!=ZXS_PLAN_ACK && len!=16 && len!=24 && len!=32 && len!=24+ZXS_SMB_CUT_BYTES && len!=16+ZXS_SMB_TREE_CUT_BYTES && len!=18+ZXS_DIR_NAME && len!=ZXS_DIR_PACKET && len!=16+ZXS_MEMBER_BYTES && len!=ZXS_XFER_ASK && len!=ZXS_XFER_RESULT)return bad();
     if(millis(&now)<0)return -1;
     stop=now+10000;
     for(;;) {
@@ -361,10 +361,16 @@ static int zxs_tree_cut_read(int fd,const uint8_t *share,const uint8_t *pool,str
         if(memcmp(b+16,zero,sizeof(zero))!=0 || b[89]!=0)return bad();
         memcpy(x.pool,b+73,16);x.root_fd=-1;*out=x;return 0;
     }
-    if(!cut_id(b+16)||!cut_id(b+32)||!cut_id(b+48)||(b[72]!=1&&b[72]!=2)||
-       b[89]<2||b[89]>=64)return bad();
     for(size_t i=64;i<72;i++)x.revision=(x.revision<<8)|b[i];
-    if(x.revision==0 || x.revision>INT64_MAX)return bad();
+    if(b[89]==1){
+        /* Within the one native ZXS root. R is not a share grant. A
+         * nonzero setting field here identifies an exact deletion folder. */
+        if(pool==NULL || share!=NULL || cut_id(b+16) || !cut_id(b+32) ||
+           b[72]!=1 || x.revision!=1)return bad();
+    }else{
+        if(!cut_id(b+16)||!cut_id(b+32)||!cut_id(b+48)||(b[72]!=1&&b[72]!=2)||
+           b[89]<2||b[89]>=64||x.revision==0||x.revision>INT64_MAX)return bad();
+    }
     memcpy(x.share,b+16,16);memcpy(x.volume,b+32,16);memcpy(x.setting,b+48,16);
     x.mode=b[72];memcpy(x.pool,b+73,16);x.volume_ordinal=b[89];x.root_fd=-1;
     *out=x;return 0;
@@ -392,16 +398,33 @@ int zxs_smb_root_wait(int tree,int session,int timeout)
     if(p[1].revents!=0 || (p[0].revents&~POLLIN)!=0)return -1;
     return p[0].revents==POLLIN?1:0; /* data is consumed only by this tree worker */
 }
+int zxs_r_round_own_parent(struct zxs_smb_tree_cut *child,struct zxs_smb_tree_cut *parent)
+{
+    if(child==NULL||parent==NULL||child->root_fd<0||parent->root_fd<0||child->owns_parent||parent->owns_parent||
+       child->root_fd==parent->root_fd||child->volume_ordinal!=1||parent->volume_ordinal!=1||
+       child->mode!=1||parent->mode!=1||child->revision!=1||parent->revision!=1||
+       !cut_id(child->setting)||cut_id(parent->setting)||
+       memcmp(child->pool,parent->pool,16)!=0||memcmp(child->volume,parent->volume,16)!=0||
+       zxs_smb_ctl_live(child->root_fd)!=0||zxs_smb_ctl_live(parent->root_fd)!=0)return bad();
+    child->owns_parent=true;child->parent_fd=parent->root_fd;parent->root_fd=-1;
+    return 0;
+}
 int zxs_smb_root_release(struct zxs_smb_tree_cut *owned)
 {
-    if(owned!=NULL && owned->root_fd>=0){
+    if(owned==NULL)return 0;
+    if(owned->root_fd>=0){
         shutdown(owned->root_fd,SHUT_RDWR);
         close(owned->root_fd);owned->root_fd=-1;
+    }
+    if(owned->owns_parent){
+        shutdown(owned->parent_fd,SHUT_RDWR);
+        close(owned->parent_fd);owned->parent_fd=-1;owned->owns_parent=false;
     }
     return 0;
 }
 
 #include "zxs_plan_wire.inc"
 #include "zxs_directory_wire.inc"
+#include "zxs_transfer_wire.inc"
 #include "zxs_read_wire.inc"
 #include "zxs_work_wire.inc"
