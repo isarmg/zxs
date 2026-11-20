@@ -12,7 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import comparison, freeze
-from zipworkspace.desktop.selection import Selection, StoreSelection, compare_version
+from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection, compare_version
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
@@ -73,6 +73,81 @@ class CompareVersions(unittest.TestCase):
         self.assertEqual((rows["kind"].before,rows["kind"].after,rows["kind"].before_bytes), ("file","directory",0))
         self.assertEqual((rows["empty-old"].change,rows["empty-new"].change), ("missing","added"))
         self.assertNotIn("not-compared",rows)
+
+    def test_compares_plain_zip_as_verified_contents_not_a_repository_or_an_open_path(self):
+        origin = self.root / "roundtrip.zip"
+        origin.write_bytes(self.left.path.read_bytes())
+        copied = PlainSelection.open(origin, retain=False)
+        with patch.object(os, "open", side_effect=AssertionError("no reopening")), \
+             patch.object(sqlite3, "connect", side_effect=AssertionError("no state work")):
+            identical = comparison.compare_plain(self.left.browser, copied.rows)
+        self.assertFalse(identical.rows)
+        ordinary = self.root / "independent.zip"
+        with zipfile.ZipFile(ordinary, "w") as z:
+            z.writestr("empty-new/", b"")
+            z.writestr("foo", b"same")
+            z.writestr("kind/", b"")
+            z.writestr("note", b"new")  # equal size; content hash differs
+            z.comment = b"unrelated"
+        view = PlainSelection.open(ordinary, retain=False)
+        ordinary.unlink()  # The two completed in-memory readings do not require either name.
+        with patch.object(os, "open", side_effect=AssertionError("no reopening")):
+            changes = comparison.compare_plain(self.left.browser, view.rows)
+        self.assertEqual((changes.added, changes.changed, changes.missing), (2, 2, 2))
+        names = {r.path: r for r in changes.page(0)}
+        self.assertEqual((names["empty-old"].change, names["empty-new"].change), ("missing", "added"))
+        self.assertEqual((names["Foo"].change, names["foo"].change), ("missing", "added"))
+        self.assertEqual((names["kind"].before, names["kind"].after), ("file", "directory"))
+        self.assertEqual((names["note"].before_bytes, names["note"].after_bytes), (3, 3))
+        self.assertEqual(len(view.rows), 4)  # a comparison consumes only a temporary dict
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_ordinary_zip_action_clears_late_comparison_after_switching_the_right_view(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        try:
+            win.archive.show_selection(self.left)
+            source = self.root / "ordinary.zip"
+            with zipfile.ZipFile(source, "w") as z: z.writestr("note", b"new")
+            plain = PlainSelection.open(source, retain=False)
+            win.plain_import.show_selection(plain)
+            pane = win.archive.comparison
+
+            def start():
+                win.tabs.setCurrentWidget(win.plain_import)
+                future = Future()
+                with patch.object(win.pool, "submit", return_value=future) as queued:
+                    win.plain_import.compare.click()
+                self.assertIs(win.pending[0], future)
+                self.assertIs(win.tabs.currentWidget(), win.archive)
+                self.assertIs(win.archive.views.currentWidget(), pane)
+                return future, queued.call_args.args[0]
+
+            future, run = start()
+            future.set_result(run())
+            win.poll()
+            self.assertIn(plain.preview.sha256, pane.summary.text())
+            self.assertIn(("note", "不同", "文件 · 3 B", "文件 · 3 B"),
+                          tuple(r[0] for r in pane.table.rows.rows))
+            self.assertIs(win.archive.selection, self.left)
+
+            future, run = start()
+            late = run()
+            win.plain_import.release_display()
+            new_status = win.note.text()
+            future.set_result(late)
+            win.poll()
+            self.assertIsNone(pane.report)
+            self.assertIsNone(pane.plain)
+            self.assertEqual(pane.table.rows.rows, ())
+            self.assertEqual(win.note.text(), new_status)
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
     def test_rejects_the_same_bytes_in_a_replaced_slot_or_a_loose_catalog_anchor(self):
         slot = self.right.path

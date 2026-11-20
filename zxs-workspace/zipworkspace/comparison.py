@@ -171,6 +171,11 @@ def compare_to_index(index, observed):
     return Changes(*_changes(_rows(index), observed.rows))
 
 
+def compare_plain(before, verified_rows):
+    """Compare an admitted .zxs view to a verified plain ZIP manifest, without any I/O or repo identity."""
+    return Changes(*_changes(_rows(before), dict(verified_rows)))
+
+
 def compare_snapshots(before, other):
     """Both ArchiveBrowsers already verified; never open live bodies here."""
     if before.commit.repo != other.commit.repo:

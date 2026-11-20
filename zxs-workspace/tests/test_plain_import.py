@@ -165,7 +165,7 @@ class PlainPreviewWindow(unittest.TestCase):
                 self.assertIn(sha256(source.read_bytes()).hexdigest(), pane.details.text())
                 self.assertIsNotNone(pane.selected)
                 self.assertTrue(pane.find.isEnabled())
-                controls = {pane.choose, pane.find, pane.up, pane.into, pane.back, pane.more}
+                controls = {pane.choose, pane.find, pane.compare, pane.up, pane.into, pane.back, pane.more}
                 if sys.platform == "linux":
                     self.assertIn("核验不会提取", pane.outcome.text())
                     self.assertTrue(pane.extract.isEnabled())

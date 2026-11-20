@@ -1,4 +1,4 @@
-"""One read-only result view, either a local folder or one explicitly selected catalog version."""
+"""Read-only results for a local folder, a catalog version or a verified ordinary ZIP."""
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from .. import comparison
@@ -12,7 +12,7 @@ class ComparisonPane(QWidget):
         super().__init__()
         self.owner = owner
         layout = QVBoxLayout(self)
-        layout.addWidget(label("可以比较本机文件夹，也可以从「历史」或「分支」选定另一归档版本。两种比较都只读，不同步文件。"))
+        layout.addWidget(label("可以比较本机文件夹、从「历史」或「分支」选另一版本，或在「核验普通 ZIP」页比较两次核验的内容。比较只读，不同步文件。"))
         self.choose = button("选择文件夹并比较…", self.pick)
         layout.addWidget(self.choose)
         self.summary = label()
@@ -38,6 +38,7 @@ class ComparisonPane(QWidget):
 
     def clear(self):
         self.report, self.number, self.mode, self.request = None, 0, None, None
+        self.plain = None
         self.table.rows.replace(())
         self.back.setEnabled(False); self.more.setEnabled(False)
         self.page_label.setText("")
@@ -46,6 +47,12 @@ class ComparisonPane(QWidget):
         if self.mode == "version":
             self.set_snapshot(self.snapshot)
             self.owner.inform("已清除原版本对照。")
+
+    def invalidate_plain(self, selection):
+        if self.mode == "plain" and self.plain is selection:
+            self.clear()
+            self.summary.setText("原普通 ZIP 已更换或关闭；旧对照已清除。")
+            self.owner.inform("已清除普通 ZIP 对照。")
 
     def matches(self, snapshot, request):
         return self.snapshot is snapshot and self.request is request
@@ -143,15 +150,56 @@ class ComparisonPane(QWidget):
                 failed(Rejected("另一个操作正在执行；未开始比较。"))
         return True
 
+    def compare_ordinary_zip(self, plain):
+        chosen = self.snapshot
+        if chosen is None or self.owner.pending is not None: return False
+        self.clear()
+        request = self.request = object()
+        self.mode, self.plain = "plain", plain
+        directory, rows = chosen.browser, plain.rows
+        pair = (f"此前已核验的快照：{str(chosen.path)!r} · 节点 {directory.commit.operation}\n"
+                f"此前已核验的普通 ZIP：{str(plain.path)!r} · SHA-256 {plain.preview.sha256}\n"
+                "只比较这两次读取的内容。不会重新打开路径或从 ZIP 注释取得版本身份。")
+        self.summary.setText(pair + "\n正在比较已核目录…")
+
+        def work():
+            try: return comparison.compare_plain(directory, rows), None
+            except Exception as err: return None, str(err)
+
+        def done(outcome):
+            if not self.matches(chosen, request) or self.plain is not plain: return
+            report, error = outcome
+            if error is not None:
+                self.summary.setText(pair + f"\n未完成比较：{error}")
+                self.owner.inform("未完成普通 ZIP 比较；请查看对比页。")
+                return
+            self.report = report
+            self.summary.setText(pair + f"\n仅普通 ZIP {report.added} · 不同 {report.changed} · 仅快照 {report.missing}。"
+                                 + ("树内容没有差异；此处未比较两个归档的原始字节。" if not report.rows else ""))
+            self.show_page(0)
+            self.owner.inform("完成两份已核验内容的只读比较；没有提取、同步或修改来源。")
+
+        try:
+            submitted = self.owner.job("正在比较两份已核验目录，不读取归档正文…", work, done)
+        except Exception as err:
+            done((None, str(err)))
+        else:
+            if submitted is None:
+                done((None, "另一个操作正在执行。"))
+        return True
+
     def show_page(self, number):
         if self.report is None: return
         rows = self.report.page(number)
         kind = {"directory":"目录", "file":"文件", None:"无"}
-        revision = self.mode == "version"
-        change = ({"added":"仅所选", "changed":"不同", "missing":"仅当前"} if revision else
-                  {"added":"新增", "changed":"修改", "missing":"缺少"})
+        changes = {
+            "version": {"added":"仅所选", "changed":"不同", "missing":"仅当前"},
+            "plain": {"added":"仅普通 ZIP", "changed":"不同", "missing":"仅快照"},
+            "folder": {"added":"新增", "changed":"修改", "missing":"缺少"},
+        }
+        change = changes[self.mode]
         def side(role, size):
-            return f"{kind[role]} · {size:,} B" if revision and size is not None else kind[role]
+            return f"{kind[role]} · {size:,} B" if self.mode != "folder" and size is not None else kind[role]
         self.table.rows.replace(((r.path, change[r.change], side(r.before, r.before_bytes),
                                   side(r.after, r.after_bytes)), r) for r in rows)
         self.number = number

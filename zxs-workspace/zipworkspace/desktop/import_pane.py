@@ -31,6 +31,9 @@ class ImportPane(QWidget):
                    "核验不会提取。提取须另行选择同一实际 ext4/XFS 挂载上的两个不同目录与一个新目的名称。")
         self.outcome = label(message)
         layout.addWidget(self.outcome)
+        self.compare = button("与当前已核验 .zxs 快照比较", self.compare_to_current)
+        self.compare.setEnabled(False)
+        layout.addWidget(self.compare)
         self.at = label("尚无已核验的目录。")
         layout.addWidget(self.at)
         self.files = Table(("名称", "类型", "字节数", "SHA-256"), "已核验普通 ZIP 的当前目录")
@@ -50,8 +53,11 @@ class ImportPane(QWidget):
     def release_display(self):
         dialog, self.search_dialog = self.search_dialog, None
         if dialog is not None: dialog.reject()
-        if self.selected is not None: self.selected.release_display()
+        if self.selected is not None:
+            self.owner.archive.comparison.invalidate_plain(self.selected)
+            self.selected.release_display()
         self.selected = self.file_page = None
+        self.compare.setEnabled(False)
         self.number = 0
         self.files.rows.replace(())
         self.at.setText("尚无已核验的目录。")
@@ -72,6 +78,7 @@ class ImportPane(QWidget):
     def show_selection(self, selected):
         self.release_display()
         self.selected = selected
+        self.compare.setEnabled(True)
         if self.extract is not None:
             self.extract.setEnabled(selected.held is not None and not selected.held.closed)
         preview = selected.preview
@@ -142,6 +149,16 @@ class ImportPane(QWidget):
 
         dialog.finished.connect(dismissed)
         dialog.open()
+
+    def compare_to_current(self):
+        selected = self.selected
+        if selected is None or self.owner.pending is not None: return
+        archive = self.owner.archive
+        if archive.selection is None:
+            self.owner.inform("请先在这个窗口打开并核验一个 .zxs 快照，再比较这份普通 ZIP。")
+        elif archive.comparison.compare_ordinary_zip(selected):
+            self.owner.tabs.setCurrentWidget(archive)
+            archive.views.setCurrentWidget(archive.comparison)
 
     def choose_destination(self):
         selected = self.selected
