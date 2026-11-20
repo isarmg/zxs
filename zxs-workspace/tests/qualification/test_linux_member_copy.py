@@ -13,7 +13,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace.desktop import member_copy
-from zipworkspace.desktop.selection import PlainSelection, Selection
+from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected, new_id
 from zipworkspace.publish import Uncertain
 
@@ -225,6 +225,75 @@ class LinuxMemberCopy(unittest.TestCase):
         with patch.object(member_copy.private_stage, "new_child", side_effect=AssertionError("reject replaced original first")):
             with self.assertRaises(Rejected): following.run(confirmed=True)
         self.assertFalse(following.path.exists())
+
+    def history_plan(self):
+        source_store = self.archive.parent / "history-origin"
+        source_store.mkdir(mode=0o700)
+        manifest = Manifest()
+        manifest.add("file", False, 4, hashlib.sha256(b"body").hexdigest())
+        repo, main, branch, tree = "d"*32, "e"*32, "f"*32, manifest.digest()
+        first = Commit(repo, main, 1, "1"*32, None, tree)
+        parent = Commit(repo, main, 2, "2"*32, first.operation, tree)
+        tip = Commit(repo, branch, 1, "3"*32, parent.operation, tree)
+        after = Commit(repo, main, 3, "4"*32, parent.operation, tree)
+        for marker in (first, parent, tip, after):
+            with (source_store/marker.filename).open("xb") as raw, zipfile.ZipFile(raw, "w") as z:
+                z.writestr("file", b"body")
+                z.comment = marker.encode()
+        selected = Selection.open(source_store/tip.filename, retain=True)
+        self.addCleanup(selected.release_display)
+        choice = StoreSelection.open(source_store)
+        catalog = selected.catalog(choice)
+        plan = member_copy.HistoryCopy(selected, choice, catalog, str(self.dest/"local-store"))
+        self.addCleanup(plan.close)
+        plan.pick_private(str(self.private))
+        return plan, source_store, selected, choice, catalog, (first, parent, tip, after)
+
+    def test_copy_only_the_original_complete_ancestry_as_one_new_store(self):
+        plan, original, selected, _, _, (first, parent, tip, unrelated) = self.history_plan()
+        display = selected.held.fileno()
+        os.lseek(display, 5, os.SEEK_SET)
+        files = {p.name: p.read_bytes() for p in original.iterdir()}
+        details = plan.review()
+        self.assertIn(tip.operation, details)
+        self.assertFalse(plan.path.exists())
+        self.assertEqual(list(self.private.iterdir()), [])
+        with self.assertRaises(Rejected): plan.run()
+        included = {first.filename, parent.filename, tip.filename}
+        real = member_copy.rename_new_at
+        def publish(pfd, leaf, dest, **kw):
+            stage = self.private/leaf
+            self.assertFalse(plan.path.exists())
+            self.assertEqual({p.name for p in stage.iterdir()}, included)
+            self.assertTrue(os.path.samestat(kw["expected_source"], stage.stat()))
+            real(pfd, leaf, dest, **kw)
+        with patch.object(member_copy, "rename_new_at", side_effect=publish) as rename:
+            plan.run(confirmed=True)
+            rename.assert_called_once()
+        self.assertEqual(os.lseek(display, 0, os.SEEK_CUR), 5)
+        self.assertEqual({p.name:p.read_bytes() for p in plan.path.iterdir()}, {n:files[n] for n in included})
+        self.assertEqual({p.name:p.read_bytes() for p in original.iterdir()}, files)
+        self.assertFalse((plan.path/unrelated.filename).exists())
+        local_store = StoreSelection.open(plan.path)
+        local = Selection.open(plan.path/tip.filename)
+        self.assertEqual(local.catalog(local_store).select_branch(tip.branch).marker, tip)
+
+    def test_original_ancestor_cannot_be_replaced_or_omitted_and_never_creates_stage(self):
+        plan, original, selected, choice, _, (first, _, tip, _) = self.history_plan()
+        plan.review()
+        leaf = original/first.filename
+        old = original/"removed"
+        leaf.rename(old)
+        leaf.write_bytes(old.read_bytes())
+        with patch.object(member_copy.private_stage, "new_child", side_effect=AssertionError("must check original slots first")):
+            with self.assertRaises(Rejected): plan.run(confirmed=True)
+        self.assertFalse(plan.path.exists())
+        self.assertEqual(list(self.private.iterdir()), [])
+        leaf.rename(original/"replacement")
+        missing = selected.catalog(choice)
+        self.assertEqual(missing.history(tip.operation)[1], first.operation)
+        with self.assertRaises(Rejected):
+            member_copy.HistoryCopy(selected, choice, missing, str(self.dest/"must-not-start"))
 
     def subtree_plan(self, name="tree", *, output="tree-copy", scratch=None):
         entry = self.selected.browser.entry("", name)

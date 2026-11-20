@@ -1,15 +1,16 @@
 """Linux Qt exports a selected snapshot or archive entry without overwriting."""
-from contextlib import ExitStack, closing
+from contextlib import ExitStack, closing, contextmanager
 import hashlib
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import stat
 import sys
 
 from .. import private_stage
 from ..archive import copy_body, read_managed_document, stored_member, stored_plain, stored_subtree
 from ..comparison import Folder
-from ..document import native_identity
+from ..document import archive_sha, native_identity, relative_document
 from ..freeze import _distinct_roots, observe_held
 from ..linux_authority import ProcView as _ProcView, owned_directory as _directory
 from ..linux_mount import _ordinary_user
@@ -17,7 +18,7 @@ from ..model import CHUNK, MAX_CD, MAX_FILE, MAX_TOTAL, Rejected, member_name, n
 from ..opening import _read_selected
 from ..private_candidates import held_candidates
 from ..private_freeze import local_mount, mount_id
-from ..publish import Uncertain, rename_new_at, require_native_writer
+from ..publish import Uncertain, held_store, rename_new_at, require_native_writer
 
 
 def _generation(m):
@@ -358,7 +359,7 @@ class _AtomicDirectoryCopy:
             self._parents()
             _unoccupied(self.parent, self.path.name)
             _unoccupied(self.private.parent, self.stage_name)
-            _check_source(self.selected, self.source, self.proc.read)
+            self._bound_source()
             self.rows = self._approved_rows()
             self.size = sum(row[1] for row in self.rows.values())
             self.ready = True
@@ -366,11 +367,17 @@ class _AtomicDirectoryCopy:
                     f"内容：{len(self.rows):,} 项，{self.size:,} 字节（包括空目录）\n"
                     f"新的完整目录：{str(self.path)!r}\n私有暂存：{str(self.private.path / self.stage_name)!r}\n\n"
                     "不登记或签出工作树。在独占私处复核全部内容后，只改名一次；同名不覆盖。"
-                    "只保存普通文件字节和目录结构，不复制来源元数据，也不打开或执行结果。"
+                    "不复制来源元数据，也不打开或执行结果。"
                     "本版本确认后须等待，不能中途取消。失败可能在私处留材料，不删除或另发。")
         except BaseException:
             self.close()
             raise
+
+    def _bound_source(self):
+        _check_source(self.selected, self.source, self.proc.read)
+
+    def _sealed_tree(self, stage, sink):
+        return _observe_subtree(stage, sink, self.rows)
 
     def run(self, *, confirmed=False):
         if confirmed is not True or not self.ready or self.used or self.closed:
@@ -381,12 +388,12 @@ class _AtomicDirectoryCopy:
             with self.stack:
                 read = self.proc.read
                 if _ordinary_user(read_proc=read) != self.uid: raise Rejected("普通用户已改变，不能另存")
-                _check_source(self.selected, self.source, read)
+                self._bound_source()
                 self._parents()
                 _unoccupied(self.parent, self.path.name)
                 reader = _Positional(self.source, self.selected.observed[2])
                 with self._entries(reader) as (archive, files):
-                    _check_source(self.selected, self.source, read)
+                    self._bound_source()
                     self._parents()
                     _unoccupied(self.parent, self.path.name)
                     stage_attempted = True
@@ -400,8 +407,8 @@ class _AtomicDirectoryCopy:
                                 if copy_body(body, size, dest) != sha:
                                     raise Rejected("私有副本与原预览中成员的 SHA-256 不符")
                         sink.sync(self.rows)
-                        sealed = _observe_subtree(stage, sink, self.rows)
-                        _check_source(self.selected, self.source, read)
+                        sealed = self._sealed_tree(stage, sink)
+                        self._bound_source()
                         self._parents()
                         self._named_stage(self.private.parent, self.stage_name, stage)
                         if _directory_generation(stage.parent) != sealed:
@@ -477,6 +484,124 @@ class PlainZipCopy(_AtomicDirectoryCopy):
 
     def _entries(self, reader):
         return stored_plain(reader, reader.end, self.rows)
+
+
+class HistoryCopy(_AtomicDirectoryCopy):
+    """Copy exactly one previously verified, complete ancestry to a new local STORE."""
+
+    def __init__(self, selected, choice, catalog, spelling):
+        marker = selected.browser.commit
+        tip = catalog.nodes.get(marker.operation)
+        chain, missing = catalog.history(marker.operation)
+        if (choice.path != catalog.store or tip is None or missing is not None or tip.marker != marker or
+                str(tip.path) != str(selected.path) or tip.observed != selected.observed or
+                (selected.exact is not None and selected.exact != tip)):
+            raise Rejected("需选择当前 STORE 中已经核验到起点的规范版本；不能用散包、旧列表或缺失父节点")
+        originals = []
+        for parent in reversed(chain):  # never select an updated branch tip
+            node = catalog.nodes.get(parent.operation)
+            if (node is None or node.marker != parent or
+                    str(node.path) != str(choice.path / parent.filename)):
+                raise Rejected("每一代都须来自同一次列表核验的原规范槽")
+            originals.append(node)
+        if not originals or originals[-1] is not tip:
+            raise Rejected("没有当前版本的完整原历史")
+        self.tip, self.originals, self.choice = tip, tuple(originals), choice
+        self.store = None
+        super().__init__(selected, spelling)
+
+    def _approved_rows(self):
+        self.store = self.stack.enter_context(held_store(self.choice.path))
+        if self.store.identity != self.choice.identity:
+            raise Rejected("原归档存储被替换，不能复制历史")
+        self.store_mount = mount_id(self.store.fd, read_proc=self.proc.read)
+        self._bound_source()
+        return {node.marker.filename: (False, node.observed[2], node.sha256) for node in self.originals}
+
+    def _bound_source(self):
+        super()._bound_source()
+        if self.store is None: return
+        self.store.check_store()
+        read = self.proc.read
+        fd = os.open(self.store.path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            if (native_identity(os.fstat(fd), stat.S_IFDIR) != self.choice.identity or
+                    mount_id(fd, read_proc=read) != self.store_mount or
+                    mount_id(self.store.fd, read_proc=read) != self.store_mount or
+                    mount_id(self.source, read_proc=read) != self.store_mount):
+                raise Rejected("原 STORE 已更换挂载或所选归档不在这个原 STORE 上")
+        finally: os.close(fd)
+        if self.choice.identity[0] == self.target_chain[-1][0] and self.store_mount != self.mount:
+            raise Rejected("源 STORE 和本机目的藏在同设备的不同挂载，不能证明互相独立")
+        _distinct_roots((self.store.fd, self.private.parent, self.parent))
+
+    def _describe(self):
+        return (f"原 STORE（只读）：{str(self.store.path)!r}\n"
+                f"固定的末代节点：{self.tip.marker.operation} · 第 {self.tip.marker.generation} 代\n"
+                f"原样复制已核的 {len(self.originals):,} 代及其规范文件名，不追分支头或复制旁支。"
+                "新目录是独立的本机 STORE，可稍后明确选择。不会修改或上传到原 STORE。")
+
+    def _named_original(self, node, fd):
+        if (_generation(os.fstat(fd)) != node.observed or
+                mount_id(fd, read_proc=self.proc.read) != self.store_mount):
+            raise Rejected("原历史归档已替换或迁出所选 STORE 挂载")
+
+    @contextmanager
+    def _entries(self, _reader):
+        # Check original relative names and physical mounts before creating
+        # the private directory. Only one ancestor data FD is open at a time.
+        for node in self.originals:
+            self._exact_leaf(node)
+        yield self, [(node.marker.filename, node) for node in self.originals]
+
+    def _exact_leaf(self, node):
+        fd = os.open(node.marker.filename, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.store.fd)
+        try: self._named_original(node, fd)
+        finally: os.close(fd)
+
+    @contextmanager
+    def open(self, node):
+        if node is self.tip:
+            # The displayed file's original data capability is already held.
+            self._named_original(node, self.source)
+            self._exact_leaf(node)
+            yield SimpleNamespace(read=_read_selected(self.source))
+            self._named_original(node, self.source)
+            self._exact_leaf(node)
+        else:
+            name = node.marker.filename
+            with relative_document(self.store.fd, name) as doc:
+                self._named_original(node, doc.fileno())
+                self._exact_leaf(node)
+                yield doc
+                self._named_original(node, doc.fileno())
+                self._exact_leaf(node)
+
+    def _sealed_tree(self, stage, sink):
+        # These are raw archive files, not a worktree manifest. Several valid
+        # ZIP snapshots can exceed the per-tree logical body budget in total.
+        original = _directory_generation(stage.parent)
+        def names():
+            with os.scandir(stage.parent) as found:
+                got = {entry.name for _, entry in zip(range(len(self.rows) + 1), found)}
+            if got != self.rows.keys(): raise Rejected("本机暂存包含缺失或额外归档")
+        names()
+        for leaf, (_, size, expected) in self.rows.items():
+            with relative_document(stage.parent, leaf, single=True) as doc:
+                def still_named():
+                    fd = os.open(leaf, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=stage.parent)
+                    try:
+                        sink.check(leaf, fd)
+                        sink.check(leaf, doc.fileno())
+                    finally: os.close(fd)
+                still_named()
+                if os.fstat(doc.fileno()).st_size != size or archive_sha(doc) != expected:
+                    raise Rejected("本机暂存未能逐字节读回原历史归档")
+                still_named()
+        names()
+        if _directory_generation(stage.parent) != original:
+            raise Rejected("读回时原本机暂存目录已改变")
+        return original
 
 
 def _directory_generation(fd):

@@ -62,6 +62,10 @@ class ArchivePane(QWidget):
         fl.addLayout(nav)
         self.views.addTab(self.folder, "文件")
         self.history = self.make_table(("节点 ID", "分支", "代", "父节点"), "历史", "查看选中的历史快照")
+        self.copy_history = None
+        if sys.platform == "linux":
+            self.copy_history = button("将当前版本及祖先复制到新本机库…", self.choose_history_copy)
+            self.history.parentWidget().layout().addWidget(self.copy_history)
         self.branches = self.make_table(("分支", "最高观察代", "已核验分支头", "缺失父节点"), "分支", "查看选中的分支头")
         self.comparison = ComparisonPane(owner)
         self.views.addTab(self.comparison, "只读对比")
@@ -94,6 +98,7 @@ class ArchivePane(QWidget):
         self.catalog = None
         self.history.rows.replace(())
         self.branches.rows.replace(())
+        if self.copy_history is not None: self.copy_history.setEnabled(False)
 
     def clear_document(self):
         self.close_search()
@@ -266,6 +271,63 @@ class ArchivePane(QWidget):
 
         submit("正在只读核验归档来源、目标目录和完整字节…", plan.review, review)
 
+    def choose_history_copy(self):
+        selected, store, catalog = self.selection, self.store, self.catalog
+        if (self.copy_history is None or selected is None or store is None or catalog is None or
+                self.owner.pending is not None): return
+        from .member_copy import HistoryCopy
+        def current():
+            return selected is self.selection and store is self.store and catalog is self.catalog
+
+        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
+        name, _ = QFileDialog.getSaveFileName(self, "指定新本机 STORE 的父目录和空缺新名称",
+                                               "local-store", "所有文件 (*)", options=opts)
+        if not name or not current(): return
+        plan = None
+        try:
+            plan = HistoryCopy(selected, store, catalog, name)
+            scratch = QFileDialog.getExistingDirectory(self, "选择本机同挂载、本人独用的已有 0700 暂存目录",
+                                                       "", opts | QFileDialog.Option.ShowDirsOnly)
+            if not scratch or not current():
+                plan.close()
+                return
+            plan.pick_private(scratch)
+        except BaseException as err:
+            if plan is not None: plan.close()
+            if not isinstance(err, Exception): raise
+            self.owner.inform(str(err))
+            return
+
+        def submit(title, call, apply):
+            try:
+                future = self.owner.job(title, call, apply, failed=lambda _error: plan.close())
+                if future is None: plan.close()
+                else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
+            except BaseException:
+                plan.close()
+                raise
+
+        def completed(message):
+            self.owner.inform(f"{message}\n可另行选这个新 STORE，再打开其中的精确末代快照："
+                              f"{str(plan.path / plan.tip.marker.filename)!r}。未改当前 STORE 或工作树。")
+
+        def review(details):
+            try:
+                if (current() and confirm(self, "建立新本机库，不改变原 STORE", details,
+                        attestation="原版本和两个本机父不移动、不改写。本机两处不属于原共享的服务器目录、别名或同步位置；本人独用私处，并同意留下失败材料。",
+                        action_text="复制完整祖先到本机") and current()):
+                    submit("正在从原位置逐份复制、核验原始字节并读回新本机库…",
+                           lambda: plan.run(confirmed=True), completed)
+                else:
+                    plan.close()
+                    self.owner.inform("没有创建本机库或修改原 STORE。")
+            except BaseException:
+                plan.close()
+                raise
+
+        submit("正在核对原 STORE 与所选目录；尚未写入…", plan.review, review)
+
     def choose_store(self):
         name = QFileDialog.getExistingDirectory(self, "选择已有的归档存储目录")
         if name: self.choose_store_path(Path(name))
@@ -327,6 +389,10 @@ class ArchivePane(QWidget):
         chain, missing = self.catalog.history(self.selection.browser.commit.operation)
         self.history.rows.replace(((m.operation, m.branch, str(m.generation), m.parent or "起点"),
                                    self.catalog.select_node(m.operation)) for m in chain)
+        if self.copy_history is not None:
+            tip = self.catalog.nodes.get(self.selection.browser.commit.operation)
+            self.copy_history.setEnabled(missing is None and self.selection.held is not None and
+                tip is not None and str(tip.path) == str(self.selection.path) and tip.observed == self.selection.observed)
         self.owner.inform("历史不完整。缺少原始父节点：" + missing if missing else "已沿原始父节点读到仓库起点。")
 
     def open_row(self, table):
