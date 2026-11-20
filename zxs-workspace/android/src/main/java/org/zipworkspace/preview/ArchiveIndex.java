@@ -2,11 +2,13 @@ package org.zipworkspace.preview;
 
 import android.icu.lang.UCharacter;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
+import java.util.List;
 import java.util.Locale;
 import java.util.TreeMap;
 
@@ -14,6 +16,7 @@ import java.util.TreeMap;
 final class ArchiveIndex {
     static final long MAX_ARCHIVE = (256L << 30) + (32L << 20);
     static final int MAX_CD = 2 << 20, MAX_ENTRIES = 8192, MAX_NODES = 12288;
+    static final int MAX_QUERY = 128; // UTF-16 code units; name search never interprets a path.
     static final long U32 = 0xffffffffL;
     private static final java.util.regex.Pattern DEVICE = java.util.regex.Pattern.compile(
             "CON|PRN|AUX|NUL|CLOCK\\$|CONIN\\$|CONOUT\\$|(?:COM|LPT)[1-9¹²³]");
@@ -47,11 +50,39 @@ final class ArchiveIndex {
             children = folder ? new TreeMap<>() : null;
         }
     }
+    static final class Match {
+        final Item item;
+        final int ordinal; // zero-based among ALL children of the actual parent
+        Match(Item item, int ordinal) { this.item = item; this.ordinal = ordinal; }
+    }
+
     final Item root = new Item("", 0, null, true);
     private final long centralAt;
     private final byte[] central, ending;
     private ArchiveIndex(long centralAt, byte[] central, byte[] ending) {
         this.centralAt = centralAt; this.central = central; this.ending = ending;
+    }
+
+    List<Match> findNames(String query, Runnable check) {
+        if (query.isEmpty() || query.length() > MAX_QUERY)
+            throw new IllegalArgumentException("Search query outside the size limit");
+        ArrayList<Match> results = new ArrayList<>();
+        check.run();
+        findNames(root, query, check, results);
+        check.run();
+        return List.copyOf(results);
+    }
+
+    private static void findNames(Item parent, String query, Runnable check, ArrayList<Match> results) {
+        // The parsed tree is no longer mutated. Build neither a second index
+        // nor path strings for all matches (only the current UI page needs them).
+        int ordinal = 0;
+        for (Item child : parent.children.values()) {
+            check.run();
+            if (child.name.contains(query)) results.add(new Match(child, ordinal));
+            ordinal++;
+            if (child.children != null) findNames(child, query, check, results);
+        }
     }
 
     StoredMember.Result checkMember(MemberSource src, Item file) throws IOException {
@@ -60,9 +91,7 @@ final class ArchiveIndex {
     StoredMember.Result checkMember(MemberSource src, Item file, boolean previewText) throws IOException {
         require(file != null && file.children == null && file.slot != null);
         require(!previewText || (file.bytes >= 0 && file.bytes <= PlainText.LIMIT));
-        Item ancestor = file;
-        while (ancestor.parent != null) ancestor = ancestor.parent;
-        require(ancestor == root); // a row from a former selection is not a capability on this index
+        require(owns(file)); // a row from a former selection is not a capability on this index
         byte[] block = new byte[64 * 1024];
         checkDirectory(src, block);
         byte[] capture = previewText ? new byte[(int)file.bytes] : null;
@@ -73,6 +102,12 @@ final class ArchiveIndex {
         src.check();
         return new StoredMember.Result(result.expected, result.actual, text);
     }
+    boolean owns(Item node) {
+        if (node == null) return false;
+        while (node.parent != null) node = node.parent;
+        return node == root;
+    }
+
     private void checkDirectory(MemberSource src, byte[] block) throws IOException {
         StoredMember.match(src, centralAt, central, block);
         StoredMember.match(src, centralAt + central.length, ending, block);

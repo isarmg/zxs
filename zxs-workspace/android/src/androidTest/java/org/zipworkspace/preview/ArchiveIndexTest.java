@@ -2,12 +2,16 @@ package org.zipworkspace.preview;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.os.CancellationSignal;
+import android.os.OperationCanceledException;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -42,6 +46,48 @@ public final class ArchiveIndexTest {
         assertTrue(root.children.get("空").children.isEmpty());
         assertTrue(read(zip()).root.children.isEmpty());
     }
+    @Test public void nameSearchLocatesSameSpellingInDifferentParentsEvenBeyondTheFirstPage() throws IOException {
+        ArrayList<String> names = new ArrayList<>();
+        for (int i = 100; i < 205; i++) names.add("A/item-" + i);
+        names.addAll(List.of("A/readme[1].txt", "B/readme[1].txt", "C/README[1].TXT",
+                "Empty/", "Implicit/SubName/file"));
+        byte[] packed = zip(names.toArray(new String[0]));
+        ArchiveIndex index = read(packed);
+        List<ArchiveIndex.Match> hits = index.findNames("readme[1]", () -> {});
+        assertEquals(2, hits.size());  // Literal brackets, case-sensitive, not a regex or a path lookup.
+        for (int i = 0; i < 2; i++) {
+            ArchiveIndex.Match hit = hits.get(i);
+            ArchiveIndex.Item parent = index.root.children.get(i == 0 ? "a" : "b");
+            assertSame(parent, hit.item.parent);
+            assertSame(parent.children.get("readme[1].txt"), hit.item);
+            assertSame(new ArrayList<>(parent.children.values()).get(hit.ordinal), hit.item);
+        }
+        assertEquals(105, hits.get(0).ordinal);
+        assertEquals(1, hits.get(0).ordinal / 100);  // The matching member is on the second directory page.
+        assertEquals(0, hits.get(1).ordinal);
+        assertTrue(index.findNames("A/readme", () -> {}).isEmpty());
+        assertEquals("README[1].TXT", index.findNames("README", () -> {}).get(0).item.name);
+        assertFalse(index.findNames("SubName", () -> {}).get(0).item.declared);
+        assertTrue(index.findNames("Empty", () -> {}).get(0).item.children.isEmpty());
+        ArchiveIndex newlySelected = read(packed);  // Even a byte-identical selection has different node identities.
+        assertFalse(newlySelected.owns(hits.get(0).item));
+        assertTrue(index.owns(hits.get(0).item));
+    }
+
+    @Test public void canceledNameSearchReturnsNoPartialSetAndEmptySearchDoesNotListEverything() throws IOException {
+        ArchiveIndex index = read(zip("file-a", "file-b", "file-c"));
+        CancellationSignal signal = new CancellationSignal();
+        int[] checkpoints = {0};
+        assertThrows(OperationCanceledException.class, () -> index.findNames("file", () -> {
+            if (++checkpoints[0] == 3) signal.cancel();  // First matching row was already collected.
+            signal.throwIfCanceled();
+        }));
+        assertThrows(IllegalArgumentException.class, () -> index.findNames("", () -> {}));
+        assertThrows(IllegalArgumentException.class,
+                () -> index.findNames("X".repeat(ArchiveIndex.MAX_QUERY + 1), () -> {}));
+        assertTrue(index.findNames("no-hit", () -> {}).isEmpty());
+    }
+
     @Test public void theIndexNeverAuthenticatesPayloadOrArchiveComment() throws IOException {
         byte[] b = zip("x");
         int body = 30 + (b[26] & 255) + (b[28] & 255); b[body] ^= 0x10;

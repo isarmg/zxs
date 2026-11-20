@@ -10,10 +10,15 @@ import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputFilter;
+import android.text.InputType;
+import android.text.TextUtils;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
 import android.view.WindowInsets;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -22,6 +27,7 @@ import android.view.WindowManager;
 import android.view.textclassifier.TextClassifier;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -40,10 +46,29 @@ public final class ArchiveActivity extends Activity {
     private int generation, page;
     private int requested, nextRequest = 1;
     private TextView state, location;
-    private Button pick, cancel, up, prev, next;
+    private Button pick, cancel, find, up, prev, next;
+    private LinearLayout listHost;
     private ListView list;
     private ArchiveIndex.Item folder;
-    private final ArrayList<ArchiveIndex.Item> visible = new ArrayList<>();
+    private NameSearch search;
+
+    private static final class NameSearch {
+        final PickedDocument picked;
+        List<ArchiveIndex.Match> matches; // null refers only to this pending search, not an empty result.
+        int page;
+        NameSearch(PickedDocument picked) { this.picked = picked; }
+    }
+
+    private static final class DisplayRow {
+        final ArchiveIndex.Item item;
+        final NameSearch request;
+        final ArchiveIndex.Match match;
+        final String title;
+        DisplayRow(ArchiveIndex.Item item, NameSearch request, ArchiveIndex.Match match, String title) {
+            this.item = item; this.request = request; this.match = match; this.title = title;
+        }
+        @Override public String toString() { return title; }
+    }
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -58,24 +83,20 @@ public final class ArchiveActivity extends Activity {
         notice.setText("ZIP 目录预览\n目录只显示声明。点普通文件可核验 CRC-32；不超过 32 KiB 的成员还可校验并查看 UTF-8 纯文本。不会解包或认证快照。");
         body.addView(notice);
         pick = button(body, "选择本机 .zxs 或 Store ZIP", v -> choose());
-        cancel = button(body, "取消读取", v -> {
+        cancel = button(body, "取消本次操作", v -> {
+            if (search != null && search.matches == null) search = null;
             stopJob();
             if (document == null) reset("已取消读取。");
-            else { state.setText("已取消核验，没有结果。"); render(); }
+            else { state.setText("已取消，没有新结果。"); render(); }
         });
-        state = new TextView(this); body.addView(state);
-        location = new TextView(this); body.addView(location);
+        find = button(body, "按名称查找…", v -> askSearch());
+        state = summary(body, 6);
+        location = summary(body, 3);
         LinearLayout nav = new LinearLayout(this); body.addView(nav);
-        up = button(nav, "上一级", v -> enter(folder.parent));
-        prev = button(nav, "上一页", v -> { page--; render(); });
-        next = button(nav, "下一页", v -> { page++; render(); });
-        list = new ListView(this);
-        body.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
-        list.setOnItemClickListener((a, v, pos, id) -> {
-            if (active != null || document == null || pos < 0 || pos >= visible.size()) return;
-            ArchiveIndex.Item row = visible.get(pos);
-            if (row.children != null) enter(row); else ask(document, row);
-        });
+        up = button(nav, "上一级", v -> goUp());
+        prev = button(nav, "上一页", v -> movePage(-1));
+        next = button(nav, "下一页", v -> movePage(1));
+        listHost = body;
         setContentView(body);
         if (saved != null) {
             requested = saved.getInt("picker");
@@ -87,6 +108,37 @@ public final class ArchiveActivity extends Activity {
     private Button button(LinearLayout box, String title, View.OnClickListener listener) {
         Button b = new Button(this); b.setText(title); b.setOnClickListener(listener); box.addView(b); return b;
     }
+    private TextView summary(LinearLayout parent, int lines) {
+        TextView view = new TextView(this);
+        view.setMaxLines(lines);
+        view.setEllipsize(TextUtils.TruncateAt.END);
+        parent.addView(view);
+        return view;
+    }
+
+    private void replaceList(List<DisplayRow> rows, boolean enabled) {
+        // AbsListView can deliver an earlier tap later using a position in
+        // the *current* adapter. A semantic render needs a new ListView.
+        ListView old = list;
+        ListView current = new ListView(this);
+        current.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, rows));
+        current.setEnabled(enabled);
+        current.setSaveEnabled(false);
+        current.setOnItemClickListener((a, view, pos, id) -> {
+            if (a != list || active != null || document == null || decision != null) return;
+            Object shown = a.getItemAtPosition(pos);
+            if (!(shown instanceof DisplayRow)) return;
+            DisplayRow row = (DisplayRow)shown;
+            if (row.match != null) locate(row.request, row.match);
+            else if (search == null) {
+                if (row.item.children != null) enter(row.item); else ask(document, row.item);
+            }
+        });
+        list = current; // Reject the old instance before detaching it from the window.
+        if (old != null) listHost.removeView(old);
+        listHost.addView(current, new LinearLayout.LayoutParams(-1, 0, 1));
+    }
+
     private void stopJob() {
         generation++;
         if (active != null) active.cancel();
@@ -95,6 +147,7 @@ public final class ArchiveActivity extends Activity {
     }
     private void retire() {
         stopJob();
+        search = null;
         if (decision != null) decision.dismiss();
         if (document != null) { document.close(); document = null; }
     }
@@ -106,9 +159,9 @@ public final class ArchiveActivity extends Activity {
         catch (RejectedExecutionException e) { retire(); reset("本次读取未开始，请重新选择。"); }
     }
     private void reset(String message) {
-        folder = null; page = 0; visible.clear(); list.setAdapter(null);
+        folder = null; page = 0; search = null; replaceList(List.of(), false);
         state.setText(message); location.setText("");
-        up.setEnabled(false); prev.setEnabled(false); next.setEnabled(false);
+        find.setEnabled(false); up.setEnabled(false); prev.setEnabled(false); next.setEnabled(false);
         cancel.setVisibility(active == null ? View.GONE : View.VISIBLE);
     }
     private void choose() {
@@ -152,10 +205,99 @@ public final class ArchiveActivity extends Activity {
             if (!posted && resultView != null) resultView.close();
         });
     }
+    private static void appendPath(StringBuilder path, ArchiveIndex.Item row) {
+        if (row.parent != null) {
+            appendPath(path, row.parent);
+            path.append('/').append(row.name);
+        }
+    }
     private static String pathOf(ArchiveIndex.Item row) {
-        String path = "";
-        for (; row.parent != null; row = row.parent) path = "/" + row.name + path;
-        return path.isEmpty() ? "/" : path;
+        StringBuilder path = new StringBuilder();
+        appendPath(path, row);
+        return path.length() == 0 ? "/" : path.toString();
+    }
+
+    private void askSearch() {
+        PickedDocument picked = document;
+        if (picked == null || folder == null || active != null || decision != null) return;
+        EditText query = new EditText(this);
+        query.setSingleLine(true);
+        query.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        query.setFilters(new InputFilter[]{new InputFilter.LengthFilter(ArchiveIndex.MAX_QUERY)});
+        query.setImeOptions(EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+        query.setHint("输入部分名称，区分大小写");
+        query.setSaveEnabled(false);
+        query.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        query.setImportantForContentCapture(View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("查找文件或目录名称")
+                .setMessage("只在本次已读取的归档目录记录中查找，不读取正文。")
+                .setView(query).setNegativeButton("取消", null)
+                .setPositiveButton("查找", (d, which) -> startSearch(picked, query.getText().toString()))
+                .create();
+        showDecision(dialog, query); // Discard the draft on every dismissal.
+    }
+
+    private void startSearch(PickedDocument picked, String query) {
+        if (document != picked || active != null || folder == null) return;
+        if (query.isEmpty()) { state.setText("请先输入要查找的名称片段。"); return; }
+        NameSearch request = new NameSearch(picked);
+        CancellationSignal signal = new CancellationSignal();
+        int ticket = ++generation;
+        search = request; active = signal;
+        state.setText(picked.title + "（仅在目录声明中查找）");
+        render();
+        try {
+            worker.execute(() -> {
+                List<ArchiveIndex.Match> read = null;
+                try { read = picked.index.findNames(query, signal::throwIfCanceled); }
+                catch (RuntimeException ignored) { /* no search terms or paths in failure text */ }
+                final List<ArchiveIndex.Match> matches = read;
+                main.post(() -> finishSearch(request, ticket, signal, matches));
+            });
+        } catch (RejectedExecutionException unavailable) {
+            // A failed in-memory search is not a file/provider failure.
+            finishSearch(request, ticket, signal, null);
+        }
+    }
+
+    private void finishSearch(NameSearch request, int ticket, CancellationSignal signal,
+                              List<ArchiveIndex.Match> matches) {
+        if (search != request || document != request.picked || !current(ticket, signal)) return;
+        active = null;
+        if (matches == null) {
+            search = null;
+            state.setText("未完成名称查找；仍可浏览原目录。");
+        } else {
+            request.matches = matches;
+        }
+        render();
+    }
+
+    private void locate(NameSearch request, ArchiveIndex.Match match) {
+        if (request == null || request != search || document != request.picked || request.matches == null
+                || match.item.parent == null || !document.index.owns(match.item)) return;
+        folder = match.item.parent;  // A real index node: no lookup by the displayed path.
+        page = match.ordinal / PAGE;
+        search = null;
+        state.setText("已定位到所选条目所在页；未打开成员。");
+        render();
+        list.setSelection(match.ordinal % PAGE);
+    }
+
+    private void goUp() {
+        if (active != null || folder == null) return;
+        if (search != null) {
+            search = null;
+            state.setText(document.title + "（目录声明）");
+            render(); // folder and its page were untouched by searching
+        } else enter(folder.parent);
+    }
+
+    private void movePage(int delta) {
+        if (active != null || folder == null) return;
+        if (search == null) page += delta; else search.page += delta;
+        render();
     }
     private void ask(PickedDocument picked, ArchiveIndex.Item row) {
         if (decision != null) return;
@@ -195,7 +337,8 @@ public final class ArchiveActivity extends Activity {
         showDecision(dialog, body);
     }
     private void startIfCurrent(PickedDocument picked, ArchiveIndex.Item row, boolean previewText) {
-        if (document != picked || active != null || folder != row.parent || (previewText && row.bytes > PlainText.LIMIT)) return;
+        if (document != picked || active != null || search != null || folder != row.parent
+                || (previewText && row.bytes > PlainText.LIMIT)) return;
         CancellationSignal signal = new CancellationSignal();
         int ticket = ++generation; active = signal;
         String path = pathOf(row);
@@ -211,41 +354,63 @@ public final class ArchiveActivity extends Activity {
                 if (result == null) {
                     retire(); reset("未取得完整结果：成员布局不符、读取中断、文件已变或授权不可用。请重新选择。");
                 } else {
-                    state.setText(picked.title + "\n" + path + "（" + row.bytes + " B）\n"
-                            + (result.matches() ? "该项 CRC-32 与 ZIP 声明相符。" : "该项 CRC-32 与 ZIP 声明不符。")
+                    boolean textAllowed = previewText && result.matches() && folder == row.parent && search == null;
+                    String verdict = (result.matches() ? "该项 CRC-32 与 ZIP 声明相符。" : "该项 CRC-32 与 ZIP 声明不符。")
                             + String.format(Locale.ROOT, "\n声明 %08X，实读 %08X。", result.expected, result.actual)
-                            + " 不是签名，也不证明整包或其他项。");
+                            + "\n不是签名，也不证明整包或其他项。";
+                    if (textAllowed && result.text == null) verdict += "\n不是此预览支持的 UTF-8 纯文本，不显示正文。";
+                    state.setText(verdict + "\n" + path + "（" + row.bytes + " B）\n" + picked.title);
                     render();
-                    if (previewText && result.matches() && folder == row.parent) {
-                        if (result.text != null) showText(path, result.text);
-                        else state.append("\n不是此预览支持的 UTF-8 纯文本，不显示正文。");
-                    }
+                    if (textAllowed && result.text != null) showText(path, result.text);
                 }
             });
         });
     }
     private void enter(ArchiveIndex.Item item) {
         if (item == null || item.children == null) return;
-        folder = item; page = 0; render();
+        search = null; folder = item; page = 0; render();
     }
+    private static DisplayRow displayed(ArchiveIndex.Item item, NameSearch request, ArchiveIndex.Match match) {
+        String name = match == null ? item.name : pathOf(item);
+        return new DisplayRow(item, request, match,
+                item.children != null ? "目录　" + name : name + "　" + item.bytes + " B");
+    }
+
     private void render() {
-        int count = folder.children.size(), pages = Math.max(1, (count + PAGE - 1) / PAGE);
-        page = Math.max(0, Math.min(page, pages - 1));
-        String path = pathOf(folder);
-        location.setText(path + "   " + (count == 0 ? "空目录" : (page + 1) + "/" + pages + " 页"));
-        visible.clear(); ArrayList<String> titles = new ArrayList<>();
-        int i = 0;
-        for (ArchiveIndex.Item row : folder.children.values()) {
-            if (i++ < page * PAGE) continue;
-            if (visible.size() == PAGE) break;
-            visible.add(row);
-            titles.add(row.children != null ? "目录　" + row.name : row.name + "　" + row.bytes + " B");
+        NameSearch request = search;
+        List<ArchiveIndex.Match> matches = request == null || request.matches == null ? List.of() : request.matches;
+        int count = request == null ? folder.children.size() : matches.size();
+        int pages = Math.max(1, (count + PAGE - 1) / PAGE);
+        int shownPage = Math.max(0, Math.min(request == null ? page : request.page, pages - 1));
+        String bounds = (shownPage + 1) + "/" + pages + " 页";
+        ArrayList<DisplayRow> rows = new ArrayList<>();
+        int start = shownPage * PAGE;
+        if (request != null) {
+            request.page = shownPage;
+            if (request.matches == null) location.setText("正在查找名称…");
+            else if (count == 0) location.setText("没有匹配的文件或目录名称。");
+            else location.setText("名称匹配 " + count + " 项 · " + bounds);
+            for (int i = start; i < Math.min(start + PAGE, count); i++) {
+                ArchiveIndex.Match match = matches.get(i);
+                rows.add(displayed(match.item, request, match));
+            }
+        } else {
+            page = shownPage;
+            location.setText(pathOf(folder) + "   " + (count == 0 ? "空目录" : bounds));
+            int i = 0;
+            for (ArchiveIndex.Item item : folder.children.values()) {
+                if (i++ < start) continue;
+                if (rows.size() == PAGE) break;
+                rows.add(displayed(item, null, null));
+            }
         }
-        list.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, titles));
         boolean idle = active == null;
-        list.setEnabled(idle); cancel.setVisibility(idle ? View.GONE : View.VISIBLE);
-        up.setEnabled(idle && folder.parent != null); prev.setEnabled(idle && page > 0);
-        next.setEnabled(idle && page + 1 < pages);
+        replaceList(rows, idle);
+        find.setEnabled(idle); cancel.setVisibility(idle ? View.GONE : View.VISIBLE);
+        up.setText(request == null ? "上一级" : "返回目录");
+        up.setEnabled(idle && (request != null || folder.parent != null));
+        prev.setEnabled(idle && shownPage > 0);
+        next.setEnabled(idle && shownPage + 1 < pages);
     }
     @Override protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
