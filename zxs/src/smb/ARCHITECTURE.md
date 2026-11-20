@@ -104,6 +104,12 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 整批通过后仅能按顺序短借同一原消息和原会话，并在发给业务前逐项重核原登记、连接和凭据代。接线方在实际使用／提交时仍须终验，不能长期保存布尔结果；不把全局或凭据锁带入网络／存储。合法消费编号但载荷计费不足的成员没有业务票，保留成员级参数错误；后续不相关成员仍独立，相关链保留前件失败而不虚构 Tree／Open 或统一错误码。[相关链执行](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1)必须用紧邻命令的真实处理结果；验签使用的继承 SID 不发共享权限、Root/FILE 权限或 MaximalAccess。当前不派发命令、不出普通 SMB 回复、也不做 CANCEL；遗弃未结的应答账会关闭原连接。`src/test/smb/ordinary.rs` 的公开合成源例从同一次协商、挑战和签名末包进入此门，没有执行测试或实机。
 
+## 首个 TREE_CONNECT 入口（只验请求，不发树）
+
+[MS-SMB2 §2.2.9](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/832d2130-22e8-4afb-aafd-b30bb0901798) 的名称字段以本成员头为原点；范围不能借下一复合成员的字节。只接受有界、无 NUL 的 UTF-16LE 普通 UNC `\\服务器\ZXS`；ASCII 共享名不分大小写，盘和文件名规则不变。拒绝超限或确定非法的普通 ASCII DNS 标签；短 NetBIOS 和非 ASCII 拼写仍交实际可信别名／共享作用域核对，不改写名称、不进行 DNS。不重新解释集群重连、请求扩展、DFS 或相关后件；普通盘共享无重定向，客户端能接受重定向的提示不授能力。同一已支付、整批已验签的 `VerifiedMember` 保留在每个结果里，重核原会话代。字段非法、共享名不符、会话失效各有独立失败域，不拿一个假 `TreeId` 或默认状态代替；本片不发包。活的 3.1.1 非访客／匿名会话缺少应有的明文签名时，将来接线须由原连接按 [§3.3.5.7](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/652e0c14-5014-4470-999d-b174d7b2da87) 断连，不会有这个已验成员。
+
+共享授权还缺真实 Core 统一根发行口。届时 `TreeConnect.MaximalAccess` 应来自该主体在共享文件策略下的权限上限；不能拿虚拟根本身不许增删，就把整个有 RW 子盘的共享描述成只读。[原生 macOS 的挂载逻辑](https://github.com/apple-oss-distributions/SMBClient/blob/99da2d9a4bbe17cde3cee382ad3edc16e25f5535/kernel/smbfs/smbfs_vfsops.c#L1444-L1454) 也会据此及卷级只读标志决定整个挂载是否只读。但共享上限不授子盘、目录或文件访问：RO 子盘不能写，回收子树只读加经业务验权的同树恢复，真实写入仍逐操作核当前 Core 盘模式和原代；切回 RW 也不复活失效的旧写票。未发布共享上限、对象 `MxAc`、共享表或成功应答。合成源例只证明该形状拒绝把 RW、RO、回收当成另一共享或 TREE_CONNECT 的后缀；混合授权仍须真实适配后的验收。
+
 ## 文件 I/O 请求与原打开边界（未接线）
 
 [READ](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/21e8b343-34e9-4fca-8d93-03dd2d3e961e) 和 [CLOSE](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/f2b4183a-29c2-4fc0-a5de-fe290408f68c) 从各自命令取得范围或关闭意图；普通引用携两半 SMB2_FILEID，关联引用只继承同一链紧邻前件的已证实 ID，不能以客户端填入的另一组 ID 或最近打开回退。实际入口仍须验签、验 credits 与当前连接／会话／树，再以两半与原代次匹配唯一真实 OPEN；本片没有认证发行者或第二张路由表。后端入口只接已成功绑定的 Held，不收线上的 FileId、路径或替代对象。

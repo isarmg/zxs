@@ -142,3 +142,18 @@ fn two_unrelated_members_use_their_distinct_real_sessions_on_one_owner() {
     }
     assert!(batch.next().unwrap().is_none());
 }
+
+/// Borrow the real first TREE_CONNECT for a source-only backend fixture.
+/// The callback neither constructs a member nor can retain it past the batch.
+pub(in crate::smb) fn with_tree_member(revoke: bool, check: impl FnOnce(VerifiedMember<'_, '_>)) {
+    let srv = provider();
+    let mut connection = connected_as(&srv, false).unwrap();
+    assert_eq!(publish_at(&mut connection, 1), 1);
+    let bytes = frame(&packet(3, 3, 1, false, 0, FIRST[0]));
+    let raw = parsed(&bytes);
+    let paid = connection.receive(&raw).unwrap();
+    let Admission::Ready(mut batch) = paid.preflight(&mut connection) else { panic!("signed fixture"); };
+    let Some(Step::Verified(member)) = batch.next().unwrap() else { panic!("first TREE_CONNECT"); };
+    if revoke { srv.run.verifier.as_ref().unwrap().fixture_revoke(); }
+    check(member);
+}

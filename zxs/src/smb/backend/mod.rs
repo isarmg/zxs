@@ -8,6 +8,7 @@
 //! other opens; a lock-free guess is not evidence. MS-SMB2 2.2.13 requires
 //! ignoring the wire FILE_DISALLOW_EXCLUSIVE option, not forwarding it as a local flag.
 pub(in crate::smb) mod path;
+pub(in crate::smb) mod tree_connect;
 mod query;
 mod io;
 pub(super) use io::{CloseCompletion, FlushCompletion, ReadCompletion, ReadFault, WriteCompletion, WriteFault};

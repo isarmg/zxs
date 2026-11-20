@@ -1,7 +1,7 @@
 //! Only the bounded name fields of an already separated SMB2 request.
 //! These views do not validate all CREATE contexts, grant an open, verify
 //! signatures, resolve a related FileId, or authorize a rename.
-use super::{bytes, field, message::Message, u16le, u32le, u64le};
+use super::{bytes, field, message::{Message, RELATED, Routing}, u16le, u32le, u64le};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum FieldError { WrongCommand, Malformed, RenameInformationLength, Unsupported }
@@ -19,10 +19,41 @@ pub(in crate::smb) struct RenameNameField<'a> {
     pub(in crate::smb) replace_if_exists: bool,
 }
 
+pub(in crate::smb) const TREE_SERVER_UNITS: usize = 255;
+pub(in crate::smb) const TREE_SHARE_UNITS: usize = 80;
+const TREE_RECONNECT: u16 = 1;
+const TREE_REDIRECT: u16 = 2;
+const TREE_EXTENSION: u16 = 4;
+const REPLAY: u32 = 0x2000_0000;
 const DFS: u32 = 0x1000_0000;
 const OPEN_BY_FILE_ID: u32 = 0x2000;
 
 impl<'a> Message<'a> {
+    /// MS-SMB2 2.2.9: a plain UNC field of one TREE_CONNECT. The caller
+    /// still needs the authenticated member and the real share resolver.
+    pub(in crate::smb) fn tree_connect_name_field(&self) -> Result<&'a [u8], FieldError> {
+        use FieldError::*;
+        const FIXED: usize = 72;
+        const MAX_NAME_BYTES: usize = (2 + TREE_SERVER_UNITS + 1 + TREE_SHARE_UNITS) * 2;
+        if self.header.command != 3 { return Err(WrongCommand); }
+        // A related request requires dispatch with its actual predecessor;
+        // no such contract is implemented for a new TREE_CONNECT yet.
+        if self.header.flags & (RELATED | DFS | REPLAY) != 0 { return Err(Unsupported); }
+        if self.header.routing != (Routing::Sync { tree: 0 }) { return Err(Malformed); }
+        let p = self.raw;
+        if u16le(p, 64).map_err(|_| Malformed)? != 9 { return Err(Malformed); }
+        let flags = u16le(p, 66).map_err(|_| Malformed)?;
+        if flags & !(TREE_RECONNECT | TREE_REDIRECT | TREE_EXTENSION) != 0 { return Err(Malformed); }
+        // An advisory redirect bit does not request a cluster connection.
+        // Neither remoted identity nor reconnect is implemented; never
+        // reinterpret an extension's bytes as the ordinary path.
+        if flags & (TREE_RECONNECT | TREE_EXTENSION) != 0 { return Err(Unsupported); }
+        let at = usize::from(u16le(p, 68).map_err(|_| Malformed)?);
+        let n = usize::from(u16le(p, 70).map_err(|_| Malformed)?);
+        if at < FIXED || n == 0 || n % 2 != 0 || n > MAX_NAME_BYTES { return Err(Malformed); }
+        bytes(p, at, n).map_err(|_| Malformed)
+    }
+
     /// MS-SMB2 2.2.13. Offsets start at this message's header, not the
     /// Direct TCP frame or the first member of a compound.
     pub(in crate::smb) fn create_name_fields(&self) -> Result<CreateNameField<'a>, FieldError> {
