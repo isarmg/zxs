@@ -14,14 +14,16 @@ static inline uint32_t zxs_smb_uncached_caps(uint32_t caps)
 #define ZXS_CREATE_MXAC_QUERY 2u
 #define ZXS_CREATE_REPLY_CONTEXTS (ZXS_CREATE_QFID_QUERY|ZXS_CREATE_MXAC_QUERY)
 
-/* Admit only bounded and independently sized contexts. A server without
- * caching or durable opens ignores the initial RqLs/DHnQ hints; reconnect,
+/* Admit only bounded and independently sized contexts. AAPL's initial
+ * server query detects other SMB servers by the absence of an AAPL reply;
+ * it does not request file capabilities. A server without caching or durable opens ignores the initial RqLs/DHnQ hints; reconnect,
  * replay and all other contexts are a different capability. QFid/MxAc
  * select fixed responses for the exact original FSP. */
 static inline bool zxs_smb_uncached_open(uint8_t level,DATA_BLOB context,uint8_t *queries)
 {
 	const uint8_t *p=context.data;
 	size_t n=context.length;
+	const unsigned aapl=16;
 	unsigned seen=0;
 	*queries=0;
 	if(level!=SMB2_OPLOCK_LEVEL_NONE && level!=SMB2_OPLOCK_LEVEL_II &&
@@ -42,6 +44,7 @@ static inline bool zxs_smb_uncached_open(uint8_t level,DATA_BLOB context,uint8_t
 		else if(memcmp(p+16,"RqLs",4)==0 && level==SMB2_OPLOCK_LEVEL_LEASE &&
 			(len==0x20 || len==0x34)){bit=4;}
 		else if(memcmp(p+16,"DHnQ",4)==0 && level==SMB2_OPLOCK_LEVEL_BATCH && len==16){bit=8;}
+		else if(memcmp(p+16,"AAPL",4)==0 && len==24){bit=aapl;}
 		else{return false;}
 		if((seen&bit)!=0)return false;
 		seen|=bit;
@@ -49,6 +52,9 @@ static inline bool zxs_smb_uncached_open(uint8_t level,DATA_BLOB context,uint8_t
 		if(len!=0){
 			off=SVAL(p,10);
 			if(off<24 || (off&7)!=0 || off>span || len>span-off)return false;
+			/* Only the initial Apple server query: four bytes each for
+			 * command and reserved, then two ignored u64 bitmaps. */
+			if(bit==aapl && (IVAL(p,off)!=1 || IVAL(p,off+4)!=0))return false;
 			last=off+len;
 		}
 		if(span-last>7)return false;

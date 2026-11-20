@@ -550,6 +550,26 @@ done:
 	TALLOC_FREE(f);TALLOC_FREE(d);return ok;
 }
 
+static bool native_apple_probe_is_not_negotiation(void)
+{
+	uint8_t wire[72]={0},out[ZXS_MXAC_REPLY_BYTES],queries=UINT8_MAX;
+	DATA_BLOB response={.data=out,.length=sizeof(out)};
+	create_context_spelling(wire,48,"AAPL",24,24);
+	SIVAL(wire,24,1);SBVAL(wire,32,7);SBVAL(wire,40,0x3f);
+	create_context_spelling(wire+48,0,"MxAc",0,0);
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,sizeof(wire)),&queries) ||
+	   queries!=ZXS_CREATE_MXAC_QUERY ||
+	   !zxs_create_context_response(response,queries,0,SEC_FILE_READ_ATTRIBUTE) ||
+	   IVAL(out,0)!=0 || memcmp(out+16,"MxAc",4)!=0)return false;
+	SIVAL(wire,24,2); /* Different Apple command is not a server-name probe. */
+	if(zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,sizeof(wire)),&queries))return false;
+	SIVAL(wire,24,1);SIVAL(wire,0,0);
+	if(!zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,48),&queries) ||
+	   queries!=0 || zxs_create_context_size(queries)!=0)return false;
+	SIVAL(wire,28,1);
+	return !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,48),&queries);
+}
+
 int main(void)
 {
 	const char *file[] = {"zxs_file", NULL};
@@ -565,7 +585,8 @@ int main(void)
 	    zxs_smb_namespace_name("ZXS\\Docs")) {
 		return 1;
 	}
-	if (!ipc_only_pipe_policy() || !uncached_create_policy() || !native_query_file_number() || conn == NULL ||
+	if (!ipc_only_pipe_policy() || !uncached_create_policy() || !native_query_file_number() ||
+	    !native_apple_probe_is_not_negotiation() || conn == NULL ||
 	    zxs_file_vfs_route(3,1,false,false,false,file,false) != ZXS_VFS_FILE ||
 	    zxs_file_vfs_route(1,1,true,false,false,NULL,false) != ZXS_VFS_IPC ||
 	    zxs_file_vfs_route(3,1,true,false,false,NULL,false) != ZXS_VFS_REJECT ||
