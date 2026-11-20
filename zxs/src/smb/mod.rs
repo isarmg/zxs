@@ -2,6 +2,8 @@
 //! The existing server's startup, credentials and workers are not wired here.
 #[allow(dead_code, reason = "input layer is staged before the network runtime")]
 mod wire;
+#[allow(dead_code, reason = "share votes are staged before real storage-open integration")]
+mod backend;
 
 #[cfg(test)]
 #[path = "../test/smb/mod.rs"]
