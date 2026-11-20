@@ -41,6 +41,48 @@ final class DirectoryIndexTests: XCTestCase {
         XCTAssertEqual(r.children?["空"]?.children?.count, 0)
         XCTAssertEqual(try read(zip([])).root.children?.count, 0)
     }
+    func testNameMatchesPreserveSameSpellingInSeparateParentsAndActualSecondPage() throws {
+        var names = (100..<205).map { "A/item-\($0)" }
+        names += ["A/readme[1].txt", "B/readme[1].txt", "C/README[1].TXT", "空目录/", "隐式/下一级/file"]
+        let b = zip(names, reverse: true), index = try read(b)
+        let hits = try index.findNames("readme[1]", check: {})
+        XCTAssertEqual(hits.map(\.path), ["/A/readme[1].txt", "/B/readme[1].txt"])
+        XCTAssertEqual(hits.map(\.ordinal), [105, 0])
+        XCTAssertEqual(hits[0].ordinal / 100, 1)
+        for hit in hits {
+            let rows = try XCTUnwrap(index.originalParentRows(for: hit))
+            XCTAssertTrue(rows[hit.ordinal] === hit.member)
+            XCTAssertTrue(rows[hit.ordinal] === hit.parents.last?.children?["readme[1].txt"])
+        }
+        XCTAssertEqual(try index.findNames("README", check: {}).map(\.path), ["/C/README[1].TXT"])
+        XCTAssertTrue(try index.findNames("A/readme", check: {}).isEmpty)  // name fragment, not a path
+        XCTAssertEqual(try index.findNames("空目录", check: {}).first?.member.children?.count, 0)
+        XCTAssertEqual(try index.findNames("下一级", check: {}).first?.member.explicit, false)
+        let replacement = try read(b)  // Same ZIP bytes do not restore former view/node identity.
+        XCTAssertNil(replacement.originalParentRows(for: hits[0]))
+        let wrongLineage = DirectoryIndex.NameMatch(parents: [index.root, hits[1].parents[1]],
+            member: hits[0].member, ordinal: hits[1].ordinal)
+        XCTAssertNil(index.originalParentRows(for: wrongLineage))
+    }
+
+    func testNameSearchIsLiteralBoundedAndDoesNotReturnPartialResultsOnCancellation() throws {
+        let max = String(repeating: "a", count: DirectoryIndex.maxSearchUnits)
+        let index = try read(zip(["é", "file-a", "file-b", "file-c", max]))
+        XCTAssertEqual(try index.findNames("é", check: {}).first?.member.name, "é")
+        XCTAssertTrue(try index.findNames("e\u{301}", check: {}).isEmpty) // not Swift String canonical equality
+        XCTAssertTrue(try index.findNames("É", check: {}).isEmpty)
+        XCTAssertEqual(try index.findNames(max, check: {}).count, 1)
+        XCTAssertThrowsError(try index.findNames(max + "a", check: {}))
+        XCTAssertThrowsError(try index.findNames("", check: {}))
+        var checks = 0
+        XCTAssertThrowsError(try index.findNames("file") {
+            checks += 1
+            if checks == 4 { throw PreviewError.cancelled } // Already found file-a, yet no partial answer.
+        }) { error in
+            guard case PreviewError.cancelled = error else { return XCTFail("unexpected result") }
+        }
+    }
+
     func testIndexDoesNotAuthenticateBody() throws {
         var b = zip(["x"])
         b[31] ^= 0x40

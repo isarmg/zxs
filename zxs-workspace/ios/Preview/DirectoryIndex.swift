@@ -31,12 +31,58 @@ fileprivate final class PhysicalSlot {
 struct DirectoryIndex {
     static let maxSize = (256 << 30) + (32 << 20)
     static let maxDirectory = 2 << 20
+    static let maxSearchUnits = 128
     static let u32max = 0xffff_ffff
     let root = Member("")
     private var nameBytes = 0, nodes = 0, total = 0
     private var centralAt = 0, central: [UInt8] = [], ending: [UInt8] = []
     // Actual explicit file objects from this observation only; no pathname lookup on a later selection.
     private var files = Set<ObjectIdentifier>()
+
+    struct NameMatch {
+        let parents: [Member]  // original root through the containing directory
+        let member: Member
+        let ordinal: Int       // position among all siblings, not just the matches
+
+        var path: String {
+            "/" + (parents.dropFirst().map(\.name) + [member.name]).joined(separator: "/")
+        }
+    }
+
+    static func orderedChildren(of directory: Member) -> [Member] {
+        directory.children?.values.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) } ?? []
+    }
+
+    func findNames(_ query: String, check: () throws -> Void) throws -> [NameMatch] {
+        try requirePreview(!query.isEmpty && query.utf16.count <= Self.maxSearchUnits)
+        var found: [NameMatch] = []
+        var parents: [Member] = []
+        func visit(_ directory: Member) throws {
+            try check()
+            parents.append(directory)
+            defer { parents.removeLast() }
+            for (ordinal, member) in Self.orderedChildren(of: directory).enumerated() {
+                try check()
+                if (member.name as NSString).range(of: query, options: .literal).location != NSNotFound {
+                    found.append(NameMatch(parents: parents, member: member, ordinal: ordinal))
+                }
+                if member.children != nil { try visit(member) }
+            }
+        }
+        try visit(root)
+        try check()
+        return found
+    }
+
+    func originalParentRows(for match: NameMatch) -> [Member]? {
+        guard match.parents.first === root, let last = match.parents.last else { return nil }
+        for (parent, child) in zip(match.parents, match.parents.dropFirst()) {
+            guard parent.children?.values.contains(where: { $0 === child }) == true else { return nil }
+        }
+        let ordered = Self.orderedChildren(of: last)
+        guard ordered.indices.contains(match.ordinal), ordered[match.ordinal] === match.member else { return nil }
+        return ordered
+    }
 
     func checkMember(_ file: Member, previewText: Bool = false, check: () throws -> Void,
                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
