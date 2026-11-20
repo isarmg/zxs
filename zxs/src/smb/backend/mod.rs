@@ -191,14 +191,19 @@ impl<'s, Q: OriginalRequest> Pending<'s, '_, Q> {
             drop(held); // close the core handle before releasing its vote
             return Err(e);
         }
-        Ok(Held { original: held, _slot: self.slot, grant: self.planned.grant })
+        Ok(Held { original: held, _slot: self.slot, grant: self.planned.grant, root_position: None })
     }
 }
 
 /// Declaration order matters: drop the actual storage handle before the vote.
 /// There is no unpair, publish-by-ID, auto-flush, or automatic history commit.
 #[must_use = "dropping the held pair closes the original and releases its share vote"]
-struct Held<'s, H> { original: H, _slot: Slot<'s>, grant: Grant }
+struct Held<'s, H> {
+    original: H,
+    _slot: Slot<'s>,
+    grant: Grant,
+    root_position: Option<query::root::Position>,
+}
 
 #[cfg(test)]
 #[path = "../../test/smb/backend_open.rs"]

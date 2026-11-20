@@ -1,5 +1,6 @@
-//! Read-mount query inputs and one response's record budget. Nothing here
-//! enumerates a Core object, issues a cursor, or builds a success reply.
+//! Query input, root selection and one response's record budget. The only
+//! source of rows is the original authorized object; no reply is sent here.
+pub(super) mod root;
 use super::{Held, Object};
 use crate::{display, smb::wire::query_fields::DirectoryQuery};
 
@@ -86,6 +87,49 @@ impl Pattern {
             }
         }))
     }
+
+    fn matches_root(&self, name: &str) -> bool {
+        match self {
+            Self::All => true,
+            // ZXS's virtual namespace starts at its share root. There is no
+            // host parent or fabricated "."/".." member to enumerate.
+            Self::Current | Self::Parent => false,
+            Self::Exact(want) => want.as_str() == name,
+            Self::Expression(want) => matches_expression(want, name),
+        }
+    }
+}
+
+// MS-FSA 2.1.4.4: run on UTF-16 code units with ZXS's exact case and no
+// short-name aliases. Two bounded rows of suffix states, no backtracking.
+// Both inputs were bounded by the request/display grammar.
+fn matches_expression(pattern: &str, name: &str) -> bool {
+    let mut expression = [0u16; display::MAX];
+    let mut words = [0u16; display::MAX];
+    let (plen, nlen) = (pattern.encode_utf16().count(), name.encode_utf16().count());
+    if plen > expression.len() || nlen > words.len() || nlen == 0 { return false; }
+    for (dst, unit) in expression.iter_mut().zip(pattern.encode_utf16()) { *dst = unit; }
+    for (dst, unit) in words.iter_mut().zip(name.encode_utf16()) { *dst = unit; }
+    const DOT: u16 = b'.' as u16;
+    let last_dot = words[..nlen].iter().rposition(|&w| w == DOT);
+    let mut suffix = [false; display::MAX + 1];
+    suffix[nlen] = true;
+    for &op in expression[..plen].iter().rev() {
+        let mut current = [false; display::MAX + 1];
+        current[nlen] = matches!(op, 0x2a | 0x3c | 0x3e | 0x22) && suffix[nlen];
+        for n in (0..nlen).rev() {
+            current[n] = match op {
+                0x2a => suffix[n] || current[n + 1], // *
+                0x3f => suffix[n + 1],              // ?
+                0x3c => suffix[n] || (last_dot != Some(n) && current[n + 1]), // DOS_STAR
+                0x3e => suffix[if words[n] == DOT { n } else { n + 1 }],     // DOS_QM
+                0x22 => words[n] == DOT && suffix[n + 1],                   // DOS_DOT
+                w => words[n] == w && suffix[n + 1],
+            };
+        }
+        suffix = current;
+    }
+    suffix[0]
 }
 
 // Independent cap on records in one SMB reply. Core's own page/cursor and

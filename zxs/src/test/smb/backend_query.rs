@@ -289,3 +289,191 @@ fn single_and_full_size_queries_both_obey_record_cap() {
         assert_eq!((page.bytes(), page.records()), (limit * 96, limit));
     }
 }
+
+
+mod root_pages {
+    use super::*;
+    use crate::smb::backend::{Facts, Grant, Held, OpenCoordinator, OriginalRequest, ParentWrite, Share,
+        query::root::{Child, Fault, OriginalNamespace, RootPage, Selection}};
+    use std::{cell::Cell, io, num::NonZeroUsize, rc::Rc};
+
+    #[derive(Default)]
+    struct Observe { calls: Cell<usize>, denied: Cell<bool> }
+    struct FixtureRoot { rows: Vec<(String, u16)>, observe: Rc<Observe> }
+
+    impl OriginalNamespace for FixtureRoot {
+        type Metadata = u16; // a synthetic marker, never an emitted FileId
+        fn root_projection(&self) -> io::Result<Vec<Child<u16>>> {
+            self.observe.calls.set(self.observe.calls.get() + 1);
+            if self.observe.denied.get() { return Err(io::ErrorKind::PermissionDenied.into()); }
+            Ok(self.rows.iter().map(|(name, metadata)| Child { name: name.clone(), metadata: *metadata }).collect())
+        }
+    }
+
+    struct Intent(Facts);
+    impl OriginalRequest for Intent {
+        type Held = FixtureRoot;
+        type Error = ();
+        fn recheck(&self, _: &FixtureRoot) -> Result<Facts, ()> { Ok(self.0) }
+    }
+
+    fn coordinator() -> OpenCoordinator { OpenCoordinator::new(NonZeroUsize::new(16).unwrap()) }
+    fn pool() -> PoolId { PoolId([1; 16]) }
+    fn opened<'c>(owner: &'c OpenCoordinator, object: Object, access: u32, rows: &[(&str, u16)])
+        -> (Held<'c, FixtureRoot>, Rc<Observe>)
+    {
+        let observe = Rc::new(Observe::default());
+        let source = FixtureRoot { rows: rows.iter().map(|(n, m)| (String::from(*n), *m)).collect(),
+            observe: Rc::clone(&observe) };
+        let facts = Facts { object, grant: Grant::from_effective(access).unwrap(), parent_write: ParentWrite::Denied };
+        let req = Intent(facts);
+        let pending = owner.reserve(&req, facts, Share::from_bits(7).unwrap()).unwrap();
+        (pending.bind(source).unwrap(), observe)
+    }
+
+    fn page<'a>(open: &'a mut Held<'_, FixtureRoot>, flags: u8, output: u32, room: usize, pattern: &str)
+        -> Result<RootPage<'a, u16>, Fault>
+    {
+        let frame = framed(&[&directory(12, flags, output, &utf16(pattern))]);
+        let batch = parsed(&frame);
+        let q = batch.messages()[0].query_directory(MAX_TX).unwrap();
+        open.prepare_root_query(&q, room)
+    }
+
+    fn names<'p>(page: &'p RootPage<'_, u16>, end: bool) -> Vec<(&'p str, u16, usize)> {
+        let Selection::Rows { entries, exhausted, .. } = page.output() else { panic!("expected real selected rows"); };
+        assert_eq!(*exhausted, end);
+        entries.iter().map(|e| (e.child.name.as_str(), e.child.metadata, e.space.offset)).collect()
+    }
+
+    #[test]
+    fn only_returned_prefix_advances_the_one_position_and_denial_is_not_end() {
+        let owner = coordinator();
+        let (mut open, observe) = opened(&owner, Object::Namespace(pool()), 1,
+            &[("A", 11), ("bbbbbbbb", 44), ("z", 99), ("盘", 222)]);
+
+        let first = page(&mut open, 0, 30, 4096, "*").unwrap();
+        assert_eq!(names(&first, false), [("A", 11, 0)]);
+        assert!(matches!(first.output(), Selection::Rows { bytes: 14, .. }));
+        drop(first); // failed, cancelled or unsent reply
+        let first = page(&mut open, 0, 30, 4096, "*").unwrap();
+        assert_eq!(names(&first, false), [("A", 11, 0)]);
+        first.written_for_fixture();
+
+        observe.denied.set(true);
+        assert!(matches!(page(&mut open, 2, 64, 4096, ""), Err(Fault::Original(e))
+            if e.kind() == io::ErrorKind::PermissionDenied));
+        observe.denied.set(false);
+        // A continuation cannot replace the original pattern (the supplied
+        // value is ignored) and starts at the first NOT returned member.
+        let second = page(&mut open, 2, 64, 4096, "z").unwrap();
+        assert_eq!(names(&second, false), [("bbbbbbbb", 44, 0)]);
+        second.written_for_fixture();
+        let last = page(&mut open, 0, 30, 4096, "").unwrap();
+        assert_eq!(names(&last, true), [("z", 99, 0), ("盘", 222, 16)]);
+        last.written_for_fixture();
+        let end = page(&mut open, 0, 30, 4096, "").unwrap();
+        assert!(matches!(end.output(), Selection::NoMatch { first_query: false }));
+        assert_eq!(observe.calls.get(), 6);
+    }
+
+    #[test]
+    fn search_scope_restarts_only_on_the_same_open_and_retains_exact_case() {
+        let owner = coordinator();
+        let (mut open, _) = opened(&owner, Object::Namespace(pool()), 1,
+            &[("A.txt", 1), ("B.abc.TXT", 2), ("Z", 3), ("a.txt", 4), ("e\u{301}", 5), ("é", 6), ("𐐀档", 7)]);
+        let first = page(&mut open, 0, 256, 4096, "a.txt").unwrap();
+        assert_eq!(names(&first, true), [("a.txt", 4, 0)]);
+        first.written_for_fixture();
+        let other = page(&mut open, 0, 256, 4096, "B*").unwrap();
+        assert!(matches!(other.output(), Selection::NoMatch { first_query: false }));
+        drop(other);
+
+        let restart = page(&mut open, 1, 256, 4096, "").unwrap();
+        assert_eq!(names(&restart, true), [("a.txt", 4, 0)]);
+        drop(restart);
+        let reopen = page(&mut open, 16, 256, 4096, "<.TXT").unwrap();
+        assert_eq!(names(&reopen, true), [("B.abc.TXT", 2, 0)]);
+        reopen.written_for_fixture();
+        let restart = page(&mut open, 1, 256, 4096, "").unwrap();
+        assert_eq!(names(&restart, true), [("B.abc.TXT", 2, 0)]);
+        drop(restart);
+
+        for (pattern, name, marker) in [
+            ("Z>>\"", "Z", 3),
+            ("B>.abc.TXT", "B.abc.TXT", 2), // > moves past the pattern token, not the period
+            ("??档", "𐐀档", 7),             // two UTF-16 units before 档
+            ("e\u{301}", "e\u{301}", 5),
+            ("é", "é", 6),
+        ] {
+            let res = page(&mut open, 16, 256, 4096, pattern).unwrap();
+            assert_eq!(names(&res, true), [(name, marker, 0)]);
+        }
+        for pattern in [".", "..", "?.TXT", "?档"] {
+            let res = page(&mut open, 16, 256, 4096, pattern).unwrap();
+            assert!(matches!(res.output(), Selection::NoMatch { first_query: false }));
+        }
+        // Another open shares no search pattern or cursor with this one.
+        let (mut another, _) = opened(&owner, Object::Namespace(pool()), 1, &[("Z", 3)]);
+        let fresh = page(&mut another, 0, 256, 4096, "").unwrap();
+        assert_eq!(names(&fresh, true), [("Z", 3, 0)]);
+    }
+
+    #[test]
+    fn first_overflow_keeps_original_complete_name_to_retry_without_skipping() {
+        let owner = coordinator();
+        let (mut open, _) = opened(&owner, Object::Namespace(pool()), 1, &[("𐐀", 1), ("𐐁", 2)]);
+        assert!(matches!(page(&mut open, 0, 16, 13, ""), Err(Fault::Budget(PageStop::ResponseSpace))));
+        let partial = page(&mut open, 0, 14, 4096, "").unwrap();
+        let Selection::FirstOverflow { child, name_space } = partial.output() else { panic!("expected overflow"); };
+        assert_eq!((child.name.as_str(), child.metadata, *name_space), ("𐐀", 1, 2));
+        partial.written_for_fixture();
+        let full = page(&mut open, 0, 16, 4096, "").unwrap();
+        assert_eq!(names(&full, false), [("𐐀", 1, 0)]);
+        full.written_for_fixture();
+        assert_eq!(names(&page(&mut open, 0, 16, 4096, "").unwrap(), true), [("𐐁", 2, 0)]);
+    }
+
+    #[test]
+    fn the_full_bounded_projection_is_consumed_in_record_capped_pages() {
+        let owner = coordinator();
+        let (mut open, _) = opened(&owner, Object::Namespace(pool()), 1, &[]);
+        open.original.rows = (0..63u16).map(|n| (format!("{n:02}"), n)).collect();
+        for part in 0..4u16 {
+            let start = part * 16;
+            let end = (start + 16).min(63);
+            let p = page(&mut open, 0, 4000, 4096, "*.*").unwrap();
+            let returned: Vec<u16> = names(&p, end == 63).into_iter().map(|(_, meta, _)| meta).collect();
+            assert_eq!(returned, (start..end).collect::<Vec<_>>());
+            p.written_for_fixture();
+        }
+        let exhausted = page(&mut open, 0, 4000, 4096, "").unwrap();
+        assert!(matches!(exhausted.output(), Selection::NoMatch { first_query: false }));
+    }
+
+    #[test]
+    fn denied_nonroot_invalid_projection_and_true_empty_remain_distinct() {
+        let owner = coordinator();
+        let (mut file, observe) = opened(&owner, Object::File(pool(), FileId([2; 16])), 1, &[]);
+        assert!(matches!(page(&mut file, 0, 512, 4096, ""), Err(Fault::NotNamespace)));
+        assert_eq!(observe.calls.get(), 0);
+        let (mut no_list, observe) = opened(&owner, Object::Namespace(pool()), 0x80, &[]);
+        assert!(matches!(page(&mut no_list, 0, 512, 4096, ""), Err(Fault::ListDenied)));
+        assert_eq!(observe.calls.get(), 0);
+
+        for bad in [&[("z", 1), ("a", 2)][..], &[("dup", 1), ("dup", 2)], &[("host\\leaf", 1)]] {
+            let (mut root, _) = opened(&owner, Object::Namespace(pool()), 1, bad);
+            assert!(matches!(page(&mut root, 0, 512, 4096, ""), Err(Fault::InvalidProjection)));
+        }
+        let (mut too_many, _) = opened(&owner, Object::Namespace(pool()), 1, &[]);
+        too_many.original.rows = (0..64u16).map(|n| (format!("{n:02}"), n)).collect();
+        assert!(matches!(page(&mut too_many, 0, 512, 4096, ""), Err(Fault::InvalidProjection)));
+
+        let (mut root, _) = opened(&owner, Object::Namespace(pool()), 1, &[]);
+        let first = page(&mut root, 0, 512, 4096, "").unwrap();
+        assert!(matches!(first.output(), Selection::NoMatch { first_query: true }));
+        first.written_for_fixture();
+        let next = page(&mut root, 0, 512, 4096, "").unwrap();
+        assert!(matches!(next.output(), Selection::NoMatch { first_query: false }));
+    }
+}
