@@ -36,7 +36,7 @@ fn signed_paid_member_and_session_survive_the_unc_boundary() {
     with_tree_member(false, |member| {
         let original = std::ptr::from_ref(member.message());
         let Ok(parsed) = TreeConnectRequest::parse(member) else { panic!("original TREE_CONNECT"); };
-        assert_eq!(parsed.accepted_local(), None); // no real socket was provided
+        assert!(parsed.accepted_endpoints().is_none()); // no real socket was provided
         assert_eq!(parsed.server_spelling(), "fixture");
         assert_eq!(std::ptr::from_ref(parsed.original().message()), original);
         assert_eq!(parsed.original().ordinal(), 0);

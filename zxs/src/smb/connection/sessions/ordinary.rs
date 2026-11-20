@@ -3,7 +3,7 @@
 pub(in crate::smb) mod outbound;
 use super::{Phase,Registration};
 use crate::smb::{
-    connection::{Connection,Fault,Origin,Payload,Received,Result},
+    connection::{Connection,Fault,Origin,Payload,Received,Result,accepted::AcceptedEndpoints},
     session::{self,BatchRevision,BoundSession,VerifiedIds},
     wire::message::{Message,RELATED},
 };
@@ -50,11 +50,11 @@ pub(in crate::smb) struct SessionView<'step> {
     reg:&'step Registration,origin:&'step Arc<Origin>,revision:&'step BatchRevision,max_transact:u32,
 }
 impl SessionView<'_> {
-    /// Root name resolution must compare this exact local address against
-    /// the installation's approved listener/alias scope. Not authority
-    /// by itself, and a script-only fixture never asserts a local socket.
-    pub(in crate::smb) fn accepted_local(&self)->Option<std::net::SocketAddr> {
-        self.origin.accepted_local.as_ref().map(|local|local.address())
+    /// Borrow the pair from the same origin; never accept independently
+    /// supplied addresses from a handler or the request. Each approved local
+    /// socket has its own peer prefix. A fixture supplies no socket evidence.
+    pub(in crate::smb) fn accepted_endpoints(&self)->Option<&AcceptedEndpoints> {
+        self.origin.endpoints.as_ref()
     }
     /// Call again at use/commit. No registry or credential lock survives this
     /// function, in particular none may be held across Core storage or network.

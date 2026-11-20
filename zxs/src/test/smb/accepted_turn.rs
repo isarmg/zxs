@@ -10,7 +10,7 @@ use aes::Aes128;
 use cmac::Cmac;
 use hmac::{Hmac,KeyInit,Mac};
 use sha2::{Digest,Sha256,Sha512};
-use std::{collections::VecDeque,io::{self,ErrorKind,Read,Write},net::IpAddr,sync::{Arc,Mutex}};
+use std::{collections::VecDeque,io::{self,ErrorKind,Read,Write},sync::{Arc,Mutex}};
 
 #[derive(Default)]
 struct Trace {input:VecDeque<u8>,out:Vec<u8>,eof:bool,drops:usize}
@@ -36,7 +36,7 @@ fn give(t:&Seen,p:&[u8]) {t.lock().unwrap().input.extend(p.iter().copied());}
 fn peer(run:&RunningServerGuid)->(Peer,Seen,Vec<u8>,Vec<u8>) {
     let [mut neg,..]=synthetic_exchange();neg[14]=4;let raw=frame(&neg);
     let t=Arc::new(Mutex::new(Trace::default()));give(&t,&raw);
-    let p=Peer::open(run,DirectStream::Fixture(Box::new(Duplex(Arc::clone(&t)))),IpAddr::from([192,0,2,51])).unwrap();
+    let p=Peer::open_fixture(run,DirectStream::Fixture(Box::new(Duplex(Arc::clone(&t))))).unwrap();
     let rep=take(&t);(p,t,raw,rep)
 }
 fn fold(h:&mut [u8;64],wire:&[u8]) {

@@ -1,7 +1,7 @@
 //! The first TREE_CONNECT boundary: one original authenticated request,
 //! parsed target spelling, and no host lookup, tree, access mask or reply.
 use crate::smb::{
-    connection::{Fault as ConnectionFault, sessions::ordinary::VerifiedMember},
+    connection::{Fault as ConnectionFault, accepted::AcceptedEndpoints, sessions::ordinary::VerifiedMember},
     wire::path_fields::{FieldError, TREE_SERVER_UNITS, TREE_SHARE_UNITS},
 };
 
@@ -43,10 +43,10 @@ impl<'step, 'raw> TreeConnectRequest<'step, 'raw> {
     /// a pool. The eventual resolver uses only trusted service/alias scope.
     pub(in crate::smb) fn server_spelling(&self) -> &str { &self.server }
 
-    /// Kernel metadata through this same member, never a separate endpoint
-    /// from a different connection or a name from this client's UNC.
-    pub(in crate::smb) fn accepted_local(&self) -> Option<std::net::SocketAddr> {
-        self.original.session().accepted_local()
+    /// Check the local listener and its own peer prefix as a pair; neither
+    /// address is claimed by the client's UNC. This is not a share grant.
+    pub(in crate::smb) fn accepted_endpoints(&self) -> Option<&AcceptedEndpoints> {
+        self.original.session().accepted_endpoints()
     }
 }
 

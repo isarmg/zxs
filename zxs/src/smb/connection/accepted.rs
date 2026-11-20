@@ -10,48 +10,55 @@ use std::{net::{IpAddr,SocketAddr,TcpStream},sync::{Arc,atomic::AtomicBool}};
 /// Exclusive protocol owner. No raw Connection getter, stream replacement,
 /// separate response sink or numeric-ID constructor.
 #[must_use]
-pub(in crate::smb) struct Peer { connection:Connection, remote:IpAddr, first_login_by:Option<std::time::Instant> }
+pub(in crate::smb) struct Peer { connection:Connection, first_login_by:Option<std::time::Instant> }
 
-/// Kernel-observed local endpoint of this exact accepted transport, not an
-/// approved listener or a principal. There is no constructor from names,
-/// peer input or an externally supplied sockaddr.
-pub(super) struct AcceptedLocal(SocketAddr);
-impl AcceptedLocal {
+/// A pair observed on the SAME owned kernel socket before reading any SMB
+/// bytes. Neither address may be substituted or moved to a different
+/// stream. This is evidence for network admission, not admission itself.
+pub(in crate::smb) struct AcceptedEndpoints { local:SocketAddr, peer:SocketAddr }
+impl AcceptedEndpoints {
     fn inspect(socket:&TcpStream)->Result<Self> {
-        let addr=socket.local_addr().map_err(|_|Fault::Transport)?;
-        if !concrete_445(addr) {return Err(Fault::Transport);}
-        Ok(Self(addr))
+        let local=socket.local_addr().map_err(|_|Fault::Transport)?;
+        let peer=socket.peer_addr().map_err(|_|Fault::Transport)?;
+        if !direct_pair(local,peer) {return Err(Fault::Transport);}
+        Ok(Self{local,peer})
     }
-    pub(super) fn address(&self)->SocketAddr {self.0}
+    pub(in crate::smb) fn local(&self)->SocketAddr {self.local}
+    pub(in crate::smb) fn peer(&self)->SocketAddr {self.peer}
 }
 
-fn concrete_445(addr:SocketAddr)->bool {
+fn direct_pair(local:SocketAddr,peer:SocketAddr)->bool {
+    local.port()==445 && peer.port()!=0 &&
+        local.is_ipv4()==peer.is_ipv4() &&
+        concrete_address(local) && concrete_address(peer)
+}
+fn concrete_address(addr:SocketAddr)->bool {
     let ip=match addr.ip() {
         // Classification only. Retain the kernel's original sockaddr,
         // including its address family and v6 scope, for authorization.
         IpAddr::V6(a)=>a.to_ipv4_mapped().map_or(IpAddr::V6(a),IpAddr::V4),
         v4=>v4,
     };
-    addr.port()==445 && !ip.is_unspecified() && !ip.is_multicast() &&
+    !ip.is_unspecified() && !ip.is_multicast() &&
         !matches!(ip,IpAddr::V4(a) if a.is_broadcast())
 }
 
 struct Incoming {
     stream:DirectStream,
-    local:Option<AcceptedLocal>,
+    endpoints:Option<AcceptedEndpoints>,
 }
 impl Incoming {
     fn inspect(stream:DirectStream)->Result<Self> {
-        let local=match &stream {
+        let endpoints=match &stream {
             DirectStream::Tcp(socket)=>{
-                let local=AcceptedLocal::inspect(socket)?;
+                let endpoints=AcceptedEndpoints::inspect(socket)?;
                 socket.set_nonblocking(false).map_err(|_|Fault::Transport)?;
-                Some(local)
+                Some(endpoints)
             }
             #[cfg(test)]
             DirectStream::Fixture(_)=>None,
         };
-        Ok(Self{stream,local})
+        Ok(Self{stream,endpoints})
     }
 }
 
@@ -59,8 +66,7 @@ impl RunningServerGuid {
     /// Future enabled TCP/445 service supplies its sole accepted, unread
     /// socket. No socket is obtained, accepted or connected by this module.
     pub(in crate::smb) fn negotiate_accepted(&self,socket:TcpStream)->Result<Peer> {
-        let remote=socket.peer_addr().map_err(|_|Fault::Transport)?.ip();
-        Peer::open(self,DirectStream::Tcp(socket),remote)
+        Peer::open(self,Incoming::inspect(DirectStream::Tcp(socket))?)
     }
 }
 fn parsed(record:&[u8])->Result<Compound<'_>> {
@@ -69,8 +75,7 @@ fn parsed(record:&[u8])->Result<Compound<'_>> {
     Compound::parse(frame).map_err(|_|Fault::Opening)
 }
 impl Peer {
-    fn open(server:&RunningServerGuid,stream:DirectStream,remote:IpAddr)->Result<Self> {
-        let mut incoming=Incoming::inspect(stream)?;
+    fn open(server:&RunningServerGuid,mut incoming:Incoming)->Result<Self> {
         let seat=AcceptSeat::reserve(&server.share())?;
         let original=incoming.stream.read_record(MAX_OPENING_BYTES,deadline()?)?;
         let offer=Opening::received(&parsed(&original)?)?;
@@ -81,7 +86,12 @@ impl Peer {
         incoming.stream.write_smb(tx.bytes(),||Ok(()))?;
         let connection=tx.after_write(Completion::Written(incoming),seat)?;
         let first_login_by=std::time::Instant::now().checked_add(std::time::Duration::from_secs(60)).ok_or(Fault::Clock)?;
-        Ok(Self{connection,remote,first_login_by:Some(first_login_by)})
+        Ok(Self{connection,first_login_by:Some(first_login_by)})
+    }
+    #[cfg(test)]
+    fn open_fixture(server:&RunningServerGuid,stream:DirectStream)->Result<Self> {
+        if !matches!(&stream,DirectStream::Fixture(_)) {return Err(Fault::Transport);}
+        Self::open(server,Incoming::inspect(stream)?)
     }
 }
 enum Completion { Written(Incoming), #[cfg(test)] WithoutSocket }
@@ -89,13 +99,13 @@ impl OpeningSend {
     // Private to this owner: there is no ordinary caller acknowledgement or
     // handoff that could swap in another connection after negotiation.
     fn after_write(self,completed:Completion,seat:AcceptSeat)->Result<Connection> {
-        let (stream,accepted_local)=match completed {
-            Completion::Written(Incoming{stream,local})=>(Some(stream),local),
+        let (stream,endpoints)=match completed {
+            Completion::Written(Incoming{stream,endpoints})=>(Some(stream),endpoints),
             #[cfg(test)] Completion::WithoutSocket=>(None,None),
         };
         if self.signing==CmacChoice::NoCommon {return Err(Fault::NoCommonSigning);}
         let conn=Connection{limits:self.limits,client:self.client,server:self.server,in_flight:0,
-            sessions:Vec::new(),stream,origin:Arc::new(Origin{closed:AtomicBool::new(false),hash:self.hash,run:self.run,accepted_local}),
+            sessions:Vec::new(),stream,origin:Arc::new(Origin{closed:AtomicBool::new(false),hash:self.hash,run:self.run,endpoints}),
             window:Window{low:1,next:1+u64::from(self.grant),bits:ones(self.grant)}};
         seat.promote(&conn)?;Ok(conn)
     }

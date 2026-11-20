@@ -34,14 +34,13 @@ fn script(input:Vec<u8>,stop:Option<(usize,bool)>)->(DirectStream,Arc<Mutex<Trac
     let trace=Arc::new(Mutex::new(Trace{input,..Trace::default()}));
     (DirectStream::Fixture(Box::new(Script{trace:Arc::clone(&trace),stop})),trace)
 }
-fn ip()->IpAddr {IpAddr::from([192,0,2,42])}
 
 #[test]
 fn one_received_stream_one_complete_reply_one_actual_transcript_and_no_session() {
     let run=running([0x93;16]);let [mut q,_,setup,..]=synthetic_exchange();q[14]=4;
     let first=frame(&q);let later=frame(&setup);let mut joined=first.clone();joined.extend_from_slice(&later);
-    let (stream,trace)=script(joined,None);let mut p=Peer::open(&run,stream,ip()).unwrap();
-    assert_eq!(p.remote,ip());assert!(p.connection.origin.accepted_local.is_none());assert!(p.connection.sessions.is_empty());assert_eq!(p.connection.window.available(),4);
+    let (stream,trace)=script(joined,None);let mut p=Peer::open_fixture(&run,stream).unwrap();
+    assert!(p.connection.origin.endpoints.is_none());assert!(p.connection.sessions.is_empty());assert_eq!(p.connection.window.available(),4);
     let out={let t=trace.lock().unwrap();
         assert_eq!(t.pos,first.len());assert_eq!(t.drops,0);assert!(t.reads>3 && t.writes>3);t.out.clone()};
     assert_eq!(&out[..4],&174u32.to_be_bytes());assert_eq!(out.len(),178);
@@ -64,7 +63,7 @@ fn reject_prefix_before_allocating_or_reading_body_and_do_not_reuse_an_ambiguous
             let mut v=((MAX_OPENING_BYTES+1) as u32).to_be_bytes().to_vec();v.push(0x42);v
         },4),(vec![0,0,0],3),(vec![0,0,0,12,1,2],6),
     ] {
-        let (stream,trace)=script(wire,None);assert!(Peer::open(&run,stream,ip()).is_err());
+        let (stream,trace)=script(wire,None);assert!(Peer::open_fixture(&run,stream).is_err());
         let t=trace.lock().unwrap();assert_eq!(t.pos,consumed);assert!(t.out.is_empty());assert_eq!(t.drops,1);
     }
     let (mut stream,t)=script(frame(&q),None);
@@ -72,7 +71,7 @@ fn reject_prefix_before_allocating_or_reading_body_and_do_not_reuse_an_ambiguous
     assert_eq!(t.lock().unwrap().reads,0);drop(stream);
     for (limit,zero) in [(2,false),(4,true),(29,false),(177,true)] {
         let (stream,t)=script(frame(&q),Some((limit,zero)));
-        assert!(matches!(Peer::open(&run,stream,ip()),Err(Fault::Transport)));
+        assert!(matches!(Peer::open_fixture(&run,stream),Err(Fault::Transport)));
         let seen=t.lock().unwrap();assert_eq!(seen.out.len(),limit);assert_eq!(seen.drops,1);
     }
 }
@@ -80,12 +79,12 @@ fn reject_prefix_before_allocating_or_reading_body_and_do_not_reuse_an_ambiguous
 #[test]
 fn capacity_is_shared_by_incomplete_and_negotiated_connections_before_any_read() {
     let run=running([0x62;16]);let [q,..]=synthetic_exchange();
-    let (stream,t)=script(frame(&q),None);let peer=Peer::open(&run,stream,ip()).unwrap();
+    let (stream,t)=script(frame(&q),None);let peer=Peer::open_fixture(&run,stream).unwrap();
     let mut held:Vec<_>=(0..127).map(|_|AcceptSeat::reserve(&run.share()).unwrap()).collect();
     let (blocked,observed)=script(frame(&q),None);
-    assert!(matches!(Peer::open(&run,blocked,ip()),Err(Fault::SessionLimit)));
+    assert!(matches!(Peer::open_fixture(&run,blocked),Err(Fault::SessionLimit)));
     assert_eq!(observed.lock().unwrap().reads,0);
-    drop(held.pop());let (next,_)=script(frame(&q),None);let next=Peer::open(&run,next,ip()).unwrap();
+    drop(held.pop());let (next,_)=script(frame(&q),None);let next=Peer::open_fixture(&run,next).unwrap();
     assert!(matches!(AcceptSeat::reserve(&run.share()),Err(Fault::SessionLimit)));
     drop(peer);assert_eq!(t.lock().unwrap().drops,1);
     let _seat=AcceptSeat::reserve(&run.share()).unwrap();drop(next);
@@ -97,19 +96,34 @@ fn incompatible_signing_list_is_answered_in_full_without_exposing_a_negotiated_p
     q[96..98].copy_from_slice(&2u16.to_le_bytes());q.resize(q.len().next_multiple_of(8),0xb3);
     q.extend_from_slice(&[8,0,4,0,0,0,0,0,1,0,2,0]); // only GMAC; the server returns CMAC as required
     let (stream,t)=script(frame(&q),None);
-    assert!(matches!(Peer::open(&run,stream,ip()),Err(Fault::NoCommonSigning)));
+    assert!(matches!(Peer::open_fixture(&run,stream),Err(Fault::NoCommonSigning)));
     let seen=t.lock().unwrap();assert_eq!(seen.out.len(),192);assert_eq!(&seen.out[..4],&188u32.to_be_bytes());
     assert_eq!(&seen.out[180..],&[8,0,4,0,0,0,0,0,1,0,1,0]);assert_eq!(seen.drops,1);
 }
 
 #[test]
-fn concrete_local_address_preserves_family_and_interface_scope() {
-    use std::net::{Ipv6Addr, SocketAddrV6};
-    let scoped=SocketAddr::V6(SocketAddrV6::new("fe80::1".parse::<Ipv6Addr>().unwrap(),445,0,9));
-    assert!(concrete_445(scoped));
-    assert!(concrete_445("192.0.2.50:445".parse().unwrap()));
-    for s in ["0.0.0.0:445","[::]:445","192.0.2.50:139","224.0.0.1:445","[ff02::1]:445","255.255.255.255:445",
-        "[::ffff:0.0.0.0]:445","[::ffff:224.0.0.1]:445"] {
-        assert!(!concrete_445(s.parse().unwrap()));
+fn shape_checks_both_ends_and_leaves_exact_interface_scope_for_policy() {
+    use std::net::SocketAddrV6;
+    let local="192.0.2.50:445".parse::<SocketAddr>().unwrap();
+    let peer="192.0.2.42:51013".parse::<SocketAddr>().unwrap();
+    let local6="[2001:db8:a::2]:445".parse::<SocketAddr>().unwrap();
+    let peer6="[2001:db8:a::3]:51013".parse::<SocketAddr>().unwrap();
+    assert!(direct_pair(local,peer));
+    assert!(direct_pair(local6,peer6));
+    let scoped_local=SocketAddr::V6(SocketAddrV6::new("fe80::1".parse().unwrap(),445,0,9));
+    let scoped_peer=SocketAddr::V6(SocketAddrV6::new("fe80::2".parse().unwrap(),51013,0,9));
+    assert!(direct_pair(scoped_local,scoped_peer)); // shape only, not a policy match
+    assert!(!direct_pair(local,peer6));
+    assert!(!direct_pair(local6,peer));
+    for (l,r) in [
+        ("0.0.0.0:445","192.0.2.42:51013"), ("[::]:445","[2001:db8:a::3]:51013"),
+        ("192.0.2.50:139","192.0.2.42:51013"), ("224.0.0.1:445","192.0.2.42:51013"),
+        ("[ff02::1]:445","[2001:db8:a::3]:51013"), ("255.255.255.255:445","192.0.2.42:51013"),
+        ("[::ffff:0.0.0.0]:445","[::ffff:192.0.2.42]:51013"), ("[::ffff:224.0.0.1]:445","[::ffff:192.0.2.42]:51013"),
+        ("192.0.2.50:445","192.0.2.42:0"), ("192.0.2.50:445","0.0.0.0:51013"),
+        ("192.0.2.50:445","224.0.0.1:51013"), ("192.0.2.50:445","255.255.255.255:51013"),
+        ("[2001:db8:a::2]:445","[ff02::1]:51013"), ("[2001:db8:a::2]:445","[::ffff:0.0.0.0]:51013"),
+    ] {
+        assert!(!direct_pair(l.parse().unwrap(),r.parse().unwrap()));
     }
 }

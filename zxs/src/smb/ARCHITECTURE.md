@@ -24,9 +24,9 @@
 
 ## 已接受连接的交付与协商
 
-未来已启用的服务所有者只能交付一条**尚未读取、独占**的 TCP/445 连接以及同次运行的私有实例。这里不建监听、不接收外部传来的已登录连接、不克隆或替换流；OS 提供的原对端 IP 只作连接元数据。[接入状态](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/91e2ec0b-530b-4558-aee0-2ca4d586f66a)与认证身份是两回事。每个未协商的入口在首次阻塞读之前与已协商连接共享最多 128 席；失败释放，成功将同一席转为原连接登记，不在注册锁内做 I/O。
+未来已启用的服务所有者只能交付一条**尚未读取、独占**的 TCP/445 连接以及同次运行的私有实例。这里不建监听、不接收外部传来的已登录连接、不克隆或替换流；内核取得的这对地址只作连接元数据。[接入状态](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/91e2ec0b-530b-4558-aee0-2ca4d586f66a)与认证身份是两回事。每个未协商的入口在首次阻塞读之前与已协商连接共享最多 128 席；失败释放，成功将同一席转为原连接登记，不在注册锁内做 I/O。
 
-用 [TcpStream::local_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.local_addr) 从同一已接受的 TCP socket 取得内核本地 `SocketAddr`，拒绝非 445 或非具体单播地址，并随本次真实 origin 一直保留（包括 IPv6 scope，不从对端或 UNC 取）。原已验签、付额的 TREE_CONNECT 可短借查看；脚本流不提供实际地址。该事实不等于已批准的监听／别名、更不等于服务、账户或文件权，必须另由可信 launcher 和同一 Core 安装资格匹配。此处不创建或接受监听，也不读密验文件。
+首字节前用 [TcpStream::local_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.local_addr) 和 [peer_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.peer_addr) 从独占的同一 socket 取得完整 `SocketAddr` 对，拒绝本地非 445、对端零端口、不同地址族或非具体单播地址。地址对只随原流进入同一个 origin，保留 IPv6 scope、端口和地址族，不从 UNC、转发信息或测试的输入地址取值。原已付额、验签的 TREE_CONNECT 只能短借查看这一对，不能单独提供本机和客户地址。地址形状正确不等于获准：正式入口仍须在读取前识别真正已批准的本地监听及**该监听自己的**客户前缀，且业务授权仍需同一 Core 安装与账号代。此处没有准入发行者、监听或密验文件读入。
 
 按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。三类 SESSION_SETUP 回复和后续原帧读取见下；业务持有者与通用派发仍未启用。源码夹具在 `src/test/smb/accepted.rs`，未运行或开 socket。
 
