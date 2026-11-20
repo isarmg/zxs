@@ -96,6 +96,32 @@ pub fn prepare_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
 pub fn prepare_ext4_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
     prepare_checker_exec(cmd,original,Some(300))
 }
+#[allow(unsafe_code)]
+pub fn prepare_xfs_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
+    // The pinned XFS binary uses sysconf(_SC_NPROCESSORS_ONLN) as a work
+    // queue size. With no guest sysfs or procfs, the pinned glibc falls back
+    // to this process's affinity. Restrict only this child before exec.
+    // SAFETY: stack-only, fixed-length Linux masks; pid 0 is the calling task.
+    unsafe{cmd.pre_exec(||{
+        let mut available=[0u64;128]; // at most 8192 CPU indices; no fallback
+        let bytes=std::mem::size_of_val(&available);
+        if libc::sched_getaffinity(0,bytes,available.as_mut_ptr().cast())!=0{
+            return Err(io::Error::last_os_error());
+        }
+        let Some(i)=available.iter().position(|&w|w!=0)else{return Err(io::Error::from_raw_os_error(libc::EINVAL));};
+        let mut one=[0u64;128];one[i]=1u64<<available[i].trailing_zeros();
+        if libc::sched_setaffinity(0,bytes,one.as_ptr().cast())!=0{
+            return Err(io::Error::last_os_error());
+        }
+        let mut observed=[0u64;128];
+        if libc::sched_getaffinity(0,bytes,observed.as_mut_ptr().cast())!=0{
+            return Err(io::Error::last_os_error());
+        }
+        if observed!=one{return Err(io::Error::from_raw_os_error(libc::EINVAL));}
+        Ok(())
+    });}
+    prepare_checker_exec(cmd,original,Some(300))
+}
 fn prepare_checker_exec(cmd:&mut Command,original:&File,cpu:Option<libc::rlim_t>)->io::Result<()>{
     let mut args=vec![CString::new("bwrap").expect("literal")];
     let ceiling=if cpu.is_some(){79}else{63};
@@ -109,6 +135,8 @@ fn prepare_checker_exec(cmd:&mut Command,original:&File,cpu:Option<libc::rlim_t>
 /// No string from a request can become a subcommand or a program name.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum CopyFormat{Fat32,Exfat}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum LeasedFormat{Ext4,Xfs}
 /// Spawn only the copy checker present in the same protected installation as the
 /// calling panel. The only argument is the digest of the *already sealed* stdin.
 pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyFormat,digest:&[u8;32])->io::Result<()>{
@@ -116,10 +144,11 @@ pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyForm
     prepare_fixed_panel_exec(cmd,original,action,digest)
 }
 
-/// stdin is the selected, previously unopened-for-data ext copy's new readonly
+/// stdin is the selected saved volume's new readonly
 /// description, not a sealed copy. Only this particular worker can lease it.
-pub fn prepare_ext4_panel_exec(cmd:&mut Command,original:&File,digest:&[u8;32])->io::Result<()>{
-    prepare_fixed_panel_exec(cmd,original,"__ext4-leased-v1",digest)
+pub fn prepare_leased_panel_exec(cmd:&mut Command,original:&File,format:LeasedFormat,digest:&[u8;32])->io::Result<()>{
+    let action=match format{LeasedFormat::Ext4=>"__ext4-leased-v1",LeasedFormat::Xfs=>"__xfs-leased-v1"};
+    prepare_fixed_panel_exec(cmd,original,action,digest)
 }
 fn prepare_fixed_panel_exec(cmd:&mut Command,original:&File,action:&'static str,digest:&[u8;32])->io::Result<()>{
     use std::fmt::Write;
@@ -231,15 +260,18 @@ fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<li
 
 /// Native x86-64 classic BPF for --seccomp. Only group-lifetime constraints,
 /// not a general syscall security policy. Never allow independent children.
-pub fn diagnostic_group_filter()->Vec<u8>{group_filter(false)}
+pub fn diagnostic_group_filter()->Vec<u8>{group_filter(false,false)}
 
 // The pinned libext2fs checks bitmaps in threads on a sufficiently large
 // filesystem. Allow only the actual glibc 2.41 NPTL thread in this profile.
-pub fn ext4_group_filter()->Vec<u8>{group_filter(true)}
+pub fn ext4_group_filter()->Vec<u8>{group_filter(true,false)}
+// The pinned XFS xfile path falls back to O_TMPFILE in its bounded private
+// tmpfs. Do not let it use unlimited anonymous shmem instead.
+pub fn xfs_group_filter()->Vec<u8>{group_filter(true,true)}
 const NPTL_CLONE:u32=uapi::CLONE_VM|uapi::CLONE_FS|uapi::CLONE_FILES|uapi::CLONE_SIGHAND
     |uapi::CLONE_THREAD|uapi::CLONE_SYSVSEM|uapi::CLONE_SETTLS|uapi::CLONE_PARENT_SETTID
     |uapi::CLONE_CHILD_CLEARTID;
-fn group_filter(threads:bool)->Vec<u8>{
+fn group_filter(threads:bool,xfs:bool)->Vec<u8>{
     const LD_W_ABS:u16=0x20;const JEQ:u16=0x15;const JGE:u16=0x35;const RET:u16=0x06;
     const KILL:u32=0x8000_0000;const EPERM:u32=0x0005_0001;const ALLOW:u32=0x7fff_0000;
     let mut out=Vec::with_capacity(192);
@@ -251,6 +283,11 @@ fn group_filter(threads:bool)->Vec<u8>{
     for number in [uapi::__NR_setsid,uapi::__NR_setpgid,uapi::__NR_fork,uapi::__NR_vfork,
                    uapi::__NR_unshare,uapi::__NR_setns] {
         op(JEQ,0,1,number);op(RET,0,0,EPERM);
+    }
+    if xfs{
+        for number in [uapi::__NR_memfd_create,uapi::__NR_sched_setaffinity]{
+            op(JEQ,0,1,number);op(RET,0,0,EPERM);
+        }
     }
     if threads{
         // Do not dereference clone3's hidden argument struct. Its defined
@@ -287,7 +324,7 @@ mod tests {
     }
     fn decision(p:&[u8],arch:u32,nr:u32)->u32{decision_with_flags(p,arch,nr,0)}
     #[test]
-    fn only_ext_can_create_an_exact_glibc_same_process_thread(){
+    fn leased_checkers_can_create_an_exact_glibc_same_process_thread(){
         let arch=0xc000_003e;
         let glibc_flags=0x003d_0f00;
         let ext=ext4_group_filter();
@@ -303,6 +340,20 @@ mod tests {
         }
         assert_eq!(decision(&ext,arch,uapi::__NR_fstat),0x7fff_0000);
         assert_eq!(decision_with_flags(&diagnostic_group_filter(),arch,uapi::__NR_clone,glibc_flags),0x0005_0001);
+    }
+    #[test]
+    fn xfs_requires_bounded_scratch_and_keeps_its_own_verified_launch_affinity(){
+        let arch=0xc000_003e;
+        let p=xfs_group_filter();
+        assert_eq!(decision_with_flags(&p,arch,uapi::__NR_clone,0x003d_0f00),0x7fff_0000);
+        assert_eq!(decision_with_flags(&p,arch,uapi::__NR_clone,0x003d_0f11),0x0005_0001);
+        for n in [uapi::__NR_memfd_create,uapi::__NR_sched_setaffinity]{
+            assert_eq!(decision(&p,arch,n),0x0005_0001);
+            assert_eq!(decision(&ext4_group_filter(),arch,n),0x7fff_0000);
+        }
+        assert_eq!(decision(&p,arch,uapi::__NR_sched_getaffinity),0x7fff_0000);
+        assert_eq!(decision(&p,arch,uapi::__NR_openat),0x7fff_0000);
+        assert_eq!(decision(&p,arch,uapi::__NR_setns),0x0005_0001);
     }
     #[test]
     fn tool_cannot_fork_or_leave_the_launchers_process_group_in_another_abi(){

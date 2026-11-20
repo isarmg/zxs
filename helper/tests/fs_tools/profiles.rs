@@ -46,7 +46,7 @@ fn missing_unchecked_mismatch_and_unavailable_versions_are_not_device_results(){
 fn only_supported_bundled_slots_are_private_and_detection_is_not_execution(){
     for p in PROFILES {
         let path = p.slots().join("/");
-        if matches!(p.format,"fat32"|"exfat"|"ext4") {
+        if matches!(p.format,"fat32"|"exfat"|"ext4"|"xfs") {
             assert!(path.starts_with("usr/lib/local-ops-helper/disk-tools-v1/bin/"));
         } else {
             assert!(!p.private());assert!(!path.contains("disk-tools-v1"));

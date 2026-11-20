@@ -93,5 +93,7 @@ mod tests{
         let answer=c.preview(now);
         assert_eq!(answer.code,200);
         assert_eq!(answer.body,format!("{}\n{}\next4\n17592186044416\n-\n-\nclaimed","a".repeat(64),"11".repeat(32)));
+        c.info.detail=Detail::Xfs;
+        assert_eq!(c.preview(now).body,answer.body.replace("\next4\n","\nXFS\n"));
     }
 }

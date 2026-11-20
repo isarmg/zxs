@@ -19,6 +19,9 @@ const EXT_PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/e2fsprogs-
 const EXT_POLICY:&[&str]=pack!("ext4-check-v1");
 const EXT_POLICY_BYTES:u64=1046;
 const EXT_CHECKER:&[&str]=pack!("bin","e2fsck");
+const XFS_PROFILE:&str="debian13-amd64/private-pack-1/bubblewrap-0.12/xfsprogs-6.13.0";
+const XFS_POLICY:&[&str]=pack!("xfs-check-v1");
+const XFS_CHECKER:&[&str]=pack!("bin","xfs_repair");
 // Only these five extra DSOs are part of the exact e2fsck and guest libc
 // closure. They are not replacement host loaders or Samba dependencies.
 const EXT_LIBS:[(&str,&[&str],&str);5]=[
@@ -28,19 +31,28 @@ const EXT_LIBS:[(&str,&[&str],&str);5]=[
     ("libuuid.so.1",pack!("lib","libuuid.so.1"),"/lib/x86_64-linux-gnu/libuuid.so.1"),
     ("libe2p.so.2",pack!("lib","libe2p.so.2"),"/lib/x86_64-linux-gnu/libe2p.so.2"),
 ];
+const XFS_LIBS:[(&str,&[&str],&str);3]=[
+    EXT_LIBS[3], // libuuid
+    EXT_LIBS[2], // libblkid
+    ("liburcu.so.8",pack!("lib","liburcu.so.8"),"/lib/x86_64-linux-gnu/liburcu.so.8"),
+];
 const MAX_ELF:u64=32<<20;
 
 #[derive(Clone,Copy,PartialEq,Eq)]
-pub(super) enum Engine{Copy(Format),Ext4}
+pub(super) enum Engine{Copy(Format),Ext4,Xfs}
 impl Engine{
-    fn profile(self)->&'static str{match self{Self::Copy(Format::Fat32)=>PROFILE,Self::Copy(Format::Exfat)=>EX_PROFILE,Self::Ext4=>EXT_PROFILE}}
-    fn policy(self)->&'static [&'static str]{match self{Self::Copy(Format::Fat32)=>POLICY,Self::Copy(Format::Exfat)=>EX_POLICY,Self::Ext4=>EXT_POLICY}}
+    fn profile(self)->&'static str{match self{Self::Copy(Format::Fat32)=>PROFILE,Self::Copy(Format::Exfat)=>EX_PROFILE,Self::Ext4=>EXT_PROFILE,Self::Xfs=>XFS_PROFILE}}
+    fn policy(self)->&'static [&'static str]{match self{Self::Copy(Format::Fat32)=>POLICY,Self::Copy(Format::Exfat)=>EX_POLICY,Self::Ext4=>EXT_POLICY,Self::Xfs=>XFS_POLICY}}
     fn checker(self)->(&'static str,&'static [&'static str]){
-        match self{Self::Copy(Format::Fat32)=>(KEYS[1],SLOTS[1]),Self::Copy(Format::Exfat)=>("fsck.exfat",EX_CHECKER),Self::Ext4=>("e2fsck",EXT_CHECKER)}
+        match self{Self::Copy(Format::Fat32)=>(KEYS[1],SLOTS[1]),Self::Copy(Format::Exfat)=>("fsck.exfat",EX_CHECKER),
+            Self::Ext4=>("e2fsck",EXT_CHECKER),Self::Xfs=>("xfs_repair",XFS_CHECKER)}
+    }
+    fn private_guest(self)->&'static [(&'static str,&'static [&'static str],&'static str)]{
+        match self{Self::Ext4=>&EXT_LIBS,Self::Xfs=>&XFS_LIBS,Self::Copy(_)=>&[]}
     }
     fn slots(self)->impl Iterator<Item=(&'static str,&'static [&'static str])>{
         KEYS.into_iter().zip(SLOTS).enumerate().map(move |(i,(label,slot))|if i==1{self.checker()}else{(label,slot)})
-            .chain(EXT_LIBS.into_iter().take(if self==Self::Ext4{EXT_LIBS.len()}else{0}).map(|(key,slot,_)|(key,slot)))
+            .chain(self.private_guest().iter().map(|&(key,slot,_)|(key,slot)))
     }
 }
 
@@ -66,6 +78,7 @@ impl Runtime {
     }
     pub(super) fn exfat()->io::Result<Self>{Ok(Self::selected(Engine::Copy(Format::Exfat),None)?.0)}
     pub(super) fn ext4()->io::Result<Self>{Ok(Self::selected(Engine::Ext4,None)?.0)}
+    pub(super) fn xfs()->io::Result<Self>{Ok(Self::selected(Engine::Xfs,None)?.0)}
     fn selected(kind:Engine,release:Option<&[u8;32]>)->io::Result<(Self,[u8;32])>{
         use sha2::{Digest,Sha256};
         let limit=if kind==Engine::Ext4{EXT_POLICY_BYTES}else{1024};
@@ -96,11 +109,15 @@ impl Runtime {
         if self.kind!=Engine::Ext4{return Err(invalid("not the approved ext4 checker profile"));}
         Ok(())
     }
+    pub(super) fn require_xfs(&self)->io::Result<()> {
+        if self.kind!=Engine::Xfs{return Err(invalid("not the approved XFS checker profile"));}
+        Ok(())
+    }
     pub(super) fn launcher(&self)->&std::fs::File { &self.files[0].file }
     pub(super) fn sandbox_files(&self)->impl Iterator<Item=(&std::fs::File,&'static str)>{
         self.files[1..4].iter().map(|f|&f.file).zip(["/checker","/lib64/ld-linux-x86-64.so.2","/lib/x86_64-linux-gnu/libc.so.6"])
-            .chain(self.files[8..].iter().map(|f|&f.file).zip(EXT_LIBS.map(|(_,_,dest)|dest)))
-            .chain((self.kind==Engine::Ext4).then(||(&self.files[2].file,"/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")))
+            .chain(self.files[8..].iter().map(|f|&f.file).zip(self.kind.private_guest().iter().map(|&(_,_,dest)|dest)))
+            .chain((!self.kind.private_guest().is_empty()).then(||(&self.files[2].file,"/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")))
     }
     pub(super) fn recheck(&self)->io::Result<()>{
         self.policy.recheck()?; for f in &self.files{f.recheck()?;}Ok(())
@@ -109,6 +126,15 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn xfs_profile_requires_its_own_eleven_slots_no_extra_guest_libraries(){
+        let line=|k|format!("{k} {}\n","ab".repeat(32));
+        let correct=format!("{XFS_PROFILE}\n{}",Engine::Xfs.slots().map(|(k,_)|line(k)).collect::<String>());
+        assert!(correct.len()<=1024);assert_eq!(pins_for(Engine::Xfs,correct.as_bytes()).unwrap().len(),11);
+        assert!(pins_for(Engine::Ext4,correct.as_bytes()).is_err());
+        assert!(pins_for(Engine::Xfs,correct.replace(&line("liburcu.so.8"),"").as_bytes()).is_err());
+        assert!(pins_for(Engine::Xfs,(correct+&line("libext2fs.so.2")).as_bytes()).is_err());
+    }
     #[test]
     fn ext4_profile_cannot_substitute_another_version_or_omit_the_actual_guest_closure(){
         let row=|k|format!("{k} {}\n","12".repeat(32));

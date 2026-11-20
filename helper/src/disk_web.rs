@@ -122,10 +122,10 @@ pub(crate) fn serve(image:Option<Job>)->io::Result<()>{
     crate::maintenance::diagnostic_worker(getuid().as_raw(),getgid().as_raw())?;
     let stderr=io::stderr();let mut tty=stderr.lock();
     require_terminal(stderr.as_fd())?;
-    let ext=matches!(&image,Some(Job::Ext4(_)));
+    let leased=matches!(&image,Some(Job::Leased(..)));
     let selected=if let Some(job)=image{
-        if ext{
-            writeln!(tty,"仅固定终端选择的 ext4 副本原件。浏览器确认后才取只读租约、核对 SHA-256 并运行检查器。")?;
+        if leased{
+            writeln!(tty,"仅固定终端选择的卷镜像原件。浏览器确认后才取只读租约、核对 SHA-256 并运行检查器。")?;
         }else{
             writeln!(tty,"正在读取终端指定的镜像并核对完整 SHA-256。仅保存封存副本；浏览器确认前不会运行检查器。")?;
         }
@@ -141,7 +141,7 @@ pub(crate) fn serve(image:Option<Job>)->io::Result<()>{
     tty.flush()?;drop(code);drop(tty);
     // No worker exists while the terminal writes its prompts. Once requests
     // can run, let a foreground cancel close HTTP and reap this worker.
-    if ext{watch_cancellation()?;}
+    if leased{watch_cancellation()?;}
     // No listener thread, automatic probe or timer
     // refresh. Each connection has its own total read and write budgets.
     let transport=(|| -> io::Result<()>{

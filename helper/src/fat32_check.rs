@@ -3,10 +3,12 @@ mod exfat;
 mod ext4;
 mod group;
 mod image;
+mod leased;
 pub(crate) mod panel;
 mod runner;
 mod runtime;
-pub(crate) use helper_linux_evidence::diagnostic_process::CopyFormat as Format;
+mod xfs;
+pub(crate) use helper_linux_evidence::diagnostic_process::{CopyFormat as Format,LeasedFormat};
 use crate::fs_tools::hex;
 use std::{ffi::OsString,fmt,io,path::{Path,PathBuf}};
 
@@ -49,6 +51,9 @@ impl Request {
     pub(crate) fn parse_ext4(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
         Self::parse_image(&mut args,"expected one absolute saved ext4 volume image and --sha256 HEX; no devices or checker options")
     }
+    pub(crate) fn parse_xfs(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
+        Self::parse_image(&mut args,"expected one absolute saved XFS volume image and --sha256 HEX; no devices or checker options")
+    }
     fn parse_image(args:&mut impl Iterator<Item=OsString>,usage:&'static str)->Result<Self,&'static str>{
         let image=args.next().ok_or(usage)?;
         if !Path::new(&image).is_absolute()||args.next().as_deref()!=Some(std::ffi::OsStr::new("--sha256")){return Err(usage);}
@@ -59,8 +64,14 @@ impl Request {
     pub(crate) fn run_ext4(self)->io::Result<ext4::Report>{
         runner::prepare_ext4_worker()?;
         let runtime=runtime::Runtime::ext4()?;
-        let image=ext4::Image::capture(&self.image,&self.digest)?;
+        let image=ext4::Image::capture(&self.image,&self.digest,ext4::read_frame)?;
         runner::check_ext4(&runtime,&image)
+    }
+    pub(crate) fn run_xfs(self)->io::Result<xfs::Report>{
+        runner::prepare_xfs_worker()?;
+        let runtime=runtime::Runtime::xfs()?;
+        let image=xfs::Image::capture(&self.image,&self.digest,xfs::read_frame)?;
+        runner::check_xfs(&runtime,&image)
     }
     pub(crate) fn run_exfat(self)->io::Result<exfat::Report>{
         runner::prepare_worker()?;

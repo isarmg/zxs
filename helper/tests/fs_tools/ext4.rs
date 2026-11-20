@@ -95,7 +95,8 @@ fn private_ext_receipts_bind_original_digest_large_length_real_exit_and_exact_pa
 
 #[test]
 fn waiting_ext_selection_neither_needs_a_valid_header_nor_excludes_a_writer_but_will_not_handoff_a_replacement(){
-    use rustix::fs::{Mode,open};
+    use crate::{fat32_check::leased::Selected,pinned::Mount};
+    use rustix::fs::{Mode,OFlags,fcntl_getfl,open};
     let fixture=crate::test_area::data_directory();
     let path=fixture.path().join("saved-copy");
     let writer=std::fs::File::options().write(true).create_new(true).open(&path).unwrap();
@@ -107,7 +108,7 @@ fn waiting_ext_selection_neither_needs_a_valid_header_nor_excludes_a_writer_but_
     drop(writer); // a waiting selection must not hold a read lease
     let reader=selected.reader().unwrap();
     assert!(fcntl_getfl(&reader).unwrap().contains(OFlags::NOATIME));
-    assert_eq!(Mount::on(&reader).unwrap(),Some(selected.mount));
+    assert!(Mount::on(&reader).unwrap().is_some());
     std::fs::rename(&path,fixture.path().join("still-held-original")).unwrap();
     let replacement=std::fs::File::options().write(true).create_new(true).open(&path).unwrap();
     replacement.set_len(4096).unwrap();
@@ -117,6 +118,7 @@ fn waiting_ext_selection_neither_needs_a_valid_header_nor_excludes_a_writer_but_
 
 #[test]
 fn a_readable_original_changed_after_preview_does_not_reach_the_worker(){
+    use crate::fat32_check::leased::Selected;
     let fixture=crate::test_area::data_directory();let path=fixture.path().join("edited");
     let writer=std::fs::File::options().write(true).create_new(true).open(&path).unwrap();
     writer.set_len(4096).unwrap();

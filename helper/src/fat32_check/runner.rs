@@ -1,7 +1,7 @@
 //! One isolated invocation. The checker never gets host /dev, the caller's
 //! namespace/terminal, any host directory, or an arbitrary option. Only the
-//! ext4 branch binds the explicitly saved copy itself and holds a read lease.
-use super::{Format,ext4,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
+//! leased branches bind just the explicitly saved copy.
+use super::{Format,ext4,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -15,25 +15,37 @@ use std::{fs::File,io::{self,Read,Write},process::{Command,Stdio},thread,time::{
 const OUTPUT:usize=64*1024;
 const STATUS:usize=4096;
 const LIMIT:Duration=Duration::from_secs(30);
-const EXT4_LIMIT:Duration=Duration::from_secs(10*60);
+const LEASED_LIMIT:Duration=Duration::from_secs(10*60);
 
-pub(super) fn prepare_worker()->io::Result<()> {prepare(false)}
-pub(super) fn prepare_ext4_worker()->io::Result<()> {prepare(true)}
-fn prepare(ext4:bool)->io::Result<()> {
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum Budget{Sealed,Ext4,Xfs}
+pub(super) fn prepare_worker()->io::Result<()> {prepare(Budget::Sealed)}
+pub(super) fn prepare_ext4_worker()->io::Result<()> {prepare(Budget::Ext4)}
+pub(super) fn prepare_xfs_worker()->io::Result<()> {prepare(Budget::Xfs)}
+fn prepare(budget:Budget)->io::Result<()> {
     // This command owns the entire CLI process. Never lower process rlimits or
     // manipulate descriptor inheritance in an embedding service.
     rustix::thread::set_no_new_privs(true)?;
     crate::maintenance::diagnostic_worker(getuid().as_raw(),getgid().as_raw())?;
     helper_linux_evidence::isolate_check_descriptors()?;
     super::group::prepare()?;
+    let leased=budget!=Budget::Sealed;
+    // The original xfs_repair refuses to proceed if it cannot set a finite
+    // FSIZE to infinity. Do not raise an inherited limit, even for this child.
+    if budget==Budget::Xfs&&getrlimit(Resource::Fsize).current.is_some(){
+        return Err(invalid("upstream XFS requires an inherited unlimited file-size limit; nothing was raised"));
+    }
     // The ext guest has thirteen authenticated slots with each original
     // ancestry held, not eight. Allow those fds plus temporary probes/pipes.
-    for (r,n) in [(Resource::Cpu,12),(Resource::As,if ext4{2<<30}else{512<<20}),
-                  (Resource::Fsize,if ext4{64<<10}else{140<<20}),
-                  (Resource::Core,0),(Resource::Nofile,if ext4{192}else{128}),(Resource::Nproc,if ext4{256}else{64})]{
-        if ext4&&r==Resource::Cpu{continue;} // only the sandbox child has its own CPU ceiling
+    for (r,n) in [(Resource::Cpu,12),(Resource::As,if leased{2<<30}else{512<<20}),
+                  (Resource::Fsize,if leased{64<<10}else{140<<20}),
+                  (Resource::Core,0),(Resource::Nofile,if leased{192}else{128}),(Resource::Nproc,if leased{256}else{64})]{
+        if leased&&r==Resource::Cpu || budget==Budget::Xfs&&r==Resource::Fsize{continue;}
         let old=getrlimit(r);
         let hard=old.maximum.map_or(n,|h|h.min(n));let soft=old.current.map_or(hard,|s|s.min(hard));
+        // XFS attempts to restore NOFILE/AS soft from hard, so make the
+        // contained process's limits equal and never higher than inheritance.
+        let hard=if budget==Budget::Xfs{soft}else{hard};
         setrlimit(r,Rlimit{current:Some(soft),maximum:Some(hard)})?;
     }
     Ok(())
@@ -63,9 +75,19 @@ pub(super) fn check_ext4(runtime:&Runtime,image:&ext4::Image)->io::Result<ext4::
     if !delivered(&status,code){return Err(invalid("e2fsck delivery or actual exit not confirmed"));}
     Ok(ext4::classify(code,&out,&err,image.extent()))
 }
+pub(super) fn check_xfs(runtime:&Runtime,image:&xfs::Image)->io::Result<xfs::Report>{
+    runtime.require_xfs()?;
+    let (code,out,err,status)=invoke(runtime,Operand::LeasedXfs(image))?;
+    image.require()?;
+    if !delivered(&status,code){return Err(invalid("xfs_repair delivery or actual exit not confirmed"));}
+    Ok(xfs::classify(code,&out,&err,image.extent()))
+}
 #[derive(Clone,Copy)]
-enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image)}
-impl Operand<'_>{
+enum Operand<'a>{Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image)}
+impl<'a> Operand<'a>{
+    fn lease(self)->Option<&'a File>{
+        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file())}
+    }
     fn sandbox(self,cmd:&mut Command)->io::Result<OwnedFd>{
         match self{
             Self::Sealed(copy)=>{
@@ -74,8 +96,8 @@ impl Operand<'_>{
                 cmd.args(["--perms","0400","--ro-bind-data",&fd.as_raw_fd().to_string(),"/image"]);
                 Ok(fd)
             }
-            Self::LeasedExt4(image)=>{
-                let fd=give(image.file())?;
+            _=>{
+                let fd=give(self.lease().expect("leased operand"))?;
                 cmd.args(["--ro-bind-fd",&fd.as_raw_fd().to_string(),"/image"]);
                 Ok(fd)
             }
@@ -84,6 +106,7 @@ impl Operand<'_>{
 }
 fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
     let ext=matches!(copy,Operand::LeasedExt4(_));
+    let xfs=matches!(copy,Operand::LeasedXfs(_));
     let (stdin,fin)=pipe_with(PipeFlags::CLOEXEC)?;drop(fin); // real EOF, never a terminal
     let null=if ext{Some(give(&stdin)?)}else{None};
     let (rstatus,wstatus)=pipe_with(PipeFlags::CLOEXEC)?;
@@ -105,30 +128,37 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
         b.args(["--setenv","EXT2FS_NO_MTAB_OK","1","--size","65536","--tmpfs","/dev",
                 "--perms","0600","--file",&fd.as_raw_fd().to_string(),"/dev/null"]);
     }
+    if xfs{
+        // No devices or host tmp. This is just private, sized backing for
+        // the native XFS O_TMPFILE scratch. The original image stays RO.
+        b.args(["--perms","0700","--size","536870912","--tmpfs","/dev/shm"]);
+    }
     let (filter_read,filter_write)=pipe_with(PipeFlags::CLOEXEC)?;
     {
-        use helper_linux_evidence::diagnostic_process::{diagnostic_group_filter,ext4_group_filter};
+        use helper_linux_evidence::diagnostic_process::{diagnostic_group_filter,ext4_group_filter,xfs_group_filter};
         let mut w=File::from(filter_write);
-        w.write_all(&if ext{ext4_group_filter()}else{diagnostic_group_filter()})?;
+        w.write_all(&if ext{ext4_group_filter()}else if xfs{xfs_group_filter()}else{diagnostic_group_filter()})?;
     }
     let filter=give(&filter_read)?;b.args(["--seccomp",&filter.as_raw_fd().to_string()]);
     let operand=copy.sandbox(&mut b)?;let status=give(&wstatus)?;
     b.args(["--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),"--","/checker"]);
-    if ext{b.args(["-fn","-N","/image","/image"]);}else{b.args(["-n","/image"]);}
+    if ext{b.args(["-fn","-N","/image","/image"]);}
+    else if xfs{b.args(["-n","-f","-P","-t","0","-o","phase2_threads=1","/image"]);}
+    else{b.args(["-n","/image"]);}
     runtime.recheck()?;
     not_cancelled()?;
-    if let Operand::LeasedExt4(image)=copy{
-        image.require()?;
-        helper_linux_evidence::diagnostic_process::prepare_ext4_diagnostic_exec(&mut b,runtime.launcher())?;
-    }else{
-        helper_linux_evidence::diagnostic_process::prepare_diagnostic_exec(&mut b,runtime.launcher())?;
+    use helper_linux_evidence::diagnostic_process::{prepare_diagnostic_exec,prepare_ext4_diagnostic_exec,prepare_xfs_diagnostic_exec};
+    match copy{
+        Operand::Sealed(_)=>prepare_diagnostic_exec(&mut b,runtime.launcher())?,
+        Operand::LeasedExt4(image)=>{image.require()?;prepare_ext4_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::LeasedXfs(image)=>{image.require()?;prepare_xfs_diagnostic_exec(&mut b,runtime.launcher())?;},
     }
     let mut group=Group::new(b.spawn()?);
     // Only the sandbox monitor and its explicitly selected setup descriptions
     // retain writers. In particular the parent must not keep the status pipe open.
     drop(b);drop(given);drop(operand);drop(status);drop(wstatus);drop(filter);drop(filter_read);drop(null);
-    let lease=match copy{Operand::LeasedExt4(image)=>Some(image.file()),Operand::Sealed(_)=>None};
-    let result=collect(&mut group,File::from(rstatus),if ext{EXT4_LIMIT}else{LIMIT},lease);
+    let lease=copy.lease();
+    let result=collect(&mut group,File::from(rstatus),if lease.is_some(){LEASED_LIMIT}else{LIMIT},lease);
     let reaped=group.finish()?;
     let (code,out,err,status)=result?;
     not_cancelled()?;

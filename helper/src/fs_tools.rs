@@ -23,13 +23,13 @@ pub(crate) struct Profile {
     pub(crate) options:&'static [&'static str], pub(crate) target:Target, pub(crate) limit:&'static str,
 }
 impl Profile {
-    pub(crate) fn private(self)->bool {matches!(self.format,"fat32"|"exfat"|"ext4")}
+    pub(crate) fn private(self)->bool {matches!(self.format,"fat32"|"exfat"|"ext4"|"xfs")}
     fn slots(self)->Vec<&'static str>{
         if self.private(){vec!["usr","lib","local-ops-helper","disk-tools-v1","bin",self.tool]}
         else{vec!["usr",self.directory,self.tool]}
     }
     pub(crate) fn action(self)->&'static str {match self.format {
-        "fat32"|"exfat"=>"sealed-copy-readonly", "ext4"=>"leased-saved-copy-readonly",
+        "fat32"|"exfat"=>"sealed-copy-readonly", "ext4"|"xfs"=>"leased-saved-copy-readonly",
         "zfs"=>"host-version-and-loaded-module-required-not-enabled", _=>"planned-not-enabled"
     }}
 }

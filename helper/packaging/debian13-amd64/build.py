@@ -38,6 +38,12 @@ EXT4_NEEDED = {
     "libuuid.so.1": {"libc.so.6",LOADER},
     "libe2p.so.2": {"libc.so.6"},
 }
+XFS_LIBS = ("libuuid.so.1", "libblkid.so.1", "liburcu.so.8")
+XFS_NEEDED = {
+    "xfs_repair": {"libc.so.6", *XFS_LIBS},
+    "liburcu.so.8": {"libc.so.6", LOADER},
+}
+CHECKER_NEEDED = EXT4_NEEDED | XFS_NEEDED  # shared libuuid/blkid requirements already exact above
 
 
 def textout(args, cwd=None):
@@ -300,16 +306,17 @@ def build(args):
         cap_manifest=cap/"CAPSULE"
         with cap_manifest.open("xb") as mf: mf.write(samba_capsule.manifest_bytes(recipe))
         binary=copy_checked(args.helper,root/"usr/bin/helper",args.helper_sha256,cap=64<<20)
-        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat",home/"bin/e2fsck"]
+        programs=[binary,home/"bin/bwrap",home/"bin/fsck.fat",home/"bin/fsck.exfat",home/"bin/e2fsck",home/"bin/xfs_repair"]
         libs=sorted((home/"lib").iterdir())
         allowed={p.name for p in libs}
-        base=allowed-set(EXT4_LIBS)
-        require(set(EXT4_LIBS)<=allowed,"missing e2fsck guest library")
+        extras=set(EXT4_LIBS)|set(XFS_LIBS)
+        base=allowed-extras
+        require(extras<=allowed,"missing leased-copy guest library")
         requires={}
         for path in programs+libs:
-            expected=EXT4_NEEDED.get(path.name)
+            expected=CHECKER_NEEDED.get(path.name)
             needed=elf(path,allowed if expected else base,engine=path.name in {"fsck.fat","fsck.exfat"},library=path in libs)
-            require(expected is None or set(needed)==expected,"e2fsck guest DT_NEEDED differs from the fixed Debian closure")
+            require(expected is None or set(needed)==expected,"checker guest DT_NEEDED differs from the fixed Debian closure")
             requires[str(path.relative_to(root))]=needed
             path.chmod(0o755 if path in programs or path.name==LOADER else 0o644)
         # Provider is loaded only for an allowed NEW first setup. Even an
@@ -325,11 +332,12 @@ def build(args):
             require(textout(["/usr/bin/patchelf","--print-interpreter",str(checker)])==SYSTEM_LOADER,"unexpected sandbox loader")
         for path in programs[:2]:
             bind_private_loader(path)
-        # Keep the established two profiles byte-identical. Samba separately
-        # pins the original FAT32 profile, not this new ext4 guest.
+        # Keep all existing profiles byte-identical. Samba separately pins the
+        # original FAT32 profile and gets no XFS checker or library.
         for policy,version_label,tool,extra in (("fat32-check-v1","dosfstools-4.2","fsck.fat",()),
                 ("exfat-check-v1","exfatprogs-1.2.9","fsck.exfat",()),
-                ("ext4-check-v1","e2fsprogs-1.47.2","e2fsck",EXT4_LIBS)):
+                ("ext4-check-v1","e2fsprogs-1.47.2","e2fsck",EXT4_LIBS),
+                ("xfs-check-v1","xfsprogs-6.13.0","xfs_repair",XFS_LIBS)):
             keys=(PROFILE[0],tool,*PROFILE[2:],*extra)
             files=(FILES[0],"bin/"+tool,*FILES[2:],*(f"lib/{name}" for name in extra))
             lines=[f"{key} {digest(home/leaf)}" for key,leaf in zip(keys,files,strict=True)]
@@ -344,7 +352,7 @@ def build(args):
               "inactive_smb_installation_check":smb_host,
               "first_live_template":{"path":LIVE_TEMPLATE,"sha256":digest(template)},
               "samba_inputs":sam,"samba_static":{k:v for k,v in recipe.items() if k!="files"},"samba_manifest":str(cap_manifest.relative_to(root)),"samba_manifest_sha256":digest(cap_manifest),
-              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly","e2fsck":"leased-saved-copy-readonly"}}
+              "relocation":["usr/bin/helper",PRIVATE_NAME+"/bin/bwrap"],"actions":{"fsck.fat":"sealed-copy-readonly","fsck.exfat":"sealed-copy-readonly","e2fsck":"leased-saved-copy-readonly","xfs_repair":"leased-saved-copy-readonly"}}
         # Candidate NON-privileged material for the release signer. Do not
         # install it as its own authorization: the package owner is not the site's
         # authority. It and the exact .deb are covered by the external signed sums.
