@@ -93,11 +93,15 @@ def create_catalog(work, store, state, base, instance_id, *, checked_root=None, 
 
 
 @contextmanager
-def locked(state, *, read_only=False, live=None, operation=None, phase="更新原工作树登记"):
+def locked(state, *, read_only=False, live=None, local_only=False, operation=None, phase="更新原工作树登记"):
     """Open the existing catalog with either a read snapshot or a reserved writer."""
+    if local_only and (not read_only or live is None):
+        raise Rejected("without STORE only this live session's local read is permitted")
     state = Path(state).absolute()
     db = state / "worktree.sqlite"
-    if live is not None: live.check_catalog(db)
+    def check_catalog():
+        if live is not None: live.check_catalog(db, local_only=local_only)
+    check_catalog()
     if not state.is_dir() or state.is_symlink() or (state.stat().st_mode & 0o077):
         raise Rejected("use the existing private worktree state directory")
     mode = "ro" if read_only else "rw"  # Neither may create a missing catalog.
@@ -109,7 +113,7 @@ def locked(state, *, read_only=False, live=None, operation=None, phase="更新�
         database_error(error); raise
     con.row_factory = sqlite3.Row
     try:
-        if live is not None: live.check_catalog(db)
+        check_catalog()
         if read_only:
             con.execute("BEGIN")  # Both checkout and instance reads see the same committed state.
         else:
@@ -118,7 +122,7 @@ def locked(state, *, read_only=False, live=None, operation=None, phase="更新�
         row = con.execute("SELECT * FROM checkout WHERE singleton=1").fetchone()
         if row is None: raise Rejected("worktree record missing")
         yield con, row, state
-        if live is not None: live.check_catalog(db)
+        check_catalog()
         con.commit()
     except BaseException as error:
         database_error(error)
@@ -261,7 +265,7 @@ def branch_from_snapshot(state, *, selected):
 
 
 def status(state, *, live=None):
-    with locked(state, read_only=True, live=live) as (con, row, _):
+    with locked(state, read_only=True, live=live, local_only=live is not None) as (con, row, _):
         rec = lifecycle.instance(con)
         if live is not None:
             live.check_instance(row, rec)

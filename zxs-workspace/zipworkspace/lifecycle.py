@@ -104,9 +104,9 @@ def _verify_base(doc, name, expected):
     return marker, base
 
 
-def _idle_live_base(live):
+def _idle_live_base(live, *, local_only=False):
     from .worktree import locked
-    with locked(live.state, read_only=True, live=live) as (con, row, _):
+    with locked(live.state, read_only=True, live=live, local_only=local_only) as (con, row, _):
         rec = instance(con)
         live.check_instance(row, rec)
         if (rec["phase"] != "visible" or rec["active"] is not None
@@ -115,24 +115,45 @@ def _idle_live_base(live):
         return _base_values(row)
 
 
-def observe_live_changes(live):
-    """One observation against this still-held CLI checkout's last recorded base."""
-    from .comparison import compare_manifests
+def _observe_local_work(live, *, with_store):
     from .private_stage import same_mount
-
-    expected = _idle_live_base(live)
-    name = _base_leaf(expected)
     working_mount = same_mount(live.state_fd, live.work_fd)
-    store_mount = mount_id(live.store_fd)
-    _distinct_roots((live.work_fd, live.state_fd, live.store_fd))
+    outside = (live.state_fd, live.store_fd) if with_store else (live.state_fd,)
+    _distinct_roots((live.work_fd, *outside))
     work = native_identity(os.fstat(live.work_fd), stat.S_IFDIR)
-    excluded = {native_identity(os.fstat(fd), stat.S_IFDIR) for fd in (live.state_fd, live.store_fd)}
+    excluded = {native_identity(os.fstat(fd), stat.S_IFDIR) for fd in outside}
+    excluded.add(live.store_identity)  # Originally observed, not a lookup in the offline STORE.
 
     def work_member(_, child):
         m = os.fstat(child)
         if (m.st_dev, m.st_ino) in excluded or mount_id(child) != working_mount:
             raise Rejected("工作目录含子挂载或 STATE/STORE 别名；没有完整观察")
 
+    return observe_held(live.work_fd, work, require_ids=True, check_held=work_member)
+
+
+def observe_initial_changes(live):
+    """Local observation only, against the exact initial checkout this window created."""
+    from .comparison import compare_to_index
+    index = live.initial_index
+    if index is None: raise Rejected("本窗口没有从原签出交接的初始核验索引")
+    marker = index.commit
+    expected = (marker.repo, marker.branch, marker.generation, marker.operation, live.checkout_sha)
+    if _idle_live_base(live, local_only=True) != expected:
+        raise Rejected("原登记已不是首次签出的确切基线；请核验 STORE 中的当前版本")
+    current = _observe_local_work(live, with_store=False)
+    result = compare_to_index(index, current)
+    if _idle_live_base(live, local_only=True) != expected:
+        raise Rejected("离线观察期间原基线改变；不显示旧结果")
+    return marker, result
+
+
+def observe_live_changes(live):
+    """One observation against this still-held CLI checkout's last recorded base."""
+    from .comparison import compare_manifests
+    expected = _idle_live_base(live)
+    name = _base_leaf(expected)
+    store_mount = mount_id(live.store_fd)
     # Both SQLite snapshots are short. Only original archive/work descriptors,
     # not a SQLite transaction, stay held across the potentially large reads.
     with relative_document(live.store_fd, name) as doc:
@@ -141,7 +162,7 @@ def observe_live_changes(live):
             raise Rejected("基线归档不在原 STORE 挂载")
         marker, base = _verify_base(doc, name, expected)
         check_relative(live.store_fd, name, doc, observed)
-        current = observe_held(live.work_fd, work, require_ids=True, check_held=work_member)
+        current = _observe_local_work(live, with_store=True)
         result = compare_manifests(base, current)
         if _idle_live_base(live) != expected:
             raise Rejected("观察期间原登记基线改变；请重新查看")

@@ -99,6 +99,48 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
             else: entry.unlink()
             saved.rename(entry)
 
+    def test_initial_status_and_local_changes_do_not_touch_offline_store_or_loose_source(self):
+        from zipworkspace.desktop import live_checkout
+        self.store.rename(self.root/"offline-store")
+        self.loose.rename(self.root/"former-selection.zxs")
+        (self.tree/"story").write_bytes(b"offline edit")
+        (self.tree/"local-empty").mkdir()
+        original_named, real_stat = live_checkout._named_mount, os.fstat
+        def named(path, fd):
+            self.assertNotEqual(path, self.store)
+            return original_named(path, fd)
+        def fstat(fd):
+            self.assertNotEqual(fd, self.live.store_fd)
+            return real_stat(fd)
+        with patch.object(live_checkout, "_named_mount", side_effect=named), \
+             patch.object(os, "fstat", side_effect=fstat), \
+             patch.object(lifecycle, "relative_document", side_effect=AssertionError("no archive reopened")), \
+             patch.object(os, "fsync", side_effect=AssertionError("no writing")):
+            record = self.live.status()
+            before, report = lifecycle.observe_initial_changes(self.live)
+        self.assertEqual(record["base_operation"], self.first.operation)
+        self.assertEqual(before, self.first)
+        self.assertEqual([(r.path, r.change) for r in report.rows],
+                         [("local-empty", "added"), ("story", "changed")])
+        with self.assertRaises(OSError): lifecycle.observe_live_changes(self.live)
+        with patch.object(worktree.sqlite3, "connect", side_effect=AssertionError("no offline writer")):
+            with self.assertRaisesRegex(Rejected, "only this live session's local read"):
+                with worktree.locked(self.state, live=self.live, local_only=True): pass
+
+    def test_offline_compare_requires_the_exact_initial_raw_digest_before_and_after_read(self):
+        real_observe = lifecycle.observe_held
+        def change_basis(*args, **kwargs):
+            seen = real_observe(*args, **kwargs)
+            with worktree.locked(self.state) as (con, _, __):
+                con.execute("UPDATE checkout SET base_sha=? WHERE singleton=1", ("7"*64,))
+            return seen
+        with patch.object(lifecycle, "observe_held", side_effect=change_basis):
+            with self.assertRaisesRegex(Rejected, "原基线改变"):
+                lifecycle.observe_initial_changes(self.live)
+        with patch.object(lifecycle, "observe_held", side_effect=AssertionError("wrong initial raw digest")):
+            with self.assertRaisesRegex(Rejected, "不是首次签出的确切基线"):
+                lifecycle.observe_initial_changes(self.live)
+
     @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
     def test_window_poll_uses_the_original_session_for_success_and_failure_and_releases_the_loan(self):
         from PySide6.QtWidgets import QApplication
@@ -150,6 +192,35 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
                     self.assertEqual(report.rows, ())
                 pane.close_session()
 
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_window_links_offline_status_and_the_initial_comparison_button(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        pane = win.archive.checkout; pane._attach(self.live)
+        self.store.rename(self.root/"offline")
+        (self.tree/"story").write_bytes(b"changed while offline")
+        jobs = []
+        def queue(work):
+            future = Future()
+            jobs.append((future, work))
+            return future
+        def poll():
+            future, work = jobs.pop(0)
+            self.assertTrue(future.set_running_or_notify_cancel())
+            future.set_result(work())
+            win.poll()
+        with patch.object(win.pool, "submit", side_effect=queue):
+            self.assertFalse(pane.initial_changes.isEnabled())
+            pane.refresh_live(); poll()
+            self.assertTrue(pane.initial_changes.isEnabled())
+            pane.initial_changes.click(); poll()
+            self.assertEqual(pane.changes_dialog.windowTitle(), "离线对照首次签出版本")
+            self.assertIn("未检查 STORE", win.note.text())
+            pane.changes_dialog.reject()
+            self.assertFalse(jobs)
 
     @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
     def test_worktree_dialog_pages_full_relative_names_and_closes_with_the_session(self):
@@ -226,8 +297,8 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         opened, active = [], []
         real_locked, real_observe = worktree.locked, lifecycle.observe_held
         @contextmanager
-        def read_only(state, *, read_only, live):
-            self.assertEqual((state, read_only, live), (self.state, True, self.live))
+        def read_only(state, *, read_only, live, local_only=False):
+            self.assertEqual((state, read_only, live, local_only), (self.state, True, self.live, False))
             with real_locked(state, read_only=read_only, live=live) as data:
                 opened.append(data[1]["parent"]); active.append(True)
                 try: yield data

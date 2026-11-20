@@ -166,6 +166,11 @@ def compare_manifests(base, observed):
     return Changes(*_changes(base.rows.items(), observed.rows))
 
 
+def compare_to_index(index, observed):
+    """A previous full archive verification, compared to the selected local scan."""
+    return Changes(*_changes(_rows(index), observed.rows))
+
+
 def compare_snapshots(before, other):
     """Both ArchiveBrowsers already verified; never open live bodies here."""
     if before.commit.repo != other.commit.repo:

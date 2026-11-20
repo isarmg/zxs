@@ -222,7 +222,7 @@ class CheckoutChoice:
         self.provisional = LiveCheckout(self.destination, self.state, self.store.path, row["worktree"],
                                         snapshot.browser.commit.repo, work_fd, state_fd, store_fd,
                                         source=(self.operation, snapshot.browser.commit, self.verified_sha,
-                                                snapshot.path, snapshot.observed))
+                                                snapshot.path, snapshot.observed), initial_index=snapshot.browser)
         return self.provisional
 
     def take_session(self):

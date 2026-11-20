@@ -15,7 +15,7 @@ from .checkout_action import _named_mount
 class LiveCheckout:
     """Only the actual creator of a new catalog can supply a session."""
     def __init__(self, work, state, store, instance, repo, work_fd, private_fd, store_fd,
-                 *, source=None, initial_branch=None):
+                 *, source=None, initial_branch=None, initial_index=None):
         self.work, self.state, self.store = work, state, store
         self.instance, self.repo = check_id(instance), check_id(repo)
         self.initial_base = ((self.repo, check_id(initial_branch), 0, None, None)
@@ -26,13 +26,19 @@ class LiveCheckout:
             raise Rejected("必须明确交接已签出的原节点或本次新登记的空基线")
         (self.checkout_operation, self.checkout_marker, self.checkout_sha,
          self.source_path, self.source_stamp) = source if source is not None else (None,)*5
-        # Shared by borrowed views, but does not retain the browser or its archive FD.
+        if initial_index is not None and (source is None or initial_index.commit != self.checkout_marker):
+            raise Rejected("首次签出索引不属于原节点")
+        # Verified names/digests only, independent of the display selection and
+        # its remote file descriptor. Never an authority for writing to STORE.
+        self.initial_index = initial_index
+        # The revocation is shared by borrowed views; none holds the old display FD.
         self._branch_source_revoked = Event()
         self.stack, self.db, self.closed = ExitStack(), None, False
         try:
             self.work_fd, self.state_fd, self.store_fd = (
                 self.keep(fd) for fd in (work_fd, private_fd, store_fd))
             self.check_dirs()
+            self.store_identity = native_identity(os.fstat(self.store_fd), stat.S_IFDIR)
         except BaseException:
             self.close()
             raise
@@ -70,15 +76,19 @@ class LiveCheckout:
     def close(self):
         if not self.closed:
             self.closed = True
+            self.initial_index = None
             self.stack.close()
 
-    def check_dirs(self):
+    def check_state(self):
         if self.closed: raise Rejected("已关闭本窗口的原工作树会话")
         _named_mount(self.state, self.state_fd)
-        _named_mount(self.store, self.store_fd)
         m = os.fstat(self.state_fd)
         if m.st_uid != os.geteuid() or m.st_mode & 0o077:
             raise Rejected("原 CLI 状态目录不再由当前用户独占")
+
+    def check_dirs(self):
+        self.check_state()
+        _named_mount(self.store, self.store_fd)
 
     def new_catalog(self, path, original):
         self.check_dirs()
@@ -93,8 +103,9 @@ class LiveCheckout:
             raise Rejected("新建的原 catalog 文件在交接前已被替换")
         self.check_catalog(path)
 
-    def check_catalog(self, path):
-        self.check_dirs()
+    def check_catalog(self, path, *, local_only=False):
+        if local_only: self.check_state()
+        else: self.check_dirs()
         if self.db is None or path.parent != self.state:
             raise Rejected("无本窗口实际创建的库，不按路径接管")
         named_fd = os.open(path.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.state_fd)

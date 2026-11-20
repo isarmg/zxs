@@ -3,7 +3,7 @@ from contextlib import closing
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QVBoxLayout, QWidget
 
 from ..capacity import describe
-from ..lifecycle import LiveVisibility, observe_live_changes
+from ..lifecycle import LiveVisibility, observe_initial_changes, observe_live_changes
 from ..model import Rejected
 
 from .checkout_action import CheckoutChoice, available
@@ -37,7 +37,11 @@ class CheckoutPane(QWidget):
         self.refresh = button("刷新本窗口工作树的状态", self.refresh_live)
         layout.addWidget(self.refresh)
         self.changes = button("查看工作目录相对基线的改动…", self.compare_live)
-        layout.addWidget(self.changes)
+        self.initial_changes = button("离线对照首次签出版本…", lambda: self.compare_live(initial=True))
+        comparison_line = QHBoxLayout()
+        comparison_line.addWidget(self.changes)
+        comparison_line.addWidget(self.initial_changes)
+        layout.addLayout(comparison_line)
         move_line = QHBoxLayout()
         self.move = button("临时收起工作目录…", self.move_live)
         self.move_query = button("只读查本次收起／恢复回执", self.query_visibility)
@@ -302,6 +306,11 @@ class CheckoutPane(QWidget):
         committed = bool(record.get("base_generation"))
         no_commit = record.get("pending_operation") is None
         self.changes.setEnabled(idle and visible and committed and no_commit)
+        index = self.live.initial_index if self.live is not None else None
+        self.initial_changes.setEnabled(bool(idle and visible and committed and no_commit and index is not None
+                                             and (record.get("branch"), record.get("base_generation"),
+                                                  record.get("base_operation")) ==
+                                                 (index.commit.branch, index.commit.generation, index.commit.operation)))
         self.commits.allow_visible(visible)
         self.move.setText("恢复原路径并保留改动…" if phase == "hidden" else "临时收起工作目录…")
         self.move.setEnabled(bool(idle and committed and no_commit and phase in ("visible", "hidden")
@@ -408,7 +417,7 @@ class CheckoutPane(QWidget):
 
         self._visibility_job("正在只读查询本窗口这笔原目录改名…", plan.result, shown)
 
-    def compare_live(self):
+    def compare_live(self, *, initial=False):
         live = self.live
         if (live is None or self.owner.pending is not None or self.active
                 or self.commits.running is not None or self.changes_dialog is not None): return
@@ -418,8 +427,12 @@ class CheckoutPane(QWidget):
             if error is not None:
                 self.owner.inform(f"未取得完整工作树对照：{error}。未启动冻结、提交或恢复。")
                 return
-            self.owner.inform("工作树只读对照已完成；后续编辑不会自动刷新。")
-            self.show_changes(live, *result)
+            if initial:
+                self.owner.inform("离线对照已完成；未检查 STORE，后续编辑不会自动刷新。")
+                self.show_changes(live, *result, initial=True)
+            else:
+                self.owner.inform("工作树只读对照已完成；后续编辑不会自动刷新。")
+                self.show_changes(live, *result)
 
         loan = None
         try:
@@ -427,9 +440,12 @@ class CheckoutPane(QWidget):
             def read():
                 # Route a late refusal through the same session check as a late success.
                 try:
-                    with closing(loan): return observe_live_changes(loan), None
+                    with closing(loan):
+                        return (observe_initial_changes(loan) if initial else observe_live_changes(loan)), None
                 except Exception as error: return None, error
-            future = self.owner.job("正在只读核验实际基线及本次工作目录…", read, done)
+            title = ("正在离线对照初次签出的原核验索引和本机工作目录…" if initial else
+                     "正在只读核验实际基线及本次工作目录…")
+            future = self.owner.job(title, read, done)
             if future is None: raise Rejected("另一个任务正在执行；未开始对照")
         except BaseException as error:
             if loan is not None: loan.close()
@@ -438,17 +454,19 @@ class CheckoutPane(QWidget):
         else:
             future.add_done_callback(lambda task: loan.close() if task.cancelled() else None)
 
-    def show_changes(self, live, marker, report):
+    def show_changes(self, live, marker, report, *, initial=False):
         # The read-only result exists only in this modal view. Once closed it
         # cannot linger into a later commit, recovery, or baseline switch.
         dialog = QDialog(self)
-        dialog.setWindowTitle("工作目录相对基线的改动")
+        dialog.setWindowTitle("离线对照首次签出版本" if initial else "工作目录相对基线的改动")
         dialog.resize(820, 510)
         layout = QVBoxLayout(dialog)
         layout.addWidget(label(
             f"原工作目录：{live.work}\n当前登记基线：分支 {marker.branch} · 第 {marker.generation} 代\n"
             f"基线节点：{marker.operation}\n新增 {report.added} · 修改 {report.changed} · 缺少 {report.missing}。"
             + ("本次未发现差异。" if not report.rows else "")))
+        if initial:
+            layout.addWidget(label("只使用首次签出时的核验索引；没有读取或验证 STORE，也不证明现在能提交。"))
         layout.addWidget(label("这是一次观察，不是实时或原子快照，也不能代替提交前停止写入者。"))
         table = Table(("相对路径", "差异", "登记基线", "工作目录"), "本工作树的只读改动")
         layout.addWidget(table)
@@ -495,7 +513,7 @@ class CheckoutPane(QWidget):
                 f"实例：{record['worktree']}\n可见状态：{phase}\n分支：{record['branch']} · {base}\n"
                 f"待决提交：{record['pending_operation'] or '无'}\n"
                 f"待决隐藏/恢复：{record['pending_visibility_operation'] or '无'}\n"
-                "这是原登记的一次只读快照，未检查工作文件是否已修改。")
+                "这是本机原登记的一次只读观察；未检查工作文件是否已修改，也未检查 STORE 是否可用。")
             self.owner.inform("已读取本窗口原工作树状态。")
         def failed(error):
             if self.live is live:
