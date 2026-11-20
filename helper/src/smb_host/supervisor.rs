@@ -2,7 +2,7 @@
 //! ELFs, not a shell, service-manager wrapper, namespace proxy or looked-up PID.
 //! Package/site policy for authorizing the actual private deployment is upstream
 //! of Inputs. No automatic start, web request, self-approval or retry.
-use super::{Control,no,origins::{Inputs,Selected},process};
+use super::{Control,no,origins::{Inputs,OriginalMounts,Selected,View},process};
 use helper_linux_evidence::{diagnostic_process as signals,smb_ready::{self,Receipt},smb_spawn::{self,Born}};
 use std::{io,thread,time::{Duration,Instant}};
 
@@ -18,7 +18,7 @@ impl<'a> Pair<'a>{
         let site=Selected::new(inputs)?;cancelled()?;
         // The typed foreground origin already owns the original S SH
         // followed by site EX, and cannot drop them while either child exists.
-        let bound=site.require()?;
+        let bound=site.require(View::Prepared,View::Prepared)?;
         let want=smb_ready::expected(&bound,&site.inputs.plan.sha());
         let (receipt,offer)=Receipt::fresh()?;
         let control=Control::fresh()?;let end=Instant::now()+Duration::from_secs(9);
@@ -32,7 +32,8 @@ impl<'a> Pair<'a>{
             if process::qualify(daemon.original(),site.daemon.file,&control.daemon,&control.storage).is_ok(){break;}
             if Instant::now()>=end{return Err(no());}thread::sleep(Duration::from_millis(5));
         }
-        site.require()?;cancelled()?;
+        let daemon_mounts=OriginalMounts::capture(&daemon,site.inputs.daemon_root,true)?;
+        site.require(View::Running(&daemon,&daemon_mounts),View::Prepared)?;cancelled()?;
         let handoff=control.for_storage(daemon.original(),&site.daemon)?;
         let (opposite,_original_master)=handoff.original_3_5()?;
         let storage=smb_spawn::storage(site.storage.file,site.inputs.storage_root,opposite,site.inputs.bound_readonly,&daemon,&site.env,site.inputs.null)?;
@@ -41,9 +42,11 @@ impl<'a> Pair<'a>{
         let checked=(||{
             pair.storage.exec_barrier(end)?;let v=&pair.site;
             process::storage_snapshot(pair.storage.original(),v.storage.file,v.inputs.uid,v.inputs.gid)?;
-            process::waitable_live(pair.daemon.original())?;v.require()?;cancelled()?;
+            let storage_mounts=OriginalMounts::capture(&pair.storage,v.inputs.storage_root,false)?;
+            let mounted=||v.require(View::Running(&pair.daemon,&daemon_mounts),View::Running(&pair.storage,&storage_mounts));
+            process::waitable_live(pair.daemon.original())?;mounted()?;cancelled()?;
             receipt.wait(&want,&pair.daemon,&pair.storage,Instant::now()+Duration::from_secs(30))?;
-            if v.require()?!=bound{return Err(no());}
+            if mounted()?!=bound{return Err(no());}
             cancelled()
         })();
         if let Err(e)=checked{pair.abort()?;return Err(e);}

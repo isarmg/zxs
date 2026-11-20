@@ -1,9 +1,9 @@
 //! Live, independently selected installation objects for one approved start.
 //! This is not an authority issuer. No "trust these hashes" CLI or callback.
-use super::{Image,no,release::Release};
+use super::{Image,no,process,release::Release};
 use crate::{sqlite_install::Online,pinned::{Entity,Mount,Pinned},smb_profile::{self,first::Plan}};
-use helper_linux_evidence::smb_spawn::StorageConfig;
-use rustix::{fs::{Mode,OFlags,ResolveFlags,StatVfsMountFlags,fcntl_getfl,fstatvfs,open,openat2},io::Errno};
+use helper_linux_evidence::smb_spawn::{Born,StorageConfig};
+use rustix::{fs::{Mode,OFlags,PROC_SUPER_MAGIC,ResolveFlags,StatVfsMountFlags,fcntl_getfl,fstatfs,fstatvfs,open,openat2},io::Errno};
 #[cfg(test)]
 use rustix::fs::{FlockOperation,flock};
 use sha2::{Digest,Sha256};
@@ -32,10 +32,68 @@ pub(super) fn ro(f:&File)->io::Result<bool>{Ok(fstatvfs(f)?.f_flag.contains(Stat
 fn directory(f:&File,unowned:bool)->io::Result<()>{
     let m=f.metadata()?;if !m.is_dir() ||unowned&&(m.uid()!=0||m.mode()&0o022!=0){return Err(no());}Ok(())
 }
-fn view(f:&File,host:&File)->io::Result<()>{
+fn base_view(f:&File,host:&File)->io::Result<()>{
     directory(f,true)?;
     if !ro(f)?||ident(f)?==ident(host)?||Mount::on(f)?.is_none_or(|m|m.at_root!=Some(true)){return Err(no());}
+    Ok(())
+}
+fn prepared_view(f:&File)->io::Result<()>{
     let leaf=dir(f,"proc")?;directory(&leaf,true)?;if mid(&leaf)?!=mid(f)?{return Err(no());}Ok(())
+}
+
+// A view FD is not a retained snapshot of its unmounted leaves. Linux has
+// moved the same vfsmount to this child's private namespace, so subsequent
+// path lookups through it see the child's fixed proc/scratch overmounts.
+#[derive(PartialEq,Eq)]
+pub(super) struct OriginalMounts{root:(Entity,u64),proc:(Entity,u64),scratch:Option<[(Entity,u64);3]>}
+const SCRATCH:[&str;3]=["run","cache","lock"];
+const ISOLATED:StatVfsMountFlags=StatVfsMountFlags::NODEV.union(StatVfsMountFlags::NOSUID).union(StatVfsMountFlags::NOEXEC);
+#[derive(Clone,Copy)]
+enum Leaf{Proc,Scratch}
+fn leaf_policy(kind:Leaf,magic:u32,mode:u32,uid:u32,gid:u32,ino:u64,flags:StatVfsMountFlags)->bool{
+    if uid!=0||gid!=0||!flags.contains(ISOLATED){return false;}
+    match kind{
+        Leaf::Proc=>magic==PROC_SUPER_MAGIC as u32&&ino==1&&flags.contains(StatVfsMountFlags::RDONLY),
+        Leaf::Scratch=>magic==0x0102_1994&&mode==0o040700&&!flags.contains(StatVfsMountFlags::RDONLY),
+    }
+}
+fn attached(f:&File,kind:Leaf)->io::Result<(Entity,u64)>{
+    let m=f.metadata()?;let e=Entity::of(&m)?;
+    let mount=Mount::on(f)?.filter(|m|m.at_root==Some(true)).ok_or_else(no)?;
+    if !m.is_dir()||m.nlink()==0||!leaf_policy(kind,fstatfs(f)?.f_type as u32,m.mode(),m.uid(),m.gid(),e.ino,
+        fstatvfs(f)?.f_flag){return Err(no());}
+    Ok((e,mount.id))
+}
+impl OriginalMounts{
+    pub(super) fn capture(original:&Born,view:&File,daemon:bool)->io::Result<Self>{
+        let root=process::role_root(original.original(),view)?;
+        let base=(ident(&root)?,mid(&root)?);
+        let p=attached(&dir(&root,"proc")?,Leaf::Proc)?;
+        let scratch=if daemon{
+            let i=dir(&root,"instance")?;
+            let observe=|name|->io::Result<(Entity,u64)>{attached(&dir(&i,name)?,Leaf::Scratch)};
+            Some([observe(SCRATCH[0])?,observe(SCRATCH[1])?,observe(SCRATCH[2])?])
+        }else{None};
+        let mut unique=vec![base,p];
+        if let Some(extra)=scratch{unique.extend(extra);}
+        if unique.iter().enumerate().any(|(i,(o,m))|unique[..i].iter().any(|(before,n)|before==o||n==m)){
+            return Err(no());
+        }
+        process::role_root(original.original(),view)?;
+        Ok(Self{root:base,proc:p,scratch})
+    }
+}
+#[derive(Clone,Copy)]
+pub(super) enum View<'a>{Prepared,Running(&'a Born,&'a OriginalMounts)}
+impl View<'_>{
+    fn require(self,view:&File,host:&File,daemon:bool)->io::Result<()>{
+        base_view(view,host)?;
+        match self{
+            Self::Prepared=>prepared_view(view),
+            Self::Running(id,expected) if OriginalMounts::capture(id,view,daemon)?==*expected=>Ok(()),
+            _=>Err(no()),
+        }
+    }
 }
 fn exact_public(f:&File,len:u64)->io::Result<()>{
     let m=f.metadata()?;
@@ -99,9 +157,9 @@ impl<'a> Selected<'a>{
         let env=StorageConfig::selected(inputs.uid,inputs.gid,inputs.system_path,inputs.pool,inputs.instance,inputs.operation,config)?;
         let release=inputs.release;
         let daemon=Image::select(release,true)?;let storage=Image::select(release,false)?;
-        let x=Self{inputs,daemon,storage,env,live};x.require()?;Ok(x)
+        let x=Self{inputs,daemon,storage,env,live};x.require(View::Prepared,View::Prepared)?;Ok(x)
     }
-    pub(super) fn require(&self)->io::Result<[u8;128]>{
+    pub(super) fn require(&self,daemon_view:View<'_>,storage_view:View<'_>)->io::Result<[u8;128]>{
         let a=&self.inputs;a.approved.require()?;self.daemon.original()?;self.storage.original()?;
         if a.system_pin.path()!=std::path::Path::new(a.system_path)||
             a.system_pin.entity()!=ident(a.system)?||a.system_pin.require_same_named_mount()?.id!=mid(a.system)?{
@@ -109,7 +167,7 @@ impl<'a> Selected<'a>{
         }
         if ident(self.daemon.file)?==ident(self.storage.file)?{return Err(no());}
         let host=File::from(open(c"/",DIR,Mode::empty())?);
-        view(a.daemon_root,&host)?;view(a.storage_root,&host)?;
+        daemon_view.require(a.daemon_root,&host,true)?;storage_view.require(a.storage_root,&host,false)?;
         super::identity::require(a.daemon_root,a.storage_root,a.approved_nss_sha,(a.uid,a.gid))?;
         let ids=[ident(a.daemon_root)?,ident(a.storage_root)?,ident(a.site)?,ident(a.system)?];
         if ids.iter().enumerate().any(|(i,k)|ids[..i].contains(k)){return Err(no());}
@@ -140,8 +198,10 @@ impl<'a> Selected<'a>{
             mid(&store)?!=mid(&account)?||mid(&shown)?!=mid(&account_view)?||ident(&store)?!=ident(&shown)?||!ro(&shown)?{
             return Err(no());
         }
-        for n in ["run","cache","lock"]{
-            let d=dir(&role,n)?;directory(&d,true)?;if mid(&d)?!=mid(&role)?||!ro(&d)?{return Err(no());}
+        if matches!(daemon_view,View::Prepared){
+            for n in SCRATCH{
+                let d=dir(&role,n)?;directory(&d,true)?;if mid(&d)?!=mid(&role)?||!ro(&d)?{return Err(no());}
+            }
         }
         for (path,orig) in std::iter::once((std::path::Path::new(a.system_path),a.system)).chain(a.approved.roots()){
             let relative=path.strip_prefix("/").map_err(|_|no())?;
@@ -185,6 +245,20 @@ impl<'a> Selected<'a>{
 #[cfg(test)]
 mod lease_tests{
     use super::*;
+    #[test]fn running_views_do_not_accept_readonly_scratch_or_an_arbitrary_proc_lookalike(){
+        let proc=PROC_SUPER_MAGIC as u32;let tmp=0x0102_1994;
+        let ro=StatVfsMountFlags::RDONLY;
+        assert!(leaf_policy(Leaf::Proc,proc,0o040555,0,0,1,ISOLATED|ro));
+        assert!(leaf_policy(Leaf::Scratch,tmp,0o040700,0,0,1,ISOLATED));
+        assert!(!leaf_policy(Leaf::Proc,tmp,0o040555,0,0,1,ISOLATED|ro));
+        assert!(!leaf_policy(Leaf::Proc,proc,0o040555,0,0,2,ISOLATED|ro));
+        assert!(!leaf_policy(Leaf::Proc,proc,0o040555,0,0,1,ISOLATED));
+        for (mode,owner,group,flags) in [(0o040755,0,0,ISOLATED),(0o040700,1000,0,ISOLATED),
+            (0o040700,0,1000,ISOLATED),(0o040700,0,0,ISOLATED|ro),
+            (0o040700,0,0,ISOLATED-StatVfsMountFlags::NOEXEC)]{
+            assert!(!leaf_policy(Leaf::Scratch,tmp,mode,owner,group,1,flags));
+        }
+    }
     #[test]fn offline_admin_and_second_daemon_cannot_pass_while_online_pair_owns_the_originals(){
         let tmp=tempfile::tempdir().unwrap();let s=tmp.path().join("system");let i=tmp.path().join("instance");
         std::fs::create_dir(&s).unwrap();std::fs::create_dir(&i).unwrap();

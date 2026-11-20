@@ -148,6 +148,14 @@ fn active_dir(birth:&File)->io::Result<(u32,File)>{
     let original=File::from(openat2(&p,idname.as_str(),DIR,Mode::empty(),SAFE)?);
     waitable_live(birth)?;Ok((id,original))
 }
+/// Only the actual waitable child selected by the original birth pidfd.
+/// The runtime mount tree is the exact detached object we moved there.
+pub(super) fn role_root(birth:&File,view:&File)->io::Result<File>{
+    let(_,task)=active_dir(birth)?;
+    let root=target(&task,c"root")?;
+    if !same(&root,view)?{return Err(no());}
+    waitable_live(birth)?;Ok(root)
+}
 pub(super) fn storage_snapshot(birth:&File,image:&File,uid:u32,gid:u32)->io::Result<bool>{
     let(id,original)=active_dir(birth)?;pid_namespaces(birth)?;
     if !same(&target(&original,c"exe")?,image)?{return Err(no());}
