@@ -168,13 +168,17 @@ static bool native_directory_projection(connection_struct *c)
 	for(size_t i=0;i<sizeof(exact)-1;i++){SSVAL(multi,20+2*i,exact[i]);}
 	DATA_BLOB nesting={.data=multi,.length=sizeof(multi)};
 	if(!zxs_restore_input(c,nesting,&folder,&name)||strcmp(folder,"F")||strcmp(name,"Reports\\Report"))goto fail;
-	char *renamed=NULL;const char *leaf=NULL;
-	if(!zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&leaf)||
-	   strcmp(renamed,"F\\Reports\\Report")!=0||strcmp(leaf,"Report")!=0||
-	   zxs_ordinary_rename_input(c,nesting,"G\\Reports\\Old",&renamed,&leaf)||
-	   zxs_ordinary_rename_input(c,nesting,"F\\reports\\Old",&renamed,&leaf)||
-	   zxs_ordinary_rename_input(c,nesting,"F\\Old",&renamed,&leaf))goto fail;
-	multi[0]=1;if(zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&leaf))goto fail;
+	char *renamed=NULL,*destination_volume=NULL;const char *within=NULL;
+	if(!zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&destination_volume,&within)||
+	   strcmp(renamed,"F\\Reports\\Report")!=0||strcmp(within,"Report")!=0||destination_volume!=NULL||
+	   zxs_ordinary_rename_input(c,nesting,"G\\Reports\\Old",&renamed,&destination_volume,&within)||
+	   zxs_ordinary_rename_input(c,nesting,"f\\Reports\\Old",&renamed,&destination_volume,&within))goto fail;
+	if(!zxs_ordinary_rename_input(c,nesting,"F\\reports\\Old",&renamed,&destination_volume,&within)||
+	   strcmp(destination_volume,"F")!=0||strcmp(within,"Reports\\Report")!=0)goto fail;
+	if(!zxs_ordinary_rename_input(c,nesting,"F\\Old",&renamed,&destination_volume,&within)||
+	   strcmp(destination_volume,"F")!=0||strcmp(within,"Reports\\Report")!=0)goto fail;
+	multi[0]=1;
+	if(zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&destination_volume,&within))goto fail;
 	multi[0]=0;
 	SSVAL(multi,24,'\\');if(zxs_restore_input(c,nesting,&folder,&name))goto fail;
 	if(zxs_lock_width(0,0)||!zxs_lock_width(1,0)||

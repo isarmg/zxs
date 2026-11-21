@@ -106,6 +106,10 @@ impl Birth{
 }
 pub(crate) struct Installed{dir:HeldDir,header:HeldBytes,witness:CString,placement_parent:Option<HeldDir>}
 impl Installed{
+    pub(crate) fn duplicate(&self)->io::Result<Self>{
+        Ok(Self{dir:self.dir.duplicate()?,header:self.header.duplicate()?,witness:self.witness.clone(),
+            placement_parent:self.placement_parent.as_ref().map(HeldDir::duplicate).transpose()?})
+    }
     pub(crate) fn directory(&self)->&HeldDir{&self.dir}
     pub(crate) fn capture_retirement(&self,root:&HeldDir)->io::Result<crate::fs::RetireProof>{
         self.require(root)?;
@@ -118,6 +122,26 @@ impl Installed{
     pub(crate) fn still_retirement_target(&self,root:&HeldDir,p:&crate::fs::RetireProof)->io::Result<()>{
         self.require(root)?;
         p.requires_target(self.placement_parent.as_ref().unwrap_or(root),&self.dir,&self.witness)
+    }
+    /// Consume the independently verified endpoint of the exact completed
+    /// same-mount move. Keep this reader's original body FD. Only the
+    /// flat outer hard-link rename can legitimately update header ctime.
+    pub(crate) fn rebind_moved(&mut self,new_root:&HeldDir,moved:Self)->io::Result<()>{
+        moved.require(new_root)?;
+        if self.witness!=moved.witness||self.dir.entity!=moved.dir.entity||!self.dir.same_mount(&moved.dir)?{
+            return Err(invalid("moved FILE differs from the originally opened body"));
+        }
+        let (path,header,pocket)=match (&self.placement_parent,&moved.placement_parent){
+            (None,None) if self.header.stamp().same_moved_file_header(moved.header.stamp())=>
+                (moved.dir.path,moved.header,None),
+            (Some(old),Some(new)) if old.entity==new.entity&&old.same_mount(new)?&&self.header.stamp()==moved.header.stamp()=>
+                (moved.dir.path,moved.header,moved.placement_parent),
+            _=>return Err(invalid("moved FILE differs from its original outer evidence")),
+        };
+        // If a late physical check fails, the native result is unknown and
+        // this handle is closed. This drops only the second body's EX FD.
+        self.dir.path=path;self.header=header;self.placement_parent=pocket;
+        self.require(new_root)
     }
     pub(crate) fn require_newborn(&self,parent:&HeldDir)->io::Result<()>{self.dir.only(Some(c"FILE"))?;self.require(parent)}
     pub(crate) fn with_placement_parent(mut self,root:&HeldDir,held:HeldDir)->io::Result<Self>{
@@ -142,3 +166,9 @@ pub(crate) use move_install::{MoveInstall,MoveRoom};
 #[path="rename_install.rs"]
 mod rename_install;
 pub(crate) use rename_install::{RenameInstall,RenameStage};
+#[path="parent_move.rs"]
+mod parent_move;
+pub(crate) use parent_move::{FlatParentMove,ParentMoveStep,lock_parents as lock_parent_pair};
+#[path="packed_parent_move.rs"]
+mod packed_parent_move;
+pub(crate) use packed_parent_move::{PackedParentMove,PackedParentStep};

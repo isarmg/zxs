@@ -28,6 +28,11 @@ impl LiveStamp{
         b[48..52].copy_from_slice(&self.owner.to_be_bytes());b[52..56].copy_from_slice(&self.group.to_be_bytes());b
     }
     pub(crate) fn same(self,other:Self)->bool{(self.dev,self.ino)==(other.dev,other.ino)}
+    /// A controlled rename of the FILE header's outer hard link may
+    /// change its inode ctime. No data or other stamp field is relaxed.
+    pub(crate) fn same_moved_file_header(self,now:Self)->bool{
+        Self{ctime:now.ctime,..self}==now
+    }
     pub(crate) fn require(self,file:&File)->io::Result<()>{
         if Self::read(file)?!=self{return Err(invalid("portable ordinary file changed while held"));}Ok(())
     }
@@ -36,6 +41,9 @@ impl LiveStamp{
 enum Extent{Whole,CheckedPrefix}
 pub(crate) struct HeldBytes{file:File,original:LiveStamp,extent:Extent}
 impl HeldBytes{
+    pub(crate) fn duplicate(&self)->io::Result<Self>{
+        Ok(Self{file:self.file.try_clone()?,original:self.original,extent:self.extent})
+    }
     pub(crate) fn file(&self)->&File{&self.file}
     pub(crate) fn stamp(&self)->LiveStamp{self.original}
     /// Use only for a working extent with independently authenticated bytes.
@@ -125,6 +133,20 @@ impl<'a> WitnessRead<'a>{
     /// no directory hardlink, third metadata database or persistent inode ID.
     pub(crate) fn file_header(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
         self.directory_header(parent,sample,c"FILE",witness,size)
+    }
+    /// Only for an already-issued same-mount FILE move between two
+    /// actual held parents. The original outer link may have moved before
+    /// its body; ordinary opens still require the same immediate parent.
+    pub(crate) fn moved_file_header(&self,body_parent:&HeldDir,link_parent:&HeldDir,
+        link_names:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
+        if self.dir.path.parent()!=Some(body_parent.path.as_path())||
+            !self.dir.same_mount(body_parent)?||!body_parent.same_mount(link_parent)?{
+            return Err(invalid("FILE move header crosses its original held mount or parent"));
+        }
+        body_parent.require_named()?;link_parent.require_named()?;
+        let held=self.open_pair(c"FILE",link_parent,link_names,witness,size..=size)?;
+        body_parent.require_named()?;link_parent.require_named()?;
+        Self::require_parent(self.dir)?;held.unchanged()?;Ok(held)
     }
     pub(super) fn directory_header(&self,parent:&HeldDir,sample:&BTreeSet<Vec<u8>>,primary:&CStr,witness:&CStr,size:u64)->io::Result<HeldBytes>{
         if self.dir.path.parent()!=Some(parent.path.as_path())||!self.dir.same_mount(parent)?{

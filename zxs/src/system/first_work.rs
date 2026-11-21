@@ -6,7 +6,7 @@ use super::super::{file_location::{Placed,Place},volume::{OrdinaryRoot,OrdinaryV
 use crate::ordinary::working_round::{End,Selected,Used};
 use crate::{FileId,OperationId,VolumeId,display,fs::{HeldDir,invalid,directory_birth::DirectoryParent},hash::Sha256,identity::{AccountId,ShareId},
     ordinary::{portable_birth::{Birth,Installed},working_sql::{self,Incoming,Retained,Spec}}};
-use std::{cell::Cell,fs::File,io::{self,Write}};
+use std::{cell::Cell,fs::File,io::{self,Write},sync::{Arc,Weak,atomic::{AtomicU64,Ordering}}};
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct WorkReceipt{pub(crate) file:FileId,pub(crate) save:OperationId,pub(crate) revision:u64,
@@ -194,7 +194,33 @@ impl<'r> std::ops::Deref for MemberRoot<'_,'r>{
     type Target=OrdinaryRoot<'r>;
     fn deref(&self)->&Self::Target{match self{Self::Owned(r)=>r,Self::Tree(r)=>r}}
 }
-pub(crate) struct Current<'t,'s,'r>{original:ReadFile,root:MemberRoot<'t,'r>,tree:&'t Tree<'s,'r>}
+pub(crate) struct Current<'t,'s,'r>{original:ReadFile,root:MemberRoot<'t,'r>,tree:&'t Tree<'s,'r>,open:Arc<AtomicU64>}
+/// Actual duplicate F/FILE membership; never imports a SQL connection or
+/// a new selection from the caller. The original member revokes this
+/// snapshot as soon as it starts another rename or loses its live open.
+pub(super) struct CapacityCut{
+    open:Weak<AtomicU64>,sequence:u64,selected:Place,birth:Birth,
+    media:super::super::volume::OrdinaryMedia,container:Installed,pub(super) setting:super::Setting,
+}
+impl CapacityCut{
+    pub(super) fn require_owner(&self)->io::Result<()>{
+        if self.open.upgrade().is_some_and(|a|a.load(Ordering::Acquire)==self.sequence){Ok(())}
+        else{Err(super::denied())}
+    }
+    pub(super) fn logical(&self,db:&Connection,c:&Catalog)->io::Result<()>{
+        self.require_owner()?;
+        self.media.capacity_origin().require_catalog(c,self.setting.volume)?;
+        let p=file_create::placed_at(db,c,self.setting.volume,self.selected.parent,&self.selected.name,Some(self.selected.file))?;
+        if p.here!=self.selected||p.birth!=self.birth{return Err(super::denied());}Ok(())
+    }
+    pub(super) fn physical(&self)->io::Result<()>{
+        self.media.capacity_origin().require_held()?;
+        self.container.require(self.media.folder())
+    }
+    pub(super) fn sample(&self)->io::Result<super::super::volume::Capacity>{
+        super::super::volume::measure(&self.media.root)
+    }
+}
 
 /// The one physical read view and its exact logical placement. Credentials,
 /// protocol routes and the reader's current short authorization cut are
@@ -230,7 +256,7 @@ impl<'s,'r> Tree<'s,'r>{
         let (root,birth,container)=born.parts(false)?;
         let place=Place::origin(&birth,root.parent());
         let original=ReadFile{body:None,container,birth,place,live:None};
-        let handle=Current{original,root:MemberRoot::Owned(root),tree:self};
+        let handle=Current{original,root:MemberRoot::Owned(root),tree:self,open:Arc::new(AtomicU64::new(0))};
         handle.require()?;Ok(handle)
     }
     pub(crate) fn open_current<'t>(&'t self,name:&str)->io::Result<Current<'t,'s,'r>>{
@@ -263,7 +289,7 @@ impl<'s,'r> Tree<'s,'r>{
         })?;
         let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::at_parent(src,&c,&route.ok_or_else(||invalid("lost selected FILE parent"))?,None)?)};
         let original=ReadFile::open(placed,&selected,root.folder())?;
-        let h=Current{original,root,tree:self};
+        let h=Current{original,root,tree:self,open:Arc::new(AtomicU64::new(0))};
         let v=h.with_read(|reader|reader.checked(&selected,||Ok(()),|db|result(db,&h.original.birth)))?;
         Ok((h,v))
     }
@@ -336,18 +362,56 @@ impl Current<'_,'_,'_>{
     fn with_read<T>(&self,use_original:impl FnOnce(ReadAt<'_>)->T)->T{
         let require=|db:&Connection,c:&Catalog|self.tree.require(db,c,false);
         use_original(ReadAt{file:&self.original,root:self.root.view(),source:self.tree.session.source,
-            volume:self.tree.setting.volume,parent:self.tree.parent,require:&require})
+            volume:self.original.place.volume,parent:self.original.place.parent,require:&require})
     }
     pub(crate) fn file(&self)->FileId{self.original.birth.file}
     pub(super) fn native_placement(&self)->&Place{&self.original.place}
     pub(super) fn rename_native(&mut self,op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
         point:impl Fn(super::file_rename::Cut)->io::Result<()>)->io::Result<()>{
-        self.require()?;
-        let (selected,body)=self.tree.rename_existing(&self.root,&self.original.place,&self.original.container,
-            op,name,alive,point)?;
+        self.require()?;self.invalidate_capacity()?;
+        let (selected,body)=self.tree.scoped(self.original.place.parent)
+            .rename_existing(&self.root,&self.original.place,&self.original.container,op,name,alive,point)?;
         self.original.container.rebind_renamed(self.root.folder(),&body).map_err(|_|super::file_rename::unknown())?;
         self.original.place=selected;
         drop(body); // no FILE write lock escapes to the original read handle
+        self.require().and_then(|_|alive()).map_err(|_|super::file_rename::unknown())
+    }
+    pub(super) fn capacity_cut(&self)->io::Result<CapacityCut>{
+        self.with_read(|read|read.source.at(|db,c|read.still_selected(db,&c)))?;
+        Ok(CapacityCut{open:Arc::downgrade(&self.open),sequence:self.open.load(Ordering::Acquire),
+            selected:self.original.place.clone(),birth:self.original.birth.clone(),setting:self.tree.setting,
+            media:self.root.duplicate_media()?,container:self.original.container.duplicate()?})
+    }
+    #[cfg(test)]
+    pub(super) fn filesystem_capacity(&self,after_sample:impl FnOnce()->io::Result<()>)
+        ->io::Result<(Option<super::super::volume::Capacity>,bool)>{
+        let cut=self.capacity_cut()?;cut.physical()?;
+        let measured=cut.sample().ok().filter(|s|s.total>=4096);
+        after_sample()?;cut.physical()?;
+        self.tree.session.source.at(|db,c|{self.tree.require(db,&c,false)?;cut.logical(db,&c)})?;
+        Ok((measured,self.tree.setting.mode==super::share_mode::Mode::ReadWrite))
+    }
+    fn invalidate_capacity(&self)->io::Result<()>{
+        self.open.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(1))
+            .map(drop).map_err(|_|invalid("original member capacity sequence exhausted"))
+    }
+    pub(super) fn require_move_folder(&self,pick:impl FnOnce(&Connection,&Catalog)->io::Result<Option<super::Setting>>)
+        ->io::Result<()>{
+        self.tree.session.source.at(|db,c|{
+            self.tree.require(db,&c,true)?;
+            if pick(db,&c)?!=Some(self.tree.setting){return Err(super::denied());}
+            Ok(())
+        })
+    }
+    pub(super) fn move_native_parent(&mut self,parts:&[String],op:OperationId,name:&str,
+        alive:&impl Fn()->io::Result<()>,point:impl Fn(super::file_rename::Cut)->io::Result<()>)->io::Result<()>{
+        self.require()?;self.invalidate_capacity()?;
+        let tree=self.tree.scoped(self.original.place.parent);
+        let (selected,body,parent)=tree.move_existing_parent(&self.root,&self.original.place,&self.original.container,
+            parts,op,name,alive,point)?;
+        self.original.container.rebind_moved(parent.folder(),body).map_err(|_|super::file_rename::unknown())?;
+        self.original.place=selected;
+        self.root=MemberRoot::Owned(parent);
         self.require().and_then(|_|alive()).map_err(|_|super::file_rename::unknown())
     }
     pub(crate) fn size(&self)->u64{self.original.size()}

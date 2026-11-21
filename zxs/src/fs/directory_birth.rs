@@ -164,6 +164,9 @@ impl DirectoryBirth{
 }
 pub(crate) struct DirectoryHold{dir:HeldDir,marker:HeldBytes,witness:CString}
 impl DirectoryHold{
+    pub(crate) fn duplicate(&self)->io::Result<Self>{
+        Ok(Self{dir:self.dir.duplicate()?,marker:self.marker.duplicate()?,witness:self.witness.clone()})
+    }
     pub(crate) fn directory(&self)->&HeldDir{&self.dir}
     pub(crate) fn require(&self,parent:&HeldDir)->io::Result<()>{
         if self.dir.path.parent()!=Some(parent.path.as_path())||!parent.same_mount(&self.dir)?{return Err(unknown());}

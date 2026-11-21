@@ -253,15 +253,19 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
             let member=members[i].0.as_raw_fd();
             let action=mover::pending(member);
             if action<0{members.remove(i);continue;}
+            if action==2{
+                let _=namespace::start_moved_capacity(scope,&mut capacity,site,origin,member,&members[i].1);
+                continue;
+            }
             if action==1{
                 let Ok((request,answer))=mover::take(member,origin)else{members.remove(i);continue;};
-                if let mover::Request::Rename(name)=&request{
+                if matches!(&request,mover::Request::Rename(_)|mover::Request::Move{..}){
                     let still=||{
                         if !tree_live.load(Ordering::Acquire)||(site.stopping)()||!live(origin,reply,0)||
                            unsafe{zxs_member_held(member)}!=0{return Err(denied());}
                         Ok(())
                     };
-                    mover::rename(site,answer,name,&mut members[i].1,&still);
+                    mover::rename(site,answer,&request,&mut members[i].1,&still);
                     continue;
                 }
                 if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}

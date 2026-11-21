@@ -95,6 +95,7 @@ int zxs_ns_capacity_read(int fd,struct zxs_ns_space *out);
 #define ZXS_XFER_RESTORE 2u
 #define ZXS_XFER_PROBE 3u
 #define ZXS_XFER_RENAME 4u
+#define ZXS_XFER_MOVE 5u
 #define ZXS_XFER_ASK (20+ZXS_DIR_NAME+ZXS_FILE_NAME)
 #define ZXS_XFER_RESULT 64u
 #define ZXS_XFER_BUSY 1u

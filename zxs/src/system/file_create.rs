@@ -117,23 +117,39 @@ pub(in crate::system::reader) fn display_owner(db:&Connection,c:&Catalog,b:&Birt
 }
 pub(in crate::system::reader) fn display_owner_at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<Alias>>{
     if Birth::reserved_spelling(name.as_bytes()){return Ok(None);}
-    let s=db.prepare(c"SELECT e.create_op,1,l.display FROM main.file_location l
+    let s=db.prepare(c"SELECT e.create_op,1,l.display,l.file_id,l.position_op,l.generation FROM main.file_location l
       JOIN main.root_entry e ON e.file_id=l.file_id
       JOIN main.operation o ON o.op_id=l.position_op AND o.state=1
       WHERE l.volume_id=?1 AND l.flat_terminal=?2 AND l.parent_id=?3 AND l.role=2 AND l.backing_op IS NULL
-      UNION ALL SELECT e.create_op,0,m.source_name FROM main.file_transfer m
+      UNION ALL SELECT e.create_op,0,m.source_name,m.file_id,m.source_op,m.source_gen FROM main.file_transfer m
       JOIN main.root_entry e ON e.file_id=m.file_id
       JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
-      WHERE m.source_id=?1 AND m.source_terminal=?2 AND m.source_parent=?3 AND m.direction=1 AND m.source_backing IS NULL")?;
+      JOIN main.operation p ON p.op_id=m.source_op AND p.state=1
+      WHERE m.source_id=?1 AND m.source_terminal=?2 AND m.source_parent=?3 AND m.direction=1 AND m.source_backing IS NULL
+      AND ((p.kind=5 AND m.source_gen=1 AND e.create_op=p.op_id AND e.volume_id=m.source_id
+              AND e.parent_id=m.source_parent AND e.display=m.source_name AND e.terminal=m.source_terminal)
+           OR (p.kind=14 AND EXISTS(SELECT 1 FROM main.file_rename r WHERE r.rename_op=p.op_id AND r.file_id=m.file_id
+              AND r.source_gen+1=m.source_gen AND r.volume_id=m.source_id AND r.target_parent=m.source_parent
+              AND r.target_name=m.source_name AND r.target_terminal=m.source_terminal AND r.backing_op IS NULL)))")?;
     s.bind_bytes(1,&volume.0)?;s.bind_bytes(2,name.as_bytes())?;s.bind_bytes(3,&parent.bytes())?;
     match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(None),rc=>{check(rc)?;return Err(invalid("cannot inspect a colliding native name"));}}
     let op=OperationId(s.array(0)?);let current=s.byte(1)?==1;
-    let source=display::component(s.blob(2,222)?,222)?.to_owned();s.done()?;
+    let source=display::component(s.blob(2,222)?,222)?.to_owned();
+    let file=FileId(s.array(3)?);let position=OperationId(s.array(4)?);let generation=s.integer(5)?;s.done()?;
     let Some(other)=by_op(db,c,op)?.filter(|o|o.committed)else{return Ok(None);};
     let leaf=Birth::placed_container(&source,other.birth.file)?;
-    if other.birth.volume!=volume||other.parent!=parent||source==name||leaf.to_bytes()!=name.as_bytes(){
+    if other.birth.file!=file||other.birth.volume!=volume||source==name||leaf.to_bytes()!=name.as_bytes(){
         return Err(invalid("wrong confirmed terminal for displayed spelling"));}
-    let members=if current{Some(work_record::members(db,c,&other.birth)?)}else{None};
+    // Birth independently proves the immutable FILE. The actual named
+    // parent comes from its original current placement/old source receipt.
+    let members=if current{
+        let selected=Place::current(db,c,file)?;
+        if selected.op!=position||selected.generation!=generation||selected.volume!=volume||
+            selected.parent!=parent||selected.role!=Role::File||selected.backing.is_some()||selected.name!=source{
+            return Err(invalid("current native terminal differs from its original position"));
+        }
+        Some(work_record::members(db,c,&other.birth)?)
+    }else{None};
     Ok(Some(Alias{birth:other.birth,leaf,members}))
 }
 

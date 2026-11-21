@@ -186,6 +186,62 @@ pub(super) fn ordinary_capacity(site:Site<'_>,origin:&TreeOrigin,answer:&OwnedFd
     })
 }
 
+/// A moved FILE owns the *current* F proof. The two capacity permits
+/// cover physical checks, slow statvfs and the independent terminal cut.
+/// The owner loop does not borrow any FILE into the spawned job.
+pub(super) fn start_moved_capacity<'scope,'env:'scope>(
+    scope:&'scope thread::Scope<'scope,'env>,slot:&mut Option<thread::ScopedJoinHandle<'scope,()>>,
+    site:Site<'env>,origin:&TreeOrigin,member:i32,current:&super::super::super::first_work::Current<'_,'_,'_>,
+)->io::Result<()>{
+    use std::os::fd::BorrowedFd;
+    let (mut command,mut cursor)=(0u8,[0u8;256]);
+    let fd=unsafe{super::zxs_dir_take(member,origin.worker.as_raw_fd(),&mut command,cursor.as_mut_ptr())};
+    os(fd)?;
+    let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+    if !matches!(command,CAPACITY_RO|CAPACITY_RW)||cursor[0]!=0{return Err(denied());}
+    if slot.as_ref().is_some_and(|s|!s.is_finished()){no_capacity(fd,CAP_BUSY);return Ok(());}
+    let Some(permit)=site.capacity_slot.and_then(CapacityPermit::take)else{
+        no_capacity(fd,CAP_BUSY);return Ok(());
+    };
+    if (site.stopping)()||unsafe{super::zxs_member_held(member)}!=0||
+        unsafe{super::zxs_member_held(fd)}!=0{return Err(denied());}
+    // SAFETY: the caller's live dispatcher still owns this exact member.
+    let member=unsafe{BorrowedFd::borrow_raw(member)}.try_clone_to_owned()?;
+    let peer=origin.duplicate()?;
+    let checked=current.capacity_cut()?;
+    if let Ok(job)=thread::Builder::new().name("zxs-smb-moved-capacity".into()).spawn_scoped(scope,move||{
+        let _permit=permit;
+        let attempt=(||->io::Result<()>{
+            let live_now=||{
+                checked.require_owner()?;
+                if (site.stopping)()||!live(&peer,&answer,0)||
+                    unsafe{super::zxs_member_held(member.as_raw_fd())}!=0{return Err(denied());}Ok(())
+            };
+            live_now()?;site.validate()?;
+            let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
+            let session=SmbSession{source:&src,original:peer.slot.original.clone()};
+            let grant=checked.setting;
+            let current=Tree{session:&session,setting:grant,parent:DirectoryParent::Root};
+            let cut=||src.at(|db,c|{
+                current.require(db,&c,false)?;checked.logical(db,&c)?;live_now()
+            });
+            cut()?;checked.physical()?;
+            let sample=checked.sample().ok().filter(|s|s.total>=4096);
+            checked.physical()?;site.validate()?;cut()?;live_now()?;
+            if let Some(s)=sample{
+                os(unsafe{zxs_ns_capacity_reply(fd,CAP_READY,s.total,
+                    if command==CAPACITY_RW&&grant.mode==Mode::ReadWrite&&!s.read_only{s.available}else{0},s.free)})?;
+            }else{no_capacity(fd,CAP_NO_MEDIA);}
+            Ok(())
+        })();
+        let _=attempt;
+        // Keep ownership until all proofs/data have been sent. An fd
+        // number copied into the reply call is not a lifetime anchor.
+        drop((answer,member,checked));
+    }){*slot=Some(job);}
+    Ok(())
+}
+
 pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()>{
     if origin.slot.pool!=site.pool || (site.stopping)() || !live(&origin,&root,0){return Err(denied());}
     site.validate()?;

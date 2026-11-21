@@ -17,14 +17,19 @@ fn changed(db:&Connection,input:String,op:OperationId)->io::Result<()>{
     q.done()
 }
 fn issue(src:&InitialReader,db:&Connection,token:OperationId,file:FileId,share:ShareId,target:&str)->io::Result<()>{
+    issue_at(src,db,token,file,share,target,None)
+}
+fn issue_at(src:&InitialReader,db:&Connection,token:OperationId,file:FileId,share:ShareId,target:&str,
+    parent:Option<crate::fs::directory_birth::DirectoryParent>)->io::Result<()>{
     let o=hex(&token.0);let f=hex(&file.0);let g=hex(&share.0);let n=hex(target.as_bytes());
+    let wanted=parent.map_or_else(||"l.parent_id".to_owned(),|p|format!("X'{}'",hex(&p.bytes())));
     let terminal=hex(Birth::placed_container(target,file)?.to_bytes());
     src.transaction(db,c"BEGIN IMMEDIATE",|db,_|{
         changed(db,format!("INSERT OR REPLACE INTO file_rename(rename_op,file_id,source_op,source_gen,volume_id,parent_id,source_name,target_name,
-              backing_op,source_terminal,target_terminal,share_id,setting_op,auth_op,save_op,manual_op)
+              backing_op,source_terminal,target_terminal,share_id,setting_op,auth_op,save_op,manual_op,target_parent)
           SELECT X'{o}',l.file_id,l.position_op,l.generation,l.volume_id,l.parent_id,l.display,X'{n}',l.backing_op,l.flat_terminal,
             CASE WHEN l.backing_op IS NULL THEN X'{terminal}' ELSE NULL END,
-            a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op
+            a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op,{wanted}
           FROM transferable_location l JOIN live_ordinary_writer a ON a.volume_id=l.volume_id
           WHERE l.file_id=X'{f}' AND a.share_id=X'{g}' RETURNING rename_op"),token)?;
         changed(db,format!("INSERT INTO operation SELECT X'{o}',14,a.actor_id,zeroblob(32),0
@@ -341,4 +346,172 @@ fn same_backing_rename_keeps_superseded_work_names_without_making_them_readable(
     let mut prior=Vec::new();cold_tree.open_version(renamed,older.node).unwrap().range_to(0,4,&mut prior).unwrap();
     let mut newer=Vec::new();cold_tree.open_version(renamed,newest.node).unwrap().range_to(0,4,&mut newer).unwrap();
     assert_eq!(prior,b"ABCD");assert_eq!(newer,b"ZBZD");
+}
+
+#[test]
+#[ignore="source only: SQLite placement, real two-parent raw operation and original FILE history"]
+fn two_parent_ticket_reserves_the_actual_destination_without_reserving_other_parents(){
+    use crate::{DirectoryId,fs::directory_birth::DirectoryParent,ordinary::portable_birth::FlatParentMove};
+    let tmp=PrivateTemp::under(std::path::Path::new("/tmp"));
+    let separate=PrivateTemp::under(std::path::Path::new("/dev/shm"));
+    let (s,pool,f,rw)=crate::system::reader::tests::transfer_pool(&tmp,&separate.0.join("actual-R"));
+    let src=InitialReader::open(&s,pool).unwrap();
+    let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let tree=session.connect(rw).unwrap();
+    let file=tree.create_file(op(0x71),"Report").unwrap();
+    let raw=Connection::open(&src.dir,true).unwrap();
+    let mut input=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600)
+        .open(tmp.0.join("copy-source")).unwrap();
+    input.write_all(b"original").unwrap();input.sync_all().unwrap();
+    tree.save_first(op(0x72),"Report",file.file,&input).unwrap();
+    let key=tree.open_current("Report").unwrap().native_key().unwrap();
+    let selected=src.at(|db,c|Place::current(db,&c,file.file)).unwrap();
+
+    let (_,root)=tree.ordinary_route(&[],true).unwrap();
+    tree.make_ordinary_directory(&root,op(0x73),"New",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    tree.make_ordinary_directory(&root,op(0x74),"Other",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let (_,target)=tree.ordinary_route(&["New".to_owned()],true).unwrap();
+    let (_,other)=tree.ordinary_route(&["Other".to_owned()],true).unwrap();
+    let into=tree.scoped(target.parent());
+    let sibling=tree.scoped(other.parent());
+    assert!(issue_at(&src,&raw,op(0x75),file.file,rw,"Report",
+        Some(DirectoryParent::Directory(DirectoryId([0xfa;16])))).is_err());
+    let end=Birth::placed_container("Busy",file.file).unwrap();
+    into.make_ordinary_directory(&target,op(0x76),end.to_str().unwrap(),|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    assert!(issue_at(&src,&raw,op(0x77),file.file,rw,"Busy",Some(target.parent())).is_err());
+    assert_eq!(src.at(|db,c|Place::current(db,&c,file.file)).unwrap(),selected);
+
+    let outer=HeldDir::trusted_storage(&f).unwrap();
+    let new=outer.exact_directory(c"New").unwrap().unwrap();
+    let (birth,members)=src.at(|db,c|{
+        let b=selected.clone().bind(db,&c)?.birth;
+        let m=work_record::members(db,&c,&b)?;Ok((b,m))
+    }).unwrap();
+    let inode=outer.exact_directory(&birth.container().unwrap()).unwrap().unwrap().entity;
+    let held=FlatParentMove::hold(&birth,&outer,&new,"Report","Report",RenameStage::BeforeReserve,
+        |w|members.require(w)).unwrap();
+    issue_at(&src,&raw,op(0x78),file.file,rw,"Report",Some(target.parent())).unwrap();
+    for dir in [&tree,&into]{
+        assert_eq!(dir.occupied_name("Report",false).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    }
+    assert!(into.make_ordinary_directory(&target,op(0x79),"Report",|_|Ok(()),&||Ok(()),|_|Ok(())).is_err());
+    assert_ne!(sibling.create_file(op(0x7a),"Report").unwrap().file,file.file);
+    let (at,())=held.install(|_|Ok(()),|_|Ok(()),|confirmed|{
+        assert_eq!(confirmed.directory().entity,inode);finish(&raw,op(0x78))
+    }).unwrap();
+    drop(at);
+    assert_eq!(tree.occupied_name("Report",false).unwrap(),None);
+    assert_eq!(into.occupied_name("Report",false).unwrap(),Some(file.file));
+    let current=into.open_current("Report").unwrap();
+    let mut contents=Vec::new();current.range_to(0,8,&mut contents).unwrap();
+    assert_eq!(contents,b"original");
+    assert_eq!(current.native_key().unwrap(),key);
+    assert_eq!(current.working_original(),Some(op(0x72)));
+    let place=src.at(|db,c|Place::current(db,&c,file.file)).unwrap();
+    assert_eq!((place.file,place.op,place.generation,place.parent,place.backing),
+        (file.file,op(0x78),2,target.parent(),None));
+
+    // Another logical FILE may share the actual display spelling of a
+    // proved native flat terminal. It can read after A changes parents
+    // and also while A's committed F->R retains the original source.
+    let native=Birth::placed_container("Report",file.file).unwrap();
+    let typed=native.to_str().unwrap();
+    let second=into.create_file(op(0x7b),typed).unwrap();
+    assert_eq!(into.open_current(typed).unwrap().file(),second.file);
+    let done=into.transfer(&super::file_transfer::Handoff::Delete(place),op(0x7c),||Ok(())).unwrap();
+    assert_eq!(done.to.file,file.file);
+    assert!(new.checked_child_path(&native).unwrap().is_dir());
+    assert_eq!(into.open_current(typed).unwrap().file(),second.file);
+    drop(current);
+}
+
+#[test]
+#[ignore="source only: exact live placement change and cold same-volume movement, no SMB process"]
+fn opening_a_second_parent_does_not_reissue_the_file_or_change_its_original_view(){
+    use super::file_rename::{Cut,recover_for_test};
+    let tmp=PrivateTemp::under(&std::env::temp_dir());
+    let (s,pool,f,rw,_)=ordinary_pool(&tmp);
+    let src=InitialReader::open(&s,pool).unwrap();
+    let independent=InitialReader::open(&s,pool).unwrap();
+    let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let top=auth.connect(rw).unwrap();
+    let (_,from)=top.ordinary_route(&[],true).unwrap();
+    top.make_ordinary_directory(&from,op(0x61),"Folder",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let target=["Folder".to_owned()];
+    let (_,route)=top.ordinary_route(&target,true).unwrap();
+    let nest=top.scoped(route.parent());
+    let file=top.create_file(op(0x62),"Draft").unwrap();
+    let mut input=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600)
+        .open(tmp.0.join("existing-selected-view")).unwrap();
+    input.write_all(b"held-view").unwrap();input.sync_all().unwrap();
+    top.save_first(op(0x63),"Draft",file.file,&input).unwrap();
+    let mut old=top.open_current("Draft").unwrap();
+    let key=old.native_key().unwrap();
+    let original=independent.at(|db,c|Place::current(db,&c,file.file)).unwrap();
+    let birth=independent.at(|db,c|original.clone().bind(db,&c).map(|p|p.birth)).unwrap();
+    let unwanted=f.join("Folder").join(Birth::placed_container("Occupied",file.file).unwrap().to_str().unwrap());
+    let injected=std::cell::Cell::new(false);
+    assert_eq!(old.move_native_parent(&target,op(0x67),"Occupied",&||Ok(()),|stage|{
+        if stage==Cut::ParentSampled{
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().mode(0o700).create(&unwanted)?;injected.set(true);
+        }
+        Ok(())
+    }).unwrap_err().kind(),io::ErrorKind::AlreadyExists);
+    assert!(injected.get()&&unwanted.is_dir());
+    independent.at(|db,_|{
+        let q=db.prepare(c"SELECT op_id FROM main.operation WHERE op_id=?1")?;
+        q.bind_bytes(1,&op(0x67).0)?;
+        assert!(!work_record::start_one(&q)?);Ok(())
+    }).unwrap();
+    std::fs::remove_dir(&unwanted).unwrap();
+    let cut=std::cell::Cell::new(false);
+    let result=old.move_native_parent(&target,op(0x64),"Renamed",&||Ok(()),|stage|{
+        if stage==Cut::NameChanged{
+            cut.set(true);
+            assert!(!f.join(birth.witness()?.to_str().unwrap()).exists());
+            assert!(f.join("Folder").join(birth.witness()?.to_str().unwrap()).exists());
+            assert!(f.join(birth.container()?.to_str().unwrap()).exists());
+            independent.at(|db,c|{
+                assert_eq!(Place::current(db,&c,file.file)?,original);
+                assert_eq!(Place::named(db,&c,original.volume,original.parent,"Draft").unwrap_err().kind(),io::ErrorKind::WouldBlock);
+                assert_eq!(Place::named(db,&c,original.volume,route.parent(),"Renamed").unwrap_err().kind(),io::ErrorKind::WouldBlock);
+                Ok(())
+            })?;
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        Ok(())
+    });
+    assert!(cut.get()&&result.unwrap_err().kind()==io::ErrorKind::ConnectionAborted);
+    drop(old);
+    recover_for_test(&independent,op(0x64),file.file,|_,_,_,_|Ok(())).unwrap();
+    let committed=independent.at(|db,c|Place::current(db,&c,file.file)).unwrap();
+    assert_eq!((committed.op,committed.parent,committed.file),(op(0x64),route.parent(),file.file));
+    let mut at=nest.open_current("Renamed").unwrap();
+    assert_eq!(at.native_key().unwrap(),key);
+    at.move_native_parent(&[],op(0x65),"Back",&||Ok(()),|_|Ok(())).unwrap();
+    assert_eq!(at.native_key().unwrap(),key);
+    let mut held=Vec::new();at.range_to(0,9,&mut held).unwrap();
+    assert_eq!(held,b"held-view");
+    assert_eq!(at.working_original(),Some(op(0x63)));
+    // The member now occupies the F root. Loss of the former ordinary
+    // child's physical path cannot substitute a different capacity origin.
+    std::fs::rename(f.join("Folder"),f.join("original-parent-away")).unwrap();
+    let (capacity,may_write)=at.filesystem_capacity(||Ok(())).unwrap();
+    assert!(may_write&&capacity.is_some());
+    std::fs::rename(f.join("original-parent-away"),f.join("Folder")).unwrap();
+    let prior_capacity=at.capacity_cut().unwrap();
+    prior_capacity.require_owner().unwrap();
+    at.rename_native(op(0x66),"Final",&||Ok(()),|_|Ok(())).unwrap();
+    assert!(prior_capacity.require_owner().is_err()); // not only the reused FileId
+    drop(prior_capacity);
+    assert_eq!(at.native_key().unwrap(),key);
+    assert!(nest.open_current("Renamed").is_err());
+    assert_eq!(top.open_current("Final").unwrap().file(),file.file);
+    let admin=independent.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    assert!(at.filesystem_capacity(||{
+        let s=admin.share_setting(rw)?;
+        admin.set_share_mode(op(0x68),rw,s.op,Mode::ReadOnly)?;
+        Ok(())
+    }).is_err());
 }

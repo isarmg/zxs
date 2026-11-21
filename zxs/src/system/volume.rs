@@ -41,7 +41,7 @@ impl CapacityOrigin<'_>{
         Ok(sample)
     }
 }
-fn measure(root:&HeldDir)->io::Result<Capacity>{
+pub(super) fn measure(root:&HeldDir)->io::Result<Capacity>{
     let (mut total,mut available,mut free,mut read_only)=(0,0,0,0);
     if unsafe{zxs_storage_capacity_full(root.file.as_raw_fd(),&mut total,&mut available,&mut free,&mut read_only)}<0{
         return Err(io::Error::last_os_error());
@@ -108,6 +108,11 @@ impl OrdinaryView<'_>{
     }
 }
 impl OrdinaryMedia{
+    fn duplicate(&self)->io::Result<Self>{
+        let ancestors=self.ancestors.iter().map(DirectoryHold::duplicate).collect::<io::Result<Vec<_>>>()?;
+        Ok(Self{root:self.root.duplicate()?,mark:self.mark.duplicate()?,expected:self.expected,
+            volume:self.volume,ordinal:self.ordinal,parent:self.parent,ancestors})
+    }
     fn view<'a>(&'a self,source:&'a InitialReader)->OrdinaryView<'a>{OrdinaryView{source,media:self}}
     pub(super) fn folder(&self)->&HeldDir{self.ancestors.last().map_or(&self.root,|child|child.directory())}
     pub(super) fn parent(&self)->DirectoryParent{self.parent}
@@ -151,6 +156,7 @@ impl<'a> OrdinaryRoot<'a>{
         }Ok(f)
     }
     pub(super) fn view(&self)->OrdinaryView<'_>{self.media.view(self.source)}
+    pub(super) fn duplicate_media(&self)->io::Result<OrdinaryMedia>{self.media.duplicate()}
     fn selected(source:&'a InitialReader,catalog:&Catalog,id:VolumeId,lock:Option<bool>)->io::Result<Self>{
         let (i,row)=catalog.rows().iter().enumerate().find(|(_,r)|r.volume==id&&r.role==Role::File)
              .ok_or_else(||invalid("not an ordinary VolumeId in this original pool"))?;

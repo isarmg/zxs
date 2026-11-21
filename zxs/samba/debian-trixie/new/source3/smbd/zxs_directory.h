@@ -88,7 +88,8 @@ static inline struct zxs_dir_search *zxs_find_dir(const struct files_struct *fsp
 struct zxs_read_fsp {
 	const struct smbXsrv_session *session;const struct smbXsrv_tcon *tcon;
 	uint32_t seq;int fd;
-	bool writable,busy,dirty,share_detached,recycle_close;
+	bool writable,busy,dirty,share_detached,recycle_close,moved_parent;
+	uint64_t placement_sequence;
 	struct zxs_member_info member;
 	struct zxs_smb_tree_cut folder;
 };
@@ -117,7 +118,7 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *,struct tevent_context *,struct 
 				    const struct zxs_smb_tree_cut *,unsigned limit,const uint8_t *after,size_t size);
 NTSTATUS zxs_dir_cut_recv(struct tevent_req *,uint8_t *optional_rows);
 struct tevent_req *zxs_capacity_send(TALLOC_CTX *,struct tevent_context *,struct smbd_smb2_request *,
-	const struct zxs_smb_tree_cut *ordinary,bool may_write);
+	const struct zxs_smb_tree_cut *ordinary,bool may_write,int moved_member);
 NTSTATUS zxs_capacity_recv(struct tevent_req *,struct zxs_ns_space *);
 #define ZXS_INFO_FS_SIZE 3u
 #define ZXS_INFO_FS_ATTRIBUTE 5u
@@ -199,7 +200,7 @@ struct tevent_req *zxs_xfer_send(TALLOC_CTX *,struct tevent_context *,struct tev
 	struct smbd_smb2_request *,struct files_struct *,uint8_t,const char *,const char *,const uint8_t mark[16]);
 NTSTATUS zxs_xfer_recv(struct tevent_req *,bool *unknown,uint8_t receipt[16]);
 bool zxs_restore_input(TALLOC_CTX *,DATA_BLOB,char **,char **);
-bool zxs_ordinary_rename_input(TALLOC_CTX *,DATA_BLOB,const char *,char **,const char **);
+bool zxs_ordinary_rename_input(TALLOC_CTX *,DATA_BLOB,const char *,char **,char **,const char **);
 NTSTATUS zxs_open_member_fsp(struct smbd_smb2_request *,struct smb_request *,uint32_t,uint32_t,
 			    const char *name,const struct zxs_member_info *,struct zxs_smb_tree_cut *,bool writable,int *fd,struct files_struct **);
 NTSTATUS zxs_member_cut_recv(struct tevent_req *,struct zxs_member_info *,int *fd,bool *offer);

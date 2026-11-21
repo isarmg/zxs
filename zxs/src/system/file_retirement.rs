@@ -65,9 +65,12 @@ fn applied_target(db:&Connection,place:&Place)->io::Result<RetireProof>{
         JOIN main.file_location l ON l.file_id=m.file_id AND l.backing_op=m.transfer_op
         JOIN main.operation h ON h.op_id=l.position_op AND h.state=1
         WHERE r.transfer_op=?1 AND l.position_op=?2 AND l.file_id=?3
-          AND m.target_id=l.volume_id AND m.target_parent=l.parent_id AND (CASE m.direction WHEN 1 THEN 1 ELSE 2 END)=l.role
-          AND ((h.kind=12 AND m.target_name=l.display AND m.source_gen+1=l.generation)
-               OR (h.kind=14 AND l.role=2 AND m.source_gen+1<l.generation))")?;
+          AND m.target_id=l.volume_id AND (CASE m.direction WHEN 1 THEN 1 ELSE 2 END)=l.role
+          AND ((h.kind=12 AND m.target_name=l.display AND m.target_parent=l.parent_id AND m.source_gen+1=l.generation)
+               OR (h.kind=14 AND l.role=2 AND m.source_gen+1<l.generation
+                   AND EXISTS(SELECT 1 FROM main.file_rename z WHERE z.rename_op=h.op_id
+                       AND z.file_id=l.file_id AND z.volume_id=l.volume_id AND z.target_parent=l.parent_id
+                       AND z.target_name=l.display AND z.backing_op=m.transfer_op)))")?;
     q.bind_bytes(1,&backing.0)?;q.bind_bytes(2,&place.op.0)?;q.bind_bytes(3,&place.file.0)?;
     if !work_record::start_one(&q)?{return Err(invalid("no genuine physical confirmation of current retirement target"));}
     let result=RetireProof::decode(q.blob(0,MAX_RETIRE_PROOF)?)?;q.done()?;Ok(result)

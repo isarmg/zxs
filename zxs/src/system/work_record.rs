@@ -215,7 +215,7 @@ pub(super) fn members(db:&Connection,c:&super::Catalog,b:&Birth)->io::Result<Mem
       JOIN main.file_location l ON l.file_id=w.file_id
       WHERE w.file_id=?1 AND w.retained_mask<>0 AND EXISTS(SELECT 1 FROM main.file_material_position h
         WHERE h.position_op=w.position_op AND h.file_id=l.file_id AND h.volume_id=l.volume_id
-          AND h.parent_id=l.parent_id AND h.backing_op IS l.backing_op)")?;
+          AND h.backing_op IS l.backing_op)")?;
     q.bind_bytes(1,&b.file.0)?;
     while start_one(&q)? {
         let p=OperationId(q.array(0)?);
@@ -238,7 +238,7 @@ pub(super) fn ceiling(db:&Connection,b:&Birth,selected:ReadRecord)->io::Result<E
       JOIN main.file_location l ON l.file_id=w.file_id WHERE w.file_id=?1 AND w.round_op=?2
       AND (o.state=1 OR EXISTS(SELECT 1 FROM main.file_material_position h
         WHERE h.position_op=w.position_op AND h.file_id=l.file_id AND h.volume_id=l.volume_id
-          AND h.parent_id=l.parent_id AND h.backing_op IS l.backing_op))
+          AND h.backing_op IS l.backing_op))
       ORDER BY w.issue DESC LIMIT 1")?;
     q.bind_bytes(1,&b.file.0)?;q.bind_bytes(2,&cut.key().round.0)?;
     if !start_one(&q)?{return Ok(cut.end());}

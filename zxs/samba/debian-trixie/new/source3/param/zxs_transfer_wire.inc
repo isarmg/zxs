@@ -9,7 +9,7 @@ static bool transfer_labels(uint8_t kind,const uint8_t *folder,size_t f,const ui
     if(kind==ZXS_XFER_DELETE||kind==ZXS_XFER_PROBE)return f==0&&n==0;
     if(kind==ZXS_XFER_RENAME)return f==0&&n>0&&n<=ZXS_FILE_NAME&&name!=NULL&&memchr(name,0,n)==NULL&&
         memchr(name,'\\',n)==NULL&&memchr(name,'/',n)==NULL&&memchr(name,':',n)==NULL;
-    return kind==ZXS_XFER_RESTORE && f>0&&f<=ZXS_DIR_NAME && n>0&&n<=ZXS_FILE_NAME &&
+    return (kind==ZXS_XFER_RESTORE||kind==ZXS_XFER_MOVE) && f>0&&f<=ZXS_DIR_NAME && n>0&&n<=ZXS_FILE_NAME &&
         folder!=NULL && name!=NULL && memchr(folder,0,f)==NULL && memchr(name,0,n)==NULL &&
         memchr(folder,'\\',f)==NULL && memchr(name,'\\',n)==NULL;
 }
@@ -17,7 +17,7 @@ int zxs_xfer_query(int member,uint8_t kind,const uint8_t *folder,size_t f,const 
 {
     uint8_t b[ZXS_XFER_ASK]={0};int p[2],rc,e;
     const uint8_t *parents=NULL;size_t plen=0;
-    if(kind==ZXS_XFER_RESTORE && name!=NULL && n>0 && n<=ZXS_OD_PATH_MAX){
+    if((kind==ZXS_XFER_RESTORE||kind==ZXS_XFER_MOVE) && name!=NULL && n>0 && n<=ZXS_OD_PATH_MAX){
         const uint8_t *last=NULL;
         for(size_t i=0;i<n;i++)if(name[i]=='\\')last=name+i;
         if(last!=NULL){
@@ -43,6 +43,7 @@ int zxs_member_xfer_pending(int member)
     uint8_t tag[16];
     ssize_t n=recv(member,tag,sizeof(tag),MSG_PEEK|MSG_TRUNC|MSG_DONTWAIT);
     if(n==ZXS_XFER_ASK&&memcmp(tag,handoff_ask,16)==0)return 1;
+    if(n==18+ZXS_DIR_NAME&&memcmp(tag,capq,16)==0)return 2; /* moved FILE capacity on its own endpoint */
     if(n==32)return 0; /* existing exact READ decoder owns the actual tag */
     return bad();
 }
@@ -51,7 +52,7 @@ int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAM
     uint8_t b[ZXS_XFER_ASK];int answer=-1;
     if(transfer(member,NULL,b,sizeof(b),-1,&answer,ZXS_DATA_FD,true)!=0)return -1;
     size_t f=b[17],n=b[18];const uint8_t *tail=b+20+ZXS_DIR_NAME;
-    if(memcmp(b,handoff_ask,16)!=0||b[19]>1||(b[19]!=0&&b[16]!=ZXS_XFER_RESTORE)||!transfer_labels(b[16],b+20,f,tail,n)||
+    if(memcmp(b,handoff_ask,16)!=0||b[19]>1||(b[19]!=0&&b[16]!=ZXS_XFER_RESTORE&&b[16]!=ZXS_XFER_MOVE)||!transfer_labels(b[16],b+20,f,tail,n)||
        same_endpoint_process(answer,worker,false)!=0)goto reject;
     if(b[16]==ZXS_XFER_DELETE&&!cut_id(b+20))goto reject;
     for(size_t i=b[16]==ZXS_XFER_DELETE?16:f;i<ZXS_DIR_NAME;i++)if(b[20+i]!=0)goto reject;

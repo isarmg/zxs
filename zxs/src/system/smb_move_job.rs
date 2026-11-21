@@ -22,7 +22,10 @@ unsafe extern "C"{
     fn zxs_xfer_reply(fd:i32,status:u8,file:*const u8,op:*const u8)->i32;
     fn zxs_member_held(member:i32)->i32;
 }
-pub(super) enum Request{Delete([u8;16]),Mark,Restore{folder:String,parents:Vec<String>,name:String},Rename(String)}
+pub(super) enum Request{
+    Delete([u8;16]),Mark,Restore{folder:String,parents:Vec<String>,name:String},Rename(String),
+    Move{folder:String,parents:Vec<String>,name:String},
+}
 pub(super) fn pending(member:i32)->i32{unsafe{zxs_member_xfer_pending(member)}}
 pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>{
     let(mut kind,mut folder,mut name,mut mark)=(0,[0u8;256],[0u8;223],[0u8;16]);
@@ -35,10 +38,11 @@ pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>
         1 if f==0&&n==0&&plen==0&&mark!=[0;16]=>Request::Delete(mark),
         3 if f==0&&n==0&&plen==0=>Request::Mark,
         4 if f==0&&n>0&&n<=222&&plen==0&&mark==[0;16]=>Request::Rename(display::component(&name[1..1+n],222)?.to_owned()),
-        2 if f>0&&n>0&&f<=255&&n<=222=>Request::Restore{
-            folder:display::component(&folder[1..1+f],255)?.to_owned(),
-            parents:if plen==0{Vec::new()}else{super::super::super::ordinary_directory::components(raw.get(..usize::from(plen)).ok_or_else(denied)?)?},
-            name:display::component(&name[1..1+n],222)?.to_owned(),
+        code @ (2|5) if f>0&&n>0&&f<=255&&n<=222&&mark==[0;16]=>{
+            let folder=display::component(&folder[1..1+f],255)?.to_owned();
+            let parents=if plen==0{Vec::new()}else{super::super::super::ordinary_directory::components(raw.get(..usize::from(plen)).ok_or_else(denied)?)?};
+            let name=display::component(&name[1..1+n],222)?.to_owned();
+            if code==2{Request::Restore{folder,parents,name}}else{Request::Move{folder,parents,name}}
         },
         _=>return Err(denied()),
     };
@@ -55,7 +59,7 @@ fn reply(answer:OwnedFd,result:io::Result<(crate::FileId,OperationId)>){
     }
 }
 static RENAME_WORK:AtomicUsize=AtomicUsize::new(0);
-pub(super) fn rename(site:Site<'_>,answer:OwnedFd,name:&str,current:&mut Current<'_,'_,'_>,
+pub(super) fn rename(site:Site<'_>,answer:OwnedFd,request:&Request,current:&mut Current<'_,'_,'_>,
     member_alive:&impl Fn()->io::Result<()>){
     if RENAME_WORK.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<4).then_some(n+1)).is_err(){
         refuse(answer,1);return;
@@ -72,7 +76,14 @@ pub(super) fn rename(site:Site<'_>,answer:OwnedFd,name:&str,current:&mut Current
     let outcome=(||{
         live()?;
         let op=OperationId::new()?;
-        current.rename_native(op,name,&live,|_|Ok(()))?;
+        match request{
+            Request::Rename(name)=>current.rename_native(op,name,&live,|_|Ok(()))?,
+            Request::Move{folder,parents,name}=>{
+                current.require_move_folder(|db,c|site.plan.current(db,c,folder))?;
+                current.move_native_parent(parents,op,name,&live,|_|Ok(()))?;
+            },
+            _=>return Err(denied()),
+        }
         Ok((current.file(),op))
     })();
     if live().is_ok(){reply(answer,outcome);}

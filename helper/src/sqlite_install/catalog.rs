@@ -7,7 +7,7 @@ use std::{ffi::OsString,io,os::unix::ffi::{OsStrExt,OsStringExt},path::PathBuf};
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=13;
+pub(super) const SCHEMA_VERSION:i64=14;
 pub(super) const MAX_OBJECTS:i32=147; // 117 declared descriptions and 30 implicit UNIQUE indexes
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
@@ -155,7 +155,7 @@ mod schema_tests {
         assert!(initial_recycle(&[row(0,4),row(1,5),row(1,6)]).is_err());
     }
     #[test]
-    fn old_versions_and_a_different_v13_structure_are_not_the_fresh_family() {
+    fn old_versions_and_a_same_size_prior_index_are_not_the_fresh_family() {
         let approved=Canonical::new().unwrap();
         assert_eq!(approved.0.len(),147);
         let mut db=Connection::open_in_memory().unwrap();
@@ -167,9 +167,11 @@ mod schema_tests {
         assert!(approved.require(&tx).is_err());
         tx.execute_batch("PRAGMA main.user_version = 12;").unwrap();
         assert!(approved.require(&tx).is_err());
-        tx.execute_batch("PRAGMA main.user_version = 13;
-                         DROP INDEX rename_original_source;
-                         CREATE INDEX unknown_release_origin ON file_rename(file_id,source_op);").unwrap();
+        tx.execute_batch("PRAGMA main.user_version = 13;").unwrap();
+        assert!(approved.require(&tx).is_err());
+        tx.execute_batch("PRAGMA main.user_version = 14;
+                         DROP INDEX rename_destination_name;
+                         CREATE INDEX rename_destination_name ON file_rename(volume_id,parent_id,target_name);").unwrap();
         assert_eq!(shape(&tx).unwrap().len(),147);
         assert!(approved.require(&tx).is_err());
     }

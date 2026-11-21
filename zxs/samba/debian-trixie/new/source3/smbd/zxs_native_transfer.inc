@@ -12,6 +12,10 @@ struct zxs_xfer_state{
 	bool unknown,rename_claimed;
 	uint8_t kind,receipt[16];
 };
+static bool zxs_rename_kind(uint8_t kind)
+{
+	return kind==ZXS_XFER_RENAME||kind==ZXS_XFER_MOVE;
+}
 static bool zxs_xfer_current(struct smbd_smb2_request *n,struct files_struct *fsp,
 			    const struct zxs_read_fsp *m,uint8_t kind)
 {
@@ -31,7 +35,7 @@ static bool zxs_xfer_current(struct smbd_smb2_request *n,struct files_struct *fs
 		if(m->folder.mode!=2||m->folder.volume_ordinal<2||!m->recycle_close||!fsp->fsp_flags.closing)return false;
 	}else if(kind==ZXS_XFER_PROBE){
 		if(m->folder.mode!=2||m->folder.volume_ordinal<2||fsp->fsp_flags.closing)return false;
-	}else if(kind==ZXS_XFER_RENAME){
+	}else if(zxs_rename_kind(kind)){
 		if(m->folder.mode!=2||m->folder.volume_ordinal<2||m->writable||fsp->fsp_flags.closing||
 		   (fsp->conn->share_access&SEC_DIR_ADD_FILE)==0)return false;
 	}else{return false;}
@@ -86,12 +90,14 @@ static void zxs_xfer_ready(struct tevent_req *sub)
 	case ZXS_XFER_UNAVAILABLE:status=NT_STATUS_DEVICE_NOT_READY;break;
 	default:break;
 	}
-	if(s->kind==ZXS_XFER_RENAME&&NT_STATUS_IS_OK(status)){
-		if(!s->rename_claimed||s->rename_to==NULL||
+	if(zxs_rename_kind(s->kind)&&NT_STATUS_IS_OK(status)){
+		if(!s->rename_claimed||s->rename_to==NULL||s->member->placement_sequence==UINT64_MAX||
 		   !zxs_release_ordinary_rename(s->fsp,s->rename_to)){
 			zxs_xfer_finish(req,NT_STATUS_OK,true);return;
 		}
 		s->rename_claimed=false;
+		s->member->placement_sequence++;
+		if(s->kind==ZXS_XFER_MOVE){s->member->moved_parent=true;}
 	}
 	zxs_xfer_finish(req,status,false);
 }
@@ -110,7 +116,7 @@ static struct tevent_req *zxs_xfer_begin(TALLOC_CTX *ctx,struct tevent_context *
 	s->link=aio_add_req_to_fsp(fsp,outer);
 	if(tevent_req_nomem(s->link,req))return tevent_req_post(req,ev);
 	talloc_steal(s,s->link);s->member=m;m->busy=true;
-	if(kind==ZXS_XFER_RENAME){
+	if(zxs_rename_kind(kind)){
 		if(renamed==NULL||fsp->fsp_name==NULL){
 			zxs_xfer_finish(req,NT_STATUS_ACCESS_DENIED,false);return tevent_req_post(req,ev);
 		}
@@ -147,9 +153,9 @@ struct tevent_req *zxs_xfer_send(TALLOC_CTX *ctx,struct tevent_context *ev,struc
 	return zxs_xfer_begin(ctx,ev,outer,n,fsp,kind,folder,name,mark,NULL);
 }
 static struct tevent_req *zxs_rename_send(TALLOC_CTX *ctx,struct tevent_context *ev,struct tevent_req *outer,
-	struct smbd_smb2_request *n,struct files_struct *fsp,const char *target,const char *leaf)
+	struct smbd_smb2_request *n,struct files_struct *fsp,const char *target,const char *folder,const char *name)
 {
-	return zxs_xfer_begin(ctx,ev,outer,n,fsp,ZXS_XFER_RENAME,NULL,leaf,NULL,target);
+	return zxs_xfer_begin(ctx,ev,outer,n,fsp,folder==NULL?ZXS_XFER_RENAME:ZXS_XFER_MOVE,folder,name,NULL,target);
 }
 _PUBLIC_
 NTSTATUS zxs_xfer_recv(struct tevent_req *req,bool *unknown,uint8_t receipt[16])
@@ -181,14 +187,17 @@ bool zxs_restore_input(TALLOC_CTX *ctx,DATA_BLOB input,char **folder,char **name
 	*folder=path;*name=split+1;return true;
 }
 _PUBLIC_
-bool zxs_ordinary_rename_input(TALLOC_CTX *ctx,DATA_BLOB input,const char *opened,char **target,const char **leaf)
+bool zxs_ordinary_rename_input(TALLOC_CTX *ctx,DATA_BLOB input,const char *opened,char **target,char **volume,const char **relative)
 {
-	char *folder=NULL,*relative=NULL;
-	if(opened==NULL||!zxs_restore_input(ctx,input,&folder,&relative))return false;
-	char *full=talloc_asprintf(ctx,"%s\\%s",folder,relative);
+	char *folder=NULL,*path=NULL;
+	if(opened==NULL||!zxs_restore_input(ctx,input,&folder,&path))return false;
+	const char *label=strchr(opened,'\\');
+	if(label==NULL||strlen(folder)!=(size_t)(label-opened)||memcmp(opened,folder,label-opened)!=0)return false;
+	char *full=talloc_asprintf(ctx,"%s\\%s",folder,path);
 	if(full==NULL)return false;
 	const char *a=strrchr(opened,'\\'),*b=strrchr(full,'\\');
-	if(a==NULL||b==NULL||(a-opened)!=(b-full)||memcmp(opened,full,b-full)!=0||
-	   !zxs_xfer_label(b+1,ZXS_FILE_NAME))return false;
-	*target=full;*leaf=b+1;return true;
+	if(b==NULL||!zxs_xfer_label(b+1,ZXS_FILE_NAME))return false;
+	const bool same=(a-opened)==(b-full)&&memcmp(opened,full,b-full)==0;
+	*target=full;*volume=same?NULL:folder;*relative=same?b+1:path;
+	return true;
 }

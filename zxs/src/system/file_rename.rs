@@ -8,10 +8,10 @@ use crate::{FileId,OperationId,Role,VolumeId,display,
 use std::{collections::BTreeSet,io,os::unix::ffi::OsStrExt,thread,time::Duration};
 
 #[derive(Clone,Copy,Eq,PartialEq)]
-pub(super) enum Cut{Reserved,NameChanged,Confirmed}
+pub(super) enum Cut{ParentSampled,Reserved,NameChanged,Confirmed}
 #[derive(Clone,Debug,Eq,PartialEq)]
 struct Original{
-    op:OperationId,from:Place,name:String,share:ShareId,setting:OperationId,
+    op:OperationId,from:Place,to_parent:DirectoryParent,name:String,share:ShareId,setting:OperationId,
     auth:OperationId,actor:AccountId,epoch:i64,save:Option<OperationId>,manual:Option<OperationId>,
 }
 #[derive(Clone,Copy,Eq,PartialEq)]
@@ -21,20 +21,20 @@ pub(super) fn unknown()->io::Error{io::Error::new(io::ErrorKind::ConnectionAbort
 
 impl Original{
     fn target(&self)->Place{
-        Place{op:self.op,generation:self.from.generation+1,name:self.name.clone(),..self.from.clone()}
+        Place{op:self.op,generation:self.from.generation+1,parent:self.to_parent,name:self.name.clone(),..self.from.clone()}
     }
     fn digest(&self,b:&Birth)->io::Result<[u8;32]>{
         if b.file!=self.from.file || self.from.role!=Role::File || self.from.generation<1 ||
            self.from.generation>=i64::MAX-1 || self.epoch<=0{
             return Err(invalid("rename has no original authorized placement"));
         }
-        if self.op==self.from.op||self.name==self.from.name||[self.op.0,self.from.op.0,self.from.volume.0,
+        if self.op==self.from.op||(self.name==self.from.name&&self.from.parent==self.to_parent)||[self.op.0,self.from.op.0,self.from.volume.0,
             self.share.0,self.setting.0,self.auth.0,self.actor.0].contains(&[0;16]){
             return Err(invalid("rename has an invalid original selector"));
         }
         let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/ORDINARY-RENAME\0")?;
         for id in [b.pool.0,b.operation.0,b.file.0,b.entry.0,b.history.0,b.branch.0,self.op.0,self.from.op.0,
-            self.from.volume.0,self.from.parent.bytes(),self.share.0,self.setting.0,self.auth.0,self.actor.0]{
+            self.from.volume.0,self.from.parent.bytes(),self.to_parent.bytes(),self.share.0,self.setting.0,self.auth.0,self.actor.0]{
             h.update(&id)?;
         }
         h.update(&self.from.generation.to_be_bytes())?;h.update(&self.epoch.to_be_bytes())?;
@@ -49,11 +49,11 @@ impl Original{
     }
     fn issue(&self,db:&Connection,birth:&Birth)->io::Result<()>{
         let o=db.prepare(c"INSERT INTO main.file_rename(rename_op,file_id,source_op,source_gen,volume_id,parent_id,
-            source_name,target_name,backing_op,source_terminal,target_terminal,share_id,setting_op,auth_op,save_op,manual_op)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)")?;
+            source_name,target_name,backing_op,source_terminal,target_terminal,share_id,setting_op,auth_op,save_op,manual_op,target_parent)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)")?;
         let f=&self.from;
         for (i,value) in [(1,self.op.0),(2,f.file.0),(3,f.op.0),(5,f.volume.0),(6,f.parent.bytes()),
-            (12,self.share.0),(13,self.setting.0),(14,self.auth.0)]{o.bind_bytes(i,&value)?;}
+            (12,self.share.0),(13,self.setting.0),(14,self.auth.0),(17,self.to_parent.bytes())]{o.bind_bytes(i,&value)?;}
         o.bind_integer(4,f.generation)?;o.bind_bytes(7,f.name.as_bytes())?;o.bind_bytes(8,self.name.as_bytes())?;
         if let Some(id)=f.backing{o.bind_bytes(9,&id.0)?;}else{
             o.bind_bytes(10,f.leaf()?.to_bytes())?;o.bind_bytes(11,self.target().leaf()?.to_bytes())?;
@@ -68,7 +68,7 @@ impl Original{
         let q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,r.file_id,r.source_op,r.source_gen,r.volume_id,
           r.parent_id,r.source_name,r.target_name,r.backing_op,r.source_terminal,r.target_terminal,
           r.share_id,r.setting_op,r.auth_op,r.save_op,r.manual_op,e.generation,
-          EXISTS(SELECT 1 FROM main.file_rename_abort a WHERE a.rename_op=o.op_id)
+          EXISTS(SELECT 1 FROM main.file_rename_abort a WHERE a.rename_op=o.op_id),r.target_parent
           FROM main.file_rename r JOIN main.operation o ON o.op_id=r.rename_op AND o.kind=14
           JOIN main.credential_epoch e ON e.role=1 AND e.credential_op=r.auth_op
           JOIN main.account_pair p ON p.singleton=e.slot AND p.smb_id=o.actor_id
@@ -88,7 +88,7 @@ impl Original{
         if Place::read_backing(&q,10,12,file,&name)?!=backing{return Err(invalid("rename changed physical backing"));}
         let from=Place{file,op:OperationId(q.array(4)?),generation:q.integer(5)?,volume:VolumeId(q.array(6)?),
             parent:DirectoryParent::from_bytes(q.array(7)?),name:old,role:Role::File,backing};
-        let row=Self{op,from,name,share:ShareId(q.array(13)?),setting:OperationId(q.array(14)?),
+        let row=Self{op,from,to_parent:DirectoryParent::from_bytes(q.array(20)?),name,share:ShareId(q.array(13)?),setting:OperationId(q.array(14)?),
             auth:OperationId(q.array(15)?),actor:AccountId(q.array(1)?),epoch:q.integer(18)?,
             save:work_record::optional(&q,16)?,manual:work_record::optional(&q,17)?};
         if q.array::<32>(2)?!=row.digest(birth)?{return Err(invalid("rename receipt differs from its original request"));}
@@ -128,18 +128,18 @@ fn pocket_shape(private:bool,parent:&HeldDir,body:&HeldDir,b:&Birth)->io::Result
     Ok(())
 }
 
-fn vacant(db:&Connection,c:&Catalog,from:&Place,title:&str)->io::Result<()>{
-    if Place::renaming_name(db,from.volume,from.parent,title)?{return Err(busy());}
-    if Place::named(db,c,from.volume,from.parent,title)?.is_some()||
-       ordinary_directory::lookup(db,c,from.volume,from.parent,title)?.is_some(){
+fn vacant(db:&Connection,c:&Catalog,from:&Place,into:DirectoryParent,title:&str)->io::Result<()>{
+    if Place::renaming_name(db,from.volume,into,title)?{return Err(busy());}
+    if Place::named(db,c,from.volume,into,title)?.is_some()||
+       ordinary_directory::lookup(db,c,from.volume,into,title)?.is_some(){
         return Err(io::ErrorKind::AlreadyExists.into());
     }
     if from.backing.is_none(){
         let leaf=Birth::placed_container(title,from.file)?;
         let native=leaf.to_str().map_err(|_|denied())?;
-        if Place::renaming_name(db,from.volume,from.parent,native)?{return Err(busy());}
-        if ordinary_directory::lookup(db,c,from.volume,from.parent,native)?.is_some()||
-           (native.len()<=222&&Place::named(db,c,from.volume,from.parent,native)?.is_some()){
+        if Place::renaming_name(db,from.volume,into,native)?{return Err(busy());}
+        if ordinary_directory::lookup(db,c,from.volume,into,native)?.is_some()||
+           (native.len()<=222&&Place::named(db,c,from.volume,into,native)?.is_some()){
             return Err(io::ErrorKind::AlreadyExists.into());
         }
     }
@@ -177,19 +177,25 @@ enum Abort{Untouched=1,RolledBack=2}
 /// untouched reservation, or put back the same file under a new RW grant.
 fn recover(src:&InitialReader,op:OperationId,file:FileId,allowed:&Allowed<'_>,
     alive:&impl Fn()->io::Result<()>)->io::Result<()>{
-    let (catalog,original,kind,birth,route,members,old_alias,new_alias)=src.at(|db,c|{
+    let (catalog,original,kind,birth,route,target,members,old_alias,new_alias)=src.at(|db,c|{
         alive()?;
         let birth=file_create::committed_file(db,&c,file)?;
         let (r,state)=Original::fetch(db,&birth,op)?.ok_or_else(denied)?;
         if state!=Status::Pending||r.from.file!=file{return Err(denied());}
         let kind=r.recovery(db,&c,&birth,allowed)?;
         let route=ordinary_directory::Route::at(db,&c,r.from.volume,r.from.parent)?;
+        let target=if r.to_parent!=r.from.parent{Some(ordinary_directory::Route::at(db,&c,r.from.volume,r.to_parent)?)}else{None};
         let members=work_record::members(db,&c,&birth)?;
         let old=file_create::display_owner_at(db,&c,r.from.volume,r.from.parent,&r.from.name)?;
-        let new=file_create::display_owner_at(db,&c,r.from.volume,r.from.parent,&r.name)?;
-        Ok((c,r,kind,birth,route,members,old,new))
+        let new=file_create::display_owner_at(db,&c,r.from.volume,r.to_parent,&r.name)?;
+        Ok((c,r,kind,birth,route,target,members,old,new))
     })?;
     let f=OrdinaryRoot::at_parent(src,&catalog,&route,None)?;
+    if let Some(target)=target{
+        let to=OrdinaryRoot::at_parent(src,&catalog,&target,None)?;
+        return parent_change::recover(src,&original,kind,&birth,&f,&to,&route,&target,&members,
+            old_alias.as_ref(),new_alias.as_ref(),allowed,alive);
+    }
     let holder=if let Some(native)=original.from.private_leaf()?{
         Some(f.folder().exact_directory(&native)?.ok_or_else(denied)?)
     }else{None};
@@ -291,11 +297,11 @@ impl Tree<'_,'_>{
             let selected=Place::current(db,&c,expected.file)?;
             if &selected!=expected{return Err(denied());}
             Place::require_no_rename(db,expected.file)?;
-            vacant(db,&c,expected,name)?;
+            vacant(db,&c,expected,expected.parent,name)?;
             let b=selected.bind(db,&c)?.birth;
             let r=c.rows().get(1).filter(|r|r.role==Role::Recycle).ok_or_else(denied)?;
             b.validate_transfer_geometry(name,(&r.path,r.limit),op)?;
-            let planned=Original{op,from:expected.clone(),name:name.to_owned(),share:grant.share,setting:grant.op,
+            let planned=Original{op,from:expected.clone(),to_parent:expected.parent,name:name.to_owned(),share:grant.share,setting:grant.op,
                 auth:owner.op,actor:owner.account,epoch:owner.generation,save:work_record::selected(db,&b)?.map(|v|v.record.key().save),
                 manual:work_record::latest_commit(db,&b)?.map(|n|n.0)};
             planned.digest(&b)?;
@@ -321,7 +327,7 @@ impl Tree<'_,'_>{
                file_create::display_owner_at(db,&c,expected.volume,expected.parent,name)?!=alias{
                 return Err(busy());
             }
-            vacant(db,&c,expected,name)?;
+            vacant(db,&c,expected,expected.parent,name)?;
             ordinary_directory::budget(db,expected.volume,expected.parent,&names,
                 (!private).then_some(Additional::Rename(expected.file,&terminal)))?;
             original.issue(db,&birth)
@@ -378,3 +384,6 @@ impl Tree<'_,'_>{
         execute.map_err(|_|unknown())
     }
 }
+
+#[path="file_parent_change.rs"]
+mod parent_change;

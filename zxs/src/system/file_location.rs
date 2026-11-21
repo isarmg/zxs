@@ -82,8 +82,8 @@ impl Place{
         Ok(None)
     }
     pub(super) fn renaming_name(db:&Connection,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<bool>{
-        let q=db.prepare(c"SELECT 1 FROM main.pending_rename WHERE volume_id=?1 AND parent_id=?2 AND target_name=?3
-            UNION ALL SELECT 1 FROM main.pending_rename WHERE volume_id=?1 AND parent_id=?2 AND target_terminal=?3
+        let q=db.prepare(c"SELECT 1 FROM main.pending_rename WHERE volume_id=?1 AND target_parent=?2 AND target_name=?3
+            UNION ALL SELECT 1 FROM main.pending_rename WHERE volume_id=?1 AND target_parent=?2 AND target_terminal=?3
             UNION ALL SELECT 1 FROM main.file_location l JOIN main.pending_rename r ON r.file_id=l.file_id AND r.source_op=l.position_op
               WHERE l.role=2 AND l.volume_id=?1 AND l.parent_id=?2 AND l.display=?3 LIMIT 1")?;
         q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;q.bind_bytes(3,name.as_bytes())?;

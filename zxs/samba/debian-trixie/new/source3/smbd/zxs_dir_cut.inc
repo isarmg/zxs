@@ -134,7 +134,7 @@ reject:
 }
 static struct tevent_req *zxs_dir_cut_begin(TALLOC_CTX *ctx,struct tevent_context *ev,
 	struct smbd_smb2_request *n,const struct zxs_smb_tree_cut *folder,
-	unsigned limit,const uint8_t *after,size_t size,uint8_t mode)
+	unsigned limit,const uint8_t *after,size_t size,uint8_t mode,int moved_member)
 {
 	struct tevent_req *req;struct zxs_dir_cut_state *s;
 	req=tevent_req_create(ctx,&s,struct zxs_dir_cut_state);if(req==NULL)return NULL;
@@ -146,9 +146,10 @@ static struct tevent_req *zxs_dir_cut_begin(TALLOC_CTX *ctx,struct tevent_contex
 	int fd=folder==NULL?s->tcon->zxs_tree_choice->root_fd:folder->root_fd;
 	if(limit==ZXS_NS_CAPACITY_RW){
 		if(size!=0 || mode>1 || (folder!=NULL && zxs_folder_retained(folder)))goto reject;
-		/* An ordinary FSP sends only to its own original folder lease.
-		 * The total-root endpoint alone can choose a reference volume. */
-		s->fd=zxs_ns_capacity_query(fd,mode!=0);
+		if(moved_member>=0&&(folder==NULL||zxs_member_held(moved_member)!=0))goto reject;
+		/* After a parent move, the FSP's own member holds the new proof.
+		 * The old folder is only its lineage, not a capacity fallback. */
+		s->fd=zxs_ns_capacity_query(moved_member>=0?moved_member:fd,mode!=0);
 	}else if(limit==ZXS_OD_PATH){
 		if(folder==NULL || zxs_folder_retained(folder) || zxs_folder_ordinary_child(folder))goto reject;
 		s->od_mode=mode;s->fd=zxs_odir_query(fd,mode,after,size);
@@ -185,17 +186,17 @@ struct tevent_req *zxs_dir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,
 	struct smbd_smb2_request *n,const struct zxs_smb_tree_cut *folder,unsigned limit,const uint8_t *after,size_t size)
 {
 	if(limit==ZXS_OD_PATH || limit==ZXS_NS_CAPACITY_RW)return NULL;
-	return zxs_dir_cut_begin(ctx,ev,n,folder,limit,after,size,0);
+	return zxs_dir_cut_begin(ctx,ev,n,folder,limit,after,size,0,-1);
 }
 struct tevent_req *zxs_odir_cut_send(TALLOC_CTX *ctx,struct tevent_context *ev,struct smbd_smb2_request *n,
 	const struct zxs_smb_tree_cut *folder,uint8_t mode,const uint8_t *path,size_t size)
 {
-	return zxs_dir_cut_begin(ctx,ev,n,folder,ZXS_OD_PATH,path,size,mode);
+	return zxs_dir_cut_begin(ctx,ev,n,folder,ZXS_OD_PATH,path,size,mode,-1);
 }
 struct tevent_req *zxs_capacity_send(TALLOC_CTX *ctx,struct tevent_context *ev,
-	struct smbd_smb2_request *n,const struct zxs_smb_tree_cut *ordinary,bool may_write)
+	struct smbd_smb2_request *n,const struct zxs_smb_tree_cut *ordinary,bool may_write,int moved_member)
 {
-	return zxs_dir_cut_begin(ctx,ev,n,ordinary,ZXS_NS_CAPACITY_RW,NULL,0,may_write?1:0);
+	return zxs_dir_cut_begin(ctx,ev,n,ordinary,ZXS_NS_CAPACITY_RW,NULL,0,may_write?1:0,moved_member);
 }
 NTSTATUS zxs_capacity_recv(struct tevent_req *req,struct zxs_ns_space *out)
 {

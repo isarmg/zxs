@@ -12,6 +12,10 @@ pub(crate) struct ControlRead {
     limit: u64,
 }
 impl ControlRead {
+    pub(crate) fn duplicate(&self)->io::Result<Self>{
+        Ok(Self{name:self.name,file:self.file.try_clone()?,opening:self.opening,
+            parent:self.parent,mount:self.mount,limit:self.limit})
+    }
     pub(crate) fn open(dir: &HeldDir, name: &'static CStr, limit: usize) -> io::Result<Self> {
         let limit = u64::try_from(limit).map_err(|_| invalid("control length limit overflow"))?;
         dir.checked_child_path(name)?;

@@ -116,31 +116,38 @@ fn ready(site:Site<'_>,alive:&impl Fn()->io::Result<()>,fd:i32,data:&[u8;88],bor
 }
 fn read_only(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,expected:Setting,member:i32,
     alive:&impl Fn()->io::Result<()>,current:&mut Current<'_,'_,'_>)->io::Result<()>{
-    loop{
-        alive()?;
-        let r=unsafe{zxs_smb_root_wait(member,origin.session.as_raw_fd(),500)};
-        if r==0{continue;}if r!=1{return Err(denied());}
-        match mover::pending(member){
-            1=>{
-                let (request,answer)=mover::take(member,origin)?;
-                if let mover::Request::Rename(name)=&request{
-                    mover::rename(site,answer,name,current,alive);
+    std::thread::scope(|scope|{
+        let mut moved_capacity=None;
+        loop{
+            alive()?;
+            let r=unsafe{zxs_smb_root_wait(member,origin.session.as_raw_fd(),500)};
+            if r==0{continue;}if r!=1{return Err(denied());}
+            match mover::pending(member){
+                2=>{
+                    let _=super::namespace::start_moved_capacity(scope,&mut moved_capacity,site,origin,member,current);
                     continue;
-                }
-                if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
-                let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
-                mover::run(site,origin,branch,answer,request,current.native_placement().clone(),Some(expected),permit);
-                continue;
-            },
-            0=>{},
-            _=>return Err(denied()),
+                },
+                1=>{
+                    let (request,answer)=mover::take(member,origin)?;
+                    if matches!(&request,mover::Request::Rename(_)|mover::Request::Move{..}){
+                        mover::rename(site,answer,&request,current,alive);
+                        continue;
+                    }
+                    if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
+                    let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
+                    mover::run(site,origin,branch,answer,request,current.native_placement().clone(),Some(expected),permit);
+                    continue;
+                },
+                0=>{},
+                _=>return Err(denied()),
+            }
+            let (mut at,mut count)=(0,0);
+            let fd=unsafe{zxs_read_take(member,origin.worker.as_raw_fd(),&mut at,&mut count)};
+            if fd<0{return Err(denied());}
+            let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+            alive()?;site.validate()?;
+            let read=current.smb_read_window(at,count,|b|os(unsafe{zxs_read_fill(answer.as_raw_fd(),b.as_ptr(),b.len())}));
+            if read.is_ok() && alive().is_ok() && site.validate().is_ok(){let _=unsafe{zxs_read_accept(answer.as_raw_fd())};}
         }
-        let (mut at,mut count)=(0,0);
-        let fd=unsafe{zxs_read_take(member,origin.worker.as_raw_fd(),&mut at,&mut count)};
-        if fd<0{return Err(denied());}
-        let answer=unsafe{OwnedFd::from_raw_fd(fd)};
-        alive()?;site.validate()?;
-        let read=current.smb_read_window(at,count,|b|os(unsafe{zxs_read_fill(answer.as_raw_fd(),b.as_ptr(),b.len())}));
-        if read.is_ok() && alive().is_ok() && site.validate().is_ok(){let _=unsafe{zxs_read_accept(answer.as_raw_fd())};}
-    }
+    })
 }

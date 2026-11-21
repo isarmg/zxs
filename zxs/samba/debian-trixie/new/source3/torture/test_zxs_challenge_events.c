@@ -331,7 +331,7 @@ static bool exact_root_capacity_envelope(void)
 	   zxs_ns_capacity_reply(peer,ZXS_NS_CAP_NO_MEDIA,0,0,0)!=0 ||
 	   zxs_ns_capacity_read(ref,&got)!=0 || got.status!=ZXS_NS_CAP_NO_MEDIA || got.total!=0)goto end;
 	close(ref);ref=-1;close(peer);peer=-1;
-	ref=zxs_ns_capacity_query(p[0],true);if(ref<0)goto end;
+	ref=zxs_ns_capacity_query(p[0],true);if(ref<0||zxs_member_xfer_pending(p[1])!=2)goto end;
 	peer=zxs_dir_take(p[1],pid,&scope,name);
 	if(peer<0 || scope!=ZXS_NS_CAPACITY_RW || name[0]!=0 ||
 	   zxs_ns_capacity_reply(peer,ZXS_NS_CAP_READY,16384,8192,4096)==0 ||
@@ -382,7 +382,16 @@ static bool exact_transfer_envelope(void)
     native=zxs_xfer_query(p[0],ZXS_XFER_RENAME,NULL,0,(const uint8_t *)"New",3,NULL);
     if(native<0||zxs_member_xfer_pending(p[1])!=1)goto end;
     store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark,&width,parents);
-    ok=store>=0&&kind==ZXS_XFER_RENAME&&folder[0]==0&&width==0&&name[0]==3&&memcmp(name+1,"New",3)==0;
+    if(store<0||kind!=ZXS_XFER_RENAME||folder[0]!=0||width!=0||name[0]!=3||memcmp(name+1,"New",3)!=0)goto end;
+    close(store);store=-1;close(native);native=-1;
+    const char outgoing[]="Reports\\2027\\Report";
+    if(zxs_xfer_query(p[0],ZXS_XFER_MOVE,NULL,0,(const uint8_t *)outgoing,sizeof(outgoing)-1,NULL)>=0||
+       zxs_xfer_query(p[0],ZXS_XFER_MOVE,(const uint8_t *)"F",1,(const uint8_t *)outgoing,sizeof(outgoing)-1,op)>=0)goto end;
+    native=zxs_xfer_query(p[0],ZXS_XFER_MOVE,(const uint8_t *)"F",1,(const uint8_t *)outgoing,sizeof(outgoing)-1,NULL);
+    if(native<0||zxs_member_xfer_pending(p[1])!=1)goto end;
+    store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark,&width,parents);
+    ok=store>=0&&kind==ZXS_XFER_MOVE&&folder[0]==1&&folder[1]=='F'&&width==12&&
+        memcmp(parents,"Reports\\2027",12)==0&&name[0]==6&&memcmp(name+1,"Report",6)==0;
 end:
 	if(store>=0)close(store);if(native>=0)close(native);if(proc>=0)close(proc);
 	close(p[0]);close(p[1]);return ok;

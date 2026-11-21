@@ -319,7 +319,9 @@ impl<'s,'r> Tree<'s,'r>{
     }
 }
 
-pub(super) enum Additional<'a>{File(&'a Birth),Directory(&'a DirectoryBirth),Pocket(&'a CStr),Rename(FileId,&'a CStr)}
+pub(super) enum Additional<'a>{
+    File(&'a Birth),Directory(&'a DirectoryBirth),Pocket(&'a CStr),Rename(FileId,&'a CStr),IncomingFlat(&'a CStr,&'a CStr),
+}
 struct NameBudget{unaccounted:BTreeSet<Vec<u8>>,promised:BTreeSet<Vec<u8>>,count:usize,bytes:usize}
 impl NameBudget{
     fn charge(&mut self,count:usize,bytes:usize)->io::Result<()>{
@@ -333,6 +335,11 @@ impl NameBudget{
         self.unaccounted.remove(pin.to_bytes());let has_end=self.unaccounted.remove(terminal);
         if pending&&self.unaccounted.remove(stage.to_bytes())&&has_end{return Err(invalid("two native names claim the same birth slot"));}
         self.charge(2,2+pin.to_bytes().len()+if pending{terminal.len().max(stage.to_bytes().len())}else{terminal.len()})
+    }
+    fn incoming_flat(&mut self,pin:&CStr,end:&CStr)->io::Result<()>{
+        self.claim(pin.to_bytes())?;self.claim(end.to_bytes())?;
+        self.unaccounted.remove(pin.to_bytes());self.unaccounted.remove(end.to_bytes());
+        self.charge(2,2+pin.to_bytes().len()+end.to_bytes().len())
     }
     fn rename_edge(&mut self,pin:&CStr,old:&[u8],new:&[u8])->io::Result<()>{
         if old.is_empty()||old.len()>255||new.is_empty()||new.len()>255{return Err(invalid("invalid original rename terminal"));}
@@ -360,7 +367,7 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
     let mut b=NameBudget{unaccounted:census.clone(),promised:BTreeSet::new(),count:0,bytes:0};
     let q=db.prepare(c"SELECT e.create_op,e.ticket,l.flat_terminal,o.state,l.file_id,r.target_terminal FROM main.file_location l
         JOIN main.root_entry e ON e.file_id=l.file_id JOIN main.operation o ON o.op_id=e.create_op
-        LEFT JOIN main.pending_rename r ON r.file_id=l.file_id AND r.source_op=l.position_op
+        LEFT JOIN main.pending_rename r ON r.file_id=l.file_id AND r.source_op=l.position_op AND r.target_parent=l.parent_id
         WHERE l.role=2 AND l.flat_terminal IS NOT NULL AND l.volume_id=?1 AND l.parent_id=?2")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
     let mut charged_rename=false;
@@ -386,8 +393,27 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         100=>{let op=OperationId(q.array(0)?);let(p,s)=dir_reserved(op)?;b.pair(&p,&s,q.blob(1,255)?,q.byte(2)?==0)?;}
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
+    // A two-parent move bills both parents for all of that FILE's own
+    // names until selection/abort, including the source rollback room.
+    let q=db.prepare(c"SELECT b.create_op,b.ticket,r.file_id,r.target_name,r.target_terminal FROM main.pending_rename r
+        JOIN main.root_entry b ON b.file_id=r.file_id
+        WHERE r.volume_id=?1 AND r.target_parent=?2 AND r.parent_id<>r.target_parent AND r.backing_op IS NULL")?;
+    q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
+    loop{match unsafe{sqlite3_step(q.0)}{
+        100=>{
+            let file=FileId(q.array(2)?);
+            let name=crate::display::component(q.blob(3,222)?,222)?;
+            let terminal=Birth::placed_container(name,file)?;
+            if terminal.to_bytes()!=q.blob(4,255)?{return Err(invalid("wrong original incoming FILE terminal"));}
+            let(pin,_)=Birth::reservation_leaves(OperationId(q.array(0)?),OperationId(q.array(1)?))?;
+            b.incoming_flat(&pin,&terminal)?;
+        },
+        101=>break,n=>{check(n)?;return Err(denied());}
+    }}
     let q=db.prepare(c"SELECT backing_op FROM main.file_location WHERE role=2 AND backing_op IS NOT NULL AND volume_id=?1 AND parent_id=?2
-        UNION ALL SELECT transfer_op FROM main.pending_transfer WHERE direction=2 AND target_id=?1 AND target_parent=?2")?;
+        UNION ALL SELECT transfer_op FROM main.pending_transfer WHERE direction=2 AND target_id=?1 AND target_parent=?2
+        UNION ALL SELECT backing_op FROM main.pending_rename WHERE volume_id=?1 AND target_parent=?2
+              AND parent_id<>target_parent AND backing_op IS NOT NULL")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
     loop{match unsafe{sqlite3_step(q.0)}{
         100=>b.pocket(&Birth::placement_parent(OperationId(q.array(0)?))?)?,
@@ -397,6 +423,7 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         Some(Additional::File(f))=>b.pair(&f.witness()?,&f.lower(0)?,f.container()?.to_bytes(),true)?,
         Some(Additional::Directory(d))=>b.pair(&d.witness(),&d.stage(),d.leaf()?.to_bytes(),true)?,
         Some(Additional::Pocket(p))=>b.pocket(p)?,
+        Some(Additional::IncomingFlat(pin,end))=>b.incoming_flat(pin,end)?,
         Some(Additional::Rename(..)) if !charged_rename=>return Err(invalid("no exact flat FILE for this rename budget")),
         Some(Additional::Rename(..))=>{},
         None=>{}
