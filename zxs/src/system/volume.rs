@@ -78,6 +78,24 @@ impl OrdinaryView<'_>{
     pub(super) fn for_tree(&self,source:&InitialReader,volume:VolumeId)->bool{
         std::ptr::eq(self.source,source)&&self.media.volume==volume
     }
+    fn require(&self)->io::Result<()>{
+        self.source.dir.require()?;check(unsafe{zxs_sql_named(self.source.conn.0)})?;
+        self.source.marker.require(&self.source.dir.root)?;
+        let now=HeldDir::trusted_storage(&self.media.root.path)?;
+        if now.entity!=self.media.root.entity||!now.same_mount(&self.media.root)?||
+            self.media.mark.bytes(&self.media.root)?.as_slice()!=self.media.expected.as_slice(){
+            return Err(invalid("original SQL declaration does not match this current ordinary root"));
+        }
+        ordinary_directory::keep_chain(&self.media.root,&self.media.ancestors)
+    }
+    pub(super) fn space(&self)->io::Result<DiskSpace>{
+        self.require()?;let(mut total,mut available)=(0,0);
+        // SAFETY: actual already-held ordinary root FD, two live output integers.
+        if unsafe{zxs_storage_capacity(self.media.root.file.as_raw_fd(),&mut total,&mut available)}<0{
+            return Err(io::Error::last_os_error());
+        }
+        self.require()?;Ok(DiskSpace{volume:self.media.volume,filesystem_bytes:total,available_bytes:available})
+    }
     pub(super) fn require_streaming(&self)->io::Result<()>{
         self.require_streaming_at(||Ok(()))
     }
@@ -146,16 +164,7 @@ impl<'a> OrdinaryRoot<'a>{
         let media=OrdinaryMedia{root,mark,expected,volume:id,ordinal:row.ordinal,parent:DirectoryParent::Root,ancestors:Vec::new()};
         let b=Self{source,media};b.require()?;Ok(b)
     }
-    pub(super) fn require(&self)->io::Result<()>{
-        self.source.dir.require()?;check(unsafe{zxs_sql_named(self.source.conn.0)})?;
-        self.source.marker.require(&self.source.dir.root)?;
-        let now=HeldDir::trusted_storage(&self.root.path)?;
-        if now.entity!=self.root.entity||!now.same_mount(&self.root)?||
-            self.mark.bytes(&self.root)?.as_slice()!=self.expected.as_slice(){
-            return Err(invalid("original SQL declaration does not match this current ordinary root"));
-        }
-        ordinary_directory::keep_chain(&self.root,&self.ancestors)
-    }
+    pub(super) fn require(&self)->io::Result<()>{self.view().require()}
     /// A stream already selected this F from a verified short SQL snapshot.
     /// Check its held names, both exact private parents and marker stamps
     /// without re-enumerating S, re-reading its SQL schema or probing R.
@@ -178,14 +187,7 @@ impl<'a> OrdinaryRoot<'a>{
         self.require_streaming()?;
         Ok(sample)
     }
-    pub(super) fn space(&self)->io::Result<DiskSpace>{
-        self.require()?;let(mut total,mut available)=(0,0);
-        // SAFETY: actual already-held ordinary root FD, two live output integers.
-        if unsafe{zxs_storage_capacity(self.root.file.as_raw_fd(),&mut total,&mut available)}<0{
-            return Err(io::Error::last_os_error());
-        }
-        self.require()?;Ok(DiskSpace{volume:self.volume,filesystem_bytes:total,available_bytes:available})
-    }
+    pub(super) fn space(&self)->io::Result<DiskSpace>{self.view().space()}
 }
 
 /// The native R role has its own selected proof. It cannot be passed into

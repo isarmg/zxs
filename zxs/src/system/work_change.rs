@@ -1,10 +1,11 @@
 //! One bounded business writer for this original ordinary FILE. The per-FILE
 //! native directory EX is held across all saves on this handle; compatible
 //! read handles never take it. SQLite carries only the exact original decisions.
-use super::{Catalog,Connection,Tree,check,sqlite3_step};
-use super::super::{file_location::{Place,Placed},volume::OrdinaryRoot,work_record::{self,Edit,Issued,Members,ReadRecord}};
+use super::{Catalog,Connection,InitialReader,Tree,check,file_create,sqlite3_step};
+use super::super::{file_location::{Place,Placed},volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Edit,Issued,Members,ReadRecord}};
 use crate::{
-    FileId,OperationId,display,fs::{WitnessRead,invalid},
+    FileId,OperationId,display,fs::{HeldDir,WitnessRead,invalid,directory_birth::DirectoryParent},
+    identity::AccountId,system::reader::account::share_mode::Setting,
     ordinary::{portable_birth::{Birth,Installed},working_round::{Draft,End,Key,Record,Selected,Span}},
 };
 use std::{fs::File,io};
@@ -45,19 +46,44 @@ impl State{
     fn pending(&self)->Option<Issued>{self.pending}
 }
 
+// Actual mutable FILE hold. Neither its physical descriptor nor the
+// original writer nonce is recreated at a request / authorization cut.
+struct WriteFile{installed:Installed,birth:Birth,place:Place,nonce:OperationId}
+impl WriteFile{
+    fn acquire(located:Placed,parent:&HeldDir,selected:&State)->io::Result<Self>{
+        let names=parent.names()?.into_iter().collect();
+        let installed=located.open(parent,&names,true,|s|selected.members.require(s))?;
+        let Placed{birth,here:place}=located;
+        Ok(Self{installed,birth,place,nonce:OperationId::new()?})
+    }
+}
 pub(crate) struct Writer<'t,'s,'r>{
-    installed:Installed,
+    original:WriteFile,
     root:OrdinaryRoot<'r>,
     tree:&'t Tree<'s,'r>,
-    birth:Birth,
-    place:Place,
-    nonce:OperationId,
+}
+
+/// The values used by the original kind-10 SAVE only. They are not a
+/// login, a share grant or a callable operation without the same SQL cut.
+#[derive(Clone,Copy)]
+struct EditAuthority{account:AccountId,op:OperationId,generation:i64,setting:Setting}
+
+/// The single SAVE algorithm has the exact original FILE and a fresh
+/// authorization function for the same, already sourced SQLite cut.
+struct WriteAt<'a>{
+    original:&'a WriteFile,root:OrdinaryView<'a>,source:&'a InitialReader,
+    authority:EditAuthority,parent:DirectoryParent,
+    require:&'a dyn Fn(&Connection,&Catalog)->io::Result<()>,
+}
+impl std::ops::Deref for WriteAt<'_>{
+    type Target=WriteFile;
+    fn deref(&self)->&Self::Target{self.original}
 }
 impl<'s,'r> Tree<'s,'r>{
     pub(super) fn writer_from_newborn<'t>(&'t self,born:super::file_create::NativeBorn<'r>,nonce:OperationId)->io::Result<Writer<'t,'s,'r>>{
         let (root,birth,installed)=born.parts(true)?;
         let place=Place::origin(&birth,root.parent());
-        let handle=Writer{installed,root,tree:self,birth,place,nonce};
+        let handle=Writer{original:WriteFile{installed,birth,place,nonce},root,tree:self};
         handle.require_work()?;Ok(handle)
     }
     pub(super) fn open_named_writer(&self,name:&str)->io::Result<Writer<'_,'s,'r>>{
@@ -78,14 +104,14 @@ impl<'s,'r> Tree<'s,'r>{
             Ok((c,located,selected,route))
         })?;
         let root=OrdinaryRoot::at_parent(src,&catalog,&route,None)?;
-        let names=root.folder().names()?.into_iter().collect();
-        let installed=located.open(root.folder(),&names,true,|s|selected.members.require(s))?;
-        let Placed{birth,here:place}=located;
-        let handle=Writer{installed,root,tree:self,birth,place,nonce:OperationId::new()?};
-        handle.physical(&selected)?;
-        src.at(|db,c|{
-            if handle.state(db,&c)?!=selected{return Err(busy("work changed during writer admission"));}
-            Ok(())
+        let original=WriteFile::acquire(located,root.folder(),&selected)?;
+        let handle=Writer{original,root,tree:self};
+        handle.with_write(|w|{
+            w.physical(&selected)?;
+            src.at(|db,c|{
+                if w.state(db,&c)?!=selected{return Err(busy("work changed during writer admission"));}
+                Ok(())
+            })
         })?;
         Ok(handle)
     }
@@ -97,52 +123,24 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
         }
         original.require_named()?;self.root.require_streaming()
     }
-    pub(super) fn work_directory(&self)->&crate::fs::HeldDir{self.installed.directory()}
+    pub(super) fn work_directory(&self)->&crate::fs::HeldDir{self.original.installed.directory()}
     pub(super) fn staging_free(&self)->io::Result<u64>{Ok(self.root.space()?.available_bytes)}
     pub(super) fn current_read(&self)->io::Result<Current<'t,'s,'r>>{
         let tree:&'t Tree<'s,'r>=self.tree;
-        let found=tree.open_current(&self.place.name)?;
-        if found.file()!=self.birth.file{return Err(invalid("writer reader does not own the original FILE"));}
+        let found=tree.open_current(&self.original.place.name)?;
+        if found.file()!=self.original.birth.file{return Err(invalid("writer reader does not own the original FILE"));}
         Ok(found)
     }
-    pub(super) fn require_work(&self)->io::Result<()>{
-        let src=self.tree.session.source;
-        let x=src.at(|db,c|self.state(db,&c))?;
-        self.physical(&x)?;
-        src.at(|db,c|{
-            if self.state(db,&c)?!=x{return Err(busy("work writer lost its original cut"));}
-            Ok(())
-        })
+    fn with_write<T>(&self,action:impl FnOnce(WriteAt<'_>)->io::Result<T>)->io::Result<T>{
+        let credential=&self.tree.session.original;let setting=self.tree.setting;
+        let require=|db:&Connection,c:&Catalog|self.tree.require(db,c,true);
+        action(WriteAt{original:&self.original,root:self.root.view(),source:self.tree.session.source,
+            authority:EditAuthority{account:credential.account,op:credential.op,generation:credential.generation,setting},
+            parent:self.tree.parent,require:&require})
     }
-    fn state(&self,db:&Connection,c:&Catalog)->io::Result<State>{
-        self.tree.require(db,c,true)?;
-        let located=self.tree.placed(db,c,&self.place.name,Some(self.birth.file))?;
-        if located.birth!=self.birth||located.here!=self.place{
-            return Err(invalid("work writer lost its original FILE placement"));
-        }
-        State::at(db,c,&self.birth,&self.place)
-    }
-    fn physical(&self,x:&State)->io::Result<()>{
-        let alias=super::directory::check_alias_name(&self.root,&self.place.name,x.alias.as_ref(),None)?;
-        x.members.require(&WitnessRead::at(self.installed.directory())?)?;
-        self.root.require_streaming()?;self.installed.require(self.root.folder())?;
-        drop(alias);Ok(())
-    }
-    fn original(&self,db:&Connection,op:OperationId)->io::Result<Option<Issued>>{
-        let auth=&self.tree.session.original;let setting=self.tree.setting;
-        let row=work_record::edit(db,&self.birth,op)?;
-        if row.is_some_and(|i| {
-            let e=i.edit;
-            (e.actor,e.credential,e.generation,e.share,e.setting,e.position,e.volume)!=
-                (auth.account,auth.op,auth.generation,setting.share,setting.op,self.place.op,self.place.volume)
-        }){return Err(invalid("this original SAVE was not issued by the current writer authority"));}
-        Ok(row)
-    }
+    pub(super) fn require_work(&self)->io::Result<()>{self.with_write(|w|w.require_work())}
     pub(crate) fn receipt(&self,op:OperationId)->io::Result<Option<Receipt>>{
-        self.tree.session.source.at(|db,c|{
-            self.state(db,&c)?;
-            Ok(self.original(db,op)?.filter(|r|r.confirmed).map(|r|r.edit.record.into()))
-        })
+        self.with_write(|w|w.receipt(op))
     }
     /// One actual range edit or resize. A resize uses an independently
     /// completed empty staging FD and no write offset. Neither issues a Node.
@@ -151,7 +149,7 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
     }
     pub(in crate::system::reader) fn save_after(&self,op:OperationId,expected:Option<OperationId>,offset:Option<u64>,
         final_size:u64,input:&File,point:impl FnMut(Cut)->io::Result<()>)->io::Result<Receipt>{
-        self.save_staged(op,expected,|k,start,base|Draft::stage(k,start,base,offset,final_size,input),&||Ok(()),point)
+        self.with_write(|w|w.save_staged(op,expected,|k,start,base|Draft::stage(k,start,base,offset,final_size,input),&||Ok(()),point))
     }
     /// Submit all effective intervals of one original SAVE in one native
     /// append and one metadata transition. No per-WRITE version is created.
@@ -161,12 +159,54 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
     }
     pub(super) fn save_packed_guarded(&self,op:OperationId,expected:Option<OperationId>,preserved:u64,eof:u64,
         spans:&[Span],packed:&File,alive:&impl Fn()->io::Result<()>)->io::Result<Receipt>{
-        self.save_staged(op,expected,|k,start,base|Draft::packed(k,start,base,preserved,eof,spans,packed),alive,|_|Ok(()))
+        self.with_write(|w|w.save_staged(op,expected,|k,start,base|Draft::packed(k,start,base,preserved,eof,spans,packed),alive,|_|Ok(())))
+    }
+}
+
+impl WriteAt<'_>{
+    fn require_work(&self)->io::Result<()>{
+        let src=self.source;
+        let x=src.at(|db,c|self.state(db,&c))?;
+        self.physical(&x)?;
+        src.at(|db,c|{
+            if self.state(db,&c)?!=x{return Err(busy("work writer lost its original cut"));}
+            Ok(())
+        })
+    }
+    fn state(&self,db:&Connection,c:&Catalog)->io::Result<State>{
+        (self.require)(db,c)?;
+        let located=file_create::placed_at(db,c,self.authority.setting.volume,self.parent,&self.place.name,Some(self.birth.file))?;
+        if located.birth!=self.birth||located.here!=self.place{
+            return Err(invalid("work writer lost its original FILE placement"));
+        }
+        State::at(db,c,&self.birth,&self.place)
+    }
+    fn physical(&self,x:&State)->io::Result<()>{
+        let alias=super::directory::check_alias_at(self.root.folder(),&self.place.name,x.alias.as_ref(),None)?;
+        x.members.require(&WitnessRead::at(self.installed.directory())?)?;
+        self.root.require_streaming()?;self.installed.require(self.root.folder())?;
+        drop(alias);Ok(())
+    }
+    fn original(&self,db:&Connection,op:OperationId)->io::Result<Option<Issued>>{
+        let auth=self.authority;let setting=auth.setting;
+        let row=work_record::edit(db,&self.birth,op)?;
+        if row.is_some_and(|i| {
+            let e=i.edit;
+            (e.actor,e.credential,e.generation,e.share,e.setting,e.position,e.volume)!=
+                (auth.account,auth.op,auth.generation,setting.share,setting.op,self.place.op,self.place.volume)
+        }){return Err(invalid("this original SAVE was not issued by the current writer authority"));}
+        Ok(row)
+    }
+    fn receipt(&self,op:OperationId)->io::Result<Option<Receipt>>{
+        self.source.at(|db,c|{
+            self.state(db,&c)?;
+            Ok(self.original(db,op)?.filter(|r|r.confirmed).map(|r|r.edit.record.into()))
+        })
     }
     fn save_staged<'a>(&self,op:OperationId,expected:Option<OperationId>,
         draft_with:impl FnOnce(Key,End,Option<&Selected>)->io::Result<Draft<'a>>,alive:&impl Fn()->io::Result<()>,
         mut point:impl FnMut(Cut)->io::Result<()>)->io::Result<Receipt>{
-        alive()?;let src=self.tree.session.source;let dir=self.installed.directory();
+        alive()?;let src=self.source;let dir=self.installed.directory();
         let (before,known,base) = src.at(|db,c|{
             let state=self.state(db,&c)?;
             let known=self.original(db,op)?;
@@ -213,10 +253,10 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
             let need=(prepared.end().data-start.data).checked_add(prepared.end().checks-start.checks)
                 .ok_or_else(||invalid("working pair space overflow"))?;
             if self.root.space()?.available_bytes<need{return Err(io::Error::new(io::ErrorKind::StorageFull,"insufficient space for the actual work change"));}
-            let a=&self.tree.session.original;let issue=before.latest.map_or(0,|i|i.edit.issue).checked_add(1)
+            let a=self.authority;let issue=before.latest.map_or(0,|i|i.edit.issue).checked_add(1)
                 .filter(|v|*v<i64::MAX).ok_or_else(||invalid("work issuance exhausted"))?;
             let proposed=Edit{record:prepared,actor:a.account,credential:a.op,generation:a.generation,
-                share:self.tree.setting.share,setting:self.tree.setting.op,position:self.place.op,volume:self.place.volume,nonce:self.nonce,issue,
+                share:a.setting.share,setting:a.setting.op,position:self.place.op,volume:self.place.volume,nonce:self.nonce,issue,
                 parent:before.parent(),predecessor:before.base(),previous_pending:pending.map(|p|p.edit.record.key().save),retained};
             self.physical(&before)?;
             let w=Connection::open(&src.dir,true)?;
