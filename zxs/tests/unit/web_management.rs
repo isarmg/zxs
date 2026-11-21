@@ -178,11 +178,12 @@ fn explicitly_check_only_a_registered_volume_without_exposing_disk_paths(){
                 }
             };
             let good=checked(&form);
-            assert!(good.starts_with("HTTP/1.1 200")&&good.contains("总容量")&&good.contains("文件系统 UUID"));
+            assert!(good.starts_with("HTTP/1.1 200")&&good.contains("总容量")&&good.contains("Web 所见挂载"));
+            assert!(["文件系统 UUID","文件系统短标识","文件系统标识"].into_iter().any(|field|good.contains(field)));
             assert!(good.contains(&format!("<code>{f}</code>"))&&!good.contains("unmounted-"));
             let missing=checked(&format!("csrf={csrf}&volume={r}"));
             assert!(missing.starts_with("HTTP/1.1 503")&&missing.contains("本次未能核对原卷和容量"));
-            assert!(!missing.contains("unmounted-")&&!missing.contains("<dt>总容量"));
+            assert!(!missing.contains("unmounted-")&&!missing.contains("<dt>总容量")&&!missing.contains("Web 所见挂载"));
             assert!(checked(&format!("csrf={csrf}&volume={}",crate::VolumeId([0xee;16])))
                 .starts_with("HTTP/1.1 404"));
             assert!(req("POST","/logout",cookie,&origin,&format!("csrf={csrf}")).starts_with("HTTP/1.1 303"));
@@ -191,6 +192,18 @@ fn explicitly_check_only_a_registered_volume_without_exposing_disk_paths(){
         transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
         client.join().unwrap()
     });
+}
+
+#[test]
+fn a_readonly_mount_never_labels_free_space_as_write_permission(){
+    use crate::{Role,VolumeId,system::reader::account::volume_status::{Reading,Report}};
+    let page=|mount_read_only|pages::volume_status(&Report{volume:VolumeId([0x13;16]),role:Role::File,
+        current:Some(Reading{bytes:42,available:24,mount_read_only,filesystem_id:None})});
+    let ro=page(true);let rw=page(false);
+    assert!(ro.body.contains("<dt>Web 所见挂载</dt><dd>只读</dd>"));
+    assert!(ro.body.contains("可用空间不代表可以写入")&&ro.body.contains("24 字节"));
+    assert!(rw.body.contains("<dd>未标记只读</dd>")&&rw.body.contains("不代表写入授权"));
+    assert!(ro.body.contains("<dt>文件系统标识</dt><dd>未取得</dd>"));
 }
 
 #[test]

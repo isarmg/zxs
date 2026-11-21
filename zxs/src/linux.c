@@ -173,13 +173,16 @@ int zxs_open_mountinfo(void) { return open_proc_child("mountinfo",O_RDONLY); }
 #include <stdlib.h>
 #include <sys/ioctl.h>
 
+/* Display only, never a durable enrollment or device identity. Linux can
+ * report a shorter native filesystem identifier as well as a 16-byte UUID.
+ * The caller supplies a 16-byte buffer. Do not copy any trailing bytes. */
 int zxs_storage_uuid(int fd,unsigned char *out) {
 #ifdef FS_IOC_GETFSUUID
     struct fsuuid2 fs = {0};
-    if (ioctl(fd, FS_IOC_GETFSUUID, &fs) < 0) return -1;
-    if (fs.len != 16) { errno = ENOTSUP; return -1; }
-    memcpy(out,fs.uuid,16);
-    return 0;
+    if (ioctl(fd, FS_IOC_GETFSUUID, &fs) != 0) return -1;
+    if (fs.len == 0 || fs.len > 16) { errno = ENOTSUP; return -1; }
+    memcpy(out,fs.uuid,fs.len);
+    return fs.len;
 #else
     (void)fd; (void)out; errno=ENOTSUP; return -1;
 #endif
@@ -321,6 +324,9 @@ static int zxs_capacity_at(int fd,uint64_t *total,uint64_t *available,uint64_t *
 }
 int zxs_storage_capacity(int fd,uint64_t *total,uint64_t *available) {
     return zxs_capacity_at(fd,total,available,NULL,NULL);
+}
+int zxs_storage_capacity_status(int fd,uint64_t *total,uint64_t *available,int *read_only) {
+    return zxs_capacity_at(fd,total,available,NULL,read_only);
 }
 int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_t *free_bytes,int *read_only) {
     return zxs_capacity_at(fd,total,available,free_bytes,read_only);

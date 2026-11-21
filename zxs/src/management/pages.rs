@@ -24,7 +24,7 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
     out.push_str(include_str!("../../web/shell-start.html"));
     out.push_str(r#"<section id="zxs-status" class="zxs-panel"><h2>系统与磁盘</h2><div class="zxs-metric-grid"><article class="zxs-metric-card"><h3>SYSTEM 登记</h3><strong class="zxs-metric-current">已核对</strong><small>本次 SQLite 读取与原 SYSTEM 卷标相符。</small></article>"#);
     write!(out,r#"<article class="zxs-metric-card"><h3>普通数据卷</h3><strong class="zxs-metric-current">{}</strong><small>已登记数量，不是在线数量。</small></article></div><p>PoolId：<code>{}</code></p>"#,data.volumes.iter().filter(|(r,_)|*r==Role::File).count(),data.pool).unwrap();
-    out.push_str(r#"<div class="zxs-table-scroll"><table class="zxs-table"><caption>本池登记卷</caption><thead><tr><th scope="col">角色</th><th scope="col">VolumeId</th><th scope="col">登记核对</th><th scope="col">容量与 UUID</th></tr></thead><tbody>"#);
+    out.push_str(r#"<div class="zxs-table-scroll"><table class="zxs-table"><caption>本池登记卷</caption><thead><tr><th scope="col">角色</th><th scope="col">VolumeId</th><th scope="col">登记核对</th><th scope="col">文件系统检查</th></tr></thead><tbody>"#);
     for &(r,id) in &data.volumes{
         let state=if r==Role::System{"已核登记与卷标"}else{"仅有登记"};
         write!(out,r#"<tr><td>{}</td><td><code>{id}</code></td><td>{state}</td><td><form method="post" action="{}"><input type="hidden" name="volume" value="{id}"><input type="hidden" name="csrf" value=""#,volume_role(r),super::observe::TARGET).unwrap();
@@ -62,15 +62,16 @@ pub(super) fn volume_status(report:&Report)->Reply{
     write!(out,"<title>卷检查 · ZXS</title></head><body><main data-zxs-scope><h1>卷检查</h1><p>{} · <code>{}</code></p>",
         volume_role(report.role),report.volume).unwrap();
     let status=if let Some(r)=&report.current{
-        write!(out,"<p>Web 服务已核对所选登记卷。本次文件系统采样：</p><dl><dt>总容量</dt><dd>{} 字节</dd><dt>当前可用</dt><dd>{} 字节</dd><dt>文件系统 UUID</dt><dd>",r.bytes,r.available).unwrap();
-        if let Some(uuid)=r.uuid{
-            out.push_str("<code>");
-            for (i,b) in uuid.iter().enumerate(){
-                if matches!(i,4|6|8|10){out.push('-');}write!(out,"{b:02x}").unwrap();
-            }
-            out.push_str("</code>");
-        }else{out.push_str("未取得");}
-        out.push_str("</dd></dl><p>容量是该文件系统的即时采样，不是目录配额。此结果不证明磁盘健康或 SMB 可用。</p>");
+        let mount=if r.mount_read_only{"只读"}else{"未标记只读"};
+        write!(out,"<p>Web 服务已核对所选登记卷。本次文件系统采样：</p><dl><dt>Web 所见挂载</dt><dd>{mount}</dd><dt>总容量</dt><dd>{} 字节</dd><dt>内核报告可用空间</dt><dd>{} 字节</dd>",r.bytes,r.available).unwrap();
+        match &r.filesystem_id{
+            Some(id) if id.len()==16=>write!(out,"<dt>文件系统 UUID</dt><dd><code>{id}</code></dd>").unwrap(),
+            Some(id)=>write!(out,"<dt>文件系统短标识</dt><dd><code>{id}</code>（{} 字节，内核顺序）</dd>",id.len()).unwrap(),
+            None=>out.push_str("<dt>文件系统标识</dt><dd>未取得</dd>"),
+        }
+        out.push_str("</dl>");
+        if r.mount_read_only{out.push_str("<p>此挂载为只读；可用空间不代表可以写入。</p>");}
+        out.push_str("<p>挂载和容量仅反映 Web 服务本次采样，不代表写入授权、目录配额、磁盘健康、读写速率或 SMB 当前状态。文件系统标识不是物理设备编号。</p>");
         "200 OK"
     }else{
         out.push_str("<p>此卷有登记，但 Web 服务本次未能核对原卷和容量。不能据此判断磁盘故障或回收内容。</p>");
