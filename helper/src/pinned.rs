@@ -43,28 +43,49 @@ pub(crate) struct Pinned {
     kind: Kind,
     fd: File,
     chain: Vec<Entity>,
+    no_automount: bool,
 }
 
 fn dir_flags() -> OFlags {
     OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
 }
 
+/// Refuse a passive O_PATH pin before using it for another path component.
+/// Linux can return an untriggered autofs FD for the last component of a
+/// bare O_PATH lookup; going through it, or using DIRECTORY in the lookup,
+/// could trigger the mount. Ordinary previous callers keep their flags.
+pub(crate) fn require_no_automount(fd:&File)->io::Result<()>{
+    const AUTOFS_SUPER_MAGIC:u64=0x0187; // Linux UAPI <linux/magic.h>
+    let s=statx(fd,c"",AtFlags::EMPTY_PATH|AtFlags::NO_AUTOMOUNT|AtFlags::STATX_DONT_SYNC,StatxFlags::TYPE)?;
+    if fstatfs(fd)?.f_type as u64==AUTOFS_SUPER_MAGIC||s.stx_attributes.contains(StatxAttributes::AUTOMOUNT){
+        return Err(invalid("this offline action requires an already mounted local path, without an automount ancestor"));
+    }Ok(())
+}
+
 impl Pinned {
     pub(crate) fn open(path: &Path, kind: Kind) -> io::Result<Self> {
+        Self::open_policy(path,kind,false)
+    }
+    pub(crate) fn already_mounted(path:&Path,kind:Kind)->io::Result<Self>{
+        Self::open_policy(path,kind,true)
+    }
+    fn open_policy(path:&Path,kind:Kind,no_automount:bool)->io::Result<Self>{
         let raw = path.as_os_str().as_bytes();
         kind.check_path(raw).map_err(invalid)?;
         let mut names = raw[1..].split(|b| *b == b'/').peekable();
         let mut fd = File::from(open("/", dir_flags(), Mode::empty())?);
+        if no_automount{require_no_automount(&fd)?;}
         let mut chain = vec![Entity::of(&fd.metadata()?)?];
         if raw == b"/" {
-            return Ok(Self { path: path.to_owned(), kind, fd, chain });
+            return Ok(Self { path: path.to_owned(), kind, fd, chain, no_automount });
         }
         while let Some(name) = names.next() {
             let last_file = names.peek().is_none() && matches!(kind, Kind::Regular);
-            let flags = if last_file {
+            let flags = if last_file||no_automount {
                 OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC
             } else { dir_flags() };
             let child = File::from(openat(&fd, OsStr::from_bytes(name), flags, Mode::empty())?);
+            if no_automount{require_no_automount(&child)?;}
             let meta = child.metadata()?;
             if (last_file && !meta.is_file()) || (!last_file && !meta.is_dir()) {
                 return Err(invalid("path must have the requested type; symbolic links and special files are refused"));
@@ -74,7 +95,7 @@ impl Pinned {
             chain.push(entity);
             fd = child;
         }
-        Ok(Self { path: path.to_owned(), kind, fd, chain })
+        Ok(Self { path: path.to_owned(), kind, fd, chain, no_automount })
     }
 
     pub(crate) fn entity(&self) -> Entity { *self.chain.last().expect("root and leaf are present") }
@@ -85,6 +106,7 @@ impl Pinned {
     pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.fd.metadata() }
 
     pub(crate) fn path(&self) -> &Path { &self.path }
+    pub(crate) fn passive_mount_observation(&self)->bool{self.no_automount}
     pub(crate) fn mount(&self) -> io::Result<Mount> { Mount::on(&self.fd)?.ok_or_else(||invalid("live mount identity unavailable")) }
 
     /// Only a directory pin, not a general access lift. Its mount and entity
@@ -93,7 +115,7 @@ impl Pinned {
         if !matches!(self.kind,Kind::StorageRoot){return Err(invalid("expected an original directory pin"));}
         self.require_same_path()?;
         let out=File::from(openat(&self.fd,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC,Mode::empty())?);
-        let now=Self::open(&self.path,self.kind)?;
+        let now=Self::open_policy(&self.path,self.kind,self.no_automount)?;
         if self.chain!=now.chain||self.mount()?!=now.mount()?||Some(now.mount()?)!=Mount::on(&out)?||now.entity()!=Entity::of(&out.metadata()?)?{
             return Err(invalid("directory name or mount changed"));
         }
@@ -104,7 +126,7 @@ impl Pinned {
     /// directory. Never lock a duplicate of somebody else's open description.
     pub(crate) fn storage_directory(&self) -> io::Result<File> {
         if !matches!(self.kind, Kind::StorageRoot) { return Err(invalid("expected a selected storage root")); }
-        let now = Self::open(&self.path, self.kind)?;
+        let now = Self::open_policy(&self.path, self.kind,self.no_automount)?;
         let original_mount = Mount::on(&self.fd)?.ok_or_else(|| invalid("original mount is unavailable"))?;
         if self.chain != now.chain || Mount::on(&now.fd)?.is_none_or(|m| m.id != original_mount.id) {
             return Err(invalid("original storage path, visible ancestry or mount changed"));
@@ -121,7 +143,7 @@ impl Pinned {
     }
 
     pub(crate) fn require_same_path(&self) -> io::Result<()> {
-        let now = Self::open(&self.path, self.kind)?;
+        let now = Self::open_policy(&self.path, self.kind,self.no_automount)?;
         if now.chain != self.chain { return Err(invalid("selected path or parent changed during observation")); }
         Ok(())
     }
@@ -130,7 +152,7 @@ impl Pinned {
     /// visible entities. A bind of the same inode is not the original mount.
     /// The newly named FD is evidence only; keep using the first held FD.
     pub(crate) fn require_same_named_mount(&self) -> io::Result<Mount> {
-        let now = Self::open(&self.path, self.kind)?;
+        let now = Self::open_policy(&self.path, self.kind,self.no_automount)?;
         check_named_mount(&self.chain, self.mount()?, &now.chain, now.mount()?)
     }
 }

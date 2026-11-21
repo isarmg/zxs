@@ -114,9 +114,22 @@ impl LockedSystem {
         Ok(())
     }
     pub(super) fn allows_account_write(&self)->bool{!matches!(self.lease,SystemLease::LentRead)}
+    /// Read-only H04 uses the same actual offline lease, not any writer gate.
+    /// Its selected S must already have been pinned without automounting.
+    pub(super) fn retirement_host(&self)->io::Result<(&File,&Pinned)>{
+        if matches!(self.lease,SystemLease::LentRead)||!self.selected.pin.passive_mount_observation(){
+            return Err(bad("retirement inventory needs an already mounted original SYSTEM and its offline EX lease"));
+        }
+        self.require()?;Ok((&self.selected.host,&self.selected.pin))
+    }
     #[cfg(test)]
     pub(super) fn from_fixture(path:&std::path::Path)->io::Result<Self>{
         SelectedSystem::from_host(path,File::open("/")?,rustix::process::getuid().as_raw(),rustix::process::getgid().as_raw())?.take_original()
+    }
+    #[cfg(test)]
+    pub(super) fn from_passive_fixture(path:&std::path::Path)->io::Result<Self>{
+        let pin=Pinned::already_mounted(path,Kind::StorageRoot)?;
+        SelectedSystem::from_origin(pin,File::open("/")?,rustix::process::getuid().as_raw(),rustix::process::getgid().as_raw())?.take_original()
     }
 }
 

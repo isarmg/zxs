@@ -12,6 +12,7 @@ pub(in crate::sqlite_install) use first_browser::offer as offer_init_web;
 pub(crate) use first_browser::worker as exec_first_browser;
 pub(super) use layout::{Choice,Resolved,online_roots,verify_web_unit};
 pub(crate) use layout::worker as exec_layout_sql_child;
+pub(crate) use layout::RetirementCheck;
 mod release;
 mod host;
 pub(super) use host::{Selection,run};

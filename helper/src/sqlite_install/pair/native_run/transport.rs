@@ -11,7 +11,7 @@ pub(super) type Payload=[u8;65];
 
 #[derive(Clone,Copy)]
 pub(super) enum Kind{Inspect=1,Act=2,Reserved=3,NativeSynced=4,Complete=5,Lease=6,Warm=7,Prepared=8,ChosenFolder=9,VolumeClaim=10,ConfirmedWeb=11,FirstBrowserReady=12,FirstBrowserRequest=13,
-    CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23}
+    CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23,RetirementCheck=29}
 
 pub(super) struct Channel {fd:File,peer:UCred,scope:[u8;32]}
 pub(super) fn pair()->io::Result<(File,File)>{
@@ -113,5 +113,19 @@ mod tests{
         root.send(Kind::Reserved,&digest,&data).unwrap();
         assert!(worker.receive::<0>(Kind::Reserved,&digest).is_err());
         drop(root);worker.eof().unwrap();
+    }
+    #[test]fn the_retirement_result_has_no_descriptor_or_other_phase(){
+        let (a,b)=pair().unwrap();let (unwanted,_)=pair().unwrap();
+        let who=UCred{uid:getuid(),gid:getgid(),pid:getpid()};let d=[3;32];
+        let a=Channel::from_owned_child_session(a,who,d).unwrap();
+        let b=Channel::from_owned_child_session(b,who,d).unwrap();
+        a.send_original(Kind::RetirementCheck,&d,&[7;65],&unwanted).unwrap();
+        assert!(b.receive::<0>(Kind::RetirementCheck,&d).is_err());
+        a.send(Kind::Act,&d,&[7;65]).unwrap();
+        assert!(b.receive::<0>(Kind::RetirementCheck,&d).is_err());
+        a.send(Kind::RetirementCheck,&d,&[7;65]).unwrap();
+        assert_eq!(b.receive::<0>(Kind::RetirementCheck,&d).unwrap().0,[7;65]);
+        a.send(Kind::RetirementCheck,&d,&[8;65]).unwrap();drop(a);
+        assert!(b.eof().is_err());
     }
 }

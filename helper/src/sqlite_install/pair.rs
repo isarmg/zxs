@@ -11,6 +11,7 @@ mod smb_policy;
 mod terminal;
 pub(super) use terminal::PublicConfirmation;
 mod observed;
+mod retire_ordinary;
 mod online;
 mod recycle;
 mod inactive_web_unit;
@@ -27,7 +28,7 @@ mod domain;
 
 pub(crate) use command::Setup;
 pub(crate) use domain::exec_child;
-pub(crate) use native_run::{exec_sql_child,exec_layout_sql_child};
+pub(crate) use native_run::{exec_sql_child,exec_layout_sql_child,RetirementCheck};
 pub(super) use native_sql::WriteGate as NativeWriteGate;
 pub(super) use domain::{require_lent_ex,require_lent_sh};
 use super::{bad,request::Id};

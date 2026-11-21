@@ -102,4 +102,13 @@ fn first<'g>(request:&Request,group:&'g Group,issue:&Issue)->io::Result<Pending<
 }
 
 #[cfg(test)]
+pub(super) fn seed_retirement_fixture(request:&Request,group:&Group)->io::Result<(Id,Vec<Id>)>{
+    // Ignored preflight source example: separate fresh disposable paths only.
+    let issue=Issue{pool:[4;16],rows:(0..request.paths().len()).map(|i|([0x11+i as u8;16],[0x21+i as u8;32])).collect()};
+    let pending=first(request,group,&issue)?;
+    let done=super::complete::original(&super::catalog::Canonical::new()?,request,group,Some(&pending))?;
+    Ok((done.pool,issue.rows.iter().map(|(volume,_)|*volume).collect()))
+}
+
+#[cfg(test)]
 #[path="../../tests/sqlite/stage.rs"] mod cases;

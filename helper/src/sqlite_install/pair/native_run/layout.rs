@@ -13,6 +13,9 @@ use sha2::{Digest,Sha256};
 use std::{collections::BTreeSet,ffi::OsString,fmt::Write,fs::File,io,os::unix::{ffi::{OsStrExt,OsStringExt},fs::MetadataExt},
     path::{Path,PathBuf},time::{Duration,Instant}};
 
+mod retirement_check;
+pub(crate) use retirement_check::RetirementCheck;
+
 const HELPER:&[&str]=&["usr","bin","helper"];
 const ONLINE:&[u8]=b"helper exact host runtime selection v10\0";
 const DOMAIN:&[u8]=b"helper exact init selection v10\0";
@@ -289,14 +292,16 @@ pub(crate) fn worker()->io::Result<()>{
     set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
     if dumpable_behavior()?!=DumpableBehavior::NotDumpable{return Err(bad_question());}
     let raw=read_sealed(&meta,BUDGET)?;drop(meta);
-    enum Mode{Online(LiveQuery),Layout(Question),WebUnit(WebQuestion)}
-    let mode=if raw.starts_with(WEB){Mode::WebUnit(WebQuestion::decode(&raw)?)}
+    enum Mode{Online(LiveQuery),Layout(Question),WebUnit(WebQuestion),Retirement(retirement_check::Question)}
+    let mode=if raw.starts_with(retirement_check::DOMAIN){Mode::Retirement(retirement_check::Question::decode(&raw)?)}
+        else if raw.starts_with(WEB){Mode::WebUnit(WebQuestion::decode(&raw)?)}
         else if raw.starts_with(ONLINE){Mode::Online(LiveQuery::decode(&raw)?)}
         else{Mode::Layout(Question::decode(&raw)?)};
-    let source=match &mode{
+    let source:(Id,[u64;3],&Path)=match &mode{
         Mode::Layout(q)=>(q.actor,q.location,&q.system),
         Mode::Online(q)=>(q.actor,q.location,&q.system),
         Mode::WebUnit(q)=>(q.actor,q.location,&q.system),
+        Mode::Retirement(q)=>q.original_system(),
     };
     if source.0!=actor{return Err(bad_question());}
     let scope:[u8;32]=Sha256::digest(&raw).into();
@@ -304,9 +309,15 @@ pub(crate) fn worker()->io::Result<()>{
     let channel=Channel::from_owned_child_session(fd,UCred{pid:parent,uid:Uid::ROOT,gid:Gid::ROOT},scope)?;
     let (empty,[lease])=channel.wait::<1>(Kind::Lease,&scope,Instant::now()+Duration::from_secs(20))?;
     if empty!=[0;65]{return Err(bad_question());}
-    let pin=Pinned::open(source.2,PathKind::StorageRoot)?;
+    let pin=if matches!(&mode,Mode::Retirement(_)){
+        Pinned::already_mounted(source.2,PathKind::StorageRoot)?
+    }else{Pinned::open(source.2,PathKind::StorageRoot)?};
     if place(&pin)?!=source.1{return Err(bad_question());}
     let open=SelectedSystem::from_origin(pin,host,uid,gid)?;
+    if let Mode::Retirement(q)=&mode{
+        let system=open.from_lent_ex(lease)?;
+        return q.inspect(&system,&channel,&scope,parent);
+    }
     if let Mode::WebUnit(q)=&mode{
         let system=if q.shared{open.from_lent_sh(lease)?}else{open.from_lent_ex(lease)?};
         observed::confirmed_web(&q.pool,&q.init,&q.setup,&system)?;
