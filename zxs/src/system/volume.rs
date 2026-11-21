@@ -153,7 +153,27 @@ impl<'a> OrdinaryRoot<'a>{
             f.media.ancestors=route.hold(&f.media.root)?;f.media.parent=parent;
             match lock{Some(true)=>f.folder().exclusive()?,Some(false)=>f.folder().share()?,None=>{}}
             f.require_streaming()?;
+            // The original name may still physically exist after another
+            // owner reserved a relabel and detached. Do not open from a
+            // stale SQL sample just because its physical marker still fits.
+            source.at(|db,c|{
+                if Route::at(db,&c,route.volume(),parent)?!=*route{
+                    return Err(invalid("ordinary parent changed during physical admission"));
+                }
+                Ok(())
+            })?;
         }Ok(f)
+    }
+    /// Used only by a quiescent owner after all work borrowing this
+    /// marker OFD has left its scope. Until the same leaf returns, this
+    /// partially held root cannot authorize enumeration or any child I/O.
+    pub(super) fn take_directory_leaf(&mut self)->io::Result<DirectoryHold>{
+        if self.parent()==DirectoryParent::Root{return Err(invalid("cannot relabel the enrolled ordinary root"));}
+        self.media.ancestors.pop().ok_or_else(||invalid("missing original directory leaf"))
+    }
+    pub(super) fn return_directory_leaf(&mut self,leaf:DirectoryHold)->io::Result<()>{
+        leaf.require(self.media.folder())?;
+        self.media.ancestors.push(leaf);self.require_streaming()
     }
     pub(super) fn view(&self)->OrdinaryView<'_>{self.media.view(self.source)}
     pub(super) fn duplicate_media(&self)->io::Result<OrdinaryMedia>{self.media.duplicate()}

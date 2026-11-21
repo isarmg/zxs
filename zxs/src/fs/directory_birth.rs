@@ -61,6 +61,14 @@ impl DirectoryBirth{
     pub(crate) fn open_selected(&self,parent:&HeldDir,names:&BTreeSet<Vec<u8>>)->io::Result<DirectoryHold>{
         self.open_at(parent,names,&self.leaf()?)
     }
+    /// Reopen only the business spelling that the current SQL selection
+    /// specifies, but check it against this immutable birth's original pair.
+    pub(crate) fn open_position(&self,parent:&HeldDir,names:&BTreeSet<Vec<u8>>,name:&str)->io::Result<DirectoryHold>{
+        self.valid()?;
+        let name=crate::display::component(name.as_bytes(),255)?;
+        if crate::ordinary::portable_birth::Birth::reserved_spelling(name.as_bytes()){return Err(unknown());}
+        self.open_at(parent,names,&CString::new(name).map_err(|_|unknown())?)
+    }
     fn open_at(&self,parent:&HeldDir,names:&BTreeSet<Vec<u8>>,name:&CStr)->io::Result<DirectoryHold>{
         let dir=parent.directory_in_sample(name,names)?.ok_or_else(||io::Error::from(io::ErrorKind::NotFound))?;
         let scope=WitnessRead::at(&dir)?;
@@ -190,6 +198,10 @@ unsafe extern "C"{
     fn zxs_create_new_regular(parent:c_int,name:*const c_char)->c_int;
     fn linkat(old:c_int,name:*const c_char,new:c_int,witness:*const c_char,flags:c_int)->c_int;
 }
+
+#[path="directory_rename.rs"]
+mod rename;
+pub(crate) use rename::{DirectoryRename,DirectoryRenameSide};
 
 #[cfg(test)]
 mod tests{

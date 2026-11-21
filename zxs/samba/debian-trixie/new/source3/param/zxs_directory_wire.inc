@@ -29,6 +29,8 @@ static const uint8_t odanswer[16]="ZXS-OD/CUT-01";
 static const uint8_t odack[16]="ZXS-OD/ACK-01";
 static const uint8_t oddone[16]="ZXS-OD/DONE-01";
 static const uint8_t odrows[16]="ZXS-OD/ROWS-01";
+static const uint8_t odrenameq[16]="ZXS-OD/RENAME1";
+static const uint8_t odrenamer[16]="ZXS-OD/RENAMED1";
 
 bool zxs_odir_component(const char *name,size_t n,size_t limit)
 {
@@ -162,6 +164,7 @@ static int zxs_tree_request(int tree,const uint8_t tag[16],unsigned limit,const 
     const bool capacity=tag==capq,file=tag!=dirq&&!capacity;
     if(limit>ZXS_DIR_ROWS || n>ZXS_DIR_NAME || (capacity && (limit>1 || n!=0)) ||
        (file && (n==0 || (tag==nsq?limit>2:tag==retainedq?(limit>1||!zxs_retained_path(after,n)):
+                    tag==odrenameq?(limit!=0 || after==NULL || !zxs_odir_component((const char *)after,n,ZXS_DIR_NAME)):
                     (n>ZXS_FILE_NAME || (tag==birthq?limit>3:limit!=0))))) ||
        (n!=0 && ((!file && limit==0) || after==NULL || memchr(after,0,n))))return bad();
     memcpy(b,tag,16);b[16]=(uint8_t)limit;b[17]=(uint8_t)n;
@@ -198,6 +201,10 @@ int zxs_birth_query(int tree,const uint8_t *name,size_t n,unsigned flags)
 {
     return zxs_tree_request(tree,birthq,flags,name,n);
 }
+int zxs_odir_relabel_query(int tree,const uint8_t *name,size_t n)
+{
+    return zxs_tree_request(tree,odrenameq,0,name,n);
+}
 int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+1])
 {
     uint8_t b[18+ZXS_DIR_NAME];int reply=-1;
@@ -207,17 +214,38 @@ int zxs_dir_take(int tree,int worker,uint8_t *limit,uint8_t cursor[ZXS_DIR_NAME+
     bool file=edit || memcmp(b,openq,16)==0;
     bool folder=memcmp(b,nsq,16)==0,birth=memcmp(b,birthq,16)==0;
     bool retained=memcmp(b,retainedq,16)==0,path=memcmp(b,odreq,16)==0;
-    bool capacity=memcmp(b,capq,16)==0;
-    if((!file && !folder && !birth && !retained && !path && !capacity && memcmp(b,dirq,16)!=0) ||
+    bool capacity=memcmp(b,capq,16)==0,relabel=memcmp(b,odrenameq,16)==0;
+    if((!file && !folder && !birth && !retained && !path && !capacity && !relabel && memcmp(b,dirq,16)!=0) ||
        b[16]>ZXS_DIR_ROWS || n>ZXS_DIR_NAME ||
-       (capacity?(b[16]>1||n!=0):path?(b[16]!=0||n!=0):folder?(b[16]>2||!n):retained?(b[16]>1||!zxs_retained_path(b+18,n)):
+       (relabel?(b[16]!=0||!zxs_odir_component((const char *)b+18,n,ZXS_DIR_NAME)):
+        capacity?(b[16]>1||n!=0):path?(b[16]!=0||n!=0):folder?(b[16]>2||!n):retained?(b[16]>1||!zxs_retained_path(b+18,n)):
           (file||birth)?(b[16]>(birth?3:0)||!n||n>ZXS_FILE_NAME):(b[16]==0 && n)) ||
        (n && memchr(b+18,0,n)!=NULL) || same_endpoint_process(reply,worker,false)!=0)goto invalid;
     for(size_t i=n;i<ZXS_DIR_NAME;i++)if(b[18+i]!=0)goto invalid;
     if(capacity){*limit=b[16]?ZXS_NS_CAPACITY_RW:ZXS_NS_CAPACITY_RO;cursor[0]=0;return reply;}
-    *limit=path?ZXS_OD_PATH:retained?(ZXS_RETAINED_OPEN+b[16]):birth?(ZXS_FILE_BIRTH+b[16]):folder?(b[16]==0?ZXS_NS_OPEN:(b[16]==1?ZXS_NS_WRITE:ZXS_NS_MAXIMUM)):edit?ZXS_MEMBER_WRITE_OPEN:(file?ZXS_MEMBER_OPEN:b[16]);cursor[0]=(uint8_t)n;if(n)memcpy(cursor+1,b+18,n);return reply;
+    *limit=relabel?ZXS_OD_RELABEL:path?ZXS_OD_PATH:retained?(ZXS_RETAINED_OPEN+b[16]):birth?(ZXS_FILE_BIRTH+b[16]):folder?(b[16]==0?ZXS_NS_OPEN:(b[16]==1?ZXS_NS_WRITE:ZXS_NS_MAXIMUM)):edit?ZXS_MEMBER_WRITE_OPEN:(file?ZXS_MEMBER_OPEN:b[16]);cursor[0]=(uint8_t)n;if(n)memcpy(cursor+1,b+18,n);return reply;
 invalid:
     close(reply);return bad();
+}
+/* Fixed-size, separate directory result domain. No host path or inode. */
+int zxs_odir_relabel_reply(int fd,uint8_t status,const uint8_t directory[16],const uint8_t op[16])
+{
+    uint8_t b[ZXS_XFER_RESULT]={0};
+    if(status>ZXS_XFER_UNKNOWN || (status==0 &&
+       (directory==NULL || op==NULL || !cut_id(directory) || !cut_id(op))) ||
+       (status!=0 && (directory!=NULL || op!=NULL)))return bad();
+    memcpy(b,odrenamer,16);b[16]=status;
+    if(status==0){memcpy(b+32,directory,16);memcpy(b+48,op,16);}
+    return transfer(fd,b,NULL,sizeof(b),-1,NULL,ZXS_NO_FD,true);
+}
+int zxs_odir_relabel_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t op[16])
+{
+    uint8_t b[ZXS_XFER_RESULT],zero[47]={0};
+    if(expected==NULL || status==NULL || !cut_id(expected) ||
+       transfer(fd,NULL,b,sizeof(b),-1,NULL,ZXS_NO_FD,true)!=0)return -1;
+    if(memcmp(b,odrenamer,16)!=0 || b[16]>ZXS_XFER_UNKNOWN || memcmp(b+17,zero,15)!=0 ||
+       (b[16]==0?(memcmp(b+32,expected,16)!=0||!cut_id(b+48)):memcmp(b+17,zero,47)!=0))return bad();
+    *status=b[16];if(op!=NULL)memcpy(op,b+48,16);return 0;
 }
 static int zxs_dir_send(int fd,const uint8_t data[ZXS_DIR_PACKET-16],const uint8_t tag[16])
 {

@@ -5,6 +5,7 @@ struct zxs_xfer_state{
 	struct smbd_smb2_request *native;
 	struct files_struct *fsp;
 	struct zxs_read_fsp *member;
+	struct zxs_dir_search *directory;
 	struct aio_req_fsp_link *link;
 	struct tevent_req *watch;
 	struct smb_filename *rename_to;
@@ -14,7 +15,7 @@ struct zxs_xfer_state{
 };
 static bool zxs_rename_kind(uint8_t kind)
 {
-	return kind==ZXS_XFER_RENAME||kind==ZXS_XFER_MOVE||kind==ZXS_XFER_COPY_MOVE;
+	return kind==ZXS_XFER_RENAME||kind==ZXS_XFER_MOVE||kind==ZXS_XFER_COPY_MOVE||kind==ZXS_OD_RELABEL;
 }
 static bool zxs_xfer_current(struct smbd_smb2_request *n,struct files_struct *fsp,
 			    const struct zxs_read_fsp *m,uint8_t kind)
@@ -46,6 +47,17 @@ static bool zxs_xfer_current(struct smbd_smb2_request *n,struct files_struct *fs
 	return fsp->file_id.devid==dev&&fsp->file_id.extid==ext&&fsp->file_id.inode==m->member.number&&
 	       change_to_user_and_service(fsp->conn,fsp->vuid);
 }
+static bool zxs_relabel_current(struct smbd_smb2_request *n,struct files_struct *fsp,const struct zxs_dir_search *d)
+{
+	return d!=NULL && d==zxs_find_dir(fsp) && zxs_folder_ordinary_child(&d->folder) &&
+	       d->folder.mode==2 && zxs_request_folder_current(n,&d->folder) &&
+	       d->session==n->session && d->tcon==n->tcon && d->seq==n->session->global->auth_session_info_seqnum &&
+	       n->tcon->compat==fsp->conn && fsp->vuid==n->session->global->session_wire_id &&
+	       !fsp->fsp_flags.closing && !fsp->fsp_flags.is_pathref && fsp->fsp_flags.is_fsa &&
+	       fsp->op!=NULL && fsp->op->global!=NULL && !fsp->conn->read_only &&
+	       (fsp->access_mask&SEC_STD_DELETE)!=0 && (fsp->conn->share_access&SEC_DIR_ADD_SUBDIR)!=0 &&
+	       zxs_directory_same_id(fsp,&d->folder) && change_to_user_and_service(fsp->conn,fsp->vuid);
+}
 static bool zxs_xfer_release_claim(struct zxs_xfer_state *s)
 {
 	if(!s->rename_claimed)return true;
@@ -62,6 +74,7 @@ static int zxs_xfer_release(struct zxs_xfer_state *s)
 	zxs_xfer_drop_answer(s);
 	zxs_xfer_release_claim(s);
 	if(s->member!=NULL){s->member->busy=false;s->member=NULL;}
+	if(s->directory!=NULL){s->directory->busy=false;s->directory=NULL;}
 	TALLOC_FREE(s->link);return 0;
 }
 static void zxs_xfer_finish(struct tevent_req *req,NTSTATUS status,bool unknown)
@@ -79,8 +92,12 @@ static void zxs_xfer_ready(struct tevent_req *sub)
 	struct zxs_xfer_state *s=tevent_req_data(req,struct zxs_xfer_state);
 	int err=0;uint8_t result=0;const bool ready=wait_for_read_recv(sub,&err);
 	s->watch=NULL;TALLOC_FREE(sub);
-	if(!ready||!zxs_xfer_current(s->native,s->fsp,s->member,s->kind)||
-	   zxs_xfer_read(s->answer,s->member->member.file,&result,s->receipt)!=0||result==ZXS_XFER_UNKNOWN){
+	if(!ready || (s->kind==ZXS_OD_RELABEL
+	   ? (!zxs_relabel_current(s->native,s->fsp,s->directory) ||
+	      zxs_odir_relabel_read(s->answer,s->directory->folder.directory,&result,s->receipt)!=0)
+	   : (!zxs_xfer_current(s->native,s->fsp,s->member,s->kind) ||
+	      zxs_xfer_read(s->answer,s->member->member.file,&result,s->receipt)!=0)) ||
+	   result==ZXS_XFER_UNKNOWN){
 		zxs_xfer_finish(req,NT_STATUS_OK,true);return;
 	}
 	NTSTATUS status=NT_STATUS_ACCESS_DENIED;
@@ -95,13 +112,18 @@ static void zxs_xfer_ready(struct tevent_req *sub)
 	default:break;
 	}
 	if(zxs_rename_kind(s->kind)&&NT_STATUS_IS_OK(status)){
-		if(!s->rename_claimed||s->rename_to==NULL||s->member->placement_sequence==UINT64_MAX||
+		if(!s->rename_claimed||s->rename_to==NULL||(s->member!=NULL&&s->member->placement_sequence==UINT64_MAX)||
 		   !zxs_release_ordinary_rename(s->fsp,s->rename_to)){
 			zxs_xfer_finish(req,NT_STATUS_OK,true);return;
 		}
 		s->rename_claimed=false;
-		s->member->placement_sequence++;
-		if(s->kind==ZXS_XFER_MOVE||s->kind==ZXS_XFER_COPY_MOVE){s->member->moved_parent=true;}
+		if(s->directory!=NULL){
+			s->directory->used=false;s->directory->ended=false;
+			memset(s->directory->after,0,sizeof(s->directory->after));
+		}else{
+			s->member->placement_sequence++;
+			if(s->kind==ZXS_XFER_MOVE||s->kind==ZXS_XFER_COPY_MOVE){s->member->moved_parent=true;}
+		}
 	}
 	zxs_xfer_finish(req,status,false);
 }
@@ -113,13 +135,19 @@ static struct tevent_req *zxs_xfer_begin(TALLOC_CTX *ctx,struct tevent_context *
 	req=tevent_req_create(ctx,&s,struct zxs_xfer_state);if(req==NULL)return NULL;
 	s->answer=-1;s->kind=kind;s->native=n;s->fsp=fsp;
 	talloc_set_destructor(s,zxs_xfer_release);
-	struct zxs_read_fsp *m=zxs_find_read(fsp);
-	if(!zxs_xfer_current(n,fsp,m,kind)||m->busy){
+	struct zxs_read_fsp *m=kind==ZXS_OD_RELABEL?NULL:zxs_find_read(fsp);
+	struct zxs_dir_search *d=kind==ZXS_OD_RELABEL?zxs_find_dir(fsp):NULL;
+	if(kind==ZXS_OD_RELABEL ? !zxs_relabel_current(n,fsp,d) : !zxs_xfer_current(n,fsp,m,kind)){
 		tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return tevent_req_post(req,ev);
+	}
+	if(d!=NULL?d->busy:m->busy){
+		tevent_req_nterror(req,d!=NULL?NT_STATUS_SHARING_VIOLATION:NT_STATUS_ACCESS_DENIED);
+		return tevent_req_post(req,ev);
 	}
 	s->link=aio_add_req_to_fsp(fsp,outer);
 	if(tevent_req_nomem(s->link,req))return tevent_req_post(req,ev);
-	talloc_steal(s,s->link);s->member=m;m->busy=true;
+	talloc_steal(s,s->link);s->member=m;s->directory=d;
+	if(d!=NULL)d->busy=true;else m->busy=true;
 	if(zxs_rename_kind(kind)){
 		if(renamed==NULL||fsp->fsp_name==NULL){
 			zxs_xfer_finish(req,NT_STATUS_ACCESS_DENIED,false);return tevent_req_post(req,ev);
@@ -134,8 +162,13 @@ static struct tevent_req *zxs_xfer_begin(TALLOC_CTX *ctx,struct tevent_context *
 		}
 		s->rename_claimed=true;
 	}
-	s->answer=zxs_xfer_query(m->fd,kind,(const uint8_t *)folder,folder!=NULL?strlen(folder):0,
-				(const uint8_t *)name,name!=NULL?strlen(name):0,mark);
+	if(d!=NULL){
+		if(name==NULL){zxs_xfer_finish(req,NT_STATUS_INVALID_PARAMETER,false);return tevent_req_post(req,ev);}
+		s->answer=zxs_odir_relabel_query(d->folder.root_fd,(const uint8_t *)name,strlen(name));
+	}else{
+		s->answer=zxs_xfer_query(m->fd,kind,(const uint8_t *)folder,folder!=NULL?strlen(folder):0,
+					(const uint8_t *)name,name!=NULL?strlen(name):0,mark);
+	}
 	if(s->answer<0){
 		zxs_xfer_finish(req,NT_STATUS_ACCESS_DENIED,false);return tevent_req_post(req,ev);
 	}
@@ -162,6 +195,11 @@ static struct tevent_req *zxs_rename_send(TALLOC_CTX *ctx,struct tevent_context 
 	const char *opened=fsp->fsp_name==NULL?NULL:fsp->fsp_name->base_name;
 	return zxs_xfer_begin(ctx,ev,outer,n,fsp,zxs_ordinary_destination_kind(opened,folder),folder,name,NULL,target);
 }
+static struct tevent_req *zxs_relabel_send(TALLOC_CTX *ctx,struct tevent_context *ev,struct tevent_req *outer,
+	struct smbd_smb2_request *n,struct files_struct *fsp,const char *target,const char *name)
+{
+	return zxs_xfer_begin(ctx,ev,outer,n,fsp,ZXS_OD_RELABEL,NULL,name,NULL,target);
+}
 _PUBLIC_
 NTSTATUS zxs_xfer_recv(struct tevent_req *req,bool *unknown,uint8_t receipt[16])
 {
@@ -176,20 +214,38 @@ static bool zxs_xfer_label(const char *name,size_t max)
 	size_t n=strlen(name);
 	return n>0&&n<=max&&name[n-1]!='.'&&name[n-1]!=' '&&strpbrk(name,"\\/:*?\"<>|")==NULL;
 }
-_PUBLIC_
-bool zxs_restore_input(TALLOC_CTX *ctx,DATA_BLOB input,char **folder,char **name)
+static bool zxs_rename_path(TALLOC_CTX *ctx,DATA_BLOB input,char **path)
 {
-	char *path=NULL,*split;size_t decoded=0;
+	char *decoded_path=NULL;size_t decoded=0;
 	if(input.length<20||input.data==NULL||CVAL(input.data,0)!=0||BVAL(input.data,8)!=0)return false;
 	const size_t bytes=IVAL(input.data,16);
 	/* Reserved bytes and tail padding are not part of the declared name. */
 	if(bytes==0||(bytes&1)!=0||bytes>input.length-20||bytes>2*(ZXS_DIR_NAME+1+ZXS_OD_PATH_MAX)||
-	   !convert_string_talloc(ctx,CH_UTF16,CH_UNIX,input.data+20,bytes,&path,&decoded)||
-	   path==NULL||strlen(path)!=decoded)return false;
+	   !convert_string_talloc(ctx,CH_UTF16,CH_UNIX,input.data+20,bytes,&decoded_path,&decoded)||
+	   decoded_path==NULL||strlen(decoded_path)!=decoded)return false;
+	*path=decoded_path;return true;
+}
+_PUBLIC_
+bool zxs_restore_input(TALLOC_CTX *ctx,DATA_BLOB input,char **folder,char **name)
+{
+	char *path=NULL,*split;
+	if(!zxs_rename_path(ctx,input,&path))return false;
 	split=strchr(path,'\\');if(split==NULL)return false;
 	*split=0;
 	if(!zxs_xfer_label(path,ZXS_DIR_NAME)||!zxs_odir_relative(split+1,false))return false;
 	*folder=path;*name=split+1;return true;
+}
+_PUBLIC_
+bool zxs_directory_rename_input(TALLOC_CTX *ctx,DATA_BLOB input,const char *opened,char **target,const char **leaf)
+{
+	char *path=NULL;
+	if(opened==NULL||!zxs_rename_path(ctx,input,&path))return false;
+	const char *label=strchr(path,'\\'),*old=strrchr(opened,'\\'),*next=strrchr(path,'\\');
+	if(label==NULL||old==NULL||next==NULL||old==opened||
+	   !zxs_odir_component(path,(size_t)(label-path),ZXS_DIR_NAME)||!zxs_odir_relative(label+1,true)||
+	   (size_t)(old-opened)!=(size_t)(next-path)||memcmp(opened,path,(size_t)(next-path))!=0||
+	   strcmp(old+1,next+1)==0)return false;
+	*target=path;*leaf=next+1;return true;
 }
 _PUBLIC_
 uint8_t zxs_ordinary_destination_kind(const char *opened,const char *volume)

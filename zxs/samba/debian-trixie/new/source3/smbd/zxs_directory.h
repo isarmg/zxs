@@ -201,6 +201,7 @@ struct tevent_req *zxs_xfer_send(TALLOC_CTX *,struct tevent_context *,struct tev
 NTSTATUS zxs_xfer_recv(struct tevent_req *,bool *unknown,uint8_t receipt[16]);
 bool zxs_restore_input(TALLOC_CTX *,DATA_BLOB,char **,char **);
 bool zxs_ordinary_rename_input(TALLOC_CTX *,DATA_BLOB,const char *,char **,char **,const char **);
+bool zxs_directory_rename_input(TALLOC_CTX *,DATA_BLOB,const char *,char **,const char **);
 uint8_t zxs_ordinary_destination_kind(const char *opened,const char *volume);
 NTSTATUS zxs_open_member_fsp(struct smbd_smb2_request *,struct smb_request *,uint32_t,uint32_t,
 			    const char *name,const struct zxs_member_info *,struct zxs_smb_tree_cut *,bool writable,int *fd,struct files_struct **);

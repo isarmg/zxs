@@ -2,7 +2,7 @@
 //! own read-only SQLite connection, and the private endpoint of one TCON.
 //! No host path, physical inode, block device or FILE descriptor crosses to smbd.
 use super::{InitialReader,Stamp,attempts::TreeOrigin,denied,os};
-use super::super::{SmbSession,Tree,directory,share_mode::Setting};
+use super::super::{SmbSession,Tree,directory,ordinary_directory::Route,share_mode::{Mode,Setting}};
 use crate::{OperationId,PoolId,fs::{ControlRead,directory_birth::DirectoryParent},identity::ShareId,system::{lease::SystemDir,reader::volume::OrdinaryRoot}};
 use std::{cell::Cell,fs::File,io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::{Arc,atomic::{AtomicBool,AtomicUsize,Ordering}},thread};
 
@@ -29,6 +29,7 @@ unsafe extern "C"{
     fn zxs_odir_reply(fd:i32,code:u8,basics:*const u8,id:*const u8,op:*const u8)->i32;
     fn zxs_odir_take_ack(fd:i32,id:*const u8,op:*const u8)->i32;
     fn zxs_odir_done(fd:i32,id:*const u8,op:*const u8)->i32;
+    fn zxs_odir_relabel_reply(fd:i32,status:u8,id:*const u8,op:*const u8)->i32;
     fn zxs_member_reply(fd:i32,info:*const u8)->i32;
     fn zxs_tree_events(tree:i32,session:i32,members:*const i32,n:usize,events:*mut u8)->i32;
     fn zxs_member_held(member:i32)->i32;
@@ -69,10 +70,11 @@ impl<'scope,'env:'scope> Workers<'scope,'env>{
         if let Ok(h)=job{self.jobs.push((owner,h));}
     }
 }
-fn live(origin:&TreeOrigin,tree:&OwnedFd,timeout:i32)->bool{
+fn live(origin:&TreeOrigin,tree:&OwnedFd,timeout:i32)->bool{live_fd(origin,tree.as_raw_fd(),timeout)}
+fn live_fd(origin:&TreeOrigin,tree:i32,timeout:i32)->bool{
     origin.alive.load(Ordering::Acquire) &&
         unsafe{zxs_smb_process_live(origin.worker.as_raw_fd())}==0 &&
-        unsafe{zxs_smb_root_wait(tree.as_raw_fd(),origin.session.as_raw_fd(),timeout)}>=0
+        unsafe{zxs_smb_root_wait(tree,origin.session.as_raw_fd(),timeout)}>=0
 }
 fn choice(setting:Setting,pool:PoolId,ordinal:u8)->io::Result<[u8;74]>{
     if !(2..64).contains(&ordinal)||setting.revision<=0||!matches!(setting.mode as u8,1|2){return Err(denied());}
@@ -112,10 +114,33 @@ fn serve_folder(site:Site<'_>,origin:TreeOrigin,expected:Setting,writer_class:bo
     let tree_live=AtomicBool::new(true);
     struct Clear<'a>(&'a AtomicBool);
     impl Drop for Clear<'_>{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
-    thread::scope(|scope|drive(scope,site,&origin,&reply,&root,&tree,writer_class,&tree_live,Clear(&tree_live)))
+    let _=thread::scope(|scope|drive(scope,site,&origin,&reply,&root,&tree,writer_class,&tree_live,Clear(&tree_live)))?;
+    Ok(())
 }
 
 const ORDINARY_PATH:u8=243;
+const DIRECTORY_RELABEL:u8=240;
+static RELABEL_JOBS:AtomicUsize=AtomicUsize::new(0);
+struct RelabelPermit;
+impl RelabelPermit{
+    fn obtain()->Option<Self>{
+        RELABEL_JOBS.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<4).then_some(n+1)).ok()?;
+        Some(Self)
+    }
+}
+impl Drop for RelabelPermit{fn drop(&mut self){RELABEL_JOBS.fetch_sub(1,Ordering::AcqRel);}}
+enum Branch{Closed,Relabel{answer:OwnedFd,name:String,permit:RelabelPermit}}
+fn relabel_status(fd:i32,code:u8){
+    let _=unsafe{zxs_odir_relabel_reply(fd,code,std::ptr::null(),std::ptr::null())};
+}
+fn reject_relabel(fd:i32,e:&io::Error){
+    relabel_status(fd,match e.kind(){
+        io::ErrorKind::WouldBlock=>1,io::ErrorKind::StorageFull=>2,io::ErrorKind::AlreadyExists=>3,
+        io::ErrorKind::NotFound=>4,io::ErrorKind::NotConnected=>6,io::ErrorKind::ConnectionAborted=>7,_=>5,
+    });
+}
+
+
 const SELECT_EXISTING_KIND:u8=4;
 const ORDINARY_FILE_KIND:u8=7;
 const PATH_MAX:usize=4096;
@@ -133,9 +158,12 @@ impl Drop for PathPermit{fn drop(&mut self){self.0.fetch_sub(1,Ordering::AcqRel)
 fn serve_nested(site:Site<'_>,origin:&TreeOrigin,top:&OwnedFd,top_live:&AtomicBool,expected:Setting,
     writer_class:bool,reply:OwnedFd,_permit:PathPermit)->io::Result<()>{
     let fd=reply.as_raw_fd();
+    let mut unannounced=Some(reply);
     let live_parent=||!top_live.load(Ordering::Acquire)||(site.stopping)()||!live(origin,top,0);
+    // fd is owned by unannounced or by the serving closure; the former
+    // is checked before a late error can come back through this path.
     let alive=||->io::Result<()>{
-        if live_parent() || !live(origin,&reply,0){return Err(denied());}
+        if live_parent() || !live_fd(origin,fd,0){return Err(denied());}
         Ok(())
     };
     let offered=Cell::new(false);
@@ -154,7 +182,7 @@ fn serve_nested(site:Site<'_>,origin:&TreeOrigin,top:&OwnedFd,top_live:&AtomicBo
         let auth=SmbSession{source:&src,original:origin.slot.original.clone()};
         let tree=auth.connect_id(expected.share)?;
         if tree.setting!=expected{return Err(denied());}
-        let (catalog,route)=if mode==0{
+        let (catalog,mut route)=if mode==0{
             tree.ordinary_route(&names,writer_class)?
         }else if mode==SELECT_EXISTING_KIND{
             use super::super::ordinary_directory::NamedKind;
@@ -186,7 +214,7 @@ fn serve_nested(site:Site<'_>,origin:&TreeOrigin,top:&OwnedFd,top_live:&AtomicBo
                     },&alive,|_|Ok(()))?;
                     if !offered.get()&&mode==2{return Err(io::ErrorKind::AlreadyExists.into());}
                     let (cur,actual)=tree.ordinary_route(&names,false)?;
-                    if actual.selected()!=Some(&born){return Err(denied());}
+                    if !actual.selected().is_some_and(|entry|entry.is_birth(&born)){return Err(denied());}
                     Ok((cur,actual))
                 })().or_else(|e:io::Error|{
                     // Another request may have confirmed between the two
@@ -199,26 +227,71 @@ fn serve_nested(site:Site<'_>,origin:&TreeOrigin,top:&OwnedFd,top_live:&AtomicBo
                 Err(e)=>return Err(e),
             }
         };
-        let root=OrdinaryRoot::at_parent(&src,&catalog,&route,None)?;
-        let registered=route.selected().ok_or_else(denied)?;
+        let mut root=OrdinaryRoot::at_parent(&src,&catalog,&route,None)?;
+        let registered=route.selected().ok_or_else(denied)?.birth();
+        let directory=registered.id;
         let brief=choice(expected,src.pool,root.ordinal)?;
         let selected=tree.scoped(route.parent());
         root.require_streaming()?;
         src.at(|db,c|selected.require(db,&c,false))?;
         site.validate()?;alive()?;
+        // Own the exact endpoint *after* the held directory, before any
+        // positive cut. Rust drops it first on normal return, local error
+        // and unwind. Native must see its EOF before this marker SH can
+        // disappear, even if it has not yet installed the share entry.
+        let serving=unannounced.take().ok_or_else(denied)?;
         if offered.get(){
             os(unsafe{zxs_odir_done(fd,registered.id.0.as_ptr(),registered.original.0.as_ptr())})?;
         }else{
             os(unsafe{zxs_odir_reply(fd,0,brief.as_ptr(),registered.id.0.as_ptr(),registered.original.0.as_ptr())})?;
         }
-        let active=AtomicBool::new(true);
         struct Clear<'a>(&'a AtomicBool);
         impl Drop for Clear<'_>{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
         let path_site=Site{stopping:&live_parent,..site};
-        thread::scope(|scope|drive(scope,path_site,origin,&reply,&root,&selected,writer_class,&active,Clear(&active)))
+        loop{
+            let active=AtomicBool::new(true);
+            let branch=thread::scope(|scope|drive(scope,path_site,origin,&serving,&root,&selected,writer_class,&active,Clear(&active)))?;
+            let Branch::Relabel{answer,name,permit:_permit}=branch else{return Ok(());};
+            // drive did not end any live child in order to rename. Scope
+            // join drops every same-OFD borrower before taking the leaf.
+            let answer_fd=answer.as_raw_fd();
+            let peer=||->io::Result<()>{
+                alive()?;
+                if unsafe{zxs_member_held(answer_fd)}!=0{return Err(denied());}
+                Ok(())
+            };
+            let still=||{site.validate()?;peer()};
+            if let Err(e)=still(){reject_relabel(answer_fd,&e);continue;}
+            let op=match OperationId::new(){Ok(op)=>op,Err(e)=>{reject_relabel(answer_fd,&e);continue;}};
+            let mut hold=Some(root.take_directory_leaf()?);
+            match selected.relabel_directory(&name,op,&route,&mut hold,&still,|_|Ok(())){
+                Ok((moved,leaf))=>{
+                    let verified=(||{
+                        if moved.parent()!=DirectoryParent::Directory(directory){return Err(denied());}
+                        root.return_directory_leaf(leaf)?;
+                        site.validate()?;
+                        src.at(|db,c|{
+                            selected.require(db,&c,true)?;
+                            if Route::at(db,&c,expected.volume,moved.parent())?!=moved{return Err(denied());}
+                            peer()
+                        })?;
+                        peer()
+                    })();
+                    if verified.is_err(){relabel_status(answer_fd,7);return Err(denied());}
+                    os(unsafe{zxs_odir_relabel_reply(answer_fd,0,directory.0.as_ptr(),op.0.as_ptr())})?;
+                    route=moved;
+                },
+                Err(e)=>{
+                    if let Some(lease)=hold{
+                        if root.return_directory_leaf(lease).is_ok(){reject_relabel(answer_fd,&e);continue;}
+                    }
+                    relabel_status(answer_fd,7);return Err(e);
+                }
+            }
+        }
     })();
     if let Err(e)=&result{
-        if !offered.get()&&alive().is_ok()&&site.validate().is_ok(){
+        if unannounced.is_some()&&!offered.get()&&alive().is_ok()&&site.validate().is_ok(){
             let reason=match e.kind(){
                 io::ErrorKind::AlreadyExists=>2,io::ErrorKind::WouldBlock=>3,
                 io::ErrorKind::StorageFull=>5,io::ErrorKind::NotFound=>6,_=>4,
@@ -231,7 +304,7 @@ fn serve_nested(site:Site<'_>,origin:&TreeOrigin,top:&OwnedFd,top_live:&AtomicBo
 
 fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<'env>,
     origin:&'env TreeOrigin,reply:&'env OwnedFd,root:&'env OrdinaryRoot<'_>,tree:&Tree<'_,'_>,writer_class:bool,
-    tree_live:&'env AtomicBool,_clear:impl Drop)->io::Result<()>{
+    tree_live:&'env AtomicBool,_clear:impl Drop)->io::Result<Branch>{
     // The drop guard ends writer admission before scoped threads are joined.
     // Compatible readers keep their original bounded dispatcher.
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
@@ -310,6 +383,23 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
         let fd=unsafe{zxs_dir_take(reply.as_raw_fd(),origin.worker.as_raw_fd(),&mut limit,cursor.as_mut_ptr())};
         if fd<0{break;} // original session remains usable on its other trees
         let answer=unsafe{OwnedFd::from_raw_fd(fd)};
+        if limit==DIRECTORY_RELABEL{
+            let fd=answer.as_raw_fd();
+            if tree.parent==DirectoryParent::Root||tree.setting.mode!=Mode::ReadWrite{relabel_status(fd,5);continue;}
+            let Ok(name)=crate::display::component(&cursor[1..1+usize::from(cursor[0])],255) else{
+                relabel_status(fd,5);continue;
+            };
+            // A relabel never expels a valid child reader or writer; it
+            // must also yield to any active borrow of this same marker OFD.
+            if !members.is_empty()||!ordinary_moves.is_empty()||
+                writers.iter().any(|h|!h.is_finished())||births.iter().any(|(_,h)|!h.is_finished())||
+                moves.iter().any(|h|!h.is_finished())||paths.iter().any(|h|!h.is_finished())||
+                capacity.as_ref().is_some_and(|h|!h.is_finished()){
+                relabel_status(fd,1);continue;
+            }
+            let Some(permit)=RelabelPermit::obtain()else{relabel_status(fd,1);continue;};
+            return Ok(Branch::Relabel{answer,name:name.into(),permit});
+        }
         if matches!(limit,namespace::CAPACITY_RO|namespace::CAPACITY_RW){
             if cursor[0]!=0{continue;}
             let grant=tree.setting;
@@ -384,7 +474,7 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
         }
         let _=unsafe{zxs_odir_rows(answer.as_raw_fd(),out.as_ptr())}; // cancel lost no cursor, grant or data
     }
-    Ok(())
+    Ok(Branch::Closed)
 }
 
 #[cfg(test)]

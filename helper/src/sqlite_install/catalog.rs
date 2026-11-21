@@ -7,8 +7,8 @@ use std::{ffi::OsString,io,os::unix::ffi::{OsStrExt,OsStringExt},path::PathBuf};
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=15;
-pub(super) const MAX_OBJECTS:i32=147; // 117 declared descriptions and 30 implicit UNIQUE indexes
+pub(super) const SCHEMA_VERSION:i64=16;
+pub(super) const MAX_OBJECTS:i32=167; // 136 declared descriptions and 31 implicit UNIQUE indexes
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
 fn shape(c:&Connection)->io::Result<Shape>{
@@ -157,7 +157,7 @@ mod schema_tests {
     #[test]
     fn old_versions_and_a_same_size_prior_index_are_not_the_fresh_family() {
         let approved=Canonical::new().unwrap();
-        assert_eq!(approved.0.len(),147);
+        assert_eq!(approved.0.len(),167);
         let mut db=Connection::open_in_memory().unwrap();
         super::super::engine::limits(&db).unwrap();
         db.execute_batch(SCHEMA).unwrap();
@@ -172,26 +172,33 @@ mod schema_tests {
         tx.execute_batch("PRAGMA main.user_version = 14;").unwrap();
         assert!(approved.require(&tx).is_err());
         tx.execute_batch("PRAGMA main.user_version = 15;").unwrap();
+        assert!(approved.require(&tx).is_err());
+        tx.execute_batch("PRAGMA main.user_version = 16;").unwrap();
         assert!(approved.require(&tx).is_ok());
         tx.execute_batch("DROP INDEX rename_destination_name;
                          CREATE INDEX rename_destination_name ON file_rename(volume_id,parent_id,target_name);").unwrap();
-        assert_eq!(shape(&tx).unwrap().len(),147);
+        assert_eq!(shape(&tx).unwrap().len(),167);
         assert!(approved.require(&tx).is_err());
     }
     #[test]
-    fn a_current_version_with_the_same_object_count_but_a_weaker_transfer_table_is_not_the_fresh_family() {
+    fn the_current_version_and_row_count_do_not_admit_a_weakened_business_table() {
         let approved=Canonical::new().unwrap();
-        let wrong=SCHEMA.replacen("target_setting_op BLOB REFERENCES share_mode(change_op),",
-                                  "target_setting_op BLOB,",1);
-        assert_ne!(wrong,SCHEMA);
-        let mut db=Connection::open_in_memory().unwrap();
-        super::super::engine::limits(&db).unwrap();
-        db.execute_batch(&wrong).unwrap();
-        let tx=db.transaction().unwrap();
-        let version:i64=tx.query_row("PRAGMA main.user_version",[],|row|row.get(0)).unwrap();
-        assert_eq!(version,SCHEMA_VERSION);
-        assert_eq!(shape(&tx).unwrap().len(),147);
-        assert!(approved.require(&tx).is_err());
+        for (original,weakened) in [
+            ("target_setting_op BLOB REFERENCES share_mode(change_op),","target_setting_op BLOB,"),
+            ("CREATE TABLE directory_location (\n  directory_id BLOB NOT NULL PRIMARY KEY REFERENCES directory_entry(directory_id),",
+             "CREATE TABLE directory_location (\n  directory_id BLOB NOT NULL PRIMARY KEY,"),
+        ]{
+            let wrong=SCHEMA.replacen(original,weakened,1);
+            assert_ne!(wrong,SCHEMA);
+            let mut db=Connection::open_in_memory().unwrap();
+            super::super::engine::limits(&db).unwrap();
+            db.execute_batch(&wrong).unwrap();
+            let tx=db.transaction().unwrap();
+            let version:i64=tx.query_row("PRAGMA main.user_version",[],|row|row.get(0)).unwrap();
+            assert_eq!(version,SCHEMA_VERSION);
+            assert_eq!(shape(&tx).unwrap().len(),167);
+            assert!(approved.require(&tx).is_err());
+        }
     }
     #[test]
     fn bounded_fresh_schema_can_be_read_again_by_an_independent_connection() {

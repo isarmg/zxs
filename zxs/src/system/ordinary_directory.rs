@@ -18,8 +18,31 @@ pub(super) fn components(raw:&[u8])->io::Result<Vec<String>>{
 fn busy()->io::Error{io::Error::new(io::ErrorKind::WouldBlock,"original ordinary name is reserved but unconfirmed")}
 fn exists()->io::Error{io::Error::from(io::ErrorKind::AlreadyExists)}
 
+/// A directory's current selected spelling and original immutable
+/// marker are different facts. The initial position still is its birth.
 #[derive(Clone,Debug,Eq,PartialEq)]
-pub(in crate::system::reader) struct Route{pool:PoolId,volume:VolumeId,steps:Vec<DirectoryBirth>}
+pub(super) struct DirectoryPlace{birth:DirectoryBirth,name:String,position:OperationId,generation:i64}
+impl DirectoryPlace{
+    fn born(birth:DirectoryBirth)->Self{
+        let name=birth.name.clone();let position=birth.original;
+        Self{birth,name,position,generation:1}
+    }
+    pub(super) fn name(&self)->&str{&self.name}
+    pub(super) fn birth(&self)->&DirectoryBirth{&self.birth}
+    pub(super) fn position(&self)->OperationId{self.position}
+    pub(super) fn generation(&self)->i64{self.generation}
+    pub(super) fn is_birth(&self,birth:&DirectoryBirth)->bool{
+        self.generation==1 && self.position==birth.original && &self.birth==birth && self.name==birth.name
+    }
+    pub(super) fn open_selected(&self,parent:&HeldDir,names:&BTreeSet<Vec<u8>>)->io::Result<DirectoryHold>{
+        self.birth.open_position(parent,names,&self.name)
+    }
+    fn open(&self,parent:&HeldDir)->io::Result<DirectoryHold>{
+        self.open_selected(parent,&parent.names()?.into_iter().collect())
+    }
+}
+#[derive(Clone,Debug,Eq,PartialEq)]
+pub(in crate::system::reader) struct Route{pool:PoolId,volume:VolumeId,steps:Vec<DirectoryPlace>}
 impl Route{
     pub(in crate::system::reader) fn at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent)->io::Result<Self>{
         if !c.rows().iter().any(|r|r.role==Role::File&&r.volume==volume){return Err(denied());}
@@ -27,7 +50,7 @@ impl Route{
         while let DirectoryParent::Directory(id)=at{
             if steps.len()>=MAX_PATH_DEPTH{return Err(invalid("ordinary parent ancestry is too deep"));}
             let selected=by_id(db,c,volume,id)?;
-            at=selected.parent;steps.push(selected);
+            at=selected.birth.parent;steps.push(selected);
         }
         steps.reverse();
         let path=Self{pool:c.birth.pool,volume,steps};
@@ -39,21 +62,21 @@ impl Route{
         if names.len()>MAX_PATH_DEPTH||!c.rows().iter().any(|r|r.role==Role::File&&r.volume==volume){return Err(denied());}
         let(mut steps,mut at)=(Vec::with_capacity(names.len()),DirectoryParent::Root);
         for name in names{
-            let birth=lookup(db,c,volume,at,name.as_ref())?.ok_or(io::ErrorKind::NotFound)?;
-            at=DirectoryParent::Directory(birth.id);steps.push(birth);
+            let place=lookup(db,c,volume,at,name.as_ref())?.ok_or(io::ErrorKind::NotFound)?;
+            at=DirectoryParent::Directory(place.birth.id);steps.push(place);
         }
         let path=Self{pool:c.birth.pool,volume,steps};
         path.geometry(c)?;Ok(path)
     }
     pub(in crate::system::reader) fn volume(&self)->VolumeId{self.volume}
     pub(in crate::system::reader) fn parent(&self)->DirectoryParent{
-        self.steps.last().map_or(DirectoryParent::Root,|s|DirectoryParent::Directory(s.id))
+        self.steps.last().map_or(DirectoryParent::Root,|s|DirectoryParent::Directory(s.birth.id))
     }
-    pub(super) fn selected(&self)->Option<&DirectoryBirth>{self.steps.last()}
+    pub(super) fn selected(&self)->Option<&DirectoryPlace>{self.steps.last()}
     /// SMB-relative human labels only, for the chosen VolumeId in this
     /// database cut. No host path or file capability is returned.
     pub(in crate::system::reader) fn show_child(&self,name:&str)->String{
-        self.steps.iter().map(|d|d.name.as_str()).chain(std::iter::once(name)).collect::<Vec<_>>().join("\\")
+        self.steps.iter().map(DirectoryPlace::name).chain(std::iter::once(name)).collect::<Vec<_>>().join("\\")
     }
     pub(in crate::system::reader) fn geometry(&self,c:&Catalog)->io::Result<PathBuf>{
         let row=c.rows().iter().find(|r|r.role==Role::File&&r.volume==self.volume).ok_or_else(denied)?;
@@ -110,24 +133,40 @@ fn original(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Origina
         return Err(invalid("directory differs from its actual original SQLite birth"));}
     q.done()?;Ok(Some(Original{birth,done:state==1,aborted,actor,share,setting,auth,epoch}))
 }
-fn by_id(db:&Connection,c:&Catalog,volume:VolumeId,id:DirectoryId)->io::Result<DirectoryBirth>{
-    let q=db.prepare(c"SELECT create_op FROM main.directory_slot WHERE directory_id=?1 AND volume_id=?2 AND state=1")?;
+fn published(db:&Connection,c:&Catalog,op:OperationId,position:OperationId,generation:i64,name:String)
+    ->io::Result<DirectoryPlace>{
+    let birth=original(db,c,op)?.filter(|b|b.done&&!b.aborted).ok_or_else(denied)?.birth;
+    if generation==1&&position==op&&name==birth.name{return Ok(DirectoryPlace::born(birth));}
+    let rename=directory_rename::selected(db,c,position)?
+        .filter(|r|r.confirmed&&!r.aborted&&r.birth==birth&&r.source_gen.checked_add(1)==Some(generation)&&r.target==name)
+        .ok_or_else(||invalid("directory position differs from its exact confirmed rename"))?;
+    Ok(DirectoryPlace{birth:rename.birth,name,position,generation})
+}
+fn by_id(db:&Connection,c:&Catalog,volume:VolumeId,id:DirectoryId)->io::Result<DirectoryPlace>{
+    let q=db.prepare(c"SELECT d.create_op,d.position_op,d.generation,d.display,
+        EXISTS(SELECT 1 FROM main.pending_directory_rename m WHERE m.directory_id=d.directory_id AND m.source_op=d.position_op)
+      FROM main.directory_selected d WHERE d.directory_id=?1 AND d.volume_id=?2 AND d.state=1")?;
     q.bind_bytes(1,&id.0)?;q.bind_bytes(2,&volume.0)?;
     if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
-    let op=OperationId(q.array(0)?);q.done()?;
-    let b=original(db,c,op)?.filter(|b|b.done&&!b.aborted).ok_or_else(denied)?.birth;
-    if b.id!=id||b.volume!=volume{return Err(denied());}Ok(b)
+    let op=OperationId(q.array(0)?);let position=OperationId(q.array(1)?);let generation=q.integer(2)?;
+    let name=display::component(q.blob(3,255)?,255)?.to_owned();let moving=q.byte(4)?==1;q.done()?;
+    if moving{return Err(busy());}
+    let at=published(db,c,op,position,generation,name)?;
+    if at.birth.id!=id||at.birth.volume!=volume{return Err(denied());}
+    Ok(at)
 }
-pub(super) fn lookup(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<DirectoryBirth>>{
+pub(super) fn lookup(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<DirectoryPlace>>{
     display::component(name.as_bytes(),255)?;
-    let q=db.prepare(c"SELECT create_op,COALESCE(state,0) FROM main.directory_slot
+    let q=db.prepare(c"SELECT create_op,position_op,generation,COALESCE(state,0) FROM main.directory_slot
       WHERE volume_id=?1 AND parent_id=?2 AND display=?3")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;q.bind_bytes(3,name.as_bytes())?;
     if !work_record::start_one(&q)?{return Ok(None);}
-    let op=OperationId(q.array(0)?);let done=q.byte(1)?==1;q.done()?;
+    let op=OperationId(q.array(0)?);let position=OperationId(q.array(1)?);let generation=q.integer(2)?;
+    let done=q.byte(3)?==1;q.done()?;
     if !done{return Err(busy());}
-    let b=original(db,c,op)?.filter(|b|b.done&&!b.aborted).ok_or_else(denied)?.birth;
-    if b.volume!=volume||b.parent!=parent||b.name!=name{return Err(denied());}Ok(Some(b))
+    let at=published(db,c,op,position,generation,name.into())?;
+    if at.birth.volume!=volume||at.birth.parent!=parent{return Err(denied());}
+    Ok(Some(at))
 }
 
 /// Same-slot scope for a pending or published directory, an ordinary FILE or
@@ -146,11 +185,12 @@ fn directory_vacant(db:&Connection,c:&Catalog,parent:&Route,name:&str)->io::Resu
     Ok(())
 }
 fn pending_at(db:&Connection,c:&Catalog,route:&Route,name:&str)->io::Result<Option<Original>>{
-    let q=db.prepare(c"SELECT create_op,COALESCE(state,0) FROM main.directory_slot
+    let q=db.prepare(c"SELECT create_op,COALESCE(state,0),moving IS NOT NULL FROM main.directory_slot
              WHERE volume_id=?1 AND parent_id=?2 AND display=?3")?;
     q.bind_bytes(1,&route.volume.0)?;q.bind_bytes(2,&route.parent().bytes())?;q.bind_bytes(3,name.as_bytes())?;
     if !work_record::start_one(&q)?{return Ok(None);}
-    let op=OperationId(q.array(0)?);let done=q.byte(1)?==1;q.done()?;
+    let op=OperationId(q.array(0)?);let done=q.byte(1)?==1;let moving=q.byte(2)?==1;q.done()?;
+    if moving{return Err(busy());}
     if done{return Err(exists());}
     let p=original(db,c,op)?.filter(|x|!x.aborted&&!x.done).ok_or_else(denied)?;
     if p.birth.volume!=route.volume||p.birth.parent!=route.parent()||p.birth.name!=name{return Err(denied());}
@@ -347,6 +387,7 @@ impl DirectoryAt<'_>{
 
 pub(super) enum Additional<'a>{
     File(&'a Birth),Directory(&'a DirectoryBirth),Pocket(&'a CStr),Rename(FileId,&'a CStr),IncomingFlat(&'a CStr,&'a CStr),
+    RenameDirectory(DirectoryId,&'a CStr),
 }
 struct NameBudget{unaccounted:BTreeSet<Vec<u8>>,promised:BTreeSet<Vec<u8>>,count:usize,bytes:usize}
 impl NameBudget{
@@ -372,7 +413,7 @@ impl NameBudget{
         self.claim(pin.to_bytes())?;self.claim(old)?;self.claim(new)?;
         self.unaccounted.remove(pin.to_bytes());
         let a=self.unaccounted.remove(old);let b=self.unaccounted.remove(new);
-        if a&&b{return Err(invalid("two native names claim one same-parent FILE rename"));}
+        if a&&b{return Err(invalid("two native names claim one same-parent rename"));}
         self.charge(2,2+pin.to_bytes().len()+old.len().max(new.len()))
     }
     fn claim(&mut self,name:&[u8])->io::Result<()>{
@@ -413,10 +454,27 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         }
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
-    let q=db.prepare(c"SELECT create_op,display,COALESCE(state,0) FROM main.directory_slot WHERE volume_id=?1 AND parent_id=?2")?;
+    let q=db.prepare(c"SELECT d.create_op,d.display,COALESCE(d.state,0),d.directory_id,r.target_name
+         FROM main.directory_selected d LEFT JOIN main.pending_directory_rename r
+           ON r.directory_id=d.directory_id AND r.source_op=d.position_op WHERE d.volume_id=?1 AND d.parent_id=?2")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
+    let mut charged_directory=false;
     loop{match unsafe{sqlite3_step(q.0)}{
-        100=>{let op=OperationId(q.array(0)?);let(p,s)=dir_reserved(op)?;b.pair(&p,&s,q.blob(1,255)?,q.byte(2)?==0)?;}
+        100=>{
+            let op=OperationId(q.array(0)?);let(pin,stage)=dir_reserved(op)?;let old=q.blob(1,255)?;
+            let requested=match &more{
+                Some(Additional::RenameDirectory(id,name)) if id.0==q.array::<16>(3)?=>Some(name.to_bytes()),
+                _=>None,
+            };
+            let pending=unsafe{super::super::sqlite3_column_type(q.0,4)}!=5;
+            if let Some(new)=requested{
+                if pending||q.byte(2)?!=1{return Err(busy());}
+                charged_directory=true;b.rename_edge(&pin,old,new)?;
+            }else if pending{
+                if q.byte(2)?!=1{return Err(invalid("pending move did not follow an installed directory"));}
+                b.rename_edge(&pin,old,q.blob(4,255)?)?;
+            }else{b.pair(&pin,&stage,old,q.byte(2)?==0)?;}
+        },
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
     // A two-parent move bills both parents for all of that FILE's own
@@ -452,6 +510,8 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         Some(Additional::IncomingFlat(pin,end))=>b.incoming_flat(pin,end)?,
         Some(Additional::Rename(..)) if !charged_rename=>return Err(invalid("no exact flat FILE for this rename budget")),
         Some(Additional::Rename(..))=>{},
+        Some(Additional::RenameDirectory(..)) if !charged_directory=>return Err(invalid("no original directory for this rename budget")),
+        Some(Additional::RenameDirectory(..))=>{},
         None=>{}
     }
     b.finish()
@@ -462,6 +522,10 @@ fn dir_reserved(op:OperationId)->io::Result<(CString,CString)>{
     let stage=CString::new(format!(".zxs-new-{op}-4")).map_err(|_|denied())?;
     Ok((pin,stage))
 }
+
+#[path="directory_relabel.rs"]
+mod directory_rename;
+pub(super) use directory_rename::{RelabelCut, recovery_loop as recover_relabels};
 
 #[cfg(test)]
 mod tests{

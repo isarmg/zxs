@@ -14,8 +14,12 @@ NTSTATUS zxs_open_access(connection_struct *c,bool directory,const struct zxs_sm
 {
 	uint32_t profile=directory?(SEC_RIGHTS_DIR_READ|SEC_DIR_TRAVERSE):SEC_RIGHTS_FILE_READ;
 	if(!c->read_only && folder!=NULL && folder->mode==2){
-		if(directory)profile|=SEC_DIR_ADD_FILE|SEC_DIR_ADD_SUBDIR;
-		else profile|=SEC_RIGHTS_FILE_WRITE|SEC_STD_DELETE;
+		if(directory){
+			profile|=SEC_DIR_ADD_FILE|SEC_DIR_ADD_SUBDIR;
+			/* DELETE on an actual nested directory permits only its
+			 * bounded same-parent relabel, not directory removal. */
+			if(zxs_folder_ordinary_child(folder))profile|=SEC_STD_DELETE;
+		}else profile|=SEC_RIGHTS_FILE_WRITE|SEC_STD_DELETE;
 	}
 	/* Retained DELETE access is for the exact FILE_RENAME_INFORMATION
 	 * restore only. No retained disposition/create/EOF/write is admitted. */

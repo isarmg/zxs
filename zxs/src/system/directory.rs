@@ -1,9 +1,9 @@
 //! Exact business children, never the host's directory stream. Ordinary
 //! directory and FILE rows occupy the same parent-local byte name.
-use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,Route},sqlite3_step};
+use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,DirectoryPlace,Route},sqlite3_step};
 use super::super::{file_location::Placed,volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Members,ReadRecord}};
 use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,
-    fs::{HeldDir,WitnessRead,invalid,directory_birth::{DirectoryBirth,DirectoryHold,DirectoryParent}},
+    fs::{HeldDir,WitnessRead,invalid,directory_birth::{DirectoryHold,DirectoryParent}},
     ordinary::portable_birth::{Birth,Installed}};
 use std::{collections::BTreeSet,ffi::CString,io};
 
@@ -21,9 +21,9 @@ impl Entry{
             (b.pool,at.volume,b.entry,b.file,at.op,at.generation,at.parent)&&self.name==at.name
     }
 }
-pub(super) enum Child{Directory(DirectoryBirth),File(Entry)}
+pub(super) enum Child{Directory(DirectoryPlace),File(Entry)}
 impl Child{
-    pub(super) fn name(&self)->&str{match self{Self::Directory(d)=>&d.name,Self::File(f)=>&f.name}}
+    pub(super) fn name(&self)->&str{match self{Self::Directory(d)=>d.name(),Self::File(f)=>&f.name}}
 }
 #[derive(Eq,PartialEq)]
 struct Plan{
@@ -31,9 +31,9 @@ struct Plan{
     display_owner:Option<file_create::Alias>,number:u64,
 }
 #[derive(Eq,PartialEq)]
-enum Pick{Directory(DirectoryBirth),File(Plan)}
+enum Pick{Directory(DirectoryPlace),File(Plan)}
 impl Pick{
-    fn name(&self)->&str{match self{Self::Directory(d)=>&d.name,Self::File(p)=>&p.placed.here.name}}
+    fn name(&self)->&str{match self{Self::Directory(d)=>d.name(),Self::File(p)=>&p.placed.here.name}}
 }
 enum Held{Directory(DirectoryHold),File(Installed)}
 pub(crate) struct RootFiles<'t,'s,'r>{
@@ -103,7 +103,7 @@ fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:boo
                 1 if mixed=>{
                     let row=ordinary_directory::lookup(db,c,at.volume,at.parent,name)?
                         .ok_or_else(||invalid("selected directory is no longer published"))?;
-                    if row.id.0!=q.array::<16>(1)?{return Err(invalid("different selected directory"));}
+                    if row.birth().id.0!=q.array::<16>(1)?{return Err(invalid("different selected directory"));}
                     page.push(Pick::Directory(row));
                 },
                 _=>return Err(invalid("unknown ordinary member type")),

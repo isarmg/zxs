@@ -96,7 +96,7 @@ fn pending_pool_extra_schema_and_unexpected_wal_are_not_accepted_or_repaired(){
 #[ignore="source-only explicit previous-version fixture; never open an existing pool"]
 fn previous_native_version_is_not_rewritten_or_opened(){
     let t=PrivateTemp::under(&std::env::temp_dir());
-    let (s,p)=record(&t,InitState::Committed,"PRAGMA main.user_version=14;");
+    let (s,p)=record(&t,InitState::Committed,"PRAGMA main.user_version=15;");
     let original=s.join("SYSTEM.sqlite3");
     // Builder's SQLite connection has closed; this is only a byte snapshot
     // of the isolated fixture, not an extra checkpoint FD on a live pool.

@@ -123,9 +123,27 @@ static void zxs_existing_file_finish(struct tevent_req *req)
 {
 	struct smbd_smb2_create_state *s=tevent_req_data(req,struct smbd_smb2_create_state);
 	const struct zxs_read_fsp *f=zxs_find_read(s->result);
+	if(s->zxs_is_dir){
+		const struct zxs_dir_search *d=zxs_find_dir(s->result);
+		struct smbd_smb2_request *n=s->smb2req;
+		/* Only now is this directory's real native share entry installed.
+		 * If the queued storage holder died earlier, the old spelling
+		 * must not turn into an OPEN after the other rename finished. */
+		if(d==NULL||(zxs_folder_ordinary_child(&d->folder)&&
+		   (!NT_STATUS_IS_OK(n->xconn->transport.status)||!zxs_request_root_current(n)||
+		    d->tcon!=n->tcon||d->session!=n->session||d->seq!=n->session->global->auth_session_info_seqnum||
+		    s->result->conn!=n->tcon->compat||s->result->vuid!=n->session->global->session_wire_id||
+		    !s->result->fsp_flags.is_fsa||s->result->fsp_flags.closing||!zxs_directory_same_id(s->result,&d->folder)||
+		    !change_to_user_and_service(s->result->conn,s->result->vuid)||
+		    !zxs_request_folder_current(n,&d->folder)))){
+			(void)close_file_free(s->smb1req,&s->result,ERROR_CLOSE);
+			tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
+		}
+		zxs_create_success(req,FILE_WAS_OPENED);return;
+	}
 	/* A writer already holds the exact storage FILE EX before its reply,
 	 * so it never competes with a simultaneous ordinary physical rename. */
-	if(s->zxs_is_dir||(f!=NULL&&(f->writable||zxs_folder_retained(&f->folder)))){
+	if(f!=NULL&&(f->writable||zxs_folder_retained(&f->folder))){
 		zxs_create_success(req,FILE_WAS_OPENED);return;
 	}
 	s->result->fsp_flags.closing=true;s->zxs_provisional=true;

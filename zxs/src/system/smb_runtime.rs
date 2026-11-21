@@ -2,7 +2,7 @@
 //! The reply contains only nonsecret original identity. It cannot construct
 //! SmbSession, publish a share, validate a password or open a FILE. Only a later
 //! successful managed session update can promote its own original attempt.
-use super::{Connection,Credential,InitialReader,denied};
+use super::{Catalog,Connection,Credential,InitialReader,denied};
 use crate::{OperationId,PoolId,fs::invalid};
 use std::{fs::File,io,os::{fd::{AsRawFd,FromRawFd,OwnedFd},unix::fs::{FileExt,MetadataExt}},path::Path};
 
@@ -184,23 +184,27 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
         os(unsafe{zxs_smb_origin_enable(fd)})?;
         admitted.store(true,std::sync::atomic::Ordering::Release);
         let (approved,bound,bound_stamp,master_process,allow)=(&plan,&binding,&stamp,&master,&admitted);
+        let recovery_scope=move|db:&Connection,c:&Catalog,share,volume|{
+            let folder=approved.folders().iter().find(|f|f.share()==share&&f.volume()==volume).ok_or_else(denied)?;
+            if !approved.current(db,c,folder.name())?.is_some_and(|g|g.share==share&&g.volume==volume){return Err(denied());}
+            Ok(())
+        };
+        let recovery_live=move||{
+            if Stamp::read(bound)?!=*bound_stamp||should_stop()||!allow.load(std::sync::atomic::Ordering::Acquire)||
+               unsafe{zxs_smb_process_live(master_process.as_raw_fd())}!=0||
+               !rename_receive_live(fd)||
+               unsafe{zxs_smb_ctl_life(master_life.as_raw_fd(),0)}!=0{return Err(denied());}
+            Ok(())
+        };
+        // Two bounded lanes: a slow directory or abandoned sub-tree never
+        // stops the independent FILE recovery cursor.
         let _resume=std::thread::Builder::new().name("zxs-original-rename-recovery".into()).spawn_scoped(scope,move||{
             let Ok(local)=InitialReader::alongside(dir,mark,pool,shape) else{return;};
-            super::file_rename::recovery_loop(&local,|db,c,share,volume|{
-                let folder=approved.folders().iter().find(|f|f.share()==share&&f.volume()==volume).ok_or_else(denied)?;
-                if !approved.current(db,c,folder.name())?.is_some_and(|g|g.share==share&&g.volume==volume){
-                    return Err(denied());
-                }
-                Ok(())
-            },||{
-                if Stamp::read(bound)?!=*bound_stamp||should_stop()||!allow.load(std::sync::atomic::Ordering::Acquire)||
-                   unsafe{zxs_smb_process_live(master_process.as_raw_fd())}!=0||
-                   !rename_receive_live(fd)||
-                   unsafe{zxs_smb_ctl_life(master_life.as_raw_fd(),0)}!=0{
-                    return Err(denied());
-                }
-                Ok(())
-            });
+            super::file_rename::recovery_loop(&local,recovery_scope,recovery_live);
+        });
+        let _folders=std::thread::Builder::new().name("zxs-directory-relabel-recovery".into()).spawn_scoped(scope,move||{
+            let Ok(local)=InitialReader::alongside(dir,mark,pool,shape) else{return;};
+            super::ordinary_directory::recover_relabels(&local,recovery_scope,recovery_live);
         });
         attempts::serve(fd,&life,&master,&admitted,&stopping,||{
             if Stamp::read(&binding)?!=stamp{return Err(denied());}

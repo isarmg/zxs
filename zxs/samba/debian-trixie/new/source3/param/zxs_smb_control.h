@@ -112,6 +112,11 @@ int zxs_member_xfer_pending(int member);
 int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAME+1],uint8_t name[ZXS_FILE_NAME+1],uint8_t mark[16],uint16_t *parent_len,uint8_t *parents);
 int zxs_xfer_reply(int fd,uint8_t status,const uint8_t file[16],const uint8_t op[16]);
 int zxs_xfer_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t receipt[16]);
+/* A rename on the already-held ordinary directory endpoint. */
+#define ZXS_OD_RELABEL 240u
+int zxs_odir_relabel_query(int tree,const uint8_t *name,size_t n);
+int zxs_odir_relabel_reply(int fd,uint8_t status,const uint8_t directory[16],const uint8_t op[16]);
+int zxs_odir_relabel_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t op[16]);
 #define ZXS_OD_PATH 243
 #define ZXS_OD_PATH_MAX 4096
 #define ZXS_OD_PATH_REQUEST (19+ZXS_OD_PATH_MAX)

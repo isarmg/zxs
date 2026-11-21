@@ -181,6 +181,23 @@ static bool native_directory_projection(connection_struct *c)
 	if(!zxs_ordinary_rename_input(c,nesting,"F\\Old",&renamed,&destination_volume,&within)||
 	   strcmp(destination_volume,"F")!=0||strcmp(within,"Reports\\Report")!=0||
 	   zxs_ordinary_destination_kind("F\\Old",destination_volume)!=ZXS_XFER_MOVE)goto fail;
+	char *directory_target=NULL;const char *dir_leaf=NULL;
+	if(!zxs_directory_rename_input(c,nesting,"F\\Reports\\Old",&directory_target,&dir_leaf)||
+	   strcmp(directory_target,"F\\Reports\\Report")!=0||strcmp(dir_leaf,"Report")!=0||
+	   zxs_directory_rename_input(c,nesting,"F\\Reports\\Report",&directory_target,&dir_leaf)||
+	   zxs_directory_rename_input(c,nesting,"F\\reports\\Old",&directory_target,&dir_leaf)||
+	   zxs_directory_rename_input(c,nesting,"G\\Reports\\Old",&directory_target,&dir_leaf)||
+	   zxs_directory_rename_input(c,nesting,"F\\Old",&directory_target,&dir_leaf))goto fail;
+	uint8_t long_dir[20+2*(2+255)]={0};
+	const size_t wide_dir=2+255;SIVAL(long_dir,16,2*wide_dir);
+	SSVAL(long_dir,20,'F');SSVAL(long_dir,22,'\\');
+	for(size_t i=2;i<wide_dir;i++){SSVAL(long_dir,20+2*i,'a');}
+	if(!zxs_directory_rename_input(c,data_blob_const(long_dir,sizeof(long_dir)),"F\\Old",&directory_target,&dir_leaf)||
+	   strlen(dir_leaf)!=255)goto fail;
+	long_dir[0]=1;
+	if(zxs_directory_rename_input(c,data_blob_const(long_dir,sizeof(long_dir)),"F\\Old",&directory_target,&dir_leaf))goto fail;
+	long_dir[0]=0;long_dir[8]=1;
+	if(zxs_directory_rename_input(c,data_blob_const(long_dir,sizeof(long_dir)),"F\\Old",&directory_target,&dir_leaf))goto fail;
 	multi[0]=1;
 	if(zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&destination_volume,&within))goto fail;
 	multi[0]=0;
@@ -597,6 +614,14 @@ static bool native_maximal_access(connection_struct *conn)
 	   IVAL(out,ZXS_QFID_REPLY_BYTES+12)!=8 || IVAL(out,ZXS_QFID_REPLY_BYTES+24)!=0 ||
 	   IVAL(out,ZXS_QFID_REPLY_BYTES+28)!=share || f->access_mask!=minimal ||
 	   !zxs_fsp_maximum_open_access(d,&mask) || mask!=minimal)goto done;
+	s->folder=(struct zxs_smb_tree_cut){.root_fd=8,.volume_ordinal=2,.mode=2,.revision=1};
+	if(!zxs_fsp_maximum_open_access(d,&mask)||mask!=minimal)goto done; /* immutable enrolled root */
+	s->folder.directory[0]=1;s->folder.directory_op[0]=2;
+	conn->share_access=share|SEC_DIR_ADD_SUBDIR;
+	if(!zxs_fsp_maximum_open_access(d,&mask)||mask!=(minimal|SEC_DIR_ADD_SUBDIR|SEC_STD_DELETE))goto done;
+	s->folder.mode=1;
+	if(!zxs_fsp_maximum_open_access(d,&mask)||mask!=minimal)goto done;
+	conn->share_access=share;
 	r->folder.mode=1;
 	if(!zxs_fsp_maximum_open_access(f,&mask)||mask!=minimal)goto done;
 	r->folder.volume_ordinal=1;
