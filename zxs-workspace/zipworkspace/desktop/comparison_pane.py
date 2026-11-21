@@ -1,5 +1,5 @@
 """Read-only results for a local folder, a catalog version or a verified ordinary ZIP."""
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QFileDialog, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from .. import comparison
 from ..model import Rejected
@@ -13,6 +13,8 @@ class ComparisonPane(QWidget):
         super().__init__()
         self.owner = owner
         self.active_read = self.report = self.right = self.text_read = self.text_dialog = self.row_epoch = None
+        self.filter_read = self.filtered_rows = None
+        self.applied_filter = ("", None)
         layout = QVBoxLayout(self)
         layout.addWidget(label("可以直接选另一份快照、比本机文件夹、从历史选版本，或比较普通 ZIP。所有比较只读，不同步文件。"))
         targets = QHBoxLayout()
@@ -23,8 +25,34 @@ class ComparisonPane(QWidget):
         layout.addLayout(targets)
         self.summary = label()
         layout.addWidget(self.summary)
+        filters = QHBoxLayout()
+        self.filter_term = QLineEdit()
+        self.filter_term.setAccessibleName("差异筛选的相对路径片段")
+        self.filter_term.setPlaceholderText("相对路径包含…（区分大小写，用 / 分层）")
+        # Keep one extra code unit so an overlong paste cannot masquerade as a valid truncated query.
+        self.filter_term.setMaxLength(comparison.FILTER_PATH_BYTES + 1)
+        self.filter_change = QComboBox()
+        self.filter_change.setAccessibleName("筛选差异类别")
+        for caption, key in (("全部差异", None), ("仅对照对象", "added"),
+                             ("内容或类型不同", "changed"), ("仅当前快照", "missing")):
+            self.filter_change.addItem(caption, key)
+        self.apply_filter = button("筛选本次对照", self.filter_current)
+        self.clear_filter = button("清除筛选", self.reset_filter)
+        filters.addWidget(self.filter_term, 1)
+        for control in (self.filter_change, self.apply_filter, self.clear_filter): filters.addWidget(control)
+        layout.addLayout(filters)
+        self.filter_status = label()
+        layout.addWidget(self.filter_status)
+        self.filter_term.returnPressed.connect(self.filter_current)
+        self.filter_term.textChanged.connect(self._filter_widgets)
+        self.filter_change.currentIndexChanged.connect(self._filter_widgets)
         self.table = Table(("相对路径", "差异", "当前快照", "对照对象"), "只读版本或目录对比结果")
         layout.addWidget(self.table)
+        self.selected_path = QLineEdit()
+        self.selected_path.setReadOnly(True)
+        self.selected_path.setAccessibleName("所选差异的完整相对路径")
+        self.selected_path.setPlaceholderText("选择一条差异，显示完整相对路径")
+        layout.addWidget(self.selected_path)
         self.lines = button("查看所选文件的逐行差异…", self.read_lines)
         layout.addWidget(self.lines)
         self.table.selectionModel().selectionChanged.connect(self._row_changed)
@@ -50,9 +78,14 @@ class ComparisonPane(QWidget):
     def clear(self):
         previous, self.active_read = self.active_read, None
         if previous is not None: previous.cancel()
+        previous_filter, self.filter_read = self.filter_read, None
+        if previous_filter is not None: previous_filter.cancel()
         report = self.report
         self.report, self.number, self.mode, self.request = None, 0, None, None
         self.plain = None
+        self.filtered_rows, self.applied_filter = None, ("", None)
+        self.filter_term.clear()
+        self.filter_change.setCurrentIndex(0)
         self.close_lines()
         if isinstance(report, comparison.Report): report.close()
         right, self.right = self.right, None
@@ -60,6 +93,7 @@ class ComparisonPane(QWidget):
         self.table.rows.replace(())
         self.back.setEnabled(False); self.more.setEnabled(False)
         self.page_label.setText("")
+        self._filter_widgets()
 
     def invalidate_versions(self):
         if self.mode == "version":
@@ -269,7 +303,8 @@ class ComparisonPane(QWidget):
 
     def _line_selection(self, row):
         left = self.snapshot
-        if not can_compare_text(row) or left is None or left.held is None or left.held.closed: return False
+        if (self.filter_read is not None or not can_compare_text(row) or left is None or left.held is None
+                or left.held.closed): return False
         if self.mode == "folder":
             return (self.report is not None and self.report.text is not None and self.report.text.supports(left, row))
         if self.mode == "plain":
@@ -288,7 +323,9 @@ class ComparisonPane(QWidget):
     def _row_changed(self, *_):
         self.row_epoch = object()
         self.close_lines()
-        self.lines.setEnabled(self._line_selection(self.table.item()))
+        row = self.table.item() if self.report is not None and self.filter_read is None else None
+        self.selected_path.setText(row.path if row is not None else "")
+        self.lines.setEnabled(self._line_selection(row))
 
     def read_lines(self):
         left, right, row = self.snapshot, self.right, self.table.item()
@@ -395,9 +432,74 @@ class ComparisonPane(QWidget):
                 done((None, "另一个操作正在执行。"))
         return True
 
+    def _draft_filter(self):
+        return self.filter_term.text(), self.filter_change.currentData()
+
+    def _filter_widgets(self, *_):
+        usable = self.report is not None and self.filter_read is None and bool(self.report.rows)
+        draft = self._draft_filter()
+        self.filter_term.setEnabled(usable)
+        self.filter_change.setEnabled(usable)
+        self.apply_filter.setEnabled(usable and draft != self.applied_filter)
+        self.clear_filter.setEnabled(usable and (draft != ("", None) or self.filtered_rows is not None))
+        message = ("正在筛选这一次的已观察差异，不读取文件。" if self.filter_read is not None else
+                   "条件尚未应用；下方仍显示上一次结果。" if usable and draft != self.applied_filter else "")
+        self.filter_status.setText(message)
+        self.filter_status.setVisible(bool(message))
+
+    def reset_filter(self):
+        if self.report is None or self.filter_read is not None or self.owner.pending is not None: return
+        self.filtered_rows, self.applied_filter = None, ("", None)
+        self.filter_term.clear()
+        self.filter_change.setCurrentIndex(0)
+        self.show_page(0)
+
+    def filter_current(self):
+        chosen, request, report = self.snapshot, self.request, self.report
+        if (report is None or not report.rows or self.filter_read is not None or self.owner.pending is not None): return
+        criteria = self._draft_filter()
+        if criteria == self.applied_filter: return
+        if criteria == ("", None):
+            self.reset_filter()
+            return
+        watch = self.filter_read = Verification()
+        self.table.clearSelection()
+        self._row_changed()
+        self._filter_widgets()
+        rows = report.rows  # Do not retain report, selected archives or directory handles in the search worker.
+
+        def work():
+            try: return comparison.filter_rows(rows, *criteria, check=watch.check), None
+            except Exception as error: return None, str(error)
+
+        def done(outcome):
+            if self.filter_read is not watch or not self.matches(chosen, request) or self.report is not report: return
+            self.filter_read = None
+            filtered, error = outcome
+            if watch.cancelled or self._draft_filter() != criteria:
+                self.owner.inform("未应用本次筛选，保留此前结果。")
+            elif error is not None:
+                self.owner.inform(f"未完成筛选：{error}。保留此前结果。")
+            else:
+                self.filtered_rows, self.applied_filter = filtered, criteria
+                self.show_page(0)
+                self.owner.inform("已筛选本次对照；未重新读取或改动文件。")
+            self._filter_widgets()
+            self._row_changed()
+
+        try:
+            future = self.owner.job("正在筛选本次对照的原有结果…", work, done,
+                                    cancel=watch.cancel, cancel_text="取消筛选（保留此前结果）")
+            if future is None: raise Rejected("另一个任务正在执行；本次未开始")
+        except Exception as error: done((None, str(error)))
+
     def show_page(self, number):
-        if self.report is None: return
-        rows = self.report.page(number)
+        if self.report is None or self.filter_read is not None: return
+        view = self.report.rows if self.filtered_rows is None else self.filtered_rows
+        span = self.report.PAGE
+        count = max(1, (len(view) + span - 1) // span)
+        if type(number) is not int or not 0 <= number < count: return
+        rows = view[number*span:(number+1)*span]
         kind = {"directory":"目录", "file":"文件", None:"无"}
         changes = {
             "version": {"added":"仅所选", "changed":"不同", "missing":"仅当前"},
@@ -408,9 +510,12 @@ class ComparisonPane(QWidget):
         change = changes[self.mode]
         def side(role, size):
             return f"{kind[role]} · {size:,} B" if self.mode != "folder" and size is not None else kind[role]
+        self.table.clearSelection()
         self.table.rows.replace(((r.path, change[r.change], side(r.before, r.before_bytes),
                                   side(r.after, r.after_bytes)), r) for r in rows)
         self.number = number
-        count = max(1, (len(self.report.rows)+self.report.PAGE-1)//self.report.PAGE)
-        self.page_label.setText(f"第 {number+1}/{count} 页")
+        total = len(self.report.rows)
+        selected = f"全部 {total:,} 项" if self.filtered_rows is None else f"匹配 {len(view):,} / 全部 {total:,} 项"
+        self.page_label.setText(selected + (f" · 第 {number+1}/{count} 页" if view else ""))
         self.back.setEnabled(number > 0); self.more.setEnabled(number+1 < count)
+        self._filter_widgets()

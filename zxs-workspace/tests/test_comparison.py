@@ -32,6 +32,40 @@ def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None, repo="1
     return Selection.open(path)
 
 
+class FilterComparisonRows(unittest.TestCase):
+    def test_literal_subpath_and_category_keep_original_sorted_rows(self):
+        row = comparison.Difference
+        rows = (row("A/[notes]+.txt", "changed", "file", "file", 1, 2),
+                row("B/[notes]+.txt", "missing", "file", None, 1, None),
+                row("父/[notes]+.txt", "added", None, "file", None, 0))
+        self.assertIs(comparison.filter_rows(rows, ""), rows)
+        hits = comparison.filter_rows(rows, "[notes]+.txt")
+        self.assertEqual(len(hits), 3)
+        self.assertTrue(all(hit is original for hit, original in zip(hits, rows)))
+        self.assertIs(comparison.filter_rows(rows, "/[notes]", "missing")[0], rows[1])
+        self.assertIs(comparison.filter_rows(rows, "父/", "added")[0], rows[2])
+        self.assertEqual(comparison.filter_rows(rows, "a/[notes]"), ())
+        self.assertEqual(comparison.filter_rows(rows, " [notes]"), ())
+
+    def test_bounded_search_and_mid_scan_cancellation(self):
+        item = comparison.Difference("target", "changed", "file", "file", 1, 2)
+        with self.assertRaisesRegex(Rejected, "UTF-8"):
+            comparison.filter_rows((item,), "字" * (comparison.FILTER_PATH_BYTES // 3 + 1))
+        with self.assertRaisesRegex(Rejected, "条目范围"):
+            comparison.filter_rows((item,) * (2 * comparison.MAX_MEMBERS + 1), "x")
+        with self.assertRaisesRegex(Rejected, "差异类别"):
+            comparison.filter_rows((item,), "", "rename")
+        checks = 0
+
+        def check():
+            nonlocal checks
+            checks += 1
+            if checks == 3: raise Rejected("cancel during scan")
+
+        with self.assertRaisesRegex(Rejected, "cancel during scan"):
+            comparison.filter_rows((item,) * 520, "target", check=check)
+
+
 class CompareOrdinaryZipText(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
@@ -177,6 +211,110 @@ class CompareOrdinaryZipText(unittest.TestCase):
                 self.assertTrue(report.plain.held.closed)
                 self.assertFalse(report.left.held.closed)
                 self.assertFalse(replacement.held.closed)
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional desktop")
+    def test_qt_filter_paginates_original_rows_cancels_and_discards_a_replaced_report(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import comparison_pane as ui
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        left_path, right_path = self.root/"baseline.zxs", self.root/"same-names.zip"
+        paths = [f"group{n:03}/[notes]+.txt" for n in range(103)]
+        snapshot(left_path, [(p, b"old\n") for p in paths])
+        left = Selection.open(left_path, retain=True)
+        self.addCleanup(left.release_display)
+        with zipfile.ZipFile(right_path, "w", compression=zipfile.ZIP_STORED) as out:
+            for p in paths + ["[notes]+.txt"]: out.writestr(p, b"new\n")
+        plain = PlainSelection.open(right_path)
+        replacement = PlainSelection.open(right_path)
+        self.addCleanup(plain.release_display)
+        self.addCleanup(replacement.release_display)
+        win = Window()
+        pane = win.archive.comparison
+        queue = []
+
+        def defer(work):
+            future = Future()
+            queue.append((future, work))
+            return future
+
+        def complete():
+            future, work = queue.pop(0)
+            future.set_result(work())
+
+        try:
+            win.archive.show_selection(left)
+            win.plain_import.show_selection(plain)
+            with patch.object(win.pool, "submit", side_effect=defer):
+                win.plain_import.compare_to_current(); complete(); win.poll()
+                original = pane.report
+                summary = pane.summary.text()
+                total = len(original.rows)
+                expected = tuple(item for item in original.rows if item.change == "changed")
+                self.assertEqual(total, 104)
+                with patch.object(Path, "stat", side_effect=AssertionError("filter must not stat")), \
+                     patch.object(os, "open", side_effect=AssertionError("filter must not open")), \
+                     patch.object(ui, "compare_plain_text", side_effect=AssertionError("filter must not read data")):
+                    pane.filter_term.setText("[notes]+.txt")
+                    pane.filter_change.setCurrentIndex(pane.filter_change.findData("changed"))
+                    self.assertFalse(queue)  # Editing controls alone does not launch a scan.
+                    pane.apply_filter.click(); complete(); win.poll()
+                    self.assertIs(pane.report, original)
+                    self.assertEqual(pane.summary.text(), summary)
+                    self.assertIn(f"匹配 103 / 全部 {total}", pane.page_label.text())
+                    pane.more.click()
+                    self.assertEqual(pane.number, 1)
+                    pane.table.selectRow(0)
+                    same = expected[100]
+                    self.assertIs(pane.table.item(), same)
+                    self.assertEqual(pane.selected_path.text(), same.path)
+                    self.assertTrue(pane.lines.isEnabled())
+
+                    pane.filter_term.setText("absent")
+                    filtered = pane.filtered_rows
+                    old_epoch = pane.row_epoch
+                    pane.apply_filter.click(); complete()
+                    self.assertIsNot(pane.row_epoch, old_epoch)
+                    self.assertEqual(pane.selected_path.text(), "")
+                    self.assertFalse(pane.lines.isEnabled())
+                    win.cancel_transfer(); win.poll()  # Cancel even after the worker produced a result.
+                    self.assertIs(pane.filtered_rows, filtered)
+                    self.assertEqual(pane.number, 1)
+                    pane.apply_filter.click(); complete(); win.poll()
+                    self.assertEqual(pane.filtered_rows, ())
+                    self.assertIn(f"匹配 0 / 全部 {total}", pane.page_label.text())
+                    self.assertFalse(pane.more.isEnabled())
+                    pane.clear_filter.click()
+                    self.assertIsNone(pane.filtered_rows)
+                    self.assertEqual(pane.number, 0)
+
+                pane.filter_term.setText("group0"); pane.apply_filter.click(); complete()
+                win.plain_import.show_selection(replacement)  # Same name and bytes, different display owner.
+                notice = win.note.text()
+                win.poll()
+                self.assertEqual(win.note.text(), notice)
+                self.assertIsNone(pane.report)
+                self.assertIsNone(pane.filtered_rows)
+                self.assertEqual(pane.filter_term.text(), "")
+                self.assertEqual(pane.selected_path.text(), "")
+                self.assertFalse(pane.apply_filter.isEnabled())
+                self.assertTrue(plain.held.closed)
+                self.assertFalse(left.held.closed)
+                self.assertFalse(replacement.held.closed)
+
+                win.plain_import.compare_to_current(); complete(); win.poll()
+                with patch.object(comparison, "filter_rows", side_effect=Rejected("old filter refused")):
+                    pane.filter_term.setText("group0"); pane.apply_filter.click(); complete()
+                pane.close_report()
+                notice = win.note.text()
+                win.poll()
+                self.assertEqual(win.note.text(), notice)  # A retired failure is also silent.
+                self.assertIsNone(pane.report)
         finally:
             if win.pending is not None:
                 win.pending[0].cancel(); win.poll()

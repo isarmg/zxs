@@ -12,10 +12,11 @@ from .archive import stamp
 from .document import named_document, native_identity
 from .freeze import _sig, observe_held
 from .linux_authority import ProcView
-from .model import Rejected, member_name
+from .model import MAX_MEMBERS, Rejected, member_name
 from .private_freeze import local_mount, mount_id
 
 COMPARE_BYTES = 64 * 1024
+FILTER_PATH_BYTES = 1024  # Every admitted relative path fits, including all parent components.
 
 
 def available():
@@ -133,6 +134,26 @@ class Changes:
         if type(number) is not int or not 0 <= number < max(1, (len(self.rows) + self.PAGE - 1) // self.PAGE):
             raise Rejected("comparison page outside the observed report")
         return self.rows[number*self.PAGE:(number+1)*self.PAGE]
+
+
+def filter_rows(rows, term, change=None, *, check=None):
+    """Project one finished comparison: preserve order and each original Difference."""
+    if type(rows) is not tuple or len(rows) > 2 * MAX_MEMBERS:
+        raise Rejected("对照结果超出可筛选的条目范围")
+    if (type(term) is not str or len(term) > FILTER_PATH_BYTES or
+            len(term.encode("utf-8", "surrogatepass")) > FILTER_PATH_BYTES):
+        raise Rejected(f"路径片段不能超过 {FILTER_PATH_BYTES:,} 个 UTF-8 字节")
+    if change not in (None, "added", "changed", "missing"):
+        raise Rejected("未知的差异类别")
+    if check is not None: check()
+    if not term and change is None: return rows
+    hits = []
+    for i, row in enumerate(rows):
+        if check is not None and i % 256 == 0: check()
+        if (change is None or row.change == change) and term in row.path:
+            hits.append(row)
+    if check is not None: check()
+    return tuple(hits)
 
 
 def _archive_stamp(info):
