@@ -60,6 +60,9 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install::pair) fn confirm_fat32_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-FAT32-COPY",Some(preview),64*1024)
     }
+    pub(in crate::sqlite_install::pair) fn confirm_web_administrator_reset(&self,review:String)->io::Result<()>{
+        self.ask("RESET-ZXS-WEB-ADMIN",Some(review),8*1024)
+    }
     pub(in crate::sqlite_install::pair) fn confirm_rust_credential(&self,reset:bool,resume:bool,review:String)->io::Result<()>{
         let verb=if resume{"RESUME-RUST-SMB"}else if reset{"RESET-RUST-SMB"}else{"ENROLL-RUST-SMB"};
         self.ask(verb,Some(review),96*1024)

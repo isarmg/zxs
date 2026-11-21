@@ -135,6 +135,13 @@ impl<'a> Quiet<'a> {
 }
 impl Drop for Quiet<'_> { fn drop(&mut self) { let _ = self.restore(); } }
 
+fn begin_held_quiet(fd:BorrowedFd<'_>)->io::Result<(Quiet<'_>,PromptSignals)>{
+    let signals=PromptSignals::begin()?;
+    let tty=Quiet::begin(fd)?;
+    // Keep the owning caller's Quiet field before PromptSignals on all exits.
+    Ok((tty,signals))
+}
+
 fn capture(entries:&mut [Entry],offset:usize,selected:&SelectedInput,fd:BorrowedFd<'_>,
            verify:impl Fn()->io::Result<()>,signals:&PromptSignals)->io::Result<()> {
     let check=|| {signals.check()?; selected.audit.require_current()?; selected.channel.require()?;verify()};
@@ -187,8 +194,7 @@ impl SelectedInput {
     }
     pub(super) fn hold_for_birth<'a>(&'a self,tty:&'a io::Stdin)->io::Result<HeldQuiet<'a>>{
         self.audit.require_current()?;self.channel.require()?;
-        let signals=PromptSignals::begin()?;
-        let tty=Quiet::begin(tty.as_fd())?;
+        let (tty,signals)=begin_held_quiet(tty.as_fd())?;
         Ok(HeldQuiet{tty,signals,selected:self})
     }
     /// Fixed low Rust secret worker only under the actual parent-owned
@@ -258,6 +264,35 @@ impl WebEntry<'_>{
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn web_admin_reset_disposable_pty_can_enter_the_real_hidden_act_gate_after_public_approval(){
+        use rustix::{process::getuid,pty::{grantpt,ioctl_tiocgptpeer,openpt,unlockpt,OpenptFlags}};
+        const CHILD:&str="HELPER_UNIT_WEB_RESET_TTY_CHILD";
+        if getuid().is_root(){return;}
+        if std::env::var_os(CHILD).is_none(){
+            let result=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact",
+                "sqlite_install::pair::terminal::tests::web_admin_reset_disposable_pty_can_enter_the_real_hidden_act_gate_after_public_approval","--nocapture"])
+                .env(CHILD,"1").output().unwrap();
+            assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
+            assert!(result.stdout.windows(b"RESET-FIXTURE-HIDDEN-ACT-READY".len()).any(|s|s==b"RESET-FIXTURE-HIDDEN-ACT-READY"));
+            return;
+        }
+        let flags=OpenptFlags::RDWR|OpenptFlags::NOCTTY|OpenptFlags::CLOEXEC;
+        let master=openpt(flags).unwrap();grantpt(&master).unwrap();unlockpt(&master).unwrap();
+        let slave=ioctl_tiocgptpeer(&master,flags).unwrap();
+        let before=tcgetattr(&slave).unwrap();
+        assert!(before.local_modes.contains(LocalModes::ICANON|LocalModes::ECHO));
+        let public_phase=PromptSignals::begin().unwrap();
+        public_phase.check().unwrap();public_phase.finish().unwrap();
+        // Same exact parent primitive as SelectedInput::hold_for_birth; no
+        // actual S/site, low privileged child, terminal user or password.
+        let (mut quiet,signals)=begin_held_quiet(slave.as_fd()).unwrap();
+        signals.check().unwrap();quiet.verify().unwrap();
+        assert!(!tcgetattr(&slave).unwrap().local_modes.intersects(LocalModes::ICANON|LocalModes::ECHO));
+        println!("RESET-FIXTURE-HIDDEN-ACT-READY");
+        quiet.restore().unwrap();signals.check().unwrap();signals.finish().unwrap();
+        assert!(same_mode(&tcgetattr(&slave).unwrap(),&before));
+    }
     // Test-created devpts pair only. Neither standard input nor the host's
     // actual controlling terminal is used, and no password is requested.
     #[test]

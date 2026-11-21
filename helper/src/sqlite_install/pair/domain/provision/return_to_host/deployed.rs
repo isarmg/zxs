@@ -1,7 +1,7 @@
 //! A read-only, one-session owner for the ZXS deployment locator and the
 //! authoritative existing site. No Helper state or credential is consulted.
 use super::{PRODUCT,Site,approval,bad,child,contents,layout,lease,mark,product_pin,public_record::Public,
-    rust_site::{PublicAuthority,checked_vault_stamp},shared_lease};
+    rust_site::{PublicAuthority,VaultStamp,checked_vault_stamp},shared_lease};
 use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::{MAX_WIRE,RustPlan},
     sqlite_install::pair::fresh_issuer::{SitePayload,compiled_v17,image}};
 use rustix::fs::{FlockOperation,Mode,OFlags,ResolveFlags,flock,openat2};
@@ -55,6 +55,16 @@ pub(in crate::sqlite_install::pair) struct DeployedSite{
 }
 impl DeployedSite{
     pub(in crate::sqlite_install::pair) fn select()->io::Result<Self>{
+        Self::select_with_system(|path|Pinned::already_mounted(path,Kind::StorageRoot))
+    }
+    pub(in crate::sqlite_install::pair) fn select_for_web_reset()->io::Result<Self>{
+        Self::select_with_system(|path|{
+            let scope=std::sync::Arc::new(crate::maintenance::HostMounts::discovery_view(false)?);
+            Pinned::require_local_root(&scope)?;
+            Pinned::local_storage(path,&scope)
+        })
+    }
+    fn select_with_system(find:impl FnOnce(&Path)->io::Result<Pinned>)->io::Result<Self>{
         compiled_v17()?;
         approval::no_inherited_descriptors()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
@@ -78,7 +88,7 @@ impl DeployedSite{
         let plan=RustPlan::decode(plan_file.bytes()).map_err(bad)?;
         if plan.origin!=payload.origin||plan.sha()!=payload.plan_sha{return Err(unknown());}
         let verified_image=image::Image::select(&payload.elf_sha)?;
-        let system=Pinned::already_mounted(&payload.system,Kind::StorageRoot)?;
+        let system=find(&payload.system)?;
         let system_ex=system.storage_directory()?;
         // Same kernel order as the only original cold supervisor. An online
         // participant holds S SH, in which case this check cannot qualify.
@@ -121,6 +131,9 @@ impl DeployedSite{
     pub(in crate::sqlite_install::pair) fn plan(&self)->&RustPlan{&self.plan}
     pub(in crate::sqlite_install::pair) fn site_sha(&self)->[u8;32]{self.selection.1}
     pub(in crate::sqlite_install::pair) fn require_vault_prefix(&self,wanted:&[u8;224])->io::Result<()>{
+        self.observe_vault(wanted).map(drop)
+    }
+    pub(in crate::sqlite_install::pair) fn observe_vault(&self,wanted:&[u8;224])->io::Result<ObservedVault<'_>>{
         self.require()?;
         let vault=product_pin(&self.site_ex,VAULT,false)?;
         let m=vault.metadata()?;
@@ -138,8 +151,55 @@ impl DeployedSite{
             checked_vault_stamp(&leaf(&dir,RECORD)?,mount)?!=stamp||mark(&product_pin(&self.site_ex,VAULT,false)?)?!=mark(&dir)?{
             return Err(unknown());
         }
-        self.require()
+        // Retain only the original non-readable pin, never the prefix reader.
+        drop(read);
+        let witness=ObservedVault{site:self,dir,original,stamp,mount};
+        witness.require()?;Ok(witness)
     }
+}
+pub(in crate::sqlite_install::pair) struct ObservedVault<'a>{
+    site:&'a DeployedSite,dir:File,original:File,stamp:VaultStamp,mount:u64,
+}
+impl ObservedVault<'_>{
+    pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
+        self.site.require()?;
+        let parent=mark(&self.dir)?;
+        if parent.1!=self.mount||mark(&product_pin(&self.site.site_ex,VAULT,false)?)?!=parent{
+            return Err(unknown());
+        }
+        contents(&self.dir,&[b"credential.v1"])?;
+        layout::bare_acl(&self.dir,c"system.posix_acl_access")?;layout::bare_acl(&self.dir,c"system.posix_acl_default")?;
+        if checked_vault_stamp(&self.original,self.mount)?!=self.stamp||
+            checked_vault_stamp(&leaf(&self.dir,RECORD)?,self.mount)?!=self.stamp{
+            return Err(unknown());
+        }
+        self.site.require()
+    }
+}
+
+/// Qualify the original installed origin in the private Web-reset worker
+/// before lowering, without opening the vault or acquiring a second lock.
+pub(in crate::sqlite_install::pair) fn verify_deployed_worker(payload:&SitePayload,plan:&RustPlan)->io::Result<()>{
+    compiled_v17()?;
+    if payload.origin!=plan.origin||payload.plan_sha!=plan.sha(){return Err(unknown());}
+    let site=Site::product(approval::host_admin()?,&payload.origin.instance,false)?;
+    let parent=child(&site.chain[PRODUCT.len()-1],c".")?;
+    protected_parent(&parent)?;
+    let (selector,record)=locator(&parent)?;
+    let expected=(payload.origin.instance,payload.sha()?);
+    if record!=expected{return Err(unknown());}
+    layout::verify_registered_instance(&site,payload.subject.tuple().2)?;
+    let dir=child(site.base(),c".")?;
+    if mark(&dir)?!=mark(site.base())?{return Err(unknown());}
+    layout::bare_acl(&dir,c"system.posix_acl_default")?;
+    contents(&dir,&[b"site.v1",b"rust.install",b"vault"])?;
+    let auth=PublicAuthority::select(&dir)?;
+    let installed=Public::select(&dir,c"rust.install",1..=MAX_WIRE)?;
+    if auth.bytes()!=payload.encode()?||installed.bytes()!=plan.wire(){return Err(unknown());}
+    installed.require(&dir,c"rust.install")?;auth.require(&dir)?;
+    let (named,again)=locator(&parent)?;
+    if again!=expected||super::live::Stamp::on(&named)?!=super::live::Stamp::on(&selector)?{return Err(unknown());}
+    site.check()
 }
 
 #[cfg(test)]

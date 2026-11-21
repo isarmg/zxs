@@ -6,7 +6,7 @@ mod layout;
 mod start;
 mod public_record;
 mod deployed;
-pub(in crate::sqlite_install::pair) use deployed::DeployedSite;
+pub(in crate::sqlite_install::pair) use deployed::{DeployedSite,verify_deployed_worker};
 pub(in crate::sqlite_install::pair) use rust_vault_io::{Allocated,finish_seen_pending,verify_fresh_vault};
 pub(in crate::sqlite_install::pair) use rust_site::{RustSite,VaultStamp,checked_vault_stamp,verify_fresh_worker};
 pub(super) use layout::bare_acl;

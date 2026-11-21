@@ -80,6 +80,8 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 ## 本机部署与离线维护
 
+[原部署的 Web 管理员离线重置与只读回执](docs/web-admin-offline-reset.md)只认当前原 v17 站点；不更改 SMB 凭据。
+
 - [无状态发现](docs/discovery.md)只根据本次实际挂载和固定的 SYSTEM 元数据，或本会话给出的绝对目录，报告候选。候选不是授权，不自动选盘或初始化。
 - [新池、同一原 INIT 续作与查询](docs/sqlite-first-install.md)要求当前有前台授权、明确提供原 INIT 主体和数值 UID/GID；不设置 Helper 偏好或保存授权。继续原单需要原件及原标记，查询不自动修改。
 - [新 v17 私有首设](docs/private-fresh-zxs-v17.md)可从原始 INIT 依据、单 ELF 的独立预期 SHA-256 和实际前台确认，接原低权限的 SQLite 与新凭据发行。此处没有迁移、服务启停或自动接管。

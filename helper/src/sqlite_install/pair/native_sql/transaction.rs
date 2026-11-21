@@ -32,6 +32,18 @@ impl<'s> AccountCut<'s>{
     }
     fn clean(&self) -> io::Result<()> { self.unchanged()?; self.database.sidecars_absent() }
     pub(super) fn fresh_origin(&self,expected:[u64;3])->io::Result<()>{self.clean()?;self.database.matches_fresh_origin(expected)}
+    pub(super) fn original_objects(&self)
+        ->io::Result<(std::fs::File,[u8;64],crate::sqlite_install::markers::SystemObservation)>{
+        use crate::sqlite_install::pair::fresh_issuer::InitialDatabase;
+        self.clean()?;
+        let pin=self.database.fresh_observation_pin()?;
+        let source=self.locking.source();
+        let stamp=InitialDatabase::observation_on(&pin,source.uid())?;
+        let marker=self.marker.observe(source,&self.want)?;
+        self.clean()?;
+        if InitialDatabase::observation_on(&pin,source.uid())?!=stamp{return Err(bad("original Web database metadata changed"));}
+        Ok((pin,stamp,marker))
+    }
     pub(super) fn read<T>(&self,f:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<T>{
         self.clean()?;
         let (mark,value)=observed::at_original(&self.pool,&self.init,self.locking,&self.database,&self.schema,&self.marker,f)?;

@@ -453,3 +453,12 @@ impl RustPending<'_,'_,'_>{
         Ok(active)
     }
 }
+
+#[cfg(test)]
+pub(super) fn web_reset_fixture_pair(tx:&Transaction<'_>,plan:&RustPlan,actor:Id){
+    let mut sid=[71;28];sid[..12].copy_from_slice(&SID_PREFIX);sid[24..].copy_from_slice(&1000u32.to_le_bytes());
+    let birth=Birth::new(plan,actor,[81;16],Ids::checked([82;16],[83;16]).unwrap(),
+        b"admin.fixture",b"smb.fixture",sid,[84;16]).unwrap();
+    birth.reserve(tx,plan,&PreparedWeb::synthetic([85;16],[86;32])).unwrap();
+    birth.finish(tx,plan).unwrap();
+}

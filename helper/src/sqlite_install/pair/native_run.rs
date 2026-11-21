@@ -6,6 +6,8 @@ mod worker;
 mod layout;
 mod first_browser;
 mod rust_credentials;
+mod web_admin_reset;
+pub(crate) use web_admin_reset::{Selection as WebAdministratorReset,worker as web_admin_reset_worker};
 pub(in crate::sqlite_install::pair) use rust_credentials::{DurableRustPending,RustEnrollmentApproval,FreshActive,transact_fresh};
 pub(crate) use rust_credentials::{account_worker as rust_account_worker,vault_worker as rust_vault_worker};
 mod copy_repair_browser;

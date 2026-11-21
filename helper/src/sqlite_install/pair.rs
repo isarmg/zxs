@@ -16,7 +16,7 @@ pub(crate) use native_run::{RetirementCheck,ImportCheck,check_deployment};
 mod rust_enroll;
 mod fresh_issuer;
 pub(super) use fresh_issuer::{ExplicitSubject,compiled_v17,require_v17};
-pub(crate) use native_run::{rust_account_worker,rust_vault_worker};
+pub(crate) use native_run::{rust_account_worker,rust_vault_worker,WebAdministratorReset,web_admin_reset_worker};
 mod recycle;
 mod domain;
 

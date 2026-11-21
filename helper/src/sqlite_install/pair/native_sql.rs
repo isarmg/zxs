@@ -5,6 +5,7 @@ use rusqlite::{params,Row,Transaction};
 use std::io;
 pub(super) mod transaction;
 pub(in crate::sqlite_install::pair) mod rust_vault;
+pub(in crate::sqlite_install::pair) mod web_reset;
 pub(in crate::sqlite_install) use transaction::WriteGate;
 #[derive(Clone, Copy)]
 struct Core { pool: Id, init: Id, op: Id, actor: Id, approval: Id }

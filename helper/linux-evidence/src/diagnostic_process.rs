@@ -161,7 +161,7 @@ fn prepare_fixed_panel_exec(cmd:&mut Command,original:&File,action:&'static str,
 /// Fixed private child kinds. Neither can execute a caller-supplied program
 /// or inherit descriptors beyond the same dedicated 3/4 layout.
 #[derive(Clone,Copy)]
-pub enum OfflineSql { FirstLayout, FirstBrowser, RustAccount, RustVaultWriter, CopyRepairBrowser }
+pub enum OfflineSql { FirstLayout, FirstBrowser, RustAccount, RustVaultWriter, CopyRepairBrowser, WebAdministratorReset }
 
 /// The account SQL child retains the operator's TERMINAL session (not
 /// the unrelated diagnostic worker session). Only 3=private seqpacket and
@@ -193,6 +193,7 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
         let action=match mode{OfflineSql::FirstLayout=>c"__first-layout-sql-v9",OfflineSql::FirstBrowser=>c"__first-install-browser-v1",
             OfflineSql::RustAccount=>c"__rust-account-sql-v1",OfflineSql::RustVaultWriter=>c"__rust-vault-writer-v1",
             OfflineSql::CopyRepairBrowser=>c"__copy-repair-browser-v2",
+            OfflineSql::WebAdministratorReset=>c"__zxs-web-admin-reset-sql-v1",
         };
         let argv=[c"helper".as_ptr(),action.as_ptr(),std::ptr::null()];
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
