@@ -284,3 +284,17 @@ def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, no
     store.check()
     if observer is not None: observer.check()
     return result
+
+
+def compare_snapshot_file(left: Selection, path, *, observer):
+    """The chosen counterpart may be any .zxs, not necessarily a node of left's STORE."""
+    from ..comparison import compare_archive_contents
+
+    observer.check()
+    path = Path(path).absolute()
+    if path.suffix.lower() != ".zxs": raise Rejected("请另选一份 .zxs 快照文件")
+    right = Selection.open(path, observer=observer)  # No retained right handle/capability.
+    observer.begin("compare")
+    changes = compare_archive_contents(left.browser, right.browser)
+    observer.check()
+    return right.path, right.browser.commit, changes

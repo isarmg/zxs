@@ -12,11 +12,12 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import comparison, freeze
-from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection, Verification, compare_version
+from zipworkspace.desktop.selection import (PlainSelection, Selection, StoreSelection, Verification,
+                                            compare_snapshot_file, compare_version)
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
 
 
-def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None):
+def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None, repo="1"*32):
     manifest = Manifest()
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as out:
         for name, data in rows:
@@ -24,7 +25,7 @@ def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None):
             manifest.add(name, is_dir, 0 if is_dir else len(data),
                          None if is_dir else hashlib.sha256(data).hexdigest())
             out.writestr(name + ("/" if is_dir else ""), data or b"")
-        out.comment = Commit("1"*32, "2"*32, generation, operation, parent, manifest.digest()).encode()
+        out.comment = Commit(repo, "2"*32, generation, operation, parent, manifest.digest()).encode()
     return Selection.open(path)
 
 
@@ -100,6 +101,65 @@ class CompareVersions(unittest.TestCase):
         self.assertEqual((names["kind"].before, names["kind"].after), ("file", "directory"))
         self.assertEqual((names["note"].before_bytes, names["note"].after_bytes), (3, 3))
         self.assertEqual(len(view.rows), 4)  # a comparison consumes only a temporary dict
+
+    def test_two_explicit_files_from_different_repos_need_no_store_or_left_reopen(self):
+        from zipworkspace.desktop import selection
+        other = snapshot(self.root/"other-project.zxs",
+                         [("note", b"new"), ("empty-new", None)], "6"*32, repo="9"*32)
+        saved = self.left.path.rename(self.root/"older-left.zxs")
+        original = selection.named_document
+        def only_other(path):
+            self.assertEqual(path, other.path)
+            return original(path)
+        with patch.object(selection, "named_document", side_effect=only_other) as opens, \
+             patch.object(selection, "Catalog", side_effect=AssertionError("no inventory")), \
+             patch.object(sqlite3, "connect", side_effect=AssertionError("no worktree")):
+            path, marker, report = compare_snapshot_file(self.left, other.path, observer=Verification())
+        opens.assert_called_once()
+        self.assertTrue(saved.is_file())
+        self.assertEqual((path, marker.repo), (other.path, other.browser.commit.repo))
+        self.assertEqual((report.added, report.changed, report.missing), (1, 1, 3))
+        with self.assertRaisesRegex(Rejected, "not from one"):
+            comparison.compare_snapshots(self.left.browser, other.browser)  # history remains distinct
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop")
+    def test_direct_snapshot_picker_compares_without_store_and_rejects_a_late_previous_view(self):
+        from PySide6.QtWidgets import QApplication, QFileDialog
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        try:
+            win.archive.show_selection(self.left)
+            pane = win.archive.comparison
+            other = snapshot(self.root/"different.zxs", [("folder", None)], "6"*32, repo="9"*32)
+            win.archive.views.setCurrentWidget(pane)
+
+            def begin():
+                future = Future()
+                with patch.object(QFileDialog, "getOpenFileName", return_value=(str(other.path), "")), \
+                     patch.object(win.pool, "submit", return_value=future) as queued:
+                    pane.choose_snapshot.click()
+                return future, queued.call_args.args[0]
+
+            future, run = begin()
+            future.set_result(run()); win.poll()
+            self.assertIsNone(win.archive.store)
+            self.assertIs(win.archive.selection, self.left)
+            self.assertEqual(pane.report.added, 1)
+            self.assertIn("不推断仓库", pane.summary.text())
+
+            future, run = begin()
+            result = run()
+            win.archive.show_selection(other)
+            notice = win.note.text()
+            win.poll()
+            future.set_result(result); win.poll()
+            self.assertIsNone(pane.report)
+            self.assertEqual(win.note.text(), notice)
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
     def test_catalog_cancellation_stops_before_reading_the_next_slot(self):
         from zipworkspace import refs

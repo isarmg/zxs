@@ -182,6 +182,11 @@ def compare_snapshots(before, other):
     """Both ArchiveBrowsers already verified; never open live bodies here."""
     if before.commit.repo != other.commit.repo:
         raise Rejected("the two snapshots are not from one archive repository")
+    return compare_archive_contents(before, other)
+
+
+def compare_archive_contents(before, other):
+    """Compare two verified logical trees without implying any history relation."""
     if before.commit.tree == other.commit.tree:
         return Changes(0, 0, 0, ())
     return Changes(*_changes(_rows(before), dict(_rows(other))))

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from .. import comparison
 from ..model import Rejected
-from .selection import Verification, compare_version as compare_listed_version
+from .selection import Verification, compare_snapshot_file, compare_version as compare_listed_version
 from .widgets import Table, button, label
 
 
@@ -13,9 +13,12 @@ class ComparisonPane(QWidget):
         self.owner = owner
         self.active_read = None
         layout = QVBoxLayout(self)
-        layout.addWidget(label("可以比较本机文件夹、从「历史」或「分支」选另一版本，或在「核验普通 ZIP」页比较两次核验的内容。比较只读，不同步文件。"))
+        layout.addWidget(label("可以直接选另一份快照、比本机文件夹、从历史选版本，或比较普通 ZIP。所有比较只读，不同步文件。"))
+        targets = QHBoxLayout()
         self.choose = button("选择文件夹并比较…", self.pick)
-        layout.addWidget(self.choose)
+        self.choose_snapshot = button("选择另一份 .zxs 并比较…", self.pick_snapshot)
+        targets.addWidget(self.choose); targets.addWidget(self.choose_snapshot)
+        layout.addLayout(targets)
         self.summary = label()
         layout.addWidget(self.summary)
         self.table = Table(("相对路径", "差异", "当前快照", "对照对象"), "只读版本或目录对比结果")
@@ -33,6 +36,7 @@ class ComparisonPane(QWidget):
         self.clear()
         enabled = comparison.available()
         self.choose.setEnabled(snapshot is not None and enabled)
+        self.choose_snapshot.setEnabled(snapshot is not None)
         self.summary.setText("请先打开并核验一个快照。" if snapshot is None else
             f"当前快照：{snapshot.path}\n节点：{snapshot.browser.commit.operation}\n"
             + ("尚未开始比较。" if enabled else "本机目录比较在此平台不可用；也可以从历史或分支选择版本对照。"))
@@ -59,6 +63,59 @@ class ComparisonPane(QWidget):
 
     def matches(self, snapshot, request):
         return self.snapshot is snapshot and self.request is request
+
+    def pick_snapshot(self):
+        chosen = self.snapshot
+        if chosen is None or self.owner.pending is not None: return
+        name, _ = QFileDialog.getOpenFileName(self, "选择用于内容对照的另一份 .zxs", "", "目录快照 (*.zxs *.ZXS)",
+                                             options=QFileDialog.Option.ReadOnly)
+        if name and self.snapshot is chosen: self.compare_file(name)
+
+    def compare_file(self, name):
+        chosen = self.snapshot
+        if chosen is None or self.owner.pending is not None: return False
+        self.clear()
+        self.mode = "file"
+        request = self.request = object()
+        observer = self.active_read = Verification()
+        pair = (f"当前快照：{str(chosen.path)!r} · 节点 {chosen.browser.commit.operation}\n"
+                f"本次所选：{str(name)!r}\n只比较两个归档内容，不推断仓库、先后或共同历史。")
+        self.summary.setText(pair + "\n正在核验所选 .zxs…")
+
+        def work():
+            try: return compare_snapshot_file(chosen, name, observer=observer), None
+            except Exception as error: return None, error
+
+        def done(outcome):
+            if not self.matches(chosen, request): return
+            self.active_read = None
+            result, error = outcome
+            if observer.cancelled:
+                self.summary.setText(pair + "\n已取消；未显示本次对照。")
+                self.owner.inform("已取消快照文件对照，当前快照未更改。")
+            elif error is not None:
+                self.summary.setText(pair + f"\n未完成文件对照：{error}")
+                self.owner.inform("未完成快照文件对照；请查看对比页。")
+            else:
+                _, marker, self.report = result
+                delta = self.report
+                self.summary.setText(pair + f"\n所选节点：{marker.operation}"
+                                     f"\n仅所选 {delta.added} · 不同 {delta.changed} · 仅当前 {delta.missing}。"
+                                     + ("逻辑树内容没有差异。" if not delta.rows else ""))
+                self.show_page(0)
+                self.owner.inform("只读的快照内容对照已完成，未切换快照、归档存储或工作树。")
+
+        def progress():
+            return observer.progress() if self.matches(chosen, request) else ("", 0, None)
+
+        try:
+            future = self.owner.job("正在只读核验另一份快照的内容…", work, done, cancel=observer.cancel,
+                                    cancel_text="取消快照文件对照", progress_report=progress)
+        except Exception as error:
+            done((None, error))
+        else:
+            if future is None: done((None, Rejected("另一个任务正在执行；本次未启动")))
+        return True
 
     def pick(self):
         chosen = self.snapshot
@@ -227,6 +284,7 @@ class ComparisonPane(QWidget):
         kind = {"directory":"目录", "file":"文件", None:"无"}
         changes = {
             "version": {"added":"仅所选", "changed":"不同", "missing":"仅当前"},
+            "file": {"added":"仅所选", "changed":"不同", "missing":"仅当前"},
             "plain": {"added":"仅普通 ZIP", "changed":"不同", "missing":"仅快照"},
             "folder": {"added":"新增", "changed":"修改", "missing":"缺少"},
         }
