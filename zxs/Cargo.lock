@@ -88,13 +88,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hmac"
-version = "0.13.0"
-dependencies = [
- "digest",
-]
-
-[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 dependencies = [
@@ -122,13 +115,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rc4"
-version = "0.2.0"
-dependencies = [
- "cipher",
-]
-
-[[package]]
 name = "sha2"
 version = "0.11.1"
 dependencies = [
@@ -150,10 +136,11 @@ name = "zxs"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "cipher",
  "cmac",
- "hmac",
+ "digest",
+ "libc",
  "md-5",
- "rc4",
  "sha2",
  "zeroize",
 ]

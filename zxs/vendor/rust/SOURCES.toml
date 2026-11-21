@@ -1,4 +1,5 @@
-# crates.io source archive inventory; no downloaded archive is an executable input here.
+# Original source archive inventory, including code since incorporated into ZXS modules.
+# An internal_module is relative to the ZXS project root, and is not a Cargo package.
 
 [[package]]
 name = "aes"
@@ -155,6 +156,7 @@ commit = "0236c8eb50098dd7f277a71ab89caaeb1e7314df"
 upstream_subdirectory = "hmac"
 archive = "https://static.crates.io/crates/hmac/hmac-0.13.0.crate"
 sha256 = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+internal_module = "src/smb/session/keyed_digest"
 
 [[package]]
 name = "hybrid-array"
@@ -215,6 +217,7 @@ commit = "b516422ebb49ff0d9140b22ac8c2a627d10a452e"
 upstream_subdirectory = "rc4"
 archive = "https://static.crates.io/crates/rc4/rc4-0.2.0.crate"
 sha256 = "840038b674daa9f7a7957440d937951d15c0143c056e631e529141fd780e0c92"
+internal_module = "src/smb/session/strict_verifier/key_exchange"
 
 [[package]]
 name = "sha2"

@@ -201,7 +201,7 @@ impl Mounts {
     }
 
     /// Only the two fixed, already provisioned OS ancestors of the
-    /// dedicated Samba instance may independently change mounts. An
+    /// dedicated ZXS instance may independently change mounts. An
     /// ordinary subtree bind is not a complete root. Btrfs reports an
     /// anon_dev in stat and its superblock device in mountinfo, so use
     /// its original mounted subvolume root inode in that branch instead.

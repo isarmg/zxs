@@ -11,7 +11,7 @@ use crate::{
         },
     },
 };
-use std::{cell::Cell, convert::Infallible, marker::PhantomData, num::NonZeroUsize};
+use std::{cell::Cell, convert::Infallible, marker::PhantomData, num::NonZeroUsize, sync::Arc};
 
 const MAX_READ: u32 = 131_072;
 const PERSISTENT: u64 = 0x0706_0504_0302_0100;
@@ -143,7 +143,7 @@ impl<H> OriginalRequest for Bind<H> {
     fn recheck(&self, _held: &H) -> Result<Facts, Self::Error> { Ok(self.0) }
 }
 
-fn original<'s, H>(owner: &'s OpenCoordinator, facts: Facts, h: H, share: u32) -> Held<'s, H> {
+fn original<H>(owner: &Arc<OpenCoordinator>, facts: Facts, h: H, share: u32) -> Held<H> {
     let op = Bind::<H>(facts, PhantomData);
     owner.reserve(&op, facts, Share::from_bits(share).unwrap()).unwrap().bind(h).unwrap()
 }
@@ -214,7 +214,7 @@ fn checked_short_data_zero_length_and_real_eof_follow_wire_status() {
 }
 
 struct Closer<'a> {
-    owner: &'a OpenCoordinator,
+    owner: &'a Arc<OpenCoordinator>,
     called: &'a Cell<Option<CloseMode>>,
     failure: bool,
     attributes_available: bool,
@@ -286,9 +286,30 @@ fn write_borrows_exact_tcp_data_and_flags_not_framing_or_padding() {
     assert_eq!(command.data.length(), 3);
     assert!(command.data.write_through() && command.data.unbuffered());
     assert_eq!(batch.messages()[0].write_request(2).err(), Some(IoFieldError::ExceedsMaxWrite));
+    assert_eq!(batch.messages()[0].write_target(), Ok(command.open));
     req[96] = 1;
     let frame = framed(&[&req]);
-    assert_eq!(compound(&frame).messages()[0].write_request(MAX_READ).err(), Some(IoFieldError::Malformed));
+    let next = compound(&frame);
+    assert_eq!(next.messages()[0].write_target(), Ok(command.open)); // route only, no RDMA body
+    assert_eq!(next.messages()[0].write_request(MAX_READ).err(), Some(IoFieldError::Malformed));
+}
+
+#[test]
+fn write_routing_never_uses_an_adjacent_header_or_a_standalone_sentinel() {
+    let mut write = write_packet(112, 0, 0, b"");
+    write[80..96].fill(0xff);
+    let frame = framed(&[&write]);
+    assert_eq!(compound(&frame).messages()[0].write_target(), Err(IoFieldError::NoExplicitOpen));
+    let mut first = flush_packet();
+    first[20..24].copy_from_slice(&88u32.to_le_bytes());
+    write[16..20].copy_from_slice(&4u32.to_le_bytes());
+    let frame = framed(&[&first, &write]);
+    let batch = compound(&frame);
+    assert_eq!(batch.messages()[0].write_target(), Err(IoFieldError::WrongCommand));
+    assert_eq!(batch.messages()[1].write_target(), Ok(OpenReference::PreviousInCompound));
+    write.truncate(96); // two raw halves exist, but not a complete fixed member
+    let frame = framed(&[&first, &write]);
+    assert_eq!(compound(&frame).messages()[1].write_target(), Err(IoFieldError::Malformed));
 }
 
 #[test]
@@ -432,23 +453,32 @@ fn reserved_mode_combinations_do_not_write_and_write_through_waits_for_core() {
 }
 
 #[test]
-fn empty_write_and_actual_flush_never_imply_history_or_a_new_open() {
+fn empty_write_never_confirms_earlier_staging_even_on_write_through() {
+    use WriteOpenMode::*;
     use WriteStep::*;
     let table = OpenCoordinator::new(NonZeroUsize::new(1).unwrap());
     let seen = std::cell::RefCell::new(Vec::new());
-    let open = |object, rights| original(&table, facts(object, rights),
-        Writer { seen: &seen, eof: 4, mode: WriteOpenMode::Buffered, fail_flush: false, reported_count: None }, 7);
+    let open = |object, rights, mode, fail_flush| original(&table, facts(object, rights),
+        Writer { seen: &seen, eof: 4, mode, fail_flush, reported_count: None }, 7);
     let wire = framed(&[&write_packet(0, 52, 0, b"")]);
-    assert_eq!(open(FILE, 1).write(data(&wire)), Err(WriteFault::AccessDenied));
-    assert_eq!(open(FILE, 1).flush().err(), Some(WriteFault::AccessDenied));
-    assert_eq!(open(Object::Namespace(POOL), 2).flush().err(), Some(WriteFault::DirectoryFlushUnavailable));
+    assert_eq!(open(FILE, 1, BufferedWriteThrough, true).write(data(&wire)), Err(WriteFault::AccessDenied));
+    assert_eq!(open(FILE, 1, Buffered, false).flush().err(), Some(WriteFault::AccessDenied));
+    assert_eq!(open(Object::Namespace(POOL), 2, Buffered, false).flush().err(), Some(WriteFault::DirectoryFlushUnavailable));
     assert!(seen.borrow().is_empty());
-    let mut h = open(FILE, 6);
-    assert_eq!(h.write(data(&wire)), Ok(WriteCompletion { count: 0, confirmed: false }));
-    assert_eq!(h.original.eof, 4);
-    assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0)]);
-    assert!(h.flush().is_ok());
-    assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0), Flush]);
+    for (mode, fail_flush, expected) in [
+        (Buffered, false, None),
+        (BufferedWriteThrough, true, Some(WriteFault::Confirmation("original flush failed"))),
+    ] {
+        seen.borrow_mut().clear();
+        let mut h = open(FILE, 6, mode, fail_flush);
+        assert_eq!(h.write(data(&wire)), Ok(WriteCompletion { count: 0, confirmed: false }));
+        assert_eq!(h.original.eof, 4);
+        assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0)]);
+        // The previous query didn't run the storage confirmation. A real
+        // explicit FLUSH is still responsible for it and its own outcome.
+        assert_eq!(h.flush().err(), expected);
+        assert_eq!(seen.borrow().as_slice(), &[CheckEof, Write(52, 0), Flush]);
+    }
 }
 
 
@@ -505,7 +535,7 @@ fn optional_close_attributes_have_a_real_flag_and_fixed_layout() {
         (CloseMode::PostQueryAttributes, 0x0081, false, CloseMode::PostQueryAttributes, false),
         (CloseMode::PostQueryAttributes, 0x0081, true, CloseMode::PostQueryAttributes, true),
     ] {
-        let reply = FileReply::close(open(rights, available).close(mode).unwrap());
+        let reply = FileReply::close(&open(rights, available).close(mode).unwrap());
         assert_eq!(called.get(), Some(effective));
         assert_eq!((reply.command(), reply.status()), (0x06, 0));
         let (fixed, payload) = reply.parts();

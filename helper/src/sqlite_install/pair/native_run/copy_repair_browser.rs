@@ -69,7 +69,7 @@ pub(crate) fn worker()->io::Result<()>{
     let channel=Channel::from_owned_child_session(fd,who,digest)?;
     same(parent)?;
     let listener=TcpListener::bind((Ipv4Addr::LOCALHOST,0))?;listener.set_nonblocking(true)?;
-    helper_linux_evidence::native_confinement::first_install_panel(&listener)?;
+    helper_linux_evidence::panel_confinement::first_install_panel(&listener)?;
     let port=listener.local_addr()?.port();let code=random::<32>()?;
     let mut ready=[0;65];ready[..2].copy_from_slice(&port.to_be_bytes());ready[2..34].copy_from_slice(&code);
     same(parent)?;channel.send(Kind::CopyRepairBrowserReady,&digest,&ready)?;

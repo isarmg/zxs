@@ -28,7 +28,7 @@ unsafe extern "C"{
     fn sqlite3_column_int64(s:*mut Stmt,k:c_int)->i64;
     fn sqlite3_get_autocommit(db:*mut Db)->c_int;
 }
-const MAX_SCHEMA_OBJECTS:u16=167;
+const MAX_SCHEMA_OBJECTS:u16=172;
 fn check(rc:c_int)->io::Result<()>{
     if rc==0{return Ok(());}
     let(kind,why)=match rc{
@@ -156,6 +156,9 @@ impl InitialReader{
     pub(crate) fn open(system:&Path,expected:PoolId)->io::Result<Self>{
         let limit=usize::try_from(unsafe{zxs_sql_path_limit()}).map_err(|_|invalid("unknown SQLite Unix VFS"))?;
         let dir=SystemDir::hold(system,limit)?;
+        Self::open_held(dir,expected)
+    }
+    fn open_held(dir:SystemDir,expected:PoolId)->io::Result<Self>{
         // Root and marker identifiers were inspected with statx (no open)
         // and shown distinct, single-link and protected before borrowing this
         // non-DB control file. Only SQLite ever opens the DB or its journal.

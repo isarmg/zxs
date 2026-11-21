@@ -1,5 +1,5 @@
 //! Two and only two protocol identities in one SQLite pool. Web never selects
-//! the Samba secret. Neither an account row nor a share definition opens FILE.
+//! the SMB secret. Neither an account row nor a share definition opens FILE.
 use super::{Catalog,Connection,InitialReader,check,sqlite3_step};
 use crate::{OperationId,PoolId,fs::invalid,identity::AccountId,password::Verifier};
 use std::io;
@@ -23,7 +23,7 @@ impl WebCurrent{
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"Web credentials not accepted")}
 
 /// Only this type can issue a Web management operation. It has no data-open
-/// methods, never accepts a Samba SID or a claimed remote account id.
+/// methods, never accepts a remote SID or a claimed account id.
 pub(crate) struct WebAdmin<'a>{source:&'a InitialReader,account:AccountId,origin:OperationId,generation:i64}
 impl InitialReader{
     pub(crate) fn authenticate_web(&self,login:&str,password:&str)->io::Result<WebAdmin<'_>>{

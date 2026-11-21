@@ -195,18 +195,6 @@ impl RuntimeFile {
         };
         image()?;self.recheck()?;image()
     }
-    /// Only compares an already-held directory with the single "usr" sibling
-    /// of a protected installed manifest. This does not export a parent FD.
-    pub(crate) fn require_samba_usr(&self,usr:&File)->io::Result<()>{
-        self.recheck()?;
-        let parent=self.chain.fds.iter().rev().nth(1).ok_or_else(||io::Error::other("missing original package directory"))?;
-        let pin=File::from(openat(parent,c"usr",path_flags()|OFlags::DIRECTORY,Mode::empty())?);
-        let a=Mark::on(&pin).map_err(|_|io::Error::other("could not identify package directory"))?;
-        let parent_mark=Mark::on(parent).map_err(|_|io::Error::other("could not identify the protected package parent"))?;
-        if self.parts.last()!=Some(&"CAPSULE")||a.mount!=parent_mark.mount||a.entity.dev!=parent_mark.entity.dev
-            ||!a.accepts(true)||Mark::on(usr).ok()!=Some(a){return Err(io::Error::other("not the installed manifest's original usr"));}
-        self.recheck()
-    }
     pub(crate) fn digest(&mut self)->io::Result<[u8;32]> {
         use std::io::Seek;
         self.file.rewind()?;

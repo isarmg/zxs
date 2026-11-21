@@ -1,4 +1,4 @@
--- Native v16 only, after a complete bounded same-cut core-table audit.
+-- Exact v17, after a complete bounded same-cut core-table audit.
 -- Direct references to the immutable volume ID, irrespective of live mode.
 SELECT EXISTS(SELECT 1 FROM main.root_share WHERE volume_id=?1),
        EXISTS(SELECT 1 FROM main.file_location WHERE volume_id=?1),

@@ -176,6 +176,53 @@ fn payload_uses_original_lengths_and_fails_member_not_transport() {
     assert_eq!(badly.payload(0),Some(Payload::InvalidParameter)); settle(&mut c,&mut badly);
 }
 
+fn rename_debt_header()->Vec<u8>{
+    let mut q=request(SET_INFO,1,1,3);
+    p32(&mut q,16,SIGNED);p32(&mut q,36,1);p64(&mut q,40,1);
+    p16(&mut q,64,33);q[66]=1;q[67]=10;p32(&mut q,68,22);p16(&mut q,72,96);
+    p64(&mut q,80,1);p64(&mut q,88,2);p32(&mut q,112,2);p16(&mut q,116,u16::from(b'x'));
+    q.truncate(118);q
+}
+
+#[test]
+fn retaining_ordinary_move_debt_does_not_grant_or_settle_and_drop_stops_only_its_origin(){
+    // Ledger only. Marking the wire bit is not a signature or Core grant;
+    // no prepared FILE or runtime pending record is made by this fixture.
+    let mut original=ready(3);
+    let neighbour=ready(3);
+    let signed_shape=rename_debt_header();
+    let before=original.window.next;
+    let held=parsed(&signed_shape,|frame|{
+        let due=original.debit(frame).unwrap();
+        original.retain_move_debt(due,&frame.messages()[0]).unwrap()
+    });
+    assert_eq!((original.window.available(),original.window.next,original.in_flight),(2,before,1));
+    parsed(&signed_shape,|frame|{
+        let raw=&frame.messages()[0];
+        assert_eq!(held.require(&original,raw),Ok(()));
+        assert_eq!(held.require(&neighbour,raw),Err(Fault::WrongBatch));
+    });
+    for change in [6,14,24]{
+        let mut changed=signed_shape.clone();changed[change]^=1;
+        parsed(&changed,|frame|assert_eq!(held.require(&original,&frame.messages()[0]),Err(Fault::WrongBatch)));
+    }
+    drop(held);
+    assert_eq!(original.alive(),Err(Fault::Closed));
+    assert_eq!(neighbour.alive(),Ok(()));
+    assert_eq!((original.window.available(),original.window.next,original.in_flight),(2,before,1));
+}
+
+#[test]
+fn the_one_move_debt_cannot_absorb_another_charge_on_its_connection(){
+    let mut c=ready(3);
+    let shape=rename_debt_header();
+    let due=parsed(&shape,|frame|c.debit(frame).unwrap());
+    let other=accept(&mut c,vec![request(13,2,1,2)]).unwrap();
+    parsed(&shape,|frame|assert!(matches!(c.retain_move_debt(due,&frame.messages()[0]),Err(Fault::WrongBatch))));
+    assert_eq!((c.in_flight,c.window.available(),c.alive()),(2,1,Err(Fault::Closed)));
+    drop(other);
+}
+
 #[test]
 fn only_matching_actual_synchronous_reply_can_publish_grants_exactly_once() {
     let mut c = ready(2); let mut other = ready(2);

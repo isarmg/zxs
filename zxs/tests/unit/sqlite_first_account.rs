@@ -16,7 +16,7 @@ pub(super) fn rows()->[String;4]{
     let wn=field("web_login_hex");let sn=field("smb_login_hex");let sid=field("smb_sid");
     let salt=field("web_salt");let tag=field("web_verifier");let inst=field("instance");let bound=field("setup_bound_sha");
     let actor=field("offline_actor");let sha=field("request_sha");
-    [format!("INSERT INTO account_pair VALUES(1,X'{op}',X'{app}',X'{inst}',X'{bound}',X'{web}',X'{wn}',X'{smb}',X'{sn}',X'{sid}');"),
+    [format!("INSERT INTO account_pair VALUES(1,X'{op}',X'{app}',X'{inst}',X'{bound}',X'{web}',X'{wn}',X'{smb}',X'{sn}',X'{sid}',0,NULL);"),
      format!("INSERT INTO web_password VALUES(1,X'{op}',1,X'{salt}',X'{tag}');"),
      format!("INSERT INTO operation VALUES(X'{op}',2,X'{actor}',X'{sha}',0);"),
      format!("UPDATE operation SET state=1 WHERE op_id=X'{op}' AND kind=2 AND state=0;")]

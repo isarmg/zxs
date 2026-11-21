@@ -3,7 +3,7 @@
 use super::{access::{self,ExternalHttps},manual,App,BAD,REJECT,Reply,Request,Token};
 use crate::fs::invalid;
 use std::{io::{self,Read,Write},net::{IpAddr,SocketAddr,TcpListener,TcpStream},os::fd::AsRawFd,
-    sync::{atomic::{compiler_fence,AtomicBool,Ordering},mpsc},time::{Duration,Instant}};
+    sync::{OnceLock,atomic::{compiler_fence,AtomicBool,Ordering},mpsc},time::{Duration,Instant}};
 
 pub(super) struct PrivateBytes(pub(super) Vec<u8>);
 impl Drop for PrivateBytes{
@@ -121,8 +121,11 @@ fn admission(closing:&AtomicBool,stopping:&impl Fn()->bool,run:impl FnOnce()->Re
     if admitted(closing,stopping){run()}else{stopped()}
 }
 fn stopped()->Reply{Reply::text("503 Service Unavailable","管理服务正在停止。")}
-fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,jobs:mpsc::SyncSender<Job>){
+fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,accepting:&AtomicBool,jobs:mpsc::SyncSender<Job>){
     while !closing.load(Ordering::Acquire){
+        if !accepting.load(Ordering::Acquire){
+            std::thread::sleep(Duration::from_millis(10));continue;
+        }
         let s=match unsafe{zxs_web_readable(ls.as_raw_fd())}{
             0=>continue,1=>match ls.accept(){Ok((s,_))=>s,Err(e)if retry_accept(&e)=>continue,
                 Err(e)=>{worker_fault(closing,&jobs,e);break;}},
@@ -136,7 +139,21 @@ fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,jobs:
         });
     }
 }
+#[cfg(test)]
 pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,stopping:impl Fn()->bool+Sync)->io::Result<()>{
+    let accepting=AtomicBool::new(true); // Only a fixture's private listener.
+    serve_after(ls,proxy,app,stopping,&accepting,||Ok(()))
+}
+pub(super) fn serve_ready<F:Fn()->bool+Send+Sync>(ls:&TcpListener,app:&mut App<'_>,
+    ready:impl FnOnce()->io::Result<F>)->io::Result<()>{
+    let accepting=AtomicBool::new(false);
+    let original=OnceLock::<F>::new();
+    let stopping=||original.get().is_some_and(|lost|lost());
+    serve_after(ls,None,app,stopping,&accepting,||
+        original.set(ready()?).map_err(|_|io::Error::other("the same Web original was already admitted")))
+}
+fn serve_after(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,stopping:impl Fn()->bool+Sync,
+    accepting:&AtomicBool,ready:impl FnOnce()->io::Result<()>)->io::Result<()>{
     ls.set_nonblocking(true)?;let closing=AtomicBool::new(false);
     std::thread::scope(|scope|{
         let(tx,rx)=mpsc::sync_channel(WORKERS);let mut failure=None;
@@ -144,10 +161,20 @@ pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_
         let original_stop=&stopping;
         std::thread::Builder::new().name("zxs-manual-work".into()).spawn_scoped(scope,move||manual::run(site,closed,original_stop,orders))?;
         for _ in 0..WORKERS{let jobs=tx.clone();let closed=&closing;
-            if let Err(e)=std::thread::Builder::new().name("zxs-http-io".into()).spawn_scoped(scope,move||worker(ls,proxy,closed,jobs)){
+            if let Err(e)=std::thread::Builder::new().name("zxs-http-io".into()).spawn_scoped(scope,move||worker(ls,proxy,closed,accepting,jobs)){
                 closing.store(true,Ordering::Release);failure=Some(e);break;
             }
         }drop(tx);
+        if !accepting.load(Ordering::Acquire)&&failure.is_none(){
+            // No worker accepted a tuple from the kernel before this cut.
+            // Publish the actual readiness only after both the business
+            // dispatcher and every bounded I/O worker have been created.
+            let opened=ready().and_then(|()|if stopping(){Err(io::ErrorKind::Interrupted.into())}else{Ok(())});
+            match opened{
+                Ok(())=>accepting.store(true,Ordering::Release),
+                Err(e)=>{closing.store(true,Ordering::Release);failure=Some(e);}
+            }
+        }
         loop{
             if stopping(){closing.store(true,Ordering::Release);}
             match rx.recv_timeout(Duration::from_millis(100)){

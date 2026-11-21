@@ -1,23 +1,21 @@
-//! H04 read-only evidence for one explicitly selected original F. Native v16
+//! H04 read-only evidence for one explicitly selected original F. v17
 //! has no retirement operation, unpublish or state writer. A clear observation
 //! is not a durable receipt, permission to retire, or a reusable lease.
 use super::{Id,observed};
 use crate::{maintenance::HostMounts,pinned::{Entity,Kind,Mount,Pinned},sqlite_install::{MARKER,bad,
     catalog::{self,Canonical},engine::{self,Access},markers::{OrdinaryMark,SystemMark},
-    originals::{HeldRoot,LockedSystem,named_backing},reservation::Existing,stage}};
+    originals::{HeldRoot,LockedSystem,named_backing},reservation::Existing}};
 use rusqlite::{Transaction,params};
 use rustix::fs::{FlockOperation,RawDir,flock};
-use sha2::{Digest,Sha256};
 use std::{fs::File,io,mem::MaybeUninit,os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};
 
 const ROW_CEILING:i64=2048;
-const V16_TABLES:&[&str]=&[
+const V17_TABLES:&[&str]=&[
     "operation","pool_birth","volume_claim","account_pair","web_password","credential_reset",
-    "root_share","share_mode","root_entry","file_location","directory_entry","directory_abort",
+    "smb_rust_revision","root_share","share_mode","root_entry","file_location","directory_entry","directory_abort",
     "directory_location","directory_rename","directory_rename_abort","file_transfer","file_transfer_source",
     "file_transfer_void","file_rename","file_rename_abort","first_work","work_edit","manual_node",
 ];
-const LEGACY_DDL:&str="67867b40506b6e72086e7ab948f7ba774f885c3b8d78864130f8f3e1d4937da9";
 fn unknown()->io::Error{bad("cannot prove a complete original ordinary-volume retirement inventory")}
 fn sql(_:rusqlite::Error)->io::Error{unknown()}
 
@@ -68,23 +66,17 @@ impl std::fmt::Display for ProtectedVolume{
 impl std::error::Error for ProtectedVolume{}
 pub(super) fn protected_volume(e:&io::Error)->bool{e.get_ref().is_some_and(|x|x.is::<ProtectedVolume>())}
 
-pub(super) fn compiled_native16()->io::Result<()>{
-    let exact=crate::fs_tools::hex(LEGACY_DDL).expect("fixed Native v16 DDL SHA-256");
-    if catalog::SCHEMA_VERSION!=16||<[u8;32]>::from(Sha256::digest(stage::SCHEMA.as_bytes()))!=exact{
-        return Err(unknown());
-    }
-    Ok(())
-}
-fn native16()->io::Result<Canonical>{compiled_native16()?;Canonical::new()}
+pub(super) fn compiled_v17()->io::Result<()>{super::fresh_issuer::compiled_v17()}
+fn template()->io::Result<Canonical>{compiled_v17()?;Canonical::new()}
 
-/// Some v16 relationships have no index by volume. Bound each complete
+/// Some v17 relationships have no index by volume. Bound each complete
 /// input first, in the SAME transaction. A partial search never gives a
 /// negative witness. Only static table names, no raw row data, are used.
 fn complete_small_cut(tx:&Transaction<'_>)->io::Result<()>{
-    for name in V16_TABLES{
+    for name in V17_TABLES{
         let query=format!("SELECT count(*) FROM (SELECT 1 FROM main.{name} LIMIT ?1)");
         let n:i64=tx.query_row(&query,[ROW_CEILING+1],|r|r.get(0)).map_err(sql)?;
-        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded Native v16 snapshot; not cleared"));}
+        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded v17 snapshot; not cleared"));}
     }
     let mut verify=tx.prepare("PRAGMA main.foreign_key_check").map_err(sql)?;
     if verify.column_count()!=4{return Err(unknown());}
@@ -198,11 +190,18 @@ impl OriginalF{
 /// The authenticated lowered read worker lends the exclusive original S.
 /// The bounded observer is called while the original F and its marker are
 /// still held. It receives facts only, never a reusable lock or marker token.
-pub(super) fn observe<T>(locked:&LockedSystem,scope:&Scope,report:impl FnOnce(Preflight)->T)->io::Result<T>{
+pub(super) fn observe<T>(locked:&LockedSystem,scope:&Scope,actor:&Id,report:impl FnOnce(Preflight)->T)->io::Result<T>{
     let (host,s)=locked.retirement_host()?;
-    let tpl=native16()?;let original=Existing::observed_system(locked)?;let mark=SystemMark::before_sql(locked.source())?;
+    let tpl=template()?;let original=Existing::observed_system(locked)?;let mark=SystemMark::before_sql(locked.source())?;
     let mut anchor=engine::existing(&original,Access::Read)?;
-    let read=|tx:&Transaction<'_>|at_scope(tx,&tpl,locked.source(),scope);
+    let read=|tx:&Transaction<'_>|{
+        let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.pool_birth b JOIN main.operation i
+            ON i.op_id=b.init_op AND i.kind=1 AND i.state=1
+            WHERE b.singleton=1 AND b.pool_id=?1 AND b.init_op=?2 AND i.actor_id=?3)",
+            params![&scope.pool[..],&scope.init[..],&actor[..]],|r|r.get(0)).map_err(sql)?;
+        if !valid{return Err(unknown());}
+        at_scope(tx,&tpl,locked.source(),scope)
+    };
     let (before,choice)=observed::snapshot(&mut anchor,&scope.pool,&scope.init,locked,&original,&tpl,&mark,&read)?;
     let uid=locked.source().uid();
     let f=OriginalF::select(scope,&choice,s,host,uid)?;
@@ -222,7 +221,7 @@ pub(super) fn observe<T>(locked:&LockedSystem,scope:&Scope,report:impl FnOnce(Pr
 }
 
 #[cfg(test)]
-fn inspect(locked:&LockedSystem,scope:&Scope)->io::Result<Preflight>{observe(locked,scope,|v|v)}
+fn inspect(locked:&LockedSystem,scope:&Scope)->io::Result<Preflight>{observe(locked,scope,&[2;16],|v|v)}
 
 #[cfg(test)]
 #[path="../../../tests/sqlite/retire_ordinary.rs"] mod cases;

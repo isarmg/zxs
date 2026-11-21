@@ -1,7 +1,7 @@
 //! Read only the confirmed retained generation, qualified by the active
 //! native SMB account and by the actual dedicated R. A FILE's old DeleteOp
 //! never opens a subsequent retained generation or a different volume.
-use super::{InitialReader,SmbSession,file_number::{self,NativeKey},smb_buffer};
+use super::{InitialReader,SmbSession,denied,file_number::{self,NativeKey},smb_buffer};
 use super::super::{Catalog,Connection,file_location::{Place,Placed},volume::{RecycleMedia,RecycleRoot},
     work_record::{self,Members,ReadRecord}};
 use crate::{FileId,OperationId,Role,fs::{WitnessRead,invalid},
@@ -27,7 +27,9 @@ struct RetainedAt<'a>{
     source:&'a InitialReader,media:&'a RecycleMedia,
     require:&'a dyn Fn(&Connection,&Catalog)->io::Result<()>,
 }
-struct ReadAt<'a>{site:RetainedAt<'a>,file:&'a RetainedFile}
+struct ReadAt<'a>{site:RetainedAt<'a>,file:&'a RetainedFile,previous_after_restore:bool}
+type MatchRound<'a>=&'a dyn Fn(&str,&mut usize)->io::Result<bool>;
+const MAX_FILTER_ROWS:usize=8192;
 impl<'r> SmbSession<'r>{
     pub(super) fn retained<'s>(&'s self)->io::Result<Drive<'s,'r>>{
         let source=self.source;let c=source.at(|db,c|{self.require_current(db,&c)?;Ok(c)})?;
@@ -62,27 +64,44 @@ impl RetainedAt<'_>{
         }
         Ok(())
     }
-    fn page_at(&self,db:&Connection,c:&Catalog,after:Option<OperationId>,limit:u8)->io::Result<Vec<Item>>{
+    fn page_at(&self,db:&Connection,c:&Catalog,after:Option<OperationId>,limit:u8,
+        matching:Option<MatchRound<'_>>,
+    )->io::Result<Vec<Item>>{
         self.select(db,c)?;
         let q=db.prepare(c"SELECT l.position_op,l.display,l.file_id FROM main.file_location l
           JOIN main.operation o ON l.position_op=o.op_id AND o.kind=12 AND o.state=1
           JOIN main.file_transfer m ON m.transfer_op=l.position_op AND m.file_id=l.file_id AND m.direction=1
           WHERE l.volume_id=?1 AND l.role=1 AND l.position_op>?2 ORDER BY l.position_op LIMIT ?3")?;
         q.bind_bytes(1,&self.media.volume().0)?;q.bind_bytes(2,&after.unwrap_or(OperationId([0;16])).0)?;
-        q.bind_integer(3,i64::from(limit))?;let mut rows=Vec::new();
+        let query_limit=if matching.is_some()&&limit!=0{(MAX_FILTER_ROWS+1) as i64}else{i64::from(limit)};
+        q.bind_integer(3,query_limit)?;
+        let mut rows=Vec::new();let mut scanned=0usize;let mut work=0usize;
         while work_record::start_one(&q)?{
-            rows.push(Item{op:OperationId(q.array(0)?),name:crate::display::component(q.blob(1,222)?,222)?.to_owned(),
+            let op=OperationId(q.array(0)?);
+            if let Some(matched)=matching{
+                if scanned==MAX_FILTER_ROWS{
+                    return Err(io::Error::new(io::ErrorKind::OutOfMemory,"retained directory scan budget"));
+                }
+                scanned+=1;
+                if !matched(&op.to_string(),&mut work)?{continue;}
+                rows.try_reserve(1).map_err(|_|io::ErrorKind::OutOfMemory)?;
+            }
+            rows.push(Item{op,name:crate::display::component(q.blob(1,222)?,222)?.to_owned(),
                 file:FileId(q.array(2)?)});
+            if rows.len()==usize::from(limit)&&matching.is_some(){break;}
         }
         Ok(rows)
     }
     fn page(&self,after:Option<OperationId>,limit:u8)->io::Result<Vec<Item>>{
+        self.page_matching(after,limit,None)
+    }
+    fn page_matching(&self,after:Option<OperationId>,limit:u8,matching:Option<MatchRound<'_>>)->io::Result<Vec<Item>>{
         if limit>16{return Err(invalid("invalid retained page bound"));}
         let src=self.source;
-        let start=src.at(|db,c|self.page_at(db,&c,after,limit))?;
+        let start=src.at(|db,c|self.page_at(db,&c,after,limit,matching))?;
         self.media.require(src)?;
         src.at(|db,c|{
-            if self.page_at(db,&c,after,limit)?!=start{return Err(io::ErrorKind::WouldBlock.into());}
+            if self.page_at(db,&c,after,limit,matching)?!=start{return Err(io::ErrorKind::WouldBlock.into());}
             Ok(start)
         })
     }
@@ -139,7 +158,7 @@ impl Reader<'_,'_,'_>{
     pub(super) fn size(&self)->u64{self.original.view.map_or(0,|r|r.record.logical())}
     pub(super) fn revision(&self)->u64{self.original.view.map_or(0,|r|r.record.key().revision)}
     fn with_read<T>(&self,action:impl FnOnce(ReadAt<'_>)->io::Result<T>)->io::Result<T>{
-        self.drive.with_site(|site|action(ReadAt{site,file:&self.original}))
+        self.drive.with_site(|site|action(ReadAt{site,file:&self.original,previous_after_restore:true}))
     }
     pub(super) fn range_evidence(&self,offset:u64,n:u64,out:impl Write)->io::Result<Used>{
         self.with_read(|read|read.range_evidence(offset,n,out))
@@ -154,7 +173,7 @@ impl ReadAt<'_>{
         let old=&self.file.place.here;
         match Place::retained(db,c,old.volume,old.op,&old.name){
             Ok(current)if current==*old=>{},
-            Err(e)if e.kind()==io::ErrorKind::NotFound&&self.file.keep==KeepReader::ShareDelete=>{
+            Err(e)if e.kind()==io::ErrorKind::NotFound&&self.previous_after_restore&&self.file.keep==KeepReader::ShareDelete=>{
                 // Only this already-held lease may use the old R bytes.
                 // A new open or a restore must still select the current R row.
                 let q=db.prepare(c"SELECT 1 FROM main.file_transfer m
@@ -216,3 +235,18 @@ impl ReadAt<'_>{
         self.finish(&used)?;Ok(used)
     }
 }
+
+// This is the same canonical business name in both frontends. It is not a
+// wire FileId, an arbitrary path, or a proof the deletion still exists.
+pub(super) fn delete_id(raw:&[u8])->io::Result<OperationId>{
+    if raw.len()!=32||!raw.iter().all(|&b|matches!(b,b'0'..=b'9'|b'a'..=b'f')){return Err(denied());}
+    let op=std::str::from_utf8(raw).map_err(|_|denied())?.parse::<OperationId>().map_err(|_|denied())?;
+    if op.0==[0;16]||op.0==[0xff;16]{return Err(denied());}Ok(op)
+}
+
+#[path="smb_rust_retained.rs"]
+mod rust;
+pub(crate) use rust::{RustRetainedDirectory,RustRetainedFile,RustRetainedKind,RustRetainedPage,RustRetainedReadProof};
+#[cfg(test)]
+#[path="../test/smb/core_retained.rs"]
+mod tests;

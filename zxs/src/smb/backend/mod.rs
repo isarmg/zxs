@@ -1,20 +1,41 @@
 //! The SMB share-mode table is not a catalog, a credential, or a FILE writer.
 //! One coordinator must span all connections/trees for the service. Both pending
 //! and published opens vote; no mutex is held while acquiring or rechecking a
-//! real storage open. There is deliberately no production authenticator or
-//! storage implementation in this slice. These votes alone do not implement
-//! CREATE. Before admitting directories, the adapter must also order the
-//! MS-FSA 2.1.5.1.2 first-directory-open rule with real directory rights and
-//! other opens; a lock-free guess is not evidence. MS-SMB2 2.2.13 requires
-//! ignoring the wire FILE_DISALLOW_EXCLUSIVE option, not forwarding it as a local flag.
+//! real storage open. The storage/root adapter is separate. These votes alone do not implement
+//! CREATE. For ordinary directories MS-FSA 2.1.5.1.2's first actual bound
+//! Open is decided in this same table; a pending seat is not an Open.
+//! MS-SMB2 2.2.13 ignores wire FILE_DISALLOW_EXCLUSIVE.
 pub(in crate::smb) mod path;
 pub(in crate::smb) mod tree_connect;
 mod query;
-pub(in crate::smb) use query::root::{EndOfRoot, RootScanEnd, records::FullRootRecords};
+pub(in crate::smb) use query::root::{EndOfRoot,RootCursorEffect,RootPendingToken,RootScanEnd,records::FullRootRecords};
 mod io;
+mod disposition;
+use disposition::DeleteState;
+pub(in crate::smb) use disposition::{DispositionError,PreparedDisposition};
+mod root_open;
+mod file_open;
+mod attribute_tag;
+pub(in crate::smb) use attribute_tag::{DIRECTORY_ATTRIBUTES,FILE_ATTRIBUTES,PreparedAttributeTag};
+pub(crate) use file_open::{FileRenameTarget,OrdinaryMoveAdmission,OrdinaryRenameAdmission};
+mod file_birth;
+pub(crate) use file_birth::FileBirthVote;
+pub(in crate::smb) use file_birth::PreparedBirth;
+mod writable_file_open;
+mod directory_open;
+pub(crate) use directory_open::OrdinaryDirectoryRenameAdmission;
+mod directory_birth;
+pub(crate) use directory_birth::DirectoryBirthVote;
+pub(in crate::smb) use directory_birth::PreparedDirectoryBirth;
+mod retained_open;
+pub(in crate::smb) use retained_open::{PreparedRetainedQuery,PreparedRetainedRead,PreparedRetainedRestore,RestoreError,RetainedOpen,RetiredRetainedRestore};
+pub(in crate::smb) use directory_open::{DirectoryCloseError,DirectoryOpen,DirectoryOpenError,PreparedDirectoryRename,PreparedDirectoryStandard,PreparedOrdinaryQuery};
+pub(in crate::smb) use file_open::{FileCloseError,FileCloseFault,FileOpen,FileOpenError,FileReadError,FileStandardError,OrdinaryRenameError,PreparedCrossFilesystemMove,PreparedFileName,PreparedFileRead,PreparedFileStandard,PreparedNamedFile,PreparedOrdinaryRename,RetiredOrdinaryRename};
+pub(in crate::smb) use writable_file_open::{FileWriteError,PreparedFileEof,PreparedFileFlush,PreparedFileWrite,PreparedWriterRead,PreparedWriterStandard,WritableCloseFault,WritableFileOpen};
+pub(in crate::smb) use root_open::{FS_SIZE_BYTES,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedRootQuery,RetiredRootFs,RetiredRootFsSize,RootCloseError,RootFsError,RootOpen,RootOpenError,RootQueryError};
 pub(super) use io::{CloseCompletion, FlushCompletion, ReadCompletion, ReadFault, WriteCompletion, WriteFault};
 use crate::{DirectoryId, FileId, OperationId, PoolId, VolumeId};
-use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
+use std::{collections::HashMap, num::NonZeroUsize, sync::{Arc,Mutex,Weak}};
 
 /// These are original domain identities, not SMB2_FILEIDs, host paths or
 /// file numbers returned by directory enumeration. A move never changes File.
@@ -88,7 +109,7 @@ impl Vote {
 }
 
 #[derive(Default)]
-struct Counts { live: usize, needs: [usize; 3], denies: [usize; 3] }
+struct Counts { live: usize, bound: usize, retained:usize, needs: [usize; 3], denies: [usize; 3], deletion: Option<DeleteState>, renaming: Option<Weak<()>> }
 
 impl Counts {
     fn conflicts(&self, vote: Vote) -> bool {
@@ -115,10 +136,10 @@ impl Counts {
 #[derive(Default)]
 struct Table { live: usize, objects: HashMap<Object, Counts> }
 
-struct OpenCoordinator { limit: NonZeroUsize, table: Mutex<Table> }
+pub(in crate::smb) struct OpenCoordinator { limit: NonZeroUsize, table: Mutex<Table> }
 
 #[derive(Debug, Eq, PartialEq)]
-enum ReserveError { SharingViolation, Resources, Unavailable }
+enum ReserveError { SharingViolation, DeletePending, Resources, Unavailable }
 
 /// Implement only for a concrete storage-side adapter. The request owns or
 /// borrows the exact original authenticated session/tree and opening intent.
@@ -132,18 +153,20 @@ trait OriginalRequest {
 }
 
 impl OpenCoordinator {
-    fn new(limit: NonZeroUsize) -> Self { Self { limit, table: Mutex::default() } }
+    pub(in crate::smb) fn new(limit: NonZeroUsize) -> Arc<Self> { Arc::new(Self { limit, table: Mutex::default() }) }
 
     /// Existing files: reserve before acquiring the actual core open. New
     /// files: reserve inside the core's provisional-identity callback before
     /// its durable mutation. The two cuts refer to the same original request.
-    fn reserve<'s, 'q, Q: OriginalRequest>(
-        &'s self, request: &'q Q, planned: Facts, share: Share,
-    ) -> Result<Pending<'s, 'q, Q>, ReserveError> {
+    fn reserve<'q, Q: OriginalRequest>(
+        self:&Arc<Self>, request: &'q Q, planned: Facts, share: Share,
+    ) -> Result<Pending<'q, Q>, ReserveError> {
         let vote = Vote::new(planned, share);
         let mut table = self.table.lock().map_err(|_| ReserveError::Unavailable)?;
-        if table.objects.get(&planned.object).is_some_and(|row| row.conflicts(vote)) {
-            return Err(ReserveError::SharingViolation);
+        if let Some(row)=table.objects.get(&planned.object){
+            if row.deletion.is_some(){return Err(ReserveError::DeletePending);}
+            if row.renaming.is_some(){return Err(ReserveError::SharingViolation);}
+            if row.conflicts(vote){return Err(ReserveError::SharingViolation);}
         }
         if table.live >= self.limit.get() { return Err(ReserveError::Resources); }
         if !table.objects.contains_key(&planned.object) {
@@ -151,20 +174,55 @@ impl OpenCoordinator {
         }
         table.objects.entry(planned.object).or_default().add(vote);
         table.live += 1;
-        Ok(Pending { request, planned, slot: Slot { owner: self, object: planned.object, vote } })
+        Ok(Pending { request, planned, slot: Slot { owner: Arc::clone(self), object: planned.object,
+            vote, bound: false, retained:false, released: false, identity: Arc::new(()) } })
     }
 }
 
 /// A single non-cloneable share vote. It grants no IO and is never a wire ID.
-struct Slot<'s> { owner: &'s OpenCoordinator, object: Object, vote: Vote }
+struct Slot {
+    owner: Arc<OpenCoordinator>, object: Object, vote: Vote, bound: bool,
+    retained:bool, released: bool, identity: Arc<()>,
+}
 
-impl Drop for Slot<'_> {
+impl Slot {
+    fn mark_bound(&mut self)->bool{
+        let Ok(mut table)=self.owner.table.lock() else{return false;};
+        let Some(row)=table.objects.get_mut(&self.object) else{return false;};
+        if self.bound||self.released||row.bound>=row.live||row.deletion.is_some(){return false;}
+        let mut effective=self.vote;
+        // MS-FSA 2.1.5.1.2, after the sharing checks. Our ordinary
+        // directories lack full FILE_GENERIC_WRITE, independent of actual
+        // parent FILE_WRITE_DATA (already reflected in the pending vote).
+        // Only this actual binding learns if earlier real Opens exist. It
+        // may relax its own reservation; never guess from provisional seats.
+        if row.bound==0 && effective.denies&R!=0 &&
+            matches!(self.object,Object::OrdinaryRoot(..)|Object::Directory(..)){
+            row.denies[0]-=1;
+            effective.denies&=!R;
+        }
+        row.bound+=1;
+        if self.retained{row.retained+=1;}
+        drop(table);
+        self.vote=effective;
+        self.bound=true;
+        true
+    }
+}
+
+impl Drop for Slot {
     fn drop(&mut self) {
+        if self.released{return;}
         // A poisoned table already refuses all new opens. Never reset it or
         // let another caller take ownership by removing an unrelated entry.
         let Ok(mut table) = self.owner.table.lock() else { return };
         if let Some(row) = table.objects.get_mut(&self.object) {
+            // Abort/disconnect never arms a mark or starts FILE movement.
+            if row.deletion.as_ref().is_some_and(|mark|mark.is_unarmed_on(&self.identity)){
+                row.deletion=None;
+            }
             row.remove(self.vote);
+            if self.bound{row.bound-=1;if self.retained{row.retained-=1;}}
             if row.live == 0 { table.objects.remove(&self.object); }
             table.live -= 1;
         }
@@ -172,22 +230,24 @@ impl Drop for Slot<'_> {
 }
 
 #[must_use = "dropping a pending reservation cancels it"]
-struct Pending<'s, 'q, Q: OriginalRequest> {
+struct Pending<'q, Q: OriginalRequest> {
     request: &'q Q,
     planned: Facts,
-    slot: Slot<'s>,
+    slot: Slot,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum BindError<E> { Original(E), Changed }
 
-impl<'s, Q: OriginalRequest> Pending<'s, '_, Q> {
+impl<Q: OriginalRequest> Pending<'_, Q> {
+    fn as_retained(mut self)->Self{self.slot.retained=true;self}
     /// The hold can be created only after the matching original request
     /// rechecks its real storage handle. A future wire OpenTable may publish
     /// that hold, never a Pending or just a share vote.
-    fn bind(self, held: Q::Held) -> Result<Held<'s, Q::Held>, BindError<Q::Error>> {
+    fn bind(mut self, held: Q::Held) -> Result<Held<Q::Held>, BindError<Q::Error>> {
         let result = self.request.recheck(&held).map_err(BindError::Original)
-            .and_then(|now| (now == self.planned).then_some(()).ok_or(BindError::Changed));
+            .and_then(|now| (now == self.planned).then_some(()).ok_or(BindError::Changed))
+            .and_then(|()|self.slot.mark_bound().then_some(()).ok_or(BindError::Changed));
         if let Err(e) = result {
             drop(held); // close the core handle before releasing its vote
             return Err(e);
@@ -199,9 +259,9 @@ impl<'s, Q: OriginalRequest> Pending<'s, '_, Q> {
 /// Declaration order matters: drop the actual storage handle before the vote.
 /// There is no unpair, publish-by-ID, auto-flush, or automatic history commit.
 #[must_use = "dropping the held pair closes the original and releases its share vote"]
-struct Held<'s, H> {
+struct Held<H> {
     original: H,
-    _slot: Slot<'s>,
+    _slot: Slot,
     grant: Grant,
     root_search: query::root::Search,
 }

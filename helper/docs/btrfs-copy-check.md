@@ -20,4 +20,4 @@ helper disk-web --btrfs-copy /绝对路径/volume.img --sha256 可信SHA256
 
 Btrfs 可选用健康的元数据镜像，结果不能证明每份镜像都无误。此命令不验证文件正文，不重放日志，结构报告不等于完整文件校验或物理健康。`image_bytes` 是整份摘要范围，`device_bytes` 是原主超级块的声明范围；可能存在的尾部只计入摘要。不会回显原路径、FSID、卷内名称、工具原文或数据。网页的配对后十分钟也包含整份校验；时间更长请用终端，终端的上游阶段仍有十分钟、300 秒 CPU 和有界输出，不能保证阻塞的宿主 I/O 立即结束。
 
-参见 [Debian btrfs-check(8)](https://manpages.debian.org/trixie/btrfs-progs/btrfs-check.8.en.html) 和 [上游 btrfs-check](https://btrfs.readthedocs.io/en/latest/btrfs-check.html)。发行依赖[由管理员按独立预期摘要核准的私有包](../packaging/debian13-amd64/README.md)；当前只完成源码和上游静态对读，未运行、组包或做设备验收。
+参见 [Debian btrfs-check(8)](https://manpages.debian.org/trixie/btrfs-progs/btrfs-check.8.en.html) 和 [上游 btrfs-check](https://btrfs.readthedocs.io/en/latest/btrfs-check.html)。发行依赖[独立核准确切 SHA-256 的私有材料](../packaging/debian13-amd64/README.md)；当前只完成源码和上游静态对读，未运行、组包或做设备验收。

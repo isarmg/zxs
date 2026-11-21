@@ -1,13 +1,32 @@
 //! A still-live approved parent must participate after the original child
 //! has permanently dropped identity. A right-looking sealed request and
 //! the static peer credential of a socketpair cannot substitute for this.
-use super::super::super::handoff::start_control;
 use crate::sqlite_install::bad;
-use rustix::{fd::AsFd,net::{SendFlags,UCred,send,sockopt},process::{Gid,Pid,Uid},
+use rustix::{fd::AsFd,net::{RecvAncillaryBuffer,RecvAncillaryMessage,RecvFlags,ReturnFlags,SendFlags,UCred,recvmsg,send,sockopt},process::{Gid,Pid,Uid},
     rand::{GetRandomFlags,getrandom}};
-use std::{io,thread,time::{Duration,Instant}};
+use std::{io::{self,IoSliceMut},mem::MaybeUninit,thread,time::{Duration,Instant}};
 
 type Frame=[u8;65];
+// This live challenge has exactly one kernel sender record and no passed FDs.
+fn start_control(socket:&impl AsFd,expected:UCred)->io::Result<Frame>{
+    let mut frame=[0;65];
+    let mut room=[MaybeUninit::uninit();rustix::cmsg_space!(ScmRights(1),ScmCredentials(1))];
+    let mut control=RecvAncillaryBuffer::new(&mut room);
+    let got=recvmsg(socket,&mut [IoSliceMut::new(&mut frame)],&mut control,RecvFlags::DONTWAIT|RecvFlags::CMSG_CLOEXEC)?;
+    let mut sender=None;let mut invalid=false;
+    for record in control.drain(){
+        match record{
+            RecvAncillaryMessage::ScmCredentials(who) if sender.is_none()=>sender=Some(who),
+            _=>invalid=true,
+        }
+    }
+    if invalid||got.bytes!=65||got.flags.intersects(ReturnFlags::TRUNC|ReturnFlags::CTRUNC)||
+        !sender.is_some_and(|w|w.pid==expected.pid&&w.uid==expected.uid&&w.gid==expected.gid){
+        return Err(bad("wrong actual sender or malformed live host authorization"));
+    }
+    Ok(frame)
+}
+
 fn frame(kind:u8,nonce:&[u8;32],scope:&[u8;32])->Frame{
     let mut b=[0;65];b[0]=kind;b[1..33].copy_from_slice(nonce);b[33..].copy_from_slice(scope);b
 }

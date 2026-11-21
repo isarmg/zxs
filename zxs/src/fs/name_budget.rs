@@ -1,7 +1,7 @@
 //! Geometry of one exact directory, never authority over its contents. A
 //! stored component limit is usable only from the verified original SYSTEM.
 use super::{HeldDir,PathBudget,invalid,path_budget};
-use std::{ffi::CStr,io,os::{fd::AsRawFd,raw::c_int}};
+use std::{ffi::CStr,fs::File,io,os::{fd::AsRawFd,raw::c_int}};
 
 unsafe extern "C"{fn zxs_component_limit(fd:c_int)->c_int;}
 
@@ -16,11 +16,18 @@ impl ComponentLimit{
     pub(crate) fn encoded(self)->u8{self.0}
     pub(crate) fn held(dir:&HeldDir)->io::Result<Self>{
         dir.require_named()?;
+        let limit=Self::on_fd(&dir.file)?;
+        dir.require_named()?;
+        Ok(limit)
+    }
+    /// Numerical geometry only. A supervisor already holding/proving its
+    /// original named mount can sample that same FD; no path or grant here.
+    pub(crate) fn on_fd(dir:&File)->io::Result<Self>{
         // SAFETY: this fd stays owned and open across the read-only fpathconf.
-        let value=unsafe{zxs_component_limit(dir.file.as_raw_fd())};
+        let value=unsafe{zxs_component_limit(dir.as_raw_fd())};
         if value<0{return Err(io::Error::last_os_error());}
         let bounded=u8::try_from(value).map_err(|_|invalid("invalid native component-limit response"))?;
-        let limit=Self::from_original(bounded)?;dir.require_named()?;Ok(limit)
+        Self::from_original(bounded)
     }
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]

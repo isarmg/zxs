@@ -169,7 +169,10 @@ fn original_birth(db:&Connection,c:&Catalog,op:OperationId,name:&str,setting:Set
 
 /// The original birth transaction's source and its exact authority. The
 /// authorized caller is checked within each already-open SQLite cut.
-struct CreateCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+pub(super) struct CreateCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+impl<'a> CreateCut<'a>{
+    pub(super) fn parts(&self)->(&'a InitialReader,&'a Connection,&'a Catalog){(self.source,self.db,self.catalog)}
+}
 struct CreateAt<'s,'a>{
     source:&'s InitialReader,setting:Setting,parent:DirectoryParent,actor:AccountId,auth:OperationId,generation:i64,
     require:&'a dyn Fn(&CreateCut<'_>)->io::Result<()>,
@@ -401,6 +404,10 @@ pub(super) fn placed_at(db:&Connection,c:&Catalog,volume:VolumeId,parent:Directo
     if id.is_some_and(|id|p.file!=id){return Err(io::ErrorKind::NotFound.into());}
     p.bind(db,c)
 }
+
+#[path="smb_rust_birth.rs"]
+mod rust;
+pub(crate) use rust::{RustFileBirth,RustNamedWrite};
 
 #[cfg(test)]
 mod native_tests{

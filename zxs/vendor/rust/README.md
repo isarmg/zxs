@@ -14,22 +14,22 @@ directory, another project nor a host cryptographic service supplies a crate.
 
 [SOURCES.toml](SOURCES.toml) records the archive URL, SHA-256 from the
 crates.io index, upstream repository/revision, license, edition and minimum
-Rust version of each package. All 21 archive checksums were verified before
+Rust version of each upstream package. All 21 original archive checksums were verified before
 import (2,557,868 compressed bytes in total). No .crate archive or prebuilt
-object is committed. Inside each package the published src/**, build.rs where
+object is committed. Inside each remaining package the published src/**, build.rs where
 present, .cargo_vcs_info.json, README, LICENSE files, Cargo.toml.orig (author
 manifest) and Cargo.toml.upstream (registry-normalized manifest) are unchanged.
-The 735 original files can be compared by Git blob ID with the same paths in
-the checksum-matching source archives (map Cargo.toml.upstream to Cargo.toml).
+The original intake comprised 735 such files. Unchanged files can be compared
+by Git blob ID with their matching archive paths (map Cargo.toml.upstream to
+Cargo.toml).
 
 An active Cargo.toml starts from Cargo.toml.upstream, then adds a relative
 path to any existing dependency section naming a vendored package (including
 the `common` alias for crypto-common, matching dev entries and target
 conditional entries) and omits explicit upstream test/bench targets that are
-not imported. No Rust code, license, version constraint, feature or
-architecture guard was patched. The upstream archives remain the way to
-inspect development/CI assets or run their own tests; ZXS-authored SMB test
-source is kept under `src/test/smb/`.
+not imported. That policy still applies to the separate packages. Code
+incorporated into ZXS instead records its original blob and actual local
+integration changes. ZXS-authored SMB test source is kept under `src/test/smb/`.
 
 The chosen [sha2 0.11.1 release](https://github.com/RustCrypto/hashes/tree/sha2-v0.11.1/sha2)
 includes [upstream's AArch64 round-constant fix](https://github.com/RustCrypto/hashes/pull/922):
@@ -52,25 +52,33 @@ That is not an assertion that these primitives are safe for new protocols.
 Upstream explicitly warns about RC4 and MD5. The ZXS verifier limits their use
 to NTLM's keyed proof and MIC, standard key derivations and optional key
 exchange/MIC wrapping. No MD4/password processing or host crypto provider
-is added here. The source uses the existing cipher/digest cohorts; the one
-newly enabled cipher/stream-wrapper path points to the existing block-buffer.
+is added here. RC4 is now a [private key-exchange module](../../src/smb/session/strict_verifier/key_exchange/ORIGIN.md),
+no longer a Cargo package; its recorded origin and licenses remain. It uses
+the already enabled stream-wrapper and zeroize features of the same cipher
+package rather than adding or updating any library.
+
+HMAC now belongs to the [private SMB keyed-digest module](../../src/smb/session/keyed_digest/ORIGIN.md),
+not a Cargo package. Its RustCrypto block-buffer macro and MAC traits still
+come from the same `digest` package. The product's fixed HMAC-SHA-256 session
+derivation and HMAC-MD5 verifier, including their typed digests, are unchanged.
 
 ## Active paths and build scope
 
-The ZXS workspace excludes each vendored package, so its own upstream dev and
-unselected optional dependencies do not enter the normal ZXS graph. The direct
-dependencies are aes, cmac, hmac, md-5, rc4, sha2 and zeroize, all with
-defaults off; the first six use their upstream zeroize features. No derive, alloc/oid, C
-provider, generated binding, system crypto or external service is required by
-this selection. Enabled path edges, also spelled out in Cargo.lock:
+The ZXS workspace excludes the 19 remaining local path packages, so their own
+upstream dev and unselected optional dependencies do not enter the normal ZXS
+graph. The cipher manifest has no default feature; ZXS makes the already active
+stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
+The one direct digest dependency retains the already active block-api, mac and
+zeroize features of the retired HMAC edge.
+No derive, alloc/oid, C provider, generated binding, system crypto or external
+service is required by this selection. Enabled path edges, also spelled out in
+Cargo.lock:
 
 ```text
-zxs -> aes, cmac, hmac, md-5, rc4, sha2, zeroize
+zxs -> aes, cipher [stream-wrapper, zeroize], cmac, digest [block-api, mac, zeroize], libc, md-5, sha2, zeroize
 aes -> cipher, cpubits, cpufeatures [target cfg], zeroize
 cmac -> cipher, dbl, digest
-hmac -> digest
 md-5 -> cfg-if, digest
-rc4 -> cipher [stream-wrapper]
 sha2 -> cfg-if, cpufeatures [target cfg], digest
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 digest -> block-buffer, crypto-common [alias common], ctutils, zeroize

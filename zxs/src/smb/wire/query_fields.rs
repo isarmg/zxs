@@ -1,6 +1,9 @@
 //! Request views for MS-SMB2 §§2.2.33, 2.2.37. In particular, neither a
 //! related FileId nor a directory search index is an open or a storage key.
-use super::{bytes, field, message::Message, u16le, u32le};
+use super::{bytes, field, io_fields::{IoFieldError,OpenReference},message::Message, u16le, u32le};
+
+const DIRECTORY_FIXED:usize=96;
+const INFO_FIXED:usize=104;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum QueryError {
@@ -85,6 +88,7 @@ pub(in crate::smb) enum FileClass {
     All,
     NetworkOpen,
     AttributeTag,
+    NormalizedName,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,10 +118,11 @@ impl InfoClass {
                 18 => FileClass::All,
                 34 => FileClass::NetworkOpen,
                 35 => FileClass::AttributeTag,
+                48 => FileClass::NormalizedName,
                 // Documented MS-FSCC §2.4 classes outside this parser's
                 // profile; 0x64 is the reserved MS-SMB2 FILE class.
                 1..=3 | 7..=17 | 19..=29 | 31..=33 | 36..=40 | 44..=46 |
-                48 | 50 | 54 | 59 | 60 | 64 | 65 | 78..=81 | 0x64 => return Err(NotSupported),
+                50 | 54 | 59 | 60 | 64 | 65 | 78..=81 | 0x64 => return Err(NotSupported),
                 _ => return Err(InvalidInfoClass),
             })),
             2 => Ok(Self::Filesystem(match value {
@@ -151,21 +156,34 @@ fn check_output(request: u32, max_transact: u32) -> Result<u32, QueryError> {
 }
 
 impl<'a> Message<'a> {
+    /// A minimally bounded ID for Session→Tree→OPEN lookup before any
+    /// query clauses are interpreted or sent to an object.
+    pub(in crate::smb) fn directory_target(&self)->Result<OpenReference,IoFieldError>{
+        self.directory_fixed().map_err(|e|match e{
+            QueryError::WrongCommand=>IoFieldError::WrongCommand,_=>IoFieldError::Malformed,
+        })?;
+        self.io_open_reference(72)
+    }
+    fn directory_fixed(&self)->Result<(),QueryError>{
+        use QueryError::{Malformed,WrongCommand};
+        if self.header.command!=0x000e{return Err(WrongCommand);}
+        if self.raw.len()<DIRECTORY_FIXED||u16le(self.raw,64).map_err(|_|Malformed)?!=33{return Err(Malformed);}
+        Ok(())
+    }
+    pub(in crate::smb) fn directory_output(&self,max_transact:u32)->Result<u32,QueryError>{
+        self.directory_fixed()?;
+        check_output(u32le(self.raw,92).map_err(|_|QueryError::Malformed)?,max_transact)
+    }
     /// The maximum is the connection's actual negotiated MaxTransactSize.
     pub(in crate::smb) fn query_directory(&self, max_transact: u32) -> Result<DirectoryQuery<'a>, QueryError> {
-        use QueryError::{Malformed, WrongCommand};
-        const FIXED: usize = 96;
+        use QueryError::Malformed;
+        const FIXED:usize=DIRECTORY_FIXED;
         const RESTART: u8 = 0x01;
         const SINGLE: u8 = 0x02;
         const INDEX: u8 = 0x04;
         const REOPEN: u8 = 0x10;
-        if self.header.command != 0x000e {
-            return Err(WrongCommand);
-        }
+        let output_bytes=self.directory_output(max_transact)?;
         let p = self.raw;
-        if p.len() < FIXED || u16le(p, 64).map_err(|_| Malformed)? != 33 {
-            return Err(Malformed);
-        }
         let flags = p[67];
         if flags & !(RESTART | SINGLE | INDEX | REOPEN) != 0 {
             return Err(Malformed);
@@ -200,20 +218,33 @@ impl<'a> Message<'a> {
             scan,
             single: flags & SINGLE != 0,
             wire_id: field(p, 72).map_err(|_| Malformed)?,
-            output_bytes: check_output(u32le(p, 92).map_err(|_| Malformed)?, max_transact)?,
+            output_bytes,
             pattern,
         })
     }
 
-    pub(in crate::smb) fn query_info(&self, max_transact: u32) -> Result<InfoQuery, QueryError> {
+    /// Original bounded lookup coordinate only. The queried info class
+    /// cannot bypass the original Session -> Tree -> OPEN route.
+    pub(in crate::smb) fn query_info_target(&self)->Result<OpenReference,IoFieldError>{
+        self.query_info_fixed().map_err(|e|match e{
+            QueryError::WrongCommand=>IoFieldError::WrongCommand,_=>IoFieldError::Malformed,
+        })?;
+        self.io_open_reference(88)
+    }
+    fn query_info_fixed(&self)->Result<(),QueryError>{
         use QueryError::{Malformed, WrongCommand};
         if self.header.command != 0x0010 {
             return Err(WrongCommand);
         }
-        let p = self.raw;
-        if p.len() < 104 || u16le(p, 64).map_err(|_| Malformed)? != 41 {
+        if self.raw.len() < INFO_FIXED || u16le(self.raw, 64).map_err(|_| Malformed)? != 41 {
             return Err(Malformed);
         }
+        Ok(())
+    }
+    pub(in crate::smb) fn query_info(&self, max_transact: u32) -> Result<InfoQuery, QueryError> {
+        use QueryError::Malformed;
+        self.query_info_fixed()?;
+        let p = self.raw;
         let class = InfoClass::select(p[66], p[67])?;
         let output_bytes = check_output(u32le(p, 68).map_err(|_| Malformed)?, max_transact)?;
         // For these classes there is no meaningful input window, flags or

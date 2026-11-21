@@ -247,6 +247,14 @@ impl CapacityCut{
 /// separate. The body and container still retire before the physical parent.
 struct ReadFile{body:Option<Selected>,container:Installed,birth:Birth,place:Place,live:Option<ReadRecord>}
 impl ReadFile{
+    /// This duplicates the already-held FILE witness; it never reacquires a
+    /// same-named container or moves a SQLite reader to another thread.
+    fn ordinary_move_source(&self,grant:super::Setting)->io::Result<super::file_transfer::OrdinaryMoveSource>{
+        Ok(super::file_transfer::OrdinaryMoveSource{place:self.place.clone(),
+            physical:self.container.duplicate()?,view:self.live,grant})
+    }
+}
+impl ReadFile{
     fn open(placed:Placed,selected:&ReadCut,folder:&HeldDir)->io::Result<Self>{
         let sample=folder.names()?.into_iter().collect();
         let container=placed.open(folder,&sample,false,|scope|selected.members.require(scope))?;
@@ -315,18 +323,35 @@ impl<'s,'r> Tree<'s,'r>{
     }
     pub(super) fn prepare_moved_file(&self,result:super::file_transfer::Moved,opened:&super::file_transfer::OrdinaryMoveSource)
         ->io::Result<MovedFile>{
-        let src=self.session.source;
+        let require=|db:&Connection,c:&Catalog|self.require(db,c,true);
+        let authority=&self.session.original;
+        MoveTargetAt{source:self.session.source,setting:self.setting,parent:self.parent,actor:authority.account,
+            auth:authority.op,require:&require}.prepare(result,opened)
+    }
+}
+
+/// Destination verifier for an already confirmed ordinary move, used
+/// inside the independent worker's reader. Requires that exact authority
+/// at both SQL cuts; no move, client path lookup, SQLite state transfer
+/// or replacement of the original OPEN happens here.
+struct MoveTargetAt<'a>{
+    source:&'a InitialReader,setting:super::Setting,parent:DirectoryParent,
+    actor:AccountId,auth:OperationId,require:&'a dyn Fn(&Connection,&Catalog)->io::Result<()>,
+}
+impl MoveTargetAt<'_>{
+    fn prepare(&self,result:super::file_transfer::Moved,opened:&super::file_transfer::OrdinaryMoveSource)
+        ->io::Result<MovedFile>{
+        let src=self.source;
         let unknown=super::file_rename::unknown;
         if result.from!=opened.place{return Err(unknown());}
-        let authority=&self.session.original;
         let (c,placed,selected,route,proof)=src.at(|db,c|{
-            self.require(db,&c,true)?;
-            let placed=self.placed(db,&c,&result.to.name,Some(result.to.file))?;
+            (self.require)(db,&c)?;
+            let placed=file_create::placed_at(db,&c,self.setting.volume,self.parent,&result.to.name,Some(result.to.file))?;
             if placed.here!=result.to||result.to.file!=result.from.file||result.to.op!=result.op||
                 result.to.volume==result.from.volume||result.from.role!=crate::Role::File||result.to.role!=crate::Role::File{
                 return Err(unknown());
             }
-            result.require_ordinary_origin(db,opened.grant,self.setting,authority.op,authority.account)?;
+            result.require_ordinary_origin(db,opened.grant,self.setting,self.auth,self.actor)?;
             if let Some(old)=opened.view{
                 if work_record::confirmed(db,&placed.birth,old.record.key().save)?!=old{return Err(unknown());}
             }
@@ -337,12 +362,11 @@ impl<'s,'r> Tree<'s,'r>{
         }).map_err(|_|unknown())?;
         let root=OrdinaryRoot::at_parent(src,&c,&route,None).map_err(|_|unknown())?;
         let original=ReadFile::open(placed,&selected,root.folder()).map_err(|_|unknown())?;
-        let require=|db:&Connection,c:&Catalog|self.require(db,c,true);
         let at=ReadAt{file:&original,root:root.view(),source:src,
-            volume:result.to.volume,parent:result.to.parent,require:&require};
+            volume:result.to.volume,parent:result.to.parent,require:self.require};
         at.checked(&selected,||original.container.still_retirement_target(root.folder(),&proof),|_|Ok(()))
             .map_err(|_|unknown())?;
-        Ok(MovedFile{original,media:root.into_media(),from:opened.grant,setting:self.setting,auth:authority.op,result})
+        Ok(MovedFile{original,media:root.into_media(),from:opened.grant,setting:self.setting,auth:self.auth,result})
     }
 }
 impl ReadAt<'_>{
@@ -379,10 +403,15 @@ impl ReadAt<'_>{
         // Native disk checks fit between the existing short SQL cuts.
         self.check_with(||used.require(self.file.container.directory()),|_|Ok(()))
     }
-    fn range_evidence(&self,offset:u64,count:u64,mut out:impl Write)->io::Result<Used>{
+    fn range_evidence(&self,offset:u64,count:u64,out:impl Write)->io::Result<Used>{
+        self.range_evidence_while(offset,count,out,&||Ok(()))
+    }
+    fn range_evidence_while(&self,offset:u64,count:u64,mut out:impl Write,
+        progress:&impl Fn()->io::Result<()>)->io::Result<Used>{
         if offset.checked_add(count).is_none_or(|end|end>self.file.size()){return Err(invalid("range outside this confirmed working EOF"));}
         let seen=Cell::new(None);
         let gate=||->io::Result<()>{
+            progress()?;
             let before=super::smb_buffer::data_version(self.source)?;
             if seen.get()!=Some(before){
                 self.check_with(||Ok(()),|_|Ok(()))?;
@@ -390,13 +419,15 @@ impl ReadAt<'_>{
                 seen.set(Some(before));
             }
             self.root.require_streaming()?;self.file.container.require(self.root.folder())?;
-            if let Some(h)=&self.file.body{h.require(self.file.container.directory())?;}Ok(())
+            if let Some(h)=&self.file.body{h.require(self.file.container.directory())?;}
+            progress()
         };
         gate()?;
         let used=if let (Some(held),Some(cut))=(&self.file.body,self.file.live){
             held.range_with(self.file.container.directory(),offset,count,|need|{
                 let mut result=Vec::new();result.try_reserve_exact(need.len()).map_err(|_|invalid("work origin request exceeds memory"))?;
                 for batch in need.chunks(64){
+                    progress()?;
                     self.source.at(|db,c|{
                         self.still_selected(db,&c)?;
                         for n in batch{result.push(work_record::origin(db,&self.file.birth,cut,*n)?);}Ok(())
@@ -405,7 +436,7 @@ impl ReadAt<'_>{
                 Ok(result)
             },&gate,out)?
         }else{out.flush()?;Used::default()};
-        self.finish_sources(&used)?;Ok(used)
+        progress()?;self.finish_sources(&used)?;progress()?;Ok(used)
     }
 }
 
@@ -421,8 +452,7 @@ impl<'t,'s,'r> Current<'t,'s,'r>{
     /// Preserve the exact already-open body and dual HEADER evidence for
     /// the independently authorized ordinary-volume copy worker.
     pub(super) fn move_source(&self)->io::Result<super::file_transfer::OrdinaryMoveSource>{
-        Ok(super::file_transfer::OrdinaryMoveSource{place:self.original.place.clone(),
-            physical:self.original.container.duplicate()?,view:self.original.live,grant:self.setting})
+        self.original.ordinary_move_source(self.setting)
     }
     pub(super) fn grant(&self)->super::Setting{self.setting}
     pub(super) fn begin_ordinary_move(&mut self)->io::Result<super::file_transfer::OrdinaryMoveSource>{
@@ -534,3 +564,9 @@ impl<'t,'s,'r> Current<'t,'s,'r>{
         self.with_read(|reader|reader.range_evidence(offset,count,out))
     }
 }
+
+#[path="smb_rust_file.rs"]
+mod rust;
+pub(super) use rust::HeldRename;
+pub(crate) use rust::{RustFileName,RustFileSelection,RustFileStandard,RustOrdinaryRename,RustReadFile,RustReadProof,RustRetiredOrdinaryRename};
+pub(crate) use super::file_transfer::RustOrdinaryMove;

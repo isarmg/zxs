@@ -116,12 +116,12 @@ mod tests{
             let mut r=post(path,token.as_bytes());r.auth=Some(format!("Bearer {bearer}"));r.csrf=Some(csrf.clone());r
         };
         let mut origin=request("/api/copy-repair/request");origin.origin=Some("http://localhost:1900".into());
-        assert_eq!(panel.handle_with_guide(origin,now,||panic!("no guide in this mode")).code,403);
+        assert_eq!(panel.handle(origin,now).code,403);
         let mut cookie=request("/api/copy-repair/request");cookie.csrf=None;
-        assert_eq!(panel.handle_with_guide(cookie,now,||panic!("no guide in this mode")).code,403);
-        assert_eq!(panel.handle_with_guide(request("/api/install/request"),now,||panic!("no guide in this mode")).code,400);
+        assert_eq!(panel.handle(cookie,now).code,403);
+        assert_eq!(panel.handle(request("/api/install/request"),now).code,400);
         assert!(!panel.closed);
-        assert_eq!(panel.handle_with_guide(request("/api/copy-repair/request"),now,||panic!("no guide in this mode")).code,200);
+        assert_eq!(panel.handle(request("/api/copy-repair/request"),now).code,200);
         assert!(panel.closed);
     }
     #[test]

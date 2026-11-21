@@ -80,6 +80,11 @@ impl Route{
         self.steps.last().map_or(DirectoryParent::Root,|s|DirectoryParent::Directory(s.birth.id))
     }
     pub(super) fn selected(&self)->Option<&DirectoryPlace>{self.steps.last()}
+    /// The current selected spelling at each exact DirectoryPlace, not its birth label.
+    pub(super) fn components(&self)->impl Iterator<Item=&str>{self.steps.iter().map(DirectoryPlace::name)}
+    pub(super) fn parent_components(&self)->impl Iterator<Item=&str>{
+        self.components().take(self.steps.len().saturating_sub(1))
+    }
     /// SMB-relative human labels only, for the chosen VolumeId in this
     /// database cut. No host path or file capability is returned.
     pub(in crate::system::reader) fn show_child(&self,name:&str)->String{
@@ -295,17 +300,23 @@ impl<'s,'r> Tree<'s,'r>{
             self.require(cut.db,cut.catalog,true)
         };
         let at=DirectoryAt{source:self.session.source,setting:self.setting,actor:a.account,auth:a.op,
-            epoch:a.generation,require:&require};
+            epoch:a.generation,require:&require,earlier:EarlierBirth::Native};
         at.make(route,op,name,offer,live,cut)
     }
 }
 
 /// Short exact source and account check, inside the same original SQLite
 /// transactions. This does not issue a namespace or a live tree.
-struct DirectoryCreateCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+pub(super) struct DirectoryCreateCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+impl<'a> DirectoryCreateCut<'a>{
+    pub(super) fn parts(&self)->(&'a InitialReader,&'a Connection,&'a Catalog){(self.source,self.db,self.catalog)}
+}
+#[derive(Clone,Copy,Eq,PartialEq)]
+enum EarlierBirth{Native,Fresh}
 struct DirectoryAt<'a>{
     source:&'a InitialReader,setting:Setting,actor:AccountId,auth:OperationId,epoch:i64,
     require:&'a dyn Fn(&DirectoryCreateCut<'_>)->io::Result<()>,
+    earlier:EarlierBirth,
 }
 impl DirectoryAt<'_>{
     fn authorized(&self,db:&Connection,catalog:&Catalog)->io::Result<()>{
@@ -322,6 +333,9 @@ impl DirectoryAt<'_>{
             if Route::at(db,&c,g.volume,parent)?!=*route{return Err(denied());}
             let old=exact_original(self,db,&c,op,parent,name)?;
             let earlier=if old.is_none(){pending_at(db,&c,route,name)?}else{None};
+            // An unrelated fresh Rust request never authorizes the
+            // Native recovery/abandonment path for an earlier operation.
+            if self.earlier==EarlierBirth::Fresh&&(old.is_some()||earlier.is_some()){return Err(busy());}
             if old.is_none()&&earlier.is_none(){directory_vacant(db,&c,route,name)?;}
             Ok((c,old,earlier))
         })?;
@@ -402,6 +416,10 @@ impl DirectoryAt<'_>{
         Ok((birth,held))
     }
 }
+
+#[path="smb_rust_directory_birth.rs"]
+mod rust_birth;
+pub(crate) use rust_birth::RustNamedDirectory;
 
 pub(super) enum Additional<'a>{
     File(&'a Birth),Directory(&'a DirectoryBirth),Pocket(&'a CStr),Rename(FileId,&'a CStr),IncomingFlat(&'a CStr,&'a CStr),
@@ -543,7 +561,7 @@ fn dir_reserved(op:OperationId)->io::Result<(CString,CString)>{
 
 #[path="directory_relabel.rs"]
 mod directory_rename;
-pub(super) use directory_rename::{RelabelCut, recovery_loop as recover_relabels};
+pub(super) use directory_rename::{ConfirmedRelabel,DirectoryRelabelCut,RelabelCut,relabel_rust,recovery_loop as recover_relabels};
 
 #[cfg(test)]
 mod tests{

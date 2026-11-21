@@ -45,25 +45,11 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install) fn confirm_init(&self,fresh:bool,preview:String)->io::Result<()>{
         self.ask(if fresh{"INIT"}else{"RESUME"},Some(preview),1100*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_domain(&self,preview:String)->io::Result<()>{self.ask("PROVISION",Some(preview),96*1024)}
-    pub(in crate::sqlite_install::pair) fn confirm_web_reset(&self,preview:String)->io::Result<()>{
-        self.ask("RESET-WEB",Some(preview),20*1024)
+    pub(in crate::sqlite_install) fn confirm_v17_initialization(&self,review:String)->io::Result<()>{
+        self.ask("INIT-ZXS-V17",Some(review),1100*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_native(&self,reset:bool,review:String)->io::Result<()>{
-        self.ask(if reset{"RESET-SMB"}else{"SETUP-NATIVE"},Some(review),96*1024)
-    }
-    pub(in crate::sqlite_install::pair) fn confirm_layout(&self, ids:[&Id;3], subject:(u32,u32), parent:&str,
-        parent_id:crate::pinned::Entity,mount:u64,config:&[u8;32],release:&[u8;32],original_paths:&str,plan:&str)->io::Result<()>{
-        let hx=|v:&[u8]|v.iter().map(|b|format!("{b:02x}")).collect::<String>();
-        let preview=format!("仅创建新宿主实例布局 /var/lib/local-ops-helper/samba-instances/{}，以及从 {} 起缺少的固定父目录。只有缺失的中间目录为 root:root 0711；新实例为 root:存储组 0750，private/state 归存储 UID/GID、0700；独立 accountdb 归 root:root、0700 且留空；smb.conf 为 root:root 0444。请核这一宿主位置专用、未被其它业务当作数据目录。已只读核对指定池的原登记；不会修改池、生成域、设置账户、变更网络或启动服务。已有名字不接管；中断可能留下暂存或最终名，请保留。\n原父 dev {} / inode {} / mount {}；维护主体 {}、审批参考 {}；存储 UID/GID {}/{}。配置 SHA-256 {}；已登记软件发行 {}。\n{original_paths}{plan}",
-            hx(ids[0]),parent,parent_id.dev,parent_id.ino,mount,hx(ids[1]),hx(ids[2]),subject.0,subject.1,hx(config),hx(release));
-        self.ask("LAYOUT",Some(preview),1100*1024)
-    }
-    pub(in crate::sqlite_install::pair) fn confirm_web_unit(&self,review:String)->io::Result<()>{
-        self.ask("INSTALL-WEB-UNIT",Some(review),24*1024)
-    }
-    pub(in crate::sqlite_install::pair) fn confirm_web_control(&self,start:bool,review:String)->io::Result<()>{
-        self.ask(if start{"START-WEB-UNIT"}else{"STOP-WEB-UNIT"},Some(review),24*1024)
+    pub(in crate::sqlite_install::pair) fn confirm_fresh_zxs(&self,review:String)->io::Result<()>{
+        self.ask("ISSUE-ZXS-V17",Some(review),1100*1024)
     }
     pub(in crate::sqlite_install::pair) fn confirm_ext_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-EXT-COPY",Some(preview),64*1024)
@@ -74,7 +60,13 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install::pair) fn confirm_fat32_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-FAT32-COPY",Some(preview),64*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_start(&self,review:String)->io::Result<()>{self.ask("START-SMB",Some(review),96*1024)}
+    pub(in crate::sqlite_install::pair) fn confirm_rust_credential(&self,reset:bool,resume:bool,review:String)->io::Result<()>{
+        let verb=if resume{"RESUME-RUST-SMB"}else if reset{"RESET-RUST-SMB"}else{"ENROLL-RUST-SMB"};
+        self.ask(verb,Some(review),96*1024)
+    }
+    pub(in crate::sqlite_install::pair) fn confirm_rust_stage_discard(&self,review:String)->io::Result<()>{
+        self.ask("DISCARD-RUST-STAGE",Some(review),96*1024)
+    }
     pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
         nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),&||self.check())
     }

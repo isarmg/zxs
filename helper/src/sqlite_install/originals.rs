@@ -53,13 +53,6 @@ pub(super) struct SelectedSystem {pin:Pinned,host:File,uid:u32,gid:u32}
 enum SystemLease{Exclusive,LentExclusive,LentRead}
 pub(super) struct LockedSystem {selected:SelectedSystem,dir:File,limit:u8,lease:SystemLease}
 impl SelectedSystem {
-    /// Only O_PATH ancestor/leaf observation here, before final lowering to the
-    /// configured storage worker. This is not setup/recovery authorization.
-    pub(super) fn foreground_origin(path:&std::path::Path)->io::Result<Self>{
-        let host=super::approval::host_admin()?;let (_,uid,gid)=super::approval::profile()?;
-        super::approval::same_terminal(&io::stdin(),&io::stderr())?;
-        Self::from_host(path,host,uid,gid)
-    }
     pub(super) fn from_host(path:&std::path::Path,host:File,uid:u32,gid:u32)->io::Result<Self>{
         let pin=Pinned::open(path,Kind::StorageRoot)?;
         Self::from_origin(pin,host,uid,gid)
@@ -140,7 +133,13 @@ impl Originals{
     // Called BEFORE displaying the actual root list. The original host root is
     // from the local host authority, never recovered from an on-disk declaration.
     pub(super) fn pin(request:&Request,host:File)->io::Result<Self>{
-        let selected=request.paths().iter().map(|p|Pinned::open(p,Kind::StorageRoot)).collect::<io::Result<Vec<_>>>()?;
+        Self::pin_with(request,host,Pinned::open)
+    }
+    pub(super) fn pin_passive(request:&Request,host:File)->io::Result<Self>{
+        Self::pin_with(request,host,Pinned::already_mounted)
+    }
+    fn pin_with(request:&Request,host:File,open:impl Fn(&std::path::Path,Kind)->io::Result<Pinned>)->io::Result<Self>{
+        let selected=request.paths().iter().map(|p|open(p,Kind::StorageRoot)).collect::<io::Result<Vec<_>>>()?;
         for (i,r) in selected.iter().enumerate(){
             if selected[..i].iter().any(|a|a.entity()==r.entity()||a.entity_is_visible_ancestor_of(r)||r.entity_is_visible_ancestor_of(a)){
                 return Err(bad("duplicate or nested original storage directories"));

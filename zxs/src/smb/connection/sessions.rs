@@ -22,8 +22,34 @@ pub(in crate::smb) struct RunningServerGuid { run:Arc<Run> }
 impl RunningServerGuid {
     pub(super) fn wire(&self)->&[u8;16] { &self.run.guid }
     pub(super) fn share(&self)->Arc<Run> { Arc::clone(&self.run) }
+    #[cfg(test)]
+    pub(super) fn fixture_revoke_provider(&self) {
+        self.run.verifier.as_ref().expect("the fixture holds a provider").fixture_revoke();
+    }
+    pub(in crate::smb) fn from_start(start:&Arc<crate::smb::InheritedRun>,verifier:crate::smb::session::ChallengeService)
+        ->Result<Self>{
+        let origin=verifier.batch_revision().and_then(|v|v.original_start(&verifier)).ok_or(Fault::NoVerifier)?;
+        if !Arc::ptr_eq(start,&origin){return Err(Fault::NoVerifier);}
+        let mut guid=[0u8;16];
+        if !crate::smb::local::random(&mut guid)||guid==[0;16]{return Err(Fault::Entropy);}
+        Ok(Self{run:Arc::new(Run::new(guid,Some(verifier)))})
+    }
+    pub(in crate::smb) fn is_original_start(&self,start:&Arc<crate::smb::InheritedRun>)->bool{
+        self.run.verifier.as_ref().and_then(|s|s.batch_revision().and_then(|p|p.original_start(s)))
+            .is_some_and(|loaded|Arc::ptr_eq(start,&loaded))
+    }
 }
-pub(super) struct Run { guid:[u8;16], index:Mutex<Global>, verifier:Option<crate::smb::session::ChallengeService> }
+pub(super) struct Run {
+    guid:[u8;16],index:Mutex<Global>,verifier:Option<crate::smb::session::ChallengeService>,
+    persistent:Arc<ordinary::opens::GlobalOpens>,
+    share_modes:Arc<crate::smb::backend::OpenCoordinator>,
+}
+impl Run {
+    fn new(guid:[u8;16],verifier:Option<crate::smb::session::ChallengeService>)->Self{
+        Self{guid,index:Mutex::new(Global::empty()),verifier,persistent:ordinary::opens::GlobalOpens::new(),
+            share_modes:crate::smb::backend::OpenCoordinator::new(ordinary::opens::PER_RUN)}
+    }
+}
 struct Global {accepting:usize,next:u64,live:Vec<Weak<Claim>>,transports:Vec<clients::Tracked>,clients:Vec<clients::Dialect>}
 impl Global {fn empty()->Self {Self{accepting:0,next:1,live:Vec::new(),transports:Vec::new(),clients:Vec::new()}}}
 struct Claim { id:NonZeroU64, origin:Weak<Origin>, expires:Instant, valid:OnceLock<crate::smb::session::LiveMark> }
@@ -69,7 +95,15 @@ impl Drop for Registration {
 }
 
 pub(super) struct Local { reg:Registration, phase:Phase }
-enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending), ProofTaken, SendingFinal, Valid(crate::smb::session::BoundSession) }
+enum Phase { Sending, Waiting(AwaitNegotiate), Type1Taken, SendingChallenge, WaitingAuth(crate::smb::session::Pending), ProofTaken, SendingFinal, Valid(LiveSession) }
+struct LiveSession {
+    auth:crate::smb::session::BoundSession,opens:ordinary::opens::OpenTable,trees:ordinary::trees::TreeTable,
+}
+impl LiveSession {
+    fn new(auth:crate::smb::session::BoundSession)->Self{
+        Self{auth,opens:ordinary::opens::OpenTable::new(),trees:ordinary::trees::TreeTable::new()}
+    }
+}
 #[derive(Clone,Copy)]
 enum Sending {Selection,Challenge,Final}
 impl Connection {

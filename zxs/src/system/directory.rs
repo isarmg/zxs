@@ -3,7 +3,7 @@
 use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,DirectoryPlace,Route},sqlite3_step};
 use super::super::{file_location::Placed,volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Members,ReadRecord}};
 use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,
-    fs::{HeldDir,WitnessRead,invalid,directory_birth::{DirectoryHold,DirectoryParent}},
+    fs::{DIRECTORY_NAMES,HeldDir,WitnessRead,invalid,directory_birth::{DirectoryHold,DirectoryParent}},
     ordinary::portable_birth::{Birth,Installed}};
 use std::{collections::BTreeSet,ffi::CString,io};
 
@@ -74,7 +74,11 @@ pub(super) fn check_alias_at(parent:&HeldDir,name:&str,owner:Option<&file_create
 #[derive(Clone,Copy)]
 struct PageAt<'a>{source:&'a InitialReader,volume:VolumeId,parent:DirectoryParent}
 
-fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:bool)->io::Result<Vec<Pick>>{
+// Only Rust SMB's checked pattern selection uses the extra scan budget.
+// Start each authoritative SQL cut with its own deterministic matching work.
+type NameFilter<'a>=dyn Fn(&str,&mut usize)->io::Result<bool>+'a;
+fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:bool,
+    filter:Option<&NameFilter<'_>>)->io::Result<Vec<Pick>>{
     let q=db.prepare(c"SELECT p.display AS name,p.file_id,0 FROM main.file_location p JOIN main.operation o ON o.op_id=p.position_op
         WHERE p.role=2 AND p.volume_id=?1 AND p.parent_id=?2 AND p.display>?3 AND o.state=1
           AND NOT EXISTS(SELECT 1 FROM main.pending_rename r WHERE r.file_id=p.file_id AND r.source_op=p.position_op)
@@ -82,11 +86,29 @@ fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:boo
           WHERE ?4=1 AND d.volume_id=?1 AND d.parent_id=?2 AND d.display>?3 AND d.state=1
         ORDER BY name LIMIT ?5")?;
     q.bind_bytes(1,&at.volume.0)?;q.bind_bytes(2,&at.parent.bytes())?;q.bind_bytes(3,after)?;
-    q.bind_integer(4,i64::from(u8::from(mixed)))?;q.bind_integer(5,i64::from(limit))?;let mut page:Vec<Pick>=Vec::new();
+    q.bind_integer(4,i64::from(u8::from(mixed)))?;
+    q.bind_integer(5,if filter.is_some(){(DIRECTORY_NAMES+1) as i64}else{i64::from(limit)})?;
+    let mut page:Vec<Pick>=Vec::new();
+    let (mut scanned,mut work)=(0usize,0usize);
+    let mut last=[0;display::MAX];
+    let mut last_len=after.len();
+    if filter.is_some(){last[..last_len].copy_from_slice(after);}
     loop{match unsafe{sqlite3_step(q.0)}{
         101=>return Ok(page),
         100=>{
             let name=display::component(q.blob(0,255)?,255)?;
+            if let Some(accept)=filter{
+                // A limit sentinel is NOT source exhaustion. Compare all
+                // scanned keys, including names skipped by the expression.
+                if scanned==DIRECTORY_NAMES{
+                    return Err(io::Error::new(io::ErrorKind::OutOfMemory,"ordinary directory expression exceeds its name scan limit"));
+                }
+                if name.as_bytes()<=&last[..last_len]{return Err(invalid("unordered ordinary scan keys"));}
+                scanned+=1;
+                last_len=name.len();
+                last[..last_len].copy_from_slice(name.as_bytes());
+                if !accept(name,&mut work)?{continue;}
+            }
             let prior=page.last().map_or(after,|p|p.name().as_bytes());
             if page.len()>=usize::from(limit)||name.as_bytes()<=prior{return Err(invalid("unordered or oversized ordinary page"));}
             match q.byte(2)?{
@@ -108,19 +130,22 @@ fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:boo
                 },
                 _=>return Err(invalid("unknown ordinary member type")),
             }
+            // Returning this entire matching prefix does not assert
+            // exhaustion; a later query can start at its last *sent* key.
+            if filter.is_some()&&page.len()==usize::from(limit){return Ok(page);}
         }
         rc=>{check(rc)?;return Err(invalid("could not select ordinary share members"));}
     }}
 }
 /// A cursor is an ordering key, never a pathname, principal or grant. No
 /// physical inode or storage name is returned from either listing route.
-fn read_page_bound(at:PageAt<'_>,root:OrdinaryView<'_>,after:&[u8],limit:u8,mixed:bool,
+fn read_page_bound(at:PageAt<'_>,root:OrdinaryView<'_>,after:&[u8],limit:u8,mixed:bool,filter:Option<&NameFilter<'_>>,
     require:impl Fn(&Connection,&Catalog)->io::Result<()>,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
     if !(1..=MAX_PAGE).contains(&limit){return Err(invalid("invalid ordinary page limit"));}
     if !after.is_empty(){display::component(after,if mixed{255}else{222})?;}
     let src=at.source;
     if !root.for_tree(src,at.volume)||root.parent()!=at.parent{return Err(invalid("different original ordinary parent"));}
-    let select_current=|db:&Connection,c:&Catalog|{require(db,c)?;select(at,db,c,after,limit,mixed)};
+    let select_current=|db:&Connection,c:&Catalog|{require(db,c)?;select(at,db,c,after,limit,mixed,filter)};
     let selected=src.at(|db,c|select_current(db,&c))?;
     let parent=root.folder();
     let native_sample=||if selected.is_empty(){Ok(BTreeSet::<Vec<u8>>::new())}
@@ -171,7 +196,7 @@ fn read_page_bound(at:PageAt<'_>,root:OrdinaryView<'_>,after:&[u8],limit:u8,mixe
 }
 fn read_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed:bool,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
     let at=PageAt{source:tree.session.source,volume:tree.setting.volume,parent:tree.parent};
-    read_page_bound(at,root.view(),after,limit,mixed,|db,c|tree.require(db,c,false),at_cut)
+    read_page_bound(at,root.view(),after,limit,mixed,None,|db,c|tree.require(db,c,false),at_cut)
 }
 pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Entry>>{
     read_page(tree,root,after,limit,false,at_cut)?.into_iter().map(|item|match item{
@@ -195,3 +220,8 @@ impl RootFiles<'_,'_,'_>{
         self.ended=rows.len()<usize::from(limit);Ok(rows)
     }
 }
+
+#[path="smb_rust_directory.rs"]
+mod rust;
+pub(crate) use rust::{RustDirectoryPage,RustDirectoryRename,RustOrdinaryDirectory,RustOrdinaryKind};
+pub(super) use rust::RustDirectorySelection;

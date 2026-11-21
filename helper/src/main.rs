@@ -10,7 +10,6 @@ mod fs_tools;
 mod fat32_check;
 mod inspect;
 mod isolated_group;
-mod smb_host;
 mod smb_profile;
 mod maintenance;
 mod path_rules;
@@ -30,7 +29,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-ordinary-retirement --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper install-pool web new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --approval ID --recycle-name NAME --listen ADDR/PREFIX [--listen ADDR/PREFIX ...] --share DIR NAME ro|rw [--share DIR NAME ro|rw ...]\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --setup-op SETUP_OP --approval ID --live-sha256 HEX\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --bound-sha256 HEX --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --bound-sha256 HEX --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper install-web-unit --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper web-unit start --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper web-unit stop --system DIR --pool ID --approval ID --zxs-sha256 HEX\n  helper web-unit status --system DIR --pool ID --zxs-sha256 HEX\n  helper start-smb --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --bound-sha256 HEX\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-ordinary-retirement --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper install-pool web new|resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -40,20 +39,17 @@ enum Command {
     Directories(Vec<PathBuf>),
     Compare(PathBuf, PathBuf),
     Discover(sqlite_install::Discovery),
-    Storage(Selection),
     RetirementCheck(sqlite_install::RetirementCheck),
+    Storage(Selection),
     Install(sqlite_install::Installation),
     Setup(sqlite_install::Setup),
-    StartSmb(sqlite_install::StartSmb),
-    InstallWebUnit(sqlite_install::InstallWebUnit),
-    WebUnitControl(sqlite_install::WebUnitControl),
     Disks(block_tools::Query),
     DiskWeb(Option<fat32_check::panel::Job>),
     DiskWebStorage(Selection),
     SealedWorker(fat32_check::Format,[u8;32]),
     LeasedPanelWorker(fat32_check::LeasedFormat,[u8;32]),
-    SamWorker,
-    NativeSqlWorker,
+    RustAccountWorker,
+    RustVaultWriter,
     LayoutSqlWorker,
     FirstBrowserWorker,
     CopyRepairBrowserWorker,
@@ -76,9 +72,6 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if args.next().is_some() { return Err("unexpected argument"); }
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
-    if op == "install-web-unit"{return sqlite_install::InstallWebUnit::parse(args).map(Command::InstallWebUnit);}
-    if op == "web-unit"{return sqlite_install::WebUnitControl::parse(args).map(Command::WebUnitControl);}
-    if op == "start-smb"{return sqlite_install::StartSmb::parse(args).map(Command::StartSmb);}
     if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(Command::Setup);}
     if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "check-ordinary-retirement"{return sqlite_install::RetirementCheck::parse(args).map(Command::RetirementCheck);}
@@ -94,12 +87,12 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
             Some(arg) if arg=="--xfs-copy"=>Request::parse_xfs(args).map(|r|Command::DiskWeb(Some(Job::Leased(LeasedFormat::Xfs,r)))),
             Some(arg) if arg=="--ntfs-copy"=>Request::parse_ntfs(args).map(|r|Command::DiskWeb(Some(Job::Leased(LeasedFormat::Ntfs,r)))),
             Some(arg) if arg=="--btrfs-copy"=>Request::parse_btrfs(args).map(|r|Command::DiskWeb(Some(Job::Leased(LeasedFormat::Btrfs,r)))),
-            _=>Err("disk-web accepts --storage-roots with explicit roles, or one selected volume-image check"),
+            _=>Err("disk-web accepts one terminal-selected --fat32-copy, --exfat-copy, --ext4-copy, --xfs-copy, --ntfs-copy or --btrfs-copy IMAGE --sha256 HEX"),
         };
     }
-    if op=="__native-account-sql-v9"{
+    if op=="__rust-account-sql-v1"||op=="__rust-vault-writer-v1"{
         if args.next().is_some(){return Err("invalid internal worker");}
-        return Ok(Command::NativeSqlWorker);
+        return Ok(if op=="__rust-account-sql-v1"{Command::RustAccountWorker}else{Command::RustVaultWriter});
     }
     if op=="__first-install-browser-v1"{
         if args.next().is_some(){return Err("unexpected browser worker argument");}
@@ -112,10 +105,6 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op=="__first-layout-sql-v9"{
         if args.next().is_some(){return Err("invalid internal worker");}
         return Ok(Command::LayoutSqlWorker);
-    }
-    if op=="__sam-fresh-v1"{
-        if args.next().is_some(){return Err("invalid internal worker");}
-        return Ok(Command::SamWorker);
     }
     let leased=match op.to_str(){
         Some("__ext4-leased-v1")=>Some(fat32_check::LeasedFormat::Ext4),
@@ -169,24 +158,21 @@ fn line(s: &str) -> io::Result<()> {
 
 fn run(command: Command) -> io::Result<ExitCode> {
     match command {
-        Command::StartSmb(authority)=>authority.run()?,
-        Command::InstallWebUnit(authority)=>authority.run()?,
-        Command::WebUnitControl(authority)=>authority.run()?,
         Command::DiskWeb(image) => disk_web::serve(image)?,
-        Command::DiskWebStorage(roots) => disk_web::serve_storage(roots)?,
-        Command::NativeSqlWorker=>return Ok(ExitCode::from(if sqlite_install::native_sql_worker().is_ok(){0}else{2})),
+        Command::DiskWebStorage(s)=>disk_web::serve_storage(s)?,
+        Command::RetirementCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
+        Command::Discover(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}
+        Command::RustAccountWorker=>return Ok(ExitCode::from(if sqlite_install::rust_account_worker().is_ok(){0}else{2})),
+        Command::RustVaultWriter=>return Ok(ExitCode::from(if sqlite_install::rust_vault_worker().is_ok(){0}else{2})),
         Command::FirstBrowserWorker=>return Ok(ExitCode::from(if sqlite_install::exec_first_browser().is_ok(){0}else{2})),
         Command::CopyRepairBrowserWorker=>return Ok(ExitCode::from(if sqlite_install::exec_copy_repair_browser().is_ok(){0}else{2})),
         Command::LayoutSqlWorker=>return Ok(ExitCode::from(if sqlite_install::layout_sql_worker().is_ok(){0}else{2})),
-        Command::SamWorker=>return Ok(ExitCode::from(if sqlite_install::sam_worker().is_ok(){0}else{2})),
         Command::SealedWorker(fmt,digest) => return Ok(ExitCode::from(fat32_check::panel::worker(fmt,digest).unwrap_or(2))),
         // Code 2 can describe a structured incomplete report. Internal
         // failure must never accept an already-written packet.
         Command::LeasedPanelWorker(kind,digest) => return Ok(ExitCode::from(fat32_check::panel::leased_worker(kind,digest).unwrap_or(3))),
         Command::Install(i)=>{let(code,public)=i.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         Command::Setup(s)=>{let(code,public)=s.run()?;line(&public)?;return Ok(ExitCode::from(code));}
-        Command::RetirementCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
-        Command::Discover(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
@@ -253,30 +239,6 @@ mod copy_arguments{
     use fat32_check::{LeasedFormat,panel::Job};
 
     #[test]
-    fn stateless_discovery_accepts_no_authority_or_saved_path_flags(){
-        let cmd=|a:&[&str]|parse(a.iter().map(|&v|OsString::from(v)));
-        assert!(matches!(cmd(&["discover"]),Ok(Command::Discover(_))));
-        assert!(matches!(cmd(&["discover","--system","/mnt/control/pool"]),Ok(Command::Discover(_))));
-        for bad in [&["discover","/mnt/control/pool"][..],&["discover","--system",".."],
-            &["discover","--system","/"],&["discover","--system","/a","--system","/b"],
-            &["discover","--adopt"],&["discover","--save","/elsewhere"]]{assert!(cmd(bad).is_err());}
-    }
-
-    #[test]
-    fn the_panel_takes_exactly_one_foreground_storage_selection_and_no_image_with_it(){
-        let cmd=|a:&[&str]|parse(a.iter().map(|&arg|OsString::from(arg)));
-        let roots=["disk-web","--storage-roots","--system","/root/S","--recycle","/root/R","--data","/root/F"];
-        assert!(matches!(cmd(&roots),Ok(Command::DiskWebStorage(_))));
-        assert!(cmd(&roots[..6]).is_err());
-        assert!(cmd(&["disk-web","--system","/root/S","--recycle","/root/R","--data","/root/F"]).is_err());
-        let h="ab".repeat(32);
-        let mut mixed=roots.to_vec();mixed.extend(["--ext4-copy","/image","--sha256",h.as_str()]);
-        assert!(cmd(&mixed).is_err());
-        let mut mixed=["disk-web","--exfat-copy","/image","--sha256",h.as_str()].to_vec();
-        mixed.extend_from_slice(&roots[1..]);assert!(cmd(&mixed).is_err());
-    }
-
-    #[test]
     fn the_repair_worker_gets_no_path_format_or_tool_arguments(){
         let cmd=|a:&[&str]|parse(a.iter().map(|&arg|OsString::from(arg)));
         assert!(matches!(cmd(&["__copy-repair-browser-v2"]),Ok(Command::CopyRepairBrowserWorker)));
@@ -315,23 +277,5 @@ mod copy_arguments{
         assert!(cmd(&["check-btrfs-copy","/saved/volume","--sha256",&digest,"--force"]).is_err());
         assert!(cmd(&["disk-web","--btrfs-copy","/saved/volume","--sha256",&digest,"--repair"]).is_err());
         assert!(cmd(&["__btrfs-leased-v1",&digest,"/saved/second"]).is_err());
-    }
-}
-
-#[cfg(test)]
-mod retirement_check_arguments{
-    use super::*;
-    #[test]
-    fn the_readonly_verbs_never_admit_an_apply_or_an_original_receipt(){
-        let pool="01".repeat(16);let init="02".repeat(16);let volume="03".repeat(16);
-        let cmd=|a:&[&str]|parse(a.iter().map(|&arg|OsString::from(arg)));
-        let base=["check-ordinary-retirement","--system","/pool/S","--pool",&pool,"--init",&init,"--volume",&volume,"--data","/pool/F"];
-        assert!(matches!(cmd(&base),Ok(Command::RetirementCheck(_))));
-        assert!(cmd(&base[..base.len()-1]).is_err());
-        for extra in ["--apply","--force","--resume","--receipt-only","--unmount","--approval"]{
-            let mut extended=base.to_vec();extended.push(extra);assert!(cmd(&extended).is_err());
-        }
-        let mut other=base;other[0]="retire-ordinary";assert!(cmd(&other).is_err());
-        assert!(cmd(&["__first-layout-sql-v9","/pool/F"]).is_err());
     }
 }

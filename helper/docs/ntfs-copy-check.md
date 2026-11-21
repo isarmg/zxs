@@ -18,4 +18,4 @@ helper disk-web --ntfs-copy /绝对路径/volume.img --sha256 可信SHA256
 
 **不是 Windows chkdsk。** 成功不验证全部 MFT、普通文件正文或整个卷的完整性，也不确认 NTFS 日志是否干净、Windows 休眠/快速启动或是否适合挂载。中间可能存在的尾部不另作结构检查；`image_bytes` 是完整文件摘要范围，`declared_bytes` 是卷头的声明字节数。不回显原路径、卷标、文件名或上游诊断原文。网页只用配对后的剩余十分钟（包含完整摘要与工具观察），较大的副本可用终端；终端仍对上游阶段设十分钟、300 秒 CPU 和有界输出，且不会保证阻塞的宿主 I/O 立刻响应取消。
 
-依据：[Debian ntfsfix(8)](https://manpages.debian.org/trixie/ntfs-3g/ntfsfix.8.en.html)、[Debian 安全版来源](https://security-tracker.debian.org/tracker/source-package/ntfs-3g)。发行须由管理员按独立预期摘要核准的[私有包](../packaging/debian13-amd64/README.md)提供。本内容只完成源码及上游静态对读，未组包、运行或做现场验收。
+依据：[Debian ntfsfix(8)](https://manpages.debian.org/trixie/ntfs-3g/ntfsfix.8.en.html)、[Debian 安全版来源](https://security-tracker.debian.org/tracker/source-package/ntfs-3g)。发行须由独立核准确切 SHA-256 的[私有材料](../packaging/debian13-amd64/README.md)提供。本内容只完成源码及上游静态对读，未组包、运行或做现场验收。

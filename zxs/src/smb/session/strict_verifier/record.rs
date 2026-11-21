@@ -1,7 +1,9 @@
 //! Rust-only fixed private verifier record. Decoding is NOT qualification.
-//! Nothing here opens a file, qualifies a deployment or constructs a session.
-use super::{Rejected,Result,Secret};
-use std::num::NonZeroU64;
+//! The protected load below is distinct from raw decoding and has no
+//! authority to construct a live session.
+use super::{ProtectedRevision,Rejected,Result,RevisionSource,Secret,VaultDecoder,challenge::utf16};
+use crate::{smb::InheritedRun,system::reader::smb::runtime::QualifiedRustInstall};
+use std::{num::NonZeroU64,sync::Arc};
 use zeroize::Zeroizing;
 
 pub(super) const RECORD_BYTES:usize=240;
@@ -25,8 +27,8 @@ pub(super) struct Coordinates {
 }
 
 /// No Debug, Clone, raw key exposure or conversion to an active revision.
-/// An exact-size input is required; the future original-FD reader must still
-/// prove the object and EOF, and the owner must separately qualify ACTIVE.
+/// An exact-size input is required; only the original-FD load below binds
+/// this decoder to the actual checked installation and current revision.
 #[must_use]
 pub(super) struct DecodedRecord { fields:Coordinates, key:Secret }
 impl DecodedRecord {
@@ -59,6 +61,23 @@ impl DecodedRecord {
         Ok(Self{fields,key})
     }
     pub(super) fn coordinates(&self)->&Coordinates {&self.fields}
+}
+
+pub(super) fn load_original(start:&Arc<InheritedRun>,actual:&QualifiedRustInstall)->Result<ProtectedRevision>{
+    let buffer=start.read_for_decoder(&VaultDecoder(()),actual).map_err(|_|Rejected)?;
+    let DecodedRecord{fields:q,key}=DecodedRecord::decode(buffer)?;
+    let name=std::str::from_utf8(&q.login[..usize::from(q.login_len)]).map_err(|_|Rejected)?;
+    let ids=[q.pool,q.init,q.setup,q.instance,q.binding,q.account,q.credential,q.record];
+    if !actual.is_original_start(start)||
+        !actual.matches_record_coordinates(&ids,q.generation.get() as i64,name){return Err(Rejected);}
+    let host=actual.hostname().as_bytes();
+    let mut spn=Vec::new();
+    spn.try_reserve_exact(5+host.len()).map_err(|_|Rejected)?;
+    spn.extend_from_slice(b"cifs/");spn.extend_from_slice(host);
+    let result=ProtectedRevision{user:utf16(name.as_bytes())?,domain:utf16(DOMAIN.as_bytes())?,
+        spn:utf16(&spn)?,epoch:q.generation,response_key:key,source:RevisionSource::Installed(Arc::downgrade(start))};
+    actual.require_current().map_err(|_|Rejected)?;
+    Ok(result)
 }
 
 #[cfg(test)]

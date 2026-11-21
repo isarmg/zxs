@@ -11,4 +11,4 @@ JOIN main.operation o ON o.op_id=r.op_id AND o.kind=CASE r.role WHEN 1 THEN 7 EL
 WHERE p.pool_id=?1 AND p.init_op=?2 AND a.birth_op=?3 AND o.actor_id=?5 AND o.request_sha=?6
   AND r.approval_ref=?7 AND r.previous_op=?10 AND r.generation=?11 AND
   ((r.role=0 AND a.web_id=?9 AND ?12 IS NULL AND ?13 IS NULL) OR
-   (r.role=1 AND a.smb_id=?9 AND a.instance_id=?12 AND r.bound_sha=?13));
+   (r.role=1 AND a.smb_family=0 AND a.smb_id=?9 AND a.instance_id=?12 AND r.bound_sha=?13));

@@ -1,11 +1,27 @@
 //! From a paid frame on its original connection to short, ordered, signed
 //! session-member borrows. Not a Tree, Open, execution result or reply.
 pub(in crate::smb) mod outbound;
+pub(super) mod trees;
+pub(super) mod opens;
+pub(in crate::smb) use trees::ProposedTreeId;
+pub(in crate::smb) use outbound::root_io::{BirthAdmission,ClosedOpen,PendingOpen};
+pub(in crate::smb) use outbound::root_io::probe::ProbePart;
+pub(in crate::smb) use outbound::root_io::retained_restore::FileActionPart;
+pub(in crate::smb) use outbound::root_query::{DirectoryRefusal,PendingRootQuery,WrittenOrdinaryQuery,WrittenRetainedQuery,WrittenRootQuery};
+pub(in crate::smb) use outbound::root_query::related::BrowsePart;
+pub(in crate::smb) use outbound::retire::ExitPlan;
+pub(in crate::smb) use outbound::restore::{PendingRename,RenameRefusal};
+pub(in crate::smb) use outbound::file_read::{PendingRead,ReadRefusal};
+pub(in crate::smb) use outbound::file_write::{PendingWrite,WriteRefusal};
+pub(in crate::smb::connection) use outbound::ordinary_move::MoveEscrow;
+pub(in crate::smb) use outbound::root_attributes::{FsInfoRefusal,PendingAttributeTag,PendingFileName,PendingFileStandard,PendingInternal,PendingRootAttributes,PendingRootSize};
+mod authority;
+pub(crate) use authority::RustSessionWitness;
 use super::{Phase,Registration};
 use crate::smb::{
     connection::{Connection,Fault,Origin,Payload,Received,Result,accepted::AcceptedEndpoints},
     session::{self,BatchRevision,BoundSession,VerifiedIds},
-    wire::message::{Message,RELATED},
+    wire::{credit_fields::Limits,message::{Message,RELATED}},
 };
 use std::{num::NonZeroU64,sync::{Arc,atomic::Ordering},time::Instant};
 
@@ -13,7 +29,7 @@ use std::{num::NonZeroU64,sync::{Arc,atomic::Ordering},time::Instant};
 pub(in crate::smb) enum Admission<'owner,'raw> {
     Ready(CheckedBatch<'owner,'raw>),
     AnotherConnection(Received<'raw>), // nothing touched on the mistaken owner
-    Other(Received<'raw>),            // setup, cancel or an unsupported command
+    Other(Received<'raw>),            // not an executable ordinary command
     Refused(Refused<'raw>),           // a future error writer still owes THIS frame
     TransportGone,
 }
@@ -43,11 +59,13 @@ impl<'step,'raw> VerifiedMember<'step,'raw> {
     pub(in crate::smb) fn message(&self)->&Message<'raw> {self.message}
     pub(in crate::smb) fn ordinal(&self)->usize {self.ordinal}
     pub(in crate::smb) fn session(&self)->&SessionView<'step> {&self.session}
-    pub(in crate::smb) fn max_transact(&self)->u32 {self.session.max_transact}
+    pub(in crate::smb) fn max_transact(&self)->u32 {self.session.limits.transact}
+    pub(in crate::smb) fn max_read(&self)->u32 {self.session.limits.read}
+    pub(in crate::smb) fn max_write(&self)->u32 {self.session.limits.write}
 }
 /// Not Clone, no constructor from an ID, no key or long-lived account token.
 pub(in crate::smb) struct SessionView<'step> {
-    reg:&'step Registration,origin:&'step Arc<Origin>,revision:&'step BatchRevision,max_transact:u32,
+    reg:&'step Registration,origin:&'step Arc<Origin>,revision:&'step BatchRevision,limits:&'step Limits,
 }
 impl SessionView<'_> {
     /// Borrow the pair from the same origin; never accept independently
@@ -71,15 +89,39 @@ impl SessionView<'_> {
 impl Connection {
     fn valid_slot(&self,sid:NonZeroU64)->Option<(&Registration,&BoundSession)> {
         let item=self.sessions.iter().find(|v|v.reg.claim.id==sid)?;
-        match &item.phase {Phase::Valid(bound)=>Some((&item.reg,bound)),_=>None}
+        match &item.phase {Phase::Valid(valid)=>Some((&item.reg,&valid.auth)),_=>None}
+    }
+    fn published_bound(&self,sid:NonZeroU64)->Option<&BoundSession> {
+        let (reg,bound)=self.valid_slot(sid)?;
+        match reg.current(&self.origin,Instant::now()) {
+            Ok(true)=>Some(bound),Ok(false)=>None,
+            Err(_)=>{self.origin.closed.store(true,Ordering::Release);None},
+        }
     }
     fn member_scope<'a>(&'a self,sid:NonZeroU64,revision:&'a BatchRevision)->Result<SessionView<'a>> {
         let (reg,bound)=self.valid_slot(sid).ok_or(Fault::SessionState)?;
         if !bound.on_revision(revision) {return Err(Fault::SessionState);}
-        let view=SessionView{reg,origin:&self.origin,revision,max_transact:self.limits.transact};view.recheck()?;Ok(view)
+        let view=SessionView{reg,origin:&self.origin,revision,limits:&self.limits};view.recheck()?;Ok(view)
     }
 }
 impl<'raw> Received<'raw> {
+    /// The actual synchronous owner has no target at a receive boundary.
+    /// Require that invariant here, not merely at the end of `Peer::poll`:
+    /// this cannot silently discard a cancel for a future in-flight owner.
+    pub(in crate::smb::connection) fn discard_idle_cancel(self,owner:&Connection)->Result<()> {
+        if !Arc::ptr_eq(&self.debit.origin,&owner.origin) {return Err(Fault::WrongBatch);}
+        owner.alive()?;
+        let [m]=self.frame.messages() else {return Err(Fault::WrongReply);};
+        // MS-SMB2 2.2.30: Size=4; the reserved word has no semantics,
+        // but it remains in the originally authenticated bytes.
+        if owner.in_flight!=0 || self.debit.owed || self.payload(0)!=Some(Payload::CancelExempt) ||
+            m.raw.len()!=68 || m.raw[64..66]!=4u16.to_le_bytes() {return Err(Fault::WrongReply);}
+        let revision=owner.origin.run.verifier.as_ref().and_then(|s|s.batch_revision()).ok_or(Fault::NoVerifier)?;
+        let id=session::verify_cancel(self.frame,&revision,|sid|owner.published_bound(sid));
+        owner.alive()?;
+        owner.member_scope(id.map_err(|_|Fault::SessionState)?,&revision)?;
+        Ok(()) // no affected request, status, credit grant, or business handler
+    }
     fn unsigned_live_tree(&self,i:usize,c:&Connection,revision:&BatchRevision)->bool {
         let parts=self.frame.messages();
         let Some(m)=parts.get(i) else {return false;};
@@ -109,13 +151,7 @@ impl<'raw> Received<'raw> {
             return Admission::Refused(Refused{original:self,ordinal:0,reason:session::Fault::UnknownSession});
         };
         let c:&Connection=&*owner;
-        let signed=session::verify_published(self.frame,&revision,|id|{
-            let (reg,bound)=c.valid_slot(id)?;
-            match reg.current(&c.origin,Instant::now()) {
-                Ok(true)=>Some(bound),Ok(false)=>None,
-                Err(_)=>{c.origin.closed.store(true,Ordering::Release);None},
-            }
-        });
+        let signed=session::verify_published(self.frame,&revision,|id|c.published_bound(id));
         if c.alive().is_err() {owner.disconnect();return Admission::TransportGone;}
         let ids=match signed {
             Ok(ids)=>ids,

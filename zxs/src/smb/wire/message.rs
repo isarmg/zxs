@@ -9,7 +9,7 @@ const SERVER_TO_REDIR: u32 = 1;
 const ASYNC: u32 = 2;
 pub(in crate::smb) const RELATED: u32 = 4;
 pub(in crate::smb) const SIGNED: u32 = 8;
-const CANCEL: u16 = 0x000c;
+pub(in crate::smb) const CANCEL: u16 = 0x000c;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Routing {

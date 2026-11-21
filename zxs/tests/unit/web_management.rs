@@ -239,3 +239,25 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
     assert!(result.contains(&format!("版本 ID：<code>{}</code>",frozen.version)));
     assert!(history_result.contains(&format!("<code>{}</code>",frozen.version))&&history_result.contains(&format!("<code>{}</code>",frozen.node)));
 }
+
+
+#[test]
+#[ignore="isolated loopback TCP and fresh SQLite; tests no live port or deployed site"]
+fn failed_private_web_ready_keeps_the_original_listener_unserved(){
+    use crate::system::reader::ordinary_pool;
+    let temp=PrivateTemp::under(&std::env::temp_dir());
+    let (path,pool,_,_,_)=ordinary_pool(&temp);
+    let source=InitialReader::open(&path,pool).unwrap();
+    let listener=TcpListener::bind(("127.0.0.1",0)).unwrap();
+    let _peer=TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let count=std::cell::Cell::new(0);
+    let rejected=serve_ready_original(&source,&listener,||->io::Result<fn()->bool>{
+        count.set(count.get()+1);
+        Err(io::ErrorKind::PermissionDenied.into())
+    });
+    assert_eq!(count.get(),1);
+    assert_eq!(rejected.unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+    // The already queued real connection still belongs to the exact same
+    // listener; no gated worker accepted it during or after the failed cut.
+    assert!(listener.accept().is_ok());
+}

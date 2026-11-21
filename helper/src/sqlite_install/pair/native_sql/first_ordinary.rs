@@ -1,66 +1,10 @@
-//! One explicit offline setup, after exact native synchronization. This
-//! module cannot turn an already confirmed receipt into a new publication
-//! or act as an online Web login. It never obtains a filesystem path.
-use super::{Binding,Birth,Id,Ids,Original,activate,bad,blob,collision,one,require_init,sql};
-use crate::smb_profile::{self,first::{Folder,FolderIds,Plan}};
+//! Exact first ordinary publications after the genuine Rust setup.
+use super::{Id,bad,blob,collision,one,sql};
+use crate::smb_profile::first::{Folder,FolderIds};
 use rusqlite::{Transaction,params};
 use sha2::{Digest,Sha256};
 use std::io;
 
-pub(super) struct Selected<'p> { birth: &'p Birth, plan: &'p Plan }
-impl<'p> Selected<'p> {
-    /// The caller must also hold the *independently* approved site/grant and
-    /// the exact original config/BOUND descriptions. SHA is not authorization.
-    pub(super) fn bind(birth: &'p Birth,bound: &[u8;128],plan: &'p Plan)->io::Result<Self>{
-        let o=plan.origin;
-        let live:[u8;32]=Sha256::digest(smb_profile::render(plan).map_err(bad)?.as_bytes()).into();
-        let scope=birth.scope;
-        if (o.pool,o.init,o.setup,o.instance)!=(scope.pool,scope.init,scope.op,birth.binding.instance)
-            || Binding::expected(bound,&o.pool,&o.instance,&o.domain,&live)?!=birth.binding{
-            return Err(bad("the original native setup and approved ordinary plan do not match"));
-        }
-        Ok(Self{birth,plan})
-    }
-
-    fn volumes(&self,tx:&Transaction<'_>)->io::Result<()>{
-        let c=self.birth.scope;
-        require_init(tx,&c)?;
-        volumes(tx,&c.init,self.plan.folders())
-    }
-    pub(super) fn vacant(&self,tx:&Transaction<'_>)->io::Result<()>{
-        self.volumes(tx)?;
-        vacant(tx,self.plan.folders())
-    }
-
-    /// Call with the actual original pending setup, native proof and live
-    /// first-plan grant under the single guarded writer closure. The caller
-    /// must drop the whole transaction if this fails, even after activation.
-    pub(super) fn finish(&self,tx:&Transaction<'_>,ids:Ids)->io::Result<()>{
-        if self.birth.original(tx)?!=Original::Pending(ids){
-            return Err(bad("only this still-pending original setup can issue its inaugural shares"));
-        }
-        self.vacant(tx)?;
-        let c=self.birth.scope;
-        activate(tx,&c,c.op,&self.birth.binding,&self.birth.sha(),ids.smb,&self.birth.smb,1,None)?;
-        let a=Authority{pool:c.pool,setup:c.op,web:ids.web};
-        a.require_first_web(tx)?;
-        for (f,k) in self.plan.folders(){a.insert(tx,f,*k)?;}
-        self.history(tx,ids)
-    }
-
-    /// The original apply/receipt history is not the runtime access grant.
-    /// Re-observing the already completed setup never reopens later-off shares.
-    pub(super) fn history(&self,tx:&Transaction<'_>,ids:Ids)->io::Result<()>{
-        self.volumes(tx)?;
-        if self.birth.original(tx)?!=Original::Committed(ids){return Err(bad("the original complete setup and account pair are required"));}
-        let a=Authority{pool:self.birth.scope.pool,setup:self.birth.scope.op,web:ids.web};
-        for (f,k) in self.plan.folders(){a.original(tx,f,*k)?;}
-        Ok(())
-    }
-}
-
-// Exact transactional helpers for the same original SQL publication. The
-// two external credential families do not share a disk credential or grant.
 pub(super) fn volumes(tx:&Transaction<'_>,init:&Id,folders:&[(Folder,FolderIds)])->io::Result<()>{
     let mut s=tx.prepare("SELECT EXISTS(SELECT 1 FROM main.volume_claim v
               JOIN main.operation o ON o.op_id=v.claim_op

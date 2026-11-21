@@ -3,7 +3,6 @@ mod check;
 mod first;
 pub(crate) use first::{serve_first,serve_repair};
 mod http;
-mod setup;
 mod view;
 
 use http::{Reply,Request};
@@ -40,9 +39,6 @@ impl Panel {
             session:None,expires:now+PAIR,closed:false,check:None,handoff:None,storage:None}
     }
     fn handle(&mut self,r:Request,now:Instant)->Reply{
-        self.handle_with_guide(r,now,setup::observe)
-    }
-    fn handle_with_guide(&mut self,r:Request,now:Instant,guide:impl FnOnce()->Reply)->Reply{
         if self.closed||now>=self.expires{return Reply::plain(403,"会话已结束，请重新在终端启动。");}
         if r.host!=self.host{return Reply::plain(403,"需要本机准确的回环地址和端口。");}
         if r.method=="GET" && r.body.is_empty(){
@@ -96,7 +92,6 @@ impl Panel {
         match r.path.as_str() {
             "/api/copy/preview"=>match self.check.as_mut(){Some(c)=>c.preview(now),
                 None=>Reply::plain(403,"本次终端只开放观察，没有预选卷镜像。")},
-            "/api/install/guide"=>guide(),
             "/api/disks"=>view::disks(false),"/api/rates"=>view::disks(true),"/api/tools"=>view::tools(),
             "/api/storage"=>match &self.storage{Some(roots)=>view::storage(&roots.observe()),
                 None=>Reply::plain(403,"本次终端没有预选挂载目录；请另从本机终端以 disk-web --storage-roots 启动。")},

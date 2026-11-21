@@ -3,14 +3,14 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 16;
+PRAGMA user_version = 17;
 
 -- Both INIT (1) and SETUP_PAIR (2) name a separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
 -- SET_SHARE_MODE (4) changes one share; no per-user ACL.
 -- CREATE_FILE (5) reserves one exact name in its selected ordinary parent.
 -- FIRST_WORK (6) selects the first manual working revision, never a formal Node.
--- RESET_SMB (7) is pending until its single native SAM account is durable.
+-- RESET_SMB (7) is pending until its sole credential, of the original SMB family, is durable.
 -- RESET_WEB (8) changes only the Web verifier in one SQL commit.
 -- WORK_EDIT (10) revises one working round; MANUAL_NODE (11) freezes it explicitly.
 -- TRANSFER (12) changes one original FILE placement; it never creates a FILE or version.
@@ -58,7 +58,8 @@ CREATE TABLE volume_claim (
 ) STRICT, WITHOUT ROWID;
 
 -- Exactly one immutable protocol identity pair per pool. This database contains
--- only the Web credential. Samba alone holds the SMB credential, never a copy here.
+-- only the Web credential. The original SMB family owns its one external
+-- credential; this database never stores the SMB secret or its digest.
 CREATE TABLE account_pair (
   singleton     INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),
   birth_op      BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
@@ -72,7 +73,12 @@ CREATE TABLE account_pair (
   smb_login     BLOB NOT NULL CHECK(length(smb_login) BETWEEN 1 AND 64 AND instr(smb_login,X'00')=0 AND
        CAST(substr(smb_login,1,1) AS TEXT) GLOB '[a-z0-9]' AND CAST(smb_login AS TEXT) NOT GLOB '*[^a-z0-9._-]*') CHECK(smb_login<>web_login AND CAST(smb_login AS TEXT) NOT IN ('guest','anonymous','nobody','root')),
   smb_sid       BLOB NOT NULL CHECK(length(smb_sid)=28 AND substr(smb_sid,1,12)=X'010500000000000515000000'
-                 AND substr(smb_sid,13,12)<>zeroblob(12) AND substr(smb_sid,25,4)=X'E8030000')
+                 AND substr(smb_sid,13,12)<>zeroblob(12) AND substr(smb_sid,25,4)=X'E8030000'),
+  smb_family    INTEGER NOT NULL CHECK(smb_family IN (0,1)), -- native SAM or Rust vault, immutable
+  smb_rust_bind_id BLOB,
+  CHECK((smb_family=0 AND smb_rust_bind_id IS NULL) OR
+        (smb_family=1 AND smb_rust_bind_id IS NOT NULL AND length(smb_rust_bind_id)=16
+                      AND smb_rust_bind_id<>zeroblob(16) AND setup_bound_sha<>zeroblob(32)))
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE web_password (
@@ -82,8 +88,9 @@ CREATE TABLE web_password (
   salt          BLOB NOT NULL CHECK(length(salt)=16),
   verifier      BLOB NOT NULL CHECK(length(verifier)=32)
 ) STRICT, WITHOUT ROWID;
--- Immutable public revisions, one chain per protocol. A NULL bound_sha is
--- mandatory for Web: Web reset never reads the native SAM or its credentials.
+-- Immutable public revisions, one chain per protocol. Web always has NULL
+-- bound_sha and never reads the SMB credential. Rust reset stays with the
+-- first approved public installation descriptor; native uses its old binding.
 CREATE TABLE credential_reset (
   op_id        BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
   role         INTEGER NOT NULL CHECK(role IN (0,1)), -- 0 Web, 1 SMB
@@ -94,6 +101,25 @@ CREATE TABLE credential_reset (
                            (role=1 AND bound_sha IS NOT NULL AND length(bound_sha)=32)),
   UNIQUE(role,generation), UNIQUE(role,previous_op)
 ) STRICT, WITHOUT ROWID;
+
+-- Nonsecret original coordinates only. There is still only one epoch chain
+-- and one activation state; a vault record ID is not an authentication proof.
+CREATE TABLE smb_rust_revision (
+  credential_op BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  record_id     BLOB NOT NULL UNIQUE CHECK(length(record_id)=16 AND record_id<>zeroblob(16))
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER start_smb_rust_revision BEFORE INSERT ON smb_rust_revision
+WHEN EXISTS(SELECT 1 FROM smb_rust_revision WHERE credential_op=NEW.credential_op OR record_id=NEW.record_id)
+  OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.credential_op)
+  OR NOT EXISTS(SELECT 1 FROM account_pair a WHERE a.singleton=1 AND a.smb_family=1 AND
+       (a.birth_op=NEW.credential_op OR EXISTS(SELECT 1 FROM credential_reset r
+         WHERE r.op_id=NEW.credential_op AND r.role=1 AND r.bound_sha=a.setup_bound_sha)))
+BEGIN SELECT RAISE(ABORT,'Rust vault record requires one fresh original of this family'); END;
+CREATE TRIGGER keep_smb_rust_revision BEFORE UPDATE ON smb_rust_revision
+BEGIN SELECT RAISE(ABORT,'immutable Rust vault record identity'); END;
+CREATE TRIGGER retain_smb_rust_revision BEFORE DELETE ON smb_rust_revision
+BEGIN SELECT RAISE(ABORT,'retain original Rust vault record identity'); END;
+
 CREATE VIEW credential_epoch(role,slot,credential_op,generation) AS
   SELECT 0,singleton,birth_op,1 FROM account_pair UNION ALL
   SELECT 1,singleton,birth_op,1 FROM account_pair UNION ALL
@@ -109,6 +135,8 @@ CREATE TRIGGER start_reset BEFORE INSERT ON credential_reset
 WHEN EXISTS(SELECT 1 FROM credential_reset WHERE op_id=NEW.op_id OR
             (role=NEW.role AND (generation=NEW.generation OR previous_op=NEW.previous_op)))
   OR EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id)
+  OR (NEW.role=1 AND EXISTS(SELECT 1 FROM account_pair a WHERE a.singleton=1 AND a.smb_family=1
+                          AND NEW.bound_sha IS NOT a.setup_bound_sha))
   OR NOT EXISTS(SELECT 1 FROM active_credential WHERE role=NEW.role AND credential_op=NEW.previous_op
                 AND generation=NEW.generation-1)
 BEGIN SELECT RAISE(ABORT,'reset requires the precise active predecessor and a fresh original'); END;
@@ -891,11 +919,15 @@ BEGIN SELECT RAISE(ABORT,'manual publication requires one exact settled original
 CREATE TRIGGER keep_manual_node BEFORE UPDATE ON manual_node BEGIN SELECT RAISE(ABORT,'immutable manual node'); END;
 CREATE TRIGGER retain_manual_node BEFORE DELETE ON manual_node BEGIN SELECT RAISE(ABORT,'retain original manual node'); END;
 
--- Setup reserves the pair before native IO. Neither role is active until the
--- same setup commits; role-specific resets never change the other role.
+-- Setup reserves the pair before its family's external IO. Neither role is
+-- active until the same setup commits; role-specific resets never change
+-- the other role.
 CREATE TRIGGER new_origin BEFORE INSERT ON operation
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) AND kind=NEW.kind))
   OR EXISTS(SELECT 1 FROM credential_reset r WHERE r.op_id=NEW.op_id AND NEW.kind<>CASE r.role WHEN 0 THEN 8 ELSE 7 END)
+  OR (NEW.kind NOT IN (2,7) AND EXISTS(SELECT 1 FROM smb_rust_revision WHERE credential_op=NEW.op_id))
+  OR (NEW.kind IN (2,7) AND (SELECT smb_family FROM account_pair WHERE singleton=1)
+        IS NOT (SELECT EXISTS(SELECT 1 FROM smb_rust_revision WHERE credential_op=NEW.op_id)))
   OR (NEW.kind=7 AND (NEW.state<>0 OR NOT EXISTS(SELECT 1 FROM credential_reset WHERE op_id=NEW.op_id AND role=1)))
   OR (NEW.kind=8 AND (NEW.state<>1 OR NOT EXISTS(SELECT 1 FROM credential_reset r
         JOIN web_password w ON w.credential_op=r.op_id AND w.generation=r.generation
@@ -1001,7 +1033,10 @@ CREATE TRIGGER retain_claim BEFORE DELETE ON volume_claim BEGIN SELECT RAISE(ABO
 -- file/parent sync or an independent R filesystem. The offline writer must
 -- already hold those independent proofs at its final conditional update.
 CREATE TRIGGER confirm_origin BEFORE UPDATE OF state ON operation
-WHEN OLD.state<>0 OR NEW.state<>1 OR NOT (
+WHEN OLD.state<>0 OR NEW.state<>1
+  OR (OLD.kind IN (2,7) AND (SELECT smb_family FROM account_pair WHERE singleton=1)
+        IS NOT (SELECT EXISTS(SELECT 1 FROM smb_rust_revision WHERE credential_op=OLD.op_id)))
+  OR NOT (
   (OLD.kind=1 AND EXISTS(SELECT 1 FROM pool_birth b WHERE b.init_op=OLD.op_id
     AND b.root_count=(SELECT count(*) FROM volume_claim WHERE claim_op=OLD.op_id))) OR
   (OLD.kind=2 AND EXISTS(SELECT 1 FROM account_pair a JOIN web_password w ON w.slot=a.singleton

@@ -63,58 +63,77 @@ pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&
     engine::original_name(c)?;locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
     Ok((actual,result))
 }
-/// The fixed Web unit may be associated with this exact enrolled SYSTEM.
-/// No verifier, login, alternate path or non-Web credential leaves the cut.
-pub(super) fn confirmed_web(pool:&Id,init:&Id,setup:&Id,locked:&LockedSystem)->io::Result<()> {
-    with_origin(pool,init,locked,|tx,_|{
-        let qualified:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.account_pair a
-                JOIN main.operation o ON o.op_id=a.birth_op AND o.kind=2 AND o.state=1
-                JOIN main.active_credential e ON e.role=0 AND e.slot=a.singleton
-                WHERE a.singleton=1 AND a.birth_op=?1)",params![&setup[..]],|r|r.get(0)).map_err(sql)?;
-        if !qualified{return Err(bad("the original Web administrator is not confirmed"));}
-        Ok(())
-    })
-}
 pub(super) fn init_claims(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<Vec<Initial>>{
     with_origin(pool,init,locked,|tx,template|catalog::initial_metadata(tx,template,locked.source(),pool,init))
 }
-pub(super) struct StartupClaims{pub(super) ordinary:Vec<Initial>,pub(super) recycle:Initial}
-pub(super) fn startup_claims(plan:&crate::smb_profile::first::Plan,bound_sha:&[u8;32],locked:&LockedSystem)
-    ->io::Result<StartupClaims>{
-    let o=plan.origin;
-    with_origin(&o.pool,&o.init,locked,|tx,template|{
-        let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.account_pair a
-               JOIN main.operation s ON s.op_id=a.birth_op AND s.kind=2 AND s.state=1
-               JOIN main.active_credential e ON e.role=1 AND e.slot=a.singleton
-               WHERE a.singleton=1 AND a.birth_op=?1 AND a.instance_id=?2 AND a.setup_bound_sha=?3)",
-            params![&o.setup[..],&o.instance[..],&bound_sha[..]],|r|r.get(0)).map_err(sql)?;
-        if !live{return Err(bad("no confirmed original native account on this installation"));}
-        let claims=catalog::initial_metadata(tx,template,locked.source(),&o.pool,&o.init)?;
-        let mut selected=Vec::with_capacity(plan.folders().len());
-        for (f,key) in plan.folders(){
-            let issued:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.root_share r
-                 JOIN main.operation p ON p.op_id=r.publish_op AND p.kind=3 AND p.state=1
-                 JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=1
-                 JOIN main.operation q ON q.op_id=m.change_op AND q.kind=4 AND q.state=1
-                 WHERE r.share_id=?1 AND r.publish_op=?2 AND r.volume_id=?3 AND r.display_label=?4
-                   AND r.author_auth_op=?5 AND m.previous_op=?2 AND m.author_auth_op=?5
-                   AND m.change_op=?6 AND m.mode=?7)",
-                params![&key.share[..],&key.publish[..],&f.volume[..],f.name.as_bytes(),&o.setup[..],&key.setting[..],i64::from(f.mode.code())],
-                |r|r.get(0)).map_err(sql)?;
-            let item=claims.iter().find(|c|c.marker[20]==2&&c.marker[37..53]==f.volume)
-                .ok_or_else(||bad("a selected ordinary volume has no exact original claim"))?;
-            if !issued{return Err(bad("no confirmed original publication matching the selected folder"));}
-            selected.push(Initial{path:item.path.clone(),marker:item.marker});
-        }
-        Ok(StartupClaims{ordinary:selected,recycle:catalog::initial_recycle(&claims)?.clone()})
-    })
-}
-pub(super) fn approved_folders(plan:&crate::smb_profile::first::Plan,locked:&LockedSystem)->io::Result<()>{
-    let o=plan.origin;
-    let claims=init_claims(&o.pool,&o.init,locked)?;
-    catalog::initial_recycle(&claims)?;
-    if !plan.folders().iter().all(|(f,_)|claims.iter().any(|c|c.marker[20]==2&&c.marker[37..53]==f.volume)){
-        return Err(bad("the first SMB plan is not limited to the original ordinary data volumes"));
-    }
+/// Only for one new ZXS issuance. Existing or partially applied account
+/// authority, non-INIT history or an unknown first cut is never adopted.
+pub(super) fn isolated_first_init(tx:&Transaction<'_>,pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32])->io::Result<()>{
+    let found:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.pool_birth b
+        JOIN main.operation i ON i.op_id=b.init_op AND i.kind=1 AND i.state=1
+        WHERE b.singleton=1 AND b.pool_id=?1 AND b.init_op=?2 AND i.actor_id=?3 AND i.request_sha=?4)
+        AND NOT EXISTS(SELECT 1 FROM main.operation WHERE op_id<>?2)
+        AND NOT EXISTS(SELECT 1 FROM main.account_pair)
+        AND NOT EXISTS(SELECT 1 FROM main.web_password)
+        AND NOT EXISTS(SELECT 1 FROM main.smb_rust_revision)
+        AND NOT EXISTS(SELECT 1 FROM main.credential_epoch)
+        AND NOT EXISTS(SELECT 1 FROM main.credential_reset)
+        AND NOT EXISTS(SELECT 1 FROM main.root_share)
+        AND NOT EXISTS(SELECT 1 FROM main.share_mode)",
+        params![&pool[..],&init[..],&actor[..],&init_sha[..]],|r|r.get(0)).map_err(sql)?;
+    if !found{return Err(bad("not the exact committed account-free first v17 INIT"));}
     Ok(())
+}
+pub(super) fn isolated_first_claims(pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32],locked:&LockedSystem)
+    ->io::Result<(Vec<Initial>,std::fs::File)>{
+    super::fresh_issuer::require_v17()?;
+    let source=locked.source();let schema=Canonical::new()?;let db=Existing::observed_system(locked)?;
+    let marker=SystemMark::before_sql(source)?;
+    let pin=db.fresh_observation_pin()?;
+    let (_,claims)=at_original(pool,init,locked,&db,&schema,&marker,|tx|{
+        isolated_first_init(tx,pool,init,actor,init_sha)?;
+        catalog::initial_metadata(tx,&schema,source,pool,init)
+    })?;
+    db.sidecars_absent()?;let _same=db.fresh_observation_pin()?;
+    Ok((claims,pin))
+}
+#[cfg(test)]
+mod fresh_v17_tests{
+    use super::*;
+    #[test]
+    fn fresh_v17_sql_cut_rejects_pending_init_other_actor_receipt_and_prior_accounts(){
+        // Use only the frozen schema in memory; deliberately no host authority
+        // or mounted root. The real route separately proves the S VFS and marks.
+        let mut c=rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        c.execute_batch(crate::sqlite_install::stage::SCHEMA).unwrap();
+        let (pool,init,actor,reference,setup,instance)=([1u8;16],[2u8;16],[3u8;16],[4u8;16],[5u8;16],[6u8;16]);
+        let requested=[7u8;32];
+        let tx=c.transaction().unwrap();
+        tx.execute("INSERT INTO operation VALUES(?1,1,?2,?3,0)",params![&init[..],&actor[..],&requested[..]]).unwrap();
+        tx.execute("INSERT INTO pool_birth VALUES(1,?1,?2,?3,1001,3)",params![&pool[..],&init[..],&reference[..]]).unwrap();
+        assert!(isolated_first_init(&tx,&pool,&init,&actor,&requested).is_err());
+        for (i,path) in [b"/fixture/S".as_slice(),b"/fixture/R",b"/fixture/F"].into_iter().enumerate(){
+            tx.execute("INSERT INTO volume_claim VALUES(?1,?2,?2,?3,?4,255,?5)",
+                params![&init[..],i as i64,&[11u8+i as u8;16][..],path,&[21u8+i as u8;32][..]]).unwrap();
+        }
+        tx.execute("UPDATE operation SET state=1 WHERE op_id=?1",[&init[..]]).unwrap();
+        assert!(isolated_first_init(&tx,&pool,&init,&actor,&requested).is_ok());
+        assert!(isolated_first_init(&tx,&pool,&init,&[31;16],&requested).is_err());
+        assert!(isolated_first_init(&tx,&pool,&init,&actor,&[32;32]).is_err());
+        tx.commit().unwrap();
+
+        let tx=c.transaction().unwrap();
+        let mut sid=[42u8;28];sid[..12].copy_from_slice(&[1,5,0,0,0,0,0,5,21,0,0,0]);
+        sid[24..].copy_from_slice(&1000u32.to_le_bytes());
+        tx.execute("INSERT INTO account_pair VALUES(1,?1,?2,?3,?4,?5,X'776562',?6,X'736d62',?7,0,NULL)",
+            params![&setup[..],&reference[..],&instance[..],&[19u8;32][..],&[20u8;16][..],&[21u8;16][..],&sid[..]]).unwrap();
+        tx.execute("INSERT INTO web_password VALUES(1,?1,1,?2,?3)",
+            params![&setup[..],&[22u8;16][..],&[23u8;32][..]]).unwrap();
+        tx.execute("INSERT INTO operation VALUES(?1,2,?2,?3,0)",params![&setup[..],&actor[..],&[24u8;32][..]]).unwrap();
+        assert!(isolated_first_init(&tx,&pool,&init,&actor,&requested).is_err());
+        tx.rollback().unwrap();
+        let tx=c.transaction().unwrap();
+        assert!(isolated_first_init(&tx,&pool,&init,&actor,&requested).is_ok());
+    }
 }

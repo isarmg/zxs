@@ -1,7 +1,7 @@
 //! An original registered ordinary root, selected by VolumeId, not a
 //! FILE/account permission. Never routes a recycling root into normal I/O.
 use super::{Catalog,InitialReader,check,smb::ordinary_directory::{self,Route},zxs_sql_named};
-use crate::{Role,VolumeId,fs::{ComponentLimit,ControlRead,HeldDir,invalid,directory_birth::{DirectoryHold,DirectoryParent}}};
+use crate::{Role,VolumeId,fs::{ComponentLimit,ControlRead,HeldDir,invalid,directory_birth::{DirectoryBirth,DirectoryHold,DirectoryParent}}};
 use std::{io,os::{fd::AsRawFd,raw::c_int}};
 
 unsafe extern "C"{
@@ -113,7 +113,7 @@ impl OrdinaryMedia{
         Ok(Self{root:self.root.duplicate()?,mark:self.mark.duplicate()?,expected:self.expected,
             volume:self.volume,ordinal:self.ordinal,parent:self.parent,ancestors})
     }
-    fn view<'a>(&'a self,source:&'a InitialReader)->OrdinaryView<'a>{OrdinaryView{source,media:self}}
+    pub(super) fn view<'a>(&'a self,source:&'a InitialReader)->OrdinaryView<'a>{OrdinaryView{source,media:self}}
     pub(super) fn folder(&self)->&HeldDir{self.ancestors.last().map_or(&self.root,|child|child.directory())}
     pub(super) fn parent(&self)->DirectoryParent{self.parent}
     pub(super) fn capacity_origin(&self)->CapacityOrigin<'_>{
@@ -177,6 +177,21 @@ impl<'a> OrdinaryRoot<'a>{
     }
     pub(super) fn view(&self)->OrdinaryView<'_>{self.media.view(self.source)}
     pub(super) fn duplicate_media(&self)->io::Result<OrdinaryMedia>{self.media.duplicate()}
+    /// Attach the hold the actual directory birth just installed under
+    /// this exact F/parent. No reopening by client display spelling.
+    pub(super) fn adopt_directory(mut self,birth:&DirectoryBirth,child:DirectoryHold)->io::Result<OrdinaryMedia>{
+        if birth.pool!=self.source.pool||birth.volume!=self.media.volume||birth.parent!=self.media.parent||
+           child.directory().path!=self.folder().path.join(&birth.name){
+            return Err(invalid("new directory does not belong to this F parent"));
+        }
+        self.require_streaming()?;
+        child.require(self.folder())?;
+        self.media.ancestors.try_reserve(1).map_err(|_|io::ErrorKind::OutOfMemory)?;
+        self.media.ancestors.push(child);
+        self.media.parent=DirectoryParent::Directory(birth.id);
+        self.require_streaming()?;
+        Ok(self.into_media())
+    }
     pub(super) fn into_media(self)->OrdinaryMedia{self.media}
     // A verified short-lived handoff carries the same held F and ancestry,
     // not a pathname to reopen. The caller still authorizes the actual FILE.
@@ -249,6 +264,7 @@ impl<'a> RecycleRoot<'a>{
         held.require()?;Ok(held)
     }
     pub(super) fn media(&self)->&RecycleMedia{&self.media}
+    pub(super) fn into_media(self)->RecycleMedia{self.media}
     pub(super) fn volume(&self)->VolumeId{self.media.volume()}
     pub(super) fn root_for_read(&self)->&HeldDir{self.media.root_for_read()}
     pub(super) fn require(&self)->io::Result<()>{self.media.require(self.source)}

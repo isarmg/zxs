@@ -71,6 +71,26 @@ impl<'g> Existing<'g>{
         let x=Self(DbName{root,path,entity:Entity{dev:makedev(s.stx_dev_major,s.stx_dev_minor),ino:s.stx_ino},mount:s.stx_mnt_id},use_);
         x.require()?;Ok(x)
     }
+    // Non-readable kernel pin for the fresh-only paired issuer. No raw
+    // readable DB FD ever opens in root or in the VFS writer via this pin.
+    pub(super) fn fresh_observation_pin(&self)->io::Result<File>{
+        use rustix::fs::{ResolveFlags,openat2};
+        self.sidecars_absent()?;
+        let fd=File::from(openat2(self.0.root.dir(),c"SYSTEM.sqlite3",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,
+            Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_SYMLINKS|ResolveFlags::NO_MAGICLINKS)?);
+        let m=fd.metadata()?;
+        if m.mode()!=0o100600||m.nlink()!=1||m.uid()!=self.0.root.uid()||m.len()==0||
+            Entity::of(&m)?!=self.0.entity||Mount::on(&fd)?.is_none_or(|x|x.id!=self.0.mount){
+            return Err(bad("different fresh INIT database pin"));
+        }
+        self.sidecars_absent()?;Ok(fd)
+    }
+    pub(super) fn matches_fresh_origin(&self,expected:[u64;3])->io::Result<()>{
+        self.sidecars_absent()?;
+        let got=[self.0.entity.dev,self.0.entity.ino,self.0.mount];
+        if got!=expected{return Err(bad("the original account-free INIT database changed"));}
+        Ok(())
+    }
     pub(super) fn allows_install_write(&self)->bool{matches!(self.1,DbUse::InitialGroup)}
     pub(super) fn path(&self)->&std::path::Path{&self.0.path}
     pub(super) fn require(&self)->io::Result<()>{

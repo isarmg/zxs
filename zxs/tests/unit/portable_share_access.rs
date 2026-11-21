@@ -175,19 +175,12 @@ fn portable_bootstrap_requires_one_exact_profile_and_grants_only_to_confirmed_ac
     }
 }
 
-// Only a fixture preparing an independent known password/salt for the second
-// participant via the same installed reference ABI. No issuer or service uses it.
+// Fixed public fixture from the authenticated previous Debian trixie Argon2
+// library, t=3, m=65536, p=4, v=19, password "second public synthetic example".
+// Keep the verifier independent of the implementation under test.
 fn second_public_verifier()->([u8;16],[u8;32]){
-    use std::ffi::{c_int,c_void};
-    #[link(name="argon2",kind="dylib")]
-    unsafe extern "C"{
-        fn argon2id_hash_raw(t:u32,m:u32,p:u32,pw:*const c_void,pwlen:usize,salt:*const c_void,slen:usize,out:*mut c_void,n:usize)->c_int;
-    }
-    let pw=b"second public synthetic example";let salt=[0x9bu8;16];let mut out=[0u8;32];
-    // SAFETY: each exact buffer spans the specified size and lives through
-    // this synchronous upstream call; no actual password is used or stored.
-    let rc=unsafe{argon2id_hash_raw(3,65536,4,pw.as_ptr().cast(),pw.len(),salt.as_ptr().cast(),salt.len(),out.as_mut_ptr().cast(),out.len())};
-    assert_eq!(rc,0);(salt,out)
+    ([0x9b;16],[0x55,0x96,0xe5,0x08,0x4a,0x64,0x6a,0x3e,0x7d,0x03,0xc1,0xa6,0x25,0xfa,0xf5,0x9a,
+        0xca,0x7e,0xf0,0xaf,0x78,0xfd,0xa2,0xa4,0x26,0x38,0x5d,0xa1,0xcb,0x62,0x87,0xf2])
 }
 
 #[test]

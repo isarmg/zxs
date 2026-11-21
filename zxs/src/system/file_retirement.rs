@@ -101,11 +101,20 @@ impl<'a> Volume<'a>{
         }
     }
 }
-fn run(src:&InitialReader,t:&Ticket,live:&impl Fn()->io::Result<()>,point:&impl Fn(RetireCut)->io::Result<()>)->io::Result<()>{
+type Allowed<'a>=dyn Fn(&Connection,&Catalog,&Place,&Place)->io::Result<()>+'a;
+impl Ticket{
+    fn selected(&self,db:&Connection,c:&Catalog,allowed:&Allowed<'_>)->io::Result<Place>{
+        let current=self.current(db,c)?;
+        allowed(db,c,&self.source,&current)?;
+        Ok(current)
+    }
+}
+fn run(src:&InitialReader,t:&Ticket,allowed:&Allowed<'_>,live:&impl Fn()->io::Result<()>,
+    point:&impl Fn(RetireCut)->io::Result<()>)->io::Result<()>{
     live()?;
     let proof=RetireProof::decode(&t.names)?;
     let (c,birth,selected,members,from_parent,to_parent)=src.at(|db,c|{
-        let p=t.current(db,&c)?;
+        let p=t.selected(db,&c,allowed)?;
         let b=file_create::committed_file(db,&c,p.file)?;
         let m=work_record::members(db,&c,&b)?;
         let parent=|place:&Place| if place.role==Role::File{Route::at(db,&c,place.volume,place.parent).map(Some)}else{Ok(None)};
@@ -128,7 +137,7 @@ fn run(src:&InitialReader,t:&Ticket,live:&impl Fn()->io::Result<()>,point:&impl 
         return Err(invalid("selected target is not distinct from the old physical FILE"));
     }
     let installed=src.at(|db,c|{
-        if t.current(db,&c)?!=selected{return Err(invalid("retirement target moved"));}
+        if t.selected(db,&c,allowed)?!=selected{return Err(invalid("retirement target moved"));}
         applied_target(db,&selected)
     })?;
     target_original.still_retirement_target(target.root(),&installed)?;
@@ -137,14 +146,14 @@ fn run(src:&InitialReader,t:&Ticket,live:&impl Fn()->io::Result<()>,point:&impl 
         live()?;source.require()?;target.require()?;target_original.require(target.root())?;
         let version=super::smb_buffer::data_version(src)?;
         if observed.get()!=Some(version){
-            src.at(|db,c|if t.current(db,&c)?==selected{Ok(())}else{Err(invalid("retirement target moved"))})?;
+            src.at(|db,c|if t.selected(db,&c,allowed)?==selected{Ok(())}else{Err(invalid("retirement target moved"))})?;
             target_original.still_retirement_target(target.root(),&installed)?;
             observed.set(Some(version));
         }
         Ok(())
     };
     let last_cut=||->io::Result<()>{
-        src.at(|db,c|if t.current(db,&c)?==selected{Ok(())}else{Err(invalid("retirement target moved"))})?;
+        src.at(|db,c|if t.selected(db,&c,allowed)?==selected{Ok(())}else{Err(invalid("retirement target moved"))})?;
         gate()
     };
     let root=HeldDir::trusted_storage(&source.root().path)?;
@@ -158,17 +167,23 @@ fn run(src:&InitialReader,t:&Ticket,live:&impl Fn()->io::Result<()>,point:&impl 
     gate()?;
     let w=Connection::open(&src.dir,true)?;
     src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-        if t.current(db,&c)?!=selected{return Err(invalid("different selected target at source completion"));}
+        if t.selected(db,&c,allowed)?!=selected{return Err(invalid("different selected target at source completion"));}
         live()?;
         let q=db.prepare(c"UPDATE main.file_transfer_source SET guard=NULL,status=1 WHERE seq=?1 AND transfer_op=?2 AND status=0")?;
         q.bind_integer(1,t.seq)?;q.bind_bytes(2,&t.op.0)?;q.done()
     })
 }
 pub(super) fn serve(src:&InitialReader,live:impl Fn()->io::Result<()>){
+    serve_scoped(src,|_,_,_,_|Ok(()),live)
+}
+/// The exact existing work, with an optional family-specific restriction
+/// at each SQL selection. No caller can supply a cleanup ticket.
+pub(super) fn serve_scoped(src:&InitialReader,allowed:impl Fn(&Connection,&Catalog,&Place,&Place)->io::Result<()>,
+    live:impl Fn()->io::Result<()>){
     let mut after=0;
     while live().is_ok(){
         let pause=match next(src,after){
-            Ok(Some(t))=>{after=t.seq;let _=run(src,&t,&live,&|_|Ok(()));250},
+            Ok(Some(t))=>{after=t.seq;let _=run(src,&t,&allowed,&live,&|_|Ok(()));250},
             _=>{after=0;1000},
         };
         // Avoid spinning on a genuinely open old FILE, an offline R, a
@@ -179,5 +194,5 @@ pub(super) fn serve(src:&InitialReader,live:impl Fn()->io::Result<()>){
 #[cfg(test)]
 pub(super) fn one_for_test(src:&InitialReader,point:impl Fn(RetireCut)->io::Result<()>)->io::Result<()>{
     let t=next(src,0)?.ok_or_else(||invalid("no pending original retirement"))?;
-    run(src,&t,&||Ok(()),&point)
+    run(src,&t,&|_,_,_,_|Ok(()),&||Ok(()),&point)
 }

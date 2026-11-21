@@ -24,12 +24,10 @@ exclude = [
     "vendor/rust/ctutils-0.4.8",
     "vendor/rust/dbl-0.5.0",
     "vendor/rust/digest-0.11.3",
-    "vendor/rust/hmac-0.13.0",
     "vendor/rust/hybrid-array-0.4.15",
     "vendor/rust/inout-0.2.6",
     "vendor/rust/libc-0.2.191",
     "vendor/rust/md-5-0.11.0",
-    "vendor/rust/rc4-0.2.0",
     "vendor/rust/sha2-0.11.1",
     "vendor/rust/typenum-1.20.1",
     "vendor/rust/zeroize-1.9.2",
@@ -37,9 +35,12 @@ exclude = [
 
 [dependencies]
 aes = { version = "=0.9.4", path = "vendor/rust/aes-0.9.4", default-features = false, features = ["zeroize"] }
+# The private NTLM key-exchange module keeps the former RC4 package's features.
+cipher = { version = "=0.5.2", path = "vendor/rust/cipher-0.5.2", default-features = false, features = ["stream-wrapper", "zeroize"] }
 cmac = { version = "=0.8.0", path = "vendor/rust/cmac-0.8.0", default-features = false, features = ["zeroize"] }
-hmac = { version = "=0.13.0", path = "vendor/rust/hmac-0.13.0", default-features = false, features = ["zeroize"] }
+# The internal SMB keyed digest uses the same RustCrypto macro and traits as the old HMAC package.
+digest = { version = "=0.11.3", path = "vendor/rust/digest-0.11.3", default-features = false, features = ["block-api", "mac", "zeroize"] }
+libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
 md-5 = { version = "=0.11.0", path = "vendor/rust/md-5-0.11.0", default-features = false, features = ["zeroize"] }
-rc4 = { version = "=0.2.0", path = "vendor/rust/rc4-0.2.0", default-features = false, features = ["zeroize"] }
 sha2 = { version = "=0.11.1", path = "vendor/rust/sha2-0.11.1", default-features = false, features = ["zeroize"] }
 zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }

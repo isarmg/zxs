@@ -108,6 +108,8 @@ pub(in crate::smb) fn file_range_end(offset: u64, length: u32) -> Option<u64> {
     offset.checked_add(u64::from(length)).filter(|end| *end <= i64::MAX as u64)
 }
 
+const WRITE_FIXED: usize = 112;
+
 impl<'a> Message<'a> {
     pub(super) fn io_open_reference(&self, offset: usize) -> Result<OpenReference, IoFieldError> {
         // §3.3.5.2.7.2 says to use the prior operation's IDs in all
@@ -125,13 +127,8 @@ impl<'a> Message<'a> {
 
     pub(in crate::smb) fn read_request(&self, max_read: u32) -> Result<ReadRequest, IoFieldError> {
         use IoFieldError::*;
-        if self.header.command != 0x0008 {
-            return Err(WrongCommand);
-        }
+        self.read_fixed()?;
         let p = self.raw;
-        if p.len() < 112 || u16le(p, 64).map_err(|_| Malformed)? != 49 {
-            return Err(Malformed);
-        }
         let flags = p[67];
         if flags & !0x03 != 0 || u32le(p, 100).map_err(|_| Malformed)? != 0 {
             // This profile is TCP. An RDMA channel descriptor on TCP is an
@@ -157,15 +154,23 @@ impl<'a> Message<'a> {
         })
     }
 
+    /// This is only the bounded raw routing coordinate; the already-held
+    /// object later checks the exact paid READ with its real session limits.
+    pub(in crate::smb) fn read_target(&self)->Result<OpenReference,IoFieldError>{
+        self.read_fixed()?;
+        self.io_open_reference(80)
+    }
+    fn read_fixed(&self)->Result<(),IoFieldError>{
+        use IoFieldError::*;
+        if self.header.command!=0x0008{return Err(WrongCommand);}
+        if self.raw.len()<112||u16le(self.raw,64).map_err(|_|Malformed)?!=49{return Err(Malformed);}
+        Ok(())
+    }
+
     pub(in crate::smb) fn close_request(&self) -> Result<CloseRequest, IoFieldError> {
         use IoFieldError::*;
-        if self.header.command != 0x0006 {
-            return Err(WrongCommand);
-        }
+        self.close_fixed()?;
         let p = self.raw;
-        if p.len() < 88 || u16le(p, 64).map_err(|_| Malformed)? != 24 {
-            return Err(Malformed);
-        }
         let mode = match u16le(p, 66).map_err(|_| Malformed)? {
             0 => CloseMode::Plain,
             1 => CloseMode::PostQueryAttributes,
@@ -175,18 +180,25 @@ impl<'a> Message<'a> {
         Ok(CloseRequest { open: self.io_open_reference(72)?, mode })
     }
 
+    /// Bound the target before resolving the original CLOSE. Its flags are
+    /// processed by the actual object after Session.OpenTable and Tree lookup.
+    pub(in crate::smb) fn close_target(&self)->Result<OpenReference,IoFieldError>{
+        self.close_fixed()?;
+        self.io_open_reference(72)
+    }
+    fn close_fixed(&self)->Result<(),IoFieldError>{
+        use IoFieldError::*;
+        if self.header.command!=0x0006{return Err(WrongCommand);}
+        if self.raw.len()<88||u16le(self.raw,64).map_err(|_|Malformed)?!=24{return Err(Malformed);}
+        Ok(())
+    }
+
     /// MS-SMB2 §§2.2.21 and 3.3.5.13. Borrow exactly Length TCP bytes of this
     /// message, never a descriptor, an adjacent command, or compound padding.
     pub(in crate::smb) fn write_request(&self, max_write: u32) -> Result<WriteRequest<'a>, IoFieldError> {
         use IoFieldError::*;
-        const FIXED: usize = 112;
-        if self.header.command != 0x0009 {
-            return Err(WrongCommand);
-        }
+        self.write_fixed()?;
         let p = self.raw;
-        if p.len() < FIXED || u16le(p, 64).map_err(|_| Malformed)? != 49 {
-            return Err(Malformed);
-        }
         if u32le(p, 96).map_err(|_| Malformed)? != 0 {
             return Err(Malformed); // TCP only, including when Length is zero
         }
@@ -198,7 +210,7 @@ impl<'a> Message<'a> {
         let payload = if length == 0 && at == 0 {
             &p[0..0]
         } else {
-            if !(FIXED..=0x100).contains(&at) {
+            if !(WRITE_FIXED..=0x100).contains(&at) {
                 return Err(Malformed);
             }
             bytes(p, at, usize::try_from(length).map_err(|_| Malformed)?).map_err(|_| Malformed)?
@@ -220,6 +232,22 @@ impl<'a> Message<'a> {
                 position, payload, length, write_through: flags & 1 != 0, unbuffered: flags & 2 != 0,
             },
         })
+    }
+
+    /// The fixed routing coordinate only; the original session/tree/OPEN
+    /// lookup precedes length, channel and buffer validation (§3.3.5.13).
+    /// A successful lookup here never makes malformed WRITE data executable.
+    pub(in crate::smb) fn write_target(&self) -> Result<OpenReference, IoFieldError> {
+        self.write_fixed()?;
+        self.io_open_reference(80)
+    }
+    fn write_fixed(&self) -> Result<(), IoFieldError> {
+        use IoFieldError::*;
+        if self.header.command != 0x0009 { return Err(WrongCommand); }
+        if self.raw.len() < WRITE_FIXED || u16le(self.raw, 64).map_err(|_| Malformed)? != 49 {
+            return Err(Malformed);
+        }
+        Ok(())
     }
 
     /// MS-SMB2 §2.2.17. Neither reserved field is a flush mode.

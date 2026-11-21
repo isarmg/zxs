@@ -13,11 +13,6 @@ pub fn cancelled()->bool{CANCELLED.load(Ordering::Relaxed)}
 pub fn watch_cancellation()->io::Result<()>{
     watch(&[libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT])
 }
-/// A foreground SMB supervisor must also stop rather than be suspended by
-/// the tty job-control key. Fixed child setup starts with default handlers.
-pub fn watch_smb_cancellation()->io::Result<()>{
-    watch(&[libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT,libc::SIGTSTP])
-}
 #[allow(unsafe_code)]
 fn watch(signals:&[libc::c_int])->io::Result<()>{
     // SAFETY: fully initialized Linux sigaction with a C-ABI handler that
@@ -163,17 +158,10 @@ fn prepare_fixed_panel_exec(cmd:&mut Command,original:&File,action:&'static str,
     pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t),None)
 }
 
-/// First-install child: no caller-selected operation or argument. The parent
-/// hands off a sealed scope and one local result endpoint, not root files.
-pub fn prepare_sam_worker_exec(cmd:&mut Command,original:&File)->io::Result<()>{
-    pinned_exec(cmd,original,vec![CString::new("helper").expect("literal"),
-        CString::new("__sam-fresh-v1").expect("literal")],Some(std::process::id() as libc::pid_t),None)
-}
-
 /// Fixed private child kinds. Neither can execute a caller-supplied program
 /// or inherit descriptors beyond the same dedicated 3/4 layout.
 #[derive(Clone,Copy)]
-pub enum OfflineSql { Account, FirstLayout, FirstBrowser, CopyRepairBrowser }
+pub enum OfflineSql { FirstLayout, FirstBrowser, RustAccount, RustVaultWriter, CopyRepairBrowser }
 
 /// The account SQL child retains the operator's TERMINAL session (not
 /// the unrelated diagnostic worker session). Only 3=private seqpacket and
@@ -202,8 +190,10 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
         if libc::dup3(channel.as_raw_fd(),3,0)!=3||libc::dup3(order.as_raw_fd(),4,0)!=4{
             return Err(io::Error::last_os_error());
         }
-        let action=match mode{OfflineSql::Account=>c"__native-account-sql-v9",OfflineSql::FirstLayout=>c"__first-layout-sql-v9",OfflineSql::FirstBrowser=>c"__first-install-browser-v1",
-            OfflineSql::CopyRepairBrowser=>c"__copy-repair-browser-v2"};
+        let action=match mode{OfflineSql::FirstLayout=>c"__first-layout-sql-v9",OfflineSql::FirstBrowser=>c"__first-install-browser-v1",
+            OfflineSql::RustAccount=>c"__rust-account-sql-v1",OfflineSql::RustVaultWriter=>c"__rust-vault-writer-v1",
+            OfflineSql::CopyRepairBrowser=>c"__copy-repair-browser-v2",
+        };
         let argv=[c"helper".as_ptr(),action.as_ptr(),std::ptr::null()];
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
         libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),
@@ -377,4 +367,26 @@ mod tests {
         assert_eq!(decision(&p,0x4000_0003,uapi::__NR_fork),0x8000_0000);
         assert_eq!(decision(&p,arch,0x4000_0000|uapi::__NR_clone),0x8000_0000);
     }
+}
+
+/// Only this kernel null object may be exposed as a device. Its pathname is
+/// never taken from the environment, manifest or command arguments.
+pub fn null_device()->io::Result<File>{
+    use rustix::fs::{Mode,OFlags,PROC_SUPER_MAGIC,fstatfs,open,openat};
+    use std::os::unix::fs::{FileTypeExt,MetadataExt};
+    const DIR:OFlags=OFlags::PATH.union(OFlags::DIRECTORY).union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
+    let fail=||io::Error::other("the original kernel null device could not be proved");
+    let dev=File::from(open(c"/dev",DIR,Mode::empty())?);
+    let pin=File::from(openat(&dev,c"null",OFlags::PATH|OFlags::CLOEXEC|OFlags::NOFOLLOW,Mode::empty())?);
+    let m=pin.metadata()?;
+    if !m.file_type().is_char_device()||m.rdev()!=rustix::fs::makedev(1,3)||m.uid()!=0||m.gid()!=0||
+        m.mode()&0o7777!=0o666||!matches!(fstatfs(&pin)?.f_type as u64,0x01021994){return Err(fail());}
+    // Use the genuine, held current proc-fd identity, not a second /dev name.
+    let p=File::from(open(c"/proc",DIR,Mode::empty())?);
+    if fstatfs(&p)?.f_type!=PROC_SUPER_MAGIC{return Err(fail());}
+    let name=format!("thread-self/fd/{}",pin.as_raw_fd());
+    let file=File::from(openat(&p,name.as_str(),OFlags::RDWR|OFlags::NOCTTY|OFlags::CLOEXEC,Mode::empty())?);
+    let f=file.metadata()?;
+    if !f.file_type().is_char_device()||(f.dev(),f.ino(),f.rdev())!=(m.dev(),m.ino(),m.rdev()){return Err(fail());}
+    Ok(file)
 }

@@ -5,7 +5,7 @@ use crate::smb::connection::{Opening,OpeningSend,setup::{Start,tests::{PICK,body
 use crate::smb::wire::preauth::tests::synthetic_exchange;
 
 pub(in crate::smb::connection) fn running(guid:[u8;16])->RunningServerGuid {
-    RunningServerGuid {run:Arc::new(Run{guid,index:Mutex::new(Global::empty()),verifier:None})}
+    RunningServerGuid {run:Arc::new(Run::new(guid,None))}
 }
 impl Opening {
     // For the existing ledger-only fixtures. Its known server wire bytes are

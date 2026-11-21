@@ -23,7 +23,6 @@
       <button type="button" id="rates">读取本次 I/O 速率</button>
       <button type="button" id="storage">查看预选挂载容量</button>
       <button type="button" id="tools">核对工具安装位置</button>
-      <button type="button" id="guide" class="quiet">打开首次安装向导</button>
     </div>
     <p class="hint">只有点击才采样，不后台刷新。速率取两次内核计数，不运行读写基准。挂载容量只采终端预选目录，不表示池登记或硬件健康。</p>
   </section>
@@ -37,110 +36,7 @@
       <button type="button" id="receipt" class="quiet">查看同次结果</button></div>
     </div>
   </section>
-  <section class="card install-guide" id="setup" hidden aria-labelledby="setuptitle">
-    <p class="eyebrow">FIRST INSTALL</p><h2 id="setuptitle">首次安装向导</h2>
-    <p>这里仅核对安装包的固定模板并给出本机步骤。不会选择盘、执行这些命令、安装服务或接收口令、路径、审批、回执。步骤不会自动打勾；真实结果请留在终端。</p>
-    <p class="hint">本路径面向 Debian 13 amd64。若尚无本机管理员按预期 SHA-256 独立核准的配套制品、合格的新卷及受保护的宿主维护身份，请停在准备阶段。模板一致不等于已核准制品、已配置、已启动或可登录。</p>
-    <dl class="setup-status" aria-label="本次只读的模板观察">
-      <dt>Samba 渲染骨架（非正式配置）</dt><dd id="setup-sam">未观察</dd>
-      <dt>旧内部预检材料（不用于正式启动）</dt><dd id="setup-smb">未观察</dd>
-      <dt>原生管理 HTTP 的可选启动单元与生成脚本</dt><dd id="setup-http">未观察</dd>
-    </dl>
-    <button id="guide-refresh" type="button" class="quiet">再次核对模板</button>
-    <p class="hint">可选择并复制下列某一段固定命令。先在对应的另一个本机终端用真实、非秘密值设定该段的变量；缺值会阻止执行。不要把口令设进变量或复制到本页。每个写操作分别确认，不能用配对授权。</p>
-    <ol class="setup-steps">
-      <li><details open><summary>核对新卷，在终端初始化存储池</summary>
-        <p>先独立确定全新 SYSTEM、专用回收卷和至少一个普通卷，按约定预先挂载。回收卷须与 SYSTEM 和所有普通卷来自不同的文件系统；一个名字或挂载 ID 不能证明独立。普通用户可先观察，不会写入：</p>
-        <pre tabindex="0" aria-label="观察新卷的命令"><code>/usr/bin/helper storage-status \
-  --system "${SYSTEM:?set SYSTEM in this terminal first}" \
-  --recycle "${RECYCLE:?set RECYCLE in this terminal first}" \
-  --data "${DATA:?set DATA in this terminal first}"</code></pre>
-        <p>下面是本机 root 前台的独立离线写入，只选新根；多块普通卷各加一对 <code>--data</code> 参数。留存已确认的 <code>pool=</code> 与原 <code>operation=</code>。如果中断，只核当时原件，按原单指引选择同一 INIT 的 <code>resume</code>，不要换号或重做。</p>
-        <pre tabindex="0" aria-label="真正离线建池的命令"><code>/usr/bin/helper install-pool new \
-  --op "${INIT_OP:?set INIT_OP in this terminal first}" \
-  --approval "${INIT_APPROVAL:?set INIT_APPROVAL in this terminal first}" \
-  --system "${SYSTEM:?set SYSTEM in this terminal first}" \
-  --recycle "${RECYCLE:?set RECYCLE in this terminal first}" \
-  --data "${DATA:?set DATA in this terminal first}"</code></pre>
-      </details></li>
-      <li><details><summary>准备新的专用 Samba 实例并生成原域</summary>
-        <p>只在受信本机 root 前台运行。这里明确选择实际用于 SMB 的 LAN 地址/网段，以及原 INIT 中每个要纳入的普通数据盘路径、一级名称和只读/读写模式，以及该共享内单独的逻辑回收站名称。首次布局必须能证明原 INIT 的独立 R 在位。只建专用配置，不启动服务；从原 <code>layout=prepared</code> 回执留存 <code>live_sha256</code>。</p>
-        <pre tabindex="0" aria-label="为原池指定首装 LAN、普通盘及逻辑回收站"><code>/usr/bin/helper setup-pair provision --create-layout \
-  --system "${SYSTEM:?set SYSTEM in this terminal first}" \
-  --pool "${POOL_ID:?set POOL_ID in this terminal first}" \
-  --init "${INIT_OP:?set INIT_OP in this terminal first}" \
-  --instance "${INSTANCE_ID:?set INSTANCE_ID in this terminal first}" \
-  --domain-op "${DOMAIN_OP:?set DOMAIN_OP in this terminal first}" \
-  --setup-op "${SETUP_OP:?set SETUP_OP in this terminal first}" \
-  --approval "${LAYOUT_APPROVAL:?set LAYOUT_APPROVAL in this terminal first}" \
-  --recycle-name "${RECYCLE_NAME:?set its exact logical folder name}" \
-  --listen "${SMB_LISTEN:?set SMB_LISTEN to the approved local IP and prefix}" \
-  --share "${DATA:?set DATA to an original data root}" "${FOLDER:?set its exact folder name}" "${MODE:?set ro or rw}"</code></pre>
-        <p>在本机需要时重复 <code>--listen</code> 或 <code>--share</code>，不要把系统盘、回收站目录或未选盘放进普通共享。初始业务只有 <code>\\服务器\ZXS</code>；各选中的普通盘目录及一个逻辑回收站都是它的一级文件夹。不要把回收盘作为 <code>--share</code> 输入。网页不采集这些参数或显示 R 的本机启动核验结果。</p>
-        <p>域供给是另一笔明确批准的写动作；域号和首设号不能沿用 INIT。它使用这次布局的原 <code>live_sha256</code>，成功回执有 <code>bound_sha256</code>，在本机留存供随后选同一原件；缺回执不换新号重做。</p>
-        <pre tabindex="0" aria-label="为已核原实例生成域的命令"><code>/usr/bin/helper setup-pair provision \
-  --system "${SYSTEM:?set SYSTEM in this terminal first}" \
-  --pool "${POOL_ID:?set POOL_ID in this terminal first}" \
-  --init "${INIT_OP:?set INIT_OP in this terminal first}" \
-  --instance "${INSTANCE_ID:?set INSTANCE_ID in this terminal first}" \
-  --op "${DOMAIN_OP:?set DOMAIN_OP in this terminal first}" \
-  --setup-op "${SETUP_OP:?set SETUP_OP in this terminal first}" \
-  --approval "${DOMAIN_APPROVAL:?set DOMAIN_APPROVAL in this terminal first}" \
-  --live-sha256 "${LIVE_SHA256:?set LIVE_SHA256 from the original layout receipt}"</code></pre>
-      </details></li>
-      <li><details><summary>在原终端设置唯一 Web 管理员与 SMB 用户</summary>
-        <p>继续使用另开的受信本机 root 前台终端，不在磁盘面板的普通用户终端执行。使用两个不同登录名与不同口令；命令确认同一池和专用域，秘密按固定无回显提示分别输入。页面不会代输。前台同时批准本次计划中的普通目录及模式。<code>pair=confirmed</code> 是账户和这些初始许可的原单，不用再登录 Web 开一次；它不保证已启动或能登录。</p>
-        <pre tabindex="0" aria-label="两账户首次设置命令"><code>/usr/bin/helper setup-pair enroll \
-  --system "${SYSTEM:?set SYSTEM in this terminal first}" \
-  --pool "${POOL_ID:?set POOL_ID in this terminal first}" \
-  --init "${INIT_OP:?set INIT_OP in this terminal first}" \
-  --instance "${INSTANCE_ID:?set INSTANCE_ID in this terminal first}" \
-  --domain-op "${DOMAIN_OP:?set DOMAIN_OP in this terminal first}" \
-  --bound-sha256 "${BOUND_SHA256:?set BOUND_SHA256 from the original confirmed receipt}" \
-  --op "${SETUP_OP:?set SETUP_OP in this terminal first}" \
-  --approval "${SETUP_APPROVAL:?set SETUP_APPROVAL in this terminal first}" \
-  --web-login "${WEB_LOGIN:?set WEB_LOGIN in this terminal first}" \
-  --smb-login "${SMB_LOGIN:?set SMB_LOGIN in this terminal first}"</code></pre>
-        <p>只查也在受信本机 root 前台，使用原来的所有非秘密选项和同一个原操作号。退出 0 为该原单已确认，1 是未找到或待办，2 为未能确认。只查不会提示口令、同步或重做。</p>
-        <pre tabindex="0" aria-label="只查两账户的原回执"><code>/usr/bin/helper setup-pair enroll \
-  --system "${SYSTEM:?set SYSTEM in this terminal first}" \
-  --pool "${POOL_ID:?set POOL_ID in this terminal first}" \
-  --init "${INIT_OP:?set INIT_OP in this terminal first}" \
-  --instance "${INSTANCE_ID:?set INSTANCE_ID in this terminal first}" \
-  --domain-op "${DOMAIN_OP:?set DOMAIN_OP in this terminal first}" \
-  --bound-sha256 "${BOUND_SHA256:?set BOUND_SHA256 from the original confirmed receipt}" \
-  --op "${SETUP_OP:?set SETUP_OP in this terminal first}" \
-  --approval "${SETUP_APPROVAL:?set SETUP_APPROVAL in this terminal first}" \
-  --web-login "${WEB_LOGIN:?set WEB_LOGIN in this terminal first}" \
-  --smb-login "${SMB_LOGIN:?set SMB_LOGIN in this terminal first}" \
-  --receipt-only</code></pre>
-      </details></li>
-      <li><details><summary>SMB：从本机前台启动</summary>
-        <p>只用本机已核准、与这次原首装配套的两个程序及其私有库。启动需原 <code>bound_sha256</code> 和本机明确确认。程序经过真实监听核对后才报告其结果；管理员不用登录 Web 再启用刚配置的共享。</p>
-        <pre tabindex="0" aria-label="启动唯一的已配置 SMB 服务"><code>/usr/bin/helper start-smb \
-  --system "${SYSTEM:?set SYSTEM in this terminal first}" \
-  --pool "${POOL_ID:?set POOL_ID in this terminal first}" \
-  --init "${INIT_OP:?set INIT_OP in this terminal first}" \
-  --instance "${INSTANCE_ID:?set INSTANCE_ID in this terminal first}" \
-  --domain-op "${DOMAIN_OP:?set DOMAIN_OP in this terminal first}" \
-  --setup-op "${SETUP_OP:?set SETUP_OP in this terminal first}" \
-  --bound-sha256 "${BOUND_SHA256:?set BOUND_SHA256 from the original confirmed receipt}"</code></pre>
-        <p>批准实际选定的 LAN 和目录，再保持本机前台。获准客户端用唯一 SMB 账户打开 <code>\\服务器\ZXS</code>，不尝试匿名或逐盘 UNC。监听与客户登录/读写分别确认；终端 Ctrl+C 请求停机。</p>
-      </details></li>
-      <li><details><summary>管理 Web：启动 ZXS 的原生 HTTP</summary>
-        <p>两账户已确认后，用该池登记的普通存储身份启动已按独立预期摘要核准的 ZXS；不需要 nginx、域名、证书或套接字激活。下列命令只是在终端运行 ZXS。需确认你愿意让管理端口在所有 IPv4 接口监听；直连没有加密，只在可信网络使用。</p>
-        <pre tabindex="0" aria-label="启动 ZXS 原生管理 HTTP 的命令"><code>ZXS_SYSTEM_ROOT="${SYSTEM:?set SYSTEM in this terminal first}" \
-ZXS_POOL_ID="${POOL_ID:?set POOL_ID in this terminal first}" /usr/bin/zxs</code></pre>
-        <p>从浏览器打开 <code>http://&lt;服务器实际 IPv4&gt;:8443/</code>，用唯一 Web 管理员登录。<code>0.0.0.0</code> 仅是监听值。若需要 HTTPS，由你的外部软件独立终结 TLS，不在 Helper 中安装或配置。若使用 systemd，可在自有私有工作目录生成不启用的候选：</p>
-        <pre tabindex="0" aria-label="生成一份可选 systemd 管理服务的命令"><code>/usr/bin/python3 -I -S -B /usr/share/local-ops-helper/web-management/profile.py render \
-  "${SYSTEM:?set SYSTEM in this terminal first}" \
-  "${POOL_ID:?set POOL_ID in this terminal first}" \
-  "${STORAGE_UID:?set STORAGE_UID in this terminal first}" \
-  "${STORAGE_GID:?set STORAGE_GID in this terminal first}"</code></pre>
-        <p>生成不等于安装或启动。只选择终端运行或管理员独立审核的 systemd 方式之一；没有实机登录验收。</p>
-      </details></li>
-    </ol>
-  </section>
+
   <p id="notice" role="status" aria-live="polite"></p>
   <section class="card" id="result" hidden aria-labelledby="resulttitle"><p class="eyebrow">RESULT</p><h2 id="resulttitle">观察结果</h2><p id="evidence"></p><div class="scroll" tabindex="0" aria-label="可横向滚动的结果表格"><table><thead id="cols"></thead><tbody id="rows"></tbody></table></div></section>
   <footer>网页不上传文件或下载正文，不接受设备路径或命令参数。检查和修复不是“查看状态”的副作用。</footer>

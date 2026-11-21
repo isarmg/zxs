@@ -43,7 +43,7 @@ fn routes(db:&Connection,c:&Catalog,original:&Original,from:&Route,to:&Route)->i
        Route::at(db,c,original.from.volume,original.to_parent)?!=*to{return Err(denied());}
     Ok(())
 }
-fn physical_parents(from:&OrdinaryRoot<'_>,to:&OrdinaryRoot<'_>)->io::Result<()>{
+fn physical_parents(from:OrdinaryView<'_>,to:&OrdinaryRoot<'_>)->io::Result<()>{
     from.require_streaming()?;to.require_streaming()
 }
 
@@ -51,12 +51,33 @@ impl<'s,'r> Tree<'s,'r>{
     pub(in crate::system::reader::smb) fn move_existing_parent(&self,root:&OrdinaryRoot<'r>,expected:&Place,opened:&Installed,
         parts:&[String],op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
         point:impl Fn(Cut)->io::Result<()>)->io::Result<(Place,Installed,OrdinaryRoot<'r>)>{
+        let source=self.session.source;let owner=&self.session.original;
+        let require=|cut:&RenameCut<'_>|{
+            debug_assert!(std::ptr::eq(cut.source,source));
+            self.require(cut.db,cut.catalog,true)
+        };
+        let at=RenameAt{source,setting:self.setting,parent:self.parent,
+            actor:owner.account,auth:owner.op,epoch:owner.generation,require:&require};
+        let moved=at.move_between(root.view(),expected,opened,parts,op,name,alive,point)?;
+        Ok((moved.renamed.place,moved.renamed.body,moved.target))
+    }
+}
+
+/// Returned only by the single shared kind14 engine after actual confirmed
+/// source/target authority and physical movement. The target remains held.
+pub(super) struct Moved<'s>{
+    pub(super) renamed:Renamed,pub(super) target:OrdinaryRoot<'s>,pub(super) route:Route,
+}
+impl<'s> RenameAt<'s,'_>{
+    pub(super) fn move_between(&self,root:OrdinaryView<'_>,expected:&Place,opened:&Installed,
+        parts:&[impl AsRef<str>],op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
+        point:impl Fn(Cut)->io::Result<()>)->io::Result<Moved<'s>>{
         display::component(name.as_bytes(),222)?;
-        let src=self.session.source;let grant=self.setting;let owner=&self.session.original;
+        let src=self.source;let grant=self.setting;
         if expected.role!=Role::File||(expected.volume,expected.parent)!=(grant.volume,self.parent)||
            !root.for_tree(src,grant.volume)||root.parent()!=self.parent{return Err(denied());}
         let (catalog,original,birth,source,target,members,alias)=src.at(|db,c|{
-            self.require(db,&c,true)?;alive()?;
+            self.authorized(db,&c)?;alive()?;
             let selected=Place::current(db,&c,expected.file)?;
             if &selected!=expected{return Err(denied());}
             Place::require_no_rename(db,expected.file)?;
@@ -68,7 +89,7 @@ impl<'s,'r> Tree<'s,'r>{
             let r=c.rows().get(1).filter(|r|r.role==Role::Recycle).ok_or_else(denied)?;
             b.validate_transfer_geometry(name,(&r.path,r.limit),op)?;
             let original=Original{op,from:expected.clone(),to_parent:target.parent(),name:name.to_owned(),
-                share:grant.share,setting:grant.op,auth:owner.op,actor:owner.account,epoch:owner.generation,
+                share:grant.share,setting:grant.op,auth:self.auth,actor:self.actor,epoch:self.epoch,
                 save:work_record::selected(db,&b)?.map(|r|r.record.key().save),
                 manual:work_record::latest_commit(db,&b)?.map(|n|n.0)};
             original.digest(&b)?;
@@ -97,7 +118,7 @@ impl<'s,'r> Tree<'s,'r>{
         // from a foreign terminal, witness or pocket which has just arrived.
         requested.require_reservable(&a,&b)?;
         let attempt=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-            self.require(db,&c,true)?;
+            self.authorized(db,&c)?;
             routes(db,&c,&original,&source,&target)?;
             if Place::current(db,&c,expected.file)?!=*expected||
                 work_record::members(db,&c,&birth)?!=members||
@@ -122,7 +143,7 @@ impl<'s,'r> Tree<'s,'r>{
             let admit=||{
                 physical_parents(root,&to)?;
                 src.at(|db,c|{
-                    self.require(db,&c,true)?;routes(db,&c,&original,&source,&target)?;
+                    self.authorized(db,&c)?;routes(db,&c,&original,&source,&target)?;
                     original.require_exact(db,&birth,Status::Pending)?;original.live(db)?;
                     alive()
                 })?;
@@ -134,7 +155,7 @@ impl<'s,'r> Tree<'s,'r>{
                 let _alias=directory::check_alias_name(&to,name,alias.as_ref(),None)?;
                 let w=Connection::open(&src.dir,true)?;
                 let result=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-                    self.require(db,&c,true)?;routes(db,&c,&original,&source,&target)?;
+                    self.authorized(db,&c)?;routes(db,&c,&original,&source,&target)?;
                     original.require_exact(db,&birth,Status::Pending)?;original.live(db)?;
                     if file_create::display_owner_at(db,&c,grant.volume,target.parent(),name)?!=alias{return Err(busy());}
                     alive()?;original.confirm(db)?;
@@ -143,7 +164,7 @@ impl<'s,'r> Tree<'s,'r>{
                 drop(w);
                 if result.is_err(){
                     src.at(|db,c|{
-                        self.require(db,&c,true)?;routes(db,&c,&original,&source,&target)?;
+                        self.authorized(db,&c)?;routes(db,&c,&original,&source,&target)?;
                         original.require_exact(db,&birth,Status::Confirmed)?;
                         if Place::current(db,&c,expected.file)?!=destination{return Err(denied());}Ok(())
                     })?;
@@ -153,7 +174,7 @@ impl<'s,'r> Tree<'s,'r>{
             point(Cut::Confirmed)?;
             Ok((destination,actual))
         })().map_err(|_|unknown())?;
-        Ok((execute.0,execute.1,to))
+        Ok(Moved{renamed:Renamed{place:execute.0,body:execute.1,proof:ExactRename(original)},target:to,route:target})
     }
 }
 
@@ -161,13 +182,13 @@ pub(super) fn recover(src:&InitialReader,original:&Original,kind:Recovery,birth:
     from:&OrdinaryRoot<'_>,to:&OrdinaryRoot<'_>,source:&Route,target:&Route,members:&Members,
     old_alias:Option<&file_create::Alias>,new_alias:Option<&file_create::Alias>,allowed:&Allowed<'_>,
     alive:&impl Fn()->io::Result<()>)->io::Result<()>{
-    physical_parents(from,to)?;
+    physical_parents(from.view(),to)?;
     let step=Moving::hold(original,birth,from.folder(),to.folder(),RenameStage::Reserved,members)?;
     let untouched=step.at_old();let forward=!untouched&&kind==Recovery::Continue;
     let (there,name,parent,alias)=if forward{(to,&original.name,original.to_parent,new_alias)}
         else{(from,&original.from.name,original.from.parent,old_alias)};
     let admit=||{
-        physical_parents(from,to)?;
+        physical_parents(from.view(),to)?;
         src.at(|db,c|{
             routes(db,&c,original,source,target)?;
             if original.recovery(db,&c,birth,allowed)?!=kind{return Err(denied());}
@@ -176,7 +197,7 @@ pub(super) fn recover(src:&InitialReader,original:&Original,kind:Recovery,birth:
         alive()
     };
     let terminal=|actual:&Installed|{
-        physical_parents(from,to)?;actual.require(there.folder())?;
+        physical_parents(from.view(),to)?;actual.require(there.folder())?;
         members.require(&WitnessRead::at(actual.directory())?)?;
         let _alias=directory::check_alias_name(there,name,alias,None)?;
         let w=Connection::open(&src.dir,true)?;

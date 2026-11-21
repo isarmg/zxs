@@ -342,50 +342,13 @@ fn selected_claim_reader(pin:&File,entity:Entity,mount:u64,passive:bool)->io::Re
 
 /// Only the root-owned nonsecret live configuration or bound record below a separately
 /// admitted instance root. The worker may update atime; no arbitrary path.
-pub(crate) fn sam_public_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{
+pub(crate) fn public_record_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{
     let m=pin.metadata()?;
     if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)||!m.is_file()||m.uid()!=0||m.mode()&0o7777!=0o444||m.nlink()!=1
         ||length==0||length>1<<20||m.len()!=length||Mount::on(pin)?.is_none_or(|v|v.id!=mount){
-        return Err(invalid("not the selected root-owned public SAM record"));
+        return Err(invalid("not the selected root-owned public origin record"));
     }
-    reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::PublicSamMount(mount))
-}
-
-/// Only a bounded public NSS member already selected beneath the dedicated
-/// smbd's independently approved readonly execution root. Do not data-open
-/// a second path lookup or require this private root image to be ext4/etc.
-pub(crate) fn smb_nss_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{
-    use rustix::fs::{fstatvfs,StatVfsMountFlags};
-    let qualify=|f:&File|->io::Result<Entity>{
-        let m=f.metadata()?;
-        if m.mode()!=0o100644||m.uid()!=0||m.gid()!=0||m.nlink()!=1||
-            !(1..=512).contains(&length)||m.len()!=length||Mount::on(f)?.is_none_or(|v|v.id!=mount)||
-            !fstatvfs(f)?.f_flag.contains(StatVfsMountFlags::RDONLY){
-            return Err(invalid("not the selected original readonly NSS member"));
-        }
-        Entity::of(&m)
-    };
-    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH){
-        return Err(invalid("expected the actual NSS pin"));
-    }
-    let entity=qualify(pin)?;
-    let reader=reopen_admitted_reader(pin,entity,ReaderBoundary::PublicSamMount(mount))?;
-    if qualify(&reader)?!=entity||qualify(pin)?!=entity{
-        return Err(invalid("selected NSS member changed before its read"));
-    }
-    Ok(reader)
-}
-
-/// After Samba has exited: synchronize the original O_PATH-selected store on
-/// the separately approved private mount. No content is read or returned.
-pub(crate) fn sync_sam_store(pin:&File,uid:u32,mount:u64)->io::Result<()>{
-    let m=pin.metadata()?;
-    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)||!m.is_file()||m.uid()!=uid||m.mode()&0o7777!=0o600||m.nlink()!=1
-        ||!(1..=16<<20).contains(&m.len())||Mount::on(pin)?.is_none_or(|v|v.id!=mount){
-        return Err(invalid("expected the original bounded private SAM store"));
-    }
-    let file=reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::SelectedControlMount(mount))?;
-    file.sync_all()
+    reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::PublicRecordMount(mount))
 }
 
 /// Upgrade an original O_PATH private regular inode only; never use its mutable pathname.
@@ -419,12 +382,12 @@ pub(crate) fn installed_regular_reader(pin:&File)->io::Result<File>{
 // caller only reads fixed private control names below a separately selected, held
 // storage directory. A current mount ID binds its descriptors, not its provenance.
 #[derive(Copy, Clone)]
-enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64), DiscoveryControlMount(u64), PublicSamMount(u64), InstalledRegular(u32) }
+enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64), DiscoveryControlMount(u64), PublicRecordMount(u64), InstalledRegular(u32) }
 impl ReaderBoundary {
     fn matches(self, fd: &File) -> io::Result<bool> {
         match self {
             Self::DataFilesystem(magic)|Self::InstalledRegular(magic) => Ok(filesystem(fd)? == Some(magic)),
-            Self::SelectedControlMount(id)|Self::DiscoveryControlMount(id)|Self::PublicSamMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
+            Self::SelectedControlMount(id)|Self::DiscoveryControlMount(id)|Self::PublicRecordMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
         }
     }
 }
@@ -475,7 +438,7 @@ fn reopen_admitted_reader(pin: &File, entity: Entity, boundary: ReaderBoundary) 
         return Err(invalid("descriptor no longer selects the original regular file"));
     }
     let flags=OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
-    let flags=if matches!(boundary,ReaderBoundary::InstalledRegular(_)|ReaderBoundary::PublicSamMount(_)){flags}else{flags|OFlags::NOATIME};
+    let flags=if matches!(boundary,ReaderBoundary::InstalledRegular(_)|ReaderBoundary::PublicRecordMount(_)){flags}else{flags|OFlags::NOATIME};
     let result = File::from(openat(&fds, number.as_str(),flags,Mode::empty())?);
     let observed = result.metadata()?;
     if !observed.is_file() || Entity::of(&observed)? != entity {
@@ -569,7 +532,7 @@ mod tests {
         let id=Mount::on(&old.fd).unwrap().unwrap().id;
         std::fs::rename(&named,retained).unwrap();
         std::os::unix::fs::symlink("does-not-exist",&named).unwrap();
-        let mut reopened=reopen_admitted_reader(&old.fd,old.entity(),ReaderBoundary::PublicSamMount(id)).unwrap();
+        let mut reopened=reopen_admitted_reader(&old.fd,old.entity(),ReaderBoundary::PublicRecordMount(id)).unwrap();
         let mut b=Vec::new();reopened.read_to_end(&mut b).unwrap();
         assert_eq!(b,b"selected bytes");assert_eq!(Entity::of(&reopened.metadata().unwrap()).unwrap(),old.entity());
         assert!(old.require_same_path().is_err());

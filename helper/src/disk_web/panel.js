@@ -3,23 +3,16 @@
   const el = id => document.getElementById(id);
   let bearer = "", csrf = "", ticket = "", busy = false;
   const labels = {disks:"设备与挂载", rates:"被动 I/O 速率", storage:"终端预选挂载容量", tools:"随包与宿主工具"};
-  const buttons = ["pair",...Object.keys(labels),"guide","guide-refresh","preview","confirm","receipt","close"].map(el);
+  const buttons = ["pair",...Object.keys(labels),"preview","confirm","receipt","close"].map(el);
   const leasedTools=new Map([
     ["ext4",["ext 文件系统（ext2/3/4） · e2fsck -fn","check-ext4-copy"]],
     ["XFS",["XFS · xfs_repair -n -f","check-xfs-copy"]],
     ["NTFS",["NTFS · ntfsfix -n（有限元数据观察）","check-ntfs-copy"]],
     ["Btrfs",["Btrfs 单设备副本 · btrfs check --readonly","check-btrfs-copy"]]
   ]);
-  const setupRows=["setup-sam","setup-smb","setup-http"];
-  const setupLabels=new Map([
-    ["equal","与当前 helper 内置的模板字节一致"],
-    ["different","与当前 helper 的模板不同；请在终端核实同版发行"],
-    ["unconfirmed","未能核对；不要视为模板合格"]
-  ]);
   const text = (tag, value) => {const n=document.createElement(tag); n.textContent=value; return n;};
   const show = (id, yes) => {el(id).hidden=!yes;};
-  const clearGuide = () => {for(const row of setupRows)el(row).textContent="未观察";};
-  const erase = () => {bearer="";csrf="";ticket="";clearGuide();show("setup",false);show("checks",false);show("selection",false);el("imgdigest").textContent="";el("imggeometry").textContent="";el("code").value="";el("cols").replaceChildren();el("rows").replaceChildren();el("evidence").textContent="";show("result",false);};
+  const erase = () => {bearer="";csrf="";ticket="";show("checks",false);show("selection",false);el("imgdigest").textContent="";el("imggeometry").textContent="";el("code").value="";el("cols").replaceChildren();el("rows").replaceChildren();el("evidence").textContent="";show("result",false);};
   const state = msg => {el("notice").textContent=msg;};
   async function once(fn) {
     if (busy) return;
@@ -57,17 +50,6 @@
     const response=await post("/api/"+id,auth());const msg=await response.text();
     if(!response.ok){state(msg);return;}render(labels[id],msg);
   }
-  async function guide() {
-    clearGuide();show("setup",true);state("正在核对固定安装模板……");
-    const response=await post("/api/install/guide",auth());
-    const msg=await response.text();
-    if (!response.ok){state(msg);return;}
-    const [header,...result]=msg.split("\n");
-    if (header!=="helper-install-guide-2"||result.length!==setupRows.length||!result.every(v=>setupLabels.has(v)))
-      throw Error("invalid fixed template observation");
-    result.forEach((v,i)=>{el(setupRows[i]).textContent=setupLabels.get(v);});
-    state("只观察模板字节。请用另一个本机终端完成实际安装并核对原回执。");
-  }
   async function preview() {
     ticket="";show("selection",false);
     const response=await post("/api/copy/preview",auth());const msg=await response.text();
@@ -99,7 +81,6 @@
     // Never substitute a new target or silently issue another command.
     state(await response.text());
   }
-  for(const action of ["guide","guide-refresh"])el(action).addEventListener("click",()=>once(guide));
   el("preview").addEventListener("click",()=>once(preview));
   el("confirm").addEventListener("click",()=>once(()=>check(true)));
   el("receipt").addEventListener("click",()=>once(()=>check(false)));

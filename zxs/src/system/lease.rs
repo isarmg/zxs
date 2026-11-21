@@ -20,7 +20,13 @@ fn private_name(root:&HeldDir,n:&CStr)->io::Result<u64>{
 pub(super) struct SystemDir{pub(super) root:HeldDir,db:CString,ino:u64,marker_ino:u64}
 impl SystemDir{
     pub(super) fn hold(path:&Path,vfs_path_limit:usize)->io::Result<Self>{
+        Self::hold_qualified(path,vfs_path_limit,|_|Ok(()))
+    }
+    /// Prove a newly opened directory is the received original before any
+    /// lock, member observation or SQLite access in the preflight role.
+    pub(super) fn hold_qualified(path:&Path,vfs_path_limit:usize,qualify:impl FnOnce(&HeldDir)->io::Result<()>)->io::Result<Self>{
         let root=HeldDir::trusted_system(path)?;
+        qualify(&root)?;
         root.share()?; // Fresh OFD specific to this online holder; no EX, conversion or unlock.
         let b=NameBudget::held(&root)?;b.child(DB)?;b.child(JOURNAL)?;b.child(ROOT_MARK)?;
         let jr=root.checked_child_path(JOURNAL)?;

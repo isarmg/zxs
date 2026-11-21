@@ -6,9 +6,9 @@
 
 ## 固定受信发行配置
 
-目标是 Debian 13 amd64。正常发行包自行携带固定启动器、上游检查器及私有运行库；不要求用户手配摘要或安装 dosfstools，不使用同名宿主命令替补。构建/发行者须先独立核 Debian 的发行签名、实际程序、配套库、补丁/许可证与完整对应源码，并记录最终制品的独立预期摘要；见[工具包配方](../packaging/debian13-amd64/README.md)。本次没有生成可安装物。
+目标是 Debian 13 amd64。正常发行包自行携带固定启动器、上游检查器及私有运行库；不要求用户手配摘要或安装 dosfstools，不使用同名宿主命令替补。构建/发行者须先独立核 Debian 的发行签名、实际程序、配套库、补丁/许可证与完整对应源码，并对最终发行物签名；见[工具包配方](../packaging/debian13-amd64/README.md)。本次没有生成可安装物或签名。
 
-固定根是 `/usr/lib/local-ops-helper/disk-tools-v1`。其中 `fat32-check-v1` 首行为 `debian13-amd64/private-pack-1/bubblewrap-0.12/dosfstools-4.2`；接下来八行必须依次给出 bwrap、fsck.fat、ld-linux-x86-64、libc、libcap、libselinux、libpcre2、libgcc 的最终 SHA-256。每段实际路径及叶均须受保护、root 所有、组/其他人不可写，拒绝符号链接、漏件/漏项、错架构和散列不符。启动器用已核的原文件描述符 exec；只有 fsck.fat、装载器及 libc 会进入检查沙箱。运行中的发行目录、宿主内核和启动环境仍须可信。这里核已安装受保护配置列出的固定槽；实际部署前，管理员另从独立可信来源核准最终安装包和摘要。读取公开安装文件可能更新它们的 atime。
+固定根是 `/usr/lib/local-ops-helper/disk-tools-v1`。其中 `fat32-check-v1` 首行为 `debian13-amd64/private-pack-1/bubblewrap-0.12/dosfstools-4.2`；接下来八行必须依次给出 bwrap、fsck.fat、ld-linux-x86-64、libc、libcap、libselinux、libpcre2、libgcc 的最终 SHA-256。每段实际路径及叶均须受保护、root 所有、组/其他人不可写，拒绝符号链接、漏件/漏项、错架构和散列不符。启动器用已核的原文件描述符 exec；只有 fsck.fat、装载器及 libc 会进入检查沙箱。运行中的发行目录、宿主内核和启动环境仍须可信。此处并不动态验证发布签名，实际部署须先核收件来源。读取公开安装文件可能更新它们的 atime。
 
 ## 检查权限与输出
 

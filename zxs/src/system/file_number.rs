@@ -8,9 +8,18 @@ use std::io;
 #[derive(Debug,Copy,Clone,PartialEq,Eq)]
 pub(crate) struct NativeKey{device:u64,inode:u64,extended:u64}
 impl NativeKey{
-    /// Samba 4.22 file_id (devid, inode, extid). The first two fields also
-    /// distinguish different FILEs inside this dedicated pool.
+    /// Exact storage witness words. The protocol exposes only its unique
+    /// number in the fixed logical volume, not the host inode or pool words.
     pub(crate) fn words(self)->(u64,u64,u64){(self.device,self.inode,self.extended)}
+}
+
+/// The SMB information number, not an OPEN key or a host volume/file ID.
+/// Only the original unique SQL owner may construct it.
+#[derive(Clone,Copy,Eq,PartialEq)]
+pub(crate) struct SmbFileIndex(u64);
+impl SmbFileIndex{
+    pub(crate) fn number(self)->u64{self.0}
+    pub(crate) fn qfid(self)->(u64,u64){(self.0,1)} // the one ZXS logical volume
 }
 fn number(id:FileId)->Option<u64>{
     let mut part=[0;8];part.copy_from_slice(&id.0[..8]);let n=u64::from_be_bytes(part);
@@ -41,6 +50,9 @@ pub(super) fn choose(db:&Connection,candidates:&[FileId;8])->io::Result<FileId>{
 pub(super) fn original(db:&Connection,pool:PoolId,file:FileId)->io::Result<NativeKey>{
     if !matches!(owners(db,file)?,Owners::One(id) if id==file){return Err(invalid("native number has no unique original FILE owner"));}
     key(pool,file)
+}
+pub(super) fn smb_index(db:&Connection,pool:PoolId,file:FileId)->io::Result<SmbFileIndex>{
+    original(db,pool,file).map(|key|SmbFileIndex(key.inode))
 }
 fn key(pool:PoolId,file:FileId)->io::Result<NativeKey>{
     let n=number(file).ok_or_else(||invalid("original FILE has no usable native number"))?;

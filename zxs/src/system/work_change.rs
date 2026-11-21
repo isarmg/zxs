@@ -24,6 +24,16 @@ impl From<Record> for Receipt{
 #[derive(Clone,Copy,Eq,PartialEq)]
 pub(in crate::system::reader) enum Cut{Reserved,BytesSynced}
 fn busy(message:&str)->io::Error{io::Error::new(io::ErrorKind::WouldBlock,message.to_owned())}
+/// Used only when the exact original request can neither be proved absent
+/// nor proved recorded/confirmed. Native sees the same Other + message as
+/// before; the Rust connection can suppress a definite response.
+#[derive(Debug)]
+struct UnconfirmedSave(&'static str);
+impl std::fmt::Display for UnconfirmedSave{
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.write_str(self.0)}
+}
+impl std::error::Error for UnconfirmedSave{}
+fn unconfirmed(message:&'static str)->io::Error{io::Error::other(UnconfirmedSave(message))}
 
 #[derive(Eq,PartialEq)]
 struct State {
@@ -65,15 +75,26 @@ pub(crate) struct Writer<'t,'s,'r>{
 
 /// The values used by the original kind-10 SAVE only. They are not a
 /// login, a share grant or a callable operation without the same SQL cut.
-#[derive(Clone,Copy)]
+#[derive(Clone,Copy,Eq,PartialEq)]
 struct EditAuthority{account:AccountId,op:OperationId,generation:i64,setting:Setting}
+
+/// Only this module creates a cut, using its real source on either the
+/// original read connection or its own original S write transaction.
+pub(in crate::system::reader::smb) struct WriterCut<'a>{
+    source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog,
+}
+impl<'a> WriterCut<'a>{
+    pub(in crate::system::reader::smb) fn parts(&self)->(&'a InitialReader,&'a Connection,&'a Catalog){
+        (self.source,self.db,self.catalog)
+    }
+}
 
 /// The single SAVE algorithm has the exact original FILE and a fresh
 /// authorization function for the same, already sourced SQLite cut.
 struct WriteAt<'a>{
     original:&'a WriteFile,root:OrdinaryView<'a>,source:&'a InitialReader,
     authority:EditAuthority,parent:DirectoryParent,
-    require:&'a dyn Fn(&Connection,&Catalog)->io::Result<()>,
+    require:&'a dyn Fn(&WriterCut<'_>)->io::Result<()>,
 }
 impl std::ops::Deref for WriteAt<'_>{
     type Target=WriteFile;
@@ -133,7 +154,7 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
     }
     fn with_write<T>(&self,action:impl FnOnce(WriteAt<'_>)->io::Result<T>)->io::Result<T>{
         let credential=&self.tree.session.original;let setting=self.tree.setting;
-        let require=|db:&Connection,c:&Catalog|self.tree.require(db,c,true);
+        let require=|cut:&WriterCut<'_>|self.tree.require(cut.db,cut.catalog,true);
         action(WriteAt{original:&self.original,root:self.root.view(),source:self.tree.session.source,
             authority:EditAuthority{account:credential.account,op:credential.op,generation:credential.generation,setting},
             parent:self.tree.parent,require:&require})
@@ -165,16 +186,22 @@ impl<'t,'s,'r> Writer<'t,'s,'r>{
 
 impl WriteAt<'_>{
     fn require_work(&self)->io::Result<()>{
+        self.check_current(|_|Ok(()))
+    }
+    fn check_current<T>(&self,observe:impl FnOnce(&Connection)->io::Result<T>)->io::Result<T>{
         let src=self.source;
         let x=src.at(|db,c|self.state(db,&c))?;
         self.physical(&x)?;
         src.at(|db,c|{
             if self.state(db,&c)?!=x{return Err(busy("work writer lost its original cut"));}
-            Ok(())
+            observe(db)
         })
     }
+    fn smb_index(&self)->io::Result<super::file_number::SmbFileIndex>{
+        self.check_current(|db|super::file_number::smb_index(db,self.birth.pool,self.birth.file))
+    }
     fn state(&self,db:&Connection,c:&Catalog)->io::Result<State>{
-        (self.require)(db,c)?;
+        (self.require)(&WriterCut{source:self.source,db,catalog:c})?;
         let located=file_create::placed_at(db,c,self.authority.setting.volume,self.parent,&self.place.name,Some(self.birth.file))?;
         if located.birth!=self.birth||located.here!=self.place{
             return Err(invalid("work writer lost its original FILE placement"));
@@ -269,7 +296,7 @@ impl WriteAt<'_>{
                 match src.at(|db,c|{self.state(db,&c)?;self.original(db,op)}){
                     Ok(Some(same))if same.edit==proposed=>{},
                     Ok(None)=>return Err(err),
-                    _=>return Err(io::Error::other("SAVE reservation unconfirmed; inspect the exact original")),
+                    _=>return Err(unconfirmed("SAVE reservation unconfirmed; inspect the exact original")),
                 }
             }
             proposed
@@ -299,7 +326,11 @@ impl WriteAt<'_>{
         drop(w);
         match out{Ok(r)=>Ok(r),Err(err)=>match self.receipt(op){
             Ok(Some(r))if r==Receipt::from(prepared)=>Ok(r),Ok(_)=>Err(err),
-            Err(_)=>Err(io::Error::other("SAVE outcome unconfirmed; inspect the exact original")),
+            Err(_)=>Err(unconfirmed("SAVE outcome unconfirmed; inspect the exact original")),
         }}
     }
 }
+
+#[path="smb_rust_writer.rs"]
+mod rust;
+pub(crate) use rust::{RustWorkWriter,RustWriterSelection};

@@ -1,19 +1,24 @@
 //! Plaintext SMB 3.1.1, fresh authenticated NTLM session, AES-128-CMAC only.
 //! The original connection owns publication and request admission. There is no
-//! production credential provider or listener. A signature alone grants no file access.
+//! enabled production entry or listener. A signature alone grants no file access.
 mod der;
 pub(in crate::smb) mod envelope;
+mod keyed_digest;
 mod ntlm_shape;
 mod strict_verifier;
-pub(in crate::smb) use strict_verifier::{MechanismProof,Pending,Rejected as ChallengeRejected,challenge::{ChallengeService,ChallengeStep},completion::{BatchRevision,BoundSession,LiveMark}};
+pub(in crate::smb) use strict_verifier::{MechanismProof,Pending,Rejected as ChallengeRejected,VaultDecoder,challenge::{ChallengeService,ChallengeStep},completion::{BatchRevision,BoundSession,LiveMark}};
+
+#[cfg(test)]
+pub(in crate::smb) use self::keyed_digest::Hmac as HmacForSessionFixture;
 
 use crate::smb::wire::{
-    message::{Compound, MAX_COMMANDS, Message, RELATED, SIGNED},
+    message::{CANCEL, Compound, MAX_COMMANDS, Message, RELATED, SIGNED},
     preauth::RequestKeyContext,
 };
 use aes::Aes128;
 use cmac::Cmac;
-use hmac::{Hmac, KeyInit, Mac};
+use digest::{KeyInit, Mac};
+use self::keyed_digest::Hmac;
 use sha2::{Sha256, digest::{FixedOutput, Output}};
 use std::num::NonZeroU64;
 use zeroize::{Zeroize, Zeroizing};
@@ -126,6 +131,15 @@ pub(in crate::smb) fn verify_published<'s>(
 )->Result<VerifiedIds,(usize,Fault)> {
     verify_ids(frame,|sid|lookup(sid)?.signer_for(revision))
 }
+/// CANCEL has no sequence debit or related SID. This is the same raw CMAC
+/// check, not admission as an executable ordinary member or a cancel target.
+pub(in crate::smb) fn verify_cancel<'s>(
+    frame:&Compound<'_>,revision:&BatchRevision,mut lookup:impl FnMut(NonZeroU64)->Option<&'s BoundSession>,
+)->Result<NonZeroU64,Fault> {
+    let [m]=frame.messages() else {return Err(Fault::WrongPhase);};
+    if m.header.command!=CANCEL {return Err(Fault::WrongPhase);}
+    verify_signed(m,None,&mut |sid|lookup(sid)?.signer_for(revision))
+}
 fn verify_ids<'s>(frame:&Compound<'_>,mut lookup:impl FnMut(NonZeroU64)->Option<&'s SessionSigner>)
     ->Result<VerifiedIds,(usize,Fault)> {
     let mut out=VerifiedIds([None;MAX_COMMANDS]);let mut previous=None;
@@ -138,6 +152,10 @@ fn verify_ids<'s>(frame:&Compound<'_>,mut lookup:impl FnMut(NonZeroU64)->Option<
 fn verify_member<'s>(m:&Message<'_>,previous:Option<NonZeroU64>,
     lookup:&mut impl FnMut(NonZeroU64)->Option<&'s SessionSigner>)->Result<NonZeroU64,Fault> {
     if !matches!(m.header.command,0x0002..=0x000b | 0x000d..=0x0012) {return Err(Fault::WrongPhase);}
+    verify_signed(m,previous,lookup)
+}
+fn verify_signed<'s>(m:&Message<'_>,previous:Option<NonZeroU64>,
+    lookup:&mut impl FnMut(NonZeroU64)->Option<&'s SessionSigner>)->Result<NonZeroU64,Fault> {
     if m.header.flags&SIGNED==0 {return Err(Fault::SignatureRequired);}
     let id=if m.header.flags&RELATED!=0 {previous} else {
         NonZeroU64::new(m.header.session).filter(|v|v.get()!=u64::MAX)

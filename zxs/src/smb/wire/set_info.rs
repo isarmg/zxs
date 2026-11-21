@@ -6,7 +6,10 @@ use super::{
 };
 use crate::smb::connection::{Fault, sessions::ordinary::VerifiedMember};
 
-const SET_INFO: u16 = 0x0011;
+mod rename;
+pub(in crate::smb) use rename::{RenameError,RenameRequest};
+
+pub(in crate::smb) const SET_INFO: u16 = 0x0011;
 const INFO_FILE: u8 = 1;
 const FILE_DISPOSITION: u8 = 13;
 const FILE_END_OF_FILE: u8 = 20;
@@ -68,14 +71,36 @@ impl<'step, 'raw> FileSetRequest<'step, 'raw> {
     pub(in crate::smb) fn input_length(&self) -> u32 { self.fields.input_length }
 }
 
-fn fields(m: &Message<'_>, max_transact: u32) -> Result<Fields, Error> {
+fn fixed(m:&Message<'_>)->Result<(),Error>{
     use Error::*;
     if m.header.command != SET_INFO { return Err(WrongCommand); }
-    if m.header.flags & NO_CURRENT_TARGET != 0 { return Err(NotInProfile); }
-    let p = m.raw;
-    if p.len() < FIXED_END || u16le(p, 64).map_err(|_| Malformed)? != 33 {
+    if m.raw.len() < FIXED_END || u16le(m.raw,64).map_err(|_|Malformed)? != 33 {
         return Err(Malformed);
     }
+    Ok(())
+}
+impl Message<'_>{
+    /// Shape selector for the known compound class; not an OPEN or authority.
+    pub(in crate::smb) fn is_basic_disposition_request(&self)->bool{
+        self.header.command==SET_INFO&&self.raw.get(66..68)==Some(&[INFO_FILE,FILE_DISPOSITION][..])
+    }
+
+    /// Original bounded coordinate, not a decoded info class or mutation.
+    /// The dispatcher resolves its Session/Tree/OPEN before acting on either.
+    pub(in crate::smb) fn set_info_target(&self)->Result<OpenReference,IoFieldError>{
+        fixed(self).map_err(|e|match e{
+            Error::WrongCommand=>IoFieldError::WrongCommand,
+            _=>IoFieldError::Malformed,
+        })?;
+        self.io_open_reference(80)
+    }
+}
+
+fn fields(m: &Message<'_>, max_transact: u32) -> Result<Fields, Error> {
+    use Error::*;
+    fixed(m)?;
+    if m.header.flags & NO_CURRENT_TARGET != 0 { return Err(NotInProfile); }
+    let p = m.raw;
     if p[66] != INFO_FILE || !matches!(p[67], FILE_DISPOSITION | FILE_END_OF_FILE) {
         // Including local/extended flags such as FileDispositionInformationEx.
         // Do not ever reinterpret a different class as ordinary deletion.

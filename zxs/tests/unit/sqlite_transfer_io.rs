@@ -38,19 +38,70 @@ fn another_ordinary_filesystem_selects_the_same_history_then_retires_only_the_ol
     assert!(!ownership.is_member(&another_open));drop(another_open);
     drop(before);
     let old=f.join(format!("Original-{file}.txt"));assert!(old.is_dir());
+    let request=Handoff::MoveOrdinary{source:hold.place.clone(),target:"Arrival.txt".into()};
+    let fresh=|target:&Tree<'_,'_>,run:&Handoff,new,point:&mut dyn FnMut(Cut)->io::Result<()>,select:&dyn Fn()->io::Result<()>|{
+        let opened=OpenedOrdinaryMove{original:&hold.physical,select};
+        from.with_transfer(Some(target),|at|{
+            let (selected,source_route,target_route)=src.at(|db,c|Ok((Route::select(&at,db,&c,&request)?,
+                DirectoryRoute::at(db,&c,from.setting.volume,from.parent)?,
+                DirectoryRoute::at(db,&c,target.setting.volume,target.parent)?)))?;
+            let start=TransferStart::Fresh(FreshOrdinaryOp{op:new,selected,from:source_route,to:target_route});
+            at.transfer_started(run,start,Some(opened),||Ok(()),false,point)
+        })
+    };
+    // A fresh engine start cannot reuse an existing Op even if it belongs
+    // to a different operation and there is as yet no pending FILE move.
+    assert_eq!(fresh(&to,&request,op(0xa0),&mut |_|panic!("already used ID started copy"),&||panic!("selected reused ID"))
+        .unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    let changed=Handoff::MoveOrdinary{source:hold.place.clone(),target:"Different.txt".into()};
+    assert_eq!(fresh(&to,&changed,op(0xae),&mut |_|panic!("changed target started copy"),&||panic!("selected changed target"))
+        .unwrap_err().kind(),io::ErrorKind::PermissionDenied);
     let mut seen=false;
-    let fail=from.ordinary_after(&to,&hold,"Arrival.txt".into(),op(0xa5),|cut|{
+    let fail=fresh(&to,&request,op(0xa5),&mut |cut|{
         if cut!=Cut::CandidateSynced{return Ok(());}
         seen=true;
         assert_eq!(other.at(|db,c|Place::current(db,&c,file))?,hold.place);
         web.set_share_mode(op(0xa6),z2,original_target.op,Mode::ReadOnly)?;
         Ok(())
-    });
+    },&||Ok(()));
     assert!(seen&&fail.is_err());assert_eq!(source.native_key().unwrap(),key);
     assert!(auth.connect(z2).unwrap().scoped(Directory(dir.id)).open_current("Arrival.txt").is_err());
     web.set_share_mode(op(0xa7),z2,op(0xa6),Mode::ReadWrite).unwrap();
     let refreshed=auth.connect(z2).unwrap().scoped(Directory(dir.id));
+    // No new owner can clear or adopt the old reservation even after the
+    // target's old authorization is superseded. The source is still selected.
+    assert_eq!(fresh(&refreshed,&request,op(0xac),&mut |_|panic!("adopted revoked pending reservation"),&||panic!("selected old Op"))
+        .unwrap_err().kind(),io::ErrorKind::WouldBlock);
     assert!(from.transfer_ordinary_to(&refreshed,&hold,"Arrival.txt".into(),op(0xa5),||Ok(())).is_err());
+    // Refuse just the final selection. This source fixture inspects the
+    // authority only after the hook returns, not from inside the SQL cut.
+    let captured=std::cell::Cell::new(false);let decisions=std::cell::Cell::new(0);
+    let vetoed=from.ordinary_after(&refreshed,&hold,"Arrival.txt".into(),op(0xa8),|cut|{
+        assert_eq!(decisions.get(),0);
+        if cut==Cut::GuardCaptured{captured.set(true);}
+        Ok(())
+    },||{
+        assert!(captured.get());decisions.set(decisions.get()+1);
+        Err(io::ErrorKind::Interrupted.into())
+    });
+    assert_eq!(vetoed.unwrap_err().kind(),io::ErrorKind::Interrupted);
+    assert_eq!(decisions.get(),1);
+    other.at(|db,c|{
+        assert_eq!(Place::current(db,&c,file)?,hold.place);
+        let q=db.prepare(c"SELECT state,EXISTS(SELECT 1 FROM main.file_transfer_source WHERE transfer_op=?1)
+                           FROM main.operation WHERE op_id=?1 AND kind=12")?;
+        q.bind_bytes(1,&op(0xa8).0)?;
+        assert!(work_record::start_one(&q)?);assert_eq!((q.byte(0)?,q.byte(1)?),(0,0));q.done()
+    }).unwrap();
+    assert!(old.is_dir()&&refreshed.open_current("Arrival.txt").is_err());
+    assert!(destination.join("Reviewed").join(Birth::placement_parent(op(0xa8)).unwrap().into_string().unwrap()).is_dir());
+    // A fresh call cannot adopt a still-live reservation either, even
+    // with the exact target spelling or its old Op. This is tested before
+    // the separate explicit legacy-policy continuation below.
+    for next in [op(0xa8),op(0xad)]{
+        assert_eq!(fresh(&refreshed,&request,next,&mut |_|panic!("adopted live pending reservation"),&||panic!("selected old Op"))
+            .unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    }
     let moved=from.transfer_ordinary_to(&refreshed,&hold,"Arrival.txt".into(),op(0xa8),||Ok(())).unwrap();
     assert_eq!((moved.to.file,moved.to.parent,moved.to.role),(file,Directory(dir.id),Role::File));
     assert_eq!(from.transfer_ordinary_to(&refreshed,&hold,"Arrival.txt".into(),op(0xa8),||Ok(())).unwrap(),moved);
@@ -280,7 +331,7 @@ fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_resto
     let other_tree=other_session.connect(rw).unwrap();
     let mut draining=Some(other_tree.open_writer("Report.txt",file).unwrap());
     let mut waited=false;
-    let deleted=tree.with_transfer(None,|at| at.transfer_inner(&intent,op(0xb5),None,||Ok(()),true,|cut|{
+    let deleted=tree.with_transfer(None,|at|at.transfer_inner(&intent,op(0xb5),None,||Ok(()),true,|cut|{
         if cut==Cut::WaitingForSource{
             assert!(!waited);assert_eq!(select(),original);assert_eq!(count(),1);
             waited=true;drop(draining.take().expect("original separate writer still holds FILE EX"));

@@ -8,7 +8,7 @@ UPDATE main.operation SET state=1
 WHERE op_id=?4 AND actor_id=?5 AND request_sha=?6 AND state=0 AND EXISTS(
  SELECT 1 FROM main.pool_birth b JOIN main.operation i ON i.op_id=b.init_op AND i.kind=1 AND i.state=1
  JOIN main.account_pair a ON a.singleton=b.singleton
- WHERE b.pool_id=?1 AND b.init_op=?2 AND a.birth_op=?3 AND a.instance_id=?8 AND a.smb_id=?10
+ WHERE b.pool_id=?1 AND b.init_op=?2 AND a.smb_family=0 AND a.birth_op=?3 AND a.instance_id=?8 AND a.smb_id=?10
    AND a.smb_login=?11 AND a.smb_sid=?12 AND
    ((operation.kind=2 AND operation.op_id=a.birth_op AND a.approval_ref=?7 AND a.setup_bound_sha=?9
      AND ?13=1 AND ?14 IS NULL) OR

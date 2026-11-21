@@ -1,18 +1,20 @@
 //! Strict development profile for one connection-oriented NTLMv2 exchange.
-//! No enrollment, credential reader, production provider, live-session authority,
-//! wire-key constructor, listener or conversion into a storage/session grant.
+//! No enrollment, wire-key constructor, listener or conversion into a
+//! storage/session grant. An installed verifier needs the real launcher.
 pub(super) mod challenge;
 pub(super) mod completion;
+mod key_exchange;
 mod record;
+use self::key_exchange::{Rc4, StreamCipher};
 use super::{
     Secret, envelope::{AwaitAuthenticate, HaveNegotiate, Layer, Saved, Unverified},
+    keyed_digest::Hmac,
     ntlm_shape::{self as ntlm, Authenticate, Challenge},
 };
-use crate::smb::wire::{message::Compound, preauth::RequestKeyContext};
-use hmac::{Hmac, KeyInit, Mac};
+use crate::smb::{InheritedRun,wire::{message::Compound, preauth::RequestKeyContext}};
+use digest::{KeyInit, Mac};
 use md5::{Digest, Md5, digest::{FixedOutput, Output}};
-use rc4::{Rc4, StreamCipher};
-use std::{num::NonZeroU64, sync::Arc, time::Instant};
+use std::{num::NonZeroU64, sync::{Arc,Weak}, time::Instant};
 use zeroize::{Zeroize, Zeroizing};
 
 type H = Hmac<Md5>;
@@ -40,12 +42,31 @@ const FORBIDDEN: u32 = 0x40 | 0x80 | 0x800 | 0x0010_0000 | 0x0040_0000;
 
 /// A prederived, password-equivalent NTLMv2 verifier for exactly one
 /// principal/domain and revision; not a password, Web hash, or identity proof.
-/// No production constructor until the actual credential owner is integrated.
 struct ProtectedRevision {
     user: Box<[u8]>, domain: Box<[u8]>, spn: Box<[u8]>, // trusted exact UTF-16LE
     epoch: NonZeroU64,
     response_key: Secret,
+    source:RevisionSource,
 }
+
+enum RevisionSource{Installed(Weak<InheritedRun>),#[cfg(test)] Fixture}
+impl RevisionSource{
+    fn live(&self)->bool{
+        match self{
+            Self::Installed(s)=>s.upgrade().is_some_and(|v|v.require_live_source().is_ok()),
+            #[cfg(test)] Self::Fixture=>true,
+        }
+    }
+    fn installed(&self)->Option<Arc<InheritedRun>>{
+        match self{
+            Self::Installed(s)=>s.upgrade(),
+            #[cfg(test)] Self::Fixture=>None,
+        }
+    }
+}
+/// Private ability to consume the startup vault. Only this module and its
+/// strict mechanism children can construct it. No copy/default/factory.
+pub(in crate::smb) struct VaultDecoder(());
 
 /// Sealed mechanism state. The actual connection reserves the SID and lifetime;
 /// challenge::ChallengeService pins its own revision and original Type2. No

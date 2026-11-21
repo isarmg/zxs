@@ -2,13 +2,23 @@
 //! Decoding a plan never creates an SMB session or a directory handle.
 use super::{Connection,InitialReader,denied};
 use super::super::{Catalog,check,share_mode::{self,Mode,Setting},sqlite3_step};
-use crate::system::reader::credential::Pair;
+use crate::system::reader::credential::{ActiveRustMeta,Pair};
 use crate::{OperationId,Role,VolumeId,display,fs::invalid,hash::{Sha256,digest},identity::ShareId};
-use std::{collections::BTreeSet,io,net::{IpAddr,Ipv4Addr,Ipv6Addr}};
+use std::{collections::BTreeSet,io,net::{IpAddr,Ipv4Addr,Ipv6Addr,SocketAddr},rc::{Rc,Weak},sync::Arc};
 
-const MAGIC:&[u8;16]=b"ZXS-SMB-FIRST-1\0";
-pub(super) const PLAN_SLOT:usize=17631;
-const MAX_WIRE:usize=PLAN_SLOT;
+#[path="smb_rust_maintenance.rs"]
+mod maintenance;
+
+#[path="smb_rust_capacity.rs"]
+mod capacity;
+pub(crate) use capacity::RustRootCapacity;
+
+#[path="smb_rust_preflight.rs"]
+pub(super) mod preflight;
+
+const RUST_MAGIC:&[u8;16]=b"ZXS-RUST-SMB-I1\0";
+const RUST_IDS:&[u8]=b"ZXS-RUST-SMB-I1/ID\0";
+const MAX_RUST_WIRE:usize=17_885;
 type Id=[u8;16];
 
 #[derive(Clone,Copy,Eq,Ord,PartialEq,PartialOrd)]
@@ -42,23 +52,79 @@ impl Folder{
 pub(super) struct Plan{
     scope:[Id;5], sha:[u8;32], endpoints:Vec<Endpoint>, folders:Vec<Folder>, recycle:String,
 }
-pub(super) struct InstalledPlan(Plan);
-impl Plan{
+
+fn take<'a>(p:&mut &'a[u8],len:usize)->io::Result<&'a[u8]>{
+    let (out,rest)=p.split_at_checked(len).ok_or_else(denied)?;*p=rest;Ok(out)
+}
+fn fixed<const N:usize>(p:&mut &[u8])->io::Result<[u8;N]>{
+    Ok(take(p,N)?.try_into().expect("exact requested length"))
+}
+fn scope(p:&mut &[u8])->io::Result<([Id;5],BTreeSet<Id>)>{
+    let mut seen=BTreeSet::new();
+    let mut scope=[[0u8;16];5];
+    for id in &mut scope{
+        *id=fixed(p)?;
+        if *id==[0;16]||!seen.insert(*id){return Err(denied());}
+    }
+    Ok((scope,seen))
+}
+fn host(p:&mut &[u8])->io::Result<String>{
+    let [n]=fixed(p)?;
+    if !(1..=253).contains(&n){return Err(denied());}
+    let host=take(p,usize::from(n))?;
+    for (i,label) in host.split(|&b|b==b'.').enumerate(){
+        if !(1..=63).contains(&label.len())||(i==0&&(label.len()>15||!label.iter().any(u8::is_ascii_lowercase)))||
+           label.first()==Some(&b'-')||label.last()==Some(&b'-')||
+           !label.iter().all(|b|b.is_ascii_lowercase()||b.is_ascii_digit()||*b==b'-'){
+           return Err(denied());
+        }
+    }
+    Ok(std::str::from_utf8(host).expect("canonical ASCII").to_owned())
+}
+
+/// Public descriptor syntax and a nonsecret SQL selection. These values
+/// carry no live site lock, vault provenance, protocol proof or OPEN grant.
+pub(super) struct RustPlan{plan:Plan,host:String}
+impl RustPlan{
     pub(super) fn parse(raw:&[u8])->io::Result<Self>{
-        fn take<'a>(p:&mut &'a[u8],len:usize)->io::Result<&'a[u8]>{
-            let (out,rest)=p.split_at_checked(len).ok_or_else(denied)?;*p=rest;Ok(out)
+        let mut p=raw.strip_prefix(RUST_MAGIC).filter(|_|raw.len()<=MAX_RUST_WIRE).ok_or_else(denied)?;
+        let (ids,seen)=scope(&mut p)?;
+        let host=host(&mut p)?;
+        let plan=Plan::parse_namespace(p,ids,seen,digest(raw)?)?;
+        Ok(Self{plan,host})
+    }
+    pub(super) fn hostname(&self)->&str{&self.host}
+    fn listener_is(&self,index:usize,local:SocketAddr)->bool{
+        local.port()==445&&(!matches!(local,SocketAddr::V6(v) if v.scope_id()!=0))&&
+            self.plan.endpoints().get(index).is_some_and(|e|e.ip==local.ip())
+    }
+    pub(super) fn admits_addresses(&self,local:SocketAddr,peer:SocketAddr)->bool{
+        if local.port()!=445||peer.port()==0||local.is_ipv4()!=peer.is_ipv4()||
+            [local,peer].into_iter().any(|a|matches!(a,SocketAddr::V6(v) if v.scope_id()!=0)){
+            return false;
         }
-        fn fixed<const N:usize>(p:&mut &[u8])->io::Result<[u8;N]>{
-            Ok(take(p,N)?.try_into().expect("exact requested length"))
+        let Some(e)=self.plan.endpoints().iter().find(|e|e.ip==local.ip())else{return false;};
+        if Endpoint::new(peer.ip(),e.prefix).is_err(){return false;}
+        let n=u32::from(e.prefix);
+        match(e.ip,peer.ip()){
+            (IpAddr::V4(a),IpAddr::V4(b))=>(u32::from(a)^u32::from(b))&!u32::MAX.checked_shr(n).unwrap_or(0)==0,
+            (IpAddr::V6(a),IpAddr::V6(b))=>(u128::from(a)^u128::from(b))&!u128::MAX.checked_shr(n).unwrap_or(0)==0,
+            _=>false,
         }
-        let mut p=raw.strip_prefix(MAGIC).filter(|_|raw.len()<=MAX_WIRE).ok_or_else(denied)?;
-        let sha=digest(raw)?;
-        let mut seen=BTreeSet::new();
-        let mut scope=[[0u8;16];5];
-        for id in &mut scope{
-            *id=fixed(&mut p)?;
-            if *id==[0;16]||!seen.insert(*id){return Err(denied());}
-        }
+    }
+    /// Same original S cut as the installed folder receipts. The caller must
+    /// still prove the actual site/record/lock and authenticate the client.
+    pub(super) fn active_at(&self,db:&Connection,c:&Catalog)->io::Result<ActiveRustMeta>{
+        let pair=Pair::confirmed(db,c)?.ok_or_else(denied)?;
+        let m=pair.active_rust_at(db,c)?.ok_or_else(denied)?;
+        if self.plan.scope!=[m.pool.0,m.init.0,m.instance,m.bind,m.setup.0]||
+            m.install_sha!=self.plan.sha{return Err(denied());}
+        self.plan.require_original_namespace(db,c,&pair)?;
+        Ok(m)
+    }
+}
+impl Plan{
+    fn parse_namespace(mut p:&[u8],scope:[Id;5],mut seen:BTreeSet<Id>,sha:[u8;32])->io::Result<Self>{
         let [n]=fixed(&mut p)?;
         if !(1..=16).contains(&n){return Err(denied());}
         let mut endpoints=Vec::<Endpoint>::with_capacity(n as usize);
@@ -85,7 +151,7 @@ impl Plan{
             let name=display::component(take(&mut p,k)?,display::MAX)?;
             if !names.insert(name){return Err(denied());}
             let next=|kind|{
-                let mut h=Sha256::new();h.update(b"ZXS-SMB-FIRST-1/ID\0")?;h.update(&sha)?;
+                let mut h=Sha256::new();h.update(RUST_IDS)?;h.update(&sha)?;
                 h.update(&[kind])?;h.update(&id)?;
                 Ok::<Id,io::Error>(h.finish()[..16].try_into().expect("derive 16B"))
             };
@@ -105,26 +171,10 @@ impl Plan{
     pub(super) fn sha(&self)->[u8;32]{self.sha}
     pub(super) fn endpoints(&self)->&[Endpoint]{&self.endpoints}
     pub(super) fn folders(&self)->&[Folder]{&self.folders}
-    pub(super) fn install(self,src:&InitialReader,bound:&[u8;128])->io::Result<InstalledPlan>{
-        if self.scope[0]!=bound[16..32]||self.scope[2]!=bound[32..48]||self.scope[3]!=bound[48..64]{
-            return Err(denied());
-        }
-        let bound_sha=digest(bound)?;
-        src.at(|db,c|self.qualify_native_at(db,&c,bound_sha).map(drop))?;
-        Ok(InstalledPlan(self))
-    }
-    /// Qualify only the native installation baseline inside the caller's
-    /// original SYSTEM read cut. The BOUND digest comes from the already
-    /// checked public BOUND above. This is not a verifier or an SMB grant.
-    /// A reader needing the active epoch can use this same Pair before leaving
-    /// the cut; native plan installation still requires only the original rows.
-    fn qualify_native_at(&self,db:&Connection,c:&Catalog,bound_sha:[u8;32])->io::Result<Pair>{
-        let pair=Pair::confirmed(db,c)?.ok_or_else(denied)?;
-        if self.scope!=[c.birth.pool.0,c.birth.op.0,pair.instance,self.scope[3],pair.setup.0]||
-            pair.setup_bound!=bound_sha{return Err(denied());}
+    fn require_original_namespace(&self,db:&Connection,c:&Catalog,pair:&Pair)->io::Result<()>{
         if !c.rows().get(1).is_some_and(|r|r.ordinal==1&&r.role==Role::Recycle){return Err(denied());}
-        for f in self.folders(){self.original(db,c,&pair,f)?;}
-        Ok(pair)
+        for f in self.folders(){self.original(db,c,pair,f)?;}
+        Ok(())
     }
     fn original(&self,db:&Connection,c:&Catalog,pair:&Pair,f:&Folder)->io::Result<()>{
         if !c.rows().iter().any(|v|v.role==Role::File&&v.volume==f.volume){return Err(denied());}
@@ -151,34 +201,95 @@ impl Plan{
     }
 }
 
-impl InstalledPlan{
-    pub(super) fn sha(&self)->[u8;32]{self.0.sha()}
-    pub(super) fn folders(&self)->&[Folder]{self.0.folders()}
-    pub(super) fn retained_label(&self)->&str{&self.0.recycle}
-    /// Logical children in exact display-byte order, strictly after a cursor.
-    /// Caller must have rechecked the original live SMB subject in this same
-    /// SQL cut and validated the cursor; these rows carry no OPEN or grant.
-    /// A zero-length cursor selects the complete bounded namespace. No volume
-    /// is opened: the installed R label is not evidence that its medium is up.
-    pub(super) fn project_visible_after<'p>(&'p self,db:&Connection,c:&Catalog,left:&[u8])
-        ->io::Result<Vec<(&'p [u8],u64)>>{
-        let mut matches=Vec::new();
-        let retained=self.retained_label().as_bytes();
-        if retained>left{matches.push((retained,2));}
+/// The running Rust endpoint's original public installation. This holds the
+/// actual Core S SH, registry catalogue and initially selected plan and
+/// credential together. It is not a protocol authentication or file grant.
+/// There is no path/bytes/scalar-only constructor.
+#[must_use]
+pub(crate) struct QualifiedRustInstall{
+    origin:Arc<crate::smb::InheritedRun>,
+    source:InitialReader,
+    installed:RustPlan,
+    original:ActiveRustMeta,
+}
+impl QualifiedRustInstall{
+    pub(crate) fn attach(origin:Arc<crate::smb::InheritedRun>)->io::Result<Self>{
+        origin.require_live_source()?;
+        let installed=RustPlan::parse(origin.rust_plan())?;
+        let count=installed.plan.endpoints().len();
+        if origin.listener_count()!=count||(0..count).any(|i|
+            !origin.listen_addr(i).is_some_and(|a|installed.listener_is(i,a))){
+            return Err(denied());
+        }
+        let source=InitialReader::open(origin.system_path(),crate::PoolId(installed.plan.scope[0]))?;
+        if source.dir.root.entity!=origin.system_entity(){return Err(denied());}
+        let original=source.at(|db,c|installed.active_at(db,&c))?;
+        if !origin.current_public_revision_is(original.smb.0,original.epoch.op.0,original.record,
+            &original.sid,original.epoch.generation,&original.login){return Err(denied());}
+        origin.require_live_source()?;
+        Ok(Self{origin,source,installed,original})
+    }
+
+    /// Checks this same original startup owner and current DB epoch, not a
+    /// remembered public ACTIVE selection. Never holds a SQLite transaction
+    /// across the caller's network, authentication or payload I/O.
+    pub(crate) fn require_current(&self)->io::Result<()>{
+        self.origin.require_live_source()?;
+        if self.source.dir.root.entity!=self.origin.system_entity(){return Err(denied());}
+        let current=self.source.at(|db,c|self.installed.active_at(db,&c))?;
+        if current!=self.original{return Err(denied());}
+        self.origin.require_live_source()
+    }
+
+    // This name (not the client UNC or a resolver) is the trust anchor for
+    // the single name/SPN policy. Its presence is not a file/tree grant.
+    pub(crate) fn hostname(&self)->&str{self.installed.hostname()}
+
+    pub(crate) fn is_original_start(&self,origin:&crate::smb::InheritedRun)->bool{
+        std::ptr::eq(self.origin.as_ref(),origin)
+    }
+
+    /// Compare the entire public prefix of the already protected record.
+    /// Matching bytes do not establish provenance or authenticate a client.
+    pub(crate) fn matches_record_coordinates(&self,ids:&[[u8;16];8],generation:i64,login:&str)->bool{
+        let m=&self.original;
+        *ids==[m.pool.0,m.init.0,m.setup.0,m.instance,m.bind,m.smb.0,m.epoch.op.0,m.record]&&
+            generation==m.epoch.generation&&login==m.login.as_str()
+    }
+
+    /// Only matching plan data: these addresses must come from the same
+    /// original owned kernel socket. This predicate never issues a grant.
+    pub(crate) fn admits_original_addresses(&self,local:SocketAddr,peer:SocketAddr)->bool{
+        self.installed.admits_addresses(local,peer)
+    }
+    pub(crate) fn original_listener_is(&self,index:usize,local:SocketAddr)->bool{
+        self.installed.listener_is(index,local)
+    }
+}
+
+
+#[derive(Eq,PartialEq)]
+struct LogicalChild<'p>{name:&'p str, number:u64, mode:Option<Setting>}
+impl Plan{
+    /// All visible children in exact display-byte order after a validated
+    /// cursor. No media access, no host paths, and no fake disk state.
+    fn logical_after<'p>(&'p self,db:&Connection,c:&Catalog,left:&[u8])->io::Result<Vec<LogicalChild<'p>>>{
+        let mut selected=Vec::new();
+        if self.recycle.as_bytes()>left{
+            selected.push(LogicalChild{name:&self.recycle,number:2,mode:None});
+        }
         for f in self.folders(){
-            let name=f.name().as_bytes();
-            if name<=left{continue;}
+            if f.name().as_bytes()<=left{continue;}
             let now=self.current(db,c,f.name())?.ok_or_else(denied)?;
             if now.mode==Mode::Disabled{continue;}
-            let v=c.rows().iter().find(|v|v.role==Role::File&&v.volume==f.volume()).ok_or_else(denied)?;
-            matches.push((name,u64::from(v.ordinal)+1));
+            let volume=c.rows().iter().find(|v|v.role==Role::File&&v.volume==f.volume()).ok_or_else(denied)?;
+            selected.push(LogicalChild{name:f.name(),number:u64::from(volume.ordinal)+1,mode:Some(now)});
         }
-        matches.sort_unstable_by_key(|r|r.0);
-        Ok(matches)
+        selected.sort_unstable_by_key(|r|r.name.as_bytes());
+        Ok(selected)
     }
-    // The original first mode is not the current permission. A later
-    // action still selects the live authenticated session/grant independently.
-    pub(super) fn current(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Option<Setting>>{
+
+    fn current(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Option<Setting>>{
         let Some(f)=self.folders().iter().find(|f|f.name()==label)else{return Ok(None);};
         let now=share_mode::current(db,c,f.share)?;
         if now.volume!=f.volume||now.revision<1{return Err(denied());}
@@ -186,32 +297,185 @@ impl InstalledPlan{
     }
 }
 
-#[cfg(test)]
-mod tests{
-    use super::*;
-    use super::super::hex;
-    #[test]
-    fn complete_first_plan_has_exact_helper_digest_and_separate_case_labels(){
-        let entries=include_str!("first-ordinary-plan-v1.txt");
-        let read=|key|entries.lines().filter_map(|x|x.split_once('=')).find(|(k,_)|*k==key).unwrap().1;
-        let mut raw=hex::<179>(read("wire_hex")).unwrap();
-        let p=Plan::parse(&raw).unwrap();
-        assert_eq!(p.scope,[[1;16],[2;16],[3;16],[4;16],[5;16]]);
-        assert_eq!(p.sha(),hex(read("plan_sha256")).unwrap());
-        assert_eq!((p.endpoints[0].ip,p.endpoints[0].prefix),("192.0.2.17".parse().unwrap(),24));
-        assert_eq!((p.endpoints[1].ip,p.endpoints[1].prefix),("2001:db8:7::2".parse().unwrap(),64));
-        assert_eq!(p.folders[0].name(),"Docs");assert_eq!(p.folders[1].name(),"docs");
-        assert_eq!(p.folders[0].share.0,hex(read("f1_share")).unwrap());
-        assert_eq!(p.folders[0].publish.0,hex(read("f1_publish")).unwrap());
-        assert_eq!(p.folders[0].first.0,hex(read("f1_mode")).unwrap());
-        assert_eq!(p.folders[1].share.0,hex(read("f2_share")).unwrap());
-        assert_eq!(p.folders[1].publish.0,hex(read("f2_publish")).unwrap());
-        assert_eq!(p.folders[1].first.0,hex(read("f2_mode")).unwrap());
-        assert_eq!(p.recycle,"回收站");
-        assert!(Plan::parse(&raw[..178]).is_err());
-        raw[168..170].copy_from_slice(&[0,0]);
-        assert!(Plan::parse(&raw[..170]).is_err()); // old ordinary-only ABI is not v10
-        raw[168..170].copy_from_slice(&[0,4]);raw[170..174].copy_from_slice(b"Docs");
-        assert!(Plan::parse(&raw[..174]).is_err()); // exact name already routes to F
+/// A pending result from the same authorized logical root, not a wire
+/// cursor, search pattern, response, FileId, client or authority for I/O.
+#[must_use]
+pub(crate) struct RustRootProjection{
+    root:Weak<()>,
+    // Own the exact mode op and revision of every projected ordinary child.
+    // In particular RW->RO->RW does not reuse an already prepared reply.
+    children:Vec<(String,u64,Option<Setting>)>,
+}
+impl RustRootProjection{
+    pub(crate) fn children(&self)->impl Iterator<Item=(&str,u64)>+'_{
+        self.children.iter().map(|(name,number,_)|(name.as_str(),*number))
+    }
+    /// A coarse share-level fact, never an access mask for a concrete file.
+    pub(crate) fn has_readwrite_child(&self)->bool{
+        self.children.iter().any(|(_,_,s)|s.is_some_and(|s|s.mode==Mode::ReadWrite))
     }
 }
+
+/// Compare only the exact original tree. This is not a session or an OPEN.
+#[must_use]
+pub(crate) struct RustRootStamp(Weak<()>);
+
+/// An actual application tree for this same process, installation and
+/// authenticated protocol session. It does not own an SMB number or the
+/// reply; the wire owner must still publish an exact original TCON.
+#[must_use]
+pub(crate) struct RustRoot{
+    install:Rc<QualifiedRustInstall>,
+    session:crate::smb::RustSessionWitness,
+    lifetime:Rc<()>,
+}
+impl RustRoot{
+    // The caller retains the actual signed, paid TCON and verifies its
+    // canonical host, exact share and real transport from the same member.
+    pub(crate) fn connect(install:Rc<QualifiedRustInstall>,session:crate::smb::RustSessionWitness)
+        ->io::Result<(Self,RustRootProjection)>{
+        if !session.is_tree_connect(){return Err(denied());}
+        let tree=Self{install,session,lifetime:Rc::new(())};
+        let scope=tree.project(&tree.session)?;
+        Ok((tree,scope))
+    }
+    fn require_member(&self,member:&crate::smb::RustSessionWitness)->io::Result<()>{
+        if !self.session.same_session(member)||!member.is_current_on(&self.install){return Err(denied());}
+        self.install.origin.require_live_source()
+    }
+    // Only the fixed ordinary Core adapters can borrow this same reader. It
+    // still checks actual Rust account and share mode inside each cut.
+    pub(in crate::system::reader::smb) fn ordinary_reader(&self,member:&crate::smb::RustSessionWitness)
+        ->io::Result<&InitialReader>{
+        self.require_member(member)?;
+        Ok(&self.install.source)
+    }
+    pub(in crate::system::reader::smb) fn ordinary_folder_at(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Setting>{
+        if !std::ptr::eq(db,&self.install.source.conn){return Err(denied());}
+        self.current_ordinary_at(db,c,label)
+    }
+    /// Spelling alone is not access. The retained OPEN separately qualifies
+    /// the live member, same SQLite cut and distinct original physical R.
+    pub(crate) fn names_retained_role(&self,label:&str)->bool{
+        label==self.install.installed.plan.recycle.as_str()
+    }
+    pub(in crate::system::reader::smb) fn retained_volume_at(&self,db:&Connection,c:&Catalog)->io::Result<crate::VolumeId>{
+        let site=&self.install;
+        if !std::ptr::eq(db,&site.source.conn)||site.installed.active_at(db,c)?!=site.original{return Err(denied());}
+        Ok(c.rows().get(1).filter(|r|r.role==crate::Role::Recycle&&r.ordinal==1).ok_or_else(denied)?.volume)
+    }
+    fn current_ordinary_at(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Setting>{
+        let site=&self.install;
+        if site.installed.active_at(db,c)?!=site.original{return Err(denied());}
+        if label==site.installed.plan.recycle.as_str(){
+            return Err(io::Error::new(io::ErrorKind::Unsupported,"the retained namespace requires its own original role"));
+        }
+        let setting=site.installed.plan.current(db,c,label)?.ok_or(io::ErrorKind::NotFound)?;
+        if setting.mode==Mode::Disabled{return Err(denied());}
+        Ok(setting)
+    }
+    /// Type comes only from the original mutable FILE engine. It accepts
+    /// that engine's exact writer-side connection only for this same S;
+    /// an arbitrary SQL connection never replaces the reader's DB.
+    pub(in crate::system::reader::smb) fn ordinary_writer_at(
+        &self,cut:&crate::system::reader::smb::work_change::WriterCut<'_>,label:&str,
+    )->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        let (source,db,c)=cut.parts();
+        self.current_writable_at(source,db,c,label)
+    }
+    pub(in crate::system::reader::smb) fn ordinary_birth_at(
+        &self,cut:&crate::system::reader::smb::file_create::CreateCut<'_>,label:&str,
+    )->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        let (source,db,c)=cut.parts();
+        self.current_writable_at(source,db,c,label)
+    }
+    pub(in crate::system::reader::smb) fn ordinary_directory_birth_at(
+        &self,cut:&crate::system::reader::smb::ordinary_directory::DirectoryCreateCut<'_>,label:&str,
+    )->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        let (source,db,c)=cut.parts();
+        self.current_writable_at(source,db,c,label)
+    }
+    pub(in crate::system::reader::smb) fn ordinary_transfer_at(
+        &self,cut:&crate::system::reader::smb::file_transfer::TransferCut<'_>,label:&str,
+    )->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        let (source,db,c)=cut.parts();
+        self.current_writable_at(source,db,c,label)
+    }
+    pub(in crate::system::reader::smb) fn ordinary_rename_at(
+        &self,cut:&crate::system::reader::smb::file_rename::RenameCut<'_>,label:&str,
+    )->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        let (source,db,c)=cut.parts();
+        self.current_writable_at(source,db,c,label)
+    }
+    pub(in crate::system::reader::smb) fn ordinary_directory_relabel_at(
+        &self,cut:&crate::system::reader::smb::ordinary_directory::DirectoryRelabelCut<'_>,label:&str,
+    )->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        let (source,db,c)=cut.parts();
+        self.current_writable_at(source,db,c,label)
+    }
+    fn current_writable_at(&self,source:&InitialReader,db:&Connection,c:&Catalog,label:&str)
+        ->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        if !std::ptr::eq(source,&self.install.source){return Err(denied());}
+        let setting=self.current_ordinary_at(db,c,label)?;
+        if setting.mode!=Mode::ReadWrite{return Err(denied());}
+        let m=&self.install.original;
+        Ok((m.smb,m.epoch.op,m.epoch.generation,setting))
+    }
+    /// A progress check during an already authorized ordinary FILE read,
+    /// never a replacement for the before/after S, placement and media cuts.
+    pub(in crate::system::reader::smb) fn ordinary_read_progress(&self,member:&crate::smb::RustSessionWitness)->io::Result<()>{
+        if !self.session.same_session(member){return Err(denied());}
+        member.require_read_progress(&self.install)
+    }
+    /// Cheap same-session fence inside the original SAVE transaction. Do
+    /// not perform Core qualification, blocking locks or SQLite here.
+    pub(in crate::system::reader::smb) fn original_write_live(&self,member:&crate::smb::RustSessionWitness)->io::Result<()>{
+        if !self.session.same_session(member){return Err(denied());}
+        member.require_write_turn_inside(&self.install)
+    }
+    /// A fresh signed, paid member in the actual current tree/open is
+    /// required by the backend. An idle saved witness is not that member.
+    /// Recheck the real credential and select all rows in ONE original cut.
+    pub(crate) fn project(&self,member:&crate::smb::RustSessionWitness)->io::Result<RustRootProjection>{
+        self.require_member(member)?;
+        let site=&self.install;
+        let children=site.source.at(|db,c|{
+            if site.installed.active_at(db,&c)?!=site.original{return Err(denied());}
+            let result=site.installed.plan.logical_after(db,&c,b"")?;
+            Ok(result.into_iter().map(|v|(v.name.to_owned(),v.number,v.mode)).collect())
+        })?;
+        self.require_member(member)?;
+        Ok(RustRootProjection{root:Rc::downgrade(&self.lifetime),children})
+    }
+    /// Used by the original command/reply owner before/after write to check
+    /// the rights and visible revision, not to commit a cursor or acknowledge.
+    pub(crate) fn require_projection(&self,member:&crate::smb::RustSessionWitness,expected:&RustRootProjection)
+        ->io::Result<()>{
+        if !expected.root.ptr_eq(&Rc::downgrade(&self.lifetime)){return Err(denied());}
+        let current=self.project(member)?;
+        if current.children!=expected.children{return Err(denied());}
+        Ok(())
+    }
+    pub(crate) fn ensure_current(&self,member:&crate::smb::RustSessionWitness)->io::Result<()>{
+        self.require_member(member)?;
+        self.install.require_current()?;
+        self.require_member(member)
+    }
+    /// The original ZXS logical root of the only exposed logical volume.
+    /// This is not a physical F or R, and its number is outside the >255
+    /// namespace of actual allocated FILE numbers.
+    pub(crate) fn logical_root_disk_id(&self,member:&crate::smb::RustSessionWitness)->io::Result<(u64,u64)>{
+        if !(member.is_create()||member.is_query_info()){return Err(denied());}
+        self.ensure_current(member)?;
+        Ok((1,1)) // (logical root index, single logical volume's index)
+    }
+    pub(crate) fn pool(&self)->crate::PoolId{self.install.original.pool}
+    pub(crate) fn stamp(&self)->RustRootStamp{RustRootStamp(Rc::downgrade(&self.lifetime))}
+    pub(crate) fn matches_stamp(&self,s:&RustRootStamp)->bool{
+        s.0.ptr_eq(&Rc::downgrade(&self.lifetime))
+    }
+}
+
+#[cfg(test)]
+#[path="../test/smb/core_credential.rs"]
+mod rust_credential_tests;

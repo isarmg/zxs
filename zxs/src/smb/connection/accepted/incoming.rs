@@ -2,13 +2,13 @@
 //! the caller nor a fallback can supply a frame, mutable connection or socket.
 use super::{Peer,parsed};
 use crate::smb::{
-    connection::{Connection,Fault,Received,Result,sessions::{Resume,ordinary::Admission},setup::{Start,Why}},
-    session::envelope::Failure,wire::{direct::MAX_FRAME_BYTES,setup_reply},
+    connection::{Connection,Fault,Origin,Received,Result,sessions::{Resume,ordinary::{Admission,MoveEscrow}},setup::{Start,Why}},
+    session::envelope::Failure,wire::{direct::MAX_FRAME_BYTES,message::{CANCEL,Compound},setup_reply},
 };
-use std::time::Instant;
+use std::{sync::{Arc,Weak,atomic::Ordering},time::Instant};
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(in crate::smb) enum Turn {Idle,SelectionWritten,ChallengeWritten,FinalWritten,ErrorWritten,EchoWritten,TreeRefused,Routed}
+pub(in crate::smb) enum Turn {Idle,SelectionWritten,ChallengeWritten,FinalWritten,ErrorWritten,EchoWritten,TreeRefused,CancelNoTarget,Routed}
 /// A real future handler must either settle its own original receipt or stop.
 /// In particular an unsigned error reply is NOT a substitute for checking a
 /// signed reauth, binding or an unrelated protected session.
@@ -21,7 +21,94 @@ pub(in crate::smb) struct SpecialSetup<'r> { _original:Received<'r> }
 
 #[derive(Clone,Copy)]
 enum Issuer { Protected, #[cfg(test)] FixedChallenge }
+
+/// Created only by receiving one complete record from this owner's
+/// original stream. No caller can trade a signed body or Direct TCP prefix
+/// onto different bytes, reissue a paid debit, or substitute a sink.
+#[must_use]
+struct CapturedRecord{origin:Weak<Origin>,bytes:Vec<u8>}
+impl CapturedRecord{
+    fn from_stream(owner:&mut Connection,limit:usize)->Result<Option<Self>>{
+        let got=owner.stream.as_mut().ok_or(Fault::Transport)?.poll_record(limit)?;
+        Ok(got.map(|bytes|Self{origin:Arc::downgrade(&owner.origin),bytes}))
+    }
+    fn require_owner(&self,owner:&Connection)->Result<()>{
+        if !self.origin.ptr_eq(&Arc::downgrade(&owner.origin)){
+            // A consumed frame can't silently vanish on its true origin.
+            // The mistaken recipient does not inherit or spend its credit.
+            if let Some(source)=self.origin.upgrade(){source.closed.store(true,Ordering::Release);}
+            return Err(Fault::WrongBatch);
+        }
+        owner.alive()
+    }
+    fn frame_on<'a>(&'a self,owner:&Connection)->Result<Compound<'a>>{
+        self.require_owner(owner)?;
+        parsed(&self.bytes)
+    }
+}
+
+/// Only the peer's actual immutable input, while still borrowed, can
+/// export an owned escrow from the qualified synchronous batch.
+pub(in crate::smb::connection) struct MoveCapture<'frame,'wire>{frame:&'frame Compound<'wire>}
+impl MoveCapture<'_,'_>{
+    pub(in crate::smb::connection) fn matches(&self,frame:&Compound<'_>)->bool{std::ptr::eq(self.frame,frame)}
+}
+
+/// The one real connection owner holds the immutable input allocation,
+/// charged debt, original signer revision and bound FILE proposal together.
+/// No full Connection, SQLite borrow or cryptographic key crosses a worker
+/// boundary. Drop still owes the original terminal reply and closes that
+/// origin; nothing in this slice may declare or settle its success.
+#[must_use]
+pub(super) struct PendingOriginalMove{held:MoveEscrow,input:CapturedRecord}
+impl PendingOriginalMove{
+    fn prepare(input:CapturedRecord,owner:&mut Connection)->Result<Self>{
+        let held={
+            let frame=input.frame_on(owner)?;
+            let [raw]=frame.messages()else{return Err(Fault::WrongReply);};
+            if !raw.is_basic_rename_request()||owner.in_flight!=0{return Err(Fault::WrongReply);}
+            let capture=MoveCapture{frame:&frame};
+            let paid=owner.receive(&frame)?;
+            let admitted=paid.preflight(owner);
+            match admitted{
+                Admission::Ready(batch)=>batch.into_move_escrow(capture)?,
+                Admission::TransportGone=>return Err(Fault::Closed),
+                _=>return Err(Fault::SessionState),
+            }
+        };
+        let pending=Self{held,input};
+        pending.require_original(owner)?;
+        Ok(pending)
+    }
+    fn require_original(&self,owner:&Connection)->Result<()>{
+        let frame=self.input.frame_on(owner)?;
+        self.held.require_original(owner,&frame)
+    }
+}
+
 impl Peer {
+    /// Not called by the real receive loop yet. That may change only once
+    /// socket/worker events, authenticated cancellation, held target rebind
+    /// and the original reply/credit terminal transition are implemented.
+    fn park_original_move(&mut self,input:CapturedRecord)->Result<()>{
+        if let Err(e)=input.require_owner(&self.connection){
+            if e!=Fault::WrongBatch{self.disconnect_original();}
+            return Err(e);
+        }
+        let prepare=if self.original_move.is_none(){PendingOriginalMove::prepare(input,&mut self.connection)}
+            else{Err(Fault::WrongBatch)};
+        match prepare{
+            Ok(pending)=>{self.original_move=Some(pending);Ok(())},
+            Err(e)=>{self.disconnect_original();Err(e)},
+        }
+    }
+    fn disconnect_original(&mut self){
+        // Invalidate the connection and its local tables before letting
+        // go of the parked original's FILE guard. Never issue a credit,
+        // implicit CLOSE/SAVE, or a second result on this path.
+        self.connection.disconnect();
+        drop(self.original_move.take());
+    }
     pub(in crate::smb) fn poll(&mut self,
         other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn> {
         self.poll_with(Issuer::Protected,other)
@@ -32,11 +119,12 @@ impl Peer {
         if self.first_login_by.is_some_and(|end|now>=end) {return Err(Fault::SessionState);}Ok(())
     }
     fn poll_with(&mut self,issuer:Issuer,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn> {
+        if self.original_move.is_some(){self.disconnect_original();return Err(Fault::Closed);}
         let result=self.once(issuer,other);
         // Never skip a paid frame by dropping/forgetting an outstanding
         // operation. This owner is strictly synchronous, with no pending async I/O.
         if result.is_err() || self.connection.alive().is_err() || self.connection.in_flight!=0 {
-            self.connection.disconnect();return Err(result.err().unwrap_or(Fault::Closed));
+            self.disconnect_original();return Err(result.err().unwrap_or(Fault::Closed));
         }
         result
     }
@@ -44,12 +132,17 @@ impl Peer {
         self.housekeeping()?;
         let c=&mut self.connection;
         let limit=(u64::from(c.limits.transact)+256).min(MAX_FRAME_BYTES as u64) as usize;
-        let Some(record)=c.stream.as_mut().ok_or(Fault::Transport)?.poll_record(limit)? else {
+        let Some(record)=CapturedRecord::from_stream(c,limit)? else {
             self.housekeeping()?;return Ok(Turn::Idle);
         };
         self.housekeeping()?;
         let c=&mut self.connection;
-        let frame=parsed(&record)?;let parts=frame.messages();let paid=c.receive(&frame)?;
+        let frame=record.frame_on(c)?;let parts=frame.messages();let paid=c.receive(&frame)?;
+        if parts.iter().any(|m|m.header.command==CANCEL) {
+            // Do not route a mixed frame, even if another member was paid.
+            paid.discard_idle_cancel(c)?;
+            return Ok(Turn::CancelNoTarget);
+        }
         if parts.iter().any(|m|m.header.command==1) {
             let special=match parts {
                 [m]=>!setup_reply::plain_header(m) || (m.raw.get(64..66)==Some(&25u16.to_le_bytes()[..]) &&

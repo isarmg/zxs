@@ -9,6 +9,18 @@ use std::time::Duration;
 
 pub(super) const FIXTURE_SERVER_TIME:u64=0x01da_bc00_1122_3344;
 
+#[test]
+fn private_key_exchange_source_keeps_its_known_stream_and_erasure_trait() {
+    // RFC 6229 §2, key 0x0102030405, offset 0. The production verifier's
+    // NTLM/SPNEGO known answers below also remain unmodified.
+    let mut first = [0u8; 16];
+    rc4_apply(&[1, 2, 3, 4, 5], &mut first).unwrap();
+    assert_eq!(first, [0xb2, 0x39, 0x63, 0x05, 0xf0, 0x3d, 0xc0, 0x27,
+                       0xcc, 0xc3, 0x52, 0x4a, 0x0a, 0x11, 0x18, 0xa8]);
+    fn requires_erasure<T: cipher::zeroize::ZeroizeOnDrop>() {}
+    requires_erasure::<Rc4>();
+}
+
 const PLAIN_ONE: &str = "4e544c4d535350000100000015820822000000000000000000000000000000000a00654a0000000f";
 const PLAIN_TWO: &str = concat!(
     "4e544c4d5353500002000000060006003800000015828a221112131415161718000000000000000028002800",
@@ -101,6 +113,7 @@ pub(super) fn revision() -> Arc<ProtectedRevision> {
         user: utf("wirefixture"), domain: utf("SYNTH"), spn: utf("cifs/fixture.invalid"),
         epoch: NonZeroU64::new(17).unwrap(),
         response_key: Zeroizing::new(std::array::from_fn(|i| 0x60 + i as u8)),
+        source: RevisionSource::Fixture,
     })
 }
 pub(super) fn challenge_vector()->(Vec<u8>,Vec<u8>) {(hex(PLAIN_ONE),hex(PLAIN_TWO))}

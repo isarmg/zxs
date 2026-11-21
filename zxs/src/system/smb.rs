@@ -11,7 +11,7 @@ struct Credential{account:AccountId,instance:[u8;16],op:OperationId,generation:i
 impl Credential{
     // Nonsecret mapping only. Native authentication never reads or opens SQL.
     fn current(db:&Connection,c:&Catalog)->io::Result<Self>{
-        let pair=Pair::confirmed(db,c)?.ok_or_else(denied)?;
+        let pair=Pair::confirmed(db,c)?.filter(Pair::is_native).ok_or_else(denied)?;
         let epoch=pair.epoch(db,c,Role::Smb)?.ok_or_else(denied)?;
         Ok(Self{account:pair.smb,instance:pair.instance,op:epoch.op,generation:epoch.generation,sid:pair.sid,login:pair.smb_login.into_bytes()})
     }
@@ -54,6 +54,7 @@ pub(crate) mod file_number;
 
 #[path="file_create.rs"]
 pub(crate) mod file_create;
+pub(crate) use file_create::{RustFileBirth,RustNamedWrite};
 
 #[path="first_work.rs"]
 pub(crate) mod first_work;
@@ -62,29 +63,29 @@ pub(crate) mod first_work;
 mod smb_buffer;
 #[path="retained_read.rs"]
 mod retained_read;
+pub(crate) use retained_read::{RustRetainedDirectory,RustRetainedFile,RustRetainedKind,RustRetainedPage,RustRetainedReadProof};
 
 #[path="file_transfer.rs"]
 mod file_transfer;
+pub(crate) use file_transfer::{ConfirmedFileDelete,RustFileDelete,RustRetainedRestore};
 #[path="file_rename.rs"]
 mod file_rename;
 #[path="file_retirement.rs"]
 mod retirement;
-
-#[cfg(test)]
-#[path="../../tests/unit/sqlite_rename.rs"]
-mod rename_tests;
 
 #[path="work_change.rs"]
 pub(crate) mod work_change;
 
 #[path="smb_stage.rs"]
 mod smb_stage;
+pub(crate) use smb_stage::{RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter};
 
 #[path="directory.rs"]
 pub(crate) mod directory;
 
 #[path="ordinary_directory.rs"]
 pub(in crate::system::reader) mod ordinary_directory;
+pub(crate) use ordinary_directory::RustNamedDirectory;
 
 #[path="smb_runtime.rs"]
 pub(crate) mod runtime;

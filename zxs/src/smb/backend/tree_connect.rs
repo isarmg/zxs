@@ -4,6 +4,8 @@ use crate::smb::{
     connection::{Fault as ConnectionFault, accepted::AcceptedEndpoints, sessions::ordinary::VerifiedMember},
     wire::path_fields::{FieldError, TREE_SERVER_UNITS, TREE_SHARE_UNITS},
 };
+use crate::system::reader::smb::runtime::{QualifiedRustInstall,RustRoot,RustRootProjection};
+use std::{io,rc::Rc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Error {
@@ -48,6 +50,48 @@ impl<'step, 'raw> TreeConnectRequest<'step, 'raw> {
     pub(in crate::smb) fn accepted_endpoints(&self) -> Option<&AcceptedEndpoints> {
         self.original.session().accepted_endpoints()
     }
+
+    /// Translate only the original, paid, verified request into its one
+    /// actual Core root. Host spelling and transport facts from another
+    /// stream, SQL meta alone, and a durable saved SID cannot enter here.
+    pub(in crate::smb) fn qualify(self,install:Rc<QualifiedRustInstall>)
+        ->Result<QualifiedTreeConnect<'step,'raw>,(Self,QualificationError)>{
+        fn original_root(req:&TreeConnectRequest<'_,'_>,install:Rc<QualifiedRustInstall>)
+            ->Result<(RustRoot,RustRootProjection),QualificationError>{
+            let connected=req.accepted_endpoints().ok_or(QualificationError::Endpoint)?;
+            if !install.admits_original_addresses(connected.local(),connected.peer()){
+                return Err(QualificationError::Endpoint);}
+            if !install.hostname().eq_ignore_ascii_case(req.server_spelling()){
+                return Err(QualificationError::UnapprovedServer);}
+            let subject=req.original.rust_session_witness().map_err(QualificationError::Session)?;
+            RustRoot::connect(install,subject).map_err(QualificationError::Original)
+        }
+        match original_root(&self,install){
+            Ok((root,projection))=>Ok(QualifiedTreeConnect{request:self,root,projection}),
+            Err(e)=>Err((self,e)),
+        }
+    }
+}
+#[derive(Debug)]
+pub(in crate::smb) enum QualificationError{
+    Session(ConnectionFault),Endpoint,UnapprovedServer,Original(io::Error),
+}
+
+/// Sealed to the original request until the actual reply owner publishes
+/// its tree. No response ID, success, cursor or OPEN is created here.
+#[must_use]
+pub(in crate::smb) struct QualifiedTreeConnect<'step,'raw>{
+    request:TreeConnectRequest<'step,'raw>,
+    root:RustRoot,
+    projection:RustRootProjection,
+}
+impl<'step,'raw> QualifiedTreeConnect<'step,'raw>{
+    pub(in crate::smb) fn original(&self)->&VerifiedMember<'step,'raw>{self.request.original()}
+    pub(in crate::smb) fn root(&self)->&RustRoot{&self.root}
+    pub(in crate::smb) fn projection(&self)->&RustRootProjection{&self.projection}
+    // Ownership only. The checked batch still owns the actual request
+    // identity and response ledger; this is not an acknowledgement.
+    pub(in crate::smb) fn into_prepared_root(self)->(RustRoot,RustRootProjection){(self.root,self.projection)}
 }
 
 // Apply the share-name rules from MS-FSCC 2.1.6, not the ZXS business-file

@@ -1,12 +1,12 @@
 //! One read-only H04 request on the existing layout observer process. No
-//! NativeSite, account data, ACT, write grant or reusable retirement ticket.
-use super::{Channel,Id,Kind,MAX_PATH_BYTES,PathKind,Pinned,PublicConfirmation,approval,place,query,random,require};
-use crate::sqlite_install::{bad,id,originals::LockedSystem,pair::retire_ordinary::{self,Preflight,Scope}};
+//! runtime site, account data, ACT, write grant or reusable retirement ticket.
+use super::{Channel,Id,Kind,MAX_PATH_BYTES,PathKind,Pinned,PublicConfirmation,approval,place,query_with,random,require};
+use crate::sqlite_install::{bad,id,originals::LockedSystem,pair::{retire_ordinary::{self,Preflight,Scope},ExplicitSubject}};
 use rustix::process::{Pid,getppid};
 use std::{ffi::{OsStr,OsString},fmt::Write,io,os::unix::ffi::{OsStrExt,OsStringExt},path::{Path,PathBuf}};
 
-pub(super) const DOMAIN:&[u8]=b"helper ordinary retirement check Native16 1\0";
-const BUDGET:usize=DOMAIN.len()+32+4*16+3*8+2*(2+MAX_PATH_BYTES);
+pub(super) const DOMAIN:&[u8]=b"helper ordinary retirement check exact v17 1\0";
+const BUDGET:usize=DOMAIN.len()+32+4*16+8+3*8+2*(2+MAX_PATH_BYTES);
 const PUBLICATION:u16=1<<0;
 const SELECTED_FILE:u16=1<<1;
 const DIRECTORY:u16=1<<2;
@@ -23,7 +23,7 @@ const NO_CHANGE:&str="仅只读预检；没有退登记、修改、清除或卸�
 fn invalid()->io::Error{bad("different or incomplete original ordinary-volume preflight scope")}
 
 #[derive(Debug)]
-pub(crate) struct RetirementCheck(Scope);
+pub(crate) struct RetirementCheck(Scope,ExplicitSubject);
 impl RetirementCheck{
     pub(crate) fn parse(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
         fn field(args:&mut impl Iterator<Item=OsString>,key:&str)->Result<OsString,&'static str>{
@@ -33,24 +33,25 @@ impl RetirementCheck{
         fn key(args:&mut impl Iterator<Item=OsString>,name:&str)->Result<Id,&'static str>{
             id(field(args,name)?).ok_or("expected 32 nonzero lowercase hexadecimal identifier digits")
         }
+        let subject=ExplicitSubject::parse(&mut args)?;
         let system=PathBuf::from(field(&mut args,"--system")?);
         let pool=key(&mut args,"--pool")?;let init=key(&mut args,"--init")?;let volume=key(&mut args,"--volume")?;
         let ordinary=PathBuf::from(field(&mut args,"--data")?);
         if args.next().is_some(){return Err("read-only preflight has no options to change or apply anything");}
-        Scope::new(pool,init,volume,system,ordinary).map(Self)
+        Scope::new(pool,init,volume,system,ordinary).map(|s|Self(s,subject))
             .map_err(|_|"invalid original SYSTEM or distinct ordinary path/identity for read-only preflight")
     }
     fn query(&self)->io::Result<Reply>{
-        retire_ordinary::compiled_native16()?;
+        retire_ordinary::compiled_v17()?;
         approval::no_inherited_descriptors()?;
-        let _host=approval::host_admin()?;let tty=PublicConfirmation::select()?;let subject=approval::profile()?;
+        let _host=approval::host_admin()?;let tty=PublicConfirmation::select()?;let subject=self.1.tuple();
         let pin=Pinned::already_mounted(self.0.system(),PathKind::StorageRoot)?;
         let original=pin.storage_directory()?;
         rustix::fs::flock(&original,rustix::fs::FlockOperation::NonBlockingLockExclusive)?;
         let check=||{tty.check()?;require(&pin,&original,subject)};
         check()?;
-        let raw=encode(&self.0,&random::<32>()?,&subject.0,place(&pin)?)?;
-        query(&raw,&original,subject,&check,|channel,digest,until|{
+        let raw=encode(&self.0,&random::<32>()?,self.1,place(&pin)?)?;
+        query_with(&raw,&original,subject,None,&check,|channel,digest,until|{
             let (body,[])=channel.wait_checked::<0>(Kind::RetirementCheck,digest,until,&check)?;
             Reply::decode(&body,self.0.ids())
         })
@@ -61,10 +62,11 @@ impl RetirementCheck{
     }
 }
 
-pub(super) struct Question{actor:Id,location:[u64;3],scope:Scope}
-fn encode(scope:&Scope,nonce:&[u8;32],actor:&Id,location:[u64;3])->io::Result<Vec<u8>>{
-    if nonce==&[0;32]||actor==&[0;16]||location[1..].contains(&0){return Err(invalid());}
-    let mut raw=DOMAIN.to_vec();raw.extend(nonce);raw.extend(actor);
+pub(super) struct Question{subject:ExplicitSubject,location:[u64;3],scope:Scope}
+fn encode(scope:&Scope,nonce:&[u8;32],subject:ExplicitSubject,location:[u64;3])->io::Result<Vec<u8>>{
+    let (actor,uid,gid)=subject.tuple();
+    if nonce==&[0;32]||location[1..].contains(&0){return Err(invalid());}
+    let mut raw=DOMAIN.to_vec();raw.extend(nonce);raw.extend(actor);raw.extend(uid.to_be_bytes());raw.extend(gid.to_be_bytes());
     for id in scope.ids(){raw.extend(id);}
     for n in location{raw.extend(n.to_be_bytes());}
     for path in [scope.system(),scope.ordinary()]{
@@ -87,15 +89,16 @@ impl Question{
             Ok(PathBuf::from(OsString::from_vec(take(b,n)?.to_vec())))
         }
         let nonce=fixed(&mut bytes)?;let actor=fixed(&mut bytes)?;
+        let subject=ExplicitSubject::checked(actor,u32::from_be_bytes(fixed(&mut bytes)?),u32::from_be_bytes(fixed(&mut bytes)?))?;
         let pool=fixed(&mut bytes)?;let init=fixed(&mut bytes)?;let volume=fixed(&mut bytes)?;
         let location=[u64::from_be_bytes(fixed(&mut bytes)?),u64::from_be_bytes(fixed(&mut bytes)?),u64::from_be_bytes(fixed(&mut bytes)?)];
         let system=path(&mut bytes)?;let ordinary=path(&mut bytes)?;
         let scope=Scope::new(pool,init,volume,system,ordinary)?;
-        if !bytes.is_empty()||encode(&scope,&nonce,&actor,location)?.as_slice()!=raw{return Err(invalid());}
-        retire_ordinary::compiled_native16()?;
-        Ok(Self{actor,location,scope})
+        if !bytes.is_empty()||encode(&scope,&nonce,subject,location)?.as_slice()!=raw{return Err(invalid());}
+        retire_ordinary::compiled_v17()?;
+        Ok(Self{subject,location,scope})
     }
-    pub(super) fn original_system(&self)->(Id,[u64;3],&Path){(self.actor,self.location,self.scope.system())}
+    pub(super) fn original_system(&self)->(ExplicitSubject,[u64;3],&Path){(self.subject,self.location,self.scope.system())}
     pub(super) fn inspect(&self,locked:&LockedSystem,channel:&Channel,digest:&[u8;32],parent:Pid)->io::Result<()>{
         let send=|reply:Reply|{
             if getppid()!=Some(parent){return Err(invalid());}
@@ -103,7 +106,7 @@ impl Question{
         };
         // The success callback runs while both originals are held, outside
         // SQLite. An uncertain send must not generate a second packet.
-        match retire_ordinary::observe(locked,&self.scope,|snapshot|send(Reply::from(snapshot,self.scope.ids())?)){
+        match retire_ordinary::observe(locked,&self.scope,&self.subject.tuple().0,|snapshot|send(Reply::from(snapshot,self.scope.ids())?)){
             Ok(sent)=>sent,
             Err(e)=>{
                 let status=if retire_ordinary::protected_volume(&e){Reply::Protected}else{Reply::Unknown};
@@ -178,9 +181,10 @@ mod tests{
         OsString::from_vec(b"/roots/F-\xff".to_vec()).into()).unwrap()}
     #[test]
     fn exact_private_question_preserves_raw_f_and_rejects_a_forged_domain_or_tail(){
-        let s=scope();let wire=encode(&s,&[4;32],&[5;16],[0,6,7]).unwrap();
+        let s=scope();let subject=ExplicitSubject::checked([5;16],1001,1002).unwrap();
+        let wire=encode(&s,&[4;32],subject,[0,6,7]).unwrap();
         let q=Question::decode(&wire).unwrap();
-        assert_eq!(q.original_system(),([5;16],[0,6,7],Path::new("/roots/S")));
+        assert_eq!(q.original_system(),(subject,[0,6,7],Path::new("/roots/S")));
         assert_eq!(q.scope.ordinary().as_os_str().as_bytes(),b"/roots/F-\xff");
         assert_eq!(q.scope.ids(),s.ids());
         assert!(Question::decode(&wire[..wire.len()-1]).is_err());

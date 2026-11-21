@@ -2,11 +2,7 @@
 
 目前的宿主只读诊断包括：目录关系、文件比较、选定存储根的容量/挂载、Linux 块设备清单与被动 I/O 速率，文件系统检查工具清单，以及隔离调用 FAT32、exFAT、ext4、XFS、NTFS 或 Btrfs 的上游工具。目标平台为 Linux x86_64。不接管设备或服务，没有后台服务；只有显式启动 `helper disk-web` 才开临时本机面板。无参数只显示用法。
 
-ZXS 的业务管理页由 [ZXS 原生 HTTP](docs/management-http.md) 直接提供，默认监听 0.0.0.0:8443，无需域名、证书、nginx 或套接字激活。可选的非 root systemd 单元只作为不启用的候选；如需 HTTPS，使用站点的外部软件。本包不会启动或改网络。
-
-[专用 SMB](docs/smb-host.md) 只用管理员已按准确摘要批准的配套制品，从本机前台启动。首装已选的数据目录无需再进 Web 开启，只访问唯一共享。原监听证明与独立客户登录、读写验收分开。
-
-**找现有部署。** [`helper discover`](docs/discovery.md) 只从本次真实本机挂载根观察 SYSTEM 候选；已知原 SYSTEM 位于子目录时用 `helper discover --system DIR` 指定本次原位置。无常驻或保存路径，不读数据库正文，不把候选当成已验原池或维护许可。
+业务 Web 与嵌入的 Rust SMB 由同一个 ZXS 可执行文件直接提供。Helper 不负责启动、代理、启用或安装运行服务，不保存可供以后代用的路径、用户偏好或授权状态。实际冷启动与双端登录要在最终配套制品验收。
 
 ```sh
 helper inspect-dirs /home/alice/downloads /home/alice/downloads/week-01 /mnt/incoming
@@ -23,7 +19,7 @@ helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin
 
 ## 本机磁盘面板
 
-`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可查看设备与挂载、被动 I/O 速率及七类工具的固定安装位置。普通启动不会执行检查。可在终端以 `--storage-roots --system DIR --recycle DIR --data DIR` 预选挂载目录，配对后按需看总量、空闲、可用和只读标志，浏览器不能换路径。该观察不核登记、温度或健康。终端用 `--fat32-copy`、`--exfat-copy`、`--ext4-copy`、`--xfs-copy`、`--ntfs-copy` 或 `--btrfs-copy` 加 `IMAGE --sha256 HEX` 只选定一份卷镜像，配对后预览并确认一次。两种 FAT 在启动时封存，ext4/XFS/NTFS/Btrfs 只在确认后持只读租约并比对整份摘要，不复制。网页不收路径、上传、工具参数或修复请求。见[用法和访问边界](docs/disk-web.md)。配对后还可打开[首次安装向导](docs/disk-web.md#首次安装向导本机命令与原回执)：比较固定模板并提供可复制的本机命令；真正建池、域供给、口令和启停确认仍只在终端。
+`helper disk-web` 在明确启动后才监听本机临时端口。从终端取得一次性配对码，网页可查看设备与挂载、被动 I/O 速率及七类工具的固定安装位置。普通启动不会执行检查。终端用 `--fat32-copy`、`--exfat-copy`、`--ext4-copy`、`--xfs-copy`、`--ntfs-copy` 或 `--btrfs-copy` 加 `IMAGE --sha256 HEX` 只选定一份卷镜像，配对后预览并确认一次。两种 FAT 在启动时封存，ext4/XFS/NTFS/Btrfs 只在确认后持只读租约并比对整份摘要，不复制。网页不收路径、上传、工具参数或修复请求。见[用法和访问边界](docs/disk-web.md)。
 
 ## 查看选定的存储根
 
@@ -82,20 +78,17 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 `helper check-btrfs-copy /绝对路径/volume.img --sha256 可信SHA256`。固定上游 `btrfs check --readonly` 只对自包含的单设备完整原始副本做结构检查；也可通过配对面板确认。不会查宿主其他设备，不支持多设备、恢复或修复，也不证明普通文件或每份镜像无误。[用法与边界](docs/btrfs-copy-check.md)。
 
-## 本机部署与离线维护（设计）
+## 本机部署与离线维护
 
-**首次建池：** 这是独立于只读诊断的离线写操作。[本机 `install-pool new|resume`](docs/sqlite-first-install.md) 只处理预先挂载、受保护且明确交付的 SYSTEM、独立回收卷和普通卷。不同的前台确认分别用于新建空池和续同一原单；不格式化、不清盘，不把未知残留作为可续状态。唯一 SYSTEM.sqlite3、各卷准确标记和最后活动回执需分别确认。建池不是设置两个账户、启用服务或保证登录。若只需检查原结果，用同样的原参数运行 `install-pool receipt`。它只读核原 SYSTEM，即使外卷暂不在也不会补标或同步。源代码尚未运行，更未进行真实设备验收。
+- [无状态发现](docs/discovery.md)只根据本次实际挂载和固定的 SYSTEM 元数据，或本会话给出的绝对目录，报告候选。候选不是授权，不自动选盘或初始化。
+- [新池、同一原 INIT 续作与查询](docs/sqlite-first-install.md)要求当前有前台授权、明确提供原 INIT 主体和数值 UID/GID；不设置 Helper 偏好或保存授权。继续原单需要原件及原标记，查询不自动修改。
+- [新 v17 私有首设](docs/private-fresh-zxs-v17.md)可从原始 INIT 依据、单 ELF 的独立预期 SHA-256 和实际前台确认，接原低权限的 SQLite 与新凭据发行。此处没有迁移、服务启停或自动接管。
+- [普通卷退登记预检](docs/retire-ordinary-preflight.md)只核本次真实原件与已知阻挡，不是真的退登记，也不表示可移除、擦除或卸载。
 
-**首次设置账户：** [本机 `setup-pair` 的前提、语法与返回值](docs/samba-domain.md#本机首设入口)。`provision --create-layout` 可明确只建立一个新的受保护实例目录与正式模板，不接管旧路径；随后另批 `provision` 为全新专实例生成并确认本地域；`enroll` 在同一原池一次建立唯一 Web 管理员和唯一 SMB 用户（使用不同口令）。Web 校验值只留 v16 SQLite，SMB 凭据只在专用原生账号库；两角色可分别在停机时重置。加 `--receipt-only` 只查原回执；明确的 `--resume` 只在原件与原阶段可核的适用情形继续，不询问已落盘目标的密码。当前没有已打包安装物、帐号登录或真实 Samba 访问的验收结果。
-
-当前 Web 向导仅引导已有本机流程，不提供实际磁盘选择、服务配置应用或实时状态。后续完善 CLI，并按独立授权分批增加环境核对、卷设置和服务排错。磁盘初始化/加入、非空普通盘显式导入、永久退登记（不擦盘）均在 ZXS 停止后由 helper 自己完成，不调用 ZXS 程序或服务。它依赖双方一致的公开磁盘与账户契约，以及原 SYSTEM 上的真实排他租约，而不信任“服务已停”的字样。正常主动下线和故障离线仍由 ZXS 处理。宿主与磁盘信息只由 helper 的运维视图显示，ZXS Web 只做业务管理；helper 已有候选盘与型号、容量/挂载和被动观测的速率源码，温度、设备错误、实际服务配置和有界脱敏日志须各自核验，未完成的不得报正常；不测速，不用“服务在运行”或历史登记推断在线业务健康。无法核实则明确标出。
-
-本机 [`check-ordinary-retirement`](docs/retire-ordinary-preflight.md) 只在持原 SYSTEM EX 且原件可验时核明确选中的一个 Native v16 普通卷。它仅报告本次已见阻挡或未确认，不执行退登记、写入或卸载；未运行实测。计划中的停机维护 CLI 还将按明确选择核查原池、卷和 FILE 容器，按原操作 ID 查询，只在另经授权并能核实原件时续作受支持的原维护操作。查询不自动修复；拿不到独占租约或认不出公开格式，不凭同名目录或旧命令输出猜测。日常 FILE 操作不放在维护 CLI：业务 Web 只管理，不收发文件正文；正文访问走 SMB。helper 自己的 Web 向导也不收发业务文件正文。
-
-这些是[架构与交付门槛](ARCHITECTURE.md)，不属于上述已接命令的部分尚未交付。以上观察命令都不授予离线写权；目前的[本机面板](docs/disk-web.md)只读观察，并可引导终端安装；它没有安装执行器、systemctl 或 Web 修复操作。
+已分开保全的空盘加入和非空转换预检不在这个格式切口自动开放。需要真正的挂载目标或用户数据操作时，另核原件、审批和范围；本源码未替代现场验收。
 
 ## 独立开发
 
 本目录有独立 Cargo 工程、Rust 工具链和[依赖来源记录](DEPENDENCIES.md)。允许验证时，入口为 `cargo build --locked` 和 `cargo test --locked`。后者的正向文件用例须在上述受支持文件系统上的专用临时位置创建自己的测试文件；如系统临时目录不满足，可由操作者设置 `HELPER_TEST_DATA_PARENT` 指向合格的专用目录。该变量仅供测试使用；先决条件缺失是测试失败，不算验证通过。
 
-当前未执行 CLI、依赖解析、构建、测试或 CI，也未安装或操作实际介质。块设备 CLI 验收源码另需显式提供稳定试验设备号 `HELPER_TEST_BLOCK_DEV`，没有实际测试结果。独立构建和发行需要哪些输入与证据，见[交付核对表](RELEASE.md)；待办见[项目任务清单](TASKS.md)。
+隔离构建和合成用例不能替代完整验收；本候选未安装、运行现场服务或操作实际介质。块设备 CLI 验收源码另需显式提供稳定试验设备号 `HELPER_TEST_BLOCK_DEV`，没有实际测试结果。独立构建和发行需要哪些输入与证据，见[交付核对表](RELEASE.md)；待办见[项目任务清单](TASKS.md)。

@@ -20,8 +20,8 @@ impl Write for Buffer{
     }
     fn flush(&mut self)->io::Result<()>{Ok(())}
 }
-pub(super) fn deliver<T>(offset:u64,count:u32,size:u64,range:impl FnOnce(u64,u64,&mut Buffer)->io::Result<Used>,
-    consume:impl FnOnce(&[u8])->io::Result<T>,mut confirm:impl FnMut(&Used)->io::Result<()>)->io::Result<T>{
+fn collect(offset:u64,count:u32,size:u64,range:impl FnOnce(u64,u64,&mut Buffer)->io::Result<Used>)
+    ->io::Result<(Vec<u8>,Used)>{
     // Pinned upstream absolute input maximum, not a new negotiated size.
     if count>0xffff00||offset.checked_add(u64::from(count)).is_none_or(|end|end>i64::MAX as u64){
         return Err(invalid("invalid native SMB read request"));
@@ -30,7 +30,20 @@ pub(super) fn deliver<T>(offset:u64,count:u32,size:u64,range:impl FnOnce(u64,u64
     let mut buffer=Buffer{data:Vec::new(),limit:n};
     let used=range(start,n as u64,&mut buffer)?;
     if buffer.data.len()!=n{return Err(invalid("incomplete checked SMB read window"));}
-    let result=consume(&buffer.data)?;
+    Ok((buffer.data,used))
+}
+pub(super) fn deliver<T>(offset:u64,count:u32,size:u64,range:impl FnOnce(u64,u64,&mut Buffer)->io::Result<Used>,
+    consume:impl FnOnce(&[u8])->io::Result<T>,mut confirm:impl FnMut(&Used)->io::Result<()>)->io::Result<T>{
+    let (data,used)=collect(offset,count,size,range)?;
+    let result=consume(&data)?;
     crate::ordinary::after_output(&mut ||confirm(&used))?;
     Ok(result)
+}
+// Rust keeps (rather than transmits) the actual complete immutable window.
+// Its original used-source proof travels with the bytes until late send.
+pub(super) fn prepare(offset:u64,count:u32,size:u64,range:impl FnOnce(u64,u64,&mut Buffer)->io::Result<Used>,
+    mut confirm:impl FnMut(&Used)->io::Result<()>)->io::Result<(Vec<u8>,Used)>{
+    let (data,used)=collect(offset,count,size,range)?;
+    crate::ordinary::after_output(&mut ||confirm(&used))?;
+    Ok((data,used))
 }

@@ -151,11 +151,12 @@ impl<'t,'s,'r> Staged<'t,'s,'r>{
     fn writable(&self,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
         alive()?;self.writer.require_work()} // same original Tree, credential and FILE
     fn refresh(&mut self)->io::Result<()>{
-        if let Some(op)=self.draft.refresh_op{
-            let latest=self.writer.current_read()?;
-            if latest.working_original()!=Some(op)||latest.size()!=self.draft.eof{return Err(invalid("confirmed work no longer matches its original FLUSH"));}
-            self.base=latest;self.draft.refresh_op=None;
-        }
+        let writer=&self.writer;
+        if let Some(latest)=self.draft.refresh_with(||{
+            let latest=writer.current_read()?;
+            let op=latest.working_original();let eof=latest.size();
+            Ok((latest,op,eof))
+        })?{self.base=latest;}
         Ok(())
     }
     fn changing(&mut self,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
@@ -206,6 +207,14 @@ struct FlushInput<'a>{op:OperationId,retained:u64,eof:u64,spans:&'a[Span],input:
 impl DraftStage{
     fn new(Scratch(spool):Scratch,eof:u64)->Self{
         Self{spool,eof,retained:eof,parts:Vec::new(),flush_op:None,refresh_op:None}
+    }
+    fn refresh_with<T>(&mut self,select:impl FnOnce()->io::Result<(T,Option<OperationId>,u64)>)->io::Result<Option<T>>{
+        if let Some(original)=self.refresh_op{
+            let (latest,op,eof)=select()?;
+            if op!=Some(original)||eof!=self.eof{return Err(invalid("confirmed work no longer matches its original FLUSH"));}
+            self.refresh_op=None;
+            Ok(Some(latest))
+        }else{Ok(None)}
     }
     fn transfer_ready(&self,base_size:u64)->io::Result<()>{
         if self.eof!=base_size||self.retained!=self.eof||!self.parts.is_empty()||
@@ -389,3 +398,7 @@ mod tests{
         assert_eq!(latest,overlay);
     }
 }
+
+#[path="smb_rust_staged.rs"]
+mod rust;
+pub(crate) use rust::{RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter};

@@ -56,7 +56,7 @@ fn proof_from_fixture(decoded:DecodedRecord,want:&Coordinates)->Result<Mechanism
     let DecodedRecord{fields,key}=decoded;
     let who=std::str::from_utf8(&fields.login[..usize::from(fields.login_len)]).map_err(|_|Rejected)?;
     let revision=Arc::new(ProtectedRevision{user:utf(who),domain:utf(DOMAIN),spn:utf("cifs/fixture.invalid"),
-        epoch:fields.generation,response_key:key});
+        epoch:fields.generation,response_key:key,source:RevisionSource::Fixture});
     let (one,two,three)=(hex(TYPE1),hex(TYPE2),hex(TYPE3));
     let sid=NonZeroU64::new(42).unwrap();
     let issued=Issued{start:frame::seen(&one),revision,assigned:sid,expected_type2:Saved::from_wire(&two).unwrap(),

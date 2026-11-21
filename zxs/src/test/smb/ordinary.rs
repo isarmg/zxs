@@ -53,7 +53,9 @@ fn default_and_explicit_cmac_both_require_first_signed_request_on_its_published_
                 Admission::Ready(mut batch) if !unsigned=>{
                     let Some(Step::Verified(v))=batch.next().unwrap() else {panic!("no original first member")};
                     assert_eq!(v.ordinal(),0);assert!(std::ptr::eq(v.message(),&raw.messages()[0]));
-                    v.session().recheck().unwrap();assert!(batch.next().unwrap().is_none());
+                    v.session().recheck().unwrap();
+                    assert!(matches!(v.rust_session_witness(),Err(Fault::NoVerifier)));
+                    assert!(batch.next().unwrap().is_none());
                 }
                 Admission::TransportGone if unsigned=>{}, // mandatory for this actual active-session TCON
                 _=>panic!("missing context must not disable signing; an explicit context cannot excuse a missing flag"),

@@ -4,8 +4,9 @@
 //! peer-supplied IDs, a grant integer or an externally supplied transcript.
 use super::wire::{
     credit_fields::{Cost, Limits, direct_445_grant, split_sync_reply},
-    direct::MAX_FRAME_BYTES, message::{Compound, MAX_COMMANDS},
+    direct::MAX_FRAME_BYTES, message::{CANCEL, Compound, MAX_COMMANDS, Message, RELATED, Routing, SIGNED},
     negotiate::Offer, preauth::{ConnectionHash, NegotiateRequestHash},
+    set_info::SET_INFO,
 };
 use super::wire::{negotiate::CmacChoice, negotiate_reply::{OriginalHeader, Selection}};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -17,13 +18,15 @@ mod transport;
 pub(in crate::smb) mod accepted;
 
 const CAP: u16 = 64; // bound on live number span AND advertised + in-flight requests
-const CANCEL: u16 = 0x000c;
 const K64: u64 = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Fault {
     Opening, NoDialect, NoPreauthHash, Identity, Entropy, Clock, NoCommonSigning, SetupPhase, Closed, Range, FrameSize,
     Resources, Exhausted, WrongBatch, NoReply, WrongReply, Transport, SessionLimit, SessionState, NoVerifier, ClientDialect,
+    // Actual storage cannot yet disclose this exact original's outcome.
+    // Stop the paid stream, never send a conclusive error or retry it.
+    WriteOutcomeUnknown,
 }
 pub(in crate::smb) type Result<T> = std::result::Result<T, Fault>;
 
@@ -146,6 +149,27 @@ impl Drop for Debits {
     }
 }
 
+/// Exactly one already paid, still owed standalone move-shaped member.
+/// This stores accounting only; the peer keeps the original signed frame
+/// and current-session proof beside it. No publication or reset API exists.
+#[must_use]
+struct MoveDebt { original:Debits, charge:u16 }
+impl MoveDebt {
+    fn require(&self, owner:&Connection, message:&Message<'_>)->Result<()> {
+        owner.alive()?;
+        if !Arc::ptr_eq(&owner.origin,&self.original.origin) {return Err(Fault::WrongBatch);}
+        let [member]=self.original.entries.as_slice() else {return Err(Fault::WrongBatch);};
+        let h=&message.header;
+        if !self.original.owed||owner.in_flight!=1||member.payload!=Payload::Covered||member.cmd!=SET_INFO||
+            !message.is_basic_rename_request()||h.flags&(SIGNED|RELATED)!=SIGNED||
+            !matches!(h.routing,Routing::Sync{..})||message.raw.get(20..24)!=Some(&[0;4][..])||
+            member.mid!=h.message||member.ask!=h.credit_request||self.charge!=h.credit_charge {
+            return Err(Fault::WrongBatch);
+        }
+        Ok(())
+    }
+}
+
 struct Origin {
     closed: AtomicBool, hash: ConnectionHash, run:Arc<sessions::Run>,
     endpoints: Option<accepted::AcceptedEndpoints>,
@@ -171,6 +195,11 @@ impl Drop for Connection {
     fn drop(&mut self) { self.origin.closed.store(true,Ordering::Release); }
 }
 impl Connection {
+    fn retain_move_debt(&self,debit:Debits,message:&Message<'_>)->Result<MoveDebt>{
+        let proof=MoveDebt{original:debit,charge:message.header.credit_charge};
+        proof.require(self,message)?;
+        Ok(proof)
+    }
     fn alive(&self) -> Result<()> {
         if self.origin.closed.load(Ordering::Acquire) { Err(Fault::Closed) } else { Ok(()) }
     }

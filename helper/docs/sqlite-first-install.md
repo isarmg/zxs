@@ -3,16 +3,16 @@
 `helper install-pool new|resume` 是**有写入的离线操作**；单独的 `receipt` 只核对原 INIT 回执。普通磁盘诊断面板不会执行这些操作。另有[同机浏览器发起前台确认](disk-web.md)的可选入口，写入决定仍由该终端作出。当前源码针对外部预先挂载、受保护且独立选定的本地卷。它不分区、格式化、挂载、擦盘、迁移既有目录或启动服务。只建立与同版业务端一致的唯一[已冻结数据库结构](../src/sqlite_install/schema.sql)，不识别、升级或双写此前的格式。建池完成后**仍没有账户或可登录的服务**。尚未构建、运行或做真机断电验收；请勿把本页当成实盘验证报告。
 
 ```text
-helper install-pool new    --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
-helper install-pool resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
-helper install-pool receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
+helper install-pool new    --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
+helper install-pool resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
+helper install-pool receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
 ```
 
 - **new：只新建。** 本机管理员先独立确定全新的 SYSTEM、回收 R 和 1–62 个普通卷，包括 R 确实来自与 S 和所有普通卷独立的文件系统；路径或挂载 ID 本身不证明物理盘独立。每个目录是受保护宿主上的专用普通目录，由预定非 root 存储账号拥有，权限 0700；父链需可核，来源不明就拒绝。实际目录、祖先、名称容量、挂载、只读标志、已有旧属性或未知现物均核查。无法核查既有目录的旧标记不接手；不读旧值，不用 xattr 存新格式。不自动发现或占用非空卷。
 - **resume：绝不建库。** 保存两个非秘密 ID（均为 32 位小写非零十六进制），使用**同一维护主体、审批参考、存储 UID、明确的原 S/R/F 与原操作**。必须独立核实当前接入的确是上次交付的原介质；整套卷与库被复制时，单靠 SQL/卷标不能证明哪套是原件。观察到已提交的准确原单只返历史回执，不重建已丢的标记，不证明当前健康。如有未归属或需恢复的 `-journal`、WAL、SHM、空/半库、损坏/外来标记或签发来源不明，不删、不代修、不重发新号。
 - **receipt：只查同一 INIT，不续作。** 丢回执、只想确认当前原单，或部分外卷暂时不在时，使用原 Op、原审批参考、同一受保护的本机维护主体/存储 UID，以及当初所有 S/R/F 的准确路径字节。本机 root 前台确认环境后先永久降权，再只持原 SYSTEM 的独立 EX，SQLite 实际只读。R/F 参数只校对原申请和已登记的行，不查、开或锁这两类卷，无需重新挂载它们。它不检查当前卷健康或连通性，不证明可修复、可写、外卷在位或可在线；独立核对当前是原 SYSTEM，不能只凭名字、SQL 或整套克隆自证来源。
 - **查询返回值。** `0`：`init=confirmed`，所选 SYSTEM 里同一原 INIT 的历史确认，要求真实原 S 标存在且完全相符。 `1`：`init=pending`，同一精确待办，S 原标吻合或当下原 S 无标都不推进。两者的 PoolId 仅为该历史决定/待办的原值，待办不说明池活动。 `2`：未能证实，例如 S 锁冲突、数据库缺失/空/不是此版本、原单不符、读取异常、存在任何意外文件或日志、已提交但 S 标缺失、具名原件变更。不能把 `2` 当作未曾建池，也不会改开写连接、设置标记、同步、修复日志或放新号继续。
-- **谁能确认。** 需可信宿主上的本机 root 管理终端。固定的、受保护且 root 所有、无链接别名的 0600 普通 `/etc/local-ops-helper/installer.identity` 含一行 ASCII：`HOST-INSTALL-1 <32位小写非零十六进制维护ID> <十进制非root存储UID> <十进制非root存储GID>\n`。该文件应由可信宿主管理员预先设置；helper 不创建它，不保存口令或审批票。使用 [Linux 初始 PID、USER nsfs 身份](https://github.com/torvalds/linux/blob/v6.12/include/linux/proc_ns.h) 与真实 PID1 的挂载命名空间及根。三个标准流必须是该操作者同一前台控制终端，不接受其他继承描述符或后台/网页调用。完整列表及原申请摘要显示后，清除已排队输入并给出一次性确认码；new 需输入 `INIT 确认码`，resume 须另输 `RESUME 确认码`。原申请 SHA-256 不作确认码。receipt 不要求写入确认、不读取确认输入。两个 ID、路径或服务停止都不是授权。需要写时随后永久降到已核的非 root 存储身份、清补充组及能力，才允许建库/写卷标。
+- **谁能确认。** 可信宿主上的本机 root 与实际前台控制终端。原 INIT 主体和明确的非 root 存储身份由本会话的 `--init-actor ID --storage-uid N --storage-gid N` 输入；不保存身份、路径、口令或审批票。旧单查询和续作仍以原 S 的准确操作、请求摘要、卷标及相同原件为准。显示完整原件后刷新当前终端输入并另做一次性确认。需要写时永久降到应有非 root 存储身份。
 - **互斥及结果。** 以独立打开的原目录描述符按固定次序取齐全部非阻塞 EX，S 的那一把贯穿所有 SQLite 连接与操作末端；不同进程不能借同一 OFD。锁要求所有参与者遵守，不能抵抗能任意替换整个受保护宿主的第三方。SQLite 始终使用固定 Unix VFS，核实际引擎/禁 WAL/扩展，S 路径必须无损 UTF‑8 且数据库和回滚日志名能容纳；R/F 保留原路径字节。仅 OS 可独占预留 0600 新空库，文件和父目录同步并关闭 raw FD 后，SQLite 才只用精确原名开户，**不用 CREATE**。不在打开 SQLite 的同时裸开关其数据库 inode。
 - **先库后标，再确认。** 第一笔短事务保存原待认领结果及整组卷行；先由真正的只读连接按完整[规范 DDL](../src/sqlite_install/schema.sql)、原请求与各行核实，再关库做磁盘标记。先核 *全部* 指定根；已有正确标记只重同步，没有的用固定名称独占创建。逐个核实际 101 字节、EOF、原 inode、文件与原父同步、独立具名读回。只有整组已核才重开既有库，以短事务再取同一原单和全表后条件提交 0→1，最终再次只读查证。每次补标前再核原 DB 与 S 清单；最后 UPDATE 紧前从原描述符完整枚举 S/R/F，COMMIT 前再次完整枚举 R/F 并核 S 两件原物及意外名称。只有原进程的 SQLite 在其短事务内管理自己的临时回滚日志；不按日志名字授予归属，不打开或手动删除。关库后 S 必须重新仅有数据库及原标。失败或 COMMIT 结果不明保留现场，不能用新号代原单；若 SQL 已提交而末端检测报错，不能承诺它仍然待办。
 
@@ -25,4 +25,4 @@ helper install-pool receipt --op ID --approval ID --system DIR --recycle DIR --d
 
 两个真实登录需要独立授权的 Web 管理员/专用 SMB 账户首设和各自网络适配；这两个动作均不属于本命令。
 
-两个账户随后使用[独立的本机首设、只查、恢复或按角色重置](samba-domain.md#本机首设入口)。Web 校验值留在本池的唯一 SQLite v16；Samba 凭据只在实例独立的原生账号文件，建池不读取它、不设置密码、不启动服务。历史角色审批、共享许可、实际登录和各卷当前可用性互不替代。
+两个账户由[独立新池首设](private-fresh-zxs-v17.md)发行。原初装或原确认回执既不是登录检查，也不启动 ZXS。

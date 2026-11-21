@@ -1,6 +1,6 @@
 //! Sole publisher of a freshly authenticated, signed, one-channel SMB
 //! session. A successful local return is never a Tree or a Core FILE grant.
-use super::{Claim,Local,Phase,Registration,Sending,proof::Proven};
+use super::{Claim,LiveSession,Local,Phase,Registration,Sending,proof::Proven};
 use crate::smb::{connection::{Connection,Fault,Origin,ReplySend,Result},session::BoundSession};
 use std::{sync::{Arc,Weak,atomic::Ordering},time::Instant};
 
@@ -53,7 +53,7 @@ impl FinalSend<'_,'_> {
         let item=c.sessions.iter_mut().find(|v|Arc::ptr_eq(&v.reg.claim,claim)).ok_or(Fault::SessionState)?;
         if !matches!(&item.phase,Phase::SendingFinal) {return Err(Fault::SessionState);}
         let Local{reg,phase}=item;
-        reg.publish(&origin,guid,dialect,now,next,|state|*phase=Phase::Valid(state))
+        reg.publish(&origin,guid,dialect,now,next,|state|*phase=Phase::Valid(LiveSession::new(state)))
     }
     #[cfg(test)]
     pub(in crate::smb) fn bytes(&self)->Result<&[u8]> {

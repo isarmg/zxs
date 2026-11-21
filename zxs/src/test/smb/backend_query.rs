@@ -196,8 +196,20 @@ fn metadata_view_keeps_requested_credit_but_does_not_read_ignored_input() {
 }
 
 #[test]
+fn normalized_name_is_class_48_with_the_original_output_ceiling() {
+    let data = framed(&[&info(1, 48, 19)]);
+    let frame = parsed(&data);
+    let message = &frame.messages()[0];
+    let q = message.query_info(19).unwrap();
+    assert_eq!(q.class, InfoClass::File(FileClass::NormalizedName));
+    assert_eq!((q.output_bytes, q.credit_bytes, q.wire_id), (19, 19, RAW_ID));
+    assert_eq!(message.query_info(18), Err(QueryError::ExceedsMaxTransact));
+}
+
+#[test]
 fn unsupported_metadata_is_not_mapped_to_another_class_or_a_default() {
     for (kind, class, error) in [
+        (1, 9, QueryError::NotSupported), // local FileNameInformation is not class 48
         (1, 15, QueryError::NotSupported), // EA input is not a supported metadata path
         (1, 22, QueryError::NotSupported), // no named streams
         (2, 8, QueryError::NotSupported), // no invented FS object ID
@@ -291,11 +303,109 @@ fn single_and_full_size_queries_both_obey_record_cap() {
 }
 
 
+#[test]
+fn ordinary_filter_work_and_unimplemented_dot_records_are_not_exhaustion(){
+    let exact=Pattern::Exact("Report.xlsx".into());
+    assert!(exact.supports_ordinary(false));
+    assert!(!exact.supports_ordinary(true));
+    assert!(Pattern::All.supports_ordinary(true));
+    assert!(!Pattern::Parent.supports_ordinary(false));
+    let mut work=0;
+    assert!(exact.match_bounded("Report.xlsx",&mut work).unwrap());
+    assert!(!exact.match_bounded("report.xlsx",&mut work).unwrap());
+    assert_eq!(work,0); // exact UTF-8 check, no wildcard matrix
+    let wildcard=Pattern::Expression("?.txt".into());
+    assert!(!wildcard.supports_ordinary(true));
+    assert!(wildcard.match_bounded("A.txt",&mut work).unwrap());
+    assert!(work>0);
+    work=2_000_000;
+    assert_eq!(wildcard.match_bounded("A.txt",&mut work).unwrap_err().kind(),
+        std::io::ErrorKind::OutOfMemory);
+}
+
 mod root_pages {
     use super::*;
     use crate::smb::backend::{Facts, Grant, Held, OpenCoordinator, OriginalRequest, ParentWrite, Share,
         query::root::{Child, Fault, OriginalNamespace, RootPage, Selection, records::EncodeFault}};
-    use std::{cell::Cell, io, num::NonZeroUsize, rc::Rc};
+    use std::{cell::Cell, io, num::NonZeroUsize, rc::Rc, sync::Arc};
+
+    #[test]
+    fn ordinary_real_wire_records_distinguish_directory_from_an_empty_or_nonempty_file(){
+        let owner=coordinator();
+        let (mut open,_)=opened(&owner,Object::OrdinaryRoot(pool(),VolumeId([2;16])),1,&[]);
+        let req=directory(38,0,4096,&[]);
+        let data=framed(&[&req]);
+        let q=parsed(&data).messages()[0].query_directory(MAX_TX).unwrap();
+        let (page,())=open.prepare_ordinary_query_with(&q,4096,|_,pattern,after,limit|{
+            assert_eq!(pattern,&Pattern::All);
+            assert_eq!((after,limit),(None,16));
+            Ok((vec![
+                Child{name:"Dir".into(),number:u64::MAX,eof:None},
+                Child{name:"Empty".into(),number:123,eof:Some(0)},
+                Child{name:"File".into(),number:456,eof:Some(4097)},
+            ],()))
+        }).unwrap();
+        let encoded=page.encode_complete().unwrap();
+        let bytes=encoded.data();
+        assert_eq!(bytes.len(),272);
+        assert_eq!(&bytes[0..4],&88u32.to_le_bytes());
+        assert_eq!(&bytes[40..56],&[0;16]); // directory reports no data length or allocation
+        assert_eq!(&bytes[56..60],&0x10u32.to_le_bytes());
+        assert_eq!(&bytes[72..80],&u64::MAX.to_le_bytes()); // unknown per-object FileId
+        assert_eq!(&bytes[80..86],&[b'D',0,b'i',0,b'r',0]);
+        let empty=&bytes[88..];
+        assert_eq!(&empty[0..4],&96u32.to_le_bytes());
+        assert_eq!(&empty[40..56],&[0;16]); // zero bytes still belong to a logical FILE
+        assert_eq!(&empty[56..60],&0x20u32.to_le_bytes());
+        assert_eq!(&empty[72..80],&123u64.to_le_bytes());
+        let file=&bytes[184..];
+        assert_eq!(&file[0..4],&0u32.to_le_bytes());
+        assert_eq!(&file[40..48],&4097u64.to_le_bytes());
+        assert_eq!(&file[48..56],&8192u64.to_le_bytes());
+        assert_eq!(&file[56..60],&0x20u32.to_le_bytes());
+        assert_eq!(&file[72..80],&456u64.to_le_bytes());
+    }
+
+    #[test]
+    fn ordinary_page_commits_the_last_emitted_key_not_lookahead_or_dropped_rows(){
+        let owner=coordinator();
+        let (mut open,_)=opened(&owner,Object::Directory(pool(),DirectoryId([3;16])),1,&[]);
+        let req=directory(12,0,14,&[]);
+        let data=framed(&[&req]);
+        let q=parsed(&data).messages()[0].query_directory(MAX_TX).unwrap();
+        let all=|_:&FixtureRoot,_:&Pattern,after:Option<&str>,_:u8|{
+            assert!(after.is_none());
+            Ok((vec![
+                Child{name:"A".into(),number:1,eof:Some(1)},
+                Child{name:"B".into(),number:2,eof:Some(2)},
+            ],()))
+        };
+        let (page,())=open.prepare_ordinary_query_with(&q,14,all).unwrap();
+        assert!(matches!(page.output(),Selection::Rows{entries,exhausted:false,..} if entries.len()==1));
+        drop(page); // dropped frame: A still not sent
+        let (page,())=open.prepare_ordinary_query_with(&q,14,all).unwrap();
+        assert!(page.written_for_fixture(&mut open));
+        let (next,())=open.prepare_ordinary_query_with(&q,14,|_,_,after,_|{
+            assert_eq!(after,Some("A"));
+            Ok((vec![Child{name:"B".into(),number:2,eof:Some(2)}],()))
+        }).unwrap();
+        assert!(matches!(next.output(),Selection::Rows{entries,..} if entries[0].child.name=="B"));
+    }
+
+    #[test]
+    fn ordinary_source_failure_stays_error_and_does_not_consume_first_scan(){
+        let owner=coordinator();
+        let (mut open,_)=opened(&owner,Object::Directory(pool(),DirectoryId([3;16])),1,&[]);
+        let req=directory(12,0,16,&[]);
+        let data=framed(&[&req]);
+        let q=parsed(&data).messages()[0].query_directory(MAX_TX).unwrap();
+        assert!(matches!(open.prepare_ordinary_query_with::<()>(&q,16,|_,_,_,_|
+            Err(Fault::Original(io::ErrorKind::NotConnected.into()))),Err(Fault::Original(e)) if e.kind()==io::ErrorKind::NotConnected));
+        let (next,())=open.prepare_ordinary_query_with(&q,16,|_,_,after,_|{
+            assert!(after.is_none());Ok((Vec::new(),()))
+        }).unwrap();
+        assert!(matches!(next.output(),Selection::NoMatch{first_query:true}));
+    }
 
     #[derive(Default)]
     struct Observe { calls: Cell<usize>, denied: Cell<bool> }
@@ -305,7 +415,7 @@ mod root_pages {
         fn root_projection(&self) -> io::Result<Vec<Child>> {
             self.observe.calls.set(self.observe.calls.get() + 1);
             if self.observe.denied.get() { return Err(io::ErrorKind::PermissionDenied.into()); }
-            Ok(self.rows.iter().map(|(name, number)| Child { name: name.clone(), number: u64::from(*number) }).collect())
+            Ok(self.rows.iter().map(|(name, number)| Child { name: name.clone(), number: u64::from(*number), eof: None }).collect())
         }
     }
 
@@ -316,10 +426,10 @@ mod root_pages {
         fn recheck(&self, _: &FixtureRoot) -> Result<Facts, ()> { Ok(self.0) }
     }
 
-    fn coordinator() -> OpenCoordinator { OpenCoordinator::new(NonZeroUsize::new(16).unwrap()) }
+    fn coordinator() -> Arc<OpenCoordinator> { OpenCoordinator::new(NonZeroUsize::new(16).unwrap()) }
     fn pool() -> PoolId { PoolId([1; 16]) }
-    fn opened<'c>(owner: &'c OpenCoordinator, object: Object, access: u32, rows: &[(&str, u16)])
-        -> (Held<'c, FixtureRoot>, Rc<Observe>)
+    fn opened(owner: &Arc<OpenCoordinator>, object: Object, access: u32, rows: &[(&str, u16)])
+        -> (Held<FixtureRoot>, Rc<Observe>)
     {
         let observe = Rc::new(Observe::default());
         let source = FixtureRoot { rows: rows.iter().map(|(n, m)| (String::from(*n), *m)).collect(),
@@ -330,7 +440,7 @@ mod root_pages {
         (pending.bind(source).unwrap(), observe)
     }
 
-    fn page(open: &mut Held<'_, FixtureRoot>, flags: u8, output: u32, room: usize, pattern: &str)
+    fn page(open: &mut Held<FixtureRoot>, flags: u8, output: u32, room: usize, pattern: &str)
         -> Result<RootPage, Fault>
     {
         let frame = framed(&[&directory(12, flags, output, &utf16(pattern))]);

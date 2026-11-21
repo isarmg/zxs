@@ -5,21 +5,12 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/mman.h>
-#include <sys/prctl.h>
-#include <sys/resource.h>
 #include <sys/vfs.h>
 #include <linux/magic.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
 static int proc_fd_directory(void);
-
-/* Storage's new executable has not opened the pool or started workers. */
-int zxs_smb_storage_privacy(void) {
-    const struct rlimit limit={0,0};
-    return setrlimit(RLIMIT_CORE,&limit)==0 && prctl(PR_SET_DUMPABLE,0L,0L,0L,0L)==0 &&
-        prctl(PR_GET_DUMPABLE,0L,0L,0L,0L)==0 ? 0 : -1;
-}
 
 /* Input is one component relative to a live descriptor. No symlink lookup. */
 int zxs_open_directory(int parent, const char *name) {
@@ -319,25 +310,6 @@ int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_
 #include <stddef.h>
 
 #include <poll.h>
-#include <signal.h>
-#include <stdatomic.h>
-/* SIGINT/SIGTERM may arrive on an I/O thread while the owner is dispatching.
-   Refuse a target that would implement this signal-handler store with a lock. */
-_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "shutdown flag must always be lock-free");
-static _Atomic unsigned int zxs_web_stop_requested;
-static void zxs_web_stop(int signum) {
-    (void)signum; atomic_store_explicit(&zxs_web_stop_requested,1u,memory_order_relaxed);
-}
-int zxs_web_signals(void) {
-    struct sigaction sa;
-    memset(&sa,0,sizeof(sa)); sa.sa_handler = zxs_web_stop;
-    if (sigemptyset(&sa.sa_mask) < 0 || sigaction(SIGTERM,&sa,NULL) < 0 ||
-        sigaction(SIGINT,&sa,NULL) < 0) return -1;
-    return 0;
-}
-int zxs_web_stopping(void) {
-    return atomic_load_explicit(&zxs_web_stop_requested,memory_order_relaxed) != 0;
-}
 /* On an established TCP listener Linux can report the new connection's
    pending network error directly from accept(2). It isn't a listener fault. */
 int zxs_web_retry_accept(int e) {

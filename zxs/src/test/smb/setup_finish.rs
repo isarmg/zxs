@@ -44,7 +44,7 @@ fn submitted_exact_signed_final_installs_only_its_live_scope_and_a_fresh_credit(
         assert!(claim.valid.get().is_none());assert!(other.sessions.is_empty());
         send.submitted().unwrap();assert_eq!(c.window.available(),4);
         let Phase::Valid(state)=&c.sessions[0].phase else {panic!("signed send did not promote");};
-        assert!(state.same_id(claim.id));assert!(claim.valid.get().is_some());
+        assert!(state.auth.same_id(claim.id));assert!(state.trees.count()==0);assert!(claim.valid.get().is_some());
         // NTLM gives no distinct session expiry in this local profile. The
         // initial 30 seconds were for the handshake, not a renewable grant.
         assert!(claim.active(claim.expires+Duration::from_secs(1)));

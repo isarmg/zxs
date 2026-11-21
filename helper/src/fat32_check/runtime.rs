@@ -30,7 +30,7 @@ const BTRFS_POLICY:&[&str]=pack!("btrfs-check-v1");
 const BTRFS_POLICY_BYTES:u64=1116;
 const BTRFS_CHECKER:&[&str]=pack!("bin","btrfs");
 // Only these five extra DSOs are part of the exact e2fsck and guest libc
-// closure. They are not replacement host loaders or Samba dependencies.
+// closure. They are not replacement host loaders.
 const EXT_LIBS:[(&str,&[&str],&str);5]=[
     ("libext2fs.so.2",pack!("lib","libext2fs.so.2"),"/lib/x86_64-linux-gnu/libext2fs.so.2"),
     ("libcom_err.so.2",pack!("lib","libcom_err.so.2"),"/lib/x86_64-linux-gnu/libcom_err.so.2"),
@@ -90,26 +90,17 @@ fn pins_for(kind:Engine,bytes:&[u8])->io::Result<Vec<[u8;32]>> {
     Ok(digests)
 }
 impl Runtime {
-    pub(super) fn open()->io::Result<Self>{ Ok(Self::open_for(None)?.0) }
-    // Normal diagnostics still trust their protected distribution slot. The
-    // host SAM issuer additionally pins this profile from its separate release.
-    pub(super) fn open_for(release:Option<&[u8;32]>)->io::Result<(Self,[u8;32])>{
-        Self::selected(Engine::Copy(Format::Fat32),release)
-    }
-    pub(super) fn exfat()->io::Result<Self>{Ok(Self::selected(Engine::Copy(Format::Exfat),None)?.0)}
-    pub(super) fn ext4()->io::Result<Self>{Ok(Self::selected(Engine::Ext4,None)?.0)}
-    pub(super) fn xfs()->io::Result<Self>{Ok(Self::selected(Engine::Xfs,None)?.0)}
-    pub(super) fn ntfs()->io::Result<Self>{Ok(Self::selected(Engine::Ntfs,None)?.0)}
-    pub(super) fn btrfs()->io::Result<Self>{Ok(Self::selected(Engine::Btrfs,None)?.0)}
-    fn selected(kind:Engine,release:Option<&[u8;32]>)->io::Result<(Self,[u8;32])>{
-        use sha2::{Digest,Sha256};
+    pub(super) fn open()->io::Result<Self>{Self::selected(Engine::Copy(Format::Fat32))}
+    pub(super) fn exfat()->io::Result<Self>{Self::selected(Engine::Copy(Format::Exfat))}
+    pub(super) fn ext4()->io::Result<Self>{Self::selected(Engine::Ext4)}
+    pub(super) fn xfs()->io::Result<Self>{Self::selected(Engine::Xfs)}
+    pub(super) fn ntfs()->io::Result<Self>{Self::selected(Engine::Ntfs)}
+    pub(super) fn btrfs()->io::Result<Self>{Self::selected(Engine::Btrfs)}
+    fn selected(kind:Engine)->io::Result<Self>{
         let limit=match kind{Engine::Ext4=>EXT_POLICY_BYTES,Engine::Btrfs=>BTRFS_POLICY_BYTES,_=>1024};
         let mut policy=RuntimeFile::open(kind.policy(),false,limit)?;
         let mut bytes=Vec::new();(&mut policy.file).take(limit+1).read_to_end(&mut bytes)?;
         if bytes.len() as u64>limit{return Err(invalid("protected checker profile exceeded its size budget"));}
-        if release.is_some_and(|approved|<[u8;32]>::from(Sha256::digest(&bytes))!=*approved){
-            return Err(invalid("not the independently enrolled host launcher profile"));
-        }
         let expected=pins_for(kind,&bytes)?;policy.recheck()?;
         let mut files=Vec::new();
         for (i,(_,slot)) in kind.slots().enumerate() {
@@ -122,7 +113,7 @@ impl Runtime {
             files.push(f);
         }
         let runtime=Self{kind,policy,files};
-        runtime.recheck()?;Ok((runtime,expected[0]))
+        runtime.recheck()?;Ok(runtime)
     }
     pub(super) fn require_format(&self,kind:Format)->io::Result<()>{
         if self.kind==Engine::Copy(kind){Ok(())}else{Err(invalid("checker profile and selected format differ"))}

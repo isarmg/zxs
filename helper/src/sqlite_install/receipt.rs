@@ -7,15 +7,16 @@ use std::{io,path::PathBuf};
 #[derive(Debug,Eq,PartialEq)]
 pub(super) struct Receipt{pub(super) pool:Id,pub(super) committed:bool}
 
-pub(super) fn foreground(op:Id,reference:Id,paths:Vec<PathBuf>)->io::Result<Receipt>{
+pub(super) fn foreground(op:Id,reference:Id,paths:Vec<PathBuf>,subject:super::pair::ExplicitSubject)->io::Result<Receipt>{
+    super::pair::compiled_v17()?;
     approval::no_inherited_descriptors()?;
     let host=approval::host_admin()?;
-    let (actor,uid,gid)=approval::profile()?;
+    let (actor,uid,gid)=subject.tuple();
     approval::same_terminal(&io::stdin(),&io::stderr())?;
     let original=Request::new(op,actor,reference,uid,paths)?;
-    let system=SelectedSystem::from_host(&original.paths()[0],host,uid,gid)?;
+    let path=crate::pinned::Pinned::already_mounted(&original.paths()[0],crate::pinned::Kind::StorageRoot)?;
+    let system=SelectedSystem::from_origin(path,host,uid,gid)?;
     approval::same_terminal(&io::stdin(),&io::stderr())?;
-    if approval::profile()? != (actor,uid,gid){return Err(bad("the original host installer identity changed before receipt observation"));}
     // Actual SQLite and marker content are opened only after permanently
     // lowering to the same configured storage identity as the birth action.
     approval::drop_to_storage(uid,gid)?;

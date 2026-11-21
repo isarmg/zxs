@@ -76,3 +76,15 @@ fn returns_only_supported_connection_flags_and_trusted_bounded_utf16() {
     let descriptor=crate::smb::session::ntlm_shape::challenge_fields(&encoded).unwrap();
     assert_eq!(descriptor.avs.get(3),names.dns_machine.as_deref());
 }
+
+#[test]
+fn local_release_not_client_label_makes_only_debug_version_fields(){
+    assert_eq!(release_parts(b"6.12.73+deb13-amd64").unwrap(),(6,12,73));
+    assert_eq!(release_parts(b"7.3.0-rc1").unwrap(),(7,3,0));
+    for invalid in [&b""[..],b"6.12",b"6.12.fake",b"256.1.2",b"6.12.65536"]{
+        assert!(release_parts(invalid).is_err());
+    }
+    let n=ServerNames::from_install("fixture.lan",(6,12,73)).unwrap();
+    assert_eq!(n.machine,utf("FIXTURE"));assert_eq!(n.nb_domain,utf("ZXSLOCAL"));
+    assert_eq!(n.dns_machine,Some(utf("fixture.lan")));
+}

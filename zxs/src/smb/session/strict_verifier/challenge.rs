@@ -1,12 +1,12 @@
 //! Server-owned NTLMv2 Type 2 for the configured standalone service. No
-//! general GSS acceptor, credential provisioning, live account or key export.
-use super::{AGREED,ALWAYS_SIGN,FORBIDDEN,MIN,TARGET_INFO,Issued,Pending,ProtectedRevision,Rejected,Result};
-use crate::smb::{local,session::envelope::{ChallengeLayer,HaveNegotiate,Saved}};
-use std::{num::NonZeroU64,sync::{Arc,RwLock},time::{Instant,SystemTime,UNIX_EPOCH}};
+//! general GSS acceptor, credential enrollment, live session or key export.
+use super::{AGREED,ALWAYS_SIGN,FORBIDDEN,MIN,TARGET_INFO,Issued,Pending,ProtectedRevision,Rejected,Result,record};
+use crate::{smb::{InheritedRun,local,session::envelope::{ChallengeLayer,HaveNegotiate,Saved}},
+    system::reader::smb::runtime::QualifiedRustInstall};
+use std::{io,num::NonZeroU64,sync::{Arc,RwLock,TryLockError},time::{Instant,SystemTime,UNIX_EPOCH}};
 
-/// Deliberately no production constructor. The future protected credential
-/// owner must supply trusted standalone server names, actual OS version and
-/// one coherent account revision; none is learned from the referring client.
+/// Only the actual checked installation and its original protected source
+/// can provide the strictly scoped key and standalone server names.
 pub(in crate::smb) struct ChallengeService {
     names:ServerNames,
     revision:RwLock<Option<Arc<ProtectedRevision>>>,
@@ -21,16 +21,39 @@ struct ServerNames {
 pub(in crate::smb) struct ChallengeStep { gss:Vec<u8>, issued:Issued }
 
 impl ChallengeService {
+    pub(in crate::smb) fn from_qualified(start:&Arc<InheritedRun>,installation:&QualifiedRustInstall)->Result<Self>{
+        if !installation.is_original_start(start){return Err(Rejected);}
+        let names=ServerNames::from_install(installation.hostname(),linux_version()?)?;
+        let original=record::load_original(start,installation)?;
+        Ok(Self{names,revision:RwLock::new(Some(Arc::new(original))),#[cfg(test)] fixture_wall_time:None})
+    }
     pub(super) fn snapshot(&self)->Result<Arc<ProtectedRevision>> {
-        self.revision.read().map_err(|_|Rejected)?.as_ref().cloned().ok_or(Rejected)
+        let r=self.revision.read().map_err(|_|Rejected)?.as_ref().cloned().ok_or(Rejected)?;
+        if !r.source.live(){return Err(Rejected);}
+        Ok(r)
     }
     pub(super) fn current(&self,rev:&Arc<ProtectedRevision>)->bool {
         self.while_current(rev,||()).is_some()
+    }
+    /// Same protected revision/startup without waiting in an active Core
+    /// transaction. The caller's original registration uses registry ->
+    /// verifier lock order. No callback or secret is exposed here.
+    pub(super) fn require_held_revision(&self,rev:&Arc<ProtectedRevision>,start:&Arc<InheritedRun>)->io::Result<()> {
+        let g=self.revision.try_read().map_err(|err|io::Error::from(match err {
+            TryLockError::WouldBlock=>io::ErrorKind::WouldBlock,
+            TryLockError::Poisoned(_)=>io::ErrorKind::PermissionDenied,
+        }))?;
+        if !g.as_ref().is_some_and(|v|v.epoch==rev.epoch&&Arc::ptr_eq(v,rev))||
+            !rev.source.installed().is_some_and(|v|Arc::ptr_eq(&v,start)){
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        start.require_live_source() // original parent pidfd, poll(0)
     }
     /// Only short in-memory publication uses the held read lock. A future
     /// credential writer must never take a transport/registry lock while
     /// holding the write lock; the shared order is registry -> revision.
     pub(super) fn while_current<R>(&self,rev:&Arc<ProtectedRevision>,f:impl FnOnce()->R)->Option<R> {
+        if !rev.source.live(){return None;}
         let g=self.revision.read().ok()?;
         if !g.as_ref().is_some_and(|v|v.epoch==rev.epoch && Arc::ptr_eq(v,rev)) {return None;}
         let out=f();drop(g);Some(out)
@@ -129,7 +152,43 @@ fn descriptor(buf:&mut [u8],at:usize,n:usize,offset:usize) {
     buf[at+2..at+4].copy_from_slice(&(n as u16).to_le_bytes());
     buf[at+4..at+8].copy_from_slice(&(offset as u32).to_le_bytes());
 }
+pub(super) fn utf16(ascii:&[u8])->Result<Box<[u8]>>{
+    if ascii.is_empty()||!ascii.is_ascii()||ascii.contains(&0){return Err(Rejected);}
+    let mut out=Vec::new();out.try_reserve_exact(ascii.len().checked_mul(2).ok_or(Rejected)?).map_err(|_|Rejected)?;
+    for &v in ascii{out.extend_from_slice(&[v,0]);}
+    Ok(out.into_boxed_slice())
+}
+fn release_parts(release:&[u8])->Result<(u8,u8,u16)>{
+    fn decimal(input:&[u8])->Result<u16>{
+        if input.is_empty()||!input.iter().all(u8::is_ascii_digit){return Err(Rejected);}
+        input.iter().try_fold(0u16,|n,v|
+            n.checked_mul(10).and_then(|n|n.checked_add(u16::from(*v-b'0'))).ok_or(Rejected))
+    }
+    let mut parts=release.splitn(3,|&v|v==b'.');
+    let major=u8::try_from(decimal(parts.next().ok_or(Rejected)?)?).map_err(|_|Rejected)?;
+    let minor=u8::try_from(decimal(parts.next().ok_or(Rejected)?)?).map_err(|_|Rejected)?;
+    let suffix=parts.next().ok_or(Rejected)?;
+    let end=suffix.iter().take_while(|b|b.is_ascii_digit()).count();
+    Ok((major,minor,decimal(&suffix[..end])?))
+}
+fn linux_version()->Result<(u8,u8,u16)>{
+    // SAFETY: uname populates a complete C utsname; release is a bounded
+    // byte field. No environment strings, external command or host lookup.
+    let mut u:libc::utsname=unsafe{std::mem::zeroed()};
+    if unsafe{libc::uname(&mut u)}!=0{return Err(Rejected);}
+    let bytes=unsafe{std::slice::from_raw_parts(u.release.as_ptr().cast::<u8>(),u.release.len())};
+    let release=std::ffi::CStr::from_bytes_until_nul(bytes).map_err(|_|Rejected)?;
+    release_parts(release.to_bytes())
+}
 impl ServerNames {
+    fn from_install(host:&str,version:(u8,u8,u16))->Result<Self>{
+        let first=host.split('.').next().ok_or(Rejected)?;
+        let machine=utf16(first.to_ascii_uppercase().as_bytes())?;
+        let nb_domain=utf16(record::DOMAIN.as_bytes())?;
+        let dns_machine=Some(utf16(host.as_bytes())?);
+        let (major,minor,build)=version;
+        Ok(Self{machine,nb_domain,dns_machine,major,minor,build})
+    }
     fn encode(&self,flags:u32,nonce:[u8;8],time:u64)->Result<Vec<u8>> {
         // At most 15 UTF-16 code units for each local NetBIOS label and 255
         // for the configured DNS machine. Arithmetic below is bounded by this.

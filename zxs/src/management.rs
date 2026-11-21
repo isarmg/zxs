@@ -1,12 +1,12 @@
-//! Native management HTTP. Authentication and authorisation remain in ZXS.
-use crate::{OperationId,PoolId,identity::ShareId,system::reader::{InitialReader,account::WebAdmin}};
+//! ZXS management HTTP. Authentication and authorization stay with the original site.
+use crate::{OperationId,identity::ShareId,system::reader::{InitialReader,account::WebAdmin}};
 use std::{borrow::Cow,collections::{BTreeMap,VecDeque},fmt::Write as _,io::{self,Write},net::TcpListener,
-    path::Path,sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
+    sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 mod pages;
 mod transport;
 mod access;
 mod manual;
-pub use access::ExternalHttps;
+#[cfg(test)] use access::ExternalHttps;
 use access::Audience;
 
 const IDLE:Duration=Duration::from_secs(15*60);
@@ -135,12 +135,11 @@ impl<'s> App<'s>{
     }
 }
 
-/// One business owner holds S and all WebAdmin handles. A fixed number of I/O
-/// workers frame ordinary HTTP without holding SQLite or serialising slow reads.
-pub fn serve(system:&Path,pool:PoolId,proxy:Option<ExternalHttps>,stopping:impl Fn()->bool+Sync)->io::Result<()>{
-    let source=InitialReader::open(system,pool)?;
-    let listener=TcpListener::bind(("0.0.0.0",8443))?;
-    transport::serve(&listener,proxy.as_ref(),&mut App::new(&source),stopping)
+/// The verified same-ELF Web role supplies its already qualified original
+/// S, listener and READY cut. No selection, bind or settings fallback here.
+pub(crate) fn serve_ready_original<F:Fn()->bool+Send+Sync>(source:&InitialReader,listener:&TcpListener,
+    ready:impl FnOnce()->io::Result<F>)->io::Result<()>{
+    transport::serve_ready(listener,&mut App::new(source),ready)
 }
 
 #[cfg(test)]

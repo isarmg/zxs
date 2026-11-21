@@ -1,14 +1,27 @@
 //! Original synchronous stream and ledger for closed reply kinds. There is
 //! no generic signing/send route from caller-provided bytes or success status.
-use super::{CheckedBatch,Step,VerifiedMember};
+pub(super) mod root_io;
+pub(super) mod root_query;
+pub(super) mod retire;
+pub(super) mod file_read;
+pub(super) mod file_write;
+pub(super) mod ordinary_move;
+pub(super) mod root_attributes;
+pub(super) mod restore;
+use super::{CheckedBatch,Step,VerifiedMember,ProposedTreeId,RustSessionWitness,trees::TreeTable};
+use super::super::Phase;
 use crate::smb::{
-    backend::tree_connect::{Error as TreeError,TreeConnectRequest},
+    backend::tree_connect::{Error as TreeError,QualificationError,TreeConnectRequest},
     connection::{Connection,Fault,Payload,ReplySend,Result},
     session::{BatchRevision,VerifiedIds},
     wire::{fixed_reply::{MAX_SMALL_REPLY,TreeFailure,UnsignedSmall},
         message::{RELATED,Routing},path_fields::FieldError},
 };
-use std::num::NonZeroU64;
+use crate::system::reader::smb::runtime::{QualifiedRustInstall,RustRoot,RustRootProjection};
+use std::{io,num::NonZeroU64,rc::Rc};
+
+#[derive(Clone,Copy,Eq,PartialEq)]
+pub(in crate::smb) enum TreeTurn {Connected,Refused}
 
 #[must_use]
 pub(in crate::smb) struct SyncReply<'a> {
@@ -55,27 +68,86 @@ impl CheckedBatch<'_,'_> {
     /// extension shape without a disposition keeps its exact paid member.
     /// No numeric ID, independently supplied error or caller body is accepted.
     pub(in crate::smb) fn try_send_tree_refusal(&mut self)->Result<bool> {
+        self.tree_reply(None).map(|result|result.is_some())
+    }
+    /// Actual original dispatcher, not a caller-supplied share check. A
+    /// compound or shape this subset does not handle consumes no step.
+    pub(in crate::smb) fn try_send_qualified_tree(&mut self,installation:Rc<QualifiedRustInstall>)->Result<Option<TreeTurn>>{
+        self.tree_reply(Some(installation))
+    }
+    fn tree_reply(&mut self,installation:Option<Rc<QualifiedRustInstall>>)->Result<Option<TreeTurn>>{
         self.before_reply()?;
-        let [m]=self.original.frame.messages() else {return Ok(false);};
-        if m.header.command!=3 || m.header.routing!=(Routing::Sync{tree:0}) {return Ok(false);}
+        let [m]=self.original.frame.messages() else {return Ok(None);};
+        if m.header.command!=3 || m.header.routing!=(Routing::Sync{tree:0}) {return Ok(None);}
         if self.original.payload(0)!=Some(Payload::NoVariableRule) {return Err(Fault::SessionState);}
         let id=self.ids.at(0).ok_or(Fault::SessionState)?;
         let member=VerifiedMember{message:m,ordinal:0,session:self.owner.member_scope(id,&self.revision)?};
-        // This checks syntax only. It cannot authorize a matching share,
-        // which still depends on its trusted listener and real Core scope.
-        let (member,why)=match TreeConnectRequest::parse(member) {
-            Ok(_)=>return Ok(false),
-            Err((_,TreeError::Field(FieldError::Unsupported)))=>return Ok(false),
-            Err((_,TreeError::Session(e)))=>return Err(e),
-            Err((m,TreeError::BadUnc|TreeError::Field(FieldError::Malformed)))=>(m,TreeFailure::InvalidParameter),
-            Err((m,TreeError::UnknownShare))=>(m,TreeFailure::BadNetworkName),
-            Err((m,TreeError::Resources))=>(m,TreeFailure::InsufficientResources),
-            Err((_,TreeError::Field(_)))=>return Err(Fault::WrongReply),
+        let request=match TreeConnectRequest::parse(member) {
+            Ok(r)=>r,
+            Err((_,TreeError::Field(FieldError::Unsupported)))=>return Ok(None),
+            Err((member,why))=>{
+                let failure=match why{
+                    TreeError::BadUnc|TreeError::Field(FieldError::Malformed)=>TreeFailure::InvalidParameter,
+                    TreeError::UnknownShare=>TreeFailure::BadNetworkName,
+                    TreeError::Resources=>TreeFailure::InsufficientResources,
+                    TreeError::Session(e)=>return Err(e),
+                    TreeError::Field(_)=>return Err(Fault::WrongReply),
+                };
+                let draft=UnsignedSmall::tree_failure(&member,id,failure).map_err(|_|Fault::WrongReply)?;
+                return self.send_refusal(draft);
+            },
         };
-        let draft=UnsignedSmall::tree_failure(&member,id,why).map_err(|_|Fault::WrongReply)?;
+        // Without a real Core installation there is only the existing
+        // refusal path above, never a substitute positive tree.
+        let Some(installation)=installation else{return Ok(None);};
+        let approval=match request.qualify(installation){
+            Ok(v)=>v,
+            Err((r,why))=>{
+                let failure=match why{
+                    QualificationError::Session(e)=>return Err(e),
+                    QualificationError::Endpoint=>return Err(Fault::Transport),
+                    QualificationError::UnapprovedServer=>TreeFailure::BadNetworkName,
+                    QualificationError::Original(e)=>match e.kind(){
+                        io::ErrorKind::PermissionDenied=>TreeFailure::AccessDenied,
+                        io::ErrorKind::OutOfMemory=>TreeFailure::InsufficientResources,
+                        _=>TreeFailure::ServerUnavailable,
+                    },
+                };
+                let draft=UnsignedSmall::tree_failure(r.original(),id,failure).map_err(|_|Fault::WrongReply)?;
+                return self.send_refusal(draft);
+            }
+        };
+        let tree=match self.owner.tree_table(id)?.propose(){
+            Ok(t)=>t,
+            Err(Fault::Resources|Fault::Exhausted)=>{
+                let draft=UnsignedSmall::tree_failure(approval.original(),id,TreeFailure::InsufficientResources)
+                    .map_err(|_|Fault::WrongReply)?;
+                // End the original connection borrow before its same reply.
+                drop(approval);return self.send_refusal(draft);
+            },
+            Err(e)=>return Err(e),
+        };
+        let scope=approval.original().rust_session_witness()?;
+        let draft=UnsignedSmall::tree_success(&approval,id,&tree).map_err(|_|Fault::WrongReply)?;
+        let (root,projection)=approval.into_prepared_root();
+        let pending=PendingTree{sid:id,tree,root,scope,projection};
+        if let Err(e)=self.owner.tree_table_mut(id)?.reserve(&pending.tree){
+            if e!=Fault::Resources{return Err(e);}
+            // The accepted request hasn't left this owner and no slot was
+            // reserved. Report only this allocation failure, not a success.
+            let member=VerifiedMember{message:m,ordinal:0,session:self.owner.member_scope(id,&self.revision)?};
+            let refusal=UnsignedSmall::tree_failure(&member,id,TreeFailure::InsufficientResources)
+                .map_err(|_|Fault::WrongReply)?;
+            return self.send_refusal(refusal);
+        }
+        self.next=1;
+        self.small_replies(std::iter::once(draft))?.send_tree(pending)?;
+        Ok(Some(TreeTurn::Connected))
+    }
+    fn send_refusal(&mut self,draft:UnsignedSmall)->Result<Option<TreeTurn>>{
         self.next=1;
         self.small_replies(std::iter::once(draft))?.send()?;
-        Ok(true)
+        Ok(Some(TreeTurn::Refused))
     }
 
     // No generic reply builder outside this module. Only the reply kinds
@@ -107,6 +179,28 @@ impl CheckedBatch<'_,'_> {
         Ok(SyncReply{tx,ids,revision,count})
     }
 }
+
+impl Connection {
+    fn tree_table(&self,sid:NonZeroU64)->Result<&TreeTable>{
+        let s=self.sessions.iter().find(|v|v.reg.claim.id==sid).ok_or(Fault::SessionState)?;
+        let Phase::Valid(live)=&s.phase else{return Err(Fault::SessionState);};
+        Ok(&live.trees)
+    }
+    fn tree_table_mut(&mut self,sid:NonZeroU64)->Result<&mut TreeTable>{
+        let s=self.sessions.iter_mut().find(|v|v.reg.claim.id==sid).ok_or(Fault::SessionState)?;
+        let Phase::Valid(live)=&mut s.phase else{return Err(Fault::SessionState);};
+        Ok(&mut live.trees)
+    }
+}
+struct PendingTree {
+    sid:NonZeroU64,tree:ProposedTreeId,root:RustRoot,scope:RustSessionWitness,projection:RustRootProjection,
+}
+impl PendingTree {
+    fn check(&self,c:&Connection)->Result<()>{
+        if !c.tree_table(self.sid)?.waiting(&self.tree){return Err(Fault::SessionState);}
+        self.root.require_projection(&self.scope,&self.projection).map_err(|_|Fault::SessionState)
+    }
+}
 /// Inaccessible to dispatch callers. This value means only that the exact
 /// bound bytes were completely written on their own still-current stream.
 /// It owns the unresolved ledger; dropping it closes this connection.
@@ -118,6 +212,17 @@ impl<'a> SyncReply<'a> {
     /// write is followed by a separate actual state/credit publication.
     pub(in crate::smb) fn send(self)->Result<()> {
         self.write_original()?.publish_ledger()
+    }
+    fn send_tree(self,pending:PendingTree)->Result<()> {
+        // The actual selected rights/name snapshot must still hold before
+        // anything is written. No SQLite or registry lock crosses TCP.
+        pending.check(self.tx.plan.owner)?;
+        let FullyWrittenSync(Self{tx,ids,revision,count})=self.write_original()?;
+        tx.publish_with(|c|{
+            current(c,ids,revision,count)?;
+            pending.check(c)?;
+            c.tree_table_mut(pending.sid)?.publish(pending.tree,pending.root)
+        })
     }
 
     fn write_original(self)->Result<FullyWrittenSync<'a>> {

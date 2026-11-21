@@ -11,7 +11,7 @@ pub(super) enum QueryObject {
     File,
 }
 
-impl<H> Held<'_, H> {
+impl<H> Held<H> {
     /// Get the object's shape from the real open, not from a search pattern,
     /// the SMB2_FILEID bytes, or a client's proposed attributes.
     pub(super) fn query_object(&self) -> QueryObject {
@@ -86,6 +86,31 @@ impl Pattern {
                 Self::Exact(text)
             }
         }))
+    }
+
+    // This slice does not generate `.` / `..` pseudo-records for ordinary
+    // folders. FSA §2.1.5.6.3's real-volume-root and wildcard-that-matches
+    // dot exceptions let these planned patterns use actual direct children.
+    pub(super) fn supports_ordinary(&self,nested:bool)->bool{
+        match self{
+            Self::Current|Self::Parent=>false,
+            Self::All=>true,
+            Self::Exact(_)=>!nested,
+            Self::Expression(x)=>!nested||matches_expression(x,"."),
+        }
+    }
+
+    pub(super) fn match_bounded(&self,name:&str,work:&mut usize)->std::io::Result<bool>{
+        // A held query can select a sparse page from a real large directory.
+        // Bound worst-case UTF-16 DP work in each actual SQL cut as well as
+        // the independent Core row/response-record limits.
+        const MAX_STATES:usize=2_000_000;
+        if let Self::Expression(x)=self{
+            let cost=x.encode_utf16().count()*name.encode_utf16().count();
+            *work=work.checked_add(cost).filter(|n|*n<=MAX_STATES)
+                .ok_or_else(||std::io::Error::new(std::io::ErrorKind::OutOfMemory,"ordinary directory pattern work budget"))?;
+        }
+        Ok(self.matches_root(name))
     }
 
     fn matches_root(&self, name: &str) -> bool {

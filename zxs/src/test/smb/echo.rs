@@ -145,6 +145,7 @@ fn a_valid_tree_connect_is_not_answered_as_echo_or_consumed_by_this_handler() {
     assert!(!batch.try_send_tree_refusal().unwrap());
     let Some(Step::Verified(t))=batch.next().unwrap() else {panic!("original unrelated handler lost its ticket")};
     assert_eq!(t.message().header.command,3);assert!(capture.lock().unwrap().bytes.is_empty());
+    assert!(matches!(t.rust_session_witness(),Err(Fault::NoVerifier)));
 }
 
 #[test]

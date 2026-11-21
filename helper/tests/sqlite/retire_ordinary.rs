@@ -1,26 +1,27 @@
 //! Unrun source tests of the conservative H04 observation. All data is
 //! synthetic; no retirement worker, real S/F, product or service is invoked.
 use super::*;
+use crate::sqlite_install::stage;
 use rusqlite::Connection;
 
 #[test]
-fn native_schema_has_exactly_the_audited_table_set(){
+fn v17_has_exactly_the_audited_table_set(){
     let mut db=Connection::open_in_memory().unwrap();
     engine::limits(&db).unwrap();
     db.execute_batch(stage::SCHEMA).unwrap();
     let tx=db.transaction().unwrap();
-    native16().unwrap().require(&tx).unwrap();
+    template().unwrap().require(&tx).unwrap();
     let tables=tx.prepare("SELECT name FROM main.sqlite_schema WHERE type='table'").unwrap()
         .query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
     let observed=tables.iter().map(String::as_str).collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(observed,V16_TABLES.iter().copied().collect());
+    assert_eq!(observed,V17_TABLES.iter().copied().collect());
     complete_small_cut(&tx).unwrap();
     assert!(!responsibilities(&tx,&[9;16]).unwrap().any());
 }
 
 fn synthetic_columns(db:&Connection){
     // Shape is intentionally weak to exercise adverse/potentially malformed
-    // historical facts, not a substitute for native16() or the product DDL.
+    // historical facts, not a substitute for template() or the product DDL.
     db.execute_batch("CREATE TABLE root_share(volume_id,publish_op);
         CREATE TABLE share_mode(change_op);
         CREATE TABLE file_location(volume_id);

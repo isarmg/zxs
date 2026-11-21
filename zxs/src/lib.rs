@@ -1,13 +1,14 @@
 //! Standalone ZXS storage. Fresh-selection inspection is read-only: it returns
 //! what was observed, not a capability to register, publish or write later.
 mod smb;
+#[doc(hidden)]
+pub use smb::{start_original_zxs,try_supervised_zxs_role};
 mod fs;
 mod hash;
 mod password;
 mod display;
 mod system;
-pub mod management;
-pub use system::reader::smb::runtime::serve as serve_smb_storage;
+mod management;
 mod identity;
 mod pool;
 mod ordinary;

@@ -4,11 +4,11 @@
 //! NEGOTIATE serializer are not predicted. Compare against the bytes written.
 use super::*;
 use crate::smb::{connection::{sessions::{RunningServerGuid,challenge::tests::provider,tests::running},
-    setup::tests::{body,frame},transport::DirectStream},session::ChallengeService,
+    setup::tests::{body,frame},transport::DirectStream},session::{ChallengeService,HmacForSessionFixture as Hmac},
     wire::preauth::tests::synthetic_exchange};
 use aes::Aes128;
 use cmac::Cmac;
-use hmac::{Hmac,KeyInit,Mac};
+use digest::{KeyInit,Mac};
 use sha2::{Digest,Sha256,Sha512};
 use std::{collections::VecDeque,io::{self,ErrorKind,Read,Write},sync::{Arc,Mutex}};
 
@@ -70,6 +70,133 @@ fn tree_request(key:&[u8],mid:u64,path:&str,offset:u16)->Vec<u8> {
     let n=(request.len()-72) as u16;request[70..72].copy_from_slice(&n.to_le_bytes());
     let tag=tag_for_this_fixture(key,&request);request[48..64].copy_from_slice(&tag);
     frame(&request)
+}
+
+fn authenticated_fixture(run:&RunningServerGuid)->(Peer,Seen,[u8;16]) {
+    let (mut p,t,neg,rep)=peer(run);
+    let mut h=[0;64];fold(&mut h,&neg);fold(&mut h,&rep);
+    let (one,three)=ChallengeService::fixture_messages(false);
+    one_turn(&mut p,&t,&one,1,0,Turn::ChallengeWritten,&mut h);
+    one_turn(&mut p,&t,&three,2,1,Turn::FinalWritten,&mut h);
+    (p,t,signing_key_for_this_fixture(&h))
+}
+fn fixed_request(command:u16,mid:u64,flags:u8,routing:u64)->Vec<u8> {
+    let mut p=vec![0;68];p[..4].copy_from_slice(b"\xfeSMB");p[4]=64;p[6]=1;p[14]=1;
+    p[12..14].copy_from_slice(&command.to_le_bytes());p[16]=flags;
+    p[24..32].copy_from_slice(&mid.to_le_bytes());p[32..40].copy_from_slice(&routing.to_le_bytes());
+    p[40]=1;p[64]=4;p
+}
+fn cancel_request(mid:u64,flags:u8,routing:u64)->Vec<u8> {
+    let mut p=fixed_request(CANCEL,mid,flags,routing);
+    p[6..8].fill(255);p[14..16].fill(255); // neither spend nor grant anything
+    p[66..68].copy_from_slice(&[0x37,0xe1]); // ignored only as a field, never removed from CMAC
+    p
+}
+fn seal_fixture_request(p:&mut [u8],key:&[u8]) {
+    let tag=tag_for_this_fixture(key,p);p[48..64].copy_from_slice(&tag);
+}
+fn echo_turn(p:&mut Peer,t:&Seen,key:&[u8],mid:u64) {
+    let mut q=fixed_request(13,mid,8,0);seal_fixture_request(&mut q,key);
+    give(t,&frame(&q));assert_eq!(p.poll(step_unexpected),Ok(Turn::EchoWritten));
+    let ans=take(t);assert_eq!(&ans[28..36],&mid.to_le_bytes());
+    assert_eq!(&ans[52..68],&tag_for_this_fixture(key,&ans[4..]));
+}
+
+#[test]
+fn signed_standalone_cancel_without_target_has_no_output_or_credit_and_keeps_original_session() {
+    let run=provider();let (mut p,t,key)=authenticated_fixture(&run);
+    echo_turn(&mut p,&t,&key,3);
+    let before=p.connection.window;
+    for (mid,flags,routing) in [(3,8,0),(3,8,0),(4,8,0), (u64::MAX-2,8,0), (0,10,0x0123_4567_89ab_cdef)] {
+        let mut b=cancel_request(mid,flags,routing);seal_fixture_request(&mut b,&key);
+        give(&t,&frame(&b));assert_eq!(p.poll(step_unexpected),Ok(Turn::CancelNoTarget));
+        assert!(take(&t).is_empty());assert_eq!(t.lock().unwrap().drops,0);
+        let now=p.connection.window;
+        assert_eq!((now.low,now.next,now.bits),(before.low,before.next,before.bits));
+        assert_eq!(p.connection.in_flight,0);assert_eq!(p.connection.sessions.len(),1);
+    }
+    echo_turn(&mut p,&t,&key,4); // CANCEL did not spend this original available MID
+}
+
+#[test]
+fn malformed_unverified_or_compounded_cancel_never_reaches_a_handler() {
+    for kind in 0..7 {
+        let run=provider();let (mut p,t,key)=authenticated_fixture(&run);
+        let mut b=cancel_request(3,8,0);
+        let want=match kind {
+            0=>{b[16]=0;Fault::SessionState}, // even a tag under the real fixture key does not set SIGNED
+            1=>Fault::SessionState,
+            2=>{b[64]=3;Fault::WrongReply},
+            3=>{b.pop();Fault::WrongReply},
+            4=>{b.push(0);Fault::WrongReply},
+            5=>Fault::WrongReply,
+            _=>{run.fixture_revoke_provider();Fault::NoVerifier},
+        };
+        seal_fixture_request(&mut b,&key);
+        if kind==1 {b[66]^=1;} // bytes of the reserved word still authenticated
+        if kind==5 {
+            let mut first=fixed_request(13,3,8,0);first.resize(72,0);first[20]=72;
+            seal_fixture_request(&mut first,&key);first.extend_from_slice(&b);b=first;
+        }
+        give(&t,&frame(&b));assert_eq!(p.poll(step_unexpected),Err(want));
+        assert!(take(&t).is_empty());assert_eq!(t.lock().unwrap().drops,1);
+    }
+}
+
+#[test]
+fn only_the_receiving_peer_can_take_the_exact_ordinary_move_capture(){
+    let run=provider();
+    let (mut a,trace,_,_)=peer(&run);
+    let (mut b,other,_,_)=peer(&run);
+    give(&trace,&frame(&fixed_request(13,1,0,0)));
+    let captured=CapturedRecord::from_stream(&mut a.connection,MAX_FRAME_BYTES).unwrap().unwrap();
+    {
+        let original=captured.frame_on(&a.connection).unwrap();
+        let detached=parsed(&captured.bytes).unwrap();
+        let mark=MoveCapture{frame:&original};
+        assert!(mark.matches(&original));
+        assert!(!mark.matches(&detached)); // the same bytes are not a borrowed original
+    }
+    assert_eq!(b.park_original_move(captured),Err(Fault::WrongBatch));
+    assert!(b.original_move.is_none()&&a.original_move.is_none());
+    assert_eq!((a.connection.alive(),b.connection.alive()),(Err(Fault::Closed),Ok(())));
+    assert_eq!((a.connection.in_flight,b.connection.in_flight),(0,0));
+    assert!(take(&trace).is_empty()&&take(&other).is_empty());
+}
+
+#[test]
+fn signed_move_shape_without_an_original_file_cannot_park_or_release_its_debt(){
+    let run=provider();let (mut p,t,key)=authenticated_fixture(&run);
+    let mut q=fixed_request(17,3,8,1u64<<32);q.resize(122,0);
+    q[64]=33;q[66]=1;q[67]=10;q[68]=26;q[72]=96;q[80]=1;q[88]=2;q[112]=6;
+    q[116..].copy_from_slice(&[b'G',0,b'\\',0,b'x',0]);
+    seal_fixture_request(&mut q,&key);give(&t,&frame(&q));
+    let previous=p.connection.window.next;
+    let captured=CapturedRecord::from_stream(&mut p.connection,MAX_FRAME_BYTES).unwrap().unwrap();
+    assert_eq!(p.park_original_move(captured),Err(Fault::WrongReply));
+    assert!(p.original_move.is_none()&&p.connection.sessions.is_empty());
+    assert_eq!((p.connection.in_flight,p.connection.window.next,p.connection.alive()),(1,previous,Err(Fault::Closed)));
+    assert!(take(&t).is_empty());assert_eq!(t.lock().unwrap().drops,1);
+}
+
+#[test]
+fn cancel_has_no_power_over_another_connection_or_an_unsettled_ordinary_receipt() {
+    let run=provider();let (mut original,t,key)=authenticated_fixture(&run);
+    let (mut foreign,wrong,_,_)=peer(&run);
+    let mut cancel=cancel_request(3,8,0);seal_fixture_request(&mut cancel,&key);
+    give(&wrong,&frame(&cancel));assert_eq!(foreign.poll(step_unexpected),Err(Fault::SessionState));
+    assert!(take(&wrong).is_empty());assert_eq!(wrong.lock().unwrap().drops,1);
+    echo_turn(&mut original,&t,&key,3);
+
+    // Take an actual paid receipt without settling it. This is not an async
+    // worker; it proves the synchronous no-target branch won't swallow it.
+    let mut q=fixed_request(13,4,8,0);seal_fixture_request(&mut q,&key);
+    let record=frame(&q);let parsed=parsed(&record).unwrap();
+    let outstanding=original.connection.receive(&parsed).unwrap();
+    assert!(outstanding.debit.owed);assert_eq!(original.connection.in_flight,1);
+    cancel[24..32].copy_from_slice(&4u64.to_le_bytes());seal_fixture_request(&mut cancel,&key);
+    give(&t,&frame(&cancel));assert_eq!(original.poll(step_unexpected),Err(Fault::WrongReply));
+    assert!(outstanding.debit.owed);assert!(take(&t).is_empty());assert_eq!(t.lock().unwrap().drops,1);
 }
 
 #[test]

@@ -2,7 +2,7 @@
 //! username, flag, raw key, success template or replacement final GSS token.
 use super::{FinalGss,MechanismProof,ProtectedRevision,Rejected,Result,challenge::ChallengeService};
 use crate::smb::session::{FinalKeys,SessionSigner,VerifiedExchange};
-use std::{num::NonZeroU64,sync::{Arc,Weak}};
+use std::{io,num::NonZeroU64,sync::{Arc,Weak}};
 
 /// Still NOT a live entry or file authority. The original connection must own
 /// this candidate, keep its real Claim and publish only on confirmed send.
@@ -44,6 +44,11 @@ impl BatchRevision {
     pub(in crate::smb) fn current(&self,s:&ChallengeService)->bool {
         self.0.upgrade().is_some_and(|r|s.current(&r))
     }
+    pub(in crate::smb) fn original_start(&self,s:&ChallengeService)->Option<Arc<crate::smb::InheritedRun>>{
+        let r=self.0.upgrade()?;
+        if !s.current(&r){return None;}
+        r.source.installed()
+    }
 }
 /// Weak currency marker in the run-wide index. It conveys no key, subject,
 /// storage right or way to make a session. The connection owns the keys.
@@ -51,6 +56,16 @@ pub(in crate::smb) struct LiveMark(Weak<ProtectedRevision>);
 impl LiveMark {
     pub(in crate::smb) fn current(&self,s:&ChallengeService)->bool {
         self.0.upgrade().is_some_and(|r|s.current(&r))
+    }
+    pub(in crate::smb) fn original_start(&self,s:&ChallengeService)->Option<Arc<crate::smb::InheritedRun>>{
+        let r=self.0.upgrade()?;
+        if !s.current(&r){return None;}
+        r.source.installed()
+    }
+    pub(in crate::smb) fn require_held_revision(&self,s:&ChallengeService,start:&Arc<crate::smb::InheritedRun>)
+        ->io::Result<()> {
+        let r=self.0.upgrade().ok_or(io::ErrorKind::PermissionDenied)?;
+        s.require_held_revision(&r,start)
     }
 }
 impl SealedFinal {
@@ -64,11 +79,31 @@ impl BoundSession {
     /// buffers. The connection separately verifies the current original Claim.
     pub(in crate::smb) fn sign_small_reply(&self,stamp:&BatchRevision,reply:crate::smb::wire::fixed_reply::PayableSmall)
         ->std::result::Result<crate::smb::wire::fixed_reply::SignedSmall,crate::smb::session::Fault> {
-        use hmac::Mac;
-        let signer=self.signer_for(stamp).filter(|s|s.id==reply.sid()).ok_or(crate::smb::session::Fault::UnknownSession)?;
-        let mut mac=signer.mac()?;mac.update(reply.for_mac());let result=mac.finalize();
+        let tag=self.reply_tag(stamp,reply.sid(),reply.for_mac())?;
+        Ok(reply.signed(tag))
+    }
+    pub(in crate::smb) fn sign_directory(&self,stamp:&BatchRevision,reply:crate::smb::wire::query_reply::PayableDirectory)
+        ->std::result::Result<crate::smb::wire::query_reply::SignedDirectory,crate::smb::session::Fault>{
+        let tag=self.reply_tag(stamp,reply.sid(),reply.for_mac())?;
+        Ok(reply.signed(tag))
+    }
+    pub(in crate::smb) fn sign_file_read(&self,stamp:&BatchRevision,reply:crate::smb::wire::read_reply::PayableRead)
+        ->std::result::Result<crate::smb::wire::read_reply::SignedRead,crate::smb::session::Fault>{
+        let tag=self.reply_tag(stamp,reply.sid(),reply.for_mac())?;
+        Ok(reply.signed(tag))
+    }
+    pub(in crate::smb) fn sign_file_name(&self,stamp:&BatchRevision,reply:crate::smb::wire::file_name_reply::PayableFileName)
+        ->std::result::Result<crate::smb::wire::file_name_reply::SignedFileName,crate::smb::session::Fault>{
+        let tag=self.reply_tag(stamp,reply.sid(),reply.for_mac())?;
+        Ok(reply.signed(tag))
+    }
+    fn reply_tag(&self,stamp:&BatchRevision,id:NonZeroU64,exact:&[u8])
+        ->std::result::Result<[u8;16],crate::smb::session::Fault>{
+        use digest::Mac;
+        let signer=self.signer_for(stamp).filter(|s|s.id==id).ok_or(crate::smb::session::Fault::UnknownSession)?;
+        let mut mac=signer.mac()?;mac.update(exact);let result=mac.finalize();
         let mut public_tag=[0;16];public_tag.copy_from_slice(result.as_bytes());
-        Ok(reply.signed(public_tag))
+        Ok(public_tag)
     }
     pub(in crate::smb) fn same_id(&self,id:NonZeroU64)->bool {self.keys.signer.id==id}
     pub(in crate::smb) fn install_while_current<R>(self,s:&ChallengeService,install:impl FnOnce(Self,LiveMark)->R)

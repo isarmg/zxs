@@ -296,24 +296,40 @@ impl Tree<'_,'_>{
         RenameAt{source,setting:self.setting,parent:self.parent,
             actor:owner.account,auth:owner.op,epoch:owner.generation,require:&require}
             .rename(root.view(),expected,opened,op,name,alive,point)
+            .map(|renamed|(renamed.place,renamed.body))
     }
 }
 
 /// All selection and confirmation cuts remain on one original SYSTEM.
 /// This short helper does not grant a FILE, a name or a live SMB session.
-struct RenameCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
-struct RenameAt<'a>{
-    source:&'a InitialReader,setting:Setting,parent:DirectoryParent,actor:AccountId,auth:OperationId,epoch:i64,
-    require:&'a dyn Fn(&RenameCut<'_>)->io::Result<()>,
+pub(super) struct RenameCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+impl<'a> RenameCut<'a>{
+    pub(super) fn parts(&self)->(&'a InitialReader,&'a Connection,&'a Catalog){(self.source,self.db,self.catalog)}
 }
-impl RenameAt<'_>{
+
+pub(super) struct ExactRename(Original);
+impl ExactRename{
+    pub(super) fn require(&self,db:&Connection,birth:&Birth,place:&Place)->io::Result<()>{
+        if self.0.target()!=*place{return Err(denied());}
+        self.0.require_exact(db,birth,Status::Confirmed)
+    }
+}
+pub(super) struct Renamed{place:Place,body:Installed,proof:ExactRename}
+impl Renamed{
+    pub(super) fn into_parts(self)->(Place,Installed,ExactRename){(self.place,self.body,self.proof)}
+}
+struct RenameAt<'s,'q>{
+    source:&'s InitialReader,setting:Setting,parent:DirectoryParent,actor:AccountId,auth:OperationId,epoch:i64,
+    require:&'q dyn Fn(&RenameCut<'_>)->io::Result<()>,
+}
+impl RenameAt<'_,'_>{
     fn authorized(&self,db:&Connection,catalog:&Catalog)->io::Result<()>{
         (self.require)(&RenameCut{source:self.source,db,catalog})
     }
 
     fn rename(&self,root:OrdinaryView<'_>,expected:&Place,opened:&Installed,
         op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
-        point:impl Fn(Cut)->io::Result<()>)->io::Result<(Place,Installed)>{
+        point:impl Fn(Cut)->io::Result<()>)->io::Result<Renamed>{
         display::component(name.as_bytes(),222)?;
         let src=self.source;let grant=self.setting;
         if expected.name==name||expected.role!=Role::File||(expected.volume,expected.parent)!=(grant.volume,self.parent)
@@ -407,9 +423,14 @@ impl RenameAt<'_>{
             point(Cut::Confirmed)?;
             Ok((selected,same))
         })();
-        execute.map_err(|_|unknown())
+        let (place,body)=execute.map_err(|_|unknown())?;
+        Ok(Renamed{place,body,proof:ExactRename(original)})
     }
 }
+
+#[path="smb_rust_rename.rs"]
+mod rust;
+pub(super) use rust::{HeldRenameResult,rename_held,require_writable};
 
 #[path="file_parent_change.rs"]
 mod parent_change;

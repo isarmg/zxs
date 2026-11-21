@@ -7,8 +7,8 @@ use std::{ffi::OsString,io,os::unix::ffi::{OsStrExt,OsStringExt},path::PathBuf};
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=16;
-pub(super) const MAX_OBJECTS:i32=167; // 136 declared descriptions and 31 implicit UNIQUE indexes
+pub(super) const SCHEMA_VERSION:i64=17;
+pub(super) const MAX_OBJECTS:i32=172; // 140 declared descriptions and 32 implicit UNIQUE indexes
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
 fn shape(c:&Connection)->io::Result<Shape>{
@@ -157,7 +157,7 @@ mod schema_tests {
     #[test]
     fn old_versions_and_a_same_size_prior_index_are_not_the_fresh_family() {
         let approved=Canonical::new().unwrap();
-        assert_eq!(approved.0.len(),167);
+        assert_eq!(approved.0.len(),172);
         let mut db=Connection::open_in_memory().unwrap();
         super::super::engine::limits(&db).unwrap();
         db.execute_batch(SCHEMA).unwrap();
@@ -174,10 +174,12 @@ mod schema_tests {
         tx.execute_batch("PRAGMA main.user_version = 15;").unwrap();
         assert!(approved.require(&tx).is_err());
         tx.execute_batch("PRAGMA main.user_version = 16;").unwrap();
+        assert!(approved.require(&tx).is_err());
+        tx.execute_batch("PRAGMA main.user_version = 17;").unwrap();
         assert!(approved.require(&tx).is_ok());
         tx.execute_batch("DROP INDEX rename_destination_name;
                          CREATE INDEX rename_destination_name ON file_rename(volume_id,parent_id,target_name);").unwrap();
-        assert_eq!(shape(&tx).unwrap().len(),167);
+        assert_eq!(shape(&tx).unwrap().len(),172);
         assert!(approved.require(&tx).is_err());
     }
     #[test]
@@ -196,7 +198,7 @@ mod schema_tests {
             let tx=db.transaction().unwrap();
             let version:i64=tx.query_row("PRAGMA main.user_version",[],|row|row.get(0)).unwrap();
             assert_eq!(version,SCHEMA_VERSION);
-            assert_eq!(shape(&tx).unwrap().len(),167);
+            assert_eq!(shape(&tx).unwrap().len(),172);
             assert!(approved.require(&tx).is_err());
         }
     }

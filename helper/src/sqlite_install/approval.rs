@@ -1,42 +1,54 @@
 //! One foreground local administrator authorizes one already-pinned set. No
 //! browser, environment, SQL row, plain UID argument or saved grant can issue it.
 use super::{Purpose,originals::Originals,pair::PublicConfirmation,request::{Id,Request}};
-use crate::{disk_web::require_terminal,fs_tools::RuntimeFile,maintenance::{diagnostic_worker,thread_file},pinned::{Entity,Mount}};
+use crate::{disk_web::require_terminal,maintenance::{diagnostic_worker,thread_file},pinned::{Entity,Mount}};
 use rustix::{fs::{Mode,OFlags,RawDir,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2},process::{Gid,Uid,getgid,getuid,getegid,geteuid},
     thread::{set_keep_capabilities,set_no_new_privs,set_thread_groups,set_thread_res_gid,set_thread_res_uid}};
 use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read},mem::MaybeUninit,os::{fd::{AsFd,AsRawFd},unix::{ffi::OsStrExt,fs::MetadataExt}},path::PathBuf};
-const PROFILE:&[&str]=&["etc","local-ops-helper","installer.identity"];
 
 pub(super) struct Approved {request:Request, originals:Originals, purpose:Purpose}
 
 /// Pins the selected original names without opening directories for data or
 /// acquiring a lease. A paired browser may ask to display the terminal
 /// confirmation, but only this live root foreground can make it Approved.
-pub(super) struct Proposal{request:Request,originals:Originals,purpose:Purpose,subject:(Id,u32,u32)}
+pub(super) struct Proposal{
+    request:Request,originals:Originals,purpose:Purpose,subject:(Id,u32,u32),
+    explicit:super::pair::ExplicitSubject,private:bool,
+}
 impl Proposal{
     /// Non-secret op/reference may be recorded BEFORE any write; they are not authority.
-    pub(super) fn select(purpose:Purpose,op:Id,reference:Id,paths:Vec<PathBuf>)->io::Result<Self>{
+    pub(super) fn select(purpose:Purpose,op:Id,reference:Id,paths:Vec<PathBuf>,
+        explicit:super::pair::ExplicitSubject,private:bool)->io::Result<Self>{
+        super::pair::compiled_v17()?;
+        if private{
+            super::pair::require_v17()?;
+            if !matches!(purpose,Purpose::Fresh){return Err(denied());}
+        }
         // A privileged FD inherited across lowering credentials retains its
         // original rights. A fresh terminal tool accepts only stdio, no inherited
         // file/socket/cwd-like authority from a shell, web worker or supervisor.
         no_inherited_descriptors()?;
-        let host=host_admin()?;let subject=profile()?;
+        let host=host_admin()?;
+        let subject=explicit.tuple();
         let request=Request::new(op,subject.0,reference,subject.1,paths)?;
         // Check paths/SQLite capabilities before even showing a proposal. No SQL
         // connection, data read, directory allocation or privilege is granted here.
         request.database(super::engine::path_limit()?)?;
-        let originals=Originals::pin(&request,host)?;
-        let out=Self{request,originals,purpose,subject};out.require()?;Ok(out)
+        let originals=Originals::pin_passive(&request,host)?;
+        let out=Self{request,originals,purpose,subject,explicit,private};out.require()?;Ok(out)
     }
     pub(super) fn require(&self)->io::Result<()>{
         let current=host_admin()?;self.originals.require_host(&current)?;
-        if profile()?!=self.subject{return Err(denied());}
+        super::pair::compiled_v17()?;
+        if self.private{super::pair::require_v17()?;}
+        if self.explicit.tuple()!=self.subject{return Err(denied());}
         same_terminal(&io::stdin(),&io::stderr())?;
         for n in &self.originals.selected{n.require_same_named_mount()?;}
         Ok(())
     }
-    pub(super) fn browser_scope(&self)->([u8;32],bool,u8){
-        (self.request.sha(), matches!(self.purpose,Purpose::Fresh), (self.request.paths().len()-2) as u8)
+    pub(super) fn fresh_receipt_sha(&self)->Option<[u8;32]>{self.private.then(||self.request.sha())}
+    pub(super) fn browser_scope(&self)->([u8;32],bool,u8,super::pair::ExplicitSubject){
+        (self.request.sha(), matches!(self.purpose,Purpose::Fresh), (self.request.paths().len()-2) as u8,self.explicit)
     }
     pub(super) fn authorize(self,tty:PublicConfirmation)->io::Result<Approved>{
         self.require()?;tty.check()?;
@@ -56,7 +68,8 @@ impl Proposal{
         // Also used after the browser worker has really closed and been
         // reaped. The same retained TTY issues a new challenge, clearing all
         // previously queued input; the repeatable request SHA is not an answer.
-        tty.confirm_init(matches!(self.purpose,Purpose::Fresh),preview)?;
+        if self.private{tty.confirm_v17_initialization(preview)?;}
+        else{tty.confirm_init(matches!(self.purpose,Purpose::Fresh),preview)?;}
         self.require()?;tty.check()?;drop(tty);
         let Self{request,originals,purpose,..}=self;
         // End the privileged phase BEFORE opening any storage directory for data or
@@ -81,7 +94,7 @@ pub(super) fn drop_to_storage(uid:u32,gid:u32)->io::Result<()>{
 
 fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 fn escaped(raw:&[u8])->String{raw.iter().copied().flat_map(std::ascii::escape_default).map(char::from).collect()}
-fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"exact protected host administrator, profile and controlling terminal required")}
+fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"exact protected host administrator, explicit original scope and controlling terminal required")}
 pub(super) fn same_terminal(input:&io::Stdin,output:&io::Stderr)->io::Result<()>{
     let stdout=io::stdout();
     require_terminal(input.as_fd())?;require_terminal(output.as_fd())?;require_terminal(stdout.as_fd())?;
@@ -169,34 +182,9 @@ pub(super) fn host_admin()->io::Result<File>{
     if Entity::of(&host.metadata()?)?!=Entity::of(&here.metadata()?)?||Mount::on(&host)?!=Mount::on(&here)?{return Err(denied());}
     Ok(host)
 }
-pub(super) fn profile()->io::Result<(Id,u32,u32)>{
-    let f=RuntimeFile::open(PROFILE,false,128)?;
-    let m=f.file.metadata()?;if m.mode()&0o7777!=0o600||m.nlink()!=1||m.uid()!=0{return Err(denied());}
-    let mut bytes=Vec::new();(&f.file).take(129).read_to_end(&mut bytes)?;f.recheck()?;
-    decode_profile(&bytes)
-}
-fn decode_profile(bytes:&[u8])->io::Result<(Id,u32,u32)>{
-    let s=std::str::from_utf8(bytes).map_err(|_|denied())?.strip_suffix('\n').ok_or_else(denied)?;
-    let mut words=s.split(' ');if words.next()!=Some("HOST-INSTALL-1"){return Err(denied());}
-    let h=words.next().filter(|h|h.len()==32&&h.bytes().all(|c|c.is_ascii_digit()||(b'a'..=b'f').contains(&c))).ok_or_else(denied)?;
-    let mut id=[0u8;16];for(i,b)in id.iter_mut().enumerate(){*b=u8::from_str_radix(&h[2*i..2*i+2],16).map_err(|_|denied())?;}
-    let number=|s:&str|s.parse::<u32>().ok().filter(|&n|n>0&&n<u32::MAX&&n.to_string()==s).ok_or_else(denied);
-    let uid=number(words.next().ok_or_else(denied)?)?;let gid=number(words.next().ok_or_else(denied)?)?;
-    if id==[0;16]||words.next().is_some()||bytes.len()>128{return Err(denied());}Ok((id,uid,gid))
-}
-
 #[cfg(test)]
 mod tests{
     use super::*;
-    #[test]fn only_one_registered_nonroot_service_identity_matches_the_fixed_profile(){
-        let id="02020202020202020202020202020202";
-        assert_eq!(decode_profile(format!("HOST-INSTALL-1 {id} 1001 103\n").as_bytes()).unwrap(),([2;16],1001,103));
-        for bad in [format!("HOST-INSTALL-1 {id} 0 103\n"),format!("HOST-INSTALL-1 {id} 1001 0\n"),
-            format!("HOST-INSTALL-1 {id} 01001 103\n"),format!("HOST-INSTALL-1 {id} 1001 103\nmore\n"),
-            format!("HOST-INSTALL-1 {id} 1001 103"),format!("HOST-INSTALL-1 {} 1000 1001\n","0".repeat(32))]{
-            assert!(decode_profile(bad.as_bytes()).is_err());
-        }
-    }
     #[test]fn a_consistent_private_pid_or_user_view_does_not_establish_the_host(){
         let id=|ino|Entity{dev:9,ino};
         let host=[id(0xefff_fffc),id(0xefff_fffd),id(4026531841)];

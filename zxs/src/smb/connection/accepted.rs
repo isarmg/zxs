@@ -5,12 +5,15 @@ pub(in crate::smb) mod incoming;
 use super::{Connection,Fault,Opening,OpeningSend,Origin,Result,Window,ones,
     sessions::{AcceptSeat,RunningServerGuid},transport::{DirectStream,deadline}};
 use crate::smb::wire::{direct::Frame,message::Compound,negotiate::{CmacChoice,MAX_OPENING_BYTES}};
+use crate::system::reader::smb::runtime::QualifiedRustInstall;
 use std::{net::{IpAddr,SocketAddr,TcpStream},sync::{Arc,atomic::AtomicBool}};
 
 /// Exclusive protocol owner. No raw Connection getter, stream replacement,
 /// separate response sink or numeric-ID constructor.
 #[must_use]
-pub(in crate::smb) struct Peer { connection:Connection, first_login_by:Option<std::time::Instant> }
+pub(in crate::smb) struct Peer {
+    connection:Connection, first_login_by:Option<std::time::Instant>, original_move:Option<incoming::PendingOriginalMove>,
+}
 
 /// A pair observed on the SAME owned kernel socket before reading any SMB
 /// bytes. Neither address may be substituted or moved to a different
@@ -65,8 +68,18 @@ impl Incoming {
 impl RunningServerGuid {
     /// Future enabled TCP/445 service supplies its sole accepted, unread
     /// socket. No socket is obtained, accepted or connected by this module.
-    pub(in crate::smb) fn negotiate_accepted(&self,socket:TcpStream)->Result<Peer> {
-        Peer::open(self,Incoming::inspect(DirectStream::Tcp(socket))?)
+    pub(in crate::smb) fn negotiate_accepted(&self,accepted:crate::smb::launch::OwnedAccepted,
+        installation:&QualifiedRustInstall)->Result<Peer> {
+        let (socket,start,index)=accepted.unpack();
+        if !self.is_original_start(&start)||!installation.is_original_start(&start){return Err(Fault::NoVerifier);}
+        installation.require_current().map_err(|_|Fault::NoVerifier)?;
+        let input=Incoming::inspect(DirectStream::Tcp(socket))?;
+        let pair=input.endpoints.as_ref().ok_or(Fault::Transport)?;
+        if !installation.original_listener_is(index,pair.local())||
+            !installation.admits_original_addresses(pair.local(),pair.peer()){return Err(Fault::Transport);}
+        // No bytes have been read or written. This exact OS accepted stream
+        // now enters the same origin's normal NEGOTIATE.
+        Peer::open(self,input)
     }
 }
 fn parsed(record:&[u8])->Result<Compound<'_>> {
@@ -86,7 +99,7 @@ impl Peer {
         incoming.stream.write_smb(tx.bytes(),||Ok(()))?;
         let connection=tx.after_write(Completion::Written(incoming),seat)?;
         let first_login_by=std::time::Instant::now().checked_add(std::time::Duration::from_secs(60)).ok_or(Fault::Clock)?;
-        Ok(Self{connection,first_login_by:Some(first_login_by)})
+        Ok(Self{connection,first_login_by:Some(first_login_by),original_move:None})
     }
     #[cfg(test)]
     fn open_fixture(server:&RunningServerGuid,stream:DirectStream)->Result<Self> {

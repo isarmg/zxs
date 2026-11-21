@@ -2,14 +2,12 @@
 //! production subject, final success, network activity, or file authority.
 use super::*;
 use crate::smb::connection::{
-    sessions::{Global,Run,RunningServerGuid,Resume,LIFETIME,tests::{connected,running,selected}},
+    sessions::{Run,RunningServerGuid,Resume,LIFETIME,tests::{connected,running,selected}},
     setup::{Start,tests::{PICK,body,frame,ntlm1,parsed}},
 };
-use std::sync::Mutex;
 
 pub(in crate::smb::connection) fn provider()->RunningServerGuid {
-    RunningServerGuid{run:Arc::new(Run{guid:[17;16],index:Mutex::new(Global::empty()),
-        verifier:Some(ChallengeService::fixture())})}
+    RunningServerGuid{run:Arc::new(Run::new([17;16],Some(ChallengeService::fixture())))}
 }
 fn one()->Vec<u8> {
     let mut p=ntlm1();p[12..16].copy_from_slice(&0x2208_8215u32.to_le_bytes());

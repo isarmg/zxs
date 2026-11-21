@@ -3,7 +3,8 @@
 use super::{Additional,Catalog,Connection,DirectoryBirth,DirectoryPlace,DirectoryHold,DirectoryParent,
     OperationId,OrdinaryRoot,Route,Tree,AccountId,ShareId,VolumeId,display,denied,invalid,work_record};
 use super::super::super::{InitialReader,volume::measure};
-use crate::fs::directory_birth::{DirectoryRename,DirectoryRenameSide};
+use crate::{fs::directory_birth::{DirectoryRename,DirectoryRenameSide},smb::OrdinaryDirectoryRenameAdmission,
+    system::reader::{account::share_mode::{Mode,Setting},smb::runtime::RustRoot}};
 use crate::ordinary::portable_birth::Birth;
 use crate::hash::Sha256;
 use std::{ffi::CString,io,thread,time::Duration};
@@ -156,10 +157,51 @@ impl Tree<'_,'_>{
         owner:&mut Option<DirectoryHold>,live:&impl Fn()->io::Result<()>,point:impl Fn(RelabelCut)->io::Result<()>)
         ->io::Result<(Route,DirectoryHold)>{
         let src=self.session.source;let g=self.setting;let a=&self.session.original;
-        if old.volume()!=g.volume||old.parent()!=self.parent||owner.is_none(){return Err(denied());}
+        let require=|cut:&DirectoryRelabelCut<'_>|{
+            debug_assert!(std::ptr::eq(cut.source,src));
+            self.require(cut.db,cut.catalog,true)
+        };
+        let original=RelabelAt{source:src,setting:g,directory:self.parent,actor:a.account,
+            auth:a.op,epoch:a.generation,require:&require};
+        original.relabel(target,op,old,owner,live,point).map(|(route,hold,_)|(route,hold))
+    }
+}
+
+/// A private borrow of the exact Core reader and its ongoing SQLite cut.
+/// Only the common relabel engine can supply one; it grants no handle.
+pub(in crate::system::reader::smb) struct DirectoryRelabelCut<'a>{
+    source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog,
+}
+impl<'a> DirectoryRelabelCut<'a>{
+    pub(in crate::system::reader::smb) fn parts(&self)->(&'a InitialReader,&'a Connection,&'a Catalog){
+        (self.source,self.db,self.catalog)
+    }
+}
+struct RelabelAt<'a>{
+    source:&'a InitialReader,setting:Setting,directory:DirectoryParent,actor:AccountId,auth:OperationId,epoch:i64,
+    require:&'a dyn Fn(&DirectoryRelabelCut<'_>)->io::Result<()>,
+}
+#[must_use]
+pub(in crate::system::reader::smb) struct ConfirmedRelabel{original:Rename}
+impl ConfirmedRelabel{
+    pub(in crate::system::reader::smb) fn require(&self,db:&Connection,c:&Catalog,route:&Route)->io::Result<()>{
+        if self.original.confirmed_position(db,c)?!=*route{return Err(denied());}
+        Ok(())
+    }
+}
+impl RelabelAt<'_>{
+    /// One operation, one existing directory marker. Both SMB families
+    /// use these same physical and SQL transitions, but not the authority
+    /// that certifies each of their exact active account/setting cuts.
+    fn relabel(&self,target:&str,op:OperationId,old:&Route,owner:&mut Option<DirectoryHold>,
+        live:&impl Fn()->io::Result<()>,point:impl Fn(RelabelCut)->io::Result<()>)
+        ->io::Result<(Route,DirectoryHold,ConfirmedRelabel)>{
+        let src=self.source;let g=self.setting;
+        if old.volume()!=g.volume||old.parent()!=self.directory||owner.is_none(){return Err(denied());}
+        let authorize=|db:&Connection,catalog:&Catalog|(self.require)(&DirectoryRelabelCut{source:src,db,catalog});
         let mut parent=old.clone();
         let previous=parent.steps.pop().ok_or_else(denied)?; // never the enrolled F itself
-        let r=Rename::prepare(op,&previous,target,g.share,g.op,a.op,a.account,a.generation)?;
+        let r=Rename::prepare(op,&previous,target,g.share,g.op,self.auth,self.actor,self.epoch)?;
         if old.parent()!=DirectoryParent::Directory(r.birth.id)||parent.parent()!=r.birth.parent{return Err(denied());}
         let exact_parent=|db:&Connection,c:&Catalog|{
             if Route::at(db,c,g.volume,r.birth.parent)?!=parent{return Err(denied());}
@@ -172,7 +214,7 @@ impl Tree<'_,'_>{
         };
         let new=CString::new(r.target.as_bytes()).map_err(|_|denied())?;
         let catalog=src.at(|db,c|{
-            self.require(db,&c,true)?;exact_old(db,&c)?;live()?;Ok(c)
+            authorize(db,&c)?;exact_old(db,&c)?;live()?;Ok(c)
         })?;
         let ordinary=OrdinaryRoot::at_parent(src,&catalog,&parent,None)?;
         if measure(&ordinary.root)?.read_only{return Err(io::ErrorKind::PermissionDenied.into());}
@@ -187,7 +229,7 @@ impl Tree<'_,'_>{
             ordinary.require_streaming()?;
             let out=Connection::open(&src.dir,true)?;
             src.transaction_before_commit(&out,c"BEGIN IMMEDIATE",|db,c|{
-                self.require(db,&c,true)?;exact_old(db,&c)?;
+                authorize(db,&c)?;exact_old(db,&c)?;
                 super::budget(db,g.volume,r.birth.parent,&census,Some(Additional::RenameDirectory(r.birth.id,&new)))?;
                 live()?;r.issue(db)
             },live)
@@ -209,7 +251,7 @@ impl Tree<'_,'_>{
             let admit=||{
                 ordinary.require_streaming()?;
                 src.at(|db,c|{
-                    self.require(db,&c,true)?;exact_parent(db,&c)?;r.require_pending(db,&c)?;r.live(db)?;live()
+                    authorize(db,&c)?;exact_parent(db,&c)?;r.require_pending(db,&c)?;r.live(db)?;live()
                 })?;
                 // The transaction may have done additional S-name I/O.
                 live()
@@ -218,20 +260,39 @@ impl Tree<'_,'_>{
                 ordinary.require_streaming()?;
                 let out=Connection::open(&src.dir,true)?;
                 let decided=src.transaction_before_commit(&out,c"BEGIN IMMEDIATE",|db,c|{
-                    self.require(db,&c,true)?;exact_parent(db,&c)?;r.live(db)?;live()?;
+                    authorize(db,&c)?;exact_parent(db,&c)?;r.live(db)?;live()?;
                     r.confirm(db,&c)?;r.confirmed_position(db,&c)
                 },live);
                 drop(out);
                 match decided{
                     Ok(new)=>Ok(new),
-                    Err(_)=>src.at(|db,c|{self.require(db,&c,true)?;exact_parent(db,&c)?;r.confirmed_position(db,&c)}),
+                    Err(_)=>src.at(|db,c|{authorize(db,&c)?;exact_parent(db,&c)?;r.confirmed_position(db,&c)}),
                 }
             })?;
             point(RelabelCut::Confirmed)?;
             live()?;Ok((selected,held))
         })();
-        changed.map_err(|_:io::Error|unknown())
+        changed.map(|(route,held)|(route,held,ConfirmedRelabel{original:r})).map_err(|_:io::Error|unknown())
     }
+}
+
+pub(in crate::system::reader::smb) fn relabel_rust(tree:&RustRoot,ask:&OrdinaryDirectoryRenameAdmission<'_>,label:&str,
+    setting:Setting,old:&Route,owner:&mut Option<DirectoryHold>)
+    ->io::Result<(Route,DirectoryHold,ConfirmedRelabel)>{
+    let DirectoryParent::Directory(directory)=old.parent() else{return Err(denied());};
+    let (member,target)=ask.held(tree.pool(),directory)?;
+    if !member.is_set_info()||setting.mode!=Mode::ReadWrite||old.volume()!=setting.volume{return Err(denied());}
+    let source=tree.ordinary_reader(member)?;
+    let (actor,auth,epoch,grant)=source.at(|db,catalog|
+        tree.ordinary_directory_relabel_at(&DirectoryRelabelCut{source,db,catalog:&catalog},label))?;
+    if grant!=setting{return Err(denied());}
+    let require=|cut:&DirectoryRelabelCut<'_>|{
+        if tree.ordinary_directory_relabel_at(cut,label)?!=(actor,auth,epoch,setting){return Err(denied());}
+        Ok(())
+    };
+    let original=RelabelAt{source,setting,directory:old.parent(),actor,auth,epoch,require:&require};
+    let op=OperationId::new()?;
+    original.relabel(target,op,old,owner,&||tree.original_write_live(member),|_|Ok(()))
 }
 
 type Allowed<'a>=dyn Fn(&Connection,&Catalog,ShareId,VolumeId)->io::Result<()>+'a;

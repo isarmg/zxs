@@ -94,12 +94,17 @@ fn member_bounds_and_open_route_are_independent_of_a_later_command() {
     first.extend_from_slice(&related);
     let b = packet(&first);
     let c = parsed(&b);
+    assert_eq!(c.messages()[0].set_info_target(),Ok(OpenReference::Explicit(WireOpenId {
+        persistent: 0x1122_3344_5566_7788, volatile: 0x8877_6655_4433_2211,
+    })));
     assert_eq!(fields(&c.messages()[0], 65_536), Err(Error::Malformed));
     // Literal non-sentinel halves still cannot replace the original result.
+    assert_eq!(c.messages()[1].set_info_target(), Ok(OpenReference::PreviousInCompound));
     assert_eq!(fields(&c.messages()[1], 65_536).unwrap().open, OpenReference::PreviousInCompound);
 
     let mut raw = request(FILE_DISPOSITION, 96, &[1]);
     raw[80..96].fill(0xff);
+    assert_eq!(parsed(&packet(&raw)).messages()[0].set_info_target(), Err(IoFieldError::NoExplicitOpen));
     assert_eq!(one(&raw, 65_536), Err(Error::NoExplicitOpen));
     for flags in [0x1000_0000u32, 0x2000_0000] {
         raw[16..20].copy_from_slice(&flags.to_le_bytes());

@@ -7,7 +7,7 @@ fn file(n: u8) -> Object { Object::File(pool(1), FileId([n; 16])) }
 fn facts(object: Object, bits: u32) -> Facts {
     Facts { object, grant: Grant::from_effective(bits).unwrap(), parent_write: ParentWrite::Granted }
 }
-fn table(n: usize) -> OpenCoordinator { OpenCoordinator::new(NonZeroUsize::new(n).unwrap()) }
+fn table(n: usize) -> Arc<OpenCoordinator> { OpenCoordinator::new(NonZeroUsize::new(n).unwrap()) }
 
 struct Attempt(u8);
 struct Original { attempt: u8, actual: Facts }
@@ -165,4 +165,69 @@ fn a_pending_open_votes_across_threads_and_leaves_no_stale_denial() {
         assert_eq!(answer, Some(ReserveError::SharingViolation));
     });
     assert!(t.reserve(&req, facts(file(5),2), Share(ALL)).is_ok());
+}
+
+#[test]
+fn ordinary_directory_first_bound_open_is_not_a_provisional_vote(){
+    let t=table(4);let request=Attempt(1);
+    let directory=facts(Object::Directory(pool(1),DirectoryId([9;16])),1);
+    let first=t.reserve(&request,directory,Share(W|D)).unwrap();
+    assert_ne!(first.slot.vote.denies&R,0);
+    let read=first.bind(Original{attempt:1,actual:directory}).unwrap();
+    assert_eq!(read._slot.vote.denies&R,0); // actual first, no full FILE_GENERIC_WRITE
+    assert!(t.reserve(&request,directory,Share(ALL)).is_ok());
+    drop(read);
+
+    let info=Facts{grant:Grant(0x80),..directory};
+    let not_yet=t.reserve(&request,info,Share(0)).unwrap();
+    let reader=t.reserve(&request,directory,Share(W|D)).unwrap()
+        .bind(Original{attempt:1,actual:directory}).unwrap();
+    assert_eq!(reader._slot.vote.denies&R,0); // a provisional metadata OPEN is not earlier
+    drop((reader,not_yet));
+
+    let meta=t.reserve(&request,info,Share(0)).unwrap().bind(Original{attempt:1,actual:info}).unwrap();
+    let reserved=t.reserve(&request,directory,Share(W|D)).unwrap();
+    let exclusive=reserved.bind(Original{attempt:1,actual:directory}).unwrap();
+    assert_ne!(exclusive._slot.vote.denies&R,0); // an actual earlier metadata OPEN counts
+    assert_eq!(t.reserve(&request,directory,Share(ALL)).err(),Some(ReserveError::SharingViolation));
+    drop((exclusive,meta));
+
+    let meta=t.reserve(&request,info,Share(0)).unwrap().bind(Original{attempt:1,actual:info}).unwrap();
+    let reserved=t.reserve(&request,directory,Share(W|D)).unwrap();
+    drop(meta);
+    let reader=reserved.bind(Original{attempt:1,actual:directory}).unwrap();
+    assert_eq!(reader._slot.vote.denies&R,0); // earlier actual OPEN left before binding
+}
+
+#[test]
+fn original_read_only_parent_forces_share_read_even_after_an_open(){
+    let t=table(3);let request=Attempt(3);
+    let dir=Facts{parent_write:ParentWrite::Denied,..facts(Object::OrdinaryRoot(pool(1),VolumeId([2;16])),1)};
+    let old=t.reserve(&request,dir,Share(R)).unwrap().bind(Original{attempt:3,actual:dir}).unwrap();
+    let other=t.reserve(&request,dir,Share(0)).unwrap();
+    assert_eq!(other.slot.vote.denies&R,0);
+    drop((other,old));
+}
+
+#[test]
+fn an_original_retained_hold_uses_the_same_seat_but_cannot_elect_ordinary_close(){
+    let t=table(2);let request=Attempt(1);let f=facts(file(1),1);
+    let reserved=t.reserve(&request,f,Share(ALL)).unwrap().as_retained();
+    assert_eq!(t.table.lock().unwrap().objects[&f.object].retained,0);
+    let read=reserved.bind(Original{attempt:1,actual:f}).unwrap();
+    assert_eq!(t.table.lock().unwrap().objects[&f.object].retained,1);
+    let Held{original,_slot,..}=read;
+    drop(original);
+    assert_eq!(_slot.finish_normal().err().unwrap().kind(),std::io::ErrorKind::PermissionDenied);
+    assert_eq!(t.table.lock().unwrap().live,0);
+}
+
+#[test]
+fn original_file_can_release_normally_without_an_armed_transfer(){
+    let t=table(1);let request=Attempt(1);let f=facts(file(1),1);
+    let Held{original,_slot,..}=t.reserve(&request,f,Share(ALL)).unwrap()
+        .bind(Original{attempt:1,actual:f}).unwrap();
+    drop(original);
+    assert!(_slot.finish_normal().unwrap().is_none());
+    assert!(t.table.lock().unwrap().objects.is_empty());
 }

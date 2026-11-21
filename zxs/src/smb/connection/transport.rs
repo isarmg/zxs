@@ -7,6 +7,7 @@ use std::{io::{ErrorKind,Read,Write},net::TcpStream,time::{Duration,Instant}};
 const IO_BUDGET:Duration=Duration::from_secs(5);
 pub(super) fn deadline()->Result<Instant> {Instant::now().checked_add(IO_BUDGET).ok_or(Fault::Clock)}
 fn remaining(end:Instant)->Result<Duration> {
+    if crate::smb::launch::stopping(){return Err(Fault::Closed);}
     let left=end.saturating_duration_since(Instant::now());
     if left.is_zero() {Err(Fault::Transport)} else {Ok(left)}
 }
@@ -45,6 +46,7 @@ impl DirectStream {
         let idle=Instant::now().checked_add(Duration::from_secs(1)).ok_or(Fault::Clock)?;
         let mut prefix=[0;4];
         loop {
+            if crate::smb::launch::stopping(){return Err(Fault::Closed);}
             let left=idle.saturating_duration_since(Instant::now());
             if left.is_zero() {return Ok(None);}
             let first=match self {

@@ -1,5 +1,5 @@
 //! Local, unbuffered entry on the already-open controlling terminal. Private:
-//! this is not maintenance authorization, Samba-domain evidence or an issuer.
+//! this is not maintenance authorization, runtime installation evidence or an issuer.
 mod audit;
 mod channel;
 pub(in crate::sqlite_install) use channel::PublicConfirmation;
@@ -169,14 +169,7 @@ impl SelectedInput {
         let audit=UnauditedInput::query_current()?;
         drop(host);Ok(Self{audit,channel})
     }
-    /// Actual offline native process only, after loading the approved native
-    /// closed role and applying its process restrictions.
-    pub(super) fn smb_only(&self,ready:helper_linux_evidence::first_smb::Enrollment)
-        ->io::Result<helper_linux_evidence::first_smb::FirstSlot>{
-        let [smb,_]=self.pair_for(2)?;
-        ready.prepare(&smb.take())
-    }
-    pub(super) fn lock_native_memory(&self)->io::Result<()>{
+    pub(super) fn lock_secret_memory(&self)->io::Result<()>{
         self.audit.require_current()?;
         self.channel.require()?;
         protect_memory()
@@ -197,6 +190,31 @@ impl SelectedInput {
         let signals=PromptSignals::begin()?;
         let tty=Quiet::begin(tty.as_fd())?;
         Ok(HeldQuiet{tty,signals,selected:self})
+    }
+    /// Fixed low Rust secret worker only under the actual parent-owned
+    /// no-echo guard. This entry never yields a password or key.
+    pub(super) fn rust_vault_only(&self,ready:helper_linux_evidence::first_smb::Enrollment,
+        prefix:&[u8;224],stage:&mut std::fs::File)->io::Result<()>{
+        let [smb,_]=self.held_pair(2)?;
+        ready.seal_rust_v1(&smb.take(),prefix,stage)
+    }
+    fn held_pair(&self,offset:usize)->io::Result<[Entry;2]>{
+        if offset!=0&&offset!=2{return Err(refuse("wrong fixed credential role"));}
+        let stdin=io::stdin();let f=stdin.as_fd();
+        let state=tcgetattr(f)?;
+        if state.line_discipline!=0||state.input_modes!=InputModes::empty()
+            ||state.local_modes!=(LocalModes::ISIG|(state.local_modes&LocalModes::TOSTOP))
+            ||state.special_codes[Cc::VMIN]!=0||state.special_codes[Cc::VTIME]!=2||fcntl_getfl(f)?.contains(OFlags::NONBLOCK){
+            return Err(refuse("the exact parent-held hidden input mode is not in force"));
+        }
+        let same=|| {
+            if same_mode(&state,&tcgetattr(f)?){Ok(())}else{Err(refuse("parent-held hidden mode changed"))}
+        };
+        let signals=PromptSignals::begin()?;
+        let mut entries=std::array::from_fn::<_,2,_>(|_|Entry::new());
+        capture(&mut entries,offset,self,f,same,&signals)?;
+        signals.check()?;signals.finish()?;
+        Ok(entries)
     }
     fn pair_for(&self,offset:usize)->io::Result<[Entry;2]>{
         if offset!=0&&offset!=2{return Err(failure("wrong fixed credential role"));}
@@ -221,13 +239,6 @@ impl HeldQuiet<'_>{
     pub(super) fn require(&self)->io::Result<()>{
         self.signals.check()?;self.selected.audit.require_current()?;self.selected.channel.require()?;self.tty.verify()
     }
-    pub(super) fn smb(&self,provider:helper_linux_evidence::first_smb::Enrollment)
-        ->io::Result<helper_linux_evidence::first_smb::FirstSlot>{
-        self.require()?;
-        let mut entries=std::array::from_fn::<_,2,_>(|_|Entry::new());
-        capture(&mut entries,2,self.selected,self.tty.fd,||self.tty.verify(),&self.signals)?;
-        let [smb,_]=entries;provider.prepare(&smb.take())
-    }
     pub(super) fn finish(mut self)->io::Result<()>{
         self.tty.restore()?;let pending=self.signals.check();self.signals.finish()?;pending
     }
@@ -239,21 +250,8 @@ impl WebEntry<'_>{
     // This child verifies the actual selected mode but cannot restore it or
     // pass a Web secret back. The parent collects this original child first.
     pub(super) fn read_held(self)->io::Result<PreparedWeb>{
-        let stdin=io::stdin();let f=stdin.as_fd();
-        let state=tcgetattr(f)?;
-        if state.line_discipline!=0||state.input_modes!=InputModes::empty()
-            ||state.local_modes!=(LocalModes::ISIG|(state.local_modes&LocalModes::TOSTOP))
-            ||state.special_codes[Cc::VMIN]!=0||state.special_codes[Cc::VTIME]!=2||fcntl_getfl(f)?.contains(OFlags::NONBLOCK){
-            return Err(refuse("the exact parent-held hidden input mode is not in force"));
-        }
-        let same=|| {
-            if same_mode(&state,&tcgetattr(f)?){Ok(())}else{Err(refuse("parent-held hidden mode changed"))}
-        };
-        let signals=PromptSignals::begin()?;
-        let mut entries=std::array::from_fn::<_,2,_>(|_|Entry::new());
-        capture(&mut entries,0,self.selected,f,same,&signals)?;
-        signals.check()?;signals.finish()?;
-        let [web,_]=entries;PreparedWeb::fresh(web.take(),self.workspace)
+        let [web,_]=self.selected.held_pair(0)?;
+        PreparedWeb::fresh(web.take(),self.workspace)
     }
 }
 

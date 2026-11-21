@@ -1,9 +1,8 @@
-//! Complete MS-FSCC records for authorized logical namespace folders only.
+//! Complete MS-FSCC records for authorized actual logical children.
 //! This is data for one original query, not a status, header, or acknowledgement.
-use super::{RootPage, Selection};
-use crate::smb::wire::query_fields::DirectoryClass;
-
-const DIRECTORY: u32 = 0x10;
+use super::{RootCursorEffect,RootPage,RootPendingToken,Selection};
+use crate::smb::{backend::{DIRECTORY_ATTRIBUTES,FILE_ATTRIBUTES,file_open::allocation},
+    wire::query_fields::DirectoryClass};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(in crate::smb::backend) enum EncodeFault { NotComplete, Resources, InconsistentPage }
@@ -17,9 +16,11 @@ pub(in crate::smb) struct FullRootRecords {
 }
 impl FullRootRecords {
     pub(in crate::smb) fn data(&self) -> &[u8] { &self.bytes }
+    pub(in crate::smb) fn pending(&self)->RootPendingToken<'_>{self.proposal.pending()}
+    pub(in crate::smb) fn into_effect(self)->RootCursorEffect{self.proposal.into_effect()}
 
     #[cfg(test)]
-    pub(in crate::smb::backend) fn written_for_fixture<H>(self, open: &mut crate::smb::backend::Held<'_, H>) -> bool {
+    pub(in crate::smb::backend) fn written_for_fixture<H>(self, open: &mut crate::smb::backend::Held<H>) -> bool {
         self.proposal.written_for_fixture(open)
     }
 }
@@ -52,7 +53,13 @@ impl RootPage {
             if self.class == Names {
                 bytes[8..12].copy_from_slice(&n.to_le_bytes());
             } else {
-                bytes[56..60].copy_from_slice(&DIRECTORY.to_le_bytes());
+                let attributes=if let Some(eof)=record.child.eof{
+                    if eof>i64::MAX as u64{return Err(EncodeFault::InconsistentPage);}
+                    bytes[40..48].copy_from_slice(&eof.to_le_bytes());
+                    bytes[48..56].copy_from_slice(&allocation(eof).to_le_bytes());
+                    FILE_ATTRIBUTES
+                }else{DIRECTORY_ATTRIBUTES};
+                bytes[56..60].copy_from_slice(&attributes.to_le_bytes());
                 bytes[60..64].copy_from_slice(&n.to_le_bytes());
                 let number = record.child.number.to_le_bytes();
                 match self.class {

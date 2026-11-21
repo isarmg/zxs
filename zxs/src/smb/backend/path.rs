@@ -16,6 +16,10 @@ impl From<FieldError> for NameError {
 pub(in crate::smb) struct TreeName(String);
 
 impl TreeName {
+    /// Reuse the same grammar on the bounded relative bytes of a checked
+    /// current CREATE. Its caller must still allocate the actual object.
+    pub(in crate::smb) fn create_relative(raw:&[u8])->Result<Self,NameError>{Self::decode(raw,NameUse::Create)}
+
     pub(in crate::smb) fn components(&self) -> impl DoubleEndedIterator<Item = &str> {
         self.0.split('\\')
     }
@@ -72,6 +76,7 @@ pub(in crate::smb) struct RenameSpelling {
     pub(in crate::smb) source_wire_id: [u8; 16],
     pub(in crate::smb) destination: TreeName,
     pub(in crate::smb) requested_replace: bool,
+    pub(in crate::smb) had_root_separator: bool,
 }
 
 impl RenameSpelling {
@@ -83,7 +88,8 @@ impl RenameSpelling {
     pub(in crate::smb) fn from_message(m: &Message<'_>) -> Result<Self, NameError> {
         let fields = m.basic_rename_name_field()?;
         Ok(Self { source_wire_id: fields.source_wire_id, requested_replace: fields.replace_if_exists,
-                  destination: TreeName::decode(fields.name, NameUse::RenameTarget)? })
+                  destination: TreeName::decode(fields.name, NameUse::RenameTarget)?,
+                  had_root_separator: fields.name.starts_with(&[b'\\', 0]) })
     }
 }
 
