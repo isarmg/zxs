@@ -5,6 +5,7 @@ import stat
 
 from .. import lifecycle, worktree
 from ..archive import read_managed_document, stamp
+from ..capacity import observed_available
 from ..document import PositionalDocument, archive_sha, check_relative, native_identity, relative_document
 from ..model import Commit, Rejected, check_id, new_id
 from ..private_candidates import CandidateDirectory
@@ -16,6 +17,37 @@ from .selection import Verification
 
 def _baseline(row):
     return (row["repo"], row["branch"], row["generation"], row["parent"], row["base_sha"])
+
+
+_SPACE_LIMITS = "只作当时提示，不预留；配额、inode、SQLite 和实际分配开销不能由此确定。以实际写入结果为准。"
+
+
+def _byte_count(size):
+    return f"{size:,} B" if size < (1 << 30) else f"{size:,} B（约 {size / (1 << 30):.2f} GiB）"
+
+
+def _reported_space(role, available, needed=None):
+    if available is None:
+        return f"{role}：当前无法读取原目录的可用字节。"
+    caution = "，可能不足" if available == 0 or (needed is not None and available < needed) else ""
+    return f"{role} 原目录当前报告普通用户可用 {_byte_count(available)}{caution}。"
+
+
+def _fresh_space_detail(same_filesystem, state_available, store_available, body):
+    stage = "STATE 捕获一份新 ZIP；如需上传，STORE 暂存另一份，原 STATE 候选仍保留。"
+    if body is None:
+        size = "不另行扫描工作目录；确认前整包大小未知。"
+    else:
+        size = f"每份 ZIP 的已审正文为 {_byte_count(body)}，另需 ZIP 结构。"
+    if same_filesystem:
+        overlap = ("上传时同卷两份同时占用。" if body is None else
+                   f"上传时同卷两份正文合计 {_byte_count(2 * body)}，另需两份 ZIP 结构。")
+        placement = overlap + "两个原目录的可用读数不能相加。"
+    else:
+        placement = "STATE 与 STORE 位于不同文件系统，分别核对各自的新增用量。"
+    return "\n".join(("容量预检（只读）：" + stage, size + placement,
+                      _reported_space("STATE", state_available, body),
+                      _reported_space("STORE", store_available, body), _SPACE_LIMITS))
 
 
 class _Receipt:
@@ -155,24 +187,48 @@ class CommitChoice:
 
     def _prepare(self):
         self._prepare_base(required=self.review_basis if self.review is not None else None)
+        space = self._fresh_space_hint()
         _, branch, gen, node, digest = self.base
         if gen == 0:
             self.check_first_slot()
             base_detail = f"尚无已提交的快照。此次将建立第 1 代，没有父节点。\n新槽：{self.live.store / self.first_slot}"
         else:
+            self._check_base_evidence()
             base_detail = f"基线：第 {gen} 代 · {node}\n原包 SHA-256：{digest}"
         if self.review is not None:
-            base_detail += (f"\n本次审阅：{self.review.entries:,} 项 · 普通文件正文 {self.review.data_bytes:,} B"
+            base_detail += (f"\n本次审阅：{self.review.entries:,} 项"
                             f"\n审阅所得整树 SHA-256：{self.review.tree}\n"
                             "只提交与此报告相同的路径、类型与正文；冻结不符则不登记、不发布。")
         return (f"工作树：{self.live.work}\n命令行 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
                 f"分支：{branch}\n{base_detail}\n"
-                f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n"
+                f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n{space}\n\n"
                 "提交整个工作目录，生成新的不可变归档。不改写原代，不自动解决同代冲突。"
                 "登记本次原待决前可请求停止；可能保留私有候选。开始登记后不能用取消撤回，只查原号。"
-                "捕获在原 STATE 中只写一份匿名整包，核验及同步后才用正式候选名登记；"
-                "上传时原候选与 STORE 暂存仍同时存在。请确认足够空间，不保证容量。"
+                "原 STATE 的匿名整包核验及同步后才用正式候选名登记。"
                 "此路径须为普通用户并能从本机内核 procfs 核验匿名文件，不使用具名兜底。")
+
+    def _fresh_space_hint(self):
+        self.qualify()
+        state_fd, store_fd = self.live.state_fd, self.store.fd
+        # Compare the device of the two already qualified ext4/XFS roots, not
+        # mount spelling or even mount ID (two whole-root views can share one fs).
+        # This groups demand only. Directory-relative project/RT accounting can
+        # report different availability even on the same filesystem.
+        same_filesystem = os.fstat(state_fd).st_dev == os.fstat(store_fd).st_dev
+        state, store = observed_available(state_fd), observed_available(store_fd)
+        self.qualify()
+        return _fresh_space_detail(same_filesystem, state, store,
+                                   None if self.review is None else self.review.data_bytes)
+
+    def _upload_space_hint(self, archive_bytes):
+        self.qualify()
+        store = observed_available(self.store.fd)
+        self.qualify()
+        # The private candidate is already present. No new STATE archive
+        # copy is needed; this is only the STORE directory's current report.
+        return (f"容量预检（只读）：如需上传，STORE 新增一份 {_byte_count(archive_bytes)} 的完整 ZIP 暂存；"
+                "不新增 STATE 归档副本。\n"
+                f"{_reported_space('STORE', store, archive_bytes)}\n{_SPACE_LIMITS}")
 
     def _open_base(self, *, held_mount=False):
         repo, branch, gen, node, digest = self.base

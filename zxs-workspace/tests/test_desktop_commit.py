@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -16,7 +17,7 @@ import zipfile
 from zipworkspace import lifecycle, live_candidate, private_stage, publish, worktree
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
-from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped, ReviewedTreeChanged
+from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped, ReviewedTreeChanged, _fresh_space_detail
 from zipworkspace.desktop.pending_fork import PendingFork
 from zipworkspace.desktop.selection import Selection, Verification, read_registered_baseline
 from zipworkspace.desktop.retry_choice import PendingRetry
@@ -35,6 +36,23 @@ def snapshot(path, marker=None, *, year=1980):
             out.writestr(entry, body)
         out.comment = marker.encode()
     return marker
+
+
+class CommitCapacityPresentation(unittest.TestCase):
+    def test_same_filesystem_counts_shared_logical_demand_not_the_sum_of_two_free_readings(self):
+        detail = _fresh_space_detail(True, 21, 30, 20)
+        self.assertIn("同卷两份正文合计 40 B", detail)
+        self.assertIn("不能相加", detail)
+        self.assertIn("STATE 原目录当前报告普通用户可用 21 B", detail)
+        self.assertIn("STORE 原目录当前报告普通用户可用 30 B", detail)
+        self.assertNotIn("51 B", detail)
+
+    def test_separate_filesystems_do_not_compare_each_volume_to_two_copies(self):
+        detail = _fresh_space_detail(False, 26, 19, 20)
+        self.assertIn("不同文件系统", detail)
+        self.assertNotIn("40 B", detail)
+        self.assertIn("STATE 原目录当前报告普通用户可用 26 B。", detail)
+        self.assertIn("STORE 原目录当前报告普通用户可用 19 B，可能不足。", detail)
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "real admitted Linux ext4/XFS required")
@@ -412,6 +430,62 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         self.assertIsNone(evidence.held)
         return report, choice
 
+    def test_capacity_at_fresh_consent_samples_only_each_original_root_and_keeps_unknown_distinct(self):
+        (self.tree / "story").write_bytes(b"same data in both complete archive copies")
+        _, reviewed = self.reviewed_choice()
+        ordinary = self.choice(review=False)
+        before_state, before_store = set(self.state.iterdir()), set(self.store.iterdir())
+        zero = SimpleNamespace(f_frsize=4096, f_blocks=10, f_bfree=0, f_bavail=0)
+
+        def sample(choice, fd):
+            if fd == choice.live.state_fd:
+                self.assertTrue(os.path.samestat(os.fstat(fd), self.state.stat()))
+                return zero
+            self.assertEqual(fd, choice.live.store_fd)
+            self.assertTrue(os.path.samestat(os.fstat(fd), self.store.stat()))
+            raise OSError(errno.EIO, "test: no space reading")
+
+        for decision in (ordinary, reviewed):
+            with self.subTest(reviewed=decision is reviewed), \
+                 patch.object(os, "fstatvfs", side_effect=lambda fd: sample(decision, fd)) as stats, \
+                 patch.object(lifecycle, "observe_held", side_effect=AssertionError("no new WORK scan")), \
+                 patch.object(live_candidate, "capture_live", side_effect=AssertionError("not authorized yet")), \
+                 patch.object(publish, "_new_upload", side_effect=AssertionError("not authorized yet")), \
+                 patch.object(os, "fsync", side_effect=AssertionError("capacity prep is not a sync")):
+                detail = decision.prepare()
+            self.assertEqual([call.args for call in stats.call_args_list],
+                             [(decision.live.state_fd,), (decision.live.store_fd,)])
+            self.assertIn("STATE 原目录当前报告普通用户可用 0 B，可能不足", detail)
+            self.assertIn("STORE：当前无法读取原目录的可用字节", detail)
+            self.assertTrue(decision.ready)
+            self.assertFalse(decision.used)
+            if decision is ordinary:
+                self.assertIn("确认前整包大小未知", detail)
+            else:
+                self.assertIn(f"每份 ZIP 的已审正文为 {reviewed.review.data_bytes} B", detail)
+                self.assertIn(f"同卷两份正文合计 {2 * reviewed.review.data_bytes} B", detail)
+                self.assertIn(reviewed.review.tree, detail)
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(set(self.state.iterdir()), before_state)
+        self.assertEqual(set(self.store.iterdir()), before_store)
+
+    def test_capacity_sample_is_not_a_proof_after_store_name_replacement(self):
+        decision = self.choice(review=False)
+
+        def replace_store(fd):
+            self.assertIn(fd, (decision.live.state_fd, decision.live.store_fd))
+            if fd == decision.live.store_fd:
+                self.store.rename(self.root / "still-held-store")
+                self.store.mkdir()
+            return SimpleNamespace(f_frsize=4096, f_blocks=8, f_bfree=7, f_bavail=6)
+
+        with patch.object(os, "fstatvfs", side_effect=replace_store), self.assertRaises(Rejected):
+            decision.prepare()
+        self.assertFalse(decision.ready)
+        self.assertFalse(decision.used)
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(list(self.store.iterdir()), [])
+
     def test_reviewed_commit_takes_the_original_report_before_close_and_freezes_exact_content(self):
         from zipworkspace.desktop import commit_choice
         (self.tree/"story").write_bytes(b"reviewed contents")
@@ -510,6 +584,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
             deliver()
             confirm.assert_called_once()
             self.assertIn(job.review.tree, confirm.call_args.args[2])
+            self.assertIn("容量预检（只读）", confirm.call_args.args[2])
             self.assertIn("停止所有工作树写入者", confirm.call_args.kwargs["attestation"])
             self.assertFalse(queue)
             self.assertIsNone(pane.commits.running)
@@ -1116,8 +1191,15 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         retry = self.retry_choice(original)
         with self.assertRaises(Rejected): PendingRetry(original)
         with self.assertRaises(Rejected): retry.run()
-        with patch.object(os,"fsync",side_effect=AssertionError("read-only preparation cannot sync")):
-            self.assertIn("正式槽不存在",retry.prepare())
+        zero = SimpleNamespace(f_frsize=4096, f_blocks=10, f_bfree=0, f_bavail=0)
+        with patch.object(os, "fstatvfs", return_value=zero) as stats, \
+             patch.object(os, "fsync", side_effect=AssertionError("read-only preparation cannot sync")):
+            detail = retry.prepare()
+        stats.assert_called_once_with(retry.live.store_fd)
+        self.assertIn("正式槽不存在", detail)
+        self.assertIn(f"STORE 新增一份 {(self.state / (original.operation + '.zxs')).stat().st_size:,} B 的完整 ZIP", detail)
+        self.assertIn("不新增 STATE 归档副本", detail)
+        self.assertIn("STORE 原目录当前报告普通用户可用 0 B，可能不足", detail)
         self.assertEqual(retry.operation,original.operation)
         (self.tree/"story").write_bytes(b"edits after freezing are not part of retry")
         self.assertIsNone(retry.ack_fd)
@@ -1139,8 +1221,11 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         for replaced in (False,True):
             with self.subTest(replaced=replaced):
                 retry = self.retry_choice(original)
-                with patch.object(os,"fsync",side_effect=AssertionError("preview is not a durability barrier")):
-                    self.assertIn("只确认这个原文件",retry.prepare())
+                with patch.object(os, "fstatvfs", side_effect=AssertionError("no upload-capacity gate for ACK_ONLY")), \
+                     patch.object(os, "fsync", side_effect=AssertionError("preview is not a durability barrier")):
+                    detail = retry.prepare()
+                self.assertIn("只确认这个原文件", detail)
+                self.assertIn("不新增归档副本；仍须实际同步并记录原回执", detail)
                 self.assertIsNotNone(retry.ack_fd)
                 kept = self.root/"confirmed-original.zxs"; target.rename(kept)
                 if replaced: target.write_bytes(kept.read_bytes())

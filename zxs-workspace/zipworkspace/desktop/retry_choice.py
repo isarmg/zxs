@@ -56,11 +56,13 @@ class PendingRetry(CommitChoice):
         except Conflict:
             self.origin.conflict = True
             raise
+        existing = self.ack_fd is not None
+        space = ("容量：只核认已核对的原正式槽，不新增归档副本；仍须实际同步并记录原回执。"
+                 if existing else self._upload_space_hint(observed[2]))
         self._pending()  # Expensive archive reads never run with a SQLite lock held.
         self.check_candidate()
         self._check_base_evidence()
         if self.registered_source: self._check_registered_mount()
-        existing = self.ack_fd is not None
         action = ("该正式槽已是核验过的原归档。在 STORE 中只确认这个原文件，不上传；它若消失或被换就停止。"
                   if existing else
                   "核验时正式槽不存在。只用这份已冻结的原候选尝试不可覆盖发布；相同结果只核认，不同结果不覆盖。")
@@ -74,7 +76,7 @@ class PendingRetry(CommitChoice):
         return (f"原工作树：{self.live.work}\n原 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
                 f"原操作：{self.operation}\n冻结归档 SHA-256：{self.digest}\n"
                 f"当前分支：{self.base[1]} · {base}\n目标分支：{self.marker.branch} · 第 {self.marker.generation} 代\n"
-                f"正式槽：{self.marker.filename}\n\n{action}\n{effect}\n"
+                f"正式槽：{self.marker.filename}\n\n{action}\n{space}\n{effect}\n"
                 "不读取或冻结当前工作文件，后来保存的编辑不会进入这笔原操作。")
 
     @contextmanager
