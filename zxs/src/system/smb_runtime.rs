@@ -10,6 +10,8 @@ use std::{fs::File,io,os::{fd::{AsRawFd,FromRawFd,OwnedFd},unix::fs::{FileExt,Me
 mod attempts;
 #[path="smb_trees.rs"]
 mod trees;
+#[path="smb_reference_capacity.rs"]
+mod reference_capacity;
 #[path="smb_first_plan.rs"]
 mod first;
 

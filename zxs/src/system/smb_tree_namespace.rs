@@ -1,8 +1,9 @@
 //! One authenticated SMB business root. Root listing uses only the original
 //! plan and current SQL; no selected drive has to be online merely to list it.
 use super::{InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,os,serve_folder};
+use super::super::reference_capacity::{Reference,pick_reference};
 use super::super::super::share_mode::{Mode,Setting};
-use crate::{display,fs::directory_birth::DirectoryParent,system::reader::{Catalog,volume::{Capacity,CapacityOrigin,OrdinaryRoot}}};
+use crate::{display,fs::directory_birth::DirectoryParent,system::reader::{Catalog,volume::{Capacity,CapacityOrigin}}};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering},thread};
 
 const NAME:usize=255;
@@ -100,7 +101,6 @@ pub(super) fn start_capacity<'scope,'env:'scope>(
     }){*slot=Some(job);}
 }
 
-struct Reference<'r>{root:OrdinaryRoot<'r>,grant:Setting,bytes:Capacity,writable:bool}
 impl Reference<'_>{
     fn confirm(&self,session:&SmbSession<'_>,catalog:&Catalog,validate:impl FnOnce()->io::Result<()>,
         live:impl FnOnce()->io::Result<()>)->io::Result<()>{
@@ -117,26 +117,6 @@ impl Reference<'_>{
     }
 }
 
-/// Sample only authorized ordinary candidates, never an aggregate volume.
-/// Plan order is stable by original VolumeId inside each class. A SQL RW
-/// entry on a read-only mount is only a fallback, never RW.
-fn pick_reference<'r>(src:&'r InitialReader,catalog:&Catalog,mut choices:Vec<Setting>,
-    can_write:bool,live:impl Fn()->io::Result<()>)->io::Result<Option<Reference<'r>>>{
-    choices.retain(|s|s.mode!=Mode::Disabled);
-    if can_write{choices.sort_by_key(|s|s.mode!=Mode::ReadWrite);}
-    let mut chosen=None;
-    for grant in choices{
-        live()?;
-        if chosen.is_some() && grant.mode!=Mode::ReadWrite{break;}
-        let Ok(root)=OrdinaryRoot::for_body(src,catalog,grant.volume)else{continue;};
-        let Ok(bytes)=root.sampled_capacity()else{continue;};
-        if bytes.total<4096{continue;}
-        let writable=can_write&&grant.mode==Mode::ReadWrite&&!bytes.read_only;
-        if writable||chosen.is_none(){chosen=Some(Reference{root,grant,bytes,writable});}
-        if writable||!can_write{break;}
-    }
-    Ok(chosen)
-}
 fn reference_capacity(site:Site<'_>,origin:&TreeOrigin,answer:&OwnedFd,can_write:bool)->io::Result<()>{
     let fd=answer.as_raw_fd();
     let current=||->io::Result<()>{
@@ -275,6 +255,7 @@ pub(super) fn serve(site:Site<'_>,origin:TreeOrigin,root:OwnedFd)->io::Result<()
 #[cfg(test)]
 mod tests{
     use super::*;
+    use crate::system::reader::volume::OrdinaryRoot;
     #[test]
     #[ignore="source-only: fresh SQLite fixture and unprivileged isolated ordinary F; no listener"]
     fn real_reference_uses_one_confirmed_volume_and_rejects_a_late_change_of_grant(){
