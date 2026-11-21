@@ -5,7 +5,7 @@ use super::{Error,Result,create_fields::{Disposition,MaximumAccessQuery},io_repl
 use crate::smb::{
     backend::{CloseCompletion,FS_SIZE_BYTES,PreparedDisposition,PreparedOrdinaryRename,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRetainedRestore,tree_connect::QualifiedTreeConnect},
     connection::sessions::ordinary::{
-        BrowsePart,ClosedOpen,DirectoryRefusal,ExitPlan,FsInfoRefusal,PendingAttributeTag,PendingFileStandard,PendingInternal,PendingOpen,PendingRootAttributes,PendingRootSize,ProbePart,ProposedTreeId,
+        BrowsePart,ClosedOpen,DirectoryRefusal,ExitPlan,FsInfoRefusal,PendingAttributeTag,PendingFileAccess,PendingFileStandard,PendingInternal,PendingOpen,PendingRootAttributes,PendingRootSize,ProbePart,ProposedTreeId,
         FileActionPart,PendingRename,PendingWrite,ReadRefusal,RenameRefusal,VerifiedMember,WriteRefusal,
     },
 };
@@ -249,6 +249,15 @@ impl UnsignedSmall {
         let (status,body)=file_attribute_tag_body(output,attributes,tag);
         let mut draft=Self::standalone(member,pending.sid(),QUERY_INFO,status,64+body.len())?;
         draft.raw[64..64+body.len()].copy_from_slice(&body);Ok(draft)
+    }
+    pub(in crate::smb) fn file_access(member:&VerifiedMember<'_,'_>,pending:&PendingFileAccess)->Result<Self>{
+        if !pending.matches(member){return Err(Error::InvalidRequest);}
+        let info=member.message().query_info(member.max_transact()).map_err(|_|Error::InvalidRequest)?;
+        let (output,grant)=pending.values();
+        if info.class!=InfoClass::File(FileClass::Access)||info.output_bytes!=output{return Err(Error::InvalidRequest);}
+        let (status,body,len)=file_access_body(output,grant);
+        let mut draft=Self::standalone(member,pending.sid(),QUERY_INFO,status,64+len)?;
+        draft.raw[64..64+len].copy_from_slice(&body[..len]);Ok(draft)
     }
     pub(in crate::smb) fn internal_info(member:&VerifiedMember<'_,'_>,pending:&PendingInternal)->Result<Self>{
         if !pending.matches(member){return Err(Error::InvalidRequest);}
@@ -618,6 +627,18 @@ pub(super) fn information_too_small(raw:&mut [u8]){
     // 3.1.1 default error context: exactly one eight-byte header
     // (both ErrorDataLength and ErrorId zero), no payload.
     raw[..16].fill(0);raw[0]=9;raw[2]=1;raw[4]=8;
+}
+// MS-FSCC §2.4.1 and MS-FSA §2.1.5.12.1: one unsigned LE ACCESS_MASK.
+fn file_access_body(output:u32,grant:u32)->(u32,[u8;16],usize){
+    let mut bytes=[0;16];bytes[0]=9;
+    if output<4{
+        information_too_small(&mut bytes);
+        return (0xc000_0004,bytes,16);
+    }
+    bytes[2..4].copy_from_slice(&72u16.to_le_bytes());
+    bytes[4..8].copy_from_slice(&4u32.to_le_bytes());
+    bytes[8..12].copy_from_slice(&grant.to_le_bytes());
+    (0,bytes,12)
 }
 // MS-FSCC §2.4.27: one little-endian file number.
 fn internal_body(output:u32,number:u64)->(u32,[u8;16]){

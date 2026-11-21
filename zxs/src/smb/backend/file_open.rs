@@ -3,6 +3,7 @@
 //! FileId belongs to the caller's actual Session.OpenTable.
 use super::{BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
     attribute_tag::PreparedAttributeTag,
+    file_access::PreparedFileAccess,
     disposition::{DELETE_ACCESS,DELETE_ON_CLOSE,DispositionError,PreparedDisposition,Snapshot},
     io::{CloseCompletion,ReadCompletion,ReadFault,seal_read},
     path::{NameError,TreeName},writable_file_open::{self,WritableFileOpen}};
@@ -275,6 +276,14 @@ impl FileOpen {
     }
     pub(in crate::smb) fn require_attribute_tag(&self,tree:&RustRoot,proof:&PreparedAttributeTag)->stdio::Result<()>{
         proof.require(&self.held,|scope|self.held.original.require_current(tree,scope))
+    }
+    pub(in crate::smb) fn prepare_file_access(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
+        ->Result<PreparedFileAccess,FileStandardError>{
+        PreparedFileAccess::prepare(&self.held,Object::File(tree.pool(),self.held.original.file()),member,
+            |scope|self.require_current(tree,scope))
+    }
+    pub(in crate::smb) fn require_file_access(&self,tree:&RustRoot,proof:&PreparedFileAccess)->stdio::Result<()>{
+        proof.require(&self.held,Object::File(tree.pool(),self.held.original.file()),|scope|self.require_current(tree,scope))
     }
     pub(in crate::smb) fn prepare_normalized_name(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
         ->Result<PreparedFileName,FileStandardError>{

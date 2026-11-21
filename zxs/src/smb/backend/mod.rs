@@ -15,6 +15,8 @@ use disposition::DeleteState;
 pub(in crate::smb) use disposition::{DispositionError,PreparedDisposition};
 mod root_open;
 mod file_open;
+mod file_access;
+pub(in crate::smb) use file_access::PreparedFileAccess;
 mod attribute_tag;
 pub(in crate::smb) use attribute_tag::{DIRECTORY_ATTRIBUTES,FILE_ATTRIBUTES,PreparedAttributeTag};
 pub(crate) use file_open::{FileRenameTarget,OrdinaryMoveAdmission,OrdinaryRenameAdmission};

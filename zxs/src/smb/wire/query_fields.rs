@@ -85,6 +85,7 @@ pub(in crate::smb) enum FileClass {
     Basic,
     Standard,
     Internal,
+    Access,
     All,
     NetworkOpen,
     AttributeTag,
@@ -115,13 +116,14 @@ impl InfoClass {
                 4 => FileClass::Basic,
                 5 => FileClass::Standard,
                 6 => FileClass::Internal,
+                8 => FileClass::Access,
                 18 => FileClass::All,
                 34 => FileClass::NetworkOpen,
                 35 => FileClass::AttributeTag,
                 48 => FileClass::NormalizedName,
                 // Documented MS-FSCC §2.4 classes outside this parser's
                 // profile; 0x64 is the reserved MS-SMB2 FILE class.
-                1..=3 | 7..=17 | 19..=29 | 31..=33 | 36..=40 | 44..=46 |
+                1..=3 | 7 | 9..=17 | 19..=29 | 31..=33 | 36..=40 | 44..=46 |
                 50 | 54 | 59 | 60 | 64 | 65 | 78..=81 | 0x64 => return Err(NotSupported),
                 _ => return Err(InvalidInfoClass),
             })),

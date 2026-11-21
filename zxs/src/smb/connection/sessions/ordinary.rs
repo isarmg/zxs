@@ -14,7 +14,7 @@ pub(in crate::smb) use outbound::restore::{PendingRename,RenameRefusal};
 pub(in crate::smb) use outbound::file_read::{PendingRead,ReadRefusal};
 pub(in crate::smb) use outbound::file_write::{PendingWrite,WriteRefusal};
 pub(in crate::smb::connection) use outbound::ordinary_move::MoveEscrow;
-pub(in crate::smb) use outbound::root_attributes::{FsInfoRefusal,PendingAttributeTag,PendingFileName,PendingFileStandard,PendingInternal,PendingRootAttributes,PendingRootSize};
+pub(in crate::smb) use outbound::root_attributes::{FsInfoRefusal,PendingAttributeTag,PendingFileAccess,PendingFileName,PendingFileStandard,PendingInternal,PendingRootAttributes,PendingRootSize};
 mod authority;
 pub(crate) use authority::RustSessionWitness;
 use super::{Phase,Registration};

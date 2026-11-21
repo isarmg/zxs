@@ -4,7 +4,7 @@ use super::{CheckedBatch,Connection,Fault,Payload,Result,RustSessionWitness,Sync
     root_io::RequestSlot};
 use super::super::opens::Opened;
 use crate::smb::{
-    backend::{FileStandardError,PreparedAttributeTag,PreparedDirectoryStandard,PreparedFileName,PreparedFileStandard,PreparedRetainedStandard,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedWriterName,PreparedWriterStandard,RootFsError},
+    backend::{FileStandardError,PreparedAttributeTag,PreparedDirectoryStandard,PreparedFileAccess,PreparedFileName,PreparedFileStandard,PreparedRetainedStandard,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedWriterName,PreparedWriterStandard,RootFsError},
     wire::{Error as WireError,file_name_reply::UnsignedFileName,fixed_reply::{FileStandardFields,FsInfoFailure},
         io_fields::{IoFieldError,OpenReference,WireOpenId},message::{Message,RELATED,Routing},
         query_fields::{FileClass,FsClass,InfoClass,QueryError}},
@@ -66,6 +66,19 @@ impl CheckedBatch<'_,'_>{
                     let pending=PendingInternal{original,ids,prepared:InternalPrepared::Root(prepared)};
                     let draft=UnsignedSmall::internal_info(&member,&pending).map_err(|_|Fault::WrongReply)?;
                     (PendingInfo::Internal(pending),draft)
+                },
+                (open @ (Opened::File(_)|Opened::Writer(_)),InfoClass::File(FileClass::Access))=>{
+                    let prepared=match open{
+                        Opened::File(f)=>f.prepare_file_access(tree,&member),
+                        Opened::Writer(f)=>f.prepare_file_access(tree,&member),
+                        _=>return Err(Fault::SessionState),
+                    };
+                    let prepared=match prepared{
+                        Ok(v)=>v,Err(e)=>return self.fs_info_refusal(m,sid,file_failure(e)?),
+                    };
+                    let pending=PendingFileAccess{original,ids,prepared};
+                    let draft=UnsignedSmall::file_access(&member,&pending).map_err(|_|Fault::WrongReply)?;
+                    (PendingInfo::Access(pending),draft)
                 },
                 (open @ (Opened::File(_)|Opened::Writer(_)),InfoClass::File(FileClass::Internal))=>{
                     let scope=member.rust_session_witness()?;
@@ -342,15 +355,36 @@ impl PendingAttributeTag{
         }.map_err(|_|Fault::SessionState)
     }
 }
+/// This reply is bound to the original paid slot and its exact grant at both
+/// transport cuts. It has no cursor, write-stage receipt or new share vote.
+#[must_use]
+pub(in crate::smb) struct PendingFileAccess{original:RequestSlot,ids:WireOpenId,prepared:PreparedFileAccess}
+impl PendingFileAccess{
+    pub(in crate::smb) fn sid(&self)->NonZeroU64{self.original.sid}
+    pub(in crate::smb) fn matches(&self,m:&VerifiedMember<'_,'_>)->bool{
+        m.ordinal()==0&&self.original.matches(m,self.sid())&&
+            m.message().query_info_target().is_ok_and(|id|id==OpenReference::Explicit(self.ids))
+    }
+    pub(in crate::smb) fn values(&self)->(u32,u32){self.prepared.values()}
+    fn check(&self,c:&Connection)->Result<()>{
+        let tree=self.original.root(c)?;
+        let slot=c.open_table(self.sid())?.find(self.ids).filter(|s|s.tree()==self.original.tree).ok_or(Fault::SessionState)?;
+        match slot.object(){
+            Opened::File(open)=>open.require_file_access(tree,&self.prepared),
+            Opened::Writer(open)=>open.require_file_access(tree,&self.prepared),
+            _=>return Err(Fault::SessionState),
+        }.map_err(|_|Fault::SessionState)
+    }
+}
 enum PendingInfo{
     Root(PendingRootAttributes),Size(PendingRootSize),Internal(PendingInternal),File(PendingFileStandard),
-    AttributeTag(PendingAttributeTag),
+    AttributeTag(PendingAttributeTag),Access(PendingFileAccess),
 }
 impl PendingInfo{
     fn check(&self,c:&Connection)->Result<()>{
         match self{
             Self::Root(v)=>v.check(c),Self::Size(v)=>v.check(c),Self::Internal(v)=>v.check(c),
-            Self::File(v)=>v.check(c),Self::AttributeTag(v)=>v.check(c),
+            Self::File(v)=>v.check(c),Self::AttributeTag(v)=>v.check(c),Self::Access(v)=>v.check(c),
         }
     }
 }
