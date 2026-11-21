@@ -353,6 +353,8 @@ fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_resto
     use super::super::retained_read::KeepReader;
     let (normal,_)=retained.open(deleted.op,"Report.txt",KeepReader::WhileRetained).unwrap();
     let (opened_before_restore,_)=retained.open(deleted.op,"Report.txt",KeepReader::ShareDelete).unwrap();
+    assert_eq!(normal.current_standard_eof().unwrap(),4);
+    assert_eq!(opened_before_restore.current_standard_eof().unwrap(),4);
     let body=normal.smb_read_window(0,4,|b|Ok(b.to_vec())).unwrap();
     assert_eq!(body,b"B\0K\0");
     let mut wrong_generation=deleted.to.clone();wrong_generation.generation+=1;
@@ -362,6 +364,8 @@ fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_resto
     assert_eq!(tree.transfer(&return_plan,restored.op,||Ok(())).unwrap(),restored);
     assert_eq!(restored.to.file,file);assert_eq!(select(),restored.to);
     assert!(retained.open(deleted.op,"Report.txt",KeepReader::ShareDelete).is_err());
+    assert_eq!(normal.current_standard_eof().unwrap_err().kind(),io::ErrorKind::NotFound);
+    assert_eq!(opened_before_restore.current_standard_eof().unwrap_err().kind(),io::ErrorKind::NotFound);
     assert!(normal.smb_read_window::<()>(0,4,|_|panic!("stale non-share-delete reader was delivered")).is_err());
     assert_eq!(opened_before_restore.smb_read_window(0,4,|b|Ok(b.to_vec())).unwrap(),b"B\0K\0");
     let mut list=tree.root_files().unwrap();

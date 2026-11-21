@@ -4,7 +4,7 @@ use super::{CheckedBatch,Connection,Fault,Payload,Result,RustSessionWitness,Sync
     root_io::RequestSlot};
 use super::super::opens::Opened;
 use crate::smb::{
-    backend::{FileStandardError,PreparedAttributeTag,PreparedDirectoryStandard,PreparedFileName,PreparedFileStandard,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedWriterStandard,RootFsError},
+    backend::{FileStandardError,PreparedAttributeTag,PreparedDirectoryStandard,PreparedFileName,PreparedFileStandard,PreparedRetainedStandard,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedWriterStandard,RootFsError},
     wire::{Error as WireError,file_name_reply::UnsignedFileName,fixed_reply::{FileStandardFields,FsInfoFailure},
         io_fields::{IoFieldError,OpenReference,WireOpenId},message::{Message,RELATED,Routing},
         query_fields::{FileClass,FsClass,InfoClass,QueryError}},
@@ -85,11 +85,12 @@ impl CheckedBatch<'_,'_>{
                     let draft=UnsignedSmall::internal_info(&member,&pending).map_err(|_|Fault::WrongReply)?;
                     (PendingInfo::Internal(pending),draft)
                 },
-                (open @ (Opened::Directory(_)|Opened::File(_)|Opened::Writer(_)),InfoClass::File(FileClass::Standard))=>{
+                (open @ (Opened::Directory(_)|Opened::File(_)|Opened::Writer(_)|Opened::Retained(_)),InfoClass::File(FileClass::Standard))=>{
                     let prepared=match open{
                         Opened::Directory(d)=>d.prepare_standard(tree,&member).map(StandardPrepared::Directory),
                         Opened::File(f)=>f.prepare_standard(tree,&member).map(StandardPrepared::Reader),
                         Opened::Writer(f)=>f.prepare_standard(tree,&member).map(StandardPrepared::Writer),
+                        Opened::Retained(f)=>f.prepare_standard(tree,&member).map(StandardPrepared::Retained),
                         _=>return Err(Fault::SessionState),
                     };
                     let prepared=match prepared{
@@ -257,7 +258,10 @@ impl PendingInternal{
 }
 #[must_use]
 pub(in crate::smb) struct PendingFileStandard{original:RequestSlot,ids:WireOpenId,prepared:StandardPrepared}
-enum StandardPrepared{Directory(PreparedDirectoryStandard),Reader(PreparedFileStandard),Writer(PreparedWriterStandard)}
+enum StandardPrepared{
+    Directory(PreparedDirectoryStandard),Reader(PreparedFileStandard),Writer(PreparedWriterStandard),
+    Retained(PreparedRetainedStandard),
+}
 impl PendingFileStandard{
     pub(in crate::smb) fn sid(&self)->NonZeroU64{self.original.sid}
     pub(in crate::smb) fn matches(&self,m:&VerifiedMember<'_,'_>)->bool{
@@ -269,6 +273,7 @@ impl PendingFileStandard{
             StandardPrepared::Directory(p)=>return (p.output(),FileStandardFields::Directory),
             StandardPrepared::Reader(p)=>p.values(),
             StandardPrepared::Writer(p)=>p.values(),
+            StandardPrepared::Retained(p)=>p.values(),
         };
         (output,FileStandardFields::File{allocation,eof,delete_pending})
     }
@@ -279,6 +284,7 @@ impl PendingFileStandard{
             (StandardPrepared::Directory(p),Opened::Directory(open))=>p.require_current(open,tree),
             (StandardPrepared::Reader(p),Opened::File(open))=>p.require_current(open,tree),
             (StandardPrepared::Writer(p),Opened::Writer(open))=>p.require_current(open,tree),
+            (StandardPrepared::Retained(p),Opened::Retained(open))=>p.require_current(open,tree),
             _=>return Err(Fault::SessionState),
         }.map_err(|_|Fault::SessionState)
     }

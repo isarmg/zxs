@@ -206,6 +206,12 @@ impl RustRetainedFile{
     pub(crate) fn require_current(&self,tree:&RustRoot,scope:&RustSessionWitness)->io::Result<()>{
         self.with_read(tree,scope,|at|at.finish(&Used::default()))
     }
+    pub(crate) fn current_standard_eof(&self,tree:&RustRoot,scope:&RustSessionWitness)->io::Result<u64>{
+        if !scope.is_query_info(){return Err(denied());}
+        // QUERY_INFO can only describe the exact current R placement.
+        // with_read never uses the old SHARE_DELETE view for this command.
+        self.with_read(tree,scope,|at|at.standard_eof())
+    }
     pub(crate) fn read(&self,tree:&RustRoot,scope:&RustSessionWitness,offset:u64,count:u32)
         ->io::Result<(Vec<u8>,RustRetainedReadProof)>{
         if !scope.is_read(){return Err(denied());}

@@ -157,6 +157,10 @@ impl Reader<'_,'_,'_>{
     }
     pub(super) fn size(&self)->u64{self.original.view.map_or(0,|r|r.record.logical())}
     pub(super) fn revision(&self)->u64{self.original.view.map_or(0,|r|r.record.key().revision)}
+    #[cfg(test)]
+    pub(super) fn current_standard_eof(&self)->io::Result<u64>{
+        self.drive.with_site(|site|ReadAt{site,file:&self.original,previous_after_restore:false}.standard_eof())
+    }
     fn with_read<T>(&self,action:impl FnOnce(ReadAt<'_>)->io::Result<T>)->io::Result<T>{
         self.drive.with_site(|site|action(ReadAt{site,file:&self.original,previous_after_restore:true}))
     }
@@ -203,6 +207,22 @@ impl ReadAt<'_>{
         let src=self.source();src.at(|db,c|self.check_at(db,&c))?;
         self.physical(true)?;children.require(self.file.hold.directory())?;
         src.at(|db,c|self.check_at(db,&c))
+    }
+    // Class 5 describes a current retained link, not a previously open
+    // byte view which may lawfully outlive a successful restore.
+    fn standard_eof(&self)->io::Result<u64>{
+        if self.previous_after_restore{return Err(denied());}
+        let select=|db:&Connection,c:&Catalog|{
+            self.check_at(db,c)?;
+            // Match the complete selected ReadRecord, including genuine
+            // absence of a first SAVE; an older record of equal EOF is not it.
+            let view=work_record::selected(db,&self.file.place.birth)?;
+            if view!=self.file.view{return Err(io::ErrorKind::WouldBlock.into());}
+            Ok(view.map_or(0,|r|r.record.logical()))
+        };
+        let src=self.source();src.at(|db,c|select(db,&c))?;
+        self.physical(true)?;
+        src.at(|db,c|select(db,&c))
     }
     fn range_evidence(&self,offset:u64,n:u64,mut out:impl Write)->io::Result<Used>{
         if offset.checked_add(n).is_none_or(|end|end>self.file.view.map_or(0,|r|r.record.logical())){return Err(invalid("range outside exact retained EOF"));}

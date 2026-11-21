@@ -5,16 +5,17 @@
 use super::{
     BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
     directory_open::DirectoryOpenError as OpenError,
-    file_open::{EXECUTE,FILE_READ_RIGHTS,FileCloseError,FileReadError,MAXIMUM_ALLOWED,READ_DATA,allocation},
+    file_open::{EXECUTE,FILE_READ_RIGHTS,FileCloseError,FileReadError,FileStandardError,MAXIMUM_ALLOWED,READ_DATA,allocation},
     io::{CloseCompletion,ReadCompletion,ReadFault,seal_read},
     path::{NameError,TreeName},
 };
 use crate::{
     smb::{RustSessionWitness,connection::sessions::ordinary::VerifiedMember,
-        wire::{create_fields::{CurrentName,Disposition,MaximumAccessQuery},set_info::RenameRequest}},
+        wire::{create_fields::{CurrentName,Disposition,MaximumAccessQuery},io_fields::OpenReference,
+            message::{RELATED,Routing},query_fields::{FileClass,InfoClass},set_info::RenameRequest}},
     system::reader::smb::{RustRetainedDirectory,RustRetainedFile,RustRetainedKind,RustRetainedReadProof,RustRetainedRestore,runtime::{RustRoot,RustRootStamp}},
 };
-use std::{convert::Infallible,io,sync::Arc};
+use std::{convert::Infallible,io,sync::{Arc,Weak}};
 
 const DIRECTORY:u32=1;
 const NON_DIRECTORY:u32=0x40;
@@ -180,6 +181,20 @@ impl RetainedOpen{
             },
         }
     }
+    pub(in crate::smb) fn prepare_standard(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
+        ->Result<PreparedRetainedStandard,FileStandardError>{
+        let raw=member.message();
+        let fields=raw.query_info(member.max_transact()).map_err(FileStandardError::Fields)?;
+        if fields.class!=InfoClass::File(FileClass::Standard)||member.ordinal()!=0||raw.header.flags&RELATED!=0||
+            !matches!(raw.header.routing,Routing::Sync{..})||raw.raw.get(20..24)!=Some(&[0;4][..])||
+            !matches!(raw.query_info_target(),Ok(OpenReference::Explicit(_))){return Err(FileStandardError::NotSupported);}
+        let Kind::File(file)=&self.0 else{return Err(FileStandardError::NotSupported);};
+        let scope=member.rust_session_witness().map_err(FileStandardError::Session)?;
+        // Class 5 needs no additional READ_ATTRIBUTES, READ_DATA or DELETE.
+        // The signed sender has already resolved both halves of this OPEN.
+        let eof=current_standard_eof(file,tree,&scope).map_err(FileStandardError::Original)?;
+        Ok(PreparedRetainedStandard{open:Arc::downgrade(&file._slot.identity),scope,output:fields.output_bytes,eof})
+    }
     pub(in crate::smb) fn read(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>,room:usize)
         ->Result<PreparedRetainedRead,FileReadError>{
         let request=member.message().read_request(member.max_read()).map_err(FileReadError::Fields)?;
@@ -216,6 +231,34 @@ impl RetainedOpen{
             Kind::File(file)=>file.close_with(mode,|_,_|Ok::<_,Infallible>(None)),
         };
         Ok(result.unwrap_or_else(|impossible|match impossible{}))
+    }
+}
+
+// SQL's one current placement and the already held R prove one logical
+// name. An actual ordinary deletion mark (which R never creates) cannot
+// coexist with the positively verified answer.
+fn current_standard_eof(file:&Held<RustRetainedFile>,tree:&RustRoot,scope:&RustSessionWitness)->io::Result<u64>{
+    let slot=&file._slot;
+    if !slot.bound||!slot.retained||slot.released||slot.object!=Object::File(tree.pool(),file.original.file()){
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    if slot.pending_delete()?{return Err(io::ErrorKind::WouldBlock.into());}
+    let eof=file.original.current_standard_eof(tree,scope)?;
+    if slot.pending_delete()?{return Err(io::ErrorKind::WouldBlock.into());}
+    Ok(eof)
+}
+
+#[must_use]
+pub(in crate::smb) struct PreparedRetainedStandard{open:Weak<()>,scope:RustSessionWitness,output:u32,eof:u64}
+impl PreparedRetainedStandard{
+    pub(in crate::smb) fn values(&self)->(u32,u64,u64,bool){
+        (self.output,allocation(self.eof),self.eof,false)
+    }
+    pub(in crate::smb) fn require_current(&self,open:&RetainedOpen,tree:&RustRoot)->io::Result<()>{
+        let Kind::File(file)=&open.0 else{return Err(io::ErrorKind::PermissionDenied.into());};
+        if !self.open.ptr_eq(&Arc::downgrade(&file._slot.identity)){return Err(io::ErrorKind::PermissionDenied.into());}
+        if current_standard_eof(file,tree,&self.scope)?!=self.eof{return Err(io::ErrorKind::WouldBlock.into());}
+        Ok(())
     }
 }
 

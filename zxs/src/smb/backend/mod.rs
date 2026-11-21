@@ -28,7 +28,7 @@ mod directory_birth;
 pub(crate) use directory_birth::DirectoryBirthVote;
 pub(in crate::smb) use directory_birth::PreparedDirectoryBirth;
 mod retained_open;
-pub(in crate::smb) use retained_open::{PreparedRetainedQuery,PreparedRetainedRead,PreparedRetainedRestore,RestoreError,RetainedOpen,RetiredRetainedRestore};
+pub(in crate::smb) use retained_open::{PreparedRetainedQuery,PreparedRetainedRead,PreparedRetainedRestore,PreparedRetainedStandard,RestoreError,RetainedOpen,RetiredRetainedRestore};
 pub(in crate::smb) use directory_open::{DirectoryCloseError,DirectoryOpen,DirectoryOpenError,PreparedDirectoryRename,PreparedDirectoryStandard,PreparedOrdinaryQuery};
 pub(in crate::smb) use file_open::{FileCloseError,FileCloseFault,FileOpen,FileOpenError,FileReadError,FileStandardError,OrdinaryRenameError,PreparedCrossFilesystemMove,PreparedFileName,PreparedFileRead,PreparedFileStandard,PreparedNamedFile,PreparedOrdinaryRename,RetiredOrdinaryRename};
 pub(in crate::smb) use writable_file_open::{FileWriteError,PreparedFileEof,PreparedFileFlush,PreparedFileWrite,PreparedWriterRead,PreparedWriterStandard,WritableCloseFault,WritableFileOpen};
