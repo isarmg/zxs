@@ -307,6 +307,17 @@ def _small_lines(data):
 
 def compare_folder_text(left, report, row, *, observer):
     """After separate consent, verify only the original pair from the folder report."""
+    if sys.platform == "darwin":
+        from ..macos_read import in_disposable_thread
+        from ..macos_folder import MacFolderText
+        if isinstance(report.text, MacFolderText):
+            # The context, ZIP/peer reads and final rechecks must execute on
+            # the *same* short-lived policy owner, not yield to a shared worker.
+            return in_disposable_thread(_compare_folder_text, left, report, row, observer)
+    return _compare_folder_text(left, report, row, observer)
+
+
+def _compare_folder_text(left, report, row, observer):
     if not can_compare_text(row) or report.text is None:
         raise Rejected("该次对照没有这对原件的逐行核验凭据")
     observer.begin("identity")

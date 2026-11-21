@@ -185,7 +185,9 @@ class ComparisonPane(QWidget):
             return observer.progress() if self.matches(chosen, request) else ("", 0, None)
 
         try:
-            folder = comparison.Folder.choose(name)  # Bind before queuing the slow inventory.
+            # Bind before queuing the slow inventory. A held Darwin archive
+            # uses only original, literal, no-link name validation from here.
+            folder = comparison.choose_comparison_folder(name, literal=chosen.held is not None)
         except (OSError, Rejected) as err:
             failed(err)
             return

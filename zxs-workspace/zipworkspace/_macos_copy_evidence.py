@@ -5,15 +5,15 @@ import errno
 from functools import lru_cache
 import os
 import stat
-import struct
 import sys
 
 from . import macos_read
 from .document import native_identity
+from .macos_read import check_literal_path, check_spelling
 from .model import Rejected
 
 # sys/attr.h, sys/fcntl.h, sys/clonefile.h and CoreFoundation/CFURL.h.
-_UUID, _FSTYPE, _RET = 0x40000, 0x100000, 0x80000000
+_RET = 0x80000000
 _CAPABILITIES, _EXCLUSIVE_RENAME = 0x20000, 0x80000  # sys/attr.h
 _MNT_QUARANTINE = 0x400  # sys/mount.h: volume-wide quarantine
 _ZONE = b"com.apple.quarantine"
@@ -169,27 +169,13 @@ def native():
 
 
 def apfs(fd, *, fresh_snapshot=False):
-    """Ask the open vnode, not a mount-name lookup. Require the actual volume UUID and APFS name."""
-    macos_read.resident("所选归档或目录", fd)
-    _, _, attrs = macos_read._require()
-    req = macos_read._Attributes(5, 0, _RET, _RET | 0x4000 | _UUID | _FSTYPE)
-    buf = (C.c_uint32 * 32)()
-    if attrs(fd, C.byref(req), buf, C.sizeof(buf), 4): raise _error("无法核实原 APFS 卷")
-    raw = bytes(buf)
-    size, ret, vol, dirs, files, forks = struct.unpack_from("=6I", raw)
-    requested = 0x4000 | _UUID | _FSTYPE
-    if not 52 <= size <= len(raw) or ret != _RET or vol not in (requested, _RET | requested) or dirs or files or forks:
-        raise Rejected("系统未返回完整的原卷类型和身份")
-    flags, = struct.unpack_from("=I", raw, 24)
-    if not flags & 0x1000 or flags & (0x00200000 | 0x1):  # MNT_LOCAL; no ignored ownership/read-only mount
+    """The existing writable APFS qualifier, including its origin restrictions."""
+    volume, flags = macos_read.apfs_volume(fd)
+    if flags & (0x00200000 | 0x1):  # no ignored ownership/read-only mount
         raise Rejected("需要启用真实所有权的本机可写卷")
     if fresh_snapshot and flags & _MNT_QUARANTINE:
         raise Rejected("原卷有系统卷级隔离，不能制作新的独立快照")
-    volume = raw[28:44]
-    off, n = struct.unpack_from("=iI", raw, 44)
-    if not any(volume) or off < 8 or n != 5 or 44 + off + n > size or raw[44+off:44+off+n] != b"apfs\0":
-        raise Rejected("只支持可确证的本地 APFS 卷")
-    return os.fstat(fd).st_dev, volume
+    return volume
 
 
 def require_exclusive_rename(fd):
@@ -204,26 +190,3 @@ def require_exclusive_rename(fd):
     if (size != C.sizeof(result) or common != _RET or vol not in (_CAPABILITIES, _RET | _CAPABILITIES)
             or dirs or files or forks or not (result[7] & result[11] & _EXCLUSIVE_RENAME)):
         raise Rejected("原卷未明确返回无覆盖改名能力")
-
-
-def check_literal_path(path, fd):
-    # XNU fcntl(F_GETPATH) takes at least MAXPATHLEN bytes (1024).
-    import fcntl
-    result = fcntl.fcntl(fd, 50, bytes(1024))
-    if result.partition(b"\0")[0] != os.fsencode(path):
-        raise Rejected("原句柄的系统路径与所选的准确名称不一致")
-
-
-def check_spelling(fd, leaf):
-    # APFS may accept different case or normalization. Keep the actual original leaf,
-    # not just a spelling which currently opens that inode.
-    _, _, attrs = macos_read._require()
-    req = macos_read._Attributes(5, 0, _RET | 1)
-    buf = (C.c_uint32 * 160)()
-    if attrs(fd, C.byref(req), buf, C.sizeof(buf), 4): raise _error("无法核实实际文件名")
-    raw = bytes(buf)
-    size, common, vol, dirs, files, forks, off, n = struct.unpack_from("=6IiI", raw)
-    expected = os.fsencode(leaf) + b"\0"
-    if (not 32 <= size <= len(raw) or common != (_RET | 1) or vol or dirs or files or forks or
-            off < 8 or n != len(expected) or 24+off+n > size or raw[24+off:24+off+n] != expected):
-        raise Rejected("实际文件名与所选原名的拼写不一致；不更名发布")

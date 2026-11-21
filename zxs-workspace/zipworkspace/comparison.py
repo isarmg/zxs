@@ -103,6 +103,13 @@ class Folder:
         if fd is not None: os.close(fd)
 
 
+def choose_comparison_folder(path, *, literal=False):
+    if literal and sys.platform == "darwin":
+        from .macos_folder import MacComparisonFolder
+        return MacComparisonFolder.choose(path)
+    return Folder.choose(path)
+
+
 @dataclass(frozen=True, slots=True)
 class Difference:
     path: str
@@ -326,6 +333,17 @@ def compare_archive_contents(before, other):
 
 def compare(selected, folder: Folder, *, observer=None, retain_text=False):
     """Use the already verified archive content, not registered state or current HEAD."""
+    if retain_text and sys.platform == "darwin":
+        from . import macos_read
+        from .macos_folder import MacComparisonFolder
+        if type(folder) is MacComparisonFolder:
+            # Even a failed thread launch still consumes the picker handle.
+            with closing(folder):
+                return macos_read.in_disposable_thread(_compare_owned, selected, folder, observer, retain_text)
+    return _compare_owned(selected, folder, observer, retain_text)
+
+
+def _compare_owned(selected, folder, observer, retain_text):
     with ExitStack() as output:
         with closing(folder):
             if observer is not None: observer.begin("identity")
@@ -335,8 +353,12 @@ def compare(selected, folder: Folder, *, observer=None, retain_text=False):
                 report = _compare_windows_held(selected, folder, output, observer)
             elif sys.platform == "darwin":
                 from . import macos_read
+                from .macos_folder import MacComparisonFolder
                 with macos_read.no_materialization():  # Includes the archive's final named recheck.
-                    report = _compare(selected, folder, macos_read, observer=observer)
+                    if retain_text and type(folder) is MacComparisonFolder:
+                        try: report = _compare_macos_held(selected, folder, output, observer)
+                        finally: folder.close()
+                    else: report = _compare(selected, folder, macos_read, observer=observer)
             else: report = _compare(selected, folder, observer=observer)
         if observer is not None: observer.check()
         output.pop_all()
@@ -420,6 +442,34 @@ def _compare_windows_held(selected, folder, output, observer):
             # An admitted native proof must stay native, even if it fails late.
             if text.bind(delta[3], original): output.callback(text.close)
             else: text = None
+        return Report(*delta, folder.evidence, selected.browser.commit.operation, text)
+
+
+def _compare_macos_held(selected, folder, output, observer):
+    from . import macos_read
+    from .macos_folder import MacFolderText, check_archive
+
+    # Already under the worker thread's opt-out. Neither phase uses the legacy
+    # archive path or LSTAT: unsupported APFS evidence means list-only on these same objects.
+    with ExitStack() as held:
+        if selected.held is None: raise Rejected("本次比较需要仍持有原归档，未按名称重新打开")
+        original = selected.held.duplicate()
+        held.callback(os.close, original)
+        root = folder._check()
+        check_archive(selected, original)
+        try: text = MacFolderText(selected, folder, root, original)
+        except (OSError, Rejected): text = None
+        tree = observe_held(root, folder.evidence.identity, require_ids=True,
+                            check_held=macos_read.resident, observer=observer,
+                            on_file=None if text is None else text.remember)
+        if observer is not None: observer.begin("compare")
+        delta = _changes(_rows(selected.browser), tree.rows)
+        if observer is not None: observer.begin("identity")
+        if text is None:
+            check_archive(selected, original)
+            folder.check_original(root)
+        elif text.bind(delta[3], root, original): output.callback(text.close)
+        else: text = None
         return Report(*delta, folder.evidence, selected.browser.commit.operation, text)
 
 
