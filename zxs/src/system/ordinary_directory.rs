@@ -35,11 +35,11 @@ impl Route{
     }
     /// Wire labels are only lookups. This returns the same verified route as
     /// the DirectoryId construction, never an unqualified Unix path.
-    pub(super) fn by_names(db:&Connection,c:&Catalog,volume:VolumeId,names:&[String])->io::Result<Self>{
+    pub(super) fn by_names(db:&Connection,c:&Catalog,volume:VolumeId,names:&[impl AsRef<str>])->io::Result<Self>{
         if names.len()>MAX_PATH_DEPTH||!c.rows().iter().any(|r|r.role==Role::File&&r.volume==volume){return Err(denied());}
         let(mut steps,mut at)=(Vec::with_capacity(names.len()),DirectoryParent::Root);
         for name in names{
-            let birth=lookup(db,c,volume,at,name)?.ok_or(io::ErrorKind::NotFound)?;
+            let birth=lookup(db,c,volume,at,name.as_ref())?.ok_or(io::ErrorKind::NotFound)?;
             at=DirectoryParent::Directory(birth.id);steps.push(birth);
         }
         let path=Self{pool:c.birth.pool,volume,steps};
@@ -167,6 +167,21 @@ fn for_tree(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,op:OperationId,parent:Di
 pub(super) enum Cut{Reserved,Installed}
 #[derive(Debug)]
 pub(super) enum NamedKind{Directory(Route),File}
+
+/// Select only the business type at the original catalog parent. The caller
+/// must authorize this same read cut and later acquire the actual medium.
+pub(super) fn kind_at(db:&Connection,c:&Catalog,volume:VolumeId,parents:&[impl AsRef<str>],name:&str)
+    ->io::Result<NamedKind>{
+    let mut route=Route::by_names(db,c,volume,parents)?;
+    let dir=lookup(db,c,route.volume,route.parent(),name)?;
+    let file=if name.len()<=222{Place::named(db,c,route.volume,route.parent(),name)?}else{None};
+    match(dir,file){
+        (Some(d),None)=>{route.steps.push(d);route.geometry(c)?;Ok(NamedKind::Directory(route))},
+        (None,Some(f))=>{let _=f.bind(db,c)?;Ok(NamedKind::File)},
+        (None,None)=>Err(io::ErrorKind::NotFound.into()),
+        (Some(_),Some(_))=>Err(invalid("two original types claim one ordinary name")),
+    }
+}
 impl<'s,'r> Tree<'s,'r>{
     /// Each name is resolved against one current, authenticated SQL cut.
     pub(super) fn ordinary_route(&self,names:&[String],write:bool)->io::Result<(Catalog,Route)>{
@@ -183,15 +198,7 @@ impl<'s,'r> Tree<'s,'r>{
         let (name,parents)=names.split_last().ok_or_else(denied)?;
         self.session.source.at(|db,c|{
             self.require(db,&c,false)?;
-            let mut route=Route::by_names(db,&c,self.setting.volume,parents)?;
-            let dir=lookup(db,&c,route.volume,route.parent(),name)?;
-            let file=if name.len()<=222{Place::named(db,&c,route.volume,route.parent(),name)?}else{None};
-            let kind=match(dir,file){
-                (Some(d),None)=>{route.steps.push(d);route.geometry(&c)?;NamedKind::Directory(route)},
-                (None,Some(f))=>{let _=f.bind(db,&c)?;NamedKind::File},
-                (None,None)=>return Err(io::ErrorKind::NotFound.into()),
-                (Some(_),Some(_))=>return Err(invalid("two original types claim one ordinary name")),
-            };
+            let kind=kind_at(db,&c,self.setting.volume,parents,name)?;
             Ok((c,kind))
         })
     }
