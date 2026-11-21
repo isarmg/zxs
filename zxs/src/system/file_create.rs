@@ -2,8 +2,8 @@
 //! conditional commit after the ordinary root/FILE header names have synced.
 //! No secondary ledger. No source pathname, credential or permission boolean
 //! is accepted from the client; a share never owns its own namespace.
-use super::{Tree,Catalog,Connection,check,ordinary_directory::{self,Additional,Route},sqlite3_step};
-use super::super::{file_location::{Place,Placed},volume::OrdinaryRoot,work_record::{self,Members}};
+use super::{Tree,Catalog,Connection,InitialReader,check,ordinary_directory::{self,Additional,Route},sqlite3_step};
+use super::super::{account::share_mode::Setting,file_location::{Place,Placed},volume::OrdinaryRoot,work_record::{self,Members}};
 use crate::{BranchId,EntryId,FileId,HistoryId,OperationId,PoolId,Role,VolumeId,display,
     fs::{HeldDir,invalid,directory_birth::DirectoryParent},hash::Sha256,
     identity::{AccountId,ShareId},ordinary::portable_birth::Birth,system::ROOT_MARK};
@@ -155,35 +155,41 @@ pub(in crate::system::reader) fn display_owner_at(db:&Connection,c:&Catalog,volu
 
 #[derive(Clone,Copy,PartialEq,Eq)]
 pub(in crate::system::reader) enum Point{Reserved,Installed}
-impl<'s,'r> Tree<'s,'r>{
-    /// No physical observation takes place in the caller's name cut. A
-    /// pending birth is not absence and cannot be resolved by using its name.
-    pub(super) fn occupied_name(&self,name:&str,write:bool)->io::Result<Option<FileId>>{
-        display::component(name.as_bytes(),222)?;
-        self.session.source.at(|db,c|{
-            self.require(db,&c,write)?;
-            self.name_on(db,&c,name)
-        })
+fn name_on(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<FileId>>{
+    if ordinary_directory::lookup(db,c,volume,parent,name)?.is_some(){return Err(io::ErrorKind::AlreadyExists.into());}
+    Ok(Place::named(db,c,volume,parent,name)?.map(|p|p.file))
+}
+fn original_birth(db:&Connection,c:&Catalog,op:OperationId,name:&str,setting:Setting,parent:DirectoryParent,
+    actor:AccountId,auth:OperationId)->io::Result<Option<Origin>>{
+    let old=by_op(db,c,op)?;
+    if old.as_ref().is_some_and(|x|x.birth.name!=name||x.birth.volume!=setting.volume||x.parent!=parent||x.actor!=actor||
+       x.auth!=auth||x.share!=setting.share||x.mode!=setting.op){return Err(invalid("same operation refers to a different original request"));}
+    Ok(old)
+}
+
+/// The original birth transaction's source and its exact authority. The
+/// authorized caller is checked within each already-open SQLite cut.
+struct CreateCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+struct CreateAt<'s,'a>{
+    source:&'s InitialReader,setting:Setting,parent:DirectoryParent,actor:AccountId,auth:OperationId,generation:i64,
+    require:&'a dyn Fn(&CreateCut<'_>)->io::Result<()>,
+}
+impl<'s> CreateAt<'s,'_>{
+    fn authorized(&self,db:&Connection,catalog:&Catalog)->io::Result<()>{
+        (self.require)(&CreateCut{source:self.source,db,catalog})
     }
-    fn name_on(&self,db:&Connection,c:&Catalog,name:&str)->io::Result<Option<FileId>>{
-        if ordinary_directory::lookup(db,c,self.setting.volume,self.parent,name)?.is_some(){return Err(io::ErrorKind::AlreadyExists.into());}
-        Ok(Place::named(db,c,self.setting.volume,self.parent,name)?.map(|p|p.file))
-    }
-    /// An exact native share-mode admission precedes reservation. Hold the
-    /// existing F namespace lock during this process, never a SQL transaction
-    /// while waiting for native acknowledgement or doing volume I/O.
-    pub(super) fn create_native<T>(&self,original:&OrdinaryRoot<'_>,name:&str,write_handle:bool,
+    fn create<T>(&self,original:&OrdinaryRoot<'_>,name:&str,write_handle:bool,
         offer:impl FnOnce(&Birth,u64)->io::Result<()>,prepare:impl FnOnce(&HeldDir)->io::Result<T>,
-        live:&impl Fn()->io::Result<()>)->io::Result<(NativeBorn<'r>,T)>{
+        live:&impl Fn()->io::Result<()>)->io::Result<(NativeBorn<'s>,T)>{
         display::component(name.as_bytes(),222)?;
-        let src=self.session.source;let a=&self.session.original;let setting=self.setting;
+        let src=self.source;let setting=self.setting;
         let op=OperationId::new()?;let ticket=OperationId::new()?;let entry=EntryId::new()?;
         let history=HistoryId::new()?;let branch=BranchId::new()?;
         let candidates=FileId::birth_candidates()?;
-        let sha=request(src.pool,op,a.account,a.op,a.generation,setting.share,setting.op,setting.volume,self.parent,name)?;
+        let sha=request(src.pool,op,self.actor,self.auth,self.generation,setting.share,setting.op,setting.volume,self.parent,name)?;
         let (c,route,b,key,alias)=src.at(|db,c|{
-            self.require(db,&c,true)?;live()?;
-            if self.name_on(db,&c,name)?.is_some(){return Err(io::ErrorKind::AlreadyExists.into());}
+            self.authorized(db,&c)?;live()?;
+            if name_on(db,&c,setting.volume,self.parent,name)?.is_some(){return Err(io::ErrorKind::AlreadyExists.into());}
             let (file,key)=super::file_number::available(db,src.pool,&candidates)?;
             let b=Birth{pool:src.pool,volume:setting.volume,operation:op,entry,file,history,branch,ticket,slot:0,name:name.to_owned()};
             let route=Route::at(db,&c,setting.volume,self.parent)?;
@@ -211,9 +217,9 @@ impl<'s,'r> Tree<'s,'r>{
         let (native,holder)=prove()?;
         let w=Connection::open(&src.dir,true)?;
         let reserved=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-            self.require(db,&c,true)?;
-            if self.name_on(db,&c,name)?.is_some(){return Err(io::ErrorKind::AlreadyExists.into());}
-            if self.origin(db,&c,op,name)?.is_some() || display_owner(db,&c,&b,self.parent)?!=alias||Route::at(db,&c,setting.volume,self.parent)?!=route{
+            self.authorized(db,&c)?;
+            if name_on(db,&c,setting.volume,self.parent,name)?.is_some(){return Err(io::ErrorKind::AlreadyExists.into());}
+            if original_birth(db,&c,op,name,setting,self.parent,self.actor,self.auth)?.is_some() || display_owner(db,&c,&b,self.parent)?!=alias||Route::at(db,&c,setting.volume,self.parent)?!=route{
                 return Err(invalid("native birth or confirmed display alias changed before reservation"));
             }
             // Other F roots have independent locks. Never substitute a new
@@ -222,15 +228,15 @@ impl<'s,'r> Tree<'s,'r>{
             ordinary_directory::budget(db,b.volume,self.parent,&native.into_iter().collect(),Some(Additional::File(&b)))?;live()?;
             let s=db.prepare(c"INSERT INTO main.root_entry(create_op,share_id,setting_op,auth_op,volume_id,display,terminal,entry_id,file_id,history_id,branch_id,ticket,parent_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)")?;
             let end=b.container()?;
-            for(i,v)in [op.0.as_slice(),setting.share.0.as_slice(),setting.op.0.as_slice(),a.op.0.as_slice(),
+            for(i,v)in [op.0.as_slice(),setting.share.0.as_slice(),setting.op.0.as_slice(),self.auth.0.as_slice(),
                 setting.volume.0.as_slice(),name.as_bytes(),end.to_bytes(),b.entry.0.as_slice(),b.file.0.as_slice(),
                 b.history.0.as_slice(),b.branch.0.as_slice(),b.ticket.0.as_slice(),self.parent.bytes().as_slice()].iter().enumerate(){s.bind_bytes(i as i32+1,v)?;}
             s.done()?;let cmd=db.prepare(c"INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,5,?2,?3,0)")?;
-            cmd.bind_bytes(1,&op.0)?;cmd.bind_bytes(2,&a.account.0)?;cmd.bind_bytes(3,&sha)?;cmd.done()
+            cmd.bind_bytes(1,&op.0)?;cmd.bind_bytes(2,&self.actor.0)?;cmd.bind_bytes(3,&sha)?;cmd.done()
         });
         drop(w);drop(holder);
         if let Err(error)=reserved{
-            let prior=src.at(|db,c|{self.require(db,&c,true)?;self.origin(db,&c,op,name)})?;
+            let prior=src.at(|db,c|{self.authorized(db,&c)?;original_birth(db,&c,op,name,setting,self.parent,self.actor,self.auth)})?;
             if !prior.is_some_and(|o|!o.committed&&o.birth==b){return Err(error);}
         }
         live()?;
@@ -245,8 +251,8 @@ impl<'s,'r> Tree<'s,'r>{
         locked.require_streaming()?;body.require_streaming()?;
         let w=Connection::open(&src.dir,true)?;
         let confirmed=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-            self.require(db,&c,true)?;
-            if !self.origin(db,&c,op,name)?.is_some_and(|o|!o.committed&&o.birth==b)||
+            self.authorized(db,&c)?;
+            if !original_birth(db,&c,op,name,setting,self.parent,self.actor,self.auth)?.is_some_and(|o|!o.committed&&o.birth==b)||
                 display_owner(db,&c,&b,self.parent)?!=alias{return Err(invalid("different pending native birth"));}
             super::file_number::original(db,b.pool,b.file)?;
             live()?;
@@ -256,18 +262,45 @@ impl<'s,'r> Tree<'s,'r>{
         });
         drop(w);drop(alias_pin);
         if let Err(error)=confirmed{
-            let prior=src.at(|db,c|{self.require(db,&c,true)?;self.origin(db,&c,op,name)})?;
+            let prior=src.at(|db,c|{self.authorized(db,&c)?;original_birth(db,&c,op,name,setting,self.parent,self.actor,self.auth)})?;
             if !prior.is_some_and(|o|o.committed&&o.birth==b){return Err(error);}
         }
         Ok((NativeBorn{root:body,birth:b,installed,write:write_handle},holder))
     }
+}
+
+impl<'s,'r> Tree<'s,'r>{
+    /// No physical observation takes place in the caller's name cut. A
+    /// pending birth is not absence and cannot be resolved by using its name.
+    pub(super) fn occupied_name(&self,name:&str,write:bool)->io::Result<Option<FileId>>{
+        display::component(name.as_bytes(),222)?;
+        self.session.source.at(|db,c|{
+            self.require(db,&c,write)?;
+            self.name_on(db,&c,name)
+        })
+    }
+    fn name_on(&self,db:&Connection,c:&Catalog,name:&str)->io::Result<Option<FileId>>{
+        name_on(db,c,self.setting.volume,self.parent,name)
+    }
+    /// An exact native share-mode admission precedes reservation. Hold the
+    /// existing F namespace lock during this process, never a SQL transaction
+    /// while waiting for native acknowledgement or doing volume I/O.
+    pub(super) fn create_native<T>(&self,original:&OrdinaryRoot<'_>,name:&str,write_handle:bool,
+        offer:impl FnOnce(&Birth,u64)->io::Result<()>,prepare:impl FnOnce(&HeldDir)->io::Result<T>,
+        live:&impl Fn()->io::Result<()>)->io::Result<(NativeBorn<'r>,T)>{
+        let a=&self.session.original;
+        let require=|cut:&CreateCut<'_>|{
+            debug_assert!(std::ptr::eq(cut.source,self.session.source));
+            self.require(cut.db,cut.catalog,true)
+        };
+        let actual=CreateAt{source:self.session.source,setting:self.setting,parent:self.parent,
+            actor:a.account,auth:a.op,generation:a.generation,require:&require};
+        actual.create(original,name,write_handle,offer,prepare,live)
+    }
 
     fn origin(&self,db:&Connection,c:&Catalog,op:OperationId,name:&str)->io::Result<Option<Origin>>{
         let a=&self.session.original;
-        let old=by_op(db,c,op)?;
-        if old.as_ref().is_some_and(|x|x.birth.name!=name||x.birth.volume!=self.setting.volume||x.parent!=self.parent||x.actor!=a.account||
-           x.auth!=a.op||x.share!=self.setting.share||x.mode!=self.setting.op){return Err(invalid("same operation refers to a different original request"));}
-        Ok(old)
+        original_birth(db,c,op,name,self.setting,self.parent,a.account,a.op)
     }
     pub(crate) fn create_file(&self,op:OperationId,name:&str)->io::Result<NewFile>{
         self.create_after(op,name,|_|Ok(()))
