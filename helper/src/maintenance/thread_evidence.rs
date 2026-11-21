@@ -1,7 +1,7 @@
 //! Two fixed kernel observations of this very thread. No credentials are changed.
-use crate::pinned::Mount;
+use crate::pinned::{self,Entity,Mount};
 use rustix::fs::{Mode, OFlags, PROC_SUPER_MAGIC, ResolveFlags, fstatfs, open, openat2};
-use std::{ffi::CStr, fs::File, io::{self, Read}};
+use std::{ffi::{CStr,OsStr}, fs::File, io::{self, Read}};
 
 fn unsupported(reason: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Unsupported, reason) }
 
@@ -23,6 +23,28 @@ pub(crate) fn thread_file(name: &CStr) -> io::Result<File> {
 }
 
 pub(super) fn mountinfo() -> io::Result<File> { thread_file(c"thread-self/mountinfo") }
+
+/// Only discovery's current mount table. Walk actual PID/task/TID on the
+/// held proc mount without following a directory lookup into an automount.
+pub(super) fn passive_mountinfo()->io::Result<File>{
+    let (mut root,mount)=pinned::passive_proc_root()?;
+    let pid=std::process::id().to_string();
+    let tid=rustix::thread::gettid().as_raw_pid().to_string();
+    for name in [pid.as_str(),"task",tid.as_str()]{
+        root=pinned::passive_proc_child(&root,OsStr::new(name),mount,true)?;
+    }
+    let name=OsStr::new("mountinfo");
+    let prior=pinned::passive_proc_child(&root,name,mount,false)?;
+    let original=Entity::of(&prior.metadata()?)?;
+    let rd=File::from(openat2(&root,name,OFlags::RDONLY|OFlags::NONBLOCK|OFlags::NOFOLLOW|OFlags::CLOEXEC,
+        Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_SYMLINKS)?);
+    if !rd.metadata()?.is_file()||Entity::of(&rd.metadata()?)?!=original
+        ||fstatfs(&rd)?.f_type!=PROC_SUPER_MAGIC||Mount::on(&rd)?.is_none_or(|m|m.id!=mount)
+        ||Entity::of(&pinned::passive_proc_child(&root,name,mount,false)?.metadata()?)?!=original{
+        return Err(unsupported("mount table name or genuine procfs identity changed"));
+    }
+    Ok(rd)
+}
 
 const STATUS_MAX: usize = 64 * 1024;
 

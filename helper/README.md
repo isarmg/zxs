@@ -6,6 +6,8 @@ ZXS 的业务管理页由 [ZXS 原生 HTTP](docs/management-http.md) 直接提�
 
 [专用 SMB](docs/smb-host.md) 只用管理员已按准确摘要批准的配套制品，从本机前台启动。首装已选的数据目录无需再进 Web 开启，只访问唯一共享。原监听证明与独立客户登录、读写验收分开。
 
+**找现有部署。** [`helper discover`](docs/discovery.md) 只从本次真实本机挂载根观察 SYSTEM 候选；已知原 SYSTEM 位于子目录时用 `helper discover --system DIR` 指定本次原位置。无常驻或保存路径，不读数据库正文，不把候选当成已验原池或维护许可。
+
 ```sh
 helper inspect-dirs /home/alice/downloads /home/alice/downloads/week-01 /mnt/incoming
 helper compare-files /home/alice/reference.bin /mnt/incoming/candidate.bin

@@ -3,10 +3,10 @@ pub(crate) mod storage_status;
 pub(crate) mod portable_pending;
 pub(crate) use crate::path_rules::Kind;
 
-use rustix::fs::{AtFlags, Mode, OFlags, PROC_SUPER_MAGIC, StatxAttributes, StatxFlags, fstatfs, open, openat, readlinkat, statx};
+use rustix::fs::{AtFlags, CWD, Mode, OFlags, PROC_SUPER_MAGIC, ResolveFlags, StatxAttributes, StatxFlags, fstatfs, open, openat, openat2, readlinkat, statx};
 use std::ffi::OsStr;
 use std::fs::{File, Metadata};
-use std::io;
+use std::io::{self,Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -62,6 +62,85 @@ pub(crate) fn require_no_automount(fd:&File)->io::Result<()>{
     }Ok(())
 }
 
+// Used for passive discovery only. Never follow the last name just to test
+// whether it is an automount. Match every proved proc directory to this mount.
+pub(crate) fn passive_proc_root()->io::Result<(File,u64)>{
+    let p=File::from(openat2(CWD,c"/proc",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
+        ResolveFlags::NO_SYMLINKS|ResolveFlags::NO_MAGICLINKS|ResolveFlags::CACHED)?);
+    require_no_automount(&p)?;
+    if !p.metadata()?.is_dir()||fstatfs(&p)?.f_type!=PROC_SUPER_MAGIC{
+        return Err(invalid("need the root of a genuine procfs"));
+    }
+    let m=Mount::on(&p)?.filter(|m|m.at_root==Some(true)).ok_or_else(||invalid("procfs mount root unavailable"))?;
+    let who=File::from(openat2(&p,c"self",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
+        DISCOVERY_WITHIN|ResolveFlags::NO_XDEV)?);
+    if !who.metadata()?.file_type().is_symlink()||readlinkat(&who,c"",Vec::new())?.as_bytes()!=std::process::id().to_string().as_bytes(){
+        return Err(invalid("procfs refers to another process namespace"));
+    }
+    Ok((p,m.id))
+}
+pub(crate) fn passive_proc_child(parent:&File,name:&OsStr,mount:u64,directory:bool)->io::Result<File>{
+    let f=File::from(openat2(parent,name,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
+        DISCOVERY_WITHIN|ResolveFlags::NO_XDEV)?);
+    require_no_automount(&f)?;
+    let m=f.metadata()?;
+    if !(if directory{m.is_dir()}else{m.is_file()})||fstatfs(&f)?.f_type!=PROC_SUPER_MAGIC
+        ||Mount::on(&f)?.is_none_or(|m|m.id!=mount){
+        return Err(invalid("procfs observation is not on the same genuine mount"));
+    }
+    Ok(f)
+}
+
+/// Obtain a mount ID from the kernel's own description table, not statx on
+/// an unqualified mount (which could issue remote getattr/revalidation).
+pub(crate) struct DiscoveryFdInfo{infos:File,mount:u64}
+impl DiscoveryFdInfo{
+    pub(crate) fn open()->io::Result<Self>{
+        let (proc,mount)=passive_proc_root()?;
+        let pid=std::process::id().to_string();
+        let process=passive_proc_child(&proc,OsStr::new(&pid),mount,true)?;
+        Ok(Self{infos:passive_proc_child(&process,OsStr::new("fdinfo"),mount,true)?,mount})
+    }
+    pub(crate) fn mount(&self,held:&File)->io::Result<u64>{
+        let name=held.as_raw_fd().to_string();let name=OsStr::new(&name);
+        let prior=passive_proc_child(&self.infos,name,self.mount,false)?;
+        let metadata=prior.metadata()?;let object=Entity::of(&metadata)?;
+        let actual=File::from(openat2(&self.infos,name,OFlags::RDONLY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC,
+            Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_SYMLINKS|ResolveFlags::NO_XDEV)?);
+        if !actual.metadata()?.is_file()||Entity::of(&actual.metadata()?)?!=object||fstatfs(&actual)?.f_type!=PROC_SUPER_MAGIC
+            ||Mount::on(&actual)?.is_none_or(|m|m.id!=self.mount){return Err(invalid("untrusted descriptor mount observation"));}
+        let mut bytes=Vec::new();actual.take(4097).read_to_end(&mut bytes)?;
+        discovery_mount_id(&bytes)
+    }
+}
+fn discovery_mount_id(bytes:&[u8])->io::Result<u64>{
+    let no=||invalid("bounded original descriptor mount ID unavailable");
+    if bytes.len()>4096||!bytes.ends_with(b"\n"){return Err(no());}
+    let mut rows=bytes.split(|&c|c==b'\n').filter_map(|r|r.strip_prefix(b"mnt_id:").map(|v|v.trim_ascii()));
+    let raw=rows.next().ok_or_else(no)?;
+    let id=std::str::from_utf8(raw).ok().and_then(|v|v.parse::<u64>().ok())
+        .filter(|v|*v!=0&&v.to_string().as_bytes()==raw).ok_or_else(no)?;
+    if rows.next().is_some(){return Err(no());}
+    Ok(id)
+}
+
+const DISCOVERY_WITHIN:ResolveFlags=ResolveFlags::BENEATH.union(ResolveFlags::NO_SYMLINKS).union(ResolveFlags::NO_MAGICLINKS);
+fn discover_component(parent:&File,name:&OsStr,crossing:bool)->io::Result<File>{
+    let path=OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC;
+    // From an already qualified local descriptor, ordinary same-mount
+    // lookups may do local I/O. An expected named crossing needs a known
+    // local mount-table row before this call and remains cache-only. Never
+    // retry a rejected or unexpectedly uncached crossing.
+    let policy=if crossing{ResolveFlags::CACHED}else{ResolveFlags::NO_XDEV};
+    Ok(File::from(openat2(parent,name,path,Mode::empty(),DISCOVERY_WITHIN|policy)?))
+}
+
+pub(crate) trait DiscoveryAdmission{
+    fn root_mount(&self)->io::Result<u64>;
+    fn crossing(&self,parent:u64,prefix:&Path)->io::Result<Option<u64>>;
+    fn admit(&self,fd:&File)->io::Result<u64>;
+}
+
 impl Pinned {
     pub(crate) fn open(path: &Path, kind: Kind) -> io::Result<Self> {
         Self::open_policy(path,kind,false)
@@ -70,12 +149,22 @@ impl Pinned {
         Self::open_policy(path,kind,true)
     }
     fn open_policy(path:&Path,kind:Kind,no_automount:bool)->io::Result<Self>{
+        Self::open_guarded(path,kind,no_automount,None)
+    }
+    fn open_guarded(path:&Path,kind:Kind,no_automount:bool,admit:Option<&dyn DiscoveryAdmission>)->io::Result<Self>{
         let raw = path.as_os_str().as_bytes();
         kind.check_path(raw).map_err(invalid)?;
         let mut names = raw[1..].split(|b| *b == b'/').peekable();
-        let mut fd = File::from(open("/", dir_flags(), Mode::empty())?);
+        let (mut fd,mut known)=if let Some(check)=admit{
+            let expected=check.root_mount()?;
+            let root=File::from(openat2(CWD,c"/",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
+                ResolveFlags::NO_SYMLINKS|ResolveFlags::NO_MAGICLINKS|ResolveFlags::CACHED)?);
+            if check.admit(&root)?!=expected{return Err(invalid("original root mount changed during discovery"));}
+            (root,expected)
+        }else{(File::from(open("/",dir_flags(),Mode::empty())?),0)};
         if no_automount{require_no_automount(&fd)?;}
         let mut chain = vec![Entity::of(&fd.metadata()?)?];
+        let mut end=0usize;
         if raw == b"/" {
             return Ok(Self { path: path.to_owned(), kind, fd, chain, no_automount });
         }
@@ -84,7 +173,18 @@ impl Pinned {
             let flags = if last_file||no_automount {
                 OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC
             } else { dir_flags() };
-            let child = File::from(openat(&fd, OsStr::from_bytes(name), flags, Mode::empty())?);
+            // Discovery first gates the live mount ID from this bare O_PATH
+            // handle. Do not fstatfs, query directory metadata or walk below
+            // it until the same local mount table admits that crossing.
+            let child=if let Some(check)=admit{
+                end+=1+name.len();
+                let prefix=Path::new(OsStr::from_bytes(&raw[..end]));
+                let transition=check.crossing(known,prefix)?;
+                let child=discover_component(&fd,OsStr::from_bytes(name),transition.is_some())?;
+                let found=check.admit(&child)?;
+                if found!=transition.unwrap_or(known){return Err(invalid("unexpected mount crossing during discovery"));}
+                known=found;child
+            }else{File::from(openat(&fd,OsStr::from_bytes(name),flags,Mode::empty())?)};
             if no_automount{require_no_automount(&child)?;}
             let meta = child.metadata()?;
             if (last_file && !meta.is_file()) || (!last_file && !meta.is_dir()) {
@@ -157,6 +257,40 @@ impl Pinned {
     }
 }
 
+/// The same mount admission is mandatory for every walk and held read. No
+/// methods expose the inner Pinned to a path opener lacking the live gate.
+pub(crate) struct DiscoveryPin<'a>{original:Pinned,admit:&'a dyn DiscoveryAdmission}
+impl<'a> DiscoveryPin<'a>{
+    pub(crate) fn select(path:&Path,admit:&'a dyn DiscoveryAdmission)->io::Result<Self>{
+        Ok(Self{original:Pinned::open_guarded(path,Kind::StorageRoot,true,Some(admit))?,admit})
+    }
+    pub(crate) fn require_named(&self)->io::Result<Mount>{
+        let x=&self.original;
+        let named=Pinned::open_guarded(&x.path,x.kind,true,Some(self.admit))?;
+        self.admit.admit(&x.fd)?;
+        check_named_mount(&x.chain,x.mount()?,&named.chain,named.mount()?)
+    }
+    pub(crate) fn metadata(&self)->io::Result<Metadata>{
+        self.admit.admit(&self.original.fd)?;self.original.metadata()
+    }
+    pub(crate) fn magic(&self)->io::Result<u32>{
+        self.admit.admit(&self.original.fd)?;local_data_filesystem(&self.original.fd)
+    }
+    pub(crate) fn directory(&self)->io::Result<File>{
+        let mount=self.require_named()?;
+        let f=File::from(openat(&self.original.fd,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW
+            |OFlags::NOATIME|OFlags::CLOEXEC,Mode::empty())?);
+        self.require_directory(&f,mount)?;Ok(f)
+    }
+    pub(crate) fn require_directory(&self,f:&File,mount:Mount)->io::Result<()>{
+        self.admit.admit(f)?;
+        if Entity::of(&f.metadata()?)?!=self.original.entity()||Mount::on(f)?!=Some(mount)||self.require_named()?!=mount{
+            return Err(invalid("the visible discovery directory or mount changed"));
+        }
+        Ok(())
+    }
+}
+
 fn check_named_mount(original: &[Entity], mount: Mount, named: &[Entity], current: Mount) -> io::Result<Mount> {
     if original != named || current != mount {
         return Err(invalid("selected name, ancestry or original mount changed"));
@@ -189,12 +323,21 @@ impl LocalDataFile {
 /// A fixed 101-byte SQLite claim, only below a separately authorized and
 /// held storage directory. Never a data/backup/health or caller-path reader.
 pub(crate) fn sqlite_claim_reader(pin:&File,entity:Entity,mount:u64)->io::Result<File>{
+    selected_claim_reader(pin,entity,mount,false)
+}
+
+pub(crate) fn discovery_claim_reader(pin:&File,entity:Entity,mount:u64)->io::Result<File>{
+    selected_claim_reader(pin,entity,mount,true)
+}
+
+fn selected_claim_reader(pin:&File,entity:Entity,mount:u64,passive:bool)->io::Result<File>{
     let m=pin.metadata()?;
     if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)||!m.is_file()||m.mode()&0o7777!=0o600||
         m.nlink()!=1||m.len()!=101||Entity::of(&m)?!=entity||Mount::on(pin)?.is_none_or(|v|v.id!=mount){
         return Err(invalid("not an original SQLite enrollment marker"));
     }
-    reopen_admitted_reader(pin,entity,ReaderBoundary::SelectedControlMount(mount))
+    reopen_admitted_reader(pin,entity,if passive{ReaderBoundary::DiscoveryControlMount(mount)}
+        else{ReaderBoundary::SelectedControlMount(mount)})
 }
 
 /// Only the root-owned nonsecret live configuration or bound record below a separately
@@ -276,40 +419,51 @@ pub(crate) fn installed_regular_reader(pin:&File)->io::Result<File>{
 // caller only reads fixed private control names below a separately selected, held
 // storage directory. A current mount ID binds its descriptors, not its provenance.
 #[derive(Copy, Clone)]
-enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64), PublicSamMount(u64), InstalledRegular(u32) }
+enum ReaderBoundary { DataFilesystem(u32), SelectedControlMount(u64), DiscoveryControlMount(u64), PublicSamMount(u64), InstalledRegular(u32) }
 impl ReaderBoundary {
     fn matches(self, fd: &File) -> io::Result<bool> {
         match self {
             Self::DataFilesystem(magic)|Self::InstalledRegular(magic) => Ok(filesystem(fd)? == Some(magic)),
-            Self::SelectedControlMount(id)|Self::PublicSamMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
+            Self::SelectedControlMount(id)|Self::DiscoveryControlMount(id)|Self::PublicSamMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
         }
     }
 }
 
 fn reopen_admitted_reader(pin: &File, entity: Entity, boundary: ReaderBoundary) -> io::Result<File> {
-    let proc = open("/proc", dir_flags(), Mode::empty())?;
-    if fstatfs(&proc)?.f_type != PROC_SUPER_MAGIC {
-        return Err(invalid("a genuine procfs for this process is required"));
-    }
     let pid = std::process::id().to_string();
-    if readlinkat(&proc, "self", Vec::new())?.as_bytes() != pid.as_bytes() {
-        return Err(invalid("procfs refers to another process namespace"));
-    }
-    let proc_pid = openat(&proc, pid.as_str(), dir_flags(), Mode::empty())?;
-    let fds = File::from(openat(&proc_pid, "fd", dir_flags(), Mode::empty())?);
-    if fstatfs(&fds)?.f_type != PROC_SUPER_MAGIC { return Err(invalid("untrusted descriptor directory")); }
+    let(fds,passive_mount)=if matches!(boundary,ReaderBoundary::DiscoveryControlMount(_)){
+        let (proc,mount)=passive_proc_root()?;
+        let proc_pid=passive_proc_child(&proc,OsStr::new(&pid),mount,true)?;
+        (passive_proc_child(&proc_pid,OsStr::new("fd"),mount,true)?,Some(mount))
+    }else{
+        let proc=open("/proc",dir_flags(),Mode::empty())?;
+        if fstatfs(&proc)?.f_type!=PROC_SUPER_MAGIC{return Err(invalid("a genuine procfs for this process is required"));}
+        if readlinkat(&proc,"self",Vec::new())?.as_bytes()!=pid.as_bytes(){
+            return Err(invalid("procfs refers to another process namespace"));
+        }
+        let proc_pid=openat(&proc,pid.as_str(),dir_flags(),Mode::empty())?;
+        let fds=File::from(openat(&proc_pid,"fd",dir_flags(),Mode::empty())?);
+        if fstatfs(&fds)?.f_type!=PROC_SUPER_MAGIC{return Err(invalid("untrusted descriptor directory"));}
+        (fds,None)
+    };
     // Even a procfs directory must belong to our descriptor table. Follow the kernel
     // link for the directory's own held fd and compare identities before using it.
     let myself = fds.as_raw_fd().to_string();
-    let again = File::from(openat(&fds, myself.as_str(),
-        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())?);
-    if Entity::of(&again.metadata()?)? != Entity::of(&fds.metadata()?)? {
+    let flags=OFlags::PATH|OFlags::CLOEXEC|if passive_mount.is_some(){OFlags::empty()}else{OFlags::DIRECTORY};
+    let again=File::from(openat(&fds,myself.as_str(),flags,Mode::empty())?);
+    if passive_mount.is_some(){require_no_automount(&again)?;}
+    if Entity::of(&again.metadata()?)? != Entity::of(&fds.metadata()?)?
+        ||passive_mount.is_some_and(|id|Mount::on(&again).ok().flatten().is_none_or(|m|m.id!=id)){
         return Err(invalid("procfs descriptor directory is not this process's"));
     }
     let number = pin.as_raw_fd().to_string();
-    let proc_link = File::from(openat(&fds, number.as_str(),
-        OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?);
-    if !proc_link.metadata()?.file_type().is_symlink() || fstatfs(&proc_link)?.f_type != PROC_SUPER_MAGIC {
+    let flags=OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC;
+    let proc_link=File::from(if passive_mount.is_some(){
+        openat2(&fds,number.as_str(),flags,Mode::empty(),DISCOVERY_WITHIN|ResolveFlags::NO_XDEV)?
+    }else{openat(&fds,number.as_str(),flags,Mode::empty())?});
+    if passive_mount.is_some(){require_no_automount(&proc_link)?;}
+    if !proc_link.metadata()?.file_type().is_symlink() || fstatfs(&proc_link)?.f_type != PROC_SUPER_MAGIC
+        ||passive_mount.is_some_and(|id|Mount::on(&proc_link).ok().flatten().is_none_or(|m|m.id!=id)){
         return Err(invalid("descriptor is not a procfs kernel link"));
     }
     let check = File::from(openat(&fds, number.as_str(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty())?);
@@ -354,6 +508,13 @@ fn filesystem(file: &File) -> io::Result<Option<u32>> {
 mod tests {
     use super::require_local_data_fs;
     use linux_raw_sys::general as fs;
+    #[test]
+    fn stateless_discovery_requires_one_canonical_kernel_fdinfo_mount_id(){
+        use super::discovery_mount_id;
+        assert_eq!(discovery_mount_id(b"pos:\t0\nflags:\t012000000\nmnt_id:\t18\nino:\t100\n").unwrap(),18);
+        for raw in [&b"ino:\t18\n"[..],b"mnt_id:\t0\n",b"mnt_id:\t018\n",b"mnt_id:\t18",
+            b"mnt_id:\t18\nmnt_id:\t18\n",b"mnt_id:\t18 19\n"]{assert!(discovery_mount_id(raw).is_err());}
+    }
     #[test]
     fn same_inodes_do_not_substitute_another_named_mount() {
         use super::{check_named_mount, Entity, Mount};

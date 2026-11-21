@@ -1,13 +1,16 @@
-//! Fresh-root ancestry in the current maintenance thread's mount namespace.
-//! We never search other paths, open files on a volume, or recover a hidden parent.
-use crate::pinned::{Entity, Mount, Pinned, invalid, local_data_filesystem};
+//! Mount evidence in the current maintenance thread's namespace.
+//! Ancestry never searches other paths or recovers a hidden parent. The
+//! separate discovery cut returns only bounded, admitted mountpoint names.
+use crate::pinned::{DiscoveryAdmission,DiscoveryFdInfo,Entity, Mount, Pinned, invalid, local_data_filesystem};
 use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
 use rustix::fs::{Mode, OFlags, fgetxattr, makedev, openat};
 use rustix::io::Errno;
-use std::{collections::BTreeMap, fs::File, io::{self, Read}, os::unix::fs::MetadataExt};
+use std::{collections::BTreeMap, ffi::OsStr, fs::File, io::{self, Read},
+    os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};
 
 const TABLE_BYTES: usize = 4 * 1024 * 1024;
 const TABLE_ROWS: usize = 16_384;
+const DISCOVERY_ROOTS: usize = 64;
 fn unknown(why: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Unsupported, why) }
 
 fn no_claim(dir: &File) -> io::Result<()> {
@@ -19,8 +22,8 @@ fn no_claim(dir: &File) -> io::Result<()> {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Row { parent: u64, device: u64, whole: bool, devtmpfs: bool, site_level:Option<usize>, magic:Option<u32> }
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct Row { parent: u64, device: u64, whole: bool, devtmpfs: bool, site_level:Option<usize>, magic:Option<u32>, namespace_root:bool }
 fn site_level(point:&[u8])->Option<usize>{match point{b"/var"=>Some(0),b"/var/lib"=>Some(1),_=>None}}
 fn data_magic(fs:&[u8])->Option<u32>{match fs{
     b"ext2"|b"ext3"|b"ext4"=>Some(EXT4_SUPER_MAGIC),
@@ -31,6 +34,66 @@ fn data_magic(fs:&[u8])->Option<u32>{match fs{
 }}
 
 pub(crate) struct Mounts(BTreeMap<u64, Row>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DiscoveryMount {
+    pub(crate) path: PathBuf,
+    pub(crate) id: u64,
+    pub(crate) device: u64,
+    pub(crate) magic: u32,
+}
+// mountinfo escapes only whitespace and backslash. Parse byte-for-byte, not
+// as shell, URL or Path normalization; SYSTEM's SQL path must also be UTF-8.
+fn discovery_path(mut raw: &[u8]) -> Option<PathBuf> {
+    let mut name=Vec::new();
+    while let Some((&byte,tail))=raw.split_first(){
+        if name.len()>=crate::path_rules::MAX_PATH_BYTES{return None;}
+        match byte {
+            b'\\'=>{
+                let code=tail.get(..3)?;
+                name.push(match code{b"040"=>b' ',b"011"=>b'\t',b"012"=>b'\n',b"134"=>b'\\',_=>return None});
+                raw=&tail[3..];
+            }
+            b' '|b'\t'|b'\n'|0=>return None,
+            v=>{name.push(v);raw=tail;}
+        }
+    }
+    if name.as_slice()!=b"/"{crate::pinned::Kind::StorageRoot.check_path(&name).ok()?;}
+    std::str::from_utf8(&name).ok()?;
+    Some(PathBuf::from(OsStr::from_bytes(&name)))
+}
+
+struct DiscoveryTable{mounts:Mounts,names:BTreeMap<PathBuf,Option<(u64,u64)>>,roots:Vec<DiscoveryMount>}
+impl DiscoveryTable{
+    fn named(&self,path:&Path,parent:Option<u64>)->io::Result<Option<u64>>{
+        let no=||unknown("no unambiguous exact local mount at this discovery crossing");
+        let Some(row)=self.names.get(path) else {return Ok(None);};
+        let (id,up)=(*row).ok_or_else(no)?;
+        if !self.mounts.discovery_ancestry(id)||parent.is_some_and(|p|p!=up){return Err(no());}
+        Ok(Some(id))
+    }
+}
+/// One process-local discovery cut; its table cannot be populated by CLI,
+/// a file argument, Helper config or an external mount/identity cache.
+pub(crate) struct DiscoveryView{table:DiscoveryTable,fds:DiscoveryFdInfo}
+impl DiscoveryView{
+    pub(crate) fn roots(&self)->&[DiscoveryMount]{&self.table.roots}
+    pub(crate) fn same_scope(&self,other:&Self)->bool{
+        self.table.names==other.table.names&&self.table.mounts.0==other.table.mounts.0&&self.table.roots==other.table.roots
+    }
+}
+impl DiscoveryAdmission for DiscoveryView{
+    fn root_mount(&self)->io::Result<u64>{
+        self.table.named(Path::new("/"),None)?.ok_or_else(||unknown("cannot prove a local visible root for discovery"))
+    }
+    fn crossing(&self,parent:u64,prefix:&Path)->io::Result<Option<u64>>{self.table.named(prefix,Some(parent))}
+    fn admit(&self,fd:&File)->io::Result<u64>{
+        let id=self.fds.mount(fd)?;
+        if !self.table.mounts.discovery_ancestry(id){return Err(unknown("a live discovery path is not on an admitted local mount"));}
+        Ok(id)
+    }
+}
+
 impl Mounts {
     pub(crate) fn current() -> io::Result<Self> {
         let f = super::thread_evidence::mountinfo()?;
@@ -39,10 +102,55 @@ impl Mounts {
         Self::parse(&bytes)
     }
 
+    pub(crate) fn discovery_view(automatic:bool) -> io::Result<DiscoveryView> {
+        let f=super::thread_evidence::passive_mountinfo()?;
+        let mut bytes=Vec::new();
+        f.take(TABLE_BYTES as u64+1).read_to_end(&mut bytes)?;
+        Ok(DiscoveryView{table:Self::discovery_table(&bytes,automatic)?,fds:DiscoveryFdInfo::open()?})
+    }
+    #[cfg(test)]
+    fn discover(bytes:&[u8])->io::Result<Vec<DiscoveryMount>>{
+        Ok(Self::discovery_table(bytes,true)?.roots)
+    }
+    fn discovery_table(bytes:&[u8],automatic:bool)->io::Result<DiscoveryTable>{
+        let mut roots=Vec::new();let mut names=BTreeMap::new();
+        let table=Self::parse_each(bytes,|id,row,point|{
+            let Some(path)=discovery_path(point)else{return Ok(());};
+            names.entry(path.clone()).and_modify(|entry|*entry=None).or_insert(Some((id,row.parent)));
+            // No overlay, network, device-free pseudo filesystems, autofs or
+            // filesystem subtree binds in automatic discovery. Explicit
+            // selection is the only fallback, not a recursive path scan.
+            if let Some(magic)=row.magic.filter(|_|automatic&&row.whole&&row.device!=0&&!row.namespace_root) {
+                if roots.len()==DISCOVERY_ROOTS{
+                    return Err(unknown("too many eligible mounted roots; select one --system directory"));
+                }
+                roots.push(DiscoveryMount{path,id,device:row.device,magic});
+            }
+            Ok(())
+        })?;
+        // A reachable local mount can itself be nested under NFS, autofs or
+        // another unsupported parent. Skip these before any pathname walk.
+        roots.retain(|r|table.discovery_ancestry(r.id));
+        roots.sort_unstable_by(|a,b|(&a.path,a.id).cmp(&(&b.path,b.id)));
+        Ok(DiscoveryTable{mounts:table,names,roots})
+    }
+    fn discovery_ancestry(&self,mut id:u64)->bool{
+        for _ in 0..=256{
+            let Some(row)=self.0.get(&id).filter(|r|r.magic.is_some()&&r.device!=0) else{return false;};
+            if row.namespace_root{return true;}
+            if row.parent==id{return false;}
+            id=row.parent;
+        }
+        false
+    }
+
     // mountinfo(5), numeric mount ID, parent, major:minor, then the root
     // *inside* the filesystem. Field five's visible mountpoint is not this root.
     // No stored paths are decoded, logged or subsequently opened.
     fn parse(bytes: &[u8]) -> io::Result<Self> {
+        Self::parse_each(bytes,|_,_,_|Ok(()))
+    }
+    fn parse_each(bytes: &[u8],mut visit:impl FnMut(u64,Row,&[u8])->io::Result<()>) -> io::Result<Self> {
         let bad = || unknown("incomplete, oversized or ambiguous mountinfo");
         if bytes.is_empty() || bytes.len() > TABLE_BYTES || !bytes.ends_with(b"\n") { return Err(bad()); }
         let mut rows = BTreeMap::new();
@@ -63,11 +171,13 @@ impl Mounts {
             let point=words.next().filter(|w|w.starts_with(b"/")).ok_or_else(bad)?;
             if !words.next().is_some_and(|w| !w.is_empty()) || !words.any(|w| w == b"-") { return Err(bad()); }
             let fs_type=words.next().filter(|v|!v.is_empty()).ok_or_else(bad)?;
+            let row=Row {parent,device,whole:root==b"/",devtmpfs:fs_type==b"devtmpfs",
+                site_level:site_level(point),magic:data_magic(fs_type),namespace_root:point==b"/"};
             if !(0..2).all(|_| words.next().is_some_and(|w| !w.is_empty())) || words.next().is_some()
-                || rows.insert(id, Row { parent, device, whole:root==b"/", devtmpfs:fs_type==b"devtmpfs",
-                    site_level:site_level(point), magic:data_magic(fs_type) }).is_some() {
+                || rows.insert(id,row).is_some() {
                 return Err(bad());
             }
+            visit(id,row,point)?;
         }
         Ok(Self(rows))
     }

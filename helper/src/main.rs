@@ -30,7 +30,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-ordinary-retirement --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper install-pool web new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --approval ID --recycle-name NAME --listen ADDR/PREFIX [--listen ADDR/PREFIX ...] --share DIR NAME ro|rw [--share DIR NAME ro|rw ...]\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --setup-op SETUP_OP --approval ID --live-sha256 HEX\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --bound-sha256 HEX --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --bound-sha256 HEX --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper install-web-unit --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper web-unit start --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper web-unit stop --system DIR --pool ID --approval ID --zxs-sha256 HEX\n  helper web-unit status --system DIR --pool ID --zxs-sha256 HEX\n  helper start-smb --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --bound-sha256 HEX\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-ordinary-retirement --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper install-pool web new|resume --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper setup-pair provision --create-layout --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --approval ID --recycle-name NAME --listen ADDR/PREFIX [--listen ADDR/PREFIX ...] --share DIR NAME ro|rw [--share DIR NAME ro|rw ...]\n  helper setup-pair provision --system DIR --pool ID --init ID --instance ID --op DOMAIN_OP --setup-op SETUP_OP --approval ID --live-sha256 HEX\n  helper setup-pair enroll --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --bound-sha256 HEX --op SETUP_OP --approval ID --web-login NAME --smb-login NAME [--receipt-only|--resume]\n  helper setup-pair reset-smb --system DIR --pool ID --init ID --instance ID --domain-op ID --bound-sha256 HEX --setup-op ID --op ID --approval ID --smb-account ID --smb-login NAME --previous-op ID --previous-generation N [--receipt-only|--resume]\n  helper install-web-unit --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper web-unit start --system DIR --pool ID --init INIT_OP --setup-op SETUP_OP --approval ID --zxs-sha256 HEX\n  helper web-unit stop --system DIR --pool ID --approval ID --zxs-sha256 HEX\n  helper web-unit status --system DIR --pool ID --zxs-sha256 HEX\n  helper start-smb --system DIR --pool ID --init ID --instance ID --domain-op DOMAIN_OP --setup-op SETUP_OP --bound-sha256 HEX\n  helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op ID --op ID --approval ID --web-account ID --previous-op ID --previous-generation N [--receipt-only]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -39,6 +39,7 @@ enum Command {
     Version,
     Directories(Vec<PathBuf>),
     Compare(PathBuf, PathBuf),
+    Discover(sqlite_install::Discovery),
     Storage(Selection),
     RetirementCheck(sqlite_install::RetirementCheck),
     Install(sqlite_install::Installation),
@@ -81,6 +82,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(Command::Setup);}
     if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "check-ordinary-retirement"{return sqlite_install::RetirementCheck::parse(args).map(Command::RetirementCheck);}
+    if op == "discover"{return sqlite_install::Discovery::parse(args).map(Command::Discover);}
     if op == "disk-web" {
         use fat32_check::{Format,LeasedFormat,Request,panel::Job};
         return match args.next(){
@@ -184,6 +186,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Install(i)=>{let(code,public)=i.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         Command::Setup(s)=>{let(code,public)=s.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         Command::RetirementCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
+        Command::Discover(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}
         Command::Help => line(USAGE)?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
@@ -248,6 +251,16 @@ fn main() -> ExitCode {
 mod copy_arguments{
     use super::*;
     use fat32_check::{LeasedFormat,panel::Job};
+
+    #[test]
+    fn stateless_discovery_accepts_no_authority_or_saved_path_flags(){
+        let cmd=|a:&[&str]|parse(a.iter().map(|&v|OsString::from(v)));
+        assert!(matches!(cmd(&["discover"]),Ok(Command::Discover(_))));
+        assert!(matches!(cmd(&["discover","--system","/mnt/control/pool"]),Ok(Command::Discover(_))));
+        for bad in [&["discover","/mnt/control/pool"][..],&["discover","--system",".."],
+            &["discover","--system","/"],&["discover","--system","/a","--system","/b"],
+            &["discover","--adopt"],&["discover","--save","/elsewhere"]]{assert!(cmd(bad).is_err());}
+    }
 
     #[test]
     fn the_panel_takes_exactly_one_foreground_storage_selection_and_no_image_with_it(){

@@ -4,6 +4,42 @@ use crate::{path_rules::Kind, test_area::subtree_bind_directory};
 use std::fs;
 
 #[test]
+fn stateless_discovery_uses_only_escaped_whole_local_mount_names_and_is_bounded(){
+    let raw=b"41 41 8:1 / / rw - ext4 /dev/root rw\n\
+        42 41 8:2 / /mnt/one\\040space\\134disk\\012line\\011tab rw - ext4 /dev/local rw\n\
+        43 41 8:2 /subtree /mnt/bind rw - ext4 /dev/local rw\n\
+        44 41 0:3 / /mnt/net rw - nfs4 vendor:/root rw\n\
+        45 41 0:4 / /mnt/auto rw - autofs systemd-1 rw\n\
+        46 41 0:5 / /mnt/virtual rw - tmpfs tmpfs rw\n\
+        47 41 8:3 / /srv/other rw - xfs /dev/second rw\n\
+        48 41 8:4 / /mnt/noncanonical\\141 rw - ext4 /dev/third rw\n\
+        49 44 8:5 / /mnt/net/child rw - ext4 /dev/nested rw\n\
+        50 41 8:6 / /mnt/stack rw - ext4 /dev/lower rw\n\
+        51 50 0:10 / /mnt/stack rw - autofs top rw\n";
+    let got=Mounts::discover(raw).unwrap();
+    assert_eq!(got.len(),3); // stacked lower is a possible raw candidate, never opened
+    assert_eq!(got[0],DiscoveryMount{path:"/mnt/one space\\disk\nline\ttab".into(),id:42,
+        device:makedev(8,2),magic:EXT4_SUPER_MAGIC});
+    assert_eq!(got[1].id,50);assert_eq!(got[2].id,47);
+    let named=Mounts::discovery_table(raw,false).unwrap();
+    assert!(named.roots.is_empty()); // explicit selection does not collect targets
+    assert_eq!(named.named(Path::new("/"),None).unwrap(),Some(41));
+    assert_eq!(named.named(&got[0].path,Some(41)).unwrap(),Some(42));
+    assert!(named.named(&got[0].path,Some(47)).is_err());
+    for p in ["/mnt/net","/mnt/net/child","/mnt/auto","/mnt/virtual","/mnt/stack"]{
+        assert!(named.named(Path::new(p),Some(41)).is_err());
+    }
+    assert_eq!(named.named(Path::new("/mnt/ordinary-subdir"),Some(41)).unwrap(),None);
+    assert!(Mounts::discover(&raw[..raw.len()-1]).is_err());
+    let mut oversized=String::from("999 999 8:1 / / rw - ext4 /dev/root rw\n");
+    use std::fmt::Write;
+    for i in 1..=DISCOVERY_ROOTS+1{
+        writeln!(oversized,"{i} 999 8:2 / /mnt/r{i} rw - ext4 /dev/local rw").unwrap();
+    }
+    assert!(Mounts::discover(oversized.as_bytes()).is_err());
+}
+
+#[test]
 fn actual_filesystem_root_is_field_four_not_the_visible_mountpoint_or_source() {
     let table = Mounts::parse(b"41 1 8:2 / /home\\040area rw shared:9 - ext4 /dev/test rw\n42 41 8:2 /hidden / rw - ext4 /dev/test rw\n43 41 8:3 / /disk rw - xfs /dev/other rw\n").unwrap();
     assert_eq!(table.whole(41, makedev(8, 2)).unwrap().parent, 1);

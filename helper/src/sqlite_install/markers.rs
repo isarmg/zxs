@@ -2,7 +2,7 @@
 //! markers, arbitrary caller names and filesystem-specific formats are not inputs.
 use super::{bad,originals::Group,DATABASE,MARKER};
 use crate::pinned::Entity;
-use rustix::fs::{AtFlags,Mode,OFlags,StatxFlags,makedev,openat,statx};
+use rustix::fs::{AtFlags,Mode,OFlags,ResolveFlags,StatxFlags,makedev,openat,openat2,statx};
 use std::{ffi::OsStr,fs::File,io,os::unix::{ffi::OsStrExt,fs::FileExt}};
 
 #[derive(Eq,PartialEq)]
@@ -79,6 +79,68 @@ impl Mark{
         self.verify(dir,wanted)?;Ok(again)
     }
 }
+
+/// Non-authoritative, never passed to a SQLite or maintenance opener. A
+/// readable claim and matching database metadata do not prove committed INIT.
+pub(super) struct DiscoveredSystem {
+    mark:Mark,
+    body:[u8;101],
+    database:Stamp,
+}
+impl DiscoveredSystem{
+    pub(super) fn probe(dir:&File,uid:u32)->io::Result<Option<Self>>{
+        let absent=|e:&io::Error|e.kind()==io::ErrorKind::NotFound;
+        let pin=match discovery_leaf(dir,slot()){
+            Ok(f)=>f,
+            Err(e) if absent(&e)=>{
+                return match discovery_leaf(dir,slot()){
+                    Err(e) if absent(&e)=>Ok(None),
+                    _=>Err(bad("a control marker appeared during discovery")),
+                };
+            }
+            Err(e)=>return Err(e),
+        };
+        let before=held(&pin)?;let parent=held(dir)?;
+        feedback_shape(&before,&parent,uid,101)?;
+        let fd=crate::pinned::discovery_claim_reader(&pin,Entity{dev:before.dev,ino:before.ino},before.mount)?;
+        if held(&fd)?!=before||held(&discovery_leaf(dir,slot())?)?!=before{return Err(bad("control marker changed during opening"));}
+        let mark=Mark{fd,s:before};
+        let body=exact_bytes(&mark.fd)?;
+        verify_discovery_mark(&mark,&body,dir)?;
+        let [pool,_,_]=coordinates(&body);
+        if matches!(body[20],1|2)&&volume_body(&body,&pool){return Ok(None);}
+        if !system_body(&body,&pool){return Err(bad("the private marker is not recognizable SYSTEM evidence"));}
+        // Only O_PATH metadata for the database. The time/size check can
+        // yield unknown on a busy pool; no content/lock/journal is used.
+        let database=held(&discovery_leaf(dir,OsStr::new(DATABASE))?)?;
+        let ds=held(dir)?;
+        if database.len==0||database.ino==mark.s.ino{
+            return Err(bad("no distinct positive-sized SYSTEM database metadata"));
+        }
+        feedback_shape(&database,&ds,uid,database.len)?;
+        let found=Self{mark,body,database};found.require(dir)?;Ok(Some(found))
+    }
+    pub(super) fn coordinates(&self)->[[u8;16];3]{coordinates(&self.body)}
+    pub(super) fn require(&self,dir:&File)->io::Result<()>{
+        verify_discovery_mark(&self.mark,&self.body,dir)?;
+        if held(&discovery_leaf(dir,OsStr::new(DATABASE))?)?!=self.database{return Err(bad("SYSTEM database metadata changed"));}
+        Ok(())
+    }
+}
+fn discovery_leaf(dir:&File,name:&OsStr)->io::Result<File>{
+    // Neither current name may be a mounted remote/special file: reject at
+    // lookup, before asking for filesystem metadata or any reader.
+    Ok(File::from(openat2(dir,name,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
+        ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_SYMLINKS|ResolveFlags::NO_MAGICLINKS)?))
+}
+fn verify_discovery_mark(mark:&Mark,body:&[u8;101],dir:&File)->io::Result<()>{
+    let same=||->io::Result<bool>{Ok(held(&mark.fd)?==mark.s&&held(&discovery_leaf(dir,slot())?)?==mark.s)};
+    if !same()?||exact_bytes(&mark.fd)?!=*body||!same()?{return Err(bad("recognized discovery marker changed"));}
+    Ok(())
+}
+fn coordinates(body:&[u8;101])->[[u8;16];3]{
+    std::array::from_fn(|i|body[21+16*i..37+16*i].try_into().expect("fixed marker"))
+}
 /// Fixed physical leaf proof of one independently selected approved F.
 pub(super) struct OrdinaryMark(Mark);
 impl OrdinaryMark{
@@ -125,7 +187,10 @@ impl LiveSystemMark{
     pub(super) fn entity(&self)->Entity{Entity{dev:self.mark.s.dev,ino:self.mark.s.ino}}
 }
 fn system_body(body:&[u8;101],pool:&[u8;16])->bool{
-    body[..20]==*b"ZXS-SQLITE-1/VOLUME\0"&&body[20]==0&&*pool!=[0;16]&&body[21..37]==pool[..]
+    body[20]==0&&volume_body(body,pool)
+}
+fn volume_body(body:&[u8;101],pool:&[u8;16])->bool{
+    body[..20]==*b"ZXS-SQLITE-1/VOLUME\0"&&*pool!=[0;16]&&body[21..37]==pool[..]
         &&body[37..53]!=[0;16]&&body[37..53]!=pool[..]&&body[53..69]!=[0;16]&&body[69..]!=[0;32]
 }
 #[cfg(test)]
