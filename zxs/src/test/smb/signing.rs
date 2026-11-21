@@ -48,6 +48,40 @@ fn hex(s: &str) -> Vec<u8> {
     s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
 }
 
+#[test]
+fn signing_mac_matches_rfc4493_at_every_buffer_split() {
+    // RFC 4493 section 4 (https://www.rfc-editor.org/rfc/rfc4493#section-4).
+    // Check the actual session MAC against published answers, not itself.
+    let signer = SessionSigner {
+        id: NonZeroU64::new(1).unwrap(),
+        key: Zeroizing::new(hex("2b7e151628aed2a6abf7158809cf4f3c").try_into().unwrap()),
+    };
+    let input = hex(concat!(
+        "6bc1bee22e409f96e93d7e117393172a", "ae2d8a571e03ac9c9eb76fac45af8e51",
+        "30c81c46a35ce411e5fbc1191a0a52ef", "f69f2445df4f9b17ad2b417be66c3710",
+    ));
+    for (len, answer) in [
+        (0, "bb1d6929e95937287fa37d129b756746"),
+        (16, "070a16b46b4d4144f79bdd9dd04a287c"),
+        (40, "dfa66747de9ae63030ca32611497c827"),
+        (64, "51f0bebf7e3b9d92fc49741779363cfe"),
+    ] {
+        let answer = hex(answer);
+        for split in 0..=len {
+            let mut mac = signer.mac().unwrap();
+            mac.update(&input[..split]);
+            mac.update(&input[split..len]);
+            assert_eq!(mac.clone().finalize().as_bytes().as_slice(), answer.as_slice(), "{len}/{split}");
+            mac.verify_slice(&answer).unwrap();
+        }
+        let mut incorrect = answer;
+        incorrect[15] ^= 1;
+        let mut mac = signer.mac().unwrap();
+        mac.update(&input[..len]);
+        assert!(mac.verify_slice(&incorrect).is_err());
+    }
+}
+
 fn envelope<T>(p: &[u8], read: impl FnOnce(&Compound<'_>) -> T) -> T {
     let mut transport = (p.len() as u32).to_be_bytes().to_vec();
     transport.extend_from_slice(p);

@@ -1,6 +1,9 @@
+//! RustCrypto CMAC (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
+//! Modified by ZXS to use an internal block doubler and fixed erasure.
+
 use cipher::{BlockCipherEncBackend, BlockCipherEncClosure, BlockCipherEncrypt};
 use core::fmt;
-use dbl::Dbl;
+use super::double::Dbl;
 use digest::{
     MacMarker, Output, OutputSizeUser, Reset,
     array::{Array, ArraySize},
@@ -12,7 +15,6 @@ use digest::{
     common::{InnerInit, InnerUser},
 };
 
-#[cfg(feature = "zeroize")]
 use digest::zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Generic core CMAC instance, which operates over blocks.
@@ -122,14 +124,10 @@ impl<C: CmacCipher> fmt::Debug for CmacCore<C> {
 
 impl<C: CmacCipher> Drop for CmacCore<C> {
     fn drop(&mut self) {
-        #[cfg(feature = "zeroize")]
-        {
-            self.state.zeroize();
-        }
+        self.state.zeroize();
     }
 }
 
-#[cfg(feature = "zeroize")]
 impl<C: CmacCipher + ZeroizeOnDrop> ZeroizeOnDrop for CmacCore<C> {}
 
 #[inline(always)]

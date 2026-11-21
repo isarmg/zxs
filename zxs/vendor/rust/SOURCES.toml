@@ -60,6 +60,7 @@ commit = "192737458879ba34d822c84950b1cca001c8a73e"
 upstream_subdirectory = "cmac"
 archive = "https://static.crates.io/crates/cmac/cmac-0.8.0.crate"
 sha256 = "ac78aa94ce13e432b332a4d1bf2eff167d3a2520188ee05b337180a42fd2e62e"
+internal_module = "src/smb/session/packet_mac"
 
 [[package]]
 name = "cmov"
@@ -132,6 +133,7 @@ commit = "303c9e8e8fd5e08de4719bd6614935bc68c63a55"
 upstream_subdirectory = "dbl"
 archive = "https://static.crates.io/crates/dbl/dbl-0.5.0.crate"
 sha256 = "f0d7a944e61df464668c5f51f56cc667396a8821434273112948ea0b66e405d7"
+internal_module = "src/smb/session/packet_mac/double"
 
 [[package]]
 name = "digest"

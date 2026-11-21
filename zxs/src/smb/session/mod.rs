@@ -5,18 +5,21 @@ mod der;
 pub(in crate::smb) mod envelope;
 mod keyed_digest;
 mod ntlm_shape;
+mod packet_mac;
 mod strict_verifier;
 pub(in crate::smb) use strict_verifier::{MechanismProof,Pending,Rejected as ChallengeRejected,VaultDecoder,challenge::{ChallengeService,ChallengeStep},completion::{BatchRevision,BoundSession,LiveMark}};
 
 #[cfg(test)]
 pub(in crate::smb) use self::keyed_digest::Hmac as HmacForSessionFixture;
 
+#[cfg(test)]
+pub(in crate::smb) type SigningMacForSessionFixture = SigningMac;
+
 use crate::smb::wire::{
     message::{CANCEL, Compound, MAX_COMMANDS, Message, RELATED, SIGNED},
     preauth::RequestKeyContext,
 };
 use aes::Aes128;
-use cmac::Cmac;
 use digest::{KeyInit, Mac};
 use self::keyed_digest::Hmac;
 use sha2::{Sha256, digest::{FixedOutput, Output}};
@@ -24,7 +27,7 @@ use std::num::NonZeroU64;
 use zeroize::{Zeroize, Zeroizing};
 
 type KdfMac = Hmac<Sha256>;
-type SigningMac = Cmac<Aes128>;
+type SigningMac = packet_mac::Cmac<Aes128>;
 type Secret = Zeroizing<[u8; 16]>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

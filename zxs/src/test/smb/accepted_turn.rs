@@ -6,8 +6,7 @@ use super::*;
 use crate::smb::{connection::{sessions::{RunningServerGuid,challenge::tests::provider,tests::running},
     setup::tests::{body,frame},transport::DirectStream},session::{ChallengeService,HmacForSessionFixture as Hmac},
     wire::preauth::tests::synthetic_exchange};
-use aes::Aes128;
-use cmac::Cmac;
+use crate::smb::session::SigningMacForSessionFixture;
 use digest::{KeyInit,Mac};
 use sha2::{Digest,Sha256,Sha512};
 use std::{collections::VecDeque,io::{self,ErrorKind,Read,Write},sync::{Arc,Mutex}};
@@ -50,7 +49,7 @@ fn one_turn(p:&mut Peer,t:&Seen,token:&[u8],mid:u64,sid:u64,want:Turn,h:&mut [u8
     if want!=Turn::FinalWritten {fold(h,&r);}r
 }
 fn tag_for_this_fixture(key:&[u8],smb:&[u8])->[u8;16] {
-    let mut clear=smb.to_vec();clear[48..64].fill(0);let mut mac=Cmac::<Aes128>::new_from_slice(key).unwrap();
+    let mut clear=smb.to_vec();clear[48..64].fill(0);let mut mac=SigningMacForSessionFixture::new_from_slice(key).unwrap();
     Mac::update(&mut mac,&clear);let mut tag=[0;16];tag.copy_from_slice(mac.finalize().as_bytes());tag
 }
 

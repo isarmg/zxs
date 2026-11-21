@@ -1,15 +1,10 @@
-#![no_std]
-#![doc = include_str!("../README.md")]
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/RustCrypto/media/26acc39f/logo.svg",
-    html_favicon_url = "https://raw.githubusercontent.com/RustCrypto/media/26acc39f/logo.svg"
-)]
-#![cfg_attr(docsrs, feature(doc_cfg))]
-
-pub use digest::{self, KeyInit, Mac};
+//! RustCrypto CMAC (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
+//! Modified by ZXS for use inside the SMB session boundary.
+#![forbid(unsafe_code)]
 
 /// Block-level implementation.
-pub mod block_api;
+mod block_api;
+mod double;
 
 use block_api::CmacCipher;
 use core::fmt;

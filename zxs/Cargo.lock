@@ -33,15 +33,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmac"
-version = "0.8.0"
-dependencies = [
- "cipher",
- "dbl",
- "digest",
-]
-
-[[package]]
 name = "cmov"
 version = "0.5.4"
 
@@ -68,13 +59,6 @@ name = "ctutils"
 version = "0.4.8"
 dependencies = [
  "cmov",
-]
-
-[[package]]
-name = "dbl"
-version = "0.5.0"
-dependencies = [
- "hybrid-array",
 ]
 
 [[package]]
@@ -137,7 +121,6 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "cipher",
- "cmac",
  "digest",
  "libc",
  "md-5",

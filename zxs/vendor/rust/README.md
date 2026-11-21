@@ -4,11 +4,12 @@ The private SMB implementation uses RustCrypto SHA-512, HMAC-SHA-256 and
 AES-128-CMAC. Its strict, offline NTLMv2 verifier additionally needs the legacy
 MD5/HMAC-MD5 and RC4 primitives prescribed by MS-NLMP; they are not SMB file
 encryption, a password-storage recommendation, or general crypto primitives
-for new ZXS features. These are the complete
-**library/build sources** of its pinned graph, including every published CPU
-backend, not executable archives, a new product/workspace, or an alternative
-registry. Paths are relative to the importing manifest; neither the invocation
-directory, another project nor a host cryptographic service supplies a crate.
+for new ZXS features. The remaining path packages retain their complete
+**library/build sources**, including every published CPU backend; ZXS-owned
+modules retain the used source. Neither an executable archive, a new product
+nor an alternative registry is built here. Paths are relative to the importing
+manifest; neither the invocation directory, another project nor a host
+cryptographic service supplies a crate.
 
 ## Provenance and local changes
 
@@ -62,29 +63,34 @@ not a Cargo package. Its RustCrypto block-buffer macro and MAC traits still
 come from the same `digest` package. The product's fixed HMAC-SHA-256 session
 derivation and HMAC-MD5 verifier, including their typed digests, are unchanged.
 
+CMAC and the forward 128-bit doubling it uses are now part of the
+[private SMB packet MAC](../../src/smb/session/packet_mac/ORIGIN.md), not
+separate Cargo packages. Signing retains the same AES-128 implementation,
+macros, buffering, erasure and traits. Unused doubling sizes and inverse
+operations were not moved.
+
 ## Active paths and build scope
 
-The ZXS workspace excludes the 19 remaining local path packages, so their own
+The ZXS workspace excludes the 17 remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
 graph. The cipher manifest has no default feature; ZXS makes the already active
 stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
 The one direct digest dependency retains the already active block-api, mac and
-zeroize features of the retired HMAC edge.
+zeroize features used by the internal HMAC and CMAC.
 No derive, alloc/oid, C provider, generated binding, system crypto or external
 service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> aes, cipher [stream-wrapper, zeroize], cmac, digest [block-api, mac, zeroize], libc, md-5, sha2, zeroize
+zxs -> aes, cipher [stream-wrapper, zeroize], digest [block-api, mac, zeroize], libc, md-5, sha2, zeroize
 aes -> cipher, cpubits, cpufeatures [target cfg], zeroize
-cmac -> cipher, dbl, digest
 md-5 -> cfg-if, digest
 sha2 -> cfg-if, cpufeatures [target cfg], digest
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 digest -> block-buffer, crypto-common [alias common], ctutils, zeroize
 block-buffer -> hybrid-array, zeroize
 crypto-common -> hybrid-array
-dbl, inout -> hybrid-array
+inout -> hybrid-array
 hybrid-array -> typenum, zeroize
 ctutils -> cmov
 cpufeatures -> libc [target cfg, including Linux AArch64]

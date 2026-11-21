@@ -6,7 +6,8 @@ use crate::smb::connection::{
     setup::tests::{frame,parsed},transport::DirectStream,
 };
 use std::{io::{Read,Write},sync::Mutex};
-use cmac::{KeyInit,Mac};
+use crate::smb::session::SigningMacForSessionFixture;
+use digest::{KeyInit,Mac};
 use crate::smb::wire::fixed_reply::{LOGOFF,TREE_DISCONNECT};
 use crate::smb::wire::io_reply::{FLUSH,WRITE};
 use crate::smb::wire::set_info::SET_INFO;
@@ -17,7 +18,7 @@ fn signed(packet:&mut [u8]){
     // Existing public raw-profile synthetic answer in final_keys.rs.
     let key=[0x90,0xda,0x95,0x77,0x49,0x4a,0x46,0x81,0x3d,0x02,0x54,0xb5,0xed,0x28,0x88,0x7f];
     packet[48..64].fill(0);
-    let mut mac=cmac::Cmac::<aes::Aes128>::new_from_slice(&key).unwrap();mac.update(packet);
+    let mut mac=SigningMacForSessionFixture::new_from_slice(&key).unwrap();mac.update(packet);
     packet[48..64].copy_from_slice(mac.finalize().as_bytes());
 }
 
