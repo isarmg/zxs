@@ -230,6 +230,22 @@ class FreshFolderSnapshot(unittest.TestCase):
                          (self.plan.repo, self.plan.branch, self.plan.operation, 1, None))
         self.assertEqual((self.source / "one" / "equal-name").read_bytes(), b"first directory")
 
+    def test_fresh_unmarked_snapshot_can_open_but_mark_preserving_zip_save_never_stages(self):
+        self.plan.review()
+        self.plan.run(confirmed=True)
+        selected = Selection.open(self.final, retain=True)
+        self.stack.callback(selected.release_display)
+        self.assertEqual(selected.browser.commit.operation, self.plan.operation)
+        original = self.final.read_bytes()
+        save = self.stack.enter_context(closing(copy.SnapshotCopy(selected, self.dest, as_zip=True)))
+        with patch.object(copy.native(), "clone", side_effect=AssertionError("never clone an unmarked archive")):
+            with self.assertRaisesRegex(Rejected, "只接受有原隔离来源的归档"):
+                save.review()
+            with self.assertRaises(Rejected): save.run(confirmed=True)
+        self.assertFalse(save.destination.exists())
+        self.assertFalse((self.dest / save.stage).exists())
+        self.assertEqual(self.final.read_bytes(), original)
+
     def test_inaccessible_quarantine_status_fails_before_staging(self):
         with patch.object(copy.native(), "property", return_value=False):
             with self.assertRaisesRegex(Rejected, "不会当成无标记"): self.plan.review()

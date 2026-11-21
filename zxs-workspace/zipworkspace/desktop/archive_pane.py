@@ -38,9 +38,12 @@ class ArchivePane(QWidget):
             actions.addWidget(self.save_zip)
         if sys.platform == "darwin":
             self.save_copy = button("另存同名完整归档…", self.choose_copy)
-            actions.addWidget(self.save_copy)
             self.save_zip = button("另存完整快照为 ZIP…", lambda: self.choose_copy(as_zip=True))
-            actions.addWidget(self.save_zip)
+            origin_hint = "原归档须自带可核验的系统隔离来源。刚从本机目录生成的无标记快照可浏览，不能用此入口另存。"
+            for action in (self.save_copy, self.save_zip):
+                action.setToolTip(origin_hint)
+                action.setAccessibleDescription(origin_hint)
+                actions.addWidget(action)
         layout.addLayout(actions)
         self.details = label()
         self.raw_check = button("核验并显示整包 SHA-256…", self.check_raw)
