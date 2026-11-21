@@ -59,7 +59,7 @@ pub(in crate::system::reader) fn check_alias_name(root:&OrdinaryRoot<'_>,name:&s
     ->io::Result<Option<Installed>>{
     check_alias_at(root.folder(),name,owner,sample)
 }
-fn check_alias_at(parent:&HeldDir,name:&str,owner:Option<&file_create::Alias>,sample:Option<&BTreeSet<Vec<u8>>>)
+pub(super) fn check_alias_at(parent:&HeldDir,name:&str,owner:Option<&file_create::Alias>,sample:Option<&BTreeSet<Vec<u8>>>)
     ->io::Result<Option<Installed>>{
     if Birth::reserved_spelling(name.as_bytes()){return Ok(None);}
     let leaf=CString::new(name).map_err(|_|invalid("invalid display leaf"))?;

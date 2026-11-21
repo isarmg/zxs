@@ -81,7 +81,7 @@ impl OrdinaryView<'_>{
     pub(super) fn require_streaming(&self)->io::Result<()>{
         self.require_streaming_at(||Ok(()))
     }
-    fn require_streaming_at(&self,at_target:impl FnOnce()->io::Result<()>)->io::Result<()>{
+    pub(super) fn require_streaming_at(&self,at_target:impl FnOnce()->io::Result<()>)->io::Result<()>{
         crate::fs::WitnessRead::require_parent(&self.source.dir.root)?;
         check(unsafe{zxs_sql_named(self.source.conn.0)})?;
         self.source.marker.require(&self.source.dir.root)?;
