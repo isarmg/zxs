@@ -5,6 +5,7 @@ pub(super) mod root_query;
 pub(super) mod retire;
 pub(super) mod file_read;
 pub(super) mod file_write;
+mod interface_probe;
 pub(super) mod ordinary_move;
 pub(super) mod root_attributes;
 pub(super) mod restore;

@@ -1,6 +1,6 @@
 //! Closed, small synchronous replies to an original paid, signed member.
 //! No generic success body or caller-selected wire ID.
-use super::{Error,Result,create_fields::{Disposition,MaximumAccessQuery},io_reply::{FLUSH,FileReply,WRITE},message::{Message,RELATED,SIGNED,Routing},
+use super::{Error,Result,create_fields::{Disposition,MaximumAccessQuery},io_reply::{FLUSH,FileReply,WRITE},message::{Message,RELATED,SIGNED,Routing},network_probe::{IOCTL,NetworkProbe},
     query_fields::{FileClass,FsClass,InfoClass},set_info::{Change,FileSetRequest,RenameRequest,SET_INFO}};
 use crate::smb::{
     backend::{CloseCompletion,FS_SIZE_BYTES,PreparedDisposition,PreparedOrdinaryRename,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRetainedRestore,tree_connect::QualifiedTreeConnect},
@@ -40,6 +40,14 @@ pub(in crate::smb) enum TreeFailure {
     InsufficientResources=0xc000_009a,
     BadNetworkName=0xc000_00cc,
     ServerUnavailable=0xc000_0466,
+}
+
+#[derive(Clone,Copy)]
+#[repr(u32)]
+pub(in crate::smb) enum NetworkProbeFailure{
+    InvalidParameter=0xc000_000d,
+    NotSupported=0xc000_00bb,
+    NetworkNameDeleted=0xc000_00c9,
 }
 
 #[derive(Clone,Copy)]
@@ -128,6 +136,23 @@ impl UnsignedSmall {
         // StructureSize=9, eight fixed bytes, zero context count/ByteCount.
         draft.raw[64]=9;
         Ok(draft)
+    }
+
+    pub(in crate::smb) fn network_probe_failure(member:&VerifiedMember<'_,'_>,sid:NonZeroU64,
+        why:NetworkProbeFailure)->Result<Self>{
+        use NetworkProbeFailure::{InvalidParameter,NetworkNameDeleted,NotSupported};
+        let probe=member.message().network_interface_probe().ok_or(Error::InvalidRequest)?;
+        let allowed=match (probe,why){
+            (_,NetworkNameDeleted)|(NetworkProbe::NotFsctl,NotSupported)|
+            (NetworkProbe::InvalidFileId|NetworkProbe::NoHandle{..},InvalidParameter)=>true,
+            (NetworkProbe::NoHandle{max_output},NotSupported)=>max_output<=member.max_transact(),
+            _=>false,
+        };
+        if member.ordinal()!=0||!allowed{return Err(Error::InvalidRequest);}
+        // This is an SMB2 ERROR, never a successful IOCTL with an empty list.
+        // No error data, contexts, FileId, or interface bytes follow the fixed part.
+        let mut draft=Self::standalone(member,sid,IOCTL,why as u32,EMPTY_ERROR)?;
+        draft.raw[64]=9;Ok(draft)
     }
 
     pub(in crate::smb) fn tree_success(approved:&QualifiedTreeConnect<'_,'_>,sid:NonZeroU64,id:&ProposedTreeId)
