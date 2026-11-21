@@ -18,17 +18,22 @@ fn no()->io::Error{invalid("the selected output name, parent or new private work
 fn live()->io::Result<()>{if cancelled(){Err(io::ErrorKind::Interrupted.into())}else{Ok(())}}
 fn print_sha(v:&[u8;32])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 
-#[derive(Clone,Copy,Debug)]
-enum RepairFormat{Ext4,Exfat,Fat32}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) enum RepairFormat{Ext4,Exfat,Fat32}
 impl RepairFormat{
+    pub(crate) fn scope_code(self)->u8{match self{Self::Ext4=>1,Self::Exfat=>2,Self::Fat32=>3}}
+    pub(crate) fn from_scope_code(code:u8)->Option<Self>{match code{
+        1=>Some(Self::Ext4),2=>Some(Self::Exfat),3=>Some(Self::Fat32),_=>None,
+    }}
+    pub(crate) fn panel_label(self)->&'static str{match self{Self::Ext4=>"ext",Self::Exfat=>"exFAT",Self::Fat32=>"FAT32"}}
     fn image(self)->&'static std::ffi::CStr{match self{Self::Ext4=>c"image.ext",Self::Exfat=>c"image.exfat",Self::Fat32=>c"image.fat32"}}
     fn leaf(self)->&'static OsStr{OsStr::from_bytes(self.image().to_bytes())}
     fn label(self)->&'static str{match self{Self::Ext4=>"ext-family",Self::Exfat=>"exFAT",Self::Fat32=>"FAT32"}}
     fn slug(self)->&'static str{match self{Self::Ext4=>".zxs-ext-work-",Self::Exfat=>".zxs-exfat-work-",Self::Fat32=>".zxs-fat32-work-"}}
     fn usage(self)->&'static str{match self{
         Self::Ext4=>"expected repair-ext4-copy [web] ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
-        Self::Exfat=>"expected repair-exfat-copy ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
-        Self::Fat32=>"expected repair-fat32-copy ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
+        Self::Exfat=>"expected repair-exfat-copy [web] ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
+        Self::Fat32=>"expected repair-fat32-copy [web] ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
     }}
 }
 
@@ -48,7 +53,6 @@ impl Request{
         let usage=format.usage();
         let first=a.next().ok_or(usage)?;
         let web=first=="web";
-        if web&&!matches!(format,RepairFormat::Ext4){return Err(usage);}
         let source=PathBuf::from(if web{a.next().ok_or(usage)?}else{first});
         if a.next().as_deref()!=Some(OsStr::new("--sha256")){return Err(usage);}
         let digest=a.next().and_then(|v|hex(v.to_str()?)).ok_or(usage)?;
@@ -81,11 +85,7 @@ impl Request{
         let require=||{
             dest.require_unoccupied()?;original.require()?;runtime.recheck()
         };
-        match self.format{
-            RepairFormat::Ext4=>crate::sqlite_install::confirm_ext_repair(preview,self.web.then_some(length),&require)?,
-            RepairFormat::Exfat=>crate::sqlite_install::confirm_exfat_repair(preview,&require)?,
-            RepairFormat::Fat32=>crate::sqlite_install::confirm_fat32_repair(preview,&require)?,
-        }
+        crate::sqlite_install::confirm_copy_repair(self.format,preview,self.web.then_some(length),&require)?;
         require()?;
         runner::prepare_work_repair(length)?;
         // A partial copy is not adopted or cleaned up on paper after a
@@ -296,7 +296,7 @@ mod tests{
         let parse=|s:&str|Request::parse_exfat(s.split(' ').map(OsString::from));
         let job=parse(&approved).unwrap();
         assert_eq!(job.output.join(job.format.leaf()),Path::new("/new/work/image.exfat"));
-        assert!(parse(&format!("web {approved}")).is_err());
+        assert!(parse(&format!("web {approved}")).unwrap().web);
         for option in ["-y","-s","-b","-p","--overwrite"]{
             assert!(parse(&format!("{approved} {option}")).is_err());
         }
@@ -311,7 +311,7 @@ mod tests{
         let fat=|s:&str|Request::parse_fat32(s.split(' ').map(OsString::from));
         let job=fat(&approved).unwrap();
         assert_eq!(job.output.join(job.format.leaf()),Path::new("/new/work/image.fat32"));
-        assert!(fat(&format!("web {approved}")).is_err());
+        assert!(fat(&format!("web {approved}")).unwrap().web);
         assert!(fat(&format!("{approved} -p")).is_err());
         assert!(fat(&format!("{prefix}{parent}/{}","a".repeat(more-1))).is_ok());
         assert!(fat(&format!("{prefix}{parent}/{}","a".repeat(more))).is_err());

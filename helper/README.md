@@ -56,11 +56,11 @@ helper disks --device 259:1 --rates
 
 `helper check-fat32-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。只接受已保存、最多 128 MiB 的普通 FAT32 卷镜像，不接受设备、分区表或任意工具参数。检查器只看到已核摘要的独立副本，在独立的 Linux 命名空间中运行 `fsck.fat -n`；不会修复或改写原镜像。[Debian 13 amd64 的发行配方](packaging/debian13-amd64/README.md)将上游工具与其运行库放在 helper 私有目录；不借用宿主同名程序，不自动安装。缺件或隔离不成立就拒绝。详见[配置、结果和限制](docs/fat32-copy-check.md)。本批只写源码，尚无实跑证据。
 
-[`repair-fat32-copy`](docs/fat32-copy-check.md#只修新建的工作副本) 是另一项本机确认操作。固定 `fsck.fat -p` 仅处理新工作文件，可能截短或删除工作副本内的受损项，独立只读复查通过后无覆盖发布；不改原输入、磁盘或现有输出，不由网页执行。
+[`repair-fat32-copy`](docs/fat32-copy-check.md#只修新建的工作副本) 是另一项本机确认操作。固定 `fsck.fat -p` 仅处理新工作文件，可能截短或删除工作副本内的受损项，独立只读复查通过后无覆盖发布；不改原输入、磁盘或现有输出。可加 `web` 先从[独立配对页](docs/disk-web.md#可选由同机浏览器发起工作副本的终端确认)请求原终端确认；网页不执行。
 
 exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。它只对 1–128 MiB、符合单卷边界的封存副本运行包内 `fsck.exfat -n`。返回 0 只表示此次检查未报告问题；1 表示明确报告问题或卷状态位须注意；2 表示未能确认。不会修盘，也不检查普通文件正文。[范围、结果与上游依据](docs/exfat-copy-check.md)。也可在终端按上述方式预选 exFAT，由配对页面确认同一项检查。
 
-另有本机确认的 [`repair-exfat-copy`](docs/exfat-copy-check.md#只修新建的工作副本)：仅对新工作文件固定 `fsck.exfat -p`，再次只读检查后无覆盖发布。自动修复可能截短或删除工作副本里的损坏项，不改变输入、原盘或现有输出，不提供网页登录修复。
+另有本机确认的 [`repair-exfat-copy`](docs/exfat-copy-check.md#只修新建的工作副本)：仅对新工作文件固定 `fsck.exfat -p`，再次只读检查后无覆盖发布。自动修复可能截短或删除工作副本里的损坏项，不改变输入、原盘或现有输出。可加 `web` 先请求同一终端确认，网页不执行。
 
 ## 检查一份 ext4 保存副本（只读）
 

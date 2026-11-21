@@ -1,20 +1,21 @@
 //! A one-shot browser handoff on its own already isolated listener. It has
-//! only a purpose and a count or byte length, never a path, device or command.
+//! a typed install count or a fixed format and byte length. No paths or commands.
 use super::{Panel,Reply,Request,digest,http,matches,token};
+use crate::fat32_check::repair::RepairFormat;
 use std::{io,net::TcpListener,thread,time::{Duration,Instant}};
 const TICKET:Duration=Duration::from_secs(90);
 #[derive(Clone,Copy)]
-enum Purpose{Install{fresh:bool,count:u8},ExtRepair{bytes:u64}}
+enum Purpose{Install{fresh:bool,count:u8},CopyRepair{format:RepairFormat,bytes:u64}}
 pub(super) struct Offer{
     purpose:Purpose,ticket:Option<([u8;32],Instant)>,requested:bool,
 }
 impl Offer{
-    pub(super) fn is_repair(&self)->bool{matches!(self.purpose,Purpose::ExtRepair{..})}
+    pub(super) fn is_repair(&self)->bool{matches!(self.purpose,Purpose::CopyRepair{..})}
     pub(super) fn route(&mut self,r:Request,now:Instant)->(Reply,bool){
         let (preview,request,requested,cancelled)=match self.purpose{
             Purpose::Install{..}=>("/api/install/preview","/api/install/request",
                 "请求已交回本机终端。网页将关闭；尚未启用、设密或写盘。","安装请求已取消。未写入。"),
-            Purpose::ExtRepair{..}=>("/api/ext-repair/preview","/api/ext-repair/request",
+            Purpose::CopyRepair{..}=>("/api/copy-repair/preview","/api/copy-repair/request",
                 "请求已交回本机终端。网页将关闭；尚未读取或修复镜像。","工作副本请求已取消。未写入。"),
         };
         if r.path==request{
@@ -36,7 +37,7 @@ impl Offer{
                 self.ticket=Some((digest(ticket.as_bytes()),now+TICKET));
                 let page=match self.purpose{
                     Purpose::Install{fresh,count}=>format!("{}\n{count}\n{ticket}",if fresh{"new"}else{"resume"}),
-                    Purpose::ExtRepair{bytes}=>format!("repair\n{bytes}\n{ticket}"),
+                    Purpose::CopyRepair{format,bytes}=>format!("{}\n{bytes}\n{ticket}",format.panel_label()),
                 };
                 (Reply::plain(200,page),false)
             }
@@ -50,10 +51,10 @@ pub(crate) fn serve_first(listener:TcpListener,fresh:bool,count:u8,code:[u8;32],
     if !(1..=62).contains(&count){return Err(io::Error::other("invalid fixed installation panel scope"));}
     serve(listener,Purpose::Install{fresh,count},code,end,check)
 }
-pub(crate) fn serve_repair(listener:TcpListener,bytes:u64,code:[u8;32],end:Instant,
+pub(crate) fn serve_repair(listener:TcpListener,format:RepairFormat,bytes:u64,code:[u8;32],end:Instant,
     check:impl Fn()->io::Result<()>)->io::Result<bool>{
     if !(1..=i64::MAX as u64).contains(&bytes){return Err(io::Error::other("invalid fixed copy-repair panel scope"));}
-    serve(listener,Purpose::ExtRepair{bytes},code,end,check)
+    serve(listener,Purpose::CopyRepair{format,bytes},code,end,check)
 }
 fn serve(listener:TcpListener,purpose:Purpose,code:[u8;32],end:Instant,
     check:impl Fn()->io::Result<()>)->io::Result<bool>{
@@ -99,6 +100,7 @@ mod tests{
         let mut offer=Offer{purpose:Purpose::Install{fresh:true,count:2},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false};
         assert_eq!(offer.route(post("/api/install/request",b"/host/disk"),now).0.code,400);
         assert_eq!(offer.route(post("/api/copy/preview",b""),now).0.code,404);
+        assert_eq!(offer.route(post("/api/copy-repair/preview",b""),now).0.code,404);
         assert_eq!(offer.route(post("/api/install/request",token.as_bytes()),now+TICKET).0.code,403);
         let (message,close)=offer.route(post("/api/install/request",token.as_bytes()),now);
         assert_eq!(message.code,200);assert!(close&&offer.requested);
@@ -109,31 +111,46 @@ mod tests{
         let now=Instant::now();let token="a".repeat(64);let bearer="b".repeat(64);let csrf="c".repeat(64);
         let mut panel=Panel::new("127.0.0.1:1900".into(),b"not-used",now);
         panel.session=Some(super::super::Session{bearer:digest(bearer.as_bytes()),csrf:digest(csrf.as_bytes())});
-        panel.handoff=Some(Offer{purpose:Purpose::ExtRepair{bytes:4096},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false});
+        panel.handoff=Some(Offer{purpose:Purpose::CopyRepair{format:RepairFormat::Exfat,bytes:4096},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false});
         let request=|path:&str|{
             let mut r=post(path,token.as_bytes());r.auth=Some(format!("Bearer {bearer}"));r.csrf=Some(csrf.clone());r
         };
-        let mut origin=request("/api/ext-repair/request");origin.origin=Some("http://localhost:1900".into());
+        let mut origin=request("/api/copy-repair/request");origin.origin=Some("http://localhost:1900".into());
         assert_eq!(panel.handle_with_guide(origin,now,||panic!("no guide in this mode")).code,403);
-        let mut cookie=request("/api/ext-repair/request");cookie.csrf=None;
+        let mut cookie=request("/api/copy-repair/request");cookie.csrf=None;
         assert_eq!(panel.handle_with_guide(cookie,now,||panic!("no guide in this mode")).code,403);
         assert_eq!(panel.handle_with_guide(request("/api/install/request"),now,||panic!("no guide in this mode")).code,400);
         assert!(!panel.closed);
-        assert_eq!(panel.handle_with_guide(request("/api/ext-repair/request"),now,||panic!("no guide in this mode")).code,200);
+        assert_eq!(panel.handle_with_guide(request("/api/copy-repair/request"),now,||panic!("no guide in this mode")).code,200);
         assert!(panel.closed);
+    }
+    #[test]
+    fn repair_page_displays_only_the_parent_selected_format_and_length(){
+        let now=Instant::now();
+        for (format,label) in [(RepairFormat::Ext4,"ext"),(RepairFormat::Exfat,"exFAT"),(RepairFormat::Fat32,"FAT32")]{
+            let mut offer=Offer{purpose:Purpose::CopyRepair{format,bytes:4096},ticket:None,requested:false};
+            let (page,close)=offer.route(post("/api/copy-repair/preview",b""),now);
+            assert!(!close);assert_eq!(page.code,200);
+            let mut fields=page.body.lines();
+            assert_eq!(fields.next(),Some(label));assert_eq!(fields.next(),Some("4096"));
+            let ticket=fields.next().unwrap();assert!(matches(ticket.as_bytes(),&offer.ticket.unwrap().0));
+            assert!(fields.next().is_none());
+            assert_eq!(offer.route(post("/api/copy-repair/request",b"exFAT"),now).0.code,400);
+            assert_eq!(offer.route(post("/api/copy-repair/request",ticket.as_bytes()),now).0.code,200);
+        }
     }
     #[test]
     fn repair_preview_has_a_separate_purpose_without_files_and_consumes_one_ticket(){
         let now=Instant::now();let token="a".repeat(64);
-        let mut offer=Offer{purpose:Purpose::ExtRepair{bytes:i64::MAX as u64},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false};
+        let mut offer=Offer{purpose:Purpose::CopyRepair{format:RepairFormat::Fat32,bytes:i64::MAX as u64},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false};
         assert!(offer.is_repair());
         assert_eq!(offer.route(post("/api/install/request",token.as_bytes()),now).0.code,400);
         assert_eq!(offer.route(post("/api/disks",b""),now).0.code,404);
-        assert_eq!(offer.route(post("/api/ext-repair/preview",b"--repair /path"),now).0.code,400);
-        assert_eq!(offer.route(post("/api/ext-repair/request",b"/host/image"),now).0.code,400);
-        assert_eq!(offer.route(post("/api/ext-repair/request",token.as_bytes()),now+TICKET).0.code,403);
-        let (message,close)=offer.route(post("/api/ext-repair/request",token.as_bytes()),now);
+        assert_eq!(offer.route(post("/api/copy-repair/preview",b"--repair /path"),now).0.code,400);
+        assert_eq!(offer.route(post("/api/copy-repair/request",b"/host/image"),now).0.code,400);
+        assert_eq!(offer.route(post("/api/copy-repair/request",token.as_bytes()),now+TICKET).0.code,403);
+        let (message,close)=offer.route(post("/api/copy-repair/request",token.as_bytes()),now);
         assert_eq!(message.code,200);assert!(close&&offer.requested);
-        assert_eq!(offer.route(post("/api/ext-repair/request",token.as_bytes()),now).0.code,403);
+        assert_eq!(offer.route(post("/api/copy-repair/request",token.as_bytes()),now).0.code,403);
     }
 }
