@@ -24,7 +24,7 @@ def _dir_flags():
 
 
 def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None, checkpoint=None,
-          on_frozen=None, on_read=None, before_inventory=None, write_file=None):
+          on_frozen=None, on_read=None, before_inventory=None, write_file=None, on_file=None):
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
@@ -88,6 +88,8 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                         manifest.rows[path] = (False, count, h.hexdigest())
                     if _sig(os.fstat(child)) != sig or _sig(os.stat(name, dir_fd=fd, follow_symlinks=False)) != sig:
                         raise Rejected("source or its name changed while freezing")
+                    if on_file is not None and hash_files and not recheck and not is_dir:
+                        on_file(path, child, before, manifest.rows[path][2])
                 finally:
                     os.close(child)
         if _sig(os.fstat(fd)) != _sig(root):
@@ -99,7 +101,7 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
     return manifest
 
 
-def observe_held(fd, expected, *, require_ids=False, check_held=None, checkpoint=None, observer=None):
+def observe_held(fd, expected, *, require_ids=False, check_held=None, checkpoint=None, observer=None, on_file=None):
     """Hash all real descendants of this particular open directory, then recheck the generation."""
     before = os.fstat(fd)
     if (before.st_dev,before.st_ino) != expected or not expected[1] or not stat.S_ISDIR(before.st_mode):
@@ -111,7 +113,8 @@ def observe_held(fd, expected, *, require_ids=False, check_held=None, checkpoint
     tree = _scan(fd, hash_files=True, require_ids=require_ids, check_held=check_held,
                  checkpoint=checkpoint if observer is None else check,
                  on_read=None if observer is None else observer.advance,
-                 before_inventory=None if observer is None else lambda: observer.begin("inventory"))
+                 before_inventory=None if observer is None else lambda: observer.begin("inventory"),
+                 on_file=on_file)
     if _sig(before) != _sig(os.fstat(fd)):
         raise Rejected("selected directory changed during readback")
     if observer is not None: observer.check()

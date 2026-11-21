@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 from .. import comparison
 from ..model import Rejected
 from .selection import Verification, compare_snapshot_file, compare_version as compare_listed_version
-from .text_preview import can_compare_text, compare_text
+from .text_preview import can_compare_text, compare_folder_text, compare_text
 from .widgets import Table, button, confirm, label, line_diff_dialog
 
 
@@ -12,7 +12,7 @@ class ComparisonPane(QWidget):
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
-        self.active_read = self.right = self.text_read = self.text_dialog = self.row_epoch = None
+        self.active_read = self.report = self.right = self.text_read = self.text_dialog = self.row_epoch = None
         layout = QVBoxLayout(self)
         layout.addWidget(label("可以直接选另一份快照、比本机文件夹、从历史选版本，或比较普通 ZIP。所有比较只读，不同步文件。"))
         targets = QHBoxLayout()
@@ -50,9 +50,11 @@ class ComparisonPane(QWidget):
     def clear(self):
         previous, self.active_read = self.active_read, None
         if previous is not None: previous.cancel()
+        report = self.report
         self.report, self.number, self.mode, self.request = None, 0, None, None
         self.plain = None
         self.close_lines()
+        if isinstance(report, comparison.Report): report.close()
         right, self.right = self.right, None
         if right is not None: right.release_display()
         self.table.rows.replace(())
@@ -152,23 +154,26 @@ class ComparisonPane(QWidget):
         self.mode = "folder"
         self.summary.setText(f"等待核验：{name}\n快照节点：{chosen.browser.commit.operation}")
         def work():
-            try: return comparison.compare(chosen, folder, observer=observer), None
+            try: return comparison.compare(chosen, folder, observer=observer, retain_text=True), None
             except Exception as error: return None, error
         def done(outcome):
+            report, error = outcome
+            if report is not None and (not self.matches(chosen, request) or observer.cancelled): report.close()
             if not self.matches(chosen, request): return
             self.active_read = None
             if observer.cancelled:
                 self.summary.setText("已取消本次文件夹对照，保留当前浏览快照。未显示部分结果。")
                 self.owner.inform("已取消文件夹对照；没有写入。")
                 return
-            report, error = outcome
             if error is not None:
                 failed(error)
                 return
             self.report = report
             self.summary.setText(f"快照：{chosen.path} · 节点 {report.operation}\n本次观察：{report.folder.path}\n"
                                  f"新增 {report.added} · 修改 {report.changed} · 缺少 {report.missing}。"
-                                 + ("没有差异。" if not report.rows else ""))
+                                 + ("没有差异。" if not report.rows else "")
+                                 + ("\n可另行核验有凭据的小文件对，查看逐行差异。" if report.text is not None else
+                                    "\n本次没有可逐行复核的原文件对。" if report.rows else ""))
             self.show_page(0)
             self.owner.inform("只读比较完成；后续编辑不会自动更新这份结果。")
         def failed(err):
@@ -261,9 +266,12 @@ class ComparisonPane(QWidget):
         return True
 
     def _line_selection(self, row):
-        return (self.mode in ("file", "version") and self.snapshot is not None and self.right is not None
-                and all(view.held is not None and not view.held.closed for view in (self.snapshot, self.right))
-                and can_compare_text(row))
+        left = self.snapshot
+        if not can_compare_text(row) or left is None or left.held is None or left.held.closed: return False
+        if self.mode == "folder":
+            return (self.report is not None and self.report.text is not None and self.report.text.supports(left, row))
+        return (self.mode in ("file", "version") and self.right is not None and self.right.held is not None
+                and not self.right.held.closed)
 
     def close_lines(self):
         read, self.text_read = self.text_read, None
@@ -278,19 +286,24 @@ class ComparisonPane(QWidget):
 
     def read_lines(self):
         left, right, row = self.snapshot, self.right, self.table.item()
-        origin, picked = self.request, self.row_epoch
+        report, origin, picked = self.report, self.request, self.row_epoch
         if (not self._line_selection(row) or self.owner.pending is not None or self.text_read is not None
                 or self.text_dialog is not None):
             return
 
         def same_pair():
-            return (self.matches(left, origin) and self.right is right and self.row_epoch is picked
+            return (self.matches(left, origin) and self.report is report and self.right is right and self.row_epoch is picked
                     and self.table.item() is row and self._line_selection(row))
 
-        detail = (f"相对路径：{row.path!r}\n当前节点：{left.browser.commit.operation} · {row.before_bytes:,} B\n"
-                  f"所选节点：{right.browser.commit.operation} · {row.after_bytes:,} B")
-        if (not confirm(self, "核验后查看逐行差异", detail + "\n只读取两份原归档中这一个成员的完整正文。"
-                        "结果只在此处以纯文本显示，换行采用预览规则；每侧限 64 KiB、1,024 行，可取消。",
+        in_folder = self.mode == "folder"
+        other = (f"本次观察的原文件夹：{str(report.folder.path)!r}" if in_folder else
+                 f"所选节点：{right.browser.commit.operation}")
+        detail = (f"相对路径：{row.path!r}\n当前快照：{str(left.path)!r}\n"
+                  f"节点 {left.browser.commit.operation} · {row.before_bytes:,} B\n{other} · {row.after_bytes:,} B")
+        reading = ("只复核这次观察的原文件和对应归档成员，不重扫或改用其他文件。" if in_folder else
+                   "只读取两份原归档中这一个成员的完整正文。")
+        if (not confirm(self, "核验后查看逐行差异", detail + "\n" + reading
+                        + "结果只在此处以纯文本显示，换行采用预览规则；每侧限 64 KiB、1,024 行，可取消。",
                         attestation="我确认只看上面两份原件的这个文本，不打开外部应用。",
                         action_text="核验并比较") or not same_pair() or self.owner.pending is not None):
             return
@@ -299,7 +312,9 @@ class ComparisonPane(QWidget):
         def current(): return self.text_read is watch and same_pair()
 
         def work():
-            try: return compare_text(left, right, row, observer=watch), None
+            try:
+                if in_folder: return compare_folder_text(left, report, row, observer=watch), None
+                return compare_text(left, right, row, observer=watch), None
             except Exception as error: return None, error
 
         def done(outcome):
@@ -312,10 +327,10 @@ class ComparisonPane(QWidget):
                 self.owner.inform(f"没有显示逐行差异：{error}")
             else:
                 self.show_lines(detail, value)
-                self.owner.inform("已核验这两个原成员并显示纯文本差异，未修改文件或启动外部应用。")
+                self.owner.inform("已核验这两个原件并显示纯文本差异，未修改文件或启动外部应用。")
 
         try:
-            future = self.owner.job("正在只读核验这两个原成员…", work, done, cancel=watch.cancel,
+            future = self.owner.job("正在只读核验这两个原件…", work, done, cancel=watch.cancel,
                                     cancel_text="取消逐行比较",
                                     progress_report=lambda: watch.progress() if current() else ("", 0, None))
             if future is None: raise Rejected("另一个窗口任务尚未结束；未开始逐行核验")

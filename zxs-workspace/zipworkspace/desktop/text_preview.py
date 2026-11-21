@@ -293,6 +293,29 @@ def _verified_small(read, fact, observer):
     return data
 
 
+def _small_lines(data):
+    try: text = data.decode("utf-8").replace("\r\n", "\n")
+    except UnicodeError as error: raise Rejected("两个原件已核验，但至少一个不是严格 UTF-8 文本") from error
+    if not _showable(text): raise Rejected("内容含不可显示控制字符，未交逐行差异")
+    return _split_comparison(text)
+
+
+def compare_folder_text(left, report, row, *, observer):
+    """After separate consent, verify only the original pair from the folder report."""
+    if not can_compare_text(row) or report.text is None:
+        raise Rejected("该次对照没有这对原件的逐行核验凭据")
+    observer.begin("identity")
+    with report.text.open_pair(left, row, observer.check) as (original, local, left_sha, right_sha):
+        observer.begin("members", row.before_bytes + row.after_bytes)
+        raw = _At(original, left.observed[2], observer.check)
+        with stored_member(raw, raw.end, left.browser.commit, row.path, row.before_bytes) as body:
+            archived = _verified_small(body.read, (row.before_bytes, left_sha), observer)
+        current = _verified_small(lambda n: os.read(local, n), (row.after_bytes, right_sha), observer)
+        display = _unified((_small_lines(archived), _small_lines(current)), ("当前快照", "本次本机文件"), observer)
+        observer.begin("identity")
+    return display
+
+
 class WorktreeTextPair:
     """One bound baseline member and one relative working file, never a writer."""
     def __init__(self, live, evidence, row):
@@ -383,13 +406,7 @@ class WorktreeTextPair:
             archived = _verified_small(body.read, self.facts[0], observer)
         with self._working(observer.check) as doc:
             current = _verified_small(doc.read, self.facts[1], observer)
-        sides = []
-        for data in (archived, current):
-            try: text = data.decode("utf-8").replace("\r\n", "\n")
-            except UnicodeError as error: raise Rejected("两个原件已核验，但至少一个不是严格 UTF-8 文本") from error
-            if not _showable(text): raise Rejected("内容含不可显示控制字符，未交逐行差异")
-            sides.append(_split_comparison(text))
-        display = _unified(sides, ("登记基线", "本次工作文件"), observer)
+        display = _unified((_small_lines(archived), _small_lines(current)), ("登记基线", "本次工作文件"), observer)
         observer.begin("identity")
         self._check_archive()
         self._check_basis()

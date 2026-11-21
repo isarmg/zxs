@@ -55,15 +55,15 @@ class ProcView:
         self.pid = os.getpid()
         if os.readlink("self", dir_fd=root) != str(self.pid):
             raise Rejected("procfs 不对应本进程的 PID")
-        self.task = self._open(root, str(self.pid), flags)
+        self.task = self.open_beneath(root, str(self.pid), flags)
         stack.callback(os.close, self.task)
-        self.fds = self._open(self.task, "fd", flags)
+        self.fds = self.open_beneath(self.task, "fd", flags)
         stack.callback(os.close, self.fds)
         _, base, path, kind = mount_record(root, read_proc=self.read)
         if (base, path, kind) != (b"/", b"/proc", b"proc"):
             raise Rejected("不是原 procfs 根挂载")
 
-    def _open(self, parent, name, flags):
+    def open_beneath(self, parent, name, flags):
         # Linux openat2: NO_XDEV | NO_SYMLINKS | BENEATH. This excludes a
         # separately mounted lookalike even before opening/reading its files.
         how = _OpenHow(flags, 0, 0x0d)
@@ -71,13 +71,13 @@ class ProcView:
                           ctypes.byref(how), ctypes.c_size_t(ctypes.sizeof(how)))
         if fd < 0:
             code = ctypes.get_errno()
-            raise Rejected(f"无法在原 procfs 挂载内取得必要句柄（openat2: {os.strerror(code)}）")
+            raise Rejected(f"无法在原挂载的目录内取得必要句柄（openat2: {os.strerror(code)}）")
         return fd
 
     def read(self, name, limit):
         if os.getpid() != self.pid: raise Rejected("原进程的 procfs 证据不能移交")
         if name == "status": name = f"task/{get_native_id()}/status"
-        fd = self._open(self.task, name, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = self.open_beneath(self.task, name, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
         try:
             native_identity(os.fstat(fd), stat.S_IFREG)
             with os.fdopen(fd, "rb", closefd=False) as actual:

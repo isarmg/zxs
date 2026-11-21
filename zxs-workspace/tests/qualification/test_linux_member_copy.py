@@ -14,9 +14,9 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from zipworkspace import lifecycle, worktree
+from zipworkspace import comparison, lifecycle, worktree
 from zipworkspace.comparison import Folder
-from zipworkspace.desktop import member_copy, store_import
+from zipworkspace.desktop import member_copy, store_import, text_preview
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.initialize_choice import InitializeChoice
 from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection
@@ -104,6 +104,184 @@ class LinuxMemberCopy(unittest.TestCase):
         plan = store_import.StoreSuccessor(selected, store, catalog)
         self.addCleanup(plan.close)
         return plan
+
+    def compare_folder_fixture(self, right=b"<new>\n", left=b"<old>\r\n"):
+        path = self.private / "compared.zxs"
+        folder = self.dest / "observed"
+        (folder / "original").mkdir(parents=True)
+        (folder / "other").mkdir()
+        (folder / "original" / "same").write_bytes(right)
+        (folder / "other" / "same").write_bytes(b"other new")
+        (folder / "original" / "hard").write_bytes(b"linked right")
+        (folder / "other" / "hard").hardlink_to(folder / "original" / "hard")
+        tree = Manifest()
+        with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_STORED) as package:
+            for name, data in (("original/same", left), ("other/same", b"other old"),
+                               ("original/hard", b"not right")):
+                tree.add(name, False, len(data), hashlib.sha256(data).hexdigest())
+                package.writestr(name, data)
+            package.comment = Commit("1"*32, "2"*32, 1, "3"*32, None, tree.digest()).encode()
+        selected = Selection.open(path, retain=True)
+        self.addCleanup(selected.release_display)
+        return selected, folder
+
+    def folder_report(self, selected, folder):
+        with patch.object(comparison, "named_document", side_effect=AssertionError("do not reopen the left body")):
+            report = comparison.compare(selected, Folder.choose(folder), observer=Verification(), retain_text=True)
+        self.addCleanup(report.close)
+        return report, next(row for row in report.rows if row.path == "original/same")
+
+    def test_folder_line_diff_uses_only_both_original_report_files(self):
+        selected, folder = self.compare_folder_fixture()
+        right = folder / "original" / "same"
+        original_right = right.stat()
+        report, row = self.folder_report(selected, folder)
+        other = next(r for r in report.rows if r.path == "original/hard")
+        self.assertFalse(report.text.supports(selected, other))  # ordinary report still includes hard links
+        self.assertFalse(report.text.supports(selected, replace(row)))
+        with self.assertRaises(Rejected):
+            text_preview.compare_folder_text(selected, report, replace(row), observer=Verification())
+        with self.assertRaises(Rejected):
+            with report.text.open_pair(replace(selected), row, lambda: None): pass
+        fd = selected.held.fileno()
+        os.lseek(fd, 17, os.SEEK_SET)
+        real_read = os.read
+        real_open = os.open
+        pieces = []
+
+        def right_only(fd, count):
+            self.assertTrue(os.path.samestat(os.fstat(fd), original_right))
+            value = real_read(fd, count)
+            pieces.append(value)
+            return value
+
+        def metadata_open(name, flags, *args, **kwargs):
+            if os.fspath(name) in (str(selected.path), str(folder)):
+                self.assertTrue(flags & os.O_PATH)
+            self.assertFalse(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC))
+            return real_open(name, flags, *args, **kwargs)
+
+        with patch.object(os, "open", side_effect=metadata_open), patch.object(os, "read", side_effect=right_only), \
+             patch.object(comparison, "observe_held", side_effect=AssertionError("do not rescan a folder")), \
+             patch.object(text_preview, "stored_member", wraps=text_preview.stored_member) as stored:
+            value = text_preview.compare_folder_text(selected, report, row, observer=Verification())
+        stored.assert_called_once()
+        self.assertEqual(stored.call_args.args[3], "original/same")
+        self.assertEqual(pieces, [b"<new>\n", b""])
+        self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 17)
+        self.assertIn("-<old>", value)
+        self.assertIn("+<new>", value)
+        self.assertNotIn("other", value)
+        report.close()
+        self.assertFalse(report.text.supports(selected, row))
+        with self.assertRaises(Rejected):
+            text_preview.compare_folder_text(selected, report, row, observer=Verification())
+
+    def test_folder_line_diff_rejects_same_byte_replacement_and_different_actual_reads(self):
+        selected, folder = self.compare_folder_fixture()
+        report, row = self.folder_report(selected, folder)
+        original = os.read
+        def wrong(fd, n):
+            body = original(fd, n)
+            return b"X" + body[1:] if body else body
+
+        with patch.object(os, "read", side_effect=wrong), self.assertRaisesRegex(Rejected, "SHA-256"):
+            text_preview.compare_folder_text(selected, report, row, observer=Verification())
+        leaf = folder / "original" / "same"
+        raw = leaf.read_bytes()
+        leaf.rename(leaf.with_name("before")); leaf.write_bytes(raw)
+        with patch.object(os, "read", side_effect=AssertionError("cannot read a replacement inode")), \
+             self.assertRaisesRegex(Rejected, "原名称、实体或状态"):
+            text_preview.compare_folder_text(selected, report, row, observer=Verification())
+        # Right root replacement is not authority to follow the old relative name.
+        folder.rename(self.dest / "before-folder"); folder.mkdir()
+        with self.assertRaisesRegex(Rejected, "原文件夹"):
+            text_preview.compare_folder_text(selected, report, row, observer=Verification())
+
+    def test_folder_line_diff_rechecks_the_relative_leaf_before_delivering_text(self):
+        selected, folder = self.compare_folder_fixture()
+        report, row = self.folder_report(selected, folder)
+        leaf = folder / "original" / "same"
+        unified = text_preview._unified
+
+        def rename_after_read(*args, **kwargs):
+            value = unified(*args, **kwargs)
+            old = leaf.with_name("moved")
+            leaf.rename(old)
+            leaf.symlink_to(old.name)
+            return value
+
+        with patch.object(text_preview, "_unified", side_effect=rename_after_read), self.assertRaises(Rejected):
+            text_preview.compare_folder_text(selected, report, row, observer=Verification())
+
+    def test_folder_line_diff_uses_text_bounds_and_no_unsupported_mount_fallback(self):
+        selected, folder = self.compare_folder_fixture(right=b"\xff")
+        report, row = self.folder_report(selected, folder)
+        with self.assertRaisesRegex(Rejected, "UTF-8"):
+            text_preview.compare_folder_text(selected, report, row, observer=Verification())
+        leaf = folder / "original" / "same"
+        leaf.write_bytes(b"x\n" * (text_preview.COMPARE_LINES + 1))
+        report, row = self.folder_report(selected, folder)
+        with self.assertRaisesRegex(Rejected, "1,024 行"):
+            text_preview.compare_folder_text(selected, report, row, observer=Verification())
+        leaf.write_bytes(b"x" * (comparison.COMPARE_BYTES + 1))
+        report, row = self.folder_report(selected, folder)
+        self.assertFalse(report.text.supports(selected, row))
+        with patch.object(comparison, "local_mount", side_effect=Rejected("unqualified mount")):
+            unchanged, listed = self.folder_report(selected, folder)
+        self.assertEqual(unchanged.rows, report.rows)
+        self.assertEqual(listed, row)
+        self.assertIsNone(unchanged.text)
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional native Qt controls")
+    def test_folder_line_diff_qt_requires_this_report_and_ignores_late_results(self):
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit
+        from zipworkspace.desktop import comparison_pane as ui
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        selected, root = self.compare_folder_fixture()
+        win = Window()
+        pane = win.archive.comparison
+
+        def queue(fn):
+            task = Future()
+            with patch.object(win.pool, "submit", return_value=task) as work:
+                fn()
+            self.assertIs(win.pending[0], task)
+            return task, work.call_args.args[0]
+
+        try:
+            win.archive.show_selection(selected)
+            win.archive.views.setCurrentWidget(pane)
+            future, action = queue(lambda: pane.compare_path(root))
+            future.set_result(action()); win.poll()
+            report = pane.report
+            pane.table.selectRow(next(i for i, (_, r) in enumerate(pane.table.rows.rows) if r.path == "original/same"))
+            self.assertTrue(pane.lines.isEnabled())
+            with patch.object(ui, "confirm", return_value=False), \
+                 patch.object(win.pool, "submit", side_effect=AssertionError("reading needs this explicit consent")):
+                pane.lines.click()
+            with patch.object(ui, "confirm", return_value=True) as consent:
+                future, action = queue(pane.lines.click)
+            self.assertIn(str(root), consent.call_args.args[2])
+            self.assertIn("original/same", consent.call_args.args[2])
+            future.set_result(action()); win.poll()
+            self.assertIn("+<new>", pane.text_dialog.findChild(QPlainTextEdit).toPlainText())
+            pane.close_lines()
+            with patch.object(ui, "confirm", return_value=True):
+                future, action = queue(pane.lines.click)
+            result = action()
+            self.assertIsNotNone(result[0])
+            pane.close_report()  # Cleared before the actual job callback, even though the worker succeeded.
+            note = win.note.text()
+            future.set_result(result); win.poll()
+            self.assertIsNone(pane.text_dialog)
+            self.assertEqual(win.note.text(), note)
+            self.assertTrue(all(not report.text.supports(selected, r) for r in report.rows))
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
     def test_imports_only_the_held_raw_successor_with_native_noreplace(self):
         selected, store, catalog, parent = self.import_version()

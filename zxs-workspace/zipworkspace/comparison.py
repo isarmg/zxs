@@ -1,14 +1,18 @@
 """Read-only path differences between verified snapshots or against one observed folder."""
-from dataclasses import dataclass
+from contextlib import ExitStack, closing, contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 import os
 import stat
 import sys
+from threading import Lock
 
 from .archive import stamp
 from .document import named_document, native_identity
-from .freeze import observe_held
-from .model import Rejected
+from .freeze import _sig, observe_held
+from .linux_authority import ProcView
+from .model import Rejected, member_name
+from .private_freeze import local_mount, mount_id
 
 COMPARE_BYTES = 64 * 1024
 
@@ -123,10 +127,124 @@ class Changes:
         return self.rows[number*self.PAGE:(number+1)*self.PAGE]
 
 
+def _archive_stamp(info):
+    return (*native_identity(info, stat.S_IFREG), info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _check_archive(selected, original, proc=None, expected_mount=None):
+    if _archive_stamp(os.fstat(original)) != selected.observed:
+        raise Rejected("已显示的原归档发生变化；请重新打开后比较")
+    if proc is None:
+        if _archive_stamp(selected.path.stat(follow_symlinks=False)) != selected.observed:
+            raise Rejected("归档已不在原名称；未重新打开正文")
+        return None
+    named = os.open(selected.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        actual = mount_id(original, read_proc=proc.read)
+        if (_archive_stamp(os.fstat(named)) != selected.observed or
+                mount_id(named, read_proc=proc.read) != actual or
+                expected_mount is not None and expected_mount != actual):
+            raise Rejected("原归档的名称或实际挂载已变化；未重新打开正文")
+        return actual
+    finally:
+        os.close(named)
+
+
+def _check_root(evidence, root, mount, proc):
+    named = os.open(evidence.path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        if (any(native_identity(os.fstat(fd), stat.S_IFDIR) != evidence.identity or
+                mount_id(fd, read_proc=proc.read) != mount for fd in (root, named)) or
+                os.readlink(str(root), dir_fd=proc.fds) != str(evidence.path)):
+            raise Rejected("原文件夹或实际挂载已改变；未选用同名替件")
+    finally:
+        os.close(named)
+
+
+class _FolderText:
+    """One original directory and metadata from this report, not a second inventory or text cache."""
+    _root = None
+
+    def __init__(self, selected, evidence, root, mount, archive_mount, pairs):
+        self.selected, self.evidence, self.mount, self.archive_mount = selected, evidence, mount, archive_mount
+        self._lock, self._pairs = Lock(), pairs
+        self._root = os.dup(root)
+
+    def _pair(self, selected, row):
+        if self._root is None or self.selected is not selected or row is None: return None
+        pair = self._pairs.get(row.path)
+        return pair if pair is not None and pair[0] is row else None
+
+    def supports(self, selected, row):
+        with self._lock: return self._pair(selected, row) is not None
+
+    def close(self):
+        if self._root is None: return
+        with self._lock:
+            root, self._root = self._root, None
+            self._pairs.clear()
+        if root is not None: os.close(root)
+
+    __del__ = close  # Normal ownership ends on cancellation, replacement or report close.
+
+    @contextmanager
+    def open_pair(self, selected, row, check):
+        check()
+        with ExitStack() as held:
+            with self._lock:
+                pair = self._pair(selected, row)
+                if pair is None: raise Rejected("不属于本次文件夹对照的原差异行")
+                root = os.dup(self._root)
+                held.callback(os.close, root)
+            _, expected, left_sha, right_sha = pair
+            if ("/".join(member_name(row.path)) != row.path or expected[3] != row.after_bytes):
+                raise Rejected("原相对路径或已观察大小不符")
+            original = held.enter_context(selected.held.read_lease())
+            proc = ProcView(held)
+            metadata = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
+
+            def exact_leaf(fd):
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or _sig(info) != expected or
+                        mount_id(fd, read_proc=proc.read) != self.mount):
+                    raise Rejected("本机文件与对照时的原名称、实体或状态不同；请刷新对照")
+
+            def originals():
+                check()
+                _check_archive(selected, original, proc, self.archive_mount)
+                _check_root(self.evidence, root, self.mount, proc)
+                check()
+
+            originals()
+            named = proc.open_beneath(root, row.path, metadata)
+            held.callback(os.close, named)
+            exact_leaf(named)
+            # Read that exact regular object, not a second lookup of its leaf.
+            # Positively admit the numeric proc entry itself before following its magic link.
+            referent = proc.open_beneath(proc.fds, str(named), metadata)
+            held.callback(os.close, referent)
+            if not stat.S_ISLNK(os.fstat(referent).st_mode):
+                raise Rejected("未取得原普通文件的 procfs 句柄链接")
+            item = os.open(str(named), os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=proc.fds)
+            held.callback(os.close, item)
+            exact_leaf(item)
+            check()
+            yield original, item, left_sha, right_sha
+            originals()
+            final = proc.open_beneath(root, row.path, metadata)
+            held.callback(os.close, final)
+            for fd in (named, item, final): exact_leaf(fd)
+            check()
+
+
 @dataclass(frozen=True, slots=True)
 class Report(Changes):
     folder: FolderEvidence
     operation: str
+    text: _FolderText | None = field(default=None, repr=False, compare=False)
+
+    def close(self):
+        if self.text is not None: self.text.close()
 
 
 def _value(entry):
@@ -194,19 +312,63 @@ def compare_archive_contents(before, other):
     return Changes(*_changes(_rows(before), dict(_rows(other))))
 
 
-def compare(selected, folder: Folder, *, observer=None):
+def compare(selected, folder: Folder, *, observer=None, retain_text=False):
     """Use the already verified archive content, not registered state or current HEAD."""
-    try:
-        if observer is not None: observer.begin("identity")
-        if sys.platform == "darwin":
-            from . import macos_read
-            with macos_read.no_materialization():  # Worker, including the archive's final named recheck.
-                report = _compare(selected, folder, macos_read, observer=observer)
-        else: report = _compare(selected, folder, observer=observer)
+    with ExitStack() as output:
+        with closing(folder):
+            if observer is not None: observer.begin("identity")
+            if retain_text and sys.platform == "linux" and type(folder) is Folder and selected.held is not None:
+                report = _compare_held(selected, folder, output, observer)
+            elif sys.platform == "darwin":
+                from . import macos_read
+                with macos_read.no_materialization():  # Includes the archive's final named recheck.
+                    report = _compare(selected, folder, macos_read, observer=observer)
+            else: report = _compare(selected, folder, observer=observer)
         if observer is not None: observer.check()
+        output.pop_all()
         return report
-    finally:
-        folder.close()
+
+
+def _compare_held(selected, folder, output, observer):
+    # Only the extra row proof needs this native Linux capability. Other
+    # folders keep the ordinary comparison without a text-reading grant.
+    with ExitStack() as scan:
+        original = scan.enter_context(selected.held.read_lease())
+        root = folder.check()
+        try:
+            proc = ProcView(scan)
+            mount = local_mount(root, read_proc=proc.read)
+            _check_root(folder.evidence, root, mount, proc)
+        except (OSError, Rejected):
+            proc = None
+        archive_mount = _check_archive(selected, original, proc)
+        candidates = {}
+
+        def remember(path, child, before, sha):
+            if before.st_size > COMPARE_BYTES or before.st_nlink != 1: return
+            parent, _, name = path.rpartition("/")
+            entry = selected.browser.entry(parent, name)
+            if (entry is None or entry.kind != "file" or entry.size_bytes > COMPARE_BYTES or
+                    entry.sha256 == sha): return
+            info = os.fstat(child)
+            if (_sig(info) == _sig(before) and info.st_nlink == 1 and
+                    mount_id(child, read_proc=proc.read) == mount):
+                candidates[path] = _sig(before), entry.sha256, sha
+
+        tree = observe_held(root, folder.evidence.identity, require_ids=True, observer=observer,
+                            on_file=remember if proc is not None else None)
+        if observer is not None: observer.begin("compare")
+        delta = _changes(_rows(selected.browser), tree.rows)
+        if observer is not None: observer.begin("identity")
+        folder.check()
+        _check_archive(selected, original, proc, archive_mount)
+        if proc is not None: _check_root(folder.evidence, root, mount, proc)
+        text = None
+        if candidates:
+            pairs = {row.path: (row, *candidates[row.path]) for row in delta[3] if row.path in candidates}
+            text = _FolderText(selected, folder.evidence, root, mount, archive_mount, pairs)
+            output.callback(text.close)
+        return Report(*delta, folder.evidence, selected.browser.commit.operation, text)
 
 
 def _compare(selected, folder, darwin=None, *, observer=None):
