@@ -4,8 +4,8 @@ use super::{SiteLease,denied,held::{self,Stamp}};
 use crate::smb::launch::envelope::VaultStamp;
 use std::{fs::File,io,os::fd::{AsFd,BorrowedFd}};
 
-const NAME:&std::ffi::CStr=c"credential.v1";
-const MEMBERS:&[&[u8]]=&[b"credential.v1"];
+use crate::system::shared_account::{VAULT_NAME as NAME,VAULT_LENGTH};
+const MEMBERS:&[&[u8]]=&[NAME.to_bytes()];
 
 #[must_use]
 pub(in crate::smb::launch) struct Vault<'s,'p>{
@@ -53,7 +53,7 @@ impl<'s,'p> Vault<'s,'p>{
 }
 fn witness(stamp:Stamp)->io::Result<VaultStamp>{
     let nsec=|n:i64|->io::Result<u32>{u32::try_from(n).ok().filter(|v|*v<1_000_000_000).ok_or_else(denied)};
-    if stamp.mode!=0o100600||stamp.uid!=0||stamp.gid!=0||stamp.bytes!=240||stamp.place.entity.inode==0{
+    if stamp.mode!=0o100600||stamp.uid!=0||stamp.gid!=0||stamp.bytes!=VAULT_LENGTH as u64||stamp.place.entity.inode==0{
         return Err(denied());
     }
     Ok(VaultStamp{dev:stamp.place.entity.device,ino:stamp.place.entity.inode,

@@ -6,7 +6,7 @@ use super::{attrs,bare_acl,creation_preflight,exact_with,fstatvfs,host_mount,mar
 use super::super::{Site,approval,bad,child,lease,public_record::Public,product_pin,
     rust_site::{PublicAuthority,RustSite},site_lease::SiteLease};
 use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::MAX_WIRE,sqlite_install::pair::{
-    fresh_issuer::{DEPLOYMENT_BYTES,SitePayload,activation,require_v17},
+    fresh_issuer::{DEPLOYMENT_BYTES,FreshConsent,SitePayload,activation,require_v18},
     native_run::{FreshActive,ResolvedRust},terminal::PublicConfirmation}};
 use rustix::fs::{FlockOperation,Mode,OFlags,RawDir,ResolveFlags,flock,openat2};
 use std::{ffi::{CStr,CString},fs::File,io::{self,Read},mem::MaybeUninit,os::unix::fs::{FileExt,MetadataExt},path::Path};
@@ -74,7 +74,7 @@ fn verify_file(parent:&File,name:&CStr,original:&File,wanted:&[u8],mode:Mode)->i
 pub(in crate::sqlite_install::pair) struct FreshParent{parent:Site,ex:File,stage:CString,instance:[u8;16]}
 impl FreshParent{
     pub(in crate::sqlite_install::pair) fn select(instance:[u8;16])->io::Result<Self>{
-        require_v17()?;
+        require_v18()?;
         approval::no_inherited_descriptors()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         if instance==[0;16]{return Err(no());}
@@ -151,16 +151,16 @@ impl FreshHome{
         if pub_plan.bytes()!=plan||PublicAuthority::select(dir)?.bytes()!=root{return Err(no());}
         Ok(())
     }
-    pub(in crate::sqlite_install::pair) fn prepare(&self,resolved:&ResolvedRust,tty:&PublicConfirmation,
+    pub(in crate::sqlite_install::pair) fn prepare(&self,resolved:&ResolvedRust,consent:&FreshConsent,
         live:impl Fn()->io::Result<()>)->io::Result<RustSite>{
         let final_name=self.parent.leaf.as_c_str();
         let plan=resolved.plan().wire();
         let root=self.authority.encode()?;
-        self.check(resolved,&[])?;tty.check()?;live()?;
+        self.check(resolved,&[])?;consent.require_site(&self.authority)?;live()?;
         noentry(&self.ex,final_name)?;
         let created=new_dir(&self.ex,&self.stage)?;
         flock(&created,FlockOperation::NonBlockingLockExclusive)?;
-        self.check(resolved,&[self.stage.to_bytes()])?;tty.check()?;live()?;
+        self.check(resolved,&[self.stage.to_bytes()])?;consent.require_site(&self.authority)?;live()?;
         let vault=new_dir(&created,VAULT)?;owned(&vault,0,0,OWNER)?;
         let plan_fd=new_file(&created,PLAN,&plan,PUBLIC)?;
         let site_fd=new_file(&created,SITE,&root,PRIVATE)?;
@@ -169,7 +169,7 @@ impl FreshHome{
         vault.sync_all()?;created.sync_all()?;self.ex.sync_all()?;
         self.check(resolved,&[self.stage.to_bytes()])?;
         self.tree(&created,plan,&root,&vault,&plan_fd,&site_fd)?;
-        tty.check()?;live()?;
+        consent.require_site(&self.authority)?;live()?;
         same_name(&self.ex,&self.stage,&created)?;noentry(&self.ex,final_name)?;
         publish(&self.ex,&self.stage,final_name)?;
         same_name(&self.ex,final_name,&created)?;
@@ -185,7 +185,7 @@ impl FreshHome{
         let pin=Pinned::already_mounted(old.path(),Kind::StorageRoot)?;
         if pin.entity()!=old.entity()||pin.require_same_named_mount()?!=old.require_same_named_mount()?{return Err(no());}
         let held=SiteLease::from_product(pin,system_lock.try_clone()?,site,created,subject)?;
-        tty.check()?;live()?;
+        consent.require_site(&self.authority)?;live()?;
         RustSite::selected_product(held,self.authority.clone(),resolved.plan())
     }
 
@@ -224,7 +224,7 @@ impl FreshHome{
 mod tests{
     use super::*;
     #[test]
-    fn fresh_v17_exact_dedicated_inventory_and_noreplace_use_only_disposable_names(){
+    fn fresh_v18_exact_dedicated_inventory_and_noreplace_use_only_disposable_names(){
         let tmp=tempfile::tempdir().unwrap();let dir=File::open(tmp.path()).unwrap();
         inventory(&dir,&[]).unwrap();
         std::fs::write(tmp.path().join(".deployment.v1.new"),b"fresh-candidate").unwrap();

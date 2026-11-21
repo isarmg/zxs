@@ -347,7 +347,7 @@ mod tests{
     fn one_original_writer_sees_private_ranges_and_authorizes_a_real_flush_once() {
         let temp=PrivateTemp::under(&std::env::temp_dir());let(p,pool,_f,rw,ro)=ordinary_pool(&temp);
         let source=InitialReader::open(&p,pool).unwrap();
-        let session=SmbSession::fixture_authenticated(&source,"files.smb").unwrap();
+        let session=SmbSession::fixture_authenticated(&source,"first.admin").unwrap();
         let write=session.connect(rw).unwrap();let read=session.connect(ro).unwrap();
         let name="staging.txt";let first=OperationId([0xf1;16]);
         let file=write.create_file(OperationId([0xf0;16]),name).unwrap().file;

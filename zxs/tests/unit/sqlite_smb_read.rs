@@ -8,7 +8,7 @@ fn checked_window_clips_eof_and_never_hands_off_a_prefix_of_a_damaged_read(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,ro)=enrollment(&t);
     let src=InitialReader::open(&s,p).unwrap();let peer=InitialReader::open(&s,p).unwrap();
     let manager=peer.authenticate_web("first.admin","correct horse battery staple").unwrap();
-    let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let a=smb.connect(rw).unwrap();let b=smb.connect(ro).unwrap();
     let id=a.create_file(OperationId([0xda;16]),NAME).unwrap().file;
     let before=b.open_current(NAME).unwrap();

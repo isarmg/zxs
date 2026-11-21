@@ -7,7 +7,7 @@ mod start;
 mod public_record;
 mod deployed;
 pub(in crate::sqlite_install::pair) use deployed::{DeployedSite,deployed_worker_payload,verify_deployed_worker};
-pub(in crate::sqlite_install::pair) use rust_vault_io::{Allocated,CurrentVault,verify_fresh_vault};
+pub(in crate::sqlite_install::pair) use rust_vault_io::{Allocated,CurrentVault,PlacedVault};
 pub(in crate::sqlite_install::pair) use rust_site::{CredentialSite,RustSite,VaultStamp,checked_vault_stamp,verify_fresh_worker};
 pub(super) use layout::bare_acl;
 pub(in crate::sqlite_install::pair) use layout::{FreshHome,FreshParent};
@@ -34,7 +34,7 @@ fn product_pin(parent:&File,name:&std::ffi::CStr,may_cross:bool)->io::Result<Fil
 }
 impl Site{
     fn product(host:File,instance:&Id,missing_final:bool)->io::Result<Self>{
-        crate::sqlite_install::pair::compiled_v17()?;
+        crate::sqlite_install::pair::compiled_v18()?;
         let leaf=CString::new(instance.iter().map(|b|format!("{b:02x}")).collect::<String>()).expect("lower hex");
         let names=&PRODUCT;
         let mut chain=Vec::with_capacity(names.len()+1);safe_dir(&host)?;

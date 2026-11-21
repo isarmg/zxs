@@ -1,11 +1,10 @@
 //! Shared SQLite authority for the original Rust issuance.
-use super::{Id,bad,login,distinct_roles};
+use super::{Id,bad};
 mod first_ordinary;
 use rusqlite::{params,Row,Transaction};
 use std::io;
 pub(super) mod transaction;
 pub(in crate::sqlite_install::pair) mod rust_vault;
-pub(in crate::sqlite_install::pair) mod web_reset;
 pub(in crate::sqlite_install) use transaction::WriteGate;
 #[derive(Clone, Copy)]
 struct Core { pool: Id, init: Id, op: Id, actor: Id, approval: Id }
@@ -20,8 +19,6 @@ impl Core {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Ids { web: Id, smb: Id }
 impl Ids {
-    pub(super) fn web_value(self) -> Id { self.web }
-    pub(super) fn smb_value(self) -> Id { self.smb }
     pub(super) fn checked(web: Id, smb: Id) -> io::Result<Self> {
         if [web, smb].contains(&[0; 16]) || web == smb { return Err(bad("invalid fixed account IDs")); }
         Ok(Self { web, smb })
@@ -45,18 +42,6 @@ fn history<T>(state: i64, value: T) -> io::Result<Original<T>> {
         1 => Ok(Original::Committed(value)),
         _ => Err(bad("unsupported account maintenance state")),
     }
-}
-fn require_init(tx: &Transaction<'_>, c: &Core) -> io::Result<()> {
-    // Defence against interpreting an empty/different pool as an absent
-    // account. The calling protected transaction still verifies the exact v17
-    // canonical schema, original S marker and normal upstream Unix VFS.
-    let init: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM main.pool_birth b
-           JOIN main.operation i ON i.op_id=b.init_op AND i.kind=1 AND i.state=1
-           WHERE b.singleton=1 AND b.pool_id=?1 AND b.init_op=?2)",
-        params![&c.pool[..], &c.init[..]], |r| r.get(0)).map_err(sql)?;
-    if !init { return Err(bad("there is no such confirmed original pool")); }
-    Ok(())
 }
 fn collision(tx: &Transaction<'_>, op: &Id) -> io::Result<bool> {
     tx.query_row("SELECT EXISTS(SELECT 1 FROM main.operation WHERE op_id=?1)",

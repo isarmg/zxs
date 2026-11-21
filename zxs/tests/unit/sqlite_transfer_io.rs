@@ -13,7 +13,7 @@ fn another_ordinary_filesystem_selects_the_same_history_then_retires_only_the_ol
     let destination=remote.0.join("ordinary-target");
     let(s,p,f,r,z1,z2)=ordinary_transfer_pool(&private,&destination);
     let src=InitialReader::open(&s,p).unwrap();let other=InitialReader::open(&s,p).unwrap();
-    let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let auth=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let from=auth.connect(z1).unwrap();let target=auth.connect(z2).unwrap();
     let web=other.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let original_target=web.share_setting(z2).unwrap();
@@ -139,7 +139,7 @@ fn do_not_create_a_copy_ticket_for_two_registrations_of_one_mounted_filesystem()
     use crate::system::reader::tests::ordinary_transfer_pool;
     let a=PrivateTemp::under(Path::new("/tmp"));let b=PrivateTemp::under(Path::new("/tmp"));
     let(s,p,f,_,z1,z2)=ordinary_transfer_pool(&a,&b.0.join("not-a-different-filesystem"));
-    let src=InitialReader::open(&s,p).unwrap();let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let src=InitialReader::open(&s,p).unwrap();let auth=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let from=auth.connect(z1).unwrap();let to=auth.connect(z2).unwrap();
     let file=from.create_file(OperationId([0x94;16]),"Document").unwrap().file;
     let source=from.open_current("Document").unwrap().move_source().unwrap();
@@ -160,7 +160,7 @@ fn unprovable_old_source_stops_before_a_move_ticket_or_target_stage(){
     let local=PrivateTemp::under(Path::new("/tmp"));let other=PrivateTemp::under(Path::new("/dev/shm"));
     let dest=other.0.join("ordinary");let(s,p,f,_,a,b)=ordinary_transfer_pool(&local,&dest);
     let src=InitialReader::open(&s,p).unwrap();let witness=InitialReader::open(&s,p).unwrap();
-    let login=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let login=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let from=login.connect(a).unwrap();let to=login.connect(b).unwrap();
     let web=witness.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let op=|n|OperationId([n;16]);let name="Report";
@@ -208,7 +208,7 @@ fn nested_handoff_keeps_original_parents_and_the_same_confirmed_work(){
     let private=PrivateTemp::under(Path::new("/tmp"));let remote=PrivateTemp::under(Path::new("/dev/shm"));
     let recycle=remote.0.join("actual-R");let (s,p,f,rw)=transfer_pool(&private,&recycle);
     let src=InitialReader::open(&s,p).unwrap();
-    let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let auth=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let top=auth.connect(rw).unwrap();let (_,r)=top.ordinary_route(&[],true).unwrap();
     let op=|n|OperationId([n;16]);
     let (a,_)=top.make_ordinary_directory(&r,op(0xe0),"Draft",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
@@ -250,7 +250,7 @@ fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_resto
     let private=PrivateTemp::under(Path::new("/tmp"));let other=PrivateTemp::under(Path::new("/dev/shm"));
     let recycle=other.0.join("actual-R");let (s,p,f,rw)=transfer_pool(&private,&recycle);
     let src=InitialReader::open(&s,p).unwrap();let same=InitialReader::open(&s,p).unwrap();
-    let account=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=account.connect(rw).unwrap();
+    let account=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=account.connect(rw).unwrap();
     let admin=same.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let op=|n|OperationId([n;16]);
     let file=tree.create_file(op(0xb0),"Report.txt").unwrap().file;
@@ -327,7 +327,7 @@ fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_resto
     }
     // Native has selected B as the last CLOSE, but the removed A's
     // actual storage writer has not yet released this FILE's OFD.
-    let other_session=SmbSession::fixture_authenticated(&same,"files.smb").unwrap();
+    let other_session=SmbSession::fixture_authenticated(&same,"first.admin").unwrap();
     let other_tree=other_session.connect(rw).unwrap();
     let mut draining=Some(other_tree.open_writer("Report.txt",file).unwrap());
     let mut waited=false;
@@ -431,7 +431,7 @@ fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_resto
 fn source_retirement_preserves_a_leased_or_unknown_original_and_resumes_exact_unlinks(){
     let temp=PrivateTemp::under(Path::new("/tmp"));let other=PrivateTemp::under(Path::new("/dev/shm"));
     let recycle=other.0.join("actual-R");let (path,pool,f,rw)=transfer_pool(&temp,&recycle);
-    let src=InitialReader::open(&path,pool).unwrap();let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let src=InitialReader::open(&path,pool).unwrap();let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=smb.connect(rw).unwrap();let op=|n|OperationId([n;16]);
     let file=tree.create_file(op(0xd1),"Part.txt").unwrap().file;
     let pos=src.at(|db,c|Place::current(db,&c,file)).unwrap();
@@ -499,7 +499,7 @@ fn source_retirement_preserves_a_leased_or_unknown_original_and_resumes_exact_un
 fn earlier_retirement_requires_the_actual_latest_transfer_target(){
     let tmp=PrivateTemp::under(Path::new("/tmp"));let rr=PrivateTemp::under(Path::new("/dev/shm"));
     let r=rr.0.join("actual-R");let (path,pool,f,rw)=transfer_pool(&tmp,&r);
-    let src=InitialReader::open(&path,pool).unwrap();let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let src=InitialReader::open(&path,pool).unwrap();let auth=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=auth.connect(rw).unwrap();let op=|n|OperationId([n;16]);
     let file=tree.create_file(op(0xe1),"Before.txt").unwrap().file;
     let pos=src.at(|db,c|Place::current(db,&c,file)).unwrap();

@@ -1,6 +1,6 @@
 # 本机首次建池、续作和原 INIT 回执
 
-`helper install-pool new|resume` 是**有写入的离线操作**；单独的 `receipt` 只核对原 INIT 回执。普通磁盘诊断面板不会执行这些操作。另有[同机浏览器发起前台确认](disk-web.md)的可选入口，写入决定仍由该终端作出。当前源码针对外部预先挂载、受保护且独立选定的本地卷。它不分区、格式化、挂载、擦盘、迁移既有目录或启动服务。只建立与同版业务端一致的唯一[已冻结数据库结构](../src/sqlite_install/schema.sql)，不识别、升级或双写此前的格式。建池完成后**仍没有账户或可登录的服务**。尚未构建、运行或做真机断电验收；请勿把本页当成实盘验证报告。
+`helper install-pool new|resume` 是**有写入的离线操作**；单独的 `receipt` 只核对原 INIT 回执。普通磁盘诊断面板不会执行这些操作。另有[同机浏览器发起前台确认](disk-web.md)的可选入口，写入决定仍由该终端作出。当前源码针对外部预先挂载、受保护且独立选定的本地卷。它不分区、格式化、挂载、擦盘、迁移既有目录或启动服务。只建立与同版业务端一致的唯一[已冻结数据库结构](../src/sqlite_install/schema.sql)，不识别、升级或双写此前的格式。建池完成后**仍没有账户或可登录的服务**。本候选尚未执行真机建池或断电验收；隔离开发测试不是实盘验证。
 
 ```text
 helper install-pool new    --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
@@ -23,6 +23,4 @@ helper install-pool receipt --init-actor ID --storage-uid N --storage-gid N --op
 | 只有半个标、标有空洞或意外日志 | 保留失败现场，不覆盖、不删除、不猜。 |
 | 全部标可见，最后 SQL 未提交或回执丢失 | 原 INIT 仍待决则全组重同步/复读才完成。若原 SQL 已提交，仅返回历史，不补标、不启动服务。 |
 
-两个真实登录需要独立授权的 Web 管理员/专用 SMB 账户首设和各自网络适配；这两个动作均不属于本命令。
-
-两个账户由[独立新池首设](private-fresh-zxs-v17.md)发行。原初装或原确认回执既不是登录检查，也不启动 ZXS。
+Web 与 SMB 共用的一个账户由[独立新池首设](private-fresh-zxs-v18.md)发行。原初装或原确认回执既不是登录检查，也不启动 ZXS。

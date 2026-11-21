@@ -3,6 +3,8 @@
 //! Core credentials, or explicit service activation.
 mod envelope;
 mod kernel;
+mod pair_gate;
+mod cohort;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 #[allow(dead_code)]
 mod custody;

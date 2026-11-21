@@ -217,7 +217,7 @@ impl Born<'_>{
         if code==0{Ok(())}else{Err(io::Error::last_os_error())}
     }
 }
-/// An exact READY token requires the original packet and a later live
+/// An exact PREPARED token requires the original packet and a later live
 /// image/ROOT/TERM snapshot. The TERM-only obligation already held at the
 /// possibly delivered START vote and never depends on this token.
 #[must_use]
@@ -249,9 +249,9 @@ impl<'a> Born<'a>{
     }
     pub(super) fn server(mut self,frame:&[u8;80],public:&File,
         vault_and_listeners:&[BorrowedFd<'_>],until:Instant,before_send:impl FnOnce()->Result<()>)->Result<Ready<'a>>{
-        if self.role!=Role::Server||&frame[..16]!=b"ZXS-RUST/START1\0"||
-            !(2..=17).contains(&vault_and_listeners.len()){return Err(Fault::Handoff);}
-        let mut wanted=*frame;wanted[..16].copy_from_slice(b"ZXS-RUST/READY1\0");
+        if self.role!=Role::Server||&frame[..16]!=b"ZXS-RUST/START2\0"||
+            !(3..=18).contains(&vault_and_listeners.len()){return Err(Fault::Handoff);}
+        let mut wanted=*frame;wanted[..16].copy_from_slice(b"ZXS-RUST/PREP02\0");
         self.await_exec(until)?;
         let original=self.handoff_identity()?;
         let channel=self.channel.take().ok_or(Fault::Handoff)?;
@@ -263,19 +263,19 @@ impl<'a> Born<'a>{
         Ok(self.admitted())
     }
     /// On failure the one owning Web birth comes back to the same
-    /// foreground. It may not reap before starting the already-READY
+    /// foreground. It may not reap before starting the already-PREPARED
     /// sibling's drain, even when the Web identity is still uncertain.
-    pub(super) fn web(mut self,frame:&[u8;80],public:&File,listener:BorrowedFd<'_>,
+    pub(super) fn web(mut self,frame:&[u8;80],public:&File,listener:BorrowedFd<'_>,gate:BorrowedFd<'_>,
         until:Instant,before_send:impl FnOnce()->Result<()>)->std::result::Result<Ready<'a>,(Fault,Self)>{
         let verified=(||{
-            if self.role!=Role::Web||&frame[..16]!=b"ZXS-WEB/START-1\0"{return Err(Fault::Handoff);}
-            let mut wanted=*frame;wanted[..16].copy_from_slice(b"ZXS-WEB/READY-1\0");
+            if self.role!=Role::Web||&frame[..16]!=b"ZXS-WEB/START-2\0"{return Err(Fault::Handoff);}
+            let mut wanted=*frame;wanted[..16].copy_from_slice(b"ZXS-WEB/PREP-02\0");
             self.await_exec(until)?;
             let original=self.handoff_identity()?;
             let channel=self.channel.take().ok_or(Fault::Handoff)?;
             self.wait_term_handlers(until)?;
             before_send()?;
-            offer_packet(&channel,frame,public,&[listener],until,||self.expose())?;
+            offer_packet(&channel,frame,public,&[listener,gate],until,||self.expose())?;
             let (got,_)=child_receipt(&channel,&original,self.subject(),false,until)?;
             if got!=wanted||!self.snapshot()?{return Err(Fault::Handoff);}
             Ok(())
@@ -290,6 +290,7 @@ impl<'a> Born<'a>{
 }
 impl Ready<'_>{
     pub(super) fn is_smb(&self)->bool{self.0.role==Role::Server}
+    pub(super) fn is_web(&self)->bool{self.0.role==Role::Web}
     pub(super) fn peek(&self)->Result<Option<i32>>{self.0.peek()}
     pub(super) fn begin_drain(&mut self)->Result<()>{self.0.begin_drain()}
     pub(super) fn finish(mut self)->Result<()>{self.0.finish_drain()}

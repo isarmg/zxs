@@ -1,4 +1,4 @@
-//! Fixed, local maintenance for the sole Web and SMB identities in exact v17;
+//! Fixed, local maintenance for the sole shared Web/SMB identity in exact v18;
 //! no retired SQL SMB credential issuer, migration or protocol fallback.
 mod command;
 mod native_sql;
@@ -15,8 +15,8 @@ mod import_source;
 pub(crate) use native_run::{RetirementCheck,ImportCheck,check_deployment};
 mod rust_enroll;
 mod fresh_issuer;
-pub(super) use fresh_issuer::{ExplicitSubject,compiled_v17,require_v17};
-pub(crate) use native_run::{rust_account_worker,rust_vault_worker,SmbPasswordReset,WebAdministratorReset,web_admin_reset_worker};
+pub(super) use fresh_issuer::{ExplicitSubject,compiled_v18,require_v18};
+pub(crate) use native_run::{rust_account_worker,rust_vault_worker,SharedAccountReset};
 mod recycle;
 mod domain;
 
@@ -45,8 +45,4 @@ fn login(s: &[u8]) -> bool {
     let basic = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     (1..=64).contains(&s.len()) && basic(s[0])
         && s.iter().all(|&b| basic(b) || matches!(b, b'.' | b'_' | b'-'))
-}
-
-fn distinct_roles(web:&[u8],smb:&[u8])->bool{
-    web!=smb&&![b"guest".as_slice(),b"anonymous",b"nobody",b"root"].contains(&smb)
 }

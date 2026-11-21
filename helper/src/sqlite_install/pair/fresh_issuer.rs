@@ -8,18 +8,18 @@ use super::bad;
 use sha2::{Digest,Sha256};
 use std::{ffi::OsString,io};
 
-const SCHEMA_SHA:&str="a5eb88872ac976929b6ca4e5621a74de979ac9040512d1d937b50452307f42d0";
-pub(in crate::sqlite_install) fn compiled_v17()->io::Result<()>{
-    let wanted=crate::fs_tools::hex(SCHEMA_SHA).expect("frozen v17 DDL hash");
+const SCHEMA_SHA:&str="8379dfa3b66040540995ebf863d3f12c7fddbb57ce05e98961011dc7429dfc4b";
+pub(in crate::sqlite_install) fn compiled_v18()->io::Result<()>{
+    let wanted=crate::fs_tools::hex(SCHEMA_SHA).expect("frozen v18 DDL hash");
     let actual:[u8;32]=Sha256::digest(crate::sqlite_install::stage::SCHEMA.as_bytes()).into();
-    if crate::sqlite_install::catalog::SCHEMA_VERSION!=17||actual!=wanted{
-        return Err(bad("the private fresh ZXS issuer is not qualified for this exact v17 format"));
+    if crate::sqlite_install::catalog::SCHEMA_VERSION!=18||actual!=wanted{
+        return Err(bad("the private fresh ZXS issuer is not qualified for this exact v18 format"));
     }
     Ok(())
 }
-pub(in crate::sqlite_install) fn require_v17()->io::Result<()>{
-    if !cfg!(feature="private-fresh-zxs-v17"){return Err(bad("private fresh ZXS issuance is disabled"));}
-    compiled_v17()
+pub(in crate::sqlite_install) fn require_v18()->io::Result<()>{
+    if !cfg!(feature="private-fresh-zxs-v18"){return Err(bad("private fresh ZXS issuance is disabled"));}
+    compiled_v18()
 }
 type Id=[u8;16];
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -47,8 +47,8 @@ impl ExplicitSubject{
 }
 
 pub(super) mod image;
-use super::{command::{key,name,sha,value},distinct_roles,domain::{FreshHome,FreshParent},native_run::{Choice,ResolvedRust,transact_fresh},
-    native_sql::rust_vault::{Desired,RustOrder},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest}},terminal::PublicConfirmation};
+use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,ResolvedRust,transact_fresh},
+    native_sql::rust_vault::{ActiveRustMeta,Desired,RustChange,RustOrder,SetupSpec,shared_login},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest},receipt::Observed},terminal::PublicConfirmation};
 use crate::{path_rules::Kind,smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
     rust_first::{self,Origin}},sqlite_install::{approval,stage::random}};
 use helper_linux_evidence::prompt_signals::PromptSignals;
@@ -72,7 +72,7 @@ fn filesystem_phase<T>(live:&dyn Fn()->io::Result<()>,
 #[derive(Debug)]
 pub(super) struct Selection{
     subject:ExplicitSubject,system:PathBuf,origin:Origin,reference:Id,init_sha:[u8;32],
-    image:[u8;32],crypto:CryptoPins,hostname:String,web:Vec<u8>,smb:Vec<u8>,
+    image:[u8;32],crypto:CryptoPins,hostname:String,login:Vec<u8>,
     recycle:RecycleName,endpoints:Vec<Endpoint>,folders:Vec<Choice>,
 }
 impl Selection{
@@ -94,9 +94,8 @@ impl Selection{
             gcrypt:sha(&mut it,"--gcrypt-sha256")?,gpgerror:sha(&mut it,"--gpgerror-sha256")?};
         let hostname=value(&mut it,"--host")?.into_string().ok().filter(|v|rust_first::valid_host(v))
             .ok_or("expected the canonical lower ASCII installation hostname")?;
-        let web=name(&mut it,"--web-login")?;
-        let smb=name(&mut it,"--smb-login")?;
-        if !distinct_roles(&web,&smb){return Err("expected two distinct non-guest roles");}
+        let login=name(&mut it,"--login")?;
+        if !shared_login(&login){return Err("expected one canonical non-guest login for both Web and SMB");}
         let recycle=RecycleName::new(value(&mut it,"--recycle-name")?.into_string()
             .map_err(|_|"expected a valid logical recycle name")?)?;
         let mut endpoints=Vec::new();let mut folders:Vec<Choice>=Vec::new();
@@ -118,11 +117,11 @@ impl Selection{
             }else{return Err("only explicit bounded listeners and original folders; no recovery, password, or alternate executable");}
         }
         if endpoints.is_empty()||folders.is_empty(){return Err("select at least one LAN listener and original ordinary folder");}
-        Ok(Self{subject,system,origin,reference,init_sha,image,crypto,hostname,web,smb,recycle,endpoints,folders})
+        Ok(Self{subject,system,origin,reference,init_sha,image,crypto,hostname,login,recycle,endpoints,folders})
     }
     pub(super) fn run(self)->io::Result<(u8,String)>{
-        require_v17()?;
-        let Self{subject,system,origin,reference,init_sha,image,crypto,hostname,web,smb,recycle,endpoints,folders}=self;
+        require_v18()?;
+        let Self{subject,system,origin,reference,init_sha,image,crypto,hostname,login,recycle,endpoints,folders}=self;
         // Check host/stdin custody before obtaining any unrelated FD. This
         // genuine low reader holds the original S EX and no root SQL.
         let parent=FreshParent::select(origin.instance)?;
@@ -132,26 +131,29 @@ impl Selection{
         let providers=Cryptography::fresh(crypto)?;
         let payload=SitePayload::new(resolved.plan(),subject,&system,std::path::Path::new(image::PATH),image)?;
         let target=parent.bind(&resolved,payload.clone())?;
-        let review=preview(&resolved,&payload,&target,&web,&smb,&reference,&init_sha,crypto)?;
-        tty.confirm_fresh_zxs(review)?;
+        let (pin,_,original_subject)=resolved.protected_new_system()?;
+        if original_subject!=subject{return Err(bad("selected original INIT subject changed"));}
+        let entity=pin.entity();
+        let m=Manifest{intent:Intent::Fresh,nonce:random()?,system:system.clone(),
+            entity:[entity.dev,entity.ino,pin.require_same_named_mount()?.id],plan:resolved.plan().clone(),
+            order:RustOrder{op:origin.setup,actor:subject.actor,approval:reference,role:Desired::Setup(SetupSpec::new(login)?)},
+            authority:Authority::Fresh(CredentialScope{subject,crypto,site:payload.sha()?,init_sha,database:resolved.fresh_database()?})};
+        let change=RustChange::for_fresh(&m.plan,&m.order,init_sha)?;
+        let spec=change.target();
+        let review=preview(&resolved,&payload,&target,&spec,&reference,change.digest(),crypto)?;
+        let consent=FreshConsent::approve(&tty,&m,&payload,change,review)?;
         let deadline=Instant::now()+Duration::from_secs(10*60);
         let live=||->io::Result<()>{
             if Instant::now()>=deadline{return Err(bad("the original fresh product approval expired"));}
-            // The low Web secret temporarily changes the TTY flags. That
+            // The single low secret capture temporarily changes the TTY flags. That
             // stage checks the same original tty through HeldQuiet instead.
             approval::host_admin()?;
             providers.require()?;image_file.require()?;resolved.require()
         };
         let phase=(||->io::Result<_>{
             live()?;tty.check()?;
-            let site=filesystem_phase(&live,|guarded|target.prepare(&resolved,&tty,guarded))?;
-            let authority=site.fresh_payload().ok_or_else(||bad("missing actual fresh authority"))?;
-            let(pin,_)=site.original_system()?;let entity=pin.entity();
-            let m=Manifest{intent:Intent::Fresh,nonce:random()?,system:system.clone(),
-                entity:[entity.dev,entity.ino,pin.require_same_named_mount()?.id],plan:site.plan().clone(),
-                order:RustOrder{op:origin.setup,actor:subject.actor,approval:reference,role:Desired::Setup{web,smb}},
-                authority:Authority::Fresh(CredentialScope{subject,crypto,site:authority.sha()?,init_sha,database:resolved.fresh_database()?})};
-            let active=transact_fresh(&site,m,&tty,&live)?;
+            let site=filesystem_phase(&live,|guarded|target.prepare(&resolved,&consent,guarded))?;
+            let active=transact_fresh(&site,m,consent,&live)?;
             let record=active.at(&site)?.record;
             let site_sha=filesystem_phase(&live,|guarded|target.activate(&resolved,&site,active,&tty,guarded))?;
             Ok((site_sha,record))
@@ -162,21 +164,56 @@ impl Selection{
             hex(&origin.pool),hex(&origin.init),hex(&origin.instance),hex(&origin.setup),hex(&site_sha),hex(&record))))
     }
 }
+/// One real original-terminal challenge, before creating site or vault
+/// material. The same exact manifest and independently lowered public tuple
+/// must still agree to use it; no child may ask for another setup approval.
+#[must_use]
+pub(in crate::sqlite_install::pair) struct FreshConsent<'a>{
+    tty:&'a PublicConfirmation,scope:[u8;32],site:[u8;32],action:[u8;32],target:ActiveRustMeta,
+}
+impl<'a> FreshConsent<'a>{
+    fn approve(tty:&'a PublicConfirmation,m:&Manifest,site:&SitePayload,change:RustChange,preview:String)->io::Result<Self>{
+        let scope=m.scope()?;let stamp=site.sha()?;let target=change.target();let action=change.digest();
+        let Authority::Fresh(f)=m.authority else{return Err(bad("missing exact approved fresh account"));};
+        if f.site!=stamp||m.plan.sha()!=site.plan_sha||m.plan.origin!=site.origin
+            ||m.system!=site.system||f.subject!=site.subject||f.init_sha!=target.init_sha||change.previous().is_some(){
+            return Err(bad("different exact fresh setup preview"));
+        }
+        tty.confirm_fresh_zxs(preview)?;
+        Ok(Self{tty,scope,site:stamp,action,target})
+    }
+    pub(in crate::sqlite_install::pair) fn terminal(&self)->&'a PublicConfirmation{self.tty}
+    pub(in crate::sqlite_install::pair) fn require_site(&self,site:&SitePayload)->io::Result<()>{
+        if site.sha()?!=self.site{return Err(bad("not this originally approved site"));}self.tty.check()
+    }
+    pub(in crate::sqlite_install::pair) fn require_manifest(&self,m:&Manifest)->io::Result<()>{
+        if m.scope()?!=self.scope{return Err(bad("not this originally approved shared setup"));}self.tty.check()
+    }
+    pub(in crate::sqlite_install::pair) fn require_observed(&self,m:&Manifest,v:&Observed)->io::Result<()>{
+        self.require_manifest(m)?;
+        if v.state!=1||v.target!=self.target||v.previous.is_some()||v.action!=self.action{
+            return Err(bad("lowered observation differs from the sole original setup consent"));
+        }
+        Ok(())
+    }
+}
+
 fn hex(bytes:&[u8])->String{bytes.iter().map(|b|format!("{b:02x}")).collect()}
-fn preview(resolved:&ResolvedRust,payload:&SitePayload,target:&FreshHome,web:&[u8],smb:&[u8],reference:&Id,init_sha:&[u8;32],crypto:CryptoPins)
+fn preview(resolved:&ResolvedRust,payload:&SitePayload,target:&FreshHome,shared:&ActiveRustMeta,reference:&Id,action:[u8;32],crypto:CryptoPins)
     ->io::Result<String>{
     let p=resolved.plan();let o=p.origin;let(actor,uid,gid)=payload.subject.tuple();
-    let mut out=format!("仅发行从未设置账号的 v17 新 ZXS 池。不会续单、覆盖、清理、迁移，也不会启动任何服务。若中断则保留所有原件，不能盲目重做。\n\
+    let mut out=format!("仅发行从未设置账号的 v18 新 ZXS 池。不会续单、覆盖、清理、迁移，也不会启动任何服务。若中断则保留所有原件，不能盲目重做。\n\
         原池 {} / INIT {} / 原请求 SHA-256 {} / 原主体 {} / 存储 UID:GID {uid}:{gid}。\n\
         新站点 {} / Bind {} / SETUP {} / 批准参考 {}。\n\
         实际受保护的目标 {}。此操作最后独立写入新 deployment.v1；已有文件一律不接管。\n\
         已独立确认的单一 {} SHA-256 {}；原描述 SHA-256 {}；新站点记录 SHA-256 {}。\n\
         当前指定 Helper {}、离线 libgcrypt {}、离线 libgpg-error {}；这些不随 ZXS 运行。\n\
-        {}本次 ZXS 主机 {}；Web 用户 {}、SMB 用户 {}。之后在本原终端独立确认并输入两个密码。\n",
-        hex(&o.pool),hex(&o.init),hex(init_sha),hex(&actor),hex(&o.instance),hex(&o.bind),hex(&o.setup),hex(reference),target.evidence()?,
+        {}本次 ZXS 主机 {}；Web 与 SMB 共用唯一用户名 {}、账户 {}（首代），凭据正本 {}、固定 SID {}。\n\
+        共用设置请求 SHA-256 {}；仅此一次批准，之后在本原终端输入和复输同一个口令。\n",
+        hex(&o.pool),hex(&o.init),hex(&shared.init_sha),hex(&actor),hex(&o.instance),hex(&o.bind),hex(&o.setup),hex(reference),target.evidence()?,
         image::PATH,hex(&payload.elf_sha),hex(&payload.plan_sha),hex(&payload.sha()?),hex(&crypto.helper),hex(&crypto.gcrypt),
-        hex(&crypto.gpgerror),resolved.preview(),p.host(),std::str::from_utf8(web).map_err(|_|bad("Web endpoint is not UTF-8"))?,
-        std::str::from_utf8(smb).map_err(|_|bad("SMB endpoint is not UTF-8"))?);
+        hex(&crypto.gpgerror),resolved.preview(),p.host(),std::str::from_utf8(&shared.login).map_err(|_|bad("invalid shared login"))?,
+        hex(&shared.account),hex(&shared.record),hex(&shared.sid),hex(&action));
     for e in p.endpoints(){writeln!(out,"  SMB {}:{} / 子网前缀 {}（预定而未监听）",e.address(),445,e.prefix()).expect("writing String");}
     out.push_str("  原回收路径在 ZXS 中的计划名称 \"");
     smb_profile::escaped(&mut out,p.recycle().as_str().as_bytes());out.push_str("\"\n");
@@ -192,19 +229,19 @@ mod tests{
     use super::*;
     fn arg(s:&str)->impl Iterator<Item=OsString>+'_{s.split_ascii_whitespace().map(OsString::from)}
     #[test]
-    fn fresh_v17_issue_parser_cannot_select_an_old_action_or_credential_path(){
+    fn fresh_v18_issue_parser_cannot_select_an_old_action_or_credential_path(){
         let form=format!("--init-actor {} --storage-uid 1001 --storage-gid 1002 --system /lab/S --pool {} --init {} \
             --instance {} --bind {} --setup-op {} --init-sha256 {} --approval {} --zxs-sha256 {} --helper-sha256 {} --gcrypt-sha256 {} \
-            --gpgerror-sha256 {} --host fresh.test --web-login first.web --smb-login first.smb --recycle-name Recycle \
+            --gpgerror-sha256 {} --host fresh.test --login first.zxs --recycle-name Recycle \
             --listen 192.0.2.17/24 --share /lab/F Work rw",hex(&[31;16]),hex(&[1;16]),hex(&[2;16]),hex(&[3;16]),
             hex(&[4;16]),hex(&[5;16]),hex(&[45;32]),hex(&[6;16]),hex(&[41;32]),hex(&[42;32]),hex(&[43;32]),hex(&[44;32]));
         assert!(Selection::parse(arg(&form)).is_ok());
         for bad in [format!("{form} --resume"),format!("{form} --password bogus"),format!("{form} --site /other"),
-            form.replace("first.smb","guest"),form.replace("/lab/F","/lab/S/F"),form.replace("1001","01001"),
+            form.replace("first.zxs","guest"),form.replace("--login first.zxs","--web-login first.web --smb-login first.smb"),form.replace("/lab/F","/lab/S/F"),form.replace("1001","01001"),
             form.replace(&hex(&[3;16]),&hex(&[2;16])),form.replace("192.0.2.17/24","0.0.0.0/0"),
             form.replace(&hex(&[41;32]),&hex(&[0;32]))]{assert!(Selection::parse(arg(&bad)).is_err());}
-        let public=format!("issue-fresh-zxs-v17 {form}");
-        assert_eq!(super::super::command::Setup::parse(arg(&public)).is_ok(),cfg!(feature="private-fresh-zxs-v17"));
+        let public=format!("issue-fresh-zxs-v18 {form}");
+        assert_eq!(super::super::command::Setup::parse(arg(&public)).is_ok(),cfg!(feature="private-fresh-zxs-v18"));
     }
 }
 

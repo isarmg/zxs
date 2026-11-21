@@ -154,8 +154,11 @@ impl PreflightQuestion{
         if q.subject()!=subject{return Err(Fault::Handoff);}
         Ok(q)
     }
-    pub(super) fn web_reader(&self,read_only:bool,live:impl Fn()->io::Result<()>)->Result<InitialReader>{
+    pub(super) fn web_reader(&self,read_only:bool,live:impl Fn()->io::Result<()>)->Result<(InitialReader,PreflightEpoch)>{
         web_reader(self.read_scope(),read_only,live).map_err(|_|Fault::Handoff)
+    }
+    pub(super) fn cohort_for(&self,epoch:&PreflightEpoch)->Result<[u8;32]>{
+        super::cohort::digest(self.release,self.installed,self.entity,epoch)
     }
 
     fn approve_shape(&self,reply:&PreflightSelection)->Result<()>{

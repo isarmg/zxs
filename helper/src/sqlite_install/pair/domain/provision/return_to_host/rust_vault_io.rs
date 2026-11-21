@@ -1,12 +1,11 @@
 //! The host side of a single offline vault placement. No password or
 //! password-equivalent bytes are read here or given to the SQL worker.
-use super::{bad,contents,layout,mark,rust_site::{checked_vault_stamp,CredentialSite,RustSite,VaultStamp}};
+use super::{bad,contents,layout,mark,rust_site::{checked_vault_stamp,CredentialSite,VaultStamp}};
 use crate::{pinned::{Entity,private_inode_reader},sqlite_install::pair::{
-    native_run::{DurableRustPending,RustEnrollmentApproval},native_sql::rust_vault::ActiveRustMeta,Id}};
+    native_run::{DurableRustPending,RustEnrollmentApproval},native_sql::rust_vault::{VAULT_NAME as FIXED,ActiveRustMeta},Id}};
 use rustix::fs::{Mode,OFlags,RenameFlags,ResolveFlags,openat2,renameat,renameat_with};
 use std::{ffi::{CStr,CString},fs::File,io,os::unix::fs::{FileExt,MetadataExt}};
 
-const FIXED:&CStr=c"credential.v1";
 const LOCAL:ResolveFlags=ResolveFlags::BENEATH.union(ResolveFlags::NO_XDEV)
     .union(ResolveFlags::NO_SYMLINKS).union(ResolveFlags::NO_MAGICLINKS);
 fn wrong()->io::Error{bad("wrong exact offline Rust SMB credential state; preserve or query the original operation")}
@@ -35,7 +34,7 @@ fn successor(site:CredentialSite<'_>,old:Option<&ActiveRustMeta>,new:&ActiveRust
     match old{
         None=>new.generation==1&&new.op==new.setup,
         Some(p)=>exact_site(site,p)&&p.generation>=1&&p.generation.checked_add(1)==Some(new.generation)&&
-            p.account==new.account&&p.login==new.login&&p.sid==new.sid&&p.op!=new.op&&p.record!=new.record,
+            p.account==new.account&&p.login==new.login&&p.sid==new.sid&&p.init_sha==new.init_sha&&p.op!=new.op&&p.record!=new.record,
     }
 }
 
@@ -105,9 +104,9 @@ pub(in crate::sqlite_install::pair) struct Allocated<'s>{
     previous:Option<(ActiveRustMeta,Sealed)>,
 }
 impl<'s> Allocated<'s>{
-    // Fresh only. The caller must close its writer description after lending
+    // New operation only. The caller closes its writer description after lending
     // it; no Drop tries to unlink any entry on uncertain operation state.
-    pub(in crate::sqlite_install::pair) fn reserve(grant:&RustEnrollmentApproval<'s>,current:Option<CurrentVault<'s>>,
+    pub(in crate::sqlite_install::pair) fn reserve(grant:&RustEnrollmentApproval<'_,'s>,current:Option<CurrentVault<'s>>,
         live:impl Fn()->io::Result<()>)->io::Result<(Self,File)>{
         grant.require()?;live()?;
         let site=grant.site();let target=grant.original().target.clone();let old=grant.original().previous.clone();
@@ -165,7 +164,12 @@ impl<'s> Frozen<'s>{
         if checked_vault_stamp(&a.original,path.mark.1)?!=self.sealed.stamp{return Err(wrong());}
         Ok(())
     }
-    pub(in crate::sqlite_install::pair) fn replace_in_pending(self,pending:&DurableRustPending<'_,'_>)->io::Result<PlacedVault<'s>>{
+    pub(in crate::sqlite_install::pair) fn wire(&self)->io::Result<([u8;65],&File)>{
+        self.require_ready()?;
+        let a=&self.allocated;
+        Ok((encode_witness(1,&a.meta.record,a.path.mark.1,&self.sealed.stamp),&a.original))
+    }
+    pub(in crate::sqlite_install::pair) fn replace_in_pending(self,pending:&DurableRustPending<'_,'_,'s>)->io::Result<PlacedVault<'s>>{
         let a=&self.allocated;let path=&a.path;
         pending.require(path.site,&a.meta)?;path.require()?;
         let wanted=a.meta.record_prefix()?;
@@ -199,42 +203,33 @@ impl PlacedVault<'_>{
         inventory(&self.path.dir,true,None)
     }
     pub(in crate::sqlite_install::pair) fn wire(&self)->io::Result<([u8;65],&File)>{
-        self.require()?;let mut b=[0;65];b[0]=3;b[1..17].copy_from_slice(&self.meta.record);
-        let v=&self.sealed.stamp;
-        b[17..25].copy_from_slice(&self.path.mark.1.to_be_bytes());
-        b[25..33].copy_from_slice(&v.dev.to_be_bytes());b[33..41].copy_from_slice(&v.ino.to_be_bytes());
-        b[41..49].copy_from_slice(&v.ctime_sec.to_be_bytes());b[49..53].copy_from_slice(&v.ctime_ns.to_be_bytes());
-        b[53..61].copy_from_slice(&v.mtime_sec.to_be_bytes());b[61..65].copy_from_slice(&v.mtime_ns.to_be_bytes());
-        Ok((b,&self.original))
+        self.require()?;
+        Ok((encode_witness(3,&self.meta.record,self.path.mark.1,&self.sealed.stamp),&self.original))
     }
 }
-
-pub(in crate::sqlite_install::pair) fn verify_fresh_vault(site:&RustSite,target:&ActiveRustMeta)->io::Result<()>{
-    if site.fresh_payload().is_none()||!successor(CredentialSite::Fresh(site),None,target){return Err(wrong());}
-    let original=Original::open(CredentialSite::Fresh(site))?;
-    inventory(&original.dir,true,None)?;
-    let want=target.record_prefix()?;
-    let held=original.exact(FIXED,&want)?;
-    held.require(&original,FIXED,&want)?;
-    inventory(&original.dir,true,None)?;
-    original.require()
+fn encode_witness(tag:u8,record:&Id,mount:u64,v:&VaultStamp)->[u8;65]{
+    let mut b=[0;65];b[0]=tag;b[1..17].copy_from_slice(record);
+    b[17..25].copy_from_slice(&mount.to_be_bytes());
+    b[25..33].copy_from_slice(&v.dev.to_be_bytes());b[33..41].copy_from_slice(&v.ino.to_be_bytes());
+    b[41..49].copy_from_slice(&v.ctime_sec.to_be_bytes());b[49..53].copy_from_slice(&v.ctime_ns.to_be_bytes());
+    b[53..61].copy_from_slice(&v.mtime_sec.to_be_bytes());b[61..65].copy_from_slice(&v.mtime_ns.to_be_bytes());b
 }
 
 #[cfg(test)]
 mod tests{
     use super::*;
     #[test]
-    fn smb_password_reset_new_cannot_clear_or_adopt_an_unknown_stage_name(){
+    fn shared_reset_new_cannot_clear_or_adopt_an_unknown_stage_name(){
         // Exercise the real plain directory inventory only. These empty
         // placeholder files are neither a credential nor any actual vault.
         let shelf=tempfile::tempdir().unwrap();
-        std::fs::File::create(shelf.path().join("credential.v1")).unwrap();
+        std::fs::File::create(shelf.path().join("credential.v2")).unwrap();
         let dir=std::fs::File::open(shelf.path()).unwrap();
         inventory(&dir,true,None).unwrap();
         let name=stage_name(&[50;16]).unwrap();
         let name=name.to_str().unwrap();
         std::fs::File::create(shelf.path().join(name)).unwrap();
         assert!(inventory(&dir,true,None).is_err());
-        assert!(shelf.path().join(name).is_file()&&shelf.path().join("credential.v1").is_file());
+        assert!(shelf.path().join(name).is_file()&&shelf.path().join("credential.v2").is_file());
     }
 }

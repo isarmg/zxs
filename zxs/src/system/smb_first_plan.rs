@@ -224,7 +224,7 @@ impl QualifiedRustInstall{
         let source=InitialReader::open(origin.system_path(),crate::PoolId(installed.plan.scope[0]))?;
         if source.dir.root.entity!=origin.system_entity(){return Err(denied());}
         let original=source.at(|db,c|installed.active_at(db,&c))?;
-        if !origin.current_public_revision_is(original.smb.0,original.epoch.op.0,original.record,
+        if !origin.current_public_revision_is(original.canonical.0,original.epoch.op.0,original.record,
             &original.sid,original.epoch.generation,&original.login){return Err(denied());}
         origin.require_live_source()?;
         Ok(Self{origin,source,installed,original})
@@ -253,7 +253,7 @@ impl QualifiedRustInstall{
     /// Matching bytes do not establish provenance or authenticate a client.
     pub(crate) fn matches_record_coordinates(&self,ids:&[[u8;16];8],generation:i64,login:&str)->bool{
         let m=&self.original;
-        *ids==[m.pool.0,m.init.0,m.setup.0,m.instance,m.bind,m.smb.0,m.epoch.op.0,m.record]&&
+        *ids==[m.pool.0,m.init.0,m.setup.0,m.instance,m.bind,m.canonical.0,m.epoch.op.0,m.record]&&
             generation==m.epoch.generation&&login==m.login.as_str()
     }
 

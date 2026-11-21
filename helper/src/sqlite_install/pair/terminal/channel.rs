@@ -9,10 +9,18 @@ use std::{fs::File,io,os::fd::{AsFd,BorrowedFd},time::{Duration,Instant}};
 mod confirmation;
 pub(in crate::sqlite_install) use confirmation::PublicConfirmation;
 
-const PROMPTS:[&[u8];4]=[
-    "请输入 Web 管理员口令（不回显），然后按回车。\n".as_bytes(), "请再次输入同一 Web 管理员口令。\n".as_bytes(),
-    "请输入不同的 SMB 专用账户口令（不回显），然后按回车。\n".as_bytes(), "请再次输入同一 SMB 专用账户口令。\n".as_bytes(),
-];
+#[derive(Clone,Copy)]
+pub(super) enum Prompt { Joint }
+impl Prompt {
+    fn wording(self)->[&'static [u8];2] {
+        match self {
+            Self::Joint=>[
+                "请输入 Web 与 SMB 共用的同一账户口令（不回显），然后按回车。\n".as_bytes(),
+                "请再次输入同一账户口令。\n".as_bytes(),
+            ],
+        }
+    }
+}
 
 fn already_writable(flags:OFlags)->bool {
     let access=flags&OFlags::ACCMODE;
@@ -68,8 +76,8 @@ impl Channel {
             return Err(refuse("selected terminal session, group or private prompt fd changed"));
         }Ok(())
     }
-    pub(super) fn prompt(&self,index:usize,end:Instant,check:impl Fn()->io::Result<()>)->io::Result<()> {
-        let bytes=*PROMPTS.get(index).ok_or_else(||failure("unknown credential prompt"))?;
+    pub(super) fn prompt(&self,prompt:Prompt,index:usize,end:Instant,check:impl Fn()->io::Result<()>)->io::Result<()> {
+        let bytes=*prompt.wording().get(index).ok_or_else(||failure("unknown credential prompt"))?;
         nonblocking_prompt(self.out.as_fd(),bytes,end,check)
     }
 }
@@ -93,7 +101,12 @@ mod tests {
     #[test] fn no_new_write_right_from_a_reserved_access_mode_or_path_only_descriptor() {
         for f in [OFlags::WRONLY, OFlags::RDWR|OFlags::NONBLOCK]{assert!(already_writable(f));}
         for f in [OFlags::RDONLY, OFlags::ACCMODE, OFlags::PATH, OFlags::PATH|OFlags::WRONLY]{assert!(!already_writable(f));}
-        assert_eq!(PROMPTS.len(),4);
+    }
+    #[test] fn joint_account_secret_has_one_shared_prompt_and_one_repeat_not_two_roles() {
+        let [first,repeat]=Prompt::Joint.wording();
+        assert_eq!(first,"请输入 Web 与 SMB 共用的同一账户口令（不回显），然后按回车。\n".as_bytes());
+        assert_eq!(repeat,"请再次输入同一账户口令。\n".as_bytes());
+
     }
     #[test] fn full_nonblocking_output_can_time_out_without_a_reader_or_a_blocking_write() {
         use rustix::pipe::{pipe_with,PipeFlags};

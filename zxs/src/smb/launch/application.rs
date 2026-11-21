@@ -33,7 +33,7 @@ pub fn start_original_zxs()->io::Result<()>{
     let mut web=match custody::launch_internal_web(&mut accepted,&mut smb){
         Ok(web)=>web,
         Err(e)=>{
-            // This SMB really reached its own READY; it uses the original
+            // This SMB reached its own PREPARED; it uses the original
             // normal drain even when the whole application did not start.
             let _=smb.begin_drain();
             let _=smb.finish();
@@ -41,8 +41,9 @@ pub fn start_original_zxs()->io::Result<()>{
         }
     };
     let mut result=(||{
+        accepted.release_pair(&smb,&web)?;
         terminal.report(
-            "ZXS：本次 Web 和内置 SMB 的原进程与监听已确认，均来自同一原 SYSTEM。尚未确认客户端互通或旧单恢复完成。\n",
+            "ZXS：本次 Web 和内置 SMB 已核对同一原 SYSTEM 与凭据代，已共同放行。尚未确认客户端互通或旧单恢复完成。\n",
             ||{
                 if custody::stopping()||web.exited()?.is_some()||smb.exited()?.is_some(){return Err(no());}
                 Ok(())
@@ -58,7 +59,7 @@ pub fn start_original_zxs()->io::Result<()>{
             thread::sleep(Duration::from_millis(50));
         }
     })();
-    // Request TERM from BOTH original, genuinely READY births before
+    // Request TERM from BOTH original, genuinely PREPARED births before
     // waiting on either. No rollback/replay or purported tidy exit after
     // an uncertain handoff. Each handle owns its real birth through reap.
     smb.begin_pair(&mut web);

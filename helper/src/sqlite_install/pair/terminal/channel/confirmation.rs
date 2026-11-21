@@ -1,7 +1,5 @@
 //! Single nonsecret host-installation confirmation on this exact foreground
-//! Linux N_TTY. The four fixed credential prompts in Channel are unchanged.
-use crate::sqlite_install::pair::Id;
-use std::{os::unix::ffi::OsStrExt,path::Path};
+//! Linux N_TTY. Hidden input is a separate confined worker scope.
 use super::{Channel,Surface,failure,fs,nonblocking_prompt,own_descriptor_table,refuse};
 use helper_linux_evidence::prompt_signals::PromptSignals;
 use rustix::{fs::{Mode,OFlags},io::Errno,rand::{GetRandomFlags,getrandom},
@@ -45,11 +43,11 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install) fn confirm_init(&self,fresh:bool,preview:String)->io::Result<()>{
         self.ask(if fresh{"INIT"}else{"RESUME"},Some(preview),1100*1024)
     }
-    pub(in crate::sqlite_install) fn confirm_v17_initialization(&self,review:String)->io::Result<()>{
-        self.ask("INIT-ZXS-V17",Some(review),1100*1024)
+    pub(in crate::sqlite_install) fn confirm_v18_initialization(&self,review:String)->io::Result<()>{
+        self.ask("INIT-ZXS-V18",Some(review),1100*1024)
     }
     pub(in crate::sqlite_install::pair) fn confirm_fresh_zxs(&self,review:String)->io::Result<()>{
-        self.ask("ISSUE-ZXS-V17",Some(review),1100*1024)
+        self.ask("ISSUE-ZXS-V18",Some(review),1100*1024)
     }
     pub(in crate::sqlite_install::pair) fn confirm_ext_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-EXT-COPY",Some(preview),64*1024)
@@ -60,12 +58,8 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install::pair) fn confirm_fat32_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-FAT32-COPY",Some(preview),64*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_web_administrator_reset(&self,review:String)->io::Result<()>{
-        self.ask("RESET-ZXS-WEB-ADMIN",Some(review),8*1024)
-    }
-    pub(in crate::sqlite_install::pair) fn confirm_rust_credential(&self,reset:bool,resume:bool,review:String)->io::Result<()>{
-        let verb=if resume{"RESUME-RUST-SMB"}else if reset{"RESET-RUST-SMB"}else{"ENROLL-RUST-SMB"};
-        self.ask(verb,Some(review),96*1024)
+    pub(in crate::sqlite_install::pair) fn confirm_shared_account_reset(&self,review:String)->io::Result<()>{
+        self.ask("RESET-ZXS-ACCOUNT",Some(review),96*1024)
     }
     pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
         nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),&||self.check())

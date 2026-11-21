@@ -81,12 +81,12 @@ pub(super) fn isolated_first_init(tx:&Transaction<'_>,pool:&Id,init:&Id,actor:&I
         AND NOT EXISTS(SELECT 1 FROM main.root_share)
         AND NOT EXISTS(SELECT 1 FROM main.share_mode)",
         params![&pool[..],&init[..],&actor[..],&init_sha[..]],|r|r.get(0)).map_err(sql)?;
-    if !found{return Err(bad("not the exact committed account-free first v17 INIT"));}
+    if !found{return Err(bad("not the exact committed account-free first v18 INIT"));}
     Ok(())
 }
 pub(super) fn isolated_first_claims(pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32],locked:&LockedSystem)
     ->io::Result<(Vec<Initial>,std::fs::File)>{
-    super::fresh_issuer::require_v17()?;
+    super::fresh_issuer::require_v18()?;
     let source=locked.source();let schema=Canonical::new()?;let db=Existing::observed_system(locked)?;
     let marker=SystemMark::before_sql(source)?;
     let pin=db.fresh_observation_pin()?;
@@ -103,12 +103,12 @@ pub(super) fn isolated_first_claims(pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32
 pub(super) fn deployed_active(locked:&LockedSystem,site:&super::fresh_issuer::SitePayload,plan:&crate::smb_profile::rust_first::RustPlan)
     ->io::Result<(std::fs::File,[u8;64],SystemObservation,[u8;224])>{
     use super::{fresh_issuer::InitialDatabase,native_sql::rust_vault::active_at};
-    super::fresh_issuer::compiled_v17()?;
+    super::fresh_issuer::compiled_v18()?;
     let (actor,uid,_)=site.subject.tuple();
     let o=site.origin;
     let source=locked.source();
     if site.plan_sha!=plan.sha()||o!=plan.origin||site.system!=source.path()||uid!=source.uid(){
-        return Err(bad("different held SYSTEM or installed v17 plan"));
+        return Err(bad("different held SYSTEM or installed v18 plan"));
     }
     let schema=Canonical::new()?;
     let db=Existing::observed_system(locked)?;
@@ -132,10 +132,10 @@ pub(super) fn deployed_active(locked:&LockedSystem,site:&super::fresh_issuer::Si
     Ok((pin,stamp,original_mark,public))
 }
 #[cfg(test)]
-mod fresh_v17_tests{
+mod fresh_v18_tests{
     use super::*;
     #[test]
-    fn fresh_v17_sql_cut_rejects_pending_init_other_actor_receipt_and_prior_accounts(){
+    fn fresh_v18_sql_cut_rejects_pending_init_other_actor_receipt_and_prior_accounts(){
         // Use only the frozen schema in memory; deliberately no host authority
         // or mounted root. The real route separately proves the S VFS and marks.
         let mut c=rusqlite::Connection::open_in_memory().unwrap();
@@ -160,10 +160,13 @@ mod fresh_v17_tests{
         let tx=c.transaction().unwrap();
         let mut sid=[42u8;28];sid[..12].copy_from_slice(&[1,5,0,0,0,0,0,5,21,0,0,0]);
         sid[24..].copy_from_slice(&1000u32.to_le_bytes());
-        tx.execute("INSERT INTO account_pair VALUES(1,?1,?2,?3,?4,?5,X'776562',?6,X'736d62',?7,0,NULL)",
-            params![&setup[..],&reference[..],&instance[..],&[19u8;32][..],&[20u8;16][..],&[21u8;16][..],&sid[..]]).unwrap();
+        tx.execute("INSERT INTO account_pair(singleton,birth_op,approval_ref,instance_id,setup_bound_sha,
+                account_id,login,web_id,smb_id,smb_sid,smb_rust_bind_id) VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![&setup[..],&reference[..],&instance[..],&[19u8;32][..],&[20u8;16][..],b"shared".as_slice(),
+                &[21u8;16][..],&[25u8;16][..],&sid[..],&[26u8;16][..]]).unwrap();
         tx.execute("INSERT INTO web_password VALUES(1,?1,1,?2,?3)",
             params![&setup[..],&[22u8;16][..],&[23u8;32][..]]).unwrap();
+        tx.execute("INSERT INTO smb_rust_revision VALUES(?1,?2)",params![&setup[..],&[27u8;16][..]]).unwrap();
         tx.execute("INSERT INTO operation VALUES(?1,2,?2,?3,0)",params![&setup[..],&actor[..],&[24u8;32][..]]).unwrap();
         assert!(isolated_first_init(&tx,&pool,&init,&actor,&requested).is_err());
         tx.rollback().unwrap();

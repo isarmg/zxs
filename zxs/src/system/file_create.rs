@@ -421,7 +421,7 @@ mod native_tests{
     fn native_offer_needs_exact_ack_before_sql_and_does_not_take_a_read_lock(){
         let tmp=PrivateTemp::under(&std::env::temp_dir());let(path,pool,_,rw,ro)=ordinary_pool(&tmp);
         let src=InitialReader::open(&path,pool).unwrap();
-        let s=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let s=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
         let w=s.connect(rw).unwrap();let r=s.connect(ro).unwrap();
         let obs=InitialReader::alongside(&src.dir,&src.marker,pool,src.expected_schema).unwrap();
         let c=src.snapshot().unwrap();let root=OrdinaryRoot::for_body(&src,&c,w.setting.volume).unwrap();

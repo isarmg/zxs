@@ -93,18 +93,26 @@ fn pending_pool_extra_schema_and_unexpected_wal_are_not_accepted_or_repaired(){
 }
 
 #[test]
-#[ignore="source-only explicit previous-version fixture; never open an existing pool"]
-fn previous_native_version_is_not_rewritten_or_opened(){
-    let t=PrivateTemp::under(&std::env::temp_dir());
-    let (s,p)=record(&t,InitState::Committed,"PRAGMA main.user_version=16;");
-    let original=s.join("SYSTEM.sqlite3");
-    // Builder's SQLite connection has closed; this is only a byte snapshot
-    // of the isolated fixture, not an extra checkpoint FD on a live pool.
-    let before=std::fs::read(&original).unwrap();
-    assert!(InitialReader::open(&s,p).is_err());
-    assert_eq!(std::fs::read(&original).unwrap(),before);
-    for name in ["SYSTEM.sqlite3-journal","SYSTEM.sqlite3-wal","SYSTEM.sqlite3-shm"]{
-        assert!(!s.join(name).exists());
+#[ignore="source-only exact older header fixtures; never open an existing pool"]
+fn previous_formats_are_rejected_by_the_family_gate_and_not_rewritten(){
+    for version in [16,17]{
+        let t=PrivateTemp::under(&std::env::temp_dir());
+        // Give it otherwise-canonical rows/shape to isolate the header gate.
+        // A prior version must fail before its catalog/credentials are read.
+        let header=format!("PRAGMA main.user_version={version};");
+        let (s,p)=record(&t,InitState::Committed,&header);
+        let original=s.join("SYSTEM.sqlite3");
+        assert!(std::fs::read(&original).unwrap().get(60..64)==Some(&(version as u32).to_be_bytes()));
+        // Builder's connection has closed; this is only a byte snapshot of
+        // the isolated fixture, not an extra FD on a live pool.
+        let before=std::fs::read(&original).unwrap();
+        let failure=InitialReader::open(&s,p).err().expect("a prior format is never accepted");
+        assert_eq!(failure.kind(),io::ErrorKind::InvalidData);
+        assert!(failure.to_string().starts_with("SQLite 20:")); // family mismatch, not a later schema/row error
+        assert_eq!(std::fs::read(&original).unwrap(),before);
+        for name in ["SYSTEM.sqlite3-journal","SYSTEM.sqlite3-wal","SYSTEM.sqlite3-shm"]{
+            assert!(!s.join(name).exists());
+        }
     }
 }
 
@@ -268,7 +276,7 @@ pub(super) fn ordinary_transfer_pool(t:&PrivateTemp,target:&Path)->
 pub(crate) fn stage_managed_file(source:&InitialReader,rw:crate::identity::ShareId,ro:crate::identity::ShareId,name:&str,data:&File)
     ->io::Result<crate::FileId>{
     // The fake native login proof remains inside this reader-only test.
-    let session=smb::SmbSession::fixture_authenticated(source,"files.smb")?;
+    let session=smb::SmbSession::fixture_authenticated(source,"first.admin")?;
     let tree=session.connect(rw)?;let read=session.connect(ro)?;
     let file=tree.create_file(OperationId([0xbb;16]),name)?.file;
     let writer=tree.open_writer(name,file)?;

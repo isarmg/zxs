@@ -1,587 +1,430 @@
-//! This is the nonsecret SQL half of the Rust vault family. Functions that
-//! write a transaction are private to the offline transaction owner. They
-//! do not acquire either EX lock, open a vault, or authorize maintenance.
-use super::{Core,Id,Ids,Original,bad,blob,collision,distinct_roles,first_ordinary,history,login,one,require_init,sql,stage};
-use super::super::web_secret::PreparedWeb;
-use crate::smb_profile::rust_first::RustPlan;
+//! The shared public epoch and the two short original-S writes. No password,
+//! SMB key, root vault namespace, or permission to apply is available here.
+use super::{Core,Id,Ids,Original,bad,blob,collision,first_ordinary,history,one,sql,stage};
+use super::super::{login,native_run::joint_material::{Binding,Epoch,Received,StagedWeb}};
+use super::transaction::{AccountCut,expired};
+use crate::{smb_profile::rust_first::RustPlan,sqlite_install::{originals::LockedSystem,stage::random}};
 use rusqlite::{params,Transaction};
 use sha2::{Digest,Sha256};
-use std::io;
+use std::{io,time::Instant};
 
 const SID_PREFIX:[u8;12]=[1,5,0,0,0,0,0,5,21,0,0,0];
+const ACTOR:&[u8]=b"ZXS-SQLITE-1/ACCOUNT-ACTOR-1\0";
+const SETUP:&[u8]=b"ZXS-SQLITE-1/SHARED-SETUP-1\0";
+const RESET:&[u8]=b"ZXS-SQLITE-1/SHARED-RESET-1\0";
 const ACTIVATE:&str=include_str!("activate-rust.sql");
-
-#[derive(Clone,Eq,PartialEq)]
-pub(in crate::sqlite_install::pair) struct ActiveRustMeta{
-    pub(in crate::sqlite_install::pair) pool:Id,
-    pub(in crate::sqlite_install::pair) init:Id,
-    pub(in crate::sqlite_install::pair) setup:Id,
-    pub(in crate::sqlite_install::pair) descriptor_sha:[u8;32],
-    pub(in crate::sqlite_install::pair) instance:Id,
-    pub(in crate::sqlite_install::pair) bind:Id,
-    pub(in crate::sqlite_install::pair) account:Id,
-    pub(in crate::sqlite_install::pair) login:Vec<u8>,
-    pub(in crate::sqlite_install::pair) sid:[u8;28],
-    pub(in crate::sqlite_install::pair) op:Id,
-    pub(in crate::sqlite_install::pair) generation:i64,
-    pub(in crate::sqlite_install::pair) record:Id,
-}
-impl ActiveRustMeta{
-    /// Canonical nonsecret envelope for the exact selected library and
-    /// root-owned staging inode. Never copy the last 16 bytes to SQL or IPC.
-    pub(in crate::sqlite_install::pair) fn record_prefix(&self)->io::Result<[u8;224]>{
-        let ids=[self.pool,self.init,self.setup,self.instance,self.bind,self.account,self.op,self.record];
-        if !login(&self.login)||!distinct_roles(&[],&self.login)||ids.contains(&[0;16])||
-            self.init==self.setup||self.op==self.init||self.generation<1||
-            (self.generation==1)!=(self.op==self.setup)||!valid_sid(&self.sid){return Err(public_error());}
-        let mut b=[0u8;224];b[..16].copy_from_slice(b"ZXS-RUST-SMB-V1\0");
-        b[16]=1;b[17]=self.login.len() as u8;
-        for (slot,id) in b[24..152].chunks_exact_mut(16).zip(ids){slot.copy_from_slice(&id);}
-        b[152..160].copy_from_slice(&(self.generation as u64).to_be_bytes());
-        b[160..160+self.login.len()].copy_from_slice(&self.login);
-        Ok(b)
-    }
-}
-#[derive(Clone,Copy,Eq,PartialEq)]
-struct Installation{pool:Id,init:Id,setup:Id,instance:Id,bind:Id,sha:[u8;32]}
-impl From<&RustPlan> for Installation{
-    fn from(p:&RustPlan)->Self{
-        let o=p.origin;Self{pool:o.pool,init:o.init,setup:o.setup,instance:o.instance,bind:o.bind,sha:p.sha()}
-    }
+pub(in crate::sqlite_install::pair) const VAULT_MAGIC:&[u8;16]=b"ZXS-RUST-SMB-V2\0";
+pub(in crate::sqlite_install::pair) const VAULT_NAME:&std::ffi::CStr=c"credential.v2";
+fn wrong()->io::Error{bad("not the original shared account and its exact credential epoch")}
+pub(in crate::sqlite_install::pair) fn shared_login(name:&[u8])->bool{
+    login(name)&&!matches!(name,b"guest"|b"anonymous"|b"nobody"|b"root")
 }
 fn valid_sid(sid:&[u8;28])->bool{
     sid[..12]==SID_PREFIX&&sid[12..24]!=[0;12]&&sid[24..]==1000u32.to_le_bytes()
 }
-fn public_name(h:&mut Sha256,name:&[u8]){
-    h.update([name.len() as u8]);h.update(name);
+fn roles(account:Id,actor:Id)->io::Result<Ids>{
+    if [account,actor].contains(&[0;16])||account==actor{return Err(wrong());}
+    let make=|member:u8|->Id{
+        let mut h=Sha256::new();h.update(ACTOR);h.update(account);h.update([member]);
+        h.finalize()[..16].try_into().expect("fixed role key")
+    };
+    let ids=Ids::checked(make(0),make(1))?;
+    if [ids.web,ids.smb].iter().any(|a|*a==actor||*a==account){return Err(wrong());}
+    Ok(ids)
 }
-fn public_error()->io::Error{bad("wrong exact Rust SMB account operation or public installation")}
 
-struct Birth{
-    scope:Core,install:Installation,ids:Ids,web:Vec<u8>,smb:Vec<u8>,sid:[u8;28],record:Id,
+#[derive(Clone,Eq,PartialEq)]
+pub(in crate::sqlite_install::pair) struct ActiveRustMeta{
+    pub pool:Id,pub init:Id,pub setup:Id,pub instance:Id,pub bind:Id,
+    pub init_sha:[u8;32],pub descriptor_sha:[u8;32],pub account:Id,pub login:Vec<u8>,pub sid:[u8;28],
+    pub op:Id,pub generation:i64,pub record:Id,
 }
+impl ActiveRustMeta{
+    fn installation(&self)->[Id;5]{[self.pool,self.init,self.setup,self.instance,self.bind]}
+    fn matches(&self,p:&RustPlan)->bool{
+        let o=p.origin;self.installation()==[o.pool,o.init,o.setup,o.instance,o.bind]&&self.descriptor_sha==p.sha()
+    }
+    fn epoch(&self)->Epoch{Epoch{op:self.op,generation:self.generation,record:self.record}}
+    pub(in crate::sqlite_install::pair) fn record_prefix(&self)->io::Result<[u8;224]>{
+        let fixed=self.installation();
+        if [self.account,self.op,self.record].contains(&[0;16])||fixed.contains(&[0;16])||
+            fixed.iter().enumerate().any(|(i,v)|fixed[..i].contains(v))||
+            [self.init_sha,self.descriptor_sha].contains(&[0;32])||!shared_login(&self.login)||!valid_sid(&self.sid)||
+            !match self.generation{1=>self.op==self.setup,2.. =>!fixed.contains(&self.op),_=>false}{return Err(wrong());}
+        let mut out=[0u8;224];out[..16].copy_from_slice(VAULT_MAGIC);out[16]=1;out[17]=self.login.len() as u8;
+        for (slot,id) in out[24..152].chunks_exact_mut(16).zip(fixed.into_iter().chain([self.account,self.op,self.record])){
+            slot.copy_from_slice(&id);
+        }
+        out[152..160].copy_from_slice(&self.generation.to_be_bytes());
+        out[160..160+self.login.len()].copy_from_slice(&self.login);
+        helper_linux_evidence::first_smb::require_rust_v2_public_prefix(&out)?;
+        Ok(out)
+    }
+    fn request(&self,domain:&[u8],actor:Id,approval:Id)->io::Result<Sha256>{
+        self.record_prefix()?;roles(self.account,actor)?;
+        if approval==[0;16]||approval==self.op{return Err(wrong());}
+        let mut h=Sha256::new();h.update(domain);
+        for id in self.installation().into_iter().chain([self.account]){h.update(id);}
+        h.update(self.init_sha);h.update(self.descriptor_sha);
+        h.update([self.login.len() as u8]);h.update(&self.login);h.update(self.sid);
+        h.update(actor);h.update(approval);Ok(h)
+    }
+}
+fn committed_init_digest(tx:&Transaction<'_>,plan:&RustPlan,actor:Id)->io::Result<[u8;32]>{
+    let o=plan.origin;
+    let mut st=tx.prepare("SELECT i.request_sha FROM main.pool_birth b JOIN main.operation i ON i.op_id=b.init_op
+       WHERE b.singleton=1 AND b.pool_id=?1 AND b.init_op=?2 AND i.kind=1 AND i.state=1 AND i.actor_id=?3").map_err(sql)?;
+    let mut q=st.query(params![&o.pool[..],&o.init[..],&actor[..]]).map_err(sql)?;
+    let digest=blob(q.next().map_err(sql)?.ok_or_else(wrong)?,0)?;
+    if digest==[0;32]||q.next().map_err(sql)?.is_some(){return Err(wrong());}
+    Ok(digest)
+}
+fn forbid_unsettled_births(tx:&Transaction<'_>,old:Id)->io::Result<()>{
+    // The reviewed view has a fixed partial index and at most 257 rows.
+    let block:bool=tx.query_row("SELECT 256 < (SELECT count(*) FROM main.credential_reset_births)
+           OR EXISTS(SELECT 1 FROM main.credential_reset_births WHERE auth_op IS NULL OR (aborted=0 AND auth_op=?1))",
+           [&old[..]],|r|r.get(0)).map_err(sql)?;
+    if block{return Err(bad("resolve the protected original pending FILE or directory birth before changing the shared account"));}
+    Ok(())
+}
+fn no_active(tx:&Transaction<'_>)->io::Result<()>{
+    let exposed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.active_credential)",[],|r|r.get(0)).map_err(sql)?;
+    if exposed{return Err(wrong());}Ok(())
+}
+fn write_record(tx:&Transaction<'_>,m:&ActiveRustMeta)->io::Result<()>{
+    one(tx.execute("INSERT INTO main.smb_rust_revision(credential_op,record_id) VALUES(?1,?2)",params![&m.op[..],&m.record[..]]))
+}
+
+/// Fresh nonsecret IDs are frozen before the single public setup consent.
+#[derive(Clone,Debug,Eq,PartialEq)]
+pub(in crate::sqlite_install::pair) struct SetupSpec{pub account:Id,pub login:Vec<u8>,pub sid:[u8;28],pub record:Id}
+impl SetupSpec{
+    pub(in crate::sqlite_install::pair) fn new(login:Vec<u8>)->io::Result<Self>{
+        if !shared_login(&login){return Err(wrong());}
+        let mut sid=[0;28];sid[..12].copy_from_slice(&SID_PREFIX);
+        sid[12..24].copy_from_slice(&random::<12>()?);sid[24..].copy_from_slice(&1000u32.to_le_bytes());
+        Ok(Self{account:random()?,login,sid,record:random()?})
+    }
+}
+#[derive(Clone,Debug)]
+pub(in crate::sqlite_install::pair) enum Desired{Setup(SetupSpec),Reset{previous:Id,generation:i64}}
+#[derive(Clone,Debug)]
+pub(in crate::sqlite_install::pair) struct RustOrder{pub actor:Id,pub approval:Id,pub op:Id,pub role:Desired}
+
+struct Birth{scope:Core,target:ActiveRustMeta,keys:Ids,digest:[u8;32]}
 impl Birth{
-    fn new(plan:&RustPlan,actor:Id,approval:Id,ids:Ids,web:&[u8],smb:&[u8],sid:[u8;28],record:Id)->io::Result<Self>{
-        let install=Installation::from(plan);
-        let scope=Core::new(install.pool,install.init,install.setup,actor,approval)?;
-        if install.sha==[0;32]||record==[0;16]||!login(web)||!login(smb)||!distinct_roles(web,smb)||!valid_sid(&sid){
-            return Err(public_error());}
-        Ok(Self{scope,install,ids,web:web.to_vec(),smb:smb.to_vec(),sid,record})
-    }
-    fn sha(&self)->[u8;32]{
-        let c=self.scope;let i=self.install;
-        let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/RUST-SMB-PAIR-1\0");
-        for id in [c.pool,c.init,c.op,c.actor,c.approval,i.instance,i.bind,self.ids.web,self.ids.smb,self.record]{h.update(id);}
-        h.update(i.sha);public_name(&mut h,&self.web);public_name(&mut h,&self.smb);h.update(self.sid);
-        h.finalize().into()
-    }
-    fn target(&self)->ActiveRustMeta{
-        let i=self.install;
-        ActiveRustMeta{pool:i.pool,init:i.init,setup:i.setup,descriptor_sha:i.sha,instance:i.instance,bind:i.bind,
-            account:self.ids.smb,login:self.smb.clone(),sid:self.sid,op:i.setup,generation:1,record:self.record}
-    }
-
-    // The static first-plan authority is only the transaction-local right to
-    // create the exact original rows. It never becomes an online Web user.
-    fn first(&self)->first_ordinary::Authority{
-        first_ordinary::Authority{pool:self.install.pool,setup:self.install.setup,web:self.ids.web}
+    fn new(plan:&RustPlan,init_sha:[u8;32],actor:Id,approval:Id,spec:&SetupSpec)->io::Result<Self>{
+        let o=plan.origin;let scope=Core::new(o.pool,o.init,o.setup,actor,approval)?;
+        let target=ActiveRustMeta{pool:o.pool,init:o.init,setup:o.setup,instance:o.instance,bind:o.bind,
+            init_sha,descriptor_sha:plan.sha(),account:spec.account,login:spec.login.clone(),sid:spec.sid,
+            op:o.setup,generation:1,record:spec.record};
+        let keys=roles(spec.account,actor)?;
+        let mut h=target.request(SETUP,actor,approval)?;h.update(spec.record);
+        Ok(Self{scope,target,keys,digest:h.finalize().into()})
     }
     fn original(tx:&Transaction<'_>,plan:&RustPlan)->io::Result<Original<Self>>{
-        let i=Installation::from(plan);
-        let mut s=tx.prepare("SELECT o.state,o.actor_id,o.request_sha,a.approval_ref,a.web_id,a.web_login,
-                     a.smb_id,a.smb_login,a.smb_sid,r.record_id
-                FROM main.account_pair a JOIN main.operation o ON o.op_id=a.birth_op AND o.kind=2
-                JOIN main.smb_rust_revision r ON r.credential_op=a.birth_op
-                WHERE a.singleton=1 AND a.smb_family=1 AND a.birth_op=?1 AND a.instance_id=?2
-                  AND a.setup_bound_sha=?3 AND a.smb_rust_bind_id=?4").map_err(sql)?;
-        let mut q=s.query(params![&i.setup[..],&i.instance[..],&i.sha[..],&i.bind[..]]).map_err(sql)?;
+        let p=plan.origin;
+        let mut s=tx.prepare("SELECT o.state,o.actor_id,o.request_sha,a.approval_ref,a.account_id,a.login,a.web_id,a.smb_id,a.smb_sid,r.record_id
+            FROM main.account_pair a JOIN main.operation o ON o.op_id=a.birth_op AND o.kind=2
+            JOIN main.smb_rust_revision r ON r.credential_op=a.birth_op
+            WHERE a.singleton=1 AND a.birth_op=?1 AND a.instance_id=?2 AND a.setup_bound_sha=?3 AND a.smb_rust_bind_id=?4").map_err(sql)?;
+        let mut q=s.query(params![&p.setup[..],&p.instance[..],&plan.sha()[..],&p.bind[..]]).map_err(sql)?;
         let Some(row)=q.next().map_err(sql)? else{
-            let seen:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.account_pair) OR
-                    EXISTS(SELECT 1 FROM main.operation WHERE kind=2) OR
-                    EXISTS(SELECT 1 FROM main.web_password)",[],|r|r.get(0)).map_err(sql)?;
-            if seen||collision(tx,&i.setup)?{return Err(public_error());}
+            let seen:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.account_pair)
+                OR EXISTS(SELECT 1 FROM main.operation WHERE kind=2) OR EXISTS(SELECT 1 FROM main.web_password)
+                OR EXISTS(SELECT 1 FROM main.smb_rust_revision) OR EXISTS(SELECT 1 FROM main.credential_reset)",
+                [],|r|r.get(0)).map_err(sql)?;
+            if seen||collision(tx,&p.setup)?{return Err(wrong());}
             return Ok(Original::Absent);
         };
-        let web=row.get_ref(5).map_err(sql)?.as_blob().map_err(|_|public_error())?;
-        let smb=row.get_ref(7).map_err(sql)?.as_blob().map_err(|_|public_error())?;
-        let birth=Self::new(plan,blob(row,1)?,blob(row,3)?,Ids::checked(blob(row,4)?,blob(row,6)?)?,
-            web,smb,blob(row,8)?,blob(row,9)?)?;
-        let tag=blob::<32>(row,2)?;let state=row.get(0).map_err(sql)?;
-        if birth.sha()!=tag||q.next().map_err(sql)?.is_some(){return Err(public_error());}
-        require_init(tx,&birth.scope)?;history(state,birth)
+        let actor=blob(row,1)?;
+        let spec=SetupSpec{account:blob(row,4)?,login:row.get(5).map_err(sql)?,sid:blob(row,8)?,record:blob(row,9)?};
+        let birth=Self::new(plan,committed_init_digest(tx,plan,actor)?,actor,blob(row,3)?,&spec)?;
+        let state=row.get(0).map_err(sql)?;
+        if birth.digest!=blob::<32>(row,2)?||[birth.keys.web,birth.keys.smb]!=[blob(row,6)?,blob(row,7)?]
+            ||q.next().map_err(sql)?.is_some(){return Err(wrong());}
+        history(state,birth)
     }
     fn validate_plan(&self,tx:&Transaction<'_>,plan:&RustPlan)->io::Result<()>{
-        if self.install!=Installation::from(plan){return Err(public_error());}
-        require_init(tx,&self.scope)?;
-        let r:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.volume_claim
-                   WHERE claim_op=?1 AND ordinal=1 AND role=1)",[&self.scope.init[..]],|r|r.get(0)).map_err(sql)?;
-        if !r{return Err(public_error());}
+        if !self.target.matches(plan)||committed_init_digest(tx,plan,self.scope.actor)?!=self.target.init_sha{return Err(wrong());}
+        let r:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.volume_claim WHERE claim_op=?1 AND ordinal=1 AND role=1)",
+            [&self.scope.init[..]],|r|r.get(0)).map_err(sql)?;
+        if !r{return Err(wrong());}
         first_ordinary::volumes(tx,&self.scope.init,plan.folders())
     }
-    fn reserve(&self,tx:&Transaction<'_>,plan:&RustPlan,verifier:&PreparedWeb)->io::Result<()>{
+    fn first(&self)->first_ordinary::Authority{
+        first_ordinary::Authority{pool:self.scope.pool,setup:self.scope.op,web:self.keys.web}
+    }
+    fn stage_identity(&self,tx:&Transaction<'_>,plan:&RustPlan)->io::Result<()>{
         self.validate_plan(tx,plan)?;
-        if !matches!(Self::original(tx,plan)?,Original::Absent){return Err(public_error());}
+        if !matches!(Self::original(tx,plan)?,Original::Absent){return Err(wrong());}
         first_ordinary::vacant(tx,plan.folders())?;
-        let c=self.scope;let i=self.install;
+        let c=self.scope;let t=&self.target;
         one(tx.execute("INSERT INTO main.account_pair(singleton,birth_op,approval_ref,instance_id,setup_bound_sha,
-                        web_id,web_login,smb_id,smb_login,smb_sid,smb_family,smb_rust_bind_id)
-                        VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10)",
-            params![&c.op[..],&c.approval[..],&i.instance[..],&i.sha[..],&self.ids.web[..],&self.web,
-                &self.ids.smb[..],&self.smb,&self.sid[..],&i.bind[..]]))?;
-        one(verifier.insert(tx,&c.op))?;
-        record(tx,&c.op,&self.record)?;
-        stage(tx,&c,2,&self.sha())?;
-        if !matches!(Self::original(tx,plan)?,Original::Pending(p) if p.sha()==self.sha()){return Err(public_error());}
-        Ok(())
-    }
-    // Must be called by the trusted low writer only after the durable, exact
-    // reopened vault witness. On any subsequent error roll the whole SQL cut back.
-    fn finish(&self,tx:&Transaction<'_>,plan:&RustPlan)->io::Result<()>{
-        self.validate_plan(tx,plan)?;
-        if !matches!(Self::original(tx,plan)?,Original::Pending(p) if p.sha()==self.sha()){return Err(public_error());}
-        first_ordinary::vacant(tx,plan.folders())?;
-        activate(tx,self.scope,&self.target(),&self.sha(),None)?;
-        let a=self.first();a.require_first_web(tx)?;
-        for(f,k)in plan.folders(){a.insert(tx,f,*k)?;}
-        if active_at(tx,plan)?!=self.target(){return Err(public_error());}
-        Ok(())
+                      account_id,login,web_id,smb_id,smb_sid,smb_rust_bind_id) VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![&c.op[..],&c.approval[..],&t.instance[..],&t.descriptor_sha[..],&t.account[..],&t.login,
+                &self.keys.web[..],&self.keys.smb[..],&t.sid[..],&t.bind[..]]))
     }
 }
 
-struct Reset{scope:Core,previous:ActiveRustMeta,record:Id}
+struct Reset{scope:Core,prior:ActiveRustMeta,target:ActiveRustMeta,digest:[u8;32]}
 impl Reset{
-    fn with_original(previous:ActiveRustMeta,op:Id,actor:Id,approval:Id,record:Id)->io::Result<Self>{
-        let c=Core::new(previous.pool,previous.init,op,actor,approval)?;
-        if [previous.setup,previous.op].contains(&op)||[previous.record,[0;16]].contains(&record)||
-           !(1..i64::MAX).contains(&previous.generation)||(previous.op==previous.setup)!=(previous.generation==1){
-            return Err(public_error());}
-        Ok(Self{scope:c,previous,record})
+    fn new(prior:ActiveRustMeta,op:Id,actor:Id,approval:Id,record:Id)->io::Result<Self>{
+        prior.record_prefix()?;
+        let scope=Core::new(prior.pool,prior.init,op,actor,approval)?;
+        let generation=prior.generation.checked_add(1).ok_or_else(wrong)?;
+        if prior.record==record||prior.op==op{return Err(wrong());}
+        let target=ActiveRustMeta{op,generation,record,..prior.clone()};
+        let mut h=target.request(RESET,actor,approval)?;
+        for v in [op,prior.op,prior.record]{h.update(v);}
+        h.update(prior.generation.to_be_bytes());h.update(record);
+        Ok(Self{scope,prior,target,digest:h.finalize().into()})
     }
-    fn sha(&self)->[u8;32]{
-        let c=self.scope;let p=&self.previous;
-        let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/RUST-SMB-RESET-1\0");
-        for id in [c.pool,c.init,p.setup,c.op,c.actor,c.approval,p.instance,p.bind,p.account,p.op,p.record,self.record]{h.update(id);}
-        h.update(p.generation.to_be_bytes());h.update(p.descriptor_sha);
-        public_name(&mut h,&p.login);h.update(p.sid);h.finalize().into()
+    fn stage_identity(&self,tx:&Transaction<'_>,plan:&RustPlan)->io::Result<()>{
+        if collision(tx,&self.scope.op)?||active_at(tx,plan)?!=self.prior{return Err(wrong());}
+        forbid_unsettled_births(tx,self.prior.op)?;
+        let t=&self.target;let c=self.scope;
+        one(tx.execute("INSERT INTO main.credential_reset(op_id,previous_op,generation,approval_ref,bound_sha) VALUES(?1,?2,?3,?4,?5)",
+            params![&t.op[..],&self.prior.op[..],t.generation,&c.approval[..],&t.descriptor_sha[..]]))
     }
-    fn target(&self)->ActiveRustMeta{
-        ActiveRustMeta{op:self.scope.op,generation:self.previous.generation+1,record:self.record,..self.previous.clone()}
-    }
-    fn reserve(&self,tx:&Transaction<'_>,plan:&RustPlan)->io::Result<()>{
-        let c=self.scope;let p=&self.previous;
-        if collision(tx,&c.op)?||active_at(tx,plan)?!=*p{return Err(public_error());}
-        one(tx.execute("INSERT INTO main.credential_reset(op_id,role,previous_op,generation,approval_ref,bound_sha)
-                        VALUES(?1,1,?2,?3,?4,?5)",
-            params![&c.op[..],&p.op[..],p.generation+1,&c.approval[..],&p.descriptor_sha[..]]))?;
-        record(tx,&c.op,&self.record)?;
-        stage(tx,&c,7,&self.sha())?;
-        self.require(tx,plan,0)
-    }
-    fn require(&self,tx:&Transaction<'_>,plan:&RustPlan,state:i64)->io::Result<()>{
-        let target=self.target();let c=self.scope;
-        let Original::Committed(birth)=Birth::original(tx,plan)? else{return Err(public_error());};
-        birth.validate_plan(tx,plan)?;
-        let q=select_reset(tx,&birth,target.op,target.generation,state)?;
-        if q.sha()!=self.sha()||q.previous!=self.previous||q.target()!=target||q.scope.approval!=c.approval{return Err(public_error());}
-        Ok(())
-    }
-    // The caller retains the exact old and new public record IDs while the
-    // old position is disabled. There is never fallback to the old record.
-    fn finish(&self,tx:&Transaction<'_>,plan:&RustPlan)->io::Result<()>{
-        self.require(tx,plan,0)?;
-        activate(tx,self.scope,&self.target(),&self.sha(),Some((&self.previous.op,&self.previous.record)))?;
-        self.require(tx,plan,1)?;
-        if active_at(tx,plan)?!=self.target(){return Err(public_error());}
-        Ok(())
-    }
-}
-
-fn record(tx:&Transaction<'_>,op:&Id,id:&Id)->io::Result<()>{
-    one(tx.execute("INSERT INTO main.smb_rust_revision(credential_op,record_id) VALUES(?1,?2)",
-        params![&op[..],&id[..]]))
-}
-fn activate(tx:&Transaction<'_>,c:Core,m:&ActiveRustMeta,hash:&[u8;32],previous:Option<(&Id,&Id)>)->io::Result<()>{
-    let mut s=tx.prepare(ACTIVATE).map_err(sql)?;
-    let (previous_op,previous_record)=previous.map_or((None,None),|(o,r)|(Some(&o[..]),Some(&r[..])));
-    let mut updated=s.query(params![&m.pool[..],&m.init[..],&m.setup[..],&m.op[..],&c.actor[..],&hash[..],
-            &c.approval[..],&m.instance[..],&m.descriptor_sha[..],&m.account[..],&m.login,&m.sid[..],
-            m.generation,previous_op,&m.bind[..],&m.record[..],previous_record]).map_err(sql)?;
-    let row=updated.next().map_err(sql)?.ok_or_else(public_error)?;
-    if blob::<16>(row,0)?!=m.op||updated.next().map_err(sql)?.is_some(){return Err(public_error());}
-    Ok(())
 }
 fn select_reset(tx:&Transaction<'_>,birth:&Birth,op:Id,generation:i64,state:i64)->io::Result<Reset>{
     let mut s=tx.prepare("SELECT o.actor_id,o.request_sha,r.approval_ref,r.previous_op,v.record_id,pv.record_id
-        FROM main.credential_reset r
-        JOIN main.operation o ON o.op_id=r.op_id AND o.kind=7
-        JOIN main.credential_epoch p ON p.role=1 AND p.credential_op=r.previous_op
-        JOIN main.operation pred ON pred.op_id=p.credential_op AND pred.state=1 AND pred.kind=CASE WHEN p.generation=1 THEN 2 ELSE 7 END
-        JOIN main.smb_rust_revision v ON v.credential_op=r.op_id
-        JOIN main.smb_rust_revision pv ON pv.credential_op=r.previous_op
-        WHERE r.op_id=?1 AND r.role=1 AND r.generation=?2 AND o.state=?3 AND r.bound_sha=?4
-          AND p.generation=r.generation-1").map_err(sql)?;
-    let mut q=s.query(params![&op[..],generation,state,&birth.install.sha[..]]).map_err(sql)?;
-    let row=q.next().map_err(sql)?.ok_or_else(public_error)?;
-    let prev=ActiveRustMeta{op:blob(row,3)?,generation:generation-1,record:blob(row,5)?,..birth.target()};
-    if prev.record==[0;16]||(prev.generation==1&&prev.record!=birth.record){return Err(public_error());}
-    let order=Reset::with_original(prev,op,blob(row,0)?,blob(row,2)?,blob(row,4)?)?;
-    if order.sha()!=blob::<32>(row,1)?||q.next().map_err(sql)?.is_some(){return Err(public_error());}
-    Ok(order)
+      FROM main.credential_reset r JOIN main.operation o ON o.op_id=r.op_id AND o.kind=9
+      JOIN main.operation p ON p.op_id=r.previous_op AND p.state=1 AND p.actor_id=o.actor_id
+      JOIN main.smb_rust_revision v ON v.credential_op=r.op_id
+      JOIN main.smb_rust_revision pv ON pv.credential_op=r.previous_op
+      LEFT JOIN main.credential_reset pr ON pr.op_id=r.previous_op
+      WHERE r.op_id=?1 AND r.generation=?2 AND o.state=?3 AND r.bound_sha=?4
+      AND ((r.generation=2 AND p.kind=2 AND r.previous_op=?5 AND pr.op_id IS NULL)
+        OR (r.generation>2 AND p.kind=9 AND pr.generation=r.generation-1 AND pr.bound_sha=r.bound_sha))").map_err(sql)?;
+    let t=&birth.target;
+    let mut q=s.query(params![&op[..],generation,state,&t.descriptor_sha[..],&t.setup[..]]).map_err(sql)?;
+    let row=q.next().map_err(sql)?.ok_or_else(wrong)?;
+    let actor=blob(row,0)?;
+    let prior=ActiveRustMeta{op:blob(row,3)?,generation:generation.checked_sub(1).ok_or_else(wrong)?,record:blob(row,5)?,..t.clone()};
+    if actor!=birth.scope.actor||(prior.generation==1&&prior!=*t){return Err(wrong());}
+    let reset=Reset::new(prior,op,actor,blob(row,2)?,blob(row,4)?)?;
+    if reset.digest!=blob::<32>(row,1)?||q.next().map_err(sql)?.is_some(){return Err(wrong());}
+    Ok(reset)
 }
-
-/// One own canonical transaction only. The descriptor and this public SQL
-/// stamp still need the actual trusted site and protected record FD. Never
-/// pick the most recent committed older generation while a reset is pending.
 pub(in crate::sqlite_install::pair) fn active_at(tx:&Transaction<'_>,plan:&RustPlan)->io::Result<ActiveRustMeta>{
-    let Original::Committed(birth)=Birth::original(tx,plan)? else{return Err(public_error());};
+    let Original::Committed(birth)=Birth::original(tx,plan)? else{return Err(wrong());};
     birth.validate_plan(tx,plan)?;
     let a=birth.first();for(f,k)in plan.folders(){a.original(tx,f,*k)?;}
-    let mut s=tx.prepare("SELECT e.credential_op,e.generation FROM main.active_credential e
-        WHERE e.slot=1 AND e.role=1 AND e.generation=COALESCE((SELECT max(generation) FROM main.credential_reset WHERE role=1),1)")
-        .map_err(sql)?;
+    let mut s=tx.prepare("SELECT credential_op,generation,record_id FROM main.active_shared_credential WHERE slot=1").map_err(sql)?;
     let mut q=s.query([]).map_err(sql)?;
-    let row=q.next().map_err(sql)?.ok_or_else(public_error)?;
-    let op=blob::<16>(row,0)?;let generation:i64=row.get(1).map_err(sql)?;
-    if q.next().map_err(sql)?.is_some(){return Err(public_error());}
-    if generation==1&&op==birth.scope.op{return Ok(birth.target());}
-    if generation<2{return Err(public_error());}
-    Ok(select_reset(tx,&birth,op,generation,1)?.target())
+    let row=q.next().map_err(sql)?.ok_or_else(wrong)?;
+    let op=blob(row,0)?;let generation:i64=row.get(1).map_err(sql)?;let record=blob::<16>(row,2)?;
+    if q.next().map_err(sql)?.is_some(){return Err(wrong());}
+    let t=if generation==1&&op==birth.scope.op{birth.target}else if generation>=2{select_reset(tx,&birth,op,generation,1)?.target}else{return Err(wrong());};
+    if t.record!=record{return Err(wrong());}Ok(t)
 }
 
-use super::transaction::{AccountCut,expired};
-use crate::sqlite_install::{originals::LockedSystem,stage::random};
-use std::time::Instant;
-
-/// This is the public order, not the operator's permission or a vault FD.
-#[derive(Debug)]
-pub(in crate::sqlite_install::pair) enum Desired{
-    Setup{web:Vec<u8>,smb:Vec<u8>},
-    Reset{previous:Id,generation:i64},
-}
-#[derive(Debug)]
-pub(in crate::sqlite_install::pair) struct RustOrder{
-    pub actor:Id,pub approval:Id,pub op:Id,pub role:Desired,
-}
-/// Rebind a nonsecret worker observation to the exact exposed reset order.
-/// This reproduces the pre-existing v17 persistent digest, not a new grant.
-pub(in crate::sqlite_install::pair) fn reset_digest(plan:&RustPlan,order:&RustOrder,old:&ActiveRustMeta,
-    target:&ActiveRustMeta)->io::Result<[u8;32]>{
-    let Desired::Reset{previous,generation}=&order.role else{return Err(public_error());};
-    let install=Installation{pool:old.pool,init:old.init,setup:old.setup,instance:old.instance,bind:old.bind,sha:old.descriptor_sha};
-    if install!=Installation::from(plan)||(*previous,*generation)!=(old.op,old.generation){
-        return Err(public_error());
-    }
-    old.record_prefix()?;target.record_prefix()?;
-    let op=Reset::with_original(old.clone(),order.op,order.actor,order.approval,target.record)?;
-    if op.target()!=*target{return Err(public_error());}
-    Ok(op.sha())
-}
+/// Pending or historical nonsecret comparison; the caller supplies the real
+/// checked root/worker and never derives or uses a password for a receipt.
 pub(in crate::sqlite_install::pair) struct RustChange{actual:Change}
 enum Change{Setup(Birth),Reset(Reset)}
 impl RustChange{
+    pub(in crate::sqlite_install::pair) fn for_fresh(plan:&RustPlan,order:&RustOrder,init_sha:[u8;32])->io::Result<Self>{
+        let Desired::Setup(spec)=&order.role else{return Err(wrong());};
+        if order.op!=plan.origin.setup{return Err(wrong());}
+        Ok(Self{actual:Change::Setup(Birth::new(plan,init_sha,order.actor,order.approval,spec)?)})
+    }
+    fn core(&self)->Core{match &self.actual{Change::Setup(b)=>b.scope,Change::Reset(r)=>r.scope}}
     pub(in crate::sqlite_install::pair) fn digest(&self)->[u8;32]{
-        match &self.actual{Change::Setup(b)=>b.sha(),Change::Reset(r)=>r.sha()}
+        match &self.actual{Change::Setup(b)=>b.digest,Change::Reset(r)=>r.digest}
     }
-    pub(in crate::sqlite_install::pair) fn target(&self)->ActiveRustMeta{
-        match &self.actual{Change::Setup(b)=>b.target(),Change::Reset(r)=>r.target()}
-    }
+    fn head(&self)->&ActiveRustMeta{match &self.actual{Change::Setup(b)=>&b.target,Change::Reset(r)=>&r.target}}
+    pub(in crate::sqlite_install::pair) fn target(&self)->ActiveRustMeta{self.head().clone()}
     pub(in crate::sqlite_install::pair) fn previous(&self)->Option<&ActiveRustMeta>{
-        match &self.actual{Change::Setup(_)=>None,Change::Reset(r)=>Some(&r.previous)}
+        match &self.actual{Change::Setup(_)=>None,Change::Reset(r)=>Some(&r.prior)}
     }
-    pub(in crate::sqlite_install::pair) fn web_account(&self)->Option<Id>{
-        match &self.actual{Change::Setup(b)=>Some(b.ids.web_value()),Change::Reset(_)=>None}
-    }
+    fn same(&self,b:&Self)->bool{self.digest()==b.digest()&&self.head()==b.head()&&self.previous()==b.previous()}
+}
+pub(in crate::sqlite_install::pair) fn observed_binding(nonce:[u8;32],action:[u8;32],target:&ActiveRustMeta,previous:Option<&ActiveRustMeta>)->io::Result<Binding>{
+    Binding::new(nonce,action,target.account,target.epoch(),previous.map(ActiveRustMeta::epoch),target.record_prefix()?)
+}
+pub(in crate::sqlite_install::pair) fn require_observed(plan:&RustPlan,order:&RustOrder,digest:[u8;32],
+    target:&ActiveRustMeta,previous:Option<&ActiveRustMeta>)->io::Result<()>{
+    if !target.matches(plan)||order.op!=target.op{return Err(wrong());}
+    let expect=match (&order.role,previous){
+        (Desired::Setup(_),None)=>RustChange::for_fresh(plan,order,target.init_sha)?,
+        (Desired::Reset{previous,generation},Some(old)) if (*previous,*generation)==(old.op,old.generation)&&old.matches(plan)=>
+            RustChange{actual:Change::Reset(Reset::new(old.clone(),order.op,order.actor,order.approval,target.record)?)},
+        _=>return Err(wrong()),
+    };
+    if expect.head()!=target||expect.digest()!=digest{return Err(wrong());}Ok(())
 }
 
-/// The actual offline worker retains the lent SYSTEM EX, original database,
-/// fixed parent channel and exact descriptor. It has no vault namespace.
 pub(in crate::sqlite_install::pair) struct RustAccountCut<'s,'p>{
     cut:AccountCut<'s>,plan:&'p RustPlan,order:RustOrder,init_sha:Option<[u8;32]>,
 }
 impl<'s,'p> RustAccountCut<'s,'p>{
     pub(in crate::sqlite_install::pair) fn open_deployed_reset(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,
         site:&super::super::fresh_issuer::SitePayload)->io::Result<Self>{
-        super::super::fresh_issuer::compiled_v17()?;
+        super::super::fresh_issuer::compiled_v18()?;
         let (actor,uid,_)=site.subject.tuple();
         if !matches!(&order.role,Desired::Reset{..})||actor!=order.actor||site.origin!=plan.origin||
-            site.plan_sha!=plan.sha()||locked.source().path()!=site.system||locked.source().uid()!=uid{return Err(public_error());}
-        let cut=Self::open_inner(locked,plan,order,None)?;
-        cut.cut.read(|tx|cut.require_before_new(tx))?;
-        Ok(cut)
+            site.plan_sha!=plan.sha()||locked.source().path()!=site.system||locked.source().uid()!=uid{return Err(wrong());}
+        let p=plan.origin;
+        let s=Self{cut:AccountCut::at(locked,p.pool,p.init)?,plan,order,init_sha:None};
+        s.cut.read(|tx|s.original_origin(tx))?;Ok(s)
     }
     pub(in crate::sqlite_install::pair) fn open_new_first(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,
         init_sha:[u8;32],database:[u64;3])->io::Result<Self>{
-        super::super::fresh_issuer::require_v17()?;
-        if !matches!(&order.role,Desired::Setup{..}){return Err(public_error());}
-        let s=Self::open_inner(locked,plan,order,Some(init_sha))?;
+        super::super::fresh_issuer::require_v18()?;
+        RustChange::for_fresh(plan,&order,init_sha)?;
+        let p=plan.origin;
+        let s=Self{cut:AccountCut::at(locked,p.pool,p.init)?,plan,order,init_sha:Some(init_sha)};
         s.cut.fresh_origin(database)?;
-        s.cut.read(|tx|s.require_before_new(tx))?;
-        Ok(s)
+        s.cut.read(|tx|s.before_new(tx))?;Ok(s)
     }
-    fn open_inner(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,init_sha:Option<[u8;32]>)->io::Result<Self>{
-        let o=plan.origin;
-        let core=Core::new(o.pool,o.init,order.op,order.actor,order.approval)?;
-        match &order.role{
-            Desired::Setup{web,smb} if order.op==o.setup&&login(web)&&login(smb)&&distinct_roles(web,smb)=>{},
-            Desired::Reset{previous,generation} if ![[0;16],o.init,o.bind,order.op].contains(previous)&&
-                ![o.setup,o.bind].contains(&order.op)&&(1..i64::MAX).contains(generation)&&(*previous==o.setup)==(*generation==1)=>{},
-            _=>return Err(public_error()),
-        }
-        Ok(Self{cut:AccountCut::at(locked,core.pool,core.init)?,plan,order,init_sha})
-    }
-    fn require_before_new(&self,tx:&Transaction<'_>)->io::Result<()>{
-        if let Some(init_sha)=self.init_sha{
-            let o=self.plan.origin;
-            super::super::observed::isolated_first_init(tx,&o.pool,&o.init,&self.order.actor,&init_sha)
-        }else{self.require_deployed(tx)}
-    }
-    fn require_deployed(&self,tx:&Transaction<'_>)->io::Result<()>{
-        if self.init_sha.is_none(){self.cut.deployed_origin(tx,&self.order.actor)?;}
+    fn original_origin(&self,tx:&Transaction<'_>)->io::Result<()>{
+        let sha=committed_init_digest(tx,self.plan,self.order.actor)?;
+        if let Some(expected)=self.init_sha{if expected!=sha{return Err(wrong());}}
+        else{self.cut.deployed_origin(tx,&self.order.actor)?;}
         Ok(())
     }
-    pub(in crate::sqlite_install::pair) fn objects(&self)
-        ->io::Result<(std::fs::File,[u8;64],crate::sqlite_install::markers::SystemObservation)>{
-        self.cut.original_objects()
-    }
-    fn order_scope(&self,core:Core)->io::Result<()>{
-        let o=self.plan.origin;let c=&self.order;
-        if (core.pool,core.init,core.op,core.actor,core.approval)!=(o.pool,o.init,c.op,c.actor,c.approval){
-            return Err(public_error());
+    fn before_new(&self,tx:&Transaction<'_>)->io::Result<()>{
+        self.original_origin(tx)?;
+        if let Some(sha)=self.init_sha{
+            let o=self.plan.origin;super::super::observed::isolated_first_init(tx,&o.pool,&o.init,&self.order.actor,&sha)?;
         }
-        Ok(())
+        if !matches!(self.original(tx)?,Original::Absent){return Err(wrong());}Ok(())
     }
-    fn request(&self,change:&RustChange)->io::Result<()>{
-        match (&self.order.role,&change.actual){
-            (Desired::Setup{web,smb},Change::Setup(b))
-                if b.install==Installation::from(self.plan) && &b.web==web && &b.smb==smb=>self.order_scope(b.scope),
-            (Desired::Reset{previous,generation},Change::Reset(r))
-                if r.previous.op==*previous&&r.previous.generation==*generation=>self.order_scope(r.scope),
-            _=>Err(public_error()),
-        }
-    }
-    fn original_in(&self,tx:&Transaction<'_>)->io::Result<Original<RustChange>>{
-        match &self.order.role{
-            Desired::Setup{..}=>{
-                let (state,birth)=match Birth::original(tx,self.plan)?{
-                    Original::Absent=>return Ok(Original::Absent),
-                    Original::Pending(b)=>(0,b),
-                    Original::Committed(b)=>(1,b),
-                };
-                if state==1{
-                    birth.validate_plan(tx,self.plan)?;
-                    let first=birth.first();
-                    for(f,k)in self.plan.folders(){first.original(tx,f,*k)?;}
-                }
-                let change=RustChange{actual:Change::Setup(birth)};
-                self.request(&change)?;history(state,change)
-            }
+    fn original(&self,tx:&Transaction<'_>)->io::Result<Original<RustChange>>{
+        let r=match &self.order.role{
+            Desired::Setup(_)=>match Birth::original(tx,self.plan)?{
+                Original::Absent=>return Ok(Original::Absent),
+                Original::Pending(b)=>(0,Change::Setup(b)),
+                Original::Committed(b)=>{
+                    b.validate_plan(tx,self.plan)?;let first=b.first();
+                    for (f,k) in self.plan.folders(){first.original(tx,f,*k)?;}(1,Change::Setup(b))
+                },
+            },
             Desired::Reset{generation,..}=>{
                 let op=self.order.op;
-                let mut q=tx.prepare("SELECT state FROM main.operation WHERE op_id=?1 AND kind=7").map_err(sql)?;
-                let mut rows=q.query([&op[..]]).map_err(sql)?;
-                let Some(row)=rows.next().map_err(sql)?else{
-                    if collision(tx,&op)?{return Err(public_error());}
-                    return Ok(Original::Absent);
-                };
-                let state:i64=row.get(0).map_err(sql)?;
-                if rows.next().map_err(sql)?.is_some(){return Err(public_error());}
-                let Original::Committed(b)=Birth::original(tx,self.plan)?else{return Err(public_error());};
-                let reset=select_reset(tx,&b,op,*generation+1,state)?;
-                let change=RustChange{actual:Change::Reset(reset)};
-                self.request(&change)?;history(state,change)
+                let mut st=tx.prepare("SELECT state FROM main.operation WHERE op_id=?1 AND kind=9").map_err(sql)?;
+                let mut q=st.query([&op[..]]).map_err(sql)?;
+                let Some(row)=q.next().map_err(sql)? else{if collision(tx,&op)?{return Err(wrong());}return Ok(Original::Absent);};
+                let state=row.get(0).map_err(sql)?;if q.next().map_err(sql)?.is_some(){return Err(wrong());}
+                let Original::Committed(b)=Birth::original(tx,self.plan)? else{return Err(wrong());};
+                (state,Change::Reset(select_reset(tx,&b,op,generation.checked_add(1).ok_or_else(wrong)?,state)?))
             }
-        }
+        };
+        let result=RustChange{actual:r.1};
+        require_observed(self.plan,&self.order,result.digest(),result.head(),result.previous())?;
+        history(r.0,result)
     }
     pub(in crate::sqlite_install::pair) fn observe(&self)->io::Result<Original<RustChange>>{
-        self.cut.read(|tx|{self.require_deployed(tx)?;self.original_in(tx)})
+        self.cut.read(|tx|{self.original_origin(tx)?;self.original(tx)})
     }
     pub(in crate::sqlite_install::pair) fn propose_new(&self)->io::Result<RustChange>{
         self.cut.read(|tx|{
-            self.require_before_new(tx)?;
-            if !matches!(self.original_in(tx)?,Original::Absent){return Err(public_error());}
-            let record:Id=random()?;
-            let actual=match &self.order.role{
-                Desired::Setup{web,smb}=>{
-                    let mut sid=[0u8;28];sid[..12].copy_from_slice(&SID_PREFIX);
-                    sid[12..24].copy_from_slice(&random::<12>()?);
-                    sid[24..].copy_from_slice(&1000u32.to_le_bytes());
-                    let birth=Birth::new(self.plan,self.order.actor,self.order.approval,Ids::checked(random()?,random()?)?,web,smb,sid,record)?;
-                    birth.validate_plan(tx,self.plan)?;
-                    first_ordinary::vacant(tx,self.plan.folders())?;
-                    Change::Setup(birth)
-                }
+            self.before_new(tx)?;
+            match &self.order.role{
+                Desired::Setup(_)=>{
+                    let c=RustChange::for_fresh(self.plan,&self.order,self.init_sha.ok_or_else(wrong)?)?;
+                    let Change::Setup(b)=&c.actual else{return Err(wrong());};
+                    b.validate_plan(tx,self.plan)?;first_ordinary::vacant(tx,self.plan.folders())?;Ok(c)
+                },
                 Desired::Reset{previous,generation}=>{
                     let old=active_at(tx,self.plan)?;
-                    if (old.op,old.generation)!=(*previous,*generation){return Err(public_error());}
-                    Change::Reset(Reset::with_original(old,self.order.op,self.order.actor,self.order.approval,record)?)
+                    if (old.op,old.generation)!=(*previous,*generation){return Err(wrong());}
+                    forbid_unsettled_births(tx,old.op)?;
+                    Ok(RustChange{actual:Change::Reset(Reset::new(old,self.order.op,self.order.actor,self.order.approval,random()?)?)})
                 }
-            };
-            let result=RustChange{actual};
-            self.request(&result)?;
-            Ok(result)
+            }
         })
     }
-    fn same_pending(&self,expected:&RustChange)->io::Result<()>{
-        match self.observe()?{
-            Original::Pending(current) if current.digest()==expected.digest()&&current.target()==expected.target()=>Ok(()),
-            _=>Err(public_error()),
-        }
+    pub(in crate::sqlite_install::pair) fn objects(&self)
+      ->io::Result<(std::fs::File,[u8;64],crate::sqlite_install::markers::SystemObservation)>{
+        self.cut.original_objects()
     }
-    pub(in crate::sqlite_install::pair) fn confirmed_pending<'a>(&'a self,change:RustChange,until:Instant)
-        ->io::Result<RustPending<'a,'s,'p>>{
-        expired(until)?;self.same_pending(&change)?;
-        // A cold exact pending may have followed an uncertain sync. Sync
-        // its original SQLite and directory and independently re-open it.
-        self.cut.sync()?;self.same_pending(&change)?;expired(until)?;
-        Ok(RustPending{owner:self,change,until})
+    pub(in crate::sqlite_install::pair) fn reserve_after_staging<'a>(&'a self,change:RustChange,nonce:[u8;32],
+       web:Received,until:Instant,live:impl Fn()->io::Result<()>)->io::Result<RustPending<'a,'s,'p>>{
+        require_observed(self.plan,&self.order,change.digest(),change.head(),change.previous())?;
+        let binding=observed_binding(nonce,change.digest(),change.head(),change.previous())?;
+        let material=self.cut.write(until,&live,|tx|{
+            self.before_new(tx)?;
+            let w=stage_shared(tx,self.plan,&change,&binding,web)?;
+            self.require_original_pending(tx,&change)?;
+            Ok(w)
+        })?; // any error after touching the row drops/rolls back this IMMEDIATE transaction
+        live()?;self.cut.sync()?;expired(until)?;
+        let p=RustPending{owner:self,change,binding,material,until};p.require()?;live()?;Ok(p)
     }
-    /// Called only after the original protected issuer already reaped and
-    /// independently re-opened the exact freshly sealed root stage.
-    pub(in crate::sqlite_install::pair) fn reserve_after_staging<'a>(
-        &'a self,change:RustChange,web:Option<&PreparedWeb>,until:Instant,
-        parent_current:impl Fn()->io::Result<()>,
-    )->io::Result<RustPending<'a,'s,'p>>{
-        self.request(&change)?;
-        self.cut.write(until,&parent_current,|tx|{
-            self.require_before_new(tx)?;
-            if !matches!(self.original_in(tx)?,Original::Absent){return Err(public_error());}
-            match (&change.actual,web){
-                (Change::Setup(b),Some(v))=>b.reserve(tx,self.plan,v),
-                (Change::Reset(r),None)=>r.reserve(tx,self.plan),
-                _=>Err(public_error()),
-            }
-        })?;
-        parent_current()?;
-        self.confirmed_pending(change,until)
+    fn require_original_pending(&self,tx:&Transaction<'_>,change:&RustChange)->io::Result<()>{
+        self.original_origin(tx)?;
+        if !matches!(self.original(tx)?,Original::Pending(observed) if observed.same(change)){return Err(wrong());}
+        no_active(tx)
     }
+}
+
+fn stage_shared(tx:&Transaction<'_>,plan:&RustPlan,c:&RustChange,binding:&Binding,value:Received)->io::Result<StagedWeb>{
+    match &c.actual{Change::Setup(b)=>b.stage_identity(tx,plan)?,Change::Reset(r)=>r.stage_identity(tx,plan)?,}
+    let web=value.stage(binding,tx)?;
+    write_record(tx,c.head())?;
+    stage(tx,&c.core(),if c.previous().is_none(){2}else{9},&c.digest())?;
+    web.require_stored(binding,tx)?;no_active(tx)?;Ok(web)
+}
+fn activate(tx:&Transaction<'_>,plan:&RustPlan,c:&RustChange,binding:&Binding,web:&StagedWeb)->io::Result<()>{
+    let t=c.head();let s=c.core();let old=c.previous();
+    let pre_op=old.map(|p|&p.op[..]);let pre_gen=old.map(|p|p.generation);let pre_rec=old.map(|p|&p.record[..]);
+    if let Change::Setup(b)=&c.actual{b.validate_plan(tx,plan)?;first_ordinary::vacant(tx,plan.folders())?;}
+    web.require_stored(binding,tx)?;
+    {
+        let mut st=tx.prepare(ACTIVATE).map_err(sql)?;
+        let mut q=st.query(params![&t.pool[..],&t.init[..],&t.init_sha[..],&t.setup[..],&t.op[..],&s.actor[..],&c.digest()[..],
+            &s.approval[..],&t.instance[..],&t.bind[..],&t.descriptor_sha[..],&t.account[..],&t.login,&t.sid[..],
+            t.generation,&t.record[..],pre_op,pre_gen,pre_rec]).map_err(sql)?;
+        if blob::<16>(q.next().map_err(sql)?.ok_or_else(wrong)?,0)?!=t.op||q.next().map_err(sql)?.is_some(){return Err(wrong());}
+    }
+    if let Change::Setup(b)=&c.actual{
+        let a=b.first();a.require_first_web(tx)?;for(f,k)in plan.folders(){a.insert(tx,f,*k)?;}
+    }
+    web.require_stored(binding,tx)?;
+    if active_at(tx,plan)?!=*t{return Err(wrong());}Ok(())
 }
 
 #[must_use]
 pub(in crate::sqlite_install::pair) struct RustPending<'a,'s,'p>{
-    owner:&'a RustAccountCut<'s,'p>,change:RustChange,until:Instant,
+    owner:&'a RustAccountCut<'s,'p>,change:RustChange,binding:Binding,material:StagedWeb,until:Instant,
 }
 impl RustPending<'_,'_,'_>{
     pub(in crate::sqlite_install::pair) fn change(&self)->&RustChange{&self.change}
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
-        expired(self.until)?;self.owner.same_pending(&self.change)
+        expired(self.until)?;
+        self.owner.cut.read(|tx|{
+            self.owner.require_original_pending(tx,&self.change)?;
+            self.material.require_stored(&self.binding,tx)
+        })
     }
-    /// Only the fixed worker after authentication of the original placed
-    /// O_PATH witness. The actual live guard is rechecked across both cuts.
+    /// The original live vault check uses the actual placed O_PATH. No
+    /// verifier or permission is introduced by a historic SQL observation.
     pub(in crate::sqlite_install::pair) fn finish(self,live_vault:impl Fn()->io::Result<()>)->io::Result<ActiveRustMeta>{
-        self.require()?;
-        let target=self.change.target();let owner=self.owner;
+        self.require()?;live_vault()?;
+        let owner=self.owner;
         owner.cut.write(self.until,&live_vault,|tx|{
-            owner.require_deployed(tx)?;
-            match &self.change.actual{
-                Change::Setup(b)=>b.finish(tx,owner.plan),
-                Change::Reset(r)=>r.finish(tx,owner.plan),
-            }
-        })?;
+            owner.require_original_pending(tx,&self.change)?;
+            activate(tx,owner.plan,&self.change,&self.binding,&self.material)
+        })?; // rollback on any failed row, vault, parent or exact readback inside the cut
         owner.cut.sync()?;
-        let active=owner.cut.read(|tx|{owner.require_deployed(tx)?;active_at(tx,owner.plan)})?;
+        let result=owner.cut.read(|tx|{
+            owner.original_origin(tx)?;
+            match owner.original(tx)?{
+                Original::Committed(ref observed) if observed.same(&self.change)=>(),
+                _=>return Err(wrong()),
+            }
+            self.material.require_stored(&self.binding,tx)?;
+            active_at(tx,owner.plan)
+        })?;
         expired(self.until)?;live_vault()?;
-        if active!=target{return Err(public_error());}
-        Ok(active)
+        if result!=*self.change.head(){return Err(wrong());}Ok(result)
     }
 }
 
 #[cfg(test)]
-pub(super) fn web_reset_fixture_pair(tx:&Transaction<'_>,plan:&RustPlan,actor:Id){
-    let mut sid=[71;28];sid[..12].copy_from_slice(&SID_PREFIX);sid[24..].copy_from_slice(&1000u32.to_le_bytes());
-    let birth=Birth::new(plan,actor,[81;16],Ids::checked([82;16],[83;16]).unwrap(),
-        b"admin.fixture",b"smb.fixture",sid,[84;16]).unwrap();
-    birth.reserve(tx,plan,&PreparedWeb::synthetic([85;16],[86;32])).unwrap();
-    birth.finish(tx,plan).unwrap();
-}
-
-#[cfg(test)]
-mod reset_tests{
-    use super::*;
-    use crate::sqlite_install::{request::Request,stage::SCHEMA};
-    use rusqlite::Connection;
-    use std::path::PathBuf;
-
-    fn seed()->(Connection,RustPlan,Id){
-        let vector=include_str!("../../../../tests/smb-host/rust-install-v1.txt");
-        let raw=vector.lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
-        let raw=(0..raw.len()).step_by(2).map(|i|u8::from_str_radix(&raw[i..i+2],16).unwrap()).collect::<Vec<_>>();
-        let p=RustPlan::decode(&raw).unwrap();let o=p.origin;
-        let actor=[71;16];let approval=[72;16];
-        let roots=[([73;16],PathBuf::from("/synthetic/S")),([74;16],"/synthetic/R".into())].into_iter()
-            .chain(p.folders().iter().enumerate().map(|(i,(f,_))|(f.volume,PathBuf::from(format!("/synthetic/F{i:02}")))))
-            .collect::<Vec<_>>();
-        let request=Request::new(o.init,actor,approval,1001,roots.iter().map(|(_,path)|path.clone()).collect()).unwrap();
-        let mut c=Connection::open_in_memory().unwrap();
-        c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;").unwrap();
-        c.execute_batch(SCHEMA).unwrap();
-        let tx=c.transaction().unwrap();
-        tx.execute("INSERT INTO main.operation VALUES(?1,1,?2,?3,0)",params![&o.init[..],&actor[..],&request.sha()[..]]).unwrap();
-        tx.execute("INSERT INTO main.pool_birth VALUES(1,?1,?2,?3,1001,?4)",
-            params![&o.pool[..],&o.init[..],&approval[..],roots.len() as i64]).unwrap();
-        for (i,(volume,path)) in roots.iter().enumerate(){
-            tx.execute("INSERT INTO main.volume_claim VALUES(?1,?2,?3,?4,?5,255,?6)",
-                params![&o.init[..],i as i64,crate::sqlite_install::request::role(i),&volume[..],path.as_os_str().as_encoded_bytes(),
-                    &[(100+i) as u8;32][..]]).unwrap();
-        }
-        tx.execute("UPDATE main.operation SET state=1 WHERE op_id=?1",[&o.init[..]]).unwrap();
-        web_reset_fixture_pair(&tx,&p,actor);
-        tx.commit().unwrap();
-        (c,p,actor)
-    }
-    type Web=(Vec<u8>,Vec<u8>,i64,Vec<u8>,Vec<u8>,Vec<u8>);
-    fn web(tx:&Transaction<'_>)->Web{
-        tx.query_row("SELECT w.salt,w.verifier,w.generation,w.credential_op,a.web_id,a.web_login
-            FROM main.web_password w JOIN main.account_pair a ON w.slot=a.singleton",[],|r|
-            Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).unwrap()
-    }
-    #[test]
-    fn smb_password_reset_pending_blocks_the_old_epoch_then_one_exact_new_active_reopens_and_web_is_identical(){
-        let (mut c,plan,actor)=seed();let tx=c.transaction().unwrap();
-        let unchanged=web(&tx);let old=active_at(&tx,&plan).unwrap();
-        assert_eq!(old.generation,1);
-        let op=[110;16];let approval=[111;16];
-        let order=RustOrder{op,approval,actor,role:Desired::Reset{previous:old.op,generation:old.generation}};
-        let reset=Reset::with_original(old.clone(),op,actor,approval,[112;16]).unwrap();
-        // Independently measured 302-byte public v17 preimage, in the same
-        // order as Core credential.rs::rust_reset_request. No secret fixture.
-        assert_eq!(reset.sha(),crate::fs_tools::hex("190fa8110ab5258d1a226434d84776faa7a673aceefc8de9976448b57fd73f60").unwrap());
-        assert_eq!(reset_digest(&plan,&order,&old,&reset.target()).unwrap(),reset.sha());
-        let mut changed=reset.target();changed.record=[113;16];
-        assert_ne!(reset_digest(&plan,&order,&old,&changed).unwrap(),reset.sha());
-        let mut bad_target=reset.target();bad_target.login=b"not-this-smb".to_vec();
-        assert!(reset_digest(&plan,&order,&old,&bad_target).is_err());
-
-        reset.reserve(&tx,&plan).unwrap(); // actual reviewed v17 tables/triggers, no vault file
-        assert!(active_at(&tx,&plan).is_err());
-        assert_eq!(web(&tx),unchanged);
-        assert!(reset.reserve(&tx,&plan).is_err());
-        let foreign=Reset::with_original(old.clone(),[120;16],actor,[121;16],[122;16]).unwrap();
-        assert!(foreign.reserve(&tx,&plan).is_err());
-        let wrong_record=Reset::with_original(old.clone(),op,actor,approval,[113;16]).unwrap();
-        assert!(wrong_record.finish(&tx,&plan).is_err());
-        assert!(active_at(&tx,&plan).is_err());
-        tx.commit().unwrap();
-
-        let tx=c.transaction().unwrap();
-        assert!(active_at(&tx,&plan).is_err()); // another transaction never sees the old epoch
-        let Original::Committed(birth)=Birth::original(&tx,&plan).unwrap()else{panic!("no synthetic original first pair");};
-        assert!(select_reset(&tx,&birth,op,2,1).is_err());
-        assert_eq!(select_reset(&tx,&birth,op,2,0).unwrap().sha(),reset.sha());
-        reset.finish(&tx,&plan).unwrap(); // SQL half assumes an independent protected vault witness
-        assert!(active_at(&tx,&plan).unwrap()==reset.target());
-        assert_eq!(web(&tx),unchanged);assert!(reset.finish(&tx,&plan).is_err());
-        tx.commit().unwrap();
-
-        let tx=c.transaction().unwrap();
-        let active=active_at(&tx,&plan).unwrap();assert!(active==reset.target());
-        let later=Reset::with_original(active,[130;16],actor,[131;16],[132;16]).unwrap();
-        later.reserve(&tx,&plan).unwrap();assert!(active_at(&tx,&plan).is_err());
-        later.finish(&tx,&plan).unwrap();
-        assert_eq!(select_reset(&tx,&birth,op,2,1).unwrap().sha(),reset.sha()); // historical, not active
-        assert!(active_at(&tx,&plan).unwrap()==later.target());
-        assert_eq!(web(&tx),unchanged);
-        let effects:i64=tx.query_row("SELECT count(*) FROM main.credential_reset WHERE role<>1",[],|r|r.get(0)).unwrap();
-        assert_eq!(effects,0);
-        tx.commit().unwrap();
-    }
-}
+#[path = "../../../../tests/sqlite/shared_account_transactions.rs"]
+mod driver_tests;

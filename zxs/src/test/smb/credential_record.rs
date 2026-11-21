@@ -7,7 +7,7 @@ use crate::smb::session::envelope::tests as frame;
 use std::{sync::Arc,time::{Duration,Instant}};
 
 const RECORD:&str=concat!(
-    "5a58532d525553542d534d422d563100010b000000000000010101010101010101010101010101010202",
+    "5a58532d525553542d534d422d563200010b000000000000010101010101010101010101010101010202",
     "020202020202020202020202020203030303030303030303030303030303040404040404040404040404",
     "040404040505050505050505050505050505050506060606060606060606060606060606030303030303",
     "030303030303030303030808080808080808080808080808080800000000000000017769726566697874",
@@ -80,6 +80,8 @@ fn decoded_fixed_record_can_feed_only_the_existing_strict_fixture_verifier() {
 
 #[test]
 fn fields_are_checked_exactly_and_carry_no_authority_or_default_account() {
+    let mut v1=filled();v1[14]=b'1'; // exact retired magic, not a second decoder
+    assert!(DecodedRecord::decode(v1).is_err());
     for at in [0,15,16,18,23,160,171,223] {
         let mut b=filled();b[at]^=0xff;assert!(DecodedRecord::decode(b).is_err());
     }

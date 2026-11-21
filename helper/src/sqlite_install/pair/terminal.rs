@@ -4,7 +4,9 @@ mod audit;
 mod channel;
 pub(in crate::sqlite_install) use channel::PublicConfirmation;
 use audit::UnauditedInput;
-use super::web_secret::{PreparedWeb,WebWorkspace};
+use channel::Prompt;
+use helper_linux_evidence::first_smb::Enrollment;
+use super::{native_run::joint_material::Binding,web_secret::{PreparedWeb,WebWorkspace}};
 use super::super::approval::{host_admin,same_terminal};
 use crate::maintenance::{diagnostic_worker, thread_file};
 use helper_linux_evidence::prompt_signals::PromptSignals;
@@ -24,7 +26,7 @@ fn failure(s: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Invalid
 /// Restrictions last until exit; there is no unlock, fork or new privilege here.
 /// They do not make the host administrator, PTY master, audit policy, crash
 /// capture or hibernation trusted: those are independent deployment gates.
-fn protected_process(uid: u32, gid: u32) -> io::Result<()> {
+pub(super) fn protected_process(uid: u32, gid: u32) -> io::Result<()> {
     diagnostic_worker(uid, gid)?;
     protect_memory()
 }
@@ -142,14 +144,21 @@ fn begin_held_quiet(fd:BorrowedFd<'_>)->io::Result<(Quiet<'_>,PromptSignals)>{
     Ok((tty,signals))
 }
 
-fn capture(entries:&mut [Entry],offset:usize,selected:&SelectedInput,fd:BorrowedFd<'_>,
+fn require_repeat(entries:&[Entry;2])->io::Result<()>{
+    if entries[0].len==0||!bool::from(entries[0].bytes().ct_eq(entries[1].bytes())){
+        return Err(failure("the two protected password entries did not match"));
+    }
+    Ok(())
+}
+
+fn capture(entries:&mut [Entry;2],prompt:Prompt,selected:&SelectedInput,fd:BorrowedFd<'_>,
            verify:impl Fn()->io::Result<()>,signals:&PromptSignals)->io::Result<()> {
     let check=|| {signals.check()?; selected.audit.require_current()?; selected.channel.require()?;verify()};
     let mut scratch=Zeroizing::new([0u8;1]);
     for i in 0..entries.len() {
         check()?;tcflush(fd,QueueSelector::IFlush)?; // never accept leftovers from another prompt
         let end=Instant::now()+Duration::from_secs(120);
-        selected.channel.prompt(offset+i,end,&check)?;
+        selected.channel.prompt(prompt,i,end,&check)?;
         loop {
             check()?;
             if Instant::now()>=end{return Err(io::Error::new(io::ErrorKind::TimedOut,"credential prompt expired"));}
@@ -160,8 +169,8 @@ fn capture(entries:&mut [Entry],offset:usize,selected:&SelectedInput,fd:Borrowed
             let done=entries[i].key(scratch[0]);scratch.zeroize();
             if done? {break;}
         }
-        if i==1&&!bool::from(entries[0].bytes().ct_eq(entries[1].bytes())){return Err(failure("the two protected password entries did not match"));}
     }
+    require_repeat(entries)?;
     check()
 }
 
@@ -181,31 +190,20 @@ impl SelectedInput {
         self.channel.require()?;
         protect_memory()
     }
-    pub(super) fn web_only(&self,uid:u32,gid:u32)->io::Result<PreparedWeb>{
-        let WebEntry{workspace,..}=self.reserve_web(uid,gid)?;
-        let [web,_]=self.pair_for(0)?;
-        PreparedWeb::fresh(web.take(),workspace)
-    }
-    pub(super) fn reserve_web(&self,uid:u32,gid:u32)->io::Result<WebEntry<'_>>{
-        self.audit.require_current()?;self.channel.require()?;
-        protected_process(uid,gid)?;
-        let workspace=WebWorkspace::reserve()?;
-        Ok(WebEntry{selected:self,workspace})
-    }
     pub(super) fn hold_for_birth<'a>(&'a self,tty:&'a io::Stdin)->io::Result<HeldQuiet<'a>>{
         self.audit.require_current()?;self.channel.require()?;
         let (tty,signals)=begin_held_quiet(tty.as_fd())?;
         Ok(HeldQuiet{tty,signals,selected:self})
     }
-    /// Fixed low Rust secret worker only under the actual parent-owned
-    /// no-echo guard. This entry never yields a password or key.
-    pub(super) fn rust_vault_only(&self,ready:helper_linux_evidence::first_smb::Enrollment,
-        prefix:&[u8;224],stage:&mut std::fs::File)->io::Result<()>{
-        let [smb,_]=self.held_pair(2)?;
-        ready.seal_rust_v1(&smb.take(),prefix,stage)
+    /// Complete both fixed providers and memory preparation before the
+    /// real coordinator grants any new writable stage or hidden input.
+    pub(super) fn reserve_joint(&self,uid:u32,gid:u32,crypto:Enrollment,binding:Binding)->io::Result<JointEntry<'_>>{
+        self.audit.require_current()?;self.channel.require()?;
+        protected_process(uid,gid)?;
+        let workspace=WebWorkspace::reserve()?;
+        Ok(JointEntry{selected:self,workspace,crypto,binding})
     }
-    fn held_pair(&self,offset:usize)->io::Result<[Entry;2]>{
-        if offset!=0&&offset!=2{return Err(refuse("wrong fixed credential role"));}
+    fn held_password(&self,prompt:Prompt)->io::Result<Entry>{
         let stdin=io::stdin();let f=stdin.as_fd();
         let state=tcgetattr(f)?;
         if state.line_discipline!=0||state.input_modes!=InputModes::empty()
@@ -218,25 +216,13 @@ impl SelectedInput {
         };
         let signals=PromptSignals::begin()?;
         let mut entries=std::array::from_fn::<_,2,_>(|_|Entry::new());
-        capture(&mut entries,offset,self,f,same,&signals)?;
+        capture(&mut entries,prompt,self,f,same,&signals)?;
         signals.check()?;signals.finish()?;
-        Ok(entries)
+        let [accepted,repeat]=entries;
+        drop(repeat); // erase confirmation before doing anything with the password
+        Ok(accepted)
     }
-    fn pair_for(&self,offset:usize)->io::Result<[Entry;2]>{
-        if offset!=0&&offset!=2{return Err(failure("wrong fixed credential role"));}
-        let mut entries=std::array::from_fn(|_|Entry::new());
-        self.capture(&mut entries,offset)?;
-        Ok(entries)
-    }
-    fn capture(&self,entries:&mut [Entry],offset:usize)->io::Result<()>{
-        self.audit.require_current()?;self.channel.require()?;
-        let stdin=io::stdin();let signals=PromptSignals::begin()?;
-        let mut tty=Quiet::begin(stdin.as_fd())?;
-        let captured=capture(entries,offset,self,tty.fd,||tty.verify(),&signals);
-        let restored=tty.restore();drop(tty);
-        let pending=signals.check();let mask=signals.finish();
-        restored?;mask?;pending?;captured
-    }
+
 }
 
 // Quiet is dropped BEFORE the original signal mask (including errors).
@@ -250,49 +236,41 @@ impl HeldQuiet<'_>{
     }
 }
 
-pub(super) struct WebEntry<'a>{selected:&'a SelectedInput,workspace:WebWorkspace}
-impl WebEntry<'_>{
-    // Parent owns the quiet terminal across both protocol prompts.
-    // This child verifies the actual selected mode but cannot restore it or
-    // pass a Web secret back. The parent collects this original child first.
-    pub(super) fn read_held(self)->io::Result<PreparedWeb>{
-        let [web,_]=self.selected.held_pair(0)?;
-        PreparedWeb::fresh(web.take(),self.workspace)
+/// This owns both complete derivation preparations. It has no public CLI,
+/// parent channel, SQL access or reusable plaintext accessor.
+pub(super) struct JointEntry<'a>{selected:&'a SelectedInput,workspace:WebWorkspace,crypto:Enrollment,binding:Binding}
+pub(super) struct JointPacking(());
+pub(super) struct JointWeb{binding:Binding,web:PreparedWeb}
+impl JointWeb {
+    // Refuse crossed offers before packing or opening a transfer. There
+    // is no generic export route for a Web-only result.
+    pub(super) fn seal_for_peer(self,expected:&Binding)->io::Result<std::fs::File>{
+        self.binding.require_same(expected)?;
+        self.web.seal_for_joint_peer(JointPacking(()))
+    }
+    #[cfg(test)]
+    pub(super) fn synthetic(binding:Binding)->Self{
+        Self{binding,web:PreparedWeb::synthetic([0x31;16],[0x32;32])}
+    }
+}
+impl JointEntry<'_>{
+    /// Exactly one original hidden entry + repeat. Both algorithms borrow the
+    /// first still-owned, zeroizing terminal buffer. The provider writes only
+    /// to the already granted new vault stage; NT/response-key bytes never
+    /// become a Web value. Do not reserve SQL on error or adopt any residue.
+    pub(super) fn seal_in_held_tty(self,stage:&mut std::fs::File)->io::Result<JointWeb>{
+        let stage=self.crypto.prepare_rust_v2(self.binding.prefix(),stage)?;
+        let admitted=self.selected.held_password(Prompt::Joint)?;
+        let web=PreparedWeb::fresh_from_joint(&admitted.bytes,admitted.len,self.workspace)?;
+        stage.seal(admitted.bytes())?;
+        drop(admitted);
+        Ok(JointWeb{binding:self.binding,web})
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn web_admin_reset_disposable_pty_can_enter_the_real_hidden_act_gate_after_public_approval(){
-        use rustix::{process::getuid,pty::{grantpt,ioctl_tiocgptpeer,openpt,unlockpt,OpenptFlags}};
-        const CHILD:&str="HELPER_UNIT_WEB_RESET_TTY_CHILD";
-        if getuid().is_root(){return;}
-        if std::env::var_os(CHILD).is_none(){
-            let result=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact",
-                "sqlite_install::pair::terminal::tests::web_admin_reset_disposable_pty_can_enter_the_real_hidden_act_gate_after_public_approval","--nocapture"])
-                .env(CHILD,"1").output().unwrap();
-            assert!(result.status.success(),"{}",String::from_utf8_lossy(&result.stderr));
-            assert!(result.stdout.windows(b"RESET-FIXTURE-HIDDEN-ACT-READY".len()).any(|s|s==b"RESET-FIXTURE-HIDDEN-ACT-READY"));
-            return;
-        }
-        let flags=OpenptFlags::RDWR|OpenptFlags::NOCTTY|OpenptFlags::CLOEXEC;
-        let master=openpt(flags).unwrap();grantpt(&master).unwrap();unlockpt(&master).unwrap();
-        let slave=ioctl_tiocgptpeer(&master,flags).unwrap();
-        let before=tcgetattr(&slave).unwrap();
-        assert!(before.local_modes.contains(LocalModes::ICANON|LocalModes::ECHO));
-        let public_phase=PromptSignals::begin().unwrap();
-        public_phase.check().unwrap();public_phase.finish().unwrap();
-        // Same exact parent primitive as SelectedInput::hold_for_birth; no
-        // actual S/site, low privileged child, terminal user or password.
-        let (mut quiet,signals)=begin_held_quiet(slave.as_fd()).unwrap();
-        signals.check().unwrap();quiet.verify().unwrap();
-        assert!(!tcgetattr(&slave).unwrap().local_modes.intersects(LocalModes::ICANON|LocalModes::ECHO));
-        println!("RESET-FIXTURE-HIDDEN-ACT-READY");
-        quiet.restore().unwrap();signals.check().unwrap();signals.finish().unwrap();
-        assert!(same_mode(&tcgetattr(&slave).unwrap(),&before));
-    }
     // Test-created devpts pair only. Neither standard input nor the host's
     // actual controlling terminal is used, and no password is requested.
     #[test]
@@ -326,6 +304,22 @@ mod tests {
         q.restore().unwrap(); assert!(same_mode(&original,&tcgetattr(&slave).unwrap()));
     }
     #[test]
+    fn joint_account_secret_repeat_does_not_normalize_trim_or_accept_a_second_value(){
+        fn entered(wanted:&[u8])->Entry{
+            let mut e=Entry::new();
+            for &byte in wanted{assert!(!e.key(byte).unwrap());}
+            assert!(e.key(b'\n').unwrap());e
+        }
+        let original=" Audit-é 💠 ".as_bytes();
+        let same=[entered(original),entered(original)];
+        require_repeat(&same).unwrap();
+        assert!(same[0].bytes()==original);
+        for other in ["Audit-é 💠 "," Audit-e\u{301} 💠 "," audit-é 💠 "]{
+            assert!(require_repeat(&[entered(original),entered(other.as_bytes())]).is_err());
+        }
+        assert!(require_repeat(&[Entry::new(),Entry::new()]).is_err());
+    }
+    #[test]
     fn terminal_bytes_are_bounded_and_erasure_clears_the_whole_utf8_character() {
         let mut value=Entry::new();
         for &b in " x中".as_bytes() { assert!(!value.key(b).unwrap()); }
@@ -342,5 +336,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/sqlite/smb_reset_terminal.rs"]
-mod smb_reset_terminal;
+#[path = "../../../tests/sqlite/shared_reset_terminal.rs"]
+mod shared_reset_terminal;

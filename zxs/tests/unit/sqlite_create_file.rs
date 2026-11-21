@@ -17,8 +17,8 @@ pub(super) fn configure(src:&InitialReader)->(ShareId,ShareId){
     let web=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let a=web.publish_root(OperationId([0x81;16]),F,"writable").unwrap();
     let b=web.publish_root(OperationId([0x82;16]),F,"view").unwrap();
-    let smb=SmbSession::fixture_authenticated(src,"files.smb").unwrap();
-    assert!(smb.connect(a.share).is_err());assert!(SmbSession::fixture_authenticated(src,"first.admin").is_err());
+    let smb=SmbSession::fixture_authenticated(src,"first.admin").unwrap();
+    assert!(smb.connect(a.share).is_err());assert!(SmbSession::fixture_authenticated(src,"files.smb").is_err());
     web.set_share_mode(OperationId([0x83;16]),a.share,a.op,Mode::ReadWrite).unwrap();
     web.set_share_mode(OperationId([0x84;16]),b.share,b.op,Mode::ReadOnly).unwrap();(a.share,b.share)
 }
@@ -35,7 +35,7 @@ fn same_real_file_cold_reopens_across_authorized_shares_and_lost_response_keeps_
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=publication::first(&t);
     let op=OperationId([0x91;16]);let (rw,ro,one,two,root)={
         let src=InitialReader::open(&s,p).unwrap();let f=open_root(&src);let(rw,ro)=configure(&src);
-        let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let a=session.connect(rw).unwrap();let b=session.connect(ro).unwrap();
+        let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let a=session.connect(rw).unwrap();let b=session.connect(ro).unwrap();
         assert!(b.create_file(op,"Report.xlsx").is_err());assert_eq!(state(&src,op),None);
         let one=a.create_file(op,"Report.xlsx").unwrap();let two=a.create_file(OperationId([0x92;16]),"report.xlsx").unwrap();
         assert_ne!(one.file,two.file);assert_eq!(b.newborn("Report.xlsx",one.file).unwrap(),one);
@@ -48,7 +48,7 @@ fn same_real_file_cold_reopens_across_authorized_shares_and_lost_response_keeps_
         (rw,ro,one,two,f)
     };
     let src=InitialReader::open(&s,p).unwrap();
-    let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let a=session.connect(rw).unwrap();
+    let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let a=session.connect(rw).unwrap();
     assert_eq!(a.create_file(op,"Report.xlsx").unwrap(),one);assert_eq!(state(&src,op).unwrap().0,1);
     assert_eq!(session.connect(ro).unwrap().newborn("report.xlsx",two.file).unwrap(),two);
     let container=root.join(format!("Report-{}.xlsx",one.file));let primary=container.join("FILE");
@@ -65,7 +65,7 @@ fn reservation_precedes_names_and_only_the_exact_synced_header_pair_can_confirm(
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=publication::first(&t);let op=OperationId([0x94;16]);
     let(rw,id,root)={
         let src=InitialReader::open(&s,p).unwrap();let root=open_root(&src);let(rw,_)=configure(&src);
-        let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let a=session.connect(rw).unwrap();
+        let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let a=session.connect(rw).unwrap();
         assert!(a.create_after(op,"方案.xlsx",|cut|if cut==Point::Reserved{Err(io::Error::other("stop before mkdir"))}else{Ok(())}).is_err());
         let(pending,id,_)=state(&src,op).unwrap();assert_eq!(pending,0);assert_eq!(std::fs::read_dir(&root).unwrap().count(),1);
         assert!(a.newborn("方案.xlsx",id).is_err());
@@ -73,7 +73,7 @@ fn reservation_precedes_names_and_only_the_exact_synced_header_pair_can_confirm(
         assert_eq!(state(&src,op).unwrap().0,0);assert!(a.newborn("方案.xlsx",id).is_err());
         assert!(root.join(format!("方案-{id}.xlsx/FILE")).is_file());(rw,id,root)
     };
-    let cold=InitialReader::open(&s,p).unwrap();let session=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,p).unwrap();let session=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let a=session.connect(rw).unwrap();let outcome=a.create_file(op,"方案.xlsx").unwrap();assert_eq!(outcome.file,id);
     assert_eq!(a.newborn("方案.xlsx",id).unwrap(),outcome);
     // An unrelated incomplete operation: its name is reserved, not adoptable.
@@ -91,7 +91,7 @@ fn disabling_an_inflight_create_does_not_publish_or_turn_the_old_tree_into_a_new
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=publication::first(&t);let src=InitialReader::open(&s,p).unwrap();
     let root=open_root(&src);let(rw,ro)=configure(&src);let peer=InitialReader::open(&s,p).unwrap();
     let manager=peer.authenticate_web("first.admin","correct horse battery staple").unwrap();
-    let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let a=session.connect(rw).unwrap();
+    let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let a=session.connect(rw).unwrap();
     let op=OperationId([0x97;16]);let mut stopped=false;
     assert!(a.create_after(op,"never-disclose",|cut|{if cut==Point::Installed{
         let s=manager.share_setting(rw)?;manager.set_share_mode(OperationId([0x98;16]),rw,s.op,Mode::Disabled)?;stopped=true;
@@ -109,7 +109,7 @@ fn reoccupied_old_stage_blocks_hot_and_cold_confirmation_without_touching_the_se
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=publication::first(&t);let op=OperationId([0x9a;16]);
     let (rw,id,stray)={
         let src=InitialReader::open(&s,p).unwrap();let root=open_root(&src);let(rw,_)=configure(&src);
-        let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=session.connect(rw).unwrap();
+        let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=session.connect(rw).unwrap();
         let mut stray=None;assert!(tree.create_after(op,"report",|point|{if point==Point::Installed{
             let (pending,_,ticket)=state(&src,op).unwrap();assert_eq!(pending,0);
             let slot=root.join(format!(".zxs-new-{ticket}-0"));std::fs::DirBuilder::new().mode(0o700).create(&slot)?;
@@ -117,7 +117,7 @@ fn reoccupied_old_stage_blocks_hot_and_cold_confirmation_without_touching_the_se
         }Ok(())}).is_err());
         let(z,id,_)=state(&src,op).unwrap();assert_eq!(z,0);(rw,id,stray.unwrap())
     };
-    let cold=InitialReader::open(&s,p).unwrap();let session=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,p).unwrap();let session=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let tree=session.connect(rw).unwrap();assert!(tree.create_file(op,"report").is_err());assert_eq!(state(&cold,op).unwrap().0,0);
     assert_eq!(std::fs::read(stray.join("sentinel")).unwrap(),b"preserve");
     std::fs::rename(&stray,t.0.join("displaced-stray")).unwrap();
@@ -132,14 +132,14 @@ fn late_real_display_directory_blocks_original_create_but_real_terminal_is_not_a
         let op=OperationId([0xa7;16]);
         let(rw,id,root)={
             let src=InitialReader::open(&s,p).unwrap();let root=open_root(&src);let(rw,_)=configure(&src);
-            let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=session.connect(rw).unwrap();
+            let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=session.connect(rw).unwrap();
             assert!(tree.create_after(op,"方案.xlsx",|at|{if at==cut{
                 let bad=root.join("方案.xlsx");std::fs::DirBuilder::new().mode(0o700).create(&bad)?;std::fs::write(bad.join("keep"),b"X")?;
             }Ok(())}).is_err());
             let (pending,id,_)=state(&src,op).unwrap();assert_eq!(pending,0);
             assert_eq!(root.join(format!("方案-{id}.xlsx")).exists(),n==1);(rw,id,root)
         };
-        let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+        let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
         let tree=smb.connect(rw).unwrap();assert!(tree.create_file(op,"方案.xlsx").is_err());
         assert_eq!(std::fs::read(root.join("方案.xlsx/keep")).unwrap(),b"X");assert_eq!(state(&cold,op).unwrap().0,0);
         std::fs::rename(root.join("方案.xlsx"),t.0.join("unrelated-dir")).unwrap();

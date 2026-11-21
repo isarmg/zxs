@@ -1,4 +1,4 @@
-//! Offline, non-authorizing H03 source inventory for exact independently maintained v17.
+//! Offline, non-authorizing H03 source inventory for exact independently maintained v18.
 //! A complete result describes two bounded metadata walks, not a copy plan.
 use super::{Id,observed,retire_ordinary};
 use crate::{maintenance::DiscoveryView,pinned::{self,Entity,Mount,Pinned},sqlite_install::{DATABASE,bad,
@@ -248,7 +248,7 @@ fn vfs_without_access_time(locked:&LockedSystem)->io::Result<()>{
 /// not source paths, descriptors, a resume ID or any authority.
 pub(super) fn observe<T>(locked:&LockedSystem,pool:&Id,init:&Id,actor:&Id,path:&Path,location:[u64;3],
     report:impl FnOnce(Finding)->T)->io::Result<T>{
-    retire_ordinary::compiled_v17()?;
+    retire_ordinary::compiled_v18()?;
     let (host,system)=locked.retirement_host()?;
     let scope=system.local_scope().ok_or_else(unknown)?;
     vfs_without_access_time(locked)?;
@@ -298,7 +298,7 @@ pub(super) fn observe<T>(locked:&LockedSystem,pool:&Id,init:&Id,actor:&Id,path:&
 mod tests{
     use super::*;
     #[test]
-    fn nonempty_v17_only_known_unsafe_names_and_exact_business_display_bounds_are_claimed(){
+    fn nonempty_v18_only_known_unsafe_names_and_exact_business_display_bounds_are_claimed(){
         assert!(user_name("目录".as_bytes(),true)&&user_name(".notes".as_bytes(),false));
         assert!(user_name(&[b'a';222],false)&&user_name(&[b'a';255],true));
         assert!(!user_name(&[b'a';223],false)&&!user_name(b"trail ",true)&&!user_name(b"file.",false));
@@ -313,7 +313,7 @@ mod tests{
 
     #[test]
     #[ignore="source-only metadata inventory; needs a disposable existing supported local filesystem"]
-    fn nonempty_v17_actual_scan_keeps_empty_dirs_and_abstains_on_links_control_names_and_a_changed_tree(){
+    fn nonempty_v18_actual_scan_keeps_empty_dirs_and_abstains_on_links_control_names_and_a_changed_tree(){
         use std::{fs,os::unix::fs::symlink};
         let area=crate::test_area::data_directory();
         let path=area.path().join("legacy");

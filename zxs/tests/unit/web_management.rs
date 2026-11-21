@@ -58,7 +58,7 @@ fn login_change_installed_folder_and_cold_overview_do_not_open_offline_file_root
     for opaque in ["","null"]{assert!(hit(&mut app,"POST","/login","",opaque,"login=first.admin&password=correct+horse+battery+staple").starts_with("HTTP/1.1 403"));}
     let cookie=logged(&mut app);let page=hit(&mut app,"GET","/",&cookie,"","");
     assert!(page.contains("Referrer-Policy: same-origin\r\n"));
-    assert!(page.contains("first.admin")&&page.contains("files.smb")&&!page.contains("unmounted-"));
+    assert!(page.matches("first.admin").count()==1&&page.contains("Web 与 SMB 共用账号")&&!page.contains("files.smb")&&!page.contains("unmounted-"));
     assert!(!page.contains("本池登记卷")&&!page.contains("总容量")&&!page.contains("文件系统 UUID")&&
         !page.contains("Web 所见挂载")&&!page.contains("检查此卷")&&!page.contains("zxs-status"));
     // Business modes still display the original logical volume, not a disk probe.

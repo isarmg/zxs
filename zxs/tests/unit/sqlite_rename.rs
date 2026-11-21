@@ -46,7 +46,7 @@ fn a_rename_preserves_real_file_identity_and_its_settled_view_without_sharing_a_
     let tmp=PrivateTemp::under(&std::env::temp_dir());
     let (s,pool,f,rw,_)=ordinary_pool(&tmp);
     let src=InitialReader::open(&s,pool).unwrap();
-    let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=session.connect(rw).unwrap();
     let born=tree.create_file(op(0xd0),"Report.txt").unwrap();
     let bytes=tmp.0.join("working-source");
@@ -113,7 +113,7 @@ fn actual_rename_issuer_keeps_the_original_reader_and_reports_a_lost_final_reply
     let tmp=PrivateTemp::under(&std::env::temp_dir());
     let (s,pool,_,rw,_)=ordinary_pool(&tmp);
     let src=InitialReader::open(&s,pool).unwrap();
-    let initial=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let initial=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=initial.connect(rw).unwrap();
     let file=tree.create_file(op(0xbb),"First.txt").unwrap();
     let mut raw=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600)
@@ -163,7 +163,7 @@ fn recover_the_recorded_name_after_the_old_handle_is_gone_and_never_regrant_a_re
     let tmp=PrivateTemp::under(&std::env::temp_dir());
     let (s,pool,f,rw,_)=ordinary_pool(&tmp);
     let src=InitialReader::open(&s,pool).unwrap();
-    let initial=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let initial=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=initial.connect(rw).unwrap();
     let started=tree.create_file(op(0xc8),"Old.txt").unwrap();
     let mut member=tree.open_current("Old.txt").unwrap();
@@ -242,7 +242,7 @@ fn same_file_after_restore_can_rename_while_the_old_retained_read_delays_only_it
     let local=PrivateTemp::under(Path::new("/tmp"));let other=PrivateTemp::under(Path::new("/dev/shm"));
     let r=other.0.join("actual-R");let (s,pool,f,rw)=transfer_pool(&local,&r);
     let source=InitialReader::open(&s,pool).unwrap();let cold=InitialReader::open(&s,pool).unwrap();
-    let smb=SmbSession::fixture_authenticated(&source,"files.smb").unwrap();let tree=smb.connect(rw).unwrap();
+    let smb=SmbSession::fixture_authenticated(&source,"first.admin").unwrap();let tree=smb.connect(rw).unwrap();
     let admin=cold.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let file=tree.create_file(op(0x81),"Draft.txt").unwrap().file;
     let mut input=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600)
@@ -278,7 +278,7 @@ fn same_file_after_restore_can_rename_while_the_old_retained_read_delays_only_it
     assert!(old_pocket.is_dir());drop(retained_handle);
     retirement::one_for_test(&cold,|_|Ok(())).unwrap();
     assert!(!old_pocket.exists());
-    let reopened=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let reopened=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let tree=reopened.connect(rw).unwrap();
     assert_eq!(tree.open_current("Renamed.txt").unwrap().native_key().unwrap(),native_id);
     let mut version=Vec::new();
@@ -295,7 +295,7 @@ fn same_backing_rename_keeps_superseded_work_names_without_making_them_readable(
 
     let t=PrivateTemp::under(&std::env::temp_dir());let (s,pool,f,rw,_)=ordinary_pool(&t);
     let src=InitialReader::open(&s,pool).unwrap();let cold=InitialReader::open(&s,pool).unwrap();
-    let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=auth.connect(rw).unwrap();
+    let auth=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=auth.connect(rw).unwrap();
     let admin=cold.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let initial="Report";let file=tree.create_file(op(0x91),initial).unwrap().file;
     let stock=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600)
@@ -334,7 +334,7 @@ fn same_backing_rename_keeps_superseded_work_names_without_making_them_readable(
     drop(original);
     assert_eq!(std::fs::read(body(renamed).join(unselected.to_str().unwrap())).unwrap(),b"?");
     assert!(!body(initial).exists());
-    let owns=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();let cold_tree=owns.connect(rw).unwrap();
+    let owns=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();let cold_tree=owns.connect(rw).unwrap();
     let mut selected=Vec::new();
     cold_tree.open_current(renamed).unwrap().range_to(0,4,&mut selected).unwrap();
     assert_eq!(selected,b"ZBCD");
@@ -356,7 +356,7 @@ fn two_parent_ticket_reserves_the_actual_destination_without_reserving_other_par
     let separate=PrivateTemp::under(std::path::Path::new("/dev/shm"));
     let (s,pool,f,rw)=crate::system::reader::tests::transfer_pool(&tmp,&separate.0.join("actual-R"));
     let src=InitialReader::open(&s,pool).unwrap();
-    let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=session.connect(rw).unwrap();
     let file=tree.create_file(op(0x71),"Report").unwrap();
     let raw=Connection::open(&src.dir,true).unwrap();
@@ -433,7 +433,7 @@ fn opening_a_second_parent_does_not_reissue_the_file_or_change_its_original_view
     let (s,pool,f,rw,_)=ordinary_pool(&tmp);
     let src=InitialReader::open(&s,pool).unwrap();
     let independent=InitialReader::open(&s,pool).unwrap();
-    let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let auth=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let top=auth.connect(rw).unwrap();
     let (_,from)=top.ordinary_route(&[],true).unwrap();
     top.make_ordinary_directory(&from,op(0x61),"Folder",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();

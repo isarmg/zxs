@@ -1,10 +1,10 @@
 //! Public exact scope of a prepared low writer; it cannot include a password.
 use super::{bad,manifest::{self,Intent,Manifest},receipt::Observed};
-use crate::sqlite_install::pair::native_sql::rust_vault::{Desired,reset_digest};
+use crate::sqlite_install::pair::native_sql::rust_vault::require_observed;
 use sha2::{Digest,Sha256};
 use std::{fs::File,io};
 
-const DOMAIN:&[u8;16]=b"ZXS-RUST-SEAL-1\0";
+const DOMAIN:&[u8;16]=b"ZXS-RUST-SEAL-2\0";
 const LIMIT:usize=24*1024;
 fn no()->io::Error{bad("wrong original Rust vault writer order")}
 pub(in crate::sqlite_install::pair) struct SecretOrder{
@@ -27,15 +27,13 @@ impl SecretOrder {
         let manifest=manifest::decode(m)?;
         let selected=Observed::decode(preview,&manifest.plan)?;
         if manifest.intent!=Intent::Fresh||selected.state!=1||selected.target.op!=manifest.order.op{return Err(no());}
-        let matches=match(&manifest.order.role,&selected.previous){
-            (Desired::Setup{smb,..},None)=>smb==&selected.target.login,
-            (Desired::Reset{..},Some(old))=>reset_digest(&manifest.plan,&manifest.order,old,&selected.target)?==selected.action,
-            _=>false,
-        };
-        if !matches{return Err(no());}
+        require_observed(&manifest.plan,&manifest.order,selected.action,&selected.target,selected.previous.as_ref())?;
+        if let manifest::Authority::Fresh(origin)=manifest.authority{
+            if origin.init_sha!=selected.target.init_sha{return Err(no());}
+        }
         Ok((Self{manifest,selected},digest))
     }
 }
 pub(in crate::sqlite_install::pair) fn scope(raw:&[u8])->[u8;32]{
-    let mut h=Sha256::new();h.update(b"ZXS-HELPER/RUST-SMB-SEALED-SLOT-1\0");h.update(raw);h.finalize().into()
+    let mut h=Sha256::new();h.update(b"ZXS-HELPER/SHARED-SEALED-SLOT-2\0");h.update(raw);h.finalize().into()
 }

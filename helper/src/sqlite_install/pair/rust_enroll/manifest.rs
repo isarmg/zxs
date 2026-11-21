@@ -1,16 +1,16 @@
 //! Exact nonsecret order from the original root account owner. Decode is
 //! not approval. The child still proves ancestry, parent and the lent S.
-use super::{Id,bad};
-use crate::sqlite_install::pair::fresh_issuer::{CredentialScope,CryptoPins,ExplicitSubject,compiled_v17};
+use super::bad;
+use crate::sqlite_install::pair::fresh_issuer::{CredentialScope,CryptoPins,ExplicitSubject,compiled_v18};
 use crate::{path_rules::Kind,smb_profile::rust_first::{MAX_WIRE,RustPlan},
-    sqlite_install::pair::{distinct_roles,login,native_sql::rust_vault::{Desired,RustOrder}}};
+    sqlite_install::pair::native_sql::rust_vault::{Desired,RustOrder,RustChange,SetupSpec,shared_login}};
 use rustix::fs::{SealFlags,fcntl_get_seals};
 use sha2::{Digest,Sha256};
 use std::{fs::File,io,os::unix::fs::{FileExt,MetadataExt},path::PathBuf};
 
-const TAG:&[u8;18]=b"ZXS-RUST-ENROLL-1\0";
-const DEPLOYED_TAG:&[u8]=b"ZXS-DEPLOYED-SMB-RESET-1\0";
-const LIMIT:usize=TAG.len()+2+32+3*16+3*8+2+4095+2+MAX_WIRE+2*65+CredentialScope::WIDTH;
+const TAG:&[u8;18]=b"ZXS-RUST-ENROLL-2\0";
+const DEPLOYED_TAG:&[u8]=b"ZXS-DEPLOYED-SHARED-RESET-2\0";
+const LIMIT:usize=TAG.len()+2+32+3*16+3*8+2+4095+2+MAX_WIRE+65+16+16+28+CredentialScope::WIDTH;
 const _:()=assert!(DeployedScope::WIDTH<=CredentialScope::WIDTH);
 fn no()->io::Error{bad("wrong sealed original Rust account request")}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -22,7 +22,7 @@ pub(in crate::sqlite_install::pair) struct DeployedScope{
 impl DeployedScope{
     const WIDTH:usize=DEPLOYED_TAG.len()+24+128;
     fn check(self)->io::Result<()>{
-        compiled_v17()?;
+        compiled_v18()?;
         if self.site==[0;32]||self.helper==[0;32]{return Err(no());}
         if let Some(p)=self.crypto(){p.check()?;}
         Ok(())
@@ -64,14 +64,16 @@ pub(in crate::sqlite_install::pair) struct Manifest{
 }
 impl Manifest{
     fn require(&self)->io::Result<()>{
+        compiled_v18()?;
         let o=self.plan.origin;let w=&self.order;
         let path=self.system.to_str().ok_or_else(no)?.as_bytes();
         Kind::StorageRoot.check_path(path).map_err(bad)?;
         if path.len()>4095||self.entity[1]==0||self.entity[2]==0||self.nonce==[0;32]||
             [w.op,w.actor,w.approval].contains(&[0;16])||w.op==o.init{return Err(no());}
         match (self.authority,&w.role){
-            (Authority::Fresh(new),Desired::Setup{web,smb}) if self.intent==Intent::Fresh&&
-                new.subject.tuple().0==w.actor&&w.op==o.setup&&login(web)&&login(smb)&&distinct_roles(web,smb)=>Ok(()),
+            (Authority::Fresh(new),Desired::Setup(_)) if self.intent==Intent::Fresh&&new.subject.tuple().0==w.actor&&w.op==o.setup=>{
+                RustChange::for_fresh(&self.plan,w,new.init_sha).map(drop)
+            },
             (Authority::Deployed(s),Desired::Reset{previous,generation})
                 if s.subject.tuple().0==w.actor&&(self.intent==Intent::Fresh)==s.providers.is_some()&&
                 ![o.pool,o.init,o.instance,o.bind,w.op,[0;16]].contains(previous)&&
@@ -92,9 +94,9 @@ impl Manifest{
         let raw=self.plan.wire();
         e.extend((raw.len()as u16).to_be_bytes());e.extend(raw);
         match &self.order.role{
-            Desired::Setup{web,smb}=>{
-                e.push(1);
-                for n in [web,smb]{e.push(n.len()as u8);e.extend(n);}
+            Desired::Setup(spec)=>{
+                e.push(1);e.extend(spec.account);e.extend(spec.record);e.extend(spec.sid);
+                e.push(spec.login.len() as u8);e.extend(&spec.login);
             }
             Desired::Reset{previous,generation}=>{
                 e.push(2);e.extend(previous);e.extend(generation.to_be_bytes());
@@ -105,7 +107,7 @@ impl Manifest{
         Ok(e)
     }
     pub(in crate::sqlite_install::pair) fn scope(&self)->io::Result<[u8;32]>{
-        let mut h=Sha256::new();h.update(b"ZXS-HELPER/RUST-ACCOUNT-SCOPE-1\0");h.update(self.encode()?);Ok(h.finalize().into())
+        let mut h=Sha256::new();h.update(b"ZXS-HELPER/SHARED-ACCOUNT-SCOPE-2\0");h.update(self.encode()?);Ok(h.finalize().into())
     }
     pub(in crate::sqlite_install::pair) fn read(file:&File)->io::Result<Self>{decode(&seal_bytes(file,LIMIT)?)}
 }
@@ -130,7 +132,7 @@ pub(in crate::sqlite_install::pair) fn decode(raw:&[u8])->io::Result<Manifest>{
     let system=PathBuf::from(std::str::from_utf8(b.counted(4095)?).map_err(|_|no())?);
     let plan=RustPlan::decode(b.counted(MAX_WIRE)?).map_err(bad)?;
     let role=match b.byte()?{
-        1=>Desired::Setup{web:b.name()?,smb:b.name()?},
+        1=>Desired::Setup(SetupSpec{account:b.fixed()?,record:b.fixed()?,sid:b.fixed()?,login:b.name()?}),
         2=>Desired::Reset{previous:b.fixed::<16>()?,generation:i64::from_be_bytes(b.fixed()?)},
         _=>return Err(no()),
     };
@@ -155,7 +157,7 @@ impl<'a> Cursor<'a>{
     }
     fn name(&mut self)->io::Result<Vec<u8>>{
         let n=usize::from(self.byte()?);let b=self.take(n)?;
-        if !login(b){return Err(no());}Ok(b.to_vec())
+        if !shared_login(b){return Err(no());}Ok(b.to_vec())
     }
 }
 
@@ -173,7 +175,7 @@ mod tests{
                 site:[105;32],helper:[106;32],providers:(intent==Intent::Fresh).then_some(([107;32],[108;32]))}),plan}
     }
     #[test]
-    fn smb_password_reset_receipt_and_new_are_distinct_immutable_worker_scopes(){
+    fn shared_reset_receipt_and_new_are_distinct_immutable_worker_scopes(){
         let q=sample(Intent::Fresh);let raw=q.encode().unwrap();
         let decoded=decode(&raw).unwrap();
         assert_eq!(decoded.encode().unwrap(),raw);

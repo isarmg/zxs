@@ -5,13 +5,13 @@ use crate::{smb::connection::sessions::RunningServerGuid,system::reader::smb::ru
 use std::{io::ErrorKind,os::fd::AsRawFd,sync::{Arc,atomic::Ordering},time::Instant};
 
 impl InheritedRun {
-    pub(in crate::smb::launch) fn publish_ready(self:&Arc<Self>,selected:&QualifiedRustInstall,server:&RunningServerGuid,
+    pub(in crate::smb::launch) fn publish_prepared(self:&Arc<Self>,selected:&QualifiedRustInstall,server:&RunningServerGuid,
         gate:&crate::smb::launch::entry::InstalledTerm)->Result<()>{
         if gate.stopping()||!selected.is_original_start(self)||!server.is_original_start(self){return Err(Fault::Handoff);}
         selected.require_current().map_err(|_|Fault::Handoff)?;
         self.supervisor.require_live()?;
         self.ready.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire).map_err(|_|Fault::Handoff)?;
-        let packet=self.start.ready_frame();
+        let packet=self.start.prepared_frame();
         let fd=self.supervisor.socket.as_raw_fd();
         loop {
             if gate.stopping()||Instant::now()>=self.until{return Err(Fault::Handoff);}
@@ -41,7 +41,16 @@ impl InheritedRun {
             return Err(Fault::Handoff);
         }
         self.supervisor.require_live()?;
-        self.ready.store(2,Ordering::Release);Ok(())
+        Ok(())
+    }
+    pub(in crate::smb::launch) fn await_pair(&self,term:&crate::smb::launch::entry::InstalledTerm)->Result<()>{
+        let gate=self.pair.lock().map_err(|_|Fault::Handoff)?.take().ok_or(Fault::Handoff)?;
+        gate.wait(self.env.pair.until()?,||{
+            if term.stopping(){return Err(Fault::Handoff);}
+            self.supervisor.require_live()
+        })?;
+        self.ready.compare_exchange(1,2,Ordering::Release,Ordering::Acquire).map_err(|_|Fault::Handoff)?;
+        Ok(())
     }
     pub(in crate::smb::launch) fn next_listener(&self,from:usize,admit:bool)->Result<Option<usize>>{
         if self.ready.load(Ordering::Acquire)!=2{return Err(Fault::Handoff);}

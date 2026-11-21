@@ -5,8 +5,9 @@ start selects its original deployment; there is no separate SMB binary, public
 SMB command, general server API, or independently configured SMB service.
 This boundary never scans host disks, adopts an existing Native site, uses
 Helper discoveries as authorization, or reads any /etc/local-ops-helper file.
-A future fresh issuer creates the protected ZXS-owned deployment record once.
-There is no issuer or storage upgrade in this slice.
+The paired fresh issuer must create the protected ZXS-owned deployment record
+once after genuine shared activation. This runtime does not provision or
+upgrade storage, including any v17 split-account pool.
 
 ## Existing protected originals
 
@@ -27,7 +28,7 @@ There is no issuer or storage upgrade in this slice.
   root:root 0444 and one link. It already defines host/one SMB share, exact
   LAN endpoints and prefixes, earliest folder names/modes and recycle label.
   A separate lower-privilege reader independently qualifies its entire shape
-  and original v17 receipts; this root selector recognizes only the matching
+  and original v18 shared-account receipts; this root selector recognizes only the matching
   five IDs and the selected whole SHA-256.
 - site.v1 is exactly one root:root 0600 ordinary, one-link file on that site.
   Binary bytes in order: ZXS-RUST-SITE-1 plus NUL (16 bytes); Pool, Init,
@@ -41,11 +42,11 @@ There is no issuer or storage upgrade in this slice.
   No terminator, optional field, data mount number, login, password, policy
   cache, or path fallback. Parsing alone is no approval.
 - vault is original same-mount root:root 0700. Root origin selection never
-  opens its credential. Once the original low socket/pidfd worker reports
-  exact ACTIVE (not merely by supplying a tuple), the live typed launch is
-  expected to open the original protected one-link 240-byte credential RO
-  and hand it to the proven lower-privilege role. No stored secret is
-  duplicated into the public record. The sole active epoch is in SYSTEM.
+  reads its credential body. Once the original low socket/pidfd worker
+  reports exact ACTIVE (not merely a tuple), the typed launch opens the
+  original protected one-link 240-byte credential.v2 RO for the proven
+  lower-privilege SMB role. No vault FD goes to Web and no Web verifier to
+  the parent or SMB. The sole active account epoch is in SYSTEM.
 
 Root selects site.v1, acquires the lifetime original SYSTEM SH before the site
 EX, rechecks original name/inode/mount and profile, obtains only public
@@ -66,14 +67,20 @@ interpreted as approval or silently changed into direct HTTP. The Web child
 gets the same original SYSTEM and selected ordinary media read-only for the
 manual version proof, with no recycle, vault, or SMB socket. Both lowered
 births are the same installed ZXS ELF, with separate original listeners and
-receipts. A whole-start report requires both private READY receipts; one
-approved component may already be live while the other starts. READY is
-not a claim of old-operation recovery or client interoperability.
+receipts. Each independently proves the same exact S, PLAN, role and public
+shared account epoch, then sends one authenticated PREPARED and EOF. After
+both original receipts and a last liveness/TERM vote, the parent takes one
+common irreversible step: F_SEAL_SEAL on its retained writable original
+gate. Both child loans are genuinely read-only after exec, bound to the same
+inode, commitment and hard monotonic budget. No userspace accept, challenge,
+HTTP handler or SMB cold write task before that role verifies release. A
+TCP backlog can exist before release. This is not a positive acknowledgment
+that both loops processed requests or completed old-operation recovery.
 
 Never print credential bytes or original volume tokens. Site, SYSTEM and
 approved ELF identity stay held until actual drain/reap. Start both normal
 stops before any wait; when the second birth fails, begin stopping the
-already admitted sibling before failed cleanup can wait. No automatic
+already prepared sibling before failed cleanup can wait. No automatic
 restart or fallback. SYSTEM and site mode or identity changes are not
 repaired at startup. Mount observations are host-local and contemporaneous,
 not durable hardware claims or protection from a malicious host administrator.

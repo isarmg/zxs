@@ -5,7 +5,7 @@ use crate::sqlite_install::{bad,id,originals::LockedSystem,pair::{retire_ordinar
 use rustix::process::{Pid,getppid};
 use std::{ffi::{OsStr,OsString},fmt::Write,io,os::unix::ffi::{OsStrExt,OsStringExt},path::{Path,PathBuf}};
 
-pub(super) const DOMAIN:&[u8]=b"helper ordinary retirement check exact v17 1\0";
+pub(super) const DOMAIN:&[u8]=b"helper ordinary retirement check exact v18 1\0";
 const BUDGET:usize=DOMAIN.len()+32+4*16+8+3*8+2*(2+MAX_PATH_BYTES);
 const PUBLICATION:u16=1<<0;
 const SELECTED_FILE:u16=1<<1;
@@ -42,7 +42,7 @@ impl RetirementCheck{
             .map_err(|_|"invalid original SYSTEM or distinct ordinary path/identity for read-only preflight")
     }
     fn query(&self)->io::Result<Reply>{
-        retire_ordinary::compiled_v17()?;
+        retire_ordinary::compiled_v18()?;
         approval::no_inherited_descriptors()?;
         let _host=approval::host_admin()?;let tty=PublicConfirmation::select()?;let subject=self.1.tuple();
         let pin=Pinned::already_mounted(self.0.system(),PathKind::StorageRoot)?;
@@ -95,7 +95,7 @@ impl Question{
         let system=path(&mut bytes)?;let ordinary=path(&mut bytes)?;
         let scope=Scope::new(pool,init,volume,system,ordinary)?;
         if !bytes.is_empty()||encode(&scope,&nonce,subject,location)?.as_slice()!=raw{return Err(invalid());}
-        retire_ordinary::compiled_v17()?;
+        retire_ordinary::compiled_v18()?;
         Ok(Self{subject,location,scope})
     }
     pub(super) fn original_system(&self)->(ExplicitSubject,[u64;3],&Path){(self.subject,self.location,self.scope.system())}

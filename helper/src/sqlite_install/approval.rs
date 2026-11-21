@@ -19,9 +19,9 @@ impl Proposal{
     /// Non-secret op/reference may be recorded BEFORE any write; they are not authority.
     pub(super) fn select(purpose:Purpose,op:Id,reference:Id,paths:Vec<PathBuf>,
         explicit:super::pair::ExplicitSubject,private:bool)->io::Result<Self>{
-        super::pair::compiled_v17()?;
+        super::pair::compiled_v18()?;
         if private{
-            super::pair::require_v17()?;
+            super::pair::require_v18()?;
             if !matches!(purpose,Purpose::Fresh){return Err(denied());}
         }
         // A privileged FD inherited across lowering credentials retains its
@@ -39,8 +39,8 @@ impl Proposal{
     }
     pub(super) fn require(&self)->io::Result<()>{
         let current=host_admin()?;self.originals.require_host(&current)?;
-        super::pair::compiled_v17()?;
-        if self.private{super::pair::require_v17()?;}
+        super::pair::compiled_v18()?;
+        if self.private{super::pair::require_v18()?;}
         if self.explicit.tuple()!=self.subject{return Err(denied());}
         same_terminal(&io::stdin(),&io::stderr())?;
         for n in &self.originals.selected{n.require_same_named_mount()?;}
@@ -68,7 +68,7 @@ impl Proposal{
         // Also used after the browser worker has really closed and been
         // reaped. The same retained TTY issues a new challenge, clearing all
         // previously queued input; the repeatable request SHA is not an answer.
-        if self.private{tty.confirm_v17_initialization(preview)?;}
+        if self.private{tty.confirm_v18_initialization(preview)?;}
         else{tty.confirm_init(matches!(self.purpose,Purpose::Fresh),preview)?;}
         self.require()?;tty.check()?;drop(tty);
         let Self{request,originals,purpose,..}=self;

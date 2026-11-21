@@ -13,10 +13,10 @@ pub(super) fn first_with_storage(t:&PrivateTemp,recycle:Option<PathBuf>,second:O
     let (s,p)=record_with_storage(t,InitState::Committed,"",recycle,second);
     let selected=HeldDir::trusted_system(&s).unwrap();selected.exclusive().unwrap();
     let writer=Builder::existing(&s.join("SYSTEM.sqlite3"));
-    let [pair,web,pending,activate]=first_account::rows();
+    let [pair,web,record,pending,activate]=first_account::rows(&writer);
     writer.exec("PRAGMA foreign_keys=ON; PRAGMA synchronous=EXTRA; BEGIN IMMEDIATE;");
-    writer.exec(&pair);writer.exec(&web);writer.exec(&pending);writer.exec("COMMIT");
-    // Synthetic SQL evidence only: this fixture does not create or open a native SAM.
+    writer.exec(&pair);writer.exec(&web);writer.exec(&record);writer.exec(&pending);writer.exec("COMMIT");
+    // Synthetic SQL evidence only: this fixture does not create or open a verifier vault.
     writer.exec("BEGIN IMMEDIATE");writer.exec(&activate);writer.exec("COMMIT");
     (s,p)
 }
@@ -46,7 +46,7 @@ fn exact_original_publication_is_reusable_without_looking_at_unmounted_filesyste
             s.bind_bytes(1,&op.0)?;assert_eq!(unsafe{sqlite3_step(s.0)},100);
             let sha=s.array::<32>(0)?;s.done()?;Ok(sha)
         }).unwrap();
-        assert_eq!(hex(&recorded),"d2385e10d25e4681b83926ab28134d2c3fa82751845c480d6b4c4f5481016d06");
+        assert_eq!(hex(&recorded),"0816ce4b59a4fc93d642a8dba7c7442ed22916cf9547dda3287acbea9eb865f7");
         assert_eq!(m.publish_root(op,f,"报告").unwrap(),a);
         assert!(m.publish_root(op,f,"Reports").is_err());
         assert!(m.publish_root(OperationId([0x82;16]),f,"报告").is_err()); // name never overwritten
@@ -108,8 +108,8 @@ fn same_inode_system_marker_edit_after_both_inserts_rolls_back_share_and_receipt
         // boundary, without adding any pre-COMMIT callback to the product.
         let share=CString::new(format!("INSERT INTO root_share VALUES(X'{}',X'{}',X'{}',X'{}',X'e68aa5e5918a')",
             hex(&[0x91;16]),hex(&op.0),hex(&[0x44;16]),hex(&f.0))).unwrap();
-        let receipt=CString::new(format!("INSERT INTO operation VALUES(X'{}',3,X'{}',X'd2385e10d25e4681b83926ab28134d2c3fa82751845c480d6b4c4f5481016d06',1)",
-            hex(&op.0),hex(&[0x55;16]))).unwrap();
+        let receipt=CString::new(format!("INSERT INTO operation VALUES(X'{}',3,X'{}',X'0816ce4b59a4fc93d642a8dba7c7442ed22916cf9547dda3287acbea9eb865f7',1)",
+            hex(&op.0),"e92840bf31a7de28e8fb785a6fc79546")).unwrap();
         let mut after_inserts=false;
         let got=online.transaction(&w,c"BEGIN IMMEDIATE",|db,_|{
             db.fixed(&share)?;db.fixed(&receipt)?;after_inserts=true;

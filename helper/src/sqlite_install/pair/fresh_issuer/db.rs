@@ -61,7 +61,7 @@ mod tests{
     use super::*;
     use std::os::unix::fs::{OpenOptionsExt,PermissionsExt};
     #[test]
-    fn fresh_v17_original_db_pin_rejects_readable_fd_and_same_byte_named_replacement(){
+    fn fresh_v18_original_db_pin_rejects_readable_fd_and_same_byte_named_replacement(){
         let tmp=tempfile::tempdir().unwrap();
         let path=tmp.path().join("SYSTEM.sqlite3");
         std::fs::write(&path,b"fixture-owned").unwrap();

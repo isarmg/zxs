@@ -32,7 +32,7 @@ pub(crate) struct Receipt {
 /// or pathname selected by HTTP. The original reader keeps these OFDs live.
 pub(crate) struct Site<'a>{original:&'a SystemDir,marker:&'a ControlRead,pool:PoolId,schema:[u8;32]}
 #[derive(Clone,Copy)]
-pub(crate) struct Who{account:AccountId,credential:OperationId,generation:i64}
+pub(crate) struct Who{account:AccountId,canonical:AccountId,credential:OperationId,generation:i64}
 impl InitialReader{
     pub(crate) fn manual_site(&self)->Site<'_>{Site{original:&self.dir,marker:&self.marker,pool:self.pool,schema:self.expected_schema}}
 }
@@ -45,8 +45,8 @@ impl Site<'_>{
         let src=InitialReader::alongside(self.original,self.marker,self.pool,self.schema)?;
         let admin=src.at(|db,c|{
             let current=WebCurrent::select(db,&c)?.ok_or_else(denied)?;
-            if (current.account,current.op,current.generation)!=(who.account,who.credential,who.generation){return Err(denied());}
-            Ok(WebAdmin{source:&src,account:who.account,origin:who.credential,generation:who.generation})
+            if (current.account,current.canonical,current.op,current.generation)!=(who.account,who.canonical,who.credential,who.generation){return Err(denied());}
+            Ok(WebAdmin{source:&src,account:who.account,canonical:who.canonical,origin:who.credential,generation:who.generation})
         })?;
         f(admin)
     }
@@ -154,7 +154,7 @@ impl WebAdmin<'_>{
         })
     }
 
-    pub(crate) fn manual_author(&self)->Who{Who{account:self.account,credential:self.origin,generation:self.generation}}
+    pub(crate) fn manual_author(&self)->Who{Who{account:self.account,canonical:self.canonical,credential:self.origin,generation:self.generation}}
     pub(crate) fn manual_target(&self,file:FileId)->io::Result<Target>{
         self.manual_preview(file).map(|(t,_)|t)
     }
@@ -276,7 +276,7 @@ mod tests{
         let(s,pool,f,rw,_)=ordinary_pool(&temp);
         let source=InitialReader::open(&s,pool).unwrap();
         let independent=InitialReader::open(&s,pool).unwrap();
-        let client=SmbSession::fixture_authenticated(&source,"files.smb").unwrap();let tree=client.connect(rw).unwrap();
+        let client=SmbSession::fixture_authenticated(&source,"first.admin").unwrap();let tree=client.connect(rw).unwrap();
         let original=OperationId([0xd1;16]);let save=OperationId([0xd2;16]);let attempt=OperationId([0xd3;16]);
         let name="FinalCut.xlsx";let file=tree.create_file(original,name).unwrap().file;
         let mut material=OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(temp.0.join("material")).unwrap();

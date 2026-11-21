@@ -6,8 +6,7 @@ use crate::{smb::InheritedRun,system::reader::smb::runtime::QualifiedRustInstall
 use std::{num::NonZeroU64,sync::Arc};
 use zeroize::Zeroizing;
 
-pub(super) const RECORD_BYTES:usize=240;
-const MAGIC:&[u8;16]=b"ZXS-RUST-SMB-V1\0";
+use crate::system::shared_account::{VAULT_LENGTH as RECORD_BYTES,VAULT_MAGIC as MAGIC};
 pub(super) const DOMAIN:&str="ZXSLOCAL";
 
 /// Comparison data only. No public constructor or interpretation as a grant.
@@ -49,7 +48,9 @@ impl DecodedRecord {
         let [pool,init,setup,instance,binding,account,credential,record]=ids;
         let g=u64::from_be_bytes(bytes[152..160].try_into().map_err(|_|Rejected)?);
         let generation=NonZeroU64::new(g).filter(|n|n.get()<=i64::MAX as u64).ok_or(Rejected)?;
-        if init==setup || credential==init || (credential==setup)!=(g==1) || bytes[224..240]==[0;16] {
+        let original=[pool,init,setup,instance,binding];
+        if original.iter().enumerate().any(|(i,id)|original[..i].contains(id)) ||
+            (if g==1{credential!=setup}else{original.contains(&credential)}) || bytes[224..240]==[0;16]{
             return Err(Rejected);
         }
         let fields=Coordinates{pool,init,setup,instance,binding,account,credential,record,generation,

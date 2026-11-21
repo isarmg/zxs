@@ -9,8 +9,8 @@ use crate::system::reader::smb::file_create::Point;
 fn original_shared_namespace_page_is_not_a_native_directory_dump_or_body_check(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,ro)=enrollment(&t);
     let write=InitialReader::open(&s,p).unwrap();let read=InitialReader::open(&s,p).unwrap();
-    let ws=SmbSession::fixture_authenticated(&write,"files.smb").unwrap();let w=ws.connect(rw).unwrap();
-    let rs=SmbSession::fixture_authenticated(&read,"files.smb").unwrap();let r=rs.connect(ro).unwrap();
+    let ws=SmbSession::fixture_authenticated(&write,"first.admin").unwrap();let w=ws.connect(rw).unwrap();
+    let rs=SmbSession::fixture_authenticated(&read,"first.admin").unwrap();let r=rs.connect(ro).unwrap();
     let mut empty=r.root_files().unwrap();assert!(empty.next(3).unwrap().is_empty());
     let a=w.create_file(OperationId([0xd0;16]),"A").unwrap();
     let b=w.create_file(OperationId([0xd1;16]),"a").unwrap();
@@ -59,8 +59,8 @@ fn original_shared_namespace_page_is_not_a_native_directory_dump_or_body_check()
 fn failed_disclosure_never_moves_the_cursor_or_refreshes_the_grant(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,ro)=enrollment(&t);
     let write=InitialReader::open(&s,p).unwrap();let read=InitialReader::open(&s,p).unwrap();
-    let ws=SmbSession::fixture_authenticated(&write,"files.smb").unwrap();let w=ws.connect(rw).unwrap();
-    let rs=SmbSession::fixture_authenticated(&read,"files.smb").unwrap();let r=rs.connect(ro).unwrap();
+    let ws=SmbSession::fixture_authenticated(&write,"first.admin").unwrap();let w=ws.connect(rw).unwrap();
+    let rs=SmbSession::fixture_authenticated(&read,"first.admin").unwrap();let r=rs.connect(ro).unwrap();
     let web=write.authenticate_web("first.admin","correct horse battery staple").unwrap();
     let a=w.create_file(OperationId([0xe1;16]),"a").unwrap();
     let c=w.create_file(OperationId([0xe2;16]),"c").unwrap();
@@ -93,7 +93,7 @@ fn original_number_survives_alias_share_revision_and_reopen(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,_,rw,ro)=enrollment(&t);
     let op=OperationId([0xeb;16]);
     let (id,key)={
-        let src=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let src=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
         let a=sess.connect(rw).unwrap();let b=sess.connect(ro).unwrap();
         let first=a.create_file(op,"invoices").unwrap();let other=a.create_file(OperationId([0xec;16]),"another").unwrap();
         let old=b.open_current("invoices").unwrap();let key=old.native_key().unwrap();
@@ -105,7 +105,7 @@ fn original_number_survives_alias_share_revision_and_reopen(){
         let picked=a.open_current("invoices").unwrap();assert_eq!(picked.working_revision(),1);assert_eq!(picked.native_key().unwrap(),key);
         assert_eq!(a.create_file(op,"invoices").unwrap(),first);(first.file,key)
     };
-    let cold=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let tree=sess.connect(ro).unwrap();let got=tree.open_current("invoices").unwrap();
     assert_eq!((got.file(),got.native_key().unwrap()),(id,key));
     let web=cold.authenticate_web("first.admin","correct horse battery staple").unwrap();
@@ -118,7 +118,7 @@ fn original_number_survives_alias_share_revision_and_reopen(){
 fn internal_share_choice_does_not_reuse_an_old_current_grant(){
     use std::io::ErrorKind;
     let t=PrivateTemp::under(&std::env::temp_dir());let (s,p,_,rw,ro)=enrollment(&t);
-    let src=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let src=InitialReader::open(&s,p).unwrap();let sess=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let w=sess.connect(rw).unwrap();
     let r=sess.connect(ro).unwrap();
     let made=w.create_file(OperationId([0xbd;16]),"reports").unwrap();

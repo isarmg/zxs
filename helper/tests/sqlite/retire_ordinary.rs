@@ -5,7 +5,7 @@ use crate::sqlite_install::stage;
 use rusqlite::Connection;
 
 #[test]
-fn v17_has_exactly_the_audited_table_set(){
+fn v18_has_exactly_the_audited_table_set(){
     let mut db=Connection::open_in_memory().unwrap();
     engine::limits(&db).unwrap();
     db.execute_batch(stage::SCHEMA).unwrap();

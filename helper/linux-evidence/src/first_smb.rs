@@ -184,13 +184,14 @@ impl Libraries{
 const RUST_PREFIX:usize=224;
 const RUST_LEN:u64=240;
 const RUST_AUTH_DOMAIN:&[u8]=b"ZXSLOCAL";
+const RUST_V2:&[u8;16]=b"ZXS-RUST-SMB-V2\0";
 
 fn rust_login(prefix:&[u8;RUST_PREFIX])->io::Result<&[u8]>{
     let mut coords=prefix[24..152].chunks_exact(16);
     let generation=u64::from_be_bytes(prefix[152..160].try_into().expect("fixed generation"));
     let n=usize::from(prefix[17]);
     let init=&prefix[40..56];let setup=&prefix[56..72];let current=&prefix[120..136];
-    if &prefix[..16]!=b"ZXS-RUST-SMB-V1\0"||prefix[16]!=1||prefix[18..24]!=[0;6]||
+    if &prefix[..16]!=RUST_V2||prefix[16]!=1||prefix[18..24]!=[0;6]||
         coords.any(|id|id==[0;16])||generation==0||generation>i64::MAX as u64||!(1..=64).contains(&n)||
         init==setup||current==init||(generation==1)!=(current==setup){
         return Err(no());
@@ -202,25 +203,70 @@ fn rust_login(prefix:&[u8;RUST_PREFIX])->io::Result<&[u8]>{
         prefix[160+n..].iter().any(|&b|b!=0){return Err(no());}
     Ok(name)
 }
-impl Enrollment {
-    /// Consumes one approved offline enrollment. Only a separately granted,
-    /// root-owned, unused writable staging inode belongs at this boundary.
-    /// Never pass the ACTIVE named file. The original root issuer separately
-    /// owns the path and locks, consumes child exit, independently reopens
-    /// the stage and durably installs it before confirming SQL.
+
+/// The v2 schema has one configured account, in the same age-bound fixed
+/// position. Accept the grammatically exact public prefix, not a grant.
+#[doc(hidden)]
+pub fn require_rust_v2_public_prefix(prefix:&[u8;RUST_PREFIX])->io::Result<()>{
+    rust_login(prefix)?;
+    let install=prefix[24..104].chunks_exact(16).collect::<Vec<_>>();
+    if install.iter().enumerate().any(|(i,id)|install[..i].contains(id))
+        ||prefix[152..160]!=1u64.to_be_bytes()&&install.contains(&&prefix[120..136]){
+        return Err(no());
+    }
+    Ok(())
+}
+type WriteStamp=(u64,u64,u64);
+fn stage_stamp(file:&std::fs::File)->io::Result<WriteStamp>{
+    use std::os::unix::fs::MetadataExt;
+    let m=file.metadata()?;
+    if !m.is_file()||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.mode()&0o7777!=0o600{return Err(no());}
+    Ok((m.dev(),m.ino(),m.len()))
+}
+#[derive(Eq,PartialEq)]
+struct BlankStage{stamp:WriteStamp,changed:[i64;4]}
+impl BlankStage{
+    fn require(stage:&mut std::fs::File)->io::Result<Self>{
+        use std::{io::Seek,os::unix::fs::MetadataExt};
+        use rustix::fs::{OFlags,fcntl_getfl};
+        let flags=fcntl_getfl(&*stage)?;
+        let stamp=stage_stamp(stage)?;
+        let m=stage.metadata()?;
+        if flags.intersects(OFlags::PATH|OFlags::APPEND)||flags&OFlags::ACCMODE!=OFlags::WRONLY||
+            stamp.2!=0||stage.stream_position()?!=0||stage_stamp(stage)?!=stamp{
+            return Err(no());
+        }
+        Ok(Self{stamp,changed:[m.ctime(),m.ctime_nsec(),m.mtime(),m.mtime_nsec()]})
+    }
+}
+/// Own the chosen provider with a borrow of this exact original blank
+/// stage. Rechecking after input cannot select a different file or grant.
+pub struct RustV2Stage<'a>{enrollment:Enrollment,prefix:&'a [u8;RUST_PREFIX],stage:&'a mut std::fs::File,original:BlankStage}
+impl RustV2Stage<'_>{
     #[doc(hidden)]
-    pub fn seal_rust_v1(mut self,input:&[u8],prefix:&[u8;RUST_PREFIX],stage:&mut std::fs::File)->io::Result<()>{
-        use std::{io::{Seek,Write},os::unix::fs::MetadataExt};
+    pub fn seal(self,input:&[u8])->io::Result<()>{
+        if BlankStage::require(self.stage)?!=self.original{return Err(no());}
+        self.enrollment.seal_record(input,self.prefix,self.stage)
+    }
+}
+impl Enrollment {
+    /// Fixed new-profile stage qualification *before* requesting a secret.
+    /// The high caller has already proved the exact name/current grant;
+    /// we only receive that actual file, never a vault name or root FD.
+    #[doc(hidden)]
+    pub fn prepare_rust_v2<'s>(self,prefix:&'s [u8;RUST_PREFIX],stage:&'s mut std::fs::File)->io::Result<RustV2Stage<'s>>{
+        require_rust_v2_public_prefix(prefix)?;
+        let original=BlankStage::require(stage)?;
+        Ok(RustV2Stage{enrollment:self,prefix,stage,original})
+    }
+
+    fn seal_record(mut self,input:&[u8],prefix:&[u8;RUST_PREFIX],stage:&mut std::fs::File)->io::Result<()>{
+        use std::io::{Seek,Write};
         use rustix::fs::{OFlags,fcntl_getfl};
 
         let login=rust_login(prefix)?;
-        fn stamp(file:&std::fs::File)->io::Result<(u64,u64,u64)>{
-            let m=file.metadata()?;
-            if !m.is_file()||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.mode()&0o7777!=0o600{return Err(no());}
-            Ok((m.dev(),m.ino(),m.len()))
-        }
         let flags=fcntl_getfl(&*stage)?;
-        let (dev,ino,initial)=stamp(stage)?;
+        let (dev,ino,initial)=stage_stamp(stage)?;
         if initial!=0||stage.stream_position()?!=0||flags.contains(OFlags::APPEND)||
             !matches!(flags&OFlags::ACCMODE,OFlags::WRONLY|OFlags::RDWR){return Err(no());}
         let mut identity=[0u8;144]; // uppercase canonical login + exact enrolled domain, UTF-16LE
@@ -241,13 +287,13 @@ impl Enrollment {
         drop(self);
         permitted(&mac.lib)?;
         let key=mac.complete(&identity[..2*(login.len()+RUST_AUTH_DOMAIN.len())])?;
-        if *key==[0;16]||stamp(stage)?!=(dev,ino,0)||stage.stream_position()?!=0{return Err(no());}
+        if *key==[0;16]||stage_stamp(stage)?!=(dev,ino,0)||stage.stream_position()?!=0{return Err(no());}
         stage.write_all(prefix)?;
         stage.write_all(key)?;
         drop(mac);
-        if stamp(stage)?!=(dev,ino,RUST_LEN)||stage.stream_position()?!=RUST_LEN{return Err(no());}
+        if stage_stamp(stage)?!=(dev,ino,RUST_LEN)||stage.stream_position()?!=RUST_LEN{return Err(no());}
         stage.sync_all()?;
-        if stamp(stage)?!=(dev,ino,RUST_LEN){return Err(no());}
+        if stage_stamp(stage)?!=(dev,ino,RUST_LEN){return Err(no());}
         Ok(())
     }
 }

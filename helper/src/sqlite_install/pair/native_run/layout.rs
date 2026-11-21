@@ -11,7 +11,7 @@ use crate::{path_rules::MAX_PATH_BYTES,pinned::{Kind as PathKind,Pinned,helper_e
     smb_profile::{self,first::{Endpoint,Folder,Id,Mode,RecycleName,MAX_FOLDERS}},
     sqlite_install::{approval,catalog::{self,Initial},markers::OrdinaryMark,originals::{SelectedSystem,named_backing},pair::{domain::{
         give_live_approval,request_live_approval,require_lent_ex,sealed,FreshParent},observed,terminal::PublicConfirmation},
-        pair::{fresh_issuer::{ExplicitSubject,InitialDatabase,require_v17},recycle::Recycle},stage::random}};
+        pair::{fresh_issuer::{ExplicitSubject,InitialDatabase,require_v18},recycle::Recycle},stage::random}};
 use helper_linux_evidence::diagnostic_process::{OfflineSql,account_sql_descriptors};
 use rustix::{fs::{FlockOperation,flock},net::UCred,process::{DumpableBehavior,Gid,Signal,Uid,dumpable_behavior,
     getppid,set_dumpable_behavior,set_parent_process_death_signal}};
@@ -34,14 +34,14 @@ pub(in crate::sqlite_install::pair) struct Choice {
 struct FreshScope{subject:ExplicitSubject,helper:[u8;32],init_sha:[u8;32]}
 impl FreshScope{
     fn encode(self,out:&mut Vec<u8>)->io::Result<()>{
-        require_v17()?;
+        require_v18()?;
         if self.helper==[0;32]||self.init_sha==[0;32]{return Err(bad_question());}
         let (actor,uid,gid)=self.subject.tuple();
         out.extend_from_slice(FRESH);out.extend(actor);
         out.extend(uid.to_be_bytes());out.extend(gid.to_be_bytes());out.extend(self.helper);out.extend(self.init_sha);Ok(())
     }
     fn decode(bytes:&[u8])->io::Result<Self>{
-        require_v17()?;
+        require_v18()?;
         let r=bytes.strip_prefix(FRESH).filter(|r|r.len()==88).ok_or_else(bad_question)?;
         let subject=ExplicitSubject::checked(r[..16].try_into().map_err(|_|bad_question())?,
             u32::from_be_bytes(r[16..20].try_into().map_err(|_|bad_question())?),
@@ -430,12 +430,12 @@ mod tests {
         let mut wrong=raw.clone();wrong[53]=0;assert!(scoped_material(&wrong,Some(&chosen),pool,init).is_err());
         let mut wrong=raw;wrong.extend(b"/../other");assert!(scoped_material(&wrong,Some(&chosen),pool,init).is_err());
     }
-    #[test] fn fresh_v17_question_roundtrips_the_distinct_exact_init_and_helper_digests(){
+    #[test] fn fresh_v18_question_roundtrips_the_distinct_exact_init_and_helper_digests(){
         let q=Question{nonce:[7;32],actor:[1;16],pool:[2;16],init:[3;16],location:[9,10,15],
             system:"/fixture/S".into(),paths:vec!["/fixture/F".into()],fresh:Some(FreshScope{
                 subject:ExplicitSubject::checked([1;16],1001,1002).unwrap(),helper:[41;32],init_sha:[42;32],
             })};
-        if !cfg!(feature="private-fresh-zxs-v17"){assert!(q.encode().is_err());return;}
+        if !cfg!(feature="private-fresh-zxs-v18"){assert!(q.encode().is_err());return;}
         let raw=q.encode().unwrap();
         let real=Question::decode(&raw).unwrap().fresh.unwrap();
         assert_eq!((real.helper,real.init_sha),([41;32],[42;32]));

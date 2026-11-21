@@ -10,7 +10,7 @@ fn explicit_node_cannot_publish_from_a_staged_old_view_or_ignore_a_deferred_edit
     let t=PrivateTemp::under(&std::env::temp_dir());
     let (site,pool,_,rw,_)=ordinary_pool(&t);
     let src=InitialReader::open(&site,pool).unwrap();
-    let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=smb.connect(rw).unwrap();
     let born=tree.create_file(OperationId([0xa1;16]),"round.xlsx").unwrap();
     let initial=OperationId([0xa2;16]);
@@ -66,7 +66,7 @@ fn manual_publication_freezes_the_actual_view_without_copy_and_replays_only_its_
     let source=InitialReader::open(&s,pool).unwrap();
     let anon=InitialReader::open(&s,pool).unwrap();
     let admin=anon.authenticate_web("first.admin","correct horse battery staple").unwrap();
-    let smb=SmbSession::fixture_authenticated(&source,"files.smb").unwrap();
+    let smb=SmbSession::fixture_authenticated(&source,"first.admin").unwrap();
     let a=smb.connect(rw).unwrap();let b=smb.connect(ro).unwrap();
     let op=OperationId([0xb1;16]);let first=OperationId([0xb2;16]);let publish=OperationId([0xb3;16]);
     let file=a.create_file(op,"source.xlsx").unwrap().file;
@@ -118,7 +118,7 @@ fn each_manual_node_can_start_the_next_physical_delta_immediately_without_full()
     let (s,pool,f,rw,ro)=ordinary_pool(&t);
     let source=InitialReader::open(&s,pool).unwrap();let management=InitialReader::open(&s,pool).unwrap();
     let admin=management.authenticate_web("first.admin","correct horse battery staple").unwrap();
-    let smb=SmbSession::fixture_authenticated(&source,"files.smb").unwrap();
+    let smb=SmbSession::fixture_authenticated(&source,"first.admin").unwrap();
     let a=smb.connect(rw).unwrap();let b=smb.connect(ro).unwrap();
     let name="Four.xlsx";
     let id=|x:u8|OperationId([x;16]);
@@ -167,7 +167,7 @@ fn each_manual_node_can_start_the_next_physical_delta_immediately_without_full()
     assert_eq!(count_manual(&source,file),4);
     assert_eq!(std::fs::read_dir(f.join(format!("Four-{file}.xlsx"))).unwrap().count(),17);
 
-    let cold=InitialReader::open(&s,pool).unwrap();let session=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,pool).unwrap();let session=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let reader=session.connect(ro).unwrap();
     for (node,bytes) in [(n1.node,b"AxyDE".as_slice()),(n2.node,b"Axy\0\0\0"),(n3.node,b"Axy\0W\0"),(n4.node,b"XYy\0W\0")] {
         let found=reader.open_version(name,node).unwrap();let mut all=Vec::new();
@@ -184,7 +184,7 @@ fn true_next_writer_preserves_partial_tail_before_raising_the_next_original_wind
     let t=PrivateTemp::under(&std::env::temp_dir());
     let (s,pool,f,rw,ro)=ordinary_pool(&t);let src=InitialReader::open(&s,pool).unwrap();
     let independent=InitialReader::open(&s,pool).unwrap();
-    let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let a=smb.connect(rw).unwrap();let b=smb.connect(ro).unwrap();
     let id=|x:u8|OperationId([x;16]);let name="Gap";
     let file=a.create_file(id(0xc1),name).unwrap().file;
@@ -221,7 +221,7 @@ fn one_flush_uses_one_work_save_for_disjoint_writes_and_a_truncate_expand_prefix
     use crate::ordinary::working_round::Span;
     let tip=PrivateTemp::under(&std::env::temp_dir());
     let (s,p,f,rw,ro)=ordinary_pool(&tip);
-    let src=InitialReader::open(&s,p).unwrap();let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let src=InitialReader::open(&s,p).unwrap();let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let a=session.connect(rw).unwrap();let b=session.connect(ro).unwrap();
     let name="Packed.txt";let op=|x:u8|OperationId([x;16]);
     let file=a.create_file(op(0xd1),name).unwrap().file;
@@ -250,7 +250,7 @@ fn replacing_unconfirmed_new_rounds_keeps_only_names_that_were_actually_created(
     let t=PrivateTemp::under(&std::env::temp_dir());let (site,p,f,rw,ro)=ordinary_pool(&t);
     let r=InitialReader::open(&site,p).unwrap();let a=InitialReader::open(&site,p).unwrap();
     let admin=a.authenticate_web("first.admin","correct horse battery staple").unwrap();
-    let smb=SmbSession::fixture_authenticated(&r,"files.smb").unwrap();
+    let smb=SmbSession::fixture_authenticated(&r,"first.admin").unwrap();
     let write=smb.connect(rw).unwrap();let read=smb.connect(ro).unwrap();
     let op=|x:u8|OperationId([x;16]);let name="Second";
     let file=write.create_file(op(0xe0),name).unwrap().file;
@@ -294,7 +294,7 @@ fn replacing_unconfirmed_new_rounds_keeps_only_names_that_were_actually_created(
     let second=admin.freeze(op(0xe6),admin.manual_target(file).unwrap()).unwrap();
     assert_eq!(second.target.parent,Some(first.original));
     let cold=InitialReader::open(&site,p).unwrap();
-    let selected=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let selected=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let tree=selected.connect(ro).unwrap();let mut bytes=Vec::new();
     tree.open_version(name,first.node).unwrap().range_to(0,4,&mut bytes).unwrap();assert_eq!(bytes,b"AAAA");
     bytes.clear();tree.open_version(name,second.node).unwrap().range_to(0,4,&mut bytes).unwrap();assert_eq!(bytes,b"ZAAA");

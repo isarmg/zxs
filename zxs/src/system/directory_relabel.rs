@@ -400,7 +400,7 @@ mod tests{
     fn exact_pending_names_and_single_location_survive_real_directory_rename(){
         let tmp=PrivateTemp::under(&std::env::temp_dir());
         let(s,pool,f,rw,_)=ordinary_pool(&tmp);let src=InitialReader::open(&s,pool).unwrap();
-        let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=session.connect(rw).unwrap();
+        let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=session.connect(rw).unwrap();
         let (_,root)=tree.ordinary_route(&[],true).unwrap();
         let (born,held)=tree.make_ordinary_directory(&root,op(0x61),"Reports",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
         let(catalog,route)=tree.ordinary_route(&["Reports".into()],true).unwrap();
@@ -514,7 +514,7 @@ mod tests{
         let tmp=PrivateTemp::under(&std::env::temp_dir());
         let(s,pool,f,rw,_)=ordinary_pool(&tmp);let src=InitialReader::open(&s,pool).unwrap();
         let another=InitialReader::open(&s,pool).unwrap();
-        let session=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=session.connect(rw).unwrap();
+        let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=session.connect(rw).unwrap();
         let (_,root)=tree.ordinary_route(&[],true).unwrap();
         let (born,open)=tree.make_ordinary_directory(&root,op(0x71),"Draft",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
         let mark=std::fs::metadata(&open.directory().path).unwrap().ino();

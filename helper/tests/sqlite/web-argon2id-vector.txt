@@ -1,0 +1,3 @@
+# Independent Argon2id vector for publicly specified test input, not a live verifier.
+web_salt=308211aa0be041b823db6d237e9d0c3c
+web_verifier=61fc094958ed8d2534cf357f3f74bd9e743f512adedb0bc93237c2223ad341b8

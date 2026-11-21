@@ -3,6 +3,7 @@
 //! returns no VAULT, password/hash, fd, session, tree or write grant.
 #![allow(dead_code)] // Only the authenticated preflight entry may connect this.
 use super::{ActiveRustMeta,Connection,Catalog,InitialReader,Mode,RustPlan,denied};
+use crate::system::reader::credential::Pair;
 use crate::{Entity,PoolId,Role,VolumeId,fs,system::{ClaimRow,lease::SystemDir,reader::zxs_sql_path_limit}};
 use std::{fs::File,io,mem::MaybeUninit,net::IpAddr,os::fd::AsRawFd,path::{Path,PathBuf}};
 
@@ -52,7 +53,7 @@ pub(crate) struct PreflightEpoch{
 }
 impl PreflightEpoch{
     fn from_current(active:ActiveRustMeta)->Self{
-        Self{account:active.smb.0,op:active.epoch.op.0,record:active.record,sid:active.sid,
+        Self{account:active.canonical.0,op:active.epoch.op.0,record:active.record,sid:active.sid,
             generation:active.epoch.generation,login:active.login}
     }
 }
@@ -114,14 +115,23 @@ fn open_projected(w:&PreflightRead<'_>,read_only:bool,live:&impl Fn()->io::Resul
     Ok((source,plan))
 }
 
-fn checked_scope(source:&InitialReader,plan:&RustPlan,w:&PreflightRead<'_>,read_only:bool,
+fn checked_scope(source:&InitialReader,plan:&RustPlan,w:&PreflightRead<'_>,read_only:bool,web:bool,
     live:&impl Fn()->io::Result<()>)->io::Result<PreflightSelection>{
     let reached=||{
         require_projection(&source.dir.root.file,source.dir.root.entity,w.original_system,read_only)?;
         live()
     };
     let selected=source.transaction_before_commit(&source.conn,c"BEGIN",|db,c|{
-        plan.preflight_at(db,&c,w.original_init_actor,w.approved_install)
+        let selected=plan.preflight_at(db,&c,w.original_init_actor,w.approved_install)?;
+        if web{
+            // Web alone can qualify/load its salted verifier in this very
+            // snapshot. No verifier bytes are in the returned startup facts.
+            let Some((account,epoch,_verifier))=Pair::qualified_web(db,&c)? else{return Err(denied());};
+            if (account.canonical.0,epoch.op,epoch.generation,epoch.record,account.login.as_str())!=
+               (selected.epoch.account,selected.epoch.op,selected.epoch.generation,selected.epoch.record,selected.epoch.login.as_str())
+            {return Err(denied());}
+        }
+        Ok(selected)
     },&reached)?;
     source.dir.require()?;source.marker.require(&source.dir.root)?;
     reached()?;
@@ -133,17 +143,17 @@ fn checked_scope(source:&InitialReader,plan:&RustPlan,w:&PreflightRead<'_>,read_
 /// and never opens the vault, F/R or a write DB.
 pub(crate) fn preflight_read(w:PreflightRead<'_>,live:impl Fn()->io::Result<()>)->io::Result<PreflightSelection>{
     let (source,plan)=open_projected(&w,true,&live)?;
-    checked_scope(&source,&plan,&w,true,&live)
+    checked_scope(&source,&plan,&w,true,false,&live)
 }
 
 /// The normal ZXS application opens Web on the *same* original site and
 /// SYSTEM. Return the already validated reader, never a path to reopen.
 /// The private Web child must have separately matched its original process
 /// and socket. A read-only original stays read-only, not silently upgraded.
-pub(crate) fn web_reader(w:PreflightRead<'_>,read_only:bool,live:impl Fn()->io::Result<()>)->io::Result<InitialReader>{
+pub(crate) fn web_reader(w:PreflightRead<'_>,read_only:bool,live:impl Fn()->io::Result<()>)->io::Result<(InitialReader,PreflightEpoch)>{
     let (source,plan)=open_projected(&w,read_only,&live)?;
-    checked_scope(&source,&plan,&w,read_only,&live)?;
-    Ok(source)
+    let selected=checked_scope(&source,&plan,&w,read_only,true,&live)?;
+    Ok((source,selected.epoch))
 }
 
 #[cfg(test)]

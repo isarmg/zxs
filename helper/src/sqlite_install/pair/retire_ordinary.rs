@@ -1,4 +1,4 @@
-//! H04 read-only evidence for one explicitly selected original F. v17
+//! H04 read-only evidence for one explicitly selected original F. v18
 //! has no retirement operation, unpublish or state writer. A clear observation
 //! is not a durable receipt, permission to retire, or a reusable lease.
 use super::{Id,observed};
@@ -66,17 +66,17 @@ impl std::fmt::Display for ProtectedVolume{
 impl std::error::Error for ProtectedVolume{}
 pub(super) fn protected_volume(e:&io::Error)->bool{e.get_ref().is_some_and(|x|x.is::<ProtectedVolume>())}
 
-pub(super) fn compiled_v17()->io::Result<()>{super::fresh_issuer::compiled_v17()}
-fn template()->io::Result<Canonical>{compiled_v17()?;Canonical::new()}
+pub(super) fn compiled_v18()->io::Result<()>{super::fresh_issuer::compiled_v18()}
+fn template()->io::Result<Canonical>{compiled_v18()?;Canonical::new()}
 
-/// Some v17 relationships have no index by volume. Bound each complete
+/// Some v18 relationships have no index by volume. Bound each complete
 /// input first, in the SAME transaction. A partial search never gives a
 /// negative witness. Only static table names, no raw row data, are used.
 fn complete_small_cut(tx:&Transaction<'_>)->io::Result<()>{
     for name in V17_TABLES{
         let query=format!("SELECT count(*) FROM (SELECT 1 FROM main.{name} LIMIT ?1)");
         let n:i64=tx.query_row(&query,[ROW_CEILING+1],|r|r.get(0)).map_err(sql)?;
-        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded v17 snapshot; not cleared"));}
+        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded v18 snapshot; not cleared"));}
     }
     let mut verify=tx.prepare("PRAGMA main.foreign_key_check").map_err(sql)?;
     if verify.column_count()!=4{return Err(unknown());}

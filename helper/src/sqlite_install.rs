@@ -12,7 +12,7 @@ mod receipt;
 mod pair;
 mod discovery;
 pub(crate) use discovery::Discovery;
-pub(crate) use pair::{RetirementCheck,ImportCheck,Setup,check_deployment,exec_layout_sql_child as layout_sql_worker,exec_first_browser,rust_account_worker,rust_vault_worker,SmbPasswordReset,WebAdministratorReset,web_admin_reset_worker};
+pub(crate) use pair::{RetirementCheck,ImportCheck,Setup,check_deployment,exec_layout_sql_child as layout_sql_worker,exec_first_browser,rust_account_worker,rust_vault_worker,SharedAccountReset};
 
 pub(crate) use pair::{confirm_copy_repair,exec_copy_repair_browser};
 
@@ -43,9 +43,9 @@ impl Installation{
         let mut first=args.next().and_then(|s|s.into_string().ok());
         let browser=first.as_deref()==Some("web");
         if browser{first=args.next().and_then(|s|s.into_string().ok());}
-        let private=first.as_deref()==Some("new-zxs-v17")&&!browser&&cfg!(feature="private-fresh-zxs-v17");
+        let private=first.as_deref()==Some("new-zxs-v18")&&!browser&&cfg!(feature="private-fresh-zxs-v18");
         let action=match first.as_deref(){
-            Some("new-zxs-v17") if private=>InitAction::Apply(Purpose::Fresh),
+            Some("new-zxs-v18") if private=>InitAction::Apply(Purpose::Fresh),
             Some("new")=>InitAction::Apply(Purpose::Fresh),Some("resume")=>InitAction::Apply(Purpose::Original),
             Some("receipt") if !browser=>InitAction::Receipt,
             _=>return Err("choose new, resume or receipt explicitly; never automatically switch")};
@@ -83,7 +83,7 @@ impl Installation{
                 let result=stage::install(proposal.authorize(terminal)?)?;
                 if let Some(request)=fresh{
                     let sha=request.iter().map(|b|format!("{b:02x}")).collect::<String>();
-                    return Ok((0,format!("fresh-v17-init=confirmed pool={} operation={} init_request_sha256={sha}; original marker group confirmed, no deployment or credentials issued",
+                    return Ok((0,format!("fresh-v18-init=confirmed pool={} operation={} init_request_sha256={sha}; original marker group confirmed, no deployment or credentials issued",
                         hex(result.pool),hex(result.op))));
                 }
                 Ok((0,format!("{} pool={} operation={}; neither network login nor current disk health is certified",
@@ -106,10 +106,10 @@ mod command_cases{
     use super::*;
     fn args(s:&str)->impl Iterator<Item=OsString>+'_ {s.split(' ').map(OsString::from)}
     #[test]
-    fn fresh_v17_init_is_a_distinct_explicit_terminal_only_mode(){
+    fn fresh_v18_init_is_a_distinct_explicit_terminal_only_mode(){
         let d=|v:&str|v.repeat(16);
-        let t=format!("new-zxs-v17 --init-actor {} --storage-uid 1001 --storage-gid 1002 --op {} --approval {} --system /s --recycle /r --data /f",d("31"),d("32"),d("33"));
-        if cfg!(feature="private-fresh-zxs-v17"){
+        let t=format!("new-zxs-v18 --init-actor {} --storage-uid 1001 --storage-gid 1002 --op {} --approval {} --system /s --recycle /r --data /f",d("31"),d("32"),d("33"));
+        if cfg!(feature="private-fresh-zxs-v18"){
             let v=Installation::parse(args(&t)).unwrap();
             assert!(v.private&&!v.browser&&matches!(v.action,InitAction::Apply(Purpose::Fresh)));
         }else{assert!(Installation::parse(args(&t)).is_err());}

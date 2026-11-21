@@ -1,30 +1,25 @@
-//! Two and only two protocol identities in one SQLite pool. Web never selects
-//! the SMB secret. Neither an account row nor a share definition opens FILE.
+//! One shared identity in the original SQLite pool. A Web role remains a
+//! separate authority with no SMB secret or FILE body access.
 use super::{Catalog,Connection,InitialReader,check,sqlite3_step};
-use crate::{OperationId,PoolId,fs::invalid,identity::AccountId,password::Verifier};
+use crate::{OperationId,identity::AccountId,password::Verifier};
 use std::io;
 
-use super::credential::{Pair,Role};
-#[cfg(test)] use super::credential::setup_request;
+use super::credential::Pair;
 
 #[derive(Eq,PartialEq)]
-struct WebCurrent{account:AccountId,op:OperationId,generation:i64,login:String,smb_login:String,verifier:Verifier}
+struct WebCurrent{account:AccountId,canonical:AccountId,op:OperationId,generation:i64,login:String,verifier:Verifier}
 impl WebCurrent{
     fn select(db:&Connection,c:&Catalog)->io::Result<Option<Self>>{
-        let Some(pair)=Pair::confirmed(db,c)? else{return Ok(None)};
-        let Some(epoch)=pair.epoch(db,c,Role::Web)? else{return Ok(None)};
-        let s=db.prepare(c"SELECT salt,verifier FROM main.web_password WHERE slot=1 AND credential_op=?1 AND generation=?2")?;
-        s.bind_bytes(1,&epoch.op.0)?;s.bind_integer(2,epoch.generation)?;
-        match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(invalid("missing selected Web credential")),rc=>{check(rc)?;return Err(invalid("cannot select Web credential"));}}
-        let verifier=Verifier::new(s.array(0)?,s.array(1)?);s.done()?;
-        Ok(Some(Self{account:pair.web,op:epoch.op,generation:epoch.generation,login:pair.web_login,smb_login:pair.smb_login,verifier}))
+        let Some((pair,epoch,verifier))=Pair::qualified_web(db,c)? else{return Ok(None)};
+        Ok(Some(Self{account:pair.web,canonical:pair.canonical,op:OperationId(epoch.op),
+            generation:epoch.generation,login:pair.login,verifier}))
     }
 }
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"Web credentials not accepted")}
 
 /// Only this type can issue a Web management operation. It has no data-open
 /// methods, never accepts a remote SID or a claimed account id.
-pub(crate) struct WebAdmin<'a>{source:&'a InitialReader,account:AccountId,origin:OperationId,generation:i64}
+pub(crate) struct WebAdmin<'a>{source:&'a InitialReader,account:AccountId,canonical:AccountId,origin:OperationId,generation:i64}
 impl InitialReader{
     pub(crate) fn authenticate_web(&self,login:&str,password:&str)->io::Result<WebAdmin<'_>>{
         self.authenticate_web_after(login,password,||Ok(()))
@@ -36,7 +31,7 @@ impl InitialReader{
         after()?;
         self.at(|db,c|{
             if WebCurrent::select(db,&c)?.as_ref()!=Some(&m){return Err(denied());}
-            Ok(WebAdmin{source:self,account:m.account,origin:m.op,generation:m.generation})
+            Ok(WebAdmin{source:self,account:m.account,canonical:m.canonical,origin:m.op,generation:m.generation})
         })
     }
 }
@@ -70,27 +65,10 @@ impl WebAdmin<'_>{
     }
     fn current(&self,db:&Connection,c:&Catalog)->io::Result<WebCurrent>{
         let m=WebCurrent::select(db,c)?.ok_or_else(denied)?;
-        if (m.account,m.op,m.generation)!=(self.account,self.origin,self.generation){return Err(denied());}Ok(m)
+        if (m.account,m.canonical,m.op,m.generation)!=(self.account,self.canonical,self.origin,self.generation){return Err(denied());}Ok(m)
     }
     #[cfg(test)]
     pub(super) fn id(&self)->io::Result<AccountId>{self.source.at(|db,c|{self.current(db,&c)?;Ok(self.account)})}
-}
-
-/// Same nonsecret request and receipt helper must implement independently.
-/// Do not ask for either password merely to resolve a lost setup response.
-#[cfg(test)]
-pub(super) fn setup_state(src:&InitialReader,op:OperationId,actor:[u8;16],approval:[u8;16],
-    instance:[u8;16],bound:[u8;32],web:&[u8],smb:&[u8],sid:&[u8;28])->io::Result<Option<(bool,AccountId,AccountId)>>{
-    let q=std::ffi::CString::new(include_str!("original-first.sql")).expect("fixed SQL");
-    src.at(|db,c|{
-        let sha=setup_request(c.birth.pool,c.birth.op,op,actor,approval,instance,bound,web,smb,sid)?;let s=db.prepare(&q)?;
-        for(i,b)in [c.birth.pool.0.as_slice(),op.0.as_slice(),actor.as_slice(),sha.as_slice(),c.birth.op.0.as_slice(),
-                    approval.as_slice(),web,smb,sid.as_slice(),instance.as_slice(),bound.as_slice()].into_iter().enumerate(){s.bind_bytes(i as i32+1,b)?;}
-        match unsafe{sqlite3_step(s.0)}{101=>Ok(None),100=>{
-            let committed=match s.byte(0)?{0=>false,1=>true,_=>return Err(invalid("invalid account original state"))};
-            let result=(committed,AccountId(s.array(1)?),AccountId(s.array(2)?));s.done()?;Ok(Some(result))
-        },rc=>{check(rc)?;Err(invalid("unexpected original pair result"))}}
-    })
 }
 
 #[cfg(test)]

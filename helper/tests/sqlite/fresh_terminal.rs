@@ -7,10 +7,10 @@ use rustix::{fs::{OFlags,fcntl_getfl,fcntl_setfl},io::Errno,
 use std::{fs::File,io,process::{Command,Stdio},time::{Duration,Instant}};
 
 const CHILD:&str="HELPER_UNIT_FRESH_PROMPT_CHILD";
-const TEST:&str="sqlite_install::pair::fresh_issuer::terminal_tests::fresh_v17_both_real_confirmations_remain_eligible_after_the_original_scoped_phase";
+const TEST:&str="sqlite_install::pair::fresh_issuer::terminal_tests::fresh_v18_one_real_consent_allows_original_scoped_phase_without_second_prompt";
 
 #[test]
-fn fresh_v17_both_real_confirmations_remain_eligible_after_the_original_scoped_phase(){
+fn fresh_v18_one_real_consent_allows_original_scoped_phase_without_second_prompt(){
     if std::env::var_os(CHILD).is_some(){
         assert!(!getuid().is_root());
         let stdin=io::stdin();setsid().unwrap();
@@ -18,9 +18,8 @@ fn fresh_v17_both_real_confirmations_remain_eligible_after_the_original_scoped_p
         let tty=PublicConfirmation::select().unwrap();
         tty.confirm_fresh_zxs("fixture initial preview (no site, no disk, no password)\n".into()).unwrap();
         filesystem_phase(&||tty.check(),|check|{check()?;check()}).unwrap();
-        tty.confirm_rust_credential(false,false,"fixture next non-secret approval\n".into()).unwrap();
         filesystem_phase(&||tty.check(),|check|check()).unwrap();
-        tty.report("TLS-FIXTURE-BOTH-PROMPTS-CLOSED\n").unwrap();
+        tty.report("FRESH-FIXTURE-ONE-PROMPT-CLOSED\n").unwrap();
         return;
     }
     if getuid().is_root(){return;} // this fixture must never turn into root maintenance
@@ -35,7 +34,7 @@ fn fresh_v17_both_real_confirmations_remain_eligible_after_the_original_scoped_p
     let pass=(||->io::Result<()>{
         let stop=Instant::now()+Duration::from_secs(12);
         let mut observed=Vec::new();let mut stage=0;let mut buf=[0;2048];
-        let stages=[b"ISSUE-ZXS-V17".as_slice(),b"ENROLL-RUST-SMB".as_slice()];
+        let stages=[b"ISSUE-ZXS-V18".as_slice()];
         while Instant::now()<stop{
             match rustix::io::read(&master,&mut buf[..]){
                 Ok(n)=>observed.extend_from_slice(&buf[..n]),
@@ -61,7 +60,7 @@ fn fresh_v17_both_real_confirmations_remain_eligible_after_the_original_scoped_p
                 }
             }
             if let Some(done)=child.try_wait()?{
-                return if done.success()&&stage==2&&observed.windows(b"TLS-FIXTURE-BOTH-PROMPTS-CLOSED".len()).any(|v|v==b"TLS-FIXTURE-BOTH-PROMPTS-CLOSED"){
+                return if done.success()&&stage==1&&observed.windows(b"FRESH-FIXTURE-ONE-PROMPT-CLOSED".len()).any(|v|v==b"FRESH-FIXTURE-ONE-PROMPT-CLOSED"){
                     Ok(())
                 }else{Err(io::Error::other(format!("fixture child {done}, answered {stage}: {}",String::from_utf8_lossy(&observed))))};
             }

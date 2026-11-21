@@ -5,6 +5,7 @@ use crate::{OperationId,PoolId,Role,VolumeId,fs::{self,invalid,ComponentLimit,Na
 use std::{collections::BTreeSet,ffi::CStr,io,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
 
 mod lease;
+pub(crate) mod shared_account;
 pub(crate) mod reader;
 
 pub(crate) const SCHEMA:&str=include_str!("system/schema.sql");

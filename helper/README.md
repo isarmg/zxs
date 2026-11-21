@@ -80,12 +80,11 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 ## 本机部署与离线维护
 
-[原部署的 Web 管理员离线重置与只读回执](docs/web-admin-offline-reset.md)只认当前原 v17 站点；不更改 SMB 凭据。
-[原 SMB 账户的独立离线重置与只读回执](docs/smb-offline-reset.md)使用同一原站点与确定前序，既不改 Web 凭据，也不接管未知暂存。
+[共用账户离线重置与只读回执](docs/shared-account-reset.md)只认确切原 v18 站点与同一原前序。Web 与 SMB 使用一个用户名和口令；两者只能切到同一已确认代次。该写路径默认禁用，不接管未知暂存。
 
 - [无状态发现](docs/discovery.md)只根据本次实际挂载和固定的 SYSTEM 元数据，或本会话给出的绝对目录，报告候选。候选不是授权，不自动选盘或初始化。
 - [新池、同一原 INIT 续作与查询](docs/sqlite-first-install.md)要求当前有前台授权、明确提供原 INIT 主体和数值 UID/GID；不设置 Helper 偏好或保存授权。继续原单需要原件及原标记，查询不自动修改。
-- [新 v17 私有首设](docs/private-fresh-zxs-v17.md)可从原始 INIT 依据、单 ELF 的独立预期 SHA-256 和实际前台确认，接原低权限的 SQLite 与新凭据发行。此处没有迁移、服务启停或自动接管。
+- [新 v18 私有首设](docs/private-fresh-zxs-v18.md)可从原始 INIT 依据、单 ELF 的独立预期 SHA-256 和实际前台确认，接原低权限的 SQLite 与新凭据发行。此处没有迁移、服务启停或自动接管。
 - [复查原 ZXS 部署](docs/reattach-check.md)使用 ZXS 自己的受保护持久依据，只有只读结论，不采纳、不重装、不授权维护。
 - [普通卷退登记预检](docs/retire-ordinary-preflight.md)只核本次真实原件与已知阻挡，不是真的退登记，也不表示可移除、擦除或卸载。
 

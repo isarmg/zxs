@@ -33,7 +33,8 @@ Use a distinct clean worktree to reproduce the build separately.
 
 A digest and an ELF check are build evidence, not installation approval or
 SMB/Web acceptance. Fresh site setup still uses independent administrator
-approval and the original protected v17 deployment record. An optional
+approval, the exact fresh v18 shared-account SYSTEM and the original
+protected deployment/site records. No v17 pool is upgraded. An optional
 Helper must embed the complete unchanged bytes, not confer trust by hashing
 an arbitrary installed executable. The primary runtime qualification is
 separate on the exact accepted Linux target and newly prepared test pool;

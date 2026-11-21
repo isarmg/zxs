@@ -1,7 +1,7 @@
 //! Exact foreground-approved offline Rust vault providers.
 //! No stored Helper approval, caller-named library or runtime dependency.
 use crate::{fs_tools::RuntimeFile,pinned::helper_elf::ForegroundElf,sqlite_install::pair::{bad,smb_policy}};
-use crate::sqlite_install::pair::fresh_issuer::{CryptoPins,compiled_v17,require_v17};
+use crate::sqlite_install::pair::fresh_issuer::{CryptoPins,compiled_v18,require_v18};
 use helper_linux_evidence::first_smb::{Enrollment,Libraries};
 use std::io;
 
@@ -13,10 +13,10 @@ pub(in crate::sqlite_install::pair) struct Cryptography{
 }
 impl Cryptography{
     pub(in crate::sqlite_install::pair) fn fresh(pins:CryptoPins)->io::Result<Self>{
-        require_v17()?;Self::for_deployed(pins)
+        require_v18()?;Self::for_deployed(pins)
     }
     pub(in crate::sqlite_install::pair) fn for_deployed(pins:CryptoPins)->io::Result<Self>{
-        compiled_v17()?;pins.check()?;smb_policy::system_policy()?;
+        compiled_v18()?;pins.check()?;smb_policy::system_policy()?;
         if !smb_policy::clean_environment(){return Err(no());}
         let helper=ForegroundElf::host()?;
         helper.require_independent_digest(&pins.helper)?;
@@ -26,7 +26,7 @@ impl Cryptography{
     }
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
         self.helper.require()?;
-        compiled_v17()?;
+        compiled_v18()?;
         self.gcrypt.recheck()?;self.gpgerr.recheck()?;smb_policy::system_policy()
     }
     pub(in crate::sqlite_install::pair) fn before_dropping(&self)->io::Result<Libraries>{

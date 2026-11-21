@@ -90,7 +90,7 @@ mod tests{
     fn confirmed_history_pages_keep_the_first_unreturned_ordinal_and_original_links(){
         let temp=PrivateTemp::under(&std::env::temp_dir());let (s,p,path,rw,_)=ordinary_pool(&temp);
         let src=InitialReader::open(&s,p).unwrap();let read=InitialReader::open(&s,p).unwrap();
-        let account=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let account=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
         let tree=account.connect(rw).unwrap();
         let admin=read.authenticate_web("first.admin","correct horse battery staple").unwrap();
         let file=tree.create_file(OperationId([0x7f;16]),"Tracked.txt").unwrap().file;

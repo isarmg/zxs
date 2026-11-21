@@ -45,7 +45,7 @@ fn finish(db:&Builder,op:OperationId)->io::Result<()>{
 fn one_current_location_keeps_birth_and_readers_separate_from_a_stale_delete_or_regrant(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,_)=ordinary_pool(&t);
     let src=InitialReader::open(&s,p).unwrap();
-    let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let opened=smb.connect(rw).unwrap();
     let b=opened.create_file(OperationId([0xb1;16]),"Report.txt").unwrap();
     // A real writer leaves physically synced but unconfirmed bytes after
@@ -127,7 +127,7 @@ fn one_current_location_keeps_birth_and_readers_separate_from_a_stale_delete_or_
     let new=OperationId([0xb8;16]);ticket(&raw,new,b.file,deleting,rw,f_id,"Return.txt",2).unwrap();
     // Even though it is still the original raw role1 position, its name is
     // not an ordinary F slot. A real pending target may not be stolen.
-    let current=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let granted=current.connect(rw).unwrap();
+    let current=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let granted=current.connect(rw).unwrap();
     assert!(granted.create_file(OperationId([0xb9;16]),"Return.txt").is_err());
     finish(&raw,new).unwrap();
     assert_eq!(at(&src,b.file),(new,3,Role::File,f_id,"Return.txt".into()));
@@ -157,7 +157,7 @@ fn another_ordinary_volume_needs_two_fresh_same_account_settings_and_one_destina
     let publish=admin.publish_root(op(0xe0),dst,"destination").unwrap();
     let a=admin.share_setting(rw).unwrap();
     let desired=admin.set_share_mode(op(0xe1),publish.share,publish.op,Mode::ReadWrite).unwrap();
-    let current=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let current=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let source=current.connect(rw).unwrap();
     let file=source.create_file(op(0xe2),"Source").unwrap();
     let source_place=at(&src,file.file);

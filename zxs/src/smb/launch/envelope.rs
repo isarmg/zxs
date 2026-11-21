@@ -1,19 +1,19 @@
 //! Bounded framing of the private supervisor's public START payload.
 //! These values do not prove the supervisor or grant use of the vault.
-use super::{Fault,Result};
+use super::{Fault,Result,cohort::{self,PairOffer,WIRE_BYTES}};
 use std::path::Path;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 pub(super) mod send;
 
-const START_MAGIC:&[u8;16]=b"ZXS-RUST/START1\0";
-const READY_MAGIC:&[u8;16]=b"ZXS-RUST/READY1\0";
-const ENV_MAGIC:&[u8;19]=b"ZXS-RUST-SMB-ENV-1\0";
+const START_MAGIC:&[u8;16]=b"ZXS-RUST/START2\0";
+const READY_MAGIC:&[u8;16]=b"ZXS-RUST/PREP02\0";
+const ENV_MAGIC:&[u8;19]=b"ZXS-RUST-SMB-ENV-2\0";
 pub(super) const START_BYTES:usize=80;
 pub(super) const MAX_LISTENERS:usize=16;
 const MAX_PATH:usize=4096;
 const MAX_PLAN:usize=17_885;
 pub(super) const ENV_MAX:usize=ENV_MAGIC.len()+32+32+4+4+8+8+2+MAX_PATH+2+MAX_PLAN+
-    1+MAX_LISTENERS*8+16*3+40+28+8+1+64;
+    1+MAX_LISTENERS*8+16*3+40+28+8+1+64+WIRE_BYTES;
 
 #[must_use]
 pub(super) struct Start{nonce:[u8;32],digest:[u8;32]}
@@ -34,7 +34,7 @@ impl Start {
         Ok(env)
     }
     // Public acknowledgement bytes, not a readiness or sending capability.
-    pub(super) fn ready_frame(&self)->[u8;START_BYTES]{
+    pub(super) fn prepared_frame(&self)->[u8;START_BYTES]{
         let mut body=[0;START_BYTES];body[..16].copy_from_slice(READY_MAGIC);
         body[16..48].copy_from_slice(&self.nonce);body[48..].copy_from_slice(&self.digest);body
     }
@@ -52,6 +52,7 @@ pub(super) struct Envelope {
     pub(super) account:Id,pub(super) credential:Id,pub(super) record:Id,
     pub(super) vault:VaultStamp,
     pub(super) sid:[u8;28],pub(super) generation:i64,pub(super) login:String,
+    pub(super) pair:PairOffer,
 }
 /// Public stat witness, not proof of credential contents or authorization.
 #[derive(Clone,Copy,Eq,PartialEq)]
@@ -94,11 +95,17 @@ impl Envelope{
         let login_len=usize::from(c.byte()?);
         if generation<=0||!(1..=64).contains(&login_len){return Err(Fault::Shape);}
         let login=crate::password::login_name(c.take(login_len)?).map_err(|_|Fault::Shape)?;
-        if matches!(login,"root"|"nobody"|"anonymous"|"guest")||!c.0.is_empty(){return Err(Fault::Shape);}
+        let pair=PairOffer::decode(c.array()?)?;
+        if matches!(login,"root"|"nobody"|"anonymous"|"guest")||!c.0.is_empty()||nonce==pair.nonce{return Err(Fault::Shape);}
+        let epoch=crate::system::reader::smb::runtime::PreflightEpoch{account,op:credential,record,sid,generation,login:text(login)?};
+        let plan_sha=crate::hash::digest(public_plan).map_err(|_|Fault::Shape)?;
+        if pair.cohort!=cohort::digest(release_sha,plan_sha,crate::Entity{device:sdev,inode:sino},&epoch)?{
+            return Err(Fault::Handoff);
+        }
         let mut plan=Vec::new();plan.try_reserve_exact(public_plan.len()).map_err(|_|Fault::Resources)?;
         plan.extend_from_slice(public_plan);
         Ok(Self{nonce,release_sha,uid,gid,sdev,sino,system:text(system)?,plan,cookie_count,cookies,
-            account,credential,record,vault,sid,generation,login:text(login)?})
+            account,credential,record,vault,sid,generation,login:epoch.login,pair})
     }
     pub(super) fn cookies(&self)->&[u64]{&self.cookies[..self.cookie_count]}
 }

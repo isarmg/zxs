@@ -1,19 +1,19 @@
-//! Business authority belongs to the original authenticated session. Production
-//! construction is private to its storage-side endpoint after the managed SMB
-//! worker's successful final native update; a SID, name or WebAdmin is not proof.
-use super::{Catalog,Connection,InitialReader,account::share_mode::{self,Mode,Setting},credential::{Pair,Role},check,sqlite3_step};
+//! Business authority belongs to the original authenticated session, not
+//! a raw name/SID or permission to use the other protocol. The in-process
+//! test session below never issues a live SMB grant.
+use super::{Catalog,Connection,InitialReader,account::share_mode::{self,Mode,Setting},credential::Pair,check,sqlite3_step};
 use crate::{OperationId,fs::directory_birth::DirectoryParent,identity::{AccountId,ShareId}};
 use std::io;
 
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"no current authenticated SMB access")}
 #[derive(Clone,Debug,Eq,PartialEq)]
-struct Credential{account:AccountId,instance:[u8;16],op:OperationId,generation:i64,sid:[u8;28],login:Vec<u8>}
+struct Credential{account:AccountId,canonical:AccountId,instance:[u8;16],op:OperationId,generation:i64,sid:[u8;28],login:Vec<u8>}
 impl Credential{
-    // Nonsecret mapping only. Native authentication never reads or opens SQL.
+    // Nonsecret mapping only. The live Rust challenge still requires its vault.
     fn current(db:&Connection,c:&Catalog)->io::Result<Self>{
-        let pair=Pair::confirmed(db,c)?.filter(Pair::is_native).ok_or_else(denied)?;
-        let epoch=pair.epoch(db,c,Role::Smb)?.ok_or_else(denied)?;
-        Ok(Self{account:pair.smb,instance:pair.instance,op:epoch.op,generation:epoch.generation,sid:pair.sid,login:pair.smb_login.into_bytes()})
+        let pair=Pair::confirmed(db,c)?.ok_or_else(denied)?;
+        let epoch=pair.current(db,c)?.ok_or_else(denied)?;
+        Ok(Self{account:pair.smb,canonical:pair.canonical,instance:pair.instance,op:OperationId(epoch.op),generation:epoch.generation,sid:pair.sid,login:pair.login.into_bytes()})
     }
 }
 pub(crate) struct SmbSession<'r>{source:&'r InitialReader,original:Credential}

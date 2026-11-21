@@ -37,12 +37,12 @@ impl InheritedControl{
         Ok(Self{original,subject})
     }
     pub(super) fn recv_server(self,until:Instant)->Result<(VerifiedControl,[u8;START_BYTES],ReceivedOriginals)>{
-        self.receive::<START_BYTES>(until,3)
+        self.receive::<START_BYTES>(until,4)
     }
     #[allow(dead_code)] // called by the paired fixed internal Web entry
     pub(in crate::smb::launch) fn recv_web(self,until:Instant)
         ->Result<(VerifiedControl,[u8;START_BYTES],ReceivedOriginals)>{
-        self.receive::<START_BYTES>(until,2)
+        self.receive::<START_BYTES>(until,3)
     }
     #[allow(dead_code)] // used by the paired standalone preflight source
     pub(in crate::smb::launch) fn recv_once<const N:usize>(self,until:Instant)
@@ -88,9 +88,9 @@ impl VerifiedControl{
     /// server listener and normal stop handlers. Hold the original parent
     /// liveness through that Web's normal HTTP workers and final drain.
     #[allow(dead_code)]
-    pub(in crate::smb::launch) fn publish_web_ready(self,frame:&[u8;START_BYTES],until:Instant)->Result<VerifiedWebRun>{
+    pub(in crate::smb::launch) fn publish_web_prepared(self,frame:&[u8;START_BYTES],until:Instant)->Result<VerifiedWebRun>{
         self.require_live()?;
-        if &frame[..16]!=b"ZXS-WEB/READY-1\0"||Instant::now()>=until{return Err(Fault::Handoff);}
+        if &frame[..16]!=b"ZXS-WEB/PREP-02\0"||Instant::now()>=until{return Err(Fault::Handoff);}
         let fd=self.original.socket.as_raw_fd();
         // SAFETY: exact own original socket and fixed live frame. Send once
         // with no SCM_RIGHTS; failure cannot advance a separate READY path.
@@ -148,10 +148,10 @@ impl ReceivedOriginals{
         read_sealed(&File::from(self.take(0)?),MAX)
     }
     #[allow(dead_code)]
-    pub(in crate::smb::launch) fn only_web<const MAX:usize>(mut self)->Result<(Vec<u8>,UnverifiedWebListener)>{
-        if self.count()!=2{return Err(Fault::Handoff);}
+    pub(in crate::smb::launch) fn only_web<const MAX:usize>(mut self)->Result<(Vec<u8>,UnverifiedWebListener,OwnedFd)>{
+        if self.count()!=3{return Err(Fault::Handoff);}
         let bytes=read_sealed(&File::from(self.take(0)?),MAX)?;
-        Ok((bytes,UnverifiedWebListener(self.take(1)?)))
+        Ok((bytes,UnverifiedWebListener(self.take(1)?),self.take(2)?))
     }
 }
 fn sealed_size(file:&File,maximum:usize)->Result<usize>{

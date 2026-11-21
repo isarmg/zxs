@@ -17,7 +17,7 @@ use std::{
 
 const SCM_PIDFD:libc::c_int=4; // Linux v6.12 include/linux/socket.h
 const WAIT:Duration=Duration::from_secs(10);
-const MAX_RIGHTS:usize=2+MAX_LISTENERS;
+const MAX_RIGHTS:usize=3+MAX_LISTENERS;
 const CONTROL_SIZE:usize=unsafe{
     libc::CMSG_SPACE((MAX_RIGHTS*size_of::<RawFd>()) as u32) as usize+
     libc::CMSG_SPACE(size_of::<libc::ucred>() as u32) as usize+
@@ -37,6 +37,7 @@ pub(crate) struct InheritedRun {
     until:Instant,
     ready:AtomicU8,
     env:Envelope,
+    pair:Mutex<Option<super::pair_gate::WaitingGate>>,
     vault:Mutex<Option<VaultInput>>,
     listeners:Vec<TcpListener>,
 }
@@ -73,12 +74,13 @@ impl InheritedRun {
         let until=Instant::now().checked_add(WAIT).ok_or(Fault::Handoff)?;
         let (verified,packet,mut control)=link.recv_server(until)?;
         let (uid,gid)=verified.subject();
+        super::low::require_reduced((uid,gid))?;
         let supervisor=verified.into_supervisor();
         let start=Start::decode(&packet)?;
         let sealed=File::from(control.take(0)?);
         let env=start.verify(&frozen(&sealed)?)?;
         drop(sealed);
-        if (uid,gid)!=(env.uid,env.gid)||control.count()!=2+env.cookies().len(){return Err(Fault::Handoff);}
+        if (uid,gid)!=(env.uid,env.gid)||control.count()!=3+env.cookies().len(){return Err(Fault::Handoff);}
         let file=File::from(control.take(1)?);
         let stamp=env.vault;
         vault_file(&file,&stamp)?;
@@ -86,8 +88,10 @@ impl InheritedRun {
         for (i,&cookie) in env.cookies().iter().enumerate(){
             listeners.push(listener(control.take(i+2)?,cookie)?);
         }
+        let pair=super::pair_gate::WaitingGate::from_start(control.take(2+env.cookies().len())?,
+            env.pair.gate,env.pair.nonce,env.pair.cohort)?;
         supervisor.require_live()?;
-        Ok(Self{supervisor,start,until,ready:AtomicU8::new(0),env,vault:Mutex::new(Some(VaultInput{file,stamp})),listeners})
+        Ok(Self{supervisor,start,until,ready:AtomicU8::new(0),env,pair:Mutex::new(Some(pair)),vault:Mutex::new(Some(VaultInput{file,stamp})),listeners})
     }
 }
 impl Supervisor {

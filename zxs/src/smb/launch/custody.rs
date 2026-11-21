@@ -8,7 +8,7 @@ mod listeners;
 mod preflight;
 mod start;
 pub(super) use preflight::VerifiedPreflight;
-pub(super) use start::{authorize,prepare_site,stopping,launch_internal_smb,launch_internal_web};
+pub(super) use start::{PreparedPair,authorize,prepare_site,stopping,launch_internal_smb,launch_internal_web};
 use super::{Fault,Result,kernel::{self,BootSocket,OriginalProcess}};
 use std::{
     ffi::{CStr,CString},fs::{File,OpenOptions},io::Read,marker::PhantomData,mem::{size_of,zeroed},

@@ -8,7 +8,7 @@ use std::{io,path::PathBuf};
 pub(super) struct Receipt{pub(super) pool:Id,pub(super) committed:bool}
 
 pub(super) fn foreground(op:Id,reference:Id,paths:Vec<PathBuf>,subject:super::pair::ExplicitSubject)->io::Result<Receipt>{
-    super::pair::compiled_v17()?;
+    super::pair::compiled_v18()?;
     approval::no_inherited_descriptors()?;
     let host=approval::host_admin()?;
     let (actor,uid,gid)=subject.tuple();

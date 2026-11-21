@@ -575,7 +575,7 @@ mod tests{
         let tmp=PrivateTemp::under(&std::env::temp_dir());let (path,pool,f,rw,ro)=ordinary_pool(&tmp);
         let src=InitialReader::open(&path,pool).unwrap();
         let other=InitialReader::alongside(&src.dir,&src.marker,pool,src.expected_schema).unwrap();
-        let s=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let s=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
         let tree=s.connect(rw).unwrap();let reader=s.connect(ro).unwrap();
         let (_,root)=tree.ordinary_route(&[],true).unwrap();
         let reached=Cell::new(false);
@@ -603,7 +603,7 @@ mod tests{
         let (capital,_)=tree.make_ordinary_directory(&root,op(0x91),"Reports",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
         // The real observer saw that prior pending cut. If it retries
         // after the first caller confirmed, no second native OFFER exists.
-        let a2=SmbSession::fixture_authenticated(&other,"files.smb").unwrap();let second=a2.connect(rw).unwrap();
+        let a2=SmbSession::fixture_authenticated(&other,"first.admin").unwrap();let second=a2.connect(rw).unwrap();
         let (_,r2)=second.ordinary_route(&[],true).unwrap();
         let (same,_)=second.make_ordinary_directory(&r2,confirmed.birth.original,"Reports",|_|panic!("already confirmed"),&||Ok(()),|_|Ok(())).unwrap();
         assert_eq!(same.id,capital.id);

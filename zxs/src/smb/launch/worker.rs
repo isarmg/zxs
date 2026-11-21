@@ -28,8 +28,9 @@ impl Worker {
         let server=Arc::new(RunningServerGuid::from_start(&original,verifier).map_err(|_|Fault::Handoff)?);
         Ok(Self{original,selected,server})
     }
-    pub(super) fn ready(&self,term:&InstalledTerm)->Result<()>{
-        self.original.publish_ready(&self.selected,&self.server,term)
+    pub(super) fn prepare_pair(&self,term:&InstalledTerm)->Result<()>{
+        self.original.publish_prepared(&self.selected,&self.server,term)?;
+        self.original.await_pair(term)
     }
     pub(super) fn first_ready(&self,from:usize,have_room:bool)->Result<Option<usize>>{
         self.original.next_listener(from,have_room)

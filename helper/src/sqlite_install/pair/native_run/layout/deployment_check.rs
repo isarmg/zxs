@@ -3,7 +3,7 @@
 //! can leave the lowered original SYSTEM reader.
 use super::{Channel,Kind,PublicConfirmation,bad,observed,place,query_with,random,sealed,sealed_owner};
 use crate::{smb_profile::rust_first::{MAX_WIRE,RustPlan},sqlite_install::{markers::SystemObservation,originals::LockedSystem,pair::{
-    domain::DeployedSite,fresh_issuer::{ExplicitSubject,InitialDatabase,MAX_SITE,SitePayload,compiled_v17,image}
+    domain::DeployedSite,fresh_issuer::{ExplicitSubject,InitialDatabase,MAX_SITE,SitePayload,compiled_v18,image}
 }}};
 use rustix::process::{Pid,getppid};
 use sha2::{Digest,Sha256};
@@ -21,7 +21,7 @@ pub(super) struct Question{
 }
 impl Question{
     fn encode(&self)->io::Result<Vec<u8>>{
-        compiled_v17()?;
+        compiled_v18()?;
         let site=self.site.encode()?;
         let plan=self.plan.wire();
         if self.nonce==[0;32]||self.where_system[1..].contains(&0)||self.site.origin!=self.plan.origin||
@@ -88,7 +88,7 @@ fn checked_reply(meta:&[u8;65],site:&SitePayload,raw:&[u8])->io::Result<([u8;224
     let prefix:[u8;224]=raw.try_into().map_err(|_|unavailable())?;
     let o=site.origin;
     let identities=[o.pool,o.init,o.setup,o.instance,o.bind];
-    if *meta!=make_reply(&site.sha()?,&prefix)||&prefix[..16]!=b"ZXS-RUST-SMB-V1\0"||prefix[16]!=1||
+    if *meta!=make_reply(&site.sha()?,&prefix)||&prefix[..16]!=b"ZXS-RUST-SMB-V2\0"||prefix[16]!=1||
         prefix[18..24]!=[0;6]||prefix[24..104].chunks_exact(16).zip(identities).any(|(actual,id)|actual!=id){
         return Err(unavailable());
     }
@@ -174,7 +174,7 @@ mod tests{
     #[test]
     fn reattach_reply_requires_exact_site_digest_current_origin_and_public_bytes_only(){
         let q=question();let o=q.site.origin;
-        let mut b=[0;224];b[..16].copy_from_slice(b"ZXS-RUST-SMB-V1\0");b[16]=1;b[17]=3;
+        let mut b=[0;224];b[..16].copy_from_slice(b"ZXS-RUST-SMB-V2\0");b[16]=1;b[17]=3;
         for (slot,id) in b[24..152].chunks_exact_mut(16).zip([o.pool,o.init,o.setup,o.instance,o.bind,[44;16],o.setup,[45;16]]){
             slot.copy_from_slice(&id);
         }

@@ -28,7 +28,7 @@ fn first_manual_save_reads_by_name_after_all_handles_close_and_retry_returns_onl
     let data=b"ZXS-real-binary-\0\xff\x00end";let body=input(&t,"incoming-good",data);
     let bad=input(&t,"incoming-different",b"not identical");let zero=input(&t,"empty",b"");
     let(first,made)={
-        let src=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+        let src=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
         let writer=smb.connect(rw).unwrap();let reader=smb.connect(ro).unwrap();
         let made=writer.create_file(OperationId([0xb1;16]),NAME).unwrap();
         let before=reader.open_current(NAME).unwrap();assert_eq!((before.file(),before.size(),before.working_revision()),(made.file,0,0));
@@ -48,7 +48,7 @@ fn first_manual_save_reads_by_name_after_all_handles_close_and_retry_returns_onl
         assert_eq!((z.revision,z.bytes),(1,0));let h=reader.open_current(&leaf).unwrap();assert_eq!(h.working_revision(),1);
         h.range_to(0,0,&mut none).unwrap();(result,made)
     };
-    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let tree=smb.connect(ro).unwrap();assert!(tree.open_current("方案.XLSX").is_err());
     let h=tree.open_current(NAME).unwrap();assert_eq!((h.file(),h.size(),h.working_revision()),(made.file,first.bytes,1));
     let mut all=Vec::new();h.range_to(0,h.size(),&mut all).unwrap();assert_eq!(all,data);
@@ -74,8 +74,8 @@ fn synced_not_yet_confirmed_remains_logically_empty_and_same_original_can_recove
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,ro)=enrollment(&t);
     let input=input(&t,"incoming",b"abcdefghijk");let id={
         let src=InitialReader::open(&s,p).unwrap();let peer=InitialReader::open(&s,p).unwrap();
-        let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let tree=smb.connect(rw).unwrap();
-        let sb=SmbSession::fixture_authenticated(&peer,"files.smb").unwrap();let other=sb.connect(rw).unwrap();
+        let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=smb.connect(rw).unwrap();
+        let sb=SmbSession::fixture_authenticated(&peer,"first.admin").unwrap();let other=sb.connect(rw).unwrap();
         let id=tree.create_file(OperationId([0xb1;16]),NAME).unwrap().file;
         let mut saw_uncommitted_page=false;
         assert!(tree.save_first_after(SAVE,NAME,id,&input,|cut|{
@@ -92,7 +92,7 @@ fn synced_not_yet_confirmed_remains_logically_empty_and_same_original_can_recove
         assert_eq!(pending(&src,SAVE),Some(0));
         assert_eq!(other.open_current("sibling").unwrap().working_revision(),0);id
     };
-    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let tree=smb.connect(rw).unwrap();let peer=smb.connect(ro).unwrap();let previous=peer.open_current(NAME).unwrap();
     assert_eq!((previous.file(),previous.size(),previous.working_revision()),(id,0,0));drop(previous);
     let raw=f.join(format!("方案-{id}.xlsx/change-{SAVE}-00000000"));
@@ -113,7 +113,7 @@ fn revoked_before_confirm_or_during_delivery_is_not_a_new_grant_and_bad_blocks_a
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,ro)=enrollment(&t);
     let src=InitialReader::open(&s,p).unwrap();let peer=InitialReader::open(&s,p).unwrap();
     let manager=peer.authenticate_web("first.admin","correct horse battery staple").unwrap();
-    let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let a=smb.connect(rw).unwrap();
+    let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let a=smb.connect(rw).unwrap();
     let b=smb.connect(ro).unwrap();let id=a.create_file(OperationId([0xb1;16]),NAME).unwrap().file;
     let other=a.create_file(OperationId([0xb9;16]),"other").unwrap().file;
     let block=4*1024*1024;let mut content=vec![23u8;block+2];content[block]=42;content[block+1]=43;
@@ -144,7 +144,7 @@ fn new_rw_can_supersede_only_a_revoked_unconfirmed_attempt_without_adopting_its_
         let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,f,rw,ro)=enrollment(&t);
         let src=InitialReader::open(&s,p).unwrap();let peer=InitialReader::open(&s,p).unwrap();
         let manage=peer.authenticate_web("first.admin","correct horse battery staple").unwrap();
-        let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let old=smb.connect(rw).unwrap();
+        let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let old=smb.connect(rw).unwrap();
         let made=old.create_file(OperationId([0xc0;16]),NAME).unwrap();
         let old_op=OperationId([0xc1;16]);let new_op=OperationId([0xc2;16]);
         let before=input(&t,"old-receiver",b"private candidate");let after=input(&t,"new-receiver",b"new admitted bytes");
@@ -174,7 +174,7 @@ fn new_rw_can_supersede_only_a_revoked_unconfirmed_attempt_without_adopting_its_
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(),count+4);
         if stop==Cut::BytesSynced{assert_eq!(std::fs::read(&prior).unwrap(),b"Xrivate candidate");}
         drop(old);drop(empty);drop(fresh);drop(smb);drop(src);drop(manage);drop(peer);
-        let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+        let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
         let reader=smb.connect(ro).unwrap();let v=reader.open_current(NAME).unwrap();let mut got=Vec::new();
         v.range_to(0,v.size(),&mut got).unwrap();assert_eq!(got,b"new admitted bytes");assert_eq!(v.file(),made.file);drop(v);
         if stop==Cut::Reserved{
@@ -192,8 +192,8 @@ fn new_rw_can_supersede_only_a_revoked_unconfirmed_attempt_without_adopting_its_
 fn compatible_read_snapshots_cross_a_real_first_writer_in_both_directions(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,_,rw,ro)=enrollment(&t);
     let a=InitialReader::open(&s,p).unwrap();let b=InitialReader::open(&s,p).unwrap();
-    let sa=SmbSession::fixture_authenticated(&a,"files.smb").unwrap();
-    let sb=SmbSession::fixture_authenticated(&b,"files.smb").unwrap();
+    let sa=SmbSession::fixture_authenticated(&a,"first.admin").unwrap();
+    let sb=SmbSession::fixture_authenticated(&b,"first.admin").unwrap();
     let writer=sa.connect(rw).unwrap();let reader=sb.connect(ro).unwrap();let competing=sb.connect(rw).unwrap();
     let id=writer.create_file(OperationId([0xd1;16]),NAME).unwrap().file;
     let file=input(&t,"received",b"never disclose this before its original SQL commit");
@@ -237,7 +237,7 @@ fn candidate_cannot_issue_a_receipt_over_an_unreserved_tail_but_a_confirmed_read
     let source=input(&t,"received",&data);
     let (id,raw)={
         let src=InitialReader::open(&s,p).unwrap();
-        let smb=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();let a=smb.connect(rw).unwrap();
+        let smb=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let a=smb.connect(rw).unwrap();
         let id=a.create_file(OperationId([0xc7;16]),NAME).unwrap().file;
         let raw=f.join(format!("方案-{id}.xlsx/change-{SAVE}-00000000"));let mut touched=false;
         let bad=a.save_first_after(SAVE,NAME,id,&source,|cut|{
@@ -249,7 +249,7 @@ fn candidate_cannot_issue_a_receipt_over_an_unreserved_tail_but_a_confirmed_read
         assert!(touched&&bad.is_err());assert_eq!(pending(&src,SAVE),Some(0));
         assert_eq!(a.first_save_receipt(SAVE,NAME,id).unwrap(),None);(id,raw)
     };
-    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let writer=smb.connect(rw).unwrap();let reader=smb.connect(ro).unwrap();
     let prev=reader.open_current(NAME).unwrap();assert_eq!((prev.file(),prev.working_revision(),prev.size()),(id,0,0));drop(prev);
     assert!(writer.save_first(SAVE,NAME,id,&source).is_err());assert_eq!(pending(&cold,SAVE),Some(0));
@@ -272,7 +272,7 @@ mod smb_read;
 #[ignore="public synthetic SQL credential transition; real ordinary files; no native authentication or maintenance locks"]
 fn changing_smb_epoch_keeps_old_file_bytes_but_never_promotes_an_old_save(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p,_f,rw,_ro)=enrollment(&t);
-    let src=InitialReader::open(&s,p).unwrap();let old=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let src=InitialReader::open(&s,p).unwrap();let old=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();
     let tree=old.connect(rw).unwrap();let data=input(&t,"captured",b"old confirmed body");
     let saved=tree.create_file(OperationId([0xd1;16]),"read").unwrap();
     let stale=tree.create_file(OperationId([0xd2;16]),"write").unwrap();
@@ -281,10 +281,10 @@ fn changing_smb_epoch_keeps_old_file_bytes_but_never_promotes_an_old_save(){
     let err=tree.save_first_after(OperationId([0xd4;16]),"write",stale.file,&data,|cut|{
         if cut==Cut::BytesSynced{at=true;return Err(io::Error::other("after named work sync"));}Ok(())
     }).unwrap_err();assert!(at);assert_eq!(err.to_string(),"after named work sync");
-    let db=Builder::existing(&s.join("SYSTEM.sqlite3"));first_account::fixture_rotate_smb(&db);drop(db);
+    let db=Builder::existing(&s.join("SYSTEM.sqlite3"));first_account::fixture_rotate_account(&db);drop(db);
     assert!(h.range_to(0,1,Vec::new()).is_err());assert!(tree.save_first(OperationId([0xd4;16]),"write",stale.file,&data).is_err());
     drop(h);drop(tree);drop(old);drop(src);
-    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"files.smb").unwrap();
+    let cold=InitialReader::open(&s,p).unwrap();let smb=SmbSession::fixture_authenticated(&cold,"first.admin").unwrap();
     let fresh=smb.connect(rw).unwrap();let h=fresh.open_current("read").unwrap();let mut b=Vec::new();
     h.range_to(0,h.size(),&mut b).unwrap();assert_eq!(b,b"old confirmed body");assert_eq!(h.file(),saved.file);
     assert!(fresh.save_first(OperationId([0xd4;16]),"write",stale.file,&data).is_err());

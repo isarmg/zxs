@@ -119,7 +119,7 @@ mod tests{
         })
     }
     #[test]
-    fn fresh_v17_image_rejects_interpreter_loader_and_ambiguous_programs(){
+    fn fresh_v18_image_rejects_interpreter_loader_and_ambiguous_programs(){
         let b=small();check(&b).unwrap();
         let mut bad=b.clone();bad[120..124].copy_from_slice(&PT_INTERP.to_le_bytes());assert!(check(&bad).is_err());
         let mut bad=b.clone();bad[68..72].fill(0);assert!(check(&bad).is_err());

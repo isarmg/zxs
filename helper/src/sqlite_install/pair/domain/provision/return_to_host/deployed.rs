@@ -3,14 +3,14 @@
 use super::{PRODUCT,Site,approval,bad,child,contents,layout,lease,mark,product_pin,public_record::Public,
     rust_site::{PublicAuthority,VaultStamp,checked_vault_stamp},shared_lease};
 use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::{MAX_WIRE,RustPlan},
-    sqlite_install::pair::fresh_issuer::{SitePayload,compiled_v17,image}};
+    sqlite_install::pair::fresh_issuer::{SitePayload,compiled_v18,image}};
 use rustix::fs::{FlockOperation,Mode,OFlags,ResolveFlags,flock,openat2};
 use sha2::{Digest,Sha256};
 use std::{ffi::CStr,fs::File,io,os::unix::fs::{FileExt,MetadataExt},path::Path};
 
 const LOCATOR:&CStr=c"deployment.v1";
 const VAULT:&CStr=c"vault";
-const RECORD:&CStr=c"credential.v1";
+use crate::sqlite_install::pair::native_sql::rust_vault::VAULT_NAME as RECORD;
 const MAGIC:&[u8;16]=b"ZXS-DEPLOYED-V1\0";
 fn unknown()->io::Error{bad("the original independently managed ZXS deployment was not confirmed")}
 fn leaf(parent:&File,name:&CStr)->io::Result<File>{
@@ -57,7 +57,7 @@ impl DeployedSite{
     pub(in crate::sqlite_install::pair) fn select()->io::Result<Self>{
         Self::select_with_system(|path|Pinned::already_mounted(path,Kind::StorageRoot))
     }
-    pub(in crate::sqlite_install::pair) fn select_for_web_reset()->io::Result<Self>{
+    pub(in crate::sqlite_install::pair) fn select_for_account_reset()->io::Result<Self>{
         Self::select_with_system(|path|{
             let scope=std::sync::Arc::new(crate::maintenance::HostMounts::discovery_view(false)?);
             Pinned::require_local_root(&scope)?;
@@ -65,7 +65,7 @@ impl DeployedSite{
         })
     }
     fn select_with_system(find:impl FnOnce(&Path)->io::Result<Pinned>)->io::Result<Self>{
-        compiled_v17()?;
+        compiled_v18()?;
         approval::no_inherited_descriptors()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         let host=approval::host_admin()?;
@@ -99,7 +99,7 @@ impl DeployedSite{
         result.require()?;Ok(result)
     }
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
-        compiled_v17()?;
+        compiled_v18()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         let (_,uid,gid)=self.payload.subject.tuple();
         protected_parent(&self.parent)?;
@@ -147,7 +147,7 @@ impl DeployedSite{
     }
     pub(in crate::sqlite_install::pair) fn observe_vault(&self,wanted:&[u8;224])->io::Result<ObservedVault<'_>>{
         let dir=self.offline_vault_directory()?;
-        contents(&dir,&[b"credential.v1"])?;
+        contents(&dir,&[RECORD.to_bytes()])?;
         let original=leaf(&dir,RECORD)?;let mount=mark(&dir)?.1;
         let stamp=checked_vault_stamp(&original,mount)?;
         let read=private_inode_reader(&original,0,mount)?;
@@ -173,7 +173,7 @@ impl ObservedVault<'_>{
         if parent.1!=self.mount||mark(&product_pin(&self.site.site_ex,VAULT,false)?)?!=parent{
             return Err(unknown());
         }
-        contents(&self.dir,&[b"credential.v1"])?;
+        contents(&self.dir,&[RECORD.to_bytes()])?;
         layout::bare_acl(&self.dir,c"system.posix_acl_access")?;layout::bare_acl(&self.dir,c"system.posix_acl_default")?;
         if checked_vault_stamp(&self.original,self.mount)?!=self.stamp||
             checked_vault_stamp(&leaf(&self.dir,RECORD)?,self.mount)?!=self.stamp{
@@ -186,7 +186,7 @@ impl ObservedVault<'_>{
 /// Qualify the original installed origin in a private worker before
 /// lowering, without opening the vault or acquiring a second lock.
 pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,site_sha:[u8;32])->io::Result<SitePayload>{
-    compiled_v17()?;
+    compiled_v18()?;
     if site_sha==[0;32]{return Err(unknown());}
     let expected=(plan.origin.instance,site_sha);
     let site=Site::product(approval::host_admin()?,&expected.0,false)?;

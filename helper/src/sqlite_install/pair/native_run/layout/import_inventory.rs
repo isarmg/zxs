@@ -5,7 +5,7 @@ use crate::{maintenance::{DiscoveryView,HostMounts},sqlite_install::{bad,id,orig
 use rustix::{fs::{FlockOperation,flock},process::{Pid,getppid}};
 use std::{ffi::{OsStr,OsString},fmt::Write,io,os::unix::ffi::{OsStrExt,OsStringExt},path::{Path,PathBuf},sync::Arc};
 
-pub(super) const DOMAIN:&[u8]=b"helper nonempty source inventory exact v17 1\0";
+pub(super) const DOMAIN:&[u8]=b"helper nonempty source inventory exact v18 1\0";
 const HEAD:usize=32+3*16+8+6*8;
 const BUDGET:usize=DOMAIN.len()+HEAD+2*(2+MAX_PATH_BYTES);
 const ONLY_READ:&str="仅源目录元数据清点；未读源文件正文、未确定目标与空间，也没有导入、写入或移除。";
@@ -42,7 +42,7 @@ impl ImportCheck{
         Ok(())
     }
     fn query(&self)->io::Result<Reply>{
-        retire_ordinary::compiled_v17()?;
+        retire_ordinary::compiled_v18()?;
         approval::no_inherited_descriptors()?;
         let scope=mount_scope()?;
         let _host=approval::host_admin()?;
@@ -103,7 +103,7 @@ impl Question{
         let system=location(&mut b)?;let source=location(&mut b)?;
         let q=ImportCheck{system:path(&mut b)?,source:path(&mut b)?,pool,init,subject};
         if !b.is_empty()||encode(&q,&nonce,system,source)?.as_slice()!=raw{return Err(invalid());}
-        retire_ordinary::compiled_v17()?;
+        retire_ordinary::compiled_v18()?;
         Ok(Self{q,system,source})
     }
     pub(super) fn original_system(&self)->(ExplicitSubject,[u64;3],&Path){(self.q.subject,self.system,&self.q.system)}
@@ -189,7 +189,7 @@ mod tests{
         source:OsString::from_vec(b"/held/legacy-\xff".to_vec()).into(),pool:[1;16],init:[2;16],subject:ExplicitSubject::checked([8;16],1001,1002).unwrap()}}
 
     #[test]
-    fn nonempty_v17_explicit_stateless_selection_has_no_target_or_apply_operand(){
+    fn nonempty_v18_explicit_stateless_selection_has_no_target_or_apply_operand(){
         let parts=["--init-actor","03030303030303030303030303030303","--storage-uid","1001","--storage-gid","1002",
             "--system","/original/S","--pool","01010101010101010101010101010101",
             "--init","02020202020202020202020202020202","--source","/fixture/source"];
@@ -201,7 +201,7 @@ mod tests{
     }
 
     #[test]
-    fn nonempty_v17_manifest_binds_both_original_places_and_raw_source_without_authorizing_any_action(){
+    fn nonempty_v18_manifest_binds_both_original_places_and_raw_source_without_authorizing_any_action(){
         let q=draft();let v=encode(&q,&[7;32],[1,2,3],[4,5,6]).unwrap();
         let read=Question::decode(&v).unwrap();
         assert_eq!(read.original_system(),(q.subject,[1,2,3],Path::new("/original/S")));
@@ -212,7 +212,7 @@ mod tests{
     }
 
     #[test]
-    fn nonempty_v17_no_wrong_mount_impossible_counts_or_partial_inventory_on_the_wire(){
+    fn nonempty_v18_no_wrong_mount_impossible_counts_or_partial_inventory_on_the_wire(){
         let [pool,init]=[[1;16],[2;16]];
         let c=Counts{files:2,dirs:1,empty_dirs:1,logical_bytes:11};
         let found=Reply::Inventoried(c,42);

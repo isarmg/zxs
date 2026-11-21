@@ -40,9 +40,9 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
         out.push_str("</tbody></table></div><p>请使用站点提供的服务器地址。这里显示的是本池授权，不代表网络已上线或磁盘可用。</p>");
     }
     if let Some(k)=data.next{write!(out,r##"<p><a href="/?after={k}#zxs-shares">下一页目录</a></p>"##).unwrap();}
-    out.push_str(r#"</section><section id="zxs-versions" class="zxs-panel"><h2>手动提交版本</h2><p>保存只更新工作稿。关闭应用写入后，在此选择文件并明确提交才会生成正式版本。</p><p><a href="/versions">从文件列表选择</a></p></section><section id="zxs-credentials" class="zxs-panel"><h2>固定账号</h2><div class="zxs-account-grid"><article class="zxs-account-card"><h3>Web 管理员</h3><bdi>"#);
-    text(&mut out,&data.web);out.push_str(r#"</bdi><small>仅用于管理，不能读取文件正文。</small></article><article class="zxs-account-card"><h3>SMB 文件账号</h3><bdi>"#);text(&mut out,&data.smb);
-    out.push_str(r#"</bdi><small>只能按已启用共享的模式访问文件。</small></article></div></section><form method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
+    out.push_str(r#"</section><section id="zxs-versions" class="zxs-panel"><h2>手动提交版本</h2><p>保存只更新工作稿。关闭应用写入后，在此选择文件并明确提交才会生成正式版本。</p><p><a href="/versions">从文件列表选择</a></p></section><section id="zxs-credentials" class="zxs-panel"><h2>Web 与 SMB 共用账号</h2><div class="zxs-account-grid"><article class="zxs-account-card"><h3>登录名</h3><bdi>"#);
+    text(&mut out,&data.login);
+    out.push_str(r#"</bdi><small>Web 仅用于管理，SMB 只能按已启用目录的模式访问文件。</small></article></div></section><form method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
     text(&mut out,csrf);out.push_str(r#""><button class="zxs-button" type="submit">退出管理</button></form></main></div></div></body></html>"#);Ok(out)
 }
 

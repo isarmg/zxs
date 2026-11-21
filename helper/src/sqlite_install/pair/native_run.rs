@@ -1,15 +1,15 @@
-//! Host-side decisions and the authenticated result for the private v17
+//! Host-side decisions and the authenticated result for the private v18
 //! handoff. No mode can choose media by parsing a UUID or receipt.
 mod transport;
+pub(super) mod joint_material;
 mod manifest;
 mod worker;
 mod layout;
 mod first_browser;
 mod rust_credentials;
-mod web_admin_reset;
-mod smb_password_reset;
-pub(crate) use smb_password_reset::Selection as SmbPasswordReset;
-pub(crate) use web_admin_reset::{Selection as WebAdministratorReset,worker as web_admin_reset_worker};
+mod objects;
+mod shared_account_reset;
+pub(crate) use shared_account_reset::Selection as SharedAccountReset;
 pub(in crate::sqlite_install::pair) use rust_credentials::{DurableRustPending,RustEnrollmentApproval,FreshActive,transact_fresh};
 pub(crate) use rust_credentials::{account_worker as rust_account_worker,vault_worker as rust_vault_worker};
 mod copy_repair_browser;

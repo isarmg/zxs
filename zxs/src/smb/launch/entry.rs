@@ -81,11 +81,11 @@ unsafe fn enter()->Result<()>{
     peers.try_reserve_exact(MAX_PEERS).map_err(|_|Fault::Resources)?;
     let result=thread::scope(|scope|{
         // Qualify thread-local Core readers before READY; the cold tasks
-        // cannot make a physical change until this exact launch emits it.
+        // cannot start physical recovery until the shared admission seal.
         let (retirement_start,retirement)=maintenance::prepare(scope,Arc::clone(&original),Task::Retirement)?;
         let (rename_start,rename)=maintenance::prepare(scope,Arc::clone(&original),Task::Rename)?;
         let (relabel_start,relabel)=maintenance::prepare(scope,Arc::clone(&original),Task::DirectoryRelabel)?;
-        let admitted=worker.ready(&term).and_then(|()|{
+        let admitted=worker.prepare_pair(&term).and_then(|()|{
             retirement_start.send(()).map_err(|_|Fault::Handoff)?;
             rename_start.send(()).map_err(|_|Fault::Handoff)?;
             relabel_start.send(()).map_err(|_|Fault::Handoff)

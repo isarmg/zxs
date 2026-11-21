@@ -1,7 +1,7 @@
 //! The public fields have no password or reusable grant. Detached receiver
 //! matches the actual ROOT sender, current original setup, inherited lease
 //! and sealed scope before using them. This is not another catalog.
-use super::{ExplicitSubject,bad,require_v17};
+use super::{ExplicitSubject,bad,require_v18};
 use crate::{path_rules::Kind,smb_profile::rust_first::{Origin,RustPlan}};
 use sha2::{Digest,Sha256};
 use std::{io,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
@@ -37,7 +37,7 @@ pub(in crate::sqlite_install::pair) struct CredentialScope{
 impl CredentialScope{
     pub(in crate::sqlite_install::pair) const WIDTH:usize=ORDER.len()+16+8+96+32+32+24;
     pub(in crate::sqlite_install::pair) fn encode(self,out:&mut Vec<u8>)->io::Result<()>{
-        require_v17()?;self.check()?;
+        require_v18()?;self.check()?;
         let (actor,uid,gid)=self.subject.tuple();
         out.extend_from_slice(ORDER);out.extend_from_slice(&actor);
         out.extend_from_slice(&uid.to_be_bytes());out.extend_from_slice(&gid.to_be_bytes());
@@ -51,7 +51,7 @@ impl CredentialScope{
         Ok(())
     }
     pub(in crate::sqlite_install::pair) fn decode(raw:&[u8])->io::Result<Self>{
-        require_v17()?;
+        require_v18()?;
         if raw.len()!=Self::WIDTH{return Err(no());}
         let mut c=Cursor(raw.strip_prefix(ORDER).ok_or_else(no)?);
         let subject=ExplicitSubject::checked(c.a()?,u32::from_be_bytes(c.a()?),u32::from_be_bytes(c.a()?))?;
@@ -140,7 +140,7 @@ mod tests{
         RustPlan::decode(&raw).unwrap()
     }
     #[test]
-    fn fresh_v17_site_and_activation_match_the_independently_measured_zxs_layout(){
+    fn fresh_v18_site_and_activation_match_the_independently_measured_zxs_layout(){
         let r=SitePayload::new(&plan(),ExplicitSubject::checked([31;16],1001,1002).unwrap(),
             Path::new("/fresh S/SYSTEM"),Path::new("/opt/zxs/bin/zxs"),[41;32]).unwrap();
         let bytes=r.encode().unwrap();

@@ -59,7 +59,7 @@ impl Approval{
         Ok(Self{origin,subject:Subject{init_actor,uid,gid},system,image,plan_sha,image_sha})
     }
     /// Check the fixed origin and whole approved plan hash. Only the low
-    /// Core production reader interprets the plan and v17 ACTIVE rows.
+    /// Core production reader interprets the plan and v18 shared ACTIVE rows.
     pub(super) fn require_plan(&self,raw:&[u8])->io::Result<()>{
         let mut c=Cursor(raw.strip_prefix(PLAN_MAGIC).filter(|_|raw.len()<=MAX_PLAN).ok_or_else(denied)?);
         if Origin::decode(&mut c)?!=self.origin||c.0.is_empty()||crate::hash::digest(raw)?!=self.plan_sha{

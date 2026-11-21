@@ -1,6 +1,7 @@
 //! Serialize exactly the public START the existing independently qualified
 //! child decodes. Never make a grant or supply a second startup syntax.
 use super::{ENV_MAGIC,ENV_MAX,Fault,MAX_LISTENERS,MAX_PATH,MAX_PLAN,Result,START_BYTES,START_MAGIC,Start,VaultStamp};
+use super::super::cohort::PairOffer;
 use crate::{Entity,system::reader::smb::runtime::PreflightEpoch};
 
 pub(in crate::smb::launch) struct Scope<'a>{
@@ -13,6 +14,7 @@ pub(in crate::smb::launch) struct Scope<'a>{
     pub(in crate::smb::launch) cookies:&'a [u64],
     pub(in crate::smb::launch) vault:VaultStamp,
     pub(in crate::smb::launch) epoch:&'a PreflightEpoch,
+    pub(in crate::smb::launch) pair:PairOffer,
 }
 pub(in crate::smb::launch) fn encode(s:Scope<'_>)->Result<([u8;START_BYTES],Vec<u8>)>{
     if s.path.len()>MAX_PATH||s.plan.len()>MAX_PLAN||s.cookies.len()>MAX_LISTENERS||s.epoch.login.len()>64{
@@ -32,9 +34,10 @@ pub(in crate::smb::launch) fn encode(s:Scope<'_>)->Result<([u8;START_BYTES],Vec<
     out.extend_from_slice(&s.vault.mtime_s.to_be_bytes());out.extend_from_slice(&s.vault.mtime_ns.to_be_bytes());
     out.extend_from_slice(&s.epoch.sid);out.extend_from_slice(&s.epoch.generation.to_be_bytes());
     out.push(s.epoch.login.len() as u8);out.extend_from_slice(s.epoch.login.as_bytes());
+    out.extend_from_slice(&s.pair.encode());
     let digest=crate::hash::digest(&out).map_err(|_|Fault::Shape)?;
     let mut frame=[0;START_BYTES];
     frame[..16].copy_from_slice(START_MAGIC);frame[16..48].copy_from_slice(&s.nonce);frame[48..].copy_from_slice(&digest);
-    Start::decode(&frame)?.verify(&out)?; // same strict child format, before the first send
+    let _=Start::decode(&frame)?.verify(&out)?; // same strict child format, before the first send
     Ok((frame,out))
 }
