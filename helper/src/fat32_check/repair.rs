@@ -15,16 +15,18 @@ use std::{ffi::{OsStr,OsString},fs::File,io,mem::MaybeUninit,
 const DIRECTORY:OFlags=OFlags::DIRECTORY.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
 const PIN:OFlags=OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
 const IMAGE:&std::ffi::CStr=c"image.ext";
-const USAGE:&str="expected repair-ext4-copy ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR";
+const USAGE:&str="expected repair-ext4-copy [web] ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR";
 fn no()->io::Error{invalid("the selected output name, parent or new private working inode is not exact")}
 fn live()->io::Result<()>{if cancelled(){Err(io::ErrorKind::Interrupted.into())}else{Ok(())}}
 fn print_sha(v:&[u8;32])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 
 #[derive(Debug)]
-pub(crate) struct Request{source:PathBuf,digest:[u8;32],output:PathBuf}
+pub(crate) struct Request{source:PathBuf,digest:[u8;32],output:PathBuf,web:bool}
 impl Request{
     pub(crate) fn parse(mut a:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        let source=PathBuf::from(a.next().ok_or(USAGE)?);
+        let first=a.next().ok_or(USAGE)?;
+        let web=first=="web";
+        let source=PathBuf::from(if web{a.next().ok_or(USAGE)?}else{first});
         if a.next().as_deref()!=Some(OsStr::new("--sha256")){return Err(USAGE);}
         let digest=a.next().and_then(|v|hex(v.to_str()?)).ok_or(USAGE)?;
         if a.next().as_deref()!=Some(OsStr::new("--output")){return Err(USAGE);}
@@ -35,7 +37,7 @@ impl Request{
         // checker. Count the fixed leaf as well as the requested directory.
         Kind::Regular.check_path(output.join("image.ext").as_os_str().as_bytes())?;
         if a.next().is_some(){return Err(USAGE);}
-        Ok(Self{source,digest,output})
+        Ok(Self{source,digest,output,web})
     }
 
     pub(crate) fn run(self)->io::Result<String>{
@@ -49,7 +51,9 @@ impl Request{
         let runtime=Runtime::ext4()?;
         let preview=format!("只在新工作副本上让 e2fsck 自动修复可安全处理的 ext 问题，再对新副本做一次独立只读检查。不会挂载或修改输入镜像、原磁盘或现有目标。\n输入镜像 {:?}，{length} 字节，外部提供的 SHA-256 {}。\n只有成功复查后才无覆盖地发布 {:?}。预留工作目录 {:?}；空间不足、中断或结果不明时可能留在这两个名字之一，请保留并不要用作已复查镜像。\n",
             self.source,print_sha(&self.digest),dest.output_image(),dest.work_path());
-        crate::sqlite_install::confirm_ext_repair(preview)?;
+        crate::sqlite_install::confirm_ext_repair(preview,self.web.then_some(length),||{
+            dest.require_unoccupied()?;original.require()?;runtime.recheck()
+        })?;
         dest.require_unoccupied()?;
         original.require()?;
         runner::prepare_ext_repair(length)?;
@@ -227,7 +231,10 @@ mod tests{
         let sha="b0".repeat(32);
         let parse=|s:&str|Request::parse(s.split(' ').map(OsString::from));
         let approved=format!("/saved/ext.img --sha256 {sha} --output /work/new");
-        assert!(parse(&approved).is_ok());
+        assert!(!parse(&approved).unwrap().web);
+        assert!(parse(&format!("web {approved}")).unwrap().web);
+        assert!(parse(&format!("web web {approved}")).is_err());
+        assert!(parse(&format!("web {approved} --output /other")).is_err());
         for bad in [format!("{approved} -y"),format!("{approved} --output /other"),
             format!("/saved/ext.img --sha256 {sha}"),approved.replace("/work/new","/"),
             approved.replace("/work/new","/work/../new"),approved.replace("/saved/ext.img","ext.img")]{

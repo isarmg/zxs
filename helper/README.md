@@ -62,7 +62,7 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 `helper check-ext4-copy /绝对路径/volume.img --sha256 完整副本的独立SHA256`。从用户明确选择的本地普通镜像检查，不打开原盘，也不把镜像拷入内存或限制为 128 MiB。需保持实际只读租约及原件；用隔离的 Debian 原版 `e2fsck -fn`。外部日志、需要恢复、截短或未完整检查都不报正常。也可用上面的配对面板确认同次只读检查；更长任务用终端命令。[完整边界与返回码](docs/ext4-copy-check.md)见专页。
 
-另有分开的本机终端 [`repair-ext4-copy`](docs/ext4-copy-check.md#只修新建的工作副本)，只对新工作副本固定用 `e2fsck -fp`，独立 `-fn` 复查后才发布新文件。不会改输入镜像或磁盘，不是 Web 修复入口。
+另有分开的本机前台 [`repair-ext4-copy`](docs/ext4-copy-check.md#只修新建的工作副本)：可用 `web` 先请求原终端确认，但网页不运行修复、也不选输入或输出。只对新的工作副本固定用 `e2fsck -fp`，独立 `-fn` 复查后才发布新文件，不改输入或磁盘。
 
 ## 检查一份 XFS 保存副本（只读）
 

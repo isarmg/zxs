@@ -173,7 +173,7 @@ pub fn prepare_sam_worker_exec(cmd:&mut Command,original:&File)->io::Result<()>{
 /// Fixed private child kinds. Neither can execute a caller-supplied program
 /// or inherit descriptors beyond the same dedicated 3/4 layout.
 #[derive(Clone,Copy)]
-pub enum OfflineSql { Account, FirstLayout, FirstBrowser }
+pub enum OfflineSql { Account, FirstLayout, FirstBrowser, ExtRepairBrowser }
 
 /// The account SQL child retains the operator's TERMINAL session (not
 /// the unrelated diagnostic worker session). Only 3=private seqpacket and
@@ -202,7 +202,8 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
         if libc::dup3(channel.as_raw_fd(),3,0)!=3||libc::dup3(order.as_raw_fd(),4,0)!=4{
             return Err(io::Error::last_os_error());
         }
-        let action=match mode{OfflineSql::Account=>c"__native-account-sql-v9",OfflineSql::FirstLayout=>c"__first-layout-sql-v9",OfflineSql::FirstBrowser=>c"__first-install-browser-v1"};
+        let action=match mode{OfflineSql::Account=>c"__native-account-sql-v9",OfflineSql::FirstLayout=>c"__first-layout-sql-v9",OfflineSql::FirstBrowser=>c"__first-install-browser-v1",
+            OfflineSql::ExtRepairBrowser=>c"__ext-repair-browser-v1"};
         let argv=[c"helper".as_ptr(),action.as_ptr(),std::ptr::null()];
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
         libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),

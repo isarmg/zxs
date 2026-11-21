@@ -1,14 +1,23 @@
-//! First-install handoff on its own already isolated local listener. It has
-//! only a label and count, never a path, device descriptor or root command.
+//! A one-shot browser handoff on its own already isolated listener. It has
+//! only a purpose and a count or byte length, never a path, device or command.
 use super::{Panel,Reply,Request,digest,http,matches,token};
 use std::{io,net::TcpListener,thread,time::{Duration,Instant}};
 const TICKET:Duration=Duration::from_secs(90);
+#[derive(Clone,Copy)]
+enum Purpose{Install{fresh:bool,count:u8},ExtRepair{bytes:u64}}
 pub(super) struct Offer{
-    fresh:bool,count:u8,ticket:Option<([u8;32],Instant)>,pub(super) requested:bool,
+    purpose:Purpose,ticket:Option<([u8;32],Instant)>,requested:bool,
 }
 impl Offer{
+    pub(super) fn is_repair(&self)->bool{matches!(self.purpose,Purpose::ExtRepair{..})}
     pub(super) fn route(&mut self,r:Request,now:Instant)->(Reply,bool){
-        if r.path=="/api/install/request"{
+        let (preview,request,requested,cancelled)=match self.purpose{
+            Purpose::Install{..}=>("/api/install/preview","/api/install/request",
+                "请求已交回本机终端。网页将关闭；尚未启用、设密或写盘。","安装请求已取消。未写入。"),
+            Purpose::ExtRepair{..}=>("/api/ext-repair/preview","/api/ext-repair/request",
+                "请求已交回本机终端。网页将关闭；尚未读取或修复镜像。","工作副本请求已取消。未写入。"),
+        };
+        if r.path==request{
             if r.content_type.as_deref()!=Some("application/octet-stream")||r.body.len()!=64{
                 return (Reply::plain(400,"这里只接受本机预览票。"),false);
             }
@@ -16,29 +25,43 @@ impl Offer{
                 return (Reply::plain(403,"预览票不符或已失效。尚未写入。"),false);
             }
             self.ticket=None;self.requested=true;
-            return (Reply::plain(200,"请求已交回本机终端。网页将关闭；尚未启用、设密或写盘。"),true);
+            return (Reply::plain(200,requested),true);
         }
         if !r.body.is_empty()||r.content_type.is_some(){
             return (Reply::plain(400,"这里不接受路径、口令、操作 ID 或工具选项。"),false);
         }
         match r.path.as_str(){
-            "/api/install/preview" if !self.requested=>{
+            p if p==preview && !self.requested=>{
                 let Ok(ticket)=token()else{return (Reply::plain(503,"暂不能准备本机确认票。"),false);};
                 self.ticket=Some((digest(ticket.as_bytes()),now+TICKET));
-                (Reply::plain(200,format!("{}\n{}\n{ticket}",if self.fresh{"new"}else{"resume"},self.count)),false)
+                let page=match self.purpose{
+                    Purpose::Install{fresh,count}=>format!("{}\n{count}\n{ticket}",if fresh{"new"}else{"resume"}),
+                    Purpose::ExtRepair{bytes}=>format!("repair\n{bytes}\n{ticket}"),
+                };
+                (Reply::plain(200,page),false)
             }
-            "/api/close"=>(Reply::plain(200,"安装请求已取消。未写入。"),true),
-            _=>(Reply::plain(404,"此安装页面只提供原范围预览和发起。"),false),
+            "/api/close"=>(Reply::plain(200,cancelled),true),
+            _=>(Reply::plain(404,"此页面只提供本次原范围预览和发起。"),false),
         }
     }
 }
 pub(crate) fn serve_first(listener:TcpListener,fresh:bool,count:u8,code:[u8;32],end:Instant,
     check:impl Fn()->io::Result<()>)->io::Result<bool>{
-    if !(1..=62).contains(&count)||code==[0;32]{return Err(io::Error::other("invalid fixed panel scope"));}
+    if !(1..=62).contains(&count){return Err(io::Error::other("invalid fixed installation panel scope"));}
+    serve(listener,Purpose::Install{fresh,count},code,end,check)
+}
+pub(crate) fn serve_repair(listener:TcpListener,bytes:u64,code:[u8;32],end:Instant,
+    check:impl Fn()->io::Result<()>)->io::Result<bool>{
+    if !(1..=i64::MAX as u64).contains(&bytes){return Err(io::Error::other("invalid fixed copy-repair panel scope"));}
+    serve(listener,Purpose::ExtRepair{bytes},code,end,check)
+}
+fn serve(listener:TcpListener,purpose:Purpose,code:[u8;32],end:Instant,
+    check:impl Fn()->io::Result<()>)->io::Result<bool>{
+    if code==[0;32]{return Err(io::Error::other("invalid fixed panel pairing code"));}
     let code=code.iter().map(|b|format!("{b:02x}")).collect::<String>();
     let mut panel=Panel::new(listener.local_addr()?.to_string(),code.as_bytes(),Instant::now());
     drop(code);
-    panel.install=Some(Offer{fresh,count,ticket:None,requested:false});
+    panel.handoff=Some(Offer{purpose,ticket:None,requested:false});
     let mut served=0;
     while !panel.closed&&Instant::now()<panel.expires.min(end)&&served<256{
         check()?;
@@ -59,7 +82,7 @@ pub(crate) fn serve_first(listener:TcpListener,fresh:bool,count:u8,code:[u8;32],
     }
     drop(listener);
     check()?;
-    Ok(panel.install.is_some_and(|o|o.requested))
+    Ok(panel.handoff.is_some_and(|o|o.requested))
 }
 
 #[cfg(test)]
@@ -71,14 +94,46 @@ mod tests{
             content_type:(!body.is_empty()).then(||"application/octet-stream".into()),body:body.into()}
     }
     #[test]
-    fn request_is_one_existing_ticket_not_a_path_or_a_disk_command(){
+    fn install_request_is_one_existing_ticket_not_a_path_or_a_disk_command(){
         let now=Instant::now();let token="a".repeat(64);
-        let mut offer=Offer{fresh:true,count:2,ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false};
+        let mut offer=Offer{purpose:Purpose::Install{fresh:true,count:2},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false};
         assert_eq!(offer.route(post("/api/install/request",b"/host/disk"),now).0.code,400);
         assert_eq!(offer.route(post("/api/copy/preview",b""),now).0.code,404);
         assert_eq!(offer.route(post("/api/install/request",token.as_bytes()),now+TICKET).0.code,403);
         let (message,close)=offer.route(post("/api/install/request",token.as_bytes()),now);
         assert_eq!(message.code,200);assert!(close&&offer.requested);
         assert_eq!(offer.route(post("/api/install/request",token.as_bytes()),now).0.code,403);
+    }
+    #[test]
+    fn repair_handoff_still_requires_the_exact_origin_and_both_paired_credentials(){
+        let now=Instant::now();let token="a".repeat(64);let bearer="b".repeat(64);let csrf="c".repeat(64);
+        let mut panel=Panel::new("127.0.0.1:1900".into(),b"not-used",now);
+        panel.session=Some(super::super::Session{bearer:digest(bearer.as_bytes()),csrf:digest(csrf.as_bytes())});
+        panel.handoff=Some(Offer{purpose:Purpose::ExtRepair{bytes:4096},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false});
+        let request=|path:&str|{
+            let mut r=post(path,token.as_bytes());r.auth=Some(format!("Bearer {bearer}"));r.csrf=Some(csrf.clone());r
+        };
+        let mut origin=request("/api/ext-repair/request");origin.origin=Some("http://localhost:1900".into());
+        assert_eq!(panel.handle_with_guide(origin,now,||panic!("no guide in this mode")).code,403);
+        let mut cookie=request("/api/ext-repair/request");cookie.csrf=None;
+        assert_eq!(panel.handle_with_guide(cookie,now,||panic!("no guide in this mode")).code,403);
+        assert_eq!(panel.handle_with_guide(request("/api/install/request"),now,||panic!("no guide in this mode")).code,400);
+        assert!(!panel.closed);
+        assert_eq!(panel.handle_with_guide(request("/api/ext-repair/request"),now,||panic!("no guide in this mode")).code,200);
+        assert!(panel.closed);
+    }
+    #[test]
+    fn repair_preview_has_a_separate_purpose_without_files_and_consumes_one_ticket(){
+        let now=Instant::now();let token="a".repeat(64);
+        let mut offer=Offer{purpose:Purpose::ExtRepair{bytes:i64::MAX as u64},ticket:Some((digest(token.as_bytes()),now+TICKET)),requested:false};
+        assert!(offer.is_repair());
+        assert_eq!(offer.route(post("/api/install/request",token.as_bytes()),now).0.code,400);
+        assert_eq!(offer.route(post("/api/disks",b""),now).0.code,404);
+        assert_eq!(offer.route(post("/api/ext-repair/preview",b"--repair /path"),now).0.code,400);
+        assert_eq!(offer.route(post("/api/ext-repair/request",b"/host/image"),now).0.code,400);
+        assert_eq!(offer.route(post("/api/ext-repair/request",token.as_bytes()),now+TICKET).0.code,403);
+        let (message,close)=offer.route(post("/api/ext-repair/request",token.as_bytes()),now);
+        assert_eq!(message.code,200);assert!(close&&offer.requested);
+        assert_eq!(offer.route(post("/api/ext-repair/request",token.as_bytes()),now).0.code,403);
     }
 }

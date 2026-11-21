@@ -1,7 +1,7 @@
 //! Explicit local disk panel. Pairing alone never authorizes a checker or repair.
 mod check;
 mod first;
-pub(crate) use first::serve_first;
+pub(crate) use first::{serve_first,serve_repair};
 mod http;
 mod setup;
 mod view;
@@ -31,12 +31,12 @@ fn matches(s:&[u8],d:&[u8;32])->bool{
 struct Session{bearer:[u8;32],csrf:[u8;32]}
 struct Panel {
     host:String, origin:String, pairing:Option<[u8;32]>, failed:u8, session:Option<Session>,
-    expires:Instant, closed:bool, check:Option<check::Check>, install:Option<first::Offer>,
+    expires:Instant, closed:bool, check:Option<check::Check>, handoff:Option<first::Offer>,
 }
 impl Panel {
     fn new(host:String,code:&[u8],now:Instant)->Self{
         Self{origin:format!("http://{host}"),host,pairing:Some(digest(code)),failed:0,
-            session:None,expires:now+PAIR,closed:false,check:None,install:None}
+            session:None,expires:now+PAIR,closed:false,check:None,handoff:None}
     }
     fn handle(&mut self,r:Request,now:Instant)->Reply{
         self.handle_with_guide(r,now,setup::observe)
@@ -46,8 +46,10 @@ impl Panel {
         if r.host!=self.host{return Reply::plain(403,"需要本机准确的回环地址和端口。");}
         if r.method=="GET" && r.body.is_empty(){
             return match r.path.as_str(){
-                "/" if self.install.is_some()=>Reply::asset("text/html; charset=utf-8",include_str!("disk_web/first.html")),
-                "/panel.js" if self.install.is_some()=>Reply::asset("text/javascript; charset=utf-8",include_str!("disk_web/first.js")),
+                "/" if self.handoff.as_ref().is_some_and(first::Offer::is_repair)=>
+                    Reply::asset("text/html; charset=utf-8",include_str!("disk_web/repair.html")),
+                "/" if self.handoff.is_some()=>Reply::asset("text/html; charset=utf-8",include_str!("disk_web/first.html")),
+                "/panel.js" if self.handoff.is_some()=>Reply::asset("text/javascript; charset=utf-8",include_str!("disk_web/first.js")),
                 "/"=>Reply::asset("text/html; charset=utf-8",include_str!("disk_web/index.html")),
                 "/panel.js"=>Reply::asset("text/javascript; charset=utf-8",include_str!("disk_web/panel.js")),
                 "/panel.css"=>Reply::asset("text/css; charset=utf-8",include_str!("disk_web/panel.css")),
@@ -79,8 +81,8 @@ impl Panel {
             || !r.csrf.as_deref().is_some_and(|v|matches(v.as_bytes(),&session.csrf)){
             return Reply::plain(403,"会话凭据无效。");
         }
-        if let Some(install)=&mut self.install{
-            let (response,close)=install.route(r,now);self.closed=close;return response;
+        if let Some(offer)=&mut self.handoff{
+            let (response,close)=offer.route(r,now);self.closed=close;return response;
         }
         if matches!(r.path.as_str(),"/api/copy/check"|"/api/copy/result"){
             if r.content_type.as_deref()!=Some("application/octet-stream")||r.body.len()!=64{

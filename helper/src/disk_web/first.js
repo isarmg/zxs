@@ -3,6 +3,9 @@ const pair = document.querySelector("#pair-form"), scope = document.querySelecto
 const code = document.querySelector("#code"), plan = document.querySelector("#plan"), status = document.querySelector("#status");
 const proceed = document.querySelector("#continue"), cancel = document.querySelector("#cancel");
 const hex = /^[0-9a-f]{64}$/;
+const repair = document.querySelector("main").dataset.purpose === "ext-repair";
+const route = repair ? "/api/ext-repair" : "/api/install";
+const validByteCount = b => /^[1-9][0-9]{0,18}$/.test(b) && (b.length < 19 || b <= "9223372036854775807");
 let auth = null, csrf = null, ticket = null;
 async function post(path, body, authenticated = true) {
     const headers = {};
@@ -17,12 +20,17 @@ async function post(path, body, authenticated = true) {
     return r.text();
 }
 async function preview() {
-    const fields = (await post("/api/install/preview", null)).split("\n");
-    if (fields.length !== 3 || !["new", "resume"].includes(fields[0]) ||
-        !/^(?:[1-9]|[1-5][0-9]|6[0-2])$/.test(fields[1]) || !hex.test(fields[2])) throw new Error();
+    const fields = (await post(route + "/preview", null)).split("\n");
+    if (fields.length !== 3 || !hex.test(fields[2])) throw new Error();
+    if (repair) {
+        if (fields[0] !== "repair" || !validByteCount(fields[1])) throw new Error();
+        plan.textContent = "终端已选一个 " + fields[1] + " 字节的输入镜像和一个新工作副本位置。这里只发起终端确认，尚未读取镜像，也未创建文件。";
+    } else {
+        if (!["new", "resume"].includes(fields[0]) || !/^(?:[1-9]|[1-5][0-9]|6[0-2])$/.test(fields[1])) throw new Error();
+        plan.textContent = (fields[0] === "new" ? "新建空池" : "只续同一原单") + "：终端已选 1 个 SYSTEM、1 个独立回收盘和 " +
+            fields[1] + " 个数据根。终端将显示实际原名和身份，本次预览不核盘内内容。";
+    }
     ticket = fields[2];
-    plan.textContent = (fields[0] === "new" ? "新建空池" : "只续同一原单") + "：终端已选 1 个 SYSTEM、1 个独立回收盘和 " +
-        fields[1] + " 个数据根。终端将显示实际原名和身份，本次预览不核盘内内容。";
     proceed.disabled = false;
 }
 pair.addEventListener("submit", async e => {
@@ -38,7 +46,7 @@ pair.addEventListener("submit", async e => {
         pair.hidden = true; scope.hidden = false; proceed.disabled = true;
         await preview();
     } catch (_) {
-        status.textContent = "未取得有效预览。请核原终端和配对码；网页未启动安装。";
+        status.textContent = "未取得有效预览。请核原终端和配对码；网页未启动任何操作。";
     } finally {
         if (auth === null) button.disabled = false;
     }
@@ -47,8 +55,8 @@ proceed.addEventListener("click", async () => {
     if (ticket === null) return;
     const proposed = ticket; ticket = null; proceed.disabled = true; cancel.disabled = true;
     try {
-        await post("/api/install/request", proposed);
-        status.textContent = "请求已交给本机终端，网页将关闭。请回原终端核对原件并决定，不是安装完成。";
+        await post(route + "/request", proposed);
+        status.textContent = "请求已交给本机终端，网页将关闭。请回原终端核对原件并决定；现在还没有开始。";
     } catch (_) {
         status.textContent = "未取得网页回执。先看原终端；收到本机确认提示才可继续，不另开新单。";
     } finally {
