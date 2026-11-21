@@ -104,8 +104,10 @@ fn checked_reply(meta:&[u8;65],site:&SitePayload,raw:&[u8])->io::Result<([u8;224
 }
 
 fn observe()->io::Result<(Id,Id,Id,u64)>{
-    let tty=PublicConfirmation::select()?;
+    // Site selection requires pristine inherited stdio. Only then open the
+    // extra descriptors needed to keep the original terminal pinned.
     let site=DeployedSite::select()?;
+    let tty=PublicConfirmation::select()?;
     let (system,locked)=site.original();
     let q=Question{nonce:random()?,where_system:place(system)?,site:site.payload().clone(),plan:site.plan().clone()};
     let subject=q.site.subject.tuple();
