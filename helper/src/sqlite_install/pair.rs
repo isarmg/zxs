@@ -42,6 +42,10 @@ pub(crate) fn confirm_exfat_repair(preview:String,require:impl Fn()->std::io::Re
     let tty=terminal::PublicConfirmation::select()?;
     require()?;tty.confirm_exfat_repair(preview)?;require()?;tty.check()
 }
+pub(crate) fn confirm_fat32_repair(preview:String,require:impl Fn()->std::io::Result<()>)->std::io::Result<()>{
+    let tty=terminal::PublicConfirmation::select()?;
+    require()?;tty.confirm_fat32_repair(preview)?;require()?;tty.check()
+}
 
 fn login(s: &[u8]) -> bool {
     let basic = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();

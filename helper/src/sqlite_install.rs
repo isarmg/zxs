@@ -12,7 +12,7 @@ mod receipt;
 mod pair;
 pub(crate) use pair::{InstallWebUnit,WebUnitControl, Setup,exec_child as sam_worker,exec_sql_child as native_sql_worker,exec_layout_sql_child as layout_sql_worker,exec_first_browser,Online,StartSmb};
 
-pub(crate) use pair::{confirm_exfat_repair,confirm_ext_repair,exec_ext_repair_browser};
+pub(crate) use pair::{confirm_exfat_repair,confirm_ext_repair,confirm_fat32_repair,exec_ext_repair_browser};
 
 const DATABASE:&str="SYSTEM.sqlite3";
 const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";

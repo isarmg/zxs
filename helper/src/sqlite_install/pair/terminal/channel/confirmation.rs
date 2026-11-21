@@ -71,6 +71,9 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install::pair) fn confirm_exfat_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-EXFAT-COPY",Some(preview),64*1024)
     }
+    pub(in crate::sqlite_install::pair) fn confirm_fat32_repair(&self,preview:String)->io::Result<()>{
+        self.ask("REPAIR-FAT32-COPY",Some(preview),64*1024)
+    }
     pub(in crate::sqlite_install::pair) fn confirm_start(&self,review:String)->io::Result<()>{self.ask("START-SMB",Some(review),96*1024)}
     pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
         nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),&||self.check())

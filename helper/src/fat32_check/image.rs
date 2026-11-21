@@ -30,6 +30,27 @@ fn geometry(b:&[u8;512],length:u64)->io::Result<Geometry> {
     Ok(Geometry{length,sector_bytes:bs,data_clusters:clusters as u32})
 }
 
+// The selected FAT allocation layout and extended boot volume ID cannot be
+// replaced by another image with a coincidentally matching size. Leave the
+// boot labels, state bits and backup/FSInfo locations to the genuine checker.
+#[derive(Clone,Copy)]
+pub(super) struct FatRepairFrame{pub(super) view:Geometry,bpb:[u8;42]}
+pub(super) type FatRepairImage=super::leased::Image<FatRepairFrame>;
+pub(super) fn fat_repair_frame(file:&File,length:u64)->io::Result<FatRepairFrame>{
+    let mut boot=[0;512];file.read_exact_at(&mut boot,0)?;
+    work_frame(&boot,length)
+}
+fn work_frame(boot:&[u8;512],length:u64)->io::Result<FatRepairFrame>{
+    let view=geometry(boot,length)?;
+    let mut bpb=[0;42];
+    bpb[..37].copy_from_slice(&boot[11..48]);
+    bpb[37..].copy_from_slice(&boot[66..71]);
+    Ok(FatRepairFrame{view,bpb})
+}
+impl FatRepairFrame{
+    pub(super) fn same_volume(self,reopened:Self)->bool{self.view==reopened.view&&self.bpb==reopened.bpb}
+}
+
 // Only a complete capture can construct a checker operand. No inherited device,
 // arbitrary File or unsealed bytes can be promoted by the launcher.
 pub(super) struct Sealed {fd:File,geometry:Geometry}
@@ -110,3 +131,24 @@ fn eof(f:&mut impl Read)->io::Result<()>{
 #[cfg(test)]
 #[path="../../tests/fs_tools/fat32_image.rs"]
 mod tests;
+
+#[cfg(test)]
+mod repair_tests{
+    use super::*;
+    #[test]fn matching_size_or_counts_do_not_replace_the_known_fat_volume(){
+        let mut boot=[0u8;512];let sectors=80_000u32;let len=u64::from(sectors)*512;
+        boot[11..13].copy_from_slice(&512u16.to_le_bytes());boot[13]=1;
+        boot[14..16].copy_from_slice(&32u16.to_le_bytes());boot[16]=2;
+        boot[32..36].copy_from_slice(&sectors.to_le_bytes());
+        boot[36..40].copy_from_slice(&640u32.to_le_bytes());boot[44]=2;
+        boot[66]=0x29;boot[510..].copy_from_slice(&[0x55,0xaa]);
+        let original=work_frame(&boot,len).unwrap();
+        boot[65]=1;boot[71]=b'L';
+        assert!(original.same_volume(work_frame(&boot,len).unwrap())); // state / label, not identity
+        boot[67]=1;
+        assert!(!original.same_volume(work_frame(&boot,len).unwrap())); // volume ID
+        boot[67]=0;boot[44]=3;
+        assert!(!original.same_volume(work_frame(&boot,len).unwrap())); // ordinary root's layout
+        assert!(work_frame(&boot,len+512).is_err());
+    }
+}

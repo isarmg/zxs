@@ -1,7 +1,7 @@
 //! One isolated invocation. The checker never gets host /dev, the caller's
 //! namespace/terminal, any host directory, or an arbitrary option. Only the
 //! leased branches bind just the explicitly saved copy.
-use super::{Format,btrfs,ext4,ntfs,repair,xfs,group::Group,image::{ExfatSealed,Sealed},runtime::Runtime};
+use super::{Format,btrfs,ext4,ntfs,repair,xfs,group::Group,image::{ExfatSealed,FatRepairImage,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -74,6 +74,20 @@ pub(super) fn check(runtime:&Runtime,image:&Sealed)->io::Result<super::Report> {
     let (code,out,err,status)=invoke(runtime,Operand::Sealed(image.file()))?;
     classify(code,&out,&err,&status,image.geometry().data_clusters)
 }
+pub(super) fn check_fat32_work(runtime:&Runtime,work:&FatRepairImage)->io::Result<super::Report>{
+    runtime.require_format(Format::Fat32)?;work.require()?;
+    let (code,out,err,status)=invoke(runtime,Operand::LeasedFat32(work))?;
+    work.require()?;classify(code,&out,&err,&status,work.extent().view.data_clusters)
+}
+pub(super) fn repair_fat32(runtime:&Runtime,work:&repair::Writable<'_>,source:&FatRepairImage)->io::Result<i32>{
+    runtime.require_format(Format::Fat32)?;source.require()?;work.require()?;
+    let (code,out,err,status)=invoke(runtime,Operand::RepairFat32{work,source})?;
+    source.require()?;work.require()?;
+    if !preen_exit(&status,code)||!fat_preen_summary(code,&out,&err,source.extent().view.data_clusters){
+        return Err(invalid("FAT32 automatic repair was incomplete or needs manual attention; no final copy published"));
+    }
+    Ok(code)
+}
 pub(super) fn check_exfat(runtime:&Runtime,image:&ExfatSealed)->io::Result<super::exfat::Report>{
     runtime.require_format(Format::Exfat)?;
     let (code,out,err,status)=invoke(runtime,Operand::Sealed(image.file()))?;
@@ -141,13 +155,16 @@ pub(super) fn check_btrfs(runtime:&Runtime,image:&btrfs::Image)->io::Result<btrf
 enum Operand<'a>{
     Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image),LeasedNtfs(&'a ntfs::Image),LeasedBtrfs(&'a btrfs::Image),
     LeasedExfat(&'a super::exfat::RepairImage),
+    LeasedFat32(&'a FatRepairImage),
     RepairExt4{work:&'a repair::Writable<'a>,source:&'a ext4::Image},
     RepairExfat{work:&'a repair::Writable<'a>,source:&'a super::exfat::RepairImage},
+    RepairFat32{work:&'a repair::Writable<'a>,source:&'a FatRepairImage},
 }
 impl<'a> Operand<'a>{
     fn lease(self)->Option<&'a File>{
         match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file()),Self::LeasedBtrfs(i)=>Some(i.file()),Self::RepairExt4{source,..}=>Some(source.file()),
-            Self::LeasedExfat(work)=>Some(work.file()),Self::RepairExfat{source,..}=>Some(source.file())}
+            Self::LeasedExfat(work)=>Some(work.file()),Self::RepairExfat{source,..}=>Some(source.file()),
+            Self::LeasedFat32(work)=>Some(work.file()),Self::RepairFat32{source,..}=>Some(source.file())}
     }
     fn sandbox(self,cmd:&mut Command)->io::Result<OwnedFd>{
         match self{
@@ -157,7 +174,7 @@ impl<'a> Operand<'a>{
                 cmd.args(["--perms","0400","--ro-bind-data",&fd.as_raw_fd().to_string(),"/image"]);
                 Ok(fd)
             }
-            Self::RepairExt4{work,..}|Self::RepairExfat{work,..}=>{
+            Self::RepairExt4{work,..}|Self::RepairExfat{work,..}|Self::RepairFat32{work,..}=>{
                 work.require()?;
                 // The original readonly source is watched by the parent but
                 // never duplicated into bubblewrap. Only the newborn inode
@@ -176,7 +193,7 @@ impl<'a> Operand<'a>{
 }
 fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
     let repairing_ext=matches!(copy,Operand::RepairExt4{..});
-    let repairing_exfat=matches!(copy,Operand::RepairExfat{..});
+    let repairing_fat=matches!(copy,Operand::RepairExfat{..}|Operand::RepairFat32{..});
     let ext=repairing_ext||matches!(copy,Operand::LeasedExt4(_));
     let xfs=matches!(copy,Operand::LeasedXfs(_));
     let ntfs=matches!(copy,Operand::LeasedNtfs(_));
@@ -231,7 +248,7 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     let operand=copy.sandbox(&mut b)?;let status=give(&wstatus)?;
     b.args(["--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),"--","/checker"]);
     if repairing_ext{b.args(["-fp","-N","/image","/image"]);}
-    else if repairing_exfat{b.args(["-p","/image"]);}
+    else if repairing_fat{b.args(["-p","/image"]);}
     else if ext{b.args(["-fn","-N","/image","/image"]);}
     else if xfs{b.args(["-n","-f","-P","-t","0","-o","phase2_threads=1","/image"]);}
     else if btrfs{b.args(["check","--readonly","/image"]);}
@@ -243,11 +260,13 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
         Operand::Sealed(_)=>prepare_diagnostic_exec(&mut b,runtime.launcher())?,
         Operand::LeasedExt4(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedExfat(work)=>{work.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::LeasedFat32(work)=>{work.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedNtfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedBtrfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedXfs(image)=>{image.require()?;prepare_xfs_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::RepairExt4{work,source}=>{work.require()?;source.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::RepairExfat{work,source}=>{work.require()?;source.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::RepairFat32{work,source}=>{work.require()?;source.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
     }
     let mut group=Group::new(b.spawn()?);
     // Only the sandbox monitor and its explicitly selected setup descriptions
@@ -319,10 +338,24 @@ fn summary(line:&[u8],clusters:u32)->Option<(u32,u32)> {
 // its compiled-in CP850 table before opening /image. Only the exact complete
 // startup notice is benign; never discard arbitrary per-file stderr.
 const CP850_FALLBACK:&[u8]=b"Cannot initialize conversion from codepage 850 to ANSI_X3.4-1968: Invalid argument\nCannot initialize conversion from ANSI_X3.4-1968 to codepage 850: Invalid argument\nUsing internal CP850 conversion table\n";
+const FAT_BANNER:&[u8]=b"fsck.fat 4.2 (2021-01-31)";
+fn fat_preen_summary(code:i32,out:&[u8],err:&[u8],clusters:u32)->bool{
+    if !err.is_empty()&&err!=CP850_FALLBACK{return false;}
+    let Some(out)=out.strip_suffix(b"\n")else{return false;};
+    let mut rows=out.split(|&b|b==b'\n');
+    if rows.next()!=Some(FAT_BANNER)||rows.next_back().and_then(|l|summary(l,clusters)).is_none(){return false;}
+    match code{
+        0=>rows.next().is_none(),
+        // 1 also covers internal or I/O failure. Even the normal writing
+        // decision is before fs_close's actual flush, so stderr is checked
+        // above and this is still only a prerequisite to the second -n run.
+        1=>rows.next_back()==Some(b"Writing changes.")&&rows.next_back()==Some(b"*** Filesystem was changed ***"),
+        _=>false,
+    }
+}
 
 fn classify(code:i32,out:&[u8],err:&[u8],status:&[u8],clusters:u32)->io::Result<super::Report> {
-    let first=b"fsck.fat 4.2 (2021-01-31)";
-    if !delivered(status,code) || !out.split(|b|*b==b'\n').next().is_some_and(|v|v==first) {
+    if !delivered(status,code) || !out.split(|b|*b==b'\n').next().is_some_and(|v|v==FAT_BANNER) {
         return Err(invalid("checker launch, expected version or completed status not established"));
     }
     // Never echo image labels, filenames, terminal escapes or raw tool output.
@@ -350,6 +383,21 @@ mod repair_tests{
             assert!(!preen_exit(terminal.trim_end().as_bytes(),code));
             assert!(!preen_exit(b"",code));
         }
+    }
+    #[test]
+    fn fat32_change_marker_and_real_end_are_not_equivalent_to_exit_one(){
+        const ZERO:&[u8]=b"fsck.fat 4.2 (2021-01-31)\n/image: 0 files, 1/75000 clusters\n";
+        const ONE:&[u8]=b"fsck.fat 4.2 (2021-01-31)\nobserved repair details\n\n*** Filesystem was changed ***\nWriting changes.\n/image: 0 files, 1/75000 clusters\n";
+        assert!(fat_preen_summary(0,ZERO,CP850_FALLBACK,75000));
+        assert!(fat_preen_summary(1,ONE,b"",75000));
+        assert!(!fat_preen_summary(0,ONE,b"",75000));
+        assert!(!fat_preen_summary(1,ZERO,b"",75000));
+        assert!(!fat_preen_summary(1,ONE,b"write error\n",75000));
+        assert!(!fat_preen_summary(1,&ONE[..ONE.len()-1],b"",75000));
+        assert!(!fat_preen_summary(1,ONE,b"",75001));
+        assert!(!fat_preen_summary(2,ONE,b"",75000));
+        let mut errors=CP850_FALLBACK.to_vec();errors.extend(b"write error\n");
+        assert!(!fat_preen_summary(1,ONE,&errors,75000));
     }
 }
 

@@ -16,4 +16,18 @@
 
 子进程启动后 30 秒墙钟、12 秒 CPU、512 MiB 进程地址空间、64 KiB 合并标准输出/错误等上限。中途信号、超时、输出不全或没有 launcher 的终场回执不得报健康。返回 0 只代表受支持工具完成且无其他检查消息（无宿主字符转换插件时，仅允许工具使用内置 CP850 表的完整已知启动提示），绝不是硬盘健康或以后仍未改变；1 表示工具给出与原几何一致的完整终场统计，另有消息或问题（工具自身的 1 也可含内部不一致）；即便工具退出 1，只要缺本镜像的完整统计，仍为 2：没有完整检查结果。给出终场解析下来的文件数、使用簇和总簇，不回显原始报告。不会把镜像中的文件名、卷标或终端转义原文写到报告。
 
-实现依据：[bubblewrap 0.12 参数和隔离](https://github.com/containers/bubblewrap/blob/v0.12.0/bwrap.xml)、[dosfstools 4.2 工具源码和退出处理](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c)、[Linux memfd 封印](https://man7.org/linux/man-pages/man2/memfd_create.2.html)。实际受控 Debian 环境、坏镜像和隔离失败的运行验收尚未做。[exFAT](exfat-copy-check.md) 有单独的只读命令；两者都不提供修复入口或 Web 写操作。
+实现依据：[bubblewrap 0.12 参数和隔离](https://github.com/containers/bubblewrap/blob/v0.12.0/bwrap.xml)、[dosfstools 4.2 工具源码和退出处理](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c)、[Linux memfd 封印](https://man7.org/linux/man-pages/man2/memfd_create.2.html)。实际受控 Debian 环境、坏镜像和隔离失败的运行验收尚未做。[exFAT](exfat-copy-check.md) 有单独的只读命令；普通 Web 面板的这两类检查仍无写操作。
+
+## 只修新建的工作副本
+
+本机非 root 前台给出已保存单卷镜像的绝对路径、独立的完整 SHA-256 和一个不存在的新输出目录。操作者先确认输入未挂载、未作为 loop 后端；它必须是合格的普通文件，不能是设备节点。核对本机实际动作、原位置与输出，再输入刚显示的 `REPAIR-FAT32-COPY` 挑战。没有浏览器入口，不接受其他工具参数。
+
+```sh
+/usr/bin/helper repair-fat32-copy /saved/volume.img --sha256 HEX --output /work/new-volume
+```
+
+只把拥有独立 inode 的新工作文件放进隔离环境，固定调用 `fsck.fat -p`。在本版 dosfstools 4.2 中，`-p`、`-a` 与 `-y` 是**同一自动模式**。它可能截短、改名、删除坏目录项，或把孤立的簇链保存为恢复文件；只对工作副本接受这种效果，不尝试找回全部文件。原输入在完整复制和外部 SHA/EOF 核对期间及之后持原只读租约，永不交给可写的子进程。不给上游磁盘、其他数据、原宿主目录、终端或自由选项。[本版上游手册](https://manpages.debian.org/trixie/dosfstools/fsck.fat.8.en.html)和[自动模式源码](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c#L118-L130)记录了其实际行为。
+
+上游退出 1 同时可能表示内部错误，写失败甚至只另报 stderr。只有实际返回 0 且正好无额外信息，或实际返回 1 并给出确切原生提交尾、与原几何相符的终场，且没有已核固定 CP850 启动提示以外的 stderr，才进入独立复查。这不是仅凭「正在写」报成功。关闭已同步的写 FD，依原名独立重开工作 inode，核它仍属同一 FAT32 几何及卷识别字段，完整计算新 SHA 和 EOF。只读沙箱用同版 `-n` 严格检查，确切结果为 0 才在原父目录无覆盖地发布 `NEW_DIR/image.fat32`。只说明新副本本次元数据检查没有报告问题，**不证明文件正文无损、原盘健康或可安全挂载**。[实际写入与最终返回处理](https://github.com/dosfstools/dosfstools/blob/v4.2/src/io.c#L129-L168)。
+
+该流式工作路径不套用 128 MiB 的旧内存快照限制，需要足够存储空间，仍受继承的文件大小限额和实际 I/O 约束；每次工具最多 10 分钟墙钟及 300 秒子进程 CPU。超时、异常退出、真原文件变化、失败或部分输出一律不报有已确认成品；保留操作预览里的新工作文件和可能已改名但未确认的结果，不接管、不删除或覆盖。源码及试验用例未实际构建、运行或接触设备。

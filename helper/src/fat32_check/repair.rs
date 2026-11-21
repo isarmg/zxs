@@ -1,6 +1,6 @@
 //! An opt-in repair of a newly created working image. The selected source is
 //! always readonly and never supplied to the writable sandbox.
-use super::{exfat,ext4,leased::{CopySource,Image,Selected},runner,runtime::Runtime};
+use super::{exfat,ext4,image,leased::{CopySource,Image,Selected},runner,runtime::Runtime};
 use crate::{fs_tools::hex,pinned::{Entity,Kind,Mount,Pinned,invalid,local_data_filesystem,private_inode_reader}};
 use helper_linux_evidence::diagnostic_process::cancelled;
 use rustix::{
@@ -19,15 +19,16 @@ fn live()->io::Result<()>{if cancelled(){Err(io::ErrorKind::Interrupted.into())}
 fn print_sha(v:&[u8;32])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 
 #[derive(Clone,Copy,Debug)]
-enum RepairFormat{Ext4,Exfat}
+enum RepairFormat{Ext4,Exfat,Fat32}
 impl RepairFormat{
-    fn image(self)->&'static std::ffi::CStr{match self{Self::Ext4=>c"image.ext",Self::Exfat=>c"image.exfat"}}
+    fn image(self)->&'static std::ffi::CStr{match self{Self::Ext4=>c"image.ext",Self::Exfat=>c"image.exfat",Self::Fat32=>c"image.fat32"}}
     fn leaf(self)->&'static OsStr{OsStr::from_bytes(self.image().to_bytes())}
-    fn label(self)->&'static str{match self{Self::Ext4=>"ext-family",Self::Exfat=>"exFAT"}}
-    fn slug(self)->&'static str{match self{Self::Ext4=>".zxs-ext-work-",Self::Exfat=>".zxs-exfat-work-"}}
+    fn label(self)->&'static str{match self{Self::Ext4=>"ext-family",Self::Exfat=>"exFAT",Self::Fat32=>"FAT32"}}
+    fn slug(self)->&'static str{match self{Self::Ext4=>".zxs-ext-work-",Self::Exfat=>".zxs-exfat-work-",Self::Fat32=>".zxs-fat32-work-"}}
     fn usage(self)->&'static str{match self{
         Self::Ext4=>"expected repair-ext4-copy [web] ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
         Self::Exfat=>"expected repair-exfat-copy ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
+        Self::Fat32=>"expected repair-fat32-copy ABSOLUTE_IMAGE --sha256 HEX --output ABSOLUTE_NEW_DIR",
     }}
 }
 
@@ -40,11 +41,14 @@ impl Request{
     pub(crate) fn parse_exfat(a:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
         Self::parse_format(a,RepairFormat::Exfat)
     }
+    pub(crate) fn parse_fat32(a:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
+        Self::parse_format(a,RepairFormat::Fat32)
+    }
     fn parse_format(mut a:impl Iterator<Item=OsString>,format:RepairFormat)->Result<Self,&'static str>{
         let usage=format.usage();
         let first=a.next().ok_or(usage)?;
         let web=first=="web";
-        if web&&matches!(format,RepairFormat::Exfat){return Err(usage);}
+        if web&&!matches!(format,RepairFormat::Ext4){return Err(usage);}
         let source=PathBuf::from(if web{a.next().ok_or(usage)?}else{first});
         if a.next().as_deref()!=Some(OsStr::new("--sha256")){return Err(usage);}
         let digest=a.next().and_then(|v|hex(v.to_str()?)).ok_or(usage)?;
@@ -70,6 +74,7 @@ impl Request{
         let (runtime,action)=match self.format{
             RepairFormat::Ext4=>(Runtime::ext4()?,"只在新工作副本上让 e2fsck 自动修复可安全处理的 ext 问题，再对新副本做一次独立只读检查。"),
             RepairFormat::Exfat=>(Runtime::exfat()?,"只在新工作副本上运行 fsck.exfat -p，再独立只读复查。自动修复可能截短文件、改名或删除坏目录项。不会找回全部文件，也不验证文件正文。"),
+            RepairFormat::Fat32=>(Runtime::open()?,"只在新工作副本上运行 fsck.fat -p，再独立只读复查。该版本的自动修复与 -a/-y 相同，可能截短文件、改名、删除坏目录项，或把孤立簇链保存为恢复文件。不会找回全部文件，也不验证文件正文。"),
         };
         let preview=format!("{action}不会挂载或修改输入镜像、原磁盘或现有目标。\n输入镜像 {:?}，{length} 字节，外部提供的 SHA-256 {}。\n只有成功复查后才无覆盖地发布 {:?}。预留工作目录 {:?}；空间不足、中断或结果不明时可能留在这两个名字之一，请保留并不要用作已复查镜像。\n",
             self.source,print_sha(&self.digest),dest.output_image(),dest.work_path());
@@ -79,6 +84,7 @@ impl Request{
         match self.format{
             RepairFormat::Ext4=>crate::sqlite_install::confirm_ext_repair(preview,self.web.then_some(length),&require)?,
             RepairFormat::Exfat=>crate::sqlite_install::confirm_exfat_repair(preview,&require)?,
+            RepairFormat::Fat32=>crate::sqlite_install::confirm_fat32_repair(preview,&require)?,
         }
         require()?;
         runner::prepare_work_repair(length)?;
@@ -90,6 +96,9 @@ impl Request{
                     |rt,_,new|if runner::check_ext4(rt,new)?.exit()==0{Ok(())}else{Err(no_recheck())})?,
                 RepairFormat::Exfat=>work_repair(original,&dest,&self.digest,&runtime,exfat::repair_frame,runner::repair_exfat,
                     |rt,source,new|if source.extent().same_volume(new.extent())&&runner::check_exfat_work(rt,new)?.exit()==0{
+                        Ok(())}else{Err(no_recheck())})?,
+                RepairFormat::Fat32=>work_repair(original,&dest,&self.digest,&runtime,image::fat_repair_frame,runner::repair_fat32,
+                    |rt,source,new|if source.extent().same_volume(new.extent())&&runner::check_fat32_work(rt,new)?.exit()==0{
                         Ok(())}else{Err(no_recheck())})?,
             };
             Ok(format!("format={} result=working-copy-rechecked source=unmodified-by-helper preen_status={preen_exit} recheck=no-findings-reported image_bytes={length} sha256={} output={:?}",
@@ -281,7 +290,7 @@ mod tests{
         }
     }
     #[test]
-    fn exfat_is_a_separate_terminal_request_with_its_own_final_leaf(){
+    fn fat_repairs_are_separate_terminal_requests_with_their_own_final_leaves(){
         let sha="b0".repeat(32);
         let approved=format!("/saved/exfat.img --sha256 {sha} --output /new/work");
         let parse=|s:&str|Request::parse_exfat(s.split(' ').map(OsString::from));
@@ -299,5 +308,12 @@ mod tests{
         let more=limit-"/image.exfat".len()-parent.len();
         assert!(parse(&format!("{prefix}{parent}/{}","a".repeat(more-1))).is_ok());
         assert!(parse(&format!("{prefix}{parent}/{}","a".repeat(more))).is_err());
+        let fat=|s:&str|Request::parse_fat32(s.split(' ').map(OsString::from));
+        let job=fat(&approved).unwrap();
+        assert_eq!(job.output.join(job.format.leaf()),Path::new("/new/work/image.fat32"));
+        assert!(fat(&format!("web {approved}")).is_err());
+        assert!(fat(&format!("{approved} -p")).is_err());
+        assert!(fat(&format!("{prefix}{parent}/{}","a".repeat(more-1))).is_ok());
+        assert!(fat(&format!("{prefix}{parent}/{}","a".repeat(more))).is_err());
     }
 }
