@@ -4,14 +4,15 @@ use super::{
     BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
     attribute_tag::PreparedAttributeTag,
     disposition::{DELETE_ACCESS,DispositionError,PreparedDisposition,Snapshot},
-    file_open::{EXECUTE,FILE_READ_RIGHTS,FileAnswers,FileCloseError,FileOpenError,FileReadError,FileStandardError,MAXIMUM_ALLOWED,READ_DATA,allocation},
+    file_open::{EXECUTE,FILE_READ_RIGHTS,FileAnswers,FileCloseError,FileOpenError,FileReadError,FileStandardError,MAXIMUM_ALLOWED,READ_DATA,
+        allocation,normalized_name_error,normalized_query},
     io::{CheckedWrite,CloseCompletion,FlushCompletion,ReadCompletion,ReadFault,WriteCompletion,WriteFault,
         WriteOpenMode,flush_held,seal_read,write_held},
 };
 use crate::{
     smb::{RustSessionWitness,connection::{Fault as ConnectionFault,sessions::ordinary::VerifiedMember},
         wire::{io_fields::IoFieldError,query_fields::{FileClass,InfoClass},set_info::{Change,FileSetRequest}}},
-    system::reader::smb::{RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter,
+    system::reader::smb::{RustStagedName,RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter,
         file_number::SmbFileIndex,runtime::RustRoot,work_change::RustWriterSelection},
 };
 use std::{io as stdio,sync::Arc};
@@ -104,6 +105,15 @@ impl PreparedWriterStandard{
         Ok(())
     }
 }
+#[must_use]
+pub(in crate::smb) struct PreparedWriterName{view:RustStagedName,scope:RustSessionWitness,output:u32}
+impl PreparedWriterName{
+    pub(in crate::smb) fn output(&self)->u32{self.output}
+    pub(in crate::smb) fn path(&self)->&str{self.view.path()}
+    pub(in crate::smb) fn require_current(&self,open:&WritableFileOpen,tree:&RustRoot)->stdio::Result<()>{
+        open.held.original.require_normalized_name(tree,&self.scope,&self.view)
+    }
+}
 struct OriginalTurn{scope:RustSessionWitness,view:RustStagedState}
 impl OriginalTurn{
     fn accepted(scope:RustSessionWitness,open:&WritableFileOpen)->Self{
@@ -190,6 +200,12 @@ impl WritableFileOpen{
         let original=self.held.original.standard(tree,&scope).map_err(FileStandardError::Original)?;
         let delete_pending=self.held._slot.pending_delete().map_err(FileStandardError::Original)?;
         Ok(PreparedWriterStandard{original,scope,output:query.output_bytes,delete_pending})
+    }
+    pub(in crate::smb) fn prepare_normalized_name(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
+        ->Result<PreparedWriterName,FileStandardError>{
+        let (scope,output)=normalized_query(member)?;
+        let view=self.held.original.normalized_name(tree,&scope).map_err(normalized_name_error)?;
+        Ok(PreparedWriterName{view,scope,output})
     }
     pub(in crate::smb) fn prepare_attribute_tag(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
         ->Result<PreparedAttributeTag,FileStandardError>{

@@ -7,7 +7,7 @@
 | 登录、连接 `ZXS`、退出 | 有严格 NTLMv2、适用 MIC、SHA-512 预认证和原流 AES-CMAC；使用真实 Core 当前账户与盘权限；ECHO、TREE_DISCONNECT、LOGOFF 有原命令分派。 | 未从源码推断 Windows 冷连接、Finder、Linux 挂载或任一真实客户端登录；已有离线构建与开发检查；仍未部署或原生客户端验收。 |
 | 浏览和目录 | 有真实虚拟根、普通 F 卷根/子目录和 R 相关目录的独立 OPEN、过滤枚举、继续分页和 CLOSE；普通子目录有带类型的 CREATE/OPEN_IF 和已授 DELETE 的同父不覆盖改名。 | 只有有限的关联形状；某些嵌套通配缺点目录支持。没有目录跨父/跨卷、整组回收和恢复；不是通用目录服务。 |
 | 普通 FILE 和写稿 | 有显式已授权 FILE_OPEN、窄 FILE_CREATE/OPEN_IF、偏移 READ/WRITE、已授权 SET EOF、FLUSH、显式正常 CLOSE；原对象单写、兼容读者读确认视图，工作稿保存不发正式版本。 | 不接覆盖式 CREATE、写属性/EA、字节范围锁。断开未确认写稿不等于删除已确认的新名字。 |
-| 查询 | 支持普通读/写 FILE 的 Standard 和稳定 Internal，普通只读 FILE 的 NormalizedName，普通文件/目录与虚拟根的 AttributeTag；已有普通 F 卷根/子目录和实际仍在 R 的 FILE 也支持独立 Standard。根的容量/卷属性及少量探测关联已有单独限界。 | FileAll、真时标及其它未证类不能用宿主或零值补齐；R 根/删除目录、虚拟根和关联形状不进入这些 Standard 路径，已还原旧 R 读柄不再报告当前 R 元数据。 |
+| 查询 | 支持普通读/写 FILE 的 Standard 和稳定 Internal，同原读／写 FILE 句柄的 NormalizedName（写入状态未知时拒绝），普通文件/目录与虚拟根的 AttributeTag；已有普通 F 卷根/子目录和实际仍在 R 的 FILE 也支持独立 Standard。根的容量/卷属性及少量探测关联已有单独限界。 | FileAll、真时标及其它未证类不能用宿主或零值补齐；R 根/删除目录、虚拟根和关联形状不进入这些 Standard 路径，已还原旧 R 读柄不再报告当前 R 元数据。 |
 | 改名、移动、回收 | 普通非写者 FILE 已有原柄同父改名、限同一实际登记 F 的独立跨父移动（kind14）；普通 FILE 的最后正常 CLOSE 可按原删除标记入 R，实际保留 FILE 可在同树空位恢复（kind12）。同一 FileId、工作修订、历史不重发。 | 普通不同实际文件系统 F→F 有共享 Core 引擎及不触业务的原请求准备票，**尚无执行路由**。R 不开放普通写或覆盖；现有回收/恢复同步回合不是长请求/取消支持。 |
 | 截断、退场和取消 | 已有的 SET EOF 是同一已开 Writer 的工作操作；干净退场、未提交写稿及已确认但丢答分别处理。独立强签 CANCEL 无命中时不应答不授额。 | 无真实在途 CANCEL、异步 STATUS_PENDING、通用复合或大文件移动；不承诺能取消已进内核的 I/O，也不从会话失效触发 FLUSH/CLOSE/删除。 |
 

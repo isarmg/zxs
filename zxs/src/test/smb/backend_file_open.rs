@@ -30,3 +30,35 @@ fn logical_allocation_is_not_a_disk_size_measurement(){
         assert_eq!(allocation(eof),bytes);
     }
 }
+
+#[test]
+fn normalized_name_admission_preserves_explicit_standalone_placement_for_both_open_kinds(){
+    use crate::smb::wire::{direct::Frame,message::Compound};
+    let mut request=[0;104];
+    request[..4].copy_from_slice(b"\xfeSMB");request[4]=64;request[12]=16;request[16]=8;
+    request[36]=9;request[40]=3;request[64]=41;
+    request[66]=1;request[67]=48;request[68]=19;
+    request[88]=5;request[96]=7; // both halves explicit, still not an OPEN proof
+    let framed=|messages:&[&[u8]]|{
+        let length=messages.iter().map(|p|p.len()).sum::<usize>() as u32;
+        let mut out=length.to_be_bytes().to_vec();for p in messages{out.extend_from_slice(p);}out
+    };
+    fn parse(raw:&[u8])->Compound<'_>{
+        let (one,tail)=Frame::split(raw).ok().unwrap().unwrap();
+        assert!(tail.is_empty());Compound::parse(one).ok().unwrap()
+    }
+    let wire=framed(&[&request]);let first=parse(&wire);let message=&first.messages()[0];
+    assert_eq!(normalized_name_output(message,0,19).unwrap(),19);
+    assert!(matches!(normalized_name_output(message,0,18),Err(FileStandardError::Fields(QueryError::ExceedsMaxTransact))));
+    let mut compound=request;compound[20]=104;
+    let wire=framed(&[&compound,&request]);let together=parse(&wire);
+    for (ordinal,m) in together.messages().iter().enumerate(){
+        assert!(matches!(normalized_name_output(m,ordinal,19),Err(FileStandardError::NotSupported)));
+    }
+    let mut missing=request;missing[88..104].fill(0xff);
+    let wire=framed(&[&missing]);let one=parse(&wire);
+    assert!(normalized_name_output(&one.messages()[0],0,19).is_err());
+    let mut other=request;other[67]=35;
+    let wire=framed(&[&other]);let one=parse(&wire);
+    assert!(matches!(normalized_name_output(&one.messages()[0],0,19),Err(FileStandardError::NotSupported)));
+}

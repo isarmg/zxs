@@ -4,7 +4,7 @@ use super::{CheckedBatch,Connection,Fault,Payload,Result,RustSessionWitness,Sync
     root_io::RequestSlot};
 use super::super::opens::Opened;
 use crate::smb::{
-    backend::{FileStandardError,PreparedAttributeTag,PreparedDirectoryStandard,PreparedFileName,PreparedFileStandard,PreparedRetainedStandard,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedWriterStandard,RootFsError},
+    backend::{FileStandardError,PreparedAttributeTag,PreparedDirectoryStandard,PreparedFileName,PreparedFileStandard,PreparedRetainedStandard,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedWriterName,PreparedWriterStandard,RootFsError},
     wire::{Error as WireError,file_name_reply::UnsignedFileName,fixed_reply::{FileStandardFields,FsInfoFailure},
         io_fields::{IoFieldError,OpenReference,WireOpenId},message::{Message,RELATED,Routing},
         query_fields::{FileClass,FsClass,InfoClass,QueryError}},
@@ -115,8 +115,13 @@ impl CheckedBatch<'_,'_>{
                     let draft=UnsignedSmall::attribute_tag(&member,&pending).map_err(|_|Fault::WrongReply)?;
                     (PendingInfo::AttributeTag(pending),draft)
                 },
-                (Opened::File(open),InfoClass::File(FileClass::NormalizedName))=>{
-                    let prepared=match open.prepare_normalized_name(tree,&member){
+                (open @ (Opened::File(_)|Opened::Writer(_)),InfoClass::File(FileClass::NormalizedName))=>{
+                    let prepared=match open{
+                        Opened::File(f)=>f.prepare_normalized_name(tree,&member).map(NamePrepared::Reader),
+                        Opened::Writer(f)=>f.prepare_normalized_name(tree,&member).map(NamePrepared::Writer),
+                        _=>return Err(Fault::SessionState),
+                    };
+                    let prepared=match prepared{
                         Ok(v)=>v,
                         Err(e)=>return self.fs_info_refusal(m,sid,file_failure(e)?),
                     };
@@ -292,19 +297,28 @@ impl PendingFileStandard{
 /// One real normalized-name observation travels with the bytes describing
 /// it until the original receipt and ledger are checked after transmission.
 #[must_use]
-pub(in crate::smb) struct PendingFileName{original:RequestSlot,ids:WireOpenId,prepared:PreparedFileName}
+pub(in crate::smb) struct PendingFileName{original:RequestSlot,ids:WireOpenId,prepared:NamePrepared}
+enum NamePrepared{Reader(PreparedFileName),Writer(PreparedWriterName)}
 impl PendingFileName{
     pub(in crate::smb) fn sid(&self)->NonZeroU64{self.original.sid}
     pub(in crate::smb) fn matches(&self,m:&VerifiedMember<'_,'_>)->bool{
         m.ordinal()==0&&self.original.matches(m,self.sid())&&
             m.message().query_info_target().is_ok_and(|id|id==OpenReference::Explicit(self.ids))
     }
-    pub(in crate::smb) fn payload(&self)->(u32,&str){(self.prepared.output(),self.prepared.path())}
+    pub(in crate::smb) fn payload(&self)->(u32,&str){
+        match &self.prepared{
+            NamePrepared::Reader(p)=>(p.output(),p.path()),
+            NamePrepared::Writer(p)=>(p.output(),p.path()),
+        }
+    }
     fn check(&self,c:&Connection)->Result<()>{
         let tree=self.original.root(c)?;
         let slot=c.open_table(self.sid())?.find(self.ids).filter(|s|s.tree()==self.original.tree).ok_or(Fault::SessionState)?;
-        let Opened::File(open)=slot.object()else{return Err(Fault::SessionState);};
-        self.prepared.require_current(open,tree).map_err(|_|Fault::SessionState)
+        match (&self.prepared,slot.object()){
+            (NamePrepared::Reader(p),Opened::File(open))=>p.require_current(open,tree),
+            (NamePrepared::Writer(p),Opened::Writer(open))=>p.require_current(open,tree),
+            _=>return Err(Fault::SessionState),
+        }.map_err(|_|Fault::SessionState)
     }
 }
 #[must_use]

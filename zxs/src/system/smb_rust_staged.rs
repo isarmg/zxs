@@ -1,8 +1,8 @@
 //! Same actual private staging/FLUSH as Native, driven only by original
 //! Rust SMB members. Only the immutable buffer can leave the staged borrow.
 use super::{DraftStage,Scratch};
-use crate::{fs::invalid,smb::RustSessionWitness,ordinary::working_round::Used,
-    system::reader::smb::{denied,file_number::SmbFileIndex,first_work::RustReadFile,runtime::RustRoot,work_change::RustWorkWriter}};
+use crate::{OperationId,fs::invalid,smb::RustSessionWitness,ordinary::working_round::Used,
+    system::reader::smb::{denied,file_number::SmbFileIndex,first_work::{RustFileName,RustReadFile},runtime::RustRoot,work_change::RustWorkWriter}};
 use std::{io,rc::{Rc,Weak}};
 
 #[must_use]
@@ -19,6 +19,14 @@ pub(crate) struct RustStagedWriter{
 }
 #[must_use]
 pub(crate) struct RustStagedState{open:Weak<()>,revision:u64}
+impl RustStagedState{
+    fn require_same(&self,expected:&Self)->io::Result<()>{
+        if !self.open.ptr_eq(&expected.open)||self.revision!=expected.revision{
+            return Err(invalid("not this original staged FILE state"));
+        }
+        Ok(())
+    }
+}
 #[must_use]
 pub(crate) struct RustStagedReadProof{state:RustStagedState,used:Used}
 /// One observed logical EOF of this original writer, not a SAVE receipt,
@@ -27,6 +35,18 @@ pub(crate) struct RustStagedReadProof{state:RustStagedState,used:Used}
 pub(crate) struct RustStagedStandard{state:RustStagedState,eof:u64}
 impl RustStagedStandard{
     pub(crate) fn eof(&self)->u64{self.eof}
+}
+/// A read-only spelling tied to the actual held writer, not its client
+/// path, its scratch inode, the separately held base reader or a new OPEN.
+#[must_use]
+pub(crate) struct RustStagedName{state:RustStagedState,position:(OperationId,i64),path:String}
+impl RustStagedName{
+    pub(crate) fn path(&self)->&str{&self.path}
+    fn require_identity(&self,state:&RustStagedState,position:(OperationId,i64))->io::Result<()>{
+        self.state.require_same(state)?;
+        if self.position!=position{return Err(invalid("original writable FILE position changed"));}
+        Ok(())
+    }
 }
 impl RustStagedWriter{
     pub(crate) fn open(writer:RustWorkWriter,tree:&RustRoot,member:&RustSessionWitness)->io::Result<Self>{
@@ -54,10 +74,7 @@ impl RustStagedWriter{
         RustStagedState{open:Rc::downgrade(&self.own),revision:self.revision}
     }
     fn require_same_state(&self,state:&RustStagedState)->io::Result<()>{
-        if !state.open.ptr_eq(&Rc::downgrade(&self.own))||state.revision!=self.revision{
-            return Err(invalid("not this original staged FILE state"));
-        }
-        Ok(())
+        self.state().require_same(state)
     }
     pub(crate) fn require_state(&self,tree:&RustRoot,member:&RustSessionWitness,state:&RustStagedState)->io::Result<()>{
         self.require_same_state(state)?;
@@ -86,14 +103,35 @@ impl RustStagedWriter{
         ->io::Result<()>{
         if !member.is_query_info(){return Err(denied());}
         self.require_same_state(&snapshot.state)?;
-        self.no_unconfirmed_through()?;
-        if self.draft.flush_op.is_some()||self.draft.refresh_op.is_some()||self.draft.spool.poisoned{
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,"original staged FILE cannot provide a settled view"));
-        }
+        self.metadata_ready()?;
         if self.eof()!=snapshot.eof{return Err(invalid("original staged FILE EOF changed"));}
         // Healthy private staged writes are visible to this OPEN without
         // refreshing it, flushing it, or reading an unrelated FILE's size.
         // The original writer still checks its single selected placement.
+        self.require_current(tree,member)
+    }
+    fn metadata_ready(&self)->io::Result<()>{
+        self.no_unconfirmed_through()?;
+        if self.draft.flush_op.is_some()||self.draft.refresh_op.is_some()||self.draft.spool.poisoned{
+            return Err(io::Error::new(io::ErrorKind::WouldBlock,"original staged FILE cannot provide a settled view"));
+        }
+        Ok(())
+    }
+    pub(crate) fn normalized_name(&self,tree:&RustRoot,member:&RustSessionWitness)->io::Result<RustStagedName>{
+        if !member.is_query_info(){return Err(denied());}
+        self.metadata_ready()?;
+        self.require_current(tree,member)?;
+        let place=self.writer.original_place();
+        let path=RustFileName::format(std::iter::once(self.writer.label()).chain(self.writer.route().components())
+            .chain(std::iter::once(place.name.as_str())))?;
+        Ok(RustStagedName{state:self.state(),position:(place.op,place.generation),path})
+    }
+    pub(crate) fn require_normalized_name(&self,tree:&RustRoot,member:&RustSessionWitness,name:&RustStagedName)
+        ->io::Result<()>{
+        if !member.is_query_info(){return Err(denied());}
+        let p=self.writer.original_place();
+        name.require_identity(&self.state(),(p.op,p.generation))?;
+        self.metadata_ready()?;
         self.require_current(tree,member)
     }
     fn refresh(&mut self,tree:&RustRoot,member:&RustSessionWitness)->io::Result<()>{
@@ -186,5 +224,28 @@ impl RustStagedWriter{
         self.require_same_state(&proof.state)?;
         self.base.require_working_range(tree,member,&proof.used)?;
         self.require_current(tree,member)
+    }
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn staged_normalized_name_rejects_another_writer_revision_or_placement_even_with_the_same_spelling(){
+        let owner=Rc::new(());let other=Rc::new(());
+        let state=|r,own:&Rc<()>|RustStagedState{open:Rc::downgrade(own),revision:r};
+        let original=OperationId([0x73;16]);
+        let name=RustStagedName{state:state(4,&owner),position:(original,2),
+            path:RustFileName::format(["Data-é","Archive🚀","Final.TXt"].into_iter()).unwrap()};
+        assert_eq!(name.path(),r"\Data-é\Archive🚀\Final.TXt");
+        assert!(name.require_identity(&state(4,&owner),(original,2)).is_ok());
+        for (view,position) in [
+            (state(4,&other),(original,2)),
+            (state(5,&owner),(original,2)),
+            (state(4,&owner),(original,3)),
+            (state(4,&owner),(OperationId([0x74;16]),2)),
+        ]{
+            assert_eq!(name.require_identity(&view,position).unwrap_err().kind(),io::ErrorKind::InvalidInput);
+        }
     }
 }

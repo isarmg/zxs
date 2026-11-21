@@ -126,6 +126,10 @@ pub(crate) struct RustFileName{
 }
 impl RustFileName{
     pub(crate) fn path(&self)->&str{&self.path}
+    /// Shared spelling codec only; creates no FILE/placement proof.
+    pub(in crate::system::reader::smb) fn format<'a>(parts:impl Iterator<Item=&'a str>)->io::Result<String>{
+        normalized_share_path(parts)
+    }
 }
 
 fn normalized_share_path<'a>(parts:impl Iterator<Item=&'a str>)->io::Result<String>{

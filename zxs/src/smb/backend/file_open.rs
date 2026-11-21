@@ -9,7 +9,7 @@ use super::{BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,Pa
 use crate::{fs::MAX_PATH_DEPTH,smb::{RustSessionWitness,
     connection::{Fault as ConnectionFault,sessions::ordinary::VerifiedMember},
     wire::{create_fields::{CurrentIntent,CurrentName,Disposition,Error as CreateError,MaximumAccessQuery,SpecialOpen},io_fields::{IoFieldError,OpenReference},
-        message::{RELATED,Routing},query_fields::{FileClass,InfoClass,QueryError},set_info::FileSetRequest}},
+        message::{Message,RELATED,Routing},query_fields::{FileClass,InfoClass,QueryError},set_info::FileSetRequest}},
     system::reader::smb::{file_number::SmbFileIndex,first_work::{RustFileName,RustFileStandard,RustReadFile,RustReadProof},runtime::RustRoot}};
 use std::{io as stdio,sync::Arc};
 
@@ -196,6 +196,30 @@ impl PreparedFileName{
         open.held.original.require_normalized_name(tree,&self.scope,&self.view)
     }
 }
+fn normalized_name_output(original:&Message<'_>,ordinal:usize,maximum:u32)->Result<u32,FileStandardError>{
+    let query=original.query_info(maximum).map_err(FileStandardError::Fields)?;
+    if query.class!=InfoClass::File(FileClass::NormalizedName){return Err(FileStandardError::NotSupported);}
+    // A predecessor or another OPEN cannot lend its FileId or authority.
+    if ordinal!=0||original.header.flags&RELATED!=0||
+        !matches!(original.header.routing,Routing::Sync{..})||original.raw.get(20..24)!=Some(&[0;4][..])||
+        !matches!(original.query_info_target(),Ok(OpenReference::Explicit(_))){
+        return Err(FileStandardError::NotSupported);
+    }
+    Ok(query.output_bytes)
+}
+pub(super) fn normalized_query(member:&VerifiedMember<'_,'_>)->Result<(RustSessionWitness,u32),FileStandardError>{
+    let output=normalized_name_output(member.message(),member.ordinal(),member.max_transact())?;
+    let scope=member.rust_session_witness().map_err(FileStandardError::Session)?;
+    // No additional FILE_READ_ATTRIBUTES check for this class (MS-SMB2
+    // §3.3.5.20.1). These ordinary OPENs cannot be issued by FILE ID.
+    Ok((scope,output))
+}
+pub(super) fn normalized_name_error(error:stdio::Error)->FileStandardError{
+    match error.kind(){
+        stdio::ErrorKind::Unsupported=>FileStandardError::NotSupported,
+        _=>FileStandardError::Original(error),
+    }
+}
 impl FileOpen {
     pub(in crate::smb) fn maximal_access_answer(&self)->Option<u32>{self.maximal}
     pub(in crate::smb) fn disk_id_answer(&self)->Option<(u64,u64)>{self.disk.map(SmbFileIndex::qfid)}
@@ -254,23 +278,9 @@ impl FileOpen {
     }
     pub(in crate::smb) fn prepare_normalized_name(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
         ->Result<PreparedFileName,FileStandardError>{
-        let original=member.message();
-        let query=original.query_info(member.max_transact()).map_err(FileStandardError::Fields)?;
-        if query.class!=InfoClass::File(FileClass::NormalizedName){return Err(FileStandardError::NotSupported);}
-        // This slice never transfers a predecessor's FileId or authority.
-        if member.ordinal()!=0||original.header.flags&RELATED!=0||
-            !matches!(original.header.routing,Routing::Sync{..})||original.raw.get(20..24)!=Some(&[0;4][..])||
-            !matches!(original.query_info_target(),Ok(OpenReference::Explicit(_))){
-            return Err(FileStandardError::NotSupported);
-        }
-        let scope=member.rust_session_witness().map_err(FileStandardError::Session)?;
-        // FILE_READ_ATTRIBUTES is not an additional gate for this class
-        // (MS-SMB2 §3.3.5.20.1); this OPEN was not opened by FILE ID.
-        let view=self.held.original.normalized_name(tree,&scope).map_err(|e|match e.kind(){
-            stdio::ErrorKind::Unsupported=>FileStandardError::NotSupported,
-            _=>FileStandardError::Original(e),
-        })?;
-        Ok(PreparedFileName{view,scope,output:query.output_bytes})
+        let (scope,output)=normalized_query(member)?;
+        let view=self.held.original.normalized_name(tree,&scope).map_err(normalized_name_error)?;
+        Ok(PreparedFileName{view,scope,output})
     }
     pub(in crate::smb) fn read(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>,room:usize)
         ->Result<PreparedFileRead,FileReadError>{

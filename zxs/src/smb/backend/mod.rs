@@ -31,7 +31,7 @@ mod retained_open;
 pub(in crate::smb) use retained_open::{PreparedRetainedQuery,PreparedRetainedRead,PreparedRetainedRestore,PreparedRetainedStandard,RestoreError,RetainedOpen,RetiredRetainedRestore};
 pub(in crate::smb) use directory_open::{DirectoryCloseError,DirectoryOpen,DirectoryOpenError,PreparedDirectoryRename,PreparedDirectoryStandard,PreparedOrdinaryQuery};
 pub(in crate::smb) use file_open::{FileCloseError,FileCloseFault,FileOpen,FileOpenError,FileReadError,FileStandardError,OrdinaryRenameError,PreparedCrossFilesystemMove,PreparedFileName,PreparedFileRead,PreparedFileStandard,PreparedNamedFile,PreparedOrdinaryRename,RetiredOrdinaryRename};
-pub(in crate::smb) use writable_file_open::{FileWriteError,PreparedFileEof,PreparedFileFlush,PreparedFileWrite,PreparedWriterRead,PreparedWriterStandard,WritableCloseFault,WritableFileOpen};
+pub(in crate::smb) use writable_file_open::{FileWriteError,PreparedFileEof,PreparedFileFlush,PreparedFileWrite,PreparedWriterName,PreparedWriterRead,PreparedWriterStandard,WritableCloseFault,WritableFileOpen};
 pub(in crate::smb) use root_open::{FS_SIZE_BYTES,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedRootQuery,RetiredRootFs,RetiredRootFsSize,RootCloseError,RootFsError,RootOpen,RootOpenError,RootQueryError};
 pub(super) use io::{CloseCompletion, FlushCompletion, ReadCompletion, ReadFault, WriteCompletion, WriteFault};
 use crate::{DirectoryId, FileId, OperationId, PoolId, VolumeId};

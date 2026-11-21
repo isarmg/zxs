@@ -401,4 +401,4 @@ mod tests{
 
 #[path="smb_rust_staged.rs"]
 mod rust;
-pub(crate) use rust::{RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter};
+pub(crate) use rust::{RustStagedName,RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter};

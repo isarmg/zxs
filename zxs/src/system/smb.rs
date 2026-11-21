@@ -78,7 +78,7 @@ pub(crate) mod work_change;
 
 #[path="smb_stage.rs"]
 mod smb_stage;
-pub(crate) use smb_stage::{RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter};
+pub(crate) use smb_stage::{RustStagedName,RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter};
 
 #[path="directory.rs"]
 pub(crate) mod directory;
