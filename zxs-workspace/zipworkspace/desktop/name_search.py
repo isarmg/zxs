@@ -1,10 +1,11 @@
-"""One read-only search dialog, bound to the current verified browser's in-memory index."""
+"""Literal name search and exact path navigation in one verified, in-memory index."""
 from threading import Event
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHeaderView, QHBoxLayout, QLineEdit, QVBoxLayout
 
 from ..browser import MAX_NAME_QUERY
+from ..model import Rejected
 from .widgets import Table, button, label
 
 
@@ -16,10 +17,10 @@ class NameSearch(QDialog):
         super().__init__(window)  # Window.job only disables the tabs, never this Close button.
         self.owner, self.browser, self.current, self.go_to = window, browser, current, go_to
         self.request, self.matches, self.number, self.retired = None, (), 0, False
-        self.setWindowTitle("在当前归档内按名称查找")
+        self.setWindowTitle("在当前归档内查找名称或定位路径")
         self.resize(800, 490)
         layout = QVBoxLayout(self)
-        layout.addWidget(label("区分大小写，只匹配单个文件或文件夹的名称片段。定位不会打开或另存。"))
+        layout.addWidget(label("名称可按片段查找；已有完整相对路径可直接定位。两者都区分大小写，不会打开或另存条目。"))
         query_row = QHBoxLayout()
         self.term = QLineEdit()
         self.term.setAccessibleName("要查找的名称片段")
@@ -29,9 +30,17 @@ class NameSearch(QDialog):
         self.find = button("查找", self.search)
         query_row.addWidget(self.term); query_row.addWidget(self.find)
         layout.addLayout(query_row)
+        exact_row = QHBoxLayout()
+        self.exact = QLineEdit()
+        self.exact.setAccessibleName("归档内的完整相对路径")
+        self.exact.setPlaceholderText("完整相对路径，例如 设计/图纸.txt")
+        self.exact.returnPressed.connect(self.locate_path)
+        self.jump = button("按完整路径定位", self.locate_path)
+        exact_row.addWidget(self.exact); exact_row.addWidget(self.jump)
+        layout.addLayout(exact_row)
         self.message = label()
         layout.addWidget(self.message)
-        self.hits = Table(("完整相对路径", "类型", "字节数"), "快照名称查找结果")
+        self.hits = Table(("完整相对路径", "类型", "字节数"), "当前归档的名称查找结果")
         self.hits.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         header = self.hits.horizontalHeader()
         header.setStretchLastSection(False)
@@ -48,7 +57,7 @@ class NameSearch(QDialog):
         self.more = button("下一页", lambda: self.page(self.number + 1))
         self.locate = button("定位所选条目", self.activate)
         self.close_button = button("关闭", self.reject)
-        for item in (self.find, self.back, self.more, self.locate, self.close_button): item.setAutoDefault(False)
+        for item in (self.find, self.jump, self.back, self.more, self.locate, self.close_button): item.setAutoDefault(False)
         for item in (self.back, self.more, self.locate, self.close_button): nav.addWidget(item)
         layout.addLayout(nav)
         self.hits.selectionModel().selectionChanged.connect(self.selected)
@@ -71,6 +80,7 @@ class NameSearch(QDialog):
             request.set()
             if self.owner.note.text() == self.WORKING: self.owner.inform("已关闭名称查找。")
         self.term.clear()
+        self.exact.clear()
         self.message.clear()
         self.empty()
 
@@ -93,7 +103,7 @@ class NameSearch(QDialog):
             return
         request = self.request = Event()
         browser = self.browser
-        self.term.setEnabled(False); self.find.setEnabled(False)
+        for control in (self.term, self.find, self.exact, self.jump): control.setEnabled(False)
         self.message.setText("正在查找已核验的目录索引…")
 
         def work():
@@ -104,7 +114,7 @@ class NameSearch(QDialog):
         def done(outcome):
             if self.request is not request or request.is_set() or not self.active(): return
             self.request = None
-            self.term.setEnabled(True); self.find.setEnabled(True)
+            for control in (self.term, self.find, self.exact, self.jump): control.setEnabled(True)
             matches, error = outcome
             if error is not None:
                 self.message.setText(f"查找未完成：{error}")
@@ -142,6 +152,18 @@ class NameSearch(QDialog):
         if not self.active() or self.request is not None or self.owner.pending is not None: return
         hit = self.hits.item()
         if hit is None or not any(hit is original for _, original in self.hits.rows.rows): return
+        self._reveal(hit)
+
+    def locate_path(self):
+        if not self.active() or self.request is not None or self.owner.pending is not None: return
+        self.empty()
+        try: hit = self.browser.match_path(self.exact.text())
+        except Rejected as error:
+            self.message.setText(str(error))
+            return
+        self._reveal(hit)
+
+    def _reveal(self, hit):
         try: table = self.go_to(self, hit)
         except (ValueError, IndexError) as error:
             self.message.setText(f"无法定位本条原结果：{error}")

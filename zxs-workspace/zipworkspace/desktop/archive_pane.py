@@ -65,7 +65,7 @@ class ArchivePane(QWidget):
         fl = QVBoxLayout(self.folder)
         self.at = label()
         fl.addWidget(self.at)
-        self.find = button("在本快照内按名称查找…", self.open_search)
+        self.find = button("查找条目或定位路径…", self.open_search)
         fl.addWidget(self.find)
         self.files = Table(("名称", "类型", "字节数", "SHA-256"), "快照里的直接子项")
         self.files.doubleClicked.connect(lambda _index: self.enter())

@@ -68,7 +68,7 @@ class ImportPane(QWidget):
         self.into = button("打开选中的文件夹", self.enter)
         self.back = button("上一页", lambda: self.turn(-1))
         self.more = button("下一页", lambda: self.turn(1))
-        self.find = button("在此 ZIP 按名称查找…", self.open_search)
+        self.find = button("查找条目或定位路径…", self.open_search)
         for control in (self.up, self.into, self.back, self.more, self.find):
             control.setEnabled(False)
             nav.addWidget(control)

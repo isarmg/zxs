@@ -74,6 +74,18 @@ class DirectoryIndex:
         i = bisect_left(rows, name, key=_NAME)
         return rows[i] if i < len(rows) and rows[i].name == name else None
 
+    def match_path(self, path: str) -> NameMatch:
+        """Resolve an archive-relative path literally, using only the admitted parent and its sorted rows."""
+        try:
+            member_name(path)
+        except Rejected as error:
+            raise Rejected("请输入归档内的完整相对路径，按原拼写用 / 分隔，不加首尾斜杠。") from error
+        parent, _, name = path.rpartition("/")
+        entry = self.entry(parent, name)
+        if entry is None:
+            raise Rejected("当前归档中没有这个完整相对路径。请核对大小写和每一级目录。")
+        return NameMatch(parent, entry)
+
     def verified_entries(self):
         """Iterate the admitted rows, including empty and implicit directories; no archive I/O."""
         for parent, children in self._children.items():

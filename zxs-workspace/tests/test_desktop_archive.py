@@ -565,6 +565,62 @@ class DesktopArchiveWidgets(unittest.TestCase):
                 self.assertEqual(pane.file_page.entries[11].name, "two[1]")
             self.assertEqual({p.name for p in root.iterdir()}, {"preserved.zxs"})
 
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1", "optional Qt source fixture")
+    def test_exact_path_selects_original_parent_page_in_both_views_and_rejects_a_retired_dialog(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.selection import PlainSelection
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = {f"right/{i:03d}": b"" for i in range(101)}
+            entries.update({"left/note": b"other", "right/note": b"chosen", "empty/": b""})
+            managed = root / "chosen.zxs"
+            write_snapshot(managed, entries=entries)
+            plain = root / "ordinary.zip"
+            with zipfile.ZipFile(plain, "w", compression=zipfile.ZIP_STORED) as archive:
+                for name, data in entries.items(): archive.writestr(name, data)
+                archive.comment = b"not a repository marker"
+            win = Window()
+            try:
+                for pane, source, open_view in ((win.archive, managed, Selection.open),
+                                                (win.plain_import, plain, PlainSelection.open)):
+                    with self.subTest(source=source.name):
+                        choice = open_view(source, retain=False)
+                        replacement = open_view(source, retain=False)
+                        index = choice.browser if pane is win.archive else choice.index
+                        win.tabs.setCurrentWidget(pane)
+                        pane.show_selection(choice)
+                        pane.find.click()
+                        dialog = pane.search_dialog
+                        before = pane.file_page
+                        with patch.object(index, "find_names", side_effect=AssertionError("no name scan")), \
+                             patch.object(win, "job", side_effect=AssertionError("no I/O job")), \
+                             patch.object(pane, "enter", side_effect=AssertionError("select only")):
+                            for raw in ("right/../left/note", "Right/note", "missing/note"):
+                                dialog.exact.setText(raw)
+                                dialog.jump.click()
+                                self.assertTrue(dialog.message.text())
+                                self.assertIs(pane.file_page, before)
+                                self.assertIs(pane.search_dialog, dialog)
+                            dialog.exact.setText("right/note")
+                            dialog.exact.returnPressed.emit()
+                            self.assertIsNone(pane.search_dialog)
+                            self.assertEqual((pane.file_page.directory, pane.file_page.entries[1].name), ("right", "note"))
+                            self.assertIs(pane.files.item(), index.entry("right", "note"))
+
+                            pane.find.click()
+                            stale = pane.search_dialog
+                            stale.exact.setText("empty")
+                            pane.show_selection(replacement)  # Same name and bytes; different display.
+                            before = pane.file_page
+                            self.assertIsNone(pane.search_dialog)
+                            with patch.object(index, "match_path", side_effect=AssertionError("retired")):
+                                stale.locate_path()
+                            self.assertIs(pane.file_page, before)
+            finally:
+                win.close()
+
     def test_closed_or_replaced_search_keeps_original_folder_and_drops_queued_results(self):
         from concurrent.futures import Future
         from PySide6.QtWidgets import QApplication

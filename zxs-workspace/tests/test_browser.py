@@ -118,6 +118,35 @@ class Browse(unittest.TestCase):
         self.assertEqual(browser.page_at("", 1, limit=1),
                          browser.list_directory(cursor=first.next_cursor, limit=1))
 
+    def test_exact_path_is_literal_and_never_scans_names_or_reopens_the_archive(self):
+        nested = "/".join(("深" * 60, "层" * 60))
+        leaf = " 图纸[1]é.txt"
+        self.write(self.path, entries={f"{nested}/{leaf}": b"selected", f"other/{leaf}": b"other",
+                                       f"{nested}/  first": b"first", "empty/": None, "literal%2Fdir": b""})
+        browser, second = ArchiveBrowser.open(self.path), ArchiveBrowser.open(self.path)
+        self.path.rename(self.root / "retained.zxs")
+        with mock.patch.object(browser, "find_names", side_effect=AssertionError("no name scan")), \
+             mock.patch.object(browser, "verified_entries", side_effect=AssertionError("no tree scan")), \
+             mock.patch("zipworkspace.browser.named_document", side_effect=AssertionError("no file open")):
+            target = f"{nested}/{leaf}"
+            self.assertGreater(len(target), 128)  # Full paths do not inherit the name-fragment ceiling.
+            match = browser.match_path(target)
+            self.assertEqual(match.path, target)
+            self.assertIs(match.entry, browser.entry(nested, leaf))
+            self.assertIsNot(match.entry, browser.match_path(f"other/{leaf}").entry)
+            number, row = browser.locate_name(match, limit=1)
+            self.assertEqual((number, row), (1, 0))
+            self.assertIs(browser.page_at(nested, number, limit=1).entries[row], match.entry)
+            with self.assertRaises(Rejected): second.locate_name(match)
+            self.assertEqual(browser.match_path(nested).entry.kind, "directory")  # implicit
+            self.assertEqual(browser.match_path("empty").entry.kind, "directory")
+            self.assertEqual(browser.match_path("literal%2Fdir").path, "literal%2Fdir")
+            for invalid in ("", "/" + target, target + "/", "other/./" + leaf, "other/../" + target,
+                            "other//" + leaf, "other\\" + leaf, "C:/other/file", "file:///other/file",
+                            "other/" + leaf.lstrip(), "OTHER/" + leaf, target.replace("é", "e\u0301"),
+                            "literal/dir", target + "missing", "/".join(["a" * 230] * 5)):
+                with self.subTest(invalid=invalid), self.assertRaises(Rejected): browser.match_path(invalid)
+
     def test_continuations_reopen_only_the_same_logical_snapshot_and_folder(self):
         self.write(self.path)
         first = ArchiveBrowser.open(self.path)
