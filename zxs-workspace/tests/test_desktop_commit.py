@@ -1292,6 +1292,120 @@ class FrozenConflictBranch(OriginalCheckoutFixture):
         self.assertEqual(self.live.status()["pending_operation"], None)
 
 
+class RegisteredNodeBranch(OriginalCheckoutFixture):
+    needs_freeze = True
+
+    def registration(self):
+        r = self.live.status()
+        return tuple(r[k] for k in ("repo", "branch", "base_generation", "base_operation"))
+
+    def prepare_branch(self):
+        branch = SnapshotBranch(self.live, registered=self.registration())
+        self.addCleanup(branch.release)
+        detail = branch.prepare()
+        self.assertIn("所列的登记基线", detail)
+        return branch
+
+    def test_a_later_registered_commit_can_be_forked_after_losing_the_original_display(self):
+        (self.tree/"story").write_bytes(b"only the new committed version")
+        save = CommitChoice(self.live); self.addCleanup(save.release)
+        save.prepare()
+        canonical, current = save.run()
+        before = canonical.read_bytes()
+        self.assertEqual(current.generation, 2)
+        self.live.revoke_branch_source()
+        self.loose.rename(self.root/"unavailable-first-display.zxs")
+        with self.assertRaises(Rejected): SnapshotBranch(self.live)
+        (self.tree/"story").write_bytes(b"keep this unsubmitted edit")
+        with patch.object(worktree, "frozen_tree", side_effect=AssertionError("branch does not read work content")):
+            branch = self.prepare_branch()
+            self.assertEqual(branch.proposed.parent, current.operation)
+            final, marker = branch.run()
+        self.assertEqual((marker.parent, marker.tree, marker.generation),
+                         (current.operation, current.tree, 1))
+        self.assertNotEqual(marker.branch, current.branch)
+        self.assertEqual(canonical.read_bytes(), before)
+        self.assertEqual((self.tree/"story").read_bytes(), b"keep this unsubmitted edit")
+        with zipfile.ZipFile(final) as original:
+            self.assertEqual(original.read("story"), b"only the new committed version")
+        self.assertEqual(self.registration(), (marker.repo, marker.branch, 1, marker.operation))
+
+    def test_registered_branch_checks_the_display_before_opening_any_archive_and_refuses_an_orphan_sha(self):
+        from zipworkspace.desktop import commit_choice
+        before = set(self.store.iterdir())
+        r = self.registration()
+        stale = SnapshotBranch(self.live, registered=(r[0], r[1], 2, r[3]))
+        self.addCleanup(stale.release)
+        with patch.object(commit_choice, "relative_document", side_effect=AssertionError("different source")), \
+             self.assertRaisesRegex(Rejected, "界面|窗口状态"):
+            stale.prepare()
+        actual = self.prepare_branch()
+        with worktree.locked(self.state) as (con, _, __):
+            con.execute("UPDATE checkout SET pending_sha=?", ("f"*64,))
+        with patch.object(actual.area, "copy_with_marker", side_effect=AssertionError("must refuse before write")), \
+             self.assertRaises(Rejected):
+            actual.run()
+        self.assertEqual(set(self.store.iterdir()), before)
+        self.assertFalse((self.state/(actual.operation+".zxs")).exists())
+
+    def test_a_persisted_registered_branch_retries_only_the_original_operation(self):
+        self.live.revoke_branch_source()
+        branch = self.prepare_branch()
+        with patch.object(worktree, "_publish", side_effect=OSError(errno.EIO, "failed original upload")), \
+             self.assertRaises(OSError):
+            branch.run()
+        self.assertEqual(branch.result()[0], "pending")
+        retry = PendingRetry(branch); self.addCleanup(retry.release)
+        self.assertTrue(retry.registered_source)
+        self.assertIn("登记完成", retry.prepare())
+        self.assertEqual(retry.operation, branch.operation)
+        (self.tree/"story").write_bytes(b"later edits")
+        with patch.object(worktree, "frozen_tree", side_effect=AssertionError("no refreeze on retry")):
+            final, marker = retry.run()
+        self.assertEqual(marker, branch.proposed)
+        self.assertTrue(final.is_file())
+        self.assertEqual((self.tree/"story").read_bytes(), b"later edits")
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop")
+    def test_registered_branch_button_requires_a_current_explicit_confirmation(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        self.live.revoke_branch_source()
+        try:
+            pane = win.archive.checkout
+            pane._attach(self.live)
+            pane.live_record = self.live.status()
+            pane._worktree_actions()
+            controls = pane.commits
+            self.assertFalse(controls.new_branch.isEnabled())
+            self.assertTrue(controls.base_branch.isEnabled())
+            future = Future()
+            with patch.object(win.pool, "submit", return_value=future) as queued:
+                controls.base_branch.click()
+            future.set_result(queued.call_args.args[0]())
+
+            def changed(_parent, question, detail, **_):
+                self.assertIn("登记基线", question)
+                self.assertIn(self.first.operation, detail)
+                r = self.registration()
+                controls.allow_visible(True, registered=(r[0], r[1], 2, r[3]))
+                return True
+
+            with patch.object(commit_controls, "confirm", side_effect=changed), \
+                 patch.object(win.pool, "submit", side_effect=AssertionError("no write after the decision changed")):
+                win.poll()
+            self.assertIsNone(controls.last)
+            self.assertEqual(self.live.status()["pending_operation"], None)
+            self.assertCountEqual(self.store.iterdir(), [self.original])
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
+
+
 class DisplayedNodeBranch(OriginalCheckoutFixture):
     def proposal(self, live=None):
         job = SnapshotBranch(live or self.live); self.addCleanup(job.release)

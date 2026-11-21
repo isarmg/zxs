@@ -14,16 +14,20 @@ class CommitControls(QWidget):
         super().__init__()
         self.owner, self.refresh_status = owner, refresh
         self.session = self.last = self.running = None
+        self.registered = None
         self.blocked = self.visible = False
         box = QVBoxLayout(self); row = QHBoxLayout()
         self.save = button("提交本次工作目录…", self.begin)
         self.new_branch = button("从签出时的原节点创建新分支…", self.branch)
+        self.base_branch = button("从当前登记基线创建新分支…", self.branch_registered)
         self.query = button("查询该次操作的原回执", self.inspect)
         self.sync_receipt = button("只同步本机原完成回执…", self.confirm_completion)
         self.retry = button("核对并续作原待决操作…", self.resume)
         self.conflict_fork = button("核对同代冲突，用原冻结归档另建分支…", self.fork_conflict)
         row.addWidget(self.save); row.addWidget(self.query); box.addLayout(row)
-        box.addWidget(self.new_branch); box.addWidget(self.retry); box.addWidget(self.conflict_fork)
+        branches = QHBoxLayout()
+        branches.addWidget(self.new_branch); branches.addWidget(self.base_branch); box.addLayout(branches)
+        box.addWidget(self.retry); box.addWidget(self.conflict_fork)
         box.addWidget(self.sync_receipt)
         self.output = label(); box.addWidget(self.output)
         self.set_session(None)
@@ -32,14 +36,16 @@ class CommitControls(QWidget):
         idle = self.session is not None and self.running is None and not self.blocked and self.visible
         self.save.setEnabled(idle)
         self.new_branch.setEnabled(idle and self.session.branch_source_available)
+        self.base_branch.setEnabled(idle and self.registered is not None)
         free = self.session is not None and self.running is None and self.last is not None
         self.query.setEnabled(free)
         self.sync_receipt.setEnabled(free and self.last.local_receipt_seen)
         self.retry.setEnabled(free and self.visible and self.last.pending_seen and not self.last.conflict)
         self.conflict_fork.setEnabled(free and self.visible and self.last.conflict_pending_seen)
 
-    def allow_visible(self, visible):
+    def allow_visible(self, visible, *, registered=None):
         self.visible = visible
+        self.registered = registered if visible else None
         self.buttons()
 
     @staticmethod
@@ -51,6 +57,7 @@ class CommitControls(QWidget):
     def set_session(self, live):
         if self.last is not None and self.last is not self.running: self.last.release()
         self.session, self.last, self.blocked = live, None, False
+        self.registered = None
         self.visible = live is not None
         self.output.setText("只操作本窗口刚创建的原工作树，不从 STATE 路径补领。")
         self.buttons()
@@ -80,14 +87,19 @@ class CommitControls(QWidget):
     def branch(self):
         self._begin(branch=True)
 
-    def _begin(self, *, branch):
+    def branch_registered(self):
+        if self.registered is not None: self._begin(branch=True, registered=self.registered)
+
+    def _begin(self, *, branch, registered=None):
         original = self.session
         if (original is None or self.running is not None or self.blocked or not self.visible
                 or self.owner.pending is not None): return
         def same_decision():
-            return self.session is original and (not branch or original.branch_source_available)
+            return (self.session is original and self.visible and not self.blocked and self.owner.pending is None and
+                    (not branch or (self.registered == registered if registered is not None else
+                                    original.branch_source_available)))
         if not same_decision(): return
-        try: job = SnapshotBranch(original) if branch else CommitChoice(original)
+        try: job = SnapshotBranch(original, registered=registered) if branch else CommitChoice(original)
         except Exception as err:
             self.output.setText(describe(err)); return
         preparation = job.preparation
@@ -114,7 +126,9 @@ class CommitControls(QWidget):
             try:
                 if preparation is not None: preparation.check()
                 if branch:
-                    question, action = "从签出时的原节点创建并发布新分支", "创建、发布并切换"
+                    question = ("从所列登记基线创建并发布新分支" if registered is not None else
+                                "从签出时的原节点创建并发布新分支")
+                    action = "创建、发布并切换"
                     agree = "我确认发布的是所列原快照，不含当前编辑。STATE 由本人独占；STORE 不同步，无其他程序改动本次暂存名。"
                 else:
                     question, action = "确认提交整个工作目录", "确认并提交"

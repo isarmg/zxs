@@ -1,4 +1,4 @@
-"""Fork the displayed, verified checkout node; do not read the current working files."""
+"""Fork one fixed archive version; never read the current working files."""
 import os
 import stat
 
@@ -13,35 +13,53 @@ from .commit_choice import CommitChoice
 class SnapshotBranch(CommitChoice):
     purpose = "branch"
 
-    def __init__(self, live):
-        live.require_branch_source()
+    def __init__(self, live, *, registered=None):
+        self.registered = registered
+        if registered is None: live.require_branch_source()
         self.branch_id = new_id()  # Fixed before review; a collision never selects a different branch.
         super().__init__(live)
 
     def _prepare(self):
-        self.live.require_branch_source()
-        old = self.live.checkout_marker
-        self._prepare_base(required=(old.repo, old.branch, old.generation, old.operation, self.live.checkout_sha))
-        if self.base_marker != old or self.base[-1] != self.live.checkout_sha:
-            raise Rejected("本工作树的当前基线不再是窗口所选原节点；不能从另一个节点建分支")
+        if self.registered is not None:
+            self._prepare_base(displayed=self.registered)
+            old = self.base_marker
+            if old is None: raise Rejected("只有已发布且本会话已登记的基线能创建分支")
+            source_name = self.live.store / self.name
+            self.source = self.original
+            description = "本工作树界面所列的登记基线"
+        else:
+            self.live.require_branch_source()
+            old = self.live.checkout_marker
+            self._prepare_base(required=(old.repo, old.branch, old.generation, old.operation, self.live.checkout_sha))
+            if self.base_marker != old or self.base[-1] != self.live.checkout_sha:
+                raise Rejected("本工作树的当前基线不再是窗口所选原节点；不能从另一个节点建分支")
+            source_name = self.live.source_path
+            if str(source_name) == str(self.live.store/self.name):
+                self.source = self.original  # Reuse the already verified exact canonical file.
+            else:
+                self.source = self.stack.enter_context(named_document(source_name))
+            description = "签出时连续显示的所选原节点"
         if self.branch_id == old.branch: raise Rejected("新分支号与所选原分支冲突")
         self.proposed = Commit(old.repo, self.branch_id, 1, self.operation, old.operation, old.tree)
-        if str(self.live.source_path) == str(self.live.store/self.name):
-            self.source = self.original  # Reuse the already verified exact canonical file.
-        else:
-            self.source = self.stack.enter_context(named_document(self.live.source_path))
         self._selected_source()
         self.check_empty_slot()
         if self._idle_base() != self.base: raise Rejected("读取期间原基线变化；未制作候选")
-        return (f"所选归档：{self.live.source_path}\n仓库：{old.repo}\n原分支：{old.branch} · 第 {old.generation} 代\n"
-                f"父节点：{old.operation}\n原归档 SHA-256：{self.live.checkout_sha}\n"
+        return (f"来源：{description}\n所选归档：{source_name}\n仓库：{old.repo}\n"
+                f"原分支：{old.branch} · 第 {old.generation} 代\n"
+                f"父节点：{old.operation}\n原归档 SHA-256：{self.base[4]}\n"
                 f"新分支：{self.branch_id} · 第 1 代\n新节点 / 本次操作号：{self.operation}\n"
                 f"新正式槽：{self.live.store/self.proposed.filename}\n"
                 f"本工作树：{self.live.work}\n原 STATE：{self.live.state}\n\n"
-                "本操作复制所选原节点的完整快照，不读取工作目录里的编辑。确认才创建私有候选并向上述 STORE 发布；"
+                "本操作复制所列原节点的完整快照，不读取工作目录里的编辑，不追最新分支头。"
+                "确认才创建私有候选并向上述 STORE 发布；"
                 "不更新原分支，不覆盖任何已有槽。仅在原操作完成后本工作树切到新分支，磁盘上的编辑仍保留。")
 
     def _selected_source(self):
+        if self.registered is not None:
+            if self.source is not self.original or self.base[:4] != self.registered:
+                raise Rejected("不能用另一个归档代替已核验的登记基线")
+            self._check_registered_mount()
+            return
         self.live.require_branch_source()
         s = self.live.source_stamp
         m = self.live.source_path.stat(follow_symlinks=False)
@@ -50,9 +68,9 @@ class SnapshotBranch(CommitChoice):
             raise Rejected("窗口原先所选归档已被替换或改变，不能用同名文件另建分支")
 
     def check_base(self):
-        self.live.require_branch_source()
+        if self.registered is None: self.live.require_branch_source()
         super().check_base()  # The canonical original remains in the retained STORE.
-        self._selected_source()  # The displayed name remains bound to the held input used for the copy.
+        self._selected_source()
 
     def check_empty_slot(self):
         self.store.check_store()
@@ -65,7 +83,7 @@ class SnapshotBranch(CommitChoice):
     def run(self):
         if self.closed or not self.ready or self.used: raise Rejected("本次原节点分支决定不可重用")
         try:
-            self.live.require_branch_source()
+            if self.registered is None: self.live.require_branch_source()
             self.used = True
             return worktree.branch_from_snapshot(self.live.state, selected=self)
         except Conflict:

@@ -21,6 +21,7 @@ class PendingRetry(CommitChoice):
         self.receipt = submitted.receipt
         self.base, self.marker, self.digest = submitted.base, submitted.marker, submitted.digest
         self.origin, self.candidate = submitted, None
+        self.registered_source = getattr(submitted, "registered", None) is not None
         self.leaf = self.operation + ".zxs"
 
     def _pending(self):
@@ -41,7 +42,8 @@ class PendingRetry(CommitChoice):
         self.store = StoreReadback(self.live.store, self.live.store_fd)
         self.qualify()
         self._pending()
-        self._open_base()
+        if self.registered_source: self._open_base(held_mount=True)
+        else: self._open_base()
         src = self.stack.enter_context(relative_document(self.live.state_fd, self.leaf, single=True))
         observed = stamp(src)
         record, _ = read_managed_document(src, display_name=self.leaf)
@@ -57,6 +59,7 @@ class PendingRetry(CommitChoice):
         self._pending()  # Expensive archive reads never run with a SQLite lock held.
         self.check_candidate()
         self._check_base_evidence()
+        if self.registered_source: self._check_registered_mount()
         existing = self.ack_fd is not None
         action = ("该正式槽已是核验过的原归档。在 STORE 中只确认这个原文件，不上传；它若消失或被换就停止。"
                   if existing else
@@ -84,6 +87,10 @@ class PendingRetry(CommitChoice):
     def check_row(self, con, row):
         super().check_row(con, row)
         self.check_candidate()
+
+    def check_base(self):
+        super().check_base()
+        if self.registered_source: self._check_registered_mount()
 
     def run(self):
         if self.closed or not self.ready or self.used: raise Rejected("本次原操作续作决定不可复用")

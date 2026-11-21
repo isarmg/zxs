@@ -387,7 +387,7 @@ class CheckoutPane(QWidget):
                                              and (record.get("branch"), record.get("base_generation"),
                                                   record.get("base_operation")) ==
                                                  (index.commit.branch, index.commit.generation, index.commit.operation)))
-        self.commits.allow_visible(visible)
+        self.commits.allow_visible(visible, registered=self._displayed_basis())
         self.move.setText("恢复原路径并保留改动…" if phase == "hidden" else "临时收起工作目录…")
         self.move.setEnabled(bool(idle and committed and no_commit and phase in ("visible", "hidden")
                                   and not self.visibility_blocked and not self.commits.blocked))
@@ -401,17 +401,22 @@ class CheckoutPane(QWidget):
                     and record.get("pending_operation") is None)
 
     def _can_browse_baseline(self):
-        record = self.live_record or {}
         return bool(self.open_baseline is not None and self.live is not None and not self.active
                     and self.commits.running is None and not self.commits.blocked and not self.visibility_blocked
-                    and record.get("visibility") == "visible" and record.get("base_generation")
-                    and record.get("pending_operation") is None and record.get("pending_visibility_operation") is None)
+                    and self._displayed_basis() is not None)
+
+    def _displayed_basis(self):
+        record = self.live_record or {}
+        if (record.get("visibility") == "visible" and record.get("base_generation")
+                and record.get("pending_operation") is None and record.get("pending_visibility_operation") is None):
+            return tuple(record[key] for key in ("repo", "branch", "base_generation", "base_operation"))
+        return None
 
     def browse_baseline(self):
         if (self.owner.pending is not None or self.changes_dialog is not None or not self._can_browse_baseline()):
             return
         live, record = self.live, self.live_record
-        displayed = tuple(record[key] for key in ("repo", "branch", "base_generation", "base_operation"))
+        displayed = self._displayed_basis()
 
         def current():
             return self.live is live and self.live_record is record and self._can_browse_baseline()

@@ -8,7 +8,7 @@ from ..archive import read_managed_document, stamp
 from ..document import archive_sha, check_relative, native_identity, relative_document
 from ..model import Commit, Rejected, check_id, new_id
 from ..private_candidates import CandidateDirectory
-from ..private_freeze import local_mount
+from ..private_freeze import local_mount, mount_id
 from ..publish import Conflict, StoreReadback, require_native_writer
 
 from .selection import Verification
@@ -119,7 +119,7 @@ class CommitChoice:
                 raise Rejected("有待决提交或不一致的原登记；不能另发操作")
             return _baseline(row)
 
-    def _prepare_base(self, *, required=None):
+    def _prepare_base(self, *, required=None, displayed=None):
         self.store = StoreReadback(self.live.store, self.live.store_fd)
         self.area = CandidateDirectory(self.live.state, self.live.state_fd,
                                       native_identity(os.fstat(self.live.state_fd), stat.S_IFDIR))
@@ -127,7 +127,10 @@ class CommitChoice:
         self.base = self._idle_base()
         if required is not None and self.base != required:
             raise Rejected("本工作树的当前基线不再是窗口所选原节点；不打开其他代")
-        self._open_base()
+        if displayed is not None and self.base[:4] != displayed:
+            raise Rejected("登记基线与窗口状态不同；请刷新，不会选另一代")
+        if displayed is None: self._open_base()
+        else: self._open_base(held_mount=True)
 
     def _prepare(self):
         self._prepare_base()
@@ -144,7 +147,7 @@ class CommitChoice:
                 "登记本次原待决前可请求停止；可能保留私有候选。开始登记后不能用取消撤回，只查原号。"
                 "STATE 的冻结和新整包会同时占空间，STORE 还需一份整包；这里不保证容量。")
 
-    def _open_base(self):
+    def _open_base(self, *, held_mount=False):
         repo, branch, gen, node, digest = self.base
         check_id(repo); check_id(branch)
         if type(gen) is int and gen == 0:
@@ -162,6 +165,8 @@ class CommitChoice:
         except FileNotFoundError as exc:
             raise Rejected("所选 STORE 中缺少原基线，不用窗口打开的散包代替，也不自动补发") from exc
         observed = stamp(doc)
+        if held_mount and mount_id(doc.fileno()) != mount_id(self.live.store_fd):
+            raise Rejected("登记基线归档不在原 STORE 挂载")
         marker = read_managed_document(doc, display_name=self.name, observer=self.preparation)[0]
         if ((marker.repo, marker.branch, marker.generation, marker.operation) != self.base[:4]
                 or archive_sha(doc, observer=self.preparation) != digest):
@@ -176,6 +181,15 @@ class CommitChoice:
             return  # Only the actual creator of this original catalog carries this evidence.
         if self.original is None: raise Rejected("未持有本次已核验的原基线")
         check_relative(self.live.store_fd, self.name, self.original, self.observed)
+
+    def _check_registered_mount(self):
+        named = os.open(self.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.live.store_fd)
+        try:
+            m = os.fstat(named)
+            if ((*native_identity(m, stat.S_IFREG), m.st_size, m.st_mtime_ns, m.st_ctime_ns) != self.observed
+                    or not mount_id(named) == mount_id(self.original.fileno()) == mount_id(self.live.store_fd)):
+                raise Rejected("登记基线的正式名称或实际挂载已变化")
+        finally: os.close(named)
 
     def check_base(self):
         if self.closed or not self.ready: raise Rejected("未持有本次已核验的原基线")

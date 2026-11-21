@@ -283,18 +283,19 @@ def branch_from_snapshot(state, *, selected):
     if selected.purpose != "branch" or not selected.used or Path(state).absolute() != selected.live.state:
         raise Rejected("not a confirmed original-node branch decision")
     selected.check_base()  # Also rejects a closed or unprepared decision before opening a writer.
-    op, new, old = selected.operation, selected.proposed, selected.live.checkout_marker
-    if new != Commit(old.repo, selected.branch_id, 1, op, old.operation, old.tree) or new.branch == old.branch:
+    op, new, old = selected.operation, selected.proposed, selected.base_marker
+    if (old is None or (old.repo, old.branch, old.generation, old.operation) != selected.base[:4]
+            or new != Commit(old.repo, selected.branch_id, 1, op, old.operation, old.tree) or new.branch == old.branch):
         raise Rejected("branch marker does not represent the original reviewed node")
     with locked(state, live=selected.live, operation=op, journal_delete=True,
                 phase="登记从原节点创建的新分支待决") as (con, row, _):
         selected.check_row(con, row)
-        if row["pending"] is not None or con.execute(
+        if row["pending"] is not None or row["pending_sha"] is not None or con.execute(
                 "SELECT 1 FROM completed WHERE operation=? UNION ALL "
                 "SELECT 1 FROM forked_original WHERE operation=? OR successor=?", (op,op,op)).fetchone():
             raise Rejected("已有待决或该操作号已使用；不另建分支")
         selected.check_empty_slot()
-        sha = selected.area.copy_with_marker(selected.source, selected.live.checkout_sha, new, selected.check_base)
+        sha = selected.area.copy_with_marker(selected.source, selected.base[4], new, selected.check_base)
         selected.check_row(con, row)
         selected.check_empty_slot()
         selected.marker, selected.digest = new, sha
