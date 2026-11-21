@@ -133,6 +133,12 @@ class _AnonymousCopy(_BeforePublication):
     def _publication_guard(self):
         return nullcontext()
 
+    def _before_link(self):
+        """Optional final checks before committing to the native link."""
+
+    def _after_link(self, _fd, _observed):
+        """Optional additional read-only checks on the exact published generation."""
+
     def review(self):
         if self.closed or self.ready or self.used: raise Rejected("请重新选择一次快照内容和目的文件")
         try:
@@ -217,6 +223,19 @@ class _AnonymousCopy(_BeforePublication):
             raise Rejected("匿名副本读回不等于原数据")
         return before
 
+    def _whole_snapshot(self, create, expected_sha):
+        fd = create()
+        sha = self._copy(_read_selected(self.source), fd)
+        if expected_sha is not None and sha != expected_sha:
+            raise Rejected("复制的原始字节不等于列表中已核验的节点")
+        self._output(fd, 0, self.size)
+        self._phase("正在核验匿名 ZIP 里的完整目录和成员")
+        with os.fdopen(fd, "rb", closefd=False) as actual:
+            marker, _ = read_managed_document(_CheckedReads(actual, self._checkpoint), display_name=self.selected.path.name)
+        if marker != self.selected.browser.commit:
+            raise Rejected("原始字节不再表示选中的目录快照")
+        return fd, sha
+
     def run(self, *, confirmed=False):
         if confirmed is not True or not self.ready or self.closed or self.used:
             raise Rejected("只允许明确确认一次已核验的快照内容和目的文件")
@@ -247,6 +266,7 @@ class _AnonymousCopy(_BeforePublication):
                 temp.enter_context(self._publication_guard())
                 self._source()
                 self._parent()
+                self._before_link()
                 name = str(out)
                 if (not stat.S_ISLNK(os.stat(name, dir_fd=self.proc.fds, follow_symlinks=False).st_mode) or
                         self._output(out, 0, size) != sealed or
@@ -275,6 +295,7 @@ class _AnonymousCopy(_BeforePublication):
                 recheck()
                 os.fsync(self.parent)
                 recheck()
+                self._after_link(out, published)
             return f"已另存并核验：{str(self.path)!r}（{size:,} 字节）"
         except Exception as err:
             if may_be_linked:
@@ -417,18 +438,8 @@ class ZipCopy(_AnonymousCopy):
                   "不解包、不改原归档。\n")
 
     def _payload(self, create):
-        fd = create()
-        sha = self._copy(_read_selected(self.source), fd)
-        if self.selected.exact is not None and sha != self.selected.exact.sha256:
-            raise Rejected("复制的原始字节不等于列表中已核验的节点")
-        self._output(fd, 0, self.size)
-        # The private readback uses the one new inode, before publishing the .zip name.
-        self._phase("正在核验匿名 ZIP 里的完整目录和成员")
-        with os.fdopen(fd, "rb", closefd=False) as actual:
-            marker, _ = read_managed_document(_CheckedReads(actual, self._checkpoint), display_name=self.selected.path.name)
-        if marker != self.selected.browser.commit:
-            raise Rejected("原始字节不再表示选中的目录快照")
-        return fd, sha
+        exact = self.selected.exact
+        return self._whole_snapshot(create, exact.sha256 if exact is not None else None)
 
 
 class FolderSnapshot(_AnonymousCopy):

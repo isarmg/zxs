@@ -21,7 +21,7 @@ class ArchivePane(QWidget):
         self.selection = self.store = self.catalog = self.file_page = None
         self.verification = self.catalog_verification = None
         self.slots_dialog = self.slots_token = None
-        self.folder_snapshot = None
+        self.folder_snapshot = self.store_import_request = None
         self.directory, self.page_number, self.search_dialog = "", 0, None
         self.text_dialog = None
         layout = QVBoxLayout(self)
@@ -91,13 +91,17 @@ class ArchivePane(QWidget):
         fl.addLayout(nav)
         self.views.addTab(self.folder, "文件")
         self.history = self.make_table(("节点 ID", "分支", "代", "父节点"), "历史", "查看选中的历史快照")
-        self.copy_history = self.copy_repository = None
+        self.copy_history = self.copy_repository = self.import_version = None
         if sys.platform == "linux":
             self.copy_history = button("将当前版本及祖先复制到新本机库…", self.choose_history_copy)
             self.copy_repository = button("复制本次已核的所有分支到新本机库…",
                                           lambda: self.choose_history_copy(all_observed=True))
+            self.import_version = button("将当前下一代原样并入所选本机库…", self.import_store_version)
+            self.import_version.setObjectName("import-original-store-successor")
+            self.import_version.setToolTip("须先核验所选本机库的完整历史，且本次打开的原快照是同一分支的下一代。")
             self.history.parentWidget().layout().addWidget(self.copy_history)
             self.history.parentWidget().layout().addWidget(self.copy_repository)
+            self.history.parentWidget().layout().addWidget(self.import_version)
         self.branches = self.make_table(("分支", "最高观察代", "已核验分支头", "缺失父节点"), "分支", "查看选中的分支头")
         self.comparison = ComparisonPane(owner)
         self.views.addTab(self.comparison, "只读对比")
@@ -127,12 +131,14 @@ class ArchivePane(QWidget):
 
     def clear_catalog(self):
         self.catalog_verification = None
+        self.close_store_import_choice()
         self.comparison.invalidate_versions()
         self.catalog = None
         self.history.rows.replace(())
         self.branches.rows.replace(())
         if self.copy_history is not None: self.copy_history.setEnabled(False)
         if self.copy_repository is not None: self.copy_repository.setEnabled(False)
+        if self.import_version is not None: self.import_version.setEnabled(False)
 
     def clear_document(self):
         self.verification = None
@@ -551,6 +557,72 @@ class ArchivePane(QWidget):
         name = QFileDialog.getExistingDirectory(self, "选择已有的归档存储目录", "", options)
         if name: self.choose_store_path(Path(name))
 
+    def close_store_import_choice(self):
+        self.store_import_request = None
+
+    def import_store_version(self):
+        selected, store, catalog = self.selection, self.store, self.catalog
+        if (self.import_version is None or selected is None or store is None or catalog is None
+                or self.store_import_request is not None or self.owner.pending is not None): return
+        from .store_import import StoreSuccessor
+        try: plan = StoreSuccessor(selected, store, catalog)
+        except Exception as error:
+            self.owner.inform(str(error))
+            return
+        token = self.store_import_request = object()
+
+        def current():
+            return (self.store_import_request is token and self.selection is selected and
+                    self.store is store and self.catalog is catalog and not selected.held.closed)
+
+        def finish(message, error=None, *, invalidate_history=False):
+            try:
+                if current():
+                    if invalidate_history: self.clear_catalog()  # No automatic re-read or worktree change.
+                    self.owner.inform(message if error is None else str(error))
+            finally:
+                try: plan.close()
+                finally:
+                    if self.store_import_request is token: self.close_store_import_choice()
+
+        def submit(title, task, accept):
+            def work():
+                try: return task(), None
+                except Exception as error: return None, error
+            future = self.owner.job(title, work, lambda outcome: accept(*outcome),
+                                    failed=lambda error: finish(None, error), cancel=plan.cancel,
+                                    cancel_text="取消本机并入（发布前）",
+                                    progress_report=lambda: plan.progress() if current() else ("", 0, None))
+            if future is None: return False
+            future.add_done_callback(lambda job: plan.close() if job.cancelled() else None)
+            return True
+
+        def complete(message, error):
+            finish(None if error else f"{message}\n只并入了这一个原版；如需查看新历史，请重新读取分支与历史。",
+                   error, invalidate_history=True)
+
+        def reviewed(detail, error):
+            if error is not None:
+                finish(None, error)
+                return
+            try:
+                consent = (current() and not plan.cancelled.is_set() and confirm(
+                    self, "将一个原版本并入所选本机库", detail,
+                    attestation="这是本人独用的本机库，不是共享或同步位置。这次操作期间原归档、目的目录和既有版本不会被移动或改写，已停止其他写入者。",
+                    action_text="原样并入这一代"))
+                if not consent or not current() or plan.cancelled.is_set():
+                    finish("未并入版本，没有发布新文件。")
+                elif not submit("正在原样核验并入这一代，未发布…", lambda: plan.run(confirmed=True), complete):
+                    finish("窗口正在处理另一项，未开始并入。")
+            except Exception as error:
+                finish(None, error)
+
+        try:
+            if not submit("正在只读核对确切上一代、新槽和本机存储；没有写入…", plan.review, reviewed):
+                finish("窗口正在处理另一项，未开始并入。")
+        except Exception as error:
+            finish(None, error)
+
     def choose_store_path(self, store):
         if self.owner.pending is not None: return
         self.store = None
@@ -718,6 +790,11 @@ class ArchivePane(QWidget):
                         tip is not None and str(tip.path) == str(self.selection.path) and tip.observed == self.selection.observed)
             self.copy_history.setEnabled(can_copy)
             self.copy_repository.setEnabled(can_copy and HistoryCopy.complete(self.catalog))
+        if self.import_version is not None:
+            marker, selected = self.selection.browser.commit, self.selection
+            self.import_version.setEnabled(selected.held is not None and not selected.held.closed and
+                marker.generation > 1 and marker.parent in self.catalog.nodes and
+                marker.operation not in self.catalog.nodes and (marker.branch, marker.generation) not in self.catalog.slots)
         self.owner.inform("历史不完整。缺少原始父节点：" + missing if missing else "已沿原始父节点读到仓库起点。")
 
     def open_row(self, table):

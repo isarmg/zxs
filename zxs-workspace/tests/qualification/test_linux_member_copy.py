@@ -1,6 +1,7 @@
 """Opt-in ordinary-user ext4/XFS, no device changes; leaves only synthetic cases for inspection."""
 from concurrent.futures import Future
 from contextlib import ExitStack
+from dataclasses import replace
 import errno
 import hashlib
 from importlib.util import find_spec
@@ -15,7 +16,7 @@ import zipfile
 
 from zipworkspace import lifecycle, worktree
 from zipworkspace.comparison import Folder
-from zipworkspace.desktop import member_copy
+from zipworkspace.desktop import member_copy, store_import
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.initialize_choice import InitializeChoice
 from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection
@@ -75,6 +76,193 @@ class LinuxMemberCopy(unittest.TestCase):
         plan = member_copy.ZipCopy(self.selected, str(self.dest/name))
         self.addCleanup(plan.close)
         return plan
+
+    def stored_version(self, generation, parent=None, *, same=None, year=1980, path=None):
+        body = f"original body of one version: {generation}".encode()
+        tree = Manifest()
+        tree.add("item", False, len(body), hashlib.sha256(body).hexdigest())
+        tree.add("empty", True, 0, None)
+        marker = same or Commit("a"*32, "b"*32, generation, new_id(), parent, tree.digest())
+        path = self.dest/marker.filename if path is None else path
+        with path.open("xb") as out, zipfile.ZipFile(out, "w", compression=zipfile.ZIP_STORED) as z:
+            for name, mode, value in (("item", 0o100644, body), ("empty/", 0o40755, b"")):
+                entry = zipfile.ZipInfo(name, (year, 1, 1, 0, 0, 0)); entry.external_attr = mode << 16
+                z.writestr(entry, value)
+            z.comment = marker.encode()
+        return path, marker
+
+    def import_version(self):
+        parent, marker = self.stored_version(1)
+        original, _ = self.stored_version(2, marker.operation, path=self.private/"current.zxs")
+        selected = Selection.open(original, retain=True)
+        self.addCleanup(selected.release_display)
+        store = StoreSelection.open(self.dest)
+        catalog = selected.catalog(store)
+        return selected, store, catalog, parent
+
+    def import_plan(self, selected, store, catalog):
+        plan = store_import.StoreSuccessor(selected, store, catalog)
+        self.addCleanup(plan.close)
+        return plan
+
+    def test_imports_only_the_held_raw_successor_with_native_noreplace(self):
+        selected, store, catalog, parent = self.import_version()
+        plan = self.import_plan(selected, store, catalog)
+        before, raw = parent.read_bytes(), selected.path.read_bytes()
+        original = os.link
+        def install(source, name, **kwargs):
+            self.assertEqual({p.name for p in self.dest.iterdir()}, {parent.name})
+            self.assertEqual(os.fstat(int(source)).st_nlink, 0)
+            return original(source, name, **kwargs)
+        with patch.object(Selection, "open", side_effect=AssertionError("no source reopened by spelling")), \
+             patch.object(Selection, "catalog", side_effect=AssertionError("do not reselect or read a newer head")), \
+             patch.object(worktree, "commit", side_effect=AssertionError("no workspace registration")):
+            self.assertIn(catalog.anchor.sha256, plan.review())
+            with self.assertRaises(Rejected): plan.run()
+            with patch.object(os, "link", side_effect=install) as link:
+                self.assertIn(str(plan.path), plan.run(confirmed=True))
+                link.assert_called_once()
+        self.assertEqual({p.name for p in self.dest.iterdir()}, {parent.name, plan.path.name})
+        self.assertEqual((plan.path.read_bytes(), selected.path.read_bytes(), parent.read_bytes()), (raw, raw, before))
+        with zipfile.ZipFile(plan.path) as z:
+            self.assertEqual(z.comment, selected.browser.commit.encode())
+            self.assertTrue(z.getinfo("empty/").is_dir())
+            self.assertIsNone(z.testzip())
+        with self.assertRaises(Rejected): plan.run(confirmed=True)
+
+    def test_original_and_parent_require_exact_zip_bytes_not_just_same_tree(self):
+        selected, store, catalog, original_parent = self.import_version()
+        wrong_source, _ = self.stored_version(2, same=catalog.anchor.marker, year=2000, path=self.private/"other.zxs")
+        dig = hashlib.sha256(wrong_source.read_bytes()).hexdigest()
+        self.assertNotEqual(dig, catalog.anchor.sha256)
+        with patch.object(catalog, "anchor", replace(catalog.anchor, sha256=dig)):
+            plan = self.import_plan(selected, store, catalog)
+            plan.review()
+            with patch.object(os, "link", side_effect=AssertionError("wrong original raw SHA")), \
+                 self.assertRaisesRegex(Rejected, "原始字节不等于"):
+                plan.run(confirmed=True)
+            self.assertFalse(plan.path.exists())
+        predecessor = catalog.nodes[catalog.anchor.marker.parent]
+        other, _ = self.stored_version(1, same=predecessor.marker, year=2000, path=self.private/"other-parent.zxs")
+        dig = hashlib.sha256(other.read_bytes()).hexdigest()
+        self.assertNotEqual(dig, predecessor.sha256)
+        false = replace(predecessor, sha256=dig)
+        with patch.dict(catalog.nodes, {false.marker.operation: false}), \
+             patch.dict(catalog.slots, {(false.marker.branch, false.marker.generation): false}):
+            plan = self.import_plan(selected, store, catalog)
+            with self.assertRaisesRegex(Rejected, "原上一代不再符合"): plan.review()
+        self.assertEqual(list(self.dest.iterdir()), [original_parent])
+
+    def test_review_is_invalidated_by_a_new_generation_or_same_byte_parent_replacement(self):
+        selected, store, catalog, parent = self.import_version()
+        prior = parent.read_bytes()
+        plan = self.import_plan(selected, store, catalog)
+        plan.review()
+        late, _ = self.stored_version(3, selected.browser.commit.operation)
+        with self.assertRaisesRegex(Rejected, "规范槽已增补"): plan.run(confirmed=True)
+        self.assertTrue(late.is_file()); self.assertFalse(plan.path.exists())
+        late.rename(self.private/"kept-later.zxs")
+        plan = self.import_plan(selected, store, catalog)
+        plan.review()
+        old = parent.rename(self.private/"actual-parent.zxs")
+        parent.write_bytes(prior)
+        self.assertNotEqual(old.stat().st_ino, parent.stat().st_ino)
+        with self.assertRaises(Rejected): plan.run(confirmed=True)
+        self.assertTrue(parent.is_file()); self.assertFalse(plan.path.exists())
+
+    def test_destination_catalog_keeps_space_for_the_new_slot(self):
+        selected, store, catalog, parent = self.import_version()
+        sidecar = self.dest/"existing-note"
+        sidecar.write_bytes(b"not this repo")
+        plan = self.import_plan(selected, store, catalog)
+        with patch.object(store_import, "STORE_BUDGET", 2), \
+             self.assertRaisesRegex(Rejected, "有界目录的上限"):
+            plan.review()
+        self.assertEqual(set(self.dest.iterdir()), {sidecar, parent})
+
+    def test_last_prepublication_inventory_follows_the_last_source_check(self):
+        selected, store, catalog, _ = self.import_version()
+        plan = self.import_plan(selected, store, catalog)
+        plan.review()
+        original, late = plan._source, []
+        def read_source():
+            original()
+            if not late and "读回" in plan.progress()[0]:
+                late.append(self.stored_version(3, selected.browser.commit.operation)[0])
+        with patch.object(plan, "_source", side_effect=read_source), \
+             patch.object(os, "link", side_effect=AssertionError("stale evidence must not publish")), \
+             self.assertRaisesRegex(Rejected, "规范槽已增补"):
+            plan.run(confirmed=True)
+        self.assertEqual(len(late), 1)
+        self.assertTrue(late[0].is_file())
+        self.assertFalse(plan.path.exists())
+
+    def test_exact_bytes_late_collision_stays_a_refusal_not_a_success(self):
+        selected, store, catalog, parent = self.import_version()
+        plan = self.import_plan(selected, store, catalog)
+        plan.review()
+        raw, actual = selected.path.read_bytes(), os.link
+        def occupy(source, name, **kwargs):
+            with plan.path.open("xb") as incumbent: incumbent.write(raw)
+            actual(source, name, **kwargs)
+        with patch.object(os, "link", side_effect=occupy) as link, \
+             self.assertRaisesRegex(Rejected, "目的名称已被占用"):
+            plan.run(confirmed=True)
+        link.assert_called_once()
+        self.assertEqual(plan.path.read_bytes(), raw)
+        self.assertEqual(set(self.dest.iterdir()), {parent, plan.path})
+
+    def test_post_link_parent_barrier_failure_remains_unknown_and_does_not_cleanup(self):
+        selected, store, catalog, parent = self.import_version()
+        plan = self.import_plan(selected, store, catalog)
+        plan.review()
+        expected, actual = self.dest.stat(), os.fsync
+        def sync(fd):
+            if os.path.samestat(os.fstat(fd), expected) and plan.path.exists():
+                raise OSError(errno.EIO, "synthetic original STORE barrier error")
+            actual(fd)
+        with patch.object(os, "fsync", side_effect=sync), self.assertRaises(Uncertain):
+            plan.run(confirmed=True)
+        self.assertEqual(plan.path.read_bytes(), selected.path.read_bytes())
+        self.assertEqual(set(self.dest.iterdir()), {parent, plan.path})
+        with self.assertRaises(Rejected): plan.run(confirmed=True)
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional Qt")
+    def test_original_qt_confirmation_cannot_publish_after_its_catalog_is_revoked(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import archive_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        selected, store, catalog, parent = self.import_version()
+        pane = win.archive
+        pane.show_selection(selected); pane.use_store(store); pane.show_catalog(catalog)
+        self.assertTrue(pane.import_version.isEnabled())
+        pending = []
+        def enqueue(task):
+            original = Future()
+            pending.append((original, task))
+            return original
+        def confirm(*args, **kwargs):
+            pane.clear_catalog()  # Programmatic change inside the modal dialog loop.
+            return True
+        try:
+            with patch.object(win.pool, "submit", side_effect=enqueue), \
+                 patch.object(archive_pane, "confirm", side_effect=confirm) as asked, \
+                 patch.object(store_import.StoreSuccessor, "run", side_effect=AssertionError("old decision")):
+                pane.import_version.click()
+                first, prepare = pending.pop()
+                self.assertTrue(first.set_running_or_notify_cancel())
+                first.set_result(prepare())
+                win.poll()
+                asked.assert_called_once()
+                self.assertEqual(pending, [])
+                self.assertIsNone(pane.store_import_request)
+                self.assertEqual(list(self.dest.iterdir()), [parent])
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
     def original_folder(self):
         original = self.private/"folder"

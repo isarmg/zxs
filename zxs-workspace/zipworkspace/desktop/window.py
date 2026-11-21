@@ -250,6 +250,7 @@ class Window(QMainWindow):
             self.archive.close_text()
             self.archive.close_slots()
             self.archive.close_folder_snapshot_choice()
+            self.archive.close_store_import_choice()
             self.archive.comparison.clear()
             self.archive.checkout.close_session()
             if self.archive.selection is not None: self.archive.selection.release_display()
