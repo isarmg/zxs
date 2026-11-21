@@ -795,9 +795,9 @@ class PlainZipCopy(_AtomicDirectoryCopy):
 
 
 class HistoryCopy(_AtomicDirectoryCopy):
-    """Copy exactly one previously verified, complete ancestry to a new local STORE."""
+    """Copy a fixed verified ancestry or all observed complete branches to a new local STORE."""
 
-    def __init__(self, selected, choice, catalog, spelling):
+    def __init__(self, selected, choice, catalog, spelling, *, all_observed=False):
         marker = selected.browser.commit
         tip = catalog.nodes.get(marker.operation)
         chain, missing = catalog.history(marker.operation)
@@ -805,18 +805,31 @@ class HistoryCopy(_AtomicDirectoryCopy):
                 str(tip.path) != str(selected.path) or tip.observed != selected.observed or
                 (selected.exact is not None and selected.exact != tip)):
             raise Rejected("需选择当前 STORE 中已经核验到起点的规范版本；不能用散包、旧列表或缺失父节点")
+        if all_observed:
+            if not self.complete(catalog):
+                raise Rejected("已列仓库含无法追到原正式起点的分支；不建立不完整的本机仓库")
+            markers = [node.marker for _, node in sorted(catalog.slots.items())]
+        else:
+            markers = reversed(chain)  # never select an updated branch tip
         originals = []
-        for parent in reversed(chain):  # never select an updated branch tip
-            node = catalog.nodes.get(parent.operation)
-            if (node is None or node.marker != parent or
-                    str(node.path) != str(choice.path / parent.filename)):
+        for exact in markers:
+            node = catalog.nodes.get(exact.operation)
+            if (node is None or node.marker != exact or node.marker.repo != marker.repo or
+                    str(node.path) != str(choice.path / exact.filename)):
                 raise Rejected("每一代都须来自同一次列表核验的原规范槽")
             originals.append(node)
-        if not originals or originals[-1] is not tip:
+        includes_tip = any(node is tip for node in originals) if all_observed else bool(originals and originals[-1] is tip)
+        if not includes_tip:
             raise Rejected("没有当前版本的完整原历史")
         self.tip, self.originals, self.choice = tip, tuple(originals), choice
+        self.all_observed = all_observed
         self.store = None
         super().__init__(selected, spelling)
+
+    @staticmethod
+    def complete(catalog):
+        return bool(catalog.nodes and catalog.store_gaps.keys() == catalog.nodes.keys()
+                    and all(gap is None for gap in catalog.store_gaps.values()))
 
     def _approved_rows(self):
         self.store = self.stack.enter_context(held_store(self.choice.path))
@@ -844,10 +857,18 @@ class HistoryCopy(_AtomicDirectoryCopy):
         _distinct_roots((self.store.fd, self.private.parent, self.parent))
 
     def _describe(self):
-        return (f"原 STORE（只读）：{str(self.store.path)!r}\n"
-                f"固定的末代节点：{self.tip.marker.operation} · 第 {self.tip.marker.generation} 代\n"
-                f"原样复制已核的 {len(self.originals):,} 代及其规范文件名，不追分支头或复制旁支。"
-                "新目录是独立的本机 STORE，可稍后明确选择。不会修改或上传到原 STORE。")
+        mark = self.tip.marker
+        if self.all_observed:
+            branches = len({node.marker.branch for node in self.originals})
+            fixed = (f"仓库：{mark.repo} · 当前原节点：{mark.operation}\n"
+                     f"原样复制此次列表已核的 {branches:,} 个分支、{len(self.originals):,} 个规范版本。"
+                     "不重新扫描或加入之后出现的版本。\n")
+        else:
+            fixed = (f"固定的末代节点：{mark.operation} · 第 {mark.generation} 代\n"
+                     f"原样复制已核的 {len(self.originals):,} 代及其规范文件名，不追分支头或复制旁支。\n")
+        return (f"原 STORE（只读）：{str(self.store.path)!r}\n" + fixed
+                + "新目录是独立的时点副本，不同步、不向原 STORE 上传。"
+                  "保留原分支号；需要独立开发时先显式新建分支，避免两库产生同代同名不同内容。")
 
     def _named_original(self, node, fd):
         if (_generation(os.fstat(fd)) != node.observed or
@@ -912,6 +933,12 @@ class HistoryCopy(_AtomicDirectoryCopy):
         names()
         if _directory_generation(stage.parent) != original:
             raise Rejected("读回时原本机暂存目录已改变")
+        if self.all_observed:
+            # Recheck these same slot names, not directory inventory, after
+            # the full destination readback. Never add a later observed slot.
+            for node in self.originals:
+                self._checkpoint()
+                self._exact_leaf(node)
         return original
 
 

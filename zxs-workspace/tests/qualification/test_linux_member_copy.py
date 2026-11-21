@@ -566,6 +566,64 @@ class LinuxMemberCopy(unittest.TestCase):
         local = Selection.open(plan.path/tip.filename)
         self.assertEqual(local.catalog(local_store).select_branch(tip.branch).marker, tip)
 
+    def test_all_observed_complete_branches_are_copied_without_adding_late_or_other_repo_slots(self):
+        branch_only, origin, selected, store, catalog, (first, parent, tip, other) = self.history_plan()
+        branch_only.close()
+        plan = member_copy.HistoryCopy(selected, store, catalog, str(self.dest/"all-observed"), all_observed=True)
+        self.addCleanup(plan.close)
+        plan.pick_private(str(self.private))
+        detail = plan.review()
+        self.assertIn("2 个分支、4 个规范版本", detail)
+        self.assertIn("不同内容", detail)
+        late = Commit(first.repo, other.branch, 4, "7"*32, other.operation, other.tree)
+        elsewhere = Commit("a"*32, "b"*32, 1, "8"*32, None, first.tree)
+        for marker in (late, elsewhere):
+            with zipfile.ZipFile(origin/marker.filename, "x") as z:
+                z.writestr("file", b"body"); z.comment = marker.encode()
+        before = {p.name: p.read_bytes() for p in origin.iterdir()}
+        plan.run(confirmed=True)
+        included = {item.filename for item in (first, parent, tip, other)}
+        self.assertEqual({p.name:p.read_bytes() for p in plan.path.iterdir()}, {name:before[name] for name in included})
+        self.assertEqual({p.name:p.read_bytes() for p in origin.iterdir()}, before)
+        verified = Selection.open(plan.path / tip.filename).catalog(StoreSelection.open(plan.path))
+        self.assertEqual(verified.select_branch(tip.branch).marker, tip)
+        self.assertEqual(verified.select_branch(other.branch).marker, other)
+
+    def test_repo_copy_refuses_unresolved_observed_branch_even_when_chosen_chain_is_complete(self):
+        branch_only, origin, selected, store, _, (first, _, tip, _) = self.history_plan()
+        branch_only.close()
+        missing = Commit(first.repo, "c"*32, 1, "8"*32, "9"*32, first.tree)
+        with zipfile.ZipFile(origin/missing.filename, "x") as z:
+            z.writestr("file", b"body"); z.comment = missing.encode()
+        catalog = selected.catalog(store)
+        self.assertIsNone(catalog.history(tip.operation)[1])
+        self.assertEqual(catalog.store_gaps[missing.operation], missing.parent)
+        self.assertFalse(member_copy.HistoryCopy.complete(catalog))
+        with self.assertRaisesRegex(Rejected, "不完整"):
+            member_copy.HistoryCopy(selected, store, catalog, str(self.dest/"must-not-start"), all_observed=True)
+        one = member_copy.HistoryCopy(selected, store, catalog, str(self.dest/"still-only-one"))
+        self.addCleanup(one.close)
+        self.assertNotIn(missing, tuple(node.marker for node in one.originals))
+
+    def test_repo_copy_rechecks_a_side_branch_slot_after_copy_before_publication(self):
+        branch_only, origin, selected, store, catalog, (_, _, _, side) = self.history_plan()
+        branch_only.close()
+        plan = member_copy.HistoryCopy(selected, store, catalog, str(self.dest/"multi-replaced"), all_observed=True)
+        self.addCleanup(plan.close)
+        plan.pick_private(str(self.private)); plan.review()
+        native_sync = member_copy.private_stage._Output.sync
+        def replace_after_copy(sink, *args, **kw):
+            native_sync(sink, *args, **kw)
+            chosen = origin/side.filename
+            retained = origin/"original-observed-slot"
+            chosen.rename(retained)
+            chosen.write_bytes(retained.read_bytes())
+        with patch.object(member_copy.private_stage._Output, "sync", replace_after_copy), \
+             patch.object(member_copy, "rename_new_at", side_effect=AssertionError("never publish rebound source")):
+            with self.assertRaisesRegex(Rejected, "原历史归档已替换"): plan.run(confirmed=True)
+        self.assertFalse(plan.path.exists())
+        self.assertTrue((self.private/plan.stage_name).is_dir())
+
     def test_original_ancestor_cannot_be_replaced_or_omitted_and_never_creates_stage(self):
         plan, original, selected, choice, _, (first, _, tip, _) = self.history_plan()
         plan.review()

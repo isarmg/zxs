@@ -82,10 +82,13 @@ class ArchivePane(QWidget):
         fl.addLayout(nav)
         self.views.addTab(self.folder, "文件")
         self.history = self.make_table(("节点 ID", "分支", "代", "父节点"), "历史", "查看选中的历史快照")
-        self.copy_history = None
+        self.copy_history = self.copy_repository = None
         if sys.platform == "linux":
             self.copy_history = button("将当前版本及祖先复制到新本机库…", self.choose_history_copy)
+            self.copy_repository = button("复制本次已核的所有分支到新本机库…",
+                                          lambda: self.choose_history_copy(all_observed=True))
             self.history.parentWidget().layout().addWidget(self.copy_history)
+            self.history.parentWidget().layout().addWidget(self.copy_repository)
         self.branches = self.make_table(("分支", "最高观察代", "已核验分支头", "缺失父节点"), "分支", "查看选中的分支头")
         self.comparison = ComparisonPane(owner)
         self.views.addTab(self.comparison, "只读对比")
@@ -120,6 +123,7 @@ class ArchivePane(QWidget):
         self.history.rows.replace(())
         self.branches.rows.replace(())
         if self.copy_history is not None: self.copy_history.setEnabled(False)
+        if self.copy_repository is not None: self.copy_repository.setEnabled(False)
 
     def clear_document(self):
         self.verification = None
@@ -388,7 +392,7 @@ class ArchivePane(QWidget):
 
         submit("正在只读核验归档来源、目标目录和完整字节…", plan.review, review)
 
-    def choose_history_copy(self):
+    def choose_history_copy(self, *, all_observed=False):
         selected, store, catalog = self.selection, self.store, self.catalog
         if (self.copy_history is None or selected is None or store is None or catalog is None or
                 self.owner.pending is not None): return
@@ -403,7 +407,7 @@ class ArchivePane(QWidget):
         if not name or not current(): return
         plan = None
         try:
-            plan = HistoryCopy(selected, store, catalog, name)
+            plan = HistoryCopy(selected, store, catalog, name, all_observed=all_observed)
             scratch = QFileDialog.getExistingDirectory(self, "选择本机同挂载、本人独用的已有 0700 暂存目录",
                                                        "", opts | QFileDialog.Option.ShowDirsOnly)
             if not scratch or not current():
@@ -428,14 +432,14 @@ class ArchivePane(QWidget):
                 raise
 
         def completed(message):
-            self.owner.inform(f"{message}\n可另行选这个新 STORE，再打开其中的精确末代快照："
+            self.owner.inform(f"{message}\n可另行选这个新 STORE，再打开其中的本次原节点："
                               f"{str(plan.path / plan.tip.marker.filename)!r}。未改当前 STORE 或工作树。")
 
         def review(details):
             try:
                 if (current() and confirm(self, "建立新本机库，不改变原 STORE", details,
                         attestation="原版本和两个本机父不移动、不改写。本机两处不属于原共享的服务器目录、别名或同步位置；本人独用私处，并同意留下失败材料。",
-                        action_text="复制完整祖先到本机") and current()):
+                        action_text="复制全部已列分支" if all_observed else "复制完整祖先到本机") and current()):
                     submit("正在从原位置逐份复制、核验原始字节并读回新本机库…",
                            lambda: plan.run(confirmed=True), completed, cancellable=True)
                 else:
@@ -519,9 +523,12 @@ class ArchivePane(QWidget):
         self.history.rows.replace(((m.operation, m.branch, str(m.generation), m.parent or "起点"),
                                    self.catalog.select_node(m.operation)) for m in chain)
         if self.copy_history is not None:
+            from .member_copy import HistoryCopy
             tip = self.catalog.nodes.get(self.selection.browser.commit.operation)
-            self.copy_history.setEnabled(missing is None and self.selection.held is not None and
-                tip is not None and str(tip.path) == str(self.selection.path) and tip.observed == self.selection.observed)
+            can_copy = (missing is None and self.selection.held is not None and not self.selection.held.closed and
+                        tip is not None and str(tip.path) == str(self.selection.path) and tip.observed == self.selection.observed)
+            self.copy_history.setEnabled(can_copy)
+            self.copy_repository.setEnabled(can_copy and HistoryCopy.complete(self.catalog))
         self.owner.inform("历史不完整。缺少原始父节点：" + missing if missing else "已沿原始父节点读到仓库起点。")
 
     def open_row(self, table):
