@@ -1,9 +1,10 @@
 """A verified display is not authority to write or a claim about raw ZIP bytes."""
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import stat
+import sys
 from threading import Event, Lock
 from types import MappingProxyType
 
@@ -11,7 +12,7 @@ from .. import plain_import
 
 from ..archive import stamp
 from ..browser import ArchiveBrowser, DirectoryIndex
-from ..document import archive_sha, named_document, native_identity, relative_document
+from ..document import PositionalDocument, archive_sha, named_document, native_identity, relative_document
 from ..model import Rejected
 from ..refs import Catalog, Node
 
@@ -221,6 +222,39 @@ class Selection:
                 (self.exact is not None and result.anchor != self.exact)):
             raise Rejected("selected original changed before catalog inspection")
         return result
+
+
+def selected_raw_sha(selected: Selection, *, observer):
+    """Re-read only the physical bytes of the held observation, not a path or catalog slot."""
+    if not isinstance(selected, Selection) or selected.held is None or selected.held.closed:
+        raise Rejected("没有可核验的原浏览句柄")
+    observer.begin("identity")
+    with ExitStack() as leases:
+        resident = None
+        if sys.platform == "darwin":
+            from ..macos_read import no_materialization, resident
+            leases.enter_context(no_materialization())
+        fd = leases.enter_context(selected.held.read_lease())
+
+        def current():
+            observer.check()
+            if resident is not None: resident(selected.path.name, fd)
+            for item in (os.fstat(fd), selected.path.stat(follow_symlinks=False)):
+                observed = (*native_identity(item, stat.S_IFREG), item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+                if observed != selected.observed:
+                    raise Rejected("原归档已变化，不按同名路径重开")
+
+        current()
+        source = (nullcontext(PositionalDocument(fd, selected.observed[2])) if hasattr(os, "pread")
+                  else os.fdopen(fd, "rb", buffering=0, closefd=False))
+        with source as original:
+            sha = archive_sha(original, observer=observer)
+        observer.begin("identity")
+        current()
+        if selected.exact is not None and sha != selected.exact.sha256:
+            raise Rejected("整包 SHA-256 与已列原版本不符")
+    observer.check()
+    return sha
 
 
 def read_registered_baseline(live, displayed, *, observer):

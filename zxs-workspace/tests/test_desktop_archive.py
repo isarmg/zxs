@@ -1,3 +1,5 @@
+from concurrent.futures import Future
+from contextlib import ExitStack
 from dataclasses import replace
 import errno
 import hashlib
@@ -11,8 +13,8 @@ from unittest.mock import patch
 import unittest
 import zipfile
 
-from zipworkspace.desktop.selection import Selection, StoreSelection
-from zipworkspace.model import Commit, Manifest, Rejected
+from zipworkspace.desktop.selection import Selection, StoreSelection, Verification, selected_raw_sha
+from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
 
 
 def write_snapshot(path, *, marker=None, year=2000, entries=None):
@@ -116,6 +118,66 @@ class SelectedOriginal(unittest.TestCase):
                 self.assertEqual(cat.select_node(marker.operation), cat.anchor)
                 self.assertEqual(cat.select_branch(marker.branch).marker, later)
 
+    def test_requested_raw_hash_is_from_the_held_zip_without_reparse_or_shared_seek(self):
+        from zipworkspace.desktop import selection as view
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as held:
+            path = Path(tmp) / "selected.zxs"
+            marker = write_snapshot(path, entries={"first/body": b"A" * (2 * CHUNK), "empty/": b""})
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            self.assertNotEqual(digest, marker.tree)
+            selected = Selection.open(path, retain=True)
+            held.callback(selected.release_display)
+            fd = selected.held.fileno()
+            os.lseek(fd, 15, os.SEEK_SET)
+
+            class Watch(Verification):
+                def __init__(self, cancel=False):
+                    super().__init__()
+                    self.copied, self.stop = 0, cancel
+
+                def advance(self, size):
+                    super().advance(size)
+                    self.copied += size
+                    if self.stop: self.cancel()
+
+            with patch.object(view, "named_document", side_effect=AssertionError("no reopen")), \
+                 patch.object(view, "ArchiveBrowser", side_effect=AssertionError("no ZIP reparse")):
+                read = Watch()
+                self.assertEqual(selected_raw_sha(selected, observer=read), digest)
+                self.assertEqual(read.copied, selected.observed[2])
+                cancelled = Watch(cancel=True)
+                with self.assertRaisesRegex(Rejected, "已取消"):
+                    selected_raw_sha(selected, observer=cancelled)
+                self.assertGreater(cancelled.copied, 0)
+                self.assertLessEqual(cancelled.copied, CHUNK)
+            self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 15)
+            self.assertIsNone(selected.exact)  # The read doesn't mint a history or writer capability.
+
+    @unittest.skipIf(os.name == "nt", "POSIX synthetic same-name replacement with the original held")
+    def test_requested_raw_hash_rejects_same_byte_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as held:
+            path = Path(tmp) / "chosen.zxs"
+            write_snapshot(path)
+            selected = Selection.open(path, retain=True)
+            held.callback(selected.release_display)
+            moved = path.with_suffix(".original")
+            path.rename(moved)
+            path.write_bytes(moved.read_bytes())
+            with self.assertRaisesRegex(Rejected, "原归档已变化"):
+                selected_raw_sha(selected, observer=Verification())
+
+    def test_requested_raw_hash_checks_a_listed_digest_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as held:
+            path = Path(tmp) / "chosen.zxs"
+            write_snapshot(path)
+            view = Selection.open(path)
+            node = view.catalog(StoreSelection.open(path.parent)).anchor
+            selected = Selection.open(path, expected=node, retain=True)
+            held.callback(selected.release_display)
+            self.assertEqual(selected_raw_sha(selected, observer=Verification()), node.sha256)
+            with self.assertRaisesRegex(Rejected, "已列原版本不符"):
+                selected_raw_sha(replace(selected, exact=replace(node, sha256="0" * 64)), observer=Verification())
+
     def test_same_inode_at_a_different_name_is_not_reused_as_the_store_slot(self):
         from zipworkspace import refs
         with tempfile.TemporaryDirectory() as tmp:
@@ -216,6 +278,44 @@ class SelectedOriginal(unittest.TestCase):
 
 @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
 class DesktopArchiveWidgets(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1", "optional Qt source fixture")
+    def test_raw_digest_needs_confirmation_and_remains_in_the_original_view(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import archive_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = Path(tmp) / "first.zxs", Path(tmp) / "second.zxs"
+            write_snapshot(first)
+            write_snapshot(second, year=2001)
+            win = Window()
+            pane = win.archive
+            pane.show_selection(Selection.open(first, retain=True))
+            try:
+                with patch.object(archive_pane, "confirm", return_value=False), \
+                     patch.object(win.pool, "submit", side_effect=AssertionError("confirmation missing")):
+                    pane.raw_check.click()
+                self.assertEqual(pane.raw_result.text(), "")
+
+                def start_read():
+                    ready = Future()
+                    with patch.object(archive_pane, "confirm", return_value=True), \
+                         patch.object(win.pool, "submit", return_value=ready) as run:
+                        pane.raw_check.click()
+                    ready.set_result(run.call_args.args[0]())
+
+                start_read()
+                pane.show_selection(Selection.open(second, retain=True))
+                win.poll()
+                self.assertEqual(pane.raw_result.text(), "")
+                start_read()
+                win.poll()
+                self.assertIn(hashlib.sha256(second.read_bytes()).hexdigest(), pane.raw_result.text())
+                pane.close_snapshot()
+                self.assertEqual(pane.raw_result.text(), "")
+            finally:
+                win.close()
+
     def test_real_window_reuses_the_selected_file_and_shows_the_verified_folders(self):
         from PySide6.QtWidgets import QApplication
         from zipworkspace.desktop.window import Window

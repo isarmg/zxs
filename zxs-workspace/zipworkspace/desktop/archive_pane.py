@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout,
 
 from .comparison_pane import ComparisonPane
 from .checkout_pane import CheckoutPane
-from .selection import Selection, StoreSelection, submit_verification
+from .selection import Selection, StoreSelection, selected_raw_sha, submit_verification
 from .widgets import Table, button, confirm, label
 
 
@@ -37,8 +37,12 @@ class ArchivePane(QWidget):
             actions.addWidget(self.save_zip)
         layout.addLayout(actions)
         self.details = label()
+        self.raw_check = button("核验并显示整包 SHA-256…", self.check_raw)
+        self.raw_result = label()
         self.store_label = label("尚未选择归档存储；浏览一个快照不需要存储目录。")
         layout.addWidget(self.details)
+        layout.addWidget(self.raw_check)
+        layout.addWidget(self.raw_result)
         layout.addWidget(self.store_label)
         self.views = QTabWidget()
         layout.addWidget(self.views)
@@ -125,6 +129,8 @@ class ArchivePane(QWidget):
         self.comparison.set_snapshot(None)
         self.clear_catalog()
         self.details.setText("尚未打开快照")
+        self.raw_check.setEnabled(False)
+        self.clear_raw()
         self.at.setText("")
         self.files.rows.replace(())
         self.update_member_action()
@@ -144,6 +150,36 @@ class ArchivePane(QWidget):
         if self.mount is not None: self.mount.changing()
         name, _ = QFileDialog.getOpenFileName(self, "选择要核验的目录快照", "", "目录快照 (*.zxs *.ZXS);;所有文件 (*)")
         if name: self.open_snapshot(name)
+
+    def clear_raw(self):
+        self.raw_result.clear()
+        self.raw_result.hide()
+
+    def check_raw(self):
+        selected = self.selection
+        if (selected is None or selected.held is None or selected.held.closed
+                or self.owner.pending is not None): return
+        shown_at_confirmation = self.verification
+        size = selected.observed[2]
+        if not confirm(self, "核验当前归档的整包字节",
+                       f"原归档：{str(selected.path)!r}\n只读取本次仍持有的原文件，共 {size:,} 字节；"
+                       "不重新打开同名文件，不重新解释目录，可取消。已挂载的来源可能由系统访问远端。"
+                       "这是字节摘要，不证明来源、分支头或工作树状态。",
+                       attestation="我确认只读核对上述原文件。", action_text="读取并核验 SHA-256"):
+            return
+        if (self.selection is not selected or self.verification is not shown_at_confirmation
+                or selected.held.closed or self.owner.pending is not None): return
+        self.clear_raw()
+        request = self.verification = object()
+        def current():
+            return self.selection is selected and self.verification is request and not selected.held.closed
+        def show(sha):
+            self.raw_result.setText(f"本次实读的完整 ZIP SHA-256（{size:,} B）：{sha}\n不证明归档来源。")
+            self.raw_result.show()
+            self.owner.inform("已核验本次原归档整包的字节摘要，没有修改或登记。")
+        submit_verification(self.owner, "正在读取整包原始字节，不解包…",
+                            lambda observer: selected_raw_sha(selected, observer=observer),
+                            show, current=current, discard=lambda _sha: None)
 
     def open_snapshot(self, name):
         if self.owner.pending is not None: return
@@ -410,12 +446,14 @@ class ArchivePane(QWidget):
         self.checkout.set_snapshot(selected)
         if self.selection is not None and self.selection is not selected: self.selection.release_display()
         self.selection = selected
+        self.clear_raw()
+        self.raw_check.setEnabled(selected.held is not None and not selected.held.closed)
         if self.save_copy is not None: self.save_copy.setEnabled(selected.held is not None)
         if self.save_zip is not None: self.save_zip.setEnabled(selected.held is not None)
         self.comparison.set_snapshot(selected)
         marker = selected.browser.commit
         evidence = (f"原归档 SHA-256：{selected.exact.sha256}" if selected.exact is not None
-                    else "成员内容已完整核验；未计算原 ZIP 字节摘要。")
+                    else "首次打开只核验成员与整树；整包字节摘要可另行核验。")
         self.details.setText(f"{selected.path}\n仓库 {marker.repo}  ·  分支 {marker.branch}  ·  第 {marker.generation} 代\n"
                              f"节点 {marker.operation}  ·  整树 SHA-256：{marker.tree}\n{evidence}")
         self.reload.setEnabled(self.store is not None)
