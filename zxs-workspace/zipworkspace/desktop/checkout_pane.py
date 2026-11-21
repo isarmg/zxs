@@ -714,18 +714,23 @@ class CheckoutPane(QWidget):
         table = Table(columns, "首次提交内容（一次只读观察）" if first else "本工作树的只读改动")
         layout.addWidget(table)
         if evidence is not None:
-            def select_missing():
+            def missing():
                 row = table.item()
-                if row is not None and row.change == "missing" and row.before == "file":
-                    self.restore_missing(dialog, live, evidence, row)
+                return row if row is not None and row.change == "missing" and row.before in ("file", "directory") else None
 
-            restore = button("从登记基线补回所选缺失文件…", select_missing)
+            def select_missing():
+                row = missing()
+                if row is not None: self.restore_missing(dialog, live, evidence, row)
+
+            restore = button("从登记基线补回所选缺失内容…", select_missing)
             restore.setObjectName("restore-selected-missing-member")
             restore.setEnabled(False)
 
             def update_restore(*_):
-                row = table.item()
-                restore.setEnabled(row is not None and row.change == "missing" and row.before == "file")
+                row = missing()
+                kind = "内容" if row is None else ("目录" if row.before == "directory" else "文件")
+                restore.setText(f"从登记基线补回所选缺失{kind}…")
+                restore.setEnabled(row is not None)
 
             table.selectionModel().selectionChanged.connect(update_restore)
             table.rows.modelReset.connect(update_restore)
@@ -767,8 +772,11 @@ class CheckoutPane(QWidget):
                 or self.restoring_member is not None or self.visibility_blocked or self.commits.blocked
                 or self.commits.running is not None):
             return
-        from .member_copy import RestoreMissingMember
-        try: plan = RestoreMissingMember(live, evidence, row)
+        from .member_copy import RestoreMissingDirectory, RestoreMissingMember
+        directory = row.before == "directory"
+        plan_type = RestoreMissingDirectory if directory else RestoreMissingMember
+        kind = "目录" if directory else "文件"
+        try: plan = plan_type(live, evidence, row)
         except Exception as error:
             self.owner.inform(describe(error))
             return
@@ -807,17 +815,29 @@ class CheckoutPane(QWidget):
                 finish(None, error)
                 return
             try:
+                terms = "我已关闭编辑器、暂停同步和所有其他工作树写入（含 CLI），操作期间不移动原目录。"
+                if directory: terms += "我独占所选暂存目录，也已暂停对此目录的同步与写入。"
                 if (not current() or plan.cancelled.is_set() or not confirm(
-                        self, "只补回这一个缺失文件", details,
-                        attestation="我已关闭编辑器、暂停同步和所有其他工作树写入（含 CLI），操作期间不移动原目录。",
-                        action_text="把缺失文件补回原路径") or not current() or plan.cancelled.is_set()):
-                    finish("未补回文件；已有编辑、登记和历史不变。")
+                        self, f"只补回这一个缺失{kind}", details,
+                        attestation=terms, action_text=f"把缺失{kind}补回原路径")
+                        or not current() or plan.cancelled.is_set()):
+                    finish(f"未补回{kind}；已有编辑、登记和历史不变。")
                     return
-                queue("正在复制并核对原基线的这一个文件…",
-                      lambda: f"{plan.run(confirmed=True)}\n只补回原文件；没有提交或改动登记基线。", finish)
+                queue(f"正在复制并核对原基线的这一个{kind}…",
+                      lambda: f"{plan.run(confirmed=True)}\n只补回原{kind}；没有提交或改动登记基线。", finish)
             except Exception as error: finish(None, error)
 
-        queue("正在只读复核本次登记基线和缺失文件的原父目录…", plan.review, reviewed)
+        if directory:
+            try:
+                private = self._directory("选择与工作树同挂载的独立私有暂存目录（已有、本人独占、无同步）", read_only=True)
+                if not private or not current():
+                    finish("未补回目录；没有写入暂存或工作树。")
+                    return
+                plan.pick_private(private)
+            except Exception as error:
+                finish(None, error)
+                return
+        queue(f"正在只读复核本次登记基线和缺失{kind}的原父目录…", plan.review, reviewed)
 
     def refresh_live(self):
         live = self.live

@@ -360,32 +360,19 @@ class MemberCopy(_StoredFileCopy):
         return f"成员：{self.member!r}\n正文：{self.size:,} 字节\nSHA-256：{self.entry.sha256}\n"
 
 
-class RestoreMissingMember(_StoredFileCopy):
-    """Recover one missing regular file from this comparison, never an edit or directory."""
-    def __init__(self, live, evidence, row):
+class _OriginalRecovery:
+    """Shared STATE, actual destination parent, and STORE-slot gates for recovery."""
+    @staticmethod
+    def _require_evidence(live, evidence):
         if (not isinstance(evidence, MissingBaseline) or evidence.instance != live.instance or
                 evidence.path != live.store / _base_leaf(evidence.basis)):
-            raise Rejected("不能用另一次观察的基线补回本窗口文件")
-        size, self.expected_sha = evidence.file(row)
-        self.marker, self.member = evidence.marker, row.path
-        self.live = live.borrow()
-        try:
-            super().__init__(evidence, str(live.work.joinpath(*member_name(row.path))), size)
-            self.stack.callback(self.live.close)
-        except BaseException:
-            self.live.close()
-            raise
+            raise Rejected("不能用另一次观察的基线补回本窗口内容")
 
     def _source_details(self):
         return (f"登记基线：{self.marker.operation} · 原整包 SHA-256：{self.selected.basis[4]}\n"
                 f"原工作目录：{str(self.live.work)!r}\n")
 
-    def _selection_details(self):
-        return (f"缺失文件：{self.member!r}\n正文：{self.size:,} 字节\nSHA-256：{self.expected_sha}\n"
-                "只补回这个缺失文件，父目录必须已经存在。不会改变登记基线、历史或 STORE。\n")
-
-    def _source(self):
-        super()._source()
+    def _original_base_leaf(self):
         base = os.open(self.selected.path.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.live.store_fd)
         try:
             if (_generation(os.fstat(base)) != self.selected.observed or
@@ -393,13 +380,12 @@ class RestoreMissingMember(_StoredFileCopy):
                 raise Rejected("登记基线不再是原 STORE 中的同一归档")
         finally: os.close(base)
 
-    def _parent(self):
-        super()._parent()
-        _distinct_roots((self.live.work_fd, self.live.state_fd, self.live.store_fd))
+    def _original_work_parent(self, chain, *, separate=()):
+        _distinct_roots((self.live.work_fd, self.live.state_fd, self.live.store_fd, *separate))
         mount = local_mount(self.live.work_fd, read_proc=self.proc.read)
         first = len(self.live.work.parts) - 1
         root = (*native_identity(os.fstat(self.live.work_fd), stat.S_IFDIR), mount)
-        if (self.parents[first] != root or any(parent[2] != mount for parent in self.parents[first:]) or
+        if (chain[first] != root or any(parent[2] != mount for parent in chain[first:]) or
                 os.readlink(str(self.parent), dir_fd=self.proc.fds) != str(self.path.parent)):
             raise Rejected("现有父目录不再位于原工作树的准确名称与实际挂载下")
         flags = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -417,7 +403,7 @@ class RestoreMissingMember(_StoredFileCopy):
     def _publication_guard(self):
         with _held_idle_live_base(self.live, rollback_only=True) as current:
             if current != self.selected.basis:
-                raise Rejected("原登记基线已改变；不会用旧对照补回文件")
+                raise Rejected("原登记基线已改变；不会用旧对照补回内容")
             yield
 
     def review(self):
@@ -430,6 +416,33 @@ class RestoreMissingMember(_StoredFileCopy):
         except BaseException:
             self.close()
             raise
+
+
+class RestoreMissingMember(_OriginalRecovery, _StoredFileCopy):
+    """Recover exactly one missing regular file, never replacing an edit."""
+    def __init__(self, live, evidence, row):
+        self._require_evidence(live, evidence)
+        size, self.expected_sha = evidence.file(row)
+        self.marker, self.member = evidence.marker, row.path
+        self.live = live.borrow()
+        try:
+            super().__init__(evidence, str(live.work.joinpath(*member_name(row.path))), size)
+            self.stack.callback(self.live.close)
+        except BaseException:
+            self.live.close()
+            raise
+
+    def _selection_details(self):
+        return (f"缺失文件：{self.member!r}\n正文：{self.size:,} 字节\nSHA-256：{self.expected_sha}\n"
+                "只补回这个缺失文件，父目录必须已经存在。不会改变登记基线、历史或 STORE。\n")
+
+    def _source(self):
+        super()._source()
+        self._original_base_leaf()
+
+    def _parent(self):
+        super()._parent()
+        self._original_work_parent(self.parents)
 
 
 class ZipCopy(_AnonymousCopy):
@@ -531,6 +544,9 @@ class _AtomicDirectoryCopy(_BeforePublication):
         finally:
             os.close(fd)
 
+    def _publication_guard(self):
+        return nullcontext()
+
     def review(self):
         if self.closed or self.used or self.ready or self.private is None:
             raise Rejected("须明确选择本次目录、目的新名称及专用暂存位置")
@@ -581,13 +597,14 @@ class _AtomicDirectoryCopy(_BeforePublication):
         stage_attempted = may_have_moved = False
         original_work, delivered = None, False
         try:
-            with self.stack:
+            with self.stack, ExitStack() as publication:
                 read = self.proc.read
                 self._checkpoint()
                 if _ordinary_user(read_proc=read) != self.uid: raise Rejected("普通用户已改变，不能另存")
-                self._bound_source()
-                self._parents()
-                _unoccupied(self.parent, self.path.name)
+                with self._publication_guard():
+                    self._bound_source()
+                    self._parents()
+                    _unoccupied(self.parent, self.path.name)
                 reader = _Positional(self.source, self.selected.observed[2], self._checkpoint)
                 with self._entries(reader) as (archive, files):
                     self._bound_source()
@@ -611,6 +628,9 @@ class _AtomicDirectoryCopy(_BeforePublication):
                         self._phase("正在同步并完整读回私处，尚未发布")
                         sink.sync(self.rows, checkpoint=self._checkpoint)
                         sealed = self._sealed_tree(stage, sink)
+                        # A recovery holds its original catalog read snapshot
+                        # only across the short final transaction, never the payload copy.
+                        publication.enter_context(self._publication_guard())
                         self._bound_source()
                         self._parents()
                         self._named_stage(self.private.parent, self.stage_name, stage)
@@ -683,6 +703,38 @@ class DirectoryCopy(_AtomicDirectoryCopy):
 
     def _entries(self, reader):
         return stored_subtree(reader, reader.end, self.selected.browser.commit, self.root, self.rows)
+
+
+class RestoreMissingDirectory(_OriginalRecovery, _AtomicDirectoryCopy):
+    """Recover one entirely missing subtree into its existing original parent."""
+    def __init__(self, live, evidence, row):
+        self._require_evidence(live, evidence)
+        self.approved, self.root, self.marker = evidence.subtree(row), row.path, evidence.marker
+        self.live = live.borrow()
+        try:
+            super().__init__(evidence, str(live.work.joinpath(*member_name(self.root))))
+            self.stack.callback(self.live.close)
+        except BaseException:
+            self.live.close()
+            raise
+
+    def _bound_source(self):
+        super()._bound_source()
+        self._original_base_leaf()
+
+    def _parents(self):
+        super()._parents()
+        self._original_work_parent(self.target_chain, separate=(self.private.parent,))
+
+    def _approved_rows(self):
+        return self.approved
+
+    def _describe(self):
+        return (self._source_details() + f"只补回缺失子目录：{self.root!r}。父目录须已存在。\n"
+                "保留其他编辑；不改变原登记、基线、历史或 STORE。")
+
+    def _entries(self, reader):
+        return stored_subtree(reader, reader.end, self.marker, self.root, self.rows)
 
 
 class _PublishedWork(Folder):

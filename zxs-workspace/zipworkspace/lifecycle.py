@@ -182,10 +182,11 @@ def observe_initial_changes(live, *, observer=None):
 
 
 class MissingBaseline:
-    """Short-lived, exact STORE evidence for one online comparison dialog."""
-    def __init__(self, fd, path, observed, basis, marker, missing, instance_id):
+    """Short-lived evidence for exact missing rows in one online comparison."""
+    def __init__(self, fd, path, observed, basis, marker, missing, baseline, instance_id):
         self.path, self.observed, self.basis, self.marker = path, observed, basis, marker
         self.instance = instance_id
+        self._baseline = baseline
         self.missing, self._fd = missing, os.dup(fd)
 
     @property
@@ -196,14 +197,20 @@ class MissingBaseline:
         return os.dup(self._fd)
 
     def file(self, row):
-        actual = self.missing.get(row.path)
-        if actual is None or actual[0] is not row:
+        if self.missing.get(row.path) is not row or row.before != "file":
             raise Rejected("只能补回本次基线对照中的一条缺失普通文件")
-        return actual[1:]
+        return self._baseline[row.path][1:]
+
+    def subtree(self, row):
+        if self.missing.get(row.path) is not row or row.before != "directory":
+            raise Rejected("只能补回本次基线对照中的一条缺失目录")
+        prefix = row.path + "/"
+        return {path[len(prefix):]: actual for path, actual in self._baseline.items() if path.startswith(prefix)}
 
     def close(self):
         fd, self._fd = self._fd, None
         self.missing.clear()
+        self._baseline = None
         if fd is not None: os.close(fd)
 
 
@@ -228,13 +235,14 @@ def observe_live_changes(live, *, observer=None, retain_missing=False):
             if observer is not None: observer.begin("compare")
             result = compare_manifests(base, current)
             if retain_missing:
-                files = {}
+                rows = {}
                 for row in result.rows:
                     if observer is not None: observer.check()
-                    if row.change == "missing" and row.before == "file":
-                        files[row.path] = (row, *base.rows[row.path][1:])
-                if files:
-                    missing = MissingBaseline(doc.fileno(), live.store/name, observed, expected, marker, files, live.instance)
+                    if row.change == "missing" and row.before in ("file", "directory"):
+                        rows[row.path] = row
+                if rows:
+                    missing = MissingBaseline(doc.fileno(), live.store/name, observed, expected, marker,
+                                              rows, base.rows, live.instance)
                     handoff.callback(missing.close)
             if observer is not None: observer.begin("identity")
             if _idle_live_base(live) != expected:

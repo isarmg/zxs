@@ -11,12 +11,14 @@ import sys
 from dataclasses import replace
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from zipworkspace import lifecycle, publish, worktree
 from zipworkspace.capacity import describe
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.initialize_choice import InitializeChoice
-from zipworkspace.desktop.member_copy import RestoreMissingMember
+from zipworkspace.desktop import member_copy
+from zipworkspace.desktop.member_copy import RestoreMissingDirectory, RestoreMissingMember
 from zipworkspace.linux_authority import ProcView, owned_directory
 from zipworkspace.linux_mount import _ordinary_user
 from zipworkspace.model import Rejected, new_id
@@ -41,8 +43,9 @@ class LinuxVisibility(unittest.TestCase):
             os.mkdir(leaf, 0o700, dir_fd=parent)
         # Dedicated synthetic cases are retained, not removed by reused pathname.
         root = scratch / leaf
-        self.work_parent, self.private, self.store = (root / n for n in ("trees", "states", "archives"))
-        for folder in (self.work_parent, self.private, self.store): folder.mkdir(mode=0o700)
+        self.work_parent, self.private, self.store, self.staging = (
+            root / n for n in ("trees", "states", "archives", "stage"))
+        for folder in (self.work_parent, self.private, self.store, self.staging): folder.mkdir(mode=0o700)
         self.tree, self.state = self.work_parent / "work", self.private / "original"
         self.tree.mkdir(mode=0o700)
         (self.tree/"empty").mkdir(mode=0o700)
@@ -88,6 +91,116 @@ class LinuxVisibility(unittest.TestCase):
             self.addCleanup(decision.close)
         self.assertIsNone(evidence.held)
         return decision
+
+    def missing_directory(self, name):
+        marker, report, evidence = lifecycle.observe_live_changes(self.live, retain_missing=True)
+        self.assertEqual(marker, self.marker)
+        self.assertIsNotNone(evidence)
+        with closing(evidence):
+            row = next(r for r in report.rows if r.path == name)
+            self.assertEqual((row.change, row.before), ("missing", "directory"))
+            with self.assertRaisesRegex(Rejected, "本次基线对照"):
+                RestoreMissingDirectory(self.live, evidence, replace(row))
+            decision = RestoreMissingDirectory(self.live, evidence, row)
+            self.addCleanup(decision.close)
+        self.assertIsNone(evidence.held)
+        return decision
+
+    def test_restore_subdirectory_publishes_whole_original_and_no_siblings(self):
+        target = self.tree/"group"
+        leaf = target/"folder"
+        leaf.mkdir(parents=True, mode=0o700)
+        (target/"empty-inside").mkdir(mode=0o700)
+        (leaf/"story").write_bytes(b"original selected body")
+        other = self.tree/"group-other"
+        other.mkdir(mode=0o700)
+        (other/"story").write_bytes(b"independent prefix")
+        self.commit()
+        (other/"story").write_bytes(b"sibling edit remains")
+        (leaf/"story").unlink()
+        leaf.rmdir()
+        (target/"empty-inside").rmdir()
+        target.rmdir()
+        decision = self.missing_directory("group")
+        decision.pick_private(str(self.staging))
+        before = self.live.status()
+        db = self.state/"worktree.sqlite"
+        original = db.read_bytes()
+        opened, native = [], zipfile.ZipFile.open
+
+        def read(archive, item, *args, **kwargs):
+            opened.append(item.filename)
+            self.assertFalse(target.exists())
+            return native(archive, item, *args, **kwargs)
+
+        with patch.object(zipfile.ZipFile, "open", read), \
+             patch.object(lifecycle, "read_managed_document", side_effect=AssertionError("no second full read")), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("not a commit")):
+            detail = decision.review()
+            self.assertIn(self.marker.operation, detail)
+            self.assertIn(str(target), detail)
+            self.assertIn("包括空目录", detail)
+            with self.assertRaises(Rejected): decision.run()
+            self.assertIn("已另存并核验目录", decision.run(confirmed=True))
+        self.assertEqual(opened, ["group/folder/story"])
+        self.assertEqual((target/"folder/story").read_bytes(), b"original selected body")
+        self.assertEqual(list((target/"empty-inside").iterdir()), [])
+        self.assertEqual(list(self.staging.iterdir()), [])
+        self.assertEqual((other/"story").read_bytes(), b"sibling edit remains")
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
+        self.assertEqual(self.live.status(), before)
+        self.assertEqual(db.read_bytes(), original)
+
+    def test_restore_empty_directory_refuses_a_late_occupant_without_losing_private_work(self):
+        self.commit()
+        target = self.tree/"empty"
+        target.rmdir()
+        decision = self.missing_directory("empty")
+        decision.pick_private(str(self.staging))
+        self.assertIn("0 项", decision.review())
+        native, occupants = member_copy.rename_new_at, []
+
+        def late(*args, **kwargs):
+            self.assertFalse(target.exists())
+            target.mkdir(mode=0o700)
+            occupants.append(target.stat())
+            return native(*args, **kwargs)
+
+        with patch.object(member_copy, "rename_new_at", side_effect=late) as add:
+            with self.assertRaisesRegex(Rejected, "没有覆盖"): decision.run(confirmed=True)
+            add.assert_called_once()
+        self.assertTrue(os.path.samestat(occupants[0], target.stat()))
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertEqual(list((self.staging/decision.stage_name).iterdir()), [])
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
+
+    def test_restore_directory_rechecks_pending_after_the_private_readback(self):
+        self.commit()
+        target = self.tree/"empty"
+        target.rmdir()
+        rejected = self.missing_directory("empty")
+        local = self.tree/"forbidden-stage"
+        local.mkdir(mode=0o700)
+        rejected.pick_private(str(local))
+        with self.assertRaisesRegex(Rejected, "contains another|must be different"):
+            rejected.review()
+        self.assertEqual(list(local.iterdir()), [])
+        decision = self.missing_directory("empty")
+        decision.pick_private(str(self.staging)); decision.review()
+        native = decision._sealed_tree
+
+        def after_readback(*args):
+            sealed = native(*args)
+            with worktree.locked(self.state) as (con, _, __):
+                con.execute("UPDATE checkout SET pending_sha=? WHERE singleton=1", ("e"*64,))
+            return sealed
+
+        with patch.object(decision, "_sealed_tree", side_effect=after_readback), \
+             patch.object(member_copy, "rename_new_at", side_effect=AssertionError("no original approval now")):
+            with self.assertRaisesRegex(Rejected, "无待决"): decision.run(confirmed=True)
+        self.assertFalse(target.exists())
+        self.assertTrue((self.staging/decision.stage_name).is_dir())
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
 
     def test_restore_one_missing_file_uses_original_basis_and_does_not_commit(self):
         (self.tree/"other").mkdir(mode=0o700)
@@ -195,7 +308,7 @@ class LinuxVisibility(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b"")
 
     @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
-                         "optional Qt file recovery fixture")
+                         "optional Qt file and directory recovery fixture")
     def test_only_explicit_selected_missing_row_can_request_window_recovery(self):
         from PySide6.QtWidgets import QApplication, QPushButton
         from zipworkspace.desktop import checkout_pane
@@ -203,8 +316,9 @@ class LinuxVisibility(unittest.TestCase):
         from zipworkspace.desktop.window import Window
         app = QApplication.instance() or QApplication([])
         self.commit()
-        target = self.tree/"story"
-        target.unlink()
+        file, folder = self.tree/"story", self.tree/"empty"
+        file.unlink()
+        folder.rmdir()
         window = Window()
         pane = window.archive.checkout
         pane.live = self.live
@@ -221,26 +335,34 @@ class LinuxVisibility(unittest.TestCase):
             window.poll()
 
         try:
-            with patch.object(window.pool, "submit", side_effect=queue):
-                for allow in (False, True):
-                    pane.compare_live(); completed()
-                    dialog = pane.changes_dialog
-                    self.assertIsNotNone(dialog)
-                    recovery = dialog.findChild(QPushButton, "restore-selected-missing-member")
-                    self.assertFalse(recovery.isEnabled())
-                    dialog.findChild(Table).selectRow(0)
-                    self.assertTrue(recovery.isEnabled())
-                    with patch.object(checkout_pane, "confirm", return_value=allow) as consent:
-                        recovery.click()
-                        self.assertIsNone(pane.changes_dialog)
-                        self.assertFalse(target.exists())
-                        completed()
-                    consent.assert_called_once()
-                    self.assertIn(str(target), consent.call_args.args[2])
-                    self.assertEqual(len(jobs), int(allow))
-                    if allow: completed()
-                    self.assertIsNone(pane.restoring_member)
-            self.assertEqual(target.read_bytes(), b"initial")
+            with patch.object(window.pool, "submit", side_effect=queue), \
+                 patch.object(pane, "_directory", return_value=str(self.staging)) as pick:
+                for target, kind in ((file, "文件"), (folder, "目录")):
+                    for allow in (False, True):
+                        pane.compare_live(); completed()
+                        dialog = pane.changes_dialog
+                        self.assertIsNotNone(dialog)
+                        recovery = dialog.findChild(QPushButton, "restore-selected-missing-member")
+                        self.assertFalse(recovery.isEnabled())
+                        table = dialog.findChild(Table)
+                        number = next(i for i, (_, row) in enumerate(table.rows.rows) if row.path == target.name)
+                        table.selectRow(number)
+                        self.assertTrue(recovery.isEnabled())
+                        self.assertIn(f"所选缺失{kind}", recovery.text())
+                        with patch.object(checkout_pane, "confirm", return_value=allow) as consent:
+                            recovery.click()
+                            self.assertIsNone(pane.changes_dialog)
+                            self.assertFalse(target.exists())
+                            completed()
+                        consent.assert_called_once()
+                        self.assertIn(str(target), consent.call_args.args[2])
+                        self.assertEqual(len(jobs), int(allow))
+                        if allow: completed()
+                        self.assertIsNone(pane.restoring_member)
+                self.assertEqual(pick.call_count, 2)  # Only the two genuine directory attempts ask for scratch.
+                self.assertTrue(pick.call_args.kwargs["read_only"])
+            self.assertEqual(file.read_bytes(), b"initial")
+            self.assertEqual(list(folder.iterdir()), [])
         finally:
             window.close()
 
