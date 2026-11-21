@@ -30,7 +30,7 @@ helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP
 
 - 先由本机管理员核原 PoolId 和 SYSTEM 原目录、取得与在线业务相斥的 EX，并另批此次实例供给。宿主维护者独占其明确选定的安装目录，不能使用全机 Samba 配置或搜索 `secrets.tdb`。新发行一个非零随机 InstanceId 和一个固定 ProvisionOp。生产配置文件、专用 private/state 原目录都必须在可信宿主配置中有唯一、可核对的位置；整个运行期间持原物、重新核名字与原挂载，未明来源不写。不能把挂载编号当跨重启凭证。
 - 宿主将已核同一实例的原 private/state 投射为 **/instance/private、/instance/state**；安装时只有此次被批准的空 private 可写。确切引导配置 [domain-bootstrap.conf](../resources/samba-domain/domain-bootstrap.conf) 没有 include、共享、访客或备用 passdb；其中 private dir 指向同一原目录，非工作组名（ZXSWORK）的本机 NetBIOS 名固定 ZXSLOCAL。引导配置用于生成本地域，**不代替**届时上线的有效 smb.conf；上线映射 `/instance/smb.conf`、`/instance/domain.bound` 两个确切原文件都必须为真实只读挂载。正式配置须非空、≤1 MiB、无内嵌 NUL；明确空的 `usershare path =` 和 `usershare max shares = 0`、无外接脚本。两份配置必须指向同一实际原 private/state、固定本机名和服务器角色，上线的唯一用户后端是 `tdbsam:/instance/accountdb/passdb.tdb`（独立原目录只读投给 smbd，Web 和非 root 存储视图不含它），数据共享才用 `zxs_file`。引导或域供给不加载这些后端、不建立用户库。 首版正式配置也不允许 include、config file 重定向、registry 配置或动态用户共享；原正式配置变化须另获宿主维护授权、更新该实例绑定，不能按眼前文件自行重算放行。共享启停及只读/读写模式属于 SQLite，不随每次更改重写 smb.conf。
-- [私有 guest 源码](../resources/samba-domain/fresh_guest.py) 的三次官方调用依次是固定 `set_smb_config`、`set_secrets_dir`、`get_global_sam_sid`。这是**有写的首次供给**，不是只读发现。只能用于全新 exec 的受限非 root 进程，不能复用解释器、服务进程或有旧全局状态的 fork。运行环境须由受信宿主提供：唯一 apt 认证的软件及 Python 模块闭包、没有用户包/脚本、网络/IPC、外部描述符、宿主 /etc 或 /var；只显露已选定的原件。受关注的目标是同一次原供给而非任意路径、参数、布尔值或子进程的 stdout。宿主固定启动、有界监督和本机确认已有内部源码；已有[准确 Debian 原件的组包配方](../packaging/debian13-amd64/README.md)，已有受限降权工作器交接源码，但没有实际组出的独立验签发行物或运行结果，不构成启动许可。
+- [私有 guest 源码](../resources/samba-domain/fresh_guest.py) 的三次官方调用依次是固定 `set_smb_config`、`set_secrets_dir`、`get_global_sam_sid`。这是**有写的首次供给**，不是只读发现。只能用于全新 exec 的受限非 root 进程，不能复用解释器、服务进程或有旧全局状态的 fork。运行环境须由受信宿主提供：唯一 apt 认证的软件及 Python 模块闭包、没有用户包/脚本、网络/IPC、外部描述符、宿主 /etc 或 /var；只显露已选定的原件。受关注的目标是同一次原供给而非任意路径、参数、布尔值或子进程的 stdout。宿主固定启动、有界监督和本机确认已有内部源码；已有[准确 Debian 原件的组包配方](../packaging/debian13-amd64/README.md)，已有受限降权工作器交接源码，但没有实际核准最终制品或运行结果，不构成启动许可。
 - 原 private/state 必须是各自确切的空目录。遇 `MACHINE.SID`、空/既有 `secrets.tdb`、其他文件、同一目录别名或起因不明即止，不读取、删除或迁移。Samba 会在指定 private 下创建并管理自己的 0600 `secrets.tdb`；预计只含此实例的域所需状态，不对它遍历或导出。进程内的第二次 getter 会命中缓存，`get_domain_sid` 又查工作组名，都不能冒充持久读回。任何错误/崩溃留下已产生的原状态；无已确认的绑定不自动重跑、不重新随机造域、不接管。
 
 ### 初次正式配置，不是引导配置
@@ -47,7 +47,7 @@ helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP
 
 ## 宿主内部执行边界
 
-- 当前的固定调用只接受专用宿主工作进程。它继续持原 SYSTEM 的 EX，在按独立 InstanceId 选出的专用实例目录上另取 EX，核原 private/state 正好是两个不同的空目录。本片仅支持位于该安装目录同一挂载上的 private/state。固定非 root 主体、认证发布的私有 Python/Samba 用户态闭包、对应的宿主 bwrap 及其动态装载器/库、授权且被保护的宿主安装路径是前提。不能由网页、散列自报或任意目录发出这个许可。升级必须先排空，不能边替换发行物边给新域签名。
+- 当前的固定调用只接受专用宿主工作进程。它继续持原 SYSTEM 的 EX，在按独立 InstanceId 选出的专用实例目录上另取 EX，核原 private/state 正好是两个不同的空目录。本片仅支持位于该安装目录同一挂载上的 private/state。固定非 root 主体、本地事先核准的私有 Python/Samba 用户态闭包、对应的宿主 bwrap 及其动态装载器/库、授权且被保护的宿主安装路径是前提。不能由网页、散列自报或任意目录发出这个许可。升级必须先排空，不能边替换发行物边生成新域。
 - bwrap 0.12 从已核 ELF 的 FD 执行，强制独立用户、PID、网络、IPC 及 UTS 命名空间。只映射固定私有发行树、可写原 private、只读原 state 和两份封印的引导材料；不映射宿主的 /etc、/var、/dev 或已有 Samba 实例。guest 不能分叉/脱离进程组。固定选用 `--as-pid-1`，只从 bwrap 专属状态管道的真实 child-pid 与最终正常状态，加上原 supervisor 的 wait/进程组收尾，确定此次客体。单个 PID、EOF 或 SIGKILL 都不算成功；异常保留已经产生的材料。宿主自身崩溃/被强杀不能作为全域已经退出的证据。
 - 正常结束才核客体经内核传来的同一 inode，从原 private 的准确名字核对，实同步原 secrets.tdb 和原父、末端重查身份/属性及 private/state 清单。宿主不读取/转述秘密库内容。只有这一层是**未发布**的原实例证据；它不代替下述前台确认和受保护发布，更不能建立账号或证明登录。
 
@@ -55,7 +55,7 @@ helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP
 
 宿主内部另用本次进程独占的匿名 socketpair，不是给用户或上线 smbd 的接口。worker 永久降权后先用这一对套接字发出本次随机挑战和范围摘要。仍持前台批准的父进程核实际子 PID/低权 UID/GID、原件与批准后才答复；子核此条答复真实来自原 root 父、挑战和范围都相符，才可查询所选 SYSTEM 或让客体运行。密封的输入、本来属于父的套接字或历史答复本身不算许可。完成的 worker 再一次交接 128 字节公开候选、与前台批准的原 INIT/发起主体/原件完全一致的 32 字节范围摘要、同步时私库及其父的 32 字节属性比较值，以及原 S 和实例两个已持 EX 的目录描述符与原库的只指路径描述符。内核持有在途的这两份原锁，不因 worker 退出而改锁或先放再取；接收方按同次子进程的实际未回收正常退出和内核 PID/UID/GID 核唯一消息，从受核当前线程的 fdinfo 确认这两个具体的 open description 各自拥有整文件独占 flock，并以另开原目录的共享锁争用佐证；不能把同 inode 上别人的独占锁算到收到的描述符名下。再对照独立预选的原目录、正式配置及原私库。没有复制或读出秘密内容。只有这份手递结果不授权写宿主安装父。
 
-**独立发行记录先于本次批准。** 宿主在固定清单/目录查到软件不等于可以执行它。只对独立验签和托管的三摘要发行记录（[组包说明](../packaging/debian13-amd64/README.md)）验证固定 helper 原 ELF（真实 procfs 的运行者和安装原文件须同一实体及挂载；旧进程不能给新版包出具批准）、八槽宿主 launcher 发行材料，以及准确的 Samba 私有清单。先验清单摘要，才按其中的相对名字在同一原 `usr` 目录中逐个无链接打开：每层所有名字须完全匹配，只读预期的、root:root 单链接普通文件，逐一比权限、长度、全 SHA-256 和实际 EOF；陌生项/子挂载不会被打开读正文。最终再核保存的原实体、挂载、名字与时间戳。此次批准还绑定那个目录和这套发行摘要，不会以同路径的新发行物悄悄代替已选材料。包验收仅用于受控 Debian 13 amd64：不支持并行升级或任意特权进程换物，不把元数据复核当作原子快照，绝不据此证明客体真的冷启动或账号能登录。
+**本机制品核准先于本次批准。** 宿主在固定目录查到软件不等于可以执行它。管理员从独立可信的构建或制品记录取得三项预期摘要，按[组包说明](../packaging/debian13-amd64/README.md#专用-samba-供给运行时)登记到既有 `/etc/local-ops-helper/samba-provision.release`；不要求项目发布者签名。Helper 据此验证固定 helper 原 ELF（真实 procfs 的运行者和安装原文件须同一实体及挂载；旧进程不能给新版包出具批准）、八槽宿主 launcher 发行材料，以及准确的 Samba 私有清单。先验清单摘要，才按其中的相对名字在同一原 `usr` 目录中逐个无链接打开：每层所有名字须完全匹配，只读预期的、root:root 单链接普通文件，逐一比权限、长度、全 SHA-256 和实际 EOF；陌生项/子挂载不会被打开读正文。最终再核保存的原实体、挂载、名字与时间戳。此次批准还绑定那个目录和这套发行摘要，不会以同路径的新发行物悄悄代替已选材料。包验收仅用于受控 Debian 13 amd64：不支持并行升级或任意特权进程换物，不把元数据复核当作原子快照，绝不据此证明客体真的冷启动或账号能登录。
 
 **前台确认与固定发布。** 宿主父在原前台显示所选 SYSTEM、预期池及原 INIT（此时未查数据库；只有降权 worker 在原 S 的 EX 下确认这份 INIT 已提交，才可生成域）、实例、操作、维护主体、审批参考、存储 UID/GID 及正式配置摘要；操作者只确认此次安装，不输入密码。确认前清除旧输入，以新随机挑战匹配原前台终端的一整行；拒绝、普通中断或超时在返回前清理余行，不复用上次的答案。范围另钉 S、实例、private、state 及正式配置的本次原实体/挂载，父持原件，降权 worker 在首次写前核对；同 UID/GID 不等于同一维护主体。这些本次比较值不写进 BOUND，不当作重启后的盘身份。宿主必须从这次自己启动的受信 worker 核实正常退出、原锁和唯一材料；不接受其他 `Child`、自报 SID、任意回复地址或路径。
 
@@ -70,7 +70,7 @@ helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP
 
 **单次启动。** 仅上述同一前台批准的持有人可从原安装 ELF 启动固定子进程。argv 不承载路径、SID、选择动作或凭据；输入是有封印且禁止执行的有界 memfd，唯一结果通道是该次匿名 socketpair。子进程在打开任何所选数据前核真实宿主、同一经登记 ELF 的当前父、实际父 PID 和内核记录的 root 对端，读取固定安装主体和软件登记后永久降到无能力的存储 UID/GID。因 Linux 改 UID/GID 会清父死信号，降权后重设并重新核原父，再读非秘密原单；六件都须先通过 O_PATH 的原实体/挂载比对。不会把请求的路径、自造的密封文件或另一个同 UID 的进程当作批准。父只在这个仍可核身份的子进程正常退出并通过原件读回后发布。超时或取消不再接受结果；强杀或宿主崩溃不证明全部进程已经收完，不能重发或视为可升级。
 
-本机首设用上文同一个命令选择域供给或双账户登记。尚无实际签章发行物的安装/冷启动验收。
+本机首设用上文同一个命令选择域供给或双账户登记。尚无实际安装/冷启动验收。
 
 [固定版本 bubblewrap 的状态与启动实现](https://github.com/containers/bubblewrap/blob/v0.12.0/bubblewrap.c#L2909-L2925)将 child-pid 写到专属通道；不用它代替自己的进程组退出核对。
 
@@ -78,19 +78,19 @@ helper setup-pair reset-web --system DIR --pool ID --init ID --setup-op SETUP_OP
 
 [Debian 的 Samba 源包](https://packages.debian.org/source/trixie/samba)为 `2:4.22.11+dfsg-0+deb13u1`。本片静读对应 [dsc](https://deb.debian.org/debian/pool/main/s/samba/samba_4.22.11+dfsg-0+deb13u1.dsc)、原归档和 Debian 补丁：orig 25,620,416 B、SHA-256 `4379aa4bc6c453bfa55697556d6195ab69b1cad71e5fdfaf2c53849d96d40f0a`；Debian 189,836 B、`0359a3242bcbd14f74994a195084f7a8ea28bf9d1287c0021921c40b7d5d7a03`。`source3/passdb/{py_passdb.c,secrets.c,machine_sid.c}` 对应三入口、按指定目录建立原 Samba 状态及本机 SID 事务；24 项补丁中，`usershare.patch` 改默认用户共享数量，所以原配置明确设为 0。上游或其他 Debian 版本不自动放行。
 
-已写客体、固定宿主启动、原组收尾及原库/父同步源码，**本轮没有执行、生成域或开放服务**。源码中的前台确认和不覆盖发布已接入本机入口；已经写了仅为这一域供给准备私有运行材料的组包配方；独立登记后的现场软件原件核对已接入内部批准；固定一次性 worker 已有受限启动及收尾源码；实际发行签章、冷启动与可用性验收未交付；不能凭来宾自报的版本、退出码或 SID 冒称做到。未分发/执行 Samba，没有安装包、登录、拒绝访客的实机测试或可用首设声明。
+已写客体、固定宿主启动、原组收尾及原库/父同步源码，**本轮没有执行、生成域或开放服务**。源码中的前台确认和不覆盖发布已接入本机入口；已经写了仅为这一域供给准备私有运行材料的组包配方；独立登记后的现场软件原件核对已接入内部批准；固定一次性 worker 已有受限启动及收尾源码；实际制品核准、冷启动与可用性验收未交付；不能凭来宾自报的版本、退出码或 SID 冒称做到。未分发/执行 Samba，没有安装包、登录、拒绝访客的实机测试或可用首设声明。
 
 ### 按原单确认两库，不交接秘密
 
 - 实际业务组件停止并排空后，主管从受控真实宿主取原 SYSTEM、原实例两个不同的实际目录 EX（固定顺序 S→实例）。低权 SQLite 工人借本次已持那一 **OFD**，不是另一主体用同一个 OFD 变锁；它再独立从原目录取真实 S 卷标和原已提交 INIT，并用标准 Unix VFS 保留最初数据库 inode，期间不持长 SQLite 事务。不裸开 SQLite inode，不搜索其他卷。只查路径止于已提交/待办/确无原单，不打开 TDB 正文。
-- 人的授权来自同一真实前台，选定一单、一个角色/明确首设两名及具体操作状态。独立签发和宿主的允许条件先于写入，不能用一个散列/口令批准号代替。固定低权 SQLite 工人从实际已核的 helper FD 执行，以密封**非秘密**原单和匿名 seqpacket 握手；使用逐条内核 PID/UID/GID，活动父的随机挑战及确切原件；只跨进程交付同一已持 S、非秘密阶段和 O_PATH，常规 EOF 不证明成功。原同一工人独立正常退出才给最终确认。
+- 人的授权来自同一真实前台，选定一单、一个角色/明确首设两名及具体操作状态。独立制品核准和宿主的允许条件先于写入，不能用一个散列/口令批准号代替。固定低权 SQLite 工人从实际已核的 helper FD 执行，以密封**非秘密**原单和匿名 seqpacket 握手；使用逐条内核 PID/UID/GID，活动父的随机挑战及确切原件；只跨进程交付同一已持 S、非秘密阶段和 O_PATH，常规 EOF 不证明成功。原同一工人独立正常退出才给最终确认。
 - 正向先核实际原本地域：在本实例的机器库只读取唯一规范的 `SECRETS/SID/ZXSLOCAL` 匹配 24B 域，不调用会生成新域的 getter。原生工人确认原账号库的唯一 USER/RID 及 4/0 空间。首设先从低权工人预留完整 64 MiB Web 派生区，并证实实际 SMB 提供者。暂存密钥留各自固定进程的锁定内存，终端由父维持同一次无回显，子只核当前原终端、不恢复。中断先收确切低权读者，后清终端并恢复；强杀、主机崩溃或不可恢复终端不作保证。口令不进命令、环境、日志、IPC 或临时文件。
 - SQLite v16 先留 **PENDING**（首设还留 Web 的 Argon2id 校验，两组身份暂不活动；SMB reset 仅挡 SMB）。正常提交、该连接实际 `xSync` 的原主库及原父同步、独立从同一 VFS inode 复读之后，才在同一原生 TDB 事务提交密码等价值及非秘密原代号。新账号库只准本次原进程 `O_EXCL`，重置只能写准确前驱的同一文件。原 TDB 写句柄关闭后验证并同步原库及原 accountdb 父，再独立原生重开验同一原物、全部四项和目标，才准同一原单最终 SQL 确认；首设同一事务发行此前明确批准的普通数据目录和模式，无需 Web 二次开放。后续只查不恢复历史权限。没有密码回读、密码备份、格式升级或失败后换模式。
 - Web reset 不走 Samba、BOUND 或第二库，只在原 SYSTEM EX 下确认原精确前驱，将 Web verifier、原代和操作一笔提交、同步再独立复读，不留跨库待办。后续登录须另由实际服务重新核权。
 
 ### 独立发行与站点策略
 
-受信站点在实际允许 NTLMv2 时才据外部验签结果，独立放置 root:root 0600、单链接的 `/etc/local-ops-helper/native-account.policy`，一行无通配符、单空格、尾 LF：
+受信站点在实际允许 NTLMv2 时，管理员按独立可信记录核准最终 Helper、闭包索引及两份库的预期摘要，绑定本次池、实例、原域操作与原配置摘要后，在本机另行放置 root:root 0600、单链接的 `/etc/local-ops-helper/native-account.policy`，一行无通配符、单空格、尾 LF：
 
 ```text
 SITE-NATIVE-NTLMV2-1 POOL INSTANCE DOMAIN_OP LIVE_SHA HELPER_SHA ELF_INDEX_SHA LIBGCRYPT_SHA LIBGPG_ERROR_SHA

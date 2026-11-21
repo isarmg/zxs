@@ -1,6 +1,6 @@
-//! Only the pair's signed closure may supply executable/loadable originals.
-//! A root-managed expected manifest hash is a selection after external
-//! verification, never a signature, substitute for signature, or launch grant.
+//! Only the exact closure approved in the protected local policy may supply
+//! executable/loadable originals. The manifest cannot approve itself, and
+//! local artifact approval is not the foreground site launch grant.
 use super::{no,origins::{ident,mid}};
 use crate::{fs_tools::{RuntimeFile,hash_upto},pinned};
 use helper_linux_evidence::smb_views::{Access,Public,Source};
@@ -114,6 +114,23 @@ fn rows(raw:&[u8],source:&str,expected_schema:Hash)->io::Result<(Hash,[Vec<Row>;
     Ok((nss,out))
 }
 
+struct ApprovedManifest<T>{original:T,sha:Hash,nss:Hash,listed:[Vec<Row>;2]}
+fn approve_manifest<T>(policy:io::Result<Vec<u8>>,source:&str,schema:Hash,
+    installed:impl FnOnce()->io::Result<(T,Vec<u8>)>)->io::Result<ApprovedManifest<T>>{
+    let policy=policy?;
+    let limit=std::str::from_utf8(&policy).ok().and_then(|p|p.strip_prefix("ZXS-SMB/ONLINE-1 "))
+        .and_then(|p|p.strip_suffix('\n')).ok_or_else(no)?;
+    let sha=hash(limit)?;
+    let (original,raw)=installed()?;
+    if <Hash>::from(Sha256::digest(&raw))!=sha{return Err(no());}
+    let (nss,listed)=rows(&raw,source,schema)?;
+    Ok(ApprovedManifest{original,sha,nss,listed})
+}
+fn verify_member_bytes(file:&mut impl Read,row:&Row)->io::Result<()>{
+    if hash_upto(file,row.size,ELF)?!=row.sha{return Err(no());}
+    Ok(())
+}
+
 #[derive(PartialEq,Eq)]
 struct Stamp{object:crate::pinned::Entity,mount:u64,mtime:(i64,i64),ctime:(i64,i64)}
 fn stamp(row:&Row,root:&File,pin:&File)->io::Result<Stamp>{
@@ -140,8 +157,8 @@ impl Member{
         let pin=named(root,&row.path)?;let original=stamp(&row,root,&pin)?;
         let mut file=pinned::installed_regular_reader(&pin)?;
         if stamp(&row,root,&file)?!=original
-            ||!matches!(fgetxattr(&file,c"security.capability",&mut [0u8;0][..]),Err(Errno::NODATA))
-            ||hash_upto(&mut file,row.size,ELF)?!=row.sha{return Err(no());}
+            ||!matches!(fgetxattr(&file,c"security.capability",&mut [0u8;0][..]),Err(Errno::NODATA)){return Err(no());}
+        verify_member_bytes(&mut file,&row)?;
         if matches!(row.part,Part::Exec|Part::Code){
             let mut h=[0;20];file.read_exact_at(&mut h,0)?;
             if &h[..7]!=b"\x7fELF\x02\x01\x01"||!matches!(h[16..20],[2,0,62,0]|[3,0,62,0]){return Err(no());}
@@ -177,14 +194,12 @@ fn read(f:&RuntimeFile,mode:u32,cap:u64)->io::Result<Vec<u8>>{
 impl Release{
     pub(super) fn select()->io::Result<Self>{
         let policy=RuntimeFile::open(POLICY,false,128)?;
-        let p=read(&policy,0o600,128)?;
-        let limit=std::str::from_utf8(&p).ok().and_then(|p|p.strip_prefix("ZXS-SMB/ONLINE-1 "))
-            .and_then(|p|p.strip_suffix('\n')).ok_or_else(no)?;
-        let expected=hash(limit)?;
-        let manifest=RuntimeFile::open(MANIFEST,false,MAX)?;
-        let raw=read(&manifest,0o444,MAX)?;
-        if <Hash>::from(Sha256::digest(&raw))!=expected{return Err(no());}
-        let (nss,listed)=rows(&raw,frozen_tree()?,Sha256::digest(SCHEMA).into())?;
+        let ApprovedManifest{original:manifest,sha:expected,nss,listed}
+            =approve_manifest(read(&policy,0o600,128),frozen_tree()?,Sha256::digest(SCHEMA).into(),||{
+                let manifest=RuntimeFile::open(MANIFEST,false,MAX)?;
+                let raw=read(&manifest,0o444,MAX)?;
+                Ok((manifest,raw))
+            })?;
         let mut chosen=Vec::new();
         for (i,r) in listed.into_iter().enumerate(){
             let root=parents(i)?;
@@ -251,6 +266,56 @@ mod tests{
         for (a,b) in [(ALIAS,"etc/ld.so.preload"),(LOADER,"usr/lib/x86_64-linux-gnu/../liba.so"),(NSS[3],"etc/shadow"),
             (PROGRAMS[0],"usr/sbin/smbd"),(PROGRAMS[1],PROGRAMS[0]),(" 88 "," 088 ")]{
             assert!(rows(full.replace(a,b).as_bytes(),&tree,[5;32]).is_err());
+        }
+    }
+    #[test]fn local_approval_manifest_needs_no_signature_but_missing_policy_or_changed_bytes_refuse(){
+        use std::fs;
+        let temp=tempfile::tempdir().unwrap();
+        let policy=temp.path().join("independent-admin-policy");
+        let artifact=temp.path().join("ELF-ROLES-1");
+        let member=b"local fixture bytes; not an executable";
+        let tree=frozen_tree().unwrap();
+        let schema:Hash=Sha256::digest(SCHEMA).into();
+        let hex=|bytes:&[u8]|bytes.iter().map(|b|format!("{b:02x}")).collect::<String>();
+        let body=fixture().replace(" 88 ",&format!(" {} ",member.len()))
+            .replace(&"03".repeat(32),&hex(&Sha256::digest(member)))
+            .replace(&"04".repeat(20),tree).replace(&"05".repeat(32),&hex(&schema));
+        fs::write(&artifact,body.as_bytes()).unwrap();
+        let verified=|input,source:&str,sql|approve_manifest(input,source,sql,||Ok((&artifact,fs::read(&artifact)?)));
+        assert!(approve_manifest::<()>(fs::read(&policy),tree,schema,
+            ||panic!("unapproved installation must not read role material")).is_err());
+        // Expected digest from the separate synthetic build record, not the installed path.
+        let policy_for=|bytes:&str|format!("ZXS-SMB/ONLINE-1 {}\n",hex(&Sha256::digest(bytes.as_bytes())));
+        let line=policy_for(&body);
+        fs::write(&policy,line.as_bytes()).unwrap();
+        let approved=verified(fs::read(&policy),tree,schema).unwrap();
+        assert_eq!(approved.original,&artifact);
+        assert_eq!(approved.listed.len(),2);
+        let role=approved.listed[0].iter().find(|r|r.path==PROGRAMS[0]).unwrap();
+        let file=temp.path().join("local-program-bytes");
+        fs::write(&file,member).unwrap();
+        assert!(verify_member_bytes(&mut File::open(&file).unwrap(),role).is_ok());
+        let mut replaced=member.to_vec();replaced[0]^=1;
+        fs::write(&file,&replaced).unwrap();
+        assert!(verify_member_bytes(&mut File::open(&file).unwrap(),role).is_err());
+        replaced[0]^=1;replaced.push(0);
+        fs::write(&file,&replaced).unwrap();
+        assert!(verify_member_bytes(&mut File::open(&file).unwrap(),role).is_err());
+        // No signature file. A valid change to the role manifest cannot update the policy.
+        let changed=body.replace(&format!(" {} ",member.len()),&format!(" {} ",member.len()+1));
+        assert!(rows(changed.as_bytes(),tree,schema).is_ok());
+        fs::write(&artifact,changed.as_bytes()).unwrap();
+        assert!(verified(fs::read(&policy),tree,schema).is_err());
+        let wrong_role=body.replace(NSS[0],"etc/shadow");
+        fs::write(&artifact,wrong_role.as_bytes()).unwrap();
+        assert!(verified(Ok(policy_for(&wrong_role).into_bytes()),tree,schema).is_err());
+        fs::write(&artifact,body.as_bytes()).unwrap();
+        assert!(verified(fs::read(&policy),tree,[6;32]).is_err());
+        assert!(verified(fs::read(&policy),&"06".repeat(20),schema).is_err());
+        for malformed in [line.trim_end().to_owned(),format!("{line}{line}"),
+            line.replace("ONLINE-1","UNAPPROVED-1"),"ZXS-SMB/ONLINE-1 ".to_owned()+&"00".repeat(32)+"\n"]{
+            assert!(approve_manifest::<()>(Ok(malformed.into_bytes()),tree,schema,
+                ||panic!("invalid policy must not open role material")).is_err());
         }
     }
 }

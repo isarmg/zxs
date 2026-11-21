@@ -4,7 +4,7 @@
 
 ZXS 的业务管理页由 [ZXS 原生 HTTP](docs/management-http.md) 直接提供，默认监听 0.0.0.0:8443，无需域名、证书、nginx 或套接字激活。可选的非 root systemd 单元只作为不启用的候选；如需 HTTPS，使用站点的外部软件。本包不会启动或改网络。
 
-[专用 SMB](docs/smb-host.md) 在配套验签发行下由本机前台启动。首装已选的数据目录无需再进 Web 开启，只访问唯一共享。原监听证明与独立客户登录、读写验收分开。
+[专用 SMB](docs/smb-host.md) 只用管理员已按准确摘要批准的配套制品，从本机前台启动。首装已选的数据目录无需再进 Web 开启，只访问唯一共享。原监听证明与独立客户登录、读写验收分开。
 
 ```sh
 helper inspect-dirs /home/alice/downloads /home/alice/downloads/week-01 /mnt/incoming

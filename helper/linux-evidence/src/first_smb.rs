@@ -152,7 +152,7 @@ fn permitted(lib:&Abi)->io::Result<()>{
     if unsafe{(lib.control)(FIPS_MODE,0i32)}==0{Ok(())}else{Err(no())}
 }
 /// One fresh non-root credential process only; the caller must first enforce
-/// host enrollment policy, single-thread identity, mlockall and the signed release.
+/// host enrollment policy, single-thread identity, mlockall and the locally approved closure.
 /// A failure consumes this single attempt; do not switch libraries or restart it.
 pub struct Enrollment(Handle);
 impl Libraries{

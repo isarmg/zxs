@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Offline unsigned build candidates. Dedicated unprivileged Debian 13 builder only."""
+"""Offline build candidates, not local approval. Unprivileged Debian 13 builder only."""
 import argparse
 import hashlib
 import json
@@ -69,7 +69,7 @@ def main():
         return
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--project-git",type=Path,required=True,help="complete, protected, offline original Git object store")
-    p.add_argument("--project-commit",required=True,help="independently approved public coordinated release commit containing the exact frozen zxs tree")
+    p.add_argument("--project-commit",required=True,help="locally available, independently reviewed commit containing the exact frozen zxs tree")
     p.add_argument("--debian-mirror",type=Path,required=True,help="offline Debian archive root containing dists/ and pool/")
     p.add_argument("--debian-security-mirror",type=Path,required=True,help="separate offline official trixie-security archive")
     p.add_argument("--environment-sha256",required=True,help="independent approval of exact BUILD-ENV-2")
@@ -156,9 +156,9 @@ def main():
     as_json(BUILD/"UNSIGNED-ELF-ROLES.json",linked)
     runtime=BUILD/"ELF-ROLES-1"
     with runtime.open("xb") as f:f.write(runtime_manifest(linked,schema_sha))
-    runtime.chmod(0o444)  # unsigned; authorization is separate
+    runtime.chmod(0o444)  # local administrator approval remains separate
     flag.unlink()
-    print("Created unsigned role-specific ELF and initialization materials; not deployable, no service or trust record.")
+    print("Created candidate role ELF and initialization materials; no installation, service, or local approval.")
 
 if __name__=="__main__":
     main()

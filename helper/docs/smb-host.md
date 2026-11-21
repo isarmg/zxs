@@ -4,9 +4,9 @@
 
 ## 安装材料
 
-- 使用同一经独立验签的 Debian 13 amd64 正式版本，不混合旧版、系统 Samba 或开发构建。保存原域回执的 `bound_sha256`；不能用待验目录当前的 SHA 自行批准。切换数据库只针对新建池，原库不迁移、不重签。
-- [发行配方](../packaging/debian13-amd64/online-smb.md)产生两个独立原 `elf-roles/smbd`、`elf-roles/storage` 根及对应 `ELF-ROLES-1`。独立发行者核准源码、两端实际 DDL、制品和许可证，随后将两棵完整树和清单安装到 `/usr/lib/zxs-smb-runtime/debian13-amd64/`。保持 root 属主、准确文件模式/硬链接，不用宿主库补齐。未签中间物不是获准制品。
-- 管理员按**独立已签且已验的发行清单**把 `ELF-ROLES-1` 的 SHA-256 登记在 `/etc/local-ops-helper/online-smb.policy` 的唯一一行 `ZXS-SMB/ONLINE-1 <64 小写十六进制>`，root:root 0600、单链、尾 LF。承认的是确切发行闭包和已准站点执行身份，不从安装目录自荐材料。构建器不放置政策、不签名、不启服务。
+- 使用同一组 Debian 13 amd64 锁定配套制品；可用从确切锁定源可信自建、独立核准的版本。不得混用旧版、系统 Samba 或不匹配构建。保存原域回执的 `bound_sha256`；原库不迁移。
+- [发行配方](../packaging/debian13-amd64/online-smb.md)产生两个独立原 `elf-roles/smbd`、`elf-roles/storage` 根及对应 `ELF-ROLES-1`。管理员先核准确源码、两端实际 DDL、制品与材料，再按固定路径安装两棵完整树和清单到 `/usr/lib/zxs-smb-runtime/debian13-amd64/`。保持 root 属主、准确文件模式/硬链接，不用宿主库补齐。构建输出尚不是启动许可。
+- 管理员按[独立可信的构建或制品记录](../RELEASE.md#h08在交付文件之前需要什么证据)，把预期 `ELF-ROLES-1` SHA-256 登记在 `/etc/local-ops-helper/online-smb.policy` 的唯一一行 `ZXS-SMB/ONLINE-1 <64 小写十六进制>`，root:root 0600、单链接普通文件、尾 LF。不要从待验安装目录现算现批，不要求项目发布者签名。构建器不放置策略、不启服务。Helper 逐件核名字、模式、长度、摘要及原物；本地制品核准不替代站点身份和下述前台批准。
 
 ## 启动
 

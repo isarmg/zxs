@@ -40,7 +40,7 @@
   <section class="card install-guide" id="setup" hidden aria-labelledby="setuptitle">
     <p class="eyebrow">FIRST INSTALL</p><h2 id="setuptitle">首次安装向导</h2>
     <p>这里仅核对安装包的固定模板并给出本机步骤。不会选择盘、执行这些命令、安装服务或接收口令、路径、审批、回执。步骤不会自动打勾；真实结果请留在终端。</p>
-    <p class="hint">本路径面向 Debian 13 amd64。若尚无独立验签的同版发行、合格的新卷及受保护的宿主维护身份，请停在准备阶段。模板一致不等于已验签、已配置、已启动或可登录。</p>
+    <p class="hint">本路径面向 Debian 13 amd64。若尚无本机管理员按预期 SHA-256 独立核准的配套制品、合格的新卷及受保护的宿主维护身份，请停在准备阶段。模板一致不等于已核准制品、已配置、已启动或可登录。</p>
     <dl class="setup-status" aria-label="本次只读的模板观察">
       <dt>Samba 渲染骨架（非正式配置）</dt><dd id="setup-sam">未观察</dd>
       <dt>旧内部预检材料（不用于正式启动）</dt><dd id="setup-smb">未观察</dd>
@@ -116,7 +116,7 @@
   --receipt-only</code></pre>
       </details></li>
       <li><details><summary>SMB：从本机前台启动</summary>
-        <p>只用独立验签、与这次原首装配套的两个程序及其私有库。启动需原 <code>bound_sha256</code> 和本机明确确认。程序经过真实监听核对后才报告其结果；管理员不用登录 Web 再启用刚配置的共享。</p>
+        <p>只用本机已核准、与这次原首装配套的两个程序及其私有库。启动需原 <code>bound_sha256</code> 和本机明确确认。程序经过真实监听核对后才报告其结果；管理员不用登录 Web 再启用刚配置的共享。</p>
         <pre tabindex="0" aria-label="启动唯一的已配置 SMB 服务"><code>/usr/bin/helper start-smb \
   --system "${SYSTEM:?set SYSTEM in this terminal first}" \
   --pool "${POOL_ID:?set POOL_ID in this terminal first}" \
@@ -128,7 +128,7 @@
         <p>批准实际选定的 LAN 和目录，再保持本机前台。获准客户端用唯一 SMB 账户打开 <code>\\服务器\ZXS</code>，不尝试匿名或逐盘 UNC。监听与客户登录/读写分别确认；终端 Ctrl+C 请求停机。</p>
       </details></li>
       <li><details><summary>管理 Web：启动 ZXS 的原生 HTTP</summary>
-        <p>两账户已确认后，用该池登记的普通存储身份启动验签版 ZXS；不需要 nginx、域名、证书或套接字激活。下列命令只是在终端运行 ZXS。需确认你愿意让管理端口在所有 IPv4 接口监听；直连没有加密，只在可信网络使用。</p>
+        <p>两账户已确认后，用该池登记的普通存储身份启动已按独立预期摘要核准的 ZXS；不需要 nginx、域名、证书或套接字激活。下列命令只是在终端运行 ZXS。需确认你愿意让管理端口在所有 IPv4 接口监听；直连没有加密，只在可信网络使用。</p>
         <pre tabindex="0" aria-label="启动 ZXS 原生管理 HTTP 的命令"><code>ZXS_SYSTEM_ROOT="${SYSTEM:?set SYSTEM in this terminal first}" \
 ZXS_POOL_ID="${POOL_ID:?set POOL_ID in this terminal first}" /usr/bin/zxs</code></pre>
         <p>从浏览器打开 <code>http://&lt;服务器实际 IPv4&gt;:8443/</code>，用唯一 Web 管理员登录。<code>0.0.0.0</code> 仅是监听值。若需要 HTTPS，由你的外部软件独立终结 TLS，不在 Helper 中安装或配置。若使用 systemd，可在自有私有工作目录生成不启用的候选：</p>

@@ -1,5 +1,5 @@
 //! Actual package material, not a SAM request or offline authorization. The
-//! host separately enrolls the signed distribution's exact manifest digest.
+//! local administrator separately approves exact trusted artifact digests.
 mod inventory;
 use super::{CAPSULE_USR,live::Stamp};
 use crate::{fat32_check::SamLauncher,fs_tools::RuntimeFile,pinned::{Kind,Pinned},sqlite_install::bad};
@@ -91,6 +91,10 @@ fn expected(bytes:&[u8])->io::Result<Keys>{
     let ["HOST-SAM-RELEASE-1",m,w,p]=parts.as_slice() else{return Err(invalid());};
     Ok(Keys{manifest:hex(m)?,helper:hex(w)?,launcher_profile:hex(p)?})
 }
+fn approved_layout(bytes:&[u8],keys:&Keys)->io::Result<Layout>{
+    if <[u8;32]>::from(Sha256::digest(bytes))!=keys.manifest{return Err(invalid());}
+    Layout::parse(bytes)
+}
 // Before permanently dropping identity the exec'd worker may read only
 // these fixed root-owned public policy inputs. All data FDs die on return.
 pub(super) fn worker_keys(parent:rustix::process::Pid)->io::Result<Keys>{
@@ -112,8 +116,7 @@ impl Originals{
         let keys=expected(&read(&mut policy,0o600,256)?)?;
         let mut manifest=RuntimeFile::open(MANIFEST,false,LIMIT as u64)?;
         let bytes=read(&mut manifest,0o644,LIMIT as u64)?;
-        if <[u8;32]>::from(Sha256::digest(&bytes))!=keys.manifest{return Err(invalid());}
-        let layout=Layout::parse(&bytes)?;
+        let layout=approved_layout(&bytes,&keys)?;
         let pin=Pinned::open(Path::new(CAPSULE_USR),Kind::StorageRoot)?;
         let usr=pin.relative_directory()?;
         manifest.require_samba_usr(&usr)?;
@@ -167,5 +170,16 @@ mod tests{
         for v in [line.trim_end().into(),format!("HOST-SAM-RELEASE-1 {a}\n"),line.replace("ab","AB"),
             format!("{line}{line}"),line.replace("RELEASE-1","USR-1")]{
             assert!(expected(v.as_bytes()).is_err());}
+    }
+    #[test]fn local_approval_capsule_requires_its_separately_recorded_digest(){
+        let original=format!("{TITLE}\n{}{}",row("bin/python3.13","0755"),row("lib64/ld-linux-x86-64.so.2","0755"));
+        let digest=Sha256::digest(original.as_bytes()).iter().map(|b|format!("{b:02x}")).collect::<String>();
+        let stated=format!("HOST-SAM-RELEASE-1 {digest} {} {}\n","ab".repeat(32),"47".repeat(32));
+        let keys=expected(stated.as_bytes()).unwrap();
+        assert!(approved_layout(original.as_bytes(),&keys).is_ok());
+        let changed=original.replace("\t1\t","\t2\t");
+        assert!(Layout::parse(changed.as_bytes()).is_ok());
+        assert!(approved_layout(changed.as_bytes(),&keys).is_err());
+        assert!(expected(b"").is_err());
     }
 }

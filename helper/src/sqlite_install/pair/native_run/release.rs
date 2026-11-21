@@ -1,6 +1,6 @@
-//! A release identity is independent of this executable and independent of a
-//! fresh console approval. This code neither creates nor accepts self-signed
-//! trust. One fixed private native closure and one fixed crypto provider.
+//! The site's protected local policy binds the exact approved artifact digests
+//! and original site before any native closure is used. This is separate from
+//! fresh console approval. One fixed private native closure and crypto provider.
 use super::{Id,bad};
 use crate::{fs_tools::{RuntimeFile,hash_upto},maintenance::thread_file,pinned::{Entity,Kind,LocalDataFile,Mount,Pinned},
     sqlite_install::pair::smb_policy as helpers};
@@ -29,6 +29,10 @@ impl Rule{
             live:helpers::lower(take()?)?,helper:helpers::lower(take()?)?,index:helpers::lower(take()?)?,
             gcrypt:helpers::lower(take()?)?,gpg:helpers::lower(take()?)?};
         if w.next().is_some()||[r.pool,r.instance,r.provision].contains(&[0;16]){return Err(fail());}Ok(r)
+    }
+    fn require_site(&self,pool:Id,instance:Id,provision:Id,live:[u8;32])->io::Result<()>{
+        if (self.pool,self.instance,self.provision,self.live)!=(pool,instance,provision,live){return Err(fail());}
+        Ok(())
     }
 }
 fn fail()->io::Error{bad("no verified fixed native-account release and site permission for this original instance")}
@@ -103,7 +107,7 @@ impl Release {
         helpers::mode(&policy.file,0o600)?;
         let mut text=String::new();(&policy.file).take(513).read_to_string(&mut text)?;
         let rule=Rule::parse(&text)?;policy.recheck()?;
-        if (rule.pool,rule.instance,rule.provision,rule.live)!=(pool,instance,provision,live){return Err(fail());}
+        rule.require_site(pool,instance,provision,live)?;
         let helper=helpers::release(HELPER,0o755,&rule.helper)?;helper.require_running_helper()?;
         let gcrypt=helpers::release(GCRYPT,0o644,&rule.gcrypt)?;
         let gpg=helpers::release(GPGERR,0o644,&rule.gpg)?;
@@ -184,12 +188,26 @@ impl Release {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]fn signed_closure_can_only_supply_the_fixed_private_names_and_base_glibc(){
+    #[test]fn local_approval_closure_can_only_supply_the_fixed_private_names_and_base_glibc(){
         let h="11".repeat(32);
         let valid=format!("NATIVE-ELF-1\n@libc {h}\n@loader {h}\nhelper-account-native.so {h}\nnative-lib0001.so {h}\n");
         assert_eq!(parse_index(&valid).unwrap().len(),4);
         for x in [valid.replace("native-lib0001.so","../escape.so"),valid.replace("@loader","@other"),valid.replace("@loader","@libc"),valid.trim_end().to_owned()]{
             assert!(parse_index(&x).is_err());
         }
+    }
+    #[test]fn local_approval_native_account_requires_exact_site_and_all_four_digests(){
+        let fields=["01".repeat(16),"02".repeat(16),"03".repeat(16),"04".repeat(32),
+            "05".repeat(32),"06".repeat(32),"07".repeat(32),"08".repeat(32)];
+        let text=format!("SITE-NATIVE-NTLMV2-1 {}\n",fields.join(" "));
+        let rule=Rule::parse(&text).unwrap();
+        assert_eq!([rule.helper,rule.index,rule.gcrypt,rule.gpg],[[5;32],[6;32],[7;32],[8;32]]);
+        assert!(rule.require_site([1;16],[2;16],[3;16],[4;32]).is_ok());
+        for (p,i,d,l) in [([9;16],[2;16],[3;16],[4;32]),([1;16],[9;16],[3;16],[4;32]),
+            ([1;16],[2;16],[9;16],[4;32]),([1;16],[2;16],[3;16],[9;32])]{
+            assert!(rule.require_site(p,i,d,l).is_err());
+        }
+        for wrong in [String::new(),text.trim_end().to_owned(),text.replace(&format!(" {}",fields[7]),""),
+            format!("{text}{text}")]{assert!(Rule::parse(&wrong).is_err());}
     }
 }

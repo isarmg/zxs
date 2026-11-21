@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Independent non-root/offline Debian build; output is unsigned, never installed or loaded."""
+"""Independent non-root/offline Debian build; output is evidence only, never installed or loaded."""
 import argparse
 import hashlib
 import json
@@ -173,7 +173,7 @@ def main():
     catalog.current()
     as_json(build/"UNSIGNED-NATIVE-ACCOUNT-V7.json",graph)
     stop.unlink()
-    print("Unsigned native role and source evidence only; no installation or secret operation.")
+    print("Native role and source evidence only; no installation, local approval, or secret operation.")
 
 if __name__=="__main__":
     main()
