@@ -9,13 +9,15 @@ from ..model import Rejected
 from .checkout_action import CheckoutChoice, available
 from .commit_controls import CommitControls
 from .initialize_choice import InitializeChoice, available as can_initialize
+from .selection import read_registered_baseline, submit_verification
 from .widgets import Table, button, confirm, label
 
 
 class CheckoutPane(QWidget):
-    def __init__(self, owner, current_store):
+    def __init__(self, owner, current_store, *, open_baseline=None):
         super().__init__()
         self.owner, self.current_store = owner, current_store
+        self.open_baseline = open_baseline
         self.snapshot, self.active, self.unresolved = None, False, False
         self.recover_checkout = None
         self.live = self.changes_dialog = self.live_record = self.visibility_last = None
@@ -38,7 +40,11 @@ class CheckoutPane(QWidget):
         self.end = button("关闭本窗口的工作树会话…", self.end_session)
         layout.addWidget(self.end)
         self.refresh = button("刷新本窗口工作树的状态", self.refresh_live)
-        layout.addWidget(self.refresh)
+        self.browse = button("核验登记基线并在新窗口浏览…", self.browse_baseline)
+        self.browse.setVisible(open_baseline is not None and available())
+        status_line = QHBoxLayout()
+        status_line.addWidget(self.refresh); status_line.addWidget(self.browse)
+        layout.addLayout(status_line)
         self.changes = button("查看工作目录相对基线的改动…", self.compare_live)
         self.initial_changes = button("离线对照首次签出版本…", lambda: self.compare_live(initial=True))
         comparison_line = QHBoxLayout()
@@ -374,6 +380,7 @@ class CheckoutPane(QWidget):
                        and (phase == "visible" or phase is None and self.commits.visible))
         committed = bool(record.get("base_generation"))
         no_commit = record.get("pending_operation") is None
+        self.browse.setEnabled(self._can_browse_baseline())
         self.changes.setEnabled(idle and visible and committed and no_commit)
         index = self.live.initial_index if self.live is not None else None
         self.initial_changes.setEnabled(bool(idle and visible and committed and no_commit and index is not None
@@ -392,6 +399,45 @@ class CheckoutPane(QWidget):
         return bool(self.visibility_blocked and plan is not None and plan.intent_synced and not plan.receipt_synced
                     and record.get("pending_visibility_operation") == plan.operation
                     and record.get("pending_operation") is None)
+
+    def _can_browse_baseline(self):
+        record = self.live_record or {}
+        return bool(self.open_baseline is not None and self.live is not None and not self.active
+                    and self.commits.running is None and not self.commits.blocked and not self.visibility_blocked
+                    and record.get("visibility") == "visible" and record.get("base_generation")
+                    and record.get("pending_operation") is None and record.get("pending_visibility_operation") is None)
+
+    def browse_baseline(self):
+        if (self.owner.pending is not None or self.changes_dialog is not None or not self._can_browse_baseline()):
+            return
+        live, record = self.live, self.live_record
+        displayed = tuple(record[key] for key in ("repo", "branch", "base_generation", "base_operation"))
+
+        def current():
+            return self.live is live and self.live_record is record and self._can_browse_baseline()
+
+        def accept(view):
+            try:
+                self.open_baseline(view)
+            except BaseException:
+                view.release_display()
+                raise
+            self.owner.inform("已在新窗口打开本次核验的登记基线；原工作树与浏览不变。")
+
+        loan = None
+        try:
+            loan = live.borrow()
+            future = submit_verification(self.owner, "正在核验这棵工作树的原登记基线，不会打开工作文件…",
+                                         lambda watch: read_registered_baseline(loan, displayed, observer=watch),
+                                         accept, current=current)
+            if future is None: raise Rejected("另一个任务正在执行；未开始核验基线")
+        except BaseException as error:
+            if loan is not None: loan.close()
+            if not isinstance(error, Exception): raise
+            if current(): self.owner.inform(str(error))
+        else:
+            # Also releases an unstarted loan when cancellation is observed before select().
+            future.add_done_callback(lambda _: loan.close())
 
     def _visibility_job(self, title, work, apply):
         def task():

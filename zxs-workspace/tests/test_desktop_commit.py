@@ -18,7 +18,7 @@ from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
 from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped
 from zipworkspace.desktop.pending_fork import PendingFork
-from zipworkspace.desktop.selection import Selection
+from zipworkspace.desktop.selection import Selection, Verification, read_registered_baseline
 from zipworkspace.desktop.retry_choice import PendingRetry
 from zipworkspace.model import Commit, Manifest, Rejected
 
@@ -74,6 +74,106 @@ class OriginalCheckoutFixture(unittest.TestCase):
 
 
 class LiveChangesEvidence(OriginalCheckoutFixture):
+    def baseline_display(self):
+        m = self.first
+        return m.repo, m.branch, m.generation, m.operation
+
+    def test_baseline_browser_reads_the_canonical_slot_not_work_or_a_new_head(self):
+        from zipworkspace.desktop import selection
+        real_connect = worktree.sqlite3.connect
+        modes = []
+        def only_ro(name, *args, **kw):
+            self.assertTrue(kw.get("uri"))
+            self.assertTrue(name.endswith("?mode=ro"))
+            modes.append(name)
+            return real_connect(name, *args, **kw)
+        (self.tree/"story").write_bytes(b"not in this archived base")
+        tip = Commit(self.first.repo, self.first.branch, 2, "d"*32, self.first.operation, self.first.tree)
+        snapshot(self.store / tip.filename, tip)
+        with patch.object(worktree.sqlite3, "connect", side_effect=only_ro), \
+             patch.object(selection, "named_document", side_effect=AssertionError("no reopen by spelling")), \
+             patch.object(selection, "Catalog", side_effect=AssertionError("no store inventory / latest head")), \
+             patch.object(lifecycle, "observe_held", side_effect=AssertionError("no work content read")), \
+             patch.object(os, "fsync", side_effect=AssertionError("no writing")):
+            view = read_registered_baseline(self.live, self.baseline_display(), observer=Verification())
+        self.addCleanup(view.release_display)
+        self.assertEqual(len(modes), 2)  # short committed observations on either side of the archive read
+        self.assertEqual((view.path, view.browser.commit), (self.original, self.first))
+        self.assertEqual(view.exact.sha256, hashlib.sha256(self.original.read_bytes()).hexdigest())
+        self.assertTrue(os.path.samestat(os.fstat(view.held.fileno()), self.original.stat()))
+        self.assertEqual(view.browser.list_directory().entries[1].size_bytes, len(b"original story"))
+
+    def test_baseline_browser_rejects_slot_replacement_at_the_final_gate(self):
+        from zipworkspace.desktop import selection
+        raw = self.original.read_bytes()
+        retained, real = self.root/"held-original.zxs", selection.archive_sha
+        def replace_after_hash(*args, **kw):
+            digest = real(*args, **kw)
+            self.original.rename(retained)
+            self.original.write_bytes(raw)  # the selected post-hash name is not this byte-identical inode
+            return digest
+        with patch.object(selection, "archive_sha", side_effect=replace_after_hash):
+            with self.assertRaisesRegex(Rejected, "原正式名称或挂载"):
+                read_registered_baseline(self.live, self.baseline_display(), observer=Verification())
+        self.assertEqual(retained.read_bytes(), self.original.read_bytes())
+
+    def test_baseline_browser_does_not_follow_a_concurrent_change_in_the_original_registration(self):
+        from zipworkspace.desktop import selection
+        real = selection.archive_sha
+        def advance_after_hash(*args, **kw):
+            digest = real(*args, **kw)
+            with worktree.locked(self.state, live=self.live) as (con, _, __):
+                con.execute("UPDATE checkout SET generation=2, parent=?", ("e"*32,))
+            return digest
+        with patch.object(selection, "archive_sha", side_effect=advance_after_hash):
+            with self.assertRaisesRegex(Rejected, "原登记基线变化"):
+                read_registered_baseline(self.live, self.baseline_display(), observer=Verification())
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop")
+    def test_explicit_baseline_button_opens_only_a_read_only_view_in_another_window(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import DesktopWindows
+        app = QApplication.instance() or QApplication([])
+        windows = DesktopWindows()
+        main = windows.open()
+        pane = main.archive.checkout
+        original_view = Selection.open(self.loose, retain=True)
+        try:
+            main.archive.show_selection(original_view)
+            pane._attach(self.live)
+            pane.live_record = self.live.status()
+            pane._worktree_actions()
+
+            def begin():
+                future = Future()
+                with patch.object(main.pool, "submit", return_value=future) as queued:
+                    pane.browse.click()
+                self.assertIs(main.pending[0], future)
+                return future, queued.call_args.args[0]
+
+            future, work = begin()
+            view, error = work()
+            self.assertIsNone(error)
+            future.set_result((view, None))
+            main.transfer_cancel.click(); main.poll()
+            self.assertEqual(len(windows.windows), 1)
+            self.assertTrue(view.held.closed)
+
+            future, work = begin()
+            future.set_result(work()); main.poll()
+            self.assertIs(main.archive.selection, original_view)
+            self.assertIs(pane.live, self.live)
+            self.assertTrue(self.live.branch_source_available)
+            child, = (win for win in windows.windows.values() if win is not main)
+            self.assertEqual(child.archive.selection.exact.marker, self.first)
+            self.assertIsNone(child.archive.store)
+            self.assertIsNone(child.archive.checkout.live)
+        finally:
+            if main.pending is not None:
+                main.pending[0].cancel(); main.poll()
+            for win in tuple(windows.windows.values()): win.close()
+            original_view.release_display()
+
     def test_changes_rejects_a_repacked_base_even_with_the_same_tree_and_marker(self):
         self.original.rename(self.root/"kept-original.zxs")
         snapshot(self.original, self.first, year=1981)

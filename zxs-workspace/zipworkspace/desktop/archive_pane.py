@@ -14,7 +14,7 @@ from .widgets import Table, button, confirm, label
 class ArchivePane(QWidget):
     FILE_PAGE = 100
 
-    def __init__(self, owner):
+    def __init__(self, owner, *, open_baseline=None):
         super().__init__()
         self.owner = owner
         self.selection = self.store = self.catalog = self.file_page = None
@@ -80,7 +80,7 @@ class ArchivePane(QWidget):
         self.branches = self.make_table(("分支", "最高观察代", "已核验分支头", "缺失父节点"), "分支", "查看选中的分支头")
         self.comparison = ComparisonPane(owner)
         self.views.addTab(self.comparison, "只读对比")
-        self.checkout = CheckoutPane(owner, lambda: self.store)
+        self.checkout = CheckoutPane(owner, lambda: self.store, open_baseline=open_baseline)
         self.views.addTab(self.checkout, "工作树")
         self.mount = None
         if sys.platform == "linux":

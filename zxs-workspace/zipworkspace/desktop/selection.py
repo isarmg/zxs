@@ -11,7 +11,7 @@ from .. import plain_import
 
 from ..archive import stamp
 from ..browser import ArchiveBrowser, DirectoryIndex
-from ..document import archive_sha, named_document, native_identity
+from ..document import archive_sha, named_document, native_identity, relative_document
 from ..model import Rejected
 from ..refs import Catalog, Node
 
@@ -85,8 +85,11 @@ def submit_verification(owner, title, select, accepted, *, current, discard=lamb
         else:
             accepted(selection)
 
+    def progress():
+        return observer.progress() if current() else ("", 0, None)
+
     return owner.job(title, work, done, cancel=observer.cancel, cancel_text="取消本次只读核验",
-                     progress_report=observer.progress)
+                     progress_report=progress)
 
 
 class _DisplayFD:
@@ -216,6 +219,47 @@ class Selection:
                 (self.exact is not None and result.anchor != self.exact)):
             raise Rejected("selected original changed before catalog inspection")
         return result
+
+
+def read_registered_baseline(live, displayed, *, observer):
+    """Verify the original STORE slot of an already-held idle worktree, without adopting STATE."""
+    from ..lifecycle import _base_leaf, _idle_live_base
+    from ..private_stage import mount_id
+
+    observer.begin("identity")
+    expected = _idle_live_base(live)
+    if expected[:4] != displayed: raise Rejected("登记基线已与界面不同；请先刷新原状态，不会改选新版本")
+    name = _base_leaf(expected)
+    official = live.store / name
+    original_mount = mount_id(live.store_fd)
+    observer.check()
+    with ExitStack() as handoff:
+        # No SQLite transaction, directory enumeration, work content read, or HEAD selection.
+        with relative_document(live.store_fd, name) as doc:
+            actual = stamp(doc)
+            if mount_id(doc.fileno()) != original_mount: raise Rejected("登记基线不在原 STORE 的挂载")
+            browser = ArchiveBrowser(doc, display_name=name, observer=observer)
+            marker = browser.commit
+            if ((marker.repo, marker.branch, marker.generation, marker.operation) != displayed or
+                    archive_sha(doc, observer=observer) != expected[4]):
+                raise Rejected("STORE 的登记基线节点或整包 SHA-256 不符")
+            observer.begin("identity")
+            if _idle_live_base(live) != expected:
+                raise Rejected("核验期间原登记基线变化；未浏览另一个版本")
+            still = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=live.store_fd)
+            try:
+                named = os.fstat(still)
+                if ((*native_identity(named, stat.S_IFREG), named.st_size, named.st_mtime_ns, named.st_ctime_ns) != actual
+                        or stamp(doc) != actual or mount_id(still) != original_mount):
+                    raise Rejected("登记基线的原正式名称或挂载已改变")
+                held = _DisplayFD(doc)
+                handoff.callback(held.close)
+            finally:
+                os.close(still)
+        observer.check()
+        view = Selection(official, actual, browser, Node(marker, official, expected[4], actual), held)
+        handoff.pop_all()
+        return view
 
 
 def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, node: Node, *, observer=None):

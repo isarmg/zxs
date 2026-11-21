@@ -115,7 +115,18 @@ class Window(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         self.tabs = QTabWidget()
-        self.archive = ArchivePane(self)
+        def open_baseline(selection):
+            # Transfer only the read-only archive display. A new window starts
+            # with no STORE, worktree, original operation, or mount.
+            fresh = new_window()
+            try:
+                fresh.archive.show_selection(selection)
+                fresh.inform("已只读打开登记基线；没有继承原工作树或待决操作。")
+            except BaseException:
+                fresh.close()
+                raise
+
+        self.archive = ArchivePane(self, open_baseline=None if new_window is None else open_baseline)
         self.tabs.addTab(self.archive, "快照与历史")
         self.plain_import = ImportPane(self)
         self.tabs.addTab(self.plain_import, "核验普通 ZIP")
