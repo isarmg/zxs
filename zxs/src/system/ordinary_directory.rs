@@ -45,16 +45,23 @@ impl DirectoryPlace{
 pub(in crate::system::reader) struct Route{pool:PoolId,volume:VolumeId,steps:Vec<DirectoryPlace>}
 impl Route{
     pub(in crate::system::reader) fn at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent)->io::Result<Self>{
+        Self::settled_at(db,c,volume,parent)?.ok_or_else(busy)
+    }
+    /// None is an actual selected ancestor with an unsettled rename. A
+    /// missing/malformed directory or SQLite BUSY remains an error.
+    pub(in crate::system::reader) fn settled_at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent)
+        ->io::Result<Option<Self>>{
         if !c.rows().iter().any(|r|r.role==Role::File&&r.volume==volume){return Err(denied());}
-        let mut steps=Vec::new();let mut at=parent;
+        let mut steps=Vec::new();let mut at=parent;let mut pending=false;
         while let DirectoryParent::Directory(id)=at{
             if steps.len()>=MAX_PATH_DEPTH{return Err(invalid("ordinary parent ancestry is too deep"));}
-            let selected=by_id(db,c,volume,id)?;
+            let (selected,moving)=by_id(db,c,volume,id)?;
+            pending|=moving;
             at=selected.birth.parent;steps.push(selected);
         }
         steps.reverse();
         let path=Self{pool:c.birth.pool,volume,steps};
-        path.geometry(c)?;Ok(path)
+        path.geometry(c)?;Ok((!pending).then_some(path))
     }
     /// Wire labels are only lookups. This returns the same verified route as
     /// the DirectoryId construction, never an unqualified Unix path.
@@ -142,7 +149,7 @@ fn published(db:&Connection,c:&Catalog,op:OperationId,position:OperationId,gener
         .ok_or_else(||invalid("directory position differs from its exact confirmed rename"))?;
     Ok(DirectoryPlace{birth:rename.birth,name,position,generation})
 }
-fn by_id(db:&Connection,c:&Catalog,volume:VolumeId,id:DirectoryId)->io::Result<DirectoryPlace>{
+fn by_id(db:&Connection,c:&Catalog,volume:VolumeId,id:DirectoryId)->io::Result<(DirectoryPlace,bool)>{
     let q=db.prepare(c"SELECT d.create_op,d.position_op,d.generation,d.display,
         EXISTS(SELECT 1 FROM main.pending_directory_rename m WHERE m.directory_id=d.directory_id AND m.source_op=d.position_op)
       FROM main.directory_selected d WHERE d.directory_id=?1 AND d.volume_id=?2 AND d.state=1")?;
@@ -150,10 +157,21 @@ fn by_id(db:&Connection,c:&Catalog,volume:VolumeId,id:DirectoryId)->io::Result<D
     if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
     let op=OperationId(q.array(0)?);let position=OperationId(q.array(1)?);let generation=q.integer(2)?;
     let name=display::component(q.blob(3,255)?,255)?.to_owned();let moving=q.byte(4)?==1;q.done()?;
-    if moving{return Err(busy());}
+    drop(q);
     let at=published(db,c,op,position,generation,name)?;
     if at.birth.id!=id||at.birth.volume!=volume{return Err(denied());}
-    Ok(at)
+    if moving{
+        let q=db.prepare(c"SELECT rename_op FROM main.pending_directory_rename
+             WHERE directory_id=?1 AND source_op=?2 LIMIT 2")?;
+        q.bind_bytes(1,&id.0)?;q.bind_bytes(2,&position.0)?;
+        if !work_record::start_one(&q)?{return Err(invalid("pending ancestor selection disappeared"));}
+        let rename=OperationId(q.array(0)?);q.done()?;drop(q); // exact one, never pick a representative
+        directory_rename::selected(db,c,rename)?
+            .filter(|r|!r.confirmed&&!r.aborted&&r.birth==at.birth&&r.source==position&&
+                    r.source_gen==generation&&r.old==at.name)
+            .ok_or_else(||invalid("pending ancestor does not have its exact original rename"))?;
+    }
+    Ok((at,moving))
 }
 pub(super) fn lookup(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<DirectoryPlace>>{
     display::component(name.as_bytes(),255)?;
@@ -629,9 +647,10 @@ mod tests{
         let admin=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
         let (chosen,item)=admin.manual_preview(new.file).unwrap();
         assert_eq!(item.name,"Reports\\2027\\Data");
+        use crate::system::reader::account::manual_work::PickerItem;
         let page=admin.manual_files(None).unwrap().0;
-        assert!(page.iter().any(|x|x.file==new.file && x.name=="Reports\\2027\\Data"));
-        assert!(page.iter().any(|x|x.file==sibling.file && x.name=="reports\\Data"));
+        assert!(page.iter().any(|x|matches!(x,PickerItem::Named(i) if i.file==new.file && i.name=="Reports\\2027\\Data")));
+        assert!(page.iter().any(|x|matches!(x,PickerItem::Named(i) if i.file==sibling.file && i.name=="reports\\Data")));
         let receipt=admin.freeze(op(0x9a),chosen).unwrap();
         assert_eq!(receipt.ord,1);
         let shown=admin.manual_timeline(new.file,None).unwrap();

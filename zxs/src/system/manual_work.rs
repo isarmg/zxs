@@ -52,6 +52,10 @@ impl Site<'_>{
     }
 }
 pub(crate) struct Item {pub(crate) file:FileId,pub(crate) name:String,pub(crate) volume:VolumeId}
+pub(crate) enum PickerItem{Named(Item),ParentPending(FileId)}
+impl PickerItem{
+    fn file(&self)->FileId{match self{Self::Named(row)=>row.file,Self::ParentPending(file)=>*file}}
+}
 fn busy(message:&str)->io::Error{io::Error::new(io::ErrorKind::WouldBlock,message.to_owned())}
 
 struct Cut {
@@ -147,7 +151,7 @@ impl WebAdmin<'_>{
     }
     /// Same confirmed original birth selector as ordinary directory
     /// metadata. Returns no share grant, host path or file content.
-    pub(crate) fn manual_files(&self,after:Option<FileId>)->io::Result<(Vec<Item>,Option<FileId>)>{
+    pub(crate) fn manual_files(&self,after:Option<FileId>)->io::Result<(Vec<PickerItem>,Option<FileId>)>{
         self.source.at(|db,c|{
             self.current(db,&c)?;
             const PAGE:usize=32;
@@ -156,16 +160,18 @@ impl WebAdmin<'_>{
             let mut items=Vec::new();let mut parents=BTreeMap::new();
             while work_record::start_one(&q)? {
                 let id=FileId(q.array(0)?);
-                let now=ordinary_here(db,&c,id)?;
-                let b=file_create::committed_file(db,&c,id)?;
+                let Placed{birth:b,here:now}=ordinary_here(db,&c,id)?.bind(db,&c)?;
                 let key=(now.volume,now.parent.bytes());
                 let parent=match parents.entry(key){
                     Cached::Occupied(r)=>r.into_mut(),
-                    Cached::Vacant(r)=>r.insert(Route::at(db,&c,now.volume,now.parent)?),
+                    Cached::Vacant(r)=>r.insert(Route::settled_at(db,&c,now.volume,now.parent)?),
                 };
-                items.push(Item{file:b.file,name:parent.show_child(&now.name),volume:now.volume});
+                items.push(match parent{
+                    Some(parent)=>PickerItem::Named(Item{file:b.file,name:parent.show_child(&now.name),volume:now.volume}),
+                    None=>PickerItem::ParentPending(b.file),
+                });
             }
-            let next=if items.len()>PAGE{items.truncate(PAGE);items.last().map(|i|i.file)}else{None};
+            let next=if items.len()>PAGE{items.truncate(PAGE);items.last().map(PickerItem::file)}else{None};
             Ok((items,next))
         })
     }

@@ -53,21 +53,41 @@ fn hidden(out:&mut String,csrf:&str)->io::Result<()>{
     text(out,csrf);out.push_str(r#"">"#);Ok(())
 }
 
-pub(super) fn manual_index(items:&[manual_work::Item],next:Option<FileId>)->Reply{
+pub(super) fn manual_index(items:&[manual_work::PickerItem],next:Option<FileId>)->Reply{
     let mut out=String::from(HEAD);
     out.push_str(r#"<title>选择文件 · ZXS</title></head><body><main data-zxs-scope><h1>选择文件</h1><p>仅显示已登记并确认的文件，不探测数据盘或打开正文。</p>"#);
     if items.is_empty(){out.push_str("<p>没有已确认的文件。</p>");}
     else{
-        out.push_str(r#"<table class="zxs-table"><thead><tr><th>卷内路径</th><th>数据卷</th><th>工作稿</th></tr></thead><tbody>"#);
+        out.push_str(r#"<table class="zxs-table"><thead><tr><th>FileId</th><th>卷内路径</th><th>数据卷</th><th>工作稿</th></tr></thead><tbody>"#);
         for i in items{
-            write!(out,r#"<tr><td><a href="/versions/history?file={}"><bdi>"#,i.file).unwrap();
-            text(&mut out,&i.name);write!(out,r#"</bdi></a></td><td><code>{}</code></td><td><a href="/versions?file={}">手动提交</a></td></tr>"#,i.volume,i.file).unwrap();
+            match i{
+                manual_work::PickerItem::Named(row)=>{
+                    write!(out,r#"<tr><td><code>{}</code></td><td><a href="/versions/history?file={}"><bdi>"#,row.file,row.file).unwrap();
+                    text(&mut out,&row.name);write!(out,r#"</bdi></a></td><td><code>{}</code></td><td><a href="/versions?file={}">手动提交</a></td></tr>"#,row.volume,row.file).unwrap();
+                },
+                manual_work::PickerItem::ParentPending(file)=>write!(out,
+                    "<tr><td><code>{file}</code></td><td>所属目录改名尚未确认</td><td>未显示</td><td>暂不能提交</td></tr>").unwrap(),
+            }
         }
         out.push_str("</tbody></table>");
     }
     if let Some(after)=next{write!(out,r#"<p><a href="/versions?after={after}">下一页</a></p>"#).unwrap();}
     out.push_str(r#"<p><a href="/">返回概览</a></p></main></body></html>"#);
     Reply::html("200 OK",out)
+}
+
+#[cfg(test)]
+#[test]
+fn an_unsettled_parent_never_becomes_an_old_path_or_a_submit_link(){
+    use crate::VolumeId;
+    use manual_work::{Item,PickerItem};
+    let blocked=FileId([0x20;16]);let other=FileId([0x22;16]);
+    let page=manual_index(&[PickerItem::ParentPending(blocked),PickerItem::Named(Item{
+        file:other,name:"Other.txt".into(),volume:VolumeId([0x42;16]),
+    })],None);
+    assert!(page.body.contains(&format!("<code>{blocked}</code>"))&&page.body.contains("所属目录改名尚未确认"));
+    assert!(!page.body.contains(&format!("?file={blocked}")));
+    assert!(page.body.contains(&format!("/versions?file={other}"))&&page.body.contains("Other.txt"));
 }
 
 pub(super) fn version_history(history:&crate::system::reader::account::history::Timeline)->Reply{

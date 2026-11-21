@@ -330,7 +330,8 @@ mod tests{
     use crate::system::reader::smb::ordinary_directory::{DirectoryParent,HeldDir,Route};
     use std::io;
     use crate::{fs::directory_birth::{DirectoryRename,DirectoryRenameSide},
-        system::reader::{InitialReader,ordinary_pool,smb::SmbSession,account::share_mode::Mode},test_support::PrivateTemp};
+        system::reader::{InitialReader,ordinary_pool,smb::SmbSession,account::{manual_work::PickerItem,share_mode::Mode}},
+        test_support::PrivateTemp};
     use std::{cell::Cell,os::unix::fs::MetadataExt};
     fn op(x:u8)->OperationId{OperationId([x;16])}
     #[test]
@@ -345,6 +346,9 @@ mod tests{
         let (child,next)=tree.make_ordinary_directory(&route,op(0x62),"Notes",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
         let native=std::fs::metadata(&next.directory().path).unwrap().ino();drop(next);
         let occupied=tree.create_file(op(0x63),"Other.txt").unwrap();
+        let entry=tree.scoped(DirectoryParent::Directory(child.id)).create_file(op(0x69),"Inside.txt").unwrap();
+        let reader=InitialReader::open(&s,pool).unwrap();
+        let web=reader.authenticate_web("first.admin","correct horse battery staple").unwrap();
         let raw=Connection::open(&src.dir,true).unwrap();
         let orig=route.selected().unwrap();
         let a=&session.original;
@@ -355,11 +359,36 @@ mod tests{
             assert!(src.transaction(&raw,c"BEGIN IMMEDIATE",|db,_|bad.issue(db)).is_err());
             assert!(src.at(|db,c|selected(db,&c,bad.op)).unwrap().is_none());
         }
+        let unproved=request(0x6a,"Unproved");
+        // Neither a deferred orphan nor a width-correct but wrong request
+        // digest is a positive pending result. Keep both probes uncommitted.
+        let breached=src.transaction(&raw,c"BEGIN IMMEDIATE",|db,c|->io::Result<()>{
+            let q=db.prepare(c"INSERT INTO main.directory_rename(rename_op,directory_id,source_op,source_gen,
+                   source_name,target_name,share_id,setting_op,auth_op) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?;
+            for(i,id)in [(1,unproved.op.0),(2,unproved.birth.id.0),(3,unproved.source.0),(7,unproved.share.0),
+                        (8,unproved.setting.0),(9,unproved.auth.0)]{q.bind_bytes(i,&id)?;}
+            q.bind_integer(4,unproved.source_gen)?;q.bind_bytes(5,unproved.old.as_bytes())?;
+            q.bind_bytes(6,unproved.target.as_bytes())?;q.done()?;drop(q);
+            let scope=DirectoryParent::Directory(child.id);
+            let orphan=Route::settled_at(db,&c,born.volume,scope).unwrap_err();
+            assert!(orphan.to_string().contains("does not have its exact original rename"));
+            let mut wrong=unproved.digest()?;wrong[0]^=1;
+            let q=db.prepare(c"INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,16,?2,?3,0)")?;
+            q.bind_bytes(1,&unproved.op.0)?;q.bind_bytes(2,&unproved.actor.0)?;q.bind_bytes(3,&wrong)?;q.done()?;drop(q);
+            let wrong=Route::settled_at(db,&c,born.volume,scope).unwrap_err();
+            assert!(wrong.to_string().contains("differs from its original request"));
+            Err(io::Error::other("rollback malformed picker specimen"))
+        }).unwrap_err();
+        assert_eq!(breached.to_string(),"rollback malformed picker specimen");
         let r=request(0x66,"reports");
         src.transaction(&raw,c"BEGIN IMMEDIATE",|db,_|r.issue(db)).unwrap();
         assert_eq!(src.at(|db,c|selected(db,&c,r.op)).unwrap(),Some(r.clone()));
         assert!(f.join("Reports").is_dir());
         assert_eq!(OrdinaryRoot::at_parent(&src,&catalog,&route,None).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+        let(rows,after)=web.manual_files(None).unwrap();
+        assert_eq!(rows.len(),2);assert!(after.is_none());
+        assert!(rows.iter().any(|row|matches!(row,PickerItem::ParentPending(id) if *id==entry.file)));
+        assert!(rows.iter().any(|row|matches!(row,PickerItem::Named(item) if item.file==occupied.file&&item.name=="Other.txt")));
         let conflicting=request(0x66,"Wrong");
         assert!(src.transaction(&raw,c"BEGIN IMMEDIATE",|db,c|conflicting.confirm(db,&c)).is_err());
         assert_eq!(src.at(|db,c|selected(db,&c,r.op)).unwrap(),Some(r.clone()));
@@ -389,6 +418,9 @@ mod tests{
         assert_eq!(now.birth(),&born);
         assert_eq!((now.position(),now.generation()),(r.op,2));
         assert_eq!(std::fs::metadata(f.join("reports/Notes")).unwrap().ino(),native);
+        let(rows,_)=web.manual_files(None).unwrap();
+        assert!(rows.iter().any(|row|matches!(row,PickerItem::Named(item)
+            if item.file==entry.file && item.name=="reports\\Notes\\Inside.txt")));
         assert!(src.transaction(&raw,c"BEGIN IMMEDIATE",|db,c|r.confirm(db,&c)).is_err());
         let (separate,_)=tree.make_ordinary_directory(&root,op(0x68),"Reports",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
         assert_ne!(separate.id,born.id);
