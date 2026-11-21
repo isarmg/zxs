@@ -3,8 +3,8 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from .. import comparison
 from ..model import Rejected
-from .selection import Verification, compare_snapshot_file, compare_version as compare_listed_version
-from .text_preview import can_compare_text, compare_folder_text, compare_text
+from .selection import PlainComparison, Verification, compare_snapshot_file, compare_version as compare_listed_version
+from .text_preview import can_compare_text, compare_folder_text, compare_plain_text, compare_text
 from .widgets import Table, button, confirm, label, line_diff_dialog
 
 
@@ -272,6 +272,10 @@ class ComparisonPane(QWidget):
         if not can_compare_text(row) or left is None or left.held is None or left.held.closed: return False
         if self.mode == "folder":
             return (self.report is not None and self.report.text is not None and self.report.text.supports(left, row))
+        if self.mode == "plain":
+            report, plain = self.report, self.plain
+            return (isinstance(report, PlainComparison) and report.left is left and report.plain is plain
+                    and plain.held is not None and not plain.held.closed and report.contains(row))
         return (self.mode in ("file", "version") and self.right is not None and self.right.held is not None
                 and not self.right.held.closed)
 
@@ -288,22 +292,25 @@ class ComparisonPane(QWidget):
 
     def read_lines(self):
         left, right, row = self.snapshot, self.right, self.table.item()
-        report, origin, picked = self.report, self.request, self.row_epoch
+        report, origin, picked, plain = self.report, self.request, self.row_epoch, self.plain
         if (not self._line_selection(row) or self.owner.pending is not None or self.text_read is not None
                 or self.text_dialog is not None):
             return
 
         def same_pair():
             return (self.matches(left, origin) and self.report is report and self.right is right and self.row_epoch is picked
-                    and self.table.item() is row and self._line_selection(row))
+                    and self.plain is plain and self.table.item() is row and self._line_selection(row))
 
         in_folder = self.mode == "folder"
-        other = (f"本次观察的原文件夹：{str(report.folder.path)!r}" if in_folder else
-                 f"所选节点：{right.browser.commit.operation}")
+        in_plain = self.mode == "plain"
+        if in_folder: other = f"本次观察的原文件夹：{str(report.folder.path)!r}"
+        elif in_plain: other = f"此前已核验的普通 ZIP：{str(plain.path)!r}"
+        else: other = f"所选节点：{right.browser.commit.operation}"
         detail = (f"相对路径：{row.path!r}\n当前快照：{str(left.path)!r}\n"
                   f"节点 {left.browser.commit.operation} · {row.before_bytes:,} B\n{other} · {row.after_bytes:,} B")
-        reading = ("只复核这次观察的原文件和对应归档成员，不重扫或改用其他文件。" if in_folder else
-                   "只读取两份原归档中这一个成员的完整正文。")
+        if in_folder: reading = "只复核这次观察的原文件和对应归档成员，不重扫或改用其他文件。"
+        elif in_plain: reading = "只从两份原句柄复核这一个成员。不按名称重开、不重新计算整包摘要或解释普通 ZIP 注释。"
+        else: reading = "只读取两份原归档中这一个成员的完整正文。"
         if (not confirm(self, "核验后查看逐行差异", detail + "\n" + reading
                         + "结果只在此处以纯文本显示，换行采用预览规则；每侧限 64 KiB、1,024 行，可取消。",
                         attestation="我确认只看上面两份原件的这个文本，不打开外部应用。",
@@ -316,6 +323,7 @@ class ComparisonPane(QWidget):
         def work():
             try:
                 if in_folder: return compare_folder_text(left, report, row, observer=watch), None
+                if in_plain: return compare_plain_text(report, row, observer=watch), None
                 return compare_text(left, right, row, observer=watch), None
             except Exception as error: return None, error
 
@@ -371,9 +379,10 @@ class ComparisonPane(QWidget):
                 self.summary.setText(pair + f"\n未完成比较：{error}")
                 self.owner.inform("未完成普通 ZIP 比较；请查看对比页。")
                 return
-            self.report = report
+            self.report = PlainComparison(report.added, report.changed, report.missing, report.rows, chosen, plain)
             self.summary.setText(pair + f"\n仅普通 ZIP {report.added} · 不同 {report.changed} · 仅快照 {report.missing}。"
-                                 + ("树内容没有差异；此处未比较两个归档的原始字节。" if not report.rows else ""))
+                                 + ("\n选中同路径变化的两个小文件，可另行确认并查看逐行差异。" if report.rows else
+                                    "\n树内容没有差异；此处未比较两个归档的原始字节。"))
             self.show_page(0)
             self.owner.inform("完成两份已核验内容的只读比较；没有提取、同步或修改来源。")
 

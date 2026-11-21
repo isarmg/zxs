@@ -205,15 +205,21 @@ class Native:
         if not 0 < size < len(buf): raise Rejected("cannot verify the held volume GUID name")
         return buf.value
 
+    def require_local_ntfs(self, h):
+        """Query the actual held object; never resolve a drive, file name or provider path."""
+        dev, io = _Device(), _IO()
+        s = self.volume_info(h,c.byref(io),c.byref(dev),c.sizeof(dev),4)  # FileFsDeviceInformation
+        fs = c.create_unicode_buffer(32)
+        if (s or io.result.status or
+                io.information != c.sizeof(dev) or dev.kind != 7 or dev.characteristics & 0x1055 or
+                not self.volume_name(h,None,0,None,None,None,fs,len(fs)) or fs.value != "NTFS"):
+            raise Rejected("cannot prove a fixed, nonremote NTFS volume for the held object")
+
     def admit_volume(self, root):
         guid = self.guid_name(root)
-        dev, io = _Device(), _IO()
-        s = self.volume_info(root,c.byref(io),c.byref(dev),c.sizeof(dev),4)  # FileFsDeviceInformation
-        fs = c.create_unicode_buffer(32)
-        if (not GUID_ROOT.fullmatch(guid) or self.drive_type(guid) != 3 or s or io.result.status or
-                io.information != c.sizeof(dev) or dev.kind != 7 or dev.characteristics & 0x1055 or
-                not self.volume_name(root,None,0,None,None,None,fs,len(fs)) or fs.value != "NTFS"):
+        if not GUID_ROOT.fullmatch(guid) or self.drive_type(guid) != 3:
             raise Rejected("cannot prove a fixed, nonremote NTFS volume for the selected directory")
+        self.require_local_ntfs(root)
         return guid
 
     def listing(self, h):

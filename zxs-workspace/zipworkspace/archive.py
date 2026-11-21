@@ -233,9 +233,9 @@ def _selected_index(document, length, marker=None, *, check=None):
 
 
 @contextmanager
-def stored_member(document, length, marker, name, size, *, locate=False):
+def stored_member(document, length, marker, name, size, *, locate=False, check=None):
     """Bound one admitted Store member; optionally return the verified physical body start."""
-    with _selected_index(document, length, marker) as (archive, lanes):
+    with _selected_index(document, length, marker, check=check) as (archive, lanes):
         matches = [lane for lane in lanes if lane[0].filename == name]
         if len(matches) != 1: raise Rejected("cannot identify the exact original member")
         (item, stop, form), = matches

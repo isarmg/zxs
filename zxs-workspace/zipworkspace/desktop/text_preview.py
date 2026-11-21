@@ -21,7 +21,7 @@ from ..lifecycle import MissingBaseline, _base_leaf, _idle_live_base
 from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected, member_name
 from ..private_freeze import mount_id
 from ..private_stage import same_mount
-from .selection import PlainSelection, Selection
+from .selection import PlainComparison, PlainSelection, Selection
 
 LIMIT = 256 * 1024
 COMPARE_LINES = 1024
@@ -303,6 +303,84 @@ def _small_lines(data):
     except UnicodeError as error: raise Rejected("两个原件已核验，但至少一个不是严格 UTF-8 文本") from error
     if not _showable(text): raise Rejected("内容含不可显示控制字符，未交逐行差异")
     return _split_comparison(text)
+
+
+def _plain_archive_state(view, fd):
+    # The original display handle is the authority here. Even a metadata lookup
+    # by path could traverse a newly introduced provider or reparse point.
+    if _stamp(os.fstat(fd)) != view.observed:
+        raise Rejected("对照中的原归档已变化；未按名称打开其他文件")
+    if sys.platform == "darwin":
+        from ..macos_read import local_object
+        local_object(view.path.name, fd)
+    elif os.name == "nt":
+        import msvcrt
+        from ..windows_nt import backend
+        native = backend()
+        if native is None: raise Rejected("无法核对所持 Windows 归档的本机卷和文件类型")
+        handle = msvcrt.get_osfhandle(fd)  # Borrowed, owned by the CRT descriptor.
+        native.require_local_ntfs(handle)
+        state = native.file_state(handle)
+        if state[1].directory or state[1].size != view.observed[2]:
+            raise Rejected("所持 Windows 归档不是原普通文件")
+        return state
+    return view.observed
+
+
+def compare_plain_text(report, row, *, observer):
+    """Only the exact compared row, with both original displays still held."""
+    if not isinstance(report, PlainComparison) or not can_compare_text(row) or not report.contains(row):
+        raise Rejected("请选择本次 Zip 对照中同一路径的两个小普通文件")
+    if sys.platform == "darwin":
+        from ..macos_read import in_disposable_thread, no_materialization
+        return in_disposable_thread(_compare_plain_text, report, row, observer, no_materialization)
+    return _compare_plain_text(report, row, observer, nullcontext)
+
+
+def _compare_plain_text(report, row, observer, read_policy):
+    left, right = report.left, report.plain
+    if any(view.held is None or view.held.closed for view in (left, right)):
+        raise Rejected("双方原归档必须仍由窗口持有；未重新打开路径")
+    parent, _, name = row.path.rpartition("/")
+    entries = left.browser.entry(parent, name), right.index.entry(parent, name)
+    for entry, size in zip(entries, (row.before_bytes, row.after_bytes), strict=True):
+        if entry is None or entry.kind != "file" or entry.size_bytes != size:
+            raise Rejected("差异行不再对应两份原索引里的普通文件")
+    if entries[0].sha256 == entries[1].sha256:
+        raise Rejected("两条原成员没有字节差异")
+
+    def selected_state(view):
+        observer.check()
+        fd = view.held.duplicate()  # No shared cursor access until a real read lease.
+        try: return _plain_archive_state(view, fd)
+        finally: os.close(fd)
+
+    # The Apple worker owns the entire operation including the final metadata
+    # checks and restores its policy before any result can escape it.
+    with read_policy():
+        observer.begin("identity")
+        states = tuple(selected_state(view) for view in (left, right))
+        observer.begin("members", row.before_bytes + row.after_bytes)
+        sides = []
+        for view, entry, marker, state in zip((left, right), entries, (left.browser.commit, None), states, strict=True):
+            observer.check()
+            with view.held.read_lease() as fd:
+                if _plain_archive_state(view, fd) != state:
+                    raise Rejected("对照中的原归档身份或状态已变化")
+                end = view.observed[2]
+                with _binary_reader(fd, end, observer.check) as raw:
+                    with stored_member(_Checked(raw, observer.check), end, marker, row.path, entry.size_bytes,
+                                       check=observer.check) as source:
+                        data = _verified_small(source.read, (entry.size_bytes, entry.sha256), observer)
+                if _plain_archive_state(view, fd) != state:
+                    raise Rejected("对照中的原归档身份或状态已变化")
+            sides.append(_small_lines(data))
+        display = _unified(sides, ("当前快照", "本次普通 ZIP"), observer)
+        observer.begin("identity")
+        if tuple(selected_state(view) for view in (left, right)) != states:
+            raise Rejected("对照中的原归档身份或状态已变化")
+    observer.check()
+    return display
 
 
 def compare_folder_text(left, report, row, *, observer):

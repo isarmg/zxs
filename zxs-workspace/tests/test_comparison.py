@@ -1,5 +1,6 @@
 from concurrent.futures import Future
 from contextlib import contextmanager
+from dataclasses import replace
 import errno
 import hashlib
 import os
@@ -7,15 +8,16 @@ from importlib.util import find_spec
 from pathlib import Path
 import sqlite3
 import tempfile
+from threading import get_ident
 import unittest
 from unittest.mock import patch
 import zipfile
 
 from zipworkspace import comparison, freeze
 from zipworkspace.desktop import text_preview
-from zipworkspace.desktop.selection import (PlainSelection, Selection, StoreSelection, Verification,
+from zipworkspace.desktop.selection import (PlainComparison, PlainSelection, Selection, StoreSelection, Verification,
                                             compare_snapshot_file, compare_version)
-from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
+from zipworkspace.model import CHUNK, MARKER, Commit, Manifest, Rejected
 
 
 def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None, repo="1"*32):
@@ -28,6 +30,157 @@ def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None, repo="1
             out.writestr(name + ("/" if is_dir else ""), data or b"")
         out.comment = Commit(repo, "2"*32, generation, operation, parent, manifest.digest()).encode()
     return Selection.open(path)
+
+
+class CompareOrdinaryZipText(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+
+    def original_pair(self, after=b"<new>\n"):
+        left_path, right_path = self.root/"source.zxs", self.root/"editable-copy.zip"
+        snapshot(left_path, [("same/notes", b"old\n"), ("other/notes", b"unread left")])
+        left = Selection.open(left_path, retain=True)
+        self.addCleanup(left.release_display)
+        with zipfile.ZipFile(right_path, "w") as z:
+            z.writestr("same/notes", after)
+            z.writestr("other/notes", b"unread right")
+            z.comment = MARKER + b"this is not a valid commit"
+        right = PlainSelection.open(right_path)
+        self.addCleanup(right.release_display)
+        changes = comparison.compare_plain(left.browser, right.rows)
+        report = PlainComparison(changes.added, changes.changed, changes.missing, changes.rows, left, right)
+        row = next(row for row in report.rows if row.path == "same/notes")
+        return report, row
+
+    def test_reads_only_exact_held_members_without_parsing_plain_comment_or_touching_paths(self):
+        report, row = self.original_pair("<新>𠀀\n".encode())
+        handles = [view.held.fileno() for view in (report.left, report.plain)]
+        for fd in handles: os.lseek(fd, 11, os.SEEK_SET)
+        with patch.object(Path, "stat", side_effect=AssertionError("do not resolve a displayed path")), \
+             patch.object(os, "open", side_effect=AssertionError("do not reopen either original")), \
+             patch.object(text_preview, "stored_member", wraps=text_preview.stored_member) as stored:
+            out = text_preview.compare_plain_text(report, row, observer=Verification())
+        self.assertEqual([call.args[3] for call in stored.call_args_list], [row.path, row.path])
+        self.assertEqual([call.args[2] for call in stored.call_args_list], [report.left.browser.commit, None])
+        self.assertIn("+++ 本次普通 ZIP", out)
+        self.assertIn("+<新>𠀀", out)
+        self.assertNotIn("unread", out)
+        for fd in handles: self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 11)
+
+    def test_equal_but_foreign_row_and_closed_plain_owner_never_enter_member_read(self):
+        report, row = self.original_pair()
+        with patch.object(text_preview, "stored_member", side_effect=AssertionError("must not read")):
+            with self.assertRaisesRegex(Rejected, "请选择本次"):
+                text_preview.compare_plain_text(report, replace(row), observer=Verification())
+            report.plain.release_display()
+            with self.assertRaisesRegex(Rejected, "必须仍由窗口持有"):
+                text_preview.compare_plain_text(report, row, observer=Verification())
+        self.assertFalse(report.left.held.closed)
+
+    def test_strict_text_even_when_right_crc_and_original_digest_are_valid(self):
+        report, row = self.original_pair(b"\xff")
+        with self.assertRaisesRegex(Rejected, "严格 UTF-8"):
+            text_preview.compare_plain_text(report, row, observer=Verification())
+
+    def test_unaccepted_second_original_is_rejected_before_reading_either_body(self):
+        report, row = self.original_pair()
+        inspect = text_preview._plain_archive_state
+
+        def unavailable(view, fd):
+            self.assertIsNotNone(fd)
+            if view is report.plain: raise Rejected("other original cannot be proved")
+            return inspect(view, fd)
+
+        with patch.object(text_preview, "_plain_archive_state", side_effect=unavailable), \
+             patch.object(text_preview, "stored_member", side_effect=AssertionError("must not read")):
+            with self.assertRaisesRegex(Rejected, "cannot be proved"):
+                text_preview.compare_plain_text(report, row, observer=Verification())
+
+    def test_macos_reads_and_releases_on_disposable_thread_when_policy_restore_fails(self):
+        from zipworkspace import macos_read
+        report, row = self.original_pair()
+        caller = get_ident()
+        calls = []
+
+        @contextmanager
+        def policy():
+            calls.append(("disable", get_ident()))
+            yield
+            calls.append(("restore", get_ident()))
+            raise Rejected("restoration rejected")
+
+        def native(_name, _fd): calls.append(("held", get_ident()))
+
+        with patch.object(text_preview.sys, "platform", "darwin"), \
+             patch.object(macos_read, "no_materialization", side_effect=policy), \
+             patch.object(macos_read, "local_object", side_effect=native):
+            with self.assertRaisesRegex(Rejected, "restoration rejected"):
+                text_preview.compare_plain_text(report, row, observer=Verification())
+        self.assertEqual([step for step, _ in calls], ["disable", *(["held"] * 8), "restore"])
+        self.assertEqual(len({thread for _, thread in calls}), 1)
+        self.assertNotEqual(calls[0][1], caller)
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional desktop")
+    def test_qt_requires_consent_and_drops_text_after_byte_identical_plain_reselection(self):
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit
+        from zipworkspace.desktop import comparison_pane as ui
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        report, row = self.original_pair()
+        replacement = PlainSelection.open(report.plain.path)  # New view, even with the same bytes and name.
+        self.addCleanup(replacement.release_display)
+        win = Window()
+        pane = win.archive.comparison
+        queue = []
+
+        def defer(work):
+            future = Future()
+            queue.append((future, work))
+            return future
+
+        def delivery():
+            future, work = queue.pop(0)
+            future.set_result(work())
+            win.poll()
+
+        def locate():
+            self.assertTrue(pane.report.contains(pane.report.rows[-1]))
+            i = next(i for i, (_, item) in enumerate(pane.table.rows.rows) if item.path == row.path)
+            pane.table.selectRow(i)
+            self.assertTrue(pane.lines.isEnabled())
+
+        try:
+            win.archive.show_selection(report.left)
+            win.plain_import.show_selection(report.plain)
+            with patch.object(win.pool, "submit", side_effect=defer):
+                win.plain_import.compare_to_current(); delivery(); locate()
+                with patch.object(ui, "confirm", return_value=False): pane.lines.click()
+                self.assertFalse(queue)
+                with patch.object(ui, "confirm", return_value=True): pane.lines.click()
+                delivery()
+                shown = pane.text_dialog.findChild(QPlainTextEdit)
+                self.assertTrue(shown.isReadOnly())
+                self.assertIn("+<new>", shown.toPlainText())
+                pane.close_lines()
+
+                with patch.object(ui, "confirm", return_value=True): pane.lines.click()
+                future, work = queue.pop(0)
+                future.set_result(work())
+                win.plain_import.show_selection(replacement)
+                notice = win.note.text()
+                win.poll()
+                self.assertEqual(win.note.text(), notice)
+                self.assertIsNone(pane.report)
+                self.assertIsNone(pane.text_dialog)
+                self.assertTrue(report.plain.held.closed)
+                self.assertFalse(report.left.held.closed)
+                self.assertFalse(replacement.held.closed)
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
 
 class CompareVersions(unittest.TestCase):

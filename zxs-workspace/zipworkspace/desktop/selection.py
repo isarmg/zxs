@@ -1,4 +1,5 @@
 """A verified display is not authority to write or a claim about raw ZIP bytes."""
+from bisect import bisect_left
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 import os
@@ -12,7 +13,7 @@ from .. import plain_import
 
 from ..archive import stamp
 from ..browser import ArchiveBrowser, DirectoryIndex
-from ..comparison import Changes
+from ..comparison import Changes, Difference
 from ..document import PositionalDocument, archive_sha, named_document, native_identity, relative_document
 from ..model import Rejected
 from ..refs import Catalog, Node, SlotPreview, slot_previews
@@ -381,6 +382,18 @@ def read_registered_baseline(live, displayed, *, observer):
 class ComparedArchives:
     right: Selection
     changes: Changes
+
+
+@dataclass(frozen=True, slots=True)
+class PlainComparison(Changes):
+    """A delivered list tied to these two existing display owners, not a new loan."""
+    left: Selection = field(repr=False, compare=False)
+    plain: PlainSelection = field(repr=False, compare=False)
+
+    def contains(self, row):
+        if not isinstance(row, Difference): return False
+        index = bisect_left(self.rows, row.path, key=lambda item: item.path)
+        return index < len(self.rows) and self.rows[index] is row
 
 
 def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, node: Node, *, observer=None,
