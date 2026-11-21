@@ -501,7 +501,9 @@ impl<'t,'s,'r> Current<'t,'s,'r>{
     }
     pub(crate) fn size(&self)->u64{self.original.size()}
     pub(crate) fn working_original(&self)->Option<OperationId>{self.original.live.map(|r|r.record.key().save)}
-    pub(crate) fn working_revision(&self)->u64{self.original.live.map(|r|r.record.key().revision)}
+    // Persisted working revisions start at 1. Zero denotes no selected save,
+    // as in ordinary directory rows and unopened native member offers.
+    pub(crate) fn working_revision(&self)->u64{self.original.live.map_or(0,|r|r.record.key().revision)}
     pub(super) fn original_ids(&self)->(crate::PoolId,crate::VolumeId,crate::EntryId,FileId){
         let file=&self.original;
         (file.birth.pool,file.place.volume,file.birth.entry,file.birth.file)

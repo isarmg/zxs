@@ -69,11 +69,11 @@ fn release_size_above_64_mib_reaches_the_actual_bounded_reader(){
     // With no bytes available, UnexpectedEof proves the real read was attempted;
     // InvalidInput proves rejection before a read. No giant fixture is allocated.
     for n in [(64<<20)+1,128<<20] {
-        let err=hash_upto(&mut io::empty(),n,super::super::MAX_IMAGE).unwrap_err();
+        let err=hash_upto(&mut io::empty(),n,super::super::release::ELF).unwrap_err();
         assert_eq!(err.kind(),io::ErrorKind::UnexpectedEof);
         assert_eq!(hash_upto(&mut io::empty(),n,64<<20).unwrap_err().kind(),io::ErrorKind::InvalidInput);
     }
-    assert_eq!(hash_upto(&mut io::empty(),(128<<20)+1,super::super::MAX_IMAGE).unwrap_err().kind(),io::ErrorKind::InvalidInput);
+    assert_eq!(hash_upto(&mut io::empty(),(128<<20)+1,super::super::release::ELF).unwrap_err().kind(),io::ErrorKind::InvalidInput);
 }
 
 #[test]

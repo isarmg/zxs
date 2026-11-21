@@ -145,7 +145,7 @@ mod tests{
         assert!(AtStartup::Unconfirmed.original().is_none());
         assert_ne!(AtStartup::Missing.private_status(),AtStartup::Unconfirmed.private_status());
         assert!(no_entry(&io::Error::from(Errno::NOENT)));
-        for e in [Errno::ACCES,Errno::NOTDIR,Errno::LOOP,Errno::IO]{
+        for e in [Errno::ACCESS,Errno::NOTDIR,Errno::LOOP,Errno::IO]{
             assert!(!no_entry(&io::Error::from(e)));
         }
     }

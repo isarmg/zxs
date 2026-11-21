@@ -1,7 +1,8 @@
 //! Fresh-root ancestry in the current maintenance thread's mount namespace.
 //! We never search other paths, open files on a volume, or recover a hidden parent.
 use crate::pinned::{Entity, Mount, Pinned, invalid, local_data_filesystem};
-use rustix::fs::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, Mode, OFlags, XFS_SUPER_MAGIC, fgetxattr, makedev, openat};
+use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
+use rustix::fs::{Mode, OFlags, fgetxattr, makedev, openat};
 use rustix::io::Errno;
 use std::{collections::BTreeMap, fs::File, io::{self, Read}, os::unix::fs::MetadataExt};
 

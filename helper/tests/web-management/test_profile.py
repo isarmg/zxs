@@ -21,11 +21,16 @@ class ProfileContract(unittest.TestCase):
     def test_fixed_unit_starts_only_native_zxs_and_has_no_site_or_socket_dependency(self):
         self.assertEqual(hashlib.sha256(self.data).hexdigest(),p.TEMPLATE_SHA)
         out=p.units(self.data,p.values(self.settings))
+        lines=out.splitlines()
         for line in (b"User=1001",b"Group=2001",b"Environment=ZXS_POOL_ID="+b"01"*16,
                      b'Environment="ZXS_SYSTEM_ROOT=/srv/zxs/system"',b'ExecStart=/usr/bin/zxs',
                      b'ReadWritePaths="/srv/zxs/system"',b"RestrictAddressFamilies=AF_UNIX AF_INET"):
-            self.assertIn(line,out.splitlines())
-        for no in (b"[Install]", b"ExecStartPre=", b"[Socket]", b".socket", b"Conflicts=", b"Proxy",
+            self.assertIn(line,lines)
+        self.assertIn(b"DefaultDependencies=no",lines)
+        self.assertIn(b"Before=shutdown.target",lines)
+        self.assertEqual([line for line in lines if line.startswith(b"Conflicts=")],
+                         [b"Conflicts=shutdown.target"])
+        for no in (b"[Install]", b"ExecStartPre=", b"[Socket]", b".socket", b"Proxy",
                    b"Listen", b"TLS", b"ZXS_WEB_ORIGIN", b"ZXS_WEB_PROXY_UID", b"nginx", b"ZXS_WEB_PORT"):
             self.assertNotIn(no,out)
         self.assertEqual({x.name for x in base.iterdir() if x.is_file()},{p.TEMPLATE,"profile.py"})

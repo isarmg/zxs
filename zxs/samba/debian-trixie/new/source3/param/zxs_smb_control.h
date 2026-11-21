@@ -3,6 +3,7 @@
  * trusted supervisor. Not a listener, password interface or login token. */
 #ifndef ZXS_SMB_CONTROL_H
 #define ZXS_SMB_CONTROL_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -113,7 +114,7 @@ int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAM
 int zxs_xfer_reply(int fd,uint8_t status,const uint8_t file[16],const uint8_t op[16]);
 int zxs_xfer_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t receipt[16]);
 /* A rename on the already-held ordinary directory endpoint. */
-#define ZXS_OD_RELABEL 240u
+#define ZXS_OD_RELABEL 240
 int zxs_odir_relabel_query(int tree,const uint8_t *name,size_t n);
 int zxs_odir_relabel_reply(int fd,uint8_t status,const uint8_t directory[16],const uint8_t op[16]);
 int zxs_odir_relabel_read(int fd,const uint8_t expected[16],uint8_t *status,uint8_t op[16]);

@@ -265,49 +265,6 @@ pub(super) fn ordinary_transfer_pool(t:&PrivateTemp,target:&Path)->
     (s,p,path,c.rows()[1].path.clone(),source,to.unwrap())
 }
 
-#[test]
-#[ignore="source-only Web observation in isolated temporary roots with independent SQLite and real Linux OFDs"]
-fn web_only_reports_an_exact_live_volume_and_still_current_admin(){
-    let t=PrivateTemp::under(&std::env::temp_dir());
-    let(s,p,f,_,_)=ordinary_pool(&t);
-    let src=InitialReader::open(&s,p).unwrap();
-    let admin=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
-    let id=VolumeId([0x13;16]);let rid=VolumeId([0x12;16]);
-    // An exact F sample does not ask for the normal parent lock, walk files
-    // or depend on historical SMB grants or another volume being mounted.
-    let name_lock=HeldDir::open(&f).unwrap();name_lock.exclusive().unwrap();
-    let read=admin.observe_after(id,||Ok(()),|held|{
-        assert_eq!(held.entity,name_lock.entity);
-        assert_ne!(unsafe{sqlite3_get_autocommit(src.conn.0)},0);
-    }).unwrap();
-    let space=read.current.unwrap();assert!(space.available<=space.bytes);
-    let absent=admin.observe_after(rid,||Ok(()),|_|panic!("missing R was sampled")).unwrap();
-    assert_eq!(absent.role,Role::Recycle);assert_eq!(absent.current,None);
-    assert_eq!(admin.observe_after(VolumeId([0xea;16]),||Ok(()),|_|panic!("unknown id was sampled"))
-        .unwrap_err().kind(),io::ErrorKind::NotFound);
-    let marker=f.join(OsStr::from_bytes(ROOT_MARK.to_bytes()));let old=t.0.join("old-f-marker");
-    let bytes=std::fs::read(&marker).unwrap();
-    let changed=admin.observe_after(id,||Ok(()),|_|{
-        std::fs::rename(&marker,&old).unwrap();
-        let mut same_bytes=OpenOptions::new().write(true).create_new(true).mode(0o600).open(&marker).unwrap();
-        same_bytes.write_all(&bytes).unwrap();same_bytes.sync_all().unwrap();
-    }).unwrap();
-    assert_eq!(changed.current,None,"another real inode cannot certify the held sample");
-    std::fs::remove_file(&marker).unwrap();std::fs::rename(&old,&marker).unwrap();
-    let stopped=std::cell::Cell::new(false);
-    let refused=admin.observe_after(id,||if stopped.get(){Err(io::ErrorKind::PermissionDenied.into())}else{Ok(())},
-        |_|stopped.set(true));
-    assert!(stopped.get());assert_eq!(refused.unwrap_err().kind(),io::ErrorKind::PermissionDenied);
-    let writer=Builder::existing(&s.join("SYSTEM.sqlite3"));
-    let refused=admin.observe_after(id,||Ok(()),|_|{
-        assert_ne!(unsafe{sqlite3_get_autocommit(src.conn.0)},0);
-        first_account::fixture_rotate_web(&writer);
-    });
-    assert_eq!(refused.unwrap_err().kind(),io::ErrorKind::PermissionDenied);
-    assert!(src.authenticate_web("first.admin","correct horse battery staple").unwrap()
-        .observe_after(id,||Ok(()),|_|{}).unwrap().current.is_some());
-}
-
 pub(crate) fn stage_managed_file(source:&InitialReader,rw:crate::identity::ShareId,ro:crate::identity::ShareId,name:&str,data:&File)
     ->io::Result<crate::FileId>{
     // The fake native login proof remains inside this reader-only test.

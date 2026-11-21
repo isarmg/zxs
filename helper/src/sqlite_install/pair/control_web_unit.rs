@@ -57,7 +57,7 @@ impl Control{
         let target=Target::select(&host)?;
         let fragment=Fragment::render(pin.path(),&self.pool,subject.1,subject.2)?;
         let installed=target.require_installed(&fragment,None)?;
-        let full=||{
+        let full=|| -> io::Result<()>{
             check()?;program.recheck()?;
             target.require_installed(&fragment,Some(&installed))?;Ok(())
         };
@@ -91,7 +91,9 @@ impl Control{
         };
         let mut pretty=String::new();smb_profile::escaped(&mut pretty,pin.path().as_os_str().as_bytes());
         let active=match current{State::Inactive=>"当前由 PID 1 报告未运行。".to_owned(),
-            State::Running{pid,invocation}=>format!("正在运行的原实例 PID {}，本次 InvocationID {}。",pid.as_raw_pid(),hex(&invocation))};
+            State::Running{pid,invocation}=>format!("正在运行的原实例 PID {}，本次 InvocationID {}。",pid.as_raw_pid(),hex(&invocation)),
+            State::Draining=>return Err(no()),
+        };
         let preview=format!("{purpose}\n固定单元 {UNIT}。{active}\n原 SYSTEM \"{pretty}\"（dev {} / inode {} / mount {}），存储 UID/GID {}/{}，原池 {}。\n本机维护主体 {}，审批参考 {}；主片段 SHA-256 {}；已核准的 ZXS ELF SHA-256 {}。\n",
             pin.entity().dev,pin.entity().ino,pin.require_same_named_mount()?.id,subject.1,subject.2,hex(&self.pool),
             hex(&subject.0),hex(&reference),hex(&fragment.sha()),hex(&self.elf));
@@ -100,7 +102,7 @@ impl Control{
             verify_web_unit(&pin,&share,subject,[self.pool,init,setup],true,&check)?;
         }
         if read()?!=current{return Err(no());}
-        let cut=||{full()?;if let Some(p)=&running{p.require(&program.file,&pin,mark.entity(),subject.1,subject.2)?;}Ok(())};
+        let cut=|| -> io::Result<()>{full()?;if let Some(p)=&running{p.require(&program.file,&pin,mark.entity(),subject.1,subject.2)?;}Ok(())};
         cut()?;
         let mut stop_deadline=None;
         if start{

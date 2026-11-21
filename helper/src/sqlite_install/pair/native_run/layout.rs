@@ -95,7 +95,7 @@ impl Resolved {
         let ex=system.storage_directory()?;flock(&ex,FlockOperation::NonBlockingLockExclusive)?;
         let check=||{tty.check()?;require(&system,&ex,subject)};
         check()?;
-        let mut nonce=[0;32];nonce[..16].copy_from_slice(&random()?);nonce[16..].copy_from_slice(&random()?);
+        let mut nonce=[0;32];nonce[..16].copy_from_slice(&random::<16>()?);nonce[16..].copy_from_slice(&random::<16>()?);
         let req=Question{nonce,actor:subject.0,pool:origin.pool,init:origin.init,location:place(&system)?,system:system.path().to_path_buf(),
             paths:choices.iter().map(|c|c.path.clone()).collect()};
         let (folders,claim)=read_layout(req,&ex,subject,check,origin)?;
@@ -226,7 +226,7 @@ fn send_media(channel:&Channel,scope:&[u8;32],i:usize,claim:&Initial)->io::Resul
 }
 pub(in crate::sqlite_install::pair) fn online_roots(site:&NativeSite)->io::Result<observed::StartupClaims>{
     let (pin,ex,..)=site.online_sources()?;let subject=site.subject();
-    let mut nonce=[0;32];nonce[..16].copy_from_slice(&random()?);nonce[16..].copy_from_slice(&random()?);
+    let mut nonce=[0;32];nonce[..16].copy_from_slice(&random::<16>()?);nonce[16..].copy_from_slice(&random::<16>()?);
     let q=LiveQuery{nonce,actor:subject.0,location:place(pin)?,system:pin.path().into(),plan:site.first_plan().clone(),bound:site.bound_bytes()};
     let raw=q.emit()?;
     query(&raw,ex,subject,||site.require(),|channel,scope,until|{
@@ -271,7 +271,7 @@ impl WebQuestion{
 pub(in crate::sqlite_install::pair) fn verify_web_unit(pin:&Pinned,ex:&File,subject:(Id,u32,u32),ids:[Id;3],shared:bool,
     check:impl Fn()->io::Result<()>)->io::Result<()> {
     let [pool,init,setup]=ids;
-    let mut nonce=[0;32];nonce[..16].copy_from_slice(&random()?);nonce[16..].copy_from_slice(&random()?);
+    let mut nonce=[0;32];nonce[..16].copy_from_slice(&random::<16>()?);nonce[16..].copy_from_slice(&random::<16>()?);
     let fish=WebQuestion{nonce,actor:subject.0,pool,init,setup,location:place(pin)?,system:pin.path().to_path_buf(),shared};
     query(&fish.encode()?,ex,subject,&check,|channel,scope,until|{
         let (report,[])=channel.wait_checked::<0>(Kind::ConfirmedWeb,scope,until,&check)?;

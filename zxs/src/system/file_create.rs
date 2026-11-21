@@ -272,7 +272,7 @@ impl<'s> CreateAt<'s,'_>{
 impl<'s,'r> Tree<'s,'r>{
     /// No physical observation takes place in the caller's name cut. A
     /// pending birth is not absence and cannot be resolved by using its name.
-    pub(super) fn occupied_name(&self,name:&str,write:bool)->io::Result<Option<FileId>>{
+    pub(in crate::system::reader) fn occupied_name(&self,name:&str,write:bool)->io::Result<Option<FileId>>{
         display::component(name.as_bytes(),222)?;
         self.session.source.at(|db,c|{
             self.require(db,&c,write)?;

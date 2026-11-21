@@ -4,7 +4,7 @@
 //! lookup; it never proves what a new fragment would load or launch.
 use super::{Id,bad,inactive_web_unit::{UNIT,require_amd64_elf},web_systemd_state::{self,State}};
 use crate::fs_tools::RuntimeFile;
-use rustix::{io::Errno,net::{AddressFamily,SocketAddrUnix,SocketFlags,SocketType,connect,socket,sockopt},
+use rustix::{io::Errno,net::{AddressFamily,SocketAddrUnix,SocketFlags,SocketType,connect,socket_with,sockopt},
     pipe::{PipeFlags,pipe_with}};
 use std::{collections::BTreeMap,fs::File,io,os::fd::AsRawFd,
     path::Path,process::{Child,Command,Stdio},time::{Duration,Instant}};
@@ -30,7 +30,7 @@ fn manager()->io::Result<()>{
     // mutation. Root systemctl's BUS_MANAGER local transport uses this exact
     // private pathname; no user bus, SSH, machine transport or environment
     // override is admitted. The actual kernel peer must be host PID 1.
-    let peer=socket(AddressFamily::UNIX,SocketType::STREAM,SocketFlags::CLOEXEC|SocketFlags::NONBLOCK,None)?;
+    let peer=socket_with(AddressFamily::UNIX,SocketType::STREAM,SocketFlags::CLOEXEC|SocketFlags::NONBLOCK,None)?;
     connect(&peer,&SocketAddrUnix::new("/run/systemd/private")?)?;
     let who=sockopt::socket_peercred(&peer)?;
     if who.pid.as_raw_pid()!=1||!who.uid.is_root(){return Err(no());}

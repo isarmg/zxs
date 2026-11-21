@@ -1,7 +1,8 @@
 //! Reference-volume policy shared by the Native and Rust SMB roles.
 //! These are physical observations, never a session or a file grant.
 use super::InitialReader;
-use super::super::{Catalog,share_mode::{Mode,Setting},volume::{Capacity,OrdinaryRoot}};
+use super::super::{Catalog,share_mode::{Mode,Setting}};
+use crate::system::reader::volume::{Capacity,OrdinaryRoot};
 use std::io;
 
 pub(super) struct Reference<'r>{

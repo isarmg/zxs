@@ -163,7 +163,7 @@ pub(in crate::sqlite_install::pair) fn run(selected:Selection)->io::Result<Origi
     let helper=RuntimeFile::open(HELPER,true,64<<20)?;
     helper.require_running_helper()?;
     let (actor,uid,gid)=site.subject();
-    let mut invocation=[0;32];invocation[..16].copy_from_slice(&random()?);invocation[16..].copy_from_slice(&random()?);
+    let mut invocation=[0;32];invocation[..16].copy_from_slice(&random::<16>()?);invocation[16..].copy_from_slice(&random::<16>()?);
     let m=Manifest{intent:selected.intent,invocation,pool:selected.pool,init:selected.init,instance:selected.instance,
         provision:selected.provision,op:selected.op,actor,approval:selected.reference,live:site.live_digest(),
         bound:site.bound_bytes(),system:selected.system,origin:site.system_location()?,role:selected.role,plan:site.first_plan().clone()};

@@ -18,7 +18,7 @@ const LEAF:OFlags=OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
 const SAFE:ResolveFlags=ResolveFlags::BENEATH.union(ResolveFlags::NO_SYMLINKS)
     .union(ResolveFlags::NO_MAGICLINKS).union(ResolveFlags::NO_XDEV);
 const MAX:u64=512<<10;
-const ELF:u64=128<<20;
+pub(super) const ELF:u64=128<<20;
 const NAMES:[&str;2]=["smbd","storage"];
 const PROGRAMS:[&str;2]=["usr/lib/zxs-smb-runtime/debian13-amd64/sbin/smbd",
     "usr/lib/zxs-smb-runtime/debian13-amd64/bin/zxs-smb-storage"];

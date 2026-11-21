@@ -158,7 +158,7 @@ impl Runtime {
 mod tests {
     use super::*;
     #[test]
-    fn btrfs_profile_pins_all_its_guest_libraries_without_another_device():
+    fn btrfs_profile_pins_all_its_guest_libraries_without_another_device(){
         let line=|k|format!("{k} {}\n","ab".repeat(32));
         let full=format!("{BTRFS_PROFILE}\n{}",Engine::Btrfs.slots().map(|(k,_)|line(k)).collect::<String>());
         assert_eq!(full.len() as u64,BTRFS_POLICY_BYTES);

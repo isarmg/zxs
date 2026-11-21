@@ -1,7 +1,8 @@
 //! The approved exact boot plan and its original committed setup receipts.
 //! Decoding a plan never creates an SMB session or a directory handle.
 use super::{Connection,InitialReader,denied};
-use super::super::{Catalog,check,credential::Pair,share_mode::{self,Mode,Setting},sqlite3_step};
+use super::super::{Catalog,check,share_mode::{self,Mode,Setting},sqlite3_step};
+use crate::system::reader::credential::Pair;
 use crate::{OperationId,Role,VolumeId,display,fs::invalid,hash::{Sha256,digest},identity::ShareId};
 use std::{collections::BTreeSet,io,net::{IpAddr,Ipv4Addr,Ipv6Addr}};
 

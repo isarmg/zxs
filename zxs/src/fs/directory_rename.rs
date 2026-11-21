@@ -242,7 +242,7 @@ mod tests{
         assert_eq!(hot.parent().entity,root.entity);
         assert!(hot.settle(DirectoryRenameSide::Destination,||Ok(()),||{
             did_move=true;Err(io::ErrorKind::ConnectionAborted.into())
-        },|_|panic!("cannot confirm at the interruption")).is_err());
+        },|_| -> io::Result<()> {panic!("cannot confirm at the interruption")}).is_err());
         assert!(did_move&&!root.path.join("Draft").exists());
         let new=DirectoryRename::hold(&original,&root,"Draft","Finished",None).unwrap();
         assert_eq!(new.side(),DirectoryRenameSide::Destination);

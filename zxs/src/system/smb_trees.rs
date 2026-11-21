@@ -23,6 +23,7 @@ unsafe extern "C"{
     fn zxs_smb_tree_reply(fd:i32,result:*const u8)->i32;
     fn zxs_smb_root_wait(tree:i32,session:i32,timeout:i32)->i32;
     fn zxs_smb_process_live(pidfd:i32)->i32;
+    fn zxs_dir_reply(fd:i32,page:*const u8)->i32;
     fn zxs_dir_take(tree:i32,worker:i32,limit:*mut u8,cursor:*mut u8)->i32;
     fn zxs_odir_rows(fd:i32,page:*const u8)->i32;
     fn zxs_odir_take(fd:i32,mode:*mut u8,len:*mut u16,path:*mut u8)->i32;
@@ -309,7 +310,10 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
     // Compatible readers keep their original bounded dispatcher.
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
     const MAX_MEMBERS:usize=16;
-    let mut writers=Vec::new();let mut births=Vec::new();let mut moves=Vec::new();let mut paths=Vec::new();
+    let mut writers = Vec::<thread::ScopedJoinHandle<'scope, ()>>::new();
+    let mut births = Vec::<(bool, thread::ScopedJoinHandle<'scope, ()>)>::new();
+    let mut moves = Vec::<thread::ScopedJoinHandle<'scope, ()>>::new();
+    let mut paths = Vec::<thread::ScopedJoinHandle<'scope, ()>>::new();
     let mut ordinary_moves=Vec::<mover::OrdinaryJob<'scope>>::new();
     let mut capacity=None;
     let held_capacity=root.capacity_origin();

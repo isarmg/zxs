@@ -1,6 +1,7 @@
 //! Files and system mutations described in these tests are local fixture data.
 use crate::test_support::physical as native_leaf;
 use super::*;
+use crate::ordinary::directory::types::Parent;
 use crate::{OperationId,ordinary::{Cut,create_inner},pool::lease::{Access,LocalPool},test_support::PrivateTemp};
 use std::{os::unix::fs::MetadataExt,path::Path};
 

@@ -291,7 +291,7 @@ impl HeldDir {
         os_result(unsafe{zxs_claim(self.file.as_raw_fd(),label.as_ptr(),label.len())})?;
         self.file.sync_all()
     }
-    fn pin_record(&self,name:&CStr)->io::Result<Option<File>>{
+    pub(crate) fn pin_record(&self,name:&CStr)->io::Result<Option<File>>{
         // SAFETY: O_PATH|O_NOFOLLOW pins an entry without activating a device,
         // opening a FIFO or following a symlink at this untrusted boundary.
         let fd=unsafe{zxs_pin_record(self.file.as_raw_fd(),name.as_ptr())};

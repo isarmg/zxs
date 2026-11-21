@@ -280,13 +280,13 @@ fn durable_transfer_preserves_the_confirmed_file_history_and_allows_actual_resto
     let other_tree=other_session.connect(rw).unwrap();
     let mut draining=Some(other_tree.open_writer("Report.txt",file).unwrap());
     let mut waited=false;
-    let deleted=tree.transfer_inner(&intent,op(0xb5),||Ok(()),true,|cut|{
+    let deleted=tree.with_transfer(None,|at| at.transfer_inner(&intent,op(0xb5),None,||Ok(()),true,|cut|{
         if cut==Cut::WaitingForSource{
             assert!(!waited);assert_eq!(select(),original);assert_eq!(count(),1);
             waited=true;drop(draining.take().expect("original separate writer still holds FILE EX"));
         }
         Ok(())
-    }).unwrap();assert!(waited);assert_eq!(deleted.op,op(0xb4));
+    })).unwrap();assert!(waited);assert_eq!(deleted.op,op(0xb4));
     assert_eq!(select(),deleted.to);assert_eq!(count(),1);
     assert!(tree.open_current("Report.txt").is_err());
     assert_eq!(tree.transfer(&intent,deleted.op,||Ok(())).unwrap(),deleted); // previous source no longer current

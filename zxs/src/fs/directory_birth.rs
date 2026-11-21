@@ -205,6 +205,7 @@ pub(crate) use rename::{DirectoryRename,DirectoryRenameSide};
 
 #[cfg(test)]
 mod tests{
+    use std::os::unix::fs::{DirBuilderExt,OpenOptionsExt};
     use super::*;
     use crate::test_support::PrivateTemp;
     fn slot(parent:DirectoryParent,id:u8,name:&str)->DirectoryBirth{

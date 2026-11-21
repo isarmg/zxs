@@ -321,10 +321,10 @@ mod tests{
     #[test]
     fn the_foreground_scope_cannot_move_between_actors_roots_or_operations(){
         let a=[[1;16],[2;16],[3;16],[4;16],[5;16],[6;16]];let roots=std::array::from_fn(|i|(Entity{dev:10,ino:20+i as u64},30));
-        let take=|a:&[Id;6],r:[(Entity,u64);6],p:&Path,g|order(a.each_ref(),1001,g,p,&[42;32],&[21;32],r).unwrap();
+        let take=|a:&[Id;6],r:[(Entity,u64);6],p:&Path,g|order(a.each_ref(),&[7;16],1001,g,p,&[42;32],&[21;32],r).unwrap();
         let p=Path::new("/selected");let same=take(&a,roots,p,99);
         assert_eq!(same,take(&a,roots,p,99));
-        assert_ne!(same,order(a.each_ref(),1001,99,p,&[42;32],&[22;32],roots).unwrap());
+        assert_ne!(same,order(a.each_ref(),&[7;16],1001,99,p,&[42;32],&[22;32],roots).unwrap());
         for i in 0..a.len(){let mut other=a;other[i][0]^=1;assert_ne!(same,take(&other,roots,p,99));}
         for i in 0..roots.len(){let mut other=roots;other[i].0.ino+=1;assert_ne!(same,take(&a,other,p,99));
             let mut other=roots;other[i].1+=1;assert_ne!(same,take(&a,other,p,99));}

@@ -2,7 +2,7 @@
 //! directory births. Neither physical names nor an old operation grant SMB.
 use super::{Catalog,Connection,InitialReader,Tree,check,denied,sqlite3_step};
 use super::super::{account::share_mode::Setting,file_location::Place,volume::OrdinaryRoot,work_record};
-use crate::{DirectoryId,EntryId,OperationId,PoolId,Role,VolumeId,display,
+use crate::{FileId,DirectoryId,EntryId,OperationId,PoolId,Role,VolumeId,display,
     fs::{DIRECTORY_BYTES,DIRECTORY_NAMES,HeldDir,MAX_PATH_DEPTH,invalid,path_budget,
         directory_birth::{DIRECTORY_MARK,DirectoryBirth,DirectoryHold,DirectoryParent}},
     hash::Sha256,identity::{AccountId,ShareId},ordinary::portable_birth::Birth,system::ROOT_MARK};
