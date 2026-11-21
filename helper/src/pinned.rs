@@ -12,6 +12,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use crate::maintenance::DiscoveryView;
 
 pub(crate) fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -45,6 +47,7 @@ pub(crate) struct Pinned {
     fd: File,
     chain: Vec<Entity>,
     no_automount: bool,
+    local: Option<Arc<DiscoveryView>>,
 }
 
 fn dir_flags() -> OFlags {
@@ -92,15 +95,24 @@ pub(crate) fn passive_proc_child(parent:&File,name:&OsStr,mount:u64,directory:bo
     Ok(f)
 }
 
+/// Both mountinfo and fdinfo below belong to the actual calling task.
+pub(crate) fn passive_task_proc()->io::Result<(File,u64)>{
+    let (mut root,mount)=passive_proc_root()?;
+    let pid=std::process::id().to_string();
+    let tid=rustix::thread::gettid().as_raw_pid().to_string();
+    for name in [pid.as_str(),"task",tid.as_str()]{
+        root=passive_proc_child(&root,OsStr::new(name),mount,true)?;
+    }
+    Ok((root,mount))
+}
+
 /// Obtain a mount ID from the kernel's own description table, not statx on
 /// an unqualified mount (which could issue remote getattr/revalidation).
 pub(crate) struct DiscoveryFdInfo{infos:File,mount:u64}
 impl DiscoveryFdInfo{
     pub(crate) fn open()->io::Result<Self>{
-        let (proc,mount)=passive_proc_root()?;
-        let pid=std::process::id().to_string();
-        let process=passive_proc_child(&proc,OsStr::new(&pid),mount,true)?;
-        Ok(Self{infos:passive_proc_child(&process,OsStr::new("fdinfo"),mount,true)?,mount})
+        let (task,mount)=passive_task_proc()?;
+        Ok(Self{infos:passive_proc_child(&task,OsStr::new("fdinfo"),mount,true)?,mount})
     }
     pub(crate) fn mount(&self,held:&File)->io::Result<u64>{
         let name=held.as_raw_fd().to_string();let name=OsStr::new(&name);
@@ -152,7 +164,20 @@ impl Pinned {
     fn open_policy(path:&Path,kind:Kind,no_automount:bool)->io::Result<Self>{
         Self::open_guarded(path,kind,no_automount,None)
     }
+    /// A guarded storage selection and all of its later rewalks use the
+    /// same admitted current mount cut. Never turn this into an ordinary pin.
+    pub(crate) fn local_storage(path:&Path,scope:&Arc<DiscoveryView>)->io::Result<Self>{
+        let mut one=Self::open_guarded(path,Kind::StorageRoot,true,Some(scope.as_ref()))?;
+        one.local=Some(Arc::clone(scope));Ok(one)
+    }
+    pub(crate) fn require_local_root(scope:&DiscoveryView)->io::Result<()>{
+        Self::open_guarded(Path::new("/"),Kind::Directory,true,Some(scope)).map(drop)
+    }
     fn open_guarded(path:&Path,kind:Kind,no_automount:bool,admit:Option<&dyn DiscoveryAdmission>)->io::Result<Self>{
+        Self::walk(path,kind,no_automount,admit,|_,_,_|Ok(()))
+    }
+    fn walk(path:&Path,kind:Kind,no_automount:bool,admit:Option<&dyn DiscoveryAdmission>,
+        mut see:impl FnMut(&File,Entity,usize)->io::Result<()>)->io::Result<Self>{
         let raw = path.as_os_str().as_bytes();
         kind.check_path(raw).map_err(invalid)?;
         let mut names = raw[1..].split(|b| *b == b'/').peekable();
@@ -165,9 +190,10 @@ impl Pinned {
         }else{(File::from(open("/",dir_flags(),Mode::empty())?),0)};
         if no_automount{require_no_automount(&fd)?;}
         let mut chain = vec![Entity::of(&fd.metadata()?)?];
+        see(&fd,chain[0],0)?;
         let mut end=0usize;
         if raw == b"/" {
-            return Ok(Self { path: path.to_owned(), kind, fd, chain, no_automount });
+            return Ok(Self { path: path.to_owned(), kind, fd, chain, no_automount,local:None });
         }
         while let Some(name) = names.next() {
             let last_file = names.peek().is_none() && matches!(kind, Kind::Regular);
@@ -193,10 +219,11 @@ impl Pinned {
             }
             let entity = Entity::of(&meta)?;
             if chain.contains(&entity) { return Err(invalid("aliased ancestor in selected path")); }
+            see(&child,entity,chain.len())?;
             chain.push(entity);
             fd = child;
         }
-        Ok(Self { path: path.to_owned(), kind, fd, chain, no_automount })
+        Ok(Self { path: path.to_owned(), kind, fd, chain, no_automount,local:None })
     }
 
     pub(crate) fn entity(&self) -> Entity { *self.chain.last().expect("root and leaf are present") }
@@ -204,11 +231,33 @@ impl Pinned {
     pub(crate) fn entity_is_visible_ancestor_of(&self, other: &Self) -> bool {
         other.chain[..other.chain.len() - 1].contains(&self.entity())
     }
-    pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.fd.metadata() }
+    pub(crate) fn metadata(&self) -> io::Result<Metadata> { self.admit_held(&self.fd)?;self.fd.metadata() }
+
+    pub(crate) fn local_scope(&self)->Option<&Arc<DiscoveryView>>{self.local.as_ref()}
+    fn admission(&self)->Option<&dyn DiscoveryAdmission>{
+        self.local.as_deref().map(|v|v as &dyn DiscoveryAdmission)
+    }
+    pub(crate) fn admit_held(&self,fd:&File)->io::Result<()>{
+        if let Some(admit)=self.admission(){admit.admit(fd)?;}
+        Ok(())
+    }
+    fn named(&self)->io::Result<Self>{
+        Self::open_guarded(&self.path,self.kind,self.no_automount,self.admission())
+    }
+    /// Visit only positively admitted same original prefixes, beginning at
+    /// the visible root. No backward ".." traversal or retained FD per hop.
+    pub(crate) fn same_local_chain(&self,mut visit:impl FnMut(&File,usize)->io::Result<()>)->io::Result<Mount>{
+        let admit=self.admission().ok_or_else(||invalid("local ancestry requires a guarded selection"))?;
+        let named=Self::walk(&self.path,self.kind,true,Some(admit),|f,entity,i|{
+            if self.chain.get(i)!=Some(&entity){return Err(invalid("original local ancestry changed"));}
+            visit(f,i)
+        })?;
+        check_named_mount(&self.chain,self.mount()?,&named.chain,named.mount()?)
+    }
 
     pub(crate) fn path(&self) -> &Path { &self.path }
     pub(crate) fn passive_mount_observation(&self)->bool{self.no_automount}
-    pub(crate) fn mount(&self) -> io::Result<Mount> { Mount::on(&self.fd)?.ok_or_else(||invalid("live mount identity unavailable")) }
+    pub(crate) fn mount(&self) -> io::Result<Mount> { self.admit_held(&self.fd)?;Mount::on(&self.fd)?.ok_or_else(||invalid("live mount identity unavailable")) }
 
     /// Only a directory pin, not a general access lift. Its mount and entity
     /// must still match when opened relative to the original descriptor.
@@ -216,7 +265,7 @@ impl Pinned {
         if !matches!(self.kind,Kind::StorageRoot){return Err(invalid("expected an original directory pin"));}
         self.require_same_path()?;
         let out=File::from(openat(&self.fd,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::NONBLOCK|OFlags::CLOEXEC,Mode::empty())?);
-        let now=Self::open_policy(&self.path,self.kind,self.no_automount)?;
+        let now=self.named()?;
         if self.chain!=now.chain||self.mount()?!=now.mount()?||Some(now.mount()?)!=Mount::on(&out)?||now.entity()!=Entity::of(&out.metadata()?)?{
             return Err(invalid("directory name or mount changed"));
         }
@@ -227,15 +276,18 @@ impl Pinned {
     /// directory. Never lock a duplicate of somebody else's open description.
     pub(crate) fn storage_directory(&self) -> io::Result<File> {
         if !matches!(self.kind, Kind::StorageRoot) { return Err(invalid("expected a selected storage root")); }
-        let now = Self::open_policy(&self.path, self.kind,self.no_automount)?;
-        let original_mount = Mount::on(&self.fd)?.ok_or_else(|| invalid("original mount is unavailable"))?;
-        if self.chain != now.chain || Mount::on(&now.fd)?.is_none_or(|m| m.id != original_mount.id) {
+        let now=self.named()?;
+        let original_mount=self.mount()?;
+        if self.chain != now.chain || now.mount()?.id != original_mount.id {
             return Err(invalid("original storage path, visible ancestry or mount changed"));
         }
         // The fresh name is evidence only. Open "." relative to the FIRST held
         // directory, so revalidation never changes the object receiving the open.
-        let f = File::from(openat(&self.fd, c".", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW
-            | OFlags::NOATIME | OFlags::CLOEXEC, Mode::empty())?);
+        let flags=OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::NOATIME|OFlags::CLOEXEC;
+        let f=File::from(if self.local.is_some(){
+            openat2(&self.fd,c".",flags,Mode::empty(),DISCOVERY_WITHIN|ResolveFlags::NO_XDEV)?
+        }else{openat(&self.fd,c".",flags,Mode::empty())?});
+        self.admit_held(&f)?;
         if self.entity() != Entity::of(&f.metadata()?)?
             || Mount::on(&f)?.is_none_or(|m| m.id != original_mount.id) {
             return Err(invalid("opened description does not designate the selected storage directory"));
@@ -244,7 +296,7 @@ impl Pinned {
     }
 
     pub(crate) fn require_same_path(&self) -> io::Result<()> {
-        let now = Self::open_policy(&self.path, self.kind,self.no_automount)?;
+        let now=self.named()?;
         if now.chain != self.chain { return Err(invalid("selected path or parent changed during observation")); }
         Ok(())
     }
@@ -253,7 +305,7 @@ impl Pinned {
     /// visible entities. A bind of the same inode is not the original mount.
     /// The newly named FD is evidence only; keep using the first held FD.
     pub(crate) fn require_same_named_mount(&self) -> io::Result<Mount> {
-        let now = Self::open_policy(&self.path, self.kind,self.no_automount)?;
+        let now=self.named()?;
         check_named_mount(&self.chain, self.mount()?, &now.chain, now.mount()?)
     }
 }
@@ -290,6 +342,11 @@ impl<'a> DiscoveryPin<'a>{
         }
         Ok(())
     }
+}
+
+pub(crate) fn same_mount_leaf(parent:&File,name:&OsStr)->io::Result<File>{
+    Ok(File::from(openat2(parent,name,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
+        DISCOVERY_WITHIN|ResolveFlags::NO_XDEV)?))
 }
 
 fn check_named_mount(original: &[Entity], mount: Mount, named: &[Entity], current: Mount) -> io::Result<Mount> {
@@ -478,6 +535,59 @@ mod tests {
         assert_eq!(discovery_mount_id(b"pos:\t0\nflags:\t012000000\nmnt_id:\t18\nino:\t100\n").unwrap(),18);
         for raw in [&b"ino:\t18\n"[..],b"mnt_id:\t0\n",b"mnt_id:\t018\n",b"mnt_id:\t18",
             b"mnt_id:\t18\nmnt_id:\t18\n",b"mnt_id:\t18 19\n"]{assert!(discovery_mount_id(raw).is_err());}
+    }
+    #[test]
+    fn nonempty_v17_current_task_fdinfo_works_nondumpable_without_extra_authority(){
+        use super::{DiscoveryFdInfo,Mount,passive_task_proc};
+        use rustix::process::{DumpableBehavior,dumpable_behavior,getuid,set_dumpable_behavior};
+        const CHILD:&str="HELPER_UNIT_H03_FDINFO_CHILD";
+        if std::env::var_os(CHILD).is_none(){
+            // The flag affects only this dedicated fixture process, never the
+            // outer test harness, any operator, or system configuration.
+            let status=std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact","pinned::tests::nonempty_v17_current_task_fdinfo_works_nondumpable_without_extra_authority"])
+                .env(CHILD,"1").status().unwrap();
+            assert!(status.success());return;
+        }
+        assert!(!getuid().is_root(),"this fixture requires the ordinary unprivileged build runner");
+        set_dumpable_behavior(DumpableBehavior::NotDumpable).unwrap();
+        assert_eq!(dumpable_behavior().unwrap(),DumpableBehavior::NotDumpable);
+        let area=tempfile::tempdir().unwrap();
+        let (proc,proc_id)=passive_task_proc().unwrap();
+        let scratch=std::fs::File::open(area.path()).unwrap();
+        let disk_id=Mount::on(&scratch).unwrap().unwrap().id;
+        assert_ne!(proc_id,disk_id);
+        let gate=DiscoveryFdInfo::open().unwrap();
+        assert_eq!(gate.mount(&scratch).unwrap(),disk_id);
+        assert_eq!(gate.mount(&proc).unwrap(),proc_id);
+    }
+    #[test]
+    fn nonempty_v17_guard_stops_before_inspecting_the_denied_component(){
+        use super::{DiscoveryAdmission,DiscoveryFdInfo,Kind,Pinned};
+        use rustix::fs::{Mode,OFlags,open};
+        use std::{cell::Cell,fs::File,io,path::Path};
+        struct Deny{probe:DiscoveryFdInfo,start:u64,asked:Cell<bool>,admitted:Cell<u8>}
+        impl DiscoveryAdmission for Deny{
+            fn root_mount(&self)->io::Result<u64>{Ok(self.start)}
+            fn crossing(&self,parent:u64,prefix:&Path)->io::Result<Option<u64>>{
+                assert_eq!(parent,self.start);
+                assert_eq!(prefix,Path::new("/h03-fabricated-remote"));
+                self.asked.set(true);
+                Err(io::ErrorKind::Unsupported.into())
+            }
+            fn admit(&self,who:&File)->io::Result<u64>{
+                self.admitted.set(self.admitted.get()+1);self.probe.mount(who)
+            }
+        }
+        let probe=DiscoveryFdInfo::open().unwrap();
+        let root=File::from(open(c"/",OFlags::PATH|OFlags::CLOEXEC,Mode::empty()).unwrap());
+        let admission=Deny{start:probe.mount(&root).unwrap(),probe,asked:Cell::new(false),admitted:Cell::new(0)};
+        let visited=Cell::new(0);
+        let observed=Pinned::walk(Path::new("/h03-fabricated-remote/any"),Kind::StorageRoot,true,Some(&admission),|_,_,_|{
+            visited.set(visited.get()+1);Ok(())
+        });
+        assert_eq!(observed.err().unwrap().kind(),io::ErrorKind::Unsupported);
+        assert!(admission.asked.get());assert_eq!(admission.admitted.get(),1);assert_eq!(visited.get(),1);
     }
     #[test]
     fn same_inodes_do_not_substitute_another_named_mount() {

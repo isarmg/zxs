@@ -1,8 +1,8 @@
 //! Enrollment only, in the original fixed slot. Application data, historical
 //! markers, arbitrary caller names and filesystem-specific formats are not inputs.
 use super::{bad,originals::Group,DATABASE,MARKER};
-use crate::pinned::Entity;
-use rustix::fs::{AtFlags,Mode,OFlags,ResolveFlags,StatxFlags,makedev,openat,openat2,statx};
+use crate::pinned::{Entity,same_mount_leaf};
+use rustix::fs::{AtFlags,Mode,OFlags,StatxFlags,makedev,openat,statx};
 use std::{ffi::OsStr,fs::File,io,os::unix::{ffi::OsStrExt,fs::FileExt}};
 
 #[derive(Eq,PartialEq)]
@@ -43,23 +43,28 @@ impl Mark{
     fn read_original(dir:&File,uid:u32,wanted:&[u8;101])->io::Result<Self>{
         let m=Self::pin_original(dir,uid)?;m.verify(dir,wanted)?;Ok(m)
     }
-    fn pin_original(dir:&File,uid:u32)->io::Result<Self>{
-        let before=stamp(dir,slot())?;feedback_shape(&before,&held(dir)?,uid,101)?;
-        let pin=File::from(openat(dir,slot(),OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?);
+    fn pin_original(dir:&File,uid:u32)->io::Result<Self>{Self::pin_system(dir,uid,false)}
+    fn pin_system(dir:&File,uid:u32,local:bool)->io::Result<Self>{
+        let before=named_mark(dir,local)?;feedback_shape(&before,&held(dir)?,uid,101)?;
+        let pin=if local{same_mount_leaf(dir,slot())?}else{
+            File::from(openat(dir,slot(),OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?)
+        };
         let s=held(&pin)?;if s!=before{return Err(bad("original enrollment slot changed before it was held"));}
         feedback_shape(&s,&held(dir)?,uid,101)?;
         // Only this original pre-admitted private regular control file is opened.
         // No raw DB descriptor is open here, and no mutable path follows the pin.
-        let fd=crate::pinned::sqlite_claim_reader(&pin,Entity{dev:s.dev,ino:s.ino},s.mount)?;
-        if held(&fd)?!=s||stamp(dir,slot())?!=s{return Err(bad("original enrollment slot changed during opening"));}
+        let read=if local{crate::pinned::discovery_claim_reader}else{crate::pinned::sqlite_claim_reader};
+        let fd=read(&pin,Entity{dev:s.dev,ino:s.ino},s.mount)?;
+        if held(&fd)?!=s||named_mark(dir,local)?!=s{return Err(bad("original enrollment slot changed during opening"));}
         Ok(Self{fd,s})
     }
-    fn verify(&self,dir:&File,wanted:&[u8;101])->io::Result<()>{
-        if held(&self.fd)?!=self.s||stamp(dir,slot())?!=self.s{return Err(bad("original enrollment marker or name changed"));}
+    fn verify(&self,dir:&File,wanted:&[u8;101])->io::Result<()>{self.verify_system(dir,wanted,false)}
+    fn verify_system(&self,dir:&File,wanted:&[u8;101],local:bool)->io::Result<()>{
+        if held(&self.fd)?!=self.s||named_mark(dir,local)?!=self.s{return Err(bad("original enrollment marker or name changed"));}
         if &exact_bytes(&self.fd)?!=wanted{
             return Err(bad("existing enrollment marker disagrees with this original claim; left intact"));
         }
-        if held(&self.fd)?!=self.s||stamp(dir,slot())?!=self.s{return Err(bad("enrollment marker changed during read"));}
+        if held(&self.fd)?!=self.s||named_mark(dir,local)?!=self.s{return Err(bad("enrollment marker changed during read"));}
         Ok(())
     }
     fn create(g:&Group,i:usize,wanted:&[u8;101])->io::Result<Self>{
@@ -90,10 +95,10 @@ pub(super) struct DiscoveredSystem {
 impl DiscoveredSystem{
     pub(super) fn probe(dir:&File,uid:u32)->io::Result<Option<Self>>{
         let absent=|e:&io::Error|e.kind()==io::ErrorKind::NotFound;
-        let pin=match discovery_leaf(dir,slot()){
+        let pin=match same_mount_leaf(dir,slot()){
             Ok(f)=>f,
             Err(e) if absent(&e)=>{
-                return match discovery_leaf(dir,slot()){
+                return match same_mount_leaf(dir,slot()){
                     Err(e) if absent(&e)=>Ok(None),
                     _=>Err(bad("a control marker appeared during discovery")),
                 };
@@ -103,7 +108,7 @@ impl DiscoveredSystem{
         let before=held(&pin)?;let parent=held(dir)?;
         feedback_shape(&before,&parent,uid,101)?;
         let fd=crate::pinned::discovery_claim_reader(&pin,Entity{dev:before.dev,ino:before.ino},before.mount)?;
-        if held(&fd)?!=before||held(&discovery_leaf(dir,slot())?)?!=before{return Err(bad("control marker changed during opening"));}
+        if held(&fd)?!=before||held(&same_mount_leaf(dir,slot())?)?!=before{return Err(bad("control marker changed during opening"));}
         let mark=Mark{fd,s:before};
         let body=exact_bytes(&mark.fd)?;
         verify_discovery_mark(&mark,&body,dir)?;
@@ -112,7 +117,7 @@ impl DiscoveredSystem{
         if !system_body(&body,&pool){return Err(bad("the private marker is not recognizable SYSTEM evidence"));}
         // Only O_PATH metadata for the database. The time/size check can
         // yield unknown on a busy pool; no content/lock/journal is used.
-        let database=held(&discovery_leaf(dir,OsStr::new(DATABASE))?)?;
+        let database=held(&same_mount_leaf(dir,OsStr::new(DATABASE))?)?;
         let ds=held(dir)?;
         if database.len==0||database.ino==mark.s.ino{
             return Err(bad("no distinct positive-sized SYSTEM database metadata"));
@@ -123,18 +128,15 @@ impl DiscoveredSystem{
     pub(super) fn coordinates(&self)->[[u8;16];3]{coordinates(&self.body)}
     pub(super) fn require(&self,dir:&File)->io::Result<()>{
         verify_discovery_mark(&self.mark,&self.body,dir)?;
-        if held(&discovery_leaf(dir,OsStr::new(DATABASE))?)?!=self.database{return Err(bad("SYSTEM database metadata changed"));}
+        if held(&same_mount_leaf(dir,OsStr::new(DATABASE))?)?!=self.database{return Err(bad("SYSTEM database metadata changed"));}
         Ok(())
     }
 }
-fn discovery_leaf(dir:&File,name:&OsStr)->io::Result<File>{
-    // Neither current name may be a mounted remote/special file: reject at
-    // lookup, before asking for filesystem metadata or any reader.
-    Ok(File::from(openat2(dir,name,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
-        ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_SYMLINKS|ResolveFlags::NO_MAGICLINKS)?))
+fn named_mark(dir:&File,local:bool)->io::Result<Stamp>{
+    if local{held(&same_mount_leaf(dir,slot())?)}else{stamp(dir,slot())}
 }
 fn verify_discovery_mark(mark:&Mark,body:&[u8;101],dir:&File)->io::Result<()>{
-    let same=||->io::Result<bool>{Ok(held(&mark.fd)?==mark.s&&held(&discovery_leaf(dir,slot())?)?==mark.s)};
+    let same=||->io::Result<bool>{Ok(held(&mark.fd)?==mark.s&&held(&same_mount_leaf(dir,slot())?)?==mark.s)};
     if !same()?||exact_bytes(&mark.fd)?!=*body||!same()?{return Err(bad("recognized discovery marker changed"));}
     Ok(())
 }
@@ -165,14 +167,14 @@ impl RecycleMark{
 pub(super) struct SystemMark(Mark);
 impl SystemMark {
     pub(super) fn before_sql(root:super::originals::HeldRoot<'_>)->io::Result<Self>{
-        Ok(Self(Mark::pin_original(root.dir(),root.uid())?))
+        Ok(Self(Mark::pin_system(root.dir(),root.uid(),root.local_only())?))
     }
     pub(super) fn verify(&self,root:super::originals::HeldRoot<'_>,wanted:&[u8;101])->io::Result<()> {
-        self.0.verify(root.dir(),wanted)
+        self.0.verify_system(root.dir(),wanted,root.local_only())
     }
     pub(super) fn observe(&self,root:super::originals::HeldRoot<'_>,wanted:&[u8;101])->io::Result<SystemObservation>{
         self.verify(root,wanted)?;
-        let found=SystemObservation::received(discovery_leaf(root.dir(),slot())?,root.dir(),root.uid())?;
+        let found=SystemObservation::received(same_mount_leaf(root.dir(),slot())?,root.dir(),root.uid())?;
         if found.id!=self.0.s{return Err(bad("original SYSTEM observation marker changed"));}
         self.verify(root,wanted)?;
         Ok(found)
@@ -197,7 +199,7 @@ impl SystemObservation{
     pub(super) fn require(&self,dir:&File)->io::Result<[u8;64]>{
         let s=&self.id;
         feedback_shape(s,&held(dir)?,self.uid,101)?;
-        if held(&self.fd)?!=*s||held(&discovery_leaf(dir,slot())?)?!=*s{
+        if held(&self.fd)?!=*s||held(&same_mount_leaf(dir,slot())?)?!=*s{
             return Err(bad("original named SYSTEM observation marker was changed or removed"));
         }
         let mut stamp=[0;64];
@@ -218,7 +220,7 @@ fn reattach_marker_pin_rejects_any_read_fd_and_same_bytes_at_a_new_inode(){
     let dir=File::open(t.path()).unwrap();
     let uid=rustix::process::geteuid().as_raw();
     assert!(SystemObservation::received(File::open(&path).unwrap(),&dir,uid).is_err());
-    let proof=SystemObservation::received(discovery_leaf(&dir,slot()).unwrap(),&dir,uid).unwrap();
+    let proof=SystemObservation::received(same_mount_leaf(&dir,slot()).unwrap(),&dir,uid).unwrap();
     proof.require(&dir).unwrap();
     let prior=t.path().join("earlier");
     std::fs::rename(&path,&prior).unwrap();

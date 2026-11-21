@@ -27,12 +27,7 @@ pub(super) fn mountinfo() -> io::Result<File> { thread_file(c"thread-self/mounti
 /// Only discovery's current mount table. Walk actual PID/task/TID on the
 /// held proc mount without following a directory lookup into an automount.
 pub(super) fn passive_mountinfo()->io::Result<File>{
-    let (mut root,mount)=pinned::passive_proc_root()?;
-    let pid=std::process::id().to_string();
-    let tid=rustix::thread::gettid().as_raw_pid().to_string();
-    for name in [pid.as_str(),"task",tid.as_str()]{
-        root=pinned::passive_proc_child(&root,OsStr::new(name),mount,true)?;
-    }
+    let (root,mount)=pinned::passive_task_proc()?;
     let name=OsStr::new("mountinfo");
     let prior=pinned::passive_proc_child(&root,name,mount,false)?;
     let original=Entity::of(&prior.metadata()?)?;

@@ -1,8 +1,8 @@
 //! All selected origins stay pinned from the operator's preview to SQLite close.
 //! No state is read from legacy formats, and no path comes from an untrusted SQL row.
 use super::{bad,unsupported,request::Request,MARKER};
-use crate::{maintenance::HostMounts,pinned::{Entity,Kind,Mount,Pinned}};
-use rustix::fs::{AtFlags,FlockOperation,Mode,OFlags,RawDir,StatVfsMountFlags,fgetxattr,flock,fstatvfs,openat,statat};
+use crate::{maintenance::HostMounts,pinned::{DiscoveryAdmission,Entity,Kind,Mount,Pinned,same_mount_leaf}};
+use rustix::fs::{AtFlags,FlockOperation,Mode,OFlags,RawDir,ResolveFlags,StatVfsMountFlags,fgetxattr,flock,fstatvfs,openat,openat2,statat};
 use std::{ffi::OsStr,fs::File,io,mem::MaybeUninit,os::unix::{ffi::OsStrExt,fs::MetadataExt}};
 
 pub(super) struct Originals {pub(super) selected:Vec<Pinned>, host:File}
@@ -22,7 +22,9 @@ impl<'g> HeldRoot<'g> {
     pub(super) fn uid(self)->u32{self.uid}
     pub(super) fn path(self)->&'g std::path::Path{self.pin.path()}
     pub(super) fn byte_limit(self)->u8{self.limit}
+    pub(super) fn local_only(self)->bool{self.pin.local_scope().is_some()}
     pub(super) fn require(self)->io::Result<()> {
+        self.pin.admit_held(self.dir)?;
         let m=self.dir.metadata()?;
         if location(self.dir)?!=(self.pin.entity(),self.pin.mount()?)
             ||location(&self.pin.storage_directory()?)?!=location(self.dir)?
@@ -87,6 +89,7 @@ impl SelectedSystem {
         self.with_descriptor(dir,SystemLease::LentRead)
     }
     fn with_descriptor(self,dir:File,lease:SystemLease)->io::Result<LockedSystem>{
+        self.pin.admit_held(&dir)?;
         let limit=helper_linux_evidence::portable_component_limit(&dir)?;
         let locked=LockedSystem{selected:self,dir,limit,lease};locked.require()?;Ok(locked)
     }
@@ -103,7 +106,9 @@ impl LockedSystem {
             SystemLease::LentRead=>super::pair::require_lent_sh(&self.dir,id)?,
             SystemLease::Exclusive=>(),
         }
-        ancestry(&self.selected.pin,&self.dir,&HostMounts::current()?,&self.selected.host,self.selected.uid)?;
+        if self.selected.pin.local_scope().is_some(){
+            guarded_named_backing(&self.selected.pin,&self.dir,&self.selected.host,self.selected.uid)?;
+        }else{ancestry(&self.selected.pin,&self.dir,&HostMounts::current()?,&self.selected.host,self.selected.uid)?;}
         Ok(())
     }
     pub(super) fn allows_account_write(&self)->bool{!matches!(self.lease,SystemLease::LentRead)}
@@ -207,8 +212,11 @@ fn reject_old_claim(fd:&File)->io::Result<()>{
     let dir=File::from(openat(fd,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NONBLOCK
         |OFlags::CLOEXEC|OFlags::NOFOLLOW,Mode::empty())?);
     if location(&dir)?!=location(fd)?{return Err(bad("directory changed before the legacy occupancy check"));}
+    require_no_old_attribute(&dir)
+}
+fn require_no_old_attribute(dir:&File)->io::Result<()>{
     let mut empty=[0u8;0];
-    match fgetxattr(&dir,c"user.zxs.volume",&mut empty[..]){
+    match fgetxattr(dir,c"user.zxs.volume",&mut empty[..]){
         Err(rustix::io::Errno::NODATA)=>Ok(()),
         Ok(_)|Err(rustix::io::Errno::RANGE)=>Err(bad("root or ancestor has an existing volume attribute; no takeover")),
         Err(rustix::io::Errno::OPNOTSUPP)=>Err(unsupported("cannot establish prior ownership on this mount")),
@@ -227,6 +235,50 @@ pub(super) fn named_backing(name:&Pinned,leaf:&File,table:&HostMounts,host:&File
     }
     Ok(backing)
 }
+/// Inventory keeps the existing whole-mount, original ancestry, permission
+/// and old-claim checks, but does them top-down on positively local prefixes.
+pub(super) fn guarded_named_backing(name:&Pinned,leaf:&File,host:&File,uid:u32)->io::Result<u64>{
+    let scope=name.local_scope().ok_or_else(||bad("need the original local mount scope"))?;
+    scope.admit(host)?;scope.admit(leaf)?;
+    let root=location(host)?;let original=location(leaf)?;
+    if original!=(name.entity(),name.mount()?){return Err(bad("substituted admitted volume"));}
+    let mut previous=None;let mut backing=None;
+    let mounted=name.same_local_chain(|f,i|{
+        let (entity,mount)=location(f)?;
+        let (parent,device)=scope.full_local_mount(mount.id)?;
+        if i==0 && ((entity,mount)!=root||mount.at_root!=Some(true))
+            ||previous.is_some_and(|p|p!=mount.id&&(mount.at_root!=Some(true)||parent!=p)){
+            return Err(unsupported("cannot attribute this original local directory chain"));
+        }
+        previous=Some(mount.id);
+        let last=i+1==name.visible_chain().len();
+        if last&&(entity,mount)!=original{return Err(bad("the original locally admitted leaf changed"));}
+        let m=f.metadata()?;
+        if !m.is_dir()||m.nlink()==0||!(m.uid()==0||m.uid()==uid)||m.mode()&0o022!=0&&m.mode()&0o1000==0{
+            return Err(bad("unprotected original local directory"));
+        }
+        // "." stays on this positively admitted directory. Reading an xattr
+        // predicate needs a real description, not a re-open of its path.
+        let rd=File::from(openat2(f,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NONBLOCK|OFlags::CLOEXEC,
+            Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_SYMLINKS)?);
+        scope.admit(&rd)?;
+        if location(&rd)?!=(entity,mount){return Err(bad("local directory changed before occupancy check"));}
+        require_no_old_attribute(&rd)?;
+        if last{backing=Some(device);}
+        else{
+            match same_mount_leaf(f,OsStr::from_bytes(MARKER)){
+                Err(e) if e.kind()==io::ErrorKind::NotFound=>(),
+                Err(e)=>return Err(e),
+                Ok(_)=>return Err(bad("reserved claim present on an original ancestor")),
+            }
+        }
+        Ok(())
+    })?;
+    scope.admit(leaf)?;
+    if mounted!=original.1||location(leaf)?!=original{return Err(bad("original local volume changed"));}
+    backing.ok_or_else(||bad("missing local filesystem origin"))
+}
+
 fn ancestry(name:&Pinned,leaf:&File,table:&HostMounts,host:&File,uid:u32)->io::Result<u64>{
     let host=location(host)?;
     let mut seen=name.visible_chain().iter().rev().peekable();let mut up=None;let mut child:Option<(Mount,u64)>=None;let mut sb=None;

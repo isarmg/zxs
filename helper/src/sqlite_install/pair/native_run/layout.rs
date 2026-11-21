@@ -1,5 +1,7 @@
 mod deployment_check;
 pub(crate) use deployment_check::check_deployment;
+mod import_inventory;
+pub(crate) use import_inventory::ImportCheck;
 mod retirement_check;
 pub(crate) use retirement_check::RetirementCheck;
 // Resolve explicitly selected ordinary claims plus the single original R.
@@ -340,15 +342,16 @@ pub(crate) fn worker()->io::Result<()>{
     approval::only_inherited_descriptors(&[3,4])?;
     let parent=getppid().ok_or_else(bad_question)?;
     original_parent(&fd,parent)?;
-    let host=approval::host_admin()?;
     let helper=ForegroundElf::host()?;
     helper.parent_is_same_image(parent)?;
     let raw=read_sealed(&meta,BUDGET)?;drop(meta);
-    enum QuestionKind{Fresh(Question,FreshScope),Retirement(retirement_check::Question),Deployment(deployment_check::Question)}
+    enum QuestionKind{Fresh(Question,FreshScope),Retirement(retirement_check::Question),Deployment(deployment_check::Question),Import(import_inventory::Question)}
     let q=if raw.starts_with(retirement_check::DOMAIN){
         QuestionKind::Retirement(retirement_check::Question::decode(&raw)?)
     }else if raw.starts_with(deployment_check::DOMAIN){
         QuestionKind::Deployment(deployment_check::Question::decode(&raw)?)
+    }else if raw.starts_with(import_inventory::DOMAIN){
+        QuestionKind::Import(import_inventory::Question::decode(&raw)?)
     }else{
         let q=Question::decode(&raw)?;
         let fresh=q.fresh.ok_or_else(bad_question)?;
@@ -356,11 +359,14 @@ pub(crate) fn worker()->io::Result<()>{
         if q.actor!=fresh.subject.tuple().0{return Err(bad_question());}
         QuestionKind::Fresh(q,fresh)
     };
+    let local=matches!(&q,QuestionKind::Import(_)).then(import_inventory::mount_scope).transpose()?;
+    let host=approval::host_admin()?;
     drop(helper);
     let (subject,location,path)=match &q{
         QuestionKind::Fresh(q,f)=>(f.subject,q.location,q.system.as_path()),
         QuestionKind::Retirement(q)=>q.original_system(),
         QuestionKind::Deployment(q)=>q.original_system(),
+        QuestionKind::Import(q)=>q.original_system(),
     };
     let (actor,uid,gid)=subject.tuple();
     approval::drop_to_storage(uid,gid)?;
@@ -373,13 +379,17 @@ pub(crate) fn worker()->io::Result<()>{
     let channel=Channel::from_owned_child_session(fd,UCred{pid:parent,uid:Uid::ROOT,gid:Gid::ROOT},scope)?;
     let (empty,[lease])=channel.wait::<1>(Kind::Lease,&scope,Instant::now()+Duration::from_secs(20))?;
     if empty!=[0;65]{return Err(bad_question());}
-    let pin=Pinned::already_mounted(path,PathKind::StorageRoot)?;
+    let pin=match &local{
+        Some(scope)=>Pinned::local_storage(path,scope)?,
+        None=>Pinned::already_mounted(path,PathKind::StorageRoot)?,
+    };
     if place(&pin)?!=location{return Err(bad_question());}
     let system=SelectedSystem::from_origin(pin,host,uid,gid)?.from_lent_ex(lease)?;
     let (q,fresh)=match q{
         QuestionKind::Fresh(q,fresh)=>(q,fresh),
         QuestionKind::Retirement(q)=>return q.inspect(&system,&channel,&scope,parent),
         QuestionKind::Deployment(q)=>return q.inspect(&system,&channel,&scope,parent),
+        QuestionKind::Import(q)=>return q.inspect(&system,&channel,&scope,parent),
     };
     let (catalogue,db)=observed::isolated_first_claims(&q.pool,&q.init,&actor,&fresh.init_sha,&system)?;
     let place=InitialDatabase::scope(&db,uid)?;

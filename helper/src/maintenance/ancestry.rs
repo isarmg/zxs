@@ -43,7 +43,8 @@ pub(crate) struct DiscoveryMount {
     pub(crate) magic: u32,
 }
 // mountinfo escapes only whitespace and backslash. Parse byte-for-byte, not
-// as shell, URL or Path normalization; SYSTEM's SQL path must also be UTF-8.
+// as shell, URL or Path normalization. Explicit evidence may be non-UTF-8;
+// only paths shown as automatic SYSTEM candidates must also be UTF-8.
 fn discovery_path(mut raw: &[u8]) -> Option<PathBuf> {
     let mut name=Vec::new();
     while let Some((&byte,tail))=raw.split_first(){
@@ -59,7 +60,6 @@ fn discovery_path(mut raw: &[u8]) -> Option<PathBuf> {
         }
     }
     if name.as_slice()!=b"/"{crate::pinned::Kind::StorageRoot.check_path(&name).ok()?;}
-    std::str::from_utf8(&name).ok()?;
     Some(PathBuf::from(OsStr::from_bytes(&name)))
 }
 
@@ -78,6 +78,17 @@ impl DiscoveryTable{
 pub(crate) struct DiscoveryView{table:DiscoveryTable,fds:DiscoveryFdInfo}
 impl DiscoveryView{
     pub(crate) fn roots(&self)->&[DiscoveryMount]{&self.table.roots}
+    pub(crate) fn full_local_mount(&self,id:u64)->io::Result<(u64,u64)>{
+        if !self.table.mounts.discovery_ancestry(id){return Err(unknown("no eligible local mount ancestry"));}
+        self.table.mounts.full_mount(id)
+    }
+    pub(crate) fn require_unchanged(&self)->io::Result<()>{
+        let current=Mounts::current_discovery_table(false)?;
+        if self.table.names!=current.names||self.table.mounts.0!=current.mounts.0{
+            return Err(unknown("local mount evidence changed"));
+        }
+        Ok(())
+    }
     pub(crate) fn same_scope(&self,other:&Self)->bool{
         self.table.names==other.table.names&&self.table.mounts.0==other.table.mounts.0&&self.table.roots==other.table.roots
     }
@@ -103,10 +114,13 @@ impl Mounts {
     }
 
     pub(crate) fn discovery_view(automatic:bool) -> io::Result<DiscoveryView> {
+        Ok(DiscoveryView{table:Self::current_discovery_table(automatic)?,fds:DiscoveryFdInfo::open()?})
+    }
+    fn current_discovery_table(automatic:bool)->io::Result<DiscoveryTable>{
         let f=super::thread_evidence::passive_mountinfo()?;
         let mut bytes=Vec::new();
         f.take(TABLE_BYTES as u64+1).read_to_end(&mut bytes)?;
-        Ok(DiscoveryView{table:Self::discovery_table(&bytes,automatic)?,fds:DiscoveryFdInfo::open()?})
+        Self::discovery_table(&bytes,automatic)
     }
     #[cfg(test)]
     fn discover(bytes:&[u8])->io::Result<Vec<DiscoveryMount>>{
@@ -120,7 +134,7 @@ impl Mounts {
             // No overlay, network, device-free pseudo filesystems, autofs or
             // filesystem subtree binds in automatic discovery. Explicit
             // selection is the only fallback, not a recursive path scan.
-            if let Some(magic)=row.magic.filter(|_|automatic&&row.whole&&row.device!=0&&!row.namespace_root) {
+            if let Some(magic)=row.magic.filter(|_|automatic&&row.whole&&row.device!=0&&!row.namespace_root&&path.to_str().is_some()) {
                 if roots.len()==DISCOVERY_ROOTS{
                     return Err(unknown("too many eligible mounted roots; select one --system directory"));
                 }

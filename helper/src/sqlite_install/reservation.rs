@@ -1,9 +1,9 @@
 //! The only OS file reservation for the fresh SQLite path. Once closed, the raw
 //! DB is NEVER reopened for inspection. Only metadata and the SQLite VFS are used.
 use super::{bad,engine,originals::{Group,HeldRoot,LockedSystem},request::Request,DATABASE};
-use crate::pinned::{Entity,Mount};
+use crate::pinned::{Entity,Mount,same_mount_leaf};
 use rustix::fs::{AtFlags,Mode,OFlags,StatxFlags,makedev,openat,statx};
-use std::{fs::File,io,os::unix::fs::MetadataExt,path::PathBuf};
+use std::{ffi::OsStr,fs::File,io,os::unix::fs::MetadataExt,path::PathBuf};
 
 pub(super) struct Reserved<'g>(DbName<'g>);
 pub(super) struct Existing<'g>(DbName<'g>,DbUse);
@@ -67,7 +67,7 @@ impl<'g> Existing<'g>{
     fn from_source(root:HeldRoot<'g>,path:PathBuf,use_:DbUse)->io::Result<Self>{
         let names=root.controls(&[DATABASE.as_bytes(),super::MARKER])?;
         if !names[0]||matches!(use_,DbUse::AccountObservation)&&!names[1]{return Err(bad("missing expected database or existing SYSTEM enrollment marker"));}
-        let s=statx(root.dir(),c"SYSTEM.sqlite3",AtFlags::SYMLINK_NOFOLLOW|AtFlags::NO_AUTOMOUNT,StatxFlags::BASIC_STATS|StatxFlags::MNT_ID)?;
+        let s=database_metadata(root,StatxFlags::BASIC_STATS|StatxFlags::MNT_ID)?;
         let x=Self(DbName{root,path,entity:Entity{dev:makedev(s.stx_dev_major,s.stx_dev_minor),ino:s.stx_ino},mount:s.stx_mnt_id},use_);
         x.require()?;Ok(x)
     }
@@ -114,10 +114,20 @@ impl DbName<'_>{
         // not just "SYSTEM.sqlite3" inside a now-detached directory.
         self.root.require()?;
         let need=StatxFlags::TYPE|StatxFlags::MODE|StatxFlags::NLINK|StatxFlags::UID|StatxFlags::INO|StatxFlags::SIZE|StatxFlags::MNT_ID;
-        let s=statx(self.root.dir(),c"SYSTEM.sqlite3",AtFlags::SYMLINK_NOFOLLOW|AtFlags::NO_AUTOMOUNT,need)?;
+        let s=database_metadata(self.root,need)?;
         if s.stx_mask&need.bits()!=need.bits()|| s.stx_mode!=0o100600||s.stx_nlink!=1||s.stx_uid!=self.root.uid()
             || s.stx_ino!=self.entity.ino||makedev(s.stx_dev_major,s.stx_dev_minor)!=self.entity.dev||s.stx_mnt_id!=self.mount
             || empty&&s.stx_size!=0{return Err(bad("original database reservation changed"));}
         Ok(s.stx_size)
     }
+}
+// Guarded diagnostic roots reject any bind/automount/symlink of the
+// fixed DB name before issuing statx. The O_PATH is never a SQLite data FD.
+fn database_metadata(root:HeldRoot<'_>,need:StatxFlags)->io::Result<rustix::fs::Statx>{
+    let flags=AtFlags::SYMLINK_NOFOLLOW|AtFlags::NO_AUTOMOUNT;
+    if root.local_only(){
+        let pin=same_mount_leaf(root.dir(),OsStr::new(DATABASE))?;
+        crate::pinned::require_no_automount(&pin)?;
+        Ok(statx(&pin,c"",flags|AtFlags::EMPTY_PATH,need)?)
+    }else{Ok(statx(root.dir(),c"SYSTEM.sqlite3",flags,need)?)}
 }

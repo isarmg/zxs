@@ -155,3 +155,33 @@ fn bind_subtree_and_alias_fail_at_named_boundary_but_btrfs_has_two_device_meanin
     assert!(mounts.require_instance_parent_mount(1,root(52),41,Entity{ino:257,..subvolume},BTRFS_SUPER_MAGIC).is_err());
     assert!(mounts.require_instance_parent_mount(1,root(53),41,subvolume,BTRFS_SUPER_MAGIC).is_err());
 }
+
+#[test]
+fn nonempty_v17_rejects_remote_ancestors_and_ambiguous_crossings_before_a_path_open(){
+    let raw=b"41 41 8:1 / / rw - ext4 /dev/root rw
+\
+        42 41 8:2 / /mnt/local-\xff rw - xfs /dev/local rw
+\
+        43 41 0:7 / /mnt/remote rw - nfs4 server:/data rw
+\
+        44 43 8:3 / /mnt/remote/real-local rw - ext4 /dev/nested rw
+\
+        45 41 0:9 / /mnt/auto rw - autofs systemd-1 rw
+\
+        46 41 8:5 / /mnt/stack rw - ext4 /dev/first rw
+\
+        47 46 0:10 / /mnt/stack rw - cifs //server/other rw
+";
+    let cut=Mounts::discovery_table(raw,false).unwrap();
+    assert!(cut.roots.is_empty());
+    assert_eq!(cut.named(Path::new("/"),None).unwrap(),Some(41));
+    let local=Path::new(OsStr::from_bytes(b"/mnt/local-\xff"));
+    assert_eq!(cut.named(local,Some(41)).unwrap(),Some(42));
+    assert!(cut.named(local,Some(43)).is_err());
+    assert!(cut.named(Path::new("/mnt/remote/real-local"),Some(43)).is_err());
+    assert!(cut.named(Path::new("/mnt/remote"),Some(41)).is_err());
+    assert!(cut.named(Path::new("/mnt/auto"),Some(41)).is_err());
+    assert!(cut.named(Path::new("/mnt/stack"),Some(41)).is_err());
+    assert_eq!(cut.named(Path::new("/mnt/next-same-mount"),Some(41)).unwrap(),None);
+    assert!(Mounts::discover(raw).unwrap().iter().all(|r|r.id!=42&&r.id!=44));
+}
