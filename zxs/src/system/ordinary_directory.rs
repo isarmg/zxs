@@ -672,7 +672,9 @@ mod tests{
         let receipt=admin.freeze(op(0x9a),chosen).unwrap();
         assert_eq!(receipt.ord,1);
         let shown=admin.manual_timeline(new.file,None).unwrap();
-        assert_eq!(shown.name,"Reports\\2027\\Data");
+        assert_eq!(shown.place,crate::system::reader::account::history::TimelinePlace::Ordinary{
+            name:"Reports\\2027\\Data".into(),volume:route.volume(),
+        });
         assert_eq!(shown.rows[0].version,receipt.version);
         let base=OrdinaryRoot::at_parent(&src,&c,&root,None).unwrap();
         let listing=super::super::directory::mixed_page(&tree,&base,b"",2,||Ok(())).unwrap();

@@ -1,6 +1,6 @@
 //! Built-in HTML only. Dynamic values never become markup, CSS or arbitrary
 //! URLs. The public sign-in view has no parameter capable of carrying metadata.
-use crate::{FileId,OperationId,system::reader::account::{manual_work,overview::Overview,share_mode::Mode}};
+use crate::{FileId,OperationId,system::reader::account::{history::{Timeline,TimelinePlace},manual_work,overview::Overview,share_mode::Mode}};
 use super::Reply;
 use std::{fmt::Write,io};
 
@@ -90,13 +90,22 @@ fn an_unsettled_parent_never_becomes_an_old_path_or_a_submit_link(){
     assert!(page.body.contains(&format!("/versions?file={other}"))&&page.body.contains("Other.txt"));
 }
 
-pub(super) fn version_history(history:&crate::system::reader::account::history::Timeline)->Reply{
+pub(super) fn version_history(history:&Timeline)->Reply{
     let mut out=String::from(HEAD);
-    out.push_str("<title>已提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>已提交版本</h1><p>");
-    out.push_str(if history.retained{"当前保留名称 <bdi>"}else{"当前卷内路径 <bdi>"});
-    text(&mut out,&history.name);
-    let role=if history.retained{"回收卷"}else{"数据卷"};
-    write!(out,"</bdi> · {role} <code>{}</code></p><p>这里只列已提交的版本，不读取正文或核验磁盘。</p>",history.volume).unwrap();
+    out.push_str("<title>已提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>已提交版本</h1>");
+    let named=match &history.place{
+        TimelinePlace::Ordinary{name,volume}=>Some(("当前卷内路径","数据卷",name,volume)),
+        TimelinePlace::Retained{name,volume}=>Some(("当前保留名称","回收卷",name,volume)),
+        TimelinePlace::ParentPending=>{
+            write!(out,"<p>文件 <code>{}</code>。所属目录改名尚未确认，暂不显示路径，也不提供提交入口。</p>",history.file).unwrap();
+            None
+        },
+    };
+    if let Some((label,role,name,volume))=named{
+        write!(out,"<p>{label} <bdi>").unwrap();text(&mut out,name);
+        write!(out,"</bdi> · {role} <code>{volume}</code></p>").unwrap();
+    }
+    out.push_str("<p>这里只列已提交的版本，不读取正文或核验磁盘。</p>");
     if history.rows.is_empty(){out.push_str("<p>尚无已提交版本。</p>");}
     else{
         out.push_str(r#"<table class="zxs-table"><thead><tr><th>序号</th><th>版本 ID</th><th>节点 ID</th><th>父节点</th><th>工作修订</th><th>逻辑字节</th></tr></thead><tbody>"#);
@@ -110,9 +119,27 @@ pub(super) fn version_history(history:&crate::system::reader::account::history::
     if let Some(upper)=history.next{
         write!(out,r#"<p><a href="/versions/history?file={}&amp;before={upper}">更早的版本</a></p>"#,history.file).unwrap();
     }
-    if !history.retained{write!(out,r#"<p><a href="/versions?file={}">打开手动提交表单</a></p>"#,history.file).unwrap();}
+    if matches!(&history.place,TimelinePlace::Ordinary{..}){
+        write!(out,r#"<p><a href="/versions?file={}">打开手动提交表单</a></p>"#,history.file).unwrap();
+    }
     out.push_str(r#"<p><a href="/versions">返回文件列表</a></p></main></body></html>"#);
     Reply::html("200 OK",out)
+}
+
+#[cfg(test)]
+#[test]
+fn pending_parent_history_displays_only_original_identity_versions_and_read_navigation(){
+    use crate::{NodeId,VersionId,system::reader::account::history::Version};
+    let file=FileId([0x41;16]);let version=VersionId([0x42;16]);let node=NodeId([0x43;16]);
+    let history=Timeline{file,place:TimelinePlace::ParentPending,next:Some(1),
+        rows:vec![Version{order:2,node,version,parent:Some(NodeId([0x44;16])),revision:3,length:7}]};
+    let body=version_history(&history).body;
+    assert!(body.contains(&format!("<code>{file}</code>"))&&body.contains("所属目录改名尚未确认"));
+    assert!(body.contains(&format!("<code>{version}</code>"))&&body.contains(&format!("<code>{node}</code>")));
+    assert!(body.contains(&format!("/versions/history?file={file}&amp;before=1")));
+    for unwarranted in ["<bdi>","当前卷内路径","数据卷","回收卷","/versions?file=","<form","/download"]{
+        assert!(!body.contains(unwarranted));
+    }
 }
 
 pub(super) fn manual(item:&manual_work::Item,t:manual_work::Target,op:OperationId,csrf:&str)->Reply{

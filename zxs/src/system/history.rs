@@ -1,21 +1,26 @@
 //! Read-only Web history: exact confirmed node metadata in the local
 //! database. It neither checks disk health nor opens a FILE or its body.
 use super::{WebAdmin,Connection};
-use super::super::{file_location::Place,smb::{file_create,ordinary_directory::Route},work_record};
+use super::super::{file_location::{Place,Placed},smb::ordinary_directory::Route,work_record};
 use crate::{FileId,NodeId,OperationId,Role,VersionId,VolumeId,fs::invalid};
 use std::io;
 
 const PAGE:usize=32;
 pub(crate) struct Timeline{
-    pub(crate) file:FileId,pub(crate) name:String,pub(crate) volume:VolumeId,
-    pub(crate) retained:bool,pub(crate) rows:Vec<Version>,pub(crate) next:Option<i64>,
+    pub(crate) file:FileId,pub(crate) place:TimelinePlace,
+    pub(crate) rows:Vec<Version>,pub(crate) next:Option<i64>,
+}
+#[derive(Debug,Eq,PartialEq)]
+pub(crate) enum TimelinePlace{
+    Ordinary{name:String,volume:VolumeId},
+    Retained{name:String,volume:VolumeId},
+    // An exact original pending rename was verified for a selected
+    // ancestor. No old spelling, destination or volume leaves this cut.
+    ParentPending,
 }
 pub(crate) struct Version{
     pub(crate) order:i64,pub(crate) node:NodeId,pub(crate) version:VersionId,
     pub(crate) parent:Option<NodeId>,pub(crate) revision:u64,pub(crate) length:u64,
-}
-fn positive_role(p:&Place)->io::Result<bool>{
-    match p.role{Role::File=>Ok(false),Role::Recycle=>Ok(true),_=>Err(invalid("non-FILE role in confirmed history"))}
 }
 fn original_parent(db:&Connection,file:FileId,parent:OperationId,order:i64)->io::Result<NodeId>{
     let q=db.prepare(c"SELECT n.node_id FROM main.manual_node n JOIN main.operation o ON o.op_id=n.commit_op
@@ -34,8 +39,15 @@ impl WebAdmin<'_>{
         if upper<1{return Err(invalid("invalid manual timeline cursor"));}
         self.source.at(|db,c|{
             self.current(db,&c)?;
-            let at=Place::current(db,&c,file)?;let birth=file_create::committed_file(db,&c,file)?;
-            let retained=positive_role(&at)?;
+            let Placed{birth,here:at}=Place::current(db,&c,file)?.bind(db,&c)?;
+            let place=match at.role{
+                Role::File=>match Route::settled_at(db,&c,at.volume,at.parent)?{
+                    Some(route)=>TimelinePlace::Ordinary{name:route.show_child(&at.name),volume:at.volume},
+                    None=>TimelinePlace::ParentPending,
+                },
+                Role::Recycle=>TimelinePlace::Retained{name:at.name,volume:at.volume},
+                _=>return Err(invalid("non-FILE role in confirmed history")),
+            };
             let q=db.prepare(c"SELECT n.ord,n.node_id,n.version_id,n.parent_op,n.revision,n.round_op,n.save_op
              FROM main.manual_node n JOIN main.operation o ON o.op_id=n.commit_op AND o.kind=11 AND o.state=1
              WHERE n.file_id=?1 AND n.ord<=?2 ORDER BY n.ord DESC LIMIT 33")?;
@@ -62,8 +74,7 @@ impl WebAdmin<'_>{
                 rows.push(Version{order:ord,node,version,parent,revision,length:issued.logical()});previous=Some(ord);
             }
             let next=if rows.len()>PAGE{rows.pop().map(|v|v.order)}else{None};
-            let name=if retained{at.name}else{Route::at(db,&c,at.volume,at.parent)?.show_child(&at.name)};
-            Ok(Timeline{file,name,volume:at.volume,retained,rows,next})
+            Ok(Timeline{file,place,rows,next})
         })
     }
 }
@@ -86,7 +97,10 @@ mod tests{
         let input=std::fs::OpenOptions::new().write(true).read(true).create_new(true).mode(0o600).open(temp.0.join("input")).unwrap();
         let mut prev=None;let mut originals=Vec::new();
         for i in 0..34u8{
-            let op=OperationId([0x80+2*i;16]);let commit=OperationId([0x81+2*i;16]);
+            // The pool already issued repeated-byte IDs for shares/modes.
+            // Give both operations in each round an independent test key.
+            let id=|kind|{let mut bytes=[0x7f;16];bytes[14]=i;bytes[15]=kind;OperationId(bytes)};
+            let op=id(1);let commit=id(2);
             input.write_all_at(&[i],0).unwrap();input.sync_all().unwrap();
             tree.open_writer("Tracked.txt",file).unwrap().save(op,prev,Some(0),1,&input).unwrap();
             originals.push(admin.freeze(commit,admin.manual_target(file).unwrap()).unwrap());prev=Some(op);

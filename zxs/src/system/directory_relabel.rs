@@ -391,9 +391,9 @@ mod tests{
     use crate::system::reader::smb::ordinary_directory::{DirectoryParent,HeldDir,Route};
     use std::io;
     use crate::{fs::directory_birth::{DirectoryRename,DirectoryRenameSide},
-        system::reader::{InitialReader,ordinary_pool,smb::SmbSession,account::{manual_work::PickerItem,share_mode::Mode}},
+        system::reader::{InitialReader,ordinary_pool,smb::SmbSession,account::{history::TimelinePlace,manual_work::PickerItem,share_mode::Mode}},
         test_support::PrivateTemp};
-    use std::{cell::Cell,os::unix::fs::MetadataExt};
+    use std::{cell::Cell,os::unix::fs::{FileExt,MetadataExt,OpenOptionsExt}};
     fn op(x:u8)->OperationId{OperationId([x;16])}
     #[test]
     #[ignore="source-only actual SQLite, same-directory inode and immutable descendant parent, no SMB listener"]
@@ -407,9 +407,20 @@ mod tests{
         let (child,next)=tree.make_ordinary_directory(&route,op(0x62),"Notes",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
         let native=std::fs::metadata(&next.directory().path).unwrap().ino();drop(next);
         let occupied=tree.create_file(op(0x63),"Other.txt").unwrap();
-        let entry=tree.scoped(DirectoryParent::Directory(child.id)).create_file(op(0x69),"Inside.txt").unwrap();
+        let inside=tree.scoped(DirectoryParent::Directory(child.id));
+        let entry=inside.create_file(op(0x69),"Inside.txt").unwrap();
         let reader=InitialReader::open(&s,pool).unwrap();
         let web=reader.authenticate_web("first.admin","correct horse battery staple").unwrap();
+        let input=std::fs::OpenOptions::new().read(true).write(true).create_new(true).mode(0o600)
+            .open(tmp.0.join("history-input")).unwrap();
+        input.write_all_at(b"v",0).unwrap();input.sync_all().unwrap();
+        inside.open_writer("Inside.txt",entry.file).unwrap().save(op(0x6b),None,Some(0),1,&input).unwrap();
+        let version=web.freeze(op(0x6c),web.manual_target(entry.file).unwrap()).unwrap();
+        input.write_all_at(b"v2",0).unwrap();input.sync_all().unwrap();
+        inside.open_writer("Inside.txt",entry.file).unwrap().save(op(0x6d),Some(op(0x6b)),Some(0),2,&input).unwrap();
+        let previous=web.manual_timeline(entry.file,None).unwrap();
+        assert_eq!(previous.place,TimelinePlace::Ordinary{name:"Reports\\Notes\\Inside.txt".into(),volume:born.volume});
+        let (draft,_) = web.manual_preview(entry.file).unwrap();
         let raw=Connection::open(&src.dir,true).unwrap();
         let orig=route.selected().unwrap();
         let a=&session.original;
@@ -450,6 +461,12 @@ mod tests{
         assert_eq!(rows.len(),2);assert!(after.is_none());
         assert!(rows.iter().any(|row|matches!(row,PickerItem::ParentPending(id) if *id==entry.file)));
         assert!(rows.iter().any(|row|matches!(row,PickerItem::Named(item) if item.file==occupied.file&&item.name=="Other.txt")));
+        let pending=web.manual_timeline(entry.file,None).unwrap();
+        assert_eq!((pending.file,pending.place,pending.next),(entry.file,TimelinePlace::ParentPending,None));
+        assert!(matches!(&pending.rows[..],[row] if (row.order,row.node,row.version,row.length)==(1,version.node,version.version,1)));
+        assert_eq!(web.manual_preview(entry.file).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+        assert_eq!(web.freeze(op(0x6e),draft).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+        assert!(web.manual_receipt(op(0x6e),draft).unwrap().is_none());
         let conflicting=request(0x66,"Wrong");
         assert!(src.transaction(&raw,c"BEGIN IMMEDIATE",|db,c|conflicting.confirm(db,&c)).is_err());
         assert_eq!(src.at(|db,c|selected(db,&c,r.op)).unwrap(),Some(r.clone()));
@@ -482,6 +499,10 @@ mod tests{
         let(rows,_)=web.manual_files(None).unwrap();
         assert!(rows.iter().any(|row|matches!(row,PickerItem::Named(item)
             if item.file==entry.file && item.name=="reports\\Notes\\Inside.txt")));
+        let after=web.manual_timeline(entry.file,None).unwrap();
+        assert_eq!(after.place,TimelinePlace::Ordinary{name:"reports\\Notes\\Inside.txt".into(),volume:born.volume});
+        assert!(matches!(&after.rows[..],[row] if (row.node,row.version,row.length)==(version.node,version.version,1)));
+        assert_eq!(web.manual_preview(entry.file).unwrap().0,draft);
         assert!(src.transaction(&raw,c"BEGIN IMMEDIATE",|db,c|r.confirm(db,&c)).is_err());
         let (separate,_)=tree.make_ordinary_directory(&root,op(0x68),"Reports",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
         assert_ne!(separate.id,born.id);
