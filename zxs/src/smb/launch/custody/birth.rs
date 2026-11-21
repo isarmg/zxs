@@ -268,8 +268,8 @@ impl<'a> Born<'a>{
     pub(super) fn web(mut self,frame:&[u8;80],public:&File,listener:BorrowedFd<'_>,gate:BorrowedFd<'_>,
         until:Instant,before_send:impl FnOnce()->Result<()>)->std::result::Result<Ready<'a>,(Fault,Self)>{
         let verified=(||{
-            if self.role!=Role::Web||&frame[..16]!=b"ZXS-WEB/START-2\0"{return Err(Fault::Handoff);}
-            let mut wanted=*frame;wanted[..16].copy_from_slice(b"ZXS-WEB/PREP-02\0");
+            if self.role!=Role::Web||&frame[..16]!=crate::smb::launch::web::START{return Err(Fault::Handoff);}
+            let mut wanted=*frame;wanted[..16].copy_from_slice(crate::smb::launch::web::PREPARED);
             self.await_exec(until)?;
             let original=self.handoff_identity()?;
             let channel=self.channel.take().ok_or(Fault::Handoff)?;

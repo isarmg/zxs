@@ -1,6 +1,7 @@
 //! One bounded HTTP/1.1 origin-form request per connection. No re-use,
 //! transfer codings, upstream user claims, file serving or forwarding trust.
-use super::{access::{self,ExternalHttps},manual,App,BAD,REJECT,Reply,Request,Token};
+//! The optional scoped proxy authenticates its own hop, never a Web user.
+use super::{access::HOP_HEADER,manual,App,BAD,REJECT,Reply,Request,Token,WebAccess};
 use crate::fs::invalid;
 use std::{io::{self,Read,Write},net::{IpAddr,SocketAddr,TcpListener,TcpStream},os::fd::AsRawFd,
     sync::{OnceLock,atomic::{compiler_fence,AtomicBool,Ordering},mpsc},time::{Duration,Instant}};
@@ -27,7 +28,10 @@ fn cookie(s:&str,name:&str)->io::Result<Option<Token>>{
     }Ok(found)
 }
 fn field_byte(c:u8)->bool{c.is_ascii_alphanumeric()||b"!#$%&'*+-.^_`|~".contains(&c)}
-fn parse(mut input:impl Read,local:SocketAddr,peer:IpAddr,proxy:Option<&ExternalHttps>)->io::Result<Request>{
+fn parse(mut input:impl Read,local:SocketAddr,peer:IpAddr,access:&WebAccess)->io::Result<Request>{
+    // In proxy-only mode an actual non-loopback socket cannot even read
+    // HTTP bytes, including a plausible Host or a guessed proxy header.
+    if !access.permits_socket(local,peer){return Err(io::ErrorKind::PermissionDenied.into());}
     let mut raw=PrivateBytes(vec![0;HEAD]);let mut have=0;
     let end=loop{
         if have==HEAD{return Err(bad());}
@@ -43,7 +47,7 @@ fn parse(mut input:impl Read,local:SocketAddr,peer:IpAddr,proxy:Option<&External
     if !matches!(method,"GET"|"POST")||r.next()!=Some("HTTP/1.1")||r.next().is_some()||
        target.len()>128||!target.starts_with('/')||target.starts_with("//")||
        !target.bytes().all(|c|(b'!'..=b'~').contains(&c)&&!matches!(c,b'\\'|b'#')){return Err(bad());}
-    let(mut host,mut origin,mut cookies,mut ty,mut length)=(None,None,None,None,None);
+    let(mut host,mut origin,mut cookies,mut ty,mut length,mut hop)=(None,None,None,None,None,None);
     for(i,line)in lines.enumerate(){
         if i>=MAX_FIELDS{return Err(bad());}
         let (k,v)=line.split_once(':').ok_or_else(bad)?;
@@ -54,12 +58,13 @@ fn parse(mut input:impl Read,local:SocketAddr,peer:IpAddr,proxy:Option<&External
             else if k.eq_ignore_ascii_case("cookie"){&mut cookies}
             else if k.eq_ignore_ascii_case("content-type"){&mut ty}
             else if k.eq_ignore_ascii_case("content-length"){&mut length}
+            else if k.eq_ignore_ascii_case(HOP_HEADER){&mut hop}
             else if ["transfer-encoding","expect","trailer","upgrade","content-encoding"].iter().any(|s|k.eq_ignore_ascii_case(s)){return Err(bad());}
             else{continue}; // includes Forwarded, X-Forwarded-* and Remote-User: never interpreted.
         if slot.replace(v).is_some(){return Err(bad());}
     }
     let host=host.ok_or_else(bad)?;
-    let audience=access::select(local,peer,host,proxy).ok_or_else(||io::Error::from(io::ErrorKind::PermissionDenied))?;
+    let audience=access.audience(local,host,hop).ok_or_else(||io::Error::from(io::ErrorKind::PermissionDenied))?;
     let len=match (method,length){("GET",None)=>0,(_,Some(v))=>number(v)?,_=>return Err(bad())};
     if method=="GET"&&len!=0{return Err(bad());}
     let mut body=PrivateBytes(vec![0;len]);let already=(have-end).min(len);
@@ -95,9 +100,9 @@ impl Read for Timed<'_>{fn read(&mut self,buf:&mut[u8])->io::Result<usize>{
 impl Write for Timed<'_>{fn write(&mut self,p:&[u8])->io::Result<usize>{
     self.0.set_write_timeout(Some(self.remaining()?))?;self.0.write(p)
 }fn flush(&mut self)->io::Result<()>{self.0.flush()}}
-pub(super) fn respond(stream:TcpStream,proxy:Option<&ExternalHttps>,handle:impl FnOnce(Request)->io::Result<Reply>)->io::Result<()>{
+pub(super) fn respond(stream:TcpStream,access:&WebAccess,handle:impl FnOnce(Request)->io::Result<Reply>)->io::Result<()>{
     stream.set_nonblocking(false)?;
-    let q=parse(Timed(&stream,Instant::now()+IO_TIME),stream.local_addr()?,stream.peer_addr()?.ip(),proxy);
+    let q=parse(Timed(&stream,Instant::now()+IO_TIME),stream.local_addr()?,stream.peer_addr()?.ip(),access);
     let result=match q{Ok(q)=>handle(q)?,Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>REJECT(),
         Err(e)if matches!(e.kind(),io::ErrorKind::InvalidData|io::ErrorKind::InvalidInput)=>BAD(),Err(e)=>return Err(e)};
     result.write(Timed(&stream,Instant::now()+IO_TIME))
@@ -121,7 +126,7 @@ fn admission(closing:&AtomicBool,stopping:&impl Fn()->bool,run:impl FnOnce()->Re
     if admitted(closing,stopping){run()}else{stopped()}
 }
 fn stopped()->Reply{Reply::text("503 Service Unavailable","管理服务正在停止。")}
-fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,accepting:&AtomicBool,jobs:mpsc::SyncSender<Job>){
+fn worker(ls:&TcpListener,access:&WebAccess,closing:&AtomicBool,accepting:&AtomicBool,jobs:mpsc::SyncSender<Job>){
     while !closing.load(Ordering::Acquire){
         if !accepting.load(Ordering::Acquire){
             std::thread::sleep(Duration::from_millis(10));continue;
@@ -132,7 +137,7 @@ fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,accep
             _=>{worker_fault(closing,&jobs,io::Error::last_os_error());break;}
         };
         if closing.load(Ordering::Acquire){break;}
-        let _=respond(s,proxy,|q|{
+        let _=respond(s,access,|q|{
             let(tx,rx)=mpsc::sync_channel(1);
             jobs.send(Job::Call(q,tx)).map_err(|_|io::ErrorKind::BrokenPipe)?;
             rx.recv().map_err(|_|io::ErrorKind::BrokenPipe.into())
@@ -140,19 +145,19 @@ fn worker(ls:&TcpListener,proxy:Option<&ExternalHttps>,closing:&AtomicBool,accep
     }
 }
 #[cfg(test)]
-pub(super) fn serve(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,stopping:impl Fn()->bool+Sync)->io::Result<()>{
+pub(super) fn serve(ls:&TcpListener,access:&WebAccess,app:&mut App<'_>,stopping:impl Fn()->bool+Sync)->io::Result<()>{
     let accepting=AtomicBool::new(true); // Only a fixture's private listener.
-    serve_after(ls,proxy,app,stopping,&accepting,||Ok(()))
+    serve_after(ls,access,app,stopping,&accepting,||Ok(()))
 }
-pub(super) fn serve_ready<F:Fn()->bool+Send+Sync>(ls:&TcpListener,app:&mut App<'_>,
+pub(super) fn serve_ready<F:Fn()->bool+Send+Sync>(ls:&TcpListener,access:&WebAccess,app:&mut App<'_>,
     ready:impl FnOnce()->io::Result<F>)->io::Result<()>{
     let accepting=AtomicBool::new(false);
     let original=OnceLock::<F>::new();
     let stopping=||original.get().is_some_and(|lost|lost());
-    serve_after(ls,None,app,stopping,&accepting,||
+    serve_after(ls,access,app,stopping,&accepting,||
         original.set(ready()?).map_err(|_|io::Error::other("the same Web original was already admitted")))
 }
-fn serve_after(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,stopping:impl Fn()->bool+Sync,
+fn serve_after(ls:&TcpListener,access:&WebAccess,app:&mut App<'_>,stopping:impl Fn()->bool+Sync,
     accepting:&AtomicBool,ready:impl FnOnce()->io::Result<()>)->io::Result<()>{
     ls.set_nonblocking(true)?;let closing=AtomicBool::new(false);
     std::thread::scope(|scope|{
@@ -161,7 +166,7 @@ fn serve_after(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,sto
         let original_stop=&stopping;
         std::thread::Builder::new().name("zxs-manual-work".into()).spawn_scoped(scope,move||manual::run(site,closed,original_stop,orders))?;
         for _ in 0..WORKERS{let jobs=tx.clone();let closed=&closing;
-            if let Err(e)=std::thread::Builder::new().name("zxs-http-io".into()).spawn_scoped(scope,move||worker(ls,proxy,closed,accepting,jobs)){
+            if let Err(e)=std::thread::Builder::new().name("zxs-http-io".into()).spawn_scoped(scope,move||worker(ls,access,closed,accepting,jobs)){
                 closing.store(true,Ordering::Release);failure=Some(e);break;
             }
         }drop(tx);
@@ -202,7 +207,7 @@ fn serve_after(ls:&TcpListener,proxy:Option<&ExternalHttps>,app:&mut App<'_>,sto
 #[cfg(test)]
 mod tests{
     use super::*;
-    fn read(wire:&str)->io::Result<Request>{parse(wire.as_bytes(),"192.0.2.10:8443".parse().unwrap(),"192.0.2.11".parse().unwrap(),None)}
+    fn read(wire:&str)->io::Result<Request>{parse(wire.as_bytes(),"192.0.2.10:8443".parse().unwrap(),"192.0.2.11".parse().unwrap(),&WebAccess::Direct)}
     const OK:&str="GET /login HTTP/1.1\r\nHost: 192.0.2.10:8443\r\n";
     #[test]fn fixed_http_framing_and_separate_authority(){
         assert!(read(&format!("{OK}Accept: */*\r\n\r\n")).is_ok());
@@ -220,6 +225,53 @@ mod tests{
         let mut a=b"password=%26%2B%25&login=manager".to_vec();assert_eq!(fields(&mut a,["login","password"]),Some(["manager","&+%"]));
         for b in [b"password=a&password=b".as_slice(),b"login=a&password=%GG",b"login=a&password=ok&extra=q"]{
             assert!(fields(&mut b.to_vec(),["login","password"]).is_none());}
+    }
+
+    #[test]
+    fn proxy_only_checks_the_actual_socket_before_read_and_never_falls_back(){
+        struct NoRead;
+        impl Read for NoRead{fn read(&mut self,_:&mut [u8])->io::Result<usize>{panic!("foreign socket read HTTP");}}
+        const ORIGIN:&str="https://admin.example:8444";
+        const KEY:&str=concat!("a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5");
+        // Independent SHA-256 of the published fixture's 64 ASCII characters,
+        // deliberately NOT SHA-256 of the 32 decoded bytes.
+        const SUM:&str="sha256:6eaea290aba480e118080ad627adff12fee3152d396b1f90807c6b527d4ac91f";
+        let mode=WebAccess::external_confirmation(ORIGIN,SUM).unwrap();
+        let local="127.0.0.1:8443".parse().unwrap();let peer="127.0.0.1".parse().unwrap();
+        for (bind,other) in [(local,"192.0.2.10"),(local,"127.0.0.2"),(local,"::ffff:127.0.0.1"),
+               ("192.0.2.10:8443".parse().unwrap(),"127.0.0.1"),("127.0.0.2:8443".parse().unwrap(),"127.0.0.1")]{
+            assert_eq!(parse(NoRead,bind,other.parse().unwrap(),&mode).err().unwrap().kind(),io::ErrorKind::PermissionDenied);
+        }
+        let get=|host:&str,fields:&str|format!("GET /login HTTP/1.1\r\nHost: {host}\r\n{fields}\r\n");
+        let read=|host:&str,fields:&str|parse(get(host,fields).as_bytes(),local,peer,&mode);
+        let proof=format!("{HOP_HEADER}: {KEY}\r\n");
+        let unrelated="Forwarded: proto=http;host=wrong.example\r\nX-Forwarded-Proto: http\r\nX-Forwarded-Host: wrong.example\r\nRemote-User: wrong\r\n";
+        let accepted=read("admin.example:8444",&format!("{proof}{unrelated}")).unwrap();
+        assert!(accepted.audience.secure);assert_eq!(accepted.audience.origin,ORIGIN);
+        assert_eq!(accepted.audience.cookie(),"__Host-zxs");
+        assert!(accepted.cookie.is_none()&&accepted.origin.is_none()&&accepted.body.0.is_empty());
+        assert_eq!(accepted.audience.set_cookie("fixture",false),"__Host-zxs=fixture; Path=/; Secure; HttpOnly; SameSite=Strict");
+        for wrong_host in ["127.0.0.1:8443","admin.example","Admin.example:8444","attacker.example:8444"]{
+            assert!(read(wrong_host,&proof).is_err());
+        }
+        for denied in ["".to_owned(),unrelated.to_owned(),format!("{HOP_HEADER}: {}\r\n","A5".repeat(32)),
+            format!("{HOP_HEADER}: {}\r\n", "a5".repeat(31)),format!("{HOP_HEADER}: {}\r\n", "a4".repeat(32)),
+            format!("{HOP_HEADER}: {}\r\n",&SUM[7..]),format!("{proof}zxs-proxy-key: {KEY}\r\n"),
+            format!("{proof}hOsT: admin.example:8444\r\n"),format!("{proof}Origin: {ORIGIN}\r\norigin: null\r\n")]{
+            assert!(read("admin.example:8444",&denied).is_err());
+        }
+        let nonscope=get("127.0.0.1:8443","");
+        assert!(parse(nonscope.as_bytes(),local,peer,&mode).is_err());
+        let direct=WebAccess::Direct;
+        assert!(parse(nonscope.as_bytes(),local,peer,&direct).is_ok());
+        assert!(parse(get("127.0.0.1:8443",&proof).as_bytes(),local,peer,&direct).is_err());
+        let binary_digest=WebAccess::external_confirmation(ORIGIN,
+            "sha256:fc8b64001c5fdd0f2f40fb67dae4a865a2c5bd17836676d6d5b58b7917e33717").unwrap();
+        assert!(parse(get("admin.example:8444",&proof).as_bytes(),local,peer,&binary_digest).is_err());
+        let post=format!("POST /logout HTTP/1.1\r\nHost: admin.example:8444\r\nContent-Length: 0\r\nOrigin: null\r\n{proof}\r\n");
+        // Transport preserves the original Origin verbatim, so the
+        // existing App-level immutable-Origin/CSRF checks can reject it.
+        assert_eq!(parse(post.as_bytes(),local,peer,&mode).unwrap().origin.as_deref(),Some("null"));
     }
 
     #[test]fn queued_call_is_not_admitted_on_stop_or_a_fault_still_in_the_channel(){

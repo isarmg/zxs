@@ -90,7 +90,7 @@ impl VerifiedControl{
     #[allow(dead_code)]
     pub(in crate::smb::launch) fn publish_web_prepared(self,frame:&[u8;START_BYTES],until:Instant)->Result<VerifiedWebRun>{
         self.require_live()?;
-        if &frame[..16]!=b"ZXS-WEB/PREP-02\0"||Instant::now()>=until{return Err(Fault::Handoff);}
+        if &frame[..16]!=b"ZXS-WEB/PREP-03\0"||Instant::now()>=until{return Err(Fault::Handoff);}
         let fd=self.original.socket.as_raw_fd();
         // SAFETY: exact own original socket and fixed live frame. Send once
         // with no SCM_RIGHTS; failure cannot advance a separate READY path.

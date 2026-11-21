@@ -61,9 +61,13 @@ build and disposable, no-Helper cold launch must establish that separately.
 The same foreground terminal renders only the authenticated low ACTIVE facts
 and the actual retained media selection, then issues one typed confirmation
 consumed by the same ZXS instance, reply and selected view before listeners or
-the serving handoff. Web is the existing direct HTTP on 0.0.0.0:8443 for this
-fresh scope. An existing proxy environment is explicitly rejected, never
-interpreted as approval or silently changed into direct HTTP. The Web child
+the serving handoff. Web always uses the original HTTP listener on
+0.0.0.0:8443. The real foreground consent selects direct cleartext or the
+strict same-host authenticated proxy mode for this run only. The public
+origin/digest do not alter the site record, and only the sealed Web START
+carries that scope. Existing proxy environment flags are rejected; no
+malformed or failed proxy mode falls back to direct. TLS is external.
+The Web child
 gets the same original SYSTEM and selected ordinary media read-only for the
 manual version proof, with no recycle, vault, or SMB socket. Both lowered
 births are the same installed ZXS ELF, with separate original listeners and

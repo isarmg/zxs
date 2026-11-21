@@ -6,7 +6,7 @@ mod pages;
 mod transport;
 mod access;
 mod manual;
-#[cfg(test)] use access::ExternalHttps;
+pub(crate) use access::{MAX_HTTPS_ORIGIN,WebAccess};
 use access::Audience;
 
 const IDLE:Duration=Duration::from_secs(15*60);
@@ -138,8 +138,8 @@ impl<'s> App<'s>{
 /// The verified same-ELF Web role supplies its already qualified original
 /// S, listener and READY cut. No selection, bind or settings fallback here.
 pub(crate) fn serve_ready_original<F:Fn()->bool+Send+Sync>(source:&InitialReader,listener:&TcpListener,
-    ready:impl FnOnce()->io::Result<F>)->io::Result<()>{
-    transport::serve_ready(listener,&mut App::new(source),ready)
+    access:&WebAccess,ready:impl FnOnce()->io::Result<F>)->io::Result<()>{
+    transport::serve_ready(listener,access,&mut App::new(source),ready)
 }
 
 #[cfg(test)]

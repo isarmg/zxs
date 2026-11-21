@@ -1,8 +1,23 @@
 //! A bounded fresh public confirmation on the same foreground slave or
 //! VT. It never reads passwords, changes termios or accepts a caller path.
 use super::{SiteLease,denied,held::{fd_mount,proc_dir,proc_pin},hex,media::Media};
-use crate::smb::launch::{custody::{Parent,VerifiedPreflight},kernel};
+use crate::{management::{MAX_HTTPS_ORIGIN,WebAccess},smb::launch::{custody::{Parent,VerifiedPreflight},kernel}};
 use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read,Write},os::{fd::{AsRawFd,RawFd},unix::fs::MetadataExt},thread,time::{Duration,Instant}};
+
+// One canonical TTY line, including LF, and one extra byte to detect
+// oversize even when a single read is cut at the full supplied buffer.
+const RUN_PREFIX:&str="RUN-ZXS ";
+const HTTPS_MARK:&str=" WEB-HTTPS ";
+const CONFIRM_MAX:usize=RUN_PREFIX.len()+32+HTTPS_MARK.len()+MAX_HTTPS_ORIGIN+1+7+64+1;
+fn confirmation(line:&[u8],command:&str)->io::Result<WebAccess>{
+    if line.len()>CONFIRM_MAX{return Err(denied());}
+    let rest=std::str::from_utf8(line).ok().and_then(|s|s.strip_suffix('\n'))
+        .and_then(|s|s.strip_prefix(command)).ok_or_else(denied)?;
+    if rest.is_empty(){return Ok(WebAccess::Direct);}
+    let https=rest.strip_prefix(HTTPS_MARK).ok_or_else(denied)?;
+    let (origin,sum)=https.split_once(' ').ok_or_else(denied)?;
+    WebAccess::external_confirmation(origin,sum).map_err(|_|denied())
+}
 
 #[derive(Clone,Copy,PartialEq,Eq)]
 struct Surface{device:u64,inode:u64,rdev:u64,mount:u64}
@@ -73,7 +88,7 @@ impl Terminal{
         media.require_for(site,selected)?;
         let facts=selected.qualified_for(site)?;
         let plan=selected.plan();
-        let mut detail=format!("本配置的直接 Web 监听 0.0.0.0:8443。\n站点 {}，唯一共享 ZXS；原 SMB 用户 {}（第 {} 代），禁用来宾。\n",
+        let mut detail=format!("本配置的 Web HTTP 监听固定 0.0.0.0:8443。\n站点 {}，唯一共享 ZXS；原 SMB 用户 {}（第 {} 代），禁用来宾。\n",
             escaped(plan.hostname().as_bytes()),escaped(facts.epoch.login.as_bytes()),facts.epoch.generation);
         if plan.planned_folders().len()!=facts.ordinary.len(){return Err(denied());}
         for &(ip,prefix) in plan.endpoints(){
@@ -94,7 +109,7 @@ impl Terminal{
         // SAFETY: a bounded output array; no fallback or user supplied token.
         if unsafe{libc::getrandom(random.as_mut_ptr().cast(),random.len(),libc::GRND_NONBLOCK)}!=random.len() as isize||
             random==[0;16]{return Err(denied());}
-        let answer=format!("RUN-ZXS {}\n",hex(&random));
+        let command=format!("{RUN_PREFIX}{}",hex(&random));
         let summary=format!(
             "只启动本次前台运行的整套 ZXS，不迁移池、不改密码、宿主挂载、防火墙或系统服务。已批准操作的原待办可能在真正就绪后继续核对或清退。\n\
              Pool {} / INIT {} / Setup {} / Instance {} / Bind {}。\n\
@@ -106,26 +121,25 @@ impl Terminal{
         let deadline=Instant::now()+Duration::from_secs(120);
         let check=||{live()?;self.require()};
         check()?;self.flush_input()?;
-        let outcome=(||->io::Result<()>{
+        let outcome=(||->io::Result<WebAccess>{
             write_until(&self.output,summary.as_bytes(),deadline,&check)?;
             self.flush_input()?;
-            let prompt=format!("同意以上原件与范围时输入 {answer}此处不输入口令。\n");
+            let prompt=format!("同意以上原件后，请选择本次 Web 模式：\n  {command}  （直连明文；不向不可信网络开放）\n  {command}{HTTPS_MARK}<规范 HTTPS origin> sha256:<代理密钥摘要>  （只准本机受信代理）\n只输一行；绝不输入账号口令或代理密钥原值。\n");
             write_until(&self.output,prompt.as_bytes(),deadline,&check)?;
-            let mut input=[0;96];
+            let mut input=[0;CONFIRM_MAX+1];
             loop{
                 check()?;later_than(deadline)?;
                 match (&self.input).read(&mut input){
-                    Ok(n) if &input[..n]==answer.as_bytes()=>return Ok(()),
-                    Ok(_)=>return Err(denied()),
+                    Ok(n)=>return confirmation(&input[..n],&command),
                     Err(e) if retry(&e)=>{},
                     Err(e)=>return Err(e),
                 }
             }
         })();
-        self.flush_input()?;outcome?;
+        self.flush_input()?;let web=outcome?;
         check()?;site.require()?;media.require_for(site,selected)?;
         selected.qualified_for(site)?;
-        Ok(StartApproval{terminal:self,site,selected,media})
+        Ok(StartApproval{terminal:self,site,selected,media,web})
     }
     pub(in crate::smb::launch) fn report(&self,msg:&str,check:impl Fn()->io::Result<()>)->io::Result<()>{
         if msg.len()>12*1024{return Err(denied());}
@@ -141,18 +155,19 @@ impl Terminal{
 #[must_use]
 pub(in crate::smb::launch) struct StartApproval<'t,'m,'v,'s,'p>{
     terminal:&'t Terminal,site:&'s SiteLease<'p>,
-    selected:&'v VerifiedPreflight<'s,'p>,media:&'m Media<'v,'s,'p>,
+    selected:&'v VerifiedPreflight<'s,'p>,media:&'m Media<'v,'s,'p>,web:WebAccess,
 }
 impl<'v,'s,'p> StartApproval<'_,'_,'v,'s,'p>{
     pub(in crate::smb::launch) fn consume_for(
         self,site:&SiteLease<'p>,selected:&VerifiedPreflight<'s,'p>,media:&Media<'v,'s,'p>,
-    )->io::Result<()>{
+    )->io::Result<WebAccess>{
         if !std::ptr::eq(self.site,site)||!std::ptr::eq(self.selected,selected)||!std::ptr::eq(self.media,media){
             return Err(denied());
         }
         self.terminal.require()?;self.site.require()?;
         self.selected.qualified_for(site)?;
-        self.media.require_for(site,selected)
+        self.media.require_for(site,selected)?;
+        Ok(self.web)
     }
 }
 fn escaped(value:&[u8])->String{
@@ -214,5 +229,34 @@ fn retry(e:&io::Error)->bool{
         io::ErrorKind::Interrupted=>true,
         io::ErrorKind::WouldBlock=>{thread::sleep(Duration::from_millis(20));true}
         _=>false,
+    }
+}
+
+#[cfg(test)]
+mod confirmations{
+    use super::*;
+    #[test]
+    fn same_foreground_confirmation_explicitly_selects_one_ephemeral_web_mode(){
+        let command=format!("{RUN_PREFIX}{}","42".repeat(16));
+        assert!(matches!(confirmation(format!("{command}\n").as_bytes(),&command).unwrap(),WebAccess::Direct));
+        let digest=[0x35;32];let mark=format!("sha256:{}","35".repeat(32));
+        let origin="https://admin.example:8444";
+        let proxy=format!("{command}{HTTPS_MARK}{origin} {mark}");
+        let selected=confirmation(format!("{proxy}\n").as_bytes(),&command).unwrap();
+        assert_eq!(selected.external_fields(),Some((origin,digest)));
+        // The exact maximum authority is the named 253-byte DNS host
+        // plus a colon/five-digit non-default HTTPS port.
+        let max_host=["a".repeat(63),"b".repeat(63),"c".repeat(63),"d".repeat(61)].join(".");
+        let limit=format!("{command}{HTTPS_MARK}https://{max_host}:65535 {mark}\n");
+        assert_eq!(limit.len(),CONFIRM_MAX);
+        assert!(confirmation(limit.as_bytes(),&command).is_ok());
+        for invalid in [command.clone(),format!("{command}\r\n"),format!("{command} \n"),
+            format!("{command}{HTTPS_MARK}\n"),format!("{command}{HTTPS_MARK}{origin}\n"),
+            format!("{command}{HTTPS_MARK}{origin}  {mark}\n"),format!("{command}{HTTPS_MARK}{origin} {}\n",&mark[7..]),
+            format!("{proxy} \n"),format!("{proxy}\nextra\n"),format!("{proxy}\n{command}\n"),
+            format!("{limit}\n"),format!("RUN-ZXS {}{HTTPS_MARK}{origin} {mark}\n","43".repeat(16))]{
+            assert!(confirmation(invalid.as_bytes(),&command).is_err());
+        }
+        assert!(confirmation(b"\xff\n",&command).is_err());
     }
 }

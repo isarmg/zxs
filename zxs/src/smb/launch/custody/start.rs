@@ -4,6 +4,7 @@
 //! original children during life and drain.
 use super::{Fault,Parent,VerifiedPreflight,birth::{Ready,Role},foreground,kernel::{cloexec,get_flags,sock,sock_int},
     listeners::Listeners,preflight::nonce,view::{self,Kind,Source,View}};
+use crate::management::WebAccess;
 use crate::smb::launch::{
     cohort::{self,PairOffer},envelope::{self,ENV_MAX},pair_gate::{GateOwner,GateStamp,ReadLoans},
     site::{SiteLease,Terminal,media::Media},transport::seal_public,web,
@@ -45,10 +46,10 @@ fn start_both_stops(mut smb:impl FnMut()->super::Result<()>,mut web:impl FnMut()
 pub(in crate::smb::launch) fn prepare_site<'s,'p>(parent:&'p Parent,site:&'s SiteLease<'p>,terminal:&Terminal)
     ->io::Result<VerifiedPreflight<'s,'p>>{
     if !site.is_original_parent(parent){return Err(no());}
-    // A direct-HTTP-only private product candidate must not silently
-    // substitute direct HTTP for the existing configured HTTPS audience.
+    // Old environment input never authorizes an audience or turns a
+    // malformed intended proxy scope into direct HTTP.
     if ["ZXS_WEB_TRUSTED_PROXY","ZXS_WEB_PUBLIC_ORIGIN"].into_iter().any(|key|std::env::var_os(key).is_some()){
-        return Err(io::Error::new(io::ErrorKind::Unsupported,"configured Web HTTPS proxy is not admitted by this direct-only candidate"));
+        return Err(io::Error::new(io::ErrorKind::Unsupported,"legacy Web proxy environment is not accepted; choose the audience at the original foreground confirmation"));
     }
     terminal.require()?;site.require()?;
     foreground::install().map_err(|_|no())?;
@@ -61,7 +62,7 @@ pub(in crate::smb::launch) fn prepare_site<'s,'p>(parent:&'p Parent,site:&'s Sit
 pub(in crate::smb::launch) struct Authorized<'t,'m,'v,'s,'p>{
     parent:&'p Parent,site:&'s SiteLease<'p>,terminal:&'t Terminal,
     selected:&'v VerifiedPreflight<'s,'p>,media:&'m Media<'v,'s,'p>,smb:bool,web:bool,
-    pair:PairOffer,gate:GateOwner<'p>,loans:ReadLoans,
+    pair:PairOffer,gate:GateOwner<'p>,loans:ReadLoans,web_access:WebAccess,
 }
 pub(in crate::smb::launch) fn authorize<'t,'m,'v,'s,'p>(
     parent:&'p Parent,site:&'s SiteLease<'p>,terminal:&'t Terminal,
@@ -75,7 +76,7 @@ pub(in crate::smb::launch) fn authorize<'t,'m,'v,'s,'p>(
         foreground::require().map_err(|_|no())
     };
     live()?;
-    terminal.approve(site,selected,media,&live)?.consume_for(site,selected,media)?;
+    let web_access=terminal.approve(site,selected,media,&live)?.consume_for(site,selected,media)?;
     live()?;
     let facts=selected.qualified_for(site)?;
     let location=site.system()?.2;
@@ -84,7 +85,7 @@ pub(in crate::smb::launch) fn authorize<'t,'m,'v,'s,'p>(
     let (gate,loans)=GateOwner::prepare(parent,nonce,cohort).map_err(|_|no())?;
     let pair=PairOffer{nonce,cohort,gate:gate.stamp(),until_tick:cohort::new_deadline().map_err(|_|no())?};
     live()?;
-    Ok(Authorized{parent,site,terminal,selected,media,smb:false,web:false,pair,gate,loans})
+    Ok(Authorized{parent,site,terminal,selected,media,smb:false,web:false,pair,gate,loans,web_access})
 }
 /// Only true returned role-specific PREPARED custody can construct this.
 pub(in crate::smb::launch) struct PreparedPair<'a,'p>{
@@ -173,14 +174,14 @@ pub(in crate::smb::launch) fn launch_internal_web<'m,'v,'s,'p>(scope:&mut Author
     sources.extend(media.ordinary_roots().map(|(path,original)|Source{path,original,kind:Kind::Ordinary}));
     let view=View::prepare(parent,sources,Role::Web).map_err(|_|no())?;
     scope.live()?;
-    // The existing Web product uses just this fixed direct IPv4 listener.
-    // The entitled child verifies this same cookie/IP/port, not an env or
-    // caller-supplied address. No proxy policy is introduced by this lane.
+    // Same fixed IPv4 HTTP listener for either foreground-approved mode.
+    // The lowered child verifies this same cookie/IP/port and the sealed
+    // audience, never a browser-selected or environment-supplied setting.
     let listener=TcpListener::bind((Ipv4Addr::UNSPECIFIED,8443))?;
     listener.set_nonblocking(true)?;
     let cookie=u64::from_ne_bytes(sock(listener.as_raw_fd(),libc::SOL_SOCKET,libc::SO_COOKIE).map_err(|_|no())?);
     let read_only=view::flags(system).map_err(|_|no())?&libc::ST_RDONLY!=0;
-    let (header,body)=web::encode(selected.plan(),nonce().map_err(|_|no())?,cookie,read_only,scope.pair).map_err(|_|no())?;
+    let (header,body)=web::encode(selected.plan(),nonce().map_err(|_|no())?,cookie,read_only,scope.pair,&scope.web_access).map_err(|_|no())?;
     let sealed=seal_public(&body,web::MAX).map_err(|_|no())?;
     let who=site.subject();
     let before=||->io::Result<()>{

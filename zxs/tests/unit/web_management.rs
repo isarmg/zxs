@@ -4,6 +4,10 @@ use crate::{system::reader::web_pool,test_support::PrivateTemp};
 use std::{io::{Read,Write},net::{Shutdown,TcpListener,TcpStream}};
 const HOST:&str="admin.example";
 const SITE:&str="https://admin.example";
+const KEY:&str=concat!("a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5");
+fn proxy()->WebAccess{
+    WebAccess::external_confirmation(SITE,"sha256:6eaea290aba480e118080ad627adff12fee3152d396b1f90807c6b527d4ac91f").unwrap()
+}
 fn wire(method:&str,uri:&str,host:&str,cookie:&str,origin:&str,body:&str,extra:&str)->String{
     let mut q=format!("{method} {uri} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\n",body.len());
     if !origin.is_empty(){q.push_str(&format!("Origin: {origin}\r\n"));}
@@ -11,17 +15,16 @@ fn wire(method:&str,uri:&str,host:&str,cookie:&str,origin:&str,body:&str,extra:&
     if method=="POST"{q.push_str("Content-Type: application/x-www-form-urlencoded\r\n");}
     format!("{q}{extra}\r\n{body}")
 }
-fn exchange(app:&mut App<'_>,listener:&TcpListener,proxy:Option<&ExternalHttps>,q:String)->String{
+fn exchange(app:&mut App<'_>,listener:&TcpListener,mode:&WebAccess,q:String)->String{
     let addr=listener.local_addr().unwrap();
     let client=std::thread::spawn(move||{let mut c=TcpStream::connect(addr).unwrap();c.write_all(q.as_bytes()).unwrap();
         c.shutdown(Shutdown::Write).unwrap();let mut out=String::new();c.read_to_string(&mut out).unwrap();out});
     let(server,_)=listener.accept().unwrap();
-    transport::respond(server,proxy,|q|Ok(app.handle(q,Instant::now()))).unwrap();client.join().unwrap()
+    transport::respond(server,mode,|q|Ok(app.handle(q,Instant::now()))).unwrap();client.join().unwrap()
 }
 fn hit(app:&mut App<'_>,method:&str,uri:&str,cookie:&str,origin:&str,body:&str)->String{
     let s=TcpListener::bind(("127.0.0.1",0)).unwrap();
-    let p=ExternalHttps::new("127.0.0.1".parse().unwrap(),SITE).unwrap();
-    exchange(app,&s,Some(&p),wire(method,uri,HOST,cookie,origin,body,""))
+    exchange(app,&s,&proxy(),wire(method,uri,HOST,cookie,origin,body,&format!("ZXS-Proxy-Key: {KEY}\r\n")))
 }
 fn hidden<'a>(page:&'a str,action:&str,key:&str)->&'a str{
     let needle=format!("action=\"{action}\"");let form=page.split_once(needle.as_str()).unwrap().1.split_once("</form>").unwrap().0;
@@ -101,28 +104,34 @@ fn direct_needs_no_domain_certificate_or_proxy_and_sessions_do_not_cross_transpo
     let source=InitialReader::open(&path,id).unwrap();let mut app=App::new(&source);
     let ls=TcpListener::bind(("127.0.0.1",0)).unwrap();let host=ls.local_addr().unwrap().to_string();
     let site=format!("http://{host}");let b="login=first.admin&password=correct+horse+battery+staple";
-    let raw=exchange(&mut app,&ls,None,wire("GET","/login",&host,"","","",""));
+    let raw=exchange(&mut app,&ls,&WebAccess::Direct,wire("GET","/login",&host,"","","",""));
     assert!(raw.starts_with("HTTP/1.1 200")&&raw.contains("此连接使用 HTTP"));
-    assert!(exchange(&mut app,&ls,None,wire("POST","/login",HOST,"",SITE,b,
+    assert!(exchange(&mut app,&ls,&WebAccess::Direct,wire("POST","/login",HOST,"",SITE,b,
         "Forwarded: proto=https\r\nX-Forwarded-Host: admin.example\r\n")).starts_with("HTTP/1.1 403"));
-    assert!(exchange(&mut app,&ls,None,wire("POST","/login",&host,"",SITE,b,"")).starts_with("HTTP/1.1 403"));
-    let r=exchange(&mut app,&ls,None,wire("POST","/login",&host,"",&site,b,"X-Forwarded-Proto: https\r\n"));
+    assert!(exchange(&mut app,&ls,&WebAccess::Direct,wire("POST","/login",&host,"",SITE,b,"")).starts_with("HTTP/1.1 403"));
+    let r=exchange(&mut app,&ls,&WebAccess::Direct,wire("POST","/login",&host,"",&site,b,"X-Forwarded-Proto: https\r\n"));
     assert!(r.starts_with("HTTP/1.1 303")&&r.contains("Set-Cookie: zxs-http=")&&!r.contains("; Secure"));
     assert!(r.contains("Path=/; HttpOnly; SameSite=Strict")&&!r.contains("Domain="));
     let c=r.lines().find_map(|h|h.strip_prefix("Set-Cookie: ")).unwrap().split(';').next().unwrap();
-    let page=exchange(&mut app,&ls,None,wire("GET","/",&host,c,"","",""));
+    let page=exchange(&mut app,&ls,&WebAccess::Direct,wire("GET","/",&host,c,"","",""));
     assert!(page.contains("first.admin"));let kill=format!("csrf={}",hidden(&page,"/logout","csrf"));
     // A rejected external-origin attempt cannot remove the legitimate direct session.
     let forged_secure=c.replace("zxs-http=","__Host-zxs=");
     assert!(hit(&mut app,"POST","/logout",&forged_secure,SITE,&kill).starts_with("HTTP/1.1 403"));
-    assert!(exchange(&mut app,&ls,None,wire("GET","/",&host,c,"","","")).contains("first.admin"));
+    assert!(exchange(&mut app,&ls,&WebAccess::Direct,wire("GET","/",&host,c,"","","")).contains("first.admin"));
     let tls_cookie=logged(&mut app).replace("__Host-zxs=","zxs-http=");
-    assert!(exchange(&mut app,&ls,None,wire("GET","/",&host,&tls_cookie,"","","")).starts_with("HTTP/1.1 403"));
+    assert!(exchange(&mut app,&ls,&WebAccess::Direct,wire("GET","/",&host,&tls_cookie,"","","")).starts_with("HTTP/1.1 403"));
     let other=TcpListener::bind(("127.0.0.1",0)).unwrap();let second=other.local_addr().unwrap().to_string();
-    assert!(exchange(&mut app,&other,None,wire("GET","/",&second,c,"","","")).starts_with("HTTP/1.1 403"));
-    assert!(ExternalHttps::new("::1".parse().unwrap(),SITE).is_err()); // native backend accepts IPv4, not an unreachable proxy peer
-    let wrong=ExternalHttps::new("192.0.2.1".parse().unwrap(),SITE).unwrap();
-    assert!(exchange(&mut app,&ls,Some(&wrong),wire("GET","/login",HOST,"","","","X-Forwarded-For: 192.0.2.1\r\n")).starts_with("HTTP/1.1 403"));
+    assert!(exchange(&mut app,&other,&WebAccess::Direct,wire("GET","/",&second,c,"","","")).starts_with("HTTP/1.1 403"));
+    for original in [HOST,host.as_str()]{
+        let reply=exchange(&mut app,&ls,&proxy(),wire("POST","/login",original,"",SITE,b,
+            "X-Forwarded-For: 127.0.0.1\r\nX-Forwarded-Proto: https\r\n"));
+        assert!(reply.starts_with("HTTP/1.1 403")&&!reply.contains("Set-Cookie: "));
+    }
+    let wrong=format!("ZXS-Proxy-Key: {}\r\n","01".repeat(32));
+    assert!(exchange(&mut app,&ls,&proxy(),wire("GET","/login",HOST,"","","",&wrong)).starts_with("HTTP/1.1 403"));
+    assert!(exchange(&mut app,&ls,&proxy(),wire("GET","/login",HOST,"","","",
+        &format!("zxs-proxy-key: {KEY}\r\nZXS-Proxy-Key: {KEY}\r\n"))).starts_with("HTTP/1.1 400"));
 }
 #[test]
 #[ignore="source-only slow peer and independent browser, native bounded I/O pool"]
@@ -140,7 +149,7 @@ fn partial_first_request_does_not_hold_the_application_or_another_browser(){
             let mut out=String::new();fast.read_to_string(&mut out).unwrap();
             assert!(out.starts_with("HTTP/1.1 200")&&out.contains("此连接使用 HTTP"));drop(slow);
         });
-        transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
+        transport::serve(&ls,&WebAccess::Direct,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
     });
 }
 
@@ -229,7 +238,7 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
             assert!(req("POST",lookup,c,&origin,&good).starts_with("HTTP/1.1 409"));
             (old_op,new_op,result,history_result)
         });
-        transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
+        transport::serve(&ls,&WebAccess::Direct,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
         client.join().unwrap()
     });
     assert!(admin.manual_target(file).is_err());
@@ -251,7 +260,7 @@ fn failed_private_web_ready_keeps_the_original_listener_unserved(){
     let listener=TcpListener::bind(("127.0.0.1",0)).unwrap();
     let _peer=TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let count=std::cell::Cell::new(0);
-    let rejected=serve_ready_original(&source,&listener,||->io::Result<fn()->bool>{
+    let rejected=serve_ready_original(&source,&listener,&WebAccess::Direct,||->io::Result<fn()->bool>{
         count.set(count.get()+1);
         Err(io::ErrorKind::PermissionDenied.into())
     });
