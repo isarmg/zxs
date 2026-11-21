@@ -9,7 +9,7 @@ from ..model import Rejected
 from .checkout_action import CheckoutChoice, available
 from .commit_controls import CommitControls
 from .initialize_choice import InitializeChoice, available as can_initialize
-from .selection import read_registered_baseline, submit_verification
+from .selection import Verification, read_registered_baseline, submit_verification
 from .widgets import Table, button, confirm, label
 
 
@@ -605,11 +605,19 @@ class CheckoutPane(QWidget):
         self._visibility_job("正在只读查询本窗口这笔原目录改名…", plan.result, shown)
 
     def compare_live(self, *, initial=False):
-        live = self.live
+        live, record = self.live, self.live_record
         if (live is None or self.owner.pending is not None or self.active
                 or self.commits.running is not None or self.changes_dialog is not None): return
+        observer = Verification()
+
+        def current():
+            return self.live is live and self.live_record is record
+
         def done(outcome):
-            if self.live is not live: return
+            if not current(): return
+            if observer.cancelled:
+                self.owner.inform("已取消工作树对照；没有写入或显示不完整结果。")
+                return
             result, error = outcome
             if error is not None:
                 self.owner.inform(f"未取得完整工作树对照：{error}。未启动冻结、提交或恢复。")
@@ -628,11 +636,13 @@ class CheckoutPane(QWidget):
                 # Route a late refusal through the same session check as a late success.
                 try:
                     with closing(loan):
-                        return (observe_initial_changes(loan) if initial else observe_live_changes(loan)), None
+                        observe = observe_initial_changes if initial else observe_live_changes
+                        return observe(loan, observer=observer), None
                 except Exception as error: return None, error
             title = ("正在离线对照初次签出的原核验索引和本机工作目录…" if initial else
                      "正在只读核验实际基线及本次工作目录…")
-            future = self.owner.job(title, read, done)
+            future = self.owner.job(title, read, done, cancel=observer.cancel, cancel_text="取消工作树对照",
+                                    progress_report=lambda: observer.progress() if current() else ("", 0, None))
             if future is None: raise Rejected("另一个任务正在执行；未开始对照")
         except BaseException as error:
             if loan is not None: loan.close()

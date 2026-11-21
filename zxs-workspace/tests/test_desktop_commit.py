@@ -20,7 +20,7 @@ from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped
 from zipworkspace.desktop.pending_fork import PendingFork
 from zipworkspace.desktop.selection import Selection, Verification, read_registered_baseline
 from zipworkspace.desktop.retry_choice import PendingRetry
-from zipworkspace.model import Commit, Manifest, Rejected
+from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
 
 
 def snapshot(path, marker=None, *, year=1980):
@@ -237,6 +237,37 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
         with patch.object(lifecycle, "observe_held", side_effect=change_basis):
             with self.assertRaisesRegex(Rejected, "原基线改变"):
                 lifecycle.observe_initial_changes(self.live)
+
+    def test_can_stop_work_observation_in_both_modes_without_any_candidate(self):
+        (self.tree/"story").write_bytes(b"z" * (CHUNK + 41))
+        original_state = set(self.state.iterdir())
+
+        class StopAtWork(Verification):
+            def __init__(self):
+                super().__init__()
+                self.phases = []
+            def begin(self, phase, total=None):
+                super().begin(phase, total)
+                self.phases.append(phase)
+            def advance(self, n):
+                super().advance(n)
+                if self.phases[-1] == "folder": self.cancel()
+
+        online = StopAtWork()
+        with self.assertRaisesRegex(Rejected, "取消"):
+            lifecycle.observe_live_changes(self.live, observer=online)
+        self.assertEqual(online.phases, ["identity", "layout", "members", "identity", "raw", "folder"])
+        offline = StopAtWork()
+        with patch.object(lifecycle, "relative_document", side_effect=AssertionError("offline does not access STORE")), \
+             self.assertRaisesRegex(Rejected, "取消"):
+            lifecycle.observe_initial_changes(self.live, observer=offline)
+        self.assertEqual(offline.phases, ["identity", "folder"])
+        for watch in (online, offline):
+            _, count, total = watch.progress()
+            self.assertTrue(0 < count <= CHUNK)
+            self.assertIsNone(total)  # no extra pre-scan or declaration for a mutable work directory
+        self.assertEqual(set(self.state.iterdir()), original_state)
+        self.assertIsNone(self.live.status()["pending_operation"])
         with patch.object(lifecycle, "observe_held", side_effect=AssertionError("wrong initial raw digest")):
             with self.assertRaisesRegex(Rejected, "不是首次签出的确切基线"):
                 lifecycle.observe_initial_changes(self.live)
@@ -250,8 +281,9 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
         win = Window(); self.addCleanup(win.close)
         pane = win.archive.checkout
         native = lifecycle.observe_live_changes
-        for stale, refused in ((False, False), (False, True), (True, False), (True, True)):
-            live = self.open_live(self.loose, f"view-{stale}-{refused}")
+        for stale, refused, cancelled in ((False, False, False), (False, True, False), (True, False, False),
+                                          (True, True, False), (False, False, True)):
+            live = self.open_live(self.loose, f"view-{stale}-{refused}-{cancelled}")
             pane.live = live
             pane.changes.setEnabled(True)
             jobs, loans = [], []
@@ -259,12 +291,12 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
                 future = Future()
                 jobs.append((future, work))
                 return future
-            def read(loan):
+            def read(loan, *, observer):
                 loans.append(loan)
                 self.assertIsNot(loan, live)
                 if refused: raise Rejected("原读请求被拒")
-                return native(loan)
-            with self.subTest(stale=stale, refused=refused), \
+                return native(loan, observer=observer)
+            with self.subTest(stale=stale, refused=refused, cancelled=cancelled), \
                  patch.object(win.pool, "submit", side_effect=queue), \
                  patch.object(checkout_pane, "observe_live_changes", side_effect=read), \
                  patch.object(pane, "show_changes") as opened:
@@ -275,12 +307,16 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
                     win.inform("另一选择的提示")
                 self.assertTrue(future.set_running_or_notify_cancel())
                 future.set_result(work())
+                if cancelled: win.transfer_cancel.click()
                 win.poll()
                 self.assertIsNone(win.pending)
                 self.assertTrue(loans[0].closed)
                 if stale:
                     opened.assert_not_called()
                     self.assertEqual(win.note.text(), "另一选择的提示")
+                elif cancelled:
+                    opened.assert_not_called()
+                    self.assertIn("已取消工作树对照", win.note.text())
                 elif refused:
                     opened.assert_not_called()
                     self.assertIn("原读请求被拒", win.note.text())

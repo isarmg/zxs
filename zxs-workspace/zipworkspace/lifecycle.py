@@ -96,10 +96,11 @@ def _base_leaf(expected):
     return f"{repo}.{branch}.{generation:016x}.zxs"
 
 
-def _verify_base(doc, name, expected):
-    marker, base = read_managed_document(doc, display_name=name)
+def _verify_base(doc, name, expected, *, observer=None):
+    options = {} if observer is None else {"observer": observer}
+    marker, base = read_managed_document(doc, display_name=name, **options)
     if ((marker.repo, marker.branch, marker.generation, marker.operation) != expected[:4]
-            or archive_sha(doc) != expected[4]):
+            or archive_sha(doc, **options) != expected[4]):
         raise Rejected("STORE 原基线的节点或整包 SHA-256 不符")
     return marker, base
 
@@ -115,7 +116,7 @@ def _idle_live_base(live, *, local_only=False):
         return _base_values(row)
 
 
-def _observe_local_work(live, *, with_store):
+def _observe_local_work(live, *, with_store, observer=None):
     from .private_stage import same_mount
     working_mount = same_mount(live.state_fd, live.work_fd)
     outside = (live.state_fd, live.store_fd) if with_store else (live.state_fd,)
@@ -129,28 +130,34 @@ def _observe_local_work(live, *, with_store):
         if (m.st_dev, m.st_ino) in excluded or mount_id(child) != working_mount:
             raise Rejected("工作目录含子挂载或 STATE/STORE 别名；没有完整观察")
 
-    return observe_held(live.work_fd, work, require_ids=True, check_held=work_member)
+    options = {} if observer is None else {"observer": observer}
+    return observe_held(live.work_fd, work, require_ids=True, check_held=work_member, **options)
 
 
-def observe_initial_changes(live):
+def observe_initial_changes(live, *, observer=None):
     """Local observation only, against the exact initial checkout this window created."""
     from .comparison import compare_to_index
+    if observer is not None: observer.begin("identity")
     index = live.initial_index
     if index is None: raise Rejected("本窗口没有从原签出交接的初始核验索引")
     marker = index.commit
     expected = (marker.repo, marker.branch, marker.generation, marker.operation, live.checkout_sha)
     if _idle_live_base(live, local_only=True) != expected:
         raise Rejected("原登记已不是首次签出的确切基线；请核验 STORE 中的当前版本")
-    current = _observe_local_work(live, with_store=False)
+    current = _observe_local_work(live, with_store=False, observer=observer)
+    if observer is not None: observer.begin("compare")
     result = compare_to_index(index, current)
+    if observer is not None: observer.begin("identity")
     if _idle_live_base(live, local_only=True) != expected:
         raise Rejected("离线观察期间原基线改变；不显示旧结果")
+    if observer is not None: observer.check()
     return marker, result
 
 
-def observe_live_changes(live):
+def observe_live_changes(live, *, observer=None):
     """One observation against this still-held CLI checkout's last recorded base."""
     from .comparison import compare_manifests
+    if observer is not None: observer.begin("identity")
     expected = _idle_live_base(live)
     name = _base_leaf(expected)
     store_mount = mount_id(live.store_fd)
@@ -160,12 +167,15 @@ def observe_live_changes(live):
         observed = stamp(doc)
         if mount_id(doc.fileno()) != store_mount:
             raise Rejected("基线归档不在原 STORE 挂载")
-        marker, base = _verify_base(doc, name, expected)
+        marker, base = _verify_base(doc, name, expected, observer=observer)
         check_relative(live.store_fd, name, doc, observed)
-        current = _observe_local_work(live, with_store=True)
+        current = _observe_local_work(live, with_store=True, observer=observer)
+        if observer is not None: observer.begin("compare")
         result = compare_manifests(base, current)
+        if observer is not None: observer.begin("identity")
         if _idle_live_base(live) != expected:
             raise Rejected("观察期间原登记基线改变；请重新查看")
+    if observer is not None: observer.check()
     return marker, result
 
 
