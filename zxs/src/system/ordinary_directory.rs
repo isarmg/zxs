@@ -1,7 +1,7 @@
 //! The same SYSTEM authority selects a real ordinary parent and its original
 //! directory births. Neither physical names nor an old operation grant SMB.
-use super::{Catalog,Connection,Tree,check,denied,sqlite3_step};
-use super::super::{file_location::Place,volume::OrdinaryRoot,work_record};
+use super::{Catalog,Connection,InitialReader,Tree,check,denied,sqlite3_step};
+use super::super::{account::share_mode::Setting,file_location::Place,volume::OrdinaryRoot,work_record};
 use crate::{DirectoryId,EntryId,OperationId,PoolId,Role,VolumeId,display,
     fs::{DIRECTORY_BYTES,DIRECTORY_NAMES,HeldDir,MAX_PATH_DEPTH,invalid,path_budget,
         directory_birth::{DIRECTORY_MARK,DirectoryBirth,DirectoryHold,DirectoryParent}},
@@ -156,12 +156,13 @@ fn pending_at(db:&Connection,c:&Catalog,route:&Route,name:&str)->io::Result<Opti
     if p.birth.volume!=route.volume||p.birth.parent!=route.parent()||p.birth.name!=name{return Err(denied());}
     Ok(Some(p))
 }
-fn for_tree(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,op:OperationId,parent:DirectoryParent,name:&str)->io::Result<Option<Original>>{
-    let a=&tree.session.original;let g=tree.setting;
+fn exact_original(at:&DirectoryAt<'_>,db:&Connection,c:&Catalog,op:OperationId,parent:DirectoryParent,name:&str)
+    ->io::Result<Option<Original>>{
+    let g=at.setting;
     let x=original(db,c,op)?;
     if x.as_ref().is_some_and(|x|
         x.birth.parent!=parent||x.birth.name!=name||x.birth.volume!=g.volume||x.share!=g.share||
-        x.setting!=g.op||x.auth!=a.op||x.actor!=a.account||x.epoch!=a.generation){return Err(denied());}
+        x.setting!=g.op||x.auth!=at.auth||x.actor!=at.actor||x.epoch!=at.epoch){return Err(denied());}
     Ok(x)
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
@@ -229,14 +230,39 @@ impl<'s,'r> Tree<'s,'r>{
     /// mutation. This method returns no DirectoryHold on an unknown outcome.
     pub(super) fn make_ordinary_directory(&self,route:&Route,op:OperationId,name:&str,
         offer:impl FnOnce(&DirectoryBirth)->io::Result<()>,live:&impl Fn()->io::Result<()>,
+        cut:impl FnMut(Cut)->io::Result<()>)->io::Result<(DirectoryBirth,DirectoryHold)>{
+        let a=&self.session.original;
+        let require=|cut:&DirectoryCreateCut<'_>|{
+            debug_assert!(std::ptr::eq(cut.source,self.session.source));
+            self.require(cut.db,cut.catalog,true)
+        };
+        let at=DirectoryAt{source:self.session.source,setting:self.setting,actor:a.account,auth:a.op,
+            epoch:a.generation,require:&require};
+        at.make(route,op,name,offer,live,cut)
+    }
+}
+
+/// Short exact source and account check, inside the same original SQLite
+/// transactions. This does not issue a namespace or a live tree.
+struct DirectoryCreateCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+struct DirectoryAt<'a>{
+    source:&'a InitialReader,setting:Setting,actor:AccountId,auth:OperationId,epoch:i64,
+    require:&'a dyn Fn(&DirectoryCreateCut<'_>)->io::Result<()>,
+}
+impl DirectoryAt<'_>{
+    fn authorized(&self,db:&Connection,catalog:&Catalog)->io::Result<()>{
+        (self.require)(&DirectoryCreateCut{source:self.source,db,catalog})
+    }
+    fn make(&self,route:&Route,op:OperationId,name:&str,
+        offer:impl FnOnce(&DirectoryBirth)->io::Result<()>,live:&impl Fn()->io::Result<()>,
         mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<(DirectoryBirth,DirectoryHold)>{
-        let src=self.session.source;let g=self.setting;let a=&self.session.original;let parent=route.parent();
+        let src=self.source;let g=self.setting;let parent=route.parent();
         if route.volume!=g.volume{return Err(denied());}
         display::component(name.as_bytes(),255)?;
         let (catalog,old,superseded)=src.at(|db,c|{
-            self.require(db,&c,true)?;live()?;
+            self.authorized(db,&c)?;live()?;
             if Route::at(db,&c,g.volume,parent)?!=*route{return Err(denied());}
-            let old=for_tree(self,db,&c,op,parent,name)?;
+            let old=exact_original(self,db,&c,op,parent,name)?;
             let earlier=if old.is_none(){pending_at(db,&c,route,name)?}else{None};
             if old.is_none()&&earlier.is_none(){directory_vacant(db,&c,route,name)?;}
             Ok((c,old,earlier))
@@ -246,17 +272,17 @@ impl<'s,'r> Tree<'s,'r>{
         if let Some(prior)=&superseded{
             let (terminal,paired)=prior.birth.pending_shape(d,&from_disk()?)?;
             if terminal{return Err(busy());}
-            let lost=prior.auth!=a.op||prior.setting!=g.op;
+            let lost=prior.auth!=self.auth||prior.setting!=g.op;
             if paired&&!lost{return Err(busy());}
             let reason=if lost{1}else{2};
             root.require_streaming()?;
             let sql=Connection::open(&src.dir,true)?;
             src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|{
-                self.require(db,&c,true)?;
+                self.authorized(db,&c)?;
                 if pending_at(db,&c,route,name)?.as_ref()!=Some(prior){return Err(denied());}
                 live()?;
                 let x=db.prepare(c"INSERT INTO main.directory_abort(create_op,setting_op,auth_op,reason) VALUES(?1,?2,?3,?4)")?;
-                x.bind_bytes(1,&prior.birth.original.0)?;x.bind_bytes(2,&g.op.0)?;x.bind_bytes(3,&a.op.0)?;x.bind_integer(4,reason)?;x.done()
+                x.bind_bytes(1,&prior.birth.original.0)?;x.bind_bytes(2,&g.op.0)?;x.bind_bytes(3,&self.auth.0)?;x.bind_integer(4,reason)?;x.done()
             })?;
         }
         let birth=match &old{
@@ -268,32 +294,32 @@ impl<'s,'r> Tree<'s,'r>{
         if old.is_none(){birth.new_vacancy(d,&from_disk()?)?;}
         if let Some(prior)=&old{if prior.done{
             let held=birth.open(d)?;root.require_streaming()?;
-            src.at(|db,c|{self.require(db,&c,true)?;live()?;
-                if for_tree(self,db,&c,op,parent,name)?.as_ref()!=Some(prior){return Err(denied());}Ok(())})?;
+            src.at(|db,c|{self.authorized(db,&c)?;live()?;
+                if exact_original(self,db,&c,op,parent,name)?.as_ref()!=Some(prior){return Err(denied());}Ok(())})?;
             return Ok((birth,held)); // already published; never a native offer
         }}
         live()?;offer(&birth)?;live()?;
-        let sha=digest(&birth,a.account,a.op,a.generation,g.share,g.op)?;
+        let sha=digest(&birth,self.actor,self.auth,self.epoch,g.share,g.op)?;
         if old.is_none(){
             let census=from_disk()?;birth.new_vacancy(d,&census)?;root.require_streaming()?;
             let sql=Connection::open(&src.dir,true)?;
             let reserve=src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|{
-                self.require(db,&c,true)?;
-                if Route::at(db,&c,g.volume,parent)?!=*route||for_tree(self,db,&c,op,parent,name)?.is_some(){return Err(denied());}
+                self.authorized(db,&c)?;
+                if Route::at(db,&c,g.volume,parent)?!=*route||exact_original(self,db,&c,op,parent,name)?.is_some(){return Err(denied());}
                 directory_vacant(db,&c,route,name)?;budget(db,g.volume,parent,&census,Some(Additional::Directory(&birth)))?;
                 live()?;
                 let q=db.prepare(c"INSERT INTO main.directory_entry(create_op,directory_id,entry_id,volume_id,parent_id,display,share_id,setting_op,auth_op)
                                               VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?;
                 for(i,v)in [op.0.as_slice(),birth.id.0.as_slice(),birth.entry.0.as_slice(),g.volume.0.as_slice(),
-                            parent.bytes().as_slice(),name.as_bytes(),g.share.0.as_slice(),g.op.0.as_slice(),a.op.0.as_slice()
+                            parent.bytes().as_slice(),name.as_bytes(),g.share.0.as_slice(),g.op.0.as_slice(),self.auth.0.as_slice()
                            ].into_iter().enumerate(){q.bind_bytes(i as i32+1,v)?;}
                 q.done()?;
                 let q=db.prepare(c"INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,13,?2,?3,0)")?;
-                q.bind_bytes(1,&op.0)?;q.bind_bytes(2,&a.account.0)?;q.bind_bytes(3,&sha)?;q.done()
+                q.bind_bytes(1,&op.0)?;q.bind_bytes(2,&self.actor.0)?;q.bind_bytes(3,&sha)?;q.done()
             });
             drop(sql);
             if let Err(e)=reserve{
-                let selected=src.at(|db,c|{self.require(db,&c,true)?;for_tree(self,db,&c,op,parent,name)})?;
+                let selected=src.at(|db,c|{self.authorized(db,&c)?;exact_original(self,db,&c,op,parent,name)})?;
                 if !selected.is_some_and(|x|!x.done&&!x.aborted&&x.birth==birth){return Err(e);}
             }
         }
@@ -302,9 +328,9 @@ impl<'s,'r> Tree<'s,'r>{
         held.require_newborn(d)?;root.require_streaming()?;
         let sql=Connection::open(&src.dir,true)?;
         let confirm=src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|{
-            self.require(db,&c,true)?;
+            self.authorized(db,&c)?;
             if Route::at(db,&c,g.volume,parent)?!=*route||
-               !for_tree(self,db,&c,op,parent,name)?.is_some_and(|x|!x.done&&!x.aborted&&x.birth==birth){return Err(denied());}
+               !exact_original(self,db,&c,op,parent,name)?.is_some_and(|x|!x.done&&!x.aborted&&x.birth==birth){return Err(denied());}
             live()?;
             let q=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=13 AND state=0 RETURNING op_id")?;
             q.bind_bytes(1,&op.0)?;
@@ -312,7 +338,7 @@ impl<'s,'r> Tree<'s,'r>{
         });
         drop(sql);
         if let Err(e)=confirm{
-            let selected=src.at(|db,c|{self.require(db,&c,true)?;for_tree(self,db,&c,op,parent,name)})?;
+            let selected=src.at(|db,c|{self.authorized(db,&c)?;exact_original(self,db,&c,op,parent,name)})?;
             if !selected.is_some_and(|x|x.done&&!x.aborted&&x.birth==birth){return Err(e);}
         }
         Ok((birth,held))
