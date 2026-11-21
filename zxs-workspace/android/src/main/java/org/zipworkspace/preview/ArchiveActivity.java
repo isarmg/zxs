@@ -112,7 +112,7 @@ public final class ArchiveActivity extends Activity {
             v.setPadding(i.left + gap, i.top + gap, i.right + gap, i.bottom + gap); return win;
         });
         TextView notice = new TextView(this);
-        notice.setText("ZIP 目录预览\n打开目录只看声明。可另行核验成员或整个 .zxs；不解包、不认证来源。");
+        notice.setText("ZIP 目录预览\n打开目录只看声明。可另行核验成员、原包字节或 .zxs 整树；不解包、不认证来源。");
         body.addView(notice);
         pick = button(body, "选择本机 .zxs 或 Store ZIP", v -> choose());
         cancel = button(body, "取消本次操作", v -> {
@@ -122,7 +122,7 @@ public final class ArchiveActivity extends Activity {
             else { state.setText("已取消，没有新结果。"); render(); }
         });
         find = button(body, "按名称查找…", v -> askSearch());
-        checkAll = button(body, "核验整个 .zxs…", v -> askSnapshot());
+        checkAll = button(body, "核验原归档…", v -> askArchive());
         state = summary(body, 6);
         location = summary(body, 3);
         LinearLayout nav = new LinearLayout(this); body.addView(nav);
@@ -191,7 +191,7 @@ public final class ArchiveActivity extends Activity {
         return ticket == generation && signal == active && !signal.isCanceled() && !isDestroyed();
     }
     private AtomicLong startBodyProgress(PickedDocument picked, int ticket, CancellationSignal signal,
-                                         long total, String title, String details) {
+                                         long total, String title, String measure, String details) {
         stopBodyProgress();
         AtomicLong count = new AtomicLong();
         bodyProgress = new Runnable() {
@@ -201,8 +201,8 @@ public final class ArchiveActivity extends Activity {
                 long now = count.get();
                 if (now != displayed) {
                     displayed = now;
-                    state.setText(String.format(Locale.ROOT, "%s，可取消。\n已处理正文 %,d / %,d B%s%s",
-                            title, now, total, now == total ? "；仍在核验。" : "。", details));
+                    state.setText(String.format(Locale.ROOT, "%s，可取消。\n已处理%s %,d / %,d B%s%s",
+                            title, measure, now, total, now == total ? "；仍在核验。" : "。", details));
                 }
                 main.postDelayed(this, 350); // the worker never posts per-block UI updates
             }
@@ -360,48 +360,59 @@ public final class ArchiveActivity extends Activity {
         if (search == null) page += delta; else search.page += delta;
         render();
     }
-    private void askSnapshot() {
+    private void askArchive() {
         PickedDocument picked = document;
-        if (picked == null || !picked.isManagedSnapshotName() || folder == null || active != null
+        if (picked == null || folder == null || active != null
                 || search != null || decision != null) return;
-        final ArchiveIndex.SnapshotMarker marker;
-        try { marker = picked.index.snapshotMarker(); }
-        catch (IOException badMarker) {
-            state.setText("这份 .zxs 没有可识别的规范快照标记。仍可浏览目录或核验单项。");
-            return;
+        ArchiveIndex.SnapshotMarker marker = null;
+        if (picked.isManagedSnapshotName()) {
+            try { marker = picked.index.snapshotMarker(); }
+            catch (IOException badMarker) { /* a malformed marker can never authorize the logical read */ }
         }
         int approvedTicket = generation;
-        String bytes = String.format(Locale.ROOT, "%,d", picked.index.bodyBytes());
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("核验整个 .zxs 快照")
-                .setMessage(picked.title + "\n节点 " + marker.operation + "\n将读取全部成员正文 " + bytes
-                        + " 字节并复核 ZIP 元数据。可能耗时，可取消。"
-                        + "\n只核内容与包内标记是否一致，不认证作者或分支头；不保存、不上传。")
-                .setNegativeButton("返回目录", null)
-                .setPositiveButton("核验完整内容", (d, which) -> startSnapshot(d, approvedTicket, picked))
-                .create();
-        showDecision(dialog, null);
+        String raw = String.format(Locale.ROOT, "原包 SHA-256：读取原 ZIP 完整的 %,d 字节，包含头及注释。", picked.fileBytes());
+        String logical = marker != null ? String.format(Locale.ROOT,
+                "\n.zxs 整树：读取全部成员正文 %,d 字节并复核布局。节点 %s。", picked.index.bodyBytes(), marker.operation)
+                : picked.isManagedSnapshotName() ? "\n没有可识别的规范快照标记，不提供整树核验。" : "";
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle("只读核验本次原归档")
+                .setMessage(picked.title + "\n" + raw + logical + "\n用时取决于大小，可取消。不认证来源；不保存或上传。")
+                .setNegativeButton("返回目录", null);
+        if (marker != null) builder
+                .setPositiveButton("核验 .zxs 整树", (d, which) -> startArchive(d, approvedTicket, picked, false))
+                .setNeutralButton("核对原包 SHA-256", (d, which) -> startArchive(d, approvedTicket, picked, true));
+        else builder.setPositiveButton("核对原包 SHA-256", (d, which) -> startArchive(d, approvedTicket, picked, true));
+        showDecision(builder.create(), null);
     }
 
-    private void startSnapshot(DialogInterface approved, int approvedTicket, PickedDocument picked) {
+    private void startArchive(DialogInterface approved, int approvedTicket, PickedDocument picked, boolean raw) {
         if (decision == null || decision != approved || !decision.isShowing() || generation != approvedTicket
                 || document != picked || active != null || search != null || folder == null) return;
         AlertDialog used = decision; decision = null; used.dismiss();
         CancellationSignal signal = new CancellationSignal();
         int ticket = ++generation; active = signal;
-        AtomicLong bytes = startBodyProgress(picked, ticket, signal, picked.index.bodyBytes(), "正在核验整个 .zxs", "");
+        AtomicLong bytes = startBodyProgress(picked, ticket, signal, raw ? picked.fileBytes() : picked.index.bodyBytes(),
+                raw ? "正在核对原包 SHA-256" : "正在核验 .zxs 整树", raw ? "原包字节" : "正文", "");
         render();
         submit(() -> {
-            ArchiveIndex.SnapshotMarker result = null;
-            try { result = picked.verifySnapshot(getApplicationContext(), signal, bytes::addAndGet); }
+            String result = null;
+            try {
+                if (raw) result = picked.rawDigest(getApplicationContext(), signal, bytes::addAndGet);
+                else {
+                    ArchiveIndex.SnapshotMarker marker = picked.verifySnapshot(getApplicationContext(), signal, bytes::addAndGet);
+                    result = String.format(Locale.ROOT,
+                            "整树内容与包内标记一致。未认证来源。\n第 %d 代 · 节点 %s\n已核 %,d 项、%,d B 正文。",
+                            marker.generation, marker.operation, picked.index.entryCount(), picked.index.bodyBytes());
+                }
+            }
             catch (IOException | RuntimeException ignored) { /* no URI, partial digest, or stale progress */ }
-            ArchiveIndex.SnapshotMarker completed = result;
+            String completed = result;
             main.post(() -> {
                 if (!current(ticket, signal) || document != picked) return;
                 stopBodyProgress();
                 active = null;
                 if (completed == null) {
-                    retire(); reset("没有通过整包内容核验：布局不符、读取不完整、内容不符或原授权失效。请重新选择。");
+                    retire(); reset(raw ? "没有取得原包摘要：字节不完整、原件变化或授权失效。请重新选择。"
+                            : "没有通过整树核验：布局不符、读取不完整、内容不符或原授权失效。请重新选择。");
                     return;
                 }
                 try { picked.checkPresentation(getApplicationContext()); }
@@ -409,12 +420,22 @@ public final class ArchiveActivity extends Activity {
                     retire(); reset("原文件状态或授权已失效，没有保留核验结果。");
                     return;
                 }
-                state.setText(String.format(Locale.ROOT,
-                        "整树内容与包内标记一致。未认证来源。\n第 %d 代 · 节点 %s\n已核 %,d 项、%,d B 正文。",
-                        completed.generation, completed.operation, picked.index.entryCount(), picked.index.bodyBytes()));
+                state.setText(raw ? "已读取原包完整字节；摘要不认证来源。" : completed);
                 render();
+                if (raw) showRaw(picked, completed);
             });
         });
+    }
+
+    private void showRaw(PickedDocument picked, String digest) {
+        ScrollView area = new ScrollView(this);
+        TextView value = new TextView(this);
+        value.setTextIsSelectable(true); value.setTextClassifier(TextClassifier.NO_OP); value.setSaveEnabled(false);
+        value.setText(String.format(Locale.ROOT, "%s\n完整 ZIP：%,d B\n\n%s\n\n包含头、成员与注释，不认证来源。",
+                picked.title, picked.fileBytes(), digest));
+        area.addView(value);
+        showDecision(new AlertDialog.Builder(this).setTitle("原包 SHA-256").setView(area)
+                .setPositiveButton("关闭", null).create(), value);
     }
 
     private void ask(PickedDocument picked, ArchiveIndex.Item row) {
@@ -615,7 +636,7 @@ public final class ArchiveActivity extends Activity {
         String mode = readMode == StoredMember.Mode.CRC ? ""
                 : readMode == StoredMember.Mode.INDEXED ? "\n同时核验全文与定位索引"
                 : row.bytes <= PlainText.LIMIT ? "\nCRC 相符后显示全文" : "\nCRC 相符后只显示前部";
-        AtomicLong bytes = startBodyProgress(picked, ticket, signal, row.bytes, "正在核验所选成员", mode + "\n" + path);
+        AtomicLong bytes = startBodyProgress(picked, ticket, signal, row.bytes, "正在核验所选成员", "正文", mode + "\n" + path);
         render();
         submit(() -> {
             StoredMember.Result read = null;
@@ -687,7 +708,7 @@ public final class ArchiveActivity extends Activity {
         boolean idle = active == null;
         replaceList(rows, idle);
         find.setEnabled(idle); cancel.setVisibility(idle ? View.GONE : View.VISIBLE);
-        checkAll.setVisibility(document != null && document.isManagedSnapshotName() && request == null ? View.VISIBLE : View.GONE);
+        checkAll.setVisibility(document != null && request == null ? View.VISIBLE : View.GONE);
         checkAll.setEnabled(idle);
         up.setText(request == null ? "上一级" : "返回目录");
         up.setEnabled(idle && (request != null || folder.parent != null));

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import ZipPreview
 
@@ -41,6 +42,38 @@ final class DirectoryIndexTests: XCTestCase {
     }
     private func snapshot(_ b: [UInt8]) throws -> DirectoryIndex.SnapshotMarker {
         try read(b).verifySnapshot(check: {}) { try self.copy(b, $0, $1) }
+    }
+
+    func testRawArchiveDigestIncludesTheTailUsesABoundedBufferAndDoesNotReturnOnCancel() throws {
+        let plain = textArchive([UInt8](repeating: 0x1a, count: 65_541))
+        let tree = String(repeating: "a", count: 64)
+        let b = marked(plain, tree: tree)
+        let expected = SHA256.hash(data: Data(b)).map { String(format: "%02x", $0) }.joined()
+        var offsets: [Int] = [], progress: [Int] = []
+        let result = try DocumentRead.hashRaw(size: b.count, check: {}, progress: { progress.append($0) }) { off, buffer in
+            offsets.append(off)
+            try self.copy(b, off, buffer)
+        }
+        XCTAssertEqual(result, expected)
+        XCTAssertEqual(offsets, [0, 65_536])
+        XCTAssertEqual(progress, [65_536, b.count - 65_536])
+        // Identical members, different archive comment: recomputed byte digest must differ.
+        let changed = marked(plain, tree: String(repeating: "b", count: 64))
+        XCTAssertNotEqual(result, try DocumentRead.hashRaw(size: changed.count, check: {}, progress: { _ in }) {
+            try self.copy(changed, $0, $1)
+        })
+        XCTAssertEqual(try read(b).bodyBytes, try read(changed).bodyBytes)
+        XCTAssertThrowsError(try DocumentRead.hashRaw(size: b.count + 1, check: {}, progress: { _ in }) {
+            try self.copy(b, $0, $1)
+        })
+        var cancelled = false
+        XCTAssertThrowsError(try DocumentRead.hashRaw(size: b.count, check: {
+            if cancelled { throw PreviewError.cancelled }
+        }, progress: { _ in }) { off, buffer in
+            XCTAssertEqual(off, 0); try self.copy(b, off, buffer); cancelled = true
+        }) { error in
+            guard case PreviewError.cancelled = error else { return XCTFail("unexpected error") }
+        }
     }
     func testWholeSnapshotChecksOneBodyPassAndTheCanonicalTreeInFullPathOrder() throws {
         // Independent canonical tree vector: a (implicit), a-.txt, a/图, 空 (explicit).

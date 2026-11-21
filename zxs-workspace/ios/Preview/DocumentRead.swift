@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import CryptoKit
 
 // The sole access grant lives only while a foreground selection or its draining read still owns it.
 final class DocumentPresentation: NSObject, NSFilePresenter {
@@ -92,7 +93,7 @@ final class HeldArchive {
         try scope.check()
     }
 
-    func withReads<T>(at name: UnsafePointer<CChar>, check: () throws -> Void,
+    func withReads<T>(at name: UnsafePointer<CChar>, check: () throws -> Void, exactEnd: Bool = false,
                       _ body: (_ fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> T) throws -> T {
         func validate() throws {
             try check(); try scope.check()
@@ -116,6 +117,16 @@ final class HeldArchive {
                 got += n; untilCheck -= n
             }
         }
+        if exactEnd {
+            var last: UInt8 = 0
+            while true {
+                try check(); try scope.check()
+                let n = Darwin.pread(fd, &last, 1, off_t(size))
+                if n < 0 && errno == EINTR { continue }
+                guard n == 0 else { throw PreviewError.unavailable }
+                break
+            }
+        }
         try validate()
         return value
     }
@@ -133,11 +144,11 @@ final class DocumentRead {
     private var coordinating: NSFileCoordinator?
     private var processed = 0 // single worker; sampled by the main thread
 
-    var bodyBytesProcessed: Int {
+    var bytesProcessed: Int {
         lock.lock(); defer { lock.unlock() }
         return processed
     }
-    private func didProcessBody(_ count: Int) {
+    private func didProcess(_ count: Int) {
         lock.lock(); processed += count; lock.unlock()
     }
 
@@ -198,7 +209,7 @@ final class DocumentRead {
         return try coordinated(archive.scope) { name in
             try archive.withReads(at: name, check: self.check) { fill in
                 try report.directory.checkMember(file, mode: mode,
-                    check: { try self.check(); try archive.scope.check() }, progress: self.didProcessBody, fill: fill)
+                    check: { try self.check(); try archive.scope.check() }, progress: self.didProcess, fill: fill)
             }
         }
     }
@@ -209,7 +220,36 @@ final class DocumentRead {
         return try coordinated(archive.scope) { name in
             try archive.withReads(at: name, check: self.check) { fill in
                 try report.directory.verifySnapshot(check: { try self.check(); try archive.scope.check() },
-                    progress: self.didProcessBody, fill: fill)
+                    progress: self.didProcess, fill: fill)
+            }
+        }
+    }
+
+    static func hashRaw(size: Int, check: () throws -> Void, progress: (Int) -> Void,
+                        fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> String {
+        try requirePreview(size >= 22 && size <= DirectoryIndex.maxSize)
+        var digest = SHA256()
+        var block = [UInt8](repeating: 0, count: 65_536), at = 0
+        while at < size {
+            try check()
+            let n = min(size - at, block.count)
+            try block.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
+                try fill(at, UnsafeMutableRawBufferPointer(rebasing: raw[..<n]))
+            }
+            try check()
+            block.withUnsafeBytes { raw in digest.update(bufferPointer: UnsafeRawBufferPointer(rebasing: raw[..<n])) }
+            progress(n); at += n
+        }
+        try check()
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    func rawDigest(_ report: Report) throws -> String {
+        let archive = report.archive
+        return try coordinated(archive.scope) { name in
+            try archive.withReads(at: name, check: self.check, exactEnd: true) { fill in
+                try Self.hashRaw(size: archive.size, check: { try self.check(); try archive.scope.check() },
+                                 progress: self.didProcess, fill: fill)
             }
         }
     }

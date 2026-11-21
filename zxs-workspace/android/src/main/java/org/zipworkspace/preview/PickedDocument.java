@@ -58,6 +58,19 @@ final class PickedDocument implements AutoCloseable {
     }
 
     boolean isManagedSnapshotName() { return title.toLowerCase(Locale.ROOT).endsWith(".zxs"); }
+    long fileBytes() { return observed.st_size; }
+
+    String rawDigest(Context ctx, CancellationSignal cancel, LongConsumer progress) throws IOException {
+        cancel.throwIfCanceled();
+        try (ParcelFileDescriptor lease = borrow()) {
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel, null);
+            reader.validate();
+            String digest = ArchiveIndex.rawDigest(reader, fileBytes(), progress);
+            reader.checkEnd();
+            reader.validate();
+            return digest;
+        }
+    }
     ArchiveIndex.SnapshotMarker verifySnapshot(Context ctx, CancellationSignal cancel, LongConsumer progress)
             throws IOException {
         ArchiveIndex.require(isManagedSnapshotName());
@@ -194,6 +207,18 @@ final class PickedDocument implements AutoCloseable {
             check();
             checkObserved(ctx, uri, fd, original);
             untilCheck = 8L << 20;
+        }
+        void checkEnd() throws IOException {
+            byte[] trailing = new byte[1];
+            for (;;) {
+                check();
+                try {
+                    ArchiveIndex.require(Os.pread(fd, trailing, 0, 1, original.st_size) == 0);
+                    return;
+                } catch (ErrnoException ex) {
+                    if (ex.errno != OsConstants.EINTR) throw new IOException("Could not confirm the original file end", ex);
+                }
+            }
         }
         public byte[] read(long off, int len) throws IOException {
             ArchiveIndex.require(len >= 0 && len <= ArchiveIndex.MAX_CD);

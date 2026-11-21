@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.function.LongConsumer;
 import java.security.NoSuchAlgorithmException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -180,6 +181,23 @@ final class ArchiveIndex {
         StringBuilder out = new StringBuilder(digest.length * 2);
         for (byte b : digest) out.append(Character.forDigit((b >>> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));
         return out.toString();
+    }
+
+    static String rawDigest(MemberSource src, long size, LongConsumer processed) throws IOException {
+        require(size >= 22 && size <= MAX_ARCHIVE);
+        MessageDigest digest = sha256();
+        byte[] block = new byte[65_536];
+        for (long at = 0; at < size;) {
+            src.check();
+            int length = (int)Math.min(size - at, block.length);
+            src.fill(at, block, length);
+            src.check();
+            digest.update(block, 0, length);
+            if (processed != null) processed.accept(length);
+            at += length;
+        }
+        src.check();
+        return hex(digest.digest());
     }
 
     SnapshotMarker verifySnapshot(MemberSource src) throws IOException {

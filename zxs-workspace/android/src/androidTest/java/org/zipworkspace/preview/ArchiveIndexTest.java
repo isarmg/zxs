@@ -9,9 +9,11 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -50,6 +52,41 @@ public final class ArchiveIndexTest {
     }
     private static ArchiveIndex.SnapshotMarker snapshot(byte[] b) throws IOException {
         return read(b).verifySnapshot(new StoredMemberTest.Bytes(b));
+    }
+
+    @Test public void rawZipDigestIncludesArchiveMetadataAndCanStopOnOneBoundedRead() throws Exception {
+        // A real ordinary Store ZIP; the archived body and the opaque comment both cross the read budget together.
+        byte[] plain;
+        byte[] payload = new byte[65_541]; Arrays.fill(payload, (byte)0x1a);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream z = new ZipOutputStream(bytes)) {
+            CRC32 crc = new CRC32(); crc.update(payload);
+            ZipEntry e = new ZipEntry("unchanged"); e.setMethod(ZipEntry.STORED);
+            e.setSize(payload.length); e.setCompressedSize(payload.length); e.setCrc(crc.getValue());
+            z.putNextEntry(e); z.write(payload); z.closeEntry(); z.setComment("visible archive comment");
+        }
+        plain = bytes.toByteArray();
+        ArrayList<Long> offsets = new ArrayList<>(), progress = new ArrayList<>();
+        String actual = ArchiveIndex.rawDigest(new StoredMemberTest.Bytes(plain) {
+            @Override public byte[] read(long off, int n) { throw new AssertionError("no ZIP metadata pass"); }
+            @Override public void fill(long off, byte[] dst, int n) throws IOException {
+                offsets.add(off); assertEquals(65_536, dst.length); super.fill(off, dst, n);
+            }
+        }, plain.length, progress::add);
+        StringBuilder expected = new StringBuilder();
+        for (byte b : MessageDigest.getInstance("SHA-256").digest(plain)) expected.append(String.format(Locale.ROOT, "%02x", b & 255));
+        assertEquals(expected.toString(), actual);
+        assertEquals(List.of(0L, 65_536L), offsets);
+        assertEquals(List.of(65_536L, plain.length - 65_536L), progress);
+        byte[] changed = plain.clone(); changed[changed.length - 1] ^= 1; // just the comment
+        assertNotEquals(actual, ArchiveIndex.rawDigest(new StoredMemberTest.Bytes(changed), changed.length, null));
+        assertEquals(read(plain).bodyBytes(), read(changed).bodyBytes());
+        assertThrows(IOException.class, () -> ArchiveIndex.rawDigest(new StoredMemberTest.Bytes(plain), plain.length + 1, null));
+        assertThrows(OperationCanceledException.class, () -> ArchiveIndex.rawDigest(new StoredMemberTest.Bytes(plain) {
+            @Override public void fill(long off, byte[] dst, int n) throws IOException {
+                assertEquals(0L, off); super.fill(off, dst, n); stop.cancel();
+            }
+        }, plain.length, null));
     }
     @Test public void explicitWholeSnapshotUsesCanonicalFullPathOrderAndReadsOnlyOneBodyPass() throws IOException {
         // A private-use BMP name precedes the supplementary scalar in UTF-8; Java UTF-16 compareTo reverses those two.
