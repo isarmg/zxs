@@ -20,7 +20,7 @@ class CheckoutPane(QWidget):
         self.open_baseline = open_baseline
         self.snapshot, self.active, self.unresolved = None, False, False
         self.recover_checkout = None
-        self.live = self.changes_dialog = self.live_record = self.visibility_last = None
+        self.live = self.changes_dialog = self.live_record = self.visibility_last = self.restoring_member = None
         self.visibility_blocked = False
         layout = QVBoxLayout(self)
         self.selected = label()
@@ -354,6 +354,7 @@ class CheckoutPane(QWidget):
     def close_session(self):
         self._close_checkout_recovery()
         if self.changes_dialog is not None: self.changes_dialog.reject()
+        if self.restoring_member is not None: self.restoring_member.cancel()
         live, self.live = self.live, None
         move, self.visibility_last = self.visibility_last, None
         self.live_record, self.visibility_blocked = None, False
@@ -614,31 +615,40 @@ class CheckoutPane(QWidget):
             return self.live is live and self.live_record is record
 
         def done(outcome):
-            if not current(): return
-            if observer.cancelled:
-                self.owner.inform("已取消工作树对照；没有写入或显示不完整结果。")
-                return
             result, error = outcome
-            if error is not None:
-                self.owner.inform(f"未取得完整工作树对照：{error}。未启动冻结、提交或恢复。")
-                return
-            if initial:
-                self.owner.inform("离线对照已完成；未检查 STORE，后续编辑不会自动刷新。")
-                self.show_changes(live, *result, initial=True)
-            else:
-                self.owner.inform("工作树只读对照已完成；后续编辑不会自动刷新。")
-                self.show_changes(live, *result)
+            evidence = result[2] if result is not None and not initial else None
+            try:
+                if not current(): return
+                if observer.cancelled:
+                    self.owner.inform("已取消工作树对照；没有写入或显示不完整结果。")
+                    return
+                if error is not None:
+                    self.owner.inform(f"未取得完整工作树对照：{error}。未启动冻结、提交或恢复。")
+                    return
+                if initial:
+                    self.owner.inform("离线对照已完成；未检查 STORE，后续编辑不会自动刷新。")
+                    self.show_changes(live, *result, initial=True)
+                else:
+                    self.owner.inform("工作树只读对照已完成；后续编辑不会自动刷新。")
+                    self.show_changes(live, *result[:2], evidence=evidence)
+                    evidence = None  # The dialog now owns this one original handle.
+            finally:
+                if evidence is not None: evidence.close()
 
         loan = None
         try:
             loan = live.borrow()  # Only dup here; filesystem and catalog qualification are on the worker.
             def read():
                 # Route a late refusal through the same session check as a late success.
+                result = None
                 try:
                     with closing(loan):
-                        observe = observe_initial_changes if initial else observe_live_changes
-                        return observe(loan, observer=observer), None
-                except Exception as error: return None, error
+                        if initial: return observe_initial_changes(loan, observer=observer), None
+                        result = observe_live_changes(loan, observer=observer, retain_missing=True)
+                    return result, None
+                except Exception as error:
+                    if result is not None and result[2] is not None: result[2].close()
+                    return None, error
             title = ("正在离线对照初次签出的原核验索引和本机工作目录…" if initial else
                      "正在只读核验实际基线及本次工作目录…")
             future = self.owner.job(title, read, done, cancel=observer.cancel, cancel_text="取消工作树对照",
@@ -651,7 +661,7 @@ class CheckoutPane(QWidget):
         else:
             future.add_done_callback(lambda task: loan.close() if task.cancelled() else None)
 
-    def show_changes(self, live, marker, report, *, initial=False):
+    def show_changes(self, live, marker, report, *, initial=False, evidence=None):
         # The read-only result exists only in this modal view. Once closed it
         # cannot linger into a later commit, recovery, or baseline switch.
         dialog = QDialog(self)
@@ -667,6 +677,23 @@ class CheckoutPane(QWidget):
         layout.addWidget(label("这是一次观察，不是实时或原子快照，也不能代替提交前停止写入者。"))
         table = Table(("相对路径", "差异", "登记基线", "工作目录"), "本工作树的只读改动")
         layout.addWidget(table)
+        if evidence is not None:
+            def select_missing():
+                row = table.item()
+                if row is not None and row.change == "missing" and row.before == "file":
+                    self.restore_missing(dialog, live, evidence, row)
+
+            restore = button("从登记基线补回所选缺失文件…", select_missing)
+            restore.setObjectName("restore-selected-missing-member")
+            restore.setEnabled(False)
+
+            def update_restore(*_):
+                row = table.item()
+                restore.setEnabled(row is not None and row.change == "missing" and row.before == "file")
+
+            table.selectionModel().selectionChanged.connect(update_restore)
+            table.rows.modelReset.connect(update_restore)
+            layout.addWidget(restore)
         nav = QHBoxLayout(); layout.addLayout(nav)
         number, count = 0, max(1, (len(report.rows) + report.PAGE - 1) // report.PAGE)
         change = {"added":"新增", "changed":"修改", "missing":"缺少"}
@@ -688,11 +715,70 @@ class CheckoutPane(QWidget):
         layout.addWidget(controls)
         page(0)
         def dismissed(_):
-            self.changes_dialog = None
+            if self.changes_dialog is dialog: self.changes_dialog = None
+            if evidence is not None: evidence.close()
             dialog.deleteLater()
         dialog.finished.connect(dismissed)
+        if evidence is not None: dialog.destroyed.connect(lambda *_: evidence.close())
         self.changes_dialog = dialog
         dialog.open()  # Window-modal, no nested event loop.
+
+    def restore_missing(self, dialog, live, evidence, row):
+        if (self.changes_dialog is not dialog or self.live is not live or self.active or self.owner.pending is not None
+                or self.restoring_member is not None or self.visibility_blocked or self.commits.blocked
+                or self.commits.running is not None):
+            return
+        from .member_copy import RestoreMissingMember
+        try: plan = RestoreMissingMember(live, evidence, row)
+        except Exception as error:
+            self.owner.inform(describe(error))
+            return
+        record = self.live_record
+        self.restoring_member, self.active = plan, True
+        dialog.reject()  # The decision already borrowed the precise baseline and worktree.
+        self._worktree_actions()
+
+        def current():
+            return self.restoring_member is plan and self.live is live and self.live_record is record
+
+        def finish(result, error=None):
+            try:
+                if current(): self.owner.inform(result if error is None else describe(error))
+            finally:
+                try: plan.close()
+                finally:
+                    if self.restoring_member is plan:
+                        self.restoring_member = None
+                        self._release()
+
+        def queue(title, work, apply):
+            def task():
+                try: return work(), None
+                except Exception as error: return None, error
+            try:
+                next_step = self.owner.job(title, task, lambda pair: apply(*pair),
+                                           failed=lambda error: finish(None, error), cancel=plan.cancel,
+                                           cancel_text="停止补回（正式发布前）", progress_report=plan.progress)
+                if next_step is None: raise Rejected("另一个窗口操作正在进行；未开始补回")
+                next_step.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
+            except Exception as error: finish(None, error)
+
+        def reviewed(details, error):
+            if error is not None:
+                finish(None, error)
+                return
+            try:
+                if (not current() or plan.cancelled.is_set() or not confirm(
+                        self, "只补回这一个缺失文件", details,
+                        attestation="我已关闭编辑器、暂停同步和所有其他工作树写入（含 CLI），操作期间不移动原目录。",
+                        action_text="把缺失文件补回原路径") or not current() or plan.cancelled.is_set()):
+                    finish("未补回文件；已有编辑、登记和历史不变。")
+                    return
+                queue("正在复制并核对原基线的这一个文件…",
+                      lambda: f"{plan.run(confirmed=True)}\n只补回原文件；没有提交或改动登记基线。", finish)
+            except Exception as error: finish(None, error)
+
+        queue("正在只读复核本次登记基线和缺失文件的原父目录…", plan.review, reviewed)
 
     def refresh_live(self):
         live = self.live

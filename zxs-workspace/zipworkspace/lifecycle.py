@@ -1,6 +1,6 @@
-"""Move an existing *local* worktree only: no archive/member mapping or deletion."""
+"""Observe a live worktree's exact baseline or move its original local directory."""
 from __future__ import annotations
-from contextlib import ExitStack, closing
+from contextlib import ExitStack, closing, contextmanager
 import os
 from pathlib import Path
 import stat
@@ -105,7 +105,8 @@ def _verify_base(doc, name, expected, *, observer=None):
     return marker, base
 
 
-def _idle_live_base(live, *, local_only=False):
+@contextmanager
+def _held_idle_live_base(live, *, local_only=False, rollback_only=False):
     from .worktree import locked
     with locked(live.state, read_only=True, live=live, local_only=local_only) as (con, row, _):
         rec = instance(con)
@@ -113,7 +114,14 @@ def _idle_live_base(live, *, local_only=False):
         if (rec["phase"] != "visible" or rec["active"] is not None
                 or row["pending"] is not None or row["pending_sha"] is not None):
             raise Rejected("原工作树必须可见且无待决操作；不提供本次对照")
-        return _base_values(row)
+        if rollback_only and con.execute("PRAGMA main.journal_mode").fetchone()[0] != "delete":
+            raise Rejected("不能核验原登记的 DELETE 日志模式；未补回文件")
+        yield _base_values(row)
+
+
+def _idle_live_base(live, *, local_only=False):
+    with _held_idle_live_base(live, local_only=local_only) as before:
+        return before
 
 
 def _observe_local_work(live, *, with_store, observer=None):
@@ -154,7 +162,33 @@ def observe_initial_changes(live, *, observer=None):
     return marker, result
 
 
-def observe_live_changes(live, *, observer=None):
+class MissingBaseline:
+    """Short-lived, exact STORE evidence for one online comparison dialog."""
+    def __init__(self, fd, path, observed, basis, marker, missing, instance_id):
+        self.path, self.observed, self.basis, self.marker = path, observed, basis, marker
+        self.instance = instance_id
+        self.missing, self._fd = missing, os.dup(fd)
+
+    @property
+    def held(self): return self if self._fd is not None else None
+
+    def duplicate(self):
+        if self._fd is None: raise Rejected("原基线已随对照关闭；请重新查看")
+        return os.dup(self._fd)
+
+    def file(self, row):
+        actual = self.missing.get(row.path)
+        if actual is None or actual[0] is not row:
+            raise Rejected("只能补回本次基线对照中的一条缺失普通文件")
+        return actual[1:]
+
+    def close(self):
+        fd, self._fd = self._fd, None
+        self.missing.clear()
+        if fd is not None: os.close(fd)
+
+
+def observe_live_changes(live, *, observer=None, retain_missing=False):
     """One observation against this still-held CLI checkout's last recorded base."""
     from .comparison import compare_manifests
     if observer is not None: observer.begin("identity")
@@ -163,20 +197,32 @@ def observe_live_changes(live, *, observer=None):
     store_mount = mount_id(live.store_fd)
     # Both SQLite snapshots are short. Only original archive/work descriptors,
     # not a SQLite transaction, stay held across the potentially large reads.
-    with relative_document(live.store_fd, name) as doc:
-        observed = stamp(doc)
-        if mount_id(doc.fileno()) != store_mount:
-            raise Rejected("基线归档不在原 STORE 挂载")
-        marker, base = _verify_base(doc, name, expected, observer=observer)
-        check_relative(live.store_fd, name, doc, observed)
-        current = _observe_local_work(live, with_store=True, observer=observer)
-        if observer is not None: observer.begin("compare")
-        result = compare_manifests(base, current)
-        if observer is not None: observer.begin("identity")
-        if _idle_live_base(live) != expected:
-            raise Rejected("观察期间原登记基线改变；请重新查看")
-    if observer is not None: observer.check()
-    return marker, result
+    with ExitStack() as handoff:
+        missing = None
+        with relative_document(live.store_fd, name) as doc:
+            observed = stamp(doc)
+            if mount_id(doc.fileno()) != store_mount:
+                raise Rejected("基线归档不在原 STORE 挂载")
+            marker, base = _verify_base(doc, name, expected, observer=observer)
+            check_relative(live.store_fd, name, doc, observed)
+            current = _observe_local_work(live, with_store=True, observer=observer)
+            if observer is not None: observer.begin("compare")
+            result = compare_manifests(base, current)
+            if retain_missing:
+                files = {}
+                for row in result.rows:
+                    if observer is not None: observer.check()
+                    if row.change == "missing" and row.before == "file":
+                        files[row.path] = (row, *base.rows[row.path][1:])
+                if files:
+                    missing = MissingBaseline(doc.fileno(), live.store/name, observed, expected, marker, files, live.instance)
+                    handoff.callback(missing.close)
+            if observer is not None: observer.begin("identity")
+            if _idle_live_base(live) != expected:
+                raise Rejected("观察期间原登记基线改变；请重新查看")
+        if observer is not None: observer.check()
+        handoff.pop_all()
+        return (marker, result, missing) if retain_missing else (marker, result)
 
 
 def _phases(action):

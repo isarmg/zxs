@@ -8,13 +8,15 @@ from pathlib import Path
 import sqlite3
 import stat
 import sys
+from dataclasses import replace
 import unittest
 from unittest.mock import patch
 
-from zipworkspace import lifecycle, worktree
+from zipworkspace import lifecycle, publish, worktree
 from zipworkspace.capacity import describe
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.initialize_choice import InitializeChoice
+from zipworkspace.desktop.member_copy import RestoreMissingMember
 from zipworkspace.linux_authority import ProcView, owned_directory
 from zipworkspace.linux_mount import _ordinary_user
 from zipworkspace.model import Rejected, new_id
@@ -73,6 +75,174 @@ class LinuxVisibility(unittest.TestCase):
             self.assertIn(self.marker.operation, preview)
             self.assertIn(plan.operation, preview)
         return plan
+
+    def missing_decision(self, name="story"):
+        marker, report, evidence = lifecycle.observe_live_changes(self.live, retain_missing=True)
+        self.assertEqual(marker, self.marker)
+        self.assertIsNotNone(evidence)
+        with closing(evidence):
+            row = next(r for r in report.rows if r.path == name)
+            with self.assertRaisesRegex(Rejected, "本次基线对照"):
+                RestoreMissingMember(self.live, evidence, replace(row))
+            decision = RestoreMissingMember(self.live, evidence, row)
+            self.addCleanup(decision.close)
+        self.assertIsNone(evidence.held)
+        return decision
+
+    def test_restore_one_missing_file_uses_original_basis_and_does_not_commit(self):
+        (self.tree/"other").mkdir(mode=0o700)
+        (self.tree/"other/story").write_bytes(b"different original basename")
+        self.commit()
+        other = self.tree/"other/story"
+        other.write_bytes(b"later edit remains")
+        target = self.tree/"story"
+        target.unlink()
+        decision = self.missing_decision()
+        baseline = self.live.status()
+        originals = (self.state/"worktree.sqlite").read_bytes()
+        with patch.object(lifecycle, "read_managed_document", side_effect=AssertionError("no second full tree read")), \
+             patch.object(lifecycle, "archive_sha", side_effect=AssertionError("no second ZIP read")), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("restore is not a commit")):
+            self.assertIn(self.marker.operation, decision.review())
+            self.assertFalse(target.exists())
+            with self.assertRaises(Rejected): decision.run()
+            self.assertIn("已另存并核验", decision.run(confirmed=True))
+        self.assertEqual(target.read_bytes(), b"initial")
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        self.assertEqual(other.read_bytes(), b"later edit remains")
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
+        self.assertEqual((self.state/"worktree.sqlite").read_bytes(), originals)
+        self.assertEqual(self.live.status(), baseline)
+        with self.assertRaises(Rejected): decision.run(confirmed=True)
+        _, changes, evidence = lifecycle.observe_live_changes(self.live, retain_missing=True)
+        self.assertIsNone(evidence)
+        self.assertEqual((changes.missing, changes.changed), (0, 1))
+
+    def test_restore_refuses_late_name_without_overwriting_it(self):
+        self.commit()
+        target = self.tree/"story"
+        target.unlink()
+        decision = self.missing_decision()
+        decision.review()
+        native = os.link
+        occupied = []
+        def late(source, name, **options):
+            target.write_bytes(b"created by another application")
+            occupied.append(target.stat())
+            return native(source, name, **options)
+        with patch.object(os, "link", side_effect=late) as link:
+            with self.assertRaisesRegex(Rejected, "没有覆盖"): decision.run(confirmed=True)
+            link.assert_called_once()
+        self.assertTrue(os.path.samestat(occupied[0], target.stat()))
+        self.assertEqual(target.read_bytes(), b"created by another application")
+        self.assertIsNone(self.live.status()["pending_operation"])
+
+    def test_restore_refuses_missing_parent_or_pending_without_payload(self):
+        parent = self.tree/"other"
+        parent.mkdir(mode=0o700)
+        nested = parent/"story"
+        nested.write_bytes(b"previous contents of a nested file")
+        self.commit()
+        nested.unlink(); parent.rmdir()
+        decision = self.missing_decision("other/story")
+        with self.assertRaisesRegex(Rejected, "原目的目录"): decision.review()
+        self.assertFalse(parent.exists())
+
+        (self.tree/"story").unlink()
+        pending = self.missing_decision()
+        pending.review()
+        with worktree.locked(self.state) as (con, _, __):
+            con.execute("UPDATE checkout SET pending_sha=? WHERE singleton=1", ("b"*64,))
+        with patch.object(pending, "_payload", side_effect=AssertionError("stale state must not start copy")), \
+             patch.object(os, "link", side_effect=AssertionError("stale state must not publish")):
+            with self.assertRaisesRegex(Rejected, "无待决操作"): pending.run(confirmed=True)
+        self.assertFalse((self.tree/"story").exists())
+
+    def test_restore_will_not_adopt_an_equal_byte_replacement_of_the_held_base(self):
+        self.commit()
+        target = self.tree/"story"
+        target.unlink()
+        decision = self.missing_decision()
+        decision.review()
+        retained = self.archive.with_suffix(".original")
+        self.archive.rename(retained)
+        self.archive.write_bytes(self.archive_bytes)
+        with patch.object(decision, "_payload", side_effect=AssertionError("do not stage from an obsolete source")):
+            with self.assertRaisesRegex(Rejected, "原归档已被移走、替换"): decision.run(confirmed=True)
+        self.assertFalse(target.exists())
+
+    def test_restore_empty_member_and_parent_sync_error_have_no_second_attempt(self):
+        target = self.tree / "zero"
+        target.write_bytes(b"")
+        self.commit()
+        target.unlink()
+        decision = self.missing_decision("zero")
+        decision.review()
+        native = os.fsync
+        calls = []
+        def sync(fd):
+            if os.path.samestat(os.fstat(fd), self.tree.stat()):
+                calls.append(fd)
+                raise OSError(errno.EIO, "synthetic selected parent sync failure")
+            return native(fd)
+        with patch.object(os, "fsync", side_effect=sync):
+            with self.assertRaisesRegex(publish.Uncertain, "完整副本可能已经出现"):
+                decision.run(confirmed=True)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(target.read_bytes(), b"")
+        self.assertIsNone(self.live.status()["pending_operation"])
+        with self.assertRaises(Rejected): decision.run(confirmed=True)
+        self.assertEqual(target.read_bytes(), b"")
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt file recovery fixture")
+    def test_only_explicit_selected_missing_row_can_request_window_recovery(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from zipworkspace.desktop import checkout_pane
+        from zipworkspace.desktop.widgets import Table
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        self.commit()
+        target = self.tree/"story"
+        target.unlink()
+        window = Window()
+        pane = window.archive.checkout
+        pane.live = self.live
+        jobs = []
+
+        def queue(action):
+            future = Future()
+            jobs.append((future, action))
+            return future
+
+        def completed():
+            future, action = jobs.pop(0)
+            future.set_result(action())
+            window.poll()
+
+        try:
+            with patch.object(window.pool, "submit", side_effect=queue):
+                for allow in (False, True):
+                    pane.compare_live(); completed()
+                    dialog = pane.changes_dialog
+                    self.assertIsNotNone(dialog)
+                    recovery = dialog.findChild(QPushButton, "restore-selected-missing-member")
+                    self.assertFalse(recovery.isEnabled())
+                    dialog.findChild(Table).selectRow(0)
+                    self.assertTrue(recovery.isEnabled())
+                    with patch.object(checkout_pane, "confirm", return_value=allow) as consent:
+                        recovery.click()
+                        self.assertIsNone(pane.changes_dialog)
+                        self.assertFalse(target.exists())
+                        completed()
+                    consent.assert_called_once()
+                    self.assertIn(str(target), consent.call_args.args[2])
+                    self.assertEqual(len(jobs), int(allow))
+                    if allow: completed()
+                    self.assertIsNone(pane.restoring_member)
+            self.assertEqual(target.read_bytes(), b"initial")
+        finally:
+            window.close()
 
     def test_round_trip_renames_same_inode_after_observation_and_durable_intent(self):
         self.commit()

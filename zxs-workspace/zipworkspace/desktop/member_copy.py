@@ -1,5 +1,5 @@
 """Linux Qt exports a selected snapshot or archive entry without overwriting."""
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager, nullcontext
 import hashlib
 import os
 from pathlib import Path
@@ -14,6 +14,7 @@ from ..capacity import observed_available
 from ..comparison import Folder
 from ..document import archive_sha, native_identity, relative_document
 from ..freeze import _distinct_roots, observe_held
+from ..lifecycle import MissingBaseline, _base_leaf, _held_idle_live_base
 from ..linux_authority import ProcView as _ProcView, owned_directory as _directory
 from ..linux_mount import _ordinary_user
 from ..model import CHUNK, MAX_CD, MAX_FILE, MAX_TOTAL, Rejected, member_name, new_id
@@ -171,6 +172,14 @@ class _AnonymousCopy(_BeforePublication):
     def _absent(self):
         _unoccupied(self.parent, self.path.name)
 
+    def _source_details(self):
+        return (f"普通 ZIP 首次核验的 SHA-256：{self.selected.preview.sha256}\n"
+                if isinstance(self.selected, PlainSelection) else
+                f"节点：{self.selected.browser.commit.operation}\n")
+
+    def _publication_guard(self):
+        return nullcontext()
+
     def review(self):
         if self.closed or self.ready or self.used: raise Rejected("请重新选择一次快照内容和目的文件")
         try:
@@ -190,10 +199,7 @@ class _AnonymousCopy(_BeforePublication):
             capacity = _copy_capacity(self.parent, self.size)
             self._parent()
             self.ready = True
-            evidence = (f"普通 ZIP 首次核验的 SHA-256：{self.selected.preview.sha256}\n"
-                        if isinstance(self.selected, PlainSelection) else
-                        f"节点：{self.selected.browser.commit.operation}\n")
-            return (f"原归档：{str(self.selected.path)!r}\n" + evidence
+            return (f"原归档：{str(self.selected.path)!r}\n" + self._source_details()
                     + self._selection_details() +
                     f"新文件：{str(self.path)!r}\n{capacity}\n\n"
                     "完整核验及读回后才公开名称；不覆盖、不创建工作树、不打开结果。"
@@ -266,9 +272,10 @@ class _AnonymousCopy(_BeforePublication):
                 self._checkpoint()
                 if _ordinary_user(read_proc=self.proc.read) != self.uid:
                     raise Rejected("不再是确认这次另存的普通用户")
-                self._source()
-                self._parent()
-                self._absent()
+                with self._publication_guard():
+                    self._source()
+                    self._parent()
+                    self._absent()
                 def create():
                     self._checkpoint()
                     # O_EXCL would forbid linking this O_TMPFILE; no named fallback.
@@ -280,6 +287,9 @@ class _AnonymousCopy(_BeforePublication):
                 out, sha = self._payload(create)
                 size = self.size
                 sealed = self._verify(out, sha)
+                # Worktree recovery rechecks its original read transaction
+                # at publication, never across the payload copy.
+                temp.enter_context(self._publication_guard())
                 self._source()
                 self._parent()
                 name = str(out)
@@ -320,7 +330,17 @@ class _AnonymousCopy(_BeforePublication):
             self.closed = True
 
 
-class MemberCopy(_AnonymousCopy):
+class _StoredFileCopy(_AnonymousCopy):
+    def _payload(self, create):
+        reader = _Positional(self.source, self.selected.observed[2], self._checkpoint)
+        with stored_member(reader, reader.end, self.marker, self.member, self.size) as body:
+            fd = create()
+            sha = self._copy(body.read, fd)  # ZipExtFile verifies the member's CRC at EOF.
+            if sha != self.expected_sha: raise Rejected("成员与原核验的 SHA-256 不符")
+        return fd, sha
+
+
+class MemberCopy(_StoredFileCopy):
     """Only the selected ordinary member, not its siblings or the whole tree."""
     def __init__(self, selected, directory, entry, spelling):
         if isinstance(selected, PlainSelection):
@@ -331,20 +351,84 @@ class MemberCopy(_AnonymousCopy):
         if (entry.kind != "file" or index.entry(directory, entry.name) is not entry or
                 type(entry.size_bytes) is not int or not 0 <= entry.size_bytes <= MAX_FILE):
             raise Rejected("只能另存本次已核验的一条普通成员")
-        self.entry = entry
+        self.entry, self.expected_sha = entry, entry.sha256
         self.member = f"{directory}/{entry.name}" if directory else entry.name
         super().__init__(selected, spelling, entry.size_bytes)
 
     def _selection_details(self):
         return f"成员：{self.member!r}\n正文：{self.size:,} 字节\nSHA-256：{self.entry.sha256}\n"
 
-    def _payload(self, create):
-        reader = _Positional(self.source, self.selected.observed[2], self._checkpoint)
-        with stored_member(reader, reader.end, self.marker, self.member, self.size) as body:
-            fd = create()
-            sha = self._copy(body.read, fd)  # ZipExtFile verifies the member's CRC at EOF.
-            if sha != self.entry.sha256: raise Rejected("成员与原核验的 SHA-256 不符")
-        return fd, sha
+
+class RestoreMissingMember(_StoredFileCopy):
+    """Recover one missing regular file from this comparison, never an edit or directory."""
+    def __init__(self, live, evidence, row):
+        if (not isinstance(evidence, MissingBaseline) or evidence.instance != live.instance or
+                evidence.path != live.store / _base_leaf(evidence.basis)):
+            raise Rejected("不能用另一次观察的基线补回本窗口文件")
+        size, self.expected_sha = evidence.file(row)
+        self.marker, self.member = evidence.marker, row.path
+        self.live = live.borrow()
+        try:
+            super().__init__(evidence, str(live.work.joinpath(*member_name(row.path))), size)
+            self.stack.callback(self.live.close)
+        except BaseException:
+            self.live.close()
+            raise
+
+    def _source_details(self):
+        return (f"登记基线：{self.marker.operation} · 原整包 SHA-256：{self.selected.basis[4]}\n"
+                f"原工作目录：{str(self.live.work)!r}\n")
+
+    def _selection_details(self):
+        return (f"缺失文件：{self.member!r}\n正文：{self.size:,} 字节\nSHA-256：{self.expected_sha}\n"
+                "只补回这个缺失文件，父目录必须已经存在。不会改变登记基线、历史或 STORE。\n")
+
+    def _source(self):
+        super()._source()
+        base = os.open(self.selected.path.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.live.store_fd)
+        try:
+            if (_generation(os.fstat(base)) != self.selected.observed or
+                    mount_id(base, read_proc=self.proc.read) != mount_id(self.live.store_fd, read_proc=self.proc.read)):
+                raise Rejected("登记基线不再是原 STORE 中的同一归档")
+        finally: os.close(base)
+
+    def _parent(self):
+        super()._parent()
+        _distinct_roots((self.live.work_fd, self.live.state_fd, self.live.store_fd))
+        mount = local_mount(self.live.work_fd, read_proc=self.proc.read)
+        first = len(self.live.work.parts) - 1
+        root = (*native_identity(os.fstat(self.live.work_fd), stat.S_IFDIR), mount)
+        if (self.parents[first] != root or any(parent[2] != mount for parent in self.parents[first:]) or
+                os.readlink(str(self.parent), dir_fd=self.proc.fds) != str(self.path.parent)):
+            raise Rejected("现有父目录不再位于原工作树的准确名称与实际挂载下")
+        flags = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
+        for path, fd, kind in ((self.live.state, self.live.state_fd, stat.S_IFDIR),
+                               (self.live.store, self.live.store_fd, stat.S_IFDIR),
+                               (self.live.state/"worktree.sqlite", self.live.db, stat.S_IFREG)):
+            actual = os.open(path, flags)
+            try:
+                if (native_identity(os.fstat(actual), kind) != native_identity(os.fstat(fd), kind) or
+                        mount_id(actual, read_proc=self.proc.read) != mount_id(fd, read_proc=self.proc.read)):
+                    raise Rejected("原 STATE、原数据库或 STORE 的名称和挂载已改变")
+            finally: os.close(actual)
+
+    @contextmanager
+    def _publication_guard(self):
+        with _held_idle_live_base(self.live, rollback_only=True) as current:
+            if current != self.selected.basis:
+                raise Rejected("原登记基线已改变；不会用旧对照补回文件")
+            yield
+
+    def review(self):
+        try:
+            self._checkpoint()
+            with self._publication_guard(): pass
+            details = super().review()
+            self._checkpoint()
+            return details
+        except BaseException:
+            self.close()
+            raise
 
 
 class ZipCopy(_AnonymousCopy):

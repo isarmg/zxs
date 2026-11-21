@@ -291,11 +291,11 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
                 future = Future()
                 jobs.append((future, work))
                 return future
-            def read(loan, *, observer):
+            def read(loan, *, observer, retain_missing=False):
                 loans.append(loan)
                 self.assertIsNot(loan, live)
                 if refused: raise Rejected("原读请求被拒")
-                return native(loan, observer=observer)
+                return native(loan, observer=observer, retain_missing=retain_missing)
             with self.subTest(stale=stale, refused=refused, cancelled=cancelled), \
                  patch.object(win.pool, "submit", side_effect=queue), \
                  patch.object(checkout_pane, "observe_live_changes", side_effect=read), \
