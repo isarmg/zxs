@@ -67,9 +67,6 @@ impl PublicConfirmation{
         let verb=if resume{"RESUME-RUST-SMB"}else if reset{"RESET-RUST-SMB"}else{"ENROLL-RUST-SMB"};
         self.ask(verb,Some(review),96*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_rust_stage_discard(&self,review:String)->io::Result<()>{
-        self.ask("DISCARD-RUST-STAGE",Some(review),96*1024)
-    }
     pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
         nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),&||self.check())
     }

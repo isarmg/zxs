@@ -103,7 +103,7 @@ fn checked_reply(meta:&[u8;65],site:&SitePayload,raw:&[u8])->io::Result<([u8;224
     Ok((prefix,generation))
 }
 
-fn observe()->io::Result<(Id,Id,Id,u64)>{
+fn observe()->io::Result<(Id,Id,Id,Id,u64)>{
     // Site selection requires pristine inherited stdio. Only then open the
     // extra descriptors needed to keep the original terminal pinned.
     let site=DeployedSite::select()?;
@@ -137,13 +137,14 @@ fn observe()->io::Result<(Id,Id,Id,u64)>{
     check()?;db.named(locked)?;
     if db.observation()?!=witness||marker.require(locked)?!=marker_witness{return Err(unavailable());}
     let o=q.site.origin;
-    Ok((o.pool,o.init,o.instance,generation))
+    let op=prefix[120..136].try_into().expect("checked original SMB operation");
+    Ok((o.pool,o.init,o.instance,op,generation))
 }
 pub(crate) fn check_deployment()->(u8,String){
     const SCOPE:&str="仅核对原部署：不启动、不授权维护、不变更配置、密码或介质。未核对数据卷和回收卷的可用性。";
     match observe(){
-        Ok((pool,init,instance,generation))=>(0,format!("已核对原离线 ZXS 部署：池 {}，历史 INIT {}，实例 {}，当前 SMB 凭据代次 {}。\n{SCOPE}",
-            hex(&pool),hex(&init),hex(&instance),generation)),
+        Ok((pool,init,instance,op,generation))=>(0,format!("已核对原离线 ZXS 部署：池 {}，历史 INIT {}，实例 {}，当前 SMB 凭据操作 {}／代次 {}。\n{SCOPE}",
+            hex(&pool),hex(&init),hex(&instance),hex(&op),generation)),
         Err(_)=>(2,format!("未确认原离线 ZXS 部署：原件缺失、在用、发生变化或证据不足。不会另找实例或自动初始化。\n{SCOPE}")),
     }
 }

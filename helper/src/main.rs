@@ -29,7 +29,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper check-deployment\n  helper reset-web-admin new|receipt --op ID --approval ID --helper-sha256 HEX\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-nonempty-source --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --source DIR\n  helper check-ordinary-retirement --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper install-pool web new|resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper check-deployment\n  helper reset-web-admin new|receipt --op ID --approval ID --helper-sha256 HEX\n  helper reset-smb receipt --op ID --approval ID --previous ID --previous-generation N --helper-sha256 HEX\n  helper reset-smb new --op ID --approval ID --previous ID --previous-generation N --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-nonempty-source --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --source DIR\n  helper check-ordinary-retirement --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper install-pool web new|resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper --help | --version\n\n\
 Supply explicit absolute paths; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -41,6 +41,7 @@ enum Command {
     Discover(sqlite_install::Discovery),
     CheckDeployment,
     WebAdministratorReset(sqlite_install::WebAdministratorReset),
+    SmbPasswordReset(sqlite_install::SmbPasswordReset),
     WebAdministratorResetWorker,
     RetirementCheck(sqlite_install::RetirementCheck),
     ImportCheck(sqlite_install::ImportCheck),
@@ -76,6 +77,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if args.next().is_some() { return Err("unexpected argument"); }
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
+    if op=="reset-smb"{return sqlite_install::SmbPasswordReset::parse(args).map(Command::SmbPasswordReset);}
     if op=="reset-web-admin"{return sqlite_install::WebAdministratorReset::parse(args).map(Command::WebAdministratorReset);}
     if op=="__zxs-web-admin-reset-sql-v1"{
         if args.next().is_some(){return Err("invalid internal Web administrator worker");}
@@ -176,6 +178,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::DiskWebStorage(s)=>disk_web::serve_storage(s)?,
         Command::ImportCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
         Command::RetirementCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
+        Command::SmbPasswordReset(i)=>return Ok(ExitCode::from(i.run()?)),
         Command::WebAdministratorReset(i)=>return Ok(ExitCode::from(i.run()?)),
         Command::WebAdministratorResetWorker=>return Ok(ExitCode::from(if sqlite_install::web_admin_reset_worker().is_ok(){0}else{2})),
         Command::CheckDeployment=>{let(code,public)=sqlite_install::check_deployment();line(&public)?;return Ok(ExitCode::from(code));}

@@ -262,6 +262,20 @@ pub(in crate::sqlite_install::pair) enum Desired{
 pub(in crate::sqlite_install::pair) struct RustOrder{
     pub actor:Id,pub approval:Id,pub op:Id,pub role:Desired,
 }
+/// Rebind a nonsecret worker observation to the exact exposed reset order.
+/// This reproduces the pre-existing v17 persistent digest, not a new grant.
+pub(in crate::sqlite_install::pair) fn reset_digest(plan:&RustPlan,order:&RustOrder,old:&ActiveRustMeta,
+    target:&ActiveRustMeta)->io::Result<[u8;32]>{
+    let Desired::Reset{previous,generation}=&order.role else{return Err(public_error());};
+    let install=Installation{pool:old.pool,init:old.init,setup:old.setup,instance:old.instance,bind:old.bind,sha:old.descriptor_sha};
+    if install!=Installation::from(plan)||(*previous,*generation)!=(old.op,old.generation){
+        return Err(public_error());
+    }
+    old.record_prefix()?;target.record_prefix()?;
+    let op=Reset::with_original(old.clone(),order.op,order.actor,order.approval,target.record)?;
+    if op.target()!=*target{return Err(public_error());}
+    Ok(op.sha())
+}
 pub(in crate::sqlite_install::pair) struct RustChange{actual:Change}
 enum Change{Setup(Birth),Reset(Reset)}
 impl RustChange{
@@ -285,8 +299,15 @@ pub(in crate::sqlite_install::pair) struct RustAccountCut<'s,'p>{
     cut:AccountCut<'s>,plan:&'p RustPlan,order:RustOrder,init_sha:Option<[u8;32]>,
 }
 impl<'s,'p> RustAccountCut<'s,'p>{
-    pub(in crate::sqlite_install::pair) fn open(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder)->io::Result<Self>{
-        Self::open_inner(locked,plan,order,None)
+    pub(in crate::sqlite_install::pair) fn open_deployed_reset(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,
+        site:&super::super::fresh_issuer::SitePayload)->io::Result<Self>{
+        super::super::fresh_issuer::compiled_v17()?;
+        let (actor,uid,_)=site.subject.tuple();
+        if !matches!(&order.role,Desired::Reset{..})||actor!=order.actor||site.origin!=plan.origin||
+            site.plan_sha!=plan.sha()||locked.source().path()!=site.system||locked.source().uid()!=uid{return Err(public_error());}
+        let cut=Self::open_inner(locked,plan,order,None)?;
+        cut.cut.read(|tx|cut.require_before_new(tx))?;
+        Ok(cut)
     }
     pub(in crate::sqlite_install::pair) fn open_new_first(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,
         init_sha:[u8;32],database:[u64;3])->io::Result<Self>{
@@ -294,7 +315,7 @@ impl<'s,'p> RustAccountCut<'s,'p>{
         if !matches!(&order.role,Desired::Setup{..}){return Err(public_error());}
         let s=Self::open_inner(locked,plan,order,Some(init_sha))?;
         s.cut.fresh_origin(database)?;
-        s.cut.read(|tx|s.require_initial_only(tx))?;
+        s.cut.read(|tx|s.require_before_new(tx))?;
         Ok(s)
     }
     fn open_inner(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,init_sha:Option<[u8;32]>)->io::Result<Self>{
@@ -308,12 +329,19 @@ impl<'s,'p> RustAccountCut<'s,'p>{
         }
         Ok(Self{cut:AccountCut::at(locked,core.pool,core.init)?,plan,order,init_sha})
     }
-    fn require_initial_only(&self,tx:&Transaction<'_>)->io::Result<()>{
+    fn require_before_new(&self,tx:&Transaction<'_>)->io::Result<()>{
         if let Some(init_sha)=self.init_sha{
             let o=self.plan.origin;
-            super::super::observed::isolated_first_init(tx,&o.pool,&o.init,&self.order.actor,&init_sha)?;
-        }
+            super::super::observed::isolated_first_init(tx,&o.pool,&o.init,&self.order.actor,&init_sha)
+        }else{self.require_deployed(tx)}
+    }
+    fn require_deployed(&self,tx:&Transaction<'_>)->io::Result<()>{
+        if self.init_sha.is_none(){self.cut.deployed_origin(tx,&self.order.actor)?;}
         Ok(())
+    }
+    pub(in crate::sqlite_install::pair) fn objects(&self)
+        ->io::Result<(std::fs::File,[u8;64],crate::sqlite_install::markers::SystemObservation)>{
+        self.cut.original_objects()
     }
     fn order_scope(&self,core:Core)->io::Result<()>{
         let o=self.plan.origin;let c=&self.order;
@@ -365,11 +393,11 @@ impl<'s,'p> RustAccountCut<'s,'p>{
         }
     }
     pub(in crate::sqlite_install::pair) fn observe(&self)->io::Result<Original<RustChange>>{
-        self.cut.read(|tx|self.original_in(tx))
+        self.cut.read(|tx|{self.require_deployed(tx)?;self.original_in(tx)})
     }
     pub(in crate::sqlite_install::pair) fn propose_new(&self)->io::Result<RustChange>{
         self.cut.read(|tx|{
-            self.require_initial_only(tx)?;
+            self.require_before_new(tx)?;
             if !matches!(self.original_in(tx)?,Original::Absent){return Err(public_error());}
             let record:Id=random()?;
             let actual=match &self.order.role{
@@ -415,7 +443,7 @@ impl<'s,'p> RustAccountCut<'s,'p>{
     )->io::Result<RustPending<'a,'s,'p>>{
         self.request(&change)?;
         self.cut.write(until,&parent_current,|tx|{
-            self.require_initial_only(tx)?;
+            self.require_before_new(tx)?;
             if !matches!(self.original_in(tx)?,Original::Absent){return Err(public_error());}
             match (&change.actual,web){
                 (Change::Setup(b),Some(v))=>b.reserve(tx,self.plan,v),
@@ -442,12 +470,15 @@ impl RustPending<'_,'_,'_>{
     pub(in crate::sqlite_install::pair) fn finish(self,live_vault:impl Fn()->io::Result<()>)->io::Result<ActiveRustMeta>{
         self.require()?;
         let target=self.change.target();let owner=self.owner;
-        owner.cut.write(self.until,&live_vault,|tx|match &self.change.actual{
-            Change::Setup(b)=>b.finish(tx,owner.plan),
-            Change::Reset(r)=>r.finish(tx,owner.plan),
+        owner.cut.write(self.until,&live_vault,|tx|{
+            owner.require_deployed(tx)?;
+            match &self.change.actual{
+                Change::Setup(b)=>b.finish(tx,owner.plan),
+                Change::Reset(r)=>r.finish(tx,owner.plan),
+            }
         })?;
         owner.cut.sync()?;
-        let active=owner.cut.read(|tx|active_at(tx,owner.plan))?;
+        let active=owner.cut.read(|tx|{owner.require_deployed(tx)?;active_at(tx,owner.plan)})?;
         expired(self.until)?;live_vault()?;
         if active!=target{return Err(public_error());}
         Ok(active)
@@ -461,4 +492,96 @@ pub(super) fn web_reset_fixture_pair(tx:&Transaction<'_>,plan:&RustPlan,actor:Id
         b"admin.fixture",b"smb.fixture",sid,[84;16]).unwrap();
     birth.reserve(tx,plan,&PreparedWeb::synthetic([85;16],[86;32])).unwrap();
     birth.finish(tx,plan).unwrap();
+}
+
+#[cfg(test)]
+mod reset_tests{
+    use super::*;
+    use crate::sqlite_install::{request::Request,stage::SCHEMA};
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+
+    fn seed()->(Connection,RustPlan,Id){
+        let vector=include_str!("../../../../tests/smb-host/rust-install-v1.txt");
+        let raw=vector.lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
+        let raw=(0..raw.len()).step_by(2).map(|i|u8::from_str_radix(&raw[i..i+2],16).unwrap()).collect::<Vec<_>>();
+        let p=RustPlan::decode(&raw).unwrap();let o=p.origin;
+        let actor=[71;16];let approval=[72;16];
+        let roots=[([73;16],PathBuf::from("/synthetic/S")),([74;16],"/synthetic/R".into())].into_iter()
+            .chain(p.folders().iter().enumerate().map(|(i,(f,_))|(f.volume,PathBuf::from(format!("/synthetic/F{i:02}")))))
+            .collect::<Vec<_>>();
+        let request=Request::new(o.init,actor,approval,1001,roots.iter().map(|(_,path)|path.clone()).collect()).unwrap();
+        let mut c=Connection::open_in_memory().unwrap();
+        c.execute_batch("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;").unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        let tx=c.transaction().unwrap();
+        tx.execute("INSERT INTO main.operation VALUES(?1,1,?2,?3,0)",params![&o.init[..],&actor[..],&request.sha()[..]]).unwrap();
+        tx.execute("INSERT INTO main.pool_birth VALUES(1,?1,?2,?3,1001,?4)",
+            params![&o.pool[..],&o.init[..],&approval[..],roots.len() as i64]).unwrap();
+        for (i,(volume,path)) in roots.iter().enumerate(){
+            tx.execute("INSERT INTO main.volume_claim VALUES(?1,?2,?3,?4,?5,255,?6)",
+                params![&o.init[..],i as i64,crate::sqlite_install::request::role(i),&volume[..],path.as_os_str().as_encoded_bytes(),
+                    &[(100+i) as u8;32][..]]).unwrap();
+        }
+        tx.execute("UPDATE main.operation SET state=1 WHERE op_id=?1",[&o.init[..]]).unwrap();
+        web_reset_fixture_pair(&tx,&p,actor);
+        tx.commit().unwrap();
+        (c,p,actor)
+    }
+    type Web=(Vec<u8>,Vec<u8>,i64,Vec<u8>,Vec<u8>,Vec<u8>);
+    fn web(tx:&Transaction<'_>)->Web{
+        tx.query_row("SELECT w.salt,w.verifier,w.generation,w.credential_op,a.web_id,a.web_login
+            FROM main.web_password w JOIN main.account_pair a ON w.slot=a.singleton",[],|r|
+            Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).unwrap()
+    }
+    #[test]
+    fn smb_password_reset_pending_blocks_the_old_epoch_then_one_exact_new_active_reopens_and_web_is_identical(){
+        let (mut c,plan,actor)=seed();let tx=c.transaction().unwrap();
+        let unchanged=web(&tx);let old=active_at(&tx,&plan).unwrap();
+        assert_eq!(old.generation,1);
+        let op=[110;16];let approval=[111;16];
+        let order=RustOrder{op,approval,actor,role:Desired::Reset{previous:old.op,generation:old.generation}};
+        let reset=Reset::with_original(old.clone(),op,actor,approval,[112;16]).unwrap();
+        // Independently measured 302-byte public v17 preimage, in the same
+        // order as Core credential.rs::rust_reset_request. No secret fixture.
+        assert_eq!(reset.sha(),crate::fs_tools::hex("190fa8110ab5258d1a226434d84776faa7a673aceefc8de9976448b57fd73f60").unwrap());
+        assert_eq!(reset_digest(&plan,&order,&old,&reset.target()).unwrap(),reset.sha());
+        let mut changed=reset.target();changed.record=[113;16];
+        assert_ne!(reset_digest(&plan,&order,&old,&changed).unwrap(),reset.sha());
+        let mut bad_target=reset.target();bad_target.login=b"not-this-smb".to_vec();
+        assert!(reset_digest(&plan,&order,&old,&bad_target).is_err());
+
+        reset.reserve(&tx,&plan).unwrap(); // actual reviewed v17 tables/triggers, no vault file
+        assert!(active_at(&tx,&plan).is_err());
+        assert_eq!(web(&tx),unchanged);
+        assert!(reset.reserve(&tx,&plan).is_err());
+        let foreign=Reset::with_original(old.clone(),[120;16],actor,[121;16],[122;16]).unwrap();
+        assert!(foreign.reserve(&tx,&plan).is_err());
+        let wrong_record=Reset::with_original(old.clone(),op,actor,approval,[113;16]).unwrap();
+        assert!(wrong_record.finish(&tx,&plan).is_err());
+        assert!(active_at(&tx,&plan).is_err());
+        tx.commit().unwrap();
+
+        let tx=c.transaction().unwrap();
+        assert!(active_at(&tx,&plan).is_err()); // another transaction never sees the old epoch
+        let Original::Committed(birth)=Birth::original(&tx,&plan).unwrap()else{panic!("no synthetic original first pair");};
+        assert!(select_reset(&tx,&birth,op,2,1).is_err());
+        assert_eq!(select_reset(&tx,&birth,op,2,0).unwrap().sha(),reset.sha());
+        reset.finish(&tx,&plan).unwrap(); // SQL half assumes an independent protected vault witness
+        assert!(active_at(&tx,&plan).unwrap()==reset.target());
+        assert_eq!(web(&tx),unchanged);assert!(reset.finish(&tx,&plan).is_err());
+        tx.commit().unwrap();
+
+        let tx=c.transaction().unwrap();
+        let active=active_at(&tx,&plan).unwrap();assert!(active==reset.target());
+        let later=Reset::with_original(active,[130;16],actor,[131;16],[132;16]).unwrap();
+        later.reserve(&tx,&plan).unwrap();assert!(active_at(&tx,&plan).is_err());
+        later.finish(&tx,&plan).unwrap();
+        assert_eq!(select_reset(&tx,&birth,op,2,1).unwrap().sha(),reset.sha()); // historical, not active
+        assert!(active_at(&tx,&plan).unwrap()==later.target());
+        assert_eq!(web(&tx),unchanged);
+        let effects:i64=tx.query_row("SELECT count(*) FROM main.credential_reset WHERE role<>1",[],|r|r.get(0)).unwrap();
+        assert_eq!(effects,0);
+        tx.commit().unwrap();
+    }
 }

@@ -1,5 +1,5 @@
 //! The original protected product site, no runtime or alternate account store.
-use super::{Site,approval,bad,child,contents,layout,mark,public_record::Public,site_lease::SiteLease};
+use super::{DeployedSite,Site,approval,bad,child,contents,layout,mark,public_record::Public,site_lease::SiteLease};
 use crate::{pinned::{Pinned,private_inode_reader},sqlite_install::pair::fresh_issuer::{CredentialScope,MAX_SITE,SitePayload,require_v17},
     smb_profile::rust_first::{MAX_WIRE,RustPlan}};
 use rustix::fs::{Mode,OFlags,ResolveFlags,openat2};
@@ -64,6 +64,35 @@ impl RustSite{
     }
 }
 
+
+/// Private borrow of the real owning original. Reset never constructs an
+/// installed authority from a namestring, records, or an arbitrary descriptor.
+#[derive(Clone,Copy)]
+pub(in crate::sqlite_install::pair) enum CredentialSite<'s>{Fresh(&'s RustSite),Deployed(&'s DeployedSite)}
+impl<'s> CredentialSite<'s>{
+    pub(in crate::sqlite_install::pair) fn same(self,other:Self)->bool{
+        match (self,other){
+            (Self::Fresh(a),Self::Fresh(b))=>std::ptr::eq(a,b),
+            (Self::Deployed(a),Self::Deployed(b))=>std::ptr::eq(a,b),
+            _=>false,
+        }
+    }
+    pub(in crate::sqlite_install::pair) fn require(self)->io::Result<()>{
+        match self{Self::Fresh(f)=>f.require(),Self::Deployed(d)=>d.require()}
+    }
+    pub(in crate::sqlite_install::pair) fn plan(self)->&'s RustPlan{
+        match self{Self::Fresh(f)=>f.plan(),Self::Deployed(d)=>d.plan()}
+    }
+    pub(in crate::sqlite_install::pair) fn original_system(self)->io::Result<(&'s Pinned,&'s File)>{
+        match self{Self::Fresh(f)=>f.original_system(),Self::Deployed(d)=>{d.require()?;Ok(d.original())}}
+    }
+    pub(in crate::sqlite_install::pair) fn subject(self)->([u8;16],u32,u32){
+        match self{Self::Fresh(f)=>f.subject(),Self::Deployed(d)=>d.payload().subject.tuple()}
+    }
+    pub(super) fn offline_vault_directory(self)->io::Result<File>{
+        match self{Self::Fresh(f)=>f.offline_vault_directory(),Self::Deployed(d)=>d.offline_vault_directory()}
+    }
+}
 
 /// Runtime-read public installation authority. It names the actual stable
 /// allocator's site, not a per-user Helper setting or an operating grant.

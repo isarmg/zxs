@@ -93,7 +93,7 @@ fn creation_rights(status:&[u8])->bool{
     // change the process mask or capabilities to make a site acceptable.
     mask&0o700==0 && cap&0x9==0x9 && cap&0x6!=0
 }
-fn creation_preflight(parent:&File)->io::Result<()>{
+pub(super) fn creation_preflight(parent:&File)->io::Result<()>{
     if parent.metadata()?.mode()&0o2000!=0{return Err(bad("setgid on the immediate installation parent is not supported; not changing it"));}
     let mut status=Vec::new();crate::maintenance::thread_file(c"thread-self/status")?.take(65537).read_to_end(&mut status)?;
     if !creation_rights(&status){return Err(bad("current umask or effective privileges cannot create the exact new layout"));}

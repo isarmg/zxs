@@ -133,14 +133,20 @@ impl DeployedSite{
     pub(in crate::sqlite_install::pair) fn require_vault_prefix(&self,wanted:&[u8;224])->io::Result<()>{
         self.observe_vault(wanted).map(drop)
     }
-    pub(in crate::sqlite_install::pair) fn observe_vault(&self,wanted:&[u8;224])->io::Result<ObservedVault<'_>>{
+    pub(super) fn offline_vault_directory(&self)->io::Result<File>{
         self.require()?;
-        let vault=product_pin(&self.site_ex,VAULT,false)?;
+        let pin=||product_pin(&self.site_ex,VAULT,false);
+        let vault=pin()?;
         let m=vault.metadata()?;
         if m.mode()!=0o040700||m.uid()!=0||m.gid()!=0{return Err(unknown());}
         let dir=child(&vault,c".")?;
-        if mark(&dir)?!=mark(&vault)?{return Err(unknown());}
+        if mark(&dir)?!=mark(&vault)?||mark(&dir)?.1!=mark(&self.site_ex)?.1{return Err(unknown());}
+        layout::exact_with(&self.site_ex,VAULT,&vault,pin)?;
         layout::bare_acl(&dir,c"system.posix_acl_access")?;layout::bare_acl(&dir,c"system.posix_acl_default")?;
+        self.require()?;Ok(dir)
+    }
+    pub(in crate::sqlite_install::pair) fn observe_vault(&self,wanted:&[u8;224])->io::Result<ObservedVault<'_>>{
+        let dir=self.offline_vault_directory()?;
         contents(&dir,&[b"credential.v1"])?;
         let original=leaf(&dir,RECORD)?;let mount=mark(&dir)?.1;
         let stamp=checked_vault_stamp(&original,mount)?;
@@ -177,29 +183,37 @@ impl ObservedVault<'_>{
     }
 }
 
-/// Qualify the original installed origin in the private Web-reset worker
-/// before lowering, without opening the vault or acquiring a second lock.
-pub(in crate::sqlite_install::pair) fn verify_deployed_worker(payload:&SitePayload,plan:&RustPlan)->io::Result<()>{
+/// Qualify the original installed origin in a private worker before
+/// lowering, without opening the vault or acquiring a second lock.
+pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,site_sha:[u8;32])->io::Result<SitePayload>{
     compiled_v17()?;
-    if payload.origin!=plan.origin||payload.plan_sha!=plan.sha(){return Err(unknown());}
-    let site=Site::product(approval::host_admin()?,&payload.origin.instance,false)?;
+    if site_sha==[0;32]{return Err(unknown());}
+    let expected=(plan.origin.instance,site_sha);
+    let site=Site::product(approval::host_admin()?,&expected.0,false)?;
     let parent=child(&site.chain[PRODUCT.len()-1],c".")?;
     protected_parent(&parent)?;
     let (selector,record)=locator(&parent)?;
-    let expected=(payload.origin.instance,payload.sha()?);
     if record!=expected{return Err(unknown());}
-    layout::verify_registered_instance(&site,payload.subject.tuple().2)?;
     let dir=child(site.base(),c".")?;
     if mark(&dir)?!=mark(site.base())?{return Err(unknown());}
     layout::bare_acl(&dir,c"system.posix_acl_default")?;
     contents(&dir,&[b"site.v1",b"rust.install",b"vault"])?;
     let auth=PublicAuthority::select(&dir)?;
+    let payload=SitePayload::decode(auth.bytes())?;
+    if payload.origin!=plan.origin||payload.plan_sha!=plan.sha()||payload.sha()?!=site_sha||
+        auth.bytes()!=payload.encode()?{return Err(unknown());}
+    layout::verify_registered_instance(&site,payload.subject.tuple().2)?;
     let installed=Public::select(&dir,c"rust.install",1..=MAX_WIRE)?;
-    if auth.bytes()!=payload.encode()?||installed.bytes()!=plan.wire(){return Err(unknown());}
+    if installed.bytes()!=plan.wire(){return Err(unknown());}
     installed.require(&dir,c"rust.install")?;auth.require(&dir)?;
     let (named,again)=locator(&parent)?;
     if again!=expected||super::live::Stamp::on(&named)?!=super::live::Stamp::on(&selector)?{return Err(unknown());}
-    site.check()
+    site.check()?;Ok(payload)
+}
+
+pub(in crate::sqlite_install::pair) fn verify_deployed_worker(payload:&SitePayload,plan:&RustPlan)->io::Result<()>{
+    if deployed_worker_payload(plan,payload.sha()?)?!=*payload{return Err(unknown());}
+    Ok(())
 }
 
 #[cfg(test)]

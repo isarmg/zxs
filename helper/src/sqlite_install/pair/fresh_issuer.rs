@@ -48,7 +48,7 @@ impl ExplicitSubject{
 
 pub(super) mod image;
 use super::{command::{key,name,sha,value},distinct_roles,domain::{FreshHome,FreshParent},native_run::{Choice,ResolvedRust,transact_fresh},
-    native_sql::rust_vault::{Desired,RustOrder},rust_enroll::{crypto::Cryptography,manifest::{Intent,Manifest}},terminal::PublicConfirmation};
+    native_sql::rust_vault::{Desired,RustOrder},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest}},terminal::PublicConfirmation};
 use crate::{path_rules::Kind,smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
     rust_first::{self,Origin}},sqlite_install::{approval,stage::random}};
 use helper_linux_evidence::prompt_signals::PromptSignals;
@@ -150,7 +150,7 @@ impl Selection{
             let m=Manifest{intent:Intent::Fresh,nonce:random()?,system:system.clone(),
                 entity:[entity.dev,entity.ino,pin.require_same_named_mount()?.id],plan:site.plan().clone(),
                 order:RustOrder{op:origin.setup,actor:subject.actor,approval:reference,role:Desired::Setup{web,smb}},
-                fresh:Some(CredentialScope{subject,crypto,site:authority.sha()?,init_sha,database:resolved.fresh_database()?})};
+                authority:Authority::Fresh(CredentialScope{subject,crypto,site:authority.sha()?,init_sha,database:resolved.fresh_database()?})};
             let active=transact_fresh(&site,m,&tty,&live)?;
             let record=active.at(&site)?.record;
             let site_sha=filesystem_phase(&live,|guarded|target.activate(&resolved,&site,active,&tty,guarded))?;

@@ -1,6 +1,6 @@
 //! Public exact scope of a prepared low writer; it cannot include a password.
 use super::{bad,manifest::{self,Intent,Manifest},receipt::Observed};
-use crate::sqlite_install::pair::native_sql::rust_vault::Desired;
+use crate::sqlite_install::pair::native_sql::rust_vault::{Desired,reset_digest};
 use sha2::{Digest,Sha256};
 use std::{fs::File,io};
 
@@ -29,7 +29,7 @@ impl SecretOrder {
         if manifest.intent!=Intent::Fresh||selected.state!=1||selected.target.op!=manifest.order.op{return Err(no());}
         let matches=match(&manifest.order.role,&selected.previous){
             (Desired::Setup{smb,..},None)=>smb==&selected.target.login,
-            (Desired::Reset{previous,generation},Some(old))=>*previous==old.op&&*generation==old.generation,
+            (Desired::Reset{..},Some(old))=>reset_digest(&manifest.plan,&manifest.order,old,&selected.target)?==selected.action,
             _=>false,
         };
         if !matches{return Err(no());}

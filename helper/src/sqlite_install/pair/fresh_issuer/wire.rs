@@ -19,7 +19,7 @@ pub(in crate::sqlite_install::pair) struct CryptoPins{
     pub(in crate::sqlite_install::pair) gpgerror:[u8;32],
 }
 impl CryptoPins{
-    fn check(self)->io::Result<()>{
+    pub(in crate::sqlite_install::pair) fn check(self)->io::Result<()>{
         if [self.helper,self.gcrypt,self.gpgerror].contains(&[0;32]){return Err(no());}
         Ok(())
     }

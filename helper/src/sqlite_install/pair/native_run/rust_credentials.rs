@@ -1,31 +1,48 @@
 //! Fixed two-role control for the one Rust credential. The low SQL worker
 //! has no readable vault descriptor. Only the separately reaped low
 //! writer ever writes the prepared 240-byte record.
-use super::{bad,host::{Worker,prerequisite},transport::{self,Channel,Kind,Payload},worker::original_parent};
-use crate::{pinned::{Kind as PathKind,Pinned,helper_elf::ForegroundElf},sqlite_install::{approval,
+use super::{bad,host::{Worker,prerequisite},transport::{self,Channel,Kind,Payload},worker::original_parent,
+    web_admin_reset::{Objects,object_body,read_object_body}};
+use crate::{maintenance::HostMounts,pinned::{Kind as PathKind,Pinned,helper_elf::ForegroundElf},sqlite_install::{approval,
     originals::SelectedSystem,pair::{
-        domain::{Allocated,RustSite,VaultStamp,checked_vault_stamp,finish_seen_pending,give_live_approval,request_live_approval,sealed,verify_fresh_worker,verify_fresh_vault},
-        native_sql::{Original,rust_vault::{ActiveRustMeta,Desired,RustAccountCut,RustChange}},
-        rust_enroll::{crypto::Cryptography,manifest::{Intent,Manifest,seal_bytes},receipt::Observed,secret_order::{SecretOrder,scope as secret_scope}},
+        domain::{Allocated,CredentialSite,CurrentVault,RustSite,VaultStamp,checked_vault_stamp,deployed_worker_payload,
+            give_live_approval,request_live_approval,sealed,verify_fresh_worker,verify_fresh_vault},
+        fresh_issuer::{InitialDatabase,SitePayload},
+        native_sql::{Original,rust_vault::{ActiveRustMeta,Desired,RustAccountCut,RustChange,reset_digest}},
+        rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest,seal_bytes},receipt::Observed,secret_order::{SecretOrder,scope as secret_scope}},
         terminal::{HeldQuiet,PublicConfirmation,SelectedInput},
     }}};
 use helper_linux_evidence::diagnostic_process::{OfflineSql,account_sql_descriptors};
 use rustix::{fs::{OFlags,fcntl_getfl},net::UCred,process::{DumpableBehavior,Gid,Pid,Signal,Uid,
     dumpable_behavior,getppid,parent_process_death_signal,set_dumpable_behavior,set_parent_process_death_signal}};
-use std::{fs::File,io,thread,time::{Duration,Instant}};
+use std::{fs::File,io,os::unix::fs::MetadataExt,sync::Arc,thread,time::{Duration,Instant}};
 
 const LIMIT:Duration=Duration::from_secs(12*60);
 fn exact_parent(fd:&File,owner:Pid)->io::Result<()>{
     original_parent(fd,owner)?;
     ForegroundElf::host()?.parent_is_same_image(owner)
 }
-fn subject(m:&Manifest,parent:Pid)->io::Result<([u8;16],u32,u32)>{
-    let scope=m.fresh.as_ref().ok_or_else(||bad("only the fresh v17 offline account scope is accepted"))?;
+type Subject=([u8;16],u32,u32);
+fn subject(m:&Manifest,parent:Pid)->io::Result<(Subject,Option<SitePayload>)>{
     let image=ForegroundElf::host()?;
-    image.require_independent_digest(&scope.crypto.helper)?;
+    image.require_independent_digest(&m.authority.helper())?;
     image.parent_is_same_image(parent)?;
-    verify_fresh_worker(&m.system,&m.plan,scope)?;image.require()?;
-    Ok(scope.subject.tuple())
+    let bound=match m.authority{
+        Authority::Fresh(scope)=>{
+            verify_fresh_worker(&m.system,&m.plan,&scope)?;
+            (scope.subject.tuple(),None)
+        },
+        Authority::Deployed(scope)=>{
+            let actual=deployed_worker_payload(&m.plan,scope.site)?;
+            if actual.subject!=scope.subject||actual.system!=m.system{
+                return Err(bad("different original protected deployed subject or SYSTEM"));
+            }
+            (scope.subject.tuple(),Some(actual))
+        },
+    };
+    let ((actor,_,_),_)=&bound;
+    if m.order.actor!=*actor{return Err(bad("wrong original Rust maintenance principal"));}
+    image.require()?;Ok(bound)
 }
 fn isolated(fd:File,parent:Pid,uid:u32,gid:u32,digest:[u8;32])->io::Result<(Channel,Instant)>{
     approval::drop_to_storage(uid,gid)?;
@@ -79,32 +96,50 @@ pub(crate) fn account_worker()->io::Result<()>{
     exact_parent(&fd,parent)?;
     let host=approval::host_admin()?;
     let m=Manifest::read(&meta)?;drop(meta);
-    let (actor,uid,gid)=subject(&m,parent)?;
-    if m.order.actor!=actor{return Err(bad("wrong original Rust maintenance principal"));}
+    let ((_,uid,gid),deployed)=subject(&m,parent)?;
     let scope=m.scope()?;
     let input=(m.intent==Intent::Fresh&&matches!(&m.order.role,Desired::Setup{..})).then(SelectedInput::before_drop);
     let (channel,until)=isolated(fd,parent,uid,gid,scope)?;
     let (zero,[lease])=channel.wait_checked::<1>(Kind::Lease,&scope,until,||live_parent(parent,until))?;
     if zero!=[0;65]{return Err(bad("wrong original SYSTEM lease"));}
-    let pinned=Pinned::already_mounted(&m.system,PathKind::StorageRoot)?;let e=pinned.entity();
+    let local=if deployed.is_some(){Some(Arc::new(HostMounts::discovery_view(false)?))}else{None};
+    let pinned=if let Some(view)=&local{
+        Pinned::require_local_root(view)?;
+        Pinned::local_storage(&m.system,view)?
+    }else{Pinned::already_mounted(&m.system,PathKind::StorageRoot)?};
+    let e=pinned.entity();
     if [e.dev,e.ino,pinned.require_same_named_mount()?.id]!=m.entity{return Err(bad("different original SYSTEM"));}
     let locked=SelectedSystem::from_origin(pinned,host,uid,gid)?.from_lent_ex(lease)?;
-    let f=m.fresh.ok_or_else(||bad("no exact fresh issuance scope"))?;
-    let cut=RustAccountCut::open_new_first(&locked,&m.plan,m.order,f.init_sha,f.database)?;
+    let cut=match (m.authority,deployed.as_ref()){
+        (Authority::Fresh(f),None)=>RustAccountCut::open_new_first(&locked,&m.plan,m.order,f.init_sha,f.database)?,
+        (Authority::Deployed(_),Some(actual))=>RustAccountCut::open_deployed_reset(&locked,&m.plan,m.order,actual)?,
+        _=>return Err(bad("no exact original Rust scope")),
+    };
     let alive=||{live_parent(parent,until)?;locked.require()};
-    let prior=cut.observe()?;
-    if m.fresh.is_some()&&!matches!(&prior,Original::Absent){return Err(bad("this route is fresh-only; retain the original"));}
-    let (tag,change)=match (m.intent,prior){
-        (Intent::Fresh,Original::Absent)=>(1,cut.propose_new()?),
-        (_,Original::Absent)=>{
-            channel.send_original(Kind::RustInspect,&scope,&[0;65],&sealed(&[0])?)?;
-            return Ok(());
-        },
-        (_,Original::Pending(v))=>(2,v),(_,Original::Committed(v))=>(3,v),
+    let result=match (m.intent,cut.observe()?){
+        (Intent::Fresh,Original::Absent)=>Some((1,cut.propose_new()?)),
+        (Intent::Lookup,Original::Absent)=>None,
+        (Intent::Lookup,Original::Pending(v))=>Some((2,v)),
+        (Intent::Lookup,Original::Committed(v))=>Some((3,v)),
+        _=>return Err(bad("new requires a truly absent original operation; never resumes it")),
+    };
+    let original=if deployed.is_some(){
+        let (db,stamp,marker)=cut.objects()?;
+        let observed_marker=marker.require(locked.source().dir())?;
+        alive()?;
+        channel.send_original(Kind::DeployedDatabase,&scope,&object_body(stamp),&db)?;
+        channel.send_original(Kind::DeployedMarker,&scope,&object_body(observed_marker),marker.pin())?;
+        Some((db,marker,observed_marker))
+    }else{None};
+    let Some((tag,change))=result else{
+        alive()?;
+        channel.send_original(Kind::RustInspect,&scope,&[0;65],&sealed(&[0])?)?;
+        return Ok(());
     };
     let target=change.target();let digest=change.digest();
+    alive()?;
     channel.send_original(Kind::RustInspect,&scope,&body(tag,&target.record),&observed(tag,&change)?)?;
-    if !matches!((m.intent,tag),(Intent::Fresh,1)|(Intent::Resume,2)){return Ok(());}
+    if m.intent!=Intent::Fresh{return Ok(());}
     let selected=input.transpose()?;
     let prepared=if tag==1&&selected.is_some(){
         let (warm,[])=channel.wait_checked::<0>(Kind::Warm,&digest,until,&alive)?;
@@ -115,27 +150,35 @@ pub(crate) fn account_worker()->io::Result<()>{
     }else{None};
     let (ready,[])=channel.wait_checked::<0>(Kind::RustStage,&digest,until,&alive)?;
     if ready!=body(tag,&target.record){return Err(bad("wrong original Rust vault stage admission"));}
-    let pending=if tag==1{
-        let web=prepared.map(|p|p.read_held()).transpose()?;
-        cut.reserve_after_staging(change,web.as_ref(),until,&alive)?
-    }else{cut.confirmed_pending(change,until)?};
+    let web=prepared.map(|p|p.read_held()).transpose()?;
+    let pending=cut.reserve_after_staging(change,web.as_ref(),until,&alive)?;
     pending.require()?;alive()?;
     channel.send(Kind::Reserved,&digest,&body(2,&target.record))?;
     let placed=Placed::receive(&channel,pending.change(),until)?;
     let active=pending.finish(||{alive()?;placed.require()})?;
     if active!=target{return Err(bad("wrong independently read back ACTIVE result"));}
+    if let Some((db,marker,expected_mark))=original{
+        let (again,stamp,current_mark)=cut.objects()?;
+        if InitialDatabase::scope(&again,uid)?!=InitialDatabase::scope(&db,uid)?||
+            marker.require(locked.source().dir())?!=expected_mark||
+            current_mark.require(locked.source().dir())?!=expected_mark{return Err(bad("original reset SYSTEM evidence changed"));}
+        local.as_ref().ok_or_else(||bad("missing passive SYSTEM selection"))?.require_unchanged()?;
+        alive()?;placed.require()?;
+        channel.send(Kind::RustResetDurable,&digest,&object_body(stamp))?;
+    }
+    drop(cut);alive()?;placed.require()?;
     channel.send(Kind::Complete,&digest,&body(3,&target.record))
 }
+
 pub(crate) fn vault_worker()->io::Result<()>{
     let [fd,meta]=account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3,4])?;
     let parent=getppid().ok_or_else(||bad("the original Rust secret owner is absent"))?;
     exact_parent(&fd,parent)?;
     let (order,original)=SecretOrder::read(&meta)?;drop(meta);
-    let (actor,uid,gid)=subject(&order.manifest,parent)?;
-    if order.manifest.order.actor!=actor{return Err(bad("wrong original secret writer principal"));}
-    let f=order.manifest.fresh.ok_or_else(||bad("no exact fresh credential program scope"))?;
-    let policy=Cryptography::fresh(f.crypto)?;
+    let ((_,uid,gid),deployed)=subject(&order.manifest,parent)?;
+    let pins=order.manifest.authority.crypto().ok_or_else(||bad("no exact original credential provider scope"))?;
+    let policy=if deployed.is_some(){Cryptography::for_deployed(pins)?}else{Cryptography::fresh(pins)?};
     let lib=policy.before_dropping()?;
     let tty=SelectedInput::before_drop()?;
     let (channel,until)=isolated(fd,parent,uid,gid,original)?;
@@ -143,6 +186,9 @@ pub(crate) fn vault_worker()->io::Result<()>{
     tty.lock_secret_memory()?;alive()?;
     let crypto=policy.for_low_writer(&lib)?;
     let target=order.selected;
+    if deployed.is_some(){
+        channel.send(Kind::RustResetWriterReady,&target.action,&body(1,&target.target.record))?;
+    }
     let (ready,[mut stage])=channel.wait_checked::<1>(Kind::RustStage,&target.action,until,&alive)?;
     if ready!=body(1,&target.target.record){return Err(bad("wrong original writable stage for the new Rust secret"));}
     alive()?;
@@ -152,20 +198,16 @@ pub(crate) fn vault_worker()->io::Result<()>{
 }
 
 pub(in crate::sqlite_install::pair) struct RustEnrollmentApproval<'s>{
-    site:&'s RustSite,terminal:&'s PublicConfirmation,original:&'s Observed,until:Instant,
+    site:CredentialSite<'s>,terminal:&'s PublicConfirmation,original:&'s Observed,until:Instant,
     fresh:Option<&'s dyn Fn()->io::Result<()>>,
 }
 impl<'s> RustEnrollmentApproval<'s> {
-    pub(in crate::sqlite_install::pair) fn site(&self)->&'s RustSite{self.site}
+    pub(in crate::sqlite_install::pair) fn site(&self)->CredentialSite<'s>{self.site}
     pub(in crate::sqlite_install::pair) fn original(&self)->&'s Observed{self.original}
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
         if Instant::now()>=self.until{return Err(bad("the original Rust maintenance approval expired"));}
         if let Some(check)=self.fresh{check()?;}
         self.terminal.check()?;self.site.require()
-    }
-    pub(in crate::sqlite_install::pair) fn confirm_unregistered_stage(&self,review:String)->io::Result<()>{
-        if self.original.state!=1||self.site.fresh_payload().is_some(){return Err(bad("no original approval to discard a stage"));}
-        self.require()?;self.terminal.confirm_rust_stage_discard(review)?;self.require()
     }
     fn while_quiet(&self,quiet:&HeldQuiet<'_>)->io::Result<()>{
         if Instant::now()>=self.until{return Err(bad("the original Rust maintenance approval expired"));}
@@ -179,14 +221,13 @@ pub(in crate::sqlite_install::pair) struct DurableRustPending<'a,'s>{
     approved:&'a RustEnrollmentApproval<'s>,sql:&'a Worker,
 }
 impl<'s> DurableRustPending<'_,'s> {
-    pub(in crate::sqlite_install::pair) fn approved(&self)->&RustEnrollmentApproval<'s>{self.approved}
-    pub(in crate::sqlite_install::pair) fn require(&self,site:&RustSite,meta:&ActiveRustMeta)->io::Result<()>{
-        if !std::ptr::eq(self.approved.site,site)||&self.approved.original.target!=meta{return Err(bad("not the original durable Rust operation"));}
+    pub(in crate::sqlite_install::pair) fn require(&self,site:CredentialSite<'s>,meta:&ActiveRustMeta)->io::Result<()>{
+        if !self.approved.site.same(site)||&self.approved.original.target!=meta{return Err(bad("not the original durable Rust operation"));}
         self.approved.require()?;self.sql.live()
     }
 }
 
-fn launch(helper:&ForegroundElf,site:&RustSite,tty:&PublicConfirmation,scope:[u8;32],meta:File,mode:OfflineSql)
+fn launch(helper:&ForegroundElf,site:CredentialSite<'_>,tty:&PublicConfirmation,scope:[u8;32],meta:File,mode:OfflineSql)
     ->io::Result<(Worker,Channel)>{
     let (ours,child)=transport::pair()?;
     let worker=Worker::spawn(helper.descriptor(),&child,&meta,mode)?;
@@ -211,9 +252,9 @@ fn preview(m:&Manifest,v:&Observed)->String{
         (Desired::Setup{web,..},Some(id))=>format!("首设 Web 用户 {} / 账号 {}。\n",std::str::from_utf8(web).expect("checked login"),hex(&id)),
         _=>String::new(),
     };
-    let action=if v.state==1{"准备新正本；遗留未登记暂存不会自动删除。"}
-        else{"只恢复原待办；绝不重读密码或产生另一正本。"};
-    format!("Rust 原安装 {:?} / {}，不启动 Native 或 Rust 服务。\n\
+    let action=if v.previous.is_some(){"只重置已离线的原 SMB 账户，不更改 Web、卷或部署；未知暂存不采用、不删除。"}
+        else{"准备新正本；遗留未登记暂存不会自动删除。"};
+    format!("Rust 原安装 {:?} / {}，不启动任何服务。\n\
         原池 {} / INIT {} / SETUP {}；原站点 {} / Bind {}；描述 {}。\n\
         原事 {} / 批准 {} / 请求 {}。{}{}\n\
         {}唯一 SMB 用户 {} / 禁止匿名；账号 {} / 第 {} 代 / 新正本 {}。\n",
@@ -225,14 +266,14 @@ fn expected(m:&Manifest,v:&Observed)->io::Result<()>{
     if v.target.op!=m.order.op{return Err(bad("different original action in Rust account receipt"));}
     let yes=match(&m.order.role,&v.previous){
         (Desired::Setup{smb,..},None)=>smb==&v.target.login&&v.target.generation==1,
-        (Desired::Reset{previous,generation},Some(p))=>(*previous,*generation)==(p.op,p.generation),
+        (Desired::Reset{..},Some(p))=>reset_digest(&m.plan,&m.order,p,&v.target)?==v.action,
         _=>false,
     };
     if !yes{return Err(bad("different original identity in Rust account receipt"));}
     Ok(())
 }
 
-fn transact_inner(site:&RustSite,m:Manifest,tty:&PublicConfirmation,fresh:Option<&dyn Fn()->io::Result<()>>)
+fn transact_inner(site:CredentialSite<'_>,m:Manifest,tty:&PublicConfirmation,fresh:Option<&dyn Fn()->io::Result<()>>)
     ->io::Result<Option<Observed>>{
     if let Some(check)=fresh{check()?;}
     site.require()?;tty.check()?;prerequisite()?;
@@ -241,52 +282,95 @@ fn transact_inner(site:&RustSite,m:Manifest,tty:&PublicConfirmation,fresh:Option
         m.entity!=[original.dev,original.ino,pin.require_same_named_mount()?.id]{
         return Err(bad("not this exact original offline Rust site"));
     }
-    let helper=match (site.fresh_payload(),m.fresh){
-        (Some(origin),Some(new)) if origin.sha()?==new.site&&origin.subject==new.subject=>{
-            let helper=ForegroundElf::host()?;
-            helper.require_independent_digest(&new.crypto.helper)?;helper
-        },
-        _=>return Err(bad("not the exact new ZXS site authority")),
+    let deployed=match (site,m.authority){
+        (CredentialSite::Fresh(f),Authority::Fresh(new))
+            if f.fresh_payload().is_some_and(|p|p.subject==new.subject)&&fresh.is_some()=>{
+                if f.fresh_payload().ok_or_else(||bad("missing original fresh authority"))?.sha()?!=new.site{
+                    return Err(bad("different original fresh installation"));
+                }
+                false
+            },
+        (CredentialSite::Deployed(d),Authority::Deployed(current))
+            if d.site_sha()==current.site&&d.payload().subject==current.subject&&fresh.is_none()=>true,
+        _=>return Err(bad("not the exact original deployed or fresh ZXS authority")),
     };
-    helper.require()?;
+    let helper=ForegroundElf::host()?;
+    helper.require_independent_digest(&m.authority.helper())?;
     let scope=m.scope()?;
+    let check=||{site.require()?;helper.require()?;tty.check()};
     let (mut sql,ch)=launch(&helper,site,tty,scope,sealed(&m.encode()?)?,OfflineSql::RustAccount)?;
     ch.send_original(Kind::Lease,&scope,&[0;65],lease)?;
     let initial=Instant::now()+Duration::from_secs(20);
-    let (packet,[observed])=ch.wait_checked::<1>(Kind::RustInspect,&scope,initial,||{site.require()?;tty.check()})?;
+    let (_,uid,gid)=site.subject();
+    let objects=if deployed{Some(Objects::received(&ch,&scope,initial,lease,uid,&check)?)}else{None};
+    let (packet,[observed])=ch.wait_checked::<1>(Kind::RustInspect,&scope,initial,&check)?;
+    let evidence=observed.metadata()?;
+    if (evidence.uid(),evidence.gid())!=(uid,gid){return Err(bad("observation not from the exact lowered subject"));}
+    let original_cut=||->io::Result<()>{
+        check()?;
+        if let Some(o)=&objects{
+            pin.local_scope().ok_or_else(||bad("missing passive original SYSTEM selection"))?.require_unchanged()?;
+            o.require(lease,&o.initial)?;
+        }
+        Ok(())
+    };
     if packet==[0;65]{
-        if m.fresh.is_some(){return Err(bad("this fresh issuer may not fall back to receipt lookup"));}
-        if seal_bytes(&observed,1)?!=[0]{return Err(bad("uncertain original Rust operation absence"));}
-        sql.finish(&ch,initial)?;site.require()?;return Ok(None);
+        if !deployed||m.intent!=Intent::Lookup||seal_bytes(&observed,1)?!=[0]{
+            return Err(bad("uncertain original Rust operation absence"));
+        }
+        drop(observed);sql.finish(&ch,initial)?;original_cut()?;return Ok(None);
     }
     let mut chosen=Observed::read(&observed,site.plan())?;
     drop(observed);
     if packet!=body(chosen.state,&chosen.target.record){return Err(bad("different original sealed Rust receipt"));}
     expected(&m,&chosen)?;
-    if m.fresh.is_some()&&(chosen.state!=1||chosen.previous.is_some()){
-        return Err(bad("the fresh issuer must not take over or continue an earlier request"));
+    if m.intent==Intent::Lookup{
+        if !deployed||!matches!(chosen.state,2|3)||chosen.previous.is_none(){return Err(bad("not a historical reset observation"));}
+        sql.finish(&ch,initial)?;original_cut()?;return Ok(Some(chosen));
     }
-    if !matches!((m.intent,chosen.state),(Intent::Fresh,1)|(Intent::Resume,2)){
-        sql.finish(&ch,initial)?;site.require()?;return Ok(Some(chosen));
+    if chosen.state!=1||deployed!=chosen.previous.is_some(){return Err(bad("new requires a truly new original Rust operation"));}
+    let current=chosen.previous.as_ref().map(|p|CurrentVault::select(site,p)).transpose()?;
+    {
+        let untouched=||->io::Result<()>{
+            original_cut()?;
+            if let Some(v)=&current{v.require()?;}
+            sql.live()
+        };
+        untouched()?;
+        tty.confirm_rust_credential(deployed,false,preview(&m,&chosen))?;
+        untouched()?;
     }
-    let reset=chosen.previous.is_some();
-    tty.confirm_rust_credential(reset,chosen.state==2,preview(&m,&chosen))?;
-    let until=Instant::now()+Duration::from_secs(10*60);
+    let until=Instant::now()+Duration::from_secs(if deployed{9*60}else{10*60});
     let grant=RustEnrollmentApproval{site,terminal:tty,original:&chosen,until,fresh};
-    grant.require()?;
     let digest=chosen.action;let record=chosen.target.record;
-    let frozen=if chosen.state==1{
-        sql.live()?;
-        if !reset{
+    let act=(||->io::Result<()>{
+        grant.require()?;sql.live()?;
+        if !deployed{
             ch.send(Kind::Warm,&digest,&body(1,&record))?;
             let (p,[])=ch.wait_checked::<0>(Kind::Prepared,&digest,until,||grant.require())?;
             if p!=body(1,&record){return Err(bad("the actual separate Web workspace is not prepared"));}
         }
-        let (allocated,writable)=Allocated::reserve(&grant,||sql.live())?;
-        let input=SecretOrder::encode(&m,&chosen)?;
-        let (mut writer,secret)=launch(&helper,site,tty,secret_scope(&input),sealed(&input)?,OfflineSql::RustVaultWriter)?;
-        // Root owns terminal restoration even if a low worker must be
-        // force-collected. These readers never compete for the same tty.
+        let first=if deployed{None}else{Some(Allocated::reserve(&grant,None,||sql.live())?)};
+        let order=SecretOrder::encode(&m,&chosen)?;
+        // Same known worker only after actual prior vault/SQL and public
+        // approval. It must attest provider and memory protection before
+        // a deployed reset creates even a blank stage.
+        let (mut writer,secret)=launch(&helper,site,tty,secret_scope(&order),sealed(&order)?,OfflineSql::RustVaultWriter)?;
+        if deployed{
+            let (ready,[])=secret.wait_checked::<0>(Kind::RustResetWriterReady,&digest,until,||{
+                grant.require()?;writer.live()?;sql.live()
+            })?;
+            if ready!=body(1,&record){return Err(bad("not the actual protected original SMB input"));}
+        }
+        let (allocated,writable)=match first{
+            Some(first)=>first,
+            None=>{
+                original_cut()?;
+                Allocated::reserve(&grant,current,||{sql.live()?;writer.live()})?
+            }
+        };
+        // No process-wide cancellation handler or other PromptSignals
+        // scope is active here. The parent owns terminal restoration.
         let input=SelectedInput::before_drop()?;let stdin=io::stdin();
         let quiet=input.hold_for_birth(&stdin)?;
         let attempt=(||->io::Result<_>{
@@ -300,6 +384,11 @@ fn transact_inner(site:&RustSite,m:Manifest,tty:&PublicConfirmation,fresh:Option
             writer.finish(&secret,until)?;
             let frozen=allocated.reopen_after_reap()?;
             grant.while_quiet(&quiet)?;sql.live()?;
+            // From here the short original SQL reserve can make the old
+            // credential unavailable. The retained DB pin gets a new time
+            // stamp at final durable readback, not a newly selected inode.
+            if let Some(o)=&objects{o.require(lease,&o.initial)?;}
+            frozen.require_ready()?;grant.while_quiet(&quiet)?;sql.live()?;
             ch.send(Kind::RustStage,&digest,&body(1,&record))?;
             let (p,[])=ch.wait_checked::<0>(Kind::Reserved,&digest,until,||grant.while_quiet(&quiet))?;
             if p!=body(2,&record){return Err(bad("the original SQL worker did not re-open this PENDING"));}
@@ -307,27 +396,43 @@ fn transact_inner(site:&RustSite,m:Manifest,tty:&PublicConfirmation,fresh:Option
         })();
         if attempt.is_err(){writer.cancel();sql.cancel();}
         quiet.finish()?;
-        Some(attempt?)
-    }else{
+        let frozen=attempt?;
         grant.require()?;sql.live()?;
-        ch.send(Kind::RustStage,&digest,&body(2,&record))?;
-        let (p,[])=ch.wait_checked::<0>(Kind::Reserved,&digest,until,||grant.require())?;
-        if p!=body(2,&record){return Err(bad("the original SQL worker did not re-open this PENDING"));}
-        None
-    };
-    grant.require()?;sql.live()?;
-    let pending=DurableRustPending{approved:&grant,sql:&sql};
-    let placed=match frozen{Some(stage)=>stage.replace_in_pending(&pending)?,None=>finish_seen_pending(&pending)?};
-    let (wire,original)=placed.wire()?;
-    ch.send_original(Kind::RustVaultPlaced,&digest,&wire,original)?;
-    let (done,[])=ch.wait_checked::<0>(Kind::Complete,&digest,until,||{grant.require()?;placed.require()})?;
-    if done!=body(3,&record){return Err(bad("uncertain Rust credential placement; query exactly the original operation"));}
-    sql.finish(&ch,until)?;
-    placed.require()?;grant.require()?;drop(grant);
+        let pending=DurableRustPending{approved:&grant,sql:&sql};
+        let placed=frozen.replace_in_pending(&pending)?;
+        let (wire,original)=placed.wire()?;
+        ch.send_original(Kind::RustVaultPlaced,&digest,&wire,original)?;
+        let stamp=if deployed{
+            let (d,[])=ch.wait_checked::<0>(Kind::RustResetDurable,&digest,until,||{grant.require()?;placed.require()})?;
+            Some(read_object_body(d)?)
+        }else{None};
+        let (done,[])=ch.wait_checked::<0>(Kind::Complete,&digest,until,||{grant.require()?;placed.require()})?;
+        if done!=body(3,&record){return Err(bad("wrong original Rust credential completion"));}
+        sql.finish(&ch,until)?;
+        placed.require()?;grant.require()?;helper.require()?;
+        match (&objects,stamp){
+            (Some(o),Some(now))=>{
+                pin.local_scope().ok_or_else(||bad("missing original reset SYSTEM view"))?.require_unchanged()?;
+                o.require(lease,&now)?;
+            },
+            (None,None)=>(),
+            _=>return Err(bad("missing original reset SQLite and marker evidence")),
+        }
+        Ok(())
+    })();
+    if deployed{act.map_err(|e|reset_uncertain(&m,e))?;}else{act?;}
     chosen.state=3;
     Ok(Some(chosen))
 }
 
+pub(super) fn reset_uncertain(m:&Manifest,e:io::Error)->io::Error{
+    io::Error::new(e.kind(),format!(
+        "SMB 重置结果未确认；仅查询同一原操作 {} / 批准 {}，勿再发起、删除或清理。{e}",hex(&m.order.op),hex(&m.order.approval)))
+}
+pub(super) fn transact_deployed(site:&super::super::domain::DeployedSite,m:Manifest,tty:&PublicConfirmation)
+    ->io::Result<Option<Observed>>{
+    transact_inner(CredentialSite::Deployed(site),m,tty,None)
+}
 
 /// A successful return from the actual original low worker (clean exit and
 /// EOF), the rather specific durable SQL readback and same original vault.
@@ -345,8 +450,8 @@ impl FreshActive<'_>{
 }
 pub(in crate::sqlite_install::pair) fn transact_fresh<'s>(site:&'s RustSite,m:Manifest,
     tty:&PublicConfirmation,live:&dyn Fn()->io::Result<()>)->io::Result<FreshActive<'s>>{
-    if site.fresh_payload().is_none()||m.fresh.is_none(){return Err(bad("fresh original ZXS request required"));}
-    let Some(original)=transact_inner(site,m,tty,Some(live))? else{return Err(bad("no original fresh ZXS ACTIVE proof"));};
+    if site.fresh_payload().is_none()||!matches!(m.authority,Authority::Fresh(_)){return Err(bad("fresh original ZXS request required"));}
+    let Some(original)=transact_inner(CredentialSite::Fresh(site),m,tty,Some(live))? else{return Err(bad("no original fresh ZXS ACTIVE proof"));};
     if original.state!=3||original.target.generation!=1||original.target.op!=original.target.setup||
         original.previous.is_some()||original.web_account.is_none(){return Err(bad("no fresh generation-one completion"));}
     let good=FreshActive{site,original};

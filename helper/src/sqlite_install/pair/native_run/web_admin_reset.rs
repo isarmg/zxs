@@ -112,16 +112,16 @@ fn action_body(tag:u8,q:&Question,previous:&Current)->[u8;65]{
     let mut r=[0;65];r[0]=tag;r[1..17].copy_from_slice(&q.order.op);r[17..33].copy_from_slice(&previous.op);
     r[33..41].copy_from_slice(&previous.generation.to_be_bytes());r[41..57].copy_from_slice(&q.order.approval);r
 }
-fn object_body(stamp:[u8;64])->[u8;65]{
+pub(super) fn object_body(stamp:[u8;64])->[u8;65]{
     let mut frame=[0;65];frame[0]=1;frame[1..].copy_from_slice(&stamp);frame
 }
-fn read_object_body(frame:[u8;65])->io::Result<[u8;64]>{
+pub(super) fn read_object_body(frame:[u8;65])->io::Result<[u8;64]>{
     if frame[0]!=1{return Err(wrong());}
     Ok(frame[1..].try_into().expect("fixed observation stamp"))
 }
-struct Objects{db:InitialDatabase,marker:SystemObservation,initial:[u8;64],original_mark:[u8;64]}
+pub(super) struct Objects{db:InitialDatabase,marker:SystemObservation,pub(super) initial:[u8;64],original_mark:[u8;64]}
 impl Objects{
-    fn received(channel:&Channel,scope:&[u8;32],until:Instant,system:&File,uid:u32,
+    pub(super) fn received(channel:&Channel,scope:&[u8;32],until:Instant,system:&File,uid:u32,
         check:&impl Fn()->io::Result<()>)->io::Result<Self>{
         let (frame,[fd])=channel.wait_checked::<1>(Kind::DeployedDatabase,scope,until,check)?;
         let db=InitialDatabase::received(fd,uid)?;let initial=read_object_body(frame)?;
@@ -130,7 +130,7 @@ impl Objects{
         let result=Self{db,marker,initial,original_mark:read_object_body(frame)?};
         result.require(system,&initial)?;Ok(result)
     }
-    fn require(&self,system:&File,db:&[u8;64])->io::Result<()>{
+    pub(super) fn require(&self,system:&File,db:&[u8;64])->io::Result<()>{
         self.db.named(system)?;
         if self.db.observation()?!=*db||self.marker.require(system)?!=self.original_mark{return Err(wrong());}
         Ok(())

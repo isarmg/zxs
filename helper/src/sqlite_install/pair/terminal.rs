@@ -340,3 +340,7 @@ mod tests {
         assert!(invalid.key(0).is_err()); assert!(!invalid.key(0xff).unwrap()); assert!(invalid.key(b'\n').is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/sqlite/smb_reset_terminal.rs"]
+mod smb_reset_terminal;

@@ -31,6 +31,15 @@ impl<'s> AccountCut<'s>{
         self.marker.verify(self.locking.source(),&self.want)
     }
     fn clean(&self) -> io::Result<()> { self.unchanged()?; self.database.sidecars_absent() }
+    pub(super) fn deployed_origin(&self,tx:&Transaction<'_>,actor:&Id)->io::Result<()>{
+        let found:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.pool_birth b
+            JOIN main.operation i ON i.op_id=b.init_op AND i.kind=1 AND i.state=1 AND i.actor_id=?1
+            WHERE b.singleton=1 AND b.pool_id=?2 AND b.init_op=?3 AND b.storage_uid=?4)",
+            rusqlite::params![&actor[..],&self.pool[..],&self.init[..],i64::from(self.locking.source().uid())],|r|r.get(0)).map_err(sql)?;
+        if !found{return Err(bad("independently protected site and original INIT principal disagree"));}
+        crate::sqlite_install::catalog::initial_metadata(tx,&self.schema,self.locking.source(),&self.pool,&self.init)?;
+        Ok(())
+    }
     pub(super) fn fresh_origin(&self,expected:[u64;3])->io::Result<()>{self.clean()?;self.database.matches_fresh_origin(expected)}
     pub(super) fn original_objects(&self)
         ->io::Result<(std::fs::File,[u8;64],crate::sqlite_install::markers::SystemObservation)>{
@@ -41,7 +50,7 @@ impl<'s> AccountCut<'s>{
         let stamp=InitialDatabase::observation_on(&pin,source.uid())?;
         let marker=self.marker.observe(source,&self.want)?;
         self.clean()?;
-        if InitialDatabase::observation_on(&pin,source.uid())?!=stamp{return Err(bad("original Web database metadata changed"));}
+        if InitialDatabase::observation_on(&pin,source.uid())?!=stamp{return Err(bad("original account database metadata changed"));}
         Ok((pin,stamp,marker))
     }
     pub(super) fn read<T>(&self,f:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<T>{

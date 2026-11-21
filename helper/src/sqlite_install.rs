@@ -12,7 +12,7 @@ mod receipt;
 mod pair;
 mod discovery;
 pub(crate) use discovery::Discovery;
-pub(crate) use pair::{RetirementCheck,ImportCheck,Setup,check_deployment,exec_layout_sql_child as layout_sql_worker,exec_first_browser,rust_account_worker,rust_vault_worker,WebAdministratorReset,web_admin_reset_worker};
+pub(crate) use pair::{RetirementCheck,ImportCheck,Setup,check_deployment,exec_layout_sql_child as layout_sql_worker,exec_first_browser,rust_account_worker,rust_vault_worker,SmbPasswordReset,WebAdministratorReset,web_admin_reset_worker};
 
 pub(crate) use pair::{confirm_copy_repair,exec_copy_repair_browser};
 
