@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from zipworkspace import lifecycle, live_candidate, private_stage, publish, worktree
+from zipworkspace import comparison, lifecycle, live_candidate, private_stage, publish, worktree
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
 from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped, ReviewedTreeChanged, _fresh_space_detail
@@ -53,6 +53,58 @@ class CommitCapacityPresentation(unittest.TestCase):
         self.assertNotIn("40 B", detail)
         self.assertIn("STATE 原目录当前报告普通用户可用 26 B。", detail)
         self.assertIn("STORE 原目录当前报告普通用户可用 19 B，可能不足。", detail)
+
+
+@unittest.skipUnless(sys.platform == "linux" and os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and
+                     find_spec("PySide6"), "optional Linux Qt report fixture; no worktree or drive required")
+class WorktreeReportPaths(unittest.TestCase):
+    def test_all_reports_show_the_exact_selected_path_and_clear_it_on_page_change_or_close(self):
+        from PySide6.QtCore import QItemSelectionModel
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from zipworkspace.desktop.widgets import ReportPath, Table
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        try:
+            pane = win.archive.checkout
+            leaf = " 图纸[1]é.txt"
+            exact = f"原件/{'深' * 60}/{'层' * 60}/{leaf}"
+            paths = tuple(f"副本{i:03d}/{leaf}" for i in range(100)) + (exact,)
+            rows = tuple(comparison.Difference(path, "added", None, "file", None, 3) for path in paths)
+            report = comparison.Changes(len(rows), 0, 0, rows)
+            marker = Commit("a"*32, "b"*32, 1, "c"*32, None, "d"*64)
+            live = SimpleNamespace(work="/not-opened/working-tree")
+            flags = QItemSelectionModel.SelectionFlag
+            for node, options in ((marker, {}), (marker, {"initial": True}), (None, {"first_bytes": 303})):
+                with self.subTest(options=options):
+                    pane.show_changes(live, node, report, **options)
+                    dialog = pane.changes_dialog
+                    table = dialog.findChild(Table)
+                    field = dialog.findChild(ReportPath, "selected-report-path")
+                    self.assertTrue(field.isReadOnly())
+                    self.assertTrue(field.accessibleName())
+                    self.assertEqual(field.text(), "")
+                    # Selecting any column in a row exposes the path, not the focused cell's display value.
+                    table.selectionModel().setCurrentIndex(table.rows.index(0, 1), flags.ClearAndSelect | flags.Rows)
+                    self.assertEqual(field.text(), paths[0])
+                    table.clearSelection()
+                    self.assertEqual(field.text(), "")
+                    table.selectRow(0)
+                    next_page = next(control for control in dialog.findChildren(QPushButton)
+                                     if control.text() == "下一页")
+                    next_page.click()
+                    self.assertEqual(table.rows.rowCount(), 1)
+                    self.assertIsNone(table.item())
+                    self.assertEqual(field.text(), "")
+                    table.selectRow(0)
+                    self.assertIs(table.item(), rows[-1])
+                    self.assertEqual(field.text(), exact)
+                    self.assertFalse(field.hasSelectedText())  # No automatic select or copy.
+                    dialog.reject()
+                    self.assertIsNone(pane.changes_dialog)
+                    self.assertEqual(field.text(), "")
+        finally:
+            win.close()
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "real admitted Linux ext4/XFS required")

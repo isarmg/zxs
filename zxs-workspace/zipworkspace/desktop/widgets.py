@@ -1,7 +1,7 @@
 """Native labels, virtualized tables and explicit per-operation consent."""
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox,
-                               QLabel, QPlainTextEdit, QPushButton, QTableView, QVBoxLayout)
+                               QLabel, QLineEdit, QPlainTextEdit, QPushButton, QTableView, QVBoxLayout)
 
 
 def label(text=""):
@@ -82,6 +82,22 @@ class Table(QTableView):
     def item(self):
         indices = self.selectionModel().selectedRows()
         return self.rows.rows[indices[0].row()][1] if indices else None
+
+
+class ReportPath(QLineEdit):
+    """Expose a report row's literal path for ordinary native text selection and copy."""
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("selected-report-path")
+        self.setReadOnly(True)
+        self.setAccessibleName("所选条目的完整相对路径")
+        hint = "选中一行后，可在此全选并复制完整相对路径。"
+        self.setAccessibleDescription(hint)
+        self.setToolTip(hint)
+        self.setPlaceholderText(hint)
+
+    def set_row(self, row):
+        self.setText(row.path if row is not None else "")
 
 
 def confirm(parent, title, detail, *, attestation, action_text="确认并创建"):

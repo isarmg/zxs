@@ -10,7 +10,7 @@ from .checkout_action import CheckoutChoice, available
 from .commit_controls import CommitControls
 from .initialize_choice import InitializeChoice, available as can_initialize
 from .selection import Verification, read_registered_baseline, submit_verification
-from .widgets import Table, button, confirm, label, line_diff_dialog
+from .widgets import ReportPath, Table, button, confirm, label, line_diff_dialog
 
 
 class CheckoutPane(QWidget):
@@ -717,6 +717,14 @@ class CheckoutPane(QWidget):
         layout.addWidget(label("这是一次观察，不是实时或原子快照，也不能代替提交前停止写入者。"))
         table = Table(columns, "首次提交内容（一次只读观察）" if first else "本工作树的只读改动")
         layout.addWidget(table)
+        selected_path = ReportPath()
+        layout.addWidget(selected_path)
+
+        def update_path(*_):
+            selected_path.set_row(table.item() if self.changes_dialog is dialog else None)
+
+        table.selectionModel().selectionChanged.connect(update_path)
+        table.rows.modelReset.connect(update_path)
         close_lines = None
         if evidence is not None and evidence.missing:
             def missing():
@@ -783,6 +791,7 @@ class CheckoutPane(QWidget):
         page(0)
         def dismissed(_):
             if self.changes_dialog is dialog: self.changes_dialog = None
+            selected_path.set_row(None)
             if close_lines is not None: close_lines()
             if evidence is not None: evidence.close()
             dialog.deleteLater()

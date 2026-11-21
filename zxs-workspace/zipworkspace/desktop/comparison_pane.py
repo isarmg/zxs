@@ -5,7 +5,7 @@ from .. import comparison
 from ..model import Rejected
 from .selection import PlainComparison, Verification, compare_snapshot_file, compare_version as compare_listed_version
 from .text_preview import can_compare_text, compare_folder_text, compare_plain_text, compare_text
-from .widgets import Table, button, confirm, label, line_diff_dialog
+from .widgets import ReportPath, Table, button, confirm, label, line_diff_dialog
 
 
 class ComparisonPane(QWidget):
@@ -48,10 +48,7 @@ class ComparisonPane(QWidget):
         self.filter_change.currentIndexChanged.connect(self._filter_widgets)
         self.table = Table(("相对路径", "差异", "当前快照", "对照对象"), "只读版本或目录对比结果")
         layout.addWidget(self.table)
-        self.selected_path = QLineEdit()
-        self.selected_path.setReadOnly(True)
-        self.selected_path.setAccessibleName("所选差异的完整相对路径")
-        self.selected_path.setPlaceholderText("选择一条差异，显示完整相对路径")
+        self.selected_path = ReportPath()
         layout.addWidget(self.selected_path)
         self.lines = button("查看所选文件的逐行差异…", self.read_lines)
         layout.addWidget(self.lines)
@@ -324,7 +321,7 @@ class ComparisonPane(QWidget):
         self.row_epoch = object()
         self.close_lines()
         row = self.table.item() if self.report is not None and self.filter_read is None else None
-        self.selected_path.setText(row.path if row is not None else "")
+        self.selected_path.set_row(row)
         self.lines.setEnabled(self._line_selection(row))
 
     def read_lines(self):
