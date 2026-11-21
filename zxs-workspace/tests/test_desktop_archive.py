@@ -14,7 +14,7 @@ import unittest
 import zipfile
 
 from zipworkspace.desktop.selection import (Selection, StoreSelection, Verification, duplicate_selected_view,
-                                            selected_raw_sha)
+                                            open_store_preview, selected_raw_sha)
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
 
 
@@ -35,6 +35,56 @@ def write_snapshot(path, *, marker=None, year=2000, entries=None):
 
 
 class SelectedOriginal(unittest.TestCase):
+    def test_explicit_store_names_do_not_open_archive_bodies_or_grant_history(self):
+        from zipworkspace.desktop import selection as view
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as held:
+            root = Path(tmp); loose = root/"loose.zxs"
+            marker = write_snapshot(loose)
+            slot = root/marker.filename; loose.rename(slot)
+            (root/"copy.zxs").write_bytes(slot.read_bytes())
+            another = replace(marker, repo="a"*32)
+            bad = root/another.filename; bad.write_bytes(slot.read_bytes())
+            store = StoreSelection.open(root)
+            with patch.object(view, "ArchiveBrowser", side_effect=AssertionError("inventory must not read ZIP")), \
+                 patch.object(view, "named_document", side_effect=AssertionError("inventory is not a file open")):
+                candidates = {row.repo:row for row in store.previews(observer=Verification())}
+            self.assertEqual(set(candidates), {marker.repo, another.repo})
+            with patch.object(view, "archive_sha", side_effect=AssertionError("not a history or raw request")):
+                chosen = open_store_preview(store, candidates[marker.repo], observer=Verification())
+            held.callback(chosen.release_display)
+            self.assertEqual(chosen.browser.commit, marker)
+            self.assertIsNone(chosen.exact)
+            self.assertTrue(os.path.samestat(os.fstat(chosen.held.fileno()), slot.stat()))
+            with self.assertRaisesRegex(Rejected, "规范槽名"):
+                open_store_preview(store, candidates[another.repo], observer=Verification())
+
+    def test_store_entries_reject_rebound_bytes_first_and_never_complete_a_changed_listing(self):
+        from zipworkspace import refs
+        from zipworkspace.desktop import selection as view
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); path = root/"loose.zxs"
+            marker = write_snapshot(path)
+            slot = root/marker.filename; path.rename(slot)
+            store = StoreSelection.open(root)
+            row, = store.previews(observer=Verification())
+            retained = root/"old-slot"; slot.rename(retained); slot.write_bytes(retained.read_bytes())
+            with patch.object(view, "ArchiveBrowser", side_effect=AssertionError("never read a replacement")):
+                with self.assertRaisesRegex(Rejected, "未读取替件正文"):
+                    open_store_preview(store, row, observer=Verification())
+
+            actual = view.slot_previews
+            added = root/replace(marker, branch="b"*32).filename
+            def add_after_first(*args, **kw):
+                current = actual(*args, **kw)
+                if not added.exists(): added.write_bytes(slot.read_bytes())
+                return current
+            with patch.object(view, "slot_previews", side_effect=add_after_first):
+                with self.assertRaisesRegex(Rejected, "不显示部分列表"):
+                    store.previews(observer=Verification())
+            with patch.object(refs, "STORE_BUDGET", 1):
+                with self.assertRaisesRegex(Rejected, "不显示部分列表"):
+                    store.previews(observer=Verification())
+
     def test_loose_document_can_be_read_but_is_not_an_unpublished_branch_head(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -310,6 +360,40 @@ class SelectedOriginal(unittest.TestCase):
 
 @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
 class DesktopArchiveWidgets(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1", "optional Qt source fixture")
+    def test_workspace_can_open_an_exact_store_row_from_a_blank_window(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from zipworkspace.desktop.widgets import Table
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); loose = root/"choose-me.zxs"
+            marker = write_snapshot(loose); loose.rename(root/marker.filename)
+            win = Window(); pane = win.archive
+            jobs = []
+            def queue(job):
+                ready = Future(); jobs.append((ready, job)); return ready
+            def complete():
+                ready, job = jobs.pop(0); ready.set_result(job()); win.poll()
+            try:
+                pane.use_store(StoreSelection.open(root))
+                with patch.object(win.pool, "submit", side_effect=queue):
+                    pane.show_slots.click(); complete()
+                    listing = pane.slots_dialog
+                    self.assertIsNone(pane.selection)
+                    self.assertIsNone(pane.catalog)
+                    listing.findChild(Table).selectRow(0)
+                    next(b for b in listing.findChildren(QPushButton) if b.text() == "核验并打开所选归档").click()
+                    self.assertIsNone(pane.slots_dialog)
+                    complete()
+                self.assertEqual(pane.selection.browser.commit, marker)
+                self.assertIsNone(pane.catalog)
+                self.assertIsNone(pane.checkout.live)
+            finally:
+                if win.pending is not None:
+                    win.pending[0].cancel(); win.poll()
+                win.close()
+
     @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1", "optional Qt source fixture")
     def test_actual_window_copies_only_current_read_only_view_and_drops_late_clone(self):
         from PySide6.QtWidgets import QApplication

@@ -3,10 +3,46 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 import stat
 from .archive import read_managed_document, stamp
 from .document import archive_sha, named_document, native_identity
-from .model import Commit, Rejected, check_id
+from .model import MAX_CD, MAX_TOTAL, Commit, Rejected, check_id
+
+
+_SLOT_NAME = re.compile(r"([a-f0-9]{32})\.([a-f0-9]{32})\.([a-f0-9]{16})\.zxs")
+STORE_BUDGET = 10_000
+
+
+@dataclass(frozen=True, slots=True)
+class SlotPreview:
+    """A bounded directory observation, never a verified node or branch head."""
+    leaf: str
+    repo: str
+    branch: str
+    generation: int
+    observed: tuple[int, int, int, int, int]
+
+
+def slot_previews(directory, *, check):
+    items = []
+    with os.scandir(directory) as names:
+        for n, entry in enumerate(names, 1):
+            check()
+            if n > STORE_BUDGET: raise Rejected("存储目录超过 10,000 项；不显示部分列表")
+            slot = _SLOT_NAME.fullmatch(entry.name)
+            if slot is None: continue
+            repo, branch, gen = slot.groups()
+            generation = int(gen, 16)
+            if not 0 < generation < 1 << 63: continue
+            current = entry.stat(follow_symlinks=False)
+            try: entity = native_identity(current, stat.S_IFREG)
+            except Rejected: continue
+            if not 22 <= current.st_size <= MAX_TOTAL + 2 * MAX_CD + (1 << 20): continue
+            items.append(SlotPreview(entry.name, repo, branch, generation,
+                         (*entity, current.st_size, current.st_mtime_ns, current.st_ctime_ns)))
+    check()
+    return tuple(sorted(items, key=lambda row: row.leaf))
 
 
 @dataclass(frozen=True)
@@ -40,7 +76,7 @@ def _members(store, repo, *, check=None):
     with os.scandir(store) as names:
         for n, entry in enumerate(names, 1):
             if check is not None: check()
-            if n > 10_000: raise Rejected("directory catalog exceeds current scan budget")
+            if n > STORE_BUDGET: raise Rejected("directory catalog exceeds current scan budget")
             if entry.name.startswith(repo+".") and entry.name.endswith(".zxs"):
                 result[entry.name] = _origin(store / entry.name)
     return result

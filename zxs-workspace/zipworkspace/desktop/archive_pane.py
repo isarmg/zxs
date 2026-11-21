@@ -2,11 +2,12 @@
 from pathlib import Path
 import sys
 
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout, QWidget
 
 from .comparison_pane import ComparisonPane
 from .checkout_pane import CheckoutPane
-from .selection import Selection, StoreSelection, duplicate_selected_view, selected_raw_sha, submit_verification
+from .selection import (Selection, StoreSelection, duplicate_selected_view, open_store_preview, selected_raw_sha,
+                        submit_verification)
 from .widgets import Table, button, confirm, label
 
 
@@ -19,12 +20,15 @@ class ArchivePane(QWidget):
         self.open_copy = open_copy
         self.selection = self.store = self.catalog = self.file_page = None
         self.verification = self.catalog_verification = None
+        self.slots_dialog = self.slots_token = None
         self.directory, self.page_number, self.search_dialog = "", 0, None
         self.text_dialog = None
         layout = QVBoxLayout(self)
         actions = QHBoxLayout()
         actions.addWidget(button("打开 .zxs 快照…", self.choose))
         actions.addWidget(button("选择归档存储目录…", self.choose_store))
+        self.show_slots = button("从存储目录选择快照…", self.list_store)
+        self.show_slots.setEnabled(False)
         self.reload = button("读取分支与历史", self.load_catalog)
         actions.addWidget(self.reload)
         self.save_copy = self.save_zip = None
@@ -49,7 +53,8 @@ class ArchivePane(QWidget):
             exact_actions.addWidget(self.duplicate_action)
         layout.addLayout(exact_actions)
         layout.addWidget(self.raw_result)
-        layout.addWidget(self.store_label)
+        store_line = QHBoxLayout(); store_line.addWidget(self.store_label, 1); store_line.addWidget(self.show_slots)
+        layout.addLayout(store_line)
         self.views = QTabWidget()
         layout.addWidget(self.views)
         self.folder = QWidget()
@@ -127,6 +132,7 @@ class ArchivePane(QWidget):
 
     def clear_document(self):
         self.verification = None
+        self.close_slots()
         self.close_search()
         self.close_text()
         if self.mount is not None: self.mount.set_snapshot(None)
@@ -452,25 +458,121 @@ class ArchivePane(QWidget):
         submit("正在核对原 STORE 与所选目录；尚未写入…", plan.review, review)
 
     def choose_store(self):
-        name = QFileDialog.getExistingDirectory(self, "选择已有的归档存储目录")
+        if self.owner.pending is not None: return
+        options = (QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks |
+                   QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly)
+        name = QFileDialog.getExistingDirectory(self, "选择已有的归档存储目录", "", options)
         if name: self.choose_store_path(Path(name))
 
     def choose_store_path(self, store):
+        if self.owner.pending is not None: return
         self.store = None
         self.clear_catalog()
+        self.close_slots()
+        self.show_slots.setEnabled(False)
         self.reload.setEnabled(False)
         self.store_label.setText(f"等待核验存储目录：{store}")
         self.owner.job("正在核验选择的归档存储目录…", lambda: StoreSelection.open(store), self.use_store)
 
     def use_store(self, store):
-        if store is not self.store: self.clear_catalog()
+        if store is not self.store:
+            self.clear_catalog()
+            self.close_slots()
         self.store = store
         self.store_label.setText(f"归档存储：{store.path}")
         self.reload.setEnabled(self.selection is not None)
+        self.show_slots.setEnabled(True)
         self.owner.inform("已登记本次选择的存储目录。读取分支与历史时将复核原目录。")
+
+    def close_slots(self):
+        self.slots_token = None
+        dialog, self.slots_dialog = self.slots_dialog, None
+        if dialog is not None: dialog.reject()
+
+    def list_store(self):
+        store = self.store
+        if store is None or self.slots_dialog is not None or self.owner.pending is not None: return
+        request = self.slots_token = object()
+
+        def current(): return self.store is store and self.slots_token is request
+
+        def accepted(rows):
+            if not rows:
+                self.owner.inform("本次未找到符合规范名称的普通归档文件；没有读取文件内容。")
+                return
+            out = QDialog(self)
+            out.setWindowTitle("从所选存储目录打开一个快照")
+            out.resize(940, 570)
+            layout = QVBoxLayout(out)
+            layout.addWidget(label(f"所选 STORE：{str(store.path)!r}\n这里只核对名称与文件元数据，"
+                                   "不是已提交历史或分支头。只在你选一行后读取并校验那一个包。"))
+            table = Table(("仓库号（名称）", "分支号（名称）", "代数（名称）", "ZIP 字节数"), "原 STORE 归档名称列表")
+            layout.addWidget(table, 1)
+            footer = QHBoxLayout(); layout.addLayout(footer)
+            position = 0
+            pages = (len(rows) + self.FILE_PAGE - 1) // self.FILE_PAGE
+            status = label()
+
+            def select():
+                row = table.item()
+                if (not current() or self.slots_dialog is not out or row is None
+                        or self.owner.pending is not None): return
+                self.close_slots()
+                self.open_store_row(store, row)
+
+            def show(page):
+                nonlocal position
+                if not current() or not 0 <= page < pages: return
+                position = page
+                start = page * self.FILE_PAGE
+                table.rows.replace(((r.repo, r.branch, str(r.generation), f"{r.observed[2]:,}"), r)
+                                   for r in rows[start:start + self.FILE_PAGE])
+                status.setText(f"第 {page + 1}/{pages} 页，{len(rows):,} 项")
+                previous.setEnabled(page > 0); next_.setEnabled(page + 1 < pages)
+
+            previous = button("上一页", lambda: show(position - 1))
+            next_ = button("下一页", lambda: show(position + 1))
+            open_one = button("核验并打开所选归档", select)
+            open_one.setEnabled(False)
+            def update_open(*_): open_one.setEnabled(table.item() is not None)
+            table.selectionModel().selectionChanged.connect(update_open)
+            table.rows.modelReset.connect(update_open)
+            for item in (previous, next_, status, open_one): footer.addWidget(item)
+            close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            close.rejected.connect(out.reject); layout.addWidget(close)
+
+            def dismissed(_):
+                if self.slots_dialog is out:
+                    self.slots_dialog = self.slots_token = None
+                out.deleteLater()
+
+            out.finished.connect(dismissed)
+            self.slots_dialog = out
+            show(0)
+            out.open()
+
+        submit_verification(self.owner, "正在两次只读核对存储目录名称；不开归档…", store.previews,
+                            accepted, current=current, discard=lambda _rows: None)
+
+    def open_store_row(self, store, row):
+        if self.store is not store or self.owner.pending is not None: return
+        request = self.verification = object()
+
+        def accepted(view):
+            try:
+                self.clear_document()
+                self.show_selection(view)
+            except BaseException:
+                view.release_display()
+                raise
+
+        submit_verification(self.owner, "正在核验所选名称的一个原归档，不读取其他版本…",
+                            lambda observer: open_store_preview(store, row, observer=observer), accepted,
+                            current=lambda: self.store is store and self.verification is request)
 
     def show_selection(self, selected):
         self.verification = None
+        self.close_slots()
         self.close_search()
         self.close_text()
         if self.mount is not None: self.mount.set_snapshot(selected)

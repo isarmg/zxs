@@ -15,7 +15,7 @@ from ..browser import ArchiveBrowser, DirectoryIndex
 from ..comparison import Changes
 from ..document import PositionalDocument, archive_sha, named_document, native_identity, relative_document
 from ..model import Rejected
-from ..refs import Catalog, Node
+from ..refs import Catalog, Node, SlotPreview, slot_previews
 
 
 class Verification:
@@ -182,6 +182,35 @@ class StoreSelection:
         if StoreSelection.open(self.path) != self:
             raise Rejected("selected archive store was replaced; choose the store again")
 
+    def previews(self, *, observer):
+        """Observe names only; never open one of their archives to choose a repo."""
+        observer.begin("catalog")
+        with ExitStack() as stack:
+            stack.enter_context(_without_download())
+            self.check()
+            held = None
+            if os.scandir in os.supports_fd and hasattr(os, "O_DIRECTORY"):
+                flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+                held = os.open(self.path, flags)
+                stack.callback(os.close, held)
+                if native_identity(os.fstat(held), stat.S_IFDIR) != self.identity:
+                    raise Rejected("所选存储目录已改变，未读取另一处")
+                def read():
+                    # Separate directory stream position for each bounded pass,
+                    # opened underneath the same original directory FD.
+                    cursor = os.open(".", flags, dir_fd=held)
+                    try: return slot_previews(cursor, check=observer.check)
+                    finally: os.close(cursor)
+            else:
+                def read(): return slot_previews(self.path, check=observer.check)
+            before = read()
+            self.check()
+            after = read()
+            self.check()
+            if before != after: raise Rejected("存储目录核对期间变化；不显示部分列表")
+        observer.check()
+        return before
+
 
 @dataclass(frozen=True, slots=True)
 class Selection:
@@ -195,16 +224,22 @@ class Selection:
         if self.held is not None: self.held.close()
 
     @classmethod
-    def open(cls, path, *, expected: Node | None = None, retain=False, observer=None):
+    def open(cls, path, *, expected: Node | None = None, slot: SlotPreview | None = None, retain=False, observer=None):
         path = Path(path).absolute()
         if expected is not None and expected.path != path:
             raise Rejected("selected original belongs to a different archive path")
+        if slot is not None and (expected is not None or path.name != slot.leaf):
+            raise Rejected("不是所选目录记录的准确归档名称")
         with ExitStack() as guard:
             with named_document(path) as doc:
                 original = stamp(doc)
                 if expected is not None and original != expected.observed:
                     raise Rejected("the listed archive instance changed; choose or inspect it again")
+                if slot is not None and original != slot.observed:
+                    raise Rejected("存储槽与本次看到的原件不同；未读取替件正文")
                 browser = ArchiveBrowser(doc, display_name=path.name, observer=observer)
+                if slot is not None and browser.commit.filename != slot.leaf:
+                    raise Rejected("规范槽名与实际 ZIP 中的快照标记不符")
                 options = {} if observer is None else {"observer": observer}
                 if expected is not None and (browser.commit != expected.marker or archive_sha(doc, **options) != expected.sha256):
                     raise Rejected("the selected original archive changed; select it again")
@@ -227,6 +262,27 @@ class Selection:
                 (self.exact is not None and result.anchor != self.exact)):
             raise Rejected("selected original changed before catalog inspection")
         return result
+
+
+def _without_download():
+    if sys.platform == "darwin":
+        from ..macos_read import no_materialization
+        return no_materialization()
+    return nullcontext()
+
+
+def open_store_preview(store: StoreSelection, slot: SlotPreview, *, observer):
+    """Read exactly the clicked candidate; inventory alone never authorizes a node."""
+    with ExitStack() as guard:
+        with _without_download():
+            observer.check()
+            store.check()
+            selected = Selection.open(store.path / slot.leaf, slot=slot, retain=True, observer=observer)
+            guard.callback(selected.release_display)
+            store.check()
+        observer.check()
+        guard.pop_all()
+        return selected
 
 
 @contextmanager
