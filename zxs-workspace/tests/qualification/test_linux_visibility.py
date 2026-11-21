@@ -202,6 +202,108 @@ class LinuxVisibility(unittest.TestCase):
         self.assertTrue((self.staging/decision.stage_name).is_dir())
         self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
 
+    def work_text(self, name):
+        from zipworkspace.desktop.text_preview import WorktreeTextPair
+        marker, report, evidence = lifecycle.observe_live_changes(self.live, retain_text=True)
+        self.assertEqual(marker, self.marker)
+        self.assertIsNotNone(evidence)
+        with closing(evidence):
+            row = next(r for r in report.rows if r.path == name)
+            self.assertTrue(evidence.has_text_pair(row))
+            with self.assertRaisesRegex(Rejected, "选定的一对"): WorktreeTextPair(self.live, evidence, replace(row))
+            pair = WorktreeTextPair(self.live, evidence, row)
+            self.addCleanup(pair.close)
+        self.assertIsNone(evidence.held)
+        return pair
+
+    def test_live_text_uses_the_selected_nested_relative_path_and_the_original_base(self):
+        from zipworkspace.desktop.selection import Verification
+        nested = self.tree/"other"
+        nested.mkdir(mode=0o700)
+        target = nested/"story"
+        target.write_bytes(b"line one\nold nested\n")
+        self.commit()
+        target.write_bytes(b"line one\nnew nested\n")
+        (self.tree/"story").write_bytes(b"unrelated change")
+        pair = self.work_text("other/story")
+        before = self.live.status()
+        db = self.state/"worktree.sqlite"
+        original = db.read_bytes()
+        with closing(pair), patch.object(lifecycle, "read_managed_document",
+                                         side_effect=AssertionError("do not reverify entire base")):
+            result = pair.compare(Verification())
+        self.assertIn("-old nested\n+new nested\n", result)
+        self.assertNotIn("unrelated", result)
+        self.assertEqual(db.read_bytes(), original)
+        self.assertEqual(self.live.status(), before)
+        self.assertEqual(self.archive.read_bytes(), self.archive_bytes)
+
+    def test_live_text_rejects_equal_length_different_edits_after_report(self):
+        from zipworkspace.desktop.selection import Verification
+        self.commit()
+        target = self.tree/"story"
+        target.write_bytes(b"change1")
+        pair = self.work_text("story")
+        target.write_bytes(b"change2")
+        with closing(pair), self.assertRaisesRegex(Rejected, "原 SHA-256 不符"):
+            pair.compare(Verification())
+        self.assertEqual(target.read_bytes(), b"change2")
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt worktree text fixture")
+    def test_real_worktree_text_dialog_drops_a_late_read_on_close(self):
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit, QPushButton
+        from zipworkspace.desktop import checkout_pane
+        from zipworkspace.desktop.widgets import Table
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        self.commit()
+        (self.tree/"story").write_bytes(b"new literal <text>\n")
+        window = Window()
+        pane = window.archive.checkout
+        pane.live = self.live
+        jobs = []
+
+        def queue(work):
+            task = Future()
+            jobs.append((task, work))
+            return task
+
+        def complete():
+            task, worker = jobs.pop(0)
+            task.set_result(worker())
+            window.poll()
+
+        try:
+            with patch.object(window.pool, "submit", side_effect=queue), \
+                 patch.object(checkout_pane, "confirm", return_value=True):
+                for display in (True, False):
+                    pane.compare_live()
+                    complete()
+                    report = pane.changes_dialog
+                    action = report.findChild(QPushButton, "compare-live-text")
+                    report.findChild(Table).selectRow(0)
+                    self.assertTrue(action.isEnabled())
+                    action.click()
+                    self.assertFalse(window.tabs.isEnabled())
+                    self.assertTrue(report.findChild(QPushButton, "cancel-live-text").isEnabled())
+                    if not display:
+                        task, worker = jobs.pop(0)
+                        task.set_result(worker())  # Actual bytes returned before the report closes.
+                        report.reject()
+                        window.poll()
+                        self.assertIn("没有显示", window.note.text())
+                        self.assertIsNone(report.findChild(QPlainTextEdit))
+                    else:
+                        complete()
+                        shown = report.findChild(QPlainTextEdit)
+                        self.assertIn("+new literal <text>", shown.toPlainText())
+                        report.reject()
+                        self.assertEqual(shown.toPlainText(), "")
+                    self.assertIsNone(pane.changes_dialog)
+        finally:
+            window.close()
+
     def test_restore_one_missing_file_uses_original_basis_and_does_not_commit(self):
         (self.tree/"other").mkdir(mode=0o700)
         (self.tree/"other/story").write_bytes(b"different original basename")

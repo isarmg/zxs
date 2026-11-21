@@ -10,6 +10,8 @@ from .document import named_document, native_identity
 from .freeze import observe_held
 from .model import Rejected
 
+COMPARE_BYTES = 64 * 1024
+
 
 def available():
     if os.name == "nt":

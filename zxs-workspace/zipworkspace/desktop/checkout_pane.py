@@ -10,7 +10,7 @@ from .checkout_action import CheckoutChoice, available
 from .commit_controls import CommitControls
 from .initialize_choice import InitializeChoice, available as can_initialize
 from .selection import Verification, read_registered_baseline, submit_verification
-from .widgets import Table, button, confirm, label
+from .widgets import Table, button, confirm, label, line_diff_dialog
 
 
 class CheckoutPane(QWidget):
@@ -669,7 +669,7 @@ class CheckoutPane(QWidget):
                     with closing(loan):
                         if first: return observe_first_contents(loan, observer=observer), None
                         if initial: return observe_initial_changes(loan, observer=observer), None
-                        result = observe_live_changes(loan, observer=observer, retain_missing=True)
+                        result = observe_live_changes(loan, observer=observer, retain_missing=True, retain_text=True)
                     return result, None
                 except Exception as error:
                     if result is not None and result[2] is not None: result[2].close()
@@ -690,7 +690,10 @@ class CheckoutPane(QWidget):
     def show_changes(self, live, marker, report, *, initial=False, evidence=None, first_bytes=None):
         # The read-only result exists only in this modal view. Once closed it
         # cannot linger into a later commit, recovery, or baseline switch.
-        dialog = QDialog(self)
+        # Window.job disables the main tabs recursively. Parent this report to
+        # the window itself so its own close/cancel remain actionable while
+        # the report's explicit member-only recheck is in progress.
+        dialog = QDialog(self.owner)
         first = first_bytes is not None
         dialog.setWindowTitle("首次提交内容清单" if first else
                               "离线对照首次签出版本" if initial else "工作目录相对基线的改动")
@@ -713,6 +716,7 @@ class CheckoutPane(QWidget):
         layout.addWidget(label("这是一次观察，不是实时或原子快照，也不能代替提交前停止写入者。"))
         table = Table(columns, "首次提交内容（一次只读观察）" if first else "本工作树的只读改动")
         layout.addWidget(table)
+        close_lines = None
         if evidence is not None:
             def missing():
                 row = table.item()
@@ -735,6 +739,7 @@ class CheckoutPane(QWidget):
             table.selectionModel().selectionChanged.connect(update_restore)
             table.rows.modelReset.connect(update_restore)
             layout.addWidget(restore)
+            if evidence.has_text_pairs: close_lines = self._line_tools(dialog, live, evidence, table, layout)
         nav = QHBoxLayout(); layout.addLayout(nav)
         number, count = 0, max(1, (len(report.rows) + report.PAGE - 1) // report.PAGE)
         change = {"added":"新增", "changed":"修改", "missing":"缺少"}
@@ -760,12 +765,118 @@ class CheckoutPane(QWidget):
         page(0)
         def dismissed(_):
             if self.changes_dialog is dialog: self.changes_dialog = None
+            if close_lines is not None: close_lines()
             if evidence is not None: evidence.close()
             dialog.deleteLater()
         dialog.finished.connect(dismissed)
         if evidence is not None: dialog.destroyed.connect(lambda *_: evidence.close())
         self.changes_dialog = dialog
         dialog.open()  # Window-modal, no nested event loop.
+
+    def _line_tools(self, dialog, live, evidence, table, layout):
+        state, note = self.live_record, label()
+        reading = shown = None
+        epoch = object()
+
+        def update():
+            open_.setEnabled(reading is None and self.owner.pending is None and evidence.has_text_pair(table.item()))
+            stop.setEnabled(reading is not None and not reading.cancelled)
+
+        def cancel():
+            if reading is not None:
+                reading.cancel()
+                note.setText("已请求停止，等待原只读调用返回。")
+                update()
+
+        def retire(*_):
+            nonlocal epoch, shown
+            epoch = object()
+            cancel()
+            out, shown = shown, None
+            if out is not None: out.reject()
+            if reading is None: note.clear()
+            update()
+
+        def choose():
+            nonlocal reading
+            from .text_preview import WorktreeTextPair
+            row, chosen = table.item(), epoch
+            def current():
+                return (self.changes_dialog is dialog and self.live is live and self.live_record is state
+                        and epoch is chosen and table.item() is row and evidence.has_text_pair(row))
+
+            if reading is not None or shown is not None or self.owner.pending is not None or not current(): return
+            details = (f"相对路径：{row.path!r}\n登记节点：{evidence.marker.operation} · {row.before_bytes:,} B\n"
+                       f"本次观察的工作文件：{row.after_bytes:,} B")
+            if not confirm(dialog, "核验后查看工作文件的逐行差异",
+                           details + "\n只再读取这一对完整内容；每侧至多 64 KiB、1,024 行。不修改文件，可取消。",
+                           attestation="我确认只查看这一对内容，不打开外部应用。",
+                           action_text="核验并比较") or not current() or self.owner.pending is not None:
+                return
+            try: plan = WorktreeTextPair(live, evidence, row)
+            except Exception as error:
+                note.setText(str(error))
+                return
+            watch = reading = Verification()
+            note.setText("正在从原登记基线和原工作目录读取并核验这两项。")
+            update()
+
+            def work():
+                try:
+                    with closing(plan): return plan.compare(watch), None
+                except Exception as error: return None, error
+
+            def done(outcome):
+                nonlocal reading, shown
+                if reading is not watch: return
+                reading = None
+                # The report can close while I/O drains. Its controls and
+                # original display evidence are then no longer available.
+                if self.changes_dialog is not dialog:
+                    if self.live is live and self.live_record is state and watch.cancelled:
+                        self.owner.inform("已停止逐行比较，没有显示本次正文。")
+                    return
+                update()
+                if not current():
+                    note.clear()
+                    if self.live is live and self.live_record is state:
+                        self.owner.inform("所选行已改变，没有显示该次文本。")
+                    return
+                value, error = outcome
+                if watch.cancelled:
+                    note.setText("已取消，没有显示本次文本。")
+                elif error is not None:
+                    note.setText(f"没有显示差异：{error}")
+                else:
+                    note.setText("已核对这两次所见的内容；不反映之后的编辑。")
+                    out = shown = line_diff_dialog(dialog, details, value)
+                    def closed(_result):
+                        nonlocal shown
+                        if shown is out: shown = None
+                    out.finished.connect(closed)
+                    out.open()
+                self.owner.inform(note.text())
+
+            try:
+                future = self.owner.job("正在只读核验选中的工作文件和登记基线…", work, done, cancel=watch.cancel,
+                                        cancel_text="取消逐行差异", progress_report=watch.progress)
+                if future is None: raise Rejected("窗口正在处理另一项，未开始逐行差异")
+                future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
+            except Exception as error:
+                try: plan.close()
+                finally: done((None, error))
+
+        bar = QHBoxLayout()
+        open_ = button("核验所选小文本的逐行差异…", choose)
+        open_.setObjectName("compare-live-text")
+        stop = button("停止逐行核验", cancel)
+        stop.setObjectName("cancel-live-text")
+        bar.addWidget(open_); bar.addWidget(stop)
+        layout.addLayout(bar); layout.addWidget(note)
+        table.selectionModel().selectionChanged.connect(retire)
+        table.rows.modelReset.connect(retire)
+        update()
+        return retire
 
     def restore_missing(self, dialog, live, evidence, row):
         if (self.changes_dialog is not dialog or self.live is not live or self.active or self.owner.pending is not None

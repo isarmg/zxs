@@ -1,7 +1,7 @@
 """Read only the deliberately selected Store member, presenting its text literally."""
 from bisect import bisect_right
 import codecs
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, closing, contextmanager, nullcontext
 from dataclasses import dataclass
 from difflib import unified_diff
 import hashlib
@@ -13,13 +13,18 @@ from threading import Event
 import sys
 import unicodedata
 
-from ..archive import stored_member
-from ..document import native_identity
-from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected
+from ..archive import stamp, stored_member
+from ..comparison import COMPARE_BYTES
+from ..document import check_relative, native_identity, relative_document
+from ..freeze import _dir_flags
+from ..lifecycle import MissingBaseline, _base_leaf, _idle_live_base
+from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected, member_name
+from ..private_freeze import mount_id
+from ..private_stage import same_mount
 from .selection import PlainSelection, Selection
 
 LIMIT = 256 * 1024
-COMPARE_BYTES, COMPARE_LINES = 64 * 1024, 1024
+COMPARE_LINES = 1024
 UNITS_PER_PAGE, LINES_PER_PAGE = 8192, 256
 # At 128 GiB this is 131,072 × 37 B (less than 4.7 MiB). There is
 # deliberately no table per line or per rendered page. Each non-final page
@@ -227,6 +232,22 @@ def can_compare_text(row):
             and all(type(n) is int and 0 <= n <= COMPARE_BYTES for n in (row.before_bytes, row.after_bytes)))
 
 
+def _split_comparison(text):
+    line_count = text.count("\n") + int(bool(text) and not text.endswith("\n"))
+    if line_count > COMPARE_LINES:
+        raise Rejected("文件已核验，但逐行差异每侧最多 1,024 行")
+    return text.splitlines(keepends=True)
+
+
+def _unified(sides, titles, observer):
+    observer.begin("compare")
+    display = []
+    for line in unified_diff(*sides, fromfile=titles[0], tofile=titles[1]):
+        observer.check()
+        display.append(line if line.endswith("\n") else line + "\n\\ 此行末尾没有换行\n")
+    return "".join(display) if display else "两份原件的字节不同；统一换行后，显示的文字相同。"
+
+
 def compare_text(left, right, row, *, observer):
     """Two small complete members from precisely the original checked views."""
     if not can_compare_text(row):
@@ -245,23 +266,135 @@ def compare_text(left, right, row, *, observer):
         if read.path != row.path or read.bytes_shown != entry.size_bytes:
             raise Rejected("没有取得原文件的完整文本，未生成差异")
         observer.advance(entry.size_bytes)
-        text = "".join(read.pages)
-        line_count = text.count("\n") + int(bool(text) and not text.endswith("\n"))
-        if line_count > COMPARE_LINES:
-            raise Rejected("文件已核验，但逐行对照每侧最多 1,024 行；可在各快照单独预览")
-        sides.append(text.splitlines(keepends=True))
-    observer.begin("compare")
-    display = []
-    for line in unified_diff(*sides, fromfile="当前快照", tofile="所选快照"):
-        observer.check()
-        # Display the difference's own lines literally. Preserve the fact
-        # that an original text line had no terminating newline.
-        display.append(line if line.endswith("\n") else line + "\n\\ 此行末尾没有换行\n")
+        sides.append(_split_comparison("".join(read.pages)))
+    display = _unified(sides, ("当前快照", "所选快照"), observer)
     observer.begin("identity")
     for view in (left, right):
         with _held_input(view, observer.check): pass  # Metadata only; no re-open or extra member read.
     observer.check()
-    return "".join(display) if display else "两份原成员的字节不同；按预览规则统一换行后，显示的文字相同。"
+    return display
+
+
+def _verified_small(read, fact, observer):
+    size, expected = fact
+    data, hash_ = bytearray(), hashlib.sha256()
+    while len(data) < size:
+        observer.check()
+        n = min(65536, size-len(data))
+        piece = read(n)
+        observer.check()
+        if not 0 < len(piece) <= n: raise Rejected("不能完整读取本次对照中的原件")
+        data += piece
+        hash_.update(piece)
+        observer.advance(len(piece))
+    if read(1) or hash_.hexdigest() != expected:
+        raise Rejected("内容与本次对照中的原 SHA-256 不符；请刷新对照")
+    observer.check()
+    return data
+
+
+class WorktreeTextPair:
+    """One bound baseline member and one relative working file, never a writer."""
+    def __init__(self, live, evidence, row):
+        if (not can_compare_text(row) or not isinstance(evidence, MissingBaseline)
+                or evidence.instance != live.instance or evidence.path != live.store / _base_leaf(evidence.basis)):
+            raise Rejected("不是本窗口对照中的同一路径小文本")
+        self.facts = evidence.text_pair(row)
+        self.parts, self.member = member_name(row.path), row.path
+        self.observed, self.basis, self.marker = evidence.observed, evidence.basis, evidence.marker
+        self.leaf = evidence.path.name
+        self.closed = False
+        self.stack = ExitStack()
+        try:
+            self.live = self.stack.enter_context(closing(live.borrow()))
+            self.source = evidence.duplicate()
+            self.stack.callback(os.close, self.source)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.stack.close()
+
+    def _check_basis(self):
+        if _idle_live_base(self.live) != self.basis:
+            raise Rejected("原基线已改变；请重新查看工作树对照")
+
+    def _check_archive(self):
+        # O_PATH supplies only metadata for the original relative STORE name;
+        # all actual archive bytes come from the still-held data descriptor.
+        store = self.live.store_fd
+        named = os.open(self.leaf, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=store)
+        try:
+            if (_stamp(os.fstat(named)) != self.observed or _stamp(os.fstat(self.source)) != self.observed
+                    or mount_id(named) != mount_id(self.source) or mount_id(named) != mount_id(store)):
+                raise Rejected("登记基线已不是本次持有的原归档")
+        finally: os.close(named)
+
+    @contextmanager
+    def _working(self, check):
+        root = self.live.work_fd
+        mount = same_mount(self.live.state_fd, root)
+        parent, opened = root, []
+        with ExitStack() as owned:
+            for part in self.parts[:-1]:
+                check()
+                fd = os.open(part, _dir_flags(), dir_fd=parent)
+                owned.callback(os.close, fd)
+                if mount_id(fd) != mount: raise Rejected("工作文件父目录越过原挂载")
+                opened.append((parent, part, fd))
+                parent = fd
+            leaf = self.parts[-1]
+            with relative_document(parent, leaf) as doc:
+                before = stamp(doc)
+
+                def identical():
+                    if mount_id(doc.fileno()) != mount or stamp(doc) != before:
+                        raise Rejected("工作文件已移出原挂载或在读取中改变")
+                    for above, name, held in opened:
+                        check()
+                        named = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=above)
+                        try:
+                            if not os.path.samestat(os.fstat(named), os.fstat(held)) or mount_id(named) != mount:
+                                raise Rejected("工作文件的原路径已变")
+                        finally: os.close(named)
+                    named = os.open(leaf, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+                    try:
+                        if _stamp(os.fstat(named)) != before or mount_id(named) != mount:
+                            raise Rejected("工作文件的原名称或实际挂载已变")
+                    finally: os.close(named)
+                    check_relative(parent, leaf, doc, before)
+
+                identical()
+                if before[2] != self.facts[1][0]: raise Rejected("工作文件长度已经改变；请先刷新对照")
+                yield doc
+                identical()
+
+    def compare(self, observer):
+        if self.closed: raise Rejected("原逐行对照的句柄已经释放")
+        observer.begin("identity")
+        self._check_basis()
+        self._check_archive()
+        observer.begin("members", sum(fact[0] for fact in self.facts))
+        raw = _At(self.source, self.observed[2], observer.check)
+        with stored_member(raw, raw.end, self.marker, self.member, self.facts[0][0]) as body:
+            archived = _verified_small(body.read, self.facts[0], observer)
+        with self._working(observer.check) as doc:
+            current = _verified_small(doc.read, self.facts[1], observer)
+        sides = []
+        for data in (archived, current):
+            try: text = data.decode("utf-8").replace("\r\n", "\n")
+            except UnicodeError as error: raise Rejected("两个原件已核验，但至少一个不是严格 UTF-8 文本") from error
+            if not _showable(text): raise Rejected("内容含不可显示控制字符，未交逐行差异")
+            sides.append(_split_comparison(text))
+        display = _unified(sides, ("登记基线", "本次工作文件"), observer)
+        observer.begin("identity")
+        self._check_archive()
+        self._check_basis()
+        observer.check()
+        return display
 
 
 def request_for_row(pane, selected, page, entry, *, current, confirm_action, indexed=False):

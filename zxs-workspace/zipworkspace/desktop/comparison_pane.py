@@ -1,11 +1,11 @@
 """Read-only results for a local folder, a catalog version or a verified ordinary ZIP."""
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from .. import comparison
 from ..model import Rejected
 from .selection import Verification, compare_snapshot_file, compare_version as compare_listed_version
 from .text_preview import can_compare_text, compare_text
-from .widgets import Table, button, confirm, label
+from .widgets import Table, button, confirm, label, line_diff_dialog
 
 
 class ComparisonPane(QWidget):
@@ -322,24 +322,10 @@ class ComparisonPane(QWidget):
         except Exception as error: done((None, error))
 
     def show_lines(self, detail, value):
-        out = QDialog(self)
-        out.setWindowTitle("选中文件的逐行差异")
-        out.resize(840, 600)
-        layout = QVBoxLayout(out)
-        layout.addWidget(label(detail))
-        text = QPlainTextEdit()
-        text.setReadOnly(True)
-        text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        text.setPlainText(value)
-        layout.addWidget(text)
-        controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        controls.rejected.connect(out.reject)
-        layout.addWidget(controls)
+        out = line_diff_dialog(self, detail, value)
 
         def finished(_):
             if self.text_dialog is out: self.text_dialog = None
-            text.clear()
-            out.deleteLater()
 
         out.finished.connect(finished)
         self.text_dialog = out

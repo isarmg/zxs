@@ -1,7 +1,7 @@
 """Native labels, virtualized tables and explicit per-operation consent."""
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox,
-                               QLabel, QPushButton, QTableView, QVBoxLayout)
+                               QLabel, QPlainTextEdit, QPushButton, QTableView, QVBoxLayout)
 
 
 def label(text=""):
@@ -10,6 +10,25 @@ def label(text=""):
     out.setWordWrap(True)
     out.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     out.setText(text)
+    return out
+
+
+def line_diff_dialog(parent, detail, value):
+    out = QDialog(parent)
+    out.setWindowTitle("选中文件的逐行差异")
+    out.resize(840, 600)
+    layout = QVBoxLayout(out)
+    layout.addWidget(label(detail))
+    text = QPlainTextEdit()
+    text.setReadOnly(True)
+    text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+    text.setPlainText(value)
+    layout.addWidget(text)
+    controls = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+    controls.rejected.connect(out.reject)
+    layout.addWidget(controls)
+    out.finished.connect(lambda _result: text.clear())
+    out.finished.connect(lambda _result: out.deleteLater())
     return out
 
 

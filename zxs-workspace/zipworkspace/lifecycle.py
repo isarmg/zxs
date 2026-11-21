@@ -182,11 +182,12 @@ def observe_initial_changes(live, *, observer=None):
 
 
 class MissingBaseline:
-    """Short-lived evidence for exact missing rows in one online comparison."""
-    def __init__(self, fd, path, observed, basis, marker, missing, baseline, instance_id):
+    """Short-lived evidence for exact rows in one online comparison."""
+    def __init__(self, fd, path, observed, basis, marker, missing, baseline, instance_id, text_pairs):
         self.path, self.observed, self.basis, self.marker = path, observed, basis, marker
         self.instance = instance_id
         self._baseline = baseline
+        self._text_pairs = text_pairs
         self.missing, self._fd = missing, os.dup(fd)
 
     @property
@@ -207,16 +208,29 @@ class MissingBaseline:
         prefix = row.path + "/"
         return {path[len(prefix):]: actual for path, actual in self._baseline.items() if path.startswith(prefix)}
 
+    def has_text_pair(self, row):
+        matched = self._text_pairs.get(row.path) if row is not None else None
+        return bool(self._fd is not None and matched is not None and matched[0] is row)
+
+    @property
+    def has_text_pairs(self): return bool(self._text_pairs)
+
+    def text_pair(self, row):
+        if not self.has_text_pair(row):
+            raise Rejected("只能核对本次对照中选定的一对小普通文件")
+        return self._baseline[row.path][1:], self._text_pairs[row.path][1:]
+
     def close(self):
         fd, self._fd = self._fd, None
         self.missing.clear()
+        self._text_pairs.clear()
         self._baseline = None
         if fd is not None: os.close(fd)
 
 
-def observe_live_changes(live, *, observer=None, retain_missing=False):
+def observe_live_changes(live, *, observer=None, retain_missing=False, retain_text=False):
     """One observation against this still-held CLI checkout's last recorded base."""
-    from .comparison import compare_manifests
+    from .comparison import COMPARE_BYTES, compare_manifests
     if observer is not None: observer.begin("identity")
     expected = _idle_live_base(live)
     name = _base_leaf(expected)
@@ -233,23 +247,35 @@ def observe_live_changes(live, *, observer=None, retain_missing=False):
             check_relative(live.store_fd, name, doc, observed)
             current = _observe_local_work(live, with_store=True, observer=observer)
             if observer is not None: observer.begin("compare")
+            # Save bounded digest evidence only for small changed file/file
+            # pairs, before compare_manifests consumes the current row map.
+            wanted = {}
+            if retain_text:
+                for path, item in current.rows.items():
+                    if observer is not None: observer.check()
+                    old = base.rows.get(path)
+                    if (old is not None and item != old and not item[0] and not old[0]
+                            and item[1] <= COMPARE_BYTES and old[1] <= COMPARE_BYTES):
+                        wanted[path] = item[1:]
             result = compare_manifests(base, current)
-            if retain_missing:
-                rows = {}
+            if retain_missing or retain_text:
+                rows, text_pairs = {}, {}
                 for row in result.rows:
                     if observer is not None: observer.check()
-                    if row.change == "missing" and row.before in ("file", "directory"):
+                    if retain_missing and row.change == "missing" and row.before in ("file", "directory"):
                         rows[row.path] = row
-                if rows:
+                    if row.path in wanted:
+                        text_pairs[row.path] = row, *wanted[row.path]
+                if rows or text_pairs:
                     missing = MissingBaseline(doc.fileno(), live.store/name, observed, expected, marker,
-                                              rows, base.rows, live.instance)
+                                              rows, base.rows, live.instance, text_pairs)
                     handoff.callback(missing.close)
             if observer is not None: observer.begin("identity")
             if _idle_live_base(live) != expected:
                 raise Rejected("观察期间原登记基线改变；请重新查看")
         if observer is not None: observer.check()
         handoff.pop_all()
-        return (marker, result, missing) if retain_missing else (marker, result)
+        return (marker, result, missing) if retain_missing or retain_text else (marker, result)
 
 
 def _phases(action):
