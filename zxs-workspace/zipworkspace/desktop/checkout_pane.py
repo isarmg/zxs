@@ -107,7 +107,7 @@ class CheckoutPane(QWidget):
         if read_only: opts |= QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly
         return QFileDialog.getExistingDirectory(self, prompt, initial, opts)
 
-    def pick_existing(self):
+    def pick_existing(self, *, extracted=None, still_chosen=None):
         if (not can_initialize() or self.live is not None or self.active or self.unresolved
                 or self.owner.pending is not None): return
         self.active = True
@@ -116,18 +116,25 @@ class CheckoutPane(QWidget):
         queued = False
 
         def current():
-            return self.active and self.live is None and not self.unresolved
+            return (self.active and self.live is None and not self.unresolved
+                    and (still_chosen is None or still_chosen()))
 
         try:
             plan = InitializeChoice()
-            for prompt, pick in (("选择要登记的现有工作目录", plan.pick_work),
-                                 ("选择保存后续快照的已有归档存储目录", plan.pick_store),
+            if extracted is not None:
+                if not current(): return
+                plan.pick_extracted(extracted)
+            else:
+                chosen = self._directory("选择要登记的现有工作目录", read_only=True)
+                if not chosen: return
+                plan.pick_work(chosen)
+            for prompt, pick in (("选择保存后续快照的已有归档存储目录", plan.pick_store),
                                  ("选择已有的专用 CLI 状态父目录（本人独占、无同步）", plan.pick_private)):
                 path = self._directory(prompt, read_only=True)
-                if not path: return
+                if not path or not current(): return
                 pick(path)
             leaf, ok = QInputDialog.getText(self, "新 STATE 名称", "输入在专用私有父目录下要创建的一个名称：")
-            if not ok: return
+            if not ok or not current(): return
 
             def reviewed(details):
                 try:

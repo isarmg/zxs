@@ -14,7 +14,7 @@ class ImportPane(QWidget):
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
-        self.selected = self.file_page = self.search_dialog = self.text_dialog = None
+        self.selected = self.file_page = self.search_dialog = self.text_dialog = self.extracted = None
         self.verification = None
         self.number = 0
         layout = QVBoxLayout(self)
@@ -27,11 +27,17 @@ class ImportPane(QWidget):
         layout.addLayout(selection_line)
         self.details = label("尚未选择文件。")
         layout.addWidget(self.details)
-        self.extract = None
+        self.extract = self.enroll = self.work_offer = None
         if sys.platform == "linux":
             self.extract = button("提取到新的本机目录…", self.choose_destination)
             self.extract.setEnabled(False)
             layout.addWidget(self.extract)
+            self.enroll = button("用刚提取的原目录新建仓库…", self.enroll_extracted)
+            self.enroll.setEnabled(False)
+            layout.addWidget(self.enroll)
+            self.work_offer = label()
+            self.work_offer.hide()
+            layout.addWidget(self.work_offer)
         message = (plain_import.OUTPUT_UNAVAILABLE if self.extract is None else
                    "核验不会提取。提取须另行选择同一实际 ext4/XFS 挂载上的两个不同目录与一个新目的名称。")
         self.outcome = label(message)
@@ -70,6 +76,7 @@ class ImportPane(QWidget):
 
     def release_display(self):
         self.verification = None
+        self.release_work_offer()
         dialog, self.search_dialog = self.search_dialog, None
         if dialog is not None: dialog.reject()
         self.close_text()
@@ -250,7 +257,7 @@ class ImportPane(QWidget):
         if not name or self.selected is not selected: return
         plan = None
         try:
-            plan = PlainZipCopy(selected, name)
+            plan = PlainZipCopy(selected, name, offer_work=True)
             scratch = QFileDialog.getExistingDirectory(self, "选择同一挂载、本人独用且不与目的父交叠的 0700 暂存目录",
                                                        "", opts | QFileDialog.Option.ShowDirsOnly)
             if not scratch or self.selected is not selected:
@@ -264,6 +271,34 @@ class ImportPane(QWidget):
             return
 
         self._review_copy(plan, lambda: self.selected is selected, directory=True)
+
+    def release_work_offer(self):
+        old, self.extracted = self.extracted, None
+        if old is not None: old.close()
+        self.sync_work_action()
+
+    def sync_work_action(self):
+        if self.enroll is not None:
+            original = self.extracted
+            available = original is not None and not original.closed
+            self.enroll.setEnabled(available)
+            self.work_offer.setText((f"仍持有本次实际提取的原目录：{str(original.path)!r}。" if available else
+                                     "本次交接已使用或关闭；不重新选择同名目录。" if original is not None else ""))
+            self.work_offer.setVisible(original is not None)
+
+    def enroll_extracted(self):
+        extracted, selected = self.extracted, self.selected
+        if (extracted is None or selected is None or extracted.closed or self.owner.pending is not None):
+            return
+        archive = self.owner.archive
+        checkout = archive.checkout
+        if checkout.live is not None or checkout.active or checkout.unresolved:
+            self.owner.inform("本窗口已有工作树或原签出尚未解决。没有登记刚提取的目录。")
+            return
+        self.owner.tabs.setCurrentWidget(archive)
+        archive.views.setCurrentWidget(checkout)
+        checkout.pick_existing(extracted=extracted,
+                               still_chosen=lambda: self.selected is selected and self.extracted is extracted)
 
     def _review_copy(self, plan, current, *, directory):
         def submit(title, call, apply, *, cancellable=False):
@@ -292,8 +327,27 @@ class ImportPane(QWidget):
                     writing = "正在复核原成员、写入匿名副本并完整读回…"
                 if (confirm(self, title, details, attestation=terms, action_text=action) and
                         current() and self.owner.pending is None):
-                    submit(writing,
-                           lambda: plan.run(confirmed=True), self.owner.inform, cancellable=True)
+                    if directory: self.release_work_offer()
+                    def result(value):
+                        if not directory:
+                            self.owner.inform(value)
+                            return
+                        from .member_copy import PlainExtraction
+                        if not isinstance(value, PlainExtraction):
+                            self.owner.inform(value)
+                            return
+                        original = value.work
+                        try:
+                            if not current(): return
+                            self.extracted, original = original, None
+                            self.sync_work_action()
+                            message = ("如需版本历史，可另行选择新建仓库。本次提取没有登记或提交。"
+                                       if self.extracted is not None else "未交接目录句柄；没有登记或提交。")
+                            self.outcome.setText(f"{value.message}\n{message}")
+                            self.owner.inform(value.message)
+                        finally:
+                            if original is not None: original.close()
+                    submit(writing, lambda: plan.run(confirmed=True), result, cancellable=True)
                 else:
                     plan.close()
                     if current(): self.owner.inform("没有提取或写入任何文件。")

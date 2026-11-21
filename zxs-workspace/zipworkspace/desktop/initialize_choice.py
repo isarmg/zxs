@@ -26,7 +26,7 @@ class InitializeChoice:
         require_native_writer()
         self.instance, self.repo, self.branch = (new_id() for _ in range(3))
         self.stack = ExitStack()
-        self.work = self.store = self.private = self.state = self.session = self.publication = None
+        self.work = self.store = self.private = self.state = self.session = self.publication = self.extracted = None
         self.ready = self.used = self.closed = False
 
     def close(self):
@@ -44,6 +44,13 @@ class InitializeChoice:
     def pick_work(self, path):
         self._pick(self.work)
         self.work = self.stack.enter_context(closing(Folder.choose(path)))
+
+    def pick_extracted(self, original):
+        from .member_copy import ExtractedWork
+        self._pick(self.work)
+        if not isinstance(original, ExtractedWork): raise Rejected("没有这次提取完成后的原目录交接")
+        self.work = self.stack.enter_context(closing(original.borrow()))
+        self.extracted = original
 
     def pick_store(self, path):
         self._pick(self.store)
@@ -78,7 +85,9 @@ class InitializeChoice:
         self.state = self.private.path / leaf
         self._new()
         self.ready = True
-        return (f"现有工作目录：{str(self.work.evidence.path)!r}\n原 STORE：{str(self.store.path)!r}\n"
+        from_zip = (f"来自刚完成提取的原目录；原 ZIP SHA-256：{self.extracted.archive_sha256}\n"
+                    "只登记原目录，不把归档注释或内容当作已提交历史。\n" if self.extracted is not None else "")
+        return (f"现有工作目录：{str(self.work.evidence.path)!r}\n{from_zip}原 STORE：{str(self.store.path)!r}\n"
                 f"新 CLI STATE：{str(self.state)!r}\n新实例：{self.instance}\n仓库：{self.repo}\n分支：{self.branch}\n\n"
                 "只在新 STATE 中登记这个工作目录。不读工作文件正文，不移动或改写工作目录，"
                 "不在 STORE 创建归档。不使用已有 STATE；此时没有已提交快照。"
@@ -95,6 +104,7 @@ class InitializeChoice:
         incoming = None
         try:
             work_fd, mount = self._new()
+            if self.extracted is not None: self.extracted.use()
             p = self.private
             self.publication = "state-mkdir-attempted"  # From here do not retry/adopt/clean a pathname.
             with private_stage.new_child(p, self.state.name, mount) as actual:

@@ -130,6 +130,7 @@ class Window(QMainWindow):
         self.tabs.addTab(self.archive, "快照与历史")
         self.plain_import = ImportPane(self)
         self.tabs.addTab(self.plain_import, "核验普通 ZIP")
+        self.tabs.currentChanged.connect(lambda _index: self.plain_import.sync_work_action())
         files = self.menuBar().addMenu("文件")
         if new_window is not None:
             open_window = files.addAction("新窗口")

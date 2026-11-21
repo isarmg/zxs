@@ -1,5 +1,6 @@
 """Linux Qt exports a selected snapshot or archive entry without overwriting."""
 from contextlib import ExitStack, closing, contextmanager, nullcontext
+from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ from threading import Event, Lock
 from .. import private_stage
 from ..archive import copy_body, read_managed_document, stored_member, stored_plain, stored_subtree
 from ..capacity import observed_available
-from ..comparison import Folder
+from ..comparison import Folder, FolderEvidence
 from ..document import archive_sha, native_identity, relative_document
 from ..freeze import _distinct_roots, observe_held
 from ..lifecycle import MissingBaseline, _base_leaf, _held_idle_live_base
@@ -567,11 +568,18 @@ class _AtomicDirectoryCopy(_BeforePublication):
     def _sealed_tree(self, stage, sink):
         return _observe_subtree(stage, sink, self.rows, checkpoint=self._checkpoint)
 
+    def _handoff(self, stage):
+        return None
+
+    def _delivery(self, message, work):
+        return message
+
     def run(self, *, confirmed=False):
         if confirmed is not True or not self.ready or self.used or self.closed:
             raise Rejected("只允许明确确认一次已核验的目录内容和新位置")
         self.used = True
         stage_attempted = may_have_moved = False
+        original_work, delivered = None, False
         try:
             with self.stack:
                 read = self.proc.read
@@ -633,7 +641,16 @@ class _AtomicDirectoryCopy(_BeforePublication):
                         os.fsync(self.parent)
                         os.fsync(self.private.parent)
                         recheck()
-            return f"已另存并核验目录：{str(self.path)!r}（{len(self.rows):,} 项，{self.size:,} 字节）"
+                        try:
+                            original_work = self._handoff(stage)
+                        except OSError:
+                            # A plain extraction can be complete even when an
+                            # optional independent delivery could not borrow FD(s).
+                            original_work = None
+            message = f"已另存并核验目录：{str(self.path)!r}（{len(self.rows):,} 项，{self.size:,} 字节）"
+            result = self._delivery(message, original_work)
+            delivered = True
+            return result
         except Exception as err:
             scratch = str(self.private.path / self.stage_name)
             if may_have_moved:
@@ -645,6 +662,7 @@ class _AtomicDirectoryCopy(_BeforePublication):
             raise
         finally:
             self.closed = True
+            if not delivered and original_work is not None: original_work.close()
 
 
 class DirectoryCopy(_AtomicDirectoryCopy):
@@ -667,13 +685,105 @@ class DirectoryCopy(_AtomicDirectoryCopy):
         return stored_subtree(reader, reader.end, self.selected.browser.commit, self.root, self.rows)
 
 
+class _PublishedWork(Folder):
+    """The actual published directory and its original parent, not a new picker."""
+    def __init__(self, path, root, parent, chain, mount):
+        super().__init__(FolderEvidence(path, native_identity(os.fstat(root), stat.S_IFDIR)), root)
+        self.parent, self.chain, self.mount = parent, tuple(chain), mount
+
+    @classmethod
+    def _duplicate(cls, path, root, parent, chain, mount):
+        with ExitStack() as stack:
+            work = os.dup(root); stack.callback(os.close, work)
+            destination = os.dup(parent); stack.callback(os.close, destination)
+            original = cls(path, work, destination, chain, mount)
+            stack.pop_all()
+            return original
+
+    def loan(self):
+        if self._fd is None: raise Rejected("已释放这次提取的原目录；不会按同名路径重新绑定")
+        return self._duplicate(self.evidence.path, self._fd, self.parent, self.chain, self.mount)
+
+    def _check(self):
+        checked = self._fd
+        if checked is None: raise Rejected("已释放本次提取的实际目录")
+        path = self.evidence.path
+        with ExitStack() as inspect:
+            proc = _ProcView(inspect)
+            uid = _ordinary_user(read_proc=proc.read)
+            original = os.fstat(checked)
+            named_parent, observed = _directory(inspect, path.parent, uid, proc.read, metadata_only=True)
+            named = os.open(path.name, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.parent)
+            inspect.callback(os.close, named)
+            if (tuple(observed) != self.chain or not os.path.samestat(os.fstat(named_parent), os.fstat(self.parent)) or
+                    native_identity(original, stat.S_IFDIR) != self.evidence.identity or
+                    original.st_uid != uid or stat.S_IMODE(original.st_mode) != 0o700 or
+                    local_mount(self.parent, read_proc=proc.read) != self.mount or
+                    mount_id(checked, read_proc=proc.read) != self.mount or mount_id(named, read_proc=proc.read) != self.mount or
+                    not os.path.samestat(original, os.fstat(named)) or
+                    os.readlink(str(named), dir_fd=proc.fds) != str(path)):
+                raise Rejected("提取后原目录、父目录或挂载已变化；未重新选择另一份工作目录")
+        return checked
+
+    def close(self):
+        parent, self.parent = self.parent, None
+        try: super().close()
+        finally:
+            if parent is not None: os.close(parent)
+
+
+class ExtractedWork:
+    """Single-use in this process, only from a completed ordinary ZIP extraction."""
+    def __init__(self, original, archive_sha256):
+        self.original, self.archive_sha256 = original, archive_sha256
+        self.path, self.lock = original.evidence.path, Lock()
+
+    @property
+    def closed(self): return self.original is None
+
+    def borrow(self):
+        with self.lock:
+            if self.closed: raise Rejected("这次提取的原目录已交接或关闭")
+            return self.original.loan()
+
+    def _release(self):
+        original, self.original = self.original, None
+        if original is not None: original.close()
+
+    def use(self):
+        with self.lock:
+            if self.closed: raise Rejected("不能重用这次提取的原目录")
+            self._release()
+
+    def close(self):
+        with self.lock: self._release()
+
+
+@dataclass(frozen=True, slots=True)
+class PlainExtraction:
+    message: str
+    work: ExtractedWork | None
+
+
 class PlainZipCopy(_AtomicDirectoryCopy):
     """Only a preview-held ordinary ZIP; no marker is trusted or created."""
-    def __init__(self, selected, spelling):
+    def __init__(self, selected, spelling, *, offer_work=False):
         from .selection import PlainSelection
         if not isinstance(selected, PlainSelection) or selected.held is None or selected.held.closed:
             raise Rejected("须持有本次普通 ZIP 核验时的原文件")
+        self.offer_work = offer_work
         super().__init__(selected, spelling)
+
+    def _handoff(self, stage):
+        if not self.offer_work: return None
+        original = _PublishedWork._duplicate(self.path, stage.parent, self.parent, self.target_chain, self.mount)
+        try: return ExtractedWork(original, self.selected.preview.sha256)
+        except BaseException:
+            original.close()
+            raise
+
+    def _delivery(self, message, work):
+        return PlainExtraction(message, work) if self.offer_work else message
 
     def _approved_rows(self): return self.selected.rows
 

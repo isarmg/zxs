@@ -13,7 +13,10 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from zipworkspace import lifecycle, worktree
 from zipworkspace.desktop import member_copy
+from zipworkspace.desktop.commit_choice import CommitChoice
+from zipworkspace.desktop.initialize_choice import InitializeChoice
 from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected, new_id
 from zipworkspace.publish import Uncertain
@@ -274,7 +277,7 @@ class LinuxMemberCopy(unittest.TestCase):
         self.assertEqual(list(self.dest.iterdir()), [])
         self.assertEqual(self.archive.read_bytes(), self.original)
 
-    def plain_plan(self, name="plain-output"):
+    def plain_plan(self, name="plain-output", *, offer_work=False):
         original = self.archive.with_name("plain.zip")
         with original.open("xb") as raw, zipfile.ZipFile(raw, "w") as archive:
             archive.comment = b"a plain ZIP; no Workspace identity"
@@ -285,7 +288,7 @@ class LinuxMemberCopy(unittest.TestCase):
             archive.writestr("zero", b"")
         selected = PlainSelection.open(str(original))
         self.addCleanup(selected.release_display)
-        plan = member_copy.PlainZipCopy(selected, str(self.dest/name))
+        plan = member_copy.PlainZipCopy(selected, str(self.dest/name), offer_work=offer_work)
         plan.pick_private(str(self.private))
         self.addCleanup(plan.close)
         return original, selected, plan
@@ -317,6 +320,166 @@ class LinuxMemberCopy(unittest.TestCase):
         self.assertEqual(original.read_bytes(), before)
         self.assertEqual(sorted(x.name for x in plan.path.iterdir()), ["empty", "folder", "zero"])
         self.assertEqual(list(self.private.iterdir()), [])
+
+    def copied_work(self):
+        # Even a valid managed comment remains opaque in the ordinary ZIP workflow.
+        source = self.archive.with_suffix(".zip")
+        source.write_bytes(self.original)
+        selected = PlainSelection.open(str(source))
+        self.addCleanup(selected.release_display)
+        plan = member_copy.PlainZipCopy(selected, str(self.dest/"edited-copy"), offer_work=True)
+        self.addCleanup(plan.close)
+        plan.pick_private(str(self.private)); plan.review()
+        delivered = plan.run(confirmed=True)
+        self.assertIn("已另存并核验目录", delivered.message)
+        self.assertIsNotNone(delivered.work)
+        self.addCleanup(delivered.work.close)
+        self.assertEqual(list(self.private.iterdir()), [])
+        return delivered.work, source
+
+    def register_copy(self, handoff, *, leaf="new-state", store=None):
+        if store is None:
+            store = self.archive.parent/"repo-out"
+            store.mkdir(mode=0o700)
+        choice = InitializeChoice()
+        self.addCleanup(choice.close)
+        with patch.object(member_copy.Folder, "choose", side_effect=AssertionError("do not pick a new work path")):
+            choice.pick_extracted(handoff)
+        choice.pick_private(self.private); choice.pick_store(store)
+        self.assertIn(handoff.archive_sha256, choice.review(leaf))
+        self.assertFalse(choice.state.exists())
+        self.assertEqual(list(store.iterdir()), [])
+        return choice, store
+
+    def test_completed_plain_extraction_offers_the_same_worktree_for_a_separate_genesis(self):
+        original, external_zip = self.copied_work()
+        original_fd = original.original._fd
+        self.assertTrue(os.path.samestat(os.fstat(original_fd), original.path.stat()))
+        local_story = original.path/"original/same.bin"
+        local_story.write_bytes(b"my first local edit")
+        choice, store = self.register_copy(original)
+        second, _ = self.register_copy(original, leaf="duplicate", store=store)
+        with patch.object(lifecycle, "observe_held", side_effect=AssertionError("registration doesn't rescan")), \
+             patch.object(worktree, "commit", side_effect=AssertionError("registration cannot commit")):
+            with self.assertRaises(Rejected): choice.run()
+            self.assertFalse(choice.state.exists())
+            choice.run(confirmed=True)
+            with self.assertRaisesRegex(Rejected, "不能重用"): second.run(confirmed=True)
+        self.assertTrue(original.closed)
+        self.assertFalse(second.state.exists())
+        live = choice.take_session()
+        self.addCleanup(live.close)
+        self.assertTrue(os.path.samestat(os.fstat(live.work_fd), original.path.stat()))
+        self.assertEqual(live.status()["base_generation"], 0)
+        self.assertNotEqual(live.repo, self.selected.browser.commit.repo)
+        self.assertEqual(list(store.iterdir()), [])
+
+        attempt = CommitChoice(live)
+        self.addCleanup(attempt.release)
+        attempt.prepare()
+        slot, marker = attempt.run()
+        self.assertEqual((marker.repo, marker.generation, marker.parent), (live.repo, 1, None))
+        with zipfile.ZipFile(slot) as checked:
+            self.assertEqual(checked.read("original/same.bin"), b"my first local edit")
+            self.assertTrue(checked.getinfo("empty-root/").is_dir())
+        self.assertEqual(external_zip.read_bytes(), self.original)
+
+    def test_same_named_extracted_replacement_or_failed_barrier_never_gives_a_registration(self):
+        original, _ = self.copied_work()
+        choice, store = self.register_copy(original)
+        original.path.rename(original.path.with_name("actual-kept"))
+        original.path.mkdir(mode=0o700)
+        with self.assertRaises(Rejected): choice.run(confirmed=True)
+        self.assertIsNone(choice.take_session())
+        self.assertFalse(choice.state.exists())
+        self.assertEqual(list(store.iterdir()), [])
+
+        _, _, incomplete = self.plain_plan("late-sync", offer_work=True)
+        incomplete.review()
+        native = os.fsync
+        def sync(fd):
+            if os.path.samestat(os.fstat(fd), self.dest.stat()): raise OSError(errno.EIO, "injected original parent sync failure")
+            return native(fd)
+        with patch.object(os, "fsync", side_effect=sync), \
+             patch.object(incomplete, "_handoff", side_effect=AssertionError("no work custody before both barriers")):
+            with self.assertRaises(Uncertain): incomplete.run(confirmed=True)
+        self.assertTrue(incomplete.path.is_dir())
+
+    def test_successful_plain_extraction_does_not_invent_a_worktree_when_ticket_allocation_fails(self):
+        _, _, extraction = self.plain_plan("complete-without-ticket", offer_work=True)
+        extraction.review()
+        with patch.object(extraction, "_handoff", side_effect=OSError(errno.EMFILE, "synthetic descriptor budget")):
+            published = extraction.run(confirmed=True)
+        self.assertIn("已另存并核验目录", published.message)
+        self.assertIsNone(published.work)
+        self.assertEqual((extraction.path/"folder/note").read_bytes(), b"file payload")
+        self.assertEqual(list(self.private.iterdir()), [])
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Linux desktop fixture")
+    def test_actual_zip_window_offers_but_does_not_register_without_another_confirmation(self):
+        from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog
+        from zipworkspace.desktop import checkout_pane, import_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        _, selected, fixture = self.plain_plan()
+        fixture.close()
+        destination = self.dest/"window-work"
+        store = self.archive.parent/"window-store"
+        store.mkdir(mode=0o700)
+        state = self.private/"window-state"
+        win = Window()
+        pane, checkout = win.plain_import, win.archive.checkout
+        jobs = []
+
+        def queue(work):
+            future = Future()
+            jobs.append((future, work))
+            return future
+
+        def complete():
+            future, work = jobs.pop(0)
+            future.set_result(work())
+            win.poll()
+
+        try:
+            pane.show_selection(selected)
+            win.tabs.setCurrentWidget(pane)
+            self.assertFalse(pane.enroll.isEnabled())
+            with patch.object(win.pool, "submit", side_effect=queue), \
+                 patch.object(QFileDialog, "getSaveFileName", return_value=(str(destination), "")), \
+                 patch.object(QFileDialog, "getExistingDirectory", return_value=str(self.private)), \
+                 patch.object(import_pane, "confirm", return_value=True) as extraction:
+                pane.extract.click()
+                complete(); complete()
+                extraction.assert_called_once()
+                self.assertTrue(destination.is_dir())
+                self.assertTrue(pane.enroll.isEnabled())
+                self.assertIsNone(checkout.live)
+                self.assertFalse(state.exists())
+                for allow in (False, True):
+                    win.tabs.setCurrentWidget(pane)
+                    with patch.object(checkout, "_directory", side_effect=[str(store), str(self.private)]) as where, \
+                         patch.object(QInputDialog, "getText", return_value=(state.name, True)), \
+                         patch.object(checkout_pane, "confirm", return_value=allow) as registration:
+                        pane.enroll.click()
+                        self.assertIs(win.archive.views.currentWidget(), checkout)
+                        complete()
+                    self.assertEqual(where.call_count, 2)  # No work directory picker after verified extraction.
+                    registration.assert_called_once()
+                    self.assertFalse(state.exists())
+                    self.assertEqual(len(jobs), int(allow))
+                    while jobs: complete()
+                self.assertIsNotNone(checkout.live)
+                self.assertEqual(checkout.live.status()["base_generation"], 0)
+                self.assertTrue(os.path.samestat(os.fstat(checkout.live.work_fd), destination.stat()))
+                self.assertEqual(list(store.iterdir()), [])
+                win.tabs.setCurrentWidget(pane)
+                self.assertFalse(pane.enroll.isEnabled())
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
     def test_plain_zip_replacement_and_crc_failure_never_publish_an_extraction(self):
         original, _, plan = self.plain_plan()
