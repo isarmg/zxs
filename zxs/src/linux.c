@@ -172,10 +172,6 @@ int zxs_open_mountinfo(void) { return open_proc_child("mountinfo",O_RDONLY); }
 #include <linux/fs.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
-#include <sys/syscall.h>
-#if defined(FS_IOC_GETFSSYSFSPATH) && defined(SYS_openat2)
-#include <linux/openat2.h>
-#endif
 
 /* Display only, never a durable enrollment or device identity. Linux can
  * report a shorter native filesystem identifier as well as a 16-byte UUID.
@@ -189,92 +185,6 @@ int zxs_storage_uuid(int fd,unsigned char *out) {
     return fs.len;
 #else
     (void)fd; (void)out; errno=ENOTSUP; return -1;
-#endif
-}
-
-#if defined(FS_IOC_GETFSSYSFSPATH) && defined(SYS_openat2)
-static int sysfs_openat(int parent,const char *name,int flags) {
-    const struct open_how how = {
-        .flags = (uint64_t)(flags|O_NOFOLLOW|O_CLOEXEC),
-        .resolve = RESOLVE_BENEATH|RESOLVE_NO_XDEV|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS,
-    };
-    return (int)syscall(SYS_openat2,parent,name,&how,sizeof(how));
-}
-static int sysfs_directory(int fd) {
-    struct statfs actual;
-    struct stat st;
-    if (fstatfs(fd,&actual)<0 || fstat(fd,&st)<0) return -1;
-    if (actual.f_type!=SYSFS_MAGIC || !S_ISDIR(st.st_mode) ||
-        st.st_uid!=0 || (st.st_mode&0022)!=0 || st.st_nlink==0) { errno=ENOTSUP; return -1; }
-    return 0;
-}
-#endif
-
-/* Follow the original filesystem's own live ext4 superblock attribute
- * directory, not a disk name, stat(2) dev_t, /dev node or other mount.
- * ext4 requires a unique sysfs kobject for the mounted superblock.
- */
-int zxs_open_ext4_observer(int source) {
-#if defined(FS_IOC_GETFSSYSFSPATH) && defined(SYS_openat2)
-    struct fs_sysfs_path raw = {0};
-    static const char prefix[]="ext4/";
-    const size_t n=sizeof(prefix)-1;
-    if (ioctl(source,FS_IOC_GETFSSYSFSPATH,&raw)!=0) return -1;
-    /* Match the full kernel name without accepting a truncated s_id, a
-     * different filesystem type, another path component, or features/.
-     */
-    if (raw.len<=n || raw.len>n+31 || raw.name[raw.len]!=0 ||
-        memcmp(raw.name,prefix,n)!=0) { errno=ENOTSUP; return -1; }
-    const size_t leaf=raw.len-n;
-    if ((leaf==1 && raw.name[n]=='.') ||
-        (leaf==2 && memcmp(raw.name+n,"..",2)==0) ||
-        (leaf==8 && memcmp(raw.name+n,"features",8)==0)) { errno=ENOTSUP; return -1; }
-    for (size_t i=n;i<raw.len;i++) {
-        unsigned char c=raw.name[i];
-        if (!((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')||
-              c=='.'||c=='_'||c=='-')) { errno=ENOTSUP; return -1; }
-    }
-    /* Each name is the last component of a passive O_PATH lookup. Do not
-     * set O_DIRECTORY or use an implicit intermediate path walk: they can
-     * request an automount before the kernel's NO_XDEV check in ref-walk.
-     * Read attributes only after reaching a proved same-mount directory.
-     */
-    const char *parts[]={"fs","ext4",(const char *)raw.name+n};
-    int node=open("/sys",O_PATH|O_CLOEXEC|O_NOFOLLOW);
-    if (node<0) return -1;
-    if (sysfs_directory(node)<0) { int e=errno; close(node); errno=e; return -1; }
-    for (size_t i=0;i<sizeof(parts)/sizeof(parts[0]);i++) {
-        int next=sysfs_openat(node,parts[i],O_PATH);
-        if (next>=0 && (require_same_mount(node,next)<0 || sysfs_directory(next)<0)) {
-            int e=errno; close(next); next=-1; errno=e;
-        }
-        int e=errno; close(node); node=next; errno=e;
-        if (node<0) return -1;
-    }
-    return node;
-#else
-    (void)source; errno=ENOTSUP; return -1;
-#endif
-}
-
-/* Two fixed show attributes only. The input is the kept kernel directory
- * from zxs_open_ext4_observer, never a user/request-provided descriptor.
- */
-int zxs_open_ext4_counter(int observer,int which) {
-#if defined(FS_IOC_GETFSSYSFSPATH) && defined(SYS_openat2)
-    const char *name=which==0?"errors_count":which==1?"session_write_kbytes":NULL;
-    if (!name) { errno=EINVAL; return -1; }
-    if (sysfs_directory(observer)<0) return -1;
-    int f=sysfs_openat(observer,name,O_RDONLY|O_NONBLOCK);
-    if (f<0) return -1;
-    struct stat st;
-    if (fstat(f,&st)<0 || require_same_mount(observer,f)<0) { int e=errno; close(f); errno=e; return -1; }
-    if (!S_ISREG(st.st_mode) || (st.st_mode&07777)!=0444 || st.st_uid!=0 || st.st_nlink==0) {
-        close(f); errno=ENOTSUP; return -1;
-    }
-    return f;
-#else
-    (void)observer; (void)which; errno=ENOTSUP; return -1;
 #endif
 }
 

@@ -30,7 +30,7 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
         write!(out,r#"<tr><td>{}</td><td><code>{id}</code></td><td>{state}</td><td><form method="post" action="{}"><input type="hidden" name="volume" value="{id}"><input type="hidden" name="csrf" value=""#,volume_role(r),super::observe::TARGET).unwrap();
         text(&mut out,csrf);out.push_str(r#""><button class="zxs-button" type="submit">检查此卷</button></form></td></tr>"#);
     }
-    out.push_str(r#"</tbody></table></div><p class="zxs-status">概览不探测数据盘。检查只采样所选卷，不做测速，也不判断硬件健康或 SMB 在线状态。</p></section><section id="zxs-shares" class="zxs-panel"><h2>共享配置</h2>"#);
+    out.push_str(r#"</tbody></table></div><p class="zxs-status">概览不探测数据盘。检查只采样所选卷，不判断磁盘健康、读写速率或 SMB 在线状态。</p></section><section id="zxs-shares" class="zxs-panel"><h2>共享配置</h2>"#);
     out.push_str(r#"<p>SMB 只有 <code>\\服务器\ZXS</code> 一个业务入口。这里管理首装已选的数据盘目录及其访问模式，不新建共享或暴露宿主路径。</p>"#);
     if data.shares.is_empty(){out.push_str("<p>本页没有首装已选的数据盘目录。</p>");}
     else{
@@ -69,18 +69,9 @@ pub(super) fn volume_status(report:&Report)->Reply{
             Some(id)=>write!(out,"<dt>文件系统短标识</dt><dd><code>{id}</code>（{} 字节，内核顺序）</dd>",id.len()).unwrap(),
             None=>out.push_str("<dt>文件系统标识</dt><dd>未取得</dd>"),
         }
-        match r.ext4.recorded_errors{
-            Some(n)=>write!(out,"<dt>ext4 已记录的文件系统错误</dt><dd>{n} 次</dd>").unwrap(),
-            None=>out.push_str("<dt>ext4 已记录的文件系统错误</dt><dd>未取得</dd>"),
-        }
-        match &r.ext4.writes{
-            Some(w)=>write!(out,"<dt>ext4 主逻辑设备近期写入</dt><dd>约 {} 毫秒内计数增加 {} KiB（约 {} KiB/秒）</dd>",
-                w.millis,w.kib,w.kib_per_second).unwrap(),
-            None=>out.push_str("<dt>ext4 主逻辑设备近期写入</dt><dd>未取得</dd>"),
-        }
         out.push_str("</dl>");
         if r.mount_read_only{out.push_str("<p>此挂载为只读；可用空间不代表可以写入。</p>");}
-        out.push_str("<p>挂载和容量不代表写入授权、目录配额或 SMB 当前状态。文件系统标识不是物理设备编号。ext4 错误计数为 0 不代表硬件健康；写入计数也包含同一逻辑设备上的其他活动，不是 ZXS 传输速度或磁盘测速。</p>");
+        out.push_str("<p>挂载和容量仅反映 Web 服务本次采样，不代表写入授权、目录配额、磁盘健康、读写速率或 SMB 当前状态。文件系统标识不是物理设备编号。</p>");
         "200 OK"
     }else{
         out.push_str("<p>此卷有登记，但 Web 服务本次未能核对原卷和容量。不能据此判断磁盘故障或回收内容。</p>");
