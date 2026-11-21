@@ -1,8 +1,8 @@
 //! Durable handoff of a single authorized FILE between its actual F and R.
 //! The immutable birth is never reissued. Slow data, capacity and witness
 //! checks are outside SYSTEM; only the selected receipt switches placement.
-use super::{Tree,Catalog,Connection,directory,file_create,ordinary_directory::{self,Additional,Route as DirectoryRoute}};
-use super::super::{file_location::{Place,Placed},transfer_material::Manifest,volume::{OrdinaryRoot,RecycleRoot},work_record::{self,ReadRecord}};
+use super::{Tree,Catalog,Connection,InitialReader,directory,file_create,ordinary_directory::{self,Additional,Route as DirectoryRoute}};
+use super::super::{account::share_mode::Setting,file_location::{Place,Placed},transfer_material::Manifest,volume::{OrdinaryRoot,RecycleRoot},work_record::{self,ReadRecord}};
 use crate::{OperationId,Role,VolumeId,display,fs::{HeldDir,invalid,directory_birth::DirectoryParent},hash::Sha256,
     identity::{AccountId,ShareId},ordinary::portable_birth::{Birth,MoveInstall,MoveRoom}};
 use std::io;
@@ -24,11 +24,26 @@ struct Route{
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Moved{pub(super) op:OperationId,pub(super) from:Place,pub(super) to:Place}
 
+// Original database cut, never a callable authority from numeric inputs.
+// This engine issues both native selections and updates on the same
+// source; the original caller still checks its scope in every cut.
+struct TransferCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+struct TransferAt<'a>{
+    source:&'a InitialReader,setting:Setting,parent:DirectoryParent,
+    actor:AccountId,auth:OperationId,epoch:i64,
+    require:&'a dyn Fn(&TransferCut<'_>)->io::Result<()>,
+}
+impl TransferAt<'_>{
+    fn authorized(&self,db:&Connection,catalog:&Catalog)->io::Result<()>{
+        (self.require)(&TransferCut{source:self.source,db,catalog})
+    }
+}
+
 fn occupied()->io::Error{io::Error::new(io::ErrorKind::AlreadyExists,"destination name is already selected")}
 fn pending()->io::Error{io::Error::new(io::ErrorKind::WouldBlock,"another original transfer for this FILE is unfinished")}
 impl Route{
-    fn select(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,ask:&Handoff)->io::Result<Self>{
-        tree.require(db,c,true)?;
+    fn select(tree:&TransferAt<'_>,db:&Connection,c:&Catalog,ask:&Handoff)->io::Result<Self>{
+        tree.authorized(db,c)?;
         let r=c.rows().get(1).filter(|v|v.role==Role::Recycle&&v.ordinal==1)
             .ok_or_else(||invalid("missing original retained role"))?;
         let f=tree.setting.volume;
@@ -55,12 +70,11 @@ impl Route{
         let from=place.bind(db,c)?;
         let work=work_record::selected(db,&from.birth)?;
         let head=work_record::latest_commit(db,&from.birth)?.map(|n|n.0);
-        let a=&tree.session.original;
         let parent=if kind==Direction::Restore{tree.parent}else{DirectoryParent::Root};
-        Ok(Self{from,kind,to,parent,name,work,head,share:tree.setting.share,setting:tree.setting.op,auth:a.op,actor:a.account,epoch:a.generation})
+        Ok(Self{from,kind,to,parent,name,work,head,share:tree.setting.share,setting:tree.setting.op,auth:tree.auth,actor:tree.actor,epoch:tree.epoch})
     }
-    fn receipt(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,ask:&Handoff,op:OperationId)->io::Result<Option<Moved>>{
-        tree.require(db,c,true)?;
+    fn receipt(tree:&TransferAt<'_>,db:&Connection,c:&Catalog,ask:&Handoff,op:OperationId)->io::Result<Option<Moved>>{
+        tree.authorized(db,c)?;
         let q=db.prepare(c"SELECT m.file_id,m.direction,m.source_op,m.source_gen,m.source_id,m.source_name,
                m.target_id,m.target_name,m.save_op,m.manual_op,m.source_parent,m.target_parent,m.source_backing,m.source_terminal
                FROM main.operation o JOIN main.file_transfer m ON m.transfer_op=o.op_id
@@ -87,9 +101,8 @@ impl Route{
         if !allowed{return Err(io::ErrorKind::PermissionDenied.into());}
         let birth=file_create::committed_file(db,c,file)?;
         let work=save.map(|v|work_record::confirmed(db,&birth,v)).transpose()?;
-        let a=&tree.session.original;
         let original=Self{from:Placed{birth,here:src.clone()},kind,to,parent,name,work,head,
-            share:tree.setting.share,setting:tree.setting.op,auth:a.op,actor:a.account,epoch:a.generation};
+            share:tree.setting.share,setting:tree.setting.op,auth:tree.auth,actor:tree.actor,epoch:tree.epoch};
         if !original.exists_at(db,op,true)?{return Err(invalid("no exact result for this original transfer"));}
         Ok(Some(Moved{op,from:src,to:original.target(op)}))
     }
@@ -200,21 +213,33 @@ fn space(dir:&HeldDir)->io::Result<u64>{
 #[derive(Clone,Copy,Eq,PartialEq)]
 enum Cut{WaitingForSource,Reserved,CandidateSynced,GuardCaptured}
 impl Tree<'_,'_>{
+    fn with_transfer<T>(&self,act:impl FnOnce(TransferAt<'_>)->io::Result<T>)->io::Result<T>{
+        let source=self.session.source;
+        let prior=&self.session.original;
+        let require=|cut:&TransferCut<'_>|{
+            debug_assert!(std::ptr::eq(cut.source,source)); // the same owner supplies both connections
+            self.require(cut.db,cut.catalog,true)
+        };
+        act(TransferAt{source,setting:self.setting,parent:self.parent,actor:prior.account,
+            auth:prior.op,epoch:prior.generation,require:&require})
+    }
     pub(super) fn transfer(&self,ask:&Handoff,supplied:OperationId,live:impl Fn()->io::Result<()>)->io::Result<Moved>{
-        self.transfer_inner(ask,supplied,live,false,|_|Ok(()))
+        self.with_transfer(|at|at.transfer_inner(ask,supplied,live,false,|_|Ok(())))
     }
     pub(super) fn transfer_last_close(&self,source:Place,supplied:OperationId,live:impl Fn()->io::Result<()>)->io::Result<Moved>{
-        self.transfer_inner(&Handoff::Delete(source),supplied,live,true,|_|Ok(()))
+        self.with_transfer(|at|at.transfer_inner(&Handoff::Delete(source),supplied,live,true,|_|Ok(())))
     }
     #[cfg(test)]
     fn transfer_after(&self,ask:&Handoff,supplied:OperationId,live:impl Fn()->io::Result<()>,
         point:impl FnMut(Cut)->io::Result<()>)->io::Result<Moved>{
-        self.transfer_inner(ask,supplied,live,false,point)
+        self.with_transfer(|at|at.transfer_inner(ask,supplied,live,false,point))
     }
+}
+impl TransferAt<'_>{
     fn transfer_inner(&self,ask:&Handoff,supplied:OperationId,live:impl Fn()->io::Result<()>,
         wait_last:bool,mut point:impl FnMut(Cut)->io::Result<()>)->io::Result<Moved>{
         if supplied.0==[0;16]||supplied.0==[0xff;16]{return Err(invalid("reserved transfer operation ID"));}
-        let src=self.session.source;
+        let src=self.source;
         live()?;
         if let Some(done)=src.at(|db,c|Route::receipt(self,db,&c,ask,supplied))?{live()?;return Ok(done);}
         let (c,from_position,ordinary_parent)=src.at(|db,c|{
@@ -273,7 +298,7 @@ impl Tree<'_,'_>{
                 unchanged(db,&c)?;live()?;plan.release_unselected(db,old,1)
             })?;
         }
-        let within_authority=|db:&Connection,c:&Catalog|self.require(db,c,true);
+        let within_authority=|db:&Connection,c:&Catalog|self.authorized(db,c);
         let need=material.space(src,&plan.from,within_authority,&live)?;
         gates()?;
         let alias_at=||{
@@ -381,8 +406,8 @@ impl Tree<'_,'_>{
         if let Err(error)=result{
             // A failing COMMIT need not mean it was rolled back. Never move
             // again on that assumption. Only the exact receipt can settle it.
-            if !src.at(|db,c|{self.require(db,&c,true)?;plan.exists_at(db,op,true)}).unwrap_or(false){
-                if src.at(|db,c|{self.require(db,&c,true)?;plan.exists_at(db,op,false)}).unwrap_or(false){
+            if !src.at(|db,c|{self.authorized(db,&c)?;plan.exists_at(db,op,true)}).unwrap_or(false){
+                if src.at(|db,c|{self.authorized(db,&c)?;plan.exists_at(db,op,false)}).unwrap_or(false){
                     return Err(error);
                 }
                 return Err(io::Error::new(io::ErrorKind::ConnectionAborted,"transfer outcome unknown at the original SQL boundary"));
