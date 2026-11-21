@@ -30,11 +30,16 @@ from .snapshot_view import SnapshotView
 LIMIT = 16 << 10
 
 
-def mount_receipt(lines, point, token, parent_id):
-    # /proc mountinfo escapes precisely these bytes; no stat/open of our own waiting FUSE mount.
+def mountinfo_path(point):
     path = os.fsencode(point)
     for ch, encoded in ((b"\\", b"\\134"), (b" ", b"\\040"), (b"\t", b"\\011"), (b"\n", b"\\012")):
         path = path.replace(ch, encoded)
+    return path
+
+
+def mount_receipt(lines, point, token, parent_id):
+    # /proc mountinfo escapes precisely these bytes; no stat/open of our own waiting FUSE mount.
+    path = mountinfo_path(point)
     matches = []
     for line in lines.splitlines():
         a, sep, b = line.partition(b" - ")

@@ -15,6 +15,7 @@ class MountPane(QWidget):
         # Presence only: do not import the native binding, probe /dev/fuse or install anything.
         self.component = all(find_spec(n) is not None for n in ("zipworkspace._fuse3", "pyfuse3", "trio"))
         self.planning, self.process, self.origin = False, None, None
+        self.last, self.checking = None, False
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         layout = QVBoxLayout(self)
@@ -22,6 +23,8 @@ class MountPane(QWidget):
         actions = QHBoxLayout()
         self.pick = button("选择挂载点并预览…", self.choose)
         actions.addWidget(self.pick)
+        self.check = button("只读核对原挂载／卸载状态", self.check_original)
+        actions.addWidget(self.check)
         layout.addLayout(actions)
         # Window puts this strip outside the tab stack that unrelated background tasks disable.
         self.banner = QWidget()
@@ -39,6 +42,8 @@ class MountPane(QWidget):
         p = self.process
         self.pick.setEnabled(self.component and not self.planning and p is None and self.selection is not None
                              and self.selection.held is not None and not self.selection.held.closed)
+        self.check.setEnabled(not self.planning and not self.checking and self.last is not None
+                              and self.last.can_check_exit)
         can_cancel = p is not None and not p.sent and not p.cancelled and not p.exited
         self.cancel.setEnabled(can_cancel)
         if can_cancel:
@@ -79,6 +84,7 @@ class MountPane(QWidget):
                     self.result.setText("已取消；没有启动挂载助手。")
                     return
                 self.process = plan.launch(confirmed=True)
+                self._forget_last()
                 self.origin = s
                 self.timer.start(120)
                 self.result.setText(self.process.status())
@@ -109,14 +115,44 @@ class MountPane(QWidget):
         if p.exited:
             self.timer.stop()
             self.process = self.origin = None
+            if p.can_check_exit:
+                self._forget_last()
+                self.last = p
+            else:
+                p.close_observation()
         self.buttons()
+
+    def _forget_last(self):
+        old, self.last = self.last, None
+        if old is not None: old.close_observation()
+
+    def check_original(self):
+        original = self.last
+        if (original is None or not original.can_check_exit or self.planning or self.checking
+                or self.owner.pending is not None): return
+        self.checking = True
+        self.buttons()
+        def display(message, *, failed=False):
+            self.checking = False
+            if self.last is original:
+                self.result.setText(("本次挂载／卸载状态未知：" + str(message) + "\n" + original.instructions())
+                                    if failed else message)
+            self.buttons()
+        try:
+            pending = self.owner.job("正在只读核对原内核记录和挂载点；不会卸载…", original.check_exit, display,
+                                     failed=lambda err: display(err, failed=True))
+            if pending is None: self.checking = False; self.buttons()
+        except Exception as err:
+            display(err, failed=True)
 
     def close_window(self):
         if self.planning:
             self.owner.inform("请先关闭挂载预览。")
             return False
         p = self.process
-        if p is None: return True
+        if p is None:
+            self._forget_last()
+            return True
         p.poll()
         if p.sent and not p.exited:
             if not confirm(self, "只关闭窗口，不卸载", p.instructions() + "\n\n窗口关闭本身不停止助手；也不证明挂载仍在或已卸载。",
@@ -125,5 +161,6 @@ class MountPane(QWidget):
                 return False
         self.timer.stop()
         p.leave()  # Before G: cancel. After G: never kill the server or unmount a reused pathname.
+        self._forget_last()
         self.process = self.origin = None
         return True

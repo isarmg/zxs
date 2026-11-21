@@ -11,9 +11,34 @@ import sys
 import threading
 
 from ..archive import stamp
+from .._mount_child import mount_receipt, mountinfo_path
 from ..document import native_identity
+from ..linux_authority import ProcView, owned_directory
 from ..linux_mount import _ordinary_user, held_point, point_path
 from ..model import Rejected, new_id
+from ..private_freeze import mount_id
+
+MOUNTINFO_BUDGET = 2 << 20
+
+
+def mount_presence(rows, point, token, parent_id, original_id):
+    """An exact original mount, absence, or conflicting/incomplete evidence."""
+    if original_id == parent_id: raise Rejected("原挂载 ID 不能也是自己的父挂载")
+    if not 0 < len(rows) <= MOUNTINFO_BUDGET or not rows.endswith(b"\n"):
+        raise Rejected("内核挂载表没有完整读回")
+    path, source = mountinfo_path(point), ("zip-workspace-ro-" + token).encode("ascii")
+    related = []
+    for row in rows.split(b"\n")[:-1]:
+        head, sep, tail = row.partition(b" - ")
+        a, b = head.split(b" "), tail.split(b" ")
+        if not sep or len(a) < 6 or len(b) < 3 or not a[0].isdigit() or not a[1].isdigit():
+            raise Rejected("不能完整辨认本次挂载的内核记录")
+        if a[0] == original_id or a[4] == path or b[1] == source:
+            related.append(row)
+    if not related: return "absent"
+    if len(related) == 1 and mount_receipt(related[0], point, token, parent_id) == original_id:
+        return "present"
+    return "unknown"  # The ID may already have been reused; the point might hold another mount.
 
 
 class MountChoice:
@@ -69,8 +94,10 @@ class MountChoice:
             packet = json.dumps(req, ensure_ascii=True, separators=(",", ":")).encode("ascii")
             if len(packet) > 16384 or not os.path.isabs(sys.executable): raise Rejected("无法建立有界的本机助手交接")
             parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            witness = None
             try:
                 with child:
+                    witness = os.dup(self.leaf)  # Keep only the original empty point, not a second archive FD.
                     parent.setblocking(False)
                     if parent.send(packet) != len(packet): raise Rejected("未完整交接本次请求")
                     fds = (child.fileno(), self.doc.fileno(), *self.fds)
@@ -79,17 +106,20 @@ class MountChoice:
                     proc = subprocess.Popen([sys.executable, "-I", "-B", helper, *map(str, fds)], cwd="/", shell=False, close_fds=True,
                                             pass_fds=fds, start_new_session=True, stdin=subprocess.DEVNULL,
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return MountProcess(proc, parent, self.path, self.token)
+                return MountProcess(proc, parent, self.path, self.token, witness=witness, uid=self.uid)
             except BaseException:
-                parent.close(); raise
+                parent.close()
+                if witness is not None: os.close(witness)
+                raise
         finally:
             self.close()
 
 
 class MountProcess:
     """Single GUI-thread owner. Never kill, unmount, or issue a second start."""
-    def __init__(self, proc, link, point, token):
+    def __init__(self, proc, link, point, token, *, witness=None, uid=None):
         self.proc, self.link, self.point, self.token = proc, link, point, token
+        self.witness, self.uid = witness, uid
         self.ready = self.sent = self.cancelled = self.exited = self.accepted = False
         self.mid = self.error = None
         self.refused = False
@@ -97,10 +127,15 @@ class MountProcess:
     def _disconnect(self):
         if self.link is not None: self.link.close(); self.link = None
 
+    def close_observation(self):
+        fd, self.witness = self.witness, None
+        if fd is not None: os.close(fd)
+
     def cancel(self):
         if self.sent: return False
         self.cancelled = True
         self._disconnect()  # This process never sent G; its helper cannot pass authorize().
+        self.close_observation()
         return True
 
     def grant(self):
@@ -143,6 +178,7 @@ class MountProcess:
     def leave(self):
         if not self.sent: self.cancel()
         self._disconnect()
+        self.close_observation()
         if self.proc.poll() is None:
             threading.Thread(target=self.proc.wait, name="reap-mount-helper", daemon=True).start()
 
@@ -153,6 +189,34 @@ class MountProcess:
         return (f"在同一挂载命名空间另开终端，先执行：\nfindmnt --kernel --nocanonicalize --mountpoint {path} "
                 f"--output ID,TARGET,FSTYPE,SOURCE\n核对仅一项、类型为 fuse 或 fuse.*、SOURCE 为 {label}{ident}。"
                 f"只有仍是本次挂载才关闭占用并正常卸载：\nfusermount3 -u -- {path}\n不匹配或无法确认时不要卸载。")
+
+    @property
+    def can_check_exit(self):
+        return self.exited and self.sent and self.mid is not None and self.witness is not None
+
+    def check_exit(self):
+        if not self.can_check_exit:
+            raise Rejected("没有尚可核对身份的原挂载")
+        with ExitStack() as hold:
+            proc = ProcView(hold)
+            before = os.fstat(self.witness)
+            parent = mount_id(self.witness, read_proc=proc.read)
+            expected = (before.st_dev, before.st_ino, parent)
+            def observe():
+                rows = proc.read("mountinfo", MOUNTINFO_BUDGET)
+                return mount_presence(rows, self.point, self.token, parent, self.mid.encode("ascii"))
+            visible = observe()
+            if visible == "present":
+                return ("助手已退出，内核在本挂载命名空间仍列出这笔原只读挂载。\n" + self.instructions())
+            if visible == "unknown":
+                raise Rejected("出现其他挂载、重复名称或已用作别处的 ID；不判断是否已卸载")
+            # No stat through a live FUSE mount is needed. At most get metadata
+            # handles for the actual old directory chain, then re-read the table.
+            _, identities = owned_directory(hold, self.point, self.uid, proc.read, metadata_only=True)
+            if identities[-1] != expected or identities[-2][2] != parent or observe() != "absent":
+                raise Rejected("挂载点、父挂载或内核记录已变化；未确认卸载")
+        return ("本挂载命名空间已不见这笔原只读挂载，并核对到原目录重新可见。"
+                f"\n原挂载 ID：{self.mid}\n原位置：{self.point}")
 
     def status(self):
         if self.exited:

@@ -9,12 +9,12 @@ from .model import Rejected
 from .private_freeze import mount_id, mount_record
 
 
-def owned_directory(stack, path, uid, read_proc):
+def owned_directory(stack, path, uid, read_proc, *, metadata_only=False):
     # Hold each ancestor of the literal path. We never resolve a symlink or
     # continue under a newly selected directory after approval.
     descriptors, identities = [], []
     for i, part in enumerate(path.parts):
-        mode = os.O_RDONLY if i == len(path.parts)-1 else os.O_PATH
+        mode = os.O_RDONLY if not metadata_only and i == len(path.parts)-1 else os.O_PATH
         fd = os.open(part, mode | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                      dir_fd=descriptors[-1] if descriptors else None)
         stack.callback(os.close, fd)

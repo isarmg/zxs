@@ -83,6 +83,7 @@ class DesktopMount(unittest.TestCase):
             posted = choice.launch(confirmed=True)
             start.assert_called_once()
         self.addCleanup(posted._disconnect)
+        self.addCleanup(posted.close_observation)
         return posted
 
     def test_real_inherited_snapshot_and_ancestors_serve_the_displayed_node_without_opening_its_name(self):
@@ -179,6 +180,90 @@ class DesktopMount(unittest.TestCase):
                       line.replace(b"fuse.zip-workspace",b"ext4"), line.replace(token.encode(),b"7"*32),
                       line.replace(b"view\\040here",b"view")):
             self.assertIsNone(child.mount_receipt(wrong,path,token,b"5"))
+
+    def test_observation_refuses_reused_id_stacked_point_moved_label_or_incomplete_table(self):
+        token, path = "9"*32, Path("/private/view here")
+        root = b"5 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        original = (b"73 5 0:8 / /private/view\\040here ro,nosuid,nodev - fuse.zip-workspace "
+                    + ("zip-workspace-ro-"+token).encode()+b" ro\n")
+        def observe(rows): return action.mount_presence(rows, path, token, b"5", b"73")
+        self.assertEqual(observe(root), "absent")
+        self.assertEqual(observe(root+original), "present")
+        for altered in (original+original,
+                        original.replace(b"view\\040here", b"elsewhere"),
+                        original.replace(b"zip-workspace-ro-", b"other-"),
+                        original.replace(b"73 5 ", b"73 6 "),
+                        b"74 5 0:8 / /private/view\\040here rw - tmpfs other rw\n",
+                        b"73 5 0:8 / /elsewhere rw - tmpfs other rw\n"):
+            self.assertEqual(observe(root+altered), "unknown")
+        for invalid in (b"", root+original[:-1], root+b"truncated record\n"):
+            with self.assertRaises(Rejected): observe(invalid)
+
+    def test_exit_observation_requires_original_underlying_directory_and_reconfirms_the_table(self):
+        p = self.inherited()
+        self.assertTrue(os.path.samestat(os.fstat(p.witness), self.realpoint.stat()))
+        self.link.send(b"R"); p.poll(); p.grant(); self.assertEqual(self.link.recv(2),b"G")
+        from zipworkspace.private_freeze import mount_id
+        parent = mount_id(p.witness)
+        identifier = b"73" if parent != b"73" else b"74"
+        self.link.send(b"M" + identifier)
+        self.proc.poll.return_value = 0
+        p.poll()
+        self.assertIn("未据此认定已经卸载",p.status())
+        self.assertTrue(p.can_check_exit)
+        table = b"5 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
+        original = table + (identifier + b" " + parent + b" 0:8 / /view\\040here ro - fuse.zip-workspace "
+                            + ("zip-workspace-ro-"+p.token).encode()+b" ro\n")
+        rows = []
+        class NativeMetadata:
+            def __init__(self, _): pass
+            def read(self, name, limit):
+                if name == "mountinfo": return rows.pop(0)
+                with open("/proc/self/"+name, "rb") as real: return real.read(limit+1)
+
+        with mock.patch.object(action, "ProcView", new=NativeMetadata):
+            rows[:] = [original]
+            self.assertIn("仍列出这笔原只读挂载", p.check_exit())
+            rows[:] = [table, original]
+            with self.assertRaisesRegex(Rejected, "未确认卸载"): p.check_exit()
+            rows[:] = [table, table]
+            self.assertIn("原目录重新可见", p.check_exit())
+            self.assertEqual(rows, [])
+            self.realpoint.rename(self.root/"kept-original"); self.realpoint.mkdir(mode=0o700)
+            rows[:] = [table, table]
+            with self.assertRaisesRegex(Rejected, "未确认卸载"): p.check_exit()
+        p.close_observation()
+        self.assertFalse(p.can_check_exit)
+        self.proc.terminate.assert_not_called(); self.proc.kill.assert_not_called()
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra")
+    def test_qt_keeps_only_the_old_observation_after_exit_and_dispatches_no_unmount(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window(); self.addCleanup(win.close)
+        pane, p = win.archive.mount, self.inherited()
+        pane.set_snapshot(self.selection)
+        pane.process, pane.origin = p, self.selection
+        self.link.send(b"R"); p.poll(); p.grant(); self.assertEqual(self.link.recv(2), b"G")
+        self.link.send(b"M73"); self.proc.poll.return_value = 0
+        pane.poll()
+        self.assertIsNone(pane.process)
+        self.assertIs(pane.last, p)
+        self.assertIn("未据此认定已经卸载", pane.result.text())
+        self.assertTrue(pane.check.isEnabled())
+        future, works = Future(), []
+        def queue(work):
+            works.append(work); return future
+        with mock.patch.object(win.pool, "submit", side_effect=queue), \
+             mock.patch.object(action.subprocess, "Popen", side_effect=AssertionError("no mount or unmount helper")), \
+             mock.patch.object(p, "check_exit", return_value="已在原命名空间查到原目录") as observe:
+            pane.check.click()
+            future.set_result(works[0]()); win.poll()
+        observe.assert_called_once()
+        self.assertIn("查到原目录", pane.result.text())
+        self.assertTrue(pane.close_window())
+        self.assertIsNone(pane.last); self.assertIsNone(p.witness)
 
     @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra")
     def test_qt_cancel_and_changed_selection_do_not_spawn_or_grant(self):
