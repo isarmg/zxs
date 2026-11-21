@@ -13,9 +13,16 @@ from .model import CHUNK, MAX_CD, MAX_MEMBERS, MAX_TOTAL, Commit, Manifest, Reje
 EOCD = struct.Struct("<4s4H2IH")
 LOC = struct.Struct("<4sIQI")
 EOCD64 = struct.Struct("<4sQ2H2I4Q")
+LOCAL = struct.Struct("<4s5H3I2H")
+ZIP64_LIMIT = 0xffffffff
 
 
 def bounded_directory(f, end=None, *, check=None):
+    count, start, _ = _directory_layout(f, end, check=check)
+    return count, start
+
+
+def _directory_layout(f, end=None, *, check=None):
     if check is not None: check()
     if end is None: end = f.seek(0, os.SEEK_END)
     if end < EOCD.size or end > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
@@ -54,10 +61,10 @@ def bounded_directory(f, end=None, *, check=None):
     if count * 46 > cd_size:
         raise Rejected("invalid declared member count")
     _check_records(f, count, cd_offset, pos, check=check)
-    return count, cd_offset
+    return count, cd_offset, pos
 
 
-def _check_records(f, count, cd_offset, pos, *, check=None):
+def _check_records(f, count, cd_offset, pos, *, check=None, forms=None):
     # Do not let a lying EOCD count cause ZipFile to materialize an unbounded
     # number of objects from the central directory. Check each fixed record.
     f.seek(cd_offset)
@@ -69,14 +76,20 @@ def _check_records(f, count, cd_offset, pos, *, check=None):
         name_len, extra_len, comment_len, volume = struct.unpack_from("<4H", header, 28)
         if not name_len or volume or f.seek(name_len + extra_len + comment_len, os.SEEK_CUR) > pos:
             raise Rejected("invalid central directory lengths or volume")
+        if forms is not None:
+            # Keep original size and offset sentinels before ZipInfo expands them.
+            compressed, size = struct.unpack_from("<II", header, 20)
+            offset, = struct.unpack_from("<I", header, 42)
+            forms.append((compressed == ZIP64_LIMIT) | ((size == ZIP64_LIMIT) << 1)
+                         | ((offset == ZIP64_LIMIT) << 2))
     if f.tell() != pos: raise Rejected("extra central directory entries")
 
 
 class _IndexedInput:
     """Constrain zipfile's own, second footer/directory read to the selected EOF and budgets."""
-    def __init__(self, file, end, count, central, *, check=None):
+    def __init__(self, file, end, count, central, *, central_end=None, check=None):
         self.file, self.end, self.count, self.central = file, end, count, central
-        self.check = check
+        self.check, self.central_end, self.forms = check, central_end, None
 
     def tell(self): return self.file.tell()
     def seekable(self): return True
@@ -96,13 +109,14 @@ class _IndexedInput:
         if n > CHUNK and pos != self.central: raise Rejected("central directory moved during admission")
         data = self.file.read(n)
         if len(data) != n: raise Rejected("selected ZIP changed length during admission")
-        if n > CHUNK: _check_records(io.BytesIO(data), self.count, 0, n, check=self.check)
+        if self.central_end is not None and pos == self.central and n == self.central_end - pos:
+            forms = []
+            _check_records(io.BytesIO(data), self.count, 0, n, check=self.check, forms=forms)
+            self.forms = tuple(forms)
+        elif n > CHUNK:
+            raise Rejected("unexpected central directory length during admission")
         if self.check is not None: self.check()
         return data
-
-
-LOCAL = struct.Struct("<4s5H3I2H")
-ZIP64_LIMIT = 0xffffffff
 
 
 def _zip64_extra(extra):
@@ -114,7 +128,7 @@ def _zip64_extra(extra):
         i += 4
         if i + length > len(extra): raise Rejected("invalid ZIP extra length")
         if field == 1:
-            if zi is not None: raise Rejected("duplicate local ZIP64 extra field")
+            if zi is not None: raise Rejected("duplicate ZIP64 extra field")
             zi = extra[i:i+length]
         if field == 0x9901: raise Rejected("encrypted ZIP metadata is not accepted")
         i += length
@@ -122,18 +136,37 @@ def _zip64_extra(extra):
 
 
 def _local_sizes(extra, uncompressed, compressed):
-    required = (uncompressed == ZIP64_LIMIT, compressed == ZIP64_LIMIT)
     zi = _zip64_extra(extra)
-    values = [uncompressed,compressed]
-    pos = 0
-    for n, needed in enumerate(required):
-        if needed:
-            if zi is None or len(zi)-pos < 8: raise Rejected("missing local ZIP64 entry size")
-            values[n] = struct.unpack_from("<Q", zi, pos)[0]; pos += 8
-    return values, any(required)
+    wide = ZIP64_LIMIT in (uncompressed, compressed)
+    if wide:
+        if (uncompressed, compressed) != (ZIP64_LIMIT, ZIP64_LIMIT) or zi is None or len(zi) != 16:
+            raise Rejected("local ZIP64 must provide both entry sizes")
+        return struct.unpack("<QQ", zi), True
+    if zi is not None: raise Rejected("unexpected local ZIP64 size block")
+    return (uncompressed, compressed), False
 
 
-def _local_header(f, item, central_at):
+def _descriptor(f, item, start, stop, wide, central_form):
+    width = stop - start
+    # APPNOTE 4.3.9: two sizes use ZIP64 width when they are widened. In
+    # particular a large physical offset alone is not a large member size;
+    # both standard wide and CPython's narrow streamed layout occur there.
+    if wide or central_form & 3:
+        allowed = (20, 24)
+    elif central_form & 4:
+        allowed = (12, 16, 20, 24)
+    else:
+        allowed = (12, 16)
+    if width not in allowed:
+        raise Rejected("unsupported streamed ZIP descriptor width or member boundary")
+    f.seek(start)
+    descriptor = struct.pack("<IQQ" if width >= 20 else "<III", item.CRC, item.compress_size, item.file_size)
+    if width in (16, 24): descriptor = b"PK\x07\x08" + descriptor
+    if f.read(width) != descriptor:
+        raise Rejected("streamed ZIP descriptor does not describe its actual member")
+
+
+def _local_header(f, item, stop, central_form):
     # zipfile verifies the payload CRC and local filename when opening. Check
     # the format declarations too: many ordinary tools consult the local header.
     f.seek(item.header_offset)
@@ -144,29 +177,27 @@ def _local_header(f, item, central_at):
         raise Rejected("local and central Store/encryption declarations disagree")
     start = item.header_offset + LOCAL.size + nlen + xlen
     end = start + item.compress_size
-    if nlen > 4096 or end > central_at: raise Rejected("local member outside archive budget")
+    if not 0 < nlen <= 4096 or end > stop: raise Rejected("local member outside its physical boundary")
     name = f.read(nlen)
-    if name.decode("utf-8" if flags & 0x800 else "cp437") != item.orig_filename:
+    if len(name) != nlen or name.decode("utf-8" if flags & 0x800 else "cp437") != item.orig_filename:
         raise Rejected("local and central member names disagree")
-    sizes, big = _local_sizes(f.read(xlen), size, compressed)
+    extra = f.read(xlen)
+    if len(extra) != xlen: raise Rejected("incomplete local ZIP extra field")
+    sizes, big = _local_sizes(extra, size, compressed)
+    if big and (version & 0xff) < 45: raise Rejected("local ZIP64 version is lower than 4.5")
     targets = (item.file_size,item.compress_size)
     if not flags & 8:
-        if crc != item.CRC or tuple(sizes) != targets:
+        if crc != item.CRC or sizes != targets:
             raise Rejected("local sizes or CRC disagree with central record")
         return start
     if crc not in (0,item.CRC) or any(a not in (0,b) for a,b in zip(sizes,targets)):
         raise Rejected("streamed local member disagrees with central record")
     if item.file_size >= ZIP64_LIMIT or item.compress_size >= ZIP64_LIMIT: big = True
-    descriptor = struct.pack("<IQQ" if big else "<III", item.CRC, item.compress_size, item.file_size)
-    f.seek(end)
-    remaining = min(len(descriptor)+4, central_at-end)
-    after = f.read(remaining)
-    if not (after.startswith(descriptor) or after.startswith(b"PK\x07\x08"+descriptor)):
-        raise Rejected("streamed ZIP descriptor does not describe its actual member")
+    _descriptor(f, item, end, stop, big, central_form)
     return start
 
 
-def _member_header(f, item, central_at):
+def _member_header(f, item, stop, central_form):
     directory = item.is_dir()
     if item.orig_filename != item.filename or item.compress_type != zipfile.ZIP_STORED or item.flag_bits & ~0x808:
         raise Rejected("only ordinary unencrypted Store entries are supported")
@@ -175,27 +206,40 @@ def _member_header(f, item, central_at):
     kind = stat.S_IFMT(item.external_attr >> 16) if item.create_system == 3 else 0
     if kind not in (0, stat.S_IFDIR if directory else stat.S_IFREG) or item.external_attr & 0x400:
         raise Rejected("links, devices and reparse entries are not accepted")
-    _zip64_extra(item.extra)
-    return directory, _local_header(f, item, central_at)
+    zi = _zip64_extra(item.extra)
+    if (zi is not None) != bool(central_form) or (
+            zi is not None and (len(zi) != central_form.bit_count()*8 or item.extract_version < 45)):
+        raise Rejected("central ZIP64 fields or version do not match the original sentinels")
+    return directory, _local_header(f, item, stop, central_form)
 
 
 @contextmanager
-def _selected_index(document, length, marker):
-    count, central = bounded_directory(document, length)
-    with zipfile.ZipFile(_IndexedInput(document, length, count, central), "r") as archive:
-        if len(archive.filelist) != count or (marker is not None and Commit.decode(archive.comment) != marker):
+def _selected_index(document, length, marker=None, *, check=None):
+    count, central, cd_end = _directory_layout(document, length, check=check)
+    reader = _IndexedInput(document, length, count, central, central_end=cd_end, check=check)
+    with zipfile.ZipFile(reader, "r") as archive:
+        if (len(archive.filelist) != count or archive.start_dir != central or reader.forms is None
+                or (marker is not None and Commit.decode(archive.comment) != marker)):
             raise Rejected("the selected snapshot directory or marker changed")
-        yield archive, central
+        physical = sorted(zip(archive.infolist(), reader.forms, strict=True), key=lambda entry: entry[0].header_offset)
+        lanes = []
+        for i, (item, form) in enumerate(physical):
+            if check is not None: check()
+            stop = physical[i+1][0].header_offset if i+1 < count else central
+            if not 0 <= item.header_offset <= stop - LOCAL.size or stop > central:
+                raise Rejected("local ZIP member headers overlap or leave the data region")
+            lanes.append((item, stop, form))
+        yield archive, lanes
 
 
 @contextmanager
 def stored_member(document, length, marker, name, size, *, locate=False):
     """Bound one admitted Store member; optionally return the verified physical body start."""
-    with _selected_index(document, length, marker) as (archive, central):
-        matches = [item for item in archive.infolist() if item.filename == name]
+    with _selected_index(document, length, marker) as (archive, lanes):
+        matches = [lane for lane in lanes if lane[0].filename == name]
         if len(matches) != 1: raise Rejected("cannot identify the exact original member")
-        item, = matches
-        directory, start = _member_header(document, item, central)
+        (item, stop, form), = matches
+        directory, start = _member_header(document, item, stop, form)
         if directory or item.file_size != size or (size == 0 and item.CRC):
             raise Rejected("the selected ordinary member changed")
         with archive.open(item) as source:
@@ -206,12 +250,12 @@ def stored_member(document, length, marker, name, size, *, locate=False):
 def stored_subtree(document, length, marker, root, rows):
     """Bind one admitted subtree against a single index, before creating a writer."""
     prefix = root + "/"
-    with _selected_index(document, length, marker) as (archive, central):
+    with _selected_index(document, length, marker) as (archive, lanes):
         files, explicit, accounted = [], set(), set()
-        for item in archive.infolist():
+        for item, stop, form in lanes:
             if item.filename == root: raise Rejected("selected directory is a file in this index")
             if not item.filename.startswith(prefix): continue
-            directory, _ = _member_header(document, item, central)
+            directory, _ = _member_header(document, item, stop, form)
             relative = item.filename[len(prefix):]
             if directory and relative: relative = relative[:-1]
             if relative in explicit: raise Rejected("duplicated record in selected subtree")
@@ -237,16 +281,10 @@ def stored_subtree(document, length, marker, root, rows):
 @contextmanager
 def stored_plain(document, length, rows):
     """Reconcile every local declaration with a previous read of this selected ordinary ZIP."""
-    with _selected_index(document, length, None) as (archive, central):
+    with _selected_index(document, length) as (archive, lanes):
         listed, files = Manifest(), []
-        limit = central
-        # The next physical local header is a stricter boundary than the
-        # central table, including for any streamed data descriptor.
-        for item in sorted(archive.infolist(), key=lambda row: row.header_offset, reverse=True):
-            if not 0 <= item.header_offset < limit:
-                raise Rejected("ordinary ZIP member ranges overlap")
-            directory, _ = _member_header(document, item, limit)
-            limit = item.header_offset
+        for item, stop, form in lanes:
+            directory, _ = _member_header(document, item, stop, form)
             name = item.filename[:-1] if directory else item.filename
             if not item.file_size and item.CRC:
                 raise Rejected("empty ZIP entry cannot have a nonzero CRC")
@@ -299,9 +337,9 @@ def read_archive(path, *, managed=True, sink: Path | None = None, internal=False
     return _read_checked(path.open("rb"), managed=managed, sink=_PathSink(sink) if sink is not None else None)
 
 
-def read_managed_document(document, *, display_name: str, observer=None, fixed_window=False):
+def read_managed_document(document, *, display_name: str, observer=None):
     """Verify one selected open file without closing it, reopening its name, or extracting."""
-    return _managed_document(document, display_name, None, observer=observer, fixed_window=fixed_window)
+    return _managed_document(document, display_name, None, observer=observer)
 
 
 def read_indexed_document(document, *, display_name: str):
@@ -311,15 +349,14 @@ def read_indexed_document(document, *, display_name: str):
     return marker, manifest, blocks  # Never expose the partial index of a rejected archive.
 
 
-def _managed_document(document, display_name, blocks, *, observer=None, fixed_window=False):
+def _managed_document(document, display_name, blocks, *, observer=None):
     if not display_name or "/" in display_name or "\\" in display_name or Path(display_name).suffix.lower() != ".zxs":
         raise Rejected("select a managed .zxs document")
     if not document.seekable() or not stat.S_ISREG(os.fstat(document.fileno()).st_mode):
         raise Rejected("select a seekable regular file or a completed private copy")
     position = document.tell()
     try:
-        return _read_checked(nullcontext(document), managed=True, sink=None, blocks=blocks, observer=observer,
-                             fixed_window=fixed_window)
+        return _read_checked(nullcontext(document), managed=True, sink=None, blocks=blocks, observer=observer)
     finally:
         document.seek(position)
 
@@ -343,25 +380,20 @@ def read_plain_document(document, *, observer=None):
     return _read_checked(nullcontext(document), managed=False, sink=None, observer=observer)[1]
 
 
-def _read_checked(source, *, managed, sink, blocks=None, observer=None, fixed_window=False):
+def _read_checked(source, *, managed, sink, blocks=None, observer=None):
     if not managed and sink is not None:
         raise Rejected("ordinary ZIP extraction is not admitted")
     with source as f:
         check = observer.check if observer is not None else None
         if observer is not None: observer.begin("layout")
         before = stamp(f)
-        fixed_window = fixed_window or blocks is not None or not managed or observer is not None
-        expected_count, central_at = bounded_directory(f, before[2] if fixed_window else None, check=check)
-        reader = _IndexedInput(f, before[2], expected_count, central_at, check=check) if fixed_window else f
-        with zipfile.ZipFile(reader, "r") as z:
-            if len(z.filelist) != expected_count:
-                raise Rejected("central directory member count disagrees with its footer")
+        with _selected_index(f, before[2], check=check) as (z, lanes):
             marker = Commit.decode(z.comment) if managed else None
             manifest = Manifest()
             items = []
-            for item in z.infolist():
+            for item, stop, form in lanes:
                 if check is not None: check()
-                d, start = _member_header(f, item, central_at)
+                d, start = _member_header(f, item, stop, form)
                 name = item.filename[:-1] if d else item.filename
                 manifest.add(name, d, item.file_size, None)
                 items.append((item, name, d))

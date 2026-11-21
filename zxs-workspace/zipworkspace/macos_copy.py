@@ -87,7 +87,7 @@ class SnapshotCopy:
                 fd = self.check_names()
                 self.new_leaf(fd)
                 # Pin exact original ZIP bytes to the same file and complete logical evidence.
-                marker, _ = read_managed_document(self.src, display_name=self.original_name, fixed_window=True)
+                marker, _ = read_managed_document(self.src, display_name=self.original_name)
                 digest = archive_sha(self.src)
                 if marker != self.selected.browser.commit or self.selected.exact and digest != self.selected.exact.sha256:
                     raise Rejected("原节点或原 ZIP 字节与所选快照不符")

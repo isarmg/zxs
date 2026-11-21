@@ -68,7 +68,7 @@ class Browse(unittest.TestCase):
             with self.path.open("rb", buffering=0) as original:
                 original.seek(7)
                 borrowed = PositionalDocument(original.fileno(), len(initial))
-                found, tree = read_managed_document(borrowed, display_name=self.path.name, fixed_window=True)
+                found, tree = read_managed_document(borrowed, display_name=self.path.name)
                 self.assertEqual(found, marker)
                 self.assertEqual(tree.digest(), marker.tree)
                 self.assertEqual(archive_sha(borrowed), hashlib.sha256(initial).hexdigest())
