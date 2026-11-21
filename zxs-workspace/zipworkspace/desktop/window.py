@@ -143,7 +143,7 @@ class Window(QMainWindow):
         open_snapshot = files.addAction("打开 .zxs 快照…")
         open_snapshot.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         open_snapshot.triggered.connect(lambda _checked=False: self.archive.choose())
-        if sys.platform == "linux":
+        if sys.platform in ("linux", "darwin"):
             save_folder = files.addAction("从现有目录生成全新 .zxs…")
             save_folder.triggered.connect(lambda _checked=False: self.archive.choose_folder_snapshot())
         files.addAction("关闭当前快照").triggered.connect(lambda _checked=False: self.archive.close_snapshot())

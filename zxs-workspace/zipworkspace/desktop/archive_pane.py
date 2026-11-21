@@ -173,10 +173,14 @@ class ArchivePane(QWidget):
         self.folder_snapshot = None  # Revokes a choice still in a modal picker/confirmation.
 
     def choose_folder_snapshot(self):
-        if sys.platform != "linux" or self.folder_snapshot is not None or self.owner.pending is not None:
+        if sys.platform not in ("linux", "darwin") or self.folder_snapshot is not None or self.owner.pending is not None:
             return
         from ..comparison import Folder
-        from .member_copy import FolderSnapshot
+        darwin = sys.platform == "darwin"
+        if darwin:
+            from ..macos_copy import FolderSnapshot
+        else:
+            from .member_copy import FolderSnapshot
 
         request = self.folder_snapshot = object()
         plan = folder = None
@@ -212,13 +216,16 @@ class ArchivePane(QWidget):
                 finish(None, error)
                 return
             try:
+                terms = "我已暂停编辑和同步，所选目录不移动、不改动；同意仅在此新位置生成这个文件。"
+                if darwin:
+                    terms += "目的目录由我独占、不会同步；失败或取消可以保留确认页所列的私有暂存。"
                 if (not current() or plan.cancelled.is_set() or not confirm(
                         self, "从原目录生成一个新的快照", detail,
-                        attestation="我已暂停编辑和同步，所选目录不移动、不改动；同意仅在此新位置生成这个文件。",
+                        attestation=terms,
                         action_text="生成新 .zxs") or not current() or plan.cancelled.is_set()):
                     finish("未创建快照；没有登记目录或写入目的文件。")
                     return
-                if not submit("正在从原目录生成匿名快照，还没有发布…", lambda: plan.run(confirmed=True), finish):
+                if not submit("正在从原目录制作快照，还没有发布…", lambda: plan.run(confirmed=True), finish):
                     finish("窗口正在执行另一项；未创建快照。")
             except Exception as error:
                 finish(None, error)

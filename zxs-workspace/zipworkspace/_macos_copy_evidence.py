@@ -1,6 +1,7 @@
-"""macOS evidence for copying a complete, marked archive. Never creates or changes a label."""
+"""Native macOS evidence for whole-archive writes. Never creates or changes a label."""
 from contextlib import ExitStack, contextmanager
 import ctypes as C
+import errno
 from functools import lru_cache
 import os
 import stat
@@ -13,8 +14,11 @@ from .model import Rejected
 
 # sys/attr.h, sys/fcntl.h, sys/clonefile.h and CoreFoundation/CFURL.h.
 _UUID, _FSTYPE, _RET = 0x40000, 0x100000, 0x80000000
+_CAPABILITIES, _EXCLUSIVE_RENAME = 0x20000, 0x80000  # sys/attr.h
+_MNT_QUARANTINE = 0x400  # sys/mount.h: volume-wide quarantine
 _ZONE = b"com.apple.quarantine"
 _WHERE = b"com.apple.metadata:kMDItemWhereFroms"
+_RESOURCE = b"com.apple.ResourceFork"
 _LIMIT = {_ZONE: 4096, _WHERE: 16384}
 
 
@@ -92,12 +96,13 @@ class Native:
         return values
 
     @contextmanager
-    def quarantine(self, path, fd):
-        """Read a fresh file-reference URL. Never serialize, log or set its dictionary."""
+    def _quarantine_property(self, path, fd, directory):
+        """One fresh system query on a reference to this exact held vnode."""
         bpath = os.fsencode(path)
+        kind = stat.S_IFDIR if directory else stat.S_IFREG
         def match(raw):
-            held = native_identity(os.fstat(fd), stat.S_IFREG)
-            if native_identity(os.stat(raw, follow_symlinks=False), stat.S_IFREG) != held:
+            held = native_identity(os.fstat(fd), kind)
+            if native_identity(os.stat(raw, follow_symlinks=False), kind) != held:
                 raise Rejected("系统查询的文件不是选定原件")
         match(bpath)
         with ExitStack() as stack:
@@ -105,7 +110,7 @@ class Native:
                 if not value: raise Rejected("系统无法将来源查询绑定到现有文件")
                 stack.callback(self.release, value)
                 return value
-            uri = own(self.make_url(None, bpath, len(bpath), False))
+            uri = own(self.make_url(None, bpath, len(bpath), directory))
             ref = own(self.make_ref(None, uri, None))
             def check_ref():
                 with ExitStack() as paths:
@@ -121,11 +126,39 @@ class Native:
             prop = C.c_void_p()
             ok = self.property(ref, self.key, C.byref(prop), None)
             if prop.value: stack.callback(self.release, prop.value)
-            if not ok or not prop.value or self.type(prop.value) != self.dict_type() or not 0 < self.count(prop.value) <= 64:
-                raise Rejected("macOS 未返回可核实的隔离来源；不会补造来源")
+            if not ok: raise Rejected("macOS 无法确定原件的隔离来源；不会当成无标记")
             check_ref()
             yield prop.value
             check_ref()
+
+    @contextmanager
+    def quarantine(self, path, fd):
+        """Read a positive quarantine value; never serialize, log or set it."""
+        with self._quarantine_property(path, fd, False) as prop:
+            if not prop or self.type(prop) != self.dict_type() or not 0 < self.count(prop) <= 64:
+                raise Rejected("macOS 未返回可核实的隔离来源；不会补造来源")
+            yield prop
+
+    def no_payload_metadata(self, path, fd, *, directory=False):
+        # A positive null from the public CFURL query is distinct from an
+        # error. Also require a successful empty visible FD attribute list;
+        # never inspect/copy the values or treat an unsupported query as empty.
+        self.no_acl(fd)
+        def empty():
+            n = self.names(fd, None, 0, 0)
+            if n < 0: raise _error("无法从原句柄读取扩展属性清单")
+            if n: raise Rejected("所选目录内容带扩展属性、隔离标记或资源叉，不生成省略这些信息的快照")
+        empty()
+        if not directory:
+            # A size probe reads no fork payload. A zero-length present fork
+            # is still metadata. Only Darwin's explicit not-present is clean.
+            n = self.value(fd, _RESOURCE, None, 0, 0, 0)
+            if n >= 0: raise Rejected("原件有资源叉，不生成省略这些信息的快照")
+            if C.get_errno() != getattr(errno, "ENOATTR", None):
+                raise _error("无法从原句柄排除资源叉")
+        with self._quarantine_property(path, fd, directory) as prop:
+            if prop is not None: raise Rejected("原件有系统隔离来源，不生成独立快照")
+            empty()
 
 
 @lru_cache(maxsize=1)
@@ -135,7 +168,7 @@ def native():
         raise Rejected("本系统未提供全部原生来源和权限查询；未启用备用复制方式") from err
 
 
-def apfs(fd):
+def apfs(fd, *, fresh_snapshot=False):
     """Ask the open vnode, not a mount-name lookup. Require the actual volume UUID and APFS name."""
     macos_read.resident("所选归档或目录", fd)
     _, _, attrs = macos_read._require()
@@ -150,11 +183,35 @@ def apfs(fd):
     flags, = struct.unpack_from("=I", raw, 24)
     if not flags & 0x1000 or flags & (0x00200000 | 0x1):  # MNT_LOCAL; no ignored ownership/read-only mount
         raise Rejected("需要启用真实所有权的本机可写卷")
+    if fresh_snapshot and flags & _MNT_QUARANTINE:
+        raise Rejected("原卷有系统卷级隔离，不能制作新的独立快照")
     volume = raw[28:44]
     off, n = struct.unpack_from("=iI", raw, 44)
     if not any(volume) or off < 8 or n != 5 or 44 + off + n > size or raw[44+off:44+off+n] != b"apfs\0":
         raise Rejected("只支持可确证的本地 APFS 卷")
     return os.fstat(fd).st_dev, volume
+
+
+def require_exclusive_rename(fd):
+    # Only the actual held volume can qualify RENAME_EXCL; requesting a
+    # capability, or seeing an unknown bit as zero, does not prove support.
+    _, _, attrs = macos_read._require()
+    req = macos_read._Attributes(5, 0, _RET, _RET | _CAPABILITIES)
+    result = (C.c_uint32 * 14)()
+    if attrs(fd, C.byref(req), result, C.sizeof(result), 4):
+        raise _error("无法核实原卷的无覆盖改名能力")
+    size, common, vol, dirs, files, forks = result[:6]
+    if (size != C.sizeof(result) or common != _RET or vol not in (_CAPABILITIES, _RET | _CAPABILITIES)
+            or dirs or files or forks or not (result[7] & result[11] & _EXCLUSIVE_RENAME)):
+        raise Rejected("原卷未明确返回无覆盖改名能力")
+
+
+def check_literal_path(path, fd):
+    # XNU fcntl(F_GETPATH) takes at least MAXPATHLEN bytes (1024).
+    import fcntl
+    result = fcntl.fcntl(fd, 50, bytes(1024))
+    if result.partition(b"\0")[0] != os.fsencode(path):
+        raise Rejected("原句柄的系统路径与所选的准确名称不一致")
 
 
 def check_spelling(fd, leaf):
