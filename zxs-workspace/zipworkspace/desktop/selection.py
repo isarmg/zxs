@@ -133,7 +133,7 @@ class _DisplayFD:
 
 @dataclass(frozen=True, slots=True)
 class PlainSelection:
-    """Verified ordinary ZIP display; only the Linux extractor needs its original FD."""
+    """Verified ordinary ZIP display with a borrowable read-only original FD."""
     preview: plain_import.Preview
     observed: tuple[int, int, int, int, int]
     rows: MappingProxyType

@@ -10,7 +10,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace.desktop import text_preview
-from zipworkspace.desktop.selection import Selection
+from zipworkspace.desktop.selection import PlainSelection, Selection
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
@@ -37,6 +37,43 @@ class DesktopTextPreview(unittest.TestCase):
     def get(self, selected, *, check=lambda: None, indexed=False):
         return text_preview.prepare(selected, "folder", selected.browser.entry("folder", "notes"),
                                     check=check, indexed=indexed)
+
+    def ordinary(self, payload):
+        self.count += 1
+        path = self.root / f"ordinary-{self.count}.zip"
+        with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_STORED) as z:
+            z.writestr("folder/notes", payload)
+            z.writestr("other/notes", b"not the selected file")
+            z.comment = b"zip-workspace/1\nnot a valid managed marker"
+        selected = PlainSelection.open(path, retain=True)
+        self.addCleanup(selected.release_display)
+        return selected
+
+    def test_ordinary_zip_uses_the_original_row_without_interpreting_its_comment(self):
+        raw = "<literal>\r\n中文𠀀".encode()
+        selected = self.ordinary(raw)
+        row = selected.index.entry("folder", "notes")
+        other = selected.index.entry("other", "notes")
+        fd = selected.held.fileno()
+        os.lseek(fd, 19, os.SEEK_SET)
+        with patch.object(os, "open", side_effect=AssertionError("no reopen or writer")), \
+             patch.object(text_preview, "stored_member", wraps=text_preview.stored_member) as binds:
+            report = text_preview.prepare(selected, "folder", row, check=lambda: None)
+        self.assertEqual(binds.call_args.args[2:5], (None, "folder/notes", len(raw)))
+        self.assertEqual((report.path, report.pages), ("folder/notes", ("<literal>\n中文𠀀",)))
+        self.assertEqual(os.lseek(fd, 0, os.SEEK_CUR), 19)
+        with self.assertRaises(Rejected): text_preview.prepare(selected, "folder", other, check=lambda: None)
+        self.assertFalse(hasattr(selected, "browser"))  # No repository/branch identity has been adopted.
+
+    def test_ordinary_zip_can_jump_to_the_last_checked_text_page_on_the_original_fd(self):
+        selected = self.ordinary(b"a" * text_preview.CHUNK + b"literal tail")
+        member = selected.index.entry("folder", "notes")
+        proof = text_preview.prepare(selected, "folder", member, check=lambda: None, indexed=True)
+        with patch.object(os, "open", side_effect=AssertionError("no reopen or writer")), \
+             patch.object(text_preview, "stored_member", side_effect=AssertionError("jump does not reread the ZIP index")):
+            self.assertEqual(proof.page(proof.count - 1, check=lambda: None), "literal tail")
+        selected.release_display()
+        with self.assertRaises(Rejected): proof.page(0, check=lambda: None)
 
     def test_only_original_selected_body_and_plain_unicode_no_named_reopen(self):
         raw = b"<literal>\r\n" + "中文𠀀".encode()
@@ -190,6 +227,56 @@ class DesktopTextPreview(unittest.TestCase):
         self.assertEqual(literal.toPlainText(), "<literal>")
         pane.close_text()
         self.assertIsNone(pane.text_dialog)
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional Qt source fixture")
+    def test_ordinary_zip_qt_literal_result_needs_a_current_confirmed_row(self):
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit
+        from zipworkspace.desktop import import_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        pane = win.plain_import
+        chosen = self.ordinary(b"<literal>")
+        pane.show_selection(chosen)
+        win.tabs.setCurrentWidget(pane)
+        try:
+            def select():
+                pane.show_folder("folder"); pane.files.selectRow(0)
+                self.assertTrue(pane.preview_file.isEnabled())
+            select()
+            with patch.object(import_pane, "confirm", return_value=False), \
+                 patch.object(win.pool, "submit", side_effect=AssertionError("not confirmed")):
+                pane.preview_file.click()
+
+            def queued():
+                select()
+                task = Future()
+                with patch.object(import_pane, "confirm", return_value=True), \
+                     patch.object(win.pool, "submit", return_value=task) as job:
+                    pane.preview_file.click()
+                return task, job.call_args.args[0]
+
+            old, work = queued()
+            old.set_result(work())
+            pane.show_folder("other"); pane.files.selectRow(0)  # Same basename, different original row.
+            win.poll()
+            self.assertIsNone(pane.text_dialog)
+
+            fresh, work = queued()
+            fresh.set_result(work()); win.poll()
+            literal = pane.text_dialog.findChild(QPlainTextEdit)
+            self.assertTrue(literal.isReadOnly())
+            self.assertEqual(literal.toPlainText(), "<literal>")
+            pane.release_display()
+            self.assertIsNone(pane.text_dialog)
+            self.assertTrue(chosen.held.closed)
+            self.assertIsNone(win.archive.selection)
+            self.assertIsNone(win.archive.checkout.live)
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
     @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
                          "optional Qt source fixture")

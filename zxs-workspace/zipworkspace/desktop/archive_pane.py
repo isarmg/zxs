@@ -1,7 +1,6 @@
 """Real archive navigation, selected store, branch head and historical node actions."""
 from pathlib import Path
 import sys
-from threading import Event
 
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout, QWidget
 
@@ -177,60 +176,13 @@ class ArchivePane(QWidget):
         if (selected is None or view is None or entry is None or entry.kind != "file" or
                 self.owner.pending is not None or self.text_dialog is not None):
             return
-        from . import text_preview
-        from ..model import Rejected
+        from .text_preview import request_for_row
 
         def current():
             return (selected is self.selection and view is self.file_page and entry is self.files.item() and
                     selected.held is not None and not selected.held.closed)
 
-        name = f"{view.directory}/{entry.name}" if view.directory else entry.name
-        size = entry.size_bytes
-        if indexed and size <= text_preview.LIMIT: return
-        if indexed:
-            reading = "\n全文作为严格 UTF-8 检查；核完才可按页码跳读，可能耗时。"
-        elif size <= text_preview.LIMIT:
-            reading = "\n显示通过 UTF-8 核验的全文。"
-        else:
-            reading = "\n仅判断并显示通过核验的开头最多 256 KiB，后续不判定为文本。"
-        if not current() or not confirm(self, "核验后查看纯文本",
-                f"归档：{str(selected.path)!r}\n成员：{name!r}\n将从本次原件读取全部 {size:,} 字节。"
-                + reading + "\n不打开外部应用、不写文件；可取消。",
-                attestation="我确认只查看所选成员，不启动任何程序。", action_text="核验后预览") or not current():
-            return
-        stopped = Event()
-
-        def cancel():
-            stopped.set()
-            return True
-
-        def check():
-            if stopped.is_set(): raise Rejected("已取消本次预览，未显示或保存正文。")
-
-        def read():
-            try: return text_preview.prepare(selected, view.directory, entry, check=check, indexed=indexed), None
-            except Exception as error: return None, error
-
-        def apply(result):
-            preview, error = result
-            if stopped.is_set():
-                self.owner.inform("已取消本次预览，未显示或保存正文。")
-            elif not current():
-                self.owner.inform("选择已变更，没有显示上一个成员的预览。")
-            elif error is not None:
-                self.owner.inform(str(error))
-            else:
-                out = (text_preview.indexed_dialog(self, preview, owner=self.owner, current=current) if indexed
-                       else text_preview.dialog(self, preview))
-                self.text_dialog = out
-                def finished(_result):
-                    if self.text_dialog is out: self.text_dialog = None
-                out.finished.connect(finished)
-                out.open()
-                self.owner.inform("本次实读内容与原成员的 SHA-256 相符；未确认来源，没有交给外部应用。")
-
-        self.owner.job(f"正在核验所选成员的全部 {size:,} 字节…",
-                       read, apply, cancel=cancel, cancel_text="取消本次文本预览")
+        request_for_row(self, selected, view, entry, current=current, confirm_action=confirm, indexed=indexed)
 
     def choose_member(self):
         selected, page, entry = self.selection, self.file_page, self.files.item()

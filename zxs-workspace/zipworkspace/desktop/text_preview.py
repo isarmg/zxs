@@ -15,6 +15,7 @@ import unicodedata
 from ..archive import stored_member
 from ..document import native_identity
 from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected
+from .selection import PlainSelection, Selection
 
 LIMIT = 256 * 1024
 UNITS_PER_PAGE, LINES_PER_PAGE = 8192, 256
@@ -139,8 +140,13 @@ class TextPreview:
 
 
 def _address(selected, directory, entry):
+    if isinstance(selected, PlainSelection):
+        index = selected.index
+    elif isinstance(selected, Selection):
+        index = selected.browser
+    else: raise Rejected("没有已核验的归档目录")
     if (selected.held is None or selected.held.closed or entry.kind != "file" or
-            selected.browser.entry(directory, entry.name) is not entry or
+            index.entry(directory, entry.name) is not entry or
             type(entry.size_bytes) is not int or not 0 <= entry.size_bytes <= MAX_FILE):
         raise Rejected("只能预览当前目录页明确选择的已核普通成员")
     return f"{directory}/{entry.name}" if directory else entry.name
@@ -176,12 +182,15 @@ def _held_input(selected, check):
 def prepare(selected, directory, entry, *, check, indexed=False):
     member = _address(selected, directory, entry)
     size, end = entry.size_bytes, selected.observed[2]
+    # A previously verified ordinary ZIP contributes its original manifest and
+    # member SHA, never a managed marker from its comment.
+    marker = selected.browser.commit if isinstance(selected, Selection) else None
     if indexed and size <= LIMIT: raise Rejected("小文本无需另建分页索引")
     capture, digest, read = bytearray(), hashlib.sha256(), 0
     build = _Build(size) if indexed else None
     budget = 0 if indexed else min(size, LIMIT + 3)
     with _held_input(selected, check) as (original, same_original):
-        with stored_member(original, end, selected.browser.commit, member, size, locate=True) as (body, start):
+        with stored_member(original, end, marker, member, size, locate=True) as (body, start):
             while True:
                 check()
                 block = body.read(CHUNK)
@@ -209,6 +218,57 @@ def prepare(selected, directory, entry, *, check, indexed=False):
         pages = _pages(text, check)
         same_original()
         return TextPreview(member, size, shown, pages)
+
+
+def request_for_row(pane, selected, page, entry, *, current, confirm_action, indexed=False):
+    """One explicit dialog for either archive view. The caller binds its actual row and page."""
+    owner = pane.owner
+    size = entry.size_bytes
+    if indexed and size <= LIMIT: return
+    name = f"{page.directory}/{entry.name}" if page.directory else entry.name
+    if indexed:
+        reading = "\n全文作为严格 UTF-8 检查；核完才可按页码跳读，可能耗时。"
+    elif size <= LIMIT:
+        reading = "\n显示通过 UTF-8 核验的全文。"
+    else:
+        reading = "\n仅判断并显示通过核验的开头最多 256 KiB，后续不判定为文本。"
+    if (not current() or not confirm_action(pane, "核验后查看纯文本",
+            f"归档：{str(selected.path)!r}\n成员：{name!r}\n将从本次原件读取全部 {size:,} 字节。"
+            + reading + "\n不打开外部应用、不写文件；可取消。",
+            attestation="我确认只查看所选成员，不启动任何程序。", action_text="核验后预览")
+            or not current() or owner.pending is not None):
+        return
+    stopped = Event()
+
+    def cancel():
+        stopped.set()
+        return True
+
+    def check():
+        if stopped.is_set(): raise Rejected("已取消本次预览，未显示或保存正文。")
+
+    def read():
+        try: return prepare(selected, page.directory, entry, check=check, indexed=indexed), None
+        except Exception as error: return None, error
+
+    def apply(result):
+        if not current(): return  # Do not tell a new selection about an old result, even an error.
+        preview, error = result
+        if stopped.is_set():
+            owner.inform("已取消本次预览，未显示或保存正文。")
+        elif error is not None:
+            owner.inform(str(error))
+        else:
+            out = indexed_dialog(pane, preview, owner=owner, current=current) if indexed else dialog(pane, preview)
+            pane.text_dialog = out
+            def finished(_result):
+                if pane.text_dialog is out: pane.text_dialog = None
+            out.finished.connect(finished)
+            out.open()
+            owner.inform("本次实读内容与原成员的 SHA-256 相符；未确认来源，没有交给外部应用。")
+
+    owner.job(f"正在核验所选成员的全部 {size:,} 字节…", read, apply,
+              cancel=cancel, cancel_text="取消本次文本预览")
 
 
 class _NotText(ValueError):
