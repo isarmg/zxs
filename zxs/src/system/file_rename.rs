@@ -1,7 +1,7 @@
 //! Same-parent ordinary rename issues one durable ticket for the actual
 //! existing FILE. No transfer, new content, replacement, or fallback path.
 use super::{Catalog,Connection,InitialReader,Tree,denied,directory,file_create,ordinary_directory::{self,Additional}};
-use super::super::{file_location::Place,volume::OrdinaryRoot,work_record};
+use super::super::{account::share_mode::Setting,file_location::Place,volume::{OrdinaryRoot,OrdinaryView},work_record};
 use crate::{FileId,OperationId,Role,VolumeId,display,
     fs::{HeldDir,invalid,directory_birth::DirectoryParent}, hash::Sha256,
     identity::{AccountId,ShareId},ordinary::portable_birth::{Birth,Installed,RenameInstall,RenameStage}};
@@ -288,12 +288,38 @@ impl Tree<'_,'_>{
     pub(super) fn rename_existing(&self,root:&OrdinaryRoot<'_>,expected:&Place,opened:&Installed,
         op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
         point:impl Fn(Cut)->io::Result<()>)->io::Result<(Place,Installed)>{
+        let source=self.session.source;let owner=&self.session.original;
+        let require=|cut:&RenameCut<'_>|{
+            debug_assert!(std::ptr::eq(cut.source,source));
+            self.require(cut.db,cut.catalog,true)
+        };
+        RenameAt{source,setting:self.setting,parent:self.parent,
+            actor:owner.account,auth:owner.op,epoch:owner.generation,require:&require}
+            .rename(root.view(),expected,opened,op,name,alive,point)
+    }
+}
+
+/// All selection and confirmation cuts remain on one original SYSTEM.
+/// This short helper does not grant a FILE, a name or a live SMB session.
+struct RenameCut<'a>{source:&'a InitialReader,db:&'a Connection,catalog:&'a Catalog}
+struct RenameAt<'a>{
+    source:&'a InitialReader,setting:Setting,parent:DirectoryParent,actor:AccountId,auth:OperationId,epoch:i64,
+    require:&'a dyn Fn(&RenameCut<'_>)->io::Result<()>,
+}
+impl RenameAt<'_>{
+    fn authorized(&self,db:&Connection,catalog:&Catalog)->io::Result<()>{
+        (self.require)(&RenameCut{source:self.source,db,catalog})
+    }
+
+    fn rename(&self,root:OrdinaryView<'_>,expected:&Place,opened:&Installed,
+        op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
+        point:impl Fn(Cut)->io::Result<()>)->io::Result<(Place,Installed)>{
         display::component(name.as_bytes(),222)?;
-        let src=self.session.source;let grant=self.setting;let owner=&self.session.original;
+        let src=self.source;let grant=self.setting;
         if expected.name==name||expected.role!=Role::File||(expected.volume,expected.parent)!=(grant.volume,self.parent)
             ||!root.for_tree(src,grant.volume)||root.parent()!=self.parent{return Err(denied());}
         let (original,birth,members,alias)=src.at(|db,c|{
-            self.require(db,&c,true)?;alive()?;
+            self.authorized(db,&c)?;alive()?;
             let selected=Place::current(db,&c,expected.file)?;
             if &selected!=expected{return Err(denied());}
             Place::require_no_rename(db,expected.file)?;
@@ -302,7 +328,7 @@ impl Tree<'_,'_>{
             let r=c.rows().get(1).filter(|r|r.role==Role::Recycle).ok_or_else(denied)?;
             b.validate_transfer_geometry(name,(&r.path,r.limit),op)?;
             let planned=Original{op,from:expected.clone(),to_parent:expected.parent,name:name.to_owned(),share:grant.share,setting:grant.op,
-                auth:owner.op,actor:owner.account,epoch:owner.generation,save:work_record::selected(db,&b)?.map(|v|v.record.key().save),
+                auth:self.auth,actor:self.actor,epoch:self.epoch,save:work_record::selected(db,&b)?.map(|v|v.record.key().save),
                 manual:work_record::latest_commit(db,&b)?.map(|n|n.0)};
             planned.digest(&b)?;
             let members=work_record::members(db,&c,&b)?;
@@ -316,12 +342,12 @@ impl Tree<'_,'_>{
         move_one.require_original(opened)?;pocket_shape(private,parent,move_one.current_directory(),&birth)?;
         let locked=namespace_lock(root.folder())?;
         let names=census(&locked)?;
-        let _alias=directory::check_alias_name(root,name,alias.as_ref(),Some(&names))?;
+        let _alias=directory::check_alias_at(root.folder(),name,alias.as_ref(),Some(&names))?;
         let terminal=original.target().leaf()?;
         root.require_streaming()?;opened.require(root.folder())?;
         let w=Connection::open(&src.dir,true)?;
         let attempt=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-            self.require(db,&c,true)?;alive()?;
+            self.authorized(db,&c)?;alive()?;
             if Place::current(db,&c,expected.file)?!=*expected||
                work_record::members(db,&c,&birth)?!=members||
                file_create::display_owner_at(db,&c,expected.volume,expected.parent,name)?!=alias{
@@ -345,7 +371,7 @@ impl Tree<'_,'_>{
         let execute=(||->io::Result<_>{
             point(Cut::Reserved)?;
             let check_live=||src.at(|db,c|{
-                self.require(db,&c,true)?;
+                self.authorized(db,&c)?;
                 original.require_exact(db,&birth,Status::Pending)?;
                 original.live(db)?;alive()
             });
@@ -357,11 +383,11 @@ impl Tree<'_,'_>{
                 // parent's own short independent lock for logical names.
                 let _outer=if private{Some(namespace_lock(root.folder())?)}else{None};
                 root.require_streaming()?;pocket_shape(private,parent,actually.directory(),&birth)?;
-                let _alias=directory::check_alias_name(root,name,alias.as_ref(),None)?;
+                let _alias=directory::check_alias_at(root.folder(),name,alias.as_ref(),None)?;
                 let w=Connection::open(&src.dir,true)?;
                 let target=original.target();
                 let result=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
-                    self.require(db,&c,true)?;
+                    self.authorized(db,&c)?;
                     original.require_exact(db,&birth,Status::Pending)?;
                     original.live(db)?;
                     if file_create::display_owner_at(db,&c,expected.volume,expected.parent,name)?!=alias{return Err(busy());}
@@ -372,7 +398,7 @@ impl Tree<'_,'_>{
                 drop(w);
                 if result.is_err(){
                     src.at(|db,c|{
-                        self.require(db,&c,true)?;original.require_exact(db,&birth,Status::Confirmed)?;
+                        self.authorized(db,&c)?;original.require_exact(db,&birth,Status::Confirmed)?;
                         if Place::current(db,&c,expected.file)?!=target{return Err(denied());}Ok(())
                     })?;
                 }
