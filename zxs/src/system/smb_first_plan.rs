@@ -11,7 +11,7 @@ mod maintenance;
 
 #[path="smb_rust_capacity.rs"]
 mod capacity;
-pub(crate) use capacity::RustRootCapacity;
+pub(crate) use capacity::{CapacityUnits,RustRootCapacity};
 
 #[path="smb_rust_preflight.rs"]
 pub(super) mod preflight;

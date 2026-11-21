@@ -10,7 +10,7 @@ use crate::{smb::{RustSessionWitness,connection::{Fault as ConnectionFault,sessi
 use std::{convert::Infallible,io,rc::{Rc,Weak},sync::Arc};
 
 mod capacity;
-pub(in crate::smb) use capacity::{FS_SIZE_BYTES,PreparedRootFsSize,RetiredRootFsSize};
+pub(in crate::smb) use capacity::{PreparedRootFsSize,RetiredRootFsSize};
 
 const MAXIMUM_ALLOWED:u32=0x0200_0000;
 const LIST_DIRECTORY:u32=0x0000_0001;

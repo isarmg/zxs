@@ -7,9 +7,9 @@ use crate::smb::{
     backend::{FileStandardError,PreparedAttributeTag,PreparedDirectoryStandard,PreparedFileAccess,PreparedFileName,PreparedFileStandard,PreparedRetainedStandard,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRootInternal,PreparedWriterName,PreparedWriterStandard,RootFsError},
     wire::{Error as WireError,file_name_reply::UnsignedFileName,fixed_reply::{FileStandardFields,FsInfoFailure},
         io_fields::{IoFieldError,OpenReference,WireOpenId},message::{Message,RELATED,Routing},
-        query_fields::{FileClass,FsClass,InfoClass,QueryError}},
+        query_fields::{CapacityFormat,FileClass,FsClass,InfoClass,QueryError}},
 };
-use crate::system::reader::smb::file_number::SmbFileIndex;
+use crate::system::reader::smb::{file_number::SmbFileIndex,runtime::CapacityUnits};
 use std::{io,num::NonZeroU64};
 
 pub(in crate::smb) const QUERY_INFO:u16=16;
@@ -51,7 +51,7 @@ impl CheckedBatch<'_,'_>{
                     let draft=UnsignedSmall::root_fs_attributes(&member,&pending).map_err(|_|Fault::WrongReply)?;
                     (PendingInfo::Root(pending),draft)
                 },
-                (Opened::Root(open),InfoClass::Filesystem(FsClass::Size))=>{
+                (Opened::Root(open),InfoClass::Filesystem(FsClass::Size|FsClass::FullSize))=>{
                     let prepared=match open.prepare_fs_size(tree,&member){
                         Ok(v)=>v,Err(e)=>return self.fs_info_refusal(m,sid,root_failure(e)?),
                     };
@@ -240,7 +240,7 @@ pub(in crate::smb) struct PendingRootSize{original:RequestSlot,ids:WireOpenId,pr
 impl PendingRootSize{
     pub(in crate::smb) fn sid(&self)->NonZeroU64{self.original.sid}
     pub(in crate::smb) fn matches(&self,m:&VerifiedMember<'_,'_>)->bool{self.original.matches(m,self.sid())}
-    pub(in crate::smb) fn payload(&self)->(u32,Option<(u64,u64)>){self.prepared.values()}
+    pub(in crate::smb) fn payload(&self)->(CapacityFormat,u32,Option<CapacityUnits>){self.prepared.values()}
     fn check(&self,c:&Connection)->Result<()>{
         let tree=self.original.root(c)?;
         let slot=c.open_table(self.sid())?.find(self.ids).filter(|s|s.tree()==self.original.tree).ok_or(Fault::SessionState)?;

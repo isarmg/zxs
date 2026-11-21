@@ -40,6 +40,18 @@ impl CapacityOrigin<'_>{
         self.require_held()?;
         Ok(sample)
     }
+    /// Only the mount mode is rechecked on this original retained FD.
+    /// Never replace the numeric capacity snapshot with later counters.
+    pub(super) fn require_mount_mode(&self,read_only:bool)->io::Result<()>{
+        let mut stat=std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        if unsafe{libc::fstatvfs(self.root.file.as_raw_fd(),stat.as_mut_ptr())}<0{
+            return Err(io::Error::last_os_error());
+        }
+        if (unsafe{stat.assume_init()}.f_flag&libc::ST_RDONLY!=0)!=read_only{
+            return Err(invalid("original capacity source mount mode changed"));
+        }
+        self.require_held()
+    }
 }
 pub(super) fn measure(root:&HeldDir)->io::Result<Capacity>{
     let (mut total,mut available,mut free,mut read_only)=(0,0,0,0);

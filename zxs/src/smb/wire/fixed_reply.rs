@@ -1,14 +1,15 @@
 //! Closed, small synchronous replies to an original paid, signed member.
 //! No generic success body or caller-selected wire ID.
 use super::{Error,Result,create_fields::{Disposition,MaximumAccessQuery},io_reply::{FLUSH,FileReply,WRITE},message::{Message,RELATED,SIGNED,Routing},network_probe::{IOCTL,NetworkProbe},
-    query_fields::{FileClass,FsClass,InfoClass},set_info::{Change,FileSetRequest,RenameRequest,SET_INFO}};
+    query_fields::{CapacityFormat,FileClass,FsClass,InfoClass},set_info::{Change,FileSetRequest,RenameRequest,SET_INFO}};
 use crate::smb::{
-    backend::{CloseCompletion,FS_SIZE_BYTES,PreparedDisposition,PreparedOrdinaryRename,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRetainedRestore,tree_connect::QualifiedTreeConnect},
+    backend::{CloseCompletion,PreparedDisposition,PreparedOrdinaryRename,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRetainedRestore,tree_connect::QualifiedTreeConnect},
     connection::sessions::ordinary::{
         BrowsePart,ClosedOpen,DirectoryRefusal,ExitPlan,FsInfoRefusal,PendingAttributeTag,PendingFileAccess,PendingFileStandard,PendingInternal,PendingOpen,PendingRootAttributes,PendingRootSize,ProbePart,ProposedTreeId,
         FileActionPart,PendingRename,PendingWrite,ReadRefusal,RenameRefusal,VerifiedMember,WriteRefusal,
     },
 };
+use crate::system::reader::smb::runtime::CapacityUnits;
 use std::num::NonZeroU64;
 
 const ECHO:u16=13;
@@ -249,8 +250,8 @@ impl UnsignedSmall {
     }
     pub(in crate::smb) fn root_fs_size(member:&VerifiedMember<'_,'_>,pending:&PendingRootSize)->Result<Self>{
         if !pending.matches(member){return Err(Error::InvalidRequest);}
-        let (output,allocation)=pending.payload();
-        let (status,body,len)=verified_fs_size(member,output,allocation)?;
+        let (format,output,allocation)=pending.payload();
+        let (status,body,len)=verified_fs_size(member,format,output,allocation)?;
         let mut draft=Self::standalone(member,pending.sid(),QUERY_INFO,status,64+len)?;
         draft.raw[64..64+len].copy_from_slice(&body[..len]);Ok(draft)
     }
@@ -513,8 +514,8 @@ impl UnsignedSmall {
     pub(in crate::smb) fn probe_fs_size(part:&ProbePart<'_,'_>,member:&VerifiedMember<'_,'_>,prepared:&PreparedRootFsSize)
         ->Result<(Self,Option<FsInfoFailure>)>{
         if !part.matches(member){return Err(Error::InvalidRequest);}
-        let (output,units)=prepared.values();
-        let (status,body,len)=verified_fs_size(member,output,units)?;
+        let (format,output,units)=prepared.values();
+        let (status,body,len)=verified_fs_size(member,format,output,units)?;
         let failure=match status{
             0=>None,
             0xc000_0004=>Some(FsInfoFailure::InformationLengthMismatch),
@@ -527,7 +528,7 @@ impl UnsignedSmall {
     pub(in crate::smb) fn probe_size_refusal(part:&ProbePart<'_,'_>,member:&VerifiedMember<'_,'_>,error:FsInfoFailure)
         ->Result<Self>{
         if !part.matches(member)||!member.message().query_info(member.max_transact())
-            .is_ok_and(|q|q.class==InfoClass::Filesystem(FsClass::Size))||
+            .is_ok_and(|q|q.class.capacity_format().is_some())||
             matches!(error,FsInfoFailure::InformationLengthMismatch|FsInfoFailure::DeviceNotReady){
             return Err(Error::InvalidRequest);
         }
@@ -687,28 +688,37 @@ fn fixed_file_info8_body(output:u32,data:[u8;8])->(u32,[u8;16]){
     bytes[8..16].copy_from_slice(&data);
     (0,bytes)
 }
-// MS-SMB2 §3.3.5.20.2 and MS-FSCC §2.5.8. There is no variable tail.
-fn verified_fs_size(member:&VerifiedMember<'_,'_>,output:u32,units:Option<(u64,u64)>)->Result<(u32,[u8;32],usize)>{
+// MS-SMB2 §3.3.5.20.2 and MS-FSCC §§2.5.4/2.5.8. Neither has a variable tail.
+fn verified_fs_size(member:&VerifiedMember<'_,'_>,format:CapacityFormat,output:u32,units:Option<CapacityUnits>)
+    ->Result<(u32,[u8;40],usize)>{
     let info=member.message().query_info(member.max_transact()).map_err(|_|Error::InvalidRequest)?;
-    if output!=info.output_bytes||info.class!=InfoClass::Filesystem(FsClass::Size){return Err(Error::InvalidRequest);}
-    root_fs_size_body(output,units)
+    if output!=info.output_bytes||info.class.capacity_format()!=Some(format){return Err(Error::InvalidRequest);}
+    root_fs_size_body(format,output,units)
 }
-fn root_fs_size_body(output:u32,units:Option<(u64,u64)>)->Result<(u32,[u8;32],usize)>{
-    let mut body=[0;32];body[0]=9;
-    if output<FS_SIZE_BYTES{
+fn root_fs_size_body(format:CapacityFormat,output:u32,units:Option<CapacityUnits>)->Result<(u32,[u8;40],usize)>{
+    let mut body=[0;40];body[0]=9;
+    let fixed=format.bytes();
+    if output<fixed{
         if units.is_some(){return Err(Error::InvalidRequest);}
         information_too_small(&mut body);
         return Ok((0xc000_0004,body,16));
     }
-    let Some((total,available))=units else{return Ok((0xc000_00a3,body,8));}; // DEVICE_NOT_READY
-    if total==0||available>total||total>i64::MAX as u64{return Err(Error::InvalidRequest);}
+    let Some(CapacityUnits{total,caller_available,actual_free})=units else{
+        return Ok((0xc000_00a3,body,8)); // DEVICE_NOT_READY, not a zero volume
+    };
+    if total==0||caller_available>actual_free||actual_free>total||total>i64::MAX as u64{return Err(Error::InvalidRequest);}
     body[2..4].copy_from_slice(&72u16.to_le_bytes());
-    body[4..8].copy_from_slice(&FS_SIZE_BYTES.to_le_bytes());
+    body[4..8].copy_from_slice(&fixed.to_le_bytes());
     body[8..16].copy_from_slice(&total.to_le_bytes());
-    body[16..24].copy_from_slice(&available.to_le_bytes());
-    // ZXS logical 4 KiB reporting unit, not physical-disk geometry.
-    body[24..28].copy_from_slice(&8u32.to_le_bytes());body[28..32].copy_from_slice(&512u32.to_le_bytes());
-    Ok((0,body,32))
+    body[16..24].copy_from_slice(&caller_available.to_le_bytes());
+    let geometry=match format{
+        CapacityFormat::Size=>24,
+        CapacityFormat::FullSize=>{body[24..32].copy_from_slice(&actual_free.to_le_bytes());32},
+    };
+    // Same ZXS 4 KiB reporting unit in both forms, not physical-disk geometry.
+    body[geometry..geometry+4].copy_from_slice(&8u32.to_le_bytes());
+    body[geometry+4..geometry+8].copy_from_slice(&512u32.to_le_bytes());
+    Ok((0,body,8+fixed as usize))
 }
 #[derive(Clone,Copy)]
 pub(in crate::smb) enum FileStandardFields{File{allocation:u64,eof:u64,delete_pending:bool},Directory}

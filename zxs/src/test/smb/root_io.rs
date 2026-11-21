@@ -144,7 +144,7 @@ fn a_paid_signed_file_mutation_cannot_bypass_the_original_tree_with_wire_ids(){
 
 #[test]
 fn metadata_query_cannot_substitute_a_file_id_or_a_short_charge_for_the_original_tree(){
-    for (kind,class,short) in [(2,5,false),(2,5,true),(2,3,false),(2,3,true),(1,5,false),(1,5,true),
+    for (kind,class,short) in [(2,5,false),(2,5,true),(2,3,false),(2,3,true),(2,7,false),(2,7,true),(1,5,false),(1,5,true),
                               (1,6,false),(1,6,true),(1,48,false),(1,48,true)]{
         let instance=provider();let mut peer=connected(&instance);assert_eq!(publish_at(&mut peer,1),1);
         let seen=Arc::new(Mutex::new(Vec::new()));peer.stream=Some(DirectStream::Fixture(Box::new(Sink(Arc::clone(&seen)))));
@@ -165,6 +165,7 @@ fn metadata_query_cannot_substitute_a_file_id_or_a_short_charge_for_the_original
 fn related_probe(class:u8,short:bool)->[Vec<u8>;3]{
     let mut parts=[input(CREATE,false,false),input(QUERY_INFO,false,short),input(CLOSE,true,false)];
     parts[0].resize(128,0);parts[1].resize(112,0);parts[1][67]=class;
+    if class==7&&!short{parts[1][68..72].copy_from_slice(&32u32.to_le_bytes());}
     for (i,raw) in parts.iter_mut().enumerate(){
         raw[24]=3+i as u8;
         if i<2 {let n=raw.len() as u32;raw[20..24].copy_from_slice(&n.to_le_bytes());}
@@ -182,11 +183,18 @@ fn related_probe(class:u8,short:bool)->[Vec<u8>;3]{
 
 #[test]
 fn related_root_probe_requires_actual_adjacent_open_and_preserves_all_response_members(){
-    for class in [5,3]{
+    for (class,sentinel) in [(5,false),(3,false),(7,true),(7,false)]{
         let instance=provider();let mut peer=connected(&instance);assert_eq!(publish_at(&mut peer,1),1);
         assert_eq!(peer.window.available(),4);
         let seen=Arc::new(Mutex::new(Vec::new()));peer.stream=Some(DirectStream::Fixture(Box::new(Sink(Arc::clone(&seen)))));
-        let requests=related_probe(class,false);let incoming=frame(&requests.concat());let fr=parsed(&incoming);
+        let mut requests=related_probe(class,false);
+        if sentinel{
+            // Stock FileFsFullSize triplet uses both sentinel halves. Actual
+            // related selection still uses the prior real OPEN, not these bytes.
+            requests[1][88..104].fill(0xff);requests[2][72..88].fill(0xff);
+            signed(&mut requests[1]);signed(&mut requests[2]);
+        }
+        let incoming=frame(&requests.concat());let fr=parsed(&incoming);
         let paid=peer.receive(&fr).unwrap();
         let Admission::Ready(mut batch)=paid.preflight(&mut peer)else{panic!("whole original compound did not verify");};
         assert!(batch.try_send_root_probe().unwrap());drop(batch);
@@ -205,7 +213,7 @@ fn related_root_probe_requires_actual_adjacent_open_and_preserves_all_response_m
 
 #[test]
 fn related_probe_is_not_dispatched_on_a_short_query_or_bad_last_mac(){
-    for class in [5,3]{
+    for class in [5,3,7]{
         for bad_mac in [false,true]{
             let instance=provider();let mut peer=connected(&instance);assert_eq!(publish_at(&mut peer,1),1);
             let seen=Arc::new(Mutex::new(Vec::new()));peer.stream=Some(DirectStream::Fixture(Box::new(Sink(Arc::clone(&seen)))));

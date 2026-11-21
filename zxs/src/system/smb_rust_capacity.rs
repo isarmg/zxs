@@ -1,8 +1,8 @@
-//! Same reference-volume rule as the existing Native logical ZXS root.
+//! The reference-volume rule of the logical ZXS root.
 //! Holds one actual ordinary F, never R or an aggregate, no FILE write right.
 use super::{Catalog,Connection,Plan,RustRoot,RustRootStamp,Setting,denied};
 use super::super::reference_capacity::pick_reference;
-use crate::{Role,VolumeId,smb::RustSessionWitness,system::{ClaimRow,reader::volume::OrdinaryMedia}};
+use crate::{Role,VolumeId,smb::RustSessionWitness,system::{ClaimRow,reader::volume::{Capacity,OrdinaryMedia}}};
 use std::{io,sync::atomic::{AtomicUsize,Ordering}};
 
 // Each connection is synchronous: at most one capacity turn on its owner.
@@ -19,7 +19,19 @@ impl Permit{
 }
 impl Drop for Permit{fn drop(&mut self){ACTIVE.fetch_sub(1,Ordering::AcqRel);}}
 
-struct Measured{media:OrdinaryMedia,claim:ClaimRow,grant:Setting,total:u64,available:u64}
+struct Measured{media:OrdinaryMedia,claim:ClaimRow,grant:Setting,sample:Capacity,writable:bool}
+
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct CapacityUnits{
+    pub(crate) total:u64,pub(crate) caller_available:u64,pub(crate) actual_free:u64,
+}
+impl CapacityUnits{
+    fn from_sample(sample:&Capacity,writable:bool)->Self{
+        Self{total:sample.total/4096,
+            caller_available:if writable&&!sample.read_only{sample.available/4096}else{0},
+            actual_free:sample.free/4096}
+    }
+}
 
 /// Qualified point-in-time observation, not media availability forever or
 /// permission to operate on that F. Keeps the original F through the send.
@@ -28,13 +40,14 @@ pub(crate) struct RustRootCapacity{
     root:RustRootStamp,
     choices:Vec<Setting>,
     measured:Option<Measured>,
+    require_same_mount_mode:bool,
     _permit:Permit,
 }
 impl RustRootCapacity{
     /// Wire units are always the product's 4 KiB reporting unit. This is
     /// neither the actual sector size nor a reservation of free bytes.
-    pub(crate) fn allocation_units(&self)->Option<(u64,u64)>{
-        self.measured.as_ref().map(|m|(m.total/4096,m.available/4096))
+    pub(crate) fn allocation_units(&self)->Option<CapacityUnits>{
+        self.measured.as_ref().map(|m|CapacityUnits::from_sample(&m.sample,m.writable))
     }
 }
 
@@ -47,7 +60,7 @@ impl Plan{
     }
 }
 impl RustRoot{
-    pub(crate) fn sample_capacity(&self,query:&RustSessionWitness)->io::Result<RustRootCapacity>{
+    pub(crate) fn sample_capacity(&self,query:&RustSessionWitness,require_same_mount_mode:bool)->io::Result<RustRootCapacity>{
         if !query.is_query_info(){return Err(denied());}
         self.require_member(query)?;
         let permit=Permit::try_take()?;
@@ -68,11 +81,10 @@ impl RustRoot{
                 if !p.root.for_tree(&site.source,p.grant.volume)||p.bytes.available>p.bytes.free||
                    p.bytes.free>p.bytes.total{return Err(denied());}
                 let claim=row(&catalog,p.grant.volume)?.clone();
-                Some(Measured{media:p.root.into_media(),claim,grant:p.grant,total:p.bytes.total,
-                    available:if p.writable{p.bytes.available}else{0}})
+                Some(Measured{media:p.root.into_media(),claim,grant:p.grant,sample:p.bytes,writable:p.writable})
             },
         };
-        let result=RustRootCapacity{root:self.stamp(),choices,measured,_permit:permit};
+        let result=RustRootCapacity{root:self.stamp(),choices,measured,require_same_mount_mode,_permit:permit};
         self.require_capacity(query,&result)?;Ok(result)
     }
 
@@ -84,6 +96,9 @@ impl RustRoot{
         // SQLite cut or replace them with a second sample or fresh F.
         if let Some(m)=&original.measured{
             m.media.view(&site.source).require_streaming()?;
+            if original.require_same_mount_mode{
+                m.media.capacity_origin().require_mount_mode(m.sample.read_only)?;
+            }
         }
         site.source.at(|db,c|{
             if site.installed.active_at(db,&c)?!=site.original||
@@ -95,5 +110,22 @@ impl RustRoot{
             Ok(())
         })?;
         self.require_member(query)
+    }
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    #[test]
+    fn logical_units_keep_real_free_distinct_from_caller_available_even_with_read_only_policy(){
+        let mut sample=Capacity{total:4096*1024+17,available:4096*12+4095,free:4096*49+31,read_only:false};
+        let rw=CapacityUnits{total:1024,caller_available:12,actual_free:49};
+        let ro=CapacityUnits{caller_available:0,..rw};
+        assert_eq!(CapacityUnits::from_sample(&sample,true),rw);
+        assert_eq!(CapacityUnits::from_sample(&sample,false),ro);
+        sample.read_only=true;
+        assert_eq!(CapacityUnits::from_sample(&sample,false),ro);
+        assert_eq!(CapacityUnits::from_sample(&sample,true),ro);
     }
 }

@@ -108,7 +108,21 @@ pub(in crate::smb) enum InfoClass {
     Filesystem(FsClass),
 }
 
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(in crate::smb) enum CapacityFormat{Size,FullSize}
+impl CapacityFormat{
+    pub(in crate::smb) fn bytes(self)->u32{match self{Self::Size=>24,Self::FullSize=>32}}
+}
+
 impl InfoClass {
+    pub(in crate::smb) fn capacity_format(self)->Option<CapacityFormat>{
+        match self{
+            Self::Filesystem(FsClass::Size)=>Some(CapacityFormat::Size),
+            Self::Filesystem(FsClass::FullSize)=>Some(CapacityFormat::FullSize),
+            _=>None,
+        }
+    }
+
     fn select(kind: u8, value: u8) -> Result<Self, QueryError> {
         use QueryError::{InvalidInfoClass, Malformed, NotSupported};
         match kind {

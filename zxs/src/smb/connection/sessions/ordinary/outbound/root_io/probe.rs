@@ -64,7 +64,7 @@ impl CheckedBatch<'_,'_>{
             return Ok(false);
         }
         let family=match query.query_info(self.owner.limits.transact){
-            Ok(q) if q.class==InfoClass::Filesystem(FsClass::Size)=>Query::Size,
+            Ok(q) if q.class.capacity_format().is_some()=>Query::Size,
             Ok(q) if q.class==InfoClass::Filesystem(FsClass::Attribute)&&q.output_bytes>=12=>Query::Attributes,
             Ok(q) if q.class==InfoClass::File(FileClass::All)=>Query::FileAll,
             _=>return Ok(false),
