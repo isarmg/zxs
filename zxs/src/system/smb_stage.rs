@@ -129,56 +129,97 @@ impl Scratch{
 pub(super) struct Staged<'t,'s,'r>{
     // Drop the read witnesses and the scratch before releasing FILE EX.
     base:Current<'t,'s,'r>,
-    spool:Spool,
+    draft:DraftStage,
     writer:Writer<'t,'s,'r>,
-    eof:u64,
-    retained:u64,
-    parts:Vec<Part>,
-    flush_op:Option<OperationId>,
-    refresh_op:Option<OperationId>,
 }
 impl<'t,'s,'r> Staged<'t,'s,'r>{
     pub(super) fn open(writer:Writer<'t,'s,'r>)->io::Result<Self>{
         let scratch=Scratch::before_birth(writer.work_directory())?;
         Self::prepared(writer,scratch)
     }
-    pub(super) fn prepared(writer:Writer<'t,'s,'r>,Scratch(spool):Scratch)->io::Result<Self>{
+    pub(super) fn prepared(writer:Writer<'t,'s,'r>,scratch:Scratch)->io::Result<Self>{
         let base=writer.current_read()?;
         let eof=base.size();
-        Ok(Self{base,spool,writer,eof,retained:eof,parts:Vec::new(),flush_op:None,refresh_op:None})
+        Ok(Self{base,draft:DraftStage::new(scratch,eof),writer})
     }
     pub(super) fn base(&self)->&Current<'t,'s,'r>{&self.base}
-    pub(super) fn eof(&self)->u64{self.eof}
+    pub(super) fn eof(&self)->u64{self.draft.eof}
     pub(super) fn transfer_ready(&mut self)->io::Result<()>{
         self.refresh()?;
-        if self.eof!=self.base.size()||self.retained!=self.eof||!self.parts.is_empty()||
-           self.flush_op.is_some()||self.spool.poisoned{
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,"writer still holds unconfirmed work"));
-        }
-        Ok(())
+        self.draft.transfer_ready(self.base.size())
     }
     fn writable(&self,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
         alive()?;self.writer.require_work()} // same original Tree, credential and FILE
     fn refresh(&mut self)->io::Result<()>{
-        if let Some(op)=self.refresh_op{
+        if let Some(op)=self.draft.refresh_op{
             let latest=self.writer.current_read()?;
-            if latest.working_original()!=Some(op)||latest.size()!=self.eof{return Err(invalid("confirmed work no longer matches its original FLUSH"));}
-            self.base=latest;self.refresh_op=None;
+            if latest.working_original()!=Some(op)||latest.size()!=self.draft.eof{return Err(invalid("confirmed work no longer matches its original FLUSH"));}
+            self.base=latest;self.draft.refresh_op=None;
         }
         Ok(())
     }
     fn changing(&mut self,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
         self.writable(alive)?;self.refresh()?;
-        if self.flush_op.is_some(){return Err(io::Error::new(io::ErrorKind::WouldBlock,"repeat the outstanding original FLUSH before new WRITE"));}
+        if self.draft.flush_op.is_some(){return Err(io::Error::new(io::ErrorKind::WouldBlock,"repeat the outstanding original FLUSH before new WRITE"));}
         Ok(())
     }
     pub(super) fn write(&mut self,offset:u64,data:&[u8],alive:&impl Fn()->io::Result<()>)->io::Result<()>{
         self.changing(alive)?;
+        let writer=&self.writer;
+        self.draft.write(offset,data,||{alive()?;writer.require_work()},||writer.staging_free())
+    }
+    pub(super) fn resize(&mut self,eof:u64,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
+        self.changing(alive)?;
+        let writer=&self.writer;
+        self.draft.resize(eof,||{alive()?;writer.require_work()})
+    }
+    /// An owner can read its own staged bytes; ordinary read-only FSPs still
+    /// own their fixed selection and never go through this staging object.
+    pub(super) fn read_window<T>(&mut self,offset:u64,count:u32,alive:&impl Fn()->io::Result<()>,consume:impl FnOnce(&[u8])->io::Result<T>)->io::Result<T>{
+        self.writable(alive)?;self.refresh()?;
+        let (bytes,origins)=self.draft.read_buffer(offset,count,|at,len,out|self.base.range_evidence(at,len,out))?;
+        self.base.finish_sources(&origins)?;self.writable(alive)?;
+        let value=consume(&bytes)?;
+        self.base.finish_sources(&origins)?;self.writable(alive)?;Ok(value)
+    }
+    pub(super) fn flush(&mut self,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
+        self.writable(alive)?;
+        if self.draft.refresh_op.is_some(){let _=self.refresh();return Ok(());} // already confirmed
+        let same=&self.writer;
+        let baseline=self.base.working_original();
+        let saved=self.draft.flush(self.base.size(),same.work_directory(),||same.staging_free(),|batch|
+            same.save_packed_guarded(batch.op,baseline,batch.retained,batch.eof,batch.spans,batch.input,alive).map(drop))?;
+        if !saved{return Ok(());}
+        let _=self.refresh();alive()
+    }
+}
+
+// Exactly one unlinked spool, one effective interval map and one sticky
+// original FLUSH. This object owns bytes and evidence, not authority.
+// The actual native wrapper checks its original FILE before and after.
+struct DraftStage{
+    spool:Spool,
+    eof:u64,retained:u64,parts:Vec<Part>,
+    flush_op:Option<OperationId>,refresh_op:Option<OperationId>,
+}
+struct FlushInput<'a>{op:OperationId,retained:u64,eof:u64,spans:&'a[Span],input:&'a File}
+impl DraftStage{
+    fn new(Scratch(spool):Scratch,eof:u64)->Self{
+        Self{spool,eof,retained:eof,parts:Vec::new(),flush_op:None,refresh_op:None}
+    }
+    fn transfer_ready(&self,base_size:u64)->io::Result<()>{
+        if self.eof!=base_size||self.retained!=self.eof||!self.parts.is_empty()||
+           self.flush_op.is_some()||self.spool.poisoned{
+            return Err(io::Error::new(io::ErrorKind::WouldBlock,"writer still holds unconfirmed work"));
+        }
+        Ok(())
+    }
+    fn write(&mut self,offset:u64,data:&[u8],check:impl Fn()->io::Result<()>,free:impl Fn()->io::Result<u64>)->io::Result<()>{
         let hi=offset.checked_add(data.len() as u64).filter(|v|*v<=i64::MAX as u64).ok_or_else(||invalid("SMB WRITE range overflow"))?;
-        if data.is_empty(){return self.writable(alive);}
+        if data.is_empty(){return check();}
         let old=self.spool.len;
         let stored=physically_unused(&self.parts,old,data.len() as u64)?.unwrap_or(old);
-        if stored==old && !self.spool.ram && self.writer.staging_free()?<data.len() as u64{return Err(full());}
+        if stored==old && !self.spool.ram && free()?<data.len() as u64{return Err(full());}
         let p=Part{lo:offset,hi,stored};
         // Sequential writes merge compatible extents without copying the map.
         if self.parts.last().is_none_or(|last|last.hi<=offset){
@@ -188,36 +229,34 @@ impl<'t,'s,'r> Staged<'t,'s,'r>{
                 self.parts.try_reserve(1).map_err(|_|full())?;
             }
             self.spool.place(stored,data)?;
-            if let Err(e)=self.writable(alive){self.spool.discard_tail(old);return Err(e);}
+            if let Err(e)=check(){self.spool.discard_tail(old);return Err(e);}
             if merge{self.parts.last_mut().expect("last staged interval").hi=hi;}
             else{self.parts.push(p);}
         }else{
             let next=overlay(&self.parts,p)?;
             self.spool.place(stored,data)?;
-            if let Err(e)=self.writable(alive){self.spool.discard_tail(old);return Err(e);}
+            if let Err(e)=check(){self.spool.discard_tail(old);return Err(e);}
             self.parts=next;
         }
         self.eof=self.eof.max(hi);Ok(())
     }
-    pub(super) fn resize(&mut self,eof:u64,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
-        self.changing(alive)?;
+    fn resize(&mut self,eof:u64,check:impl FnOnce()->io::Result<()>)->io::Result<()>{
         if eof>i64::MAX as u64{return Err(invalid("SMB EOF overflow"));}
-        self.writable(alive)?;
+        check()?;
         self.parts.truncate(self.parts.partition_point(|p|p.lo<eof));
         if let Some(last)=self.parts.last_mut(){last.hi=last.hi.min(eof);}
         self.retained=self.retained.min(eof);self.eof=eof;Ok(())
     }
-    fn gap(&self,out:&mut impl Write,used:&mut Used,lo:u64,hi:u64)->io::Result<()>{
+    fn gap(&self,out:&mut Vec<u8>,used:&mut Used,lo:u64,hi:u64,
+        base:&mut impl FnMut(u64,u64,&mut Vec<u8>)->io::Result<Used>)->io::Result<()>{
         let limit=hi.min(self.retained);
-        if lo<limit{used.merge(self.base.range_evidence(lo,limit-lo,&mut *out)?)?;}
+        if lo<limit{used.merge(base(lo,limit-lo,out)?)?;}
         let mut cursor=lo.max(self.retained);let zeros=[0u8;BLOCK as usize];
         while cursor<hi{let n=(hi-cursor).min(BLOCK);out.write_all(&zeros[..n as usize])?;cursor+=n;}
         Ok(())
     }
-    /// An owner can read its own staged bytes; ordinary read-only FSPs still
-    /// own their fixed selection and never go through this staging object.
-    pub(super) fn read_window<T>(&mut self,offset:u64,count:u32,alive:&impl Fn()->io::Result<()>,consume:impl FnOnce(&[u8])->io::Result<T>)->io::Result<T>{
-        self.writable(alive)?;self.refresh()?;
+    fn read_buffer(&self,offset:u64,count:u32,mut base:impl FnMut(u64,u64,&mut Vec<u8>)->io::Result<Used>)
+        ->io::Result<(Vec<u8>,Used)>{
         if count>0xffff00||offset.checked_add(u64::from(count)).is_none_or(|v|v>i64::MAX as u64){
             return Err(invalid("SMB staged READ overflow"));
         }
@@ -227,20 +266,17 @@ impl<'t,'s,'r> Staged<'t,'s,'r>{
         let mut cursor=start;let mut origins=Used::default();
         for p in &self.parts[self.parts.partition_point(|p|p.hi<=start)..]{
             let at=p.lo.max(start);if at>=end{break;}
-            if cursor<at{self.gap(&mut out,&mut origins,cursor,at)?;}
+            if cursor<at{self.gap(&mut out,&mut origins,cursor,at,&mut base)?;}
             let stop=p.hi.min(end);let len=(stop-at) as usize;
             let i=out.len();out.resize(i+len,0);self.spool.read_at(p.stored+(at-p.lo),&mut out[i..])?;
             cursor=stop;
         }
-        if cursor<end{self.gap(&mut out,&mut origins,cursor,end)?;}
-        self.base.finish_sources(&origins)?;self.writable(alive)?;
-        let result=consume(&out)?;
-        self.base.finish_sources(&origins)?;self.writable(alive)?;Ok(result)
+        if cursor<end{self.gap(&mut out,&mut origins,cursor,end,&mut base)?;}
+        Ok((out,origins))
     }
-    pub(super) fn flush(&mut self,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
-        self.writable(alive)?;
-        if self.refresh_op.is_some(){let _=self.refresh();return Ok(());} // already confirmed
-        if self.parts.is_empty()&&self.eof==self.base.size()&&self.retained==self.eof{return Ok(());}
+    fn flush(&mut self,base_size:u64,original:&HeldDir,free:impl Fn()->io::Result<u64>,
+        save:impl FnOnce(FlushInput<'_>)->io::Result<()>)->io::Result<bool>{
+        if self.parts.is_empty()&&self.eof==base_size&&self.retained==self.eof{return Ok(false);}
         let mut spans=Vec::new();spans.try_reserve_exact(self.parts.len()).map_err(|_|full())?;
         let mut length=0u64;let mut contig=true;
         for p in &self.parts{
@@ -252,8 +288,8 @@ impl<'t,'s,'r> Staged<'t,'s,'r>{
         if !contig||length!=self.spool.len{
             // Copy only effective changed ranges if needed, never base
             // file contents or an unused staging tail.
-            let mut fresh=Spool::new(self.writer.work_directory(),self.spool.charge.writer.clone())?;
-            if !fresh.ram&&self.writer.staging_free()?<length{return Err(full());}
+            let mut fresh=Spool::new(original,self.spool.charge.writer.clone())?;
+            if !fresh.ram&&free()?<length{return Err(full());}
             let mut window=[0u8;BLOCK as usize];
             for p in &self.parts{
                 let mut left=p.len();let mut off=p.stored;
@@ -266,17 +302,17 @@ impl<'t,'s,'r> Staged<'t,'s,'r>{
             packed=Some(fresh);
         }
         // No fresh descriptor must be allocated after actual confirmation.
-        let empty=Spool::new(self.writer.work_directory(),self.spool.charge.writer.clone())?;
+        let empty=Spool::new(original,self.spool.charge.writer.clone())?;
         let op=match self.flush_op{Some(op)=>op,None=>OperationId::new()?};
         self.flush_op=Some(op);
         let input=&packed.as_ref().unwrap_or(&self.spool).file;
-        self.writer.save_packed_guarded(op,self.base.working_original(),self.retained,self.eof,&spans,input,alive)?;
+        save(FlushInput{op,retained:self.retained,eof:self.eof,spans:&spans,input})?;
         // A known committed result cannot become a failed SAVE because a
         // fresh read view is unavailable. Block subsequent data work until
         // the committed Op is positively rebound; never read the old draft.
         drop(packed);self.spool=empty;self.retained=self.eof;
         self.parts.clear();self.flush_op=None;self.refresh_op=Some(op);
-        let _=self.refresh();alive()
+        Ok(true)
     }
 }
 
@@ -316,9 +352,9 @@ mod tests{
         stage.write(2,b"1234",&live).unwrap();
         stage.write(3,b"x",&live).unwrap();
         stage.resize(6,&live).unwrap();stage.resize(9,&live).unwrap();stage.write(7,b"z",&live).unwrap();
-        let high=stage.spool.len;
+        let high=stage.draft.spool.len;
         for _ in 0..16{stage.write(3,b"x",&live).unwrap();}
-        assert!(stage.spool.len<=high+1);
+        assert!(stage.draft.spool.len<=high+1);
         let event=Cell::new(0);
         let stops_after_spool=||{
             let n=event.get()+1;event.set(n);
@@ -336,7 +372,7 @@ mod tests{
         };
         assert!(stage.flush(&canceled_before_sql).is_err());assert_eq!(cut.get(),5);
         assert_eq!(read.open_current(name).unwrap().working_original(),Some(first));
-        let original=stage.flush_op.unwrap();
+        let original=stage.draft.flush_op.unwrap();
         source.at(|db,_|{
             let q=db.prepare(c"SELECT state FROM main.operation WHERE op_id=?1 AND kind=10")?;
             q.bind_bytes(1,&original.0)?;
