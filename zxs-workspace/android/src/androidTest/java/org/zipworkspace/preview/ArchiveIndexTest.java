@@ -57,6 +57,7 @@ public final class ArchiveIndexTest {
         byte[] b = marked(base, "963268783ba438cc7cd2087eb524fb8ccb60d9dfddfdbc92508abdfe7f27920d", "1", "null");
         ArchiveIndex index = read(b);
         int[] checks = {0};
+        ArrayList<Integer> processed = new ArrayList<>();
         ByteBuffer physical = ByteBuffer.wrap(base).order(ByteOrder.LITTLE_ENDIAN);
         int central = physical.getInt(base.length - 6), namedDirectory = -1;
         ArrayList<Long> bodies = new ArrayList<>();
@@ -67,6 +68,7 @@ public final class ArchiveIndexTest {
                     + (physical.getShort(local + 28) & 65535));
         }
         ArchiveIndex.SnapshotMarker result = index.verifySnapshot(new StoredMemberTest.Bytes(b) {
+            @Override public void bodyProcessed(int n) { processed.add(n); }
             @Override public void fill(long off, byte[] dest, int n) throws IOException {
                 super.fill(off, dest, n);
                 if (bodies.contains(off)) { assertEquals(3, n); checks[0]++; }
@@ -78,6 +80,7 @@ public final class ArchiveIndexTest {
         assertEquals(12L, index.bodyBytes());
         assertEquals(6, index.entryCount());
         assertEquals(4, checks[0]); // one fill at the actual body offset per ordinary file
+        assertEquals(List.of(3, 3, 3, 3), processed); // neither empty directories nor metadata
         byte[] badDirectory = b.clone();
         assertTrue(namedDirectory >= 0);
         badDirectory[namedDirectory + 8] = 8;  // still lists the directory; local method is not Store

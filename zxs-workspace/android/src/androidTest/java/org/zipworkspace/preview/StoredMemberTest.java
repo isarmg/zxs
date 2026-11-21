@@ -448,8 +448,10 @@ public final class StoredMemberTest {
         byte[] b = archive(new byte[150000], false, false, false);
         int first = 30 + NAME.length;
         for (boolean cancel : new boolean[]{true, false}) {
+            ArrayList<Integer> processed = new ArrayList<>();
             Bytes src = new Bytes(b) {
                 byte[] previous;
+                @Override public void bodyProcessed(int n) { processed.add(n); }
                 @Override public void fill(long off, byte[] target, int n) throws IOException {
                     if (off >= first && off < first + 150000) {
                         if (previous != null) {
@@ -465,6 +467,24 @@ public final class StoredMemberTest {
             ArchiveIndex index = ArchiveIndex.read(src, b.length);
             if (cancel) assertThrows(OperationCanceledException.class, () -> index.checkMember(src, row(index)));
             else assertThrows(IOException.class, () -> index.checkMember(src, row(index)));
+            assertEquals(List.of(65536), processed); // short or canceled block doesn't advance
+        }
+    }
+    @Test public void bodyCountIsNotIntegrityAndAllModesUseTheSameCounter() throws IOException {
+        byte[] text = new byte[135000]; Arrays.fill(text, (byte)'x');
+        byte[] b = archive(text, false, true, true);
+        b[30 + NAME.length + text.length - 1] = 'y'; // valid UTF-8 and length, wrong CRC
+        for (StoredMember.Mode mode : StoredMember.Mode.values()) {
+            ArrayList<Integer> processed = new ArrayList<>();
+            Bytes src = new Bytes(b) {
+                @Override public void bodyProcessed(int n) { processed.add(n); }
+            };
+            ArchiveIndex index = ArchiveIndex.read(src, b.length);
+            assertTrue(processed.isEmpty()); // listing, even if its tail window overlaps body bytes
+            StoredMember.Result result = index.checkMember(src, row(index), mode);
+            assertFalse(result.matches());
+            assertNull(result.text); assertNull(result.indexed);
+            assertEquals(mode == StoredMember.Mode.INDEXED ? List.of(text.length) : List.of(65536, 65536, 3928), processed);
         }
     }
     @Test public void changedDirectoryEndingOrLocalHeaderAfterBodyInvalidatesEvenAMatchingCRC() throws IOException {

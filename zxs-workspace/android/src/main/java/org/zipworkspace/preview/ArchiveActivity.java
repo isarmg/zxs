@@ -36,6 +36,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** No ACTION_VIEW/deep links. Only a foreground user picker decision can supply a document. */
 public final class ArchiveActivity extends Activity {
@@ -44,6 +45,7 @@ public final class ArchiveActivity extends Activity {
     private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(1));
     private CancellationSignal active;
+    private Runnable bodyProgress; // main thread owns the sole pending tick
     private PickedDocument document; // foreground-only original; never put in saved state
     private AlertDialog decision;
     private int generation, page;
@@ -172,6 +174,7 @@ public final class ArchiveActivity extends Activity {
 
     private void stopJob() {
         generation++;
+        stopBodyProgress();
         if (active != null) active.cancel();
         active = null;
         worker.getQueue().clear(); // queued jobs don't own FDs; a running read owns its own lease
@@ -186,6 +189,30 @@ public final class ArchiveActivity extends Activity {
     }
     private boolean current(int ticket, CancellationSignal signal) {
         return ticket == generation && signal == active && !signal.isCanceled() && !isDestroyed();
+    }
+    private AtomicLong startBodyProgress(PickedDocument picked, int ticket, CancellationSignal signal,
+                                         long total, String title, String details) {
+        stopBodyProgress();
+        AtomicLong count = new AtomicLong();
+        bodyProgress = new Runnable() {
+            private long displayed = -1;
+            @Override public void run() {
+                if (bodyProgress != this || !current(ticket, signal) || document != picked) return;
+                long now = count.get();
+                if (now != displayed) {
+                    displayed = now;
+                    state.setText(String.format(Locale.ROOT, "%s，可取消。\n已处理正文 %,d / %,d B%s%s",
+                            title, now, total, now == total ? "；仍在核验。" : "。", details));
+                }
+                main.postDelayed(this, 350); // the worker never posts per-block UI updates
+            }
+        };
+        bodyProgress.run();
+        return count;
+    }
+    private void stopBodyProgress() {
+        Runnable old = bodyProgress; bodyProgress = null;
+        if (old != null) main.removeCallbacks(old);
     }
     private void submit(Runnable task) {
         try { worker.execute(task); }
@@ -362,15 +389,16 @@ public final class ArchiveActivity extends Activity {
         AlertDialog used = decision; decision = null; used.dismiss();
         CancellationSignal signal = new CancellationSignal();
         int ticket = ++generation; active = signal;
-        state.setText(String.format(Locale.ROOT, "正在读取并核验全部 %,d 字节，可取消。", picked.index.bodyBytes()));
+        AtomicLong bytes = startBodyProgress(picked, ticket, signal, picked.index.bodyBytes(), "正在核验整个 .zxs", "");
         render();
         submit(() -> {
             ArchiveIndex.SnapshotMarker result = null;
-            try { result = picked.verifySnapshot(getApplicationContext(), signal); }
+            try { result = picked.verifySnapshot(getApplicationContext(), signal, bytes::addAndGet); }
             catch (IOException | RuntimeException ignored) { /* no URI, partial digest, or stale progress */ }
             ArchiveIndex.SnapshotMarker completed = result;
             main.post(() -> {
                 if (!current(ticket, signal) || document != picked) return;
+                stopBodyProgress();
                 active = null;
                 if (completed == null) {
                     retire(); reset("没有通过整包内容核验：布局不符、读取不完整、内容不符或原授权失效。请重新选择。");
@@ -585,17 +613,18 @@ public final class ArchiveActivity extends Activity {
         int ticket = ++generation; active = signal;
         String path = pathOf(row);
         String mode = readMode == StoredMember.Mode.CRC ? ""
-                : readMode == StoredMember.Mode.INDEXED ? " · 同时核验全文与定位索引"
-                : row.bytes <= PlainText.LIMIT ? " · CRC 相符后显示全文" : " · CRC 相符后只显示前部";
-        state.setText(String.format(Locale.ROOT, "正在核验全部 %,d 字节%s，可取消。\n%s", row.bytes, mode, path));
+                : readMode == StoredMember.Mode.INDEXED ? "\n同时核验全文与定位索引"
+                : row.bytes <= PlainText.LIMIT ? "\nCRC 相符后显示全文" : "\nCRC 相符后只显示前部";
+        AtomicLong bytes = startBodyProgress(picked, ticket, signal, row.bytes, "正在核验所选成员", mode + "\n" + path);
         render();
         submit(() -> {
             StoredMember.Result read = null;
-            try { read = picked.checkMember(getApplicationContext(), row, signal, readMode); }
+            try { read = picked.checkMember(getApplicationContext(), row, signal, readMode, bytes::addAndGet); }
             catch (IOException | RuntimeException ignored) { /* don't disclose URIs or return a partial CRC */ }
             final StoredMember.Result result = read;
             main.post(() -> {
                 if (!current(ticket, signal) || document != picked) return;
+                stopBodyProgress();
                 active = null;
                 if (result == null) {
                     retire(); reset("未取得完整结果：成员布局不符、读取中断、文件已变或授权不可用。请重新选择。");

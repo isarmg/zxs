@@ -21,6 +21,7 @@ import android.system.StructStat;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.util.Locale;
+import java.util.function.LongConsumer;
 
 /** One user-selected document from a platform-signed AOSP-compatible primary storage provider. */
 final class PickedDocument implements AutoCloseable {
@@ -44,11 +45,11 @@ final class PickedDocument implements AutoCloseable {
         ParcelFileDescriptor old = held; held = null;
         try { old.close(); } catch (IOException ignored) { /* no retry of a closed descriptor number */ }
     }
-    StoredMember.Result checkMember(Context ctx, ArchiveIndex.Item item, CancellationSignal cancel, StoredMember.Mode mode)
-            throws IOException {
+    StoredMember.Result checkMember(Context ctx, ArchiveIndex.Item item, CancellationSignal cancel,
+                                    StoredMember.Mode mode, LongConsumer progress) throws IOException {
         cancel.throwIfCanceled();
         try (ParcelFileDescriptor lease = borrow()) {
-            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel, progress);
             reader.validate();
             StoredMember.Result result = index.checkMember(reader, item, mode);
             reader.validate();
@@ -57,11 +58,12 @@ final class PickedDocument implements AutoCloseable {
     }
 
     boolean isManagedSnapshotName() { return title.toLowerCase(Locale.ROOT).endsWith(".zxs"); }
-    ArchiveIndex.SnapshotMarker verifySnapshot(Context ctx, CancellationSignal cancel) throws IOException {
+    ArchiveIndex.SnapshotMarker verifySnapshot(Context ctx, CancellationSignal cancel, LongConsumer progress)
+            throws IOException {
         ArchiveIndex.require(isManagedSnapshotName());
         cancel.throwIfCanceled();
         try (ParcelFileDescriptor lease = borrow()) {
-            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel, progress);
             reader.validate();
             ArchiveIndex.SnapshotMarker result = index.verifySnapshot(reader);
             reader.validate();
@@ -73,7 +75,7 @@ final class PickedDocument implements AutoCloseable {
             throws IOException {
         cancel.throwIfCanceled();
         try (ParcelFileDescriptor lease = borrow()) {
-            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel);
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel, null);
             reader.validate();
             String result = index.textPage(reader, item, proof, page);
             reader.validate();
@@ -160,7 +162,7 @@ final class PickedDocument implements AutoCloseable {
             ArchiveIndex.require(OsConstants.S_ISREG(original.st_mode) && original.st_ino != 0
                     && original.st_dev != 0 && original.st_nlink > 0 && original.st_size == size);
             Os.lseek(fd, 0, OsConstants.SEEK_CUR);
-            Reader reader = new Reader(ctx, uri, fd, original, cancel);
+            Reader reader = new Reader(ctx, uri, fd, original, cancel, null);
             reader.validate();
             ArchiveIndex index = ArchiveIndex.read(reader, size);
             reader.validate();
@@ -177,11 +179,17 @@ final class PickedDocument implements AutoCloseable {
         private final FileDescriptor fd;
         private final StructStat original;
         private final CancellationSignal cancel;
+        private final LongConsumer progress;
         private long untilCheck;
-        Reader(Context ctx, Uri uri, FileDescriptor fd, StructStat original, CancellationSignal cancel) {
+        Reader(Context ctx, Uri uri, FileDescriptor fd, StructStat original, CancellationSignal cancel,
+               LongConsumer progress) {
             this.ctx = ctx; this.uri = uri; this.fd = fd; this.original = original; this.cancel = cancel;
+            this.progress = progress;
         }
         public void check() { cancel.throwIfCanceled(); }
+        public void bodyProcessed(int length) {
+            if (progress != null) progress.accept(length);
+        }
         void validate() throws IOException {
             check();
             checkObserved(ctx, uri, fd, original);

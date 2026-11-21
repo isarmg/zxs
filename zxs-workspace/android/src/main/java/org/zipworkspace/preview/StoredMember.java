@@ -114,6 +114,7 @@ final class StoredMember {
                 System.arraycopy(block, 0, capture, at, Math.min(n, capture.length - at));
             }
             pos += n;
+            src.bodyProcessed(n);
         }
         src.check();
         local.match(src, block);

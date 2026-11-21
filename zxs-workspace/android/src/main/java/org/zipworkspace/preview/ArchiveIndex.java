@@ -31,6 +31,7 @@ final class ArchiveIndex {
     }
     interface MemberSource extends Source {
         void fill(long offset, byte[] buffer, int length) throws IOException; // exact, reusable buffer
+        default void bodyProcessed(int length) {} // completed member bytes only, not seeks/header/footer reads
     }
     static final class Slot {
         final int record, recordLength; // original central bytes, not a reconstructed filename
