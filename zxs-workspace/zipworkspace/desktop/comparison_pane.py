@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
 from .. import comparison
 from ..model import Rejected
-from .selection import compare_version as compare_listed_version
+from .selection import Verification, compare_version as compare_listed_version
 from .widgets import Table, button, label
 
 
@@ -11,6 +11,7 @@ class ComparisonPane(QWidget):
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
+        self.version_read = None
         layout = QVBoxLayout(self)
         layout.addWidget(label("可以比较本机文件夹、从「历史」或「分支」选另一版本，或在「核验普通 ZIP」页比较两次核验的内容。比较只读，不同步文件。"))
         self.choose = button("选择文件夹并比较…", self.pick)
@@ -37,6 +38,8 @@ class ComparisonPane(QWidget):
             + ("尚未开始比较。" if enabled else "本机目录比较在此平台不可用；也可以从历史或分支选择版本对照。"))
 
     def clear(self):
+        previous, self.version_read = self.version_read, None
+        if previous is not None: previous.cancel()
         self.report, self.number, self.mode, self.request = None, 0, None, None
         self.plain = None
         self.table.rows.replace(())
@@ -109,6 +112,7 @@ class ComparisonPane(QWidget):
         self.clear()
         self.mode = "version"
         request = self.request = object()
+        observer = self.version_read = Verification()
 
         def describe(side, path, marker):
             return (f"{side}：{path.name} · 第 {marker.generation} 代\n"
@@ -121,16 +125,22 @@ class ComparisonPane(QWidget):
         def work():
             # Treat this read's outcome as data, so Window.poll cannot report a
             # stale exception on the main status bar before we check the request.
-            try: return compare_listed_version(chosen, store, catalog, node), None
+            try: return compare_listed_version(chosen, store, catalog, node, observer=observer), None
             except Exception as err: return None, err
 
         def failed(err):
             if self.matches(chosen, request):
+                self.version_read = None
                 self.summary.setText(pair + f"\n未完成版本比较：{err}")
                 self.owner.inform("未完成版本比较；请查看对比页。")
 
         def done(outcome):
             if not self.matches(chosen, request): return
+            self.version_read = None
+            if observer.cancelled:
+                self.summary.setText(pair + "\n已取消本次版本对照；未显示本次结果。")
+                self.owner.inform("已取消版本对照；没有改变当前快照或写入。")
+                return
             report, error = outcome
             if error is not None:
                 failed(error)
@@ -141,8 +151,12 @@ class ComparisonPane(QWidget):
             self.show_page(0)
             self.owner.inform("所选原版本已重新核验。结果不跟随最新分支头，也不是恢复或工作树状态。")
 
+        def progress():
+            return observer.progress() if self.matches(chosen, request) else ("", 0, None)
+
         try:
-            submitted = self.owner.job("正在核验所选原版本的完整归档…", work, done)
+            submitted = self.owner.job("正在核验所选原版本的完整归档…", work, done,
+                                       cancel=observer.cancel, cancel_text="取消版本对照", progress_report=progress)
         except Exception as err:
             failed(err)
         else:

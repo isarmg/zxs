@@ -22,7 +22,8 @@ class Verification:
              "layout": "正在检查 ZIP 布局和目录",
              "members": "正在读取并核验成员正文",
              "raw": "正在核对原 ZIP 字节摘要",
-             "identity": "正在核对原件与目录"}
+             "identity": "正在核对原件与目录",
+             "compare": "正在比较两份已核验的目录内容"}
 
     def __init__(self):
         self._lock, self._stop = Lock(), Event()
@@ -217,7 +218,7 @@ class Selection:
         return result
 
 
-def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, node: Node):
+def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, node: Node, *, observer=None):
     """Compare the admitted left view to exactly one canonical catalog row, not to a later HEAD."""
     from ..comparison import compare_snapshots
 
@@ -226,8 +227,14 @@ def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, no
             str(node.path) != str(store.path / node.marker.filename) or node.marker.repo != current.repo or
             node.marker.operation == current.operation):
         raise Rejected("请选择本次存储中另一条有原始证明的规范版本")
+    if observer is not None: observer.check()
     store.check()
-    right = Selection.open(node.path, expected=node)  # No retained display FD, no change to the current selection.
+    if observer is not None: observer.check()
+    options = {} if observer is None else {"observer": observer}
+    right = Selection.open(node.path, expected=node, **options)  # No retained FD, no change to the current selection.
+    if observer is not None: observer.begin("compare")
     result = compare_snapshots(left.browser, right.browser)
+    if observer is not None: observer.begin("identity")
     store.check()
+    if observer is not None: observer.check()
     return result

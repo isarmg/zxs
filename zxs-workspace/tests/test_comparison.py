@@ -120,6 +120,26 @@ class CompareVersions(unittest.TestCase):
         self.assertEqual(native.call_count, 1)
         self.assertEqual(native.call_args.args[1], self.left.path)
 
+    def test_comparing_the_right_version_can_stop_on_a_real_member_block(self):
+        from zipworkspace.desktop.selection import Verification
+
+        class StopAtBody(Verification):
+            def advance(self, size):
+                super().advance(size)
+                phase, done, total = self.progress()
+                if phase == self.PHASE["members"] and done and total > done:
+                    self.cancel()
+
+        observer = StopAtBody()
+        with patch("zipworkspace.desktop.selection.archive_sha", side_effect=AssertionError("body stopped before raw read")), \
+             patch.object(comparison, "compare_snapshots", side_effect=AssertionError("no partial comparison")):
+            with self.assertRaisesRegex(Rejected, "取消"):
+                compare_version(self.left, self.store, self.catalog, self.right, observer=observer)
+        phase, processed, total = observer.progress()
+        self.assertEqual(phase, Verification.PHASE["members"])
+        self.assertEqual(processed, 4)  # first ordinary member, not empty directory or ZIP metadata
+        self.assertGreater(total, processed)
+
     @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
                          "optional Qt source fixture")
     def test_completed_but_cancelled_catalog_does_not_replace_the_left_snapshot(self):
@@ -249,6 +269,17 @@ class CompareVersions(unittest.TestCase):
             pane.more.click(); self.assertEqual(pane.number, 1)
 
             future, run = start()
+            result = run()
+            self.assertIsNotNone(result[0])
+            future.set_result(result)
+            win.transfer_cancel.click()  # a returned but not yet applied result is still discardable
+            win.poll()
+            self.assertIsNone(pane.report)
+            self.assertEqual(pane.table.rows.rows, ())
+            self.assertIs(archive.selection, self.left)
+            self.assertIn("已取消版本对照", win.note.text())
+
+            future, run = start()
             with patch.object(ui, "compare_listed_version", side_effect=Rejected("current archive was changed")):
                 future.set_result(run())
             win.poll()
@@ -260,6 +291,8 @@ class CompareVersions(unittest.TestCase):
             directory = self.root / "different-store"; directory.mkdir()
             archive.use_store(StoreSelection.open(directory))
             replacement_note = win.note.text()
+            win.poll()  # Old progress may not return to the status bar even before the reply arrives.
+            self.assertEqual(win.note.text(), replacement_note)
             with patch.object(ui, "compare_listed_version", side_effect=Rejected("late old version error")):
                 future.set_result(run())
             win.poll()
