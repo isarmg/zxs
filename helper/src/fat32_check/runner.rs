@@ -22,7 +22,7 @@ enum Budget{Sealed,Leased,Xfs,Repair(u64)}
 pub(super) fn prepare_worker()->io::Result<()> {prepare(Budget::Sealed)}
 pub(super) fn prepare_leased_worker()->io::Result<()> {prepare(Budget::Leased)}
 pub(super) fn prepare_xfs_worker()->io::Result<()> {prepare(Budget::Xfs)}
-pub(super) fn prepare_ext_repair(length:u64)->io::Result<()> {prepare(Budget::Repair(length))}
+pub(super) fn prepare_work_repair(length:u64)->io::Result<()> {prepare(Budget::Repair(length))}
 fn prepare(budget:Budget)->io::Result<()> {
     // This command owns the entire CLI process. Never lower process rlimits or
     // manipulate descriptor inheritance in an embedding service.
@@ -80,6 +80,24 @@ pub(super) fn check_exfat(runtime:&Runtime,image:&ExfatSealed)->io::Result<super
     if !delivered(&status,code){return Err(invalid("exFAT checker delivery and actual exit not confirmed"));}
     super::exfat::classify(code,&out,&err,image.frame())
 }
+// Separate from the sealed checker. This path accepts only the independently
+// reopened work inode, so checking a large new copy does not duplicate it in RAM.
+pub(super) fn check_exfat_work(runtime:&Runtime,work:&super::exfat::RepairImage)->io::Result<super::exfat::Report>{
+    runtime.require_format(Format::Exfat)?;work.require()?;
+    let (code,out,err,status)=invoke(runtime,Operand::LeasedExfat(work))?;
+    work.require()?;
+    if !delivered(&status,code){return Err(invalid("exFAT recheck delivery and actual exit not confirmed"));}
+    super::exfat::classify(code,&out,&err,work.extent().view)
+}
+pub(super) fn repair_exfat(runtime:&Runtime,work:&repair::Writable<'_>,source:&super::exfat::RepairImage)->io::Result<i32>{
+    runtime.require_format(Format::Exfat)?;source.require()?;work.require()?;
+    let (code,out,err,status)=invoke(runtime,Operand::RepairExfat{work,source})?;
+    source.require()?;work.require()?;
+    if !preen_exit(&status,code)||!super::exfat::preen_summary(code,&out,&err,source.extent().view){
+        return Err(invalid("exFAT automatic repair was incomplete or needs manual attention; no final copy published"));
+    }
+    Ok(code)
+}
 pub(super) fn check_ext4(runtime:&Runtime,image:&ext4::Image)->io::Result<ext4::Report>{
     runtime.require_ext4()?;
     let (code,out,err,status)=invoke(runtime,Operand::LeasedExt4(image))?;
@@ -122,11 +140,14 @@ pub(super) fn check_btrfs(runtime:&Runtime,image:&btrfs::Image)->io::Result<btrf
 #[derive(Clone,Copy)]
 enum Operand<'a>{
     Sealed(&'a File),LeasedExt4(&'a ext4::Image),LeasedXfs(&'a xfs::Image),LeasedNtfs(&'a ntfs::Image),LeasedBtrfs(&'a btrfs::Image),
+    LeasedExfat(&'a super::exfat::RepairImage),
     RepairExt4{work:&'a repair::Writable<'a>,source:&'a ext4::Image},
+    RepairExfat{work:&'a repair::Writable<'a>,source:&'a super::exfat::RepairImage},
 }
 impl<'a> Operand<'a>{
     fn lease(self)->Option<&'a File>{
-        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file()),Self::LeasedBtrfs(i)=>Some(i.file()),Self::RepairExt4{source,..}=>Some(source.file())}
+        match self{Self::Sealed(_)=>None,Self::LeasedExt4(i)=>Some(i.file()),Self::LeasedXfs(i)=>Some(i.file()),Self::LeasedNtfs(i)=>Some(i.file()),Self::LeasedBtrfs(i)=>Some(i.file()),Self::RepairExt4{source,..}=>Some(source.file()),
+            Self::LeasedExfat(work)=>Some(work.file()),Self::RepairExfat{source,..}=>Some(source.file())}
     }
     fn sandbox(self,cmd:&mut Command)->io::Result<OwnedFd>{
         match self{
@@ -136,7 +157,7 @@ impl<'a> Operand<'a>{
                 cmd.args(["--perms","0400","--ro-bind-data",&fd.as_raw_fd().to_string(),"/image"]);
                 Ok(fd)
             }
-            Self::RepairExt4{work,..}=>{
+            Self::RepairExt4{work,..}|Self::RepairExfat{work,..}=>{
                 work.require()?;
                 // The original readonly source is watched by the parent but
                 // never duplicated into bubblewrap. Only the newborn inode
@@ -154,8 +175,9 @@ impl<'a> Operand<'a>{
     }
 }
 fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
-    let repairing=matches!(copy,Operand::RepairExt4{..});
-    let ext=repairing||matches!(copy,Operand::LeasedExt4(_));
+    let repairing_ext=matches!(copy,Operand::RepairExt4{..});
+    let repairing_exfat=matches!(copy,Operand::RepairExfat{..});
+    let ext=repairing_ext||matches!(copy,Operand::LeasedExt4(_));
     let xfs=matches!(copy,Operand::LeasedXfs(_));
     let ntfs=matches!(copy,Operand::LeasedNtfs(_));
     let btrfs=matches!(copy,Operand::LeasedBtrfs(_));
@@ -208,7 +230,8 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     let filter=give(&filter_read)?;b.args(["--seccomp",&filter.as_raw_fd().to_string()]);
     let operand=copy.sandbox(&mut b)?;let status=give(&wstatus)?;
     b.args(["--remount-ro","/","--json-status-fd",&status.as_raw_fd().to_string(),"--","/checker"]);
-    if repairing{b.args(["-fp","-N","/image","/image"]);}
+    if repairing_ext{b.args(["-fp","-N","/image","/image"]);}
+    else if repairing_exfat{b.args(["-p","/image"]);}
     else if ext{b.args(["-fn","-N","/image","/image"]);}
     else if xfs{b.args(["-n","-f","-P","-t","0","-o","phase2_threads=1","/image"]);}
     else if btrfs{b.args(["check","--readonly","/image"]);}
@@ -219,10 +242,12 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     match copy{
         Operand::Sealed(_)=>prepare_diagnostic_exec(&mut b,runtime.launcher())?,
         Operand::LeasedExt4(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::LeasedExfat(work)=>{work.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedNtfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedBtrfs(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::LeasedXfs(image)=>{image.require()?;prepare_xfs_diagnostic_exec(&mut b,runtime.launcher())?;},
         Operand::RepairExt4{work,source}=>{work.require()?;source.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
+        Operand::RepairExfat{work,source}=>{work.require()?;source.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},
     }
     let mut group=Group::new(b.spawn()?);
     // Only the sandbox monitor and its explicitly selected setup descriptions

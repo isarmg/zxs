@@ -58,6 +58,8 @@ helper disks --device 259:1 --rates
 
 exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整镜像的可信SHA256`。它只对 1–128 MiB、符合单卷边界的封存副本运行包内 `fsck.exfat -n`。返回 0 只表示此次检查未报告问题；1 表示明确报告问题或卷状态位须注意；2 表示未能确认。不会修盘，也不检查普通文件正文。[范围、结果与上游依据](docs/exfat-copy-check.md)。也可在终端按上述方式预选 exFAT，由配对页面确认同一项检查。
 
+另有本机确认的 [`repair-exfat-copy`](docs/exfat-copy-check.md#只修新建的工作副本)：仅对新工作文件固定 `fsck.exfat -p`，再次只读检查后无覆盖发布。自动修复可能截短或删除工作副本里的损坏项，不改变输入、原盘或现有输出，不提供网页登录修复。
+
 ## 检查一份 ext4 保存副本（只读）
 
 `helper check-ext4-copy /绝对路径/volume.img --sha256 完整副本的独立SHA256`。从用户明确选择的本地普通镜像检查，不打开原盘，也不把镜像拷入内存或限制为 128 MiB。需保持实际只读租约及原件；用隔离的 Debian 原版 `e2fsck -fn`。外部日志、需要恢复、截短或未完整检查都不报正常。也可用上面的配对面板确认同次只读检查；更长任务用终端命令。[完整边界与返回码](docs/ext4-copy-check.md)见专页。

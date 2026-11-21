@@ -38,6 +38,10 @@ pub(crate) fn confirm_ext_repair(preview:String,web:Option<u64>,require:impl Fn(
     if let Some(bytes)=web{native_run::offer_ext_repair_web(&tty,bytes,&require)?;}
     require()?;tty.confirm_ext_repair(preview)?;require()?;tty.check()
 }
+pub(crate) fn confirm_exfat_repair(preview:String,require:impl Fn()->std::io::Result<()>)->std::io::Result<()>{
+    let tty=terminal::PublicConfirmation::select()?;
+    require()?;tty.confirm_exfat_repair(preview)?;require()?;tty.check()
+}
 
 fn login(s: &[u8]) -> bool {
     let basic = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
