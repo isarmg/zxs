@@ -18,6 +18,7 @@ class LiveCheckout:
                  *, source=None, initial_branch=None, initial_index=None):
         self.work, self.state, self.store = work, state, store
         self.instance, self.repo = check_id(instance), check_id(repo)
+        self.review_origin = object()  # The creator and its borrowed views share only this in-memory identity.
         self.initial_base = ((self.repo, check_id(initial_branch), 0, None, None)
                              if initial_branch is not None else None)
         # Only a checkout has a displayed source node. A fresh registration is

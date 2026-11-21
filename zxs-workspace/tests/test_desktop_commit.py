@@ -16,7 +16,7 @@ import zipfile
 from zipworkspace import lifecycle, live_candidate, private_stage, publish, worktree
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
-from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped
+from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped, ReviewedTreeChanged
 from zipworkspace.desktop.pending_fork import PendingFork
 from zipworkspace.desktop.selection import Selection, Verification, read_registered_baseline
 from zipworkspace.desktop.retry_choice import PendingRetry
@@ -295,11 +295,11 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
                 future = Future()
                 jobs.append((future, work))
                 return future
-            def read(loan, *, observer, retain_missing=False):
+            def read(loan, *, observer, **retained):
                 loans.append(loan)
                 self.assertIsNot(loan, live)
                 if refused: raise Rejected("原读请求被拒")
-                return native(loan, observer=observer, retain_missing=retain_missing)
+                return native(loan, observer=observer, **retained)
             with self.subTest(stale=stale, refused=refused, cancelled=cancelled), \
                  patch.object(win.pool, "submit", side_effect=queue), \
                  patch.object(checkout_pane, "observe_live_changes", side_effect=read), \
@@ -400,6 +400,133 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
             for value in (self.state, self.tree, self.store, choice.operation, self.first.operation):
                 self.assertIn(str(value), text)
         return choice
+
+    def reviewed_choice(self):
+        marker, report, evidence = lifecycle.observe_live_changes(self.live, retain_review=True)
+        self.assertEqual(marker, self.first)
+        self.addCleanup(evidence.close)
+        choice = CommitChoice(self.live, review=evidence)
+        self.addCleanup(choice.release)
+        self.assertIs(choice.review, evidence.review)
+        evidence.close()
+        self.assertIsNone(evidence.held)
+        return report, choice
+
+    def test_reviewed_commit_takes_the_original_report_before_close_and_freezes_exact_content(self):
+        from zipworkspace.desktop import commit_choice
+        (self.tree/"story").write_bytes(b"reviewed contents")
+        (self.tree/"Another empty directory").mkdir()
+        report, choice = self.reviewed_choice()
+        self.assertEqual((report.added, report.changed, report.missing), (1, 1, 0))
+        self.assertEqual((choice.review.entries, choice.review.data_bytes), (3, len(b"reviewed contents")))
+        with patch.object(commit_choice, "relative_document", side_effect=AssertionError("do not reopen the reviewed baseline")):
+            detail = choice.prepare()
+            self.assertIn(choice.review.tree, detail)
+            path, saved = choice.run()
+        self.assertEqual((saved.parent, saved.generation, saved.tree), (self.first.operation, 2, choice.review.tree))
+        self.assertEqual(self.live.status()["base_operation"], choice.operation)
+        with zipfile.ZipFile(path) as doc:
+            self.assertEqual(doc.read("story"), b"reviewed contents")
+            self.assertIn("Another empty directory/", doc.namelist())
+
+    def test_same_length_edit_after_review_rejects_inside_unnamed_capture_without_intent_or_upload(self):
+        story = self.tree/"story"
+        story.write_bytes(b"reviewed-A")
+        _, choice = self.reviewed_choice()
+        choice.prepare()
+        story.write_bytes(b"reviewed-B")
+        before_state, before_store = set(self.state.iterdir()), set(self.store.iterdir())
+        with patch.object(live_candidate.LiveArchiveCandidate, "_link_private",
+                          side_effect=AssertionError("stale review must not name a candidate")), \
+             patch.object(worktree, "finish", side_effect=AssertionError("stale review must not publish")):
+            with self.assertRaisesRegex(ReviewedTreeChanged, "请重新查看改动"): choice.run()
+        self.assertEqual(set(self.state.iterdir()), before_state)
+        self.assertEqual(set(self.store.iterdir()), before_store)
+        self.assertEqual(story.read_bytes(), b"reviewed-B")
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(choice.result()[0], "unrecorded")
+        with self.assertRaises(Rejected): choice.run()
+
+    def test_review_cannot_cross_sessions_or_use_a_same_byte_baseline_replacement(self):
+        from zipworkspace.desktop import commit_choice
+        _, _, evidence = lifecycle.observe_live_changes(self.live, retain_review=True)
+        self.addCleanup(evidence.close)
+        other = self.open_live(self.loose, "Different working directory")
+        with self.assertRaisesRegex(Rejected, "当前会话"):
+            CommitChoice(other, review=evidence)
+        choice = CommitChoice(self.live, review=evidence); self.addCleanup(choice.release)
+        evidence.close()
+        data = self.original.read_bytes()
+        self.original.rename(self.root/"old-baseline.zxs")
+        self.original.write_bytes(data)
+        with patch.object(commit_choice, "relative_document", side_effect=AssertionError("must not reopen by name")):
+            with self.assertRaises(Rejected): choice.prepare()
+        self.assertFalse(choice.used)
+        self.assertIsNone(self.live.status()["pending_operation"])
+
+    def test_unqualified_store_can_still_compare_but_cannot_supply_a_commit_review(self):
+        (self.tree/"story").write_bytes(b"one change on a readable tree")
+        with patch.object(lifecycle, "local_mount", side_effect=Rejected("remote STORE")):
+            marker, report, evidence = lifecycle.observe_live_changes(self.live, retain_review=True)
+        self.assertEqual(marker, self.first)
+        self.assertEqual(report.changed, 1)
+        self.assertIsNone(evidence)
+
+    @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
+    def test_review_button_transfers_original_proof_to_existing_manual_confirmation(self):
+        from PySide6.QtWidgets import QApplication, QPushButton
+        from zipworkspace.desktop import commit_controls
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        self.tree.joinpath("story").write_bytes(b"explicitly reviewed")
+        win = Window(); self.addCleanup(win.close)
+        pane = win.archive.checkout
+        pane.live = self.live
+        pane.live_record = self.live.status()
+        pane.commits.set_session(self.live)
+        pane._worktree_actions()
+        queue = []
+
+        def defer(work):
+            future = Future(); queue.append((future, work)); return future
+
+        def deliver():
+            future, work = queue.pop(0)
+            future.set_result(work()); win.poll()
+
+        with patch.object(win.pool, "submit", side_effect=defer), \
+             patch.object(commit_controls, "confirm", return_value=False) as confirm, \
+             patch.object(worktree, "commit", side_effect=AssertionError("nothing runs without separate consent")):
+            pane.compare_live(); deliver()
+            action = pane.changes_dialog.findChild(QPushButton, "commit-reviewed-worktree")
+            self.assertIsNotNone(action)
+            self.assertTrue(action.isEnabled())
+            self.assertFalse(queue)  # Opening/closing a report never starts a commit.
+            action.click()
+            self.assertIsNone(pane.changes_dialog)
+            self.assertEqual(len(queue), 1)  # Only read-only preparation before the unchanged manual consent.
+            job = pane.commits.running
+            self.assertIsNotNone(job.review)
+            deliver()
+            confirm.assert_called_once()
+            self.assertIn(job.review.tree, confirm.call_args.args[2])
+            self.assertIn("停止所有工作树写入者", confirm.call_args.kwargs["attestation"])
+            self.assertFalse(queue)
+            self.assertIsNone(pane.commits.running)
+            self.assertTrue(job.live.closed)
+
+            def yes_after_report_scope_changes(*_args, **_kwargs):
+                pane.live_record = dict(pane.live_record)  # A new status observation is not the old UI choice.
+                return True
+
+            confirm.side_effect = yes_after_report_scope_changes
+            pane.compare_live(); deliver()
+            pane.changes_dialog.findChild(QPushButton, "commit-reviewed-worktree").click()
+            deliver()
+            self.assertFalse(queue)
+            self.assertIsNone(pane.commits.running)
+        self.assertIsNone(self.live.status()["pending_operation"])
+        self.assertEqual(list(self.store.iterdir()), [self.original])
 
     def test_commit_publishes_exact_new_branch_slot_and_only_observes_the_final_receipt(self):
         (self.tree/"story").write_bytes(b"saved by the user")

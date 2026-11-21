@@ -669,7 +669,8 @@ class CheckoutPane(QWidget):
                     with closing(loan):
                         if first: return observe_first_contents(loan, observer=observer), None
                         if initial: return observe_initial_changes(loan, observer=observer), None
-                        result = observe_live_changes(loan, observer=observer, retain_missing=True, retain_text=True)
+                        result = observe_live_changes(loan, observer=observer, retain_missing=True, retain_text=True,
+                                                      retain_review=True)
                     return result, None
                 except Exception as error:
                     if result is not None and result[2] is not None: result[2].close()
@@ -717,7 +718,7 @@ class CheckoutPane(QWidget):
         table = Table(columns, "首次提交内容（一次只读观察）" if first else "本工作树的只读改动")
         layout.addWidget(table)
         close_lines = None
-        if evidence is not None:
+        if evidence is not None and evidence.missing:
             def missing():
                 row = table.item()
                 return row if row is not None and row.change == "missing" and row.before in ("file", "directory") else None
@@ -739,7 +740,24 @@ class CheckoutPane(QWidget):
             table.selectionModel().selectionChanged.connect(update_restore)
             table.rows.modelReset.connect(update_restore)
             layout.addWidget(restore)
-            if evidence.has_text_pairs: close_lines = self._line_tools(dialog, live, evidence, table, layout)
+        if evidence is not None and evidence.has_text_pairs:
+            close_lines = self._line_tools(dialog, live, evidence, table, layout)
+        if not first and not initial and evidence is not None and evidence.review is not None:
+            record = self.live_record
+
+            def current():
+                return (self.live is live and self.live_record is record and not self.active
+                        and not self.visibility_blocked
+                        and (self.changes_dialog is dialog or self.changes_dialog is None))
+
+            def prepare_commit():
+                if self.changes_dialog is not dialog or not current() or self.owner.pending is not None: return
+                self.commits.begin_reviewed(live, evidence, current=current, dismiss=dialog.reject)
+
+            action = button("提交本次审阅的整棵工作树…", prepare_commit)
+            action.setObjectName("commit-reviewed-worktree")
+            action.setEnabled(self.commits.save.isEnabled())
+            layout.addWidget(action)
         nav = QHBoxLayout(); layout.addLayout(nav)
         number, count = 0, max(1, (len(report.rows) + report.PAGE - 1) // report.PAGE)
         change = {"added":"新增", "changed":"修改", "missing":"缺少"}

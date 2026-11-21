@@ -5,7 +5,7 @@ import stat
 
 from .. import lifecycle, worktree
 from ..archive import read_managed_document, stamp
-from ..document import archive_sha, check_relative, native_identity, relative_document
+from ..document import PositionalDocument, archive_sha, check_relative, native_identity, relative_document
 from ..model import Commit, Rejected, check_id, new_id
 from ..private_candidates import CandidateDirectory
 from ..private_freeze import local_mount, mount_id
@@ -29,6 +29,10 @@ class _Receipt:
 
 class CommitStopped(Rejected):
     """The user's stop request won before registering this operation."""
+
+
+class ReviewedTreeChanged(Rejected):
+    """Frozen contents did not match the report; no named candidate or intent was reached."""
 
 
 class _CommitPreparation(Verification):
@@ -64,8 +68,23 @@ class _CommitPreparation(Verification):
 class CommitChoice:
     purpose = "commit"
 
-    def __init__(self, live):
+    def __init__(self, live, *, review=None):
         self._bind(live, new_id())
+        if review is not None:
+            try:
+                if (type(review) is not lifecycle.MissingBaseline or review.review is None
+                        or review.review.origin is not live.review_origin or review.instance != live.instance
+                        or review.path.parent != live.store or not review.basis[2]):
+                    raise Rejected("提交审阅仅接受当前会话的原在线工作树对照")
+                fd = review.duplicate()
+                self.stack.callback(os.close, fd)
+                self.review = review.review
+                self.review_basis, self.review_name = review.basis, review.path.name
+                self.review_stamp, self.review_marker = review.observed, review.marker
+                self.review_doc = PositionalDocument(fd, self.review_stamp[2])
+            except BaseException:
+                self.release()
+                raise
 
     def _bind(self, live, operation):
         self.operation = check_id(operation)
@@ -79,6 +98,7 @@ class CommitChoice:
         self.preparation = _CommitPreparation() if self.purpose == "commit" else None
         self.ack_fd = None
         self.anonymous_candidate = None
+        self.review = None
 
     def close(self):
         if self.closed: return
@@ -134,13 +154,17 @@ class CommitChoice:
         else: self._open_base(held_mount=True)
 
     def _prepare(self):
-        self._prepare_base()
+        self._prepare_base(required=self.review_basis if self.review is not None else None)
         _, branch, gen, node, digest = self.base
         if gen == 0:
             self.check_first_slot()
             base_detail = f"尚无已提交的快照。此次将建立第 1 代，没有父节点。\n新槽：{self.live.store / self.first_slot}"
         else:
             base_detail = f"基线：第 {gen} 代 · {node}\n原包 SHA-256：{digest}"
+        if self.review is not None:
+            base_detail += (f"\n本次审阅：{self.review.entries:,} 项 · 普通文件正文 {self.review.data_bytes:,} B"
+                            f"\n审阅所得整树 SHA-256：{self.review.tree}\n"
+                            "只提交与此报告相同的路径、类型与正文；冻结不符则不登记、不发布。")
         return (f"工作树：{self.live.work}\n命令行 STATE：{self.live.state}\n原 STORE：{self.live.store}\n"
                 f"分支：{branch}\n{base_detail}\n"
                 f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n"
@@ -163,20 +187,29 @@ class CommitChoice:
             raise Rejected("工作树没有可继续的原基线")
         self.name = f"{repo}.{branch}.{gen:016x}.zxs"
         # No SQLite writer or lock persists across this potentially long read / consent dialog.
-        try:
-            doc = self.stack.enter_context(relative_document(self.live.store_fd, self.name))
-        except FileNotFoundError as exc:
-            raise Rejected("所选 STORE 中缺少原基线，不用窗口打开的散包代替，也不自动补发") from exc
+        if self.review is not None:
+            doc = self.review_doc
+            if self.name != self.review_name: raise Rejected("不选择另一代或另一份审阅基线")
+            check_relative(self.live.store_fd, self.name, doc, self.review_stamp)
+        else:
+            try:
+                doc = self.stack.enter_context(relative_document(self.live.store_fd, self.name))
+            except FileNotFoundError as exc:
+                raise Rejected("所选 STORE 中缺少原基线，不用窗口打开的散包代替，也不自动补发") from exc
         observed = stamp(doc)
-        if held_mount and mount_id(doc.fileno()) != mount_id(self.live.store_fd):
+        if self.review is not None and observed != self.review_stamp:
+            raise Rejected("本次报告的原归档已变化；请重新查看改动")
+        if (held_mount or self.review is not None) and mount_id(doc.fileno()) != mount_id(self.live.store_fd):
             raise Rejected("登记基线归档不在原 STORE 挂载")
         marker = read_managed_document(doc, display_name=self.name, observer=self.preparation)[0]
         if ((marker.repo, marker.branch, marker.generation, marker.operation) != self.base[:4]
+                or (self.review is not None and marker != self.review_marker)
                 or archive_sha(doc, observer=self.preparation) != digest):
             raise Rejected("STORE 中原基线的节点或整包 SHA-256 不符")
         self.qualify()
         check_relative(self.live.store_fd, self.name, doc, observed)
         self.base_marker, self.observed, self.original = marker, observed, doc  # Only after both checks.
+        if self.review is not None: self._check_registered_mount()
 
     def _check_base_evidence(self):
         if (self.base is not None and self.live.initial_base is not None and self.base == self.live.initial_base
@@ -184,6 +217,7 @@ class CommitChoice:
             return  # Only the actual creator of this original catalog carries this evidence.
         if self.original is None: raise Rejected("未持有本次已核验的原基线")
         check_relative(self.live.store_fd, self.name, self.original, self.observed)
+        if self.review is not None: self._check_registered_mount()
 
     def _check_registered_mount(self):
         named = os.open(self.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.live.store_fd)
@@ -219,6 +253,10 @@ class CommitChoice:
     def check_marker(self, marker, sha):
         if self.marker is None or marker != self.marker or sha != self.digest or marker.operation != self.operation:
             raise Rejected("记录并非本次已核验的冻结候选")
+
+    def check_review_tree(self, tree):
+        if self.review is not None and tree != self.review.tree:
+            raise ReviewedTreeChanged("冻结内容已不等于本次审阅的整树；没有具名候选、登记待决或发布。请重新查看改动。")
 
     def candidate_source(self, marker):
         if self.purpose == "commit":

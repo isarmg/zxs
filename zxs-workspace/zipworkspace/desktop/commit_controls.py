@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from ..capacity import describe
 from .branch_choice import SnapshotBranch
-from .commit_choice import CommitChoice, CommitStopped
+from .commit_choice import CommitChoice, CommitStopped, ReviewedTreeChanged
 from .pending_fork import PendingFork
 from .retry_choice import PendingRetry
 from .widgets import button, confirm, label
@@ -84,22 +84,27 @@ class CommitControls(QWidget):
     def begin(self):
         self._begin(branch=False)
 
+    def begin_reviewed(self, original, review, *, current, dismiss):
+        if self.session is not original or not current(): return
+        self._begin(branch=False, review=review, still_current=current, dismiss=dismiss)
+
     def branch(self):
         self._begin(branch=True)
 
     def branch_registered(self):
         if self.registered is not None: self._begin(branch=True, registered=self.registered)
 
-    def _begin(self, *, branch, registered=None):
+    def _begin(self, *, branch, registered=None, review=None, still_current=None, dismiss=None):
         original = self.session
         if (original is None or self.running is not None or self.blocked or not self.visible
                 or self.owner.pending is not None): return
         def same_decision():
             return (self.session is original and self.visible and not self.blocked and self.owner.pending is None and
+                    (still_current is None or still_current()) and
                     (not branch or (self.registered == registered if registered is not None else
                                     original.branch_source_available)))
         if not same_decision(): return
-        try: job = SnapshotBranch(original, registered=registered) if branch else CommitChoice(original)
+        try: job = SnapshotBranch(original, registered=registered) if branch else CommitChoice(original, review=review)
         except Exception as err:
             self.output.setText(describe(err)); return
         preparation = job.preparation
@@ -131,7 +136,8 @@ class CommitControls(QWidget):
                     action = "创建、发布并切换"
                     agree = "我确认发布的是所列原快照，不含当前编辑。STATE 由本人独占；STORE 不同步，无其他程序改动本次暂存名。"
                 else:
-                    question, action = "确认提交整个工作目录", "确认并提交"
+                    question, action = (("确认提交本次审阅的整棵工作树", "确认并提交本次审阅") if review is not None else
+                                        ("确认提交整个工作目录", "确认并提交"))
                     agree = "我已停止所有工作树写入者。STATE 由本人独占，STORE 不同步、不会有其他程序改动本次上传暂存名。"
                 if not same_decision():
                     refused("原工作树会话或原分支来源已变；没有制作候选。"); return
@@ -141,7 +147,7 @@ class CommitControls(QWidget):
                     refused("确认期间原工作树会话或原分支来源已变；没有制作候选。"); return
                 self.output.setText(f"已确认原操作 {job.operation}；不要重复提交。")
                 def failed(error):
-                    if isinstance(error, CommitStopped) or not job.used:
+                    if isinstance(error, (CommitStopped, ReviewedTreeChanged)) or not job.used:
                         refused(error); return
                     after_submit(f"{describe(error)}\n尚不能从此次返回确定结果；只读查询本次原回执。", uncertain=True)
                 def done(result):
@@ -155,6 +161,10 @@ class CommitControls(QWidget):
             except Exception as err:
                 if job.used: after_submit(f"{describe(err)}\n结果待核。", uncertain=True)
                 else: refused(err)
+        if dismiss is not None:
+            try: dismiss()  # Worktree and exact original baseline already borrowed by the decision.
+            except Exception as err:
+                refused(err); return
         self.submit(job, "正在只读核对原登记及 STORE 基线…", job.prepare, reviewed, refused,
                     preparation=preparation, cancel_text="取消这次只读基线核对")
 

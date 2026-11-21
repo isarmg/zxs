@@ -273,8 +273,11 @@ def commit(state, *, fork=False, selected=None):
                     stream.close()
                     digest = capture.verify_candidate(name, original, marker)
         else:
-            marker, digest = capture.build(expected, lambda tree: Commit(repo, branch, gen+1, operation, row["parent"], tree),
-                                           lambda: selected.check_row(con, row))
+            def marker_for_tree(tree):
+                selected.check_review_tree(tree)
+                return Commit(repo, branch, gen+1, operation, row["parent"], tree)
+
+            marker, digest = capture.build(expected, marker_for_tree, lambda: selected.check_row(con, row))
             selected.check_row(con, row)
             selected.anonymous_candidate = capture
             selected.marker, selected.digest = marker, digest

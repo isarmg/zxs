@@ -1,6 +1,7 @@
 """Observe a live worktree's exact baseline or move its original local directory."""
 from __future__ import annotations
 from contextlib import ExitStack, closing, contextmanager
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import stat
@@ -181,11 +182,20 @@ def observe_initial_changes(live, *, observer=None):
     return marker, result
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewedWorktree:
+    origin: object
+    tree: str
+    entries: int
+    data_bytes: int
+
+
 class MissingBaseline:
-    """Short-lived evidence for exact rows in one online comparison."""
-    def __init__(self, fd, path, observed, basis, marker, missing, baseline, instance_id, text_pairs):
+    """Short-lived evidence for the exact baseline and rows of one online comparison."""
+    def __init__(self, fd, path, observed, basis, marker, missing, baseline, instance_id, text_pairs, *, review=None):
         self.path, self.observed, self.basis, self.marker = path, observed, basis, marker
         self.instance = instance_id
+        self.review = review
         self._baseline = baseline
         self._text_pairs = text_pairs
         self.missing, self._fd = missing, os.dup(fd)
@@ -225,10 +235,11 @@ class MissingBaseline:
         self.missing.clear()
         self._text_pairs.clear()
         self._baseline = None
+        self.review = None
         if fd is not None: os.close(fd)
 
 
-def observe_live_changes(live, *, observer=None, retain_missing=False, retain_text=False):
+def observe_live_changes(live, *, observer=None, retain_missing=False, retain_text=False, retain_review=False):
     """One observation against this still-held CLI checkout's last recorded base."""
     from .comparison import COMPARE_BYTES, compare_manifests
     if observer is not None: observer.begin("identity")
@@ -247,6 +258,14 @@ def observe_live_changes(live, *, observer=None, retain_missing=False, retain_te
             check_relative(live.store_fd, name, doc, observed)
             current = _observe_local_work(live, with_store=True, observer=observer)
             if observer is not None: observer.begin("compare")
+            # _changes consumes the current rows. Bind all actual names/kinds/bodies, not just visible differences.
+            review = None
+            if retain_review:
+                try: local_store = local_mount(live.store_fd) == store_mount
+                except (OSError, Rejected): local_store = False  # Keep the read-only report, never hand off a remote write.
+                if local_store:
+                    review = ReviewedWorktree(live.review_origin, current.digest(), len(current.rows), current.total)
+            if observer is not None: observer.check()
             # Save bounded digest evidence only for small changed file/file
             # pairs, before compare_manifests consumes the current row map.
             wanted = {}
@@ -258,7 +277,7 @@ def observe_live_changes(live, *, observer=None, retain_missing=False, retain_te
                             and item[1] <= COMPARE_BYTES and old[1] <= COMPARE_BYTES):
                         wanted[path] = item[1:]
             result = compare_manifests(base, current)
-            if retain_missing or retain_text:
+            if retain_missing or retain_text or retain_review:
                 rows, text_pairs = {}, {}
                 for row in result.rows:
                     if observer is not None: observer.check()
@@ -266,16 +285,17 @@ def observe_live_changes(live, *, observer=None, retain_missing=False, retain_te
                         rows[row.path] = row
                     if row.path in wanted:
                         text_pairs[row.path] = row, *wanted[row.path]
-                if rows or text_pairs:
+                if rows or text_pairs or review is not None:
                     missing = MissingBaseline(doc.fileno(), live.store/name, observed, expected, marker,
-                                              rows, base.rows, live.instance, text_pairs)
+                                              rows, base.rows if rows or text_pairs else {}, live.instance,
+                                              text_pairs, review=review)
                     handoff.callback(missing.close)
             if observer is not None: observer.begin("identity")
             if _idle_live_base(live) != expected:
                 raise Rejected("观察期间原登记基线改变；请重新查看")
         if observer is not None: observer.check()
         handoff.pop_all()
-        return (marker, result, missing) if retain_missing or retain_text else (marker, result)
+        return (marker, result, missing) if retain_missing or retain_text or retain_review else (marker, result)
 
 
 def _phases(action):
