@@ -2,8 +2,8 @@
 (() => {
   const el = id => document.getElementById(id);
   let bearer = "", csrf = "", ticket = "", busy = false;
-  const labels = {disks:"设备与挂载", rates:"被动 I/O 速率", tools:"随包与宿主工具"};
-  const buttons = ["pair","disks","rates","tools","guide","guide-refresh","preview","confirm","receipt","close"].map(el);
+  const labels = {disks:"设备与挂载", rates:"被动 I/O 速率", storage:"终端预选挂载容量", tools:"随包与宿主工具"};
+  const buttons = ["pair",...Object.keys(labels),"guide","guide-refresh","preview","confirm","receipt","close"].map(el);
   const leasedTools=new Map([
     ["ext4",["ext 文件系统（ext2/3/4） · e2fsck -fn","check-ext4-copy"]],
     ["XFS",["XFS · xfs_repair -n -f","check-xfs-copy"]],

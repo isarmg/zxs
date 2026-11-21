@@ -51,9 +51,9 @@ fn exfat_web_requires_its_own_explicit_terminal_preselection_with_no_path_from_h
     assert!(matches!(parse(&["check-exfat-copy","/saved/volume.img","--sha256",&h]),Ok(crate::Command::Exfat(_))));
     assert!(matches!(parse(&["disk-web"]),Ok(crate::Command::DiskWeb(None))));
     assert!(matches!(parse(&["disk-web","--exfat-copy","/saved/volume.img","--sha256",&h]),
-        Ok(crate::Command::DiskWeb(Some((crate::fat32_check::Format::Exfat,_))))));
+        Ok(crate::Command::DiskWeb(Some(crate::fat32_check::panel::Job::Sealed(crate::fat32_check::Format::Exfat,_))))));
     assert!(matches!(parse(&["disk-web","--fat32-copy","/saved/volume.img","--sha256",&h]),
-        Ok(crate::Command::DiskWeb(Some((crate::fat32_check::Format::Fat32,_))))));
+        Ok(crate::Command::DiskWeb(Some(crate::fat32_check::panel::Job::Sealed(crate::fat32_check::Format::Fat32,_))))));
     for bad in [&["check-exfat-copy","/saved/volume.img","-p"][..],
         &["check-exfat-copy","/saved/volume.img","--sha256",&h,"--repair"],
         &["check-exfat-copy","relative.img","--sha256",&h],

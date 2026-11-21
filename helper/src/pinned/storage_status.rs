@@ -37,11 +37,60 @@ impl Selection {
     }
 }
 
+/// The local panel has no path-taking operation. Capture only the explicit
+/// foreground selection, before the listener, without waking automounts or
+/// taking capacity samples. Never adopt a later file at a missing/changed name.
+pub(crate) struct WebSelection {
+    roots: Vec<(Role, Result<WebRoot, Reason>)>,
+}
+struct WebRoot { pin: Pinned, mount: Mount }
+impl WebSelection {
+    pub(crate) fn pin(selection: Selection) -> Self {
+        Self { roots: selection.paths().map(|(role, path)| (role, WebRoot::pin(path))).collect() }
+    }
+
+    pub(crate) fn observe(&self) -> Report {
+        let started = timestamp();
+        let rows = self.roots.iter().map(|(role, root)| (*role, match root {
+            Ok(root) => root.sample(),
+            Err(why) => Err(*why),
+        })).collect();
+        Report { started, ended: timestamp(), rows }
+    }
+}
+impl WebRoot {
+    fn pin(path: &Path) -> Result<Self, Reason> {
+        let pin = Pinned::already_mounted(path, Kind::StorageRoot).map_err(Reason::opening_directory)?;
+        let mount = observed_mount(&pin.fd)?;
+        let root = Self { pin, mount };
+        root.require()?;
+        Ok(root)
+    }
+
+    fn require(&self) -> Result<(), Reason> {
+        // The observer can only sample its original O_PATH handle. The
+        // independently resolved name, all visible parents and the mount
+        // must match both before and after; the recheck is never a fallback.
+        let current = self.pin.require_same_named_mount().map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::NotADirectory => Reason::Changed,
+            _ => Reason::from(e),
+        })?;
+        if current == self.mount { Ok(()) } else { Err(Reason::Changed) }
+    }
+
+    fn sample(&self) -> Result<Observed, Reason> {
+        self.require()?;
+        let space = Space::read(&self.pin.fd);
+        self.require()?;
+        Ok(Observed { entity: self.pin.entity(), mount: Ok(Mounted { mount: self.mount, space }) })
+    }
+}
+
 fn timestamp() -> Option<u128> {
     SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis())
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Reason { Unavailable, Denied, Unsupported, Invalid, Changed, NotReported, Io(Option<i32>) }
 impl From<io::Error> for Reason {
     fn from(value: io::Error) -> Self {
@@ -125,7 +174,7 @@ impl HeldSample {
 
 fn observe(path: &Path) -> Result<Observed, Reason> { HeldSample::take(path)?.finish() }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum Role { System, Recycle, Data(usize) }
 impl Display for Role {
     fn fmt(&self, f:&mut fmt::Formatter<'_>) -> fmt::Result {

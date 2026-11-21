@@ -21,10 +21,11 @@
     <div class="buttons">
       <button type="button" id="disks">查看设备与挂载</button>
       <button type="button" id="rates">读取本次 I/O 速率</button>
+      <button type="button" id="storage">查看预选挂载容量</button>
       <button type="button" id="tools">核对工具安装位置</button>
       <button type="button" id="guide" class="quiet">打开首次安装向导</button>
     </div>
-    <p class="hint">只有点击才采样，不后台刷新。速率取两次内核计数，不运行读写基准。</p>
+    <p class="hint">只有点击才采样，不后台刷新。速率取两次内核计数，不运行读写基准。挂载容量只采终端预选目录，不表示池登记或硬件健康。</p>
   </section>
   <section id="checks" class="card" hidden aria-labelledby="checktitle">
     <p class="eyebrow">READ-ONLY CHECK</p><h2 id="checktitle">检查终端预选的卷镜像</h2>

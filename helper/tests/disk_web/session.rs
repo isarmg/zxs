@@ -24,6 +24,43 @@ fn no_disk_observation_or_close_via_wrong_origin_missing_bearer_or_arbitrary_tar
     let ack=p.handle(approved("/api/close"),now);assert_eq!(ack.code,200);assert!(ack.body.contains("此回复不能作为升级许可"));assert!(p.closed);
 }
 #[test]
+fn capacity_checks_only_the_foreground_paths_and_never_adopts_a_late_name(){
+    let now=Instant::now();let mut p=logged(now);
+    assert_eq!(p.handle(approved("/api/storage"),now).code,403);
+    let area=tempfile::tempdir().unwrap();
+    let system=area.path().join("private-system-operand");
+    let recycle=area.path().join("private-recycle-operand");
+    let data=area.path().join("private-data-operand");
+    std::fs::create_dir(&system).unwrap();std::fs::create_dir(&data).unwrap();
+    let args=[std::ffi::OsString::from("--system"),system.clone().into_os_string(),"--recycle".into(),
+        recycle.clone().into_os_string(),"--data".into(),data.clone().into_os_string()];
+    p.storage=Some(WebSelection::pin(Selection::parse(args.into_iter()).unwrap()));
+    let endpoint="/api/storage";
+    let mut get=approved(endpoint);get.method="GET".into();assert_eq!(p.handle(get,now).code,404);
+    let mut bad=approved(endpoint);bad.csrf=None;assert_eq!(p.handle(bad,now).code,403);
+    let mut bad=approved(endpoint);bad.auth=None;assert_eq!(p.handle(bad,now).code,403);
+    let mut bad=approved(endpoint);bad.origin=Some("http://127.0.0.1:9999".into());assert_eq!(p.handle(bad,now).code,403);
+    let mut bad=approved(endpoint);bad.host="localhost:7654".into();assert_eq!(p.handle(bad,now).code,403);
+    let mut bad=approved(endpoint);bad.body=b"/dev/example".to_vec();assert_eq!(p.handle(bad,now).code,400);
+    let mut bad=approved(endpoint);bad.content_type=Some("application/octet-stream".into());assert_eq!(p.handle(bad,now).code,400);
+    assert_eq!(p.handle(approved("/api/storage?path=/mnt/other"),now).code,404);
+    assert_eq!(p.handle(approved(endpoint),now+SESSION).code,403);
+    let answer=p.handle(approved(endpoint),now);
+    assert_eq!(answer.code,200);assert_eq!(answer.mime,"text/plain; charset=utf-8");
+    assert!(answer.body.contains("不表示已登记"));assert!(!answer.body.contains("private-"));
+    let row=|s:&str,role:&str|s.lines().find(|line|line.starts_with(role)).unwrap().split('\t').map(str::to_owned).collect::<Vec<_>>();
+    assert_eq!(row(&answer.body,"SYSTEM 候选")[7],"当次采样");
+    assert_eq!(row(&answer.body,"回收候选")[7],"未知：not-found");
+    assert_eq!(row(&answer.body,"普通候选 1")[7],"当次采样");
+    std::fs::create_dir(&recycle).unwrap();
+    std::fs::rename(&data,area.path().join("held-original")).unwrap();std::fs::create_dir(&data).unwrap();
+    let again=p.handle(approved(endpoint),now);
+    assert_eq!(row(&again.body,"回收候选")[7],"未知：not-found");
+    assert_eq!(row(&again.body,"普通候选 1")[7],"未知：changed");
+    assert!(row(&again.body,"普通候选 1")[1..7].iter().all(|value|value=="—"));
+    assert!(!again.body.contains("private-")&&p.check.is_none());
+}
+#[test]
 fn pairing_has_a_short_deadline_six_attempts_and_no_second_use(){
     let now=Instant::now();let mut p=Panel::new("127.0.0.1:7654".into(),"d".repeat(64).as_bytes(),now);
     let pair=|c:u8|{let mut r=req("/api/pair");r.content_type=Some("application/octet-stream".into());r.body=vec![c;64];r};

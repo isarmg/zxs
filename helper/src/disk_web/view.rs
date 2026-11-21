@@ -1,7 +1,7 @@
 //! Small tabular, text-only view of the same typed observations as the CLI.
 //! No row may contribute HTML, control fields, device paths or arguments.
 use super::http::Reply;
-use crate::{block_tools as disks,fs_tools};
+use crate::{block_tools as disks,fs_tools,pinned::storage_status as storage};
 use std::fmt::Display;
 
 fn clean(s:&str)->String{s.chars().map(|c|if c.is_control(){'\u{fffd}'}else{c}).collect()}
@@ -14,7 +14,7 @@ pub(super) fn disks(rates:bool)->Reply{
     let report=match disks::Query::inventory(rates).observe(){Ok(x)=>x,Err(_)=>return Reply::plain(503,"未能从当前命名空间核得系统设备盘点；未检查健康或登记。")};
     let mut out=String::new();
     let sampled=match (report.start_ms,report.end_ms){(Some(a),Some(b)) if a<=b=>format!("Unix 毫秒 {a} 至 {b}"),_=>"时间未知".into()};
-    line(&mut out,[format!("内核 sysfs / 本线程 mountinfo / 宿主 udev 别名；{sampled}。不叠加分区与整盘；没有直接挂载匹配不代表未使用。")]);
+    line(&mut out,[format!("内核 sysfs / 本线程 mountinfo / 宿主 udev 别名；{sampled}。不叠加分区与整盘；没有直接挂载匹配不代表未使用。不检查硬件健康、温度或池登记。")]);
     let mut cols=vec!["设备号","内核名称","类别","块层容量（字节）","型号（sysfs）","FS UUID（别名）","PARTUUID（别名）","直接挂载 ID"];
     if rates{cols.extend(["采样间隔（纳秒）","读取 B/s","写入 B/s"]);}
     line(&mut out,cols.iter().map(|s|s.to_string()));
@@ -33,6 +33,40 @@ pub(super) fn disks(rates:bool)->Reply{
             }
         }
         line(&mut out,cells);
+    }
+    Reply::plain(200,out)
+}
+pub(super) fn storage(report:&storage::Report)->Reply{
+    use storage::{Capacity,Mounted,Observed,Role,Space};
+    let sampled=match (report.started,report.ended){(Some(a),Some(b)) if a<=b=>format!("Unix 毫秒 {a} 至 {b}"),_=>"时间未知".into()};
+    let mut out=String::new();
+    line(&mut out,[format!("终端所选目录的内核 statx / fstatvfs；{sampled}。报告目录当时实际所在的文件系统，不证明预期磁盘已挂载。角色是终端标签，不表示已登记。容量不是块设备容量，不相加，也未核健康或可写权限。")]);
+    line(&mut out,["终端选择","挂载 ID","挂载根","只读标志","文件系统总字节","空闲字节","非特权可用字节","证据"].map(str::to_owned));
+    let unknown=|why:&dyn Display|format!("未知：{why}");
+    for (role,result) in &report.rows{
+        let role=match role{Role::System=>"SYSTEM 候选".into(),Role::Recycle=>"回收候选".into(),Role::Data(i)=>format!("普通候选 {i}")};
+        let mut row=[role,"—".into(),"—".into(),"—".into(),"—".into(),"—".into(),"—".into(),String::new()];
+        row[7]=match result{
+            Err(why)|Ok(Observed{mount:Err(why),..})=>unknown(why),
+            Ok(Observed{mount:Ok(Mounted{mount,space}),..})=>{
+                row[1]=mount.id.to_string();
+                row[2]=match mount.at_root{Some(true)=>"是",Some(false)=>"否",None=>"未知"}.into();
+                match space{
+                    Err(why)=>unknown(why),
+                    Ok(Space{readonly_flag,capacity})=>{
+                        row[3]=if *readonly_flag{"已设置"}else{"未设置"}.into();
+                        match capacity{
+                            None=>"容量未知：内核计数不可用".into(),
+                            Some(Capacity{total,free,available})=>{
+                                row[4]=total.to_string();row[5]=free.to_string();row[6]=available.to_string();
+                                "当次采样".into()
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        line(&mut out,row);
     }
     Reply::plain(200,out)
 }

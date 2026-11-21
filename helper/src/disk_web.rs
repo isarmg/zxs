@@ -8,7 +8,7 @@ mod view;
 
 use http::{Reply,Request};
 use helper_linux_evidence::diagnostic_process::{cancelled,watch_cancellation};
-use crate::fat32_check::panel::{Job,Operand};
+use crate::{fat32_check::panel::{Job,Operand},pinned::storage_status::{Selection,WebSelection}};
 use rustix::{process::{getgid,getuid},rand::{getrandom,GetRandomFlags}};
 use sha2::{Digest,Sha256};
 use std::{io::{self,Write},net::TcpListener,os::fd::AsFd,thread,time::{Duration,Instant}};
@@ -32,11 +32,12 @@ struct Session{bearer:[u8;32],csrf:[u8;32]}
 struct Panel {
     host:String, origin:String, pairing:Option<[u8;32]>, failed:u8, session:Option<Session>,
     expires:Instant, closed:bool, check:Option<check::Check>, handoff:Option<first::Offer>,
+    storage:Option<WebSelection>,
 }
 impl Panel {
     fn new(host:String,code:&[u8],now:Instant)->Self{
         Self{origin:format!("http://{host}"),host,pairing:Some(digest(code)),failed:0,
-            session:None,expires:now+PAIR,closed:false,check:None,handoff:None}
+            session:None,expires:now+PAIR,closed:false,check:None,handoff:None,storage:None}
     }
     fn handle(&mut self,r:Request,now:Instant)->Reply{
         self.handle_with_guide(r,now,setup::observe)
@@ -97,6 +98,8 @@ impl Panel {
                 None=>Reply::plain(403,"本次终端只开放观察，没有预选卷镜像。")},
             "/api/install/guide"=>guide(),
             "/api/disks"=>view::disks(false),"/api/rates"=>view::disks(true),"/api/tools"=>view::tools(),
+            "/api/storage"=>match &self.storage{Some(roots)=>view::storage(&roots.observe()),
+                None=>Reply::plain(403,"本次终端没有预选挂载目录；请另从本机终端以 disk-web --storage-roots 启动。")},
             "/api/close"=>{self.closed=true;Reply::plain(200,"不再接受操作；终端可能仍在等工作进程收尾。此回复不能作为升级许可。")},
             _=>Reply::plain(404,"没有该操作。"),
         }
@@ -124,13 +127,21 @@ pub(crate) fn require_terminal(fd:impl AsFd)->io::Result<()>{
     Ok(())
 }
 
-pub(crate) fn serve(image:Option<Job>)->io::Result<()>{
+enum Launch { Ordinary(Option<Job>), Storage(Selection) }
+pub(crate) fn serve(image:Option<Job>)->io::Result<()>{serve_mode(Launch::Ordinary(image))}
+pub(crate) fn serve_storage(selection:Selection)->io::Result<()>{serve_mode(Launch::Storage(selection))}
+
+fn serve_mode(launch:Launch)->io::Result<()>{
     // This command owns a fresh single-threaded process. No privileged Web
     // worker, inherited admin groups, ambient capabilities or fallback listener.
     rustix::thread::set_no_new_privs(true)?;
     crate::maintenance::diagnostic_worker(getuid().as_raw(),getgid().as_raw())?;
     let stderr=io::stderr();let mut tty=stderr.lock();
     require_terminal(stderr.as_fd())?;
+    let (image,storage)=match launch{
+        Launch::Ordinary(image)=>(image,None),
+        Launch::Storage(selection)=>(None,Some(WebSelection::pin(selection))),
+    };
     let leased=matches!(&image,Some(Job::Leased(..)));
     let selected=if let Some(job)=image{
         if leased{
@@ -144,7 +155,7 @@ pub(crate) fn serve(image:Option<Job>)->io::Result<()>{
     let listener=TcpListener::bind((std::net::Ipv4Addr::LOCALHOST,0))?;
     listener.set_nonblocking(true)?;
     let host=listener.local_addr()?.to_string();
-    let code=token()?;let mut panel=Panel::new(host,code.as_bytes(),Instant::now());panel.check=selected;
+    let code=token()?;let mut panel=Panel::new(host,code.as_bytes(),Instant::now());panel.check=selected;panel.storage=storage;
     require_terminal(stderr.as_fd())?;
     writeln!(tty,"磁盘工具（本机只读）：{}\n一次性配对码（2 分钟有效，请勿分享）：{}",panel.origin,code)?;
     tty.flush()?;drop(code);drop(tty);
@@ -175,6 +186,7 @@ pub(crate) fn serve(image:Option<Job>)->io::Result<()>{
     Ok(())
     })();
     drop(listener); // Closing HTTP must not wait on the original worker's I/O or reap.
+    drop(panel.storage.take());
     let disposition=panel.check.take().map_or(Ok(()),check::Check::finish);
     disposition.and(transport)
 }
