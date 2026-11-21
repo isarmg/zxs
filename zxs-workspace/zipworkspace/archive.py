@@ -299,9 +299,9 @@ def read_archive(path, *, managed=True, sink: Path | None = None, internal=False
     return _read_checked(path.open("rb"), managed=managed, sink=_PathSink(sink) if sink is not None else None)
 
 
-def read_managed_document(document, *, display_name: str, observer=None):
+def read_managed_document(document, *, display_name: str, observer=None, fixed_window=False):
     """Verify one selected open file without closing it, reopening its name, or extracting."""
-    return _managed_document(document, display_name, None, observer=observer)
+    return _managed_document(document, display_name, None, observer=observer, fixed_window=fixed_window)
 
 
 def read_indexed_document(document, *, display_name: str):
@@ -311,14 +311,15 @@ def read_indexed_document(document, *, display_name: str):
     return marker, manifest, blocks  # Never expose the partial index of a rejected archive.
 
 
-def _managed_document(document, display_name, blocks, *, observer=None):
+def _managed_document(document, display_name, blocks, *, observer=None, fixed_window=False):
     if not display_name or "/" in display_name or "\\" in display_name or Path(display_name).suffix.lower() != ".zxs":
         raise Rejected("select a managed .zxs document")
     if not document.seekable() or not stat.S_ISREG(os.fstat(document.fileno()).st_mode):
         raise Rejected("select a seekable regular file or a completed private copy")
     position = document.tell()
     try:
-        return _read_checked(nullcontext(document), managed=True, sink=None, blocks=blocks, observer=observer)
+        return _read_checked(nullcontext(document), managed=True, sink=None, blocks=blocks, observer=observer,
+                             fixed_window=fixed_window)
     finally:
         document.seek(position)
 
@@ -342,14 +343,14 @@ def read_plain_document(document, *, observer=None):
     return _read_checked(nullcontext(document), managed=False, sink=None, observer=observer)[1]
 
 
-def _read_checked(source, *, managed, sink, blocks=None, observer=None):
+def _read_checked(source, *, managed, sink, blocks=None, observer=None, fixed_window=False):
     if not managed and sink is not None:
         raise Rejected("ordinary ZIP extraction is not admitted")
     with source as f:
         check = observer.check if observer is not None else None
         if observer is not None: observer.begin("layout")
         before = stamp(f)
-        fixed_window = blocks is not None or not managed or observer is not None
+        fixed_window = fixed_window or blocks is not None or not managed or observer is not None
         expected_count, central_at = bounded_directory(f, before[2] if fixed_window else None, check=check)
         reader = _IndexedInput(f, before[2], expected_count, central_at, check=check) if fixed_window else f
         with zipfile.ZipFile(reader, "r") as z:

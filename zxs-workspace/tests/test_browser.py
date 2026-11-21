@@ -11,7 +11,9 @@ from unittest import mock
 import zipfile
 
 from zipworkspace.browser import ArchiveBrowser
+from zipworkspace.archive import read_managed_document
 from zipworkspace.cli import main
+from zipworkspace.document import PositionalDocument, archive_sha
 from zipworkspace.model import Commit, Manifest, Rejected
 
 
@@ -57,6 +59,24 @@ class Browse(unittest.TestCase):
         self.assertEqual(browser.list_directory("a/empty").entries, ())
         self.assertIsNone(browser.list_directory("a/empty").next_cursor)
         self.assertEqual(set(self.root.iterdir()), before)
+
+    @unittest.skipUnless(hasattr(os, "pread"), "requires a native positional descriptor")
+    def test_positional_document_keeps_shared_offset_and_handles_an_empty_managed_zip(self):
+        for rows in ({}, {"a/empty/": None, "a/same": b"hello", "b/same": b"other"}):
+            marker = self.write(self.path, entries=rows)
+            initial = self.path.read_bytes()
+            with self.path.open("rb", buffering=0) as original:
+                original.seek(7)
+                borrowed = PositionalDocument(original.fileno(), len(initial))
+                found, tree = read_managed_document(borrowed, display_name=self.path.name, fixed_window=True)
+                self.assertEqual(found, marker)
+                self.assertEqual(tree.digest(), marker.tree)
+                self.assertEqual(archive_sha(borrowed), hashlib.sha256(initial).hexdigest())
+                self.assertEqual(original.tell(), 7)
+                with self.path.open("ab") as growing: growing.write(b"x")
+                borrowed.seek(len(initial))
+                self.assertEqual(borrowed.read(1), b"x")  # genuine EOF probe, not a synthetic empty read
+                self.assertEqual(original.tell(), 7)
 
 
     def test_name_search_uses_literal_names_and_the_original_full_sibling_order(self):

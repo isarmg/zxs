@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -16,6 +17,33 @@ def native_identity(meta, kind):
             or getattr(meta, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
         raise Rejected("cannot prove the selected ordinary object's identity")
     return meta.st_dev, meta.st_ino
+
+
+class PositionalDocument:
+    """Bounded binary ZIP reader borrowing a POSIX FD without changing its shared position."""
+    def __init__(self, fd, length):
+        self._fd, self._length, self._offset = fd, length, 0
+
+    def fileno(self): return self._fd
+    def tell(self): return self._offset
+    def seekable(self): return True
+
+    def seek(self, offset, whence=os.SEEK_SET):
+        at = {os.SEEK_SET: 0, os.SEEK_CUR: self._offset, os.SEEK_END: self._length}[whence] + offset
+        if at < 0: raise OSError(errno.EINVAL, "negative ZIP offset")  # zipfile permits an absent ZIP64 locator
+        if at > self._length: raise Rejected("ZIP offset outside selected source")
+        self._offset = at
+        return at
+
+    def read(self, n=-1):
+        left = self._length - self._offset
+        if n == -1: n = left
+        if not 0 <= n <= MAX_CD: raise Rejected("ZIP read outside size budget")
+        # Allow the real one-byte EOF probe used by archive_sha to detect growth.
+        if left or n != 1: n = min(n, left)
+        data = os.pread(self._fd, n, self._offset)
+        self._offset += len(data)
+        return data
 
 
 @contextmanager

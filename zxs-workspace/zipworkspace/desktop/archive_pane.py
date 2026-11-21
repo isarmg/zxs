@@ -34,6 +34,8 @@ class ArchivePane(QWidget):
         if sys.platform == "darwin":
             self.save_copy = button("另存同名完整归档…", self.choose_copy)
             actions.addWidget(self.save_copy)
+            self.save_zip = button("另存完整快照为 ZIP…", lambda: self.choose_copy(as_zip=True))
+            actions.addWidget(self.save_zip)
         layout.addLayout(actions)
         self.details = label()
         self.store_label = label("尚未选择归档存储；浏览一个快照不需要存储目录。")
@@ -296,7 +298,7 @@ class ArchivePane(QWidget):
 
     def choose_zip(self):
         selected = self.selection
-        if self.save_zip is None or selected is None or self.owner.pending is not None: return
+        if sys.platform != "linux" or self.save_zip is None or selected is None or self.owner.pending is not None: return
         from .member_copy import ZipCopy
         opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
                 QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
@@ -334,14 +336,15 @@ class ArchivePane(QWidget):
 
         submit("正在只读核对原归档和目的位置，尚未写入…", plan.review, reviewed)
 
-    def choose_copy(self):
+    def choose_copy(self, *, as_zip=False):
         selected = self.selection
         if sys.platform != "darwin" or selected is None or self.owner.pending is not None: return
         from ..macos_copy import SnapshotCopy
-        opts = QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks)
         directory = QFileDialog.getExistingDirectory(self, "选择同一 APFS 卷上仅本人使用的私有目的目录", "", opts)
         if not directory or selected is not self.selection: return
-        try: plan = SnapshotCopy(selected, directory)
+        try: plan = SnapshotCopy(selected, directory, as_zip=as_zip)
         except Exception as error:
             self.owner.inform(str(error))
             return
@@ -357,9 +360,9 @@ class ArchivePane(QWidget):
 
         def review(detail):
             try:
-                if selected is self.selection and confirm(self, "另存整个快照，不签出", detail,
+                if selected is self.selection and confirm(self, "另存整个快照，不打开或提取", detail,
                         attestation="我同意将整个原件和当时的元数据克隆到这个私有目录；原包和目的目录在操作期间无其他写者或同步。",
-                        action_text="按原名另存") and selected is self.selection:
+                        action_text="另存 ZIP" if as_zip else "按原名另存") and selected is self.selection:
                     submit("正在复制和读回完整归档，完成前不要移动目录…", lambda: plan.run(confirmed=True), self.owner.inform)
                 else:
                     plan.close()
@@ -455,7 +458,7 @@ class ArchivePane(QWidget):
         self.checkout.set_snapshot(selected)
         if self.selection is not None and self.selection is not selected: self.selection.release_display()
         self.selection = selected
-        if self.save_copy is not None: self.save_copy.setEnabled(True)
+        if self.save_copy is not None: self.save_copy.setEnabled(selected.held is not None)
         if self.save_zip is not None: self.save_zip.setEnabled(selected.held is not None)
         self.comparison.set_snapshot(selected)
         marker = selected.browser.commit

@@ -12,6 +12,7 @@ import sys
 import stat
 import unittest
 from unittest.mock import patch
+from zipfile import ZIP_STORED, ZipFile
 
 from zipworkspace import macos_copy as copy, macos_read
 from zipworkspace.desktop.selection import Selection
@@ -31,7 +32,8 @@ class SnapshotSave(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         with macos_read.no_materialization():
-            self.selected = Selection.open(self.source)
+            self.selected = Selection.open(self.source, retain=True)
+            self.stack.callback(self.selected.release_display)
             scratch = copy.Folder.choose(self.root)
             self.stack.callback(scratch.close)
             fd = scratch.check()
@@ -65,6 +67,49 @@ class SnapshotSave(unittest.TestCase):
                 self.assertTrue(api.equal(a, b))
         self.assertEqual(Selection.open(self.out).browser.commit, self.selected.browser.commit)
         self.assertFalse((self.folder / self.plan.stage).exists())
+
+    def test_standard_zip_keeps_original_bytes_comment_and_system_quarantine(self):
+        output = self.out.with_suffix(".zip")
+        with ExitStack() as held:
+            plan = copy.SnapshotCopy(self.selected, self.folder, as_zip=True)
+            held.callback(plan.close)
+            display = self.selected.held.fileno()
+            os.lseek(display, 11, os.SEEK_SET)
+            review = plan.review()
+            self.assertIn(str(output), review)
+            self.assertIn("归档注释及版本标识全部保留", review)
+            self.assertFalse(output.exists())
+            plan.run(confirmed=True)
+            # A normal ZIP reader, with no managed archive parser or output extraction.
+            with ZipFile(self.source) as original, ZipFile(output) as portable:
+                self.assertEqual(portable.namelist(), original.namelist())
+                self.assertEqual(portable.comment, self.selected.browser.commit.encode())
+                self.assertTrue(all(entry.compress_type == ZIP_STORED for entry in portable.infolist()))
+                self.assertIsNone(portable.testzip())
+            with macos_read.no_materialization(), named_document(output) as final:
+                self.assertEqual(archive_sha(final), plan.sha)
+                api = copy.native()
+                self.assertEqual(api.attrs(display), api.attrs(final.fileno()))
+                with api.quarantine(self.source, display) as original, api.quarantine(output, final.fileno()) as actual:
+                    self.assertTrue(api.equal(original, actual))
+            self.assertEqual(os.lseek(display, 0, os.SEEK_CUR), 11)
+            self.assertFalse(self.out.exists())  # only the requested extension is published
+
+    def test_existing_standard_zip_is_left_unchanged_without_a_stage(self):
+        existing = self.out.with_suffix(".zip")
+        with existing.open("xb") as file: file.write(b"another archive")
+        plan = copy.SnapshotCopy(self.selected, self.folder, as_zip=True)
+        self.stack.callback(plan.close)
+        with self.assertRaisesRegex(Rejected, "目的名称已存在"): plan.review()
+        self.assertEqual(existing.read_bytes(), b"another archive")
+        self.assertFalse((self.folder / plan.stage).exists())
+
+    def test_copy_cannot_reselect_a_name_without_the_original_display_fd(self):
+        detached = Selection.open(self.source)
+        self.assertIsNone(detached.held)
+        with self.assertRaisesRegex(Rejected, "原浏览句柄"):
+            copy.SnapshotCopy(detached, self.folder, as_zip=True)
+        self.assertEqual(list(self.folder.iterdir()), [])
 
     def test_review_and_unconfirmed_action_create_no_file(self):
         self.plan.review()
@@ -173,7 +218,8 @@ class ResidentCompressedSource(unittest.TestCase):
                 self.assertGreater(n, 0)
                 return buf.raw[:n]
             self.assertEqual(tag(), b"harmless source qualification")
-            selected = Selection.open(source)
+            selected = Selection.open(source, retain=True)
+            held.callback(selected.release_display)
             expected = archive_sha(doc)  # Whole logical ZIP read, not a measure of clone creation time.
             with self.assertRaises(FileNotFoundError):
                 os.stat(source.name, dir_fd=p, follow_symlinks=False)
