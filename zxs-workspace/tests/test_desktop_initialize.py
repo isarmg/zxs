@@ -1,5 +1,6 @@
 """Linux native worktree initialization; no application takeover of an existing catalog."""
 from concurrent.futures import Future
+from contextlib import ExitStack
 import errno
 import hashlib
 from importlib.util import find_spec
@@ -11,7 +12,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from zipworkspace import lifecycle, private_stage, publish, worktree
+from zipworkspace import lifecycle, live_candidate, private_stage, publish, worktree
 from zipworkspace.archive import read_archive
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.commit_choice import CommitChoice
@@ -37,6 +38,10 @@ class NewOriginalWorktree(unittest.TestCase):
                 private_stage.same_mount(parent.parent, parent.parent)
                 fd = os.open(".", os.O_TMPFILE | os.O_EXCL | os.O_RDWR, 0o600, dir_fd=parent.parent)
                 os.close(fd)
+            from zipworkspace.linux_mount import _ordinary_user
+            with ExitStack() as native:
+                proc = live_candidate.ProcView(native)
+                _ordinary_user(read_proc=proc.read)
         except (OSError, Rejected) as error:
             self.skipTest(f"fixture needs an admitted ext4/XFS mount with anonymous files: {error}")
         self.story = self.work / "story"
@@ -119,7 +124,7 @@ class NewOriginalWorktree(unittest.TestCase):
     def test_register_then_manually_publish_the_exact_genesis_with_no_parent(self):
         live = self.register()
         attempt = self.first(live)
-        with patch.object(worktree, "anonymous_capture", side_effect=AssertionError("unconfirmed cannot freeze")):
+        with patch.object(live_candidate, "capture_live", side_effect=AssertionError("unconfirmed cannot freeze")):
             with self.assertRaises(Rejected): worktree.commit(self.state, selected=attempt)
         self.assertEqual(list(self.store.iterdir()), [])
         final, marker = attempt.run()
@@ -206,7 +211,7 @@ class NewOriginalWorktree(unittest.TestCase):
         attempt = self.first(live)
         occupied = self.store / attempt.first_slot
         occupied.write_bytes(b"not ours")
-        with patch.object(worktree, "frozen_tree", side_effect=AssertionError("must not scan work files")):
+        with patch.object(live_candidate.LiveArchiveCandidate, "build", side_effect=AssertionError("must not scan work files")):
             with self.assertRaisesRegex(Rejected, "第 1 代名称已占用"): attempt.run()
         self.assertEqual(occupied.read_bytes(), b"not ours")
         self.assertIsNone(live.status()["pending_operation"])
@@ -217,7 +222,7 @@ class NewOriginalWorktree(unittest.TestCase):
         attempt = self.first(live)
         with worktree.locked(self.state) as (con, _, __):
             con.execute("UPDATE checkout SET pending_sha=? WHERE singleton=1", ("a"*64,))
-        with patch.object(worktree, "frozen_tree", side_effect=AssertionError("inconsistent state must not capture")):
+        with patch.object(live_candidate.LiveArchiveCandidate, "build", side_effect=AssertionError("inconsistent state must not capture")):
             with self.assertRaisesRegex(Rejected, "incomplete original pending record"): attempt.run()
         self.assertEqual(list(self.store.iterdir()), [])
         with worktree.locked(self.state, read_only=True) as (_, row, __):

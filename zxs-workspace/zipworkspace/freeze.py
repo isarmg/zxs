@@ -194,8 +194,8 @@ def _store_entry(name, directory, size):
     return info
 
 
-def pack_chosen_folder(fd, identity, dest, repo, branch, operation, *, check_held, checkpoint,
-                       on_read=None, before_inventory=None):
+def pack_observed_folder(fd, identity, dest, marker_for_tree, *, check_held, checkpoint,
+                         on_read=None, before_inventory=None):
     """Build only a private Store ZIP from the same bytes used for the directory marker."""
     before = os.fstat(fd)
     if native_identity(before, stat.S_IFDIR) != identity:
@@ -209,10 +209,15 @@ def pack_chosen_folder(fd, identity, dest, repo, branch, operation, *, check_hel
         for name, (directory, _, __) in sorted(contents.rows.items()):
             checkpoint()
             if directory: archive.writestr(_store_entry(name, True, 0), b"")
-        marker = Commit(repo, branch, 1, operation, None, contents.digest())
+        marker = marker_for_tree(contents.digest())
         archive.comment = marker.encode()
     checkpoint()
     return marker, contents.total
+
+
+def pack_chosen_folder(fd, identity, dest, repo, branch, operation, **checks):
+    return pack_observed_folder(fd, identity, dest, lambda tree: Commit(repo, branch, 1, operation, None, tree),
+                                **checks)
 
 
 def pack(frozen, tree: Manifest, marker: Commit, destination, *, observer=None):

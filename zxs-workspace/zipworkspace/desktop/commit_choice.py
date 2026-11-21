@@ -33,8 +33,7 @@ class CommitStopped(Rejected):
 
 class _CommitPreparation(Verification):
     PHASE = dict(Verification.PHASE,
-                 freeze="正在冻结本次选中的原工作目录",
-                 pack="正在从匿名冻结件写完整私有快照",
+                 freeze="正在从原工作目录写入一份未命名的私有 Store ZIP",
                  sync="正在同步私有候选并核对原工作树")
 
     def __init__(self):
@@ -79,11 +78,13 @@ class CommitChoice:
         self.local_receipt_seen = False
         self.preparation = _CommitPreparation() if self.purpose == "commit" else None
         self.ack_fd = None
+        self.anonymous_candidate = None
 
     def close(self):
         if self.closed: return
         self.closed = True
         if self.preparation is not None: self.preparation.finish()
+        self.anonymous_candidate = None
         self.stack.close()
 
     def release(self):
@@ -145,7 +146,9 @@ class CommitChoice:
                 f"本次操作号：{self.operation}\n下一代：{gen+1}\n\n"
                 "提交整个工作目录，生成新的不可变归档。不改写原代，不自动解决同代冲突。"
                 "登记本次原待决前可请求停止；可能保留私有候选。开始登记后不能用取消撤回，只查原号。"
-                "STATE 的冻结和新整包会同时占空间，STORE 还需一份整包；这里不保证容量。")
+                "捕获在原 STATE 中只写一份匿名整包，核验及同步后才用正式候选名登记；"
+                "上传时原候选与 STORE 暂存仍同时存在。请确认足够空间，不保证容量。"
+                "此路径须为普通用户并能从本机内核 procfs 核验匿名文件，不使用具名兜底。")
 
     def _open_base(self, *, held_mount=False):
         repo, branch, gen, node, digest = self.base
@@ -218,6 +221,9 @@ class CommitChoice:
             raise Rejected("记录并非本次已核验的冻结候选")
 
     def candidate_source(self, marker):
+        if self.purpose == "commit":
+            if self.anonymous_candidate is None: raise Rejected("未持有本次交接的原候选")
+            return self.anonymous_candidate.source(marker)
         return relative_document(self.live.state_fd, marker.operation+".zxs", single=True)
 
     def result(self):

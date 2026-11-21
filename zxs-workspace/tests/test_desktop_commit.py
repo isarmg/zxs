@@ -1,6 +1,6 @@
 """Native Linux fixtures for explicit commit from one live desktop checkout, not a registry."""
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 import errno
 import hashlib
@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-from zipworkspace import lifecycle, private_stage, publish, worktree
+from zipworkspace import lifecycle, live_candidate, private_stage, publish, worktree
 from zipworkspace.desktop.branch_choice import SnapshotBranch
 from zipworkspace.desktop.checkout_action import CheckoutChoice
 from zipworkspace.desktop.commit_choice import CommitChoice, CommitStopped
@@ -53,6 +53,10 @@ class OriginalCheckoutFixture(unittest.TestCase):
                 if self.needs_freeze:
                     if not getattr(os, "O_TMPFILE", 0): self.skipTest("anonymous file unsupported")
                     os.close(os.open(".", os.O_TMPFILE | os.O_EXCL | os.O_RDWR, 0o600, dir_fd=a))
+                    from zipworkspace.linux_mount import _ordinary_user
+                    with ExitStack() as native:
+                        proc = live_candidate.ProcView(native)
+                        _ordinary_user(read_proc=proc.read)
             except (OSError, Rejected) as err:
                 self.skipTest("actual drive not admitted for this fixture: " + str(err))
         finally: os.close(b); os.close(a)
@@ -420,6 +424,128 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         self.assertFalse(path.exists())
         with self.assertRaises(Rejected): choice.run()
 
+    def test_capture_uses_one_true_unnamed_zip_for_both_digests_sync_and_final_candidate(self):
+        contents = b"the edited bytes" * 500
+        story = self.tree/"story"; story.write_bytes(contents)
+        work_file = story.stat()
+        choice = self.choice()
+        leaf = self.state/(choice.operation+".zxs")
+        seen, roots, work_reads = [], [], []
+        capture = live_candidate.LiveArchiveCandidate
+        opened, link = capture.open_writer, capture._link_private
+        actual_read, actual_sync = os.read, os.fsync
+        logical, raw = live_candidate.read_managed_document, live_candidate.archive_sha
+
+        def open_writer(stage):
+            opened(stage)
+            meta = os.fstat(stage.writer)
+            self.assertEqual((meta.st_nlink, meta.st_size), (0, 0))
+            self.assertFalse(leaf.exists())
+            roots.append((meta.st_dev, meta.st_ino))
+        def check(doc, reader, event, *args, **kwargs):
+            result = reader(doc, *args, **kwargs)
+            meta = os.fstat(doc.fileno())
+            self.assertEqual((meta.st_dev, meta.st_ino, meta.st_nlink), (*roots[0], 0))
+            seen.append(event)
+            return result
+        def read(fd, count):
+            data = actual_read(fd, count)
+            if os.path.samestat(os.fstat(fd), work_file): work_reads.append(len(data))
+            return data
+        def sync(fd):
+            actual_sync(fd)
+            meta = os.fstat(fd)
+            if (meta.st_dev, meta.st_ino, meta.st_nlink) == (*roots[0], 0): seen.append("sync")
+        def install(stage, fdname):
+            self.assertEqual(seen, ["tree", "raw", "sync"])
+            link(stage, fdname)
+            meta = leaf.stat()
+            self.assertEqual((meta.st_dev, meta.st_ino, meta.st_nlink), (*roots[0], 1))
+            seen.append("link")
+        with patch.object(capture, "open_writer", new=open_writer), \
+             patch.object(capture, "_link_private", new=install), \
+             patch.object(live_candidate, "read_managed_document",
+                          side_effect=lambda doc, *a, **kw: check(doc, logical, "tree", *a, **kw)), \
+             patch.object(live_candidate, "archive_sha",
+                          side_effect=lambda doc, *a, **kw: check(doc, raw, "raw", *a, **kw)), \
+             patch.object(os, "read", side_effect=read), patch.object(os, "fsync", side_effect=sync), \
+             patch.object(worktree, "anonymous_capture", side_effect=AssertionError("no second full copy")), \
+             patch.object(worktree, "frozen_tree", side_effect=AssertionError("no raw spool")):
+            published, marker = choice.run()
+        self.assertEqual(len(roots), 1)
+        self.assertEqual((sum(work_reads), work_reads.count(0)), (len(contents), 1))
+        self.assertEqual(seen, ["tree", "raw", "sync", "link"])
+        self.assertEqual(leaf.read_bytes(), published.read_bytes())
+        with zipfile.ZipFile(leaf) as doc:
+            self.assertIsNone(doc.testzip())
+            self.assertEqual(doc.comment, marker.encode())
+            self.assertEqual(doc.read("story"), contents)
+            self.assertTrue(doc.getinfo("empty/").is_dir())
+
+    def test_failed_anonymous_file_barrier_reaches_neither_candidate_name_nor_sql_intent(self):
+        choice = self.choice()
+        original = os.fsync
+        def sync(fd):
+            if os.fstat(fd).st_nlink == 0: raise OSError(errno.EIO, "anonymous candidate barrier failed")
+            original(fd)
+        with patch.object(os, "fsync", side_effect=sync), \
+             patch.object(live_candidate.LiveArchiveCandidate, "_link_private", side_effect=AssertionError("unsynced bytes")), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("no STORE without intent")), \
+             self.assertRaisesRegex(OSError, "anonymous candidate barrier failed"):
+            choice.run()
+        self.assertFalse((self.state/(choice.operation+".zxs")).exists())
+        self.assertEqual(choice.result()[0], "unrecorded")
+
+    def test_late_private_name_collision_preserves_incumbent_and_never_registers_pending(self):
+        choice = self.choice()
+        leaf = self.state/(choice.operation+".zxs")
+        actual = live_candidate.LiveArchiveCandidate._link_private
+        def occupy(stage, source):
+            with leaf.open("xb") as incumbent: incumbent.write(b"some other file")
+            actual(stage, source)  # Verify the real link's no-replace behavior.
+        with patch.object(live_candidate.LiveArchiveCandidate, "_link_private", new=occupy), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("no STORE without intent")), \
+             self.assertRaisesRegex(Rejected, "后来被占用"):
+            choice.run()
+        self.assertEqual(leaf.read_bytes(), b"some other file")
+        self.assertEqual(choice.result()[0], "unrecorded")
+
+    def test_candidate_parent_barrier_failure_leaves_material_but_cannot_enter_pending(self):
+        choice = self.choice()
+        leaf = self.state/(choice.operation+".zxs")
+        parent, actual = self.state.stat(), os.fsync
+        def sync(fd):
+            if os.path.samestat(os.fstat(fd), parent) and leaf.is_file():
+                raise OSError(errno.EIO, "linked candidate parent barrier failed")
+            actual(fd)
+        with patch.object(os, "fsync", side_effect=sync), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("no STORE without intent")), \
+             self.assertRaisesRegex(OSError, "linked candidate parent barrier failed"):
+            choice.run()
+        with zipfile.ZipFile(leaf) as candidate:
+            self.assertEqual(candidate.read("story"), b"original story")
+        self.assertEqual(choice.result()[0], "unrecorded")
+
+    def test_store_upload_does_not_read_a_same_bytes_replacement_of_the_captured_candidate(self):
+        choice = self.choice()
+        leaf = self.state/(choice.operation+".zxs")
+        earlier = self.root/"raw-original.zip"
+        real_publish = worktree._publish
+        def replace_candidate(*args, **kwargs):
+            raw = leaf.read_bytes()
+            leaf.rename(earlier)
+            leaf.write_bytes(raw)
+            leaf.chmod(0o600)
+            self.assertNotEqual(earlier.stat().st_ino, leaf.stat().st_ino)
+            return real_publish(*args, **kwargs)
+        with patch.object(worktree, "_publish", side_effect=replace_candidate), \
+             patch.object(publish, "_new_upload", side_effect=AssertionError("no write from substitute")), \
+             self.assertRaisesRegex(Rejected, "原候选名称"):
+            choice.run()
+        self.assertEqual(earlier.read_bytes(), leaf.read_bytes())
+        self.assertEqual(choice.result()[0], "pending")
+        self.assertEqual(list(self.store.iterdir()), [self.original])
+
     def test_changes_uses_the_current_committed_base_not_the_loose_checkout_and_holds_no_read_lock_during_scan(self):
         story = self.tree/"story"
         story.write_bytes(b"revised  story")
@@ -514,7 +640,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         choice = self.choice()
         (self.tree/"story").write_bytes(b"concurrent agreed CLI commit")
         _, other = worktree.commit(self.state)
-        with patch.object(worktree,"frozen_tree",side_effect=AssertionError("changed baseline must not capture")), \
+        with patch.object(live_candidate.LiveArchiveCandidate,"build",side_effect=AssertionError("changed baseline must not capture")), \
                 self.assertRaisesRegex(Rejected, "基线已改变"): choice.run()
         self.assertFalse((self.state/(choice.operation+".zxs")).exists())
         self.assertEqual(self.live.status()["base_operation"], other.operation)
@@ -526,7 +652,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         original = self.root/"kept-original.zxs"; self.original.rename(original)
         self.original.write_bytes(original.read_bytes())
         self.assertNotEqual(self.original.stat().st_ino, original.stat().st_ino)
-        with patch.object(worktree,"anonymous_capture",side_effect=AssertionError("must check before capture")), \
+        with patch.object(live_candidate,"capture_live",side_effect=AssertionError("must check before capture")), \
                 self.assertRaises(Rejected): choice.run()
         self.assertFalse((self.state/(choice.operation+".zxs")).exists())
         self.assertEqual(self.original.read_bytes(), self.loose.read_bytes())
@@ -585,7 +711,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
     def test_prepared_but_unconfirmed_fresh_choice_cannot_create_a_pending_via_direct_business_entry(self):
         choice = self.choice()
         self.assertTrue(choice.ready); self.assertFalse(choice.used)
-        with patch.object(worktree,"anonymous_capture",side_effect=AssertionError("no freeze without confirmation")), \
+        with patch.object(live_candidate,"capture_live",side_effect=AssertionError("no freeze without confirmation")), \
              patch.object(worktree,"locked",side_effect=AssertionError("no writer before confirmation")), \
              patch.object(publish,"_new_upload",side_effect=AssertionError("no upload before confirmation")), \
              self.assertRaises(Rejected):
@@ -595,15 +721,14 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         self.assertEqual(list(self.store.iterdir()),[self.original])
 
     def test_stop_during_held_worktree_freeze_never_creates_a_named_candidate(self):
-        from zipworkspace.private_freeze import Capture
         choice = self.choice()
-        genuine = Capture.append
-        def append(capture, data):
-            genuine(capture, data)
-            self.assertIn("正在冻结本次选中的原工作目录", choice.preparation.progress()[0])
+        genuine = choice.preparation.advance
+        def advance(count):
+            genuine(count)
+            self.assertIn("一份未命名", choice.preparation.progress()[0])
             self.assertTrue(choice.preparation.cancel())
-        with patch.object(Capture, "append", new=append), \
-             patch.object(worktree, "pack", side_effect=AssertionError("do not pack after stop")), \
+        with patch.object(choice.preparation, "advance", side_effect=advance), \
+             patch.object(live_candidate.LiveArchiveCandidate, "_link_private", side_effect=AssertionError("no named candidate after stop")), \
              self.assertRaisesRegex(CommitStopped, "没有登记本次待决"):
             choice.run()
         self.assertFalse((self.state/(choice.operation+".zxs")).exists())
@@ -611,15 +736,14 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
         self.assertEqual(list(self.store.iterdir()), [self.original])
 
     def test_private_pack_completed_before_stop_does_not_authorize_publication(self):
-        from zipworkspace.private_candidates import CandidateDirectory
         choice = self.choice()
-        genuine = CandidateDirectory.verify_candidate
-        def verify(area, leaf, fd, marker, **options):
-            digest = genuine(area, leaf, fd, marker, **options)
+        genuine = choice.preparation.before_intent
+        def before_intent():
+            self.assertTrue((self.state/(choice.operation+".zxs")).is_file())
             self.assertIn("同步私有候选", choice.preparation.progress()[0])
             self.assertTrue(choice.preparation.cancel())
-            return digest
-        with patch.object(CandidateDirectory, "verify_candidate", new=verify), \
+            genuine()
+        with patch.object(choice.preparation, "before_intent", side_effect=before_intent), \
              patch.object(worktree, "_publish", side_effect=AssertionError("do not touch STORE after stop")), \
              self.assertRaisesRegex(CommitStopped, "没有登记本次待决"):
             choice.run()
@@ -747,7 +871,7 @@ class ExplicitDesktopCommit(OriginalCheckoutFixture):
             self.assertEqual(con.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
         con.close()
         original = self.choice()
-        with patch.object(worktree, "frozen_tree", side_effect=AssertionError("wrong SQLite journal")), \
+        with patch.object(live_candidate.LiveArchiveCandidate, "build", side_effect=AssertionError("wrong SQLite journal")), \
              patch.object(worktree, "_publish", side_effect=AssertionError("no STORE attempt")), \
              self.assertRaisesRegex(Rejected, "DELETE 回滚日志"):
             original.run()

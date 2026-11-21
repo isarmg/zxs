@@ -235,8 +235,12 @@ def commit(state, *, fork=False, selected=None):
         observer.check()
     # Unsupported STATE volumes refuse before SQLite can open/recover the catalog.
     proposal = selected.operation if selected is not None else None
-    watch = {} if observer is None else {"observer": observer}
-    with anonymous_capture(state, held=None if selected is None else selected.area, operation=proposal) as capture, \
+    if selected is None:
+        area = anonymous_capture(state, operation=proposal)
+    else:
+        from .live_candidate import capture_live
+        area = capture_live(selected)
+    with area as capture, \
          locked(state, live=live, operation=lambda: capture.operation or proposal, journal_delete=live is not None,
                 phase="登记原 pending；冻结候选可能已存在，不能据此认定已受理") as (con, row, state):
         capture.check_state()
@@ -260,15 +264,19 @@ def commit(state, *, fork=False, selected=None):
         capture.operation = operation
         registered = lifecycle.instance(con)
         expected = (int(registered["device"]),int(registered["inode"]))
-        with frozen_tree(work, capture, expected, store, selected=live, **watch) as (frozen, manifest):
-            marker = Commit(repo, new_id() if fork else branch, 1 if fork else gen + 1,
-                            operation, row["parent"], manifest.digest())
-            with capture.candidate(operation) as (name, original, stream):
-                pack(frozen, manifest, marker, stream, **watch)
-                stream.close()
-                digest = capture.verify_candidate(name, original, marker, **watch)
-        if selected is not None:
+        if selected is None:
+            with frozen_tree(work, capture, expected, store) as (frozen, manifest):
+                marker = Commit(repo, new_id() if fork else branch, 1 if fork else gen + 1,
+                                operation, row["parent"], manifest.digest())
+                with capture.candidate(operation) as (name, original, stream):
+                    pack(frozen, manifest, marker, stream)
+                    stream.close()
+                    digest = capture.verify_candidate(name, original, marker)
+        else:
+            marker, digest = capture.build(expected, lambda tree: Commit(repo, branch, gen+1, operation, row["parent"], tree),
+                                           lambda: selected.check_row(con, row))
             selected.check_row(con, row)
+            selected.anonymous_candidate = capture
             selected.marker, selected.digest = marker, digest
             observer.before_intent()
         con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (marker.encode(), digest))
