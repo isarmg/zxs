@@ -55,8 +55,8 @@ final class DirectoryIndexTests: XCTestCase {
             if !name.hasSuffix("/") { bodies.append(body..<(body + 3)) }
             position = name.hasSuffix("/") ? body : body + 3
         }
-        var bytes = 0
-        let item = try index.verifySnapshot(check: {}) { offset, out in
+        var bytes = 0, progress: [Int] = []
+        let item = try index.verifySnapshot(check: {}, progress: { progress.append($0) }) { offset, out in
             for range in bodies {
                 bytes += max(0, min(range.upperBound, offset + out.count) - max(range.lowerBound, offset))
             }
@@ -69,6 +69,7 @@ final class DirectoryIndexTests: XCTestCase {
         XCTAssertEqual(index.entryCount, 4)
         XCTAssertEqual(index.bodyBytes, 6)
         XCTAssertEqual(bytes, 6)
+        XCTAssertEqual(progress, [3, 3]) // neither explicit/implicit directories nor metadata
         var badDirectory = b
         let secondHeader = 30 + names[0].utf8.count + 3
         badDirectory[secondHeader + 8] = 8 // Explicit empty directory with false local compression.
@@ -574,16 +575,35 @@ final class DirectoryIndexTests: XCTestCase {
         }
     }
     func testCancelledOrTruncatedMemberReadNeverReturnsAResult() throws {
-        let b = zip(["a"]), index = try read(b), file = try XCTUnwrap(index.root.children?["a"])
+        let b = textArchive(Array(repeating: 97, count: 135_000)), index = try read(b)
+        let file = try XCTUnwrap(index.root.children?["x"])
         for cancel in [true, false] {
             let job = DocumentRead()
-            XCTAssertThrowsError(try index.checkMember(file, check: job.check) { off, target in
-                if off == 31 {
+            var processed: [Int] = []
+            XCTAssertThrowsError(try index.checkMember(file, mode: .crc, check: job.check,
+                                                       progress: { processed.append($0) }) { off, target in
+                if off == 31 + 65_536 {
                     if cancel { job.cancel(); try job.check() }
                     throw PreviewError.unavailable
                 }
                 try self.copy(b, off, target)
             })
+            XCTAssertEqual(processed, [65_536]) // the unread block is not counted
+        }
+    }
+    func testFullProgressDoesNotMeanMatchingCRCInAnyMemberMode() throws {
+        let payload = [UInt8](repeating: 97, count: 135_000)
+        var b = textArchive(payload)
+        b[31 + payload.count - 1] = 98 // still valid UTF-8 and length, but not the declared CRC
+        let index = try read(b), file = try XCTUnwrap(index.root.children?["x"])
+        for mode in [MemberReadMode.crc, .preview, .indexed] {
+            var processed: [Int] = []
+            let checked = try index.checkMember(file, mode: mode, check: {}, progress: { processed.append($0) }) {
+                try self.copy(b, $0, $1)
+            }
+            XCTAssertEqual(processed, mode == .indexed ? [payload.count] : [65_536, 65_536, 3_928])
+            XCTAssertFalse(checked.matches)
+            XCTAssertNil(checked.text); XCTAssertNil(checked.indexed)
         }
     }
 

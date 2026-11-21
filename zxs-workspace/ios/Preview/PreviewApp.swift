@@ -372,7 +372,8 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
 
     private func verifySnapshot(_ view: Report) {
         let job = DocumentRead(); active = job
-        status.text = "正在读取并核验全部 \(view.directory.bodyBytes) 字节，可取消。"; render()
+        observeBody(job, archive: view.archive, total: view.directory.bodyBytes, title: "正在核验整个 .zxs")
+        render()
         queue.addOperation { [weak self] in
             let outcome = Result { try job.verifySnapshot(view) }
             DispatchQueue.main.async { [weak self] in
@@ -433,11 +434,29 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         let first = page * pageSize
         return first < children.count && children[first..<min(first + pageSize, children.count)].contains { $0 === file }
     }
+    private func observeBody(_ job: DocumentRead, archive: HeldArchive, total: Int,
+                             title: String, detail: String = "", previous: Int = -1) {
+        guard active === job, report?.archive === archive, selection === archive.scope,
+              (try? archive.scope.check()) != nil else { return }
+        let seen = job.bodyBytesProcessed
+        if seen != previous {
+            let ending = seen == total ? "；仍在核验。" : "。"
+            status.text = "\(title)，可取消。\n已处理正文 \(seen.formatted()) / \(total.formatted()) B\(ending)\(detail)"
+        }
+        // One queued redraw at most for this live read. Revocation or a terminal result
+        // consumes active, and the weak callback can't keep a document or read alive.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(350)) { [weak self, weak job, weak archive] in
+            guard let job = job, let archive = archive else { return }
+            self?.observeBody(job, archive: archive, total: total, title: title, detail: detail, previous: seen)
+        }
+    }
     private func verify(_ view: Report, file: Member, path: String, mode: MemberReadMode) {
         let job = DocumentRead(); active = job
-        let hint = mode == .crc ? "" : mode == .indexed ? " · 同时核验全文与定位索引"
-            : file.size <= PlainText.byteLimit ? " · CRC 相符后显示全文" : " · CRC 相符后只显示前部"
-        status.text = "正在核验全部 \(file.size) 字节\(hint)，可取消。\n\(path)"; render()
+        let hint = mode == .crc ? "" : mode == .indexed ? "\n同时核验全文与定位索引"
+            : file.size <= PlainText.byteLimit ? "\nCRC 相符后显示全文" : "\nCRC 相符后只显示前部"
+        observeBody(job, archive: view.archive, total: file.size,
+                    title: "正在核验所选成员", detail: hint + "\n" + path)
+        render()
         queue.addOperation { [weak self] in
             let outcome = Result { try job.verify(view, file: file, mode: mode) }
             DispatchQueue.main.async { [weak self] in

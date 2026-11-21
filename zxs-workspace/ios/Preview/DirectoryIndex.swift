@@ -107,12 +107,13 @@ struct DirectoryIndex {
     }
 
     func checkMember(_ file: Member, mode: MemberReadMode, check: () throws -> Void,
+                     progress: (Int) -> Void = { _ in },
                      fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> MemberCRC {
         try requirePreview(mode != .snapshot)
         let slot = try originalSlot(file)
         let read = try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
             record: slot.central, offset: slot.offset, limit: slot.limit, centralWide: slot.wide,
-            size: file.size, mode: mode, check: check, fill: fill)
+            size: file.size, mode: mode, check: check, progress: progress, fill: fill)
         let proof = read.indexed.map { TextIndex(root: root, member: file, local: $0.0, pages: $0.1) }
         return MemberCRC(declared: read.declared, actual: read.actual, text: read.text, indexed: proof)
     }
@@ -152,6 +153,7 @@ struct DirectoryIndex {
     func snapshotMarker() throws -> SnapshotMarker { try SnapshotMarker.parse(comment) }
 
     func verifySnapshot(check: () throws -> Void,
+                        progress: (Int) -> Void = { _ in },
                         fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> SnapshotMarker {
         let marker = try snapshotMarker()
         var scratch = [UInt8](repeating: 0, count: 65_536)
@@ -186,7 +188,7 @@ struct DirectoryIndex {
             if let slot = member.slot {
                 let proof = try StoredBody.check(central: central, centralAt: centralAt, ending: ending,
                     record: slot.central, offset: slot.offset, limit: slot.limit, centralWide: slot.wide,
-                    size: member.size, mode: .snapshot, check: check, fill: fill)
+                    size: member.size, mode: .snapshot, check: check, progress: progress, fill: fill)
                 guard proof.declared == proof.actual, let digest = proof.sha256 else { throw PreviewError.format }
                 if !directory { sha = "\"\(digest)\"" }
             } else {

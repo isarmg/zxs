@@ -172,6 +172,7 @@ enum StoredBody {
 
     static func check(central cd: [UInt8], centralAt: Int, ending: [UInt8], record p: Int, offset: Int,
                       limit: Int, centralWide: Bool, size: Int, mode: MemberReadMode, check: () throws -> Void,
+                      progress: (Int) -> Void = { _ in },
                       fill: (Int, UnsafeMutableRawBufferPointer) throws -> Void) throws -> Checked {
         let u16 = DirectoryIndex.u16, u32 = DirectoryIndex.u32, max32 = DirectoryIndex.u32max
         try requirePreview(size >= 0 && size <= DirectoryIndex.maxMember)
@@ -243,6 +244,7 @@ enum StoredBody {
             if beforeBudget > 0 { capture?.append(contentsOf: block[..<min(n, beforeBudget)]) }
             try builder?.append(block, count: n, relative: relative, check: check)
             pos += n
+            progress(n) // neither ZIP metadata nor a later text-page read
         }
         try local.match(scratch: &scratch, check: check, fill: fill)
         if mode != .snapshot { try checkDirectory() }

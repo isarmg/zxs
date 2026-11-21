@@ -131,6 +131,15 @@ final class DocumentRead {
     private let lock = NSLock()
     private var cancelled = false
     private var coordinating: NSFileCoordinator?
+    private var processed = 0 // single worker; sampled by the main thread
+
+    var bodyBytesProcessed: Int {
+        lock.lock(); defer { lock.unlock() }
+        return processed
+    }
+    private func didProcessBody(_ count: Int) {
+        lock.lock(); processed += count; lock.unlock()
+    }
 
     func cancel() {
         lock.lock(); cancelled = true; let c = coordinating; lock.unlock()
@@ -189,7 +198,7 @@ final class DocumentRead {
         return try coordinated(archive.scope) { name in
             try archive.withReads(at: name, check: self.check) { fill in
                 try report.directory.checkMember(file, mode: mode,
-                    check: { try self.check(); try archive.scope.check() }, fill: fill)
+                    check: { try self.check(); try archive.scope.check() }, progress: self.didProcessBody, fill: fill)
             }
         }
     }
@@ -199,7 +208,8 @@ final class DocumentRead {
         guard report.isManagedSnapshotName else { throw PreviewError.format }
         return try coordinated(archive.scope) { name in
             try archive.withReads(at: name, check: self.check) { fill in
-                try report.directory.verifySnapshot(check: { try self.check(); try archive.scope.check() }, fill: fill)
+                try report.directory.verifySnapshot(check: { try self.check(); try archive.scope.check() },
+                    progress: self.didProcessBody, fill: fill)
             }
         }
     }
