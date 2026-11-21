@@ -237,9 +237,17 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
     let mut members=Vec::<(OwnedFd,super::super::first_work::Current<'_,'_,'_>)>::new();
     const MAX_MEMBERS:usize=16;
     let mut writers=Vec::new();let mut births=Vec::new();let mut moves=Vec::new();let mut paths=Vec::new();
+    let mut ordinary_moves=Vec::<mover::OrdinaryJob<'scope>>::new();
     let mut capacity=None;
     let held_capacity=root.capacity_origin();
     while !(site.stopping)()&&live(origin,reply,0){
+        for i in (0..ordinary_moves.len()).rev(){
+            if !ordinary_moves[i].finished(){continue;}
+            let job=ordinary_moves.swap_remove(i);
+            if let Some((_,current))=members.iter_mut().find(|(_,current)|job.belongs_to(current)){
+                job.finish(site,origin,reply,current);
+            }
+        }
         let mut channels=[-1;MAX_MEMBERS];let mut events=[0u8;MAX_MEMBERS+1];
         for(i,(m,_))in members.iter().enumerate(){channels[i]=m.as_raw_fd();}
         if unsafe{zxs_tree_events(reply.as_raw_fd(),origin.session.as_raw_fd(),channels.as_ptr(),members.len(),events.as_mut_ptr())}<0{break;}
@@ -259,6 +267,13 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
             }
             if action==1{
                 let Ok((request,answer))=mover::take(member,origin)else{members.remove(i);continue;};
+                if ordinary_moves.iter().any(|job|job.belongs_to(&members[i].1)){mover::refuse(answer,1);continue;}
+                if matches!(&request,mover::Request::CopyMove{..}){
+                    if let Some(job)=mover::start_ordinary(scope,site,origin,reply,tree_live,member,&mut members[i].1,answer,request){
+                        ordinary_moves.push(job);
+                    }
+                    continue;
+                }
                 if matches!(&request,mover::Request::Rename(_)|mover::Request::Move{..}){
                     let still=||{
                         if !tree_live.load(Ordering::Acquire)||(site.stopping)()||!live(origin,reply,0)||
@@ -271,7 +286,7 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
                 if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
                 moves.retain(|job:&thread::ScopedJoinHandle<'_,()>|!job.is_finished());
                 let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
-                let source=members[i].1.native_placement().clone();let authority=tree.setting;
+                let source=members[i].1.native_placement().clone();let authority=members[i].1.grant();
                 if let Ok(job)=thread::Builder::new().name("zxs-delete-to-recycle".into()).spawn_scoped(scope,move||{
                     mover::run(site,origin,reply,answer,request,source,Some(authority),permit);
                 }){moves.push(job);}

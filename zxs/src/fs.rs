@@ -261,6 +261,9 @@ impl HeldDir {
     pub(crate) fn same_mount(&self,other:&Self)->io::Result<bool>{
         Ok(mounts::id(&self.file)?==mounts::id(&other.file)?)
     }
+    pub(crate) fn distinct_filesystems(&self,other:&Self)->io::Result<bool>{
+        mounts::Mounts::read()?.distinct_filesystems(&self.file,&other.file)
+    }
     pub(crate) fn duplicate(&self)->io::Result<Self>{
         Ok(Self{file:self.file.try_clone()?,path:self.path.clone(),entity:self.entity})
     }

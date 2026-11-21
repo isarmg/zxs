@@ -14,12 +14,15 @@ struct zxs_xfer_state{
 };
 static bool zxs_rename_kind(uint8_t kind)
 {
-	return kind==ZXS_XFER_RENAME||kind==ZXS_XFER_MOVE;
+	return kind==ZXS_XFER_RENAME||kind==ZXS_XFER_MOVE||kind==ZXS_XFER_COPY_MOVE;
 }
 static bool zxs_xfer_current(struct smbd_smb2_request *n,struct files_struct *fsp,
 			    const struct zxs_read_fsp *m,uint8_t kind)
 {
 	uint64_t dev=0,ext=0;
+	/* folder and member.volume bind the original native endpoint, not
+	 * the ongoing FILE position after a handoff. Only the adopted Core
+	 * grant decides current I/O; no new write access is granted here. */
 	if(m==NULL||m!=zxs_find_read(fsp)||m->fd<0||!zxs_request_folder_current(n,&m->folder)||
 	   zxs_member_held(m->fd)!=0||m->session!=n->session||m->tcon!=n->tcon||
 	   m->seq!=n->session->global->auth_session_info_seqnum||n->tcon->compat!=fsp->conn||
@@ -88,6 +91,7 @@ static void zxs_xfer_ready(struct tevent_req *sub)
 	case ZXS_XFER_COLLISION:status=NT_STATUS_OBJECT_NAME_COLLISION;break;
 	case ZXS_XFER_NOT_FOUND:status=NT_STATUS_OBJECT_NAME_NOT_FOUND;break;
 	case ZXS_XFER_UNAVAILABLE:status=NT_STATUS_DEVICE_NOT_READY;break;
+	case ZXS_XFER_UNSUPPORTED:status=NT_STATUS_NOT_SUPPORTED;break;
 	default:break;
 	}
 	if(zxs_rename_kind(s->kind)&&NT_STATUS_IS_OK(status)){
@@ -97,7 +101,7 @@ static void zxs_xfer_ready(struct tevent_req *sub)
 		}
 		s->rename_claimed=false;
 		s->member->placement_sequence++;
-		if(s->kind==ZXS_XFER_MOVE){s->member->moved_parent=true;}
+		if(s->kind==ZXS_XFER_MOVE||s->kind==ZXS_XFER_COPY_MOVE){s->member->moved_parent=true;}
 	}
 	zxs_xfer_finish(req,status,false);
 }
@@ -155,7 +159,8 @@ struct tevent_req *zxs_xfer_send(TALLOC_CTX *ctx,struct tevent_context *ev,struc
 static struct tevent_req *zxs_rename_send(TALLOC_CTX *ctx,struct tevent_context *ev,struct tevent_req *outer,
 	struct smbd_smb2_request *n,struct files_struct *fsp,const char *target,const char *folder,const char *name)
 {
-	return zxs_xfer_begin(ctx,ev,outer,n,fsp,folder==NULL?ZXS_XFER_RENAME:ZXS_XFER_MOVE,folder,name,NULL,target);
+	const char *opened=fsp->fsp_name==NULL?NULL:fsp->fsp_name->base_name;
+	return zxs_xfer_begin(ctx,ev,outer,n,fsp,zxs_ordinary_destination_kind(opened,folder),folder,name,NULL,target);
 }
 _PUBLIC_
 NTSTATUS zxs_xfer_recv(struct tevent_req *req,bool *unknown,uint8_t receipt[16])
@@ -187,12 +192,22 @@ bool zxs_restore_input(TALLOC_CTX *ctx,DATA_BLOB input,char **folder,char **name
 	*folder=path;*name=split+1;return true;
 }
 _PUBLIC_
+uint8_t zxs_ordinary_destination_kind(const char *opened,const char *volume)
+{
+	const char *label=opened==NULL?NULL:strchr(opened,'\\');
+	if(label==NULL||label==opened)return 0;
+	if(volume==NULL)return ZXS_XFER_RENAME;
+	if(volume[0]==0)return 0;
+	const bool same=strlen(volume)==(size_t)(label-opened)&&memcmp(opened,volume,label-opened)==0;
+	return same?ZXS_XFER_MOVE:ZXS_XFER_COPY_MOVE;
+}
+_PUBLIC_
 bool zxs_ordinary_rename_input(TALLOC_CTX *ctx,DATA_BLOB input,const char *opened,char **target,char **volume,const char **relative)
 {
 	char *folder=NULL,*path=NULL;
 	if(opened==NULL||!zxs_restore_input(ctx,input,&folder,&path))return false;
 	const char *label=strchr(opened,'\\');
-	if(label==NULL||strlen(folder)!=(size_t)(label-opened)||memcmp(opened,folder,label-opened)!=0)return false;
+	if(label==NULL||label==opened)return false;
 	char *full=talloc_asprintf(ctx,"%s\\%s",folder,path);
 	if(full==NULL)return false;
 	const char *a=strrchr(opened,'\\'),*b=strrchr(full,'\\');

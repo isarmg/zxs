@@ -390,8 +390,18 @@ static bool exact_transfer_envelope(void)
     native=zxs_xfer_query(p[0],ZXS_XFER_MOVE,(const uint8_t *)"F",1,(const uint8_t *)outgoing,sizeof(outgoing)-1,NULL);
     if(native<0||zxs_member_xfer_pending(p[1])!=1)goto end;
     store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark,&width,parents);
-    ok=store>=0&&kind==ZXS_XFER_MOVE&&folder[0]==1&&folder[1]=='F'&&width==12&&
-        memcmp(parents,"Reports\\2027",12)==0&&name[0]==6&&memcmp(name+1,"Report",6)==0;
+    if(store<0||kind!=ZXS_XFER_MOVE||folder[0]!=1||folder[1]!='F'||width!=12||
+        memcmp(parents,"Reports\\2027",12)!=0||name[0]!=6||memcmp(name+1,"Report",6)!=0)goto end;
+    close(store);store=-1;close(native);native=-1;
+    if(zxs_xfer_query(p[0],ZXS_XFER_COPY_MOVE,NULL,0,(const uint8_t *)outgoing,sizeof(outgoing)-1,NULL)>=0||
+       zxs_xfer_query(p[0],ZXS_XFER_COPY_MOVE,(const uint8_t *)"F",1,(const uint8_t *)outgoing,sizeof(outgoing)-1,op)>=0)goto end;
+    native=zxs_xfer_query(p[0],ZXS_XFER_COPY_MOVE,(const uint8_t *)"G",1,(const uint8_t *)outgoing,sizeof(outgoing)-1,NULL);
+    if(native<0||zxs_member_xfer_pending(p[1])!=1)goto end;
+    store=zxs_xfer_take(p[1],proc,&kind,folder,name,mark,&width,parents);
+    if(store<0||kind!=ZXS_XFER_COPY_MOVE||folder[0]!=1||folder[1]!='G'||width!=12||
+       memcmp(parents,"Reports\\2027",12)!=0||name[0]!=6||memcmp(name+1,"Report",6)!=0)goto end;
+    if(zxs_xfer_reply(store,ZXS_XFER_UNSUPPORTED,file,op)==0)goto end;
+    ok=zxs_xfer_reply(store,ZXS_XFER_UNSUPPORTED,NULL,NULL)==0&&zxs_xfer_read(native,file,&status,NULL)==0&&status==ZXS_XFER_UNSUPPORTED;
 end:
 	if(store>=0)close(store);if(native>=0)close(native);if(proc>=0)close(proc);
 	close(p[0]);close(p[1]);return ok;

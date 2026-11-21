@@ -7,7 +7,10 @@ pub(super) fn first(t:&PrivateTemp)->(PathBuf,PoolId){
     first_with_recycle(t,None)
 }
 pub(super) fn first_with_recycle(t:&PrivateTemp,recycle:Option<PathBuf>)->(PathBuf,PoolId){
-    let (s,p)=record_with_recycle(t,InitState::Committed,"",recycle);
+    first_with_storage(t,recycle,None)
+}
+pub(super) fn first_with_storage(t:&PrivateTemp,recycle:Option<PathBuf>,second:Option<&Path>)->(PathBuf,PoolId){
+    let (s,p)=record_with_storage(t,InitState::Committed,"",recycle,second);
     let selected=HeldDir::trusted_system(&s).unwrap();selected.exclusive().unwrap();
     let writer=Builder::existing(&s.join("SYSTEM.sqlite3"));
     let [pair,web,pending,activate]=first_account::rows();

@@ -98,7 +98,7 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,folder:&OwnedFd,running:&At
             };
             let data=member_packet(&current,current.native_key()?);
             ready(site,&alive,fd,&data,offered.get())?;emitted.set(true);
-            read_only(site,origin,folder,setting,fd,&alive,&mut current)
+            read_only(site,origin,folder,fd,&alive,&mut current)
         }
     };
     let result=original();
@@ -114,12 +114,18 @@ fn ready(site:Site<'_>,alive:&impl Fn()->io::Result<()>,fd:i32,data:&[u8;88],bor
     os(unsafe{if born{zxs_birth_done(fd,data[48..64].as_ptr())}
         else{zxs_member_reply(fd,data.as_ptr())}})
 }
-fn read_only(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,expected:Setting,member:i32,
+fn read_only(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,member:i32,
     alive:&impl Fn()->io::Result<()>,current:&mut Current<'_,'_,'_>)->io::Result<()>{
+    let dispatcher=AtomicBool::new(true);
     std::thread::scope(|scope|{
+        let _exit=mover::ExitOrdinaryMoves(&dispatcher);
         let mut moved_capacity=None;
+        let mut ordinary_move:Option<mover::OrdinaryJob<'_>>=None;
         loop{
             alive()?;
+            if ordinary_move.as_ref().is_some_and(mover::OrdinaryJob::finished){
+                ordinary_move.take().expect("checked completion").finish(site,origin,branch,current);
+            }
             let r=unsafe{zxs_smb_root_wait(member,origin.session.as_raw_fd(),500)};
             if r==0{continue;}if r!=1{return Err(denied());}
             match mover::pending(member){
@@ -129,13 +135,18 @@ fn read_only(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,expected:Setting,m
                 },
                 1=>{
                     let (request,answer)=mover::take(member,origin)?;
+                    if ordinary_move.is_some(){mover::refuse(answer,1);continue;}
+                    if matches!(&request,mover::Request::CopyMove{..}){
+                        ordinary_move=mover::start_ordinary(scope,site,origin,branch,&dispatcher,member,current,answer,request);
+                        continue;
+                    }
                     if matches!(&request,mover::Request::Rename(_)|mover::Request::Move{..}){
                         mover::rename(site,answer,&request,current,alive);
                         continue;
                     }
                     if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
                     let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
-                    mover::run(site,origin,branch,answer,request,current.native_placement().clone(),Some(expected),permit);
+                    mover::run(site,origin,branch,answer,request,current.native_placement().clone(),Some(current.grant()),permit);
                     continue;
                 },
                 0=>{},

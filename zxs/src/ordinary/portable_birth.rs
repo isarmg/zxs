@@ -111,6 +111,20 @@ impl Installed{
             placement_parent:self.placement_parent.as_ref().map(HeldDir::duplicate).transpose()?})
     }
     pub(crate) fn directory(&self)->&HeldDir{&self.dir}
+    /// The independently locked source of a copy must still be the
+    /// already-open FILE, not a newly coherent object at its old spelling.
+    pub(crate) fn require_copy_source(&self,root:&HeldDir,locked:&Self)->io::Result<()>{
+        self.require(root)?;locked.require(root)?;
+        if self.dir.entity!=locked.dir.entity||self.dir.path!=locked.dir.path||!self.dir.same_mount(&locked.dir)?||
+           self.witness!=locked.witness||self.header.stamp()!=locked.header.stamp(){
+            return Err(invalid("handoff source no longer matches the opened FILE"));
+        }
+        match (&self.placement_parent,&locked.placement_parent){
+            (None,None)=>Ok(()),
+            (Some(a),Some(b)) if a.path==b.path&&a.entity==b.entity&&a.same_mount(b)?=>Ok(()),
+            _=>Err(invalid("handoff source no longer matches its opened pocket")),
+        }
+    }
     pub(crate) fn capture_retirement(&self,root:&HeldDir)->io::Result<crate::fs::RetireProof>{
         self.require(root)?;
         crate::fs::RetireProof::capture(self.placement_parent.as_ref().unwrap_or(root),&self.dir,&self.header,&self.witness)

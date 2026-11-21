@@ -157,6 +157,10 @@ impl<'a> OrdinaryRoot<'a>{
     }
     pub(super) fn view(&self)->OrdinaryView<'_>{self.media.view(self.source)}
     pub(super) fn duplicate_media(&self)->io::Result<OrdinaryMedia>{self.media.duplicate()}
+    pub(super) fn into_media(self)->OrdinaryMedia{self.media}
+    // A verified short-lived handoff carries the same held F and ancestry,
+    // not a pathname to reopen. The caller still authorizes the actual FILE.
+    pub(super) fn adopt_media(source:&'a InitialReader,media:OrdinaryMedia)->Self{Self{source,media}}
     fn selected(source:&'a InitialReader,catalog:&Catalog,id:VolumeId,lock:Option<bool>)->io::Result<Self>{
         let (i,row)=catalog.rows().iter().enumerate().find(|(_,r)|r.volume==id&&r.role==Role::File)
              .ok_or_else(||invalid("not an ordinary VolumeId in this original pool"))?;

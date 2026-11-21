@@ -15,6 +15,11 @@ fn at(src:&InitialReader,file:FileId)->(OperationId,i64,Role,VolumeId,String){
 }
 fn ticket(db:&Builder,op:OperationId,file:FileId,where_op:OperationId,share:ShareId,target:VolumeId,
           display:&str,direction:u8)->io::Result<()>{
+    ticket_at(db,op,file,where_op,share,target,display,direction,None)
+}
+fn ticket_at(db:&Builder,op:OperationId,file:FileId,where_op:OperationId,share:ShareId,target:VolumeId,
+    display:&str,direction:u8,ordinary_destination:Option<OperationId>)->io::Result<()>{
+    let dest=ordinary_destination.map_or_else(||"NULL".into(),|v|format!("X'{}'",hex(&v.0)));
     let place=hex(&where_op.0);let file=hex(&file.0);let mode=hex(&share.0);
     let op=hex(&op.0);let target=hex(&target.0);let name=hex(display.as_bytes());
     // Use the actual original currently eligible writer tuple and view; raw
@@ -22,9 +27,9 @@ fn ticket(db:&Builder,op:OperationId,file:FileId,where_op:OperationId,share:Shar
     let result=db.try_exec(&format!(
         "BEGIN IMMEDIATE;
          INSERT INTO file_transfer(transfer_op,file_id,direction,source_op,source_gen,source_id,source_name,
-            target_id,target_name,share_id,setting_op,auth_op,save_op,manual_op,source_parent,target_parent,source_backing,source_terminal)
+            target_id,target_name,share_id,setting_op,auth_op,save_op,manual_op,source_parent,target_parent,source_backing,source_terminal,target_setting_op)
          SELECT X'{op}',l.file_id,{direction},l.position_op,l.generation,l.volume_id,l.display,
-           X'{target}',X'{name}',a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op,l.parent_id,zeroblob(16),l.backing_op,l.flat_terminal
+           X'{target}',X'{name}',a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op,l.parent_id,zeroblob(16),l.backing_op,l.flat_terminal,{dest}
          FROM transferable_location l JOIN live_ordinary_writer a ON a.share_id=X'{mode}'
          WHERE l.file_id=X'{file}' AND l.position_op=X'{place}';
          INSERT INTO operation SELECT X'{op}',12,a.actor_id,zeroblob(32),0 FROM live_ordinary_writer a WHERE a.share_id=X'{mode}';
@@ -137,4 +142,52 @@ fn one_current_location_keeps_birth_and_readers_separate_from_a_stale_delete_or_
     }).unwrap();
     // The fixture never copied, cleaned or reinterpreted these original bytes.
     assert!(f.join(format!("Report-{}.txt/FILE",b.file)).is_file());
+}
+
+#[test]
+#[ignore="source-only original SQLite state for two real ordinary grants; no mounts or transfer copy"]
+fn another_ordinary_volume_needs_two_fresh_same_account_settings_and_one_destination(){
+    let tmp=PrivateTemp::under(&std::env::temp_dir());let other=tmp.0.join("zz-ordinary-destination");
+    let(s,p)=publication::first_with_storage(&tmp,None,Some(&other));
+    let src=InitialReader::open(&s,p).unwrap();
+    create_file::open_root(&src);let(rw,_)=create_file::configure(&src);
+    let op=|x|OperationId([x;16]);
+    let admin=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let dst=VolumeId([0x14;16]);
+    let publish=admin.publish_root(op(0xe0),dst,"destination").unwrap();
+    let a=admin.share_setting(rw).unwrap();
+    let desired=admin.set_share_mode(op(0xe1),publish.share,publish.op,Mode::ReadWrite).unwrap();
+    let current=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let source=current.connect(rw).unwrap();
+    let file=source.create_file(op(0xe2),"Source").unwrap();
+    let source_place=at(&src,file.file);
+    let raw=Builder::existing(&s.join("SYSTEM.sqlite3"));
+    raw.exec("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;");
+    let reserve=|o,volume,setting|ticket_at(&raw,o,file.file,file.created,rw,volume,"Arrival",3,setting);
+    assert!(reserve(op(0xe3),dst,None).is_err());
+    assert!(reserve(op(0xe4),dst,Some(a.op)).is_err());
+    assert!(reserve(op(0xe5),source_place.3,Some(a.op)).is_err());
+    assert!(reserve(op(0xe6),VolumeId([0x12;16]),Some(desired.op)).is_err());
+    reserve(op(0xe7),dst,Some(desired.op)).unwrap();
+    assert_eq!(at(&src,file.file),source_place);
+    assert!(!other.exists()); // SQL reservation is not a native destination proof.
+    let destination=current.connect(publish.share).unwrap();
+    // The ordinary target name, not just a (source, op) pair, is reserved.
+    assert_eq!(destination.occupied_name("Arrival",false).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    let second=InitialReader::open(&s,p).unwrap();
+    let web=second.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    web.set_share_mode(op(0xe8),publish.share,desired.op,Mode::ReadOnly).unwrap();
+    assert!(finish(&raw,op(0xe7)).is_err());
+    let renewed=web.set_share_mode(op(0xe9),publish.share,op(0xe8),Mode::ReadWrite).unwrap();
+    assert!(finish(&raw,op(0xe7)).is_err());
+    raw.exec(&format!("INSERT INTO file_transfer_void
+       SELECT X'{}',setting_op,auth_op,1 FROM live_ordinary_writer WHERE share_id=X'{}';",hex(&op(0xe7).0),hex(&rw.0)));
+    assert_eq!(at(&src,file.file),source_place);
+    reserve(op(0xea),dst,Some(renewed.op)).unwrap();
+    finish(&raw,op(0xea)).unwrap(); // raw SQL fixture only; production must first sync and verify actual bytes
+    assert_eq!(at(&src,file.file),(op(0xea),source_place.1+1,Role::File,dst,"Arrival".into()));
+    assert!(finish(&raw,op(0xe7)).is_err());
+    assert!(current.connect(publish.share).unwrap().open_current("Arrival").is_err());
+    assert!(source.open_current("Source").is_err());
+    assert!(!other.exists());
 }

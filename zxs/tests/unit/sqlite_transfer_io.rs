@@ -5,6 +5,153 @@ use crate::{fs::invalid,ordinary::portable_birth::Birth,system::reader::{Initial
 use std::{path::Path,fs::OpenOptions,os::unix::fs::{DirBuilderExt,FileExt,OpenOptionsExt}};
 
 #[test]
+#[ignore="source-only: same pool, two genuine private tmpfs/backing paths, no Samba listener or existing data"]
+fn another_ordinary_filesystem_selects_the_same_history_then_retires_only_the_old_source(){
+    use crate::system::reader::{account::share_mode::Mode,tests::ordinary_transfer_pool};
+    use crate::fs::directory_birth::DirectoryParent::Directory;
+    let private=PrivateTemp::under(Path::new("/tmp"));let remote=PrivateTemp::under(Path::new("/dev/shm"));
+    let destination=remote.0.join("ordinary-target");
+    let(s,p,f,r,z1,z2)=ordinary_transfer_pool(&private,&destination);
+    let src=InitialReader::open(&s,p).unwrap();let other=InitialReader::open(&s,p).unwrap();
+    let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let from=auth.connect(z1).unwrap();let target=auth.connect(z2).unwrap();
+    let web=other.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let original_target=web.share_setting(z2).unwrap();
+    assert!(HeldDir::trusted_storage(&f).unwrap().distinct_filesystems(&HeldDir::trusted_storage(&destination).unwrap()).unwrap());
+    assert!(!r.exists()); // R is not necessary or silently used by this action.
+    let (_,target_root)=target.ordinary_route(&[],true).unwrap();
+    let op=|n|OperationId([n;16]);
+    let (dir,_)=target.make_ordinary_directory(&target_root,op(0xa0),"Reviewed",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let to=target.scoped(Directory(dir.id));
+    let file=from.create_file(op(0xa1),"Original.txt").unwrap().file;
+    let input=OpenOptions::new().write(true).read(true).create_new(true).mode(0o600).open(private.0.join("changed")).unwrap();
+    input.write_all_at(b"Old bytes",0).unwrap();input.sync_all().unwrap();
+    from.open_writer("Original.txt",file).unwrap().save(op(0xa2),None,Some(0),9,&input).unwrap();
+    let frozen=web.freeze(op(0xa3),web.manual_target(file).unwrap()).unwrap();
+    let mut source=from.open_current("Original.txt").unwrap();let key=source.native_key().unwrap();
+    let before=source.capacity_cut().unwrap();
+    input.write_all_at(b"New bytes",0).unwrap();input.sync_all().unwrap();
+    from.open_writer("Original.txt",file).unwrap().save(op(0xa4),Some(op(0xa2)),Some(0),9,&input).unwrap();
+    let hold=source.begin_ordinary_move().unwrap();assert!(before.require_owner().is_err());
+    let ownership=source.move_owner();assert!(ownership.is_member(&source));ownership.check().unwrap();
+    let another_open=from.open_current("Original.txt").unwrap();
+    assert!(!ownership.is_member(&another_open));drop(another_open);
+    drop(before);
+    let old=f.join(format!("Original-{file}.txt"));assert!(old.is_dir());
+    let mut seen=false;
+    let fail=from.ordinary_after(&to,&hold,"Arrival.txt".into(),op(0xa5),|cut|{
+        if cut!=Cut::CandidateSynced{return Ok(());}
+        seen=true;
+        assert_eq!(other.at(|db,c|Place::current(db,&c,file))?,hold.place);
+        web.set_share_mode(op(0xa6),z2,original_target.op,Mode::ReadOnly)?;
+        Ok(())
+    });
+    assert!(seen&&fail.is_err());assert_eq!(source.native_key().unwrap(),key);
+    assert!(auth.connect(z2).unwrap().scoped(Directory(dir.id)).open_current("Arrival.txt").is_err());
+    web.set_share_mode(op(0xa7),z2,op(0xa6),Mode::ReadWrite).unwrap();
+    let refreshed=auth.connect(z2).unwrap().scoped(Directory(dir.id));
+    assert!(from.transfer_ordinary_to(&refreshed,&hold,"Arrival.txt".into(),op(0xa5),||Ok(())).is_err());
+    let moved=from.transfer_ordinary_to(&refreshed,&hold,"Arrival.txt".into(),op(0xa8),||Ok(())).unwrap();
+    assert_eq!((moved.to.file,moved.to.parent,moved.to.role),(file,Directory(dir.id),Role::File));
+    assert_eq!(from.transfer_ordinary_to(&refreshed,&hold,"Arrival.txt".into(),op(0xa8),||Ok(())).unwrap(),moved);
+    assert!(from.open_current("Original.txt").is_err());
+    let body=refreshed.open_current("Arrival.txt").unwrap();assert_eq!(body.native_key().unwrap(),key);
+    let mut now=Vec::new();body.range_to(0,9,&mut now).unwrap();assert_eq!(now,b"New bytes");
+    let mut past=Vec::new();refreshed.open_version("Arrival.txt",frozen.node).unwrap().range_to(0,9,&mut past).unwrap();
+    assert_eq!(past,b"Old bytes");
+    // The original open continues to see its exact earlier selected view;
+    // original source permissions no longer control use of the new target.
+    let adoption=refreshed.prepare_moved_file(moved.clone(),&hold).unwrap();
+    assert_eq!(source.adopt_moved_file(adoption).unwrap(),moved);
+    assert!(ownership.check().is_err());
+    web.set_share_mode(op(0xa9),z1,from.setting.op,Mode::Disabled).unwrap();
+    let mut prior=Vec::new();source.range_to(0,9,&mut prior).unwrap();assert_eq!(prior,b"Old bytes");
+    assert_eq!(source.native_key().unwrap(),key);assert_eq!(source.grant().volume,target.setting.volume);
+    let new_cut=source.capacity_cut().unwrap();new_cut.physical().unwrap();assert_eq!(new_cut.setting.volume,target.setting.volume);
+    let final_path=destination.join("Reviewed").join(Birth::placement_parent(moved.op).unwrap().into_string().unwrap())
+        .join(format!("Arrival-{file}.txt"));
+    assert!(final_path.is_dir()&&!r.exists());
+    assert_eq!(super::super::retirement::one_for_test(&other,|_|Ok(())).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    web.set_share_mode(op(0xaa),z2,refreshed.setting.op,Mode::Disabled).unwrap();
+    web.set_share_mode(op(0xab),z2,op(0xaa),Mode::ReadWrite).unwrap();
+    let new_grant=auth.connect(z2).unwrap().scoped(Directory(dir.id));
+    assert!(new_grant.prepare_moved_file(moved.clone(),&hold).is_err());
+    assert!(source.native_key().is_err());
+    assert!(old.is_dir());drop(hold);
+    super::super::retirement::one_for_test(&other,|_|Ok(())).unwrap();
+    assert!(!old.exists()&&final_path.is_dir()&&!r.exists());
+}
+
+#[test]
+#[ignore="source-only: two original ordinary roots on the same live filesystem; no SMB listener"]
+fn do_not_create_a_copy_ticket_for_two_registrations_of_one_mounted_filesystem(){
+    use crate::system::reader::tests::ordinary_transfer_pool;
+    let a=PrivateTemp::under(Path::new("/tmp"));let b=PrivateTemp::under(Path::new("/tmp"));
+    let(s,p,f,_,z1,z2)=ordinary_transfer_pool(&a,&b.0.join("not-a-different-filesystem"));
+    let src=InitialReader::open(&s,p).unwrap();let auth=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let from=auth.connect(z1).unwrap();let to=auth.connect(z2).unwrap();
+    let file=from.create_file(OperationId([0x94;16]),"Document").unwrap().file;
+    let source=from.open_current("Document").unwrap().move_source().unwrap();
+    let answer=from.transfer_ordinary_to(&to,&source,"Other".into(),OperationId([0x95;16]),||Ok(()));
+    assert_eq!(answer.unwrap_err().kind(),io::ErrorKind::Unsupported);
+    src.at(|db,c|{
+        assert_eq!(Place::current(db,&c,file)?,source.place);
+        let q=db.prepare(c"SELECT count(*) FROM main.file_transfer")?;
+        assert!(work_record::start_one(&q)?);assert_eq!(q.integer(0)?,0);q.done()
+    }).unwrap();
+    assert!(f.join(format!("Document-{file}")).is_dir());
+}
+
+#[test]
+#[ignore="source-only: actual allowed single-name interrupted SAVE, two isolated ordinary filesystems"]
+fn unprovable_old_source_stops_before_a_move_ticket_or_target_stage(){
+    use crate::system::reader::{tests::ordinary_transfer_pool,smb::work_change::Cut as WorkCut};
+    let local=PrivateTemp::under(Path::new("/tmp"));let other=PrivateTemp::under(Path::new("/dev/shm"));
+    let dest=other.0.join("ordinary");let(s,p,f,_,a,b)=ordinary_transfer_pool(&local,&dest);
+    let src=InitialReader::open(&s,p).unwrap();let witness=InitialReader::open(&s,p).unwrap();
+    let login=SmbSession::fixture_authenticated(&src,"files.smb").unwrap();
+    let from=login.connect(a).unwrap();let to=login.connect(b).unwrap();
+    let web=witness.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let op=|n|OperationId([n;16]);let name="Report";
+    let file=from.create_file(op(0x70),name).unwrap().file;
+    let payload=OpenOptions::new().create_new(true).read(true).write(true).mode(0o600).open(local.0.join("payload")).unwrap();
+    payload.write_all_at(b"ABCD",0).unwrap();payload.sync_all().unwrap();
+    let initial=from.open_writer(name,file).unwrap().save(op(0x71),None,Some(0),4,&payload).unwrap();
+    web.freeze(op(0x72),web.manual_target(file).unwrap()).unwrap();
+    payload.write_all_at(b"Z",0).unwrap();payload.sync_all().unwrap();
+    let left=op(0x73);let finished=op(0x74);
+    let container=f.join(Birth::placed_container(name,file).unwrap().to_str().unwrap());
+    let [unpaired,_,_,_]=crate::ordinary::working_round::names(left);
+    let lonely=container.join(unpaired.to_str().unwrap());
+    let mut left_name=false;
+    let staged=from.open_writer(name,file).unwrap().save_after(left,Some(initial.key.save),Some(0),4,&payload,|cut|{
+        if cut!=WorkCut::Reserved{return Ok(());}
+        let piece=OpenOptions::new().create_new(true).write(true).mode(0o600).open(&lonely)?;
+        piece.write_all_at(b"?",0)?;piece.sync_all()?;std::fs::File::open(&container)?.sync_all()?;
+        left_name=true;Err(io::ErrorKind::ConnectionAborted.into())
+    });
+    assert!(left_name&&staged.is_err());
+    let working=from.open_writer(name,file).unwrap().save(finished,Some(initial.key.save),Some(0),4,&payload).unwrap();
+    witness.at(|db,_|{
+        let q=db.prepare(c"SELECT retained_mask FROM main.work_edit WHERE edit_op=?1")?;
+        q.bind_bytes(1,&finished.0)?;assert!(work_record::start_one(&q)?);assert_eq!(q.byte(0)?,1);q.done()
+    }).unwrap();
+    let opened=from.open_current(name).unwrap().move_source().unwrap();let token=op(0x79);
+    let rejected=from.transfer_ordinary_to(&to,&opened,"No copy yet".into(),token,||Ok(())).unwrap_err();
+    assert_eq!(rejected.to_string(),"old FILE retirement cannot prove the original isolated object");
+    witness.at(|db,c|{
+        assert_eq!(Place::current(db,&c,file)?,opened.place);
+        let q=db.prepare(c"SELECT count(*) FROM main.file_transfer")?;
+        assert!(work_record::start_one(&q)?);assert_eq!(q.integer(0)?,0);q.done()
+    }).unwrap();
+    assert!(!dest.join(Birth::placement_parent(token).unwrap().to_str().unwrap()).exists());
+    drop(opened);
+    payload.write_all_at(b"Y",0).unwrap();payload.sync_all().unwrap();
+    from.open_writer(name,file).unwrap().save(op(0x7a),Some(working.key.save),Some(0),4,&payload).unwrap();
+    assert_eq!(std::fs::read(&lonely).unwrap(),b"?");
+}
+
+#[test]
 #[ignore="source only: exact nested ordinary storage, actual private F/R and real SQLite; no SMB listener"]
 fn nested_handoff_keeps_original_parents_and_the_same_confirmed_work(){
     let private=PrivateTemp::under(Path::new("/tmp"));let remote=PrivateTemp::under(Path::new("/dev/shm"));

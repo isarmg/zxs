@@ -171,12 +171,16 @@ static bool native_directory_projection(connection_struct *c)
 	char *renamed=NULL,*destination_volume=NULL;const char *within=NULL;
 	if(!zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&destination_volume,&within)||
 	   strcmp(renamed,"F\\Reports\\Report")!=0||strcmp(within,"Report")!=0||destination_volume!=NULL||
-	   zxs_ordinary_rename_input(c,nesting,"G\\Reports\\Old",&renamed,&destination_volume,&within)||
-	   zxs_ordinary_rename_input(c,nesting,"f\\Reports\\Old",&renamed,&destination_volume,&within))goto fail;
+	   zxs_ordinary_destination_kind("F\\Reports\\Old",destination_volume)!=ZXS_XFER_RENAME)goto fail;
+	if(!zxs_ordinary_rename_input(c,nesting,"G\\Reports\\Old",&renamed,&destination_volume,&within)||
+	   strcmp(destination_volume,"F")!=0||strcmp(within,"Reports\\Report")!=0||
+	   zxs_ordinary_destination_kind("G\\Reports\\Old",destination_volume)!=ZXS_XFER_COPY_MOVE||
+	   zxs_ordinary_destination_kind("f\\Reports\\Old",destination_volume)!=ZXS_XFER_COPY_MOVE)goto fail;
 	if(!zxs_ordinary_rename_input(c,nesting,"F\\reports\\Old",&renamed,&destination_volume,&within)||
 	   strcmp(destination_volume,"F")!=0||strcmp(within,"Reports\\Report")!=0)goto fail;
 	if(!zxs_ordinary_rename_input(c,nesting,"F\\Old",&renamed,&destination_volume,&within)||
-	   strcmp(destination_volume,"F")!=0||strcmp(within,"Reports\\Report")!=0)goto fail;
+	   strcmp(destination_volume,"F")!=0||strcmp(within,"Reports\\Report")!=0||
+	   zxs_ordinary_destination_kind("F\\Old",destination_volume)!=ZXS_XFER_MOVE)goto fail;
 	multi[0]=1;
 	if(zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&destination_volume,&within))goto fail;
 	multi[0]=0;

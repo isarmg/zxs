@@ -125,7 +125,7 @@ pub(in crate::system::reader) fn display_owner_at(db:&Connection,c:&Catalog,volu
       JOIN main.root_entry e ON e.file_id=m.file_id
       JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
       JOIN main.operation p ON p.op_id=m.source_op AND p.state=1
-      WHERE m.source_id=?1 AND m.source_terminal=?2 AND m.source_parent=?3 AND m.direction=1 AND m.source_backing IS NULL
+      WHERE m.source_id=?1 AND m.source_terminal=?2 AND m.source_parent=?3 AND m.direction IN (1,3) AND m.source_backing IS NULL
       AND ((p.kind=5 AND m.source_gen=1 AND e.create_op=p.op_id AND e.volume_id=m.source_id
               AND e.parent_id=m.source_parent AND e.display=m.source_name AND e.terminal=m.source_terminal)
            OR (p.kind=14 AND EXISTS(SELECT 1 FROM main.file_rename r WHERE r.rename_op=p.op_id AND r.file_id=m.file_id

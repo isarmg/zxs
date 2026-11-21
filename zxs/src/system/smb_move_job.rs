@@ -2,9 +2,10 @@
 //! SET_INFO supplies the request; here a current SQL boundary and physical
 //! source, verified target and exact original receipt decide its outcome.
 use super::{InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,os};
-use crate::system::reader::{smb::{file_transfer::Handoff,first_work::Current},file_location::Place,account::share_mode::{Mode,Setting}};
+use crate::system::reader::{smb::{file_transfer::Handoff,first_work::{Current,MovedFile,MoveOwner}},
+    file_location::Place,account::share_mode::{Mode,Setting}};
 use crate::{OperationId,Role,display,hash::Sha256};
-use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicUsize,Ordering}};
+use std::{io,os::fd::{AsRawFd,BorrowedFd,FromRawFd,OwnedFd},sync::atomic::{AtomicBool,AtomicUsize,Ordering},thread};
 
 static ACTIVE:AtomicUsize=AtomicUsize::new(0);
 pub(super) struct Permit;
@@ -25,6 +26,7 @@ unsafe extern "C"{
 pub(super) enum Request{
     Delete([u8;16]),Mark,Restore{folder:String,parents:Vec<String>,name:String},Rename(String),
     Move{folder:String,parents:Vec<String>,name:String},
+    CopyMove{folder:String,parents:Vec<String>,name:String},
 }
 pub(super) fn pending(member:i32)->i32{unsafe{zxs_member_xfer_pending(member)}}
 pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>{
@@ -38,11 +40,12 @@ pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>
         1 if f==0&&n==0&&plen==0&&mark!=[0;16]=>Request::Delete(mark),
         3 if f==0&&n==0&&plen==0=>Request::Mark,
         4 if f==0&&n>0&&n<=222&&plen==0&&mark==[0;16]=>Request::Rename(display::component(&name[1..1+n],222)?.to_owned()),
-        code @ (2|5) if f>0&&n>0&&f<=255&&n<=222&&mark==[0;16]=>{
+        code @ (2|5|6) if f>0&&n>0&&f<=255&&n<=222&&mark==[0;16]=>{
             let folder=display::component(&folder[1..1+f],255)?.to_owned();
             let parents=if plen==0{Vec::new()}else{super::super::super::ordinary_directory::components(raw.get(..usize::from(plen)).ok_or_else(denied)?)?};
             let name=display::component(&name[1..1+n],222)?.to_owned();
-            if code==2{Request::Restore{folder,parents,name}}else{Request::Move{folder,parents,name}}
+            match code{2=>Request::Restore{folder,parents,name},5=>Request::Move{folder,parents,name},
+                _=>Request::CopyMove{folder,parents,name}}
         },
         _=>return Err(denied()),
     };
@@ -54,9 +57,84 @@ fn reply(answer:OwnedFd,result:io::Result<(crate::FileId,OperationId)>){
         Ok((file,op))=>{let _=unsafe{zxs_xfer_reply(answer.as_raw_fd(),0,file.0.as_ptr(),op.0.as_ptr())};}
         Err(e)=>refuse(answer,match e.kind(){
             io::ErrorKind::WouldBlock=>1,io::ErrorKind::StorageFull=>2,io::ErrorKind::AlreadyExists=>3,
-            io::ErrorKind::NotFound=>4,io::ErrorKind::NotConnected=>6,io::ErrorKind::ConnectionAborted=>7,_=>5,
+            io::ErrorKind::NotFound=>4,io::ErrorKind::NotConnected=>6,io::ErrorKind::ConnectionAborted=>7,
+            io::ErrorKind::Unsupported=>8,_=>5,
         }),
     }
+}
+
+/// Cross-filesystem copies never run on a folder's READ/enumeration owner.
+/// A completed worker only returns one ready held destination and borrowed
+/// authority to the *same* surviving native member owner. No raw-FD reuse
+/// is considered identity, and no SQLite object crosses the thread.
+pub(super) struct OrdinaryJob<'scope>{owner:MoveOwner,task:thread::ScopedJoinHandle<'scope,Complete>}
+struct Complete{answer:OwnedFd,member:OwnedFd,result:io::Result<MovedFile>,_permit:Permit}
+/// The local dispatcher can leave for reasons other than peer shutdown.
+/// Drop this inside the scope before joining any borrowed worker.
+pub(super) struct ExitOrdinaryMoves<'a>(pub(super) &'a AtomicBool);
+impl Drop for ExitOrdinaryMoves<'_>{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+fn check_dispatcher(dispatcher:&AtomicBool)->io::Result<()>{
+    if dispatcher.load(Ordering::Acquire){Ok(())}else{Err(denied())}
+}
+fn still_dispatched(dispatcher:&AtomicBool,evidence:impl FnOnce()->io::Result<()>,peer:impl FnOnce()->io::Result<()>)
+    ->io::Result<()>{
+    check_dispatcher(dispatcher)?;
+    evidence()?; // BOUND metadata may block; do not use yesterday's owner after it.
+    check_dispatcher(dispatcher)?;
+    peer()?; // only original PIDFD/socket polls and weak/atomic ownership
+    check_dispatcher(dispatcher)
+}
+impl OrdinaryJob<'_>{
+    pub(super) fn finished(&self)->bool{self.task.is_finished()}
+    pub(super) fn belongs_to(&self,current:&Current<'_,'_,'_>)->bool{self.owner.is_member(current)}
+    pub(super) fn finish(self,site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,current:&mut Current<'_,'_,'_>){
+        let Ok(done)=self.task.join()else{return;};
+        let held=||self.owner.check().is_ok()&&!(site.stopping)()&&live(origin,branch,0)&&
+            unsafe{zxs_member_held(done.member.as_raw_fd())}==0&&unsafe{zxs_member_held(done.answer.as_raw_fd())}==0;
+        if !self.owner.is_member(current)||!held()||site.validate().is_err(){return;}
+        let result=done.result.and_then(|target|current.adopt_moved_file(target)).map(|m|(m.to.file,m.op));
+        // Adoption advances the sequence. Don't use the pre-adoption
+        // sequence to prove the exact reply, but still require both peers.
+        if site.validate().is_ok()&&!(site.stopping)()&&live(origin,branch,0)&&unsafe{zxs_member_held(done.member.as_raw_fd())}==0&&
+            unsafe{zxs_member_held(done.answer.as_raw_fd())}==0{reply(done.answer,result);}
+    }
+}
+pub(super) fn start_ordinary<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<'env>,
+    origin:&'env TreeOrigin,branch:&'env OwnedFd,dispatcher:&'env AtomicBool,member:i32,current:&mut Current<'_,'_,'_>,
+    answer:OwnedFd,request:Request)->Option<OrdinaryJob<'scope>>{
+    let Request::CopyMove{folder,parents,name}=request else{refuse(answer,5);return None;};
+    let Some(permit)=Permit::take()else{refuse(answer,1);return None;};
+    let Ok(opened)=current.begin_ordinary_move()else{refuse(answer,5);return None;};
+    let owner=current.move_owner();let worker_owner=owner.clone();
+    // SAFETY: the owner loop holds this exact endpoint through this call.
+    let Ok(held)=unsafe{BorrowedFd::borrow_raw(member)}.try_clone_to_owned()else{refuse(answer,1);return None;};
+    let Ok(terminal)=answer.try_clone()else{refuse(answer,1);return None;};
+    let result=thread::Builder::new().name("zxs-ordinary-volume-handoff".into()).spawn_scoped(scope,move||{
+        let still=||still_dispatched(dispatcher,||site.validate(),||{
+            worker_owner.check()?;
+            if (site.stopping)()||!live(origin,branch,0)||unsafe{zxs_member_held(held.as_raw_fd())}!=0||
+               unsafe{zxs_member_held(terminal.as_raw_fd())}!=0{return Err(denied());}
+            Ok(())
+        });
+        let result=(||->io::Result<MovedFile>{
+            still()?;
+            let src=InitialReader::alongside(site.dir,site.mark,site.pool,site.shape)?;
+            let session=SmbSession{source:&src,original:origin.slot.original.clone()};
+            let from=Tree{session:&session,setting:opened.grant,parent:opened.place.parent};
+            let (target,parent)=src.at(|db,c|{
+                from.require(db,&c,true)?;
+                let target=site.plan.current(db,&c,&folder)?.filter(|g|g.mode==Mode::ReadWrite&&g.volume!=from.setting.volume)
+                    .ok_or_else(denied)?;
+                let route=super::super::super::ordinary_directory::Route::by_names(db,&c,target.volume,&parents)?;
+                Ok((target,route.parent()))
+            })?;
+            let to=Tree{session:&session,setting:target,parent};
+            let moved=from.transfer_ordinary_to(&to,&opened,name,OperationId::new()?,&still)?;
+            to.prepare_moved_file(moved,&opened)
+        })();
+        Complete{answer:terminal,member:held,result,_permit:permit}
+    });
+    match result{Ok(task)=>Some(OrdinaryJob{owner,task}),Err(_)=>{refuse(answer,1);None}}
 }
 static RENAME_WORK:AtomicUsize=AtomicUsize::new(0);
 pub(super) fn rename(site:Site<'_>,answer:OwnedFd,request:&Request,current:&mut Current<'_,'_,'_>,
@@ -160,6 +238,34 @@ mod tests{
     use super::*;
     use crate::{system::reader::tests::transfer_pool,test_support::PrivateTemp};
     use std::path::Path;
+
+    #[test]
+    fn local_member_loop_drop_revokes_a_worker_before_scope_join_with_live_endpoints(){
+        let active=AtomicBool::new(true);
+        let (member,client)=std::os::unix::net::UnixStream::pair().unwrap();
+        let (answer,request)=std::os::unix::net::UnixStream::pair().unwrap();
+        thread::scope(|scope|{
+            let close=ExitOrdinaryMoves(&active);
+            let (unblock,wait)=std::sync::mpsc::channel::<()>();
+            let active=&active;
+            let job=scope.spawn(move||{
+                wait.recv().unwrap();
+                assert_eq!(unsafe{zxs_member_held(member.as_raw_fd())},0);
+                assert_eq!(unsafe{zxs_member_held(answer.as_raw_fd())},0);
+                assert!(check_dispatcher(active).is_err());
+            });
+            assert!(check_dispatcher(active).is_ok());
+            drop(close);unblock.send(()).unwrap();job.join().unwrap();
+            drop(client);drop(request);
+        });
+    }
+    #[test]
+    fn closing_during_bound_evidence_does_not_carry_old_admission_into_commit(){
+        let active=AtomicBool::new(true);
+        let end=ExitOrdinaryMoves(&active);
+        let denied=still_dispatched(&active,||{drop(end);Ok(())},||panic!("expired owner reached the peer/terminal gate"));
+        assert!(denied.is_err());
+    }
 
     #[test]
     #[ignore="uses two true storage roots and independent SQLite connections, not an SMB service"]

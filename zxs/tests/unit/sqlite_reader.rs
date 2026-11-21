@@ -29,19 +29,27 @@ fn record(parent:&PrivateTemp,state:InitState,extra:&str)->(PathBuf,PoolId){
     record_with_recycle(parent,state,extra,None)
 }
 fn record_with_recycle(parent:&PrivateTemp,state:InitState,extra:&str,recycle:Option<PathBuf>)->(PathBuf,PoolId){
+    record_with_storage(parent,state,extra,recycle,None)
+}
+fn record_with_storage(parent:&PrivateTemp,state:InitState,extra:&str,recycle:Option<PathBuf>,
+    second:Option<&Path>)->(PathBuf,PoolId){
     assert_ne!(fs::local_uid(),0,"run this fixture only as the ordinary unprivileged storage principal");
     let s=parent.child("S");let dir=HeldDir::open(&s).unwrap();dir.exclusive().unwrap();
     let r=recycle.unwrap_or_else(||parent.0.join("unmounted-r"));let f=parent.0.join(OsStr::from_bytes(b"unmounted-f-\xff"));
-    let paths=[s.as_path(),r.as_path(),f.as_path()];let op=OperationId([1;16]);let pool=PoolId([4;16]);
+    let mut ordinary=vec![f.as_path()];ordinary.extend(second);
+    ordinary.sort_by(|a,b|a.as_os_str().as_bytes().cmp(b.as_os_str().as_bytes()));
+    let mut paths=vec![s.as_path(),r.as_path()];paths.extend(ordinary);
+    let op=OperationId([1;16]);let pool=PoolId([4;16]);
     let uid=fs::local_uid();let actor=[2;16];let approve=[3;16];
     let sha=init_request(op,actor,approve,uid,&paths).unwrap();let n=ComponentLimit::held(&dir).unwrap().encoded();
     let b=Builder::new(&s.join("SYSTEM.sqlite3"));
     b.exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=EXTRA; PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF; BEGIN IMMEDIATE;");
     b.exec(SCHEMA);
-    b.exec(&format!("INSERT INTO operation VALUES(X'{}',1,X'{}',X'{}',0); INSERT INTO pool_birth VALUES(1,X'{}',X'{}',X'{}',{uid},3);",
-        hex(&op.0),hex(&actor),hex(&sha),hex(&pool.0),hex(&op.0),hex(&approve)));
+    b.exec(&format!("INSERT INTO operation VALUES(X'{}',1,X'{}',X'{}',0); INSERT INTO pool_birth VALUES(1,X'{}',X'{}',X'{}',{uid},{});",
+        hex(&op.0),hex(&actor),hex(&sha),hex(&pool.0),hex(&op.0),hex(&approve),paths.len()));
     for(i,p)in paths.iter().enumerate(){
-        b.exec(&format!("INSERT INTO volume_claim VALUES(X'{}',{i},{i},X'{}',X'{}',{n},X'{}');",
+        let role=i.min(2);
+        b.exec(&format!("INSERT INTO volume_claim VALUES(X'{}',{i},{role},X'{}',X'{}',{n},X'{}');",
             hex(&op.0),hex(&[0x11+i as u8;16]),hex(p.as_os_str().as_bytes()),hex(&[0x21+i as u8;32])));
     }
     b.exec("COMMIT;");
@@ -82,6 +90,22 @@ fn pending_pool_extra_schema_and_unexpected_wal_are_not_accepted_or_repaired(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=record(&t,InitState::Committed,"");
     let extra=s.join("SYSTEM.sqlite3-wal");std::fs::write(&extra,b"unowned").unwrap();
     assert!(InitialReader::open(&s,p).is_err());assert_eq!(std::fs::read(extra).unwrap(),b"unowned");
+}
+
+#[test]
+#[ignore="source-only explicit previous-version fixture; never open an existing pool"]
+fn previous_native_version_is_not_rewritten_or_opened(){
+    let t=PrivateTemp::under(&std::env::temp_dir());
+    let (s,p)=record(&t,InitState::Committed,"PRAGMA main.user_version=14;");
+    let original=s.join("SYSTEM.sqlite3");
+    // Builder's SQLite connection has closed; this is only a byte snapshot
+    // of the isolated fixture, not an extra checkpoint FD on a live pool.
+    let before=std::fs::read(&original).unwrap();
+    assert!(InitialReader::open(&s,p).is_err());
+    assert_eq!(std::fs::read(&original).unwrap(),before);
+    for name in ["SYSTEM.sqlite3-journal","SYSTEM.sqlite3-wal","SYSTEM.sqlite3-shm"]{
+        assert!(!s.join(name).exists());
+    }
 }
 
 #[test]
@@ -216,6 +240,29 @@ pub(super) fn transfer_pool(t:&PrivateTemp,path:&Path)->(PathBuf,PoolId,PathBuf,
     let src=InitialReader::open(&s,p).unwrap();let f=create_file::open_root(&src);
     std::fs::DirBuilder::new().mode(0o700).create(path).unwrap();mark_recycle(&src);
     let(rw,_)=create_file::configure(&src);(s,p,f,rw)
+}
+
+pub(super) fn ordinary_transfer_pool(t:&PrivateTemp,target:&Path)->
+    (PathBuf,PoolId,PathBuf,PathBuf,crate::identity::ShareId,crate::identity::ShareId){
+    use super::account::share_mode::Mode;
+    let(s,p)=publication::first_with_storage(t,None,Some(target));
+    let src=InitialReader::open(&s,p).unwrap();let c=src.snapshot().unwrap();
+    let web=src.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let mut from=None;let mut to=None;
+    for i in 2..4{
+        let row=&c.rows()[i];assert_eq!(row.role,Role::File);
+        std::fs::DirBuilder::new().mode(0o700).create(&row.path).unwrap();
+        let mut mark=OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(row.path.join(OsStr::from_bytes(ROOT_MARK.to_bytes()))).unwrap();
+        mark.write_all(&c.expected_marker(i).unwrap()).unwrap();mark.sync_all().unwrap();
+        File::open(&row.path).unwrap().sync_all().unwrap();
+        let is_target=row.path.as_path()==target;
+        let share=web.publish_root(OperationId([0x71+i as u8;16]),row.volume,if is_target{"Destination"}else{"Source"}).unwrap();
+        web.set_share_mode(OperationId([0x75+i as u8;16]),share.share,share.op,Mode::ReadWrite).unwrap();
+        if is_target{to=Some(share.share);}else{from=Some((row.path.clone(),share.share));}
+    }
+    let (path,source)=from.unwrap();
+    (s,p,path,c.rows()[1].path.clone(),source,to.unwrap())
 }
 
 #[test]

@@ -14,7 +14,7 @@ pub(super) fn record(db:&Connection,op:OperationId,proof:Option<&[u8]>,target:&[
     q.bind_integer(4,if proof.is_some(){0}else{2})?;q.done()
 }
 
-struct Ticket{seq:i64,op:OperationId,source:Place,target:VolumeId,parent:DirectoryParent,names:Vec<u8>}
+struct Ticket{seq:i64,op:OperationId,source:Place,direction:u8,target:VolumeId,parent:DirectoryParent,names:Vec<u8>}
 fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
     src.at(|db,_|{
         let q=db.prepare(c"SELECT r.seq,r.transfer_op,r.guard,m.file_id,m.source_op,m.source_gen,m.source_id,m.source_name,
@@ -25,13 +25,14 @@ fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
         q.bind_integer(1,after)?;
         if !work_record::start_one(&q)?{return Ok(None);}
         let seq=q.integer(0)?;let op=OperationId(q.array(1)?);let names=q.blob(2,MAX_RETIRE_PROOF)?.to_vec();
-        let role=match q.byte(8)?{1=>Role::File,2=>Role::Recycle,_=>return Err(invalid("wrong completed transfer direction"))};
+        let direction=q.byte(8)?;
+        let role=match direction{1|3=>Role::File,2=>Role::Recycle,_=>return Err(invalid("wrong completed transfer direction"))};
         let file=FileId(q.array(3)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
         let backing=Place::read_backing(&q,12,13,file,&name)?;
         let source=Place{file,op:OperationId(q.array(4)?),generation:q.integer(5)?,
             volume:VolumeId(q.array(6)?),name,role,parent:DirectoryParent::from_bytes(q.array(10)?),backing};
         let target=VolumeId(q.array(9)?);let parent=DirectoryParent::from_bytes(q.array(11)?);q.done()?;
-        Ok(Some(Ticket{seq,op,source,target,parent,names}))
+        Ok(Some(Ticket{seq,op,source,direction,target,parent,names}))
     })
 }
 impl Ticket{
@@ -44,7 +45,7 @@ impl Ticket{
         q.bind_integer(1,self.seq)?;q.bind_bytes(2,&self.op.0)?;q.bind_bytes(3,&self.source.file.0)?;
         q.bind_bytes(4,&self.source.op.0)?;q.bind_integer(5,self.source.generation)?;q.bind_bytes(6,&self.source.volume.0)?;
         q.bind_bytes(7,self.source.name.as_bytes())?;q.bind_bytes(8,&self.target.0)?;
-        q.bind_integer(9,if self.source.role==Role::File{1}else{2})?;
+        q.bind_integer(9,i64::from(self.direction))?;
         q.bind_bytes(10,&self.source.parent.bytes())?;q.bind_bytes(11,&self.parent.bytes())?;
         if !work_record::start_one(&q)?{return Err(invalid("retirement is no longer the original confirmed transfer"));}
         q.done()?;
@@ -57,7 +58,7 @@ impl Ticket{
         Ok(p)
     }
 }
-fn applied_target(db:&Connection,place:&Place)->io::Result<RetireProof>{
+pub(super) fn applied_target(db:&Connection,place:&Place)->io::Result<RetireProof>{
     let backing=place.backing.ok_or_else(||invalid("no physical transfer outputs this selected FILE"))?;
     let q=db.prepare(c"SELECT r.target_guard FROM main.file_transfer_source r
         JOIN main.file_transfer m ON m.transfer_op=r.transfer_op

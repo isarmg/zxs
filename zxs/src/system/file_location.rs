@@ -74,10 +74,10 @@ impl Place{
             return Ok(Some(p));
         }
         let q=db.prepare(c"SELECT transfer_op FROM main.pending_transfer
-          WHERE direction=2 AND target_id=?1 AND target_name=?2 AND target_parent=?3")?;
+          WHERE direction IN (2,3) AND target_id=?1 AND target_name=?2 AND target_parent=?3")?;
         q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,name.as_bytes())?;q.bind_bytes(3,&parent.bytes())?;
         if work_record::start_one(&q)?{
-            q.done()?;return Err(io::Error::new(io::ErrorKind::WouldBlock,"this exact FILE name belongs to an unconfirmed restore"));
+            q.done()?;return Err(io::Error::new(io::ErrorKind::WouldBlock,"this exact FILE name belongs to an unconfirmed ordinary arrival"));
         }
         Ok(None)
     }

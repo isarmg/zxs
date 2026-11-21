@@ -194,7 +194,27 @@ impl<'r> std::ops::Deref for MemberRoot<'_,'r>{
     type Target=OrdinaryRoot<'r>;
     fn deref(&self)->&Self::Target{match self{Self::Owned(r)=>r,Self::Tree(r)=>r}}
 }
-pub(crate) struct Current<'t,'s,'r>{original:ReadFile,root:MemberRoot<'t,'r>,tree:&'t Tree<'s,'r>,open:Arc<AtomicU64>}
+pub(crate) struct Current<'t,'s,'r>{
+    original:ReadFile,root:MemberRoot<'t,'r>,tree:&'t Tree<'s,'r>,setting:super::Setting,open:Arc<AtomicU64>,
+}
+/// An independent verified destination, prepared off the member's I/O
+/// loop. No authority, connection, old FD, or alternate name is borrowed
+/// from the original holder. Only that same logical open can adopt this cut.
+pub(super) struct MovedFile{
+    original:ReadFile,media:super::super::volume::OrdinaryMedia,
+    from:super::Setting,setting:super::Setting,auth:OperationId,result:super::file_transfer::Moved,
+}
+#[derive(Clone)]
+pub(super) struct MoveOwner{open:Weak<AtomicU64>,sequence:u64}
+impl MoveOwner{
+    pub(super) fn check(&self)->io::Result<()>{
+        if self.open.upgrade().is_some_and(|a|a.load(Ordering::Acquire)==self.sequence){Ok(())}
+        else{Err(super::denied())}
+    }
+    pub(super) fn is_member(&self,current:&Current<'_,'_,'_>)->bool{
+        self.open.ptr_eq(&Arc::downgrade(&current.open))
+    }
+}
 /// Actual duplicate F/FILE membership; never imports a SQL connection or
 /// a new selection from the caller. The original member revokes this
 /// snapshot as soon as it starts another rename or loses its live open.
@@ -256,7 +276,7 @@ impl<'s,'r> Tree<'s,'r>{
         let (root,birth,container)=born.parts(false)?;
         let place=Place::origin(&birth,root.parent());
         let original=ReadFile{body:None,container,birth,place,live:None};
-        let handle=Current{original,root:MemberRoot::Owned(root),tree:self,open:Arc::new(AtomicU64::new(0))};
+        let handle=Current{original,root:MemberRoot::Owned(root),tree:self,setting:self.setting,open:Arc::new(AtomicU64::new(0))};
         handle.require()?;Ok(handle)
     }
     pub(crate) fn open_current<'t>(&'t self,name:&str)->io::Result<Current<'t,'s,'r>>{
@@ -289,9 +309,40 @@ impl<'s,'r> Tree<'s,'r>{
         })?;
         let root=match pinned{Some(r)=>MemberRoot::Tree(r),None=>MemberRoot::Owned(OrdinaryRoot::at_parent(src,&c,&route.ok_or_else(||invalid("lost selected FILE parent"))?,None)?)};
         let original=ReadFile::open(placed,&selected,root.folder())?;
-        let h=Current{original,root,tree:self,open:Arc::new(AtomicU64::new(0))};
+        let h=Current{original,root,tree:self,setting:self.setting,open:Arc::new(AtomicU64::new(0))};
         let v=h.with_read(|reader|reader.checked(&selected,||Ok(()),|db|result(db,&h.original.birth)))?;
         Ok((h,v))
+    }
+    pub(super) fn prepare_moved_file(&self,result:super::file_transfer::Moved,opened:&super::file_transfer::OrdinaryMoveSource)
+        ->io::Result<MovedFile>{
+        let src=self.session.source;
+        let unknown=super::file_rename::unknown;
+        if result.from!=opened.place{return Err(unknown());}
+        let authority=&self.session.original;
+        let (c,placed,selected,route,proof)=src.at(|db,c|{
+            self.require(db,&c,true)?;
+            let placed=self.placed(db,&c,&result.to.name,Some(result.to.file))?;
+            if placed.here!=result.to||result.to.file!=result.from.file||result.to.op!=result.op||
+                result.to.volume==result.from.volume||result.from.role!=crate::Role::File||result.to.role!=crate::Role::File{
+                return Err(unknown());
+            }
+            result.require_ordinary_origin(db,opened.grant,self.setting,authority.op,authority.account)?;
+            if let Some(old)=opened.view{
+                if work_record::confirmed(db,&placed.birth,old.record.key().save)?!=old{return Err(unknown());}
+            }
+            let selected=ReadCut::gather(db,&c,&placed.birth,&placed.here,opened.view)?;
+            let route=super::ordinary_directory::Route::at(db,&c,result.to.volume,result.to.parent)?;
+            let proof=super::retirement::applied_target(db,&result.to)?;
+            Ok((c,placed,selected,route,proof))
+        }).map_err(|_|unknown())?;
+        let root=OrdinaryRoot::at_parent(src,&c,&route,None).map_err(|_|unknown())?;
+        let original=ReadFile::open(placed,&selected,root.folder()).map_err(|_|unknown())?;
+        let require=|db:&Connection,c:&Catalog|self.require(db,c,true);
+        let at=ReadAt{file:&original,root:root.view(),source:src,
+            volume:result.to.volume,parent:result.to.parent,require:&require};
+        at.checked(&selected,||original.container.still_retirement_target(root.folder(),&proof),|_|Ok(()))
+            .map_err(|_|unknown())?;
+        Ok(MovedFile{original,media:root.into_media(),from:opened.grant,setting:self.setting,auth:authority.op,result})
     }
 }
 impl ReadAt<'_>{
@@ -358,18 +409,52 @@ impl ReadAt<'_>{
     }
 }
 
-impl Current<'_,'_,'_>{
+impl<'t,'s,'r> Current<'t,'s,'r>{
+    fn placement_tree(&self)->Tree<'s,'r>{Tree{session:self.tree.session,setting:self.setting,parent:self.original.place.parent}}
     fn with_read<T>(&self,use_original:impl FnOnce(ReadAt<'_>)->T)->T{
-        let require=|db:&Connection,c:&Catalog|self.tree.require(db,c,false);
+        let tree=self.placement_tree();let require=|db:&Connection,c:&Catalog|tree.require(db,c,false);
         use_original(ReadAt{file:&self.original,root:self.root.view(),source:self.tree.session.source,
             volume:self.original.place.volume,parent:self.original.place.parent,require:&require})
     }
     pub(crate) fn file(&self)->FileId{self.original.birth.file}
     pub(super) fn native_placement(&self)->&Place{&self.original.place}
+    /// Preserve the exact already-open body and dual HEADER evidence for
+    /// the independently authorized ordinary-volume copy worker.
+    pub(super) fn move_source(&self)->io::Result<super::file_transfer::OrdinaryMoveSource>{
+        Ok(super::file_transfer::OrdinaryMoveSource{place:self.original.place.clone(),
+            physical:self.original.container.duplicate()?,view:self.original.live,grant:self.setting})
+    }
+    pub(super) fn grant(&self)->super::Setting{self.setting}
+    pub(super) fn begin_ordinary_move(&mut self)->io::Result<super::file_transfer::OrdinaryMoveSource>{
+        self.invalidate_capacity()?;self.move_source()
+    }
+    pub(super) fn move_owner(&self)->MoveOwner{
+        MoveOwner{open:Arc::downgrade(&self.open),sequence:self.open.load(Ordering::Acquire)}
+    }
+    pub(super) fn adopt_moved_file(&mut self,ready:MovedFile)->io::Result<super::file_transfer::Moved>{
+        let unknown=super::file_rename::unknown;
+        if self.original.place!=ready.result.from||self.original.birth!=ready.original.birth||
+            self.original.live!=ready.original.live||self.setting!=ready.from||self.tree.session.original.op!=ready.auth{
+            return Err(unknown());
+        }
+        let src=self.tree.session.source;
+        let exact=Tree{session:self.tree.session,setting:ready.setting,parent:ready.result.to.parent};
+        // Only a final short current-grant and selected-placement cut in
+        // the owner loop. The worker already proved the held target body.
+        src.at(|db,c|{
+            exact.require(db,&c,true)?;
+            ready.result.require_ordinary_origin(db,self.setting,ready.setting,ready.auth,self.tree.session.original.account)?;
+            if Place::current(db,&c,self.file())?!=ready.result.to{return Err(unknown());}Ok(())
+        }).map_err(|_|unknown())?;
+        self.invalidate_capacity().map_err(|_|unknown())?;
+        self.original=ready.original;
+        self.root=MemberRoot::Owned(OrdinaryRoot::adopt_media(src,ready.media));self.setting=ready.setting;
+        Ok(ready.result)
+    }
     pub(super) fn rename_native(&mut self,op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
         point:impl Fn(super::file_rename::Cut)->io::Result<()>)->io::Result<()>{
         self.require()?;self.invalidate_capacity()?;
-        let (selected,body)=self.tree.scoped(self.original.place.parent)
+        let (selected,body)=self.placement_tree()
             .rename_existing(&self.root,&self.original.place,&self.original.container,op,name,alive,point)?;
         self.original.container.rebind_renamed(self.root.folder(),&body).map_err(|_|super::file_rename::unknown())?;
         self.original.place=selected;
@@ -379,7 +464,7 @@ impl Current<'_,'_,'_>{
     pub(super) fn capacity_cut(&self)->io::Result<CapacityCut>{
         self.with_read(|read|read.source.at(|db,c|read.still_selected(db,&c)))?;
         Ok(CapacityCut{open:Arc::downgrade(&self.open),sequence:self.open.load(Ordering::Acquire),
-            selected:self.original.place.clone(),birth:self.original.birth.clone(),setting:self.tree.setting,
+            selected:self.original.place.clone(),birth:self.original.birth.clone(),setting:self.setting,
             media:self.root.duplicate_media()?,container:self.original.container.duplicate()?})
     }
     #[cfg(test)]
@@ -388,8 +473,8 @@ impl Current<'_,'_,'_>{
         let cut=self.capacity_cut()?;cut.physical()?;
         let measured=cut.sample().ok().filter(|s|s.total>=4096);
         after_sample()?;cut.physical()?;
-        self.tree.session.source.at(|db,c|{self.tree.require(db,&c,false)?;cut.logical(db,&c)})?;
-        Ok((measured,self.tree.setting.mode==super::share_mode::Mode::ReadWrite))
+        self.tree.session.source.at(|db,c|{self.placement_tree().require(db,&c,false)?;cut.logical(db,&c)})?;
+        Ok((measured,self.setting.mode==super::share_mode::Mode::ReadWrite))
     }
     fn invalidate_capacity(&self)->io::Result<()>{
         self.open.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(1))
@@ -398,15 +483,15 @@ impl Current<'_,'_,'_>{
     pub(super) fn require_move_folder(&self,pick:impl FnOnce(&Connection,&Catalog)->io::Result<Option<super::Setting>>)
         ->io::Result<()>{
         self.tree.session.source.at(|db,c|{
-            self.tree.require(db,&c,true)?;
-            if pick(db,&c)?!=Some(self.tree.setting){return Err(super::denied());}
+            self.placement_tree().require(db,&c,true)?;
+            if pick(db,&c)?!=Some(self.setting){return Err(super::denied());}
             Ok(())
         })
     }
     pub(super) fn move_native_parent(&mut self,parts:&[String],op:OperationId,name:&str,
         alive:&impl Fn()->io::Result<()>,point:impl Fn(super::file_rename::Cut)->io::Result<()>)->io::Result<()>{
         self.require()?;self.invalidate_capacity()?;
-        let tree=self.tree.scoped(self.original.place.parent);
+        let tree=self.placement_tree();
         let (selected,body,parent)=tree.move_existing_parent(&self.root,&self.original.place,&self.original.container,
             parts,op,name,alive,point)?;
         self.original.container.rebind_moved(parent.folder(),body).map_err(|_|super::file_rename::unknown())?;

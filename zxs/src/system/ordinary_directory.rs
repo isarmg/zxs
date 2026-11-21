@@ -411,7 +411,7 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
     let q=db.prepare(c"SELECT backing_op FROM main.file_location WHERE role=2 AND backing_op IS NOT NULL AND volume_id=?1 AND parent_id=?2
-        UNION ALL SELECT transfer_op FROM main.pending_transfer WHERE direction=2 AND target_id=?1 AND target_parent=?2
+        UNION ALL SELECT transfer_op FROM main.pending_transfer WHERE direction IN (2,3) AND target_id=?1 AND target_parent=?2
         UNION ALL SELECT backing_op FROM main.pending_rename WHERE volume_id=?1 AND target_parent=?2
               AND parent_id<>target_parent AND backing_op IS NOT NULL")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;

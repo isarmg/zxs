@@ -96,6 +96,7 @@ int zxs_ns_capacity_read(int fd,struct zxs_ns_space *out);
 #define ZXS_XFER_PROBE 3u
 #define ZXS_XFER_RENAME 4u
 #define ZXS_XFER_MOVE 5u
+#define ZXS_XFER_COPY_MOVE 6u
 #define ZXS_XFER_ASK (20+ZXS_DIR_NAME+ZXS_FILE_NAME)
 #define ZXS_XFER_RESULT 64u
 #define ZXS_XFER_BUSY 1u
@@ -105,6 +106,7 @@ int zxs_ns_capacity_read(int fd,struct zxs_ns_space *out);
 #define ZXS_XFER_DENIED 5u
 #define ZXS_XFER_UNAVAILABLE 6u
 #define ZXS_XFER_UNKNOWN 7u
+#define ZXS_XFER_UNSUPPORTED 8u
 int zxs_xfer_query(int member,uint8_t kind,const uint8_t *folder,size_t f,const uint8_t *name,size_t n,const uint8_t mark[16]);
 int zxs_member_xfer_pending(int member);
 int zxs_xfer_take(int member,int worker,uint8_t *kind,uint8_t folder[ZXS_DIR_NAME+1],uint8_t name[ZXS_FILE_NAME+1],uint8_t mark[16],uint16_t *parent_len,uint8_t *parents);

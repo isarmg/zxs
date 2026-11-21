@@ -184,6 +184,12 @@ impl InitialReader{
         self.transaction(&self.conn,c"BEGIN",read)
     }
     fn transaction<T>(&self,conn:&Connection,begin:&CStr,read:impl FnOnce(&Connection,Catalog)->io::Result<T>)->io::Result<T>{
+        self.transaction_before_commit(conn,begin,read,||Ok(()))
+    }
+    /// Check call admission after the final potentially blocking S-name
+    /// proof and immediately before COMMIT. This hook cannot acquire F/R.
+    fn transaction_before_commit<T>(&self,conn:&Connection,begin:&CStr,read:impl FnOnce(&Connection,Catalog)->io::Result<T>,
+        last:impl FnOnce()->io::Result<()>)->io::Result<T>{
         self.dir.require()?;check(unsafe{zxs_sql_named(conn.0)})?;
         if unsafe{sqlite3_get_autocommit(conn.0)}==0{return Err(invalid("previous SQLite transaction did not close"));}
         conn.fixed(begin)?;
@@ -216,6 +222,7 @@ impl InitialReader{
             self.dir.require()?;
             self.marker.require(&self.dir.root)?; // same held S control bytes/stamp at the final boundary
             check(unsafe{zxs_sql_named(conn.0)})?;
+            last()?;
             Ok(value)
         })();
         match result{
