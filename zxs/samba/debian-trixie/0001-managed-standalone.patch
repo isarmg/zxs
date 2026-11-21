@@ -4189,7 +4189,7 @@
 +		if (zxs_file_vfs_active(req->tcon->compat) && opcode!=SMB2_OP_CREATE &&
 +		    opcode!=SMB2_OP_QUERY_DIRECTORY && opcode!=SMB2_OP_READ && opcode!=SMB2_OP_GETINFO &&
 +		    opcode!=SMB2_OP_WRITE && opcode!=SMB2_OP_FLUSH && opcode!=SMB2_OP_SETINFO &&
-+		    opcode!=SMB2_OP_CLOSE && opcode!=SMB2_OP_TDIS) {
++		    opcode!=SMB2_OP_CLOSE && opcode!=SMB2_OP_LOCK && opcode!=SMB2_OP_TDIS) {
 +			return smbd_smb2_request_error(req, NT_STATUS_NOT_SUPPORTED);
 +		}
  	} else if (call->need_session) {
@@ -4965,9 +4965,56 @@
  }
  
  /****************************************************************************
+--- a/source3/locking/brlock.c
++++ b/source3/locking/brlock.c
+@@ -35,6 +35,7 @@
+ #include "messages.h"
+ #include "util_tdb.h"
+ #include "source3/locking/share_mode_lock.h"
++#include "locking/zxs_brl_budget.h"
+ 
+ #undef DBGC_CLASS
+ #define DBGC_CLASS DBGC_LOCKING
+@@ -80,6 +81,28 @@
+ 	return brl->num_locks;
+ }
+ 
++/* Reserve the entire group before any new lock can affect the snapshot. */
++bool zxs_brl_group_room(struct byte_range_lock *brl, unsigned int additional)
++{
++	unsigned int live;
++
++	if (additional == 0 || additional > ZXS_BRL_MAX_PER_FILE ||
++	    brl->num_locks > ZXS_BRL_MAX_PER_FILE) {
++		return false;
++	}
++	if (brl->num_locks <= ZXS_BRL_MAX_PER_FILE - additional) {
++		return true;
++	}
++	live = zxs_brl_compact_gone(brl->lock_data, brl->num_locks);
++	if (live != brl->num_locks) {
++		brl->num_locks = live;
++		brl->modified = true;
++	}
++	/* After this cut the stock group takes over. In particular its failure
++	 * rollback may set modified=false; never force that image to be stored. */
++	return live <= ZXS_BRL_MAX_PER_FILE - additional;
++}
++
+ struct files_struct *brl_fsp(struct byte_range_lock *brl)
+ {
+ 	return brl->fsp;
 --- a/source3/locking/proto.h
 +++ b/source3/locking/proto.h
-@@ -117,6 +117,17 @@
+@@ -31,6 +31,7 @@
+ void brl_shutdown(void);
+ 
+ unsigned int brl_num_locks(const struct byte_range_lock *brl);
++bool zxs_brl_group_room(struct byte_range_lock *brl, unsigned int additional);
+ struct files_struct *brl_fsp(struct byte_range_lock *brl);
+ void brl_req_set(struct byte_range_lock *br_lck,
+ 		 TALLOC_CTX *req_mem_ctx,
+@@ -117,6 +118,17 @@
  				enum brl_type lock_type,
  				enum brl_flavour lock_flav,
  				struct lock_struct *plock);
@@ -5045,6 +5092,101 @@
  	SIVAL(outbody.data, 0x18,
  	      capabilities);			/* capabilities */
  	SIVAL(outbody.data, 0x1C, max_trans);	/* max transact size */
+--- a/source3/smbd/smb2_lock.c
++++ b/source3/smbd/smb2_lock.c
+@@ -23,6 +23,8 @@
+ #include "locking/share_mode_lock.h"
+ #include "smbd/smbd.h"
+ #include "smbd/globals.h"
++#include "smbd/zxs_directory.h"
++#include "locking/proto.h"
+ #include "../libcli/smb/smb_common.h"
+ #include "../lib/util/tevent_ntstatus.h"
+ #include "lib/dbwrap/dbwrap_watch.h"
+@@ -50,7 +52,13 @@
+ 	struct smbd_lock_element *locks;
+ 	uint8_t lock_sequence_value;
+ 	uint8_t *lock_sequence_element;
++	struct tevent_req *zxs_proof;
++	struct aio_req_fsp_link *zxs_link;
++	struct zxs_read_fsp *zxs_member;
++	DATA_BLOB zxs_body;
++	bool zxs_unlock;
+ };
++#include "smbd/zxs_native_lock.inc"
+ 
+ static struct tevent_req *smbd_smb2_lock_send(TALLOC_CTX *mem_ctx,
+ 						 struct tevent_context *ev,
+@@ -82,7 +90,11 @@
+ 	}
+ 	inbody = SMBD_SMB2_IN_BODY_PTR(req);
+ 
+-	in_lock_count			= CVAL(inbody, 0x02);
++	const bool zxs=zxs_file_vfs_active(req->tcon->compat);
++	in_lock_count=zxs?SVAL(inbody,0x02):CVAL(inbody,0x02);
++	if(zxs&&!zxs_lock_width(in_lock_count,SMBD_SMB2_IN_DYN_LEN(req))){
++		return smbd_smb2_request_error(req,NT_STATUS_INVALID_PARAMETER);
++	}
+ 	if (req->xconn->protocol >= PROTOCOL_SMB2_10) {
+ 		in_lock_sequence	= IVAL(inbody, 0x04);
+ 	} else {
+@@ -146,6 +158,26 @@
+ 	if (in_fsp == NULL) {
+ 		return smbd_smb2_request_error(req, NT_STATUS_FILE_CLOSED);
+ 	}
++	if(zxs||zxs_file_vfs_active(in_fsp->conn)){
++		if(!zxs||in_fsp->conn!=req->tcon->compat)return smbd_smb2_request_error(req,NT_STATUS_ACCESS_DENIED);
++		const uint32_t first=in_locks[0].flags;
++		if(in_lock_count==1&&(first==SMB2_LOCK_FLAG_SHARED||first==SMB2_LOCK_FLAG_EXCLUSIVE)){
++			return smbd_smb2_request_error(req,NT_STATUS_NOT_SUPPORTED); /* waiting requests */
++		}
++		/* Once the first element selects UNLOCK, keep the native
++		 * per-element parser and dispatcher. A malformed later element
++		 * must not prevent the original valid prefix from unlocking. */
++		if(first!=SMB2_LOCK_FLAG_UNLOCK){
++			for(l=0;l<in_lock_count;l++){
++				if(!zxs_lock_immediate_flags(in_locks[l].flags,false)){
++					return smbd_smb2_request_error(req,NT_STATUS_INVALID_PARAMETER);
++				}
++				if(!byte_range_valid(in_locks[l].offset,in_locks[l].length)){
++					return smbd_smb2_request_error(req,NT_STATUS_INVALID_LOCK_RANGE);
++				}
++			}
++		}
++	}
+ 
+ 	subreq = smbd_smb2_lock_send(req, req->sconn->ev_ctx,
+ 				     req, in_fsp,
+@@ -168,6 +200,8 @@
+ 	NTSTATUS status;
+ 	NTSTATUS error; /* transport error */
+ 
++	struct smbd_smb2_lock_state *state=tevent_req_data(subreq,struct smbd_smb2_lock_state);
++	outbody=state->zxs_body;
+ 	status = smbd_smb2_lock_recv(subreq);
+ 	TALLOC_FREE(subreq);
+ 	if (!NT_STATUS_IS_OK(status)) {
+@@ -180,7 +214,7 @@
+ 		return;
+ 	}
+ 
+-	outbody = smbd_smb2_generate_outbody(smb2req, 0x04);
++	if(outbody.data==NULL)outbody = smbd_smb2_generate_outbody(smb2req, 0x04);
+ 	if (outbody.data == NULL) {
+ 		error = smbd_smb2_request_error(smb2req, NT_STATUS_NO_MEMORY);
+ 		if (!NT_STATUS_IS_OK(error)) {
+@@ -488,6 +522,11 @@
+ 	state->locks = locks;
+ 	state->lock_count = in_lock_count;
+ 
++	if(zxs_file_vfs_active(fsp->conn)){
++		if(!zxs_lock_begin(req,isunlock))return tevent_req_post(req,ev);
++		return req;
++	}
++
+ 	if (isunlock) {
+ 		status = smbd_do_unlocking(
+ 			state->smb1req, fsp, in_lock_count, locks);
 --- a/source3/smbd/smb2_getinfo.c
 +++ b/source3/smbd/smb2_getinfo.c
 @@ -22,6 +22,10 @@

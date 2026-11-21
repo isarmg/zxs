@@ -17,6 +17,7 @@
 #include "lib/param/param.h"
 #include "smbd/zxs_file_vfs.h"
 #include "smbd/zxs_directory.h"
+#include "locking/zxs_brl_budget.h"
 #include "trans2.h"
 #include "librpc/gen_ndr/smbXsrv.h"
 
@@ -176,6 +177,13 @@ static bool native_directory_projection(connection_struct *c)
 	multi[0]=1;if(zxs_ordinary_rename_input(c,nesting,"F\\Reports\\Old",&renamed,&leaf))goto fail;
 	multi[0]=0;
 	SSVAL(multi,24,'\\');if(zxs_restore_input(c,nesting,&folder,&name))goto fail;
+	if(zxs_lock_width(0,0)||!zxs_lock_width(1,0)||
+	   zxs_lock_width(2,23)||!zxs_lock_width(2,24)||
+	   !zxs_lock_width(64,63*24)||zxs_lock_width(65,64*24)||zxs_lock_width(257,256*24))goto fail;
+	if(!zxs_lock_immediate_flags(0x11,false)||!zxs_lock_immediate_flags(0x12,false)||
+	   !zxs_lock_immediate_flags(0x04,true)||zxs_lock_immediate_flags(0x04,false)||
+	   zxs_lock_immediate_flags(0x01,false)||zxs_lock_immediate_flags(0x02,false)||
+	   zxs_lock_immediate_flags(0x13,false)||zxs_lock_immediate_flags(0x14,true))goto fail;
 	c->params=NULL;return true;
 fail:
 	c->params=NULL;return false;
@@ -620,6 +628,33 @@ static bool native_apple_probe_is_not_negotiation(void)
 	return !zxs_smb_uncached_open(SMB2_OPLOCK_LEVEL_NONE,data_blob_const(wire,48),&queries);
 }
 
+/* Real compactor used by brlock.c. No daemon or DB; Linux PID_MAX_LIMIT is
+ * below INT_MAX, and zero-length locks still occupy a slot. */
+static bool native_brl_retains_unknown(void)
+{
+	struct lock_struct *ls = talloc_zero_array(NULL, struct lock_struct,
+						  ZXS_BRL_MAX_PER_FILE);
+	bool ok = false;
+	if (ls == NULL) return false;
+	for (unsigned int i=0; i<ZXS_BRL_MAX_PER_FILE; i++) {
+		ls[i].context.pid = (struct server_id){.pid=getpid(),.vnn=NONCLUSTER_VNN};
+		ls[i].lock_flav = WINDOWS_LOCK;
+		ls[i].start = i;
+	}
+	ls[5].context.pid.pid = INT_MAX; /* dead in the same Linux namespace */
+	ls[8].context.pid.pid = 0; /* stock tombstone */
+	ls[12].context.pid = (struct server_id){.pid=INT_MAX,.vnn=14}; /* unproven */
+	ls[15].context.pid.pid = UINT64_MAX; /* not an ordinary in-range PID */
+	if (zxs_brl_compact_gone(ls,ZXS_BRL_MAX_PER_FILE) == ZXS_BRL_MAX_PER_FILE-2 &&
+	    ls[4].start == 4 && ls[5].start == 6 && ls[7].start == 9 &&
+	    ls[10].start == 12 && ls[13].start == 15 &&
+	    ls[ZXS_BRL_MAX_PER_FILE-3].start == ZXS_BRL_MAX_PER_FILE-1) {
+		ok = true;
+	}
+	TALLOC_FREE(ls);
+	return ok;
+}
+
 int main(void)
 {
 	const char *file[] = {"zxs_file", NULL};
@@ -636,7 +671,7 @@ int main(void)
 		return 1;
 	}
 	if (!ipc_only_pipe_policy() || !uncached_create_policy() || !native_query_file_number() ||
-	    !native_apple_probe_is_not_negotiation() || conn == NULL ||
+	    !native_apple_probe_is_not_negotiation() || !native_brl_retains_unknown() || conn == NULL ||
 	    zxs_file_vfs_route(3,1,false,false,false,file,false) != ZXS_VFS_FILE ||
 	    zxs_file_vfs_route(1,1,true,false,false,NULL,false) != ZXS_VFS_IPC ||
 	    zxs_file_vfs_route(3,1,true,false,false,NULL,false) != ZXS_VFS_REJECT ||

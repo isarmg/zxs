@@ -59,6 +59,7 @@ static uint32_t zxs_root_capabilities(vfs_handle_struct *h,enum timestamp_set_re
 	(void)h;*res=TIMESTAMP_SET_SECONDS;return 0; /* no advertised filesystem extensions */
 }
 #include "smbd/zxs_directory.h"
+#include "locking/proto.h"
 static bool zxs_own_root_fsp(vfs_handle_struct *h,struct files_struct *fsp)
 {
 	struct zxs_dir_search *d=zxs_find_dir(fsp);
@@ -80,8 +81,29 @@ static NTSTATUS zxs_root_dos(vfs_handle_struct *h,struct files_struct *fsp,uint3
 	if(f!=NULL && h==fsp->conn->vfs_handles && f->tcon==fsp->conn->tcon){*mode=FILE_ATTRIBUTE_NORMAL;return NT_STATUS_OK;}
 	return NT_STATUS_NOT_SUPPORTED;
 }
+/* Only the native per-FileId Windows lock inventory is involved.
+ * Cleanup of a once authorized lock must not require a live socket. */
+static bool zxs_windows_brl(vfs_handle_struct *h,struct byte_range_lock *brl)
+{
+	struct files_struct *fsp=brl_fsp(brl);
+	const struct zxs_read_fsp *m=zxs_find_read(fsp);
+	return h!=NULL && m!=NULL && h==fsp->conn->vfs_handles && m->tcon==fsp->conn->tcon &&
+		!zxs_folder_retained(&m->folder) && fsp->fsp_flags.can_lock &&
+		fsp->conn->params!=NULL && lp_locking(fsp->conn->params) &&
+		lp_strict_locking(fsp->conn->params)==true && !lp_posix_locking(fsp->conn->params);
+}
+static NTSTATUS zxs_windows_lock(vfs_handle_struct *h,struct byte_range_lock *brl,struct lock_struct *l)
+{
+	if(!zxs_windows_brl(h,brl) || l->lock_flav!=WINDOWS_LOCK)return NT_STATUS_ACCESS_DENIED;
+	return brl_lock_windows_default(brl,l);
+}
+static bool zxs_windows_unlock(vfs_handle_struct *h,struct byte_range_lock *brl,const struct lock_struct *l)
+{
+	return zxs_windows_brl(h,brl) && l->lock_flav==WINDOWS_LOCK && brl_unlock_windows_default(brl,l);
+}
 static const struct vfs_fn_pointers zxs_file_front = {
 	.get_alloc_size_fn=zxs_root_alloc,.fget_dos_attributes_fn=zxs_root_dos,
+	.brl_lock_windows_fn=zxs_windows_lock,.brl_unlock_windows_fn=zxs_windows_unlock,
 	.connect_fn=zxs_file_connect,.disconnect_fn=zxs_file_disconnect,
 	.realpath_fn=zxs_root_realpath,.stat_fn=zxs_root_stat,.fs_capabilities_fn=zxs_root_capabilities,
 };

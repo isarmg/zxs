@@ -4,6 +4,7 @@
 #include "smbd/zxs_file_vfs.h"
 #include "smbd/zxs_business.h"
 #include "libcli/smb/smb_constants.h"
+#include "libcli/smb/smb2_constants.h"
 /* Empty and one-component names in the signed ZXS namespace can only
  * select the one root or an enrolled top directory. For an existing-only
  * open they need no directory hint; deeper paths select a confirmed kind. */
@@ -95,6 +96,19 @@ static inline struct zxs_read_fsp *zxs_find_read(const struct files_struct *fsp)
 {
 	if (fsp==NULL || fsp->conn==NULL || !zxs_file_vfs_active(fsp->conn) || fsp->fsp_flags.is_directory)return NULL;
 	return vfs_fetch_fsp_extension(fsp->conn->vfs_handles,fsp);
+}
+/* Scope of the first explicit ordinary range-lock implementation. Use
+ * the actual 16-bit SMB2 LockCount; a generated packet isn't authority. */
+#define ZXS_LOCK_RANGE_COUNT 64u
+static inline bool zxs_lock_width(uint16_t count,size_t extra)
+{
+	return count>0 && count<=ZXS_LOCK_RANGE_COUNT && (size_t)(count-1)*24<=extra;
+}
+static inline bool zxs_lock_immediate_flags(uint32_t flags,bool unlock)
+{
+	if(unlock)return flags==SMB2_LOCK_FLAG_UNLOCK;
+	return flags==(SMB2_LOCK_FLAG_SHARED|SMB2_LOCK_FLAG_FAIL_IMMEDIATELY) ||
+		flags==(SMB2_LOCK_FLAG_EXCLUSIVE|SMB2_LOCK_FLAG_FAIL_IMMEDIATELY);
 }
 struct aio_req_fsp_link;
 bool zxs_dir_wait_cancel(struct tevent_req *,struct tevent_context *,
