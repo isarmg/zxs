@@ -4,11 +4,13 @@
 
 | 项目 | 用途 | 文档 |
 | --- | --- | --- |
-| [`zxs/`](zxs/) | 文件容器、版本、普通目录、跨盘移动和回收 | [使用](zxs/README.md) · [架构](zxs/ARCHITECTURE.md) · [任务](zxs/TASKS.md) |
-| [`helper/`](helper/) | 本地文件和目录的通用诊断工具 | [使用](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [任务](helper/TASKS.md) |
+| [`zxs/`](zxs/) | SMB 文件共享、手动版本、跨盘移动、回收及管理 Web | [使用](zxs/README.md) · [架构](zxs/ARCHITECTURE.md) · [任务](zxs/TASKS.md) |
+| [`helper/`](helper/) | 首次部署、离线维护和磁盘诊断 | [使用](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [任务](helper/TASKS.md) |
 | [`zxs-workspace/`](zxs-workspace/) | 整目录 ZIP 版本、工作树、命令行和桌面界面 | [使用](zxs-workspace/README.md) · [架构](zxs-workspace/ARCHITECTURE.md) · [任务](zxs-workspace/TASKS.md) |
 
 开发时进入对应的项目目录。单独取出任一项目不需要另外两个项目的源码、进程或私有数据。各自任务清单说明哪些功能已写、哪些仍待实现，以及哪些验收没有运行。
+
+**SMB 交付目标：** 将自研 Rust SMB 3.1.1 编入 `zxs` 二进制，届时不另发 SMB 程序，也不要求安装 Samba。当前主线仍默认使用受管 Samba；自研实现尚未替换默认路径，不迁移已有存储池。实现与验收状态见 [ZXS 任务清单](zxs/TASKS.md)。
 
 ## 历史资料
 
