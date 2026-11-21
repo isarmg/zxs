@@ -255,6 +255,15 @@ fn drive<'scope,'env:'scope>(scope:&'scope thread::Scope<'scope,'env>,site:Site<
             if action<0{members.remove(i);continue;}
             if action==1{
                 let Ok((request,answer))=mover::take(member,origin)else{members.remove(i);continue;};
+                if let mover::Request::Rename(name)=&request{
+                    let still=||{
+                        if !tree_live.load(Ordering::Acquire)||(site.stopping)()||!live(origin,reply,0)||
+                           unsafe{zxs_member_held(member)}!=0{return Err(denied());}
+                        Ok(())
+                    };
+                    mover::rename(site,answer,name,&mut members[i].1,&still);
+                    continue;
+                }
                 if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
                 moves.retain(|job:&thread::ScopedJoinHandle<'_,()>|!job.is_finished());
                 let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};

@@ -37,6 +37,7 @@ impl Route{
                 if native.role!=Role::File||native.volume!=f||native.parent!=tree.parent||Place::current(db,c,native.file)?!=*native{
                     return Err(io::ErrorKind::NotFound.into());
                 }
+                Place::require_no_rename(db,native.file)?;
                 (native.clone(),Direction::Delete,r.volume,native.name.clone())
             }
             #[cfg(test)]
@@ -61,15 +62,18 @@ impl Route{
     fn receipt(tree:&Tree<'_,'_>,db:&Connection,c:&Catalog,ask:&Handoff,op:OperationId)->io::Result<Option<Moved>>{
         tree.require(db,c,true)?;
         let q=db.prepare(c"SELECT m.file_id,m.direction,m.source_op,m.source_gen,m.source_id,m.source_name,
-               m.target_id,m.target_name,m.save_op,m.manual_op,m.source_parent,m.target_parent FROM main.operation o JOIN main.file_transfer m ON m.transfer_op=o.op_id
+               m.target_id,m.target_name,m.save_op,m.manual_op,m.source_parent,m.target_parent,m.source_backing,m.source_terminal
+               FROM main.operation o JOIN main.file_transfer m ON m.transfer_op=o.op_id
                WHERE o.op_id=?1 AND o.kind=12 AND o.state=1")?;
         q.bind_bytes(1,&op.0)?;
         if !work_record::start_one(&q)?{return Ok(None);}
         let file=crate::FileId(q.array(0)?);
         let (kind,role)=match q.byte(1)?{1=>(Direction::Delete,Role::File),2=>(Direction::Restore,Role::Recycle),
             _=>return Err(invalid("wrong original transfer direction"))};
+        let name=display::component(q.blob(5,222)?,222)?.to_owned();
+        let backing=Place::read_backing(&q,12,13,file,&name)?;
         let src=Place{file,op:OperationId(q.array(2)?),generation:q.integer(3)?,volume:VolumeId(q.array(4)?),
-            role,name:display::component(q.blob(5,222)?,222)?.to_owned(),parent:DirectoryParent::from_bytes(q.array(10)?)};
+            role,name,parent:DirectoryParent::from_bytes(q.array(10)?),backing};
         let to=VolumeId(q.array(6)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
         let save=work_record::optional(&q,8)?;let head=work_record::optional(&q,9)?;
         let parent=DirectoryParent::from_bytes(q.array(11)?);q.done()?;
@@ -91,7 +95,7 @@ impl Route{
     }
     fn target(&self,op:OperationId)->Place{
         Place{file:self.from.here.file,op,generation:self.from.here.generation+1,volume:self.to,
-            role:if self.kind==Direction::Delete{Role::Recycle}else{Role::File},name:self.name.clone(),parent:self.parent}
+            role:if self.kind==Direction::Delete{Role::Recycle}else{Role::File},name:self.name.clone(),parent:self.parent,backing:Some(op)}
     }
     fn geometry(&self,c:&Catalog,op:OperationId,dest:&DirectoryRoute)->io::Result<()>{
         if self.from.here.generation>i64::MAX-2{return Err(invalid("placement sequence exhausted"));}
@@ -108,19 +112,19 @@ impl Route{
     }
     fn digest(&self,op:OperationId)->io::Result<[u8;32]>{
         let b=&self.from.birth;let f=&self.from.here;
-        let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/FILE-TRANSFER-PARENT\0")?;
+        let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/FILE-TRANSFER-BACKING\0")?;
         for v in [b.pool.0,b.operation.0,b.file.0,b.entry.0,b.history.0,b.branch.0,
             op.0,f.op.0,f.volume.0,self.to.0,f.parent.bytes(),self.parent.bytes(),self.share.0,self.setting.0,self.auth.0,self.actor.0]{h.update(&v)?;}
         h.update(&[self.kind as u8])?;h.update(&f.generation.to_be_bytes())?;h.update(&self.epoch.to_be_bytes())?;
         for n in [&f.name,&self.name]{h.update(&[n.len() as u8])?;h.update(n.as_bytes())?;}
-        for k in [self.work.map(|v|v.record.key().save),self.head]{
+        for k in [f.backing,self.work.map(|v|v.record.key().save),self.head]{
             h.update(&[u8::from(k.is_some())])?;if let Some(k)=k{h.update(&k.0)?;}
         }
         Ok(h.finish())
     }
     fn exists_at(&self,db:&Connection,op:OperationId,committed:bool)->io::Result<bool>{
         let q=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,m.file_id,m.direction,m.source_op,m.source_gen,
-          m.source_id,m.source_name,m.target_id,m.target_name,m.share_id,m.setting_op,m.auth_op,m.save_op,m.manual_op,m.source_parent,m.target_parent
+          m.source_id,m.source_name,m.target_id,m.target_name,m.share_id,m.setting_op,m.auth_op,m.save_op,m.manual_op,m.source_parent,m.target_parent,m.source_backing,m.source_terminal
           FROM main.operation o LEFT JOIN main.file_transfer m ON m.transfer_op=o.op_id WHERE o.op_id=?1")?;
         q.bind_bytes(1,&op.0)?;
         if !work_record::start_one(&q)?{return Ok(false);}
@@ -130,7 +134,8 @@ impl Route{
             q.array::<16>(8)?!=f.volume.0||q.blob(9,222)?!=f.name.as_bytes()||q.array::<16>(10)?!=self.to.0||q.blob(11,222)?!=self.name.as_bytes()||
             q.array::<16>(12)?!=self.share.0||q.array::<16>(13)?!=self.setting.0||q.array::<16>(14)?!=self.auth.0||
             work_record::optional(&q,15)?!=self.work.map(|r|r.record.key().save)||work_record::optional(&q,16)?!=self.head||
-            q.array::<16>(17)?!=f.parent.bytes()||q.array::<16>(18)?!=self.parent.bytes(){
+            q.array::<16>(17)?!=f.parent.bytes()||q.array::<16>(18)?!=self.parent.bytes()||
+            Place::read_backing(&q,19,20,f.file,&f.name)?!=f.backing{
             return Err(invalid("recorded transfer differs from its original scope"));
         }
         q.done()?;Ok(true)
@@ -156,6 +161,7 @@ impl Route{
     }
     fn vacant(&self,db:&Connection,except:Option<OperationId>)->io::Result<()>{
         if self.kind!=Direction::Restore{return Ok(());}
+        if Place::renaming_name(db,self.to,self.parent,&self.name)?{return Err(pending());}
         let q=db.prepare(c"SELECT 1 FROM main.file_location WHERE role=2 AND volume_id=?1 AND display=?2 AND parent_id=?3
           UNION ALL SELECT 1 FROM main.directory_slot WHERE volume_id=?1 AND display=?2 AND parent_id=?3 LIMIT 1")?;
         q.bind_bytes(1,&self.to.0)?;q.bind_bytes(2,self.name.as_bytes())?;q.bind_bytes(3,&self.parent.bytes())?;
@@ -167,13 +173,16 @@ impl Route{
     }
     fn issue(&self,db:&Connection,op:OperationId)->io::Result<()>{
         let p=&self.from.here;
-        let q=db.prepare(c"INSERT INTO main.file_transfer VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)")?;
+        let q=db.prepare(c"INSERT INTO main.file_transfer(transfer_op,file_id,direction,source_op,source_gen,source_id,source_name,
+            target_id,target_name,share_id,setting_op,auth_op,save_op,manual_op,source_parent,target_parent,source_backing,source_terminal)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)")?;
         q.bind_bytes(1,&op.0)?;q.bind_bytes(2,&p.file.0)?;q.bind_integer(3,self.kind as i64)?;
         q.bind_bytes(4,&p.op.0)?;q.bind_integer(5,p.generation)?;q.bind_bytes(6,&p.volume.0)?;q.bind_bytes(7,p.name.as_bytes())?;
         q.bind_bytes(8,&self.to.0)?;q.bind_bytes(9,self.name.as_bytes())?;
         for (i,x) in [self.share.0,self.setting.0,self.auth.0].iter().enumerate(){q.bind_bytes(i as i32+10,x)?;}
         if let Some(work)=self.work{q.bind_bytes(13,&work.record.key().save.0)?;}if let Some(head)=self.head{q.bind_bytes(14,&head.0)?;}
         q.bind_bytes(15,&p.parent.bytes())?;q.bind_bytes(16,&self.parent.bytes())?;
+        if let Some(op)=p.backing{q.bind_bytes(17,&op.0)?;}else{q.bind_bytes(18,p.leaf()?.to_bytes())?;}
         q.done()?;drop(q);
         let st=db.prepare(c"INSERT INTO main.operation VALUES(?1,12,?2,?3,0)")?;
         st.bind_bytes(1,&op.0)?;st.bind_bytes(2,&self.actor.0)?;st.bind_bytes(3,&self.digest(op)?)?;st.done()

@@ -3,7 +3,7 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 11;
+PRAGMA user_version = 13;
 
 -- Both INIT (1) and SETUP_PAIR (2) name a separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
@@ -15,16 +15,18 @@ PRAGMA user_version = 11;
 -- WORK_EDIT (10) revises one working round; MANUAL_NODE (11) freezes it explicitly.
 -- TRANSFER (12) changes one original FILE placement; it never creates a FILE or version.
 -- CREATE_DIRECTORY (13) publishes a real ordinary parent only after its native witnesses sync.
+-- RENAME_FILE (14) selects a different name at its same actual ordinary parent.
 -- Kind 9 remains unallocated in this exact format.
 -- An operation row alone is not authorization.
 CREATE TABLE operation (
   op_id       BLOB NOT NULL PRIMARY KEY CHECK(length(op_id)=16 AND op_id<>zeroblob(16)),
-  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6,7,8,10,11,12,13)),
+  kind        INTEGER NOT NULL CHECK(kind IN (1,2,3,4,5,6,7,8,10,11,12,13,14)),
   actor_id    BLOB NOT NULL CHECK(length(actor_id)=16 AND actor_id<>zeroblob(16)),
   request_sha BLOB NOT NULL CHECK(length(request_sha)=32),
   state       INTEGER NOT NULL CHECK(state IN (0,1)) -- 0: pending I/O; 1: committed
 ) STRICT, WITHOUT ROWID;
 CREATE UNIQUE INDEX singleton_bootstraps ON operation(kind) WHERE kind IN (1,2);
+CREATE INDEX incomplete_file_renames ON operation(op_id) WHERE kind=14 AND state=0;
 
 CREATE TABLE pool_birth (
   singleton    INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),
@@ -174,7 +176,6 @@ CREATE TABLE root_entry (
                           AND ticket<>X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'),
   parent_id    BLOB NOT NULL CHECK(length(parent_id)=16)
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX original_terminal_spelling ON root_entry(volume_id,parent_id,terminal);
 CREATE TRIGGER start_root_entry BEFORE INSERT ON root_entry
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
   OR EXISTS(SELECT 1 FROM root_entry WHERE create_op=NEW.create_op OR entry_id=NEW.entry_id OR file_id=NEW.file_id
@@ -200,9 +201,17 @@ CREATE TABLE file_location (
   volume_id    BLOB NOT NULL REFERENCES volume_claim(volume_id),
   role         INTEGER NOT NULL CHECK(role IN (1,2)),
   display      BLOB NOT NULL CHECK(length(display) BETWEEN 1 AND 222 AND instr(display,X'00')=0),
-  parent_id    BLOB NOT NULL CHECK(length(parent_id)=16 AND (role=2 OR parent_id=zeroblob(16)))
+  parent_id    BLOB NOT NULL CHECK(length(parent_id)=16 AND (role=2 OR parent_id=zeroblob(16))),
+  -- Rename can advance position_op without moving this physical backing.
+  -- NULL backing is the original flat parent; its terminal is indexed.
+  backing_op   BLOB REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
+  flat_terminal BLOB,
+  CHECK((backing_op IS NULL AND role=2 AND flat_terminal IS NOT NULL
+         AND length(flat_terminal)=length(display)+33 AND instr(flat_terminal,X'00')=0)
+     OR (backing_op IS NOT NULL AND flat_terminal IS NULL))
 ) STRICT, WITHOUT ROWID;
 CREATE UNIQUE INDEX current_ordinary_name ON file_location(volume_id,parent_id,display) WHERE role=2;
+CREATE UNIQUE INDEX current_flat_file_terminal ON file_location(volume_id,parent_id,flat_terminal) WHERE flat_terminal IS NOT NULL;
 CREATE INDEX current_recycle_deletion ON file_location(volume_id,position_op) WHERE role=1;
 
 -- A real ordinary directory has its own immutable birth and exact
@@ -254,11 +263,12 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
  OR EXISTS(SELECT 1 FROM directory_slot d WHERE d.volume_id=NEW.volume_id AND d.parent_id=NEW.parent_id AND d.display=NEW.display)
  OR EXISTS(SELECT 1 FROM file_location f WHERE f.volume_id=NEW.volume_id AND f.role=2
                   AND f.parent_id=NEW.parent_id AND f.display=NEW.display)
- OR EXISTS(SELECT 1 FROM file_location f JOIN root_entry b ON b.file_id=f.file_id
-                  WHERE f.volume_id=NEW.volume_id AND f.role=2 AND f.generation=1
-                    AND f.parent_id=NEW.parent_id AND b.terminal=NEW.display)
+ OR EXISTS(SELECT 1 FROM file_location f
+                  WHERE f.volume_id=NEW.volume_id AND f.parent_id=NEW.parent_id AND f.flat_terminal=NEW.display)
  OR EXISTS(SELECT 1 FROM pending_transfer m WHERE m.direction=2 AND m.target_id=NEW.volume_id
                   AND m.target_parent=NEW.parent_id AND m.target_name=NEW.display)
+ OR EXISTS(SELECT 1 FROM pending_rename r WHERE r.volume_id=NEW.volume_id AND r.parent_id=NEW.parent_id
+                  AND NEW.display IN (r.target_name,r.target_terminal))
 BEGIN SELECT RAISE(ABORT,'directory birth requires an original parent, vacant shared logical name and this live writer'); END;
 CREATE TRIGGER abort_directory BEFORE INSERT ON directory_abort
 WHEN EXISTS(SELECT 1 FROM directory_abort r WHERE r.create_op=NEW.create_op)
@@ -296,10 +306,16 @@ CREATE TABLE file_transfer (
   manual_op    BLOB REFERENCES operation(op_id),
   source_parent BLOB NOT NULL CHECK(length(source_parent)=16 AND (direction=1 OR source_parent=zeroblob(16))),
   target_parent BLOB NOT NULL CHECK(length(target_parent)=16 AND (direction=2 OR target_parent=zeroblob(16))),
+  source_backing BLOB REFERENCES operation(op_id),
+  source_terminal BLOB,
+  CHECK((source_backing IS NULL AND direction=1 AND source_terminal IS NOT NULL
+         AND length(source_terminal)=length(source_name)+33 AND instr(source_terminal,X'00')=0)
+     OR (source_backing IS NOT NULL AND source_terminal IS NULL)),
   CHECK(transfer_op<>source_op AND (direction=2 OR source_name=target_name))
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX transfer_original_source ON file_transfer(file_id,source_gen);
 CREATE INDEX transfer_destination_name ON file_transfer(target_id,target_parent,target_name) WHERE direction=2;
+CREATE INDEX transfer_flat_source ON file_transfer(source_id,source_parent,source_terminal) WHERE source_terminal IS NOT NULL;
 
 -- Separate original physical cleanup, never a second selected placement.
 -- A guard is captured from the actual paired source before publish. Blocked
@@ -339,33 +355,103 @@ SELECT m.* FROM file_transfer m LEFT JOIN operation o ON o.op_id=m.transfer_op
 WHERE (o.op_id IS NULL OR (o.kind=12 AND o.state=0))
   AND NOT EXISTS(SELECT 1 FROM file_transfer_void v WHERE v.transfer_op=m.transfer_op);
 
+-- An in-place rename keeps both original and destination names private
+-- until the name switch is selected. The outer FILE witness does not move.
+CREATE TABLE file_rename (
+  rename_op      BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED
+                     CHECK(rename_op<>zeroblob(16) AND rename_op<>X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'),
+  file_id        BLOB NOT NULL REFERENCES root_entry(file_id),
+  source_op      BLOB NOT NULL REFERENCES operation(op_id),
+  source_gen     INTEGER NOT NULL CHECK(source_gen BETWEEN 1 AND 9223372036854775805),
+  volume_id      BLOB NOT NULL REFERENCES volume_claim(volume_id),
+  parent_id      BLOB NOT NULL CHECK(length(parent_id)=16),
+  source_name    BLOB NOT NULL CHECK(length(source_name) BETWEEN 1 AND 222 AND instr(source_name,X'00')=0),
+  target_name    BLOB NOT NULL CHECK(length(target_name) BETWEEN 1 AND 222 AND instr(target_name,X'00')=0),
+  backing_op     BLOB REFERENCES operation(op_id),
+  source_terminal BLOB,
+  target_terminal BLOB,
+  share_id       BLOB NOT NULL REFERENCES root_share(share_id),
+  setting_op     BLOB NOT NULL REFERENCES share_mode(change_op),
+  auth_op        BLOB NOT NULL REFERENCES operation(op_id),
+  save_op        BLOB REFERENCES operation(op_id),
+  manual_op      BLOB REFERENCES operation(op_id),
+  CHECK(rename_op<>source_op AND source_name<>target_name),
+  CHECK((backing_op IS NULL AND source_terminal IS NOT NULL AND target_terminal IS NOT NULL
+         AND source_terminal<>target_terminal AND length(source_terminal)=length(source_name)+33
+         AND length(target_terminal)=length(target_name)+33
+         AND instr(source_terminal,X'00')=0 AND instr(target_terminal,X'00')=0)
+     OR (backing_op IS NOT NULL AND source_terminal IS NULL AND target_terminal IS NULL))
+) STRICT, WITHOUT ROWID;
+CREATE INDEX rename_original_source ON file_rename(file_id,source_op);
+CREATE INDEX rename_destination_name ON file_rename(volume_id,parent_id,target_name);
+CREATE INDEX rename_flat_destination ON file_rename(volume_id,parent_id,target_terminal) WHERE target_terminal IS NOT NULL;
+CREATE TABLE file_rename_abort (
+  rename_op      BLOB NOT NULL PRIMARY KEY REFERENCES file_rename(rename_op),
+  setting_op     BLOB NOT NULL REFERENCES share_mode(change_op),
+  auth_op        BLOB NOT NULL REFERENCES operation(op_id),
+  -- 1: same original still at OLD, no forward native handoff remained.
+  -- 2: a revoked pending rename was durably put back at OLD.
+  reason         INTEGER NOT NULL CHECK(reason IN (1,2))
+) STRICT, WITHOUT ROWID;
+CREATE VIEW pending_rename AS
+SELECT r.* FROM file_rename r LEFT JOIN operation o ON o.op_id=r.rename_op
+WHERE (o.op_id IS NULL OR (o.kind=14 AND o.state=0))
+  AND NOT EXISTS(SELECT 1 FROM file_rename_abort x WHERE x.rename_op=r.rename_op);
+-- This maps immutable issued positions to their physical body only.
+-- Prior work names and extent ceilings may follow a true same-body rename;
+-- no SAVE reservation or grant is reactivated by this relation.
+CREATE VIEW file_material_position AS
+SELECT b.file_id,b.create_op AS position_op,b.volume_id,b.parent_id,NULL AS backing_op
+  FROM root_entry b JOIN operation o ON o.op_id=b.create_op AND o.kind=5 AND o.state=1
+UNION ALL
+SELECT m.file_id,m.transfer_op,m.target_id,m.target_parent,m.transfer_op
+  FROM file_transfer m JOIN operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
+UNION ALL
+SELECT r.file_id,r.rename_op,r.volume_id,r.parent_id,r.backing_op
+  FROM file_rename r JOIN operation o ON o.op_id=r.rename_op AND o.kind=14 AND o.state=1;
+
 CREATE TRIGGER original_location BEFORE INSERT ON file_location
 WHEN NEW.role<>2 OR NEW.generation<>1
+ OR NEW.backing_op IS NOT NULL
  OR EXISTS(SELECT 1 FROM file_location l WHERE l.file_id=NEW.file_id OR l.position_op=NEW.position_op
-                                OR (l.role=2 AND l.volume_id=NEW.volume_id AND l.parent_id=NEW.parent_id AND l.display=NEW.display))
+                                OR (l.volume_id=NEW.volume_id AND l.parent_id=NEW.parent_id
+                                 AND ((l.role=2 AND l.display=NEW.display) OR l.flat_terminal=NEW.flat_terminal)))
  OR EXISTS(SELECT 1 FROM directory_slot d JOIN root_entry b ON b.file_id=NEW.file_id
             WHERE d.volume_id=NEW.volume_id AND d.parent_id=NEW.parent_id AND d.display IN (NEW.display,b.terminal))
  OR EXISTS(SELECT 1 FROM pending_transfer t
             WHERE t.direction=2 AND t.target_id=NEW.volume_id AND t.target_parent=NEW.parent_id AND t.target_name=NEW.display)
+ OR EXISTS(SELECT 1 FROM pending_rename r WHERE r.volume_id=NEW.volume_id AND r.parent_id=NEW.parent_id
+            AND (r.target_name=NEW.display OR r.target_terminal IN (NEW.display,NEW.flat_terminal)))
  OR NOT EXISTS(SELECT 1 FROM root_entry b JOIN volume_claim v ON v.volume_id=b.volume_id AND v.role=2
                 WHERE b.file_id=NEW.file_id AND b.volume_id=NEW.volume_id
-                  AND b.display=NEW.display AND b.parent_id=NEW.parent_id AND b.create_op=NEW.position_op)
+                  AND b.display=NEW.display AND b.parent_id=NEW.parent_id AND b.create_op=NEW.position_op
+                  AND b.terminal=NEW.flat_terminal)
 BEGIN SELECT RAISE(ABORT,'location requires the one original ordinary FILE name'); END;
 CREATE TRIGGER publish_birth_location AFTER INSERT ON root_entry
 BEGIN
-  INSERT INTO file_location VALUES(NEW.file_id,NEW.create_op,1,NEW.volume_id,2,NEW.display,NEW.parent_id);
+  INSERT INTO file_location VALUES(NEW.file_id,NEW.create_op,1,NEW.volume_id,2,NEW.display,NEW.parent_id,NULL,NEW.terminal);
 END;
 CREATE TRIGGER retain_location BEFORE DELETE ON file_location
 BEGIN SELECT RAISE(ABORT,'retain the selected FILE location'); END;
 CREATE TRIGGER advance_location BEFORE UPDATE ON file_location
 WHEN NEW.file_id<>OLD.file_id OR NEW.generation<>OLD.generation+1
  OR (NEW.role=2 AND EXISTS(SELECT 1 FROM directory_slot d WHERE d.volume_id=NEW.volume_id AND d.parent_id=NEW.parent_id AND d.display=NEW.display))
- OR NOT EXISTS(SELECT 1 FROM file_transfer m JOIN operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
+ OR NOT (
+ EXISTS(SELECT 1 FROM file_transfer m JOIN operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
    WHERE m.transfer_op=NEW.position_op AND m.file_id=OLD.file_id AND m.source_op=OLD.position_op
      AND m.source_gen=OLD.generation AND m.source_id=OLD.volume_id AND m.source_name=OLD.display AND m.source_parent=OLD.parent_id
+     AND m.source_backing IS OLD.backing_op AND m.source_terminal IS OLD.flat_terminal
      AND OLD.role=CASE m.direction WHEN 1 THEN 2 ELSE 1 END AND NEW.role=CASE m.direction WHEN 1 THEN 1 ELSE 2 END
-     AND m.target_id=NEW.volume_id AND m.target_name=NEW.display AND m.target_parent=NEW.parent_id)
-BEGIN SELECT RAISE(ABORT,'location may advance only from its committed original transfer'); END;
+     AND m.target_id=NEW.volume_id AND m.target_name=NEW.display AND m.target_parent=NEW.parent_id
+     AND NEW.backing_op=NEW.position_op AND NEW.flat_terminal IS NULL)
+ OR EXISTS(SELECT 1 FROM file_rename r JOIN operation o ON o.op_id=r.rename_op AND o.kind=14 AND o.state=1
+   WHERE r.rename_op=NEW.position_op AND r.file_id=OLD.file_id AND r.source_op=OLD.position_op
+     AND r.source_gen=OLD.generation AND r.source_name=OLD.display AND r.target_name=NEW.display
+     AND OLD.role=2 AND NEW.role=2 AND r.volume_id=OLD.volume_id AND r.volume_id=NEW.volume_id
+     AND r.parent_id=OLD.parent_id AND r.parent_id=NEW.parent_id AND r.backing_op IS OLD.backing_op
+     AND r.backing_op IS NEW.backing_op AND r.source_terminal IS OLD.flat_terminal
+     AND r.target_terminal IS NEW.flat_terminal))
+BEGIN SELECT RAISE(ABORT,'location may advance only from its exactly committed original movement'); END;
 CREATE TRIGGER retain_transfer BEFORE DELETE ON file_transfer
 BEGIN SELECT RAISE(ABORT,'retain original FILE transfer'); END;
 CREATE TRIGGER keep_transfer BEFORE UPDATE ON file_transfer
@@ -401,6 +487,7 @@ CREATE TRIGGER start_work BEFORE INSERT ON first_work
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.save_op)
  OR EXISTS(SELECT 1 FROM work_edit WHERE file_id=NEW.file_id)
  OR EXISTS(SELECT 1 FROM pending_transfer WHERE file_id=NEW.file_id)
+ OR EXISTS(SELECT 1 FROM pending_rename WHERE file_id=NEW.file_id)
  OR EXISTS(SELECT 1 FROM first_work WHERE save_op=NEW.save_op OR (file_id=NEW.file_id AND attempt_no=NEW.attempt_no)
            OR (NEW.previous_save IS NOT NULL AND previous_save=NEW.previous_save))
  OR (NEW.previous_save IS NOT NULL AND NOT EXISTS(
@@ -410,7 +497,7 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.save_op)
          AND o.kind=6 AND o.state=0 AND (m.revision<(SELECT MAX(z.revision) FROM share_mode z WHERE z.share_id=old.share_id)
            OR NOT EXISTS(SELECT 1 FROM active_credential WHERE role=1 AND credential_op=old.auth_op))))
  OR NOT EXISTS(SELECT 1 FROM root_entry e JOIN operation b ON b.op_id=e.create_op
-       JOIN file_location l ON l.file_id=e.file_id AND l.role=2 AND l.generation=1
+       JOIN file_location l ON l.file_id=e.file_id AND l.role=2 AND l.backing_op IS NULL
        JOIN root_share r ON r.volume_id=l.volume_id JOIN share_mode m ON m.share_id=r.share_id
        JOIN operation p ON p.op_id=m.change_op JOIN active_credential s ON s.role=1 AND s.credential_op=NEW.auth_op
        WHERE e.file_id=NEW.file_id AND b.kind=5 AND b.state=1 AND r.share_id=NEW.share_id
@@ -520,7 +607,7 @@ CREATE VIEW transferable_location AS
 SELECT l.*, w.save_op, n.commit_op AS manual_op
 FROM file_location l JOIN operation o ON o.op_id=l.position_op AND o.state=1
 LEFT JOIN selected_work w ON w.file_id=l.file_id LEFT JOIN last_manual n ON n.file_id=l.file_id
-WHERE o.kind=CASE l.generation WHEN 1 THEN 5 ELSE 12 END;
+WHERE (l.generation=1 AND o.kind=5) OR (l.generation>1 AND o.kind IN (12,14));
 -- The transfer executor holds the original FILE EX. A disconnected
 -- writer's *unconfirmed* bytes belong only to its original placement
 -- and cannot permanently pin a valid confirmed view to that volume.
@@ -533,6 +620,7 @@ JOIN live_ordinary_writer a ON a.share_id=m.share_id AND a.setting_op=m.setting_
  AND a.volume_id=CASE m.direction WHEN 1 THEN m.source_id ELSE m.target_id END
 WHERE l.position_op=m.source_op AND l.generation=m.source_gen AND l.volume_id=m.source_id
  AND l.display=m.source_name AND l.parent_id=m.source_parent
+ AND l.backing_op IS m.source_backing AND l.flat_terminal IS m.source_terminal
  AND l.role=CASE m.direction WHEN 1 THEN 2 ELSE 1 END AND l.save_op IS m.save_op AND l.manual_op IS m.manual_op
  AND (m.direction=1 OR (NOT EXISTS(SELECT 1 FROM file_location t
               WHERE t.role=2 AND t.volume_id=m.target_id AND t.parent_id=m.target_parent AND t.display=m.target_name)
@@ -548,13 +636,16 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.transfer_op)
  OR EXISTS(SELECT 1 FROM pending_transfer m WHERE m.file_id=NEW.file_id
        OR (m.direction=2 AND NEW.direction=2 AND m.target_id=NEW.target_id
           AND m.target_parent=NEW.target_parent AND m.target_name=NEW.target_name))
+ OR EXISTS(SELECT 1 FROM pending_rename r WHERE r.file_id=NEW.file_id
+       OR (NEW.direction=2 AND r.volume_id=NEW.target_id AND r.parent_id=NEW.target_parent
+          AND NEW.target_name IN (r.target_name,r.target_terminal)))
 BEGIN SELECT RAISE(ABORT,'another original FILE/source or target name already has a transfer in progress'); END;
 CREATE TRIGGER once_transfer_void BEFORE INSERT ON file_transfer_void
 WHEN EXISTS(SELECT 1 FROM file_transfer_void v WHERE v.transfer_op=NEW.transfer_op)
  OR NOT EXISTS(SELECT 1 FROM pending_transfer m
       JOIN operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=0
       JOIN file_location l ON l.file_id=m.file_id AND l.position_op=m.source_op AND l.generation=m.source_gen
-         AND l.parent_id=m.source_parent
+         AND l.parent_id=m.source_parent AND l.backing_op IS m.source_backing AND l.flat_terminal IS m.source_terminal
       JOIN live_ordinary_writer a ON a.volume_id=CASE m.direction WHEN 1 THEN m.source_id ELSE m.target_id END
        AND a.share_id=m.share_id AND a.setting_op=NEW.setting_op AND a.auth_op=NEW.auth_op
       WHERE m.transfer_op=NEW.transfer_op
@@ -566,9 +657,62 @@ WHEN NEW.kind=12 AND NEW.state=1
 BEGIN
   UPDATE file_location SET position_op=NEW.op_id,
     generation=generation+1,
+    backing_op=NEW.op_id,flat_terminal=NULL,
     (volume_id,role,display,parent_id)=(SELECT target_id,CASE direction WHEN 1 THEN 1 ELSE 2 END,target_name,target_parent
                              FROM file_transfer WHERE transfer_op=NEW.op_id)
   WHERE file_id=(SELECT file_id FROM file_transfer WHERE transfer_op=NEW.op_id);
+END;
+
+CREATE VIEW live_rename AS
+SELECT r.*,a.actor_id
+FROM pending_rename r JOIN transferable_location l ON l.file_id=r.file_id
+JOIN live_ordinary_writer a ON a.share_id=r.share_id AND a.volume_id=r.volume_id
+                            AND a.setting_op=r.setting_op AND a.auth_op=r.auth_op
+WHERE l.role=2 AND l.position_op=r.source_op AND l.generation=r.source_gen
+ AND l.volume_id=r.volume_id AND l.parent_id=r.parent_id AND l.display=r.source_name
+ AND l.backing_op IS r.backing_op AND l.flat_terminal IS r.source_terminal
+ AND l.save_op IS r.save_op AND l.manual_op IS r.manual_op
+ AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=r.file_id)
+ AND NOT EXISTS(SELECT 1 FROM first_work f LEFT JOIN operation o ON o.op_id=f.save_op
+       WHERE l.backing_op IS NULL AND f.file_id=r.file_id AND (o.op_id IS NULL OR (o.kind=6 AND o.state=0))
+          AND NOT EXISTS(SELECT 1 FROM first_work next WHERE next.previous_save=f.save_op))
+ AND NOT EXISTS(SELECT 1 FROM file_location n WHERE n.role=2 AND n.volume_id=r.volume_id
+       AND n.parent_id=r.parent_id AND (n.display IN (r.target_name,r.target_terminal) OR n.flat_terminal=r.target_terminal))
+ AND NOT EXISTS(SELECT 1 FROM directory_slot d WHERE d.volume_id=r.volume_id AND d.parent_id=r.parent_id
+       AND d.display IN (r.target_name,r.target_terminal))
+ AND NOT EXISTS(SELECT 1 FROM pending_transfer t WHERE t.file_id=r.file_id
+       OR (t.direction=2 AND t.target_id=r.volume_id AND t.target_parent=r.parent_id
+          AND t.target_name IN (r.target_name,r.target_terminal)));
+
+CREATE TRIGGER start_rename BEFORE INSERT ON file_rename
+WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.rename_op)
+ OR EXISTS(SELECT 1 FROM file_rename WHERE rename_op=NEW.rename_op)
+ OR EXISTS(SELECT 1 FROM pending_rename r WHERE r.file_id=NEW.file_id
+       OR (r.volume_id=NEW.volume_id AND r.parent_id=NEW.parent_id
+           AND (r.target_name IN (NEW.target_name,NEW.target_terminal)
+                OR r.target_terminal IN (NEW.target_name,NEW.target_terminal))))
+BEGIN SELECT RAISE(ABORT,'another original rename already holds this file or destination'); END;
+CREATE TRIGGER abort_rename BEFORE INSERT ON file_rename_abort
+WHEN EXISTS(SELECT 1 FROM file_rename_abort x WHERE x.rename_op=NEW.rename_op)
+ OR NOT EXISTS(SELECT 1 FROM pending_rename r
+       JOIN operation o ON o.op_id=r.rename_op AND o.kind=14 AND o.state=0
+       JOIN file_location l ON l.file_id=r.file_id AND l.role=2 AND l.position_op=r.source_op
+          AND l.generation=r.source_gen AND l.volume_id=r.volume_id AND l.parent_id=r.parent_id
+          AND l.display=r.source_name AND l.backing_op IS r.backing_op AND l.flat_terminal IS r.source_terminal
+       JOIN live_ordinary_writer a ON a.share_id=r.share_id AND a.volume_id=r.volume_id
+          AND a.setting_op=NEW.setting_op AND a.auth_op=NEW.auth_op
+       WHERE r.rename_op=NEW.rename_op AND (NEW.reason=1 OR a.setting_op<>r.setting_op OR a.auth_op<>r.auth_op))
+BEGIN SELECT RAISE(ABORT,'rename abandonment needs the original unselected source and current RW authority'); END;
+CREATE TRIGGER keep_rename BEFORE UPDATE ON file_rename BEGIN SELECT RAISE(ABORT,'immutable original rename'); END;
+CREATE TRIGGER retain_rename BEFORE DELETE ON file_rename BEGIN SELECT RAISE(ABORT,'retain original rename'); END;
+CREATE TRIGGER keep_rename_abort BEFORE UPDATE ON file_rename_abort BEGIN SELECT RAISE(ABORT,'immutable rename rollback'); END;
+CREATE TRIGGER retain_rename_abort BEFORE DELETE ON file_rename_abort BEGIN SELECT RAISE(ABORT,'retain rename rollback'); END;
+CREATE TRIGGER select_renamed_location AFTER UPDATE OF state ON operation
+WHEN NEW.kind=14 AND NEW.state=1
+BEGIN
+  UPDATE file_location SET position_op=NEW.op_id,generation=generation+1,
+     (display,flat_terminal)=(SELECT target_name,target_terminal FROM file_rename WHERE rename_op=NEW.op_id)
+  WHERE file_id=(SELECT file_id FROM file_rename WHERE rename_op=NEW.op_id);
 END;
 
 CREATE TRIGGER issue_work_edit BEFORE INSERT ON work_edit
@@ -576,9 +720,10 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.edit_op)
   OR EXISTS(SELECT 1 FROM work_edit WHERE edit_op=NEW.edit_op OR (file_id=NEW.file_id AND issue=NEW.issue))
   OR NEW.issue<>1+COALESCE((SELECT max(issue) FROM work_edit WHERE file_id=NEW.file_id),0)
   OR EXISTS(SELECT 1 FROM pending_transfer WHERE file_id=NEW.file_id)
+  OR EXISTS(SELECT 1 FROM pending_rename WHERE file_id=NEW.file_id)
   OR NEW.predecessor IS NOT (SELECT save_op FROM selected_work WHERE file_id=NEW.file_id)
   OR NEW.parent_commit IS NOT (SELECT commit_op FROM last_manual WHERE file_id=NEW.file_id)
-  OR EXISTS(SELECT 1 FROM first_work f JOIN file_location l ON l.file_id=f.file_id AND l.generation=1
+  OR EXISTS(SELECT 1 FROM first_work f JOIN file_location l ON l.file_id=f.file_id AND l.backing_op IS NULL
             LEFT JOIN operation o ON o.op_id=f.save_op
             WHERE f.file_id=NEW.file_id AND (o.op_id IS NULL OR (o.kind=6 AND o.state=0))
               AND NOT EXISTS(SELECT 1 FROM first_work n WHERE n.previous_save=f.save_op))
@@ -610,7 +755,8 @@ FROM selected_work h LEFT JOIN last_manual n ON n.file_id=h.file_id
 JOIN file_location l ON l.file_id=h.file_id AND l.role=2
 CROSS JOIN active_credential a
 WHERE a.role=0 AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=h.file_id)
- AND NOT EXISTS(SELECT 1 FROM pending_transfer m WHERE m.file_id=h.file_id);
+ AND NOT EXISTS(SELECT 1 FROM pending_transfer m WHERE m.file_id=h.file_id)
+ AND NOT EXISTS(SELECT 1 FROM pending_rename r WHERE r.file_id=h.file_id);
 
 CREATE TRIGGER publish_manual_node BEFORE INSERT ON manual_node
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.commit_op)
@@ -635,6 +781,9 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.op_id OR (NEW.kind IN (1,2) 
   OR (NEW.kind<>13 AND EXISTS(SELECT 1 FROM directory_entry WHERE create_op=NEW.op_id))
   OR (NEW.kind=13 AND (NEW.state<>0 OR NOT EXISTS(SELECT 1 FROM live_directory_writer d
        WHERE d.create_op=NEW.op_id AND d.actor_id=NEW.actor_id)))
+  OR (NEW.kind<>14 AND EXISTS(SELECT 1 FROM file_rename WHERE rename_op=NEW.op_id))
+  OR (NEW.kind=14 AND (NEW.state<>0 OR NOT EXISTS(SELECT 1 FROM live_rename r
+       WHERE r.rename_op=NEW.op_id AND r.actor_id=NEW.actor_id)))
   OR (NEW.kind<>12 AND EXISTS(SELECT 1 FROM file_transfer WHERE transfer_op=NEW.op_id))
   OR (NEW.kind=12 AND (NEW.state<>0 OR NOT EXISTS(SELECT 1 FROM live_transfer m
        WHERE m.transfer_op=NEW.op_id AND m.actor_id=NEW.actor_id)))
@@ -735,19 +884,22 @@ WHEN OLD.state<>0 OR NEW.state<>1 OR NOT (
   (OLD.kind=7 AND EXISTS(SELECT 1 FROM credential_reset r WHERE r.op_id=OLD.op_id AND r.role=1
     AND NOT EXISTS(SELECT 1 FROM credential_reset later WHERE later.role=1 AND later.generation>r.generation))) OR
   (OLD.kind=13 AND EXISTS(SELECT 1 FROM live_directory_writer d WHERE d.create_op=OLD.op_id AND d.actor_id=OLD.actor_id)) OR
+  (OLD.kind=14 AND EXISTS(SELECT 1 FROM live_rename r WHERE r.rename_op=OLD.op_id AND r.actor_id=OLD.actor_id)) OR
   (OLD.kind=12 AND EXISTS(SELECT 1 FROM live_transfer m WHERE m.transfer_op=OLD.op_id AND m.actor_id=OLD.actor_id)) OR
-  (OLD.kind=6 AND EXISTS(SELECT 1 FROM first_work f JOIN file_location l ON l.file_id=f.file_id AND l.generation=1 AND l.role=2
+  (OLD.kind=6 AND EXISTS(SELECT 1 FROM first_work f JOIN file_location l ON l.file_id=f.file_id AND l.backing_op IS NULL AND l.role=2
     JOIN share_mode m ON m.change_op=f.setting_op
     JOIN active_credential s ON s.role=1 AND s.credential_op=f.auth_op JOIN account_pair a ON a.singleton=s.slot
     WHERE f.save_op=OLD.op_id AND NOT EXISTS(SELECT 1 FROM first_work nxt WHERE nxt.previous_save=f.save_op)
       AND NOT EXISTS(SELECT 1 FROM work_edit w WHERE w.file_id=f.file_id)
       AND NOT EXISTS(SELECT 1 FROM pending_transfer t WHERE t.file_id=f.file_id)
+      AND NOT EXISTS(SELECT 1 FROM pending_rename r WHERE r.file_id=f.file_id)
       AND a.smb_id=OLD.actor_id AND m.mode=2
       AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=f.share_id))) OR
   (OLD.kind=10 AND EXISTS(SELECT 1 FROM pending_edit p
     JOIN live_ordinary_writer a ON a.share_id=p.share_id AND a.setting_op=p.setting_op AND a.auth_op=p.auth_op
     WHERE p.edit_op=OLD.op_id AND a.actor_id=OLD.actor_id
       AND NOT EXISTS(SELECT 1 FROM pending_transfer t WHERE t.file_id=p.file_id)
+      AND NOT EXISTS(SELECT 1 FROM pending_rename r WHERE r.file_id=p.file_id)
       AND p.predecessor IS (SELECT save_op FROM selected_work WHERE file_id=p.file_id)
       AND p.parent_commit IS (SELECT commit_op FROM last_manual WHERE file_id=p.file_id))) OR
   (OLD.kind=5 AND EXISTS(SELECT 1 FROM root_entry e JOIN share_mode m ON m.change_op=e.setting_op

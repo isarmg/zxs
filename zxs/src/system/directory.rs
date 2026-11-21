@@ -77,6 +77,7 @@ struct PageAt<'a>{source:&'a InitialReader,volume:VolumeId,parent:DirectoryParen
 fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:bool)->io::Result<Vec<Pick>>{
     let q=db.prepare(c"SELECT p.display AS name,p.file_id,0 FROM main.file_location p JOIN main.operation o ON o.op_id=p.position_op
         WHERE p.role=2 AND p.volume_id=?1 AND p.parent_id=?2 AND p.display>?3 AND o.state=1
+          AND NOT EXISTS(SELECT 1 FROM main.pending_rename r WHERE r.file_id=p.file_id AND r.source_op=p.position_op)
         UNION ALL SELECT d.display,d.directory_id,1 FROM main.directory_slot d
           WHERE ?4=1 AND d.volume_id=?1 AND d.parent_id=?2 AND d.display>?3 AND d.state=1
         ORDER BY name LIMIT ?5")?;

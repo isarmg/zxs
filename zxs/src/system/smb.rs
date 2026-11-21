@@ -65,8 +65,14 @@ mod retained_read;
 
 #[path="file_transfer.rs"]
 mod file_transfer;
+#[path="file_rename.rs"]
+mod file_rename;
 #[path="file_retirement.rs"]
 mod retirement;
+
+#[cfg(test)]
+#[path="../../tests/unit/sqlite_rename.rs"]
+mod rename_tests;
 
 #[path="work_change.rs"]
 pub(crate) mod work_change;

@@ -97,6 +97,12 @@ QUERY_DIRECTORY 复用原真实会话、FID、FILE_LIST_DIRECTORY、输出额度
 
 普通路径可选已发表的沿级真实目录，例如 `盘目录\项目\稿件.xlsx`。原生目录 CREATE/OPEN_IF 只在当前 RW 和真实 ADD_SUBDIR 下发表；先装完整 DirectoryId 的不可用原生柄，收到同原双名同步及 SQL 确认的私端答复才可用。每个子级只按准确父和名称选择，不能把原案、历史的 FileId 锁或 R 路径转为新权限。目录页每行带独立类型，实际物理 inode 不过线；普通目录不宣告唯一64位号。已获授权、真实确认空的目录首次列 `*` 返回枚举结束，不把离线或选名不匹配解释为空。支持原签名目录 GETINFO 的五个文件信息类；没有 ADS、原生重连或任意宿主路径。已确认 FILE 可用 FILE_OPEN 或 FILE_OPEN_IF 非截断打开。新生 FILE_CREATE/OPEN_IF 要求当前 RW 和原生添加权，使用本次真正原生 FSP/share-mode 后的私端 ACK 确认；完成前持 `closing` 禁止客户端操作，确认后才报告 FILE_WAS_CREATED。原私双名/SQL 待办不被任意下一请求认领。没有 ACK 不发原单；已确认后断线不报告确定失败。所有具名句柄各自保留原权限与独立 ShareAccess。
 
+### 普通 FILE 同父改名（源码，未运行）
+
+已打开的普通 RW 文件可用基本 `FileRenameInformation` 改同一真实父目录下的名字。句柄必须已获 DELETE，目标父必须允许 ADD_FILE；只支持没有正文写权的发起柄，且不得有其他活的普通打开或待删除标记。回收站旧读柄不因此成为普通打开。原生同物锁只封改名入口，不跨文件系统同步。成功后保留原 FileId、当前稿和正式节点；不复制正文，不允许覆盖、跨父移动或整个目录改名。
+
+发生断线时不把未确认的回复说成失败。存储端只按已签原单和真实旧/新名共同恢复：仍在旧名时只释放原待办，不代替已断开的句柄发起物理改名；已在新名才依当时原权完成确认，若授权已变，只有新生效的同盘 RW 权可把同一原件退回旧名。此处不提供客户端重放、可写句柄改名或临时文件覆盖式保存。
+
 ### 目录和 FILE 的原生 QUERY_INFO
 
 在已授权且已打开的普通逻辑根句柄上，支持 FileAllInformation、Basic、Standard、Internal 和 NetworkOpen 五类文件属性。复用 Samba 对请求长度、协商上限、credits 和 FID 的实际检查；用该原 TCON 的零行查询再核 SMB 当前代、共享与实际已持 F，待回调再核同一会话和根柄。由 Samba 原信息编码器返回逻辑目录、逻辑序号、零数据长度与未提供的时间；不回退宿主 stat，不返回底层文件系统信息、EA 或安全描述符。普通及回收 FILE 的已选真实柄也支持这五类，并可查询本柄实际已授 Access 与无重解析点的 AttributeTag。成员用同一私端的零字节确认再核原授权和已选图，不读正文，也不借 FILE_READ_DATA 授权；需要 READ_ATTRIBUTES 的类仍核该权。EOF 来自本柄实际显示的逻辑长度；分配字段和 CREATE/目录页一样是逻辑长度按 4 KiB 取整的 SMB 展示值（到带符号上限时用最大可表示的 4 KiB 倍数），不是宿主磁盘占用、目录配额或预留。普通名的 DeletePending 取真实原生共享状态；FileAll 不带路径或文件名。未知文件类、EA、安全描述符等不借宿主实现。现有对象的 `FILE_OPEN` 可以不指定类型：空路径或一个首装目录名仍取原 TCON 的目录选择；普通后续路径由该卷同一已授权 SQL 切面按准确父与原名选择文件或目录，再按当下的准确名称重核并实际打开对应原物；回收路径只接受原 `DeleteOp` 轮次或该轮次下的准确文件。不存在、待定或原物不可核都不尝试另一类；省略类型不会新建或授额外权限。CREATE 可请求 QFid，返回与 FileInternalInformation 相同的逻辑文件号和单一虚拟盘编号，不能提供唯一文件号的目录用标准全 1 标记，不暴露宿主 inode/卷号；结果仍来自已选的真句柄。符合结构的初次 RqLs 或 BATCH 的 DHnQ 只是提示，不给缓存、耐久重连或 replay。CREATE 的 [MxAc](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/828a4d2d-0c9b-4c1c-8d2b-cc474172baa5) 返回同一原句柄在本次受管打开策略下的最大访问掩码，不是本次已授掩码，也不是给后续操作的授权。对象未提供可比较的 ChangeTime，所以可选时间戳不替代重新计算。Apple 客户端初次 [AAPL 服务器探测](https://github.com/apple-oss-distributions/SMBClient/blob/main/kernel/netsmb/smb_2.h#L81-L96)的固定查询可随普通 CREATE 送来；服务器只核其结构并忽略，不返回 AAPL、不开 Apple 会话或扩展目录记录，也不处理 Resolve ID 等其他命令。其他上下文依旧拒绝。未验证 Linux/Windows/macOS 客户端挂载或应用保存，也未执行用例。

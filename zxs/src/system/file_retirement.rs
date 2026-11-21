@@ -18,15 +18,18 @@ struct Ticket{seq:i64,op:OperationId,source:Place,target:VolumeId,parent:Directo
 fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
     src.at(|db,_|{
         let q=db.prepare(c"SELECT r.seq,r.transfer_op,r.guard,m.file_id,m.source_op,m.source_gen,m.source_id,m.source_name,
-            m.direction,m.target_id,m.source_parent,m.target_parent FROM main.file_transfer_source r JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
+            m.direction,m.target_id,m.source_parent,m.target_parent,m.source_backing,m.source_terminal
+            FROM main.file_transfer_source r JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
             JOIN main.operation o ON o.op_id=r.transfer_op AND o.kind=12 AND o.state=1
             WHERE r.status=0 AND r.seq>?1 ORDER BY r.seq LIMIT 1")?;
         q.bind_integer(1,after)?;
         if !work_record::start_one(&q)?{return Ok(None);}
         let seq=q.integer(0)?;let op=OperationId(q.array(1)?);let names=q.blob(2,MAX_RETIRE_PROOF)?.to_vec();
         let role=match q.byte(8)?{1=>Role::File,2=>Role::Recycle,_=>return Err(invalid("wrong completed transfer direction"))};
-        let source=Place{file:FileId(q.array(3)?),op:OperationId(q.array(4)?),generation:q.integer(5)?,
-            volume:VolumeId(q.array(6)?),name:display::component(q.blob(7,222)?,222)?.to_owned(),role,parent:DirectoryParent::from_bytes(q.array(10)?)};
+        let file=FileId(q.array(3)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
+        let backing=Place::read_backing(&q,12,13,file,&name)?;
+        let source=Place{file,op:OperationId(q.array(4)?),generation:q.integer(5)?,
+            volume:VolumeId(q.array(6)?),name,role,parent:DirectoryParent::from_bytes(q.array(10)?),backing};
         let target=VolumeId(q.array(9)?);let parent=DirectoryParent::from_bytes(q.array(11)?);q.done()?;
         Ok(Some(Ticket{seq,op,source,target,parent,names}))
     })
@@ -46,6 +49,7 @@ impl Ticket{
         if !work_record::start_one(&q)?{return Err(invalid("retirement is no longer the original confirmed transfer"));}
         q.done()?;
         let p=Place::current(db,c,self.source.file)?;
+        Place::require_no_rename(db,p.file)?;
         if p.generation<=self.source.generation||
            (p.generation==self.source.generation+1&&(p.op!=self.op||p.volume!=self.target||p.parent!=self.parent)){
             return Err(invalid("no descendant selected placement for retirement"));
@@ -54,14 +58,17 @@ impl Ticket{
     }
 }
 fn applied_target(db:&Connection,place:&Place)->io::Result<RetireProof>{
+    let backing=place.backing.ok_or_else(||invalid("no physical transfer outputs this selected FILE"))?;
     let q=db.prepare(c"SELECT r.target_guard FROM main.file_transfer_source r
         JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
         JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
-        WHERE r.transfer_op=?1 AND m.file_id=?2 AND m.source_gen+1=?3 AND m.target_id=?4 AND m.target_name=?5
-          AND (CASE m.direction WHEN 1 THEN 1 ELSE 2 END)=?6 AND m.target_parent=?7")?;
-    q.bind_bytes(1,&place.op.0)?;q.bind_bytes(2,&place.file.0)?;q.bind_integer(3,place.generation)?;
-    q.bind_bytes(4,&place.volume.0)?;q.bind_bytes(5,place.name.as_bytes())?;q.bind_integer(6,match place.role{Role::Recycle=>1,Role::File=>2,_=>return Err(invalid("invalid applied target role"))})?;
-    q.bind_bytes(7,&place.parent.bytes())?;
+        JOIN main.file_location l ON l.file_id=m.file_id AND l.backing_op=m.transfer_op
+        JOIN main.operation h ON h.op_id=l.position_op AND h.state=1
+        WHERE r.transfer_op=?1 AND l.position_op=?2 AND l.file_id=?3
+          AND m.target_id=l.volume_id AND m.target_parent=l.parent_id AND (CASE m.direction WHEN 1 THEN 1 ELSE 2 END)=l.role
+          AND ((h.kind=12 AND m.target_name=l.display AND m.source_gen+1=l.generation)
+               OR (h.kind=14 AND l.role=2 AND m.source_gen+1<l.generation))")?;
+    q.bind_bytes(1,&backing.0)?;q.bind_bytes(2,&place.op.0)?;q.bind_bytes(3,&place.file.0)?;
     if !work_record::start_one(&q)?{return Err(invalid("no genuine physical confirmation of current retirement target"));}
     let result=RetireProof::decode(q.blob(0,MAX_RETIRE_PROOF)?)?;q.done()?;Ok(result)
 }
@@ -102,8 +109,8 @@ fn run(src:&InitialReader,t:&Ticket,live:&impl Fn()->io::Result<()>,point:&impl 
         Ok((c,b,p,m,old,new))
     })?;
     let source=Volume::open(src,&c,&t.source,from_parent.as_ref())?;
-    let has_parent=t.source.generation>1;
-    let portable=Birth::placed_container(&t.source.name,t.source.file)?;
+    let has_parent=t.source.backing.is_some();
+    let portable=t.source.leaf()?;
     let witness=birth.witness()?;let header=birth.header();
     let original=t.source.private_leaf()?.unwrap_or_else(||portable.clone());
     let isolated=Birth::retirement_name(t.op)?;

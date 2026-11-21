@@ -100,11 +100,11 @@ pub(super) fn display_free_in_sample(db:&Connection,c:&Catalog,f:&HeldDir,b:&Bir
 /// SQLite half of an unusual display name equal to another FILE's terminal.
 /// Does not look up any path or open F; the physical half is checked by the caller.
 #[derive(PartialEq,Eq)]
-pub(in crate::system::reader) struct Alias{birth:Birth,members:Option<Members>}
+pub(in crate::system::reader) struct Alias{birth:Birth,leaf:CString,members:Option<Members>}
 impl Alias{
     pub(in crate::system::reader) fn check(&self,root:&HeldDir,shape:&BTreeSet<Vec<u8>>)
         ->io::Result<crate::ordinary::portable_birth::Installed>{
-        self.birth.working_records_at(root,shape,false,|scope|match &self.members{
+        self.birth.working_records_in(root,shape,&self.leaf,false,|scope|match &self.members{
             Some(live)=>live.require(scope),
             // A proved former container can explain a physical spelling;
             // it cannot grant FILE access or be inspected for its contents.
@@ -117,22 +117,24 @@ pub(in crate::system::reader) fn display_owner(db:&Connection,c:&Catalog,b:&Birt
 }
 pub(in crate::system::reader) fn display_owner_at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<Alias>>{
     if Birth::reserved_spelling(name.as_bytes()){return Ok(None);}
-    let s=db.prepare(c"SELECT e.create_op,EXISTS(SELECT 1 FROM main.file_location l WHERE l.file_id=e.file_id
-       AND l.generation=1 AND l.position_op=e.create_op AND l.role=2 AND l.volume_id=e.volume_id AND l.parent_id=e.parent_id)
-      FROM main.root_entry e WHERE e.volume_id=?1 AND e.terminal=?2 AND e.parent_id=?3
-        AND (EXISTS(SELECT 1 FROM main.file_location l WHERE l.file_id=e.file_id AND l.generation=1 AND l.role=2
-                        AND l.position_op=e.create_op AND l.volume_id=e.volume_id AND l.parent_id=e.parent_id)
-          OR EXISTS(SELECT 1 FROM main.file_transfer m JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
-                     WHERE m.file_id=e.file_id AND m.direction=1 AND m.source_op=e.create_op
-                       AND m.source_gen=1 AND m.source_id=e.volume_id AND m.source_name=e.display AND m.source_parent=e.parent_id))")?;
+    let s=db.prepare(c"SELECT e.create_op,1,l.display FROM main.file_location l
+      JOIN main.root_entry e ON e.file_id=l.file_id
+      JOIN main.operation o ON o.op_id=l.position_op AND o.state=1
+      WHERE l.volume_id=?1 AND l.flat_terminal=?2 AND l.parent_id=?3 AND l.role=2 AND l.backing_op IS NULL
+      UNION ALL SELECT e.create_op,0,m.source_name FROM main.file_transfer m
+      JOIN main.root_entry e ON e.file_id=m.file_id
+      JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
+      WHERE m.source_id=?1 AND m.source_terminal=?2 AND m.source_parent=?3 AND m.direction=1 AND m.source_backing IS NULL")?;
     s.bind_bytes(1,&volume.0)?;s.bind_bytes(2,name.as_bytes())?;s.bind_bytes(3,&parent.bytes())?;
     match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(None),rc=>{check(rc)?;return Err(invalid("cannot inspect a colliding native name"));}}
-    let op=OperationId(s.array(0)?);let current=s.byte(1)?==1;s.done()?;
+    let op=OperationId(s.array(0)?);let current=s.byte(1)?==1;
+    let source=display::component(s.blob(2,222)?,222)?.to_owned();s.done()?;
     let Some(other)=by_op(db,c,op)?.filter(|o|o.committed)else{return Ok(None);};
-    if other.birth.volume!=volume||other.parent!=parent||other.birth.name==name||other.birth.container()?.to_bytes()!=name.as_bytes(){
+    let leaf=Birth::placed_container(&source,other.birth.file)?;
+    if other.birth.volume!=volume||other.parent!=parent||source==name||leaf.to_bytes()!=name.as_bytes(){
         return Err(invalid("wrong confirmed terminal for displayed spelling"));}
     let members=if current{Some(work_record::members(db,c,&other.birth)?)}else{None};
-    Ok(Some(Alias{birth:other.birth,members}))
+    Ok(Some(Alias{birth:other.birth,leaf,members}))
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]

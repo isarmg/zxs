@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#include "lib/util/sys_rw_data.h"
+#include "smbd/zxs_read_delivery.inc"
 static int zxs_create_drop_route(struct smbd_smb2_create_state *s)
 {
 	TALLOC_FREE(s->zxs_wait);
@@ -90,6 +92,59 @@ static void zxs_birth_confirmed(struct tevent_req *sub)
 	TALLOC_FREE(s->zxs_link);s->zxs_provisional=false;s->result->fsp_flags.closing=false;
 	zxs_create_success(req,FILE_WAS_CREATED);
 }
+/* A previously returned storage member is not an OPEN. First register
+ * the native share entry, then ask that exact private member for a final
+ * zero-byte proof. This closes the interval when an ordinary rename had
+ * the sole native open but a different CREATE was waiting for this slot. */
+static void zxs_existing_file_checked(struct tevent_req *sub)
+{
+	struct tevent_req *req=tevent_req_callback_data(sub,struct tevent_req);
+	struct smbd_smb2_create_state *s=tevent_req_data(req,struct smbd_smb2_create_state);
+	struct smbd_smb2_request *n=s->smb2req;
+	const struct zxs_read_fsp *f=zxs_find_read(s->result);
+	uint8_t *proof=NULL;size_t bytes=0;
+	NTSTATUS status=zxs_delivery_recv(sub,s,&proof,&bytes);
+	s->zxs_wait=NULL;TALLOC_FREE(sub);TALLOC_FREE(proof);
+	if(!NT_STATUS_IS_OK(status)||bytes!=0||!s->zxs_provisional||f==NULL||
+	   f->writable||zxs_folder_retained(&f->folder)||f->fd<0||
+	   !NT_STATUS_IS_OK(n->xconn->transport.status)||!zxs_request_folder_current(n,&f->folder)||
+	   f->tcon!=n->tcon||f->session!=n->session||f->seq!=n->session->global->auth_session_info_seqnum||
+	   s->result->conn!=n->tcon->compat||s->result->vuid!=n->session->global->session_wire_id||
+	   !s->result->fsp_flags.closing||zxs_member_held(f->fd)!=0||
+	   !change_to_user_and_service(s->result->conn,s->result->vuid)){
+		zxs_create_drop_route(s);
+		tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
+	}
+	TALLOC_FREE(s->zxs_link);
+	s->zxs_provisional=false;s->result->fsp_flags.closing=false;
+	zxs_create_success(req,FILE_WAS_OPENED);
+}
+static void zxs_existing_file_finish(struct tevent_req *req)
+{
+	struct smbd_smb2_create_state *s=tevent_req_data(req,struct smbd_smb2_create_state);
+	const struct zxs_read_fsp *f=zxs_find_read(s->result);
+	/* A writer already holds the exact storage FILE EX before its reply,
+	 * so it never competes with a simultaneous ordinary physical rename. */
+	if(s->zxs_is_dir||(f!=NULL&&(f->writable||zxs_folder_retained(&f->folder)))){
+		zxs_create_success(req,FILE_WAS_OPENED);return;
+	}
+	s->result->fsp_flags.closing=true;s->zxs_provisional=true;
+	if(f==NULL){
+		zxs_create_drop_route(s);
+		tevent_req_nterror(req,NT_STATUS_ACCESS_DENIED);return;
+	}
+	s->zxs_link=aio_add_req_to_fsp(s->result,req);
+	if(s->zxs_link!=NULL){
+		talloc_steal(s,s->zxs_link);
+		s->zxs_wait=zxs_delivery_send(s,s->ev,f->fd,0,0,0);
+		if(s->zxs_wait!=NULL){
+			tevent_req_set_callback(s->zxs_wait,zxs_existing_file_checked,req);
+			return;
+		}
+	}
+	zxs_create_drop_route(s);
+	tevent_req_nterror(req,NT_STATUS_NO_MEMORY);
+}
 static void zxs_create_open(struct tevent_req *req,const struct zxs_member_info *member,int *fd,bool offered)
 {
 	struct smbd_smb2_create_state *s=tevent_req_data(req,struct smbd_smb2_create_state);
@@ -108,7 +163,7 @@ static void zxs_create_open(struct tevent_req *req,const struct zxs_member_info 
 		SMBPROFILE_IOBYTES_ASYNC_SET_IDLE(s->smb2req->profile);return;
 	}
 	if(tevent_req_nterror(req,status))return;
-	if(!offered){zxs_create_success(req,FILE_WAS_OPENED);return;}
+	if(!offered){zxs_existing_file_finish(req);return;}
 	/* The original native share-mode entry already exists. The reserved
 	 * OPEN ID is not usable until the affirmative FILE receipt. */
 	s->result->fsp_flags.closing=true;s->zxs_provisional=true;

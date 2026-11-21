@@ -1955,6 +1955,111 @@
  	}
  
  	return pdb;
+--- a/source3/locking/share_mode_lock.c
++++ b/source3/locking/share_mode_lock.c
+@@ -2231,7 +2231,8 @@
+ 	size_t *i,
+ 	uint8_t *data,
+ 	size_t *num_share_modes,
+-	bool *writeback)
++	bool *writeback,
++	bool *strict_error)
+ {
+ 	DATA_BLOB blob = {
+ 		.data = data + (*i) * SHARE_MODE_ENTRY_SIZE,
+@@ -2250,6 +2251,10 @@
+ 		(ndr_pull_flags_fn_t)ndr_pull_share_mode_entry);
+ 	if (!NDR_ERR_CODE_IS_SUCCESS(ndr_err)) {
+ 		DBG_WARNING("ndr_pull_share_mode_entry failed\n");
++		if (strict_error != NULL) {
++			*strict_error = true;
++			return true;
++		}
+ 		*i += 1;
+ 		return false;
+ 	}
+@@ -2306,6 +2311,10 @@
+ 			DBG_WARNING("ndr_push_share_mode_entry "
+ 				    "failed: %s\n",
+ 				    ndr_errstr(ndr_err));
++			if (strict_error != NULL) {
++				*strict_error = true;
++				return true;
++			}
+ 			/*
+ 			 * Not much we can do, just ignore it
+ 			 */
+@@ -2323,12 +2332,13 @@
+ 	return false;
+ }
+ 
+-bool share_mode_forall_entries(
++static bool share_mode_scan_entries(
+ 	struct share_mode_lock *lck,
+ 	bool (*fn)(struct share_mode_entry *e,
+ 		   bool *modified,
+ 		   void *private_data),
+-	void *private_data)
++	void *private_data,
++	bool complete)
+ {
+ 	struct file_id id = share_mode_lock_file_id(lck);
+ 	struct share_mode_data *d = NULL;
+@@ -2338,7 +2348,7 @@
+ 	size_t num_share_entries;
+ 	bool writeback = false;
+ 	NTSTATUS status;
+-	bool stop = false;
++	bool stop = false, strict_error = false;
+ 	size_t i;
+ 
+ 	status = share_mode_lock_access_private_data(lck, &d);
+@@ -2371,10 +2381,17 @@
+ 			&i,
+ 			share_entries,
+ 			&num_share_entries,
+-			&writeback);
++			&writeback,
++			complete ? &strict_error : NULL);
+ 		if (stop) {
+ 			break;
+ 		}
++	}
++	/* A rename needs a complete decoded inventory. A codec error or
++	 * a visitor rejection discards the uncommitted working buffer. */
++	if (complete && (stop || strict_error)) {
++		TALLOC_FREE(ltdb);
++		return false;
+ 	}
+ 
+ 	DBG_DEBUG("num_share_entries=%zu, writeback=%d\n",
+@@ -2406,6 +2423,26 @@
+ 	}
+ 
+ 	return true;
++}
++
++bool share_mode_forall_entries(
++	struct share_mode_lock *lck,
++	bool (*fn)(struct share_mode_entry *e,
++		   bool *modified,
++		   void *private_data),
++	void *private_data)
++{
++	return share_mode_scan_entries(lck, fn, private_data, false);
++}
++
++bool zxs_share_mode_scan_rename(
++	struct share_mode_lock *lck,
++	bool (*fn)(struct share_mode_entry *e,
++		   bool *modified,
++		   void *private_data),
++	void *private_data)
++{
++	return share_mode_scan_entries(lck, fn, private_data, true);
+ }
+ 
+ struct share_mode_count_entries_state {
 --- a/source3/smbd/server_exit.c
 +++ b/source3/smbd/server_exit.c
 @@ -258,6 +258,14 @@
@@ -2380,9 +2485,11 @@
  	}
 --- a/source3/smbd/open.c
 +++ b/source3/smbd/open.c
-@@ -26,7 +26,9 @@
+@@ -25,8 +25,11 @@
+ #include "lib/util/server_id.h"
  #include "printing.h"
  #include "locking/share_mode_lock.h"
++#include "locking/proto.h"
  #include "smbd/smbd.h"
 +#include "smbd/zxs_file_vfs.h"
  #include "smbd/globals.h"
@@ -2390,7 +2497,7 @@
  #include "fake_file.h"
  #include "../libcli/security/security.h"
  #include "../librpc/gen_ndr/ndr_security.h"
-@@ -1345,7 +1347,8 @@
+@@ -1345,7 +1348,8 @@
  	FILE_EXECUTE|
  	DELETE_ACCESS;
  
@@ -2400,7 +2507,7 @@
  			   uint32_t e_share_access,
  			   uint32_t access_mask,
  			   uint32_t share_access)
-@@ -1373,6 +1376,11 @@
+@@ -1373,6 +1377,11 @@
  		return false;
  	}
  
@@ -2412,7 +2519,7 @@
  	conflict = mask_conflict(
  		access_mask, e_access_mask, FILE_WRITE_DATA | FILE_APPEND_DATA,
  		share_access, e_share_access, FILE_SHARE_WRITE);
-@@ -1587,6 +1595,7 @@
+@@ -1587,6 +1596,7 @@
  }
  
  static NTSTATUS open_mode_check(connection_struct *conn,
@@ -2420,7 +2527,7 @@
  				struct file_id fid,
  				struct share_mode_lock *lck,
  				uint32_t access_mask,
-@@ -1623,6 +1632,7 @@
+@@ -1623,6 +1633,7 @@
  		lck, &state.access_mask, &state.share_access, NULL);
  
  	conflict = share_conflict(
@@ -2428,7 +2535,7 @@
  		state.access_mask,
  		state.share_access,
  		access_mask,
-@@ -1664,6 +1674,7 @@
+@@ -1664,6 +1675,7 @@
  	}
  
  	conflict = share_conflict(
@@ -2436,7 +2543,7 @@
  		state.access_mask,
  		state.share_access,
  		access_mask,
-@@ -2597,7 +2608,10 @@
+@@ -2597,7 +2609,10 @@
  	*pgranted = 0;
  
  	status = open_mode_check(
@@ -2448,7 +2555,21 @@
  	if (NT_STATUS_EQUAL(status, NT_STATUS_SHARING_VIOLATION)) {
  		sharing_violation = true;
  		status = NT_STATUS_OK; /* handled later */
-@@ -5294,6 +5308,8 @@
+@@ -3462,6 +3477,13 @@
+ 	 * tdb chainlock.
+ 	 */
+ 	*keep_locked = false;
++
++	/* The original FILE remains the key across its logical rename.
++	 * Never admit a second ordinary handle in the handoff window. */
++	if(zxs_find_read(state->fsp)!=NULL&&(state->fsp->name_hash&UINT32_C(0x80000000))==0&&
++	   zxs_rename_blocks_ordinary_open(lck)){
++		state->status=NT_STATUS_SHARING_VIOLATION;return;
++	}
+ 
+ 	state->status = check_and_store_share_mode(state->fsp,
+ 						   state->req,
+@@ -5294,6 +5316,8 @@
  	return NT_STATUS_OK;
  }
  
@@ -4629,7 +4750,7 @@
  			lease = fsp_get_smb2_lease(fsp);
  			if (lease != NULL) {
  				dt->parent_lease_key = lease->parent_lease_key;
-@@ -1014,6 +1030,113 @@
+@@ -1014,6 +1030,214 @@
  		}
  	}
  	return NULL;
@@ -4740,12 +4861,113 @@
 +	   (share_mode_forall_entries(lck,zxs_find_close_entry,&q)&&q.found&&!q.other)){
 +		reset_delete_on_close_lck(fsp,lck);
 +	}
++}
++
++/* While a selected ordinary open renames its logical link, block both
++ * old- and new-name admissions under the actual FILE share-mode lock.
++ * Retained links and delete-on-close keep their independent identity. */
++struct zxs_rename_entries {
++	struct server_id owner;
++	uint64_t open_id;
++	uint32_t old_hash,new_hash;
++	bool check_name,write,seen,found,other;
++};
++static bool zxs_scan_ordinary_rename(struct share_mode_entry *e,bool *modified,void *private_data)
++{
++	struct zxs_rename_entries *q=private_data;
++	const bool owner=server_id_equal(&q->owner,&e->pid)&&q->open_id==e->share_file_id;
++	const bool retained=(e->name_hash&UINT32_C(0x80000000))!=0;
++	if(owner){
++		/* Even a stale or retained duplicate is not a unique owner. */
++		if(q->seen||retained)return true;
++		q->seen=true;
++	}
++	if(retained||share_entry_stale_pid(e))return false;
++	if(!owner||(q->check_name&&e->name_hash!=q->old_hash)){
++		q->other=true;return q->write;
++	}
++	q->found=true;
++	if(q->write){e->name_hash=q->new_hash;*modified=true;}
++	return false;
++}
++static void zxs_clear_rename(struct share_mode_data *d)
++{
++	d->zxs_ordinary_rename=false;ZERO_STRUCT(d->zxs_rename_owner);
++	d->zxs_rename_file_id=0;d->modified=true;
++}
++bool zxs_rename_blocks_ordinary_open(struct share_mode_lock *lck)
++{
++	struct share_mode_data *d=NULL;
++	if(!NT_STATUS_IS_OK(share_mode_lock_access_private_data(lck,&d)))return true;
++	if(!d->zxs_ordinary_rename)return false;
++	struct zxs_rename_entries q={.owner=d->zxs_rename_owner,.open_id=d->zxs_rename_file_id};
++	if(!zxs_share_mode_scan_rename(lck,zxs_scan_ordinary_rename,&q)||q.found)return true;
++	/* The original open died. Never recover a ZXS operation using this
++	 * lock record; the independent storage receipt decides that. */
++	zxs_clear_rename(d);return false;
++}
++NTSTATUS zxs_claim_ordinary_rename(files_struct *fsp)
++{
++	if(fsp==NULL||fsp->conn==NULL||fsp->fsp_flags.is_directory||fsp->fsp_flags.closing||
++	   (fsp->access_mask&SEC_STD_DELETE)==0||
++	   (fsp->name_hash&UINT32_C(0x80000000))!=0||fsp_get_smb2_lease(fsp)!=NULL){
++		return NT_STATUS_ACCESS_DENIED;
++	}
++	struct zxs_rename_entries q={
++		.owner=messaging_server_id(fsp->conn->sconn->msg_ctx),
++		.open_id=fh_get_gen_id(fsp->fh),.old_hash=fsp->name_hash,.check_name=true,
++	};
++	struct share_mode_lock *lck=get_existing_share_mode_lock(talloc_tos(),fsp->file_id);
++	if(lck==NULL)return NT_STATUS_ACCESS_DENIED;
++	struct share_mode_data *d=NULL;
++	NTSTATUS answer=NT_STATUS_ACCESS_DENIED;
++	if(!NT_STATUS_IS_OK(share_mode_lock_access_private_data(lck,&d))||
++	   !zxs_share_mode_scan_rename(lck,zxs_scan_ordinary_rename,&q)||!q.found)goto done;
++	if(q.other||d->zxs_ordinary_rename||find_delete_on_close_token(d,fsp->name_hash)!=NULL){
++		answer=NT_STATUS_SHARING_VIOLATION;goto done;
++	}
++	d->zxs_ordinary_rename=true;d->zxs_rename_owner=q.owner;d->zxs_rename_file_id=q.open_id;d->modified=true;
++	answer=NT_STATUS_OK;
++done:
++	TALLOC_FREE(lck);return answer;
++}
++/* The authenticated storage result is already settled. Update only the
++ * one native owner's pathname and admission record, never the host VFS. */
++bool zxs_release_ordinary_rename(files_struct *fsp,const struct smb_filename *target)
++{
++	struct zxs_rename_entries q={
++		.owner=messaging_server_id(fsp->conn->sconn->msg_ctx),
++		.open_id=fh_get_gen_id(fsp->fh),.old_hash=fsp->name_hash,.check_name=target!=NULL,
++	};
++	struct share_mode_lock *lck=get_existing_share_mode_lock(talloc_tos(),fsp->file_id);
++	if(lck==NULL)return false;
++	struct share_mode_data *d=NULL;bool ok=false;
++	if(!NT_STATUS_IS_OK(share_mode_lock_access_private_data(lck,&d))||!d->zxs_ordinary_rename||
++	   !server_id_equal(&d->zxs_rename_owner,&q.owner)||d->zxs_rename_file_id!=q.open_id)goto done;
++	if(!zxs_share_mode_scan_rename(lck,zxs_scan_ordinary_rename,&q))goto done;
++	if(target!=NULL){
++		if(!q.found||q.other||
++		   target->stream_name!=NULL||d->stream_name!=NULL||
++		   find_delete_on_close_token(d,fsp->name_hash)!=NULL)goto done;
++		char *base=talloc_strdup(d,target->base_name);
++		if(base==NULL||!NT_STATUS_IS_OK(fsp_set_smb_fname(fsp,target))){TALLOC_FREE(base);goto done;}
++		fsp->name_hash&=UINT32_C(0x7fffffff);
++		fsp->fsp_name->st.cached_dos_attributes=FILE_ATTRIBUTE_NORMAL;
++		q.seen=false;q.found=false;q.write=true;q.new_hash=fsp->name_hash;
++		if(!zxs_share_mode_scan_rename(lck,zxs_scan_ordinary_rename,&q)||!q.found){
++			TALLOC_FREE(base);goto done;
++		}
++		TALLOC_FREE(d->base_name);d->base_name=base;
++	}
++	zxs_clear_rename(d);ok=true;
++done:
++	TALLOC_FREE(lck);return ok;
  }
  
  /****************************************************************************
 --- a/source3/locking/proto.h
 +++ b/source3/locking/proto.h
-@@ -117,6 +117,10 @@
+@@ -117,6 +117,17 @@
  				enum brl_type lock_type,
  				enum brl_flavour lock_flav,
  				struct lock_struct *plock);
@@ -4753,6 +4975,13 @@
 +bool zxs_store_disposition(files_struct *,bool,const uint8_t mark[16]);
 +int zxs_claim_explicit_delete(files_struct *,uint8_t mark[16]);
 +void zxs_forget_virtual_disposition(struct share_mode_lock *,files_struct *,bool implicit);
++struct share_mode_entry;
++/* For rename only: a visitor's true rejects the entire pass without storing. */
++bool zxs_share_mode_scan_rename(struct share_mode_lock *,
++	bool (*)(struct share_mode_entry *,bool *,void *), void *);
++bool zxs_rename_blocks_ordinary_open(struct share_mode_lock *);
++NTSTATUS zxs_claim_ordinary_rename(files_struct *);
++bool zxs_release_ordinary_rename(files_struct *,const struct smb_filename *);
  bool strict_lock_check_default(files_struct *fsp,
  			       struct lock_struct *plock);
  NTSTATUS query_lock(files_struct *fsp,
@@ -5261,18 +5490,17 @@
  
  static void smbd_smb2_request_setinfo_done(struct tevent_req *subreq);
  NTSTATUS smbd_smb2_request_process_setinfo(struct smbd_smb2_request *req)
-@@ -125,19 +127,32 @@
+@@ -125,19 +127,31 @@
  	 * Windows never sends async interim responses if a rename triggers a
  	 * lease break. See test smb2.lease.compound_rename_middle.
  	 */
 -	return smbd_smb2_request_pending_queue(req, subreq, 0);
 +	const struct zxs_read_fsp *managed=zxs_find_read(in_fsp);
-+	const bool retained_rename=managed!=NULL&&zxs_folder_retained(&managed->folder)&&
-+		!zxs_folder_round(&managed->folder)&&
-+		in_info_type==SMB2_0_INFO_FILE&&in_file_info_class+1000==SMB_FILE_RENAME_INFORMATION;
-+	/* The dedicated filesystem has no leases. Only possibly long real
-+	 * retained moves use the routine single/last async reply. */
-+	return smbd_smb2_request_pending_queue(req, subreq, retained_rename?500:0);
++	const bool managed_rename=managed!=NULL&&in_info_type==SMB2_0_INFO_FILE&&
++		in_file_info_class+1000==SMB_FILE_RENAME_INFORMATION;
++	/* The dedicated filesystem has no leases. A sync may wait on the
++	 * actual file's filesystem in both rename and retained restore. */
++	return smbd_smb2_request_pending_queue(req, subreq, managed_rename?500:0);
  }
  
  static void smbd_smb2_request_setinfo_done(struct tevent_req *subreq)
@@ -5291,13 +5519,13 @@
 +	if(unknown){
 +		struct smbXsrv_connection *xconn=req->xconn;
 +		zxs_smb2_retire_birth(req);
-+		smbd_server_connection_terminate(xconn,"ZXS native restore outcome unconfirmed");
++		smbd_server_connection_terminate(xconn,"ZXS native namespace outcome unconfirmed");
 +		return;
 +	}
  	if (!NT_STATUS_IS_OK(status)) {
  		error = smbd_smb2_request_error(req, status);
  		if (!NT_STATUS_IS_OK(error)) {
-@@ -148,7 +163,7 @@
+@@ -148,7 +162,7 @@
  		return;
  	}
  
@@ -5306,7 +5534,7 @@
  	if (outbody.data == NULL) {
  		error = smbd_smb2_request_error(req, NT_STATUS_NO_MEMORY);
  		if (!NT_STATUS_IS_OK(error)) {
-@@ -181,9 +196,53 @@
+@@ -181,9 +195,53 @@
  	bool delay;
  	bool rename_dst_check_done;
  	bool rename_dst_parent_check_done;
@@ -5360,7 +5588,7 @@
  
  static void smbd_smb2_setinfo_cleanup(struct tevent_req *req,
  				      enum tevent_req_state req_state)
-@@ -222,6 +281,58 @@
+@@ -222,6 +280,66 @@
  	state->smb2req = smb2req;
  	state->fsp = fsp;
  	state->data = in_input_buffer;
@@ -5386,13 +5614,21 @@
 +			tevent_req_set_callback(state->zxs_wait,zxs_set_xfer_done,req);return req;
 +		}
 +		if(in_file_info_class+1000==SMB_FILE_RENAME_INFORMATION){
-+			char *folder=NULL,*name=NULL;
-+			if(in_additional_information!=0||!zxs_restore_input(state,in_input_buffer,&folder,&name)){
++			const struct zxs_read_fsp *m=zxs_find_read(fsp);
++			if(m==NULL){tevent_req_nterror(req,NT_STATUS_NOT_SUPPORTED);return tevent_req_post(req,ev);}
++			const bool ordinary=!zxs_folder_retained(&m->folder);
++			char *folder=NULL,*name=NULL,*target=NULL;
++			const char *leaf=NULL;
++			const bool valid=ordinary
++				? zxs_ordinary_rename_input(state,in_input_buffer,fsp->fsp_name==NULL?NULL:fsp->fsp_name->base_name,&target,&leaf)
++				: zxs_restore_input(state,in_input_buffer,&folder,&name);
++			if(in_additional_information!=0||!valid){
 +				tevent_req_nterror(req,NT_STATUS_INVALID_PARAMETER);return tevent_req_post(req,ev);
 +			}
 +			state->zxs_body=smbd_smb2_generate_outbody(smb2req,2);
 +			if(tevent_req_nomem(state->zxs_body.data,req))return tevent_req_post(req,ev);
-+			state->zxs_wait=zxs_xfer_send(state,ev,req,smb2req,fsp,ZXS_XFER_RESTORE,folder,name,NULL);
++			state->zxs_wait=ordinary?zxs_rename_send(state,ev,req,smb2req,fsp,target,leaf)
++				:zxs_xfer_send(state,ev,req,smb2req,fsp,ZXS_XFER_RESTORE,folder,name,NULL);
 +			if(tevent_req_nomem(state->zxs_wait,req))return tevent_req_post(req,ev);
 +			tevent_req_set_cancel_fn(req,zxs_set_xfer_cancel);
 +			tevent_req_set_callback(state->zxs_wait,zxs_set_xfer_done,req);return req;
@@ -5419,7 +5655,7 @@
  
  	tevent_req_set_cleanup_fn(req, smbd_smb2_setinfo_cleanup);
  
-@@ -945,9 +1056,11 @@
+@@ -945,9 +1063,11 @@
  	smbd_smb2_setinfo_lease_break_check(req);
  }
  
@@ -5480,3 +5716,14 @@
  	} delete_token;
  
  	typedef [public,bitmap16bit] bitmap {
+@@ -72,6 +78,10 @@
+ 		[size_is(num_delete_tokens)] delete_token delete_tokens[];
+ 		NTTIME old_write_time;
+ 		NTTIME changed_write_time;
++		/* Dedicated ZXS native lock DB only. Not client or pool bytes. */
++		boolean8 zxs_ordinary_rename;
++		server_id zxs_rename_owner;
++		udlong zxs_rename_file_id;
+ 		[skip] boolean8 not_stored;
+ 		[skip] boolean8 modified;
+ 		[ignore] file_id id; /* In memory key used to lookup cache. */

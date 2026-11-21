@@ -4,6 +4,11 @@ use super::{bad,unsupported,reservation::Existing};
 use rusqlite::{config::DbConfig,Connection,FileControl,OpenFlags,MAIN_DB};
 use std::{io,time::Duration};
 
+// SQLite bounds internal table/index/trigger hash entries, including the
+// schema table and WITHOUT ROWID primary indexes that have no sqlite_schema
+// row. This parser/engine budget is not the canonical catalogue row limit.
+const MAX_ENGINE_SCHEMA_OBJECTS:i32=192;
+
 pub(super) fn path_limit()->io::Result<usize>{helper_linux_evidence::sqlite_vfs::unix_sqlite_path_limit()}
 
 pub(super) fn verified(conn:&Connection,readonly:bool)->io::Result<()>{
@@ -85,7 +90,7 @@ fn configure(db:&Connection,ro:bool)->io::Result<()>{
 pub(super) fn limits(db:&Connection)->io::Result<()>{
     let fail=|_|bad("cannot establish the SQLite schema/data limits");
     use rusqlite::limits::Limit;
-    for (key,n) in [(Limit::SQLITE_LIMIT_LENGTH,1024*1024),(Limit::SQLITE_LIMIT_SCHEMA,super::catalog::MAX_OBJECTS)]{
+    for (key,n) in [(Limit::SQLITE_LIMIT_LENGTH,1024*1024),(Limit::SQLITE_LIMIT_SCHEMA,MAX_ENGINE_SCHEMA_OBJECTS)]{
         db.set_limit(key,n).map_err(fail)?;
         let actual=db.limit(key).map_err(fail)?;
         if actual<=0||actual>n{return Err(bad("could not bound schema/data values"));}

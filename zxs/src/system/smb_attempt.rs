@@ -192,9 +192,13 @@ impl<'a> Workers<'a>{
         }
     }
 }
-pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,stopping:impl Fn()->bool,select:impl Fn()->io::Result<Slot>,mut open:impl FnMut(TreeOrigin,ShareId,OwnedFd))->io::Result<()>{
+pub(super) fn serve(ctl:RawFd,life:&OwnedFd,master:&OwnedFd,admitted:&AtomicBool,stopping:impl Fn()->bool,select:impl Fn()->io::Result<Slot>,mut open:impl FnMut(TreeOrigin,ShareId,OwnedFd))->io::Result<()>{
     let mut active=Active::new();let mut sessions=Sessions::new();let mut workers=Workers::new(master);let mut swept=Instant::now();let mut draining=false;
+    struct RevokeOnExit<'a>(&'a AtomicBool);
+    impl Drop for RevokeOnExit<'_>{fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+    let _admission=RevokeOnExit(admitted);
     let revoke=|a:&mut Active,s:&mut Sessions|{
+        admitted.store(false,Ordering::Release);
         let _=unsafe{super::zxs_smb_ctl_drain(ctl)};a.0.clear();s.0.clear();
     };
     loop{

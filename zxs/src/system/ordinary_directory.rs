@@ -134,12 +134,13 @@ pub(super) fn lookup(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryP
 /// an incoming restore. The two media representations cannot bypass it.
 fn directory_vacant(db:&Connection,c:&Catalog,parent:&Route,name:&str)->io::Result<()>{
     if lookup(db,c,parent.volume,parent.parent(),name)?.is_some(){return Err(exists());}
+    if super::super::file_location::Place::renaming_name(db,parent.volume,parent.parent(),name)?{return Err(busy());}
     // An SMB directory may have a wider leaf than any ordinary FILE can have.
     if name.len()<=222&&super::super::file_location::Place::named(db,c,parent.volume,parent.parent(),name)?.is_some(){return Err(exists());}
     // A different business leaf may be the original physical FILE's
     // terminal. Protect that promised name even before either link exists.
-    let q=db.prepare(c"SELECT 1 FROM main.root_entry b JOIN main.file_location p ON p.file_id=b.file_id
-        WHERE b.volume_id=?1 AND b.parent_id=?2 AND b.terminal=?3 AND p.role=2 AND p.generation=1")?;
+    let q=db.prepare(c"SELECT 1 FROM main.file_location p
+        WHERE p.volume_id=?1 AND p.parent_id=?2 AND p.flat_terminal=?3 AND p.role=2")?;
     q.bind_bytes(1,&parent.volume.0)?;q.bind_bytes(2,&parent.parent().bytes())?;q.bind_bytes(3,name.as_bytes())?;
     if work_record::start_one(&q)?{return Err(exists());}
     Ok(())
@@ -318,7 +319,7 @@ impl<'s,'r> Tree<'s,'r>{
     }
 }
 
-pub(super) enum Additional<'a>{File(&'a Birth),Directory(&'a DirectoryBirth),Pocket(&'a CStr)}
+pub(super) enum Additional<'a>{File(&'a Birth),Directory(&'a DirectoryBirth),Pocket(&'a CStr),Rename(FileId,&'a CStr)}
 struct NameBudget{unaccounted:BTreeSet<Vec<u8>>,promised:BTreeSet<Vec<u8>>,count:usize,bytes:usize}
 impl NameBudget{
     fn charge(&mut self,count:usize,bytes:usize)->io::Result<()>{
@@ -332,6 +333,14 @@ impl NameBudget{
         self.unaccounted.remove(pin.to_bytes());let has_end=self.unaccounted.remove(terminal);
         if pending&&self.unaccounted.remove(stage.to_bytes())&&has_end{return Err(invalid("two native names claim the same birth slot"));}
         self.charge(2,2+pin.to_bytes().len()+if pending{terminal.len().max(stage.to_bytes().len())}else{terminal.len()})
+    }
+    fn rename_edge(&mut self,pin:&CStr,old:&[u8],new:&[u8])->io::Result<()>{
+        if old.is_empty()||old.len()>255||new.is_empty()||new.len()>255{return Err(invalid("invalid original rename terminal"));}
+        self.claim(pin.to_bytes())?;self.claim(old)?;self.claim(new)?;
+        self.unaccounted.remove(pin.to_bytes());
+        let a=self.unaccounted.remove(old);let b=self.unaccounted.remove(new);
+        if a&&b{return Err(invalid("two native names claim one same-parent FILE rename"));}
+        self.charge(2,2+pin.to_bytes().len()+old.len().max(new.len()))
     }
     fn claim(&mut self,name:&[u8])->io::Result<()>{
         if !self.promised.insert(name.to_vec()){return Err(exists());}Ok(())
@@ -349,13 +358,26 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
     let marker=if parent==DirectoryParent::Root{ROOT_MARK}else{DIRECTORY_MARK};
     if !census.contains(marker.to_bytes()){return Err(invalid("selected ordinary parent has no original marker"));}
     let mut b=NameBudget{unaccounted:census.clone(),promised:BTreeSet::new(),count:0,bytes:0};
-    let q=db.prepare(c"SELECT e.create_op,e.ticket,e.terminal,o.state FROM main.file_location l
+    let q=db.prepare(c"SELECT e.create_op,e.ticket,l.flat_terminal,o.state,l.file_id,r.target_terminal FROM main.file_location l
         JOIN main.root_entry e ON e.file_id=l.file_id JOIN main.operation o ON o.op_id=e.create_op
-        WHERE l.role=2 AND l.generation=1 AND l.volume_id=?1 AND l.parent_id=?2")?;
+        LEFT JOIN main.pending_rename r ON r.file_id=l.file_id AND r.source_op=l.position_op
+        WHERE l.role=2 AND l.flat_terminal IS NOT NULL AND l.volume_id=?1 AND l.parent_id=?2")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
+    let mut charged_rename=false;
     loop{match unsafe{sqlite3_step(q.0)}{
         100=>{let (pin,stage)=Birth::reservation_leaves(OperationId(q.array(0)?),OperationId(q.array(1)?))?;
-             b.pair(&pin,&stage,q.blob(2,255)?,q.byte(3)?==0)?;}
+             let old=q.blob(2,255)?;
+             let requested=match &more{
+                 Some(Additional::Rename(file,new)) if file.0==q.array::<16>(4)?=>Some(new.to_bytes()),
+                 _=>None,
+             };
+             if let Some(new)=requested{
+                 if unsafe{super::super::sqlite3_column_type(q.0,5)}!=5{return Err(busy());}
+                 charged_rename=true;b.rename_edge(&pin,old,new)?;
+             }else if unsafe{super::super::sqlite3_column_type(q.0,5)}!=5{
+                 b.rename_edge(&pin,old,q.blob(5,255)?)?;
+             }else{b.pair(&pin,&stage,old,q.byte(3)?==0)?;}
+        }
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
     let q=db.prepare(c"SELECT create_op,display,COALESCE(state,0) FROM main.directory_slot WHERE volume_id=?1 AND parent_id=?2")?;
@@ -364,7 +386,7 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         100=>{let op=OperationId(q.array(0)?);let(p,s)=dir_reserved(op)?;b.pair(&p,&s,q.blob(1,255)?,q.byte(2)?==0)?;}
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
-    let q=db.prepare(c"SELECT position_op FROM main.file_location WHERE role=2 AND generation>1 AND volume_id=?1 AND parent_id=?2
+    let q=db.prepare(c"SELECT backing_op FROM main.file_location WHERE role=2 AND backing_op IS NOT NULL AND volume_id=?1 AND parent_id=?2
         UNION ALL SELECT transfer_op FROM main.pending_transfer WHERE direction=2 AND target_id=?1 AND target_parent=?2")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
     loop{match unsafe{sqlite3_step(q.0)}{
@@ -375,6 +397,8 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         Some(Additional::File(f))=>b.pair(&f.witness()?,&f.lower(0)?,f.container()?.to_bytes(),true)?,
         Some(Additional::Directory(d))=>b.pair(&d.witness(),&d.stage(),d.leaf()?.to_bytes(),true)?,
         Some(Additional::Pocket(p))=>b.pocket(p)?,
+        Some(Additional::Rename(..)) if !charged_rename=>return Err(invalid("no exact flat FILE for this rename budget")),
+        Some(Additional::Rename(..))=>{},
         None=>{}
     }
     b.finish()

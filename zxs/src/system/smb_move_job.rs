@@ -2,7 +2,7 @@
 //! SET_INFO supplies the request; here a current SQL boundary and physical
 //! source, verified target and exact original receipt decide its outcome.
 use super::{InitialReader,Site,SmbSession,Tree,TreeOrigin,denied,live,os};
-use crate::system::reader::{smb::file_transfer::Handoff,file_location::Place,account::share_mode::{Mode,Setting}};
+use crate::system::reader::{smb::{file_transfer::Handoff,first_work::Current},file_location::Place,account::share_mode::{Mode,Setting}};
 use crate::{OperationId,Role,display,hash::Sha256};
 use std::{io,os::fd::{AsRawFd,FromRawFd,OwnedFd},sync::atomic::{AtomicUsize,Ordering}};
 
@@ -22,7 +22,7 @@ unsafe extern "C"{
     fn zxs_xfer_reply(fd:i32,status:u8,file:*const u8,op:*const u8)->i32;
     fn zxs_member_held(member:i32)->i32;
 }
-pub(super) enum Request{Delete([u8;16]),Mark,Restore{folder:String,parents:Vec<String>,name:String}}
+pub(super) enum Request{Delete([u8;16]),Mark,Restore{folder:String,parents:Vec<String>,name:String},Rename(String)}
 pub(super) fn pending(member:i32)->i32{unsafe{zxs_member_xfer_pending(member)}}
 pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>{
     let(mut kind,mut folder,mut name,mut mark)=(0,[0u8;256],[0u8;223],[0u8;16]);
@@ -34,6 +34,7 @@ pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>
     let ask=match kind{
         1 if f==0&&n==0&&plen==0&&mark!=[0;16]=>Request::Delete(mark),
         3 if f==0&&n==0&&plen==0=>Request::Mark,
+        4 if f==0&&n>0&&n<=222&&plen==0&&mark==[0;16]=>Request::Rename(display::component(&name[1..1+n],222)?.to_owned()),
         2 if f>0&&n>0&&f<=255&&n<=222=>Request::Restore{
             folder:display::component(&folder[1..1+f],255)?.to_owned(),
             parents:if plen==0{Vec::new()}else{super::super::super::ordinary_directory::components(raw.get(..usize::from(plen)).ok_or_else(denied)?)?},
@@ -44,6 +45,38 @@ pub(super) fn take(member:i32,origin:&TreeOrigin)->io::Result<(Request,OwnedFd)>
     Ok((ask,answer))
 }
 pub(super) fn refuse(answer:OwnedFd,why:u8){let _=unsafe{zxs_xfer_reply(answer.as_raw_fd(),why,std::ptr::null(),std::ptr::null())};}
+fn reply(answer:OwnedFd,result:io::Result<(crate::FileId,OperationId)>){
+    match result{
+        Ok((file,op))=>{let _=unsafe{zxs_xfer_reply(answer.as_raw_fd(),0,file.0.as_ptr(),op.0.as_ptr())};}
+        Err(e)=>refuse(answer,match e.kind(){
+            io::ErrorKind::WouldBlock=>1,io::ErrorKind::StorageFull=>2,io::ErrorKind::AlreadyExists=>3,
+            io::ErrorKind::NotFound=>4,io::ErrorKind::NotConnected=>6,io::ErrorKind::ConnectionAborted=>7,_=>5,
+        }),
+    }
+}
+static RENAME_WORK:AtomicUsize=AtomicUsize::new(0);
+pub(super) fn rename(site:Site<'_>,answer:OwnedFd,name:&str,current:&mut Current<'_,'_,'_>,
+    member_alive:&impl Fn()->io::Result<()>){
+    if RENAME_WORK.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|(n<4).then_some(n+1)).is_err(){
+        refuse(answer,1);return;
+    }
+    struct Release;
+    impl Drop for Release{fn drop(&mut self){RENAME_WORK.fetch_sub(1,Ordering::AcqRel);}}
+    let _release=Release;
+    let live=||->io::Result<()>{
+        site.validate()?;
+        member_alive()?;
+        if unsafe{zxs_member_held(answer.as_raw_fd())}!=0{return Err(denied());}
+        Ok(())
+    };
+    let outcome=(||{
+        live()?;
+        let op=OperationId::new()?;
+        current.rename_native(op,name,&live,|_|Ok(()))?;
+        Ok((current.file(),op))
+    })();
+    if live().is_ok(){reply(answer,outcome);}
+}
 
 fn mark_for(auth:&SmbSession<'_>,source:&Place,wanted:Setting,nonce:[u8;8])->io::Result<OperationId>{
     if nonce==[0;8]{return Err(denied());}
@@ -108,13 +141,7 @@ pub(super) fn run(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,answer:OwnedF
         Ok((moved.to.file,moved.op))
     })();
     if still().is_err()||site.validate().is_err(){return;}
-    match result{
-        Ok((file,op))=>{let _=unsafe{zxs_xfer_reply(answer.as_raw_fd(),0,file.0.as_ptr(),op.0.as_ptr())};}
-        Err(e)=>refuse(answer,match e.kind(){
-            io::ErrorKind::WouldBlock=>1,io::ErrorKind::StorageFull=>2,io::ErrorKind::AlreadyExists=>3,
-            io::ErrorKind::NotFound=>4,io::ErrorKind::NotConnected=>6,io::ErrorKind::ConnectionAborted=>7,_=>5,
-        }),
-    }
+    reply(answer,result)
 }
 
 #[cfg(test)]

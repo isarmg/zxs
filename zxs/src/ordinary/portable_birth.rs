@@ -139,3 +139,6 @@ mod sql_install;
 #[path="move_install.rs"]
 mod move_install;
 pub(crate) use move_install::{MoveInstall,MoveRoom};
+#[path="rename_install.rs"]
+mod rename_install;
+pub(crate) use rename_install::{RenameInstall,RenameStage};

@@ -185,6 +185,7 @@ struct tevent_req *zxs_xfer_send(TALLOC_CTX *,struct tevent_context *,struct tev
 	struct smbd_smb2_request *,struct files_struct *,uint8_t,const char *,const char *,const uint8_t mark[16]);
 NTSTATUS zxs_xfer_recv(struct tevent_req *,bool *unknown,uint8_t receipt[16]);
 bool zxs_restore_input(TALLOC_CTX *,DATA_BLOB,char **,char **);
+bool zxs_ordinary_rename_input(TALLOC_CTX *,DATA_BLOB,const char *,char **,const char **);
 NTSTATUS zxs_open_member_fsp(struct smbd_smb2_request *,struct smb_request *,uint32_t,uint32_t,
 			    const char *name,const struct zxs_member_info *,struct zxs_smb_tree_cut *,bool writable,int *fd,struct files_struct **);
 NTSTATUS zxs_member_cut_recv(struct tevent_req *,struct zxs_member_info *,int *fd,bool *offer);

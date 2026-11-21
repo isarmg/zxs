@@ -7,8 +7,8 @@ use std::{ffi::OsString,io,os::unix::ffi::{OsStrExt,OsStringExt},path::PathBuf};
 fn sql(_:rusqlite::Error)->io::Error {bad("original SQLite catalog is unavailable or is not this exact format")}
 #[derive(Eq,PartialEq)]
 pub(super) struct Catalog {pub(super) pool:Id,pub(super) committed:bool,pub(super) markers:Vec<[u8;101]>}
-pub(super) const SCHEMA_VERSION:i64=11;
-pub(super) const MAX_OBJECTS:i32=132; // includes SQLite's implicit indexes; v11 has 130 entries
+pub(super) const SCHEMA_VERSION:i64=13;
+pub(super) const MAX_OBJECTS:i32=147; // 117 declared descriptions and 30 implicit UNIQUE indexes
 const SHAPE:&str="SELECT type,name,tbl_name,sql FROM main.sqlite_schema ORDER BY type COLLATE BINARY,name COLLATE BINARY LIMIT ?1";
 type Shape=Vec<[Option<Vec<u8>>;4]>;
 fn shape(c:&Connection)->io::Result<Shape>{
@@ -155,16 +155,36 @@ mod schema_tests {
         assert!(initial_recycle(&[row(0,4),row(1,5),row(1,6)]).is_err());
     }
     #[test]
-    fn old_version_and_different_v11_structure_are_not_the_fresh_family() {
+    fn old_versions_and_a_different_v13_structure_are_not_the_fresh_family() {
         let approved=Canonical::new().unwrap();
-        assert_eq!(approved.0.len(),130);
+        assert_eq!(approved.0.len(),147);
         let mut db=Connection::open_in_memory().unwrap();
+        super::super::engine::limits(&db).unwrap();
         db.execute_batch(SCHEMA).unwrap();
         let tx=db.transaction().unwrap();
         assert!(approved.require(&tx).is_ok());
-        tx.execute_batch("PRAGMA main.user_version = 10;").unwrap();
+        tx.execute_batch("PRAGMA main.user_version = 11;").unwrap();
         assert!(approved.require(&tx).is_err());
-        tx.execute_batch("PRAGMA main.user_version = 11; CREATE TABLE unknown_release_origin(unused INTEGER);").unwrap();
+        tx.execute_batch("PRAGMA main.user_version = 12;").unwrap();
         assert!(approved.require(&tx).is_err());
+        tx.execute_batch("PRAGMA main.user_version = 13;
+                         DROP INDEX rename_original_source;
+                         CREATE INDEX unknown_release_origin ON file_rename(file_id,source_op);").unwrap();
+        assert_eq!(shape(&tx).unwrap().len(),147);
+        assert!(approved.require(&tx).is_err());
+    }
+    #[test]
+    fn bounded_fresh_schema_can_be_read_again_by_an_independent_connection() {
+        use rusqlite::OpenFlags as F;
+        let fixture=tempfile::tempdir().unwrap();let path=fixture.path().join("new-pool-fixture.sqlite3");
+        let writer=Connection::open_with_flags_and_vfs(&path,
+            F::SQLITE_OPEN_READ_WRITE|F::SQLITE_OPEN_CREATE|F::SQLITE_OPEN_NOFOLLOW,c"unix").unwrap();
+        super::super::engine::limits(&writer).unwrap();
+        writer.execute_batch(SCHEMA).unwrap();assert!(writer.close().is_ok());
+        let mut reader=Connection::open_with_flags_and_vfs(&path,
+            F::SQLITE_OPEN_READ_ONLY|F::SQLITE_OPEN_NOFOLLOW,c"unix").unwrap();
+        super::super::engine::limits(&reader).unwrap();
+        let tx=reader.transaction().unwrap();
+        assert!(Canonical::new().unwrap().require(&tx).is_ok());
     }
 }

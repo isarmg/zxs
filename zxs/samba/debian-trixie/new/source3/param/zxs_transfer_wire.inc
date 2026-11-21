@@ -7,6 +7,8 @@ static const uint8_t handoff_result[16]="ZXS-XFER/RESULT1";
 static bool transfer_labels(uint8_t kind,const uint8_t *folder,size_t f,const uint8_t *name,size_t n)
 {
     if(kind==ZXS_XFER_DELETE||kind==ZXS_XFER_PROBE)return f==0&&n==0;
+    if(kind==ZXS_XFER_RENAME)return f==0&&n>0&&n<=ZXS_FILE_NAME&&name!=NULL&&memchr(name,0,n)==NULL&&
+        memchr(name,'\\',n)==NULL&&memchr(name,'/',n)==NULL&&memchr(name,':',n)==NULL;
     return kind==ZXS_XFER_RESTORE && f>0&&f<=ZXS_DIR_NAME && n>0&&n<=ZXS_FILE_NAME &&
         folder!=NULL && name!=NULL && memchr(folder,0,f)==NULL && memchr(name,0,n)==NULL &&
         memchr(folder,'\\',f)==NULL && memchr(name,'\\',n)==NULL;

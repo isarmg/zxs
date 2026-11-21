@@ -209,7 +209,13 @@ pub(super) fn members(db:&Connection,c:&super::Catalog,b:&Birth)->io::Result<Mem
     if let Some(p)=pending_current(db,b)?.filter(|r|r.edit.record.key().revision==1){
         m.register(crate::ordinary::working_round::names(p.edit.record.key().round),15,false)?;
     }
-    let q=db.prepare(c"SELECT w.previous_pending,w.retained_mask,p.round_op,p.revision,o.state,p.file_id FROM main.work_edit w JOIN main.work_edit p ON p.edit_op=w.previous_pending JOIN main.operation o ON o.op_id=p.edit_op AND o.kind=10 JOIN main.file_location l ON l.file_id=w.file_id AND l.position_op=w.position_op WHERE w.file_id=?1 AND w.retained_mask<>0")?;
+    let q=db.prepare(c"SELECT w.previous_pending,w.retained_mask,p.round_op,p.revision,o.state,p.file_id
+      FROM main.work_edit w JOIN main.work_edit p ON p.edit_op=w.previous_pending
+      JOIN main.operation o ON o.op_id=p.edit_op AND o.kind=10
+      JOIN main.file_location l ON l.file_id=w.file_id
+      WHERE w.file_id=?1 AND w.retained_mask<>0 AND EXISTS(SELECT 1 FROM main.file_material_position h
+        WHERE h.position_op=w.position_op AND h.file_id=l.file_id AND h.volume_id=l.volume_id
+          AND h.parent_id=l.parent_id AND h.backing_op IS l.backing_op)")?;
     q.bind_bytes(1,&b.file.0)?;
     while start_one(&q)? {
         let p=OperationId(q.array(0)?);
@@ -230,7 +236,10 @@ pub(super) fn ceiling(db:&Connection,b:&Birth,selected:ReadRecord)->io::Result<E
     let cut=selected.record;
     let q=db.prepare(c"SELECT w.edit_op FROM main.work_edit w JOIN main.operation o ON o.op_id=w.edit_op AND o.kind=10
       JOIN main.file_location l ON l.file_id=w.file_id WHERE w.file_id=?1 AND w.round_op=?2
-      AND (o.state=1 OR w.position_op=l.position_op) ORDER BY w.issue DESC LIMIT 1")?;
+      AND (o.state=1 OR EXISTS(SELECT 1 FROM main.file_material_position h
+        WHERE h.position_op=w.position_op AND h.file_id=l.file_id AND h.volume_id=l.volume_id
+          AND h.parent_id=l.parent_id AND h.backing_op IS l.backing_op))
+      ORDER BY w.issue DESC LIMIT 1")?;
     q.bind_bytes(1,&b.file.0)?;q.bind_bytes(2,&cut.key().round.0)?;
     if !start_one(&q)?{return Ok(cut.end());}
     let id=OperationId(q.array(0)?);q.done()?;

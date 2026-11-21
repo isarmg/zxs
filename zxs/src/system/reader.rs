@@ -28,7 +28,7 @@ unsafe extern "C"{
     fn sqlite3_column_int64(s:*mut Stmt,k:c_int)->i64;
     fn sqlite3_get_autocommit(db:*mut Db)->c_int;
 }
-const MAX_SCHEMA_OBJECTS:u16=132;
+const MAX_SCHEMA_OBJECTS:u16=147;
 fn check(rc:c_int)->io::Result<()>{
     if rc==0{return Ok(());}
     let(kind,why)=match rc{

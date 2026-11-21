@@ -91,14 +91,14 @@ pub(super) fn serve(site:Site<'_>,origin:&TreeOrigin,folder:&OwnedFd,running:&At
             ready(site,&alive,fd,&data,offered.get())?;emitted.set(true);
             writer::commands(site,origin,folder,setting,fd,&alive,staged)
         }else{
-            let current=match born{
+            let mut current=match born{
                 Some((b,None))=>tree.reader_from_newborn(b)?,
                 Some(_)=>return Err(invalid("unexpected write preparation for reader")),
                 None=>tree.open_current_root(&root,name)?.0,
             };
             let data=member_packet(&current,current.native_key()?);
             ready(site,&alive,fd,&data,offered.get())?;emitted.set(true);
-            read_only(site,origin,folder,setting,fd,&alive,&current)
+            read_only(site,origin,folder,setting,fd,&alive,&mut current)
         }
     };
     let result=original();
@@ -115,7 +115,7 @@ fn ready(site:Site<'_>,alive:&impl Fn()->io::Result<()>,fd:i32,data:&[u8;88],bor
         else{zxs_member_reply(fd,data.as_ptr())}})
 }
 fn read_only(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,expected:Setting,member:i32,
-    alive:&impl Fn()->io::Result<()>,current:&Current<'_,'_,'_>)->io::Result<()>{
+    alive:&impl Fn()->io::Result<()>,current:&mut Current<'_,'_,'_>)->io::Result<()>{
     loop{
         alive()?;
         let r=unsafe{zxs_smb_root_wait(member,origin.session.as_raw_fd(),500)};
@@ -123,6 +123,10 @@ fn read_only(site:Site<'_>,origin:&TreeOrigin,branch:&OwnedFd,expected:Setting,m
         match mover::pending(member){
             1=>{
                 let (request,answer)=mover::take(member,origin)?;
+                if let mover::Request::Rename(name)=&request{
+                    mover::rename(site,answer,name,current,alive);
+                    continue;
+                }
                 if !matches!(&request,mover::Request::Delete(_)|mover::Request::Mark){mover::refuse(answer,5);continue;}
                 let Some(permit)=mover::Permit::take()else{mover::refuse(answer,1);continue;};
                 mover::run(site,origin,branch,answer,request,current.native_placement().clone(),Some(expected),permit);

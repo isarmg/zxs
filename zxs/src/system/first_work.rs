@@ -66,7 +66,7 @@ fn retained(db:&Connection,b:&Birth)->io::Result<Retained>{
 }
 pub(in crate::system::reader) fn membership(db:&Connection,c:&Catalog,b:&Birth)->io::Result<(Option<(Spec,bool)>,Retained)>{
     let Some(row)=by_file(db,b)? else{return Ok((None,Retained::new()));};
-    if Place::current(db,c,b.file)?.op!=b.operation{
+    if Place::current(db,c,b.file)?.backing.is_some(){
         return Ok((row.done.then_some((row.spec,true)),Retained::new()));
     }
     Ok((Some((row.spec,row.done)),retained(db,b)?))
@@ -340,6 +340,16 @@ impl Current<'_,'_,'_>{
     }
     pub(crate) fn file(&self)->FileId{self.original.birth.file}
     pub(super) fn native_placement(&self)->&Place{&self.original.place}
+    pub(super) fn rename_native(&mut self,op:OperationId,name:&str,alive:&impl Fn()->io::Result<()>,
+        point:impl Fn(super::file_rename::Cut)->io::Result<()>)->io::Result<()>{
+        self.require()?;
+        let (selected,body)=self.tree.rename_existing(&self.root,&self.original.place,&self.original.container,
+            op,name,alive,point)?;
+        self.original.container.rebind_renamed(self.root.folder(),&body).map_err(|_|super::file_rename::unknown())?;
+        self.original.place=selected;
+        drop(body); // no FILE write lock escapes to the original read handle
+        self.require().and_then(|_|alive()).map_err(|_|super::file_rename::unknown())
+    }
     pub(crate) fn size(&self)->u64{self.original.size()}
     pub(crate) fn working_original(&self)->Option<OperationId>{self.original.live.map(|r|r.record.key().save)}
     pub(crate) fn working_revision(&self)->u64{self.original.live.map(|r|r.record.key().revision)}

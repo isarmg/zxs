@@ -22,6 +22,8 @@ unsafe extern "C"{
     fn zxs_smb_bound_fd(fd:i32)->i32;
     fn zxs_smb_origin_enable(fd:i32)->i32;
     fn zxs_smb_process_claim(fd:i32)->i32;
+    fn zxs_smb_process_live(fd:i32)->i32;
+    fn zxs_member_held(fd:i32)->i32;
     #[cfg(test)] fn zxs_smb_ctl_read(fd:i32,p:*mut u8,n:usize)->i32;
     #[cfg(test)] fn zxs_smb_ctl_hello(fd:i32,p:*const u8)->i32;
     fn zxs_smb_ctl_bound(fd:i32,p:*mut u8)->i32;
@@ -35,6 +37,9 @@ unsafe extern "C"{
 fn os(rc:i32)->io::Result<()>{
     if rc==0{Ok(())}else{Err(io::Error::last_os_error())}
 }
+// The storage side may have valid child role packets waiting. Only a
+// socket error or peer half-close revokes this receive direction.
+fn rename_receive_live(original:i32)->bool{(unsafe{zxs_member_held(original)})==0}
 fn hex<const N:usize>(s:&str)->io::Result<[u8;N]>{
     let bad=||invalid("invalid original installation selector");
     if s.len()!=N*2{return Err(bad());}
@@ -159,6 +164,7 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
         // checked credentials, including ones already queued on this edge.
         let authority=trees::Site::from_reader(&src,&binding,&stamp,&stopping,&plan);
         let retiring=std::sync::atomic::AtomicBool::new(true);
+        let admitted=std::sync::atomic::AtomicBool::new(false);
         std::thread::scope(|scope|{
         let mut jobs=trees::Workers::new(scope,authority);
         let (dir,mark,pool,shape)=(&src.dir,&src.marker,src.pool,src.expected_schema);
@@ -174,7 +180,27 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
         until_peer_drained(fd,||{
         let dispatched=(||{
         os(unsafe{zxs_smb_origin_enable(fd)})?;
-        attempts::serve(fd,&life,&master,&stopping,||{
+        admitted.store(true,std::sync::atomic::Ordering::Release);
+        let (approved,bound,bound_stamp,master_process,allow)=(&plan,&binding,&stamp,&master,&admitted);
+        let _resume=std::thread::Builder::new().name("zxs-original-rename-recovery".into()).spawn_scoped(scope,move||{
+            let Ok(local)=InitialReader::alongside(dir,mark,pool,shape) else{return;};
+            super::file_rename::recovery_loop(&local,|db,c,share,volume|{
+                let folder=approved.folders().iter().find(|f|f.share()==share&&f.volume()==volume).ok_or_else(denied)?;
+                if !approved.current(db,c,folder.name())?.is_some_and(|g|g.share==share&&g.volume==volume){
+                    return Err(denied());
+                }
+                Ok(())
+            },||{
+                if Stamp::read(bound)?!=*bound_stamp||should_stop()||!allow.load(std::sync::atomic::Ordering::Acquire)||
+                   unsafe{zxs_smb_process_live(master_process.as_raw_fd())}!=0||
+                   !rename_receive_live(fd)||
+                   unsafe{zxs_smb_ctl_life(master_life.as_raw_fd(),0)}!=0{
+                    return Err(denied());
+                }
+                Ok(())
+            });
+        });
+        attempts::serve(fd,&life,&master,&admitted,&stopping,||{
             if Stamp::read(&binding)?!=stamp{return Err(denied());}
             let selected=current_slot(&src,pool,e.instance,&sid)?;
             if Stamp::read(&binding)?!=stamp{return Err(denied());}Ok(selected)
@@ -192,6 +218,24 @@ pub fn serve(system:&Path,pool:PoolId,instance:&str,provision:OperationId,config
 mod tests{
     use super::*;
     use crate::{system::reader::web_pool,test_support::PrivateTemp};
+    #[test]
+    #[ignore="source only: real anonymous SEQPACKET receive-direction seal"]
+    fn a_queued_role_packet_is_not_end_of_the_rename_control_input(){
+        unsafe extern "C"{
+            fn socketpair(domain:i32,kind:i32,p:i32,ends:*mut i32)->i32;
+            fn send(fd:i32,b:*const u8,len:usize,flags:i32)->isize;
+            fn shutdown(fd:i32,both:i32)->i32;
+        }
+        let mut pair=[-1;2];assert_eq!(unsafe{socketpair(1,5,0,pair.as_mut_ptr())},0);
+        let (storage,master)=(unsafe{OwnedFd::from_raw_fd(pair[0])},unsafe{OwnedFd::from_raw_fd(pair[1])});
+        assert_eq!(unsafe{shutdown(storage.as_raw_fd(),1)},0); // opposite direction may already be sealed
+        let role=[7u8;32];
+        assert_eq!(unsafe{send(master.as_raw_fd(),role.as_ptr(),role.len(),0)},32);
+        assert!(rename_receive_live(storage.as_raw_fd()));
+        assert_eq!(unsafe{shutdown(master.as_raw_fd(),1)},0);
+        assert!(!rename_receive_live(storage.as_raw_fd())); // report HUP even while packet remains queued
+    }
+
     #[test]
     #[ignore="source-only: actual private pool/pipe; inject dispatcher ENOMEM, not kernel memory pressure"]
     fn local_dispatch_failure_does_not_release_s_before_last_lifetime_writer(){
