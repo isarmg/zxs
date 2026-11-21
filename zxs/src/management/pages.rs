@@ -122,7 +122,16 @@ pub(super) fn manual(item:&manual_work::Item,t:manual_work::Target,op:OperationI
     write!(out,r#"</bdi>，数据卷 <code>{}</code>，当前这一轮的工作修订 {}。</p><p>提交会冻结这一版，不做全量复制。仍有写入时不会提交。</p>
 <form method="post" action="/versions/commit"><input type="hidden" name="op" value="{op}"><input type="hidden" name="csrf" value=""#,item.volume,t.revision).unwrap();
     text(&mut out,csrf);
-    out.push_str(r#""><button class="zxs-button" type="submit">确认提交此版本</button></form><p><a href="/">返回概览</a></p></main></body></html>"#);
+    write!(out,r#""><button class="zxs-button" type="submit">确认提交此版本</button><button type="submit" formaction="{}">只查本次回执</button></form><p><a href="/">返回概览</a></p></main></body></html>"#,
+        super::manual::RECEIPT).unwrap();
+    Reply::html("200 OK",out)
+}
+pub(super) fn manual_receipt(r:manual_work::Receipt)->Reply{
+    let mut out=String::from(HEAD);
+    write!(out,r#"<title>原提交回执 · ZXS</title></head><body><main data-zxs-scope><h1>已查到原提交回执</h1>
+<p>本查询没有提交或重试。</p><p>文件 <code>{}</code>，工作修订 {}，已确认第 {} 个正式版本。</p>
+<p>提交操作：<code>{}</code><br>版本 ID：<code>{}</code></p><p><a href="/versions/history?file={}">查看已提交版本</a></p></main></body></html>"#,
+        r.target.file,r.target.revision,r.ord,r.original,r.version,r.target.file).unwrap();
     Reply::html("200 OK",out)
 }
 pub(super) fn frozen(r:manual_work::Receipt)->Reply{

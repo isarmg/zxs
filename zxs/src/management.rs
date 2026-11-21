@@ -90,6 +90,7 @@ impl<'s> App<'s>{
                 Err(_)=>UNAVAILABLE()
             };
         }
+        if q.method=="POST"&&q.target==manual::RECEIPT{return self.manual_receipt(q,now);}
         if q.method!="POST"||!matches!(q.target.as_str(),"/login"|"/logout"|"/shares/mode"){return Reply::text("404 Not Found","没有此管理页面。");}
         if q.origin.as_deref()!=Some(q.audience.origin.as_str()){return REJECT();}
         if q.content_type!="application/x-www-form-urlencoded"{return BAD();}

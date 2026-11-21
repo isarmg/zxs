@@ -186,6 +186,8 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
             assert!(entries.contains(format!("href=\"{history}\"").as_str()));
             let page=req("GET",&view,c,"","");
             assert!(page.contains("Web&#39;).xlsx")&&page.contains("数据卷"));
+            let lookup="/versions/receipt";
+            assert!(page.contains("formaction=\"/versions/receipt\"")&&page.contains("只查本次回执"));
             let previous=format!("csrf={}&op={}",hidden(&page,"/versions/commit","csrf"),hidden(&page,"/versions/commit","op"));
             let other=req("GET",&view,c,"","");
             let old_op=hidden(&page,"/versions/commit","op").parse::<crate::OperationId>().unwrap();
@@ -199,10 +201,24 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
             let bad=format!("csrf={}&op={}", "b".repeat(64),new_op);
             assert!(req("POST","/versions/commit",c,&origin,&bad).starts_with("HTTP/1.1 403"));
             assert!(req("GET","/versions/commit",c,"","").starts_with("HTTP/1.1 404"));
+            assert!(req("GET",lookup,c,"","").starts_with("HTTP/1.1 404"));
+            assert!(req("POST",lookup,"",&origin,&good).starts_with("HTTP/1.1 403"));
+            assert!(req("POST",lookup,c,"http://other.example",&good).starts_with("HTTP/1.1 403"));
+            assert!(req("POST",lookup,c,&origin,&bad).starts_with("HTTP/1.1 403"));
+            assert!(req("POST",lookup,c,&origin,&format!("{good}&file={file}")).starts_with("HTTP/1.1 400"));
+            assert!(req("POST",lookup,c,&origin,&previous).starts_with("HTTP/1.1 409"));
+            let absent=req("POST",lookup,c,&origin,&good);
+            assert!(absent.starts_with("HTTP/1.1 200")&&absent.contains("未找到这份表单的已确认提交回执"));
+            assert!(!absent.contains("版本 ID："));
             let no_nodes=req("GET",&history,c,"","");
-            assert!(no_nodes.starts_with("HTTP/1.1 200")&&no_nodes.contains("尚无已提交版本")); // not a preview; keeps the chosen original form
+            assert!(no_nodes.starts_with("HTTP/1.1 200")&&no_nodes.contains("尚无已提交版本")); // lookup did not submit or consume the original form
             let result=req("POST","/versions/commit",c,&origin,&good);
             assert!(result.starts_with("HTTP/1.1 200")&&result.contains("正式版本已提交"));
+            let checked=req("POST",lookup,c,&origin,&good);
+            assert!(checked.starts_with("HTTP/1.1 200")&&checked.contains("已查到原提交回执")&&checked.contains("本查询没有提交或重试"));
+            assert!(checked.contains(&format!("提交操作：<code>{new_op}</code>")));
+            let version_text=result.split_once("版本 ID：").unwrap().1.split_once("</code>").unwrap().0;
+            assert!(checked.contains(&format!("版本 ID：{version_text}</code>")));
             let history_result=req("GET",&history,c,"","");
             assert!(history_result.starts_with("HTTP/1.1 200")&&history_result.contains("Web&#39;).xlsx")&&history_result.contains("逻辑字节")&&!history_result.contains("/download"));
             assert_eq!(req("POST","/versions/commit",c,&origin,&good),result);
@@ -210,6 +226,7 @@ fn only_the_displayed_manual_form_can_publish_one_formal_version(){
             assert!(preview.starts_with("HTTP/1.1 409")&&preview.contains("工作稿已变化"));
             let stale=req("POST","/versions/commit",c,&origin,&good);
             assert!(stale.starts_with("HTTP/1.1 409")&&stale.contains("这次没有提交，也未核对上一次的结果"));
+            assert!(req("POST",lookup,c,&origin,&good).starts_with("HTTP/1.1 409"));
             (old_op,new_op,result,history_result)
         });
         transport::serve(&ls,None,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();

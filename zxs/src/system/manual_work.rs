@@ -135,6 +135,25 @@ impl WebAdmin<'_>{
         q.done()?;Ok(Some(result))
     }
 
+    /// Read the receipt of the exact previously displayed manual form.
+    /// No current FILE placement or medium is needed to verify a historical
+    /// publication, and a missing receipt never starts a publication here.
+    pub(crate) fn manual_receipt(&self,op:OperationId,target:Target)->io::Result<Option<Receipt>>{
+        self.source.at(|db,c|{
+            self.current(db,&c)?;
+            let birth=file_create::committed_file(db,&c,target.file)?;
+            let saved=work_record::confirmed(db,&birth,target.save)?.record.key();
+            if (saved.file,saved.round,saved.revision)!=(target.file,target.round,target.revision){
+                return Err(invalid("receipt check disagrees with its original confirmed draft"));
+            }
+            if let Some(receipt)=self.freeze_result(db,op,&birth,target)?{return Ok(Some(receipt));}
+            let q=db.prepare(c"SELECT 1 FROM main.manual_node WHERE commit_op=?1")?;
+            q.bind_bytes(1,&op.0)?;
+            if work_record::start_one(&q)?{return Err(invalid("original publication row has no confirmed operation"));}
+            Ok(None)
+        })
+    }
+
     pub(crate) fn manual_author(&self)->Who{Who{account:self.account,credential:self.origin,generation:self.generation}}
     pub(crate) fn manual_target(&self,file:FileId)->io::Result<Target>{
         self.manual_preview(file).map(|(t,_)|t)
@@ -254,7 +273,7 @@ mod tests{
     #[ignore="isolated original FILE and SQLite; last live publication cut source only"]
     fn withdrawing_at_the_last_system_cut_publishes_neither_the_node_nor_its_operation(){
         let temp=PrivateTemp::under(&std::env::temp_dir());
-        let(s,pool,_,rw,_)=ordinary_pool(&temp);
+        let(s,pool,f,rw,_)=ordinary_pool(&temp);
         let source=InitialReader::open(&s,pool).unwrap();
         let independent=InitialReader::open(&s,pool).unwrap();
         let client=SmbSession::fixture_authenticated(&source,"files.smb").unwrap();let tree=client.connect(rw).unwrap();
@@ -289,5 +308,10 @@ mod tests{
         let later=OperationId([0xd4;16]);let receipt=other.freeze(later,expected).unwrap();
         assert_eq!((receipt.ord,receipt.target.file),(1,file));
         assert_eq!(other.freeze(later,expected).unwrap(),receipt);
+        std::fs::rename(&f,temp.0.join("offline-F")).unwrap();
+        assert_eq!(other.manual_receipt(later,expected).unwrap(),Some(receipt));
+        assert_eq!(other.manual_receipt(attempt,expected).unwrap(),None);
+        let wrong=Target{revision:expected.revision+1,..expected};
+        assert!(other.manual_receipt(later,wrong).is_err());
     }
 }
