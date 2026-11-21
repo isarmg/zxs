@@ -14,7 +14,7 @@ from ..archive import copy_body, read_managed_document, stored_member, stored_pl
 from ..capacity import observed_available
 from ..comparison import Folder, FolderEvidence
 from ..document import archive_sha, native_identity, relative_document
-from ..freeze import _distinct_roots, observe_held
+from ..freeze import _distinct_roots, observe_held, pack_chosen_folder
 from ..lifecycle import MissingBaseline, _base_leaf, _held_idle_live_base
 from ..linux_authority import ProcView as _ProcView, owned_directory as _directory
 from ..linux_mount import _ordinary_user
@@ -80,12 +80,13 @@ def _unoccupied(parent, name):
 
 def _copy_capacity(parent, size):
     available = observed_available(parent)
-    line = f"本次新增的文件逻辑量：{size:,} B；正式发布不再复制一份。"
+    line = ("在实际读完整个原目录前，无法知道新 ZIP 的长度；正式发布不再复制一份。"
+            if size is None else f"本次新增的文件逻辑量：{size:,} B；正式发布不再复制一份。")
     if available is None:
         line += "\n所选本机挂载当前可用量未知。"
     else:
         line += f"\n所选本机挂载当前报告普通用户可用 {available:,} B。"
-        if size > available: line += "按当前报告可能不足。"
+        if size is not None and size > available: line += "按当前报告可能不足。"
     return line + "未计目录、inode 等开销；不预留空间，也不保证配额或成功。"
 
 
@@ -148,13 +149,16 @@ class _AnonymousCopy(_BeforePublication):
     def __init__(self, selected, spelling, size):
         if sys.platform != "linux" or selected.held is None:
             raise Rejected("另存需要 Linux 上当前仍持有原件的已核归档")
-        self.path = _new_path(spelling)
-        self.selected, self.size = selected, size
+        self._set_output(spelling, size)
+        self.selected = selected
+        self.source = selected.held.duplicate()
+        self.stack.callback(os.close, self.source)
+
+    def _set_output(self, spelling, size):
+        self.path, self.size = _new_path(spelling), size
         self.stack = ExitStack()
         self.ready = self.used = self.closed = False
         self._init_cancellation()
-        self.source = selected.held.duplicate()
-        self.stack.callback(os.close, self.source)
 
     def close(self):
         if not self.closed:
@@ -200,8 +204,7 @@ class _AnonymousCopy(_BeforePublication):
             capacity = _copy_capacity(self.parent, self.size)
             self._parent()
             self.ready = True
-            return (f"原归档：{str(self.selected.path)!r}\n" + self._source_details()
-                    + self._selection_details() +
+            return (self._origin_label() + self._source_details() + self._selection_details() +
                     f"新文件：{str(self.path)!r}\n{capacity}\n\n"
                     "完整核验及读回后才公开名称；不覆盖、不创建工作树、不打开结果。"
                     "可在正式发布前请求取消；正在进行的系统调用须先返回，发布开始后不能撤销。"
@@ -209,6 +212,9 @@ class _AnonymousCopy(_BeforePublication):
         except BaseException:
             self.close()
             raise
+
+    def _origin_label(self):
+        return f"原归档：{str(self.selected.path)!r}\n"
 
     def _output(self, fd, links, size, name=None, *, follow=False):
         m = os.fstat(fd) if name is None else os.stat(name[1], dir_fd=name[0], follow_symlinks=follow)
@@ -475,6 +481,90 @@ class ZipCopy(_AnonymousCopy):
         if marker != self.selected.browser.commit:
             raise Rejected("原始字节不再表示选中的目录快照")
         return fd, sha
+
+
+class FolderSnapshot(_AnonymousCopy):
+    """One independent first-version ZIP from an expressly chosen existing folder."""
+    _cancel_note = "已取消创建，未发布新的快照。匿名文件在关闭句柄后释放。"
+
+    def __init__(self, folder, spelling):
+        if sys.platform != "linux" or not isinstance(folder, Folder) or folder._fd is None:
+            raise Rejected("请选择本窗口已持有的 Linux 普通目录")
+        self._set_output(spelling, None)
+        if self.path.suffix.lower() != ".zxs":
+            raise Rejected("只能生成一个全新的 .zxs 文件")
+        self.repo, self.branch, self.operation = (new_id() for _ in range(3))
+        self.input_mount = self.marker = None
+        self.folder = self.stack.enter_context(closing(folder))
+
+    def _origin_label(self):
+        return f"原目录（只读）：{str(self.folder.evidence.path)!r}\n"
+
+    def _source_details(self):
+        return f"全新仓库：{self.repo}\n全新分支：{self.branch}\n第 1 代 · 节点：{self.operation}\n"
+
+    def _selection_details(self):
+        return ("直接生成独立 Store ZIP，不为目录建立 STATE、不登记 WORK 或 STORE，"
+                "不改原文件，也不跟随链接或进入嵌套挂载。读取已挂载的远端目录可能由系统访问远端。\n")
+
+    def _source(self):
+        path = self.folder.evidence.path
+        held = self.folder.check()
+        named = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            actual = mount_id(held, read_proc=self.proc.read)
+            if (not os.path.samestat(os.fstat(held), os.fstat(named)) or
+                    mount_id(named, read_proc=self.proc.read) != actual or
+                    self.input_mount not in (None, actual) or
+                    os.readlink(str(held), dir_fd=self.proc.fds) != str(path)):
+                raise Rejected("原目录、实际挂载或准确路径已改变")
+            self.input_mount = actual
+            return held
+        finally: os.close(named)
+
+    def _parent(self):
+        super()._parent()
+        if any(original[:2] == self.folder.evidence.identity for original in self.parents):
+            raise Rejected("新快照必须保存在所选原目录之外")
+
+    def _payload(self, create):
+        original = self._source()
+        out = create()
+
+        def in_original_mount(_, child):
+            if mount_id(child, read_proc=self.proc.read) != self.input_mount:
+                raise Rejected("原目录含嵌套挂载，不生成快照")
+
+        self._phase("正在读取原目录正文并创建未发布的 Store ZIP")
+        with os.fdopen(out, "w+b", closefd=False) as dest:
+            marker, self.body_bytes = pack_chosen_folder(
+                original, self.folder.evidence.identity, dest, self.repo, self.branch, self.operation,
+                check_held=in_original_mount, checkpoint=self._checkpoint, on_read=self._bytes_processed,
+                before_inventory=lambda: self._phase("正在复核原目录与成员的第二遍清单"))
+        self._source()
+        self.marker, self.size = marker, os.fstat(out).st_size
+        return out, marker
+
+    def _verify(self, fd, marker):
+        self._checkpoint()
+        before = self._output(fd, 0, self.size)
+        self._phase("正在同步匿名快照，尚未发布")
+        os.fsync(fd)
+        self._phase("正在读回匿名快照并核验整树，尚未发布")
+        with os.fdopen(fd, "rb", closefd=False) as doc:
+            # The ZIP was just written from an independent file stream and
+            # left the fd at EOF. Read only this same native anonymous inode.
+            doc.seek(0)
+            actual, tree = read_managed_document(_CheckedReads(doc, self._checkpoint, self._bytes_processed),
+                                                 display_name=self.path.name)
+        if actual != marker or tree.total != self.body_bytes or self._output(fd, 0, self.size) != before:
+            raise Rejected("匿名快照读回未能证明为这次选定目录的整树")
+        self._checkpoint()
+        return before
+
+    def run(self, *, confirmed=False):
+        return (super().run(confirmed=confirmed) + f"\n第 1 代节点：{self.marker.operation}。"
+                "不登记、不切换已有工作树。")
 
 
 class _AtomicDirectoryCopy(_BeforePublication):

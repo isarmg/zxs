@@ -21,6 +21,7 @@ class ArchivePane(QWidget):
         self.selection = self.store = self.catalog = self.file_page = None
         self.verification = self.catalog_verification = None
         self.slots_dialog = self.slots_token = None
+        self.folder_snapshot = None
         self.directory, self.page_number, self.search_dialog = "", 0, None
         self.text_dialog = None
         layout = QVBoxLayout(self)
@@ -167,6 +168,82 @@ class ArchivePane(QWidget):
         if self.mount is not None: self.mount.changing()
         name, _ = QFileDialog.getOpenFileName(self, "选择要核验的目录快照", "", "目录快照 (*.zxs *.ZXS);;所有文件 (*)")
         if name: self.open_snapshot(name)
+
+    def close_folder_snapshot_choice(self):
+        self.folder_snapshot = None  # Revokes a choice still in a modal picker/confirmation.
+
+    def choose_folder_snapshot(self):
+        if sys.platform != "linux" or self.folder_snapshot is not None or self.owner.pending is not None:
+            return
+        from ..comparison import Folder
+        from .member_copy import FolderSnapshot
+
+        request = self.folder_snapshot = object()
+        plan = folder = None
+        queued = False
+        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
+
+        def current():
+            return self.folder_snapshot is request
+
+        def finish(message, error=None):
+            try:
+                if current(): self.owner.inform(message if error is None else str(error))
+            finally:
+                try: plan.close()
+                finally:
+                    if current(): self.close_folder_snapshot_choice()
+
+        def submit(title, call, accept):
+            def task():
+                try: return call(), None
+                except Exception as error: return None, error
+            future = self.owner.job(title, task, lambda result: accept(*result),
+                                    failed=lambda error: finish(None, error),
+                                    cancel=plan.cancel, cancel_text="停止创建快照（发布前）",
+                                    progress_report=plan.progress)
+            if future is None: return False
+            future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
+            return True
+
+        def reviewed(detail, error):
+            if error is not None:
+                finish(None, error)
+                return
+            try:
+                if (not current() or plan.cancelled.is_set() or not confirm(
+                        self, "从原目录生成一个新的快照", detail,
+                        attestation="我已暂停编辑和同步，所选目录不移动、不改动；同意仅在此新位置生成这个文件。",
+                        action_text="生成新 .zxs") or not current() or plan.cancelled.is_set()):
+                    finish("未创建快照；没有登记目录或写入目的文件。")
+                    return
+                if not submit("正在从原目录生成匿名快照，还没有发布…", lambda: plan.run(confirmed=True), finish):
+                    finish("窗口正在执行另一项；未创建快照。")
+            except Exception as error:
+                finish(None, error)
+
+        try:
+            source = QFileDialog.getExistingDirectory(self, "选择要制作快照的原目录", "",
+                                                      opts | QFileDialog.Option.ShowDirsOnly)
+            if not source or not current(): return
+            folder = Folder.choose(source)  # Pin the original before the next chooser.
+            original = folder.evidence.path
+            suggest = str(original.parent/(original.name + ".zxs")) if original.name else ""
+            name, _ = QFileDialog.getSaveFileName(self, "选择原目录之外的全新 .zxs 文件", suggest,
+                                                 "目录快照 (*.zxs *.ZXS)", options=opts)
+            if not name or not current(): return
+            plan = FolderSnapshot(folder, name)
+            folder = None
+            queued = submit("正在查原目录和新名称；没有写入…", plan.review, reviewed)
+            if not queued: finish("窗口正在执行另一项；未创建快照。")
+        except Exception as error:
+            if current(): self.owner.inform(str(error))
+        finally:
+            if folder is not None: folder.close()
+            if not queued:
+                if current(): self.close_folder_snapshot_choice()
+                if plan is not None: plan.close()
 
     def clear_raw(self):
         self.raw_result.clear()

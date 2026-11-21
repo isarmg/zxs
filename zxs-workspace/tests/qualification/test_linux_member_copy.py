@@ -14,6 +14,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import lifecycle, worktree
+from zipworkspace.comparison import Folder
 from zipworkspace.desktop import member_copy
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.initialize_choice import InitializeChoice
@@ -74,6 +75,143 @@ class LinuxMemberCopy(unittest.TestCase):
         plan = member_copy.ZipCopy(self.selected, str(self.dest/name))
         self.addCleanup(plan.close)
         return plan
+
+    def original_folder(self):
+        original = self.private/"folder"
+        original.mkdir(mode=0o700)
+        for name in ("one", "two", "empty"): (original/name).mkdir(mode=0o700)
+        (original/"one/name").write_bytes(self.data)
+        (original/"two/name").write_bytes(b"different")
+        return original
+
+    def test_chosen_folder_can_make_a_first_standalone_zip_without_registering(self):
+        original = self.original_folder()
+        selection = Folder.choose(str(original))
+        plan = member_copy.FolderSnapshot(selection, str(self.dest/"standalone.zxs"))
+        self.addCleanup(plan.close)
+        with patch.object(worktree, "create_catalog", side_effect=AssertionError("no STATE")), \
+             patch.object(worktree, "commit", side_effect=AssertionError("no commit")), \
+             patch.object(worktree, "anonymous_capture", side_effect=AssertionError("no second frozen copy")):
+            self.assertIn("不为目录建立 STATE", plan.review())
+            self.assertFalse(plan.path.exists())
+            with self.assertRaises(Rejected): plan.run()
+            actual = os.link
+            def link(source, name, **kw):
+                self.assertFalse(plan.path.exists())
+                self.assertEqual(os.fstat(int(source)).st_nlink, 0)
+                return actual(source, name, **kw)
+            with patch.object(os, "link", side_effect=link) as native:
+                message = plan.run(confirmed=True)
+                native.assert_called_once()
+        self.assertIsNone(selection._fd)
+        result = Selection.open(plan.path)
+        self.addCleanup(result.release_display)
+        marker = result.browser.commit
+        self.assertEqual((marker.repo, marker.branch, marker.operation, marker.generation, marker.parent),
+                         (plan.repo, plan.branch, plan.operation, 1, None))
+        self.assertIn(marker.operation, message)
+        with zipfile.ZipFile(plan.path) as z:
+            self.assertIsNone(z.testzip())
+            self.assertEqual(z.read("one/name"), self.data)
+            self.assertEqual(z.read("two/name"), b"different")
+            self.assertTrue(z.getinfo("empty/").is_dir())
+            self.assertTrue(all(info.compress_type == zipfile.ZIP_STORED for info in z.infolist()))
+        self.assertEqual(list(self.dest.iterdir()), [plan.path])
+        self.assertEqual((original/"one/name").read_bytes(), self.data)
+        previous = plan.path.read_bytes()
+        occupied = member_copy.FolderSnapshot(Folder.choose(str(original)), str(plan.path))
+        with self.assertRaisesRegex(Rejected, "已有文件"): occupied.review()
+        self.assertEqual(plan.path.read_bytes(), previous)
+
+    def test_folder_snapshot_checks_source_identity_and_excludes_an_inside_destination(self):
+        original = self.original_folder()
+        source = Folder.choose(str(original))
+        inside = member_copy.FolderSnapshot(source, str(original/"one/ignored.zxs"))
+        with self.assertRaisesRegex(Rejected, "原目录之外"): inside.review()
+        self.assertIsNone(source._fd)
+        self.assertFalse(inside.path.exists())
+        chosen = Folder.choose(str(original))
+        accepted = member_copy.FolderSnapshot(chosen, str(self.dest/"unchanged.zxs"))
+        self.addCleanup(accepted.close)
+        accepted.review()
+        old = original.rename(original.with_name("old-folder"))
+        self.original_folder()  # New inode and files of identical size/content.
+        with patch.object(os, "link", side_effect=AssertionError("replacement cannot be published")):
+            with self.assertRaises(Rejected): accepted.run(confirmed=True)
+        self.assertIsNone(chosen._fd)
+        self.assertFalse(accepted.path.exists())
+        self.assertEqual((old/"two/name").read_bytes(), b"different")
+
+    def test_folder_snapshot_shows_uncertain_after_the_real_link_if_only_parent_sync_fails(self):
+        original = self.original_folder()
+        plan = member_copy.FolderSnapshot(Folder.choose(str(original)), str(self.dest/"maybe.zxs"))
+        self.addCleanup(plan.close)
+        plan.review()
+        real_sync = os.fsync
+        def sync(fd):
+            if os.path.samestat(os.fstat(fd), self.dest.stat()):
+                self.assertTrue(plan.path.is_file())  # The only new name is already a complete candidate.
+                raise OSError(errno.EIO, "parent sync")
+            return real_sync(fd)
+        with patch.object(os, "fsync", side_effect=sync):
+            with self.assertRaisesRegex(Uncertain, "完整副本可能已经出现"): plan.run(confirmed=True)
+        with zipfile.ZipFile(plan.path) as z:
+            self.assertEqual(z.read("one/name"), self.data)
+        with self.assertRaises(Rejected): plan.run(confirmed=True)
+
+    def test_cancel_folder_after_readback_does_not_publish_or_leave_a_named_partial(self):
+        original = self.original_folder()
+        plan = member_copy.FolderSnapshot(Folder.choose(str(original)), str(self.dest/"cancelled.zxs"))
+        self.addCleanup(plan.close)
+        plan.review()
+        real_verify = plan._verify
+        def after_readback(*args):
+            observation = real_verify(*args)
+            self.assertTrue(plan.cancel())
+            return observation
+        with patch.object(plan, "_verify", side_effect=after_readback), \
+             patch.object(os, "link", side_effect=AssertionError("cancelled before publication")):
+            with self.assertRaises(member_copy.CancelledCopy): plan.run(confirmed=True)
+        self.assertEqual(list(self.dest.iterdir()), [])
+
+    @unittest.skipUnless(find_spec("PySide6"), "optional native Qt controls")
+    def test_folder_snapshot_uses_actual_menu_and_explicit_new_path_confirmation(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop import archive_pane
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        win = Window()
+        self.addCleanup(win.close)
+        original = self.original_folder()
+        target = self.dest/"explicit.zxs"
+        action = next(a for a in win.menuBar().actions()[0].menu().actions() if "生成全新 .zxs" in a.text())
+        tasks = []
+        def submit(work):
+            future = Future()
+            tasks.append((future, work))
+            return future
+        def poll():
+            result, work = tasks.pop(0)
+            result.set_result(work())
+            win.poll()
+        with patch.object(win.pool, "submit", side_effect=submit), \
+             patch.object(archive_pane.QFileDialog, "getExistingDirectory", return_value=str(original)), \
+             patch.object(archive_pane.QFileDialog, "getSaveFileName", return_value=(str(target), "")):
+            for permitted in (False, True):
+                with patch.object(archive_pane, "confirm", return_value=permitted) as confirm:
+                    action.trigger()
+                    self.assertFalse(target.exists())
+                    poll()
+                    self.assertFalse(target.exists())
+                    confirm.assert_called_once()
+                    self.assertIn(str(original), confirm.call_args.args[2])
+                    self.assertIn(str(target), confirm.call_args.args[2])
+                    self.assertEqual(len(tasks), int(permitted))
+                    if permitted: poll()
+                    self.assertIsNone(win.archive.folder_snapshot)
+                    self.assertIsNone(win.archive.checkout.live)
+                    self.assertIsNone(win.archive.selection)
+        self.assertTrue(target.is_file())
 
     def test_managed_zip_copy_round_trips_through_standard_reader_and_plain_extraction(self):
         plan = self.zip_plan()

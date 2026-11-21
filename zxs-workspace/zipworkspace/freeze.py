@@ -24,7 +24,7 @@ def _dir_flags():
 
 
 def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None, checkpoint=None,
-          on_frozen=None, on_read=None, before_inventory=None):
+          on_frozen=None, on_read=None, before_inventory=None, write_file=None):
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
@@ -63,23 +63,27 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                     if check_held is not None: check_held(path, child)
                     if is_dir:
                         visit(child, path, recheck=recheck)
-                    elif not recheck and (frozen is not None or hash_files):
+                    elif not recheck and (frozen is not None or hash_files or write_file is not None):
                         h = hashlib.sha256()
                         count = 0
                         start = frozen.length if frozen is not None else 0
-                        while True:
-                            if checkpoint is not None: checkpoint()
-                            block = os.read(child, CHUNK)
-                            if checkpoint is not None: checkpoint()
-                            if not block: break
-                            count += len(block)
-                            if count > before.st_size: raise Rejected("source grew while freezing")
-                            h.update(block)
-                            if on_read is not None: on_read(len(block))
-                            if frozen is not None:
-                                frozen.append(block)
-                                if on_frozen is not None: on_frozen(len(block))
-                        if count != before.st_size: raise Rejected("source shrank while freezing")
+                        target = write_file(path, before.st_size) if write_file is not None else contextlib.nullcontext()
+                        with target as packed:
+                            while True:
+                                if checkpoint is not None: checkpoint()
+                                block = os.read(child, CHUNK)
+                                if checkpoint is not None: checkpoint()
+                                if not block: break
+                                count += len(block)
+                                if count > before.st_size: raise Rejected("source grew while freezing")
+                                h.update(block)
+                                if packed is not None and packed.write(block) != len(block):
+                                    raise Rejected("short write to the private Store ZIP")
+                                if on_read is not None: on_read(len(block))
+                                if frozen is not None:
+                                    frozen.append(block)
+                                    if on_frozen is not None: on_frozen(len(block))
+                            if count != before.st_size: raise Rejected("source shrank while freezing")
                         if frozen is not None: frozen.spans[path] = (start,count)
                         manifest.rows[path] = (False, count, h.hexdigest())
                     if _sig(os.fstat(child)) != sig or _sig(os.stat(name, dir_fd=fd, follow_symlinks=False)) != sig:
@@ -181,6 +185,36 @@ def frozen_tree(source, capture, expected, store, *, selected=None, observer=Non
     finally: os.close(fd)
 
 
+def _store_entry(name, directory, size):
+    info = zipfile.ZipInfo(name + ("/" if directory else ""), (1980,1,1,0,0,0))
+    info.create_system = 3
+    info.external_attr = ((0o40755 if directory else 0o100644) << 16) | (16 if directory else 0)
+    info.compress_type = zipfile.ZIP_STORED
+    info.file_size = size
+    return info
+
+
+def pack_chosen_folder(fd, identity, dest, repo, branch, operation, *, check_held, checkpoint,
+                       on_read=None, before_inventory=None):
+    """Build only a private Store ZIP from the same bytes used for the directory marker."""
+    before = os.fstat(fd)
+    if native_identity(before, stat.S_IFDIR) != identity:
+        raise Rejected("not the originally selected folder")
+    with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        contents = _scan(fd, require_ids=True, check_held=check_held, checkpoint=checkpoint,
+                         on_read=on_read, before_inventory=before_inventory,
+                         write_file=lambda name, size: archive.open(_store_entry(name, False, size), "w"))
+        if _sig(before) != _sig(os.fstat(fd)):
+            raise Rejected("source folder changed during both observations")
+        for name, (directory, _, __) in sorted(contents.rows.items()):
+            checkpoint()
+            if directory: archive.writestr(_store_entry(name, True, 0), b"")
+        marker = Commit(repo, branch, 1, operation, None, contents.digest())
+        archive.comment = marker.encode()
+    checkpoint()
+    return marker, contents.total
+
+
 def pack(frozen, tree: Manifest, marker: Commit, destination, *, observer=None):
     if observer is not None: observer.begin("pack", tree.total)
     if marker.tree != tree.digest(): raise Rejected("wrong frozen generation")
@@ -188,11 +222,7 @@ def pack(frozen, tree: Manifest, marker: Commit, destination, *, observer=None):
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
         for name, (directory,size,digest) in sorted(tree.rows.items()):
             if observer is not None: observer.check()
-            info = zipfile.ZipInfo(name + ("/" if directory else ""), (1980,1,1,0,0,0))
-            info.create_system = 3
-            info.external_attr = ((0o40755 if directory else 0o100644) << 16) | (16 if directory else 0)
-            info.compress_type = zipfile.ZIP_STORED
-            info.file_size = size
+            info = _store_entry(name, directory, size)
             if directory:
                 archive.writestr(info,b"")
             else:

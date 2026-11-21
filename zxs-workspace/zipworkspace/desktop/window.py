@@ -1,5 +1,6 @@
 """One immutable request at a time; GUI objects never enter the worker thread."""
 from concurrent.futures import ThreadPoolExecutor
+import sys
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QMainWindow, QProgressBar,
@@ -142,6 +143,9 @@ class Window(QMainWindow):
         open_snapshot = files.addAction("打开 .zxs 快照…")
         open_snapshot.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         open_snapshot.triggered.connect(lambda _checked=False: self.archive.choose())
+        if sys.platform == "linux":
+            save_folder = files.addAction("从现有目录生成全新 .zxs…")
+            save_folder.triggered.connect(lambda _checked=False: self.archive.choose_folder_snapshot())
         files.addAction("关闭当前快照").triggered.connect(lambda _checked=False: self.archive.close_snapshot())
         if offer_snapshot is not None:
             self.snapshot_drop = SnapshotDrop(offer_snapshot)
@@ -245,6 +249,7 @@ class Window(QMainWindow):
             self.archive.close_search()
             self.archive.close_text()
             self.archive.close_slots()
+            self.archive.close_folder_snapshot_choice()
             self.archive.comparison.clear()
             self.archive.checkout.close_session()
             if self.archive.selection is not None: self.archive.selection.release_display()
