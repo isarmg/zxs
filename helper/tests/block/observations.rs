@@ -56,9 +56,11 @@ fn same_devno_or_even_same_parent_generation_is_not_sufficient_when_a_partition_
     }
     let unavailable=Report{start_ms:Some(5),end_ms:Some(3),requested_rates:true,
         rows:vec![(a.dev,Ok(Row{id:a,model:Err(Reason::NotReported),fs_uuid:Err(Reason::Unsupported),
-            partuuid:Ok("ab12-07".into()),mount_ids:Ok(vec![6,45]),rate:Err(Reason::Reset)}))]};
+            partuuid:Ok("ab12-07".into()),mount_ids:Ok(vec![6,45]),rate:Err(Reason::Reset),
+            attachment:Ok(Attachment{subsystem:"scsi",source:AttachmentSource::InferredParent,nvme_transport:Err(Reason::Unsupported)})}))]};
     let text=unavailable.to_string();
     assert!(text.contains("partuuid_udev_alias=ab12-07")&&text.contains("direct_mount_ids=6,45"));
     assert!(text.contains("sample_unix_ms=unknown")&&text.contains("rate=unknown(counter-reset)"));
+    assert!(text.contains("ancestor_subsystem_sysfs=scsi subsystem_evidence=inferred-from-partition-parent nvme_transport_sysfs=unknown(unsupported)"));
     assert!(!unavailable.complete());
 }

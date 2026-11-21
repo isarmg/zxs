@@ -113,9 +113,22 @@ fn rates(original:&Identity,now:&Identity,a:Counts,b:Counts,elapsed:Duration)->F
             write_bytes:bytes(a.write_sectors,b.write_sectors)?,interval_ns:ns})
 }
 
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) enum AttachmentSource{KernelAncestor,InferredParent}
+impl AttachmentSource{
+    fn label(self)->&'static str{
+        match self{Self::KernelAncestor=>"observed-sysfs-ancestor",Self::InferredParent=>"inferred-from-partition-parent"}
+    }
+}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct Attachment{
+    pub(crate) subsystem:&'static str,
+    pub(crate) source:AttachmentSource,
+    pub(crate) nvme_transport:Field<&'static str>,
+}
 pub(crate) struct Row {
     pub(crate) id:Identity, pub(crate) model:Field<String>, pub(crate) fs_uuid:Field<String>, pub(crate) partuuid:Field<String>,
-    pub(crate) mount_ids:Field<Vec<u64>>, pub(crate) rate:Field<Rate>,
+    pub(crate) mount_ids:Field<Vec<u64>>, pub(crate) rate:Field<Rate>,pub(crate) attachment:Field<Attachment>,
 }
 pub(crate) struct Report {pub(crate) start_ms:Option<u128>,pub(crate) end_ms:Option<u128>,requested_rates:bool, pub(crate) rows:Vec<(Dev,Field<Row>)>}
 fn utc_ms()->Option<u128>{SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|v|v.as_millis())}
@@ -145,6 +158,7 @@ impl Query {
             let row=entry.and_then(|(node,id,first)| {
                 let second=self.rates.then(||node.counts());
                 let model=node.model(&sys,&id);
+                let attachment=node.attachment(&sys,&id);
                 let current=node.identity(&sys).map_err(Reason::io)?;
                 if current!=id {return Err(Reason::Changed);}
                 let rate=match (first,second) {
@@ -158,7 +172,7 @@ impl Query {
                 });
                 let fs_uuid=aliases.fs.get(dev);
                 let partuuid=match id.kind {Kind::Disk=>Err(Reason::NotReported),Kind::Partition{..}=>aliases.partition.get(dev)};
-                Ok(Row{id,model,fs_uuid,partuuid,mount_ids,rate})
+                Ok(Row{id,model,fs_uuid,partuuid,mount_ids,rate,attachment})
             });
             rows.push((dev,row));
         }
@@ -192,6 +206,9 @@ impl fmt::Display for Report {
             write!(f," capacity_bytes={} diskseq={} model_sysfs={} fs_uuid_udev_alias={} partuuid_udev_alias={}",
                 value(&id.sectors.map(|n|u128::from(n)*SECTOR_BYTES)),value(&id.diskseq),
                 value(&row.model),value(&row.fs_uuid),value(&row.partuuid))?;
+            write!(f," ancestor_subsystem_sysfs={} subsystem_evidence={} nvme_transport_sysfs={}",
+                value(&row.attachment.map(|a|a.subsystem)),value(&row.attachment.map(|a|a.source.label())),
+                value(&row.attachment.and_then(|a|a.nvme_transport)))?;
             f.write_str(" direct_mount_ids=")?;
             match &row.mount_ids {
                 Ok(m) if m.is_empty()=>f.write_str("no-match")?,

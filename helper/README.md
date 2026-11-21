@@ -44,7 +44,9 @@ helper disks --device 259:1 --rates
 
 `direct_mount_ids` 只列本线程挂载表中超级块设备号直接匹配的挂载 ID；同一文件系统的 bind 挂载可能有多个。无直接匹配不表示未挂载或未被 swap、阵列、其他命名空间使用。`fs_uuid_udev_alias`、`partuuid_udev_alias` 来自受保护 devtmpfs 上当前分别指向该设备号的 udev 别名；它们是可陈旧的宿主缓存，不是现读介质、硬件序列号、登记 ID 或挂载 ID。无法安全归属的别名和无已知缓存型号的设备显示未知，不启动识别程序。只对设备节点取路径元数据，不打开设备读取扇区。
 
-`--rates` 多取一帧内核累计计数，中间等约一秒；按**每个设备两次读计数完成时的单调时间间隔**输出读、写 B/s。Linux 在这里的一个扇区恒为 512 B，即使设备采用 4 KiB 扇区。设备生命周期、分区原件或几何变化、可见计数回退、缺少同一盘世代时不能给速率；只有该方向的计数增量为零才报告 0；有实际传输但平均不足 1 B/s 显示为 `<1`。不是写入测试、性能上限、文件系统可用量或健康证明。基本资料/挂载或所请求速率不完整时保留其余行、退出 2；仅缺型号或 UUID 不影响基本清单。当前还没有 SMART、自检或修复命令。来源：[Linux 块层计数](https://docs.kernel.org/block/stat.html)、[内核设备世代](https://docs.kernel.org/admin-guide/abi-stable.html#sys-block-disk-diskseq)、[挂载命名空间字段](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)。
+`ancestor_subsystem_sysfs` 是同一盘世代、在同一 sysfs 挂载中核对的最近有报告的非块层祖先子系统，最多处理 24 个设备路径分量。当前识别 `scsi`、`nvme`、`nvme-subsystem`、`mmc`、`virtio`。最近子系统不可识别时标为不支持，不改报更远祖先。整盘标为当次祖先观察；分区只从已核实的父盘推断，`subsystem_evidence` 会注明。SCSI 不表示一定是 SATA、SAS 或 USB；不按设备名猜测，也不解析叠加卷的底层盘。只有核到单个 NVMe 控制器时才读内核的 `nvme_transport_sysfs`（如 `pcie`、`tcp`）；多路径命名空间不挑任意一条路径。这不是协商速率、实测吞吐或健康值。未报告、不支持、权限不足及观察间原件变化分别显示为未知。来源：[内核 sysfs 规则](https://docs.kernel.org/admin-guide/sysfs-rules.html)、[NVMe 控制器属性 ABI](https://docs.kernel.org/admin-guide/abi-stable.html)、[Linux v6.12 属性实现](https://github.com/torvalds/linux/blob/v6.12/drivers/nvme/host/sysfs.c)。
+
+`--rates` 多取一帧内核累计计数，中间等约一秒；按**每个设备两次读计数完成时的单调时间间隔**输出读、写 B/s。Linux 在这里的一个扇区恒为 512 B，即使设备采用 4 KiB 扇区。设备生命周期、分区原件或几何变化、可见计数回退、缺少同一盘世代时不能给速率；只有该方向的计数增量为零才报告 0；有实际传输但平均不足 1 B/s 显示为 `<1`。不是写入测试、性能上限、文件系统可用量或健康证明。基本资料/挂载或所请求速率不完整时保留其余行、退出 2；仅缺型号、UUID 或子系统/传输证据不影响基本清单。`disks` 不做 SMART、自检或修复。来源：[Linux 块层计数](https://docs.kernel.org/block/stat.html)、[内核设备世代](https://docs.kernel.org/admin-guide/abi-stable.html#sys-block-disk-diskseq)、[挂载命名空间字段](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)。
 
 ## 查看检查工具是否在位
 

@@ -10,12 +10,19 @@ fn line(out:&mut String,row:impl IntoIterator<Item=String>){
     for c in it{out.push('\t');out.push_str(&clean(&c));}out.push('\n');
 }
 fn field<T:Display>(f:&Result<T,disks::Reason>)->String{match f{Ok(v)=>v.to_string(),Err(e)=>format!("未知：{}",e.label())}}
+fn attachment_cells(a:Result<disks::Attachment,disks::Reason>)->[String;3]{
+    let source=a.map(|v|match v.source{
+        disks::AttachmentSource::KernelAncestor=>"当次内核祖先",
+        disks::AttachmentSource::InferredParent=>"由已核父盘推断",
+    });
+    [field(&a.map(|v|v.subsystem)),field(&source),field(&a.and_then(|v|v.nvme_transport))]
+}
 pub(super) fn disks(rates:bool)->Reply{
     let report=match disks::Query::inventory(rates).observe(){Ok(x)=>x,Err(_)=>return Reply::plain(503,"未能从当前命名空间核得系统设备盘点；未检查健康或登记。")};
     let mut out=String::new();
     let sampled=match (report.start_ms,report.end_ms){(Some(a),Some(b)) if a<=b=>format!("Unix 毫秒 {a} 至 {b}"),_=>"时间未知".into()};
-    line(&mut out,[format!("内核 sysfs / 本线程 mountinfo / 宿主 udev 别名；{sampled}。不叠加分区与整盘；没有直接挂载匹配不代表未使用。不检查硬件健康、温度或池登记。")]);
-    let mut cols=vec!["设备号","内核名称","类别","块层容量（字节）","型号（sysfs）","FS UUID（别名）","PARTUUID（别名）","直接挂载 ID"];
+    line(&mut out,[format!("内核 sysfs / 本线程 mountinfo / 宿主 udev 别名；{sampled}。子系统是内核祖先证据，不是物理接口或协商速率；不叠加分区与整盘。无直接匹配不代表未使用；未检查健康、温度或池登记。")]);
+    let mut cols=vec!["设备号","内核名称","类别","块层容量（字节）","型号（sysfs）","祖先子系统","子系统证据","NVMe 传输类型","FS UUID（别名）","PARTUUID（别名）","直接挂载 ID"];
     if rates{cols.extend(["采样间隔（纳秒）","读取 B/s","写入 B/s"]);}
     line(&mut out,cols.iter().map(|s|s.to_string()));
     for (dev,row) in &report.rows{
@@ -27,7 +34,9 @@ pub(super) fn disks(rates:bool)->Reply{
                 let mounts=match &r.mount_ids{Ok(ids) if ids.is_empty()=>"无直接匹配".into(),
                     Ok(ids)=>ids.iter().map(u64::to_string).collect::<Vec<_>>().join(", "),Err(e)=>format!("未知：{}",e.label())};
                 cells.extend([r.id.name.clone(),kind,field(&r.id.sectors.map(|s|u128::from(s)*disks::SECTOR_BYTES)),
-                    field(&r.model),field(&r.fs_uuid),field(&r.partuuid),mounts]);
+                    field(&r.model)]);
+                cells.extend(attachment_cells(r.attachment));
+                cells.extend([field(&r.fs_uuid),field(&r.partuuid),mounts]);
                 if rates{match r.rate{Ok(x)=>cells.extend([x.interval_ns.to_string(),x.bps(x.read_bytes),x.bps(x.write_bytes)]),
                     Err(why)=>cells.extend([format!("未知：{}",why.label()),"—".into(),"—".into()])}}
             }
@@ -77,4 +86,18 @@ pub(super) fn tools()->Reply{
     for row in report.rows{let p=row.profile;line(&mut out,[p.format.into(),p.tool.into(),
         (if p.private(){"随包固定位置"}else{"宿主固定位置（仅观察）"}).into(),row.installed.slot().into(),p.action().into()]);}
     Reply::plain(200,out)
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    #[test]
+    fn disk_attachment_labels_preserve_source_and_optional_failure(){
+        let direct=disks::Attachment{subsystem:"nvme",source:disks::AttachmentSource::KernelAncestor,nvme_transport:Ok("pcie")};
+        assert_eq!(attachment_cells(Ok(direct)),["nvme","当次内核祖先","pcie"]);
+        let inferred=disks::Attachment{subsystem:"scsi",source:disks::AttachmentSource::InferredParent,
+            nvme_transport:Err(disks::Reason::Unsupported)};
+        assert_eq!(attachment_cells(Ok(inferred)),["scsi","由已核父盘推断","未知：unsupported"]);
+        assert_eq!(attachment_cells(Err(disks::Reason::NotReported)),["未知：not-reported";3]);
+    }
 }
