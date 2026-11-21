@@ -1,3 +1,5 @@
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to reference the private constants module.
 //! SHA-256 `x86`/`x86_64` backend
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
@@ -11,7 +13,7 @@ use core::arch::x86_64::*;
 #[inline]
 #[target_feature(enable = "sha")]
 fn rounds4(r: usize, abef: &mut __m128i, cdgh: &mut __m128i, rest: __m128i) {
-    use crate::consts::K32;
+    use crate::smb::handshake_hash::consts::K32;
     let rk = _mm_set_epi32(
         K32[4 * r + 3] as i32,
         K32[4 * r + 2] as i32,

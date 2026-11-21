@@ -1,3 +1,5 @@
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to reference the private constants module.
 #[cfg(not(target_arch = "wasm32"))]
 compile_error!("wasm32-simd128 backend can be used only on wasm32 target arches");
 #[cfg(not(target_feature = "simd128"))]
@@ -6,7 +8,7 @@ compile_error!("wasm32-simd128 backend requires simd128 target feature");
 use core::arch::wasm32::*;
 use core::mem::size_of;
 
-use crate::consts::K64;
+use crate::smb::handshake_hash::consts::K64;
 
 #[target_feature(enable = "simd128")]
 pub(super) fn compress(state: &mut [u64; 8], blocks: &[[u8; 128]]) {
@@ -166,7 +168,7 @@ fn sha512_update_x(x: &mut [v128; 8], k64: v128) -> v128 {
 
 #[inline(always)]
 fn rk(i: usize) -> v128 {
-    let chunk = &crate::consts::K64[i..][..2];
+    let chunk = &crate::smb::handshake_hash::consts::K64[i..][..2];
     unsafe { v128_load(chunk.as_ptr().cast()) }
 }
 

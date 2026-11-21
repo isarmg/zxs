@@ -1,5 +1,6 @@
 //! Private SMB 3.1.1 implementation of the one ZXS application. The
 //! authenticated startup and Core storage authority are not public interfaces.
+mod handshake_hash;
 #[allow(dead_code, reason = "input layer is staged before the network runtime")]
 mod wire;
 mod local;

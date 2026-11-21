@@ -8,7 +8,8 @@ use crate::smb::{connection::{sessions::{RunningServerGuid,challenge::tests::pro
     wire::preauth::tests::synthetic_exchange};
 use crate::smb::session::SigningMacForSessionFixture;
 use digest::{KeyInit,Mac};
-use sha2::{Digest,Sha256,Sha512};
+use crate::smb::handshake_hash::{Sha256,Sha512};
+use digest::Digest;
 use std::{collections::VecDeque,io::{self,ErrorKind,Read,Write},sync::{Arc,Mutex}};
 
 #[derive(Default)]

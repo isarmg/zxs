@@ -73,9 +73,14 @@ separate Cargo packages. Signing retains the same AES-128 implementation,
 macros, buffering, erasure and traits. Unused doubling sizes and inverse
 operations were not moved.
 
+The pinned SHA-256 and SHA-512 code used by SMB now belongs to the
+[private handshake hash module](../../src/smb/handshake_hash/ORIGIN.md).
+It keeps the same backend dispatch and clears its state as before.
+No separate SHA-2 crate or unused fixed wrapper is needed in the product.
+
 ## Active paths and build scope
 
-The ZXS workspace excludes the 16 remaining local path packages, so their own
+The ZXS workspace excludes the 15 remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
 graph. The cipher manifest has no default feature; ZXS makes the already active
 stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
@@ -86,9 +91,8 @@ service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> aes, cipher [stream-wrapper, zeroize], digest [block-api, mac, zeroize], libc, sha2, zeroize
+zxs -> aes, cfg-if, cipher [stream-wrapper, zeroize], cpufeatures [target cfg], digest [block-api, default, mac, zeroize], libc, zeroize
 aes -> cipher, cpubits, cpufeatures [target cfg], zeroize
-sha2 -> cfg-if, cpufeatures [target cfg], digest
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 digest -> block-buffer, crypto-common [alias common], ctutils, zeroize
 block-buffer -> hybrid-array, zeroize
@@ -100,8 +104,9 @@ cpufeatures -> libc [target cfg, including Linux AArch64]
 ```
 
 All other nodes are leaves in this selected closure. All of these paths
-are inside ZXS. Inactive optional/dev declarations are preserved, not silently
-vendored or enabled; any change of feature set needs a new closure review.
+are inside ZXS. Inactive optional/dev declarations are not silently
+vendored or enabled; the now in-module SHA-2 is no longer named in the
+excluded digest development suite. Any feature change needs a new closure review.
 Local path packages have no registry checksum field in Cargo.lock; use
 SOURCES.toml to check their published origin. The highest imported minimum is
 Rust 1.89 (aes, edition 2024), below ZXS's existing Rust 1.100 / pinned

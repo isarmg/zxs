@@ -6,7 +6,8 @@
 //! the actual immutable serialized response, not a prediction of that reply.
 use super::{Error, Result, bytes, message::{Compound, Routing, SIGNED}, negotiate::{CmacChoice, Offer},
             setup_reply::Echo, u16le, u32le, u64le};
-use sha2::{Digest, Sha512};
+use crate::smb::handshake_hash::Sha512;
+use digest::Digest;
 
 const MAX_PACKET: usize = 68 * 1024;
 const MAX_CONTINUES: u8 = 8; // bounded ZXS new-session profile, not an SMB constant

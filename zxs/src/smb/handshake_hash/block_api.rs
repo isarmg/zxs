@@ -1,4 +1,7 @@
-use crate::consts;
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only for private module paths and fixed erasure.
+
+use super::consts;
 use core::fmt;
 use digest::{
     HashMarker, InvalidOutputSize, Output,
@@ -11,7 +14,7 @@ use digest::{
     typenum::{U32, U40, U64, U80, U128, Unsigned},
 };
 
-pub use crate::{sha256::compress256, sha512::compress512};
+use super::{sha256::compress256, sha512::compress512};
 
 /// Core block-level SHA-256 hasher with variable output size.
 ///
@@ -91,16 +94,12 @@ impl fmt::Debug for Sha256VarCore {
 
 impl Drop for Sha256VarCore {
     fn drop(&mut self) {
-        #[cfg(feature = "zeroize")]
-        {
-            use digest::zeroize::Zeroize;
-            self.state.zeroize();
-            self.block_len.zeroize();
-        }
+        use digest::zeroize::Zeroize;
+        self.state.zeroize();
+        self.block_len.zeroize();
     }
 }
 
-#[cfg(feature = "zeroize")]
 impl digest::zeroize::ZeroizeOnDrop for Sha256VarCore {}
 
 impl SerializableState for Sha256VarCore {
@@ -216,15 +215,11 @@ impl fmt::Debug for Sha512VarCore {
 
 impl Drop for Sha512VarCore {
     fn drop(&mut self) {
-        #[cfg(feature = "zeroize")]
-        {
-            use digest::zeroize::Zeroize;
-            self.state.zeroize();
-            self.block_len.zeroize();
-        }
+        use digest::zeroize::Zeroize;
+        self.state.zeroize();
+        self.block_len.zeroize();
     }
 }
-#[cfg(feature = "zeroize")]
 impl digest::zeroize::ZeroizeOnDrop for Sha512VarCore {}
 
 impl SerializableState for Sha512VarCore {

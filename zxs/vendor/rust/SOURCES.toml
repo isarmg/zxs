@@ -233,6 +233,7 @@ commit = "138dc5a05b93f8e49cda177fc6cfd7cc43673e5d"
 upstream_subdirectory = "sha2"
 archive = "https://static.crates.io/crates/sha2/sha2-0.11.1.crate"
 sha256 = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
+internal_module = "src/smb/handshake_hash"
 
 [[package]]
 name = "typenum"

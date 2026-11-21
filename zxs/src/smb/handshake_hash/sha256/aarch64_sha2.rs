@@ -1,3 +1,5 @@
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to reference the private constants module.
 //! SHA-256 `aarch64` backend.
 //!
 //! Implementation adapted from mbedtls.
@@ -86,7 +88,7 @@ pub(super) fn compress(state: &mut [u32; 8], blocks: &[[u8; 64]]) {
 #[inline]
 #[target_feature(enable = "neon")]
 fn rk(i: usize) -> uint32x4_t {
-    let chunk = &crate::consts::K32[i..][..4];
+    let chunk = &crate::smb::handshake_hash::consts::K32[i..][..4];
     unsafe { vld1q_u32(chunk.as_ptr()) }
 }
 

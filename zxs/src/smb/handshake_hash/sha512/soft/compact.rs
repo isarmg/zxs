@@ -1,4 +1,6 @@
-use crate::consts::K64;
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to reference the private constants module.
+use crate::smb::handshake_hash::consts::K64;
 
 fn compress_u64(state: &mut [u64; 8], block: [u64; 16]) {
     let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;

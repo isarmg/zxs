@@ -20,9 +20,9 @@ use crate::smb::wire::{
     preauth::RequestKeyContext,
 };
 use aes::Aes128;
-use digest::{KeyInit, Mac};
+use crate::smb::handshake_hash::Sha256;
+use digest::{FixedOutput, KeyInit, Mac, Output};
 use self::keyed_digest::Hmac;
-use sha2::{Sha256, digest::{FixedOutput, Output}};
 use std::num::NonZeroU64;
 use zeroize::{Zeroize, Zeroizing};
 

@@ -1,7 +1,9 @@
-use crate::consts::K64;
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to reference the private constants module.
+use crate::smb::handshake_hash::consts::K32;
 
 #[rustfmt::skip]
-macro_rules! repeat80 {
+macro_rules! repeat64 {
     ($i:ident, $b:block) => {
         let $i = 0; $b; let $i = 1; $b; let $i = 2; $b; let $i = 3; $b;
         let $i = 4; $b; let $i = 5; $b; let $i = 6; $b; let $i = 7; $b;
@@ -19,36 +21,42 @@ macro_rules! repeat80 {
         let $i = 52; $b; let $i = 53; $b; let $i = 54; $b; let $i = 55; $b;
         let $i = 56; $b; let $i = 57; $b; let $i = 58; $b; let $i = 59; $b;
         let $i = 60; $b; let $i = 61; $b; let $i = 62; $b; let $i = 63; $b;
-        let $i = 64; $b; let $i = 65; $b; let $i = 66; $b; let $i = 67; $b;
-        let $i = 68; $b; let $i = 69; $b; let $i = 70; $b; let $i = 71; $b;
-        let $i = 72; $b; let $i = 73; $b; let $i = 74; $b; let $i = 75; $b;
-        let $i = 76; $b; let $i = 77; $b; let $i = 78; $b; let $i = 79; $b;
     };
 }
 
 /// Read round constant
-fn rk(i: usize) -> u64 {
-    // `read_volatile` forces the compiler to read round constants from the static
-    // instead of inlining them, which improves codegen and performance
+fn rk(i: usize) -> u32 {
+    // `read_volatile` forces compiler to read round constants from the static
+    // instead of inlining them, which improves codegen and performance on some platforms.
+    // On x86 targets 32-bit constants can be encoded using immediate argument on the `add`
+    // instruction, so it's more efficient to inline them.
+    cfg_if::cfg_if! {
+        if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
+            use core::ptr::read as r;
+        } else {
+            use core::ptr::read_volatile as r;
+        }
+    }
+
     unsafe {
-        let p = K64.as_ptr().add(i);
-        core::ptr::read_volatile(p)
+        let p = K32.as_ptr().add(i);
+        r(p)
     }
 }
 
-/// Process a block with the SHA-512 algorithm.
-fn compress_block(state: &mut [u64; 8], block: &[u8; 128]) {
-    let mut block = super::to_u64s(block);
+/// Process a block with the SHA-256 algorithm.
+fn compress_block(state: &mut [u32; 8], block: &[u8; 64]) {
+    let mut block = super::to_u32s(block);
     let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
 
-    repeat80!(i, {
+    repeat64!(i, {
         let w = if i < 16 {
             block[i]
         } else {
             let w15 = block[(i - 15) % 16];
-            let s0 = (w15.rotate_right(1)) ^ (w15.rotate_right(8)) ^ (w15 >> 7);
+            let s0 = (w15.rotate_right(7)) ^ (w15.rotate_right(18)) ^ (w15 >> 3);
             let w2 = block[(i - 2) % 16];
-            let s1 = (w2.rotate_right(19)) ^ (w2.rotate_right(61)) ^ (w2 >> 6);
+            let s1 = (w2.rotate_right(17)) ^ (w2.rotate_right(19)) ^ (w2 >> 10);
             block[i % 16] = block[i % 16]
                 .wrapping_add(s0)
                 .wrapping_add(block[(i - 7) % 16])
@@ -56,14 +64,14 @@ fn compress_block(state: &mut [u64; 8], block: &[u8; 128]) {
             block[i % 16]
         };
 
-        let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
         let ch = (e & f) ^ ((!e) & g);
         let t1 = s1
             .wrapping_add(ch)
             .wrapping_add(rk(i))
             .wrapping_add(w)
             .wrapping_add(h);
-        let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
         let maj = (a & b) ^ (a & c) ^ (b & c);
         let t2 = s0.wrapping_add(maj);
 
@@ -87,7 +95,7 @@ fn compress_block(state: &mut [u64; 8], block: &[u8; 128]) {
     state[7] = state[7].wrapping_add(h);
 }
 
-pub(in super::super) fn compress(state: &mut [u64; 8], blocks: &[[u8; 128]]) {
+pub(in super::super) fn compress(state: &mut [u32; 8], blocks: &[[u8; 64]]) {
     for block in blocks {
         compress_block(state, block);
     }

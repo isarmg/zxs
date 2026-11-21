@@ -1,5 +1,12 @@
 //! Standalone ZXS storage. Fresh-selection inspection is read-only: it returns
 //! what was observed, not a capability to register, publish or write later.
+// Upstream's explicitly selected experimental SHA-2 intrinsics need a
+// crate attribute; this is absent on the normal ZXS release path.
+#![cfg_attr(
+    any(sha2_backend = "riscv-zknh", sha2_256_backend = "riscv-zknh"),
+    feature(riscv_ext_intrinsics)
+)]
+
 mod smb;
 #[doc(hidden)]
 pub use smb::{start_original_zxs,try_supervised_zxs_role};

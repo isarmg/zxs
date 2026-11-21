@@ -1,3 +1,5 @@
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to reference the private constants module.
 //! SHA-512 `x86`/`x86_64` backend
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
@@ -337,7 +339,7 @@ fn cast_rs(rs: &RoundStates) -> &[u64; SHA512_ROUNDS_NUM] {
 
 #[inline(always)]
 fn rk(i: usize) -> __m128i {
-    let chunk = &crate::consts::K64[i..][..2];
+    let chunk = &crate::smb::handshake_hash::consts::K64[i..][..2];
     unsafe { _mm_loadu_si128(chunk.as_ptr().cast()) }
 }
 

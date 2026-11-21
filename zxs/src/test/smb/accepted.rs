@@ -3,7 +3,8 @@
 use super::*;
 use crate::smb::{connection::{sessions::tests::running,setup::tests::frame},
     wire::preauth::tests::synthetic_exchange};
-use sha2::{Digest,Sha512};
+use crate::smb::handshake_hash::Sha512;
+use digest::Digest;
 use std::{io::{self,ErrorKind,Read,Write},sync::Mutex,time::Instant};
 
 #[derive(Default)]

@@ -89,10 +89,8 @@ version = "1.7"
 optional = true
 default-features = false
 
-[dev-dependencies.sha2]
-path = "../sha2-0.11.1"
-version = "0.11"
-
+# The upstream development suite is not imported. Its SHA-2 dependency is
+# now a private ZXS module; do not make a reverse package edge back to ZXS.
 [lints.clippy]
 borrow_as_ptr = "warn"
 cast_lossless = "warn"

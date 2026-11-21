@@ -1,5 +1,7 @@
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to reference the private constants module.
 use super::{sha256sig0, sha256sig1, sha256sum0, sha256sum1};
-use crate::consts::K32;
+use crate::smb::handshake_hash::consts::K32;
 
 #[inline]
 #[target_feature(enable = "zknh")]
