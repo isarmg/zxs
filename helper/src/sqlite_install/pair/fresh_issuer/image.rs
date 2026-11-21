@@ -5,17 +5,17 @@ use rustix::fs::{StatVfsMountFlags,fgetxattr,fstatvfs};
 use rustix::io::Errno;
 use std::{io,os::unix::fs::FileExt};
 
-pub(super) const PATH:&str="/usr/bin/zxs";
+pub(in crate::sqlite_install::pair) const PATH:&str="/usr/bin/zxs";
 const PARTS:&[&str]=&["usr","bin","zxs"];
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"not the independently approved protected static ZXS ELF")}
-pub(super) struct Image(RuntimeFile);
+pub(in crate::sqlite_install::pair) struct Image(RuntimeFile);
 impl Image{
-    pub(super) fn select(expected:&[u8;32])->io::Result<Self>{
+    pub(in crate::sqlite_install::pair) fn select(expected:&[u8;32])->io::Result<Self>{
         let f=super::super::smb_policy::release(PARTS,0o755,expected)?;
         standalone(f.file.metadata()?.len(),|offset,body|f.file.read_exact_at(body,offset))?;
         let s=Self(f);s.require()?;Ok(s)
     }
-    pub(super) fn require(&self)->io::Result<()>{
+    pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
         let f=&self.0.file;
         for x in [c"security.capability",c"system.posix_acl_access"]{
             match fgetxattr(f,x,&mut [] as &mut [u8]){

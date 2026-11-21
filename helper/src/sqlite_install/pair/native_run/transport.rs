@@ -11,7 +11,7 @@ pub(super) type Payload=[u8;65];
 
 #[derive(Clone,Copy)]
 pub(super) enum Kind{Reserved=3,Complete=5,Lease=6,Warm=7,Prepared=8,ChosenFolder=9,VolumeClaim=10,FirstBrowserReady=12,FirstBrowserRequest=13,RustInspect=15,RustStage=16,RustVaultPlaced=17,RustVaultSealed=18,
-    CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23,RetirementCheck=29,FreshDatabase=31}
+    CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23,RetirementCheck=29,FreshDatabase=31,DeployedActive=32,DeployedDatabase=33,DeployedMarker=34}
 
 pub(super) struct Channel {fd:File,peer:UCred,scope:[u8;32]}
 pub(super) fn pair()->io::Result<(File,File)>{

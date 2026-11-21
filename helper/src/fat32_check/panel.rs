@@ -1,10 +1,10 @@
 //! A single terminal-selected operand. The HTTP process has no command builder
 //! with user options, and never installs the checker's process-wide limits.
 use super::{Format,LeasedFormat,Outcome,Report,Request,btrfs,exfat,ext4,xfs,leased,ntfs,image::{ExfatSealed,Sealed},runner,runtime::Runtime};
-use crate::{fs_tools::RuntimeFile,pinned::invalid};
+use crate::pinned::{helper_elf::ForegroundElf,invalid};
 use rustix::{
     io::fcntl_dupfd_cloexec,pipe::{PipeFlags,pipe_with},
-    process::{Pid,Signal,kill_process,parent_process_death_signal}};
+    process::{Pid,Signal,getppid,kill_process,parent_process_death_signal}};
 use std::{fs::File,io::{self,Read,Write},process::{Child,Command,Stdio}};
 
 #[derive(Clone,Copy)]
@@ -41,18 +41,17 @@ impl Receipt{
         }
     }
 }
-pub(crate) struct Operand {image:Image,expected:[u8;32],installation:RuntimeFile}
+pub(crate) struct Operand {image:Image,expected:[u8;32],helper:ForegroundElf}
 impl Operand {
     pub(crate) fn capture(job:Job)->io::Result<Self>{
-        let installation=RuntimeFile::open(&["usr","bin","helper"],true,64<<20)?;
-        installation.require_running_helper()?;
+        let helper=ForegroundElf::local()?;
         let (image,expected)=match job{
             Job::Sealed(Format::Fat32,j)=>(Image::Fat32(Sealed::capture(&j.image,&j.digest)?),j.digest),
             Job::Sealed(Format::Exfat,j)=>(Image::Exfat(ExfatSealed::capture(&j.image,&j.digest)?),j.digest),
             Job::Leased(kind,j)=>(Image::Leased(kind,leased::Selected::select(&j.image)?),j.digest),
         };
-        installation.recheck()?;
-        Ok(Self{image,expected,installation})
+        helper.require()?;
+        Ok(Self{image,expected,helper})
     }
     pub(crate) fn info(&self)->Info{
         let(bytes,sector,detail)=match &self.image{
@@ -75,8 +74,8 @@ impl Operand {
         cmd.env_clear().current_dir("/").stdin(Stdio::from(input))
             .stdout(Stdio::from(File::from(write))).stderr(Stdio::piped());
         helper_linux_evidence::diagnostic_process::require_waitable_children()?;
-        self.installation.recheck()?;self.installation.require_running_helper()?;
-        expected.prepare_exec(&mut cmd,&self.installation.file,&self.expected)?;
+        self.helper.require()?;
+        expected.prepare_exec(&mut cmd,self.helper.descriptor(),&self.expected)?;
         if helper_linux_evidence::diagnostic_process::cancelled(){return Err(io::ErrorKind::Interrupted.into());}
         let child=cmd.spawn()?;
         // Do not keep an alias of the child's readonly OFD (and therefore
@@ -108,6 +107,8 @@ fn result(p:&[u8],status:Option<i32>,clusters:u32)->io::Result<Report>{
 
 pub(crate) fn worker(format:Format,expected:[u8;32])->io::Result<u8>{
     if parent_process_death_signal()?!=Some(Signal::TERM){return Err(invalid("no supervised copy-check parent"));}
+    let parent=getppid().ok_or_else(||invalid("no original copy-check parent"))?;
+    ForegroundElf::local()?.parent_is_same_image(parent)?;
     runner::prepare_worker()?;
     let file=File::from(fcntl_dupfd_cloexec(std::io::stdin(),3)?);
     let mut out=io::stdout().lock();
@@ -126,6 +127,8 @@ pub(crate) fn worker(format:Format,expected:[u8;32])->io::Result<u8>{
 
 pub(crate) fn leased_worker(kind:LeasedFormat,expected:[u8;32])->io::Result<u8>{
     if parent_process_death_signal()?!=Some(Signal::TERM){return Err(invalid("no supervised leased copy-check parent"));}
+    let parent=getppid().ok_or_else(||invalid("no original leased copy-check parent"))?;
+    ForegroundElf::local()?.parent_is_same_image(parent)?;
     match kind{
         LeasedFormat::Ext4|LeasedFormat::Ntfs|LeasedFormat::Btrfs=>runner::prepare_leased_worker()?,
         LeasedFormat::Xfs=>runner::prepare_xfs_worker()?,

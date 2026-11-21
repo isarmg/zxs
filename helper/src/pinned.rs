@@ -1,5 +1,6 @@
 //! Resolve inputs using held directories, without adopting a replacement at the same spelling.
 pub(crate) mod storage_status;
+pub(crate) mod helper_elf;
 pub(crate) mod portable_pending;
 pub(crate) use crate::path_rules::Kind;
 

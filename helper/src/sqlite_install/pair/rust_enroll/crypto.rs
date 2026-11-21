@@ -1,28 +1,28 @@
 //! Exact foreground-approved offline Rust vault providers.
 //! No stored Helper approval, caller-named library or runtime dependency.
-use crate::{fs_tools::RuntimeFile,sqlite_install::pair::{bad,smb_policy}};
+use crate::{fs_tools::RuntimeFile,pinned::helper_elf::ForegroundElf,sqlite_install::pair::{bad,smb_policy}};
 use crate::sqlite_install::pair::fresh_issuer::{CryptoPins,require_v17};
 use helper_linux_evidence::first_smb::{Enrollment,Libraries};
 use std::io;
 
-const HELPER:&[&str]=&["usr","bin","helper"];
 const GCRYPT:&[&str]=&["usr","lib","local-ops-helper","disk-tools-v1","lib","libgcrypt.so.20"];
 const GPGERR:&[&str]=&["usr","lib","local-ops-helper","disk-tools-v1","lib","libgpg-error.so.0"];
 fn no()->io::Error{bad("no approved Rust SMB enrollment provider for this original site")}
 pub(in crate::sqlite_install::pair) struct Cryptography{
-    helper:RuntimeFile,gcrypt:RuntimeFile,gpgerr:RuntimeFile,
+    helper:ForegroundElf,gcrypt:RuntimeFile,gpgerr:RuntimeFile,
 }
 impl Cryptography{
     pub(in crate::sqlite_install::pair) fn fresh(pins:CryptoPins)->io::Result<Self>{
         require_v17()?;smb_policy::system_policy()?;
         if !smb_policy::clean_environment(){return Err(no());}
-        let helper=smb_policy::release(HELPER,0o755,&pins.helper)?;
+        let helper=ForegroundElf::host()?;
+        helper.require_independent_digest(&pins.helper)?;
         let gcrypt=smb_policy::release(GCRYPT,0o644,&pins.gcrypt)?;
         let gpgerr=smb_policy::release(GPGERR,0o644,&pins.gpgerror)?;
         let x=Self{helper,gcrypt,gpgerr};x.require()?;Ok(x)
     }
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
-        self.helper.require_running_helper()?;
+        self.helper.require()?;
         require_v17()?;
         self.gcrypt.recheck()?;self.gpgerr.recheck()?;smb_policy::system_policy()
     }

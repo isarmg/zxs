@@ -2,7 +2,7 @@
 //! terminal challenge. The child receives neither source, destination, checker
 //! nor terminal. Nothing here can act on a disk or grant the parent authority.
 use super::{bad,host::Worker,manifest::sealed_owner,transport::{self,Channel,Kind}};
-use crate::{disk_web,fat32_check::repair::RepairFormat,fs_tools::RuntimeFile,maintenance,sqlite_install::{approval,pair::{
+use crate::{disk_web,fat32_check::repair::RepairFormat,pinned::helper_elf::ForegroundElf,maintenance,sqlite_install::{approval,pair::{
     domain::sealed,terminal::PublicConfirmation},stage::random}};
 use helper_linux_evidence::{diagnostic_process::{OfflineSql,account_sql_descriptors},prompt_signals::PromptSignals};
 use rustix::{net::{UCred,sockopt},process::{DumpableBehavior,Pid,Signal,dumpable_behavior,getgid,getppid,getuid,
@@ -10,7 +10,6 @@ use rustix::{net::{UCred,sockopt},process::{DumpableBehavior,Pid,Signal,dumpable
 use sha2::{Digest,Sha256};
 use std::{io,net::{Ipv4Addr,TcpListener},time::{Duration,Instant}};
 
-const HELPER:&[&str]=&["usr","bin","helper"];
 const TAG:&[u8]=b"ZXS-HELPER/COPY-REPAIR-WEB-2\0";
 const SHAPE:usize=TAG.len()+32+1+8;
 const WINDOW:Duration=Duration::from_secs(8*60);
@@ -29,18 +28,18 @@ pub(in crate::sqlite_install::pair) fn offer(tty:&PublicConfirmation,format:Repa
     maintenance::diagnostic_worker(uid.as_raw(),gid.as_raw())?;
     let mut scope=TAG.to_vec();scope.extend(random::<32>()?);scope.push(format.scope_code());scope.extend(bytes.to_be_bytes());raw_scope(&scope)?;
     let digest=Sha256::digest(&scope).into();let envelope=sealed(&scope)?;
-    let helper=RuntimeFile::open(HELPER,true,64<<20)?;helper.require_running_helper()?;
+    let helper=ForegroundElf::local()?;
     let signals=PromptSignals::begin()?;
     let check=||{signals.check()?;tty.check()};check()?;
     let (left,right)=transport::pair()?;
-    let mut child=Worker::spawn(&helper.file,&right,&envelope,OfflineSql::CopyRepairBrowser)?;
+    let mut child=Worker::spawn(helper.descriptor(),&right,&envelope,OfflineSql::CopyRepairBrowser)?;
     drop(right);drop(envelope);
     let channel=Channel::from_owned_child_session(left,UCred{pid:child.pid,uid,gid},digest)?;
     let wait=Instant::now()+Duration::from_secs(10);
     let (ready,[])=channel.wait_checked::<0>(Kind::CopyRepairBrowserReady,&digest,wait,&check)?;
     let port=u16::from_be_bytes(ready[..2].try_into().expect("bounded fixed port"));
     if port==0||ready[2..34]==[0;32]||ready[34..]!=[0;31]{return Err(no());}
-    child.live()?;helper.require_running_helper()?;require()?;
+    child.live()?;helper.require()?;require()?;
     let code=ready[2..34].iter().map(|b|format!("{b:02x}")).collect::<String>();
     tty.report(&format!("仅本机 {} 镜像工作副本请求：http://127.0.0.1:{port}/\n一次性配对码（2 分钟有效，请勿分享）：{code}\n网页只把请求交回这个终端，不读取或修复镜像。\n",format.panel_label()))?;
     let end=wait+WINDOW;
@@ -50,7 +49,7 @@ pub(in crate::sqlite_install::pair) fn offer(tty:&PublicConfirmation,format:Repa
     // successful child exit all precede the new foreground challenge.
     child.finish(&channel,end)?;
     check()?;signals.finish()?;drop(channel);drop(child);
-    helper.require_running_helper()?;require()
+    helper.require()?;require()
 }
 
 pub(crate) fn worker()->io::Result<()>{
@@ -61,7 +60,7 @@ pub(crate) fn worker()->io::Result<()>{
     let same=|parent:Pid|{if getppid()==Some(parent){Ok(())}else{Err(no())}};
     let parent=getppid().ok_or_else(no)?;let who=sockopt::socket_peercred(&fd)?;
     if who.pid!=parent||who.uid!=uid||who.gid!=gid||parent_process_death_signal()?!=Some(Signal::TERM){return Err(no());}
-    let helper=RuntimeFile::open(HELPER,true,64<<20)?;helper.require_running_helper()?;drop(helper);
+    ForegroundElf::local()?.parent_is_same_image(parent)?;
     set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
     if dumpable_behavior()?!=DumpableBehavior::NotDumpable{return Err(no());}
     let raw=sealed_owner(&meta,SHAPE,(uid.as_raw(),gid.as_raw()))?;drop(meta);

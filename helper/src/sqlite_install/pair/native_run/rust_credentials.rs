@@ -2,7 +2,7 @@
 //! has no readable vault descriptor. Only the separately reaped low
 //! writer ever writes the prepared 240-byte record.
 use super::{bad,host::{Worker,prerequisite},transport::{self,Channel,Kind,Payload},worker::original_parent};
-use crate::{fs_tools::RuntimeFile,pinned::{Kind as PathKind,Pinned},sqlite_install::{approval,
+use crate::{pinned::{Kind as PathKind,Pinned,helper_elf::ForegroundElf},sqlite_install::{approval,
     originals::SelectedSystem,pair::{
         domain::{Allocated,RustSite,VaultStamp,checked_vault_stamp,finish_seen_pending,give_live_approval,request_live_approval,sealed,verify_fresh_worker,verify_fresh_vault},
         native_sql::{Original,rust_vault::{ActiveRustMeta,Desired,RustAccountCut,RustChange}},
@@ -14,18 +14,17 @@ use rustix::{fs::{OFlags,fcntl_getfl},net::UCred,process::{DumpableBehavior,Gid,
     dumpable_behavior,getppid,parent_process_death_signal,set_dumpable_behavior,set_parent_process_death_signal}};
 use std::{fs::File,io,thread,time::{Duration,Instant}};
 
-const HELPER:&[&str]=&["usr","bin","helper"];
 const LIMIT:Duration=Duration::from_secs(12*60);
 fn exact_parent(fd:&File,owner:Pid)->io::Result<()>{
     original_parent(fd,owner)?;
-    let image=RuntimeFile::open(HELPER,true,64<<20)?;
-    image.require_running_helper()?;image.require_parent_helper(owner)
+    ForegroundElf::host()?.parent_is_same_image(owner)
 }
 fn subject(m:&Manifest,parent:Pid)->io::Result<([u8;16],u32,u32)>{
     let scope=m.fresh.as_ref().ok_or_else(||bad("only the fresh v17 offline account scope is accepted"))?;
-    let image=crate::sqlite_install::pair::smb_policy::release(HELPER,0o755,&scope.crypto.helper)?;
-    image.require_running_helper()?;image.require_parent_helper(parent)?;
-    verify_fresh_worker(&m.system,&m.plan,scope)?;image.recheck()?;
+    let image=ForegroundElf::host()?;
+    image.require_independent_digest(&scope.crypto.helper)?;
+    image.parent_is_same_image(parent)?;
+    verify_fresh_worker(&m.system,&m.plan,scope)?;image.require()?;
     Ok(scope.subject.tuple())
 }
 fn isolated(fd:File,parent:Pid,uid:u32,gid:u32,digest:[u8;32])->io::Result<(Channel,Instant)>{
@@ -187,10 +186,10 @@ impl<'s> DurableRustPending<'_,'s> {
     }
 }
 
-fn launch(helper:&RuntimeFile,site:&RustSite,tty:&PublicConfirmation,scope:[u8;32],meta:File,mode:OfflineSql)
+fn launch(helper:&ForegroundElf,site:&RustSite,tty:&PublicConfirmation,scope:[u8;32],meta:File,mode:OfflineSql)
     ->io::Result<(Worker,Channel)>{
     let (ours,child)=transport::pair()?;
-    let worker=Worker::spawn(&helper.file,&child,&meta,mode)?;
+    let worker=Worker::spawn(helper.descriptor(),&child,&meta,mode)?;
     drop(child);drop(meta);
     let (_,uid,gid)=site.subject();
     let actor=UCred{pid:worker.pid,uid:Uid::from_raw(uid),gid:Gid::from_raw(gid)};
@@ -198,7 +197,7 @@ fn launch(helper:&RuntimeFile,site:&RustSite,tty:&PublicConfirmation,scope:[u8;3
     loop{
         worker.live()?;
         if Instant::now()>=until{return Err(bad("the fixed original Rust credential worker did not become ready"));}
-        if give_live_approval(&ours,actor,&scope,||{site.require()?;tty.check()?;helper.require_running_helper()})?{break;}
+        if give_live_approval(&ours,actor,&scope,||{site.require()?;tty.check()?;helper.require()})?{break;}
         thread::sleep(Duration::from_millis(20));
     }
     Ok((worker,Channel::from_owned_child_session(ours,actor,scope)?))
@@ -243,11 +242,13 @@ fn transact_inner(site:&RustSite,m:Manifest,tty:&PublicConfirmation,fresh:Option
         return Err(bad("not this exact original offline Rust site"));
     }
     let helper=match (site.fresh_payload(),m.fresh){
-        (Some(origin),Some(new)) if origin.sha()?==new.site&&origin.subject==new.subject=>
-            crate::sqlite_install::pair::smb_policy::release(HELPER,0o755,&new.crypto.helper)?,
+        (Some(origin),Some(new)) if origin.sha()?==new.site&&origin.subject==new.subject=>{
+            let helper=ForegroundElf::host()?;
+            helper.require_independent_digest(&new.crypto.helper)?;helper
+        },
         _=>return Err(bad("not the exact new ZXS site authority")),
     };
-    helper.require_running_helper()?;
+    helper.require()?;
     let scope=m.scope()?;
     let (mut sql,ch)=launch(&helper,site,tty,scope,sealed(&m.encode()?)?,OfflineSql::RustAccount)?;
     ch.send_original(Kind::Lease,&scope,&[0;65],lease)?;

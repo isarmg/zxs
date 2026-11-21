@@ -23,7 +23,7 @@
 由非 root 操作者在本机前台运行，给出已保存单卷镜像的绝对路径、独立取得的完整 SHA-256 和一个**尚不存在**的输出目录。请输入刚显示的 `REPAIR-EXFAT-COPY` 挑战确认。输入不挂载、不可为设备或现用 loop 后端，输出不会覆盖同名文件或目录；操作也不会接管旧暂存。
 
 ```sh
-/usr/bin/helper repair-exfat-copy /saved/volume.img --sha256 HEX --output /work/new-volume
+./helper repair-exfat-copy /saved/volume.img --sha256 HEX --output /work/new-volume
 ```
 
 确认后才保留原只读租约，同一遍完整读取比对摘要并另写一份。工具只看见新建普通文件 `/image`，不见输入、设备、宿主目录或终端。对新文件仅用包内 `fsck.exfat -p`。**即使是自动模式，也可能截短文件、改名或删除坏目录项。** 不启用 `-y`、`-b` 或 `-s`，不补救挂载或日志，也不对来源或原盘做修复。限定主引导仍可识别、原单 FAT 1.00 边界可核；失败不能证明原盘坏。[上游手册](https://manpages.debian.org/trixie/exfatprogs/fsck.exfat.8.en.html)和[固定版的自动决策表](https://github.com/exfatprogs/exfatprogs/blob/1.2.9/fsck/repair.c#L34-L64)说明细节。

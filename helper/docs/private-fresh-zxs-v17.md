@@ -69,3 +69,5 @@ acceptance remains required: genuine originally protected fresh S/R/F,
 issue once, then remove the standalone Helper and its offline providers,
 cold-start the same verified ELF without a companion server, and exercise its built-in
 Web and signed SMB login. This is not a release or an unattended boot flow.
+
+Helper 可在其实际前台目录按需执行，不要求安装到固定名称；root 工作进程只沿同一个已在运行的原 ELF 描述符启动。独立的 Helper SHA-256 仍必填且必须匹配实际当前 ELF，不从当前文件自我批准。

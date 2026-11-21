@@ -30,6 +30,24 @@ impl InitialDatabase{
         if Self::scope(&fd,self.uid)?!=expected{return Err(bad("the named fresh SQLite original was replaced"));}
         Ok(expected)
     }
+    // Metadata only, on the same non-readable SQLite inode. The agreeing
+    // low reader and final host verifier use this only for a short observation.
+    pub(in crate::sqlite_install::pair) fn observation(&self)->io::Result<[u8;64]>{
+        Self::observation_on(&self.original,self.uid)
+    }
+    pub(in crate::sqlite_install::pair) fn observation_on(fd:&File,uid:u32)->io::Result<[u8;64]>{
+        let place=Self::scope(fd,uid)?;
+        let m=fd.metadata()?;
+        let mut out=[0;64];
+        for (slot,value) in out[..32].chunks_exact_mut(8).zip([place[0],place[1],place[2],m.len()]){
+            slot.copy_from_slice(&value.to_be_bytes());
+        }
+        for (slot,value) in out[32..].chunks_exact_mut(8).zip([m.ctime(),m.ctime_nsec(),m.mtime(),m.mtime_nsec()]){
+            slot.copy_from_slice(&value.to_be_bytes());
+        }
+        if Self::scope(fd,uid)?!=place{return Err(bad("different non-readable original SYSTEM database"));}
+        Ok(out)
+    }
     pub(in crate::sqlite_install::pair) fn original(&self)->io::Result<[u64;3]>{
         if Self::scope(&self.original,self.uid)?!=self.place{
             return Err(bad("changed or removed original fresh SQLite pin"));

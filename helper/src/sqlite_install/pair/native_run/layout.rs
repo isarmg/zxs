@@ -1,9 +1,11 @@
+mod deployment_check;
+pub(crate) use deployment_check::check_deployment;
 mod retirement_check;
 pub(crate) use retirement_check::RetirementCheck;
 // Resolve explicitly selected ordinary claims plus the single original R.
 // Only the authenticated lower-privilege process opens the actual SQLite ledger.
 use super::{bad,host::Worker,manifest::{read_sealed,sealed_owner},transport::{self,Channel,Kind},worker::original_parent};
-use crate::{fs_tools::RuntimeFile,path_rules::MAX_PATH_BYTES,pinned::{Kind as PathKind,Pinned},
+use crate::{path_rules::MAX_PATH_BYTES,pinned::{Kind as PathKind,Pinned,helper_elf::ForegroundElf},
     smb_profile::{self,first::{Endpoint,Folder,Id,Mode,RecycleName,MAX_FOLDERS}},
     sqlite_install::{approval,catalog::{self,Initial},markers::OrdinaryMark,originals::{SelectedSystem,named_backing},pair::{domain::{
         give_live_approval,request_live_approval,require_lent_ex,sealed,FreshParent},observed,terminal::PublicConfirmation},
@@ -15,7 +17,6 @@ use sha2::{Digest,Sha256};
 use std::{collections::BTreeSet,ffi::OsString,fmt::Write,fs::File,io,os::unix::{ffi::{OsStrExt,OsStringExt},fs::MetadataExt},
     path::{Path,PathBuf},time::{Duration,Instant}};
 
-const HELPER:&[&str]=&["usr","bin","helper"];
 const DOMAIN:&[u8]=b"helper exact init selection v10\0";
 const FRESH:&[u8]=b"ZXS-INITIAL-SESSION-1\0";
 const FRESH_SIZE:usize=FRESH.len()+16+8+32+32;
@@ -260,21 +261,18 @@ fn body(i:usize,id:Id)->[u8;65]{
 }
 fn query_with<T>(raw:&[u8],original:&File,subject:(Id,u32,u32),helper_sha:Option<[u8;32]>,
     check:impl Fn()->io::Result<()>,receive:impl FnOnce(&Channel,&[u8;32],Instant)->io::Result<T>)->io::Result<T>{
-    let mut helper=RuntimeFile::open(HELPER,true,64<<20)?;helper.require_running_helper()?;
-    if let Some(expected)=helper_sha{
-        crate::sqlite_install::pair::smb_policy::mode(&helper.file,0o755)?;
-        if helper.digest()?!=expected{return Err(bad_question());}
-    }
+    let helper=ForegroundElf::host()?;
+    if let Some(expected)=helper_sha{helper.require_independent_digest(&expected)?;}
     let scope:[u8;32]=Sha256::digest(raw).into();
     let meta=sealed(raw)?;let (parent,child)=transport::pair()?;
-    let mut hired=Worker::spawn(&helper.file,&child,&meta,OfflineSql::FirstLayout)?;
+    let mut hired=Worker::spawn(helper.descriptor(),&child,&meta,OfflineSql::FirstLayout)?;
     drop(child);drop(meta);
     let who=UCred{pid:hired.pid,uid:Uid::from_raw(subject.1),gid:Gid::from_raw(subject.2)};
     let until=Instant::now()+Duration::from_secs(20);
     loop{
         check()?;hired.live()?;
-        if Instant::now()>=until{return Err(bad("the original read-only INIT worker did not respond"));}
-        if give_live_approval(&parent,who,&scope,||{check()?;helper.require_running_helper()})?{break;}
+        if Instant::now()>=until{return Err(bad("the original read-only SYSTEM worker did not respond"));}
+        if give_live_approval(&parent,who,&scope,||{check()?;helper.require()})?{break;}
         std::thread::sleep(Duration::from_millis(20));
     }
     let channel=Channel::from_owned_child_session(parent,who,scope)?;
@@ -343,23 +341,26 @@ pub(crate) fn worker()->io::Result<()>{
     let parent=getppid().ok_or_else(bad_question)?;
     original_parent(&fd,parent)?;
     let host=approval::host_admin()?;
-    let mut helper=RuntimeFile::open(HELPER,true,64<<20)?;
-    helper.require_running_helper()?;helper.require_parent_helper(parent)?;
+    let helper=ForegroundElf::host()?;
+    helper.parent_is_same_image(parent)?;
     let raw=read_sealed(&meta,BUDGET)?;drop(meta);
-    enum QuestionKind{Fresh(Question,FreshScope),Retirement(retirement_check::Question)}
+    enum QuestionKind{Fresh(Question,FreshScope),Retirement(retirement_check::Question),Deployment(deployment_check::Question)}
     let q=if raw.starts_with(retirement_check::DOMAIN){
         QuestionKind::Retirement(retirement_check::Question::decode(&raw)?)
+    }else if raw.starts_with(deployment_check::DOMAIN){
+        QuestionKind::Deployment(deployment_check::Question::decode(&raw)?)
     }else{
         let q=Question::decode(&raw)?;
         let fresh=q.fresh.ok_or_else(bad_question)?;
-        crate::sqlite_install::pair::smb_policy::mode(&helper.file,0o755)?;
-        if helper.digest()?!=fresh.helper||q.actor!=fresh.subject.tuple().0{return Err(bad_question());}
+        helper.require_independent_digest(&fresh.helper)?;
+        if q.actor!=fresh.subject.tuple().0{return Err(bad_question());}
         QuestionKind::Fresh(q,fresh)
     };
     drop(helper);
     let (subject,location,path)=match &q{
         QuestionKind::Fresh(q,f)=>(f.subject,q.location,q.system.as_path()),
         QuestionKind::Retirement(q)=>q.original_system(),
+        QuestionKind::Deployment(q)=>q.original_system(),
     };
     let (actor,uid,gid)=subject.tuple();
     approval::drop_to_storage(uid,gid)?;
@@ -378,6 +379,7 @@ pub(crate) fn worker()->io::Result<()>{
     let (q,fresh)=match q{
         QuestionKind::Fresh(q,fresh)=>(q,fresh),
         QuestionKind::Retirement(q)=>return q.inspect(&system,&channel,&scope,parent),
+        QuestionKind::Deployment(q)=>return q.inspect(&system,&channel,&scope,parent),
     };
     let (catalogue,db)=observed::isolated_first_claims(&q.pool,&q.init,&actor,&fresh.init_sha,&system)?;
     let place=InitialDatabase::scope(&db,uid)?;

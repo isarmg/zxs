@@ -1,7 +1,7 @@
 //! Shared offline origin attributes, names and small sealed messages.
 mod return_to_host;
 mod live;
-pub(in crate::sqlite_install::pair) use return_to_host::{give_live_approval,request_live_approval,RustSite,VaultStamp,
+pub(in crate::sqlite_install::pair) use return_to_host::{DeployedSite,give_live_approval,request_live_approval,RustSite,VaultStamp,
     checked_vault_stamp,verify_fresh_worker,Allocated,finish_seen_pending,verify_fresh_vault,FreshHome,FreshParent};
 pub(in crate::sqlite_install) use return_to_host::{lease as require_lent_ex,shared_lease as require_lent_sh};
 use super::bad;

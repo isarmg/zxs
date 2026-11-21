@@ -46,7 +46,7 @@ impl ExplicitSubject{
     pub(in crate::sqlite_install) fn tuple(self)->(Id,u32,u32){(self.actor,self.uid,self.gid)}
 }
 
-mod image;
+pub(super) mod image;
 use super::{command::{key,name,sha,value},distinct_roles,domain::{FreshHome,FreshParent},native_run::{Choice,ResolvedRust,transact_fresh},
     native_sql::rust_vault::{Desired,RustOrder},rust_enroll::{crypto::Cryptography,manifest::{Intent,Manifest}},terminal::PublicConfirmation};
 use crate::{path_rules::Kind,smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},

@@ -23,7 +23,7 @@
 本机非 root 前台给出已保存单卷镜像的绝对路径、独立的完整 SHA-256 和一个不存在的新输出目录。操作者先确认输入未挂载、未作为 loop 后端；它必须是合格的普通文件，不能是设备节点。核对本机实际动作、原位置与输出，再输入刚显示的 `REPAIR-FAT32-COPY` 挑战。不接受其他工具参数。可另用同参数的 `helper repair-fat32-copy web …` 在[单独配对页](disk-web.md#可选由同机浏览器发起工作副本的终端确认)发起原终端确认；网页不读写镜像或选择工具。
 
 ```sh
-/usr/bin/helper repair-fat32-copy /saved/volume.img --sha256 HEX --output /work/new-volume
+./helper repair-fat32-copy /saved/volume.img --sha256 HEX --output /work/new-volume
 ```
 
 只把拥有独立 inode 的新工作文件放进隔离环境，固定调用 `fsck.fat -p`。在本版 dosfstools 4.2 中，`-p`、`-a` 与 `-y` 是**同一自动模式**。它可能截短、改名、删除坏目录项，或把孤立的簇链保存为恢复文件；只对工作副本接受这种效果，不尝试找回全部文件。原输入在完整复制和外部 SHA/EOF 核对期间及之后持原只读租约，永不交给可写的子进程。不给上游磁盘、其他数据、原宿主目录、终端或自由选项。[本版上游手册](https://manpages.debian.org/trixie/dosfstools/fsck.fat.8.en.html)和[自动模式源码](https://github.com/dosfstools/dosfstools/blob/v4.2/src/fsck.fat.c#L118-L130)记录了其实际行为。

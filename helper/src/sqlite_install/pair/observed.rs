@@ -1,7 +1,7 @@
 //! A readonly cut of one explicitly selected, offline SYSTEM. Physical
 //! R/F paths may be compared as SQL bytes only, never resolved or opened here.
 use super::Id;
-use crate::sqlite_install::{bad,catalog::{self,Canonical,Initial},engine::{self,Access},markers::SystemMark,originals::{HeldRoot,LockedSystem},reservation::Existing};
+use crate::sqlite_install::{bad,catalog::{self,Canonical,Initial},engine::{self,Access},markers::{SystemMark,SystemObservation},originals::{HeldRoot,LockedSystem},reservation::Existing};
 use rusqlite::{params,Transaction};
 use std::{io,os::unix::ffi::OsStrExt};
 
@@ -96,6 +96,40 @@ pub(super) fn isolated_first_claims(pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32
     })?;
     db.sidecars_absent()?;let _same=db.fresh_observation_pin()?;
     Ok((claims,pin))
+}
+/// The actual offline read observer, never a credential writer. Recover the
+/// exact original INIT claim and current ACTIVE metadata, with a non-readable
+/// pin to the actual database checked before and after the short SQLite cut.
+pub(super) fn deployed_active(locked:&LockedSystem,site:&super::fresh_issuer::SitePayload,plan:&crate::smb_profile::rust_first::RustPlan)
+    ->io::Result<(std::fs::File,[u8;64],SystemObservation,[u8;224])>{
+    use super::{fresh_issuer::InitialDatabase,native_sql::rust_vault::active_at};
+    super::fresh_issuer::compiled_v17()?;
+    let (actor,uid,_)=site.subject.tuple();
+    let o=site.origin;
+    let source=locked.source();
+    if site.plan_sha!=plan.sha()||o!=plan.origin||site.system!=source.path()||uid!=source.uid(){
+        return Err(bad("different held SYSTEM or installed v17 plan"));
+    }
+    let schema=Canonical::new()?;
+    let db=Existing::observed_system(locked)?;
+    let marker=SystemMark::before_sql(source)?;
+    let pin=db.fresh_observation_pin()?;
+    let stamp=InitialDatabase::observation_on(&pin,uid)?;
+    let (body,public)=at_original(&o.pool,&o.init,locked,&db,&schema,&marker,|tx|{
+        let is_original:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM main.operation
+            WHERE op_id=?1 AND actor_id=?2 AND kind=1 AND state=1)",params![&o.init[..],&actor[..]],|r|r.get(0)).map_err(sql)?;
+        if !is_original{return Err(bad("the protected site does not name the actual committed INIT actor"));}
+        // Reconstruct and check the original bounded catalogue digest. The
+        // R/F byte paths are not opened by the deployment observer.
+        catalog::initial_metadata(tx,&schema,source,&o.pool,&o.init)?;
+        active_at(tx,plan)?.record_prefix()
+    })?;
+    let named=db.fresh_observation_pin()?;
+    if InitialDatabase::observation_on(&pin,uid)?!=stamp||InitialDatabase::observation_on(&named,uid)?!=stamp{
+        return Err(bad("original SYSTEM database changed during the read-only deployment check"));
+    }
+    let original_mark=marker.observe(source,&body)?;
+    Ok((pin,stamp,original_mark,public))
 }
 #[cfg(test)]
 mod fresh_v17_tests{

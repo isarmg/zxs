@@ -170,6 +170,60 @@ impl SystemMark {
     pub(super) fn verify(&self,root:super::originals::HeldRoot<'_>,wanted:&[u8;101])->io::Result<()> {
         self.0.verify(root.dir(),wanted)
     }
+    pub(super) fn observe(&self,root:super::originals::HeldRoot<'_>,wanted:&[u8;101])->io::Result<SystemObservation>{
+        self.verify(root,wanted)?;
+        let found=SystemObservation::received(discovery_leaf(root.dir(),slot())?,root.dir(),root.uid())?;
+        if found.id!=self.0.s{return Err(bad("original SYSTEM observation marker changed"));}
+        self.verify(root,wanted)?;
+        Ok(found)
+    }
+}
+
+/// A non-readable pin to the exact physical marker already verified by the
+/// low reader. Neither the marker's token/body nor a readable FD is carried.
+pub(super) struct SystemObservation{fd:File,id:Stamp,uid:u32}
+impl SystemObservation{
+    pub(super) fn received(fd:File,dir:&File,uid:u32)->io::Result<Self>{
+        use rustix::{fs::fcntl_getfl,io::{FdFlags,fcntl_getfd}};
+        if !fcntl_getfl(&fd)?.contains(OFlags::PATH)||!fcntl_getfd(&fd)?.contains(FdFlags::CLOEXEC){
+            return Err(bad("the original SYSTEM observation marker pin must be non-readable"));
+        }
+        let id=held(&fd)?;
+        let this=Self{fd,id,uid};
+        this.require(dir)?;
+        Ok(this)
+    }
+    pub(super) fn pin(&self)->&File{&self.fd}
+    pub(super) fn require(&self,dir:&File)->io::Result<[u8;64]>{
+        let s=&self.id;
+        feedback_shape(s,&held(dir)?,self.uid,101)?;
+        if held(&self.fd)?!=*s||held(&discovery_leaf(dir,slot())?)?!=*s{
+            return Err(bad("original named SYSTEM observation marker was changed or removed"));
+        }
+        let mut stamp=[0;64];
+        for (x,n) in stamp.chunks_exact_mut(8).zip([s.dev,s.ino,s.mount,s.len,s.ct.0 as u64,u64::from(s.ct.1),
+            s.mt.0 as u64,u64::from(s.mt.1)]){x.copy_from_slice(&n.to_be_bytes());}
+        Ok(stamp)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn reattach_marker_pin_rejects_any_read_fd_and_same_bytes_at_a_new_inode(){
+    use std::os::unix::fs::PermissionsExt;
+    let t=tempfile::tempdir().unwrap();
+    let path=t.path().join(slot());
+    std::fs::write(&path,[45;101]).unwrap();
+    std::fs::set_permissions(&path,std::fs::Permissions::from_mode(0o600)).unwrap();
+    let dir=File::open(t.path()).unwrap();
+    let uid=rustix::process::geteuid().as_raw();
+    assert!(SystemObservation::received(File::open(&path).unwrap(),&dir,uid).is_err());
+    let proof=SystemObservation::received(discovery_leaf(&dir,slot()).unwrap(),&dir,uid).unwrap();
+    proof.require(&dir).unwrap();
+    let prior=t.path().join("earlier");
+    std::fs::rename(&path,&prior).unwrap();
+    std::fs::copy(&prior,&path).unwrap();
+    assert!(proof.require(&dir).is_err());
 }
 /// Non-SQL pool evidence for the explicitly selected Web unit. It never
 /// confers a claim or a write gate. The caller holds the original SYSTEM SH

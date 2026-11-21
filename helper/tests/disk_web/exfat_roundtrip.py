@@ -1,15 +1,18 @@
 """Manual, unexecuted acceptance fixture for a dedicated Debian 13 test host.
 
-Requires an actually installed, trusted /usr/bin/helper and a separately prepared
-clean exFAT single-volume image. Not invoked by the service, packaging or CI.
+Requires a trusted standalone Helper and independent expected SHA-256 as its
+two positional operands, and a separately prepared clean exFAT single-volume
+image. Not invoked by a product, packaging or CI.
 No device/formatting/repair, secret logging, browser upload, or arbitrary command.
 """
+import hashlib
 import http.client
 import os
 import re
 import select
 import signal
 import stat
+import sys
 import time
 
 
@@ -25,18 +28,61 @@ def stamp(path):
     return m.st_dev, m.st_ino, m.st_size, m.st_mtime_ns, m.st_ctime_ns
 
 
+def executable(path, expected):
+    need(os.path.isabs(path) and os.path.normpath(path) == path
+         and re.fullmatch("[0-9a-f]{64}", expected) and expected != "0" * 64,
+         "need one existing absolute Helper and its independent SHA-256")
+    def check(fd):
+        m = os.fstat(fd)
+        need(stat.S_ISREG(m.st_mode) and m.st_nlink == 1 and 1 <= m.st_size <= 64 << 20
+             and m.st_uid in {0, os.getuid()} and stat.S_IMODE(m.st_mode) in {0o500, 0o555, 0o700, 0o755},
+             "not a protected regular Helper executable")
+        return m.st_dev, m.st_ino, m.st_size, m.st_mtime_ns, m.st_ctime_ns
+    # This opt-in test presumes the fixture operator has already admitted
+    # the local directory and genuine Linux procfs on the disposable host.
+    pin = os.open(path, os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        first = check(pin)
+        need(os.readlink("/proc/self") == str(os.getpid()), "unexpected process filesystem")
+        fd = os.open(f"/proc/self/fd/{pin}", os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    finally:
+        os.close(pin)
+    try:
+        need(check(fd) == first, "the owned Helper descriptor changed")
+        need(os.pread(fd, 7, 0) == b"\x7fELF\x02\x01\x01", "expected a Linux ELF64 Helper")
+        digest = hashlib.sha256()
+        position = 0
+        while position < first[2]:
+            part = os.pread(fd, min(65536, first[2] - position), position)
+            need(part, "truncated Helper")
+            digest.update(part)
+            position += len(part)
+        need(not os.pread(fd, 1, position) and check(fd) == first and digest.hexdigest() == expected,
+             "different or changed Helper")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def run():
     image = os.environ["HELPER_TEST_EXFAT_CLEAN_IMAGE"]
     digest = os.environ["HELPER_TEST_EXFAT_CLEAN_SHA256"].lower()
     need(os.getuid() != 0 and os.path.isabs(image) and re.fullmatch("[0-9a-f]{64}", digest),
          "need an unprivileged worker, explicit image and independent SHA-256")
     baseline = stamp(image)
-    pid, tty = os.forkpty()
-    if pid == 0:
-        try:
-            os.execve("/usr/bin/helper", ["helper", "disk-web", "--exfat-copy", image, "--sha256", digest], {})
-        finally:
-            os._exit(127)
+    need(len(sys.argv) == 3 and os.execve in os.supports_fd,
+         "usage: exfat_roundtrip.py /absolute/path/to/helper EXPECTED_HELPER_SHA256")
+    helper = executable(sys.argv[1], sys.argv[2])
+    try:
+        pid, tty = os.forkpty()
+        if pid == 0:
+            try:
+                os.execve(helper, ["helper", "disk-web", "--exfat-copy", image, "--sha256", digest], {})
+            finally:
+                os._exit(127)
+    finally:
+        os.close(helper)
     origin = ""
     creds = {}
     try:
