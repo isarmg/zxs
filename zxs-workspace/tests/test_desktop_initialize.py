@@ -85,6 +85,37 @@ class NewOriginalWorktree(unittest.TestCase):
         self.assertIn("尚无已提交的快照", attempt.prepare())
         return attempt
 
+    def test_first_contents_is_admitted_local_inventory_even_with_store_offline(self):
+        live = self.register()
+        absent = self.store.rename(self.store.with_name("store-offline"))
+        db = self.state / "worktree.sqlite"
+        original = db.read_bytes()
+        with patch.object(lifecycle, "relative_document", side_effect=AssertionError("no STORE document")), \
+             patch.object(worktree, "anonymous_capture", side_effect=AssertionError("no freeze")):
+            report, size = lifecycle.observe_first_contents(live)
+        self.assertEqual(size, self.story.stat().st_size)
+        self.assertEqual(
+            [(r.path, r.before, r.after, r.after_bytes) for r in report.page(0)],
+            [("empty", None, "directory", None), ("story", None, "file", size)])
+        self.assertEqual(db.read_bytes(), original)
+        self.assertEqual((live.status()["base_generation"], live.status()["pending_operation"]), (0, None))
+        self.assertEqual(list(absent.iterdir()), [])
+
+    def test_no_first_contents_if_another_writer_changes_the_registration_during_observation(self):
+        live = self.register()
+        actual_read = lifecycle._observe_local_work
+        def read(*args, **kwargs):
+            contents = actual_read(*args, **kwargs)
+            # A newly changed/inconsistent checkout cannot get a stale no-pending report.
+            with worktree.locked(self.state) as (con, _, __):
+                con.execute("UPDATE checkout SET pending_sha=? WHERE singleton=1", ("a"*64,))
+            return contents
+        with patch.object(lifecycle, "_observe_local_work", side_effect=read):
+            with self.assertRaisesRegex(Rejected, "无待决"): lifecycle.observe_first_contents(live)
+        with worktree.locked(self.state, read_only=True) as (_, row, __):
+            self.assertEqual((row["generation"], row["pending"], row["pending_sha"]), (0, None, "a"*64))
+        self.assertEqual(list(self.store.iterdir()), [])
+
     def test_register_then_manually_publish_the_exact_genesis_with_no_parent(self):
         live = self.register()
         attempt = self.first(live)
@@ -102,6 +133,8 @@ class NewOriginalWorktree(unittest.TestCase):
         self.assertEqual(live.status()["base_operation"], marker.operation)
         self.assertEqual(attempt.result()[0], "completed")
         self.assertEqual(self.story.read_bytes(), b"user data before any version")
+        with patch.object(lifecycle, "_observe_local_work", side_effect=AssertionError("no stale zero-generation scan")):
+            with self.assertRaisesRegex(Rejected, "仍处在零代"): lifecycle.observe_first_contents(live)
 
         final.rename(self.store / "unavailable-at-the-base.zxs")
         next_ = CommitChoice(live)
@@ -222,8 +255,9 @@ class NewOriginalWorktree(unittest.TestCase):
 
     @unittest.skipUnless(find_spec("PySide6"), "optional Qt window")
     def test_real_window_starts_without_snapshot_and_requires_independent_commit(self):
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QLabel, QPushButton
         from zipworkspace.desktop import checkout_pane, commit_controls
+        from zipworkspace.desktop.widgets import Table
         from zipworkspace.desktop.window import Window
         app = QApplication.instance() or QApplication([])
         window = Window()
@@ -234,7 +268,7 @@ class NewOriginalWorktree(unittest.TestCase):
         self.assertTrue(pane.initialize.isEnabled())
         self.assertFalse(pane.start.isEnabled())
 
-        def start(control, expected_jobs):
+        def start(control, expected_jobs, *, before_poll=None):
             # Capture real call/receipt flow through Window.job and Window.poll.
             works = []
             def submit(work):
@@ -247,6 +281,7 @@ class NewOriginalWorktree(unittest.TestCase):
                     self.assertGreater(len(works), i)
                     future, call = works[i]
                     future.set_result(call())
+                    if before_poll is not None: before_poll()
                     window.poll()
                 self.assertEqual(len(works), expected_jobs)
 
@@ -264,7 +299,27 @@ class NewOriginalWorktree(unittest.TestCase):
         self.assertIsNotNone(pane.live)
         self.assertIn("尚无已提交快照", pane.details.text())
         self.assertFalse(pane.initialize.isEnabled())
-        self.assertFalse(pane.changes.isEnabled())
+        self.assertTrue(pane.changes.isEnabled())
+        self.assertIn("查看首次提交", pane.changes.text())
+        self.assertFalse(pane.initial_changes.isEnabled())
+        for i in range(100): (self.work/f"part-{i:03}").touch()
+        start(pane.changes, 1, before_poll=window.cancel_transfer)
+        self.assertIsNone(pane.changes_dialog)
+        self.assertIn("已取消首次提交内容清单", window.note.text())
+        start(pane.changes, 1)
+        dialog = pane.changes_dialog
+        self.assertEqual(dialog.windowTitle(), "首次提交内容清单")
+        self.assertTrue(any(f"{self.story.stat().st_size:,} B" in title.text()
+                            for title in dialog.findChildren(QLabel)))
+        table = dialog.findChild(Table)
+        self.assertEqual(table.rows.columnCount(), 2)
+        self.assertEqual(table.rows.rowCount(), 100)
+        self.assertIsNone(dialog.findChild(QPushButton, "restore-selected-missing-member"))
+        next_ = next(control for control in dialog.findChildren(QPushButton) if control.text() == "下一页")
+        next_.click()
+        self.assertEqual([row.path for _, row in table.rows.rows], ["part-099", "story"])
+        dialog.reject()
+        self.assertIsNone(pane.changes_dialog)
         self.assertEqual(list(self.store.iterdir()), [])
         with patch.object(commit_controls, "confirm", return_value=True) as submit:
             start(pane.commits.save, 3)  # Distinct consent: prepare, commit, status.
@@ -272,3 +327,4 @@ class NewOriginalWorktree(unittest.TestCase):
             self.assertIn("停止所有工作树写入者", submit.call_args.kwargs["attestation"])
         self.assertEqual(len(list(self.store.glob("*.zxs"))), 1)
         self.assertIn("基线第 1 代", pane.details.text())
+        self.assertEqual(pane.changes.text(), "查看工作目录相对基线的改动…")

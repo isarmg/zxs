@@ -142,6 +142,25 @@ def _observe_local_work(live, *, with_store, observer=None):
     return observe_held(live.work_fd, work, require_ids=True, check_held=work_member, **options)
 
 
+def observe_first_contents(live, *, observer=None):
+    """List the still-held new worktree's admitted contents, without granting a first commit."""
+    from .comparison import compare_manifests
+    from .model import Manifest
+    if observer is not None: observer.begin("identity")
+    expected = live.initial_base
+    if expected is None or _idle_live_base(live, local_only=True) != expected:
+        raise Rejected("只查看本窗口仍处在零代、没有任何提交的原登记")
+    current = _observe_local_work(live, with_store=False, observer=observer)
+    # An empty comparison side only orders the inventory. No marker, slot, or
+    # fictitious prior version is created or handed back to a commit action.
+    result = compare_manifests(Manifest(), current)
+    if observer is not None: observer.begin("identity")
+    if _idle_live_base(live, local_only=True) != expected:
+        raise Rejected("观察期间原零代登记已改变；不显示旧清单")
+    if observer is not None: observer.check()
+    return result, current.total
+
+
 def observe_initial_changes(live, *, observer=None):
     """Local observation only, against the exact initial checkout this window created."""
     from .comparison import compare_to_index

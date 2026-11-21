@@ -3,7 +3,7 @@ from contextlib import closing
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QVBoxLayout, QWidget
 
 from ..capacity import describe
-from ..lifecycle import LiveVisibility, observe_initial_changes, observe_live_changes
+from ..lifecycle import LiveVisibility, observe_first_contents, observe_initial_changes, observe_live_changes
 from ..model import Rejected
 
 from .checkout_action import CheckoutChoice, available
@@ -168,7 +168,7 @@ class CheckoutPane(QWidget):
             if current and incoming is not None:
                 self._attach(incoming)
                 incoming = None
-                self.owner.inform("已登记原工作目录。要生成第 1 代，请停止写入后另行确认提交。")
+                self.owner.inform("已登记原工作目录。可先查看首次提交的内容；要生成第 1 代，请停写后另行确认提交。")
             else:
                 self.owner.inform("原登记已完成，但没有接管到当前窗口。请保留原 STATE。")
         finally:
@@ -388,8 +388,10 @@ class CheckoutPane(QWidget):
                        and (phase == "visible" or phase is None and self.commits.visible))
         committed = bool(record.get("base_generation"))
         no_commit = record.get("pending_operation") is None
+        first = self._can_observe_first()
         self.browse.setEnabled(self._can_browse_baseline())
-        self.changes.setEnabled(idle and visible and committed and no_commit)
+        self.changes.setText("查看首次提交的内容…" if first else "查看工作目录相对基线的改动…")
+        self.changes.setEnabled(idle and visible and no_commit and (committed or first))
         index = self.live.initial_index if self.live is not None else None
         self.initial_changes.setEnabled(bool(idle and visible and committed and no_commit and index is not None
                                              and (record.get("branch"), record.get("base_generation"),
@@ -412,6 +414,15 @@ class CheckoutPane(QWidget):
         return bool(self.open_baseline is not None and self.live is not None and not self.active
                     and self.commits.running is None and not self.commits.blocked and not self.visibility_blocked
                     and self._displayed_basis() is not None)
+
+    def _can_observe_first(self):
+        record = self.live_record or {}
+        original = self.live.initial_base if self.live is not None else None
+        return bool(original is not None and not self.visibility_blocked and not self.commits.blocked
+                    and record.get("visibility") == "visible" and record.get("pending_operation") is None
+                    and record.get("pending_visibility_operation") is None
+                    and tuple(record.get(key) for key in ("repo", "branch", "base_generation", "base_operation"))
+                    == original[:4])
 
     def _displayed_basis(self):
         record = self.live_record or {}
@@ -616,23 +627,29 @@ class CheckoutPane(QWidget):
         live, record = self.live, self.live_record
         if (live is None or self.owner.pending is not None or self.active
                 or self.commits.running is not None or self.changes_dialog is not None): return
+        first = not initial and self._can_observe_first()
         observer = Verification()
+        name = "首次提交内容清单" if first else "工作树对照"
 
         def current():
             return self.live is live and self.live_record is record
 
         def done(outcome):
             result, error = outcome
-            evidence = result[2] if result is not None and not initial else None
+            evidence = result[2] if result is not None and not (initial or first) else None
             try:
                 if not current(): return
                 if observer.cancelled:
-                    self.owner.inform("已取消工作树对照；没有写入或显示不完整结果。")
+                    self.owner.inform(f"已取消{name}；没有写入或显示不完整结果。")
                     return
                 if error is not None:
-                    self.owner.inform(f"未取得完整工作树对照：{error}。未启动冻结、提交或恢复。")
+                    self.owner.inform(f"未取得完整{name}：{error}。未启动冻结、提交或恢复。")
                     return
-                if initial:
+                if first:
+                    contents, size = result
+                    self.owner.inform("已读取本次首代内容清单；未检查 STORE 或提交。")
+                    self.show_changes(live, None, contents, first_bytes=size)
+                elif initial:
                     self.owner.inform("离线对照已完成；未检查 STORE，后续编辑不会自动刷新。")
                     self.show_changes(live, *result, initial=True)
                 else:
@@ -650,15 +667,17 @@ class CheckoutPane(QWidget):
                 result = None
                 try:
                     with closing(loan):
+                        if first: return observe_first_contents(loan, observer=observer), None
                         if initial: return observe_initial_changes(loan, observer=observer), None
                         result = observe_live_changes(loan, observer=observer, retain_missing=True)
                     return result, None
                 except Exception as error:
                     if result is not None and result[2] is not None: result[2].close()
                     return None, error
-            title = ("正在离线对照初次签出的原核验索引和本机工作目录…" if initial else
+            title = ("正在只读核对原零代登记及工作目录的内容…" if first else
+                     "正在离线对照初次签出的原核验索引和本机工作目录…" if initial else
                      "正在只读核验实际基线及本次工作目录…")
-            future = self.owner.job(title, read, done, cancel=observer.cancel, cancel_text="取消工作树对照",
+            future = self.owner.job(title, read, done, cancel=observer.cancel, cancel_text=f"取消{name}",
                                     progress_report=lambda: observer.progress() if current() else ("", 0, None))
             if future is None: raise Rejected("另一个任务正在执行；未开始对照")
         except BaseException as error:
@@ -668,21 +687,31 @@ class CheckoutPane(QWidget):
         else:
             future.add_done_callback(lambda task: loan.close() if task.cancelled() else None)
 
-    def show_changes(self, live, marker, report, *, initial=False, evidence=None):
+    def show_changes(self, live, marker, report, *, initial=False, evidence=None, first_bytes=None):
         # The read-only result exists only in this modal view. Once closed it
         # cannot linger into a later commit, recovery, or baseline switch.
         dialog = QDialog(self)
-        dialog.setWindowTitle("离线对照首次签出版本" if initial else "工作目录相对基线的改动")
+        first = first_bytes is not None
+        dialog.setWindowTitle("首次提交内容清单" if first else
+                              "离线对照首次签出版本" if initial else "工作目录相对基线的改动")
         dialog.resize(820, 510)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(label(
-            f"原工作目录：{live.work}\n当前登记基线：分支 {marker.branch} · 第 {marker.generation} 代\n"
-            f"基线节点：{marker.operation}\n新增 {report.added} · 修改 {report.changed} · 缺少 {report.missing}。"
-            + ("本次未发现差异。" if not report.rows else "")))
+        if first:
+            layout.addWidget(label(f"原工作目录：{live.work}\n本次核对时尚无已提交快照。"
+                                   f"看到 {len(report.rows):,} 项，普通文件正文共 {first_bytes:,} B。"
+                                   + ("当前为空目录。" if not report.rows else "")))
+            layout.addWidget(label("以下是这一次核对的内容。未检查 STORE、未冻结；没有提交或预留正式槽。"))
+            columns = ("相对路径", "当前内容")
+        else:
+            layout.addWidget(label(
+                f"原工作目录：{live.work}\n当前登记基线：分支 {marker.branch} · 第 {marker.generation} 代\n"
+                f"基线节点：{marker.operation}\n新增 {report.added} · 修改 {report.changed} · 缺少 {report.missing}。"
+                + ("本次未发现差异。" if not report.rows else "")))
+            columns = ("相对路径", "差异", "登记基线", "工作目录")
         if initial:
             layout.addWidget(label("只使用首次签出时的核验索引；没有读取或验证 STORE，也不证明现在能提交。"))
         layout.addWidget(label("这是一次观察，不是实时或原子快照，也不能代替提交前停止写入者。"))
-        table = Table(("相对路径", "差异", "登记基线", "工作目录"), "本工作树的只读改动")
+        table = Table(columns, "首次提交内容（一次只读观察）" if first else "本工作树的只读改动")
         layout.addWidget(table)
         if evidence is not None:
             def select_missing():
@@ -706,10 +735,13 @@ class CheckoutPane(QWidget):
         change = {"added":"新增", "changed":"修改", "missing":"缺少"}
         def side(kind, size):
             return f"文件 · {size:,} B" if kind == "file" else "目录" if kind == "directory" else "无"
+        def cells(row):
+            actual = side(row.after, row.after_bytes)
+            if first: return row.path, actual
+            return row.path, change[row.change], side(row.before, row.before_bytes), actual
         def page(i):
             nonlocal number
-            table.rows.replace(((r.path, change[r.change], side(r.before, r.before_bytes),
-                                 side(r.after, r.after_bytes)), r) for r in report.page(i))
+            table.rows.replace((cells(row), row) for row in report.page(i))
             number = i
             at.setText(f"第 {i+1}/{count} 页")
             back.setEnabled(i > 0); next_.setEnabled(i+1 < count)
