@@ -76,6 +76,13 @@ def _stamp(meta):
     return (*native_identity(meta, stat.S_IFREG), meta.st_size, meta.st_mtime_ns, meta.st_ctime_ns)
 
 
+def _binary_reader(fd, end, check):
+    # POSIX pread never moves a shared cursor. Without pread the caller
+    # already owns a serialized _DisplayFD read lease and restores its cursor.
+    return (nullcontext(_At(fd, end, check)) if hasattr(os, "pread")
+            else os.fdopen(fd, "rb", buffering=0, closefd=False))
+
+
 def _showable(text):
     # Permit CR only through the caller's explicit CRLF conversion. Reject
     # control/spoofing categories and common zero-width presentation selectors.
@@ -179,9 +186,7 @@ def _held_input(selected, check):
         same_original()
         # Linux/macOS use pread rather than moving another reader's cursor.
         # Windows uses the serialized CRT lease without implicit read-ahead.
-        raw = (nullcontext(_At(fd, observed[2], check)) if hasattr(os, "pread")
-               else os.fdopen(fd, "rb", buffering=0, closefd=False))
-        with raw as opened:
+        with _binary_reader(fd, observed[2], check) as opened:
             yield _Checked(opened, check), same_original
             same_original()
 
@@ -305,12 +310,13 @@ def compare_folder_text(left, report, row, *, observer):
     if not can_compare_text(row) or report.text is None:
         raise Rejected("该次对照没有这对原件的逐行核验凭据")
     observer.begin("identity")
-    with report.text.open_pair(left, row, observer.check) as (original, local, left_sha, right_sha):
+    with report.text.open_pair(left, row, observer.check) as (original, read_local, left_sha, right_sha):
         observer.begin("members", row.before_bytes + row.after_bytes)
-        raw = _At(original, left.observed[2], observer.check)
-        with stored_member(raw, raw.end, left.browser.commit, row.path, row.before_bytes) as body:
-            archived = _verified_small(body.read, (row.before_bytes, left_sha), observer)
-        current = _verified_small(lambda n: os.read(local, n), (row.after_bytes, right_sha), observer)
+        end = left.observed[2]
+        with _binary_reader(original, end, observer.check) as raw:
+            with stored_member(_Checked(raw, observer.check), end, left.browser.commit, row.path, row.before_bytes) as body:
+                archived = _verified_small(body.read, (row.before_bytes, left_sha), observer)
+        current = _verified_small(read_local, (row.after_bytes, right_sha), observer)
         display = _unified((_small_lines(archived), _small_lines(current)), ("当前快照", "本次本机文件"), observer)
         observer.begin("identity")
     return display

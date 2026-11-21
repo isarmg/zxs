@@ -130,6 +130,17 @@ class Native:
         self.drive_type = _function(k,"GetDriveTypeW",U32,c.c_wchar_p)
         self.read_file = _function(k,"ReadFile",I32,P,P,U32,c.POINTER(U32),P)
         self.close_handle = _function(k,"CloseHandle",I32,P)
+        self.current_process = _function(k,"GetCurrentProcess",P)
+        self.duplicate_handle = _function(k,"DuplicateHandle",I32,P,P,P,c.POINTER(P),U32,I32,U32)
+
+    def duplicate(self, original):
+        if original is None: raise Rejected("the original Windows directory handle is closed")
+        process, result = self.current_process(), P()
+        # DUPLICATE_SAME_ACCESS, no CLOSE_SOURCE, no inheritance, same process.
+        if not self.duplicate_handle(process, original, process, c.byref(result), 0, 0, 2):
+            raise c.WinError(c.get_last_error())
+        if not result.value: raise Rejected("no duplicate of the original Windows handle")
+        return Handle(self, result.value)
 
     def _open(self, parent, name, kind):
         raw = name.encode("utf-16-le")
@@ -137,12 +148,12 @@ class Native:
         string = _String(len(raw), len(raw)+2, c.addressof(buf))
         obj = _Object(c.sizeof(_Object), parent, c.pointer(string), 0, None, None)
         value, io = P(), _IO()
-        directory = kind != "file"
+        directory = kind in ("ancestor", "directory")
         # SYNCHRONIZE | READ_ATTRIBUTES, plus LIST_DIRECTORY/TRAVERSE or READ_DATA.
-        access = 0x100000 | 0x80 | (0x20 if directory else 0) | (0 if kind == "ancestor" else 1)
+        access = 0x100000 | 0x80 | (0x20 if directory else 0) | (1 if kind in ("directory", "file") else 0)
         # No WRITE share on a content handle. Directory names may change; both
         # complete inventories and the selected original are independently checked.
-        share = 7 if directory else 5
+        share = 5 if kind == "file" else 7
         # Microsoft's FILE_DIRECTORY_FILE compatibility list excludes the
         # no-reparse/no-recall flags we require. Open existing directories
         # type-neutrally, then admit the actual standard/basic handle type
@@ -164,7 +175,7 @@ class Native:
         return self._open(None, "\\??\\"+letter+":\\", "directory" if enumerate_it else "ancestor")
 
     def child(self, parent, name, kind):
-        if kind not in ("ancestor","directory","file") or len(member_name(name)) != 1:
+        if kind not in ("ancestor","directory","file","file-info") or len(member_name(name)) != 1:
             raise Rejected("expected one ordinary relative Windows component")
         return self._open(parent, name, kind)
 
@@ -175,13 +186,17 @@ class Native:
         return value
 
     def info(self, h):
+        volume, e, _ = self.file_state(h)
+        return volume, e
+
+    def file_state(self, h):
         if self.file_type(h) != 1: raise Rejected("not an ordinary disk handle")
         fid = self._info(h,18,_Id)
         b, s = self._info(h,0,_Basic), self._info(h,1,_Standard)
         e = entry(bytes(fid.fid), b.attrs, b.birth, b.write, b.change, s.eof)
         if not fid.volume or s.deleting or not s.links or bool(s.directory) != e.directory:
             raise Rejected("unavailable or changing Windows native identity")
-        return fid.volume, e
+        return fid.volume, e, s.links
 
     def guid_name(self, h):
         # Existing project member bounds do not justify arbitrary provider allocations.

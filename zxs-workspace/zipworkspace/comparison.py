@@ -1,11 +1,12 @@
 """Read-only path differences between verified snapshots or against one observed folder."""
-from contextlib import ExitStack, closing, contextmanager
+from contextlib import AbstractContextManager, ExitStack, closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
 import stat
 import sys
 from threading import Lock
+from typing import Callable, Protocol
 
 from .archive import stamp
 from .document import named_document, native_identity
@@ -131,9 +132,13 @@ def _archive_stamp(info):
     return (*native_identity(info, stat.S_IFREG), info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _check_archive(selected, original, proc=None, expected_mount=None):
+def _check_held_archive(selected, original):
     if _archive_stamp(os.fstat(original)) != selected.observed:
         raise Rejected("已显示的原归档发生变化；请重新打开后比较")
+
+
+def _check_archive(selected, original, proc=None, expected_mount=None):
+    _check_held_archive(selected, original)
     if proc is None:
         if _archive_stamp(selected.path.stat(follow_symlinks=False)) != selected.observed:
             raise Rejected("归档已不在原名称；未重新打开正文")
@@ -229,7 +234,7 @@ class _FolderText:
             held.callback(os.close, item)
             exact_leaf(item)
             check()
-            yield original, item, left_sha, right_sha
+            yield original, lambda count: os.read(item, count), left_sha, right_sha
             originals()
             final = proc.open_beneath(root, row.path, metadata)
             held.callback(os.close, final)
@@ -237,11 +242,18 @@ class _FolderText:
             check()
 
 
+class _TextPairs(Protocol):
+    def close(self) -> None: ...
+    def supports(self, selected, row: Difference) -> bool: ...
+    def open_pair(self, selected, row: Difference, check) -> AbstractContextManager[
+            tuple[int, Callable[[int], bytes], str, str]]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class Report(Changes):
     folder: FolderEvidence
     operation: str
-    text: _FolderText | None = field(default=None, repr=False, compare=False)
+    text: _TextPairs | None = field(default=None, repr=False, compare=False)
 
     def close(self):
         if self.text is not None: self.text.close()
@@ -319,6 +331,8 @@ def compare(selected, folder: Folder, *, observer=None, retain_text=False):
             if observer is not None: observer.begin("identity")
             if retain_text and sys.platform == "linux" and type(folder) is Folder and selected.held is not None:
                 report = _compare_held(selected, folder, output, observer)
+            elif retain_text and os.name == "nt" and selected.held is not None:
+                report = _compare_windows_held(selected, folder, output, observer)
             elif sys.platform == "darwin":
                 from . import macos_read
                 with macos_read.no_materialization():  # Includes the archive's final named recheck.
@@ -327,6 +341,16 @@ def compare(selected, folder: Folder, *, observer=None, retain_text=False):
         if observer is not None: observer.check()
         output.pop_all()
         return report
+
+
+def _small_changed_left(selected, path, size, sha):
+    if not 0 <= size <= COMPARE_BYTES: return None
+    parent, _, name = path.rpartition("/")
+    entry = selected.browser.entry(parent, name)
+    if (entry is not None and entry.kind == "file" and entry.size_bytes <= COMPARE_BYTES and
+            entry.sha256 != sha):
+        return entry.sha256
+    return None
 
 
 def _compare_held(selected, folder, output, observer):
@@ -345,15 +369,13 @@ def _compare_held(selected, folder, output, observer):
         candidates = {}
 
         def remember(path, child, before, sha):
-            if before.st_size > COMPARE_BYTES or before.st_nlink != 1: return
-            parent, _, name = path.rpartition("/")
-            entry = selected.browser.entry(parent, name)
-            if (entry is None or entry.kind != "file" or entry.size_bytes > COMPARE_BYTES or
-                    entry.sha256 == sha): return
+            if before.st_nlink != 1: return
+            previous = _small_changed_left(selected, path, before.st_size, sha)
+            if previous is None: return
             info = os.fstat(child)
             if (_sig(info) == _sig(before) and info.st_nlink == 1 and
                     mount_id(child, read_proc=proc.read) == mount):
-                candidates[path] = _sig(before), entry.sha256, sha
+                candidates[path] = _sig(before), previous, sha
 
         tree = observe_held(root, folder.evidence.identity, require_ids=True, observer=observer,
                             on_file=remember if proc is not None else None)
@@ -368,6 +390,36 @@ def _compare_held(selected, folder, output, observer):
             pairs = {row.path: (row, *candidates[row.path]) for row in delta[3] if row.path in candidates}
             text = _FolderText(selected, folder.evidence, root, mount, archive_mount, pairs)
             output.callback(text.close)
+        return Report(*delta, folder.evidence, selected.browser.commit.operation, text)
+
+
+def _compare_windows_held(selected, folder, output, observer):
+    from .windows_folder import WindowsFolder, WindowsFolderText
+
+    if type(folder) is not WindowsFolder:
+        return _compare(selected, folder, observer=observer)
+    with ExitStack() as metadata:
+        # No archive body or cursor access during the potentially long folder
+        # scan; do not lock other windows out of their original CRT reader.
+        original = selected.held.duplicate()
+        metadata.callback(os.close, original)
+        _check_held_archive(selected, original)
+        try: text = WindowsFolderText(selected, folder, original)
+        except (OSError, Rejected):
+            # No native text proof was acquired. Keep the already supported
+            # list-only comparison, including its old named metadata check.
+            text = None
+            _check_archive(selected, original)
+        tree = folder.observe(observer=observer, on_file=None if text is None else text.remember)
+        if observer is not None: observer.begin("compare")
+        delta = _changes(_rows(selected.browser), tree.rows)
+        if observer is not None: observer.begin("identity")
+        folder.check()
+        if text is None: _check_archive(selected, original)
+        else:
+            # An admitted native proof must stay native, even if it fails late.
+            if text.bind(delta[3], original): output.callback(text.close)
+            else: text = None
         return Report(*delta, folder.evidence, selected.browser.commit.operation, text)
 
 
