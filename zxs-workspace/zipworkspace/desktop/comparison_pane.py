@@ -11,7 +11,7 @@ class ComparisonPane(QWidget):
     def __init__(self, owner):
         super().__init__()
         self.owner = owner
-        self.version_read = None
+        self.active_read = None
         layout = QVBoxLayout(self)
         layout.addWidget(label("可以比较本机文件夹、从「历史」或「分支」选另一版本，或在「核验普通 ZIP」页比较两次核验的内容。比较只读，不同步文件。"))
         self.choose = button("选择文件夹并比较…", self.pick)
@@ -38,7 +38,7 @@ class ComparisonPane(QWidget):
             + ("尚未开始比较。" if enabled else "本机目录比较在此平台不可用；也可以从历史或分支选择版本对照。"))
 
     def clear(self):
-        previous, self.version_read = self.version_read, None
+        previous, self.active_read = self.active_read, None
         if previous is not None: previous.cancel()
         self.report, self.number, self.mode, self.request = None, 0, None, None
         self.plain = None
@@ -61,23 +61,36 @@ class ComparisonPane(QWidget):
         return self.snapshot is snapshot and self.request is request
 
     def pick(self):
-        if self.snapshot is None: return
+        chosen = self.snapshot
+        if chosen is None or self.owner.pending is not None: return
         # Pass the selected spelling to the provider rather than having Qt resolve a link for it.
-        options = QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        options = (QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks |
+                   QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly)
         name = QFileDialog.getExistingDirectory(self, "选择只读比较的本机文件夹", "", options)
-        if name: self.compare_path(name)
+        if name and self.snapshot is chosen: self.compare_path(name)
 
     def compare_path(self, name):
         chosen = self.snapshot
-        if chosen is None or not comparison.available(): return
+        if chosen is None or self.owner.pending is not None or not comparison.available(): return
         self.clear()
         request = self.request = object()
+        observer = self.active_read = Verification()
         self.mode = "folder"
         self.summary.setText(f"等待核验：{name}\n快照节点：{chosen.browser.commit.operation}")
         def work():
-            return comparison.compare(chosen, folder)
-        def done(report):
+            try: return comparison.compare(chosen, folder, observer=observer), None
+            except Exception as error: return None, error
+        def done(outcome):
             if not self.matches(chosen, request): return
+            self.active_read = None
+            if observer.cancelled:
+                self.summary.setText("已取消本次文件夹对照，保留当前浏览快照。未显示部分结果。")
+                self.owner.inform("已取消文件夹对照；没有写入。")
+                return
+            report, error = outcome
+            if error is not None:
+                failed(error)
+                return
             self.report = report
             self.summary.setText(f"快照：{chosen.path} · 节点 {report.operation}\n本次观察：{report.folder.path}\n"
                                  f"新增 {report.added} · 修改 {report.changed} · 缺少 {report.missing}。"
@@ -86,14 +99,20 @@ class ComparisonPane(QWidget):
             self.owner.inform("只读比较完成；后续编辑不会自动更新这份结果。")
         def failed(err):
             if self.matches(chosen, request):
+                self.active_read = None
                 self.summary.setText(f"未取得完整比较结果：{err}")
+                self.owner.inform("未完成文件夹对照；请查看对比页。")
+        def progress():
+            return observer.progress() if self.matches(chosen, request) else ("", 0, None)
+
         try:
             folder = comparison.Folder.choose(name)  # Bind before queuing the slow inventory.
         except (OSError, Rejected) as err:
             failed(err)
             return
         try:
-            submitted = self.owner.job("正在只读核验所选文件夹…", work, done, failed=failed)
+            submitted = self.owner.job("正在只读核验所选文件夹…", work, done, cancel=observer.cancel,
+                                       cancel_text="取消文件夹对照", progress_report=progress)
         except BaseException as err:
             folder.close()
             if not isinstance(err, Exception): raise
@@ -112,7 +131,7 @@ class ComparisonPane(QWidget):
         self.clear()
         self.mode = "version"
         request = self.request = object()
-        observer = self.version_read = Verification()
+        observer = self.active_read = Verification()
 
         def describe(side, path, marker):
             return (f"{side}：{path.name} · 第 {marker.generation} 代\n"
@@ -130,13 +149,13 @@ class ComparisonPane(QWidget):
 
         def failed(err):
             if self.matches(chosen, request):
-                self.version_read = None
+                self.active_read = None
                 self.summary.setText(pair + f"\n未完成版本比较：{err}")
                 self.owner.inform("未完成版本比较；请查看对比页。")
 
         def done(outcome):
             if not self.matches(chosen, request): return
-            self.version_read = None
+            self.active_read = None
             if observer.cancelled:
                 self.summary.setText(pair + "\n已取消本次版本对照；未显示本次结果。")
                 self.owner.inform("已取消版本对照；没有改变当前快照或写入。")

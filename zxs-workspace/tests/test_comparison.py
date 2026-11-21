@@ -12,8 +12,8 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import comparison, freeze
-from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection, compare_version
-from zipworkspace.model import Commit, Manifest, Rejected
+from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection, Verification, compare_version
+from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
 
 
 def snapshot(path, rows, operation="3"*32, *, generation=1, parent=None):
@@ -352,6 +352,40 @@ class CompareFolder(unittest.TestCase):
         for bad in (2, -1, True):
             with self.assertRaises(Rejected): report.page(bad)
 
+    def test_comparison_measures_one_body_pass_and_can_stop_before_the_next_block(self):
+        chosen = snapshot(self.path, [])
+        body = b"x" * (CHUNK + 23)
+        (self.local / "large").write_bytes(body)
+        (self.local / "empty").mkdir()
+
+        class Watch(Verification):
+            def __init__(self, stop):
+                super().__init__()
+                self.stop, self.counts, self.phases = stop, [], []
+            def begin(self, phase, total=None):
+                super().begin(phase, total)
+                self.phases.append(phase)
+            def advance(self, size):
+                super().advance(size)
+                self.counts.append(self.progress()[1:])
+                if self.stop: self.cancel()
+
+        first = Watch(True)
+        with self.assertRaisesRegex(Rejected, "取消"):
+            comparison.compare(chosen, self.chosen, observer=first)
+        (read, total), = first.counts
+        self.assertLessEqual(read, CHUNK)
+        self.assertGreater(read, 0)
+        self.assertIsNone(total)
+        self.assertNotIn("inventory", first.phases)
+        with self.assertRaises(Rejected): self.chosen.check()  # the consumed native handle closed
+
+        second = Watch(False)
+        report = comparison.compare(chosen, comparison.Folder.choose(self.local), observer=second)
+        self.assertEqual(second.counts[-1], (len(body), None))
+        self.assertEqual(second.phases, ["identity", "folder", "inventory", "compare", "identity"])
+        self.assertEqual(report.added, 2)
+
     @unittest.skipUnless(os.name == "posix", "checks POSIX fd/inode lifetime")
     def test_same_name_substitution_of_folder_or_archive_is_not_a_new_selection(self):
         chosen = snapshot(self.path, [])
@@ -466,6 +500,45 @@ class CompareWidget(unittest.TestCase):
                     self.assertEqual(pane.table.rows.rows,())
                     self.assertIn(later.browser.commit.operation,pane.summary.text())
             finally: window.close()
+
+    def test_folder_cancellation_and_late_progress_are_bound_to_the_original_snapshot(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); local = root/"local"; local.mkdir()
+            chosen = snapshot(root/"a.zxs", []); later = snapshot(root/"b.zxs", [], "4"*32)
+            window = Window()
+            try:
+                window.archive.show_selection(chosen)
+                pane = window.archive.comparison
+                def begin():
+                    future = Future()
+                    with patch.object(window.pool, "submit", return_value=future) as queued:
+                        pane.compare_path(local)
+                    self.assertIs(window.pending[0], future)
+                    return future, queued.call_args.args[0]
+
+                future, work = begin()
+                finished = work()
+                self.assertIsNotNone(finished[0])
+                future.set_result(finished); window.transfer_cancel.click(); window.poll()
+                self.assertIs(window.archive.selection, chosen)
+                self.assertIsNone(pane.report)
+                self.assertIn("已取消文件夹对照", window.note.text())
+
+                future, work = begin()
+                window.archive.show_selection(later)
+                now = window.note.text()
+                window.poll()  # An obsolete in-flight progress sampler cannot update the window.
+                self.assertEqual(window.note.text(), now)
+                future.set_result(work()); window.poll()
+                self.assertIsNone(pane.report)
+                self.assertEqual(window.note.text(), now)
+            finally:
+                if window.pending is not None:
+                    window.pending[0].cancel(); window.poll()
+                window.close()
 
     def test_folder_fd_released_if_job_is_refused_fails_submission_or_is_cancelled_before_start(self):
         from PySide6.QtWidgets import QApplication

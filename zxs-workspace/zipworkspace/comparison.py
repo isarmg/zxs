@@ -83,11 +83,13 @@ class Folder:
             with self._darwin.no_materialization(): return self._check()
         return self._check()
 
-    def observe(self):
+    def observe(self, *, observer=None):
+        options = {} if observer is None else {"observer": observer}
         if self._darwin:
             with self._darwin.no_materialization():
-                return observe_held(self._check(), self.evidence.identity, require_ids=True, check_held=self._darwin.resident)
-        return observe_held(self.check(), self.evidence.identity, require_ids=True)
+                return observe_held(self._check(), self.evidence.identity, require_ids=True,
+                                    check_held=self._darwin.resident, **options)
+        return observe_held(self.check(), self.evidence.identity, require_ids=True, **options)
 
     def close(self):
         fd, self._fd = self._fd, None
@@ -185,27 +187,32 @@ def compare_snapshots(before, other):
     return Changes(*_changes(_rows(before), dict(_rows(other))))
 
 
-def compare(selected, folder: Folder):
+def compare(selected, folder: Folder, *, observer=None):
     """Use the already verified archive content, not registered state or current HEAD."""
     try:
+        if observer is not None: observer.begin("identity")
         if sys.platform == "darwin":
             from . import macos_read
             with macos_read.no_materialization():  # Worker, including the archive's final named recheck.
-                return _compare(selected, folder, macos_read)
-        return _compare(selected, folder)
+                report = _compare(selected, folder, macos_read, observer=observer)
+        else: report = _compare(selected, folder, observer=observer)
+        if observer is not None: observer.check()
+        return report
     finally:
         folder.close()
 
 
-def _compare(selected, folder, darwin=None):
+def _compare(selected, folder, darwin=None, *, observer=None):
     with named_document(selected.path) as doc:
         if stamp(doc) != selected.observed:
             raise Rejected("displayed archive changed; reopen it before comparing")
         if darwin: darwin.local_object(selected.path, doc.fileno())
         # The scan does not return payload bytes. Its own Manifest rows can be
         # consumed without making a third copy of the path inventory.
-        tree = folder.observe()
+        tree = folder.observe() if observer is None else folder.observe(observer=observer)
+        if observer is not None: observer.begin("compare")
         delta = _changes(_rows(selected.browser), tree.rows)
+        if observer is not None: observer.begin("identity")
         folder.check()
         if darwin: darwin.local_object(selected.path, doc.fileno())
     return Report(*delta, folder.evidence, selected.browser.commit.operation)

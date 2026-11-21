@@ -6,7 +6,8 @@ import struct
 import tempfile
 import unittest
 
-from zipworkspace.model import Rejected
+from zipworkspace.desktop.selection import Verification
+from zipworkspace.model import CHUNK, Rejected
 from zipworkspace import windows_folder as wf, windows_nt as nt
 
 
@@ -115,6 +116,20 @@ class HeldTraversal(unittest.TestCase):
         with self.assertRaises(Rejected): self.folder.observe()
         self.assertFalse(self.api.data_reads)
         self.assertEqual(list(self.api.active),[chosen])
+
+    def test_cancels_between_actual_default_stream_reads_without_a_partial_observation(self):
+        class StopAfterChunk(Verification):
+            def advance(self, n):
+                super().advance(n)
+                self.cancel()
+
+        self.api.body = b"x" * (CHUNK + 7)
+        watch = StopAfterChunk()
+        with self.assertRaisesRegex(Rejected, "取消"): self.folder.observe(observer=watch)
+        self.assertEqual(watch.progress(), (Verification.PHASE["folder"], CHUNK, None))
+        self.assertEqual(self.api.data_reads, [3])  # no next ReadFile or EOF probe
+        self.assertEqual(self.api.passes, 1)
+        self.assertEqual(list(self.api.active), [self.folder.handle.value])
 
     def test_enumerated_id_and_actual_child_disagree_before_any_bytes(self):
         self.api.substitute_file=5

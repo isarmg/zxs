@@ -23,6 +23,8 @@ class Verification:
              "members": "正在读取并核验成员正文",
              "raw": "正在核对原 ZIP 字节摘要",
              "identity": "正在核对原件与目录",
+             "folder": "正在读取实际文件夹的普通文件正文",
+             "inventory": "正在复核原目录及各成员的第二遍清单",
              "compare": "正在比较两份已核验的目录内容"}
 
     def __init__(self):

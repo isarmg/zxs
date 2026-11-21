@@ -23,7 +23,8 @@ def _dir_flags():
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
-def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None, checkpoint=None, on_frozen=None):
+def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_held=None, checkpoint=None,
+          on_frozen=None, on_read=None, before_inventory=None):
     facts = {}
     manifest = Manifest()
     rootdev = os.fstat(rootfd).st_dev
@@ -74,6 +75,7 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
                             count += len(block)
                             if count > before.st_size: raise Rejected("source grew while freezing")
                             h.update(block)
+                            if on_read is not None: on_read(len(block))
                             if frozen is not None:
                                 frozen.append(block)
                                 if on_frozen is not None: on_frozen(len(block))
@@ -87,19 +89,28 @@ def _scan(rootfd, frozen=None, *, hash_files=False, require_ids=False, check_hel
         if _sig(os.fstat(fd)) != _sig(root):
             raise Rejected("directory changed while freezing")
     visit(rootfd, "", recheck=False)
+    if before_inventory is not None: before_inventory()
     visit(rootfd, "", recheck=True)
     if facts: raise Rejected("entries missing from the second directory inventory")
     return manifest
 
 
-def observe_held(fd, expected, *, require_ids=False, check_held=None, checkpoint=None):
+def observe_held(fd, expected, *, require_ids=False, check_held=None, checkpoint=None, observer=None):
     """Hash all real descendants of this particular open directory, then recheck the generation."""
     before = os.fstat(fd)
     if (before.st_dev,before.st_ino) != expected or not expected[1] or not stat.S_ISDIR(before.st_mode):
         raise Rejected("not the original held output directory")
-    tree = _scan(fd, hash_files=True, require_ids=require_ids, check_held=check_held, checkpoint=checkpoint)
+    def check():
+        if checkpoint is not None: checkpoint()
+        observer.check()
+    if observer is not None: observer.begin("folder")
+    tree = _scan(fd, hash_files=True, require_ids=require_ids, check_held=check_held,
+                 checkpoint=checkpoint if observer is None else check,
+                 on_read=None if observer is None else observer.advance,
+                 before_inventory=None if observer is None else lambda: observer.begin("inventory"))
     if _sig(before) != _sig(os.fstat(fd)):
         raise Rejected("selected directory changed during readback")
+    if observer is not None: observer.check()
     return tree
 
 

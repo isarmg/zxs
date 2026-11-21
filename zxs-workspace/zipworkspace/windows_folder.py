@@ -49,7 +49,7 @@ def walk(api, drive, parts):
         raise
 
 
-def observe(api, root, volume, first):
+def observe(api, root, volume, first, *, observer=None):
     tree, facts = Manifest(), {}
 
     def held(h, expected):
@@ -58,9 +58,11 @@ def observe(api, root, volume, first):
             raise Rejected("opened Windows entry no longer matches the original inventory")
 
     def visit(parent, prefix, directory, checking, seen, directories):
+        if observer is not None: observer.check()
         held(parent, directory)
         dots = set()
         for name, row in api.listing(parent):
+            if observer is not None: observer.check()
             if name in DOT:
                 if name in dots: raise Rejected("nonprogressing Windows directory listing")
                 dots.add(name)
@@ -84,11 +86,15 @@ def observe(api, root, volume, first):
                 elif not checking:
                     left, digest = row.size, hashlib.sha256()
                     while left:
+                        if observer is not None: observer.check()
                         block = api.read(child, min(CHUNK,left))
+                        if observer is not None: observer.check()
                         if not 0 < len(block) <= min(CHUNK,left):
                             raise Rejected("size of the held Windows file changed")
                         left -= len(block)
                         digest.update(block)
+                        if observer is not None: observer.advance(len(block))
+                    if observer is not None: observer.check()
                     if api.read(child,1):
                         raise Rejected("extra bytes in the held Windows file")
                     tree.rows[path] = (False,row.size,digest.hexdigest())
@@ -98,11 +104,14 @@ def observe(api, root, volume, first):
                     held(named,row)
         held(parent,directory)
 
+    if observer is not None: observer.begin("folder")
     visit(root,"",first,False,None,{first.file_id})
+    if observer is not None: observer.begin("inventory")
     second = set()
     visit(root,"",first,True,second,{first.file_id})
     if len(second) != len(facts):
         raise Rejected("a Windows directory entry disappeared during comparison")
+    if observer is not None: observer.check()
     return tree
 
 
@@ -138,12 +147,13 @@ class WindowsFolder:
                 raise Rejected("the chosen Windows name no longer identifies this held folder")
         return self.handle.value
 
-    def observe(self):
+    def observe(self, *, observer=None):
         h = self.check()
         v, initial = self.api.info(h)
         if v != self.volume or initial.file_id != self.file_id or not initial.directory:
             raise Rejected("the selected Windows directory changed before reading")
-        tree = observe(self.api,h,v,initial)
+        options = {} if observer is None else {"observer": observer}
+        tree = observe(self.api,h,v,initial,**options)
         self.check()
         return tree
 
