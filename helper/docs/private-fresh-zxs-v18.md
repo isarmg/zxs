@@ -12,12 +12,15 @@ The intended later acceptance fixture is a **disposable Linux environment**:
 already mounted and properly protected original SYSTEM (S), independent
 recycle (R) and ordinary (F) roots; the explicit non-root storage UID/GID; an
 empty protected `/var/lib/zxs/rust-smb`; and independently approved bytes of
-the static ZXS ELF already at `/usr/bin/zxs`. The live Helper and its exact
+the static ZXS ELF already at the explicitly chosen protected canonical
+`.../zxs` file. The live Helper and its exact
 offline libgcrypt/libgpg-error inputs also need independent expected hashes.
 There is no installed Helper profile, configuration, service, or signing
 sidecar as authority. These offline libraries are not ZXS runtime
 dependencies. This source does not install an ELF, mount or format devices,
-manage services, change policy, or embed a placeholder asset.
+manage services, change policy, or embed a placeholder asset. The independent [optional image
+extractor](embedded-image.md) requires a separately approved exact asset
+and does not itself issue a site or an account.
 
 1. `install-pool new-zxs-v18` creates only the pool: explicit original INIT
    actor, storage UID/GID, non-secret operation and approval IDs, actual
@@ -26,7 +29,9 @@ manage services, change policy, or embed a placeholder asset.
    This is a separate storage action, not account setup.
 2. `setup-pair issue-fresh-zxs-v18` takes that exact existing INIT evidence,
    explicit SYSTEM, original first LAN/share plan, separate required
-   protected-site/operation IDs and independent ELF/provider hashes. It
+   protected-site/operation IDs, the actual absolute `--zxs-image` path
+   with fixed `zxs` leaf, and independent ELF/provider hashes. That path
+   and digest are kept only in the original protected ZXS site. It
    accepts **one** canonical `--login`, shared by Web and SMB; no alternate
    username or password option. One preview binds the proposed account,
    exact public successor and original plan. Only one setup approval is

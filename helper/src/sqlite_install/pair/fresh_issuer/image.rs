@@ -1,29 +1,61 @@
 //! Approve only the exact already positioned one-ELF ZXS product in the
 //! private disposable environment. An ELF header check is not cold acceptance.
-use crate::fs_tools::RuntimeFile;
-use rustix::fs::{StatVfsMountFlags,fgetxattr,fstatvfs};
-use rustix::io::Errno;
-use std::{io,os::unix::fs::FileExt};
+mod path;
+#[cfg(any(test,feature="embedded-zxs"))]
+mod asset;
+#[cfg(feature="embedded-zxs")]
+pub(crate) use asset::EmbeddedInstall;
+pub(in crate::sqlite_install::pair) use path::check_image as check_path;
+use crate::pinned::{Entity,Mount,installed_regular_reader};
+use path::{OriginalPath,no_attribute};
+use rustix::fs::{StatVfsMountFlags,fstatvfs};
+use std::{fs::File,io,os::unix::fs::{FileExt,MetadataExt},path::Path};
 
-pub(in crate::sqlite_install::pair) const PATH:&str="/usr/bin/zxs";
-const PARTS:&[&str]=&["usr","bin","zxs"];
+pub(super) const MAX_IMAGE:u64=64<<20;
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"not the independently approved protected static ZXS ELF")}
-pub(in crate::sqlite_install::pair) struct Image(RuntimeFile);
+#[derive(Clone,Copy,Eq,PartialEq)]
+struct ImageStamp{entity:Entity,mount:u64,len:u64,ctime:(i64,i64),mtime:(i64,i64)}
+impl ImageStamp{
+    fn at(f:&File)->io::Result<Self>{
+        let m=f.metadata()?;
+        if m.mode()!=0o100755||m.uid()!=0||m.gid()!=0||m.nlink()!=1||
+            !(1..=MAX_IMAGE).contains(&m.len()){return Err(denied());}
+        Ok(Self{entity:Entity::of(&m)?,mount:Mount::on(f)?.ok_or_else(denied)?.id,len:m.len(),
+            ctime:(m.ctime(),m.ctime_nsec()),mtime:(m.mtime(),m.mtime_nsec())})
+    }
+}
+pub(in crate::sqlite_install::pair) struct Image{original:OriginalPath,reader:File,stamp:ImageStamp}
 impl Image{
-    pub(in crate::sqlite_install::pair) fn select(expected:&[u8;32])->io::Result<Self>{
-        let f=super::super::smb_policy::release(PARTS,0o755,expected)?;
-        standalone(f.file.metadata()?.len(),|offset,body|f.file.read_exact_at(body,offset))?;
-        let s=Self(f);s.require()?;Ok(s)
+    pub(in crate::sqlite_install::pair) fn select(path:&Path,expected:&[u8;32])->io::Result<Self>{
+        if expected==&[0;32]{return Err(denied());}
+        let original=OriginalPath::selected(path,false)?;
+        let stamp=ImageStamp::at(original.pin())?;
+        let reader=installed_regular_reader(original.pin())?;
+        let owned=Self{original,reader,stamp};
+        owned.require()?;
+        if crate::fs_tools::hash_upto(&mut &owned.reader,stamp.len,MAX_IMAGE)?!=*expected{return Err(denied());}
+        standalone(stamp.len,|offset,body|owned.reader.read_exact_at(body,offset))?;
+        owned.require()?;Ok(owned)
     }
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
-        let f=&self.0.file;
-        for x in [c"security.capability",c"system.posix_acl_access"]{
-            match fgetxattr(f,x,&mut [] as &mut [u8]){
-                Err(Errno::NODATA)=>{},_=>return Err(denied()),
-            }
+        self.original.require()?;
+        for x in [c"security.capability",c"system.posix_acl_access"]{no_attribute(&self.reader,x)?;}
+        if fstatvfs(&self.reader)?.f_flag.contains(StatVfsMountFlags::NOEXEC)||
+            ImageStamp::at(self.original.pin())?!=self.stamp||ImageStamp::at(&self.reader)?!=self.stamp{
+            return Err(denied());
         }
-        if fstatvfs(f)?.f_flag.contains(StatVfsMountFlags::NOEXEC){return Err(denied());}
-        self.0.recheck()
+        Ok(())
+    }
+    pub(in crate::sqlite_install::pair) fn path(&self)->&Path{self.original.path()}
+    pub(in crate::sqlite_install::pair) fn includes(&self,entity:Entity)->bool{self.original.includes(entity)}
+    pub(in crate::sqlite_install::pair) fn entity(&self)->Entity{self.stamp.entity}
+    #[cfg(any(test,feature="embedded-zxs"))]
+    fn mount(&self)->u64{self.stamp.mount}
+    #[cfg(any(test,feature="embedded-zxs"))]
+    fn require_same_published(&self,original:&File)->io::Result<()>{
+        self.require()?;
+        if ImageStamp::at(original)?!=self.stamp{return Err(denied());}
+        Ok(())
     }
 }
 
@@ -87,7 +119,7 @@ fn standalone(len:u64,mut read:impl FnMut(u64,&mut[u8])->io::Result<()>)->io::Re
             if end&&tag!=0{return Err(denied());}
             match tag {
                 0=>end=true,  // DT_NULL
-                1|15|29|0x7fff_fffd|0x7fff_ffff|0x6fff_fefb|0x6fff_fefc=>return Err(denied()),
+                1|15|29|0x7fff_fffd|0x7fff_ffff|0x6fff_fefa|0x6fff_fefb|0x6fff_fefc=>return Err(denied()),
                 0x6fff_fffb=>pie|=value&0x0800_0000!=0, // DT_FLAGS_1 / DF_1_PIE
                 _=>{},
             }
@@ -101,7 +133,7 @@ fn standalone(len:u64,mut read:impl FnMut(u64,&mut[u8])->io::Result<()>)->io::Re
 #[cfg(test)]
 mod tests{
     use super::*;
-    fn small()->Vec<u8>{
+    pub(super) fn small()->Vec<u8>{
         let mut b=vec![0;224];
         b[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
         b[16..18].copy_from_slice(&ET_EXEC.to_le_bytes());b[18..20].copy_from_slice(&62u16.to_le_bytes());
@@ -119,7 +151,7 @@ mod tests{
         })
     }
     #[test]
-    fn fresh_v18_image_rejects_interpreter_loader_and_ambiguous_programs(){
+    fn fresh_v17_image_rejects_interpreter_loader_and_ambiguous_programs(){
         let b=small();check(&b).unwrap();
         let mut bad=b.clone();bad[120..124].copy_from_slice(&PT_INTERP.to_le_bytes());assert!(check(&bad).is_err());
         let mut bad=b.clone();bad[68..72].fill(0);assert!(check(&bad).is_err());

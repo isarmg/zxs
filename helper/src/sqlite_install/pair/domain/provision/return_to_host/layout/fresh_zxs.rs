@@ -96,6 +96,21 @@ impl FreshParent{
         bare_acl(&self.ex,c"system.posix_acl_access")?;bare_acl(&self.ex,c"system.posix_acl_default")?;
         inventory(&self.ex,&[])
     }
+    #[cfg(any(test,feature="embedded-zxs"))]
+    pub(in crate::sqlite_install::pair) fn protect_image_destination(&self,target:crate::pinned::Entity)->io::Result<crate::pinned::Entity>{
+        self.before_original_sql(&self.instance)?;
+        for original in std::iter::once(&self.parent.host).chain(&self.parent.chain){
+            if mark(original)?.0==target{return Err(no());}
+        }
+        Ok(mark(self.parent.base())?.0)
+    }
+    pub(in crate::sqlite_install::pair) fn require_distinct_image(&self,image:&crate::sqlite_install::pair::fresh_issuer::image::Image)
+        ->io::Result<()>{
+        self.before_original_sql(&self.instance)?;
+        if image.includes(mark(self.parent.base())?.0){return Err(no());}
+        for original in &self.parent.chain{if mark(original)?.0==image.entity(){return Err(no());}}
+        image.require()
+    }
     pub(in crate::sqlite_install::pair) fn bind(self,resolved:&ResolvedRust,authority:SitePayload)->io::Result<FreshHome>{
         if authority.origin!=resolved.plan().origin||authority.plan_sha!=resolved.plan().sha(){return Err(no());}
         self.before_original_sql(&authority.origin.instance)?;

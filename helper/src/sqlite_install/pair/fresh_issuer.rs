@@ -47,6 +47,8 @@ impl ExplicitSubject{
 }
 
 pub(super) mod image;
+#[cfg(feature="embedded-zxs")]
+pub(crate) use image::EmbeddedInstall;
 use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,ResolvedRust,transact_fresh},
     native_sql::rust_vault::{ActiveRustMeta,Desired,RustChange,RustOrder,SetupSpec,shared_login},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest},receipt::Observed},terminal::PublicConfirmation};
 use crate::{path_rules::Kind,smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
@@ -72,7 +74,7 @@ fn filesystem_phase<T>(live:&dyn Fn()->io::Result<()>,
 #[derive(Debug)]
 pub(super) struct Selection{
     subject:ExplicitSubject,system:PathBuf,origin:Origin,reference:Id,init_sha:[u8;32],
-    image:[u8;32],crypto:CryptoPins,hostname:String,login:Vec<u8>,
+    image_path:PathBuf,image:[u8;32],crypto:CryptoPins,hostname:String,login:Vec<u8>,
     recycle:RecycleName,endpoints:Vec<Endpoint>,folders:Vec<Choice>,
 }
 impl Selection{
@@ -89,6 +91,9 @@ impl Selection{
         if ids.iter().enumerate().any(|(i,n)|ids[..i].contains(n)){return Err("fresh installation identities must be distinct");}
         let init_sha=sha(&mut it,"--init-sha256")?;
         let reference=key(&mut it,"--approval")?;
+        let image_path=PathBuf::from(value(&mut it,"--zxs-image")?);
+        image::check_path(&image_path).map_err(|_|"choose the protected canonical absolute path to the fixed zxs executable")?;
+        if system.starts_with(&image_path)||image_path.starts_with(&system){return Err("SYSTEM must not contain the executable");}
         let image=sha(&mut it,"--zxs-sha256")?;
         let crypto=CryptoPins{helper:sha(&mut it,"--helper-sha256")?,
             gcrypt:sha(&mut it,"--gcrypt-sha256")?,gpgerror:sha(&mut it,"--gpgerror-sha256")?};
@@ -106,30 +111,32 @@ impl Selection{
             }else if flag=="--share"&&folders.len()<MAX_FOLDERS{
                 let p=PathBuf::from(it.next().ok_or("missing actual original data root")?);
                 Kind::StorageRoot.check_path(p.as_os_str().as_encoded_bytes())?;
-                if system.starts_with(&p)||p.starts_with(&system)||folders.iter().any(|f|p.starts_with(&f.path)||f.path.starts_with(&p)){
-                    return Err("SYSTEM and original data paths must not overlap");
+                if system.starts_with(&p)||p.starts_with(&system)||image_path.starts_with(&p)||p.starts_with(&image_path)||folders.iter().any(|f|p.starts_with(&f.path)||f.path.starts_with(&p)){
+                    return Err("SYSTEM, ordinary media and the selected image must not overlap");
                 }
                 let folder=it.next().and_then(|s|s.into_string().ok()).ok_or("missing exact UTF-8 folder name")?;
                 let mode=match it.next().as_deref().and_then(OsStr::to_str){
                     Some("ro")=>Mode::ReadOnly,Some("rw")=>Mode::ReadWrite,_=>return Err("select the explicit folder mode ro or rw"),
                 };
                 folders.push(Choice{path:p,folder,mode});
-            }else{return Err("only explicit bounded listeners and original folders; no recovery, password, or alternate executable");}
+            }else{return Err("only explicit bounded listeners and original folders; no recovery, password, or second executable");}
         }
         if endpoints.is_empty()||folders.is_empty(){return Err("select at least one LAN listener and original ordinary folder");}
-        Ok(Self{subject,system,origin,reference,init_sha,image,crypto,hostname,login,recycle,endpoints,folders})
+        Ok(Self{subject,system,origin,reference,init_sha,image_path,image,crypto,hostname,login,recycle,endpoints,folders})
     }
     pub(super) fn run(self)->io::Result<(u8,String)>{
         require_v18()?;
-        let Self{subject,system,origin,reference,init_sha,image,crypto,hostname,login,recycle,endpoints,folders}=self;
+        let Self{subject,system,origin,reference,init_sha,image_path,image,crypto,hostname,login,recycle,endpoints,folders}=self;
         // Check host/stdin custody before obtaining any unrelated FD. This
         // genuine low reader holds the original S EX and no root SQL.
         let parent=FreshParent::select(origin.instance)?;
         let resolved=ResolvedRust::fresh(&parent,&system,origin,hostname,endpoints,folders,recycle,subject,crypto.helper,init_sha)?;
         let tty=PublicConfirmation::select()?;
-        let image_file=image::Image::select(&image)?;
+        let image_file=image::Image::select(&image_path,&image)?;
+        resolved.require_distinct_image(&image_file)?;
+        parent.require_distinct_image(&image_file)?;
         let providers=Cryptography::fresh(crypto)?;
-        let payload=SitePayload::new(resolved.plan(),subject,&system,std::path::Path::new(image::PATH),image)?;
+        let payload=SitePayload::new(resolved.plan(),subject,&system,image_file.path(),image)?;
         let target=parent.bind(&resolved,payload.clone())?;
         let (pin,_,original_subject)=resolved.protected_new_system()?;
         if original_subject!=subject{return Err(bad("selected original INIT subject changed"));}
@@ -148,7 +155,7 @@ impl Selection{
             // The single low secret capture temporarily changes the TTY flags. That
             // stage checks the same original tty through HeldQuiet instead.
             approval::host_admin()?;
-            providers.require()?;image_file.require()?;resolved.require()
+            providers.require()?;resolved.require_distinct_image(&image_file)
         };
         let phase=(||->io::Result<_>{
             live()?;tty.check()?;
@@ -206,12 +213,12 @@ fn preview(resolved:&ResolvedRust,payload:&SitePayload,target:&FreshHome,shared:
         原池 {} / INIT {} / 原请求 SHA-256 {} / 原主体 {} / 存储 UID:GID {uid}:{gid}。\n\
         新站点 {} / Bind {} / SETUP {} / 批准参考 {}。\n\
         实际受保护的目标 {}。此操作最后独立写入新 deployment.v1；已有文件一律不接管。\n\
-        已独立确认的单一 {} SHA-256 {}；原描述 SHA-256 {}；新站点记录 SHA-256 {}。\n\
+        已独立确认的单一 {:?} SHA-256 {}；原描述 SHA-256 {}；新站点记录 SHA-256 {}。\n\
         当前指定 Helper {}、离线 libgcrypt {}、离线 libgpg-error {}；这些不随 ZXS 运行。\n\
         {}本次 ZXS 主机 {}；Web 与 SMB 共用唯一用户名 {}、账户 {}（首代），凭据正本 {}、固定 SID {}。\n\
         共用设置请求 SHA-256 {}；仅此一次批准，之后在本原终端输入和复输同一个口令。\n",
         hex(&o.pool),hex(&o.init),hex(&shared.init_sha),hex(&actor),hex(&o.instance),hex(&o.bind),hex(&o.setup),hex(reference),target.evidence()?,
-        image::PATH,hex(&payload.elf_sha),hex(&payload.plan_sha),hex(&payload.sha()?),hex(&crypto.helper),hex(&crypto.gcrypt),
+        payload.image,hex(&payload.elf_sha),hex(&payload.plan_sha),hex(&payload.sha()?),hex(&crypto.helper),hex(&crypto.gcrypt),
         hex(&crypto.gpgerror),resolved.preview(),p.host(),std::str::from_utf8(&shared.login).map_err(|_|bad("invalid shared login"))?,
         hex(&shared.account),hex(&shared.record),hex(&shared.sid),hex(&action));
     for e in p.endpoints(){writeln!(out,"  SMB {}:{} / 子网前缀 {}（预定而未监听）",e.address(),445,e.prefix()).expect("writing String");}
@@ -231,7 +238,7 @@ mod tests{
     #[test]
     fn fresh_v18_issue_parser_cannot_select_an_old_action_or_credential_path(){
         let form=format!("--init-actor {} --storage-uid 1001 --storage-gid 1002 --system /lab/S --pool {} --init {} \
-            --instance {} --bind {} --setup-op {} --init-sha256 {} --approval {} --zxs-sha256 {} --helper-sha256 {} --gcrypt-sha256 {} \
+            --instance {} --bind {} --setup-op {} --init-sha256 {} --approval {} --zxs-image /fixture/bin/zxs --zxs-sha256 {} --helper-sha256 {} --gcrypt-sha256 {} \
             --gpgerror-sha256 {} --host fresh.test --login first.zxs --recycle-name Recycle \
             --listen 192.0.2.17/24 --share /lab/F Work rw",hex(&[31;16]),hex(&[1;16]),hex(&[2;16]),hex(&[3;16]),
             hex(&[4;16]),hex(&[5;16]),hex(&[45;32]),hex(&[6;16]),hex(&[41;32]),hex(&[42;32]),hex(&[43;32]),hex(&[44;32]));
@@ -239,7 +246,9 @@ mod tests{
         for bad in [format!("{form} --resume"),format!("{form} --password bogus"),format!("{form} --site /other"),
             form.replace("first.zxs","guest"),form.replace("--login first.zxs","--web-login first.web --smb-login first.smb"),form.replace("/lab/F","/lab/S/F"),form.replace("1001","01001"),
             form.replace(&hex(&[3;16]),&hex(&[2;16])),form.replace("192.0.2.17/24","0.0.0.0/0"),
-            form.replace(&hex(&[41;32]),&hex(&[0;32]))]{assert!(Selection::parse(arg(&bad)).is_err());}
+            form.replace("--zxs-image /fixture/bin/zxs ",""),form.replace("/fixture/bin/zxs","/lab/S/zxs"),
+            form.replace("/fixture/bin/zxs","/lab/F/zxs"),form.replace("/fixture/bin/zxs","/fixture/bin/other"),
+            form.replace("/fixture/bin/zxs","zxs"),form.replace(&hex(&[41;32]),&hex(&[0;32]))]{assert!(Selection::parse(arg(&bad)).is_err());}
         let public=format!("issue-fresh-zxs-v18 {form}");
         assert_eq!(super::super::command::Setup::parse(arg(&public)).is_ok(),cfg!(feature="private-fresh-zxs-v18"));
     }

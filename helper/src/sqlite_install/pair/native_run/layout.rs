@@ -236,6 +236,18 @@ impl ResolvedRust {
         }
         self.require()
     }
+    pub(in crate::sqlite_install::pair) fn require_distinct_image(&self,image:&crate::sqlite_install::pair::fresh_issuer::image::Image)
+        ->io::Result<()>{
+        self.original.require()?;
+        for p in std::iter::once(&self.original.system).chain([self.original.recycle.pinned()])
+            .chain(self.original.physical.iter().map(|f|&f.pin)){
+            if image.path().starts_with(p.path())||p.path().starts_with(image.path())||
+                image.includes(p.entity())||p.visible_chain().contains(&image.entity()){
+                return Err(bad("the original executable overlaps enrolled SYSTEM, data or recycle"));
+            }
+        }
+        image.require()
+    }
     pub(in crate::sqlite_install::pair) fn require_distinct_site(&self,site:&Path)->io::Result<()>{
         if std::iter::once(self.original.system.path()).chain([self.original.recycle.source().0])
             .chain(self.original.chosen_paths.iter().map(PathBuf::as_path))

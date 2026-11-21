@@ -46,6 +46,8 @@ enum Command {
     Storage(Selection),
     Install(sqlite_install::Installation),
     Setup(sqlite_install::Setup),
+    #[cfg(feature="embedded-zxs")]
+    EmbeddedInstall(sqlite_install::EmbeddedInstall),
     Disks(block_tools::Query),
     DiskWeb(Option<fat32_check::panel::Job>),
     DiskWebStorage(Selection),
@@ -76,6 +78,8 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
     if op=="reset-account"{return sqlite_install::SharedAccountReset::parse(args).map(Command::SharedAccountReset);}
+    #[cfg(feature="embedded-zxs")]
+    if op=="install-zxs-image"{return sqlite_install::EmbeddedInstall::parse(args).map(Command::EmbeddedInstall);}
     if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(Command::Setup);}
     if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "check-nonempty-source"{return sqlite_install::ImportCheck::parse(args).map(Command::ImportCheck);}
@@ -184,8 +188,14 @@ fn run(command: Command) -> io::Result<ExitCode> {
         // failure must never accept an already-written packet.
         Command::LeasedPanelWorker(kind,digest) => return Ok(ExitCode::from(fat32_check::panel::leased_worker(kind,digest).unwrap_or(3))),
         Command::Install(i)=>{let(code,public)=i.run()?;line(&public)?;return Ok(ExitCode::from(code));}
+        #[cfg(feature="embedded-zxs")]
+        Command::EmbeddedInstall(s)=>{s.run()?;return Ok(ExitCode::SUCCESS);}
         Command::Setup(s)=>{let(code,public)=s.run()?;line(&public)?;return Ok(ExitCode::from(code));}
-        Command::Help => line(USAGE)?,
+        Command::Help=>{
+            line(USAGE)?;
+            #[cfg(feature="embedded-zxs")]
+            line("Optional exact image only: helper install-zxs-image --destination-dir DIR --zxs-sha256 HEX")?;
+        }
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
         Command::RepairExt4(job) | Command::RepairExfat(job) | Command::RepairFat32(job) => line(&job.run()?)?,

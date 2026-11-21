@@ -25,7 +25,7 @@ impl Question{
         let site=self.site.encode()?;
         let plan=self.plan.wire();
         if self.nonce==[0;32]||self.where_system[1..].contains(&0)||self.site.origin!=self.plan.origin||
-            self.site.plan_sha!=self.plan.sha()||self.site.image.as_path()!=Path::new(image::PATH)||
+            self.site.plan_sha!=self.plan.sha()||image::check_path(&self.site.image).is_err()||
             !(1..=MAX_SITE).contains(&site.len())||!(1..=MAX_WIRE).contains(&plan.len()){
             return Err(unavailable());
         }
@@ -158,7 +158,7 @@ mod tests{
         let raw=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).unwrap()).collect::<Vec<_>>();
         let plan=RustPlan::decode(&raw).unwrap();
         let site=SitePayload::new(&plan,ExplicitSubject::checked([31;16],1001,1002).unwrap(),
-            Path::new("/fixture/S"),Path::new(image::PATH),[41;32]).unwrap();
+            Path::new("/fixture/S"),Path::new("/fixture/bin/zxs"),[41;32]).unwrap();
         Question{nonce:[43;32],where_system:[0,44,45],site,plan}
     }
     #[test]

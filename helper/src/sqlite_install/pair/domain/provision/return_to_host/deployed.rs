@@ -81,13 +81,12 @@ impl DeployedSite{
         let site_ex=child(original.base(),c".")?;
         let authority=PublicAuthority::select(&site_ex)?;
         let payload=SitePayload::decode(authority.bytes())?;
-        if payload.origin.instance!=selection.0||<[u8;32]>::from(Sha256::digest(authority.bytes()))!=selection.1||
-            payload.image.as_path()!=Path::new(image::PATH){return Err(unknown());}
+        if payload.origin.instance!=selection.0||<[u8;32]>::from(Sha256::digest(authority.bytes()))!=selection.1{return Err(unknown());}
         layout::verify_registered_instance(&original,payload.subject.tuple().2)?;
         let plan_file=Public::select(&site_ex,c"rust.install",1..=MAX_WIRE)?;
         let plan=RustPlan::decode(plan_file.bytes()).map_err(bad)?;
         if plan.origin!=payload.origin||plan.sha()!=payload.plan_sha{return Err(unknown());}
-        let verified_image=image::Image::select(&payload.elf_sha)?;
+        let verified_image=image::Image::select(&payload.image,&payload.elf_sha)?;
         let system=find(&payload.system)?;
         let system_ex=system.storage_directory()?;
         // Same kernel order as the only original cold supervisor. An online
@@ -118,6 +117,9 @@ impl DeployedSite{
         if self.system.visible_chain().contains(&mark(self.original.base())?.0)||
             mark(&self.original.host)?.0==self.system.entity(){return Err(unknown());}
         for path in &self.original.chain {if mark(path)?.0==self.system.entity(){return Err(unknown());}}
+        if self.verified_image.includes(self.system.entity())||
+            self.system.visible_chain().contains(&self.verified_image.entity())||
+            self.verified_image.includes(mark(&self.parent)?.0){return Err(unknown());}
         let (located,value)=locator(&self.parent)?;
         if value!=self.selection||super::live::Stamp::on(&located)?!=super::live::Stamp::on(&self.selector)?{
             return Err(unknown());
@@ -183,6 +185,17 @@ impl ObservedVault<'_>{
     }
 }
 
+fn qualify_payload(bytes:&[u8],plan:&RustPlan,site_sha:[u8;32])->io::Result<SitePayload>{
+    let payload=SitePayload::decode(bytes)?;
+    if payload.origin!=plan.origin||payload.plan_sha!=plan.sha()||payload.sha()?!=site_sha||
+        bytes!=payload.encode()?{return Err(unknown());}
+    // The parent verifies the actual approved ELF. A credential worker
+    // accepts only the chosen path inside these same protected site bytes:
+    // it neither selects another executable nor opens the image body.
+    image::check_path(&payload.image)?;
+    Ok(payload)
+}
+
 /// Qualify the original installed origin in a private worker before
 /// lowering, without opening the vault or acquiring a second lock.
 pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,site_sha:[u8;32])->io::Result<SitePayload>{
@@ -199,9 +212,7 @@ pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,si
     layout::bare_acl(&dir,c"system.posix_acl_default")?;
     contents(&dir,&[b"site.v1",b"rust.install",b"vault"])?;
     let auth=PublicAuthority::select(&dir)?;
-    let payload=SitePayload::decode(auth.bytes())?;
-    if payload.origin!=plan.origin||payload.plan_sha!=plan.sha()||payload.sha()?!=site_sha||
-        auth.bytes()!=payload.encode()?{return Err(unknown());}
+    let payload=qualify_payload(auth.bytes(),plan,site_sha)?;
     layout::verify_registered_instance(&site,payload.subject.tuple().2)?;
     let installed=Public::select(&dir,c"rust.install",1..=MAX_WIRE)?;
     if installed.bytes()!=plan.wire(){return Err(unknown());}
@@ -226,5 +237,29 @@ mod tests{
         assert!(decode_locator(&bytes[..63]).is_err());
         assert!(decode_locator(&[bytes.as_slice(),b"x"].concat()).is_err());
         bytes[32..].fill(0);assert!(decode_locator(&bytes).is_err());
+    }
+
+    #[test]
+    fn reattach_and_shared_account_workers_keep_only_the_exact_image_from_the_protected_site(){
+        let text=include_str!("../../../../../../tests/smb-host/rust-install-v1.txt");
+        let hex=text.lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
+        let raw=hex.as_bytes().chunks_exact(2).map(|b|u8::from_str_radix(std::str::from_utf8(b).unwrap(),16).unwrap()).collect::<Vec<_>>();
+        let plan=RustPlan::decode(&raw).unwrap();
+        let subject=crate::sqlite_install::pair::ExplicitSubject::checked([71;16],1001,1002).unwrap();
+        let mut payload=SitePayload::new(&plan,subject,Path::new("/synthetic/S"),
+            Path::new("/protected/selected/bin/zxs"),[72;32]).unwrap();
+        let (body,approved)=(payload.encode().unwrap(),payload.sha().unwrap());
+        assert!(qualify_payload(&body,&plan,approved).unwrap()==payload);
+        for candidate in ["/usr/bin/zxs","/alternate/bin/zxs","/protected/selected/bin/other"]{
+            payload.image=candidate.into();
+            let changed=payload.encode().unwrap();
+            assert!(qualify_payload(&changed,&plan,approved).is_err());
+        }
+        // Even an independently named site digest cannot approve a file
+        // outside the fixed leaf grammar.
+        assert!(qualify_payload(&payload.encode().unwrap(),&plan,payload.sha().unwrap()).is_err());
+        payload.image="/protected/selected/bin/zxs".into();
+        payload.elf_sha[0]^=1;
+        assert!(qualify_payload(&payload.encode().unwrap(),&plan,approved).is_err());
     }
 }

@@ -138,7 +138,7 @@ fn discovery_mount_id(bytes:&[u8])->io::Result<u64>{
 }
 
 const DISCOVERY_WITHIN:ResolveFlags=ResolveFlags::BENEATH.union(ResolveFlags::NO_SYMLINKS).union(ResolveFlags::NO_MAGICLINKS);
-fn discover_component(parent:&File,name:&OsStr,crossing:bool)->io::Result<File>{
+pub(crate) fn discover_component(parent:&File,name:&OsStr,crossing:bool)->io::Result<File>{
     let path=OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC;
     // From an already qualified local descriptor, ordinary same-mount
     // lookups may do local I/O. An expected named crossing needs a known

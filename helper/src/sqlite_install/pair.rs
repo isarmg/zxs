@@ -15,6 +15,8 @@ mod import_source;
 pub(crate) use native_run::{RetirementCheck,ImportCheck,check_deployment};
 mod rust_enroll;
 mod fresh_issuer;
+#[cfg(feature="embedded-zxs")]
+pub(crate) use fresh_issuer::EmbeddedInstall;
 pub(super) use fresh_issuer::{ExplicitSubject,compiled_v18,require_v18};
 pub(crate) use native_run::{rust_account_worker,rust_vault_worker,SharedAccountReset};
 mod recycle;

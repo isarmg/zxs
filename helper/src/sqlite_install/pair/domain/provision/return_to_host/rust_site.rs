@@ -138,6 +138,7 @@ pub(in crate::sqlite_install::pair) fn verify_fresh_worker(system:&Path,plan:&Ru
     contents(&dir,PRODUCT)?;
     let record=PublicAuthority::select(&dir)?;
     let payload=SitePayload::decode(record.bytes())?;
+    crate::sqlite_install::pair::fresh_issuer::image::check_path(&payload.image)?;
     let installed=Public::select(&dir,c"rust.install",1..=MAX_WIRE)?;
     if payload.subject!=scope.subject||payload.origin!=plan.origin||payload.plan_sha!=plan.sha()||
         payload.system.as_path()!=system||payload.sha()?!=scope.site||installed.bytes()!=plan.wire(){return Err(no());}
