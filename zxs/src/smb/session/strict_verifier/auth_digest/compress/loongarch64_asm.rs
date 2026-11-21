@@ -1,4 +1,6 @@
 //! LoongArch64 assembly backend
+//! RustCrypto MD5 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS only to locate the private constants module.
 
 macro_rules! c {
     ($($l:expr)*) => {
@@ -157,7 +159,7 @@ pub(super) fn compress(state: &mut [u32; 4], blocks: &[[u8; 64]]) {
 
             inout("$a1") blocks.as_ptr() => _,
             inout("$a2") blocks.len() => _,
-            in("$a3") crate::consts::RC.as_ptr(),
+            in("$a3") super::super::consts::RC.as_ptr(),
             inout("$a4") state[0],
             inout("$a5") state[1],
             inout("$a6") state[2],

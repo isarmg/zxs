@@ -91,14 +91,6 @@ name = "libc"
 version = "0.2.191"
 
 [[package]]
-name = "md-5"
-version = "0.11.0"
-dependencies = [
- "cfg-if",
- "digest",
-]
-
-[[package]]
 name = "sha2"
 version = "0.11.1"
 dependencies = [
@@ -123,7 +115,6 @@ dependencies = [
  "cipher",
  "digest",
  "libc",
- "md-5",
  "sha2",
  "zeroize",
 ]

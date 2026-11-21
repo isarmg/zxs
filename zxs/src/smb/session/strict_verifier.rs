@@ -1,19 +1,20 @@
 //! Strict development profile for one connection-oriented NTLMv2 exchange.
 //! No enrollment, wire-key constructor, listener or conversion into a
 //! storage/session grant. An installed verifier needs the real launcher.
+mod auth_digest;
 pub(super) mod challenge;
 pub(super) mod completion;
 mod key_exchange;
 mod record;
 use self::key_exchange::{Rc4, StreamCipher};
+use self::auth_digest::Md5;
 use super::{
     Secret, envelope::{AwaitAuthenticate, HaveNegotiate, Layer, Saved, Unverified},
     keyed_digest::Hmac,
     ntlm_shape::{self as ntlm, Authenticate, Challenge},
 };
 use crate::smb::{InheritedRun,wire::{message::Compound, preauth::RequestKeyContext}};
-use digest::{KeyInit, Mac};
-use md5::{Digest, Md5, digest::{FixedOutput, Output}};
+use digest::{Digest, FixedOutput, KeyInit, Mac, Output};
 use std::{num::NonZeroU64, sync::{Arc,Weak}, time::Instant};
 use zeroize::{Zeroize, Zeroizing};
 

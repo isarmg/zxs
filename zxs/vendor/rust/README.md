@@ -58,6 +58,10 @@ no longer a Cargo package; its recorded origin and licenses remain. It uses
 the already enabled stream-wrapper and zeroize features of the same cipher
 package rather than adding or updating any library.
 
+MD5 is now part of the [private NTLM digest](../../src/smb/session/strict_verifier/auth_digest/ORIGIN.md),
+not a Cargo package. It uses the same compression choices and original
+state and buffer erasure; its upstream OID and alloc options remain off.
+
 HMAC now belongs to the [private SMB keyed-digest module](../../src/smb/session/keyed_digest/ORIGIN.md),
 not a Cargo package. Its RustCrypto block-buffer macro and MAC traits still
 come from the same `digest` package. The product's fixed HMAC-SHA-256 session
@@ -71,7 +75,7 @@ operations were not moved.
 
 ## Active paths and build scope
 
-The ZXS workspace excludes the 17 remaining local path packages, so their own
+The ZXS workspace excludes the 16 remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
 graph. The cipher manifest has no default feature; ZXS makes the already active
 stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
@@ -82,9 +86,8 @@ service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> aes, cipher [stream-wrapper, zeroize], digest [block-api, mac, zeroize], libc, md-5, sha2, zeroize
+zxs -> aes, cipher [stream-wrapper, zeroize], digest [block-api, mac, zeroize], libc, sha2, zeroize
 aes -> cipher, cpubits, cpufeatures [target cfg], zeroize
-md-5 -> cfg-if, digest
 sha2 -> cfg-if, cpufeatures [target cfg], digest
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 digest -> block-buffer, crypto-common [alias common], ctutils, zeroize

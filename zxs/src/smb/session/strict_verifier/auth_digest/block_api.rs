@@ -1,3 +1,6 @@
+//! RustCrypto MD5 (MIT OR Apache-2.0); see the retained notices.
+//! Modified by ZXS for private module paths and fixed state erasure.
+
 use core::fmt;
 use digest::{
     HashMarker, Output,
@@ -10,8 +13,7 @@ use digest::{
     typenum::{U16, U24, U64, Unsigned},
 };
 
-pub use crate::compress::compress;
-use crate::consts;
+use super::{compress::compress, consts};
 
 const STATE_LEN: usize = 4;
 
@@ -92,16 +94,12 @@ impl fmt::Debug for Md5Core {
 
 impl Drop for Md5Core {
     fn drop(&mut self) {
-        #[cfg(feature = "zeroize")]
-        {
-            use digest::zeroize::Zeroize;
-            self.state.zeroize();
-            self.block_len.zeroize();
-        }
+        use digest::zeroize::Zeroize;
+        self.state.zeroize();
+        self.block_len.zeroize();
     }
 }
 
-#[cfg(feature = "zeroize")]
 impl digest::zeroize::ZeroizeOnDrop for Md5Core {}
 
 impl SerializableState for Md5Core {

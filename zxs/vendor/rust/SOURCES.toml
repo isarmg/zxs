@@ -207,6 +207,7 @@ commit = "b5051e5a5e7dc86a6c27c1ec7a390744ebcfb97a"
 upstream_subdirectory = "md5"
 archive = "https://static.crates.io/crates/md-5/md-5-0.11.0.crate"
 sha256 = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+internal_module = "src/smb/session/strict_verifier/auth_digest"
 
 [[package]]
 name = "rc4"

@@ -25,7 +25,6 @@ exclude = [
     "vendor/rust/hybrid-array-0.4.15",
     "vendor/rust/inout-0.2.6",
     "vendor/rust/libc-0.2.191",
-    "vendor/rust/md-5-0.11.0",
     "vendor/rust/sha2-0.11.1",
     "vendor/rust/typenum-1.20.1",
     "vendor/rust/zeroize-1.9.2",
@@ -38,6 +37,9 @@ cipher = { version = "=0.5.2", path = "vendor/rust/cipher-0.5.2", default-featur
 # Internal SMB HMAC and CMAC use the existing RustCrypto buffer and MAC traits.
 digest = { version = "=0.11.3", path = "vendor/rust/digest-0.11.3", default-features = false, features = ["block-api", "mac", "zeroize"] }
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
-md-5 = { version = "=0.11.0", path = "vendor/rust/md-5-0.11.0", default-features = false, features = ["zeroize"] }
 sha2 = { version = "=0.11.1", path = "vendor/rust/sha2-0.11.1", default-features = false, features = ["zeroize"] }
 zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(md5_backend, values("soft"))']
