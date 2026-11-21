@@ -1,3 +1,4 @@
+//! Modified by ZXS also to invoke the private selector.
 //! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
 //! Modified by ZXS only to reference the private constants module.
 use crate::smb::handshake_hash::consts::K32;
@@ -30,7 +31,7 @@ fn rk(i: usize) -> u32 {
     // instead of inlining them, which improves codegen and performance on some platforms.
     // On x86 targets 32-bit constants can be encoded using immediate argument on the `add`
     // instruction, so it's more efficient to inline them.
-    cfg_if::cfg_if! {
+    crate::smb::handshake_hash::backend_select::cfg_if! {
         if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
             use core::ptr::read as r;
         } else {

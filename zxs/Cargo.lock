@@ -19,10 +19,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cfg-if"
-version = "1.0.5"
-
-[[package]]
 name = "cipher"
 version = "0.5.2"
 dependencies = [
@@ -103,7 +99,6 @@ name = "zxs"
 version = "0.1.0"
 dependencies = [
  "aes",
- "cfg-if",
  "cipher",
  "cpufeatures",
  "digest",

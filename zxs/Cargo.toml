@@ -14,7 +14,6 @@ resolver = "3"
 exclude = [
     "vendor/rust/aes-0.9.4",
     "vendor/rust/block-buffer-0.12.1",
-    "vendor/rust/cfg-if-1.0.5",
     "vendor/rust/cipher-0.5.2",
     "vendor/rust/cmov-0.5.4",
     "vendor/rust/cpubits-0.1.1",
@@ -31,8 +30,6 @@ exclude = [
 
 [dependencies]
 aes = { version = "=0.9.4", path = "vendor/rust/aes-0.9.4", default-features = false, features = ["zeroize"] }
-# The in-module SHA-2 backend retains the pinned upstream selectors.
-cfg-if = { version = "=1.0.5", path = "vendor/rust/cfg-if-1.0.5" }
 # The private NTLM key-exchange module keeps the former RC4 package's features.
 cipher = { version = "=0.5.2", path = "vendor/rust/cipher-0.5.2", default-features = false, features = ["stream-wrapper", "zeroize"] }
 # Retain the existing default block API and MAC/erasure features.

@@ -1,3 +1,5 @@
+//! RustCrypto SHA-2 (MIT OR Apache-2.0); original notices in handshake_hash.
+//! Modified by ZXS to invoke only the private, otherwise unchanged selector.
 #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
 compile_error!("riscv-zknh backend can be used only on riscv32 and riscv64 target arches");
 
@@ -6,7 +8,7 @@ use core::arch::riscv32::{sha256sig0, sha256sig1, sha256sum0, sha256sum1};
 #[cfg(target_arch = "riscv64")]
 use core::arch::riscv64::{sha256sig0, sha256sig1, sha256sum0, sha256sum1};
 
-cfg_if::cfg_if! {
+crate::smb::handshake_hash::backend_select::cfg_if! {
     if #[cfg(sha2_backend_riscv_zknh = "compact")] {
         mod compact;
         use compact::compress_block;

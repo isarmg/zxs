@@ -36,6 +36,7 @@ commit = "8b0a2b0fc1fa3b3741b9e72895f390cf499fe36f"
 upstream_subdirectory = ""
 archive = "https://static.crates.io/crates/cfg-if/cfg-if-1.0.5.crate"
 sha256 = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+internal_module = "src/smb/handshake_hash/backend_select"
 
 [[package]]
 name = "cipher"
