@@ -192,9 +192,10 @@ impl<'a> OrdinaryRoot<'a>{
 
 /// The native R role has its own selected proof. It cannot be passed into
 /// the ordinary volume writer or obtained by sending a path/volume to SMB.
-pub(super) struct RecycleRoot<'a>{
-    source:&'a InitialReader,root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId,
-}
+pub(super) struct RecycleRoot<'a>{source:&'a InitialReader,media:RecycleMedia}
+/// Physical R only. Its caller must carry the original S and independently
+/// qualify access to the same enrolled role in each SQLite selection.
+pub(super) struct RecycleMedia{root:HeldDir,mark:ControlRead,expected:[u8;101],volume:VolumeId}
 impl<'a> RecycleRoot<'a>{
     // Call after the logical SQL selection and outside any read transaction.
     // A missing physical root is not an empty retained namespace.
@@ -210,26 +211,33 @@ impl<'a> RecycleRoot<'a>{
             return Err(invalid("recycle root is not the independently registered filesystem or geometry"));
         }
         let mark=source.dir.hold_marker(&root)?;
-        let held=Self{source,root,mark,expected,volume:r.volume};
-        if held.mark.bytes(&held.root)?.as_slice()!=held.expected.as_slice(){
+        let media=RecycleMedia{root,mark,expected,volume:r.volume};
+        let held=Self{source,media};
+        if held.media.mark.bytes(&held.media.root)?.as_slice()!=held.media.expected.as_slice(){
             return Err(invalid("wrong original recycle root marker"));
         }
         held.require()?;Ok(held)
     }
-    pub(super) fn volume(&self)->VolumeId{self.volume}
-    pub(super) fn root_for_read(&self)->&HeldDir{&self.root}
-    pub(super) fn require(&self)->io::Result<()>{
-        crate::fs::WitnessRead::require_parent(&self.source.dir.root)?;
-        check(unsafe{zxs_sql_named(self.source.conn.0)})?;
-        self.source.marker.require(&self.source.dir.root)?;
-        crate::fs::WitnessRead::require_parent(&self.root)?;
-        self.mark.require(&self.root)
-    }
+    pub(super) fn media(&self)->&RecycleMedia{&self.media}
+    pub(super) fn volume(&self)->VolumeId{self.media.volume()}
+    pub(super) fn root_for_read(&self)->&HeldDir{self.media.root_for_read()}
+    pub(super) fn require(&self)->io::Result<()>{self.media.require(self.source)}
     /// No assumption that two mount IDs imply different disks. Reject
     /// known shared devices/mounts, without probing unrelated data volumes.
     pub(super) fn separate_from(&self,f:&OrdinaryRoot<'_>)->io::Result<()>{
-        if !std::ptr::eq(self.source,f.source)||self.root.entity.device==f.root.entity.device||
-            self.root.same_mount(&f.root)?{return Err(invalid("the selected ordinary and retained roles overlap"));}
+        if !std::ptr::eq(self.source,f.source)||self.media.root.entity.device==f.root.entity.device||
+            self.media.root.same_mount(&f.root)?{return Err(invalid("the selected ordinary and retained roles overlap"));}
         Ok(())
+    }
+}
+impl RecycleMedia{
+    pub(super) fn volume(&self)->VolumeId{self.volume}
+    pub(super) fn root_for_read(&self)->&HeldDir{&self.root}
+    pub(super) fn require(&self,source:&InitialReader)->io::Result<()>{
+        crate::fs::WitnessRead::require_parent(&source.dir.root)?;
+        check(unsafe{zxs_sql_named(source.conn.0)})?;
+        source.marker.require(&source.dir.root)?;
+        crate::fs::WitnessRead::require_parent(&self.root)?;
+        self.mark.require(&self.root)
     }
 }
