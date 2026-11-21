@@ -51,7 +51,21 @@ use super::{command::{key,name,sha,value},distinct_roles,domain::{FreshHome,Fres
     native_sql::rust_vault::{Desired,RustOrder},rust_enroll::{crypto::Cryptography,manifest::{Intent,Manifest}},terminal::PublicConfirmation};
 use crate::{path_rules::Kind,smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
     rust_first::{self,Origin}},sqlite_install::{approval,stage::random}};
+use helper_linux_evidence::prompt_signals::PromptSignals;
 use std::{ffi::OsStr,fmt::Write as _,path::PathBuf,time::{Duration,Instant}};
+
+// Before and after password prompts only. Do not leave process-wide
+// handlers or a blocked signal mask across the next independent TTY guard.
+fn filesystem_phase<T>(live:&dyn Fn()->io::Result<()>,
+    phase:impl FnOnce(&dyn Fn()->io::Result<()>)->io::Result<T>)->io::Result<T>{
+    let signals=PromptSignals::begin()?;
+    let guarded=||{signals.check()?;live()};
+    guarded()?;
+    let value=phase(&guarded);
+    let last=guarded();
+    signals.finish()?;
+    last?;value
+}
 
 /// One internal synthetic-site command with explicit immutable authority.
 /// No alternate runtime/site/secret path or receipt/recovery is accepted.
@@ -118,7 +132,6 @@ impl Selection{
         let providers=Cryptography::fresh(crypto)?;
         let payload=SitePayload::new(resolved.plan(),subject,&system,std::path::Path::new(image::PATH),image)?;
         let target=parent.bind(&resolved,payload.clone())?;
-        helper_linux_evidence::diagnostic_process::watch_cancellation()?;
         let review=preview(&resolved,&payload,&target,&web,&smb,&reference,&init_sha,crypto)?;
         tty.confirm_fresh_zxs(review)?;
         let deadline=Instant::now()+Duration::from_secs(10*60);
@@ -131,7 +144,7 @@ impl Selection{
         };
         let phase=(||->io::Result<_>{
             live()?;tty.check()?;
-            let site=target.prepare(&resolved,&tty,&live)?;
+            let site=filesystem_phase(&live,|guarded|target.prepare(&resolved,&tty,guarded))?;
             let authority=site.fresh_payload().ok_or_else(||bad("missing actual fresh authority"))?;
             let(pin,_)=site.original_system()?;let entity=pin.entity();
             let m=Manifest{intent:Intent::Fresh,nonce:random()?,system:system.clone(),
@@ -140,7 +153,7 @@ impl Selection{
                 fresh:Some(CredentialScope{subject,crypto,site:authority.sha()?,init_sha,database:resolved.fresh_database()?})};
             let active=transact_fresh(&site,m,&tty,&live)?;
             let record=active.at(&site)?.record;
-            let site_sha=target.activate(&resolved,&site,active,&tty,&live)?;
+            let site_sha=filesystem_phase(&live,|guarded|target.activate(&resolved,&site,active,&tty,guarded))?;
             Ok((site_sha,record))
         })();
         let(site_sha,record)=phase.map_err(|e|io::Error::new(e.kind(),
@@ -194,3 +207,7 @@ mod tests{
         assert_eq!(super::super::command::Setup::parse(arg(&public)).is_ok(),cfg!(feature="private-fresh-zxs-v17"));
     }
 }
+
+#[cfg(test)]
+#[path="../../../tests/sqlite/fresh_terminal.rs"]
+mod terminal_tests;

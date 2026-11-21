@@ -59,11 +59,15 @@ selector a stray site is not a runnable deployment. The live consumer's
 independent original SQL/vault/image/runtime checks still apply. Any error
 after the issue confirmation means **outcome not confirmed**; preserve the
 original identities and any stage or final names. Do not retry, remove,
-auto-repair or interpret the presence of a filename as success.
+auto-repair or interpret the presence of a filename as success. Only the
+non-interactive file-publication phases hold their own signal scope; neither
+that scope nor a custom handler may leak into either confirmation or into
+hidden entry. An interrupted process can leave the original evidence
+without reporting a result.
 
 Pure source fixtures named `fresh_v17_` use only the known wire vector,
-synthetic in-memory ledger, disposable temporary directories and static ELF
-header bytes. They do not call either CLI operation or operate on real
+synthetic in-memory ledger, disposable temporary directories, static ELF
+header bytes and one disposable non-secret pseudoterminal choreography. They do not call either CLI operation or operate on real
 mounts, accounts, packages or listeners. A separate exact paired clean-VM
 acceptance remains required: genuine originally protected fresh S/R/F,
 issue once, then remove the standalone Helper and its offline providers,

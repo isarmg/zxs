@@ -35,10 +35,6 @@ fn contents(dir:&File,expected:&[&[u8]])->io::Result<()>{
     if seen!=(1u16<<expected.len())-1||Times::on(&other)?!=before||Times::on(dir)?!=before{return Err(bad("incomplete or changed selected product directory"));}
     Ok(())
 }
-fn cancelled()->io::Result<()>{
-    if helper_linux_evidence::diagnostic_process::cancelled(){Err(io::Error::new(io::ErrorKind::Interrupted,"offline issuance interrupted; preserve original state"))}
-    else{Ok(())}
-}
 pub(in crate::sqlite_install::pair) fn sealed(bytes:&[u8])->io::Result<File>{
     use rustix::fs::{MemfdFlags,SealFlags,fcntl_add_seals,fcntl_get_seals,memfd_create};
     let mut f=File::from(memfd_create(c"helper-fixed-origin",MemfdFlags::CLOEXEC|MemfdFlags::ALLOW_SEALING|MemfdFlags::NOEXEC_SEAL)?);

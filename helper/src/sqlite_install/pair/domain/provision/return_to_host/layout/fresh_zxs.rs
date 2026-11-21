@@ -117,7 +117,6 @@ impl FreshHome{
             self.parent.leaf.to_string_lossy(),entity.dev,entity.ino))
     }
     fn check(&self,resolved:&ResolvedRust,expected:&[&[u8]])->io::Result<()>{
-        super::cancelled()?;
         let (s,_,actor)=resolved.protected_new_system()?;
         if self.authority.system.as_path()!=s.path()||self.authority.subject!=actor||
             self.authority.origin!=resolved.plan().origin||self.authority.plan_sha!=resolved.plan().sha(){return Err(no());}
