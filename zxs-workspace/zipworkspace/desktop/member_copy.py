@@ -21,6 +21,7 @@ from ..opening import _read_selected
 from ..private_candidates import held_candidates
 from ..private_freeze import local_mount, mount_id
 from ..publish import Uncertain, held_store, rename_new_at, require_native_writer
+from .selection import PlainSelection, Selection
 
 
 def _generation(m):
@@ -144,7 +145,7 @@ class _AnonymousCopy(_BeforePublication):
     _cancel_note = "已取消复制，未发布该文件。无名称副本在句柄关闭后释放。"
     def __init__(self, selected, spelling, size):
         if sys.platform != "linux" or selected.held is None:
-            raise Rejected("另存需要 Linux 上当前仍持有原件的快照")
+            raise Rejected("另存需要 Linux 上当前仍持有原件的已核归档")
         self.path = _new_path(spelling)
         self.selected, self.size = selected, size
         self.stack = ExitStack()
@@ -189,7 +190,10 @@ class _AnonymousCopy(_BeforePublication):
             capacity = _copy_capacity(self.parent, self.size)
             self._parent()
             self.ready = True
-            return (f"原归档：{str(self.selected.path)!r}\n节点：{self.selected.browser.commit.operation}\n"
+            evidence = (f"普通 ZIP 首次核验的 SHA-256：{self.selected.preview.sha256}\n"
+                        if isinstance(self.selected, PlainSelection) else
+                        f"节点：{self.selected.browser.commit.operation}\n")
+            return (f"原归档：{str(self.selected.path)!r}\n" + evidence
                     + self._selection_details() +
                     f"新文件：{str(self.path)!r}\n{capacity}\n\n"
                     "完整核验及读回后才公开名称；不覆盖、不创建工作树、不打开结果。"
@@ -319,7 +323,12 @@ class _AnonymousCopy(_BeforePublication):
 class MemberCopy(_AnonymousCopy):
     """Only the selected ordinary member, not its siblings or the whole tree."""
     def __init__(self, selected, directory, entry, spelling):
-        if (entry.kind != "file" or selected.browser.entry(directory, entry.name) is not entry or
+        if isinstance(selected, PlainSelection):
+            index, self.marker = selected.index, None
+        elif isinstance(selected, Selection):
+            index, self.marker = selected.browser, selected.browser.commit
+        else: raise Rejected("请选择已核验的归档")
+        if (entry.kind != "file" or index.entry(directory, entry.name) is not entry or
                 type(entry.size_bytes) is not int or not 0 <= entry.size_bytes <= MAX_FILE):
             raise Rejected("只能另存本次已核验的一条普通成员")
         self.entry = entry
@@ -331,7 +340,7 @@ class MemberCopy(_AnonymousCopy):
 
     def _payload(self, create):
         reader = _Positional(self.source, self.selected.observed[2], self._checkpoint)
-        with stored_member(reader, reader.end, self.selected.browser.commit, self.member, self.size) as body:
+        with stored_member(reader, reader.end, self.marker, self.member, self.size) as body:
             fd = create()
             sha = self._copy(body.read, fd)  # ZipExtFile verifies the member's CRC at EOF.
             if sha != self.entry.sha256: raise Rejected("成员与原核验的 SHA-256 不符")
@@ -341,6 +350,7 @@ class MemberCopy(_AnonymousCopy):
 class ZipCopy(_AnonymousCopy):
     """An unchanged ordinary Store/ZIP64 file with a .zip name for other extractors."""
     def __init__(self, selected, spelling):
+        if not isinstance(selected, Selection): raise Rejected("完整快照另存只接受已核验的 .zxs")
         path = _new_path(spelling)
         size = selected.observed[2]
         if path.suffix.lower() != ".zip" or not 0 < size <= MAX_TOTAL + 2*MAX_CD + (1 << 20):

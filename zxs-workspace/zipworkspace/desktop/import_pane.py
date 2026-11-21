@@ -50,6 +50,11 @@ class ImportPane(QWidget):
         for control in (self.preview_file, self.preview_whole):
             control.setEnabled(False)
             texts.addWidget(control)
+        self.save_member = None
+        if self.extract is not None:
+            self.save_member = button("另存选中的文件…", self.choose_member_destination)
+            self.save_member.setEnabled(False)
+            texts.addWidget(self.save_member)
         layout.addLayout(texts)
         self.files.selectionModel().selectionChanged.connect(self.update_text_actions)
         nav = QHBoxLayout()
@@ -144,6 +149,7 @@ class ImportPane(QWidget):
                      not selected.held.closed and entry is not None and entry.kind == "file")
         self.preview_file.setEnabled(available)
         self.preview_whole.setEnabled(available and entry.size_bytes > LIMIT)
+        if self.save_member is not None: self.save_member.setEnabled(available)
 
     def preview_selected(self, *, indexed=False):
         selected, view, entry = self.selected, self.file_page, self.files.item()
@@ -212,12 +218,34 @@ class ImportPane(QWidget):
             self.owner.tabs.setCurrentWidget(archive)
             archive.views.setCurrentWidget(archive.comparison)
 
+    @staticmethod
+    def _output_options():
+        return (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
+
+    def choose_member_destination(self):
+        selected, page, entry = self.selected, self.file_page, self.files.item()
+        if (self.save_member is None or self.owner.pending is not None or selected is None
+                or page is None or entry is None or entry.kind != "file"): return
+        from .member_copy import MemberCopy
+
+        def current():
+            return self.selected is selected and self.file_page is page and self.files.item() is entry
+
+        name, _ = QFileDialog.getSaveFileName(self, "选择已有本机目录和全新文件名", entry.name,
+                                               "所有文件 (*)", options=self._output_options())
+        if not name or not current() or self.owner.pending is not None: return
+        try: plan = MemberCopy(selected, page.directory, entry, name)
+        except Exception as err:
+            self.owner.inform(str(err))
+            return
+        self._review_copy(plan, current, directory=False)
+
     def choose_destination(self):
         selected = self.selected
         if self.extract is None or selected is None or self.owner.pending is not None: return
         from .member_copy import PlainZipCopy
-        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
-                QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
+        opts = self._output_options()
         name, _ = QFileDialog.getSaveFileName(self, "选择目的父目录和一个新文件夹名", "", "所有文件 (*)", options=opts)
         if not name or self.selected is not selected: return
         plan = None
@@ -235,10 +263,13 @@ class ImportPane(QWidget):
             self.owner.inform(str(err))
             return
 
+        self._review_copy(plan, lambda: self.selected is selected, directory=True)
+
+    def _review_copy(self, plan, current, *, directory):
         def submit(title, call, apply, *, cancellable=False):
             try:
                 options = {"cancel": plan.cancel, "progress_report": plan.progress,
-                           "cancel_text": "取消本次提取（发布前）"} if cancellable else {}
+                           "cancel_text": "取消本次输出（发布前）"} if cancellable else {}
                 future = self.owner.job(title, call, apply, failed=lambda _error: plan.close(), **options)
                 if future is None: plan.close()
                 else: future.add_done_callback(lambda task: plan.close() if task.cancelled() else None)
@@ -248,16 +279,26 @@ class ImportPane(QWidget):
 
         def review(details):
             try:
-                if (self.selected is selected and confirm(self, "提取此普通 ZIP，不覆盖", details,
-                        attestation="原包及两选定目录没有其他写者或同步，不会移位；我独用此私处，并同意在此留下失败材料。",
-                        action_text="提取并核验") and self.selected is selected):
-                    submit("正在提取到私处、完整读回并尝试正式发布…",
+                if not current():
+                    plan.close()
+                    return
+                if directory:
+                    title, action = "提取此普通 ZIP，不覆盖", "提取并核验"
+                    terms = "原包及两选定目录没有其他写者或同步，不会移位；我独用此私处，并同意在此留下失败材料。"
+                    writing = "正在提取到私处、完整读回并尝试正式发布…"
+                else:
+                    title, action = "只另存这个普通 ZIP 成员，不覆盖", "另存并核验"
+                    terms = "我选择这个全新位置，原归档和目的目录在复制期间不会被移动或改写。"
+                    writing = "正在复核原成员、写入匿名副本并完整读回…"
+                if (confirm(self, title, details, attestation=terms, action_text=action) and
+                        current() and self.owner.pending is None):
+                    submit(writing,
                            lambda: plan.run(confirmed=True), self.owner.inform, cancellable=True)
                 else:
                     plan.close()
-                    self.owner.inform("没有提取或写入任何文件。")
+                    if current(): self.owner.inform("没有提取或写入任何文件。")
             except BaseException:
                 plan.close()
                 raise
 
-        submit("正在核对原普通 ZIP 和两处目的目录；尚未写入…", plan.review, review)
+        submit("正在只读核对归档原件和选定位置；尚未写入…", plan.review, review)

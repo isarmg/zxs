@@ -104,6 +104,31 @@ class LinuxMemberCopy(unittest.TestCase):
         # ordinary ZIP preview and directory writer, without interpreting its marker.
         selected_zip = PlainSelection.open(str(plan.path))
         self.addCleanup(selected_zip.release_display)
+        single = self.dest/"one-saved-member.bin"
+        row = selected_zip.index.entry("original", "same.bin")
+        other = selected_zip.index.entry("other", "same.bin")
+        with self.assertRaises(Rejected):
+            member_copy.MemberCopy(selected_zip, "original", other, str(single))
+        save_one = member_copy.MemberCopy(selected_zip, "original", row, str(single))
+        self.addCleanup(save_one.close)
+        details = save_one.review()
+        self.assertIn(selected_zip.preview.sha256, details)
+        self.assertIn("original/same.bin", details)
+        self.assertNotIn("节点：", details)
+        self.assertFalse(single.exists())
+        with patch.object(member_copy, "stored_member", wraps=member_copy.stored_member) as bind:
+            save_one.run(confirmed=True)
+        self.assertEqual(bind.call_args.args[2:5], (None, "original/same.bin", len(self.data)))
+        self.assertEqual(single.read_bytes(), self.data)
+        self.assertEqual(stat.S_IMODE(single.stat().st_mode), 0o600)
+        self.assertCountEqual(self.dest.iterdir(), [plan.path, single])
+        retained = single.stat()
+        occupied = member_copy.MemberCopy(selected_zip, "original", row, str(single))
+        self.addCleanup(occupied.close)
+        with self.assertRaises(Rejected): occupied.review()
+        self.assertTrue(os.path.samestat(retained, single.stat()))
+        self.assertEqual(single.read_bytes(), self.data)
+
         target = self.dest/"round-trip"
         extracted = member_copy.PlainZipCopy(selected_zip, str(target))
         self.addCleanup(extracted.close)
