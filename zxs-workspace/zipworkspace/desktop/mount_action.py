@@ -54,7 +54,7 @@ class MountChoice:
             self.uid = _ordinary_user()
             self.leaf = os.open(self.path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
             self.stack.callback(os.close, self.leaf)
-            src = os.dup(snapshot.held.fileno())
+            src = snapshot.held.duplicate()
             self.stack.callback(os.close, src)
             self.doc = self.stack.enter_context(os.fdopen(src, "rb", closefd=False))
         except BaseException:

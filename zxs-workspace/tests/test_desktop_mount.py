@@ -88,6 +88,9 @@ class DesktopMount(unittest.TestCase):
 
     def test_real_inherited_snapshot_and_ancestors_serve_the_displayed_node_without_opening_its_name(self):
         self.inherited()
+        display = self.selection.held.fileno()
+        self.req["sha"] = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        os.lseek(display, 13, os.SEEK_SET)
         def driver(view, point, check, *, token, accepted):
             check()
             self.assertEqual(view.read(view.lookup(1,b"a"), 3, 5), b"ected")
@@ -99,6 +102,7 @@ class DesktopMount(unittest.TestCase):
             child.mount_selected(self.req, self.doc, self.chain, lambda: events.append(b"G"),
                                  events.append, driver=driver)
         self.assertEqual(events, [b"G", b"I", b"M123"])
+        self.assertEqual(os.lseek(display, 0, os.SEEK_CUR), 13)
 
     def test_substituted_equal_bytes_or_different_original_chain_never_enters_driver(self):
         choice = self.choice()

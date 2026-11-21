@@ -1,6 +1,6 @@
 """A verified display is not authority to write or a claim about raw ZIP bytes."""
 from contextlib import ExitStack, contextmanager, nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import os
 from pathlib import Path
 import stat
@@ -100,8 +100,8 @@ class _DisplayFD:
     """Sole owner of one display duplicate; not a buffered body reader."""
     _fd = -1
 
-    def __init__(self, doc):
-        self._lock, self._seek_lock = Lock(), Lock()
+    def __init__(self, doc, *, seek_lock=None):
+        self._lock, self._seek_lock = Lock(), seek_lock if seek_lock is not None else Lock()
         self._fd = os.dup(doc.fileno())
     @property
     def closed(self): return self._fd < 0
@@ -110,12 +110,16 @@ class _DisplayFD:
         return self._fd
     def duplicate(self):
         with self._lock: return os.dup(self.fileno())
+    def duplicate_display(self):
+        # Each view can close independently, but CRT duplicates share their
+        # physical seek position; never allocate a second lock for that cursor.
+        with self._lock: return _DisplayFD(self, seek_lock=self._seek_lock)
     @contextmanager
     def read_lease(self):
         # On Windows the CRT duplicate shares seek state with this original.
         # Preview readers are serialized; other desktop tasks on Windows use
         # their own independently opened archival streams. POSIX uses pread.
-        with self._seek_lock:
+        with (nullcontext() if hasattr(os, "pread") else self._seek_lock):
             fd = self.duplicate()
             try:
                 position = None if hasattr(os, "pread") else os.lseek(fd, 0, os.SEEK_CUR)
@@ -225,37 +229,55 @@ class Selection:
         return result
 
 
-def selected_raw_sha(selected: Selection, *, observer):
-    """Re-read only the physical bytes of the held observation, not a path or catalog slot."""
+@contextmanager
+def _display_policy(selected, observer):
     if not isinstance(selected, Selection) or selected.held is None or selected.held.closed:
         raise Rejected("没有可核验的原浏览句柄")
     observer.begin("identity")
-    with ExitStack() as leases:
-        resident = None
-        if sys.platform == "darwin":
-            from ..macos_read import no_materialization, resident
-            leases.enter_context(no_materialization())
-        fd = leases.enter_context(selected.held.read_lease())
+    resident = None
+    policy = nullcontext()
+    if sys.platform == "darwin":
+        from ..macos_read import no_materialization, resident
+        policy = no_materialization()
 
-        def current():
-            observer.check()
-            if resident is not None: resident(selected.path.name, fd)
-            for item in (os.fstat(fd), selected.path.stat(follow_symlinks=False)):
-                observed = (*native_identity(item, stat.S_IFREG), item.st_size, item.st_mtime_ns, item.st_ctime_ns)
-                if observed != selected.observed:
-                    raise Rejected("原归档已变化，不按同名路径重开")
+    def current(fd):
+        observer.check()
+        if resident is not None: resident(selected.path.name, fd)
+        for item in (os.fstat(fd), selected.path.stat(follow_symlinks=False)):
+            observed = (*native_identity(item, stat.S_IFREG), item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+            if observed != selected.observed:
+                raise Rejected("原归档已变化，不按同名路径重开")
 
-        current()
+    with policy: yield current
+    observer.check()
+
+
+def selected_raw_sha(selected: Selection, *, observer):
+    """Re-read only the physical bytes of the held observation, not a path or catalog slot."""
+    with _display_policy(selected, observer) as current, selected.held.read_lease() as fd:
+        current(fd)
         source = (nullcontext(PositionalDocument(fd, selected.observed[2])) if hasattr(os, "pread")
                   else os.fdopen(fd, "rb", buffering=0, closefd=False))
         with source as original:
             sha = archive_sha(original, observer=observer)
         observer.begin("identity")
-        current()
+        current(fd)
         if selected.exact is not None and sha != selected.exact.sha256:
             raise Rejected("整包 SHA-256 与已列原版本不符")
-    observer.check()
     return sha
+
+
+def duplicate_selected_view(selected: Selection, *, observer):
+    """Offer the exact completed browser observation to a new, independent window."""
+    with ExitStack() as release:
+        with _display_policy(selected, observer) as current:
+            copied = selected.held.duplicate_display()
+            release.callback(copied.close)
+            current(copied.fileno())
+            result = replace(selected, held=copied)
+            current(copied.fileno())
+        release.pop_all()
+        return result
 
 
 def read_registered_baseline(live, displayed, *, observer):

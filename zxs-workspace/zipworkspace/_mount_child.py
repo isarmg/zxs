@@ -21,7 +21,7 @@ if __name__ == "__main__" and not __package__:
     __package__ = spec.name
 
 from .archive import stamp
-from .document import archive_sha, native_identity
+from .document import PositionalDocument, archive_sha, native_identity
 from .linux_mount import _ordinary_user, held_point
 from .model import Commit, Rejected, check_id
 from .private_freeze import mount_id
@@ -72,6 +72,9 @@ def mount_selected(req, doc, chain, authorize, notify, *, driver=None):
     native_identity(os.fstat(doc.fileno()), stat.S_IFREG)
     expected = tuple(req["observed"])
     if stamp(doc) != expected: raise Rejected("原窗口归档已经改变")
+    # The inherited fd can also be held by another window and another helper.
+    # Even initial ZIP indexing and the history digest must not move its kernel cursor.
+    doc = PositionalDocument(doc.fileno(), expected[2])
     marker = Commit.decode(req["marker"].encode("ascii"))
     digest, token = req["sha"], check_id(req["token"])
     if digest is not None and not re.fullmatch(r"[0-9a-f]{64}", digest):

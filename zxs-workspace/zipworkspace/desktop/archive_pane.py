@@ -6,16 +6,17 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QTabWidget, QVBoxLayout,
 
 from .comparison_pane import ComparisonPane
 from .checkout_pane import CheckoutPane
-from .selection import Selection, StoreSelection, selected_raw_sha, submit_verification
+from .selection import Selection, StoreSelection, duplicate_selected_view, selected_raw_sha, submit_verification
 from .widgets import Table, button, confirm, label
 
 
 class ArchivePane(QWidget):
     FILE_PAGE = 100
 
-    def __init__(self, owner, *, open_baseline=None):
+    def __init__(self, owner, *, open_baseline=None, open_copy=None):
         super().__init__()
         self.owner = owner
+        self.open_copy = open_copy
         self.selection = self.store = self.catalog = self.file_page = None
         self.verification = self.catalog_verification = None
         self.directory, self.page_number, self.search_dialog = "", 0, None
@@ -41,7 +42,12 @@ class ArchivePane(QWidget):
         self.raw_result = label()
         self.store_label = label("尚未选择归档存储；浏览一个快照不需要存储目录。")
         layout.addWidget(self.details)
-        layout.addWidget(self.raw_check)
+        exact_actions = QHBoxLayout(); exact_actions.addWidget(self.raw_check)
+        self.duplicate_action = None
+        if open_copy is not None:
+            self.duplicate_action = button("在新窗口浏览当前原快照…", self.fork_browser)
+            exact_actions.addWidget(self.duplicate_action)
+        layout.addLayout(exact_actions)
         layout.addWidget(self.raw_result)
         layout.addWidget(self.store_label)
         self.views = QTabWidget()
@@ -130,6 +136,7 @@ class ArchivePane(QWidget):
         self.clear_catalog()
         self.details.setText("尚未打开快照")
         self.raw_check.setEnabled(False)
+        if self.duplicate_action is not None: self.duplicate_action.setEnabled(False)
         self.clear_raw()
         self.at.setText("")
         self.files.rows.replace(())
@@ -154,6 +161,26 @@ class ArchivePane(QWidget):
     def clear_raw(self):
         self.raw_result.clear()
         self.raw_result.hide()
+
+    def fork_browser(self):
+        selected = self.selection
+        if (self.open_copy is None or selected is None or selected.held is None or selected.held.closed
+                or self.owner.pending is not None): return
+        request = self.verification = object()
+
+        def current():
+            return self.selection is selected and self.verification is request and not selected.held.closed
+
+        def accepted(copy):
+            try: self.open_copy(copy)
+            except BaseException:
+                copy.release_display()
+                raise
+            self.owner.inform("已为同一原节点打开独立只读窗口；本窗口的浏览和工作树未改变。")
+
+        submit_verification(self.owner, "正在复核原归档句柄，不重新读取正文…",
+                            lambda observer: duplicate_selected_view(selected, observer=observer),
+                            accepted, current=current)
 
     def check_raw(self):
         selected = self.selection
@@ -447,7 +474,9 @@ class ArchivePane(QWidget):
         if self.selection is not None and self.selection is not selected: self.selection.release_display()
         self.selection = selected
         self.clear_raw()
-        self.raw_check.setEnabled(selected.held is not None and not selected.held.closed)
+        held = selected.held is not None and not selected.held.closed
+        self.raw_check.setEnabled(held)
+        if self.duplicate_action is not None: self.duplicate_action.setEnabled(held)
         if self.save_copy is not None: self.save_copy.setEnabled(selected.held is not None)
         if self.save_zip is not None: self.save_zip.setEnabled(selected.held is not None)
         self.comparison.set_snapshot(selected)

@@ -13,7 +13,8 @@ from unittest.mock import patch
 import unittest
 import zipfile
 
-from zipworkspace.desktop.selection import Selection, StoreSelection, Verification, selected_raw_sha
+from zipworkspace.desktop.selection import (Selection, StoreSelection, Verification, duplicate_selected_view,
+                                            selected_raw_sha)
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
 
 
@@ -178,6 +179,37 @@ class SelectedOriginal(unittest.TestCase):
             with self.assertRaisesRegex(Rejected, "已列原版本不符"):
                 selected_raw_sha(replace(selected, exact=replace(node, sha256="0" * 64)), observer=Verification())
 
+    def test_independent_display_shares_the_original_identity_and_windows_seek_guard(self):
+        from zipworkspace.desktop import selection as view
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as held:
+            path = Path(tmp) / "chosen.zxs"
+            write_snapshot(path)
+            original = Selection.open(path, retain=True)
+            held.callback(original.release_display)
+            with patch.object(view, "named_document", side_effect=AssertionError("do not reopen")), \
+                 patch.object(view, "ArchiveBrowser", side_effect=AssertionError("do not reparse the archive")), \
+                 patch.object(view, "archive_sha", side_effect=AssertionError("do not reread the ZIP")):
+                copied = duplicate_selected_view(original, observer=Verification())
+            held.callback(copied.release_display)
+            self.assertIsNot(original, copied)
+            self.assertIsNot(original.held, copied.held)
+            self.assertIs(original.held._seek_lock, copied.held._seek_lock)
+            self.assertIs(original.browser, copied.browser)
+            self.assertEqual(original.observed, copied.observed)
+            original.release_display()
+            self.assertFalse(copied.held.closed)
+            self.assertEqual(selected_raw_sha(copied, observer=Verification()), hashlib.sha256(path.read_bytes()).hexdigest())
+
+    @unittest.skipIf(os.name == "nt", "POSIX replacement under a still-held FD")
+    def test_independent_view_does_not_reopen_a_same_byte_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as held:
+            path = Path(tmp)/"chosen.zxs"; write_snapshot(path)
+            original = Selection.open(path, retain=True); held.callback(original.release_display)
+            old = path.with_suffix(".kept"); path.rename(old); path.write_bytes(old.read_bytes())
+            with self.assertRaisesRegex(Rejected, "原归档已变化"):
+                duplicate_selected_view(original, observer=Verification())
+            self.assertFalse(original.held.closed)
+
     def test_same_inode_at_a_different_name_is_not_reused_as_the_store_slot(self):
         from zipworkspace import refs
         with tempfile.TemporaryDirectory() as tmp:
@@ -278,6 +310,54 @@ class SelectedOriginal(unittest.TestCase):
 
 @unittest.skipUnless(find_spec("PySide6"), "optional desktop extra not installed")
 class DesktopArchiveWidgets(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1", "optional Qt source fixture")
+    def test_actual_window_copies_only_current_read_only_view_and_drops_late_clone(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); path, later = root/"chosen.zxs", root/"later.zxs"
+            write_snapshot(path); write_snapshot(later, year=2001)
+            delivered = []
+            def new():
+                child = Window()
+                delivered.append(child)
+                return child
+            win = Window(new_window=new)
+            pane = win.archive
+            source = Selection.open(path, retain=True)
+            pane.show_selection(source)
+            store = StoreSelection.open(root); pane.use_store(store); pane.show_catalog(source.catalog(store))
+            def begin():
+                future = Future()
+                with patch.object(win.pool, "submit", return_value=future) as run:
+                    pane.duplicate_action.click()
+                return future, run.call_args.args[0]
+            try:
+                future, job = begin()
+                future.set_result(job()); win.poll()
+                fresh = delivered[0].archive
+                self.assertIs(pane.selection, source)
+                self.assertIs(pane.store, store)
+                self.assertIs(fresh.selection.browser, source.browser)
+                self.assertIsNone(fresh.store)
+                self.assertIsNone(fresh.catalog)
+                self.assertIsNone(fresh.checkout.live)
+                copied = fresh.selection
+                delivered[0].close()
+                self.assertTrue(copied.held.closed)
+                self.assertFalse(source.held.closed)
+                future, job = begin()
+                outcome = job()
+                pane.show_selection(Selection.open(later, retain=True))
+                future.set_result(outcome); win.poll()
+                self.assertEqual(len(delivered), 1)
+                self.assertTrue(outcome[0].held.closed)
+            finally:
+                if win.pending is not None:
+                    win.pending[0].cancel(); win.poll()
+                win.close()
+
     @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1", "optional Qt source fixture")
     def test_raw_digest_needs_confirmation_and_remains_in_the_original_view(self):
         from PySide6.QtWidgets import QApplication
