@@ -12,6 +12,7 @@ from .. import plain_import
 
 from ..archive import stamp
 from ..browser import ArchiveBrowser, DirectoryIndex
+from ..comparison import Changes
 from ..document import PositionalDocument, archive_sha, named_document, native_identity, relative_document
 from ..model import Rejected
 from ..refs import Catalog, Node
@@ -298,7 +299,14 @@ def read_registered_baseline(live, displayed, *, observer):
         return view
 
 
-def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, node: Node, *, observer=None):
+@dataclass(frozen=True, slots=True)
+class ComparedArchives:
+    right: Selection
+    changes: Changes
+
+
+def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, node: Node, *, observer=None,
+                    retain_right=False):
     """Compare the admitted left view to exactly one canonical catalog row, not to a later HEAD."""
     from ..comparison import compare_snapshots
 
@@ -311,24 +319,32 @@ def compare_version(left: Selection, store: StoreSelection, catalog: Catalog, no
     store.check()
     if observer is not None: observer.check()
     options = {} if observer is None else {"observer": observer}
-    right = Selection.open(node.path, expected=node, **options)  # No retained FD, no change to the current selection.
-    if observer is not None: observer.begin("compare")
-    result = compare_snapshots(left.browser, right.browser)
-    if observer is not None: observer.begin("identity")
-    store.check()
-    if observer is not None: observer.check()
-    return result
+    right = Selection.open(node.path, expected=node, retain=retain_right, **options)
+    try:
+        if observer is not None: observer.begin("compare")
+        result = compare_snapshots(left.browser, right.browser)
+        if observer is not None: observer.begin("identity")
+        store.check()
+        if observer is not None: observer.check()
+        return ComparedArchives(right, result) if retain_right else result
+    except BaseException:
+        right.release_display()
+        raise
 
 
-def compare_snapshot_file(left: Selection, path, *, observer):
+def compare_snapshot_file(left: Selection, path, *, observer, retain_right=False):
     """The chosen counterpart may be any .zxs, not necessarily a node of left's STORE."""
     from ..comparison import compare_archive_contents
 
     observer.check()
     path = Path(path).absolute()
     if path.suffix.lower() != ".zxs": raise Rejected("请另选一份 .zxs 快照文件")
-    right = Selection.open(path, observer=observer)  # No retained right handle/capability.
-    observer.begin("compare")
-    changes = compare_archive_contents(left.browser, right.browser)
-    observer.check()
-    return right.path, right.browser.commit, changes
+    right = Selection.open(path, observer=observer, retain=retain_right)
+    try:
+        observer.begin("compare")
+        changes = compare_archive_contents(left.browser, right.browser)
+        observer.check()
+        return ComparedArchives(right, changes) if retain_right else (right.path, right.browser.commit, changes)
+    except BaseException:
+        right.release_display()
+        raise

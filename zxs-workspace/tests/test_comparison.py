@@ -12,6 +12,7 @@ from unittest.mock import patch
 import zipfile
 
 from zipworkspace import comparison, freeze
+from zipworkspace.desktop import text_preview
 from zipworkspace.desktop.selection import (PlainSelection, Selection, StoreSelection, Verification,
                                             compare_snapshot_file, compare_version)
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected
@@ -121,6 +122,105 @@ class CompareVersions(unittest.TestCase):
         self.assertEqual((report.added, report.changed, report.missing), (1, 1, 3))
         with self.assertRaisesRegex(Rejected, "not from one"):
             comparison.compare_snapshots(self.left.browser, other.browser)  # history remains distinct
+
+    def text_pair(self, before, after, *, stem="text"):
+        left_name, right_name = self.root/f"{stem}-left.zxs", self.root/f"{stem}-right.zxs"
+        snapshot(left_name, [("kept/story", before), ("elsewhere/story", b"not this row")])
+        snapshot(right_name, [("kept/story", after), ("elsewhere/story", b"also changed")],
+                 "6"*32, repo="9"*32)
+        left = Selection.open(left_name, retain=True)
+        self.addCleanup(left.release_display)
+        pair = compare_snapshot_file(left, right_name, observer=Verification(), retain_right=True)
+        self.addCleanup(pair.right.release_display)
+        return left, pair, next(r for r in pair.changes.rows if r.path == "kept/story")
+
+    def test_selected_text_difference_reads_only_each_original_exact_member(self):
+        left, pair, row = self.text_pair(b"same\r\n<old>", "same\n<新>𠀀\n".encode())
+        for view in (left, pair.right): os.lseek(view.held.fileno(), 17, os.SEEK_SET)
+        with patch.object(os, "open", side_effect=AssertionError("reopening a displayed original")), \
+             patch.object(text_preview, "stored_member", wraps=text_preview.stored_member) as files:
+            value = text_preview.compare_text(left, pair.right, row, observer=Verification())
+        self.assertEqual([x.args[3] for x in files.call_args_list], ["kept/story", "kept/story"])
+        self.assertIn("-<old>\n\\ 此行末尾没有换行", value)
+        self.assertIn("+<新>𠀀", value)
+        self.assertNotIn("elsewhere", value)
+        for view in (left, pair.right): self.assertEqual(os.lseek(view.held.fileno(), 0, os.SEEK_CUR), 17)
+
+    def test_text_difference_separates_display_identical_bytes_from_invalid_or_excessive_text(self):
+        left, pair, row = self.text_pair(b"same\r\n", b"same\n", stem="line-endings")
+        self.assertIn("字节不同", text_preview.compare_text(left, pair.right, row, observer=Verification()))
+        bad, bad_pair, row = self.text_pair(b"old", b"\xff", stem="binary")
+        with self.assertRaisesRegex(Rejected, "UTF-8"):
+            text_preview.compare_text(bad, bad_pair.right, row, observer=Verification())
+        long, long_pair, row = self.text_pair(b"x\n" * (text_preview.COMPARE_LINES + 1), b"short", stem="line-cap")
+        with self.assertRaisesRegex(Rejected, "1,024 行"):
+            text_preview.compare_text(long, long_pair.right, row, observer=Verification())
+        large, large_pair, row = self.text_pair(b"x" * (text_preview.COMPARE_BYTES + 1), b"small", stem="byte-cap")
+        with patch.object(text_preview, "prepare", side_effect=AssertionError("cap before member read")):
+            with self.assertRaisesRegex(Rejected, "64 KiB"):
+                text_preview.compare_text(large, large_pair.right, row, observer=Verification())
+
+    @unittest.skipUnless(os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1" and find_spec("PySide6"),
+                         "optional desktop")
+    def test_text_difference_ui_requires_the_current_original_pair_and_an_explicit_choice(self):
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit
+        from zipworkspace.desktop import comparison_pane as ui
+        from zipworkspace.desktop.window import Window
+        app = QApplication.instance() or QApplication([])
+        left, pair, row = self.text_pair(b"old", b"<literal new>")
+        right_path = pair.right.path
+        pair.right.release_display()
+        win = Window()
+        pane = win.archive.comparison
+        jobs = []
+
+        def queue(action):
+            future = Future()
+            jobs.append((future, action))
+            return future
+
+        def complete():
+            future, action = jobs.pop(0)
+            future.set_result(action())
+            win.poll()
+
+        def compare():
+            pane.compare_file(right_path); complete()
+            i = next(i for i, (_, item) in enumerate(pane.table.rows.rows) if item.path == row.path)
+            pane.table.selectRow(i)
+            self.assertTrue(pane.lines.isEnabled())
+
+        try:
+            win.archive.show_selection(left)
+            win.archive.views.setCurrentWidget(pane)
+            with patch.object(win.pool, "submit", side_effect=queue):
+                compare()
+                with patch.object(ui, "confirm", return_value=False): pane.lines.click()
+                self.assertEqual(jobs, [])
+                self.assertIsNone(pane.text_dialog)
+                right = pane.right
+                with patch.object(ui, "confirm", return_value=True): pane.lines.click()
+                f, work = jobs.pop(0)
+                f.set_result(work())
+                pane.close_report()
+                win.poll()
+                self.assertTrue(right.held.closed)
+                self.assertIsNone(pane.text_dialog)
+                self.assertFalse(left.held.closed)
+                compare()
+                with patch.object(ui, "confirm", return_value=True): pane.lines.click()
+                complete()
+                literal = pane.text_dialog.findChild(QPlainTextEdit)
+                self.assertTrue(literal.isReadOnly())
+                self.assertIn("+<literal new>", literal.toPlainText())
+                current = pane.right
+                pane.close_report()
+                self.assertTrue(current.held.closed)
+                self.assertIsNone(pane.text_dialog)
+        finally:
+            if win.pending is not None:
+                win.pending[0].cancel(); win.poll()
+            win.close()
 
     @unittest.skipUnless(find_spec("PySide6"), "optional desktop")
     def test_direct_snapshot_picker_compares_without_store_and_rejects_a_late_previous_view(self):

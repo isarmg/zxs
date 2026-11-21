@@ -3,6 +3,7 @@ from bisect import bisect_right
 import codecs
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from difflib import unified_diff
 import hashlib
 import os
 import re
@@ -18,6 +19,7 @@ from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected
 from .selection import PlainSelection, Selection
 
 LIMIT = 256 * 1024
+COMPARE_BYTES, COMPARE_LINES = 64 * 1024, 1024
 UNITS_PER_PAGE, LINES_PER_PAGE = 8192, 256
 # At 128 GiB this is 131,072 × 37 B (less than 4.7 MiB). There is
 # deliberately no table per line or per rendered page. Each non-final page
@@ -218,6 +220,48 @@ def prepare(selected, directory, entry, *, check, indexed=False):
         pages = _pages(text, check)
         same_original()
         return TextPreview(member, size, shown, pages)
+
+
+def can_compare_text(row):
+    return (row is not None and (row.change, row.before, row.after) == ("changed", "file", "file")
+            and all(type(n) is int and 0 <= n <= COMPARE_BYTES for n in (row.before_bytes, row.after_bytes)))
+
+
+def compare_text(left, right, row, *, observer):
+    """Two small complete members from precisely the original checked views."""
+    if not can_compare_text(row):
+        raise Rejected("逐行对照要求同一路径的两个普通文本文件，且每侧不超过 64 KiB")
+    folder, _, name = row.path.rpartition("/")
+    entries = [view.browser.entry(folder, name) for view in (left, right)]
+    for entry, size in zip(entries, (row.before_bytes, row.after_bytes)):
+        if entry is None or entry.kind != "file" or entry.size_bytes != size:
+            raise Rejected("所选差异不再对应两份原成员")
+    if entries[0].sha256 == entries[1].sha256:
+        raise Rejected("这两条原成员没有字节差异")
+    observer.begin("members", row.before_bytes + row.after_bytes)
+    sides = []
+    for view, entry in zip((left, right), entries):
+        read = prepare(view, folder, entry, check=observer.check)
+        if read.path != row.path or read.bytes_shown != entry.size_bytes:
+            raise Rejected("没有取得原文件的完整文本，未生成差异")
+        observer.advance(entry.size_bytes)
+        text = "".join(read.pages)
+        line_count = text.count("\n") + int(bool(text) and not text.endswith("\n"))
+        if line_count > COMPARE_LINES:
+            raise Rejected("文件已核验，但逐行对照每侧最多 1,024 行；可在各快照单独预览")
+        sides.append(text.splitlines(keepends=True))
+    observer.begin("compare")
+    display = []
+    for line in unified_diff(*sides, fromfile="当前快照", tofile="所选快照"):
+        observer.check()
+        # Display the difference's own lines literally. Preserve the fact
+        # that an original text line had no terminating newline.
+        display.append(line if line.endswith("\n") else line + "\n\\ 此行末尾没有换行\n")
+    observer.begin("identity")
+    for view in (left, right):
+        with _held_input(view, observer.check): pass  # Metadata only; no re-open or extra member read.
+    observer.check()
+    return "".join(display) if display else "两份原成员的字节不同；按预览规则统一换行后，显示的文字相同。"
 
 
 def request_for_row(pane, selected, page, entry, *, current, confirm_action, indexed=False):
