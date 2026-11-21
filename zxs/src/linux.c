@@ -173,21 +173,6 @@ int zxs_open_mountinfo(void) { return open_proc_child("mountinfo",O_RDONLY); }
 #include <stdlib.h>
 #include <sys/ioctl.h>
 
-/* Display only, never a durable enrollment or device identity. Linux can
- * report a shorter native filesystem identifier as well as a 16-byte UUID.
- * The caller supplies a 16-byte buffer. Do not copy any trailing bytes. */
-int zxs_storage_uuid(int fd,unsigned char *out) {
-#ifdef FS_IOC_GETFSUUID
-    struct fsuuid2 fs = {0};
-    if (ioctl(fd, FS_IOC_GETFSUUID, &fs) != 0) return -1;
-    if (fs.len == 0 || fs.len > 16) { errno = ENOTSUP; return -1; }
-    memcpy(out,fs.uuid,fs.len);
-    return fs.len;
-#else
-    (void)fd; (void)out; errno=ENOTSUP; return -1;
-#endif
-}
-
 /* Queried on the actual live FD. The mount ID returned by name_to_handle_at
  * is intentionally not a durable identifier. We never open arbitrary handles. */
 ssize_t zxs_native_birth(int fd, unsigned char *out, size_t cap) {
@@ -309,8 +294,8 @@ int zxs_sql_private_name(int parent,const char *name,uint64_t *ino) {
 
 #include <sys/statvfs.h>
 /* Capacity of this currently mounted FS, not a per-folder quota or promise.
- * In the extended observation the caller/volume counts and mount RO bit
- * are from the same statvfs sample, not separate views. */
+ * The full SMB sample keeps caller/free counts and the mount RO bit in
+ * the same statvfs result. */
 static int zxs_capacity_at(int fd,uint64_t *total,uint64_t *available,uint64_t *free_bytes,int *read_only) {
     struct statvfs v;
     if (fstatvfs(fd,&v)<0) return -1;
@@ -324,9 +309,6 @@ static int zxs_capacity_at(int fd,uint64_t *total,uint64_t *available,uint64_t *
 }
 int zxs_storage_capacity(int fd,uint64_t *total,uint64_t *available) {
     return zxs_capacity_at(fd,total,available,NULL,NULL);
-}
-int zxs_storage_capacity_status(int fd,uint64_t *total,uint64_t *available,int *read_only) {
-    return zxs_capacity_at(fd,total,available,NULL,read_only);
 }
 int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_t *free_bytes,int *read_only) {
     return zxs_capacity_at(fd,total,available,free_bytes,read_only);

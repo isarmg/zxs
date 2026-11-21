@@ -103,8 +103,6 @@ pub(crate) mod share_mode;
 #[path="overview.rs"]
 pub(crate) mod overview;
 
-#[path="volume_status.rs"]
-pub(crate) mod volume_status;
 
 #[path="manual_work.rs"]
 pub(crate) mod manual_work;

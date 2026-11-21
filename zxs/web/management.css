@@ -28,7 +28,7 @@ body { margin: 0; color: var(--zxs-text-primary); background: var(--zxs-bg-page)
 [data-zxs-scope] h1 { font-size: clamp(1.55rem, 4vw, 2rem); }
 [data-zxs-scope] h2 { font-size: 1.35rem; }
 [data-zxs-scope] h3 { font-size: 1rem; }
-[data-zxs-scope] small, .zxs-status { color: var(--zxs-block-muted); }
+[data-zxs-scope] small { color: var(--zxs-block-muted); }
 [data-zxs-scope] bdi { overflow-wrap: anywhere; }
 [data-zxs-scope] code { font-family: var(--zxs-font-mono); overflow-wrap: anywhere; }
 [data-zxs-scope] a { color: var(--zxs-text-link); text-underline-offset: .23em; }
@@ -59,13 +59,10 @@ body { margin: 0; color: var(--zxs-text-primary); background: var(--zxs-bg-page)
 }
 .zxs-stack, .zxs-panel { display: grid; grid-template-columns: minmax(0,1fr); gap: 1.25rem; }
 .zxs-panel { gap: .65rem; scroll-margin-top: 1rem; }
-.zxs-metric-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: var(--zxs-block-gap); min-width: 0; }
-.zxs-metric-card, .zxs-account-card {
+.zxs-account-card {
   display: flex; flex-direction: column; gap: .45rem; min-width: 0;
   padding: 1rem; border-radius: 1.1rem; background: var(--zxs-bg-panel); overflow-wrap: anywhere;
 }
-.zxs-metric-card { aspect-ratio: 3 / 2; }
-.zxs-metric-current { font-size: 1.3rem; font-weight: 650; }
 .zxs-table-scroll { max-width: 100%; min-width: 0; overflow: auto; border: 1px solid var(--zxs-block-border); border-radius: .75rem; }
 .zxs-table { width: 100%; border-collapse: collapse; text-align: start; }
 .zxs-table :is(td,th) { padding: .65rem .8rem; text-align: start; vertical-align: top; }
@@ -92,8 +89,7 @@ body { margin: 0; color: var(--zxs-text-primary); background: var(--zxs-bg-page)
 .authentication-card .zxs-auth-label { display: flex; align-items: center; }
 .authentication-card .zxs-auth-actions { margin-top: .5rem; }
 @media (max-width: 48rem) {
-  .zxs-metric-grid, .zxs-account-grid { grid-template-columns: minmax(0,1fr); }
-  .zxs-metric-card { aspect-ratio: auto; }
+  .zxs-account-grid { grid-template-columns: minmax(0,1fr); }
   .zxs-header-actions { margin-inline-start: 0; }
 }
 @media (max-width: 26rem), (max-height: 30rem) {
@@ -101,7 +97,7 @@ body { margin: 0; color: var(--zxs-text-primary); background: var(--zxs-bg-page)
 }
 @media (forced-colors: active) {
   [data-zxs-scope] :where(a,button,input,select,[tabindex]):focus-visible { outline-color: Highlight; }
-  .zxs-metric-card, .zxs-account-card, .authentication-card { border: 1px solid CanvasText; }
+  .zxs-account-card, .authentication-card { border: 1px solid CanvasText; }
 }
 @media (prefers-reduced-motion: reduce) {
   [data-zxs-scope] *, [data-zxs-scope] *::before, [data-zxs-scope] *::after {
