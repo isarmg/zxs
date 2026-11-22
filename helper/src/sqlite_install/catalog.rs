@@ -190,12 +190,13 @@ mod schema_tests {
     fn the_current_version_and_row_count_do_not_admit_a_weakened_business_table() {
         let approved=Canonical::new().unwrap();
         for (original,weakened) in [
-            ("file_id BLOB NOT NULL REFERENCES root_entry(file_id),\n  label BLOB",
-             "file_id BLOB NOT NULL,\n  label BLOB"),
+            ("CREATE TABLE file_label (\n  file_id BLOB NOT NULL REFERENCES root_entry(file_id),",
+             "CREATE TABLE file_label (\n  file_id BLOB NOT NULL,"),
             ("target_setting_op BLOB REFERENCES share_mode(change_op),","target_setting_op BLOB,"),
             ("CREATE TABLE directory_location (\n  directory_id BLOB NOT NULL PRIMARY KEY REFERENCES directory_entry(directory_id),",
              "CREATE TABLE directory_location (\n  directory_id BLOB NOT NULL PRIMARY KEY,"),
         ]{
+            assert_eq!(SCHEMA.matches(original).count(),1,"fixture must change one schema clause");
             let wrong=SCHEMA.replacen(original,weakened,1);
             assert_ne!(wrong,SCHEMA);
             let mut db=Connection::open_in_memory().unwrap();
