@@ -4,14 +4,22 @@ use super::{PendingRootSet, RegisterName, SyncedLabels, WorkerPolicy};
 use super::super::{Root, RootHolds, Selection, acquire, inspect_volumes};
 use crate::{maintenance::pending::ColdEmptyReady, pinned::invalid};
 use rustix::fs::{RenameFlags, renameat_with};
-use std::{io, os::unix::ffi::OsStrExt};
+use std::{fmt, io, os::unix::ffi::OsStrExt};
 
-#[derive(Debug)]
 enum PublishError {
     NotAttempted(io::Error),
     // From entry to rename onward, the caller cannot infer failure/commit from
     // an error. Keep all names and labels; inspect the same original operation.
     InspectOriginal(io::Error),
+}
+impl fmt::Debug for PublishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (phase, cause) = match self {
+            Self::NotAttempted(cause) => ("NotAttempted", cause),
+            Self::InspectOriginal(cause) => ("InspectOriginal", cause),
+        };
+        f.debug_tuple(phase).field(cause).finish()
+    }
 }
 #[must_use]
 struct AwaitingParentSync<'r>(PendingRootSet<'r>);

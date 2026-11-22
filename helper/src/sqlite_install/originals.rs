@@ -48,12 +48,13 @@ impl<'g> HeldRoot<'g> {
     }
 }
 
-/// Separate capability for *observing* one established SYSTEM. It cannot be
+/// Separate capability for one established SYSTEM. It cannot be
 /// substituted for an initial whole-group grant or constructed from SQL paths.
 pub(super) struct SelectedSystem {pin:Pinned,host:File,uid:u32,gid:u32}
 #[derive(Clone,Copy)]
-enum SystemLease{Exclusive,LentExclusive,LentRead}
-pub(super) struct LockedSystem {selected:SelectedSystem,dir:File,limit:u8,lease:SystemLease}
+enum ExclusiveLease{Owned,Lent}
+/// The original SYSTEM with an acquired or independently proven exclusive lease.
+pub(super) struct LockedSystem {selected:SelectedSystem,dir:File,limit:u8,lease:ExclusiveLease}
 impl SelectedSystem {
     #[cfg(test)]
     pub(super) fn from_host(path:&std::path::Path,host:File,uid:u32,gid:u32)->io::Result<Self>{
@@ -77,19 +78,15 @@ impl SelectedSystem {
     fn take_original(self)->io::Result<LockedSystem>{
         let dir=self.pin.storage_directory()?;
         flock(&dir,FlockOperation::NonBlockingLockExclusive)?;
-        self.with_descriptor(dir,SystemLease::Exclusive)
+        self.with_descriptor(dir,ExclusiveLease::Owned)
     }
     /// The dedicated host issuer already owns this OFD and retains it through
     /// the action. Do NOT open a second EX or convert the shared description.
     pub(super) fn hold_lent_ex(self,dir:File)->io::Result<LockedSystem>{
         crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
-        self.with_descriptor(dir,SystemLease::LentExclusive)
+        self.with_descriptor(dir,ExclusiveLease::Lent)
     }
-    pub(super) fn hold_lent_sh(self,dir:File)->io::Result<LockedSystem>{
-        crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
-        self.with_descriptor(dir,SystemLease::LentRead)
-    }
-    fn with_descriptor(self,dir:File,lease:SystemLease)->io::Result<LockedSystem>{
+    fn with_descriptor(self,dir:File,lease:ExclusiveLease)->io::Result<LockedSystem>{
         self.pin.admit_held(&dir)?;
         let limit=helper_linux_evidence::portable_component_limit(&dir)?;
         let locked=LockedSystem{selected:self,dir,limit,lease};locked.require()?;Ok(locked)
@@ -102,21 +99,18 @@ impl LockedSystem {
     pub(super) fn require(&self)->io::Result<()> {
         self.source().require()?;
         let id=(self.selected.pin.entity(),self.selected.pin.require_same_named_mount()?.id);
-        match self.lease{
-            SystemLease::LentExclusive=>super::pair::require_lent_ex(&self.dir,id)?,
-            SystemLease::LentRead=>super::pair::require_lent_sh(&self.dir,id)?,
-            SystemLease::Exclusive=>(),
+        if matches!(self.lease,ExclusiveLease::Lent){
+            super::pair::require_lent_ex(&self.dir,id)?;
         }
         if self.selected.pin.local_scope().is_some(){
             guarded_named_backing(&self.selected.pin,&self.dir,&self.selected.host,self.selected.uid)?;
         }else{ancestry(&self.selected.pin,&self.dir,&HostMounts::current()?,&self.selected.host,self.selected.uid)?;}
         Ok(())
     }
-    pub(super) fn allows_account_write(&self)->bool{!matches!(self.lease,SystemLease::LentRead)}
     /// Read-only H04 uses the same actual offline lease, not any writer gate.
     /// Its selected S must already have been pinned without automounting.
     pub(super) fn retirement_host(&self)->io::Result<(&File,&Pinned)>{
-        if matches!(self.lease,SystemLease::LentRead)||!self.selected.pin.passive_mount_observation(){
+        if !self.selected.pin.passive_mount_observation(){
             return Err(bad("retirement inventory needs an already mounted original SYSTEM and its offline EX lease"));
         }
         self.require()?;Ok((&self.selected.host,&self.selected.pin))

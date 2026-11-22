@@ -48,11 +48,9 @@ fn acquire(selection: &Selection, storage_uid: u32, original: Option<&FreshGenes
     let mut paths: Vec<_> = selection.paths().map(|(_, path)| path).collect();
     if !(3..=64).contains(&paths.len()) { return Err(invalid("invalid number of storage roots")); }
     paths[2..].sort_unstable_by(|a,b| a.as_os_str().as_bytes().cmp(b.as_os_str().as_bytes()));
-    if let Some(g) = original {
-        if !g.has_root_count(storage_uid, paths.len()) || paths.iter().enumerate().any(|(i,p)|
-            !g.matches_request_path(i, p.as_os_str().as_bytes())) {
-            return Err(invalid("explicit SYSTEM, recycle and data selection differs from the pending request"));
-        }
+    if original.is_some_and(|g|!g.has_root_count(storage_uid, paths.len()) || paths.iter().enumerate().any(|(i,p)|
+        !g.matches_request_path(i, p.as_os_str().as_bytes()))) {
+        return Err(invalid("explicit SYSTEM, recycle and data selection differs from the pending request"));
     }
     for (i, path) in paths.into_iter().enumerate() {
         let name = Pinned::open(path, Kind::StorageRoot)?;

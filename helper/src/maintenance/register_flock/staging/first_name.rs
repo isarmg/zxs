@@ -4,7 +4,7 @@
 use super::{FreshRootLocks, SyncedUnlinked};
 use crate::{maintenance::{pending::ColdPending, thread_evidence::WorkerPolicy}, pinned::invalid};
 use rustix::fs::{AtFlags, linkat};
-use std::{fs::File, io};
+use std::{fmt, fs::File, io};
 
 /// This type is nameable by the common reader, but can ONLY be constructed here
 /// after linking and syncing our own original. No external File is accepted,
@@ -14,13 +14,21 @@ impl FirstLinkedRegister {
     pub(in crate::maintenance) fn original(&self) -> &File { &self.0 }
 }
 
-#[derive(Debug)]
 enum NameError {
     NotAttempted(io::Error),
     // Fault after attempting link (including an ambiguous return or parent
     // fsync): do not clean, allocate another ID, or automatically retry.
     // The caller may only inspect the originally selected pool and init_op.
     InspectOriginal(io::Error),
+}
+impl fmt::Debug for NameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (phase, cause) = match self {
+            Self::NotAttempted(cause) => ("NotAttempted", cause),
+            Self::InspectOriginal(cause) => ("InspectOriginal", cause),
+        };
+        f.debug_tuple(phase).field(cause).finish()
+    }
 }
 
 #[must_use]

@@ -15,7 +15,8 @@ pub(super) struct AccountCut<'s>{
 }
 impl<'s> AccountCut<'s>{
     pub(super) fn at(locked:&'s LockedSystem,pool:Id,init:Id)->io::Result<Self>{
-        if !locked.allows_account_write(){return Err(bad("a runtime shared lease is not authorized for account maintenance"));}
+        // LockedSystem admits only S EX. observed_system rechecks its original
+        // lease and custody before the first SQLite connection is opened.
         let schema=Canonical::new()?;
         let database=Existing::observed_system(locked)?;
         let marker=SystemMark::before_sql(locked.source())?;

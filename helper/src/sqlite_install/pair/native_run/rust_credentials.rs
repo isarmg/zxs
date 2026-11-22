@@ -277,8 +277,8 @@ fn preview(m:&Manifest,v:&Observed)->io::Result<String>{
         hex(&crypto.helper),hex(&crypto.gcrypt),hex(&crypto.gpgerror)))
 }
 fn expected(m:&Manifest,v:&Observed)->io::Result<()>{
-    if let Authority::Fresh(scope)=m.authority{
-        if scope.init_sha!=v.target.init_sha{return Err(bad("different exact INIT consent"));}
+    if matches!(m.authority,Authority::Fresh(scope) if scope.init_sha!=v.target.init_sha){
+        return Err(bad("different exact INIT consent"));
     }
     require_observed(&m.plan,&m.order,v.action,&v.target,v.previous.as_ref())
 }

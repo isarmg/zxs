@@ -28,8 +28,8 @@ impl SecretOrder {
         let selected=Observed::decode(preview,&manifest.plan)?;
         if manifest.intent!=Intent::Fresh||selected.state!=1||selected.target.op!=manifest.order.op{return Err(no());}
         require_observed(&manifest.plan,&manifest.order,selected.action,&selected.target,selected.previous.as_ref())?;
-        if let manifest::Authority::Fresh(origin)=manifest.authority{
-            if origin.init_sha!=selected.target.init_sha{return Err(no());}
+        if matches!(manifest.authority,manifest::Authority::Fresh(origin) if origin.init_sha!=selected.target.init_sha){
+            return Err(no());
         }
         Ok((Self{manifest,selected},digest))
     }

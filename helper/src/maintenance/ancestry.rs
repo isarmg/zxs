@@ -300,10 +300,8 @@ impl Mounts {
             }
             let mount = Mount::on(dir)?.ok_or_else(|| unknown("ancestor has no mount identity"))?;
             let row = self.whole(mount.id, m.dev())?;
-            if let Some((c, r)) = child {
-                if c.id != mount.id && (c.at_root != Some(true) || r.parent != mount.id) {
-                    return Err(unknown("cannot verify a mount transition or its covered parent"));
-                }
+            if child.is_some_and(|(c,r)|c.id != mount.id && (c.at_root != Some(true) || r.parent != mount.id)){
+                return Err(unknown("cannot verify a mount transition or its covered parent"));
             }
             // Unknown/union filesystems, denied xattrs and empty markers do not
             // count as unclaimed. No enumeration of ancestor contents is needed.

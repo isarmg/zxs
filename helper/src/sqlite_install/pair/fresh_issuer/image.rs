@@ -100,9 +100,9 @@ fn standalone(len:u64,mut read:impl FnMut(u64,&mut[u8])->io::Result<()>)->io::Re
             if flags&PF_X!=0&&entry>=address&&entry-address<bytes{executable_entry=true;}
             loads.push((o,address,bytes));
         }
-        if k==PT_DYNAMIC{
-            if dyn_rows.replace((o,address,bytes)).is_some()||!(16..=MAX_DYN).contains(&bytes)||
-                bytes>mem||bytes%16!=0||!range(o,bytes,len){return Err(denied());}
+        if k==PT_DYNAMIC&&(dyn_rows.replace((o,address,bytes)).is_some()||!(16..=MAX_DYN).contains(&bytes)||
+            bytes>mem||!bytes.is_multiple_of(16)||!range(o,bytes,len)){
+            return Err(denied());
         }
     }
     if !executable_entry{return Err(denied());}

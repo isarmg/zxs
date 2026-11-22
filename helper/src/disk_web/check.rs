@@ -40,7 +40,7 @@ impl Check {
             // Claim BEFORE any fallible spawn. Retrying this same ticket (including
             // when the browser lost the response) cannot create a second process.
             if let Stage::Prepared(image)=std::mem::replace(&mut self.stage,Stage::Incomplete){
-                if let Ok(worker)=image.launch(){self.stage=Stage::Running(worker);}
+                self.stage=image.launch().map_or(Stage::Incomplete,Stage::Running);
             }
         }
         self.poll();

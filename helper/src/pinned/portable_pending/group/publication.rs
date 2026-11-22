@@ -2,13 +2,22 @@
 //! the same already-published empty request. Neither path issues a new ID.
 use super::{feedback_file::Output,markers::MarkerRun,*};
 use rustix::fs::{RenameFlags,renameat_with};
+use std::fmt;
 
-#[derive(Debug)]
 pub(super) enum PublishError {
     BeforeRename(io::Error),
     /// A rename was attempted: retain both names as observed, do not undo,
     /// clean up, reissue IDs or automatically attempt a second publication.
     InspectOriginal(io::Error),
+}
+impl fmt::Debug for PublishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (phase, cause) = match self {
+            Self::BeforeRename(cause) => ("BeforeRename", cause),
+            Self::InspectOriginal(cause) => ("InspectOriginal", cause),
+        };
+        f.debug_tuple(phase).field(cause).finish()
+    }
 }
 
 #[must_use]

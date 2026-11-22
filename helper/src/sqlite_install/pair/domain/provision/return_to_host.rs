@@ -208,3 +208,14 @@ fn prove_lease(fd:&File,id:(Entity,u64),exclusive:bool)->io::Result<()>{
         Err(Errno::WOULDBLOCK)=>require_owned(fd,id,mode),Err(e)=>Err(e.into()),Ok(())=>Err(bad("original lease no longer conflicts")),
     }
 }
+
+#[cfg(test)]
+#[test]
+fn a_shared_fdinfo_witness_cannot_authorize_an_exclusive_system_loan(){
+    let read=b"mnt_id: 17\nino: 31\nlock: 1: FLOCK ADVISORY READ 705 08:06:31 0 EOF\n";
+    let write=b"mnt_id: 17\nino: 31\nlock: 1: FLOCK ADVISORY WRITE 705 08:06:31 0 EOF\n";
+    assert!(owns_flock(read,31,17,"READ"));
+    assert!(!owns_flock(read,31,17,"WRITE"));
+    assert!(owns_flock(write,31,17,"WRITE"));
+    assert!(!owns_flock(write,31,18,"WRITE"));
+}
