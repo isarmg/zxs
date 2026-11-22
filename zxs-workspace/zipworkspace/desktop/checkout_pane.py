@@ -691,11 +691,8 @@ class CheckoutPane(QWidget):
             future.add_done_callback(lambda task: loan.close() if task.cancelled() else None)
 
     def show_changes(self, live, marker, report, *, initial=False, evidence=None, first_bytes=None, first_review=None):
-        # The read-only result exists only in this modal view. Once closed it
-        # cannot linger into a later commit, recovery, or baseline switch.
-        # Window.job disables the main tabs recursively. Parent this report to
-        # the window itself so its own close/cancel remain actionable while
-        # the report's explicit member-only recheck is in progress.
+        # Keep this report scoped to the dialog. Parent it to the window so
+        # close/cancel still work while a member read disables the main tabs.
         dialog = QDialog(self.owner)
         first = first_bytes is not None
         dialog.setWindowTitle("首次提交内容清单" if first else

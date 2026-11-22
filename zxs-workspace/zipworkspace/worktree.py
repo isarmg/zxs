@@ -222,7 +222,7 @@ def finish(state, operation, *, selected=None, original_store=None):
         con.execute("INSERT INTO completed(operation,marker,digest) VALUES(?,?,?)", (operation, marker.encode(), row["pending_sha"]))
         con.execute("""UPDATE checkout SET branch=?,generation=?,parent=?,base_sha=?,pending=NULL,pending_sha=NULL
                        WHERE singleton=1""", (marker.branch, marker.generation, marker.operation, row["pending_sha"]))
-        # The immutable private spool remains recoverable; cleanup is not part of this prototype.
+        # Keep the private candidate for exact-operation recovery.
     if selected is not None:
         # Only after SQLite COMMIT and close returned. A subsequent explicitly
         # approved retry can recheck this exact completed row and sync only STATE.
@@ -321,7 +321,7 @@ def branch_from_snapshot(state, *, selected):
         selected.check_empty_slot()
         selected.marker, selected.digest = new, sha
         con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1", (new.encode(), sha))
-    # Exactly the existing pending/completed protocol. Only a confirmed result switches this base.
+    # Only a confirmed result switches the checkout base.
     return finish(state, op, selected=selected)
 
 
