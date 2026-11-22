@@ -16,6 +16,8 @@
 
 `tests/test_windows_snapshot.py` 是不挂载的数据面用例。可选 `tests/qualification/winfsp_callbacks.c` 对厂商结构直接发起读及访问回调，不创建卷。它不是默认扩展，须在受信的普通 Windows 会话以同版本 SDK、当前 CPython 与系统 Advapi32 独立构建；仅对操作者明确指定的合成归档启用。原生夹具检查限定只读描述符、真实 AccessCheck、受限请求拒绝和内核模式门；没有运行这些用例。
 
+Windows Server x64 托管作业使用固定的 [WinFsp 2.1 头文件](https://github.com/winfsp/winfsp/tree/ddca7bd5481857a65ba552f643b8776fd070836f/inc/winfsp)，逐件核 SHA-256 后，以该作业的 CPython 头文件和 MSVC [`/c`](https://learn.microsoft.com/en-us/cpp/build/reference/c-compile-without-linking) 独立编译数据回调、封闭生命周期和 C 夹具。作业只生成三个 x64 COFF 对象，不链接 DLL、不安装或加载驱动。接下来的实际回调、普通账号隔离与挂载验证仍需独立 Windows 11 x64 环境。
+
 ## 单实例生命周期（只供单独授权的合成资格）
 
 `lifecycle.c` 使用真实 SDK 创建一份磁盘型卷，在启动 dispatcher **以前**把所有经它分派的请求一律拒绝，包括读目录和正文；没有盘符、目录挂载点、网络卷或“启用读取”开关。没有盘符并不代表卷在 Windows 不可见。[驱动可能在创建时即做内核挂载](https://github.com/winfsp/winfsp/blob/v2.1/src/sys/volume.c#L109-L121)。该源码不在默认构建、CLI 或 Qt 中。

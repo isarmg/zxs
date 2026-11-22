@@ -36,6 +36,7 @@ WINDOWS = (
     "test_windows_snapshot.DataPlane",
     "test_windows_portable.ManifestPolicy",
     "test_windows_portable.NativeServer",
+    "winfsp_compile.NativeSdkCompiler",
 )
 MACOS = (
     "test_macos_read.Boundary.test_actual_desktop_picker_and_job_leave_other_threads_untouched_on_restore_failure",
