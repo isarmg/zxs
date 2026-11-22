@@ -1,13 +1,14 @@
 //! Own only a child born in this exact clone3 call. A PID string merely
 //! routes to the child's proc entry after pidfd waitability; it is never
 //! accepted as a signal, wait, ready or ownership capability.
+mod abi;
 mod child;
 use super::{Fault,ImageStamp,Namespace,Parent,PreparedHandoff,PROC,Result,Role,bounded,caps,current_task,
     follow_kernel_link,foreground,kernel,object,proc_dir,row,view,words};
 use kernel::{BootSocket,OriginalProcess};
 use crate::smb::launch::{held_open::{self,ViewOpen},transport::{child_receipt,offer_packet}};
-use std::{ffi::CString,fs::File,io::{self,Read},mem::{size_of,zeroed},
-    os::{fd::{AsRawFd,BorrowedFd,RawFd},unix::fs::MetadataExt},thread,time::{Duration,Instant}};
+use std::{ffi::CString,fs::File,io::{self,Read},
+    os::{fd::{AsFd,AsRawFd,BorrowedFd,RawFd},unix::fs::MetadataExt},thread,time::{Duration,Instant}};
 
 #[derive(Clone,Copy,Eq,PartialEq)]
 enum Phase{Unconfirmed,Exposed,Ready,TermStarted,AbortStarted}
@@ -40,15 +41,9 @@ impl<'parent> PreparedHandoff<'parent>{
         let context=child::Inputs{image:image.as_raw_fd(),view:mount.as_raw_fd(),parent:parent.as_raw_fd(),
             peer:peer.as_raw_fd(),fail:fail.as_raw_fd(),null:null.as_raw_fd(),role,uid,gid};
         let mut pidfd=-1i32;
-        // Linux clone_args is eleven ordered u64 fields. All unused fields
-        // are zero. No VM, fd table, fs_struct, signal handlers or vfork shared.
-        let mut args=[0u64;11];
-        args[0]=(libc::CLONE_PIDFD|libc::CLONE_NEWPID|libc::CLONE_NEWNET|libc::CLONE_NEWIPC|libc::CLONE_NEWUTS)as u64;
-        args[1]=(&raw mut pidfd)as usize as u64;
-        args[4]=libc::SIGCHLD as u64;
-        // SAFETY: fixed Linux 6.12 ABI, valid pidfd output; the child branch
-        // immediately enters the static allocation-free setup below.
-        let rc=unsafe{libc::syscall(libc::SYS_clone3,args.as_ptr(),size_of::<[u64;11]>())};
+        // SAFETY: the prepared single-thread parent and high descriptors
+        // are still held. The zero-result child immediately enters child::start.
+        let rc=unsafe{abi::clone_child(&mut pidfd)};
         if rc<0{return Err(Fault::Handoff);}
         if rc==0{unsafe{child::start(context)}}
         // SAFETY: success with CLONE_PIDFD atomically transfers one fresh
@@ -82,11 +77,11 @@ impl Born<'_>{
     }
     pub(super) fn peek(&self)->Result<Option<i32>>{
         if let Some(n)=self.done{return Ok(Some(n));}
-        wait(&self.original,libc::WNOHANG|libc::WNOWAIT)
+        wait(&self.original,abi::ExitWait::Peek)
     }
     pub(super) fn reap(&mut self)->Result<i32>{
         if let Some(n)=self.done{return Ok(n);}
-        let status=wait(&self.original,0)?.ok_or(Fault::Handoff)?;
+        let status=wait(&self.original,abi::ExitWait::Reap)?.ok_or(Fault::Handoff)?;
         self.done=Some(status);
         Ok(status)
     }
@@ -304,21 +299,17 @@ impl Drop for Born<'_>{
         }
     }
 }
-fn wait(pidfd:&File,options:libc::c_int)->Result<Option<i32>>{
+fn wait(pidfd:&File,mode:abi::ExitWait)->Result<Option<i32>>{
     loop{
-        // SAFETY: fixed pidfd and sized initialized C output, never a
-        // numeric PID; only EXITED states are requested.
-        let mut s:libc::siginfo_t=unsafe{zeroed()};
-        if unsafe{libc::waitid(libc::P_PIDFD,pidfd.as_raw_fd() as libc::id_t,&raw mut s,libc::WEXITED|options)}!=0{
-            if io::Error::last_os_error().kind()==io::ErrorKind::Interrupted{continue;}
-            return Err(Fault::Handoff);
-        }
-        // SAFETY: waitid initialized the child information, or zero for no state.
-        let pid=unsafe{s.si_pid()};
-        if pid==0{return Ok(None);}
-        if pid<2||s.si_signo!=libc::SIGCHLD{return Err(Fault::Handoff);}
-        let value=match s.si_code{
-            libc::CLD_EXITED=>unsafe{s.si_status()},
+        let s=match mode.sample(pidfd.as_fd()){
+            Ok(s)=>s,
+            Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,
+            Err(_)=>return Err(Fault::Handoff),
+        };
+        if s.pid==0{return Ok(None);}
+        if s.pid<2||s.signal!=libc::SIGCHLD{return Err(Fault::Handoff);}
+        let value=match s.code{
+            libc::CLD_EXITED=>s.status,
             libc::CLD_KILLED|libc::CLD_DUMPED=>-1,
             _=>return Err(Fault::Handoff),
         };

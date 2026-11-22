@@ -155,6 +155,9 @@ int zxs_claim(int fd, const unsigned char *buf, size_t n) {
 #include <signal.h>
 
 #if defined(__x86_64__) && UINTPTR_MAX == UINT64_MAX
+#include <linux/sched.h>
+#include <sys/wait.h>
+
 _Static_assert(sizeof(pid_t) == sizeof(int32_t) && (pid_t)-1 < 0, "signed Linux pid");
 _Static_assert(sizeof(uid_t) == sizeof(uint32_t) && (uid_t)-1 > 0, "unsigned Linux uid");
 _Static_assert(sizeof(gid_t) == sizeof(uint32_t) && (gid_t)-1 > 0, "unsigned Linux gid");
@@ -182,6 +185,33 @@ int observe_waitable_children(void) {
     struct sigaction action = {0};
     return sigaction(SIGCHLD, NULL, &action) == 0 &&
            action.sa_handler == SIG_DFL && !(action.sa_flags & SA_NOCLDWAIT);
+}
+
+/* No shared VM or vfork: the zero-result child returns on its copied stack. */
+long clone_child_pidfd(int32_t *pidfd) {
+    _Static_assert(sizeof(struct clone_args) == 88, "original clone3 ABI width");
+    struct clone_args args = {
+        .flags = CLONE_PIDFD | CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWIPC | CLONE_NEWUTS,
+        .pidfd = (uintptr_t)pidfd,
+        .exit_signal = SIGCHLD
+    };
+    return syscall(SYS_clone3, &args, sizeof(args));
+}
+
+struct child_exit_sample { int32_t pid, signal, code, status; };
+static int read_child_exit(int pidfd, int flags, struct child_exit_sample *out) {
+    siginfo_t info = {0};
+    int rc = waitid(P_PIDFD, (id_t)pidfd, &info, flags);
+    if (rc == 0) {
+        *out = (struct child_exit_sample){info.si_pid, info.si_signo, info.si_code, info.si_status};
+    }
+    return rc;
+}
+int peek_child_exit(int pidfd, struct child_exit_sample *out) {
+    return read_child_exit(pidfd, WEXITED | WNOHANG | WNOWAIT, out);
+}
+int reap_child_exit(int pidfd, struct child_exit_sample *out) {
+    return read_child_exit(pidfd, WEXITED, out);
 }
 #endif
 
