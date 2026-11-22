@@ -1,19 +1,13 @@
-# ZXS 源码仓库
-
-本仓库包含三个独立项目。各自拥有源码、构建配置、文档、任务清单和测试；没有根级构建、共享依赖图或联合发布。
+# ZXS
 
 | 项目 | 用途 | 文档 |
 | --- | --- | --- |
-| [`zxs/`](zxs/) | SMB 文件共享、手动版本、跨盘移动、回收及管理 Web | [使用](zxs/README.md) · [架构](zxs/ARCHITECTURE.md) · [任务](zxs/TASKS.md) |
-| [`helper/`](helper/) | 在线宿主只读观察、首次部署及离线维护 | [使用](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [任务](helper/TASKS.md) |
-| [`zxs-workspace/`](zxs-workspace/) | 整目录 ZIP 版本、工作树、命令行和桌面界面 | [使用](zxs-workspace/README.md) · [架构](zxs-workspace/ARCHITECTURE.md) · [任务](zxs-workspace/TASKS.md) |
+| [ZXS](zxs/) | SMB 3.1.1 文件共享、手动版本、回收和 Web 管理 | [使用](zxs/README.md) · [架构](zxs/ARCHITECTURE.md) · [任务](zxs/TASKS.md) |
+| [Helper](helper/) | 首次部署、系统与磁盘状态、离线维护 | [使用](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [任务](helper/TASKS.md) |
+| [Workspace](zxs-workspace/) | 整目录 ZIP 版本和工作树，提供命令行与桌面界面 | [使用](zxs-workspace/README.md) · [架构](zxs-workspace/ARCHITECTURE.md) · [任务](zxs-workspace/TASKS.md) |
 
-开发时进入对应的项目目录。单独取出任一项目不需要另外两个项目的源码、进程或私有数据。各自任务清单说明哪些功能已写、哪些仍待实现，以及哪些验收没有运行。
+三个项目分别构建。ZXS 的 SMB 和 Web 编入同一个可执行文件，不需要 Samba 服务端；Workspace 的 `.zxs` 文件是 Store ZIP。
 
-ZXS 和 Helper 的交接以[原池落盘合同](zxs/docs/sqlite-system.md)和[共用账户合同](zxs/docs/first-account-v1.md)为准，不共享源码或进程。Helper 的宿主观测可在线进行，不证明卷已登记；涉及原池的维护写入另须停机并独占原件。[可选 Helper 构建](helper/docs/embedded-image.md)仅接收另外核准的完整 ZXS 制品。Workspace 的 `.zxs` 是普通 Store ZIP，不是服务端的卷或容器格式。
+ZXS 当前只面向新池。与 Helper 的 [Linux 单机联合验收](zxs/docs/web-and-smb.md#本轮正式验收)：未运行。普通文件跨数据盘移动尚未接入 SMB。
 
-**SMB：** 只维护编入同一个 `zxs` 二进制的内置 Rust SMB 3.1.1，服务于 ZXS 的文件共享。不另发 SMB 服务程序，不要求部署 Samba 服务端，不提供通用 SMB 服务或后备实现。当前是面向新池的源码候选，不是已发布的安装包，也不代表 Windows、macOS 或 Linux 客户端已通过验收；不迁移或接管旧实现的既有池。Core 已有普通文件跨文件系统移动引擎，公开 SMB 路径尚未接通。见 [ZXS 任务清单](zxs/TASKS.md)。
-
-## 历史资料
-
-[整理前的旧工程快照](https://github.com/isarmg/zxs/tree/8c385b1ac514fffc4e0b98b530ecbf8b1e7f597e)保留原源码、文档、测试、脚本、演示和部署配置，包括[旧 GitHub Actions](https://github.com/isarmg/zxs/tree/8c385b1ac514fffc4e0b98b530ecbf8b1e7f597e/.github)及[许可证与来源记录](https://github.com/isarmg/zxs/tree/8c385b1ac514fffc4e0b98b530ecbf8b1e7f597e/compliance)。[拆分前的任务清单](https://github.com/isarmg/zxs/blob/21a24b18fcb9e440b9438f5163cc663c4e36392c/TASKS.md)供追溯任务与历史证据。这些不是现行构建、安装或验收说明，不应据此操作现有磁盘。
+[历史快照](https://github.com/isarmg/zxs/tree/8c385b1ac514fffc4e0b98b530ecbf8b1e7f597e) · [旧任务清单](https://github.com/isarmg/zxs/blob/21a24b18fcb9e440b9438f5163cc663c4e36392c/TASKS.md) · [历史许可证与来源](https://github.com/isarmg/zxs/tree/8c385b1ac514fffc4e0b98b530ecbf8b1e7f597e/compliance)
