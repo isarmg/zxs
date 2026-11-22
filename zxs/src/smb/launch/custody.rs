@@ -9,7 +9,7 @@ mod preflight;
 mod start;
 pub(super) use preflight::VerifiedPreflight;
 pub(super) use start::{PreparedPair,authorize,prepare_site,stopping,launch_internal_smb,launch_internal_web};
-use super::{Fault,Result,Role,descriptor,kernel::{self,BootSocket,OriginalProcess}};
+use super::{Fault,Result,Role,descriptor::{self,UniqueMountId},kernel::{self,BootSocket,OriginalProcess}};
 use std::{
     ffi::{CStr,CString},fs::{File,OpenOptions},io::Read,marker::PhantomData,mem::{size_of,zeroed},
     os::fd::AsRawFd,os::unix::fs::{MetadataExt,OpenOptionsExt},rc::Rc,
@@ -100,18 +100,12 @@ impl Parent{
 }
 
 #[derive(Clone,Copy,Eq,PartialEq)]
-struct Object{device:u64,inode:u64,mount:u64}
+struct Object{device:u64,inode:u64,mount:UniqueMountId}
 fn object(file:&File)->Result<Object>{
     let m=file.metadata().map_err(|_|Fault::Handoff)?;
-    // SAFETY: this initialized C output and the retained descriptor live
-    // over statx; only the empty-path descriptor is inspected, not a path.
-    let mut st:libc::statx=unsafe{zeroed()};
-    if unsafe{libc::statx(file.as_raw_fd(),c"".as_ptr(),libc::AT_EMPTY_PATH|libc::AT_NO_AUTOMOUNT,
-        libc::STATX_MNT_ID_UNIQUE,&raw mut st)}!=0
-        ||st.stx_mask&libc::STATX_MNT_ID_UNIQUE==0||st.stx_mnt_id==0||m.ino()==0{
-        return Err(Fault::Handoff);
-    }
-    Ok(Object{device:m.dev(),inode:m.ino(),mount:st.stx_mnt_id})
+    let mount=descriptor::unique_mount(file.as_raw_fd()).ok_or(Fault::Handoff)?;
+    if m.ino()==0{return Err(Fault::Handoff);}
+    Ok(Object{device:m.dev(),inode:m.ino(),mount})
 }
 #[derive(Clone,Copy,Eq,PartialEq)]
 struct ImageStamp{

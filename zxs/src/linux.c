@@ -149,6 +149,48 @@ int zxs_claim(int fd, const unsigned char *buf, size_t n) {
 
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
+
+/* Linux v6.12 UAPI. Older libc headers may omit the unique mount ID bit. */
+#ifndef STATX_MNT_ID_UNIQUE
+#define STATX_MNT_ID_UNIQUE 0x00004000U
+#endif
+
+int observe_filesystem_type(int fd, long *out) {
+    struct statfs observed = {0};
+    if (fstatfs(fd, &observed) != 0) return -1;
+    *out = (long)observed.f_type;
+    return 0;
+}
+
+int observe_unique_mount(int fd, uint64_t *out) {
+    struct statx observed = {0};
+    if (statx(fd, "", AT_EMPTY_PATH | AT_NO_AUTOMOUNT, STATX_MNT_ID_UNIQUE, &observed) != 0 ||
+        !(observed.stx_mask & STATX_MNT_ID_UNIQUE) || observed.stx_mnt_id == 0) return -1;
+    *out = observed.stx_mnt_id;
+    return 0;
+}
+
+int observe_mount_root(int fd) {
+    struct statx observed = {0};
+    if (statx(fd, "", AT_EMPTY_PATH | AT_NO_AUTOMOUNT | AT_STATX_DONT_SYNC, STATX_MNT_ID, &observed) != 0 ||
+        !(observed.stx_attributes_mask & STATX_ATTR_MOUNT_ROOT)) return -1;
+    return (observed.stx_attributes & STATX_ATTR_MOUNT_ROOT) != 0;
+}
+
+struct character_device_identity {
+    uint64_t device, inode, special_device;
+    uint32_t major, minor;
+};
+int observe_character_device(int fd, struct character_device_identity *out) {
+    struct stat observed = {0};
+    if (fstat(fd, &observed) != 0 || !S_ISCHR(observed.st_mode) || observed.st_ino == 0) return -1;
+    *out = (struct character_device_identity) {
+        .device = (uint64_t)observed.st_dev, .inode = (uint64_t)observed.st_ino,
+        .special_device = (uint64_t)observed.st_rdev, .major = major(observed.st_rdev), .minor = minor(observed.st_rdev)
+    };
+    return 0;
+}
 
 int zxs_mount_id(int fd, uint64_t *out) {
     struct statx observed;

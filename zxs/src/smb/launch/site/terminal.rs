@@ -22,14 +22,9 @@ impl Surface{
         Self::identity(fd)
     }
     fn identity(fd:RawFd)->io::Result<Self>{
-        // SAFETY: fstat writes this initialized C output.
-        let mut st:libc::stat=unsafe{std::mem::zeroed()};
-        if unsafe{libc::fstat(fd,&mut st)}!=0||
-            st.st_mode&libc::S_IFMT!=libc::S_IFCHR||st.st_ino==0||
-            (libc::major(st.st_rdev),libc::minor(st.st_rdev))==(5,0){
-            return Err(denied());
-        }
-        Ok(Self{device:st.st_dev as u64,inode:st.st_ino as u64,rdev:st.st_rdev as u64,mount:fd_mount(fd)?})
+        let observed=descriptor::character_device(fd).ok_or_else(denied)?;
+        if (observed.major,observed.minor)==(5,0){return Err(denied());}
+        Ok(Self{device:observed.device,inode:observed.inode,rdev:observed.special_device,mount:fd_mount(fd)?})
     }
 }
 pub(in crate::smb::launch) struct Terminal{input:File,output:File,original:Surface,session:i32,group:i32}

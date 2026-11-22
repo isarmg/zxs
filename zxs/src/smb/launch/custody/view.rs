@@ -1,6 +1,6 @@
 //! Detached data-only view for an independently approved static ZXS image.
 //! No host /etc, runtime program, loader/DSO, site or credential is projected.
-use super::{Fault,Parent,PROC,Result,Role,kernel,object};
+use super::{Fault,Parent,PROC,Result,Role,descriptor,kernel,object};
 use crate::fs::MountFlags;
 use std::{ffi::{CStr,CString},fs::File,mem::{size_of,zeroed},os::{fd::AsRawFd,unix::{ffi::OsStrExt,fs::MetadataExt}},
     path::Path,ptr,thread};
@@ -214,8 +214,7 @@ pub(super) unsafe fn enter_child(view:i32)->bool{
             libc::mount(ptr::null(),c"/".as_ptr(),ptr::null(),libc::MS_REC|libc::MS_PRIVATE,ptr::null())!=0{return false;}
         let spot=libc::open(c"/proc".as_ptr(),PIN);
         if spot<0{return false;}
-        let mut st:libc::statfs=zeroed();
-        let moved=libc::fstatfs(spot,&raw mut st)==0&&st.f_type as libc::c_long==PROC&&
+        let moved=descriptor::filesystem_type(spot)==Some(PROC)&&
             libc::syscall(libc::SYS_move_mount,view,c"".as_ptr(),spot,c"".as_ptr(),MOVE_FROM_EMPTY|MOVE_TO_EMPTY)==0;
         libc::close(spot);
         moved&&libc::fchdir(view)==0&&libc::chroot(c".".as_ptr())==0&&libc::chdir(c"/".as_ptr())==0

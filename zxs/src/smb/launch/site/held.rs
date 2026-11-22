@@ -39,10 +39,7 @@ pub(super) fn fd_mount(raw:RawFd)->io::Result<u64>{
 }
 fn mount(file:&File)->io::Result<u64>{fd_mount(file.as_raw_fd())}
 fn magic(file:&File)->io::Result<u32>{
-    // SAFETY: Linux fstatfs initializes a correctly laid out output record.
-    let mut s:libc::statfs=unsafe{std::mem::zeroed()};
-    if unsafe{libc::fstatfs(file.as_raw_fd(),&mut s)}!=0{return Err(io::Error::last_os_error());}
-    Ok(s.f_type as u32)
+    descriptor::filesystem_type(file.as_raw_fd()).map(|value|value as u32).ok_or_else(io::Error::last_os_error)
 }
 
 #[derive(Clone,Copy,Eq,PartialEq)]
@@ -407,13 +404,7 @@ impl PathPin{
 }
 
 fn mount_root(f:&File)->io::Result<bool>{
-    // SAFETY: initialized output, empty-path metadata on the checked local FD.
-    let mut s:libc::statx=unsafe{std::mem::zeroed()};
-    let bit=libc::STATX_ATTR_MOUNT_ROOT as u64;
-    if unsafe{libc::statx(f.as_raw_fd(),c"".as_ptr(),
-        libc::AT_EMPTY_PATH|libc::AT_NO_AUTOMOUNT|libc::AT_STATX_DONT_SYNC,libc::STATX_MNT_ID,&mut s)}!=0||
-        s.stx_attributes_mask&bit==0{return Err(denied());}
-    Ok(s.stx_attributes&bit!=0)
+    descriptor::mount_root(f.as_raw_fd()).ok_or_else(denied)
 }
 
 pub(super) struct PublicLeaf{pin:File,stamp:Stamp,name:&'static CStr,value:Vec<u8>}

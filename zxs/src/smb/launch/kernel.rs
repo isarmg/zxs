@@ -1,10 +1,10 @@
 //! Exact kernel evidence shared by the existing inherited role and the
 //! proposed same-ELF parent. Neither a pidfd nor a channel grants a site,
 //! a credential generation, or permission to listen.
-use super::{Fault,Result,descriptor::cloexec};
+use super::{Fault,Result,descriptor::{cloexec,filesystem_type}};
 use crate::smb::readiness::{self,Interest,Watch};
 use std::{
-    fs::File,mem::{size_of,zeroed},
+    fs::File,mem::size_of,
     os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::MetadataExt,
 };
 
@@ -100,11 +100,8 @@ pub(super) fn fresh_pair()->Result<(BootSocket,BootSocket)>{
     }
     Ok((BootSocket::pin(left)?,BootSocket::pin(right)?))
 }
-pub(super) fn fs_magic(fd:RawFd)->Result<libc::c_long>{
-    // SAFETY: a correctly laid out writable C output record.
-    let mut buf:libc::statfs=unsafe{zeroed()};
-    if unsafe{libc::fstatfs(fd,&mut buf)}!=0{return Err(Fault::Handoff);}
-    Ok(buf.f_type as libc::c_long)
+pub(super) fn fs_magic(fd:RawFd)->Result<std::ffi::c_long>{
+    filesystem_type(fd).ok_or(Fault::Handoff)
 }
 pub(super) fn sock<const N:usize>(fd:RawFd,layer:libc::c_int,typ:libc::c_int)->Result<[u8;N]>{
     let mut b=[0;N];let mut n=N as libc::socklen_t;
