@@ -234,10 +234,10 @@ impl Drop for Aes128 {
     fn drop(&mut self) {
         // SAFETY: only plain fixed-size round-key arrays and dispatch tokens;
         // all-zero bytes are valid for those fields, and none runs Drop.
-        unsafe { zeroize::zeroize_flat_type(self) };
+        unsafe { crate::smb::memory_erasure::zeroize_flat_type(self) };
     }
 }
-impl zeroize::ZeroizeOnDrop for Aes128 {}
+impl crate::smb::memory_erasure::ZeroizeOnDrop for Aes128 {}
 
 #[cfg(test)]
 #[path = "../../../../tests/smb/aes_block.rs"]

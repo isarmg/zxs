@@ -6,7 +6,7 @@ use crate::smb::wire::{
     message::Compound,
     preauth::{AwaitingRequest, ConnectionHash, RequestKeyContext, SetupRequestHash},
 };
-use zeroize::Zeroize;
+use crate::smb::memory_erasure::Zeroize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::smb) enum Failure { Malformed, Limit, Mechanism, Unsupported, Stage }

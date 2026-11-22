@@ -5,7 +5,7 @@
 use core::{fmt, mem::MaybeUninit, ptr, slice};
 use super::fixed_array::{Array, ArraySize};
 use typenum::Sum;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop};
 
 mod sealed;
 

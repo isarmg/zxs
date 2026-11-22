@@ -12,13 +12,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "typenum",
- "zeroize",
 ]
 
 [[package]]
 name = "typenum"
 version = "1.20.1"
-
-[[package]]
-name = "zeroize"
-version = "1.9.2"

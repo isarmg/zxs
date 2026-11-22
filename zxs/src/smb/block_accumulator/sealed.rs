@@ -9,7 +9,7 @@ type Block<N> = MaybeUninit<Array<u8, N>>;
 
 /// Sealed trait for buffer kinds.
 pub trait Sealed {
-    type Pos: Default + Clone + zeroize::Zeroize;
+    type Pos: Default + Clone + crate::smb::memory_erasure::Zeroize;
 
     type Overhead: ArraySize;
 

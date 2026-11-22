@@ -5,7 +5,7 @@ use core::{
     ptr,
 };
 use typenum::{U2, U3, U4, U5, Unsigned};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 macro_rules! verify_array_sizes {
     ($($len:expr => $ty:ident),+ $(,)?) => {

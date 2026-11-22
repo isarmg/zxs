@@ -3,7 +3,7 @@
 use super::{InheritedRun,vault_file};
 use crate::{smb::session::VaultDecoder,system::reader::smb::runtime::QualifiedRustInstall};
 use std::{io,os::unix::fs::FileExt,sync::Arc};
-use zeroize::Zeroizing;
+use crate::smb::memory_erasure::Zeroizing;
 
 fn denied()->io::Error{
     io::Error::new(io::ErrorKind::PermissionDenied,"the original Rust SMB credential is unavailable")

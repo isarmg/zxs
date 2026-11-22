@@ -84,12 +84,14 @@ retain the original in-place views using the same array types. The
 keep key initialization and state handling unchanged. The [private block accumulator](../../src/smb/block_accumulator/ORIGIN.md)
 keeps the same pending-block checks and erasure. The [private fixed arrays](../../src/smb/fixed_array/ORIGIN.md)
 keep the same layout, size and erasure behavior; no array Cargo package remains.
+The [private erasure routines](../../src/smb/memory_erasure/ORIGIN.md) retain
+the original wipe operations without a separate Cargo package.
 No derive, alloc/oid, C provider, generated binding, system crypto or external
 service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-storage-server -> libc, typenum [const-generics], zeroize
+storage-server -> libc, typenum [const-generics]
 ```
 
 All other nodes are leaves in this selected closure. All of these paths
@@ -97,7 +99,7 @@ are inside ZXS. Inactive optional/dev declarations are not silently
 vendored or enabled. Any feature change needs a new closure review.
 Local path packages have no registry checksum field in Cargo.lock; use
 SOURCES.toml to check their published origin. The highest remaining package minimum is
-Rust 1.85, below ZXS's existing Rust 1.100 / pinned
+Rust 1.65, below ZXS's existing Rust 1.100 / pinned
 1.100.0. [Debian 13's stock rustc](https://packages.debian.org/trixie/rustc)
 is older than the pre-existing project toolchain; this does not change ZXS's
 compiler or authorize a toolchain install.

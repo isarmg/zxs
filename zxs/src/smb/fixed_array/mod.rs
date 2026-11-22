@@ -18,7 +18,7 @@ use core::{
     slice::{self, Iter, IterMut},
 };
 use typenum::{Diff, Sum};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop};
 
 /// A transparent wrapper around the `[T; N]` selected by `U`.
 #[repr(transparent)]

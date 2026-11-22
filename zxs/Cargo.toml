@@ -18,14 +18,12 @@ resolver = "3"
 exclude = [
     "vendor/rust/libc-0.2.191",
     "vendor/rust/typenum-1.20.1",
-    "vendor/rust/zeroize-1.9.2",
 ]
 
 # Native storage libraries are not part of the browser module.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
 typenum = { version = "=1.20.1", path = "vendor/rust/typenum-1.20.1", features = ["const-generics"] }
-zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }
 
 [profile.browser]
 inherits = "release"

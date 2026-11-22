@@ -1,6 +1,7 @@
+// Adapted from `RustCrypto` (MIT OR Apache-2.0); see ORIGIN.md.
 //! Bulk operations over slices and pointers.
 
-use crate::{optimization_barrier, volatile_write};
+use super::{optimization_barrier, volatile_write};
 use core::slice;
 
 /// Whether this target supports an assembly optimization barrier.
@@ -95,7 +96,6 @@ fn volatile_fill_iterative<T: Copy>(dst: &mut [T], src: T) {
 
 /// MSRV-compatible copy of core's `slice::as_chunks_mut` taken from Rust 1.88.0.
 /// Source: <https://github.com/rust-lang/rust/blob/1.88.0/library/core/src/slice/mod.rs>
-// TODO(tarcieri): use `slice::as_chunks_mut` when MSRV is 1.88 or newer.
 #[inline]
 #[track_caller]
 #[must_use]

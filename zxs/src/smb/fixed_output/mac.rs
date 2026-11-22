@@ -92,12 +92,12 @@ impl<T: OutputSizeUser> fmt::Debug for CtOutput<T> {
 impl<T: OutputSizeUser> Drop for CtOutput<T> {
     #[inline]
     fn drop(&mut self) {
-        use zeroize::Zeroize;
+        use crate::smb::memory_erasure::Zeroize;
         self.bytes.zeroize();
     }
 }
 
-impl<T: OutputSizeUser> zeroize::ZeroizeOnDrop for CtOutput<T> {}
+impl<T: OutputSizeUser> crate::smb::memory_erasure::ZeroizeOnDrop for CtOutput<T> {}
 
 /// Error type for when the [`Output`] of a [`Mac`]
 /// is not equal to the expected value.

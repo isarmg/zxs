@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn fips_197_aes128_single_and_batch_known_answer() {
-    fn require_erasure<T: zeroize::ZeroizeOnDrop>(_: &T) {}
+    fn require_erasure<T: crate::smb::memory_erasure::ZeroizeOnDrop>(_: &T) {}
 
     // FIPS PUB 197 (2001), Appendix C.1, a public known-answer vector.
     // https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197.pdf
@@ -61,6 +61,6 @@ fn fixed_keys_keep_size_checks_and_array_erasure() {
     assert!(Cmac::<Aes128>::new_from_slice(&key[..15]).is_err());
     assert!(Cmac::<Aes128>::new_from_slice(&key).is_ok());
 
-    zeroize::Zeroize::zeroize(&mut key);
+    crate::smb::memory_erasure::Zeroize::zeroize(&mut key);
     assert_eq!(&key[..], &[0; 16]);
 }

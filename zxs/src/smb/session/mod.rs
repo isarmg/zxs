@@ -23,7 +23,7 @@ use crate::smb::handshake_hash::Sha256;
 use crate::smb::fixed_output::{FixedOutput, KeyInit, Mac, Output};
 use self::keyed_digest::Hmac;
 use std::num::NonZeroU64;
-use zeroize::{Zeroize, Zeroizing};
+use crate::smb::memory_erasure::{Zeroize, Zeroizing};
 
 type KdfMac = Hmac<Sha256>;
 type SigningMac = packet_mac::Cmac<Aes128>;

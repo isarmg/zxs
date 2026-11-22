@@ -7,6 +7,7 @@ mod fixed_array;
 mod fixed_output;
 mod tag_choice;
 mod handshake_hash;
+mod memory_erasure;
 #[allow(dead_code, reason = "input layer is staged before the network runtime")]
 mod wire;
 mod local;

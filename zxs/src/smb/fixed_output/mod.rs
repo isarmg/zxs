@@ -14,7 +14,7 @@ pub(super) use crate::smb::crypto_types::{InvalidLength, Key, KeyInit, Output, O
 pub(super) use crate::smb::crypto_types::typenum::consts;
 pub(super) use hash::{Digest, HashMarker};
 pub(super) use mac::{Mac, MacMarker};
-pub(super) use zeroize;
+pub(super) use super::memory_erasure as zeroize;
 use core::fmt;
 
 /// Types which consume data with byte granularity.

@@ -17,7 +17,7 @@ use super::{
 use crate::smb::{InheritedRun,wire::{message::Compound, preauth::RequestKeyContext}};
 use crate::smb::fixed_output::{Digest, FixedOutput, KeyInit, Mac, Output};
 use std::{num::NonZeroU64, sync::{Arc,Weak}, time::Instant};
-use zeroize::{Zeroize, Zeroizing};
+use crate::smb::memory_erasure::{Zeroize, Zeroizing};
 
 type H = Hmac<Md5>;
 pub(in crate::smb) type Result<T> = std::result::Result<T, Rejected>;

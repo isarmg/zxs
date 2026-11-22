@@ -136,9 +136,9 @@ where
     }
 }
 
-impl<T, OutSize> zeroize::ZeroizeOnDrop for CtOutWrapper<T, OutSize>
+impl<T, OutSize> crate::smb::memory_erasure::ZeroizeOnDrop for CtOutWrapper<T, OutSize>
 where
-    T: VariableOutputCore + zeroize::ZeroizeOnDrop,
+    T: VariableOutputCore + crate::smb::memory_erasure::ZeroizeOnDrop,
     OutSize: ArraySize + IsLessOrEqual<T::OutputSize, Output = True>,
 {
 }

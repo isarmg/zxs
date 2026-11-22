@@ -4,7 +4,7 @@
 use super::{ProtectedRevision,Rejected,Result,RevisionSource,Secret,VaultDecoder,challenge::utf16};
 use crate::{smb::InheritedRun,system::reader::smb::runtime::QualifiedRustInstall};
 use std::{num::NonZeroU64,sync::Arc};
-use zeroize::Zeroizing;
+use crate::smb::memory_erasure::Zeroizing;
 
 use crate::system::shared_account::{VAULT_LENGTH as RECORD_BYTES,VAULT_MAGIC as MAGIC};
 pub(super) const DOMAIN:&str="ZXSLOCAL";

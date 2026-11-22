@@ -8,7 +8,7 @@ use crate::smb::session::cipher_interface::{StreamCipher, StreamCipherError};
 use core::array;
 use crate::smb::crypto_types::{BlockSizeUser, InvalidLength, Key, KeyInit, KeySizeUser, typenum::consts};
 use crate::smb::session::cipher_buffers::InOutBuf;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop};
 
 const MIN_KEY_SIZE: usize = 1;
 const MAX_KEY_SIZE: usize = 256;
