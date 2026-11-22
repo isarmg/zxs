@@ -41,9 +41,9 @@ impl DecodedRecord {
             return Err(Rejected);
         }
         let mut ids=[[0u8;16];8];
-        for (id,b) in ids.iter_mut().zip(bytes[24..152].chunks_exact(16)) {
-            if b==[0;16] {return Err(Rejected);}
-            id.copy_from_slice(b);
+        for (id,b) in ids.iter_mut().zip(bytes[24..152].as_chunks::<16>().0) {
+            if *b==[0;16] {return Err(Rejected);}
+            *id = *b;
         }
         let [pool,init,setup,instance,binding,account,credential,record]=ids;
         let g=u64::from_be_bytes(bytes[152..160].try_into().map_err(|_|Rejected)?);

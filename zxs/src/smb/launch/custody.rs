@@ -208,7 +208,7 @@ fn no_other_descriptors(proc:&File)->Result<()>{
         let mut raw=&buf[..n as usize];
         while !raw.is_empty(){
             let length=u16::from_ne_bytes(raw.get(16..18).ok_or(Fault::Handoff)?.try_into().expect("two bytes")) as usize;
-            if length<20||length%8!=0||length>raw.len(){return Err(Fault::Handoff);}
+            if length<20||!length.is_multiple_of(8)||length>raw.len(){return Err(Fault::Handoff);}
             let name=&raw[19..length]; // Linux linux_dirent64 d_name
             let name=name.split(|&v|v==0).next().ok_or(Fault::Handoff)?;
             if name==b"."||name==b".." {raw=&raw[length..];continue;}

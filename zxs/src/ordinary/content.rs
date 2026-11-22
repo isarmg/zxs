@@ -5,7 +5,7 @@ use super::draft::types::{DraftClaim,DRAFT_CHUNK};
 use crate::fs::invalid;
 use std::io;
 pub(super) const BLOCK:u64=DRAFT_CHUNK as u64;
-pub(super) fn chunks(bytes:u64)->u64{bytes/BLOCK+u64::from(bytes%BLOCK!=0)}
+pub(super) fn chunks(bytes:u64)->u64{bytes.div_ceil(BLOCK)}
 pub(super) fn end(claim:DraftClaim)->io::Result<[u8;32]>{
     let mut h=crate::hash::Sha256::new();h.update(b"ZXS/WORKING/END\0")?;h.update(&claim.bytes.to_be_bytes())?;h.update(&claim.sha256)?;Ok(h.finish())
 }

@@ -138,8 +138,8 @@ fn choose(f:u32)->Result<u32> {
     Ok((f&AGREED)|TARGET_INFO|0x0002_0000|4) // standalone TARGET_TYPE_SERVER | REQUEST_TARGET
 }
 fn name(v:&[u8],max:usize)->Result<()> {
-    if v.is_empty() || v.len()>max || v.len()%2!=0 {return Err(Rejected);}
-    let units=v.chunks_exact(2).map(|u|u16::from_le_bytes([u[0],u[1]]));
+    if v.is_empty() || v.len()>max || !v.len().is_multiple_of(2) {return Err(Rejected);}
+    let units=v.as_chunks::<2>().0.iter().copied().map(u16::from_le_bytes);
     if !char::decode_utf16(units).all(|x|x.is_ok_and(|c|c!='\0')) {return Err(Rejected);}
     Ok(())
 }

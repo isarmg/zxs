@@ -98,7 +98,7 @@ mod tests{
     fn public_plan()->Vec<u8>{
         // Immutable public plan, never a credential or real installation path.
         let hex=b"5a58532d525553542d534d422d49310011111111111111111111111111111111121212121212121212121212121212121616161616161616161616161616161617171717171717171717171717171717131313131313131313131313131313130b666978747572652e6c616e010418c00002110133333333333333333333333333333333020004446f63730006e59b9ee694b6";
-        hex.chunks_exact(2).map(|n|u8::from_str_radix(std::str::from_utf8(n).unwrap(),16).unwrap()).collect()
+        hex.as_chunks::<2>().0.iter().map(|n|u8::from_str_radix(std::str::from_utf8(n).unwrap(),16).unwrap()).collect()
     }
     fn record(system:&[u8],image:&[u8])->Vec<u8>{
         let mut raw=MAGIC.to_vec();

@@ -115,7 +115,7 @@ impl RetireProof{
         let n=u16::from_be_bytes(fixed[16..18].try_into().unwrap()) as usize;
         if n>(DIRECTORY_NAMES-1)/2||roles.len()!=n*(17+WIDTH){return Err(stale());}
         let mut parts=Vec::with_capacity(n);
-        for b in roles.chunks_exact(17+WIDTH){
+        for b in roles.as_chunks::<{17+WIDTH}>().0{
             let op=crate::OperationId(b[..16].try_into().unwrap());let class=b[16];
             if op.0==[0;16]||class>1||parts.last().is_some_and(|&(o,r,_)|(o,r)>=(op,class)){return Err(stale());}
             parts.push((op,class,Edge(b[17..].try_into().unwrap())));

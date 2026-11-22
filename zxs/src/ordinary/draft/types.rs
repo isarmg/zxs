@@ -16,7 +16,7 @@ impl DraftClaim{
     pub fn from_hex(bytes:u64,value:&str)->io::Result<Self>{
         if value.len()!=64{return Err(invalid("expected 64 lower-case SHA-256 digits"));}
         let digit=|c:u8|match c{b'0'..=b'9'=>Ok(c-b'0'),b'a'..=b'f'=>Ok(c-b'a'+10),_=>Err(invalid("invalid SHA-256 digit"))};
-        let mut result=[0;32];for (pair,out) in value.as_bytes().chunks_exact(2).zip(result.iter_mut()){
+        let mut result=[0;32];for (pair,out) in value.as_bytes().as_chunks::<2>().0.iter().zip(result.iter_mut()){
             *out=(digit(pair[0])?<<4)|digit(pair[1])?;
         }
         Self::new(bytes,result)

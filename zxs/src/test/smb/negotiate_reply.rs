@@ -33,7 +33,7 @@ const EXPLICIT_HASH: &str = concat!(
 );
 
 fn decode(s: &str) -> Vec<u8> {
-    s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()
+    s.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()
 }
 fn framed<T>(p: &[u8], read: impl FnOnce(&Compound<'_>)->T) -> T {
     let mut tcp = (p.len() as u32).to_be_bytes().to_vec(); tcp.extend_from_slice(p);

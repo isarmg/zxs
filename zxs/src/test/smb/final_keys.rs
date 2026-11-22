@@ -4,7 +4,7 @@
 use super::*;
 use crate::smb::connection::sessions::proof::tests::fixture_terminal;
 
-fn hex(s:&str)->Vec<u8> {s.as_bytes().chunks_exact(2).map(|p|
+fn hex(s:&str)->Vec<u8> {s.as_bytes().as_chunks::<2>().0.iter().map(|p|
     u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()}
 // Chain through actual final request, signing key, distinct application key, complete signed SMB response.
 const EXPECT:[[&str;4];2]=[

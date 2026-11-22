@@ -16,7 +16,7 @@ const RELATED_TAGS:[&str;2]=["d807b5f5cd1a9f3be39be9b0672071d8","42ca15102a790c5
 const SHORT:[&str;2]=["1e7cfeec389124f8024b4281c594fe9b","4c1516b67b02f3dcab9466f6d6baaff7"];
 const TWO:[&str;2]=["3329de80d9c2f536ee317c5c26a3778c","d29136853d91d8e365a43ab9e6d47e45"];
 
-fn hex(s:&str)->Vec<u8> {s.as_bytes().chunks_exact(2)
+fn hex(s:&str)->Vec<u8> {s.as_bytes().as_chunks::<2>().0.iter()
     .map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()}
 fn packet(cmd:u16,mid:u64,sid:u64,related:bool,next:usize,tag:&str)->Vec<u8> {
     let mut p=hex(TREE);p[12..14].copy_from_slice(&cmd.to_le_bytes());

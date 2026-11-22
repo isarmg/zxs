@@ -4,7 +4,7 @@
 use super::{BootSocket,Control,Fault,KernelControl,MAX_RIGHTS,OriginalProcess,Result,SEALS,START_BYTES,Supervisor,
     CONTROL_SIZE,cloexec,get_flags,inherit,initial_child,recv,sock,sock_int};
 use std::{
-    fs::File,io::{self,Write},mem::{size_of,zeroed},net::{Ipv4Addr,SocketAddr,TcpListener},
+    fs::File,io::{self,Write},mem::{size_of_val,zeroed},net::{Ipv4Addr,SocketAddr,TcpListener},
     os::fd::{AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{FileExt,MetadataExt},
     time::Instant,
 };
@@ -194,7 +194,7 @@ fn send_packet(socket:&BootSocket,frame:&[u8;START_BYTES],fds:&[RawFd],before:im
     // SAFETY: initialized C descriptor and bounded, live data/control spans.
     let mut msg:libc::msghdr=unsafe{zeroed()};
     msg.msg_iov=&raw mut data;msg.msg_iovlen=1;msg.msg_control=control.bytes.as_mut_ptr().cast();
-    let bytes=(fds.len()*size_of::<RawFd>()) as libc::c_uint;
+    let bytes=size_of_val(fds) as libc::c_uint;
     // SAFETY: the aligned control fits every validated fd in one SCM_RIGHTS
     // message.
     unsafe{

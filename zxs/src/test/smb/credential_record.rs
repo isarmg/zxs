@@ -33,7 +33,7 @@ const TYPE3:&str=concat!(
 const SESSION:&str="a698b415669d1adf02c4866ac90507f6";
 const TIME:u64=0x01da_bc00_1122_3344;
 
-fn hex(s:&str)->Vec<u8>{s.as_bytes().chunks_exact(2).map(|x|
+fn hex(s:&str)->Vec<u8>{s.as_bytes().as_chunks::<2>().0.iter().map(|x|
     u8::from_str_radix(std::str::from_utf8(x).unwrap(),16).unwrap()).collect()}
 fn filled()->Zeroizing<[u8;RECORD_BYTES]>{
     // This reference hex is wholly public. Production never allocates this

@@ -200,9 +200,9 @@ impl Control {
                     let is_right=h.cmsg_type==libc::SCM_RIGHTS;
                     if is_right{s.bad|=s.seen_rights;s.seen_rights=true;}
                     else{s.bad|=data.len()!=size_of::<RawFd>();}
-                    let mut words=data.chunks_exact(size_of::<RawFd>());
-                    for w in &mut words{
-                        let raw=RawFd::from_ne_bytes(w.try_into().expect("fixed length group"));
+                    let (words,tail)=data.as_chunks::<{size_of::<RawFd>()}>();
+                    for word in words{
+                        let raw=RawFd::from_ne_bytes(*word);
                         if raw<0{s.bad=true;continue;}
                         // SAFETY: even denied cmsgs must acquire/destroy every
                         // freshly installed kernel fd. This never reads raw user bytes.
@@ -213,7 +213,7 @@ impl Control {
                             *slot=Some(fd);s.nrights+=1;
                         }else{s.bad=true;drop(fd);}
                     }
-                    s.bad|=data.is_empty()||!words.remainder().is_empty();
+                    s.bad|=data.is_empty()||!tail.is_empty();
                 }
                 (libc::SOL_SOCKET,libc::SCM_CREDENTIALS) if data.len()==size_of::<libc::ucred>()=>{
                     // SAFETY: the complete C integer record came from the kernel.

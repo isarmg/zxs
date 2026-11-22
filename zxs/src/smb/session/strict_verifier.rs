@@ -166,8 +166,8 @@ fn selected(offered: u32, s: u32, claimed: u32) -> Result<()> {
 fn same_local_login(configured:&[u8],sent:&[u8])->bool {
     let n=configured.len()/2;
     let mut canonical=[0u8;64];
-    if !(1..=canonical.len()).contains(&n) || configured.len()!=sent.len() || configured.len()%2!=0 {return false;}
-    for ((dest,local),remote) in canonical[..n].iter_mut().zip(configured.chunks_exact(2)).zip(sent.chunks_exact(2)) {
+    if !(1..=canonical.len()).contains(&n) || configured.len()!=sent.len() || !configured.len().is_multiple_of(2) {return false;}
+    for ((dest,local),remote) in canonical[..n].iter_mut().zip(configured.as_chunks::<2>().0).zip(sent.as_chunks::<2>().0) {
         if local[1]!=0 || remote[1]!=0 || local[0]!=remote[0].to_ascii_lowercase() {return false;}
         *dest=local[0];
     }

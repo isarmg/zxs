@@ -109,7 +109,7 @@ impl SharedScope<'_>{
         b[16]=1; // only the SMB verifier record, never a Web verifier
         b[17]=self.login.len() as u8;
         let ids=[self.pool,self.init,self.setup,self.instance,self.bind,self.account,epoch.op,epoch.record];
-        for (out,id) in b[24..152].chunks_exact_mut(16).zip(ids){out.copy_from_slice(&id);}
+        for (out,id) in b[24..152].as_chunks_mut::<16>().0.iter_mut().zip(ids){*out=id;}
         b[152..160].copy_from_slice(&epoch.generation.to_be_bytes());
         b[160..160+self.login.len()].copy_from_slice(self.login);
         Ok(b)

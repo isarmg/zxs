@@ -16,7 +16,7 @@ pub struct DeletionKey{pub file:FileId,pub operation:OperationId,pub decision:[u
 fn read_digest(s:&str)->io::Result<[u8;32]>{
     if s.len()!=64{return Err(invalid("expected a 64-digit original digest"));}
     let digit=|b|match b{b'0'..=b'9'=>Ok(b-b'0'),b'a'..=b'f'=>Ok(b-b'a'+10),_=>Err(invalid("noncanonical digest"))};
-    let mut d=[0;32];for(x,b)in d.iter_mut().zip(s.as_bytes().chunks_exact(2)){*x=(digit(b[0])?<<4)|digit(b[1])?;}Ok(d)
+    let mut d=[0;32];for(x,b)in d.iter_mut().zip(s.as_bytes().as_chunks::<2>().0){*x=(digit(b[0])?<<4)|digit(b[1])?;}Ok(d)
 }
 impl DeletionKey{
     pub fn from_hex(file:FileId,operation:OperationId,digest:&str)->io::Result<Self>{

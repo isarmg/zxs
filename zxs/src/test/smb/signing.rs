@@ -45,7 +45,7 @@ impl VerifiedExchange {
     fn sign_final(self,reply:&mut [u8])->Result<SessionSigner,Fault>{self.complete(reply).map(|k|k.signer)}
 }
 fn hex(s: &str) -> Vec<u8> {
-    s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
+    s.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
 }
 
 #[test]

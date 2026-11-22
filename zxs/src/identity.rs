@@ -16,7 +16,7 @@ fn parse(s:&str) -> io::Result<[u8;16]> {
     let bad=||crate::fs::invalid("expected a nonzero 32-digit lower-case hexadecimal ID");
     if s.len()!=32{return Err(bad());}
     let mut v=[0u8;16];
-    for (dst,bytes) in v.iter_mut().zip(s.as_bytes().chunks_exact(2)){
+    for (dst,bytes) in v.iter_mut().zip(s.as_bytes().as_chunks::<2>().0){
         *dst=(nibble(bytes[0]).ok_or_else(bad)?<<4)|nibble(bytes[1]).ok_or_else(bad)?;
     }
     if v==[0;16]{Err(bad())}else{Ok(v)}

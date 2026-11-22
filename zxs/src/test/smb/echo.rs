@@ -38,7 +38,7 @@ const CASES:[(&str,&str);7]=[
         "0400000000000000")),
 ]; // single default/explicit, malformed, two related, two distinct sessions
 
-fn hex(s:&str)->Vec<u8> {s.as_bytes().chunks_exact(2).map(|p|
+fn hex(s:&str)->Vec<u8> {s.as_bytes().as_chunks::<2>().0.iter().map(|p|
     u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()}
 fn packet(i:usize)->Vec<u8> {
     let (mid,sid,more,related):(u64,u64,bool,bool)=match i {
