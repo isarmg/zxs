@@ -1,6 +1,6 @@
 //! Private AES-128 behind SMB packet CMAC.
 //!
-//! Source adapted from RustCrypto; see ORIGIN.md and the original licenses.
+//! Source adapted from `RustCrypto`; see ORIGIN.md and the original licenses.
 //! Key expansion, instruction/portable backends and whole-object erasure
 //! follow the previously selected AES-128 implementation, with no public API.
 

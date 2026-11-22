@@ -1,4 +1,4 @@
-//! RustCrypto's big-endian 128-bit block doubling used by AES-CMAC.
+//! `RustCrypto`'s big-endian 128-bit block doubling used by AES-CMAC.
 //! Modified by ZXS to retain only the forward 128-bit operation; see ../ORIGIN.md.
 #![forbid(unsafe_code)]
 

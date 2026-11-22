@@ -1,4 +1,4 @@
-//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! `RustCrypto` SHA-2 (MIT OR Apache-2.0); see the retained notices.
 //! Modified by ZXS only to reference the private constants module.
 use crate::smb::handshake_hash::consts::K64;
 

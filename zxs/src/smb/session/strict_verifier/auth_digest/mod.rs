@@ -1,4 +1,4 @@
-//! RustCrypto MD5 (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
+//! `RustCrypto` MD5 (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
 //! Modified by ZXS for its private NTLM verifier, not for general hashing.
 
 mod block_api;

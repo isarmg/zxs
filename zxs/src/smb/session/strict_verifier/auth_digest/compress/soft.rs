@@ -1,4 +1,4 @@
-//! RustCrypto MD5 (MIT OR Apache-2.0); see the retained notices.
+//! `RustCrypto` MD5 (MIT OR Apache-2.0); see the retained notices.
 //! Modified by ZXS only to locate the private constants module.
 #![allow(clippy::many_single_char_names, clippy::unreadable_literal)]
 use super::super::consts::RC;

@@ -1,4 +1,4 @@
-//! RustCrypto MD5 (MIT OR Apache-2.0); see the retained notices.
+//! `RustCrypto` MD5 (MIT OR Apache-2.0); see the retained notices.
 //! Modified by ZXS to spell the same kernel selection as complementary cfgs.
 
 // Upstream selected soft when forced, otherwise assembly only on LoongArch.

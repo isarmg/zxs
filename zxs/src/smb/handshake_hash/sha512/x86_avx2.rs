@@ -1,4 +1,4 @@
-//! RustCrypto SHA-2 (MIT OR Apache-2.0); see the retained notices.
+//! `RustCrypto` SHA-2 (MIT OR Apache-2.0); see the retained notices.
 //! Modified by ZXS only to reference the private constants module.
 //! SHA-512 `x86`/`x86_64` backend
 
@@ -56,7 +56,7 @@ fn sha512_compress_x86_64_avx(state: &mut [u64; 8], block: &[u8; 128]) {
 #[target_feature(enable = "avx")]
 fn load_data_avx(x: &mut [__m128i; 8], ms: &mut MsgSchedule, data: *const __m128i) {
     #[allow(non_snake_case)]
-    let MASK = _mm_setr_epi32(0x04050607, 0x00010203, 0x0c0d0e0f, 0x08090a0b);
+    let MASK = _mm_setr_epi32(0x0405_0607, 0x0001_0203, 0x0c0d_0e0f, 0x0809_0a0b);
 
     macro_rules! unrolled_iterations {
         ($($i:literal),*) => {$(

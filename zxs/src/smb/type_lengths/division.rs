@@ -318,15 +318,15 @@ where
     >;
 
     #[inline]
-    fn private_div_quotient(self, n: N, d: D, q: Q, _: U0, i: I) -> Self::Quotient
+    fn private_div_quotient(self, dividend: N, divisor: D, quotient: Q, _: U0, bit_index: I) -> Self::Quotient
 where {
-        let r = (UInt {
+        let remainder = (UInt {
             msb: UTerm,
-            lsb: n.get_bit::<Internal>(&i),
+            lsb: dividend.get_bit::<Internal>(&bit_index),
         })
         .trim();
-        let r_cmp_d = r.compare::<Internal>(&d);
-        ().private_div_if_quotient(n, d, q, r, i, r_cmp_d)
+        let remainder_order = remainder.compare::<Internal>(&divisor);
+        ().private_div_if_quotient(dividend, divisor, quotient, remainder, bit_index, remainder_order)
     }
 
 }
@@ -363,13 +363,13 @@ where
     >;
 
     #[inline]
-    fn private_div_quotient(self, n: N, d: D, q: Q, r: UInt<Ur, Br>, i: I) -> Self::Quotient {
-        let r = UInt {
-            msb: r,
-            lsb: n.get_bit::<Internal>(&i),
+    fn private_div_quotient(self, dividend: N, divisor: D, quotient: Q, remainder: UInt<Ur, Br>, bit_index: I) -> Self::Quotient {
+        let remainder = UInt {
+            msb: remainder,
+            lsb: dividend.get_bit::<Internal>(&bit_index),
         };
-        let r_cmp_d = r.compare::<Internal>(&d);
-        ().private_div_if_quotient(n, d, q, r, i, r_cmp_d)
+        let remainder_order = remainder.compare::<Internal>(&divisor);
+        ().private_div_if_quotient(dividend, divisor, quotient, remainder, bit_index, remainder_order)
     }
 
 }
@@ -389,15 +389,15 @@ where
     #[inline]
     fn private_div_if_quotient(
         self,
-        n: N,
-        d: D,
-        q: Q,
-        r: R,
-        i: UInt<Ui, Bi>,
+        dividend: N,
+        divisor: D,
+        quotient: Q,
+        remainder: R,
+        bit_index: UInt<Ui, Bi>,
         _: Less,
     ) -> Self::Quotient
 where {
-        ().private_div_quotient(n, d, q, r, i - B1)
+        ().private_div_quotient(dividend, divisor, quotient, remainder, bit_index - B1)
     }
 
 }
@@ -415,15 +415,15 @@ where
     #[inline]
     fn private_div_if_quotient(
         self,
-        n: N,
-        d: D,
-        q: Q,
+        dividend: N,
+        divisor: D,
+        quotient: Q,
         _: R,
-        i: UInt<Ui, Bi>,
+        bit_index: UInt<Ui, Bi>,
         _: Equal,
     ) -> Self::Quotient
 where {
-        ().private_div_quotient(n, d, q.set_bit::<Internal>(i, B1), U0::new(), i - B1)
+        ().private_div_quotient(dividend, divisor, quotient.set_bit::<Internal>(bit_index, B1), U0::new(), bit_index - B1)
     }
 
 }
@@ -445,15 +445,15 @@ where
     #[inline]
     fn private_div_if_quotient(
         self,
-        n: N,
-        d: D,
-        q: Q,
-        r: R,
-        i: UInt<Ui, Bi>,
+        dividend: N,
+        divisor: D,
+        quotient: Q,
+        remainder: R,
+        bit_index: UInt<Ui, Bi>,
         _: Greater,
     ) -> Self::Quotient
 where {
-        ().private_div_quotient(n, d, q.set_bit::<Internal>(i, B1), r - d, i - B1)
+        ().private_div_quotient(dividend, divisor, quotient.set_bit::<Internal>(bit_index, B1), remainder - divisor, bit_index - B1)
     }
 
 }
@@ -464,8 +464,8 @@ impl<N, D, Q, R> PrivateDivIf<N, D, Q, R, U0, Less> for () {
     type Remainder = R;
 
     #[inline]
-    fn private_div_if_quotient(self, _: N, _: D, q: Q, _: R, _: U0, _: Less) -> Self::Quotient {
-        q
+    fn private_div_if_quotient(self, _: N, _: D, quotient: Q, _: R, _: U0, _: Less) -> Self::Quotient {
+        quotient
     }
 
 }
@@ -479,8 +479,8 @@ where
     type Remainder = U0;
 
     #[inline]
-    fn private_div_if_quotient(self, _: N, _: D, q: Q, _: R, i: U0, _: Equal) -> Self::Quotient {
-        q.set_bit::<Internal>(i, B1)
+    fn private_div_if_quotient(self, _: N, _: D, quotient: Q, _: R, bit_index: U0, _: Equal) -> Self::Quotient {
+        quotient.set_bit::<Internal>(bit_index, B1)
     }
 
 }
@@ -495,8 +495,8 @@ where
     type Remainder = Diff<R, D>;
 
     #[inline]
-    fn private_div_if_quotient(self, _: N, _: D, q: Q, _: R, i: U0, _: Greater) -> Self::Quotient {
-        q.set_bit::<Internal>(i, B1)
+    fn private_div_if_quotient(self, _: N, _: D, quotient: Q, _: R, bit_index: U0, _: Greater) -> Self::Quotient {
+        quotient.set_bit::<Internal>(bit_index, B1)
     }
 
 }

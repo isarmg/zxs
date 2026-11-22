@@ -27,7 +27,7 @@ pub(super) fn delta_swap_2<W: Word>(a: &mut W, b: &mut W, shift: u32, mask: W) {
     *b ^= t << shift;
 }
 
-/// Applies ShiftRows once on an AES state (or key).
+/// Applies `ShiftRows` once on an AES state (or key).
 #[cfg(not(aes_backend_soft = "compact"))]
 #[inline]
 pub(super) fn shift_rows_1<W: Word>(state: &mut [W]) {
@@ -38,7 +38,7 @@ pub(super) fn shift_rows_1<W: Word>(state: &mut [W]) {
     }
 }
 
-/// Applies ShiftRows twice on an AES state (or key).
+/// Applies `ShiftRows` twice on an AES state (or key).
 #[inline]
 pub(super) fn shift_rows_2<W: Word>(state: &mut [W]) {
     debug_assert_eq!(state.len(), 8);
@@ -47,7 +47,7 @@ pub(super) fn shift_rows_2<W: Word>(state: &mut [W]) {
     }
 }
 
-/// Applies ShiftRows three times on an AES state (or key).
+/// Applies `ShiftRows` three times on an AES state (or key).
 #[inline]
 pub(super) fn shift_rows_3<W: Word>(state: &mut [W]) {
     debug_assert_eq!(state.len(), 8);

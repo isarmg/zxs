@@ -54,7 +54,7 @@ pub(crate) fn key_schedule<W: Word>(key: &[u8; 16]) -> RoundKeys<W> {
     rkeys
 }
 
-/// Fully-fixsliced AES-128 encryption (the ShiftRows is completely omitted).
+/// Fully-fixsliced AES-128 encryption (the `ShiftRows` is completely omitted).
 ///
 /// Encrypts four blocks in-place and in parallel.
 pub(crate) fn encrypt<W: Word>(rkeys: &RoundKeys<W>, blocks: &BatchBlocks<W>) -> BatchBlocks<W> {
@@ -110,7 +110,7 @@ pub(crate) fn encrypt<W: Word>(rkeys: &RoundKeys<W>, blocks: &BatchBlocks<W>) ->
     W::inv_bitslice(&state)
 }
 
-/// Fully-fixsliced AES-128 decryption (the InvShiftRows is completely omitted).
+/// Fully-fixsliced AES-128 decryption (the `InvShiftRows` is completely omitted).
 ///
 /// Decrypts four blocks in-place and in parallel.
 pub(crate) fn decrypt<W: Word>(rkeys: &RoundKeys<W>, blocks: &BatchBlocks<W>) -> BatchBlocks<W> {

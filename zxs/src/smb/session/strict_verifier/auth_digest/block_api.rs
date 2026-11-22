@@ -1,4 +1,4 @@
-//! RustCrypto MD5 (MIT OR Apache-2.0); see the retained notices.
+//! `RustCrypto` MD5 (MIT OR Apache-2.0); see the retained notices.
 //! Modified by ZXS for private module paths and fixed state erasure.
 
 use core::fmt;

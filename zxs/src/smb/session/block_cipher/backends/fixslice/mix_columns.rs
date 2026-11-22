@@ -1,9 +1,9 @@
 use super::{State, Word};
 
-/// Computation of the MixColumns transformation in the fixsliced representation,
+/// Computation of the `MixColumns` transformation in the fixsliced representation,
 /// with different rotations used according to the round number mod 4.
 ///
-/// Based on Käsper-Schwabe, similar to https://github.com/Ko-/aes-armcortexm.
+/// Based on Käsper-Schwabe, similar to <https://github.com/Ko-/aes-armcortexm>.
 macro_rules! define_mix_columns {
     (
         $name:ident,

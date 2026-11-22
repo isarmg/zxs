@@ -1,4 +1,4 @@
-//! RustCrypto CMAC (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
+//! `RustCrypto` CMAC (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
 //! Modified by ZXS for use inside the SMB session boundary.
 #![forbid(unsafe_code)]
 
