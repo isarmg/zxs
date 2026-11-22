@@ -2,7 +2,7 @@
 //! wildcard, reuseport, system network setting, routing or name discovery.
 use super::{Fault,Result,descriptor};
 use crate::smb::launch::socket_facts::{self,Integer};
-use std::{collections::BTreeSet,mem::size_of,net::{IpAddr,Ipv4Addr,Ipv6Addr,SocketAddr,TcpListener},
+use std::{collections::BTreeSet,ffi::{c_int,c_void},mem::{align_of,size_of},net::{IpAddr,Ipv4Addr,Ipv6Addr,SocketAddr,TcpListener},
     os::fd::{AsFd,AsRawFd,FromRawFd,BorrowedFd,OwnedFd},ptr};
 
 const PORT:u16=445;
@@ -93,11 +93,41 @@ impl Original{
         socket_facts::require_unconnected(socket)
     }
 }
-struct Interfaces(*mut libc::ifaddrs);
+#[repr(C)]
+#[derive(Default)]
+struct InterfaceAddressFact {
+    family: u8,
+    up: u8,
+    loopback: u8,
+    scoped: u8,
+    address: [u8; 16],
+}
+const _: () = assert!(size_of::<InterfaceAddressFact>() == 20 && align_of::<InterfaceAddressFact>() == 1);
+
+unsafe extern "C" {
+    fn open_interface_snapshot(head: *mut *mut c_void) -> c_int;
+    fn release_interface_snapshot(head: *mut c_void);
+    fn read_interface_snapshot_row(position: *const c_void, out: *mut InterfaceAddressFact) -> *const c_void;
+}
+
+struct Interfaces(*mut c_void);
 impl Drop for Interfaces{
     fn drop(&mut self){
-        // SAFETY: getifaddrs gave this one owned list.
-        unsafe{libc::freeifaddrs(self.0)}
+        // SAFETY: this is the one original getifaddrs list head (or NULL).
+        unsafe { release_interface_snapshot(self.0) }
+    }
+}
+impl InterfaceAddressFact {
+    fn ip(self) -> Option<IpAddr> {
+        if self.up != 1 || self.loopback != 0 { return None; }
+        match self.family {
+            4 => {
+                let [a, b, c, d, ..] = self.address;
+                Some(IpAddr::V4(Ipv4Addr::new(a, b, c, d)))
+            }
+            6 if self.scoped == 0 => Some(IpAddr::V6(Ipv6Addr::from(self.address))),
+            _ => None,
+        }
     }
 }
 /// Require one current assignment to an up, non-loopback interface.
@@ -106,25 +136,22 @@ fn require_local(approved:&[(IpAddr,u8)])->Result<()>{
     if !(1..=16).contains(&approved.len()){return Err(Fault::Shape);}
     let chosen=approved.iter().map(|p|p.0).collect::<BTreeSet<_>>();
     if chosen.len()!=approved.len(){return Err(Fault::Shape);}
-    let mut raw: *mut libc::ifaddrs=ptr::null_mut();
-    // SAFETY: a writable pointer to the list head; libc owns it until success.
-    if unsafe{libc::getifaddrs(&raw mut raw)}!=0{return Err(Fault::Handoff);}
-    let addresses=Interfaces(raw);let mut p=addresses.0;let mut found=BTreeSet::new();let mut n=0u32;
-    while !p.is_null(){
-        n+=1;if n>65_536{return Err(Fault::Resources);}
-        // SAFETY: list and each typed socket address are owned by getifaddrs.
-        let row=unsafe{&*p};p=row.ifa_next;
-        if row.ifa_addr.is_null()||row.ifa_flags&libc::IFF_UP as u32==0||row.ifa_flags&libc::IFF_LOOPBACK as u32!=0{continue;}
-        let ip=unsafe{match i32::from((*row.ifa_addr).sa_family){
-            libc::AF_INET=>IpAddr::V4(Ipv4Addr::from((*row.ifa_addr.cast::<libc::sockaddr_in>()).sin_addr.s_addr.to_ne_bytes())),
-            libc::AF_INET6=>{
-                let v=&*row.ifa_addr.cast::<libc::sockaddr_in6>();
-                if v.sin6_scope_id!=0{continue;}
-                IpAddr::V6(Ipv6Addr::from(v.sin6_addr.s6_addr))
-            }
-            _=>continue,
-        }};
-        if chosen.contains(&ip)&&!found.insert(ip){return Err(Fault::Handoff);}
+    let mut raw = ptr::null_mut();
+    // SAFETY: writable slot for the one head, transferred only on success.
+    if unsafe { open_interface_snapshot(&raw mut raw) } != 0 { return Err(Fault::Handoff); }
+    let addresses = Interfaces(raw);
+    let mut p = addresses.0.cast_const();
+    let mut found = BTreeSet::new();
+    let mut n = 0u32;
+    while !p.is_null() {
+        n += 1;
+        if n > 65_536 { return Err(Fault::Resources); }
+        let mut row = InterfaceAddressFact::default();
+        // SAFETY: this nonnull row belongs to the still-owned original list.
+        // C copies fixed-width facts and borrows only its very next row.
+        p = unsafe { read_interface_snapshot_row(p, &raw mut row) };
+        if let Some(ip) = row.ip()
+            && chosen.contains(&ip) && !found.insert(ip) { return Err(Fault::Handoff); }
     }
     if chosen!=found{return Err(Fault::Handoff);}
     Ok(())

@@ -587,6 +587,8 @@ int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_
 }
 
 #include <sys/socket.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/un.h>
 #include <stddef.h>
@@ -650,6 +652,47 @@ int observe_socket_unconnected(int fd) {
     memset(&address, 0, sizeof(address));
     socklen_t bytes = sizeof(address);
     return getpeername(fd, (struct sockaddr *)&address, &bytes) == -1 && errno == ENOTCONN ? 0 : -1;
+}
+
+/* The caller owns one original getifaddrs list and its row budget. No
+ * platform sockaddr or ifaddrs layout is exposed to the Rust caller. */
+struct interface_address_fact {
+    uint8_t family, up, loopback, scoped;
+    uint8_t address[16];
+};
+_Static_assert(sizeof(struct interface_address_fact) == 20 &&
+               _Alignof(struct interface_address_fact) == 1, "interface address fact ABI");
+
+int open_interface_snapshot(void **head) {
+    struct ifaddrs *list = NULL;
+    int rc = getifaddrs(&list);
+    if (rc == 0) *head = list;
+    return rc;
+}
+
+void release_interface_snapshot(void *head) {
+    freeifaddrs(head);
+}
+
+const void *read_interface_snapshot_row(const void *position, struct interface_address_fact *out) {
+    const struct ifaddrs *row = position;
+    *out = (struct interface_address_fact){0};
+    const struct sockaddr *address = row->ifa_addr;
+    if (!address) return row->ifa_next;
+    out->up = (row->ifa_flags & IFF_UP) != 0;
+    out->loopback = (row->ifa_flags & IFF_LOOPBACK) != 0;
+    if (!out->up || out->loopback) return row->ifa_next;
+    if (address->sa_family == AF_INET) {
+        const struct sockaddr_in *v4 = (const struct sockaddr_in *)address;
+        out->family = 4;
+        memcpy(out->address, &v4->sin_addr.s_addr, 4);
+    } else if (address->sa_family == AF_INET6) {
+        const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)address;
+        out->family = 6;
+        out->scoped = v6->sin6_scope_id != 0;
+        if (!out->scoped) memcpy(out->address, v6->sin6_addr.s6_addr, 16);
+    }
+    return row->ifa_next;
 }
 
 #include <poll.h>
