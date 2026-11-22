@@ -8,7 +8,7 @@ from .archive import _read_checked
 from .document import native_identity
 from .freeze import _distinct_roots, observe_held
 from .model import Rejected
-from .private_candidates import CandidateDirectory
+from .private_candidates import CHECKOUT_SOURCE_NAME, CandidateDirectory
 from .private_freeze import local_mount, mount_id
 
 LEAF = "prepared-worktree"
@@ -161,14 +161,14 @@ def materialize(area, copy, marker, mount, *, observer=None):
     if observer is not None:
         observer.section("私有工作目录")
         observer.begin("layout")
-    area.check_file("original.zxs", *copy)
+    area.check_file(CHECKOUT_SOURCE_NAME, *copy)
     with new_child(area, LEAF, mount) as stage:
         output = _Output(stage, mount)
         # Same original FD whose immutable generation, marker and whole-ZIP SHA
         # _save_original verified. No reopen of the source or output by a full path.
         with os.fdopen(copy[0], "rb", closefd=False) as package:
             actual, _ = _read_checked(nullcontext(package), managed=True, sink=output, observer=observer)
-        area.check_file("original.zxs", *copy)
+        area.check_file(CHECKOUT_SOURCE_NAME, *copy)
         if observer is not None: observer.begin("tree")
         if (actual != marker or
                 observe_held(stage.parent, stage.identity, require_ids=True, check_held=output.check,

@@ -11,6 +11,8 @@ from .capacity import buffered_output, close_output_fd, note, writing
 from .document import archive_sha, native_identity
 from .model import CHUNK, Rejected, check_id
 
+CHECKOUT_SOURCE_NAME = "original.zxs"
+
 
 def generation(meta):
     return meta.st_dev, meta.st_ino, meta.st_size, meta.st_mtime_ns, meta.st_ctime_ns

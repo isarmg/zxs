@@ -11,7 +11,7 @@ from ..capacity import describe, observed_available
 from ..document import native_identity
 from ..lifecycle import who
 from ..model import Rejected, check_id, member_name, new_id
-from ..private_candidates import generation, held_candidates
+from ..private_candidates import CHECKOUT_SOURCE_NAME, generation, held_candidates
 from ..publish import held_store, require_native_writer
 
 from .selection import Verification
@@ -383,11 +383,11 @@ class CheckoutChoice:
         original, observed = copy
         fd = None
         try:
-            installed.check_file("original.zxs", original, observed)
-            fd = os.open("original.zxs", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            installed.check_file(CHECKOUT_SOURCE_NAME, original, observed)
+            fd = os.open(CHECKOUT_SOURCE_NAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                          dir_fd=installed.parent)
-            installed.check_file("original.zxs", fd, observed)
-            installed.check_file("original.zxs", original, observed)
+            installed.check_file(CHECKOUT_SOURCE_NAME, fd, observed)
+            installed.check_file(CHECKOUT_SOURCE_NAME, original, observed)
             if not private_stage.mount_id(fd) == private_stage.mount_id(original) == private_stage.mount_id(installed.parent):
                 raise Rejected("私有原包不在本次实际 STATE 挂载")
             self.stack.callback(os.close, fd)

@@ -11,7 +11,7 @@ from .capacity import writing
 from .document import archive_sha, check_relative, named_document, native_identity, relative_document
 from .freeze import _dir_flags, _distinct_roots, _sig, observe_held, observe_tree
 from .model import Rejected, check_id, new_id
-from .private_candidates import generation
+from .private_candidates import CHECKOUT_SOURCE_NAME, generation
 from .private_freeze import local_mount, mount_id
 from .publish import rename_new_at, require_native_writer
 
@@ -186,7 +186,7 @@ def check_checkout_seed(live, source, observed):
     """Prove the held original is still the private single-link seed, without opening its data name."""
     live.check_state()
     mount = local_mount(live.state_fd)
-    named = os.open("original.zxs", os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=live.state_fd)
+    named = os.open(CHECKOUT_SOURCE_NAME, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=live.state_fd)
     try:
         for fd in (source, named):
             m = os.fstat(fd)

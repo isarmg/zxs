@@ -14,7 +14,7 @@ from .freeze import observe_held
 from . import private_stage as staging
 from .lifecycle import instance, locations, who
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, check_id, member_name, new_id
-from .private_candidates import CandidateDirectory, generation, held_candidates
+from .private_candidates import CHECKOUT_SOURCE_NAME, CandidateDirectory, generation, held_candidates
 from .publish import held_store, rename_new, rename_new_at, require_native_writer, sync_dir
 
 MAX_AUTO = 256
@@ -39,7 +39,7 @@ def _parent(path):
 @contextmanager
 def _save_original(read, size, area, expected, operation, *, observer=None):
     """Copy to one exclusive leaf in the already selected private seed directory."""
-    name = "original.zxs"
+    name = CHECKOUT_SOURCE_NAME
     if observer is not None: observer.begin("capture", size)
     area.check_state()
     with writing("STATE", area.path/name, "独占建立原始包副本", operation, area.parent):
@@ -250,9 +250,9 @@ def _install_initial(area, copy, image, state, *, base=None, stage=None, selecte
     if base is not None:
         staging.check_private(base)
         staging.check_private(area)
-    area.check_file("original.zxs", *copy)
+    area.check_file(CHECKOUT_SOURCE_NAME, *copy)
     extra = (staging.LEAF,) if stage is not None else ()
-    _seed_names(area, "original.zxs", *extra)
+    _seed_names(area, CHECKOUT_SOURCE_NAME, *extra)
     name = "opening.sqlite"
     fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                  0o600, dir_fd=area.parent)
@@ -267,14 +267,14 @@ def _install_initial(area, copy, image, state, *, base=None, stage=None, selecte
                 raise Rejected("initial checkout database readback differs")
 
         def check_pair(held, *, db=None):
-            _seed_names(held, "original.zxs", name, *extra)
+            _seed_names(held, CHECKOUT_SOURCE_NAME, name, *extra)
             if stage is not None:
                 staging.check_private(base)
                 staging.check_private(held)
                 staging.check_named(held.parent, staging.LEAF, stage.parent)
                 staging.check_mount_name(base.parent, held.path.name, held.identity, mount)
                 staging.check_mount_name(held.parent, staging.LEAF, stage.identity, mount)
-            held.check_file("original.zxs", *copy)
+            held.check_file(CHECKOUT_SOURCE_NAME, *copy)
             if db is not None:
                 held.check_file(name, db, observed)
             else:
@@ -407,7 +407,7 @@ def _held_directory(name, expected, *, parent_fd=None):
 
 def _prepare_legacy_stage(state, parent, operation, marker, expected_sha):
     """Materialize the default CLI's scratch from this attempt's exact original seed."""
-    name = "original.zxs"
+    name = CHECKOUT_SOURCE_NAME
     # The original receipt pins bytes and marker even across a process stop. Pin
     # the actual ordinary read-only leaf and its name throughout this attempt.
     with held_candidates(state) as area, relative_document(area.parent, name, single=True) as seed:
