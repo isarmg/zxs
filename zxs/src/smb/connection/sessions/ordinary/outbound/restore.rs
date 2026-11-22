@@ -182,5 +182,5 @@ impl SyncReply<'_>{
 }
 
 #[cfg(test)]
-#[path="../../../../../test/smb/restore_reply.rs"]
+#[path="../../../../../../tests/smb/restore_reply.rs"]
 mod tests;

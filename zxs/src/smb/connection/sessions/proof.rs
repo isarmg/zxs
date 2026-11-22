@@ -36,5 +36,5 @@ pub(super) fn received<'raw>(original:Received<'raw>,owner:&mut Connection,i:usi
 }
 
 #[cfg(test)]
-#[path = "../../../test/smb/setup_proof.rs"]
+#[path = "../../../../tests/smb/setup_proof.rs"]
 pub(in crate::smb) mod tests;

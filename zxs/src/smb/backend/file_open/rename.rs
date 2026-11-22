@@ -393,5 +393,5 @@ impl FileOpen{
 }
 
 #[cfg(test)]
-#[path="../../../test/smb/backend_ordinary_rename.rs"]
+#[path="../../../../tests/smb/backend_ordinary_rename.rs"]
 mod tests;

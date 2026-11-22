@@ -90,12 +90,6 @@ fn read_published(dir:&HeldDir,stamp:fs::OriginalStamp,bytes:&[u8],
     Ok(Published{stamp,record,journal})
 }
 
-#[cfg(test)]
-pub(crate) fn reject_unconfirmed_for_test(system:&Path,confirm:impl FnOnce(&HeldDir,&fs::OriginalStamp)->io::Result<()>)->io::Result<()>{
-    let dir=HeldDir::open(system)?;dir.share()?;
-    published_with_sync(&dir,confirm)?.ok_or_else(||invalid("expected original SYSTEM register"))?;
-    Ok(())
-}
 
 fn current_record(dir:&HeldDir,name:&CStr)->io::Result<Option<(fs::OriginalStamp,Record)>>{
     if name==READY{return Ok(published(dir)?.map(|r|(r.stamp,r.record)));}
@@ -239,3 +233,6 @@ fn inspect_with_sync(system:&Path,sync:impl FnOnce(&HeldDir)->io::Result<()>)->i
 #[cfg(test)]
 #[path="../tests/unit/registration.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../tests/unit/attached/pool/items.rs");

@@ -297,5 +297,5 @@ fn verify(v: Arc<ProtectedRevision>, u: Unverified<'_>, expires:Instant,server_t
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/strict_verifier.rs"]
+#[path = "../../../tests/smb/strict_verifier.rs"]
 mod tests;

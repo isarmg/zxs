@@ -550,14 +550,6 @@ impl Journal{
     pub(super) fn ticket_used(&self,ticket:OperationId)->bool{
         self.directory_tokens.contains(&ticket)||self.on_all().any(|c|c.create.attempt==ticket)||self.moves().any(|m|m.original.ticket==ticket)||self.decided(ticket).is_some()
     }
-    #[cfg(test)]
-    pub(super) fn intervals(&self,id:FileId)->impl DoubleEndedIterator<Item=&Saved>{
-        // Test-only whole-history audit. Production callers must specify a
-        // current working cut or the original confirmed submission instead.
-        self.spans.get(&id).into_iter().flatten().map(move |&i|match &self.decisions[i]{
-            Decision::Span(s)=>s,_=>unreachable!("only admitted working decisions enter this per-FILE index"),
-        })
-    }
     pub(super) fn head(&self,id:FileId)->Option<&Commit>{self.decisions.get(*self.formal.get(&id)?)?.formal().ok()}
     pub(super) fn delta(&self,file:FileId)->Option<&Delta>{self.decisions.get(*self.deltas.get(&file)?.last()?)?.delta().ok()}
     pub(super) fn delta_node(&self,file:FileId,node:NodeId)->Option<&Delta>{
@@ -582,3 +574,6 @@ impl Journal{
         self.decisions.get(*self.working.get(&id)?)?.save().ok()
     }
 }
+
+#[cfg(test)]
+include!("../../tests/unit/attached/ordinary/journal/items.rs");

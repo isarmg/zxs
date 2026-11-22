@@ -218,5 +218,5 @@ impl<'owner,'raw> CheckedBatch<'owner,'raw> {
 }
 
 #[cfg(test)]
-#[path = "../../../test/smb/ordinary.rs"]
+#[path = "../../../../tests/smb/ordinary.rs"]
 pub(in crate::smb) mod tests;

@@ -261,5 +261,5 @@ fn recv(fd:RawFd,buf:&mut [u8],end:Instant)->Result<(usize,Control)>{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/rust_launch_transport.rs"]
+#[path="../../../tests/smb/rust_launch_transport.rs"]
 mod tests;

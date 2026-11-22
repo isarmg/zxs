@@ -10,10 +10,6 @@ use std::{collections::{BTreeMap,BTreeSet},ffi::{CStr,CString},io,path::Path};
 pub(crate) struct IncomingSelection<'v>{source:&'v Verified,request:Request,prior:[u8;32],pool:PoolId,system:NativeObject,
     register:(crate::Entity,fs::Birth),target:NativeObject,ticket:OperationId,original:Option<([u8;32],NativeObject)>}
 impl<'v> IncomingSelection<'v>{
-    #[cfg(test)]
-    pub(super) fn prepare(system:&Path,source:&'v Verified,r:Request)->io::Result<PreparedIncoming<'v>>{
-        Self::prepare_checked(system,source,r,|_|Ok(()))
-    }
     pub(super) fn prepare_checked(system:&Path,source:&'v Verified,r:Request,check:impl FnOnce(&LocalPool)->io::Result<()>)->io::Result<PreparedIncoming<'v>>{
         let incoming={
             let(p,_,_)=LocalPool::with_snapshot(system,Access::Incoming)?;check(&p)?;let g=LifecycleGrant::capture(&p,r)?;
@@ -214,3 +210,6 @@ pub(super) fn proposed(turn:&crate::pool::lease::recycle::incoming::ReservationT
     if r.digest(p)?!=o.request_digest(p.id())?{return Err(invalid("different original request at the reservation writer"));}
     s.check_new_lifecycle_origin(&p.journal_registration(),&o)?;turn.require()?;Ok(o)
 }
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/custody/incoming/items.rs");

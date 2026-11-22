@@ -4,9 +4,9 @@ use crate::{FileId,OperationId,system::reader::account::{history::{Timeline,Time
 use super::Reply;
 use std::{fmt::Write,io};
 
-pub(super) const CSS:&str=include_str!("../../web/management.css");
-const G4_DEFS:&str=include_str!("../../web/g4-corner.svg");
-const G4_PAINT:&str=include_str!("../../web/g4-paint.html");
+pub(super) const CSS:&str=include_str!("assets/management.css");
+const G4_DEFS:&str=include_str!("assets/g4-corner.svg");
+const G4_PAINT:&str=include_str!("assets/g4-paint.html");
 const HEAD:&str=r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/management.css">"#;
 fn text(out:&mut String,s:&str){
     for c in s.chars(){match c{'&'=>out.push_str("&amp;"),'<'=>out.push_str("&lt;"),'>'=>out.push_str("&gt;"),
@@ -19,7 +19,7 @@ pub(super) fn sign_in(failed: bool) -> String {
     out.push_str(r#"<main class="authentication-shell" data-zxs-scope><div class="authentication-content"><section class="authentication-card zxs-g4-surface" aria-labelledby="zxs-login-title">"#);
     out.push_str(G4_PAINT);
     out.push_str(r#"<h1 id="zxs-login-title" class="zxs-visually-hidden">管理员登录 · ZXS</h1><form method="post" action="/login" accept-charset="UTF-8"><fieldset class="zxs-auth-group"><legend class="zxs-visually-hidden">Web 管理员登录</legend><div class="zxs-auth-fields">"#);
-    out.push_str(include_str!("../../web/login-fields.html"));
+    out.push_str(include_str!("assets/login-fields.html"));
     out.push_str(r#"<div class="zxs-auth-information">"#);
     out.push_str(r#"<p class="zxs-notice zxs-notice-warning">HTTP 未加密。请仅在可信网络登录。</p>"#);
     if failed {
@@ -34,7 +34,7 @@ pub(super) fn browser_overview(data: &Overview, csrf: &str) -> io::Result<String
     out.push_str(r#"<link rel="stylesheet" href="/ui/v1/folder.css"><script type="module" src="/ui/v1/boot.js"></script>"#);
     out.push_str("<title>管理概览 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
-    out.push_str(include_str!("../../web/shell-start.html"));
+    out.push_str(include_str!("assets/shell-start.html"));
     out.push_str(r#"<h1 class="zxs-visually-hidden">管理概览</h1>"#);
     browser_panel(&mut out, data);
     out.push_str(r#"<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><div class="zxs-section-heading zxs-flow"><h2 id="zxs-shares-title" class="zxs-row">共享配置</h2><dl class="zxs-endpoint zxs-row"><dt>SMB 共享名</dt><dd><code>ZXS</code></dd></dl></div>"#);
@@ -113,46 +113,7 @@ fn browser_panel(out: &mut String, data: &Overview) {
     out.push_str("</div>");
 }
 
-#[cfg(test)]
-#[test]
-fn contours_are_inert_local_decoration_on_login_and_overview() {
-    let login = sign_in(true);
-    let details = browser_overview(&Overview { login: "A<&".into(), shares: Vec::new(), next: None }, "example").unwrap();
-    for (page, tiles) in [(&login, 4), (&details, 12)] {
-        assert_eq!(page.matches("id=\"zxs-g4-corner\"").count(), 1);
-        assert_eq!(page.matches("href=\"#zxs-g4-corner\"").count(), tiles);
-        assert!(page.contains("class=\"zxs-g4-paint\" aria-hidden=\"true\""));
-        assert!(!page.contains(" style="));
-    }
-    assert!(!login.contains("<script"));
-    assert_eq!(details.matches(r#"<script type="module" src="/ui/v1/boot.js"></script>"#).count(), 1);
-    assert!(login.contains("action=\"/login\"") && login.contains("autocomplete=\"current-password\""));
-    assert!(login.contains("HTTP 未加密") && login.contains("role=\"alert\""));
-    assert!(sign_in(false).contains("HTTP 未加密"));
-    assert!(details.contains("<bdi>A&lt;&amp;</bdi>") && details.contains("action=\"/logout\""));
-}
 
-#[cfg(test)]
-#[test]
-fn overview_controls_retain_each_original_share_and_previous_operation() {
-    use crate::{VolumeId, identity::ShareId, system::reader::account::overview::Share};
-    let id = ShareId([0x13; 16]);
-    let previous = OperationId([0x24; 16]);
-    let volume = VolumeId([0x35; 16]);
-    let view = Overview {
-        login: "demo".into(),
-        shares: vec![Share { share: id, previous, volume, label: "甲<&".into(), mode: Mode::ReadOnly }],
-        next: Some(id),
-    };
-    let html = browser_overview(&view, "A&").unwrap();
-    assert!(html.contains(&format!(r#"id="zxs-share-{id}">甲&lt;&amp;</bdi>"#)));
-    assert!(html.contains(&format!(r#"<code class="zxs-volume-value">{volume}</code>"#)));
-    assert!(html.contains(&format!(r#"href="/?after={id}#zxs-shares""#)));
-    assert!(html.contains(&format!(r#"name="share" value="{id}""#)));
-    assert!(html.contains(&format!(r#"name="previous" value="{previous}""#)));
-    assert!(html.contains(r#"name="op" value=""#) && html.matches(r#"name="csrf" value="A&amp;""#).count() == 2);
-    assert!(html.contains(r#"name="mode""#) && html.contains(r#"<option value="ro" selected>"#));
-}
 
 fn hidden(out:&mut String,csrf:&str)->io::Result<()>{
     // The given view retains one original Op per independent form. Retrying
@@ -184,20 +145,6 @@ pub(super) fn manual_index(items:&[manual_work::PickerItem],next:Option<FileId>)
     Reply::html("200 OK",out)
 }
 
-#[cfg(test)]
-#[test]
-fn an_unsettled_parent_never_becomes_an_old_path_or_a_submit_link(){
-    use crate::VolumeId;
-    use manual_work::{Item,PickerItem};
-    let blocked=FileId([0x20;16]);let other=FileId([0x22;16]);
-    let page=manual_index(&[PickerItem::ParentPending(blocked),PickerItem::Named(Item{
-        file:other,name:"Other.txt".into(),volume:VolumeId([0x42;16]),
-    })],None);
-    let body=std::str::from_utf8(&page.body).unwrap();
-    assert!(body.contains(&format!("<code>{blocked}</code>"))&&body.contains("所属目录改名尚未确认"));
-    assert!(!body.contains(&format!("?file={blocked}")));
-    assert!(body.contains(&format!("/versions?file={other}"))&&body.contains("Other.txt"));
-}
 
 pub(super) fn version_history(history:&Timeline)->Reply{
     let mut out=String::from(HEAD);
@@ -234,22 +181,6 @@ pub(super) fn version_history(history:&Timeline)->Reply{
     Reply::html("200 OK",out)
 }
 
-#[cfg(test)]
-#[test]
-fn pending_parent_history_displays_only_original_identity_versions_and_read_navigation(){
-    use crate::{NodeId,VersionId,system::reader::account::history::Version};
-    let file=FileId([0x41;16]);let version=VersionId([0x42;16]);let node=NodeId([0x43;16]);
-    let history=Timeline{file,place:TimelinePlace::ParentPending,next:Some(1),
-        rows:vec![Version{order:2,node,version,parent:Some(NodeId([0x44;16])),revision:3,length:7}]};
-    let page=version_history(&history);
-    let body=std::str::from_utf8(&page.body).unwrap();
-    assert!(body.contains(&format!("<code>{file}</code>"))&&body.contains("所属目录改名尚未确认"));
-    assert!(body.contains(&format!("<code>{version}</code>"))&&body.contains(&format!("<code>{node}</code>")));
-    assert!(body.contains(&format!("/versions/history?file={file}&amp;before=1")));
-    for unwarranted in ["<bdi>","当前卷内路径","数据卷","回收卷","/versions?file=","<form","/download"]{
-        assert!(!body.contains(unwarranted));
-    }
-}
 
 pub(super) fn manual(item:&manual_work::Item,t:manual_work::Target,op:OperationId,csrf:&str)->Reply{
     let mut out=String::from(HEAD);
@@ -277,3 +208,6 @@ pub(super) fn frozen(r:manual_work::Receipt)->Reply{
         r.target.file,r.ord,r.version).unwrap();
     Reply::html("200 OK",out)
 }
+
+#[cfg(test)]
+include!("../../tests/unit/attached/management/pages/items.rs");

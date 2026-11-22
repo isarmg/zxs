@@ -11,11 +11,7 @@ mod packet_mac;
 mod strict_verifier;
 pub(in crate::smb) use strict_verifier::{MechanismProof,Pending,Rejected as ChallengeRejected,VaultDecoder,challenge::{ChallengeService,ChallengeStep},completion::{BatchRevision,BoundSession,LiveMark}};
 
-#[cfg(test)]
-pub(in crate::smb) use self::keyed_digest::Hmac as HmacForSessionFixture;
 
-#[cfg(test)]
-pub(in crate::smb) type SigningMacForSessionFixture = SigningMac;
 
 use crate::smb::wire::{
     message::{CANCEL, Compound, MAX_COMMANDS, Message, RELATED, SIGNED},
@@ -173,5 +169,8 @@ fn verify_signed<'s>(m:&Message<'_>,previous:Option<NonZeroU64>,
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/signing.rs"]
+#[path = "../../../tests/smb/signing.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/smb/session/items.rs");

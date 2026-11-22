@@ -15,6 +15,12 @@ const PASSWORD_HEADERS:[&str;7]=["argon2.h","core.h","encoding.h","thread.h",
     "blake2/blake2.h","blake2/blake2-impl.h","blake2/blamka-round-ref.h"];
 
 fn main() {
+    // The same crate builds this browser module without compiling any native
+    // C code or depending on an already staged copy of itself.
+    if env::var("TARGET").as_deref() == Ok("wasm32-unknown-unknown") {
+        println!("cargo:rerun-if-changed=build.rs");
+        return;
+    }
     assert_eq!(env::var("CARGO_CFG_TARGET_OS").unwrap(), "linux", "ZXS requires Linux");
     println!("cargo:rerun-if-changed=src/linux.c");
     for p in STORE_SOURCES{

@@ -1,11 +1,15 @@
 [package]
-name = "zxs"
+name = "storage-server"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 license = "Apache-2.0"
 description = "Single-resident FILE container storage"
 build = "build.rs"
+
+[[bin]]
+name = "zxs"
+path = "src/main.rs"
 
 # This project builds alone, including after removal of its enclosing checkout.
 [workspace]
@@ -21,12 +25,21 @@ exclude = [
     "vendor/rust/zeroize-1.9.2",
 ]
 
-[dependencies]
+# Native storage libraries are not part of the browser module.
+[target.'cfg(target_os = "linux")'.dependencies]
 block-buffer = { version = "=0.12.1", path = "vendor/rust/block-buffer-0.12.1", features = ["zeroize"] }
 crypto-common = { version = "=0.2.2", path = "vendor/rust/crypto-common-0.2.2", features = ["zeroize"] }
 inout = { version = "=0.2.6", path = "vendor/rust/inout-0.2.6" }
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
 zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }
+
+[profile.browser]
+inherits = "release"
+lto = true
+codegen-units = 1
+opt-level = "s"
+panic = "abort"
+strip = "debuginfo"
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

@@ -53,9 +53,9 @@ this step never starts it or opens a deployed pool.
 
 ## Stage the browser resources separately
 
-The browser crate is independent of the native Cargo build. From this ZXS
-directory in a private reviewed worktree, with the same local Rust 1.100.0
-toolchain described above:
+The same `storage-server` Cargo package builds the WebAssembly module from
+`src/browser/`. In a private ZXS worktree with the same reviewed local Rust
+1.100.0 toolchain as above:
 
 ```sh
 python3 build_browser.py /path/to/reviewed/rust-1.100.0/bin \
@@ -64,12 +64,13 @@ python3 build_browser.py /path/to/reviewed/rust-1.100.0/bin \
 
 Use the official [Rust wasm32 standard library, 1.100.0](https://static.rust-lang.org/dist/2026-11-12/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz)
 (SHA-256 `19b7954d650fc0d22767eceb76b8e03d07ce0d6a9f4234f33c32a17ee8d6d7b9`).
-The browser crate has no third-party Cargo packages or generated bindings.
+The browser target has no third-party dependencies or generated bindings.
 
-The recipe checks the host toolchain and target archive, then builds a
-hashed private copy of the browser source, manifest and lock with a
-private target sysroot and Cargo home. It does not read local build
-scripts, fetch dependencies, or modify the toolchain. It writes
+The recipe checks the host toolchain and target archive. It uses the root
+manifest and lock in the original source worktree, with a private target
+sysroot, Cargo home and output, and rechecks the browser source and entry
+inputs. The build script skips native C and embedding on wasm32. This
+build never fetches dependencies or modifies the toolchain. It writes
 `target/browser-assets/` without replacement: `boot.js`, `folder.css`,
 `zxs_browser.js` (the checked-in browser host code), and
 `zxs_browser_bg.wasm` (the Rust console). Build-only `provenance.json`
@@ -93,10 +94,10 @@ bytes. Compare the stage pin against independently reviewed inputs, not a
 value supplied by the stage itself. Only the four fixed resources go into the
 ELF; `provenance.json` is not served.
 
-### Direct Cargo source checks
+### Direct native Cargo source checks
 
-Every ZXS Cargo build or check needs the same reviewed browser stage and
-pin. For a source-only check:
+A native ZXS build or source check needs the same reviewed browser stage
+and pin. For a source-only check:
 
 ```sh
 ZXS_BROWSER_ASSETS=/absolute/path/to/target/browser-assets \

@@ -134,5 +134,5 @@ impl<'a> Cursor<'a>{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/rust_launch_envelope.rs"]
+#[path="../../../tests/smb/rust_launch_envelope.rs"]
 mod tests;

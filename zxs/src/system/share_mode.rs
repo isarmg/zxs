@@ -101,10 +101,6 @@ impl Change{
     }
 }
 impl WebAdmin<'_>{
-    #[cfg(test)]
-    pub(crate) fn share_setting(&self,share:ShareId)->io::Result<Setting>{
-        self.source.at(|db,c|{self.current(db,&c)?;current(db,&c,share)})
-    }
     /// The Web surface may change modes on the installer-created
     /// first folders only; it cannot add a new SMB route or publish a name.
     pub(crate) fn set_installed_mode(&self,op:OperationId,share:ShareId,previous:OperationId,mode:Mode)->io::Result<Setting>{
@@ -116,9 +112,7 @@ impl WebAdmin<'_>{
             request.select(db,c)
         },||Ok(()),|db,next,()|request.insert(db,next))
     }
-    #[cfg(test)]
-    pub(crate) fn set_share_mode(&self,op:OperationId,share:ShareId,previous:OperationId,mode:Mode)->io::Result<Setting>{
-        let request=Change::new(self,op,share,previous,mode)?;
-        self.metadata_change(|db,c|request.select(db,c),||Ok(()),|db,next,()|request.insert(db,next))
-    }
 }
+
+#[cfg(test)]
+include!("../../tests/unit/attached/system/share_mode/items.rs");

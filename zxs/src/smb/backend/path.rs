@@ -94,5 +94,5 @@ impl RenameSpelling {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/backend_path.rs"]
+#[path = "../../../tests/smb/backend_path.rs"]
 mod tests;

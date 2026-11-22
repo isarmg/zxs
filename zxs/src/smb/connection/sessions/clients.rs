@@ -68,5 +68,5 @@ impl Connection {
 }
 
 #[cfg(test)]
-#[path = "../../../test/smb/client_dialect.rs"]
+#[path = "../../../../tests/smb/client_dialect.rs"]
 mod tests;

@@ -1,0 +1,3 @@
+const ROOT_ORIGIN:usize=COMMON_ORIGIN+super::purpose::MAX_EXTRA;
+
+const ROOT_FRAME:usize=wire::ENVELOPE_BYTES+ROOT_ORIGIN+32+1+(6*NATIVE+1);

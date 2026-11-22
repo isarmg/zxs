@@ -192,10 +192,6 @@ impl Reader{
         let result=super::logical::LogicalV1::from_pages(self.segment.original.material.size,&self.segment.directory)?;
         self.unchanged()?;Ok(result)
     }
-    #[cfg(test)]
-    pub(super) fn from_test_files(original:Ref,raw:File,table:File)->io::Result<Self>{
-        Self::open(original,HeldBytes::separate_format_fixture(raw)?,HeldBytes::separate_format_fixture(table)?)
-    }
     pub(super) fn unchanged(&self)->io::Result<()>{self.segment.require(&self.raw,&self.table)}
     pub(super) fn same_issued_pair(&self,raw:Stamp,table:Stamp)->io::Result<()>{
         if self.raw.stamp()!=raw||self.table.stamp()!=table{return Err(invalid("independent reopen did not retain the actual issued working pair"));}
@@ -213,3 +209,6 @@ impl Reader{
 #[cfg(test)]
 #[path="../../../tests/unit/flat_segment.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/flat/blocks/items.rs");

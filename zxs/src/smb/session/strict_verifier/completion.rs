@@ -114,5 +114,5 @@ impl BoundSession {
 }
 
 #[cfg(test)]
-#[path = "../../../test/smb/final_keys.rs"]
+#[path = "../../../../tests/smb/final_keys.rs"]
 mod tests;

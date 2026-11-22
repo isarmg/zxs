@@ -79,5 +79,5 @@ impl SignedFileName{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/file_name_reply.rs"]
+#[path="../../../tests/smb/file_name_reply.rs"]
 mod tests;

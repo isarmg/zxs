@@ -19,10 +19,6 @@ impl FullRootRecords {
     pub(in crate::smb) fn pending(&self)->RootPendingToken<'_>{self.proposal.pending()}
     pub(in crate::smb) fn into_effect(self)->RootCursorEffect{self.proposal.into_effect()}
 
-    #[cfg(test)]
-    pub(in crate::smb::backend) fn written_for_fixture<H>(self, open: &mut crate::smb::backend::Held<H>) -> bool {
-        self.proposal.written_for_fixture(open)
-    }
 }
 
 impl RootPage {
@@ -79,3 +75,6 @@ impl RootPage {
         Ok(FullRootRecords { proposal: self, bytes: out })
     }
 }
+
+#[cfg(test)]
+include!("../../../../../tests/unit/attached/smb/backend/query/root/records/items.rs");

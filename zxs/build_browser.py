@@ -2,6 +2,7 @@
 """Stage the four ZXS browser resources without building the native executable."""
 
 import argparse
+from contextlib import contextmanager
 import ctypes
 import hashlib
 import io
@@ -13,10 +14,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import tomllib
 
 sys.dont_write_bytecode = True
-from build_release import (BROWSER_ASSETS, BROWSER_RECEIPT,
+from build_release import (BROWSER_ASSETS, BROWSER_RECEIPT, BROWSER_SOURCE,
                            BROWSER_TARGET as TARGET, MAX_BROWSER_FILE, RUST, RUST_COMMIT,
                            TARGET as HOST, browser_inputs, browser_recipe_inputs, directory,
                            need, require_name, sha256, text)
@@ -81,26 +81,30 @@ def publish(stage, output):
         raise OSError(err, os.strerror(err), OUTPUT)
 
 
-def compile_browser(source, stage, bindir, std):
-    original = source / "browser"
-    browser = stage / "browser"
-    need(not os.path.lexists(original / "build.rs"), "browser build scripts are not supported")
-    inputs = browser_inputs(original, browser)
-    manifest = tomllib.loads((browser / "Cargo.toml").read_text(encoding="utf-8"))
-    need(manifest["package"].get("build", False) is False and
-         manifest["lib"].get("path", "src/lib.rs") == "src/lib.rs", "unexpected browser build entry")
-    lock = tomllib.loads((browser / "Cargo.lock").read_text(encoding="utf-8"))
-    need(set(lock) == {"version", "package"} and lock.get("version") == 4 and lock.get("package") == [
-        {"name": "zxs-browser", "version": manifest["package"]["version"]}
-    ], "the browser component must have no third-party packages")
-    reject_cargo_config(browser)
+@contextmanager
+def checked_browser_source(source):
+    with directory(source) as root, directory("src", root) as src, directory("browser", src) as frontend:
+        reject_cargo_config(source)
+        inputs = browser_inputs(source)
+        yield inputs
+        require_name(source, root)
+        require_name("src", src, root)
+        require_name("browser", frontend, src)
+        reject_cargo_config(source)
+        need(browser_inputs(source) == inputs, "browser build inputs changed")
+
+
+def browser_environment(source, stage, bindir, std):
+    host = os.uname()
+    need((host.sysname, host.machine) == ("Linux", "x86_64"), "use a Linux x86-64 build host")
+    need(os.getuid() == os.geteuid() != 0, "build in a private, unprivileged worktree")
     cargo, rustc, rustdoc = (bindir / name for name in ("cargo", "rustc", "rustdoc"))
     toolchain = bindir.parent
     host_lib = toolchain / "lib" / "rustlib" / HOST
     lld = host_lib / "bin" / "rust-lld"
     need(all(p.is_file() and os.access(p, os.X_OK) for p in (cargo, rustc, rustdoc, lld)),
          "pass the reviewed local Rust 1.100.0 bin directory")
-    for name in ("home", "cargo", "tmp", "ready"):
+    for name in ("home", "cargo", "tmp"):
         (stage / name).mkdir(mode=0o700)
     sysroot = stage / "sysroot"
     rustlibs = sysroot / "lib" / "rustlib"
@@ -111,15 +115,15 @@ def compile_browser(source, stage, bindir, std):
                rustlibs / TARGET)
 
     env = {
-        "PATH": "/usr/bin:/bin", "HOME": str(stage / "home"), "CARGO_HOME": str(stage / "cargo"),
+        "PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(stage / "home"), "CARGO_HOME": str(stage / "cargo"),
         "TMPDIR": str(stage / "tmp"), "LC_ALL": "C", "TZ": "UTC", "SOURCE_DATE_EPOCH": "0",
         "RUSTC": str(rustc), "RUSTDOC": str(rustdoc), "CARGO_TARGET_DIR": str(stage / "target"),
         "CARGO_BUILD_JOBS": "2", "CARGO_INCREMENTAL": "0",
         "CARGO_ENCODED_RUSTFLAGS": "\x1f".join((
             f"--sysroot={sysroot}", "-C", f"linker={lld}",
-            f"--remap-path-prefix={browser}=/zxs/browser",
-            f"--remap-path-prefix={stage}=/zxs/browser-build",
-            f"--remap-path-prefix={toolchain}=/zxs/rust",
+            f"--remap-path-prefix={source}=/storage-server/source",
+            f"--remap-path-prefix={stage}=/storage-server/browser-build",
+            f"--remap-path-prefix={toolchain}=/storage-server/rust",
         )),
     }
     rust = text([rustc, "-vV"], env).strip()
@@ -129,14 +133,22 @@ def compile_browser(source, stage, bindir, std):
          "use the direct reviewed Rust bin directory, not a toolchain proxy")
     cargo_version = text([cargo, "-V"], env).strip()
     need(cargo_version.startswith(f"cargo {RUST} "), "unsupported Cargo version")
-    subprocess.run([cargo, "build", "--locked", "--offline", "--release", "--target", TARGET, "--lib"],
-                   cwd=browser, env=env, check=True)
-    wasm = stage / "target" / TARGET / "release" / "zxs_browser.wasm"
+    return env, rust, cargo_version, lld
 
+
+def compile_browser(source, stage, bindir, std, inputs):
+    env, rust, cargo_version, lld = browser_environment(source, stage, bindir, std)
+    cargo, rustc = bindir / "cargo", bindir / "rustc"
+    subprocess.run([cargo, "rustc", "--manifest-path", source / "Cargo.toml", "--locked", "--offline",
+                    "--target", TARGET, "--profile", "browser", "--lib", "--crate-type", "cdylib"],
+                   cwd=source, env=env, check=True)
+    wasm = stage / "target" / TARGET / "browser" / "storage_server.wasm"
+    ready = stage / "ready"
+    ready.mkdir(mode=0o700)
     files = {}
     for name in BROWSER_ASSETS:
         authored = AUTHORED.get(name)
-        file = wasm if authored is None else browser / authored
+        file = wasm if authored is None else source / BROWSER_SOURCE / authored
         info = file.lstat()
         need(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= MAX_BROWSER_FILE, f"invalid browser asset: {name}")
         data = file.read_bytes()
@@ -146,11 +158,9 @@ def compile_browser(source, stage, bindir, std):
             data.decode("utf-8")
         checksum = hashlib.sha256(data).hexdigest()
         if authored is not None:
-            need(checksum == inputs[authored], f"browser source changed: {authored}")
-        (stage / "ready" / name).write_bytes(data)
+            need(checksum == inputs[(BROWSER_SOURCE / authored).as_posix()], f"browser source changed: {authored}")
+        (ready / name).write_bytes(data)
         files[name] = {"bytes": len(data), "sha256": checksum}
-    need(browser_inputs(browser) == inputs and browser_inputs(original) == inputs,
-         "browser source changed during build")
     receipt = {
         "format": 1, "target": TARGET, "source": inputs,
         "recipe": browser_recipe_inputs(source),
@@ -162,16 +172,12 @@ def compile_browser(source, stage, bindir, std):
         },
         "assets": files,
     }
-    (stage / "ready" / BROWSER_RECEIPT).write_text(
+    (ready / BROWSER_RECEIPT).write_text(
         json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 
 def build(source, bindir, std):
-    host = os.uname()
-    need((host.sysname, host.machine) == ("Linux", "x86_64"), "use a Linux x86-64 build host")
-    need(os.getuid() == os.geteuid() != 0, "build in a private, unprivileged worktree")
-    with directory(source) as root, directory("browser", root) as crate, \
-         directory("target", root, create=True) as target:
+    with directory(source) as root, directory("target", root, create=True) as target:
         try:
             os.stat(OUTPUT, dir_fd=target, follow_symlinks=False)
         except FileNotFoundError:
@@ -181,9 +187,9 @@ def build(source, bindir, std):
         with tempfile.TemporaryDirectory(prefix=".zxs-browser-", dir=source / "target") as tmp:
             stage = Path(tmp)
             with directory(stage.name, target) as held:
-                compile_browser(source, stage, bindir, std)
+                with checked_browser_source(source) as inputs:
+                    compile_browser(source, stage, bindir, std, inputs)
                 require_name(source, root)
-                require_name("browser", crate, root)
                 require_name("target", target, root)
                 require_name(stage.name, held, target)
                 publish(held, target)

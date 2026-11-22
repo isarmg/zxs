@@ -79,13 +79,5 @@ fn run_site<'p>(parent:&'p Parent,terminal:&Terminal,site:&SiteLease<'p>)->io::R
 }
 
 #[cfg(test)]
-mod tests{
-    use super::*;
-    #[test]
-    fn standalone_never_converts_legacy_site_input_into_another_start(){
-        assert!(reject_legacy_selection(|_|false).is_ok());
-        for name in LEGACY_ENV{
-            assert_eq!(reject_legacy_selection(|key|key==name).unwrap_err().kind(),io::ErrorKind::Unsupported);
-        }
-    }
-}
+#[path = "../../../tests/unit/attached/smb/launch/application/tests.rs"]
+mod tests;

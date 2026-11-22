@@ -447,5 +447,5 @@ impl SyncReply<'_>{
 }
 
 #[cfg(test)]
-#[path="../../../../../test/smb/root_io.rs"]
+#[path="../../../../../../tests/smb/root_io.rs"]
 mod tests;

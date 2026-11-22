@@ -238,15 +238,6 @@ impl<'owner,'raw> CheckedBatch<'owner,'raw>{
         self.rename_refusal(m,sid,status)?;
         Ok(MoveDecision::RefusalWritten)
     }
-    #[cfg(test)]
-    pub(in crate::smb::connection) fn into_move_escrow(mut self,capture:MoveCapture<'_,'_>)->PeerResult<MoveEscrow>{
-        if !capture.matches(self.original.frame){return Err(Fault::WrongBatch);}
-        let prepared=self.qualify_ordinary_cross_filesystem_move().map_err(|e|match e{
-            MoveQualificationError::Connection(e)=>e,
-            _=>Fault::WrongReply,
-        })?.ok_or(Fault::WrongReply)?;
-        self.retain_prepared_move(capture,prepared)
-    }
     fn retain_prepared_move(self,capture:MoveCapture<'_,'_>,prepared:PreparedOriginalMove)->PeerResult<MoveEscrow>{
         if !capture.matches(self.original.frame){return Err(Fault::WrongBatch);}
         let Self{owner,original:Received{frame,debit},ids,revision,..}=self;
@@ -287,33 +278,8 @@ impl<'owner,'raw> CheckedBatch<'owner,'raw>{
 
 
 #[cfg(test)]
-mod tests{
-    use super::*;
-    use crate::smb::wire::{direct::Frame,message::CANCEL};
+#[path = "../../../../../../tests/unit/attached/smb/connection/sessions/ordinary/outbound/ordinary_move/tests.rs"]
+mod tests;
 
-    #[test]
-    fn before_interim_cancel_matches_the_original_mid_and_verified_sid_not_the_tree_or_async_field(){
-        // Routing only. The real receiver independently authenticates the
-        // complete original CMAC; this cannot produce a cancellation proof.
-        let sid=NonZeroU64::new(17).unwrap();
-        let request=RequestSlot{sid,tree:71,mid:13};
-        for (mid,flags,routing,pre,post) in [(13u64,8u8,0u64,true,true),(13,8,999u64<<32,true,true),
-            (14,8,71u64<<32,false,false),(13,10,13,false,false),(0,10,14,false,true),(0,10,0,false,false)]
-        {
-            let mut p=[0u8;72];
-            p[..4].copy_from_slice(&68u32.to_be_bytes());
-            p[4..8].copy_from_slice(b"\xfeSMB");
-            p[8]=64;p[16..18].copy_from_slice(&CANCEL.to_le_bytes());p[20]=flags;
-            p[28..36].copy_from_slice(&mid.to_le_bytes());
-            p[36..44].copy_from_slice(&routing.to_le_bytes());
-            p[44..52].copy_from_slice(&sid.get().to_le_bytes());
-            p[68..70].copy_from_slice(&4u16.to_le_bytes());
-            p[70]=0x6a; // ignored reserved field
-            let parsed=Compound::parse(Frame::split(&p).unwrap().unwrap().0).unwrap();
-            let m=cancel_shape(&parsed).unwrap();
-            assert_eq!(targets_original(m,sid,&request,None),pre);
-            assert_eq!(targets_original(m,sid,&request,NonZeroU64::new(14)),post);
-            assert!(!targets_original(m,NonZeroU64::new(18).unwrap(),&request,NonZeroU64::new(14)));
-        }
-    }
-}
+#[cfg(test)]
+include!("../../../../../../tests/unit/attached/smb/connection/sessions/ordinary/outbound/ordinary_move/items.rs");

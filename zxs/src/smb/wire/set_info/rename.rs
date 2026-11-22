@@ -67,5 +67,5 @@ fn decode(m:&Message<'_>,max_transact:u32)->Result<Fields,RenameError>{
 }
 
 #[cfg(test)]
-#[path="../../../test/smb/rename_request.rs"]
+#[path="../../../../tests/smb/rename_request.rs"]
 mod tests;

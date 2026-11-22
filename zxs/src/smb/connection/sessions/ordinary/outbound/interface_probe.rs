@@ -66,5 +66,5 @@ impl SyncReply<'_>{
 }
 
 #[cfg(test)]
-#[path="../../../../../test/smb/interface_probe.rs"]
+#[path="../../../../../../tests/smb/interface_probe.rs"]
 mod tests;

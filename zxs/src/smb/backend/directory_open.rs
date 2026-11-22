@@ -273,5 +273,5 @@ pub(crate) use rename::OrdinaryDirectoryRenameAdmission;
 pub(in crate::smb) use rename::PreparedDirectoryRename;
 
 #[cfg(test)]
-#[path="../../test/smb/backend_directory_open.rs"]
+#[path="../../../tests/smb/backend_directory_open.rs"]
 mod tests;

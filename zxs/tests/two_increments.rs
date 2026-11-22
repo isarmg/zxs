@@ -1,7 +1,7 @@
 //! Real offline storage fixtures, not an invocation of the delivered server.
 //! The independent OPEN/replay boundaries are the library calls themselves.
 use std::{collections::BTreeSet,fs,os::unix::fs::MetadataExt,path::Path};
-use zxs::{DirectoryEntry,DirectoryParent as Parent,DraftClaim,Entity,FileId,FormalNode,FormalStorage,LengthPolicy,
+use storage_server::{DirectoryEntry,DirectoryParent as Parent,DraftClaim,Entity,FileId,FormalNode,FormalStorage,LengthPolicy,
     MoveStatus,NodeId,OperationId,RecycleAction as Action,RecycleFilter,RestoreTarget,Role,SpanEdit};
 #[path="unit/support.rs"]mod support;
 const F0:&[u8]=b"The quick brown fox jumps over the lazy dog";
@@ -14,16 +14,16 @@ fn edit(offset:u64,n:u64,sha:&str,length:u64)->SpanEdit{
     SpanEdit::new(offset,claim(n,sha),LengthPolicy::Set(length)).unwrap()
 }
 fn node(sys:&Path,file:FileId,id:NodeId)->Vec<u8>{
-    let mut out=Vec::new();zxs::read_node_to(sys,file,id,&mut out).unwrap();out
+    let mut out=Vec::new();storage_server::read_node_to(sys,file,id,&mut out).unwrap();out
 }
 fn current(sys:&Path,file:FileId)->Vec<u8>{
-    let mut out=Vec::new();zxs::read_current_to(sys,file,&mut out).unwrap();out
+    let mut out=Vec::new();storage_server::read_current_to(sys,file,&mut out).unwrap();out
 }
 fn range(sys:&Path,file:FileId,offset:u64,len:u64)->Vec<u8>{
-    let mut out=Vec::new();zxs::read_current_range_to(sys,file,offset,len,&mut out).unwrap();out
+    let mut out=Vec::new();storage_server::read_current_range_to(sys,file,offset,len,&mut out).unwrap();out
 }
 fn node_range(sys:&Path,file:FileId,id:NodeId,offset:u64,len:u64)->Vec<u8>{
-    let mut out=Vec::new();zxs::read_node_range_to(sys,file,id,offset,len,&mut out).unwrap();out
+    let mut out=Vec::new();storage_server::read_node_range_to(sys,file,id,offset,len,&mut out).unwrap();out
 }
 fn incremental(got:&FormalNode,parent:&FormalNode,n:u64,sha:&str){
     assert_eq!(got.kind,FormalStorage::Incremental{parent:parent.node,parent_version:parent.version,changed:claim(n,sha)});
@@ -38,27 +38,27 @@ fn two_editors_one_file_three_fixed_histories_and_original_replays_after_custody
     let rr=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
     let sys=a.child("system");let old=a.child("A");let new=b.child("B");let bin=rr.child("R");
     assert_ne!(fs::metadata(&old).unwrap().dev(),fs::metadata(&new).unwrap().dev());
-    zxs::initialize(op(),&sys,&bin,&[old.clone(),new.clone()]).unwrap();
-    let pool=zxs::inspect(&sys).unwrap();let registered=|path:&Path|pool.volumes.iter()
+    storage_server::initialize(op(),&sys,&bin,&[old.clone(),new.clone()]).unwrap();
+    let pool=storage_server::inspect(&sys).unwrap();let registered=|path:&Path|pool.volumes.iter()
         .find(|v|v.volume.role==Role::File&&v.volume.path==path).unwrap().id;
     let from=registered(&old);let to=registered(&new);
-    let birth=zxs::create_empty(&sys,op(),from,"shared").unwrap();let id=birth.file;
-    let first_save=op();let first_body=claim(43,F0_SHA);let w0=zxs::save_first(&sys,first_save,id,first_body,F0).unwrap();
-    let c0=op();let f0=zxs::commit_working(&sys,c0,id,1).unwrap();
-    let save_a=op();let ea=edit(4,5,HELLO_SHA,12);let wa=zxs::save_interval(&sys,save_a,id,1,ea,&b"hello"[..]).unwrap();
+    let birth=storage_server::create_empty(&sys,op(),from,"shared").unwrap();let id=birth.file;
+    let first_save=op();let first_body=claim(43,F0_SHA);let w0=storage_server::save_first(&sys,first_save,id,first_body,F0).unwrap();
+    let c0=op();let f0=storage_server::commit_working(&sys,c0,id,1).unwrap();
+    let save_a=op();let ea=edit(4,5,HELLO_SHA,12);let wa=storage_server::save_interval(&sys,save_a,id,1,ea,&b"hello"[..]).unwrap();
     assert_eq!(wa.revision,2);
     let a_bytes=b"The hello br";assert_eq!(current(&sys,id),a_bytes);
-    let c1=op();let i1=zxs::commit_working(&sys,c1,id,2).unwrap();incremental(&i1,&f0,5,HELLO_SHA);
+    let c1=op();let i1=storage_server::commit_working(&sys,c1,id,2).unwrap();incremental(&i1,&f0,5,HELLO_SHA);
 
     // A→B froze exactly F0 + I1. I2 is B's independent later pack.
-    let mv=op();let moved=zxs::move_file(&sys,mv,id,from,to,0).unwrap();
+    let mv=op();let moved=storage_server::move_file(&sys,mv,id,from,to,0).unwrap();
     assert_eq!(moved.status,MoveStatus::CompleteCheckedNow);
     fs::rename(&old,a.0.join("unavailable-A")).unwrap();
-    let save_b=op();let eb=edit(6,3,ABC_SHA,20);let wb=zxs::save_interval(&sys,save_b,id,2,eb,&b"abc"[..]).unwrap();
+    let save_b=op();let eb=edit(6,3,ABC_SHA,20);let wb=storage_server::save_interval(&sys,save_b,id,2,eb,&b"abc"[..]).unwrap();
     assert_eq!(wb.base_node,i1.node);
     let mut b_bytes=b"The heabc br".to_vec();b_bytes.resize(20,0);
     assert_eq!(current(&sys,id),b_bytes);
-    let c2=op();let i2=zxs::commit_working(&sys,c2,id,3).unwrap();
+    let c2=op();let i2=storage_server::commit_working(&sys,c2,id,3).unwrap();
     assert_ne!(i2.node,i1.node);assert_ne!(i2.node,f0.node);incremental(&i2,&i1,3,ABC_SHA);
     let checked=||{
         assert_eq!(node(&sys,id,f0.node),F0);
@@ -69,37 +69,37 @@ fn two_editors_one_file_three_fixed_histories_and_original_replays_after_custody
         assert_eq!(range(&sys,id,12,8),[0;8]);
         assert_eq!(node_range(&sys,id,f0.node,12,8),&F0[12..20]);
         let mut bytes=Vec::new();
-        assert!(zxs::read_node_range_to(&sys,id,i1.node,12,1,&mut bytes).is_err()&&bytes.is_empty());
-        let actual=zxs::current_info(&sys,id).unwrap().file;
+        assert!(storage_server::read_node_range_to(&sys,id,i1.node,12,1,&mut bytes).is_err()&&bytes.is_empty());
+        let actual=storage_server::current_info(&sys,id).unwrap().file;
         assert_eq!((actual.file,actual.entry,actual.history),(id,birth.entry,birth.history));
     };
     checked();
     let delete=op();let deleting=Action::Delete{file:id,from:to};
-    let deleted=zxs::apply_recycle(&sys,delete,1,deleting).unwrap();
+    let deleted=storage_server::apply_recycle(&sys,delete,1,deleting).unwrap();
     assert_eq!(deleted.status,MoveStatus::CompleteCheckedNow);let key=deleted.deletion.unwrap();
     for n in [f0.node,i1.node,i2.node]{
-        let mut bytes=Vec::new();assert!(zxs::read_node_to(&sys,id,n,&mut bytes).is_err()&&bytes.is_empty());
+        let mut bytes=Vec::new();assert!(storage_server::read_node_to(&sys,id,n,&mut bytes).is_err()&&bytes.is_empty());
     }
-    let listed=zxs::list_retained(&sys,RecycleFilter::default(),8,None).unwrap();
+    let listed=storage_server::list_retained(&sys,RecycleFilter::default(),8,None).unwrap();
     assert!(listed.entries.iter().any(|e|e.original.file==id&&e.original.deletion==Some(key)));
     let rest=op();let restoring=Action::Restore{deleted:key,target:RestoreTarget::Volume(to)};
-    let restored=zxs::apply_recycle(&sys,rest,2,restoring).unwrap();
+    let restored=storage_server::apply_recycle(&sys,rest,2,restoring).unwrap();
     assert_eq!((restored.status,restored.deletion),(MoveStatus::CompleteCheckedNow,Some(key)));checked();
     assert_eq!(fs::read_dir(new.join(support::physical("shared",&id.to_string()))).unwrap().count(),5);
     // Completed requests do not need the old source, current FILE or R.
     fs::rename(&new,b.0.join("unavailable-B")).unwrap();fs::rename(&bin,rr.0.join("unavailable-R")).unwrap();
-    assert_eq!(zxs::save_first(&sys,first_save,id,first_body,&[][..]).unwrap(),w0);
-    assert_eq!(zxs::save_interval(&sys,save_a,id,1,ea,&[][..]).unwrap(),wa);
-    assert_eq!(zxs::save_interval(&sys,save_b,id,2,eb,&[][..]).unwrap(),wb);
+    assert_eq!(storage_server::save_first(&sys,first_save,id,first_body,&[][..]).unwrap(),w0);
+    assert_eq!(storage_server::save_interval(&sys,save_a,id,1,ea,&[][..]).unwrap(),wa);
+    assert_eq!(storage_server::save_interval(&sys,save_b,id,2,eb,&[][..]).unwrap(),wb);
     for(issued,rev,original)in[(c0,1,&f0),(c1,2,&i1),(c2,3,&i2)]{
-        assert_eq!(&zxs::commit_working(&sys,issued,id,rev).unwrap(),original);
+        assert_eq!(&storage_server::commit_working(&sys,issued,id,rev).unwrap(),original);
     }
-    assert_eq!(zxs::move_file(&sys,mv,id,from,to,0).unwrap().status,MoveStatus::OriginalPublished);
-    assert_eq!(zxs::apply_recycle(&sys,delete,1,deleting).unwrap().deletion,Some(key));
-    assert_eq!(zxs::apply_recycle(&sys,rest,2,restoring).unwrap().status,MoveStatus::OriginalPublished);
-    assert!(zxs::save_interval(&sys,save_a,id,2,ea,&[][..]).is_err());
+    assert_eq!(storage_server::move_file(&sys,mv,id,from,to,0).unwrap().status,MoveStatus::OriginalPublished);
+    assert_eq!(storage_server::apply_recycle(&sys,delete,1,deleting).unwrap().deletion,Some(key));
+    assert_eq!(storage_server::apply_recycle(&sys,rest,2,restoring).unwrap().status,MoveStatus::OriginalPublished);
+    assert!(storage_server::save_interval(&sys,save_a,id,2,ea,&[][..]).is_err());
     let mut wrong=key;wrong.decision=[0;32];
-    assert!(zxs::recycle_receipt(&sys,rest,2,Action::Restore{deleted:wrong,target:RestoreTarget::Volume(to)}).is_err());
+    assert!(storage_server::recycle_receipt(&sys,rest,2,Action::Restore{deleted:wrong,target:RestoreTarget::Volume(to)}).is_err());
 }
 
 #[test]
@@ -108,15 +108,15 @@ fn exact_display_lookup_two_equal_spelling_histories_and_one_unchanged_name_per_
     let h=support::PrivateTemp::under(&std::env::temp_dir());
     let rh=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
     let sys=h.child("system");let a=h.child("A");let b=h.child("B");let c=h.child("C");let bin=rh.child("dedicated-R");
-    let registry=zxs::initialize(op(),&sys,&bin,&[a.clone(),b.clone(),c.clone()]).unwrap();
+    let registry=storage_server::initialize(op(),&sys,&bin,&[a.clone(),b.clone(),c.clone()]).unwrap();
     let volume=|p:&Path|registry.volumes.iter().find(|r|r.volume.path==p).unwrap().id;
     let(va,vb,vc)=(volume(&a),volume(&b),volume(&c));
-    let lookup=|v,name:&str|zxs::lookup_file(&sys,v,name);
+    let lookup=|v,name:&str|storage_server::lookup_file(&sys,v,name);
     let at=|v,name:&str,body:&[u8],sha:&str|{
-        let f=zxs::create_empty(&sys,op(),v,name).unwrap();
+        let f=storage_server::create_empty(&sys,op(),v,name).unwrap();
         assert_eq!(lookup(v,name).unwrap().unwrap().file,f.file);
-        zxs::save_first(&sys,op(),f.file,claim(body.len() as u64,sha),body).unwrap();
-        let first=zxs::commit_working(&sys,op(),f.file,1).unwrap();assert_eq!(node(&sys,f.file,first.node),body);
+        storage_server::save_first(&sys,op(),f.file,claim(body.len() as u64,sha),body).unwrap();
+        let first=storage_server::commit_working(&sys,op(),f.file,1).unwrap();assert_eq!(node(&sys,f.file,first.node),body);
         (f.file,first.node)
     };
     let u=at(va,"Report.xlsx",b"abc",ABC_SHA);let l=at(va,"report.xlsx",b"hello",HELLO_SHA);
@@ -125,19 +125,19 @@ fn exact_display_lookup_two_equal_spelling_histories_and_one_unchanged_name_per_
     let leaves=|p:&Path|fs::read_dir(p).unwrap().map(|e|e.unwrap().file_name().into_string().unwrap()).collect::<BTreeSet<_>>();
     assert_eq!(leaves(&a),[upper.clone(),lower.clone()].into_iter().collect());assert_eq!(leaves(&b),[duplicate.clone()].into_iter().collect());
     denied_or_absent(lookup(va,"REPORT.xlsx"));denied_or_absent(lookup(va,&upper)); // not a second route
-    let files=zxs::list_initial_files(&sys,va).unwrap();let mixed=zxs::list_directory(&sys,Parent::Root(va)).unwrap();
+    let files=storage_server::list_initial_files(&sys,va).unwrap();let mixed=storage_server::list_directory(&sys,Parent::Root(va)).unwrap();
     let names=BTreeSet::from(["Report.xlsx","report.xlsx"]);
     assert_eq!(files.files.iter().map(|f|f.name.as_str()).collect::<BTreeSet<_>>(),names);
     assert_eq!(mixed.entries.iter().map(DirectoryEntry::name).collect::<BTreeSet<_>>(),names);
-    assert!(zxs::make_directory(&sys,op(),Parent::Root(va),"Report.xlsx").is_err()); // logical collision
-    assert!(zxs::make_directory(&sys,op(),Parent::Root(va),&upper).is_err()); // physical collision
-    zxs::make_directory(&sys,op(),Parent::Root(vc),"Report.xlsx").unwrap();
-    zxs::make_directory(&sys,op(),Parent::Root(vb),&upper).unwrap(); // different original FILE
+    assert!(storage_server::make_directory(&sys,op(),Parent::Root(va),"Report.xlsx").is_err()); // logical collision
+    assert!(storage_server::make_directory(&sys,op(),Parent::Root(va),&upper).is_err()); // physical collision
+    storage_server::make_directory(&sys,op(),Parent::Root(vc),"Report.xlsx").unwrap();
+    storage_server::make_directory(&sys,op(),Parent::Root(vb),&upper).unwrap(); // different original FILE
     let del=|file,from,epoch|{
-        let row=zxs::apply_recycle(&sys,op(),epoch,Action::Delete{file,from}).unwrap();
+        let row=storage_server::apply_recycle(&sys,op(),epoch,Action::Delete{file,from}).unwrap();
         assert_eq!(row.status,MoveStatus::CompleteCheckedNow);row.deletion.unwrap()
     };
-    let restore=|issued,key,epoch,target|zxs::apply_recycle(&sys,issued,epoch,Action::Restore{deleted:key,target});
+    let restore=|issued,key,epoch,target|storage_server::apply_recycle(&sys,issued,epoch,Action::Restore{deleted:key,target});
     let du=del(u.0,va,0);let dl=del(l.0,va,0);let db=del(other.0,vb,0);
     assert_eq!(leaves(&bin),[upper.clone(),lower.clone(),duplicate.clone()].into_iter().collect());
     denied_or_absent(lookup(va,"Report.xlsx"));denied_or_absent(lookup(va,"report.xlsx"));
@@ -145,7 +145,7 @@ fn exact_display_lookup_two_equal_spelling_histories_and_one_unchanged_name_per_
     for v in [vb,vc]{ // first conflicts physically, second logically
         let o=op();let target=RestoreTarget::Volume(v);
         assert!(restore(o,du,1,target).is_err());
-        assert!(zxs::recycle_receipt(&sys,o,1,Action::Restore{deleted:du,target}).unwrap().is_none());
+        assert!(storage_server::recycle_receipt(&sys,o,1,Action::Restore{deleted:du,target}).unwrap().is_none());
         assert_eq!(fs::read(sys.join("REGISTRATION")).unwrap(),before);
         assert!(!sys.join("FILE-ALLOCATION").exists()&&!sys.join("FILE-INTENT").exists());assert_eq!(leaves(&bin),items);
     }
@@ -179,50 +179,50 @@ fn three_scoped_parents_keep_separate_file_identities_through_history_move_and_r
     let rr=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
     let sys=a.child("system");let old=a.child("A");let new=b.child("B");let bin=rr.child("R");
     assert_ne!(fs::metadata(&old).unwrap().dev(),fs::metadata(&new).unwrap().dev());
-    zxs::initialize(op(),&sys,&bin,&[old.clone(),new.clone()]).unwrap();
-    let pool=zxs::inspect(&sys).unwrap();let vol=|p:&Path|pool.volumes.iter().find(|v|v.volume.path==p).unwrap().id;
+    storage_server::initialize(op(),&sys,&bin,&[old.clone(),new.clone()]).unwrap();
+    let pool=storage_server::inspect(&sys).unwrap();let vol=|p:&Path|pool.volumes.iter().find(|v|v.volume.path==p).unwrap().id;
     let va=vol(&old);let vb=vol(&new);let name="方案.xlsx";
     let md=|p,n|{
         let v=match p{Parent::Root(v)|Parent::Child(v,_)=>v};
-        Parent::Child(v,zxs::make_directory(&sys,op(),p,n).unwrap().directory)
+        Parent::Child(v,storage_server::make_directory(&sys,op(),p,n).unwrap().directory)
     };
     let al=md(Parent::Root(va),"left");let ar=md(Parent::Root(va),"right");
     let bl=md(Parent::Root(vb),"left");let br=md(Parent::Root(vb),"right");
-    let get=|p|zxs::lookup_file_at(&sys,p,name);
-    let make=|p,create|zxs::create_empty_at(&sys,create,p,name).unwrap();
+    let get=|p|storage_server::lookup_file_at(&sys,p,name);
+    let make=|p,create|storage_server::create_empty_at(&sys,create,p,name).unwrap();
     let id_op=op();let born=make(al,id_op);let file=born.file;
     let root_file=make(Parent::Root(va),op()).file;let sibling=make(ar,op()).file;let other=make(br,op()).file;
     assert_eq!(BTreeSet::from([file,root_file,sibling,other]).len(),4);
     assert_eq!(get(al).unwrap().unwrap().file,file);assert_eq!(get(ar).unwrap().unwrap().file,sibling);
-    assert_eq!(zxs::lookup_file(&sys,va,name).unwrap().unwrap().file,root_file);
-    let root_list=zxs::list_initial_files(&sys,va).unwrap();
+    assert_eq!(storage_server::lookup_file(&sys,va,name).unwrap().unwrap().file,root_file);
+    let root_list=storage_server::list_initial_files(&sys,va).unwrap();
     assert_eq!(root_list.files.iter().map(|f|f.file).collect::<Vec<_>>(),vec![root_file]);
-    let child_list=zxs::list_directory(&sys,al).unwrap();assert_eq!(child_list.entries,vec![DirectoryEntry::File(born.clone())]);
-    assert!(zxs::create_empty(&sys,id_op,va,name).is_err());assert!(zxs::make_directory(&sys,op(),al,name).is_err());
-    zxs::save_first(&sys,op(),other,claim(5,HELLO_SHA),&b"hello"[..]).unwrap();
-    let other_node=zxs::commit_working(&sys,op(),other,1).unwrap().node;
+    let child_list=storage_server::list_directory(&sys,al).unwrap();assert_eq!(child_list.entries,vec![DirectoryEntry::File(born.clone())]);
+    assert!(storage_server::create_empty(&sys,id_op,va,name).is_err());assert!(storage_server::make_directory(&sys,op(),al,name).is_err());
+    storage_server::save_first(&sys,op(),other,claim(5,HELLO_SHA),&b"hello"[..]).unwrap();
+    let other_node=storage_server::commit_working(&sys,op(),other,1).unwrap().node;
     let sibling_path=new.join("right").join(format!("方案-{other}.xlsx"));
     let observed=(fs::metadata(&sibling_path).unwrap().dev(),fs::metadata(&sibling_path).unwrap().ino());
-    zxs::save_first(&sys,op(),file,claim(43,F0_SHA),F0).unwrap();
-    let f0=zxs::commit_working(&sys,op(),file,1).unwrap();
-    zxs::save_interval(&sys,op(),file,1,edit(4,5,HELLO_SHA,12),&b"hello"[..]).unwrap();
-    let i1=zxs::commit_working(&sys,op(),file,2).unwrap();incremental(&i1,&f0,5,HELLO_SHA);
+    storage_server::save_first(&sys,op(),file,claim(43,F0_SHA),F0).unwrap();
+    let f0=storage_server::commit_working(&sys,op(),file,1).unwrap();
+    storage_server::save_interval(&sys,op(),file,1,edit(4,5,HELLO_SHA,12),&b"hello"[..]).unwrap();
+    let i1=storage_server::commit_working(&sys,op(),file,2).unwrap();incremental(&i1,&f0,5,HELLO_SHA);
     let mv=op();
-    assert!(zxs::move_file_at(&sys,mv,file,ar,bl,0).is_err());
-    assert!(zxs::move_file_at(&sys,mv,file,al,br,0).is_err());
+    assert!(storage_server::move_file_at(&sys,mv,file,ar,bl,0).is_err());
+    assert!(storage_server::move_file_at(&sys,mv,file,al,br,0).is_err());
     assert!(!sys.join("FILE-ALLOCATION").exists());
-    let moved=zxs::move_file_at(&sys,mv,file,al,bl,0).unwrap();
+    let moved=storage_server::move_file_at(&sys,mv,file,al,bl,0).unwrap();
     assert_eq!((moved.status,moved.source_parent,moved.destination_parent),(MoveStatus::CompleteCheckedNow,Some(al),Some(bl)));
     denied_or_absent(get(al));
     let after=get(bl).unwrap().unwrap();assert_eq!((after.file,after.entry,after.history),(file,born.entry,born.history));
     // Reuse the old name for an unrelated FILE, then lose the old volume.
     let reuse=make(al,op()).file;assert_ne!(reuse,file);
     fs::rename(&old,a.0.join("unavailable-A")).unwrap();
-    assert_eq!(zxs::move_receipt_at(&sys,mv,file,al,bl,0).unwrap().unwrap().status,MoveStatus::OriginalPublished);
-    assert!(zxs::move_receipt_at(&sys,mv,file,ar,bl,0).is_err());
-    assert!(zxs::move_receipt(&sys,mv,file,va,vb,0).is_err());
-    zxs::save_interval(&sys,op(),file,2,edit(6,3,ABC_SHA,20),&b"abc"[..]).unwrap();
-    let i2=zxs::commit_working(&sys,op(),file,3).unwrap();incremental(&i2,&i1,3,ABC_SHA);
+    assert_eq!(storage_server::move_receipt_at(&sys,mv,file,al,bl,0).unwrap().unwrap().status,MoveStatus::OriginalPublished);
+    assert!(storage_server::move_receipt_at(&sys,mv,file,ar,bl,0).is_err());
+    assert!(storage_server::move_receipt(&sys,mv,file,va,vb,0).is_err());
+    storage_server::save_interval(&sys,op(),file,2,edit(6,3,ABC_SHA,20),&b"abc"[..]).unwrap();
+    let i2=storage_server::commit_working(&sys,op(),file,3).unwrap();incremental(&i2,&i1,3,ABC_SHA);
     let mut latest=b"The heabc br".to_vec();latest.resize(20,0);
     let verify=||{
         for(n,want)in[(f0.node,F0),(i1.node,&b"The hello br"[..]),(i2.node,latest.as_slice())]{
@@ -231,39 +231,39 @@ fn three_scoped_parents_keep_separate_file_identities_through_history_move_and_r
     };
     verify();let native=format!("方案-{file}.xlsx");assert_eq!(new.join("left").join(&native).read_dir().unwrap().count(),5);
     let del=op();let deleting=Action::DeleteAt{file,source:bl};
-    let receipt=zxs::apply_recycle(&sys,del,1,deleting).unwrap();let key=receipt.deletion.unwrap();
+    let receipt=storage_server::apply_recycle(&sys,del,1,deleting).unwrap();let key=receipt.deletion.unwrap();
     assert_eq!(receipt.deleted_from,bl);
     assert!(bin.join(&native).is_dir());denied_or_absent(get(bl));
-    let mut bytes=Vec::new();assert!(zxs::read_node_to(&sys,file,f0.node,&mut bytes).is_err()&&bytes.is_empty());
-    let page=zxs::list_retained(&sys,RecycleFilter{ordinary_source:Some(vb),..RecycleFilter::default()},16,None).unwrap();
+    let mut bytes=Vec::new();assert!(storage_server::read_node_to(&sys,file,f0.node,&mut bytes).is_err()&&bytes.is_empty());
+    let page=storage_server::list_retained(&sys,RecycleFilter{ordinary_source:Some(vb),..RecycleFilter::default()},16,None).unwrap();
     assert_eq!(page.entries.len(),1);assert_eq!((page.entries[0].original.file,page.entries[0].original.deleted_from),(file,bl));
-    assert_eq!(zxs::recycle_receipt(&sys,del,1,deleting).unwrap().unwrap().status,MoveStatus::OriginalPublished);
-    assert!(zxs::recycle_receipt(&sys,del,1,Action::Delete{file,from:vb}).is_err());
+    assert_eq!(storage_server::recycle_receipt(&sys,del,1,deleting).unwrap().unwrap().status,MoveStatus::OriginalPublished);
+    assert!(storage_server::recycle_receipt(&sys,del,1,Action::Delete{file,from:vb}).is_err());
     let restore=op();let request=|deleted,target|Action::Restore{deleted,target};
-    assert!(zxs::apply_recycle(&sys,restore,2,request(key,RestoreTarget::Original)).is_err());
-    assert!(zxs::apply_recycle(&sys,restore,2,request(key,RestoreTarget::At(br))).is_err());
+    assert!(storage_server::apply_recycle(&sys,restore,2,request(key,RestoreTarget::Original)).is_err());
+    assert!(storage_server::apply_recycle(&sys,restore,2,request(key,RestoreTarget::At(br))).is_err());
     // A directory with the exact display name blocks its original parent.
-    let blocker=zxs::make_directory(&sys,op(),bl,name).unwrap();let s_before=fs::read(sys.join("REGISTRATION")).unwrap();
-    assert!(zxs::apply_recycle(&sys,restore,2,request(key,RestoreTarget::OriginalParent)).is_err());
+    let blocker=storage_server::make_directory(&sys,op(),bl,name).unwrap();let s_before=fs::read(sys.join("REGISTRATION")).unwrap();
+    assert!(storage_server::apply_recycle(&sys,restore,2,request(key,RestoreTarget::OriginalParent)).is_err());
     assert!(!sys.join("FILE-ALLOCATION").exists()&&!sys.join("FILE-INTENT").exists());
     assert_eq!(fs::read(sys.join("REGISTRATION")).unwrap(),s_before);
     assert!(bin.join(&native).is_dir());
-    assert!(zxs::list_directory(&sys,bl).unwrap().entries.contains(&DirectoryEntry::Directory(blocker)));
+    assert!(storage_server::list_directory(&sys,bl).unwrap().entries.contains(&DirectoryEntry::Directory(blocker)));
     let sub=md(Parent::Root(vb),"recovered");let dest=request(key,RestoreTarget::At(sub));
-    assert_eq!(zxs::apply_recycle(&sys,restore,2,dest).unwrap().status,MoveStatus::CompleteCheckedNow);
+    assert_eq!(storage_server::apply_recycle(&sys,restore,2,dest).unwrap().status,MoveStatus::CompleteCheckedNow);
     assert_eq!(get(sub).unwrap().unwrap().history,born.history);
     assert!(new.join("recovered").join(&native).is_dir());assert!(!bin.join(&native).exists());
     verify();assert_eq!(node(&sys,other,other_node),b"hello");
     assert_eq!((fs::metadata(&sibling_path).unwrap().dev(),fs::metadata(&sibling_path).unwrap().ino()),observed);
-    let key2=zxs::apply_recycle(&sys,op(),3,Action::DeleteAt{file,source:sub}).unwrap().deletion.unwrap();
+    let key2=storage_server::apply_recycle(&sys,op(),3,Action::DeleteAt{file,source:sub}).unwrap().deletion.unwrap();
     assert_ne!(key.decision,key2.decision);
-    assert!(zxs::apply_recycle(&sys,op(),4,request(key,RestoreTarget::OriginalParent)).is_err());
-    assert_eq!(zxs::apply_recycle(&sys,restore,2,dest).unwrap().status,MoveStatus::OriginalPublished);
+    assert!(storage_server::apply_recycle(&sys,op(),4,request(key,RestoreTarget::OriginalParent)).is_err());
+    assert_eq!(storage_server::apply_recycle(&sys,restore,2,dest).unwrap().status,MoveStatus::OriginalPublished);
     assert!(bin.join(&native).is_dir());
-    let reopen=op();zxs::apply_recycle(&sys,reopen,4,request(key2,RestoreTarget::OriginalParent)).unwrap();
+    let reopen=op();storage_server::apply_recycle(&sys,reopen,4,request(key2,RestoreTarget::OriginalParent)).unwrap();
     // Explicitly selecting the original parent is the very same request.
-    assert_eq!(zxs::recycle_receipt(&sys,reopen,4,request(key2,RestoreTarget::At(sub))).unwrap().unwrap().status,MoveStatus::OriginalPublished);
-    assert!(zxs::recycle_receipt(&sys,reopen,4,request(key2,RestoreTarget::At(bl))).is_err());
+    assert_eq!(storage_server::recycle_receipt(&sys,reopen,4,request(key2,RestoreTarget::At(sub))).unwrap().unwrap().status,MoveStatus::OriginalPublished);
+    assert!(storage_server::recycle_receipt(&sys,reopen,4,request(key2,RestoreTarget::At(bl))).is_err());
     verify();assert_eq!(make(al,id_op).file,file);
     fs::rename(a.0.join("unavailable-A"),&old).unwrap();assert_eq!(get(al).unwrap().unwrap().file,reuse);
     assert_eq!(get(ar).unwrap().unwrap().file,sibling);

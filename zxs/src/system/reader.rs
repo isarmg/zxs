@@ -5,8 +5,6 @@ use super::{BirthRow,Catalog,ClaimRow,InitState,SCHEMA,lease::SystemDir,role_at}
 use crate::{OperationId,PoolId,VolumeId,fs::{self,ComponentLimit,ControlRead,invalid}};
 use std::{ffi::{CStr,CString,OsStr,c_char,c_int},io,os::unix::ffi::OsStrExt,path::{Path,PathBuf},ptr,sync::Mutex};
 
-#[cfg(test)]
-use std::ffi::c_void;
 
 #[path="statement.rs"]
 mod statement;
@@ -197,4 +195,4 @@ mod transfer_material;
 mod file_location;
 
 #[cfg(test)]
-pub(crate) use tests::{web_pool,ordinary_pool,stage_managed_file};
+include!("../../tests/unit/attached/system/reader/items.rs");

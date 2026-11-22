@@ -132,5 +132,5 @@ fn fields(m: &Message<'_>, max_transact: u32) -> Result<Fields, Error> {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/set_info.rs"]
+#[path = "../../../tests/smb/set_info.rs"]
 mod tests;

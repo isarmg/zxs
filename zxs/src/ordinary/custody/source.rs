@@ -61,12 +61,6 @@ impl Clean{
         let result=Self::at_original_sites(&volume,dir,c,f,d,&Sites::birthplace(c,f,d))?;
         result.require(&pool,&s,&volume)?;Ok(result)
     }
-    /// Read the actual current source of a new/pending paired handoff. No
-    /// source fallback when R is unavailable, and no opening A just because
-    /// a later B-native FILE/INCR was first created there. A completed
-    /// decision must use target observation and exact retirement instead.
-    #[cfg(test)]
-    pub(super) fn capture_lifecycle(system:&Path,r:Request)->io::Result<Self>{Self::capture_checked(system,r,|_|Ok(()))}
     pub(super) fn capture_checked(system:&Path,r:Request,check:impl FnOnce(&LocalPool)->io::Result<()>)->io::Result<Self>{
         if r.call==Call::Move{return Err(invalid("ordinary MOVE uses its own source selection"));}
         let(p,_,_)=LocalPool::with_snapshot(system,Access::Incoming)?;check(&p)?;
@@ -314,3 +308,6 @@ impl Verified{
 #[cfg(test)]
 #[path="../../../tests/unit/custody_source.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/custody/source/items.rs");

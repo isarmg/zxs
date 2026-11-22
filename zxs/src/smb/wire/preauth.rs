@@ -214,5 +214,5 @@ impl RequestKeyContext {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/preauth.rs"]
+#[path = "../../../tests/smb/preauth.rs"]
 pub(in crate::smb) mod tests;

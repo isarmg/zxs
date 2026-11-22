@@ -78,10 +78,6 @@ pub fn create_empty_at(system:&Path,op:OperationId,parent:DirectoryParent,name:&
 pub fn create_empty(system:&Path,op:OperationId,volume:VolumeId,name:&str)->io::Result<FileInfo>{
     create_empty_at(system,op,DirectoryParent::Root(volume),name)
 }
-#[cfg(test)]
-fn create_inner(system:&Path,op:OperationId,id:VolumeId,name:&str,cut:impl FnMut(Cut)->io::Result<()>)->io::Result<FileInfo>{
-    create_at_inner(system,op,DirectoryParent::Root(id),name,cut)
-}
 fn create_at_inner(system:&Path,op:OperationId,address:DirectoryParent,name:&str,mut cut:impl FnMut(Cut)->io::Result<()>)->io::Result<FileInfo>{
     let id=address.volume();
     wire::human_name(name.as_bytes())?;
@@ -312,3 +308,6 @@ fn parent_listing(cut:&formal::ParentCut,address:DirectoryParent)->io::Result<(R
 #[cfg(test)]
 #[path="../tests/unit/ordinary.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../tests/unit/attached/ordinary/items.rs");

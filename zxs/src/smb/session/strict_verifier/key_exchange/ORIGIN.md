@@ -19,7 +19,7 @@ existing verifier's optional key exchange and its SPNEGO MIC handling. This is
 not a general cryptography API, new authentication capability or file encryption.
 
 The existing public NTLM known answers (with and without key exchange) remain
-in `src/test/smb/strict_verifier.rs`; the additional source fixture cites the RFC
+in `tests/smb/strict_verifier.rs`; the additional source fixture cites the RFC
 6229 first-block answer and checks the erasure trait is present. No tracing or
 inspection of freed memory is part of the fixture. None of these were run for
 this source-only move.

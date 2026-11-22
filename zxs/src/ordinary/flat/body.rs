@@ -1,11 +1,7 @@
 //! Physical bytes of one selected portable index. No lookup by filename, no
 //! authority to issue or adopt materials and no Web/SMB entry point.
-#[cfg(test)]
-use super::MaterialRef;
 use super::{Index,Leaf,Material,blocks::{Buffers,Reader},stored::Descriptor,local::Located};
 use crate::{OperationId, fs::{HeldBytes,invalid}, ordinary::output::CheckedOutput};
-#[cfg(test)]
-use std::fs::File;
 use std::{collections::BTreeMap,io::{self,Write}};
 
 /// Per-request allowance for *additional* raw/check-table file descriptors
@@ -107,16 +103,8 @@ fn write_zeroes(out:&mut impl Write,mut remaining:u64)->io::Result<()>{
 // File-level algorithms can be exercised independently of name selection.
 // No production consumer receives a caller-swappable data/metadata opener.
 #[cfg(test)]
-impl Contents{
-    fn open(descriptor:Descriptor,table:File,mut get:impl FnMut(Material)->io::Result<MaterialRef>)->io::Result<Self>{
-        Self::bind(descriptor,HeldBytes::separate_format_fixture(table)?,|m|get(m).map(Located::change))
-    }
-    fn range_to(&self,at:u64,n:u64,budget:ReadBudget,mut get:impl FnMut(MaterialRef)->io::Result<(File,File)>,out:impl Write)->io::Result<()>{
-        self.read_with(at,n,budget,0,|v|{
-            let(a,b)=get(v.reference())?;Ok((HeldBytes::separate_format_fixture(a)?,HeldBytes::separate_format_fixture(b)?))
-        },||Ok(()),out)
-    }
-}
-#[cfg(test)]
 #[path="../../../tests/unit/flat_body.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/flat/body/items.rs");

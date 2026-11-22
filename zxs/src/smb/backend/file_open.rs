@@ -330,5 +330,5 @@ pub(in crate::smb) use rename::{MoveOpenWitness,WorkingMoveGuard,OrdinaryRenameE
 pub(super) use rename::{RenameTurn,ordinary_parent_leaf};
 
 #[cfg(test)]
-#[path="../../test/smb/backend_file_open.rs"]
+#[path="../../../tests/smb/backend_file_open.rs"]
 mod tests;

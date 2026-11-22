@@ -217,10 +217,6 @@ impl Connection {
     fn stop<T>(&self, f: Fault) -> Result<T> {
         self.origin.closed.store(true,Ordering::Release); Err(f)
     }
-    #[cfg(test)]
-    fn negotiation(&self) -> Result<&ConnectionHash> {
-        self.alive()?; Ok(&self.origin.hash)
-    }
 
     /// This is the ordinary entry. No separately supplied transcript or raw
     /// message can be substituted on the subsequent SESSION_SETUP path.
@@ -375,11 +371,6 @@ impl ReplySend<'_,'_,'_> {
         self.plan.owner.stream=Some(stream);
         self.publish_with(|c|install(c,state,std::time::Instant::now()))
     }
-    /// Only after successful submission of these bytes on THIS transport.
-    /// The exclusive borrow holds its ledger between selecting and publishing
-    /// credits; no competing response can publish the same sequence range.
-    #[cfg(test)]
-    fn submitted(self) -> Result<()> { self.publish_with(|_| Ok(())) }
     // Stage-specific callers can install only state already prepared for the
     // exact bytes. Any late failure drops this uncertain transport and clears
     // its pending sessions; no new credit range or active phase survives.
@@ -403,5 +394,8 @@ impl Drop for ReplySend<'_,'_,'_> {
 }
 
 #[cfg(test)]
-#[path = "../test/smb/credits.rs"]
+#[path = "../../tests/smb/credits.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../tests/unit/attached/smb/connection/items.rs");

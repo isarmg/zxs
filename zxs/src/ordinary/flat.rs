@@ -20,8 +20,6 @@ impl Material {
     }
     pub(super) fn file(self) -> FileId { self.file }
     pub(super) fn size(self) -> u64 { self.size }
-    #[cfg(test)]
-    pub(super) fn slot(self) -> u32 { self.slot }
     pub(in crate::ordinary) fn key(self) -> (OperationId, u32) { (self.issuer, self.slot) }
 }
 
@@ -175,3 +173,6 @@ pub(in crate::ordinary) mod body;
 pub(in crate::ordinary) mod local;
 pub(crate) mod work;
 pub(crate) mod round;
+
+#[cfg(test)]
+include!("../../tests/unit/attached/ordinary/flat/items.rs");

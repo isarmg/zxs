@@ -585,15 +585,6 @@ impl<'t,'s,'r> Current<'t,'s,'r>{
             selected:self.original.place.clone(),birth:self.original.birth.clone(),setting:self.setting,
             media:self.root.duplicate_media()?,container:self.original.container.duplicate()?})
     }
-    #[cfg(test)]
-    pub(super) fn filesystem_capacity(&self,after_sample:impl FnOnce()->io::Result<()>)
-        ->io::Result<(Option<super::super::volume::Capacity>,bool)>{
-        let cut=self.capacity_cut()?;cut.physical()?;
-        let measured=cut.sample().ok().filter(|s|s.total>=4096);
-        after_sample()?;cut.physical()?;
-        self.tree.session.source.at(|db,c|{self.placement_tree().require(db,&c,false)?;cut.logical(db,&c)})?;
-        Ok((measured,self.setting.mode==super::share_mode::Mode::ReadWrite))
-    }
     fn invalidate_capacity(&self)->io::Result<()>{
         self.open.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n|n.checked_add(1))
             .map(drop).map_err(|_|invalid("original member capacity sequence exhausted"))
@@ -629,10 +620,6 @@ impl<'t,'s,'r> Current<'t,'s,'r>{
     pub(crate) fn native_key(&self)->io::Result<super::file_number::NativeKey>{
         self.with_read(|reader|reader.check_with(||Ok(()),|db|super::file_number::original(db,self.original.birth.pool,self.file())))
     }
-    #[cfg(test)]
-    pub(in crate::system::reader) fn check_at_file(&self,cut:impl FnOnce()->io::Result<()>)->io::Result<()>{
-        self.with_read(|reader|reader.check_with(cut,|_|Ok(())))
-    }
     fn require(&self)->io::Result<()>{
         self.with_read(|reader|reader.check_with(||Ok(()),|_|Ok(())))
     }
@@ -658,3 +645,6 @@ mod rust;
 pub(super) use rust::HeldRename;
 pub(crate) use rust::{RustAdoptedMove,RustFileName,RustFileSelection,RustFileStandard,RustOrdinaryRename,RustReadFile,RustReadProof,RustRetiredOrdinaryRename};
 pub(crate) use super::file_transfer::RustOrdinaryMove;
+
+#[cfg(test)]
+include!("../../tests/unit/attached/system/first_work/items.rs");

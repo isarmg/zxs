@@ -529,5 +529,5 @@ impl OrdinaryMoveSite{
 }
 
 #[cfg(test)]
-#[path="../test/smb/core_credential.rs"]
+#[path="../../tests/smb/core_credential.rs"]
 mod rust_credential_tests;

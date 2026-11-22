@@ -73,8 +73,6 @@ impl WebAdmin<'_>{
         let m=WebCurrent::select(db,c)?.ok_or_else(denied)?;
         if (m.account,m.canonical,m.op,m.generation)!=(self.account,self.canonical,self.origin,self.generation){return Err(denied());}Ok(m)
     }
-    #[cfg(test)]
-    pub(super) fn id(&self)->io::Result<AccountId>{self.source.at(|db,c|{self.current(db,&c)?;Ok(self.account)})}
 }
 
 #[cfg(test)]
@@ -95,3 +93,6 @@ pub(crate) mod history;
 
 #[path="navigation.rs"]
 pub(crate) mod navigation;
+
+#[cfg(test)]
+include!("../../tests/unit/attached/system/account/items.rs");

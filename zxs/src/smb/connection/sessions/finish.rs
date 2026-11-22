@@ -55,16 +55,6 @@ impl FinalSend<'_,'_> {
         let Local{reg,phase}=item;
         reg.publish(&origin,guid,dialect,now,next,|state|*phase=Phase::Valid(LiveSession::new(state)))
     }
-    #[cfg(test)]
-    pub(in crate::smb) fn bytes(&self)->Result<&[u8]> {
-        Self::check(self.tx.plan.owner,&self.claim,&self.next,Instant::now())?;Ok(self.tx.bytes())
-    }
-    #[cfg(test)]
-    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
-    #[cfg(test)]
-    fn submitted_at(self,now:Instant)->Result<()> {
-        let Self{tx,claim,next}=self;tx.publish_with(|c|Self::install(c,&claim,next,now))
-    }
 }
 impl Registration {
     fn publish(&self,origin:&Arc<Origin>,guid:[u8;16],dialect:u16,now:Instant,live:BoundSession,
@@ -92,5 +82,8 @@ impl Registration {
 }
 
 #[cfg(test)]
-#[path = "../../../test/smb/setup_finish.rs"]
+#[path = "../../../../tests/smb/setup_finish.rs"]
 pub(super) mod tests;
+
+#[cfg(test)]
+include!("../../../../tests/unit/attached/smb/connection/sessions/finish/items.rs");

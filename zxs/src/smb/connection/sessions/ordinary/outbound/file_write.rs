@@ -210,5 +210,5 @@ impl SyncReply<'_>{
 }
 
 #[cfg(test)]
-#[path="../../../../../test/smb/ambiguous_write.rs"]
+#[path="../../../../../../tests/smb/ambiguous_write.rs"]
 mod tests;

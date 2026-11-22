@@ -16,8 +16,6 @@ impl Invocation{
         if self.register!=p.lifecycle_register()||self.digest!=self.r.digest(p)?{return Err(invalid("different original SYSTEM registration or local custody request"));}
         Ok(())
     }
-    #[cfg(test)]
-    fn at(system:&Path,r:Request)->io::Result<Self>{let(p,_,_)=LocalPool::with_snapshot(system,Access::Read)?;Self::new(&p,r)}
 }
 fn decide_named(system:&Path,r:Request,ready:&PreparedIncoming<'_>,target:&Checked,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<Moved>{
     let m=&target.goal.frame;
@@ -45,10 +43,6 @@ fn decide_named(system:&Path,r:Request,ready:&PreparedIncoming<'_>,target:&Check
     hook(Cut::Decision)?;Ok(m.clone())
 }
 
-#[cfg(test)]
-pub(super) fn decide(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<Moved>{
-    decide_for(system,&Invocation::at(system,r)?,hook)
-}
 fn decide_for(system:&Path,call:&Invocation,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<Moved>{
     let r=call.r;
     if r.call==Call::Move{return Err(invalid("ordinary MOVE cannot use dedicated custody"));}
@@ -95,12 +89,6 @@ pub(super) fn installed(system:&Path,r:Request,expected:&Moved,hook:&mut impl Fn
     }Err(invalid("lifecycle target still pending independent installed readback"))
 }
 
-/// Complete this private pair only; an already published historical outcome
-/// is a receipt, not a request to reopen later media or spend a newer credit.
-#[cfg(test)]
-pub(super) fn perform(system:&Path,r:Request,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<super::command::MoveReceipt>{
-    perform_for(system,&Invocation::at(system,r)?,hook)
-}
 pub(super) fn perform_for(system:&Path,call:&Invocation,hook:&mut impl FnMut(Cut)->io::Result<()>)->io::Result<super::command::MoveReceipt>{
     use super::command::MoveStatus;
     let r=call.r;
@@ -116,3 +104,6 @@ pub(super) fn perform_for(system:&Path,call:&Invocation,hook:&mut impl FnMut(Cut
     if result.status!=MoveStatus::OriginalPublished{return Err(invalid("original lifecycle still pending"));}
     result.status=MoveStatus::CompleteCheckedNow;Ok(result)
 }
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/custody/lifecycle/items.rs");

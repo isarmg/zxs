@@ -269,5 +269,5 @@ struct Held<H> {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/backend_open.rs"]
+#[path = "../../../tests/smb/backend_open.rs"]
 mod tests;

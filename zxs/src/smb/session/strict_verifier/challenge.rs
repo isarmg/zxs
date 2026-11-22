@@ -236,5 +236,5 @@ fn wrapped(layer:ChallengeLayer,type2:&[u8])->Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[path = "../../../test/smb/challenge.rs"]
+#[path = "../../../../tests/smb/challenge.rs"]
 mod tests;

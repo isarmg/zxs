@@ -390,5 +390,5 @@ impl RetainedOpen{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/backend_retained_open.rs"]
+#[path="../../../tests/smb/backend_retained_open.rs"]
 mod tests;

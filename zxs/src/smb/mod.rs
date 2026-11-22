@@ -25,5 +25,5 @@ mod backend;
 pub(crate) use backend::{DirectoryBirthVote,FileBirthVote,FileRenameTarget,OrdinaryDirectoryRenameAdmission,OrdinaryMoveAdmission,OrdinaryRenameAdmission};
 
 #[cfg(test)]
-#[path = "../test/smb/mod.rs"]
+#[path = "../../tests/smb/mod.rs"]
 mod tests;

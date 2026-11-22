@@ -230,5 +230,5 @@ impl OpenTable {
 }
 
 #[cfg(test)]
-#[path="../../../../test/smb/open_ids.rs"]
+#[path="../../../../../tests/smb/open_ids.rs"]
 mod tests;

@@ -47,10 +47,11 @@ impl TreeTable {
         let at=self.live.iter().position(|(n,_)|n.get()==id).ok_or(Fault::SessionState)?;
         drop(self.live.swap_remove(at));Ok(())
     }
-    #[cfg(test)]
-    pub(in crate::smb::connection::sessions) fn count(&self)->usize {self.live.len()}
 }
 
 #[cfg(test)]
-#[path="../../../../test/smb/tree_table.rs"]
+#[path="../../../../../tests/smb/tree_table.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../../../tests/unit/attached/smb/connection/sessions/ordinary/trees/items.rs");

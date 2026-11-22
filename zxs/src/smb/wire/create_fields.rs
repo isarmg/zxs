@@ -231,5 +231,5 @@ impl<'a> Contexts<'a> {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/create_fields.rs"]
+#[path = "../../../tests/smb/create_fields.rs"]
 mod tests;

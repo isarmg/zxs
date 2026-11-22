@@ -21,8 +21,6 @@ fn vacant(s:&Journal,v:&HeldParent<'_,'_>,name:&str,file:crate::FileId)->io::Res
 pub(super) struct Destination<'s>{source:&'s Verified,system:PathBuf,system_origin:NativeObject,pub pool:PoolId,pub volume:VolumeId,
     pub root:NativeObject,pub mode:Method,pub(super) parents:Parents,choice:ParentChoice,held:HeldDir}
 impl<'s> Destination<'s>{
-    #[cfg(test)]
-    pub(super) fn select(system:&Path,src:&'s Verified,to:VolumeId)->io::Result<Self>{Self::select_at(system,src,to,ParentChoice::Roots)}
     pub(super) fn select_at(system:&Path,src:&'s Verified,to:VolumeId,choice:ParentChoice)->io::Result<Self>{
         let(p,_,s)=LocalPool::with_snapshot(system,Access::Incoming)?;
         if p.id()!=src.pool()||to==src.volume(){return Err(invalid("MOVE requires two distinct original ordinary volume registrations"));}
@@ -219,3 +217,6 @@ impl Prepared<'_>{
 #[cfg(test)]
 #[path="../../../tests/unit/custody_destination.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/custody/destination/items.rs");

@@ -313,5 +313,5 @@ pub(super) fn flush_held<H:CheckedWrite>(object:Object,grant:Grant,writer:&mut H
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/backend_io.rs"]
+#[path = "../../../tests/smb/backend_io.rs"]
 mod tests;

@@ -8,8 +8,6 @@ on:
       - .github/workflows/linux-rust-checks.yml
       - zxs/src/**
       - zxs/tests/**
-      - zxs/browser/**
-      - zxs/web/**
       - zxs/build*.rs
       - zxs/build_*.py
       - zxs/Cargo.*
@@ -91,7 +89,7 @@ jobs:
           python3 build_browser.py "$ZXS_RUST_BIN" --wasm-std "$input/rust-std.tar.xz"
           printf 'ZXS_WASM_STD=%s\n' "$input/rust-std.tar.xz" >> "$GITHUB_ENV"
           printf 'ZXS_BROWSER_ASSETS=%s\n' "$(pwd -P)/target/browser-assets" >> "$GITHUB_ENV"
-          printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=ad13130fe85ff547c2937d51d59c843b4b734cec128417ed82ac577d1b9f591e' >> "$GITHUB_ENV"
+          printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=b51aba4834ffb4b61ce207e9aa51a16df9b4e5e63e01d35a1c340dc263d56161' >> "$GITHUB_ENV"
 
       - name: Strict Clippy
         id: lint
@@ -111,6 +109,6 @@ jobs:
         if: ${{ !cancelled() && matrix.project == 'zxs' && (steps.lint.outcome == 'success' || steps.lint.outcome == 'failure') }}
         run: node tests/browser/console-host.mjs "$ZXS_BROWSER_ASSETS"
 
-      - name: Strict Clippy for the standalone wasm32 browser
+      - name: Strict Clippy for the wasm32 browser target
         if: ${{ !cancelled() && matrix.project == 'zxs' && steps.browser_stage.outcome == 'success' }}
         run: python3 tests/browser/strict_target.py "$ZXS_RUST_BIN" "$ZXS_WASM_STD"

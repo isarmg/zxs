@@ -55,5 +55,5 @@ impl<'raw> Received<'raw> {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/setup_origin.rs"]
+#[path = "../../../tests/smb/setup_origin.rs"]
 pub(in crate::smb::connection) mod tests;

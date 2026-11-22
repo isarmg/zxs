@@ -168,15 +168,11 @@ pub(in crate::ordinary) struct Moved{pub seq:u64,pub previous:[u8;32],pub reques
     pub original:Origin,pub allocation:[u8;32],pub stage:Option<u8>,pub target:Sites}
 const NATIVE:usize=16+1+fs::MAX_BIRTH;
 const COMMON_ORIGIN:usize=7*16+4+8+1+1+wire::MAX_HUMAN+2*NATIVE+2*32+1+2*32+8+32;
-#[cfg(test)]
-const ROOT_ORIGIN:usize=COMMON_ORIGIN+super::purpose::MAX_EXTRA;
 const CHILD_ANCHOR:usize=1+16+32+NATIVE;
 // Two physical child anchors for MOVE; DELETE has just one. RESTORE
 // carries a historical ordinary address, not another live directory proof.
 pub(super) const MAX_ORIGIN:usize=COMMON_ORIGIN+2*CHILD_ANCHOR;
 const _:()=assert!(super::purpose::MAX_EXTRA+33+CHILD_ANCHOR<=2*CHILD_ANCHOR);
-#[cfg(test)]
-const ROOT_FRAME:usize=wire::ENVELOPE_BYTES+ROOT_ORIGIN+32+1+(6*NATIVE+1);
 const MAX_CUSTODY_FRAME:usize=wire::ENVELOPE_BYTES+MAX_ORIGIN+32+1+(6*NATIVE+1);
 const _:()=assert!(MAX_CUSTODY_FRAME<=wire::MAX_FRAME);
 impl Moved{
@@ -230,3 +226,6 @@ impl Moved{
 #[cfg(test)]
 #[path="../../../tests/unit/recycle_codec.rs"]
 mod purpose_tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/custody/transfer/items.rs");

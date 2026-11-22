@@ -69,5 +69,5 @@ impl PreparedAttributeTag{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/backend_attribute_tag.rs"]
+#[path="../../../tests/smb/backend_attribute_tag.rs"]
 mod tests;

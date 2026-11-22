@@ -157,10 +157,6 @@ impl Reader<'_,'_,'_>{
     }
     pub(super) fn size(&self)->u64{self.original.view.map_or(0,|r|r.record.logical())}
     pub(super) fn revision(&self)->u64{self.original.view.map_or(0,|r|r.record.key().revision)}
-    #[cfg(test)]
-    pub(super) fn current_standard_eof(&self)->io::Result<u64>{
-        self.drive.with_site(|site|ReadAt{site,file:&self.original,previous_after_restore:false}.standard_eof())
-    }
     fn with_read<T>(&self,action:impl FnOnce(ReadAt<'_>)->io::Result<T>)->io::Result<T>{
         self.drive.with_site(|site|action(ReadAt{site,file:&self.original,previous_after_restore:true}))
     }
@@ -268,5 +264,8 @@ pub(super) fn delete_id(raw:&[u8])->io::Result<OperationId>{
 mod rust;
 pub(crate) use rust::{RustRetainedDirectory,RustRetainedFile,RustRetainedKind,RustRetainedPage,RustRetainedReadProof};
 #[cfg(test)]
-#[path="../test/smb/core_retained.rs"]
+#[path="../../tests/smb/core_retained.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../tests/unit/attached/system/retained_read/items.rs");

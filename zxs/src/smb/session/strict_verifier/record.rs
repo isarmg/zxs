@@ -82,5 +82,5 @@ pub(super) fn load_original(start:&Arc<InheritedRun>,actual:&QualifiedRustInstal
 }
 
 #[cfg(test)]
-#[path="../../../test/smb/credential_record.rs"]
+#[path="../../../../tests/smb/credential_record.rs"]
 mod tests;

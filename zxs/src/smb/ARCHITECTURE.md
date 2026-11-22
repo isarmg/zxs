@@ -30,11 +30,11 @@
 
 首字节前用 [TcpStream::local_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.local_addr) 和 [peer_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.peer_addr) 从独占的同一 socket 取得完整 `SocketAddr` 对，拒绝本地非 445、对端零端口、不同地址族或非具体单播地址。地址对只随原流进入同一个 origin，保留 IPv6 scope、端口和地址族，不从 UNC、转发信息或测试的输入地址取值。原已付额、验签的 TREE_CONNECT 只能短借查看这一对，不能单独提供本机和客户地址。地址形状正确不等于获准：正式入口仍须在读取前识别真正已批准的本地监听及**该监听自己的**客户前缀，且业务授权仍需同一 Core 安装与账号代。此处没有准入发行者、监听或密验文件读入。
 
-按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。三类 SESSION_SETUP 回复和后续原帧读取见下；业务持有者与通用派发仍未启用。源码夹具在 `src/test/smb/accepted.rs`，未运行或开 socket。
+按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。三类 SESSION_SETUP 回复和后续原帧读取见下；业务持有者与通用派发仍未启用。源码夹具在 `tests/smb/accepted.rs`，未运行或开 socket。
 
 ### SESSION_SETUP 不能手工确认发送
 
-机制选择 MORE、实际 Type 2 挑战 MORE 和最后经严格证明签出的成功回复，只能把原额度账绑定的完整 SMB 字节加上前缀，写入原连接独占的同一流。每次短写前及写完后检查原登记、阶段、期限与所需凭据代，不在网络写入时持注册或凭据锁。选择 MORE 并不证明账号，实际挑战要在原凭据代下才转为可用；最终成功仍在同一注册和原代原子发布后才是有效会话。部分写、完整最后一字节时已撤代、失败或流丢失均不补信用、不转阶段，终止原连接。仅测试保留人工拨动完成态的原单元夹具；`src/test/smb/setup_send.rs` 另以实际完整写口覆盖三种过程与失败。这不是生产账号来源、全部入站命令或可挂载服务。
+机制选择 MORE、实际 Type 2 挑战 MORE 和最后经严格证明签出的成功回复，只能把原额度账绑定的完整 SMB 字节加上前缀，写入原连接独占的同一流。每次短写前及写完后检查原登记、阶段、期限与所需凭据代，不在网络写入时持注册或凭据锁。选择 MORE 并不证明账号，实际挑战要在原凭据代下才转为可用；最终成功仍在同一注册和原代原子发布后才是有效会话。部分写、完整最后一字节时已撤代、失败或流丢失均不补信用、不转阶段，终止原连接。仅测试保留人工拨动完成态的原单元夹具；`tests/smb/setup_send.rs` 另以实际完整写口覆盖三种过程与失败。这不是生产账号来源、全部入站命令或可挂载服务。
 
 ### 原流入站到真实握手与 ECHO
 
@@ -42,7 +42,7 @@
 
 在单条新建／续接认证时，原 MID 先消费，选择 MORE、真实挑战 MORE 或最终签名成功依原阶段返回。已认证普通 ECHO 仍须原整帧强签。依[会话查找](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/e545352b-9f2b-4c5e-9350-db46e4f6755e)、[GSS 失败](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)及[出错应答](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/41295064-be3f-41dc-9aa5-f68545f945f0)，仅对上述无签、无既有认证权的独立尝试，实际返回原 SID/MID、原额度及明确失败：找不到原登记、严格证明不通过、无可用凭据及坏 token 等分别处理；错误报文既不发权也不收回同连接另一有效会话。部分或去向不明的写绝不再补第二份回复。带签重认证、binding、旧 SID 接管、含 SETUP 的复合以及未接业务都不退回这个无签错误路径。普通业务只交原短借的受检对象，不给可重新喂包的连接；遗弃欠账要关原流，不会假装已响应。
 
-`src/test/smb/accepted_turn.rs` 只含公开合成验证材料：三种握手走同一双工流、以实际协商盐和往返算终签、再核一个真实强签 ECHO；另区分首字节前空闲与半包超时、错连接 SID、错误证明和可继续的新尝试。无生产发行者、监听、文件权或实机结论，未运行。
+`tests/smb/accepted_turn.rs` 只含公开合成验证材料：三种握手走同一双工流、以实际协商盐和往返算终签、再核一个真实强签 ECHO；另区分首字节前空闲与半包超时、错连接 SID、错误证明和可继续的新尝试。无生产发行者、监听、文件权或实机结论，未运行。
 
 
 ## 内置 SMB 的受托接收端
@@ -65,10 +65,10 @@
 - [服务端窗口](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dec8e905-9477-4c3f-bc64-b18d97c9f905)和[序号验证](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/0326f784-0baf-45fd-9687-626859ef5a9b)：额度对应已实际发出的、单调新发的编号。可乱序接收，不能重用、跨空洞，或在 u64 末端回绕。每成员从自身 MessageId 消耗至少一格，正多额度需整个连续区间仍可用；关联成员不继承 MessageId。整批只能在同一**事前已发**窗口上扣减；任何范围无效即关本连接，不逐项执行后再发现越界。本地最多 64 格跨度，且可用额度加未完成普通请求不超过 64；不能靠不断填高编号扩张内存。这是额度记录，不替代原连接的 RequestList、会话签名或业务权。同步票已把不可换包的原字节与该项账务合在一起。将来的 RequestList 仍须按 §3.3.5.2 给每个非 CANCEL 成员登记原请求，并与后续验签、派发和在途取消绑定；不能拿账务结果另配 SESSION_SETUP 或业务帧。 本端只公布可兑现的 MaxWriteSize，不超过约束整个入站 SMB 消息的 MaxTransactSize；这是本地入站边界的约定，不要求三种协议上限相等。MaxReadSize 的数据方向相反。
 - [载荷校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/fba3123b-f566-4d8f-9715-0f529e856d25)独立于序号：零计费不表示零消费，最多覆盖 64 KiB；正计费按每格 65,536 字节。READ、WRITE、QUERY_DIRECTORY、CHANGE_NOTIFY、QUERY_INFO、SET_INFO、IOCTL 用原始声明值。查询信息按入／出最大值，IOCTL 两边分别在 u64 相加后再比较。错误或截断不能变成少计费的成功。已花合法编号但载荷不足是成员参数错误，不归还旧编号、不伪称已操作文件；前序认证、树／原 OPEN 失败仍按对应命令的规范顺序处理。
 - 唯一有固定否定答复的 IOCTL 是[查询网络接口](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/21176e9a-ec3e-4d54-adde-bed5c13f64b8)。只认原强签独立消息、无实际输入；兼收零长度尾和 [Linux v6.12 的单个零尾字节](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L3109-L3156)。本服务不公布多通道，真正同一原树、两半全一的无柄标识及额度/事务上限核验后，只回强签的 `STATUS_NOT_SUPPORTED`。同一控制码的非 FSCTL 标志、错误 FileId、额度/上限和缺原树按本项协议错误拒绝，不解释成 OPEN，不转发通用 IOCTL，没有任何数据或接口。发送前后仍核实际树答复的原站点和会话，同原流完整写出后才公布额度。此项不是 Linux 登录/挂载验收。
-- [CANCEL](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/57bae3d3-5dd7-4a5f-92cb-fc52e2087dad)在账务层只豁免序号消费：同步／异步形式不占新格、不产生本命令应答、不赠额度。真实候选的独立收包入口要求[四字节请求体](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/91913fc6-4ec9-4a83-961b-370070067e63)、原同连接已验证的会话和原字节 CMAC。保留字段不用于决策但仍在签名内。只有当前同步所有者确实没有任何未应答普通项时，才可无目标原样继续；不进入业务、不开异步、不以 MID/AsyncId 单独取消。缺签、错签、不同原连接／过期会话或复合形状仍在该入口拒绝，不生成拒绝应答，也不处理复合前件。`src/test/smb/accepted_turn.rs` 写有同原流后续强签 ECHO、窗口未变、坏包及仍有原未应答票的源码夹具，未运行。
+- [CANCEL](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/57bae3d3-5dd7-4a5f-92cb-fc52e2087dad)在账务层只豁免序号消费：同步／异步形式不占新格、不产生本命令应答、不赠额度。真实候选的独立收包入口要求[四字节请求体](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/91913fc6-4ec9-4a83-961b-370070067e63)、原同连接已验证的会话和原字节 CMAC。保留字段不用于决策但仍在签名内。只有当前同步所有者确实没有任何未应答普通项时，才可无目标原样继续；不进入业务、不开异步、不以 MID/AsyncId 单独取消。缺签、错签、不同原连接／过期会话或复合形状仍在该入口拒绝，不生成拒绝应答，也不处理复合前件。`tests/smb/accepted_turn.rs` 写有同原流后续强签 ECHO、窗口未变、坏包及仍有原未应答票的源码夹具，未运行。
 - [授额](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/2e366edb-b006-47e7-aa94-ef6f71043ced)与[同步复合回复](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf)按成员对账。候选额度尚不可花；服务端先对最终不可变回复整链核同一次批次的原 MID／command／CreditResponse，待原传输确认成功提交才一次公布。跨连接的批次、重复公布、丢失普通应答、传输结果不明、编号耗尽都不能恢复旧额度。当没有剩余额度时，服务器须补至少一格或关闭耗尽的连接，不能留下无法继续的伪活动连接。此出口不允许异步 interim/final 冒充同步回复；未来异步只允许在 interim 发一次额度。该模块只核信用，不把正确签名、可用状态或授权视作已成立。
 
-`src/test/smb/credits.rs` 保留初包、乱序、多额度、关联／非关联、CANCEL、原载荷边界、同步回包对账和整数末端的源级例子。未运行客户端或测试，也未对生产端口发包。
+`tests/smb/credits.rs` 保留初包、乱序、多额度、关联／非关联、CANCEL、原载荷边界、同步回包对账和整数末端的源级例子。未运行客户端或测试，也未对生产端口发包。
 
 ## 原生 NEGOTIATE 成功应答（不含认证成功）
 
@@ -78,7 +78,7 @@
 
 [服务器初始化](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/04e0383e-e2b4-49c2-803f-1313d9c0b2ff)要求新生成 ServerGuid；[Windows 的启动行为 <26>](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a64e55aa-1152-48e4-8206-edd96444e7f7)也是每次启动换一个。它对同一运行实例的所有连接稳定，按 [MS-DTYP 的 GUID 字节序](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp/001eec5a-7f8b-4293-9e21-ca349392db40)写入，不是永久安装 ID、池 ID 或客户端身份。不透明 `RunningServerGuid` 由同一真实受托启动建立，不是持久配置或 per-connection 自动生成。绝不能用测试 GUID 启动服务或复用旧权限。
 
-选择标准允许的**空 GSS 安全缓冲区**（起点 128，长度零），由客户端发起认证；不编造 Kerberos、NTLM 或 GSS 服务器广告，不从空缓冲区放行匿名。原生源码方面，[Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L1237-L1268)在空缓冲区启用 raw NTLMSSP 选择，[Apple SMBClient](https://github.com/apple-oss-distributions/SMBClient/blob/99da2d9a4bbe17cde3cee382ad3edc16e25f5535/kernel/netsmb/smb_smb_2.c#L6891-L6951)可继续解析协商 context；均不能代替后续严格 MIC 或三端挂载验收。 `src/test/smb/negotiate_reply.rs` 保留默认／显式两套完整应答及下一条原请求哈希固定值、无共同签名、未知能力、时钟边界和本地失败源码例；没有运行构建、测试或客户端。
+选择标准允许的**空 GSS 安全缓冲区**（起点 128，长度零），由客户端发起认证；不编造 Kerberos、NTLM 或 GSS 服务器广告，不从空缓冲区放行匿名。原生源码方面，[Linux v6.12](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L1237-L1268)在空缓冲区启用 raw NTLMSSP 选择，[Apple SMBClient](https://github.com/apple-oss-distributions/SMBClient/blob/99da2d9a4bbe17cde3cee382ad3edc16e25f5535/kernel/netsmb/smb_smb_2.c#L6891-L6951)可继续解析协商 context；均不能代替后续严格 MIC 或三端挂载验收。 `tests/smb/negotiate_reply.rs` 保留默认／显式两套完整应答及下一条原请求哈希固定值、无共同签名、未知能力、时钟边界和本地失败源码例；没有运行构建、测试或客户端。
 
 ## SHA-512 原字节记录（已用于严格认证，未接生产监听）
 
@@ -135,7 +135,7 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 按 [MS-NLMP 用户名规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/f9e6fbc4-a953-4f24-b229-ccdcc213b9ec)，登录名比较只接受本地唯一已规范的 ASCII 账户，ASCII 字母大小写等价。原 Type 3 字节仍完整参与 MIC；不重新派生 ResponseKeyNT、不试另一个域或空域，同域、SPN、NTLM 内层 MIC、应有的名单 MIC 及 SMB 强签规则保持不变。这是认证账户名，不改变 ZXS 文件／目录的大小写语义。
 
-`src/test/smb/strict_verifier.rs` 只存公开合成的完整原消息和固定答案。固定材料不对应实际账户，包含有／无 KEY_EXCH 的导出键、双方向名单 MIC，以及 v2 证明虽正确但无内层 MIC、不同但仍有效的头时间、双向边界、错 SPN、被换的原 AV7 或头/证明/MIC 等正反例；另列[微软规范公开的 SessionBaseKey 答案](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/54973495-20d2-49e8-9925-c399a403ed4a)作交叉基准，不给生产补造凭据、连接或权限。仅静审源码，未构建、运行测试或实际认证。
+`tests/smb/strict_verifier.rs` 只存公开合成的完整原消息和固定答案。固定材料不对应实际账户，包含有／无 KEY_EXCH 的导出键、双方向名单 MIC，以及 v2 证明虽正确但无内层 MIC、不同但仍有效的头时间、双向边界、错 SPN、被换的原 AV7 或头/证明/MIC 等正反例；另列[微软规范公开的 SessionBaseKey 答案](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/54973495-20d2-49e8-9925-c399a403ed4a)作交叉基准，不给生产补造凭据、连接或权限。仅静审源码，未构建、运行测试或实际认证。
 
 ### 末次回复的密钥、签名与原连接发布
 
@@ -149,19 +149,19 @@ Apple 公开的[挂载认证选择](https://github.com/apple-oss-distributions/S
 
 [协商](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)没有 Signing Capabilities context 时仍强制 CMAC；显式 CMAC 或合法非空但无共同算法时应答须回且只回 CMAC。计数为零、被截断或串错请求/回复不能作“无签名”处理。最终回复的签名函数只接收与最终请求同 MessageId、同已分配 SessionId 的实际未签成功响应；拒绝 guest/null/encrypt 标记。它给该响应签名，不把成功响应再加入 KDF。普通明文请求只有签名位和全部 16 字节 [AES-CMAC 校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5b570c0b-0854-4324-8fb5-d410692dde3e)均成立才通过签名检查。每段用原 SMB 消息和自己的尾填充，只有 Signature 16 字节置零；关联链继承的实际 SessionId 只用来选键，不改变验签字节。不相关链可涉及多个有效会话。入站先从已实际发出的窗口扣原整帧额度，随后整批签完才给出一次一个的会话成员短借；没有这里发出的成功应答或文件授权。普通回复头的生成/签名、CANCEL 和加密 transform 不由此入站函数处理。
 
-`src/test/smb/signing.rs` 保留两种协商下首个 TREE_CONNECT 的独立固定值、无签/错签拒绝，以及同链/异会话 compound 的原字节向量。测试只使用公开合成值，没有执行，不是实际登录或互通。未来若验原生客户端互通，仍须分开“无缓存端点的首次访问”和“同一身份重连”；记录 Windows 冷访问有无 multi-protocol opener，旧服务缓存的热路径不是首连通过。不增加 SMB1 文件操作或降级。
+`tests/smb/signing.rs` 保留两种协商下首个 TREE_CONNECT 的独立固定值、无签/错签拒绝，以及同链/异会话 compound 的原字节向量。测试只使用公开合成值，没有执行，不是实际登录或互通。未来若验原生客户端互通，仍须分开“无缓存端点的首次访问”和“同一身份重连”；记录 Windows 冷访问有无 multi-protocol opener，旧服务缓存的热路径不是首连通过。不增加 SMB1 文件操作或降级。
 
 ### 原连接认证成员：先验整批，再逐条短借
 
 `connection/sessions/ordinary` 只消费同一原连接的 `Received`。对原帧中所有受支持的普通成员，按[签名检查](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/85df1680-2ee7-4d25-a916-a982371ddc75)与[会话检查](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b495e2da-8711-4772-b292-453be0394b49)找该连接已经真实发布的 Valid 项；同一批只认同一受保护凭据代，先核每段原始签名，末段不通过也不给前段票。无 Signing Capabilities 与明确选 CMAC 的两种情况都不准首个普通命令缺签。只完成 MORE、别的连接知道 SID、报文写了有效 TreeId 都不是授权。[TREE_CONNECT 的专门规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/652e0c14-5014-4470-999d-b174d7b2da87)优先于通用签名拒绝：在这个仅明文 3.1.1、非匿名/非 guest 实现上，缺签名且确属本连接已发布会话的 TREE_CONNECT 须断开本连接，不能回普通拒绝继续使用。关联成员按已核前件的会话归属，不采信其报文内另一个 SID；未知或别连接的标识不撤销他方登记。已发布的项不再强持 NTLM 密验材料，保有的是该会话自身密钥及可失效的原代弱标记。
 
-整批通过后仅能按顺序短借同一原消息和原会话，并在发给业务前逐项重核原登记、连接和凭据代。接线方在实际使用／提交时仍须终验，不能长期保存布尔结果；不把全局或凭据锁带入网络／存储。合法消费编号但载荷计费不足的成员没有业务票，保留成员级参数错误；后续不相关成员仍独立，相关链保留前件失败而不虚构 Tree／Open 或统一错误码。[相关链执行](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1)必须用紧邻命令的真实处理结果；验签使用的继承 SID 不发共享权限、Root/FILE 权限或 MaximalAccess。此通用门本身不答复、不执行文件操作或 CANCEL；下面只有真正已签 ECHO 已接同步出口。遗弃未结的应答账会关闭原连接。`src/test/smb/ordinary.rs` 的公开合成源例从同一次协商、挑战和签名末包进入此门，没有执行测试或实机。
+整批通过后仅能按顺序短借同一原消息和原会话，并在发给业务前逐项重核原登记、连接和凭据代。接线方在实际使用／提交时仍须终验，不能长期保存布尔结果；不把全局或凭据锁带入网络／存储。合法消费编号但载荷计费不足的成员没有业务票，保留成员级参数错误；后续不相关成员仍独立，相关链保留前件失败而不虚构 Tree／Open 或统一错误码。[相关链执行](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1)必须用紧邻命令的真实处理结果；验签使用的继承 SID 不发共享权限、Root/FILE 权限或 MaximalAccess。此通用门本身不答复、不执行文件操作或 CANCEL；下面只有真正已签 ECHO 已接同步出口。遗弃未结的应答账会关闭原连接。`tests/smb/ordinary.rs` 的公开合成源例从同一次协商、挑战和签名末包进入此门，没有执行测试或实机。
 
 ### 第一条同步普通应答：已认证 ECHO
 
 只给尚未消费、整批均为已认证 ECHO 的原 `CheckedBatch`。每个实际短借按[处理规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/fa23e613-2768-49e5-aa68-97c4bba72379)核所在连接及原会话，[请求](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d939504d-57e2-4c0e-8ad5-1678b6fccca1)的 Reserved 不当成拒绝条件；合法返回[4 字节成功体](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/2abe9b3c-c5ab-417f-bcc3-9ab51f2fce35)，尺寸不符返回固定参数错误。没有传入任意 NTSTATUS／裸正文的成功捷径。相关链只延用上一个实际 ECHO 已核的会话，不授 Tree/Open；不相关的两项可以各自用不同真实会话。无会话、无签 ECHO 的连接级路径不在本片，不能据此判断三端可挂载。
 
-按[成功头](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d39a64be-b8f8-424d-b8e5-a2cf5257459e)、[同步复合](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf)与[出站签名](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a3e9ea1e-53c8-4cff-94bd-d98fb20417c0)逐项保留原 MID／优先级／Reserved／charge，填真实授额、有效 SID 和零树标识，每个成员用各自通道 CMAC 覆盖整个应答段，包含中间和末段零填充。只保留一份带 Direct TCP 前缀的不可变记录：原连接私有写端限时完整写入，部分写继续、被中断重试，错误／零写／撤代／去向不明均关闭原连接；仅整条写入本地 TCP 发送端且复核原登记后结清额度，不等同对端已经收到。无外部可注入的生产 writer，也没有 `submitted=true` 替代。下述受托入口从 NEGOTIATE 前持有原收发流；没有生产 accept/监听或账号来源。`src/test/smb/echo.rs` 保存默认／显式 CMAC、错误、相关尾填充、两会话及短写失败的合成固定答案，未运行。
+按[成功头](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/d39a64be-b8f8-424d-b8e5-a2cf5257459e)、[同步复合](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf)与[出站签名](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a3e9ea1e-53c8-4cff-94bd-d98fb20417c0)逐项保留原 MID／优先级／Reserved／charge，填真实授额、有效 SID 和零树标识，每个成员用各自通道 CMAC 覆盖整个应答段，包含中间和末段零填充。只保留一份带 Direct TCP 前缀的不可变记录：原连接私有写端限时完整写入，部分写继续、被中断重试，错误／零写／撤代／去向不明均关闭原连接；仅整条写入本地 TCP 发送端且复核原登记后结清额度，不等同对端已经收到。无外部可注入的生产 writer，也没有 `submitted=true` 替代。下述受托入口从 NEGOTIATE 前持有原收发流；没有生产 accept/监听或账号来源。`tests/smb/echo.rs` 保存默认／显式 CMAC、错误、相关尾填充、两会话及短写失败的合成固定答案，未运行。
 
 原同步发送只有原连接内部可获得 `FullyWrittenSync`：它随原签名整帧、原请求账和原流一起，经末字节后的原会话复核才成立；本地写完不是账户/对象权限，也不是已发额度。最后复核才结该帧账，若原代失效或丢掉该票，关闭原流、无新额度；没有一般的“已发送”布尔值或外部发布回调。ECHO、已批准的 TCON、只读根及普通 FILE 的读写／关闭都用该原流出口，业务状态的公布仍由各命令独立复核。
 
@@ -262,7 +262,7 @@ Apple 定版 [首次枚举的 CREATE/QUERY_DIRECTORY](https://github.com/apple-o
 
 Finder 的卷属性相关形状是：已付三段且原 padding 全部验签的空名 CREATE → `QUERY_INFO(FileFsAttributeInformation)` → CLOSE。按 [MS-SMB2 相关继承](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1) 只用第一段原会话／树和真实生成的同一 OPEN，不从后两段字面 ID 另找；CREATE 明确失败、没有真实 OPEN 时，依赖段回 `STATUS_INVALID_HANDLE`。一份真实 Root 共享票和保留的两半号只供帧内使用，最后必须由显式 CLOSE 实际消费，号退休、不公布外部句柄。未获付额、坏 MAC、其他命令组合及过短属性固定区不从这条相关成功链接线。原 CLOSE 和属性投影只留下同一受保护会话及树范围的终验收据；仍按 [复合回应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/dde8b59f-52ca-4cf8-8253-211bc43639cf) 填真实 NextCommand 和原序，每段（含末段）补零至 8 字节对齐，再对含填充的各段强签一次，原 TCP 完整写完且重核原树和投影才结额度。失败不复活 OPEN 或用别的树补成功。没有运行 Finder、没有验证挂载，不支持一般复合。
 
-单条已签 [TREE_DISCONNECT](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/bf494f8d-3ee2-44ce-940d-f3400daef2ae) 只移除原树与该树的 OPEN，不退同会话其他树。[LOGOFF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a6fbc502-75a5-42ef-a88c-c67b44817850) 先从连接和运行登记退原会话、丢原 OPEN 和树；留不可调度的终结票给这条已经签好的四字节应答，凭据变更、短写失败或去向不明时关原流，不能复活会话或补额度。退场不调用显式文件 CLOSE 的业务写回、FLUSH 或删除分支。`src/test/smb/root_io.rs` 的公开合成源例包括已签退出、错误及不撤邻近会话，不模拟成功 Core 资格，未运行。
+单条已签 [TREE_DISCONNECT](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/bf494f8d-3ee2-44ce-940d-f3400daef2ae) 只移除原树与该树的 OPEN，不退同会话其他树。[LOGOFF](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/a6fbc502-75a5-42ef-a88c-c67b44817850) 先从连接和运行登记退原会话、丢原 OPEN 和树；留不可调度的终结票给这条已经签好的四字节应答，凭据变更、短写失败或去向不明时关原流，不能复活会话或补额度。退场不调用显式文件 CLOSE 的业务写回、FLUSH 或删除分支。`tests/smb/root_io.rs` 的公开合成源例包括已签退出、错误及不撤邻近会话，不模拟成功 Core 资格，未运行。
 
 - 真实连接先预验完整复合请求的原字节签名及当前会话，再逐成员借出有当前主体与代次的票据。这个票据不从 UUID、裸 SID、SQL 布尔或单个签名器构造。成员、后端 Held 和应答体各自不是上线权限。由原会话和树核权限，查找及失败优先级逐命令遵循规范：READ 是 Session→Tree→OPEN，CLOSE 的标准顺序为 Session→会话内 OPEN→Tree。CLOSE 查到 OPEN 仍不能绕过核对它的原树；不能把撤权、树关闭、失效 OPEN 混成 EOF。关联成员只用本链**紧邻前项**实际已确认且仍可用的 Session／Tree／OPEN；前件没有或未取得相应范围时按 [关联请求规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/46dd4182-62d3-4e30-9fe5-e2ec124edca1) 失败，不能补猜独立 ID。只接独立根与普通 FILE 操作和上面的窄根卷探测；不接一般复合业务链。
 - 每个原会话拥有唯一 OPEN 表，条目只持有其准确原树作用域下经 `Pending::bind` 核过的 Held。先限资源、取得实物和最终原权，再发服务器自己的两半 ID 并公开；Volatile 在会话范围唯一，即使表按树分区，查出后同时核 Persistent、原树与代次；同一会话代内不得把已退休的 ID 对重新发给另一个 OPEN，旧会话不能经同名目录重找。表不取代跨会话 ShareAccess 表或 Core 单写权。Core 原树须在其借用的实际文件／目录句柄之外存活，持有本地树再建立表，销毁时逆序；不靠不安全的自引用或新的业务存储。
@@ -298,6 +298,6 @@ Finder 的卷属性相关形状是：已付三段且原 padding 全部验签的�
 - **Linux 内核客户端：**用已知共享；[v6.12 源码](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/smb2pdu.c#L5358-L5394)已给出带 `*` 的目录请求和实际信息类，是普通列目录依据而非兼容证明。上述 raw NTLMSSP 的内层 MIC 缺失仍单独挡在登录前，不因普通命令支持、签名或时间字段改变而通过。
 - **Linux 桌面用户态候选：** [GNOME Files](https://help.gnome.org/gnome-help/nautilus-connect.html) 使用同一已知共享；Debian 13 的 [GVfs 后端](https://packages.debian.org/trixie/gvfs-backends) 依赖 `libsmbclient`，其[定版客户端源码](https://github.com/samba-team/samba/blob/2750ed68433690b5f72c54ae54226e89ee1b9d74/auth/ntlmssp/ntlmssp_client.c#L769-L809)有 NTLM 内层 MIC，和 stock 内核路径不同。只属待验证的用户态浏览／编辑入口，不是 `mount.cifs`／POSIX 挂载验证，只是外部客户端对照，不是 ZXS 构建或运行依赖，也不放宽认证。
 - 如另验上述入口，用对应的实际客户端操作：正确账户可登录、错误凭据和匿名被拒；列根和多页目录，在一块盘离线时仍能读另一块在线可见盘，普通／回收两类对象按授权读取；在可写普通盘创建、偏移写、flush、重开读回，精确大小写和并发单写；当回收、改名或应用级保存声称可用时，另验实际动作和中断。单纯 TCP 成功、NEGOTIATE 或别的客户端读写不能代替这些入口的实际结果。业务上强制 NTLM 禁用/Kerberos-only 的部署不属于本地 NTLMv2 配置，不能静默退回匿名。
-- 所有 Rust SMB 测试源码放 `zxs/src/test/smb/`，从产品私有作用域用 `cfg(test)` 接入。不为测试公开认证/文件能力。区分静审、密码向量、三系统互通与真实存储故障，分别记录，不混称通过。
+- 所有 Rust SMB 测试源码放 `zxs/tests/smb/`，从产品私有作用域用 `cfg(test)` 接入。不为测试公开认证/文件能力。区分静审、密码向量、三系统互通与真实存储故障，分别记录，不混称通过。
 
 原始规范：[Direct TCP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)、[协商](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/b39f253e-4963-40df-8dff-2f9040ebbeb1)、[复合包](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/fa6687f5-99d4-4c9b-ba2e-a770310225e0)、[GSS 会话处理](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5ed93f06-a1d2-4837-8954-fa8b833c2654)、[MS-SPNG](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-spng/f377a379-c24f-4a0f-a3eb-0d835389e28a)、[NTLM 服务器校验](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/34a9417d-7cc0-43b0-b61c-1f19740df66f)、[文件信息类](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/4718fc40-e539-4014-8e33-b675af74e3e1)。

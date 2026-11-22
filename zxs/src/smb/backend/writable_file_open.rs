@@ -310,5 +310,5 @@ impl WritableFileOpen{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/backend_writable_file.rs"]
+#[path="../../../tests/smb/backend_writable_file.rs"]
 mod tests;

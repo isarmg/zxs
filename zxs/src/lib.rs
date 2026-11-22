@@ -5,31 +5,55 @@
     feature(riscv_ext_intrinsics)
 )]
 
+#[cfg(any(test, target_arch = "wasm32"))]
+mod browser;
+
+#[cfg(target_os = "linux")]
 mod smb;
+#[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use smb::{start_original_zxs,try_supervised_zxs_role};
+#[cfg(target_os = "linux")]
 mod fs;
+#[cfg(target_os = "linux")]
 mod hash;
+#[cfg(target_os = "linux")]
 mod password;
+#[cfg(target_os = "linux")]
 mod display;
+#[cfg(target_os = "linux")]
 mod net;
+#[cfg(target_os = "linux")]
 mod system;
+#[cfg(target_os = "linux")]
 mod management;
+#[cfg(target_os = "linux")]
 mod identity;
+#[cfg(target_os = "linux")]
 mod pool;
+#[cfg(target_os = "linux")]
 mod ordinary;
+#[cfg(target_os = "linux")]
 pub use ordinary::{PublishedVersion,DirectoryParent,DirectoryEntry,DirectoryInfo,DirectoryListing,make_directory,list_directory,apply_recycle,recycle_receipt,list_retained,DeletionKey,DeletionTime,RestoreTarget,RecycleAction,RecycleKind,RecycleReceipt,RecycleCursor,RecycleFilter,RecyclePage,RetainedEntry,move_file,move_file_at,move_receipt,move_receipt_at,MoveReceipt,MoveStatus,commit_working,formal_receipt,FormalStorage,LengthPolicy,SpanEdit,SpanReceipt,SpanObservation,save_interval,interval_receipt,read_current_range_to,FormalNode,FormalObservation,commit_first,first_commit_receipt,read_node_to,read_node_range_to,CurrentFile,DraftClaim,DraftReceipt,FirstSaveObservation,DRAFT_CHUNK,save_first,first_save_receipt,read_current_to,current_info,FileInfo,RootFiles,CreationStatus,CreationReceipt,create_empty_at,create_empty,creation_receipt,read_initial_file,list_initial_files,lookup_file_at,lookup_file};
+#[cfg(target_os = "linux")]
 pub use identity::{DirectoryId,BranchId,NodeId,VersionId,VersionStorageId,EntryId, FileId, HistoryId, OperationId, PoolId, VolumeId};
+#[cfg(target_os = "linux")]
 pub use pool::{initialize, inspect, PoolInfo, RegisteredVolume};
+#[cfg(target_os = "linux")]
 pub use fs::Entity;
+#[cfg(target_os = "linux")]
 use fs::{HeldDir, invalid};
+#[cfg(target_os = "linux")]
 use std::{collections::BTreeSet, io, path::{Path, PathBuf}};
 
+#[cfg(target_os = "linux")]
 pub const MAX_FILE_ROOTS: usize = 62;
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role { System, File, Recycle }
 
+#[cfg(target_os = "linux")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedVolume {
     pub role: Role,
@@ -37,8 +61,10 @@ pub struct ObservedVolume {
     pub entity: Entity,
 }
 
+#[cfg(target_os = "linux")]
 struct Selection { roots: Vec<(Role,HeldDir)> }
 
+#[cfg(target_os = "linux")]
 impl Selection {
     fn open(system: &Path, recycle: &Path, files: &[PathBuf]) -> io::Result<Self> {
         Self::with_system(HeldDir::open(system)?,recycle,files)
@@ -69,6 +95,7 @@ impl Selection {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub fn inspect_fresh(system: &Path, recycle: &Path, files: &[PathBuf]) -> io::Result<Vec<ObservedVolume>> {
     let selection = Selection::open(system,recycle,files)?;
     // flock acts on live directory FDs without creating sidecars. Nonblocking
@@ -79,10 +106,12 @@ pub fn inspect_fresh(system: &Path, recycle: &Path, files: &[PathBuf]) -> io::Re
     Ok(selection.view())
 }
 
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 #[path = "../tests/unit/fresh.rs"]
 mod fresh_tests;
 
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 #[path="../tests/unit/support.rs"]
 mod test_support;

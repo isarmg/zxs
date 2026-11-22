@@ -68,10 +68,6 @@ impl HeldBytes{
         if !parent.shares_file_mount(&p)?{return Err(invalid("portable original name is on a different mount"));}
         self.require_object(&p)?;self.unchanged()
     }
-    #[cfg(test)]
-    pub(crate) fn separate_format_fixture(file:File)->io::Result<Self>{
-        Ok(Self{original:LiveStamp::read(&file)?,file,extent:Extent::Whole})
-    }
 }
 
 /// One exact-spelling sample per direct FILE parent, not a scan per material.
@@ -180,3 +176,6 @@ impl<'a> WitnessRead<'a>{
         Ok(HeldBytes{file:held,original:expected,extent:Extent::Whole})
     }
 }
+
+#[cfg(test)]
+include!("../../tests/unit/attached/fs/witnessed/items.rs");

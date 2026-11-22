@@ -15,10 +15,6 @@ fn remaining(end:Instant)->Result<Duration> {
     if left.is_zero() {Err(Fault::Transport)} else {Ok(left)}
 }
 
-#[cfg(test)]
-pub(super) trait FixtureIo:Read+Write+Send+Sync {}
-#[cfg(test)]
-impl<T:Read+Write+Send+Sync> FixtureIo for T {}
 /// The only persistent strong reference stays in the DirectStream owner.
 /// A parked move may only borrow a transient poll observation via Weak.
 pub(super) struct OwnedTcp(Arc<TcpStream>);
@@ -140,3 +136,6 @@ impl DirectStream {
         remaining(end).map(|_|())
     }
 }
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/smb/connection/transport/items.rs");

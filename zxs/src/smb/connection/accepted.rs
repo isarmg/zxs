@@ -103,11 +103,6 @@ impl Peer {
         Ok(Self{connection,first_login_by:Some(first_login_by),original_move:None,move_backlog:None,
             ordinary_moves:false})
     }
-    #[cfg(test)]
-    fn open_fixture(server:&RunningServerGuid,stream:DirectStream)->Result<Self> {
-        if !matches!(&stream,DirectStream::Fixture(_)) {return Err(Fault::Transport);}
-        Self::open(server,Incoming{stream,endpoints:None})
-    }
 }
 enum Completion { Written(Incoming), #[cfg(test)] WithoutSocket }
 impl OpeningSend {
@@ -124,14 +119,11 @@ impl OpeningSend {
             window:Window{low:1,next:1+u64::from(self.grant),bits:ones(self.grant)}};
         seat.promote(&conn)?;Ok(conn)
     }
-    /// Existing pure wire/state fixtures never open sockets. No production
-    /// method can manually acknowledge a NEGOTIATE without doing the I/O.
-    #[cfg(test)]
-    pub(in crate::smb) fn submitted(self)->Result<Connection> {
-        let seat=AcceptSeat::reserve(&self.run)?;self.after_write(Completion::WithoutSocket,seat)
-    }
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/accepted.rs"]
+#[path = "../../../tests/smb/accepted.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/smb/connection/accepted/items.rs");

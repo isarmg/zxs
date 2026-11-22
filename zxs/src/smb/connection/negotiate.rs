@@ -6,7 +6,6 @@ use crate::smb::wire::{Error,negotiate_reply};
 pub(in crate::smb) use super::sessions::RunningServerGuid;
 use crate::smb::local::{filetime_delta,random};
 use std::time::{SystemTime,UNIX_EPOCH};
-#[cfg(test)] use std::time::Duration;
 
 impl Opening {
     /// No externally supplied clock, random bytes, grant or algorithm switch.
@@ -26,5 +25,8 @@ impl Opening {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/negotiate_reply.rs"]
+#[path = "../../../tests/smb/negotiate_reply.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/smb/connection/negotiate/items.rs");

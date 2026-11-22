@@ -122,5 +122,5 @@ unsafe fn enter()->Result<()>{
 fn complete(lane:JoinHandle<Result<()>>)->Result<()>{lane.join().map_err(|_|Fault::Handoff)?}
 
 #[cfg(test)]
-#[path="../../test/smb/launch_role.rs"]
+#[path="../../../tests/smb/launch_role.rs"]
 mod tests;

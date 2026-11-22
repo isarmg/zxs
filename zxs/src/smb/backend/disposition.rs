@@ -238,5 +238,5 @@ impl<H> Held<H>{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/backend_disposition.rs"]
+#[path="../../../tests/smb/backend_disposition.rs"]
 mod tests;

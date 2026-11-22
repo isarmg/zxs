@@ -154,5 +154,5 @@ fn decode_unc(raw: &[u8]) -> Result<String, Error> {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/backend_tree_connect.rs"]
+#[path = "../../../tests/smb/backend_tree_connect.rs"]
 mod tests;

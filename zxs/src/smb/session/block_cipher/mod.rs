@@ -240,5 +240,5 @@ impl Drop for Aes128 {
 impl zeroize::ZeroizeOnDrop for Aes128 {}
 
 #[cfg(test)]
-#[path = "../../../test/smb/aes_block.rs"]
+#[path = "../../../../tests/smb/aes_block.rs"]
 mod tests;

@@ -19,17 +19,9 @@ impl Credential{
 pub(crate) struct SmbSession<'r>{source:&'r InitialReader,original:Credential}
 pub(crate) struct Tree<'s,'r>{session:&'s SmbSession<'r>,setting:Setting,parent:DirectoryParent}
 impl<'r> SmbSession<'r>{
-    #[cfg(test)]
-    pub(in crate::system::reader) fn fixture_authenticated(source:&'r InitialReader,login:&str)->io::Result<Self>{
-        let original=source.at(|db,c|Credential::current(db,&c))?;
-        if original.login!=login.as_bytes(){return Err(denied());}Ok(Self{source,original})
-    }
     fn require_current(&self,db:&Connection,c:&Catalog)->io::Result<()>{
         if Credential::current(db,c)?!=self.original{return Err(denied());}Ok(())
     }
-    /// A SQL fixture may choose a typed ShareId; it is not a wire service name.
-    #[cfg(test)]
-    pub(crate) fn connect(&self,share:ShareId)->io::Result<Tree<'_,'r>>{self.connect_id(share)}
     fn connect_id(&self,share:ShareId)->io::Result<Tree<'_,'r>>{
         self.select_with_catalog(share).map(|(tree,_)|tree)
     }
@@ -89,3 +81,6 @@ pub(crate) use ordinary_directory::RustNamedDirectory;
 
 #[path="smb_runtime.rs"]
 pub(crate) mod runtime;
+
+#[cfg(test)]
+include!("../../tests/unit/attached/system/smb/items.rs");

@@ -17,6 +17,9 @@ RUST = "1.100.0"
 RUST_COMMIT = "0ef1bc386059596dada8fb65b50425aab2ea637a"
 MAX_IMAGE = 128 * 1024 * 1024
 BROWSER_TARGET = "wasm32-unknown-unknown"
+BROWSER_SOURCE = Path("src/browser")
+BROWSER_ENTRY_INPUTS = ("Cargo.toml", "Cargo.lock", "build.rs", "build_browser_assets.rs",
+                        "src/lib.rs", "src/hash.rs")
 BROWSER_AUTHORED = ("boot.js", "folder.css", "console_host.js")
 BROWSER_ASSETS = ("boot.js", "folder.css", "zxs_browser.js", "zxs_browser_bg.wasm")
 BROWSER_RECEIPT = "provenance.json"
@@ -75,30 +78,21 @@ def sha256(path):
         return hashlib.file_digest(data, "sha256").hexdigest()
 
 
-def browser_inputs(browser, snapshot=None):
+def browser_inputs(source):
+    # The browser is a target of the actual root package. Its build script is
+    # compiled on the host even though the WASM branch does not run native work.
+    frontend = source / BROWSER_SOURCE
+    need(stat.S_ISDIR((source / "src").lstat().st_mode) and stat.S_ISDIR(frontend.lstat().st_mode),
+         "missing original browser source directory")
     inputs = {}
-    if snapshot is not None:
-        snapshot.mkdir(mode=0o700)
-    src = browser / "src"
-    need(stat.S_ISDIR(src.lstat().st_mode), "missing browser source directory")
-    for p in (browser / "Cargo.toml", browser / "Cargo.lock",
-              *(browser / name for name in BROWSER_AUTHORED), *sorted(src.rglob("*"))):
-        kind = p.lstat().st_mode
+    for path in (*(source / name for name in BROWSER_ENTRY_INPUTS), *sorted(frontend.rglob("*"))):
+        kind = path.lstat().st_mode
         if not stat.S_ISDIR(kind):
-            need(stat.S_ISREG(kind), f"not a regular browser source: {p}")
-            name = p.relative_to(browser)
-            if snapshot is None:
-                checksum = sha256(p)
-            else:
-                data = p.read_bytes()
-                staged = snapshot / name
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                with staged.open("xb") as out:
-                    out.write(data)
-                checksum = hashlib.sha256(data).hexdigest()
-            inputs[name.as_posix()] = checksum
-    need(all(name in inputs for name in ("Cargo.toml", "Cargo.lock", "src/lib.rs", *BROWSER_AUTHORED)),
-         "incomplete browser source")
+            need(stat.S_ISREG(kind), f"not a regular browser input: {path}")
+            if path != frontend / "README.md":
+                inputs[path.relative_to(source).as_posix()] = sha256(path)
+    need(all(str(BROWSER_SOURCE / name) in inputs for name in ("mod.rs", *BROWSER_AUTHORED)),
+         "incomplete browser sources")
     return inputs
 
 
@@ -136,7 +130,7 @@ def prepare_browser_stage(source, approved, copied):
         need(isinstance(receipt, dict) and receipt.get("format") == 1
              and receipt.get("target") == BROWSER_TARGET, "invalid browser provenance")
         need(receipt.get("recipe") == browser_recipe_inputs(source)
-             and receipt.get("source") == browser_inputs(source / "browser"),
+             and receipt.get("source") == browser_inputs(source),
              "restage browser resources from this exact release source and recipe")
         copied.mkdir(mode=0o700)
         records = {}

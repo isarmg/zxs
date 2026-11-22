@@ -173,5 +173,5 @@ impl AwaitAuthenticate {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/envelope.rs"]
+#[path = "../../../tests/smb/envelope.rs"]
 pub(super) mod tests;

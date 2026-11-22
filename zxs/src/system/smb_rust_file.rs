@@ -382,5 +382,5 @@ impl RustReadFile {
 }
 
 #[cfg(test)]
-#[path="../test/smb/core_file_normalized_name.rs"]
+#[path="../../tests/smb/core_file_normalized_name.rs"]
 mod normalized_name_tests;

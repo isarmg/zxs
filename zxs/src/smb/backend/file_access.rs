@@ -56,5 +56,5 @@ impl PreparedFileAccess{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/backend_file_access.rs"]
+#[path="../../../tests/smb/backend_file_access.rs"]
 mod tests;

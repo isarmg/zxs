@@ -23,7 +23,7 @@ are in this tree. Earlier intake manifests are recoverable from Git history.
 For the remaining path packages, the active manifest points dependency edges
 at local paths and omits upstream test and benchmark targets not carried here. Code
 incorporated into ZXS instead records its original blob and actual local
-integration changes. ZXS-authored SMB test source is kept under `src/test/smb/`.
+integration changes. ZXS-authored SMB test source is kept under `tests/smb/`.
 
 The chosen [sha2 0.11.1 release](https://github.com/RustCrypto/hashes/tree/sha2-v0.11.1/sha2)
 includes [upstream's AArch64 round-constant fix](https://github.com/RustCrypto/hashes/pull/922):

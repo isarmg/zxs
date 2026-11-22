@@ -3,8 +3,6 @@
 //! old volume fallback, write permission or network authority is returned.
 use super::{Material,MaterialRef,body::{Contents,ReadBudget},stored::{Descriptor,VersionKey}};
 use crate::{VersionStorageId,fs::{HeldBytes,HeldDir,WitnessRead,invalid},ordinary::storage_name::FileName};
-#[cfg(test)]
-use std::fs::File;
 use std::{ffi::CString,io::{self,Write}};
 
 /// Selected alongside the block-table commitment from the material's own
@@ -112,3 +110,6 @@ impl<'d> LocalVersion<'d>{
 #[cfg(test)]
 #[path="../../../tests/unit/flat_local.rs"]
 mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/ordinary/flat/local/items.rs");

@@ -40,15 +40,6 @@ fn id(b: &mut &[u8]) -> io::Result<[u8;16]> {
     Ok(value)
 }
 impl Genesis {
-    /// This reader understands exactly an empty register, including EOF.
-    /// No speculative/unknown suffix can masquerade as the confirmed cut.
-    #[cfg(test)]
-    fn only(bytes: &[u8]) -> io::Result<Self> {
-        if bytes.len() > MAX_GENESIS { return Err(invalid("portable GENESIS exceeds its format limit")); }
-        let (genesis,tail)=Self::prefix(bytes)?;
-        if !tail.is_empty(){return Err(invalid("not exactly the empty portable registration"));}
-        Ok(genesis)
-    }
 
     /// Row and path counts bound the genesis itself before any decision is
     /// considered. Hash exactly the bytes decoded here, not a new read from
@@ -117,3 +108,6 @@ mod tests;
 #[cfg(test)]
 #[path="../../tests/unit/portable_decisions.rs"]
 mod decision_tests;
+
+#[cfg(test)]
+include!("../../tests/unit/attached/pool/portable/items.rs");

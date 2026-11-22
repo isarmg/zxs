@@ -22,10 +22,6 @@ pub(in crate::smb) struct RunningServerGuid { run:Arc<Run> }
 impl RunningServerGuid {
     pub(super) fn wire(&self)->&[u8;16] { &self.run.guid }
     pub(super) fn share(&self)->Arc<Run> { Arc::clone(&self.run) }
-    #[cfg(test)]
-    pub(super) fn fixture_revoke_provider(&self) {
-        self.run.verifier.as_ref().expect("the fixture holds a provider").fixture_revoke();
-    }
     pub(in crate::smb) fn from_start(start:&Arc<crate::smb::InheritedRun>,verifier:crate::smb::session::ChallengeService)
         ->Result<Self>{
         let origin=verifier.batch_revision().and_then(|v|v.original_start(&verifier)).ok_or(Fault::NoVerifier)?;
@@ -184,14 +180,6 @@ impl SelectionSend<'_,'_> {
         let item=c.sessions.iter_mut().find(|x|Arc::ptr_eq(&x.reg.claim,claim)).ok_or(Fault::SessionState)?;
         item.phase=Phase::Waiting(next);Ok(())
     }
-    #[cfg(test)]
-    pub(in crate::smb) fn bytes(&self)->&[u8] {self.tx.bytes()}
-    #[cfg(test)]
-    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
-    #[cfg(test)]
-    fn submitted_at(self,now:Instant)->Result<()> {
-        let Self{tx,claim,next}=self;tx.publish_with(|c|Self::install(c,&claim,next,now))
-    }
 }
 
 #[must_use]
@@ -249,5 +237,8 @@ impl<'raw> Existing<'raw> {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/setup_select.rs"]
+#[path = "../../../tests/smb/setup_select.rs"]
 pub(in crate::smb::connection) mod tests;
+
+#[cfg(test)]
+include!("../../../tests/unit/attached/smb/connection/sessions/items.rs");

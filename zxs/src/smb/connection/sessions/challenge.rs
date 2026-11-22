@@ -80,20 +80,15 @@ impl ChallengeSend<'_,'_> {
             item.phase=Phase::WaitingAuth(pending);
         }).ok_or(Fault::SessionState)
     }
-    #[cfg(test)]
-    pub(in crate::smb) fn bytes(&self)->&[u8] {self.tx.bytes()}
-    #[cfg(test)]
-    pub(in crate::smb) fn submitted(self)->Result<()> {self.submitted_at(Instant::now())}
-    #[cfg(test)]
-    fn submitted_at(self,now:Instant)->Result<()> {
-        let Self{tx,claim,next}=self;tx.publish_with(|c|Self::install(c,&claim,next,now))
-    }
 }
 
 #[cfg(test)]
-#[path = "../../../test/smb/setup_challenge.rs"]
+#[path = "../../../../tests/smb/setup_challenge.rs"]
 pub(in crate::smb::connection) mod tests;
 
 #[cfg(test)]
-#[path = "../../../test/smb/setup_send.rs"]
+#[path = "../../../../tests/smb/setup_send.rs"]
 mod send_tests;
+
+#[cfg(test)]
+include!("../../../../tests/unit/attached/smb/connection/sessions/challenge/items.rs");

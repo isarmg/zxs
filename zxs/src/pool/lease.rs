@@ -21,10 +21,6 @@ pub(crate) struct LocalPool {
 }
 
 impl LocalPool {
-    #[cfg(test)]
-    pub(crate) fn open(path:&Path,access:Access)->io::Result<Self>{
-        Self::with_snapshot(path,access).map(|(pool,_,_)|pool)
-    }
     pub(crate) fn with_snapshot(path: &Path, access: Access) -> io::Result<(Self,fs::OriginalStamp,crate::ordinary::journal::Journal)> {
         Self::admit_system(HeldDir::open(path)?,access,published)
     }
@@ -131,3 +127,6 @@ impl FileVolume<'_> {
         self.pool.check_root(self.index,Role::File,&self.root)
     }
 }
+
+#[cfg(test)]
+include!("../../tests/unit/attached/pool/lease/items.rs");

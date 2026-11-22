@@ -1,17 +1,17 @@
 //! Real registered native fixtures and the typed business API. This is not a
 //! browser, an authenticated remote user, an SMB client or a throughput test.
 use std::{fs,io::{self,Cursor},path::Path};
-use zxs::{DirectoryEntry,DirectoryParent,Entity,FileInfo,FormalNode,OperationId,PublishedVersion};
+use storage_server::{DirectoryEntry,DirectoryParent,Entity,FileInfo,FormalNode,OperationId,PublishedVersion};
 #[path="unit/support.rs"] mod support;
 
 const ABC:&str="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 const HELLO:&str="2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 fn op()->OperationId{OperationId::new().unwrap()}
 fn seed(sys:&Path,parent:DirectoryParent,name:&str,bytes:&[u8],sha:&str)->(FileInfo,FormalNode){
-    let created=zxs::create_empty_at(sys,op(),parent,name).unwrap();
-    zxs::save_first(sys,op(),created.file,zxs::DraftClaim::from_hex(bytes.len() as u64,sha).unwrap(),Cursor::new(bytes)).unwrap();
-    let node=zxs::commit_working(sys,op(),created.file,1).unwrap();
-    let row=zxs::list_directory(sys,parent).unwrap().entries.into_iter().find_map(|e|match e{
+    let created=storage_server::create_empty_at(sys,op(),parent,name).unwrap();
+    storage_server::save_first(sys,op(),created.file,storage_server::DraftClaim::from_hex(bytes.len() as u64,sha).unwrap(),Cursor::new(bytes)).unwrap();
+    let node=storage_server::commit_working(sys,op(),created.file,1).unwrap();
+    let row=storage_server::list_directory(sys,parent).unwrap().entries.into_iter().find_map(|e|match e{
         DirectoryEntry::File(f) if f.name==name=>Some(f),_=>None,
     }).unwrap();assert_eq!(row.file,created.file);(row,node)
 }
@@ -24,15 +24,15 @@ fn browse_one_parent_then_reuse_only_the_explicit_original_published_version(){
     let home=support::PrivateTemp::under(&std::env::temp_dir());
     let other=support::PrivateTemp::under(Path::new(&std::env::var_os("ZXS_DISTINCT_TEST_TMPDIR").unwrap()));
     let sys=home.child("system");let data=home.child("data");let bin=other.child("recycle");
-    let reg=zxs::initialize(op(),&sys,&bin,std::slice::from_ref(&data)).unwrap();
+    let reg=storage_server::initialize(op(),&sys,&bin,std::slice::from_ref(&data)).unwrap();
     let volume=reg.volumes.iter().find(|v|v.volume.path==data).unwrap().id;
     let root=DirectoryParent::Root(volume);
-    let left=DirectoryParent::Child(volume,zxs::make_directory(&sys,op(),root,"left").unwrap().directory);
-    let right=DirectoryParent::Child(volume,zxs::make_directory(&sys,op(),root,"right").unwrap().directory);
+    let left=DirectoryParent::Child(volume,storage_server::make_directory(&sys,op(),root,"left").unwrap().directory);
+    let right=DirectoryParent::Child(volume,storage_server::make_directory(&sys,op(),root,"right").unwrap().directory);
     let (row,f0)=seed(&sys,left,"Report.xlsx",b"abc",ABC);
     let (other_case,lower)=seed(&sys,left,"report.xlsx",b"hello",HELLO);
     let (sibling,sibling_node)=seed(&sys,right,"Report.xlsx",b"hello",HELLO);
-    let foreign=zxs::PoolId::new().unwrap();
+    let foreign=storage_server::PoolId::new().unwrap();
     assert!(PublishedVersion::open_listed(&sys,foreign,left,&row,f0.node).is_err());
     assert!(PublishedVersion::open_listed(&sys,reg.id,right,&row,f0.node).is_err());
     assert!(PublishedVersion::open_listed(&sys,reg.id,left,&sibling,sibling_node.node).is_err());
@@ -47,9 +47,9 @@ fn browse_one_parent_then_reuse_only_the_explicit_original_published_version(){
     assert_eq!(v.receipt(),&f0);assert_eq!(part(&v,2,1),b"c");assert_eq!(part(&other_v,1,3),b"ell");drop(other_v);
     // A genuine new decision is allowed between two reads on the same open.
     // The original F0 remains F0; it is not an alias for current contents.
-    let abc=zxs::DraftClaim::from_hex(3,ABC).unwrap();
-    zxs::save_interval(&sys,op(),row.file,1,zxs::SpanEdit::new(1,abc,zxs::LengthPolicy::KeepOrGrow).unwrap(),Cursor::new(b"abc")).unwrap();
-    let i1=zxs::commit_working(&sys,op(),row.file,2).unwrap();
+    let abc=storage_server::DraftClaim::from_hex(3,ABC).unwrap();
+    storage_server::save_interval(&sys,op(),row.file,1,storage_server::SpanEdit::new(1,abc,storage_server::LengthPolicy::KeepOrGrow).unwrap(),Cursor::new(b"abc")).unwrap();
+    let i1=storage_server::commit_working(&sys,op(),row.file,2).unwrap();
     let fresh=PublishedVersion::open_listed(&sys,reg.id,left,&row,i1.node).unwrap();
     assert_eq!(fresh.receipt(),&i1);assert_eq!(part(&fresh,0,4),b"aabc");drop(fresh);
     assert_eq!(part(&v,0,2),b"ab");assert_eq!(part(&v,3,0),b"");let mut denied=Vec::new();

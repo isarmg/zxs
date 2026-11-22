@@ -280,5 +280,5 @@ impl DirectoryPage {
 }
 
 #[cfg(test)]
-#[path = "../../test/smb/backend_query.rs"]
+#[path = "../../../tests/smb/backend_query.rs"]
 mod tests;

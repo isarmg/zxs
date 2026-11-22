@@ -241,7 +241,7 @@ impl RootOpen{
 }
 
 #[cfg(test)]
-#[path="../../test/smb/backend_root_open.rs"]
+#[path="../../../tests/smb/backend_root_open.rs"]
 mod tests;
 
 

@@ -250,5 +250,5 @@ impl FullyWrittenSync<'_> {
 }
 
 #[cfg(test)]
-#[path = "../../../../test/smb/echo.rs"]
+#[path = "../../../../../tests/smb/echo.rs"]
 mod tests;
