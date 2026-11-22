@@ -6,6 +6,17 @@ on:
     branches: [main]
     paths:
       - .github/workflows/linux-rust-checks.yml
+      - zxs/src/**
+      - zxs/tests/**
+      - zxs/browser/**
+      - zxs/build*.rs
+      - zxs/build_*.py
+      - zxs/Cargo.*
+      - helper/src/**
+      - helper/tests/**
+      - helper/linux-evidence/**
+      - helper/build.rs
+      - helper/Cargo.*
 
 permissions:
   contents: read
