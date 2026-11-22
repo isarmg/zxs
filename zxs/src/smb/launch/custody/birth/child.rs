@@ -1,8 +1,8 @@
 //! The fixed, allocation-free post-clone branch. No caller-selected command,
 //! executable path, mountpoint, or environment is interpreted here.
 use super::Role;
-use crate::smb::{launch::custody::view,readiness};
-use std::{mem::zeroed,os::fd::BorrowedFd,ptr};
+use crate::smb::{launch::{custody::view,signals},readiness};
+use std::{os::fd::BorrowedFd,ptr};
 
 #[repr(C)]
 struct CapsHeader{version:u32,pid:i32}
@@ -51,20 +51,6 @@ unsafe fn limits(uid:u32,gid:u32)->bool{
         libc::syscall(libc::SYS_seccomp,1u32,0u32,&raw const bpf)==0
     }
 }
-unsafe fn clean_signals()->bool{
-    // SAFETY: reset only this freshly cloned task's separate dispositions.
-    unsafe{
-        let mut action:libc::sigaction=zeroed();action.sa_sigaction=libc::SIG_DFL;
-        let mut empty:libc::sigset_t=zeroed();
-        if libc::sigemptyset(&mut action.sa_mask)!=0||libc::sigemptyset(&mut empty)!=0{return false;}
-        for sig in 1..=64{
-            if matches!(sig,libc::SIGKILL|libc::SIGSTOP|32|33){continue;}
-            if libc::sigaction(sig,&action,ptr::null_mut())!=0{return false;}
-        }
-        libc::sigprocmask(libc::SIG_SETMASK,&empty,ptr::null_mut())==0
-    }
-}
-
 #[derive(Clone,Copy)]
 pub(super) struct Inputs{
     pub(super) image:i32,pub(super) view:i32,pub(super) parent:i32,pub(super) peer:i32,
@@ -77,7 +63,7 @@ pub(super) unsafe fn start(i:Inputs)->!{
     // and C strings below have actual static or local lifetime.
     unsafe{
         let fail=||->!{libc::write(i.fail,b"!".as_ptr().cast(),1);libc::_exit(126)};
-        if !watch_parent(i.parent)||!clean_signals()||libc::getpid()!=1||
+        if !watch_parent(i.parent)||!signals::post_clone_defaults()||libc::getpid()!=1||
             libc::syscall(libc::SYS_close_range,3u32,u32::MAX,libc::CLOSE_RANGE_CLOEXEC)!=0{fail();}
         let core=libc::rlimit{rlim_cur:0,rlim_max:0};
         if libc::setrlimit(libc::RLIMIT_CORE,&core)!=0||libc::prctl(libc::PR_SET_DUMPABLE,z(),z(),z(),z())!=0||

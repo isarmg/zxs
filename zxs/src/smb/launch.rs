@@ -14,6 +14,7 @@ mod custody;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 mod site;
 mod low;
+mod signals;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 mod web;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]

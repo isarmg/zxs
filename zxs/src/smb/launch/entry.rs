@@ -1,7 +1,7 @@
 //! Fixed executable boundary for a verified original root supervisor. There is no
 //! alternative CLI, input path, listener constructor or descriptor option.
-use super::{Fault,InheritedRun,Result,Role,maintenance::{self,Task},worker::Worker};
-use std::{ffi::OsString,io,sync::{Arc,atomic::{AtomicBool,Ordering}},thread::{self,JoinHandle}};
+use super::{Fault,InheritedRun,Result,Role,maintenance::{self,Task},signals,worker::Worker};
+use std::{ffi::{OsString,c_int},io,sync::{Arc,atomic::{AtomicBool,Ordering}},thread::{self,JoinHandle}};
 
 const MAX_PEERS:usize=8;
 static STOP:AtomicBool=AtomicBool::new(false);
@@ -11,25 +11,14 @@ fn stop(){STOP.store(true,Ordering::Release);}
 pub(in crate::smb::launch) struct InstalledTerm(());
 impl InstalledTerm{
     fn install()->Result<Self>{
-        // SAFETY: C signal state is inspected/changed once in the dedicated
-        // child, before any lane or inherited credential material is read.
-        unsafe{
-            let mut act:libc::sigaction=std::mem::zeroed();
-            act.sa_sigaction=term as *const () as libc::sighandler_t;
-            act.sa_flags=0; // never restart a blocking syscall after TERM
-            let mut set:libc::sigset_t=std::mem::zeroed();
-            if libc::sigemptyset(&mut act.sa_mask)!=0||libc::sigemptyset(&mut set)!=0||
-                libc::sigaddset(&mut set,libc::SIGTERM)!=0||
-                libc::sigaction(libc::SIGTERM,&act,std::ptr::null_mut())!=0||
-                libc::pthread_sigmask(libc::SIG_UNBLOCK,&set,std::ptr::null_mut())!=0{
-                return Err(Fault::Handoff);
-            }
-        }
+        // SAFETY: dedicated child before any inherited credentials are read;
+        // the handler only sets its lock-free stop bit.
+        if !unsafe{signals::lowered_term(term)}{return Err(Fault::Handoff);}
         Ok(Self(()))
     }
     pub(in crate::smb::launch) fn stopping(&self)->bool{stopping()}
 }
-extern "C" fn term(_:libc::c_int){
+extern "C" fn term(_:c_int){
     // Atomics on this Linux target; no allocation, lock or I/O in the handler.
     stop();
 }

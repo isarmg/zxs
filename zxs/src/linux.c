@@ -192,6 +192,18 @@ long observe_own_capability_words(uint32_t (*out)[2][3]) {
     return rc;
 }
 
+int install_lowered_term(void (*handler)(int)) {
+    struct sigaction action = {0};
+    sigset_t term = {0};
+    action.sa_handler = handler;
+    /* No SA_RESTART: TERM must interrupt a blocked operation. */
+    return sigemptyset(&action.sa_mask) == 0 &&
+           sigemptyset(&term) == 0 &&
+           sigaddset(&term, SIGTERM) == 0 &&
+           sigaction(SIGTERM, &action, NULL) == 0 &&
+           pthread_sigmask(SIG_UNBLOCK, &term, NULL) == 0;
+}
+
 #if defined(__x86_64__) && UINTPTR_MAX == UINT64_MAX
 #include <linux/sched.h>
 #include <sys/wait.h>
@@ -221,6 +233,37 @@ int observe_waitable_children(void) {
     struct sigaction action = {0};
     return sigaction(SIGCHLD, NULL, &action) == 0 &&
            action.sa_handler == SIG_DFL && !(action.sa_flags & SA_NOCLDWAIT);
+}
+
+int install_foreground_stop(void (*handler)(int)) {
+    struct sigaction action = {0};
+    sigset_t mask = {0};
+    action.sa_handler = handler;
+    if (sigemptyset(&action.sa_mask) != 0 || sigprocmask(SIG_SETMASK, NULL, &mask) != 0)
+        return 0;
+    const int signals[] = {SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGTSTP};
+    for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) {
+        int sig = signals[i];
+        if (sigismember(&mask, sig) != 0 || sigaction(sig, &action, NULL) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+int reset_post_clone_signals(void) {
+    struct sigaction action = {0};
+    sigset_t empty = {0};
+    action.sa_handler = SIG_DFL;
+    if (sigemptyset(&action.sa_mask) != 0 || sigemptyset(&empty) != 0)
+        return 0;
+    for (int sig = 1; sig <= 64; ++sig) {
+        /* KILL and STOP are immutable; 32 and 33 are libc-reserved. */
+        if (sig == SIGKILL || sig == SIGSTOP || sig == 32 || sig == 33)
+            continue;
+        if (sigaction(sig, &action, NULL) != 0)
+            return 0;
+    }
+    return sigprocmask(SIG_SETMASK, &empty, NULL) == 0;
 }
 
 /* No shared VM or vfork: the zero-result child returns on its copied stack. */
