@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/linux-rust-checks.yml
       - zxs/src/**
+      - zxs/vendor/**
       - zxs/tests/**
       - zxs/build*.rs
       - zxs/build_*.py
@@ -17,6 +18,8 @@ on:
       - helper/linux-evidence/**
       - helper/build.rs
       - helper/Cargo.*
+      - helper/.cargo/config.toml
+      - helper/rust-toolchain.toml
 
 permissions:
   contents: read
@@ -55,6 +58,7 @@ jobs:
           sparse-checkout: ${{ matrix.project }}
 
       - name: Prepare the pinned GNU Rust toolchain
+        id: toolchain
         run: |
           test "$(id -u)" -ne 0
           export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo"
@@ -127,3 +131,34 @@ jobs:
       - name: Strict Clippy for the wasm32 browser target
         if: ${{ !cancelled() && matrix.project == 'zxs' && steps.browser_stage.outcome == 'success' }}
         run: python3 tests/browser/strict_target.py "$ZXS_RUST_BIN" "$ZXS_WASM_STD"
+
+      - name: Check first-party Rust formatting
+        if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && matrix.feature == '' }}
+        env:
+          FORMAT_PROJECT: ${{ matrix.project }}
+          CARGO_NET_OFFLINE: "true"
+        run: |
+          export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo"
+          export RUSTUP_DIST_SERVER=https://static.rust-lang.org
+          rustup component add rustfmt --toolchain 1.100.0-x86_64-unknown-linux-gnu
+          (
+            cd "$ZXS_RUST_BIN"
+            sha256sum -c <<'SUMS'
+          6e2d5b048877b33b14d5da5670381516b7ec3ee22572b8aff933d090fe6cb664  rustfmt
+          bb9f7bd771972fb994f303bb576094bb98ac7c46a31849d1d5e88a463ed2c266  cargo-fmt
+          SUMS
+          )
+          export RUSTFMT="$ZXS_RUST_BIN/rustfmt"
+          check_format() {
+            "$ZXS_RUST_BIN/cargo" fmt --manifest-path "$1" --package "$2" -- --check
+          }
+          case "$FORMAT_PROJECT" in
+            zxs) check_format Cargo.toml storage-server ;;
+            helper)
+              status=0
+              check_format Cargo.toml local-ops-helper || status=1
+              check_format linux-evidence/Cargo.toml helper-linux-evidence || status=1
+              exit "$status"
+              ;;
+            *) exit 2 ;;
+          esac

@@ -4,7 +4,19 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [.github/workflows/linux-paired-build.yml, zxs/browser-stage.sha256]
+    paths:
+      - .github/workflows/linux-paired-build.yml
+      - zxs/src/**
+      - zxs/vendor/**
+      - zxs/build*.rs
+      - zxs/build_*.py
+      - zxs/Cargo.*
+      - zxs/browser-stage.sha256
+      - helper/src/**
+      - helper/linux-evidence/**
+      - helper/build.rs
+      - helper/Cargo.*
+      - helper/.cargo/config.toml
 
 permissions: {}
 
