@@ -1,4 +1,3 @@
-//! Small tabular, text-only view of the same typed observations as the CLI.
 //! No row may contribute HTML, control fields, device paths or arguments.
 use super::http::Reply;
 use crate::{block_tools as disks,fs_tools,hardware,pinned::storage_status as storage};

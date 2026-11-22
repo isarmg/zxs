@@ -158,8 +158,7 @@ fn serve_mode(launch:Launch)->io::Result<()>{
     // No worker exists while the terminal writes its prompts. Once requests
     // can run, let a foreground cancel close HTTP and reap this worker.
     if leased{watch_cancellation()?;}
-    // No listener thread, automatic probe or timer
-    // refresh. Each connection has its own total read and write budgets.
+    // Each connection has its own total read and write budgets.
     let transport=(|| -> io::Result<()>{
     let mut served=0usize;
     while !panel.closed && !cancelled() && Instant::now()<panel.expires && served<512{

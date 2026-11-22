@@ -1,20 +1,17 @@
 # Private fresh-only ZXS v18 issuer
 
-This is an opt-in paired **source candidate**, not a supported installation or
-an accepted deployment binary. A default Helper build rejects both commands
-below. For separately authorized fixture validation, use the [independent
+A default Helper build rejects both commands below. For authorized fixture
+validation, use the [independent
 locked, offline Helper build](../RELEASE.md) with
 `--features private-fresh-zxs-v18`. The private route accepts only the exact
 v18 SQLite schema (SHA-256
 `8379dfa3b66040540995ebf863d3f12c7fddbb57ce05e98961011dc7429dfc4b`), with no
-migration, adoption, or automatic upgrade. Building the candidate does not
-qualify any deployment.
+migration, adoption, or automatic upgrade.
 
 The intended later acceptance fixture is a **disposable Linux environment**:
 already mounted and properly protected original SYSTEM (S), independent
 recycle (R) and ordinary (F) roots; the explicit non-root storage UID/GID;
-an empty, pre-provisioned `/zxs/state` (root:root, 0755, no access/default
-POSIX ACL); and independently approved bytes of the standalone ZXS ELF at
+an empty, pre-provisioned `/zxs/state`; and the independently approved standalone ZXS ELF at
 `/zxs/bin/zxs` or an explicitly eligible protected canonical `.../zxs` file.
 Both `/zxs` and `/zxs/state` are root:root 0755 with no access/default
 POSIX ACL. `/zxs` may also be a separately mounted complete supported local
@@ -55,14 +52,12 @@ helper install-pool new-zxs-v18
   [--system S_DIR] [--recycle R_DIR] (--data F_DIR | --data-label DISK_LABEL) ...
 ```
 
-This only creates the pool. Use 1–62 explicit ordinary roots and already
-prepared S/R/F. The defaults for S and R are `/zxs/disks/system` and
+Give 1–62 explicit ordinary roots and prepare S/R/F first. The defaults for S and R are `/zxs/disks/system` and
 `/zxs/disks/recycle`. The protected `/zxs` layout is checked before and after
 the original foreground INIT approval. After successful marker readback,
 retain the `fresh-v18-init=confirmed` receipt fields `pool`, `operation` and
 `init_request_sha256`, along with the original subject, paths and approval
-reference. The next step needs those exact values; the receipt neither
-issues credentials nor starts ZXS. For uncertain INIT outcomes, see the
+reference for step 2. For uncertain INIT outcomes, see the
 [original-operation guidance](sqlite-first-install.md); do not start another
 pool to obtain a receipt.
 
@@ -124,9 +119,7 @@ ID, or infer success from a path. There is no cold recovery for abandoned
 fresh account setup. The active reader must separately qualify the original
 ledger, vault, static image and volume roots before serving.
 
-Isolated unit fixtures exercise exact public vectors, synthetic SQLite
-transactions, closed low-peer framing and disposable non-secret PTYs. They
-do not prove actual protected media, live callbacks, low writer capabilities,
-cold startup, independently unchanged installer removal or real signed SMB
-and Web logins. Those require later, agreed paired acceptance. No site or
-credential operation is performed by the fixtures.
+Unit fixtures cover public vectors, synthetic SQLite transactions,
+low-peer framing and disposable non-secret PTYs. Paired acceptance remains
+pending for protected media, live callbacks, low writer permissions, cold
+startup (including after Helper removal), and real signed SMB and Web logins.

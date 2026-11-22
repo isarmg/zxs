@@ -4,7 +4,6 @@ mod import_inventory;
 pub(crate) use import_inventory::ImportCheck;
 mod retirement_check;
 pub(crate) use retirement_check::RetirementCheck;
-// Resolve explicitly selected ordinary claims plus the single original R.
 // Only the authenticated lower-privilege process opens the actual SQLite ledger.
 use super::{bad,host::Worker,manifest::{read_sealed,sealed_owner},transport::{self,Channel,Kind},worker::original_parent};
 use crate::{path_rules::MAX_PATH_BYTES,pinned::{Kind as PathKind,Pinned,helper_elf::ForegroundElf},

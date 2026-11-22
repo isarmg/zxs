@@ -69,7 +69,6 @@ fn filesystem_phase<T>(live:&dyn Fn()->io::Result<()>,
     last?;value
 }
 
-/// One internal synthetic-site command with explicit immutable authority.
 /// No alternate runtime/site/secret path or receipt/recovery is accepted.
 #[derive(Debug)]
 pub(super) struct Selection{
