@@ -127,20 +127,20 @@ impl Peer {
     }
     pub(in crate::smb) fn poll(&mut self,
         other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn> {
-        self.poll_selected(Issuer::Protected,self.ordinary_moves,other)
+        self.poll_selected(Issuer::Protected,other)
     }
     fn housekeeping(&mut self)->Result<()> {
         self.connection.alive()?;let now=Instant::now();
         if self.connection.reap_and_has_valid(now) {self.first_login_by=None;}
         if self.first_login_by.is_some_and(|end|now>=end) {return Err(Fault::SessionState);}Ok(())
     }
-    fn poll_selected(&mut self,issuer:Issuer,moves:bool,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)
+    fn poll_selected(&mut self,issuer:Issuer,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)
         ->Result<Turn>{
         let result=if self.original_move.is_some(){
-            if moves{self.drive_ordinary_move()}else{Err(Fault::Closed)}
-        }else{self.once(issuer,moves,other)};
+            self.drive_ordinary_move()
+        }else{self.once(issuer,other)};
         let valid=match &result{
-            Ok(Turn::MovePending)=>moves&&self.original_move.is_some()&&self.connection.in_flight==1,
+            Ok(Turn::MovePending)=>self.original_move.is_some()&&self.connection.in_flight==1,
             _=>self.original_move.is_none()&&self.connection.in_flight==0,
         };
         if result.is_err() || self.connection.alive().is_err() || !valid {
@@ -148,7 +148,7 @@ impl Peer {
         }
         result
     }
-    fn once(&mut self,issuer:Issuer,moves:bool,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)
+    fn once(&mut self,issuer:Issuer,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)
         ->Result<Turn>{
         self.housekeeping()?;
         let c=&mut self.connection;
@@ -163,11 +163,13 @@ impl Peer {
             self.housekeeping()?;return Ok(Turn::Idle);
         };
         self.housekeeping()?;
-        if moves&&matches!(record.frame_on(&self.connection)?.messages(),[m] if m.is_basic_rename_request()){
+        let frame=record.frame_on(&self.connection)?;
+        if matches!(frame.messages(),[m] if m.is_basic_rename_request()){
+            drop(frame);
             return self.ordinary_rename(record,other);
         }
         let c=&mut self.connection;
-        let frame=record.frame_on(c)?;let parts=frame.messages();let paid=c.receive(&frame)?;
+        let parts=frame.messages();let paid=c.receive(&frame)?;
         if parts.iter().any(|m|m.header.command==CANCEL) {
             // Do not route a mixed frame, even if another member was paid.
             paid.discard_idle_cancel(c)?;
@@ -263,8 +265,6 @@ impl Peer {
                 },
             }
         };
-        // Only the real accepted path can park a positive storage turn.
-        if !self.ordinary_moves{return Err(Fault::NoVerifier);}
         self.install_pending_move(PendingOriginalMove{held,input,control:MoveControl::default()})?;
         Ok(Turn::MovePending)
     }

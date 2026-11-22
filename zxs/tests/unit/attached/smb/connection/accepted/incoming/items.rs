@@ -37,6 +37,6 @@ impl Peer {
     }
 
     fn poll_with(&mut self,issuer:Issuer,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn> {
-        self.poll_selected(issuer,false,other)
+        self.poll_selected(issuer,other)
     }
 }

@@ -40,7 +40,7 @@ python3 -I tests/acceptance/rust_smb_client.py operations --evidence-fd 7 --cred
 
 ## 普通数据卷到普通数据卷
 
-仅用于单独批准的 Linux 资格制品：独立核对实际打开普通跨卷路径的源修订和整份 ELF。正式开关关闭时不运行。服务与客户端在同一台隔离 Linux 虚拟机；服务监督器留在该虚拟机初始命名空间，客户端沿用上述独立网口。用同版 Helper 准备全新 v18 池，原 S、F1、F2、R 为四个独立文件系统，F1/F2 是同一 ZXS 树中已确认、可写的原普通共享。由监督者先核对真实挂载、原标记和权限；两条用例各用一份独立的一次性夹具。
+仅用于单独批准的 Linux 资格制品：独立核对本次待验的源修订和整份 ELF。服务与客户端在同一台隔离 Linux 虚拟机；服务监督器留在该虚拟机初始命名空间，客户端沿用上述独立网口。用同版 Helper 准备全新 v18 池，原 S、F1、F2、R 为四个独立文件系统，F1/F2 是同一 ZXS 树中已确认、可写的原普通共享。由监督者先核对真实挂载、原标记和权限；两条用例各用一份独立的一次性夹具。
 
 沿用两个封印 FD。移动专用公告改用 `profile = ZXS-ISOLATED-SMB-MOVE-1`、
 `observed = same-elf-listen-and-distinct-original-media`，新增 `target_data_label`

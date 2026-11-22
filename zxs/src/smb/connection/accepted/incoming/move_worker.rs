@@ -307,7 +307,6 @@ impl Peer{
         result
     }
     pub(super) fn start_original_move_worker(&mut self)->Result<()>{
-        if !self.ordinary_moves{return Err(Fault::NoVerifier);}
         let pending=match self.original_move.take(){
             Some(MoveFlight::Unstarted(parked))=>parked,
             other=>{self.original_move=other;return Err(Fault::WrongBatch);},

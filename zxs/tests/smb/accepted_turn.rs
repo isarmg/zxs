@@ -233,7 +233,7 @@ fn ordinary_move_router_refuses_missing_tree_on_the_original_paid_wire_and_conti
     q[116..].copy_from_slice(&[b'G',0,92,0,b'x',0]);
     seal_fixture_request(&mut q,&key);give(&t,&frame(&q));
     let previous=p.connection.window.next;
-    assert_eq!(p.poll_selected(Issuer::Protected,true,step_unexpected),Ok(Turn::ErrorWritten));
+    assert_eq!(p.poll(step_unexpected),Ok(Turn::ErrorWritten));
     let ans=take(&t);
     assert_eq!(ans.len(),76); // one fixed ERROR response, no STATUS_PENDING
     assert_eq!(&ans[12..16],&0xc000_00c9u32.to_le_bytes()); // original Tree was not in this Session
@@ -245,7 +245,7 @@ fn ordinary_move_router_refuses_missing_tree_on_the_original_paid_wire_and_conti
     assert_eq!(p.connection.in_flight,0);
     let mut next=fixed_request(13,4,8,0);seal_fixture_request(&mut next,&key);
     give(&t,&frame(&next));
-    assert_eq!(p.poll_selected(Issuer::Protected,true,step_unexpected),Ok(Turn::EchoWritten));
+    assert_eq!(p.poll(step_unexpected),Ok(Turn::EchoWritten));
     assert_eq!(&take(&t)[28..36],&4u64.to_le_bytes());
 }
 

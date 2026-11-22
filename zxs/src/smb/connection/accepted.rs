@@ -14,7 +14,6 @@ use std::{net::{IpAddr,SocketAddr,TcpStream},sync::{Arc,atomic::AtomicBool}};
 pub(in crate::smb) struct Peer {
     connection:Connection, first_login_by:Option<std::time::Instant>, original_move:Option<incoming::MoveFlight>,
     move_backlog:Option<incoming::MoveControl>,
-    ordinary_moves:bool,
 }
 
 /// A pair observed on the SAME owned kernel socket before reading any SMB
@@ -48,9 +47,6 @@ fn concrete_address(addr:SocketAddr)->bool {
         !matches!(ip,IpAddr::V4(a) if a.is_broadcast())
 }
 
-// Reviewed source stays off until the separately qualified Linux release.
-const ORDINARY_MOVE_RELEASED:bool=false;
-
 struct Incoming {
     stream:DirectStream,
     endpoints:Option<AcceptedEndpoints>,
@@ -77,9 +73,7 @@ impl RunningServerGuid {
             !installation.admits_original_addresses(pair.local(),pair.peer()){return Err(Fault::Transport);}
         // No bytes have been read or written. This exact OS accepted stream
         // now enters the same origin's normal NEGOTIATE.
-        let mut peer=Peer::open(self,input)?;
-        peer.ordinary_moves=ORDINARY_MOVE_RELEASED;
-        Ok(peer)
+        Peer::open(self,input)
     }
 }
 
@@ -100,8 +94,7 @@ impl Peer {
         incoming.stream.write_smb(tx.bytes(),||Ok(()))?;
         let connection=tx.after_write(Completion::Written(incoming),seat)?;
         let first_login_by=std::time::Instant::now().checked_add(std::time::Duration::from_secs(60)).ok_or(Fault::Clock)?;
-        Ok(Self{connection,first_login_by:Some(first_login_by),original_move:None,move_backlog:None,
-            ordinary_moves:false})
+        Ok(Self{connection,first_login_by:Some(first_login_by),original_move:None,move_backlog:None})
     }
 }
 enum Completion { Written(Incoming), #[cfg(test)] WithoutSocket }
