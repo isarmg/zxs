@@ -15,7 +15,7 @@
 //! Originally licensed MIT. Relicensed as Apache 2.0+MIT with permission.
 
 use crate::smb::backend_select::cfg_if;
-use cipher::array::Array;
+use crypto_common::array::Array;
 
 pub(super) mod aes128;
 

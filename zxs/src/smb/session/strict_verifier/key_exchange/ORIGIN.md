@@ -12,8 +12,9 @@ and [upstream README](README.upstream.md). No upstream sync or build-time downlo
 
 Only the crate-to-module imports, visibility and crate-only attributes changed.
 ZXS previously enabled `zeroize` for every use, so the existing `ZeroizeOnDrop`
-and the same three erasures are unconditional here. The key schedule, keystream,
-length checks and protocol call sites are unchanged. The only consumer is the
+and the same three erasures are unconditional here. The [private stream interface](../../cipher_interface/ORIGIN.md)
+keeps the checked in-place path and omits unused stream methods. The key schedule,
+keystream, length checks and protocol call sites are unchanged. The only consumer is the
 existing verifier's optional key exchange and its SPNEGO MIC handling. This is
 not a general cryptography API, new authentication capability or file encryption.
 

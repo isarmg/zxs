@@ -17,8 +17,27 @@ fn private_key_exchange_source_keeps_its_known_stream_and_erasure_trait() {
     rc4_apply(&[1, 2, 3, 4, 5], &mut first).unwrap();
     assert_eq!(first, [0xb2, 0x39, 0x63, 0x05, 0xf0, 0x3d, 0xc0, 0x27,
                        0xcc, 0xc3, 0x52, 0x4a, 0x0a, 0x11, 0x18, 0xa8]);
-    fn requires_erasure<T: cipher::zeroize::ZeroizeOnDrop>() {}
+    fn requires_erasure<T: zeroize::ZeroizeOnDrop>() {}
     requires_erasure::<Rc4>();
+}
+
+#[test]
+fn key_exchange_stream_keeps_position_across_partial_and_empty_slices() {
+    let key = [1, 2, 3, 4, 5];
+    let mut expected = [0xa5; 16];
+    rc4_apply(&key, &mut expected).unwrap();
+
+    let mut data = [0xa5; 16];
+    let mut stream = Rc4::new_from_slice(&key).unwrap();
+    stream.try_apply_keystream(&mut data[..7]).unwrap();
+    stream.try_apply_keystream(&mut []).unwrap();
+    stream.try_apply_keystream(&mut data[7..]).unwrap();
+    assert_eq!(data, expected);
+
+    assert!(Rc4::new_from_slice(&[]).is_err());
+    assert!(Rc4::new_from_slice(&[0x35; 257]).is_err());
+    assert!(Rc4::new_from_slice(&[0x35]).is_ok());
+    assert!(Rc4::new_from_slice(&[0x35; 256]).is_ok());
 }
 
 const PLAIN_ONE: &str = "4e544c4d535350000100000015820822000000000000000000000000000000000a00654a0000000f";

@@ -1,10 +1,6 @@
 // ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 use crate::smb::session::block_cipher::{Block, backends::soft::MinWord};
-use cipher::{
-    Array,
-    array::ArraySize,
-    consts::{U1, U2, U4},
-};
+use crypto_common::{array::{Array, ArraySize}, typenum::{U1, U2, U4}};
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Shl, Shr};
 
 /// Width-abstracted machine word holding one row of a bitsliced AES state.

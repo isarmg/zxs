@@ -1,11 +1,10 @@
 // ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 use super::x86_aes::RoundKeys;
-use cipher::{
-    Block, BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend,
-    BlockCipherEncClosure, BlockSizeUser, ParBlocks, ParBlocksSizeUser,
-    consts::{U16, U64},
-    inout::InOut,
+use crate::smb::session::cipher_interface::{
+    BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend, BlockCipherEncClosure,
 };
+use crypto_common::{Block, BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::{U16, U64}};
+use inout::InOut;
 
 mod encdec;
 

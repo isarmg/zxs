@@ -2,10 +2,11 @@
 #![deny(unsafe_code)]
 use crate::smb::session::block_cipher::Block;
 use fixslice::BatchBlocks;
-use cipher::{
+use crate::smb::session::cipher_interface::{
     BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend, BlockCipherEncClosure,
-    BlockSizeUser, ParBlocks, ParBlocksSizeUser, consts::U16, inout::InOut,
 };
+use crypto_common::{BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::U16};
+use inout::InOut;
 
 #[path = "fixslice/mod.rs"]
 pub(crate) mod fixslice;

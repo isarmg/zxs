@@ -24,3 +24,27 @@ fn fips_197_aes128_single_and_batch_known_answer() {
     cipher.decrypt_blocks(&mut batch);
     assert_eq!(batch, [input; 64]);
 }
+
+#[test]
+fn aes128_batch_matches_single_blocks_at_backend_boundaries() {
+    let cipher = Aes128::new(&Array::from([0x35; 16]));
+    let input: [Block; 129] = core::array::from_fn(|index| {
+        let mut bytes = [0; 16];
+        bytes[0] = u8::try_from(index).unwrap();
+        Block::from(bytes)
+    });
+    let mut expected = input;
+    for block in &mut expected {
+        cipher.encrypt_block(block);
+    }
+
+    // Cover parallel groups of up to 64 blocks, with and without a tail.
+    for len in [0, 1, 2, 4, 5, 7, 8, 9, 29, 30, 31, 63, 64, 65, 129] {
+        let mut batch = input;
+        cipher.encrypt_blocks(&mut batch[..len]);
+        assert_eq!(batch[..len], expected[..len]);
+        assert_eq!(batch[len..], input[len..]);
+        cipher.decrypt_blocks(&mut batch[..len]);
+        assert_eq!(batch, input);
+    }
+}

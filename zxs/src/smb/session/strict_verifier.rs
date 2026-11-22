@@ -6,7 +6,8 @@ pub(super) mod challenge;
 pub(super) mod completion;
 mod key_exchange;
 mod record;
-use self::key_exchange::{Rc4, StreamCipher};
+use self::key_exchange::Rc4;
+use super::cipher_interface::StreamCipher;
 use self::auth_digest::Md5;
 use super::{
     Secret, envelope::{AwaitAuthenticate, HaveNegotiate, Layer, Saved, Unverified},

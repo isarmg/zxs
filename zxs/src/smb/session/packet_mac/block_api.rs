@@ -1,7 +1,7 @@
 //! RustCrypto CMAC (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
 //! Modified by ZXS to use an internal block doubler and fixed erasure.
 
-use cipher::{BlockCipherEncBackend, BlockCipherEncClosure, BlockCipherEncrypt};
+use crate::smb::session::cipher_interface::{BlockCipherEncBackend, BlockCipherEncClosure, BlockCipherEncrypt};
 use core::fmt;
 use super::double::Dbl;
 use crate::smb::fixed_output::{

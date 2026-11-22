@@ -5,10 +5,8 @@
 //! https://doc.rust-lang.org/reference/attributes/codegen.html#r-attributes.codegen.target_feature.aarch64
 use super::utils::{load_block, store_block};
 use crate::smb::session::block_cipher::Block;
-use cipher::{
-    array::{Array, ArraySize},
-    inout::InOut,
-};
+use crypto_common::array::{Array, ArraySize};
+use inout::InOut;
 use core::arch::aarch64::*;
 
 #[target_feature(enable = "aes")]

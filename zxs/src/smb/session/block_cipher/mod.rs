@@ -6,12 +6,10 @@
 
 mod backends;
 
-use cipher::{
-    AlgorithmName, BlockCipherDecClosure, BlockCipherDecrypt, BlockCipherEncClosure,
-    BlockCipherEncrypt, BlockSizeUser, Key, KeyInit, KeySizeUser,
-    array::Array,
-    consts::U16,
+use super::cipher_interface::{
+    BlockCipherDecClosure, BlockCipherDecrypt, BlockCipherEncClosure, BlockCipherEncrypt,
 };
+use crypto_common::{AlgorithmName, BlockSizeUser, Key, KeyInit, KeySizeUser, array::Array, typenum::U16};
 use core::fmt;
 use crate::smb::backend_select::cfg_if;
 

@@ -50,6 +50,7 @@ commit = "f836f71fadb3b975b577a293d57851d044f0a44b"
 upstream_subdirectory = "cipher"
 archive = "https://static.crates.io/crates/cipher/cipher-0.5.2.crate"
 sha256 = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
+internal_module = "src/smb/session/cipher_interface"
 
 [[package]]
 name = "cmac"

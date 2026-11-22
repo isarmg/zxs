@@ -1,10 +1,9 @@
 // ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
-use cipher::{
-    Block, BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend,
-    BlockCipherEncClosure, BlockSizeUser, ParBlocks, ParBlocksSizeUser,
-    consts::{U8, U16},
-    inout::InOut,
+use crate::smb::session::cipher_interface::{
+    BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend, BlockCipherEncClosure,
 };
+use crypto_common::{Block, BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::{U8, U16}};
+use inout::InOut;
 
 mod encdec;
 mod expand;

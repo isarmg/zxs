@@ -4,10 +4,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
-pub(super) use cipher::StreamCipher;
-
-use cipher::{BlockSizeUser, InOutBuf, InvalidLength, Key, KeyInit, KeySizeUser, StreamCipherError, consts};
+use crate::smb::session::cipher_interface::{StreamCipher, StreamCipherError};
 use core::array;
+use crypto_common::{BlockSizeUser, InvalidLength, Key, KeyInit, KeySizeUser, typenum::consts};
+use inout::InOutBuf;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 const MIN_KEY_SIZE: usize = 1;
 const MAX_KEY_SIZE: usize = 256;
@@ -89,19 +90,13 @@ impl StreamCipher for Rc4 {
             *b.get_out() = ks ^ *b.get_in();
         });
     }
-
-    #[inline]
-    fn unchecked_write_keystream(&mut self, buf: &mut [u8]) {
-        buf.iter_mut().for_each(|b| *b = self.prga());
-    }
 }
 
 // ZXS used only the zeroize-enabled form. It is not a switch in this module.
-impl cipher::zeroize::ZeroizeOnDrop for Rc4 {}
+impl ZeroizeOnDrop for Rc4 {}
 
 impl core::ops::Drop for Rc4 {
     fn drop(&mut self) {
-        use cipher::zeroize::Zeroize;
         self.state.zeroize();
         self.i.zeroize();
         self.j.zeroize();

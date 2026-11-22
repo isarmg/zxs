@@ -11,16 +11,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cipher"
-version = "0.5.2"
-dependencies = [
- "block-buffer",
- "crypto-common",
- "inout",
- "zeroize",
-]
-
-[[package]]
 name = "crypto-common"
 version = "0.2.2"
 dependencies = [
@@ -59,8 +49,8 @@ name = "zxs"
 version = "0.1.0"
 dependencies = [
  "block-buffer",
- "cipher",
  "crypto-common",
+ "inout",
  "libc",
  "zeroize",
 ]

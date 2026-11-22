@@ -44,8 +44,7 @@ to NTLM's keyed proof and MIC, standard key derivations and optional key
 exchange/MIC wrapping. No MD4/password processing or host crypto provider
 is added here. RC4 is now a [private key-exchange module](../../src/smb/session/strict_verifier/key_exchange/ORIGIN.md),
 no longer a Cargo package; its recorded origin and licenses remain. It uses
-the already enabled stream-wrapper and zeroize features of the same cipher
-package rather than adding or updating any library.
+the checked in-place stream method in the [private cipher interface](../../src/smb/session/cipher_interface/ORIGIN.md).
 
 MD5 is now part of the [private NTLM digest](../../src/smb/session/strict_verifier/auth_digest/ORIGIN.md),
 not a Cargo package. It uses the same compression choices and original
@@ -61,7 +60,8 @@ CMAC and the forward 128-bit doubling it uses are now part of the
 separate Cargo packages. Signing retains the same buffering, erasure and
 traits. Unused doubling sizes and inverse operations were not moved. The
 used [AES-128 implementation](../../src/smb/session/block_cipher/ORIGIN.md)
-is now a private ZXS module rather than a separate Cargo package.
+is now a private ZXS module rather than a separate Cargo package. AES and
+CMAC use the block traits in the same private cipher interface.
 
 The pinned SHA-256 and SHA-512 code used by SMB now belongs to the
 [private handshake hash module](../../src/smb/handshake_hash/ORIGIN.md).
@@ -78,17 +78,15 @@ uses the same target predicates and priority without a separate Cargo package.
 
 The ZXS workspace excludes the remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
-graph. The cipher manifest has no default feature; ZXS makes the already active
-stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
-The existing block buffer, common traits and constant-time comparisons are
-used directly by the private fixed-output code, with the same features.
+graph. The cipher interface uses the same common types, input/output buffers
+and erasure traits directly. The private fixed-output code keeps the same
+block buffer and erasure features.
 No derive, alloc/oid, C provider, generated binding, system crypto or external
 service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> block-buffer [zeroize], cipher [stream-wrapper, zeroize], crypto-common, libc, zeroize
-cipher -> block-buffer, crypto-common [alias common], inout, zeroize
+zxs -> block-buffer [zeroize], crypto-common [zeroize], inout, libc, zeroize
 block-buffer -> hybrid-array, zeroize
 crypto-common -> hybrid-array
 inout -> hybrid-array
