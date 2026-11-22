@@ -53,7 +53,7 @@ impl FreshScope{
 }
 struct Question {
     nonce:[u8;32],actor:Id,pool:Id,init:Id,location:[u64;3],system:PathBuf,
-    paths:Vec<PathBuf>,fresh:Option<FreshScope>,
+    paths:Vec<PathBuf>,fresh:FreshScope,
 }
 fn bad_question()->io::Error{bad("wrong scoped first-layout original INIT selection")}
 impl Question {
@@ -74,10 +74,8 @@ impl Question {
             if self.system==*p||!seen.insert(p.as_os_str().as_bytes()){return Err(bad_question());}
             path(&mut b,p)?;
         }
-        if let Some(f)=self.fresh{
-            if f.subject.tuple().0!=self.actor{return Err(bad_question());}
-            f.encode(&mut b)?;
-        }
+        if self.fresh.subject.tuple().0!=self.actor{return Err(bad_question());}
+        self.fresh.encode(&mut b)?;
         Ok(b)
     }
     fn decode(bytes:&[u8])->io::Result<Self>{
@@ -98,7 +96,7 @@ impl Question {
         let system=path(&mut b)?;let [count]=field(&mut b)?;
         if !(1..=MAX_FOLDERS).contains(&(count as usize)){return Err(bad_question());}
         let paths=(0..count).map(|_|path(&mut b)).collect::<io::Result<Vec<_>>>()?;
-        let fresh=if b.is_empty(){None}else{Some(FreshScope::decode(b)?)};
+        let fresh=FreshScope::decode(b)?;
         let q=Self{nonce,actor,pool,init,location,system,paths,fresh};
         if q.encode()?.as_slice()!=bytes{return Err(bad_question());}
         Ok(q)
@@ -144,26 +142,25 @@ fn separate(a:&Pinned,b:&Pinned)->bool{
         && !a.path().starts_with(b.path())&&!b.path().starts_with(a.path())
 }
 struct Originals {
-    system:Pinned,ex:File,subject:(Id,u32,u32),paths_preview:String,host:File,recycle:Recycle,
-    chosen_paths:Vec<PathBuf>,fresh:Option<FreshScope>,physical:Vec<OriginalFolder>,database:Option<InitialDatabase>,
+    system:Pinned,ex:File,subject:ExplicitSubject,paths_preview:String,host:File,recycle:Recycle,
+    chosen_paths:Vec<PathBuf>,physical:Vec<OriginalFolder>,database:InitialDatabase,
 }
 impl Originals {
     fn require(&self)->io::Result<()>{
-        require(&self.system,&self.ex,self.subject)?;
-        if let Some(database)=&self.database{database.named(&self.ex)?;}
-        for f in &self.physical{f.require(&self.host,self.subject.1)?;}
-        self.recycle.require(&self.host,self.subject.1,
+        let subject=self.subject.tuple();
+        require(&self.system,&self.ex,subject)?;
+        self.database.named(&self.ex)?;
+        for f in &self.physical{f.require(&self.host,subject.1)?;}
+        self.recycle.require(&self.host,subject.1,
             std::iter::once((&self.system,&self.ex)).chain(self.physical.iter().map(|f|(&f.pin,&f.dir))))?;
-        if self.fresh.is_some(){no_foreign_media(self.recycle.source().1)?;}
-        Ok(())
+        no_foreign_media(self.recycle.source().1)
     }
-    fn select<T>(system:&Path,(pool,init):(Id,Id),choices:Vec<Choice>,fresh:Option<FreshScope>,
+    fn select<T>(system:&Path,(pool,init):(Id,Id),choices:Vec<Choice>,fresh:FreshScope,
         build:impl FnOnce(Vec<Folder>)->io::Result<T>)
         ->io::Result<(Self,T)> {
-        if fresh.is_none(){approval::no_inherited_descriptors()?;}
         let host=approval::host_admin()?;
         let tty=PublicConfirmation::select()?;
-        let subject=fresh.ok_or_else(bad_question)?.subject.tuple();
+        let subject=fresh.subject.tuple();
         let system=Pinned::already_mounted(system,PathKind::StorageRoot)?;
         let ex=system.storage_directory()?;flock(&ex,FlockOperation::NonBlockingLockExclusive)?;
         let check=||{tty.check()?;require(&system,&ex,subject)};
@@ -171,13 +168,13 @@ impl Originals {
         let nonce=random::<32>()?;
         let req=Question{nonce,actor:subject.0,pool,init,location:place(&system)?,system:system.path().to_path_buf(),
             paths:choices.iter().map(|c|c.path.clone()).collect(),fresh};
-        let (folders,claim,ordinary,database)=read_layout(req,&ex,subject,check,(pool,init))?;
-        let f=choices.iter().zip(&folders).map(|(c,&volume)|Folder{volume,name:c.folder.clone(),mode:c.mode}).collect();
+        let LayoutEvidence{ordinary,recycle,database}=read_layout(&req,&ex,check)?;
+        let f=choices.iter().zip(&ordinary).map(|(c,(volume,_))|Folder{volume:*volume,name:c.folder.clone(),mode:c.mode}).collect();
         let plan=build(f)?;
         // Setup cannot be issued for an absent, unconfirmed or read-only R.
         // Prove its actual original before asking for the layout approval.
         let mut physical:Vec<OriginalFolder>=Vec::new();
-        for c in ordinary{
+        for (_,c) in &ordinary{
             let pin=Pinned::already_mounted(&c.path,PathKind::StorageRoot)?;
             if !separate(&pin,&system)||physical.iter().any(|p|!separate(&pin,&p.pin)){return Err(bad_question());}
             let dir=pin.storage_directory()?;
@@ -185,23 +182,21 @@ impl Originals {
             let original=OriginalFolder{pin,dir,mark,body:c.marker};
             original.require(&host,subject.1)?;physical.push(original);
         }
-        if fresh.is_some()&&physical.len()!=folders.len(){return Err(bad_question());}
-        let recycle=Recycle::select(&claim,&host,subject.1,
+        let recycle=Recycle::select(&recycle,&host,subject.1,
             std::iter::once((&system,&ex)).chain(physical.iter().map(|f|(&f.pin,&f.dir))))?;
         let mut paths_preview=String::from("本次低权限只读核对的原 SYSTEM：\"");
         smb_profile::escaped(&mut paths_preview,system.path().as_os_str().as_bytes());
-        paths_preview.push_str(if fresh.is_some(){"\"；普通盘核原声明与原卷标，不读业务内容。\n"}
-            else{"\"；普通盘只核原登记字节，未读盘内容。\n"});
+        paths_preview.push_str("\"；普通盘核原声明与原卷标。\n");
         paths_preview.push_str("  已核独立回收盘原路径 \"");
         smb_profile::escaped(&mut paths_preview,recycle.source().0.as_os_str().as_bytes());
         paths_preview.push_str("\"；只核卷身份与固定标记。\n");
-        for (c,id) in choices.iter().zip(&folders){
+        for (c,(id,_)) in choices.iter().zip(&ordinary){
             let hex=id.iter().map(|b|format!("{b:02x}")).collect::<String>();
             paths_preview.push_str("  已选原路径 \"");
             smb_profile::escaped(&mut paths_preview,c.path.as_os_str().as_bytes());
             writeln!(paths_preview,"\" → 原普通卷 {hex}。").expect("writing a String");
         }
-        let out=Self{system,ex,subject,paths_preview,host,recycle,fresh,physical,database,
+        let out=Self{system,ex,subject:fresh.subject,paths_preview,host,recycle,physical,database,
             chosen_paths:choices.into_iter().map(|c|c.path).collect()};
         out.require()?;Ok((out,plan))
     }
@@ -215,17 +210,16 @@ impl ResolvedRust {
     pub(in crate::sqlite_install::pair) fn fresh(parent:&FreshParent,system:&Path,origin:crate::smb_profile::rust_first::Origin,host:String,
         endpoints:Vec<Endpoint>,choices:Vec<Choice>,recycle:RecycleName,subject:ExplicitSubject,helper:[u8;32],init_sha:[u8;32])->io::Result<Self>{
         parent.before_original_sql(&origin.instance)?;
-        let (original,plan)=Originals::select(system,(origin.pool,origin.init),choices,Some(FreshScope{subject,helper,init_sha}),
+        let (original,plan)=Originals::select(system,(origin.pool,origin.init),choices,FreshScope{subject,helper,init_sha},
             move|folders|crate::smb_profile::rust_first::RustPlan::selected(origin,host,endpoints,folders,recycle).map_err(bad))?;
         parent.before_original_sql(&origin.instance)?;
         Ok(Self{original,plan})
     }
     pub(in crate::sqlite_install::pair) fn fresh_database(&self)->io::Result<[u64;3]>{
-        self.original.database.as_ref().ok_or_else(bad_question)?.named(&self.original.ex)
+        self.original.database.named(&self.original.ex)
     }
     pub(in crate::sqlite_install::pair) fn protected_new_system(&self)->io::Result<(&Pinned,&File,ExplicitSubject)>{
-        let s=self.original.fresh.ok_or_else(bad_question)?;
-        self.require()?;Ok((&self.original.system,&self.original.ex,s.subject))
+        self.require()?;Ok((&self.original.system,&self.original.ex,self.original.subject))
     }
     pub(in crate::sqlite_install::pair) fn require_product_parent(&self,chain:&[crate::pinned::Entity])->io::Result<()>{
         let [_,product,parent]=chain else{return Err(bad_question());};
@@ -296,30 +290,27 @@ fn query_with<T>(raw:&[u8],original:&File,subject:(Id,u32,u32),helper_sha:Option
     hired.finish(&channel,until)?;check()?;
     Ok(v)
 }
-fn read_layout(q:Question,ex:&File,subject:(Id,u32,u32),check:impl Fn()->io::Result<()>,cut:(Id,Id))->io::Result<(Vec<Id>,Initial,Vec<Initial>,Option<InitialDatabase>)>{
-    query_with(&q.encode()?,ex,subject,q.fresh.map(|v|v.helper),&check,|channel,scope,until|{
-        let database=if q.fresh.is_some(){
-            let (b,[fd])=channel.wait_checked::<1>(Kind::FreshDatabase,scope,until,&check)?;
-            let original=InitialDatabase::received(fd,subject.1)?;
-            let place=original.named(ex)?;
-            if b!=database_payload(place)||place[0]!=q.location[0]||place[2]!=q.location[2]{return Err(bad_question());}
-            Some(original)
-        }else{None};
-        let mut ids=Vec::with_capacity(q.paths.len());let mut ordinary=Vec::new();
-        for i in 0..q.paths.len(){
+struct LayoutEvidence{ordinary:Vec<(Id,Initial)>,recycle:Initial,database:InitialDatabase}
+fn read_layout(q:&Question,ex:&File,check:impl Fn()->io::Result<()>)->io::Result<LayoutEvidence>{
+    let subject=q.fresh.subject.tuple();
+    let cut=(q.pool,q.init);
+    query_with(&q.encode()?,ex,subject,Some(q.fresh.helper),&check,|channel,scope,until|{
+        let (b,[fd])=channel.wait_checked::<1>(Kind::FreshDatabase,scope,until,&check)?;
+        let database=InitialDatabase::received(fd,subject.1)?;
+        let place=database.named(ex)?;
+        if b!=database_payload(place)||place[0]!=q.location[0]||place[2]!=q.location[2]{return Err(bad_question());}
+        let mut ordinary=Vec::with_capacity(q.paths.len());
+        for (i,path) in q.paths.iter().enumerate(){
             let (v,[])=channel.wait_checked::<0>(Kind::ChosenFolder,scope,until,&check)?;
             let id:Id=v[1..17].try_into().expect("fixed reply");
-            if v!=body(i,id)||id==[0;16]||ids.contains(&id){return Err(bad_question());}
-            ids.push(id);
-            if q.fresh.is_some(){
-                let folder=Folder{volume:id,name:String::new(),mode:Mode::ReadOnly};
-                let fact=receive_scoped_media(channel,scope,until,&check,i,Some(&folder),cut,subject)?;
-                if fact.path!=q.paths[i]{return Err(bad_question());}ordinary.push(fact);
-            }
+            if v!=body(i,id)||id==[0;16]||ordinary.iter().any(|(known,_)|*known==id){return Err(bad_question());}
+            let fact=receive_scoped_media(channel,scope,until,&check,i,Some(id),cut,subject)?;
+            if fact.path.as_os_str()!=path.as_os_str(){return Err(bad_question());}
+            ordinary.push((id,fact));
         }
-        let r=receive_scoped_media(channel,scope,until,&check,q.paths.len(),None,cut,subject)?;
-        if ids.iter().any(|id|id.as_slice()==&r.marker[37..53]){return Err(bad_question());}
-        Ok((ids,r,ordinary,database))
+        let recycle=receive_scoped_media(channel,scope,until,&check,q.paths.len(),None,cut,subject)?;
+        if ordinary.iter().any(|(id,_)|id.as_slice()==&recycle.marker[37..53]){return Err(bad_question());}
+        Ok(LayoutEvidence{ordinary,recycle,database})
     })
 }
 fn volume_reply(i:usize,raw:&[u8])->[u8;65]{
@@ -329,22 +320,22 @@ fn media_bytes(record:&crate::sqlite_install::catalog::Initial)->Vec<u8>{
     let mut out=record.marker.to_vec();out.extend(record.path.as_os_str().as_bytes());out
 }
 // A missing `expected` can represent only the uniquely issued ordinal-one R.
-fn scoped_material(raw:&[u8],expected:Option<&Folder>,pool:Id,init:Id)->io::Result<Initial>{
+fn scoped_material(raw:&[u8],expected:Option<Id>,pool:Id,init:Id)->io::Result<Initial>{
     let (prefix,path)=raw.split_at_checked(101).ok_or_else(bad_question)?;
     let marker:[u8;101]=prefix.try_into().expect("control marker width");
     crate::path_rules::Kind::StorageRoot.check_path(path).map_err(bad)?;
     let role=if expected.is_some(){2}else{1};
     if &marker[..20]!=b"ZXS-SQLITE-1/VOLUME\0"||marker[20]!=role||marker[21..37]!=pool||
-        marker[37..53]==[0;16]||marker[37..53]==pool||expected.is_some_and(|f|marker[37..53]!=f.volume)
+        marker[37..53]==[0;16]||marker[37..53]==pool||expected.is_some_and(|id|marker[37..53]!=id)
         ||marker[53..69]!=init||marker[69..]==[0;32]{return Err(bad_question());}
     Ok(Initial{path:PathBuf::from(OsString::from_vec(path.to_vec())),marker})
 }
 fn receive_scoped_media(channel:&Channel,scope:&[u8;32],until:Instant,check:impl Fn()->io::Result<()>,
-    i:usize,folder:Option<&Folder>,ids:(Id,Id),subject:(Id,u32,u32))->io::Result<Initial>{
+    i:usize,volume:Option<Id>,ids:(Id,Id),subject:(Id,u32,u32))->io::Result<Initial>{
     let (reply,[fd])=channel.wait_checked::<1>(Kind::VolumeClaim,scope,until,check)?;
     let value=sealed_owner(&fd,101+MAX_PATH_BYTES,(subject.1,subject.2))?;
     if reply!=volume_reply(i,&value){return Err(bad_question());}
-    scoped_material(&value,folder,ids.0,ids.1)
+    scoped_material(&value,volume,ids.0,ids.1)
 }
 fn send_media(channel:&Channel,scope:&[u8;32],i:usize,claim:&Initial)->io::Result<()>{
     let bytes=media_bytes(claim);let report=sealed(&bytes)?;
@@ -358,7 +349,7 @@ pub(crate) fn worker()->io::Result<()>{
     let helper=ForegroundElf::host()?;
     helper.parent_is_same_image(parent)?;
     let raw=read_sealed(&meta,BUDGET)?;drop(meta);
-    enum QuestionKind{Fresh(Question,FreshScope),Retirement(retirement_check::Question),Deployment(deployment_check::Question),Import(import_inventory::Question)}
+    enum QuestionKind{Fresh(Question),Retirement(retirement_check::Question),Deployment(deployment_check::Question),Import(import_inventory::Question)}
     let q=if raw.starts_with(retirement_check::DOMAIN){
         QuestionKind::Retirement(retirement_check::Question::decode(&raw)?)
     }else if raw.starts_with(deployment_check::DOMAIN){
@@ -367,16 +358,14 @@ pub(crate) fn worker()->io::Result<()>{
         QuestionKind::Import(import_inventory::Question::decode(&raw)?)
     }else{
         let q=Question::decode(&raw)?;
-        let fresh=q.fresh.ok_or_else(bad_question)?;
-        helper.require_independent_digest(&fresh.helper)?;
-        if q.actor!=fresh.subject.tuple().0{return Err(bad_question());}
-        QuestionKind::Fresh(q,fresh)
+        helper.require_independent_digest(&q.fresh.helper)?;
+        QuestionKind::Fresh(q)
     };
     let local=matches!(&q,QuestionKind::Import(_)).then(import_inventory::mount_scope).transpose()?;
     let host=approval::host_admin()?;
     drop(helper);
     let (subject,location,path)=match &q{
-        QuestionKind::Fresh(q,f)=>(f.subject,q.location,q.system.as_path()),
+        QuestionKind::Fresh(q)=>(q.fresh.subject,q.location,q.system.as_path()),
         QuestionKind::Retirement(q)=>q.original_system(),
         QuestionKind::Deployment(q)=>q.original_system(),
         QuestionKind::Import(q)=>q.original_system(),
@@ -398,13 +387,13 @@ pub(crate) fn worker()->io::Result<()>{
     };
     if place(&pin)?!=location{return Err(bad_question());}
     let system=SelectedSystem::from_origin(pin,host,uid,gid)?.from_lent_ex(lease)?;
-    let (q,fresh)=match q{
-        QuestionKind::Fresh(q,fresh)=>(q,fresh),
+    let q=match q{
+        QuestionKind::Fresh(q)=>q,
         QuestionKind::Retirement(q)=>return q.inspect(&system,&channel,&scope,parent),
         QuestionKind::Deployment(q)=>return q.inspect(&system,&channel,&scope,parent),
         QuestionKind::Import(q)=>return q.inspect(&system,&channel,&scope,parent),
     };
-    let (catalogue,db)=observed::isolated_first_claims(&q.pool,&q.init,&actor,&fresh.init_sha,&system)?;
+    let (catalogue,db)=observed::isolated_first_claims(&q.pool,&q.init,&actor,&q.fresh.init_sha,&system)?;
     let place=InitialDatabase::scope(&db,uid)?;
     if place[0]!=q.location[0]||place[2]!=q.location[2]||getppid()!=Some(parent){return Err(bad_question());}
     system.require()?;
@@ -428,36 +417,41 @@ mod tests {
     use super::*;
     #[test] fn startup_material_binds_a_marker_to_the_exact_approved_volume(){
         let(pool,init)=([1;16],[2;16]);
-        let chosen=Folder{volume:[0x21;16],name:"Docs".into(),mode:Mode::ReadOnly};
+        let chosen=[0x21;16];
         let proof=crate::sqlite_install::catalog::Initial{
             path:PathBuf::from(OsString::from_vec(b"/mnt/original-\xfe".to_vec())),
-            marker:crate::sqlite_install::catalog::claimed_marker(2,&pool,&chosen.volume,&init,&[0x31;32]),
+            marker:crate::sqlite_install::catalog::claimed_marker(2,&pool,&chosen,&init,&[0x31;32]),
         };
         let raw=media_bytes(&proof);
-        assert_eq!(scoped_material(&raw,Some(&chosen),pool,init).unwrap().path,proof.path);
-        assert!(scoped_material(&raw,Some(&Folder{volume:[0x22;16],..chosen.clone()}),pool,init).is_err());
+        assert_eq!(scoped_material(&raw,Some(chosen),pool,init).unwrap().path,proof.path);
+        assert!(scoped_material(&raw,Some([0x22;16]),pool,init).is_err());
         assert!(scoped_material(&raw,None,pool,init).is_err());
         let mut recycle=raw.clone();recycle[20]=1;
-        assert!(scoped_material(&recycle,Some(&chosen),pool,init).is_err());
+        assert!(scoped_material(&recycle,Some(chosen),pool,init).is_err());
         assert_eq!(scoped_material(&recycle,None,pool,init).unwrap().path,proof.path);
-        let mut wrong=raw.clone();wrong[53]=0;assert!(scoped_material(&wrong,Some(&chosen),pool,init).is_err());
-        let mut wrong=raw;wrong.extend(b"/../other");assert!(scoped_material(&wrong,Some(&chosen),pool,init).is_err());
+        let mut wrong=raw.clone();wrong[53]=0;assert!(scoped_material(&wrong,Some(chosen),pool,init).is_err());
+        let mut wrong=raw;wrong.extend(b"/../other");assert!(scoped_material(&wrong,Some(chosen),pool,init).is_err());
+    }
+    fn fresh_scope()->FreshScope{
+        FreshScope{subject:ExplicitSubject::checked([1;16],1001,1002).unwrap(),helper:[41;32],init_sha:[42;32]}
     }
     #[test] fn fresh_v18_question_roundtrips_the_distinct_exact_init_and_helper_digests(){
         let q=Question{nonce:[7;32],actor:[1;16],pool:[2;16],init:[3;16],location:[9,10,15],
-            system:"/fixture/S".into(),paths:vec!["/fixture/F".into()],fresh:Some(FreshScope{
-                subject:ExplicitSubject::checked([1;16],1001,1002).unwrap(),helper:[41;32],init_sha:[42;32],
-            })};
+            system:"/fixture/S".into(),paths:vec!["/fixture/F".into()],fresh:fresh_scope()};
         if !cfg!(feature="private-fresh-zxs-v18"){assert!(q.encode().is_err());return;}
         let raw=q.encode().unwrap();
-        let real=Question::decode(&raw).unwrap().fresh.unwrap();
+        let accepted=crate::fs_tools::hex("a4ccc67c9bd77c3f81bb195af060e5e8820424ec69d3aad103968e556b2c14cd").unwrap();
+        assert_eq!(<[u8;32]>::from(Sha256::digest(&raw)),accepted);
+        let real=Question::decode(&raw).unwrap().fresh;
         assert_eq!((real.helper,real.init_sha),([41;32],[42;32]));
         assert!(Question::decode(&raw[..raw.len()-1]).is_err());
+        assert!(Question::decode(&raw[..raw.len()-FRESH_SIZE]).is_err());
         let mut tail=raw;tail.push(0);assert!(Question::decode(&tail).is_err());
     }
     #[test] fn exact_raw_paths_are_distinct_and_not_normalized(){
         let mut q=Question{nonce:[7;32],actor:[1;16],pool:[2;16],init:[3;16],location:[0,9,15],
-            system:"/system".into(),paths:vec![PathBuf::from(OsString::from_vec(b"/mnt/data-\xff".to_vec())),"/mnt/Data".into()],fresh:None};
+            system:"/system".into(),paths:vec![PathBuf::from(OsString::from_vec(b"/mnt/data-\xff".to_vec())),"/mnt/Data".into()],fresh:fresh_scope()};
+        if !cfg!(feature="private-fresh-zxs-v18"){assert!(q.encode().is_err());return;}
         let raw=q.encode().unwrap();assert_eq!(Question::decode(&raw).unwrap().paths,q.paths);
         let mut extra=raw.clone();extra.push(0);assert!(Question::decode(&extra).is_err());
         assert!(Question::decode(&raw[..raw.len()-1]).is_err());
