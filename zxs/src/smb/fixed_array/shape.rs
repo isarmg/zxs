@@ -8,10 +8,10 @@ use core::{
     mem::MaybeUninit,
     ops::{Index, IndexMut, Range},
 };
-use typenum::Unsigned;
+use crate::smb::type_lengths::Unsigned;
 
 /// Trait which associates a [`usize`] size and `ArrayType` with a
-/// `typenum`-provided [`Unsigned`] integer.
+/// sealed [`Unsigned`] integer.
 ///
 /// # Safety
 ///
@@ -21,7 +21,7 @@ pub unsafe trait ArraySize: Unsigned + Debug {
     /// Array type which corresponds to this size.
     ///
     /// This is always defined to be `[T; N]` where `N` is the same as
-    /// [`ArraySize::USIZE`][`typenum::Unsigned::USIZE`].
+    /// [`Unsigned::USIZE`].
     type ArrayType<T>: AssocArraySize<Size = Self>
         + AsRef<[T]>
         + AsMut<[T]>
@@ -41,7 +41,7 @@ pub unsafe trait ArraySize: Unsigned + Debug {
 
 /// Associates an array with its exact type-level length.
 pub trait AssocArraySize: Sized {
-    /// Size of an array type, expressed as a [`typenum`]-based [`ArraySize`].
+    /// The exact [`ArraySize`] of the array.
     type Size: ArraySize;
 }
 

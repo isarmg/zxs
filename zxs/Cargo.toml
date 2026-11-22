@@ -17,13 +17,11 @@ resolver = "3"
 # Vendored upstream libraries are dependencies, not ZXS workspace/test members.
 exclude = [
     "vendor/rust/libc-0.2.191",
-    "vendor/rust/typenum-1.20.1",
 ]
 
 # Native storage libraries are not part of the browser module.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
-typenum = { version = "=1.20.1", path = "vendor/rust/typenum-1.20.1", features = ["const-generics"] }
 
 [profile.browser]
 inherits = "release"

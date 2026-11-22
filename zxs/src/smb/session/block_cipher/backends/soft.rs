@@ -5,7 +5,7 @@ use fixslice::BatchBlocks;
 use crate::smb::session::cipher_interface::{
     BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend, BlockCipherEncClosure,
 };
-use crate::smb::crypto_types::{BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::U16};
+use crate::smb::crypto_types::{BlockSizeUser, ParBlocks, ParBlocksSizeUser, type_lengths::U16};
 use crate::smb::session::cipher_buffers::InOut;
 
 #[path = "fixslice/mod.rs"]

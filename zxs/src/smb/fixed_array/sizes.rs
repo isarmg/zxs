@@ -1,14 +1,14 @@
 // Adapted from `RustCrypto` (MIT OR Apache-2.0); see ORIGIN.md.
 //! Supported type-level lengths and their core array representations.
 
-use super::{ArraySize, AssocArraySize};
+use super::{ArraySize, AssocArraySize, type_lengths};
 use core::mem::MaybeUninit;
 
 macro_rules! impl_array_sizes {
     ($($len:expr => $ty:ident),+ $(,)?) => {
         $(
-            // SAFETY: the length equals this typenum's Unsigned::USIZE, verified by the size test.
-            unsafe impl ArraySize for typenum::consts::$ty {
+            // SAFETY: the size test verifies the length equals this unsigned width.
+            unsafe impl ArraySize for type_lengths::consts::$ty {
                 type ArrayType<T> = [T; $len];
 
                 #[inline]
@@ -18,7 +18,7 @@ macro_rules! impl_array_sizes {
             }
 
             impl<T> AssocArraySize for [T; $len] {
-                type Size = typenum::consts::$ty;
+                type Size = type_lengths::consts::$ty;
             }
         )+
     };

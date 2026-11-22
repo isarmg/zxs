@@ -6,7 +6,7 @@
 pub mod state;
 
 pub(in crate::smb) use super::fixed_array as array;
-pub use typenum;
+pub(in crate::smb) use super::type_lengths;
 use core::fmt;
 use array::{Array, ArraySize};
 

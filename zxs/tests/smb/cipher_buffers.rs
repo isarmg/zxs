@@ -1,5 +1,5 @@
 use super::{InOut, InOutBuf};
-use typenum::U4;
+use crate::smb::type_lengths::U4;
 
 #[test]
 fn borrowed_groups_and_tail_cover_exactly_the_selected_prefix() {

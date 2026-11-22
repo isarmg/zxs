@@ -6,7 +6,7 @@
 
 use crate::smb::session::cipher_interface::{StreamCipher, StreamCipherError};
 use core::array;
-use crate::smb::crypto_types::{BlockSizeUser, InvalidLength, Key, KeyInit, KeySizeUser, typenum::consts};
+use crate::smb::crypto_types::{BlockSizeUser, InvalidLength, Key, KeyInit, KeySizeUser, type_lengths::consts};
 use crate::smb::session::cipher_buffers::InOutBuf;
 use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop};
 

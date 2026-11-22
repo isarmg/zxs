@@ -1,6 +1,6 @@
 // Adapted by ZXS from RustCrypto (MIT OR Apache-2.0); see ORIGIN.md.
 
-use typenum::{IsLess, NonZero, True, U0, U1, U256, Unsigned};
+use crate::smb::type_lengths::{IsLess, NonZero, True, U0, U1, U256, Unsigned};
 
 use super::{Array, ArraySize};
 use core::{mem::MaybeUninit, ptr};

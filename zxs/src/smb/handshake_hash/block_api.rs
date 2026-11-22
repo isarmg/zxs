@@ -11,7 +11,7 @@ use crate::smb::fixed_output::{
         TruncSide, UpdateCore, VariableOutputCore,
     },
     common::state::{DeserializeStateError, SerializableState, SerializedState},
-    typenum::{U32, U40, U64, U80, U128, Unsigned},
+    type_lengths::{U32, U40, U64, U80, U128, Unsigned},
 };
 
 use super::{sha256::compress256, sha512::compress512};

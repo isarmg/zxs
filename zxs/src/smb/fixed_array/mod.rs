@@ -7,7 +7,7 @@ mod shape;
 mod sizes;
 
 pub use shape::{ArraySize, AssocArraySize};
-pub use typenum;
+pub(in crate::smb) use super::type_lengths;
 
 use core::{
     array::TryFromSliceError,
@@ -17,7 +17,7 @@ use core::{
     ptr,
     slice::{self, Iter, IterMut},
 };
-use typenum::{Diff, Sum};
+use type_lengths::{Diff, Sum};
 use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop};
 
 /// A transparent wrapper around the `[T; N]` selected by `U`.

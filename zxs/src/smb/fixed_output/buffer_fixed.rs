@@ -339,7 +339,7 @@ macro_rules! buffer_fixed {
         SerializableState $($trait_name:ident)*;
     ) => {
         impl$(< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? $crate::smb::fixed_output::common::state::SerializableState for $name$(< $( $lt ),+ >)? {
-            type SerializedStateSize = $crate::smb::fixed_output::typenum::Sum<
+            type SerializedStateSize = $crate::smb::fixed_output::type_lengths::Sum<
                 <$core_ty as $crate::smb::fixed_output::common::state::SerializableState>::SerializedStateSize,
                 $crate::smb::fixed_output::block_buffer::SerializedBufferSize<
                     <$core_ty as $crate::smb::fixed_output::block_api::BlockSizeUser>::BlockSize,

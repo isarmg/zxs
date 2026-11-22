@@ -4,14 +4,14 @@ use core::{
     mem::{align_of_val, size_of, size_of_val},
     ptr,
 };
-use typenum::{U2, U3, U4, U5, Unsigned};
+use crate::smb::type_lengths::{self, U2, U3, U4, U5, Unsigned};
 use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 macro_rules! verify_array_sizes {
     ($($len:expr => $ty:ident),+ $(,)?) => {
         $(
-            assert_eq!($len, typenum::consts::$ty::USIZE);
-            assert_eq!($len, size_of::<Array<u8, typenum::consts::$ty>>());
+            assert_eq!($len, type_lengths::consts::$ty::USIZE);
+            assert_eq!($len, size_of::<Array<u8, type_lengths::consts::$ty>>());
         )+
     };
 }

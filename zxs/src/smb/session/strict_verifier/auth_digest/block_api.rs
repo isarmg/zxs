@@ -10,7 +10,7 @@ use crate::smb::fixed_output::{
         OutputSizeUser, Reset, UpdateCore,
     },
     common::state::{DeserializeStateError, SerializableState, SerializedState},
-    typenum::{U16, U24, U64, Unsigned},
+    type_lengths::{U16, U24, U64, Unsigned},
 };
 
 use super::{compress::compress, consts};

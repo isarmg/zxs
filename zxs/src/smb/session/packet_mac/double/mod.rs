@@ -2,7 +2,7 @@
 //! Modified by ZXS to retain only the forward 128-bit operation; see ../ORIGIN.md.
 #![forbid(unsafe_code)]
 
-use crate::smb::fixed_output::array::{Array, typenum::U16};
+use crate::smb::fixed_output::array::{Array, type_lengths::U16};
 
 const C128: u64 = 0b1000_0111;
 

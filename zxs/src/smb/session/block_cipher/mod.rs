@@ -9,7 +9,7 @@ mod backends;
 use super::cipher_interface::{
     BlockCipherDecClosure, BlockCipherDecrypt, BlockCipherEncClosure, BlockCipherEncrypt,
 };
-use crate::smb::crypto_types::{AlgorithmName, BlockSizeUser, Key, KeyInit, KeySizeUser, array::Array, typenum::U16};
+use crate::smb::crypto_types::{AlgorithmName, BlockSizeUser, Key, KeyInit, KeySizeUser, array::Array, type_lengths::U16};
 use core::fmt;
 use crate::smb::backend_select::cfg_if;
 

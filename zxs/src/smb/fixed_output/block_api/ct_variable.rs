@@ -8,7 +8,7 @@ use crate::smb::crypto_types::{
     Block, BlockSizeUser, OutputSizeUser,
     array::{Array, ArraySize},
     state::{DeserializeStateError, SerializableState, SerializedState},
-    typenum::{IsLessOrEqual, True},
+    type_lengths::{IsLessOrEqual, True},
 };
 use core::{fmt, marker::PhantomData};
 

@@ -86,12 +86,14 @@ keeps the same pending-block checks and erasure. The [private fixed arrays](../.
 keep the same layout, size and erasure behavior; no array Cargo package remains.
 The [private erasure routines](../../src/smb/memory_erasure/ORIGIN.md) retain
 the original wipe operations without a separate Cargo package.
+The [type-level lengths](../../src/smb/type_lengths/ORIGIN.md) retain the sealed
+unsigned types and arithmetic used by the fixed arrays.
 No derive, alloc/oid, C provider, generated binding, system crypto or external
 service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-storage-server -> libc, typenum [const-generics]
+storage-server -> libc
 ```
 
 All other nodes are leaves in this selected closure. All of these paths

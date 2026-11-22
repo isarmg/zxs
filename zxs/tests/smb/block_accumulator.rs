@@ -1,5 +1,5 @@
 use super::{BlockBuffer, Eager, Lazy};
-use typenum::U4;
+use crate::smb::type_lengths::U4;
 use crate::smb::memory_erasure::{Zeroize, ZeroizeOnDrop};
 
 type EagerBuffer = BlockBuffer<U4, Eager>;

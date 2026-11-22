@@ -11,9 +11,4 @@ name = "storage-server"
 version = "0.1.0"
 dependencies = [
  "libc",
- "typenum",
 ]
-
-[[package]]
-name = "typenum"
-version = "1.20.1"
