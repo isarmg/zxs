@@ -25,7 +25,11 @@ DEPENDS = {
 }
 SUMMARY = {BASE: "Local whole-directory ZIP worktrees and command line",
            GUI: "Desktop interface for ZIP Workspace", MOUNT: "Optional read-only FUSE3 snapshot mount"}
-INPUT = re.compile(r"([a-f0-9]{64})  (pyproject\.toml|zipworkspace/(?:desktop/)?[A-Za-z0-9_]+\.py)")
+PROFILE = "packaging/ubuntu-26.10/"
+ASSETS = {"copyright": PROFILE + "COPYRIGHT-NOTICE", "desktop": PROFILE + "zip-workspace.desktop",
+          "mime": PROFILE + "zip-workspace-mime.xml"}
+INPUT = re.compile(r"([a-f0-9]{64})  (pyproject\.toml|zipworkspace/(?:desktop/)?[A-Za-z0-9_]+\.py|"
+                   + "|".join(map(re.escape, ASSETS.values())) + ")")
 ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TZ": "UTC", "SOURCE_DATE_EPOCH": "1795046400"}
 
 
@@ -35,6 +39,7 @@ def require(condition, message):
 
 
 def read_inputs(project, lines):
+    """Return the verified runtime and installed asset bytes used for this build."""
     inputs = {}
     for line in lines:
         m = INPUT.fullmatch(line)
@@ -55,7 +60,11 @@ def read_inputs(project, lines):
     for name in ("zipworkspace/cli.py", "zipworkspace/__init__.py", "zipworkspace/desktop/__init__.py",
                  "zipworkspace/linux_mount.py", "zipworkspace/_mount_child.py", "zipworkspace/_fuse3.py"):
         require(name in inputs, f"missing runtime input: {name}")
-    return inputs
+    assets = {}
+    for kind, name in ASSETS.items():
+        require(name in inputs, f"missing installed asset: {name}")
+        assets[kind] = inputs.pop(name)
+    return inputs, assets
 
 
 def component(name):
@@ -93,10 +102,7 @@ def build(out, who):
             and release.get("VERSION_CODENAME") == "stonking" and sys.version_info[:2] == (3, 14)
             and subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], env=ENV).strip() == b"amd64",
             "requires unprivileged Ubuntu 26.10 amd64 with system Python 3.14")
-    inputs = read_inputs(PROJECT, (HERE / "INPUTS.sha256").read_text("ascii").splitlines())
-    copyright_text = (HERE / "COPYRIGHT-NOTICE").read_bytes()
-    desktop = (HERE / "zip-workspace.desktop").read_bytes()
-    mime = (HERE / "zip-workspace-mime.xml").read_bytes()
+    inputs, assets = read_inputs(PROJECT, (HERE / "INPUTS.sha256").read_text("ascii").splitlines())
     out = out.absolute()
     require(out == out.resolve() and not out.is_relative_to(PROJECT), "use a new real directory outside the project")
     # The caller owns this new tree and its stable parent. Never reuse or recursively clean it.
@@ -108,10 +114,10 @@ def build(out, who):
             if component(name) == pkg:
                 put(stage, ROOT + name, data)
         put(stage, "usr/bin/" + pkg, launcher(pkg), 0o755)
-        put(stage, f"usr/share/doc/{pkg}/copyright", copyright_text)
+        put(stage, f"usr/share/doc/{pkg}/copyright", assets["copyright"])
         if pkg == GUI:
-            put(stage, "usr/share/applications/zip-workspace.desktop", desktop)
-            put(stage, "usr/share/mime/packages/zip-workspace.xml", mime)
+            put(stage, "usr/share/applications/zip-workspace.desktop", assets["desktop"])
+            put(stage, "usr/share/mime/packages/zip-workspace.xml", assets["mime"])
         control = (f"Package: {pkg}\nVersion: {VERSION}\nArchitecture: amd64\nSection: utils\nPriority: optional\n"
                    f"Maintainer: {who}\nDepends: {DEPENDS[pkg]}\nDescription: {SUMMARY[pkg]}\n")
         put(stage, "DEBIAN/control", control.encode("ascii"))

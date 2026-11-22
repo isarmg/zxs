@@ -17,7 +17,15 @@ class UbuntuProfile(TestCase):
     def test_components_are_disjoint_and_correspond_to_the_real_entry_points(self):
         with TemporaryDirectory() as t:
             out = Path(t).resolve() / "new"
+            expected_assets = {kind: (pkg.PROJECT / path).read_bytes() for kind, path in pkg.ASSETS.items()}
+            asset_sources = {pkg.PROJECT / path for path in pkg.ASSETS.values()}
+            read_bytes = Path.read_bytes
             release = {"ID": "ubuntu", "VERSION_ID": "26.10", "VERSION_CODENAME": "stonking"}
+
+            def reject_unverified_asset_read(path):
+                self.assertNotIn(path, asset_sources, "stage installed assets from the input loader's verified bytes")
+                return read_bytes(path)
+
             def simulated_archive(argv, **kw):
                 self.assertEqual(argv[:2], ["/usr/bin/dpkg-deb", "--root-owner-group"])
                 # No tool/executable is run in this contract test.
@@ -26,6 +34,7 @@ class UbuntuProfile(TestCase):
                   mock.patch.object(pkg.platform, "freedesktop_os_release", return_value=release),
                   mock.patch.object(pkg.sys, "version_info", (3, 14)),
                   mock.patch.object(pkg.subprocess, "check_output", return_value=b"amd64\n"),
+                  mock.patch.object(Path, "read_bytes", reject_unverified_asset_read),
                   mock.patch.object(pkg.subprocess, "run", side_effect=simulated_archive) as native):
                 pkg.build(out, "Test Packager <fixture@example.invalid>")
                 with self.assertRaises(FileExistsError):
@@ -52,12 +61,17 @@ class UbuntuProfile(TestCase):
                 self.assertEqual("pyside6" in pkg.DEPENDS[name], name == pkg.GUI)
                 self.assertEqual("shared-mime-info" in pkg.DEPENDS[name], name == pkg.GUI)
                 self.assertEqual("desktop-file-utils" in pkg.DEPENDS[name], name == pkg.GUI)
+                self.assertEqual((stage / f"usr/share/doc/{name}/copyright").read_bytes(),
+                                 expected_assets["copyright"])
                 if name == pkg.GUI:
                     mime_file = stage / "usr/share/mime/packages/zip-workspace.xml"
+                    self.assertEqual(mime_file.read_bytes(), expected_assets["mime"])
                     mime, = ElementTree.parse(mime_file).getroot()
                     self.assertEqual(mime.attrib, {"type": "application/x-zip-workspace-snapshot"})
                     self.assertEqual([el.attrib["pattern"] for el in mime.findall("{*}glob")], ["*.zxs"])
-                    desktop = (stage / "usr/share/applications/zip-workspace.desktop").read_text()
+                    launcher_file = stage / "usr/share/applications/zip-workspace.desktop"
+                    self.assertEqual(launcher_file.read_bytes(), expected_assets["desktop"])
+                    desktop = launcher_file.read_text()
                     self.assertIn("Exec=/usr/bin/zip-workspace-desktop %f\n", desktop)
                     self.assertIn("MimeType=application/x-zip-workspace-snapshot;\n", desktop)
 
@@ -65,8 +79,44 @@ class UbuntuProfile(TestCase):
         with TemporaryDirectory() as t:
             base = Path(t).resolve()
             (base / "pyproject.toml").write_bytes(b"changed")
-            for path in ("pyproject.toml", "../notes", "zipworkspace/__pycache__/private.pyc"):
+            for path in ("pyproject.toml", "../notes", "zipworkspace/__pycache__/private.pyc", pkg.PROFILE + "README.md"):
                 with self.subTest(path=path), self.assertRaises(ValueError):
                     pkg.read_inputs(base, ["0" * 64 + "  " + path])
         with self.assertRaises(ValueError):
             pkg.maintainer("Bad <fixture@example.invalid>\nDepends: something")
+
+    def test_every_installed_asset_is_required_in_the_profile(self):
+        original = (pkg.HERE / "INPUTS.sha256").read_text("ascii").splitlines()
+        for asset in pkg.ASSETS.values():
+            with self.subTest(asset=asset), self.assertRaisesRegex(ValueError, "missing installed asset"):
+                pkg.read_inputs(pkg.PROJECT, [row for row in original if row.split("  ", 1)[1] != asset])
+
+    @skipUnless(sys.platform == "linux", "native Linux package shape")
+    def test_changed_installed_assets_abort_before_package_staging(self):
+        manifest = (pkg.HERE / "INPUTS.sha256").read_bytes()
+        with TemporaryDirectory() as t:
+            root = Path(t).resolve()
+            project, out = root / "fixture-project", root / "output"
+            for row in manifest.decode("ascii").splitlines():
+                name = row.split("  ", 1)[1]
+                dest = project / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes((pkg.PROJECT / name).read_bytes())
+            here = project / pkg.PROFILE
+            (here / "INPUTS.sha256").write_bytes(manifest)
+            release = {"ID": "ubuntu", "VERSION_ID": "26.10", "VERSION_CODENAME": "stonking"}
+            with (mock.patch.object(pkg, "PROJECT", project), mock.patch.object(pkg, "HERE", here),
+                  mock.patch.object(pkg.os, "getuid", return_value=1000),
+                  mock.patch.object(pkg.platform, "freedesktop_os_release", return_value=release),
+                  mock.patch.object(pkg.sys, "version_info", (3, 14)),
+                  mock.patch.object(pkg.subprocess, "check_output", return_value=b"amd64\n"),
+                  mock.patch.object(pkg.subprocess, "run", side_effect=AssertionError("preflight must stop")) as native):
+                for name in pkg.ASSETS.values():
+                    source = project / name
+                    verified = source.read_bytes()
+                    source.write_bytes(verified + b"\n")
+                    with self.subTest(asset=name), self.assertRaisesRegex(ValueError, "source differs from release profile"):
+                        pkg.build(out, "Test Packager <fixture@example.invalid>")
+                    self.assertFalse(out.exists())
+                    source.write_bytes(verified)
+                native.assert_not_called()
