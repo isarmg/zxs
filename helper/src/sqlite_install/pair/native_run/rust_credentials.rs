@@ -9,7 +9,7 @@ use crate::{maintenance::HostMounts,pinned::{Kind as PathKind,Pinned,helper_elf:
             give_live_approval,request_live_approval,sealed,verify_fresh_worker},
         fresh_issuer::{FreshConsent,InitialDatabase,SitePayload,require_v18},
         native_sql::{Original,rust_vault::{ActiveRustMeta,RustAccountCut,RustChange,observed_binding,require_observed}},
-        rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest,seal_bytes},receipt::Observed,secret_order::{SecretOrder,scope as secret_scope}},
+        rust_enroll::{crypto::{CredentialHelper,Cryptography},manifest::{Authority,Intent,Manifest,seal_bytes},receipt::Observed,secret_order::{SecretOrder,scope as secret_scope}},
         terminal::{HeldQuiet,PublicConfirmation,SelectedInput},
     }}};
 use helper_linux_evidence::diagnostic_process::{OfflineSql,account_sql_descriptors};
@@ -18,15 +18,14 @@ use rustix::{fs::{OFlags,fcntl_getfl},net::UCred,process::{DumpableBehavior,Gid,
 use std::{fs::File,io,os::unix::fs::MetadataExt,sync::Arc,thread,time::{Duration,Instant}};
 
 const LIMIT:Duration=Duration::from_secs(12*60);
-fn exact_parent(fd:&File,owner:Pid)->io::Result<()>{
+fn exact_parent(fd:&File,owner:Pid)->io::Result<ForegroundElf>{
     original_parent(fd,owner)?;
-    ForegroundElf::host()?.parent_is_same_image(owner)
+    let image=ForegroundElf::host()?;
+    image.parent_is_same_image(owner)?;
+    Ok(image)
 }
 type Subject=([u8;16],u32,u32);
-fn subject(m:&Manifest,parent:Pid)->io::Result<(Subject,Option<SitePayload>)>{
-    let image=ForegroundElf::host()?;
-    image.require_independent_digest(&m.authority.helper())?;
-    image.parent_is_same_image(parent)?;
+fn subject(m:&Manifest,image:&CredentialHelper)->io::Result<(Subject,Option<SitePayload>)>{
     let bound=match m.authority{
         Authority::Fresh(scope)=>{
             verify_fresh_worker(&m.system,&m.plan,&scope)?;
@@ -106,10 +105,12 @@ pub(crate) fn account_worker()->io::Result<()>{
     let [fd,meta]=account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3,4])?;
     let parent=getppid().ok_or_else(||bad("the offline Rust account owner is absent"))?;
-    exact_parent(&fd,parent)?;
+    let original=exact_parent(&fd,parent)?;
     let host=approval::host_admin()?;
     let m=Manifest::read(&meta)?;drop(meta);
-    let ((_,uid,gid),deployed)=subject(&m,parent)?;
+    let helper=CredentialHelper::from_worker(original,m.authority.helper(),parent)?;
+    let ((_,uid,gid),deployed)=subject(&m,&helper)?;
+    drop(helper); // the SQL child never needs the root executable reader
     let scope=m.scope()?;
     let (channel,until)=isolated(fd,parent,uid,gid,scope)?;
     let (zero,[lease])=channel.wait_checked::<1>(Kind::Lease,&scope,until,||live_parent(parent,until))?;
@@ -186,11 +187,12 @@ pub(crate) fn vault_worker()->io::Result<()>{
     let [fd,meta]=account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3,4])?;
     let parent=getppid().ok_or_else(||bad("the original Rust secret owner is absent"))?;
-    exact_parent(&fd,parent)?;
+    let running=exact_parent(&fd,parent)?;
     let (order,original)=SecretOrder::read(&meta)?;drop(meta);
-    let ((_,uid,gid),deployed)=subject(&order.manifest,parent)?;
+    let helper=CredentialHelper::from_worker(running,order.manifest.authority.helper(),parent)?;
+    let ((_,uid,gid),_)=subject(&order.manifest,&helper)?;
     let pins=order.manifest.authority.crypto().ok_or_else(||bad("no exact original credential provider scope"))?;
-    let policy=if deployed.is_some(){Cryptography::for_deployed(pins)?}else{Cryptography::fresh(pins)?};
+    let policy=Cryptography::from_worker(pins,helper)?;
     let lib=policy.before_dropping()?;
     let tty=SelectedInput::before_drop()?;
     let (channel,until)=isolated(fd,parent,uid,gid,original)?;

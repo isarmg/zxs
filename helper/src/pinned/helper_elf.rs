@@ -246,6 +246,27 @@ impl ForegroundElf{
         }
         Ok(())
     }
+    /// A later privileged cut still independently attests the *current*
+    /// proc, file policy and actual executable mapping. Its original data
+    /// reader is already owned; never reopen it or accept another inode.
+    pub(crate) fn requalify_host_image(&self)->io::Result<()>{
+        if self.role!=Role::Privileged{return Err(no());}
+        self.role.require()?;
+        let current=ProcessFiles::select()?;
+        if current.mount!=self.process.mount||Entity::of(&current.proc.metadata()?)?!=Entity::of(&self.process.proc.metadata()?)?{
+            return Err(no());
+        }
+        let same=||->io::Result<()>{
+            self.require()?;
+            if Stamp::at(&current.exe(getpid())?)?!=self.stamp{return Err(no());}
+            Ok(())
+        };
+        same()?;
+        local_data_filesystem(&self.original)?;
+        check_image_file(&self.reader,self.stamp)?;
+        require_application_text(&current,&self.reader,self.stamp)?;
+        same()
+    }
     pub(crate) fn parent_is_same_image(&self,expected:Pid)->io::Result<()>{
         if getppid()!=Some(expected){return Err(no());}
         self.require()?;
