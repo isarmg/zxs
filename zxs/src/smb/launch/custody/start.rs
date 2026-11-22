@@ -2,7 +2,7 @@
 //! two fixed components. No user-visible separate launcher or selectable
 //! role backend. Only the application retains this private scope and both
 //! original children during life and drain.
-use super::{Fault,Parent,VerifiedPreflight,birth::{Ready,Role},foreground,kernel::{cloexec,get_flags,sock,sock_int},
+use super::{Fault,Parent,Role,VerifiedPreflight,birth::Ready,foreground,kernel::{cloexec,get_flags,sock,sock_int},
     listeners::Listeners,preflight::nonce,view::{self,Kind,Source,View}};
 use crate::management::WebAccess;
 use crate::smb::launch::{

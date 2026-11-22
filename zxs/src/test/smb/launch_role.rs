@@ -19,3 +19,16 @@ fn only_exact_argv0_selects_the_gated_main_binary_role() {
     assert_eq!(check(&["/path/zxs:internal-smb-311"]), None);
     assert_eq!(selected(&mut [OsString::from_vec(vec![0xff])].into_iter()), None);
 }
+
+#[test]
+fn parent_role_markers_round_trip_without_normalizing_raw_argv() {
+    for role in Role::ALL {
+        let raw = role.marker().to_bytes().to_vec();
+        let exact = OsString::from_vec(raw.clone());
+        assert_eq!(selected(&mut [exact.clone()].into_iter()), Some(Ok(role)));
+        assert_eq!(selected(&mut [exact, OsString::new()].into_iter()), Some(Err(Fault::Shape)));
+        let mut different = raw;
+        different.push(0xff);
+        assert_eq!(selected(&mut [OsString::from_vec(different)].into_iter()), None);
+    }
+}

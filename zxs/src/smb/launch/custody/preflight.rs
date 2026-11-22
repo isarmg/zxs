@@ -1,6 +1,6 @@
 //! High side of the actual S-only probe. The only constructor of a
 //! VerifiedPreflight completes the original low process and its fd receipt.
-use super::{Fault,Parent,Result,birth::Role,foreground,view::{Kind,Source,View}};
+use super::{Fault,Parent,Result,Role,foreground,view::{Kind,Source,View}};
 use crate::{smb::launch::{low::{PreflightQuestion,PublicReply,QUESTION_MAX,QuestionSource,REPLY_MAX},
     site::{Binding,SiteLease},transport::{read_sealed,seal_public}},
     system::reader::smb::runtime::PreflightSelection};

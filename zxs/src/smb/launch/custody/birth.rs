@@ -2,24 +2,13 @@
 //! routes to the child's proc entry after pidfd waitability; it is never
 //! accepted as a signal, wait, ready or ownership capability.
 mod child;
-use super::{Fault,ImageStamp,Namespace,Parent,PreparedHandoff,PROC,Result,bounded,caps,current_task,
+use super::{Fault,ImageStamp,Namespace,Parent,PreparedHandoff,PROC,Result,Role,bounded,caps,current_task,
     follow_kernel_link,foreground,kernel,object,proc_dir,row,view,words};
 use kernel::{BootSocket,OriginalProcess};
 use crate::smb::launch::transport::{child_receipt,offer_packet};
-use std::{ffi::{CStr,CString},fs::File,io::{self,Read},mem::{size_of,zeroed},
+use std::{ffi::CString,fs::File,io::{self,Read},mem::{size_of,zeroed},
     os::{fd::{AsRawFd,BorrowedFd,RawFd},unix::fs::MetadataExt},thread,time::{Duration,Instant}};
 
-#[derive(Clone,Copy,Eq,PartialEq)]
-pub(super) enum Role{Preflight,Server,Web}
-impl Role{
-    fn marker(self)->&'static CStr{
-        match self{
-            Self::Preflight=>c"zxs:internal-smb-preflight-311",
-            Self::Server=>c"zxs:internal-smb-311",
-            Self::Web=>c"zxs:internal-web-1",
-        }
-    }
-}
 #[derive(Clone,Copy,Eq,PartialEq)]
 enum Phase{Unconfirmed,Exposed,Ready,TermStarted,AbortStarted}
 

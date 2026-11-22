@@ -1,7 +1,7 @@
 //! Fixed executable boundary for a verified original root supervisor. There is no
 //! alternative CLI, input path, listener constructor or descriptor option.
-use super::{Fault,InheritedRun,Result,maintenance::{self,Task},worker::Worker};
-use std::{ffi::{OsStr,OsString},io,sync::{Arc,atomic::{AtomicBool,Ordering}},thread::{self,JoinHandle}};
+use super::{Fault,InheritedRun,Result,Role,maintenance::{self,Task},worker::Worker};
+use std::{ffi::OsString,io,sync::{Arc,atomic::{AtomicBool,Ordering}},thread::{self,JoinHandle}};
 
 const MAX_PEERS:usize=8;
 static STOP:AtomicBool=AtomicBool::new(false);
@@ -34,16 +34,10 @@ extern "C" fn term(_:libc::c_int){
     stop();
 }
 
-const INTERNAL_ARGV0:&str="zxs:internal-smb-311";
-const PREFLIGHT_ARGV0:&str="zxs:internal-smb-preflight-311";
-const WEB_ARGV0:&str="zxs:internal-web-1";
-#[derive(Clone,Copy,Debug,Eq,PartialEq)]
-enum Role{Server,Preflight,Web}
 fn selected(argv:&mut impl Iterator<Item=OsString>)->Option<Result<Role>>{
     let zero=argv.next()?;
-    let role=if zero==OsStr::new(INTERNAL_ARGV0){Role::Server}
-        else if zero==OsStr::new(PREFLIGHT_ARGV0){Role::Preflight}
-        else if zero==OsStr::new(WEB_ARGV0){Role::Web}else{return None;};
+    let bytes=zero.as_os_str().as_encoded_bytes();
+    let role=Role::ALL.into_iter().find(|role|role.marker().to_bytes()==bytes)?;
     Some(if argv.next().is_none(){Ok(role)}else{Err(Fault::Shape)})
 }
 

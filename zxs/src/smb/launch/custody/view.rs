@@ -1,6 +1,6 @@
 //! Detached data-only view for an independently approved static ZXS image.
 //! No host /etc, runtime program, loader/DSO, site or credential is projected.
-use super::{Fault,Parent,PROC,Result,birth::Role,kernel,object};
+use super::{Fault,Parent,PROC,Result,Role,kernel,object};
 use std::{ffi::{CStr,CString},fs::File,mem::{size_of,zeroed},os::{fd::AsRawFd,unix::{ffi::OsStrExt,fs::MetadataExt}},
     path::Path,ptr,thread};
 

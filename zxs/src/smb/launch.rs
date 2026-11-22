@@ -30,6 +30,21 @@ mod entry;
 pub(in crate::smb) use entry::stopping;
 pub use entry::try_supervised_zxs_role;
 
+// Internal exec vocabulary shared by the actual birth and the binary entry.
+// A matching marker selects a guarded path, never a role's authority.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+enum Role {Server,Preflight,Web}
+impl Role{
+    const ALL:[Self;3]=[Self::Server,Self::Preflight,Self::Web];
+    const fn marker(self)->&'static std::ffi::CStr{
+        match self{
+            Self::Server=>c"zxs:internal-smb-311",
+            Self::Preflight=>c"zxs:internal-smb-preflight-311",
+            Self::Web=>c"zxs:internal-web-1",
+        }
+    }
+}
+
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 enum Fault {Shape,Resources,Handoff}
 type Result<T>=std::result::Result<T,Fault>;
