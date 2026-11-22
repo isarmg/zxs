@@ -2,7 +2,11 @@
 //! A digest, a deadline, or an FD description is never local parent proof.
 use super::{Fault,Result,pair_gate::{GateStamp,MAX_PAIR_WAIT}};
 use crate::{Entity,hash::Sha256,system::reader::smb::runtime::PreflightEpoch};
-use std::{mem::MaybeUninit,time::{Duration,Instant}};
+use std::{ffi::c_int,time::{Duration,Instant}};
+
+unsafe extern "C"{
+    fn zxs_monotonic_sample(seconds:*mut i64,nanos:*mut i64)->c_int;
+}
 
 pub(super) const WIRE_BYTES:usize=120;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -41,13 +45,11 @@ impl PairOffer{
     }
 }
 fn ticks()->Result<u64>{
-    let mut ts=MaybeUninit::<libc::timespec>::uninit();
-    // SAFETY: the sole local CLOCK_MONOTONIC result writes this exact POD.
-    if unsafe{libc::clock_gettime(libc::CLOCK_MONOTONIC,ts.as_mut_ptr())}!=0{return Err(Fault::Handoff);}
-    // SAFETY: successful clock_gettime initialized both signed kernel fields.
-    let ts=unsafe{ts.assume_init()};
-    let seconds=u64::try_from(ts.tv_sec).map_err(|_|Fault::Handoff)?;
-    let ns=u64::try_from(ts.tv_nsec).ok().filter(|&n|n<1_000_000_000).ok_or(Fault::Handoff)?;
+    let (mut seconds,mut ns)=(0,0);
+    // SAFETY: one local CLOCK_MONOTONIC sample; the two writable outputs are distinct.
+    if unsafe{zxs_monotonic_sample(&mut seconds,&mut ns)}!=0{return Err(Fault::Handoff);}
+    let seconds=u64::try_from(seconds).map_err(|_|Fault::Handoff)?;
+    let ns=u64::try_from(ns).ok().filter(|&n|n<1_000_000_000).ok_or(Fault::Handoff)?;
     seconds.checked_mul(1_000_000_000).and_then(|s|s.checked_add(ns)).ok_or(Fault::Handoff)
 }
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]

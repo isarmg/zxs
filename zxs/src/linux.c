@@ -8,6 +8,7 @@
 #include <sys/vfs.h>
 #include <linux/magic.h>
 #include <sys/xattr.h>
+#include <time.h>
 #include <unistd.h>
 
 static int proc_fd_directory(void);
@@ -325,4 +326,16 @@ int zxs_web_readable(int fd) {
     if (result < 0) return -1;
     if ((p.revents & POLLIN) != 0) return 1;
     errno = EIO; return -1;
+}
+
+int zxs_monotonic_sample(int64_t *seconds,int64_t *nanos) {
+    struct timespec now;
+    _Static_assert(sizeof(now.tv_sec)<=sizeof(*seconds) &&
+                   sizeof(now.tv_nsec)<=sizeof(*nanos), "monotonic sample scalars fit int64_t");
+    int rc=clock_gettime(CLOCK_MONOTONIC,&now);
+    if (rc==0) {
+        *seconds=now.tv_sec;
+        *nanos=now.tv_nsec;
+    }
+    return rc;
 }
