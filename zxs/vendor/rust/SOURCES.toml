@@ -168,6 +168,7 @@ commit = "09310c55b75e2cd408951c7e2e86dba16c63fc68"
 upstream_subdirectory = ""
 archive = "https://static.crates.io/crates/hybrid-array/hybrid-array-0.4.15.crate"
 sha256 = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
+internal_module = "src/smb/fixed_array"
 
 [[package]]
 name = "inout"

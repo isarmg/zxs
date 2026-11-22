@@ -3,7 +3,8 @@
 //! Adapted by ZXS from `RustCrypto`; see ORIGIN.md and the retained licenses.
 
 use core::{fmt, mem::MaybeUninit, ptr, slice};
-use hybrid_array::{Array, ArraySize, typenum::Sum};
+use super::fixed_array::{Array, ArraySize};
+use typenum::Sum;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 mod sealed;

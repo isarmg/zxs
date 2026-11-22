@@ -1,5 +1,5 @@
 use super::{BlockBuffer, Eager, Lazy};
-use hybrid_array::typenum::U4;
+use typenum::U4;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 type EagerBuffer = BlockBuffer<U4, Eager>;

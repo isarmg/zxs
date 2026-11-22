@@ -1,7 +1,7 @@
 // Adapted by ZXS from RustCrypto (MIT OR Apache-2.0); see ORIGIN.md.
 
 use core::fmt;
-use hybrid_array::{Array, ArraySize};
+use crate::smb::fixed_array::{Array, ArraySize};
 
 pub type SerializedState<T> = Array<u8, <T as SerializableState>::SerializedStateSize>;
 

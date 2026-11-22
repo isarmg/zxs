@@ -1,6 +1,7 @@
+// Adapted from `RustCrypto` (MIT OR Apache-2.0); see ORIGIN.md.
 //! Support for constructing arrays using a provided generator function.
 
-use crate::{Array, ArraySize};
+use super::{Array, ArraySize};
 use core::{
     convert::Infallible,
     mem::{self, MaybeUninit},

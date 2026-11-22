@@ -67,7 +67,7 @@ jobs:
           python3 build_browser.py "$PAIR_BUILD/rust/bin" \
             --wasm-std "$PAIR_BUILD/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz"
           assets="$PWD/target/browser-assets"
-          pin=e08a894d2fcf5ee43f1a4b0890222e53b4c3e8b7d9c7e9faa5ad0492ed9b184a
+          pin=7859a21c0417f52d1892f3505c1628431ac949bd25492afc8e44f89770ced512
           python3 build_release.py "$PAIR_BUILD/rust/bin" --browser-assets "$assets" --browser-asset-pin "$pin"
           python3 -I - target/standalone/zxs "$assets" <<'PYTHON'
           from hashlib import sha256

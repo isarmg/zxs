@@ -5,10 +5,10 @@
 
 pub mod state;
 
-pub use hybrid_array as array;
-pub use hybrid_array::typenum;
+pub(in crate::smb) use super::fixed_array as array;
+pub use typenum;
 use core::fmt;
-use hybrid_array::{Array, ArraySize};
+use array::{Array, ArraySize};
 
 pub type Block<B> = Array<u8, <B as BlockSizeUser>::BlockSize>;
 pub type ParBlocks<T> = Array<Block<T>, <T as ParBlocksSizeUser>::ParBlocksSize>;

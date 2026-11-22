@@ -4,7 +4,7 @@
 //! Constructors borrow one initialized destination; only disjoint subviews are split out.
 
 use core::{marker::PhantomData, ptr};
-use hybrid_array::{Array, ArraySize};
+use crate::smb::fixed_array::{Array, ArraySize};
 
 pub(in crate::smb) struct InOut<'inp, 'out, T> {
     in_ptr: *const T,

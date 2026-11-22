@@ -3,6 +3,7 @@
 mod backend_select;
 mod block_accumulator;
 mod crypto_types;
+mod fixed_array;
 mod fixed_output;
 mod tag_choice;
 mod handshake_hash;

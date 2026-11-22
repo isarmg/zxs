@@ -1,5 +1,5 @@
 use super::{InOut, InOutBuf};
-use hybrid_array::typenum::U4;
+use typenum::U4;
 
 #[test]
 fn borrowed_groups_and_tail_cover_exactly_the_selected_prefix() {

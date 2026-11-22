@@ -82,15 +82,14 @@ graph. The [private cipher buffers](../../src/smb/session/cipher_buffers/ORIGIN.
 retain the original in-place views using the same array types. The
 [shared cipher and digest types](../../src/smb/crypto_types/ORIGIN.md)
 keep key initialization and state handling unchanged. The [private block accumulator](../../src/smb/block_accumulator/ORIGIN.md)
-keeps the same pending-block checks and erasure. The native manifest still
-enables array erasure.
+keeps the same pending-block checks and erasure. The [private fixed arrays](../../src/smb/fixed_array/ORIGIN.md)
+keep the same layout, size and erasure behavior; no array Cargo package remains.
 No derive, alloc/oid, C provider, generated binding, system crypto or external
 service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-storage-server -> hybrid-array [zeroize], libc, zeroize
-hybrid-array -> typenum, zeroize
+storage-server -> libc, typenum [const-generics], zeroize
 ```
 
 All other nodes are leaves in this selected closure. All of these paths
