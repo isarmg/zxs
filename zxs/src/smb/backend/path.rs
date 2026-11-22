@@ -26,7 +26,7 @@ impl TreeName {
 
     fn decode(raw: &[u8], use_: NameUse) -> Result<Self, NameError> {
         use NameError::*;
-        if raw.is_empty() || raw.len() % 2 != 0 { return Err(InvalidName); }
+        if raw.is_empty() || !raw.len().is_multiple_of(2) { return Err(InvalidName); }
         let units = raw.len() / 2;
         if units > 32_760 { return Err(TooLong); } // MS-FSCC 2.1.5; bounded UTF-16 storage
         // For rename one leading separator can designate THIS tree root.
@@ -37,7 +37,7 @@ impl TreeName {
         } else { raw };
         let mut text = String::new();
         text.try_reserve_exact(3 * units).map_err(|_| Resources)?;
-        let words = input.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]]));
+        let words = input.as_chunks::<2>().0.iter().copied().map(u16::from_le_bytes);
         for c in char::decode_utf16(words) {
             text.push(c.map_err(|_| InvalidName)?);
         }

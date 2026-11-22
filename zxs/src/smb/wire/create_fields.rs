@@ -182,7 +182,7 @@ impl<'a> Contexts<'a> {
         while !p.is_empty() {
             if out.len==MAX_CONTEXTS {return Err(Error::ContextLimit);}
             let next=field(u32le(p,0))? as usize;
-            if next!=0 && (next<16 || next%8!=0 || next>=p.len()) {return Err(Error::Malformed);}
+            if next!=0 && (next<16 || !next.is_multiple_of(8) || next>=p.len()) {return Err(Error::Malformed);}
             let (q,rest)=p.split_at(if next==0 {p.len()} else {next});
             let name_at=usize::from(field(u16le(q,4))?);
             let name_len=usize::from(field(u16le(q,6))?);

@@ -62,7 +62,7 @@ impl Pattern {
         }
         let mut text = String::new();
         text.try_reserve_exact(3 * units).map_err(|_| PatternError::Resources)?;
-        let words = raw.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]]));
+        let words = raw.as_chunks::<2>().0.iter().copied().map(u16::from_le_bytes);
         for scalar in char::decode_utf16(words) {
             text.push(scalar.map_err(|_| PatternError::BadName)?);
         }

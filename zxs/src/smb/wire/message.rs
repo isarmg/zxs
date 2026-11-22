@@ -72,7 +72,7 @@ impl<'a> Compound<'a> {
             let next = u32le(rest, 20)? as usize;
             let length = if next == 0 { rest.len() } else { next };
             // Every SMB2 request begins its body with a two-byte StructureSize.
-            if length < HEADER + 2 || (next != 0 && next % 8 != 0) {
+            if length < HEADER + 2 || (next != 0 && !next.is_multiple_of(8)) {
                 return Err(Error::InvalidRequest);
             }
             let (raw, tail) = rest.split_at_checked(length).ok_or(Error::InvalidRequest)?;

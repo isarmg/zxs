@@ -69,12 +69,12 @@ impl RootPage {
                 }
             }
             let mut words = record.child.name.encode_utf16();
-            let mut units = bytes[fixed..].chunks_exact_mut(2);
-            while let Some(dst) = units.next() {
+            let (units, tail) = bytes[fixed..].as_chunks_mut::<2>();
+            for dst in units {
                 let word = words.next().ok_or(EncodeFault::InconsistentPage)?;
-                dst.copy_from_slice(&word.to_le_bytes());
+                *dst = word.to_le_bytes();
             }
-            if words.next().is_some() || !units.into_remainder().is_empty() { return Err(EncodeFault::InconsistentPage); }
+            if words.next().is_some() || !tail.is_empty() { return Err(EncodeFault::InconsistentPage); }
         }
         Ok(FullRootRecords { proposal: self, bytes: out })
     }

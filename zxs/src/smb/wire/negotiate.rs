@@ -30,7 +30,7 @@ impl<'a> AlgorithmIds<'a> {
 
     pub(in crate::smb) fn contains(self, id: u16) -> bool {
         let wanted = id.to_le_bytes();
-        self.0.chunks_exact(2).any(|p| p == wanted.as_slice())
+        self.0.as_chunks::<2>().0.contains(&wanted)
     }
 
     // Cipher/signing contexts have a count followed by the algorithm array.
@@ -85,7 +85,7 @@ impl<'a> Offer<'a> {
         }
         let mut pos = u32le(p, 92)? as usize;
         let count = usize::from(u16le(p, 96)?);
-        if count == 0 || pos % 8 != 0 || pos < DIALECTS + dialects.0.len() {
+        if count == 0 || !pos.is_multiple_of(8) || pos < DIALECTS + dialects.0.len() {
             return Err(Error::InvalidRequest);
         }
         if count > MAX_CONTEXTS {

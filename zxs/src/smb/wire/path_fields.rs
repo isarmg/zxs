@@ -76,7 +76,7 @@ impl<'a> Message<'a> {
             if ctx != 0 { return Err(Malformed); }
             &p[0..0]
         } else {
-            if ctx < 120 || ctx % 8 != 0 || count < 16 { return Err(Malformed); }
+            if ctx < 120 || !ctx.is_multiple_of(8) || count < 16 { return Err(Malformed); }
             let c = bytes(p, ctx, count).map_err(|_| Malformed)?;
             // Both nonempty ranges were proven inside this one message.
             if n != 0 && start < ctx + c.len() && ctx < start + name.len() { return Err(Malformed); }

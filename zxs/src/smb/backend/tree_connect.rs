@@ -132,7 +132,7 @@ fn decode_unc(raw: &[u8]) -> Result<String, Error> {
     // Called only on the bounded UTF-16LE field of this message.
     let mut text = String::new();
     text.try_reserve_exact(raw.len() / 2 * 3).map_err(|_| Error::Resources)?;
-    let units = raw.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]]));
+    let units = raw.as_chunks::<2>().0.iter().copied().map(u16::from_le_bytes);
     for c in char::decode_utf16(units) {
         text.push(c.map_err(|_| Error::BadUnc)?);
     }

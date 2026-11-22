@@ -86,10 +86,10 @@ impl<'a> FileReply<'a> {
         fixed[..2].copy_from_slice(&60u16.to_le_bytes());
         if let Some(a) = receipt.attributes() {
             fixed[2..4].copy_from_slice(&1u16.to_le_bytes());
-            for (field, value) in fixed[8..56].chunks_exact_mut(8).zip([
+            for (field, value) in fixed[8..56].as_chunks_mut::<8>().0.iter_mut().zip([
                 a.created, a.accessed, a.written, a.changed, a.allocation_size, a.end_of_file,
             ]) {
-                field.copy_from_slice(&value.to_le_bytes());
+                *field = value.to_le_bytes();
             }
             fixed[56..60].copy_from_slice(&a.file_attributes.to_le_bytes());
         }

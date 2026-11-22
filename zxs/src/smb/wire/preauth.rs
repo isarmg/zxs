@@ -68,7 +68,7 @@ fn selected_suite(p: &[u8], choice: CmacChoice) -> Result<()> {
     if n > 64 { return Err(Error::Limit); }
     let token_end = security_end(p, 120, 128)?;
     let mut at = u32le(p, 124)? as usize;
-    if at % 8 != 0 || at < token_end { return invalid(); }
+    if !at.is_multiple_of(8) || at < token_end { return invalid(); }
     let mut selected = false;
     let mut cmac = false;
     for i in 0..n {

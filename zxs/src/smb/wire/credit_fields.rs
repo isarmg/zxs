@@ -62,7 +62,7 @@ pub(in crate::smb) fn split_sync_reply(p: &[u8]) -> Result<(ReplyCredit, &[u8])>
     if bytes(p, 0, 4)? != b"\xfeSMB" || u16le(p, 4)? != 64 ||
         u32le(p, 16)? & 3 != 1 || u32le(p, 8)? == 0x103 { return Err(Error::InvalidRequest); }
     let next = u32le(p, 20)? as usize;
-    if next != 0 && (next % 8 != 0 || next >= p.len()) { return Err(Error::InvalidRequest); }
+    if next != 0 && (!next.is_multiple_of(8) || next >= p.len()) { return Err(Error::InvalidRequest); }
     let len = if next == 0 { p.len() } else { next };
     if len < 66 { return Err(Error::InvalidRequest); }
     Ok((ReplyCredit { mid: u64le(p,24)?, command: u16le(p,12)?, grant: u16le(p,14)?,
