@@ -580,7 +580,7 @@ class LinuxVisibility(unittest.TestCase):
         outcome, detail = restore.result()
         self.assertEqual(outcome, "pending")
         self.assertIn(f"resume-visibility STATE {restore.operation}", detail)
-        with patch.object(lifecycle, "rename_new", side_effect=AssertionError("already moved")), \
+        with patch.object(lifecycle, "rename_new_at", side_effect=AssertionError("already moved")), \
              patch.object(lifecycle, "observe_tree", side_effect=AssertionError("resume must read the held original")):
             (self.tree/"story").write_bytes(b"newer!!")
             with self.assertRaisesRegex(Rejected, "accepted by this exact visibility operation"):
@@ -679,7 +679,7 @@ class LinuxVisibility(unittest.TestCase):
             self.assertIn("没有完成回执", detail)
             self.assertIn(plan.operation, detail)
         self.assertEqual(self.live.status()["pending_visibility_operation"], plan.operation)
-        with patch.object(lifecycle, "rename_new", side_effect=AssertionError("CLI sees exact destination; no second move")):
+        with patch.object(lifecycle, "rename_new_at", side_effect=AssertionError("CLI sees exact destination; no second move")):
             lifecycle.finish(self.state, plan.operation)
         self.assertEqual(plan.result()[0], "completed")
         self.assertEqual(self.live.status()["visibility"], "hidden")

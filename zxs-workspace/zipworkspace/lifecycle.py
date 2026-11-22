@@ -13,7 +13,7 @@ from .freeze import _dir_flags, _distinct_roots, _sig, observe_held, observe_tre
 from .model import Rejected, check_id, new_id
 from .private_candidates import generation
 from .private_freeze import local_mount, mount_id
-from .publish import rename_new, rename_new_at, require_native_writer, sync_dir
+from .publish import rename_new_at, require_native_writer
 
 
 def install(con, root: Path, *, original=None):
@@ -61,16 +61,6 @@ def base_tree(row):
     with named_document(Path(row["store"]) / leaf) as doc:
         _, tree = _verify_base(doc, leaf, expected)
     return tree
-
-
-def clean_at(path, state, tree_id, *, restore=False):
-    if observe_tree(path).digest() != tree_id:
-        message = "worktree is dirty; its existing directory and contents were preserved"
-        if restore:
-            message += (". CLI restore requires the committed tree. Close editors and pause sync. "
-                        "If the original window still holds this worktree, request restore there to keep changes. "
-                        "Do not replace either directory name or edit STATE.")
-        raise Rejected(message)
 
 
 def changes(state):
@@ -774,30 +764,83 @@ class LiveVisibility:
                            f"resume-visibility STATE {self.operation} --writers-stopped\n请使用下列原 STATE。")
 
 
+@contextmanager
+def _cli_visibility_parent(path: Path):
+    """Keep both sibling names and the sync on the same actual directory."""
+    fd = os.open(path, _dir_flags())
+    try:
+        original = native_identity(os.fstat(fd), stat.S_IFDIR)
+
+        def check_parent():
+            if native_identity(path.stat(follow_symlinks=False), stat.S_IFDIR) != original:
+                raise Rejected("worktree parent no longer names its original directory")
+
+        def pair(src, dst):
+            if src.parent != path or dst.parent != path:
+                raise Rejected("recorded worktree parent changed")
+            check_parent()
+            names = who(src.name, dir_fd=fd), who(dst.name, dir_fd=fd)
+            check_parent()
+            return names
+
+        yield fd, pair
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _cli_visibility_work(parent, leaf, expected):
+    fd = os.open(leaf, _dir_flags(), dir_fd=parent)
+    try:
+        held = os.fstat(fd)
+        if (str(held.st_dev), str(held.st_ino), stat.S_IFMT(held.st_mode)) != expected:
+            raise Rejected("held checkout is not the registered directory")
+        yield fd, held
+    finally:
+        os.close(fd)
+
+
+def _require_clean_visibility(fd, expected, tree_id, *, restore=False):
+    if observe_held(fd, expected).digest() != tree_id:
+        message = "worktree is dirty; its existing directory and contents were preserved"
+        if restore:
+            message += (". CLI restore requires the committed tree. Close editors and pause sync. "
+                        "If the original window still holds this worktree, request restore there to keep changes. "
+                        "Do not replace either directory name or edit STATE.")
+        raise Rejected(message)
+
+
 def start(state, action):
     from .worktree import locked
     phase, _ = _phases(action)
-    with locked(state) as (con, row, state):
-        rec = instance(con)
-        if (rec["phase"] != phase or rec["active"] is not None
-                or row["pending"] is not None or row["pending_sha"] is not None):
-            raise Rejected("not an idle worktree in the required visible/hidden state")
-        visible, hidden = locations(row)
-        src, dst = (visible, hidden) if action == "hide" else (hidden, visible)
-        if who(src) != identity(rec) or who(dst) is not None:
-            raise Rejected("original worktree unavailable or destination occupied; nothing was moved")
-        tree = base_tree(row).digest()
-        clean_at(src, state, tree, restore=action == "restore")
-        operation = new_id()
-        _start_visibility(con, operation, action, tree)
-    # This is a separate transaction: a failure after the rename cannot lose the intent.
-    return finish(state, operation)
+    with ExitStack() as held_parent:
+        with locked(state) as (con, row, state):
+            rec = instance(con)
+            if (rec["phase"] != phase or rec["active"] is not None
+                    or row["pending"] is not None or row["pending_sha"] is not None):
+                raise Rejected("not an idle worktree in the required visible/hidden state")
+            visible, hidden = locations(row)
+            src, dst = (visible, hidden) if action == "hide" else (hidden, visible)
+            parent = held_parent.enter_context(_cli_visibility_parent(src.parent))
+            pfd, pair = parent
+            original = identity(rec)
+            if pair(src, dst) != (original, None):
+                raise Rejected("original worktree unavailable or destination occupied; nothing was moved")
+            tree = base_tree(row).digest()
+            with _cli_visibility_work(pfd, src.name, original) as (fd, work):
+                _require_clean_visibility(fd, (work.st_dev, work.st_ino), tree, restore=action == "restore")
+                if pair(src, dst) != (original, None):
+                    raise Rejected("worktree names changed; no visibility operation was recorded")
+                operation = new_id()
+                _start_visibility(con, operation, action, tree)
+        # Separate transaction: a failure after rename cannot lose the intent.
+        return finish(state, operation, original_parent=parent)
 
 
-def finish(state, operation):
+def finish(state, operation, *, original_parent=None):
     from .worktree import locked
     check_id(operation)
-    with locked(state) as (con, row, state):
+    with ExitStack() as held_parent, locked(state) as (con, row, state):
         item = _visibility_row(con, operation)
         rec = instance(con)
         if item is None: raise Rejected("no such original local visibility operation")
@@ -814,25 +857,26 @@ def finish(state, operation):
             raise Rejected("incomplete visibility evidence does not match this original operation or conflicts with a pending commit")
         visible, hidden = locations(row)
         src, dst = (visible, hidden) if action == "hide" else (hidden, visible)
-        pair = who(src), who(dst)
-        if pair == (identity(rec), None): current, needs_move = src, True
-        elif pair == (None, identity(rec)): current, needs_move = dst, False
+        parent = original_parent if original_parent is not None else held_parent.enter_context(
+            _cli_visibility_parent(src.parent))
+        pfd, pair = parent
+        original = identity(rec)
+        names = pair(src, dst)
+        if names == (original, None): current, needs_move = src, True
+        elif names == (None, original): current, needs_move = dst, False
         else: raise Rejected("cannot prove either complete original directory/name pair; nothing was overwritten")
-        fd = os.open(current, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            held = os.fstat(fd)
-            if (str(held.st_dev),str(held.st_ino),stat.S_IFMT(held.st_mode)) != identity(rec):
-                raise Rejected("held checkout is not the registered directory")
+        with _cli_visibility_work(pfd, current.name, original) as (fd, held):
             if observe_held(fd, (held.st_dev, held.st_ino)).digest() != item["original_tree"]:
                 raise Rejected("worktree no longer matches the tree accepted by this exact visibility operation; "
                                "its directory and contents were preserved. Close editors and pause sync; do not overwrite either name.")
             if needs_move:
-                if who(src) != identity(rec) or who(dst) is not None: raise Rejected("worktree names changed")
-                rename_new(src, dst)
-            sync_dir(dst.parent)
-            if who(src) is not None or who(dst) != identity(rec):
+                if pair(src, dst) != (original, None): raise Rejected("worktree names changed")
+                # The same parent is used by the native no-replace step. Its
+                # source check is a precondition, not a kernel compare-and-swap.
+                rename_new_at(pfd, src.name, dst.name, expected_source=held)
+            os.fsync(pfd)
+            if pair(src, dst) != (None, original):
                 raise Rejected("move outcome unknown; preserve both names and the original operation")
-        finally: os.close(fd)
         result = "hidden" if action == "hide" else "visible"
         _finish_visibility(con, operation, result)
         return {"operation":operation, "original_outcome":result, "recorded_phase":result, "current_original_named":True}

@@ -1,4 +1,6 @@
+from contextlib import contextmanager
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -36,7 +38,8 @@ class LocalWorktree(unittest.TestCase):
         restored = lifecycle.start(self.state, "restore")
         self.assertEqual(lifecycle.who(self.work), identity)
         self.assertEqual((self.work / "story").read_bytes(), b"old")
-        report = lifecycle.finish(self.state, hidden["operation"])
+        with patch.object(lifecycle, "_cli_visibility_parent", side_effect=AssertionError("history never reopens for a move")):
+            report = lifecycle.finish(self.state, hidden["operation"])
         self.assertEqual((report["original_outcome"], report["recorded_phase"]), ("hidden", "visible"))
         self.assertTrue(lifecycle.finish(self.state, restored["operation"])["current_original_named"])
 
@@ -81,16 +84,76 @@ class LocalWorktree(unittest.TestCase):
         self.assertEqual((self.work / "story").read_bytes(), b"old")
 
     def test_lost_reply_after_local_move_resumes_original_without_second_rename(self):
-        primitive = lifecycle.rename_new
-        def interrupted(src, dst):
-            primitive(src, dst); raise OSError("interrupted after moving")
-        with patch.object(lifecycle, "rename_new", side_effect=interrupted):
+        primitive = lifecycle.rename_new_at
+        def interrupted(parent, src, dst, *, expected_source):
+            primitive(parent, src, dst, expected_source=expected_source)
+            raise OSError("interrupted after moving")
+        with patch.object(lifecycle, "rename_new_at", side_effect=interrupted):
             with self.assertRaises(OSError): lifecycle.start(self.state, "hide")
         pending = w.status(self.state)
         self.assertEqual(pending["visibility"], "hide-pending")
-        with patch.object(lifecycle, "rename_new", side_effect=AssertionError("must not move again")):
+        with patch.object(lifecycle, "rename_new_at", side_effect=AssertionError("must not move again")):
             result = lifecycle.finish(self.state, pending["pending_visibility_operation"])
         self.assertEqual(result["original_outcome"], "hidden")
+
+    def test_cli_visibility_uses_the_same_held_parent_for_observation_move_and_sync(self):
+        hold, move, sync = lifecycle._cli_visibility_parent, lifecycle.rename_new_at, os.fsync
+        original = self.work.stat()
+        parent_fds, moved, synced = [], [], []
+
+        @contextmanager
+        def hold_once(path):
+            self.assertEqual(path, self.work.parent)
+            with hold(path) as scope:
+                parent_fds.append(scope[0])
+                yield scope
+
+        def checked_move(parent, src, dst, *, expected_source):
+            self.assertEqual(parent_fds, [parent])
+            self.assertTrue(os.path.samestat(os.fstat(parent), self.work.parent.stat()))
+            self.assertTrue(os.path.samestat(expected_source, original))
+            self.assertEqual(src, self.work.name)
+            move(parent, src, dst, expected_source=expected_source)
+            moved.append(parent)
+
+        def checked_sync(fd):
+            self.assertEqual(moved, [fd])
+            synced.append(fd)
+            sync(fd)
+
+        with patch.object(lifecycle, "_cli_visibility_parent", hold_once), \
+             patch.object(lifecycle, "_cli_visibility_work", wraps=lifecycle._cli_visibility_work) as opened, \
+             patch.object(lifecycle, "rename_new_at", side_effect=checked_move), \
+             patch.object(lifecycle.os, "fsync", side_effect=checked_sync):
+            result = lifecycle.start(self.state, "hide")
+        self.assertEqual([call.args[0] for call in opened.call_args_list], parent_fds * 2)
+        self.assertEqual(synced, parent_fds)
+        self.assertEqual((result["original_outcome"], result["recorded_phase"], result["current_original_named"]),
+                         ("hidden", "hidden", True))
+
+    def test_missing_parent_identity_proof_after_intent_refuses_move_and_retains_the_receipt(self):
+        stat_path, register = Path.stat, lifecycle._start_visibility
+        unrelated = self.store.stat()  # A different identity for a metadata-only fault fixture.
+        accepted = []
+
+        def record(*args):
+            register(*args)
+            accepted.append(args[1])
+
+        def observe(path, *, follow_symlinks=True):
+            if accepted and path == self.work.parent and not follow_symlinks:
+                return unrelated
+            return stat_path(path, follow_symlinks=follow_symlinks)
+
+        with patch.object(lifecycle, "_start_visibility", side_effect=record), \
+             patch.object(Path, "stat", observe), \
+             patch.object(lifecycle, "rename_new_at", side_effect=AssertionError("no move without parent proof")):
+            with self.assertRaisesRegex(Rejected, "worktree parent no longer names its original directory"):
+                lifecycle.start(self.state, "hide")
+        operation, = accepted
+        self.assertEqual(w.status(self.state)["pending_visibility_operation"], operation)
+        self.assertEqual((self.work/"story").read_bytes(), b"old")
+        self.assertEqual(lifecycle.finish(self.state, operation)["original_outcome"], "hidden")
 
     def test_explicit_fork_uses_conflicted_candidate_not_later_worktree_edits(self):
         x, xs = self.root / "x", self.root / "xs"

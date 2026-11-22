@@ -67,6 +67,8 @@ python3 -m zipworkspace commit demo/states/second --fork --writers-stopped
 - 一份归档足以恢复其完整目录，**不等于**拥有所有历史。祖先档案不在当前存储位置时，`history` 明确返回缺失父操作。
 - 只看目录不必签出：`browse "$ARCHIVE" "选中的文件夹"` 返回直接子项、文件字节数和 SHA-256，空文件夹也会显示。用上一页的 `next_cursor` 继续同一快照和目录；新快照不会接用旧游标。[只读应用接口](docs/design.md#read-only-archive-browser)同样先核验整个归档，不创建工作树。
 
+CLI 收起或恢复工作树时，新决定核对登记的目录；同次调用用原父目录的同一打开句柄核对两名、无覆盖改名及同步。原件预核不是原子锁，操作期间仍须保持工作目录父稳定并停止写入。如结果不明，保留原回执按原操作号核对。
+
 运行本项目测试：
 
 ```sh
