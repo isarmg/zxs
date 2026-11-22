@@ -103,8 +103,7 @@ impl Born<'_>{
         }
         let proc=view_proc(&root)?;
         if kernel::fs_magic(proc.as_raw_fd())?!=PROC||proc.metadata().map_err(|_|Fault::Handoff)?.ino()!=1||
-            view_flags(&proc)?&(libc::ST_RDONLY|libc::ST_NODEV|libc::ST_NOSUID|libc::ST_NOEXEC)
-                !=libc::ST_RDONLY|libc::ST_NODEV|libc::ST_NOSUID|libc::ST_NOEXEC{return Err(Fault::Handoff);}
+            !view::flags(&proc)?.read_only_data(){return Err(Fault::Handoff);}
         let low=self.handoff_identity()?;
         let parent=&self.parent.original;
         let own_pid=Namespace::Pid.of_parent(&low)?;
@@ -382,9 +381,4 @@ fn view_proc(root:&File)->Result<File>{
         size_of::<libc::open_how>()))?)};
     if !f.metadata().map_err(|_|Fault::Handoff)?.is_dir(){return Err(Fault::Handoff);}
     Ok(f)
-}
-fn view_flags(f:&File)->Result<libc::c_ulong>{
-    let mut v:libc::statvfs=unsafe{zeroed()};
-    if unsafe{libc::fstatvfs(f.as_raw_fd(),&raw mut v)}!=0{return Err(Fault::Handoff);}
-    Ok(v.f_flag)
 }

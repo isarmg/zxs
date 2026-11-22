@@ -5,7 +5,7 @@
 use super::{ActiveRustMeta,Connection,Catalog,InitialReader,Mode,RustPlan,denied};
 use crate::system::reader::credential::Pair;
 use crate::{Entity,PoolId,Role,VolumeId,fs,system::{ClaimRow,lease::SystemDir,reader::zxs_sql_path_limit}};
-use std::{fs::File,io,mem::MaybeUninit,net::IpAddr,os::fd::AsRawFd,path::{Path,PathBuf}};
+use std::{fs::File,io,net::IpAddr,path::{Path,PathBuf}};
 
 /// The parent provides exact public facts from the independently approved
 /// site and a clone of its held S projected read-only into the low view.
@@ -89,11 +89,7 @@ impl RustPlan{
 
 fn require_projection(file:&File,observed:Entity,expected:Entity,read_only:bool)->io::Result<()>{
     if observed!=expected||expected.inode==0{return Err(denied());}
-    let mut raw=MaybeUninit::<libc::statvfs>::uninit();
-    // SAFETY: owned original S FD with live writable result. This only
-    // checks mount flags, never writes or remounts SYSTEM.
-    if unsafe{libc::fstatvfs(file.as_raw_fd(),raw.as_mut_ptr())}!=0{return Err(io::Error::last_os_error());}
-    if (unsafe{raw.assume_init()}.f_flag&libc::ST_RDONLY!=0)!=read_only{return Err(denied());}
+    if fs::MountFlags::on_fd(file)?.read_only()!=read_only{return Err(denied());}
     Ok(())
 }
 

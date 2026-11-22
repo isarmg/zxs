@@ -174,14 +174,14 @@ pub(in crate::smb::launch) fn launch_internal_web<'m,'v,'s,'p>(scope:&mut Author
     let listener=TcpListener::bind((Ipv4Addr::UNSPECIFIED,8443))?;
     listener.set_nonblocking(true)?;
     let cookie=u64::from_ne_bytes(sock(listener.as_raw_fd(),libc::SOL_SOCKET,libc::SO_COOKIE).map_err(|_|no())?);
-    let read_only=view::flags(system).map_err(|_|no())?&libc::ST_RDONLY!=0;
+    let read_only=view::flags(system).map_err(|_|no())?.read_only();
     let (header,body)=web::encode(selected.plan(),nonce().map_err(|_|no())?,cookie,read_only,scope.pair).map_err(|_|no())?;
     let sealed=seal_public(&body,web::MAX).map_err(|_|no())?;
     let who=site.subject();
     let before=||->io::Result<()>{
         scope.live()?;require_web(&listener,cookie).map_err(|_|no())?;
         view.require_sources().map_err(|_|no())?;
-        if read_only!=(view::flags(system).map_err(|_|no())?&libc::ST_RDONLY!=0){return Err(no());}
+        if read_only!=view::flags(system).map_err(|_|no())?.read_only(){return Err(no());}
         foreground::require().map_err(|_|no())
     };
     before()?;

@@ -284,6 +284,14 @@ int zxs_sql_private_name(int parent,const char *name,uint64_t *ino) {
 }
 
 #include <sys/statvfs.h>
+/* Translate native statvfs layout to the four ZXS mount flags. */
+int zxs_mount_flags(int fd) {
+    struct statvfs v;
+    if (fstatvfs(fd,&v)!=0) return -1;
+    unsigned long flags=v.f_flag;
+    return ((flags&ST_RDONLY)!=0?1:0) | ((flags&ST_NOSUID)!=0?2:0) |
+           ((flags&ST_NODEV)!=0?4:0) | ((flags&ST_NOEXEC)!=0?8:0);
+}
 /* Capacity of this currently mounted FS, not a per-folder quota or promise.
  * The full SMB sample keeps caller/free counts and the mount RO bit in
  * the same statvfs result. */

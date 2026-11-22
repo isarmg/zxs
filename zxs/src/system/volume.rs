@@ -1,7 +1,7 @@
 //! An original registered ordinary root, selected by VolumeId, not a
 //! FILE/account permission. Never routes a recycling root into normal I/O.
 use super::{Catalog,InitialReader,check,smb::ordinary_directory::{self,Route},zxs_sql_named};
-use crate::{Role,VolumeId,fs::{ComponentLimit,ControlRead,HeldDir,invalid,directory_birth::{DirectoryBirth,DirectoryHold,DirectoryParent}}};
+use crate::{Role,VolumeId,fs::{ComponentLimit,ControlRead,HeldDir,MountFlags,invalid,directory_birth::{DirectoryBirth,DirectoryHold,DirectoryParent}}};
 use std::{io,os::{fd::AsRawFd,raw::c_int}};
 
 unsafe extern "C"{
@@ -43,11 +43,7 @@ impl CapacityOrigin<'_>{
     /// Only the mount mode is rechecked on this original retained FD.
     /// Never replace the numeric capacity snapshot with later counters.
     pub(super) fn require_mount_mode(&self,read_only:bool)->io::Result<()>{
-        let mut stat=std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        if unsafe{libc::fstatvfs(self.root.file.as_raw_fd(),stat.as_mut_ptr())}<0{
-            return Err(io::Error::last_os_error());
-        }
-        if (unsafe{stat.assume_init()}.f_flag&libc::ST_RDONLY!=0)!=read_only{
+        if MountFlags::on_fd(&self.root.file)?.read_only()!=read_only{
             return Err(invalid("original capacity source mount mode changed"));
         }
         self.require_held()

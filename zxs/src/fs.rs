@@ -9,6 +9,7 @@ use std::os::unix::{ffi::OsStrExt, fs::{MetadataExt, PermissionsExt}};
 use std::path::{Component, Path, PathBuf};
 
 mod mounts;
+pub(crate) use mounts::MountFlags;
 mod relative;
 mod control;
 pub(crate) use control::ControlRead;

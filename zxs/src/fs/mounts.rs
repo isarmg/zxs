@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, io::{self,Read}, os::fd::{AsRawFd,FromRawFd}};
 unsafe extern "C" {
     fn zxs_mount_id(fd:std::os::raw::c_int, out:*mut u64)->std::os::raw::c_int;
     fn zxs_open_mountinfo()->std::os::raw::c_int;
+    fn zxs_mount_flags(fd:std::os::raw::c_int)->std::os::raw::c_int;
 }
 
 pub(super) fn id(file:&File)->io::Result<u64>{
@@ -15,6 +16,25 @@ pub(super) fn id(file:&File)->io::Result<u64>{
     if unsafe{zxs_mount_id(file.as_raw_fd(),&mut value)}<0{return Err(io::Error::last_os_error());}
     if value==0{return Err(invalid("kernel returned no mount identity"));}
     Ok(value)
+}
+
+/// One flag sample from an already held descriptor; not a mount identity.
+#[derive(Clone,Copy)]
+pub(crate) struct MountFlags(u8);
+impl MountFlags{
+    const READ_ONLY:u8=1;
+    const DATA_RESTRICTIONS:u8=2|4|8; // nosuid, nodev, noexec
+    pub(crate) fn on_fd(file:&File)->io::Result<Self>{
+        // SAFETY: the borrowed descriptor remains live; the shim only reads its flags.
+        let raw=unsafe{zxs_mount_flags(file.as_raw_fd())};
+        if raw<0{return Err(io::Error::last_os_error());}
+        let bits=u8::try_from(raw).ok().filter(|bits|bits&!(Self::READ_ONLY|Self::DATA_RESTRICTIONS)==0)
+            .ok_or_else(||invalid("invalid mount flag result"))?;
+        Ok(Self(bits))
+    }
+    pub(crate) const fn read_only(self)->bool{self.0&Self::READ_ONLY!=0}
+    pub(crate) const fn has_data_restrictions(self)->bool{self.0&Self::DATA_RESTRICTIONS==Self::DATA_RESTRICTIONS}
+    pub(crate) const fn read_only_data(self)->bool{self.read_only()&&self.has_data_restrictions()}
 }
 
 #[derive(Clone,Copy,Eq,PartialEq)]

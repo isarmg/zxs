@@ -2,8 +2,8 @@
 //! Paths come from the separately qualified original S reader, not the
 //! terminal or a directory scan. Missing or uncertain originals stay absent.
 use super::{SiteLease,denied,held::{self,PathPin,Role,Stamp}};
-use crate::{fs::ComponentLimit,smb::launch::custody::VerifiedPreflight,system::{ROOT_MARK,reader::smb::runtime::PreflightClaim}};
-use std::{fs::File,io,os::{fd::AsRawFd,unix::fs::FileExt},path::Path};
+use crate::{fs::{ComponentLimit,MountFlags},smb::launch::custody::VerifiedPreflight,system::{ROOT_MARK,reader::smb::runtime::PreflightClaim}};
+use std::{fs::File,io,os::unix::fs::FileExt,path::Path};
 
 struct Volume{
     pin:PathPin,dir:File,marker:File,stamp:Stamp,bytes:[u8;101],limit:ComponentLimit,
@@ -47,10 +47,7 @@ impl Volume{
     }
 }
 fn writable(f:&File)->io::Result<bool>{
-    // SAFETY: only the actual selected directory and initialized output.
-    let mut v:libc::statvfs=unsafe{std::mem::zeroed()};
-    if unsafe{libc::fstatvfs(f.as_raw_fd(),&raw mut v)}!=0{return Err(io::Error::last_os_error());}
-    Ok(v.f_flag&libc::ST_RDONLY==0)
+    Ok(!MountFlags::on_fd(f)?.read_only())
 }
 fn separate_recycle(site:&SiteLease<'_>,r:&Volume,ordinary:&[Option<Volume>])->io::Result<()>{
     let host=site.parent.host().map_err(|_|denied())?;

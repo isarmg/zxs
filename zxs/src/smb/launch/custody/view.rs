@@ -1,6 +1,7 @@
 //! Detached data-only view for an independently approved static ZXS image.
 //! No host /etc, runtime program, loader/DSO, site or credential is projected.
 use super::{Fault,Parent,PROC,Result,Role,kernel,object};
+use crate::fs::MountFlags;
 use std::{ffi::{CStr,CString},fs::File,mem::{size_of,zeroed},os::{fd::AsRawFd,unix::{ffi::OsStrExt,fs::MetadataExt}},
     path::Path,ptr,thread};
 
@@ -95,8 +96,7 @@ impl<'a> View<'a>{
         let root=object(&self.root)?;
         let proc=directory_at(&self.root,c"proc",true)?;
         if kernel::fs_magic(self.root.as_raw_fd())?!=TMPFS_MAGIC||object(&proc)?.mount!=root.mount
-            ||flags(&self.root)?&(libc::ST_RDONLY|libc::ST_NODEV|libc::ST_NOSUID|libc::ST_NOEXEC)
-                !=libc::ST_RDONLY|libc::ST_NODEV|libc::ST_NOSUID|libc::ST_NOEXEC{return Err(Fault::Handoff);}
+            ||!flags(&self.root)?.read_only_data(){return Err(Fault::Handoff);}
         self.require_sources()?;
         parent.require()
     }
@@ -107,13 +107,12 @@ impl<'a> View<'a>{
             let got=object(&shown)?;
             let a=input.original.metadata().map_err(|_|Fault::Handoff)?;
             let b=shown.metadata().map_err(|_|Fault::Handoff)?;
-            let restrictions=libc::ST_NODEV|libc::ST_NOSUID|libc::ST_NOEXEC;
             let shown_flags=flags(&shown)?;
-            let read_only=if input.forced_read_only(self.role){libc::ST_RDONLY}else{flags(input.original)?&libc::ST_RDONLY};
+            let read_only=if input.forced_read_only(self.role){true}else{flags(input.original)?.read_only()};
             if (orig.device,orig.inode)!=(got.device,got.inode)||orig.mount==got.mount||
                 (a.mode(),a.uid(),a.gid())!=(b.mode(),b.uid(),b.gid())||
-                shown_flags&restrictions!=restrictions||
-                shown_flags&libc::ST_RDONLY!=read_only{return Err(Fault::Handoff);}
+                !shown_flags.has_data_restrictions()||
+                shown_flags.read_only()!=read_only{return Err(Fault::Handoff);}
         }
         Ok(())
     }
@@ -126,11 +125,8 @@ fn components(path:&Path)->Result<Vec<CString>>{
         CString::new(part).map_err(|_|Fault::Shape)
     }).collect()
 }
-pub(super) fn flags(file:&File)->Result<libc::c_ulong>{
-    // SAFETY: initialize one output record and inspect the actual held mount.
-    let mut vfs:libc::statvfs=unsafe{zeroed()};
-    if unsafe{libc::fstatvfs(file.as_raw_fd(),&raw mut vfs)}!=0{return Err(Fault::Handoff);}
-    Ok(vfs.f_flag)
+pub(super) fn flags(file:&File)->Result<MountFlags>{
+    MountFlags::on_fd(file).map_err(|_|Fault::Handoff)
 }
 fn status(code:libc::c_long)->Result<()>{if code==0{Ok(())}else{Err(Fault::Handoff)}}
 fn detach(file:&File,recursive:bool)->Result<File>{
