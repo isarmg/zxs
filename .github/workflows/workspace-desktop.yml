@@ -6,7 +6,12 @@ on:
     branches: [main]
     paths:
       - .github/workflows/workspace-desktop.yml
-      - zxs-workspace/tests/qualification/hosted_desktop.py
+      - zxs-workspace/zipworkspace/**
+      - zxs-workspace/pyproject.toml
+      - zxs-workspace/tests/**
+      - zxs-workspace/packaging/macos-arm64/**
+      - zxs-workspace/packaging/windows-amd64/**
+      - zxs-workspace/winfsp/**
 
 permissions:
   contents: read
