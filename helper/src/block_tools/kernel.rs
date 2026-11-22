@@ -3,8 +3,8 @@
 mod attachment;
 use super::*;
 use crate::pinned::Mount;
-use rustix::fs::{Mode,OFlags,RawDir,ResolveFlags,fstatfs,open,openat2,readlinkat};
-use std::{ffi::{CStr},fs::File,io::Read,mem::MaybeUninit};
+use rustix::fs::{RawDir,ResolveFlags,fstatfs,openat2,readlinkat};
+use std::{ffi::CStr,io::Read,mem::MaybeUninit};
 
 const SYSFS_MAGIC:u64=0x6265_6572; // Linux UAPI linux/magic.h
 fn path_dir()->OFlags {OFlags::PATH|OFlags::DIRECTORY|OFlags::CLOEXEC}
@@ -47,13 +47,37 @@ fn related(dir:&File,relative:&CStr)->io::Result<File>{
 pub(super) struct Sys { root:File, index:File }
 impl Sys {
     pub(super) fn open()->io::Result<Self> {
-        let root=File::from(open(c"/sys",path_dir()|OFlags::NOFOLLOW,Mode::empty())?);
-        if fstatfs(&root)?.f_type as u64!=SYSFS_MAGIC || Mount::on(&root)?.is_none_or(|m|m.at_root!=Some(true)){
+        let root = Self::fixed_root()?;
+        let index = Self::open_index(&root)?;
+        Ok(Self { root, index })
+    }
+
+    fn fixed_root() -> io::Result<File> {
+        let root = BlockRoot::Sysfs.pin()?;
+        if fstatfs(&root)?.f_type as u64 != SYSFS_MAGIC || Mount::on(&root)?.is_none_or(|m| m.at_root != Some(true)) {
             return Err(unsupported("a genuine sysfs mount root with mount identity is required"));
         }
-        let index=File::from(openat2(&root,c"dev/block",path_dir()|OFlags::NOFOLLOW,Mode::empty(),
-            confined()|ResolveFlags::NO_SYMLINKS)?);
-        Ok(Self{root,index})
+        Ok(root)
+    }
+
+    fn open_index(root: &File) -> io::Result<File> {
+        Ok(File::from(openat2(root, c"dev/block", path_dir() | OFlags::NOFOLLOW, Mode::empty(),
+            confined() | ResolveFlags::NO_SYMLINKS)?))
+    }
+
+    pub(super) fn require_named(&self) -> io::Result<()> {
+        self.require_source(&Self::fixed_root()?)
+    }
+
+    fn require_source(&self, named: &File) -> io::Result<()> {
+        let held_mount = Mount::on(&self.root)?;
+        if held_mount.is_none() || Mount::on(named)? != held_mount || obj(named)? != obj(&self.root)? {
+            return Err(invalid("original sysfs mount changed during observation"));
+        }
+        if obj(&Self::open_index(named)?)? != obj(&self.index)? {
+            return Err(invalid("original sysfs block index changed during observation"));
+        }
+        Ok(())
     }
 
     pub(super) fn devices(&self)->io::Result<Vec<Dev>>{
@@ -141,6 +165,28 @@ impl Node {
 #[cfg(test)]
 mod tests{
     use super::*;
+
+    #[test]
+    fn unchanged_index_remains_usable_but_replaced_root_or_index_never_qualifies() {
+        use std::fs;
+        let area = tempfile::tempdir().unwrap();
+        let path = area.path().join("held");
+        fs::create_dir_all(path.join("dev/block")).unwrap();
+        let root = File::open(&path).unwrap();
+        let sys = Sys { index: Sys::open_index(&root).unwrap(), root };
+        sys.require_source(&File::open(&path).unwrap()).unwrap();
+
+        fs::rename(path.join("dev/block"), path.join("dev/old")).unwrap();
+        fs::create_dir(path.join("dev/block")).unwrap();
+        let err = sys.require_source(&File::open(&path).unwrap()).unwrap_err();
+        assert_eq!(err.to_string(), "original sysfs block index changed during observation");
+
+        fs::rename(&path, area.path().join("original")).unwrap();
+        fs::create_dir_all(path.join("dev/block")).unwrap();
+        let err = sys.require_source(&File::open(&path).unwrap()).unwrap_err();
+        assert_eq!(err.to_string(), "original sysfs mount changed during observation");
+    }
+
     #[test]
     fn control_bytes_spaces_and_terminal_escapes_never_pass_through_raw(){
         assert_eq!(label(b"disk\nA\x1b[3m %v").unwrap(),"disk%0AA%1B%5B3m%20%25v");

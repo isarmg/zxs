@@ -1,6 +1,25 @@
 //! Pure layer/identity/counter examples. These do not claim to have inspected a device.
 use super::*;
 
+#[test]
+fn fixed_source_pins_accept_plain_terminal_directories_without_following_links() {
+    use rustix::fs::fcntl_getfl;
+    use std::{fs, os::unix::fs::symlink};
+    let area = tempfile::tempdir().unwrap();
+    fs::create_dir(area.path().join("sys")).unwrap();
+    symlink("sys", area.path().join("dev")).unwrap();
+    let root = File::open(area.path()).unwrap();
+    let sys = BlockRoot::Sysfs.pin_at(&root).unwrap();
+    let flags = fcntl_getfl(&sys).unwrap();
+    assert!(flags.contains(OFlags::PATH | OFlags::NOFOLLOW));
+    assert!(!flags.contains(OFlags::DIRECTORY));
+    assert_eq!(BlockRoot::DeviceAliases.pin_at(&root).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    fs::remove_file(area.path().join("dev")).unwrap();
+    assert_eq!(BlockRoot::DeviceAliases.pin_at(&root).unwrap_err().kind(), io::ErrorKind::NotFound);
+    fs::write(area.path().join("dev"), b"not a directory").unwrap();
+    assert_eq!(BlockRoot::DeviceAliases.pin_at(&root).unwrap_err().kind(), io::ErrorKind::InvalidData);
+}
+
 fn part()->Identity {
     Identity {dev:Dev(259,8),object:Entity{dev:4,ino:222},name:"nvme0n1p7".into(),
         kind:Kind::Partition{number:7,start:2048,parent:Dev(259,0),parent_object:Entity{dev:4,ino:111}},

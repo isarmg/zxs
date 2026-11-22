@@ -2,8 +2,8 @@
 //! device: the only descriptor which can designate a device node is O_PATH.
 use super::*;
 use crate::pinned::Mount;
-use rustix::fs::{Mode,OFlags,RawDir,ResolveFlags,open,openat2};
-use std::{collections::BTreeMap,ffi::OsStr,fs::File,mem::MaybeUninit,
+use rustix::fs::{Mode,OFlags,RawDir,ResolveFlags,openat2};
+use std::{collections::BTreeMap,ffi::OsStr,mem::MaybeUninit,
     os::unix::{ffi::OsStrExt,fs::{MetadataExt,FileTypeExt}}};
 
 const LIMIT:usize=512;
@@ -75,7 +75,7 @@ fn read_one(dev:&File,set:&str)->Field<AliasMap>{
 pub(super) struct DevRoot {fd:File,entity:Entity,mount:Mount}
 impl DevRoot {
     pub(super) fn pin()->Field<Self>{
-        let fd=File::from(open(c"/dev",path()|OFlags::DIRECTORY|OFlags::NOFOLLOW,Mode::empty()).map_err(|e|Reason::io(e.into()))?);
+        let fd=BlockRoot::DeviceAliases.pin().map_err(Reason::io)?;
         protected(&fd).map_err(Reason::io)?;
         let entity=Entity::of(&fd.metadata().map_err(Reason::io)?).map_err(Reason::io)?;
         let mount=Mount::on(&fd).map_err(Reason::io)?.ok_or(Reason::Unsupported)?;

@@ -54,6 +54,8 @@ helper disks --device 259:1 --rates
 
 `ancestor_subsystem_sysfs` 是同一盘世代、在同一 sysfs 挂载中核对的最近有报告的非块层祖先子系统，最多处理 24 个设备路径分量。当前识别 `scsi`、`nvme`、`nvme-subsystem`、`mmc`、`virtio`。最近子系统不可识别时标为不支持，不改报更远祖先。整盘标为当次祖先观察；分区只从已核实的父盘推断，`subsystem_evidence` 会注明。SCSI 不表示一定是 SATA、SAS 或 USB；不按设备名猜测，也不解析叠加卷的底层盘。只有核到单个 NVMe 控制器时才读内核的 `nvme_transport_sysfs`（如 `pcie`、`tcp`）；多路径命名空间不挑任意一条路径。这不是协商速率、实测吞吐或健康值。未报告、不支持、权限不足及观察间原件变化分别显示为未知。来源：[内核 sysfs 规则](https://docs.kernel.org/admin-guide/sysfs-rules.html)、[NVMe 控制器属性 ABI](https://docs.kernel.org/admin-guide/abi-stable.html)、[Linux v6.12 属性实现](https://github.com/torvalds/linux/blob/v6.12/drivers/nvme/host/sysfs.c)。
 
+`disks` 只用已挂载的 `/sys`；可选 UUID 别名另用已核实的 `/dev`。只固定这两个顶层名字，不用目录打开标志或尾部斜杠触发其自动挂载。报告前再次核对同一 `/sys` 挂载和块索引，无法核实就不把原描述符的样本报告为当前结果；`/dev` 无法核实时只将别名标为未知。此核对不把设备、挂载与计数变成同一个原子快照。参见 [Linux 的 `O_PATH` 行为](https://man7.org/linux/man-pages/man2/open.2.html)和[目录查找触发条件](https://github.com/torvalds/linux/blob/v6.12/fs/namei.c#L1289-L1310)。
+
 `--rates` 多取一帧内核累计计数，中间等约一秒；按**每个设备两次读计数完成时的单调时间间隔**输出读、写 B/s。Linux 在这里的一个扇区恒为 512 B，即使设备采用 4 KiB 扇区。设备生命周期、分区原件或几何变化、可见计数回退、缺少同一盘世代时不能给速率；只有该方向的计数增量为零才报告 0；有实际传输但平均不足 1 B/s 显示为 `<1`。不是写入测试、性能上限、文件系统可用量或健康证明。基本资料/挂载或所请求速率不完整时保留其余行、退出 2；仅缺型号、UUID 或子系统/传输证据不影响基本清单。`disks` 不做 SMART、自检或修复。来源：[Linux 块层计数](https://docs.kernel.org/block/stat.html)、[内核设备世代](https://docs.kernel.org/admin-guide/abi-stable.html#sys-block-disk-diskseq)、[挂载命名空间字段](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)。
 
 ## 查看检查工具是否在位

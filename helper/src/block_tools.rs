@@ -4,9 +4,9 @@ mod aliases;
 mod kernel;
 
 use crate::maintenance::HostMounts;
-use crate::pinned::Entity;
-use rustix::fs::makedev;
-use std::{ffi::OsString, fmt, io, time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
+use crate::pinned::{Entity, require_no_automount};
+use rustix::fs::{Mode, OFlags, makedev, open, openat};
+use std::{ffi::OsString, fmt, fs::File, io, time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
 
 const MAX_DEVICES:usize=256;
 const MAX_MOUNTS:usize=32;
@@ -34,6 +34,41 @@ impl Reason {
 
 fn invalid(why:&'static str)->io::Error {io::Error::new(io::ErrorKind::InvalidData,why)}
 fn unsupported(why:&'static str)->io::Error {io::Error::new(io::ErrorKind::Unsupported,why)}
+// Only these terminal source names may cross from / into a kernel mount.
+// Their callers still independently qualify sysfs or optional devtmpfs.
+enum BlockRoot { Sysfs, DeviceAliases }
+impl BlockRoot {
+    const PIN: OFlags = OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
+
+    fn pin(self) -> io::Result<File> {
+        let parent = File::from(open(c"/", Self::PIN, Mode::empty())?);
+        // A child of an indirect autofs root can itself be a lookup trigger.
+        Self::no_automount(&parent)?;
+        self.pin_at(&parent)
+    }
+
+    fn pin_at(self, parent: &File) -> io::Result<File> {
+        let name = match self { Self::Sysfs => c"sys", Self::DeviceAliases => c"dev" };
+        // O_DIRECTORY (or a trailing slash) would express a traversal intent
+        // even with O_PATH. Pin only the terminal name, then check its type.
+        // This does not require an already-warmed path cache.
+        let fd = File::from(openat(parent, name, Self::PIN, Mode::empty())?);
+        Self::no_automount(&fd)?;
+        if !fd.metadata()?.is_dir() { return Err(invalid("expected a fixed block observation directory")); }
+        Ok(fd)
+    }
+
+    fn no_automount(fd: &File) -> io::Result<()> {
+        require_no_automount(fd).map_err(|err| {
+            if err.kind() == io::ErrorKind::InvalidData {
+                unsupported("fixed block observation source is an automount, not an already mounted directory")
+            } else {
+                err
+            }
+        })
+    }
+}
+
 fn number(b:&[u8])->Option<u64> {
     if b.is_empty() || !b.iter().all(u8::is_ascii_digit) {return None;}
     std::str::from_utf8(b).ok()?.parse().ok()
@@ -176,6 +211,9 @@ impl Query {
             });
             rows.push((dev,row));
         }
+        // Do not attribute old sysfs observations to a newer visible source.
+        // A replacement descriptor serves only as evidence, never as a target.
+        sys.require_named()?;
         Ok(Report{start_ms,end_ms:utc_ms(),requested_rates:self.rates,rows})
     }
 }
