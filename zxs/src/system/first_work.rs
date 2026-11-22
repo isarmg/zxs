@@ -203,6 +203,93 @@ pub(crate) struct Current<'t,'s,'r>{
 pub(super) struct MovedFile{
     original:ReadFile,media:super::super::volume::OrdinaryMedia,
     from:super::Setting,setting:super::Setting,auth:OperationId,result:super::file_transfer::Moved,
+    route:super::ordinary_directory::Route,physical:Arc<crate::fs::RetireProof>,
+}
+impl MovedFile{
+    fn matches_source(&self,original:&ReadFile,from:super::Setting)->bool{
+        original.place==self.result.from&&original.birth==self.original.birth&&
+            original.live==self.original.live&&from==self.from
+    }
+    /// Late logical cut on the owner thread. The worker proved and retained
+    /// the destination object. Never reopen its name, infer a replacement
+    /// parent or sample a different physical file here.
+    pub(super) fn require_adoptable(&self,db:&Connection,c:&Catalog,route:&super::ordinary_directory::Route,
+        from:super::Setting,to:super::Setting,auth:OperationId,actor:AccountId)->io::Result<()>{
+        let unknown=super::file_rename::unknown;
+        if &self.route!=route||self.setting!=to||self.auth!=auth||self.from!=from||
+            Place::current(db,c,self.result.to.file)?!=self.result.to||
+            file_create::committed_file(db,c,self.result.to.file)?!=self.original.birth||
+            &super::retirement::applied_target(db,&self.result.to)?!=self.physical.as_ref(){
+            return Err(unknown());
+        }
+        self.media.capacity_origin().require_catalog(c,to.volume)?;
+        self.result.require_ordinary_origin(db,from,to,auth,actor)?;
+        if let Some(held)=self.original.live{
+            if work_record::confirmed(db,&self.original.birth,held.record.key().save)?!=held{return Err(unknown());}
+        }
+        Ok(())
+    }
+    /// Duplicate the existing OFDs only. The original reader and its
+    /// immutable map will go to the OPEN; this worker-only pin cannot
+    /// read a new working view or reopen the FILE by a client name.
+    pub(super) fn retain_for_terminal(&self)->io::Result<(MoveFinalRecord,PinnedMoveTarget)>{
+        Ok((MoveFinalRecord{result:self.result.clone(),birth:self.original.birth.clone(),
+                read:self.original.live,physical:Arc::clone(&self.physical)},
+            PinnedMoveTarget{container:self.original.container.duplicate()?,media:self.media.duplicate()?}))
+    }
+}
+
+/// The selected receipt and original read revision, not a fresh view.
+pub(super) struct MoveFinalRecord{
+    pub(super) result:super::file_transfer::Moved,pub(super) birth:Birth,pub(super) read:Option<ReadRecord>,
+    physical:Arc<crate::fs::RetireProof>,
+}
+impl MoveFinalRecord{
+    pub(super) fn require(&self,db:&Connection,c:&Catalog,from:super::Setting,to:super::Setting,
+        auth:OperationId,actor:AccountId)->io::Result<()>{
+        let unknown=super::file_rename::unknown;
+        let to_place=&self.result.to;
+        Place::require_no_rename(db,to_place.file)?;
+        let placed=file_create::placed_at(db,c,to_place.volume,to_place.parent,&to_place.name,Some(to_place.file))?;
+        if &placed.here!=to_place||placed.birth!=self.birth||
+            &super::retirement::applied_target(db,&self.result.to)?!=self.physical.as_ref(){
+            return Err(unknown());
+        }
+        self.result.require_ordinary_origin(db,from,to,auth,actor)?;
+        if let Some(read)=self.read{
+            if work_record::confirmed(db,&self.birth,read.record.key().save)?!=read{return Err(unknown());}
+        }
+        Ok(())
+    }
+}
+pub(super) struct PinnedMoveTarget{container:Installed,media:super::super::volume::OrdinaryMedia}
+impl PinnedMoveTarget{
+    /// Fresh SELECT, exact held media/FILE/archives, fresh SELECT. Files
+    /// and physical operations stay on the worker, not the peer and not
+    /// within a SQL cut. The move's recorded material is stricter here
+    /// than general reads which can permit a later compatible append.
+    pub(super) fn check(&self,src:&InitialReader,record:&MoveFinalRecord,
+        authority:impl Fn(&Connection,&Catalog)->io::Result<()>)->io::Result<()>{
+        let unknown=super::file_rename::unknown;
+        let here=&record.result.to;
+        let read=|db:&Connection,c:Catalog|{
+            authority(db,&c)?;
+            self.media.capacity_origin().require_catalog(&c,here.volume)?;
+            ReadCut::gather(db,&c,&record.birth,here,record.read)
+        };
+        let before=src.at(&read)?;
+        let dir=self.media.folder();
+        let alias=super::directory::check_alias_at(dir,&here.name,before.alias.as_ref(),None)?;
+        self.media.view(src).require_streaming_at(||{
+            super::file_rename::require_writable(&self.media)?;
+            before.members.require(&crate::fs::WitnessRead::at(self.container.directory())?)?;
+            if &self.container.capture_retirement(dir)?!=record.physical.as_ref(){return Err(unknown());}
+            Ok(())
+        })?;
+        if src.at(&read)?!=before{return Err(unknown());}
+        drop(alias);
+        Ok(())
+    }
 }
 #[derive(Clone)]
 pub(super) struct MoveOwner{open:Weak<AtomicU64>,sequence:u64}
@@ -326,7 +413,7 @@ impl<'s,'r> Tree<'s,'r>{
         let require=|db:&Connection,c:&Catalog|self.require(db,c,true);
         let authority=&self.session.original;
         MoveTargetAt{source:self.session.source,setting:self.setting,parent:self.parent,actor:authority.account,
-            auth:authority.op,require:&require}.prepare(result,opened)
+            auth:authority.op,require:&require}.prepare(result,opened,None)
     }
 }
 
@@ -334,13 +421,13 @@ impl<'s,'r> Tree<'s,'r>{
 /// inside the independent worker's reader. Requires that exact authority
 /// at both SQL cuts; no move, client path lookup, SQLite state transfer
 /// or replacement of the original OPEN happens here.
-struct MoveTargetAt<'a>{
-    source:&'a InitialReader,setting:super::Setting,parent:DirectoryParent,
-    actor:AccountId,auth:OperationId,require:&'a dyn Fn(&Connection,&Catalog)->io::Result<()>,
+pub(super) struct MoveTargetAt<'a>{
+    pub(super) source:&'a InitialReader,pub(super) setting:super::Setting,pub(super) parent:DirectoryParent,
+    pub(super) actor:AccountId,pub(super) auth:OperationId,pub(super) require:&'a dyn Fn(&Connection,&Catalog)->io::Result<()>,
 }
 impl MoveTargetAt<'_>{
-    fn prepare(&self,result:super::file_transfer::Moved,opened:&super::file_transfer::OrdinaryMoveSource)
-        ->io::Result<MovedFile>{
+    pub(super) fn prepare(&self,result:super::file_transfer::Moved,opened:&super::file_transfer::OrdinaryMoveSource,
+        expected:Option<&super::ordinary_directory::Route>)->io::Result<MovedFile>{
         let src=self.source;
         let unknown=super::file_rename::unknown;
         if result.from!=opened.place{return Err(unknown());}
@@ -357,6 +444,7 @@ impl MoveTargetAt<'_>{
             }
             let selected=ReadCut::gather(db,&c,&placed.birth,&placed.here,opened.view)?;
             let route=super::ordinary_directory::Route::at(db,&c,result.to.volume,result.to.parent)?;
+            if expected.is_some_and(|original|original!=&route){return Err(unknown());}
             let proof=super::retirement::applied_target(db,&result.to)?;
             Ok((c,placed,selected,route,proof))
         }).map_err(|_|unknown())?;
@@ -366,7 +454,8 @@ impl MoveTargetAt<'_>{
             volume:result.to.volume,parent:result.to.parent,require:self.require};
         at.checked(&selected,||original.container.still_retirement_target(root.folder(),&proof),|_|Ok(()))
             .map_err(|_|unknown())?;
-        Ok(MovedFile{original,media:root.into_media(),from:opened.grant,setting:self.setting,auth:self.auth,result})
+        Ok(MovedFile{original,media:root.into_media(),from:opened.grant,setting:self.setting,auth:self.auth,
+            result,route,physical:Arc::new(proof)})
     }
 }
 impl ReadAt<'_>{
@@ -463,8 +552,7 @@ impl<'t,'s,'r> Current<'t,'s,'r>{
     }
     pub(super) fn adopt_moved_file(&mut self,ready:MovedFile)->io::Result<super::file_transfer::Moved>{
         let unknown=super::file_rename::unknown;
-        if self.original.place!=ready.result.from||self.original.birth!=ready.original.birth||
-            self.original.live!=ready.original.live||self.setting!=ready.from||self.tree.session.original.op!=ready.auth{
+        if !ready.matches_source(&self.original,self.setting)||self.tree.session.original.op!=ready.auth{
             return Err(unknown());
         }
         let src=self.tree.session.source;
@@ -568,5 +656,5 @@ impl<'t,'s,'r> Current<'t,'s,'r>{
 #[path="smb_rust_file.rs"]
 mod rust;
 pub(super) use rust::HeldRename;
-pub(crate) use rust::{RustFileName,RustFileSelection,RustFileStandard,RustOrdinaryRename,RustReadFile,RustReadProof,RustRetiredOrdinaryRename};
+pub(crate) use rust::{RustAdoptedMove,RustFileName,RustFileSelection,RustFileStandard,RustOrdinaryRename,RustReadFile,RustReadProof,RustRetiredOrdinaryRename};
 pub(crate) use super::file_transfer::RustOrdinaryMove;

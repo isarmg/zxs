@@ -44,11 +44,14 @@ struct Route{
     share:ShareId,setting:OperationId,auth:OperationId,actor:AccountId,epoch:i64,
     destination:Option<Setting>,
 }
-/// Original confirmed kind-12 selection, not merely the same FILE at the
-/// same two names. Its request binds the selected SAVE/history and authority.
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+struct ReceiptBinding{request:[u8;32],save:Option<OperationId>,manual_head:Option<OperationId>}
+
+/// The exact confirmed kind-12 selection, including the original SAVE and
+/// history. An equal current name or FileId is not the original receipt.
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Moved{
-    pub(super) op:OperationId,pub(super) from:Place,pub(super) to:Place,request:[u8;32],
+    pub(super) op:OperationId,pub(super) from:Place,pub(super) to:Place,bound:ReceiptBinding,
 }
 pub(super) struct OrdinaryMoveSource{
     pub(super) place:Place,pub(super) physical:Installed,pub(super) view:Option<ReadRecord>,pub(super) grant:Setting,
@@ -89,7 +92,8 @@ impl Moved{
            from.mode!=super::share_mode::Mode::ReadWrite||to.mode!=super::share_mode::Mode::ReadWrite{
             return Err(io::ErrorKind::PermissionDenied.into());
         }
-        let q=db.prepare(c"SELECT m.source_backing,m.source_terminal FROM main.file_transfer m
+        let q=db.prepare(c"SELECT m.source_backing,m.source_terminal,o.request_sha,m.save_op,m.manual_op
+            FROM main.file_transfer m
             JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
             WHERE m.transfer_op=?1 AND o.actor_id=?2 AND m.auth_op=?3 AND m.direction=3
               AND m.file_id=?4 AND m.source_op=?5 AND m.source_gen=?6 AND m.source_id=?7
@@ -100,7 +104,9 @@ impl Moved{
             (12,self.to.volume.0),(14,self.to.parent.bytes()),(15,to.op.0)]{q.bind_bytes(index,&id)?;}
         q.bind_integer(6,self.from.generation)?;q.bind_bytes(8,self.from.name.as_bytes())?;
         q.bind_bytes(13,self.to.name.as_bytes())?;
-        if !work_record::start_one(&q)?||Place::read_backing(&q,0,1,self.from.file,&self.from.name)?!=self.from.backing{
+        if !work_record::start_one(&q)?||Place::read_backing(&q,0,1,self.from.file,&self.from.name)?!=self.from.backing||
+            q.array::<32>(2)?!=self.bound.request||work_record::optional(&q,3)?!=self.bound.save||
+            work_record::optional(&q,4)?!=self.bound.manual_head{
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         q.done()
@@ -275,7 +281,8 @@ impl Route{
     /// observer until the original COMMIT or its exact readback succeeds.
     fn confirmed_at(&self,db:&Connection,op:OperationId)->io::Result<Option<Moved>>{
         let Some(request)=self.exact_request_at(db,op,true)? else{return Ok(None);};
-        Ok(Some(Moved{op,from:self.from.here.clone(),to:self.target(op),request}))
+        let bound=ReceiptBinding{request,save:self.work.map(|r|r.record.key().save),manual_head:self.head};
+        Ok(Some(Moved{op,from:self.from.here.clone(),to:self.target(op),bound}))
     }
     fn still_live(&self,db:&Connection,op:OperationId)->io::Result<()>{
         if !self.pending_at(db,op)?{return Err(pending());}
@@ -698,7 +705,7 @@ pub(crate) use rust::{ConfirmedFileDelete,RustFileDelete,RustRetainedRestore};
 
 #[path="smb_rust_ordinary_move.rs"]
 mod ordinary_move;
-pub(crate) use ordinary_move::RustOrdinaryMove;
+pub(crate) use ordinary_move::{CheckedMoveTarget,ConfirmedOrdinaryMove,MoveTargetKey,RustOrdinaryMove};
 
 #[cfg(test)]
 #[path="../../tests/unit/sqlite_transfer_io.rs"]

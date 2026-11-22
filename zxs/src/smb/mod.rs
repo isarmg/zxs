@@ -11,6 +11,7 @@ pub use launch::{start_original_zxs,try_supervised_zxs_role};
 #[allow(dead_code, reason = "per-transport accounting is staged before the network runtime")]
 mod connection;
 pub(crate) use connection::sessions::ordinary::RustSessionWitness;
+pub(crate) use connection::accepted::incoming::OriginalMoveFence;
 #[allow(dead_code, reason = "signing is staged before the authenticated network runtime")]
 mod session;
 #[allow(dead_code, reason = "share votes are staged before real storage-open integration")]

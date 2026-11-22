@@ -1,11 +1,11 @@
-//! Closed, small synchronous replies to an original paid, signed member.
+//! Closed, small replies to an original paid, signed member.
 //! No generic success body or caller-selected wire ID.
 use super::{Error,Result,create_fields::{Disposition,MaximumAccessQuery},io_reply::{FLUSH,FileReply,WRITE},message::{Message,RELATED,SIGNED,Routing},network_probe::{IOCTL,NetworkProbe},
     query_fields::{CapacityFormat,FileClass,FsClass,InfoClass},set_info::{Change,FileSetRequest,RenameRequest,SET_INFO}};
 use crate::smb::{
     backend::{CloseCompletion,PreparedDisposition,PreparedOrdinaryRename,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRetainedRestore,tree_connect::QualifiedTreeConnect},
     connection::sessions::ordinary::{
-        BrowsePart,ClosedOpen,DirectoryRefusal,ExitPlan,FsInfoRefusal,PendingAttributeTag,PendingFileAccess,PendingFileStandard,PendingInternal,PendingOpen,PendingRootAttributes,PendingRootSize,ProbePart,ProposedTreeId,
+        BrowsePart,CancelledOriginalMove,ClosedOpen,ConfirmedOriginalMove,DirectoryRefusal,ExitPlan,FsInfoRefusal,PendingAttributeTag,PendingFileAccess,PendingFileStandard,PendingInternal,PendingOpen,PendingRootAttributes,PendingRootSize,ProbePart,ProposedTreeId,
         FileActionPart,PendingRename,PendingWrite,ReadRefusal,RenameRefusal,VerifiedMember,WriteRefusal,
     },
 };
@@ -124,6 +124,28 @@ impl UnsignedSmall {
         draft.raw[36..40].fill(0); // ECHO returns no Tree
         draft.raw[64]=if ok {4} else {9};
         Ok(draft)
+    }
+
+    pub(in crate::smb) fn cancelled_move(member:&VerifiedMember<'_,'_>,sid:NonZeroU64,
+        original:&CancelledOriginalMove<'_>)->Result<Self>{
+        if !original.matches(member,sid){return Err(Error::InvalidRequest);}
+        // Only the original SET_INFO header and no extended error data.
+        let mut reply=Self::standalone(member,sid,SET_INFO,0xc000_0120,EMPTY_ERROR)?;
+        if let Some(id)=original.async_id(){
+            move_async_header(&mut reply.raw,id);
+        }
+        reply.raw[64]=9;
+        Ok(reply)
+    }
+    pub(in crate::smb) fn confirmed_move(member:&VerifiedMember<'_,'_>,sid:NonZeroU64,
+        original:&ConfirmedOriginalMove<'_>)->Result<Self>{
+        if !original.matches(member,sid){return Err(Error::InvalidRequest);}
+        // MS-SMB2 §§2.2.1.1, 2.2.40: ASYNC and the two-byte fixed SET_INFO
+        // success body. The one interim has already granted any credits.
+        let mut reply=Self::standalone(member,sid,SET_INFO,0,66)?;
+        move_async_header(&mut reply.raw,original.async_id());
+        reply.raw[64]=2;
+        Ok(reply)
     }
 
     pub(in crate::smb) fn tree_failure(member:&VerifiedMember<'_,'_>,sid:NonZeroU64,why:TreeFailure)
@@ -799,6 +821,28 @@ impl PayableSmall {
     }
 }
 impl SignedSmall {pub(in crate::smb) fn bytes(&self)->&[u8] {&self.0.raw[..self.0.len]}}
+
+fn move_async_header(raw:&mut [u8;MAX_SMALL_REPLY],id:NonZeroU64){
+    raw[16]|=2;
+    raw[32..40].copy_from_slice(&id.get().to_le_bytes());
+}
+
+#[cfg(test)]
+#[test]
+fn asynchronous_move_overlays_only_its_flags_and_routing_union(){
+    let mut raw=[0u8;MAX_SMALL_REPLY];
+    raw[16]=9; // existing signed server reply flags
+    raw[24..32].copy_from_slice(&23u64.to_le_bytes());
+    raw[36..40].copy_from_slice(&53u32.to_le_bytes());
+    raw[40..48].copy_from_slice(&17u64.to_le_bytes());
+    let fixed=raw;
+    move_async_header(&mut raw,NonZeroU64::new(24).unwrap());
+    assert_eq!(raw[16..20],11u32.to_le_bytes());
+    assert_eq!(raw[32..40],24u64.to_le_bytes());
+    assert_eq!(raw[..16],fixed[..16]);
+    assert_eq!(raw[20..32],fixed[20..32]);
+    assert_eq!(raw[40..],fixed[40..]);
+}
 
 #[cfg(test)]
 #[path="../../test/smb/root_mxac_reply.rs"]

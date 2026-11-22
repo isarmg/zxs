@@ -1,8 +1,8 @@
 //! Same ordinary stored FILE and selected current work as the native reader.
 //! No alternative login, pathname join, revision or writer is defined here.
-use super::{Catalog,Connection,ReadAt,ReadCut,ReadFile,Placed,file_create,work_record};
+use super::{Catalog,Connection,MovedFile,ReadAt,ReadCut,ReadFile,Placed,file_create,work_record};
 use crate::{FileId,OperationId,display,fs::invalid,ordinary::working_round::Used,smb::{FileRenameTarget,OrdinaryRenameAdmission,RustSessionWitness},
-    system::reader::{account::share_mode::{Mode,Setting},smb::{denied,file_number::{self,SmbFileIndex},file_rename,ordinary_directory::Route,
+    system::reader::{account::share_mode::{Mode,Setting},smb::{ConfirmedOrdinaryMove,MoveTargetKey,denied,file_number::{self,SmbFileIndex},file_rename,ordinary_directory::Route,
         runtime::{RustRoot,RustRootStamp},smb_buffer,work_change::{RustWorkWriter,RustWriterSelection}},volume::{OrdinaryMedia,OrdinaryRoot}}};
 use std::{io::{self,Write},rc::{Rc,Weak}};
 
@@ -68,6 +68,17 @@ pub(crate) struct RustReadFile{
 /// per-view witnesses cannot be applied to an equal FILE on another OPEN.
 #[must_use]
 pub(crate) struct RustReadProof{mark:Weak<()>,used:Used}
+
+/// Can exist only after replacing the physical custody inside this already
+/// open reader, not before actual target validation/adoption. Not Send and
+/// no permission to sign or answer a request.
+#[must_use]
+pub(crate) struct RustAdoptedMove{
+    mark:Weak<()>,target:MoveTargetKey,
+}
+impl RustAdoptedMove{
+    pub(crate) fn target(&self)->&MoveTargetKey{&self.target}
+}
 /// Short exact source built only from the already-held FILE, not a name
 /// lookup or a second authorization. No receiving module can fill it.
 pub(in crate::system::reader::smb) struct HeldRename<'a>{
@@ -208,6 +219,30 @@ impl RustReadFile {
         ->io::Result<(&str,&Route,&crate::ordinary::portable_birth::Birth,super::super::file_transfer::OrdinaryMoveSource)>{
         if !member.is_set_info()||!self.belongs_to(tree)||self.grant.mode!=Mode::ReadWrite{return Err(denied());}
         Ok((&self.label,&self.route,&self.file.birth,self.file.ordinary_move_source(self.grant)?))
+    }
+    /// Keep this OPEN's logical identity, mark, birth and original read
+    /// revision. The worker has already checked and left these exact F/
+    /// ancestry/FILE holders open. The owner rechecks logical selection but
+    /// never opens a different target by name or falls back to the source.
+    pub(crate) fn adopt_ordinary_move(&mut self,tree:&RustRoot,member:&RustSessionWitness,ready:ConfirmedOrdinaryMove)
+        ->io::Result<RustAdoptedMove>{
+        let unknown=file_rename::unknown;
+        if !self.belongs_to(tree)||!ready.held_target().matches_source(&self.file,self.grant){return Err(unknown());}
+        let (ready,label,grant,target)=ready.for_adoption(tree,member,&self.label,&self.route,self.grant)?;
+        let MovedFile{original,media,route,..}=ready;
+        // Infallible local adoption, FILE before its old parent is released.
+        self.file=original;
+        self.parent=media;
+        self.label=label;self.route=route;self.grant=grant;
+        Ok(RustAdoptedMove{mark:Rc::downgrade(&self.mark),target})
+    }
+    pub(crate) fn require_adopted_move(&self,tree:&RustRoot,member:&RustSessionWitness,receipt:&RustAdoptedMove)
+        ->io::Result<()>{
+        if !receipt.mark.ptr_eq(&Rc::downgrade(&self.mark))||!self.belongs_to(tree)||
+            !receipt.target.names_adopted(&self.label,&self.route,self.grant,&self.file.place,&self.file.birth,self.file.live){
+            return Err(file_rename::unknown());
+        }
+        receipt.target.require_adopted(tree,member,&self.parent)
     }
     /// This exact held reader is rebound only after the common kind14
     /// engine attests the same physical FILE with its original short EX.

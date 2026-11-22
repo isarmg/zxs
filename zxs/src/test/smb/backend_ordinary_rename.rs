@@ -127,6 +127,35 @@ fn only_the_single_bound_original_can_start_a_rename_turn(){
 }
 
 #[test]
+fn held_rename_turn_prevents_a_compatible_writer_reservation_until_release(){
+    use super::super::super::{Facts,Grant,OriginalRequest,ParentWrite,ReserveError,Share,Vote};
+    use std::num::NonZeroUsize;
+    struct CountsOnly;
+    impl OriginalRequest for CountsOnly{
+        type Held=Self;
+        type Error=();
+        fn recheck(&self,_:&Self)->Result<Facts,()>{panic!("a share reservation does not create an OPEN")}
+    }
+    let object=Object::File(PoolId([1;16]),FileId([2;16]));
+    let owner=OpenCoordinator::new(NonZeroUsize::new(2).unwrap());
+    let vote=Vote{needs:4,denies:0};
+    let slot=Slot{owner:Arc::clone(&owner),object,vote,bound:true,retained:false,released:false,identity:Arc::new(())};
+    {
+        let mut table=owner.table.lock().unwrap();let row=table.objects.entry(object).or_default();
+        row.add(vote);row.bound=1;table.live=1;
+    }
+    let ask=CountsOnly;
+    let writer=Facts{object,grant:Grant::from_effective(2).unwrap(),parent_write:ParentWrite::Granted};
+    let fully_shared=Share::from_bits(7).unwrap();
+    let turn=RenameTurn::take(&slot).unwrap();
+    assert!(matches!(owner.reserve(&ask,writer,fully_shared),Err(ReserveError::SharingViolation)));
+    assert!(matches!(RenameTurn::take(&slot),Err(OrdinaryRenameError::SharingViolation)));
+    turn.require(&slot).unwrap();
+    drop(turn);
+    assert!(owner.reserve(&ask,writer,fully_shared).is_ok());
+}
+
+#[test]
 fn related_retirement_holds_one_exact_empty_row_until_the_original_proof_drops(){
     use crate::{FileId,PoolId};
     use super::super::super::Vote;

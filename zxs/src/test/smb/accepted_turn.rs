@@ -148,20 +148,66 @@ fn only_the_receiving_peer_can_take_the_exact_ordinary_move_capture(){
     let run=provider();
     let (mut a,trace,_,_)=peer(&run);
     let (mut b,other,_,_)=peer(&run);
-    give(&trace,&frame(&fixed_request(13,1,0,0)));
-    let captured=CapturedRecord::from_stream(&mut a.connection,MAX_FRAME_BYTES).unwrap().unwrap();
+    let same_bytes=frame(&fixed_request(13,1,0,0));
+    give(&trace,&same_bytes);
+    let captured=OriginalMoveInput::new(CapturedRecord::from_stream(&mut a.connection,MAX_FRAME_BYTES).unwrap().unwrap());
     {
         let original=captured.frame_on(&a.connection).unwrap();
-        let detached=parsed(&captured.bytes).unwrap();
-        let mark=MoveCapture{frame:&original};
+        let detached=parsed(&captured.capture.bytes).unwrap();
+        let mark=MoveCapture{frame:&original,owned:&captured};
         assert!(mark.matches(&original));
-        assert!(!mark.matches(&detached)); // the same bytes are not a borrowed original
+        assert!(!mark.matches(&detached)); // equal bytes are not the borrowed original
+        give(&trace,&same_bytes);
+        let second=OriginalMoveInput::new(CapturedRecord::from_stream(&mut a.connection,MAX_FRAME_BYTES).unwrap().unwrap());
+        assert!(captured.issued(&mark.seal()));
+        assert!(!second.issued(&mark.seal())); // a distinct physical record, even from this peer
     }
-    assert_eq!(b.park_original_move(captured),Err(Fault::WrongBatch));
+    assert_eq!(b.park_original_move(captured.capture),Err(Fault::WrongBatch));
     assert!(b.original_move.is_none()&&a.original_move.is_none());
     assert_eq!((a.connection.alive(),b.connection.alive()),(Err(Fault::Closed),Ok(())));
     assert_eq!((a.connection.in_flight,b.connection.in_flight),(0,0));
     assert!(take(&trace).is_empty()&&take(&other).is_empty());
+}
+
+#[test]
+fn pending_framer_waits_for_one_complete_original_without_spending_or_taking_its_suffix(){
+    use crate::smb::connection::transport::PendingRead;
+    let run=provider();let (mut p,t,key)=authenticated_fixture(&run);
+    let mut q=cancel_request(3,8,0);
+    seal_fixture_request(&mut q,&key);
+    let first=frame(&q);
+    let next=frame(&fixed_request(13,4,8,0));
+    let mut input=PendingRead::default();
+    let before=p.connection.window;
+    give(&t,&first[..2]);
+    assert!(CapturedRecord::from_pending(&mut p.connection,&mut input).unwrap().is_none());
+    assert!(CapturedRecord::from_pending(&mut p.connection,&mut input).unwrap().is_none()); // quiet partial
+    give(&t,&first[2..]);give(&t,&next);
+    let captured=(0..32).find_map(|_|CapturedRecord::from_pending(&mut p.connection,&mut input).unwrap()).unwrap();
+    assert_eq!(captured.bytes,first);
+    assert!(captured.frame_on(&p.connection).is_ok());
+    assert_eq!(t.lock().unwrap().input.iter().copied().collect::<Vec<_>>(),next);
+    let after=p.connection.window;
+    assert_eq!((before.low,before.next,before.bits),(after.low,after.next,after.bits));
+    assert_eq!(p.connection.in_flight,0);
+    assert!(take(&t).is_empty());
+}
+
+#[test]
+fn pending_framer_does_not_convert_idle_or_partial_eof_into_a_record(){
+    use crate::smb::connection::transport::PendingRead;
+    let run=provider();
+    for partial in [&[][..],&[0,0][..],&[0,0,0,68,0xfe][..]] {
+        let (mut p,t,_,_)=peer(&run);
+        let mut input=PendingRead::default();
+        give(&t,partial);
+        assert!(CapturedRecord::from_pending(&mut p.connection,&mut input).unwrap().is_none());
+        assert!(CapturedRecord::from_pending(&mut p.connection,&mut input).unwrap().is_none());
+        t.lock().unwrap().eof=true;
+        assert!(matches!(CapturedRecord::from_pending(&mut p.connection,&mut input),Err(Fault::Closed)));
+        assert_eq!(p.connection.in_flight,0);
+        assert!(take(&t).is_empty());
+    }
 }
 
 #[test]
@@ -177,6 +223,30 @@ fn signed_move_shape_without_an_original_file_cannot_park_or_release_its_debt(){
     assert!(p.original_move.is_none()&&p.connection.sessions.is_empty());
     assert_eq!((p.connection.in_flight,p.connection.window.next,p.connection.alive()),(1,previous,Err(Fault::Closed)));
     assert!(take(&t).is_empty());assert_eq!(t.lock().unwrap().drops,1);
+}
+
+#[test]
+fn ordinary_move_router_refuses_missing_tree_on_the_original_paid_wire_and_continues(){
+    let run=provider();let (mut p,t,key)=authenticated_fixture(&run);
+    let mut q=fixed_request(17,3,8,1u64<<32);q.resize(122,0);
+    q[64]=33;q[66]=1;q[67]=10;q[68]=26;q[72]=96;q[80]=1;q[88]=2;q[112]=6;
+    q[116..].copy_from_slice(&[b'G',0,92,0,b'x',0]);
+    seal_fixture_request(&mut q,&key);give(&t,&frame(&q));
+    let previous=p.connection.window.next;
+    assert_eq!(p.poll_selected(Issuer::Protected,true,step_unexpected),Ok(Turn::ErrorWritten));
+    let ans=take(&t);
+    assert_eq!(ans.len(),76); // one fixed ERROR response, no STATUS_PENDING
+    assert_eq!(&ans[12..16],&0xc000_00c9u32.to_le_bytes()); // original Tree was not in this Session
+    assert_eq!(&ans[28..36],&3u64.to_le_bytes());
+    assert_eq!(&ans[52..68],&tag_for_this_fixture(&key,&ans[4..]));
+    let granted=u16::from_le_bytes(ans[18..20].try_into().unwrap());
+    assert_eq!(p.connection.window.next,previous+u64::from(granted));
+    assert!(p.original_move.is_none());
+    assert_eq!(p.connection.in_flight,0);
+    let mut next=fixed_request(13,4,8,0);seal_fixture_request(&mut next,&key);
+    give(&t,&frame(&next));
+    assert_eq!(p.poll_selected(Issuer::Protected,true,step_unexpected),Ok(Turn::EchoWritten));
+    assert_eq!(&take(&t)[28..36],&4u64.to_le_bytes());
 }
 
 #[test]

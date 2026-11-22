@@ -2,7 +2,10 @@
 //! cloning of an OS handle, or attaching a new socket to an existing session.
 use super::{Fault,Result};
 use crate::smb::wire::direct::Frame;
-use std::{io::{ErrorKind,Read,Write},net::TcpStream,time::{Duration,Instant}};
+use std::{io::{ErrorKind,Read,Write},net::TcpStream,sync::Arc,time::{Duration,Instant}};
+
+mod pending;
+pub(super) use pending::{OriginalPeerProbe,PendingRead};
 
 const IO_BUDGET:Duration=Duration::from_secs(5);
 pub(super) fn deadline()->Result<Instant> {Instant::now().checked_add(IO_BUDGET).ok_or(Fault::Clock)}
@@ -16,21 +19,28 @@ fn remaining(end:Instant)->Result<Duration> {
 pub(super) trait FixtureIo:Read+Write+Send+Sync {}
 #[cfg(test)]
 impl<T:Read+Write+Send+Sync> FixtureIo for T {}
+/// The only persistent strong reference stays in the DirectStream owner.
+/// A parked move may only borrow a transient poll observation via Weak.
+pub(super) struct OwnedTcp(Arc<TcpStream>);
 pub(super) enum DirectStream {
-    Tcp(TcpStream),
+    Tcp(OwnedTcp),
     #[cfg(test)]
     Fixture(Box<dyn FixtureIo>),
 }
 impl Drop for DirectStream {
     fn drop(&mut self) {
+        // Shutdown of the original socket does not wait for a temporary
+        // readiness observation to release its reference.
         match self {
-            Self::Tcp(s)=>{let _=s.shutdown(std::net::Shutdown::Both);}
+            Self::Tcp(s)=>{let _=s.0.shutdown(std::net::Shutdown::Both);}
             #[cfg(test)]
             Self::Fixture(_)=>{},
         }
     }
 }
 impl DirectStream {
+    pub(super) fn tcp(socket:TcpStream)->Self{Self::Tcp(OwnedTcp(Arc::new(socket)))}
+
     /// Read exactly one bounded record, not read_to_end and not one read per
     /// message. The same absolute budget covers the entire prefix AND body.
     /// The caller must discard this stream on an error (position ambiguous).
@@ -51,8 +61,8 @@ impl DirectStream {
             if left.is_zero() {return Ok(None);}
             let first=match self {
                 Self::Tcp(s)=>{
-                    s.set_read_timeout(Some(left)).map_err(|_|Fault::Transport)?;
-                    s.read(&mut prefix[..1])
+                    s.0.set_read_timeout(Some(left)).map_err(|_|Fault::Transport)?;
+                    (&*s.0).read(&mut prefix[..1])
                 }
                 #[cfg(test)]
                 Self::Fixture(s)=>s.read(&mut prefix[..1]),
@@ -80,8 +90,8 @@ impl DirectStream {
             let left=remaining(end)?;
             let got=match self {
                 Self::Tcp(s)=>{
-                    s.set_read_timeout(Some(left)).map_err(|_|Fault::Transport)?;
-                    s.read(dst)
+                    s.0.set_read_timeout(Some(left)).map_err(|_|Fault::Transport)?;
+                    (&*s.0).read(dst)
                 }
                 #[cfg(test)]
                 Self::Fixture(s)=>s.read(dst),
@@ -114,8 +124,8 @@ impl DirectStream {
                 let left=remaining(end)?;
                 let written=match self {
                     Self::Tcp(s)=>{
-                        s.set_write_timeout(Some(left)).map_err(|_|Fault::Transport)?;
-                        s.write(bytes)
+                        s.0.set_write_timeout(Some(left)).map_err(|_|Fault::Transport)?;
+                        (&*s.0).write(bytes)
                     }
                     #[cfg(test)]
                     Self::Fixture(s)=>s.write(bytes),

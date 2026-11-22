@@ -120,7 +120,7 @@ impl OrdinaryView<'_>{
     }
 }
 impl OrdinaryMedia{
-    fn duplicate(&self)->io::Result<Self>{
+    pub(super) fn duplicate(&self)->io::Result<Self>{
         let ancestors=self.ancestors.iter().map(DirectoryHold::duplicate).collect::<io::Result<Vec<_>>>()?;
         Ok(Self{root:self.root.duplicate()?,mark:self.mark.duplicate()?,expected:self.expected,
             volume:self.volume,ordinal:self.ordinal,parent:self.parent,ancestors})

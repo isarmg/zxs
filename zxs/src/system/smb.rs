@@ -67,7 +67,7 @@ pub(crate) use retained_read::{RustRetainedDirectory,RustRetainedFile,RustRetain
 
 #[path="file_transfer.rs"]
 mod file_transfer;
-pub(crate) use file_transfer::{ConfirmedFileDelete,RustFileDelete,RustRetainedRestore};
+pub(crate) use file_transfer::{CheckedMoveTarget,ConfirmedFileDelete,ConfirmedOrdinaryMove,MoveTargetKey,RustFileDelete,RustRetainedRestore};
 #[path="file_rename.rs"]
 mod file_rename;
 #[path="file_retirement.rs"]

@@ -67,7 +67,7 @@ impl CheckedBatch<'_,'_>{
         Ok(true)
     }
 
-    fn rename_refusal(&mut self,m:&Message<'_>,sid:NonZeroU64,status:RestoreFailure)->Result<bool>{
+    pub(super) fn rename_refusal(&mut self,m:&Message<'_>,sid:NonZeroU64,status:RestoreFailure)->Result<bool>{
         self.owner.member_scope(sid,&self.revision)?;
         let draft=UnsignedSmall::rename_refusal(&RenameRefusal{raw:m,sid,status}).map_err(|_|Fault::WrongReply)?;
         self.next=1;self.small_replies(std::iter::once(draft))?.send()?;Ok(true)

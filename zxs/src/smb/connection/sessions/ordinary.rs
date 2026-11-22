@@ -11,9 +11,11 @@ pub(in crate::smb) use outbound::root_query::{DirectoryRefusal,PendingRootQuery,
 pub(in crate::smb) use outbound::root_query::related::BrowsePart;
 pub(in crate::smb) use outbound::retire::ExitPlan;
 pub(in crate::smb) use outbound::restore::{PendingRename,RenameRefusal};
+pub(in crate::smb) use outbound::ordinary_move::{CancelledOriginalMove,ConfirmedOriginalMove};
 pub(in crate::smb) use outbound::file_read::{PendingRead,ReadRefusal};
 pub(in crate::smb) use outbound::file_write::{PendingWrite,WriteRefusal};
-pub(in crate::smb::connection) use outbound::ordinary_move::MoveEscrow;
+pub(in crate::smb::connection) use outbound::ordinary_move::{CheckWrittenMove,MoveCancellation,MoveEscrow,MoveWritten,WorkingMoveEscrow};
+pub(in crate::smb::connection) use outbound::ordinary_move::MoveDecision;
 pub(in crate::smb) use outbound::root_attributes::{FsInfoRefusal,PendingAttributeTag,PendingFileAccess,PendingFileName,PendingFileStandard,PendingInternal,PendingRootAttributes,PendingRootSize};
 mod authority;
 pub(crate) use authority::RustSessionWitness;
@@ -21,7 +23,7 @@ use super::{Phase,Registration};
 use crate::smb::{
     connection::{Connection,Fault,Origin,Payload,Received,Result,accepted::AcceptedEndpoints},
     session::{self,BatchRevision,BoundSession,VerifiedIds},
-    wire::{credit_fields::Limits,message::{Message,RELATED}},
+    wire::{credit_fields::Limits,message::{CANCEL,Compound,Message,RELATED}},
 };
 use std::{num::NonZeroU64,sync::{Arc,atomic::Ordering},time::Instant};
 
@@ -104,6 +106,21 @@ impl Connection {
         let view=SessionView{reg,origin:&self.origin,revision,limits:&self.limits};view.recheck()?;Ok(view)
     }
 }
+fn cancel_shape<'a,'raw>(frame:&'a Compound<'raw>)->Result<&'a Message<'raw>>{
+    let [m]=frame.messages()else{return Err(Fault::WrongReply);};
+    // MS-SMB2 2.2.30: ignored Reserved remains in the actual CMAC input.
+    if m.header.command!=CANCEL||m.raw.len()!=68||m.raw[64..66]!=4u16.to_le_bytes(){
+        return Err(Fault::WrongReply);
+    }
+    Ok(m)
+}
+fn signed_cancel(owner:&Connection,frame:&Compound<'_>,revision:&BatchRevision)->Result<NonZeroU64>{
+    let id=session::verify_cancel(frame,revision,|sid|owner.published_bound(sid));
+    owner.alive()?;
+    let sid=id.map_err(|_|Fault::SessionState)?;
+    owner.member_scope(sid,revision)?;
+    Ok(sid)
+}
 impl<'raw> Received<'raw> {
     /// The actual synchronous owner has no target at a receive boundary.
     /// Require that invariant here, not merely at the end of `Peer::poll`:
@@ -111,15 +128,12 @@ impl<'raw> Received<'raw> {
     pub(in crate::smb::connection) fn discard_idle_cancel(self,owner:&Connection)->Result<()> {
         if !Arc::ptr_eq(&self.debit.origin,&owner.origin) {return Err(Fault::WrongBatch);}
         owner.alive()?;
-        let [m]=self.frame.messages() else {return Err(Fault::WrongReply);};
-        // MS-SMB2 2.2.30: Size=4; the reserved word has no semantics,
-        // but it remains in the originally authenticated bytes.
-        if owner.in_flight!=0 || self.debit.owed || self.payload(0)!=Some(Payload::CancelExempt) ||
-            m.raw.len()!=68 || m.raw[64..66]!=4u16.to_le_bytes() {return Err(Fault::WrongReply);}
+        if owner.in_flight!=0 || self.debit.owed || self.payload(0)!=Some(Payload::CancelExempt){
+            return Err(Fault::WrongReply);
+        }
+        cancel_shape(self.frame)?;
         let revision=owner.origin.run.verifier.as_ref().and_then(|s|s.batch_revision()).ok_or(Fault::NoVerifier)?;
-        let id=session::verify_cancel(self.frame,&revision,|sid|owner.published_bound(sid));
-        owner.alive()?;
-        owner.member_scope(id.map_err(|_|Fault::SessionState)?,&revision)?;
+        signed_cancel(owner,self.frame,&revision)?;
         Ok(()) // no affected request, status, credit grant, or business handler
     }
     fn unsigned_live_tree(&self,i:usize,c:&Connection,revision:&BatchRevision)->bool {

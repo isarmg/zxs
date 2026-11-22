@@ -56,6 +56,10 @@ impl SystemDir{
             self.ino!=other.ino||self.marker_ino!=other.marker_ino{return Err(invalid("different original SYSTEM"));}
         Ok(())
     }
+    // Only held name/lease evidence. No SQLite pointer or DB FD is duplicated.
+    pub(super) fn duplicate_for_move(&self)->io::Result<Self>{
+        Ok(Self{root:self.root.duplicate()?,db:self.db.clone(),ino:self.ino,marker_ino:self.marker_ino})
+    }
     pub(super) fn path(&self)->&CStr{&self.db}
     pub(super) fn component_limit(&self)->io::Result<ComponentLimit>{ComponentLimit::held(&self.root)}
     pub(super) fn require(&self)->io::Result<()>{

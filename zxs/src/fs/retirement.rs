@@ -56,6 +56,7 @@ pub(crate) struct RetireSite<'a>{
     pub(crate) root:&'a HeldDir,pub(crate) original:&'a CStr,pub(crate) isolation:&'a CStr,
     pub(crate) portable:&'a CStr,pub(crate) witness:&'a CStr,pub(crate) header:&'a [u8],pub(crate) has_parent:bool,
 }
+#[derive(Eq,PartialEq)]
 pub(crate) struct RetireProof{
     // Inodes here supplement an already qualified root marker, exact private
     // namespace and originally held paired FILE proof. They are not volume

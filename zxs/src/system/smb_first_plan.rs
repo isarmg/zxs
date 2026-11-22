@@ -214,6 +214,10 @@ pub(crate) struct QualifiedRustInstall{
 }
 impl QualifiedRustInstall{
     pub(crate) fn attach(origin:Arc<crate::smb::InheritedRun>)->io::Result<Self>{
+        Self::attach_selected(origin,InitialReader::open)
+    }
+    fn attach_selected(origin:Arc<crate::smb::InheritedRun>,
+        open:impl FnOnce(&std::path::Path,crate::PoolId)->io::Result<InitialReader>)->io::Result<Self>{
         origin.require_live_source()?;
         let installed=RustPlan::parse(origin.rust_plan())?;
         let count=installed.plan.endpoints().len();
@@ -221,7 +225,7 @@ impl QualifiedRustInstall{
             !origin.listen_addr(i).is_some_and(|a|installed.listener_is(i,a))){
             return Err(denied());
         }
-        let source=InitialReader::open(origin.system_path(),crate::PoolId(installed.plan.scope[0]))?;
+        let source=open(origin.system_path(),crate::PoolId(installed.plan.scope[0]))?;
         if source.dir.root.entity!=origin.system_entity(){return Err(denied());}
         let original=source.at(|db,c|installed.active_at(db,&c))?;
         if !origin.current_public_revision_is(original.canonical.0,original.epoch.op.0,original.record,
@@ -230,9 +234,36 @@ impl QualifiedRustInstall{
         Ok(Self{origin,source,installed,original})
     }
 
-    /// Checks this same original startup owner and current DB epoch, not a
-    /// remembered public ACTIVE selection. Never holds a SQLite transaction
-    /// across the caller's network, authentication or payload I/O.
+    fn current_ordinary_at(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Setting>{
+        if self.installed.active_at(db,c)?!=self.original{return Err(denied());}
+        if label==self.installed.plan.recycle.as_str(){
+            return Err(io::Error::new(io::ErrorKind::Unsupported,"the retained namespace requires its own original role"));
+        }
+        let setting=self.installed.plan.current(db,c,label)?.ok_or(io::ErrorKind::NotFound)?;
+        if setting.mode==Mode::Disabled{return Err(denied());}
+        Ok(setting)
+    }
+    fn current_writable_at(&self,source:&InitialReader,db:&Connection,c:&Catalog,label:&str)
+        ->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        if !std::ptr::eq(source,&self.source){return Err(denied());}
+        let setting=self.current_ordinary_at(db,c,label)?;
+        if setting.mode!=Mode::ReadWrite{return Err(denied());}
+        let m=&self.original;
+        Ok((m.smb,m.epoch.op,m.epoch.generation,setting))
+    }
+    pub(in crate::system::reader::smb) fn move_reader(&self,member:&crate::smb::RustSessionWitness)
+        ->io::Result<&InitialReader>{
+        if !member.is_set_info()||!member.is_current_on(self){return Err(denied());}
+        Ok(&self.source)
+    }
+    pub(in crate::system::reader::smb) fn move_folder_at(
+        &self,cut:&crate::system::reader::smb::file_transfer::TransferCut<'_>,label:&str,
+    )->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
+        let (source,db,c)=cut.parts();
+        self.current_writable_at(source,db,c,label)
+    }
+
+    /// Current original startup owner and database epoch.
     pub(crate) fn require_current(&self)->io::Result<()>{
         self.origin.require_live_source()?;
         if self.source.dir.root.entity!=self.origin.system_entity(){return Err(denied());}
@@ -365,14 +396,7 @@ impl RustRoot{
         Ok(c.rows().get(1).filter(|r|r.role==crate::Role::Recycle&&r.ordinal==1).ok_or_else(denied)?.volume)
     }
     fn current_ordinary_at(&self,db:&Connection,c:&Catalog,label:&str)->io::Result<Setting>{
-        let site=&self.install;
-        if site.installed.active_at(db,c)?!=site.original{return Err(denied());}
-        if label==site.installed.plan.recycle.as_str(){
-            return Err(io::Error::new(io::ErrorKind::Unsupported,"the retained namespace requires its own original role"));
-        }
-        let setting=site.installed.plan.current(db,c,label)?.ok_or(io::ErrorKind::NotFound)?;
-        if setting.mode==Mode::Disabled{return Err(denied());}
-        Ok(setting)
+        self.install.current_ordinary_at(db,c,label)
     }
     /// Type comes only from the original mutable FILE engine. It accepts
     /// that engine's exact writer-side connection only for this same S;
@@ -415,11 +439,7 @@ impl RustRoot{
     }
     fn current_writable_at(&self,source:&InitialReader,db:&Connection,c:&Catalog,label:&str)
         ->io::Result<(crate::identity::AccountId,crate::OperationId,i64,Setting)>{
-        if !std::ptr::eq(source,&self.install.source){return Err(denied());}
-        let setting=self.current_ordinary_at(db,c,label)?;
-        if setting.mode!=Mode::ReadWrite{return Err(denied());}
-        let m=&self.install.original;
-        Ok((m.smb,m.epoch.op,m.epoch.generation,setting))
+        self.install.current_writable_at(source,db,c,label)
     }
     /// A progress check during an already authorized ordinary FILE read,
     /// never a replacement for the before/after S, placement and media cuts.
@@ -473,6 +493,38 @@ impl RustRoot{
     pub(crate) fn stamp(&self)->RustRootStamp{RustRootStamp(Rc::downgrade(&self.lifetime))}
     pub(crate) fn matches_stamp(&self,s:&RustRootStamp)->bool{
         s.0.ptr_eq(&Rc::downgrade(&self.lifetime))
+    }
+}
+
+/// Sealed exact originating S lease/marker and selected startup. Carries
+/// only original filesystem proof, never SQLite, a session or a client socket.
+#[must_use]
+pub(in crate::system::reader::smb) struct OrdinaryMoveSite{
+    origin:std::sync::Weak<crate::smb::InheritedRun>,
+    dir:crate::system::lease::SystemDir,
+    marker:crate::fs::ControlRead,
+    pool:crate::PoolId,
+    schema:[u8;32],
+}
+impl RustRoot{
+    pub(in crate::system::reader::smb) fn ordinary_move_site(&self,member:&crate::smb::RustSessionWitness)
+        ->io::Result<OrdinaryMoveSite>{
+        if !member.is_set_info(){return Err(denied());}
+        let original=self.ordinary_reader(member)?;
+        Ok(OrdinaryMoveSite{origin:Arc::downgrade(&self.install.origin),
+            dir:original.dir.duplicate_for_move()?,marker:original.marker.duplicate()?,
+            pool:original.pool,schema:original.expected_schema})
+    }
+}
+impl OrdinaryMoveSite{
+    pub(in crate::system::reader::smb) fn attach(&self)->io::Result<QualifiedRustInstall>{
+        let origin=self.origin.upgrade().ok_or_else(denied)?;
+        QualifiedRustInstall::attach_selected(origin,|path,pool|{
+            if path!=self.dir.root.path.as_path()||pool!=self.pool{return Err(denied());}
+            // `alongside` re-proves the same S directory, mount and both
+            // original control/DB leaves before opening an independent VFS.
+            InitialReader::alongside(&self.dir,&self.marker,self.pool,self.schema)
+        })
     }
 }
 

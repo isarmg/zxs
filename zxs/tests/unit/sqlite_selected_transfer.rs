@@ -29,7 +29,7 @@ fn route(kind:Direction)->Route{
         Direction::Delete=>(Place::origin(&birth,DirectoryParent::Root),r,birth.name.clone()),
         Direction::Restore=>(Place{file,op:op(19),generation:2,volume:r,role:Role::Recycle,
             name:birth.name.clone(),parent:DirectoryParent::Root,backing:Some(op(19))},f,"Restored.txt".into()),
-        Direction::Ordinary=>unreachable!(),
+        Direction::Ordinary=>(Place::origin(&birth,DirectoryParent::Root),VolumeId([24;16]),"Moved.txt".into()),
     };
     Route{from:Placed{birth,here},kind,to,parent:DirectoryParent::Root,name,work:None,head:None,
         share:ShareId([20;16]),setting:op(21),auth:op(22),actor:AccountId([23;16]),epoch:1,destination:None}
@@ -66,5 +66,29 @@ fn delete_and_restore_receipts_keep_original_save_and_history_at_the_same_places
             assert_eq!((changed.op,&changed.from,&changed.to),(first.op,&first.from,&first.to));
             assert_ne!(changed,first);
         }
+    }
+}
+
+#[test]
+fn ordinary_adoption_requires_the_committed_selection_not_only_both_places(){
+    use super::super::share_mode::Mode;
+    let mut plan=route(Direction::Ordinary);
+    let from=Setting{share:plan.share,volume:plan.from.here.volume,op:plan.setting,revision:1,mode:Mode::ReadWrite};
+    let to=Setting{share:ShareId([25;16]),volume:plan.to,op:op(26),revision:1,mode:Mode::ReadWrite};
+    plan.destination=Some(to);
+    let birth=&plan.from.birth;
+    plan.work=Some(ReadRecord{record:Record::first(Spec::checked(birth.pool,birth.file,op(31),1,[8;32],[9;32]).unwrap()).unwrap(),issue:1});
+    plan.head=Some(op(32));
+    let id=op(30);let db=memory();let selected=selected(&db,&plan,id);
+    let require=||selected.require_ordinary_origin(&db,from,to,plan.auth,plan.actor);
+    require().unwrap();
+    for changed in [c"UPDATE main.operation SET request_sha=zeroblob(32)",
+                    c"UPDATE main.file_transfer SET save_op=NULL",
+                    c"UPDATE main.file_transfer SET manual_op=NULL"]{
+        db.fixed(c"BEGIN").unwrap();
+        db.fixed(changed).unwrap();
+        assert_eq!(require().unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+        db.fixed(c"ROLLBACK").unwrap();
+        require().unwrap();
     }
 }

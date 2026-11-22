@@ -4,7 +4,7 @@ use super::{CloseCompletion,DELETE_ACCESS,FileOpen,Held,VerifiedMember};
 use super::super::{Counts,Object,OpenCoordinator,Slot,path::{NameError,TreeName}};
 use crate::{FileId,PoolId,fs::MAX_PATH_DEPTH,smb::{RustSessionWitness,connection::Fault,
     wire::{io_fields::OpenReference,message::{RELATED,Routing},path_fields::FieldError,set_info::RenameRequest}},
-    system::reader::smb::{first_work::{RustOrdinaryMove,RustOrdinaryRename,RustRetiredOrdinaryRename},runtime::RustRoot}};
+    system::reader::smb::{ConfirmedOrdinaryMove,first_work::{RustAdoptedMove,RustOrdinaryMove,RustOrdinaryRename,RustRetiredOrdinaryRename},runtime::RustRoot}};
 use std::{io,sync::{Arc,Weak}};
 
 #[derive(Debug)]
@@ -114,11 +114,8 @@ impl RenameTurn{
         row.renaming=Some(Arc::downgrade(&token));
         Ok(Self{table:Arc::clone(&slot.owner),object:slot.object,open:Arc::downgrade(&slot.identity),token,retired:false})
     }
-    fn exact(&self,row:&Counts)->bool{
-        row.retained==0&&row.deletion.is_none()&&
-            row.renaming.as_ref().is_some_and(|p|p.ptr_eq(&Arc::downgrade(&self.token)))
-    }
-    fn count(&self,row:&Counts,n:usize)->bool{self.exact(row)&&row.live==n&&row.bound==n}
+    fn exact(&self,row:&Counts)->bool{same_rename_row(row,&Arc::downgrade(&self.token))}
+    fn count(&self,row:&Counts,n:usize)->bool{count_rename_row(row,&Arc::downgrade(&self.token),n)}
     fn same_open(&self,slot:&Slot)->bool{
         Arc::ptr_eq(&self.table,&slot.owner)&&self.object==slot.object&&!slot.released&&slot.bound&&!slot.retained&&
             self.open.ptr_eq(&Arc::downgrade(&slot.identity))
@@ -151,6 +148,12 @@ impl RenameTurn{
         Ok(())
     }
 }
+fn same_rename_row(row:&Counts,token:&Weak<()>)->bool{
+    row.retained==0&&row.deletion.is_none()&&row.renaming.as_ref().is_some_and(|p|p.ptr_eq(token))
+}
+fn count_rename_row(row:&Counts,token:&Weak<()>,n:usize)->bool{
+    same_rename_row(row,token)&&row.live==n&&row.bound==n
+}
 impl Drop for RenameTurn{
     fn drop(&mut self){
         if let Ok(mut table)=self.table.table.lock(){
@@ -174,10 +177,11 @@ pub(crate) struct OrdinaryRenameAdmission<'a>{
 /// No caller can create this from bare FILE/volume IDs or a Core root.
 /// It borrows the actual standalone SET and its same original share turn.
 pub(crate) struct OrdinaryMoveAdmission<'a>{
-    turn:&'a RenameTurn,scope:&'a RustSessionWitness,target:&'a NativeMoveName<'a>,
+    turn:&'a RenameTurn,scope:RustSessionWitness,target:&'a NativeMoveName<'a>,
 }
-impl OrdinaryMoveAdmission<'_>{
-    pub(crate) fn held(&self,pool:PoolId,file:FileId)->io::Result<(&RustSessionWitness,&str,&[&str],&str)>{
+impl<'a> OrdinaryMoveAdmission<'a>{
+    pub(crate) fn into_original(self,pool:PoolId,file:FileId)
+        ->io::Result<(RustSessionWitness,&'a str,&'a [&'a str],&'a str)>{
         if !self.turn.represents(Object::File(pool,file))||!self.scope.is_set_info(){
             return Err(io::ErrorKind::PermissionDenied.into());
         }
@@ -189,7 +193,90 @@ impl OrdinaryMoveAdmission<'_>{
 /// the read-only Core proof before dropping its exclusive share turn.
 #[must_use]
 pub(in crate::smb) struct PreparedCrossFilesystemMove{
-    _binding:RustOrdinaryMove,_scope:RustSessionWitness,_turn:RenameTurn,
+    binding:RustOrdinaryMove,turn:RenameTurn,
+}
+/// Only the original peer retains the real share turn. The worker receives
+/// neither this owner nor the original mutable OPEN.
+#[must_use]
+pub(in crate::smb) struct WorkingMoveGuard{_turn:RenameTurn}
+#[derive(Clone)] // only existing weak identities, no holder or FILE access
+pub(in crate::smb) struct MoveOpenWitness{
+    table:Weak<OpenCoordinator>,object:Object,open:Weak<()>,turn:Weak<()>,
+}
+impl MoveOpenWitness{
+    pub(in crate::smb) fn require(&self)->io::Result<()>{
+        use io::ErrorKind::{PermissionDenied,WouldBlock};
+        use std::sync::TryLockError;
+        if self.open.strong_count()==0||self.turn.strong_count()==0{return Err(PermissionDenied.into());}
+        let table=self.table.upgrade().ok_or(PermissionDenied)?;
+        let rows=table.table.try_lock().map_err(|e|io::Error::from(match e{
+            TryLockError::WouldBlock=>WouldBlock,TryLockError::Poisoned(_)=>PermissionDenied,
+        }))?;
+        if !rows.objects.get(&self.object).is_some_and(|row|count_rename_row(row,&self.turn,1)){
+            return Err(PermissionDenied.into());
+        }
+        Ok(())
+    }
+}
+impl WorkingMoveGuard{
+    /// No target/file I/O or permission to mutate. The paid original
+    /// member and its still-published original OPEN must survive output.
+    pub(in crate::smb) fn require_original_open(&self,open:&FileOpen,tree:&RustRoot,member:&RustSessionWitness)
+        ->io::Result<()>{
+        if !member.is_set_info(){return Err(io::ErrorKind::PermissionDenied.into());}
+        self._turn.require_move_open(open,tree)
+    }
+    pub(in crate::smb) fn require_adopted(&self,open:&FileOpen,tree:&RustRoot,member:&RustSessionWitness,
+        adopted:&RustAdoptedMove)->io::Result<()>{
+        self.require_original_open(open,tree,member)?;
+        open.held.original.require_adopted_move(tree,member,adopted)?;
+        self.require_original_open(open,tree,member)
+    }
+    /// The private worker returns its *same* original witness. Check both
+    /// its exact share round and the actual published original read OPEN
+    /// before consuming the target already held by that worker.
+    pub(in crate::smb) fn adopt(&self,open:&mut FileOpen,tree:&RustRoot,member:&RustSessionWitness,
+        witness:MoveOpenWitness,target:ConfirmedOrdinaryMove)->io::Result<RustAdoptedMove>{
+        let turn=&self._turn;
+        let unknown=||io::Error::from(io::ErrorKind::ConnectionAborted);
+        if turn.retired||!turn.same_open(&open.held._slot)||open.held.grant.0&DELETE_ACCESS==0||
+            turn.object!=witness.object||!witness.table.ptr_eq(&Arc::downgrade(&turn.table))||
+            !witness.open.ptr_eq(&turn.open)||!witness.turn.ptr_eq(&Arc::downgrade(&turn.token)){
+            return Err(unknown());
+        }
+        witness.require().map_err(|_|unknown())?;
+        open.held.original.adopt_ordinary_move(tree,member,target)
+    }
+}
+impl RenameTurn{
+    fn require_move_open(&self,open:&FileOpen,tree:&RustRoot)->io::Result<()>{
+        use io::ErrorKind::{PermissionDenied,WouldBlock};
+        use std::sync::TryLockError;
+        if !open.held.original.belongs_to(tree)||open.held.grant.0&DELETE_ACCESS==0||
+            self.retired||!self.same_open(&open.held._slot){return Err(PermissionDenied.into());}
+        let table=self.table.table.try_lock().map_err(|e|io::Error::from(match e{
+            TryLockError::WouldBlock=>WouldBlock,TryLockError::Poisoned(_)=>PermissionDenied,
+        }))?;
+        if !table.objects.get(&self.object).is_some_and(|row|self.count(row,1)){
+            return Err(PermissionDenied.into());
+        }
+        Ok(())
+    }
+}
+impl PreparedCrossFilesystemMove{
+    /// Short original held object/turn check for a pre-work cancellation,
+    /// not evidence of a disk operation, current target or move outcome.
+    pub(in crate::smb) fn require_original_open(&self,open:&FileOpen,tree:&RustRoot,member:&RustSessionWitness)
+        ->io::Result<()>{
+        if !self.binding.is_original_member(member){return Err(io::ErrorKind::PermissionDenied.into());}
+        self.turn.require_move_open(open,tree)
+    }
+    pub(in crate::smb) fn hand_to_worker(self)->(RustOrdinaryMove,WorkingMoveGuard,MoveOpenWitness){
+        let Self{binding,turn,..}=self;
+        let witness=MoveOpenWitness{table:Arc::downgrade(&turn.table),object:turn.object,open:turn.open.clone(),
+            turn:Arc::downgrade(&turn.token)};
+        (binding,WorkingMoveGuard{_turn:turn},witness)
+    }
 }
 impl OrdinaryRenameAdmission<'_>{
     pub(crate) fn held(&self,pool:PoolId,file:FileId)->io::Result<(&RustSessionWitness,&FileRenameTarget<'_>)>{
@@ -267,9 +354,9 @@ impl FileOpen{
         let scope=request.original().rust_session_witness().map_err(OrdinaryRenameError::Session)?;
         let turn=RenameTurn::take(&self.held._slot)?;
         turn.require(&self.held._slot).map_err(OrdinaryRenameError::Original)?;
-        let admission=OrdinaryMoveAdmission{turn:&turn,scope:&scope,target:&target};
-        let binding=tree.bind_ordinary_move(&self.held.original,&admission).map_err(OrdinaryRenameError::Original)?;
-        Ok(Some(PreparedCrossFilesystemMove{_binding:binding,_scope:scope,_turn:turn}))
+        let admission=OrdinaryMoveAdmission{turn:&turn,scope,target:&target};
+        let binding=tree.bind_ordinary_move(&self.held.original,admission).map_err(OrdinaryRenameError::Original)?;
+        Ok(Some(PreparedCrossFilesystemMove{binding,turn}))
     }
 
     pub(in crate::smb) fn rename(&mut self,tree:&RustRoot,request:&RenameRequest<'_,'_>)

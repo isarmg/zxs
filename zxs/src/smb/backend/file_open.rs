@@ -326,7 +326,7 @@ impl FileOpen {
 
 mod rename;
 pub(crate) use rename::{FileRenameTarget,OrdinaryMoveAdmission,OrdinaryRenameAdmission};
-pub(in crate::smb) use rename::{OrdinaryRenameError,PreparedCrossFilesystemMove,PreparedOrdinaryRename,RetiredOrdinaryRename};
+pub(in crate::smb) use rename::{MoveOpenWitness,WorkingMoveGuard,OrdinaryRenameError,PreparedCrossFilesystemMove,PreparedOrdinaryRename,RetiredOrdinaryRename};
 pub(super) use rename::{RenameTurn,ordinary_parent_leaf};
 
 #[cfg(test)]

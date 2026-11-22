@@ -9,7 +9,7 @@ use super::wire::{
     set_info::SET_INFO,
 };
 use super::wire::{negotiate::CmacChoice, negotiate_reply::{OriginalHeader, Selection}};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::{num::NonZeroU64,sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 pub(in crate::smb) mod negotiate;
 pub(in crate::smb) mod setup;
@@ -151,9 +151,10 @@ impl Drop for Debits {
 
 /// Exactly one already paid, still owed standalone move-shaped member.
 /// This stores accounting only; the peer keeps the original signed frame
-/// and current-session proof beside it. No publication or reset API exists.
+/// and current-session proof beside it. Even after one actual interim
+/// grant, the original debit stays owed until its real terminal writer.
 #[must_use]
-struct MoveDebt { original:Debits, charge:u16 }
+struct MoveDebt { original:Debits, charge:u16, interim:Option<NonZeroU64> }
 impl MoveDebt {
     fn require(&self, owner:&Connection, message:&Message<'_>)->Result<()> {
         owner.alive()?;
@@ -196,7 +197,7 @@ impl Drop for Connection {
 }
 impl Connection {
     fn retain_move_debt(&self,debit:Debits,message:&Message<'_>)->Result<MoveDebt>{
-        let proof=MoveDebt{original:debit,charge:message.header.credit_charge};
+        let proof=MoveDebt{original:debit,charge:message.header.credit_charge,interim:None};
         proof.require(self,message)?;
         Ok(proof)
     }
@@ -205,9 +206,12 @@ impl Connection {
     }
     // No staged network writer or valid local authority survives a terminal
     // transport error. Other connections (including those sharing a GUID) keep theirs.
-    fn disconnect(&mut self) {
+    fn close_transport(&mut self){
         self.origin.closed.store(true,Ordering::Release);
         drop(self.stream.take());
+    }
+    fn disconnect(&mut self){
+        self.close_transport();
         self.sessions.clear();
     }
     fn stop<T>(&self, f: Fault) -> Result<T> {

@@ -12,7 +12,9 @@ use std::{net::{IpAddr,SocketAddr,TcpStream},sync::{Arc,atomic::AtomicBool}};
 /// separate response sink or numeric-ID constructor.
 #[must_use]
 pub(in crate::smb) struct Peer {
-    connection:Connection, first_login_by:Option<std::time::Instant>, original_move:Option<incoming::PendingOriginalMove>,
+    connection:Connection, first_login_by:Option<std::time::Instant>, original_move:Option<incoming::MoveFlight>,
+    move_backlog:Option<incoming::MoveControl>,
+    ordinary_moves:bool,
 }
 
 /// A pair observed on the SAME owned kernel socket before reading any SMB
@@ -46,42 +48,41 @@ fn concrete_address(addr:SocketAddr)->bool {
         !matches!(ip,IpAddr::V4(a) if a.is_broadcast())
 }
 
+// Reviewed source stays off until the separately qualified Linux release.
+const ORDINARY_MOVE_RELEASED:bool=false;
+
 struct Incoming {
     stream:DirectStream,
     endpoints:Option<AcceptedEndpoints>,
 }
 impl Incoming {
-    fn inspect(stream:DirectStream)->Result<Self> {
-        let endpoints=match &stream {
-            DirectStream::Tcp(socket)=>{
-                let endpoints=AcceptedEndpoints::inspect(socket)?;
-                socket.set_nonblocking(false).map_err(|_|Fault::Transport)?;
-                Some(endpoints)
-            }
-            #[cfg(test)]
-            DirectStream::Fixture(_)=>None,
-        };
-        Ok(Self{stream,endpoints})
+    fn inspect(socket:TcpStream)->Result<Self> {
+        let endpoints=AcceptedEndpoints::inspect(&socket)?;
+        socket.set_nonblocking(false).map_err(|_|Fault::Transport)?;
+        Ok(Self{stream:DirectStream::tcp(socket),endpoints:Some(endpoints)})
     }
 }
 
 impl RunningServerGuid {
-    /// Future enabled TCP/445 service supplies its sole accepted, unread
+    /// The TCP/445 service supplies its sole accepted, unread
     /// socket. No socket is obtained, accepted or connected by this module.
     pub(in crate::smb) fn negotiate_accepted(&self,accepted:crate::smb::launch::OwnedAccepted,
         installation:&QualifiedRustInstall)->Result<Peer> {
         let (socket,start,index)=accepted.unpack();
         if !self.is_original_start(&start)||!installation.is_original_start(&start){return Err(Fault::NoVerifier);}
         installation.require_current().map_err(|_|Fault::NoVerifier)?;
-        let input=Incoming::inspect(DirectStream::Tcp(socket))?;
+        let input=Incoming::inspect(socket)?;
         let pair=input.endpoints.as_ref().ok_or(Fault::Transport)?;
         if !installation.original_listener_is(index,pair.local())||
             !installation.admits_original_addresses(pair.local(),pair.peer()){return Err(Fault::Transport);}
         // No bytes have been read or written. This exact OS accepted stream
         // now enters the same origin's normal NEGOTIATE.
-        Peer::open(self,input)
+        let mut peer=Peer::open(self,input)?;
+        peer.ordinary_moves=ORDINARY_MOVE_RELEASED;
+        Ok(peer)
     }
 }
+
 fn parsed(record:&[u8])->Result<Compound<'_>> {
     let Some((frame,rest))=Frame::split(record).map_err(|_|Fault::FrameSize)? else {return Err(Fault::FrameSize);};
     if !rest.is_empty() {return Err(Fault::FrameSize);}
@@ -99,12 +100,13 @@ impl Peer {
         incoming.stream.write_smb(tx.bytes(),||Ok(()))?;
         let connection=tx.after_write(Completion::Written(incoming),seat)?;
         let first_login_by=std::time::Instant::now().checked_add(std::time::Duration::from_secs(60)).ok_or(Fault::Clock)?;
-        Ok(Self{connection,first_login_by:Some(first_login_by),original_move:None})
+        Ok(Self{connection,first_login_by:Some(first_login_by),original_move:None,move_backlog:None,
+            ordinary_moves:false})
     }
     #[cfg(test)]
     fn open_fixture(server:&RunningServerGuid,stream:DirectStream)->Result<Self> {
         if !matches!(&stream,DirectStream::Fixture(_)) {return Err(Fault::Transport);}
-        Self::open(server,Incoming::inspect(stream)?)
+        Self::open(server,Incoming{stream,endpoints:None})
     }
 }
 enum Completion { Written(Incoming), #[cfg(test)] WithoutSocket }

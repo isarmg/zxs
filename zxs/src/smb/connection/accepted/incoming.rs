@@ -1,5 +1,10 @@
 //! One synchronous receive turn on the original negotiated duplex. Neither
 //! the caller nor a fallback can supply a frame, mutable connection or socket.
+mod move_control;
+mod move_worker;
+pub(super) use move_control::MoveControl;
+pub(crate) use move_worker::OriginalMoveFence;
+pub(in crate::smb::connection) use move_worker::WorkerCancelled;
 use super::{Peer,parsed};
 use crate::smb::{
     connection::{Connection,Fault,Origin,Received,Result,sessions::{Resume,ordinary::{Admission,MoveEscrow}},setup::{Start,Why}},
@@ -8,7 +13,10 @@ use crate::smb::{
 use std::{sync::{Arc,Weak,atomic::Ordering},time::Instant};
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(in crate::smb) enum Turn {Idle,SelectionWritten,ChallengeWritten,FinalWritten,ErrorWritten,EchoWritten,TreeRefused,CancelNoTarget,Routed}
+pub(in crate::smb) enum Turn {
+    Idle,SelectionWritten,ChallengeWritten,FinalWritten,ErrorWritten,EchoWritten,TreeRefused,CancelNoTarget,Routed,
+    MovePending,MoveCancelled,MoveCompleted,
+}
 /// A real future handler must either settle its own original receipt or stop.
 /// In particular an unsigned error reply is NOT a substitute for checking a
 /// signed reauth, binding or an unrelated protected session.
@@ -26,7 +34,7 @@ enum Issuer { Protected, #[cfg(test)] FixedChallenge }
 /// original stream. No caller can trade a signed body or Direct TCP prefix
 /// onto different bytes, reissue a paid debit, or substitute a sink.
 #[must_use]
-struct CapturedRecord{origin:Weak<Origin>,bytes:Vec<u8>}
+pub(in crate::smb::connection) struct CapturedRecord{origin:Weak<Origin>,bytes:Vec<u8>}
 impl CapturedRecord{
     fn from_stream(owner:&mut Connection,limit:usize)->Result<Option<Self>>{
         let got=owner.stream.as_mut().ok_or(Fault::Transport)?.poll_record(limit)?;
@@ -41,33 +49,50 @@ impl CapturedRecord{
         }
         owner.alive()
     }
-    fn frame_on<'a>(&'a self,owner:&Connection)->Result<Compound<'a>>{
+    pub(in crate::smb::connection) fn frame_on<'a>(&'a self,owner:&Connection)->Result<Compound<'a>>{
         self.require_owner(owner)?;
         parsed(&self.bytes)
     }
 }
 
+/// Stable identity only for the original immutable move allocation; not
+/// allocated on the ordinary synchronous path or on a CANCEL control frame.
+pub(in crate::smb::connection) struct OriginalMoveInput{capture:CapturedRecord,seal:Arc<()>}
+impl OriginalMoveInput{
+    fn new(capture:CapturedRecord)->Self{Self{capture,seal:Arc::new(())}}
+    pub(in crate::smb::connection) fn issued(&self,mark:&Weak<()>)->bool{
+        mark.ptr_eq(&Arc::downgrade(&self.seal))
+    }
+    pub(in crate::smb::connection) fn frame_on<'a>(&'a self,owner:&Connection)->Result<Compound<'a>>{
+        self.capture.frame_on(owner)
+    }
+}
 /// Only the peer's actual immutable input, while still borrowed, can
 /// export an owned escrow from the qualified synchronous batch.
-pub(in crate::smb::connection) struct MoveCapture<'frame,'wire>{frame:&'frame Compound<'wire>}
+pub(in crate::smb::connection) struct MoveCapture<'frame,'wire>{
+    frame:&'frame Compound<'wire>,owned:&'frame OriginalMoveInput,
+}
 impl MoveCapture<'_,'_>{
     pub(in crate::smb::connection) fn matches(&self,frame:&Compound<'_>)->bool{std::ptr::eq(self.frame,frame)}
+    pub(in crate::smb::connection) fn seal(&self)->Weak<()>{Arc::downgrade(&self.owned.seal)}
 }
 
 /// The one real connection owner holds the immutable input allocation,
 /// charged debt, original signer revision and bound FILE proposal together.
 /// No full Connection, SQLite borrow or cryptographic key crosses a worker
-/// boundary. Drop still owes the original terminal reply and closes that
-/// origin; nothing in this slice may declare or settle its success.
+/// boundary. A worker can only take this unstarted owner by value,
+/// leaving a different original escrow. Neither type settles success.
 #[must_use]
-pub(super) struct PendingOriginalMove{held:MoveEscrow,input:CapturedRecord}
+pub(super) struct PendingOriginalMove{held:MoveEscrow,input:OriginalMoveInput,control:move_control::MoveControl}
 impl PendingOriginalMove{
+    #[cfg(test)]
     fn prepare(input:CapturedRecord,owner:&mut Connection)->Result<Self>{
+        let input=OriginalMoveInput::new(input);
         let held={
             let frame=input.frame_on(owner)?;
             let [raw]=frame.messages()else{return Err(Fault::WrongReply);};
             if !raw.is_basic_rename_request()||owner.in_flight!=0{return Err(Fault::WrongReply);}
-            let capture=MoveCapture{frame:&frame};
+            let capture=MoveCapture{frame:&frame,owned:&input};
             let paid=owner.receive(&frame)?;
             let admitted=paid.preflight(owner);
             match admitted{
@@ -76,20 +101,31 @@ impl PendingOriginalMove{
                 _=>return Err(Fault::SessionState),
             }
         };
-        let pending=Self{held,input};
+        let pending=Self{held,input,control:move_control::MoveControl::default()};
         pending.require_original(owner)?;
         Ok(pending)
     }
     fn require_original(&self,owner:&Connection)->Result<()>{
-        let frame=self.input.frame_on(owner)?;
-        self.held.require_original(owner,&frame)
+        self.held.require_original(owner,&self.input)
     }
 }
 
+#[must_use]
+pub(super) enum MoveFlight{Unstarted(PendingOriginalMove),Working(move_worker::WorkingOriginalMove)}
+impl Drop for Peer{
+    fn drop(&mut self){
+        if self.original_move.is_some(){self.disconnect_original();}
+    }
+}
+
+fn frame_limit(c:&Connection)->usize{
+    (u64::from(c.limits.transact)+256).min(MAX_FRAME_BYTES as u64) as usize
+}
+
 impl Peer {
-    /// Not called by the real receive loop yet. That may change only once
-    /// socket/worker events, authenticated cancellation, held target rebind
-    /// and the original reply/credit terminal transition are implemented.
+    /// Private direct receiver seam for negative ownership fixtures.
+    /// The live dispatcher keeps its already paid original instead.
+    #[cfg(test)]
     fn park_original_move(&mut self,input:CapturedRecord)->Result<()>{
         if let Err(e)=input.require_owner(&self.connection){
             if e!=Fault::WrongBatch{self.disconnect_original();}
@@ -97,45 +133,78 @@ impl Peer {
         }
         let prepare=if self.original_move.is_none(){PendingOriginalMove::prepare(input,&mut self.connection)}
             else{Err(Fault::WrongBatch)};
-        match prepare{
-            Ok(pending)=>{self.original_move=Some(pending);Ok(())},
+        match prepare.and_then(|pending|self.install_pending_move(pending)){
+            Ok(())=>Ok(()),
             Err(e)=>{self.disconnect_original();Err(e)},
         }
     }
+    fn install_pending_move(&mut self,mut pending:PendingOriginalMove)->Result<()>{
+        if self.original_move.is_some(){return Err(Fault::WrongBatch);}
+        pending.require_original(&self.connection)?;
+        if let Some(backlog)=self.move_backlog.take(){pending.control=backlog;}
+        self.original_move=Some(MoveFlight::Unstarted(pending));
+        Ok(())
+    }
     fn disconnect_original(&mut self){
-        // Invalidate the connection and its local tables before letting
-        // go of the parked original's FILE guard. Never issue a credit,
-        // implicit CLOSE/SAVE, or a second result on this path.
+        // Lose the choice on the real worker before closing its source.
+        // Keep the original OPEN/share row until the same worker returns:
+        // otherwise a second OPEN could enter after the placement gate won.
+        if let Some(MoveFlight::Working(working))=&mut self.original_move{
+            working.abandon();
+            self.connection.close_transport();
+            working.drain();
+        }
+        // Neither abandonment nor join can publish a credit, implicit
+        // CLOSE/SAVE, or a result back on a lost connection.
         self.connection.disconnect();
         drop(self.original_move.take());
+        self.move_backlog=None;
     }
     pub(in crate::smb) fn poll(&mut self,
         other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn> {
-        self.poll_with(Issuer::Protected,other)
+        self.poll_selected(Issuer::Protected,self.ordinary_moves,other)
     }
     fn housekeeping(&mut self)->Result<()> {
         self.connection.alive()?;let now=Instant::now();
         if self.connection.reap_and_has_valid(now) {self.first_login_by=None;}
         if self.first_login_by.is_some_and(|end|now>=end) {return Err(Fault::SessionState);}Ok(())
     }
+    #[cfg(test)]
     fn poll_with(&mut self,issuer:Issuer,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn> {
-        if self.original_move.is_some(){self.disconnect_original();return Err(Fault::Closed);}
-        let result=self.once(issuer,other);
-        // Never skip a paid frame by dropping/forgetting an outstanding
-        // operation. This owner is strictly synchronous, with no pending async I/O.
-        if result.is_err() || self.connection.alive().is_err() || self.connection.in_flight!=0 {
+        self.poll_selected(issuer,false,other)
+    }
+    fn poll_selected(&mut self,issuer:Issuer,moves:bool,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)
+        ->Result<Turn>{
+        let result=if self.original_move.is_some(){
+            if moves{self.drive_ordinary_move()}else{Err(Fault::Closed)}
+        }else{self.once(issuer,moves,other)};
+        let valid=match &result{
+            Ok(Turn::MovePending)=>moves&&self.original_move.is_some()&&self.connection.in_flight==1,
+            _=>self.original_move.is_none()&&self.connection.in_flight==0,
+        };
+        if result.is_err() || self.connection.alive().is_err() || !valid {
             self.disconnect_original();return Err(result.err().unwrap_or(Fault::Closed));
         }
         result
     }
-    fn once(&mut self,issuer:Issuer,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn> {
+    fn once(&mut self,issuer:Issuer,moves:bool,other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)
+        ->Result<Turn>{
         self.housekeeping()?;
         let c=&mut self.connection;
-        let limit=(u64::from(c.limits.transact)+256).min(MAX_FRAME_BYTES as u64) as usize;
-        let Some(record)=CapturedRecord::from_stream(c,limit)? else {
+        let limit=frame_limit(c);
+        let next=if let Some(backlog)=self.move_backlog.as_mut(){
+            let record=backlog.resume(c,limit)?;
+            if backlog.empty(){self.move_backlog=None;}
+            record
+        }else{None};
+        let record=match next{Some(record)=>Some(record),None=>CapturedRecord::from_stream(c,limit)?};
+        let Some(record)=record else {
             self.housekeeping()?;return Ok(Turn::Idle);
         };
         self.housekeeping()?;
+        if moves&&matches!(record.frame_on(&self.connection)?.messages(),[m] if m.is_basic_rename_request()){
+            return self.ordinary_rename(record,other);
+        }
         let c=&mut self.connection;
         let frame=record.frame_on(c)?;let parts=frame.messages();let paid=c.receive(&frame)?;
         if parts.iter().any(|m|m.header.command==CANCEL) {
@@ -206,6 +275,53 @@ impl Peer {
                 }
             }
             Start::TransportGone=>Err(Fault::Closed),
+        }
+    }
+    fn ordinary_rename(&mut self,record:CapturedRecord,
+        other:impl for<'c,'r> FnOnce(Outstanding<'c,'r>)->Result<()>)->Result<Turn>{
+        use crate::smb::connection::sessions::ordinary::MoveDecision;
+        let input=OriginalMoveInput::new(record);
+        let held={
+            let c=&mut self.connection;
+            let frame=input.frame_on(c)?;
+            let capture=MoveCapture{frame:&frame,owned:&input};
+            let paid=c.receive(&frame)?;
+            match paid.preflight(c){
+                Admission::Ready(batch)=>match batch.try_ordinary_move(capture)?{
+                    MoveDecision::Park(held)=>held,
+                    MoveDecision::RefusalWritten=>return Ok(Turn::ErrorWritten),
+                    MoveDecision::Ordinary(batch)=>{
+                        other(Outstanding::Ordinary(Admission::Ready(batch)))?;
+                        return Ok(Turn::Routed);
+                    },
+                },
+                Admission::TransportGone=>return Err(Fault::Closed),
+                rejected=>{
+                    other(Outstanding::Ordinary(rejected))?;
+                    return Ok(Turn::Routed);
+                },
+            }
+        };
+        // Only the real accepted path can park a positive storage turn.
+        if !self.ordinary_moves{return Err(Fault::NoVerifier);}
+        self.install_pending_move(PendingOriginalMove{held,input,control:MoveControl::default()})?;
+        Ok(Turn::MovePending)
+    }
+    fn drive_ordinary_move(&mut self)->Result<Turn>{
+        use move_control::ControlTurn;
+        let unstarted=matches!(&self.original_move,Some(MoveFlight::Unstarted(_)));
+        match self.poll_original_move_control()?{
+            ControlTurn::Cancelled=>Ok(Turn::MoveCancelled),
+            ControlTurn::MoveSettled=>Ok(Turn::MoveCompleted),
+            ControlTurn::WorkerFinished=>{
+                if unstarted||!self.adopt_original_move()?{return Err(Fault::WriteOutcomeUnknown);}
+                Ok(Turn::MovePending)
+            },
+            _ if unstarted=>{
+                self.start_original_move_worker()?;
+                Ok(Turn::MovePending)
+            },
+            _=>Ok(Turn::MovePending),
         }
     }
 }
