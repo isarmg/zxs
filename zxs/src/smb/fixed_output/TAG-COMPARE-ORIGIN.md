@@ -8,8 +8,8 @@ notices remain.
 
 The adapter retains the original byte-slice conditional move, zero initial
 choice, input one, and optimization barrier before conversion to a boolean.
-The comparison backend, public tag length checks, and tag erasure are
-unchanged.
+The [comparison backend](../tag_choice/ORIGIN.md), public tag length checks,
+and tag erasure are unchanged.
 
 | Original used source | Original Git blob |
 | --- | --- |

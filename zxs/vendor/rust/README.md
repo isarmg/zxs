@@ -31,7 +31,7 @@ the 256/512-bit backends now take a slice of the full SIMD width rather than a
 reference to a single constant. This is not a locally implemented algorithm or
 a reason to disable an architecture. [RUSTSEC-2021-0100](https://rustsec.org/advisories/RUSTSEC-2021-0100.html)
 affects sha2 0.9.7, not this version. The private [tag comparison](../../src/smb/fixed_output/TAG-COMPARE-ORIGIN.md)
-retains the original constant-time backend.
+uses the [private comparison backend](../../src/smb/tag_choice/ORIGIN.md).
 
 [md-5 0.11.0](https://github.com/RustCrypto/hashes/tree/b5051e5a5e7dc86a6c27c1ec7a390744ebcfb97a/md5) and
 [rc4 0.2.0](https://github.com/RustCrypto/stream-ciphers/tree/b516422ebb49ff0d9140b22ac8c2a627d10a452e/rc4) are unyanked
@@ -87,7 +87,7 @@ service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> block-buffer [zeroize], cipher [stream-wrapper, zeroize], cmov, crypto-common, libc, zeroize
+zxs -> block-buffer [zeroize], cipher [stream-wrapper, zeroize], crypto-common, libc, zeroize
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 block-buffer -> hybrid-array, zeroize
 crypto-common -> hybrid-array

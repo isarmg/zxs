@@ -2,6 +2,7 @@
 //! authenticated startup and Core storage authority are not public interfaces.
 mod backend_select;
 mod fixed_output;
+mod tag_choice;
 mod handshake_hash;
 #[allow(dead_code, reason = "input layer is staged before the network runtime")]
 mod wire;

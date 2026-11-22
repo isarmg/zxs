@@ -1,15 +1,13 @@
 // ZXS adaptation of RustCrypto fixed-output support; see ORIGIN.md.
 use super::{FixedOutput, Update};
-use cmov::CmovEq;
+use crate::smb::tag_choice::tag_equal_choice;
 use core::{fmt, hint::black_box};
 use crypto_common::{Output, OutputSizeUser, typenum::Unsigned};
 
 #[inline]
 fn tags_equal(expected: &[u8], supplied: &[u8]) -> bool {
-    let mut choice = 0;
-    expected.cmoveq(supplied, 1, &mut choice);
     // Preserve the optimizer barrier at the original choice-to-bool boundary.
-    black_box(choice) != 0
+    black_box(tag_equal_choice(expected, supplied)) != 0
 }
 
 pub(in crate::smb) trait MacMarker {}

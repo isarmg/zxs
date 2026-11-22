@@ -21,10 +21,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmov"
-version = "0.5.4"
-
-[[package]]
 name = "crypto-common"
 version = "0.2.2"
 dependencies = [
@@ -64,7 +60,6 @@ version = "0.1.0"
 dependencies = [
  "block-buffer",
  "cipher",
- "cmov",
  "crypto-common",
  "libc",
  "zeroize",

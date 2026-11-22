@@ -14,7 +14,6 @@ resolver = "3"
 exclude = [
     "vendor/rust/block-buffer-0.12.1",
     "vendor/rust/cipher-0.5.2",
-    "vendor/rust/cmov-0.5.4",
     "vendor/rust/crypto-common-0.2.2",
     "vendor/rust/hybrid-array-0.4.15",
     "vendor/rust/inout-0.2.6",
@@ -27,7 +26,6 @@ exclude = [
 block-buffer = { version = "=0.12.1", path = "vendor/rust/block-buffer-0.12.1", features = ["zeroize"] }
 # The private NTLM key-exchange module keeps the former RC4 package's features.
 cipher = { version = "=0.5.2", path = "vendor/rust/cipher-0.5.2", default-features = false, features = ["stream-wrapper", "zeroize"] }
-cmov = { version = "=0.5.4", path = "vendor/rust/cmov-0.5.4" }
 crypto-common = { version = "=0.2.2", path = "vendor/rust/crypto-common-0.2.2" }
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
 zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }

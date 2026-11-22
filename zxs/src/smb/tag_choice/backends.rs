@@ -1,6 +1,4 @@
-//! Backends for `cmov`, only one of which will be selected at compile-time.
-
-// Architecture-specific backends for target architectures with native predication instructions
+// ZXS adaptation of RustCrypto comparisons; see tag_choice/ORIGIN.md.
 #[cfg(not(miri))]
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
