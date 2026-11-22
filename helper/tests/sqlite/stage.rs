@@ -190,7 +190,7 @@ fn exact_readonly_receipt_distinguishes_pending_and_historical_when_the_two_exte
     let locked=LockedSystem::from_fixture(&a.roots[0]).unwrap();
     let db=Existing::initial_receipt(&locked,&r).unwrap();
     assert!(!db.allows_install_write());assert!(engine::existing(&db,engine::Access::Write).is_err());
-    assert_eq!(receipt::read(&locked,&r).unwrap(),receipt::Receipt{pool:[4;16],committed:false});
+    assert_eq!(receipt::read(&locked,&r).unwrap(),receipt::Receipt{pool:[4;16],committed_sha:None});
     assert_eq!(fs::read(a.db()).unwrap(),before);
     assert!(!mark_path(&a,0).try_exists().unwrap());
     for i in [1,2]{assert!(!a.roots[i].try_exists().unwrap());}
@@ -201,7 +201,7 @@ fn exact_readonly_receipt_distinguishes_pending_and_historical_when_the_two_exte
     drop(g);parked(&a,true);
     let before=fs::read(a.db()).unwrap();
     let lock=LockedSystem::from_fixture(&a.roots[0]).unwrap();
-    assert_eq!(receipt::read(&lock,&r).unwrap(),receipt::Receipt{pool:[4;16],committed:true});
+    assert_eq!(receipt::read(&lock,&r).unwrap(),receipt::Receipt{pool:[4;16],committed_sha:Some(r.sha())});
     assert_eq!(fs::read(a.db()).unwrap(),before);
     assert_eq!(fs::read(mark_path(&a,0)).unwrap(),expected_marker(0));
     drop(lock);
@@ -247,5 +247,5 @@ fn readonly_receipt_refuses_a_different_order_busy_system_wrong_marker_and_unkno
     assert!(receipt::read(&lock,&r).is_err());assert_eq!(fs::read(&path).unwrap(),expected_marker(1));
     fs::remove_file(&path).unwrap();
     private_contents(&path,&expected_marker(0));
-    assert_eq!(receipt::read(&lock,&r).unwrap(),receipt::Receipt{pool:[4;16],committed:false});
+    assert_eq!(receipt::read(&lock,&r).unwrap(),receipt::Receipt{pool:[4;16],committed_sha:None});
 }

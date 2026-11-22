@@ -4,7 +4,9 @@ use super::{bad,catalog::{self,Canonical,Catalog},engine::{self,Access},markers:
     request::{Id,Request},reservation::Existing};
 use rusqlite::{TransactionBehavior,params};
 use std::io;
-pub(super) struct Receipt{pub(super) pool:Id,pub(super) op:Id,pub(super) previous:bool}
+pub(super) struct Receipt{
+    pub(super) pool:Id,pub(super) op:Id,pub(super) request_sha:[u8;32],pub(super) previous:bool,
+}
 fn uncertain(_:rusqlite::Error)->io::Error{bad("SQLite completion uncertain; retain original media and operation, do not start again")}
 pub(super) fn snapshot(db:&Existing<'_>,template:&Canonical,g:&Group,r:&Request)->io::Result<Catalog>{
     let mut c=engine::existing(db,Access::Read)?;
@@ -20,7 +22,7 @@ pub(super) fn original(t:&Canonical,r:&Request,g:&Group,warm:Option<&super::stag
     if claim.committed{
         // A historical receipt does not audit mounted data or repopulate a
         // missing marker. Do not emit a new completion or perform a sync/write.
-        return Ok(Receipt{pool:claim.pool,op:r.op(),previous:true});
+        return Ok(Receipt{pool:claim.pool,op:r.op(),request_sha:r.sha(),previous:true});
     }
     // The read connection is closed during external, potentially slow I/O.
     let marks=Synced::install(g,&db,&claim.markers)?;
@@ -44,5 +46,6 @@ pub(super) fn publish(db:&Existing<'_>,t:&Canonical,g:&Group,r:&Request,claim:&C
     g.system().sync_all()?;db.sidecars_absent()?;
     let after=snapshot(db,t,g,r)?;
     if !after.committed||after.pool!=claim.pool||after.markers!=claim.markers{return Err(bad("original committed receipt is not confirmed"));}
-    marks.verify_clean(g,&claim.markers)?;Ok(Receipt{pool:after.pool,op:r.op(),previous:false})
+    marks.verify_clean(g,&claim.markers)?;
+    Ok(Receipt{pool:after.pool,op:r.op(),request_sha:r.sha(),previous:false})
 }

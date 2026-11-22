@@ -135,6 +135,7 @@ impl Selection{
         let parent=FreshParent::select(origin.instance)?;
         let resolved=ResolvedRust::fresh(&parent,&system,origin,hostname,endpoints,folders,recycle,subject,crypto.helper,init_sha)?;
         let tty=PublicConfirmation::select()?;
+        super::web_secret::WebWorkspace::check_inherited_lock_budget()?;
         let image_file=image::Image::select(&image_path,&image,parent.product_root()?)?;
         resolved.require_distinct_image(&image_file)?;
         parent.require_distinct_image(&image_file)?;
@@ -152,6 +153,7 @@ impl Selection{
         let spec=change.target();
         let review=preview(&resolved,&payload,&target,&spec,&reference,change.digest(),crypto)?;
         let consent=FreshConsent::approve(&tty,&m,&payload,change,review)?;
+        super::web_secret::WebWorkspace::check_inherited_lock_budget()?;
         let deadline=Instant::now()+Duration::from_secs(10*60);
         let live=||->io::Result<()>{
             if Instant::now()>=deadline{return Err(bad("the original fresh product approval expired"));}

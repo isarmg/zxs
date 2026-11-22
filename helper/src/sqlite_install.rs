@@ -24,7 +24,7 @@ const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";
 fn bad(message:&'static str)->std::io::Error{std::io::Error::new(std::io::ErrorKind::InvalidData,message)}
 fn unsupported(message:&'static str)->std::io::Error{std::io::Error::new(std::io::ErrorKind::Unsupported,message)}
 
-use std::{ffi::OsString,io,path::PathBuf};
+use std::{ffi::OsString,fmt::Write as _,io,path::PathBuf};
 use request::Id;
 
 #[derive(Clone,Copy,Debug)]
@@ -84,7 +84,6 @@ impl Installation{
         Ok(Self{action,browser,op,approval,paths,explicit,private})
     }
     pub(crate) fn run(self)->io::Result<(u8,String)>{
-        let hex=|v:Id|v.iter().map(|b|format!("{b:02x}")).collect::<String>();
         match self.action{
             InitAction::Apply(purpose)=>{
                 let proposal=approval::Proposal::select(purpose,self.op,self.approval,self.paths,self.explicit,self.private)?;
@@ -92,32 +91,62 @@ impl Installation{
                 if self.browser{
                     pair::offer_init_web(&terminal,proposal.browser_scope(),||proposal.require())?;
                 }
-                let fresh=proposal.fresh_receipt_sha();
                 let result=stage::install(proposal.authorize(terminal)?)?;
-                if let Some(request)=fresh{
-                    let sha=request.iter().map(|b|format!("{b:02x}")).collect::<String>();
-                    return Ok((0,format!("fresh-v18-init=confirmed pool={} operation={} init_request_sha256={sha}; original marker group confirmed, no deployment or credentials issued",
-                        hex(result.pool),hex(result.op))));
-                }
-                Ok((0,format!("{} pool={} operation={}; neither network login nor current disk health is certified",
-                    if result.previous{"original INIT was already committed (historical receipt only)"}else{"original INIT committed after all initial volume markers were synchronized"},
-                    hex(result.pool),hex(result.op))))
+                Ok((0,completion_line(result,self.private)))
             }
             InitAction::Receipt=>{
                 let result=receipt::foreground(self.op,self.approval,self.paths,self.explicit)?;
-                let (code,tag,meaning)=if result.committed{(0,"confirmed","historical receipt only")}
-                    else{(1,"pending","not completed; this query did not resume or repair it")};
-                Ok((code,format!("init={tag} pool={} operation={}; {meaning}; original SYSTEM only, recycle and data volumes not observed",
-                    hex(result.pool),hex(self.op))))
+                Ok(original_receipt_line(self.op,result))
             }
         }
     }
+}
+
+fn receipt_fields(pool:Id,op:Id,confirmed_sha:Option<[u8;32]>)->String{
+    fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
+    let mut fields=format!("pool={} operation={}",hex(&pool),hex(&op));
+    if let Some(sha)=confirmed_sha{
+        write!(fields," init_request_sha256={}",hex(&sha)).expect("writing to String");
+    }
+    fields
+}
+fn completion_line(result:complete::Receipt,private:bool)->String{
+    let fields=receipt_fields(result.pool,result.op,Some(result.request_sha));
+    if private{
+        format!("fresh-v18-init=confirmed {fields}; original volume markers verified")
+    }else{
+        let outcome=if result.previous{"original INIT was already committed (historical receipt only)"}
+            else{"original INIT committed after all initial volume markers were synchronized"};
+        format!("{outcome} {fields}")
+    }
+}
+fn original_receipt_line(op:Id,result:receipt::Receipt)->(u8,String){
+    let (code,tag,meaning)=if result.committed_sha.is_some(){(0,"confirmed","historical receipt only")}
+        else{(1,"pending","not completed; this query did not resume or repair it")};
+    let fields=receipt_fields(result.pool,op,result.committed_sha);
+    (code,format!("init={tag} {fields}; {meaning}; original SYSTEM only"))
 }
 
 #[cfg(test)]
 mod command_cases{
     use super::*;
     fn args(s:&str)->impl Iterator<Item=OsString>+'_ {s.split(' ').map(OsString::from)}
+    #[test]
+    fn same_init_digest_is_reported_on_completion_and_history_but_not_pending(){
+        let (pool,op,sha)=([4;16],[7;16],[0xab;32]);
+        let digest=format!(" init_request_sha256={}","ab".repeat(32));
+        let applied=|previous|complete::Receipt{pool,op,request_sha:sha,previous};
+        assert!(completion_line(applied(false),true).contains(&digest));
+        assert!(completion_line(applied(false),false).contains(&digest));
+        let resumed=completion_line(applied(true),false);
+        assert!(resumed.contains(&digest)&&resumed.contains("historical receipt only"));
+        let (code,confirmed)=original_receipt_line(op,receipt::Receipt{pool,committed_sha:Some(sha)});
+        assert_eq!(code,0);
+        assert!(confirmed.contains(&digest)&&confirmed.starts_with("init=confirmed "));
+        let (code,pending)=original_receipt_line(op,receipt::Receipt{pool,committed_sha:None});
+        assert_eq!(code,1);
+        assert!(pending.starts_with("init=pending ")&&!pending.contains("init_request_sha256"));
+    }
     #[test]
     fn fresh_v18_init_is_a_distinct_explicit_terminal_only_mode(){
         let d=|v:&str|v.repeat(16);

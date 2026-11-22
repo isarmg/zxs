@@ -2,11 +2,13 @@
 //! provider, authentication result, setup authority, or database writer.
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use rusqlite::{params, Transaction};
+use rustix::process::{Resource, getrlimit};
 use rustix::rand::{getrandom, GetRandomFlags};
 use std::{fs::File,io,os::unix::fs::{FileExt,MetadataExt}};
 use zeroize::Zeroizing;
 
 const KIB: u32 = 65_536;
+const WORKSPACE_BYTES: u64 = KIB as u64 * 1024;
 const PASSES: u32 = 3;
 const LANES: u32 = 4;
 const OUTPUT: usize = 32;
@@ -41,6 +43,12 @@ pub(super) struct PreparedWeb {
 // Construct only after mlockall(CURRENT|FUTURE), before entering any password.
 pub(super) struct WebWorkspace { blocks: Zeroizing<Vec<Block>>, params: Params }
 impl WebWorkspace {
+    /// Reject only a guaranteed shortfall before changing site state. The
+    /// lowered credential worker still has to lock and reserve real memory.
+    pub(super) fn check_inherited_lock_budget() -> io::Result<()> {
+        check_lock_budget(getrlimit(Resource::Memlock).current)
+    }
+
     pub(super) fn reserve() -> io::Result<Self> {
         let params = Params::new(KIB, PASSES, LANES, Some(OUTPUT))
             .map_err(|_| io::Error::other("invalid fixed Web credential parameters"))?;
@@ -54,6 +62,15 @@ impl WebWorkspace {
         blocks.resize(count, Block::new());
         Ok(Self { blocks, params })
     }
+}
+
+fn check_lock_budget(soft_limit: Option<u64>) -> io::Result<()> {
+    if soft_limit.is_some_and(|bytes| bytes <= WORKSPACE_BYTES) {
+        return Err(io::Error::other(
+            "the inherited soft MEMLOCK limit must cover the 64 MiB password workspace plus the worker's other locked memory; no site files were created",
+        ));
+    }
+    Ok(())
 }
 
 impl PreparedWeb {
@@ -175,6 +192,15 @@ mod tests {
         include_str!("../../../tests/sqlite/web-argon2id-vector.txt").lines()
             .filter_map(|l|l.split_once('=')).find(|p|p.0==key).unwrap().1
             .as_bytes().chunks_exact(2).map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()
+    }
+
+    #[test]
+    fn inherited_memlock_rejects_limits_that_cannot_cover_workspace_and_worker() {
+        for bytes in [0, WORKSPACE_BYTES - 1, WORKSPACE_BYTES] {
+            assert!(check_lock_budget(Some(bytes)).is_err());
+        }
+        assert!(check_lock_budget(Some(WORKSPACE_BYTES + 1)).is_ok());
+        assert!(check_lock_budget(None).is_ok());
     }
 
     #[test]

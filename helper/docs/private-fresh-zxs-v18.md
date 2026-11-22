@@ -40,6 +40,12 @@ independently approved file digests, not archive digests. The [Debian material
 recipe](../packaging/debian13-amd64/README.md) stages these bytes; it neither
 installs nor approves them. These libraries are not ZXS runtime dependencies.
 
+Before account issuance, the inherited soft Linux `MEMLOCK` limit must
+cover the 64 MiB password workspace plus the credential worker's other
+locked memory. A limit of 64 MiB or less is rejected before writing any site
+files. Helper does not raise the limit; the non-root worker still verifies
+that it can lock and reserve the required memory before reading a password.
+
 ## 1. Create the fresh pool
 
 The command forms below describe the required order, not copy-paste shell
@@ -57,9 +63,10 @@ Give 1–62 explicit ordinary roots and prepare S/R/F first. The defaults for S 
 the original foreground INIT approval. After successful marker readback,
 retain the `fresh-v18-init=confirmed` receipt fields `pool`, `operation` and
 `init_request_sha256`, along with the original subject, paths and approval
-reference for step 2. For uncertain INIT outcomes, see the
-[original-operation guidance](sqlite-first-install.md); do not start another
-pool to obtain a receipt.
+reference for step 2. If the output was lost, `install-pool receipt` with the
+same original INIT inputs returns the same fields when confirmed. A pending
+result is not a setup receipt. See the [original-operation
+guidance](sqlite-first-install.md); do not start another pool to obtain a receipt.
 
 ## 2. Issue the shared account on that fresh pool
 

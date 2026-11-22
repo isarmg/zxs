@@ -55,7 +55,6 @@ impl Proposal{
         if let Some(layout)=&self.layout{layout.require(&current,&self.originals.selected)?;}
         Ok(())
     }
-    pub(super) fn fresh_receipt_sha(&self)->Option<[u8;32]>{self.private.then(||self.request.sha())}
     pub(super) fn browser_scope(&self)->([u8;32],bool,u8,super::pair::ExplicitSubject){
         (self.request.sha(), matches!(self.purpose,Purpose::Fresh), (self.request.paths().len()-2) as u8,self.explicit)
     }

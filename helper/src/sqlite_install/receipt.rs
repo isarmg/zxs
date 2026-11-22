@@ -5,7 +5,7 @@ use super::{approval,bad,catalog::{self,Canonical,Catalog},engine::{self,Access}
 use std::{io,path::PathBuf};
 
 #[derive(Debug,Eq,PartialEq)]
-pub(super) struct Receipt{pub(super) pool:Id,pub(super) committed:bool}
+pub(super) struct Receipt{pub(super) pool:Id,pub(super) committed_sha:Option<[u8;32]>}
 
 pub(super) fn foreground(op:Id,reference:Id,paths:Vec<PathBuf>,subject:super::pair::ExplicitSubject)->io::Result<Receipt>{
     super::pair::compiled_v18()?;
@@ -52,5 +52,5 @@ pub(super) fn read(system:&LockedSystem,original:&Request)->io::Result<Receipt>{
     engine::original_name(&c)?;verify(&claim)?;
     c.close().map_err(|_|bad("could not close the original read-only INIT observation"))?;
     verify(&claim)?;
-    Ok(Receipt{pool:claim.pool,committed:claim.committed})
+    Ok(Receipt{pool:claim.pool,committed_sha:claim.committed.then(||original.sha())})
 }
