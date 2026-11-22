@@ -18,13 +18,17 @@ import java.nio.file.Path;
 import java.nio.file.SecureDirectoryStream;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
 
-/** The only writer for a new local Android snapshot. No caller-supplied paths or imported documents. */
+/** App-private local snapshot publication and readback. */
 final class LocalWorkspaceStore {
     private static final String STORE = "workspaces";
     private static final long MAX_ARCHIVE = 2L << 20;
-    private static final int DIRECTORY = OsConstants.O_RDONLY | OsConstants.O_NONBLOCK
+    private static final int READ = OsConstants.O_RDONLY | OsConstants.O_NONBLOCK
             | OsConstants.O_NOFOLLOW | OsConstants.O_CLOEXEC;
     private static final int CANDIDATE = OsConstants.O_RDWR | OsConstants.O_CREAT | OsConstants.O_EXCL
             | OsConstants.O_NOFOLLOW | OsConstants.O_CLOEXEC;
@@ -42,6 +46,128 @@ final class LocalWorkspaceStore {
         } catch (ErrnoException | IOException | SecurityException err) {
             return new Receipt(enclosed.failure, frozen.filename());
         }
+    }
+
+    private static final Pattern PUBLISHED = Pattern.compile("[0-9a-f]{32}\\.[0-9a-f]{32}\\.0000000000000001\\.zxs");
+    private static final int PAGE = 100;
+
+    record Page(List<String> names, String next) {}
+    record Reopened(String name, PlainText.Preview text) {}
+
+    private interface ReadOperation<T> {
+        T run(Directory target) throws ErrnoException, IOException;
+    }
+
+    private static <T> T readStore(T absent, Context context, ReadOperation<T> operation) throws IOException {
+        File data = context.getDataDir();
+        int uid = Process.myUid();
+        need(data != null && data.isAbsolute() && uid != 0);
+        File noBackup = new File(data, "no_backup");
+        try (Directory home = new Directory(data, uid, false)) {
+            Directory noBackupDir;
+            try { noBackupDir = new Directory(noBackup, uid, false); }
+            catch (ErrnoException err) {
+                if (err.errno == OsConstants.ENOENT) return absent;
+                throw err;
+            }
+            try (Directory local = noBackupDir) {
+                Directory store;
+                try { store = new Directory(new File(noBackup, STORE), uid, true); }
+                catch (ErrnoException err) {
+                    if (err.errno == OsConstants.ENOENT) return absent;
+                    throw err;
+                }
+                try (Directory target = store) {
+                    need(home.original.st_dev == local.original.st_dev && local.original.st_dev == target.original.st_dev);
+                    home.check(); local.check(); target.check();
+                    T result = operation.run(target);
+                    home.check(); local.check(); target.check();
+                    return result;
+                }
+            }
+        } catch (ErrnoException err) {
+            throw err.rethrowAsIOException();
+        }
+    }
+
+    static synchronized Page published(Context context, String after) throws IOException {
+        need(after == null || PUBLISHED.matcher(after).matches());
+        return readStore(new Page(List.of(), null), context, target -> {
+            TreeSet<String> page = new TreeSet<>();
+            try (SecureDirectoryStream<Path> paths = target.openNames()) {
+                for (Path entry : paths) {
+                    Path leaf = entry.getFileName();
+                    String name = leaf.toString();
+                    if (!PUBLISHED.matcher(name).matches() || after != null && name.compareTo(after) <= 0) continue;
+                    StructStat stat;
+                    try { stat = Os.lstat(new File(target.path, name).getPath()); }
+                    catch (ErrnoException err) {
+                        if (err.errno == OsConstants.ENOENT) continue;
+                        throw err;
+                    }
+                    if (!OsConstants.S_ISREG(stat.st_mode) || (stat.st_mode & 07777) != 0600
+                            || stat.st_uid != target.uid || stat.st_dev != target.original.st_dev || stat.st_nlink != 1
+                            || stat.st_size < 22 || stat.st_size > MAX_ARCHIVE) continue;
+                    page.add(name);
+                    if (page.size() > PAGE + 1) page.pollLast();
+                }
+            }
+            String next = null;
+            if (page.size() > PAGE) {
+                page.pollLast();
+                next = page.last();
+            }
+            return new Page(List.copyOf(page), next);
+        });
+    }
+
+    static synchronized Reopened reopen(Context context, String name) throws IOException {
+        need(name != null && PUBLISHED.matcher(name).matches());
+        Reopened reopened = readStore(null, context, target -> {
+            File archive = new File(target.path, name);
+            StructStat named = Os.lstat(archive.getPath());
+            checkFile(named, named, target, 1);
+            need(named.st_size >= 22 && named.st_size <= MAX_ARCHIVE);
+            try (Handle opened = new Handle(archive, READ, 0)) {
+                StructStat before = Os.fstat(opened.fd);
+                checkUnchanged(before, named, target);
+                byte[] bytes = new OriginalBytes(opened.fd, before.st_size).read(0, (int) before.st_size);
+                checkUnchanged(Os.fstat(opened.fd), before, target);
+                checkUnchanged(Os.lstat(archive.getPath()), before, target);
+                return readPublished(bytes, name);
+            }
+        });
+        need(reopened != null);
+        return reopened;
+    }
+
+    private static void checkUnchanged(StructStat seen, StructStat original, Directory dir) throws IOException {
+        checkFile(seen, original, dir, 1);
+        need(seen.st_mtim.compareTo(original.st_mtim) == 0 && seen.st_ctim.compareTo(original.st_ctim) == 0);
+    }
+
+    private static Reopened readPublished(byte[] bytes, String name) throws IOException {
+        ArchiveIndex.MemberSource source = new ArchiveIndex.MemberSource() {
+            @Override public void check() {}
+            @Override public byte[] read(long offset, int size) throws IOException {
+                need(offset >= 0 && size >= 0 && offset <= bytes.length - size);
+                return Arrays.copyOfRange(bytes, (int) offset, (int) offset + size);
+            }
+            @Override public void fill(long offset, byte[] out, int count) throws IOException {
+                need(offset >= 0 && count >= 0 && count <= out.length && offset <= bytes.length - count);
+                System.arraycopy(bytes, (int) offset, out, 0, count);
+            }
+        };
+        ArchiveIndex index = ArchiveIndex.read(source, bytes.length);
+        ArchiveIndex.SnapshotMarker seen = index.verifySnapshot(source);
+        need(seen.generation == 1 && seen.parent == null
+                && name.equals(seen.repo + "." + seen.branch + ".0000000000000001.zxs"));
+        need(index.root.children.size() == 1);
+        ArchiveIndex.Item file = index.root.children.firstEntry().getValue();
+        need(file.children == null && file.bytes <= PlainText.LIMIT);
+        StoredMember.Result verified = index.checkMember(source, file, true);
+        need(verified.matches() && verified.text != null && verified.text.complete());
+        return new Reopened(file.name, verified.text);
     }
 
     private static final class Handle implements AutoCloseable {
@@ -72,7 +198,7 @@ final class LocalWorkspaceStore {
             this.uid = uid;
             this.privateChild = privateChild;
             StructStat before = qualifiedName();
-            handle = new Handle(path, DIRECTORY, 0);
+            handle = new Handle(path, READ, 0);
             try {
                 original = Os.fstat(handle.fd);
                 need(OsConstants.S_ISDIR(original.st_mode) && same(original, before));

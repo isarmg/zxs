@@ -118,6 +118,9 @@ public final class ArchiveActivity extends Activity {
         button(body, "新建本机工作区", v -> {
             if (requested == 0) startActivity(new Intent(this, WorkspaceEditActivity.class));
         });
+        button(body, "打开本机已提交快照", v -> {
+            if (requested == 0) startActivity(new Intent(this, LocalSnapshotsActivity.class));
+        });
         cancel = button(body, "取消本次操作", v -> {
             if (search != null && search.matches == null) search = null;
             stopJob();

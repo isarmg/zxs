@@ -1,5 +1,6 @@
 package org.zipworkspace.preview;
 
+import android.content.Context;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
@@ -25,6 +26,39 @@ public final class LocalWorkspacePublicationTest {
     private static final int EXCLUSIVE = OsConstants.O_RDWR | OsConstants.O_CREAT | OsConstants.O_EXCL
             | OsConstants.O_NOFOLLOW | OsConstants.O_CLOEXEC;
     private static final int READ = OsConstants.O_RDONLY | OsConstants.O_NOFOLLOW | OsConstants.O_CLOEXEC;
+
+    @Test public void submittedSnapshotListsAndReopensWithoutAnEditorSession() throws Exception {
+        Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        LocalWorkspaceDraft draft = new LocalWorkspaceDraft();
+        draft.putText("smoke.txt", "hello 世界\n");
+        LocalWorkspaceDraft.Frozen frozen = draft.freeze();
+        LocalWorkspaceStore.Receipt receipt = LocalWorkspaceStore.commit(app, frozen);
+        assertEquals(LocalWorkspaceStore.Status.COMMITTED, receipt.status());
+        assertEquals(frozen.filename(), receipt.filename());
+        Path archive = app.getNoBackupFilesDir().toPath().resolve("workspaces").resolve(receipt.filename());
+        try {
+            String cursor = null;
+            boolean listed = false;
+            do {
+                LocalWorkspaceStore.Page page = LocalWorkspaceStore.published(app, cursor);
+                listed = page.names().contains(receipt.filename());
+                cursor = page.next();
+            } while (!listed && cursor != null);
+            assertTrue(listed);
+            LocalWorkspaceStore.Reopened reopened = LocalWorkspaceStore.reopen(app, receipt.filename());
+            assertEquals("smoke.txt", reopened.name());
+            assertEquals(1, reopened.text().pages());
+            assertEquals("hello 世界\n", reopened.text().page(0));
+            assertThrows(IOException.class, () -> LocalWorkspaceStore.reopen(app, "../" + receipt.filename()));
+            Path different = archive.resolveSibling("0".repeat(32) + receipt.filename().substring(32));
+            assertNotEquals(archive, different);
+            Files.copy(archive, different);
+            try {
+                Os.chmod(different.toString(), 0600);
+                assertThrows(IOException.class, () -> LocalWorkspaceStore.reopen(app, different.getFileName().toString()));
+            } finally { Files.delete(different); }
+        } finally { Files.delete(archive); }
+    }
 
     @Test public void appPrivateLinkClaimsOneNameForTheSameOriginalInode() throws Exception {
         File root = InstrumentationRegistry.getInstrumentation().getTargetContext().getNoBackupFilesDir();
