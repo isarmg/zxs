@@ -1,7 +1,7 @@
 //! A single startup fence for the two fixed ZXS roles, not a listener or
 //! a site/credential grant. Only the original authenticated START and the
 //! matching two PREPARED receipts can reach the common terminal seal.
-use super::{Fault,Result,kernel};
+use super::{Fault,Result,descriptor::{self,Access},kernel};
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 use super::custody::Parent;
 use std::{
@@ -53,17 +53,17 @@ fn identity(file:&File)->Result<(u64,u64)>{
     }
     Ok((m.dev(),m.ino()))
 }
-fn checked(file:&File,access:libc::c_int,stamp:GateStamp,expected:&GateBody)->Result<SealState>{
+fn checked(file:&File,access:Access,stamp:GateStamp,expected:&GateBody)->Result<SealState>{
     let fd=file.as_raw_fd();
-    kernel::cloexec(fd)?;
-    if kernel::get_flags(fd,libc::F_GETFL)?&(libc::O_ACCMODE|libc::O_PATH)!=access||
+    descriptor::cloexec(fd)?;
+    if descriptor::status(fd)?.access()!=Some(access)||
         identity(file)?!=(stamp.dev,stamp.ino){return Err(Fault::Handoff);}
-    let first=seal_state(kernel::get_flags(fd,libc::F_GET_SEALS)?)?;
+    let first=seal_state(descriptor::seal_bits(fd)?)?;
     let mut raw=[0;80];
     if file.read_at(&mut raw,0).map_err(|_|Fault::Handoff)?!=raw.len(){return Err(Fault::Handoff);}
     matches_body(&raw,expected,stamp.digest)?;
     if identity(file)?!=(stamp.dev,stamp.ino){return Err(Fault::Handoff);}
-    let last=seal_state(kernel::get_flags(fd,libc::F_GET_SEALS)?)?;
+    let last=seal_state(descriptor::seal_bits(fd)?)?;
     if first==SealState::Released&&last!=first{return Err(Fault::Handoff);}
     Ok(last)
 }
@@ -90,13 +90,13 @@ impl<'a> GateOwner<'a>{
             File::from(kernel::new_fd(raw.into())?)
         };
         let fd=original.as_raw_fd();
-        if kernel::get_flags(fd,libc::F_GET_SEALS)?!=libc::F_SEAL_EXEC{return Err(Fault::Handoff);}
+        if descriptor::seal_bits(fd)?!=libc::F_SEAL_EXEC{return Err(Fault::Handoff);}
         original.set_permissions(Permissions::from_mode(0o400)).map_err(|_|Fault::Handoff)?;
         original.write_all(&expected).map_err(|_|Fault::Handoff)?;
         add_seals(&original,HELD&!libc::F_SEAL_EXEC)?;
         let (dev,ino)=identity(&original)?;
         let stamp=GateStamp{dev,ino,digest:digest(&expected)?};
-        if checked(&original,libc::O_RDWR,stamp,&expected)?!=SealState::Held{return Err(Fault::Handoff);}
+        if checked(&original,Access::ReadWrite,stamp,&expected)?!=SealState::Held{return Err(Fault::Handoff);}
         let web=reopen_own(&task,&original,stamp,&expected)?;
         let smb=reopen_own(&task,&original,stamp,&expected)?;
         parent.require()?;
@@ -108,7 +108,7 @@ impl<'a> GateOwner<'a>{
     /// final vote. No fallible step follows a successful one-shot seal.
     pub(super) fn seal_after_pair(self,prepared:super::custody::PreparedPair<'_,'_>)->Result<()>{
         self.parent.require()?;
-        if checked(&self.original,libc::O_RDWR,self.stamp,&self.expected)?!=SealState::Held{return Err(Fault::Handoff);}
+        if checked(&self.original,Access::ReadWrite,self.stamp,&self.expected)?!=SealState::Held{return Err(Fault::Handoff);}
         prepared.last_vote(self.stamp)?;
         add_seals(&self.original,libc::F_SEAL_SEAL)
     }
@@ -158,7 +158,7 @@ fn reopen_own(task:&File,original:&File,stamp:GateStamp,expected:&GateBody)->Res
         return Err(Fault::Handoff);
     }
     let reader=follow(libc::O_RDONLY|libc::O_NONBLOCK|libc::O_NOATIME|libc::O_NOCTTY)?;
-    if checked(&reader,libc::O_RDONLY,stamp,expected)?!=SealState::Held||
+    if checked(&reader,Access::ReadOnly,stamp,expected)?!=SealState::Held||
         identity(original)?!=(stamp.dev,stamp.ino)||link_stamp(&proc_pin(&table,&name)?)?!=pinned{
         return Err(Fault::Handoff);
     }
@@ -173,7 +173,7 @@ impl WaitingGate{
     pub(super) fn from_start(fd:OwnedFd,stamp:GateStamp,nonce:[u8;32],cohort:[u8;32])->Result<Self>{
         let file=File::from(fd);let expected=body(nonce,cohort)?;
         let expires=Instant::now().checked_add(MAX_PAIR_WAIT).ok_or(Fault::Handoff)?;
-        if checked(&file,libc::O_RDONLY,stamp,&expected)?!=SealState::Held{return Err(Fault::Handoff);}
+        if checked(&file,Access::ReadOnly,stamp,&expected)?!=SealState::Held{return Err(Fault::Handoff);}
         Ok(Self{file,stamp,expected,expires})
     }
     /// The live probe must be the role's actual original supervisor pidfd
@@ -183,8 +183,8 @@ impl WaitingGate{
         loop{
             let left=until.checked_duration_since(Instant::now()).filter(|d|!d.is_zero()).ok_or(Fault::Handoff)?;
             live()?;
-            if seal_state(kernel::get_flags(self.file.as_raw_fd(),libc::F_GET_SEALS)?)?==SealState::Released{
-                if checked(&self.file,libc::O_RDONLY,self.stamp,&self.expected)?!=SealState::Released{
+            if seal_state(descriptor::seal_bits(self.file.as_raw_fd())?)?==SealState::Released{
+                if checked(&self.file,Access::ReadOnly,self.stamp,&self.expected)?!=SealState::Released{
                     return Err(Fault::Handoff);
                 }
                 live()?;

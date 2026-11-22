@@ -13,6 +13,29 @@
 
 static int proc_fd_directory(void);
 
+/* Read descriptor evidence without changing it or choosing its owner. */
+int observe_descriptor_flags(int fd) { return fcntl(fd, F_GETFD); }
+int observe_file_seals(int fd) { return fcntl(fd, F_GET_SEALS); }
+
+enum {
+    STATUS_READ = 1, STATUS_WRITE = 2, STATUS_READ_WRITE = 3,
+    STATUS_NONBLOCK = 4, STATUS_APPEND = 8
+};
+int observe_open_status(int fd) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0) return flags;
+    int access = 0;
+    if (!(flags & O_PATH)) {
+        switch (flags & O_ACCMODE) {
+        case O_RDONLY: access = STATUS_READ; break;
+        case O_WRONLY: access = STATUS_WRITE; break;
+        case O_RDWR: access = STATUS_READ_WRITE; break;
+        }
+    }
+    return access | ((flags & O_NONBLOCK) ? STATUS_NONBLOCK : 0) |
+                    ((flags & O_APPEND) ? STATUS_APPEND : 0);
+}
+
 /* Input is one component relative to a live descriptor. No symlink lookup. */
 int zxs_open_directory(int parent, const char *name) {
     return openat(parent, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);

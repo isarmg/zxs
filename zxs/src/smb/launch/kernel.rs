@@ -1,7 +1,7 @@
 //! Exact kernel evidence shared by the existing inherited role and the
 //! proposed same-ELF parent. Neither a pidfd nor a channel grants a site,
 //! a credential generation, or permission to listen.
-use super::{Fault,Result};
+use super::{Fault,Result,descriptor::cloexec};
 use crate::smb::readiness::{self,Interest,Watch};
 use std::{
     fs::File,mem::{size_of,zeroed},
@@ -105,15 +105,6 @@ pub(super) fn fs_magic(fd:RawFd)->Result<libc::c_long>{
     let mut buf:libc::statfs=unsafe{zeroed()};
     if unsafe{libc::fstatfs(fd,&mut buf)}!=0{return Err(Fault::Handoff);}
     Ok(buf.f_type as libc::c_long)
-}
-pub(super) fn get_flags(fd:RawFd,cmd:libc::c_int)->Result<libc::c_int>{
-    if !matches!(cmd,libc::F_GETFD|libc::F_GETFL|libc::F_GET_SEALS){return Err(Fault::Handoff);}
-    // SAFETY: these GET commands do not require a third fcntl argument.
-    let v=unsafe{libc::fcntl(fd,cmd)};
-    if v<0{Err(Fault::Handoff)}else{Ok(v)}
-}
-pub(super) fn cloexec(fd:RawFd)->Result<()>{
-    if get_flags(fd,libc::F_GETFD)?&libc::FD_CLOEXEC==0{Err(Fault::Handoff)}else{Ok(())}
 }
 pub(super) fn sock<const N:usize>(fd:RawFd,layer:libc::c_int,typ:libc::c_int)->Result<[u8;N]>{
     let mut b=[0;N];let mut n=N as libc::socklen_t;

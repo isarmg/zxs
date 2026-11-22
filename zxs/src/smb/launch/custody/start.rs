@@ -2,7 +2,7 @@
 //! two fixed components. No user-visible separate launcher or selectable
 //! role backend. Only the application retains this private scope and both
 //! original children during life and drain.
-use super::{Fault,Parent,Role,VerifiedPreflight,birth::Ready,foreground,kernel::{cloexec,get_flags,sock,sock_int},
+use super::{Fault,Parent,Role,VerifiedPreflight,birth::Ready,descriptor,foreground,kernel::{sock,sock_int},
     listeners::Listeners,preflight::nonce,view::{self,Kind,Source,View}};
 use crate::smb::launch::{
     cohort::{self,PairOffer},envelope::{self,ENV_MAX},pair_gate::{GateOwner,GateStamp,ReadLoans},
@@ -207,9 +207,9 @@ pub(in crate::smb::launch) fn launch_internal_web<'m,'v,'s,'p>(scope:&mut Author
 }
 fn require_web(listener:&TcpListener,cookie:u64)->super::Result<()>{
     let raw=listener.as_raw_fd();
-    cloexec(raw)?;
+    descriptor::cloexec(raw)?;
     if cookie==0||u64::from_ne_bytes(sock(raw,libc::SOL_SOCKET,libc::SO_COOKIE)?)!=cookie||
-        get_flags(raw,libc::F_GETFL)?&libc::O_NONBLOCK==0||
+        !descriptor::status(raw)?.nonblocking()||
         sock_int(raw,libc::SOL_SOCKET,libc::SO_DOMAIN)?!=libc::AF_INET||
         sock_int(raw,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
         sock_int(raw,libc::SOL_SOCKET,libc::SO_PROTOCOL)?!=libc::IPPROTO_TCP||

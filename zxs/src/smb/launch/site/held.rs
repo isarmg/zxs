@@ -2,7 +2,7 @@
 //! approved paths. Durable IDs never come from kernel mount numbering.
 mod diagnostics;
 use super::{approval::check_path,denied,layout};
-use crate::fs::Entity;
+use crate::{fs::Entity,smb::launch::descriptor::{self,Access,DescriptorFlags}};
 use std::{collections::BTreeMap,ffi::{CStr,CString},fs::File,io::{self,Read},
     os::{fd::{AsRawFd,FromRawFd,RawFd},unix::{ffi::OsStrExt,fs::{FileExt,MetadataExt}}},
     path::{Component,Path,PathBuf}};
@@ -71,14 +71,17 @@ pub(super) fn regular(file:&File)->io::Result<Stamp>{
     Ok(Stamp{place:place(file)?,bytes:m.len(),ctime:(m.ctime(),m.ctime_nsec()),
         mtime:(m.mtime(),m.mtime_nsec()),mode:m.mode(),uid:m.uid(),gid:m.gid()})
 }
-fn access(file:&File,mask:i32,want:i32)->io::Result<()>{
-    // SAFETY: fcntl GETFL and GETFD do not take third arguments.
-    let (fl,of)=unsafe{(libc::fcntl(file.as_raw_fd(),libc::F_GETFL),libc::fcntl(file.as_raw_fd(),libc::F_GETFD))};
-    if fl<0||of<0||fl&mask!=want||of&libc::FD_CLOEXEC==0{return Err(denied());}
+fn access(file:&File,want:Access,append:Option<bool>)->io::Result<()>{
+    let raw=file.as_raw_fd();
+    // Observe both in order, even if reading the open status failed.
+    let (status,flags)=(descriptor::status(raw),descriptor::flags(raw));
+    let status=status.map_err(|_|denied())?;
+    if !flags.is_ok_and(DescriptorFlags::close_on_exec)||status.access()!=Some(want)||
+        append.is_some_and(|want|status.append()!=want){return Err(denied());}
     Ok(())
 }
 pub(super) fn rdonly(file:&File)->io::Result<()>{
-    access(file,libc::O_ACCMODE|libc::O_PATH,libc::O_RDONLY)
+    access(file,Access::ReadOnly,None)
 }
 pub(super) fn no_xattr(file:&File,name:&CStr)->io::Result<()>{
     // SAFETY: null output and size 0 asks only whether this fixed key exists.
@@ -125,9 +128,12 @@ fn reopen_original(task:&File,pin:&File,stamp:Stamp,how:OriginalAccess)->io::Res
     };
     let previously=follow(libc::O_PATH)?;
     if regular(&previously)?!=stamp||regular(pin)?!=stamp{return Err(denied());}
-    let mode=match how{OriginalAccess::Read=>libc::O_RDONLY,OriginalAccess::AppendLog=>libc::O_WRONLY|libc::O_APPEND};
+    let (mode,want,append)=match how{
+        OriginalAccess::Read=>(libc::O_RDONLY,Access::ReadOnly,false),
+        OriginalAccess::AppendLog=>(libc::O_WRONLY|libc::O_APPEND,Access::WriteOnly,true),
+    };
     let out=follow(mode|libc::O_NONBLOCK|libc::O_NOCTTY|libc::O_NOATIME)?;
-    access(&out,libc::O_ACCMODE|libc::O_PATH|libc::O_APPEND,mode)?;
+    access(&out,want,Some(append))?;
     let now=proc_pin(&table,&name)?;
     if regular(&out)?!=stamp||regular(pin)?!=stamp||place(&now)?!=link_at||!now.metadata()?.is_symlink(){
         return Err(denied());

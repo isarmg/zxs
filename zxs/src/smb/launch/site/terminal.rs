@@ -1,7 +1,7 @@
 //! A bounded fresh public confirmation on the same foreground slave or
 //! VT. It never reads passwords, changes termios or accepts a caller path.
 use super::{SiteLease,denied,held::{fd_mount,proc_dir,proc_pin},hex,media::Media};
-use crate::smb::launch::{custody::{Parent,VerifiedPreflight},kernel};
+use crate::smb::launch::{custody::{Parent,VerifiedPreflight},descriptor::{self,Access},kernel};
 use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read,Write},os::{fd::{AsRawFd,RawFd},unix::fs::MetadataExt},thread,time::{Duration,Instant}};
 
 // One canonical TTY line, including LF, and one extra byte to detect
@@ -38,7 +38,7 @@ impl Terminal{
         let task=parent.own_task().map_err(|_|denied())?;
         let fds=proc_dir(&task,c"fd")?;
         let original=Surface::read(0)?;
-        if [1,2].into_iter().any(|fd|Surface::read(fd).ok()!=Some(original))||!access(0,false)?||!access(2,true)?{
+        if [1,2].into_iter().any(|fd|Surface::read(fd).ok()!=Some(original))||!stdio_access(0,Access::ReadOnly)?||!stdio_access(2,Access::WriteOnly)?{
             return Err(denied());
         }
         let options=libc::O_NONBLOCK|libc::O_NOCTTY;
@@ -54,13 +54,11 @@ impl Terminal{
     }
     pub(in crate::smb::launch) fn require(&self)->io::Result<()>{
         let i=self.input.as_raw_fd();let o=self.output.as_raw_fd();
-        if !access(0,false)?||!access(2,true)?||
+        if !stdio_access(0,Access::ReadOnly)?||!stdio_access(2,Access::WriteOnly)?||
             [0,1,2,i,o].into_iter().any(|fd|Surface::read(fd).ok()!=Some(self.original)){
             return Err(denied());
         }
-        let flags=libc::O_ACCMODE|libc::O_NONBLOCK|libc::O_PATH;
-        if kernel::get_flags(i,libc::F_GETFL).map_err(|_|denied())?&flags!=(libc::O_RDONLY|libc::O_NONBLOCK)||
-            kernel::get_flags(o,libc::F_GETFL).map_err(|_|denied())?&flags!=(libc::O_WRONLY|libc::O_NONBLOCK){
+        if !nonblocking_access(i,Access::ReadOnly)?||!nonblocking_access(o,Access::WriteOnly)?{
             return Err(denied());
         }
         // SAFETY: read foreground identity and termios on our owned real tty.
@@ -177,10 +175,13 @@ fn escaped(value:&[u8])->String{
     }}
     out
 }
-fn access(fd:RawFd,write:bool)->io::Result<bool>{
-    let f=kernel::get_flags(fd,libc::F_GETFL).map_err(|_|denied())?;
-    let a=f&libc::O_ACCMODE;
-    Ok(f&libc::O_PATH==0&&(a==libc::O_RDWR||a==(if write{libc::O_WRONLY}else{libc::O_RDONLY})))
+fn stdio_access(fd:RawFd,want:Access)->io::Result<bool>{
+    let mode=descriptor::status(fd).map_err(|_|denied())?.access();
+    Ok(mode==Some(Access::ReadWrite)||mode==Some(want))
+}
+fn nonblocking_access(fd:RawFd,want:Access)->io::Result<bool>{
+    let status=descriptor::status(fd).map_err(|_|denied())?;
+    Ok(status.access()==Some(want)&&status.nonblocking())
 }
 fn open_terminal(fds:&File,name:&CStr,flags:i32,expect:Surface)->io::Result<File>{
     if !matches!(name.to_bytes(),b"0"|b"2"){return Err(denied());}

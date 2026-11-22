@@ -2,7 +2,7 @@
 //! Different role frames and public payloads are still decoded separately;
 //! this code never selects credentials, plans, listeners or paths.
 use super::{BootSocket,Control,Fault,KernelControl,MAX_RIGHTS,OriginalProcess,Result,SEALS,START_BYTES,Supervisor,
-    CONTROL_SIZE,cloexec,get_flags,inherit,initial_child,recv,sock,sock_int};
+    CONTROL_SIZE,cloexec,descriptor,inherit,initial_child,recv,sock,sock_int};
 use std::{
     fs::File,io::{self,Write},mem::{size_of_val,zeroed},net::{Ipv4Addr,SocketAddr,TcpListener},
     os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{FileExt,MetadataExt},
@@ -127,7 +127,7 @@ fn require_web_socket(fd:&OwnedFd,cookie:u64)->Result<()>{
     let fd=fd.as_raw_fd();
     cloexec(fd)?;
     if cookie==0||u64::from_ne_bytes(sock(fd,libc::SOL_SOCKET,libc::SO_COOKIE)?)!=cookie||
-        get_flags(fd,libc::F_GETFL)?&libc::O_NONBLOCK==0||
+        !descriptor::status(fd)?.nonblocking()||
         sock_int(fd,libc::SOL_SOCKET,libc::SO_DOMAIN)?!=libc::AF_INET||
         sock_int(fd,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
         sock_int(fd,libc::SOL_SOCKET,libc::SO_PROTOCOL)?!=libc::IPPROTO_TCP||
@@ -156,7 +156,7 @@ impl ReceivedOriginals{
 }
 fn sealed_size(file:&File,maximum:usize)->Result<usize>{
     let fd=file.as_raw_fd();cloexec(fd)?;
-    let seals=get_flags(fd,libc::F_GET_SEALS)?;
+    let seals=descriptor::seal_bits(fd)?;
     let m=file.metadata().map_err(|_|Fault::Handoff)?;
     if !m.is_file()||m.nlink()!=0||m.mode()&0o111!=0||seals&SEALS!=SEALS{return Err(Fault::Handoff);}
     usize::try_from(m.len()).ok().filter(|n|(1..=maximum.min(PUBLIC_MAX)).contains(n)).ok_or(Fault::Handoff)

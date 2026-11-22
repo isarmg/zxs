@@ -1,6 +1,6 @@
 //! Approved exact host listeners only: no externally adopted sockets,
 //! wildcard, reuseport, system network setting, routing or name discovery.
-use super::{Fault,Result,kernel::{cloexec,get_flags,sock,sock_int}};
+use super::{Fault,Result,descriptor,kernel::{sock,sock_int}};
 use std::{collections::BTreeSet,mem::size_of,net::{IpAddr,Ipv4Addr,Ipv6Addr,SocketAddr,TcpListener},
     os::fd::{AsFd,AsRawFd,FromRawFd,BorrowedFd,OwnedFd},ptr};
 
@@ -80,8 +80,8 @@ impl Original{
     fn require(&self,listening:bool)->Result<()>{
         let fd=self.listener.as_raw_fd();let ip=self.endpoint.0;
         let family=if ip.is_ipv4(){libc::AF_INET}else{libc::AF_INET6};
-        cloexec(fd)?;
-        if get_flags(fd,libc::F_GETFL)?&libc::O_NONBLOCK==0||self.cookie==0||
+        descriptor::cloexec(fd)?;
+        if !descriptor::status(fd)?.nonblocking()||self.cookie==0||
             u64::from_ne_bytes(sock(fd,libc::SOL_SOCKET,libc::SO_COOKIE)?)!=self.cookie||
             sock_int(fd,libc::SOL_SOCKET,libc::SO_DOMAIN)?!=family||sock_int(fd,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
             sock_int(fd,libc::SOL_SOCKET,libc::SO_PROTOCOL)?!=libc::IPPROTO_TCP||

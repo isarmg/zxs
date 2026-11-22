@@ -7,8 +7,9 @@ mod handshake;
 pub(in crate::smb) use accept::OwnedAccepted;
 #[allow(unused_imports)] // the standalone low preflight is added separately
 pub(super) use handshake::{InheritedControl,child_receipt,offer_packet,read_sealed,seal_public};
-use super::{Fault,Result,envelope::{ENV_MAX,Envelope,MAX_LISTENERS,START_BYTES,Start,VaultStamp},
-    kernel::{BootSocket,OriginalProcess,cloexec,fs_magic,get_flags,sock,sock_int}};
+use super::{Fault,Result,descriptor::{self,Access,cloexec},
+    envelope::{ENV_MAX,Envelope,MAX_LISTENERS,START_BYTES,Start,VaultStamp},
+    kernel::{BootSocket,OriginalProcess,fs_magic,sock,sock_int}};
 use crate::smb::readiness::{self,Interest,Watch};
 use std::{
     fs::{File,OpenOptions},io,mem::{size_of,zeroed},net::{IpAddr,SocketAddr,TcpListener},
@@ -135,7 +136,7 @@ fn initial_child()->Result<(u32,u32)>{
     Ok((uid,gid))
 }
 unsafe fn inherit(fd:RawFd)->Result<OwnedFd>{
-    let flags=get_flags(fd,libc::F_GETFD)?;
+    let flags=descriptor::flags(fd)?.native_bits();
     // SAFETY: the isolated caller owns the fixed live descriptor exactly once.
     let own=unsafe{OwnedFd::from_raw_fd(fd)};
     // SAFETY: F_SETFD takes this integer argument for the retained fd.
@@ -144,7 +145,7 @@ unsafe fn inherit(fd:RawFd)->Result<OwnedFd>{
 }
 fn listener(fd:OwnedFd,cookie:u64)->Result<TcpListener>{
     let raw=fd.as_raw_fd();cloexec(raw)?;
-    if get_flags(raw,libc::F_GETFL)?&libc::O_NONBLOCK==0{return Err(Fault::Handoff);}
+    if !descriptor::status(raw)?.nonblocking(){return Err(Fault::Handoff);}
     let family=sock_int(raw,libc::SOL_SOCKET,libc::SO_DOMAIN)?;
     if !matches!(family,libc::AF_INET|libc::AF_INET6)||
         sock_int(raw,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
@@ -167,8 +168,7 @@ fn listener(fd:OwnedFd,cookie:u64)->Result<TcpListener>{
 fn frozen(file:&File)->Result<Vec<u8>>{handshake::read_sealed(file,ENV_MAX)}
 fn vault_file(file:&File,s:&VaultStamp)->Result<()>{
     let fd=file.as_raw_fd();cloexec(fd)?;
-    let f=get_flags(fd,libc::F_GETFL)?;
-    if f&libc::O_ACCMODE!=libc::O_RDONLY||f&libc::O_PATH!=0{return Err(Fault::Handoff);}
+    if descriptor::status(fd)?.access()!=Some(Access::ReadOnly){return Err(Fault::Handoff);}
     let m=file.metadata().map_err(|_|Fault::Handoff)?;
     if !m.is_file()||m.mode()&0o7777!=0o600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=240||
         m.dev()!=s.dev||m.ino()!=s.ino||m.ctime()!=s.ctime_s||m.ctime_nsec()!=i64::from(s.ctime_ns)||

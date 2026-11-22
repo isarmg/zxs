@@ -9,7 +9,7 @@ mod preflight;
 mod start;
 pub(super) use preflight::VerifiedPreflight;
 pub(super) use start::{PreparedPair,authorize,prepare_site,stopping,launch_internal_smb,launch_internal_web};
-use super::{Fault,Result,Role,kernel::{self,BootSocket,OriginalProcess}};
+use super::{Fault,Result,Role,descriptor,kernel::{self,BootSocket,OriginalProcess}};
 use std::{
     ffi::{CStr,CString},fs::{File,OpenOptions},io::Read,marker::PhantomData,mem::{size_of,zeroed},
     os::fd::AsRawFd,os::unix::fs::{MetadataExt,OpenOptionsExt},rc::Rc,
@@ -46,7 +46,7 @@ pub(super) struct PreparedHandoff<'a>{
 }
 impl Parent{
     pub(super) fn pin()->Result<Self>{
-        for fd in 0..=2{kernel::get_flags(fd,libc::F_GETFD)?;}
+        for fd in 0..=2{descriptor::flags(fd)?;}
         let proc=proc_root()?;
         no_other_descriptors(&proc)?;
         let original=OriginalProcess::current()?;
@@ -304,7 +304,7 @@ impl Namespace{
         // SAFETY: fixed Linux namespace fd-returning ioctl on our held
         // original pidfs descriptor only. Success transfers one fresh FD.
         let ns=unsafe{File::from(kernel::new_fd(libc::ioctl(pid.as_raw_fd(),request,0 as libc::c_ulong).into())?)};
-        kernel::cloexec(ns.as_raw_fd())?;
+        descriptor::cloexec(ns.as_raw_fd())?;
         self.checked(ns)
     }
     fn of_init(self,ns:&File)->Result<File>{
@@ -315,7 +315,7 @@ impl Namespace{
         // SAFETY: NS_GET_USERNS on the already verified original PID ns
         // yields one new CLOEXEC file, not a borrowed pointer or numeric id.
         let f=unsafe{File::from(kernel::new_fd(libc::ioctl(pid.as_raw_fd(),0xb701 as libc::c_ulong,0 as libc::c_ulong).into())?)};
-        kernel::cloexec(f.as_raw_fd())?;
+        descriptor::cloexec(f.as_raw_fd())?;
         self.checked(f)
     }
 }
