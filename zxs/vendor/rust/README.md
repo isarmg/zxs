@@ -78,18 +78,17 @@ uses the same target predicates and priority without a separate Cargo package.
 
 The ZXS workspace excludes the remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
-graph. The cipher interface uses the same common types, input/output buffers
-and erasure traits directly. The private fixed-output code keeps the same
-block buffer and erasure features.
+graph. The [private cipher buffers](../../src/smb/session/cipher_buffers/ORIGIN.md)
+retain the original in-place views using the same array types. The private
+fixed-output code keeps the same block buffer and erasure features.
 No derive, alloc/oid, C provider, generated binding, system crypto or external
 service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> block-buffer [zeroize], crypto-common [zeroize], inout, libc, zeroize
+zxs -> block-buffer [zeroize], crypto-common [zeroize], hybrid-array, libc, zeroize
 block-buffer -> hybrid-array, zeroize
 crypto-common -> hybrid-array
-inout -> hybrid-array
 hybrid-array -> typenum, zeroize
 ```
 

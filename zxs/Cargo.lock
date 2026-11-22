@@ -26,13 +26,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inout"
-version = "0.2.6"
-dependencies = [
- "hybrid-array",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.191"
 
@@ -42,7 +35,7 @@ version = "0.1.0"
 dependencies = [
  "block-buffer",
  "crypto-common",
- "inout",
+ "hybrid-array",
  "libc",
  "zeroize",
 ]

@@ -2,7 +2,7 @@
 // ZXS retains the methods used by SMB and its known-answer tests.
 
 use core::fmt;
-use inout::InOutBuf;
+use crate::smb::session::cipher_buffers::InOutBuf;
 
 /// Apply a checked stream to the existing buffer.
 pub trait StreamCipher {

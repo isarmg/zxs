@@ -178,6 +178,7 @@ commit = "d730578e69d68e185d07cb55e32eff1691133a46"
 upstream_subdirectory = "inout"
 archive = "https://static.crates.io/crates/inout/inout-0.2.6.crate"
 sha256 = "3a580c13f0ffc335ef42dd3f6b1a41b726051c5e1656d9a3aa6fddb3c5dfbbf9"
+internal_module = "src/smb/session/cipher_buffers"
 
 [[package]]
 name = "libc"

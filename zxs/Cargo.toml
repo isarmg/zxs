@@ -19,7 +19,6 @@ exclude = [
     "vendor/rust/block-buffer-0.12.1",
     "vendor/rust/crypto-common-0.2.2",
     "vendor/rust/hybrid-array-0.4.15",
-    "vendor/rust/inout-0.2.6",
     "vendor/rust/libc-0.2.191",
     "vendor/rust/typenum-1.20.1",
     "vendor/rust/zeroize-1.9.2",
@@ -29,7 +28,7 @@ exclude = [
 [target.'cfg(target_os = "linux")'.dependencies]
 block-buffer = { version = "=0.12.1", path = "vendor/rust/block-buffer-0.12.1", features = ["zeroize"] }
 crypto-common = { version = "=0.2.2", path = "vendor/rust/crypto-common-0.2.2", features = ["zeroize"] }
-inout = { version = "=0.2.6", path = "vendor/rust/inout-0.2.6" }
+hybrid-array = { version = "=0.4.15", path = "vendor/rust/hybrid-array-0.4.15" }
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
 zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }
 

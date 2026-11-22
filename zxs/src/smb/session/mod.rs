@@ -2,6 +2,7 @@
 //! The original connection owns publication and request admission. There is no
 //! enabled production entry or listener. A signature alone grants no file access.
 mod block_cipher;
+mod cipher_buffers;
 mod cipher_interface;
 mod der;
 pub(in crate::smb) mod envelope;

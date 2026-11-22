@@ -2,7 +2,7 @@
 use super::RoundKeys;
 use crate::smb::session::block_cipher::Block;
 use crypto_common::{array::{Array, ArraySize}, typenum::{Quot, U4}};
-use inout::InOut;
+use crate::smb::session::cipher_buffers::InOut;
 use core::ops::Div;
 
 #[cfg(target_arch = "x86")]

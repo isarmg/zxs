@@ -6,7 +6,7 @@
 use super::utils::{load_block, store_block};
 use crate::smb::session::block_cipher::Block;
 use crypto_common::array::{Array, ArraySize};
-use inout::InOut;
+use crate::smb::session::cipher_buffers::InOut;
 use core::arch::aarch64::*;
 
 #[target_feature(enable = "aes")]

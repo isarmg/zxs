@@ -2,7 +2,7 @@
 // ZXS retains the methods used by SMB and its known-answer tests.
 
 use crypto_common::{Block, BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::Unsigned};
-use inout::{InOut, InOutBuf};
+use crate::smb::session::cipher_buffers::{InOut, InOutBuf};
 
 /// Block encryption backend.
 pub trait BlockCipherEncBackend: ParBlocksSizeUser {

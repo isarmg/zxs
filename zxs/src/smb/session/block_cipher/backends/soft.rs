@@ -6,7 +6,7 @@ use crate::smb::session::cipher_interface::{
     BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend, BlockCipherEncClosure,
 };
 use crypto_common::{BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::U16};
-use inout::InOut;
+use crate::smb::session::cipher_buffers::InOut;
 
 #[path = "fixslice/mod.rs"]
 pub(crate) mod fixslice;
