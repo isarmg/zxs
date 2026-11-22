@@ -48,6 +48,11 @@ pub(in crate::system::reader) fn current(db:&Connection,c:&Catalog,share:ShareId
 pub(in crate::system::reader) fn find(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Option<Setting>>{
     let mut found=None;selected(db,c,share,share,false,1,false,|s,_|found=Some(s))?;Ok(found)
 }
+pub(super) fn installed(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Option<Setting>>{
+    let mut found=None;
+    selected(db,c,share,share,false,1,true,|state,_|found=Some(state))?;
+    Ok(found)
+}
 pub(super) fn page(db:&Connection,c:&Catalog,after:Option<ShareId>)->io::Result<(Vec<(Setting,String)>,Option<ShareId>)>{
     const LIMIT:usize=32;let mut rows=Vec::new();
     selected(db,c,after.unwrap_or(ShareId([0;16])),ShareId([255;16]),true,(LIMIT+1) as u8,true,|s,name|rows.push((s,name.to_owned())))?;

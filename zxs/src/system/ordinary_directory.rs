@@ -79,6 +79,19 @@ impl Route{
     pub(in crate::system::reader) fn parent(&self)->DirectoryParent{
         self.steps.last().map_or(DirectoryParent::Root,|s|DirectoryParent::Directory(s.birth.id))
     }
+    pub(in crate::system::reader) fn logical_positions(&self)
+        ->impl Iterator<Item=(DirectoryId,OperationId,i64,&str)>{
+        self.steps.iter().map(|s|(s.birth.id,s.position,s.generation,s.name()))
+    }
+    pub(in crate::system::reader) fn visible_child(&self,db:&Connection,c:&Catalog,id:DirectoryId)
+        ->io::Result<Option<(String,OperationId,i64)>>{
+        match by_id(db,c,self.volume,id){
+            Ok((d,false)) if d.birth.parent==self.parent()=>Ok(Some((d.name,d.position,d.generation))),
+            Ok(_)=>Ok(None),
+            Err(e) if e.kind()==io::ErrorKind::NotFound=>Ok(None),
+            Err(e)=>Err(e),
+        }
+    }
     pub(super) fn selected(&self)->Option<&DirectoryPlace>{self.steps.last()}
     /// The current selected spelling at each exact DirectoryPlace, not its birth label.
     pub(super) fn components(&self)->impl Iterator<Item=&str>{self.steps.iter().map(DirectoryPlace::name)}

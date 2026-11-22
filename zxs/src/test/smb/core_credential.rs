@@ -182,3 +182,129 @@ fn only_the_original_rust_record_and_its_plan_are_current(){
     let late=probe().unwrap();assert_eq!((late.epoch.record,late.epoch.generation),(NEXT,2));
     assert_eq!((early.ordinary,early.recycle),(late.ordinary,late.recycle));
 }
+
+#[test]
+fn management_navigation_is_current_parent_scoped_and_byte_ordered(){
+    use crate::{DirectoryId,FileId,hash::Sha256,identity::ShareId,
+        ordinary::portable_birth::Birth,system::reader::account::navigation::{Directory,Entry,memory_navigation}};
+    let (db,c)=on_memory();
+    let scope=spec(&c,octets(BOUND).try_into().unwrap(),octets(SID).try_into().unwrap());
+    let keys=scope.role_keys().unwrap();
+    db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    pair(&db,&scope);vault(&db,SETUP,&FIRST).unwrap();
+    stage(&db,SETUP,2,&scope.setup_request(APPROVAL,FIRST).unwrap()).unwrap();activate(&db,SETUP).unwrap();
+    db.fixed(c"COMMIT").unwrap();
+    roots(&db,keys.web);
+
+    let share=ShareId(octets("b5203c873ae8c37befe82574a4f157c5").try_into().unwrap());
+    let mode:[u8;16]=octets("9b95192b020c378ba058a588d3026df2").try_into().unwrap();
+    let volume=VolumeId([0x33;16]);let root=[0;16];
+    let id=|kind:u8,n:u8|{let mut out=[0x81;16];out[5]=n;out[15]=kind;out};
+    let write=|x:String|exec(&db,&x).unwrap_or_else(|e|panic!("{x}: {e}"));
+    let operation=|op:[u8;16],kind:u8,actor:[u8;16],hash:[u8;32],state:u8|write(format!(
+        "INSERT INTO operation VALUES({},{kind},{},{},{state})",literal(&op),literal(&actor),literal(&hash)));
+    let prefix=|domain:&[u8],op:[u8;16]|{
+        let mut h=Sha256::new();h.update(domain).unwrap();
+        for bytes in [POOL.0,op,keys.smb,SETUP.0]{h.update(&bytes).unwrap();}
+        h.update(&1i64.to_be_bytes()).unwrap();
+        h
+    };
+    let bytes=|h:&mut Sha256,text:&str|{h.update(&[text.len() as u8]).unwrap();h.update(text.as_bytes()).unwrap();};
+    let make_dir=|n:u8,parent:[u8;16],name:&str,confirm:bool|{
+        let op=id(0,n);let dir=id(1,n);let member=id(2,n);
+        write(format!("INSERT INTO directory_entry VALUES({},{},{},{},{},{},{},{},{})",
+            literal(&op),literal(&dir),literal(&member),literal(&volume.0),literal(&parent),literal(name.as_bytes()),
+            literal(&share.0),literal(&mode),literal(&SETUP.0)));
+        let mut h=prefix(b"ZXS-SQLITE-1/CREATE-DIRECTORY\0",op);
+        for value in [share.0,mode,volume.0,parent,dir,member]{h.update(&value).unwrap();}
+        bytes(&mut h,name);operation(op,13,keys.smb,h.finish(),0);
+        if confirm{activate(&db,OperationId(op)).unwrap();}
+        DirectoryId(dir)
+    };
+    db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    let parent=make_dir(0,root,"Projects",true);
+    let pending=make_dir(254,root,"Pending",false);
+    for n in 1..=34{make_dir(n,parent.0,&format!("Folder-{n:02}"),true);}
+    let leaf=FileId(id(4,1));
+    let file=OperationId(id(3,1));
+    let mut h=prefix(b"ZXS-SQLITE-1/CREATE-FILE-IN-PARENT\0",file.0);
+    for value in [share.0,mode,volume.0,parent.0]{h.update(&value).unwrap();}
+    bytes(&mut h,"Notes.txt");
+    write(format!("INSERT INTO root_entry VALUES({},{},{},{},{},{},{},{},{},{},{},{},{})",
+        literal(&file.0),literal(&share.0),literal(&mode),literal(&SETUP.0),literal(&volume.0),literal(b"Notes.txt"),
+        literal(Birth::placed_container("Notes.txt",leaf).unwrap().to_bytes()),literal(&id(5,1)),literal(&leaf.0),
+        literal(&id(6,1)),literal(&id(7,1)),literal(&id(8,1)),literal(&parent.0)));
+    operation(file.0,5,keys.smb,h.finish(),0);activate(&db,file).unwrap();
+    db.fixed(c"COMMIT").unwrap();
+
+    let read=|at,after|memory_navigation(&db,&c,share,at,after);
+    let (_,root_page,_)=read(None,None).unwrap();
+    assert_eq!(root_page,vec![Entry::Directory(Directory{id:parent,name:"Projects".into()})]);
+    assert!(read(Some(pending),None).is_err());
+    assert!(memory_navigation(&db,&c,ShareId(id(42,0)),None,None).is_err());
+    let (crumbs,first,next)=read(Some(parent),None).unwrap();
+    assert_eq!(crumbs,vec![Directory{id:parent,name:"Projects".into()}]);assert_eq!(first.len(),32);
+    assert_eq!(first[31],Entry::Directory(Directory{id:DirectoryId(id(1,32)),name:"Folder-32".into()}));
+    let next=next.as_ref();
+    assert_eq!(read(None,next).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+    let (_,last,next_page)=read(Some(parent),next).unwrap();
+    assert_eq!(last,vec![
+        Entry::Directory(Directory{id:DirectoryId(id(1,33)),name:"Folder-33".into()}),
+        Entry::Directory(Directory{id:DirectoryId(id(1,34)),name:"Folder-34".into()}),
+        Entry::File{id:leaf,name:"Notes.txt".into()},
+    ]);
+    assert!(next_page.is_none());
+
+    let op=id(9,0);let old=id(0,0);let member=id(2,0);
+    let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/RENAME-DIRECTORY\0").unwrap();
+    for value in [POOL.0,old,volume.0,root,parent.0,member,op,old,share.0,mode,SETUP.0,keys.smb]{h.update(&value).unwrap();}
+    h.update(&1i64.to_be_bytes()).unwrap();h.update(&1i64.to_be_bytes()).unwrap();
+    bytes(&mut h,"Projects");bytes(&mut h,"Renamed");
+    db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    write(format!("INSERT INTO directory_rename VALUES({},{},{},1,{},{},{},{},{})",
+        literal(&op),literal(&parent.0),literal(&old),literal(b"Projects"),literal(b"Renamed"),
+        literal(&share.0),literal(&mode),literal(&SETUP.0)));
+    operation(op,16,keys.smb,h.finish(),0);
+    db.fixed(c"COMMIT").unwrap();
+    assert!(read(None,None).unwrap().1.is_empty());
+    assert_eq!(read(Some(parent),None).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+    activate(&db,OperationId(op)).unwrap();
+    assert_eq!(read(Some(parent),next).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+    assert_eq!(read(Some(parent),None).unwrap().0,vec![Directory{id:parent,name:"Renamed".into()}]);
+
+    activate(&db,OperationId(id(0,254))).unwrap();
+    let disabled=id(10,0);db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    write(format!("INSERT INTO share_mode VALUES({},{},{},{},2,0)",
+        literal(&disabled),literal(&share.0),literal(&mode),literal(&SETUP.0)));
+    operation(disabled,4,keys.web,[0x64;32],1);
+    db.fixed(c"COMMIT").unwrap();
+    assert_eq!(read(Some(parent),None).err().unwrap().kind(),io::ErrorKind::NotFound);
+
+    let first=PublicEpoch{op:SETUP.0,generation:1,record:FIRST};
+    let second=PublicEpoch{op:RESET.0,generation:2,record:NEXT};
+    db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    write(format!("INSERT INTO credential_reset VALUES({},{},2,{},{})",literal(&RESET.0),literal(&SETUP.0),
+        literal(&RESET_APPROVAL),literal(&scope.plan_sha)));
+    write(format!("UPDATE web_password SET credential_op={},generation=2,salt={}",
+        literal(&RESET.0),literal(&[57;16])));
+    vault(&db,RESET,&NEXT).unwrap();
+    stage(&db,RESET,9,&scope.reset_request(RESET_APPROVAL,first,second).unwrap()).unwrap();
+    db.fixed(c"COMMIT").unwrap();
+    assert_eq!(read(None,None).err().unwrap().kind(),io::ErrorKind::PermissionDenied);
+    activate(&db,RESET).unwrap();
+
+    // A different committed share on this same logical disk is not an
+    // installer share merely because it has the current RW mode.
+    let other=ShareId(id(13,0));let published=id(11,0);let new_mode=id(12,0);
+    db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    write(format!("INSERT INTO root_share VALUES({},{},{},{},{})",
+        literal(&other.0),literal(&published),literal(&RESET.0),literal(&volume.0),literal(b"Other")));
+    operation(published,3,keys.web,[0x65;32],1);
+    write(format!("INSERT INTO share_mode VALUES({},{},{},{},1,2)",
+        literal(&new_mode),literal(&other.0),literal(&published),literal(&RESET.0)));
+    operation(new_mode,4,keys.web,[0x66;32],1);
+    db.fixed(c"COMMIT").unwrap();
+    assert_eq!(crate::system::reader::account::share_mode::find(&db,&c,other).unwrap().unwrap().mode,
+        crate::system::reader::account::share_mode::Mode::ReadWrite);
+    assert_eq!(memory_navigation(&db,&c,other,None,None).err().unwrap().kind(),io::ErrorKind::NotFound);
+}

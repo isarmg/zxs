@@ -92,3 +92,6 @@ pub(crate) mod overview;
 pub(crate) mod manual_work;
 #[path="history.rs"]
 pub(crate) mod history;
+
+#[path="navigation.rs"]
+pub(crate) mod navigation;
