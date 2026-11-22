@@ -68,7 +68,6 @@ fn append_observed(s:&Path,g:&Genesis,frames:&mut Vec<Vec<u8>>,frame:Vec<u8>,bef
 #[test]
 #[ignore="controlled non-root ordinary files, public Argon2 fixture; no network or real data volume"]
 fn same_open_original_reads_only_the_exact_grant_and_never_upgrades_an_old_handle(){
-    let _serial=FIXTURE_VERIFIER.lock().unwrap();
     let t=PrivateTemp::under(&std::env::temp_dir());let s=t.child("sys");let r=t.0.join("no-r");let f=t.0.join("no-files-needed");
     let(g,base,a,m)=in_roots(&s,&r,&f);let da=frame_sha(&a);let mut frames=vec![a.clone()];
     create(&s.join("REGISTRATION"),&[base,a].concat());create(&s.join("CONFIRMED"),&certify(&g,&frames).1);
@@ -186,7 +185,6 @@ fn second_public_verifier()->([u8;16],[u8;32]){
 #[test]
 #[ignore="two synthetic subjects, controlled ordinary named SYSTEM; no network or external data disks"]
 fn separately_authenticated_users_have_only_their_own_current_share_rights(){
-    let _serial=FIXTURE_VERIFIER.lock().unwrap();
     let t=PrivateTemp::under(&std::env::temp_dir());let s=t.child("sys");let r=t.0.join("no-r");let f=t.0.join("no-f");
     let(g,base,_,m)=in_roots(&s,&r,&f);let a=changed(&field(FIRST,"write_frame"),1,g.digest,9);
     let da=frame_sha(&a);let mut frames=vec![a.clone()];create(&s.join("REGISTRATION"),&[base,a].concat());

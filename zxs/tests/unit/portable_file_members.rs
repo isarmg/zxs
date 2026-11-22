@@ -43,7 +43,6 @@ fn one_logical_membership_across_shares_and_exact_prior_create_right(){
 #[test]
 #[ignore="controlled ordinary files and two public synthetic principals; no services or disks"]
 fn same_volume_through_two_shares_uses_issued_file_not_the_original_creators_continuing_rights(){
-    let _serial=FIXTURE_VERIFIER.lock().unwrap();
     let t=PrivateTemp::under(&std::env::temp_dir());let s=t.child("s");let r=t.0.join("recycle-offline");let f=t.child("f");
     let(g,base,_,mark)=in_roots(&s,&r,&f);let root_mark=crate::pool::portable_claim::ROOT_NAME.to_str().unwrap();
     let a=changed(&field(FIRST,"write_frame"),1,g.digest,9);let da=frame_sha(&a);let vol=g.rows[2].volume;

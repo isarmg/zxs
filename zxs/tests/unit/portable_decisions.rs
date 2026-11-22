@@ -6,7 +6,6 @@ fn field(src:&str,key:&str)->Vec<u8>{
     let s=src.lines().filter_map(|l|l.split_once('=')).find(|(k,_)|*k==key).unwrap().1;
     (0..s.len()).step_by(2).map(|n|u8::from_str_radix(&s[n..n+2],16).unwrap()).collect()
 }
-static FIXTURE_VERIFIER:std::sync::Mutex<()>=std::sync::Mutex::new(());
 const GEN:&str=include_str!("../vectors/portable-genesis-v1.txt");
 const FIRST:&str=include_str!("../vectors/portable-first-decision-v1.txt");
 const ENC:&[u8]=b"ZXS-PORTABLE-1/DECISION\0";
@@ -47,7 +46,6 @@ fn first_decision_uses_the_confirmed_original_frame_not_a_higher_complete_suffix
 
 #[test]
 fn upstream_password_and_exact_login_match_the_confirmed_portable_credential_only(){
-    let _serial=FIXTURE_VERIFIER.lock().unwrap();
     let g=Genesis::only(&field(GEN,"genesis")).unwrap();
     let frame=field(FIRST,"frame");let floor=field(FIRST,"floor");
     let cut=decision::Decisions::read(&g,&frame,&floor).unwrap();let a=cut.accounts.first().unwrap();
