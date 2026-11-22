@@ -1,7 +1,7 @@
 //! One isolated invocation. The checker never gets host /dev, the caller's
 //! namespace/terminal, any host directory, or an arbitrary option. Only the
 //! leased branches bind just the explicitly saved copy.
-use super::{Format,btrfs,ext4,ntfs,repair,xfs,group::Group,image::{ExfatSealed,FatRepairImage,Sealed},runtime::Runtime};
+use super::{CheckFormat,Format,LeasedFormat,btrfs,ext4,ntfs,repair,xfs,group::Group,image::{ExfatSealed,FatRepairImage,Sealed},runtime::Runtime};
 use crate::pinned::invalid;
 use rustix::{
     fd::{AsFd,AsRawFd,OwnedFd},
@@ -19,9 +19,13 @@ const LEASED_LIMIT:Duration=Duration::from_secs(10*60);
 
 #[derive(Clone,Copy,PartialEq,Eq)]
 enum Budget{Sealed,Leased,Xfs,Repair(u64)}
-pub(super) fn prepare_worker()->io::Result<()> {prepare(Budget::Sealed)}
-pub(super) fn prepare_leased_worker()->io::Result<()> {prepare(Budget::Leased)}
-pub(super) fn prepare_xfs_worker()->io::Result<()> {prepare(Budget::Xfs)}
+pub(super) fn prepare_check(format: CheckFormat) -> io::Result<()> {
+    prepare(match format {
+        CheckFormat::Sealed(_) => Budget::Sealed,
+        CheckFormat::Leased(LeasedFormat::Xfs) => Budget::Xfs,
+        CheckFormat::Leased(LeasedFormat::Ext4 | LeasedFormat::Ntfs | LeasedFormat::Btrfs) => Budget::Leased,
+    })
+}
 pub(super) fn prepare_work_repair(length:u64)->io::Result<()> {prepare(Budget::Repair(length))}
 fn prepare(budget:Budget)->io::Result<()> {
     // This command owns the entire CLI process. Never lower process rlimits or

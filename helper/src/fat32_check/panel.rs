@@ -1,6 +1,6 @@
 //! A single terminal-selected operand. The HTTP process has no command builder
 //! with user options, and never installs the checker's process-wide limits.
-use super::{Format,LeasedFormat,Outcome,Report,Request,btrfs,exfat,ext4,xfs,leased,ntfs,image::{ExfatSealed,Sealed},runner,runtime::Runtime};
+use super::{CheckFormat,Format,LeasedFormat,Outcome,Report,Request,btrfs,exfat,ext4,xfs,leased,ntfs,image::{ExfatSealed,Sealed},runner,runtime::Runtime};
 use crate::pinned::{helper_elf::ForegroundElf,invalid};
 use rustix::{
     io::fcntl_dupfd_cloexec,pipe::{PipeFlags,pipe_with},
@@ -19,8 +19,6 @@ impl Info{
     }
 }
 // Leased operands are not members of the two-format sealed protocol.
-#[derive(Debug)]
-pub(crate) enum Job{Sealed(Format,Request),Leased(LeasedFormat,Request)}
 enum Image{Fat32(Sealed),Exfat(ExfatSealed),Leased(LeasedFormat,leased::Selected)}
 enum Expected{Fat32(u32),Exfat(exfat::Framing,[u8;32]),Leased(LeasedFormat,leased::Selected,[u8;32])}
 pub(crate) enum Receipt{Fat32(Report),Exfat(exfat::Report),Ext4(ext4::Report),Xfs(xfs::Report),Ntfs(ntfs::Report),Btrfs(btrfs::Report)}
@@ -43,15 +41,15 @@ impl Receipt{
 }
 pub(crate) struct Operand {image:Image,expected:[u8;32],helper:ForegroundElf}
 impl Operand {
-    pub(crate) fn capture(job:Job)->io::Result<Self>{
+    pub(crate) fn capture(job:Request)->io::Result<Self>{
         let helper=ForegroundElf::local()?;
-        let (image,expected)=match job{
-            Job::Sealed(Format::Fat32,j)=>(Image::Fat32(Sealed::capture(&j.image,&j.digest)?),j.digest),
-            Job::Sealed(Format::Exfat,j)=>(Image::Exfat(ExfatSealed::capture(&j.image,&j.digest)?),j.digest),
-            Job::Leased(kind,j)=>(Image::Leased(kind,leased::Selected::select(&j.image)?),j.digest),
+        let image=match job.format {
+            CheckFormat::Sealed(Format::Fat32)=>Image::Fat32(Sealed::capture(&job.image,&job.digest)?),
+            CheckFormat::Sealed(Format::Exfat)=>Image::Exfat(ExfatSealed::capture(&job.image,&job.digest)?),
+            CheckFormat::Leased(kind)=>Image::Leased(kind,leased::Selected::select(&job.image)?),
         };
         helper.require()?;
-        Ok(Self{image,expected,helper})
+        Ok(Self{image,expected:job.digest,helper})
     }
     pub(crate) fn info(&self)->Info{
         let(bytes,sector,detail)=match &self.image{
@@ -109,7 +107,7 @@ pub(crate) fn worker(format:Format,expected:[u8;32])->io::Result<u8>{
     if parent_process_death_signal()?!=Some(Signal::TERM){return Err(invalid("no supervised copy-check parent"));}
     let parent=getppid().ok_or_else(||invalid("no original copy-check parent"))?;
     ForegroundElf::local()?.parent_is_same_image(parent)?;
-    runner::prepare_worker()?;
+    runner::prepare_check(CheckFormat::Sealed(format))?;
     let file=File::from(fcntl_dupfd_cloexec(std::io::stdin(),3)?);
     let mut out=io::stdout().lock();
     let code=match format{
@@ -129,10 +127,7 @@ pub(crate) fn leased_worker(kind:LeasedFormat,expected:[u8;32])->io::Result<u8>{
     if parent_process_death_signal()?!=Some(Signal::TERM){return Err(invalid("no supervised leased copy-check parent"));}
     let parent=getppid().ok_or_else(||invalid("no original leased copy-check parent"))?;
     ForegroundElf::local()?.parent_is_same_image(parent)?;
-    match kind{
-        LeasedFormat::Ext4|LeasedFormat::Ntfs|LeasedFormat::Btrfs=>runner::prepare_leased_worker()?,
-        LeasedFormat::Xfs=>runner::prepare_xfs_worker()?,
-    }
+    runner::prepare_check(CheckFormat::Leased(kind))?;
     let file=File::from(fcntl_dupfd_cloexec(std::io::stdin(),3)?);
     let mut out=io::stdout().lock();
     // Check the exact installation before obtaining the operand lease.
@@ -171,12 +166,13 @@ pub(crate) fn leased_worker(kind:LeasedFormat,expected:[u8;32])->io::Result<u8>{
 
 impl Expected{
     fn prepare_exec(&self,cmd:&mut Command,helper:&File,digest:&[u8;32])->io::Result<()>{
-        use helper_linux_evidence::diagnostic_process::{prepare_leased_panel_exec,prepare_panel_worker_exec};
-        match self{
-            Self::Fat32(_)=>prepare_panel_worker_exec(cmd,helper,Format::Fat32,digest),
-            Self::Exfat(..)=>prepare_panel_worker_exec(cmd,helper,Format::Exfat,digest),
-            Self::Leased(kind,..)=>prepare_leased_panel_exec(cmd,helper,*kind,digest),
-        }
+        use helper_linux_evidence::diagnostic_process::prepare_panel_worker_exec;
+        let format = match self {
+            Self::Fat32(_) => CheckFormat::Sealed(Format::Fat32),
+            Self::Exfat(..) => CheckFormat::Sealed(Format::Exfat),
+            Self::Leased(kind,..) => CheckFormat::Leased(*kind),
+        };
+        prepare_panel_worker_exec(cmd,helper,format,digest)
     }
     fn size(&self)->usize{
         match self{Self::Fat32(_)=>SIZE,Self::Exfat(..)=>exfat::Report::WIRE_SIZE,

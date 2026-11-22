@@ -33,7 +33,7 @@ fn ambiguous_checker_status_and_extra_output_are_not_certificates_of_health(){
 #[test]
 fn accepts_only_an_explicit_absolute_image_and_exact_independent_digest(){
     use crate::fat32_check::Request;
-    let parse=|a:&[&str]|Request::parse(a.iter().map(|s|std::ffi::OsString::from(*s)));
+    let parse=|a:&[&str]|Request::parse(CheckFormat::Sealed(Format::Fat32),a.iter().map(|s|std::ffi::OsString::from(*s)));
     let d="af".repeat(32);
     assert!(parse(&["/img","--sha256",&d]).is_ok());
     for a in [&["/img","--sha256","none"][..], &["img","--sha256",&d],&["/img","--sha256",&d,"-a"],&["/img","-r",&d]]{

@@ -7,7 +7,7 @@ mod view;
 
 use http::{Reply,Request};
 use helper_linux_evidence::diagnostic_process::{cancelled,watch_cancellation};
-use crate::{fat32_check::panel::{Job,Operand},pinned::storage_status::{Selection,WebSelection}};
+use crate::{fat32_check::{CheckFormat,Request as CopyCheck,panel::Operand},pinned::storage_status::{Selection,WebSelection}};
 use rustix::{process::{getgid,getuid},rand::{getrandom,GetRandomFlags}};
 use sha2::{Digest,Sha256};
 use std::{io::{self,Write},net::TcpListener,os::fd::AsFd,thread,time::{Duration,Instant}};
@@ -123,8 +123,8 @@ pub(crate) fn require_terminal(fd:impl AsFd)->io::Result<()>{
     Ok(())
 }
 
-enum Launch { Ordinary(Option<Job>), Storage(Selection) }
-pub(crate) fn serve(image:Option<Job>)->io::Result<()>{serve_mode(Launch::Ordinary(image))}
+enum Launch { Ordinary(Option<CopyCheck>), Storage(Selection) }
+pub(crate) fn serve(image:Option<CopyCheck>)->io::Result<()>{serve_mode(Launch::Ordinary(image))}
 pub(crate) fn serve_storage(selection:Selection)->io::Result<()>{serve_mode(Launch::Storage(selection))}
 
 fn serve_mode(launch:Launch)->io::Result<()>{
@@ -138,7 +138,7 @@ fn serve_mode(launch:Launch)->io::Result<()>{
         Launch::Ordinary(image)=>(image,None),
         Launch::Storage(selection)=>(None,Some(WebSelection::pin(selection))),
     };
-    let leased=matches!(&image,Some(Job::Leased(..)));
+    let leased=image.as_ref().is_some_and(|job| matches!(job.format(),CheckFormat::Leased(_)));
     let selected=if let Some(job)=image{
         if leased{
             writeln!(tty,"仅固定终端选择的卷镜像原件。浏览器确认后才取只读租约、核对 SHA-256 并运行检查器。")?;

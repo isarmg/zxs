@@ -25,6 +25,7 @@ mod sqlite_install;
 #[path = "../tests/common/mod.rs"]
 mod test_area;
 
+use fat32_check::CheckFormat;
 use pinned::storage_status::Selection;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -54,7 +55,7 @@ enum Command {
     EmbeddedInstall(sqlite_install::EmbeddedInstall),
     Disks(block_tools::Query),
     Hardware,
-    DiskWeb(Option<fat32_check::panel::Job>),
+    DiskWeb(Option<fat32_check::Request>),
     DiskWebStorage(Selection),
     SealedWorker(fat32_check::Format,[u8;32]),
     LeasedPanelWorker(fat32_check::LeasedFormat,[u8;32]),
@@ -64,15 +65,10 @@ enum Command {
     FirstBrowserWorker,
     CopyRepairBrowserWorker,
     FsTools(fs_tools::Query),
-    Fat32(fat32_check::Request),
-    Exfat(fat32_check::Request),
-    Ext4(fat32_check::Request),
+    CopyCheck(fat32_check::Request),
     RepairExt4(fat32_check::repair::Request),
     RepairExfat(fat32_check::repair::Request),
     RepairFat32(fat32_check::repair::Request),
-    Xfs(fat32_check::Request),
-    Ntfs(fat32_check::Request),
-    Btrfs(fat32_check::Request),
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static str> {
@@ -95,17 +91,15 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     }
     if op == "discover"{return sqlite_install::Discovery::parse(args).map(Command::Discover);}
     if op == "disk-web" {
-        use fat32_check::{Format,LeasedFormat,Request,panel::Job};
-        return match args.next(){
-            None=>Ok(Command::DiskWeb(None)),
-            Some(arg) if arg=="--storage-roots"=>Selection::parse(args).map(Command::DiskWebStorage),
-            Some(arg) if arg=="--fat32-copy"=>Request::parse(args).map(|r|Command::DiskWeb(Some(Job::Sealed(Format::Fat32,r)))),
-            Some(arg) if arg=="--exfat-copy"=>Request::parse_exfat(args).map(|r|Command::DiskWeb(Some(Job::Sealed(Format::Exfat,r)))),
-            Some(arg) if arg=="--ext4-copy"=>Request::parse_ext4(args).map(|r|Command::DiskWeb(Some(Job::Leased(LeasedFormat::Ext4,r)))),
-            Some(arg) if arg=="--xfs-copy"=>Request::parse_xfs(args).map(|r|Command::DiskWeb(Some(Job::Leased(LeasedFormat::Xfs,r)))),
-            Some(arg) if arg=="--ntfs-copy"=>Request::parse_ntfs(args).map(|r|Command::DiskWeb(Some(Job::Leased(LeasedFormat::Ntfs,r)))),
-            Some(arg) if arg=="--btrfs-copy"=>Request::parse_btrfs(args).map(|r|Command::DiskWeb(Some(Job::Leased(LeasedFormat::Btrfs,r)))),
-            _=>Err("disk-web accepts one terminal-selected --fat32-copy, --exfat-copy, --ext4-copy, --xfs-copy, --ntfs-copy or --btrfs-copy IMAGE --sha256 HEX"),
+        return match args.next() {
+            None => Ok(Command::DiskWeb(None)),
+            Some(arg) if arg == "--storage-roots" => Selection::parse(args).map(Command::DiskWebStorage),
+            Some(arg) => {
+                let kind = fat32_check::panel_format(&arg).ok_or(
+                    "disk-web accepts one terminal-selected --fat32-copy, --exfat-copy, --ext4-copy, --xfs-copy, --ntfs-copy or --btrfs-copy IMAGE --sha256 HEX",
+                )?;
+                fat32_check::Request::parse(kind, args).map(|r| Command::DiskWeb(Some(r)))
+            }
         };
     }
     if op=="__zxs-shared-account-sql-v2"||op=="__zxs-shared-vault-writer-v2"{
@@ -124,23 +118,17 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if args.next().is_some(){return Err("invalid internal worker");}
         return Ok(Command::LayoutSqlWorker);
     }
-    let leased=match op.to_str(){
-        Some("__ext4-leased-v1")=>Some(fat32_check::LeasedFormat::Ext4),
-        Some("__xfs-leased-v1")=>Some(fat32_check::LeasedFormat::Xfs),
-        Some("__ntfs-leased-v1")=>Some(fat32_check::LeasedFormat::Ntfs),
-        Some("__btrfs-leased-v1")=>Some(fat32_check::LeasedFormat::Btrfs),
-        _=>None,
-    };
-    if let Some(kind)=leased{
-        let expected=args.next().and_then(|s|fs_tools::hex(s.to_str()?)).ok_or("invalid internal leased worker")?;
-        if args.next().is_some(){return Err("invalid internal leased worker");}
-        return Ok(Command::LeasedPanelWorker(kind,expected));
-    }
-    if op=="__fat32-sealed-v1"||op=="__exfat-sealed-v1"{
-        let format=if op=="__exfat-sealed-v1"{fat32_check::Format::Exfat}else{fat32_check::Format::Fat32};
-        let expected=args.next().and_then(|s|fs_tools::hex(s.to_str()?)).ok_or("invalid internal worker")?;
-        if args.next().is_some(){return Err("invalid internal worker");}
-        return Ok(Command::SealedWorker(format,expected));
+    if let Some(format) = CheckFormat::from_worker_argument(&op) {
+        let error = match format {
+            CheckFormat::Sealed(_) => "invalid internal worker",
+            CheckFormat::Leased(_) => "invalid internal leased worker",
+        };
+        let expected = args.next().and_then(|s| fs_tools::hex(s.to_str()?)).ok_or(error)?;
+        if args.next().is_some() { return Err(error); }
+        return Ok(match format {
+            CheckFormat::Sealed(kind) => Command::SealedWorker(kind, expected),
+            CheckFormat::Leased(kind) => Command::LeasedPanelWorker(kind, expected),
+        });
     }
     if op == "inspect-dirs" {
         let dirs: Vec<_> = args.take(inspect::MAX_DIRS + 1).map(PathBuf::from).collect();
@@ -150,12 +138,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "repair-ext4-copy" {return fat32_check::repair::Request::parse(args).map(Command::RepairExt4);}
     if op == "repair-exfat-copy" {return fat32_check::repair::Request::parse_exfat(args).map(Command::RepairExfat);}
     if op == "repair-fat32-copy" {return fat32_check::repair::Request::parse_fat32(args).map(Command::RepairFat32);}
-    if op == "check-ext4-copy" {return fat32_check::Request::parse_ext4(args).map(Command::Ext4);}
-    if op == "check-xfs-copy" {return fat32_check::Request::parse_xfs(args).map(Command::Xfs);}
-    if op == "check-ntfs-copy" {return fat32_check::Request::parse_ntfs(args).map(Command::Ntfs);}
-    if op == "check-btrfs-copy" {return fat32_check::Request::parse_btrfs(args).map(Command::Btrfs);}
-    if op == "check-exfat-copy" {return fat32_check::Request::parse_exfat(args).map(Command::Exfat);}
-    if op == "check-fat32-copy" { return fat32_check::Request::parse(args).map(Command::Fat32); }
+    if let Some(format) = fat32_check::command_format(&op) {
+        return fat32_check::Request::parse(format, args).map(Command::CopyCheck);
+    }
     if op == "fs-tools" { return fs_tools::Query::parse(args).map(Command::FsTools); }
     if op == "hardware" {
         if args.next().is_some() { return Err("hardware takes no paths or options"); }
@@ -208,23 +193,10 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
         Command::RepairExt4(job) | Command::RepairExfat(job) | Command::RepairFat32(job) => line(&job.run()?)?,
-        Command::Ext4(job) => {
-            let report=job.run_ext4()?;line(&report.to_string())?;return Ok(ExitCode::from(report.exit()));
-        }
-        Command::Xfs(job) => {
-            let report=job.run_xfs()?;line(&report.to_string())?;return Ok(ExitCode::from(report.exit()));
-        }
-        Command::Ntfs(job) => {
-            let report=job.run_ntfs()?;line(&report.to_string())?;return Ok(ExitCode::from(report.exit()));
-        }
-        Command::Btrfs(job) => {
-            let report=job.run_btrfs()?;line(&report.to_string())?;return Ok(ExitCode::from(report.exit()));
-        }
-        Command::Exfat(job) => {
-            let report=job.run_exfat()?;line(&report.to_string())?;return Ok(ExitCode::from(report.exit()));
-        }
-        Command::Fat32(job) => {
-            let outcome=job.run()?;line(&outcome.to_string())?;return Ok(ExitCode::from(outcome.exit()));
+        Command::CopyCheck(job) => {
+            let (code, report) = job.run()?;
+            line(&report)?;
+            return Ok(ExitCode::from(code));
         }
         Command::FsTools(query) => {
             let report = query.observe();
@@ -272,7 +244,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod copy_arguments{
     use super::*;
-    use fat32_check::{LeasedFormat,panel::Job};
+    use fat32_check::{Format,LeasedFormat};
 
     #[test]
     fn hardware_argv_only_selects_a_fixed_passive_observation() {
@@ -291,35 +263,64 @@ mod copy_arguments{
         }
     }
     #[test]
-    fn only_the_terminal_preselects_an_ext4_copy_and_the_internal_worker_gets_no_path(){
-        let digest="35".repeat(32);
-        let cmd=|a:&[&str]|parse(a.iter().map(|&arg|OsString::from(arg)));
-        assert!(matches!(cmd(&["disk-web","--ext4-copy","/saved/volume","--sha256",&digest]),
-            Ok(Command::DiskWeb(Some(Job::Leased(LeasedFormat::Ext4,_))))));
-        assert!(cmd(&["disk-web","--ext4-copy","relative","--sha256",&digest]).is_err());
-        assert!(cmd(&["disk-web","--ext4-copy","/saved/volume","--sha256",&digest,"-y"]).is_err());
-        assert!(cmd(&["disk-web","--ext4-copy","/saved/volume","--sha256",&digest,"--fat32-copy"]).is_err());
-        assert!(matches!(cmd(&["__ext4-leased-v1",&digest]),Ok(Command::LeasedPanelWorker(LeasedFormat::Ext4,_))));
-        assert!(cmd(&["__ext4-leased-v1","/saved/volume",&digest]).is_err());
-        assert!(cmd(&["__ext4-leased-v1",&digest,"--journal"]).is_err());
-        assert!(matches!(cmd(&["disk-web","--xfs-copy","/saved/volume","--sha256",&digest]),
-            Ok(Command::DiskWeb(Some(Job::Leased(LeasedFormat::Xfs,_))))));
-        assert!(matches!(cmd(&["__xfs-leased-v1",&digest]),Ok(Command::LeasedPanelWorker(LeasedFormat::Xfs,_))));
-        assert!(cmd(&["check-xfs-copy","/saved/volume","--sha256",&digest,"-L"]).is_err());
-        assert!(cmd(&["__xfs-leased-v1",&digest,"-l","/some/log"]).is_err());
-        assert!(matches!(cmd(&["disk-web","--ntfs-copy","/saved/volume","--sha256",&digest]),
-            Ok(Command::DiskWeb(Some(Job::Leased(LeasedFormat::Ntfs,_))))));
-        assert!(matches!(cmd(&["__ntfs-leased-v1",&digest]),Ok(Command::LeasedPanelWorker(LeasedFormat::Ntfs,_))));
-        assert!(matches!(cmd(&["check-ntfs-copy","/saved/volume","--sha256",&digest]),Ok(Command::Ntfs(_))));
-        assert!(cmd(&["check-ntfs-copy","/saved/volume","--sha256",&digest,"-d"]).is_err());
-        assert!(cmd(&["disk-web","--ntfs-copy","/saved/volume","--sha256",&digest,"-b"]).is_err());
-        assert!(cmd(&["__ntfs-leased-v1",&digest,"/saved/volume"]).is_err());
-        assert!(matches!(cmd(&["disk-web","--btrfs-copy","/saved/volume","--sha256",&digest]),
-            Ok(Command::DiskWeb(Some(Job::Leased(LeasedFormat::Btrfs,_))))));
-        assert!(matches!(cmd(&["__btrfs-leased-v1",&digest]),Ok(Command::LeasedPanelWorker(LeasedFormat::Btrfs,_))));
-        assert!(matches!(cmd(&["check-btrfs-copy","/saved/volume","--sha256",&digest]),Ok(Command::Btrfs(_))));
-        assert!(cmd(&["check-btrfs-copy","/saved/volume","--sha256",&digest,"--force"]).is_err());
-        assert!(cmd(&["disk-web","--btrfs-copy","/saved/volume","--sha256",&digest,"--repair"]).is_err());
-        assert!(cmd(&["__btrfs-leased-v1",&digest,"/saved/second"]).is_err());
+    fn readonly_formats_bind_the_same_choice_in_cli_panel_and_fixed_worker() {
+        let digest = "35".repeat(32);
+        let cmd = |a: &[&str]| parse(a.iter().copied().map(OsString::from));
+        let cases = [
+            ("check-fat32-copy", "--fat32-copy", "__fat32-sealed-v1", CheckFormat::Sealed(Format::Fat32), "-a"),
+            ("check-exfat-copy", "--exfat-copy", "__exfat-sealed-v1", CheckFormat::Sealed(Format::Exfat), "-p"),
+            ("check-ext4-copy", "--ext4-copy", "__ext4-leased-v1", CheckFormat::Leased(LeasedFormat::Ext4), "-y"),
+            ("check-xfs-copy", "--xfs-copy", "__xfs-leased-v1", CheckFormat::Leased(LeasedFormat::Xfs), "-L"),
+            ("check-ntfs-copy", "--ntfs-copy", "__ntfs-leased-v1", CheckFormat::Leased(LeasedFormat::Ntfs), "-d"),
+            ("check-btrfs-copy", "--btrfs-copy", "__btrfs-leased-v1", CheckFormat::Leased(LeasedFormat::Btrfs), "--repair"),
+        ];
+        for (cli, web, worker, format, forbidden) in cases {
+            assert!(matches!(cmd(&[cli, "/saved/volume", "--sha256", &digest]),
+                Ok(Command::CopyCheck(r)) if r.format() == format));
+            assert!(matches!(cmd(&["disk-web", web, "/saved/volume", "--sha256", &digest]),
+                Ok(Command::DiskWeb(Some(r))) if r.format() == format));
+            match cmd(&[worker, &digest]).unwrap() {
+                Command::SealedWorker(kind, bound) => {
+                    assert_eq!(format, CheckFormat::Sealed(kind));
+                    assert_eq!(bound, [0x35; 32]);
+                }
+                Command::LeasedPanelWorker(kind, bound) => {
+                    assert_eq!(format, CheckFormat::Leased(kind));
+                    assert_eq!(bound, [0x35; 32]);
+                }
+                other => panic!("not the selected diagnostic worker: {other:?}"),
+            }
+            assert!(cmd(&[cli, "relative", "--sha256", &digest]).is_err());
+            assert!(cmd(&[cli, "/saved/volume", "--sha256", &digest, forbidden]).is_err());
+            assert!(cmd(&["disk-web", web, "relative", "--sha256", &digest]).is_err());
+            assert!(cmd(&["disk-web", web, "/saved/volume", "--sha256", &digest, forbidden]).is_err());
+            assert!(cmd(&["disk-web", web, "/saved/volume", "--sha256", &digest, "--fat32-copy"]).is_err());
+            assert!(cmd(&[worker, "/saved/volume", &digest]).is_err());
+            assert!(cmd(&[worker, &digest, forbidden]).is_err());
+        }
+        assert!(cmd(&["check-zfs-copy", "/saved/volume", "--sha256", &digest]).is_err());
+        assert!(cmd(&["disk-web", "--zfs-copy", "/saved/volume", "--sha256", &digest]).is_err());
+        assert!(cmd(&["disk-web", "--repair-ext4-copy", "/saved/volume", "--sha256", &digest]).is_err());
+        assert!(cmd(&["__ext4-sealed-v1", &digest]).is_err());
+        assert!(cmd(&["__fat32-leased-v1", &digest]).is_err());
+        assert!(cmd(&["__ext4-leased-v1", &digest, "--journal"]).is_err());
+        assert!(cmd(&["check-btrfs-copy", "/saved/volume", "--sha256", &digest, "--force"]).is_err());
+    }
+
+    #[test]
+    fn readonly_argv_keeps_raw_absolute_paths_but_never_accepts_non_text_options_or_digests() {
+        use std::os::unix::ffi::OsStringExt;
+        let raw_image = OsString::from_vec(b"/saved/\xff".to_vec());
+        let digest = OsString::from("35".repeat(32));
+        let sha = OsString::from("--sha256");
+        assert!(matches!(parse(["check-ext4-copy".into(), raw_image.clone(), sha.clone(), digest.clone()]),
+            Ok(Command::CopyCheck(r)) if r.format() == CheckFormat::Leased(LeasedFormat::Ext4)));
+        assert!(matches!(parse(["disk-web".into(), "--ext4-copy".into(), raw_image, sha, digest.clone()]),
+            Ok(Command::DiskWeb(Some(r))) if r.format() == CheckFormat::Leased(LeasedFormat::Ext4)));
+        let bad_option = OsString::from_vec(b"--ext4-copy\xff".to_vec());
+        assert!(parse(["disk-web".into(), bad_option, "/saved/volume".into(), "--sha256".into(), digest]).is_err());
+        let mut nontext = vec![b'0'; 64];
+        nontext[12] = 0xff;
+        assert!(parse(["__ext4-leased-v1".into(), OsString::from_vec(nontext)]).is_err());
     }
 }

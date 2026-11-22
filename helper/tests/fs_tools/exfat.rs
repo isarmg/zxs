@@ -46,14 +46,16 @@ fn version_transcript_exit_counters_and_observed_flags_are_independent(){
 }
 #[test]
 fn exfat_web_requires_its_own_explicit_terminal_preselection_with_no_path_from_http_or_repair(){
+    use crate::{Command,fat32_check::{CheckFormat,Format}};
     let h="ab".repeat(32);
     let parse=|a:&[&str]|crate::parse(a.iter().map(|s|std::ffi::OsString::from(*s)));
-    assert!(matches!(parse(&["check-exfat-copy","/saved/volume.img","--sha256",&h]),Ok(crate::Command::Exfat(_))));
-    assert!(matches!(parse(&["disk-web"]),Ok(crate::Command::DiskWeb(None))));
+    assert!(matches!(parse(&["check-exfat-copy","/saved/volume.img","--sha256",&h]),
+        Ok(Command::CopyCheck(r)) if r.format() == CheckFormat::Sealed(Format::Exfat)));
+    assert!(matches!(parse(&["disk-web"]),Ok(Command::DiskWeb(None))));
     assert!(matches!(parse(&["disk-web","--exfat-copy","/saved/volume.img","--sha256",&h]),
-        Ok(crate::Command::DiskWeb(Some(crate::fat32_check::panel::Job::Sealed(crate::fat32_check::Format::Exfat,_))))));
+        Ok(Command::DiskWeb(Some(r))) if r.format() == CheckFormat::Sealed(Format::Exfat)));
     assert!(matches!(parse(&["disk-web","--fat32-copy","/saved/volume.img","--sha256",&h]),
-        Ok(crate::Command::DiskWeb(Some(crate::fat32_check::panel::Job::Sealed(crate::fat32_check::Format::Fat32,_))))));
+        Ok(Command::DiskWeb(Some(r))) if r.format() == CheckFormat::Sealed(Format::Fat32)));
     for bad in [&["check-exfat-copy","/saved/volume.img","-p"][..],
         &["check-exfat-copy","/saved/volume.img","--sha256",&h,"--repair"],
         &["check-exfat-copy","relative.img","--sha256",&h],

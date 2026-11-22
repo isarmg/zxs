@@ -132,25 +132,45 @@ fn prepare_checker_exec(cmd:&mut Command,original:&File,cpu:Option<libc::rlim_t>
     pinned_exec(cmd,original,args,None,cpu)
 }
 
-/// No string from a request can become a subcommand or a program name.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum CopyFormat{Fat32,Exfat}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum LeasedFormat{Ext4,Xfs,Ntfs,Btrfs}
-/// Spawn only the copy checker present in the same protected installation as the
-/// calling panel. The only argument is the digest of the *already sealed* stdin.
-pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CopyFormat,digest:&[u8;32])->io::Result<()>{
-    let action=match format{CopyFormat::Fat32=>"__fat32-sealed-v1",CopyFormat::Exfat=>"__exfat-sealed-v1"};
-    prepare_fixed_panel_exec(cmd,original,action,digest)
+
+/// A readonly checker choice, with its required operand family. No format
+/// string from the caller becomes a subcommand or a program name.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum CheckFormat {
+    Sealed(CopyFormat),
+    Leased(LeasedFormat),
 }
 
-/// stdin is the selected saved volume's new readonly
-/// description, not a sealed copy. Only this particular worker can lease it.
-pub fn prepare_leased_panel_exec(cmd:&mut Command,original:&File,format:LeasedFormat,digest:&[u8;32])->io::Result<()>{
-    let action=match format{LeasedFormat::Ext4=>"__ext4-leased-v1",LeasedFormat::Xfs=>"__xfs-leased-v1",LeasedFormat::Ntfs=>"__ntfs-leased-v1",LeasedFormat::Btrfs=>"__btrfs-leased-v1"};
-    prepare_fixed_panel_exec(cmd,original,action,digest)
+// One private argv vocabulary for the child selector and the exec producer.
+const PANEL_WORKERS: [(CheckFormat, &str); 6] = [
+    (CheckFormat::Sealed(CopyFormat::Fat32), "__fat32-sealed-v1"),
+    (CheckFormat::Sealed(CopyFormat::Exfat), "__exfat-sealed-v1"),
+    (CheckFormat::Leased(LeasedFormat::Ext4), "__ext4-leased-v1"),
+    (CheckFormat::Leased(LeasedFormat::Xfs), "__xfs-leased-v1"),
+    (CheckFormat::Leased(LeasedFormat::Ntfs), "__ntfs-leased-v1"),
+    (CheckFormat::Leased(LeasedFormat::Btrfs), "__btrfs-leased-v1"),
+];
+
+impl CheckFormat {
+    pub fn from_worker_argument(argument: &std::ffi::OsStr) -> Option<Self> {
+        PANEL_WORKERS.into_iter().find_map(|(format, fixed)| (argument == fixed).then_some(format))
+    }
+
+    fn worker_argument(self) -> io::Result<&'static str> {
+        PANEL_WORKERS.into_iter().find_map(|(format, fixed)| (self == format).then_some(fixed))
+            .ok_or_else(|| io::Error::other("no fixed panel worker for this checker"))
+    }
 }
-fn prepare_fixed_panel_exec(cmd:&mut Command,original:&File,action:&'static str,digest:&[u8;32])->io::Result<()>{
+
+/// Prepare only the fixed checker entry of the same protected Helper. Its stdin
+/// must be the already sealed copy or the selected volume's new readonly
+/// description (only the worker can lease it), according to `format`.
+pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CheckFormat,digest:&[u8;32])->io::Result<()>{
+    let action = format.worker_argument()?;
     use std::fmt::Write;
     let mut hex=String::with_capacity(64);for byte in digest{write!(&mut hex,"{byte:02x}").expect("String formatting");}
     let args=vec![CString::new("helper").expect("literal"),CString::new(action).expect("literal"),
@@ -309,6 +329,23 @@ fn group_filter(threads:bool,xfs:bool)->Vec<u8>{
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fixed_panel_worker_arguments_are_unique_and_round_trip() {
+        use CheckFormat::{Leased, Sealed};
+        use std::ffi::OsStr;
+        let kinds = [
+            Sealed(CopyFormat::Fat32), Sealed(CopyFormat::Exfat), Leased(LeasedFormat::Ext4),
+            Leased(LeasedFormat::Xfs), Leased(LeasedFormat::Ntfs), Leased(LeasedFormat::Btrfs),
+        ];
+        for kind in kinds {
+            let argument = kind.worker_argument().unwrap();
+            assert_eq!(CheckFormat::from_worker_argument(OsStr::new(argument)), Some(kind));
+        }
+        for invalid in ["__ext4-sealed-v1", "__fat32-leased-v1", "__ext4-leased-v1 ", "__copy-repair-browser-v2"] {
+            assert!(CheckFormat::from_worker_argument(OsStr::new(invalid)).is_none());
+        }
+    }
+
     // Independent interpreter restricted to the four emitted classic-BPF operations.
     fn decision_with_flags(p:&[u8],arch:u32,nr:u32,flags:u64)->u32{
         let (mut a,mut pc)=(0,0usize);
