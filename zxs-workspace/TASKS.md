@@ -1,6 +1,6 @@
 # ZIP Workspace 交付清单
 
-本轮实机验收只安排 Linux，尚未执行。下表列源码和待验项；此前的命令行与 ZIP64 验证见 [README](README.md#平台与发行状态)。其他平台保留独立待办。
+Linux 走独立本机验收；Windows、macOS 走[桌面 CI](docs/hosted-desktop-qualification.md)。下表列源码和待验项；既有验证见 [README](README.md#平台与发行状态)。
 
 | 工作流 | 当前状态 | 下一道验收 |
 | --- | --- | --- |

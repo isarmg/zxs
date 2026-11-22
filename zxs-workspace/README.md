@@ -276,6 +276,7 @@ Windows 的[只读虚拟盘数据面源码](winfsp/README.md)已连接原归档�
 
 ## 平台与发行状态
 
-- **本轮原生验收只安排 Linux。** 历史验证覆盖 Linux / Python 3.12 CLI 和 65,536 条目的 ZIP64；迁入本仓后未重测，单成员 4 GiB 未验。
+- **Linux 本机验收。** 历史验证覆盖 Linux / Python 3.12 CLI 和 65,536 条目的 ZIP64；迁入本仓后未重测，单成员 4 GiB 未验。
 - **待验：** Linux Qt、安装包、只读 FUSE 与真实 SMB。窗口仅在准入的本机 STORE 提交；SMB 可作只读来源，CLI 的共享发布和断线恢复尚未实测。
-- **其他平台源码：** macOS、Windows 有桌面入口，尚未实机验收。[Android 15+](android/README.md) 与 [iOS 16+](ios/README.md) 有独立只读预览、单项校验与显式整包核验源码。当前没有签名桌面/移动发行包或已发行的虚拟盘。
+- **Windows 与 macOS：** 走[桌面 CI 验收](docs/hosted-desktop-qualification.md)。
+- **移动端源码：** [Android 15+](android/README.md) 与 [iOS 16+](ios/README.md) 有独立只读预览、单项校验与显式整包核验源码。当前没有签名桌面/移动发行包或已发行的虚拟盘。
