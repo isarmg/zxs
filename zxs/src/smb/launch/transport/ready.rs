@@ -1,8 +1,9 @@
 //! Original control record and listener readiness; no supplied FD or
 //! network address can become an input to either operation.
 use super::{Fault,InheritedRun,MAX_LISTENERS,Result};
-use crate::{smb::connection::sessions::RunningServerGuid,system::reader::smb::runtime::QualifiedRustInstall};
-use std::{io::ErrorKind,os::fd::AsRawFd,sync::{Arc,atomic::Ordering},time::Instant};
+use crate::{smb::{connection::sessions::RunningServerGuid,readiness::{self,Interest,Watch}},
+    system::reader::smb::runtime::QualifiedRustInstall};
+use std::{io::ErrorKind,os::fd::{AsFd,AsRawFd},sync::{Arc,atomic::Ordering},time::Instant};
 
 impl InheritedRun {
     pub(in crate::smb::launch) fn publish_prepared(self:&Arc<Self>,selected:&QualifiedRustInstall,server:&RunningServerGuid,
@@ -25,12 +26,12 @@ impl InheritedRun {
                 ErrorKind::Interrupted=>continue,
                 ErrorKind::WouldBlock=>{
                     let left=self.until.saturating_duration_since(Instant::now());
-                    let mut p=libc::pollfd{fd,events:libc::POLLOUT,revents:0};
-                    let ms=left.as_millis().saturating_add(1).min(100) as libc::c_int;
-                    // SAFETY: one writable pollfd over the owned endpoint.
-                    let r=unsafe{libc::poll(&mut p,1,ms)};
-                    if (r<0&&std::io::Error::last_os_error().kind()!=ErrorKind::Interrupted)||
-                        p.revents&(libc::POLLNVAL|libc::POLLHUP|libc::POLLERR)!=0{return Err(Fault::Handoff);}
+                    let mut p=[Watch::new(self.supervisor.socket.as_fd(),Interest::Write)];
+                    let ms=left.as_millis().saturating_add(1).min(100) as i32;
+                    let result=readiness::wait(&mut p,ms);
+                    if result.is_err_and(|e|e.kind()!=ErrorKind::Interrupted)||p[0].events().broken(){
+                        return Err(Fault::Handoff);
+                    }
                 },
                 _=>return Err(Fault::Handoff),
             }
@@ -55,24 +56,24 @@ impl InheritedRun {
     pub(in crate::smb::launch) fn next_listener(&self,from:usize,admit:bool)->Result<Option<usize>>{
         if self.ready.load(Ordering::Acquire)!=2{return Err(Fault::Handoff);}
         let n=self.listeners.len();
-        let mut p:[libc::pollfd;MAX_LISTENERS+1]=std::array::from_fn(|_|libc::pollfd{fd:-1,events:0,revents:0});
-        p[0]=self.supervisor.parent.poll_fd();
+        let mut p:[Watch<'_>;MAX_LISTENERS+1]=std::array::from_fn(|_|Watch::vacant());
+        p[0]=self.supervisor.parent.poll_watch();
         if admit{
             for (dst,s) in p[1..].iter_mut().zip(&self.listeners){
-                *dst=libc::pollfd{fd:s.as_raw_fd(),events:libc::POLLIN,revents:0};
+                *dst=Watch::new(s.as_fd(),Interest::Read);
             }
         }
         let used=if admit{n+1}else{1};
-        // SAFETY: one bounded wait over borrowed originals. The poll only
-        // determines readiness, never an endpoint or permission.
-        let r=unsafe{libc::poll(p.as_mut_ptr(),used as libc::nfds_t,100)};
-        if r<0{
-            return if std::io::Error::last_os_error().kind()==ErrorKind::Interrupted{Ok(None)}else{Err(Fault::Handoff)};
-        }
-        if p[0].revents!=0||p[1..used].iter().any(|v|v.revents&(libc::POLLNVAL|libc::POLLHUP|libc::POLLERR)!=0){
+        // Readiness of borrowed originals is not an endpoint or permission.
+        let r=match readiness::wait(&mut p[..used],100){
+            Ok(r)=>r,
+            Err(e) if e.kind()==ErrorKind::Interrupted=>return Ok(None),
+            Err(_)=>return Err(Fault::Handoff),
+        };
+        if p[0].events().any()||p[1..used].iter().any(|v|v.events().broken()){
             return Err(Fault::Handoff);
         }
         if !admit||r==0{return Ok(None);}
-        Ok((0..n).map(|j|(from+j)%n).find(|&i|p[i+1].revents&libc::POLLIN!=0))
+        Ok((0..n).map(|j|(from+j)%n).find(|&i|p[i+1].events().readable()))
     }
 }

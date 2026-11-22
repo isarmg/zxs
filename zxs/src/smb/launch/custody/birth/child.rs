@@ -1,8 +1,8 @@
 //! The fixed, allocation-free post-clone branch. No caller-selected command,
 //! executable path, mountpoint, or environment is interpreted here.
 use super::Role;
-use crate::smb::launch::custody::view;
-use std::{mem::zeroed,ptr};
+use crate::smb::{launch::custody::view,readiness};
+use std::{mem::zeroed,os::fd::BorrowedFd,ptr};
 
 #[repr(C)]
 struct CapsHeader{version:u32,pid:i32}
@@ -25,11 +25,10 @@ static FILTER:[libc::sock_filter;17]=[
 ];
 const fn z()->libc::c_ulong{0}
 unsafe fn watch_parent(pidfd:i32)->bool{
-    let mut p=libc::pollfd{fd:pidfd,events:libc::POLLIN,revents:0};
     // SAFETY: only this fresh child's death signal and an exact, retained
     // parent descriptor. Poll closes the race with a prior parent exit.
     unsafe{libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL as libc::c_ulong,z(),z(),z())==0&&
-        libc::poll(&raw mut p,1,0)==0}
+        readiness::quiet_now(BorrowedFd::borrow_raw(pidfd))}
 }
 unsafe fn limits(uid:u32,gid:u32)->bool{
     // SAFETY: no other thread and no shared tasks. All syscalls are fixed

@@ -5,7 +5,7 @@ use super::{BootSocket,Control,Fault,KernelControl,MAX_RIGHTS,OriginalProcess,Re
     CONTROL_SIZE,cloexec,get_flags,inherit,initial_child,recv,sock,sock_int};
 use std::{
     fs::File,io::{self,Write},mem::{size_of_val,zeroed},net::{Ipv4Addr,SocketAddr,TcpListener},
-    os::fd::{AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{FileExt,MetadataExt},
+    os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{FileExt,MetadataExt},
     time::Instant,
 };
 const PUBLIC_MAX:usize=300*1024;
@@ -52,7 +52,7 @@ impl InheritedControl{
     fn receive<const N:usize>(self,until:Instant,minimum:usize)
         ->Result<(VerifiedControl,[u8;N],ReceivedOriginals)>{
         if N!=START_BYTES{return Err(Fault::Handoff);}
-        let fd=self.original.socket.as_raw_fd();
+        let fd=self.original.socket.as_fd();
         let mut packet=[0;N];
         let (n,mut control)=recv(fd,&mut packet,until)?;
         // Ancestor UID/GID must be real kernel root in the initial user
@@ -236,7 +236,7 @@ pub(in crate::smb::launch) fn offer_packet(socket:&BootSocket,frame:&[u8;START_B
 #[allow(dead_code)]
 pub(in crate::smb::launch) fn child_receipt(socket:&BootSocket,original:&OriginalProcess,
     subject:(u32,u32),sealed:bool,until:Instant)->Result<([u8;START_BYTES],Option<File>)>{
-    let fd=socket.as_raw_fd();
+    let fd=socket.as_fd();
     let mut frame=[0;START_BYTES];
     let (n,mut c)=recv(fd,&mut frame,until)?;
     if n!=START_BYTES||c.bad||c.nrights!=sealed as usize||c.seen_rights!=sealed||

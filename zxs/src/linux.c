@@ -319,6 +319,34 @@ int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_
 #include <stddef.h>
 
 #include <poll.h>
+
+struct readiness_slot { int fd; uint8_t interest, observed; };
+enum {
+    WATCH_READ=1, WATCH_WRITE=2, WATCH_PEER_END=4, WATCH_ERROR=8,
+    WATCH_HANG=16, WATCH_INVALID=32, WATCH_OTHER=64,
+    MAX_READINESS_SLOTS=17 /* 16 listeners and their original supervisor. */
+};
+int wait_descriptor_readiness(struct readiness_slot *w,size_t count,int ms) {
+    struct pollfd kernel[MAX_READINESS_SLOTS];
+    if (count==0 || count>MAX_READINESS_SLOTS) { errno=EINVAL; return -1; }
+    for (size_t i=0;i<count;i++) {
+        unsigned int want=w[i].interest;
+        kernel[i]=(struct pollfd){.fd=w[i].fd,
+            .events=((want&WATCH_READ)?POLLIN:0) | ((want&WATCH_WRITE)?POLLOUT:0) |
+                    ((want&WATCH_PEER_END)?POLLRDHUP:0), .revents=0};
+    }
+    int rc=poll(kernel,count,ms);
+    for (size_t i=0;i<count;i++) {
+        // Preserve partial results even on EINTR, including other native events.
+        unsigned int seen=(unsigned short)kernel[i].revents;
+        w[i].observed=((seen&POLLIN)?WATCH_READ:0) | ((seen&POLLOUT)?WATCH_WRITE:0) |
+            ((seen&POLLRDHUP)?WATCH_PEER_END:0) | ((seen&POLLERR)?WATCH_ERROR:0) |
+            ((seen&POLLHUP)?WATCH_HANG:0) | ((seen&POLLNVAL)?WATCH_INVALID:0) |
+            ((seen&~(unsigned int)(POLLIN|POLLOUT|POLLRDHUP|POLLERR|POLLHUP|POLLNVAL))?WATCH_OTHER:0);
+    }
+    return rc;
+}
+
 int zxs_web_readable(int fd) {
     struct pollfd p = { .fd = fd, .events = POLLIN };
     int result = poll(&p,1,500);

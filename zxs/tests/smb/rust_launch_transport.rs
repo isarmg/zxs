@@ -1,7 +1,7 @@
 //! Anonymous synthetic fixture FDs, public bytes, no 445/network, vault,
 //! low-privilege launch, or process state changes.
 use super::*;
-use std::io::Write;
+use std::{io::Write,os::fd::AsFd};
 
 fn public(bytes:&[u8],seals:libc::c_int)->File{
     // SAFETY: fixed C name and known process-local allocation flags.
@@ -62,19 +62,19 @@ fn kernel_supplies_rights_and_pidfd_and_true_eof_has_no_control(){
     // SAFETY: half-close the fixture, not an application stream.
     assert_eq!(unsafe{libc::shutdown(a.as_raw_fd(),libc::SHUT_WR)},0);
     let until=Instant::now()+WAIT;
-    let (n,mut c)=recv(b.as_raw_fd(),&mut [0;START_BYTES],until).unwrap();
+    let (n,mut c)=recv(b.as_fd(),&mut [0;START_BYTES],until).unwrap();
     assert_eq!(n,START_BYTES);assert!(!c.bad);assert_eq!(c.nrights,1);
     // SAFETY: local fixture credentials.
     assert_eq!(c.credentials,Some(unsafe{(libc::getpid(),libc::getuid(),libc::getgid())}));
     let pid=File::from(c.pidfd.take().unwrap());assert!(OriginalProcess::pin(pid).is_ok());
     let imported=File::from(c.rights[0].take().unwrap());
     assert_eq!(imported.metadata().unwrap().ino(),dummy.metadata().unwrap().ino());cloexec(imported.as_raw_fd()).unwrap();
-    let (n,end)=recv(b.as_raw_fd(),&mut [0;1],until).unwrap();assert_eq!(n,0);assert!(end.empty());
+    let (n,end)=recv(b.as_fd(),&mut [0;1],until).unwrap();assert_eq!(n,0);assert!(end.empty());
 }
 #[test]
 fn extra_truncated_packet_is_denied_and_still_owns_received_fds(){
     let (a,b)=local_pair();let dummy=public(b"not a vault",SEALS);send(&a,&dummy,&[3,4]);
-    let (_,c)=recv(b.as_raw_fd(),&mut [0;1],Instant::now()+WAIT).unwrap();
+    let (_,c)=recv(b.as_fd(),&mut [0;1],Instant::now()+WAIT).unwrap();
     assert!(c.bad);assert!(!c.empty());assert!(c.rights[0].is_some());
 }
 
@@ -89,10 +89,10 @@ fn the_prepared_pair_reports_the_actual_original_pidfd_on_both_ends(){
         // SAFETY: half-close just this end of the fixture, once.
         assert_eq!(unsafe{libc::shutdown(from.as_raw_fd(),libc::SHUT_WR)},0);
         let until=Instant::now()+WAIT;
-        let (n,mut packet)=recv(to.as_raw_fd(),&mut [0;START_BYTES],until).unwrap();
+        let (n,mut packet)=recv(to.as_fd(),&mut [0;START_BYTES],until).unwrap();
         assert_eq!(n,START_BYTES);assert!(!packet.bad);assert_eq!(packet.nrights,1);
         original.same_sender(File::from(packet.pidfd.take().unwrap())).unwrap();
-        let (n,eof)=recv(to.as_raw_fd(),&mut [0;1],until).unwrap();
+        let (n,eof)=recv(to.as_fd(),&mut [0;1],until).unwrap();
         assert_eq!(n,0);assert!(eof.empty());
     }
     assert_eq!(original.same_sender(dummy),Err(Fault::Handoff));

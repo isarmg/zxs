@@ -1,7 +1,8 @@
 //! Incremental input only while the original peer owns a parked request.
 //! Never use a second reader, a duplicated fd, or change the stream's mode.
 use super::{DirectStream,Fault,Frame,Result,deadline,remaining};
-use std::{io::{self,ErrorKind},net::TcpStream,os::fd::{AsRawFd,BorrowedFd},sync::{Arc,Weak},time::{Duration,Instant}};
+use crate::smb::readiness::{self,Events,Interest,Watch};
+use std::{io::{self,ErrorKind},net::TcpStream,os::fd::{AsFd,AsRawFd,BorrowedFd},sync::{Arc,Weak},time::{Duration,Instant}};
 
 const STEP_BYTES:usize=16*1024;
 const WORK_TICK:Duration=Duration::from_millis(32);
@@ -68,24 +69,20 @@ impl PendingRead{
         ->Result<()>{
         if crate::smb::launch::stopping(){return Err(Fault::Closed);}
         let fd=match stream{
-            DirectStream::Tcp(s)=>s.0.as_raw_fd(),
+            DirectStream::Tcp(s)=>s.0.as_fd(),
             #[cfg(test)]
             DirectStream::Fixture(_)=>return Err(Fault::Transport),
         };
         let left=if let Some(end)=self.end{remaining(end)?.min(WORK_TICK)}else{WORK_TICK};
-        let mut p=[
-            libc::pollfd{fd,events:libc::POLLIN|libc::POLLRDHUP,revents:0},
-            libc::pollfd{fd:completion.as_raw_fd(),events:libc::POLLIN,revents:0},
-        ];
-        // SAFETY: both borrowed descriptors outlive the fixed initialized
-        // array; floor the absolute remaining duration to at most 32ms.
-        let ready=unsafe{libc::poll(p.as_mut_ptr(),2,left.as_millis() as libc::c_int)};
+        let mut p=[Watch::new(fd,Interest::Input),Watch::new(completion,Interest::Read)];
+        // Floor the original remaining duration to at most 32ms.
+        let ready=readiness::wait(&mut p,left.as_millis() as i32);
         if crate::smb::launch::stopping(){return Err(Fault::Closed);}
-        if ready<0{
-            return if io::Error::last_os_error().kind()==ErrorKind::Interrupted{Ok(())}else{Err(Fault::Transport)};
+        if let Err(e)=ready{
+            return if e.kind()==ErrorKind::Interrupted{Ok(())}else{Err(Fault::Transport)};
         }
-        pending_events(p[0].revents)?;
-        if p[1].revents&(libc::POLLERR|libc::POLLHUP|libc::POLLNVAL)!=0{return Err(Fault::WriteOutcomeUnknown);}
+        pending_events(p[0].events())?;
+        if p[1].events().broken(){return Err(Fault::WriteOutcomeUnknown);}
         Ok(())
     }
 }
@@ -102,15 +99,13 @@ impl OriginalPeerProbe{
     }
 }
 fn observe_peer(socket:&TcpStream)->Result<()>{
-    let mut p=libc::pollfd{fd:socket.as_raw_fd(),events:libc::POLLRDHUP,revents:0};
-    // SAFETY: the socket retains ownership of this fd for the whole
-    // syscall. One initialized pollfd, zero wait, and no retry.
-    if unsafe{libc::poll(&mut p,1,0)}<0{return Err(Fault::Transport);}
-    pending_events(p.revents)
+    let mut p=[Watch::new(socket.as_fd(),Interest::PeerEnd)];
+    readiness::wait(&mut p,0).map_err(|_|Fault::Transport)?;
+    pending_events(p[0].events())
 }
-fn pending_events(events:libc::c_short)->Result<()>{
-    if events&(libc::POLLERR|libc::POLLNVAL)!=0{return Err(Fault::Transport);}
-    if events&(libc::POLLRDHUP|libc::POLLHUP)!=0{return Err(Fault::Closed);}
+fn pending_events(events:Events)->Result<()>{
+    if events.invalid_or_error(){return Err(Fault::Transport);}
+    if events.peer_end(){return Err(Fault::Closed);}
     Ok(())
 }
 impl DirectStream{

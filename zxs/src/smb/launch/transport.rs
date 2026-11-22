@@ -9,9 +9,10 @@ pub(in crate::smb) use accept::OwnedAccepted;
 pub(super) use handshake::{InheritedControl,child_receipt,offer_packet,read_sealed,seal_public};
 use super::{Fault,Result,envelope::{ENV_MAX,Envelope,MAX_LISTENERS,START_BYTES,Start,VaultStamp},
     kernel::{BootSocket,OriginalProcess,cloexec,fs_magic,get_flags,sock,sock_int}};
+use crate::smb::readiness::{self,Interest,Watch};
 use std::{
     fs::{File,OpenOptions},io,mem::{size_of,zeroed},net::{IpAddr,SocketAddr,TcpListener},
-    os::fd::{AsRawFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{MetadataExt,OpenOptionsExt},
+    os::fd::{AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{MetadataExt,OpenOptionsExt},
     path::Path,sync::{Mutex,atomic::AtomicU8},time::{Duration,Instant},
 };
 
@@ -230,15 +231,16 @@ impl Control {
         s
     }
 }
-fn recv(fd:RawFd,buf:&mut [u8],end:Instant)->Result<(usize,Control)>{
+fn recv(fd:BorrowedFd<'_>,buf:&mut [u8],end:Instant)->Result<(usize,Control)>{
     loop{
         let left=end.saturating_duration_since(Instant::now());if left.is_zero(){return Err(Fault::Handoff);}
-        let mut w=libc::pollfd{fd,events:libc::POLLIN|libc::POLLRDHUP,revents:0};
-        let ms=left.as_millis().saturating_add(1).min(libc::c_int::MAX as u128) as libc::c_int;
-        // SAFETY: the writable, single pollfd is live for a bounded wait.
-        let ready=unsafe{libc::poll(&mut w,1,ms)};
-        if ready<0&&io::Error::last_os_error().kind()==io::ErrorKind::Interrupted{continue;}
-        if ready<=0||w.revents&(libc::POLLERR|libc::POLLNVAL)!=0{return Err(Fault::Handoff);}
+        let mut w=[Watch::new(fd,Interest::Input)];
+        let ms=left.as_millis().saturating_add(1).min(i32::MAX as u128) as i32;
+        match readiness::wait(&mut w,ms){
+            Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,
+            Ok(n) if n>0&&!w[0].events().invalid_or_error()=>(),
+            _=>return Err(Fault::Handoff),
+        }
         let mut c=KernelControl{_align:[],bytes:[0;CONTROL_SIZE]};
         let mut io=libc::iovec{iov_base:buf.as_mut_ptr().cast(),iov_len:buf.len()};
         // SAFETY: initialize the C header and specify live bounded spans.
@@ -246,7 +248,7 @@ fn recv(fd:RawFd,buf:&mut [u8],end:Instant)->Result<(usize,Control)>{
         m.msg_control=c.bytes.as_mut_ptr().cast();m.msg_controllen=CONTROL_SIZE as _;
         m.msg_iov=&mut io;m.msg_iovlen=1;
         // SAFETY: the character and aligned control spans live across this receive.
-        let n=unsafe{libc::recvmsg(fd,&mut m,libc::MSG_CMSG_CLOEXEC|libc::MSG_DONTWAIT)};
+        let n=unsafe{libc::recvmsg(fd.as_raw_fd(),&mut m,libc::MSG_CMSG_CLOEXEC|libc::MSG_DONTWAIT)};
         if n<0{
             if matches!(io::Error::last_os_error().kind(),io::ErrorKind::Interrupted|io::ErrorKind::WouldBlock){continue;}
             return Err(Fault::Handoff);

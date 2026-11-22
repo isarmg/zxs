@@ -37,16 +37,15 @@ fn uncertain_existing_disk_state_is_not_a_cancellation_result(){
 }
 #[test]
 fn private_completion_hint_is_drained_between_reports(){
+    use crate::smb::readiness::{self,Interest,Watch};
     let (wake,post)=CompletionWake::pair().unwrap();
-    let mut ready=libc::pollfd{fd:wake.0.as_raw_fd(),events:libc::POLLIN,revents:0};
-    // SAFETY: the owned anonymous counter outlives these two zero
-    // waits, which never depend on a TCP connection.
-    assert_eq!(unsafe{libc::poll(&mut ready,1,0)},0);
+    let mut ready=[Watch::new(wake.0.as_fd(),Interest::Read)];
+    assert_eq!(readiness::wait(&mut ready,0).unwrap(),0);
     post.notify();
-    assert_eq!(unsafe{libc::poll(&mut ready,1,0)},1);
-    assert_ne!(ready.revents&libc::POLLIN,0);
+    assert_eq!(readiness::wait(&mut ready,0).unwrap(),1);
+    assert!(ready[0].events().readable());
     wake.clear();
-    assert_eq!(unsafe{libc::poll(&mut ready,1,0)},0);
+    assert_eq!(readiness::wait(&mut ready,0).unwrap(),0);
     post.notify();
-    assert_eq!(unsafe{libc::poll(&mut ready,1,0)},1);
+    assert_eq!(readiness::wait(&mut ready,0).unwrap(),1);
 }

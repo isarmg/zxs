@@ -2,9 +2,10 @@
 //! proposed same-ELF parent. Neither a pidfd nor a channel grants a site,
 //! a credential generation, or permission to listen.
 use super::{Fault,Result};
+use crate::smb::readiness::{self,Interest,Watch};
 use std::{
     fs::File,mem::{size_of,zeroed},
-    os::fd::{AsRawFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::MetadataExt,
+    os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::MetadataExt,
 };
 
 const PID_FS_MAGIC:libc::c_long=0x50494446; // Linux v6.12 include/uapi/linux/magic.h
@@ -23,13 +24,9 @@ impl OriginalProcess{
         if sent.identity!=self.identity{return Err(Fault::Handoff);}
         Ok(())
     }
-    pub(super) fn poll_fd(&self)->libc::pollfd{
-        libc::pollfd{fd:self.file.as_raw_fd(),events:libc::POLLIN,revents:0}
-    }
+    pub(super) fn poll_watch(&self)->Watch<'_>{Watch::new(self.file.as_fd(),Interest::Read)}
     pub(super) fn require_live(&self)->Result<()>{
-        let mut wait=self.poll_fd();
-        // SAFETY: a single initialized poll record holding this live FD.
-        if unsafe{libc::poll(&mut wait,1,0)}==0{Ok(())}else{Err(Fault::Handoff)}
+        if readiness::quiet_now(self.file.as_fd()){Ok(())}else{Err(Fault::Handoff)}
     }
     #[cfg(target_arch="x86_64")]
     #[allow(dead_code)] // used only by the disabled high-side preparation
@@ -67,9 +64,8 @@ impl BootSocket{
 impl AsRawFd for BootSocket{
     fn as_raw_fd(&self)->RawFd{self.0.as_raw_fd()}
 }
-#[cfg(target_arch="x86_64")]
-impl std::os::fd::AsFd for BootSocket{
-    fn as_fd(&self)->std::os::fd::BorrowedFd<'_>{std::os::fd::AsFd::as_fd(&self.0)}
+impl AsFd for BootSocket{
+    fn as_fd(&self)->BorrowedFd<'_>{self.0.as_fd()}
 }
 
 // The parent may create this pair, but the already-attested exact scoped

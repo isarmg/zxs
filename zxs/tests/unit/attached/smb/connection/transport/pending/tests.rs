@@ -4,12 +4,12 @@ fn original_peer_probe_does_not_guess_on_missing_owner_or_loss(){
     let fixture=DirectStream::Fixture(Box::new(io::Cursor::new(Vec::<u8>::new())));
     assert!(matches!(fixture.original_peer_probe(),Err(Fault::Transport)));
     assert_eq!(OriginalPeerProbe(Weak::new()).observe(),Err(Fault::Closed));
-    assert_eq!(pending_events(0),Ok(()));
-    assert_eq!(pending_events(libc::POLLIN),Ok(()));
-    assert_eq!(pending_events(libc::POLLIN|libc::POLLRDHUP),Err(Fault::Closed));
-    assert_eq!(pending_events(libc::POLLHUP),Err(Fault::Closed));
-    assert_eq!(pending_events(libc::POLLERR|libc::POLLRDHUP),Err(Fault::Transport));
-    assert_eq!(pending_events(libc::POLLNVAL),Err(Fault::Transport));
+    assert_eq!(pending_events(Events::NONE),Ok(()));
+    assert_eq!(pending_events(Events::READABLE),Ok(()));
+    assert_eq!(pending_events(Events::READABLE.with(Events::REMOTE_END)),Err(Fault::Closed));
+    assert_eq!(pending_events(Events::HUNG_UP),Err(Fault::Closed));
+    assert_eq!(pending_events(Events::KERNEL_ERROR.with(Events::REMOTE_END)),Err(Fault::Transport));
+    assert_eq!(pending_events(Events::UNAVAILABLE),Err(Fault::Transport));
 }
 #[test]
 fn resuming_keeps_the_partial_record_and_original_deadline(){
