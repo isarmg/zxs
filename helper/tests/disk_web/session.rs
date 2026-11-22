@@ -58,11 +58,11 @@ fn a_fresh_correct_pair_makes_one_session_and_only_both_new_secrets_can_close_it
 #[test]
 fn pairing_requires_a_supported_terminal_and_the_callers_actual_foreground_session(){
     use rustix::fs::makedev;
-    assert!(supported_terminal(0o020620,makedev(136,4),0x1cd1));
-    assert!(supported_terminal(0o020620,makedev(4,1),0));
-    assert!(supported_terminal(0o020666,makedev(5,0),0));
-    for (mode,dev,fs) in [(0o020666,makedev(5,2),0x1cd1),
-        (0o100600,makedev(136,4),0x1cd1),(0o020620,makedev(136,4),0),(0o010600,0,0)] {
+    assert!(supported_terminal(0o020_620,makedev(136,4),0x1cd1));
+    assert!(supported_terminal(0o020_620,makedev(4,1),0));
+    assert!(supported_terminal(0o020_666,makedev(5,0),0));
+    for (mode,dev,fs) in [(0o020_666,makedev(5,2),0x1cd1),
+        (0o100_600,makedev(136,4),0x1cd1),(0o020_620,makedev(136,4),0),(0o010_600,0,0)] {
         assert!(!supported_terminal(mode,dev,fs));
     }
     assert!(foreground(31,31,47,47));

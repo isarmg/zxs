@@ -16,7 +16,7 @@ fn set(sb:&mut [u8;SUPER_LEN],off:usize,value:u32){sb[off..off+4].copy_from_slic
 #[test]
 fn accepts_an_ext_extent_larger_than_a_fat_memfd_and_never_a_truncated_filesystem(){
     let sb=base();
-    assert_eq!(frame(&sb,512<<20).unwrap().blocks,131072);
+    assert_eq!(frame(&sb,512<<20).unwrap().blocks,131_072);
     let longer=frame(&sb,(512<<20)+2048).unwrap();
     assert_eq!(longer.filesystem_bytes,512<<20);
     assert_eq!(longer.bytes,(512<<20)+2048); // trailing bytes aren't inspected as ext

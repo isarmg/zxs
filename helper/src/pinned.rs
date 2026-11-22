@@ -56,9 +56,9 @@ fn dir_flags() -> OFlags {
     OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
 }
 
-/// Refuse a passive O_PATH pin before using it for another path component.
+/// Refuse a passive `O_PATH` pin before using it for another path component.
 /// Linux can return an untriggered autofs FD for the last component of a
-/// bare O_PATH lookup; going through it, or using DIRECTORY in the lookup,
+/// bare `O_PATH` lookup; going through it, or using DIRECTORY in the lookup,
 /// could trigger the mount. Ordinary previous callers keep their flags.
 pub(crate) fn require_no_automount(fd:&File)->io::Result<()>{
     const AUTOFS_SUPER_MAGIC:u64=0x0187; // Linux UAPI <linux/magic.h>
@@ -253,7 +253,7 @@ impl Pinned {
         self.same_admitted_chain(admit,|f,i|visit(f,i))
     }
     /// A fresh kernel admission can also revalidate a pre-existing original
-    /// O_PATH for additional read-only policy, without replacing its identity
+    /// `O_PATH` for additional read-only policy, without replacing its identity
     /// or borrowing its lock. It must match every originally selected hop.
     pub(crate) fn same_admitted_chain(&self,admit:&dyn DiscoveryAdmission,mut visit:impl FnMut(&File,usize)->io::Result<()>)->io::Result<Mount>{
         let original=admit.admit(&self.fd)?;
@@ -312,7 +312,7 @@ impl Pinned {
         Ok(())
     }
 
-    /// Rewalk using O_PATH and require the original leaf mount as well as all
+    /// Rewalk using `O_PATH` and require the original leaf mount as well as all
     /// visible entities. A bind of the same inode is not the original mount.
     /// The newly named FD is evidence only; keep using the first held FD.
     pub(crate) fn require_same_named_mount(&self) -> io::Result<Mount> {
@@ -420,7 +420,7 @@ pub(crate) fn public_record_reader(pin:&File,mount:u64,length:u64)->io::Result<F
     reopen_admitted_reader(pin,Entity::of(&m)?,ReaderBoundary::PublicRecordMount(mount))
 }
 
-/// Upgrade an original O_PATH private regular inode only; never use its mutable pathname.
+/// Upgrade an original `O_PATH` private regular inode only; never use its mutable pathname.
 /// The caller must independently recheck the original name, held birth, protocol and lock.
 pub(crate) fn private_inode_reader(pin: &File, uid: u32, expected_mount: u64) -> io::Result<File> {
     let m = pin.metadata()?;

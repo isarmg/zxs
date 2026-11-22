@@ -11,7 +11,7 @@ impl Stamp{
         mode:m.mode(),uid:m.uid(),links:m.nlink(),len:m.len(),
         mtime:(m.mtime(),m.mtime_nsec()),ctime:(m.ctime(),m.ctime_nsec())})}
     pub(super) fn at(&self,parent:&Stamp,length:u64,mode:u32,uid:u32)->bool{
-        self.mode==(0o100000|mode)&&self.uid==uid&&self.links==1&&self.len==length
+        self.mode==(0o100_000|mode)&&self.uid==uid&&self.links==1&&self.len==length
             &&self.mount==parent.mount&&self.entity.dev==parent.entity.dev&&self.entity!=parent.entity
     }
 }

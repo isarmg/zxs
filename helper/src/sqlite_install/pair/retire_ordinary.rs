@@ -120,7 +120,7 @@ struct Identity{entry:Entity,mount:Mount,backing:u64,times:[i64;4],length:u64}
 fn actual(pin:&Pinned,f:&File,host:&File,uid:u32,expected_limit:u8)->io::Result<Identity>{
     let m=f.metadata()?;let entry=Entity::of(&m)?;
     let mount=Mount::on(f)?.ok_or_else(unknown)?;
-    if m.mode()!=0o040700||m.uid()!=uid||m.nlink()==0||pin.entity()!=entry||pin.require_same_named_mount()?!=mount
+    if m.mode()!=0o040_700||m.uid()!=uid||m.nlink()==0||pin.entity()!=entry||pin.require_same_named_mount()?!=mount
         ||helper_linux_evidence::portable_component_limit(f)?!=expected_limit{return Err(unknown());}
     let backing=named_backing(pin,f,&HostMounts::current()?,host,uid)?;
     Ok(Identity{entry,mount,backing,length:m.len(),times:[m.mtime(),m.mtime_nsec(),m.ctime(),m.ctime_nsec()]})

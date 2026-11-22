@@ -1,4 +1,4 @@
-//! Offline XFS image admission and classification of actual xfs_repair output.
+//! Offline XFS image admission and classification of actual `xfs_repair` output.
 //! The native tool, not this envelope reader, checks the filesystem structures.
 use super::leased;
 use crate::pinned::invalid;

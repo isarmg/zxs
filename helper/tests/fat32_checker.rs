@@ -1,5 +1,5 @@
 //! Future acceptance: requires the dedicated non-root worker, an administrator-verified
-//! fixed checker profile, permitted user namespaces, and HELPER_TEST_DATA_PARENT.
+//! fixed checker profile, permitted user namespaces, and `HELPER_TEST_DATA_PARENT`.
 //! No pre-existing image, mounted filesystem or device is an operand.
 mod common;
 use sha2::{Digest,Sha256};
@@ -17,7 +17,7 @@ fn image(path:&std::path::Path)->String{
     sector(&mut b,11,512);b[13]=1;sector(&mut b,14,32);b[16]=2;b[21]=0xf8;
     sector(&mut b,24,63);sector(&mut b,26,255);word(&mut b,32,total);word(&mut b,36,FAT);
     word(&mut b,44,2);sector(&mut b,48,1);sector(&mut b,50,6);b[64]=0x80;b[66]=0x29;
-    word(&mut b,67,0x13572468);b[71..82].copy_from_slice(b"NO NAME    ");b[82..90].copy_from_slice(b"FAT32   ");b[510..].copy_from_slice(&[0x55,0xaa]);
+    word(&mut b,67,0x1357_2468);b[71..82].copy_from_slice(b"NO NAME    ");b[82..90].copy_from_slice(b"FAT32   ");b[510..].copy_from_slice(&[0x55,0xaa]);
     for n in [0,6] {out.write_all_at(&b,n*512).unwrap();}
     let mut info=[0;512];word(&mut info,0,0x4161_5252);word(&mut info,484,0x6141_7272);
     word(&mut info,488,CLUSTERS-1);word(&mut info,492,3);word(&mut info,508,0xaa55_0000);

@@ -401,7 +401,7 @@ impl RustPending<'_,'_,'_>{
             self.material.require_stored(&self.binding,tx)
         })
     }
-    /// The original live vault check uses the actual placed O_PATH. No
+    /// The original live vault check uses the actual placed `O_PATH`. No
     /// verifier or permission is introduced by a historic SQL observation.
     pub(in crate::sqlite_install::pair) fn finish(self,live_vault:impl Fn()->io::Result<()>)->io::Result<ActiveRustMeta>{
         self.require()?;live_vault()?;

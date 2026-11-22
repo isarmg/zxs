@@ -41,11 +41,11 @@ impl Mark {
     }
     fn accepts(self,directory:bool)->bool{
         if self.owner!=0 || self.mode&0o022!=0 || self.links==0{return false;}
-        if directory {self.mode&0o170000==0o040000}
+        if directory {self.mode&0o170_000==0o040_000}
         else {self.regular() && self.mode&0o111!=0}
     }
     fn regular(self)->bool {
-        self.owner==0 && self.mode&0o6022==0 && self.links>0 && self.mode&0o170000==0o100000 && self.size>0
+        self.owner==0 && self.mode&0o6022==0 && self.links>0 && self.mode&0o170_000==0o100_000 && self.size>0
     }
 }
 
@@ -202,13 +202,13 @@ mod tests {
     }
     #[test]
     fn protected_stage_never_classifies_a_symlink_fifo_device_or_privileged_image_as_the_tool(){
-        let m=Mark{entity:Entity{dev:1,ino:9},mount:12,mode:0o100755,owner:0,links:1,size:8,mtime:(2,1),ctime:(2,1)};
+        let m=Mark{entity:Entity{dev:1,ino:9},mount:12,mode:0o100_755,owner:0,links:1,size:8,mtime:(2,1),ctime:(2,1)};
         assert!(m.accepts(false));
-        for mode in [0o120777,0o010755,0o060755,0o100775,0o104755,0o102755,0o100644] {
+        for mode in [0o120_777,0o010_755,0o060_755,0o100_775,0o104_755,0o102_755,0o100_644] {
             assert!(!Mark{mode,..m}.accepts(false));
         }
         assert!(!Mark{owner:1000,..m}.accepts(false));
-        assert!(Mark{mode:0o040755,..m}.accepts(true));
-        assert!(!Mark{mode:0o040777,..m}.accepts(true));
+        assert!(Mark{mode:0o040_755,..m}.accepts(true));
+        assert!(!Mark{mode:0o040_777,..m}.accepts(true));
     }
 }

@@ -105,7 +105,7 @@ mod enabled{
             tty.confirm_embedded_zxs(format!("只写入一个可独立运行的 ZXS 文件：{:?}\nSHA-256 {} / {} 字节；不覆盖、不启动、不设置账户、不创建或迁移任何池。\n",
                 path,hex(&digest),asset.len()))?;
             watch_cancellation()?;
-            let deadline=Instant::now()+Duration::from_secs(10*60);
+            let deadline=Instant::now()+Duration::from_mins(10);
             let alive=||->io::Result<()>{
                 if cancelled()||Instant::now()>=deadline{return Err(denied());}
                 tty.check()
@@ -118,7 +118,7 @@ mod enabled{
             let born=identity((&file,mount))?;
             let shape=|perm:u32,bytes:u64|->io::Result<()>{
                 let m=file.metadata()?;
-                if (m.uid(),m.gid(),m.mode(),m.nlink(),m.len())!=(0,0,0o100000|perm,0,bytes)||
+                if (m.uid(),m.gid(),m.mode(),m.nlink(),m.len())!=(0,0,0o100_000|perm,0,bytes)||
                     identity((&file,mount))?!=born{return Err(denied());}
                 for key in [c"system.posix_acl_access",c"security.capability"]{no_attribute(&file,key)?;}
                 Ok(())
@@ -150,7 +150,7 @@ mod enabled{
             }
             let finish=(||->io::Result<()>{
                 let m=file.metadata()?;
-                if (m.uid(),m.gid(),m.mode(),m.nlink(),m.len())!=(0,0,0o100755,1,asset.len() as u64)||
+                if (m.uid(),m.gid(),m.mode(),m.nlink(),m.len())!=(0,0,0o100_755,1,asset.len() as u64)||
                     identity((&file,mount))?!=born{return Err(denied());}
                 file.sync_all()?;
                 require()?;

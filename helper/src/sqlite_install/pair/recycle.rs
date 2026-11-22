@@ -27,7 +27,7 @@ fn disjoint(a:&Pinned,b:&Pinned)->bool{
 fn validate_source<'a>(pin:&Pinned,dir:&File,host:&File,uid:u32,
     other:impl IntoIterator<Item=(&'a Pinned,&'a File)>)->io::Result<Identity>{
     let m=dir.metadata()?;
-    if m.mode()!=0o040700||m.uid()!=uid||m.nlink()==0||fstatvfs(dir)?.f_flag.contains(StatVfsMountFlags::RDONLY){
+    if m.mode()!=0o040_700||m.uid()!=uid||m.nlink()==0||fstatvfs(dir)?.f_flag.contains(StatVfsMountFlags::RDONLY){
         return Err(no());
     }
     let table=HostMounts::current()?;let r=Identity::actual(pin,dir,&table)?;

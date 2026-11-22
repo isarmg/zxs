@@ -1,4 +1,4 @@
-//! HeldPending observes only an explicitly selected SYSTEM; it never writes or syncs.
+//! `HeldPending` observes only an explicitly selected SYSTEM; it never writes or syncs.
 //! The separate private group step requires all original roots and a specific approved order.
 mod group;
 use super::{Entity, Kind, Mount, Pinned, ReaderBoundary, reopen_admitted_reader};
@@ -164,7 +164,7 @@ impl HeldReady {
 impl<const PUBLISHED:bool> SystemRegister<PUBLISHED> {
     const NAME: &'static [u8]=if PUBLISHED { READY } else { PENDING };
 
-    /// host_origin must come from the trusted deployment's independently held
+    /// `host_origin` must come from the trusted deployment's independently held
     /// original directory, NOT by reopening a pathname from GENESIS. Equality
     /// below is real-time attribution, not authentication of whoever supplied it.
     fn open_original(host_origin: &File, selected: &Path, uid: u32, expected_body: &[u8])

@@ -106,7 +106,7 @@ impl Panel {
 // isatty. Writing to a PTY master would feed input to its slave.
 fn supported_terminal(mode:u32,dev:u64,magic:u64)->bool{
     let (major,minor)=(rustix::fs::major(dev),rustix::fs::minor(dev));
-    mode & 0o170000 == 0o020000 && ((major,minor)==(5,0) ||
+    mode & 0o170_000 == 0o020_000 && ((major,minor)==(5,0) ||
         (major==4 && (1..=63).contains(&minor)) ||
         ((136..=143).contains(&major) && magic==0x1cd1)) // Linux devpts slave
 }

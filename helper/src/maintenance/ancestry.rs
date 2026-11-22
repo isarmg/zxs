@@ -227,7 +227,7 @@ impl Mounts {
     }
 
     /// Generic live kernel mount evidence: parent mount ID and this complete
-    /// mount's superblock device (field 3, not the name or an inode's st_dev).
+    /// mount's superblock device (field 3, not the name or an inode's `st_dev`).
     /// Neither field is a persistent medium ID or physical-drive certificate.
     pub(crate) fn full_mount(&self, id: u64) -> io::Result<(u64, u64)> {
         self.0.get(&id).filter(|r| r.whole && r.device != 0).map(|r| (r.parent, r.device))
@@ -236,7 +236,7 @@ impl Mounts {
 
     /// The only protected site mount boundary is /zxs itself, if it is an
     /// already-mounted complete supported local root. A subtree/subvolume
-    /// mount is not a complete root. Btrfs inode stat uses anon_dev rather
+    /// mount is not a complete root. Btrfs inode stat uses `anon_dev` rather
     /// than the mountinfo superblock device, so check the root inode there.
     /// This does not prove the underlying physical drive or exclude a bind
     /// of a whole independently selected filesystem root.

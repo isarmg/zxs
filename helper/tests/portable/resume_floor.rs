@@ -1,5 +1,5 @@
-//! Native fixtures require prepared private HELPER_TEST_PORTABLE_DATA_PARENT and
-//! HELPER_TEST_PORTABLE_RECYCLE_PARENT directories and the restricted worker;
+//! Native fixtures require prepared private `HELPER_TEST_PORTABLE_DATA_PARENT` and
+//! `HELPER_TEST_PORTABLE_RECYCLE_PARENT` directories and the restricted worker;
 //! missing prerequisites are failures, not skips. Never format, mount, chown,
 //! change process privileges, or modify pre-existing data. The name-limit check needs no fixture.
 use super::*;

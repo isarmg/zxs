@@ -17,7 +17,7 @@ use rustix::{fs::{OFlags,fcntl_getfl},net::UCred,process::{DumpableBehavior,Gid,
     dumpable_behavior,getppid,parent_process_death_signal,set_dumpable_behavior,set_parent_process_death_signal}};
 use std::{fs::File,io,os::unix::fs::MetadataExt,sync::Arc,thread,time::{Duration,Instant}};
 
-const LIMIT:Duration=Duration::from_secs(12*60);
+const LIMIT:Duration=Duration::from_mins(12);
 fn exact_parent(fd:&File,owner:Pid)->io::Result<ForegroundElf>{
     original_parent(fd,owner)?;
     let image=ForegroundElf::host()?;

@@ -25,7 +25,7 @@ fn present(g:&Group,i:usize)->io::Result<bool>{
     else{Ok(g.controls(i,&[MARKER])?[0])}
 }
 fn feedback_shape(file:&Stamp,dir:&Stamp,uid:u32,len:u64)->io::Result<()>{
-    if file.dev!=dir.dev||file.mount!=dir.mount||file.mode!=0o100600||file.links!=1||file.uid!=uid||file.len!=len{
+    if file.dev!=dir.dev||file.mount!=dir.mount||file.mode!=0o100_600||file.links!=1||file.uid!=uid||file.len!=len{
         return Err(bad("existing or new enrollment slot is not the exact private regular marker"));
     }Ok(())
 }

@@ -74,7 +74,7 @@ mod tests{
         let now=Instant::now();let t=Ticket{plain:"a".repeat(64),issued:now};
         assert!(t.authorizes(&[b'a';64],now,true));assert!(!t.authorizes(&[b'a';64],now+WINDOW,true));
         assert!(!t.authorizes(&[b'b';64],now,true));assert!(!t.authorizes(&[b'a';32],now,true));
-        let info=Info{bytes:34097152,sector:Some(512),detail:Detail::Fat32Clusters(65530),digest:[0x11;32]};
+        let info=Info{bytes:34_097_152,sector:Some(512),detail:Detail::Fat32Clusters(65530),digest:[0x11;32]};
         let mut c=Check{info,stage:Stage::Done(Receipt::Fat32(Report{state:Outcome::ReportedMessages,files:2,used:3,total:65530})),ticket:Some(t)};
         assert_eq!(c.action(true,&[b'b';64],now).code,403);
         let original=c.action(false,&[b'a';64],now).body;assert!(original.contains("2；已用簇 / 总簇：3 / 65530"));

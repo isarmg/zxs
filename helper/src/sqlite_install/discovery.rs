@@ -49,7 +49,7 @@ impl Directory{
         Ok(Self{entity:Entity::of(m)?,uid:m.uid(),gid:m.gid(),mode:m.mode(),links:m.nlink()})
     }
     fn candidate(self)->bool{
-        self.mode==0o040700&&self.links!=0&&![0,u32::MAX].contains(&self.uid)
+        self.mode==0o040_700&&self.links!=0&&![0,u32::MAX].contains(&self.uid)
     }
 }
 struct Candidate{ids:[[u8;16];3],mount:u64}
@@ -133,7 +133,7 @@ mod tests{
     fn stateless_discovery_mount_ids_and_exact_root_flag_cannot_be_substituted(){
         let row=DiscoveryMount{path:"/mnt/a".into(),id:17,device:33,magic:linux_raw_sys::general::EXT4_SUPER_MAGIC};
         let real=Mount{id:17,at_root:Some(true)};
-        let dir=Directory{entity:Entity{dev:33,ino:55},uid:1000,gid:1000,mode:0o040700,links:1};
+        let dir=Directory{entity:Entity{dev:33,ino:55},uid:1000,gid:1000,mode:0o040_700,links:1};
         assert!(right_mount(real,dir,row.magic,&row));
         assert!(!right_mount(Mount{id:18,..real},dir,row.magic,&row));
         assert!(!right_mount(Mount{at_root:None,..real},dir,row.magic,&row));

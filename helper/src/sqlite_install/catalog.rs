@@ -42,7 +42,7 @@ impl Canonical{
     pub(super) fn require(&self,tx:&rusqlite::Transaction<'_>)->io::Result<()>{
         let app:i64=tx.query_row("PRAGMA main.application_id",[],|row|row.get(0)).map_err(sql)?;
         let v:i64=tx.query_row("PRAGMA main.user_version",[],|row|row.get(0)).map_err(sql)?;
-        if (app,v)!=(0x5a585331,self.1)||shape(tx)?!=self.0{return Err(bad("not the exact released database schema"));}
+        if (app,v)!=(0x5a58_5331,self.1)||shape(tx)?!=self.0{return Err(bad("not the exact released database schema"));}
         Ok(())
     }
 }

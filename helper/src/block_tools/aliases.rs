@@ -1,5 +1,5 @@
 //! Optional, explicitly labelled udev aliases. Nothing here reads a block
-//! device: the only descriptor which can designate a device node is O_PATH.
+//! device: the only descriptor which can designate a device node is `O_PATH`.
 use super::*;
 use crate::pinned::Mount;
 use rustix::fs::{Mode,OFlags,RawDir,ResolveFlags,openat2};

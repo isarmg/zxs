@@ -10,7 +10,7 @@ fn no()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,
     "no current site permission for the exact installed NTLMv2 enrollment provider and instance")}
 
 pub(super) fn mode(f:&File,want:u32)->io::Result<()>{
-    let m=f.metadata()?;if m.mode()!=(0o100000|want)||m.uid()!=0||m.gid()!=0||m.nlink()!=1{Err(no())}else{Ok(())}
+    let m=f.metadata()?;if m.mode()!=(0o100_000|want)||m.uid()!=0||m.gid()!=0||m.nlink()!=1{Err(no())}else{Ok(())}
 }
 pub(super) fn release(slot:&'static [&'static str],perm:u32,pin:&[u8;32])->io::Result<RuntimeFile>{
     let mut f=RuntimeFile::open(slot,perm==0o755,64<<20)?;mode(&f.file,perm)?;

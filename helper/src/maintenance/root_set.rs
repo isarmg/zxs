@@ -112,7 +112,7 @@ impl FreshRootLocks {
     }
 
     /// Check all observed volume origins/role positions, component limits and path bytes, not
-    /// prospective VolumeIds or future first-name publication. Cannot expose
+    /// prospective `VolumeIds` or future first-name publication. Cannot expose
     /// a directory FD to a writer or adopt a hidden ancestor.
     pub(super) fn check_image_roots(&self, image: &FreshGenesis<'_>) -> io::Result<()> {
         self.check_empty_selection()?;

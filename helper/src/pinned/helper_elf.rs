@@ -27,10 +27,10 @@ impl Role {
     fn accepts(self,s:Stamp)->bool {
         if !(1..=MAX_IMAGE).contains(&s.len)||s.links!=1{return false;}
         match self {
-            Self::Privileged=>(s.uid,s.gid,s.mode)==(0,0,0o100755),
+            Self::Privileged=>(s.uid,s.gid,s.mode)==(0,0,0o100_755),
             Self::Local{uid,..}=>match s.uid{
-                0=>s.gid==0&&s.mode==0o100755,
-                own if own==uid=>matches!(s.mode,0o100500|0o100555|0o100700|0o100755),
+                0=>s.gid==0&&s.mode==0o100_755,
+                own if own==uid=>matches!(s.mode,0o100_500|0o100_555|0o100_700|0o100_755),
                 _=>false,
             },
         }
@@ -349,13 +349,13 @@ mod tests{
 
     #[test]
     fn self_elf_ownership_profiles_reject_unlinked_privileged_or_writable_inputs(){
-        let trusted=Stamp{entity:Entity{dev:1,ino:2},mount:3,mode:0o100755,uid:0,gid:0,links:1,len:100,ctime:[1,2],mtime:[3,4]};
+        let trusted=Stamp{entity:Entity{dev:1,ino:2},mount:3,mode:0o100_755,uid:0,gid:0,links:1,len:100,ctime:[1,2],mtime:[3,4]};
         let root=Role::Privileged;let local=Role::Local{uid:1001,gid:1002};
         assert!(root.accepts(trusted)&&local.accepts(trusted));
-        let own=Stamp{uid:1001,gid:1002,mode:0o100700,..trusted};
+        let own=Stamp{uid:1001,gid:1002,mode:0o100_700,..trusted};
         assert!(local.accepts(own)&&!root.accepts(own));
-        for bad in [Stamp{links:0,..trusted},Stamp{links:2,..trusted},Stamp{mode:0o104755,..trusted},
-            Stamp{mode:0o100775,..trusted},Stamp{uid:1002,..own},Stamp{len:MAX_IMAGE+1,..trusted}]{
+        for bad in [Stamp{links:0,..trusted},Stamp{links:2,..trusted},Stamp{mode:0o104_755,..trusted},
+            Stamp{mode:0o100_775,..trusted},Stamp{uid:1002,..own},Stamp{len:MAX_IMAGE+1,..trusted}]{
             assert!(!root.accepts(bad)&&!local.accepts(bad));
         }
     }

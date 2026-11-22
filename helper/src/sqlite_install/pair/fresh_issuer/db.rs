@@ -17,7 +17,7 @@ impl InitialDatabase{
         let f=fcntl_getfl(fd)?;let m=fd.metadata()?;
         let e=Entity::of(&m)?;
         let mount=Mount::on(fd)?.filter(|x|x.id!=0).ok_or_else(||bad("no original fresh SQLite mount"))?;
-        if uid==0||m.uid()!=uid||m.mode()!=0o100600||m.nlink()!=1||m.len()==0||
+        if uid==0||m.uid()!=uid||m.mode()!=0o100_600||m.nlink()!=1||m.len()==0||
             !f.contains(OFlags::PATH)||!fcntl_getfd(fd)?.contains(FdFlags::CLOEXEC)||e.ino==0{
             return Err(bad("only the exact non-readable private fresh SQLite pin may cross this lane"));
         }

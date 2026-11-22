@@ -12,7 +12,7 @@ use std::{io,net::{Ipv4Addr,TcpListener},time::{Duration,Instant}};
 
 const TAG:&[u8]=b"ZXS-HELPER/COPY-REPAIR-WEB-2\0";
 const SHAPE:usize=TAG.len()+32+1+8;
-const WINDOW:Duration=Duration::from_secs(8*60);
+const WINDOW:Duration=Duration::from_mins(8);
 fn no()->io::Error{bad("the original working-copy request was not returned by its local browser worker; no repair was started")}
 fn byte_size(n:u64)->bool{(1..=i64::MAX as u64).contains(&n)}
 fn raw_scope(raw:&[u8])->io::Result<(RepairFormat,u64)>{

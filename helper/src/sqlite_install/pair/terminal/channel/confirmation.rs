@@ -1,5 +1,5 @@
 //! Single nonsecret host-installation confirmation on this exact foreground
-//! Linux N_TTY. Hidden input is a separate confined worker scope.
+//! Linux `N_TTY`. Hidden input is a separate confined worker scope.
 use super::{Channel,Surface,failure,fs,nonblocking_prompt,own_descriptor_table,refuse};
 use helper_linux_evidence::prompt_signals::PromptSignals;
 use rustix::{fs::{Mode,OFlags},io::Errno,rand::{GetRandomFlags,getrandom},

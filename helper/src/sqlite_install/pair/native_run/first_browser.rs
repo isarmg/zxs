@@ -12,7 +12,7 @@ use std::{io,net::{Ipv4Addr,TcpListener},time::{Duration,Instant}};
 
 const TAG:&[u8]=b"ZXS-HELPER/FIRST-BROWSER-2\0";
 const FIXED:usize=TAG.len()+32+32+16+8+1+1;
-const PANEL:Duration=Duration::from_secs(8*60);
+const PANEL:Duration=Duration::from_mins(8);
 fn no()->io::Error{bad("the original first-install browser request is unconfirmed; no installation was started")}
 pub(in crate::sqlite_install) fn offer(tty:&PublicConfirmation,scope:([u8;32],bool,u8,ExplicitSubject),require:impl Fn()->io::Result<()>)->io::Result<()>{
     require()?;tty.check()?;

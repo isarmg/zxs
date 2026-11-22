@@ -172,7 +172,7 @@ pub(super) fn host_admin()->io::Result<File>{
         let link=File::from(openat(&dir,name,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?);
         if !link.metadata()?.file_type().is_symlink()||Mount::on(&link)?.is_none_or(|m|m.id!=mount.id){return Err(denied());}
         let ns=File::from(openat(&dir,name,OFlags::PATH|OFlags::CLOEXEC,Mode::empty())?);
-        if fstatfs(&ns)?.f_type as u64!=0x6e736673{return Err(denied());} // Linux NSFS_MAGIC
+        if fstatfs(&ns)?.f_type as u64!=0x6e73_6673{return Err(denied());} // Linux NSFS_MAGIC
         Entity::of(&ns.metadata()?)
     };
     let triple=|who:&CStr|->io::Result<[Entity;3]>{
@@ -195,10 +195,10 @@ mod tests{
     use super::*;
     #[test]fn a_consistent_private_pid_or_user_view_does_not_establish_the_host(){
         let id=|ino|Entity{dev:9,ino};
-        let host=[id(0xefff_fffc),id(0xefff_fffd),id(4026531841)];
+        let host=[id(0xefff_fffc),id(0xefff_fffd),id(4_026_531_841)];
         assert!(require_host_namespaces(host,host).is_ok());
         for i in [0,1]{
-            let mut private=host;private[i]=id(4026680001);
+            let mut private=host;private[i]=id(4_026_680_001);
             assert!(require_host_namespaces(private,private).is_err());
         }
         let mut other=host;other[2].ino+=1;

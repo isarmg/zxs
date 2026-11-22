@@ -79,7 +79,7 @@ impl<'g> Existing<'g>{
         let fd=File::from(openat2(self.0.root.dir(),c"SYSTEM.sqlite3",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,
             Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_SYMLINKS|ResolveFlags::NO_MAGICLINKS)?);
         let m=fd.metadata()?;
-        if m.mode()!=0o100600||m.nlink()!=1||m.uid()!=self.0.root.uid()||m.len()==0||
+        if m.mode()!=0o100_600||m.nlink()!=1||m.uid()!=self.0.root.uid()||m.len()==0||
             Entity::of(&m)?!=self.0.entity||Mount::on(&fd)?.is_none_or(|x|x.id!=self.0.mount){
             return Err(bad("different fresh INIT database pin"));
         }
@@ -115,7 +115,7 @@ impl DbName<'_>{
         self.root.require()?;
         let need=StatxFlags::TYPE|StatxFlags::MODE|StatxFlags::NLINK|StatxFlags::UID|StatxFlags::INO|StatxFlags::SIZE|StatxFlags::MNT_ID;
         let s=database_metadata(self.root,need)?;
-        if s.stx_mask&need.bits()!=need.bits()|| s.stx_mode!=0o100600||s.stx_nlink!=1||s.stx_uid!=self.root.uid()
+        if s.stx_mask&need.bits()!=need.bits()|| s.stx_mode!=0o100_600||s.stx_nlink!=1||s.stx_uid!=self.root.uid()
             || s.stx_ino!=self.entity.ino||makedev(s.stx_dev_major,s.stx_dev_minor)!=self.entity.dev||s.stx_mnt_id!=self.mount
             || empty&&s.stx_size!=0{return Err(bad("original database reservation changed"));}
         Ok(s.stx_size)

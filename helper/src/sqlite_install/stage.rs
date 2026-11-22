@@ -80,7 +80,7 @@ fn first<'g>(request:&Request,group:&'g Group,issue:&Issue)->io::Result<Pending<
     {let slice=db.transaction().map_err(fail)?;
      let app:i64=slice.query_row("PRAGMA main.application_id",[],|r|r.get(0)).map_err(fail)?;
      let version:i64=slice.query_row("PRAGMA main.user_version",[],|r|r.get(0)).map_err(fail)?;
-     if (app,version)!=(0x5a585331,super::catalog::SCHEMA_VERSION){return Err(bad("fresh database does not identify the agreed schema"));}
+     if (app,version)!=(0x5a58_5331,super::catalog::SCHEMA_VERSION){return Err(bad("fresh database does not identify the agreed schema"));}
      let mut stmt=slice.prepare(include_str!("initial-catalog.sql")).map_err(fail)?;
      let mut rows=stmt.query([&issue.pool[..]]).map_err(fail)?;
      for(i,((id,token),path))in issue.rows.iter().zip(request.paths()).enumerate(){

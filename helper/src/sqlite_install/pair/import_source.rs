@@ -47,8 +47,8 @@ impl Stamp{
         Ok(Self{entity:Entity::of(&m)?,mount,mode:m.mode(),uid:m.uid(),gid:m.gid(),links:m.nlink(),len:m.len(),
             mtime:m.mtime(),mtime_ns:m.mtime_nsec(),ctime:m.ctime(),ctime_ns:m.ctime_nsec()})
     }
-    fn dir(self)->bool{self.mode&0o170000==0o040000}
-    fn plain(self)->bool{self.mode&0o170000==0o100000}
+    fn dir(self)->bool{self.mode&0o170_000==0o040_000}
+    fn plain(self)->bool{self.mode&0o170_000==0o100_000}
     fn add(self,h:&mut Sha256){
         for n in [self.entity.dev,self.entity.ino,self.mount.id,self.links,self.len]{h.update(n.to_be_bytes());}
         for n in [self.mode,self.uid,self.gid]{h.update(n.to_be_bytes());}

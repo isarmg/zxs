@@ -154,7 +154,7 @@ impl Selection{
         let review=preview(&resolved,&payload,&target,&spec,&reference,change.digest(),crypto)?;
         let consent=FreshConsent::approve(&tty,&m,&payload,change,review)?;
         super::web_secret::WebWorkspace::check_inherited_lock_budget()?;
-        let deadline=Instant::now()+Duration::from_secs(10*60);
+        let deadline=Instant::now()+Duration::from_mins(10);
         let live=||->io::Result<()>{
             if Instant::now()>=deadline{return Err(bad("the original fresh product approval expired"));}
             // The single low secret capture temporarily changes the TTY flags. That

@@ -1,4 +1,4 @@
-//! One fixed, read-only NETLINK_AUDIT request for this process's TTY policy.
+//! One fixed, read-only `NETLINK_AUDIT` request for this process's TTY policy.
 //! Never changes that policy, reads audit records, or accepts a socket/command.
 use rustix::{net::{self, netlink::{self,SocketAddrNetlink}, sockopt::{set_socket_timeout,Timeout},
     AddressFamily,RecvFlags,SendFlags,SocketFlags,SocketType},thread::gettid};
@@ -28,7 +28,7 @@ pub(super) struct UnauditedInput {
 }
 impl UnauditedInput {
     /// Run before this same task permanently drops its capabilities. Linux
-    /// requires the initial PID namespace and CAP_AUDIT_CONTROL even for GET.
+    /// requires the initial PID namespace and `CAP_AUDIT_CONTROL` even for GET.
     /// The authoritative flags belong to current->signal; no global auditd
     /// config, mount option or independent process is a substitute.
     pub(super) fn query_current()->io::Result<Self>{
@@ -46,7 +46,7 @@ impl UnauditedInput {
         inactive(SocketAddrNetlink::try_from(addr.ok_or_else(refused)?)?,&b)?;
         // No audit socket or privilege travels to the input reader.
         Ok(Self{pid:std::process::id(),tid:gettid().as_raw_pid(),
-            until:Instant::now()+Duration::from_secs(9*60),_thread:PhantomData})
+            until:Instant::now()+Duration::from_mins(9),_thread:PhantomData})
     }
     pub(super) fn require_current(&self)->io::Result<()>{
         if self.pid!=std::process::id()||self.tid!=gettid().as_raw_pid()||Instant::now()>=self.until{

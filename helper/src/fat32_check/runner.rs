@@ -15,7 +15,7 @@ use std::{fs::File,io::{self,Read,Write},process::{Command,Stdio},thread,time::{
 const OUTPUT:usize=64*1024;
 const STATUS:usize=4096;
 const LIMIT:Duration=Duration::from_secs(30);
-const LEASED_LIMIT:Duration=Duration::from_secs(10*60);
+const LEASED_LIMIT:Duration=Duration::from_mins(10);
 
 #[derive(Clone,Copy,PartialEq,Eq)]
 enum Budget{Sealed,Leased,Xfs,Repair(u64)}

@@ -92,7 +92,7 @@ pub(super) struct Reader(End);
 
 /// Still tied to the authorized operation and actual provider prefix.
 /// The original SQL receiver compares its own new plan/receipt again; no
-/// unbound PreparedWeb escapes merely on successful IPC.
+/// unbound `PreparedWeb` escapes merely on successful IPC.
 #[must_use]
 pub(in crate::sqlite_install::pair) struct Received{binding:Binding,web:PreparedWeb}
 pub(in crate::sqlite_install::pair) struct ReceivePacking(());
@@ -121,7 +121,7 @@ impl Received{
 }
 impl StagedWeb{
     /// The opaque original tuple can be compared again before T2; it never
-    /// exports an ordinary PreparedWeb or caller-selected SQL coordinates.
+    /// exports an ordinary `PreparedWeb` or caller-selected SQL coordinates.
     pub(in crate::sqlite_install::pair) fn require_stored(&self,expected:&Binding,tx:&Transaction<'_>)->io::Result<()>{
         self.binding.require_same(expected)?;
         self.web.require_stored(tx,&self.binding.target.op,self.binding.target.generation)

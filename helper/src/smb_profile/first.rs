@@ -61,7 +61,7 @@ fn name(s: &str) -> bool {
         && !s.chars().any(|c| c.is_control() || matches!(c, '"' | '\\' | '/' | ':' | '|' | '<' | '>' | '*' | '?'))
 }
 /// One explicitly named logical route. It is neither a volume selector nor
-/// an independent ShareId, operation, or login.
+/// an independent `ShareId`, operation, or login.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RecycleName(String);
 impl RecycleName {

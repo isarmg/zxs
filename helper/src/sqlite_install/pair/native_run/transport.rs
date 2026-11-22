@@ -1,6 +1,6 @@
 //! Dedicated original-maintenance control, not an externally callable service.
 //! Every receive is from the other still-live process of this one invocation,
-//! with SCM_CREDENTIALS and exactly the descriptors fixed by this stage.
+//! with `SCM_CREDENTIALS` and exactly the descriptors fixed by this stage.
 use crate::sqlite_install::bad;
 use rustix::{fd::{AsFd,OwnedFd},net::{AddressFamily,RecvAncillaryBuffer,RecvAncillaryMessage,RecvFlags,ReturnFlags,
     SendAncillaryBuffer,SendAncillaryMessage,SendFlags,Shutdown,SocketFlags,SocketType,UCred,recvmsg,sendmsg,shutdown,socketpair,sockopt}};

@@ -171,7 +171,7 @@ impl<'a> FreshGenesis<'a> {
     }
 
     /// Reconstruct only this admitted row's original label, never invent an ID.
-    /// check_label remains an independent exact decoder/length check.
+    /// `check_label` remains an independent exact decoder/length check.
     pub(super) fn expected_label(&self, index: usize) -> Result<Vec<u8>, Invalid> {
         let row = self.volumes.get(index).ok_or(Invalid::Label)?;
         let mut label = VOLUME.to_vec();

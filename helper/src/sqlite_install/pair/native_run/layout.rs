@@ -142,7 +142,7 @@ struct OriginalFolder{pin:Pinned,dir:File,mark:OrdinaryMark,body:[u8;101]}
 impl OriginalFolder{
     fn require(&self,host:&File,uid:u32)->io::Result<()>{
         let m=self.dir.metadata()?;
-        if !m.is_dir()||m.uid()!=uid||m.mode()!=0o040700||m.nlink()==0{return Err(bad_question());}
+        if !m.is_dir()||m.uid()!=uid||m.mode()!=0o040_700||m.nlink()==0{return Err(bad_question());}
         named_backing(&self.pin,&self.dir,&crate::maintenance::HostMounts::current()?,host,uid)?;
         self.mark.verify(&self.dir,&self.body)?;no_foreign_media(&self.dir)?;self.mark.verify(&self.dir,&self.body)
     }
@@ -266,7 +266,7 @@ impl ResolvedRust {
 fn require(pin:&Pinned,file:&File,subject:(Id,u32,u32))->io::Result<()>{
     approval::host_admin()?;
     let m=pin.metadata()?;
-    if !pin.passive_mount_observation()||!m.is_dir()||m.mode()!=0o040700||m.uid()!=subject.1||m.nlink()==0{
+    if !pin.passive_mount_observation()||!m.is_dir()||m.mode()!=0o040_700||m.uid()!=subject.1||m.nlink()==0{
         return Err(bad("different protected original SYSTEM or maintenance subject"));
     }
     require_lent_ex(file,(pin.entity(),pin.require_same_named_mount()?.id))

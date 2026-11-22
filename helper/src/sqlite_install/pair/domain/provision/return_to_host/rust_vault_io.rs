@@ -61,7 +61,7 @@ impl<'s> Original<'s>{
 
 fn require_new_stage(file:&File,vault:(Entity,u64))->io::Result<()>{
     let m=file.metadata()?;let (entity,mount)=mark(file)?;
-    if !m.is_file()||m.mode()!=0o100600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=0||
+    if !m.is_file()||m.mode()!=0o100_600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=0||
         mount!=vault.1||entity.dev!=vault.0.dev||entity.ino==vault.0.ino{return Err(wrong());}
     Ok(())
 }

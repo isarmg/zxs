@@ -23,7 +23,7 @@ fn requested_roles_report_actual_mount_and_capacity_without_claiming_or_register
         .expect("fixture requires kernel statx and mount IDs; otherwise it has not verified the positive case");
     assert_ne!(expected.stx_mask & StatxFlags::MNT_ID.bits(),0,"fixture requires an actual mount ID");
     let v=fstatvfs(&dir).unwrap(); let meta=dir.metadata().unwrap();
-    let result=status(&s,&r,&d); assert!(result.status.success(),"{:?}",result);
+    let result=status(&s,&r,&d); assert!(result.status.success(),"{result:?}");
     let text=String::from_utf8(result.stdout).unwrap();
     let lines:Vec<_>=text.lines().collect();
     assert_eq!(lines.len(),4); assert!(lines[0].contains("registration=not-checked"));

@@ -33,7 +33,7 @@ fn decode_locator(v:&[u8])->io::Result<SelectedSite>{
 }
 fn locator(parent:&File)->io::Result<Selector>{
     let pin=leaf(parent,LOCATOR)?;let m=pin.metadata()?;
-    if m.mode()!=0o100600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=64{return Err(unknown());}
+    if m.mode()!=0o100_600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=64{return Err(unknown());}
     layout::exact_with(parent,LOCATOR,&pin,||leaf(parent,LOCATOR))?;
     let stamp=super::live::Stamp::on(&pin)?;
     let reader=private_inode_reader(&pin,0,mark(parent)?.1)?;
@@ -106,7 +106,7 @@ impl DeployedSite{
         shared_lease(&self.parent,mark(&self.original.chain[PRODUCT.len()-1])?)?;
         let s=self.system.require_same_named_mount()?;
         if !self.system.passive_mount_observation()||self.system.metadata()?.uid()!=uid||
-            self.system.metadata()?.mode()!=0o040700||self.payload.system.as_path()!=self.system.path(){
+            self.system.metadata()?.mode()!=0o040_700||self.payload.system.as_path()!=self.system.path(){
             return Err(unknown());
         }
         lease(&self.system_ex,(self.system.entity(),s.id))?;
@@ -140,7 +140,7 @@ impl DeployedSite{
         let pin=||product_pin(&self.site_ex,VAULT);
         let vault=pin()?;
         let m=vault.metadata()?;
-        if m.mode()!=0o040700||m.uid()!=0||m.gid()!=0{return Err(unknown());}
+        if m.mode()!=0o040_700||m.uid()!=0||m.gid()!=0{return Err(unknown());}
         let dir=child(&vault,c".")?;
         if mark(&dir)?!=mark(&vault)?||mark(&dir)?.1!=mark(&self.site_ex)?.1{return Err(unknown());}
         layout::exact_with(&self.site_ex,VAULT,&vault,pin)?;

@@ -35,7 +35,7 @@ impl Surface {
         let x=fs::statx(&fd,c"",AtFlags::EMPTY_PATH|AtFlags::STATX_DONT_SYNC|AtFlags::NO_AUTOMOUNT,StatxFlags::MNT_ID)?;
         // /dev/tty (5:0) is an indirect "current controlling tty", not a
         // pin of one particular slave. Absolute names are never a fallback.
-        if st.st_mode&0o170000!=0o020000||st.st_ino==0
+        if st.st_mode&0o170_000!=0o020_000||st.st_ino==0
             ||(fs::major(st.st_rdev),fs::minor(st.st_rdev))==(5,0)
             ||x.stx_mask&StatxFlags::MNT_ID.bits()==0||x.stx_mnt_id==0 {
             return Err(refuse("need the actual original foreground slave or VT, not a generic tty alias"));

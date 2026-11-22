@@ -126,7 +126,7 @@ impl PreparedWeb {
         let exact=||->io::Result<MetadataIdentity>{
             let m=file.metadata()?;
             let flags=fcntl_getfl(file)?;
-            if uid==0||gid==0||!m.is_file()||m.nlink()!=0||m.mode()!=0o100400
+            if uid==0||gid==0||!m.is_file()||m.nlink()!=0||m.mode()!=0o100_400
                 ||m.uid()!=uid||m.gid()!=gid||m.len()!=JOINT_BYTES as u64
                 ||flags.contains(OFlags::PATH)||!matches!(flags&OFlags::ACCMODE,OFlags::RDONLY|OFlags::RDWR)
                 ||!fcntl_getfd(file)?.contains(FdFlags::CLOEXEC)||!fcntl_get_seals(file)?.contains(expected)

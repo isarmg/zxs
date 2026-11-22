@@ -40,7 +40,7 @@ fn same_inode_same_bytes_or_a_changed_parent_do_not_inherit_the_previous_sync_cu
     assert!(output.readback(&dir,uid,&original,&expected,&parent,&after).is_ok());
     let scratch=area.path().join("this-fixtures-temporary-neighbour");
     File::create_new(&scratch).unwrap(); fs::remove_file(scratch).unwrap();
-    dir.set_times(time(172800)).unwrap();
+    dir.set_times(time(172_800)).unwrap();
     assert!(Stamp::on(&original).unwrap()==after);
     assert_ne!(Stamp::root(&dir,uid).unwrap().modified,parent.modified);
     assert!(output.readback(&dir,uid,&original,&expected,&parent,&after).is_err());

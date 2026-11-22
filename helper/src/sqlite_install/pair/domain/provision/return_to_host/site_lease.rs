@@ -26,7 +26,7 @@ impl SiteLease{
         let m=self.system.metadata()?;
         crate::sqlite_install::pair::require_v18()?;
         let subject=self.explicit.tuple();
-        if subject!=self.subject||!m.is_dir()||m.uid()!=self.subject.1||m.mode()!=0o040700{
+        if subject!=self.subject||!m.is_dir()||m.uid()!=self.subject.1||m.mode()!=0o040_700{
             return Err(bad("SYSTEM authorization, scope or writable mount changed"));
         }
         let s=mark(&self.system.storage_directory()?)?;

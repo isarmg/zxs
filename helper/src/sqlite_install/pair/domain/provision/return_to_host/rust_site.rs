@@ -42,7 +42,7 @@ impl RustSite{
         let current=mark(&self.vault)?;
         let m=self.vault.metadata()?;
         let pin=||super::product_pin(site,c"vault");
-        if m.mode()!=0o040700||m.uid()!=0||m.gid()!=0||m.nlink()==0||current.1!=mark(site)?.1
+        if m.mode()!=0o040_700||m.uid()!=0||m.gid()!=0||m.nlink()==0||current.1!=mark(site)?.1
             ||current!=mark(&pin()?)?{return Err(no());}
         let dir=child(&self.vault,c".")?;
         if mark(&dir)?!=current{return Err(no());}
@@ -105,7 +105,7 @@ impl PublicAuthority{
     pub(super) fn select(parent:&File)->io::Result<Self>{
         let pin=authority_pin(parent)?;let stamp=super::live::Stamp::on(&pin)?;
         let m=pin.metadata()?;
-        if !m.is_file()||m.uid()!=0||m.gid()!=0||m.mode()!=0o100600||m.nlink()!=1||
+        if !m.is_file()||m.uid()!=0||m.gid()!=0||m.mode()!=0o100_600||m.nlink()!=1||
             !(1..=MAX_SITE as u64).contains(&m.len())||stamp.mount!=mark(parent)?.1{return Err(no());}
         let bytes=Self::body(&pin,stamp)?;let x=Self{pin,stamp,bytes};x.require(parent)?;Ok(x)
     }
@@ -151,7 +151,7 @@ pub(in crate::sqlite_install::pair) struct VaultStamp{
 }
 pub(in crate::sqlite_install::pair) fn checked_vault_stamp(file:&File,mount:u64)->io::Result<VaultStamp>{
     let m=file.metadata()?;let (e,mid)=mark(file)?;
-    if !m.is_file()||m.mode()!=0o100600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=240||mid!=mount{
+    if !m.is_file()||m.mode()!=0o100_600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=240||mid!=mount{
         return Err(no());
     }
     let ns=|v|u32::try_from(v).ok().filter(|n|*n<1_000_000_000).ok_or_else(no);
