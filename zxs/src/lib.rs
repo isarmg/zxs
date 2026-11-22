@@ -1,7 +1,5 @@
-//! Standalone ZXS storage. Fresh-selection inspection is read-only: it returns
-//! what was observed, not a capability to register, publish or write later.
-// Upstream's explicitly selected experimental SHA-2 intrinsics need a
-// crate attribute; this is absent on the normal ZXS release path.
+//! Standalone ZXS storage. Inspection of a fresh selection is read-only.
+// The optional RISC-V SHA-2 backend uses experimental intrinsics.
 #![cfg_attr(
     any(sha2_backend = "riscv-zknh", sha2_256_backend = "riscv-zknh"),
     feature(riscv_ext_intrinsics)

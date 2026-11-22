@@ -4,8 +4,7 @@ use super::*;
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::collections::BTreeSet;
-// Single storage layout. This exact prefix is required before any saved
-// path or business operation is used. No previous-format compatibility.
+// Check the format prefix before using stored paths.
 pub(super) const MAGIC:&[u8]=b"ZXS/FILE-POOL/ID-LEAF-1\0";
 const LABEL_MAGIC:&[u8]=b"ZXS/VOLUME/ID-LEAF-1\0";
 pub(super) const MAX_RECORD:usize=(MAX_FILE_ROOTS+2)*(4096+64+fs::MAX_BIRTH)+256;

@@ -104,9 +104,8 @@ impl Drop for Interfaces{
         unsafe{libc::freeifaddrs(self.0)}
     }
 }
-/// Same passive local-address policy as Helper: a unique current up,
-/// non-loopback assignment. A bind alone can pass with IP_NONLOCAL_BIND;
-/// this check is not a claim about route reachability, DAD or network health.
+/// Require one current assignment to an up, non-loopback interface.
+/// A socket bind alone can succeed with IP_NONLOCAL_BIND.
 fn require_local(approved:&[(IpAddr,u8)])->Result<()>{
     if !(1..=16).contains(&approved.len()){return Err(Fault::Shape);}
     let chosen=approved.iter().map(|p|p.0).collect::<BTreeSet<_>>();

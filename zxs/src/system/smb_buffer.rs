@@ -22,7 +22,7 @@ impl Write for Buffer{
 }
 fn collect(offset:u64,count:u32,size:u64,range:impl FnOnce(u64,u64,&mut Buffer)->io::Result<Used>)
     ->io::Result<(Vec<u8>,Used)>{
-    // Pinned upstream absolute input maximum, not a new negotiated size.
+    // Apply the absolute SMB read limit before allocating the window.
     if count>0xffff00||offset.checked_add(u64::from(count)).is_none_or(|end|end>i64::MAX as u64){
         return Err(invalid("invalid native SMB read request"));
     }

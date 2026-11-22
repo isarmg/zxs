@@ -55,8 +55,7 @@ fn writable(f:&File)->io::Result<bool>{
 fn separate_recycle(site:&SiteLease<'_>,r:&Volume,ordinary:&[Option<Volume>])->io::Result<()>{
     let host=site.parent.host().map_err(|_|denied())?;
     if !writable(&r.dir)?{return Err(denied());}
-    // "Independent" is the held filesystem proof inherited from the
-    // original selection, not a claim that there are two physical disks.
+    // Compare backing identities from the pinned filesystem roots.
     let backing=r.pin.backing(host,&site.task)?;
     let r_where=r.pin.location();
     for origin in std::iter::once(&site.system).chain(ordinary.iter().flatten().map(|f|&f.pin)){

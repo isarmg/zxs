@@ -264,8 +264,7 @@ impl RenameTurn{
     }
 }
 impl PreparedCrossFilesystemMove{
-    /// Short original held object/turn check for a pre-work cancellation,
-    /// not evidence of a disk operation, current target or move outcome.
+    /// Check the original open and move turn before canceling queued work.
     pub(in crate::smb) fn require_original_open(&self,open:&FileOpen,tree:&RustRoot,member:&RustSessionWitness)
         ->io::Result<()>{
         if !self.binding.is_original_member(member){return Err(io::ErrorKind::PermissionDenied.into());}

@@ -1,7 +1,7 @@
 //! MS-SMB2 §2.1: Direct TCP, not the NetBIOS session service.
 use super::{Error, Result};
 
-// Local receive budget, not a claimed negotiated MaxReadSize/MaxWriteSize.
+// Receive budget; negotiated read and write limits apply separately.
 pub(in crate::smb) const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 pub(in crate::smb) struct Frame<'a>(&'a [u8]);
 

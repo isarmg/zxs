@@ -1,6 +1,5 @@
-//! One bounded HTTP/1.1 origin-form request per connection. No re-use,
-//! transfer codings, upstream user claims, file serving or forwarding trust.
-//! The accepted local address is the only HTTP origin authority.
+//! One bounded HTTP/1.1 origin-form request per connection. The local
+//! socket address determines the origin; forwarded headers are ignored.
 use super::{manual,App,BAD,REJECT,Reply,Request,Token};
 use crate::fs::invalid;
 use std::{io::{self,Read,Write},net::{IpAddr,SocketAddr,TcpListener,TcpStream},os::fd::AsRawFd,

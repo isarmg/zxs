@@ -48,8 +48,8 @@ impl Connection{
         if p.is_null(){return Err(invalid("SQLite returned no live connection"));}Ok(Self(p))
     }
     fn expected_schema()->io::Result<[u8;32]>{
-        // Only the fixed compiled-in DDL and vendored SQLite feed this cache.
-        // Actual DB schema, identity and catalog are checked on every cut.
+        // Cache only the compiled schema template. Each cut checks the actual
+        // database schema, identity, and catalog separately.
         static TEMPLATE:Mutex<Option<[u8;32]>>=Mutex::new(None);
         cached_schema_template(&TEMPLATE,||{
             let ddl=CString::new(SCHEMA).expect("compiled static SQL is NUL-free");

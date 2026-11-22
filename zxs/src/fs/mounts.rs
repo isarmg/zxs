@@ -50,9 +50,8 @@ impl Mounts {
         if self.0.get(&id(file)?).is_none_or(|p|!p.whole){return Err(invalid("mount hides a physical ancestor or changed during selection"));}
         Ok(())
     }
-    /// `statx` mount IDs alone cannot distinguish two bind mounts of the
-    /// same filesystem. Compare the protected kernel table's superblocks
-    /// for the two held FDs. This is not a claim about independent disks.
+    /// Compare superblocks: bind mounts can have different mount IDs and
+    /// still refer to the same filesystem.
     pub(super) fn distinct_filesystems(&self,a:&File,b:&File)->io::Result<bool>{self.separate(id(a)?,id(b)?)}
     fn separate(&self,a:u64,b:u64)->io::Result<bool>{
         let get=|i|self.0.get(&i).map(|p|p.superblock).ok_or_else(||invalid("held filesystem is not in this mount namespace"));
