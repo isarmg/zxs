@@ -5,6 +5,9 @@ mod handshake_hash;
 #[allow(dead_code, reason = "input layer is staged before the network runtime")]
 mod wire;
 mod local;
+#[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
+#[allow(unused_macros, unused_imports, reason = "fixed or software backends may compile out dynamic probes")]
+mod hardware_capabilities;
 #[allow(dead_code, reason = "Rust supervisor handoff is staged before activation")]
 mod launch;
 pub(crate) use launch::InheritedRun;

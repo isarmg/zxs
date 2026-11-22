@@ -15,7 +15,6 @@ exclude = [
     "vendor/rust/block-buffer-0.12.1",
     "vendor/rust/cipher-0.5.2",
     "vendor/rust/cmov-0.5.4",
-    "vendor/rust/cpufeatures-0.3.1",
     "vendor/rust/crypto-common-0.2.2",
     "vendor/rust/ctutils-0.4.8",
     "vendor/rust/digest-0.11.3",
@@ -33,9 +32,6 @@ cipher = { version = "=0.5.2", path = "vendor/rust/cipher-0.5.2", default-featur
 digest = { version = "=0.11.3", path = "vendor/rust/digest-0.11.3", features = ["block-api", "mac", "zeroize"] }
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
 zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }
-
-[target.'cfg(any(target_arch = "aarch64", target_arch = "x86_64", target_arch = "x86"))'.dependencies]
-cpufeatures = { version = "=0.3.1", path = "vendor/rust/cpufeatures-0.3.1" }
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

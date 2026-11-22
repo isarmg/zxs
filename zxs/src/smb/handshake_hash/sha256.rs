@@ -49,10 +49,10 @@ crate::smb::backend_select::cfg_if! {
         crate::smb::backend_select::cfg_if! {
             if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
                 mod x86_sha;
-                cpufeatures::new!(shani_cpuid, "sha", "sse4.1");
+                crate::smb::hardware_capabilities::probe!(query, shani_cpuid, "sha", "sse4.1");
             } else if #[cfg(target_arch = "aarch64")] {
                 mod aarch64_sha2;
-                cpufeatures::new!(sha2_hwcap, "sha2");
+                crate::smb::hardware_capabilities::probe!(query, sha2_hwcap, "sha2");
             }
         }
 

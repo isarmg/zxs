@@ -21,9 +21,9 @@ type Block = Array<u8, U16>;
 // Define token used for target feature detection
 cfg_if! {
     if #[cfg(all(not(aes_backend = "soft"), any(target_arch = "x86_64", target_arch = "x86")))] {
-        cpufeatures::new!(features_aes, "aes");
-        cpufeatures::new!(features_vaes256, "vaes");
-        cpufeatures::new!(features_vaes512, "avx512f", "vaes");
+        crate::smb::hardware_capabilities::probe!(token, features_aes, "aes");
+        crate::smb::hardware_capabilities::probe!(token, features_vaes256, "vaes");
+        crate::smb::hardware_capabilities::probe!(token, features_vaes512, "avx512f", "vaes");
 
         #[derive(Clone, Copy)]
         struct Token {
@@ -43,7 +43,7 @@ cfg_if! {
         }
 
     } else if #[cfg(all(not(aes_backend = "soft"), target_arch = "aarch64", not(miri)))] {
-        cpufeatures::new!(features_aes, "aes");
+        crate::smb::hardware_capabilities::probe!(token, features_aes, "aes");
 
         #[derive(Clone, Copy)]
         struct Token {

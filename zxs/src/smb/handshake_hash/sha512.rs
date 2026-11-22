@@ -46,10 +46,10 @@ crate::smb::backend_select::cfg_if! {
         crate::smb::backend_select::cfg_if! {
             if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
                 mod x86_avx2;
-                cpufeatures::new!(avx2_cpuid, "avx2");
+                crate::smb::hardware_capabilities::probe!(query, avx2_cpuid, "avx2");
             } else if #[cfg(target_arch = "aarch64")] {
                 mod aarch64_sha3;
-                cpufeatures::new!(sha3_hwcap, "sha3");
+                crate::smb::hardware_capabilities::probe!(query, sha3_hwcap, "sha3");
             }
         }
 
