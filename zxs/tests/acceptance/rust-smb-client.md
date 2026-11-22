@@ -50,6 +50,9 @@ python3 -I tests/acceptance/rust_smb_client.py operations --evidence-fd 7 --cred
 1. 以同样参数运行 `seed-move-a`，随后用现有 Web 提交 A。再运行
    `seed-move-b`，用 Web 提交 B。两步分别在 F1 的同一
    `zxs-normal-move.bin` 确认 4096 字节的数据；同一 FileId 各得一版。
+   两次 Web 提交都从同一台虚拟机的初始（服务端）网络命名空间，用浏览器直连
+   实际确认的数字地址，例如 `http://192.0.2.1:8443`。`zxs-lab.test` 只用于 SMB；
+   独立 SMB 客户端的网络命名空间仍只放行 TCP 445。
    记录两版的节点、版本、父节点、SAVE 和实际内容证据。
    B 后取原只读基准，确认 F2 同名空位和这个 FILE 没有传输。不要通过复制准备目标。
 2. `move-stock` 先用强签客户端记录源的真实逻辑文件号和 B，再调用固定发行版
