@@ -52,6 +52,7 @@ python3 -m zipworkspace commit demo/states/second --fork --writers-stopped
 - 断线后用 `status` 查看原 `pending_operation`，再执行 `python3 -m zipworkspace resume STATE OPERATION`。客户端从本次已打开的原存储目录读取准确的代际槽位，在同一归档句柄核验整包 SHA-256、节点和全部成员。文件及目录同步后须仍是刚核验的文件和目录，才能确认成功；否则不清除待决操作。若本次改名明确成功，还须是刚上传的文件实体。重新打开时只凭已登记的原标记和整包摘要核对，不把同名存储认作先前持有的目录：必须先由操作者确认仍是原存储。找不到原证据不凭当前工作树重新签发。
 - `branches ARCHIVE STORE` 区分观察到的最高代与祖先完整的分支头。`checkout-branch ARCHIVE STORE WORKTREE STATE BRANCH_ID` 使用本次签出命令核验到的完整分支头，不锁定上一次列表。要签出之前看到的特定快照，使用 `checkout-node ARCHIVE STORE WORKTREE STATE NODE_ID`。本次选定后，即使字节相同，名称、文件身份、大小或时间戳不符也会拒绝。签出前在独占创建的私有副本上核验完整成员、节点和整包 SHA-256，目录同步后再次核对副本仍是原文件。失败可能留下尚未登记的准备目录，不自动删除。操作者仍须提供稳定的私有 STATE 位置；这不是桌面受管签出。
 - 仅新签出需要 Python 所带 SQLite 支持 `serialize()`：原操作的初始记录只在内存中生成一次，再排他写入新 `opening.sqlite`。默认准备目录仅含它和原包；`--private-stage` 另含一份已核验的签出目录。按所选方式核对全部对象并同步后，才交给常规 SQLite。已有签出的原操作查询、恢复和锁协议不变，不复制或替换活动数据库。
+- 默认签出尚未记录暂存目录时，从私有 STATE 打开一次 `original.zxs`，用同一只读句柄核原回执的整包摘要、解包及再次核摘要。核实原名和文件未变后才记录已同步的暂存目录；不从 STORE 补包。已有暂存决定的恢复继续核对原目录，不重新打开原包。
 - 默认首次签出已记录暂存目录后，命令在原目标父目录内做不可覆盖改名、同步和读回；若父目录或目标被替换，不登记替件。应答丢失只查原操作。暂存名称及早期解包仍要求该父目录由操作者控制，期间不要让同步工具或其他写入者改动它；目标不可覆盖不等于源名不能被换。
 
 **如果不希望目标位置出现解包中的目录：** Linux 的四个签出命令都可加 `--private-stage`，例如 `zip-workspace checkout design.zxs worktrees/design archives private-states/design --private-stage`。先准备互不包含的 `worktrees`、`archives`、`private-states` 三个目录；后者须由当前用户独占（0700），在整个操作及恢复期间不允许其他程序同步、搬动或修改。私有父与目标父必须是同一实际 Linux ext4/XFS 挂载，目标父不能是符号链接。恢复前也按当前实际 STORE 复查隔离；同一设备经另一挂载暴露的 STORE 别名不予接纳。这不是对远端存储历史身份的登记。条件不满足就拒绝，不改在目标目录解包，也不改用复制。

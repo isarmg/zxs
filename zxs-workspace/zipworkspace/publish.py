@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 import ctypes
 import errno
-import hashlib
 import os
 from pathlib import Path
 import stat
@@ -11,7 +10,7 @@ import sys
 from .archive import read_managed_document, stamp
 from .capacity import buffered_output, close_output_fd, note, writing
 from .document import archive_sha as hash_document, named_document, native_identity
-from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, new_id
+from .model import CHUNK, Commit, Rejected, new_id
 
 
 class Conflict(Rejected): pass
@@ -62,23 +61,6 @@ def rename_new(source: Path, target: Path):
     fd = os.open(source.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try: rename_new_at(fd, source.name, target.name)
     finally: os.close(fd)
-
-
-def digest_file(path: Path):
-    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
-        raise Rejected("exact named archive readback is not available on this platform")
-    h = hashlib.sha256()
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as f:
-        meta = os.fstat(f.fileno())
-        if not stat.S_ISREG(meta.st_mode) or meta.st_size > MAX_TOTAL + 2 * MAX_CD + (1 << 20):
-            raise Rejected("expected a bounded ordinary archive file")
-        before = stamp(f)
-        while data := f.read(CHUNK): h.update(data)
-        if before != stamp(f): raise Rejected("archive changed during digest")
-        if not os.path.samestat(os.fstat(f.fileno()), os.stat(path, follow_symlinks=False)):
-            raise Rejected("named archive rebound")
-    return h.hexdigest()
 
 
 class StoreReadback:

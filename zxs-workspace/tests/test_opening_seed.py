@@ -32,6 +32,77 @@ class InitialCheckoutRecord(unittest.TestCase):
     def seed(self):
         return next(self.root.glob(".zip-opening-*"))
 
+    def record_only(self):
+        with patch.object(opening, "finish", side_effect=InterruptedError("STATE installed")):
+            with self.assertRaisesRegex(InterruptedError, "STATE installed"): self.begin()
+        info = opening.status(self.state)
+        self.assertEqual(info["recorded_stage"], "original_recorded")
+        return info["operation"]
+
+    def test_unstaged_original_resumes_offline_using_one_read_only_seed(self):
+        from fcntl import F_GETFL, fcntl
+
+        operation = self.record_only()
+        self.archive.rename(self.root / "offline.zxs")
+        local = self.state / "original.zxs"
+        held, extract = [], opening.extract_checkout_document
+
+        def materialize(document, *, display_name, scratch):
+            meta = os.fstat(document.fileno())
+            self.assertTrue(os.path.samestat(meta, local.stat()))
+            self.assertEqual(fcntl(document.fileno(), F_GETFL) & os.O_ACCMODE, os.O_RDONLY)
+            self.assertEqual((display_name, scratch.parent), (local.name, self.dest.parent))
+            held.append(document)
+            return extract(document, display_name=display_name, scratch=scratch)
+
+        with patch.object(opening, "relative_document", wraps=opening.relative_document) as opened, \
+             patch.object(opening, "archive_sha", wraps=opening.archive_sha) as digest, \
+             patch.object(opening, "extract_checkout_document", side_effect=materialize):
+            self.assertEqual(opening.finish(self.state, operation), (self.dest, self.marker))
+        opened.assert_called_once()
+        doc, = held
+        self.assertEqual([c.args for c in digest.call_args_list], [(doc,), (doc,)])
+        self.assertTrue(doc.closed)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "attached")
+
+    def test_wrong_seed_digest_is_rejected_before_creating_scratch(self):
+        operation = self.record_only()
+        (self.state / "original.zxs").write_bytes(b"wrong archive")
+        with patch.object(opening.tempfile, "mkdtemp", side_effect=AssertionError("no scratch")):
+            with self.assertRaisesRegex(Rejected, "original checkout archive is unavailable"):
+                opening.finish(self.state, operation)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "original_recorded")
+        self.assertFalse(self.dest.exists())
+
+    def test_equal_bytes_seed_rebound_at_scratch_barrier_is_not_registered(self):
+        operation = self.record_only()
+        local, displaced = self.state / "original.zxs", self.state / "displaced"
+        sync = opening.sync_dir
+
+        def swap_after_sync(parent):
+            self.assertEqual(parent, self.dest.parent)
+            sync(parent)
+            local.rename(displaced); local.write_bytes(displaced.read_bytes())
+
+        with patch.object(opening, "sync_dir", side_effect=swap_after_sync):
+            with self.assertRaisesRegex(Rejected, "original archive leaf was replaced or modified"):
+                opening.finish(self.state, operation)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "original_recorded")
+        self.assertNotEqual(local.stat().st_ino, displaced.stat().st_ino)
+        self.assertEqual(local.read_bytes(), displaced.read_bytes())
+        self.assertFalse(self.dest.exists())
+        self.assertFalse((self.state / "worktree.sqlite").exists())
+        self.assertEqual(len(list(self.root.glob(".zip-checkout-*"))), 1)  # Never clean up on an uncertain result.
+
+    def test_verified_stage_resumes_without_reopening_the_seed(self):
+        operation = self.record_only()
+        with patch.object(opening, "rename_new_at", side_effect=InterruptedError("before publish")):
+            with self.assertRaisesRegex(InterruptedError, "before publish"): opening.finish(self.state, operation)
+        self.assertEqual(opening.status(self.state)["recorded_stage"], "verified_stage")
+        (self.state / "original.zxs").rename(self.state / "displaced")
+        with patch.object(opening, "relative_document", side_effect=AssertionError("no seed reopen")):
+            self.assertEqual(opening.finish(self.state, operation), (self.dest, self.marker))
+
     def test_only_the_prepared_row_is_installed_and_normal_sqlite_resumes_that_operation(self):
         connect = sqlite3.connect
         def memory_only(path, *args, **kwargs):

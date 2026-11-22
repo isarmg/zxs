@@ -342,6 +342,11 @@ def read_managed_document(document, *, display_name: str, observer=None):
     return _managed_document(document, display_name, None, observer=observer)
 
 
+def extract_checkout_document(document, *, display_name: str, scratch: Path):
+    """Legacy managed checkout only: use the borrowed input and newly created private scratch."""
+    return _managed_document(document, display_name, None, sink=_PathSink(scratch))
+
+
 def read_indexed_document(document, *, display_name: str):
     """Same full admission, additionally retaining verified Store offsets and block hashes for pread."""
     blocks = {}
@@ -349,14 +354,14 @@ def read_indexed_document(document, *, display_name: str):
     return marker, manifest, blocks  # Never expose the partial index of a rejected archive.
 
 
-def _managed_document(document, display_name, blocks, *, observer=None):
+def _managed_document(document, display_name, blocks, *, sink=None, observer=None):
     if not display_name or "/" in display_name or "\\" in display_name or Path(display_name).suffix.lower() != ".zxs":
         raise Rejected("select a managed .zxs document")
     if not document.seekable() or not stat.S_ISREG(os.fstat(document.fileno()).st_mode):
         raise Rejected("select a seekable regular file or a completed private copy")
     position = document.tell()
     try:
-        return _read_checked(nullcontext(document), managed=True, sink=None, blocks=blocks, observer=observer)
+        return _read_checked(nullcontext(document), managed=True, sink=sink, blocks=blocks, observer=observer)
     finally:
         document.seek(position)
 

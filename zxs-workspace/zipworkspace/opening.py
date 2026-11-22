@@ -7,15 +7,15 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
-from .archive import read_archive, read_managed_document, stamp
+from .archive import extract_checkout_document, read_managed_document, stamp
 from .capacity import buffered_output, close_output_fd, note, writing
-from .document import archive_sha, named_document
-from .freeze import observe_held, observe_tree
+from .document import archive_sha, named_document, relative_document
+from .freeze import observe_held
 from . import private_stage as staging
 from .lifecycle import instance, locations, who
 from .model import CHUNK, MAX_TOTAL, MAX_CD, Commit, Rejected, check_id, member_name, new_id
 from .private_candidates import CandidateDirectory, generation, held_candidates
-from .publish import digest_file, held_store, rename_new, rename_new_at, require_native_writer, sync_dir
+from .publish import held_store, rename_new, rename_new_at, require_native_writer, sync_dir
 
 MAX_AUTO = 256
 MAX_INITIAL_DB = 64 << 10  # One fresh PREPARED row; never serialize a live catalog.
@@ -405,6 +405,35 @@ def _held_directory(name, expected, *, parent_fd=None):
         os.close(fd)
 
 
+def _prepare_legacy_stage(state, parent, operation, marker, expected_sha):
+    """Materialize the default CLI's scratch from this attempt's exact original seed."""
+    name = "original.zxs"
+    # The original receipt pins bytes and marker even across a process stop. Pin
+    # the actual ordinary read-only leaf and its name throughout this attempt.
+    with held_candidates(state) as area, relative_document(area.parent, name, single=True) as seed:
+        observed = stamp(seed)
+        if archive_sha(seed) != expected_sha: raise Rejected("original checkout archive is unavailable")
+        area.check_file(name, seed.fileno(), observed)
+        with writing("工作目录父", parent, "建立原签出暂存目录", operation):
+            stage = Path(tempfile.mkdtemp(prefix=".zip-checkout-", dir=parent))
+        fd = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            m = os.fstat(fd)
+            sid = str(m.st_dev), str(m.st_ino), stat.S_IFDIR
+            # The source and output may be on different filesystems; don't
+            # attribute arbitrary archive-reader failures to the target.
+            represented, _ = extract_checkout_document(seed, display_name=name, scratch=stage)
+            if (represented != marker or archive_sha(seed) != expected_sha or
+                    observe_held(fd, (m.st_dev, m.st_ino)).digest() != marker.tree or _parent(stage) != sid):
+                raise Rejected("private checkout stage is not the original verified directory")
+            with writing("工作目录父", parent, "同步原签出暂存目录项", operation, fd):
+                sync_dir(parent)
+        finally:
+            os.close(fd)
+        area.check_state()  # relative_document checks the original named leaf on successful exit.
+    return stage.name, sid[0], sid[1]
+
+
 def finish(state, operation, *, selected=None):
     from .worktree import create_catalog, paths
     require_native_writer()
@@ -417,23 +446,8 @@ def finish(state, operation, *, selected=None):
             _catalog_matches(state,row,dest)
             return dest,marker  # Historical receipt, never reattach or move a later checkout.
         if row["stage"] is None:
-            local = state/"original.zxs"
-            if digest_file(local) != row["sha"]: raise Rejected("original checkout archive is unavailable")
-            with writing("工作目录父", parent, "建立原签出暂存目录", operation):
-                stage = Path(tempfile.mkdtemp(prefix=".zip-checkout-",dir=parent))
-            held = os.open(stage, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                m = os.fstat(held); sid = str(m.st_dev), str(m.st_ino), stat.S_IFDIR
-                # Legacy extraction reads original.zxs on STATE as well as writing a different
-                # filesystem. Do not attribute arbitrary archive-reader errors to the target.
-                represented,_ = read_archive(local,sink=stage)
-                if (represented != marker or digest_file(local) != row["sha"]
-                        or observe_tree(stage).digest() != marker.tree or _parent(stage) != sid):
-                    raise Rejected("private checkout stage is not the original verified directory")
-                with writing("工作目录父", parent, "同步原签出暂存目录项", operation, held):
-                    sync_dir(parent)
-            finally: os.close(held)
-            con.execute("UPDATE opening SET stage=?,stage_dev=?,stage_ino=? WHERE singleton=1", (stage.name,sid[0],sid[1]))
+            stage = _prepare_legacy_stage(state, parent, operation, marker, row["sha"])
+            con.execute("UPDATE opening SET stage=?,stage_dev=?,stage_ino=? WHERE singleton=1", stage)
     # The original stage decision is durable before any visible rename.
     while True:
         with ExitStack() as held:
