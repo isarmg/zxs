@@ -126,7 +126,7 @@ impl<'a> Message<'a> {
     }
 
     pub(in crate::smb) fn read_request(&self, max_read: u32) -> Result<ReadRequest, IoFieldError> {
-        use IoFieldError::*;
+        use IoFieldError::{Malformed, ExceedsMaxRead, InvalidRange};
         self.read_fixed()?;
         let p = self.raw;
         let flags = p[67];
@@ -161,14 +161,14 @@ impl<'a> Message<'a> {
         self.io_open_reference(80)
     }
     fn read_fixed(&self)->Result<(),IoFieldError>{
-        use IoFieldError::*;
+        use IoFieldError::{WrongCommand, Malformed};
         if self.header.command!=0x0008{return Err(WrongCommand);}
         if self.raw.len()<112||u16le(self.raw,64).map_err(|_|Malformed)?!=49{return Err(Malformed);}
         Ok(())
     }
 
     pub(in crate::smb) fn close_request(&self) -> Result<CloseRequest, IoFieldError> {
-        use IoFieldError::*;
+        use IoFieldError::Malformed;
         self.close_fixed()?;
         let p = self.raw;
         let mode = match u16le(p, 66).map_err(|_| Malformed)? {
@@ -187,7 +187,7 @@ impl<'a> Message<'a> {
         self.io_open_reference(72)
     }
     fn close_fixed(&self)->Result<(),IoFieldError>{
-        use IoFieldError::*;
+        use IoFieldError::{WrongCommand, Malformed};
         if self.header.command!=0x0006{return Err(WrongCommand);}
         if self.raw.len()<88||u16le(self.raw,64).map_err(|_|Malformed)?!=24{return Err(Malformed);}
         Ok(())
@@ -196,7 +196,7 @@ impl<'a> Message<'a> {
     /// MS-SMB2 §§2.2.21 and 3.3.5.13. Borrow exactly Length TCP bytes of this
     /// message, never a descriptor, an adjacent command, or compound padding.
     pub(in crate::smb) fn write_request(&self, max_write: u32) -> Result<WriteRequest<'a>, IoFieldError> {
-        use IoFieldError::*;
+        use IoFieldError::{Malformed, ExceedsMaxWrite, InvalidRange};
         self.write_fixed()?;
         let p = self.raw;
         if u32le(p, 96).map_err(|_| Malformed)? != 0 {
@@ -242,7 +242,7 @@ impl<'a> Message<'a> {
         self.io_open_reference(80)
     }
     fn write_fixed(&self) -> Result<(), IoFieldError> {
-        use IoFieldError::*;
+        use IoFieldError::{WrongCommand, Malformed};
         if self.header.command != 0x0009 { return Err(WrongCommand); }
         if self.raw.len() < WRITE_FIXED || u16le(self.raw, 64).map_err(|_| Malformed)? != 49 {
             return Err(Malformed);
@@ -252,7 +252,7 @@ impl<'a> Message<'a> {
 
     /// MS-SMB2 §2.2.17. Neither reserved field is a flush mode.
     pub(in crate::smb) fn flush_request(&self) -> Result<FlushRequest, IoFieldError> {
-        use IoFieldError::*;
+        use IoFieldError::{WrongCommand, Malformed};
         if self.header.command != 0x0007 {
             return Err(WrongCommand);
         }

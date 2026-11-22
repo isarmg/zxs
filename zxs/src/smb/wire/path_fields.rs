@@ -32,7 +32,7 @@ impl<'a> Message<'a> {
     /// MS-SMB2 2.2.9: a plain UNC field of one TREE_CONNECT. The caller
     /// still needs the authenticated member and the real share resolver.
     pub(in crate::smb) fn tree_connect_name_field(&self) -> Result<&'a [u8], FieldError> {
-        use FieldError::*;
+        use FieldError::{WrongCommand, Unsupported, Malformed};
         const FIXED: usize = 72;
         const MAX_NAME_BYTES: usize = (2 + TREE_SERVER_UNITS + 1 + TREE_SHARE_UNITS) * 2;
         if self.header.command != 3 { return Err(WrongCommand); }
@@ -57,7 +57,7 @@ impl<'a> Message<'a> {
     /// MS-SMB2 2.2.13. Offsets start at this message's header, not the
     /// Direct TCP frame or the first member of a compound.
     pub(in crate::smb) fn create_name_fields(&self) -> Result<CreateNameField<'a>, FieldError> {
-        use FieldError::*;
+        use FieldError::{WrongCommand, Malformed, Unsupported};
         if self.header.command != 5 { return Err(WrongCommand); }
         let p = self.raw;
         if p.len() < 121 || u16le(p, 64).map_err(|_| Malformed)? != 57 { return Err(Malformed); }
@@ -87,7 +87,7 @@ impl<'a> Message<'a> {
 
     /// MS-SMB2 2.2.39; MS-FSCC 2.4.42.2. Padding is not part of the name.
     pub(in crate::smb) fn basic_rename_name_field(&self) -> Result<RenameNameField<'a>, FieldError> {
-        use FieldError::*;
+        use FieldError::{WrongCommand, Unsupported, Malformed, RenameInformationLength};
         if self.header.command != 0x11 { return Err(WrongCommand); }
         if self.header.flags & DFS != 0 { return Err(Unsupported); }
         let p = self.raw;

@@ -72,7 +72,7 @@ impl<'step, 'raw> FileSetRequest<'step, 'raw> {
 }
 
 fn fixed(m:&Message<'_>)->Result<(),Error>{
-    use Error::*;
+    use Error::{WrongCommand, Malformed};
     if m.header.command != SET_INFO { return Err(WrongCommand); }
     if m.raw.len() < FIXED_END || u16le(m.raw,64).map_err(|_|Malformed)? != 33 {
         return Err(Malformed);
@@ -97,7 +97,7 @@ impl Message<'_>{
 }
 
 fn fields(m: &Message<'_>, max_transact: u32) -> Result<Fields, Error> {
-    use Error::*;
+    use Error::{NotInProfile, Malformed, ExceedsMaxTransact, InformationLength, NegativeEof, NoExplicitOpen};
     fixed(m)?;
     if m.header.flags & NO_CURRENT_TARGET != 0 { return Err(NotInProfile); }
     let p = m.raw;

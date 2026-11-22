@@ -26,7 +26,7 @@ pub(in crate::smb) enum DirectoryClass {
 
 impl DirectoryClass {
     fn select(value: u8) -> Result<Self, QueryError> {
-        use DirectoryClass::*;
+        use DirectoryClass::{Directory, Full, Both, Names, IdBoth, IdFull};
         match value {
             1 => Ok(Directory),
             2 => Ok(Full),
