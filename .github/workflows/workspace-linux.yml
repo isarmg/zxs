@@ -1,0 +1,92 @@
+name: Workspace Linux source qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/workspace-linux.yml
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    if: github.ref == 'refs/heads/main'
+    name: Ubuntu 26.04 x64 / local filesystem and virtual X11
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: zxs-workspace
+    steps:
+      - name: Checkout this Workspace revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: zxs-workspace
+      - name: Select CPython from the hosted tool cache
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14.10'
+          architecture: x64
+      - name: Check the stock runner and reserve private fixture space
+        id: scratch
+        run: |
+          . /etc/os-release
+          [[ "$ID" == ubuntu && "$VERSION_ID" == 26.04 && "$(uname -m)" == x86_64 ]]
+          [[ "$(id -u)" != 0 && "$RUNNER_TEMP" == /* && "$RUNNER_TEMP" != / ]]
+          mount_profile="$(/usr/bin/findmnt --kernel --target "$RUNNER_TEMP" --noheadings --raw --output FSTYPE,FSROOT)"
+          printf 'Fixture filesystem and exposed root: %s\n' "$mount_profile"
+          if [[ "$mount_profile" != 'ext4 /' && "$mount_profile" != 'xfs /' ]]; then
+            echo "::error::The runner has no qualified whole ext4/XFS at RUNNER_TEMP; not substituting another filesystem."
+            exit 1
+          fi
+          umask 077
+          scratch="$(mktemp -d "$RUNNER_TEMP/workspace-linux.XXXXXXXX")"
+          printf 'root=%s\n' "$scratch" >> "$GITHUB_OUTPUT"
+          if [[ -c /dev/fuse && -x /usr/bin/fusermount3 ]]; then
+            echo 'Stock FUSE device and helper found; kernel mounting is outside this job.'
+          else
+            echo 'Stock FUSE device and helper are not both present; no kernel mounting attempted.'
+          fi
+      - name: Verify package inputs and run filesystem and mount-receipt fixtures
+        env:
+          WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
+        run: |
+          sha256sum --strict --check packaging/ubuntu-26.10/INPUTS.sha256
+          python -I -B -X utf8 tests/qualification/hosted_linux.py filesystem "$WORKSPACE_SCRATCH"
+      - name: Prepare locked Qt wheels in a private virtual environment
+        env:
+          WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
+        run: |
+          [[ -x /usr/bin/xvfb-run && -x /usr/bin/Xvfb && -x /usr/bin/xauth ]] || {
+            echo "::error::The stock image lacks a usable Xvfb launcher; not changing the system."
+            exit 1
+          }
+          umask 077
+          python -I -B -m venv "$WORKSPACE_SCRATCH/venv"
+          mkdir "$WORKSPACE_SCRATCH/wheels"
+          pip=("$WORKSPACE_SCRATCH/venv/bin/python" -I -B -m pip --isolated --disable-pip-version-check --no-input)
+          lock=(--no-deps --only-binary=:all: --require-hashes --no-cache-dir -r tests/qualification/hosted-linux-requirements.txt)
+          "${pip[@]}" download --index-url https://pypi.org/simple --dest "$WORKSPACE_SCRATCH/wheels" "${lock[@]}"
+          "${pip[@]}" install --no-index --find-links "$WORKSPACE_SCRATCH/wheels" "${lock[@]}"
+          "${pip[@]}" check
+      - name: Exercise XCB Qt windows on a virtual display
+        env:
+          WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
+        run: |
+          umask 077
+          /usr/bin/xvfb-run -a -s '-screen 0 1280x960x24 -nolisten tcp' \
+            "$WORKSPACE_SCRATCH/venv/bin/python" -I -B -X utf8 \
+            tests/qualification/hosted_linux.py virtual-qt "$WORKSPACE_SCRATCH"
+      - name: Record qualification scope
+        if: always()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SCOPE'
+          This job covers source fixtures on the actual Ubuntu 26.04 runner filesystem,
+          read-only mount handoff/receipt fixtures and, if successful, XCB Qt on Xvfb.
+          It does not cover a physical desktop, installed Ubuntu 26.10 packages, desktop
+          file association, pyfuse3 callbacks or kernel mounting. Nothing was installed system-wide.
+          SCOPE
