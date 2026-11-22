@@ -17,18 +17,11 @@ cryptographic service supplies a crate.
 crates.io index, upstream repository/revision, license, edition and minimum
 Rust version of each upstream package. All 21 original archive checksums were verified before
 import (2,557,868 compressed bytes in total). No .crate archive or prebuilt
-object is committed. Inside each remaining package the published src/**, build.rs where
-present, .cargo_vcs_info.json, README, LICENSE files, Cargo.toml.orig (author
-manifest) and Cargo.toml.upstream (registry-normalized manifest) are unchanged.
-The original intake comprised 735 such files. Unchanged files can be compared
-by Git blob ID with their matching archive paths (map Cargo.toml.upstream to
-Cargo.toml).
+object is committed. The active manifests, library and build sources, and required license texts
+are in this tree. Earlier intake manifests are recoverable from Git history.
 
-An active Cargo.toml starts from Cargo.toml.upstream, then adds a relative
-path to any existing dependency section naming a vendored package (including
-the `common` alias for crypto-common, matching dev entries and target
-conditional entries) and omits explicit upstream test/bench targets that are
-not imported. That policy still applies to the separate packages. Code
+For the remaining path packages, the active manifest points dependency edges
+at local paths and omits upstream test and benchmark targets not carried here. Code
 incorporated into ZXS instead records its original blob and actual local
 integration changes. ZXS-authored SMB test source is kept under `src/test/smb/`.
 
