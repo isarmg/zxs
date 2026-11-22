@@ -1,5 +1,5 @@
-//! Optional, explicitly labelled udev aliases. Nothing here reads a block
-//! device: the only descriptor which can designate a device node is `O_PATH`.
+//! Optional, explicitly labelled udev aliases are O_PATH-only. The separate
+//! NVMe health selection can hold one checked direct namespace read-only.
 use super::*;
 use crate::pinned::Mount;
 use rustix::fs::{Mode,OFlags,RawDir,ResolveFlags,openat2};
@@ -87,6 +87,61 @@ impl DevRoot {
         if (now.entity,now.mount)!=(self.entity,self.mount){return Err(Reason::Changed);}
         Ok(())
     }
+
+    fn require_devtmpfs(&self)->Field<()>{
+        if !HostMounts::current().map_err(Reason::io)?.is_full_devtmpfs(self.mount.id,self.entity.dev){
+            return Err(Reason::Unsupported);
+        }
+        self.still_named()
+    }
+}
+
+pub(super) fn nvme_namespace_name(name:&str)->bool{
+    let canonical_number=|value:&str|{
+        value.len()<=10&&value.parse::<u32>().is_ok_and(|n|n.to_string()==value)
+    };
+    name.strip_prefix("nvme").and_then(|rest|rest.split_once('n')).is_some_and(|(controller,namespace)|
+        canonical_number(controller)&&canonical_number(namespace)&&namespace!="0")
+}
+
+/// Only the direct namespace spelling, under the original root-owned
+/// devtmpfs. Never use a udev alias, controller pathname or caller string.
+pub(super) struct NvmeNamespace<'a>{root:DevRoot,name:&'a str,dev:Dev,pin:File,original:File}
+impl<'a> NvmeNamespace<'a>{
+    fn open_slot(root:&DevRoot,name:&str,flags:OFlags)->Field<File>{
+        openat2(&root.fd,name,flags|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty(),
+            confined()|ResolveFlags::NO_SYMLINKS).map(File::from).map_err(|e|Reason::io(e.into()))
+    }
+
+    fn stamp(root:&DevRoot,fd:&File,dev:Dev)->Field<Entity>{
+        let m=fd.metadata().map_err(Reason::io)?;
+        if !m.file_type().is_block_device()||m.uid()!=0||m.rdev()!=dev.rdev()
+            ||Mount::on(fd).map_err(Reason::io)?.is_none_or(|m|m.id!=root.mount.id||m.at_root!=Some(false)){
+            return Err(Reason::Changed);
+        }
+        Entity::of(&m).map_err(Reason::io)
+    }
+
+    pub(super) fn open(identity:&'a Identity)->Field<Self>{
+        if identity.kind!=Kind::Disk||!nvme_namespace_name(&identity.name){return Err(Reason::Unsupported);}
+        let name=&identity.name;let dev=identity.dev;
+        let root=DevRoot::pin()?;root.require_devtmpfs()?;
+        let pin=Self::open_slot(&root,name,OFlags::PATH)?;
+        Self::stamp(&root,&pin,dev)?;
+        let original=Self::open_slot(&root,name,OFlags::RDONLY|OFlags::NONBLOCK)?;
+        let node=Self{root,name,dev,pin,original};node.require()?;Ok(node)
+    }
+
+    pub(super) fn require(&self)->Field<()>{
+        self.root.require_devtmpfs()?;
+        let now=Self::open_slot(&self.root,self.name,OFlags::PATH)?;
+        let initial=Self::stamp(&self.root,&self.pin,self.dev)?;
+        if Self::stamp(&self.root,&self.original,self.dev)?!=initial
+            ||Self::stamp(&self.root,&now,self.dev)?!=initial{return Err(Reason::Changed);}
+        Ok(())
+    }
+
+    pub(super) fn original(&self)->&File{&self.original}
 }
 
 pub(super) fn read(root:Field<DevRoot>,mounts:Field<&HostMounts>)->Aliases{

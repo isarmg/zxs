@@ -12,7 +12,7 @@ rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled
 zeroize = { version = "=1.9.1", default-features = false }
 libsqlite3-sys = { version = "=0.40.0", features = ["bundled"] }
 libc = "=0.2.190"
-linux-raw-sys = { version = "=0.12.1", default-features = false, features = ["std", "general"] }
+linux-raw-sys = { version = "=0.12.1", default-features = false, features = ["std", "general", "ioctl"] }
 rustix = { version = "=1.1.5", features = ["fs", "pipe", "process"] }
 
 [lints.rust]

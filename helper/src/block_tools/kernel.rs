@@ -1,6 +1,7 @@
 //! Read a fixed set of cached block attributes from the kernel's sysfs. Index
 //! symlinks are normal; they must resolve inside this one original sysfs mount.
 mod attachment;
+pub(super) use attachment::NvmeOwner;
 use super::*;
 use crate::pinned::Mount;
 use rustix::fs::{RawDir,ResolveFlags,fstatfs,openat2,readlinkat};

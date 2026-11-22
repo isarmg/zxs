@@ -1,7 +1,10 @@
 //! Explicit, bounded observation of Linux block-layer objects. No totals across
-//! disks, partitions or stacked devices; no raw-device reads or write actions.
+//! disks, partitions or stacked devices. Passive inventory is separate from
+//! the one explicit controller health observation; no disk write actions.
 mod aliases;
+mod health;
 mod kernel;
+pub(crate) use health::HealthQuery;
 
 use crate::maintenance::HostMounts;
 use crate::pinned::{Entity, require_no_automount};

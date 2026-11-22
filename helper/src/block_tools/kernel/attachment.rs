@@ -184,6 +184,37 @@ impl Node{
     }
 }
 
+/// Retain the actual direct NVMe controller ancestor, not just its label.
+/// Multipath/subsystem routing, partitions, fabrics and inferred owners refuse.
+pub(in crate::block_tools) struct NvmeOwner {
+    cut: Cut,
+    dev: Dev,
+    object: Entity,
+    generation: u64,
+}
+impl NvmeOwner {
+    pub(in crate::block_tools) fn select(sys:&Sys,node:&Node,id:&Identity)->Field<Self>{
+        if id.kind!=Kind::Disk{return Err(Reason::Unsupported);}
+        if node.dev!=id.dev||obj(&node.dir).map_err(Reason::io)?!=id.object{return Err(Reason::Changed);}
+        let generation=id.diskseq?;
+        let cut=Cut::read(sys,id.dev,id.object,generation)?;
+        if cut.parent.kind!=Subsystem::Nvme||cut.transport!=Ok("pcie"){return Err(Reason::Unsupported);}
+        let owner=Self{cut,dev:id.dev,object:id.object,generation};owner.require(sys)?;Ok(owner)
+    }
+
+    pub(in crate::block_tools) fn require(&self,sys:&Sys)->Field<()>{
+        let later=Cut::read(sys,self.dev,self.object,self.generation).map_err(changed_edge)?;
+        let verified=self.cut.finish(&later,AttachmentSource::KernelAncestor)?;
+        if verified.nvme_transport!=Ok("pcie"){return Err(Reason::Changed);}
+        let state=attr(&later.parent.dir,c"state").map_err(Reason::io)?;
+        if state!=b"live"{return Err(Reason::NotReported);}
+        later.parent.require_named(sys).map_err(changed_edge)?;
+        sys.require_named().map_err(Reason::io)
+    }
+
+    pub(in crate::block_tools) fn generation(&self)->u64{self.generation}
+}
+
 #[cfg(test)]
 mod tests{
     use super::*;
