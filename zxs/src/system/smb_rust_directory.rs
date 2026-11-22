@@ -3,8 +3,8 @@
 use super::{Catalog,Child,Connection,InitialReader,NameFilter,PageAt,
     ordinary_directory::{self,ConfirmedRelabel,NamedKind,Route},read_page_bound};
 use crate::{
-    DirectoryId,VolumeId,fs::{directory_birth::DirectoryParent,invalid},smb::{OrdinaryDirectoryRenameAdmission,RustSessionWitness},
-    system::reader::{account::share_mode::{Mode,Setting},smb::{denied,runtime::{RustRoot,RustRootStamp},smb_buffer},
+    DirectoryId,OperationId,VolumeId,fs::{directory_birth::DirectoryParent,invalid},smb::{OrdinaryDirectoryRenameAdmission,RustSessionWitness},
+    system::reader::{account::share_mode::{Mode,Setting},smb::{denied,first_work::RustFileName,runtime::{RustRoot,RustRootStamp},smb_buffer},
         volume::{OrdinaryMedia,OrdinaryRoot}},
 };
 use std::{io,rc::{Rc,Weak}};
@@ -116,6 +116,43 @@ impl RustOrdinaryDirectory{
     }
 }
 
+/// Normalized logical path of one exact ordinary directory OPEN. The
+/// optional selected place is absent only for the linked F volume label.
+/// Neither a host pathname nor an independent OPEN can mint this result.
+#[must_use]
+pub(crate) struct RustDirectoryName{
+    open:Weak<()>,position:Option<(OperationId,i64)>,path:String,
+}
+impl RustDirectoryName{
+    pub(crate) fn path(&self)->&str{&self.path}
+    fn capture<'a>(open:&Rc<()>,position:Option<(OperationId,i64)>,label:&'a str,
+        steps:impl Iterator<Item=&'a str>)->io::Result<Self>{
+        let path=RustFileName::format(std::iter::once(label).chain(steps))?;
+        Ok(Self{open:Rc::downgrade(open),position,path})
+    }
+    fn ties(&self,open:&Rc<()>,position:Option<(OperationId,i64)>)->bool{
+        self.open.ptr_eq(&Rc::downgrade(open))&&self.position==position
+    }
+}
+impl RustOrdinaryDirectory{
+    fn name_position(&self)->Option<(OperationId,i64)>{
+        self.route.selected().map(|place|(place.position(),place.generation()))
+    }
+    pub(crate) fn normalized_name(&self,tree:&RustRoot,member:&RustSessionWitness)->io::Result<RustDirectoryName>{
+        if !member.is_query_info(){return Err(denied());}
+        self.require_current(tree,member)?;
+        RustDirectoryName::capture(&self.open,self.name_position(),&self.label,self.route.components())
+    }
+    pub(crate) fn require_normalized_name(&self,tree:&RustRoot,member:&RustSessionWitness,
+        proof:&RustDirectoryName)->io::Result<()>{
+        if !member.is_query_info()||!proof.ties(&self.open,self.name_position()){return Err(denied());}
+        // Only a relabel of this same OPEN can replace its selected Route.
+        // Its leaf place then changes; any independently changed ancestor
+        // or setting instead fails the existing exact live route comparison.
+        self.require_current(tree,member)
+    }
+}
+
 #[must_use]
 pub(crate) struct RustDirectoryRename{original:ConfirmedRelabel,open:Weak<()>}
 impl RustOrdinaryDirectory{
@@ -221,5 +258,35 @@ impl RustOrdinaryDirectory{
             return Err(io::Error::new(io::ErrorKind::WouldBlock,"ordinary directory snapshot changed"));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod normalized_name_tests{
+    use super::*;
+
+    #[test]
+    fn directory_name_uses_the_linked_label_and_every_selected_ancestor(){
+        let open=Rc::new(());
+        let label=RustDirectoryName::capture(&open,None,"Data-é",std::iter::empty()).unwrap();
+        assert_eq!(label.path(),r"\Data-é");
+        let named=RustDirectoryName::capture(&open,Some((OperationId([1;16]),1)),
+            "Data-é",["Ärchive","报告🚀"].into_iter()).unwrap();
+        assert_eq!(named.path(),r"\Data-é\Ärchive\报告🚀");
+        assert!(RustDirectoryName::capture(&open,None,"Data-é",["..","Leaf"].into_iter()).is_err());
+    }
+
+    #[test]
+    fn directory_name_witness_rejects_an_equal_open_or_reused_spelling_after_relabel(){
+        let open=Rc::new(());
+        let old=Some((OperationId([1;16]),1));
+        let later=Some((OperationId([3;16]),3));
+        let name=RustDirectoryName::capture(&open,old,"Data",["Reports"].into_iter()).unwrap();
+        let renamed_back=RustDirectoryName::capture(&open,later,"Data",["Reports"].into_iter()).unwrap();
+        assert_eq!(name.path(),renamed_back.path());
+        assert!(name.ties(&open,old));
+        assert!(!name.ties(&Rc::new(()),old));
+        assert!(!name.ties(&open,None));
+        assert!(!name.ties(&open,later));
     }
 }

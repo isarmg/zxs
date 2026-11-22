@@ -1,5 +1,5 @@
 //! One standalone QUERY_INFO FileNormalizedNameInformation reply. Only
-//! the exact original authorized FILE name receipt can produce wire bytes.
+//! the exact original authorized ordinary FILE or directory name can produce wire bytes.
 use super::{Error,Result,direct::MAX_FRAME_BYTES,
     fixed_reply::{QUERY_INFO,information_too_small,standalone_header},
     query_fields::{FileClass,InfoClass}};

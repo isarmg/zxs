@@ -223,5 +223,5 @@ impl RootFiles<'_,'_,'_>{
 
 #[path="smb_rust_directory.rs"]
 mod rust;
-pub(crate) use rust::{RustDirectoryPage,RustDirectoryRename,RustOrdinaryDirectory,RustOrdinaryKind};
+pub(crate) use rust::{RustDirectoryName,RustDirectoryPage,RustDirectoryRename,RustOrdinaryDirectory,RustOrdinaryKind};
 pub(super) use rust::RustDirectorySelection;

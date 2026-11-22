@@ -31,3 +31,10 @@ fn normalized_name_short_and_partial_keep_their_distinct_311_bodies(){
     assert_eq!(encoded(PATH,19),(BUFFER_OVERFLOW,vec![9,0,72,0,18,0,0,0,16,0,0,0,
         b'\\',0,b'F',0,b'\\',0,0x87,0x65,b'\\',0,b'A',0,0x3d,0xd8]));
 }
+
+#[test]
+fn normalized_name_encodes_a_linked_directory_under_the_share_but_not_the_virtual_root(){
+    assert_eq!(encoded(r"\F",8),(0,vec![9,0,72,0,8,0,0,0,4,0,0,0,b'\\',0,b'F',0]));
+    assert!(NameBody::from_path(r"\",8).is_err());
+    assert!(NameBody::from_path(r"\\server\ZXS\F",4096).is_err());
+}

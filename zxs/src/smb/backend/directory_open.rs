@@ -3,12 +3,12 @@
 //! DELETE only for the bounded relabel lane, not data writes or disposition.
 //! Core chooses the kind; no FILE error is a directory test.
 use super::{BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
-    attribute_tag::PreparedAttributeTag,disposition::DELETE_ACCESS,file_open::FileStandardError,io::{CheckedClose,CloseAttributes,CloseCompletion},path::{NameError,TreeName}};
+    attribute_tag::PreparedAttributeTag,disposition::DELETE_ACCESS,file_open::{FileStandardError,normalized_name_error,normalized_query},io::{CheckedClose,CloseAttributes,CloseCompletion},path::{NameError,TreeName}};
 use crate::{DirectoryId,PoolId,VolumeId,fs::MAX_PATH_DEPTH,
     smb::{RustSessionWitness,connection::{Fault as ConnectionFault,sessions::ordinary::VerifiedMember},
         wire::{create_fields::{CurrentName,Disposition,Error as CreateError,SpecialOpen},io_fields::{CloseMode,IoFieldError,OpenReference},
             message::{RELATED,Routing},query_fields::{FileClass,InfoClass}}},
-    system::reader::smb::{directory::{RustOrdinaryDirectory,RustOrdinaryKind},runtime::RustRoot}};
+    system::reader::smb::{directory::{RustDirectoryName,RustOrdinaryDirectory,RustOrdinaryKind},runtime::RustRoot}};
 use std::{convert::Infallible,io,sync::{Arc,Weak}};
 
 const LIST:u32=1;
@@ -87,6 +87,18 @@ impl PreparedDirectoryStandard{
     }
 }
 
+/// Class 48 needs only the already authorized, by-name original OPEN,
+/// not FILE_LIST_DIRECTORY or an additional attributes grant.
+#[must_use]
+pub(in crate::smb) struct PreparedDirectoryName{view:RustDirectoryName,scope:RustSessionWitness,output:u32}
+impl PreparedDirectoryName{
+    pub(in crate::smb) fn output(&self)->u32{self.output}
+    pub(in crate::smb) fn path(&self)->&str{self.view.path()}
+    pub(in crate::smb) fn require_current(&self,open:&DirectoryOpen,tree:&RustRoot)->io::Result<()>{
+        open.held.original.require_normalized_name(tree,&self.scope,&self.view)
+    }
+}
+
 impl OpenCoordinator{
     /// None is a real FILE kind, not an arbitrary retry or a failed directory
     /// check. That branch still needs to select and hold its own actual FILE.
@@ -157,6 +169,12 @@ impl DirectoryOpen{
         let proof=PreparedDirectoryStandard{open:Arc::downgrade(&self.held._slot.identity),scope,output:query.output_bytes};
         proof.require_current(self,tree).map_err(FileStandardError::Original)?;
         Ok(proof)
+    }
+    pub(in crate::smb) fn prepare_normalized_name(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
+        ->Result<PreparedDirectoryName,FileStandardError>{
+        let (scope,output)=normalized_query(member)?;
+        let view=self.held.original.normalized_name(tree,&scope).map_err(normalized_name_error)?;
+        Ok(PreparedDirectoryName{view,scope,output})
     }
     pub(in crate::smb) fn prepare_attribute_tag(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>)
         ->Result<PreparedAttributeTag,FileStandardError>{
