@@ -213,5 +213,6 @@ impl Record {
 }
 
 
+#[cfg(test)]
 #[path="maintenance.rs"]
 pub(super) mod maintenance;

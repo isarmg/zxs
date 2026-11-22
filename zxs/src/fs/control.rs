@@ -36,6 +36,7 @@ impl ControlRead {
     }
     /// Only the original REGISTRATION is a lifetime lock target. Floor/mark
     /// reads take the existing short directory cut, not additional flocks.
+    #[cfg(test)]
     pub(crate) fn shared_registration(dir: &HeldDir, limit: usize) -> io::Result<Self> {
         let r = Self::open(dir, crate::pool::READY, limit)?;
         r.file.try_lock_shared().map_err(io::Error::from)?;
@@ -45,6 +46,7 @@ impl ControlRead {
     /// Both descriptors are still open, so comparing their current parent,
     /// mount and inode cannot be fooled by inode-number recycling after
     /// close. This is not a cold persistent identity or a lock transfer.
+    #[cfg(test)]
     pub(crate) fn same_registration(&self,other:&Self)->bool{
         self.name==crate::pool::READY&&other.name==self.name&&self.parent==other.parent&&
             self.mount==other.mount&&self.opening.entity()==other.opening.entity()
@@ -53,6 +55,7 @@ impl ControlRead {
     /// in the very same parent. The old descriptor is still open here,
     /// so this observer can reject a same-inode rewrite without claiming
     /// that a cold opener can reconstruct how a completed rename happened.
+    #[cfg(test)]
     pub(crate) fn replaces_confirmed(&self,prior:&Self)->bool{
         self.name==c"CONFIRMED"&&prior.name==self.name&&self.parent==prior.parent&&
             self.mount==prior.mount&&self.opening.entity()!=prior.opening.entity()
