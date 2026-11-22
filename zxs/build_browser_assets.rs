@@ -42,14 +42,14 @@ pub(super) fn embed(out:&Path)->io::Result<()>{
     println!("cargo:rerun-if-changed=build_browser_assets.rs");
     println!("cargo:rerun-if-changed=src/hash.rs");
 
-    let path=env::var(STAGE_ENV).map_err(|_|invalid("private-browser-ui requires ZXS_BROWSER_ASSETS"))?;
+    let path=env::var(STAGE_ENV).map_err(|_|invalid("ZXS requires a reviewed browser stage (ZXS_BROWSER_ASSETS)"))?;
     if path.chars().any(char::is_control){return Err(invalid("browser stage path contains control characters"));}
     let dir=PathBuf::from(path);
     if !dir.is_absolute()||dir.canonicalize()?.as_os_str()!=dir.as_os_str()||!dir.is_dir(){
         return Err(invalid("browser stage must be one canonical absolute directory"));
     }
     let pin=env::var(PIN_ENV).ok().and_then(|s|pin(&s))
-        .ok_or_else(||invalid("private-browser-ui requires one lowercase SHA-256 ZXS_BROWSER_ASSET_PIN"))?;
+        .ok_or_else(||invalid("ZXS requires one lowercase SHA-256 ZXS_BROWSER_ASSET_PIN"))?;
     println!("cargo:rerun-if-changed={}",dir.display());
     for (name,_) in SLOTS{println!("cargo:rerun-if-changed={}",dir.join(name).display());}
     let bytes=verified_stage(&dir,pin)?;

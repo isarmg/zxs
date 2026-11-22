@@ -78,8 +78,7 @@ mod tests{
         let page=std::str::from_utf8(body).unwrap();
         assert!(page.contains("src=\"/ui/v1/boot.js\"")&&page.contains("href=\"/ui/v1/folder.css\""));
         assert!(page.contains("action=\"/logout\"")&&page.contains("name=\"csrf\" value=\"csrf\""));
-        for reply in [Reply::html("200 OK",pages::sign_in(false)), BAD(),
-            Reply::html("200 OK",pages::overview(&data,"csrf").unwrap())]{
+        for reply in [Reply::html("200 OK",pages::sign_in(false)), BAD(), pages::manual_index(&[],None)]{
             let wire=written(reply);
             let (head,body)=components(&wire);
             assert!(!head.contains("script-src")&&!head.contains("connect-src"));

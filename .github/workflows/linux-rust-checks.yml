@@ -9,6 +9,7 @@ on:
       - zxs/src/**
       - zxs/tests/**
       - zxs/browser/**
+      - zxs/web/**
       - zxs/build*.rs
       - zxs/build_*.py
       - zxs/Cargo.*
@@ -32,11 +33,8 @@ jobs:
       matrix:
         include:
           - project: zxs
-            profile: ZXS default
+            profile: ZXS
             feature: ''
-          - project: zxs
-            profile: ZXS with reviewed browser stage
-            feature: private-browser-ui
           - project: helper
             profile: Helper default
             feature: ''
@@ -83,7 +81,7 @@ jobs:
         run: cargo fetch --locked
 
       - name: Stage the reviewed ZXS browser inputs
-        if: matrix.feature == 'private-browser-ui'
+        if: matrix.project == 'zxs'
         run: |
           input="$(mktemp -d "$RUNNER_TEMP/zxs-browser.XXXXXXXX")"
           mkdir "$input/crates"
@@ -109,7 +107,7 @@ jobs:
           python3 build_browser.py "$ZXS_RUST_BIN" --wasm-std "$input/rust-std.tar.xz" \
             --wasm-bindgen "$input/wasm-bindgen.tar.gz" --crates "$input/crates"
           printf 'ZXS_BROWSER_ASSETS=%s\n' "$(pwd -P)/target/browser-assets" >> "$GITHUB_ENV"
-          printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=e9f4a1f19980a50a4cb34533c31348eb2e67df3ca6ca5ce216b580c6fda5270b' >> "$GITHUB_ENV"
+          printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=8250f303ec855cc3f85d697dfcafa4563a27d3f0c32c3206df6bb880f9e50a9f' >> "$GITHUB_ENV"
 
       - name: Strict Clippy
         id: lint

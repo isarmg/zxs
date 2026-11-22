@@ -102,13 +102,13 @@ ELF; `provenance.json` is not served.
 
 ### Direct Cargo source checks
 
-Plain Cargo still leaves `private-browser-ui` off. For a source-only check of
-the paired code, use the independently reviewed stage and pin:
+Every ZXS Cargo build or check needs the same reviewed browser stage and
+pin. For a source-only check:
 
 ```sh
 ZXS_BROWSER_ASSETS=/absolute/path/to/target/browser-assets \
 ZXS_BROWSER_ASSET_PIN="$REVIEWED_STAGE_SHA256" \
-cargo check --lib --locked --offline --features private-browser-ui
+cargo check --lib --locked --offline
 ```
 
 This check does not produce the supported release artifact.

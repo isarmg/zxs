@@ -28,9 +28,6 @@ exclude = [
     "vendor/rust/zeroize-1.9.2",
 ]
 
-[features]
-private-browser-ui = []
-
 [dependencies]
 aes = { version = "=0.9.4", path = "vendor/rust/aes-0.9.4", default-features = false, features = ["zeroize"] }
 # The private NTLM key-exchange module keeps the former RC4 package's features.

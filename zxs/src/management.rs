@@ -6,7 +6,6 @@ mod pages;
 mod transport;
 mod manual;
 mod directory;
-#[cfg(feature="private-browser-ui")]
 mod browser;
 use transport::Audience;
 
@@ -62,15 +61,13 @@ impl Request{
 }
 #[derive(Clone,Copy)]
 enum Csp{
-    Native,
-    #[cfg(feature="private-browser-ui")]
+    Scriptless,
     BrowserOverview,
 }
 impl Csp{
     fn value(self)->&'static str{
         match self{
-            Self::Native=>"default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-            #[cfg(feature="private-browser-ui")]
+            Self::Scriptless=>"default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
             Self::BrowserOverview=>"default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; worker-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
         }
     }
@@ -78,7 +75,7 @@ impl Csp{
 struct Reply{status:&'static str,ty:&'static str,body:Cow<'static,[u8]>,csp:Csp,location:Option<&'static str>,set_cookie:Option<String>}
 impl Reply{
     fn content(status:&'static str,ty:&'static str,body:Cow<'static,[u8]>)->Self{
-        Self{status,ty,body,csp:Csp::Native,location:None,set_cookie:None}
+        Self{status,ty,body,csp:Csp::Scriptless,location:None,set_cookie:None}
     }
     fn text(status:&'static str,body:&'static str)->Self{Self::content(status,"text/plain; charset=utf-8",Cow::Borrowed(body.as_bytes()))}
     fn html(status:&'static str,body:String)->Self{Self::content(status,"text/html; charset=utf-8",Cow::Owned(body.into_bytes()))}
@@ -113,11 +110,8 @@ impl<'s> App<'s>{
             if q.target=="/management.css"{
                 return Reply::content("200 OK","text/css; charset=utf-8",Cow::Borrowed(pages::CSS.as_bytes()));
             }
-            #[cfg(feature="private-browser-ui")]
-            {
-                if let Some(reply)=self.browser_asset(&q){return reply;}
-                if let Some(reply)=self.directory_metadata(&q,now){return reply;}
-            }
+            if let Some(reply)=self.browser_asset(&q){return reply;}
+            if let Some(reply)=self.directory_metadata(&q,now){return reply;}
             if let Some(args)=q.target.strip_prefix("/versions/history?file="){return self.manual_history(&q,args);}
             if let Some(id)=q.target.strip_prefix("/versions?file="){return self.manual_page(&q,id);}
             if q.target=="/versions"{return self.manual_index(&q,None);}
@@ -125,16 +119,10 @@ impl<'s> App<'s>{
             let after=if q.target=="/"{None}else if let Some(s)=q.target.strip_prefix("/?after="){
                 match s.parse::<ShareId>(){Ok(k)=>Some(k),Err(_)=>return BAD()}
             }else{return Reply::text("404 Not Found","没有此管理页面。");};
-            #[cfg(feature="private-browser-ui")]
             if !q.same_origin_if_present(){return REJECT();}
             let Some(k)=q.cookie.as_ref()else{return Reply::redirect("/login");};
             let Some(s)=self.sessions.get_mut(k)else{return Reply::redirect("/login");};
-            let prepared=s.admin.overview(after).and_then(|data|{
-                #[cfg(feature="private-browser-ui")]
-                {browser::overview(&data,&s.csrf.hex())}
-                #[cfg(not(feature="private-browser-ui"))]
-                {pages::overview(&data,&s.csrf.hex()).map(|page|Reply::html("200 OK",page))}
-            });
+            let prepared=s.admin.overview(after).and_then(|data|browser::overview(&data,&s.csrf.hex()));
             return match s.finish_read(prepared){
                 Ok(page)=>page,
                 Err(e) if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(k);Reply::redirect("/login")},

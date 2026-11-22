@@ -2,7 +2,6 @@
 // download, system crypto/SQLite fallback, package discovery or CLI tools.
 use std::{env, path::{Path,PathBuf}, process::Command};
 
-#[cfg(feature="private-browser-ui")]
 #[path="build_browser_assets.rs"]
 mod browser_assets;
 
@@ -28,7 +27,6 @@ fn main() {
         assert!(!cross,"set {key} to the target toolchain when cross-compiling");default.into()
     });
     let out=PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    #[cfg(feature="private-browser-ui")]
     browser_assets::embed(&out).expect("verify and embed the reviewed browser stage");
     let objects=[out.join("linux.o"),out.join("sqlite-read.o"),out.join("sqlite3.o")];
     let cc=tool("CC","cc");

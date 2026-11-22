@@ -1,4 +1,4 @@
-//! Built-in HTML only. Dynamic values never become markup, CSS or arbitrary
+//! Built-in HTTP templates. Dynamic values never become markup, CSS or arbitrary
 //! URLs. The public sign-in view has no parameter capable of carrying metadata.
 use crate::{FileId,OperationId,system::reader::account::{history::{Timeline,TimelinePlace},manual_work,overview::Overview,share_mode::Mode}};
 use super::Reply;
@@ -29,26 +29,14 @@ pub(super) fn sign_in(failed: bool) -> String {
     out
 }
 
-pub(super) fn overview(data: &Overview, csrf: &str) -> io::Result<String> {
-    render_overview(data, csrf, false)
-}
-
 pub(super) fn browser_overview(data: &Overview, csrf: &str) -> io::Result<String> {
-    render_overview(data, csrf, true)
-}
-
-fn render_overview(data: &Overview, csrf: &str, browser: bool) -> io::Result<String> {
     let mut out = String::from(HEAD);
-    if browser {
-        out.push_str(r#"<link rel="stylesheet" href="/ui/v1/folder.css"><script type="module" src="/ui/v1/boot.js"></script>"#);
-    }
+    out.push_str(r#"<link rel="stylesheet" href="/ui/v1/folder.css"><script type="module" src="/ui/v1/boot.js"></script>"#);
     out.push_str("<title>管理概览 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
     out.push_str(include_str!("../../web/shell-start.html"));
     out.push_str(r#"<h1 class="zxs-visually-hidden">管理概览</h1>"#);
-    if browser {
-        browser_panel(&mut out, data);
-    }
+    browser_panel(&mut out, data);
     out.push_str(r#"<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><div class="zxs-section-heading zxs-flow"><h2 id="zxs-shares-title" class="zxs-row">共享配置</h2><dl class="zxs-endpoint zxs-row"><dt>SMB 共享名</dt><dd><code>ZXS</code></dd></dl></div>"#);
     if data.shares.is_empty() {
         out.push_str(r#"<p class="zxs-share-frame zxs-share-empty">暂无共享目录。</p>"#);
@@ -127,15 +115,17 @@ fn browser_panel(out: &mut String, data: &Overview) {
 
 #[cfg(test)]
 #[test]
-fn contours_are_inert_local_decoration_on_the_original_native_pages() {
+fn contours_are_inert_local_decoration_on_login_and_overview() {
     let login = sign_in(true);
-    let details = overview(&Overview { login: "A<&".into(), shares: Vec::new(), next: None }, "example").unwrap();
-    for (page, tiles) in [(&login, 4), (&details, 8)] {
+    let details = browser_overview(&Overview { login: "A<&".into(), shares: Vec::new(), next: None }, "example").unwrap();
+    for (page, tiles) in [(&login, 4), (&details, 12)] {
         assert_eq!(page.matches("id=\"zxs-g4-corner\"").count(), 1);
         assert_eq!(page.matches("href=\"#zxs-g4-corner\"").count(), tiles);
         assert!(page.contains("class=\"zxs-g4-paint\" aria-hidden=\"true\""));
-        assert!(!page.contains("<script") && !page.contains(" style="));
+        assert!(!page.contains(" style="));
     }
+    assert!(!login.contains("<script"));
+    assert_eq!(details.matches(r#"<script type="module" src="/ui/v1/boot.js"></script>"#).count(), 1);
     assert!(login.contains("action=\"/login\"") && login.contains("autocomplete=\"current-password\""));
     assert!(login.contains("HTTP 未加密") && login.contains("role=\"alert\""));
     assert!(sign_in(false).contains("HTTP 未加密"));
@@ -154,7 +144,7 @@ fn overview_controls_retain_each_original_share_and_previous_operation() {
         shares: vec![Share { share: id, previous, volume, label: "甲<&".into(), mode: Mode::ReadOnly }],
         next: Some(id),
     };
-    let html = overview(&view, "A&").unwrap();
+    let html = browser_overview(&view, "A&").unwrap();
     assert!(html.contains(&format!(r#"id="zxs-share-{id}">甲&lt;&amp;</bdi>"#)));
     assert!(html.contains(&format!(r#"<code class="zxs-volume-value">{volume}</code>"#)));
     assert!(html.contains(&format!(r#"href="/?after={id}#zxs-shares""#)));

@@ -247,7 +247,7 @@ def compile_into(source, scratch, originals, cargo, rustc, rustdoc, approved, br
             need(p.is_absolute() and p.is_file(), f"missing local C toolchain object: {n}")
             c_archives.append((n, sha256(p)))
         subprocess.run([cargo, "build", "--locked", "--offline", "--release", "--target", TARGET,
-                        "--bin", "zxs", "--features", "private-browser-ui",
+                        "--bin", "zxs",
                         "--manifest-path", source / "Cargo.toml"],
                        check=True, cwd=source, env=env)
         built = dest / TARGET / "release" / "zxs"
