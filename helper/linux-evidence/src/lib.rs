@@ -1,5 +1,5 @@
 //! Fixed Linux ABI boundaries: held-object evidence and one close-on-exec barrier.
-//! No path input, handle reopening, disk write or device control interface.
+//! No path input, handle reopening, disk write or generic device control.
 #![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64", target_pointer_width = "64")))]
 compile_error!("helper-linux-evidence supports x86_64 Linux LP64 only");
@@ -7,6 +7,7 @@ compile_error!("helper-linux-evidence supports x86_64 Linux LP64 only");
 pub mod diagnostic_process;
 pub mod prompt_signals;
 pub mod first_smb;
+pub mod nvme_health;
 pub mod panel_confinement;
 pub mod sqlite_vfs;
 

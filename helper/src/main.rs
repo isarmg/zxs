@@ -63,6 +63,7 @@ fn usage() -> String {
     if cfg!(feature = "embedded-zxs") {
         help.push_str("\n\nOptional image extraction:\n  helper install-zxs-image [--destination-dir DIR] --zxs-sha256 HEX (default /zxs/bin/zxs)");
     }
+    help.push_str("\n\nOptional read-only health:\n  helper disk-health --device MAJOR:MINOR (one direct PCIe NVMe namespace)");
     help
 }
 
@@ -83,6 +84,7 @@ enum Command {
     #[cfg(feature="embedded-zxs")]
     EmbeddedInstall(sqlite_install::EmbeddedInstall),
     Disks(block_tools::Query),
+    DiskHealth(block_tools::HealthQuery),
     Hardware,
     DiskWeb(Option<volume_images::Request>),
     DiskWebStorage(Selection),
@@ -119,6 +121,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         return Ok(Command::CheckDeployment);
     }
     if op == "discover"{return sqlite_install::Discovery::parse(args).map(Command::Discover);}
+    if op == "disk-health"{return block_tools::HealthQuery::parse(args).map(Command::DiskHealth);}
     if op == "disk-web" {
         return match args.next() {
             None => Ok(Command::DiskWeb(None)),
@@ -197,6 +200,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::DiskWebStorage(s)=>disk_web::serve_storage(s)?,
         Command::ImportCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
+        Command::DiskHealth(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}
         Command::RetirementCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
         Command::SharedAccountReset(i)=>return Ok(ExitCode::from(i.run()?)),
         Command::CheckDeployment=>{let(code,public)=sqlite_install::check_deployment();line(&public)?;return Ok(ExitCode::from(code));}
