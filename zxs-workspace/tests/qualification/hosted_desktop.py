@@ -28,6 +28,9 @@ COMMON = (
     "test_desktop_text_preview.DesktopTextPreview.test_first_open_cancelled_after_worker_return_releases_original_before_display",
 )
 WINDOWS = (
+    "test_windows_folder.HeldTraversal.test_cached_directory_fields_do_not_supply_size_generation_or_text_witness",
+    "test_windows_folder.HeldTraversal.test_actual_held_generation_changes_are_rejected_with_unchanged_inventory",
+    "test_windows_folder.HeldTraversal.test_enumerated_id_and_actual_child_disagree_before_any_bytes",
     "test_windows_folder.NativeLocalFolder.test_native_picker_reads_exact_default_stream_and_refuses_same_name_replacement",
     "test_windows_folder.NativeLocalFolder.test_fixed_native_report_reads_exact_nested_peer_from_held_zip_and_preserves_zone",
     "test_windows_snapshot.DataPlane",

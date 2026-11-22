@@ -190,6 +190,60 @@ class HeldTraversal(unittest.TestCase):
         self.assertFalse(self.api.data_reads)
         self.assertEqual(len(self.api.active),1)
 
+    def test_cached_directory_fields_do_not_supply_size_generation_or_text_witness(self):
+        listing = self.api.listing
+        witnesses = []
+
+        def cached(parent):
+            for name, row in listing(parent):
+                if row is not None:
+                    row = replace(row, attributes=row.attributes | 2, birth=row.birth + 1,
+                                  write=row.write + self.api.passes, change=row.change + self.api.passes,
+                                  size=0 if row.directory else 1)
+                yield name, row
+
+        def remember(path, child, original, sha):
+            self.assertEqual(self.api.info(child), (101, original))
+            witnesses.append((path, original, sha))
+
+        digest = sha256(b"file").hexdigest()
+        with patch.object(self.api, "listing", side_effect=cached):
+            tree = self.folder.observe(on_file=remember)
+        self.assertEqual(tree.rows, {"name": (False, 4, digest), "empty": (True, 0, None)})
+        self.assertEqual(witnesses, [("name", self.api._row(3), digest)])
+        self.assertEqual((self.api.passes, self.api.data_reads), (2, [3, 3]))
+
+    def test_actual_held_generation_changes_are_rejected_with_unchanged_inventory(self):
+        info, read = self.api.info, self.api.read
+        for point in ("body read", "second inventory"):
+            with self.subTest(point=point):
+                changed = False
+                self.api.passes = 0
+                self.api.data_reads.clear()
+
+                def change():
+                    nonlocal changed
+                    changed = True
+
+                def observed(handle):
+                    volume, row = info(handle)
+                    if changed and row.file_id == self.api._row(3).file_id:
+                        row = replace(row, change=row.change + 1)
+                    return volume, row
+
+                def collect(handle, size):
+                    result = read(handle, size)
+                    if point == "body read": change()
+                    return result
+
+                self.api.between = change if point == "second inventory" else None
+                with patch.object(self.api, "info", side_effect=observed), \
+                     patch.object(self.api, "read", side_effect=collect), self.assertRaises(Rejected):
+                    self.folder.observe()
+                self.assertTrue(changed)
+                self.assertEqual(self.api.passes, 1 if point == "body read" else 2)
+                self.assertEqual(list(self.api.active), [self.folder.handle.value])
+
     def test_missing_or_equally_sized_replaced_ordinary_file_after_hash_never_yields_report(self):
         for missing in (False,True):
             with self.subTest(missing=missing):

@@ -54,39 +54,49 @@ def walk(api, drive, parts, *, list_last=True):
 def observe(api, root, volume, first, *, observer=None, on_file=None):
     tree, facts = Manifest(), {}
 
+    def from_listing(h, listed):
+        # NTFS can delay copying metadata to the directory index. Use the
+        # enumerated identity/type to select the child, and the handle for its generation.
+        v, found = api.info(h)
+        if v != volume or found.file_id != listed.file_id or found.directory != listed.directory:
+            raise Rejected("opened Windows entry is not the inventoried object")
+        return found
+
     def held(h, expected):
         v, found = api.info(h)
         if v != volume or found != expected:
-            raise Rejected("opened Windows entry no longer matches the original inventory")
+            raise Rejected("opened Windows entry no longer matches its original held observation")
 
     def visit(parent, prefix, directory, checking, seen, directories):
         if observer is not None: observer.check()
         held(parent, directory)
         dots = set()
-        for name, row in api.listing(parent):
+        for name, listed in api.listing(parent):
             if observer is not None: observer.check()
             if name in DOT:
                 if name in dots: raise Rejected("nonprogressing Windows directory listing")
                 dots.add(name)
                 continue
             path = prefix + "/" + name if prefix else name
-            if checking:
-                if facts.get(path) != row or path in seen:
-                    raise Rejected("directory inventory, spelling, or generation changed")
-                seen.add(path)
-            else:
-                tree.add(path, row.directory, row.size, None)
-                facts[path] = row
-            if row.directory:
-                if row.file_id in directories: raise Rejected("repeated directory identity in selected folder")
-                directories.add(row.file_id)
-            kind = "directory" if row.directory else "file"
+            if checking and (path not in facts or path in seen):
+                raise Rejected("directory inventory or spelling changed")
+            kind = "directory" if listed.directory else "file"
             with api.child(parent, name, kind) as child:
-                held(child, row)
-                if row.directory:
-                    visit(child, path, row, checking, seen, directories)
+                original = from_listing(child, listed)
+                if checking:
+                    if original != facts[path]:
+                        raise Rejected("Windows entry generation changed between the two observations")
+                    seen.add(path)
+                else:
+                    tree.add(path, original.directory, original.size, None)
+                    facts[path] = original
+                if original.directory:
+                    if original.file_id in directories:
+                        raise Rejected("repeated directory identity in selected folder")
+                    directories.add(original.file_id)
+                    visit(child, path, original, checking, seen, directories)
                 elif not checking:
-                    left, digest = row.size, hashlib.sha256()
+                    left, digest = original.size, hashlib.sha256()
                     while left:
                         if observer is not None: observer.check()
                         block = api.read(child, min(CHUNK,left))
@@ -99,13 +109,13 @@ def observe(api, root, volume, first, *, observer=None, on_file=None):
                     if observer is not None: observer.check()
                     if api.read(child,1):
                         raise Rejected("extra bytes in the held Windows file")
-                    tree.rows[path] = (False,row.size,digest.hexdigest())
-                held(child, row)
+                    tree.rows[path] = (False,original.size,digest.hexdigest())
+                held(child, original)
                 # A valid held file alone does not prove its original directory entry.
                 with api.child(parent,name,kind) as named:
-                    held(named,row)
-                if on_file is not None and not checking and not row.directory:
-                    on_file(path, child, row, tree.rows[path][2])
+                    held(named, original)
+                if on_file is not None and not checking and not original.directory:
+                    on_file(path, child, original, tree.rows[path][2])
         held(parent,directory)
 
     if observer is not None: observer.begin("folder")
