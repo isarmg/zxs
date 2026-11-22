@@ -21,8 +21,8 @@ impl Sha256 {
     }
     fn compress(&mut self, block: &[u8;64]) {
         let mut w = [0_u32;64];
-        for (i, word) in block.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes(word.try_into().expect("four bytes"));
+        for (i, word) in block.as_chunks::<4>().0.iter().enumerate() {
+            w[i] = u32::from_be_bytes(*word);
         }
         for t in 16..64 {
             let x=w[t-15]; let y=w[t-2];
@@ -52,9 +52,9 @@ impl Sha256 {
             if self.used<64 {return Ok(());}
             let b=self.block; self.compress(&b); self.used=0; input=&input[n..];
         }
-        let mut blocks=input.chunks_exact(64);
-        for b in &mut blocks { self.compress(b.try_into().expect("64-byte chunk")); }
-        let rest=blocks.remainder(); self.block[..rest.len()].copy_from_slice(rest); self.used=rest.len();
+        let (blocks,rest)=input.as_chunks::<64>();
+        for b in blocks { self.compress(b); }
+        self.block[..rest.len()].copy_from_slice(rest); self.used=rest.len();
         Ok(())
     }
     pub(crate) fn finish(mut self) -> [u8;32] {
@@ -66,7 +66,7 @@ impl Sha256 {
         self.block[56..].copy_from_slice(&(self.bytes*8).to_be_bytes());
         let b=self.block;self.compress(&b);
         let mut out=[0u8;32];
-        for (to,h) in out.chunks_exact_mut(4).zip(self.h) { to.copy_from_slice(&h.to_be_bytes()); }
+        for (to,h) in out.as_chunks_mut::<4>().0.iter_mut().zip(self.h) { *to=h.to_be_bytes(); }
         out
     }
 }

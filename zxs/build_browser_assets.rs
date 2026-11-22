@@ -72,7 +72,7 @@ fn pin(s:&str)->Option<[u8;32]>{
     let hex=|b:u8|match b{b'0'..=b'9'=>Some(b-b'0'),b'a'..=b'f'=>Some(b-b'a'+10),_=>None};
     if s.len()!=64{return None;}
     let mut out=[0;32];
-    for (byte,pair) in out.iter_mut().zip(s.as_bytes().chunks_exact(2)){*byte=hex(pair[0])?<<4|hex(pair[1])?;}
+    for (byte,pair) in out.iter_mut().zip(s.as_bytes().as_chunks::<2>().0){*byte=hex(pair[0])?<<4|hex(pair[1])?;}
     Some(out)
 }
 fn inventory(dir:&Path)->io::Result<()>{
