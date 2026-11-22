@@ -15,10 +15,28 @@ pub(super) enum Handoff{
     RestoreBound{source:Place,target:String},
     MoveOrdinary{source:Place,target:String},
 }
+/// The exact kind-12 SQLite direction byte and its bound volume roles.
+/// The transfer and the old-source retirement must interpret these alike.
+#[repr(u8)]
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-enum Direction{Delete=1,Restore=2,Ordinary=3}
+pub(super) enum Direction{Delete=1,Restore=2,Ordinary=3}
 impl Direction{
-    fn ordinary_destination(self)->bool{self!=Self::Delete}
+    pub(super) fn from_stored(tag:u8)->Option<Self>{
+        match tag{
+            n if n==Self::Delete.stored()=>Some(Self::Delete),
+            n if n==Self::Restore.stored()=>Some(Self::Restore),
+            n if n==Self::Ordinary.stored()=>Some(Self::Ordinary),
+            _=>None,
+        }
+    }
+    pub(super) fn stored(self)->u8{self as u8}
+    pub(super) fn source_role(self)->Role{
+        match self{Self::Delete|Self::Ordinary=>Role::File,Self::Restore=>Role::Recycle}
+    }
+    fn target_role(self)->Role{
+        match self{Self::Delete=>Role::Recycle,Self::Restore|Self::Ordinary=>Role::File}
+    }
+    fn ordinary_destination(self)->bool{self.target_role()==Role::File}
 }
 #[derive(Clone,Debug,Eq,PartialEq)]
 struct Route{
@@ -164,13 +182,11 @@ impl Route{
         q.bind_bytes(1,&op.0)?;
         if !work_record::start_one(&q)?{return Ok(None);}
         let file=crate::FileId(q.array(0)?);
-        let (kind,role)=match q.byte(1)?{1=>(Direction::Delete,Role::File),2=>(Direction::Restore,Role::Recycle),
-            3=>(Direction::Ordinary,Role::File),
-            _=>return Err(invalid("wrong original transfer direction"))};
+        let kind=Direction::from_stored(q.byte(1)?).ok_or_else(||invalid("wrong original transfer direction"))?;
         let name=display::component(q.blob(5,222)?,222)?.to_owned();
         let backing=Place::read_backing(&q,12,13,file,&name)?;
         let src=Place{file,op:OperationId(q.array(2)?),generation:q.integer(3)?,volume:VolumeId(q.array(4)?),
-            role,name,parent:DirectoryParent::from_bytes(q.array(10)?),backing};
+            role:kind.source_role(),name,parent:DirectoryParent::from_bytes(q.array(10)?),backing};
         let to=VolumeId(q.array(6)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
         let save=work_record::optional(&q,8)?;let head=work_record::optional(&q,9)?;
         let parent=DirectoryParent::from_bytes(q.array(11)?);let target_op=work_record::optional(&q,14)?;q.done()?;
@@ -195,7 +211,7 @@ impl Route{
     }
     fn target(&self,op:OperationId)->Place{
         Place{file:self.from.here.file,op,generation:self.from.here.generation+1,volume:self.to,
-            role:if self.kind==Direction::Delete{Role::Recycle}else{Role::File},name:self.name.clone(),parent:self.parent,backing:Some(op)}
+            role:self.kind.target_role(),name:self.name.clone(),parent:self.parent,backing:Some(op)}
     }
     fn geometry(&self,c:&Catalog,op:OperationId,dest:&DirectoryRoute)->io::Result<()>{
         if self.from.here.generation>i64::MAX-2{return Err(invalid("placement sequence exhausted"));}
@@ -219,7 +235,7 @@ impl Route{
         }else{h.update(b"ZXS-SQLITE-1/FILE-TRANSFER-BACKING\0")?;}
         for v in [b.pool.0,b.operation.0,b.file.0,b.entry.0,b.history.0,b.branch.0,
             op.0,f.op.0,f.volume.0,self.to.0,f.parent.bytes(),self.parent.bytes(),self.share.0,self.setting.0,self.auth.0,self.actor.0]{h.update(&v)?;}
-        h.update(&[self.kind as u8])?;h.update(&f.generation.to_be_bytes())?;h.update(&self.epoch.to_be_bytes())?;
+        h.update(&[self.kind.stored()])?;h.update(&f.generation.to_be_bytes())?;h.update(&self.epoch.to_be_bytes())?;
         for n in [&f.name,&self.name]{h.update(&[n.len() as u8])?;h.update(n.as_bytes())?;}
         for k in [f.backing,self.work.map(|v|v.record.key().save),self.head]{
             h.update(&[u8::from(k.is_some())])?;if let Some(k)=k{h.update(&k.0)?;}
@@ -234,7 +250,7 @@ impl Route{
         if !work_record::start_one(&q)?{return Ok(false);}
         let f=&self.from.here;
         if q.byte(0)?!=12||q.byte(1)?!=u8::from(committed)||q.array::<16>(2)?!=self.actor.0||q.array::<32>(3)?!=self.digest(op)?||
-            q.array::<16>(4)?!=f.file.0||q.byte(5)?!=self.kind as u8||q.array::<16>(6)?!=f.op.0||q.integer(7)?!=f.generation||
+            q.array::<16>(4)?!=f.file.0||q.byte(5)?!=self.kind.stored()||q.array::<16>(6)?!=f.op.0||q.integer(7)?!=f.generation||
             q.array::<16>(8)?!=f.volume.0||q.blob(9,222)?!=f.name.as_bytes()||q.array::<16>(10)?!=self.to.0||q.blob(11,222)?!=self.name.as_bytes()||
             q.array::<16>(12)?!=self.share.0||q.array::<16>(13)?!=self.setting.0||q.array::<16>(14)?!=self.auth.0||
             work_record::optional(&q,15)?!=self.work.map(|r|r.record.key().save)||work_record::optional(&q,16)?!=self.head||
@@ -289,7 +305,7 @@ impl Route{
         let q=db.prepare(c"INSERT INTO main.file_transfer(transfer_op,file_id,direction,source_op,source_gen,source_id,source_name,
             target_id,target_name,share_id,setting_op,auth_op,save_op,manual_op,source_parent,target_parent,source_backing,source_terminal,target_setting_op)
             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)")?;
-        q.bind_bytes(1,&op.0)?;q.bind_bytes(2,&p.file.0)?;q.bind_integer(3,self.kind as i64)?;
+        q.bind_bytes(1,&op.0)?;q.bind_bytes(2,&p.file.0)?;q.bind_integer(3,i64::from(self.kind.stored()))?;
         q.bind_bytes(4,&p.op.0)?;q.bind_integer(5,p.generation)?;q.bind_bytes(6,&p.volume.0)?;q.bind_bytes(7,p.name.as_bytes())?;
         q.bind_bytes(8,&self.to.0)?;q.bind_bytes(9,self.name.as_bytes())?;
         for (i,x) in [self.share.0,self.setting.0,self.auth.0].iter().enumerate(){q.bind_bytes(i as i32+10,x)?;}
@@ -636,6 +652,27 @@ impl TransferAt<'_>{
             }
         }
         Ok(Moved{op,from:plan.from.here.clone(),to:plan.target(op)})
+    }
+}
+
+
+#[cfg(test)]
+#[test]
+fn stored_transfer_directions_bind_the_exact_source_and_target_roles(){
+    use crate::Role::{File,Recycle};
+    let expected=[
+        (1,Direction::Delete,File,Recycle),
+        (2,Direction::Restore,Recycle,File),
+        (3,Direction::Ordinary,File,File),
+    ];
+    for (tag,direction,source,target) in expected{
+        assert_eq!(Direction::from_stored(tag),Some(direction));
+        assert_eq!(direction.stored(),tag);
+        assert_eq!((direction.source_role(),direction.target_role()),(source,target));
+        assert_eq!(direction.ordinary_destination(),target==File);
+    }
+    for tag in (u8::MIN..=u8::MAX).filter(|tag|!(1..=3).contains(tag)){
+        assert_eq!(Direction::from_stored(tag),None);
     }
 }
 

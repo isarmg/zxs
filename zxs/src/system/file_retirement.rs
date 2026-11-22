@@ -1,7 +1,7 @@
 //! Finish a prior confirmed transfer, not a new SMB or maintenance action.
 //! The only source unlink plan was captured from the exact dual-witness
 //! original at the moment that USER-selected transfer became durable.
-use super::{Catalog,Connection,InitialReader,file_create,ordinary_directory::Route};
+use super::{Catalog,Connection,InitialReader,file_create,file_transfer::Direction,ordinary_directory::Route};
 use super::super::{file_location::Place,volume::{OrdinaryRoot,RecycleRoot},work_record};
 use crate::{FileId,OperationId,Role,VolumeId,display,fs::{HeldDir,RetireCut,RetireProof,RetireSite,MAX_RETIRE_PROOF,invalid,directory_birth::DirectoryParent},ordinary::portable_birth::Birth};
 use std::{cell::Cell,io,thread,time::Duration};
@@ -14,7 +14,7 @@ pub(super) fn record(db:&Connection,op:OperationId,proof:Option<&[u8]>,target:&[
     q.bind_integer(4,if proof.is_some(){0}else{2})?;q.done()
 }
 
-struct Ticket{seq:i64,op:OperationId,source:Place,direction:u8,target:VolumeId,parent:DirectoryParent,names:Vec<u8>}
+struct Ticket{seq:i64,op:OperationId,source:Place,direction:Direction,target:VolumeId,parent:DirectoryParent,names:Vec<u8>}
 fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
     src.at(|db,_|{
         let q=db.prepare(c"SELECT r.seq,r.transfer_op,r.guard,m.file_id,m.source_op,m.source_gen,m.source_id,m.source_name,
@@ -25,12 +25,11 @@ fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
         q.bind_integer(1,after)?;
         if !work_record::start_one(&q)?{return Ok(None);}
         let seq=q.integer(0)?;let op=OperationId(q.array(1)?);let names=q.blob(2,MAX_RETIRE_PROOF)?.to_vec();
-        let direction=q.byte(8)?;
-        let role=match direction{1|3=>Role::File,2=>Role::Recycle,_=>return Err(invalid("wrong completed transfer direction"))};
+        let direction=Direction::from_stored(q.byte(8)?).ok_or_else(||invalid("wrong completed transfer direction"))?;
         let file=FileId(q.array(3)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
         let backing=Place::read_backing(&q,12,13,file,&name)?;
         let source=Place{file,op:OperationId(q.array(4)?),generation:q.integer(5)?,
-            volume:VolumeId(q.array(6)?),name,role,parent:DirectoryParent::from_bytes(q.array(10)?),backing};
+            volume:VolumeId(q.array(6)?),name,role:direction.source_role(),parent:DirectoryParent::from_bytes(q.array(10)?),backing};
         let target=VolumeId(q.array(9)?);let parent=DirectoryParent::from_bytes(q.array(11)?);q.done()?;
         Ok(Some(Ticket{seq,op,source,direction,target,parent,names}))
     })
@@ -45,7 +44,7 @@ impl Ticket{
         q.bind_integer(1,self.seq)?;q.bind_bytes(2,&self.op.0)?;q.bind_bytes(3,&self.source.file.0)?;
         q.bind_bytes(4,&self.source.op.0)?;q.bind_integer(5,self.source.generation)?;q.bind_bytes(6,&self.source.volume.0)?;
         q.bind_bytes(7,self.source.name.as_bytes())?;q.bind_bytes(8,&self.target.0)?;
-        q.bind_integer(9,i64::from(self.direction))?;
+        q.bind_integer(9,i64::from(self.direction.stored()))?;
         q.bind_bytes(10,&self.source.parent.bytes())?;q.bind_bytes(11,&self.parent.bytes())?;
         if !work_record::start_one(&q)?{return Err(invalid("retirement is no longer the original confirmed transfer"));}
         q.done()?;
