@@ -390,6 +390,9 @@ def fork_pending(state, operation, *, selected=None):
                 old = Commit.decode(row["pending"])
                 if old.operation != operation:
                     raise Rejected("refusing to replace a different pending operation")
+                if old.parent is None:
+                    # Publishing a new branch here would claim a second repository root.
+                    raise Rejected("cannot fork a conflicting snapshot without a parent; original pending record unchanged")
                 store = held.enter_context(held_store(Path(row["store"])))
                 name = old.filename
                 with relative_document(store.fd, name) as occupied:

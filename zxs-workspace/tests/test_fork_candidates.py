@@ -13,6 +13,10 @@ from zipworkspace.archive import read_archive
 from zipworkspace.model import Commit, Manifest, Rejected, new_id
 from zipworkspace.private_candidates import CandidateDirectory
 from zipworkspace.publish import require_native_writer
+from zipworkspace.refs import Catalog
+
+
+ORIGINAL_BODY = b"original recorded material"
 
 
 def archive(path, marker, body):
@@ -28,6 +32,21 @@ def digest_tree(body):
     return tree.digest()
 
 
+def recorded_conflict(state):
+    # A pending original already frozen, not a new capture of the working tree.
+    with worktree.locked(state) as (con, row, _):
+        store = Path(row["store"])
+        old = Commit(row["repo"], row["branch"], row["generation"] + 1, new_id(),
+                     row["parent"], digest_tree(ORIGINAL_BODY))
+        source = state/(old.operation + ".zxs")
+        raw = archive(source, old, ORIGINAL_BODY)
+        con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1",
+                    (old.encode(), sha256(raw).hexdigest()))
+    winner = Commit(old.repo, old.branch, old.generation, new_id(), old.parent, digest_tree(b"winner"))
+    occupied = store/winner.filename
+    return old, source, raw, occupied, archive(occupied, winner, b"winner")
+
+
 class PendingFork(unittest.TestCase):
     def setUp(self):
         try: require_native_writer()
@@ -37,20 +56,22 @@ class PendingFork(unittest.TestCase):
         self.root = Path(tmp.name)
         self.work, self.store, self.state = (self.root/n for n in ("working","store","state"))
         self.work.mkdir(); self.store.mkdir()
-        worktree.enroll(self.work, self.store, self.state)
-        # Supply the pre-existing original pending receipt, not a newly captured working tree.
-        with worktree.locked(self.state) as (con, row, _):
-            body = b"original recorded material"
-            self.old = Commit(row["repo"], row["branch"], 1, new_id(), None, digest_tree(body))
-            self.source = self.state / (self.old.operation + ".zxs")
-            self.raw = archive(self.source, self.old, body)
-            con.execute("UPDATE checkout SET pending=?,pending_sha=? WHERE singleton=1",
-                        (self.old.encode(), sha256(self.raw).hexdigest()))
-        winner = Commit(self.old.repo, self.old.branch, 1, new_id(), None, digest_tree(b"winner"))
-        self.winner = self.store/winner.filename
-        self.winner_raw = archive(self.winner, winner, b"winner")
+        body = b"shared committed ancestor"
+        self.base = Commit(new_id(), new_id(), 1, new_id(), None, digest_tree(body))
+        self.base_archive = self.store/self.base.filename
+        base_raw = archive(self.base_archive, self.base, body)
+        worktree.enroll(self.work, self.store, self.state, base=(self.base, sha256(base_raw).hexdigest()))
+        self.old, self.source, self.raw, self.winner, self.winner_raw = recorded_conflict(self.state)
         self.branch, self.operation = new_id(), new_id()
         self.output = self.state/(self.operation+".zxs")
+
+    def parentless_conflict(self):
+        work, store, state = (self.root/("parentless-"+n) for n in ("working","store","state"))
+        work.mkdir(); store.mkdir()
+        worktree.enroll(work, store, state)
+        original, source, _, winner, _ = recorded_conflict(state)
+        self.assertIsNone(original.parent)
+        return state, store, original, source, winner
 
     def fork(self):
         with patch.object(worktree, "new_id", side_effect=[self.branch, self.operation]):
@@ -59,9 +80,40 @@ class PendingFork(unittest.TestCase):
     def still_pending(self):
         self.assertEqual(worktree.status(self.state)["pending_operation"], self.old.operation)
         self.assertEqual(self.winner.read_bytes(), self.winner_raw)
-        self.assertEqual(list(self.store.iterdir()), [self.winner])
+        self.assertCountEqual(self.store.iterdir(), (self.winner, self.base_archive))
         with worktree.locked(self.state) as (con, _, __):
             self.assertEqual(con.execute("SELECT COUNT(*) FROM forked_original").fetchone()[0], 0)
+
+    def test_parentless_conflict_cannot_authorize_a_second_root(self):
+        state, store, original, source, winner = self.parentless_conflict()
+        private = {p.name for p in state.iterdir()}
+        saved, occupied = source.read_bytes(), winner.read_bytes()
+        with patch.object(worktree, "held_store", side_effect=AssertionError("no new store decision")), \
+             patch.object(worktree, "new_id", side_effect=AssertionError("no successor identifier")), \
+             patch.object(CandidateDirectory, "fork", side_effect=AssertionError("no new candidate")):
+            with self.assertRaisesRegex(Rejected, "snapshot without a parent"):
+                worktree.fork_pending(state, original.operation)
+        self.assertEqual({p.name for p in state.iterdir()}, private)
+        self.assertEqual(source.read_bytes(), saved)
+        self.assertEqual(winner.read_bytes(), occupied)
+        self.assertEqual(list(store.iterdir()), [winner])
+        self.assertEqual(worktree.status(state)["pending_operation"], original.operation)
+        with worktree.locked(state, read_only=True) as (con, _, __):
+            self.assertIsNone(con.execute("SELECT successor FROM forked_original").fetchone())
+
+    def test_existing_parentless_successor_receipt_can_still_resume_its_exact_operation(self):
+        state, store, original, _, winner = self.parentless_conflict()
+        marker = Commit(original.repo, new_id(), 1, new_id(), None, original.tree)
+        raw = archive(state/(marker.operation + ".zxs"), marker, ORIGINAL_BODY)
+        with worktree.locked(state) as (con, _, __):
+            worktree._record_fork(con, original.operation, marker, sha256(raw).hexdigest())
+        occupied = winner.read_bytes()
+        with patch.object(worktree, "relative_document", side_effect=AssertionError("no new fork proof")), \
+             patch.object(worktree, "new_id", side_effect=AssertionError("no new operation")):
+            final, resumed = worktree.fork_pending(state, original.operation)
+        self.assertEqual((final, resumed), (store/marker.filename, marker))
+        self.assertEqual(final.read_bytes(), raw)
+        self.assertEqual(winner.read_bytes(), occupied)
 
     def test_known_unavailable_publisher_never_opens_sqlite_or_creates_a_successor(self):
         before = sorted(p.name for p in self.state.iterdir())
@@ -92,10 +144,11 @@ class PendingFork(unittest.TestCase):
         with patch.object(worktree, "held_store", keep_original), \
              patch.object(worktree, "publish", side_effect=AssertionError("do not reopen STORE")), \
              patch.object(worktree, "_publish", side_effect=use_original):
-            final, marker = self.fork()  # CLI first-generation conflicts remain eligible.
+            final, marker = self.fork()
         self.assertEqual((marker.branch,marker.operation,marker.parent,marker.tree),
                          (self.branch,self.operation,self.old.parent,self.old.tree))
         self.assertEqual(read_archive(self.output)[0], marker)
+        self.assertEqual(Catalog(final, self.store).history(marker.operation), ([marker, self.base], None))
         self.assertEqual(final.read_bytes(),self.output.read_bytes())
         self.assertEqual(self.source.read_bytes(),self.raw)
         self.source.rename(self.state/"offline-original")
@@ -142,7 +195,7 @@ class PendingFork(unittest.TestCase):
              patch.object(worktree, "_publish", side_effect=AssertionError("no upload into a renamed STORE")):
             with self.assertRaisesRegex(Rejected, "selected archive store changed"): self.fork()
         self.assertEqual(list(self.store.iterdir()), [])
-        self.assertEqual(list(retained.iterdir()), [retained/self.winner.name])
+        self.assertCountEqual(retained.iterdir(), (retained/self.winner.name, retained/self.base_archive.name))
         self.assertEqual(worktree.status(self.state)["pending_operation"], self.operation)
         self.assertTrue(self.output.is_file())
         self.store.rename(self.root/"replacement-store"); retained.rename(self.store)
