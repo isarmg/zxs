@@ -25,7 +25,7 @@ mod domain;
 pub(crate) use command::Setup;
 pub(crate) use native_run::exec_layout_sql_child;
 pub(super) use native_sql::WriteGate as NativeWriteGate;
-pub(super) use domain::{require_lent_ex,require_lent_sh};
+pub(super) use domain::{InitialLayout,require_lent_ex,require_lent_sh};
 use super::{bad,request::Id};
 
 // A nonsecret repair confirmation, not an installer role or root approval.

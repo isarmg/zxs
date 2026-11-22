@@ -1,6 +1,7 @@
 //! Current kernel observations for fixed site names and the two explicitly
 //! approved paths. Durable IDs never come from kernel mount numbering.
-use super::{approval::check_path,denied};
+mod diagnostics;
+use super::{approval::check_path,denied,layout};
 use crate::fs::Entity;
 use std::{collections::BTreeMap,ffi::{CStr,CString},fs::File,io::{self,Read},
     os::{fd::{AsRawFd,FromRawFd,RawFd},unix::{ffi::OsStrExt,fs::{FileExt,MetadataExt}}},
@@ -70,11 +71,14 @@ pub(super) fn regular(file:&File)->io::Result<Stamp>{
     Ok(Stamp{place:place(file)?,bytes:m.len(),ctime:(m.ctime(),m.ctime_nsec()),
         mtime:(m.mtime(),m.mtime_nsec()),mode:m.mode(),uid:m.uid(),gid:m.gid()})
 }
-pub(super) fn rdonly(file:&File)->io::Result<()>{
+fn access(file:&File,mask:i32,want:i32)->io::Result<()>{
     // SAFETY: fcntl GETFL and GETFD do not take third arguments.
     let (fl,of)=unsafe{(libc::fcntl(file.as_raw_fd(),libc::F_GETFL),libc::fcntl(file.as_raw_fd(),libc::F_GETFD))};
-    if fl<0||of<0||fl&(libc::O_ACCMODE|libc::O_PATH)!=libc::O_RDONLY||of&libc::FD_CLOEXEC==0{return Err(denied());}
+    if fl<0||of<0||fl&mask!=want||of&libc::FD_CLOEXEC==0{return Err(denied());}
     Ok(())
+}
+pub(super) fn rdonly(file:&File)->io::Result<()>{
+    access(file,libc::O_ACCMODE|libc::O_PATH,libc::O_RDONLY)
 }
 pub(super) fn no_xattr(file:&File,name:&CStr)->io::Result<()>{
     // SAFETY: null output and size 0 asks only whether this fixed key exists.
@@ -101,9 +105,13 @@ pub(super) fn proc_dir(parent:&File,name:&CStr)->io::Result<File>{
     if !pin.metadata()?.is_dir(){return Err(denied());}
     Ok(pin)
 }
+enum OriginalAccess { Read, AppendLog }
+pub(super) fn read_original(task:&File,pin:&File,stamp:Stamp)->io::Result<File>{
+    reopen_original(task,pin,stamp,OriginalAccess::Read)
+}
 /// Reopen the existing checked inode, not its arbitrary filesystem name.
 /// Only the kernel's literal decimal link for our retained pin is followed.
-pub(super) fn read_original(task:&File,pin:&File,stamp:Stamp)->io::Result<File>{
+fn reopen_original(task:&File,pin:&File,stamp:Stamp,how:OriginalAccess)->io::Result<File>{
     if regular(pin)?!=stamp{return Err(denied());}
     let table=proc_dir(task,c"fd")?;
     let name=CString::new(pin.as_raw_fd().to_string()).map_err(|_|denied())?;
@@ -112,13 +120,14 @@ pub(super) fn read_original(task:&File,pin:&File,stamp:Stamp)->io::Result<File>{
     let link_at=place(&link)?;
     let follow=|flags:i32|->io::Result<File>{
         // SAFETY: exact decimal current descriptor within genuine procfs
-        // for our original task. All flags are fixed read-only or O_PATH.
+        // for our original task. Fixed flags; no create or truncate.
         fd(unsafe{libc::openat(table.as_raw_fd(),name.as_ptr(),flags|libc::O_CLOEXEC)})
     };
     let previously=follow(libc::O_PATH)?;
     if regular(&previously)?!=stamp||regular(pin)?!=stamp{return Err(denied());}
-    let out=follow(libc::O_RDONLY|libc::O_NONBLOCK|libc::O_NOCTTY|libc::O_NOATIME)?;
-    rdonly(&out)?;
+    let mode=match how{OriginalAccess::Read=>libc::O_RDONLY,OriginalAccess::AppendLog=>libc::O_WRONLY|libc::O_APPEND};
+    let out=follow(mode|libc::O_NONBLOCK|libc::O_NOCTTY|libc::O_NOATIME)?;
+    access(&out,libc::O_ACCMODE|libc::O_PATH|libc::O_APPEND,mode)?;
     let now=proc_pin(&table,&name)?;
     if regular(&out)?!=stamp||regular(pin)?!=stamp||place(&now)?!=link_at||!now.metadata()?.is_symlink(){
         return Err(denied());
@@ -152,6 +161,10 @@ pub(super) fn dir_names(dir:&File,limit:usize,cap:usize)->io::Result<Vec<Vec<u8>
     }
     if place(&reader)?!=place(dir)?{return Err(denied());}
     out.sort();if out.windows(2).any(|v|v[0]==v[1]){return Err(denied());}Ok(out)
+}
+pub(super) fn require_spelling(dir:&File,want:&[u8])->io::Result<()>{
+    if !dir_names(dir,4096,256*1024)?.iter().any(|n|n.as_slice()==want){return Err(denied());}
+    Ok(())
 }
 pub(super) fn exactly(dir:&File,want:&[&[u8]])->io::Result<()>{
     let names=dir_names(dir,want.len(),1024)?;
@@ -236,24 +249,42 @@ impl<'a> Mounts<'a>{
 }
 
 #[derive(Clone,Copy)]
-pub(super) enum Role { Site, System(u32), Media(u32), Image }
+pub(super) enum Role { FixedDir, System(u32,Entity), Media(u32,Entity), Image(Entity) }
 impl Role{
+    fn permits_crossing(self,prefix:&Path)->bool{
+        // The fixed selector, instance and log directory all live on the
+        // /zxs mount (which may itself be the host filesystem). A rule
+        // based on depth would also allow a separate /zxs/state or /zxs/log.
+        !matches!(self,Self::FixedDir)||prefix==Path::new(layout::ROOT)
+    }
     fn storage_uid(self)->Option<u32>{
-        match self{Self::System(uid)|Self::Media(uid)=>Some(uid),_=>None}
+        match self{Self::System(uid,_)|Self::Media(uid,_)=>Some(uid),_=>None}
+    }
+    fn product(self)->Option<Entity>{
+        match self{Self::System(_,p)|Self::Media(_,p)|Self::Image(p)=>Some(p),Self::FixedDir=>None}
+    }
+    fn accepts(self,path:&Path)->bool{
+        match self{
+            Self::System(_,_)|Self::Media(_,_)=>layout::media(path),
+            Self::Image(_)=>layout::image(path),
+            Self::FixedDir=>true,
+        }
     }
 }
 pub(super) struct PathPin{path:PathBuf,role:Role,chain:Vec<Place>,file:File}
 impl PathPin{
     pub(super) fn select(host:&File,task:&File,path:&Path,role:Role)->io::Result<Self>{
-        if matches!(role,Role::Media(_)){
+        if matches!(role,Role::Media(..)){
             crate::fs::check_path(path)?;
             if path.components().any(|c|c.as_os_str().as_bytes().len()>255){return Err(denied());}
         }else{check_path(path)?;}
+        if !role.accepts(path){return Err(denied());}
         let index=raw_mounts(task)?;let tab=Mounts::parse(&index)?;
         let mut file=host.try_clone()?;let m=mount(&file)?;
         if tab.rows.get(&m).is_none_or(|r|r.point!=b"/"){return Err(denied());}
         let mut chain=vec![tab.observe(&file,m)?];
         let mut prefix=PathBuf::from("/");
+        let mut disks_group=false;
         let mut components=path.components().filter_map(|n|match n{Component::Normal(c)=>Some(c),_=>None}).peekable();
         while let Some(n)=components.next(){
             let parent=file.metadata()?;
@@ -261,31 +292,53 @@ impl PathPin{
             let sticky=role.storage_uid().is_some()&&parent.mode()&0o1000!=0;
             if !parent.is_dir()||!trusted||parent.mode()&0o022!=0&&!sticky{return Err(denied());}
             if role.storage_uid().is_none(){
-                no_xattr(&dir_reader(&file)?,c"system.posix_acl_access")?;
+                let d=dir_reader(&file)?;
+                no_xattr(&d,c"system.posix_acl_access")?;
+                if matches!(role,Role::FixedDir)&&prefix==Path::new(layout::ROOT){no_xattr(&d,c"system.posix_acl_default")?;}
             }
+            if matches!(role,Role::FixedDir)&&prefix==Path::new(layout::ROOT)&&
+                (parent.gid()!=0||parent.mode()!=0o040755){return Err(denied());}
+            let here=*chain.last().ok_or_else(denied)?;
+            let at_product=role.product()==Some(here.entity);
+            if at_product{
+                // Apply the same component reservation even when a whole
+                // local mount presents this original directory by another name.
+                let relative=path.strip_prefix(&prefix).map_err(|_|denied())?;
+                if !role.accepts(&Path::new(layout::ROOT).join(relative)){return Err(denied());}
+            }
+            if matches!(role,Role::FixedDir)||at_product||disks_group&&components.peek().is_none(){
+                require_spelling(&file,n.as_bytes())?;
+            }
+            disks_group=at_product&&n.as_bytes()==b"disks";
             prefix.push(n);
-            let parent=chain.last().ok_or_else(denied)?.mount;
+            let parent=here.mount;
             let crossing=tab.crossing(prefix.as_os_str().as_bytes(),parent,
-                !matches!(role,Role::Site)||chain.len()<=2)?;
+                role.permits_crossing(&prefix))?;
             let c=CString::new(n.as_bytes()).map_err(|_|denied())?;
-            if matches!(role,Role::Site)&&!dir_names(&file,4096,256*1024)?.iter().any(|r|r.as_slice()==n.as_bytes()){
-                // The fixed site path cannot be silently corrected by a
-                // case-insensitive alias; never open another directory name.
-                return Err(denied());
-            }
             let resolve=BASE|if crossing.is_some(){libc::RESOLVE_CACHED}else{libc::RESOLVE_NO_XDEV};
             // Open a bare O_PATH so an unexpected special entry is never
             // activated. Only the exact known whole local crossing is tried.
             file=open(&file,&c,PIN,resolve)?;
             let found=tab.observe(&file,crossing.unwrap_or(parent))?;
+            if matches!(role,Role::FixedDir){
+                // Below the product root, even a same-mount device change
+                // is not the fixed original. At /zxs prove the held root
+                // itself, not just a matching spelling in mountinfo.
+                if let Some(id)=crossing{
+                    let row=tab.rows.get(&id).ok_or_else(denied)?;
+                    if row.device==0||!mount_root(&file)?||row.magic==Some(BTRFS)&&found.entity.inode!=256{
+                        return Err(denied());
+                    }
+                }else if found.entity.device!=here.entity.device{return Err(denied());}
+            }
             if chain.iter().any(|s|s.entity==found.entity){return Err(denied());}
             chain.push(found);
         }
         let meta=file.metadata()?;
         match role{
-            Role::System(uid)|Role::Media(uid) if meta.is_dir()&&meta.uid()==uid&&meta.mode()==0o040700=>{},
-            Role::Site if meta.is_dir()&&meta.uid()==0=>{},
-            Role::Image if meta.is_file()&&meta.uid()==0=>{},
+            Role::System(uid,_)|Role::Media(uid,_) if meta.is_dir()&&meta.uid()==uid&&meta.mode()==0o040700=>{},
+            Role::FixedDir if meta.is_dir()&&meta.uid()==0=>{},
+            Role::Image(_) if meta.is_file()&&meta.uid()==0=>{},
             _=>return Err(denied()),
         }
         Ok(Self{path:path.to_owned(),role,chain,file})
@@ -297,6 +350,9 @@ impl PathPin{
     }
     pub(super) fn held(&self)->&File{&self.file}
     pub(super) fn path(&self)->&Path{&self.path}
+    pub(super) fn parent_place(&self)->Option<Place>{
+        self.chain.split_last()?.1.last().copied()
+    }
     /// Requires both directions of the original visible ancestry, strict
     /// whole local mounts and no reserved ZXS claim along the ancestors.
     /// The result is a current superblock witness, not a physical-disk ID.
@@ -383,22 +439,35 @@ impl PublicLeaf{
 mod tests{
     use super::*;
     #[test]
+    fn only_the_product_root_can_cross_in_a_fixed_state_or_log_walk(){
+        let fixed=Role::FixedDir;
+        assert!(fixed.permits_crossing(Path::new("/zxs")));
+        for n in ["/zxs/state","/zxs/state/112233","/zxs/log","/other"]{
+            assert!(!fixed.permits_crossing(Path::new(n)));
+        }
+        let product=Entity{device:31,inode:11};
+        for role in [Role::System(11,product),Role::Media(11,product)]{
+            assert!(role.permits_crossing(Path::new("/zxs/disks/data/a")));
+            assert!(role.permits_crossing(Path::new("/explicit/approved/volume")));
+        }
+    }
+    #[test]
     fn rust_site_mount_selection_has_no_unlisted_remote_or_private_slot_crossing(){
         let table=b"12 12 8:1 / / rw - ext4 /dev/fake-base rw\n\
-            13 12 8:2 / /var rw - xfs /dev/fake-var rw\n\
-            14 13 8:2 /borrowed /var/lib rw - xfs /dev/fake-var rw\n\
-            15 13 0:31 / /var/remote rw - nfs alpha:/fake rw\n\
-            16 13 8:3 / /var/known\\040site rw - ext4 /dev/fake-known rw\n\
-            17 13 8:3 / /var/staged rw - ext4 /dev/fake-known rw\n\
-            18 17 8:4 / /var/staged rw - ext4 /dev/fake-other rw\n";
+            13 12 8:2 / /zxs rw - xfs /dev/fake-var rw\n\
+            14 13 8:2 /borrowed /zxs/subtree rw - xfs /dev/fake-var rw\n\
+            15 13 0:31 / /zxs/remote rw - nfs alpha:/fake rw\n\
+            16 13 8:3 / /zxs/known\\040site rw - ext4 /dev/fake-known rw\n\
+            17 13 8:3 / /zxs/staged rw - ext4 /dev/fake-known rw\n\
+            18 17 8:4 / /zxs/staged rw - ext4 /dev/fake-other rw\n";
         let t=Mounts::parse(table).unwrap();
-        assert_eq!(t.crossing(b"/var",12,true).unwrap(),Some(13));
-        assert_eq!(t.crossing(b"/var/known site",13,true).unwrap(),Some(16));
-        assert_eq!(t.crossing(b"/var/other",13,true).unwrap(),None);
-        for n in [b"/var/lib".as_slice(),b"/var/remote",b"/var/staged"]{
+        assert_eq!(t.crossing(b"/zxs",12,true).unwrap(),Some(13));
+        assert_eq!(t.crossing(b"/zxs/known site",13,true).unwrap(),Some(16));
+        assert_eq!(t.crossing(b"/zxs/other",13,true).unwrap(),None);
+        for n in [b"/zxs/subtree".as_slice(),b"/zxs/remote",b"/zxs/staged"]{
             assert!(t.crossing(n,13,true).is_err());
         }
-        assert!(t.crossing(b"/var/known site",12,true).is_err());
-        assert!(t.crossing(b"/var/known site",13,false).is_err());
+        assert!(t.crossing(b"/zxs/known site",12,true).is_err());
+        assert!(t.crossing(b"/zxs/known site",13,false).is_err());
     }
 }

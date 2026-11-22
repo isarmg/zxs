@@ -1,4 +1,5 @@
 //! Explicit terminal-only pool installation and original-operation resumption. Separate local pair enrollment; no remote requests or legacy-format fallback.
+pub(crate) mod product_layout;
 mod request;
 mod engine;
 mod originals;
@@ -57,14 +58,24 @@ impl Installation{
             args.next().and_then(id).ok_or("expected 32 lowercase nonzero hex digits")
         };
         let op=tag("--op")?;let approval=tag("--approval")?;drop(tag);
+        let mut args=args.peekable();
         let mut paths=Vec::new();
-        for label in ["--system","--recycle"]{
-            if args.next().as_deref()!=Some(std::ffi::OsStr::new(label)){return Err("expected explicit --system DIR --recycle DIR");}
-            paths.push(PathBuf::from(args.next().ok_or("missing selected directory")?));
+        for (label,default) in [("--system",product_layout::SYSTEM),("--recycle",product_layout::RECYCLE)]{
+            let path=if args.peek().is_some_and(|s|s==label){
+                args.next();PathBuf::from(args.next().ok_or("missing selected directory")?)
+            }else{PathBuf::from(default)};
+            product_layout::media(&path)?;
+            paths.push(path);
         }
         while let Some(flag)=args.next(){
-            if flag!="--data"||paths.len()>=64{return Err("expected 1–62 explicitly selected --data DIR entries");}
-            paths.push(PathBuf::from(args.next().ok_or("missing selected data directory")?));
+            if paths.len()>=64{return Err("expected 1–62 explicitly selected --data DIR or --data-label LABEL entries");}
+            let path=match flag.to_str(){
+                Some("--data")=>PathBuf::from(args.next().ok_or("missing selected data directory")?),
+                Some("--data-label")=>product_layout::data_label(args.next().ok_or("missing selected DATA label")?)?,
+                _=>return Err("expected 1–62 explicitly selected --data DIR or --data-label LABEL entries"),
+            };
+            product_layout::media(&path)?;
+            paths.push(path);
         }
         if paths.len()<3{return Err("at least one ordinary data directory is required");}
         // The wire hashes F in raw byte order; neither path normalization nor a
@@ -117,6 +128,24 @@ mod command_cases{
         }else{assert!(Installation::parse(args(&t)).is_err());}
         for b in [format!("web {t}"),t.replace("1001","0"),t.replace("1002","65534"),format!("{t} --resume")]{
             assert!(Installation::parse(args(&b)).is_err());
+        }
+    }
+
+    #[test]
+    fn layout_v18_init_resolves_only_known_defaults_and_explicit_data_labels(){
+        let fields="--init-actor 03030303030303030303030303030303 --storage-uid 1001 --storage-gid 1002 --op 01010101010101010101010101010101 --approval 02020202020202020202020202020202";
+        for command in ["new","resume","receipt","web new","web resume"]{
+            let line=|tail:&str|format!("{command} {fields} {tail}");
+            let x=Installation::parse(args(&line("--data-label Z --data /approved/foreign --data-label A"))).unwrap();
+            assert_eq!(x.paths,["/zxs/disks/system","/zxs/disks/recycle","/approved/foreign","/zxs/disks/data/A","/zxs/disks/data/Z"].map(PathBuf::from));
+            let x=Installation::parse(args(&line("--recycle /explicit/r --data-label A"))).unwrap();
+            assert_eq!(x.paths,["/zxs/disks/system","/explicit/r","/zxs/disks/data/A"].map(PathBuf::from));
+            let x=Installation::parse(args(&line("--system /explicit/s --data-label A"))).unwrap();
+            assert_eq!(x.paths,["/explicit/s","/zxs/disks/recycle","/zxs/disks/data/A"].map(PathBuf::from));
+            for tail in ["","--data-label ..","--data-label a/b","--data /zxs/disks/data","--system /zxs/state --data-label A",
+                "--recycle /zxs/log/other --data-label A","--data /zxs/bin","--disks /zxs/disks"]{
+                assert!(Installation::parse(args(line(tail).trim_end())).is_err(),"{tail}");
+            }
         }
     }
 

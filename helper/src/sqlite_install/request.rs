@@ -1,7 +1,7 @@
 //! The original INIT request never includes randomly issued results, a password
 //! or a claim inferred from looking at a disk. All paths are unaltered Unix bytes.
 use super::{bad,unsupported,DATABASE};
-use crate::path_rules::Kind;
+use super::product_layout;
 use sha2::{Digest,Sha256};
 use std::{io,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
 
@@ -20,7 +20,7 @@ impl Request{
         h.update(b"ZXS-SQLITE-1/INIT\0");h.update(op);h.update(actor);h.update(approval);
         h.update(uid.to_be_bytes());h.update((paths.len() as u16).to_be_bytes());
         for (i,path) in paths.iter().enumerate(){
-            let raw=path.as_os_str().as_bytes();Kind::StorageRoot.check_path(raw).map_err(bad)?;
+            let raw=path.as_os_str().as_bytes();product_layout::media(path).map_err(bad)?;
             if i==0 && path.to_str().is_none(){return Err(unsupported("SYSTEM must be losslessly representable by the Unix SQLite VFS"));}
             if (i>2 && paths[i-1].as_os_str().as_bytes()>=raw)
                 || paths[..i].iter().any(|p|p.starts_with(path)||path.starts_with(p)){

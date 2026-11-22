@@ -1,10 +1,10 @@
 //! One foreground local administrator authorizes one already-pinned set. No
 //! browser, environment, SQL row, plain UID argument or saved grant can issue it.
-use super::{Purpose,originals::Originals,pair::PublicConfirmation,request::{Id,Request}};
+use super::{Purpose,originals::Originals,pair::{InitialLayout,PublicConfirmation},product_layout,request::{Id,Request}};
 use crate::{disk_web::require_terminal,maintenance::{diagnostic_worker,thread_file},pinned::{Entity,Mount}};
 use rustix::{fs::{Mode,OFlags,RawDir,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2},process::{Gid,Uid,getgid,getuid,getegid,geteuid},
     thread::{set_keep_capabilities,set_no_new_privs,set_thread_groups,set_thread_res_gid,set_thread_res_uid}};
-use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read},mem::MaybeUninit,os::{fd::{AsFd,AsRawFd},unix::{ffi::OsStrExt,fs::MetadataExt}},path::PathBuf};
+use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read},mem::MaybeUninit,os::{fd::{AsFd,AsRawFd},unix::{ffi::OsStrExt,fs::MetadataExt}},path::{Path,PathBuf}};
 
 pub(super) struct Approved {request:Request, originals:Originals, purpose:Purpose}
 
@@ -13,7 +13,7 @@ pub(super) struct Approved {request:Request, originals:Originals, purpose:Purpos
 /// confirmation, but only this live root foreground can make it Approved.
 pub(super) struct Proposal{
     request:Request,originals:Originals,purpose:Purpose,subject:(Id,u32,u32),
-    explicit:super::pair::ExplicitSubject,private:bool,
+    explicit:super::pair::ExplicitSubject,private:bool,layout:Option<InitialLayout>,
 }
 impl Proposal{
     /// Non-secret op/reference may be recorded BEFORE any write; they are not authority.
@@ -31,11 +31,19 @@ impl Proposal{
         let host=host_admin()?;
         let subject=explicit.tuple();
         let request=Request::new(op,subject.0,reference,subject.1,paths)?;
+        let layout=if matches!(purpose,Purpose::Fresh){
+            // Outside-only spellings can still traverse the actual product
+            // through a whole local alias. Only definite absence exempts that
+            // independent INIT; it never needs an existing /zxs/state.
+            let required=private||request.paths().iter().any(|p|p.starts_with(Path::new(product_layout::TOP)));
+            Some(InitialLayout::select(&host,required)?)
+        }else{None};
         // Check paths/SQLite capabilities before even showing a proposal. No SQL
         // connection, data read, directory allocation or privilege is granted here.
         request.database(super::engine::path_limit()?)?;
-        let originals=Originals::pin_passive(&request,host)?;
-        let out=Self{request,originals,purpose,subject,explicit,private};out.require()?;Ok(out)
+        let originals=Originals::pin_passive(&request,host.try_clone()?)?;
+        let layout=layout.map(|origin|origin.match_media(&host,&originals.selected)).transpose()?;
+        let out=Self{request,originals,purpose,subject,explicit,private,layout};out.require()?;Ok(out)
     }
     pub(super) fn require(&self)->io::Result<()>{
         let current=host_admin()?;self.originals.require_host(&current)?;
@@ -44,6 +52,7 @@ impl Proposal{
         if self.explicit.tuple()!=self.subject{return Err(denied());}
         same_terminal(&io::stdin(),&io::stderr())?;
         for n in &self.originals.selected{n.require_same_named_mount()?;}
+        if let Some(layout)=&self.layout{layout.require(&current,&self.originals.selected)?;}
         Ok(())
     }
     pub(super) fn fresh_receipt_sha(&self)->Option<[u8;32]>{self.private.then(||self.request.sha())}
@@ -71,7 +80,7 @@ impl Proposal{
         if self.private{tty.confirm_v18_initialization(preview)?;}
         else{tty.confirm_init(matches!(self.purpose,Purpose::Fresh),preview)?;}
         self.require()?;tty.check()?;drop(tty);
-        let Self{request,originals,purpose,..}=self;
+        let Self{request,originals,purpose,layout,..}=self;drop(layout);
         // End the privileged phase BEFORE opening any storage directory for data or
         // reserving a file. This code runs only in a fresh, single-threaded CLI.
         // Any partial transition terminates the operation; no recovery as root.

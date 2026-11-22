@@ -11,8 +11,9 @@ struct Volume{
 impl Volume{
     fn select(site:&SiteLease<'_>,claim:&PreflightClaim,kind:u8)->io::Result<Self>{
         let host=site.parent.host().map_err(|_|denied())?;
-        let pin=PathPin::select(host,&site.task,&claim.path,Role::Media(site.subject().uid))?;
-        if pin.overlaps(&site.system)||pin.overlaps(&site.site)||claim.marker[20]!=kind{return Err(denied());}
+        let pin=PathPin::select(host,&site.task,&claim.path,Role::Media(site.subject().uid,site.deployment.product()))?;
+        if pin.overlaps(&site.system)||site.deployment.overlaps(&pin)||pin.overlaps(&site.site)||
+            pin.overlaps(&site.image_pin)||claim.marker[20]!=kind{return Err(denied());}
         let dir=held::dir_reader(pin.held())?;
         let limit=ComponentLimit::from_original(claim.component_limit)?;
         if ComponentLimit::on_fd(&dir)?!=limit{return Err(denied());}

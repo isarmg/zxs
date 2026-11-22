@@ -5,6 +5,7 @@ mod approval;
 mod deployment;
 mod held;
 mod image;
+mod layout;
 mod terminal;
 pub(super) mod media;
 mod vault;
@@ -16,7 +17,6 @@ pub(super) use approval::{Origin,Subject};
 pub(super) use terminal::{StartApproval,Terminal};
 use std::{fs::File,io,os::unix::fs::MetadataExt,path::{Path,PathBuf}};
 
-const PREFIX:&str="/var/lib/zxs/rust-smb";
 const MEMBERS:&[&[u8]]=&[b"rust.install",b"site.v1",b"vault"];
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"the protected original ZXS SMB site cannot be confirmed")}
 
@@ -48,7 +48,7 @@ pub(super) struct SiteLease<'p>{
 }
 fn instance_path(instance:[u8;16])->io::Result<PathBuf>{
     if instance==[0;16]{return Err(denied());}
-    Ok(Path::new(PREFIX).join(hex(&instance)))
+    Ok(Path::new(layout::STATE).join(hex(&instance)))
 }
 fn protected_dir(dir:&File,gid:u32,mode:u32)->io::Result<()>{
     let m=dir.metadata()?;
@@ -60,10 +60,11 @@ impl<'p> SiteLease<'p>{
     pub(super) fn select(parent:&'p Parent)->io::Result<Self>{
         let host=parent.host().map_err(|_|denied())?;
         let task=parent.own_task().map_err(|_|denied())?;
-        let deployment=Deployment::select(host,&task)?;
+        let deployment=Deployment::select(host,&task).map_err(|e|io::Error::new(e.kind(),format!(
+            "cannot select the protected {}/deployment.v1: {e}; check the fresh offline setup; no layout was created or migrated",layout::STATE)))?;
         let instance=deployment.instance();
         let name=instance_path(instance)?;
-        let site=PathPin::select(host,&task,&name,Role::Site)?;
+        let site=PathPin::select(host,&task,&name,Role::FixedDir)?;
         let site_exclusive=held::dir_reader(site.held())?;
         // Read only a qualified root-owned record before selecting the S
         // it names, holding the site's exact inode but not yet its lease.
@@ -76,8 +77,8 @@ impl<'p> SiteLease<'p>{
         deployment.require(host,&task,authority)?;
         let approval=Approval::decode(record.bytes())?;
         if approval.origin.instance!=instance||starter.gid()!=approval.subject.gid{return Err(denied());}
-        let system=PathPin::select(host,&task,&approval.system,Role::System(approval.subject.uid))?;
-        let image_pin=PathPin::select(host,&task,&approval.image,Role::Image)?;
+        let system=PathPin::select(host,&task,&approval.system,Role::System(approval.subject.uid,deployment.product()))?;
+        let image_pin=PathPin::select(host,&task,&approval.image,Role::Image(deployment.product()))?;
         if deployment.overlaps(&system)||deployment.overlaps(&image_pin)||
             site.overlaps(&system)||image_pin.overlaps(&system)||image_pin.overlaps(&site){return Err(denied());}
         let system_shared=held::dir_reader(system.held())?;

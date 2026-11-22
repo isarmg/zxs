@@ -12,18 +12,25 @@ upgrade storage, including any v17 split-account pool.
 ## Existing protected originals
 
 - The normal no-argument entry selects only
-  /var/lib/zxs/rust-smb/deployment.v1, root:root 0600 with one link.
+  /zxs/state/deployment.v1, root:root 0600 with one link.
   It is exactly 64 bytes: ZXS-DEPLOYED-V1 plus NUL (16 bytes), the instance
   ID (16 bytes) and SHA-256 of the exact site.v1 (32 bytes). Keep the
   original deployment-directory shared lock, then SYSTEM shared and the
   exact site exclusive; the fresh issuer owns the matching order. No
-  scan, default site, manual SMB command, or legacy environment fallback.
-- /var/lib/zxs/rust-smb/<instance-hex>/ is an actual directory for the exact
+  scan, alternate site, manual SMB command, or legacy environment fallback.
+  The fresh product root `/zxs` and state parent `/zxs/state` are root:root
+  0755 without POSIX ACLs. The fixed walk can cross a qualified whole local
+  filesystem only at `/zxs`, never at `state`, an instance or its leaves.
+  A separate `/zxs` must be the actual held mount root; the Btrfs case
+  also requires its root inode 256 and mountinfo root `/`. No device
+  switch below that root is accepted for the protected fixed directories.
+  The Linux host owns any mounts; the program does not mount, provision or
+  chdir into these host paths for the public foreground entry.
+- /zxs/state/<instance-hex>/ is an actual directory for the exact
   32-lowercase-hex InstanceId: root:<storage GID> 0750, exactly rust.install,
   site.v1 and vault. Trusted root-owned ancestors deny group/other writes and
-  path substitution. Newly planned layout and legacy Helper-only
-  /var/lib/local-ops-helper/... are different cases; there is no copying,
-  implicit selection, or fallback.
+  path substitution. The former `/var/lib/zxs/rust-smb` and legacy
+  Helper-only records are not consulted, copied or migrated.
 - rust.install is the original ZXS-RUST-SMB-I1 public binary descriptor,
   root:root 0444 and one link. It already defines host/one SMB share, exact
   LAN endpoints and prefixes, earliest folder names/modes and recycle label.
@@ -57,6 +64,44 @@ PT_INTERP, DT_NEEDED, loader-path and audit dependencies are not accepted.
 No dynamic fallback or release package is produced. File structure/digest
 alone cannot demonstrate independence from late host calls; the single-ELF
 build and disposable, no-Helper cold launch must establish that separately.
+
+## Fresh default paths and foreground diagnostics
+
+The approved named ELF normally resides at `/zxs/bin/zxs`. For the host's
+fresh mounts the suggested S, F and R paths are `/zxs/disks/system`,
+`/zxs/disks/data/<label>` and `/zxs/disks/recycle`, respectively. The real
+S owns `SYSTEM.sqlite3` and its adjacent SQLite rollback journal. These
+names grant no filesystem or access authority. Explicit eligible ELF and
+media paths remain possible. Canonical media operands cannot coincide
+with, contain, or lie inside `/zxs/{state,bin,log}`; `/zxs/disks` and
+`/zxs/disks/data` are grouping directories, not selectable volumes. The
+ELF cannot overlap `/zxs/{state,log,disks}`. Use genuinely separate
+locations; do not mount aliases of one control or data directory elsewhere.
+The runtime still compares the held state, site, SYSTEM, ELF and selected
+volume identities and visible ancestry. When the walk encounters the
+actual product directory via another whole mount, it checks the same
+reserved members and their spelling. This is not a global search for
+aliases of absent or unselected paths.
+
+A host administrator can pre-provision an optional `/zxs/log` directory
+(root:root 0700, no access/default ACL, same mount as `state`) and
+`zxs.log` inside it (root:root 0600, ordinary, single link, no access ACL).
+Only the supervisor can append. It opens the exact leaf without following
+filesystem symlinks, then reopens only the pinned original regular inode
+with O_APPEND and CLOEXEC. It never creates, truncates or repairs the log.
+No log descriptor goes to Web or SMB; keep all standard descriptors on
+the real foreground terminal, not redirected to a file.
+
+There are at most two best-effort file records per run: the original
+deployment/site was verified **before child preflight or listener approval**
+(not “service started”), and the eventual confirmed drain or unconfirmed
+start/drain outcome **after child cleanup and release of business locks**.
+There is no log I/O in pair release, serve, TERM or reap. Optional file I/O
+is synchronous at those two boundaries; an unavailable file sends the
+complete short diagnostic to stderr, possibly after a partial append. No
+fsync, rotation, business audit, authentication, credential, filename or
+client event is implied. Missing or unsafe site selection never writes this
+log or creates a fresh layout.
 
 The same foreground terminal renders only the authenticated low ACTIVE facts
 and the actual retained media selection, then issues one typed confirmation

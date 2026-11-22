@@ -1,8 +1,8 @@
 //! One fixed protected original deployment for the normal program entry.
 //! No search, CLI InstanceId or default fallback. Immutable site proof, not
 //! a second credential, authority database or independent settings file.
-use super::{PREFIX,denied,held::{self,PathPin,PublicLeaf,Role},protected_dir};
-use std::{fs::File,io,os::unix::fs::MetadataExt,path::Path};
+use super::{layout,denied,held::{self,PathPin,PublicLeaf,Role},protected_dir};
+use std::{fs::File,io,path::Path};
 
 const MAGIC:&[u8;16]=b"ZXS-DEPLOYED-V1\0";
 const SIZE:usize=64;
@@ -27,16 +27,22 @@ pub(super) struct Deployment{
 }
 impl Deployment{
     pub(super) fn select(host:&File,task:&File)->io::Result<Self>{
-        let pin=PathPin::select(host,task,Path::new(PREFIX),Role::Site)?;
+        let pin=PathPin::select(host,task,Path::new(layout::STATE),Role::FixedDir)?;
         let directory=held::dir_reader(pin.held())?;
         protection(&directory)?;
         directory.try_lock_shared().map_err(io::Error::from)?;
         pin.require(host,task)?;
+        held::require_spelling(&directory,b"deployment.v1")?;
         let record=PublicLeaf::select(task,&directory,c"deployment.v1",0o100600,SIZE)?;
         let selected=Selected::decode(record.bytes())?;
         let this=Self{pin,directory,record,selected};
         this.require(host,task,this.selected.record)?;
         Ok(this)
+    }
+    pub(super) fn state_pin(&self)->&PathPin{&self.pin}
+    pub(super) fn into_state_pin(self)->PathPin{self.pin} // O_PATH; the separate locked OFD drops
+    pub(super) fn product(&self)->crate::fs::Entity{
+        self.pin.parent_place().expect("fixed /zxs/state has a parent").entity
     }
     pub(super) fn instance(&self)->[u8;16]{self.selected.instance}
     pub(super) fn overlaps(&self,other:&PathPin)->bool{self.pin.overlaps(other)}
@@ -44,16 +50,15 @@ impl Deployment{
         if digest!=self.selected.record||held::place(&self.directory)?!=self.pin.location(){return Err(denied());}
         self.pin.require(host,task)?;
         protection(&self.directory)?;
+        held::require_spelling(&self.directory,b"deployment.v1")?;
         self.record.require(task,&self.directory)?;
         self.pin.require(host,task)
     }
 }
 fn protection(directory:&File)->io::Result<()>{
-    // Both root-private and canonical non-writable ancestors are safe to
-    // traverse. The selector itself always requires exact root 0600.
-    let mode=directory.metadata()?.mode();
-    if !matches!(mode,0o040700|0o040755){return Err(denied());}
-    protected_dir(directory,0,mode)
+    // The paired fresh issuer uses this same traversable parent.
+    // The selector itself is separately checked root-private 0600.
+    protected_dir(directory,0,0o040755)
 }
 
 #[cfg(test)]

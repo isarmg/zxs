@@ -26,7 +26,7 @@ impl RustSite{
         let plan=RustPlan::decode(installed.bytes()).map_err(bad)?;
         if &plan!=expected||payload.origin!=plan.origin||payload.plan_sha!=plan.sha()||
             payload.system.as_path()!=held.system.path(){return Err(no());}
-        let vault=super::product_pin(base,c"vault",false)?;
+        let vault=super::product_pin(base,c"vault")?;
         let x=Self{held,installed,plan,vault,authority:Some((authority,payload))};
         x.require()?;contents(&x.offline_vault_directory()?,&[])?;Ok(x)
     }
@@ -41,7 +41,7 @@ impl RustSite{
         self.installed.require(site,c"rust.install")?;
         let current=mark(&self.vault)?;
         let m=self.vault.metadata()?;
-        let pin=||super::product_pin(site,c"vault",false);
+        let pin=||super::product_pin(site,c"vault");
         if m.mode()!=0o040700||m.uid()!=0||m.gid()!=0||m.nlink()==0||current.1!=mark(site)?.1
             ||current!=mark(&pin()?)?{return Err(no());}
         let dir=child(&self.vault,c".")?;

@@ -3,7 +3,7 @@ mod return_to_host;
 mod live;
 pub(in crate::sqlite_install::pair) use return_to_host::{DeployedSite,deployed_worker_payload,verify_deployed_worker,give_live_approval,request_live_approval,CredentialSite,RustSite,VaultStamp,
     checked_vault_stamp,verify_fresh_worker,Allocated,CurrentVault,PlacedVault,FreshHome,FreshParent};
-pub(in crate::sqlite_install) use return_to_host::{lease as require_lent_ex,shared_lease as require_lent_sh};
+pub(in crate::sqlite_install) use return_to_host::{InitialLayout,lease as require_lent_ex,shared_lease as require_lent_sh};
 use super::bad;
 use crate::pinned::{Entity,Mount};
 use rustix::fs::{Mode,OFlags,RawDir,openat};

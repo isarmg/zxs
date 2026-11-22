@@ -2,6 +2,7 @@
 //! Ancestry never searches other paths or recovers a hidden parent. The
 //! separate discovery cut returns only bounded, admitted mountpoint names.
 use crate::pinned::{DiscoveryAdmission,DiscoveryFdInfo,Entity, Mount, Pinned, invalid, local_data_filesystem};
+use crate::sqlite_install::product_layout;
 use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
 use rustix::fs::{Mode, OFlags, fgetxattr, makedev, openat};
 use rustix::io::Errno;
@@ -23,8 +24,7 @@ fn no_claim(dir: &File) -> io::Result<()> {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct Row { parent: u64, device: u64, whole: bool, devtmpfs: bool, site_level:Option<usize>, magic:Option<u32>, namespace_root:bool }
-fn site_level(point:&[u8])->Option<usize>{match point{b"/var"=>Some(0),b"/var/lib"=>Some(1),_=>None}}
+struct Row { parent: u64, device: u64, whole: bool, devtmpfs: bool, product_root:bool, magic:Option<u32>, namespace_root:bool }
 fn data_magic(fs:&[u8])->Option<u32>{match fs{
     b"ext2"|b"ext3"|b"ext4"=>Some(EXT4_SUPER_MAGIC),
     b"xfs"=>Some(XFS_SUPER_MAGIC),
@@ -72,12 +72,26 @@ impl DiscoveryTable{
         if !self.mounts.discovery_ancestry(id)||parent.is_some_and(|p|p!=up){return Err(no());}
         Ok(Some(id))
     }
+    fn product_crossing(&self,parent:u64)->io::Result<Option<u64>>{
+        let next=self.named(Path::new(product_layout::TOP),Some(parent))?;
+        // Rule out a subtree before crossing, not after querying it. The
+        // named test also rules out remote, pseudo, autofs and stacked rows.
+        if let Some(id)=next{
+            let (above,_)=self.mounts.full_mount(id)?;
+            if above!=parent||id==parent{return Err(unknown("not a complete separate /zxs mount"));}
+        }
+        Ok(next)
+    }
 }
 /// One process-local discovery cut; its table cannot be populated by CLI,
 /// a file argument, Helper config or an external mount/identity cache.
 pub(crate) struct DiscoveryView{table:DiscoveryTable,fds:DiscoveryFdInfo}
 impl DiscoveryView{
     pub(crate) fn roots(&self)->&[DiscoveryMount]{&self.table.roots}
+    pub(crate) fn product_crossing(&self,parent:u64)->io::Result<Option<u64>>{self.table.product_crossing(parent)}
+    pub(crate) fn require_product_mount(&self,child:Mount,parent:u64,entity:Entity,magic:u32)->io::Result<()>{
+        self.table.mounts.require_product_mount(child,parent,entity,magic)
+    }
     pub(crate) fn full_local_mount(&self,id:u64)->io::Result<(u64,u64)>{
         if !self.table.mounts.discovery_ancestry(id){return Err(unknown("no eligible local mount ancestry"));}
         self.table.mounts.full_mount(id)
@@ -186,7 +200,7 @@ impl Mounts {
             if !words.next().is_some_and(|w| !w.is_empty()) || !words.any(|w| w == b"-") { return Err(bad()); }
             let fs_type=words.next().filter(|v|!v.is_empty()).ok_or_else(bad)?;
             let row=Row {parent,device,whole:root==b"/",devtmpfs:fs_type==b"devtmpfs",
-                site_level:site_level(point),magic:data_magic(fs_type),namespace_root:point==b"/"};
+                product_root:point==product_layout::TOP.as_bytes(),magic:data_magic(fs_type),namespace_root:point==b"/"};
             if !(0..2).all(|_| words.next().is_some_and(|w| !w.is_empty())) || words.next().is_some()
                 || rows.insert(id,row).is_some() {
                 return Err(bad());
@@ -214,24 +228,20 @@ impl Mounts {
             .ok_or_else(|| unknown("cannot establish a complete selected mount"))
     }
 
-    /// Only the two fixed, already provisioned OS ancestors of the
-    /// dedicated ZXS instance may independently change mounts. An
-    /// ordinary subtree bind is not a complete root. Btrfs reports an
-    /// anon_dev in stat and its superblock device in mountinfo, so use
-    /// its original mounted subvolume root inode in that branch instead.
-    /// Does not infer the physical drive or distinguish deliberate binds
-    /// of an entire independently selected filesystem/subvolume root.
-    pub(crate) fn require_instance_parent_mount(&self,level:usize,child:Mount,parent:u64,
-        entity:Entity,magic:u32)->io::Result<()>{
-        if child.id!=parent && child.at_root==Some(true) && level<2
-            && self.0.get(&child.id).is_some_and(|row|row.site_level==Some(level)
+    /// The only protected site mount boundary is /zxs itself, if it is an
+    /// already-mounted complete supported local root. A subtree/subvolume
+    /// mount is not a complete root. Btrfs inode stat uses anon_dev rather
+    /// than the mountinfo superblock device, so check the root inode there.
+    /// This does not prove the underlying physical drive or exclude a bind
+    /// of a whole independently selected filesystem root.
+    pub(crate) fn require_product_mount(&self,child:Mount,parent:u64,entity:Entity,magic:u32)->io::Result<()>{
+        if child.id!=parent && child.at_root==Some(true)
+            && self.0.get(&child.id).is_some_and(|row|row.product_root && row.whole
                 && row.parent==parent && row.magic==Some(magic) && row.device!=0
-                && (if magic==BTRFS_SUPER_MAGIC{
-                    entity.ino==256 // BTRFS_FIRST_FREE_OBJECTID
-                }else{row.whole&&entity.dev==row.device})){
+                && (if magic==BTRFS_SUPER_MAGIC{entity.ino==256}else{entity.dev==row.device})){
             Ok(())
         }else{
-            Err(unknown("the original /var or /var/lib mount transition could not be attributed to a qualified mounted root"))
+            Err(unknown("the original /zxs mount transition could not be attributed to a qualified complete mounted root"))
         }
     }
 

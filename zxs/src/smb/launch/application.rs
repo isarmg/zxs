@@ -26,9 +26,16 @@ pub fn start_original_zxs()->io::Result<()>{
     let parent=Parent::pin().map_err(|_|no())?;
     let terminal=Terminal::select(&parent)?;
     let site=SiteLease::select(&parent)?;
-    let selected=custody::prepare_site(&parent,&site,&terminal)?;
-    let media=Media::select(&site,&selected)?;
-    let mut accepted=custody::authorize(&parent,&site,&terminal,&selected,&media)?;
+    site.record_selected(); // before even a preflight child exists
+    let result=run_site(&parent,&terminal,&site);
+    site.record_after_run(&result); // releases business custody before optional I/O
+    result
+}
+
+fn run_site<'p>(parent:&'p Parent,terminal:&Terminal,site:&SiteLease<'p>)->io::Result<()>{
+    let selected=custody::prepare_site(parent,site,terminal)?;
+    let media=Media::select(site,&selected)?;
+    let mut accepted=custody::authorize(parent,site,terminal,&selected,&media)?;
     let mut smb=custody::launch_internal_smb(&mut accepted)?;
     let mut web=match custody::launch_internal_web(&mut accepted,&mut smb){
         Ok(web)=>web,

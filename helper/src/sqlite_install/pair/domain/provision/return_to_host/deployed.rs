@@ -1,9 +1,9 @@
 //! A read-only, one-session owner for the ZXS deployment locator and the
 //! authoritative existing site. No Helper state or credential is consulted.
 use super::{PRODUCT,Site,approval,bad,child,contents,layout,lease,mark,product_pin,public_record::Public,
-    rust_site::{PublicAuthority,VaultStamp,checked_vault_stamp},shared_lease};
+    rust_site::{PublicAuthority,VaultStamp,checked_vault_stamp},shared_lease,state_pins};
 use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::{MAX_WIRE,RustPlan},
-    sqlite_install::pair::fresh_issuer::{SitePayload,compiled_v18,image}};
+    sqlite_install::{pair::fresh_issuer::{SitePayload,compiled_v18,image},product_layout}};
 use rustix::fs::{FlockOperation,Mode,OFlags,ResolveFlags,flock,openat2};
 use sha2::{Digest,Sha256};
 use std::{ffi::CStr,fs::File,io,os::unix::fs::{FileExt,MetadataExt},path::Path};
@@ -16,12 +16,6 @@ fn unknown()->io::Error{bad("the original independently managed ZXS deployment w
 fn leaf(parent:&File,name:&CStr)->io::Result<File>{
     Ok(File::from(openat2(parent,name,OFlags::PATH|OFlags::CLOEXEC|OFlags::NOFOLLOW,Mode::empty(),
         ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_MAGICLINKS|ResolveFlags::NO_SYMLINKS)?))
-}
-fn protected_parent(d:&File)->io::Result<()>{
-    let m=d.metadata()?;
-    if !m.is_dir()||m.nlink()==0||m.uid()!=0||m.gid()!=0||!matches!(m.mode()&0o7777,0o700|0o755){return Err(unknown());}
-    layout::bare_acl(d,c"system.posix_acl_access")?;
-    layout::bare_acl(d,c"system.posix_acl_default")
 }
 fn locate(fd:&File)->io::Result<([u8;16],[u8;32])>{
     let mut v=[0;64];
@@ -69,15 +63,14 @@ impl DeployedSite{
         approval::no_inherited_descriptors()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         let host=approval::host_admin()?;
-        let mut base=host.try_clone()?;
-        for (i,name) in PRODUCT.into_iter().enumerate(){base=product_pin(&base,name,i<2)?;}
+        let [top,base]=state_pins(&host)?;
         let parent=child(&base,c".")?;
         if mark(&base)?!=mark(&parent)?{return Err(unknown());}
-        protected_parent(&parent)?;
+        layout::protected_control(&parent)?;
         flock(&parent,FlockOperation::NonBlockingLockShared)?;
         let (selector,selection)=locator(&parent)?;
         let original=Site::product(host,&selection.0,false)?;
-        if mark(&original.chain[PRODUCT.len()-1])?!=mark(&parent)?{return Err(unknown());}
+        if mark(&original.chain[0])?!=mark(&top)?||mark(&original.chain[PRODUCT.len()-1])?!=mark(&parent)?{return Err(unknown());}
         let site_ex=child(original.base(),c".")?;
         let authority=PublicAuthority::select(&site_ex)?;
         let payload=SitePayload::decode(authority.bytes())?;
@@ -86,8 +79,10 @@ impl DeployedSite{
         let plan_file=Public::select(&site_ex,c"rust.install",1..=MAX_WIRE)?;
         let plan=RustPlan::decode(plan_file.bytes()).map_err(bad)?;
         if plan.origin!=payload.origin||plan.sha()!=payload.plan_sha{return Err(unknown());}
-        let verified_image=image::Image::select(&payload.image,&payload.elf_sha)?;
+        let product=mark(&original.chain[0])?.0;
+        let verified_image=image::Image::select(&payload.image,&payload.elf_sha,product)?;
         let system=find(&payload.system)?;
+        product_layout::require_original_media(product,[&system])?;
         let system_ex=system.storage_directory()?;
         // Same kernel order as the only original cold supervisor. An online
         // participant holds S SH, in which case this check cannot qualify.
@@ -101,8 +96,9 @@ impl DeployedSite{
         compiled_v18()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         let (_,uid,gid)=self.payload.subject.tuple();
-        protected_parent(&self.parent)?;
+        layout::protected_control(&self.parent)?;
         layout::verify_registered_instance(&self.original,gid)?;
+        product_layout::require_original_media(mark(&self.original.chain[0])?.0,[&self.system])?;
         shared_lease(&self.parent,mark(&self.original.chain[PRODUCT.len()-1])?)?;
         let s=self.system.require_same_named_mount()?;
         if !self.system.passive_mount_observation()||self.system.metadata()?.uid()!=uid||
@@ -137,7 +133,7 @@ impl DeployedSite{
     }
     pub(super) fn offline_vault_directory(&self)->io::Result<File>{
         self.require()?;
-        let pin=||product_pin(&self.site_ex,VAULT,false);
+        let pin=||product_pin(&self.site_ex,VAULT);
         let vault=pin()?;
         let m=vault.metadata()?;
         if m.mode()!=0o040700||m.uid()!=0||m.gid()!=0{return Err(unknown());}
@@ -156,7 +152,7 @@ impl DeployedSite{
         layout::bare_acl(&read,c"system.posix_acl_access")?;
         let mut prefix=[0;224];read.read_exact_at(&mut prefix,0)?; // never the 16-byte credential
         if &prefix!=wanted||checked_vault_stamp(&read,mount)?!=stamp||
-            checked_vault_stamp(&leaf(&dir,RECORD)?,mount)?!=stamp||mark(&product_pin(&self.site_ex,VAULT,false)?)?!=mark(&dir)?{
+            checked_vault_stamp(&leaf(&dir,RECORD)?,mount)?!=stamp||mark(&product_pin(&self.site_ex,VAULT)?)?!=mark(&dir)?{
             return Err(unknown());
         }
         // Retain only the original non-readable pin, never the prefix reader.
@@ -172,7 +168,7 @@ impl ObservedVault<'_>{
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
         self.site.require()?;
         let parent=mark(&self.dir)?;
-        if parent.1!=self.mount||mark(&product_pin(&self.site.site_ex,VAULT,false)?)?!=parent{
+        if parent.1!=self.mount||mark(&product_pin(&self.site.site_ex,VAULT)?)?!=parent{
             return Err(unknown());
         }
         contents(&self.dir,&[RECORD.to_bytes()])?;
@@ -204,7 +200,7 @@ pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,si
     let expected=(plan.origin.instance,site_sha);
     let site=Site::product(approval::host_admin()?,&expected.0,false)?;
     let parent=child(&site.chain[PRODUCT.len()-1],c".")?;
-    protected_parent(&parent)?;
+    layout::protected_control(&parent)?;
     let (selector,record)=locator(&parent)?;
     if record!=expected{return Err(unknown());}
     let dir=child(site.base(),c".")?;
@@ -250,7 +246,7 @@ mod tests{
             Path::new("/protected/selected/bin/zxs"),[72;32]).unwrap();
         let (body,approved)=(payload.encode().unwrap(),payload.sha().unwrap());
         assert!(qualify_payload(&body,&plan,approved).unwrap()==payload);
-        for candidate in ["/usr/bin/zxs","/alternate/bin/zxs","/protected/selected/bin/other"]{
+        for candidate in ["/zxs/bin/zxs","/alternate/bin/zxs","/protected/selected/bin/other"]{
             payload.image=candidate.into();
             let changed=payload.encode().unwrap();
             assert!(qualify_payload(&changed,&plan,approved).is_err());

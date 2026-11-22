@@ -2,22 +2,21 @@
 //! EX from the empty proof to selector fsync. An occupied name, abandoned
 //! stage or loss of the original is never evidence of a successful issue.
 use super::{attrs,bare_acl,creation_preflight,exact_with,fstatvfs,host_mount,mark,new_dir,noentry,owned,publish,same_name,
-    access_chain,verify_registered_instance,INSTANCE,OWNER,PUBLIC,StatVfsMountFlags,Times};
-use super::super::{Site,approval,bad,child,lease,public_record::Public,product_pin,
+    access_chain,protected_control,state_spelling,verify_registered_instance,INSTANCE,OWNER,PUBLIC,StatVfsMountFlags,Times};
+use super::super::{Site,approval,bad,child,lease,public_record::Public,
     rust_site::{PublicAuthority,RustSite},site_lease::SiteLease};
-use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::MAX_WIRE,sqlite_install::pair::{
+use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::MAX_WIRE,sqlite_install::{product_layout,pair::{
     fresh_issuer::{DEPLOYMENT_BYTES,FreshConsent,SitePayload,activation,require_v18},
-    native_run::{FreshActive,ResolvedRust},terminal::PublicConfirmation}};
+    native_run::{FreshActive,ResolvedRust},terminal::PublicConfirmation}}};
 use rustix::fs::{FlockOperation,Mode,OFlags,RawDir,ResolveFlags,flock,openat2};
-use std::{ffi::{CStr,CString},fs::File,io::{self,Read},mem::MaybeUninit,os::unix::fs::{FileExt,MetadataExt},path::Path};
+use std::{ffi::{CStr,CString},fs::File,io::{self,Read},mem::MaybeUninit,os::unix::fs::FileExt,path::Path};
 
 const ENTRY:&CStr=c"deployment.v1";
 const TICKET:&CStr=c".deployment.v1.new";
 const PLAN:&CStr=c"rust.install";
 const SITE:&CStr=c"site.v1";
 const VAULT:&CStr=c"vault";
-const PARENT:&str="/var/lib/zxs/rust-smb";
-const SEARCH_PRODUCT:Mode=Mode::from_bits_retain(0o755);
+const PARENT:&str=product_layout::STATE;
 const PRIVATE:Mode=Mode::from_bits_retain(0o600);
 fn no()->io::Error{bad("not a new protected standalone ZXS deployment; never reuse an earlier layout")}
 
@@ -82,7 +81,7 @@ impl FreshParent{
         if parent.chain.len()!=parent.prefix().len(){return Err(no());}
         let ex=child(parent.base(),c".")?;
         if mark(&ex)?!=mark(parent.base())?{return Err(no());}
-        attrs(&ex,0,0,SEARCH_PRODUCT,true)?;
+        protected_control(&ex)?;
         flock(&ex,FlockOperation::NonBlockingLockExclusive)?;
         let leaf=parent.leaf.to_str().map_err(|_|no())?;
         let stage=CString::new(format!(".{leaf}.zxs-new")).map_err(|_|no())?;
@@ -91,9 +90,9 @@ impl FreshParent{
     pub(in crate::sqlite_install::pair) fn before_original_sql(&self,instance:&[u8;16])->io::Result<()>{
         if instance!=&self.instance{return Err(no());}
         self.parent.check()?;host_mount(&self.parent)?;
+        state_spelling(&self.parent.host,&self.parent.chain[0],&self.parent.chain[1])?;
         lease(&self.ex,mark(self.parent.base())?)?;
-        attrs(&self.ex,0,0,SEARCH_PRODUCT,true)?;
-        bare_acl(&self.ex,c"system.posix_acl_access")?;bare_acl(&self.ex,c"system.posix_acl_default")?;
+        protected_control(&self.ex)?;
         inventory(&self.ex,&[])
     }
     #[cfg(any(test,feature="embedded-zxs"))]
@@ -103,6 +102,9 @@ impl FreshParent{
             if mark(original)?.0==target{return Err(no());}
         }
         Ok(mark(self.parent.base())?.0)
+    }
+    pub(in crate::sqlite_install::pair) fn product_root(&self)->io::Result<crate::pinned::Entity>{
+        self.before_original_sql(&self.instance)?;Ok(mark(&self.parent.chain[0])?.0)
     }
     pub(in crate::sqlite_install::pair) fn require_distinct_image(&self,image:&crate::sqlite_install::pair::fresh_issuer::image::Image)
         ->io::Result<()>{
@@ -143,9 +145,7 @@ impl FreshHome{
         resolved.require_product_parent(&chain)?;
         let id=mark(&self.parent.base())?;
         lease(&self.ex,id)?;
-        attrs(&self.ex,0,0,SEARCH_PRODUCT,true)?;
-        bare_acl(&self.ex,c"system.posix_acl_access")?;
-        bare_acl(&self.ex,c"system.posix_acl_default")?;
+        protected_control(&self.ex)?;
         creation_preflight(&self.ex)?;
         if usize::from(helper_linux_evidence::portable_component_limit(&self.ex)?)<self.stage.to_bytes().len()
             ||fstatvfs(&self.ex)?.f_flag.contains(StatVfsMountFlags::RDONLY){return Err(no());}

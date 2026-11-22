@@ -1,23 +1,23 @@
 //! Preserve exact protected product ancestors plus nonreplacement publication.
 mod fresh_zxs;
 pub(in crate::sqlite_install::pair) use fresh_zxs::{FreshHome,FreshParent};
-use super::{Site,bad,child,contents,mark,safe_dir};
+use super::{PRODUCT,Site,bad,child,contents,mark,product_leaf,product_pin,product_top,safe_dir};
 use super::super::Times;
-use crate::{maintenance::HostMounts,pinned::Mount};
-use rustix::{fs::{Mode,OFlags,RawDir,RenameFlags,StatVfsMountFlags,fchmod,fchown,fgetxattr,fstatvfs,mkdirat,openat,renameat_with},
+use crate::{maintenance::HostMounts,pinned::Mount,sqlite_install::product_layout};
+use rustix::{fs::{Mode,RenameFlags,StatVfsMountFlags,fchmod,fchown,fgetxattr,fstatvfs,mkdirat,renameat_with},
     io::Errno,process::{Gid,Uid}};
-use std::{ffi::CStr,fs::File,io::{self,Read},mem::MaybeUninit,os::unix::fs::MetadataExt};
+use std::{ffi::{CStr,OsStr},fs::File,io::{self,Read},os::unix::{ffi::OsStrExt,fs::MetadataExt}};
 const OWNER:Mode=Mode::RWXU;
 const INSTANCE:Mode=Mode::from_bits_retain(0o750);
 const PUBLIC:Mode=Mode::from_bits_retain(0o444);
 fn conflict()->io::Error{io::Error::new(io::ErrorKind::AlreadyExists,"layout or stage already exists; no takeover or automatic retry")}
 fn noentry(parent:&File,n:&CStr)->io::Result<()>{
-    match openat(parent,n,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty()){
-        Err(Errno::NOENT)=>Ok(()),Ok(_)=>Err(conflict()),Err(e)=>Err(e.into())
+    match product_leaf(parent,n){
+        Err(e) if e.kind()==io::ErrorKind::NotFound=>Ok(()),Ok(_)=>Err(conflict()),Err(e)=>Err(e)
     }
 }
 fn same_name(parent:&File,n:&CStr,original:&File)->io::Result<()>{
-    let now=File::from(openat(parent,n,OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?);
+    let now=product_leaf(parent,n)?;
     let (a,m)=mark(original)?;let (p,pm)=mark(parent)?;
     if mark(&now)?!=(a,m)||pm!=m||p.dev!=a.dev||p==a{return Err(bad("different original layout name, entity or mount"));}
     Ok(())
@@ -37,43 +37,51 @@ pub(in crate::sqlite_install::pair::domain::provision) fn bare_acl(f:&File,key:&
 // never open or return an unrelated entry. The independent lookup must still
 // resolve to the held directory (a mount point need not have its dirent ino).
 pub(super) fn exact_with(parent:&File,name:&CStr,selected:&File,reopen:impl FnOnce()->io::Result<File>)->io::Result<()>{
-    let before=Times::on(parent)?;
-    let f=File::from(openat(parent,c".",OFlags::RDONLY|OFlags::CLOEXEC|OFlags::DIRECTORY
-        |OFlags::NOFOLLOW|OFlags::NOATIME|OFlags::NONBLOCK,Mode::empty())?);
-    if mark(&f)?!=mark(parent)?{return Err(bad("different parent in layout name check"));}
-    let mut buf=[MaybeUninit::uninit();8192];let mut iter=RawDir::new(&f,&mut buf);
-    let mut bytes=0usize;
-    for _ in 0..4096{
-        let Some(r)=iter.next()else{break};let r=r?;let entry=r.file_name().to_bytes();
-        bytes+=entry.len()+1;if bytes>256*1024{break;}
-        if entry==name.to_bytes(){
-            if mark(&reopen()?)?==mark(selected)?&&Times::on(parent)?==before{return Ok(());}
-            return Err(bad("changed parent or child while checking exact layout spelling"));
-        }
-    }
-    Err(bad("fixed host directory spelling not confirmed within the bounded original parent listing"))
+    product_layout::raw_member(parent,OsStr::from_bytes(name.to_bytes()),||{
+        if mark(&reopen()?)?!=mark(selected)?{return Err(bad("changed child while checking exact layout spelling"));}
+        Ok(())
+    })
 }
-// An already configured /var or /var/lib is an operating-system mount
-// boundary, not an instruction to write through any existing bind at the
-// instance's package/site directories. Keep every original descriptor.
+fn check_directory(pin:&File,check:impl FnOnce(&File)->io::Result<()>)->io::Result<()>{
+    let dir=child(pin,c".")?;
+    if mark(&dir)?!=mark(pin)?{return Err(bad("changed original protected directory"));}
+    check(&dir)
+}
+pub(super) fn top_spelling(host:&File,top:&File)->io::Result<()>{
+    // The actual host root allows no access ACL; the fixed product root
+    // must match the exact same profile as the cold consumer.
+    check_directory(host,|f|bare_acl(f,c"system.posix_acl_access"))?;
+    exact_with(host,PRODUCT[0],top,||product_top(host))?;
+    check_directory(top,protected_control)
+}
+pub(super) fn state_spelling(host:&File,top:&File,state:&File)->io::Result<()>{
+    top_spelling(host,top)?;
+    exact_with(top,PRODUCT[1],state,||product_pin(top,PRODUCT[1]))?;
+    check_directory(state,protected_control)
+}
+pub(super) fn protected_control(dir:&File)->io::Result<()>{
+    attrs(dir,0,0,Mode::from_bits_retain(product_layout::CONTROL_MODE),true)?;
+    bare_acl(dir,c"system.posix_acl_access")?;
+    bare_acl(dir,c"system.posix_acl_default")
+}
+// A whole already mounted /zxs is the sole possible OS mount boundary.
+// Keep every original descriptor; no transition at state or an instance.
 fn one_mount(host:(crate::pinned::Entity,u64),d:(crate::pinned::Entity,u64))->bool{
     host.0.dev==d.0.dev && host.1==d.1
 }
 fn host_mount(site:&Site)->io::Result<()>{
     let mut parent=mark(&site.host)?;
-    let mut seen=vec![parent.0];let mut table=None;
+    let mut seen=vec![parent.0];
     for (level,d) in site.chain.iter().enumerate(){
         let current=mark(d)?;
         if seen.contains(&current.0){return Err(bad("aliased original instance ancestors"));}
         if !one_mount(parent,current){
-            if level>=2||parent.1==current.1{
+            if level!=0||parent.1==current.1{
                 return Err(io::Error::new(io::ErrorKind::Unsupported,
-                    "an extra mount or device change at or below the dedicated package installation directories is not supported"));
+                    "a separate mount or device change below /zxs is not supported for protected state"));
             }
             let mount=Mount::on(d)?.filter(|m|m.id==current.1).ok_or_else(||bad("layout mount identity changed"))?;
-            if table.is_none(){table=Some(HostMounts::current()?);}
-            table.as_ref().expect("bounded mount snapshot").require_instance_parent_mount(level,mount,parent.1,current.0,
-                crate::pinned::local_data_filesystem(d)?)?;
+            HostMounts::current()?.require_product_mount(mount,parent.1,current.0,crate::pinned::local_data_filesystem(d)?)?;
         }
         seen.push(current.0);parent=current;
     }
@@ -108,10 +116,7 @@ fn access_chain(site:&Site,gid:u32)->io::Result<()>{
         let m=dir.metadata()?;let search=if m.gid()==gid{0o010}else{0o001};
         if m.mode()&search==0{return Err(bad("storage subject cannot traverse the protected installation ancestors"));}
     }
-    let mut p=&site.host;
-    for (i,(f,&name)) in site.chain.iter().zip(site.prefix()).enumerate(){
-        exact_with(p,name,f,||site.component(p,name,i))?;p=f;
-    }
+    state_spelling(&site.host,&site.chain[0],&site.chain[1])?;
     site.check()
 }
 pub(super) fn verify_registered_instance(site:&Site, gid:u32)->io::Result<()>{
@@ -127,7 +132,9 @@ fn new_dir(parent:&File,n:&CStr)->io::Result<File>{
     // Only the actual successful creator goes on to open this name. Even an
     // already-empty directory is ineligible, never a candidate for chmod/chown.
     mkdirat(parent,n,OWNER)?;
-    let f=child(parent,n)?;
+    let pin=product_pin(parent,n)?;
+    let f=child(&pin,c".")?;
+    if mark(&pin)?!=mark(&f)?{return Err(bad("changed newly created directory"));}
     same_name(parent,n,&f)?;let m=f.metadata()?;
     if !m.is_dir()||m.uid()!=rustix::process::geteuid().as_raw()||m.nlink()==0||m.mode()&0o7777!=0o700{
         return Err(bad("new temporary directory was not private"));}

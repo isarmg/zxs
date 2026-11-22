@@ -2,7 +2,7 @@
 //! matches the actual ROOT sender, current original setup, inherited lease
 //! and sealed scope before using them. This is not another catalog.
 use super::{ExplicitSubject,bad,require_v18};
-use crate::{path_rules::Kind,smb_profile::rust_first::{Origin,RustPlan}};
+use crate::{path_rules::Kind,smb_profile::rust_first::{Origin,RustPlan},sqlite_install::product_layout};
 use sha2::{Digest,Sha256};
 use std::{io,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
 
@@ -90,6 +90,8 @@ impl SitePayload{
             return Err(no());
         }
         for p in [&self.system,&self.image]{let _=path(p.as_os_str().as_bytes())?;}
+        product_layout::media(&self.system).map_err(bad)?;
+        if !product_layout::image_separate(&self.image){return Err(no());}
         Ok(())
     }
     pub(in crate::sqlite_install::pair) fn encode(&self)->io::Result<Vec<u8>>{
@@ -139,6 +141,20 @@ mod tests{
         let raw=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).unwrap()).collect::<Vec<_>>();
         RustPlan::decode(&raw).unwrap()
     }
+    #[test]
+    fn layout_v18_persisted_site_uses_selected_effective_paths_and_rejects_reserved_state(){
+        let plan=plan();let subject=ExplicitSubject::checked([81;16],1001,1002).unwrap();
+        let original=SitePayload::new(&plan,subject,Path::new(product_layout::SYSTEM),
+            Path::new(product_layout::IMAGE),[82;32]).unwrap();
+        let wire=original.encode().unwrap();
+        assert!(SitePayload::decode(&wire).unwrap()==original);
+        let mut changed=wire.clone();let old=product_layout::SYSTEM.as_bytes();let path=b"/zxs/state/system";
+        let at=changed.windows(old.len()).position(|n|n==old).unwrap();
+        changed[at..at+old.len()].copy_from_slice(path);
+        assert!(SitePayload::decode(&changed).is_err()); // still exact width, not a framing-only failure
+        assert!(SitePayload::new(&plan,subject,Path::new(product_layout::SYSTEM),Path::new("/zxs/log/zxs"),[82;32]).is_err());
+    }
+
     #[test]
     fn fresh_v18_site_and_activation_match_the_independently_measured_zxs_layout(){
         let r=SitePayload::new(&plan(),ExplicitSubject::checked([31;16],1001,1002).unwrap(),

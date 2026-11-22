@@ -229,11 +229,13 @@ impl ResolvedRust {
         self.require()?;Ok((&self.original.system,&self.original.ex,s.subject))
     }
     pub(in crate::sqlite_install::pair) fn require_product_parent(&self,chain:&[crate::pinned::Entity])->io::Result<()>{
-        let parent=chain.last().ok_or_else(bad_question)?;
-        for p in std::iter::once(&self.original.system).chain([self.original.recycle.pinned()])
-            .chain(self.original.physical.iter().map(|f|&f.pin)){
+        let [_,product,parent]=chain else{return Err(bad_question());};
+        let media=||std::iter::once(&self.original.system).chain([self.original.recycle.pinned()])
+            .chain(self.original.physical.iter().map(|f|&f.pin));
+        for p in media(){
             if chain.contains(&p.entity())||p.visible_chain().contains(parent){return Err(bad("protected product parent aliases an original volume path"));}
         }
+        crate::sqlite_install::product_layout::require_original_media(*product,media())?;
         self.require()
     }
     pub(in crate::sqlite_install::pair) fn require_distinct_image(&self,image:&crate::sqlite_install::pair::fresh_issuer::image::Image)

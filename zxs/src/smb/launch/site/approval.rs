@@ -110,10 +110,10 @@ mod tests{
     }
     #[test]
     fn rust_site_record_binds_original_scope_and_the_whole_plan(){
-        let b=record(b"/fresh S/SYSTEM",b"/opt/zxs/bin/zxs");let r=Approval::decode(&b).unwrap();
+        let b=record(b"/zxs/disks/system",b"/zxs/bin/zxs");let r=Approval::decode(&b).unwrap();
         assert_eq!(r.origin.instance,[0x16;16]);assert_eq!(r.origin.setup,[0x13;16]);
         assert_eq!((r.subject.uid,r.subject.gid),(1001,1002));
-        assert_eq!(r.system.as_path(),Path::new("/fresh S/SYSTEM"));assert_eq!(r.image_sha,[41;32]);
+        assert_eq!(r.system.as_path(),Path::new("/zxs/disks/system"));assert_eq!(r.image_sha,[41;32]);
         let p=public_plan();r.require_plan(&p).unwrap();
         for i in [0,17,96,p.len()-1]{let mut other=p.clone();other[i]^=1;assert!(r.require_plan(&other).is_err());}
         for k in 0..b.len(){assert!(Approval::decode(&b[..k]).is_err());}

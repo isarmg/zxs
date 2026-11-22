@@ -10,10 +10,20 @@ automatic upgrade.
 
 The intended later acceptance fixture is a **disposable Linux environment**:
 already mounted and properly protected original SYSTEM (S), independent
-recycle (R) and ordinary (F) roots; the explicit non-root storage UID/GID; an
-empty protected `/var/lib/zxs/rust-smb`; and independently approved bytes of
-the static ZXS ELF already at the explicitly chosen protected canonical
-`.../zxs` file. The live Helper and its exact
+recycle (R) and ordinary (F) roots; the explicit non-root storage UID/GID;
+an empty, pre-provisioned `/zxs/state` (root:root, 0755, no access/default
+POSIX ACL); and independently approved bytes of the standalone ZXS ELF at
+`/zxs/bin/zxs` or an explicitly eligible protected canonical `.../zxs` file.
+Both `/zxs` and `/zxs/state` are root:root 0755 with no access/default
+POSIX ACL. `/zxs` may also be a separately mounted complete supported local
+filesystem root (not a mounted subtree). No mount crossing is accepted
+at `state` or below it. Sites belong to ZXS and are installed only
+under `/zxs/state/<instance-hex>`; the sole selector is
+`/zxs/state/deployment.v1`. The fixed parent/member checks require exact raw
+names and a complete bounded listing (4,096 non-dot names and 256 KiB per
+checked parent); they do not open unrelated entries. No prior deployment
+path is probed or migrated.
+The live Helper and its exact
 offline libgcrypt/libgpg-error inputs also need independent expected hashes.
 There is no installed Helper profile, configuration, service, or signing
 sidecar as authority. These offline libraries are not ZXS runtime
@@ -24,14 +34,23 @@ and does not itself issue a site or an account.
 
 1. `install-pool new-zxs-v18` creates only the pool: explicit original INIT
    actor, storage UID/GID, non-secret operation and approval IDs, actual
-   S/R/F handoff. The separately lowered installer returns the committed
+   S/R/F handoff. If omitted, SYSTEM and recycle use `/zxs/disks/system`
+   and `/zxs/disks/recycle`; use `--data DIR` or `--data-label LABEL`
+   for each original ordinary root. The exact existing `/zxs` protection
+   is checked before and after foreground INIT consent, before opening a
+   new database. The separately lowered installer returns the committed
    pool/INIT/request SHA-256 only after complete original-marker readback.
    This is a separate storage action, not account setup.
 2. `setup-pair issue-fresh-zxs-v18` takes that exact existing INIT evidence,
-   explicit SYSTEM, original first LAN/share plan, separate required
-   protected-site/operation IDs, the actual absolute `--zxs-image` path
-   with fixed `zxs` leaf, and independent ELF/provider hashes. That path
-   and digest are kept only in the original protected ZXS site. It
+   SYSTEM (optional `--system DIR`, otherwise `/zxs/disks/system`), the
+   original first LAN/share plan, separate protected-site/operation IDs,
+   and required independent ELF/provider hashes. Optional `--zxs-image
+   DIR/zxs` selects an eligible protected path instead of `/zxs/bin/zxs`.
+   Each ordinary root is selected by `--share DIR NAME ro|rw` or
+   `--share-label DISK_LABEL NAME ro|rw`; `DISK_LABEL` is a directory
+   component under `/zxs/disks/data`, not the share's displayed `NAME`. No
+   storage roots are inferred by scanning. The actual image path and digest
+   are kept only in the original protected ZXS site. It
    accepts **one** canonical `--login`, shared by Web and SMB; no alternate
    username or password option. One preview binds the proposed account,
    exact public successor and original plan. Only one setup approval is

@@ -51,8 +51,8 @@ pub(super) mod image;
 pub(crate) use image::EmbeddedInstall;
 use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,ResolvedRust,transact_fresh},
     native_sql::rust_vault::{ActiveRustMeta,Desired,RustChange,RustOrder,SetupSpec,shared_login},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest},receipt::Observed},terminal::PublicConfirmation};
-use crate::{path_rules::Kind,smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
-    rust_first::{self,Origin}},sqlite_install::{approval,stage::random}};
+use crate::{smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
+    rust_first::{self,Origin}},sqlite_install::{approval,product_layout,stage::random}};
 use helper_linux_evidence::prompt_signals::PromptSignals;
 use std::{ffi::OsStr,fmt::Write as _,path::PathBuf,time::{Duration,Instant}};
 
@@ -80,8 +80,10 @@ pub(super) struct Selection{
 impl Selection{
     pub(super) fn parse(mut it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
         let subject=ExplicitSubject::parse(&mut it)?;
-        let system=PathBuf::from(value(&mut it,"--system")?);
-        Kind::StorageRoot.check_path(system.as_os_str().as_encoded_bytes())?;
+        let mut it=it.peekable();
+        let system=if it.peek().is_some_and(|s|s=="--system"){PathBuf::from(value(&mut it,"--system")?)}
+            else{PathBuf::from(product_layout::SYSTEM)};
+        product_layout::media(&system)?;
         if !system.to_str().is_some_and(|s|s.len()<=4095){return Err("SYSTEM must be an exact protected UTF-8 path");}
         let origin=Origin{
             pool:key(&mut it,"--pool")?,init:key(&mut it,"--init")?,instance:key(&mut it,"--instance")?,
@@ -91,7 +93,8 @@ impl Selection{
         if ids.iter().enumerate().any(|(i,n)|ids[..i].contains(n)){return Err("fresh installation identities must be distinct");}
         let init_sha=sha(&mut it,"--init-sha256")?;
         let reference=key(&mut it,"--approval")?;
-        let image_path=PathBuf::from(value(&mut it,"--zxs-image")?);
+        let image_path=if it.peek().is_some_and(|s|s=="--zxs-image"){PathBuf::from(value(&mut it,"--zxs-image")?)}
+            else{PathBuf::from(product_layout::IMAGE)};
         image::check_path(&image_path).map_err(|_|"choose the protected canonical absolute path to the fixed zxs executable")?;
         if system.starts_with(&image_path)||image_path.starts_with(&system){return Err("SYSTEM must not contain the executable");}
         let image=sha(&mut it,"--zxs-sha256")?;
@@ -108,9 +111,10 @@ impl Selection{
             if flag=="--listen"&&endpoints.len()<MAX_ENDPOINTS{
                 let ep=it.next().ok_or("missing explicitly selected LAN listener")?;
                 endpoints.push(Endpoint::named(ep.to_str().ok_or("expected exact IP and prefix")?)?);
-            }else if flag=="--share"&&folders.len()<MAX_FOLDERS{
-                let p=PathBuf::from(it.next().ok_or("missing actual original data root")?);
-                Kind::StorageRoot.check_path(p.as_os_str().as_encoded_bytes())?;
+            }else if (flag=="--share"||flag=="--share-label")&&folders.len()<MAX_FOLDERS{
+                let selected=it.next().ok_or("missing actual original data root or explicit DATA label")?;
+                let p=if flag=="--share-label"{product_layout::data_label(selected)?}else{PathBuf::from(selected)};
+                product_layout::media(&p)?;
                 if system.starts_with(&p)||p.starts_with(&system)||image_path.starts_with(&p)||p.starts_with(&image_path)||folders.iter().any(|f|p.starts_with(&f.path)||f.path.starts_with(&p)){
                     return Err("SYSTEM, ordinary media and the selected image must not overlap");
                 }
@@ -119,7 +123,7 @@ impl Selection{
                     Some("ro")=>Mode::ReadOnly,Some("rw")=>Mode::ReadWrite,_=>return Err("select the explicit folder mode ro or rw"),
                 };
                 folders.push(Choice{path:p,folder,mode});
-            }else{return Err("only explicit bounded listeners and original folders; no recovery, password, or second executable");}
+            }else{return Err("only explicit --listen and --share/--share-label entries; no recovery, password or second executable");}
         }
         if endpoints.is_empty()||folders.is_empty(){return Err("select at least one LAN listener and original ordinary folder");}
         Ok(Self{subject,system,origin,reference,init_sha,image_path,image,crypto,hostname,login,recycle,endpoints,folders})
@@ -132,7 +136,7 @@ impl Selection{
         let parent=FreshParent::select(origin.instance)?;
         let resolved=ResolvedRust::fresh(&parent,&system,origin,hostname,endpoints,folders,recycle,subject,crypto.helper,init_sha)?;
         let tty=PublicConfirmation::select()?;
-        let image_file=image::Image::select(&image_path,&image)?;
+        let image_file=image::Image::select(&image_path,&image,parent.product_root()?)?;
         resolved.require_distinct_image(&image_file)?;
         parent.require_distinct_image(&image_file)?;
         let providers=Cryptography::fresh(crypto)?;
@@ -242,11 +246,20 @@ mod tests{
             --gpgerror-sha256 {} --host fresh.test --login first.zxs --recycle-name Recycle \
             --listen 192.0.2.17/24 --share /lab/F Work rw",hex(&[31;16]),hex(&[1;16]),hex(&[2;16]),hex(&[3;16]),
             hex(&[4;16]),hex(&[5;16]),hex(&[45;32]),hex(&[6;16]),hex(&[41;32]),hex(&[42;32]),hex(&[43;32]),hex(&[44;32]));
-        assert!(Selection::parse(arg(&form)).is_ok());
+        let selected=Selection::parse(arg(&form)).unwrap();
+        assert_eq!(selected.image_path,PathBuf::from("/fixture/bin/zxs"));
+        assert_eq!(selected.system,PathBuf::from("/lab/S"));
+        let defaults=form.replace("--system /lab/S ","").replace("--zxs-image /fixture/bin/zxs ","")
+            .replace("--share /lab/F","--share-label 工具");
+        let selected=Selection::parse(arg(&defaults)).unwrap();
+        assert_eq!(selected.system,PathBuf::from(product_layout::SYSTEM));
+        assert_eq!(selected.image_path,PathBuf::from(product_layout::IMAGE));
+        assert_eq!(selected.folders[0].path,PathBuf::from("/zxs/disks/data/工具"));
         for bad in [format!("{form} --resume"),format!("{form} --password bogus"),format!("{form} --site /other"),
             form.replace("first.zxs","guest"),form.replace("--login first.zxs","--web-login first.web --smb-login first.smb"),form.replace("/lab/F","/lab/S/F"),form.replace("1001","01001"),
             form.replace(&hex(&[3;16]),&hex(&[2;16])),form.replace("192.0.2.17/24","0.0.0.0/0"),
-            form.replace("--zxs-image /fixture/bin/zxs ",""),form.replace("/fixture/bin/zxs","/lab/S/zxs"),
+            defaults.replace(&format!("--zxs-sha256 {} ",hex(&[41;32])),""),defaults.replace("--share-label 工具","--share-label .."),
+            form.replace("/fixture/bin/zxs","/lab/S/zxs"),form.replace("/fixture/bin/zxs","/zxs/state/zxs"),
             form.replace("/fixture/bin/zxs","/lab/F/zxs"),form.replace("/fixture/bin/zxs","/fixture/bin/other"),
             form.replace("/fixture/bin/zxs","zxs"),form.replace(&hex(&[41;32]),&hex(&[0;32]))]{assert!(Selection::parse(arg(&bad)).is_err());}
         let public=format!("issue-fresh-zxs-v18 {form}");

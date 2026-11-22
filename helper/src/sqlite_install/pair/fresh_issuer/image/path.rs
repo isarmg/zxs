@@ -1,13 +1,12 @@
 //! Protected original image or destination parent. No supplied path may
 //! select a program to run here; only our known local mount cut is walked.
 use crate::{maintenance::HostMounts,pinned::{DiscoveryAdmission,Entity,Kind,Mount,discover_component,local_data_filesystem},
-    sqlite_install::approval};
+    sqlite_install::{approval,product_layout}};
 use super::denied;
 use rustix::{fs::{Mode,OFlags,ResolveFlags,fgetxattr,openat2},io::Errno};
 use std::{ffi::OsStr,fs::File,io,os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};
 
 pub(super) const LEAF:&str="zxs";
-pub(super) const SITE:&str="/var/lib/zxs/rust-smb";
 pub(super) const WITHIN:ResolveFlags=ResolveFlags::BENEATH.union(ResolveFlags::NO_XDEV)
     .union(ResolveFlags::NO_SYMLINKS).union(ResolveFlags::NO_MAGICLINKS);
 pub(super) const PIN:OFlags=OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
@@ -19,7 +18,7 @@ fn canonical(path:&Path,folder:bool)->io::Result<()>{
     kind.check_path(raw).map_err(crate::pinned::invalid)?;
     if !(2..=4095).contains(&raw.len())||text.chars().any(char::is_control)
         ||raw[1..].split(|&b|b==b'/').any(|name|name.len()>255)
-        ||path.starts_with(SITE)||Path::new(SITE).starts_with(path)
+        ||!product_layout::image_separate(path)
         ||!folder&&path.file_name()!=Some(OsStr::new(LEAF)){
         return Err(denied());
     }
@@ -48,7 +47,7 @@ fn qualified_dir(f:&File)->io::Result<File>{
     no_attribute(&d,c"system.posix_acl_access")?;no_attribute(&d,c"system.posix_acl_default")?;
     Ok(d)
 }
-fn walk(path:&Path,is_dir:bool)->io::Result<Vec<Prior>>{
+fn walk(path:&Path,is_dir:bool,product:Entity)->io::Result<Vec<Prior>>{
     canonical(path,is_dir)?;
     let home=approval::host_admin()?;
     let table=HostMounts::discovery_view(false)?;
@@ -64,6 +63,11 @@ fn walk(path:&Path,is_dir:bool)->io::Result<Vec<Prior>>{
         let name=OsStr::from_bytes(part);
         let from=chain.last().expect("held host root");
         let opener=qualified_dir(&from.original)?;
+        if from.at.entity==product {
+            let rest=path.strip_prefix(&prefix).map_err(|_|denied())?;
+            if !product_layout::image_separate(&Path::new(product_layout::TOP).join(rest)){return Err(denied());}
+            product_layout::raw_member(&opener,name,||Ok(()))?;
+        }
         prefix.push(name);
         let crossing=table.crossing(from.at.mount,&prefix)?;
         let last_file=!is_dir&&names.peek().is_none();
@@ -84,17 +88,18 @@ fn walk(path:&Path,is_dir:bool)->io::Result<Vec<Prior>>{
         }else if !opened.metadata()?.is_dir(){return Err(denied());}
         chain.push(Prior{original:opened,at});
     }
+    if chain.last().is_some_and(|leaf|leaf.at.entity==product){return Err(denied());}
     if is_dir{qualified_dir(&chain.last().expect("selected parent").original)?;}
     Ok(chain)
 }
 
-pub(super) struct OriginalPath{path:PathBuf,dir:bool,chain:Vec<Prior>}
+pub(super) struct OriginalPath{path:PathBuf,dir:bool,product:Entity,chain:Vec<Prior>}
 impl OriginalPath{
-    pub(super) fn selected(path:&Path,dir:bool)->io::Result<Self>{
-        Ok(Self{path:path.to_owned(),dir,chain:walk(path,dir)?})
+    pub(super) fn selected(path:&Path,dir:bool,product:Entity)->io::Result<Self>{
+        Ok(Self{path:path.to_owned(),dir,product,chain:walk(path,dir,product)?})
     }
     pub(super) fn require(&self)->io::Result<()>{
-        let now=walk(&self.path,self.dir)?;
+        let now=walk(&self.path,self.dir,self.product)?;
         if now.len()!=self.chain.len(){return Err(denied());}
         for (owned,named) in self.chain.iter().zip(now){
             if owned.at!=named.at||Place::at(&owned.original)?!=owned.at{return Err(denied());}
@@ -112,11 +117,11 @@ mod tests{
     use super::*;
     #[test]
     fn selected_zxs_path_is_canonical_fixed_leaf_and_outside_durable_site(){
-        for good in ["/opt/zxs/bin/zxs","/fresh tools/版本/zxs","/usr/bin/zxs"]{
+        for good in [product_layout::IMAGE,"/opt/zxs/bin/zxs","/fresh tools/版本/zxs","/selected/bin/zxs"]{
             assert!(check_image(Path::new(good)).is_ok());
         }
         for bad in ["zxs","/","/opt/ZXS","/opt/other","/opt//zxs","/opt/../zxs","/opt/./zxs","/opt/zxs/",
-            "/opt/zxs\n/zxs","/var/lib/zxs/rust-smb/zxs","/var/lib/zxs/rust-smb"]{
+            "/opt/zxs\n/zxs","/zxs/state/zxs","/zxs/log/zxs","/zxs/disks/zxs","/zxs/disks/data/F/zxs"]{
             assert!(check_image(Path::new(bad)).is_err(),"{bad:?}");
         }
     }

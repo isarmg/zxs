@@ -248,11 +248,20 @@ impl Pinned {
     /// the visible root. No backward ".." traversal or retained FD per hop.
     pub(crate) fn same_local_chain(&self,mut visit:impl FnMut(&File,usize)->io::Result<()>)->io::Result<Mount>{
         let admit=self.admission().ok_or_else(||invalid("local ancestry requires a guarded selection"))?;
+        self.same_admitted_chain(admit,|f,i|visit(f,i))
+    }
+    /// A fresh kernel admission can also revalidate a pre-existing original
+    /// O_PATH for additional read-only policy, without replacing its identity
+    /// or borrowing its lock. It must match every originally selected hop.
+    pub(crate) fn same_admitted_chain(&self,admit:&dyn DiscoveryAdmission,mut visit:impl FnMut(&File,usize)->io::Result<()>)->io::Result<Mount>{
+        let original=admit.admit(&self.fd)?;
         let named=Self::walk(&self.path,self.kind,true,Some(admit),|f,entity,i|{
             if self.chain.get(i)!=Some(&entity){return Err(invalid("original local ancestry changed"));}
             visit(f,i)
         })?;
-        check_named_mount(&self.chain,self.mount()?,&named.chain,named.mount()?)
+        let mount=self.mount()?;
+        if mount.id!=original{return Err(invalid("original admission mount changed"));}
+        check_named_mount(&self.chain,mount,&named.chain,named.mount()?)
     }
 
     pub(crate) fn path(&self) -> &Path { &self.path }

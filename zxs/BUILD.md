@@ -26,10 +26,12 @@ The recipe builds only the `zxs` binary with local vendored code, including
 SQLite and Argon2. It checks the ELF header and dynamic/program headers
 without starting the program: x86-64 static PIE, no `PT_INTERP`,
 `DT_NEEDED`, search/audit/filter dependencies or executable stack. It
-writes one executable under this worktree, `target/standalone/zxs`, and
+writes one build output under this worktree, `target/standalone/zxs`, and
 refuses to overwrite it. No Helper checkout, companion executable,
 system service, installer, network fetch or archive refresh is needed.
-Use a distinct clean worktree to reproduce the build separately.
+Use a distinct clean worktree to reproduce the build separately. The fresh
+host installation default is `/zxs/bin/zxs`, not the build output or working
+directory. This recipe does not create `/zxs` or install the executable.
 
 A digest and an ELF check are build evidence, not installation approval or
 SMB/Web acceptance. Fresh site setup still uses independent administrator

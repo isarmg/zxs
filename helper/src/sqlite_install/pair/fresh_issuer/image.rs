@@ -26,9 +26,9 @@ impl ImageStamp{
 }
 pub(in crate::sqlite_install::pair) struct Image{original:OriginalPath,reader:File,stamp:ImageStamp}
 impl Image{
-    pub(in crate::sqlite_install::pair) fn select(path:&Path,expected:&[u8;32])->io::Result<Self>{
+    pub(in crate::sqlite_install::pair) fn select(path:&Path,expected:&[u8;32],product:Entity)->io::Result<Self>{
         if expected==&[0;32]{return Err(denied());}
-        let original=OriginalPath::selected(path,false)?;
+        let original=OriginalPath::selected(path,false,product)?;
         let stamp=ImageStamp::at(original.pin())?;
         let reader=installed_regular_reader(original.pin())?;
         let owned=Self{original,reader,stamp};

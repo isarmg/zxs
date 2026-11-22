@@ -40,16 +40,15 @@ host tool requirements; the embedded ZXS product is static independently.
 Only the optional embedded build can offer:
 
 ```sh
-./helper install-zxs-image --destination-dir /selected/protected/bin \
-  --zxs-sha256 INDEPENDENT_WHOLE_ZXS_SHA256
+./helper install-zxs-image --zxs-sha256 INDEPENDENT_WHOLE_ZXS_SHA256
 ```
 
 A supported Linux host, real root foreground terminal, and the already
-prepared, empty protected ZXS-owned `/var/lib/zxs/rust-smb` parent are
-required. This action will not create that parent or take over an old site.
-The selected directory must already exist on the approved local host path,
-be protected and distinct from the product authority. Only the fixed leaf
-`zxs` is allowed. It requires an independent expected digest, exact payload
+prepared protected `/zxs` and empty ZXS-owned `/zxs/state` (both root:root
+0755 with no access/default POSIX ACL) are required. This action does not create that parent or take over an old site.
+The default writes `/zxs/bin/zxs`; `--destination-dir DIR` may select another
+already existing, eligible protected local directory distinct from the ZXS
+state, log and media trees. Only the fixed leaf `zxs` is allowed. It requires an independent expected digest, exact payload
 verification and a fresh foreground `INSTALL-ZXS-IMAGE` approval showing
 the actual destination and digest. No unattended entry or fallback.
 
@@ -65,8 +64,8 @@ writes site/account state, resets a credential, migrates a pool, or
 overwrites an existing file.
 
 Explicit [fresh v18 setup](private-fresh-zxs-v18.md) is a separate original
-approval. Give it the installed `--zxs-image DIR/zxs` and independently
-expected `--zxs-sha256`. It checks that executable and the original enrolled
+approval. Give it the independently expected `--zxs-sha256` and, when not
+using `/zxs/bin/zxs`, the installed `--zxs-image DIR/zxs`. It checks that executable and the original enrolled
 media before issuing **one** shared Web/SMB account; extraction by itself
 does not issue a credential. The existing `site.v1` authority and selector
 bind the chosen canonical path and whole-image hash. Later check/reset

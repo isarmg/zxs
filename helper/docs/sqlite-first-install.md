@@ -3,10 +3,12 @@
 `helper install-pool new|resume` 是**有写入的离线操作**；单独的 `receipt` 只核对原 INIT 回执。普通磁盘诊断面板不会执行这些操作。另有[同机浏览器发起前台确认](disk-web.md)的可选入口，写入决定仍由该终端作出。当前源码针对外部预先挂载、受保护且独立选定的本地卷。它不分区、格式化、挂载、擦盘、迁移既有目录或启动服务。只建立与同版业务端一致的唯一[已冻结数据库结构](../src/sqlite_install/schema.sql)，不识别、升级或双写此前的格式。建池完成后**仍没有账户或可登录的服务**。本候选尚未执行真机建池或断电验收；隔离开发测试不是实盘验证。
 
 ```text
-helper install-pool new    --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
-helper install-pool resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
-helper install-pool receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID --system DIR --recycle DIR --data DIR [--data DIR ...]
+helper install-pool new    --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...
+helper install-pool resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...
+helper install-pool receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...
 ```
+
+省略 `--system DIR` 和 `--recycle DIR` 时，分别使用 `/zxs/disks/system` 和 `/zxs/disks/recycle`；数据库名始终为 `SYSTEM.sqlite3`。普通卷不能为空，必须逐项给出 `--data DIR` 或 `--data-label LABEL`，后者只把一个 UTF‑8 目录名解释为 `/zxs/disks/data/<LABEL>`（有空格时由调用者将整个标签作为一个参数传入）。不是 SMB 的显示名称，不枚举 `data` 下的目录。显式绝对路径仍可使用；确认原单时按实际选定路径的原字节核对，省略参数不会查找另一个位置。挂载和目录由宿主准备，不由 Helper 创建或更改。存储根不得重叠 `/zxs/state`、`/zxs/bin` 或 `/zxs/log`；`/zxs/disks` 和 `/zxs/disks/data` 自身是分组目录，不是卷。选择 `/zxs` 下的根进行新建时，先核查同一原 `/zxs` 和 `/zxs/state` 已有且均为 root:root 0755、无访问或默认 POSIX ACL。全部新根与产品实体确实独立时，不要求 `/zxs/state`；仍会只核固定 `/zxs` 名（并在确认时复核）。确实不存在可以继续，若存在则必须是合格原目录。若任何所选路径经过同一受保护的 `/zxs` 实体，同样要求原 `/zxs/state`，并核查保留边界与所选成员的实际拼写；不遍历其他挂载来找别名。
 
 - **new：只新建。** 本机管理员先独立确定全新的 SYSTEM、回收 R 和 1–62 个普通卷，包括 R 确实来自与 S 和所有普通卷独立的文件系统；路径或挂载 ID 本身不证明物理盘独立。每个目录是受保护宿主上的专用普通目录，由预定非 root 存储账号拥有，权限 0700；父链需可核，来源不明就拒绝。实际目录、祖先、名称容量、挂载、只读标志、已有旧属性或未知现物均核查。无法核查既有目录的旧标记不接手；不读旧值，不用 xattr 存新格式。不自动发现或占用非空卷。
 - **resume：绝不建库。** 保存两个非秘密 ID（均为 32 位小写非零十六进制），使用**同一维护主体、审批参考、存储 UID、明确的原 S/R/F 与原操作**。必须独立核实当前接入的确是上次交付的原介质；整套卷与库被复制时，单靠 SQL/卷标不能证明哪套是原件。观察到已提交的准确原单只返历史回执，不重建已丢的标记，不证明当前健康。如有未归属或需恢复的 `-journal`、WAL、SHM、空/半库、损坏/外来标记或签发来源不明，不删、不代修、不重发新号。

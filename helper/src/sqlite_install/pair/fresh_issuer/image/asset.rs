@@ -24,7 +24,7 @@ mod enabled{
     use super::{denied,verify};
     use crate::{pinned::{Entity,Mount},sqlite_install::{approval,pair::{
         command::{sha,value},domain::FreshParent,fresh_issuer::{require_v18,hex},
-        terminal::PublicConfirmation},stage::random}};
+        terminal::PublicConfirmation},product_layout,stage::random}};
     use crate::sqlite_install::pair::fresh_issuer::image::{Image,path::{OriginalPath,PIN,WITHIN,no_attribute}};
     #[cfg(feature="embedded-zxs")]
     use super::MAX_IMAGE;
@@ -45,13 +45,18 @@ mod enabled{
     #[derive(Debug)]
     pub(crate) struct EmbeddedInstall{directory:PathBuf,independent:[u8;32]}
     impl EmbeddedInstall{
-        pub(crate) fn parse(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-            let directory=PathBuf::from(value(&mut args,"--destination-dir")?);
+        pub(crate) fn parse(args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
+            let mut args=args.peekable();
+            let directory=if args.peek().is_some_and(|s|s=="--destination-dir"){
+                PathBuf::from(value(&mut args,"--destination-dir")?)
+            }else{PathBuf::from(product_layout::BIN)};
             super::super::path::check_parent(&directory).map_err(|_|"select an existing protected canonical absolute destination directory")?;
             let independent=sha(&mut args,"--zxs-sha256")?;
             if args.next().is_some(){return Err("only this fixed destination and independent digest; no replace, startup or alternate command");}
             Ok(Self{directory,independent})
         }
+        #[cfg(test)]
+        pub(super) fn selected_directory(&self)->&std::path::Path{&self.directory}
         #[cfg(feature="embedded-zxs")]
         pub(crate) fn run(self)->io::Result<()>{
             let packaged=crate::fs_tools::hex(HASH).ok_or_else(denied)?;
@@ -68,7 +73,8 @@ mod enabled{
             let scope=random::<16>()?;
             let site=FreshParent::select(scope)?;
             let tty=PublicConfirmation::select()?; // do not keep extra FDs before the exact root entry gate
-            let target=OriginalPath::selected(&self.directory,true)?;
+            let product=site.product_root()?;
+            let target=OriginalPath::selected(&self.directory,true,product)?;
             let directory=target.directory()?;
             let identity=|(f,m):(&File,u64)|->io::Result<_>{
                 if Mount::on(f)?.is_none_or(|got|got.id!=m){return Err(denied());}
@@ -148,7 +154,7 @@ mod enabled{
                     identity((&file,mount))?!=born{return Err(denied());}
                 file.sync_all()?;
                 require()?;
-                let installed=Image::select(&path,&digest)?;
+                let installed=Image::select(&path,&digest,product)?;
                 if installed.entity()!=born||installed.mount()!=mount||installed.includes(protected){return Err(denied());}
                 installed.require_same_published(&file)?;
                 directory.sync_all()?;
@@ -188,8 +194,10 @@ mod tests{
         let args=["--destination-dir","/fixture/selected/bin","--zxs-sha256",
             "9999999999999999999999999999999999999999999999999999999999999999"];
         let parse=|a:&[&str]|super::enabled::EmbeddedInstall::parse(a.iter().map(std::ffi::OsString::from));
-        assert!(parse(&args).is_ok());
-        for wrong in ["/","../bin","/var/lib/zxs/rust-smb/own","/fixture/../other","/fixture/bin/"]{
+        assert_eq!(parse(&args).unwrap().selected_directory(),std::path::Path::new("/fixture/selected/bin"));
+        assert_eq!(parse(&args[2..]).unwrap().selected_directory(),std::path::Path::new("/zxs/bin"));
+        assert!(parse(&[]).is_err());
+        for wrong in ["/","../bin","/zxs","/zxs/state/own","/zxs/log/bin","/zxs/disks/data/F/bin","/fixture/../other","/fixture/bin/"]{
             let mut changed=args;changed[1]=wrong;assert!(parse(&changed).is_err());
         }
         for extra in ["--start","--replace","--credential","--source-path"]{
