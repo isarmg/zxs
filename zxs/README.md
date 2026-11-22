@@ -26,8 +26,8 @@ ZXS 是 Linux 文件容器存储服务。用 [Web 管理](docs/web-management.md
 - **保存**：每个 FILE 最多一个写者，兼容读固定已确认视图。每轮首次实际改动新建工作增量，后续保存更新同一稿；手动提交才产生正式版本。断开不会自动确认或发版本。[工作稿与历史](docs/portable-storage.md)
 - **回收**：同一 FileId 及历史移入独立 R；按原名称和 DeleteOp 找到该次删除，再还原到已获读写权限的普通空目标。R 不可用时停止相关操作，已核验普通卷可继续。[回收与还原](docs/recycle-and-restore.md)
 
-[SQLite SYSTEM](docs/sqlite-system.md)保存登记、授权、名称、位置、历史关系与操作回执；FILE 容器保存正文和直接索引。存储使用通用文件系统接口，不依赖 reflink 或特定文件系统。架构、离线维护边界和旧实验索引分别见[顶层设计](ARCHITECTURE.md)、[Helper](../helper/README.md)和[验收台账](TASKS.md)。
+[SQLite SYSTEM](docs/sqlite-system.md)保存登记、授权、名称、位置、历史关系与操作回执；FILE 容器保存正文和直接索引。存储使用通用文件系统接口，不依赖 reflink 或特定文件系统。架构和职责分工见[顶层设计](ARCHITECTURE.md)与[架构图](docs/architecture-maps.md)。
 
 ## 构建与验收
 
-[单 ELF 构建](BUILD.md) · [内置 SMB 业务范围](src/smb/BUSINESS.md) · [Linux 正式验收](docs/web-and-smb.md#本轮正式验收)：未运行。
+[当前范围与验证](docs/status.md) · [单 ELF 构建](BUILD.md) · [内置 SMB 业务范围](src/smb/BUSINESS.md) · [验收用例](TASKS.md)
