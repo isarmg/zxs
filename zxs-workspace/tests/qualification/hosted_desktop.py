@@ -188,10 +188,11 @@ def macos_candidate(root, executable, env):
     run(["/usr/bin/ditto", "-x", "-k", archive, unpacked], env)
     app = unpacked / "ZipWorkspace.app"
     run(["/usr/bin/codesign", "--verify", "--all-architectures", "--deep", "--strict", app], env)
-    executable = app / "Contents/MacOS/ZipWorkspace"
-    arch = subprocess.check_output(["/usr/bin/lipo", "-archs", str(executable)], env=env, text=True, timeout=30)
+    binary = app / "Contents/MacOS/ZipWorkspace"
+    arch = subprocess.check_output(["/usr/bin/lipo", "-archs", str(binary)], env=env, text=True, timeout=30)
     require(arch.strip() == "arm64", "unpacked executable is not a single arm64 slice")
     print(f"macOS local ad-hoc package built, ZIP and unpacked signature/slice checked: {record['sha256']}", flush=True)
+    run([*python_args(executable), HERE.with_name("macos_packaged_launch.py"), app], env, timeout=60)
 
 
 def hosted_run():
