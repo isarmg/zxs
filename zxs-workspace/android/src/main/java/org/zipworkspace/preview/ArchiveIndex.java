@@ -172,12 +172,29 @@ final class ArchiveIndex {
         }
     }
 
-    private static MessageDigest sha256() {
+    static MessageDigest sha256() {
         try { return MessageDigest.getInstance("SHA-256"); }
         catch (NoSuchAlgorithmException unsupported) { throw new IllegalStateException("SHA-256 unavailable", unsupported); }
     }
 
-    private static String hex(byte[] digest) {
+    static MessageDigest newTreeDigest() {
+        MessageDigest tree = sha256();
+        tree.update("zip-workspace tree 1\0".getBytes(StandardCharsets.UTF_8));
+        return tree;
+    }
+
+    static void addTreeRow(MessageDigest tree, byte[] path, boolean folder, long size, byte[] memberHash) {
+        String checksum = folder ? "null" : "\"" + hex(memberHash) + "\"";
+        // Admitted path components do not contain JSON escape characters.
+        byte[] suffix = ("\",\"" + (folder ? "d" : "f") + "\"," + size + "," + checksum + "]")
+                .getBytes(StandardCharsets.US_ASCII);
+        int length = 2 + path.length + suffix.length;
+        tree.update((byte)(length >>> 24)); tree.update((byte)(length >>> 16));
+        tree.update((byte)(length >>> 8)); tree.update((byte)length);
+        tree.update((byte)'['); tree.update((byte)'"'); tree.update(path); tree.update(suffix);
+    }
+
+    static String hex(byte[] digest) {
         StringBuilder out = new StringBuilder(digest.length * 2);
         for (byte b : digest) out.append(Character.forDigit((b >>> 4) & 15, 16)).append(Character.forDigit(b & 15, 16));
         return out.toString();
@@ -211,26 +228,18 @@ final class ArchiveIndex {
         // UTF-8 byte order is the producer's Unicode scalar order, not Java's
         // UTF-16 ordering, display ordering, or folded directory-map keys.
         rows.sort((a, b) -> Arrays.compareUnsigned(a.path, b.path));
-        MessageDigest tree = sha256(), memberHash = sha256();
-        tree.update("zip-workspace tree 1\0".getBytes(StandardCharsets.UTF_8));
+        MessageDigest tree = newTreeDigest(), memberHash = sha256();
         for (SnapshotRow row : rows) {
             src.check();
             Item item = row.item;
             boolean folder = item.children != null;
-            String checksum = "null";
+            byte[] digest = null;
             if (item.slot != null) {
                 StoredMember.Layout local = StoredMember.layout(src, central, item.slot, item.bytes);
                 require(StoredMember.crc(src, local, block, null, null, memberHash) == local.crc);
-                byte[] digest = memberHash.digest(); // resets the hasher for the next actual member
-                if (!folder) checksum = "\"" + hex(digest) + "\"";
+                digest = memberHash.digest(); // resets the hasher for the next actual member
             } else require(folder && !item.declared);
-            // Admitted path components do not contain JSON escape characters.
-            byte[] suffix = ("\",\"" + (folder ? "d" : "f") + "\"," + item.bytes + "," + checksum + "]")
-                    .getBytes(StandardCharsets.US_ASCII);
-            int length = 2 + row.path.length + suffix.length;
-            tree.update((byte)(length >>> 24)); tree.update((byte)(length >>> 16));
-            tree.update((byte)(length >>> 8)); tree.update((byte)length);
-            tree.update((byte)'['); tree.update((byte)'"'); tree.update(row.path); tree.update(suffix);
+            addTreeRow(tree, row.path, folder, item.bytes, digest);
         }
         checkDirectory(src, block); src.check();
         require(hex(tree.digest()).equals(marker.tree));
@@ -398,6 +407,8 @@ final class ArchiveIndex {
         return !DEVICE.matcher(prefix).matches();
     }
 
+    static String foldComponent(String name) { return UCharacter.foldCase(name, true); }
+
     private Item add(String path, boolean folder, long bytes, int encoded) throws IOException {
         names += encoded; logicalSize += bytes;
         require(names <= 512 * 1024 && logicalSize <= (256L << 30));
@@ -406,7 +417,7 @@ final class ArchiveIndex {
         for (int i = 0; i < parts.length; i++) {
             String s = parts[i]; require(safeComponent(s));
             boolean leaf = i + 1 == parts.length, dir = !leaf || folder;
-            String key = UCharacter.foldCase(s, true);
+            String key = foldComponent(s);
             Item item = parent.children.get(key);
             if (item == null) {
                 require(++nodes <= MAX_NODES);
