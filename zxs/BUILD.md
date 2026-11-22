@@ -30,8 +30,9 @@ The release always includes the four browser resources in the same `zxs`
 binary. The build checks that the receipt matches this browser source and
 these two build scripts, then verifies the staged bytes against the separately
 supplied pin. After either source or recipe changes, restage and review the new
-pin; the release has no asset-free fallback. SQLite and Argon2 use local
-vendored code. The recipe checks the ELF header and dynamic/program headers
+pin; the release has no asset-free fallback. The [SYSTEM engine](src/system/store/ORIGIN.md)
+and [password verifier](src/password/verification/ORIGIN.md) build from internal C sources.
+The recipe checks the ELF header and dynamic/program headers
 without starting the program: x86-64 static PIE, no `PT_INTERP`,
 `DT_NEEDED`, search/audit/filter dependencies or executable stack. It
 writes one build output under this worktree, `target/standalone/zxs`, and

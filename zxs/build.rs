@@ -1,25 +1,27 @@
-// Build the Linux ABI and exact vendored SQLite and Argon2 sources. No
-// download, system crypto/SQLite fallback, package discovery or CLI tools.
+// Build the internal Linux ABI, SYSTEM store and password verifier.
 use std::{env, path::{Path,PathBuf}, process::Command};
 
 #[path="build_browser_assets.rs"]
 mod browser_assets;
 
-const ARGON2:&str="vendor/argon2";
-const ARGON2_C:[(&str,&str);6]=[
-    ("src/argon2.c","argon2.o"),("src/core.c","core.o"),("src/encoding.c","encoding.o"),
-    ("src/ref.c","ref.o"),("src/thread.c","thread.o"),("src/blake2/blake2b.c","blake2b.o"),
+const STORE:&str="src/system/store";
+const STORE_SOURCES:[&str;3]=["connection.c","sqlite3.c","sqlite3.h"];
+const PASSWORD:&str="src/password/verification";
+const PASSWORD_C:[(&str,&str);6]=[
+    ("argon2.c","argon2.o"),("core.c","core.o"),("encoding.c","encoding.o"),
+    ("ref.c","ref.o"),("thread.c","thread.o"),("blake2/blake2b.c","blake2b.o"),
 ];
-const ARGON2_HEADERS:[&str;7]=["include/argon2.h","src/core.h","src/encoding.h","src/thread.h",
-    "src/blake2/blake2.h","src/blake2/blake2-impl.h","src/blake2/blamka-round-ref.h"];
+const PASSWORD_HEADERS:[&str;7]=["argon2.h","core.h","encoding.h","thread.h",
+    "blake2/blake2.h","blake2/blake2-impl.h","blake2/blamka-round-ref.h"];
 
 fn main() {
     assert_eq!(env::var("CARGO_CFG_TARGET_OS").unwrap(), "linux", "ZXS requires Linux");
-    for p in ["src/linux.c","src/sqlite_read.c","vendor/sqlite/sqlite3.c","vendor/sqlite/sqlite3.h"]{
-        println!("cargo:rerun-if-changed={p}");
+    println!("cargo:rerun-if-changed=src/linux.c");
+    for p in STORE_SOURCES{
+        println!("cargo:rerun-if-changed={STORE}/{p}");
     }
-    for p in ARGON2_C.iter().map(|&(p,_)|p).chain(ARGON2_HEADERS){
-        println!("cargo:rerun-if-changed={ARGON2}/{p}");
+    for p in PASSWORD_C.iter().map(|&(p,_)|p).chain(PASSWORD_HEADERS){
+        println!("cargo:rerun-if-changed={PASSWORD}/{p}");
     }
     for k in ["CC","AR"]{println!("cargo:rerun-if-env-changed={k}");}
     let cross=env::var_os("HOST")!=env::var_os("TARGET");
@@ -28,33 +30,32 @@ fn main() {
     });
     let out=PathBuf::from(env::var_os("OUT_DIR").unwrap());
     browser_assets::embed(&out).expect("verify and embed the reviewed browser stage");
-    let objects=[out.join("linux.o"),out.join("sqlite-read.o"),out.join("sqlite3.o")];
+    let linux=out.join("linux.o");
+    let connection=out.join("sqlite-read.o");
+    let engine=out.join("sqlite3.o");
     let cc=tool("CC","cc");
     let compile=|source:&str,object:&Path,flags:&[&str]|{
-        assert!(Command::new(&cc).args(["-std=c11","-fPIC","-Ivendor/sqlite"]).args(flags)
+        assert!(Command::new(&cc).args(["-std=c11","-fPIC"]).args(flags)
             .arg("-c").arg(source).arg("-o").arg(object).status().expect("start target C compiler").success(),
             "compile {source}");
     };
-    compile("src/linux.c",&objects[0], &["-Wall","-Wextra","-Werror"]);
-    compile("src/sqlite_read.c",&objects[1], &["-Wall","-Wextra","-Werror"]);
-    compile("vendor/sqlite/sqlite3.c",&objects[2], &["-O2","-D_GNU_SOURCE","-DSQLITE_THREADSAFE=1",
+    compile("src/linux.c",&linux, &["-Wall","-Wextra","-Werror"]);
+    compile(&format!("{STORE}/connection.c"),&connection, &["-Wall","-Wextra","-Werror"]);
+    compile(&format!("{STORE}/sqlite3.c"),&engine, &["-O2","-D_GNU_SOURCE","-DSQLITE_THREADSAFE=1",
         "-DSQLITE_OMIT_LOAD_EXTENSION","-DSQLITE_OMIT_WAL","-DSQLITE_OMIT_SHARED_CACHE","-DSQLITE_DQS=0","-DSQLITE_USE_URI=0"]);
-    let argon_dir=out.join("argon2");
-    std::fs::create_dir_all(&argon_dir).expect("Argon2 private build directory");
-    let argon_headers=format!("-I{ARGON2}/include");
-    let argon_objects=ARGON2_C.map(|(source,name)|{
-        let dst=argon_dir.join(name);
-        // Upstream reference (no CPU-specific code or generated tools).
-        // Keep upstream p=4 worker threads and default memory clearing.
-        compile(&format!("{ARGON2}/{source}"),&dst,&["-O2","-fvisibility=hidden","-pthread",&argon_headers]);
+    let password_dir=out.join("password");
+    std::fs::create_dir_all(&password_dir).expect("password verifier build directory");
+    let password_headers=format!("-I{PASSWORD}");
+    let password_objects=PASSWORD_C.map(|(source,name)|{
+        let dst=password_dir.join(name);
+        // Keep the reference implementation's p=4 worker threads and memory clearing.
+        compile(&format!("{PASSWORD}/{source}"),&dst,&["-O2","-fvisibility=hidden","-pthread",&password_headers]);
         dst
     });
     let ar=tool("AR","ar");
     let archive=|name:&str, members:&[PathBuf]|{
         let output=out.join(name);
-        // ar replaces entries but does not drop omitted members. Always
-        // rebuild this private archive so an old target directory cannot
-        // retain a member from the retired transport.
+        // Rebuild the archive; ar updates present members but does not drop old ones.
         match std::fs::remove_file(&output){
             Ok(())=>{},
             Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
@@ -63,10 +64,12 @@ fn main() {
         assert!(Command::new(&ar).arg("crs").arg(&output).args(members)
             .status().expect("start target archiver").success(),"archive {name}");
     };
-    archive("libzxs_linux.a",&objects);
-    archive("libzxs_argon2.a",&argon_objects);
+    archive("libzxs_linux.a",&[linux]);
+    archive("libzxs_system_store.a",&[connection,engine]);
+    archive("libzxs_password.a",&password_objects);
     println!("cargo:rustc-link-search=native={}",out.display());
     println!("cargo:rustc-link-lib=static=zxs_linux");
-    println!("cargo:rustc-link-lib=static=zxs_argon2");
+    println!("cargo:rustc-link-lib=static=zxs_system_store");
+    println!("cargo:rustc-link-lib=static=zxs_password");
     println!("cargo:rustc-link-lib=pthread");
 }
