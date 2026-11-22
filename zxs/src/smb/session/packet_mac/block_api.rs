@@ -41,7 +41,7 @@ impl<C: CmacCipher> MacMarker for CmacCore<C> {}
 impl<C: CmacCipher> InnerInit for CmacCore<C> {
     #[inline]
     fn inner_init(cipher: C) -> Self {
-        let state = Default::default();
+        let state = Block::<C>::default();
         Self { cipher, state }
     }
 }
@@ -80,7 +80,7 @@ impl<C: CmacCipher> UpdateCore for CmacCore<C> {
 impl<C: CmacCipher> Reset for CmacCore<C> {
     #[inline(always)]
     fn reset(&mut self) {
-        self.state = Default::default();
+        self.state = Block::<C>::default();
     }
 }
 
@@ -91,7 +91,7 @@ impl<C: CmacCipher> FixedOutputCore for CmacCore<C> {
         let pos = buffer.get_pos();
         let buf = buffer.pad_with_zeros();
 
-        let mut subkey = Default::default();
+        let mut subkey = Block::<C>::default();
         cipher.encrypt_block(&mut subkey);
         let key1 = C::dbl(subkey);
 

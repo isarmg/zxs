@@ -31,7 +31,7 @@ pub trait FixedOutput: Update + OutputSizeUser + Sized {
     /// Retrieve result and consume the hasher instance.
     #[inline]
     fn finalize_fixed(self) -> Output<Self> {
-        let mut out = Default::default();
+        let mut out = Output::<Self>::default();
         self.finalize_into(&mut out);
         out
     }
@@ -45,7 +45,7 @@ pub trait FixedOutputReset: FixedOutput + Reset {
     /// Retrieve result and reset the hasher state.
     #[inline]
     fn finalize_fixed_reset(&mut self) -> Output<Self> {
-        let mut out = Default::default();
+        let mut out = Output::<Self>::default();
         self.finalize_into_reset(&mut out);
         out
     }

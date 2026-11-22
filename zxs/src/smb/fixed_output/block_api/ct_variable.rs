@@ -88,7 +88,7 @@ where
         buffer: &mut Buffer<Self>,
         out: &mut Array<u8, Self::OutputSize>,
     ) {
-        let mut full_res = Default::default();
+        let mut full_res = Array::<u8, T::OutputSize>::default();
         self.inner.finalize_variable_core(buffer, &mut full_res);
         let n = out.len();
         let m = full_res.len() - n;
@@ -120,7 +120,7 @@ where
 {
     #[inline]
     fn reset(&mut self) {
-        *self = Default::default();
+        *self = Self::default();
     }
 }
 

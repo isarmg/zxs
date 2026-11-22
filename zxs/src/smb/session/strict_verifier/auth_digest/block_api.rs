@@ -76,7 +76,7 @@ impl Default for Md5Core {
 impl Reset for Md5Core {
     #[inline]
     fn reset(&mut self) {
-        *self = Default::default();
+        *self = Self::default();
     }
 }
 
