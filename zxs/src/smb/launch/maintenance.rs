@@ -8,9 +8,9 @@ pub(super) enum Task{Retirement,Rename,DirectoryRelabel}
 impl Task{
     fn name(&self)->&str{
         match self{
-            Self::Retirement=>"zxs-rust-source-retirement",
-            Self::Rename=>"zxs-rust-rename-recovery",
-            Self::DirectoryRelabel=>"zxs-rust-directory-relabel-recovery",
+            Self::Retirement=>"source-retire",
+            Self::Rename=>"rename-recover",
+            Self::DirectoryRelabel=>"relabel-recover",
         }
     }
 }
