@@ -6,7 +6,7 @@
 
 ## 准备经核对的离线环境
 
-这是供获权构建者**以后**运行的流程，不是现在要安装的程序。使用干净的 Windows 11 x64 及官方常规（有 GIL）[CPython 3.14.10 Windows installer (64-bit)](https://www.python.org/downloads/release/python-31410/)；不是 32 位、ARM64、自由线程或 embeddable 包。官方安装器 SHA-256：`92480239264744fe0386a1bd8275786fefa126e3129e56a68e22b52c73329965`。由构建者单独核官方公示散列和发布证明，先准备可信工具。后续安全更新应升级并再核配方，不为匹配旧配置回退安全补丁。
+使用干净的 Windows 11 x64 及官方常规（有 GIL）[CPython 3.14.10 Windows installer (64-bit)](https://www.python.org/downloads/release/python-31410/)。配方用 [IsWow64Process2](https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-iswow64process2) 同时核验原生 x64 主机及进程，不接收 Server、ARM64 上的仿真、32 位或自由线程解释器。官方安装器 SHA-256：`92480239264744fe0386a1bd8275786fefa126e3129e56a68e22b52c73329965`。由构建者单独核官方公示散列和发布证明，先准备可信工具。后续安全更新应升级并再核配方，不为匹配旧配置回退安全补丁。
 
 `requirements.txt` 固定了 9 个官方 PyPI wheel 的确切版本和 SHA-256，行尾注明文件名。包括 [PyInstaller 6.22.3](https://pypi.org/project/pyinstaller/6.22.3/#files)、[hooks-contrib 2026.7](https://pypi.org/project/pyinstaller-hooks-contrib/2026.7/#files)、[PySide6-Essentials 6.11.2](https://pypi.org/project/PySide6-Essentials/6.11.2/#files) / [shiboken6 6.11.2](https://pypi.org/project/shiboken6/6.11.2/#files) 和实际 Python 依赖闭包。把这些文件先放进本地受信 wheel 目录，不用 Sdist、不用裸系统 Qt 或额外插件。
 
@@ -35,6 +35,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Candidate not complete' }
 
 ## 核对真正的候选，再决定是否发行
 
-- 交接 `dist\ZipWorkspace` 完整目录和 `candidate.json`。后者在打包返回后才写入，记录项目版本、构建依赖与整个包里每个普通文件的大小、SHA-256（文件路径相对于包目录）；同时要求 PE 为 AMD64 GUI、真实 Python DLL 与 Qt 平台插件存在。不能把构建中间目录、EXE 单件或不完整记录当候选；工具不删除既有结果。不复制 `work`、`temp` 或缓存。
-- 记录确切源码提交和工具来源；按记录重算每件的哈希并检查没有额外文件，查看 EXE 的 `asInvoker` / `uiAccess=false` 清单和 DLL 实际依赖。须在已许可的干净 Windows 11 x64 普通账户，用不装 Python / Qt / WinFsp 的环境启动窗口并核浏览、确切两版本对照、NTFS 比较及退出；确定是否依赖现有 MSVC runtime。先跑独立副本，不截用用户档案。源码与哈希清单不是运行验证、签名、系统拦截放行或可复现构建证明。
+- 交接 `dist\ZipWorkspace` 完整目录和 `candidate.json`，另从构建端记录该 JSON 的 SHA-256、源码提交和工具来源。配方核验 AMD64 GUI PE、真实 Python DLL、Qt 平台插件和嵌入的 [CreateProcess 清单](https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests)：每个语言版本都是 `asInvoker`、`uiAccess=false`。JSON 记录包中每个文件的大小和 SHA-256。只复制成品和记录，不复制构建中间目录或缓存。
+- 在另一台已获准的干净 Windows 11 x64 桌面用普通账户验候选。先准备不含系统 Python、Qt 或 WinFsp 的系统和一个新的空私有测试目录；候选目录和测试目录都用固定本机 NTFS，运行期间不移动或同步。脚本使用系统的 Windows PowerShell，无须为此在验收机安装 Python。按本机已有的脚本执行策略运行：
+
+  ```powershell
+  .\packaging\windows-amd64\qualify-launch.ps1 -CandidateRoot 'C:\candidate' -ScratchDirectory 'C:\private-test' -ExpectedReceiptSha256 '<来自构建端的64位小写十六进制摘要>' -Launch
+  ```
+
+  脚本重算完整成品，实际启动固定的窗口入口，等到 `ZIP Workspace` 主窗口后正常关闭，再重核成品。然后用独立合成归档查浏览、两版本对照和 NTFS 比较，记录是否需要预装的 MSVC runtime。保持系统安全设置不变。GitHub 的 `windows-2025` 是 Server x64，只查源码和 PE 规则；[托管的 Windows 11](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) 是 Arm64，便携构建和普通账户启动要用独立的 Win11 x64 测试机。
 - 先落实本产品的分发权，逐项核真正带入的 Python、Qt/Shiboken、PyInstaller 启动器与可能的系统运行库许可；[随包告知](COPYRIGHT-NOTICE.txt)不是许可合规证明。若之后由获权所有者在单独阶段签名，核真实签名及独立信任的发布身份，为签过的文件重新计算摘要，不能用候选摘要代替。**未构建、未运行、未签名、未发布 Windows 安装包或便携包。**

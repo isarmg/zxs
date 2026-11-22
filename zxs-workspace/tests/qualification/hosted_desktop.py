@@ -34,6 +34,8 @@ WINDOWS = (
     "test_windows_folder.NativeLocalFolder.test_native_picker_reads_exact_default_stream_and_refuses_same_name_replacement",
     "test_windows_folder.NativeLocalFolder.test_fixed_native_report_reads_exact_nested_peer_from_held_zip_and_preserves_zone",
     "test_windows_snapshot.DataPlane",
+    "test_windows_portable.ManifestPolicy",
+    "test_windows_portable.NativeServer",
 )
 MACOS = (
     "test_macos_read.Boundary.test_actual_desktop_picker_and_job_leave_other_threads_untouched_on_restore_failure",
@@ -65,11 +67,11 @@ def prepare_environment(root, mac, env):
     executable = venv / ("bin/python" if mac else "Scripts/python.exe")
     lock = PROJECT / "packaging" / ("macos-arm64" if mac else "windows-amd64") / "requirements.txt"
     if not mac:
-        # Server runs source only. It needs Qt, not the Win11 packaging dependencies.
+        # Server runs source and inert PE fixtures, not the Win11 package recipe.
         lines = [line for line in lock.read_text("ascii").splitlines()
-                 if line.startswith(("pyside6-essentials==", "shiboken6=="))]
-        require(len(lines) == 2, "the Windows lock must supply both Qt wheels")
-        lock = root / "qt-requirements.txt"
+                 if line.startswith(("pyside6-essentials==", "shiboken6==", "pefile=="))]
+        require(len(lines) == 3, "the Windows lock must supply Qt and the PE parser")
+        lock = root / "source-requirements.txt"
         lock.write_text("\n".join(lines) + "\n", encoding="ascii")
     wheels.mkdir(mode=0o700)
     pip = [*python_args(executable), "-m", "pip", "--isolated", "--disable-pip-version-check", "--no-input"]
