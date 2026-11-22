@@ -32,13 +32,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctutils"
-version = "0.4.8"
-dependencies = [
- "cmov",
-]
-
-[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 dependencies = [
@@ -71,8 +64,8 @@ version = "0.1.0"
 dependencies = [
  "block-buffer",
  "cipher",
+ "cmov",
  "crypto-common",
- "ctutils",
  "libc",
  "zeroize",
 ]

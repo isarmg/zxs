@@ -30,12 +30,8 @@ includes [upstream's AArch64 round-constant fix](https://github.com/RustCrypto/h
 the 256/512-bit backends now take a slice of the full SIMD width rather than a
 reference to a single constant. This is not a locally implemented algorithm or
 a reason to disable an architecture. [RUSTSEC-2021-0100](https://rustsec.org/advisories/RUSTSEC-2021-0100.html)
-affects sha2 0.9.7, not this version. The constant-time support releases
-cmov 0.5.4 and ctutils 0.4.8 postdate the fixes listed in
-[RUSTSEC-2026-0003](https://rustsec.org/advisories/RUSTSEC-2026-0003.html)
-and [RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385.html),
-respectively. The advisory/source review is not a
-certification, claim of no other vulnerabilities or substitute for future review.
+affects sha2 0.9.7, not this version. The private [tag comparison](../../src/smb/fixed_output/TAG-COMPARE-ORIGIN.md)
+retains the original constant-time backend.
 
 [md-5 0.11.0](https://github.com/RustCrypto/hashes/tree/b5051e5a5e7dc86a6c27c1ec7a390744ebcfb97a/md5) and
 [rc4 0.2.0](https://github.com/RustCrypto/stream-ciphers/tree/b516422ebb49ff0d9140b22ac8c2a627d10a452e/rc4) are unyanked
@@ -91,13 +87,12 @@ service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> block-buffer [zeroize], cipher [stream-wrapper, zeroize], crypto-common, ctutils, libc, zeroize
+zxs -> block-buffer [zeroize], cipher [stream-wrapper, zeroize], cmov, crypto-common, libc, zeroize
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 block-buffer -> hybrid-array, zeroize
 crypto-common -> hybrid-array
 inout -> hybrid-array
 hybrid-array -> typenum, zeroize
-ctutils -> cmov
 ```
 
 All other nodes are leaves in this selected closure. All of these paths
@@ -105,7 +100,7 @@ are inside ZXS. Inactive optional/dev declarations are not silently
 vendored or enabled. Any feature change needs a new closure review.
 Local path packages have no registry checksum field in Cargo.lock; use
 SOURCES.toml to check their published origin. The highest remaining package minimum is
-Rust 1.87 (ctutils, edition 2024), below ZXS's existing Rust 1.100 / pinned
+Rust 1.85, below ZXS's existing Rust 1.100 / pinned
 1.100.0. [Debian 13's stock rustc](https://packages.debian.org/trixie/rustc)
 is older than the pre-existing project toolchain; this does not change ZXS's
 compiler or authorize a toolchain install.

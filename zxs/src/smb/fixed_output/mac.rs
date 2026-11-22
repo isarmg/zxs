@@ -1,8 +1,16 @@
 // ZXS adaptation of RustCrypto fixed-output support; see ORIGIN.md.
 use super::{FixedOutput, Update};
-use core::fmt;
+use cmov::CmovEq;
+use core::{fmt, hint::black_box};
 use crypto_common::{Output, OutputSizeUser, typenum::Unsigned};
-use ctutils::CtEq;
+
+#[inline]
+fn tags_equal(expected: &[u8], supplied: &[u8]) -> bool {
+    let mut choice = 0;
+    expected.cmoveq(supplied, 1, &mut choice);
+    // Preserve the optimizer barrier at the original choice-to-bool boundary.
+    black_box(choice) != 0
+}
 
 pub(in crate::smb) trait MacMarker {}
 
@@ -30,8 +38,8 @@ impl<T: Update + FixedOutput + MacMarker> Mac for T {
         if n != Self::OutputSize::USIZE {
             return Err(MacError);
         }
-        let choice = self.finalize_fixed().as_slice().ct_eq(tag);
-        if choice.into() { Ok(()) } else { Err(MacError) }
+        let equal = tags_equal(self.finalize_fixed().as_slice(), tag);
+        if equal { Ok(()) } else { Err(MacError) }
     }
 
     fn verify_truncated_left(self, tag: &[u8]) -> Result<(), MacError> {
@@ -39,9 +47,9 @@ impl<T: Update + FixedOutput + MacMarker> Mac for T {
         if n == 0 || n > Self::OutputSize::USIZE {
             return Err(MacError);
         }
-        let choice = self.finalize_fixed()[..n].ct_eq(tag);
+        let equal = tags_equal(&self.finalize_fixed()[..n], tag);
 
-        if choice.into() { Ok(()) } else { Err(MacError) }
+        if equal { Ok(()) } else { Err(MacError) }
     }
 }
 
@@ -71,7 +79,7 @@ impl<T: OutputSizeUser> CtOutput<T> {
 impl<T: OutputSizeUser> PartialEq for CtOutput<T> {
     #[inline(always)]
     fn eq(&self, other: &CtOutput<T>) -> bool {
-        self.bytes.ct_eq(&other.bytes).into()
+        tags_equal(self.bytes.as_slice(), other.bytes.as_slice())
     }
 }
 

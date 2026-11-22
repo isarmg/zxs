@@ -378,6 +378,9 @@ fn hmac_md5_full_and_left_prefix_tag_boundaries_match_rfc2202() {
 
     compute().verify_slice(&tag).unwrap();
     compute().verify_truncated_left(&tag[..8]).unwrap();
+    let protected = compute().finalize();
+    assert_eq!(protected, compute().finalize());
+    assert_ne!(protected, hmac(&[0x0b; 16], &[b"Bye now!"]).unwrap().finalize());
 
     for offset in [0, 7, 15] {
         let mut wrong = tag;

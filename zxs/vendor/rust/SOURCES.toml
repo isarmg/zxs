@@ -112,6 +112,7 @@ commit = "ddefdcacb3414980b5105a967a1413eaaf385541"
 upstream_subdirectory = "ctutils"
 archive = "https://static.crates.io/crates/ctutils/ctutils-0.4.8.crate"
 sha256 = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
+internal_module = "src/smb/fixed_output"
 
 [[package]]
 name = "dbl"

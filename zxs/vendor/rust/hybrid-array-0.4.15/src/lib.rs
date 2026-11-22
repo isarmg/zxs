@@ -1,3 +1,4 @@
+// ZXS removes an unused integration feature; the selected array code is unchanged.
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
@@ -1117,42 +1118,6 @@ where
     T: Zeroable,
     U: ArraySize,
 {
-}
-
-#[cfg(feature = "ctutils")]
-impl<T, U> ctutils::CtAssign for Array<T, U>
-where
-    [T]: ctutils::CtAssign,
-    U: ArraySize,
-{
-    #[inline]
-    fn ct_assign(&mut self, other: &Self, choice: ctutils::Choice) {
-        self.as_mut_slice().ct_assign(other.as_slice(), choice);
-    }
-}
-
-#[cfg(feature = "ctutils")]
-impl<T, U> ctutils::CtSelect for Array<T, U>
-where
-    U: ArraySize,
-    U::ArrayType<T>: ctutils::CtSelect,
-{
-    #[inline]
-    fn ct_select(&self, other: &Self, choice: ctutils::Choice) -> Self {
-        Self(self.0.ct_select(&other.0, choice))
-    }
-}
-
-#[cfg(feature = "ctutils")]
-impl<T, U> ctutils::CtEq for Array<T, U>
-where
-    U: ArraySize,
-    U::ArrayType<T>: ctutils::CtEq,
-{
-    #[inline]
-    fn ct_eq(&self, other: &Self) -> ctutils::Choice {
-        self.0.ct_eq(&other.0)
-    }
 }
 
 #[cfg(feature = "subtle")]

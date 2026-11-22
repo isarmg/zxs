@@ -8,7 +8,7 @@ archive SHA-256 and revision. Original [MIT](LICENSE-MIT) and
 ZXS keeps the used buffer, block and fixed output adapters, without a
 package-level dynamic digest, XOF or test framework. The two existing MAC
 verification forms still validate tag length before using the same
-constant-time byte comparison. Buffer kind, state encoding, widths,
+[constant-time byte comparison](TAG-COMPARE-ORIGIN.md). Buffer kind, state encoding, widths,
 reset and erasure are unchanged.
 
 | Original selected source | Original Git blob |
