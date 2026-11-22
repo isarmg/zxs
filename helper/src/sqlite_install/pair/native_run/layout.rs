@@ -293,7 +293,6 @@ fn query_with<T>(raw:&[u8],original:&File,subject:(Id,u32,u32),helper_sha:Option
 struct LayoutEvidence{ordinary:Vec<(Id,Initial)>,recycle:Initial,database:InitialDatabase}
 fn read_layout(q:&Question,ex:&File,check:impl Fn()->io::Result<()>)->io::Result<LayoutEvidence>{
     let subject=q.fresh.subject.tuple();
-    let cut=(q.pool,q.init);
     query_with(&q.encode()?,ex,subject,Some(q.fresh.helper),&check,|channel,scope,until|{
         let (b,[fd])=channel.wait_checked::<1>(Kind::FreshDatabase,scope,until,&check)?;
         let database=InitialDatabase::received(fd,subject.1)?;
@@ -304,11 +303,11 @@ fn read_layout(q:&Question,ex:&File,check:impl Fn()->io::Result<()>)->io::Result
             let (v,[])=channel.wait_checked::<0>(Kind::ChosenFolder,scope,until,&check)?;
             let id:Id=v[1..17].try_into().expect("fixed reply");
             if v!=body(i,id)||id==[0;16]||ordinary.iter().any(|(known,_)|*known==id){return Err(bad_question());}
-            let fact=receive_scoped_media(channel,scope,until,&check,i,Some(id),cut,subject)?;
+            let fact=receive_scoped_media(channel,scope,until,&check,i,Some(id),q)?;
             if fact.path.as_os_str()!=path.as_os_str(){return Err(bad_question());}
             ordinary.push((id,fact));
         }
-        let recycle=receive_scoped_media(channel,scope,until,&check,q.paths.len(),None,cut,subject)?;
+        let recycle=receive_scoped_media(channel,scope,until,&check,q.paths.len(),None,q)?;
         if ordinary.iter().any(|(id,_)|id.as_slice()==&recycle.marker[37..53]){return Err(bad_question());}
         Ok(LayoutEvidence{ordinary,recycle,database})
     })
@@ -331,11 +330,12 @@ fn scoped_material(raw:&[u8],expected:Option<Id>,pool:Id,init:Id)->io::Result<In
     Ok(Initial{path:PathBuf::from(OsString::from_vec(path.to_vec())),marker})
 }
 fn receive_scoped_media(channel:&Channel,scope:&[u8;32],until:Instant,check:impl Fn()->io::Result<()>,
-    i:usize,volume:Option<Id>,ids:(Id,Id),subject:(Id,u32,u32))->io::Result<Initial>{
+    i:usize,volume:Option<Id>,q:&Question)->io::Result<Initial>{
     let (reply,[fd])=channel.wait_checked::<1>(Kind::VolumeClaim,scope,until,check)?;
-    let value=sealed_owner(&fd,101+MAX_PATH_BYTES,(subject.1,subject.2))?;
+    let (_,uid,gid)=q.fresh.subject.tuple();
+    let value=sealed_owner(&fd,101+MAX_PATH_BYTES,(uid,gid))?;
     if reply!=volume_reply(i,&value){return Err(bad_question());}
-    scoped_material(&value,volume,ids.0,ids.1)
+    scoped_material(&value,volume,q.pool,q.init)
 }
 fn send_media(channel:&Channel,scope:&[u8;32],i:usize,claim:&Initial)->io::Result<()>{
     let bytes=media_bytes(claim);let report=sealed(&bytes)?;
@@ -349,11 +349,16 @@ pub(crate) fn worker()->io::Result<()>{
     let helper=ForegroundElf::host()?;
     helper.parent_is_same_image(parent)?;
     let raw=read_sealed(&meta,BUDGET)?;drop(meta);
-    enum QuestionKind{Fresh(Question),Retirement(retirement_check::Question),Deployment(deployment_check::Question),Import(import_inventory::Question)}
+    enum QuestionKind{
+        Fresh(Question),
+        Retirement(retirement_check::Question),
+        Deployment(Box<deployment_check::Question>),
+        Import(import_inventory::Question),
+    }
     let q=if raw.starts_with(retirement_check::DOMAIN){
         QuestionKind::Retirement(retirement_check::Question::decode(&raw)?)
     }else if raw.starts_with(deployment_check::DOMAIN){
-        QuestionKind::Deployment(deployment_check::Question::decode(&raw)?)
+        QuestionKind::Deployment(Box::new(deployment_check::Question::decode(&raw)?))
     }else if raw.starts_with(import_inventory::DOMAIN){
         QuestionKind::Import(import_inventory::Question::decode(&raw)?)
     }else{
