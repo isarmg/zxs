@@ -11,12 +11,20 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.SecureDirectoryStream;
+import java.nio.file.attribute.BasicFileAttributeView;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Map;
 
 /** The only writer for a new local Android snapshot. No caller-supplied paths or imported documents. */
 final class LocalWorkspaceStore {
     private static final String STORE = "workspaces";
     private static final long MAX_ARCHIVE = 2L << 20;
-    private static final int DIRECTORY = OsConstants.O_RDONLY | OsConstants.O_DIRECTORY
+    private static final int DIRECTORY = OsConstants.O_RDONLY | OsConstants.O_NONBLOCK
             | OsConstants.O_NOFOLLOW | OsConstants.O_CLOEXEC;
     private static final int CANDIDATE = OsConstants.O_RDWR | OsConstants.O_CREAT | OsConstants.O_EXCL
             | OsConstants.O_NOFOLLOW | OsConstants.O_CLOEXEC;
@@ -63,26 +71,63 @@ final class LocalWorkspaceStore {
             this.path = path;
             this.uid = uid;
             this.privateChild = privateChild;
+            StructStat before = qualifiedName();
             handle = new Handle(path, DIRECTORY, 0);
             try {
                 original = Os.fstat(handle.fd);
+                need(OsConstants.S_ISDIR(original.st_mode) && same(original, before));
                 check();
-            } catch (ErrnoException | IOException err) {
+            } catch (ErrnoException | IOException | SecurityException err) {
                 try { handle.close(); }
                 catch (ErrnoException close) { err.addSuppressed(close); }
                 throw err;
             }
         }
 
-        void check() throws ErrnoException, IOException {
+        private StructStat qualifiedName() throws ErrnoException, IOException {
             // These directories are under Android's application sandbox. 0771
             // on a framework directory is fine only when its writable group is
             // the app's own UID. Our app-owned child remains exactly 0700.
             StructStat named = Os.lstat(path.getPath());
             int mode = named.st_mode & 07777;
-            need(OsConstants.S_ISDIR(named.st_mode) && named.st_uid == uid && same(original, named)
+            need(OsConstants.S_ISDIR(named.st_mode) && named.st_uid == uid
                     && (privateChild ? mode == 0700
                         : (mode & 0002) == 0 && ((mode & 0020) == 0 || named.st_gid == uid)));
+            return named;
+        }
+
+        void check() throws ErrnoException, IOException { need(same(original, qualifiedName())); }
+
+        SecureDirectoryStream<Path> openNames() throws ErrnoException, IOException {
+            Path directory = path.toPath();
+            check();
+            // Android's Unix view returns these fields and its opaque key from one lstat.
+            Map<String, Object> named;
+            try {
+                named = Files.readAttributes(directory, "unix:dev,ino,fileKey", LinkOption.NOFOLLOW_LINKS);
+            } catch (UnsupportedOperationException | IllegalArgumentException absent) {
+                throw new IOException("The original directory does not expose its Unix identity", absent);
+            }
+            Object key = named.get("fileKey");
+            need(key != null && Long.valueOf(original.st_dev).equals(named.get("dev"))
+                    && Long.valueOf(original.st_ino).equals(named.get("ino")));
+            // The terminal "." makes this read-only stream open require a directory.
+            DirectoryStream<Path> stream = Files.newDirectoryStream(directory.resolve("."));
+            try {
+                if (!(stream instanceof SecureDirectoryStream<Path> names)) {
+                    throw new IOException("The original directory does not support relative deletion");
+                }
+                BasicFileAttributeView view = names.getFileAttributeView(BasicFileAttributeView.class);
+                need(view != null);
+                BasicFileAttributes held = view.readAttributes();
+                need(held.isDirectory() && key.equals(held.fileKey()));
+                check();
+                return names;
+            } catch (ErrnoException | IOException | SecurityException err) {
+                try { stream.close(); }
+                catch (IOException close) { err.addSuppressed(close); }
+                throw err;
+            }
         }
 
         void sync() throws ErrnoException { Os.fsync(handle.fd); }
@@ -113,14 +158,18 @@ final class LocalWorkspaceStore {
                         home.check(); local.check(); target.check();
                         // Includes the namespace entries for a newly provisioned no-backup/store directory.
                         target.sync(); local.sync(); home.sync();
-                        writeOne(home, local, target);
+                        try (SecureDirectoryStream<Path> names = target.openNames()) {
+                            writeOne(home, local, target, names);
+                        }
                     }
                 }
             }
         }
 
-        private void writeOne(Directory home, Directory local, Directory target) throws IOException, ErrnoException {
+        private void writeOne(Directory home, Directory local, Directory target, SecureDirectoryStream<Path> names)
+                throws IOException, ErrnoException {
             File pending = new File(target.path, "." + frozen.operation + ".pending");
+            Path pendingName = pending.toPath().getFileName();
             File destination = new File(target.path, frozen.filename());
             try (Handle original = new Handle(pending, CANDIDATE, 0600)) {
                 StructStat made = Os.fstat(original.fd);
@@ -151,7 +200,7 @@ final class LocalWorkspaceStore {
                     target.check();
                     checkFile(Os.lstat(destination.getPath()), sealed, target, 2);
                     checkFile(Os.lstat(pending.getPath()), sealed, target, 2);
-                    Os.unlink(pending.getPath());
+                    names.deleteFile(pendingName);
                     Os.fsync(original.fd);
                     target.sync();
                     home.check(); local.check(); target.check();
@@ -164,8 +213,8 @@ final class LocalWorkspaceStore {
                             target.check();
                             StructStat scratch = Os.lstat(pending.getPath());
                             if (OsConstants.S_ISREG(scratch.st_mode) && same(scratch, made)
-                                    && scratch.st_nlink == 1) Os.unlink(pending.getPath());
-                        } catch (ErrnoException | IOException ignored) {
+                                    && scratch.st_nlink == 1) names.deleteFile(pendingName);
+                        } catch (ErrnoException | IOException | SecurityException ignored) {
                             // Nothing else is removed, and an uncertain publication is never cleaned here.
                         }
                     }
