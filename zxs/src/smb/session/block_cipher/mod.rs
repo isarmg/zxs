@@ -13,7 +13,7 @@ use cipher::{
     consts::U16,
 };
 use core::fmt;
-use cpubits::cfg_if;
+use crate::smb::backend_select::cfg_if;
 
 /// 128-bit AES block
 type Block = Array<u8, U16>;

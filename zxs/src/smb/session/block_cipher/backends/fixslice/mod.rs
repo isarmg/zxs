@@ -14,6 +14,7 @@
 //!
 //! Originally licensed MIT. Relicensed as Apache 2.0+MIT with permission.
 
+use crate::smb::backend_select::cfg_if;
 use cipher::array::Array;
 
 pub(super) mod aes128;
@@ -27,15 +28,29 @@ pub(super) use word::Word;
 
 type State<W> = [W; 8];
 
-cpubits::cpubits! {
-    16 => {
+// The original width priority keeps ARMv7 and wasm32 on 64-bit batches.
+// See NATIVE-WORD-ORIGIN.md for the retained attribution.
+cfg_if! {
+    if #[cfg(cpubits = "16")] {
         pub(super) type NativeWord = u16;
-    }
-    32 => {
+    } else if #[cfg(cpubits = "32")] {
         pub(super) type NativeWord = u32;
-    }
-    64 => {
+    } else if #[cfg(cpubits = "64")] {
         pub(super) type NativeWord = u64;
+    } else if #[cfg(target_pointer_width = "16")] {
+        pub(super) type NativeWord = u16;
+    } else if #[cfg(all(
+        target_pointer_width = "32",
+        not(any(all(target_arch = "arm", target_feature = "v7"), target_arch = "wasm32")),
+    ))] {
+        pub(super) type NativeWord = u32;
+    } else if #[cfg(any(
+        target_pointer_width = "64", all(target_arch = "arm", target_feature = "v7"),
+        target_arch = "wasm32",
+    ))] {
+        pub(super) type NativeWord = u64;
+    } else {
+        compile_error!("unsupported target pointer width");
     }
 }
 

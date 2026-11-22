@@ -1,6 +1,8 @@
 pub(crate) mod soft;
 
-cpubits::cfg_if! {
+use crate::smb::backend_select::cfg_if;
+
+cfg_if! {
     if #[cfg(aes_backend = "soft")] {
         // Do not add other backends if software backend is forced
     } else if #[cfg(all(target_arch = "aarch64", not(miri)))] {

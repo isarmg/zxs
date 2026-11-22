@@ -15,7 +15,6 @@ exclude = [
     "vendor/rust/block-buffer-0.12.1",
     "vendor/rust/cipher-0.5.2",
     "vendor/rust/cmov-0.5.4",
-    "vendor/rust/cpubits-0.1.1",
     "vendor/rust/cpufeatures-0.3.1",
     "vendor/rust/crypto-common-0.2.2",
     "vendor/rust/ctutils-0.4.8",
@@ -28,7 +27,6 @@ exclude = [
 ]
 
 [dependencies]
-cpubits = { version = "=0.1.1", path = "vendor/rust/cpubits-0.1.1" }
 # The private NTLM key-exchange module keeps the former RC4 package's features.
 cipher = { version = "=0.5.2", path = "vendor/rust/cipher-0.5.2", default-features = false, features = ["stream-wrapper", "zeroize"] }
 # Retain the existing default block API and MAC/erasure features.

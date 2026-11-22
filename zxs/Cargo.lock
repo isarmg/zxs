@@ -25,10 +25,6 @@ name = "cmov"
 version = "0.5.4"
 
 [[package]]
-name = "cpubits"
-version = "0.1.1"
-
-[[package]]
 name = "cpufeatures"
 version = "0.3.1"
 dependencies = [
@@ -91,7 +87,6 @@ name = "zxs"
 version = "0.1.0"
 dependencies = [
  "cipher",
- "cpubits",
  "cpufeatures",
  "digest",
  "libc",

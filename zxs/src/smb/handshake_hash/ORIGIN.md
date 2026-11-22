@@ -26,7 +26,7 @@ the [RFC 6234 §8.5](https://www.rfc-editor.org/rfc/rfc6234.html#section-8.5)
 answers and existing SMB/NTLM synthetic transcripts are not real client
 or formal acceptance.
 
-The [private backend selector](backend_select/ORIGIN.md) is the same
+The [private backend selector](../backend_select/ORIGIN.md) is the same
 original cfg-if macro; target-conditional `cpufeatures` and the used
 `digest` features remain the same pinned packages. The excluded digest package's inactive
 development reference to the removed SHA-2 package is no longer valid;

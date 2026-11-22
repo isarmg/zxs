@@ -72,12 +72,13 @@ The pinned SHA-256 and SHA-512 code used by SMB now belongs to the
 It keeps the same backend dispatch and clears its state as before.
 No separate SHA-2 crate or unused fixed wrapper is needed in the product.
 
-The SHA-2 backend uses the original [private selector macro](../../src/smb/handshake_hash/backend_select/ORIGIN.md)
-instead of a separate cfg-if package; selector ordering and target cfgs are unchanged.
+SHA-2 and AES share the internal [compile-time selector](../../src/smb/backend_select/ORIGIN.md).
+The AES [portable word selection](../../src/smb/session/block_cipher/backends/fixslice/NATIVE-WORD-ORIGIN.md)
+uses the same target predicates and priority without a separate Cargo package.
 
 ## Active paths and build scope
 
-The ZXS workspace excludes the 13 remaining local path packages, so their own
+The ZXS workspace excludes the 12 remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
 graph. The cipher manifest has no default feature; ZXS makes the already active
 stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
@@ -88,7 +89,7 @@ service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> cipher [stream-wrapper, zeroize], cpubits, cpufeatures [target cfg], digest [block-api, default, mac, zeroize], libc, zeroize
+zxs -> cipher [stream-wrapper, zeroize], cpufeatures [target cfg], digest [block-api, default, mac, zeroize], libc, zeroize
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 digest -> block-buffer, crypto-common [alias common], ctutils, zeroize
 block-buffer -> hybrid-array, zeroize

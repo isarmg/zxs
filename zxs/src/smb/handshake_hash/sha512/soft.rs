@@ -1,6 +1,6 @@
 //! RustCrypto SHA-2 (MIT OR Apache-2.0); original notices in handshake_hash.
 //! Modified by ZXS to invoke only the private, otherwise unchanged selector.
-crate::smb::handshake_hash::backend_select::cfg_if! {
+crate::smb::backend_select::cfg_if! {
     if #[cfg(sha2_backend_soft = "compact")] {
         mod compact;
         pub(super) use compact::compress;

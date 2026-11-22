@@ -8,7 +8,7 @@ use core::arch::riscv32::{sha256sig0, sha256sig1, sha256sum0, sha256sum1};
 #[cfg(target_arch = "riscv64")]
 use core::arch::riscv64::{sha256sig0, sha256sig1, sha256sum0, sha256sum1};
 
-crate::smb::handshake_hash::backend_select::cfg_if! {
+crate::smb::backend_select::cfg_if! {
     if #[cfg(sha2_backend_riscv_zknh = "compact")] {
         mod compact;
         use compact::compress_block;

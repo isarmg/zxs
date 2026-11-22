@@ -1,6 +1,6 @@
 //! RustCrypto SHA-2 (MIT OR Apache-2.0); original notices in handshake_hash.
 //! Modified by ZXS to invoke only the private, otherwise unchanged selector.
-crate::smb::handshake_hash::backend_select::cfg_if! {
+crate::smb::backend_select::cfg_if! {
     if #[cfg(any(sha2_backend = "soft", sha2_256_backend = "soft"))] {
         mod soft;
         use soft::compress;
@@ -46,7 +46,7 @@ crate::smb::handshake_hash::backend_select::cfg_if! {
     } else {
         mod soft;
 
-        crate::smb::handshake_hash::backend_select::cfg_if! {
+        crate::smb::backend_select::cfg_if! {
             if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
                 mod x86_sha;
                 cpufeatures::new!(shani_cpuid, "sha", "sse4.1");
@@ -57,7 +57,7 @@ crate::smb::handshake_hash::backend_select::cfg_if! {
         }
 
         fn compress(state: &mut [u32; 8], blocks: &[[u8; 64]]) {
-            crate::smb::handshake_hash::backend_select::cfg_if! {
+            crate::smb::backend_select::cfg_if! {
                 if #[cfg(any(target_arch = "x86", target_arch = "x86_64"))] {
                     if shani_cpuid::get() {
                         // SAFETY: we checked that required target features are available

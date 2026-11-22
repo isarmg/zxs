@@ -2,7 +2,6 @@
 //! Modified by ZXS to keep the two fixed hashes required by the SMB handshake.
 #![allow(clippy::needless_range_loop)]
 
-mod backend_select;
 mod block_api;
 #[rustfmt::skip]
 mod consts;

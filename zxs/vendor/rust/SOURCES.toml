@@ -37,7 +37,7 @@ commit = "8b0a2b0fc1fa3b3741b9e72895f390cf499fe36f"
 upstream_subdirectory = ""
 archive = "https://static.crates.io/crates/cfg-if/cfg-if-1.0.5.crate"
 sha256 = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
-internal_module = "src/smb/handshake_hash/backend_select"
+internal_module = "src/smb/backend_select"
 
 [[package]]
 name = "cipher"
@@ -87,6 +87,7 @@ commit = "bff92a8c33629ae8e9d1407f3b7fea604992dd0f"
 upstream_subdirectory = "cpubits"
 archive = "https://static.crates.io/crates/cpubits/cpubits-0.1.1.crate"
 sha256 = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
+internal_module = "src/smb/session/block_cipher/backends/fixslice"
 
 [[package]]
 name = "cpufeatures"
