@@ -81,6 +81,7 @@ jobs:
         run: cargo fetch --locked
 
       - name: Stage the reviewed ZXS browser inputs
+        id: browser_stage
         if: matrix.project == 'zxs'
         run: |
           input="$(mktemp -d "$RUNNER_TEMP/zxs-browser.XXXXXXXX")"
@@ -88,6 +89,7 @@ jobs:
             https://static.rust-lang.org/dist/2026-11-12/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz \
             -o "$input/rust-std.tar.xz"
           python3 build_browser.py "$ZXS_RUST_BIN" --wasm-std "$input/rust-std.tar.xz"
+          printf 'ZXS_WASM_STD=%s\n' "$input/rust-std.tar.xz" >> "$GITHUB_ENV"
           printf 'ZXS_BROWSER_ASSETS=%s\n' "$(pwd -P)/target/browser-assets" >> "$GITHUB_ENV"
           printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=ad13130fe85ff547c2937d51d59c843b4b734cec128417ed82ac577d1b9f591e' >> "$GITHUB_ENV"
 
@@ -108,3 +110,7 @@ jobs:
       - name: Check the staged WASM with a synthetic browser host
         if: ${{ !cancelled() && matrix.project == 'zxs' && (steps.lint.outcome == 'success' || steps.lint.outcome == 'failure') }}
         run: node tests/browser/console-host.mjs "$ZXS_BROWSER_ASSETS"
+
+      - name: Strict Clippy for the standalone wasm32 browser
+        if: ${{ !cancelled() && matrix.project == 'zxs' && steps.browser_stage.outcome == 'success' }}
+        run: python3 tests/browser/strict_target.py "$ZXS_RUST_BIN" "$ZXS_WASM_STD"
