@@ -5,7 +5,7 @@
 - 登录名是 1–64 B 规范小写 ASCII，首字符为字母或数字，余下可含 `.`、`_`、`-`；排除 `guest`、`anonymous`、`nobody`、`root`。Web 比较原样；SMB 按其协议规则接受同名的 ASCII 大小写，不产生另一个配置名。固定域为 `ZXSLOCAL`；SID、目标和监听来自同一受保护的原安装，不采用来信自报 SID。
 - Web 只使用随机 16 B 盐和 32 B Argon2id v19 校验值（64 MiB、3 次、4 lanes），留在原 SYSTEM SQLite。SMB 只使用 [`vault/credential.v2`](../src/smb/credential-record.md) 的原 NTLMv2 等价材料：仅核实本次低权 SMB 角色才可读取实际正本。Web 不读 SMB 正本，SMB 启动不取 Web 校验值；高侧只核公开绑定和原件元数据。输入同一个受保护口令不等于存两份明文、持久化 NT hash，或在两角色间传密码/会话。
 - 首设和重置各是一笔有独立批准的原操作。重置不改名字，不轮换角色主体键。一笔已确认的历史仍以当时的主体/凭据代解释；旧会话、旧工作单与旧票据不能因新的共同凭据代而继续获得当前权限。
-- 直接管理 HTTP 是明文，泄露共享口令同样危及 SMB。只在隔离开发网络验证直连。对外管理 HTTPS 由独立软件提供；[可信外部 Origin 与后端隔离](web-management.md#外部-https-反向代理)另作真实部署验收，不开放原始 HTTP 到不可信网络。
+- [管理 HTTP](web-management.md) 是明文，泄露共用口令同样危及 SMB。请只在受保护的网络内访问。
 
 ## 原安装内的离线顺序
 

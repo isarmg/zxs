@@ -1,22 +1,16 @@
 //! A bounded fresh public confirmation on the same foreground slave or
 //! VT. It never reads passwords, changes termios or accepts a caller path.
 use super::{SiteLease,denied,held::{fd_mount,proc_dir,proc_pin},hex,media::Media};
-use crate::{management::{MAX_HTTPS_ORIGIN,WebAccess},smb::launch::{custody::{Parent,VerifiedPreflight},kernel}};
+use crate::smb::launch::{custody::{Parent,VerifiedPreflight},kernel};
 use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read,Write},os::{fd::{AsRawFd,RawFd},unix::fs::MetadataExt},thread,time::{Duration,Instant}};
 
 // One canonical TTY line, including LF, and one extra byte to detect
 // oversize even when a single read is cut at the full supplied buffer.
 const RUN_PREFIX:&str="RUN-ZXS ";
-const HTTPS_MARK:&str=" WEB-HTTPS ";
-const CONFIRM_MAX:usize=RUN_PREFIX.len()+32+HTTPS_MARK.len()+MAX_HTTPS_ORIGIN+1+7+64+1;
-fn confirmation(line:&[u8],command:&str)->io::Result<WebAccess>{
-    if line.len()>CONFIRM_MAX{return Err(denied());}
-    let rest=std::str::from_utf8(line).ok().and_then(|s|s.strip_suffix('\n'))
-        .and_then(|s|s.strip_prefix(command)).ok_or_else(denied)?;
-    if rest.is_empty(){return Ok(WebAccess::Direct);}
-    let https=rest.strip_prefix(HTTPS_MARK).ok_or_else(denied)?;
-    let (origin,sum)=https.split_once(' ').ok_or_else(denied)?;
-    WebAccess::external_confirmation(origin,sum).map_err(|_|denied())
+const CONFIRM_MAX:usize=RUN_PREFIX.len()+32+1;
+fn confirmation(line:&[u8],command:&str)->io::Result<()>{
+    if line.strip_suffix(b"\n")!=Some(command.as_bytes()){return Err(denied());}
+    Ok(())
 }
 
 #[derive(Clone,Copy,PartialEq,Eq)]
@@ -121,10 +115,10 @@ impl Terminal{
         let deadline=Instant::now()+Duration::from_secs(120);
         let check=||{live()?;self.require()};
         check()?;self.flush_input()?;
-        let outcome=(||->io::Result<WebAccess>{
+        let outcome=(||->io::Result<()>{
             write_until(&self.output,summary.as_bytes(),deadline,&check)?;
             self.flush_input()?;
-            let prompt=format!("同意以上原件后，请选择本次 Web 模式：\n  {command}  （直连明文；不向不可信网络开放）\n  {command}{HTTPS_MARK}<规范 HTTPS origin> sha256:<代理密钥摘要>  （只准本机受信代理）\n只输一行；绝不输入账号口令或代理密钥原值。\n");
+            let prompt=format!("同意以上原件后，请输入 {command}。\n只输一行，不输入账号口令。\n");
             write_until(&self.output,prompt.as_bytes(),deadline,&check)?;
             let mut input=[0;CONFIRM_MAX+1];
             loop{
@@ -136,10 +130,10 @@ impl Terminal{
                 }
             }
         })();
-        self.flush_input()?;let web=outcome?;
+        self.flush_input()?;outcome?;
         check()?;site.require()?;media.require_for(site,selected)?;
         selected.qualified_for(site)?;
-        Ok(StartApproval{terminal:self,site,selected,media,web})
+        Ok(StartApproval{terminal:self,site,selected,media})
     }
     pub(in crate::smb::launch) fn report(&self,msg:&str,check:impl Fn()->io::Result<()>)->io::Result<()>{
         if msg.len()>12*1024{return Err(denied());}
@@ -155,19 +149,18 @@ impl Terminal{
 #[must_use]
 pub(in crate::smb::launch) struct StartApproval<'t,'m,'v,'s,'p>{
     terminal:&'t Terminal,site:&'s SiteLease<'p>,
-    selected:&'v VerifiedPreflight<'s,'p>,media:&'m Media<'v,'s,'p>,web:WebAccess,
+    selected:&'v VerifiedPreflight<'s,'p>,media:&'m Media<'v,'s,'p>,
 }
 impl<'v,'s,'p> StartApproval<'_,'_,'v,'s,'p>{
     pub(in crate::smb::launch) fn consume_for(
         self,site:&SiteLease<'p>,selected:&VerifiedPreflight<'s,'p>,media:&Media<'v,'s,'p>,
-    )->io::Result<WebAccess>{
+    )->io::Result<()>{
         if !std::ptr::eq(self.site,site)||!std::ptr::eq(self.selected,selected)||!std::ptr::eq(self.media,media){
             return Err(denied());
         }
         self.terminal.require()?;self.site.require()?;
         self.selected.qualified_for(site)?;
-        self.media.require_for(site,selected)?;
-        Ok(self.web)
+        self.media.require_for(site,selected)
     }
 }
 fn escaped(value:&[u8])->String{
@@ -236,25 +229,14 @@ fn retry(e:&io::Error)->bool{
 mod confirmations{
     use super::*;
     #[test]
-    fn same_foreground_confirmation_explicitly_selects_one_ephemeral_web_mode(){
+    fn same_foreground_confirmation_accepts_only_the_original_line(){
         let command=format!("{RUN_PREFIX}{}","42".repeat(16));
-        assert!(matches!(confirmation(format!("{command}\n").as_bytes(),&command).unwrap(),WebAccess::Direct));
-        let digest=[0x35;32];let mark=format!("sha256:{}","35".repeat(32));
-        let origin="https://admin.example:8444";
-        let proxy=format!("{command}{HTTPS_MARK}{origin} {mark}");
-        let selected=confirmation(format!("{proxy}\n").as_bytes(),&command).unwrap();
-        assert_eq!(selected.external_fields(),Some((origin,digest)));
-        // The exact maximum authority is the named 253-byte DNS host
-        // plus a colon/five-digit non-default HTTPS port.
-        let max_host=["a".repeat(63),"b".repeat(63),"c".repeat(63),"d".repeat(61)].join(".");
-        let limit=format!("{command}{HTTPS_MARK}https://{max_host}:65535 {mark}\n");
-        assert_eq!(limit.len(),CONFIRM_MAX);
-        assert!(confirmation(limit.as_bytes(),&command).is_ok());
+        let accepted=format!("{command}\n");
+        assert_eq!(accepted.len(),CONFIRM_MAX);
+        assert!(confirmation(accepted.as_bytes(),&command).is_ok());
         for invalid in [command.clone(),format!("{command}\r\n"),format!("{command} \n"),
-            format!("{command}{HTTPS_MARK}\n"),format!("{command}{HTTPS_MARK}{origin}\n"),
-            format!("{command}{HTTPS_MARK}{origin}  {mark}\n"),format!("{command}{HTTPS_MARK}{origin} {}\n",&mark[7..]),
-            format!("{proxy} \n"),format!("{proxy}\nextra\n"),format!("{proxy}\n{command}\n"),
-            format!("{limit}\n"),format!("RUN-ZXS {}{HTTPS_MARK}{origin} {mark}\n","43".repeat(16))]{
+            format!("{command} WEB-HTTPS https://admin.example sha256:{}\n","35".repeat(32)),
+            format!("{command}\nextra\n"),format!("RUN-ZXS {}\n","43".repeat(16))]{
             assert!(confirmation(invalid.as_bytes(),&command).is_err());
         }
         assert!(confirmation(b"\xff\n",&command).is_err());

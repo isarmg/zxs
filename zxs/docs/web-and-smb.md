@@ -1,6 +1,6 @@
 # Web 管理，SMB 传输文件
 
-Web 和 Rust SMB 3.1.1 编入同一个 `zxs` 可执行文件。Web 提供 HTTP，可由外部代理提供 HTTPS。配置见 [管理 Web](web-management.md)和[站点启动](../src/smb/launch/site/CONTRACT.md)。
+Web 和 Rust SMB 3.1.1 编入同一个 `zxs` 可执行文件。Web 只提供 HTTP。参见 [管理 Web](web-management.md)和[站点启动](../src/smb/launch/site/CONTRACT.md)。
 
 ## Web 的第一条真实路径：登录后查看和管理
 

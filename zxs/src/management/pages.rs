@@ -12,7 +12,7 @@ fn text(out:&mut String,s:&str){
     for c in s.chars(){match c{'&'=>out.push_str("&amp;"),'<'=>out.push_str("&lt;"),'>'=>out.push_str("&gt;"),
         '"'=>out.push_str("&quot;"),'\''=>out.push_str("&#39;"),_=>out.push(c)}}
 }
-pub(super) fn sign_in(failed: bool, secure: bool) -> String {
+pub(super) fn sign_in(failed: bool) -> String {
     let mut out = String::from(HEAD);
     out.push_str("<title>管理员登录 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
@@ -21,9 +21,7 @@ pub(super) fn sign_in(failed: bool, secure: bool) -> String {
     out.push_str(r#"<h1 id="zxs-login-title" class="zxs-visually-hidden">管理员登录 · ZXS</h1><form method="post" action="/login" accept-charset="UTF-8"><fieldset class="zxs-auth-group"><legend class="zxs-visually-hidden">Web 管理员登录</legend><div class="zxs-auth-fields">"#);
     out.push_str(include_str!("../../web/login-fields.html"));
     out.push_str(r#"<div class="zxs-auth-information">"#);
-    if !secure {
-        out.push_str(r#"<p class="zxs-notice zxs-notice-warning">HTTP 未加密。请仅在可信网络登录。</p>"#);
-    }
+    out.push_str(r#"<p class="zxs-notice zxs-notice-warning">HTTP 未加密。请仅在可信网络登录。</p>"#);
     if failed {
         out.push_str(r#"<p class="zxs-notice zxs-notice-error" role="alert">登录名或口令不正确。</p>"#);
     }
@@ -130,7 +128,7 @@ fn browser_panel(out: &mut String, data: &Overview) {
 #[cfg(test)]
 #[test]
 fn contours_are_inert_local_decoration_on_the_original_native_pages() {
-    let login = sign_in(true, false);
+    let login = sign_in(true);
     let details = overview(&Overview { login: "A<&".into(), shares: Vec::new(), next: None }, "example").unwrap();
     for (page, tiles) in [(&login, 4), (&details, 8)] {
         assert_eq!(page.matches("id=\"zxs-g4-corner\"").count(), 1);
@@ -140,7 +138,7 @@ fn contours_are_inert_local_decoration_on_the_original_native_pages() {
     }
     assert!(login.contains("action=\"/login\"") && login.contains("autocomplete=\"current-password\""));
     assert!(login.contains("HTTP 未加密") && login.contains("role=\"alert\""));
-    assert!(!sign_in(false, true).contains("HTTP 未加密"));
+    assert!(sign_in(false).contains("HTTP 未加密"));
     assert!(details.contains("<bdi>A&lt;&amp;</bdi>") && details.contains("action=\"/logout\""));
 }
 

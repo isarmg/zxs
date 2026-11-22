@@ -3,14 +3,12 @@
 use super::{custody::{self,Parent},site::{SiteLease,Terminal,media::Media}};
 use std::{io,thread,time::Duration};
 
-const LEGACY_ENV:[&str;4]=[
-    "ZXS_SYSTEM_ROOT","ZXS_POOL_ID","ZXS_WEB_TRUSTED_PROXY","ZXS_WEB_PUBLIC_ORIGIN",
-];
+const LEGACY_ENV:[&str;2]=["ZXS_SYSTEM_ROOT","ZXS_POOL_ID"];
 
 fn reject_legacy_selection(present:impl Fn(&str)->bool)->io::Result<()>{
     if LEGACY_ENV.into_iter().any(present){
         return Err(io::Error::new(io::ErrorKind::Unsupported,
-            "this fresh ZXS deployment must use its protected selection; legacy Web or proxy environment is not accepted"));
+            "this fresh ZXS deployment must use its protected selection; legacy site environment is not accepted"));
     }
     Ok(())
 }
@@ -84,7 +82,7 @@ fn run_site<'p>(parent:&'p Parent,terminal:&Terminal,site:&SiteLease<'p>)->io::R
 mod tests{
     use super::*;
     #[test]
-    fn standalone_never_converts_legacy_site_or_proxy_input_into_another_start(){
+    fn standalone_never_converts_legacy_site_input_into_another_start(){
         assert!(reject_legacy_selection(|_|false).is_ok());
         for name in LEGACY_ENV{
             assert_eq!(reject_legacy_selection(|key|key==name).unwrap_err().kind(),io::ErrorKind::Unsupported);

@@ -4,7 +4,6 @@
 //! original children during life and drain.
 use super::{Fault,Parent,Role,VerifiedPreflight,birth::Ready,foreground,kernel::{cloexec,get_flags,sock,sock_int},
     listeners::Listeners,preflight::nonce,view::{self,Kind,Source,View}};
-use crate::management::WebAccess;
 use crate::smb::launch::{
     cohort::{self,PairOffer},envelope::{self,ENV_MAX},pair_gate::{GateOwner,GateStamp,ReadLoans},
     site::{SiteLease,Terminal,media::Media},transport::seal_public,web,
@@ -57,7 +56,7 @@ pub(in crate::smb::launch) fn prepare_site<'s,'p>(parent:&'p Parent,site:&'s Sit
 pub(in crate::smb::launch) struct Authorized<'t,'m,'v,'s,'p>{
     parent:&'p Parent,site:&'s SiteLease<'p>,terminal:&'t Terminal,
     selected:&'v VerifiedPreflight<'s,'p>,media:&'m Media<'v,'s,'p>,smb:bool,web:bool,
-    pair:PairOffer,gate:GateOwner<'p>,loans:ReadLoans,web_access:WebAccess,
+    pair:PairOffer,gate:GateOwner<'p>,loans:ReadLoans,
 }
 pub(in crate::smb::launch) fn authorize<'t,'m,'v,'s,'p>(
     parent:&'p Parent,site:&'s SiteLease<'p>,terminal:&'t Terminal,
@@ -71,7 +70,7 @@ pub(in crate::smb::launch) fn authorize<'t,'m,'v,'s,'p>(
         foreground::require().map_err(|_|no())
     };
     live()?;
-    let web_access=terminal.approve(site,selected,media,&live)?.consume_for(site,selected,media)?;
+    terminal.approve(site,selected,media,&live)?.consume_for(site,selected,media)?;
     live()?;
     let facts=selected.qualified_for(site)?;
     let location=site.system()?.2;
@@ -80,7 +79,7 @@ pub(in crate::smb::launch) fn authorize<'t,'m,'v,'s,'p>(
     let (gate,loans)=GateOwner::prepare(parent,nonce,cohort).map_err(|_|no())?;
     let pair=PairOffer{nonce,cohort,gate:gate.stamp(),until_tick:cohort::new_deadline().map_err(|_|no())?};
     live()?;
-    Ok(Authorized{parent,site,terminal,selected,media,smb:false,web:false,pair,gate,loans,web_access})
+    Ok(Authorized{parent,site,terminal,selected,media,smb:false,web:false,pair,gate,loans})
 }
 /// Only true returned role-specific PREPARED custody can construct this.
 pub(in crate::smb::launch) struct PreparedPair<'a,'p>{
@@ -176,7 +175,7 @@ pub(in crate::smb::launch) fn launch_internal_web<'m,'v,'s,'p>(scope:&mut Author
     listener.set_nonblocking(true)?;
     let cookie=u64::from_ne_bytes(sock(listener.as_raw_fd(),libc::SOL_SOCKET,libc::SO_COOKIE).map_err(|_|no())?);
     let read_only=view::flags(system).map_err(|_|no())?&libc::ST_RDONLY!=0;
-    let (header,body)=web::encode(selected.plan(),nonce().map_err(|_|no())?,cookie,read_only,scope.pair,&scope.web_access).map_err(|_|no())?;
+    let (header,body)=web::encode(selected.plan(),nonce().map_err(|_|no())?,cookie,read_only,scope.pair).map_err(|_|no())?;
     let sealed=seal_public(&body,web::MAX).map_err(|_|no())?;
     let who=site.subject();
     let before=||->io::Result<()>{

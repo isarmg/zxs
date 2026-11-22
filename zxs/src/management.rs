@@ -4,13 +4,11 @@ use std::{borrow::Cow,collections::{BTreeMap,VecDeque},fmt::Write as _,io::{self
     sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 mod pages;
 mod transport;
-mod access;
 mod manual;
 mod directory;
 #[cfg(feature="private-browser-ui")]
 mod browser;
-pub(crate) use access::{MAX_HTTPS_ORIGIN,WebAccess};
-use access::Audience;
+use transport::Audience;
 
 const IDLE:Duration=Duration::from_secs(15*60);
 const ABSOLUTE:Duration=Duration::from_secs(8*3600);
@@ -97,7 +95,7 @@ impl<'s> App<'s>{
         self.expire(now);
         if q.method=="GET"{
             if !q.body.0.is_empty(){return BAD();}
-            if q.target=="/login"{return Reply::html("200 OK",pages::sign_in(false,q.audience.secure));}
+            if q.target=="/login"{return Reply::html("200 OK",pages::sign_in(false));}
             if q.target=="/management.css"{
                 return Reply::content("200 OK","text/css; charset=utf-8",Cow::Borrowed(pages::CSS.as_bytes()));
             }
@@ -145,7 +143,7 @@ impl<'s> App<'s>{
             let Some(s)=self.sessions.get(k)else{return REJECT();};
             if Token::parse(csrf).is_none_or(|c|!s.csrf.matches(&c)){return REJECT();}
             self.sessions.remove(k);let mut r=Reply::redirect("/login");
-            r.set_cookie=Some(q.audience.set_cookie("",true));return r;
+            r.set_cookie=Some(transport::session_cookie("",true));return r;
         }
         if q.target.starts_with("/shares/"){
             let Some(k)=q.cookie.as_ref()else{return REJECT();};
@@ -167,14 +165,14 @@ impl<'s> App<'s>{
         if self.attempts.len()>=MAX_ATTEMPTS{return Reply::text("429 Too Many Requests","登录尝试过多，请稍后再试。");}
         self.attempts.push_back(now);
         let admin=match self.source.authenticate_web(login,password){Ok(a)=>a,
-            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>return Reply::html("403 Forbidden",pages::sign_in(true,q.audience.secure)),
+            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>return Reply::html("403 Forbidden",pages::sign_in(true)),
             Err(_)=>return UNAVAILABLE()};
         let(Ok(key),Ok(csrf))=(Token::fresh(),Token::fresh())else{return UNAVAILABLE();};
         if self.sessions.contains_key(&key)||key==csrf{return UNAVAILABLE();}
         if let Some(old)=q.cookie.as_ref(){self.sessions.remove(old);}
         if self.sessions.len()>=MAX_SESSIONS{return Reply::text("429 Too Many Requests","管理会话已满，请稍后再试。");}
         let mut r=Reply::redirect("/");
-        r.set_cookie=Some(q.audience.set_cookie(&key.hex(),false));
+        r.set_cookie=Some(transport::session_cookie(&key.hex(),false));
         self.sessions.insert(key,Session{audience:q.audience,admin,csrf,born:now,last:now,
             permit:Arc::new(AtomicBool::new(true)),chosen:None,directory_pages:directory::HeldPages::default()});r
     }
@@ -183,8 +181,8 @@ impl<'s> App<'s>{
 /// The verified same-ELF Web role supplies its already qualified original
 /// S, listener and READY cut. No selection, bind or settings fallback here.
 pub(crate) fn serve_ready_original<F:Fn()->bool+Send+Sync>(source:&InitialReader,listener:&TcpListener,
-    access:&WebAccess,ready:impl FnOnce()->io::Result<F>)->io::Result<()>{
-    transport::serve_ready(listener,access,&mut App::new(source),ready)
+    ready:impl FnOnce()->io::Result<F>)->io::Result<()>{
+    transport::serve_ready(listener,&mut App::new(source),ready)
 }
 
 #[cfg(test)]

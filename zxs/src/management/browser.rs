@@ -78,7 +78,7 @@ mod tests{
         let page=std::str::from_utf8(body).unwrap();
         assert!(page.contains("src=\"/ui/v1/boot.js\"")&&page.contains("href=\"/ui/v1/folder.css\""));
         assert!(page.contains("action=\"/logout\"")&&page.contains("name=\"csrf\" value=\"csrf\""));
-        for reply in [Reply::html("200 OK",pages::sign_in(false,true)), BAD(),
+        for reply in [Reply::html("200 OK",pages::sign_in(false)), BAD(),
             Reply::html("200 OK",pages::overview(&data,"csrf").unwrap())]{
             let wire=written(reply);
             let (head,body)=components(&wire);
@@ -100,7 +100,7 @@ mod tests{
         setup.set_share_mode(OperationId([0xa5;16]),row.share,row.op,Mode::ReadOnly).unwrap();
         drop(setup);
         let mut app=App::new(&source);
-        let audience=Audience{origin:"https://admin.example".into(),secure:true};
+        let audience=Audience{origin:"http://192.0.2.10:8443".into()};
         let request=|method:&str,target:&str,origin:Option<&str>,cookie:Option<&str>,body:&str|Request{
             method:method.into(),target:target.into(),origin:origin.map(str::to_owned),audience:audience.clone(),
             cookie:cookie.map(|s|Token::parse(s).unwrap()),content_type:"application/x-www-form-urlencoded".into(),
@@ -116,7 +116,7 @@ mod tests{
         let login=app.handle(request("POST","/login",Some(&audience.origin),None,
             "login=first.admin&password=correct+horse+battery+staple"),start);
         assert_eq!(login.location,Some("/"));
-        let cookie=login.set_cookie.as_deref().unwrap().strip_prefix("__Host-zxs=").unwrap().split(';').next().unwrap();
+        let cookie=login.set_cookie.as_deref().unwrap().strip_prefix("zxs-http=").unwrap().split(';').next().unwrap();
         let cookie=Some(cookie);
         let shell=app.handle(request("GET","/",None,cookie,""),Instant::now());
         assert!(matches!(shell.csp,Csp::BrowserOverview));
