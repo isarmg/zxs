@@ -466,7 +466,6 @@ impl TransferAt<'_>{
         let (from,to)=passage.physical();
         let target_parent=second_parent.as_ref().unwrap_or(&ordinary_parent);
         let require_routes=|db:&Connection,c:&Catalog|->io::Result<()>{
-            // Both placements are selected prior to any filesystem I/O.
             if let Some(d)=self.destination{
                 if DirectoryRoute::at(db,c,self.setting.volume,self.parent)?!=ordinary_parent||
                     DirectoryRoute::at(db,c,d.setting.volume,d.parent)?!=*target_parent{
@@ -606,7 +605,6 @@ impl TransferAt<'_>{
             Ok(x)=>x,
             Err(error)=>{
                 if candidate.pair_incomplete(&error,to)?{
-                    // Use the exact chosen root and source FILE lock again.
                     // An unpaired name is never adopted, repaired, or removed.
                     let root=HeldDir::trusted_storage(&to.path)?;root.exclusive()?;
                     if root.entity!=to.entity||!root.same_mount(to)?{return Err(invalid("changed incomplete placement root"));}

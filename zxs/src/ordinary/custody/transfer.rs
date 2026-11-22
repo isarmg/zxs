@@ -166,8 +166,6 @@ impl Sites{
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(in crate::ordinary) struct Moved{pub seq:u64,pub previous:[u8;32],pub request:[u8;32],pub digest:[u8;32],pub bytes:Vec<u8>,
     pub original:Origin,pub allocation:[u8;32],pub stage:Option<u8>,pub target:Sites}
-// Canonical maxima. The actual maximal encoder is also exercised in the
-// source fixture. Omitting an optional INCR or a shorter name only shrinks it.
 const NATIVE:usize=16+1+fs::MAX_BIRTH;
 const COMMON_ORIGIN:usize=7*16+4+8+1+1+wire::MAX_HUMAN+2*NATIVE+2*32+1+2*32+8+32;
 #[cfg(test)]

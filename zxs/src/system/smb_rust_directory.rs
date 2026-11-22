@@ -49,9 +49,7 @@ impl<'a> RustDirectorySelection<'a>{
     )->Self{Self{tree,member,label,grant,catalog,route}}
     pub(crate) fn volume(&self)->VolumeId{self.grant.volume}
     pub(crate) fn nested(&self)->Option<DirectoryId>{nested(&self.route)}
-    // ZXS per-disk namespace policy, not a claim about media free space
-    // or the handle's requested access. A volume label's parent is always
-    // the immutable ZXS logical root, even when that volume is configured RW.
+    // A volume label has the immutable ZXS root as its parent, even on a RW share.
     pub(crate) fn parent_allows_file_write(&self)->bool{allows_parent_write(&self.route,self.grant)}
     pub(crate) fn acquire(self)->io::Result<RustOrdinaryDirectory>{
         let Self{tree,member,label,grant,catalog,route}=self;

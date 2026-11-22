@@ -230,7 +230,6 @@ impl DraftStage{
         let stored=physically_unused(&self.parts,old,data.len() as u64)?.unwrap_or(old);
         if stored==old && !self.spool.ram && free()?<data.len() as u64{return Err(full());}
         let p=Part{lo:offset,hi,stored};
-        // Sequential writes merge compatible extents without copying the map.
         if self.parts.last().is_none_or(|last|last.hi<=offset){
             let merge=self.parts.last().is_some_and(|last|last.hi==offset&&last.stored+last.len()==p.stored);
             if !merge{

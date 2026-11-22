@@ -308,8 +308,6 @@ impl RustReadFile {
     pub(crate) fn normalized_name(&self,tree:&RustRoot,member:&RustSessionWitness)->io::Result<RustFileName>{
         if !member.is_query_info(){return Err(denied());}
         self.require_current(tree,member)?;
-        // The current Route carries each selected DirectoryPlace spelling.
-        // Reading the held placement never follows a client-supplied alias.
         let path=normalized_share_path(self.original_parent_components().chain(std::iter::once(self.file.place.name.as_str())))?;
         Ok(RustFileName{mark:Rc::downgrade(&self.mark),placement:self.name_position(),path})
     }

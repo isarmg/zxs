@@ -85,8 +85,6 @@ impl RustDirectoryBirth<'_>{
             Err(e)if offered.is_none()=>return Err(e),
             Err(e)=>return Err(uncertain(e)),
         };
-        // The exact pair and selected directory now exist. Keep its real
-        // held proof and the same F/parent instead of reopening a name.
         let media=media.adopt_directory(&birth,held).map_err(uncertain)?;
         // Keep the same marker and already held FD. `from_birth` independently
         // compares this exact position (not just DirectoryId) against the live Route.

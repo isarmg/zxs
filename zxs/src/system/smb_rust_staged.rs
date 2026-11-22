@@ -160,8 +160,6 @@ impl RustStagedWriter{
     pub(crate) fn write(&mut self,tree:&RustRoot,member:&RustSessionWitness,offset:u64,data:&[u8])->io::Result<u32>{
         if !member.is_write(){return Err(denied());}
         if data.is_empty(){
-            // Inspect the same original writer, without refreshing its
-            // selected work or consuming any outstanding SAVE/FLUSH.
             self.no_unconfirmed_through()?;
             self.require_current(tree,member)?;
             if self.draft.flush_op.is_some()||self.draft.refresh_op.is_some(){
