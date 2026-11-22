@@ -4,6 +4,7 @@ use crate::{system::reader::web_pool,test_support::PrivateTemp};
 use std::{io::{Read,Write},net::{Shutdown,TcpListener,TcpStream}};
 const HOST:&str="admin.example";
 const SITE:&str="https://admin.example";
+const DIRECT_WARNING:&str="HTTP 未加密";
 const KEY:&str=concat!("a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5","a5a5a5a5a5a5a5a5");
 fn proxy()->WebAccess{
     WebAccess::external_confirmation(SITE,"sha256:6eaea290aba480e118080ad627adff12fee3152d396b1f90807c6b527d4ac91f").unwrap()
@@ -51,7 +52,7 @@ fn login_change_installed_folder_and_cold_overview_do_not_open_offline_file_root
     let anon=hit(&mut app,"GET","/","","","");assert!(anon.contains("Location: /login")&&!anon.contains("first.admin"));
     let form=hit(&mut app,"GET","/login","","","");
     assert!(form.contains("Referrer-Policy: same-origin\r\n"));
-    assert!(form.contains("autocomplete=\"current-password\"")&&!form.contains("files.smb")&&!form.contains("本池登记卷"));
+    assert!(form.contains("autocomplete=\"current-password\"")&&!form.contains("files.smb")&&!form.contains("本池登记卷")&&!form.contains(DIRECT_WARNING));
     for who in ["files.smb","anonymous","guest"]{
         let out=hit(&mut app,"POST","/login","",SITE,&format!("login={who}&password=correct+horse+battery+staple"));
         assert!(out.starts_with("HTTP/1.1 403")&&!out.contains("Set-Cookie: "));
@@ -65,13 +66,14 @@ fn login_change_installed_folder_and_cold_overview_do_not_open_offline_file_root
     assert!(!page.contains("本池登记卷")&&!page.contains("总容量")&&!page.contains("文件系统 UUID")&&
         !page.contains("Web 所见挂载")&&!page.contains("检查此卷")&&!page.contains("zxs-status"));
     // Business modes still display the original logical volume, not a disk probe.
-    assert!(page.contains(&format!("<code>{v}</code>")));
+    assert!(page.contains(&format!("{v}</code>")));
     let removed="/volumes/observe";
     assert!(hit(&mut app,"GET",removed,&cookie,"","").starts_with("HTTP/1.1 404"));
     let old=format!("csrf={}&volume={v}",hidden(&page,"/shares/mode","csrf"));
     assert!(hit(&mut app,"POST",removed,&cookie,SITE,&old).starts_with("HTTP/1.1 404"));
-    assert_eq!(page.matches("<bdi>R&amp;D</bdi>").count(),1);assert!(page.contains("<td>只读</td>"));
-    assert!(page.contains(r"<code>\\服务器\ZXS</code>")&&!page.contains("not selected"));
+    assert_eq!(page.matches(">R&amp;D</bdi>").count(),1);
+    assert!(page.contains("只读</span>")&&page.contains(r#"<option value="ro" selected>只读</option>"#));
+    assert!(page.contains("SMB 共享名")&&page.contains("<code>ZXS</code>")&&!page.contains("not selected"));
     assert!(!page.contains("smb://")&&!page.contains("action=\"/shares/publish\""));
     assert!(hit(&mut app,"POST","/shares/publish",&cookie,SITE,"").starts_with("HTTP/1.1 404"));
     assert!(!hit(&mut app,"GET","/login","","","").contains("R&amp;D"));
@@ -89,8 +91,8 @@ fn login_change_installed_folder_and_cold_overview_do_not_open_offline_file_root
     drop(app);drop(source);let source=InitialReader::open(&p,id).unwrap();let mut cold=App::new(&source);
     assert!(hit(&mut cold,"GET","/",&cookie,"","").contains("Location: /login"));
     let cookie=logged(&mut cold);let page=hit(&mut cold,"GET","/",&cookie,"","");
-    assert!(page.contains("<bdi>R&amp;D</bdi>")&&page.contains("<td>读写</td>"));
-    assert!(page.contains(r"<code>\\服务器\ZXS</code>"));
+    assert!(page.contains(">R&amp;D</bdi>")&&page.contains("读写</span>")&&page.contains(r#"<option value="rw" selected>读写</option>"#));
+    assert!(page.contains("SMB 共享名")&&page.contains("<code>ZXS</code>"));
     let exit=format!("csrf={}",hidden(&page,"/logout","csrf"));
     assert!(hit(&mut cold,"POST","/logout",&cookie,"https://other.example",&exit).starts_with("HTTP/1.1 403"));
     assert!(hit(&mut cold,"POST","/logout",&cookie,SITE,&exit).contains("Max-Age=0"));
@@ -105,7 +107,7 @@ fn direct_needs_no_domain_certificate_or_proxy_and_sessions_do_not_cross_transpo
     let ls=TcpListener::bind(("127.0.0.1",0)).unwrap();let host=ls.local_addr().unwrap().to_string();
     let site=format!("http://{host}");let b="login=first.admin&password=correct+horse+battery+staple";
     let raw=exchange(&mut app,&ls,&WebAccess::Direct,wire("GET","/login",&host,"","","",""));
-    assert!(raw.starts_with("HTTP/1.1 200")&&raw.contains("此连接使用 HTTP"));
+    assert!(raw.starts_with("HTTP/1.1 200")&&raw.contains(DIRECT_WARNING));
     assert!(exchange(&mut app,&ls,&WebAccess::Direct,wire("POST","/login",HOST,"",SITE,b,
         "Forwarded: proto=https\r\nX-Forwarded-Host: admin.example\r\n")).starts_with("HTTP/1.1 403"));
     assert!(exchange(&mut app,&ls,&WebAccess::Direct,wire("POST","/login",&host,"",SITE,b,"")).starts_with("HTTP/1.1 403"));
@@ -147,7 +149,7 @@ fn partial_first_request_does_not_hold_the_application_or_another_browser(){
             let mut fast=TcpStream::connect(addr).unwrap();fast.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             fast.write_all(wire("GET","/login",&addr.to_string(),"","","","").as_bytes()).unwrap();
             let mut out=String::new();fast.read_to_string(&mut out).unwrap();
-            assert!(out.starts_with("HTTP/1.1 200")&&out.contains("此连接使用 HTTP"));drop(slow);
+            assert!(out.starts_with("HTTP/1.1 200")&&out.contains(DIRECT_WARNING));drop(slow);
         });
         transport::serve(&ls,&WebAccess::Direct,&mut App::new(&source),||stop.load(Ordering::Acquire)).unwrap();
     });

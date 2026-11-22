@@ -1,8 +1,12 @@
 <fieldset class="zxs-auth-fields">
   <legend class="zxs-visually-hidden">Web 管理员登录</legend>
-  <label class="zxs-auth-label" for="zxs-login">管理员登录名</label>
-  <input class="zxs-input" id="zxs-login" name="login" required maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false">
-  <label class="zxs-auth-label" for="zxs-password">管理员口令</label>
-  <input class="zxs-input" id="zxs-password" type="password" name="password" required maxlength="1024" autocomplete="current-password">
-  <div class="zxs-auth-actions"><button class="zxs-button" type="submit">登录</button></div>
+  <div class="zxs-auth-field">
+    <label for="zxs-login">登录名</label>
+    <input class="zxs-input" id="zxs-login" name="login" required maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false">
+  </div>
+  <div class="zxs-auth-field">
+    <label for="zxs-password">口令</label>
+    <input class="zxs-input" id="zxs-password" type="password" name="password" required maxlength="1024" autocomplete="current-password">
+  </div>
+  <button class="zxs-button zxs-button-primary" type="submit">登录</button>
 </fieldset>

@@ -12,49 +12,85 @@ fn text(out:&mut String,s:&str){
     for c in s.chars(){match c{'&'=>out.push_str("&amp;"),'<'=>out.push_str("&lt;"),'>'=>out.push_str("&gt;"),
         '"'=>out.push_str("&quot;"),'\''=>out.push_str("&#39;"),_=>out.push(c)}}
 }
-pub(super) fn sign_in(failed:bool,secure:bool)->String{
-    let mut out=String::from(HEAD);
+pub(super) fn sign_in(failed: bool, secure: bool) -> String {
+    let mut out = String::from(HEAD);
     out.push_str("<title>管理员登录 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
-    out.push_str(r#"<main class="authentication-shell" data-zxs-scope><div class="authentication-content"><div class="authentication-card zxs-g4-surface">"#);
+    out.push_str(r#"<main class="authentication-shell" data-zxs-scope><section class="authentication-card zxs-g4-surface" aria-labelledby="zxs-login-title">"#);
     out.push_str(G4_PAINT);
-    out.push_str("<p>ZXS 管理</p><h1>管理员登录</h1><p>请使用 ZXS 账号登录，登录名和口令与 SMB 相同。</p>");
-    if !secure{out.push_str(r#"<p>此连接使用 HTTP，不加密口令。请仅在可信网络登录，或使用你自己的 HTTPS 入口。</p>"#);}
-    if failed{out.push_str(r#"<p class="zxs-error" role="alert">管理员登录名或口令不正确。</p>"#);}
+    out.push_str(r#"<header class="zxs-auth-header"><p class="zxs-product-identity"><span class="zxs-brand-mark" aria-hidden="true"></span><strong>ZXS</strong></p><h1 id="zxs-login-title">管理员登录</h1></header>"#);
+    if !secure {
+        out.push_str(r#"<p class="zxs-notice zxs-notice-warning">HTTP 未加密。请仅在可信网络登录。</p>"#);
+    }
+    if failed {
+        out.push_str(r#"<p class="zxs-notice zxs-notice-error" role="alert">登录名或口令不正确。</p>"#);
+    }
     out.push_str(r#"<form method="post" action="/login" accept-charset="UTF-8">"#);
     out.push_str(include_str!("../../web/login-fields.html"));
-    out.push_str("</form></div></div></main></body></html>");out
+    out.push_str("</form></section></main></body></html>");
+    out
 }
-pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
-    let mut out=String::from(HEAD);out.push_str("<title>管理概览 · ZXS</title></head><body>");
+
+pub(super) fn overview(data: &Overview, csrf: &str) -> io::Result<String> {
+    let mut out = String::from(HEAD);
+    out.push_str("<title>管理概览 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
     out.push_str(include_str!("../../web/shell-start.html"));
-    out.push_str(r#"<section id="zxs-shares" class="zxs-panel"><h2>共享配置</h2>"#);
-    out.push_str(r#"<p>SMB 只有 <code>\\服务器\ZXS</code> 一个业务入口。这里管理首装已选的数据盘目录及其访问模式，不新建共享或暴露宿主路径。</p>"#);
-    if data.shares.is_empty(){out.push_str("<p>本页没有首装已选的数据盘目录。</p>");}
-    else{
-        out.push_str(r#"<div class="zxs-table-frame zxs-g4-surface">"#);
-        out.push_str(G4_PAINT);
-        out.push_str(r#"<div class="zxs-table-scroll" tabindex="0" role="region" aria-label="共享配置表"><table class="zxs-table"><thead><tr><th scope="col">ZXS 下的目录</th><th scope="col">普通卷</th><th scope="col">SMB 设置</th><th scope="col">修改设置</th></tr></thead><tbody>"#);
-        for share in &data.shares{
-            let mode=match share.mode{Mode::Disabled=>"停用",Mode::ReadOnly=>"只读",Mode::ReadWrite=>"读写"};
-            out.push_str("<tr><td><bdi>");text(&mut out,&share.label);
-            write!(out,r#"</bdi></td><td><code>{}</code></td><td>{mode}</td><td><form method="post" action="/shares/mode"><input type="hidden" name="share" value="{}"><input type="hidden" name="previous" value="{}">"#,share.volume,share.share,share.previous).unwrap();
-            hidden(&mut out,csrf)?;out.push_str(r#"<label>新模式 <select name="mode">"#);
-            for (value,label,active) in [("off","停用",Mode::Disabled),("ro","只读",Mode::ReadOnly),("rw","读写",Mode::ReadWrite)]{
-                let selected=if active==share.mode{" selected"}else{""};write!(out,r#"<option value="{value}"{selected}>{label}</option>"#).unwrap();
+    out.push_str(r#"<div class="zxs-page-intro"><h1>管理概览</h1><dl class="zxs-endpoint"><dt>SMB 共享名</dt><dd><code>ZXS</code></dd></dl></div>
+<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><h2 id="zxs-shares-title">共享配置</h2>"#);
+    if data.shares.is_empty() {
+        out.push_str(r#"<p class="zxs-share-frame zxs-share-empty">暂无共享目录。</p>"#);
+    } else {
+        out.push_str(r#"<div class="zxs-share-frame">
+<div class="zxs-share-line zxs-share-head" aria-hidden="true"><span>共享目录</span><span>SMB 权限</span><span>修改权限</span></div>
+<ul class="zxs-share-rows" role="list" aria-labelledby="zxs-shares-title">"#);
+        for share in &data.shares {
+            let (mode, mode_class) = match share.mode {
+                Mode::Disabled => ("停用", "off"),
+                Mode::ReadOnly => ("只读", "ro"),
+                Mode::ReadWrite => ("读写", "rw"),
+            };
+            let volume = share.volume.to_string();
+            let suffix = volume.get(volume.len().saturating_sub(8)..).unwrap_or(&volume);
+            let id = share.share;
+            write!(out, r#"<li class="zxs-share-line">
+<div class="zxs-share-directory"><bdi class="zxs-share-name" id="zxs-share-{id}">"#).unwrap();
+            text(&mut out, &share.label);
+            write!(out, r#"</bdi><details class="zxs-volume-id"><summary>卷 <code>…{suffix}</code></summary>
+<code class="zxs-volume-value">{volume}</code></details></div>
+<span class="zxs-mode zxs-mode-{mode_class}"><span class="zxs-visually-hidden">SMB 权限：</span>{mode}</span>
+<form class="zxs-mode-form" method="post" action="/shares/mode">
+<input type="hidden" name="share" value="{id}"><input type="hidden" name="previous" value="{}">"#, share.previous).unwrap();
+            hidden(&mut out, csrf)?;
+            write!(out, r#"<label class="zxs-visually-hidden" id="zxs-mode-label-{id}" for="zxs-mode-{id}">修改权限</label>
+<select class="zxs-input" name="mode" id="zxs-mode-{id}" aria-labelledby="zxs-mode-label-{id} zxs-share-{id}">"#).unwrap();
+            for (value, label, active) in [
+                ("off", "停用", Mode::Disabled),
+                ("ro", "只读", Mode::ReadOnly),
+                ("rw", "读写", Mode::ReadWrite),
+            ] {
+                let selected = if active == share.mode { " selected" } else { "" };
+                write!(out, r#"<option value="{value}"{selected}>{label}</option>"#).unwrap();
             }
-            out.push_str(r#"</select></label><button type="submit" class="zxs-button">保存</button></form></td></tr>"#);
+            write!(out, r#"</select>
+<button type="submit" class="zxs-button" id="zxs-save-{id}" aria-labelledby="zxs-save-{id} zxs-share-{id}">保存</button></form></li>"#).unwrap();
         }
-        out.push_str("</tbody></table></div></div><p>请使用站点提供的服务器地址。这里显示的是本池授权，不代表网络已上线或磁盘可用。</p>");
+        out.push_str("</ul></div>");
     }
-    if let Some(k)=data.next{write!(out,r##"<p><a href="/?after={k}#zxs-shares">下一页目录</a></p>"##).unwrap();}
-    out.push_str(r#"</section><section id="zxs-versions" class="zxs-panel"><h2>手动提交版本</h2><p>保存只更新工作稿。关闭应用写入后，在此选择文件并明确提交才会生成正式版本。</p><p><a href="/versions">从文件列表选择</a></p></section><section id="zxs-credentials" class="zxs-panel"><h2>Web 与 SMB 共用账号</h2><div class="zxs-account-grid"><article class="zxs-account-card zxs-g4-surface">"#);
+    if let Some(k) = data.next {
+        write!(out, r##"<p class="zxs-pagination"><a class="zxs-button" href="/?after={k}#zxs-shares">下一页目录</a></p>"##).unwrap();
+    }
+    out.push_str(r#"</section><div class="zxs-overview-actions"><section id="zxs-versions" class="zxs-utility-card zxs-g4-surface" aria-labelledby="zxs-versions-title">"#);
     out.push_str(G4_PAINT);
-    out.push_str("<h3>登录名</h3><bdi>");
-    text(&mut out,&data.login);
-    out.push_str(r#"</bdi><small>Web 仅用于管理，SMB 只能按已启用目录的模式访问文件。</small></article></div></section><form method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
-    text(&mut out,csrf);out.push_str(r#""><button class="zxs-button" type="submit">退出管理</button></form></main></div></div></body></html>"#);Ok(out)
+    out.push_str(r#"<h2 id="zxs-versions-title">手动提交版本</h2><p><a class="zxs-button" href="/versions">选择文件</a></p></section>
+<section id="zxs-credentials" class="zxs-utility-card zxs-g4-surface" aria-labelledby="zxs-credentials-title">"#);
+    out.push_str(G4_PAINT);
+    out.push_str(r#"<h2 id="zxs-credentials-title">Web 与 SMB 共用账号</h2><div class="zxs-account-line"><dl><dt>登录名</dt><dd><bdi>"#);
+    text(&mut out, &data.login);
+    out.push_str(r#"</bdi></dd></dl><form method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
+    text(&mut out, csrf);
+    out.push_str(r#""><button class="zxs-button" type="submit">退出登录</button></form></div></section></div></main></div></body></html>"#);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -62,14 +98,38 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
 fn contours_are_inert_local_decoration_on_the_original_native_pages() {
     let login = sign_in(true, false);
     let details = overview(&Overview { login: "A<&".into(), shares: Vec::new(), next: None }, "example").unwrap();
-    for page in [&login, &details] {
+    for (page, tiles) in [(&login, 4), (&details, 8)] {
         assert_eq!(page.matches("id=\"zxs-g4-corner\"").count(), 1);
-        assert_eq!(page.matches("href=\"#zxs-g4-corner\"").count(), 4);
+        assert_eq!(page.matches("href=\"#zxs-g4-corner\"").count(), tiles);
         assert!(page.contains("class=\"zxs-g4-paint\" aria-hidden=\"true\""));
         assert!(!page.contains("<script") && !page.contains(" style="));
     }
     assert!(login.contains("action=\"/login\"") && login.contains("autocomplete=\"current-password\""));
+    assert!(login.contains("HTTP 未加密") && login.contains("role=\"alert\""));
+    assert!(!sign_in(false, true).contains("HTTP 未加密"));
     assert!(details.contains("<bdi>A&lt;&amp;</bdi>") && details.contains("action=\"/logout\""));
+}
+
+#[cfg(test)]
+#[test]
+fn overview_controls_retain_each_original_share_and_previous_operation() {
+    use crate::{VolumeId, identity::ShareId, system::reader::account::overview::Share};
+    let id = ShareId([0x13; 16]);
+    let previous = OperationId([0x24; 16]);
+    let volume = VolumeId([0x35; 16]);
+    let view = Overview {
+        login: "demo".into(),
+        shares: vec![Share { share: id, previous, volume, label: "甲<&".into(), mode: Mode::ReadOnly }],
+        next: Some(id),
+    };
+    let html = overview(&view, "A&").unwrap();
+    assert!(html.contains(&format!(r#"id="zxs-share-{id}">甲&lt;&amp;</bdi>"#)));
+    assert!(html.contains(&format!(r#"<code class="zxs-volume-value">{volume}</code>"#)));
+    assert!(html.contains(&format!(r#"href="/?after={id}#zxs-shares""#)));
+    assert!(html.contains(&format!(r#"name="share" value="{id}""#)));
+    assert!(html.contains(&format!(r#"name="previous" value="{previous}""#)));
+    assert!(html.contains(r#"name="op" value=""#) && html.matches(r#"name="csrf" value="A&amp;""#).count() == 2);
+    assert!(html.contains(r#"name="mode""#) && html.contains(r#"<option value="ro" selected>"#));
 }
 
 fn hidden(out:&mut String,csrf:&str)->io::Result<()>{
@@ -81,7 +141,7 @@ fn hidden(out:&mut String,csrf:&str)->io::Result<()>{
 
 pub(super) fn manual_index(items:&[manual_work::PickerItem],next:Option<FileId>)->Reply{
     let mut out=String::from(HEAD);
-    out.push_str(r#"<title>选择文件 · ZXS</title></head><body><main data-zxs-scope><h1>选择文件</h1><p>仅显示已登记并确认的文件，不探测数据盘或打开正文。</p>"#);
+    out.push_str(r#"<title>选择文件 · ZXS</title></head><body><main data-zxs-scope><h1>选择文件</h1>"#);
     if items.is_empty(){out.push_str("<p>没有已确认的文件。</p>");}
     else{
         out.push_str(r#"<table class="zxs-table"><thead><tr><th>FileId</th><th>卷内路径</th><th>数据卷</th><th>工作稿</th></tr></thead><tbody>"#);
@@ -131,7 +191,6 @@ pub(super) fn version_history(history:&Timeline)->Reply{
         write!(out,"<p>{label} <bdi>").unwrap();text(&mut out,name);
         write!(out,"</bdi> · {role} <code>{volume}</code></p>").unwrap();
     }
-    out.push_str("<p>这里只列已提交的版本，不读取正文或核验磁盘。</p>");
     if history.rows.is_empty(){out.push_str("<p>尚无已提交版本。</p>");}
     else{
         out.push_str(r#"<table class="zxs-table"><thead><tr><th>序号</th><th>版本 ID</th><th>节点 ID</th><th>父节点</th><th>工作修订</th><th>逻辑字节</th></tr></thead><tbody>"#);
@@ -172,7 +231,7 @@ pub(super) fn manual(item:&manual_work::Item,t:manual_work::Target,op:OperationI
     let mut out=String::from(HEAD);
     out.push_str("<title>手动提交版本 · ZXS</title></head><body><main data-zxs-scope><h1>手动提交版本</h1>");
     out.push_str("<p>卷内路径 <bdi>");text(&mut out,&item.name);
-    write!(out,r#"</bdi>，数据卷 <code>{}</code>，当前这一轮的工作修订 {}。</p><p>提交会冻结这一版，不做全量复制。仍有写入时不会提交。</p>
+    write!(out,r#"</bdi>，数据卷 <code>{}</code>，当前这一轮的工作修订 {}。</p><p>提交会冻结这一版。请先停止写入。</p>
 <form method="post" action="/versions/commit"><input type="hidden" name="op" value="{op}"><input type="hidden" name="csrf" value=""#,item.volume,t.revision).unwrap();
     text(&mut out,csrf);
     write!(out,r#""><button class="zxs-button" type="submit">确认提交此版本</button><button type="submit" formaction="{}">只查本次回执</button></form><p><a href="/">返回概览</a></p></main></body></html>"#,
