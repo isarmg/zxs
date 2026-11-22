@@ -1,0 +1,229 @@
+name: Linux disposable guest preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/linux-guest-preflight.yml
+
+permissions: {}
+
+jobs:
+  guest:
+    if: github.repository == 'isarmg/zxs' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Verify the signed guest and prepare local QEMU tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(id -u)" -ne 0
+          work=$(mktemp -d "$RUNNER_TEMP/zxs-guest.XXXXXXXX")
+          printf 'ZXS_GUEST_WORK=%s\n' "$work" >> "$GITHUB_ENV"
+          cd "$work"
+
+          image=ubuntu-26.04-minimal-cloudimg-amd64.img
+          release=https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20261118
+          fetch() {
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --connect-timeout 15 --max-time 240 --retry 2 --max-filesize 600000000 "$release/$1" -o "$1"
+          }
+          fetch SHA256SUMS
+          fetch SHA256SUMS.gpg
+          mkdir gnupg
+          GNUPGHOME="$work/gnupg" gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg \
+            --status-fd 1 SHA256SUMS.gpg SHA256SUMS > image.signature
+          grep -qF '[GNUPG:] VALIDSIG D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81 ' image.signature
+          pin=f6c630c04d4fad012f2c4ed3a21a2b0c0f814f13f6873568da4c31d8df65c12e
+          grep -qxF "$pin *$image" SHA256SUMS
+          fetch "$image"
+          printf '%s *%s\n' "$pin" "$image" | sha256sum -c -
+
+          mkdir -p apt/{etc/empty,lists/partial,archives/partial} tools
+          : > apt/status
+          export APT_CONFIG="$work/apt/config"
+          cat > "$APT_CONFIG" <<EOF
+          Dir::Etc "$work/apt/etc";
+          Dir::Etc::main "/dev/null";
+          Dir::Etc::parts "empty";
+          Dir::Etc::sourceparts "empty";
+          Dir::Etc::sourcelist "sources.list";
+          Dir::State "$work/apt";
+          Dir::State::status "$work/apt/status";
+          Dir::Cache "$work/apt";
+          Dir::Log "$work/apt";
+          Dir::Cache::pkgcache "";
+          Dir::Cache::srcpkgcache "";
+          Acquire::Languages "none";
+          Acquire::Retries "2";
+          APT::Get::Always-Include-Phased-Updates "true";
+          APT::Update::Error-Mode "any";
+          EOF
+          snapshot=https://snapshot.ubuntu.com/ubuntu/20261118T120000Z
+          archive_key=/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+          for suite in noble noble-updates noble-security; do
+            printf 'deb [arch=amd64 signed-by=%s] %s %s main universe\n' "$archive_key" "$snapshot" "$suite"
+          done > apt/etc/sources.list
+          /usr/bin/apt-get update
+          (
+            cd apt/lists
+            cat <<'PINS' | sha256sum -c -
+          cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble_InRelease
+          a4dfe9c58d77db89e8b45240d1cc14a3e6dd9159bc29395aebfe6e893594dccb  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble-updates_InRelease
+          65a6f9c5cf5b8d887e45c2a638b19bedd86e9d3630afee8b3a7b46ea5803dc22  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble-security_InRelease
+          PINS
+          )
+          /usr/bin/apt-get --assume-yes --download-only --no-install-recommends install \
+            qemu-system-x86 ovmf genisoimage e2fsprogs
+          for package in apt/archives/*.deb; do
+            dpkg-deb --extract "$package" tools
+          done
+          sha256sum apt/archives/*.deb
+
+      - name: Boot without a NIC and report private filesystem capabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$ZXS_GUEST_WORK"
+          tools="$PWD/tools"
+          libs="$tools/usr/lib/x86_64-linux-gnu:$tools/lib/x86_64-linux-gnu"
+          loader="$tools/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+          tool_env=(env -i LANG=C PATH=/usr/bin:/bin HOME="$PWD" TMPDIR="$PWD"
+            QEMU_MODULE_DIR="$tools/usr/lib/x86_64-linux-gnu/qemu"
+            MKE2FS_CONFIG="$tools/etc/mke2fs.conf" "$loader" --inhibit-cache --library-path "$libs")
+          for exe in usr/sbin/mke2fs usr/bin/genisoimage usr/bin/qemu-system-x86_64; do
+            "${tool_env[@]}" --list "$tools/$exe" |
+              awk -v base="$tools/" '$2 == "=>" && index($3, base) != 1 {exit 1}'
+          done
+          mkdir -m 0755 empty empty/subtree
+          mkdir seed
+          for role in a b; do
+            truncate -s 64M "$role.ext4"
+            "${tool_env[@]}" "$tools/usr/sbin/mke2fs" -q -t ext4 -d empty -L "zxs-probe-$role" "$role.ext4"
+          done
+          printf '%s\n' 'instance-id: zxs-phase-zero' > seed/meta-data
+          cat > seed/user-data <<'CLOUD'
+          #cloud-config
+          users: []
+          ssh_pwauth: false
+          ssh_genkeytypes: []
+          package_update: false
+          package_upgrade: false
+          write_files:
+            - path: /run/zxs-probe.py
+              permissions: '0644'
+              content: |
+                import errno, fcntl, os
+                from pathlib import Path
+                from uuid import UUID
+
+                def check(condition):
+                    if not condition:
+                        raise RuntimeError("unexpected fixture capability")
+
+                def mount_at(point):
+                    rows = [line.split() for line in Path("/proc/thread-self/mountinfo").read_text().splitlines()]
+                    picked = [row for row in rows if row[4] == point]
+                    check(len(picked) == 1)
+                    return picked[0]
+
+                check(os.getuid() == os.getgid() == 23100)
+                status = dict(line.split(":", 1) for line in Path("/proc/thread-self/status").read_text().splitlines())
+                check(all(status[key].split() == ["23100"] * 4 for key in ("Uid", "Gid")))
+                check(status["Groups"].split() == [] and status["NoNewPrivs"].strip() == "1")
+                check(all(int(status[key], 16) == 0 for key in ("CapInh", "CapPrm", "CapEff", "CapAmb")))
+                check(os.uname().release == "7.0.0-43-generic" and os.uname().machine == "x86_64")
+                check(os.listdir("/sys/class/net") == ["lo"])
+                root = mount_at("/")
+                check(root[3] == "/" and root[root.index("-") + 1] == "ext4")
+                print(f"ZXS-GUEST kernel={os.uname().release} root={root[0]}:{root[1]} self_parent={root[0] == root[1]}", flush=True)
+
+                def original(path):
+                    row = mount_at(path)
+                    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    dev = os.fstat(fd).st_dev
+                    info = dict(line.split(":", 1) for line in Path(f"/proc/thread-self/fdinfo/{fd}").read_text().splitlines())
+                    check(row[0] == info["mnt_id"].strip() and row[2] == f"{os.major(dev)}:{os.minor(dev)}")
+                    check(row[3] == "/" and "ro" in row[5].split(",") and row[row.index("-") + 1] == "ext4")
+                    raw = bytearray(17)
+                    fcntl.ioctl(fd, 0x80111500, raw)
+                    check(raw[0] == 16 and any(raw[1:]))
+                    volume = UUID(bytes=bytes(raw[1:]))
+                    try:
+                        os.getxattr(fd, "user.zxs.volume")
+                    except OSError as err:
+                        check(err.errno == errno.ENODATA)
+                    else:
+                        raise RuntimeError("unexpected fixture label")
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    second = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        fcntl.flock(second, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        raise RuntimeError("independent directory flock not excluded")
+                    os.close(second)
+                    os.close(fd)
+                    print(f"ZXS-GUEST {path} mount={row[0]} dev={row[2]} fsuuid={volume} ro=yes xattr=ENODATA flock=yes", flush=True)
+                    return row, volume
+
+                a, au = original("/mnt/zxs-a")
+                b, bu = original("/mnt/zxs-b")
+                bind = mount_at("/mnt/zxs-bind")
+                check(a[0] != b[0] and a[2] != b[2] and au != bu)
+                check(bind[0] not in (a[0], b[0]) and bind[2] == a[2] and bind[3] == "/subtree" and "ro" in bind[5].split(","))
+                print(f"ZXS-GUEST independent_worker=23100:23100 nnp=1 subtree_mount={bind[0]} root={bind[3]}", flush=True)
+                print("ZXS-GUEST mounted preflight complete", flush=True)
+
+          runcmd:
+            - - /bin/sh
+              - -ec
+              - |
+                exec > /dev/ttyS0 2>&1
+                stage=namespaces
+                trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "ZXS-GUEST failed at %s (exit %s)\n" "$stage" "$rc"; fi' EXIT
+                for ns in pid user mnt net; do
+                  test "$(stat -Lc '%d:%i' "/proc/thread-self/ns/$ns")" = "$(stat -Lc '%d:%i' "/proc/1/ns/$ns")"
+                done
+                test "$(stat -Lc '%d:%i' /)" = "$(stat -Lc '%d:%i' /proc/1/root)"
+                printf '%s\n' 'ZXS-GUEST same initial guest namespaces and root as PID 1'
+                stage=read-only-mounts
+                udevadm settle --timeout=15
+                mkdir /mnt/zxs-a /mnt/zxs-b /mnt/zxs-bind
+                mount -t ext4 -o ro,noload /dev/disk/by-id/virtio-zxs-probe-a /mnt/zxs-a
+                mount -t ext4 -o ro,noload /dev/disk/by-id/virtio-zxs-probe-b /mnt/zxs-b
+                mount --bind /mnt/zxs-a/subtree /mnt/zxs-bind
+                stage=unprivileged-observations
+                setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
+                  python3 -I /run/zxs-probe.py
+          power_state:
+            mode: poweroff
+            timeout: 60
+            condition: true
+          CLOUD
+          "${tool_env[@]}" "$tools/usr/bin/genisoimage" -quiet -volid cidata -joliet -rock -output seed.iso seed
+          firmware="$tools/usr/share/OVMF"
+          cp "$firmware/OVMF_VARS_4M.fd" vars.fd
+          boot_status=0
+          timeout -k 15s 12m "${tool_env[@]}" "$tools/usr/bin/qemu-system-x86_64" \
+            -no-user-config -nodefaults -machine q35 -accel tcg,thread=multi -smp 2 -m 2048 \
+            -nic none -display none -monitor none -serial file:serial.log -no-reboot \
+            -L "$tools/usr/share/qemu" \
+            -drive if=pflash,format=raw,readonly=on,file="$firmware/OVMF_CODE_4M.fd" \
+            -drive if=pflash,format=raw,file=vars.fd \
+            -drive if=virtio,format=qcow2,file=ubuntu-26.04-minimal-cloudimg-amd64.img \
+            -drive if=virtio,format=raw,readonly=on,file=seed.iso \
+            -drive if=none,id=a,format=raw,readonly=on,file=a.ext4 \
+            -device virtio-blk-pci,drive=a,serial=zxs-probe-a \
+            -drive if=none,id=b,format=raw,readonly=on,file=b.ext4 \
+            -device virtio-blk-pci,drive=b,serial=zxs-probe-b || boot_status=$?
+          if test -f serial.log; then
+            tr -d '\r' < serial.log | grep -aE '^ZXS-GUEST ' || true
+          fi
+          test "$boot_status" -eq 0
+          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-GUEST mounted preflight complete')" -eq 1
