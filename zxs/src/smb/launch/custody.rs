@@ -12,7 +12,7 @@ pub(super) use start::{PreparedPair,authorize,prepare_site,stopping,launch_inter
 use super::{Fault,Result,Role,descriptor::{self,UniqueMountId},
     held_open::{self,ProcOpen},kernel::{self,BootSocket,OriginalProcess}};
 use std::{
-    ffi::{CStr,CString},fs::{File,OpenOptions},io::Read,marker::PhantomData,mem::{size_of,zeroed},
+    ffi::{CStr,CString,c_int,c_long},fs::{File,OpenOptions},io::Read,marker::PhantomData,
     os::fd::AsRawFd,os::unix::fs::{MetadataExt,OpenOptionsExt},rc::Rc,
 };
 
@@ -28,6 +28,16 @@ const PIN:i32=libc::O_PATH|libc::O_CLOEXEC|libc::O_NOFOLLOW;
 const DIR:i32=PIN|libc::O_DIRECTORY;
 const SERVICE_CAPS:u64=(1<<0)|(1<<1)|(1<<3)|(1<<6)|(1<<7)|(1<<10);
 const SUPERVISOR_CAPS:u64=SERVICE_CAPS|(1<<5)|(1<<8)|(1<<18)|(1<<19)|(1<<21);
+
+#[repr(C)]
+#[derive(Default)]
+struct OwnProcessIds{pid:i32,uid:u32,euid:u32,gid:u32,egid:u32}
+
+unsafe extern "C" {
+    fn observe_own_task_ids(tid:*mut c_long)->i32;
+    fn observe_own_process_ids(ids:*mut OwnProcessIds);
+    fn observe_waitable_children()->c_int;
+}
 
 #[must_use]
 pub(super) struct Parent{
@@ -153,9 +163,10 @@ fn proc_dir(parent:&File,name:&CStr)->Result<File>{
     Ok(f)
 }
 fn current_task(proc:&File)->Result<File>{
-    // SAFETY: read only actual process and task identifiers.
-    let (pid,tid)=unsafe{(libc::getpid(),libc::syscall(libc::SYS_gettid))};
-    if pid<=1||libc::c_long::from(pid)!=tid{return Err(Fault::Handoff);}
+    let mut tid=0;
+    // SAFETY: one native long destination for the actual task ID.
+    let pid=unsafe{observe_own_task_ids(&raw mut tid)};
+    if pid<=1||c_long::from(pid)!=tid{return Err(Fault::Handoff);}
     // thread-self is a terminal *ordinary symlink*, not a directory.
     // Validate its real bounded spelling, then pin the generated numeric
     // path inside this procfs without following the terminal alias.
@@ -234,18 +245,15 @@ fn bounded(proc:&File,path:&CStr,max:u64)->Result<Vec<u8>>{
     Ok(data)
 }
 fn waitable_children()->Result<()>{
-    // SAFETY: no handler is installed. sigaction only reads current process
-    // disposition into this initialized output. Auto-reaping is not custody.
-    let mut action:libc::sigaction=unsafe{zeroed()};
-    if unsafe{libc::sigaction(libc::SIGCHLD,std::ptr::null(),&raw mut action)}!=0
-        ||action.sa_sigaction!=libc::SIG_DFL||action.sa_flags&libc::SA_NOCLDWAIT!=0{
-        return Err(Fault::Handoff);
-    }
+    // SAFETY: queries SIGCHLD without installing a handler.
+    if unsafe{observe_waitable_children()}!=1{return Err(Fault::Handoff);}
     Ok(())
 }
 fn host_task(proc:&File)->Result<()>{
-    // SAFETY: only reads current process identifiers.
-    let (pid,uid,euid,gid,egid)=unsafe{(libc::getpid(),libc::getuid(),libc::geteuid(),libc::getgid(),libc::getegid())};
+    let mut ids=OwnProcessIds::default();
+    // SAFETY: the C observation only writes the fixed ID record.
+    unsafe{observe_own_process_ids(&raw mut ids);}
+    let OwnProcessIds{pid,uid,euid,gid,egid}=ids;
     if pid<=1||[uid,euid,gid,egid]!=[0;4]{return Err(Fault::Handoff);}
     let id=pid.to_string();
     let current=current_task(proc)?;

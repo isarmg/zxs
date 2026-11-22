@@ -152,6 +152,38 @@ int zxs_claim(int fd, const unsigned char *buf, size_t n) {
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <linux/openat2.h>
+#include <signal.h>
+
+#if defined(__x86_64__) && UINTPTR_MAX == UINT64_MAX
+_Static_assert(sizeof(pid_t) == sizeof(int32_t) && (pid_t)-1 < 0, "signed Linux pid");
+_Static_assert(sizeof(uid_t) == sizeof(uint32_t) && (uid_t)-1 > 0, "unsigned Linux uid");
+_Static_assert(sizeof(gid_t) == sizeof(uint32_t) && (gid_t)-1 > 0, "unsigned Linux gid");
+
+int32_t observe_own_task_ids(long *tid) {
+    pid_t pid = getpid();
+    *tid = syscall(SYS_gettid);
+    return pid;
+}
+
+struct own_process_ids {
+    int32_t pid;
+    uint32_t uid, euid, gid, egid;
+};
+void observe_own_process_ids(struct own_process_ids *ids) {
+    ids->pid = getpid();
+    ids->uid = getuid();
+    ids->euid = geteuid();
+    ids->gid = getgid();
+    ids->egid = getegid();
+}
+
+/* Auto-reaping would discard the original child exit evidence. */
+int observe_waitable_children(void) {
+    struct sigaction action = {0};
+    return sigaction(SIGCHLD, NULL, &action) == 0 &&
+           action.sa_handler == SIG_DFL && !(action.sa_flags & SA_NOCLDWAIT);
+}
+#endif
 
 /* Linux v6.12 UAPI. Older libc headers may omit the unique mount ID bit. */
 #ifndef STATX_MNT_ID_UNIQUE
