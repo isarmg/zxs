@@ -1,4 +1,4 @@
-//! RustCrypto HMAC (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
+//! `RustCrypto` HMAC (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
 //! Modified by ZXS for integration as an internal SMB session module.
 #![forbid(unsafe_code)]
 

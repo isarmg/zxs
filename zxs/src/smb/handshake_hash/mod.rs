@@ -1,4 +1,4 @@
-//! RustCrypto SHA-2 (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
+//! `RustCrypto` SHA-2 (MIT OR Apache-2.0); see ORIGIN.md and the retained notices.
 //! Modified by ZXS to keep the two fixed hashes required by the SMB handshake.
 #![allow(clippy::needless_range_loop)]
 

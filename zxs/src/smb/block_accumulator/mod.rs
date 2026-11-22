@@ -73,7 +73,7 @@ impl<BS: BlockSizes, K: BufferKind> BlockBuffer<BS, K> {
         let pos = self.get_pos();
         // using `self.remaining()` for some reason
         // prevents panic elimination
-        let rem = self.size() - pos;
+        let rem = BS::USIZE - pos;
         let n = input.len();
         // Note that checking condition `pos + n < BlockSize` is
         // equivalent to checking `n < rem`, where `rem` is equal
@@ -162,12 +162,6 @@ impl<BS: BlockSizes, K: BufferKind> BlockBuffer<BS, K> {
         // SAFETY: the `buffer` field is properly initialized up to `self.get_pos()`.
         // `get_pos` never returns position bigger than buffer size.
         unsafe { slice::from_raw_parts(self.buffer.as_ptr().cast(), self.get_pos()) }
-    }
-
-    /// Return size of the internal buffer in bytes.
-    #[inline(always)]
-    pub fn size(&self) -> usize {
-        BS::USIZE
     }
 
     /// Set buffer position.
@@ -263,7 +257,7 @@ impl<BS: BlockSizes> BlockBuffer<BS, Eager> {
         mut compress: impl FnMut(&Array<u8, BS>),
     ) {
         let pos = self.get_pos();
-        let size = self.size();
+        let size = BS::USIZE;
         // Number of bytes remaining in the buffer after `delim` is written to it
         // This never underflows since for eager buffers `size` is always greater than `pos`.
         let pad_len = size - pos - 1;

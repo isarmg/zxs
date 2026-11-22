@@ -189,10 +189,10 @@ const fn double_bits_8_to_16(b: u8) -> u16 {
 const fn double_bits_16_to_32(b: u16) -> u32 {
     let x = b as u32;
     // Spread the 16 bits of x to even positions 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30.
-    let x = (x | (x << 8)) & 0x00FF00FF;
-    let x = (x | (x << 4)) & 0x0F0F0F0F;
-    let x = (x | (x << 2)) & 0x33333333;
-    let x = (x | (x << 1)) & 0x55555555;
+    let x = (x | (x << 8)) & 0x00FF_00FF;
+    let x = (x | (x << 4)) & 0x0F0F_0F0F;
+    let x = (x | (x << 2)) & 0x3333_3333;
+    let x = (x | (x << 1)) & 0x5555_5555;
     // Duplicate each spread bit to its adjacent odd position.
     x | (x << 1)
 }
@@ -205,10 +205,10 @@ const fn double_bits_16_to_32(b: u16) -> u32 {
 const fn quad_bits_16_to_64(b: u16) -> u64 {
     let x = b as u64;
     // Spread the 16 bits of x to positions 0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60.
-    let x = (x | (x << 24)) & 0x000000FF000000FF;
-    let x = (x | (x << 12)) & 0x000F000F000F000F;
-    let x = (x | (x << 6)) & 0x0303030303030303;
-    let x = (x | (x << 3)) & 0x1111111111111111;
+    let x = (x | (x << 24)) & 0x0000_00FF_0000_00FF;
+    let x = (x | (x << 12)) & 0x000F_000F_000F_000F;
+    let x = (x | (x << 6)) & 0x0303_0303_0303_0303;
+    let x = (x | (x << 3)) & 0x1111_1111_1111_1111;
     // Duplicate each spread bit to its adjacent odd position.
     x | (x << 1) | (x << 2) | (x << 3)
 }
@@ -223,7 +223,7 @@ impl Word for u32 {
 
     #[inline(always)]
     fn uniform_row(b: u8) -> u32 {
-        double_bits_8_to_16(b) as u32 * 0x01010101
+        double_bits_8_to_16(b) as u32 * 0x0101_0101
     }
 
     #[inline(always)]
@@ -236,7 +236,7 @@ impl Word for u32 {
 
     #[inline(always)]
     fn byte_repeat(b: u8) -> u32 {
-        (b as u32) * 0x01010101
+        (b as u32) * 0x0101_0101
     }
 
     /// Bitslice two 128-bit input blocks into a 256-bit internal state.
@@ -336,7 +336,7 @@ impl Word for u64 {
 
     #[inline(always)]
     fn byte_repeat(b: u8) -> u64 {
-        (b as u64) * 0x0101010101010101
+        (b as u64) * 0x0101_0101_0101_0101
     }
 
     /// Bitslice four 128-bit input blocks into a 512-bit internal state.
