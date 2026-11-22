@@ -1,5 +1,6 @@
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 use super::RoundKeys;
-use crate::Block;
+use crate::smb::session::block_cipher::Block;
 use cipher::{Array, array::ArraySize, consts::U4, inout::InOut, typenum::Quot};
 use core::ops::Div;
 

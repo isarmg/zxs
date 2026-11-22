@@ -62,9 +62,10 @@ derivation and HMAC-MD5 verifier, including their typed digests, are unchanged.
 
 CMAC and the forward 128-bit doubling it uses are now part of the
 [private SMB packet MAC](../../src/smb/session/packet_mac/ORIGIN.md), not
-separate Cargo packages. Signing retains the same AES-128 implementation,
-macros, buffering, erasure and traits. Unused doubling sizes and inverse
-operations were not moved.
+separate Cargo packages. Signing retains the same buffering, erasure and
+traits. Unused doubling sizes and inverse operations were not moved. The
+used [AES-128 implementation](../../src/smb/session/block_cipher/ORIGIN.md)
+is now a private ZXS module rather than a separate Cargo package.
 
 The pinned SHA-256 and SHA-512 code used by SMB now belongs to the
 [private handshake hash module](../../src/smb/handshake_hash/ORIGIN.md).
@@ -76,7 +77,7 @@ instead of a separate cfg-if package; selector ordering and target cfgs are unch
 
 ## Active paths and build scope
 
-The ZXS workspace excludes the 14 remaining local path packages, so their own
+The ZXS workspace excludes the 13 remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
 graph. The cipher manifest has no default feature; ZXS makes the already active
 stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
@@ -87,8 +88,7 @@ service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> aes, cipher [stream-wrapper, zeroize], cpufeatures [target cfg], digest [block-api, default, mac, zeroize], libc, zeroize
-aes -> cipher, cpubits, cpufeatures [target cfg], zeroize
+zxs -> cipher [stream-wrapper, zeroize], cpubits, cpufeatures [target cfg], digest [block-api, default, mac, zeroize], libc, zeroize
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
 digest -> block-buffer, crypto-common [alias common], ctutils, zeroize
 block-buffer -> hybrid-array, zeroize
@@ -104,8 +104,8 @@ are inside ZXS. Inactive optional/dev declarations are not silently
 vendored or enabled; the now in-module SHA-2 is no longer named in the
 excluded digest development suite. Any feature change needs a new closure review.
 Local path packages have no registry checksum field in Cargo.lock; use
-SOURCES.toml to check their published origin. The highest imported minimum is
-Rust 1.89 (aes, edition 2024), below ZXS's existing Rust 1.100 / pinned
+SOURCES.toml to check their published origin. The highest remaining package minimum is
+Rust 1.87 (ctutils, edition 2024), below ZXS's existing Rust 1.100 / pinned
 1.100.0. [Debian 13's stock rustc](https://packages.debian.org/trixie/rustc)
 is older than the pre-existing project toolchain; this does not change ZXS's
 compiler or authorize a toolchain install.

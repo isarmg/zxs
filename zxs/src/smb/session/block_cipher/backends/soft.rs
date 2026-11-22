@@ -1,5 +1,7 @@
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 #![deny(unsafe_code)]
-use crate::{Block, backends::soft::fixslice::BatchBlocks};
+use crate::smb::session::block_cipher::Block;
+use fixslice::BatchBlocks;
 use cipher::{
     BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend, BlockCipherEncClosure,
     BlockSizeUser, ParBlocks, ParBlocksSizeUser, consts::U16, inout::InOut,
@@ -7,9 +9,6 @@ use cipher::{
 
 #[path = "fixslice/mod.rs"]
 pub(crate) mod fixslice;
-
-#[cfg(feature = "hazmat")]
-pub(crate) use fixslice::hazmat;
 
 use fixslice::{MinWord, NativeBatchSize, NativeWord, Word};
 
@@ -108,18 +107,4 @@ impl_backend!(
     key_size = 16,
     module = aes128,
     doc = "AES-128",
-);
-impl_backend!(
-    name = Aes192,
-    backend = Aes192Backend,
-    key_size = 24,
-    module = aes192,
-    doc = "AES-192",
-);
-impl_backend!(
-    name = Aes256,
-    backend = Aes256Backend,
-    key_size = 32,
-    module = aes256,
-    doc = "AES-256",
 );

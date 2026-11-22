@@ -1,4 +1,5 @@
-use crate::{Block, backends::soft::MinWord};
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
+use crate::smb::session::block_cipher::{Block, backends::soft::MinWord};
 use cipher::{
     Array,
     array::ArraySize,

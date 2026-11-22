@@ -1,3 +1,4 @@
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 use super::{BatchBlocks, State, Word};
 
 /// Replicate a single 16-byte input block across all slots of a `Batch<W>`.
@@ -27,7 +28,7 @@ pub(super) fn delta_swap_2<W: Word>(a: &mut W, b: &mut W, shift: u32, mask: W) {
 }
 
 /// Applies ShiftRows once on an AES state (or key).
-#[cfg(any(not(aes_backend_soft = "compact"), feature = "hazmat"))]
+#[cfg(not(aes_backend_soft = "compact"))]
 #[inline]
 pub(super) fn shift_rows_1<W: Word>(state: &mut [W]) {
     debug_assert_eq!(state.len(), 8);

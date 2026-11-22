@@ -1,4 +1,5 @@
-//! Fixsliced implementations of AES-128, AES-192 and AES-256 (64-bit)
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
+//! Fixsliced implementation of AES-128
 //! adapted from the C implementation.
 //!
 //! All implementations are fully bitsliced and do not rely on any
@@ -16,10 +17,6 @@
 use cipher::array::Array;
 
 pub(super) mod aes128;
-pub(super) mod aes192;
-pub(super) mod aes256;
-#[cfg(feature = "hazmat")]
-pub(crate) mod hazmat;
 
 mod mix_columns;
 mod sbox;
@@ -43,5 +40,5 @@ cpubits::cpubits! {
 }
 
 pub(super) type NativeBatchSize = <NativeWord as Word>::Blocks;
-pub(super) type BatchBlocks<W> = Array<crate::Block, <W as Word>::Blocks>;
+pub(super) type BatchBlocks<W> = Array<crate::smb::session::block_cipher::Block, <W as Word>::Blocks>;
 pub(super) type MinWord = u16;

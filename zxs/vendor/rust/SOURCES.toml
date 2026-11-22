@@ -12,6 +12,7 @@ commit = "9a84f2f8b581f62bcd00e16b5e11a2f6251916ee"
 upstream_subdirectory = "aes"
 archive = "https://static.crates.io/crates/aes/aes-0.9.4.crate"
 sha256 = "fc0fc36d7440d015b45468ba08a21e80e056ebbd014c611c6298bb7503e04bd1"
+internal_module = "src/smb/session/block_cipher"
 
 [[package]]
 name = "block-buffer"

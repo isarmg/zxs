@@ -1,4 +1,5 @@
-use crate::Block;
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
+use crate::smb::session::block_cipher::Block;
 use core::arch::aarch64::{uint8x16_t, vld1q_u8, vst1q_u8};
 
 #[inline]

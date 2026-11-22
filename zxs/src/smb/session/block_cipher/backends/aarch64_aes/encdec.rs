@@ -1,9 +1,10 @@
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 //! AES encryption support
 //!
 //! Note that `aes` target feature implicitly enables `neon`, see:
 //! https://doc.rust-lang.org/reference/attributes/codegen.html#r-attributes.codegen.target_feature.aarch64
 use super::utils::{load_block, store_block};
-use crate::Block;
+use crate::smb::session::block_cipher::Block;
 use cipher::{
     array::{Array, ArraySize},
     inout::InOut,

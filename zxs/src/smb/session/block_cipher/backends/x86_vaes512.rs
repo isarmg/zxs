@@ -1,37 +1,36 @@
+// ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 use super::x86_aes::RoundKeys;
 use cipher::{
     Block, BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend,
     BlockCipherEncClosure, BlockSizeUser, ParBlocks, ParBlocksSizeUser,
-    consts::{U16, U30},
+    consts::{U16, U64},
     inout::InOut,
 };
 
 mod encdec;
 
 pub(crate) type Aes128<'a> = Aes<'a, 11>;
-pub(crate) type Aes192<'a> = Aes<'a, 13>;
-pub(crate) type Aes256<'a> = Aes<'a, 15>;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Aes<'a, const RK: usize> {
     rk: &'a RoundKeys<RK>,
-    rk2: encdec::RoundKeys2<RK>,
+    rk4: encdec::RoundKeys4<RK>,
 }
 
 impl<'a, const RK: usize> Aes<'a, RK> {
     #[inline]
-    #[target_feature(enable = "vaes")]
+    #[target_feature(enable = "avx512f,vaes")]
     pub(crate) fn encrypt(rk: &'a RoundKeys<RK>, f: impl BlockCipherEncClosure<BlockSize = U16>) {
-        let rk2 = encdec::broadcast_keys(rk);
-        let backend = Self { rk, rk2 };
+        let rk4 = encdec::broadcast_keys(rk);
+        let backend = Self { rk, rk4 };
         f.call(&backend)
     }
 
     #[inline]
-    #[target_feature(enable = "vaes")]
+    #[target_feature(enable = "avx512f,vaes")]
     pub(crate) fn decrypt(rk: &'a RoundKeys<RK>, f: impl BlockCipherDecClosure<BlockSize = U16>) {
-        let rk2 = encdec::broadcast_keys(rk);
-        let backend = Self { rk, rk2 };
+        let rk4 = encdec::broadcast_keys(rk);
+        let backend = Self { rk, rk4 };
         f.call(&backend)
     }
 }
@@ -40,27 +39,29 @@ impl<const RK: usize> BlockSizeUser for Aes<'_, RK> {
     type BlockSize = U16;
 }
 
-// Block size of 30 is chosen based on AVX2's 16 YMM registers.
+// Block sizes are chosen based on AVX-512's 32 ZMM registers.
 //
-// - 1 register holds round key
-// - 15 registers hold 2 data blocks
+// Round keys use 11, 13, 15 registers for AES-128/192/256 respectively.
+// It results in 21, 19, 17 registers available for blocks with each register containing 4 blocks.
+// We use the closest power-of-two value.
+// TODO: bench bigger cipher-specific values
 impl<const RK: usize> ParBlocksSizeUser for Aes<'_, RK> {
-    type ParBlocksSize = U30;
+    type ParBlocksSize = U64;
 }
 
 impl<const RK: usize> BlockCipherEncBackend for Aes<'_, RK> {
     #[inline(always)]
     fn encrypt_block(&self, block: InOut<'_, '_, Block<Self>>) {
         // SAFETY: this trait impl is used only by the `Self::encrypt` method marked with
-        // `#[target_feature(enable = "vaes")]`
+        // `#[target_feature(enable = "vaavx512f,vaeses")]`
         unsafe { super::x86_aes::encrypt(self.rk, block) };
     }
 
     #[inline(always)]
     fn encrypt_par_blocks(&self, blocks: InOut<'_, '_, ParBlocks<Self>>) {
         // SAFETY: this trait impl is used only by the `Self::encrypt` method marked with
-        // `#[target_feature(enable = "vaes")]`
-        unsafe { encdec::batch_encrypt(&self.rk2, blocks) };
+        // `#[target_feature(enable = "avx512f,vaes")]`
+        unsafe { encdec::batch_encrypt(&self.rk4, blocks) };
     }
 }
 
@@ -68,14 +69,14 @@ impl<const RK: usize> BlockCipherDecBackend for Aes<'_, RK> {
     #[inline(always)]
     fn decrypt_block(&self, block: InOut<'_, '_, Block<Self>>) {
         // SAFETY: this trait impl is used only by the `Self::decrypt` method marked with
-        // `#[target_feature(enable = "vaes")]`
+        // `#[target_feature(enable = "avx512f,vaes")]`
         unsafe { super::x86_aes::decrypt(self.rk, block) };
     }
 
     #[inline(always)]
     fn decrypt_par_blocks(&self, blocks: InOut<'_, '_, ParBlocks<Self>>) {
         // SAFETY: this trait impl is used only by the `Self::decrypt` method marked with
-        // `#[target_feature(enable = "vaes")]`
-        unsafe { encdec::batch_decrypt(&self.rk2, blocks) };
+        // `#[target_feature(enable = "avx512f,vaes")]`
+        unsafe { encdec::batch_decrypt(&self.rk4, blocks) };
     }
 }

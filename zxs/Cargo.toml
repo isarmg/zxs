@@ -12,7 +12,6 @@ build = "build.rs"
 resolver = "3"
 # Vendored upstream libraries are dependencies, not ZXS workspace/test members.
 exclude = [
-    "vendor/rust/aes-0.9.4",
     "vendor/rust/block-buffer-0.12.1",
     "vendor/rust/cipher-0.5.2",
     "vendor/rust/cmov-0.5.4",
@@ -29,7 +28,7 @@ exclude = [
 ]
 
 [dependencies]
-aes = { version = "=0.9.4", path = "vendor/rust/aes-0.9.4", default-features = false, features = ["zeroize"] }
+cpubits = { version = "=0.1.1", path = "vendor/rust/cpubits-0.1.1" }
 # The private NTLM key-exchange module keeps the former RC4 package's features.
 cipher = { version = "=0.5.2", path = "vendor/rust/cipher-0.5.2", default-features = false, features = ["stream-wrapper", "zeroize"] }
 # Retain the existing default block API and MAC/erasure features.
@@ -43,6 +42,9 @@ cpufeatures = { version = "=0.3.1", path = "vendor/rust/cpufeatures-0.3.1" }
 [lints.rust.unexpected_cfgs]
 level = "warn"
 check-cfg = [
+    'cfg(aes_backend, values("soft"))',
+    'cfg(aes_backend_soft, values("compact"))',
+    'cfg(cpubits, values("16", "32", "64"))',
     'cfg(md5_backend, values("soft"))',
     'cfg(sha2_backend, values("soft", "riscv-zknh"))',
     'cfg(sha2_256_backend, values("aarch64-sha2", "soft", "riscv-zknh", "x86-sha"))',

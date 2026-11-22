@@ -1,6 +1,7 @@
 //! Plaintext SMB 3.1.1, fresh authenticated NTLM session, AES-128-CMAC only.
 //! The original connection owns publication and request admission. There is no
 //! enabled production entry or listener. A signature alone grants no file access.
+mod block_cipher;
 mod der;
 pub(in crate::smb) mod envelope;
 mod keyed_digest;
@@ -19,7 +20,7 @@ use crate::smb::wire::{
     message::{CANCEL, Compound, MAX_COMMANDS, Message, RELATED, SIGNED},
     preauth::RequestKeyContext,
 };
-use aes::Aes128;
+use self::block_cipher::Aes128;
 use crate::smb::handshake_hash::Sha256;
 use digest::{FixedOutput, KeyInit, Mac, Output};
 use self::keyed_digest::Hmac;
