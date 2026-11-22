@@ -1,0 +1,89 @@
+name: Workspace Android compile
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/workspace-android-compile.yml
+      - zxs-workspace/android/src/main/**
+      - zxs-workspace/android/build.gradle
+      - zxs-workspace/android/settings.gradle
+      - zxs-workspace/android/gradle.properties
+
+permissions:
+  contents: read
+
+jobs:
+  javac:
+    if: github.ref == 'refs/heads/main'
+    name: Ubuntu 24.04 x64 / Android Java source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: zxs-workspace/android
+    steps:
+      - name: Checkout this Android source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: zxs-workspace/android
+      - name: Compile release Java sources only
+        run: |
+          set -euo pipefail
+          [[ "$EUID" != 0 && "$(uname -m)" == x86_64 && "$RUNNER_TEMP" == /* && "$RUNNER_TEMP" != / ]]
+          export JAVA_HOME="${JAVA_HOME_17_X64:?The image must provide a stock JDK 17}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          sdk="${ANDROID_HOME:?The image must provide its stock Android SDK}"
+          platform="$sdk/platforms/android-36"
+          tools="$sdk/build-tools/35.0.0"
+          if ! [[ -x "$JAVA_HOME/bin/javac" && -r "$platform/android.jar" && -x "$tools/aapt2" ]] ||
+             ! grep -Eq '^JAVA_VERSION="17(\.[0-9]+)*([+-][^"]*)?"$' "$JAVA_HOME/release" ||
+             ! grep -Fxq 'AndroidVersion.ApiLevel=36' "$platform/source.properties" ||
+             ! grep -Fxq 'Pkg.Revision=2' "$platform/source.properties" ||
+             ! grep -Fxq 'Pkg.Revision=35.0.0' "$tools/source.properties"; then
+            echo "::error::The runner must already have JDK 17, Android API 36 rev 2 and Build Tools 35.0.0. Nothing is installed."
+            exit 1
+          fi
+          if [[ -n "${ANDROID_SDK_ROOT:-}" && "$(realpath -e "$ANDROID_SDK_ROOT")" != "$(realpath -e "$sdk")" ]]; then
+            echo "::error::The runner describes two different SDK roots."
+            exit 1
+          fi
+          printf 'Source %s; runner %s %s\n' "$GITHUB_SHA" "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          java -version
+
+          umask 077
+          scratch="$(mktemp -d "$RUNNER_TEMP/workspace-android.XXXXXXXX")"
+          export GRADLE_USER_HOME="$scratch/gradle-user"
+          export ANDROID_USER_HOME="$scratch/android-user"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --connect-timeout 15 --max-time 240 \
+            https://downloads.gradle.org/distributions/gradle-8.13-bin.zip -o "$scratch/gradle.zip"
+          (
+            cd "$scratch"
+            printf '%s  gradle.zip\n' 20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78 |
+              sha256sum --strict --check -
+            unzip -q gradle.zip
+          )
+          gradle=("$scratch/gradle-8.13/bin/gradle" --no-daemon --no-build-cache --no-configuration-cache
+            --console=plain -Pandroid.builder.sdkDownload=false -Porg.gradle.java.installations.auto-download=false)
+          target=:compileReleaseJavaWithJavac
+          "${gradle[@]}" "$target" --dry-run | tee "$scratch/plan"
+          grep -Fxq "$target SKIPPED" "$scratch/plan"
+          while read -r task state rest; do
+            [[ "$task" == :* && "$state" == SKIPPED && -z "$rest" ]] || continue
+            case "${task##*:}" in
+              assemble*|bundle*|packageRelease|packageDebug|*Apk*|sign*|validateSigning*|install*|uninstall*|connected*|managed*|test*)
+                printf '::error::Out-of-scope Gradle task: %s\n' "$task"
+                exit 1 ;;
+            esac
+          done <"$scratch/plan"
+          "${gradle[@]}" "$target"
+          if [[ ! -d build/intermediates ]] ||
+             [[ -z "$(find build/intermediates -type f -size +0c -path '*/org/zipworkspace/preview/ArchiveActivity.class' -print -quit)" ]]; then
+            echo "::error::The Java compile did not produce ArchiveActivity.class."
+            exit 1
+          fi
+          echo 'Java source compiled. No Android device, instrumentation, signing, APK or upload was requested.'
