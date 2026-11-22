@@ -13,10 +13,14 @@ From `zxs/` with the audited Rust 1.100 toolchain in a separate disposable Linux
 ```sh
 (cd vendor/argon2 && sha256sum -c SHA256SUMS)
 cargo +1.100.0 test --locked --offline --lib bundled_argon2_accepts_exact_legacy_verifiers -- --test-threads=1
-python3 build_release.py /path/to/reviewed/rust-1.100.0/bin
+```
+
+For the full ELF, follow the [standalone release build](../../BUILD.md), then run:
+
+```sh
 readelf -ldW target/standalone/zxs
 ```
 
-The [standalone build](../../BUILD.md) checks the complete ELF interpreter and
-dynamic dependency list. The Argon2 fixture and the loader check alone do not
+The release build checks the complete ELF interpreter and dynamic dependency
+list. The Argon2 fixture and the loader check alone do not
 establish cold launch without Helper, client qualification, or deployment.

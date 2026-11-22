@@ -17,15 +17,16 @@ import tempfile
 import tomllib
 
 sys.dont_write_bytecode = True
-from build_release import RUST, RUST_COMMIT, TARGET as HOST, directory, need, require_name, sha256, text
+from build_release import (BROWSER_ASSETS, BROWSER_AUTHORED as AUTHORED, BROWSER_RECEIPT,
+                           BROWSER_TARGET as TARGET, MAX_BROWSER_FILE, RUST, RUST_COMMIT,
+                           TARGET as HOST, browser_inputs, browser_recipe_inputs, directory,
+                           need, require_name, sha256, text)
 
-TARGET = "wasm32-unknown-unknown"
 STD_SHA = "19b7954d650fc0d22767eceb76b8e03d07ce0d6a9f4234f33c32a17ee8d6d7b9"
 BINDGEN = "0.2.129"
 BINDGEN_ARCHIVE_SHA = "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e"
 BINDGEN_SHA = "fb59da714982a04273e9e4b09a85e523e5dd04de35b1a4a8b1641785ee7a71cf"
-AUTHORED = ("boot.js", "folder.css")
-GENERATED = ("zxs_browser.js", "zxs_browser_bg.wasm")
+GENERATED = BROWSER_ASSETS[len(AUTHORED):]
 OUTPUT = "browser-assets"
 MIB = 1024 * 1024
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
@@ -91,33 +92,6 @@ def supply_crates(lock, cache, vendor):
     need(local == ["zxs-browser"] and f"wasm-bindgen-{BINDGEN}" in crates,
          "unexpected browser workspace or wasm-bindgen lock")
     return crates
-
-
-def browser_inputs(browser, snapshot=None):
-    inputs = {}
-    if snapshot is not None:
-        snapshot.mkdir(mode=0o700)
-    src = browser / "src"
-    need(stat.S_ISDIR(src.lstat().st_mode), "missing browser source directory")
-    for p in (browser / "Cargo.toml", browser / "Cargo.lock",
-              *(browser / name for name in AUTHORED), *sorted(src.rglob("*"))):
-        kind = p.lstat().st_mode
-        if not stat.S_ISDIR(kind):
-            need(stat.S_ISREG(kind), f"not a regular browser source: {p}")
-            name = p.relative_to(browser)
-            if snapshot is None:
-                checksum = sha256(p)
-            else:
-                data = p.read_bytes()
-                staged = snapshot / name
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                with staged.open("xb") as out:
-                    out.write(data)
-                checksum = hashlib.sha256(data).hexdigest()
-            inputs[name.as_posix()] = checksum
-    need(all(name in inputs for name in ("Cargo.toml", "Cargo.lock", "src/lib.rs", *AUTHORED)),
-         "incomplete browser source")
-    return inputs
 
 
 def reject_cargo_config(cwd):
@@ -210,10 +184,10 @@ def compile_browser(source, stage, bindir, std, bindgen_input, cache):
     need({p.name for p in generated.iterdir()} == set(GENERATED), "unexpected wasm-bindgen outputs")
 
     files = {}
-    for name in (*AUTHORED, *GENERATED):
+    for name in BROWSER_ASSETS:
         file = (browser if name in AUTHORED else generated) / name
         info = file.lstat()
-        need(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 8 * MIB, f"invalid browser asset: {name}")
+        need(stat.S_ISREG(info.st_mode) and 0 < info.st_size <= MAX_BROWSER_FILE, f"invalid browser asset: {name}")
         data = file.read_bytes()
         if name.endswith(".wasm"):
             need(data.startswith(b"\0asm\x01\0\0\0"), "invalid WebAssembly module")
@@ -228,7 +202,7 @@ def compile_browser(source, stage, bindir, std, bindgen_input, cache):
          "browser source changed during build")
     receipt = {
         "format": 1, "target": TARGET, "source": inputs, "registry_archives": crates,
-        "recipe": {name: sha256(source / name) for name in ("build_browser.py", "build_release.py")},
+        "recipe": browser_recipe_inputs(source),
         "tools": {
             "rustc": {"version": rust, "sha256": sha256(rustc)},
             "cargo": {"version": cargo_version, "sha256": sha256(cargo)},
@@ -239,7 +213,7 @@ def compile_browser(source, stage, bindir, std, bindgen_input, cache):
         },
         "assets": files,
     }
-    (stage / "ready" / "provenance.json").write_text(
+    (stage / "ready" / BROWSER_RECEIPT).write_text(
         json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
 

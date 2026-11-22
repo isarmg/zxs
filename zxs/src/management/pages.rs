@@ -16,18 +16,18 @@ pub(super) fn sign_in(failed: bool, secure: bool) -> String {
     let mut out = String::from(HEAD);
     out.push_str("<title>管理员登录 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
-    out.push_str(r#"<main class="authentication-shell" data-zxs-scope><section class="authentication-card zxs-g4-surface" aria-labelledby="zxs-login-title">"#);
+    out.push_str(r#"<main class="authentication-shell" data-zxs-scope><div class="authentication-content"><section class="authentication-card zxs-g4-surface" aria-labelledby="zxs-login-title">"#);
     out.push_str(G4_PAINT);
-    out.push_str(r#"<header class="zxs-auth-header"><p class="zxs-product-identity"><span class="zxs-brand-mark" aria-hidden="true"></span><strong>ZXS</strong></p><h1 id="zxs-login-title">管理员登录</h1></header>"#);
+    out.push_str(r#"<h1 id="zxs-login-title" class="zxs-visually-hidden">管理员登录 · ZXS</h1><form method="post" action="/login" accept-charset="UTF-8"><fieldset class="zxs-auth-group"><legend class="zxs-visually-hidden">Web 管理员登录</legend><div class="zxs-auth-fields">"#);
+    out.push_str(include_str!("../../web/login-fields.html"));
+    out.push_str(r#"<div class="zxs-auth-information">"#);
     if !secure {
         out.push_str(r#"<p class="zxs-notice zxs-notice-warning">HTTP 未加密。请仅在可信网络登录。</p>"#);
     }
     if failed {
         out.push_str(r#"<p class="zxs-notice zxs-notice-error" role="alert">登录名或口令不正确。</p>"#);
     }
-    out.push_str(r#"<form method="post" action="/login" accept-charset="UTF-8">"#);
-    out.push_str(include_str!("../../web/login-fields.html"));
-    out.push_str("</form></section></main></body></html>");
+    out.push_str(r#"</div><div class="zxs-auth-actions"><button class="zxs-button" type="submit"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true" focusable="false"><path d="M13 4h7v16h-7M3 12h12m-4-4 4 4-4 4"/></svg>登录</button></div></div></fieldset></form></section></div></main></body></html>"#);
     out
 }
 
@@ -47,12 +47,11 @@ fn render_overview(data: &Overview, csrf: &str, browser: bool) -> io::Result<Str
     out.push_str("<title>管理概览 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
     out.push_str(include_str!("../../web/shell-start.html"));
-    out.push_str(r#"<div class="zxs-page-intro"><h1>管理概览</h1><dl class="zxs-endpoint"><dt>SMB 共享名</dt><dd><code>ZXS</code></dd></dl></div>
-"#);
+    out.push_str(r#"<h1 class="zxs-visually-hidden">管理概览</h1>"#);
     if browser {
         browser_panel(&mut out, data);
     }
-    out.push_str(r#"<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><h2 id="zxs-shares-title">共享配置</h2>"#);
+    out.push_str(r#"<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><div class="zxs-section-heading zxs-flow"><h2 id="zxs-shares-title" class="zxs-row">共享配置</h2><dl class="zxs-endpoint zxs-row"><dt>SMB 共享名</dt><dd><code>ZXS</code></dd></dl></div>"#);
     if data.shares.is_empty() {
         out.push_str(r#"<p class="zxs-share-frame zxs-share-empty">暂无共享目录。</p>"#);
     } else {
@@ -60,10 +59,10 @@ fn render_overview(data: &Overview, csrf: &str, browser: bool) -> io::Result<Str
 <div class="zxs-share-line zxs-share-head" aria-hidden="true"><span>共享目录</span><span>SMB 权限</span><span>修改权限</span></div>
 <ul class="zxs-share-rows" role="list" aria-labelledby="zxs-shares-title">"#);
         for share in &data.shares {
-            let (mode, mode_class) = match share.mode {
-                Mode::Disabled => ("停用", "off"),
-                Mode::ReadOnly => ("只读", "ro"),
-                Mode::ReadWrite => ("读写", "rw"),
+            let mode = match share.mode {
+                Mode::Disabled => "停用",
+                Mode::ReadOnly => "只读",
+                Mode::ReadWrite => "读写",
             };
             let volume = share.volume.to_string();
             let suffix = volume.get(volume.len().saturating_sub(8)..).unwrap_or(&volume);
@@ -73,7 +72,7 @@ fn render_overview(data: &Overview, csrf: &str, browser: bool) -> io::Result<Str
             text(&mut out, &share.label);
             write!(out, r#"</bdi><details class="zxs-volume-id"><summary>卷 <code>…{suffix}</code></summary>
 <code class="zxs-volume-value">{volume}</code></details></div>
-<span class="zxs-mode zxs-mode-{mode_class}"><span class="zxs-visually-hidden">SMB 权限：</span>{mode}</span>
+<span class="zxs-mode zxs-status"><span class="zxs-visually-hidden">SMB 权限：</span>{mode}</span>
 <form class="zxs-mode-form" method="post" action="/shares/mode">
 <input type="hidden" name="share" value="{id}"><input type="hidden" name="previous" value="{}">"#, share.previous).unwrap();
             hidden(&mut out, csrf)?;
@@ -102,16 +101,16 @@ fn render_overview(data: &Overview, csrf: &str, browser: bool) -> io::Result<Str
     out.push_str(G4_PAINT);
     out.push_str(r#"<h2 id="zxs-credentials-title">Web 与 SMB 共用账号</h2><div class="zxs-account-line"><dl><dt>登录名</dt><dd><bdi>"#);
     text(&mut out, &data.login);
-    out.push_str(r#"</bdi></dd></dl><form method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
+    out.push_str(r#"</bdi></dd></dl><form id="zxs-logout" method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
     text(&mut out, csrf);
-    out.push_str(r#""><button class="zxs-button" type="submit">退出登录</button></form></div></section></div></main></div></body></html>"#);
+    out.push_str(r#""></form></div></section></div></main></div></div></body></html>"#);
     Ok(out)
 }
 
 fn browser_panel(out: &mut String, data: &Overview) {
-    out.push_str(r#"<section id="zxs-files" class="zxs-file-manager zxs-g4-surface" aria-labelledby="zxs-folder-title" hidden>"#);
+    out.push_str(r#"<section id="zxs-files" class="zxs-file-manager zxs-stack" aria-labelledby="zxs-folder-title" hidden><div id="zxs-file-corner-source" hidden>"#);
     out.push_str(G4_PAINT);
-    out.push_str(r#"<h2 id="zxs-folder-title" tabindex="-1">目录</h2><div id="zxs-folder-content"></div></section>
+    out.push_str(r#"</div><h2 id="zxs-folder-title" class="zxs-row" tabindex="-1">目录</h2><div id="zxs-folder-content"></div></section>
 <p id="zxs-folder-load-error" role="alert" hidden>目录未加载，请刷新。</p>
 <div id="zxs-browser-roots" hidden"#);
     if let Some(next) = data.next {

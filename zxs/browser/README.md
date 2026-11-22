@@ -6,7 +6,7 @@ Rust/WASM 负责目录导航、层级路径和文件行。登录、共享设置�
 
 ## 服务接口
 
-原生服务只在启用浏览器资源的鉴权概览页引用固定模块。该页放置 `zxs-console-nav`、`zxs-files`、`zxs-folder-title`（`tabindex="-1"`）与 `zxs-folder-content`；`zxs-console-secondary` 是版本和账号面板的共同容器。目录面板沿用 G4 装饰。隐藏的 `zxs-browser-roots` 提供 `[data-zxs-share]` 的已启用共享及文本名，可带 `data-zxs-next`。`zxs-folder-load-error` 为简短的启动错误。
+原生服务只在启用浏览器资源的鉴权概览页引用固定模块。该页提供 `zxs-console-nav`、`zxs-account-link` 和目录正文；`zxs-console-secondary` 是版本及账号面板的共同容器。目录页将 `zxs-file-corner-source` 内的装饰移至列表，路径导航留在列表外。隐藏的 `zxs-browser-roots` 提供 `[data-zxs-share]` 的已启用共享及文本名，可带 `data-zxs-next`。`zxs-folder-load-error` 为简短的启动错误。
 
 `GET /ui/v1/d/<ShareId>/<DirectoryId 或 ->/<页标识或 ->` 每次重新鉴权；页标识属于同会话同目录。成功响应为最多 128 KiB 的 `application/json`，含实际长度：`ancestors` 为根下到当前目录（不含共享根，最多 256 层），`entries` 为本页最多 32 个直接子项（`kind` 为 `directory` 或 `file`），`next` 为页标识或 `null`。每项仅 `id`、`name` 和所需类型。无会话返回 401。仅点击实际链接才打开新的手动提交表单。
 

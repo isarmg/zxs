@@ -1,9 +1,13 @@
 # Build the single Linux executable
 
-From an exact reviewed copy of the ZXS source tree on **Linux x86-64 GNU**:
+From an exact reviewed copy of the ZXS source tree on **Linux x86-64 GNU**,
+first [stage the browser resources](#stage-the-browser-resources-separately)
+and verify the single stage pin independently. Then build the release:
 
 ```sh
-python3 build_release.py /path/to/reviewed/rust-1.100.0/bin
+python3 build_release.py /path/to/reviewed/rust-1.100.0/bin \
+  --browser-assets "$(pwd -P)/target/browser-assets" \
+  --browser-asset-pin "$REVIEWED_STAGE_SHA256"
 ```
 
 The reference Rust compiler is 1.100.0, commit
@@ -15,15 +19,19 @@ recipe refuses mounted/symlinked or untrusted output directories rather
 than writing through them. The build host also needs Python ≥3.11, GNU GCC
 with its static GNU C runtime, GNU ar/ld/readelf and the standard host tools.
 The development reference used Debian GCC 14.2.0, binutils 2.44 and glibc 2.41.
-Record the exact source revision/tree, the toolchain and C archive digests
-printed by the build, and the resulting ELF digest. The printed tool and
+Record the exact source revision/tree, the browser stage pin, the toolchain
+and C archive digests, and the resulting ELF digest printed by the build. The printed tool and
 archive facts are not an authentication of the toolchain. Compare digests only
 with the same complete toolchain and source inputs. The recipe fixes the
 target, Cargo lock/offline mode, archive epoch and build path remapping; the
 C input versions alone are not a promise of equal package bytes.
 
-The recipe builds only the `zxs` binary with local vendored code, including
-SQLite and Argon2. It checks the ELF header and dynamic/program headers
+The release always includes the four browser resources in the same `zxs`
+binary. The build checks that the receipt matches this browser source and
+these two build scripts, then verifies the staged bytes against the separately
+supplied pin. After either source or recipe changes, restage and review the new
+pin; the release has no asset-free fallback. SQLite and Argon2 use local
+vendored code. The recipe checks the ELF header and dynamic/program headers
 without starting the program: x86-64 static PIE, no `PT_INTERP`,
 `DT_NEEDED`, search/audit/filter dependencies or executable stack. It
 writes one build output under this worktree, `target/standalone/zxs`, and
@@ -77,26 +85,30 @@ hashes, tool inputs, and byte count and SHA-256 of each asset. Keep the reviewed
 source revision and upstream license material with the build evidence.
 Reproduce in a clean private worktree using the same complete inputs.
 
-This command builds only the browser component. The native recipe above is
-unchanged. When embedding is enabled, match the receipt to the reviewed build
-inputs, check the four asset hashes and embed only those four files in the ELF.
+This command builds only the browser component. Match the receipt to the
+reviewed build inputs and verify the four asset hashes before approving a
+stage pin. Keep the stage and source worktree under your exclusive control.
+Keep the reviewed pin separate from the stage and supply it explicitly to the
+release command; a digest calculated from an unreviewed directory is not
+approval.
 
-### Check the paired native source
-
-`private-browser-ui` is off by default. To check the opt-in source with the
-same reviewed browser stage and native toolchain above, keep the private
-stage under your exclusive control throughout the check:
-
-```sh
-ZXS_BROWSER_ASSETS=/absolute/path/to/target/browser-assets \
-ZXS_BROWSER_ASSET_PIN='independently-reviewed-stage-sha256' \
-cargo check --lib --locked --offline --features private-browser-ui
-```
-
-The one stage pin covers `boot.js`, `folder.css`, `zxs_browser.js`,
+The binary stage pin covers `boot.js`, `folder.css`, `zxs_browser.js`,
 `zxs_browser_bg.wasm` and `provenance.json`, in that order. Hash the ASCII
 domain `ZXS-BROWSER-ASSET-STAGE-1` plus one NUL, then each file's one-byte
 name length, name bytes, eight-byte big-endian length and 32 raw SHA-256
 bytes. Compare the stage pin against independently reviewed inputs, not a
 value supplied by the stage itself. Only the four fixed resources go into the
-ELF. The native release recipe and independent whole-ELF approval still apply.
+ELF; `provenance.json` is not served.
+
+### Direct Cargo source checks
+
+Plain Cargo still leaves `private-browser-ui` off. For a source-only check of
+the paired code, use the independently reviewed stage and pin:
+
+```sh
+ZXS_BROWSER_ASSETS=/absolute/path/to/target/browser-assets \
+ZXS_BROWSER_ASSET_PIN="$REVIEWED_STAGE_SHA256" \
+cargo check --lib --locked --offline --features private-browser-ui
+```
+
+This check does not produce the supported release artifact.

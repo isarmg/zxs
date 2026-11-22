@@ -28,6 +28,7 @@ struct Console {
     views: [View; 4],
     secondary: Element,
     content: Element,
+    corner_paint: Element,
     shares: Vec<Share>,
     next_share: Option<Id>,
     generation: Cell<u64>,
@@ -38,6 +39,8 @@ pub fn mount() -> Result<(), JsValue> {
     let window = web_sys::window().ok_or_else(missing)?;
     let document = window.document().ok_or_else(missing)?;
     let content = element(&document, "zxs-folder-content")?;
+    let corner_paint = element(&document, "zxs-file-corner-source")?
+        .first_element_child().ok_or_else(missing)?;
     let slot = element(&document, "zxs-console-nav")?;
     let secondary = element(&document, "zxs-console-secondary")?;
     let roots = element(&document, "zxs-browser-roots")?;
@@ -60,15 +63,16 @@ pub fn mount() -> Result<(), JsValue> {
     let next_share = roots.get_attribute("data-zxs-next")
         .map(|value| Id::parse(&value).ok_or_else(missing))
         .transpose()?;
-    let directory_link = link(&document, ROOTS, "目录")?;
+    let directory_link = link(&document, ROOTS, "文件")?;
+    directory_link.set_class_name("zxs-button");
     let views = [
         View::new(&document, Panel::Folders, directory_link.clone())?,
         View::native(&document, &slot, Panel::Shares)?,
         View::native(&document, &slot, Panel::Versions)?,
-        View::native(&document, &slot, Panel::Account)?,
+        View::new(&document, Panel::Account, element(&document, "zxs-account-link")?)?,
     ];
     let console = Rc::new(Console {
-        window, document, views, secondary, content,
+        window, document, views, secondary, content, corner_paint,
         shares, next_share, generation: Cell::new(0),
     });
     let owner = Rc::clone(&console);
@@ -118,13 +122,7 @@ impl Console {
             };
             view.show(visible, active)?;
         }
-        let one = matches!(selected, Some(Panel::Versions | Panel::Account));
-        visibility(&self.secondary, one || selected.is_none())?;
-        if one {
-            self.secondary.set_attribute("data-zxs-single", "")?;
-        } else {
-            self.secondary.remove_attribute("data-zxs-single")?;
-        }
+        visibility(&self.secondary, matches!(selected, Some(Panel::Versions | Panel::Account)) || selected.is_none())?;
         if focus && let Some(view) = self.views.iter().find(|v| selected == Some(v.kind)) {
             view.heading.set_attribute("tabindex", "-1")?;
             view.heading.focus()?;
@@ -191,7 +189,7 @@ impl Console {
                 let folder = Folder { share: share.id, parent: None, page: None };
                 self.entry(&list, &share.label, Kind::Directory, &folder.fragment())?;
             }
-            self.content.append_child(&list)?;
+            self.show_rows(&list, false)?;
         }
         if let Some(next) = self.next_share {
             let a = self.button(&format!("/?after={next}{ROOTS}"), "下一页共享")?;
@@ -208,6 +206,7 @@ impl Console {
             self.message(message, false)?;
         } else {
             let list = self.list()?;
+            let actions = page.entries.iter().any(|row| row.kind == Kind::File);
             for row in page.entries {
                 let href = match row.kind {
                     Kind::Directory => folder.destination(Some(row.id)).fragment(),
@@ -220,7 +219,7 @@ impl Console {
                     line.append_child(&button)?;
                 }
             }
-            self.content.append_child(&list)?;
+            self.show_rows(&list, actions)?;
         }
         if folder.page.is_some() || page.next.is_some() {
             let pager = node(&self.document, "nav", "zxs-file-pagination")?;
@@ -276,6 +275,21 @@ impl Console {
         Ok(())
     }
 
+    fn show_rows(&self, rows: &Element, actions: bool) -> Result<(), JsValue> {
+        let panel = node(&self.document, "div", "zxs-file-list-panel zxs-g4-surface")?;
+        panel.append_child(&self.corner_paint)?;
+        let heading = node(&self.document, "div", "zxs-file-row zxs-file-list-heading")?;
+        heading.set_attribute("aria-hidden", "true")?;
+        for title in ["名称", "类型", if actions { "操作" } else { "" }] {
+            let column = text(&self.document, "span", title)?;
+            heading.append_child(&column)?;
+        }
+        panel.append_child(&heading)?;
+        panel.append_child(rows)?;
+        self.content.append_child(&panel)?;
+        Ok(())
+    }
+
     fn list(&self) -> Result<Element, JsValue> {
         let list = node(&self.document, "ul", "zxs-file-list")?;
         list.set_attribute("role", "list")?;
@@ -294,6 +308,12 @@ impl Console {
         let name = text(&self.document, "bdi", name)?;
         a.append_child(&name)?;
         row.append_child(&a)?;
+        let category = text(&self.document, "span", match kind {
+            Kind::Directory => "目录",
+            Kind::File => "文件",
+        })?;
+        category.set_class_name("zxs-file-type");
+        row.append_child(&category)?;
         list.append_child(&row)?;
         Ok(row)
     }

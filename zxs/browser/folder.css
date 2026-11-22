@@ -1,37 +1,51 @@
-.zxs-file-manager {
-  --zxs-g4-extent: 2rem;
-  --zxs-g4-fill: var(--zxs-bg-panel);
-  background: var(--zxs-g4-fill);
-  border-radius: var(--zxs-g4-extent);
-  min-width: 0;
-  padding: .9rem 1rem;
-}
-#zxs-files[hidden], #zxs-shares[hidden], #zxs-versions[hidden], #zxs-credentials[hidden],
-#zxs-console-secondary[hidden], #zxs-folder-load-error[hidden] { display: none; }
-#zxs-console-secondary[data-zxs-single] { grid-template-columns: minmax(0, 1fr); }
-.zxs-header-navigation a[aria-current="page"] { color: var(--zxs-link); background: var(--zxs-bg-hover); }
-#zxs-folder-content { display: grid; gap: .7rem; margin-block-start: .6rem; }
+.zxs-file-manager { min-width: 0; gap: 0; }
+.zxs-file-manager > h2 { padding-inline: var(--zxs-list-content-inset); }
+#zxs-folder-content { display: grid; grid-template-columns: minmax(0, 1fr); }
 #zxs-folder-content > .zxs-button { justify-self: start; }
-.zxs-breadcrumb ol, .zxs-file-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .65rem; }
+.zxs-breadcrumb ol, .zxs-file-pagination { display: flex; align-items: center; flex-wrap: wrap; }
 .zxs-breadcrumb ol, .zxs-file-list { list-style: none; padding: 0; margin: 0; }
-.zxs-breadcrumb li { display: flex; align-items: center; gap: .65rem; min-width: 0; overflow-wrap: anywhere; }
-.zxs-breadcrumb li + li::before { content: "/"; color: var(--zxs-text-muted); }
-.zxs-breadcrumb a, .zxs-file-name { display: inline-flex; align-items: center; gap: .5rem; min-width: 0; }
-.zxs-breadcrumb a { text-decoration: none; }
-.zxs-breadcrumb a:hover, .zxs-file-name:hover { text-decoration: underline; }
-.zxs-file-list li + li { border-block-start: 1px solid var(--zxs-line); }
-.zxs-file-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
-  gap: .5rem; min-width: 0; padding-block: .25rem;
+.zxs-breadcrumb li {
+  display: flex; align-items: center; gap: .25em; min-width: 0;
+  min-height: var(--zxs-control-height); margin-inline-end: .25em; overflow-wrap: anywhere;
 }
-.zxs-file-name { min-height: var(--zxs-control-height); text-decoration: none; padding: .25rem; }
+.zxs-breadcrumb li + li::before { content: "/"; color: var(--zxs-text-muted); }
+.zxs-breadcrumb a, .zxs-file-name { display: inline-flex; align-items: center; gap: .5em; min-width: 0; }
+.zxs-breadcrumb a {
+  min-height: var(--zxs-control-height); padding-inline: var(--zxs-list-content-inset);
+  text-decoration: none;
+}
+.zxs-breadcrumb a:hover, .zxs-file-name:hover { text-decoration: underline; }
+
+.zxs-file-list-panel {
+  --zxs-g4-extent: var(--zxs-contour-panel);
+  --zxs-g4-fill: var(--zxs-bg-panel);
+  background: var(--zxs-g4-fill); border-radius: var(--zxs-g4-extent); min-width: 0;
+}
+.zxs-file-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 5em 8em;
+  min-height: var(--zxs-control-height); align-items: center;
+  gap: 0 .5em; min-width: 0; padding-inline: var(--zxs-list-content-inset);
+  border-radius: var(--zxs-contour-panel);
+}
+.zxs-file-list-heading { color: var(--zxs-text-muted); }
+.zxs-file-name { min-height: var(--zxs-control-height); text-decoration: none; }
 .zxs-file-name > bdi { min-width: 0; overflow-wrap: anywhere; }
-.zxs-file-icon { flex: 0 0 auto; }
+.zxs-file-icon { flex: none; }
 .zxs-file-icon--folder { color: var(--zxs-link); }
-.zxs-file-icon--file, .zxs-file-empty { color: var(--zxs-text-muted); }
+.zxs-file-icon--file, .zxs-file-type, .zxs-file-empty { color: var(--zxs-text-muted); }
+.zxs-file-empty { padding: var(--zxs-list-content-inset); }
+.zxs-file-row > .zxs-button { justify-self: start; padding-inline: 0; }
+@media (hover: hover) and (pointer: fine) {
+  .zxs-file-list .zxs-file-row:hover { background: var(--zxs-bg-hover); }
+}
+@media (max-width: 32rem) {
+  .zxs-file-list-heading { display: none; }
+  .zxs-file-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .zxs-file-row > .zxs-button { grid-column: 1 / -1; justify-self: end; }
+}
 @supports (container-type: size) and (width: 1cqmin) {
-  .zxs-file-manager.zxs-g4-surface { background-color: transparent; }
+  .zxs-file-list-panel.zxs-g4-surface { background-color: transparent; }
 }
 @media (forced-colors: active) {
-  .zxs-file-manager.zxs-g4-surface { background: Canvas; border: 1px solid CanvasText; }
+  .zxs-file-list-panel.zxs-g4-surface { background: Canvas; border: 1px solid CanvasText; }
 }
