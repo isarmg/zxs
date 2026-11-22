@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/workspace-linux.yml
       - zxs-workspace/tests/qualification/hosted_linux.py
+      - zxs-workspace/tests/qualification/hosted-linux-xcb.sh
       - zxs-workspace/tests/qualification/test_linux_member_copy.py
 
 permissions:
@@ -75,12 +76,17 @@ jobs:
           "${pip[@]}" download --index-url https://pypi.org/simple --dest "$WORKSPACE_SCRATCH/wheels" "${lock[@]}"
           "${pip[@]}" install --no-index --find-links "$WORKSPACE_SCRATCH/wheels" "${lock[@]}"
           "${pip[@]}" check
+      - name: Stage and verify official Ubuntu XCB and GL dispatch libraries
+        env:
+          WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
+        run: /usr/bin/bash tests/qualification/hosted-linux-xcb.sh "$WORKSPACE_SCRATCH"
       - name: Exercise XCB Qt windows on a virtual display
         env:
           WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
         run: |
           umask 077
           /usr/bin/xvfb-run -a -s '-screen 0 1280x960x24 -nolisten tcp' \
+            /usr/bin/env "LD_LIBRARY_PATH=$WORKSPACE_SCRATCH/qt-xcb/runtime/usr/lib/x86_64-linux-gnu:$WORKSPACE_SCRATCH/qt-xcb/runtime/lib/x86_64-linux-gnu" \
             "$WORKSPACE_SCRATCH/venv/bin/python" -I -B -X utf8 \
             tests/qualification/hosted_linux.py virtual-qt "$WORKSPACE_SCRATCH"
       - name: Record qualification scope
