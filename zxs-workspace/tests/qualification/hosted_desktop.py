@@ -36,6 +36,7 @@ WINDOWS = (
     "test_windows_snapshot.DataPlane",
 )
 MACOS = (
+    "test_macos_read.Boundary.test_actual_desktop_picker_and_job_leave_other_threads_untouched_on_restore_failure",
     "test_macos_read.ComparisonBoundary.test_real_local_volume_compares_exact_files_and_restores_both_thread_policies",
     "test_macos_read.ComparisonBoundary.test_real_apfs_pair_retains_originals_and_accepts_no_case_alias",
     "test_macos_snapshot_save.FreshFolderSnapshot.test_fresh_standard_zip_has_new_first_generation_and_preserves_empty_directory",

@@ -11,6 +11,14 @@ from .selection import (Selection, StoreSelection, duplicate_selected_view, open
 from .widgets import Table, button, confirm, label
 
 
+def _pin_original(choose, *args, **kwargs):
+    # Pickers remain on the GUI thread; only the native original checks move.
+    if sys.platform == "darwin":
+        from ..macos_read import in_disposable_thread
+        return in_disposable_thread(choose, *args, **kwargs)
+    return choose(*args, **kwargs)
+
+
 class ArchivePane(QWidget):
     FILE_PAGE = 100
 
@@ -243,13 +251,13 @@ class ArchivePane(QWidget):
             source = QFileDialog.getExistingDirectory(self, "选择要制作快照的原目录", "",
                                                       opts | QFileDialog.Option.ShowDirsOnly)
             if not source or not current(): return
-            folder = Folder.choose(source)  # Pin the original before the next chooser.
+            folder = _pin_original(Folder.choose, source)  # Pin the original before the next chooser.
             original = folder.evidence.path
             suggest = str(original.parent/(original.name + ".zxs")) if original.name else ""
             name, _ = QFileDialog.getSaveFileName(self, "选择原目录之外的全新 .zxs 文件", suggest,
                                                  "目录快照 (*.zxs *.ZXS)", options=opts)
             if not name or not current(): return
-            plan = FolderSnapshot(folder, name)
+            plan = _pin_original(FolderSnapshot, folder, name)
             folder = None
             queued = submit("正在查原目录和新名称；没有写入…", plan.review, reviewed)
             if not queued: finish("窗口正在执行另一项；未创建快照。")
@@ -462,7 +470,7 @@ class ArchivePane(QWidget):
                 QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks)
         directory = QFileDialog.getExistingDirectory(self, "选择同一 APFS 卷上仅本人使用的私有目的目录", "", opts)
         if not directory or selected is not self.selection: return
-        try: plan = SnapshotCopy(selected, directory, as_zip=as_zip)
+        try: plan = _pin_original(SnapshotCopy, selected, directory, as_zip=as_zip)
         except Exception as error:
             self.owner.inform(str(error))
             return

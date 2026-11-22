@@ -4,6 +4,7 @@ from contextlib import ExitStack, contextmanager
 import ctypes as C
 import errno
 import hashlib
+from importlib.util import find_spec
 import os
 from pathlib import Path
 import struct
@@ -115,6 +116,54 @@ class Boundary(unittest.TestCase):
             self.assertIsNot(later, failed)
             self.assertFalse(later.is_alive())
             self.assertEqual(shared.submit(lambda: api.value).result(), 0)
+
+    @unittest.skipUnless(sys.platform == "darwin" and os.environ.get("ZIP_WORKSPACE_GUI_TESTS") == "1"
+                         and find_spec("PySide6"), "needs the macOS Qt desktop fixture")
+    def test_actual_desktop_picker_and_job_leave_other_threads_untouched_on_restore_failure(self):
+        from PySide6.QtWidgets import QApplication
+        from zipworkspace.desktop.archive_pane import _pin_original
+        from zipworkspace.desktop.window import Window
+
+        app = QApplication.instance() or QApplication([])
+        window = Window()
+        self.addCleanup(window.close)
+        api = ThreadIO(0)
+        presented, errors = [], []
+
+        def operation():
+            with mac.no_materialization():
+                self.assertEqual(api.value, 1)
+                return current_thread()
+
+        def pool_state():
+            return window.pool.submit(lambda: (current_thread(), api.value)).result(timeout=5)
+
+        before = pool_state()
+        with patch.object(mac, "_api", return_value=api.calls):
+            api.fail = 0
+            with self.assertRaisesRegex(Rejected, "无法恢复"):
+                _pin_original(operation)
+            future = window.job("policy failure fixture", operation, presented.append, failed=errors.append)
+            with self.assertRaisesRegex(Rejected, "无法恢复"):
+                future.result(timeout=5)
+            window.poll()
+            self.assertFalse(presented)
+            self.assertEqual(len(errors), 1)
+            self.assertIsNone(window.pending)
+            for retired in api.failed_restorations:
+                self.assertIsNot(retired, current_thread())
+                self.assertIsNot(retired, before[0])
+                self.assertFalse(retired.is_alive())
+            self.assertEqual(len(api.failed_restorations), 2)
+            self.assertEqual(api.value, 0)
+            self.assertEqual(pool_state(), before)
+            api.fail = None
+            later = window.job("policy success fixture", operation, presented.append).result(timeout=5)
+            window.poll()
+            self.assertEqual(presented, [later])
+            self.assertNotIn(later, api.failed_restorations)
+            self.assertFalse(later.is_alive())
+            self.assertEqual(pool_state(), before)
 
     def test_fixed_returned_volume_attributes_require_the_actual_positive_local_flag(self):
         api = ThreadIO(1)

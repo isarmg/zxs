@@ -176,7 +176,12 @@ class Window(QMainWindow):
         self.progress.show()
         self.timer.start(125)
         try:
-            future = self.pool.submit(work)
+            if sys.platform == "darwin":
+                # A failed native policy restore must not affect another job on this pool.
+                from ..macos_read import in_disposable_thread
+                future = self.pool.submit(lambda: in_disposable_thread(work))
+            else:
+                future = self.pool.submit(work)
         except BaseException:
             self.timer.stop(); self.progress.hide(); self.tabs.setEnabled(True)
             raise
