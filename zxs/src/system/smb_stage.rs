@@ -26,11 +26,16 @@ impl Charge{
             .map_err(|_|full())?;
         self.writer.set(writer);self.amount+=extra;Ok(())
     }
+    fn release_above(&mut self,end:u64){
+        let released=self.amount.saturating_sub(end);
+        if released!=0{
+            self.amount-=released;
+            self.writer.set(self.writer.get()-released);
+            RAM.fetch_sub(released,Ordering::AcqRel);
+        }
+    }
 }
-impl Drop for Charge{fn drop(&mut self){if self.amount!=0{
-    self.writer.set(self.writer.get()-self.amount);
-    RAM.fetch_sub(self.amount,Ordering::AcqRel);
-}}}
+impl Drop for Charge{fn drop(&mut self){self.release_above(0);}}
 struct Spool{file:File,charge:Charge,ram:bool,len:u64,poisoned:bool} // close FD before releasing RAM budget
 impl Spool {
     fn new(dir:&HeldDir,writer:Rc<Cell<u64>>)->io::Result<Self>{
@@ -69,6 +74,17 @@ impl Spool {
             if self.file.set_len(old).is_ok(){self.len=old;}else{self.poisoned=true;}
         }
     }
+    /// Only the already selected contiguous prefix is handed to SAVE. The
+    /// unselected tail is neither needed by this draft nor visible to readers.
+    fn trim_unselected_tail(&mut self,end:u64)->io::Result<()>{
+        if self.poisoned||end>self.len{return Err(invalid("invalid staged input prefix"));}
+        if end<self.len{
+            self.file.set_len(end)?;
+            self.len=end;
+            self.charge.release_above(end);
+        }
+        Ok(())
+    }
     fn place(&mut self,at:u64,data:&[u8])->io::Result<()>{
         if at==self.len{return self.append(data);}
         if self.poisoned||at.checked_add(data.len() as u64).is_none_or(|end|end>self.len){
@@ -94,9 +110,13 @@ fn append_part(parts:&mut Vec<Part>,next:Part)->io::Result<()>{
     if parts.len()>=SPANS{return Err(invalid("too many effective staged intervals"));}
     parts.try_reserve(1).map_err(|_|full())?;parts.push(next);Ok(())
 }
-fn physically_unused(parts:&[Part],length:u64,needed:u64)->io::Result<Option<u64>>{
-    let used=parts.iter().try_fold(0u64,|n,p|n.checked_add(p.len()).ok_or_else(full))?;
-    if length.checked_sub(used).filter(|n|*n>=needed).is_none(){return Ok(None);}
+fn selected_bytes(parts:&[Part])->u64{
+    // Logical intervals never overlap and all fall inside an i64-bounded EOF.
+    parts.iter().copied().map(Part::len).sum()
+}
+fn physically_unused(parts:&[Part],length:u64,live:u64,needed:u64)->io::Result<Option<u64>>{
+    let available=length.checked_sub(live).ok_or_else(||invalid("selected bytes exceed the staging spool"))?;
+    if available<needed{return Ok(None);}
     let mut by_offset=Vec::new();by_offset.try_reserve_exact(parts.len()).map_err(|_|full())?;
     for p in parts{by_offset.push((p.stored,p.stored.checked_add(p.len()).ok_or_else(full)?));}
     by_offset.sort_unstable();let mut at=0;
@@ -201,12 +221,13 @@ impl<'t,'s,'r> Staged<'t,'s,'r>{
 struct DraftStage{
     spool:Spool,
     eof:u64,retained:u64,parts:Vec<Part>,
+    live_bytes:u64, // exact selected byte count; holes in the logical file do not count
     flush_op:Option<OperationId>,refresh_op:Option<OperationId>,
 }
 struct FlushInput<'a>{op:OperationId,retained:u64,eof:u64,spans:&'a[Span],input:&'a File}
 impl DraftStage{
     fn new(Scratch(spool):Scratch,eof:u64)->Self{
-        Self{spool,eof,retained:eof,parts:Vec::new(),flush_op:None,refresh_op:None}
+        Self{spool,eof,retained:eof,parts:Vec::new(),live_bytes:0,flush_op:None,refresh_op:None}
     }
     fn refresh_with<T>(&mut self,select:impl FnOnce()->io::Result<(T,Option<OperationId>,u64)>)->io::Result<Option<T>>{
         if let Some(original)=self.refresh_op{
@@ -227,10 +248,11 @@ impl DraftStage{
         let hi=offset.checked_add(data.len() as u64).filter(|v|*v<=i64::MAX as u64).ok_or_else(||invalid("SMB WRITE range overflow"))?;
         if data.is_empty(){return check();}
         let old=self.spool.len;
-        let stored=physically_unused(&self.parts,old,data.len() as u64)?.unwrap_or(old);
+        let stored=physically_unused(&self.parts,old,self.live_bytes,data.len() as u64)?.unwrap_or(old);
         if stored==old && !self.spool.ram && free()?<data.len() as u64{return Err(full());}
         let p=Part{lo:offset,hi,stored};
         if self.parts.last().is_none_or(|last|last.hi<=offset){
+            let live=self.live_bytes.checked_add(p.len()).ok_or_else(full)?;
             let merge=self.parts.last().is_some_and(|last|last.hi==offset&&last.stored+last.len()==p.stored);
             if !merge{
                 if self.parts.len()>=SPANS{return Err(invalid("too many effective staged intervals"));}
@@ -240,19 +262,27 @@ impl DraftStage{
             if let Err(e)=check(){self.spool.discard_tail(old);return Err(e);}
             if merge{self.parts.last_mut().expect("last staged interval").hi=hi;}
             else{self.parts.push(p);}
+            self.live_bytes=live;
         }else{
             let next=overlay(&self.parts,p)?;
+            let live=selected_bytes(&next);
             self.spool.place(stored,data)?;
             if let Err(e)=check(){self.spool.discard_tail(old);return Err(e);}
             self.parts=next;
+            self.live_bytes=live;
         }
         self.eof=self.eof.max(hi);Ok(())
     }
     fn resize(&mut self,eof:u64,check:impl FnOnce()->io::Result<()>)->io::Result<()>{
         if eof>i64::MAX as u64{return Err(invalid("SMB EOF overflow"));}
         check()?;
-        self.parts.truncate(self.parts.partition_point(|p|p.lo<eof));
+        let keep=self.parts.partition_point(|p|p.lo<eof);
+        let removed=selected_bytes(&self.parts[keep..])+
+            self.parts[..keep].last().map_or(0,|last|last.hi.saturating_sub(eof));
+        let live=self.live_bytes.checked_sub(removed).ok_or_else(||invalid("selected bytes do not cover the discarded draft intervals"))?;
+        self.parts.truncate(keep);
         if let Some(last)=self.parts.last_mut(){last.hi=last.hi.min(eof);}
+        self.live_bytes=live;
         self.retained=self.retained.min(eof);self.eof=eof;Ok(())
     }
     fn gap(&self,out:&mut Vec<u8>,used:&mut Used,lo:u64,hi:u64,
@@ -293,7 +323,12 @@ impl DraftStage{
         }
         let mut packed=None;
         if self.spool.poisoned{return Err(invalid("cannot flush failed private SMB staging"));}
-        if !contig||length!=self.spool.len{
+        if length!=self.live_bytes{return Err(invalid("selected byte count does not match the staged input map"));}
+        if contig{
+            // Reuse the same anonymous spool, including a strict prefix
+            // after SET EOF. Never charge RAM for a redundant packed copy.
+            self.spool.trim_unselected_tail(length)?;
+        }else{
             // Copy only effective changed ranges if needed, never base
             // file contents or an unused staging tail.
             let mut fresh=Spool::new(original,self.spool.charge.writer.clone())?;
@@ -319,7 +354,7 @@ impl DraftStage{
         // fresh read view is unavailable. Block subsequent data work until
         // the committed Op is positively rebound; never read the old draft.
         drop(packed);self.spool=empty;self.retained=self.eof;
-        self.parts.clear();self.flush_op=None;self.refresh_op=Some(op);
+        self.parts.clear();self.live_bytes=0;self.flush_op=None;self.refresh_op=Some(op);
         Ok(true)
     }
 }
@@ -329,6 +364,102 @@ mod tests{
     use super::*;
     use crate::{system::reader::{InitialReader,ordinary_pool,smb::SmbSession},test_support::PrivateTemp};
     use std::{fs::OpenOptions,os::unix::fs::OpenOptionsExt};
+
+    fn ram_draft(eof:u64)->DraftStage{
+        // SAFETY: fixed NUL-terminated name; a successful memfd_create
+        // hands this fixture one fresh owned descriptor.
+        let fd=unsafe{libc::memfd_create(c"zxs-stage-test".as_ptr(),libc::MFD_CLOEXEC)};
+        assert!(fd>=0);
+        let file=unsafe{File::from_raw_fd(fd)};
+        file.set_permissions(Permissions::from_mode(0o600)).unwrap();
+        let charge=Charge{amount:0,writer:Rc::new(Cell::new(0))};
+        DraftStage::new(Scratch(Spool{file,charge,ram:true,len:0,poisoned:false}),eof)
+    }
+
+    #[test]
+    fn truncated_ram_prefix_flushes_the_same_inode_within_the_original_quota(){
+        let temp=PrivateTemp::under(&std::env::temp_dir());
+        let parent=HeldDir::open(&temp.0).unwrap();
+        let mut stage=ram_draft(0);
+        let chunk=vec![0x42;1024*1024];
+        let size=chunk.len() as u64;
+        for part in 0..24{
+            stage.write(part*size,&chunk,||Ok(()),||unreachable!()).unwrap();
+        }
+        assert_eq!(stage.spool.charge.amount,24*size);
+        let final_size=20*size;
+        stage.resize(final_size,||Ok(())).unwrap();
+        let inode=stage.spool.file.metadata().unwrap().ino();
+        let quota=stage.spool.charge.writer.clone();
+        let mut original=None;
+        let failed=stage.flush(0,&parent,||unreachable!(),|batch|{
+            let found=batch.input.metadata().unwrap();
+            assert_eq!((found.ino(),found.len(),quota.get()),(inode,final_size,final_size));
+            assert_eq!(batch.eof,final_size);
+            let mut tail=[0];
+            batch.input.read_exact_at(&mut tail,final_size-1).unwrap();
+            assert_eq!(tail,[0x42]);
+            original=Some(batch.op);
+            Err(io::ErrorKind::WouldBlock.into())
+        });
+        assert_eq!(failed.unwrap_err().kind(),io::ErrorKind::WouldBlock);
+        assert_eq!(stage.flush_op,original);
+        assert_eq!((stage.spool.len,stage.live_bytes),(final_size,final_size));
+        assert!(stage.flush(0,&parent,||unreachable!(),|batch|{
+            assert_eq!(Some(batch.op),original);
+            assert_eq!(batch.input.metadata().unwrap().ino(),inode);
+            Ok(())
+        }).unwrap());
+        assert_eq!(stage.refresh_op,original);
+        assert_eq!((stage.spool.len,stage.live_bytes,quota.get()),(0,0,0));
+    }
+
+    #[test]
+    fn staging_live_count_tracks_sparse_append_reuse_resize_and_rejected_write(){
+        let temp=PrivateTemp::under(&std::env::temp_dir());
+        let parent=HeldDir::open(&temp.0).unwrap();
+        let mut stage=ram_draft(0);
+        let live=|s:&DraftStage|(s.live_bytes,s.spool.len);
+        for (at,data,expected) in [
+            (0,&b"ab"[..],(2,2)),(8,&b"cd"[..],(4,4)),
+            (1,&b"XY"[..],(5,6)),(16,&b"q"[..],(6,6)),
+        ]{
+            stage.write(at,data,||Ok(()),||unreachable!()).unwrap();
+            assert_eq!(live(&stage),expected);
+        }
+        assert_eq!(stage.parts.last().unwrap().stored,1);
+        stage.resize(9,||Ok(())).unwrap();
+        assert_eq!(live(&stage),(4,6));
+        let selection=stage.parts.clone();
+        let rejected=||Err(io::ErrorKind::PermissionDenied.into());
+        assert_eq!(stage.write(16,b"xyz",rejected,||unreachable!()).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+        assert_eq!(live(&stage),(4,6));
+        assert_eq!(stage.parts,selection);
+        assert!(stage.flush(0,&parent,||Ok(u64::MAX),|batch|{
+            let mut packed=[0;4];
+            batch.input.read_exact_at(&mut packed,0).unwrap();
+            assert_eq!((&packed,batch.eof),(b"aXYc",9));
+            Ok(())
+        }).unwrap());
+        assert_eq!(live(&stage),(0,0));
+    }
+
+    #[test]
+    fn truncate_to_empty_keeps_the_effective_eof_change(){
+        let temp=PrivateTemp::under(&std::env::temp_dir());
+        let parent=HeldDir::open(&temp.0).unwrap();
+        let mut stage=ram_draft(1);
+        stage.write(0,b"ab",||Ok(()),||unreachable!()).unwrap();
+        stage.resize(0,||Ok(())).unwrap();
+        let inode=stage.spool.file.metadata().unwrap().ino();
+        assert!(stage.flush(1,&parent,||unreachable!(),|batch|{
+            let found=batch.input.metadata().unwrap();
+            assert!(batch.spans.is_empty());
+            assert_eq!((found.ino(),found.len(),batch.eof),(inode,0,0));
+            Ok(())
+        }).unwrap());
+    }
+
     #[test]
     fn packed_ram_and_original_are_charged_to_the_same_writer(){
         let writer=Rc::new(Cell::new(0));
