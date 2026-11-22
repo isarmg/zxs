@@ -76,12 +76,17 @@ int zxs_directory_has_only(int fd, const char *allowed) {
     return empty;
 }
 
-/* No unlabelled fallback on an unsupported or unreadable mount. */
-int zxs_volume_label_present(int fd) {
-    ssize_t bytes = fgetxattr(fd, "user.zxs.volume", NULL, 0);
-    if (bytes >= 0) return 1;       /* An empty or unknown label is still a claim. */
+/* An empty value is present; only ENODATA proves absence. */
+int observe_xattr_presence(int fd, const char *name) {
+    ssize_t bytes = fgetxattr(fd, name, NULL, 0);
+    if (bytes >= 0) return 1;
     if (errno == ENODATA) return 0;
     return -1;
+}
+
+/* No unlabelled fallback on an unsupported or unreadable mount. */
+int zxs_volume_label_present(int fd) {
+    return observe_xattr_presence(fd, "user.zxs.volume");
 }
 uid_t zxs_effective_uid(void) { return geteuid(); }
 

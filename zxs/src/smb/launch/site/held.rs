@@ -4,7 +4,7 @@ mod diagnostics;
 use super::{approval::check_path,denied,layout};
 use crate::{fs::Entity,smb::launch::{descriptor::{self,Access,DescriptorFlags},
     held_open::{self,ProcOpen,SiteOpen}}};
-use std::{collections::BTreeMap,ffi::{CStr,CString},fs::File,io::{self,Read},
+use std::{collections::BTreeMap,ffi::{CStr,CString,c_char,c_int},fs::File,io::{self,Read},
     os::{fd::{AsRawFd,FromRawFd,RawFd},unix::{ffi::OsStrExt,fs::{FileExt,MetadataExt}}},
     path::{Component,Path,PathBuf}};
 
@@ -14,6 +14,7 @@ const MAX_MOUNTS:usize=16_384;
 const BTRFS:u32=0x9123_683e;
 unsafe extern "C"{
     fn zxs_mount_id(fd:libc::c_int,mount:*mut u64)->libc::c_int;
+    fn observe_xattr_presence(fd:c_int,name:*const c_char)->c_int;
 }
 fn fd(raw:RawFd)->io::Result<File>{
     if raw<0{return Err(io::Error::last_os_error());}
@@ -78,9 +79,8 @@ pub(super) fn rdonly(file:&File)->io::Result<()>{
     access(file,Access::ReadOnly,None)
 }
 pub(super) fn no_xattr(file:&File,name:&CStr)->io::Result<()>{
-    // SAFETY: null output and size 0 asks only whether this fixed key exists.
-    if unsafe{libc::fgetxattr(file.as_raw_fd(),name.as_ptr(),std::ptr::null_mut(),0)}<0
-        && io::Error::last_os_error().raw_os_error()==Some(libc::ENODATA){return Ok(());}
+    // SAFETY: the held descriptor and NUL-terminated key live through the observation.
+    if unsafe{observe_xattr_presence(file.as_raw_fd(),name.as_ptr())}==0{return Ok(());}
     Err(denied())
 }
 pub(super) fn dir_reader(pin:&File)->io::Result<File>{
