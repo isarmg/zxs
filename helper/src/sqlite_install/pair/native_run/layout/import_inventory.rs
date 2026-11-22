@@ -83,8 +83,6 @@ fn encode(q:&ImportCheck,nonce:&[u8;32],system:[u64;3],source:[u64;3])->io::Resu
 }
 impl Question{
     pub(super) fn decode(raw:&[u8])->io::Result<Self>{
-        if raw.len()>BUDGET{return Err(invalid());}
-        let mut b=raw.strip_prefix(DOMAIN).ok_or_else(invalid)?;
         fn take<'a>(b:&mut &'a [u8],n:usize)->io::Result<&'a [u8]>{
             let (one,rest)=b.split_at_checked(n).ok_or_else(invalid)?;*b=rest;Ok(one)
         }
@@ -97,6 +95,8 @@ impl Question{
             if n==0||n>MAX_PATH_BYTES{return Err(invalid());}
             Ok(PathBuf::from(OsString::from_vec(take(b,n)?.to_vec())))
         }
+        if raw.len()>BUDGET{return Err(invalid());}
+        let mut b=raw.strip_prefix(DOMAIN).ok_or_else(invalid)?;
         let nonce=bytes(&mut b)?;let actor=bytes(&mut b)?;
         let subject=ExplicitSubject::checked(actor,u32::from_be_bytes(bytes(&mut b)?),u32::from_be_bytes(bytes(&mut b)?))?;
         let pool=bytes(&mut b)?;let init=bytes(&mut b)?;

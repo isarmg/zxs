@@ -77,8 +77,6 @@ fn encode(scope:&Scope,nonce:&[u8;32],subject:ExplicitSubject,location:[u64;3])-
 }
 impl Question{
     pub(super) fn decode(raw:&[u8])->io::Result<Self>{
-        if raw.len()>BUDGET{return Err(invalid());}
-        let mut bytes=raw.strip_prefix(DOMAIN).ok_or_else(invalid)?;
         fn take<'a>(b:&mut &'a [u8],n:usize)->io::Result<&'a [u8]>{
             let (v,more)=b.split_at_checked(n).ok_or_else(invalid)?;*b=more;Ok(v)
         }
@@ -88,6 +86,8 @@ impl Question{
             if n==0||n>MAX_PATH_BYTES{return Err(invalid());}
             Ok(PathBuf::from(OsString::from_vec(take(b,n)?.to_vec())))
         }
+        if raw.len()>BUDGET{return Err(invalid());}
+        let mut bytes=raw.strip_prefix(DOMAIN).ok_or_else(invalid)?;
         let nonce=fixed(&mut bytes)?;let actor=fixed(&mut bytes)?;
         let subject=ExplicitSubject::checked(actor,u32::from_be_bytes(fixed(&mut bytes)?),u32::from_be_bytes(fixed(&mut bytes)?))?;
         let pool=fixed(&mut bytes)?;let init=fixed(&mut bytes)?;let volume=fixed(&mut bytes)?;

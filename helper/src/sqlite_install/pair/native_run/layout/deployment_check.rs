@@ -38,7 +38,6 @@ impl Question{
         Ok(out)
     }
     pub(super) fn decode(raw:&[u8])->io::Result<Self>{
-        let mut b=raw.strip_prefix(DOMAIN).filter(|_|raw.len()<=CAP).ok_or_else(unavailable)?;
         fn take<'a>(b:&mut &'a[u8],len:usize)->io::Result<&'a[u8]>{
             let (first,rest)=b.split_at_checked(len).ok_or_else(unavailable)?;*b=rest;Ok(first)
         }
@@ -50,6 +49,7 @@ impl Question{
             if !(1..=bound).contains(&len){return Err(unavailable());}
             take(b,len)
         }
+        let mut b=raw.strip_prefix(DOMAIN).filter(|_|raw.len()<=CAP).ok_or_else(unavailable)?;
         let nonce=field(&mut b)?;
         let where_system=[u64::from_be_bytes(field(&mut b)?),u64::from_be_bytes(field(&mut b)?),u64::from_be_bytes(field(&mut b)?)];
         let site=SitePayload::decode(counted(&mut b,MAX_SITE)?)?;

@@ -68,16 +68,16 @@ struct Question {
 fn bad_question()->io::Error{bad("wrong scoped first-layout original INIT selection")}
 impl Question {
     fn encode(&self)->io::Result<Vec<u8>>{
+        fn path(b:&mut Vec<u8>,p:&Path)->io::Result<()>{
+            let p=p.as_os_str().as_bytes();crate::path_rules::Kind::StorageRoot.check_path(p).map_err(bad)?;
+            b.extend((p.len() as u16).to_be_bytes());b.extend(p);Ok(())
+        }
         if self.nonce==[0;32]||[self.actor,self.pool,self.init].contains(&[0;16])||
             self.system.to_str().is_none()||self.location[1]==0||self.location[2]==0
             ||!(1..=MAX_FOLDERS).contains(&self.paths.len()){return Err(bad_question());}
         let mut b=DOMAIN.to_vec();
         b.extend(self.nonce);b.extend(self.actor);b.extend(self.pool);b.extend(self.init);
         for n in self.location{b.extend(n.to_be_bytes());}
-        fn path(b:&mut Vec<u8>,p:&Path)->io::Result<()>{
-            let p=p.as_os_str().as_bytes();crate::path_rules::Kind::StorageRoot.check_path(p).map_err(bad)?;
-            b.extend((p.len() as u16).to_be_bytes());b.extend(p);Ok(())
-        }
         path(&mut b,&self.system)?;b.push(self.paths.len() as u8);
         let mut seen=BTreeSet::new();
         for p in &self.paths{
@@ -89,8 +89,6 @@ impl Question {
         Ok(b)
     }
     fn decode(bytes:&[u8])->io::Result<Self>{
-        if bytes.len()>BUDGET{return Err(bad_question());}
-        let mut b=bytes.strip_prefix(DOMAIN).ok_or_else(bad_question)?;
         fn take<'a>(b:&mut &'a [u8],n:usize)->io::Result<&'a [u8]>{
             let (v,rest)=b.split_at_checked(n).ok_or_else(bad_question)?;*b=rest;Ok(v)
         }
@@ -101,6 +99,8 @@ impl Question {
             let raw=take(b,n)?;crate::path_rules::Kind::StorageRoot.check_path(raw).map_err(bad)?;
             Ok(PathBuf::from(OsString::from_vec(raw.to_vec())))
         }
+        if bytes.len()>BUDGET{return Err(bad_question());}
+        let mut b=bytes.strip_prefix(DOMAIN).ok_or_else(bad_question)?;
         let nonce=field(&mut b)?;let actor=field(&mut b)?;let pool=field(&mut b)?;let init=field(&mut b)?;
         let location=[u64::from_be_bytes(field(&mut b)?),u64::from_be_bytes(field(&mut b)?),u64::from_be_bytes(field(&mut b)?)];
         let system=path(&mut b)?;let [count]=field(&mut b)?;
