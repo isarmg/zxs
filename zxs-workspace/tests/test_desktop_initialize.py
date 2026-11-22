@@ -1,6 +1,7 @@
 """Linux native worktree initialization; no application takeover of an existing catalog."""
 from concurrent.futures import Future
 from contextlib import ExitStack
+from dataclasses import replace
 import errno
 import hashlib
 from importlib.util import find_spec
@@ -15,7 +16,7 @@ import zipfile
 from zipworkspace import lifecycle, live_candidate, private_stage, publish, worktree
 from zipworkspace.archive import read_archive
 from zipworkspace.desktop.branch_choice import SnapshotBranch
-from zipworkspace.desktop.commit_choice import CommitChoice
+from zipworkspace.desktop.commit_choice import CommitChoice, ReviewedTreeChanged
 from zipworkspace.desktop.initialize_choice import InitializeChoice, available
 from zipworkspace.desktop.pending_fork import PendingFork
 from zipworkspace.desktop.retry_choice import PendingRetry
@@ -96,12 +97,16 @@ class NewOriginalWorktree(unittest.TestCase):
         db = self.state / "worktree.sqlite"
         original = db.read_bytes()
         with patch.object(lifecycle, "relative_document", side_effect=AssertionError("no STORE document")), \
+             patch.object(live, "check_dirs", side_effect=AssertionError("inventory does not resolve STORE")), \
              patch.object(worktree, "anonymous_capture", side_effect=AssertionError("no freeze")):
-            report, size = lifecycle.observe_first_contents(live)
+            report, size, review = lifecycle.observe_first_contents(live, retain_review=True)
         self.assertEqual(size, self.story.stat().st_size)
         self.assertEqual(
             [(r.path, r.before, r.after, r.after_bytes) for r in report.page(0)],
             [("empty", None, "directory", None), ("story", None, "file", size)])
+        self.assertEqual((review.instance, review.basis), (live.instance, live.initial_base))
+        self.assertEqual((review.review.entries, review.review.data_bytes), (2, size))
+        self.assertIs(review.review.origin, live.review_origin)
         self.assertEqual(db.read_bytes(), original)
         self.assertEqual((live.status()["base_generation"], live.status()["pending_operation"]), (0, None))
         self.assertEqual(list(absent.iterdir()), [])
@@ -145,6 +150,55 @@ class NewOriginalWorktree(unittest.TestCase):
         next_ = CommitChoice(live)
         self.addCleanup(next_.release)
         with self.assertRaisesRegex(Rejected, "缺少原基线"): next_.prepare()
+
+    def test_first_review_freezes_the_observed_tree_and_cannot_be_reused_after_base_advances(self):
+        from zipworkspace.desktop import commit_choice
+        live = self.register()
+        exact = Manifest()
+        original = self.story.read_bytes()
+        exact.add("story", False, len(original), hashlib.sha256(original).hexdigest())
+        exact.add("empty", True, 0, None)
+        report, size, review = lifecycle.observe_first_contents(live, retain_review=True)
+        self.assertEqual((len(report.rows), size, review.review.tree), (2, len(original), exact.digest()))
+        with self.assertRaisesRegex(Rejected, "当前会话"):
+            CommitChoice(live, review=replace(review, review=replace(review.review, origin=object())))
+        with self.assertRaisesRegex(Rejected, "原零代登记"):
+            CommitChoice(live, review=replace(review, basis=(live.repo, live.initial_base[1], 0, "a"*32, None)))
+        attempt = CommitChoice(live, review=review)
+        self.addCleanup(attempt.release)
+        with patch.object(commit_choice, "relative_document", side_effect=AssertionError("no zero-generation archive")):
+            detail = attempt.prepare()
+            self.assertIn(review.review.tree, detail)
+            self.assertIn("没有父节点", detail)
+            self.assertIn(f"已审正文为 {size} B", detail)
+            final, marker = attempt.run()
+            self.assertEqual((marker.generation, marker.parent, marker.tree), (1, None, exact.digest()))
+            self.assertEqual(read_archive(final)[1].rows, exact.rows)
+            stale = CommitChoice(live, review=review)
+            self.addCleanup(stale.release)
+            with self.assertRaisesRegex(Rejected, "登记基线已变化"): stale.prepare()
+        self.assertFalse(stale.used)
+        self.assertEqual(live.status()["base_operation"], marker.operation)
+        self.assertEqual(list(self.store.iterdir()), [final])
+
+    def test_changed_same_size_bytes_after_first_review_abort_before_named_candidate_and_intent(self):
+        live = self.register()
+        self.story.write_bytes(b"reviewed-A")
+        _, _, review = lifecycle.observe_first_contents(live, retain_review=True)
+        attempt = CommitChoice(live, review=review)
+        self.addCleanup(attempt.release)
+        attempt.prepare()
+        self.story.write_bytes(b"reviewed-B")
+        prior_state = set(self.state.iterdir())
+        with patch.object(live_candidate.LiveArchiveCandidate, "_link_private",
+                          side_effect=AssertionError("do not name a stale first candidate")), \
+             patch.object(worktree, "finish", side_effect=AssertionError("do not publish")):
+            with self.assertRaises(ReviewedTreeChanged): attempt.run()
+        self.assertEqual(set(self.state.iterdir()), prior_state)
+        self.assertEqual(list(self.store.iterdir()), [])
+        self.assertEqual(self.story.read_bytes(), b"reviewed-B")
+        self.assertEqual((live.status()["base_generation"], live.status()["pending_operation"]), (0, None))
+        self.assertEqual(attempt.result()[0], "unrecorded")
 
     def test_reject_a_rebound_work_directory_before_state_exists(self):
         selected = self.plan()
@@ -326,9 +380,28 @@ class NewOriginalWorktree(unittest.TestCase):
         dialog.reject()
         self.assertIsNone(pane.changes_dialog)
         self.assertEqual(list(self.store.iterdir()), [])
+        self.assertIsNone(pane.commits.running)
+
+        def reviewed_action():
+            start(pane.changes, 1)
+            action = pane.changes_dialog.findChild(QPushButton, "commit-reviewed-worktree")
+            self.assertIsNotNone(action)
+            self.assertTrue(action.isEnabled())
+            return action
+
+        with patch.object(commit_controls, "confirm", return_value=False) as submit, \
+             patch.object(worktree, "commit", side_effect=AssertionError("refusal cannot freeze")):
+            start(reviewed_action(), 1)
+            submit.assert_called_once()
+            self.assertIn("审阅的第 1 代", submit.call_args.args[1])
+            self.assertIsNone(pane.changes_dialog)
+            self.assertIsNone(pane.commits.running)
+            self.assertEqual(list(self.store.iterdir()), [])
         with patch.object(commit_controls, "confirm", return_value=True) as submit:
-            start(pane.commits.save, 3)  # Distinct consent: prepare, commit, status.
+            start(reviewed_action(), 3)  # Distinct consent: prepare, commit, status.
+            submit.assert_called_once()
             self.assertIn("第 1 代", submit.call_args.args[2])
+            self.assertIn("审阅所得整树 SHA-256", submit.call_args.args[2])
             self.assertIn("停止所有工作树写入者", submit.call_args.kwargs["attestation"])
         self.assertEqual(len(list(self.store.glob("*.zxs"))), 1)
         self.assertIn("基线第 1 代", pane.details.text())

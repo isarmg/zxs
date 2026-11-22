@@ -143,23 +143,46 @@ def _observe_local_work(live, *, with_store, observer=None):
     return observe_held(live.work_fd, work, require_ids=True, check_held=work_member, **options)
 
 
-def observe_first_contents(live, *, observer=None):
-    """List the still-held new worktree's admitted contents, without granting a first commit."""
+@dataclass(frozen=True, slots=True)
+class ReviewedWorktree:
+    origin: object
+    tree: str
+    entries: int
+    data_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class FirstContentsReview:
+    """In-memory review of an exact zero-generation registration, not an archive witness."""
+    instance: str
+    basis: tuple[str, str, int, None, None]
+    review: ReviewedWorktree
+
+
+def observe_first_contents(live, *, observer=None, retain_review=False):
+    """Read the original zero-generation contents without accessing STORE or reserving a slot."""
     from .comparison import compare_manifests
     from .model import Manifest
     if observer is not None: observer.begin("identity")
     expected = live.initial_base
-    if expected is None or _idle_live_base(live, local_only=True) != expected:
+    if expected is None or expected[2:] != (0, None, None) or _idle_live_base(live, local_only=True) != expected:
         raise Rejected("只查看本窗口仍处在零代、没有任何提交的原登记")
     current = _observe_local_work(live, with_store=False, observer=observer)
-    # An empty comparison side only orders the inventory. No marker, slot, or
-    # fictitious prior version is created or handed back to a commit action.
+    if observer is not None: observer.check()
+    evidence = None
+    if retain_review:
+        # compare_manifests consumes current.rows. Include every name, type
+        # and file digest, even when no single page shows the entire tree.
+        evidence = FirstContentsReview(live.instance, expected,
+                                       ReviewedWorktree(live.review_origin, current.digest(),
+                                                        len(current.rows), current.total))
+    # The empty side only orders the inventory, never represents a commit.
     result = compare_manifests(Manifest(), current)
     if observer is not None: observer.begin("identity")
     if _idle_live_base(live, local_only=True) != expected:
         raise Rejected("观察期间原零代登记已改变；不显示旧清单")
     if observer is not None: observer.check()
-    return result, current.total
+    return (result, current.total, evidence) if retain_review else (result, current.total)
 
 
 def observe_initial_changes(live, *, observer=None):
@@ -180,14 +203,6 @@ def observe_initial_changes(live, *, observer=None):
         raise Rejected("离线观察期间原基线改变；不显示旧结果")
     if observer is not None: observer.check()
     return marker, result
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewedWorktree:
-    origin: object
-    tree: str
-    entries: int
-    data_bytes: int
 
 
 class MissingBaseline:

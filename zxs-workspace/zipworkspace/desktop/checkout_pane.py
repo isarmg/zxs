@@ -646,9 +646,9 @@ class CheckoutPane(QWidget):
                     self.owner.inform(f"未取得完整{name}：{error}。未启动冻结、提交或恢复。")
                     return
                 if first:
-                    contents, size = result
+                    contents, size, first_review = result
                     self.owner.inform("已读取本次首代内容清单；未检查 STORE 或提交。")
-                    self.show_changes(live, None, contents, first_bytes=size)
+                    self.show_changes(live, None, contents, first_bytes=size, first_review=first_review)
                 elif initial:
                     self.owner.inform("离线对照已完成；未检查 STORE，后续编辑不会自动刷新。")
                     self.show_changes(live, *result, initial=True)
@@ -667,7 +667,7 @@ class CheckoutPane(QWidget):
                 result = None
                 try:
                     with closing(loan):
-                        if first: return observe_first_contents(loan, observer=observer), None
+                        if first: return observe_first_contents(loan, observer=observer, retain_review=True), None
                         if initial: return observe_initial_changes(loan, observer=observer), None
                         result = observe_live_changes(loan, observer=observer, retain_missing=True, retain_text=True,
                                                       retain_review=True)
@@ -688,7 +688,7 @@ class CheckoutPane(QWidget):
         else:
             future.add_done_callback(lambda task: loan.close() if task.cancelled() else None)
 
-    def show_changes(self, live, marker, report, *, initial=False, evidence=None, first_bytes=None):
+    def show_changes(self, live, marker, report, *, initial=False, evidence=None, first_bytes=None, first_review=None):
         # The read-only result exists only in this modal view. Once closed it
         # cannot linger into a later commit, recovery, or baseline switch.
         # Window.job disables the main tabs recursively. Parent this report to
@@ -750,7 +750,9 @@ class CheckoutPane(QWidget):
             layout.addWidget(restore)
         if evidence is not None and evidence.has_text_pairs:
             close_lines = self._line_tools(dialog, live, evidence, table, layout)
-        if not first and not initial and evidence is not None and evidence.review is not None:
+        review = first_review
+        if not first: review = evidence if evidence is not None and evidence.review is not None else None
+        if not initial and review is not None:
             record = self.live_record
 
             def current():
@@ -760,9 +762,9 @@ class CheckoutPane(QWidget):
 
             def prepare_commit():
                 if self.changes_dialog is not dialog or not current() or self.owner.pending is not None: return
-                self.commits.begin_reviewed(live, evidence, current=current, dismiss=dialog.reject)
+                self.commits.begin_reviewed(live, review, current=current, dismiss=dialog.reject)
 
-            action = button("提交本次审阅的整棵工作树…", prepare_commit)
+            action = button("提交本次审阅的第 1 代…" if first else "提交本次审阅的整棵工作树…", prepare_commit)
             action.setObjectName("commit-reviewed-worktree")
             action.setEnabled(self.commits.save.isEnabled())
             layout.addWidget(action)

@@ -136,8 +136,10 @@ class CommitControls(QWidget):
                     action = "创建、发布并切换"
                     agree = "我确认发布的是所列原快照，不含当前编辑。STATE 由本人独占；STORE 不同步，无其他程序改动本次暂存名。"
                 else:
-                    question, action = (("确认提交本次审阅的整棵工作树", "确认并提交本次审阅") if review is not None else
-                                        ("确认提交整个工作目录", "确认并提交"))
+                    if review is not None:
+                        question = "确认提交本次审阅的第 1 代" if job.base[2] == 0 else "确认提交本次审阅的整棵工作树"
+                        action = "确认并提交本次审阅"
+                    else: question, action = "确认提交整个工作目录", "确认并提交"
                     agree = "我已停止所有工作树写入者。STATE 由本人独占，STORE 不同步、不会有其他程序改动本次上传暂存名。"
                 if not same_decision():
                     refused("原工作树会话或原分支来源已变；没有制作候选。"); return
@@ -162,11 +164,11 @@ class CommitControls(QWidget):
                 if job.used: after_submit(f"{describe(err)}\n结果待核。", uncertain=True)
                 else: refused(err)
         if dismiss is not None:
-            try: dismiss()  # Worktree and exact original baseline already borrowed by the decision.
+            try: dismiss()  # The decision already owns the review and any required baseline handle.
             except Exception as err:
                 refused(err); return
-        self.submit(job, "正在只读核对原登记及 STORE 基线…", job.prepare, reviewed, refused,
-                    preparation=preparation, cancel_text="取消这次只读基线核对")
+        self.submit(job, "正在只读核对原登记和原 STORE 中的相关槽位…", job.prepare, reviewed, refused,
+                    preparation=preparation, cancel_text="取消这次只读核对")
 
     def inspect(self):
         job, original = self.last, self.session

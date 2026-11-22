@@ -103,20 +103,29 @@ class CommitChoice:
     def __init__(self, live, *, review=None):
         self._bind(live, new_id())
         if review is not None:
-            try:
-                if (type(review) is not lifecycle.MissingBaseline or review.review is None
-                        or review.review.origin is not live.review_origin or review.instance != live.instance
-                        or review.path.parent != live.store or not review.basis[2]):
-                    raise Rejected("提交审阅仅接受当前会话的原在线工作树对照")
-                fd = review.duplicate()
-                self.stack.callback(os.close, fd)
-                self.review = review.review
-                self.review_basis, self.review_name = review.basis, review.path.name
-                self.review_stamp, self.review_marker = review.observed, review.marker
-                self.review_doc = PositionalDocument(fd, self.review_stamp[2])
+            try: self._bind_review(review)
             except BaseException:
                 self.release()
                 raise
+
+    def _bind_review(self, evidence):
+        live = self.live
+        if (type(evidence) not in (lifecycle.FirstContentsReview, lifecycle.MissingBaseline)
+                or type(evidence.review) is not lifecycle.ReviewedWorktree
+                or evidence.review.origin is not live.review_origin or evidence.instance != live.instance):
+            raise Rejected("提交审阅只接受当前会话的原首次清单或原在线工作树对照")
+        if type(evidence) is lifecycle.FirstContentsReview:
+            if live.initial_base is None or evidence.basis != live.initial_base or evidence.basis[2:] != (0, None, None):
+                raise Rejected("首次审阅不属于本窗口的原零代登记")
+        else:
+            if evidence.path.parent != live.store or not evidence.basis[2]:
+                raise Rejected("在线对照不属于本窗口的原 STORE 基线")
+            fd = evidence.duplicate()
+            self.stack.callback(os.close, fd)
+            self.review_name = evidence.path.name
+            self.review_stamp, self.review_marker = evidence.observed, evidence.marker
+            self.review_doc = PositionalDocument(fd, self.review_stamp[2])
+        self.review, self.review_basis = evidence.review, evidence.basis
 
     def _bind(self, live, operation):
         self.operation = check_id(operation)
@@ -130,7 +139,7 @@ class CommitChoice:
         self.preparation = _CommitPreparation() if self.purpose == "commit" else None
         self.ack_fd = None
         self.anonymous_candidate = None
-        self.review = None
+        self.review = self.review_basis = self.review_doc = None
 
     def close(self):
         if self.closed: return
@@ -179,14 +188,14 @@ class CommitChoice:
         self.qualify()
         self.base = self._idle_base()
         if required is not None and self.base != required:
-            raise Rejected("本工作树的当前基线不再是窗口所选原节点；不打开其他代")
+            raise Rejected("原工作树的登记基线已变化；请重新查看，不打开其他代")
         if displayed is not None and self.base[:4] != displayed:
             raise Rejected("登记基线与窗口状态不同；请刷新，不会选另一代")
         if displayed is None: self._open_base()
         else: self._open_base(held_mount=True)
 
     def _prepare(self):
-        self._prepare_base(required=self.review_basis if self.review is not None else None)
+        self._prepare_base(required=self.review_basis)
         space = self._fresh_space_hint()
         _, branch, gen, node, digest = self.base
         if gen == 0:
@@ -243,7 +252,8 @@ class CommitChoice:
             raise Rejected("工作树没有可继续的原基线")
         self.name = f"{repo}.{branch}.{gen:016x}.zxs"
         # No SQLite writer or lock persists across this potentially long read / consent dialog.
-        if self.review is not None:
+        reviewed_archive = self.review_doc is not None
+        if reviewed_archive:
             doc = self.review_doc
             if self.name != self.review_name: raise Rejected("不选择另一代或另一份审阅基线")
             check_relative(self.live.store_fd, self.name, doc, self.review_stamp)
@@ -253,19 +263,19 @@ class CommitChoice:
             except FileNotFoundError as exc:
                 raise Rejected("所选 STORE 中缺少原基线，不用窗口打开的散包代替，也不自动补发") from exc
         observed = stamp(doc)
-        if self.review is not None and observed != self.review_stamp:
+        if reviewed_archive and observed != self.review_stamp:
             raise Rejected("本次报告的原归档已变化；请重新查看改动")
-        if (held_mount or self.review is not None) and mount_id(doc.fileno()) != mount_id(self.live.store_fd):
+        if (held_mount or reviewed_archive) and mount_id(doc.fileno()) != mount_id(self.live.store_fd):
             raise Rejected("登记基线归档不在原 STORE 挂载")
         marker = read_managed_document(doc, display_name=self.name, observer=self.preparation)[0]
         if ((marker.repo, marker.branch, marker.generation, marker.operation) != self.base[:4]
-                or (self.review is not None and marker != self.review_marker)
+                or (reviewed_archive and marker != self.review_marker)
                 or archive_sha(doc, observer=self.preparation) != digest):
             raise Rejected("STORE 中原基线的节点或整包 SHA-256 不符")
         self.qualify()
         check_relative(self.live.store_fd, self.name, doc, observed)
         self.base_marker, self.observed, self.original = marker, observed, doc  # Only after both checks.
-        if self.review is not None: self._check_registered_mount()
+        if reviewed_archive: self._check_registered_mount()
 
     def _check_base_evidence(self):
         if (self.base is not None and self.live.initial_base is not None and self.base == self.live.initial_base
@@ -273,7 +283,7 @@ class CommitChoice:
             return  # Only the actual creator of this original catalog carries this evidence.
         if self.original is None: raise Rejected("未持有本次已核验的原基线")
         check_relative(self.live.store_fd, self.name, self.original, self.observed)
-        if self.review is not None: self._check_registered_mount()
+        if self.review_doc is not None: self._check_registered_mount()
 
     def _check_registered_mount(self):
         named = os.open(self.name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.live.store_fd)
