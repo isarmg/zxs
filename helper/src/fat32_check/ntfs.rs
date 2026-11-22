@@ -19,7 +19,7 @@ fn frame(boot:&[u8;BOOT],bytes:u64)->io::Result<Extent>{
     if &boot[3..11]!=b"NTFS    "{return Err(invalid("expected a single NTFS volume starting at offset zero"));}
     let sector=u64::from(u16::from_le_bytes(boot[11..13].try_into().expect("sector size")));
     if bytes>MAX_PROBE{return Err(invalid("NTFS image exceeds the pinned tool's safe size probe"));}
-    if !matches!(sector,512|1024|2048|4096)||bytes%sector!=0{
+    if !matches!(sector,512|1024|2048|4096)||!bytes.is_multiple_of(sector){
         return Err(invalid("expected a whole number of supported NTFS sectors"));
     }
     // The on-disk BPB count is signed. The pinned ntfsfix checks the
@@ -65,7 +65,7 @@ impl Report {
         if p.len()!=Self::WIRE_SIZE||&p[..4]!=b"NFR1"||p[9..17]!=bytes.to_be_bytes()||&p[25..]!=digest{return Err(bad());}
         let upstream=i32::from_be_bytes(p[5..9].try_into().expect("four bytes"));
         let declared_bytes=u64::from_be_bytes(p[17..25].try_into().expect("eight bytes"));
-        if !(0..=255).contains(&upstream)||declared_bytes<512||declared_bytes%512!=0||bytes%512!=0||bytes>MAX_PROBE
+    if !(0..=255).contains(&upstream)||declared_bytes<512||!declared_bytes.is_multiple_of(512)||!bytes.is_multiple_of(512)||bytes>MAX_PROBE
             ||!bytes.checked_sub(declared_bytes).is_some_and(|extra|extra>=512){return Err(bad());}
         let observed=match(p[4],upstream,exit){(0,0,Some(0))=>true,(2,_,Some(2))=>false,_=>return Err(bad())};
         Ok(Self{observed,upstream,bytes,declared_bytes})

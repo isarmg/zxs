@@ -8,7 +8,7 @@ use tempfile::TempDir;
 fn vector(name:&str) -> Vec<u8> {
     let line=include_str!("genesis-v1.txt").lines().find_map(|s| s.split_once('=').filter(|(k,_)| *k==name))
         .expect("missing public vector");
-    line.1.as_bytes().chunks_exact(2).map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()
+    line.1.as_bytes().as_chunks::<2>().0.iter().map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()
 }
 
 struct Fixture {

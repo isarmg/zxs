@@ -18,7 +18,7 @@ fn bad_joint_record()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,
 struct WebInput<'a>(&'a [u8]);
 impl<'a> WebInput<'a> {
     fn check(bytes: &'a [u8]) -> io::Result<Self> {
-        if !(1..=1024).contains(&bytes.len()) || std::str::from_utf8(&bytes).is_err() {
+        if !(1..=1024).contains(&bytes.len()) || std::str::from_utf8(bytes).is_err() {
             // Never put the supplied bytes, their digest, or an internal error containing them in diagnostics.
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "expected 1–1024 UTF-8 input bytes for the Web credential"));
         }
@@ -191,7 +191,7 @@ mod tests {
     fn value(key: &str) -> Vec<u8> {
         include_str!("../../../tests/sqlite/web-argon2id-vector.txt").lines()
             .filter_map(|l|l.split_once('=')).find(|p|p.0==key).unwrap().1
-            .as_bytes().chunks_exact(2).map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()
+            .as_bytes().as_chunks::<2>().0.iter().map(|p|u8::from_str_radix(std::str::from_utf8(p).unwrap(),16).unwrap()).collect()
     }
 
     #[test]

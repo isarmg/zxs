@@ -39,11 +39,11 @@ impl InitialDatabase{
         let place=Self::scope(fd,uid)?;
         let m=fd.metadata()?;
         let mut out=[0;64];
-        for (slot,value) in out[..32].chunks_exact_mut(8).zip([place[0],place[1],place[2],m.len()]){
-            slot.copy_from_slice(&value.to_be_bytes());
+        for (slot,value) in out[..32].as_chunks_mut::<8>().0.iter_mut().zip([place[0],place[1],place[2],m.len()]){
+            *slot=value.to_be_bytes();
         }
-        for (slot,value) in out[32..].chunks_exact_mut(8).zip([m.ctime(),m.ctime_nsec(),m.mtime(),m.mtime_nsec()]){
-            slot.copy_from_slice(&value.to_be_bytes());
+        for (slot,value) in out[32..].as_chunks_mut::<8>().0.iter_mut().zip([m.ctime(),m.ctime_nsec(),m.mtime(),m.mtime_nsec()]){
+            *slot=value.to_be_bytes();
         }
         if Self::scope(fd,uid)?!=place{return Err(bad("different non-readable original SYSTEM database"));}
         Ok(out)

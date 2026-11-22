@@ -9,6 +9,7 @@ use std::{ffi::OsStr,fs::File,io,os::unix::{ffi::OsStrExt,fs::MetadataExt},path:
 pub(super) const LEAF:&str="zxs";
 pub(super) const WITHIN:ResolveFlags=ResolveFlags::BENEATH.union(ResolveFlags::NO_XDEV)
     .union(ResolveFlags::NO_SYMLINKS).union(ResolveFlags::NO_MAGICLINKS);
+#[cfg(any(test,feature="embedded-zxs"))]
 pub(super) const PIN:OFlags=OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
 
 fn canonical(path:&Path,folder:bool)->io::Result<()>{
@@ -107,6 +108,7 @@ impl OriginalPath{
         Ok(())
     }
     pub(super) fn pin(&self)->&File{&self.chain.last().expect("held path").original}
+    #[cfg(any(test,feature="embedded-zxs"))]
     pub(super) fn directory(&self)->io::Result<File>{if !self.dir{return Err(denied());}self.require()?;qualified_dir(self.pin())}
     pub(super) fn path(&self)->&Path{&self.path}
     pub(super) fn includes(&self,entity:Entity)->bool{self.chain.iter().any(|v|v.at.entity==entity)}

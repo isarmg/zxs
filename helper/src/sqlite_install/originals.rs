@@ -55,6 +55,7 @@ pub(super) struct SelectedSystem {pin:Pinned,host:File,uid:u32,gid:u32}
 enum SystemLease{Exclusive,LentExclusive,LentRead}
 pub(super) struct LockedSystem {selected:SelectedSystem,dir:File,limit:u8,lease:SystemLease}
 impl SelectedSystem {
+    #[cfg(test)]
     pub(super) fn from_host(path:&std::path::Path,host:File,uid:u32,gid:u32)->io::Result<Self>{
         let pin=Pinned::open(path,Kind::StorageRoot)?;
         Self::from_origin(pin,host,uid,gid)
@@ -135,11 +136,12 @@ impl Originals{
     pub(super) fn require_host(&self,fd:&File)->io::Result<()>{
         if location(&self.host)?!=location(fd)?{return Err(bad("host root changed during operator approval"));}Ok(())
     }
-    // Called BEFORE displaying the actual root list. The original host root is
-    // from the local host authority, never recovered from an on-disk declaration.
+    #[cfg(test)]
     pub(super) fn pin(request:&Request,host:File)->io::Result<Self>{
         Self::pin_with(request,host,Pinned::open)
     }
+    // Before displaying the real root list, use the held host root and verify
+    // already mounted originals without consulting an on-disk declaration.
     pub(super) fn pin_passive(request:&Request,host:File)->io::Result<Self>{
         Self::pin_with(request,host,Pinned::already_mounted)
     }

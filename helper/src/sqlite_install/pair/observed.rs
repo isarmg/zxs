@@ -27,17 +27,6 @@ pub(super) fn first_marker(pool:&Id,init:&Id,tx:&Transaction<'_>,root:HeldRoot<'
     Ok(crate::sqlite_install::catalog::claimed_marker(0,pool,&volume,init,&token))
 }
 
-// All callers use exactly this read-only original S cut. The first installer
-// needs only proof of the committed INIT, not accounts or any R/F paths.
-fn with_origin<T>(pool:&Id,init:&Id,locked:&LockedSystem,read:impl FnOnce(&Transaction<'_>,&Canonical)->io::Result<T>)->io::Result<T>{
-    let template=Canonical::new()?;let source=locked.source();let db=Existing::observed_system(locked)?;
-    // Hold the actual admitted private marker *before* SQLite opens. Inside
-    // the transaction only statx its name and read its already-held FD;
-    // never open/close another raw FD for the underlying database inode.
-    let mark=SystemMark::before_sql(source)?;
-    Ok(at_original(pool,init,locked,&db,&template,&mark,|tx|read(tx,&template))?.1)
-}
-
 // Reuse the *same* original DB identity, held SYSTEM marker and exact
 // schema when an action requires more than one short, independent connection.
 pub(super) fn at_original<T>(pool:&Id,init:&Id,locked:&LockedSystem,db:&Existing<'_>,template:&Canonical,mark:&SystemMark,
@@ -62,9 +51,6 @@ pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&
     if !c.is_autocommit(){return Err(bad("original account snapshot did not end"));}
     engine::original_name(c)?;locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
     Ok((actual,result))
-}
-pub(super) fn init_claims(pool:&Id,init:&Id,locked:&LockedSystem)->io::Result<Vec<Initial>>{
-    with_origin(pool,init,locked,|tx,template|catalog::initial_metadata(tx,template,locked.source(),pool,init))
 }
 /// Only for one new ZXS issuance. Existing or partially applied account
 /// authority, non-INIT history or an unknown first cut is never adopted.

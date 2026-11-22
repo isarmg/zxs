@@ -4,7 +4,7 @@ use super::{Purpose,originals::Originals,pair::{InitialLayout,PublicConfirmation
 use crate::{disk_web::require_terminal,maintenance::{diagnostic_worker,thread_file},pinned::{Entity,Mount}};
 use rustix::{fs::{Mode,OFlags,RawDir,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2},process::{Gid,Uid,getgid,getuid,getegid,geteuid},
     thread::{set_keep_capabilities,set_no_new_privs,set_thread_groups,set_thread_res_gid,set_thread_res_uid}};
-use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read},mem::MaybeUninit,os::{fd::{AsFd,AsRawFd},unix::{ffi::OsStrExt,fs::MetadataExt}},path::{Path,PathBuf}};
+use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read},mem::MaybeUninit,os::{fd::{AsFd,AsRawFd},unix::ffi::OsStrExt},path::{Path,PathBuf}};
 
 pub(super) struct Approved {request:Request, originals:Originals, purpose:Purpose}
 

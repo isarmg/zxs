@@ -1,7 +1,7 @@
 //! Creation-only host-side ZXS origin. Keep the fixed dedicated parent under
 //! EX from the empty proof to selector fsync. An occupied name, abandoned
 //! stage or loss of the original is never evidence of a successful issue.
-use super::{attrs,bare_acl,creation_preflight,exact_with,fstatvfs,host_mount,mark,new_dir,noentry,owned,publish,same_name,
+use super::{attrs,bare_acl,creation_preflight,fstatvfs,host_mount,mark,new_dir,noentry,owned,publish,same_name,
     access_chain,protected_control,state_spelling,verify_registered_instance,INSTANCE,OWNER,PUBLIC,StatVfsMountFlags,Times};
 use super::super::{Site,approval,bad,child,lease,public_record::Public,
     rust_site::{PublicAuthority,RustSite},site_lease::SiteLease};
@@ -143,7 +143,7 @@ impl FreshHome{
         let mut chain=vec![mark(&self.parent.host)?.0];
         for p in &self.parent.chain{chain.push(mark(p)?.0);}
         resolved.require_product_parent(&chain)?;
-        let id=mark(&self.parent.base())?;
+        let id=mark(self.parent.base())?;
         lease(&self.ex,id)?;
         protected_control(&self.ex)?;
         creation_preflight(&self.ex)?;
@@ -177,7 +177,7 @@ impl FreshHome{
         flock(&created,FlockOperation::NonBlockingLockExclusive)?;
         self.check(resolved,&[self.stage.to_bytes()])?;consent.require_site(&self.authority)?;live()?;
         let vault=new_dir(&created,VAULT)?;owned(&vault,0,0,OWNER)?;
-        let plan_fd=new_file(&created,PLAN,&plan,PUBLIC)?;
+        let plan_fd=new_file(&created,PLAN,plan,PUBLIC)?;
         let site_fd=new_file(&created,SITE,&root,PRIVATE)?;
         let gid=self.authority.subject.tuple().2;
         owned(&created,0,gid,INSTANCE)?;

@@ -6,16 +6,15 @@ mod layout;
 mod start;
 mod public_record;
 mod deployed;
-pub(in crate::sqlite_install::pair) use deployed::{DeployedSite,deployed_worker_payload,verify_deployed_worker};
+pub(in crate::sqlite_install::pair) use deployed::{DeployedSite,deployed_worker_payload};
 pub(in crate::sqlite_install::pair) use rust_vault_io::{Allocated,CurrentVault,PlacedVault};
 pub(in crate::sqlite_install::pair) use rust_site::{CredentialSite,RustSite,VaultStamp,checked_vault_stamp,verify_fresh_worker};
-pub(super) use layout::bare_acl;
 pub(in crate::sqlite_install::pair) use layout::{FreshHome,FreshParent};
 pub(in crate::sqlite_install::pair) use start::{child as request_live_approval,respond as give_live_approval};
 use super::{bad,child,contents,mark,live};
 use crate::{maintenance::HostMounts,pinned::{DiscoveryAdmission,Entity,Mount,discover_component,local_data_filesystem,require_no_automount},
     sqlite_install::{approval,product_layout,request::Id}};
-use rustix::{fs::{FlockOperation,Mode,OFlags,fcntl_getfl,flock,openat},io::Errno};
+use rustix::{fs::{FlockOperation,OFlags,fcntl_getfl,flock},io::Errno};
 use std::{ffi::{CStr,CString,OsStr},fs::File,io::{self,Read},os::{fd::AsRawFd,unix::{ffi::OsStrExt,fs::MetadataExt}}};
 
 const PRODUCT:[&CStr;2]=product_layout::STATE_COMPONENTS;

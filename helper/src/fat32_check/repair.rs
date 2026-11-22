@@ -10,7 +10,7 @@ use rustix::{
     rand::{GetRandomFlags,getrandom},
 };
 use std::{ffi::{OsStr,OsString},fs::File,io,mem::MaybeUninit,
-    os::unix::{ffi::OsStrExt,fs::{FileExt,MetadataExt}},path::{Path,PathBuf}};
+    os::unix::{ffi::OsStrExt,fs::{FileExt,MetadataExt}},path::PathBuf};
 
 const DIRECTORY:OFlags=OFlags::DIRECTORY.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
 const PIN:OFlags=OFlags::PATH.union(OFlags::NOFOLLOW).union(OFlags::CLOEXEC);
@@ -85,7 +85,7 @@ impl Request{
         let require=||{
             dest.require_unoccupied()?;original.require()?;runtime.recheck()
         };
-        crate::sqlite_install::confirm_copy_repair(self.format,preview,self.web.then_some(length),&require)?;
+        crate::sqlite_install::confirm_copy_repair(self.format,preview,self.web.then_some(length),require)?;
         require()?;
         runner::prepare_work_repair(length)?;
         // A partial copy is not adopted or cleaned up on paper after a
@@ -259,6 +259,7 @@ impl<'a> Writable<'a>{
 #[cfg(test)]
 mod tests{
     use super::*;
+    use std::path::Path;
     #[test]
     fn the_output_leaf_is_still_a_supported_input_at_the_path_boundaries(){
         let sha="b0".repeat(32);

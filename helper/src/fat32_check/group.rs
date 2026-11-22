@@ -1,7 +1,5 @@
 //! Keep the checker tests in their original private harness.
 pub(super) use crate::isolated_group::{prepare,Group};
-#[cfg(test)]
-use std::io;
 
 #[cfg(test)]
 mod tests {

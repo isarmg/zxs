@@ -52,8 +52,8 @@ impl ActiveRustMeta{
             [self.init_sha,self.descriptor_sha].contains(&[0;32])||!shared_login(&self.login)||!valid_sid(&self.sid)||
             !match self.generation{1=>self.op==self.setup,2.. =>!fixed.contains(&self.op),_=>false}{return Err(wrong());}
         let mut out=[0u8;224];out[..16].copy_from_slice(VAULT_MAGIC);out[16]=1;out[17]=self.login.len() as u8;
-        for (slot,id) in out[24..152].chunks_exact_mut(16).zip(fixed.into_iter().chain([self.account,self.op,self.record])){
-            slot.copy_from_slice(&id);
+        for (slot,id) in out[24..152].as_chunks_mut::<16>().0.iter_mut().zip(fixed.into_iter().chain([self.account,self.op,self.record])){
+            *slot=id;
         }
         out[152..160].copy_from_slice(&self.generation.to_be_bytes());
         out[160..160+self.login.len()].copy_from_slice(&self.login);

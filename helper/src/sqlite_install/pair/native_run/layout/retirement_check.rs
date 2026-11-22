@@ -51,7 +51,7 @@ impl RetirementCheck{
         let check=||{tty.check()?;require(&pin,&original,subject)};
         check()?;
         let raw=encode(&self.0,&random::<32>()?,self.1,place(&pin)?)?;
-        query_with(&raw,&original,subject,None,&check,|channel,digest,until|{
+        query_with(&raw,&original,subject,None,check,|channel,digest,until|{
             let (body,[])=channel.wait_checked::<0>(Kind::RetirementCheck,digest,until,&check)?;
             Reply::decode(&body,self.0.ids())
         })

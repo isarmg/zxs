@@ -15,7 +15,7 @@ fn no_tag(dir: &File) {
     let mut buf = [0; 1];
     assert_eq!(fgetxattr(dir, c"user.zxs.volume", &mut buf[..]), Err(Errno::NODATA));
 }
-fn available(path: &Path) { flock(&File::open(path).unwrap(), NonBlockingLockExclusive).unwrap(); }
+fn available(path: &Path) { flock(File::open(path).unwrap(), NonBlockingLockExclusive).unwrap(); }
 
 #[test]
 fn partial_original_labels_require_all_locks_and_do_not_turn_into_automatic_completion() {
@@ -28,7 +28,7 @@ fn partial_original_labels_require_all_locks_and_do_not_turn_into_automatic_comp
     let observed = observe(&s, original.uid, &selection).unwrap();
     observed.recheck().unwrap();
     for path in [s.as_path(), r.path(), d.as_path(), &s.join("INITIALIZING")] {
-        assert_eq!(flock(&File::open(path).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
+        assert_eq!(flock(File::open(path).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
     }
     no_tag(&sf); no_tag(&df);
     let mut actual = [0; 160]; let got = fgetxattr(&rf, c"user.zxs.volume", &mut actual[..]).unwrap();
@@ -79,7 +79,7 @@ fn one_busy_root_or_a_replaced_named_directory_cannot_be_skipped_and_all_acquire
     flock(&held, NonBlockingLockExclusive).unwrap();
     assert_eq!(observe(&s, original.uid, &selection).err().unwrap().kind(), io::ErrorKind::WouldBlock);
     for path in [s.as_path(), d.as_path(), &s.join("INITIALIZING")] { available(path); }
-    assert_eq!(flock(&File::open(r.path()).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
+    assert_eq!(flock(File::open(r.path()).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
     drop(held);
     observe(&s, original.uid, &selection).unwrap().recheck().unwrap();
 

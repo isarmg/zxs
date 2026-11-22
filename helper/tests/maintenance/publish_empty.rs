@@ -133,7 +133,7 @@ fn a_partially_labelled_original_can_finish_by_cold_handoff_without_changing_the
     let independent = File::open(&pending).unwrap(); let inode = independent.metadata().unwrap().ino();
     let bytes = fs::read(&pending).unwrap();
     for p in [r.path(), d.as_path()] {
-        assert_eq!(fgetxattr(&File::open(p).unwrap(), c"user.zxs.volume", &mut [0u8;160][..]), Err(Errno::NODATA));
+        assert_eq!(fgetxattr(File::open(p).unwrap(), c"user.zxs.volume", &mut [0u8;160][..]), Err(Errno::NODATA));
     }
     drop(warm); drop(group); // prior process no longer owns the register or volume locks
     let selection = selected(&s,r.path(),&d);

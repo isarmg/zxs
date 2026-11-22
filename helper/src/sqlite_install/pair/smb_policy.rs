@@ -9,11 +9,6 @@ const MAX_MAPS:usize=256<<10;
 fn no()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,
     "no current site permission for the exact installed NTLMv2 enrollment provider and instance")}
 
-pub(super) fn lower<const N:usize>(s:&str)->io::Result<[u8;N]>{
-    if s.len()!=N*2||!s.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)){return Err(no());}
-    let mut out=[0;N];for(i,p)in out.iter_mut().enumerate(){*p=u8::from_str_radix(&s[i*2..i*2+2],16).map_err(|_|no())?;}
-    Ok(out)
-}
 pub(super) fn mode(f:&File,want:u32)->io::Result<()>{
     let m=f.metadata()?;if m.mode()!=(0o100000|want)||m.uid()!=0||m.gid()!=0||m.nlink()!=1{Err(no())}else{Ok(())}
 }
@@ -58,7 +53,8 @@ pub(super) fn segments(raw:&str,sites:&[usize],expected:&Mapping<'_>,code:bool)-
         let mut f=line.split_ascii_whitespace();let range=f.next().and_then(|s|s.split_once('-')).ok_or_else(no)?;
         let a=usize::from_str_radix(range.0,16).map_err(|_|no())?;
         let b=usize::from_str_radix(range.1,16).map_err(|_|no())?;
-        if a>=b{return Err(no());}if !sites.iter().any(|p|(a..b).contains(p)){continue;}
+        if a>=b{return Err(no());}
+        if !sites.iter().any(|p|(a..b).contains(p)){continue;}
         let mode=f.next().ok_or_else(no)?;
         if if code{mode!="r-xp"}else{!["r--p","rw-p","r-xp"].contains(&mode)}{return Err(no());}let _offset=f.next().ok_or_else(no)?;
         let (ma,mi)=f.next().and_then(|s|s.split_once(':')).ok_or_else(no)?;

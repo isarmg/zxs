@@ -131,13 +131,14 @@ fn code_map(bytes:&[u8],address:u64)->io::Result<CodeMap>{
 struct ExecAux{phdr:u64,phent:u64,phnum:u64,entry:u64,page:u64}
 fn exec_aux(raw:&[u8])->io::Result<ExecAux>{
     // Native x86-64 ELF, not the supplied argv or a userspace copy of auxv.
-    if raw.len()<16||raw.len()>MAX_AUXV||raw.len()%16!=0{return Err(no());}
+    let (words,tail)=raw.as_chunks::<16>();
+    if words.is_empty()||raw.len()>MAX_AUXV||!tail.is_empty(){return Err(no());}
     let mut wanted=[None;5];let mut ended=false;
-    for (i,e) in raw.chunks_exact(16).enumerate(){
+    for (i,e) in words.iter().enumerate(){
         let tag=u64::from_le_bytes(e[..8].try_into().expect("word"));
         let value=u64::from_le_bytes(e[8..].try_into().expect("word"));
         let j=match tag{
-            0 if value==0&&i+1==raw.len()/16=>{ended=true;break;}
+            0 if value==0&&i+1==words.len()=>{ended=true;break;}
             0=>return Err(no()),
             3=>0,4=>1,5=>2,9=>3,6=>4,_=>continue,
         };

@@ -155,19 +155,19 @@ pub(crate) fn account_worker()->io::Result<()>{
     if m.intent!=Intent::Fresh{return Ok(());}
     let binding=observed_binding(m.nonce,digest,&target,change.previous())?;
     let (peer,[link])=channel.wait_checked::<1>(Kind::JointSqlPeer,&digest,until,&alive)?;
-    let reader=JointReader::connect(link,child_peer(peer,&target.record,uid,gid)?,binding,&alive)?;
-    let stage=VaultWitness::receive(&channel,Kind::JointVaultDurable,1,&change,until,&alive)?;
+    let reader=JointReader::connect(link,child_peer(peer,&target.record,uid,gid)?,binding,alive)?;
+    let stage=VaultWitness::receive(&channel,Kind::JointVaultDurable,1,&change,until,alive)?;
     // The original parent sends this only after reaping the actual writer,
     // seeing its clean EOF and independently rechecking the durable stage.
     // The queued peer is identified by SCM; it is not expected still live.
-    let web=reader.receive(until,&alive)?;
+    let web=reader.receive(until,alive)?;
     let staged_live=||{alive()?;stage.require()};
-    let pending=cut.reserve_after_staging(change,m.nonce,web,until,&staged_live)?;
+    let pending=cut.reserve_after_staging(change,m.nonce,web,until,staged_live)?;
     pending.require()?;staged_live()?;
     channel.send(Kind::Reserved,&digest,&body(2,&target.record))?;
-    let placed=VaultWitness::receive(&channel,Kind::RustVaultPlaced,3,pending.change(),until,&alive)?;
+    let placed=VaultWitness::receive(&channel,Kind::RustVaultPlaced,3,pending.change(),until,alive)?;
     let placed_live=||{alive()?;stage.now_placed(&placed)};
-    let active=pending.finish(&placed_live)?;
+    let active=pending.finish(placed_live)?;
     if active!=target{return Err(bad("wrong independently read back ACTIVE result"));}
     let (again,stamp,current_mark)=cut.objects()?;
     if InitialDatabase::scope(&again,uid)?!=InitialDatabase::scope(&db,uid)?||
@@ -203,14 +203,14 @@ pub(crate) fn vault_worker()->io::Result<()>{
     let binding=observed_binding(order.manifest.nonce,target.action,&target.target,target.previous.as_ref())?;
     let complete=tty.reserve_joint(uid,gid,crypto,binding)?;
     let (peer,[link])=channel.wait_checked::<1>(Kind::JointWriterPeer,&target.action,until,&alive)?;
-    let writer=JointWriter::connect(link,child_peer(peer,&target.target.record,uid,gid)?,binding,until,&alive)?;
+    let writer=JointWriter::connect(link,child_peer(peer,&target.target.record,uid,gid)?,binding,until,alive)?;
     channel.send(Kind::JointWriterReady,&target.action,&body(1,&target.target.record))?;
     let (ready,[mut stage])=channel.wait_checked::<1>(Kind::RustStage,&target.action,until,&alive)?;
     if ready!=body(1,&target.target.record){return Err(bad("wrong original writable stage for the new shared password"));}
     alive()?;
     let web=complete.seal_in_held_tty(&mut stage)?;
     drop(stage);alive()?;
-    writer.deliver(web,&alive)?;
+    writer.deliver(web,alive)?;
     channel.send(Kind::RustVaultSealed,&target.action,&body(1,&target.target.record))
 
 }

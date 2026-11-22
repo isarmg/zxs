@@ -267,7 +267,7 @@ pub(super) fn observe<T>(locked:&LockedSystem,pool:&Id,init:&Id,actor:&Id,path:&
         if !original{return Err(unknown());}
         catalog::initial_metadata(tx,&template,source,pool,init)
     };
-    let (before,claims)=observed::snapshot(&mut anchor,pool,init,locked,&original,&template,&marker,&read)?;
+    let (before,claims)=observed::snapshot(&mut anchor,pool,init,locked,&original,&template,&marker,read)?;
     // Obvious enrolled path intersection is conclusive without even opening
     // a source directory stream. Otherwise preserve passive alias exclusions.
     let obvious=claims.iter().any(|c|spelling(path,&c.path));

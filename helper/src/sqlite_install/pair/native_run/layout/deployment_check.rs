@@ -89,12 +89,12 @@ fn checked_reply(meta:&[u8;65],site:&SitePayload,raw:&[u8])->io::Result<([u8;224
     let o=site.origin;
     let identities=[o.pool,o.init,o.setup,o.instance,o.bind];
     if *meta!=make_reply(&site.sha()?,&prefix)||&prefix[..16]!=b"ZXS-RUST-SMB-V2\0"||prefix[16]!=1||
-        prefix[18..24]!=[0;6]||prefix[24..104].chunks_exact(16).zip(identities).any(|(actual,id)|actual!=id){
+        prefix[18..24]!=[0;6]||prefix[24..104].as_chunks::<16>().0!=identities{
         return Err(unavailable());
     }
     let n=usize::from(prefix[17]);
     let generation=u64::from_be_bytes(prefix[152..160].try_into().expect("generation"));
-    if !(1..=64).contains(&n)||prefix[104..152].chunks_exact(16).any(|x|x==[0;16])||
+    if !(1..=64).contains(&n)||prefix[104..152].as_chunks::<16>().0.contains(&[0;16])||
         !(1..=(i64::MAX as u64)).contains(&generation)||prefix[160+n..].iter().any(|&b|b!=0)||
         !super::super::super::login(&prefix[160..160+n])||
         (generation==1)!=(prefix[120..136]==o.setup){
@@ -113,7 +113,7 @@ fn observe()->io::Result<(Id,Id,Id,Id,u64)>{
     let subject=q.site.subject.tuple();
     let check=||{tty.check()?;site.require()};
     check()?;
-    let (db,witness,marker,marker_witness,prefix,generation)=query_with(&q.encode()?,locked,subject,None,&check,|ch,scope,until|{
+    let (db,witness,marker,marker_witness,prefix,generation)=query_with(&q.encode()?,locked,subject,None,check,|ch,scope,until|{
         let (proof,[fd])=ch.wait_checked::<1>(Kind::DeployedDatabase,scope,until,&check)?;
         let db=InitialDatabase::received(fd,subject.1)?;
         let place=db.named(locked)?;
@@ -175,8 +175,8 @@ mod tests{
     fn reattach_reply_requires_exact_site_digest_current_origin_and_public_bytes_only(){
         let q=question();let o=q.site.origin;
         let mut b=[0;224];b[..16].copy_from_slice(b"ZXS-RUST-SMB-V2\0");b[16]=1;b[17]=3;
-        for (slot,id) in b[24..152].chunks_exact_mut(16).zip([o.pool,o.init,o.setup,o.instance,o.bind,[44;16],o.setup,[45;16]]){
-            slot.copy_from_slice(&id);
+        for (slot,id) in b[24..152].as_chunks_mut::<16>().0.iter_mut().zip([o.pool,o.init,o.setup,o.instance,o.bind,[44;16],o.setup,[45;16]]){
+            *slot=id;
         }
         b[159]=1;b[160..163].copy_from_slice(b"smb");
         let sha=q.site.sha().unwrap();let meta=make_reply(&sha,&b);

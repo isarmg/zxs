@@ -10,7 +10,7 @@ const WIRE:usize=8+1+32+32+65;
 pub(super) type Payload=[u8;65];
 
 #[derive(Clone,Copy)]
-pub(super) enum Kind{Reserved=3,Complete=5,Lease=6,Warm=7,Prepared=8,ChosenFolder=9,VolumeClaim=10,FirstBrowserReady=12,FirstBrowserRequest=13,RustInspect=15,RustStage=16,RustVaultPlaced=17,RustVaultSealed=18,
+pub(super) enum Kind{Reserved=3,Complete=5,Lease=6,ChosenFolder=9,VolumeClaim=10,FirstBrowserReady=12,FirstBrowserRequest=13,RustInspect=15,RustStage=16,RustVaultPlaced=17,RustVaultSealed=18,
     CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23,RetirementCheck=29,ImportInventory=30,FreshDatabase=31,DeployedActive=32,DeployedDatabase=33,DeployedMarker=34,SharedAccountDurable=38,JointWriterReady=39,
     JointWebReceiverReady=40,JointWebMaterial=41,JointSqlPeer=42,JointWriterPeer=43,JointVaultDurable=44}
 
@@ -106,7 +106,7 @@ mod tests{
         let data=[5;65];let digest=[4;32];
         root.send(Kind::Reserved,&digest,&data).unwrap();
         assert_eq!(worker.receive::<0>(Kind::Reserved,&digest).unwrap().0,data);
-        root.send(Kind::Warm,&digest,&data).unwrap();
+        root.send(Kind::Complete,&digest,&data).unwrap();
         assert!(worker.receive::<0>(Kind::Reserved,&digest).is_err());
         root.send(Kind::Reserved,&[7;32],&data).unwrap();
         assert!(worker.receive::<0>(Kind::Reserved,&digest).is_err());

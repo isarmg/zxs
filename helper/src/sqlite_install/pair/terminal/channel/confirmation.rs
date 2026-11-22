@@ -21,7 +21,7 @@ fn clear(f:&File)->io::Result<()>{Ok(tcflush(f,QueueSelector::IFlush)?)}
 impl PublicConfirmation{
     pub(in crate::sqlite_install) fn select()->io::Result<Self>{
         let terminal=Channel::select()?; // rejects /dev/tty aliases; holds original stderr slave/VT
-        if !readable(fs::fcntl_getfl(&io::stdin())?){return Err(refuse("standard input must already have read access"));}
+        if !readable(fs::fcntl_getfl(io::stdin())?){return Err(refuse("standard input must already have read access"));}
         let (_proc,table)=own_descriptor_table()?;
         let link=File::from(fs::openat(&table,c"0",OFlags::PATH|OFlags::NOFOLLOW|OFlags::CLOEXEC,Mode::empty())?);
         if !link.metadata()?.is_symlink()||fs::fstatfs(&link)?.f_type!=fs::PROC_SUPER_MAGIC
@@ -34,7 +34,7 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install) fn check(&self)->io::Result<()>{
         self.terminal.require()?;
         let key=tcgetattr(&self.reader)?;
-        if !readable(fs::fcntl_getfl(&io::stdin())?)||Surface::at(&self.reader)?!=self.terminal.original
+        if !readable(fs::fcntl_getfl(io::stdin())?)||Surface::at(&self.reader)?!=self.terminal.original
             ||fs::fcntl_getfl(&self.reader)?&(OFlags::NONBLOCK|OFlags::ACCMODE)!=(OFlags::NONBLOCK|OFlags::RDONLY)
             ||key.line_discipline!=0||!key.local_modes.contains(LocalModes::ICANON){
             return Err(refuse("the original nonblocking foreground canonical terminal is required"));}
@@ -66,7 +66,7 @@ impl PublicConfirmation{
         self.ask("RESET-ZXS-ACCOUNT",Some(review),96*1024)
     }
     pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
-        nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),&||self.check())
+        nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),||self.check())
     }
     fn ask(&self,verb:&'static str,preview:Option<String>,limit:usize)->io::Result<()>{
         let fresh=challenge()?;let answer=format!("{verb} {fresh}\n");
@@ -79,10 +79,10 @@ impl PublicConfirmation{
                 // The bounded action preview and challenge share one
                 // nonblocking OFD and the same real deadline.
                 if text.len()>limit{return Err(failure("fixed installation preview exceeds its budget"));}
-                nonblocking_prompt(self.terminal.out.as_fd(),text.as_bytes(),end,&check)?;
+                nonblocking_prompt(self.terminal.out.as_fd(),text.as_bytes(),end,check)?;
                 clear(&self.reader)?;
             }
-            nonblocking_prompt(self.terminal.out.as_fd(),prompt.as_bytes(),end,&check)?;
+            nonblocking_prompt(self.terminal.out.as_fd(),prompt.as_bytes(),end,check)?;
             let mut line=[0u8;96];
             while Instant::now()<end{
                 check()?;

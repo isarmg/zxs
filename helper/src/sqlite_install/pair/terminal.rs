@@ -81,6 +81,7 @@ impl Entry {
         }
     }
     fn bytes(&self)->&[u8] { &self.bytes[..self.len] }
+    #[cfg(test)]
     fn take(self) -> Secret {
         let mut exact = Zeroizing::new(vec![0u8; self.len].into_boxed_slice());
         exact.copy_from_slice(&self.bytes[..self.len]); exact
@@ -116,6 +117,7 @@ impl<'a> Quiet<'a> {
         tcflush(fd, QueueSelector::IFlush)?; // remove type-ahead BEFORE any prompt
         Ok(q)
     }
+    #[cfg(test)]
     fn next_prompt(&self)->io::Result<()> {self.verify()?;tcflush(self.fd,QueueSelector::IFlush)?;Ok(())}
     fn verify(&self) -> io::Result<()> {
         if !same_mode(&tcgetattr(self.fd)?, &self.current) {
@@ -155,10 +157,10 @@ fn capture(entries:&mut [Entry;2],prompt:Prompt,selected:&SelectedInput,fd:Borro
            verify:impl Fn()->io::Result<()>,signals:&PromptSignals)->io::Result<()> {
     let check=|| {signals.check()?; selected.audit.require_current()?; selected.channel.require()?;verify()};
     let mut scratch=Zeroizing::new([0u8;1]);
-    for i in 0..entries.len() {
+    for (i,entry) in entries.iter_mut().enumerate() {
         check()?;tcflush(fd,QueueSelector::IFlush)?; // never accept leftovers from another prompt
         let end=Instant::now()+Duration::from_secs(120);
-        selected.channel.prompt(prompt,i,end,&check)?;
+        selected.channel.prompt(prompt,i,end,check)?;
         loop {
             check()?;
             if Instant::now()>=end{return Err(io::Error::new(io::ErrorKind::TimedOut,"credential prompt expired"));}
@@ -166,7 +168,7 @@ fn capture(entries:&mut [Entry;2],prompt:Prompt,selected:&SelectedInput,fd:Borro
                 Err(rustix::io::Errno::INTR)=>continue,other=>other?,
             };
             if n==0 {continue;} // VMIN=0/VTIME=2: timeout or hangup, never a complete password
-            let done=entries[i].key(scratch[0]);scratch.zeroize();
+            let done=entry.key(scratch[0]);scratch.zeroize();
             if done? {break;}
         }
     }

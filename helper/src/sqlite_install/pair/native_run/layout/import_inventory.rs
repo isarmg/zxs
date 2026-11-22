@@ -59,7 +59,7 @@ impl ImportCheck{
         };
         checked()?;
         let raw=encode(self,&random::<32>()?,place(&system)?,location)?;
-        let found=query_with(&raw,&original,actor,None,&checked,|channel,digest,until|{
+        let found=query_with(&raw,&original,actor,None,checked,|channel,digest,until|{
             let (body,[])=channel.wait_checked::<0>(Kind::ImportInventory,digest,until,&checked)?;
             Reply::decode(&body,self.pool,self.init,location[2])
         })?;

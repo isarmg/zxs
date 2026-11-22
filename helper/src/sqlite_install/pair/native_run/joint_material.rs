@@ -35,7 +35,7 @@ impl Binding{
             Some(old)=>old.generation>0&&old.generation.checked_add(1)==Some(generation)
                 &&old.op!=op&&old.record!=record&&old.op!=[0;16]&&old.record!=[0;16]
                 &&if old.generation==1{old.op==prefix[56..72]}
-                else{!prefix[24..104].chunks_exact(16).any(|id|id==old.op)},
+                else{!prefix[24..104].as_chunks::<16>().0.contains(&old.op)},
         };
         if [nonce,action].contains(&[0;32])||[account,op,record].contains(&[0;16])||!monotonic||
             prefix[104..120]!=account||prefix[120..136]!=op||prefix[136..152]!=record||prefix[152..160]!=generation.to_be_bytes(){
@@ -214,7 +214,7 @@ mod tests{
     fn peer(pid:Pid)->UCred{UCred{pid,uid:getuid(),gid:getgid()}}
     fn exact_material()->File{JointWeb::synthetic(binding()).seal_for_peer(&binding()).unwrap()}
     fn case_in_child(case:&str){
-        let socket=File::from(fcntl_dupfd_cloexec(&io::stdin(),3).unwrap());
+        let socket=File::from(fcntl_dupfd_cloexec(io::stdin(),3).unwrap());
         // Unit test for genuine different process SCM only. No privilege,
         // tracing change, credential, database on disk or host runtime.
         let end=End::original(socket,peer(getppid().unwrap()),binding()).unwrap();

@@ -18,7 +18,7 @@ fn selection(s: &Path, r: &Path, d: &Path) -> Selection {
 }
 fn label(p: &Path) -> Option<Vec<u8>> {
     let mut buf = [0; 160];
-    match fgetxattr(&File::open(p).unwrap(), c"user.zxs.volume", &mut buf[..]) {
+    match fgetxattr(File::open(p).unwrap(), c"user.zxs.volume", &mut buf[..]) {
         Ok(n) => Some(buf[..n].to_vec()),
         Err(Errno::NODATA) => None,
         Err(e) => panic!("cannot inspect explicit original fixture volume: {e}"),
@@ -46,9 +46,9 @@ fn warm_first_label_then_cold_same_pending_finishes_all_original_labels_and_neve
     labelled.recheck().unwrap();
     for (i,path) in [s.as_path(), r.path(), d.as_path()].into_iter().enumerate() {
         assert_eq!(label(path).as_deref(), Some(expected[i].as_slice()));
-        assert_eq!(flock(&File::open(path).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
+        assert_eq!(flock(File::open(path).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
     }
-    assert_eq!(flock(&File::open(s.join("INITIALIZING")).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
+    assert_eq!(flock(File::open(s.join("INITIALIZING")).unwrap(), NonBlockingLockShared), Err(Errno::WOULDBLOCK));
     drop(labelled);
     // The exact existing labels may be resynchronized, never replaced. A
     // filesystem's ctime is not our proof of label contents; reread the attributes.

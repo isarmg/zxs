@@ -90,7 +90,7 @@ fn synchronized_genesis_and_frontier_are_read_from_the_same_still_unnamed_origin
     drop(group);
     for p in [system.as_path(), recycle.path(), data.as_path()] {
         assert_eq!(fs::read_dir(p).unwrap().count(), 0);
-        flock(&File::open(p).unwrap(), NonBlockingLockShared).unwrap();
+        flock(File::open(p).unwrap(), NonBlockingLockShared).unwrap();
     }
 }
 

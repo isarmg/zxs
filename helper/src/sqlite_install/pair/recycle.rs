@@ -3,7 +3,7 @@
 use super::bad;
 use crate::{maintenance::HostMounts,pinned::{Entity,Kind,Mount,Pinned},
     sqlite_install::{catalog::Initial,markers::RecycleMark,originals::named_backing}};
-use rustix::{fs::{AtFlags,StatVfsMountFlags,fstatvfs,statat},io::Errno};
+use rustix::fs::{StatVfsMountFlags,fstatvfs};
 use std::{fs::File,io,os::unix::fs::MetadataExt,path::Path};
 
 fn no()->io::Error{bad("cannot prove the original independent recycle disk")}

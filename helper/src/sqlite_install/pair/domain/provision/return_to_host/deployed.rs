@@ -218,11 +218,6 @@ pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,si
     site.check()?;Ok(payload)
 }
 
-pub(in crate::sqlite_install::pair) fn verify_deployed_worker(payload:&SitePayload,plan:&RustPlan)->io::Result<()>{
-    if deployed_worker_payload(plan,payload.sha()?)?!=*payload{return Err(unknown());}
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests{
     use super::*;
@@ -239,7 +234,7 @@ mod tests{
     fn reattach_and_shared_account_workers_keep_only_the_exact_image_from_the_protected_site(){
         let text=include_str!("../../../../../../tests/smb-host/rust-install-v1.txt");
         let hex=text.lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
-        let raw=hex.as_bytes().chunks_exact(2).map(|b|u8::from_str_radix(std::str::from_utf8(b).unwrap(),16).unwrap()).collect::<Vec<_>>();
+        let raw=hex.as_bytes().as_chunks::<2>().0.iter().map(|b|u8::from_str_radix(std::str::from_utf8(b).unwrap(),16).unwrap()).collect::<Vec<_>>();
         let plan=RustPlan::decode(&raw).unwrap();
         let subject=crate::sqlite_install::pair::ExplicitSubject::checked([71;16],1001,1002).unwrap();
         let mut payload=SitePayload::new(&plan,subject,Path::new("/synthetic/S"),

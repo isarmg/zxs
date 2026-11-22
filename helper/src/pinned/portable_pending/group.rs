@@ -51,7 +51,7 @@ fn has_reserved_name(dir: &File) -> io::Result<bool> {
 impl Root<'_> {
     fn require_origin(&self, uid: u32) -> io::Result<Stamp> {
         let s = Stamp::root(&self.dir, uid)?;
-        if Stamp::root(&self.original, uid)? != s || Stamp::root(&self.name.storage_directory()?, uid)? != s {
+        if Stamp::root(self.original, uid)? != s || Stamp::root(&self.name.storage_directory()?, uid)? != s {
             return Err(bad("a selected volume no longer matches its supplied original directory"));
         }
         Ok(s)

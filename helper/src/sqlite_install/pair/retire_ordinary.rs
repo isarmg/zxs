@@ -202,7 +202,7 @@ pub(super) fn observe<T>(locked:&LockedSystem,scope:&Scope,actor:&Id,report:impl
         if !valid{return Err(unknown());}
         at_scope(tx,&tpl,locked.source(),scope)
     };
-    let (before,choice)=observed::snapshot(&mut anchor,&scope.pool,&scope.init,locked,&original,&tpl,&mark,&read)?;
+    let (before,choice)=observed::snapshot(&mut anchor,&scope.pool,&scope.init,locked,&original,&tpl,&mark,read)?;
     let uid=locked.source().uid();
     let f=OriginalF::select(scope,&choice,s,host,uid)?;
     let occupied=f.probe(s,host,uid,&choice)?;
