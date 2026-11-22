@@ -44,8 +44,12 @@ struct Route{
     share:ShareId,setting:OperationId,auth:OperationId,actor:AccountId,epoch:i64,
     destination:Option<Setting>,
 }
+/// Original confirmed kind-12 selection, not merely the same FILE at the
+/// same two names. Its request binds the selected SAVE/history and authority.
 #[derive(Clone,Debug,Eq,PartialEq)]
-pub(super) struct Moved{pub(super) op:OperationId,pub(super) from:Place,pub(super) to:Place}
+pub(super) struct Moved{
+    pub(super) op:OperationId,pub(super) from:Place,pub(super) to:Place,request:[u8;32],
+}
 pub(super) struct OrdinaryMoveSource{
     pub(super) place:Place,pub(super) physical:Installed,pub(super) view:Option<ReadRecord>,pub(super) grant:Setting,
 }
@@ -203,11 +207,11 @@ impl Route{
         if !allowed{return Err(io::ErrorKind::PermissionDenied.into());}
         let birth=file_create::committed_file(db,c,file)?;
         let work=save.map(|v|work_record::confirmed(db,&birth,v)).transpose()?;
-        let original=Self{from:Placed{birth,here:src.clone()},kind,to,parent,name,work,head,
+        let original=Self{from:Placed{birth,here:src},kind,to,parent,name,work,head,
             share:tree.setting.share,setting:tree.setting.op,auth:tree.auth,actor:tree.actor,epoch:tree.epoch,
             destination:tree.destination.map(|d|d.setting)};
-        if !original.exists_at(db,op,true)?{return Err(invalid("no exact result for this original transfer"));}
-        Ok(Some(Moved{op,from:src,to:original.target(op)}))
+        let moved=original.confirmed_at(db,op)?.ok_or_else(||invalid("no exact result for this original transfer"))?;
+        Ok(Some(moved))
     }
     fn target(&self,op:OperationId)->Place{
         Place{file:self.from.here.file,op,generation:self.from.here.generation+1,volume:self.to,
@@ -242,15 +246,18 @@ impl Route{
         }
         Ok(h.finish())
     }
-    fn exists_at(&self,db:&Connection,op:OperationId,committed:bool)->io::Result<bool>{
+    fn exact_request_at(&self,db:&Connection,op:OperationId,committed:bool)->io::Result<Option<[u8;32]>>{
         let q=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,m.file_id,m.direction,m.source_op,m.source_gen,
           m.source_id,m.source_name,m.target_id,m.target_name,m.share_id,m.setting_op,m.auth_op,m.save_op,m.manual_op,m.source_parent,m.target_parent,m.source_backing,m.source_terminal,m.target_setting_op
           FROM main.operation o LEFT JOIN main.file_transfer m ON m.transfer_op=o.op_id WHERE o.op_id=?1")?;
         q.bind_bytes(1,&op.0)?;
-        if !work_record::start_one(&q)?{return Ok(false);}
+        if !work_record::start_one(&q)?{return Ok(None);}
+        if q.byte(0)?!=12||q.byte(1)?!=u8::from(committed)||q.array::<16>(2)?!=self.actor.0{
+            return Err(invalid("recorded transfer differs from its original scope"));
+        }
+        let request=q.array::<32>(3)?;
         let f=&self.from.here;
-        if q.byte(0)?!=12||q.byte(1)?!=u8::from(committed)||q.array::<16>(2)?!=self.actor.0||q.array::<32>(3)?!=self.digest(op)?||
-            q.array::<16>(4)?!=f.file.0||q.byte(5)?!=self.kind.stored()||q.array::<16>(6)?!=f.op.0||q.integer(7)?!=f.generation||
+        if request!=self.digest(op)?||q.array::<16>(4)?!=f.file.0||q.byte(5)?!=self.kind.stored()||q.array::<16>(6)?!=f.op.0||q.integer(7)?!=f.generation||
             q.array::<16>(8)?!=f.volume.0||!q.blob_eq(9,222,f.name.as_bytes())?||q.array::<16>(10)?!=self.to.0||!q.blob_eq(11,222,self.name.as_bytes())?||
             q.array::<16>(12)?!=self.share.0||q.array::<16>(13)?!=self.setting.0||q.array::<16>(14)?!=self.auth.0||
             work_record::optional(&q,15)?!=self.work.map(|r|r.record.key().save)||work_record::optional(&q,16)?!=self.head||
@@ -259,10 +266,19 @@ impl Route{
             work_record::optional(&q,21)?!=self.destination.map(|d|d.op){
             return Err(invalid("recorded transfer differs from its original scope"));
         }
-        q.done()?;Ok(true)
+        q.done()?;Ok(Some(request))
+    }
+    fn pending_at(&self,db:&Connection,op:OperationId)->io::Result<bool>{
+        Ok(self.exact_request_at(db,op,false)?.is_some())
+    }
+    /// During a writer cut the caller must not return this proof to an
+    /// observer until the original COMMIT or its exact readback succeeds.
+    fn confirmed_at(&self,db:&Connection,op:OperationId)->io::Result<Option<Moved>>{
+        let Some(request)=self.exact_request_at(db,op,true)? else{return Ok(None);};
+        Ok(Some(Moved{op,from:self.from.here.clone(),to:self.target(op),request}))
     }
     fn still_live(&self,db:&Connection,op:OperationId)->io::Result<()>{
-        if !self.exists_at(db,op,false)?{return Err(pending());}
+        if !self.pending_at(db,op)?{return Err(pending());}
         let q=db.prepare(c"SELECT actor_id FROM main.live_transfer WHERE transfer_op=?1")?;
         q.bind_bytes(1,&op.0)?;
         if !work_record::start_one(&q)?||q.array::<16>(0)?!=self.actor.0{return Err(io::ErrorKind::PermissionDenied.into());}
@@ -564,7 +580,7 @@ impl TransferAt<'_>{
                     return Err(if issued_here.get(){io::Error::new(io::ErrorKind::ConnectionAborted,
                         "fresh ordinary move reservation outcome is unknown")}else{err});
                 }
-                if !src.at(|db,c|{unchanged(db,&c)?;plan.exists_at(db,op,false)})?{return Err(err);}
+                if !src.at(|db,c|{unchanged(db,&c)?;plan.pending_at(db,op)})?{return Err(err);}
             }
         }
         src.at(|db,c|{unchanged(db,&c)?;plan.still_live(db,op)})?;
@@ -637,21 +653,23 @@ impl TransferAt<'_>{
             let st=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=12 AND state=0")?;
             st.bind_bytes(1,&op.0)?;st.done()?;drop(st);
             super::retirement::record(db,op,retirement.as_deref(),&target_proof)?;
-            if !plan.exists_at(db,op,true)?{return Err(invalid("transfer did not select the original receipt"));}
-            Ok(())
+            plan.confirmed_at(db,op)?.ok_or_else(||invalid("transfer did not select the original receipt"))
         },move||opened.map_or(Ok(()),OpenedOrdinaryMove::before_selection));
         drop(w);
-        if let Err(error)=result{
-            // A failing COMMIT need not mean it was rolled back. Never move
-            // again on that assumption. Only the exact receipt can settle it.
-            if !src.at(|db,c|{self.authorized(db,&c)?;plan.exists_at(db,op,true)}).unwrap_or(false){
-                if src.at(|db,c|{self.authorized(db,&c)?;plan.exists_at(db,op,false)}).unwrap_or(false){
+        match result{
+            Ok(confirmed)=>Ok(confirmed),
+            Err(error)=>{
+                // A failing COMMIT need not mean it was rolled back. Never
+                // move again on that assumption; only exact readback settles it.
+                if let Ok(Some(confirmed))=src.at(|db,c|{self.authorized(db,&c)?;plan.confirmed_at(db,op)}){
+                    return Ok(confirmed);
+                }
+                if src.at(|db,c|{self.authorized(db,&c)?;plan.pending_at(db,op)}).unwrap_or(false){
                     return Err(error);
                 }
-                return Err(io::Error::new(io::ErrorKind::ConnectionAborted,"transfer outcome unknown at the original SQL boundary"));
+                Err(io::Error::new(io::ErrorKind::ConnectionAborted,"transfer outcome unknown at the original SQL boundary"))
             }
         }
-        Ok(Moved{op,from:plan.from.here.clone(),to:plan.target(op)})
     }
 }
 
@@ -687,3 +705,7 @@ pub(crate) use ordinary_move::RustOrdinaryMove;
 #[cfg(test)]
 #[path="../../tests/unit/sqlite_transfer_io.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path="../../tests/unit/sqlite_selected_transfer.rs"]
+mod selected_transfer_tests;
