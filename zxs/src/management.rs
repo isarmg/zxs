@@ -6,6 +6,7 @@ mod pages;
 mod transport;
 mod access;
 mod manual;
+mod directory;
 pub(crate) use access::{MAX_HTTPS_ORIGIN,WebAccess};
 use access::Audience;
 
@@ -34,8 +35,11 @@ impl Token{
     fn matches(&self,other:&Self)->bool{self.0.iter().zip(other.0).fold(0u8,|n,(a,b)|n|(a^b))==0}
 }
 struct Session<'s>{audience:Audience,admin:WebAdmin<'s>,csrf:Token,born:Instant,last:Instant,
-    permit:Arc<AtomicBool>,chosen:manual::Chosen}
+    permit:Arc<AtomicBool>,chosen:manual::Chosen,directory_pages:directory::HeldPages<'s>}
 impl Drop for Session<'_>{fn drop(&mut self){self.permit.store(false,Ordering::Release);}}
+fn session_live_at(born:Instant,last:Instant,now:Instant)->bool{
+    now.saturating_duration_since(born)<ABSOLUTE&&now.saturating_duration_since(last)<IDLE
+}
 struct App<'s>{source:&'s InitialReader,sessions:BTreeMap<Token,Session<'s>>,attempts:VecDeque<Instant>}
 struct Request{method:String,target:String,audience:Audience,origin:Option<String>,content_type:String,
     cookie:Option<Token>,body:transport::PrivateBytes}
@@ -60,7 +64,7 @@ const BAD:fn()->Reply=||Reply::text("400 Bad Request","请求格式不正确。"
 impl<'s> App<'s>{
     fn new(source:&'s InitialReader)->Self{Self{source,sessions:BTreeMap::new(),attempts:VecDeque::new()}}
     fn expire(&mut self,now:Instant){
-        self.sessions.retain(|_,s|now.saturating_duration_since(s.born)<ABSOLUTE&&now.saturating_duration_since(s.last)<IDLE);
+        self.sessions.retain(|_,s|session_live_at(s.born,s.last,now));
     }
     fn handle(&mut self,mut q:Request,now:Instant)->Reply{
         if let Some(k)=q.cookie.as_ref(){
@@ -131,7 +135,7 @@ impl<'s> App<'s>{
         let mut r=Reply::redirect("/");
         r.set_cookie=Some(q.audience.set_cookie(&key.hex(),false));
         self.sessions.insert(key,Session{audience:q.audience,admin,csrf,born:now,last:now,
-            permit:Arc::new(AtomicBool::new(true)),chosen:None});r
+            permit:Arc::new(AtomicBool::new(true)),chosen:None,directory_pages:directory::HeldPages::default()});r
     }
 }
 
