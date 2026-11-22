@@ -5,12 +5,14 @@
 | 项目 | 用途 | 文档 |
 | --- | --- | --- |
 | [`zxs/`](zxs/) | SMB 文件共享、手动版本、跨盘移动、回收及管理 Web | [使用](zxs/README.md) · [架构](zxs/ARCHITECTURE.md) · [任务](zxs/TASKS.md) |
-| [`helper/`](helper/) | 首次部署、离线维护和磁盘诊断 | [使用](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [任务](helper/TASKS.md) |
+| [`helper/`](helper/) | 在线宿主只读观察、首次部署及离线维护 | [使用](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [任务](helper/TASKS.md) |
 | [`zxs-workspace/`](zxs-workspace/) | 整目录 ZIP 版本、工作树、命令行和桌面界面 | [使用](zxs-workspace/README.md) · [架构](zxs-workspace/ARCHITECTURE.md) · [任务](zxs-workspace/TASKS.md) |
 
 开发时进入对应的项目目录。单独取出任一项目不需要另外两个项目的源码、进程或私有数据。各自任务清单说明哪些功能已写、哪些仍待实现，以及哪些验收没有运行。
 
-**SMB：** 只维护编入同一个 `zxs` 二进制的内置 Rust SMB 3.1.1，服务于 ZXS 的文件共享。不另发 SMB 服务程序，不要求部署 Samba 服务端，不提供通用 SMB 服务或后备实现。当前是面向新池的源码候选，不是已发布的安装包，也不代表 Windows、macOS 或 Linux 客户端已通过验收；不迁移或接管旧实现的既有池。见 [ZXS 任务清单](zxs/TASKS.md)。
+ZXS 和 Helper 的交接以[原池落盘合同](zxs/docs/sqlite-system.md)和[共用账户合同](zxs/docs/first-account-v1.md)为准，不共享源码或进程。Helper 的宿主观测可在线进行，不证明卷已登记；涉及原池的维护写入另须停机并独占原件。[可选 Helper 构建](helper/docs/embedded-image.md)仅接收另外核准的完整 ZXS 制品。Workspace 的 `.zxs` 是普通 Store ZIP，不是服务端的卷或容器格式。
+
+**SMB：** 只维护编入同一个 `zxs` 二进制的内置 Rust SMB 3.1.1，服务于 ZXS 的文件共享。不另发 SMB 服务程序，不要求部署 Samba 服务端，不提供通用 SMB 服务或后备实现。当前是面向新池的源码候选，不是已发布的安装包，也不代表 Windows、macOS 或 Linux 客户端已通过验收；不迁移或接管旧实现的既有池。Core 已有普通文件跨文件系统移动引擎，公开 SMB 路径尚未接通。见 [ZXS 任务清单](zxs/TASKS.md)。
 
 ## 历史资料
 
