@@ -2,10 +2,6 @@ name: Linux disposable guest terminal preflight
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/linux-guest-terminal-preflight.yml
 
 permissions: {}
 
@@ -106,7 +102,7 @@ jobs:
           "${git_source[@]}" init -q
           "${git_source[@]}" fetch --no-tags --depth=1 https://github.com/isarmg/zxs.git "$GITHUB_SHA"
           test "$("${git_source[@]}" rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
-          "${git_source[@]}" cat-file blob "$GITHUB_SHA:zxs/test/acceptance/guest_terminal_preflight.py" > observation.py
+          "${git_source[@]}" cat-file blob "$GITHUB_SHA:zxs/tests/acceptance/guest_terminal_preflight.py" > observation.py
           sha256sum observation.py
           printf '%s\n' 'instance-id: terminal-observation' > seed/meta-data
           cat > seed/user-data <<'CLOUD'
