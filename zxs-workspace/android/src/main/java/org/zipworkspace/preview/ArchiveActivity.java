@@ -115,6 +115,9 @@ public final class ArchiveActivity extends Activity {
         notice.setText("ZIP 目录预览\n打开目录只看声明。可另行核验成员、原包字节或 .zxs 整树；不解包、不认证来源。");
         body.addView(notice);
         pick = button(body, "选择本机 .zxs 或 Store ZIP", v -> choose());
+        button(body, "新建本机工作区", v -> {
+            if (requested == 0) startActivity(new Intent(this, WorkspaceEditActivity.class));
+        });
         cancel = button(body, "取消本次操作", v -> {
             if (search != null && search.matches == null) search = null;
             stopJob();
