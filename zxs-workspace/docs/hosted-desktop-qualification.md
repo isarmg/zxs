@@ -1,6 +1,6 @@
 # Windows / macOS 桌面 CI 验收
 
-在 GitHub Actions 选择 **Workspace desktop qualification**，对 `main` 手动运行。只在该工作流文件推送到 `main` 时自动运行；普通提交不触发。按实际 run 的提交、两个工作项和日志记录结果。
+在 GitHub Actions 选择 **Workspace desktop qualification**，对 `main` 手动运行。只有该工作流或本验收脚本改动推送到 `main` 才自动运行。按实际 run 的提交、两个工作项和日志记录结果。
 
 | GitHub 托管环境 | 必须执行 |
 | --- | --- |

@@ -9,7 +9,7 @@ from threading import Lock
 from typing import Callable, Protocol
 
 from .archive import stamp
-from .document import named_document, native_identity
+from .document import archive_observation, named_archive_observation, named_document, native_identity
 from .freeze import _sig, observe_held
 from .linux_authority import ProcView
 from .model import MAX_MEMBERS, Rejected, member_name
@@ -156,25 +156,21 @@ def filter_rows(rows, term, change=None, *, check=None):
     return tuple(hits)
 
 
-def _archive_stamp(info):
-    return (*native_identity(info, stat.S_IFREG), info.st_size, info.st_mtime_ns, info.st_ctime_ns)
-
-
 def _check_held_archive(selected, original):
-    if _archive_stamp(os.fstat(original)) != selected.observed:
+    if archive_observation(os.fstat(original)) != selected.observed:
         raise Rejected("已显示的原归档发生变化；请重新打开后比较")
 
 
 def _check_archive(selected, original, proc=None, expected_mount=None):
     _check_held_archive(selected, original)
     if proc is None:
-        if _archive_stamp(selected.path.stat(follow_symlinks=False)) != selected.observed:
+        if named_archive_observation(selected.path) != selected.observed:
             raise Rejected("归档已不在原名称；未重新打开正文")
         return None
     named = os.open(selected.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         actual = mount_id(original, read_proc=proc.read)
-        if (_archive_stamp(os.fstat(named)) != selected.observed or
+        if (archive_observation(os.fstat(named)) != selected.observed or
                 mount_id(named, read_proc=proc.read) != actual or
                 expected_mount is not None and expected_mount != actual):
             raise Rejected("原归档的名称或实际挂载已变化；未重新打开正文")

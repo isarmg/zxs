@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/workspace-desktop.yml
+      - zxs-workspace/tests/qualification/hosted_desktop.py
 
 permissions:
   contents: read

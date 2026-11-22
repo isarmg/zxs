@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import stat
 from .archive import read_managed_document, stamp
-from .document import archive_sha, named_document, native_identity
+from .document import archive_observation, archive_sha, named_archive_observation, named_document, native_identity
 from .model import MAX_CD, MAX_TOTAL, Commit, Rejected, check_id
 
 
@@ -36,11 +36,17 @@ def slot_previews(directory, *, check):
             generation = int(gen, 16)
             if not 0 < generation < 1 << 63: continue
             current = entry.stat(follow_symlinks=False)
-            try: entity = native_identity(current, stat.S_IFREG)
-            except Rejected: continue
-            if not 22 <= current.st_size <= MAX_TOTAL + 2 * MAX_CD + (1 << 20): continue
-            items.append(SlotPreview(entry.name, repo, branch, generation,
-                         (*entity, current.st_size, current.st_mtime_ns, current.st_ctime_ns)))
+            if os.name == "nt":
+                # Windows DirEntry.stat is useful for type, but lacks the file ID.
+                if (not stat.S_ISREG(current.st_mode) or
+                        current.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                    continue
+                observed = named_archive_observation(Path(entry.path))
+            else:
+                try: observed = archive_observation(current)
+                except Rejected: continue
+            if not 22 <= observed[2] <= MAX_TOTAL + 2 * MAX_CD + (1 << 20): continue
+            items.append(SlotPreview(entry.name, repo, branch, generation, observed))
     check()
     return tuple(sorted(items, key=lambda row: row.leaf))
 
@@ -51,12 +57,6 @@ class Node:
     path: Path
     sha256: str
     observed: tuple[int, int, int, int, int]  # Original held slot, never persisted in the ZIP.
-
-
-def _origin(path):
-    m = path.stat(follow_symlinks=False)
-    native_identity(m, stat.S_IFREG)
-    return (m.st_dev, m.st_ino, m.st_size, m.st_mtime_ns, m.st_ctime_ns)
 
 
 def _read_node(doc, path, expected, *, observer=None):
@@ -78,7 +78,7 @@ def _members(store, repo, *, check=None):
             if check is not None: check()
             if n > STORE_BUDGET: raise Rejected("directory catalog exceeds current scan budget")
             if entry.name.startswith(repo+".") and entry.name.endswith(".zxs"):
-                result[entry.name] = _origin(store / entry.name)
+                result[entry.name] = named_archive_observation(store / entry.name)
     return result
 
 

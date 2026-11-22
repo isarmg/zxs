@@ -1,4 +1,4 @@
-"""Read-only native calls for a selected local Windows directory. No DLL loads on import."""
+"""Native read-only Windows file and directory operations. No DLL loads on import."""
 import ctypes as c
 from dataclasses import dataclass
 from functools import lru_cache
@@ -122,6 +122,7 @@ class Native:
         n = c.WinDLL("ntdll.dll", use_last_error=True, winmode=0x800)
         self.create = _function(n,"NtCreateFile",I32,c.POINTER(P),U32,c.POINTER(_Object),
                                 c.POINTER(_IO),P,U32,U32,U32,U32,P,U32)
+        self.open_attributes = _function(k,"CreateFileW",P,c.c_wchar_p,U32,U32,P,U32,U32,P)
         self.volume_info = _function(n,"NtQueryVolumeInformationFile",I32,P,c.POINTER(_IO),P,U32,I32)
         self.file_info = _function(k,"GetFileInformationByHandleEx",I32,P,I32,P,U32)
         self.file_type = _function(k,"GetFileType",U32,P)
@@ -132,6 +133,19 @@ class Native:
         self.close_handle = _function(k,"CloseHandle",I32,P)
         self.current_process = _function(k,"GetCurrentProcess",P)
         self.duplicate_handle = _function(k,"DuplicateHandle",I32,P,P,P,c.POINTER(P),U32,I32,U32)
+
+    def archive_stat(self, path):
+        """Use the same fstat provider as an open archive, with no access to file data."""
+        import msvcrt
+        # FILE_READ_ATTRIBUTES, full sharing, OPEN_EXISTING, NO_RECALL | OPEN_REPARSE_POINT.
+        value = self.open_attributes(os.fspath(path), 0x80, 7, None, 3, 0x00300000, None)
+        if value in (None, P(-1).value): raise c.WinError(c.get_last_error())
+        owner = Handle(self, value)
+        with owner:
+            fd = msvcrt.open_osfhandle(value, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+            owner.value = None  # The CRT now owns the same non-inheritable HANDLE.
+            try: return os.fstat(fd)
+            finally: os.close(fd)
 
     def duplicate(self, original):
         if original is None: raise Rejected("the original Windows directory handle is closed")

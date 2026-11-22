@@ -19,6 +19,25 @@ def native_identity(meta, kind):
     return meta.st_dev, meta.st_ino
 
 
+def archive_observation(meta):
+    return (*native_identity(meta, stat.S_IFREG), meta.st_size, meta.st_mtime_ns, meta.st_ctime_ns)
+
+
+def named_archive_observation(path):
+    """Observe a file name in the same identity/time domain as a held archive."""
+    original = archive_observation(path.stat(follow_symlinks=False))
+    if os.name != "nt": return original
+    from .windows_nt import backend
+    native = backend()
+    if native is None: raise Rejected("cannot verify Windows archive metadata")
+    # CPython's Windows path stat puts birth time in st_ctime; held fstat
+    # reports the real ChangeTime. Query a no-data handle, never drop that check.
+    actual = archive_observation(native.archive_stat(path))
+    if actual[:4] != original[:4]:
+        raise Rejected("the named Windows archive changed during metadata observation")
+    return actual
+
+
 class PositionalDocument:
     """Bounded binary ZIP reader borrowing a POSIX FD without changing its shared position."""
     def __init__(self, fd, length):

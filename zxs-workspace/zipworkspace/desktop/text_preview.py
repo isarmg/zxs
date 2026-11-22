@@ -15,7 +15,7 @@ import unicodedata
 
 from ..archive import stamp, stored_member
 from ..comparison import COMPARE_BYTES
-from ..document import check_relative, native_identity, relative_document
+from ..document import archive_observation, check_relative, named_archive_observation, native_identity, relative_document
 from ..freeze import _dir_flags, _sig
 from ..lifecycle import InitialCheckoutText, MissingBaseline, _base_leaf, _idle_live_base, check_checkout_seed
 from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected, member_name
@@ -70,10 +70,6 @@ class _At:
         self.offset += len(data)
         self.check()
         return data
-
-
-def _stamp(meta):
-    return (*native_identity(meta, stat.S_IFREG), meta.st_size, meta.st_mtime_ns, meta.st_ctime_ns)
 
 
 def _binary_reader(fd, end, check):
@@ -180,8 +176,8 @@ def _held_input(selected, check):
         def same_original():
             check()
             if resident is not None: resident(selected.path.name, fd)
-            if (_stamp(os.fstat(fd)) != observed or
-                    _stamp(selected.path.stat(follow_symlinks=False)) != observed):
+            if (archive_observation(os.fstat(fd)) != observed or
+                    named_archive_observation(selected.path) != observed):
                 raise Rejected("归档原件已改变；未重新打开同名包")
         same_original()
         # Linux/macOS use pread rather than moving another reader's cursor.
@@ -308,7 +304,7 @@ def _small_lines(data):
 def _plain_archive_state(view, fd):
     # The original display handle is the authority here. Even a metadata lookup
     # by path could traverse a newly introduced provider or reparse point.
-    if _stamp(os.fstat(fd)) != view.observed:
+    if archive_observation(os.fstat(fd)) != view.observed:
         raise Rejected("对照中的原归档已变化；未按名称打开其他文件")
     if sys.platform == "darwin":
         from ..macos_read import local_object
@@ -459,7 +455,8 @@ class WorktreeTextPair:
         store = self.live.store_fd
         named = os.open(self.leaf, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=store)
         try:
-            if (_stamp(os.fstat(named)) != self.observed or _stamp(os.fstat(self.source)) != self.observed
+            if (archive_observation(os.fstat(named)) != self.observed
+                    or archive_observation(os.fstat(self.source)) != self.observed
                     or mount_id(named) != mount_id(self.source) or mount_id(named) != mount_id(store)):
                 raise Rejected("登记基线已不是本次持有的原归档")
         finally: os.close(named)
@@ -497,7 +494,7 @@ class WorktreeTextPair:
                         finally: os.close(named)
                     named = os.open(leaf, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
                     try:
-                        if _stamp(os.fstat(named)) != before or mount_id(named) != mount:
+                        if archive_observation(os.fstat(named)) != before or mount_id(named) != mount:
                             raise Rejected("工作文件的原名称或实际挂载已变")
                     finally: os.close(named)
                     check_relative(parent, leaf, doc, before)

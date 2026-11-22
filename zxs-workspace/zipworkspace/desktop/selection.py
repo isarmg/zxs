@@ -14,7 +14,8 @@ from .. import plain_import
 from ..archive import stamp
 from ..browser import ArchiveBrowser, DirectoryIndex
 from ..comparison import Changes, Difference
-from ..document import PositionalDocument, archive_sha, named_document, native_identity, relative_document
+from ..document import (PositionalDocument, archive_observation, archive_sha, named_archive_observation,
+                        named_document, native_identity, relative_document)
 from ..model import Rejected
 from ..refs import Catalog, Node, SlotPreview, slot_previews
 
@@ -300,10 +301,9 @@ def _display_policy(selected, observer):
     def current(fd):
         observer.check()
         if resident is not None: resident(selected.path.name, fd)
-        for item in (os.fstat(fd), selected.path.stat(follow_symlinks=False)):
-            observed = (*native_identity(item, stat.S_IFREG), item.st_size, item.st_mtime_ns, item.st_ctime_ns)
-            if observed != selected.observed:
-                raise Rejected("原归档已变化，不按同名路径重开")
+        if (archive_observation(os.fstat(fd)) != selected.observed or
+                named_archive_observation(selected.path) != selected.observed):
+            raise Rejected("原归档已变化，不按同名路径重开")
 
     with policy: yield current
     observer.check()

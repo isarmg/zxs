@@ -21,6 +21,9 @@ COMMON = (
     "test_comparison.FilterComparisonRows",
     "test_comparison.CompareVersions.test_two_explicit_files_from_different_repos_need_no_store_or_left_reopen",
     "test_comparison.CompareVersions.test_selected_text_difference_reads_only_each_original_exact_member",
+    "test_desktop_archive.SelectedOriginal.test_explicit_store_names_do_not_open_archive_bodies_or_grant_history",
+    "test_desktop_archive.SelectedOriginal.test_store_entries_reject_rebound_bytes_first_and_never_complete_a_changed_listing",
+    "test_desktop_archive.SelectedOriginal.test_requested_raw_hash_is_from_the_held_zip_without_reparse_or_shared_seek",
     "test_desktop_archive.DesktopArchiveWidgets.test_exact_path_selects_original_parent_page_in_both_views_and_rejects_a_retired_dialog",
     "test_desktop_text_preview.DesktopTextPreview.test_first_open_cancelled_after_worker_return_releases_original_before_display",
 )
