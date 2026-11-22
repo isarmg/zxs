@@ -32,6 +32,10 @@ EVIDENCE_KEYS = {
     "profile", "observed", "source_commit", "zxs_sha256", "client_netns", "outside_netns",
     "host", "address", "data_label", "recycle_label",
 }
+MOVE_MODES = ("seed-move-a", "seed-move-b", "move-stock", "move-original")
+MOVE_KEYS = {"target_data_label", "move_case"}
+MOVE_LEAF = "zxs-normal-move.bin"
+MOVE_A, MOVE_B, MOVE_C = (bytes([letter]) * 4096 for letter in b"ABC")
 WHEELS = {"smbprotocol": "1.17.0", "pyspnego": "0.12.4"}
 FILE_NOT_AVAILABLE = 0xC0000467  # Original compatible vote, but Core's FILE EX is busy.
 NAME_NOT_FOUND = 0xC0000034
@@ -80,19 +84,29 @@ def ns_id(value):
             and all(type(num) is int and 0 < num < 2**64 for num in value))
 
 
-def evidence(raw):
+def evidence(raw, mode):
+    move = mode in MOVE_MODES
     v = json.loads(raw.decode("ascii"), object_pairs_hook=unique_object)
-    need(isinstance(v, dict) and set(v) == EVIDENCE_KEYS, "bad-evidence-shape")
-    need(v["profile"] == "ZXS-ISOLATED-SMB-ACCEPT-1" and v["observed"] == "same-elf-listen-confirmed"
-         and v["host"] == SERVER and v["address"] == TARGET, "not-the-disposable-test-endpoint")
+    need(isinstance(v, dict) and set(v) == (EVIDENCE_KEYS | MOVE_KEYS if move else EVIDENCE_KEYS),
+         "bad-evidence-shape")
+    profile = "ZXS-ISOLATED-SMB-MOVE-1" if move else "ZXS-ISOLATED-SMB-ACCEPT-1"
+    cut = "same-elf-listen-and-distinct-original-media" if move else "same-elf-listen-confirmed"
+    need(v["profile"] == profile and v["observed"] == cut and v["host"] == SERVER and v["address"] == TARGET,
+         "not-the-disposable-test-endpoint")
     for key, length in (("source_commit", 40), ("zxs_sha256", 64)):
         need(isinstance(v[key], str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", v[key])
              and int(v[key], 16) != 0, "missing-external-source-evidence")
     need(ns_id(v["client_netns"]) and ns_id(v["outside_netns"])
          and v["client_netns"] != v["outside_netns"], "not-distinct-namespaces")
-    for name in [v["data_label"]] + ([] if v["recycle_label"] is None else [v["recycle_label"]]):
-        need(isinstance(name, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", name), "bad-fixture-label")
-    need(v["recycle_label"] != v["data_label"], "same-fixture-labels")
+    labels = [v["data_label"]] + ([] if v["recycle_label"] is None else [v["recycle_label"]])
+    if move:
+        labels.append(v["target_data_label"])
+        need(v["recycle_label"] is not None and v["move_case"] in ("stock", "original")
+             and (not mode.startswith("move-") or mode == "move-" + v["move_case"]),
+             "wrong-original-move-case")
+    for label in labels:
+        need(isinstance(label, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", label), "bad-fixture-label")
+    need(len(set(labels)) == len(labels), "same-fixture-labels")
     return v
 
 
@@ -136,33 +150,38 @@ def credentials(fd):
     return match[1].decode("ascii"), match[2].decode("ascii")
 
 
-def stock(fd):
+def stock(fd, move=None):
     binary = "/usr/bin/smbclient"
     opts = {"timeout": TIMEOUT * 2, "stdin": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "env": ENV}
     ver = subprocess.run([binary, "--version"], check=True, stdout=subprocess.PIPE, **opts).stdout.strip()
     need(re.fullmatch(rb"Version (4\.22\.[0-9]{1,3}(?:[-+][A-Za-z0-9.+~-]{1,40})?)", ver), "unreviewed-stock-client")
+    if move is None:
+        phase, command = "stock-tree-echo", "echo 1 zxs-acceptance"
+    else:
+        source, target = move
+        phase, command = "stock-signed-rename-only", f"rename {source} {target}"
     cmd = [binary, f"//{SERVER}/ZXS", f"--ip-address={TARGET}", f"--port={PORT}",
            "--configfile=/dev/null", "--option=client min protocol=SMB3_11", "--max-protocol=SMB3_11",
            "--use-kerberos=off", "--client-protection=sign", "--name-resolve=host",
            f"--authentication-file=/proc/self/fd/{fd}", "--debuglevel=0", f"--timeout={TIMEOUT}",
-           "--command=echo 1 zxs-acceptance"]
+           f"--command={command}"]
     rc = subprocess.run(cmd, stdout=subprocess.DEVNULL, pass_fds=(fd,), **opts).returncode
     if rc != 0:
-        report("fail", "stock-tree-echo", exit_code=rc, version=ver.decode("ascii"))
+        report("fail", phase, exit_code=rc, version=ver.decode("ascii"))
         return 1
-    report("pass", "stock-tree-echo", version=ver.decode("ascii"))
+    report("pass", phase, version=ver.decode("ascii"))
     return 0
 
 
-def typed(v, user, password, phase):
+def typed(v, user, password, phase, mode="operations", credential_fd=None):
     for distribution, version in WHEELS.items():
         need(importlib.metadata.version(distribution) == version, "unreviewed-typed-client")
     need(all(importlib.util.find_spec(name) is None for name in ("gssapi", "krb5")), "kerberos-plugin-in-ntlm-fixture")
     from smbprotocol import Dialects
     from smbprotocol.connection import Connection, HashAlgorithms, SecurityMode, SigningAlgorithms
-    from smbprotocol.exceptions import SMBResponseException
+    from smbprotocol.exceptions import SMB2ErrorResponse, SMBResponseException
     from smbprotocol.file_info import FileInternalInformation, FileRenameInformation
-    from smbprotocol.header import Commands, Smb2Flags
+    from smbprotocol.header import Commands, NtStatus, Smb2Flags
     from smbprotocol.open import (
         CreateAction, CreateDisposition, CreateOptions, DirectoryAccessMask, FileAttributes,
         FileInformationClass, FilePipePrinterAccessMask, ImpersonationLevel, Open, ShareAccess,
@@ -172,11 +191,64 @@ def typed(v, user, password, phase):
     from smbprotocol.tree import TreeConnect
 
     class ObservedConnection(Connection):
+        move_replies = None
+        move_request = None
+        move_async_id = None
+        move_bad_reply = False
+
+        def verify_signature(self, header, session_id, force=False):
+            # The upstream input worker sees replies before replacing the
+            # saved response on its original Request. Record, never alter it.
+            replies = None if force else self.move_replies
+            try:
+                if replies is not None:
+                    need(len(replies) < 2 and header["command"].get_value() == Commands.SMB2_SET_INFO,
+                         "unrelated-or-duplicate-move-response")
+                result = super().verify_signature(header, session_id, force=force)
+            except Exception:
+                if replies is not None:
+                    self.move_bad_reply = True
+                raise
+            if replies is not None:
+                replies.append(header)
+            return result
+
+        def check_move(self, request, reply, *, pending):
+            flags = Smb2Flags.SMB2_FLAGS_SERVER_TO_REDIR | Smb2Flags.SMB2_FLAGS_ASYNC_COMMAND
+            if not pending:
+                flags |= Smb2Flags.SMB2_FLAGS_SIGNED
+            # 1.17.0 stores both layouts as SMB2HeaderResponse.
+            async_id = reply["reserved"].get_value() | (reply["tree_id"].get_value() << 32)
+            need(reply["flags"].get_value() == flags and reply["next_command"].get_value() == 0
+                 and request.message["flags"].get_value() == Smb2Flags.SMB2_FLAGS_SIGNED
+                 and reply["command"].get_value() == request.message["command"].get_value() == Commands.SMB2_SET_INFO
+                 and reply["message_id"].get_value() == request.message["message_id"].get_value()
+                 and reply["session_id"].get_value() == request.session_id and async_id > 0
+                 and reply["credit_response"].get_value() in ((0, 1) if pending else (0,)),
+                 "wrong-original-move-response")
+            if pending:
+                body = SMB2ErrorResponse()
+                raw = reply["data"].get_value()
+                need(reply["status"].get_value() == NtStatus.STATUS_PENDING
+                     and reply["signature"].get_value() == bytes(16)
+                     and len(raw) == 8 and not body.unpack(raw)
+                     and body["structure_size"].get_value() == 9 and body["reserved"].get_value() == 0
+                     and body["error_context_count"].get_value() == body["byte_count"].get_value() == 0,
+                     "wrong-move-interim")
+            else:
+                need(async_id == self.move_async_id and reply["status"].get_value() != NtStatus.STATUS_PENDING,
+                     "wrong-terminal-async-id")
+                self.verify_signature(reply, request.session_id, force=True)
+            return async_id
+
         # Use the upstream client for all packets and crypto. The worker's
         # default verification skips unsigned messages; acceptance must
         # explicitly reject such a reply, not just request signed traffic.
         def receive(self, request, wait=True, timeout=None, resolve_symlinks=False):
             def check(reply):
+                if request is self.move_request:
+                    self.check_move(request, reply, pending=False)
+                    return
                 command = request.message["command"].get_value()
                 if command == Commands.SMB2_NEGOTIATE:
                     return
@@ -274,6 +346,119 @@ def typed(v, user, password, phase):
         reply = opened.close()
         need(reply is not None and reply["structure_size"].get_value() == 60, "close-not-acknowledged")
 
+    def send_info(handle, request):
+        mount = handle.tree_connect
+        request["file_id"] = handle.file_id
+        transfer = handle.connection.send(request, sid=mount.session.session_id, tid=mount.tree_connect_id)
+        return handle.connection.receive(transfer)["data"].get_value()
+
+    def number(handle):
+        req = SMB2QueryInfoRequest()
+        req["info_type"] = FileInternalInformation.INFO_TYPE
+        req["file_info_class"] = FileInternalInformation.INFO_CLASS
+        req["output_buffer_length"] = len(FileInternalInformation())
+        raw = send_info(handle, req)
+        need(len(raw) == 16, "unexpected-file-index-response")
+        body = SMB2QueryInfoResponse()
+        body.unpack(raw)
+        need(body["structure_size"].get_value() == 9 and body["output_buffer_offset"].get_value() == 72
+             and body["output_buffer_length"].get_value() == 8, "unexpected-file-index-response")
+        result = body.parse_buffer(FileInternalInformation)["index_number"].get_value()
+        need(255 < result < 2**64 - 1, "not-an-ordinary-file-index")
+        return result
+
+    def read_view(handle, expected):
+        need(handle.end_of_file == len(expected)
+             and handle.read(0, len(expected), min_length=len(expected)) == expected,
+             "wrong-original-file-view")
+
+    def put_view(mount, name, data, create=False):
+        writer = open_held(mount, name, wr, create=create)
+        need(writer.write(data, offset=0) == len(data), "short-move-fixture-write")
+        need(writer.flush()["structure_size"].get_value() == 4, "move-fixture-flush-not-acknowledged")
+        close_acked(writer)
+
+    def move_exact_open(held, target):
+        conn = held.connection
+        mount = held.tree_connect
+        rename = FileRenameInformation()
+        rename["replace_if_exists"] = False
+        rename["file_name"] = target
+        req = SMB2SetInfoRequest()
+        req["info_type"] = rename.INFO_TYPE
+        req["file_info_class"] = rename.INFO_CLASS
+        req["file_id"] = held.file_id
+        req["buffer"] = rename
+        conn.move_replies = []
+        try:
+            original = conn.send(req, sid=mount.session.session_id, tid=mount.tree_connect_id, credit_request=1)
+            conn.move_request = original
+            # receive(wait=False) would remove the original outstanding request.
+            need(original.response_event.wait(TIMEOUT) and conn.move_replies, "missing-move-interim")
+            conn.move_async_id = conn.check_move(original, conn.move_replies[0], pending=True)
+            need(isinstance(original.async_id, bytes) and len(original.async_id) == 8
+                 and int.from_bytes(original.async_id, "little") == conn.move_async_id, "wrong-client-async-id")
+            final = conn.receive(original, timeout=TIMEOUT)
+            body = SMB2SetInfoResponse()
+            raw = final["data"].get_value()
+            need(not conn.move_bad_reply and len(conn.move_replies) == 2 and conn.move_replies[1] is final
+                 and len(raw) == 2 and not body.unpack(raw) and body["structure_size"].get_value() == 2,
+                 "wrong-move-terminal-response")
+        finally:
+            conn.move_replies = conn.move_request = conn.move_async_id = None
+
+    if mode in MOVE_MODES:
+        source, target = (label + "\\" + MOVE_LEAF for label in (v["data_label"], v["target_data_label"]))
+        if mode in ("seed-move-a", "seed-move-b"):
+            with tree("move-seed") as seed:
+                phase[0] = mode
+                absent(lambda: open_held(seed, target, rd), NAME_NOT_FOUND)
+                if mode == "seed-move-b":
+                    old = open_held(seed, source, rd)
+                    read_view(old, MOVE_A)
+                    close_acked(old)
+                put_view(seed, source, MOVE_A if mode == "seed-move-a" else MOVE_B, create=mode == "seed-move-a")
+            report("pass", mode)
+            return
+        if mode == "move-stock":
+            with tree("before-stock-move") as before:
+                phase[0] = "stock-move-original"
+                absent(lambda: open_held(before, target, rd), NAME_NOT_FOUND)
+                original = open_held(before, source, rd)
+                logical_index = number(original)
+                read_view(original, MOVE_B)
+                close_acked(original)
+            phase[0] = "stock-signed-rename"
+            need(stock(credential_fd, (source, target)) == 0, "stock-rename-not-confirmed")
+            expected = MOVE_B
+        else:
+            with tree("move-owner") as owner:
+                phase[0] = "same-open-original"
+                absent(lambda: open_held(owner, target, rd), NAME_NOT_FOUND)
+                original = open_held(owner, source, rd | delete)
+                wire_open, logical_index = original.file_id, number(original)
+                read_view(original, MOVE_B)
+                with tree("move-new-confirmed-view") as writer:
+                    put_view(writer, source, MOVE_C)
+                read_view(original, MOVE_B)
+                phase[0] = "same-open-signed-move"
+                move_exact_open(original, target)
+                phase[0] = "same-open-old-confirmed-view"
+                need(original.file_id == wire_open and number(original) == logical_index, "original-open-or-index-changed")
+                read_view(original, MOVE_B)
+                close_acked(original)
+            expected = MOVE_C
+        with tree("fresh-after-move") as after:
+            phase[0] = "move-fresh-target-and-original-name"
+            absent(lambda: open_held(after, source, rd), NAME_NOT_FOUND)
+            original = open_held(after, target, rd)
+            need(number(original) == logical_index, "move-changed-logical-file-index")
+            read_view(original, expected)
+            close_acked(original)
+        report("pass", "move-client-observations", case=v["move_case"],
+               logical_index=f"{logical_index:016x}", same_open_checked=mode == "move-original")
+        return
+
     def check_read(opened):
         need(opened.end_of_file == len(content), "wrong-original-file-eof")
         observed = opened.read(0, len(content), min_length=len(content))
@@ -326,27 +511,6 @@ def typed(v, user, password, phase):
         close_acked(d)
         return found
 
-    def send_info(handle, request):
-        mount = handle.tree_connect
-        request["file_id"] = handle.file_id
-        transfer = handle.connection.send(request, sid=mount.session.session_id, tid=mount.tree_connect_id)
-        return handle.connection.receive(transfer)["data"].get_value()
-
-    def number(handle):
-        req = SMB2QueryInfoRequest()
-        req["info_type"] = FileInternalInformation.INFO_TYPE
-        req["file_info_class"] = FileInternalInformation.INFO_CLASS
-        req["output_buffer_length"] = len(FileInternalInformation())
-        raw = send_info(handle, req)
-        need(len(raw) == 16, "unexpected-file-index-response")
-        body = SMB2QueryInfoResponse()
-        body.unpack(raw)
-        need(body["structure_size"].get_value() == 9 and body["output_buffer_offset"].get_value() == 72
-             and body["output_buffer_length"].get_value() == 8, "unexpected-file-index-response")
-        result = body.parse_buffer(FileInternalInformation)["index_number"].get_value()
-        need(255 < result < 2**64 - 1, "not-an-ordinary-file-index")
-        return result
-
     with tree("recycle-d") as d:
         phase[0] = "recycle-original-empty"
         need(not names(d, recycle), "recycle-fixture-not-empty")
@@ -394,7 +558,7 @@ def main():
     logging.disable(1000)  # Never emit third-party credential, token or packet logs.
     warnings.filterwarnings("ignore")
     args = argparse.ArgumentParser(description=__doc__)
-    args.add_argument("mode", choices=("stock", "operations"))
+    args.add_argument("mode", choices=("stock", "operations") + MOVE_MODES)
     args.add_argument("--evidence-fd", type=int, required=True)
     args.add_argument("--credentials-fd", type=int, required=True)
     options = args.parse_args()
@@ -402,7 +566,7 @@ def main():
     try:
         need(sys.platform == "linux" and sys.flags.isolated and os.geteuid() != 0
              and options.evidence_fd != options.credentials_fd, "need-isolated-unprivileged-linux-runner")
-        v = evidence(fixed_fd(options.evidence_fd, 0, 2048))
+        v = evidence(fixed_fd(options.evidence_fd, 0, 2048), options.mode)
         isolated_network(v)
         need(not ("LM_COMPAT_LEVEL" in os.environ or "NTLM_USER_FILE" in os.environ), "ntlm-overrides-present")
         user, password = credentials(options.credentials_fd)
@@ -411,7 +575,7 @@ def main():
             phase[0] = "stock-tree-echo"
             return stock(options.credentials_fd)
         phase[0] = "typed-client-versions"
-        typed(v, user, password, phase)
+        typed(v, user, password, phase, options.mode, options.credentials_fd)
         return 0
     except Refused as exc:
         report("fail", phase[0], reason=exc.args[0])

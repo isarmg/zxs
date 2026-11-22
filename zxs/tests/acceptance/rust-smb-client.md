@@ -37,3 +37,44 @@ python3 -I tests/acceptance/rust_smb_client.py operations --evidence-fd 7 --cred
 `operations` 的独立客户端镜像从官方已验证材料提供 `smbprotocol` **1.17.0**（[官方轮子及来源](https://pypi.org/project/smbprotocol/1.17.0/#files)，源码 `55e643ae50f61dd270d6a4884f16ffa12dc29596`，轮子 SHA-256 `bd1abff5417f5af83ca516a64ab8e5acece3dbdcf58d4e5e23e47f5165a77349`）及 `pyspnego` **0.12.4**（[官方轮子及来源](https://pypi.org/project/pyspnego/0.12.4/#files)，源码 `133ec0005ed156b544ebf7bfdee93e08aefcc1b4`，轮子 SHA-256 `a29a34de1abe9e9b30d9aa1d363f8e49fc159eb7355b1f2ee86ccb3a2ce3bba9`）。镜像负责审核 Python、其传递依赖、`iproute2` 和 `smbclient` 的准确发行包；源脚本只核两个库版本，不下载／安装客户端，也不把任何依赖带入 `zxs`。
 
 输出只含固定阶段、通过／失败／跳过、独立提供的公开源／执行文件摘要、确实收到的状态或测试数据摘要，不输出测试账号、密码、原路径、原包或文件内容。任一失败非零退出，保留夹具供查证；不替失败步骤做普通 CLOSE、补 FLUSH、重复删除／还原或清理原物。结束后由隔离操作员处理一次性夹具。
+
+## 普通数据卷到普通数据卷
+
+仅用于单独批准的 Linux 资格制品：独立核对实际打开普通跨卷路径的源修订和整份 ELF。正式开关关闭时不运行。服务与客户端在同一台隔离 Linux 虚拟机；服务监督器留在该虚拟机初始命名空间，客户端沿用上述独立网口。用同版 Helper 准备全新 v18 池，原 S、F1、F2、R 为四个独立文件系统，F1/F2 是同一 ZXS 树中已确认、可写的原普通共享。由监督者先核对真实挂载、原标记和权限；两条用例各用一份独立的一次性夹具。
+
+沿用两个封印 FD。移动专用公告改用 `profile = ZXS-ISOLATED-SMB-MOVE-1`、
+`observed = same-elf-listen-and-distinct-original-media`，新增 `target_data_label`
+（F2 逻辑名）及 `move_case`（`stock` 或 `original`）。`data_label` 为 F1，
+`recycle_label` 必须提供本次独立 R 的真实名。现有 `stock`、`operations` 继续用旧公告。
+
+1. 以同样参数运行 `seed-move-a`，随后用现有 Web 提交 A。再运行
+   `seed-move-b`，用 Web 提交 B。两步分别在 F1 的同一
+   `zxs-normal-move.bin` 确认 4096 字节的数据；同一 FileId 各得一版。
+   记录两版的节点、版本、父节点、SAVE 和实际内容证据。
+   B 后取原只读基准，确认 F2 同名空位和这个 FILE 没有传输。不要通过复制准备目标。
+2. `move-stock` 先用强签客户端记录源的真实逻辑文件号和 B，再调用固定发行版
+   [smbclient rename](https://github.com/samba-team/samba/blob/samba-4.22.0/source3/libsmb/cli_smb2_fnum.c#L3049-L3149)
+   （原 DELETE 打开、一次无覆盖改名和 CLOSE，不调用复制）。新强签会话核同一文件号、
+   目标 B、原名不可选。stock 使用者已关闭原句柄。
+3. 在另一份夹具执行 `move-original`。原强签 OPEN 确认 B；兼容的第二写者提交
+   4096 字节的 C 并正常关闭，原 OPEN 仍读 B。标准客户端库向原 FILE 发送一次
+   不覆盖的 SET_INFO 并保留同一原请求，实际看到一条 PENDING 和同 MID/SID/AsyncId
+   的强签成功结尾（终局零授额）。同一原 OPEN 验同一两半 FileId、文件号和 B 后关闭。
+   新会话只在 F2 打开同一文件号并读到 C。此用例不修改握手、原帧、签名或信用额度。
+
+监督者对同一个原 S 独立只读执行 [回执查询](rust_smb_cross_f_receipt.sql)。原
+`:file` 必须取自移动前选定 FILE，前八字节的大端值对应客户端报出的文件号；
+不能到新名反推基准。只接受 SQLite v18 的原应用和 INIT、真实当代共同账户、
+同一 SMB 主体及两端原 RW 设置。一条已确认 kind-12、direction=3 选中 F2，
+原放置代加一，两份 kind-11 历史与正式版本不变、关联正确且保留原工作稿。
+stock 用例的 SAVE 不变；原句柄用例只新增移动前已确认的 C 那一笔 kind-10，
+选址行的 SAVE 必须等于该最新记录。旧源清退和两份正式版本字节由独立原 FILE
+只读证据核对；客户端和 SQL 分别记录。
+SQL 不运行在客户端网络命名空间，不打开写连接，不传凭据，也不清理失败夹具。
+
+**丢答、F2 实际离线另测。** 只在监督者能扣住原改名应答、核对同一 kind-12
+已确认，并能让服务的原 F2 实际不可用时运行。用另一份真实独立 F2；
+不要用删名、卸载宿主上的一个别名、禁用共享或模拟错误代替。
+原连接断开后不重送 MOVE。旧 F1 不可从新会话重开，F2 不可用时不得借旧源回读；
+复原同一 F2 后核原 FileId、工作稿、两个正式版本及同一选址回执。
+当前客户端两项不控制设备或失答。Linux 资格运行：未执行。
