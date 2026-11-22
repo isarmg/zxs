@@ -26,6 +26,9 @@ mod test_area;
 #[cfg(test)]
 #[path = "../tests/common/child.rs"]
 mod fixture_child;
+#[cfg(test)]
+#[path = "../tests/build/dependency_document.rs"]
+mod dependency_document;
 
 use volume_images::CheckFormat;
 use pinned::storage_status::Selection;
