@@ -29,9 +29,9 @@ pub(super) use domain::{InitialLayout,require_lent_ex};
 use super::{bad,request::Id};
 
 // A nonsecret repair confirmation, not an installer role or root approval.
-pub(crate) fn confirm_copy_repair(format:crate::fat32_check::repair::RepairFormat,preview:String,web:Option<u64>,
+pub(crate) fn confirm_copy_repair(format:crate::volume_images::repair::RepairFormat,preview:String,web:Option<u64>,
     require:impl Fn()->std::io::Result<()>)->std::io::Result<()>{
-    use crate::fat32_check::repair::RepairFormat;
+    use crate::volume_images::repair::RepairFormat;
     let tty=terminal::PublicConfirmation::select()?;
     if let Some(bytes)=web{native_run::offer_copy_repair_web(&tty,format,bytes,&require)?;}
     require()?;

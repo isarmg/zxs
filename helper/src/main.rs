@@ -7,7 +7,7 @@ mod block_tools;
 mod disk_web;
 mod fs_tools;
 mod hardware;
-mod fat32_check;
+mod volume_images;
 mod inspect;
 mod isolated_group;
 mod smb_profile;
@@ -27,7 +27,7 @@ mod test_area;
 #[path = "../tests/common/child.rs"]
 mod fixture_child;
 
-use fat32_check::CheckFormat;
+use volume_images::CheckFormat;
 use pinned::storage_status::Selection;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -81,20 +81,20 @@ enum Command {
     EmbeddedInstall(sqlite_install::EmbeddedInstall),
     Disks(block_tools::Query),
     Hardware,
-    DiskWeb(Option<fat32_check::Request>),
+    DiskWeb(Option<volume_images::Request>),
     DiskWebStorage(Selection),
-    SealedWorker(fat32_check::Format,[u8;32]),
-    LeasedPanelWorker(fat32_check::LeasedFormat,[u8;32]),
+    SealedWorker(volume_images::Format,[u8;32]),
+    LeasedPanelWorker(volume_images::LeasedFormat,[u8;32]),
     RustAccountWorker,
     RustVaultWriter,
     LayoutSqlWorker,
     FirstBrowserWorker,
     CopyRepairBrowserWorker,
     FsTools(fs_tools::Query),
-    CopyCheck(fat32_check::Request),
-    RepairExt4(fat32_check::repair::Request),
-    RepairExfat(fat32_check::repair::Request),
-    RepairFat32(fat32_check::repair::Request),
+    CopyCheck(volume_images::Request),
+    RepairExt4(volume_images::repair::Request),
+    RepairExfat(volume_images::repair::Request),
+    RepairFat32(volume_images::repair::Request),
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static str> {
@@ -121,10 +121,10 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
             None => Ok(Command::DiskWeb(None)),
             Some(arg) if arg == "--storage-roots" => Selection::parse(args).map(Command::DiskWebStorage),
             Some(arg) => {
-                let kind = fat32_check::panel_format(&arg).ok_or(
+                let kind = volume_images::panel_format(&arg).ok_or(
                     "disk-web accepts one terminal-selected --fat32-copy, --exfat-copy, --ext4-copy, --xfs-copy, --ntfs-copy or --btrfs-copy IMAGE --sha256 HEX",
                 )?;
-                fat32_check::Request::parse(kind, args).map(|r| Command::DiskWeb(Some(r)))
+                volume_images::Request::parse(kind, args).map(|r| Command::DiskWeb(Some(r)))
             }
         };
     }
@@ -161,11 +161,11 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if dirs.is_empty() || dirs.len() > inspect::MAX_DIRS { return Err("expected 1–16 directories"); }
         return Ok(Command::Directories(dirs));
     }
-    if op == "repair-ext4-copy" {return fat32_check::repair::Request::parse(args).map(Command::RepairExt4);}
-    if op == "repair-exfat-copy" {return fat32_check::repair::Request::parse_exfat(args).map(Command::RepairExfat);}
-    if op == "repair-fat32-copy" {return fat32_check::repair::Request::parse_fat32(args).map(Command::RepairFat32);}
-    if let Some(format) = fat32_check::command_format(&op) {
-        return fat32_check::Request::parse(format, args).map(Command::CopyCheck);
+    if op == "repair-ext4-copy" {return volume_images::repair::Request::parse(args).map(Command::RepairExt4);}
+    if op == "repair-exfat-copy" {return volume_images::repair::Request::parse_exfat(args).map(Command::RepairExfat);}
+    if op == "repair-fat32-copy" {return volume_images::repair::Request::parse_fat32(args).map(Command::RepairFat32);}
+    if let Some(format) = volume_images::command_format(&op) {
+        return volume_images::Request::parse(format, args).map(Command::CopyCheck);
     }
     if op == "fs-tools" { return fs_tools::Query::parse(args).map(Command::FsTools); }
     if op == "hardware" {
@@ -203,10 +203,10 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::FirstBrowserWorker=>return Ok(ExitCode::from(if sqlite_install::exec_first_browser().is_ok(){0}else{2})),
         Command::CopyRepairBrowserWorker=>return Ok(ExitCode::from(if sqlite_install::exec_copy_repair_browser().is_ok(){0}else{2})),
         Command::LayoutSqlWorker=>return Ok(ExitCode::from(if sqlite_install::layout_sql_worker().is_ok(){0}else{2})),
-        Command::SealedWorker(fmt,digest) => return Ok(ExitCode::from(fat32_check::panel::worker(fmt,digest).unwrap_or(2))),
+        Command::SealedWorker(fmt,digest) => return Ok(ExitCode::from(volume_images::panel::worker(fmt,digest).unwrap_or(2))),
         // Code 2 can describe a structured incomplete report. Internal
         // failure must never accept an already-written packet.
-        Command::LeasedPanelWorker(kind,digest) => return Ok(ExitCode::from(fat32_check::panel::leased_worker(kind,digest).unwrap_or(3))),
+        Command::LeasedPanelWorker(kind,digest) => return Ok(ExitCode::from(volume_images::panel::leased_worker(kind,digest).unwrap_or(3))),
         Command::Install(i)=>{let(code,public)=i.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         #[cfg(feature="embedded-zxs")]
         Command::EmbeddedInstall(s)=>{s.run()?;return Ok(ExitCode::SUCCESS);}
@@ -286,7 +286,7 @@ fn user_help_matches_compiled_account_modes() {
 #[cfg(test)]
 mod copy_arguments{
     use super::*;
-    use fat32_check::{Format,LeasedFormat};
+    use volume_images::{Format,LeasedFormat};
 
     #[test]
     fn hardware_argv_only_selects_a_fixed_passive_observation() {

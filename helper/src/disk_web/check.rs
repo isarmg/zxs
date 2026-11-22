@@ -1,7 +1,7 @@
 //! An optional single terminal grant. Pairing on its own creates none.
 //! This state belongs to one panel with exactly one non-renewable paired session.
 use super::{Reply,matches,token};
-use crate::fat32_check::panel::{Info,Operand,Receipt,Running};
+use crate::volume_images::panel::{Info,Operand,Receipt,Running};
 use std::{fmt::Write,time::{Duration,Instant}};
 
 pub(super) const WINDOW:Duration=Duration::from_secs(90);
@@ -68,7 +68,7 @@ impl Check {
 #[cfg(test)]
 mod tests{
     use super::*;
-    use crate::fat32_check::{Outcome,Report,panel::Detail};
+    use crate::volume_images::{Outcome,Report,panel::Detail};
     #[test]
     fn preapproval_needs_this_exact_ticket_before_deadline_and_retries_return_the_same_receipt(){
         let now=Instant::now();let t=Ticket{plain:"a".repeat(64),issued:now};

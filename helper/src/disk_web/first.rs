@@ -1,7 +1,7 @@
 //! A one-shot browser handoff on its own already isolated listener. It has
 //! a typed install count or a fixed format and byte length. No paths or commands.
 use super::{Panel,Reply,Request,digest,http,matches,token};
-use crate::fat32_check::repair::RepairFormat;
+use crate::volume_images::repair::RepairFormat;
 use std::{io,net::TcpListener,thread,time::{Duration,Instant}};
 const TICKET:Duration=Duration::from_secs(90);
 #[derive(Clone,Copy)]

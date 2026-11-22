@@ -46,7 +46,7 @@ fn version_transcript_exit_counters_and_observed_flags_are_independent(){
 }
 #[test]
 fn exfat_web_requires_its_own_explicit_terminal_preselection_with_no_path_from_http_or_repair(){
-    use crate::{Command,fat32_check::{CheckFormat,Format}};
+    use crate::{Command,volume_images::{CheckFormat,Format}};
     let h="ab".repeat(32);
     let parse=|a:&[&str]|crate::parse(a.iter().map(|s|std::ffi::OsString::from(*s)));
     assert!(matches!(parse(&["check-exfat-copy","/saved/volume.img","--sha256",&h]),

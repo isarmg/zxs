@@ -95,7 +95,7 @@ fn private_ext_receipts_bind_original_digest_large_length_real_exit_and_exact_pa
 
 #[test]
 fn waiting_ext_selection_neither_needs_a_valid_header_nor_excludes_a_writer_but_will_not_handoff_a_replacement(){
-    use crate::{fat32_check::leased::Selected,pinned::Mount};
+    use crate::{volume_images::leased::Selected,pinned::Mount};
     use rustix::fs::{Mode,OFlags,fcntl_getfl,open};
     let fixture=crate::test_area::data_directory();
     let path=fixture.path().join("saved-copy");
@@ -118,7 +118,7 @@ fn waiting_ext_selection_neither_needs_a_valid_header_nor_excludes_a_writer_but_
 
 #[test]
 fn a_readable_original_changed_after_preview_does_not_reach_the_worker(){
-    use crate::fat32_check::leased::Selected;
+    use crate::volume_images::leased::Selected;
     let fixture=crate::test_area::data_directory();let path=fixture.path().join("edited");
     let writer=std::fs::File::options().write(true).create_new(true).open(&path).unwrap();
     writer.set_len(4096).unwrap();

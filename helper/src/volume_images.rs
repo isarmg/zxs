@@ -1,4 +1,4 @@
-//! Isolated saved-volume diagnostics and a separate, explicitly approved ext work-copy path.
+//! Isolated saved-volume diagnostics and separately approved work-copy repairs.
 mod btrfs;
 mod exfat;
 mod ext4;

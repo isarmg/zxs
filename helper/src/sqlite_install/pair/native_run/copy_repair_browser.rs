@@ -2,7 +2,7 @@
 //! terminal challenge. The child receives neither source, destination, checker
 //! nor terminal. Nothing here can act on a disk or grant the parent authority.
 use super::{bad,host::Worker,manifest::sealed_owner,transport::{self,Channel,Kind}};
-use crate::{disk_web,fat32_check::repair::RepairFormat,pinned::helper_elf::ForegroundElf,maintenance,sqlite_install::{approval,pair::{
+use crate::{disk_web,volume_images::repair::RepairFormat,pinned::helper_elf::ForegroundElf,maintenance,sqlite_install::{approval,pair::{
     domain::sealed,terminal::PublicConfirmation},stage::random}};
 use helper_linux_evidence::{diagnostic_process::{OfflineSql,account_sql_descriptors},prompt_signals::PromptSignals};
 use rustix::{net::{UCred,sockopt},process::{DumpableBehavior,Pid,Signal,dumpable_behavior,getgid,getppid,getuid,

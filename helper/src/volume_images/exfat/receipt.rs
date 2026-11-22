@@ -4,8 +4,8 @@ use super::{Framing,Outcome,Report,valid_counts};
 use crate::pinned::invalid;
 use std::io;
 impl Report{
-    pub(in crate::fat32_check) const WIRE_SIZE:usize=57;
-    pub(in crate::fat32_check) fn packet(&self,digest:&[u8;32])->[u8;57]{
+    pub(in crate::volume_images) const WIRE_SIZE:usize=57;
+    pub(in crate::volume_images) fn packet(&self,digest:&[u8;32])->[u8;57]{
         let mut out=[0;57];out[..4].copy_from_slice(b"ECR1");
         out[4]=match self.state{Outcome::NoFindings=>0,Outcome::VolumeFlags=>1,Outcome::ExtraDiagnostics=>2,
             Outcome::Uncorrected=>3,Outcome::IncompleteUnresolved=>4};
@@ -14,7 +14,7 @@ impl Report{
         let(dirs,files)=self.counts.unwrap_or((0,0));out[49..53].copy_from_slice(&dirs.to_be_bytes());
         out[53..57].copy_from_slice(&files.to_be_bytes());out
     }
-    pub(in crate::fat32_check) fn from_packet(p:&[u8],exit:Option<i32>,frame:Framing,digest:&[u8;32])->io::Result<Self>{
+    pub(in crate::volume_images) fn from_packet(p:&[u8],exit:Option<i32>,frame:Framing,digest:&[u8;32])->io::Result<Self>{
         let bad=||invalid("no matching complete receipt from the selected exFAT worker");
         if p.len()!=Self::WIRE_SIZE || &p[..4]!=b"ECR1" || &p[5..37]!=digest
             || p[37..45]!=frame.length.to_be_bytes() || p[45..47]!=frame.sector.to_be_bytes()
@@ -29,7 +29,7 @@ impl Report{
         };
         if !valid_counts(d,f,frame){return Err(bad());} Ok(Self{state,frame,counts:Some((d,f))})
     }
-    pub(in crate::fat32_check) fn panel_text(&self)->String{
+    pub(in crate::volume_images) fn panel_text(&self)->String{
         let msg=match self.state{
             Outcome::NoFindings=>"fsck.exfat 本次只读检查未报告问题；并非正文、备用引导区或整盘健康证明",
             Outcome::VolumeFlags=>"工具返回 0，但卷状态需注意，不能判为正常",

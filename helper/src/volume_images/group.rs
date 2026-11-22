@@ -5,7 +5,7 @@ pub(super) use crate::isolated_group::{prepare,Group};
 mod tests {
     use super::*;
     use std::{fs::File,io::{Read,Write},process::{Command,Stdio},time::{Instant,Duration}};
-    const N:&str="fat32_check::group::tests::";
+    const N:&str="volume_images::group::tests::";
     fn own_test(name:&str)->Command{
         let mut p=Command::new(std::env::current_exe().unwrap());
         p.args(["--ignored","--exact",&format!("{N}{name}"),"--nocapture"]);p

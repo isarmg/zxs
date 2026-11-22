@@ -1,5 +1,5 @@
 use super::*;
-use crate::fat32_check::Outcome;
+use crate::volume_images::Outcome;
 
 const GOOD:&[u8]=b"fsck.fat 4.2 (2021-01-31)\n/image: 1 files, 1/65526 clusters\n";
 const DELIVERED:&[u8]=b"{ \"child-pid\": 52 }\n{ \"exit-code\": 0 }\n";
@@ -32,7 +32,7 @@ fn ambiguous_checker_status_and_extra_output_are_not_certificates_of_health(){
 }
 #[test]
 fn accepts_only_an_explicit_absolute_image_and_exact_independent_digest(){
-    use crate::fat32_check::Request;
+    use crate::volume_images::Request;
     let parse=|a:&[&str]|Request::parse(CheckFormat::Sealed(Format::Fat32),a.iter().map(|s|std::ffi::OsString::from(*s)));
     let d="af".repeat(32);
     assert!(parse(&["/img","--sha256",&d]).is_ok());
