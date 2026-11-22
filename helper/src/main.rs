@@ -44,10 +44,10 @@ install-pool defaults to /zxs/disks/system and /zxs/disks/recycle; choose each o
 
 const PRIVATE_INSTALL_USAGE: &str = "
 
-Private v19 setup on an isolated fresh pool; stop ZXS before account reset:
-  helper install-pool new-deployment --init-actor ID --storage-uid N --storage-gid N
+Private v19 setup on an isolated fresh pool; prefix each first action with web to request its original terminal confirmation. Stop ZXS before account reset:
+  helper install-pool [web] new-deployment --init-actor ID --storage-uid N --storage-gid N
       --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...
-  helper setup-pair issue-fresh --init-actor ID --storage-uid N --storage-gid N [--system DIR]
+  helper setup-pair [web] issue-fresh --init-actor ID --storage-uid N --storage-gid N [--system DIR]
       --pool ID --init ID --instance ID --bind ID --setup-op ID --init-sha256 HEX --approval ID
       [--zxs-image DIR/zxs] --zxs-sha256 HEX --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX
       --host HOST --login LOGIN --recycle-name NAME (--listen IP/PREFIX | --share DIR NAME ro|rw | --share-label LABEL NAME ro|rw) ...
@@ -272,8 +272,8 @@ fn user_help_matches_compiled_account_modes() {
     let help = usage();
     assert!(help.contains("install-pool new|resume|receipt"));
     for command in [
-        "install-pool new-deployment",
-        "setup-pair issue-fresh",
+        "install-pool [web] new-deployment",
+        "setup-pair [web] issue-fresh",
         "reset-account new",
         "reset-account receipt",
     ] {

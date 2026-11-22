@@ -16,6 +16,7 @@ mod copy_repair_browser;
 pub(super) use copy_repair_browser::offer as offer_copy_repair_web;
 pub(crate) use copy_repair_browser::worker as exec_copy_repair_browser;
 pub(in crate::sqlite_install) use first_browser::offer as offer_init_web;
+pub(super) use first_browser::offer_phase as offer_account_web;
 pub(crate) use first_browser::worker as exec_first_browser;
 pub(super) use layout::{Choice,FirstShares,FreshScope,ResolvedRust};
 pub(crate) use layout::{RetirementCheck,ImportCheck,check_deployment};

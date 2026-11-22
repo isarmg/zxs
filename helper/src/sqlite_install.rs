@@ -46,7 +46,7 @@ impl Installation{
         let mut first=args.next().and_then(|s|s.into_string().ok());
         let browser=first.as_deref()==Some("web");
         if browser{first=args.next().and_then(|s|s.into_string().ok());}
-        let private=first.as_deref()==Some("new-deployment")&&!browser&&cfg!(feature="private-fresh-install");
+        let private=first.as_deref()==Some("new-deployment")&&cfg!(feature="private-fresh-install");
         let action=match first.as_deref(){
             Some("new-deployment") if private=>InitAction::Apply(Purpose::Fresh),
             Some("new")=>InitAction::Apply(Purpose::Fresh),Some("resume")=>InitAction::Apply(Purpose::Original),
@@ -148,7 +148,7 @@ mod command_cases{
         assert!(pending.starts_with("init=pending ")&&!pending.contains("init_request_sha256"));
     }
     #[test]
-    fn fresh_deployment_init_is_a_distinct_explicit_terminal_only_mode(){
+    fn fresh_deployment_init_is_explicit_in_both_handoff_modes(){
         let d=|v:&str|v.repeat(16);
         let t=format!("new-deployment --init-actor {} --storage-uid 1001 --storage-gid 1002 --op {} --approval {} --system /s --recycle /r --data /f",d("31"),d("32"),d("33"));
         let retired=t.replacen("new-deployment","new-zxs-v18",1);
@@ -157,7 +157,12 @@ mod command_cases{
             let v=Installation::parse(args(&t)).unwrap();
             assert!(v.private&&!v.browser&&matches!(v.action,InitAction::Apply(Purpose::Fresh)));
         }else{assert!(Installation::parse(args(&t)).is_err());}
-        for b in [format!("web {t}"),t.replace("1001","0"),t.replace("1002","65534"),format!("{t} --resume")]{
+        let via_web=format!("web {t}");
+        let guided=Installation::parse(via_web.split_ascii_whitespace().map(OsString::from));
+        if cfg!(feature="private-fresh-install"){
+            let selected=guided.unwrap();assert!(selected.browser&&selected.private);
+        }else{assert!(guided.is_err());}
+        for b in [t.replace("1001","0"),t.replace("1002","65534"),format!("{t} --resume")]{
             assert!(Installation::parse(args(&b)).is_err());
         }
     }

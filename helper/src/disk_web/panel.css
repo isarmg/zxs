@@ -10,3 +10,5 @@
 .setup-steps summary{font-weight:650;cursor:pointer}.setup-steps p{margin:.65rem 0}.setup-steps pre{margin:.6rem 0;padding:.65rem .8rem;background:var(--bg);border:1px solid var(--rule);border-radius:6px;overflow:auto}
 .setup-steps pre code{user-select:all}.setup-steps pre:focus-visible,.setup-steps summary:focus-visible{outline:3px solid #dc8b28;outline-offset:2px}
 @media(max-width:31rem){.setup-status{display:block}.setup-status dd{margin-bottom:.45rem}}
+
+#install-steps [aria-current="step"] { font-weight: bold; }

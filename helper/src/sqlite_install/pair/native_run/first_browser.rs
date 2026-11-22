@@ -2,7 +2,7 @@
 //! confirmation. This never signs an INIT or accepts a path/data/secret from
 //! HTTP. Only the authenticated exact process can return a request.
 use super::{bad,host::Worker,manifest::read_sealed,transport::{self,Channel,Kind},worker::original_parent};
-use crate::{disk_web,pinned::helper_elf::ForegroundElf,sqlite_install::{approval,pair::{
+use crate::{disk_web::{self,InstallPhase},pinned::helper_elf::ForegroundElf,sqlite_install::{approval,pair::{
     domain::{give_live_approval,request_live_approval,sealed},terminal::PublicConfirmation,ExplicitSubject},stage::random}};
 use helper_linux_evidence::{diagnostic_process::{OfflineSql,account_sql_descriptors},prompt_signals::PromptSignals};
 use rustix::net::UCred;
@@ -15,12 +15,18 @@ const FIXED:usize=TAG.len()+32+32+16+8+1+1;
 const PANEL:Duration=Duration::from_mins(8);
 fn no()->io::Error{bad("the original first-install browser request is unconfirmed; no installation was started")}
 pub(in crate::sqlite_install) fn offer(tty:&PublicConfirmation,scope:([u8;32],bool,u8,ExplicitSubject),require:impl Fn()->io::Result<()>)->io::Result<()>{
+    let (scope,fresh,count,subject)=scope;
+    let phase=if fresh{InstallPhase::Initialize}else{InstallPhase::Resume};
+    offer_phase(tty,(scope,phase,count,subject),require)
+}
+pub(in crate::sqlite_install::pair) fn offer_phase(tty:&PublicConfirmation,scope:([u8;32],InstallPhase,u8,ExplicitSubject),
+    require:impl Fn()->io::Result<()>)->io::Result<()>{
     require()?;tty.check()?;
     let (actor,uid,gid)=scope.3.tuple();
     let sig=PromptSignals::begin()?;
     let check=||{sig.check()?;tty.check()};
     let mut raw=TAG.to_vec();raw.extend(scope.0);raw.extend(random::<32>()?);raw.extend(actor);raw.extend(uid.to_be_bytes());raw.extend(gid.to_be_bytes());
-    raw.push(u8::from(scope.1));raw.push(scope.2);
+    raw.push(scope.1.wire());raw.push(scope.2);
     let digest=Sha256::digest(&raw).into();let order=sealed(&raw)?;
     let helper=ForegroundElf::host()?;
     let (local,remote)=transport::pair()?;
@@ -62,7 +68,8 @@ pub(crate) fn worker()->io::Result<()>{
         u32::from_be_bytes(p[80..84].try_into().map_err(|_|no())?),
         u32::from_be_bytes(p[84..88].try_into().map_err(|_|no())?))?;
     let (_,uid,gid)=desired.tuple();
-    if p[..32]==[0;32]||p[32..64]==[0;32]||p[88]>1||!(1..=62).contains(&p[89]){return Err(no());}
+    let phase=InstallPhase::from_wire(p[88]).ok_or_else(no)?;
+    if p[..32]==[0;32]||p[32..64]==[0;32]||!(1..=62).contains(&p[89]){return Err(no());}
     approval::drop_to_storage(uid,gid)?;
     set_parent_process_death_signal(Some(Signal::TERM))?;original_parent(&fd,parent)?;
     set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
@@ -79,6 +86,6 @@ pub(crate) fn worker()->io::Result<()>{
     let mut message=[0u8;65];message[..2].copy_from_slice(&port.to_be_bytes());message[2..34].copy_from_slice(&code);
     channel.send(Kind::FirstBrowserReady,&scope,&message)?;
     let same=||{if getppid()!=Some(parent){return Err(no());}Ok(())};
-    if !disk_web::serve_first(listener,p[88]!=0,p[89],code,Instant::now()+PANEL,same)?{return Err(no());}
+    if !disk_web::serve_first(listener,phase,p[89],code,Instant::now()+PANEL,same)?{return Err(no());}
     same()?;channel.send(Kind::FirstBrowserRequest,&scope,&[0;65])
 }

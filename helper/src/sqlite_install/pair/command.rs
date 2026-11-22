@@ -4,7 +4,10 @@ use crate::sqlite_install::id;
 use std::{ffi::{OsStr,OsString},io};
 
 #[derive(Debug)]
-pub(crate) struct Setup(super::fresh_issuer::Selection);
+pub(crate) struct Setup {
+    selection: super::fresh_issuer::Selection,
+    web: bool,
+}
 pub(super) fn value(it:&mut impl Iterator<Item=OsString>,flag:&str)->Result<OsString,&'static str>{
     if it.next().as_deref()!=Some(OsStr::new(flag)){return Err("expected named setup fields in the displayed order");}
     it.next().ok_or("missing setup field")
@@ -23,10 +26,17 @@ pub(super) fn name(it:&mut impl Iterator<Item=OsString>,flag:&str)->Result<Vec<u
 
 impl Setup{
     pub(crate) fn parse(mut it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        if !(cfg!(feature="private-fresh-install")&&it.next().as_deref()==Some(OsStr::new("issue-fresh"))){
-            return Err("no public setup/SMB service command; the private fresh v19 fixture is separately enabled");
+        if !cfg!(feature="private-fresh-install") {
+            return Err("the private fresh setup must be enabled explicitly");
         }
-        super::fresh_issuer::Selection::parse(it).map(Self)
+        let first=it.next();
+        let web=first.as_deref()==Some(OsStr::new("web"));
+        let action=if web{it.next()}else{first};
+        if action.as_deref()!=Some(OsStr::new("issue-fresh")){
+            return Err("choose issue-fresh or web issue-fresh; no service command");
+        }
+        let selection=super::fresh_issuer::Selection::parse(it)?;
+        Ok(Self{selection,web})
     }
-    pub(crate) fn run(self)->io::Result<(u8,String)>{self.0.run()}
+    pub(crate) fn run(self)->io::Result<(u8,String)>{self.selection.run(self.web)}
 }

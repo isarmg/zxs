@@ -49,7 +49,7 @@ impl ExplicitSubject{
 pub(super) mod image;
 #[cfg(feature="embedded-zxs")]
 pub(crate) use image::EmbeddedInstall;
-use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,FirstShares,FreshScope,ResolvedRust,transact_fresh},
+use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,FirstShares,FreshScope,ResolvedRust,offer_account_web,transact_fresh},
     native_sql::rust_vault::{ActiveRustMeta,Desired,RustChange,RustOrder,SetupSpec,shared_login},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest},receipt::Observed},terminal::PublicConfirmation};
 use crate::{smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
     rust_first::{self,Origin}},sqlite_install::{approval,product_layout,stage::random}};
@@ -127,8 +127,19 @@ impl Selection{
         let shares=FirstShares{host:hostname,endpoints,choices:folders,recycle};
         Ok(Self{subject,system,origin,reference,init_sha,image_path,image,crypto,login,shares})
     }
-    pub(super) fn run(self)->io::Result<(u8,String)>{
+    pub(super) fn run(self,web:bool)->io::Result<(u8,String)>{
         require_private_install()?;
+        if web {
+            // The browser never holds originals or takes the SYSTEM lease.
+            // It can only ask this one foreground instance to show its normal
+            // review; the protected originals are checked after the child exits.
+            approval::no_inherited_descriptors()?;
+            let require=|| approval::host_admin().map(drop);
+            require()?;
+            let terminal=PublicConfirmation::select()?;
+            let count=u8::try_from(self.shares.choices.len()).map_err(|_|bad("invalid fresh share count"))?;
+            offer_account_web(&terminal,(self.init_sha,crate::disk_web::InstallPhase::Account,count,self.subject),require)?;
+        }
         let Self{subject,system,origin,reference,init_sha,image_path,image,crypto,login,shares}=self;
         // Check host/stdin custody before obtaining any unrelated FD. This
         // genuine low reader holds the original S EX and no root SQL.
@@ -264,6 +275,11 @@ mod tests{
             form.replace("/fixture/bin/zxs","/lab/F/zxs"),form.replace("/fixture/bin/zxs","/fixture/bin/other"),
             form.replace("/fixture/bin/zxs","zxs"),form.replace(&hex(&[41;32]),&hex(&[0;32]))]{assert!(Selection::parse(arg(&bad)).is_err());}
         let public=format!("issue-fresh {form}");
+        let through_web=format!("web issue-fresh {form}");
+        assert_eq!(super::super::command::Setup::parse(arg(&through_web)).is_ok(),cfg!(feature="private-fresh-install"));
+        for bad in ["web web issue-fresh", "web reset-account", "web", "web issue-fresh --password hidden"] {
+            assert!(super::super::command::Setup::parse(arg(bad)).is_err());
+        }
         let retired=format!("issue-fresh-zxs-v18 {form}");
         assert!(super::super::command::Setup::parse(arg(&retired)).is_err());
         assert_eq!(super::super::command::Setup::parse(arg(&public)).is_ok(),cfg!(feature="private-fresh-install"));

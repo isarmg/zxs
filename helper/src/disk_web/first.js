@@ -5,6 +5,13 @@ const refresh = document.querySelector("#preview"), proceed = document.querySele
 const hex = /^[0-9a-f]{64}$/;
 const repair = document.querySelector("main").dataset.purpose === "copy-repair";
 const route = repair ? "/api/copy-repair" : "/api/install";
+const steps = repair ? [] : [...document.querySelectorAll("#install-steps > li[id]")];
+function currentStep(id) {
+    for (const step of steps) {
+        if (step.id === id) step.setAttribute("aria-current", "step");
+        else step.removeAttribute("aria-current");
+    }
+}
 const validByteCount = b => /^[1-9][0-9]{0,18}$/.test(b) && (b.length < 19 || b <= "9223372036854775807");
 let auth = null, csrf = null, ticket = null;
 // Match the server's maximum in first.rs, measured conservatively from before
@@ -32,21 +39,28 @@ async function fetchPreview() {
         if (!["ext", "exFAT", "FAT32"].includes(fields[0]) || !validByteCount(fields[1])) throw new Error();
         plan.textContent = "终端已选一份 " + fields[1] + " 字节的 " + fields[0] + " 输入镜像和一个新工作副本位置。这里只发起终端确认，尚未读取镜像，也未创建文件。自动修复可能丢弃工作副本中的受损内容。";
     } else {
-        if (!["new", "resume"].includes(fields[0]) || !/^(?:[1-9]|[1-5][0-9]|6[0-2])$/.test(fields[1])) throw new Error();
-        plan.textContent = (fields[0] === "new" ? "新建空池" : "只续同一原单") + "：终端已选 1 个 SYSTEM、1 个独立回收盘和 " +
-            fields[1] + " 个数据根。终端将显示实际原名和身份，本次预览不核盘内内容。";
+        if (!["new", "resume", "setup"].includes(fields[0]) || !/^(?:[1-9]|[1-5][0-9]|6[0-2])$/.test(fields[1])) throw new Error();
+        if (fields[0] === "setup") {
+            plan.textContent = "发行单一 Web/SMB 账号：终端已预选 " + fields[1] +
+                " 个共享目录。尚未核实原池或设密；原终端将核对完整范围，并在确认后单独隐藏输入口令。";
+        } else {
+            plan.textContent = (fields[0] === "new" ? "新建空池" : "只续同一原单") + "：终端已选 1 个 SYSTEM、1 个独立回收盘和 " +
+                fields[1] + " 个数据根。终端将显示实际原名和身份，本次预览不核盘内内容。";
+        }
     }
-    return fields[2];
+    return {value: fields[2], phase: repair ? null : fields[0]};
 }
 async function preview() {
     if (auth === null || refresh.disabled) return;
     lockControls();
     ticket = null;
     plan.textContent = status.textContent = "";
+    currentStep(null);
     const before = performance.now() + TICKET_MS;
     try {
-        const value = await fetchPreview();
-        ticket = {value, before};
+        const preview = await fetchPreview();
+        ticket = {...preview, before};
+        currentStep("review-step");
         proceed.disabled = false;
         status.textContent = "已显示本次范围。预览票过期后请重新预览。";
     } catch (_) {
@@ -85,6 +99,7 @@ proceed.addEventListener("click", async () => {
     lockControls();
     try {
         await post(route + "/request", proposed.value);
+        currentStep(proposed.phase === "setup" ? "account-step" : "init-step");
         status.textContent = "请求已交给本机终端，网页将关闭。请回原终端核对原件并决定；现在还没有开始。";
     } catch (_) {
         status.textContent = "未取得网页回执。先看原终端；收到本机确认提示才可继续，不另开新单。";

@@ -1,7 +1,7 @@
 //! Explicit local disk panel. Pairing alone never authorizes a checker or repair.
 mod check;
 mod first;
-pub(crate) use first::{serve_first,serve_repair};
+pub(crate) use first::{InstallPhase,serve_first,serve_repair};
 mod http;
 mod view;
 
