@@ -13,7 +13,7 @@ from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
 from .private_candidates import held_candidates
 from .private_freeze import anonymous_capture
-from .publish import _publish, confirm_final, digest_file, publish, rename_new, rename_new_at, require_native_writer, sync_dir
+from .publish import _publish, confirm_final, publish, rename_new, rename_new_at, require_native_writer, sync_dir
 
 
 def paths(work, store, state):
@@ -256,10 +256,7 @@ def commit(state, *, fork=False, selected=None):
             if gen == 0:
                 selected.check_first_slot()  # Only before capture, not on a genuine original retry.
         elif gen:
-            base_path = store / f"{repo}.{branch}.{gen:016x}.zxs"
-            saved, _ = read_archive(base_path)
-            if (saved.repo, saved.branch, saved.generation, saved.operation) != (repo, branch, gen, row["parent"]) or digest_file(base_path) != row["base_sha"]:
-                raise Rejected("exact original branch base is not available in the selected store")
+            lifecycle.base_tree(row)
         operation = new_id() if selected is None else selected.operation
         capture.operation = operation
         registered = lifecycle.instance(con)

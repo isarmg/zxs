@@ -43,7 +43,7 @@ def main(args=None):
     add("branches", "archive store", "list complete observed directory heads and exact missing ancestors")
     for command, field in (("checkout-branch","branch"), ("checkout-node","operation")):
         add(command, "archive store worktree state", "check out an exact directory branch head or historical node").add_argument(field)
-    add("changes", "state", "compare actual ordinary working files to their original directory snapshot")
+    add("changes", "state", "read-only comparison of ordinary working files to their recorded snapshot")
     for action in ("hide", "restore", "resume-visibility"):
         vis = add(action, "state", "move or verify only this exact clean local worktree")
         vis.add_argument("--writers-stopped", action="store_true", required=True)

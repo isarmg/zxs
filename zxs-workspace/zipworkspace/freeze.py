@@ -121,12 +121,14 @@ def observe_held(fd, expected, *, require_ids=False, check_held=None, checkpoint
     return tree
 
 
-def observe_tree(source: Path):
+def observe_tree(source: Path, *, expected=None):
     """Read back actual named files without making a second private data copy."""
     _native()
     fd = os.open(source, _dir_flags())
     try:
         root_sig = _sig(os.fstat(fd))
+        if expected is not None and (not root_sig[1] or root_sig[:2] != expected):
+            raise Rejected("opened worktree is not the registered directory")
         tree = _scan(fd, hash_files=True)
         if root_sig != _sig(os.stat(source, follow_symlinks=False)):
             raise Rejected("checkout changed during readback")

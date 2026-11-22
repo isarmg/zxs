@@ -6,14 +6,14 @@ import os
 from pathlib import Path
 import stat
 import sys
-from .archive import read_archive, read_managed_document, stamp
+from .archive import read_managed_document, stamp
 from .capacity import writing
-from .document import archive_sha, check_relative, native_identity, relative_document
+from .document import archive_sha, check_relative, named_document, native_identity, relative_document
 from .freeze import _dir_flags, _distinct_roots, _sig, observe_held, observe_tree
 from .model import Rejected, check_id, new_id
 from .private_candidates import generation
 from .private_freeze import local_mount, mount_id
-from .publish import digest_file, rename_new, rename_new_at, require_native_writer, sync_dir
+from .publish import rename_new, rename_new_at, require_native_writer, sync_dir
 
 
 def install(con, root: Path, *, original=None):
@@ -51,15 +51,15 @@ def require_visible(con, row):
     rec = instance(con)
     if rec["phase"] != "visible" or rec["active"] is not None or who(locations(row)[0]) != identity(rec):
         raise Rejected("visibility operation pending, checkout hidden, or original directory identity changed")
+    return rec
 
 
 def base_tree(row):
-    if not row["generation"]: raise Rejected("worktree has no confirmed directory snapshot")
-    p = Path(row["store"]) / f"{row['repo']}.{row['branch']}.{row['generation']:016x}.zxs"
-    marker, tree = read_archive(p)
-    if (marker.repo, marker.branch, marker.generation, marker.operation) != (
-            row["repo"], row["branch"], row["generation"], row["parent"]) or digest_file(p) != row["base_sha"]:
-        raise Rejected("cannot prove this working tree's original committed base")
+    """Read the catalog's exact committed base from one named, read-only document."""
+    expected = _base_values(row)
+    leaf = _base_leaf(expected)
+    with named_document(Path(row["store"]) / leaf) as doc:
+        _, tree = _verify_base(doc, leaf, expected)
     return tree
 
 
@@ -75,15 +75,20 @@ def clean_at(path, state, tree_id, *, restore=False):
 
 def changes(state):
     from .worktree import locked
-    with locked(state) as (con, row, state):
-        require_visible(con, row)
+    # Compare against one committed catalog snapshot. A report needs neither
+    # a reserved writer nor permission to replay a hot rollback journal.
+    with locked(state, read_only=True) as (con, row, _):
+        original = require_visible(con, row)
         base = base_tree(row).rows if row["generation"] else {}
-        cur = observe_tree(locations(row)[0]).rows
-        def report(keys):
-            keys = sorted(keys)
-            return {"count": len(keys), "first_paths": keys[:100]}
-        return {"added":report(cur.keys() - base.keys()), "removed":report(base.keys() - cur.keys()),
-                "changed":report(k for k in cur.keys() & base.keys() if cur[k] != base[k])}
+        observed = int(original["device"]), int(original["inode"])
+        cur = observe_tree(locations(row)[0], expected=observed).rows
+        require_visible(con, row)
+
+    def report(keys):
+        keys = sorted(keys)
+        return {"count": len(keys), "first_paths": keys[:100]}
+    return {"added":report(cur.keys() - base.keys()), "removed":report(base.keys() - cur.keys()),
+            "changed":report(k for k in cur.keys() & base.keys() if cur[k] != base[k])}
 
 
 def _base_values(row):

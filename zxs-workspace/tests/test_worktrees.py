@@ -52,6 +52,34 @@ class LocalWorktree(unittest.TestCase):
             with self.assertRaises(Rejected): action()
         self.assertEqual((self.root / "displaced" / "story").read_bytes(), b"changed")
 
+    def test_changes_matches_decoded_tree_and_raw_digest_on_the_same_open_baseline(self):
+        (self.work / "story").write_bytes(b"new edit")
+        with patch.object(lifecycle, "named_document", wraps=lifecycle.named_document) as opened, \
+             patch.object(lifecycle, "read_managed_document", wraps=lifecycle.read_managed_document) as decoded, \
+             patch.object(lifecycle, "archive_sha", wraps=lifecycle.archive_sha) as hashed:
+            value = lifecycle.changes(self.state)
+        self.assertEqual(value["changed"], {"count": 1, "first_paths": ["story"]})
+        opened.assert_called_once_with(self.base)
+        decoded.assert_called_once()
+        hashed.assert_called_once()
+        self.assertIs(decoded.call_args.args[0], hashed.call_args.args[0])
+        self.assertTrue(decoded.call_args.args[0].closed)
+
+    def test_changes_refuses_if_the_worktree_name_rebinds_after_baseline_verification(self):
+        original = lifecycle.base_tree
+        def verify_then_move(row):
+            tree = original(row)
+            self.work.rename(self.root / "retained")
+            self.work.mkdir()
+            (self.work / "story").write_bytes(b"old")
+            return tree
+
+        with patch.object(lifecycle, "base_tree", side_effect=verify_then_move):
+            with self.assertRaisesRegex(Rejected, "not the registered directory"):
+                lifecycle.changes(self.state)
+        self.assertEqual((self.root / "retained" / "story").read_bytes(), b"old")
+        self.assertEqual((self.work / "story").read_bytes(), b"old")
+
     def test_lost_reply_after_local_move_resumes_original_without_second_rename(self):
         primitive = lifecycle.rename_new
         def interrupted(src, dst):
