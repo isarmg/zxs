@@ -98,7 +98,11 @@ fn browser_dispatch_uses_the_original_admin_session_and_metadata_cut(){
     }
     let page=app.handle(request("GET",&path,None,cookie,""),Instant::now());
     assert_eq!(page.status,"200 OK");
-    assert_eq!(&*page.body,b"{\"ancestors\":[],\"entries\":[],\"next\":null}");
+    let body=std::str::from_utf8(&page.body).unwrap();
+    let scope=body.strip_prefix(r#"{"ancestors":[],"entries":[],"next":null,"scope":""#)
+        .and_then(|scope|scope.strip_suffix(r#"","writable":false}"#))
+        .expect("empty read-only directory metadata");
+    assert!(scope.len()==64&&scope.bytes().all(|b|b.is_ascii_digit()||matches!(b,b'a'..=b'f')));
     assert_eq!(app.handle(request("GET","/ui/v1/provenance.json",None,cookie,""),Instant::now()).status,"404 Not Found");
     assert_eq!(app.handle(request("GET",&path,None,cookie,""),start+ABSOLUTE).status,"401 Unauthorized");
     assert!(app.sessions.is_empty());
