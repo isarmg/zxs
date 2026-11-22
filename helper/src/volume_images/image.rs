@@ -23,11 +23,13 @@ fn geometry(b:&[u8;512],length:u64)->io::Result<Geometry> {
     let metadata=reserved+u64::from(copies)*fat;
     let clusters=sectors.checked_sub(metadata).ok_or_else(||invalid("invalid FAT allocation extents"))?/cluster;
     // FAT type is determined by cluster count, NOT the printable filesystem label.
+    let unsupported_clusters=||unsupported("invalid or unsupported FAT32 cluster geometry");
     if !(65525..=0x0fff_ffed).contains(&clusters) || fat*u64::from(bs)/4<clusters+2
         || root<2 || u64::from(root)>clusters+1 {
-        return Err(unsupported("invalid or unsupported FAT32 cluster geometry"));
+        return Err(unsupported_clusters());
     }
-    Ok(Geometry{length,sector_bytes:bs,data_clusters:clusters as u32})
+    let data_clusters=u32::try_from(clusters).map_err(|_|unsupported_clusters())?;
+    Ok(Geometry{length,sector_bytes:bs,data_clusters})
 }
 
 // The selected FAT allocation layout and extended boot volume ID cannot be
@@ -86,7 +88,7 @@ fn capture<T>(path:&Path,expected:&[u8;32],minimum:u64,finish:fn(File,&[u8;32])-
     let mut buf=[0_u8;32768];
     let mut remaining=length;
     while remaining!=0 {
-        let n=remaining.min(buf.len() as u64) as usize;
+        let n=usize::try_from(remaining).unwrap_or(usize::MAX).min(buf.len());
         original.read_exact(&mut buf[..n])?;copy.write_all(&buf[..n])?;remaining-=n as u64;
     }
     eof(&mut original)?;
@@ -105,14 +107,14 @@ fn verify_copy(mut copy:File,expected:&[u8;32],min:u64)->io::Result<(File,[u8;51
     let meta=copy.metadata()?;
     let length=meta.len();
     if !meta.is_file() || meta.nlink()!=0 || meta.mode()&0o111!=0 || !(min..=MAX).contains(&length)
-        || rustix::fs::fstatfs(&copy)?.f_type as u64!=0x0102_1994 // Linux TMPFS_MAGIC (memfd)
+        || rustix::fs::fstatfs(&copy)?.f_type!=0x0102_1994 // Linux TMPFS_MAGIC (memfd)
         || !fcntl_get_seals(&copy)?.contains(seals()|SealFlags::EXEC) {
         return Err(invalid("expected a complete, non-executable, write-sealed anonymous image"));
     }
     copy.rewind()?;
     let mut buf=[0u8;32768];let mut hash=Sha256::new();let mut left=length;
     while left!=0 {
-        let n=left.min(buf.len() as u64) as usize;
+        let n=usize::try_from(left).unwrap_or(usize::MAX).min(buf.len());
         copy.read_exact(&mut buf[..n])?;hash.update(&buf[..n]);left-=n as u64;
     }
     eof(&mut copy)?;

@@ -96,7 +96,7 @@ pub(crate) fn hash_upto(file:&mut impl Read,size:u64,max:u64)->io::Result<[u8;32
     if size==0||size>max{return Err(io::Error::new(io::ErrorKind::InvalidInput,"file outside hash budget"));}
     let mut hash=Sha256::new();let mut left=size;let mut buf=[0;32*1024];
     while left!=0 {
-        let n=left.min(buf.len() as u64) as usize;file.read_exact(&mut buf[..n])?;
+        let n=usize::try_from(left).unwrap_or(usize::MAX).min(buf.len());file.read_exact(&mut buf[..n])?;
         hash.update(&buf[..n]);left-=n as u64;
     }
     loop {match file.read(&mut buf[..1]){

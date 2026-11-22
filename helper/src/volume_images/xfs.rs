@@ -33,7 +33,7 @@ fn frame(sb:&[u8;HEADER],bytes:u64)->io::Result<Extent>{
     if !(512..=65536).contains(&block)||!block.is_power_of_two()||block.trailing_zeros()!=u32::from(sb[120])
         ||!(512..=block.min(32768)).contains(&sectors)||!sectors.is_power_of_two()||sectors.trailing_zeros()!=u32::from(sb[121])
         ||!(1..=i32::MAX as u32).contains(&ags)||agblocks==0
-        ||u64::BITS-(agblocks-1).leading_zeros()!=agshift||blocks.div_ceil(agblocks)!=u64::from(ags){
+        ||(agblocks-1).bit_width()!=agshift||blocks.div_ceil(agblocks)!=u64::from(ags){
         return Err(invalid("inconsistent XFS image envelope"));
     }
     let filesystem_bytes=blocks.checked_mul(u64::from(block)).filter(|&n|(2048..=bytes).contains(&n))

@@ -110,7 +110,7 @@ fn digest(file:&File,length:u64,mut observe:impl FnMut(u64,&[u8])->io::Result<()
     let mut hash=Sha256::new();let mut buf=[0;128*1024];let mut at=0;
     while at!=length{
         require_copy_read_lease(file)?;
-        let limit=(length-at).min(buf.len() as u64) as usize;
+        let limit=usize::try_from(length-at).unwrap_or(usize::MAX).min(buf.len());
         let n=match file.read_at(&mut buf[..limit],at){
             Ok(0)=>return Err(invalid("saved copy ended before the expected length")),
             Ok(n)=>n,Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e),

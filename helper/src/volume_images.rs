@@ -21,7 +21,7 @@ pub(crate) struct Request { format:CheckFormat, image:PathBuf, digest:[u8;32] }
 pub(crate) enum Outcome {NoFindingsReported,ReportedMessages,FindingsOrToolError}
 pub(crate) struct Report {pub(crate) state:Outcome,pub(crate) files:u32,pub(crate) used:u32,pub(crate) total:u32}
 impl Report {
-    pub(crate) fn exit(&self)->u8 {if self.state==Outcome::NoFindingsReported {0}else{1}}
+    pub(crate) fn exit(&self)->u8 {u8::from(self.state!=Outcome::NoFindingsReported)}
 }
 impl fmt::Display for Report {
     fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result {

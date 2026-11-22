@@ -66,7 +66,7 @@ impl Report {
         let upstream=i32::from_be_bytes(p[5..9].try_into().expect("four bytes"));
         let declared_bytes=u64::from_be_bytes(p[17..25].try_into().expect("eight bytes"));
     if !(0..=255).contains(&upstream)||declared_bytes<512||!declared_bytes.is_multiple_of(512)||!bytes.is_multiple_of(512)||bytes>MAX_PROBE
-            ||!bytes.checked_sub(declared_bytes).is_some_and(|extra|extra>=512){return Err(bad());}
+            ||bytes.checked_sub(declared_bytes).is_none_or(|extra|extra<512){return Err(bad());}
         let observed=match(p[4],upstream,exit){(0,0,Some(0))=>true,(2,_,Some(2))=>false,_=>return Err(bad())};
         Ok(Self{observed,upstream,bytes,declared_bytes})
     }
