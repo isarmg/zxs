@@ -37,8 +37,22 @@ impl Token{
 struct Session<'s>{audience:Audience,admin:WebAdmin<'s>,csrf:Token,born:Instant,last:Instant,
     permit:Arc<AtomicBool>,chosen:manual::Chosen,directory_pages:directory::HeldPages<'s>}
 impl Drop for Session<'_>{fn drop(&mut self){self.permit.store(false,Ordering::Release);}}
+impl Session<'_>{
+    fn finish_read<T>(&mut self,prepared:io::Result<T>)->io::Result<T>{
+        finish_read_at(self.born,&mut self.last,Instant::now(),prepared)
+    }
+}
 fn session_live_at(born:Instant,last:Instant,now:Instant)->bool{
     now.saturating_duration_since(born)<ABSOLUTE&&now.saturating_duration_since(last)<IDLE
+}
+fn finish_read_at<T>(born:Instant,last:&mut Instant,checked:Instant,prepared:io::Result<T>)->io::Result<T>{
+    // Even a refusal can reveal metadata, such as whether a FILE exists.
+    // Check the unrefreshed session after preparing the response, before
+    // returning it or adopting a new form or continuation.
+    if !session_live_at(born,*last,checked){return Err(io::ErrorKind::PermissionDenied.into());}
+    let prepared=prepared?;
+    *last=checked;
+    Ok(prepared)
 }
 struct App<'s>{source:&'s InitialReader,sessions:BTreeMap<Token,Session<'s>>,attempts:VecDeque<Instant>}
 struct Request{method:String,target:String,audience:Audience,origin:Option<String>,content_type:String,
@@ -104,10 +118,10 @@ impl<'s> App<'s>{
                 if let Some(reply)=self.browser_asset(&q){return reply;}
                 if let Some(reply)=self.directory_metadata(&q,now){return reply;}
             }
-            if let Some(args)=q.target.strip_prefix("/versions/history?file="){return self.manual_history(&q,args,now);}
-            if let Some(id)=q.target.strip_prefix("/versions?file="){return self.manual_page(&q,id,now);}
-            if q.target=="/versions"{return self.manual_index(&q,None,now);}
-            if let Some(after)=q.target.strip_prefix("/versions?after="){return self.manual_index(&q,Some(after),now);}
+            if let Some(args)=q.target.strip_prefix("/versions/history?file="){return self.manual_history(&q,args);}
+            if let Some(id)=q.target.strip_prefix("/versions?file="){return self.manual_page(&q,id);}
+            if q.target=="/versions"{return self.manual_index(&q,None);}
+            if let Some(after)=q.target.strip_prefix("/versions?after="){return self.manual_index(&q,Some(after));}
             let after=if q.target=="/"{None}else if let Some(s)=q.target.strip_prefix("/?after="){
                 match s.parse::<ShareId>(){Ok(k)=>Some(k),Err(_)=>return BAD()}
             }else{return Reply::text("404 Not Found","没有此管理页面。");};
@@ -115,20 +129,14 @@ impl<'s> App<'s>{
             if !q.same_origin_if_present(){return REJECT();}
             let Some(k)=q.cookie.as_ref()else{return Reply::redirect("/login");};
             let Some(s)=self.sessions.get_mut(k)else{return Reply::redirect("/login");};
-            let prepared=s.admin.overview(after).map(|data|{
+            let prepared=s.admin.overview(after).and_then(|data|{
                 #[cfg(feature="private-browser-ui")]
                 {browser::overview(&data,&s.csrf.hex())}
                 #[cfg(not(feature="private-browser-ui"))]
                 {pages::overview(&data,&s.csrf.hex()).map(|page|Reply::html("200 OK",page))}
             });
-            #[cfg(feature="private-browser-ui")]
-            let now={
-                let checked=Instant::now();
-                if !session_live_at(s.born,s.last,checked){self.sessions.remove(k);return Reply::redirect("/login");}
-                checked
-            };
-            return match prepared{
-                Ok(Ok(page))=>{s.last=now;page},
+            return match s.finish_read(prepared){
+                Ok(page)=>page,
                 Err(e) if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(k);Reply::redirect("/login")},
                 _=>UNAVAILABLE()
             };

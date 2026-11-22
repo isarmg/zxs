@@ -122,10 +122,8 @@ pub(super) fn respond(stream:TcpStream,handle:impl FnOnce(Request)->io::Result<R
 }
 enum Job{Call(Request,mpsc::SyncSender<Reply>),Fault(io::Error)}
 unsafe extern "C"{
-    fn zxs_web_retry_accept(err:std::os::raw::c_int)->std::os::raw::c_int;
     fn zxs_web_readable(fd:std::os::raw::c_int)->std::os::raw::c_int;
 }
-fn retry_accept(e:&io::Error)->bool{e.raw_os_error().is_some_and(|n|unsafe{zxs_web_retry_accept(n)!=0})}
 fn worker_fault(closing:&AtomicBool,jobs:&mpsc::SyncSender<Job>,e:io::Error){
     // Close the admission gate before another Call can bypass a queued Fault.
     closing.store(true,Ordering::Release);let _=jobs.send(Job::Fault(e));
@@ -145,7 +143,7 @@ fn worker(ls:&TcpListener,closing:&AtomicBool,accepting:&AtomicBool,jobs:mpsc::S
             std::thread::sleep(Duration::from_millis(10));continue;
         }
         let s=match unsafe{zxs_web_readable(ls.as_raw_fd())}{
-            0=>continue,1=>match ls.accept(){Ok((s,_))=>s,Err(e)if retry_accept(&e)=>continue,
+            0=>continue,1=>match ls.accept(){Ok((s,_))=>s,Err(e)if crate::net::retry_tcp_accept(&e)=>continue,
                 Err(e)=>{worker_fault(closing,&jobs,e);break;}},
             _=>{worker_fault(closing,&jobs,io::Error::last_os_error());break;}
         };
@@ -270,10 +268,5 @@ mod tests{
             stop.store(true,Ordering::Release);Reply::text("200 OK","finished")
         }).status,"200 OK");
         assert_eq!(admission(&closed,&||stop.load(Ordering::Acquire),||panic!("ran after stop")).status,"503 Service Unavailable");
-    }
-    #[cfg(all(target_os="linux",target_arch="x86_64"))]
-    #[test]fn linux_tcp_accept_pending_faults_are_per_connection_not_fatal(){
-        for err in [4,11,71,92,95,100,101,102,103,104,110,112,113]{assert!(retry_accept(&io::Error::from_raw_os_error(err)));}
-        for err in [9,22,24,88]{assert!(!retry_accept(&io::Error::from_raw_os_error(err)));}
     }
 }

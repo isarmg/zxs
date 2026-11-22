@@ -3,6 +3,24 @@ use super::*;
 use crate::{system::reader::web_pool,test_support::PrivateTemp};
 use std::{io::{Read,Write},net::{Shutdown,TcpListener,TcpStream}};
 const DIRECT_WARNING:&str="HTTP 未加密";
+#[test]
+fn completed_web_reads_obey_both_expiry_boundaries_without_refreshing_failures(){
+    let born=Instant::now();
+    let second=Duration::from_secs(1);
+    let missing=||Err::<(),_>(io::ErrorKind::NotFound.into());
+    for (original,expiry) in [(born+second,born+second+IDLE),(born+ABSOLUTE-second,born+ABSOLUTE)]{
+        let mut last=original;
+        let just_before=expiry-second;
+        assert_eq!(finish_read_at(born,&mut last,just_before,missing()).unwrap_err().kind(),io::ErrorKind::NotFound);
+        assert_eq!(last,original);
+        assert_eq!(finish_read_at(born,&mut last,expiry,Ok(())).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+        assert_eq!(finish_read_at(born,&mut last,expiry,missing()).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+        assert_eq!(last,original);
+        assert!(finish_read_at(born,&mut last,just_before,Ok(())).is_ok());
+        assert_eq!(last,just_before);
+    }
+}
+
 fn wire(method:&str,uri:&str,host:&str,cookie:&str,origin:&str,body:&str,extra:&str)->String{
     let mut q=format!("{method} {uri} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\n",body.len());
     if !origin.is_empty(){q.push_str(&format!("Origin: {origin}\r\n"));}

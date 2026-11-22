@@ -1,5 +1,5 @@
 //! Wire adapter for the same authenticated, metadata-only directory read.
-use super::{App,BAD,LOGIN_REQUIRED,REJECT,Reply,Request,Session,UNAVAILABLE,session_live_at};
+use super::{App,BAD,LOGIN_REQUIRED,REJECT,Reply,Request,Session,UNAVAILABLE};
 use crate::{DirectoryId,OperationId,identity::ShareId,system::reader::account::navigation::{Cursor,Directory,Entry,Page}};
 use std::{borrow::Cow,collections::VecDeque,fmt::Write as _,io,time::Instant};
 
@@ -71,9 +71,6 @@ fn metadata(page:&Page<'_>,next:Option<Handle>)->io::Result<Reply>{
     if out.len()>MAX_JSON{return Err(io::Error::other("directory metadata exceeds its response bound"));}
     Ok(Reply::content("200 OK","application/json; charset=utf-8",Cow::Owned(out.into_bytes())))
 }
-fn live_reply<T>(born:Instant,last:Instant,checked:Instant,prepared:io::Result<T>)->io::Result<T>{
-    if session_live_at(born,last,checked){prepared}else{Err(io::ErrorKind::PermissionDenied.into())}
-}
 fn page(s:&mut Session<'_>,query:Query)->io::Result<Reply>{
     let prepared=(||{
         let after=match query.after{
@@ -85,10 +82,8 @@ fn page(s:&mut Session<'_>,query:Query)->io::Result<Reply>{
         let reply=metadata(&page,next.as_ref().map(|(id,_)|*id))?;
         Ok((reply,next))
     })();
-    let checked=Instant::now();
-    let (reply,next)=live_reply(s.born,s.last,checked,prepared)?;
+    let (reply,next)=s.finish_read(prepared)?;
     if let Some(next)=next{remember(&mut s.directory_pages.pages,next);}
-    s.last=checked;
     Ok(reply)
 }
 impl App<'_>{
@@ -157,23 +152,6 @@ mod tests{
         assert!(metadata(&p,None).unwrap().body.ends_with(b"\"next\":null}"));
         let empty=Page{ancestors:Vec::new(),entries:Vec::new(),next:None};
         assert_eq!(&*metadata(&empty,None).unwrap().body,b"{\"ancestors\":[],\"entries\":[],\"next\":null}");
-    }
-
-    #[test]
-    fn directory_metadata_obeys_both_original_expiry_boundaries(){
-        use super::super::{ABSOLUTE,IDLE};
-        use std::time::Duration;
-        let born=Instant::now();
-        let second=Duration::from_secs(1);
-        let last=born+second;
-        assert!(session_live_at(born,last,last+IDLE-second));
-        assert!(!session_live_at(born,last,last+IDLE));
-        let last=born+ABSOLUTE-second;
-        let missing=||Err::<(),_>(io::ErrorKind::NotFound.into());
-        assert!(live_reply(born,last,last,Ok(())).is_ok());
-        assert_eq!(live_reply(born,last,last,missing()).unwrap_err().kind(),io::ErrorKind::NotFound);
-        assert_eq!(live_reply(born,last,born+ABSOLUTE,Ok(())).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
-        assert_eq!(live_reply(born,last,born+ABSOLUTE,missing()).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Accept only from the exact host listener retained by the supervisor
 //! handoff. No caller-supplied socket, endpoint, or forwarding metadata.
 use super::InheritedRun;
-use crate::system::reader::smb::runtime::QualifiedRustInstall;
+use crate::{net::retry_tcp_accept,system::reader::smb::runtime::QualifiedRustInstall};
 use std::{io,net::TcpStream,sync::{Arc,atomic::Ordering}};
 
 #[must_use]
@@ -25,7 +25,7 @@ impl InheritedRun {
         if !installation.original_listener_is(index,listener.local_addr()?){return Err(bad());}
         let socket=match listener.accept(){
             Ok((s,_))=>s, // we re-read both addresses from this same socket
-            Err(e) if matches!(e.kind(),io::ErrorKind::WouldBlock|io::ErrorKind::Interrupted|io::ErrorKind::ConnectionAborted)=>return Ok(None),
+            Err(e) if retry_tcp_accept(&e)=>return Ok(None),
             Err(e)=>return Err(e),
         };
         Ok(Some(OwnedAccepted{socket,start:Arc::clone(self),listener:index}))

@@ -42,17 +42,18 @@ pub(super) fn run(site:Site<'_>,closing:&AtomicBool,stopping:&impl Fn()->bool,jo
     }
 }
 impl<'s> App<'s>{
-    pub(super) fn manual_index(&mut self,q:&Request,after:Option<&str>,now:Instant)->Reply{
+    pub(super) fn manual_index(&mut self,q:&Request,after:Option<&str>)->Reply{
         let Some(key)=q.cookie.as_ref()else{return Reply::redirect("/login")};
         let Some(s)=self.sessions.get_mut(key)else{return Reply::redirect("/login")};
         let after=match after.map(str::parse::<FileId>).transpose(){Ok(k)=>k,Err(_)=>return BAD()};
-        match s.admin.manual_files(after){
-            Ok((items,next))=>{s.last=now;pages::manual_index(&items,next)},
+        let prepared=s.admin.manual_files(after).map(|(items,next)|pages::manual_index(&items,next));
+        match s.finish_read(prepared){
+            Ok(reply)=>reply,
             Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);Reply::redirect("/login")},
             Err(_)=>UNAVAILABLE(),
         }
     }
-    pub(super) fn manual_history(&mut self,q:&Request,target:&str,now:Instant)->Reply{
+    pub(super) fn manual_history(&mut self,q:&Request,target:&str)->Reply{
         let Some(key)=q.cookie.as_ref()else{return Reply::redirect("/login")};
         let Some(s)=self.sessions.get_mut(key)else{return Reply::redirect("/login")};
         let (id,upper)=match target.split_once("&before="){
@@ -63,23 +64,25 @@ impl<'s> App<'s>{
             None=>(target,None),
         };
         let Ok(file)=id.parse::<FileId>() else{return BAD()};
-        match s.admin.manual_timeline(file,upper){
-            Ok(history)=>{s.last=now;pages::version_history(&history)},
+        let prepared=s.admin.manual_timeline(file,upper).map(|history|pages::version_history(&history));
+        match s.finish_read(prepared){
+            Ok(reply)=>reply,
             Err(e) if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);Reply::redirect("/login")},
             Err(e) if e.kind()==io::ErrorKind::NotFound=>Reply::text("404 Not Found","没有此文件。"),
             Err(_)=>UNAVAILABLE(),
         }
     }
-    pub(super) fn manual_page(&mut self,q:&Request,id:&str,now:Instant)->Reply{
+    pub(super) fn manual_page(&mut self,q:&Request,id:&str)->Reply{
         let Ok(file)=id.parse::<FileId>() else{return BAD()};
         let Some(key)=q.cookie.as_ref()else{return Reply::redirect("/login")};
         let Some(s)=self.sessions.get_mut(key)else{return Reply::redirect("/login")};
         s.chosen=None;
-        match s.admin.manual_preview(file){
-            Ok((target,item))=>match OperationId::new(){
-                Ok(op)=>{s.chosen=Some((op,target));s.last=now;pages::manual(&item,target,op,&s.csrf.hex())},
-                Err(_)=>UNAVAILABLE()
-            },
+        let prepared=s.admin.manual_preview(file).and_then(|(target,item)|{
+            let op=OperationId::new().map_err(io::Error::other)?;
+            Ok((op,target,pages::manual(&item,target,op,&s.csrf.hex())))
+        });
+        match s.finish_read(prepared){
+            Ok((op,target,reply))=>{s.chosen=Some((op,target));reply},
             Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);Reply::redirect("/login")},
             Err(e)if e.kind()==io::ErrorKind::NotFound=>Reply::text("404 Not Found","没有此文件。"),
             Err(e)if e.kind()==io::ErrorKind::WouldBlock=>conflict(),
@@ -96,14 +99,16 @@ impl<'s> App<'s>{
     pub(super) fn manual_receipt(&mut self,mut q:Request,now:Instant)->Reply{
         if q.method!="POST"||q.target!=RECEIPT{return REJECT();}
         let (s,op,target)=match self.original_form(&mut q,now){Ok(form)=>form,Err(e)=>return e};
-        let result=s.admin.manual_receipt(op,target);
-        // Read authority was selected by SQLite in one read cut. Do not
-        // deliver its contents after this browser session expires during I/O.
-        if Instant::now()>=(s.born+super::ABSOLUTE).min(s.last+super::IDLE){return REJECT();}
-        match result{
-            Ok(Some(receipt))=>{s.last=now;pages::manual_receipt(receipt)},
-            Ok(None)=>{s.last=now;Reply::text("200 OK","截至本次核对，未找到这份表单的已确认提交回执。原请求仍可能在处理。本查询没有提交或重试。")},
-            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>REJECT(),
+        let prepared=s.admin.manual_receipt(op,target).map(|result|match result{
+            Some(receipt)=>pages::manual_receipt(receipt),
+            None=>Reply::text("200 OK","截至本次核对，未找到这份表单的已确认提交回执。原请求仍可能在处理。本查询没有提交或重试。"),
+        });
+        match s.finish_read(prepared){
+            Ok(reply)=>reply,
+            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>{
+                if let Some(key)=q.cookie.as_ref(){self.sessions.remove(key);}
+                REJECT()
+            },
             Err(_)=>Reply::text("503 Service Unavailable","目前无法核对这份表单的提交回执，结果未知。本查询没有提交或重试。"),
         }
     }

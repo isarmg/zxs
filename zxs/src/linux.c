@@ -310,18 +310,6 @@ int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_
 #include <stddef.h>
 
 #include <poll.h>
-/* On an established TCP listener Linux can report the new connection's
-   pending network error directly from accept(2). It isn't a listener fault. */
-int zxs_web_retry_accept(int e) {
-    if (e == EAGAIN || e == EWOULDBLOCK || e == EINTR) return 1;
-    switch (e) {
-    case ECONNABORTED: case ECONNRESET: case ENETDOWN: case EPROTO:
-    case ENOPROTOOPT: case EHOSTDOWN: case ENONET: case EHOSTUNREACH:
-    case EOPNOTSUPP: case ENETUNREACH: case ENETRESET: case ETIMEDOUT:
-    case ENOSR: case ESOCKTNOSUPPORT: case EPROTONOSUPPORT: return 1;
-    default: return 0;
-    }
-}
 int zxs_web_readable(int fd) {
     struct pollfd p = { .fd = fd, .events = POLLIN };
     int result = poll(&p,1,500);

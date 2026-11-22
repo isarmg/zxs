@@ -14,6 +14,7 @@ mod fs;
 mod hash;
 mod password;
 mod display;
+mod net;
 mod system;
 mod management;
 mod identity;
