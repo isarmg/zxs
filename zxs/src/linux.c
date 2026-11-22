@@ -154,6 +154,7 @@ int zxs_claim(int fd, const unsigned char *buf, size_t n) {
 
 #include <stdint.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <linux/openat2.h>
@@ -206,6 +207,7 @@ int install_lowered_term(void (*handler)(int)) {
 
 #if defined(__x86_64__) && UINTPTR_MAX == UINT64_MAX
 #include <linux/sched.h>
+#include <linux/nsfs.h>
 #include <sys/wait.h>
 
 _Static_assert(sizeof(pid_t) == sizeof(int32_t) && (pid_t)-1 < 0, "signed Linux pid");
@@ -264,6 +266,33 @@ int reset_post_clone_signals(void) {
             return 0;
     }
     return sigprocmask(SIG_SETMASK, &empty, NULL) == 0;
+}
+
+struct namespace_probe { unsigned long request; int clone_type; };
+/* Namespace tags in custody.rs order; Linux 6.12 PIDFS _IO request numbers. */
+static const struct namespace_probe namespace_probes[] = {
+    {_IO(0xff, 2), CLONE_NEWIPC},
+    {_IO(0xff, 3), CLONE_NEWNS},
+    {_IO(0xff, 4), CLONE_NEWNET},
+    {_IO(0xff, 5), CLONE_NEWPID},
+    {_IO(0xff, 6), CLONE_NEWPID},
+    {_IO(0xff, 9), CLONE_NEWUSER},
+    {_IO(0xff, 10), CLONE_NEWUTS},
+};
+
+int observe_namespace_kind(int fd, uint8_t kind) {
+    return kind < sizeof(namespace_probes) / sizeof(namespace_probes[0]) &&
+           ioctl(fd, NS_GET_NSTYPE, 0ul) == namespace_probes[kind].clone_type;
+}
+int open_process_namespace(int pidfd, uint8_t kind) {
+    if (kind >= sizeof(namespace_probes) / sizeof(namespace_probes[0])) {
+        errno = EINVAL;
+        return -1;
+    }
+    return ioctl(pidfd, namespace_probes[kind].request, 0ul);
+}
+int open_namespace_owner(int nsfd) {
+    return ioctl(nsfd, NS_GET_USERNS, 0ul);
 }
 
 /* No shared VM or vfork: the zero-result child returns on its copied stack. */
@@ -407,7 +436,6 @@ int zxs_open_mountinfo(void) { return open_proc_child("mountinfo",O_RDONLY); }
 
 #include <linux/fs.h>
 #include <stdlib.h>
-#include <sys/ioctl.h>
 
 /* Queried on the actual live FD. The mount ID returned by name_to_handle_at
  * is intentionally not a durable identifier. We never open arbitrary handles. */

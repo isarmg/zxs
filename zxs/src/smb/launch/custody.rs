@@ -18,7 +18,6 @@ use std::{
 
 const PROC:libc::c_long=libc::PROC_SUPER_MAGIC as libc::c_long;
 const NSFS:libc::c_long=0x6e736673;
-const NS_GET_NSTYPE:libc::c_ulong=0xb703;
 // Linux 6.12 fs/proc and include/uapi/linux/pidfd.h. A numeric proc
 // entry is not a process grant; only the initial namespace's reserved PID 1
 // may be looked up, to compare actual host namespaces and root.
@@ -37,6 +36,9 @@ unsafe extern "C" {
     fn observe_own_task_ids(tid:*mut c_long)->i32;
     fn observe_own_process_ids(ids:*mut OwnProcessIds);
     fn observe_waitable_children()->c_int;
+    fn observe_namespace_kind(fd:c_int,kind:u8)->c_int;
+    fn open_process_namespace(pidfd:c_int,kind:u8)->c_int;
+    fn open_namespace_owner(nsfd:c_int)->c_int;
 }
 
 #[must_use]
@@ -275,41 +277,41 @@ fn host_task(proc:&File)->Result<()>{
 }
 
 #[derive(Clone,Copy)]
-enum Namespace{Ipc,Mount,Net,Pid,PidForChildren,User,Uts}
+#[repr(u8)]
+enum Namespace{Ipc=0,Mount=1,Net=2,Pid=3,PidForChildren=4,User=5,Uts=6}
 impl Namespace{
-    fn fields(self)->(&'static CStr,libc::c_ulong,libc::c_int){
+    fn name(self)->&'static CStr{
         match self{
-            Self::Ipc=>(c"ipc",0xff02,libc::CLONE_NEWIPC),
-            Self::Mount=>(c"mnt",0xff03,libc::CLONE_NEWNS),
-            Self::Net=>(c"net",0xff04,libc::CLONE_NEWNET),
-            Self::Pid=>(c"pid",0xff05,libc::CLONE_NEWPID),
-            Self::PidForChildren=>(c"pid_for_children",0xff06,libc::CLONE_NEWPID),
-            Self::User=>(c"user",0xff09,libc::CLONE_NEWUSER),
-            Self::Uts=>(c"uts",0xff0a,libc::CLONE_NEWUTS),
+            Self::Ipc=>c"ipc",
+            Self::Mount=>c"mnt",
+            Self::Net=>c"net",
+            Self::Pid=>c"pid",
+            Self::PidForChildren=>c"pid_for_children",
+            Self::User=>c"user",
+            Self::Uts=>c"uts",
         }
     }
     fn checked(self,f:File)->Result<File>{
         if kernel::fs_magic(f.as_raw_fd())?!=NSFS{return Err(Fault::Handoff);}
-        // SAFETY: NS_GET_NSTYPE is a fixed _IO query with zero argument.
-        if unsafe{libc::ioctl(f.as_raw_fd(),NS_GET_NSTYPE,0 as libc::c_ulong)}!=self.fields().2{return Err(Fault::Handoff);}
+        // SAFETY: fixed kind observation on the held namespace descriptor.
+        if unsafe{observe_namespace_kind(f.as_raw_fd(),self as u8)}!=1{return Err(Fault::Handoff);}
         Ok(f)
     }
     fn of_parent(self,pid:&OriginalProcess)->Result<File>{
-        let (_,request,_)=self.fields();
-        // SAFETY: fixed Linux namespace fd-returning ioctl on our held
-        // original pidfs descriptor only. Success transfers one fresh FD.
-        let ns=unsafe{File::from(kernel::new_fd(libc::ioctl(pid.as_raw_fd(),request,0 as libc::c_ulong).into())?)};
+        // SAFETY: fixed namespace request on the held original pidfd;
+        // success returns one new owned descriptor.
+        let ns=unsafe{File::from(kernel::new_fd(open_process_namespace(pid.as_raw_fd(),self as u8).into())?)};
         descriptor::cloexec(ns.as_raw_fd())?;
         self.checked(ns)
     }
     fn of_init(self,ns:&File)->Result<File>{
-        self.checked(follow_kernel_link(ns,self.fields().0,libc::O_RDONLY|libc::O_NOCTTY)?)
+        self.checked(follow_kernel_link(ns,self.name(),libc::O_RDONLY|libc::O_NOCTTY)?)
     }
     fn owner_of_pid(self,pid:&File)->Result<File>{
         if !matches!(self,Self::User){return Err(Fault::Handoff);}
         // SAFETY: NS_GET_USERNS on the already verified original PID ns
         // yields one new CLOEXEC file, not a borrowed pointer or numeric id.
-        let f=unsafe{File::from(kernel::new_fd(libc::ioctl(pid.as_raw_fd(),0xb701 as libc::c_ulong,0 as libc::c_ulong).into())?)};
+        let f=unsafe{File::from(kernel::new_fd(open_namespace_owner(pid.as_raw_fd()).into())?)};
         descriptor::cloexec(f.as_raw_fd())?;
         self.checked(f)
     }
