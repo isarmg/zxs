@@ -15,7 +15,7 @@ from .checkout_action import _named_mount
 class LiveCheckout:
     """Only the actual creator of a new catalog can supply a session."""
     def __init__(self, work, state, store, instance, repo, work_fd, private_fd, store_fd,
-                 *, source=None, initial_branch=None, initial_index=None):
+                 *, source=None, initial_branch=None, initial_index=None, initial_seed=None):
         self.work, self.state, self.store = work, state, store
         self.instance, self.repo = check_id(instance), check_id(repo)
         self.review_origin = object()  # The creator and its borrowed views share only this in-memory identity.
@@ -40,6 +40,10 @@ class LiveCheckout:
                 self.keep(fd) for fd in (work_fd, private_fd, store_fd))
             self.check_dirs()
             self.store_identity = native_identity(os.fstat(self.store_fd), stat.S_IFDIR)
+            self.initial_seed = None
+            if initial_seed is not None and initial_index is not None:
+                try: self.initial_seed = self.keep(initial_seed[0]), initial_seed[1]
+                except OSError: pass  # Listing and ordinary worktree custody do not require a text-read loan.
         except BaseException:
             self.close()
             raise
@@ -55,14 +59,18 @@ class LiveCheckout:
         if not self.branch_source_available:
             raise Rejected("已离开签出时的原浏览快照；不能从同名或重新选择的归档新建分支")
 
-    def borrow(self):
+    def borrow(self, *, seed=False):
         """One in-flight job owns independent references, even if a stale UI drops its selection."""
         if self.closed or self.db is None: raise Rejected("没有可交接的本窗口原会话")
         other = copy(self)
         other.stack = ExitStack()
+        other.initial_seed = None
         try:
             for attr in ("work_fd", "state_fd", "store_fd", "db"):
                 setattr(other, attr, other.keep(getattr(self, attr)))
+            if seed and self.initial_seed is not None:
+                try: other.initial_seed = other.keep(self.initial_seed[0]), self.initial_seed[1]
+                except OSError: pass
             if self.closed: raise Rejected("原工作树会话已关闭")
             return other  # The background reader qualifies original names, mounts and SQLite before use.
         except BaseException:
@@ -77,7 +85,7 @@ class LiveCheckout:
     def close(self):
         if not self.closed:
             self.closed = True
-            self.initial_index = None
+            self.initial_index = self.initial_seed = None
             self.stack.close()
 
     def check_state(self):

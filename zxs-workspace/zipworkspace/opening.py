@@ -361,6 +361,8 @@ def begin(source, parent, stem, store, state, *, automatic, expected=None, priva
             staging.separate_roots(base.parent, target, store_root, mount)
             with writing("STATE", state, "写入、安装并同步首笔签出登记", operation, base.parent):
                 _install_initial(area, copy, image, state, base=base, stage=stage, selected=selected, worktree=worktree)
+            if selected is not None:
+                selected.retain_initial_seed(CandidateDirectory(state, area.parent, area.identity), copy)
     if selected is not None:
         selected.registered = True  # Seed/tree, outer parent, and all producer closes succeeded.
         return finish(state, operation, selected=selected)

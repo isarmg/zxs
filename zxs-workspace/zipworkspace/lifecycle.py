@@ -11,6 +11,7 @@ from .capacity import writing
 from .document import archive_sha, check_relative, native_identity, relative_document
 from .freeze import _dir_flags, _distinct_roots, _sig, observe_held, observe_tree
 from .model import Rejected, check_id, new_id
+from .private_candidates import generation
 from .private_freeze import local_mount, mount_id
 from .publish import digest_file, rename_new, rename_new_at, require_native_writer, sync_dir
 
@@ -125,7 +126,7 @@ def _idle_live_base(live, *, local_only=False):
         return before
 
 
-def _observe_local_work(live, *, with_store, observer=None):
+def _observe_local_work(live, *, with_store, observer=None, on_file=None):
     from .private_stage import same_mount
     working_mount = same_mount(live.state_fd, live.work_fd)
     outside = (live.state_fd, live.store_fd) if with_store else (live.state_fd,)
@@ -140,6 +141,7 @@ def _observe_local_work(live, *, with_store, observer=None):
             raise Rejected("工作目录含子挂载或 STATE/STORE 别名；没有完整观察")
 
     options = {} if observer is None else {"observer": observer}
+    if on_file is not None: options["on_file"] = on_file
     return observe_held(live.work_fd, work, require_ids=True, check_held=work_member, **options)
 
 
@@ -185,9 +187,53 @@ def observe_first_contents(live, *, observer=None, retain_review=False):
     return (result, current.total, evidence) if retain_review else (result, current.total)
 
 
-def observe_initial_changes(live, *, observer=None):
+def check_checkout_seed(live, source, observed):
+    """Prove the held original is still the private single-link seed, without opening its data name."""
+    live.check_state()
+    mount = local_mount(live.state_fd)
+    named = os.open("original.zxs", os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=live.state_fd)
+    try:
+        for fd in (source, named):
+            m = os.fstat(fd)
+            if (not stat.S_ISREG(m.st_mode) or m.st_nlink != 1 or m.st_uid != os.geteuid()
+                    or m.st_mode & 0o077 or generation(m) != observed or mount_id(fd) != mount):
+                raise Rejected("STATE 中的首次签出原包已变化或不可核验，不读取替件")
+    finally: os.close(named)
+    live.check_state()
+
+
+class InitialCheckoutText:
+    """Text-only custody from one offline report; not a STORE baseline or write credential."""
+    def __init__(self, live, marker, basis, seed, pairs):
+        self.origin, self.instance = live.review_origin, live.instance
+        self.marker, self.basis, self.observed = marker, basis, seed[1]
+        self._pairs = pairs
+        self._fd = os.dup(seed[0])
+
+    @property
+    def has_text_pairs(self): return self._fd is not None and bool(self._pairs)
+
+    def has_text_pair(self, row):
+        pair = self._pairs.get(row.path) if row is not None else None
+        return self._fd is not None and pair is not None and pair[0] is row
+
+    def text_pair(self, row):
+        if not self.has_text_pair(row): raise Rejected("只能核对本次离线对照中选定的一对小普通文件")
+        return self._pairs[row.path][1:]
+
+    def duplicate(self):
+        if self._fd is None: raise Rejected("原本机签出包已随离线对照关闭")
+        return os.dup(self._fd)
+
+    def close(self):
+        fd, self._fd = self._fd, None
+        self._pairs.clear()
+        if fd is not None: os.close(fd)
+
+
+def observe_initial_changes(live, *, observer=None, retain_text=False):
     """Local observation only, against the exact initial checkout this window created."""
-    from .comparison import compare_to_index
+    from .comparison import COMPARE_BYTES, compare_to_index
     if observer is not None: observer.begin("identity")
     index = live.initial_index
     if index is None: raise Rejected("本窗口没有从原签出交接的初始核验索引")
@@ -195,14 +241,43 @@ def observe_initial_changes(live, *, observer=None):
     expected = (marker.repo, marker.branch, marker.generation, marker.operation, live.checkout_sha)
     if _idle_live_base(live, local_only=True) != expected:
         raise Rejected("原登记已不是首次签出的确切基线；请核验 STORE 中的当前版本")
-    current = _observe_local_work(live, with_store=False, observer=observer)
+    seed = live.initial_seed if retain_text else None
+    wanted = {}
+
+    def note_small(path, _child, meta, digest):
+        if meta.st_nlink != 1 or meta.st_size > COMPARE_BYTES: return
+        parent, _, leaf = path.rpartition("/")
+        old = index.entry(parent, leaf)
+        if old is None or old.kind != "file" or old.size_bytes > COMPARE_BYTES: return
+        before, after = (old.size_bytes, old.sha256), (meta.st_size, digest)
+        if before != after: wanted[path] = (before, after, _sig(meta))
+
+    options = {"on_file": note_small} if seed is not None else {}
+    current = _observe_local_work(live, with_store=False, observer=observer, **options)
     if observer is not None: observer.begin("compare")
     result = compare_to_index(index, current)
     if observer is not None: observer.begin("identity")
-    if _idle_live_base(live, local_only=True) != expected:
-        raise Rejected("离线观察期间原基线改变；不显示旧结果")
-    if observer is not None: observer.check()
-    return marker, result
+    with ExitStack() as held:
+        evidence = None
+        if wanted:
+            try:
+                check_checkout_seed(live, *seed)
+            except (OSError, Rejected):
+                pass  # The already verified in-memory index still supports the ordinary offline listing.
+            else:
+                pairs = {}
+                for row in result.rows:
+                    if observer is not None: observer.check()
+                    if row.path in wanted: pairs[row.path] = (row, *wanted[row.path])
+                if pairs:
+                    try: evidence = InitialCheckoutText(live, marker, expected, seed, pairs)
+                    except OSError: pass  # The optional text loan is unavailable; do not discard the report.
+                    else: held.callback(evidence.close)
+        if _idle_live_base(live, local_only=True) != expected:
+            raise Rejected("离线观察期间原基线改变；不显示旧结果")
+        if observer is not None: observer.check()
+        held.pop_all()
+        return (marker, result, evidence) if retain_text else (marker, result)
 
 
 class MissingBaseline:

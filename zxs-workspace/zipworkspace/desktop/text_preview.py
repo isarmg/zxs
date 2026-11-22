@@ -16,8 +16,8 @@ import unicodedata
 from ..archive import stamp, stored_member
 from ..comparison import COMPARE_BYTES
 from ..document import check_relative, native_identity, relative_document
-from ..freeze import _dir_flags
-from ..lifecycle import MissingBaseline, _base_leaf, _idle_live_base
+from ..freeze import _dir_flags, _sig
+from ..lifecycle import InitialCheckoutText, MissingBaseline, _base_leaf, _idle_live_base, check_checkout_seed
 from ..model import CHUNK, MAX_CD, MAX_FILE, Rejected, member_name
 from ..private_freeze import mount_id
 from ..private_stage import same_mount
@@ -414,13 +414,23 @@ def _compare_folder_text(left, report, row, observer):
 class WorktreeTextPair:
     """One bound baseline member and one relative working file, never a writer."""
     def __init__(self, live, evidence, row):
-        if (not can_compare_text(row) or not isinstance(evidence, MissingBaseline)
-                or evidence.instance != live.instance or evidence.path != live.store / _base_leaf(evidence.basis)):
+        self.offline = type(evidence) is InitialCheckoutText
+        if (not can_compare_text(row) or not (self.offline or isinstance(evidence, MissingBaseline))
+                or evidence.instance != live.instance):
             raise Rejected("不是本窗口对照中的同一路径小文本")
-        self.facts = evidence.text_pair(row)
+        self.work_signature = None
+        if self.offline:
+            if evidence.origin is not live.review_origin or evidence.marker != live.checkout_marker:
+                raise Rejected("不是本窗口首次签出的原本机文本对照")
+            before, after, self.work_signature = evidence.text_pair(row)
+            self.facts = before, after
+        else:
+            if evidence.path != live.store / _base_leaf(evidence.basis):
+                raise Rejected("不是本窗口对照中的原 STORE 基线")
+            self.leaf = evidence.path.name
+            self.facts = evidence.text_pair(row)
         self.parts, self.member = member_name(row.path), row.path
         self.observed, self.basis, self.marker = evidence.observed, evidence.basis, evidence.marker
-        self.leaf = evidence.path.name
         self.closed = False
         self.stack = ExitStack()
         try:
@@ -437,10 +447,13 @@ class WorktreeTextPair:
             self.stack.close()
 
     def _check_basis(self):
-        if _idle_live_base(self.live) != self.basis:
+        if _idle_live_base(self.live, local_only=self.offline) != self.basis:
             raise Rejected("原基线已改变；请重新查看工作树对照")
 
     def _check_archive(self):
+        if self.offline:
+            check_checkout_seed(self.live, self.source, self.observed)
+            return
         # O_PATH supplies only metadata for the original relative STORE name;
         # all actual archive bytes come from the still-held data descriptor.
         store = self.live.store_fd
@@ -471,6 +484,10 @@ class WorktreeTextPair:
                 def identical():
                     if mount_id(doc.fileno()) != mount or stamp(doc) != before:
                         raise Rejected("工作文件已移出原挂载或在读取中改变")
+                    if self.work_signature is not None:
+                        m = os.fstat(doc.fileno())
+                        if m.st_nlink != 1 or _sig(m) != self.work_signature:
+                            raise Rejected("工作文件不是本次离线报告中的原实体或状态；请刷新对照")
                     for above, name, held in opened:
                         check()
                         named = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=above)
@@ -501,7 +518,8 @@ class WorktreeTextPair:
             archived = _verified_small(body.read, self.facts[0], observer)
         with self._working(observer.check) as doc:
             current = _verified_small(doc.read, self.facts[1], observer)
-        display = _unified((_small_lines(archived), _small_lines(current)), ("登记基线", "本次工作文件"), observer)
+        base = "首次签出的本机原包" if self.offline else "登记基线"
+        display = _unified((_small_lines(archived), _small_lines(current)), (base, "本次工作文件"), observer)
         observer.begin("identity")
         self._check_archive()
         self._check_basis()

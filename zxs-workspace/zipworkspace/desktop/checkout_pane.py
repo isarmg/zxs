@@ -636,7 +636,7 @@ class CheckoutPane(QWidget):
 
         def done(outcome):
             result, error = outcome
-            evidence = result[2] if result is not None and not (initial or first) else None
+            evidence = result[2] if result is not None and not first else None
             try:
                 if not current(): return
                 if observer.cancelled:
@@ -651,7 +651,8 @@ class CheckoutPane(QWidget):
                     self.show_changes(live, None, contents, first_bytes=size, first_review=first_review)
                 elif initial:
                     self.owner.inform("离线对照已完成；未检查 STORE，后续编辑不会自动刷新。")
-                    self.show_changes(live, *result, initial=True)
+                    self.show_changes(live, *result[:2], initial=True, evidence=evidence)
+                    evidence = None  # The dialog now owns any original local seed handle.
                 else:
                     self.owner.inform("工作树只读对照已完成；后续编辑不会自动刷新。")
                     self.show_changes(live, *result[:2], evidence=evidence)
@@ -661,16 +662,17 @@ class CheckoutPane(QWidget):
 
         loan = None
         try:
-            loan = live.borrow()  # Only dup here; filesystem and catalog qualification are on the worker.
+            loan = live.borrow(seed=True) if initial else live.borrow()
+            # Only dup here; filesystem and catalog qualification are on the worker.
             def read():
                 # Route a late refusal through the same session check as a late success.
                 result = None
                 try:
                     with closing(loan):
                         if first: return observe_first_contents(loan, observer=observer, retain_review=True), None
-                        if initial: return observe_initial_changes(loan, observer=observer), None
-                        result = observe_live_changes(loan, observer=observer, retain_missing=True, retain_text=True,
-                                                      retain_review=True)
+                        if initial: result = observe_initial_changes(loan, observer=observer, retain_text=True)
+                        else: result = observe_live_changes(loan, observer=observer, retain_missing=True, retain_text=True,
+                                                            retain_review=True)
                     return result, None
                 except Exception as error:
                     if result is not None and result[2] is not None: result[2].close()
@@ -713,7 +715,9 @@ class CheckoutPane(QWidget):
                 + ("本次未发现差异。" if not report.rows else "")))
             columns = ("相对路径", "差异", "登记基线", "工作目录")
         if initial:
-            layout.addWidget(label("只使用首次签出时的核验索引；没有读取或验证 STORE，也不证明现在能提交。"))
+            layout.addWidget(label("差异列表基于首次签出的核验索引；不读取或验证 STORE，也不证明现在能提交。"))
+            if evidence is None:
+                layout.addWidget(label("本次没有可从原本机签出包复核的小文本对。"))
         layout.addWidget(label("这是一次观察，不是实时或原子快照，也不能代替提交前停止写入者。"))
         table = Table(columns, "首次提交内容（一次只读观察）" if first else "本工作树的只读改动")
         layout.addWidget(table)
@@ -726,7 +730,7 @@ class CheckoutPane(QWidget):
         table.selectionModel().selectionChanged.connect(update_path)
         table.rows.modelReset.connect(update_path)
         close_lines = None
-        if evidence is not None and evidence.missing:
+        if not initial and evidence is not None and evidence.missing:
             def missing():
                 row = table.item()
                 return row if row is not None and row.change == "missing" and row.before in ("file", "directory") else None
@@ -749,9 +753,9 @@ class CheckoutPane(QWidget):
             table.rows.modelReset.connect(update_restore)
             layout.addWidget(restore)
         if evidence is not None and evidence.has_text_pairs:
-            close_lines = self._line_tools(dialog, live, evidence, table, layout)
+            close_lines = self._line_tools(dialog, live, evidence, table, layout, initial=initial)
         review = first_review
-        if not first: review = evidence if evidence is not None and evidence.review is not None else None
+        if not first and not initial: review = evidence if evidence is not None and evidence.review is not None else None
         if not initial and review is not None:
             record = self.live_record
 
@@ -802,7 +806,7 @@ class CheckoutPane(QWidget):
         self.changes_dialog = dialog
         dialog.open()  # Window-modal, no nested event loop.
 
-    def _line_tools(self, dialog, live, evidence, table, layout):
+    def _line_tools(self, dialog, live, evidence, table, layout, *, initial=False):
         state, note = self.live_record, label()
         reading = shown = None
         epoch = object()
@@ -837,6 +841,7 @@ class CheckoutPane(QWidget):
             if reading is not None or shown is not None or self.owner.pending is not None or not current(): return
             details = (f"相对路径：{row.path!r}\n登记节点：{evidence.marker.operation} · {row.before_bytes:,} B\n"
                        f"本次观察的工作文件：{row.after_bytes:,} B")
+            if initial: details += "\n归档一侧使用本次签出保留的原本机 STATE 副本，不访问 STORE。"
             if not confirm(dialog, "核验后查看工作文件的逐行差异",
                            details + "\n只再读取这一对完整内容；每侧至多 64 KiB、1,024 行。不修改文件，可取消。",
                            attestation="我确认只查看这一对内容，不打开外部应用。",
@@ -847,7 +852,8 @@ class CheckoutPane(QWidget):
                 note.setText(str(error))
                 return
             watch = reading = Verification()
-            note.setText("正在从原登记基线和原工作目录读取并核验这两项。")
+            note.setText("正在核验原本机签出包和原工作目录中的所选项。" if initial else
+                         "正在从原登记基线和原工作目录读取并核验这两项。")
             update()
 
             def work():

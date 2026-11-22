@@ -101,6 +101,7 @@ class CheckoutChoice:
         self.store = self.target = self.base = self.state = None
         self.keep_session = keep_session
         self.provisional = self.session = self.verified_sha = None
+        self.initial_seed = None
         self.publication = None  # Only the actual private STATE installation boundary sets this.
         self.prepared = self.resume_offer = self.resume_mode = None
         self.registered = self.receipt_synced = self.initial_run = False
@@ -119,6 +120,7 @@ class CheckoutChoice:
         if not self.closed:
             self.preparation.finish()
             self.closed = True
+            self.initial_seed = None
             try: self._close_source()
             finally: self.stack.close()
 
@@ -375,6 +377,26 @@ class CheckoutChoice:
                 private_stage.mount_id(child) != private_stage.mount_id(root)):
             raise Rejected("原工作目录或确认的恢复方式不再相符")
 
+    def retain_initial_seed(self, installed, copy):
+        """Keep only a read-only handle to the producer's actual verified local copy."""
+        if not self.keep_session: return
+        original, observed = copy
+        fd = None
+        try:
+            installed.check_file("original.zxs", original, observed)
+            fd = os.open("original.zxs", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                         dir_fd=installed.parent)
+            installed.check_file("original.zxs", fd, observed)
+            installed.check_file("original.zxs", original, observed)
+            if not private_stage.mount_id(fd) == private_stage.mount_id(original) == private_stage.mount_id(installed.parent):
+                raise Rejected("私有原包不在本次实际 STATE 挂载")
+            self.stack.callback(os.close, fd)
+            self.initial_seed, fd = (fd, observed), None
+        except (OSError, Rejected):
+            pass  # Only the optional local text action loses its witness.
+        finally:
+            if fd is not None: os.close(fd)
+
     def resume(self, offer, *, confirmed=False):
         if (not confirmed or not self.can_review_recovery or self.resume_offer is not offer or offer is None or
                 self.resume_mode is not None):
@@ -400,7 +422,8 @@ class CheckoutChoice:
         self.provisional = LiveCheckout(self.destination, self.state, self.store.path, row["worktree"],
                                         snapshot.browser.commit.repo, work_fd, state_fd, store_fd,
                                         source=(self.operation, snapshot.browser.commit, self.verified_sha,
-                                                snapshot.path, snapshot.observed), initial_index=snapshot.browser)
+                                                snapshot.path, snapshot.observed), initial_index=snapshot.browser,
+                                        initial_seed=self.initial_seed)
         return self.provisional
 
     def take_session(self):

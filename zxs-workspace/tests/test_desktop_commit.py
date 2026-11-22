@@ -312,6 +312,83 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
             with self.assertRaisesRegex(Rejected, "原基线改变"):
                 lifecycle.observe_initial_changes(self.live)
 
+    def offline_text(self):
+        from zipworkspace.desktop.text_preview import WorktreeTextPair
+        before, report, evidence = lifecycle.observe_initial_changes(self.live, retain_text=True)
+        self.assertEqual(before, self.first)
+        self.assertIsNotNone(evidence)
+        with closing(evidence):
+            row = next(row for row in report.rows if row.path == "story")
+            self.assertTrue(evidence.has_text_pair(row))
+            with self.assertRaisesRegex(Rejected, "选定的一对"):
+                WorktreeTextPair(self.live, evidence, replace(row))
+            pair = WorktreeTextPair(self.live, evidence, row)
+        self.addCleanup(pair.close)
+        self.assertFalse(evidence.has_text_pairs)
+        return pair
+
+    def test_offline_text_uses_the_original_readonly_seed_without_store_or_archive_data_reopen(self):
+        import fcntl
+        from zipworkspace.desktop import live_checkout
+        self.store.rename(self.root/"offline-store")
+        self.loose.rename(self.root/"old-display")
+        (self.tree/"story").write_bytes(b"working edit\n")
+        seed_fd, _ = self.live.initial_seed
+        mode = fcntl.fcntl(seed_fd, fcntl.F_GETFL)
+        self.assertEqual(mode & os.O_ACCMODE, os.O_RDONLY)
+        self.assertFalse(mode & os.O_PATH)
+        db = self.state/"worktree.sqlite"
+        before = db.read_bytes()
+        orig_named, orig_open = live_checkout._named_mount, os.open
+
+        def named(path, fd):
+            self.assertNotEqual(path, self.store)
+            return orig_named(path, fd)
+
+        def metadata_only(path, flags, *args, **kwargs):
+            self.assertNotEqual(path, self.store)
+            if path == "original.zxs": self.assertTrue(flags & os.O_PATH)
+            return orig_open(path, flags, *args, **kwargs)
+
+        with patch.object(live_checkout, "_named_mount", side_effect=named), \
+             patch.object(os, "open", side_effect=metadata_only), \
+             patch.object(lifecycle, "read_managed_document", side_effect=AssertionError("no whole archive scan")), \
+             patch.object(lifecycle, "archive_sha", side_effect=AssertionError("no whole archive hash")):
+            with closing(self.offline_text()) as pair:
+                self.assertNotEqual(pair.source, seed_fd)
+                self.assertTrue(os.path.samestat(os.fstat(seed_fd), os.fstat(pair.source)))
+                value = pair.compare(Verification())
+        self.assertIn("首次签出的本机原包", value)
+        self.assertIn("-original story", value)
+        self.assertIn("+working edit", value)
+        self.assertEqual(db.read_bytes(), before)
+
+    def test_rebound_private_seed_is_never_reopened_and_the_report_remains_available(self):
+        from zipworkspace.desktop import text_preview
+        self.store.rename(self.root/"offline-store")
+        (self.tree/"story").write_bytes(b"a changed worktree")
+        pair = self.offline_text()
+        seed = self.state/"original.zxs"
+        copy = seed.read_bytes()
+        seed.rename(self.state/"retained-original")
+        seed.write_bytes(copy); seed.chmod(0o600)
+        with closing(pair), patch.object(text_preview, "stored_member", side_effect=AssertionError("no replacement body")):
+            with self.assertRaisesRegex(Rejected, "首次签出原包已变化"):
+                pair.compare(Verification())
+        before, report, no_text = lifecycle.observe_initial_changes(self.live, retain_text=True)
+        self.assertEqual((before, report.changed, no_text), (self.first, 1, None))
+
+    def test_offline_text_rejects_same_byte_workfile_replacement_after_the_report(self):
+        target = self.tree/"story"
+        target.write_bytes(b"same-byte replacement is not the original")
+        self.store.rename(self.root/"offline-store")
+        pair = self.offline_text()
+        body = target.read_bytes()
+        target.rename(self.tree/"original-working-file")
+        target.write_bytes(body)
+        with closing(pair), self.assertRaisesRegex(Rejected, "不是本次离线报告中的原实体"):
+            pair.compare(Verification())
+
     def test_can_stop_work_observation_in_both_modes_without_any_candidate(self):
         (self.tree/"story").write_bytes(b"z" * (CHUNK + 41))
         original_state = set(self.state.iterdir())
@@ -405,7 +482,9 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
 
     @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
     def test_window_links_offline_status_and_the_initial_comparison_button(self):
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit, QPushButton
+        from zipworkspace.desktop import checkout_pane
+        from zipworkspace.desktop.widgets import Table
         from zipworkspace.desktop.window import Window
         app = QApplication.instance() or QApplication([])
         win = Window(); self.addCleanup(win.close)
@@ -422,14 +501,29 @@ class LiveChangesEvidence(OriginalCheckoutFixture):
             self.assertTrue(future.set_running_or_notify_cancel())
             future.set_result(work())
             win.poll()
-        with patch.object(win.pool, "submit", side_effect=queue):
+        with patch.object(win.pool, "submit", side_effect=queue), \
+             patch.object(checkout_pane, "confirm", return_value=True) as confirm:
             self.assertFalse(pane.initial_changes.isEnabled())
             pane.refresh_live(); poll()
             self.assertTrue(pane.initial_changes.isEnabled())
             pane.initial_changes.click(); poll()
-            self.assertEqual(pane.changes_dialog.windowTitle(), "离线对照首次签出版本")
+            dialog = pane.changes_dialog
+            self.assertEqual(dialog.windowTitle(), "离线对照首次签出版本")
             self.assertIn("未检查 STORE", win.note.text())
-            pane.changes_dialog.reject()
+            self.assertIsNone(dialog.findChild(QPushButton, "commit-reviewed-worktree"))
+            self.assertIsNone(dialog.findChild(QPushButton, "restore-selected-missing-member"))
+            action = dialog.findChild(QPushButton, "compare-live-text")
+            self.assertFalse(action.isEnabled())
+            dialog.findChild(Table).selectRow(0)
+            self.assertTrue(action.isEnabled())
+            action.click()
+            self.assertIn("不访问 STORE", confirm.call_args.args[2])
+            future, worker = jobs.pop(0)
+            future.set_result(worker())  # The completed read is still suppressed if the report closes first.
+            self.assertIsNotNone(future.result()[0])
+            dialog.reject()
+            win.poll()
+            self.assertIsNone(dialog.findChild(QPlainTextEdit))
             self.assertFalse(jobs)
 
     @unittest.skipUnless(find_spec("PySide6"), "requires optional Qt and a usable display/offscreen platform")
