@@ -1,5 +1,5 @@
 //! Payload fixtures only. No authority, objects or reply sender minted here.
-use super::*;
+use super::super::*;
 
 #[test]
 fn root_fs_attributes_has_distinct_small_warning_and_full_shapes(){

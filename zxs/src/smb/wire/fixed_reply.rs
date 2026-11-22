@@ -829,16 +829,8 @@ fn move_async_header(raw:&mut [u8;MAX_SMALL_REPLY],id:NonZeroU64){
 
 
 #[cfg(test)]
-#[path="../../../tests/smb/root_mxac_reply.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path="../../../tests/smb/root_fs_info_reply.rs"]
-mod fs_info_tests;
-
-#[cfg(test)]
-#[path="../../../tests/smb/file_standard_reply.rs"]
-mod file_info_tests;
+#[path = "../../../tests/smb/fixed_reply/mod.rs"]
+mod body_tests;
 
 #[cfg(test)]
 include!("../../../tests/unit/attached/smb/wire/fixed_reply/items.rs");

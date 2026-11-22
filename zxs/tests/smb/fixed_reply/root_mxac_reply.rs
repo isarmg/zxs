@@ -1,5 +1,5 @@
 //! The bounded context encoding only. No synthetic OPEN, Core or signer.
-use super::*;
+use super::super::*;
 
 #[test]
 fn unconditional_root_mxac_is_one_aligned_context_with_its_real_mask(){

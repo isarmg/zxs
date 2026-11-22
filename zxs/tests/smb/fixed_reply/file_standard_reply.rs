@@ -1,5 +1,5 @@
 //! Fixed body fixtures, not a FILE authority or signed-success producer.
-use super::*;
+use super::super::*;
 
 #[test]
 fn file_access_is_one_fixed_little_endian_grant_or_the_default_small_buffer_error(){
