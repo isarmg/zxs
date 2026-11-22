@@ -19,6 +19,7 @@ MAX_IMAGE = 64 << 20
 MAX_HELPER = 64 << 20
 RUST_REV = "0ef1bc386059596dada8fb65b50425aab2ea637a"
 EXPECTED_HOST = "x86_64-unknown-linux-gnu"
+LOAD_PAGE = 4096  # Linux x86-64 ELF_EXEC_PAGESIZE
 SQLITE_CONFIG_SHA = "9523c1d40a68e848d7ab68b258828f7f5ccb38e6e63e740ed8369e93776fd29e"
 # Dynamic dependencies, search paths, audit, config, auxiliary and filter.
 NO_RUNTIME = {1, 15, 29, 0x6ffffefa, 0x6ffffefb, 0x6ffffefc, 0x7ffffffd, 0x7fffffff}
@@ -111,6 +112,20 @@ def verify_embedding(helper, zxs):
     need(len(sharing) == 1 and sharing[0][1] == 4 and sharing[0][2] <= start
          and end <= sharing[0][2] + sharing[0][5],
          "exact ZXS payload intersects another load or not entirely in one read-only loadable range")
+    need(all(r[2] % LOAD_PAGE == r[3] % LOAD_PAGE for r in load if r[5]),
+         "Helper file-backed load offset and address disagree within a page")
+    owner = sharing[0]
+    address = owner[3] + start - owner[2]
+    address_end = address + len(zxs)
+    # Linux maps PT_LOAD windows by virtual page, not just p_filesz or
+    # literal file offsets. Another load can also map/zero memory past EOF.
+    for r in load:
+        if r is owner or not r[6]:
+            continue
+        first = r[3] // LOAD_PAGE * LOAD_PAGE
+        past = (r[3] + r[6] + LOAD_PAGE - 1) // LOAD_PAGE * LOAD_PAGE
+        need(address_end <= first or past <= address,
+             "another Helper load touches a virtual page holding the embedded ZXS payload")
     return start
 
 

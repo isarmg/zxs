@@ -24,8 +24,12 @@ python3 build_embedded.py \
 Inputs are named canonical local paths, not auto-fetched dependencies. The
 script makes a private exact-byte copy, independently checks the approved
 input hash and static PIE shape, builds locked/offline with only the checked tracked SQLite flags and a fresh private Cargo home (no alternate or ancestor Cargo config), and verifies that
-the actual Helper ELF contains **one whole unchanged payload** in a read-only
-loadable region without executing either image. Only the raw
+the actual Helper ELF contains **one whole unchanged payload** in one read-only
+loadable region, with no other `PT_LOAD` mapping over its Linux x86-64 virtual
+pages, including a load's zero-filled memory range. See the
+[Linux ELF loader](https://github.com/torvalds/linux/blob/v6.12/fs/binfmt_elf.c#L329-L413)
+and [x86 page size](https://github.com/torvalds/linux/blob/v6.12/arch/x86/include/asm/elf.h#L210-L214).
+It does not execute either image. Only the raw
 `target/standalone/helper` artifact is exported, without overwriting. Its
 receipt reports both full hashes and records, but does not authenticate, the
 supplied ZXS source-tree identifier. The optional Helper has its normal Linux
