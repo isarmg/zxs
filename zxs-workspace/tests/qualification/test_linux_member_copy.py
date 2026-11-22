@@ -19,7 +19,7 @@ from zipworkspace.comparison import Folder
 from zipworkspace.desktop import member_copy, store_import, text_preview
 from zipworkspace.desktop.commit_choice import CommitChoice
 from zipworkspace.desktop.initialize_choice import InitializeChoice
-from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection
+from zipworkspace.desktop.selection import PlainSelection, Selection, StoreSelection, Verification
 from zipworkspace.model import CHUNK, Commit, Manifest, Rejected, new_id
 from zipworkspace.publish import Uncertain
 

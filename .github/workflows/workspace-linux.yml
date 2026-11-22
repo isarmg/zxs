@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/workspace-linux.yml
+      - zxs-workspace/tests/qualification/hosted_linux.py
+      - zxs-workspace/tests/qualification/test_linux_member_copy.py
 
 permissions:
   contents: read
