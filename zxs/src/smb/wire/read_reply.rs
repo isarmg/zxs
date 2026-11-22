@@ -11,7 +11,7 @@ const END_OF_FILE:u32=0xc000_0011;
 #[derive(Clone,Copy)]
 #[repr(u32)]
 pub(in crate::smb) enum ReadFailure{
-    InvalidParameter=0xc000_000d,AccessDenied=0xc000_0022,Resources=0xc000_009a,FileIsDirectory=0xc000_00ba,
+    InvalidParameter=0xc000_000d,AccessDenied=0xc000_0022,FileLockConflict=0xc000_0054,Resources=0xc000_009a,FileIsDirectory=0xc000_00ba,
     NotSupported=0xc000_00bb,NetworkNameDeleted=0xc000_00c9,Internal=0xc000_00e5,FileClosed=0xc000_0128,
     FileNotAvailable=0xc000_0467,ServerUnavailable=0xc000_0466,VolumeDismounted=0xc000_026e,
 }

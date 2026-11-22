@@ -10,6 +10,8 @@ pub(in crate::smb) mod tree_connect;
 mod query;
 pub(in crate::smb) use query::root::{EndOfRoot,RootCursorEffect,RootPendingToken,RootScanEnd,records::FullRootRecords};
 mod io;
+mod range_lock;
+pub(in crate::smb) use range_lock::{LockError,PreparedLock,RangeIoError};
 mod disposition;
 use disposition::DeleteState;
 pub(in crate::smb) use disposition::{DispositionError,PreparedDisposition};
@@ -111,7 +113,7 @@ impl Vote {
 }
 
 #[derive(Default)]
-struct Counts { live: usize, bound: usize, retained:usize, needs: [usize; 3], denies: [usize; 3], deletion: Option<DeleteState>, renaming: Option<Weak<()>> }
+struct Counts { live: usize, bound: usize, retained:usize, needs: [usize; 3], denies: [usize; 3], deletion: Option<DeleteState>, renaming: Option<Weak<()>>, ranges: range_lock::Ranges }
 
 impl Counts {
     fn conflicts(&self, vote: Vote) -> bool {
@@ -126,7 +128,8 @@ impl Counts {
             self.denies[i] += usize::from(vote.denies & (1 << i) != 0);
         }
     }
-    fn remove(&mut self, vote: Vote) {
+    fn remove(&mut self, vote: Vote, owner: &Arc<()>) {
+        self.ranges.remove_owner(owner);
         self.live -= 1;
         for i in 0..3 {
             self.needs[i] -= usize::from(vote.needs & (1 << i) != 0);
@@ -223,7 +226,7 @@ impl Drop for Slot {
             if row.deletion.as_ref().is_some_and(|mark|mark.is_unarmed_on(&self.identity)){
                 row.deletion=None;
             }
-            row.remove(self.vote);
+            row.remove(self.vote,&self.identity);
             if self.bound{row.bound-=1;if self.retained{row.retained-=1;}}
             if row.live == 0 { table.objects.remove(&self.object); }
             table.live -= 1;

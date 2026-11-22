@@ -2,7 +2,7 @@
 //! hold. No client-supplied ID, pathname, or backend substitute is accepted.
 //! The dispatcher still has to verify the current connection/session/tree
 //! and resolve both halves (or the exact previous compound OPEN) first.
-use super::{Grant,Held,Object,disposition::ClosedDeletion};
+use super::{Grant,Held,Object,Slot,disposition::ClosedDeletion,range_lock::{Intent,IoPermit,RangeIoError}};
 use crate::{smb::RustSessionWitness,system::reader::smb::runtime::RustRoot};
 use std::{io,num::NonZeroU32};
 use crate::smb::wire::io_fields::{CloseMode, ReadRange, WriteData, WritePosition, file_range_end};
@@ -41,6 +41,7 @@ pub(in crate::smb) enum ReadFault<E> {
     ResponseSpace,
     InconsistentLength,
     EndOfFile,
+    Range(RangeIoError),
     Original(E),
 }
 
@@ -67,9 +68,27 @@ impl<H> Held<H> {
         Ok(())
     }
 }
+impl Slot {
+    pub(super) fn read_permit<E>(
+        &self,
+        range: ReadRange,
+        require_current: impl FnOnce() -> Result<(), E>,
+    ) -> Result<Option<IoPermit<'_>>, ReadFault<E>> {
+        match self.range_io(range.offset(), u64::from(range.length()), Intent::Read) {
+            Ok(permit) => Ok(permit),
+            Err(fault) => {
+                // A stale original must not learn another OPEN's lock state.
+                require_current().map_err(ReadFault::Original)?;
+                Err(ReadFault::Range(fault))
+            }
+        }
+    }
+}
 impl<H:CheckedRead> Held<H>{
     pub(super) fn read(&self,range:ReadRange,response_room:usize)->Result<ReadCompletion<H::Body>,ReadFault<H::Error>>{
         self.check_read(range,response_room)?;
+        let Self{_slot:slot,..}=self;
+        let _permit=slot.read_permit(range,||Ok(()))?;
         let body=self.original.read_checked(range.offset(),range.length()).map_err(ReadFault::Original)?;
         seal_read(range,body)
     }
@@ -228,13 +247,14 @@ pub(in crate::smb) enum WriteFault<E> {
     UnbufferedUnavailable,
     InvalidRange,
     InconsistentLength,
+    Range(RangeIoError),
     Original(E),
     Confirmation(E),
 }
 
 impl<H: CheckedWrite> Held<H> {
     pub(super) fn write(&mut self, request: WriteData<'_>) -> Result<WriteCompletion, WriteFault<H::Error>> {
-        write_held(self._slot.object,self.grant,&mut self.original,request)
+        write_held(&self._slot,self.grant,&mut self.original,request)
     }
     pub(super) fn flush(&mut self) -> Result<FlushCompletion, WriteFault<H::Error>> {
         flush_held(self._slot.object,self.grant,&mut self.original)
@@ -243,12 +263,12 @@ impl<H: CheckedWrite> Held<H> {
 
 /// Shared with the actual writer adapter, which lends one verified member
 /// and the already bound original Core writer for only this operation.
-pub(super) fn write_held<H:CheckedWrite>(object:Object,grant:Grant,writer:&mut H,request:WriteData<'_>)
+pub(super) fn write_held<H:CheckedWrite>(slot:&Slot,grant:Grant,writer:&mut H,request:WriteData<'_>)
     ->Result<WriteCompletion,WriteFault<H::Error>>{
         use WriteFault::*;
         const WRITE_DATA: u32 = 0x0002;
         const APPEND_DATA: u32 = 0x0004;
-        if !matches!(object, Object::File(..)) {
+        if !matches!(slot.object, Object::File(..)) {
             return Err(NotDataFile);
         }
         let can_write = grant.0 & WRITE_DATA != 0;
@@ -284,6 +304,7 @@ pub(super) fn write_held<H:CheckedWrite>(object:Object,grant:Grant,writer:&mut H
         // MS-FSA §2.1.5.4 ends a valid zero-byte WRITE before modifying
         // the stream. In particular it cannot confirm an earlier staged EOF.
         let confirm = request.length() != 0 && mode == WriteOpenMode::BufferedWriteThrough;
+        let _permit=slot.range_io(offset,u64::from(request.length()),Intent::Write).map_err(Range)?;
         let count = writer.write_checked(offset, request.payload()).map_err(Original)?;
         if count != request.length() {
             // This Core contract admits the exact range or fails. Do not

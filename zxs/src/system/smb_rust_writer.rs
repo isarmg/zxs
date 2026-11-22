@@ -137,9 +137,13 @@ impl RustWorkWriter{
     }
     fn with_writer_at<T>(&self,tree:&RustRoot,member:&RustSessionWitness,
         action:impl FnOnce(WriteAt<'_>)->io::Result<T>)->io::Result<T>{
-        if !self.belongs_to(tree){return Err(denied());}
         if !(member.is_create()||member.is_read()||member.is_write()||member.is_flush()||
              member.is_close()||member.is_set_info()||member.is_query_info()){return Err(denied());}
+        self.inspect_writer_at(tree,member,action)
+    }
+    fn inspect_writer_at<T>(&self,tree:&RustRoot,member:&RustSessionWitness,
+        inspect:impl FnOnce(WriteAt<'_>)->io::Result<T>)->io::Result<T>{
+        if !self.belongs_to(tree){return Err(denied());}
         let source=tree.ordinary_reader(member)?;
         let require=|cut:&WriterCut<'_>|{
             let who=tree.ordinary_writer_at(cut,&self.label)?;
@@ -151,15 +155,23 @@ impl RustWorkWriter{
             }
             self.media.capacity_origin().require_catalog(c,current.setting.volume)
         };
-        action(WriteAt{original:&self.original,root:self.media.view(source),source,
+        inspect(WriteAt{original:&self.original,root:self.media.view(source),source,
             authority:self.authority,parent:self.route.parent(),require:&require})
     }
     pub(crate) fn require_current(&self,tree:&RustRoot,member:&RustSessionWitness)->io::Result<()>{
-        self.with_write(tree,member,|w|{
+        let require=|w:WriteAt<'_>|{
             w.require_work()?;
             if self.media.capacity_origin().sample()?.read_only{return Err(io::ErrorKind::ReadOnlyFilesystem.into());}
             Ok(())
-        })
+        };
+        if member.is_lock(){
+            // A paid LOCK can observe the same actual writer; it is not
+            // admitted to the staging, write or save command paths.
+            self.inspect_writer_at(tree,member,require)?;
+            tree.ordinary_reader(member).map(drop)
+        }else{
+            self.with_write(tree,member,require)
+        }
     }
     pub(in crate::system::reader::smb) fn smb_index(&self,tree:&RustRoot,member:&RustSessionWitness)->io::Result<SmbFileIndex>{
         if !(member.is_create()||member.is_query_info()){return Err(denied());}

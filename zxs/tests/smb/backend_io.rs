@@ -632,3 +632,32 @@ fn read_refusal_checks_grant_before_shape_and_does_not_build_data() {
         assert_eq!(called.get(), None);
     }
 }
+
+#[test]
+fn append_and_read_check_locks_before_io_or_write_through_confirmation() {
+    use crate::smb::wire::lock_fields::LockChange;
+    use super::super::range_lock::tests::change;
+    let table = OpenCoordinator::new(NonZeroUsize::new(3).unwrap());
+    let seen = std::cell::RefCell::new(Vec::new());
+    let called = Cell::new(None);
+    let blocker = original(&table, facts(FILE, 1), (), 7);
+    let mut writer = original(&table, facts(FILE, 6),
+        Writer { seen: &seen, eof: 19, mode: WriteOpenMode::BufferedWriteThrough, fail_flush: false, reported_count: None }, 7);
+    let reader = original(&table, facts(FILE, 1), Reader { called: &called, storage: Ok(b"ab") }, 7);
+    let append = framed(&[&write_packet(112, u64::MAX, 0, b"ab")]);
+    let Held{_slot:blocker_slot,..}=&blocker;
+    change(blocker_slot, 20, 1, LockChange::Exclusive).unwrap();
+
+    assert_eq!(writer.write(data(&append)), Err(WriteFault::Range(RangeIoError::Conflict)));
+    assert_eq!(seen.borrow().as_slice(), &[WriteStep::CheckEof]);
+    let read = reader.read(range(19, 2, 0, 0), 2);
+    assert_eq!(read.as_ref().err(), Some(&ReadFault::Range(RangeIoError::Conflict)));
+    assert_eq!(FileReply::read(&read).unwrap().status(), 0xc000_0054);
+    assert_eq!(called.get(), None);
+
+    change(blocker_slot, 20, 1, LockChange::Unlock).unwrap();
+    seen.borrow_mut().clear();
+    assert_eq!(writer.write(data(&append)).unwrap().count(), 2);
+    assert_eq!(seen.borrow().as_slice(), &[WriteStep::CheckEof, WriteStep::Write(19, 2), WriteStep::Flush]);
+    assert_eq!(reader.read(range(19, 2, 0, 0), 2).unwrap().data(), b"ab");
+}

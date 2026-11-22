@@ -34,6 +34,7 @@ impl RustSessionWitness {
     pub(crate) fn is_flush(&self)->bool{self.command==7}
     pub(crate) fn is_read(&self)->bool{self.command==8}
     pub(crate) fn is_write(&self)->bool{self.command==9}
+    pub(crate) fn is_lock(&self)->bool{self.command==crate::smb::wire::lock_fields::LOCK}
     pub(crate) fn is_query_directory(&self)->bool{self.command==14}
     pub(crate) fn is_query_info(&self)->bool{self.command==16}
     pub(crate) fn is_set_info(&self)->bool{self.command==17}

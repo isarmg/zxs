@@ -4,6 +4,7 @@ use super::{
     BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
     attribute_tag::PreparedAttributeTag,
     file_access::PreparedFileAccess,
+    range_lock::{LockError,PreparedLock},
     disposition::{DELETE_ACCESS,DispositionError,PreparedDisposition,Snapshot},
     file_open::{EXECUTE,FILE_READ_RIGHTS,FileAnswers,FileCloseError,FileOpenError,FileReadError,FileStandardError,MAXIMUM_ALLOWED,READ_DATA,
         allocation,normalized_name_error,normalized_query},
@@ -12,7 +13,7 @@ use super::{
 };
 use crate::{
     smb::{RustSessionWitness,connection::{Fault as ConnectionFault,sessions::ordinary::VerifiedMember},
-        wire::{io_fields::IoFieldError,query_fields::{FileClass,InfoClass},set_info::{Change,FileSetRequest}}},
+        wire::{io_fields::IoFieldError,lock_fields::LockRequest,query_fields::{FileClass,InfoClass},set_info::{Change,FileSetRequest}}},
     system::reader::smb::{RustStagedName,RustStagedReadProof,RustStagedStandard,RustStagedState,RustStagedWriter,
         file_number::SmbFileIndex,runtime::RustRoot,work_change::RustWriterSelection},
 };
@@ -255,7 +256,7 @@ impl WritableFileOpen{
         ->Result<PreparedFileWrite,FileWriteError>{
         let request=member.message().write_request(member.max_write()).map_err(FileWriteError::Fields)?;
         let scope=self.begin(tree,member)?;
-        let result=write_held(self.held._slot.object,self.held.grant,&mut WriteTurn{
+        let result=write_held(&self.held._slot,self.held.grant,&mut WriteTurn{
             actual:&mut self.held.original,mode:self.mode,tree,scope:&scope,
         },request.data).map_err(FileWriteError::Fault)?;
         Ok(PreparedFileWrite{result,original:OriginalTurn::accepted(scope,self)})
@@ -269,12 +270,32 @@ impl WritableFileOpen{
         }).map_err(FileWriteError::Fault)?;
         Ok(PreparedFileFlush{result,original:OriginalTurn::accepted(scope,self)})
     }
+    pub(in crate::smb) fn change_lock(&self,tree:&RustRoot,request:&LockRequest<'_,'_>)
+        ->Result<PreparedLock,LockError>{
+        self.held.change_lock(request,|scope|self.require_current(tree,scope))
+    }
+    pub(in crate::smb) fn require_lock(&self,tree:&RustRoot,proof:&PreparedLock)->stdio::Result<()>{
+        let Held{_slot:slot,..}=&self.held;
+        proof.require(slot,|scope|self.require_current(tree,scope))
+    }
     pub(in crate::smb) fn set_eof(&mut self,tree:&RustRoot,request:&FileSetRequest<'_,'_>)
         ->Result<PreparedFileEof,FileWriteError>{
         let Change::EndOfFile(end)=request.change() else{return Err(FileWriteError::NotSupported);};
         if self.held.grant.0&WRITE_DATA==0{return Err(FileWriteError::Fault(WriteFault::AccessDenied));}
         let scope=self.begin(tree,request.original())?;
-        self.held.original.resize(tree,&scope,end).map_err(|e|FileWriteError::Fault(WriteFault::Original(e)))?;
+        // A deferred refresh must preserve this exact draft EOF before
+        // resize may proceed. Only the changed length interval is reserved.
+        let Held{_slot:slot,original,..}=&mut self.held;
+        let old=original.eof();
+        let permit=match slot.resize_permit(old,end){
+            Ok(permit)=>permit,
+            Err(fault)=>{
+                original.require_current(tree,&scope).map_err(|e|FileWriteError::Fault(WriteFault::Original(e)))?;
+                return Err(FileWriteError::Fault(WriteFault::Range(fault)));
+            }
+        };
+        original.resize(tree,&scope,end).map_err(|e|FileWriteError::Fault(WriteFault::Original(e)))?;
+        drop(permit); // length mutation settled before taking the reply snapshot
         Ok(PreparedFileEof{original:OriginalTurn::accepted(scope,self)})
     }
     pub(in crate::smb) fn read(&mut self,tree:&RustRoot,member:&VerifiedMember<'_,'_>,room:usize)
@@ -283,7 +304,10 @@ impl WritableFileOpen{
         if !self.held.original.belongs_to(tree){return Err(FileReadError::WrongTree);}
         let scope=member.rust_session_witness().map_err(FileReadError::Session)?;
         self.held.check_read(request.range,room).map_err(FileReadError::Fault)?;
-        let (data,proof)=self.held.original.read(tree,&scope,request.range.offset(),request.range.length())
+        let Held{_slot:slot,original,..}=&mut self.held;
+        let _permit=slot.read_permit(request.range,||original.require_current(tree,&scope))
+            .map_err(FileReadError::Fault)?;
+        let (data,proof)=original.read(tree,&scope,request.range.offset(),request.range.length())
             .map_err(|e|FileReadError::Fault(ReadFault::Original(e)))?;
         let result=match seal_read(request.range,data){
             Ok(data)=>Ok(data),Err(ReadFault::EndOfFile)=>Err(ReadFault::EndOfFile),Err(e)=>return Err(FileReadError::Fault(e)),

@@ -12,6 +12,7 @@ use crate::smb::wire::fixed_reply::{LOGOFF,TREE_DISCONNECT};
 use crate::smb::wire::io_reply::{FLUSH,WRITE};
 use crate::smb::wire::set_info::SET_INFO;
 use crate::smb::wire::read_reply::READ;
+use crate::smb::wire::lock_fields::LOCK;
 use super::super::root_attributes::QUERY_INFO;
 
 fn signed(packet:&mut [u8]){
@@ -34,7 +35,7 @@ impl Write for Sink {
 }
 
 fn input(cmd:u16,absent:bool,short:bool)->Vec<u8>{
-    let mut p=vec![0;if cmd==CREATE{121}else if matches!(cmd,READ|WRITE){113}else if cmd==14{98}else if cmd==QUERY_INFO{105}else if cmd==SET_INFO{104}else if short{80}else{88}];
+    let mut p=vec![0;if cmd==CREATE{121}else if matches!(cmd,READ|WRITE){113}else if cmd==14{98}else if cmd==QUERY_INFO{105}else if cmd==SET_INFO{104}else if cmd==LOCK{112}else if short{80}else{88}];
     p[..8].copy_from_slice(&[0xfe,b'S',b'M',b'B',64,0,1,0]);
     p[12..14].copy_from_slice(&cmd.to_le_bytes());p[14]=2;p[16]=8;p[24]=3;p[36]=7;p[40]=1;
     if cmd==CREATE {
@@ -45,6 +46,8 @@ fn input(cmd:u16,absent:bool,short:bool)->Vec<u8>{
     } else if cmd==WRITE {
         p[64]=49;p[66]=112;p[68..72].copy_from_slice(&(if short {65_537u32}else{1}).to_le_bytes());
         p[80]=3;p[88]=4;p[112]=0x51;
+    } else if cmd==LOCK {
+        p[64]=48;p[66]=1;p[72]=3;p[80]=4;p[88]=19;p[96]=2;p[104]=0x12;
     } else if cmd==SET_INFO {
         p[64]=33;p[66]=1;p[67]=20;p[72]=96;
         p[68..72].copy_from_slice(&(if short{65_537u32}else{8}).to_le_bytes());
@@ -126,14 +129,16 @@ fn signed_read_without_its_actual_tree_never_reads_or_returns_eof(){
 #[test]
 fn a_paid_signed_file_mutation_cannot_bypass_the_original_tree_with_wire_ids(){
     for (command,short,payload) in [(WRITE,false,Payload::Covered),(WRITE,true,Payload::InvalidParameter),
-        (FLUSH,false,Payload::NoVariableRule),(SET_INFO,false,Payload::Covered),(SET_INFO,true,Payload::InvalidParameter)]{
+        (FLUSH,false,Payload::NoVariableRule),(SET_INFO,false,Payload::Covered),(SET_INFO,true,Payload::InvalidParameter),
+        (LOCK,false,Payload::NoVariableRule)]{
         let instance=provider();let mut peer=connected(&instance);assert_eq!(publish_at(&mut peer,1),1);
         let seen=Arc::new(Mutex::new(Vec::new()));
         peer.stream=Some(DirectStream::Fixture(Box::new(Sink(Arc::clone(&seen)))));
         let request=input(command,false,short);let bytes=frame(&request);let fr=parsed(&bytes);
         let paid=peer.receive(&fr).unwrap();assert_eq!(paid.payload(0),Some(payload));
         let Admission::Ready(mut batch)=paid.preflight(&mut peer)else{panic!("must verify actual frame");};
-        assert!(batch.try_send_file_write().unwrap());drop(batch);
+        assert!(if command==LOCK{batch.try_send_file_lock().unwrap()}else{batch.try_send_file_write().unwrap()});
+        drop(batch);
         let mut refusal=request[..64].to_vec();refusal[8..12].copy_from_slice(&0xc000_00c9u32.to_le_bytes());
         refusal[16]=9;refusal.extend_from_slice(&[9,0,0,0,0,0,0,0]);signed(&mut refusal);
         assert_eq!(&*seen.lock().unwrap(),&frame(&refusal));

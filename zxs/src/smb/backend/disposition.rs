@@ -144,7 +144,7 @@ impl Slot{
             let authority=row.deletion.as_ref().and_then(DeleteState::plan).ok_or(io::ErrorKind::PermissionDenied)?;
             Some(Arc::clone(authority))
         };
-        row.remove(self.vote);
+        row.remove(self.vote,&self.identity);
         row.bound-=1;
         self.released=true;
         if let Some(plan)=plan{

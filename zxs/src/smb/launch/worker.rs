@@ -63,7 +63,7 @@ fn turn(selected:&Rc<QualifiedRustInstall>,peer:&mut Peer)->connection::Result<T
             if batch.try_send_qualified_tree(Rc::clone(selected))?.is_some()||
                 batch.try_send_root_probe()?||batch.try_send_root_open_close_probe()?||batch.try_send_related_browse()?||
                 batch.try_send_related_rename()?||batch.try_send_related_disposition()?||
-                batch.try_send_open_close()?||batch.try_send_file_read()?||batch.try_send_named_rename()?||batch.try_send_file_write()?||batch.try_send_root_query()?||
+                batch.try_send_open_close()?||batch.try_send_file_read()?||batch.try_send_file_lock()?||batch.try_send_named_rename()?||batch.try_send_file_write()?||batch.try_send_root_query()?||
                 batch.try_send_open_info()?||batch.try_send_network_interface_refusal()?||batch.try_send_exit()?{Ok(())}
             else{Err(connection::Fault::WrongReply)}
         },

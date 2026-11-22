@@ -202,6 +202,9 @@ impl RetainedOpen{
         if !file.original.belongs_to(tree){return Err(FileReadError::WrongTree);}
         let scope=member.rust_session_witness().map_err(FileReadError::Session)?;
         file.check_read(request.range,room).map_err(FileReadError::Fault)?;
+        let Held{_slot:slot,..}=file;
+        let _permit=slot.read_permit(request.range,||file.original.require_current(tree,&scope))
+            .map_err(FileReadError::Fault)?;
         let (data,proof)=file.original.read(tree,&scope,request.range.offset(),request.range.length())
             .map_err(|e|FileReadError::Fault(ReadFault::Original(e)))?;
         let result=match seal_read(request.range,data){

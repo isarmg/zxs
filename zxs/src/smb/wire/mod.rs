@@ -6,6 +6,7 @@ pub(in crate::smb) mod direct;
 pub(in crate::smb) mod file_name_reply;
 pub(in crate::smb) mod fixed_reply;
 pub(in crate::smb) mod io_fields;
+pub(in crate::smb) mod lock_fields;
 pub(in crate::smb) mod io_reply;
 pub(in crate::smb) mod read_reply;
 pub(in crate::smb) mod message;

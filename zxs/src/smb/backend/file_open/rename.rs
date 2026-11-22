@@ -135,7 +135,7 @@ impl RenameTurn{
         let mut table=self.table.table.lock().map_err(|_|io::Error::other("unavailable original FILE sharing state"))?;
         let row=table.objects.get_mut(&self.object).ok_or(io::ErrorKind::PermissionDenied)?;
         if !self.count(row,1){return Err(io::ErrorKind::PermissionDenied.into());}
-        row.remove(slot.vote);row.bound=0;
+        row.remove(slot.vote,&slot.identity);row.bound=0;
         slot.released=true;
         self.retired=true;
         Ok(())

@@ -13,6 +13,7 @@ pub(in crate::smb) use outbound::retire::ExitPlan;
 pub(in crate::smb) use outbound::restore::{PendingRename,RenameRefusal};
 pub(in crate::smb) use outbound::ordinary_move::{CancelledOriginalMove,ConfirmedOriginalMove};
 pub(in crate::smb) use outbound::file_read::{PendingRead,ReadRefusal};
+pub(in crate::smb) use outbound::file_lock::{LockRefusal,PendingLock};
 pub(in crate::smb) use outbound::file_write::{PendingWrite,WriteRefusal};
 pub(in crate::smb::connection) use outbound::ordinary_move::{CheckWrittenMove,MoveCancellation,MoveEscrow,MoveWritten,WorkingMoveEscrow};
 pub(in crate::smb::connection) use outbound::ordinary_move::MoveDecision;

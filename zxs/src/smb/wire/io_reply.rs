@@ -4,7 +4,7 @@
 //! sign that exact member, including its header, before any transmission.
 use crate::smb::backend::{
     CloseCompletion, FlushCompletion, PreparedDirectoryRename, PreparedDisposition, PreparedFileEof,
-    PreparedOrdinaryRename, PreparedRetainedRestore, ReadCompletion, ReadFault, WriteCompletion, WriteFault,
+    PreparedOrdinaryRename, PreparedRetainedRestore, RangeIoError, ReadCompletion, ReadFault, WriteCompletion, WriteFault,
 };
 
 const READ: u16 = 0x0008;
@@ -23,10 +23,21 @@ enum PlainError {
     EndOfFile = 0xc000_0011,
     InvalidParameter = 0xc000_000d,
     AccessDenied = 0xc000_0022,
+    FileLockConflict = 0xc000_0054,
     InsufficientResources = 0xc000_009a,
     FileIsADirectory = 0xc000_00ba,
     NotSupported = 0xc000_00bb,
     InternalError = 0xc000_00e5,
+}
+
+impl From<RangeIoError> for PlainError {
+    fn from(error: RangeIoError) -> Self {
+        match error {
+            RangeIoError::Conflict => Self::FileLockConflict,
+            RangeIoError::Resources => Self::InsufficientResources,
+            RangeIoError::Unavailable => Self::InternalError,
+        }
+    }
 }
 
 enum Form<'a> {
@@ -60,6 +71,7 @@ impl<'a> FileReply<'a> {
                     ReadFault::NotDataFile => PlainError::FileIsADirectory,
                     ReadFault::UnbufferedUnavailable => PlainError::NotSupported,
                     ReadFault::InconsistentLength => PlainError::InternalError,
+                    ReadFault::Range(error) => (*error).into(),
                     ReadFault::Original(e) => return Err(e),
                 };
                 return Ok(Self(Form::Failure { command: READ, code: status }));
@@ -162,6 +174,7 @@ impl<'a> FileReply<'a> {
             WriteFault::UnbufferedUnavailable | WriteFault::DirectoryFlushUnavailable => PlainError::NotSupported,
             WriteFault::InvalidRange | WriteFault::InvalidWriteCombination => PlainError::InvalidParameter,
             WriteFault::InconsistentLength => PlainError::InternalError,
+            WriteFault::Range(error) => (*error).into(),
             // Keep failed mutation and failed confirmation apart. Only the
             // actual adapter knows their NTSTATUS and recovery semantics.
             WriteFault::Original(_) | WriteFault::Confirmation(_) => return Err(fault),

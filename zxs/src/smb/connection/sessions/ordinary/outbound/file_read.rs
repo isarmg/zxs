@@ -3,7 +3,7 @@
 use super::{CheckedBatch,Connection,Fault,Payload,Result,SyncReply,UnsignedSmall,VerifiedMember,current,
     root_io::RequestSlot};
 use super::super::opens::Opened;
-use crate::smb::{backend::{FileReadError,PreparedFileRead,PreparedRetainedRead,PreparedWriterRead,ReadCompletion,ReadFault},
+use crate::smb::{backend::{FileReadError,PreparedFileRead,PreparedRetainedRead,PreparedWriterRead,RangeIoError,ReadCompletion,ReadFault},
     wire::{Error as WireError,direct::MAX_FRAME_BYTES,io_fields::{IoFieldError,OpenReference,WireOpenId},message::{Message,RELATED,Routing},
         read_reply::{HEADER_AND_READ_FIXED,READ,ReadFailure,UnsignedRead}}};
 use std::{io,num::NonZeroU64};
@@ -101,6 +101,11 @@ fn read_failure(e:FileReadError)->Result<ReadFailure>{
             ReadFault::UnbufferedUnavailable=>W::NotSupported,
             ReadFault::ResponseSpace=>W::Resources,
             ReadFault::InconsistentLength=>W::Internal,
+            ReadFault::Range(e)=>match e{
+                RangeIoError::Conflict=>W::FileLockConflict,
+                RangeIoError::Resources=>W::Resources,
+                RangeIoError::Unavailable=>W::ServerUnavailable,
+            },
             // EOF is permissible only with the original current held view
             // and late proof in PreparedFileRead, not a plain error result.
             ReadFault::EndOfFile=>return Err(Fault::WrongReply),

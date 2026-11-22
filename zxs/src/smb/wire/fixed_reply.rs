@@ -1,12 +1,12 @@
 //! Closed, small replies to an original paid, signed member.
 //! No generic success body or caller-selected wire ID.
-use super::{Error,Result,create_fields::{Disposition,MaximumAccessQuery},io_reply::{FLUSH,FileReply,WRITE},message::{Message,RELATED,SIGNED,Routing},network_probe::{IOCTL,NetworkProbe},
+use super::{Error,Result,create_fields::{Disposition,MaximumAccessQuery},io_reply::{FLUSH,FileReply,WRITE},lock_fields::{LOCK,LockRequest},message::{Message,RELATED,SIGNED,Routing},network_probe::{IOCTL,NetworkProbe},
     query_fields::{CapacityFormat,FileClass,FsClass,InfoClass},set_info::{Change,FileSetRequest,RenameRequest,SET_INFO}};
 use crate::smb::{
     backend::{CloseCompletion,PreparedDisposition,PreparedOrdinaryRename,PreparedRootFsAttributes,PreparedRootFsSize,PreparedRetainedRestore,tree_connect::QualifiedTreeConnect},
     connection::sessions::ordinary::{
         BrowsePart,CancelledOriginalMove,ClosedOpen,ConfirmedOriginalMove,DirectoryRefusal,ExitPlan,FsInfoRefusal,PendingAttributeTag,PendingFileAccess,PendingFileStandard,PendingInternal,PendingOpen,PendingRootAttributes,PendingRootSize,ProbePart,ProposedTreeId,
-        FileActionPart,PendingRename,PendingWrite,ReadRefusal,RenameRefusal,VerifiedMember,WriteRefusal,
+        FileActionPart,LockRefusal,PendingLock,PendingRename,PendingWrite,ReadRefusal,RenameRefusal,VerifiedMember,WriteRefusal,
     },
 };
 use crate::system::reader::smb::runtime::CapacityUnits;
@@ -88,7 +88,7 @@ pub(in crate::smb) enum FsInfoFailure {
 #[derive(Clone,Copy)]
 #[repr(u32)]
 pub(in crate::smb) enum WriteFailure {
-    InformationLengthMismatch=0xc000_0004,InvalidParameter=0xc000_000d,AccessDenied=0xc000_0022,DiskFull=0xc000_007f,Resources=0xc000_009a,
+    InformationLengthMismatch=0xc000_0004,InvalidParameter=0xc000_000d,AccessDenied=0xc000_0022,FileLockConflict=0xc000_0054,DiskFull=0xc000_007f,Resources=0xc000_009a,
     MediaWriteProtected=0xc000_00a2,NotSupported=0xc000_00bb,NetworkNameDeleted=0xc000_00c9,
     InternalError=0xc000_00e5,FileClosed=0xc000_0128,VolumeDismounted=0xc000_026e,
     ServerUnavailable=0xc000_0466,FileNotAvailable=0xc000_0467,
@@ -102,6 +102,15 @@ pub(in crate::smb) enum RestoreFailure{
     SharingViolation=0xc000_0043,DeletePending=0xc000_0056,
     DiskFull=0xc000_007f,Resources=0xc000_009a,MediaWriteProtected=0xc000_00a2,NotSupported=0xc000_00bb,
     NetworkNameDeleted=0xc000_00c9,NameTooLong=0xc000_0106,FileClosed=0xc000_0128,
+    VolumeDismounted=0xc000_026e,ServerUnavailable=0xc000_0466,FileNotAvailable=0xc000_0467,
+}
+
+#[derive(Clone,Copy)]
+#[repr(u32)]
+pub(in crate::smb) enum LockFailure{
+    InvalidParameter=0xc000_000d,AccessDenied=0xc000_0022,LockNotGranted=0xc000_0055,RangeNotLocked=0xc000_007e,
+    Resources=0xc000_009a,MediaWriteProtected=0xc000_00a2,NotSupported=0xc000_00bb,
+    NetworkNameDeleted=0xc000_00c9,FileClosed=0xc000_0128,InvalidRange=0xc000_01a1,
     VolumeDismounted=0xc000_026e,ServerUnavailable=0xc000_0466,FileNotAvailable=0xc000_0467,
 }
 
@@ -217,6 +226,20 @@ impl UnsignedSmall {
         let header=standalone_header(m,sid,super::read_reply::READ,why as u32)?;
         let mut raw=[0;MAX_SMALL_REPLY];raw[..64].copy_from_slice(&header);raw[64]=9;
         Ok(Self{raw,len:EMPTY_ERROR,sid})
+    }
+
+    pub(in crate::smb) fn lock_refusal(original:&LockRefusal<'_,'_>)->Result<Self>{
+        let (message,sid,why)=original.fields();
+        let header=standalone_header(message,sid,LOCK,why as u32)?;
+        let mut raw=[0;MAX_SMALL_REPLY];raw[..64].copy_from_slice(&header);raw[64]=9;
+        Ok(Self{raw,len:EMPTY_ERROR,sid})
+    }
+
+    /// MS-SMB2 2.2.27: this fixed success needs a real lock mutation.
+    pub(in crate::smb) fn locked(request:&LockRequest<'_,'_>,pending:&PendingLock)->Result<Self>{
+        if !pending.matches(request){return Err(Error::InvalidRequest);}
+        let mut result=Self::standalone(request.original(),pending.sid(),LOCK,0,68)?;
+        result.raw[64]=4;Ok(result)
     }
 
     pub(in crate::smb) fn write_refusal(original:&WriteRefusal<'_,'_>)->Result<Self>{

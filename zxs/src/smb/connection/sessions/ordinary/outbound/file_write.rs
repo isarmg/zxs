@@ -4,7 +4,7 @@
 use super::{CheckedBatch,Connection,Fault,Payload,Result,SyncReply,UnsignedSmall,VerifiedMember,current,
     root_io::RequestSlot};
 use super::super::opens::Opened;
-use crate::smb::{backend::{DispositionError,FileWriteError,PreparedDisposition,PreparedFileEof,PreparedFileFlush,PreparedFileWrite,WriteFault},
+use crate::smb::{backend::{DispositionError,FileWriteError,PreparedDisposition,PreparedFileEof,PreparedFileFlush,PreparedFileWrite,RangeIoError,WriteFault},
     wire::{fixed_reply::WriteFailure,io_fields::{IoFieldError,OpenReference,WireOpenId},
         io_reply::{FLUSH,FileReply,WRITE},message::{Message,RELATED,Routing},
         set_info::{Change,Error as SetError,FileSetRequest,SET_INFO}}};
@@ -140,6 +140,11 @@ fn failure(e:FileWriteError)->Result<WriteFailure>{
             WriteFault::NotDataFile|WriteFault::InconsistentLength=>W::InternalError,
             WriteFault::UnbufferedUnavailable|WriteFault::DirectoryFlushUnavailable=>W::NotSupported,
             WriteFault::InvalidWriteCombination|WriteFault::InvalidRange=>W::InvalidParameter,
+            WriteFault::Range(e)=>match e{
+                RangeIoError::Conflict=>W::FileLockConflict,
+                RangeIoError::Resources=>W::Resources,
+                RangeIoError::Unavailable=>W::ServerUnavailable,
+            },
             WriteFault::Original(e)|WriteFault::Confirmation(e)=>return original_write_failure(e),
         },
     })

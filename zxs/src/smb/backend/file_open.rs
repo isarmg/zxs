@@ -4,13 +4,14 @@
 use super::{BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
     attribute_tag::PreparedAttributeTag,
     file_access::PreparedFileAccess,
+    range_lock::{LockError,PreparedLock},
     disposition::{DELETE_ACCESS,DELETE_ON_CLOSE,DispositionError,PreparedDisposition,Snapshot},
     io::{CloseCompletion,ReadCompletion,ReadFault,seal_read},
     path::{NameError,TreeName},writable_file_open::{self,WritableFileOpen}};
 use crate::{fs::MAX_PATH_DEPTH,smb::{RustSessionWitness,
     connection::{Fault as ConnectionFault,sessions::ordinary::VerifiedMember},
     wire::{create_fields::{CurrentIntent,CurrentName,Disposition,Error as CreateError,MaximumAccessQuery,SpecialOpen},io_fields::{IoFieldError,OpenReference},
-        message::{Message,RELATED,Routing},query_fields::{FileClass,InfoClass,QueryError},set_info::FileSetRequest}},
+        lock_fields::LockRequest,message::{Message,RELATED,Routing},query_fields::{FileClass,InfoClass,QueryError},set_info::FileSetRequest}},
     system::reader::smb::{file_number::SmbFileIndex,first_work::{RustFileName,RustFileStandard,RustReadFile,RustReadProof},runtime::RustRoot}};
 use std::{io as stdio,sync::Arc};
 
@@ -291,12 +292,23 @@ impl FileOpen {
         let view=self.held.original.normalized_name(tree,&scope).map_err(normalized_name_error)?;
         Ok(PreparedFileName{view,scope,output})
     }
+    pub(in crate::smb) fn change_lock(&self,tree:&RustRoot,request:&LockRequest<'_,'_>)
+        ->Result<PreparedLock,LockError>{
+        self.held.change_lock(request,|scope|self.require_current(tree,scope))
+    }
+    pub(in crate::smb) fn require_lock(&self,tree:&RustRoot,proof:&PreparedLock)->stdio::Result<()>{
+        let Held{_slot:slot,..}=&self.held;
+        proof.require(slot,|scope|self.require_current(tree,scope))
+    }
     pub(in crate::smb) fn read(&self,tree:&RustRoot,member:&VerifiedMember<'_,'_>,room:usize)
         ->Result<PreparedFileRead,FileReadError>{
         let raw=member.message().read_request(member.max_read()).map_err(FileReadError::Fields)?;
         if !self.held.original.belongs_to(tree){return Err(FileReadError::WrongTree);}
         let scope=member.rust_session_witness().map_err(FileReadError::Session)?;
         self.held.check_read(raw.range,room).map_err(FileReadError::Fault)?;
+        let Held{_slot:slot,..}=&self.held;
+        let _permit=slot.read_permit(raw.range,||self.require_current(tree,&scope))
+            .map_err(FileReadError::Fault)?;
         let (data,proof)=self.held.original.read_window(tree,&scope,raw.range.offset(),raw.range.length())
             .map_err(|e|FileReadError::Fault(ReadFault::Original(e)))?;
         let result=match seal_read(raw.range,data){
