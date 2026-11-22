@@ -1,9 +1,9 @@
 //! Qualified reads for one account. Must be used only inside the same original
 //! S transaction as its validated catalog. Nothing here issues a credential,
 //! opens the vault or a writer, or makes an authenticated role.
-use super::{Catalog,Connection,check,super::shared_account::{PublicEpoch,SharedScope}};
+use super::{Catalog,Connection,Statement,check,super::shared_account::{PublicEpoch,SharedScope}};
 use crate::{OperationId,PoolId,fs::invalid,identity::AccountId,password::{self,Verifier}};
-use std::io;
+use std::{ffi::CStr,io};
 
 #[derive(Clone,Copy,Eq,PartialEq)]
 pub(super) struct Epoch{pub(super) op:OperationId,pub(super) generation:i64}
@@ -56,12 +56,24 @@ impl OneAccount{
         Ok(Some(identity))
     }
 
-    /// The only lookup exposing a Web verifier. Exact setup, current reset,
-    /// both role actor keys and the same already active row are qualified in
-    /// the single calling S cut; raw public coordinates cannot load the tag.
-    pub(super) fn qualified_web(db:&Connection,c:&Catalog)->io::Result<Option<(Self,PublicEpoch,Verifier)>>{
+    fn web_head(db:&Connection,c:&Catalog)->io::Result<Option<(Self,PublicEpoch)>>{
         let Some(pair)=Self::confirmed(db,c)? else{return Ok(None);};
         let Some(epoch)=pair.current(db,c)? else{return Ok(None);};
+        Ok(Some((pair,epoch)))
+    }
+
+    /// A business cut needs the current Web role and a validly shaped
+    /// verifier row, not the salt or tag. Keep them out of its SQL result.
+    pub(super) fn qualified_web_metadata(db:&Connection,c:&Catalog)->io::Result<Option<(Self,PublicEpoch)>>{
+        let Some((pair,epoch))=Self::web_head(db,c)? else{return Ok(None);};
+        require_web_shape(db,epoch)?;
+        Ok(Some((pair,epoch)))
+    }
+
+    /// The only lookup exposing a Web verifier. Raw public coordinates alone
+    /// cannot load the tag: setup and current reset qualify in this same cut.
+    pub(super) fn qualified_web(db:&Connection,c:&Catalog)->io::Result<Option<(Self,PublicEpoch,Verifier)>>{
+        let Some((pair,epoch))=Self::web_head(db,c)? else{return Ok(None);};
         Ok(Some((pair,epoch,web_material(db,epoch)?)))
     }
 
@@ -108,14 +120,44 @@ impl OneAccount{
     }
 }
 
-/// The Web-only caller uses its just-selected exact head in the same cut.
+// Both projections must identify the same original row. Only their result
+// columns differ; the joins and all three epoch binds are fixed here.
+macro_rules! select_web_password{
+    ($columns:literal)=>{
+        match CStr::from_bytes_with_nul(concat!("SELECT ",$columns," FROM main.active_shared_credential a
+        CROSS JOIN main.web_password w ON w.slot=a.slot AND w.credential_op=a.credential_op AND w.generation=a.generation
+        WHERE a.credential_op=?1 AND a.generation=?2 AND a.record_id=?3\0").as_bytes()){
+            Ok(sql)=>sql,Err(_)=>panic!("invalid fixed Web password query"),
+        }
+    }
+}
+const WEB_MATERIAL:&CStr=select_web_password!("w.salt,w.verifier");
+const WEB_SHAPE:&CStr=select_web_password!(
+    "CASE WHEN typeof(w.salt)='blob' THEN length(w.salt) ELSE -1 END,
+     CASE WHEN typeof(w.verifier)='blob' THEN length(w.verifier) ELSE -1 END");
+
+fn web_password_row<'a>(db:&'a Connection,e:PublicEpoch,sql:&'static CStr)->io::Result<Statement<'a>>{
+    let s=db.prepare(sql)?;
+    s.bind_bytes(1,&e.op)?;s.bind_integer(2,e.generation)?;s.bind_bytes(3,&e.record)?;
+    match s.step(){100=>Ok(s),rc=>{check(rc)?;Err(bad())}}
+}
+
+fn require_web_shape(db:&Connection,e:PublicEpoch)->io::Result<()>{
+    let s=web_password_row(db,e,WEB_SHAPE)?;
+    for (column,width) in [(0,16),(1,32)]{
+        // Non-BLOB is not an empty BLOB. Preserve the fixed-blob reader's
+        // storage-class and width decisions without asking for the data.
+        let n=s.integer(column)?;
+        if n<0{return Err(invalid("unexpected SQLite blob storage class"));}
+        if n==0||n>width{return Err(invalid("missing or oversized SQLite blob"));}
+        if n!=width{return Err(invalid("wrong SQLite identity/digest width"));}
+    }
+    s.done()
+}
+
 /// Neither SMB nor launch/custody receives this verifier.
 fn web_material(db:&Connection,e:PublicEpoch)->io::Result<Verifier>{
-    let s=db.prepare(c"SELECT w.salt,w.verifier FROM main.active_shared_credential a
-        CROSS JOIN main.web_password w ON w.slot=a.slot AND w.credential_op=a.credential_op AND w.generation=a.generation
-        WHERE a.credential_op=?1 AND a.generation=?2 AND a.record_id=?3")?;
-    s.bind_bytes(1,&e.op)?;s.bind_integer(2,e.generation)?;s.bind_bytes(3,&e.record)?;
-    match s.step(){100=>{},rc=>{check(rc)?;return Err(bad());}}
+    let s=web_password_row(db,e,WEB_MATERIAL)?;
     let result=Verifier::new(s.array(0)?,s.array(1)?);
     s.done()?;
     Ok(result)
@@ -170,12 +212,15 @@ mod tests{
         run(db,format!("INSERT INTO smb_rust_revision VALUES({},{})",blob(&op),blob(&rid)));
     }
     fn setup(db:&Connection,scope:SharedScope<'_>,web:[u8;16]){
+        setup_widths(db,scope,web,16,32)
+    }
+    fn setup_widths(db:&Connection,scope:SharedScope<'_>,web:[u8;16],salt:usize,tag:usize){
         let keys=scope.role_keys().unwrap();
         db.fixed(c"BEGIN IMMEDIATE").unwrap();
         run(db,format!("INSERT INTO account_pair VALUES(1,{},{},{},{},{},{},{},{},{},{})",
             blob(&SETUP),blob(&APPROVAL),blob(&scope.instance),blob(&scope.plan_sha),blob(&scope.account),
             blob(scope.login),blob(&web),blob(&keys.smb),blob(&scope.sid),blob(&scope.bind)));
-        run(db,format!("INSERT INTO web_password VALUES(1,{},1,zeroblob(16),zeroblob(32))",blob(&SETUP)));
+        run(db,format!("INSERT INTO web_password VALUES(1,{},1,zeroblob({salt}),zeroblob({tag}))",blob(&SETUP)));
         record(db,SETUP,FIRST);
         run(db,format!("INSERT INTO operation VALUES({},2,{},{},0)",blob(&SETUP),blob(&ACTOR),
             blob(&scope.setup_request(APPROVAL,FIRST).unwrap())));
@@ -197,20 +242,25 @@ mod tests{
         let first=PublicEpoch{op:SETUP,generation:1,record:FIRST};
         let next=PublicEpoch{op:RESET,generation:2,record:NEXT};
         assert!(OneAccount::confirmed(&db,&c).unwrap().is_none());
+        assert!(OneAccount::qualified_web_metadata(&db,&c).unwrap().is_none());
         setup(&db,scope,keys.web);
         assert!(OneAccount::confirmed(&db,&c).unwrap().is_none());
+        assert!(OneAccount::qualified_web_metadata(&db,&c).unwrap().is_none());
         status(&db,SETUP);
         let shared=OneAccount::confirmed(&db,&c).unwrap().unwrap();
         assert_eq!(shared.canonical.0,scope.account);assert_eq!(shared.web.0,keys.web);
         assert_eq!(shared.smb.0,keys.smb);assert_eq!(shared.login,"shared.operator");
         assert!(shared.current(&db,&c).unwrap()==Some(first));
         assert!(OneAccount::qualified_web(&db,&c).unwrap().is_some_and(|(_,e,_)|e==first));
+        assert!(OneAccount::qualified_web_metadata(&db,&c).unwrap().is_some_and(|(a,e)|a.web.0==keys.web&&e==first));
         reset(&db,scope,scope.reset_request(APPROVAL,first,next).unwrap());
         assert!(shared.current(&db,&c).unwrap().is_none());
         assert!(OneAccount::qualified_web(&db,&c).unwrap().is_none());
+        assert!(OneAccount::qualified_web_metadata(&db,&c).unwrap().is_none());
         status(&db,RESET);
         assert!(shared.current(&db,&c).unwrap()==Some(next));
         assert!(OneAccount::qualified_web(&db,&c).unwrap().is_some_and(|(_,e,_)|e==next));
+        assert!(OneAccount::qualified_web_metadata(&db,&c).unwrap().is_some_and(|(a,e)|a.web.0==keys.web&&e==next));
     }
 
     #[test]
@@ -224,5 +274,25 @@ mod tests{
         reset(&db,origin,[101;32]);status(&db,RESET);
         assert!(shared.current(&db,&c).is_err());
         assert!(OneAccount::qualified_web(&db,&c).is_err());
+        assert!(OneAccount::qualified_web_metadata(&db,&c).is_err());
+    }
+
+    #[test]
+    fn business_web_cut_rejects_the_same_bad_widths_as_login(){
+        for (salt,tag) in [(0,32),(15,32),(17,32),(16,0),(16,31),(16,33)]{
+            let (db,c)=memory();let origin=scope(&c);
+            // In-memory schema fixture only: model invalid stored widths
+            // without changing the canonical table, triggers, or joins.
+            db.fixed(c"PRAGMA ignore_check_constraints=ON").unwrap();
+            setup_widths(&db,origin,origin.role_keys().unwrap().web,salt,tag);
+            db.fixed(c"PRAGMA ignore_check_constraints=OFF").unwrap();
+            status(&db,SETUP);
+            let active=PublicEpoch{op:SETUP,generation:1,record:FIRST};
+            assert!(OneAccount::web_head(&db,&c).unwrap().is_some_and(|(_,e)|e==active));
+            let business=OneAccount::qualified_web_metadata(&db,&c).err().unwrap();
+            let login=OneAccount::qualified_web(&db,&c).err().unwrap();
+            assert_eq!(business.kind(),login.kind());
+            assert_eq!(business.to_string(),login.to_string());
+        }
     }
 }

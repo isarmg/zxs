@@ -4,15 +4,20 @@ use super::{Catalog,Connection,InitialReader,check};
 use crate::{OperationId,identity::AccountId,password::Verifier};
 use std::io;
 
-use super::credential::Pair;
+use super::{credential::Pair,super::shared_account::PublicEpoch};
 
 #[derive(Eq,PartialEq)]
-struct WebCurrent{account:AccountId,canonical:AccountId,op:OperationId,generation:i64,login:String,verifier:Verifier}
+struct WebCurrent{account:AccountId,canonical:AccountId,op:OperationId,generation:i64,login:String}
 impl WebCurrent{
+    fn from_head(pair:Pair,epoch:PublicEpoch)->Self{
+        Self{account:pair.web,canonical:pair.canonical,op:OperationId(epoch.op),
+            generation:epoch.generation,login:pair.login}
+    }
     fn select(db:&Connection,c:&Catalog)->io::Result<Option<Self>>{
-        let Some((pair,epoch,verifier))=Pair::qualified_web(db,c)? else{return Ok(None)};
-        Ok(Some(Self{account:pair.web,canonical:pair.canonical,op:OperationId(epoch.op),
-            generation:epoch.generation,login:pair.login,verifier}))
+        Ok(Pair::qualified_web_metadata(db,c)?.map(|(pair,epoch)|Self::from_head(pair,epoch)))
+    }
+    fn for_login(db:&Connection,c:&Catalog)->io::Result<Option<(Self,Verifier)>>{
+        Ok(Pair::qualified_web(db,c)?.map(|(pair,epoch,verifier)|(Self::from_head(pair,epoch),verifier)))
     }
 }
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"Web credentials not accepted")}
@@ -26,11 +31,12 @@ impl InitialReader{
     }
     pub(super) fn authenticate_web_after(&self,login:&str,password:&str,after:impl FnOnce()->io::Result<()>)->io::Result<WebAdmin<'_>>{
         if login.is_empty()||login.len()>64||password.is_empty()||password.len()>1024{return Err(denied());}
-        let m=self.at(|db,c|WebCurrent::select(db,&c))?.ok_or_else(denied)?;
-        if !m.verifier.matches(password)?||m.login.as_bytes()!=login.as_bytes(){return Err(denied());}
+        let before=self.at(|db,c|WebCurrent::for_login(db,&c))?.ok_or_else(denied)?;
+        let (m,verifier)=&before;
+        if !verifier.matches(password)?||m.login.as_bytes()!=login.as_bytes(){return Err(denied());}
         after()?;
         self.at(|db,c|{
-            if WebCurrent::select(db,&c)?.as_ref()!=Some(&m){return Err(denied());}
+            if WebCurrent::for_login(db,&c)?.as_ref()!=Some(&before){return Err(denied());}
             Ok(WebAdmin{source:self,account:m.account,canonical:m.canonical,origin:m.op,generation:m.generation})
         })
     }
