@@ -23,6 +23,9 @@ mod sqlite_install;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod test_area;
+#[cfg(test)]
+#[path = "../tests/common/child.rs"]
+mod fixture_child;
 
 use fat32_check::CheckFormat;
 use pinned::storage_status::Selection;
@@ -73,7 +76,7 @@ enum Command {
     ImportCheck(sqlite_install::ImportCheck),
     Storage(Selection),
     Install(sqlite_install::Installation),
-    Setup(sqlite_install::Setup),
+    Setup(Box<sqlite_install::Setup>),
     #[cfg(feature="embedded-zxs")]
     EmbeddedInstall(sqlite_install::EmbeddedInstall),
     Disks(block_tools::Query),
@@ -104,7 +107,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op=="reset-account"{return sqlite_install::SharedAccountReset::parse(args).map(Command::SharedAccountReset);}
     #[cfg(feature="embedded-zxs")]
     if op=="install-zxs-image"{return sqlite_install::EmbeddedInstall::parse(args).map(Command::EmbeddedInstall);}
-    if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(Command::Setup);}
+    if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(|setup|Command::Setup(Box::new(setup)));}
     if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "check-nonempty-source"{return sqlite_install::ImportCheck::parse(args).map(Command::ImportCheck);}
     if op == "check-ordinary-retirement"{return sqlite_install::RetirementCheck::parse(args).map(Command::RetirementCheck);}

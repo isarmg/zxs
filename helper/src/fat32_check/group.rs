@@ -29,12 +29,14 @@ mod tests {
     #[test] #[ignore="internal process-domain fixture"]
     fn fixture_in_monitor(){
         if !selected("fixture_in_monitor"){return;}
-        let _child=own_test("fixture_early_setup").spawn().unwrap();pause_fixture();
+        let mut child=own_test("fixture_early_setup").spawn().unwrap();
+        pause_fixture();let _=child.wait();
     }
     #[test] #[ignore="internal process-domain fixture"]
     fn fixture_before_payload(){
         if !selected("fixture_before_payload"){return;}
-        let _child=own_test("fixture_in_monitor").spawn().unwrap();pause_fixture();
+        let mut child=own_test("fixture_in_monitor").spawn().unwrap();
+        pause_fixture();let _=child.wait();
     }
     #[test] #[ignore="internal dedicated supervisor fixture"]
     fn fixture_supervisor(){

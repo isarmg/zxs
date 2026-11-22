@@ -32,25 +32,34 @@ pub(super) fn first_marker(pool:&Id,init:&Id,tx:&Transaction<'_>,root:HeldRoot<'
 pub(super) fn at_original<T>(pool:&Id,init:&Id,locked:&LockedSystem,db:&Existing<'_>,template:&Canonical,mark:&SystemMark,
     read:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<([u8;101],T)> {
     let mut c=engine::existing(db,Access::Read)?;
-    let result=snapshot(&mut c,pool,init,locked,db,template,mark,read)?;
+    let result=OriginalRead::new(locked,db,template,mark).snapshot(&mut c,pool,init,read)?;
     c.close().map_err(|_|bad("original readonly account observation did not close cleanly"))?;
     db.sidecars_absent()?;mark.verify(locked.source(),&result.0)?;Ok(result)
 }
 
-// A caller may retain this actual standard-VFS connection, with *no active
-// transaction*, to keep the original database inode alive across human input.
-pub(super) fn snapshot<T>(c:&mut rusqlite::Connection,pool:&Id,init:&Id,locked:&LockedSystem,db:&Existing<'_>,template:&Canonical,
-    mark:&SystemMark,read:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<([u8;101],T)>{
-    let source=locked.source();db.sidecars_absent()?;engine::original_name(c)?;
-    if !c.is_autocommit(){return Err(bad("unexpected open SQLite transaction before the account observation"));}
-    let tx=c.transaction().map_err(sql)?;template.require(&tx)?;
-    let actual=first_marker(pool,init,&tx,source)?;mark.verify(source,&actual)?;
-    let result=read(&tx)?;
-    mark.verify(source,&actual)?;engine::original_name(&tx)?;db.sidecars_absent()?;
-    tx.commit().map_err(sql)?;
-    if !c.is_autocommit(){return Err(bad("original account snapshot did not end"));}
-    engine::original_name(c)?;locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
-    Ok((actual,result))
+pub(super) struct OriginalRead<'a,'g>{
+    locked:&'a LockedSystem,db:&'a Existing<'g>,template:&'a Canonical,mark:&'a SystemMark,
+}
+impl<'a,'g> OriginalRead<'a,'g>{
+    pub(super) fn new(locked:&'a LockedSystem,db:&'a Existing<'g>,template:&'a Canonical,mark:&'a SystemMark)->Self{
+        Self{locked,db,template,mark}
+    }
+    // The caller can retain this standard-VFS connection between observations
+    // with no open transaction, so the original inode stays pinned.
+    pub(super) fn snapshot<T>(&self,c:&mut rusqlite::Connection,pool:&Id,init:&Id,
+        read:impl FnOnce(&Transaction<'_>)->io::Result<T>)->io::Result<([u8;101],T)>{
+        let Self{locked,db,template,mark}=self;
+        let source=locked.source();db.sidecars_absent()?;engine::original_name(c)?;
+        if !c.is_autocommit(){return Err(bad("unexpected open SQLite transaction before the account observation"));}
+        let tx=c.transaction().map_err(sql)?;template.require(&tx)?;
+        let actual=first_marker(pool,init,&tx,source)?;mark.verify(source,&actual)?;
+        let result=read(&tx)?;
+        mark.verify(source,&actual)?;engine::original_name(&tx)?;db.sidecars_absent()?;
+        tx.commit().map_err(sql)?;
+        if !c.is_autocommit(){return Err(bad("original account snapshot did not end"));}
+        engine::original_name(c)?;locked.require()?;db.sidecars_absent()?;mark.verify(source,&actual)?;
+        Ok((actual,result))
+    }
 }
 /// Only for one new ZXS issuance. Existing or partially applied account
 /// authority, non-INIT history or an unknown first cut is never adopted.

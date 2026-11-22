@@ -49,7 +49,7 @@ impl ExplicitSubject{
 pub(super) mod image;
 #[cfg(feature="embedded-zxs")]
 pub(crate) use image::EmbeddedInstall;
-use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,ResolvedRust,transact_fresh},
+use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,FirstShares,FreshScope,ResolvedRust,transact_fresh},
     native_sql::rust_vault::{ActiveRustMeta,Desired,RustChange,RustOrder,SetupSpec,shared_login},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest},receipt::Observed},terminal::PublicConfirmation};
 use crate::{smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
     rust_first::{self,Origin}},sqlite_install::{approval,product_layout,stage::random}};
@@ -73,8 +73,7 @@ fn filesystem_phase<T>(live:&dyn Fn()->io::Result<()>,
 #[derive(Debug)]
 pub(super) struct Selection{
     subject:ExplicitSubject,system:PathBuf,origin:Origin,reference:Id,init_sha:[u8;32],
-    image_path:PathBuf,image:[u8;32],crypto:CryptoPins,hostname:String,login:Vec<u8>,
-    recycle:RecycleName,endpoints:Vec<Endpoint>,folders:Vec<Choice>,
+    image_path:PathBuf,image:[u8;32],crypto:CryptoPins,login:Vec<u8>,shares:FirstShares,
 }
 impl Selection{
     pub(super) fn parse(mut it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
@@ -125,15 +124,16 @@ impl Selection{
             }else{return Err("only explicit --listen and --share/--share-label entries; no recovery, password or second executable");}
         }
         if endpoints.is_empty()||folders.is_empty(){return Err("select at least one LAN listener and original ordinary folder");}
-        Ok(Self{subject,system,origin,reference,init_sha,image_path,image,crypto,hostname,login,recycle,endpoints,folders})
+        let shares=FirstShares{host:hostname,endpoints,choices:folders,recycle};
+        Ok(Self{subject,system,origin,reference,init_sha,image_path,image,crypto,login,shares})
     }
     pub(super) fn run(self)->io::Result<(u8,String)>{
         require_v18()?;
-        let Self{subject,system,origin,reference,init_sha,image_path,image,crypto,hostname,login,recycle,endpoints,folders}=self;
+        let Self{subject,system,origin,reference,init_sha,image_path,image,crypto,login,shares}=self;
         // Check host/stdin custody before obtaining any unrelated FD. This
         // genuine low reader holds the original S EX and no root SQL.
         let parent=FreshParent::select(origin.instance)?;
-        let resolved=ResolvedRust::fresh(&parent,&system,origin,hostname,endpoints,folders,recycle,subject,crypto.helper,init_sha)?;
+        let resolved=ResolvedRust::fresh(&parent,&system,origin,shares,FreshScope::new(subject,crypto.helper,init_sha))?;
         let tty=PublicConfirmation::select()?;
         super::web_secret::WebWorkspace::check_inherited_lock_budget()?;
         let image_file=image::Image::select(&image_path,&image,parent.product_root()?)?;
@@ -255,7 +255,7 @@ mod tests{
         let selected=Selection::parse(arg(&defaults)).unwrap();
         assert_eq!(selected.system,PathBuf::from(product_layout::SYSTEM));
         assert_eq!(selected.image_path,PathBuf::from(product_layout::IMAGE));
-        assert_eq!(selected.folders[0].path,PathBuf::from("/zxs/disks/data/工具"));
+        assert_eq!(selected.shares.choices[0].path,PathBuf::from("/zxs/disks/data/工具"));
         for bad in [format!("{form} --resume"),format!("{form} --password bogus"),format!("{form} --site /other"),
             form.replace("first.zxs","guest"),form.replace("--login first.zxs","--web-login first.web --smb-login first.smb"),form.replace("/lab/F","/lab/S/F"),form.replace("1001","01001"),
             form.replace(&hex(&[3;16]),&hex(&[2;16])),form.replace("192.0.2.17/24","0.0.0.0/0"),

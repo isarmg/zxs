@@ -17,17 +17,21 @@ fn leaf(parent:&File,name:&CStr)->io::Result<File>{
     Ok(File::from(openat2(parent,name,OFlags::PATH|OFlags::CLOEXEC|OFlags::NOFOLLOW,Mode::empty(),
         ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_MAGICLINKS|ResolveFlags::NO_SYMLINKS)?))
 }
-fn locate(fd:&File)->io::Result<([u8;16],[u8;32])>{
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+struct SelectedSite{instance:[u8;16],sha:[u8;32]}
+struct Selector{pin:File,value:SelectedSite}
+
+fn locate(fd:&File)->io::Result<SelectedSite>{
     let mut v=[0;64];
     fd.read_exact_at(&mut v,0)?;
     if fd.read_at(&mut [0],64)?!=0{return Err(unknown());}
     decode_locator(&v)
 }
-fn decode_locator(v:&[u8])->io::Result<([u8;16],[u8;32])>{
+fn decode_locator(v:&[u8])->io::Result<SelectedSite>{
     if v.len()!=64||&v[..16]!=MAGIC||v[16..32]==[0;16]||v[32..]==[0;32]{return Err(unknown());}
-    Ok((v[16..32].try_into().expect("fixed site identity"),v[32..].try_into().expect("fixed site digest")))
+    Ok(SelectedSite{instance:v[16..32].try_into().expect("fixed site identity"),sha:v[32..].try_into().expect("fixed site digest")})
 }
-fn locator(parent:&File)->io::Result<(File,([u8;16],[u8;32]))>{
+fn locator(parent:&File)->io::Result<Selector>{
     let pin=leaf(parent,LOCATOR)?;let m=pin.metadata()?;
     if m.mode()!=0o100600||m.uid()!=0||m.gid()!=0||m.nlink()!=1||m.len()!=64{return Err(unknown());}
     layout::exact_with(parent,LOCATOR,&pin,||leaf(parent,LOCATOR))?;
@@ -38,12 +42,12 @@ fn locator(parent:&File)->io::Result<(File,([u8;16],[u8;32]))>{
     if super::live::Stamp::on(&reader)?!=stamp||super::live::Stamp::on(&leaf(parent,LOCATOR)?)?!=stamp{
         return Err(unknown());
     }
-    Ok((pin,value))
+    Ok(Selector{pin,value})
 }
 
 #[must_use]
 pub(in crate::sqlite_install::pair) struct DeployedSite{
-    parent:File,selector:File,selection:([u8;16],[u8;32]),original:Site,site_ex:File,
+    parent:File,selector:Selector,original:Site,site_ex:File,
     system:Pinned,system_ex:File,authority:PublicAuthority,plan_file:Public,
     payload:SitePayload,plan:RustPlan,verified_image:image::Image,
 }
@@ -68,13 +72,13 @@ impl DeployedSite{
         if mark(&base)?!=mark(&parent)?{return Err(unknown());}
         layout::protected_control(&parent)?;
         flock(&parent,FlockOperation::NonBlockingLockShared)?;
-        let (selector,selection)=locator(&parent)?;
-        let original=Site::product(host,&selection.0,false)?;
+        let selector=locator(&parent)?;
+        let original=Site::product(host,&selector.value.instance,false)?;
         if mark(&original.chain[0])?!=mark(&top)?||mark(&original.chain[PRODUCT.len()-1])?!=mark(&parent)?{return Err(unknown());}
         let site_ex=child(original.base(),c".")?;
         let authority=PublicAuthority::select(&site_ex)?;
         let payload=SitePayload::decode(authority.bytes())?;
-        if payload.origin.instance!=selection.0||<[u8;32]>::from(Sha256::digest(authority.bytes()))!=selection.1{return Err(unknown());}
+        if payload.origin.instance!=selector.value.instance||<[u8;32]>::from(Sha256::digest(authority.bytes()))!=selector.value.sha{return Err(unknown());}
         layout::verify_registered_instance(&original,payload.subject.tuple().2)?;
         let plan_file=Public::select(&site_ex,c"rust.install",1..=MAX_WIRE)?;
         let plan=RustPlan::decode(plan_file.bytes()).map_err(bad)?;
@@ -88,7 +92,7 @@ impl DeployedSite{
         // participant holds S SH, in which case this check cannot qualify.
         flock(&system_ex,FlockOperation::NonBlockingLockExclusive)?;
         flock(&site_ex,FlockOperation::NonBlockingLockExclusive)?;
-        let result=Self{parent,selector,selection,original,site_ex,system,system_ex,
+        let result=Self{parent,selector,original,site_ex,system,system_ex,
             authority,plan_file,payload,plan,verified_image};
         result.require()?;Ok(result)
     }
@@ -116,8 +120,8 @@ impl DeployedSite{
         if self.verified_image.includes(self.system.entity())||
             self.system.visible_chain().contains(&self.verified_image.entity())||
             self.verified_image.includes(mark(&self.parent)?.0){return Err(unknown());}
-        let (located,value)=locator(&self.parent)?;
-        if value!=self.selection||super::live::Stamp::on(&located)?!=super::live::Stamp::on(&self.selector)?{
+        let located=locator(&self.parent)?;
+        if located.value!=self.selector.value||super::live::Stamp::on(&located.pin)?!=super::live::Stamp::on(&self.selector.pin)?{
             return Err(unknown());
         }
         contents(&self.site_ex,&[b"rust.install",b"site.v1",b"vault"])?;
@@ -127,7 +131,7 @@ impl DeployedSite{
     pub(in crate::sqlite_install::pair) fn original(&self)->(&Pinned,&File){(&self.system,&self.system_ex)}
     pub(in crate::sqlite_install::pair) fn payload(&self)->&SitePayload{&self.payload}
     pub(in crate::sqlite_install::pair) fn plan(&self)->&RustPlan{&self.plan}
-    pub(in crate::sqlite_install::pair) fn site_sha(&self)->[u8;32]{self.selection.1}
+    pub(in crate::sqlite_install::pair) fn site_sha(&self)->[u8;32]{self.selector.value.sha}
     pub(in crate::sqlite_install::pair) fn require_vault_prefix(&self,wanted:&[u8;224])->io::Result<()>{
         self.observe_vault(wanted).map(drop)
     }
@@ -197,12 +201,12 @@ fn qualify_payload(bytes:&[u8],plan:&RustPlan,site_sha:[u8;32])->io::Result<Site
 pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,site_sha:[u8;32])->io::Result<SitePayload>{
     compiled_v18()?;
     if site_sha==[0;32]{return Err(unknown());}
-    let expected=(plan.origin.instance,site_sha);
-    let site=Site::product(approval::host_admin()?,&expected.0,false)?;
+    let expected=SelectedSite{instance:plan.origin.instance,sha:site_sha};
+    let site=Site::product(approval::host_admin()?,&expected.instance,false)?;
     let parent=child(&site.chain[PRODUCT.len()-1],c".")?;
     layout::protected_control(&parent)?;
-    let (selector,record)=locator(&parent)?;
-    if record!=expected{return Err(unknown());}
+    let selector=locator(&parent)?;
+    if selector.value!=expected{return Err(unknown());}
     let dir=child(site.base(),c".")?;
     if mark(&dir)?!=mark(site.base())?{return Err(unknown());}
     layout::bare_acl(&dir,c"system.posix_acl_default")?;
@@ -213,8 +217,8 @@ pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,si
     let installed=Public::select(&dir,c"rust.install",1..=MAX_WIRE)?;
     if installed.bytes()!=plan.wire(){return Err(unknown());}
     installed.require(&dir,c"rust.install")?;auth.require(&dir)?;
-    let (named,again)=locator(&parent)?;
-    if again!=expected||super::live::Stamp::on(&named)?!=super::live::Stamp::on(&selector)?{return Err(unknown());}
+    let named=locator(&parent)?;
+    if named.value!=expected||super::live::Stamp::on(&named.pin)?!=super::live::Stamp::on(&selector.pin)?{return Err(unknown());}
     site.check()?;Ok(payload)
 }
 
@@ -224,7 +228,7 @@ mod tests{
     #[test]
     fn reattach_only_the_exact_complete_nonzero_zxs_selector(){
         let mut bytes=[0;64];bytes[..16].copy_from_slice(MAGIC);bytes[16..32].fill(1);bytes[32..].fill(2);
-        assert_eq!(decode_locator(&bytes).unwrap(),([1;16],[2;32]));
+        assert_eq!(decode_locator(&bytes).unwrap(),SelectedSite{instance:[1;16],sha:[2;32]});
         assert!(decode_locator(&bytes[..63]).is_err());
         assert!(decode_locator(&[bytes.as_slice(),b"x"].concat()).is_err());
         bytes[32..].fill(0);assert!(decode_locator(&bytes).is_err());

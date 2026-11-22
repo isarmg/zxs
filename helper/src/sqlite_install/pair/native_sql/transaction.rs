@@ -20,7 +20,7 @@ impl<'s> AccountCut<'s>{
         let database=Existing::observed_system(locked)?;
         let marker=SystemMark::before_sql(locked.source())?;
         let mut anchor=engine::existing(&database,engine::Access::Read)?;
-        let (want,())=observed::snapshot(&mut anchor,&pool,&init,locked,&database,&schema,&marker,|_|Ok(()))?;
+        let (want,())=observed::OriginalRead::new(locked,&database,&schema,&marker).snapshot(&mut anchor,&pool,&init,|_|Ok(()))?;
         Ok(Self { locking:locked, database, schema, marker, want, anchor, pool, init })
     }
     fn unchanged(&self) -> io::Result<()> {

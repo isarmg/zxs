@@ -29,9 +29,19 @@ pub(in crate::sqlite_install::pair) struct Choice {
     pub(in crate::sqlite_install::pair) folder:String,
     pub(in crate::sqlite_install::pair) mode:Mode,
 }
+#[derive(Debug)]
+pub(in crate::sqlite_install::pair) struct FirstShares{
+    pub(in crate::sqlite_install::pair) host:String,
+    pub(in crate::sqlite_install::pair) endpoints:Vec<Endpoint>,
+    pub(in crate::sqlite_install::pair) choices:Vec<Choice>,
+    pub(in crate::sqlite_install::pair) recycle:RecycleName,
+}
 #[derive(Clone,Copy)]
-struct FreshScope{subject:ExplicitSubject,helper:[u8;32],init_sha:[u8;32]}
+pub(in crate::sqlite_install::pair) struct FreshScope{subject:ExplicitSubject,helper:[u8;32],init_sha:[u8;32]}
 impl FreshScope{
+    pub(in crate::sqlite_install::pair) fn new(subject:ExplicitSubject,helper:[u8;32],init_sha:[u8;32])->Self{
+        Self{subject,helper,init_sha}
+    }
     fn encode(self,out:&mut Vec<u8>)->io::Result<()>{
         require_v18()?;
         if self.helper==[0;32]||self.init_sha==[0;32]{return Err(bad_question());}
@@ -207,10 +217,11 @@ impl ResolvedRust {
     pub(in crate::sqlite_install::pair) fn plan(&self)->&crate::smb_profile::rust_first::RustPlan{&self.plan}
     pub(in crate::sqlite_install::pair) fn preview(&self)->&str{&self.original.paths_preview}
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{self.original.require()}
-    pub(in crate::sqlite_install::pair) fn fresh(parent:&FreshParent,system:&Path,origin:crate::smb_profile::rust_first::Origin,host:String,
-        endpoints:Vec<Endpoint>,choices:Vec<Choice>,recycle:RecycleName,subject:ExplicitSubject,helper:[u8;32],init_sha:[u8;32])->io::Result<Self>{
+    pub(in crate::sqlite_install::pair) fn fresh(parent:&FreshParent,system:&Path,origin:crate::smb_profile::rust_first::Origin,
+        shares:FirstShares,scope:FreshScope)->io::Result<Self>{
+        let FirstShares{host,endpoints,choices,recycle}=shares;
         parent.before_original_sql(&origin.instance)?;
-        let (original,plan)=Originals::select(system,(origin.pool,origin.init),choices,FreshScope{subject,helper,init_sha},
+        let (original,plan)=Originals::select(system,(origin.pool,origin.init),choices,scope,
             move|folders|crate::smb_profile::rust_first::RustPlan::selected(origin,host,endpoints,folders,recycle).map_err(bad))?;
         parent.before_original_sql(&origin.instance)?;
         Ok(Self{original,plan})
@@ -391,7 +402,7 @@ pub(crate) fn worker()->io::Result<()>{
         None=>Pinned::already_mounted(path,PathKind::StorageRoot)?,
     };
     if place(&pin)?!=location{return Err(bad_question());}
-    let system=SelectedSystem::from_origin(pin,host,uid,gid)?.from_lent_ex(lease)?;
+    let system=SelectedSystem::from_origin(pin,host,uid,gid)?.hold_lent_ex(lease)?;
     let q=match q{
         QuestionKind::Fresh(q)=>q,
         QuestionKind::Retirement(q)=>return q.inspect(&system,&channel,&scope,parent),

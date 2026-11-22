@@ -1,6 +1,7 @@
 //! Real non-secret prompt and phase order on a newly created disposable PTY.
 //! No ZXS authority, host credentials, pool paths or prepared file writes.
 use super::{filesystem_phase,PublicConfirmation};
+use crate::fixture_child::FixtureChild;
 use rustix::{fs::{OFlags,fcntl_getfl,fcntl_setfl},io::Errno,
     process::{getpid,getuid,ioctl_tiocsctty,setsid},
     pty::{OpenptFlags,grantpt,ioctl_tiocgptpeer,openpt,unlockpt},termios::tcsetpgrp};
@@ -28,9 +29,9 @@ fn fresh_v18_one_real_consent_allows_original_scoped_phase_without_second_prompt
     grantpt(&master).unwrap();unlockpt(&master).unwrap();
     let slave=File::from(ioctl_tiocgptpeer(&master,flags).unwrap());
     fcntl_setfl(&master,fcntl_getfl(&master).unwrap()|OFlags::NONBLOCK).unwrap();
-    let mut child=Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])
+    let mut child=FixtureChild::spawn(Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])
         .env(CHILD,"1").stdin(Stdio::from(slave.try_clone().unwrap())).stdout(Stdio::from(slave.try_clone().unwrap()))
-        .stderr(Stdio::from(slave)).spawn().unwrap();
+        .stderr(Stdio::from(slave))).unwrap();
     let pass=(||->io::Result<()>{
         let stop=Instant::now()+Duration::from_secs(12);
         let mut observed=Vec::new();let mut stage=0;let mut buf=[0;2048];
@@ -68,6 +69,5 @@ fn fresh_v18_one_real_consent_allows_original_scoped_phase_without_second_prompt
         }
         Err(io::Error::other(format!("fixture timed out at {stage}: {}",String::from_utf8_lossy(&observed))))
     })();
-    if pass.is_err(){let _=child.kill();let _=child.wait();}
     pass.unwrap();
 }

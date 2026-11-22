@@ -75,17 +75,17 @@ fn give(fd:&impl AsFd)->io::Result<OwnedFd> {
 
 pub(super) fn check(runtime:&Runtime,image:&Sealed)->io::Result<super::Report> {
     runtime.require_format(Format::Fat32)?;
-    let (code,out,err,status)=invoke(runtime,Operand::Sealed(image.file()))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::Sealed(image.file()))?;
     classify(code,&out,&err,&status,image.geometry().data_clusters)
 }
 pub(super) fn check_fat32_work(runtime:&Runtime,work:&FatRepairImage)->io::Result<super::Report>{
     runtime.require_format(Format::Fat32)?;work.require()?;
-    let (code,out,err,status)=invoke(runtime,Operand::LeasedFat32(work))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::LeasedFat32(work))?;
     work.require()?;classify(code,&out,&err,&status,work.extent().view.data_clusters)
 }
 pub(super) fn repair_fat32(runtime:&Runtime,work:&repair::Writable<'_>,source:&FatRepairImage)->io::Result<i32>{
     runtime.require_format(Format::Fat32)?;source.require()?;work.require()?;
-    let (code,out,err,status)=invoke(runtime,Operand::RepairFat32{work,source})?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::RepairFat32{work,source})?;
     source.require()?;work.require()?;
     if !preen_exit(&status,code)||!fat_preen_summary(code,&out,&err,source.extent().view.data_clusters){
         return Err(invalid("FAT32 automatic repair was incomplete or needs manual attention; no final copy published"));
@@ -94,7 +94,7 @@ pub(super) fn repair_fat32(runtime:&Runtime,work:&repair::Writable<'_>,source:&F
 }
 pub(super) fn check_exfat(runtime:&Runtime,image:&ExfatSealed)->io::Result<super::exfat::Report>{
     runtime.require_format(Format::Exfat)?;
-    let (code,out,err,status)=invoke(runtime,Operand::Sealed(image.file()))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::Sealed(image.file()))?;
     if !delivered(&status,code){return Err(invalid("exFAT checker delivery and actual exit not confirmed"));}
     super::exfat::classify(code,&out,&err,image.frame())
 }
@@ -102,14 +102,14 @@ pub(super) fn check_exfat(runtime:&Runtime,image:&ExfatSealed)->io::Result<super
 // reopened work inode, so checking a large new copy does not duplicate it in RAM.
 pub(super) fn check_exfat_work(runtime:&Runtime,work:&super::exfat::RepairImage)->io::Result<super::exfat::Report>{
     runtime.require_format(Format::Exfat)?;work.require()?;
-    let (code,out,err,status)=invoke(runtime,Operand::LeasedExfat(work))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::LeasedExfat(work))?;
     work.require()?;
     if !delivered(&status,code){return Err(invalid("exFAT recheck delivery and actual exit not confirmed"));}
     super::exfat::classify(code,&out,&err,work.extent().view)
 }
 pub(super) fn repair_exfat(runtime:&Runtime,work:&repair::Writable<'_>,source:&super::exfat::RepairImage)->io::Result<i32>{
     runtime.require_format(Format::Exfat)?;source.require()?;work.require()?;
-    let (code,out,err,status)=invoke(runtime,Operand::RepairExfat{work,source})?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::RepairExfat{work,source})?;
     source.require()?;work.require()?;
     if !preen_exit(&status,code)||!super::exfat::preen_summary(code,&out,&err,source.extent().view){
         return Err(invalid("exFAT automatic repair was incomplete or needs manual attention; no final copy published"));
@@ -118,14 +118,14 @@ pub(super) fn repair_exfat(runtime:&Runtime,work:&repair::Writable<'_>,source:&s
 }
 pub(super) fn check_ext4(runtime:&Runtime,image:&ext4::Image)->io::Result<ext4::Report>{
     runtime.require_ext4()?;
-    let (code,out,err,status)=invoke(runtime,Operand::LeasedExt4(image))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::LeasedExt4(image))?;
     image.require()?;
     if !delivered(&status,code){return Err(invalid("e2fsck delivery or actual exit not confirmed"));}
     Ok(ext4::classify(code,&out,&err,image.extent()))
 }
 pub(super) fn repair_ext4(runtime:&Runtime,work:&repair::Writable<'_>,source:&ext4::Image)->io::Result<i32>{
     runtime.require_ext4()?;source.require()?;work.require()?;
-    let (code,out,_err,status)=invoke(runtime,Operand::RepairExt4{work,source})?;
+    let Captured{code,out,status,..}=invoke(runtime,Operand::RepairExt4{work,source})?;
     source.require()?;work.require()?;
     if !preen_exit(&status,code)
         ||!ext4::preen_summary(&out,ext4::read_frame(work.file(),work.length())?){
@@ -136,21 +136,21 @@ pub(super) fn repair_ext4(runtime:&Runtime,work:&repair::Writable<'_>,source:&ex
 fn preen_exit(status:&[u8],code:i32)->bool{matches!(code,0|1)&&delivered(status,code)}
 pub(super) fn check_xfs(runtime:&Runtime,image:&xfs::Image)->io::Result<xfs::Report>{
     runtime.require_xfs()?;
-    let (code,out,err,status)=invoke(runtime,Operand::LeasedXfs(image))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::LeasedXfs(image))?;
     image.require()?;
     if !delivered(&status,code){return Err(invalid("xfs_repair delivery or actual exit not confirmed"));}
     Ok(xfs::classify(code,&out,&err,image.extent()))
 }
 pub(super) fn observe_ntfs(runtime:&Runtime,image:&ntfs::Image)->io::Result<ntfs::Report>{
     runtime.require_ntfs()?;
-    let (code,out,err,status)=invoke(runtime,Operand::LeasedNtfs(image))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::LeasedNtfs(image))?;
     image.require()?;
     if !delivered(&status,code){return Err(invalid("ntfsfix delivery or actual exit not confirmed"));}
     Ok(ntfs::classify(code,&out,&err,image.extent()))
 }
 pub(super) fn check_btrfs(runtime:&Runtime,image:&btrfs::Image)->io::Result<btrfs::Report>{
     runtime.require_btrfs()?;
-    let (code,out,err,status)=invoke(runtime,Operand::LeasedBtrfs(image))?;
+    let Captured{code,out,err,status}=invoke(runtime,Operand::LeasedBtrfs(image))?;
     image.require()?;
     if !delivered(&status,code){return Err(invalid("Btrfs checker delivery or actual exit not confirmed"));}
     Ok(btrfs::classify(code,&out,&err,image.extent()))
@@ -195,7 +195,8 @@ impl<'a> Operand<'a>{
         }
     }
 }
-fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
+struct Captured{code:i32,out:Vec<u8>,err:Vec<u8>,status:Vec<u8>}
+fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<Captured>{
     let repairing_ext=matches!(copy,Operand::RepairExt4{..});
     let repairing_fat=matches!(copy,Operand::RepairExfat{..}|Operand::RepairFat32{..});
     let ext=repairing_ext||matches!(copy,Operand::LeasedExt4(_));
@@ -279,11 +280,11 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<(i32,Vec<u8>,Vec<u8>,Ve
     let lease=copy.lease();
     let result=collect(&mut group,File::from(rstatus),if lease.is_some(){LEASED_LIMIT}else{LIMIT},lease);
     let reaped=group.finish()?;
-    let (code,out,err,status)=result?;
+    let captured=result?;
     not_cancelled()?;
-    if reaped.leader_code!=Some(code){return Err(invalid("monitor exit did not match its independently reaped status"));}
+    if reaped.leader_code!=Some(captured.code){return Err(invalid("monitor exit did not match its independently reaped status"));}
     runtime.recheck()?;
-    Ok((code,out,err,status))
+    Ok(captured)
 }
 
 fn not_cancelled()->io::Result<()> {
@@ -302,7 +303,7 @@ fn drain(f:&mut impl Read,v:&mut Vec<u8>,max:usize)->io::Result<bool>{
         Err(e) if e.kind()==io::ErrorKind::Interrupted=>continue,Err(e)=>return Err(e),
     }} Ok(false)
 }
-fn collect(group:&mut Group,mut status:File,limit:Duration,lease:Option<&File>)->io::Result<(i32,Vec<u8>,Vec<u8>,Vec<u8>)>{
+fn collect(group:&mut Group,mut status:File,limit:Duration,lease:Option<&File>)->io::Result<Captured>{
     let mut out=group.child.stdout.take().ok_or_else(||invalid("missing checker output pipe"))?;
     let mut err=group.child.stderr.take().ok_or_else(||invalid("missing checker error pipe"))?;
     nonblock(&out)?;nonblock(&err)?;nonblock(&status)?;
@@ -315,7 +316,7 @@ fn collect(group:&mut Group,mut status:File,limit:Duration,lease:Option<&File>)-
         let a=drain(&mut out,&mut o,OUTPUT-e.len())?;let b=drain(&mut err,&mut e,OUTPUT-o.len())?;
         let c=drain(&mut status,&mut s,STATUS)?;
         if let Some(code)=group.peek_exit()? && a && b && c {
-            return Ok((code,o,e,s));
+            return Ok(Captured{code,out:o,err:e,status:s});
         }
         thread::sleep(Duration::from_millis(5));
     }

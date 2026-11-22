@@ -68,7 +68,7 @@ impl ProcessFiles{
         Ok(actual)
     }
     fn exe(&self,id:Pid)->io::Result<File>{self.kernel_link(&self.directory(id)?,OsStr::new("exe"),OFlags::PATH)}
-    fn from_pin(&self,fd:&File)->io::Result<File>{
+    fn open_pinned(&self,fd:&File)->io::Result<File>{
         let me=self.directory(getpid())?;
         let files=passive_proc_child(&me,OsStr::new("fd"),self.mount,true)?;
         self.kernel_link(&files,OsStr::new(&fd.as_raw_fd().to_string()),OFlags::RDONLY|OFlags::NONBLOCK)
@@ -231,7 +231,7 @@ impl ForegroundElf{
         let stamp=Stamp::at(&original)?;
         if !role.accepts(stamp){return Err(no());}
         local_data_filesystem(&original)?;
-        let reader=process.from_pin(&original)?;
+        let reader=process.open_pinned(&original)?;
         if Stamp::at(&reader)?!=stamp{return Err(no());}
         check_image_file(&reader,stamp)?;
         require_application_text(&process,&reader,stamp)?;
@@ -341,7 +341,7 @@ mod tests{
     fn self_elf_owned_test_process_exe_is_the_mapping_of_this_compiled_code(){
         // The unit-test process only. No launch, protected path or live data.
         let proc=ProcessFiles::select().unwrap();
-        let pin=proc.exe(getpid()).unwrap();let stamp=Stamp::at(&pin).unwrap();let read=proc.from_pin(&pin).unwrap();
+        let pin=proc.exe(getpid()).unwrap();let stamp=Stamp::at(&pin).unwrap();let read=proc.open_pinned(&pin).unwrap();
         require_application_text(&proc,&read,stamp).unwrap();
         let foreign=Stamp{entity:Entity{ino:stamp.entity.ino^1,..stamp.entity},..stamp};
         assert!(require_application_text(&proc,&read,foreign).is_err());

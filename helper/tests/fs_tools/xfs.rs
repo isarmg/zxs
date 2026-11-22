@@ -14,10 +14,11 @@ fn sb()->[u8;HEADER]{
 fn wide(s:&mut [u8;HEADER],i:usize,n:u64){s[i..i+8].copy_from_slice(&n.to_be_bytes());}
 fn set(s:&mut [u8;HEADER],i:usize,n:u32){s[i..i+4].copy_from_slice(&n.to_be_bytes());}
 const BYTES:u64=168_000*4096;
+const _:()=assert!(BYTES>128<<20);
 #[test]
 fn only_a_full_single_volume_with_consistent_internal_log_and_no_rt_is_admitted(){
     let full=sb();
-    assert!(frame(&full,BYTES).is_ok());assert!(BYTES>128<<20);
+    assert!(frame(&full,BYTES).is_ok());
     let bigger=(1u64<<44)+4096;
     assert_eq!(frame(&full,bigger).unwrap().filesystem_bytes,BYTES);
     assert!(frame(&full,BYTES-1).is_err());

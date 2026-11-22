@@ -122,7 +122,7 @@ pub(crate) fn account_worker()->io::Result<()>{
     }else{Pinned::already_mounted(&m.system,PathKind::StorageRoot)?};
     let e=pinned.entity();
     if [e.dev,e.ino,pinned.require_same_named_mount()?.id]!=m.entity{return Err(bad("different original SYSTEM"));}
-    let locked=SelectedSystem::from_origin(pinned,host,uid,gid)?.from_lent_ex(lease)?;
+    let locked=SelectedSystem::from_origin(pinned,host,uid,gid)?.hold_lent_ex(lease)?;
     let cut=match (m.authority,deployed.as_ref()){
         (Authority::Fresh(f),None)=>RustAccountCut::open_new_first(&locked,&m.plan,m.order,f.init_sha,f.database)?,
         (Authority::Deployed(_),Some(actual))=>RustAccountCut::open_deployed_reset(&locked,&m.plan,m.order,actual)?,

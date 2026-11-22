@@ -1,6 +1,7 @@
 //! Only one real non-secret reset challenge and one quiet-mode transition
 //! on a disposable PTY. Never launch a worker or read credential input.
 use super::{PublicConfirmation,begin_held_quiet,same_mode};
+use crate::fixture_child::FixtureChild;
 use rustix::{fs::{OFlags,fcntl_getfl,fcntl_setfl},io::Errno,process::{getpid,getuid,ioctl_tiocsctty,setsid},
     pty::{OpenptFlags,grantpt,ioctl_tiocgptpeer,openpt,unlockpt},termios::{LocalModes,tcgetattr,tcsetpgrp}};
 use std::{fs::File,io,os::fd::AsFd,process::{Command,Stdio},time::{Duration,Instant}};
@@ -30,9 +31,9 @@ fn shared_account_reset_real_public_challenge_releases_the_mask_before_hidden_mo
     grantpt(&master).unwrap();unlockpt(&master).unwrap();
     let slave=File::from(ioctl_tiocgptpeer(&master,flags).unwrap());
     fcntl_setfl(&master,fcntl_getfl(&master).unwrap()|OFlags::NONBLOCK).unwrap();
-    let mut sub=Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])
+    let mut sub=FixtureChild::spawn(Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])
         .env(CHILD,"1").stdin(Stdio::from(slave.try_clone().unwrap()))
-        .stdout(Stdio::from(slave.try_clone().unwrap())).stderr(Stdio::from(slave)).spawn().unwrap();
+        .stdout(Stdio::from(slave.try_clone().unwrap())).stderr(Stdio::from(slave))).unwrap();
     let result=(||->io::Result<()>{
         let end=Instant::now()+Duration::from_secs(8);
         let marker="输入 RESET-ZXS-ACCOUNT ".as_bytes();
@@ -44,19 +45,18 @@ fn shared_account_reset_real_public_challenge_releases_the_mask_before_hidden_mo
                 Err(e)=>return Err(e.into()),
             }
             if out.len()>32768{return Err(io::Error::other("reset PTY report exceeded its budget"));}
-            if !answered {
-                if let Some(start)=out.windows(marker.len()).position(|v|v==marker).map(|p|p+marker.len()){
-                    if let Some(key)=out.get(start..start+32){
-                        if !key.iter().all(|b|b.is_ascii_digit()||matches!(b,b'a'..=b'f')){
-                            return Err(io::Error::other("not a real public reset challenge"));
-                        }
-                        let answer=[b"RESET-ZXS-ACCOUNT ",key,b"\n"].concat();
-                        if rustix::io::write(&master,answer.as_slice())?!=answer.len(){
-                            return Err(io::Error::other("short disposable challenge response"));
-                        }
-                        answered=true;
-                    }
+            if !answered
+                && let Some(start)=out.windows(marker.len()).position(|v|v==marker).map(|p|p+marker.len())
+                && let Some(key)=out.get(start..start+32)
+            {
+                if !key.iter().all(|b|b.is_ascii_digit()||matches!(b,b'a'..=b'f')){
+                    return Err(io::Error::other("not a real public reset challenge"));
                 }
+                let answer=[b"RESET-ZXS-ACCOUNT ",key,b"\n"].concat();
+                if rustix::io::write(&master,answer.as_slice())?!=answer.len(){
+                    return Err(io::Error::other("short disposable challenge response"));
+                }
+                answered=true;
             }
             if let Some(status)=sub.try_wait()?{
                 return if status.success()&&answered&&out.windows(DONE.len()).any(|v|v==DONE){Ok(())}
@@ -66,6 +66,5 @@ fn shared_account_reset_real_public_challenge_releases_the_mask_before_hidden_mo
         }
         Err(io::Error::other("reset PTY fixture timed out"))
     })();
-    if result.is_err(){let _=sub.kill();let _=sub.wait();}
     result.unwrap();
 }

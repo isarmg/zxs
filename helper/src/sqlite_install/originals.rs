@@ -81,11 +81,11 @@ impl SelectedSystem {
     }
     /// The dedicated host issuer already owns this OFD and retains it through
     /// the action. Do NOT open a second EX or convert the shared description.
-    pub(super) fn from_lent_ex(self,dir:File)->io::Result<LockedSystem>{
+    pub(super) fn hold_lent_ex(self,dir:File)->io::Result<LockedSystem>{
         crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
         self.with_descriptor(dir,SystemLease::LentExclusive)
     }
-    pub(super) fn from_lent_sh(self,dir:File)->io::Result<LockedSystem>{
+    pub(super) fn hold_lent_sh(self,dir:File)->io::Result<LockedSystem>{
         crate::maintenance::diagnostic_worker(self.uid,self.gid)?;
         self.with_descriptor(dir,SystemLease::LentRead)
     }

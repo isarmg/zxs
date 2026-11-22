@@ -8,18 +8,18 @@ const LINK_BYTES:usize=4096;
 const DEPTH:usize=24;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-enum Subsystem{Block,Scsi,Nvme,NvmeSubsystem,Virtio,Mmc}
+enum Subsystem{Block,Scsi,Nvme,NvmeGroup,Virtio,Mmc}
 impl Subsystem{
     fn named(raw:&[u8])->Field<Self>{
         match raw{
             b"block"=>Ok(Self::Block),b"scsi"=>Ok(Self::Scsi),b"nvme"=>Ok(Self::Nvme),
-            b"nvme-subsystem"=>Ok(Self::NvmeSubsystem),b"virtio"=>Ok(Self::Virtio),b"mmc"=>Ok(Self::Mmc),
+            b"nvme-subsystem"=>Ok(Self::NvmeGroup),b"virtio"=>Ok(Self::Virtio),b"mmc"=>Ok(Self::Mmc),
             _=>Err(Reason::Unsupported),
         }
     }
     fn label(self)->&'static str{
         match self{
-            Self::Block=>"block",Self::Scsi=>"scsi",Self::Nvme=>"nvme",Self::NvmeSubsystem=>"nvme-subsystem",
+            Self::Block=>"block",Self::Scsi=>"scsi",Self::Nvme=>"nvme",Self::NvmeGroup=>"nvme-subsystem",
             Self::Virtio=>"virtio",Self::Mmc=>"mmc",
         }
     }

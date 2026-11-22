@@ -167,7 +167,7 @@ impl Birth{
     }
 }
 
-struct Reset{scope:Core,prior:ActiveRustMeta,target:ActiveRustMeta,digest:[u8;32]}
+struct Reset{scope:Core,prior:Box<ActiveRustMeta>,target:ActiveRustMeta,digest:[u8;32]}
 impl Reset{
     fn new(prior:ActiveRustMeta,op:Id,actor:Id,approval:Id,record:Id)->io::Result<Self>{
         prior.record_prefix()?;
@@ -178,10 +178,10 @@ impl Reset{
         let mut h=target.request(RESET,actor,approval)?;
         for v in [op,prior.op,prior.record]{h.update(v);}
         h.update(prior.generation.to_be_bytes());h.update(record);
-        Ok(Self{scope,prior,target,digest:h.finalize().into()})
+        Ok(Self{scope,prior:Box::new(prior),target,digest:h.finalize().into()})
     }
     fn stage_identity(&self,tx:&Transaction<'_>,plan:&RustPlan)->io::Result<()>{
-        if collision(tx,&self.scope.op)?||active_at(tx,plan)?!=self.prior{return Err(wrong());}
+        if collision(tx,&self.scope.op)?||active_at(tx,plan)?!=*self.prior{return Err(wrong());}
         forbid_unsettled_births(tx,self.prior.op)?;
         let t=&self.target;let c=self.scope;
         one(tx.execute("INSERT INTO main.credential_reset(op_id,previous_op,generation,approval_ref,bound_sha) VALUES(?1,?2,?3,?4,?5)",
@@ -238,7 +238,7 @@ impl RustChange{
     fn head(&self)->&ActiveRustMeta{match &self.actual{Change::Setup(b)=>&b.target,Change::Reset(r)=>&r.target}}
     pub(in crate::sqlite_install::pair) fn target(&self)->ActiveRustMeta{self.head().clone()}
     pub(in crate::sqlite_install::pair) fn previous(&self)->Option<&ActiveRustMeta>{
-        match &self.actual{Change::Setup(_)=>None,Change::Reset(r)=>Some(&r.prior)}
+        match &self.actual{Change::Setup(_)=>None,Change::Reset(r)=>Some(r.prior.as_ref())}
     }
     fn same(&self,b:&Self)->bool{self.digest()==b.digest()&&self.head()==b.head()&&self.previous()==b.previous()}
 }
