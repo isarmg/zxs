@@ -63,6 +63,30 @@ fn record_with_storage(parent:&PrivateTemp,state:InitState,extra:&str,recycle:Op
     drop(b);drop(dir);(s,pool)
 }
 #[test]
+fn compiled_schema_template_reuses_only_success_and_keeps_actual_shapes_separate(){
+    let cache=Mutex::new(None);
+    let error=cached_schema_template(&cache,||Err(io::ErrorKind::OutOfMemory.into())).unwrap_err();
+    assert_eq!(error.kind(),io::ErrorKind::OutOfMemory);
+    let expected=cached_schema_template(&cache,Connection::expected_schema).unwrap();
+    std::thread::scope(|scope|{
+        for _ in 0..2{
+            scope.spawn(||assert_eq!(cached_schema_template(&cache,||unreachable!()).unwrap(),expected));
+        }
+    });
+
+    let ddl=CString::new(SCHEMA.replace(
+        "CREATE INDEX pending_shared_reset ON operation(op_id) WHERE kind=9 AND state=0;",
+        "CREATE INDEX pending_shared_reset ON operation(op_id) WHERE kind=4 AND state=0;",
+    )).unwrap();
+    let mut raw=ptr::null_mut();
+    // SAFETY: fixed test DDL and one initialized output; this DB is in memory.
+    check(unsafe{zxs_sql_template(ddl.as_ptr(),&mut raw)}).unwrap();
+    let different=Connection(raw);
+    assert_ne!(different.shape().unwrap(),expected);
+    assert_eq!(Connection::expected_schema().unwrap(),expected);
+}
+
+#[test]
 #[ignore="source-only qualification with non-root storage UID and dependable local Linux locks"]
 fn actual_database_is_readonly_and_idle_online_ofd_excludes_a_separate_offline_holder(){
     let t=PrivateTemp::under(&std::env::temp_dir());let(s,p)=record(&t,InitState::Committed,"");

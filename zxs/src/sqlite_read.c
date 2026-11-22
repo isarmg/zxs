@@ -65,7 +65,7 @@ int zxs_sql_named(sqlite3 *db) {
     int rc=sqlite3_file_control(db,"main",SQLITE_FCNTL_HAS_MOVED,&moved);
     return rc==SQLITE_OK && moved ? SQLITE_CANTOPEN : rc;
 }
-/* Compile the canonical public DDL once per observer, outside any real
+/* Compile the canonical public DDL once per process, outside any real
  * pool transaction. No user rows, persisted DB, path lookup or ATTACH. The
  * caller retains only the digest of the actual normalized SQLite objects. */
 int zxs_sql_template(const char *ddl,sqlite3 **result) {

@@ -248,26 +248,29 @@ fn recover(src:&InitialReader,op:OperationId,file:FileId,allowed:&Allowed<'_>,
     Ok(())
 }
 
+fn recovery_page(db:&Connection,after:OperationId)->io::Result<Vec<(OperationId,FileId)>>{
+    let q=db.prepare(c"SELECT r.rename_op,r.file_id
+        FROM main.operation o JOIN main.file_rename r ON r.rename_op=o.op_id
+        WHERE o.kind=14 AND o.state=0 AND o.op_id>?1
+          AND NOT EXISTS(SELECT 1 FROM main.file_rename_abort a WHERE a.rename_op=o.op_id)
+        ORDER BY o.op_id LIMIT 16")?;
+    q.bind_bytes(1,&after.0)?;
+    let mut rows=Vec::with_capacity(16);
+    while work_record::start_one(&q)?{rows.push((OperationId(q.array(0)?),FileId(q.array(1)?)));}
+    Ok(rows)
+}
+
 pub(super) fn recovery_loop(src:&InitialReader,allowed:impl Fn(&Connection,&Catalog,ShareId,VolumeId)->io::Result<()>,
     alive:impl Fn()->io::Result<()>){
     let mut after=OperationId([0;16]);
     while alive().is_ok(){
-        let page=src.at(|db,_|{
-            let q=db.prepare(c"SELECT r.rename_op,r.file_id,
-                EXISTS(SELECT 1 FROM main.file_rename_abort a WHERE a.rename_op=o.op_id)
-                FROM main.operation o JOIN main.file_rename r ON r.rename_op=o.op_id
-                WHERE o.kind=14 AND o.state=0 AND o.op_id>?1 ORDER BY o.op_id LIMIT 16")?;
-            q.bind_bytes(1,&after.0)?;
-            let mut rows=Vec::with_capacity(16);
-            while work_record::start_one(&q)?{rows.push((OperationId(q.array(0)?),FileId(q.array(1)?),q.byte(2)?==1));}
-            Ok(rows)
-        });
+        let page=src.at(|db,_|recovery_page(db,after));
         let pause=match page{
             Ok(rows) if !rows.is_empty()=>{
-                for (op,file,aborted) in rows{
+                for (op,file) in rows{
                     after=op;
                     if alive().is_err(){break;}
-                    if !aborted{let _=recover(src,op,file,&allowed,&alive);}
+                    let _=recover(src,op,file,&allowed,&alive);
                 }
                 250
             },
@@ -276,6 +279,42 @@ pub(super) fn recovery_loop(src:&InitialReader,allowed:impl Fn(&Connection,&Cata
         thread::sleep(Duration::from_millis(pause));
     }
 }
+
+#[cfg(test)]
+#[test]
+fn ordinary_rename_recovery_page_does_not_fill_with_aborted_history(){
+    use super::super::{check,zxs_sql_template};
+    let mut raw=std::ptr::null_mut();
+    // SAFETY: fixed test SQL and an initialized output; no actual pool is opened.
+    check(unsafe{zxs_sql_template(c"
+        CREATE TABLE operation(op_id BLOB PRIMARY KEY,kind INTEGER,state INTEGER) STRICT, WITHOUT ROWID;
+        CREATE TABLE file_rename(rename_op BLOB PRIMARY KEY,file_id BLOB) STRICT, WITHOUT ROWID;
+        CREATE TABLE file_rename_abort(rename_op BLOB PRIMARY KEY) STRICT, WITHOUT ROWID;
+    ".as_ptr(),&mut raw)}).unwrap();
+    let db=Connection(raw);
+    for i in 1..=20{
+        let op=[i;16];let file=[i+64;16];
+        let add=db.prepare(c"INSERT INTO operation VALUES (?1,?2,?3)").unwrap();
+        add.bind_bytes(1,&op).unwrap();
+        add.bind_integer(2,if i==19{16}else{14}).unwrap();
+        add.bind_integer(3,i64::from(i==18)).unwrap();
+        add.done().unwrap();
+        let rename=db.prepare(c"INSERT INTO file_rename VALUES (?1,?2)").unwrap();
+        rename.bind_bytes(1,&op).unwrap();
+        rename.bind_bytes(2,&file).unwrap();
+        rename.done().unwrap();
+        if i<=16{
+            let abort=db.prepare(c"INSERT INTO file_rename_abort VALUES (?1)").unwrap();
+            abort.bind_bytes(1,&op).unwrap();
+            abort.done().unwrap();
+        }
+    }
+    let first=(OperationId([17;16]),FileId([81;16]));
+    let second=(OperationId([20;16]),FileId([84;16]));
+    assert_eq!(recovery_page(&db,OperationId([0;16])).unwrap(),[first,second]);
+    assert_eq!(recovery_page(&db,first.0).unwrap(),[second]);
+}
+
 #[cfg(test)]
 pub(super) fn recover_for_test(src:&InitialReader,op:OperationId,file:FileId,
     allowed:impl Fn(&Connection,&Catalog,ShareId,VolumeId)->io::Result<()>)->io::Result<()>{

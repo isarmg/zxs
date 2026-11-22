@@ -3,7 +3,7 @@
 //! The directory OFD remains held across idle time; no SQL transaction does.
 use super::{BirthRow,Catalog,ClaimRow,InitState,SCHEMA,lease::SystemDir,role_at};
 use crate::{OperationId,PoolId,VolumeId,fs::{self,ComponentLimit,ControlRead,invalid}};
-use std::{ffi::{CStr,CString,OsStr,c_char,c_int},io,os::unix::ffi::OsStrExt,path::{Path,PathBuf},ptr};
+use std::{ffi::{CStr,CString,OsStr,c_char,c_int},io,os::unix::ffi::OsStrExt,path::{Path,PathBuf},ptr,sync::Mutex};
 
 #[cfg(test)]
 use std::ffi::c_void;
@@ -33,6 +33,13 @@ fn check(rc:c_int)->io::Result<()>{
     Err(io::Error::new(kind,format!("SQLite {rc}: {why}")))
 }
 struct Connection(*mut Db);
+fn cached_schema_template(cache:&Mutex<Option<[u8;32]>>,compile:impl FnOnce()->io::Result<[u8;32]>)->io::Result<[u8;32]>{
+    let mut stored=cache.lock().map_err(|_|io::Error::other("canonical SYSTEM schema template lock poisoned"))?;
+    if let Some(digest)=*stored{return Ok(digest);}
+    let digest=compile()?;
+    *stored=Some(digest);
+    Ok(digest)
+}
 impl Connection{
     fn open(dir:&SystemDir,writer:bool)->io::Result<Self>{
         let mut p=ptr::null_mut();
@@ -41,10 +48,15 @@ impl Connection{
         if p.is_null(){return Err(invalid("SQLite returned no live connection"));}Ok(Self(p))
     }
     fn expected_schema()->io::Result<[u8;32]>{
-        let ddl=CString::new(SCHEMA).expect("compiled static SQL is NUL-free");
-        let mut p=ptr::null_mut();check(unsafe{zxs_sql_template(ddl.as_ptr(),&mut p)})?;
-        if p.is_null(){return Err(invalid("SQLite returned no fixed in-memory template"));}
-        Connection(p).shape() // reference connection closes here, before any real read transaction
+        // Only the fixed compiled-in DDL and vendored SQLite feed this cache.
+        // Actual DB schema, identity and catalog are checked on every cut.
+        static TEMPLATE:Mutex<Option<[u8;32]>>=Mutex::new(None);
+        cached_schema_template(&TEMPLATE,||{
+            let ddl=CString::new(SCHEMA).expect("compiled static SQL is NUL-free");
+            let mut p=ptr::null_mut();check(unsafe{zxs_sql_template(ddl.as_ptr(),&mut p)})?;
+            if p.is_null(){return Err(invalid("SQLite returned no fixed in-memory template"));}
+            Connection(p).shape() // close the memory-only reference before any real read transaction
+        })
     }
     fn fixed(&self,sql:&CStr)->io::Result<()>{
         let s=self.prepare(sql)?;let rc=s.step();
