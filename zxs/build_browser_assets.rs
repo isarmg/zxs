@@ -110,7 +110,8 @@ fn verified_stage(dir:&Path,expected:[u8;32])->io::Result<[Vec<u8>;SLOTS.len()]>
     for ((name,kind),out) in SLOTS.into_iter().zip(&mut files){
         let bytes=read(&dir.join(name))?;
         kind.require(&bytes)?;
-        stage.update(&[name.len() as u8])?;
+        let name_len=u8::try_from(name.len()).map_err(|_|invalid("browser stage slot name too long"))?;
+        stage.update(&[name_len])?;
         stage.update(name.as_bytes())?;
         stage.update(&(bytes.len() as u64).to_be_bytes())?;
         stage.update(&hash::digest(&bytes)?)?;
