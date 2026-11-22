@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [.github/workflows/linux-paired-build.yml]
+    paths: [.github/workflows/linux-paired-build.yml, zxs/browser-stage.sha256]
 
 permissions: {}
 
@@ -63,11 +63,24 @@ jobs:
           set -euo pipefail
           umask 077
           cd "$PAIR_BUILD/source/zxs"
+          # This recorded approval is separate from the staged assets.
+          pin=$(python3 -I - <<'PYTHON'
+          import os, re, stat, sys
+
+          with os.fdopen(os.open("browser-stage.sha256",
+                                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
+              if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                  sys.exit("browser-stage.sha256 must be a regular file")
+              raw = source.read(66)
+          if re.fullmatch(rb"[0-9a-f]{64}\n", raw) is None:
+              sys.exit("browser-stage.sha256 must contain 64 lowercase hex digits followed by one LF")
+          print(raw[:64].decode("ascii"))
+          PYTHON
+          )
           sha256sum build_browser.py build_release.py
           python3 build_browser.py "$PAIR_BUILD/rust/bin" \
             --wasm-std "$PAIR_BUILD/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz"
           assets="$PWD/target/browser-assets"
-          pin=5fbb375cc51b344806b06dd34d77a3ce9dde96d91f69db3950fe1378120c55ce
           python3 build_release.py "$PAIR_BUILD/rust/bin" --browser-assets "$assets" --browser-asset-pin "$pin"
           python3 -I - target/standalone/zxs "$assets" <<'PYTHON'
           from hashlib import sha256
