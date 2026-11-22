@@ -538,6 +538,13 @@ int observe_socket_peer(int fd, struct socket_peer_credentials *out) {
     return 0;
 }
 
+int observe_socket_unconnected(int fd) {
+    struct sockaddr_storage address;
+    memset(&address, 0, sizeof(address));
+    socklen_t bytes = sizeof(address);
+    return getpeername(fd, (struct sockaddr *)&address, &bytes) == -1 && errno == ENOTCONN ? 0 : -1;
+}
+
 #include <poll.h>
 
 struct readiness_slot { int fd; uint8_t interest, observed; };

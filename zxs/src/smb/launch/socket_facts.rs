@@ -1,4 +1,4 @@
-//! Read only the original socket options used by startup custody.
+//! Read only the original socket facts used by startup custody.
 use super::{Fault,Result};
 use std::{ffi::c_int,os::fd::{AsRawFd,BorrowedFd}};
 
@@ -15,6 +15,7 @@ struct PeerCredentials {pid:i32,uid:u32,gid:u32}
 unsafe extern "C"{
     fn observe_socket_integer(fd:c_int,kind:u8,out:*mut c_int)->c_int;
     fn observe_socket_cookie(fd:c_int,out:*mut u64)->c_int;
+    fn observe_socket_unconnected(fd:c_int)->c_int;
     #[cfg(target_arch="x86_64")]
     fn observe_socket_peer(fd:c_int,out:*mut PeerCredentials)->c_int;
 }
@@ -30,6 +31,11 @@ pub(super) fn cookie(fd:BorrowedFd<'_>)->Result<u64>{
     // SAFETY: the borrowed original and writable result live through the cookie getter.
     if unsafe{observe_socket_cookie(fd.as_raw_fd(),&raw mut value)}!=0{return Err(Fault::Handoff);}
     Ok(value)
+}
+pub(super) fn require_unconnected(fd:BorrowedFd<'_>)->Result<()>{
+    // SAFETY: the original borrowed socket lives through one fixed peer query.
+    if unsafe{observe_socket_unconnected(fd.as_raw_fd())}!=0{return Err(Fault::Handoff);}
+    Ok(())
 }
 #[cfg(target_arch="x86_64")]
 pub(super) fn peer_credentials(fd:BorrowedFd<'_>)->Result<(i32,u32,u32)>{

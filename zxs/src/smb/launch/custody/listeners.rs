@@ -90,12 +90,7 @@ impl Original{
             socket_facts::integer(socket,Integer::Accepting)?!=listening as i32||
             ip.is_ipv6()&&socket_facts::integer(socket,Integer::V6Only)?!=1||
             self.listener.local_addr().map_err(|_|Fault::Handoff)?!=SocketAddr::new(ip,PORT){return Err(Fault::Handoff);}
-        // SAFETY: bounded kernel query on the original socket; no peer path.
-        let mut address:libc::sockaddr_storage=unsafe{std::mem::zeroed()};
-        let mut n=size_of::<libc::sockaddr_storage>()as libc::socklen_t;
-        if unsafe{libc::getpeername(fd,(&raw mut address).cast(),&raw mut n)}!= -1||
-            std::io::Error::last_os_error().raw_os_error()!=Some(libc::ENOTCONN){return Err(Fault::Handoff);}
-        Ok(())
+        socket_facts::require_unconnected(socket)
     }
 }
 struct Interfaces(*mut libc::ifaddrs);
