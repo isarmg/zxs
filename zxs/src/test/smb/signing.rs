@@ -74,11 +74,16 @@ fn signing_mac_matches_rfc4493_at_every_buffer_split() {
             assert_eq!(mac.clone().finalize().as_bytes().as_slice(), answer.as_slice(), "{len}/{split}");
             mac.verify_slice(&answer).unwrap();
         }
-        let mut incorrect = answer;
-        incorrect[15] ^= 1;
         let mut mac = signer.mac().unwrap();
         mac.update(&input[..len]);
-        assert!(mac.verify_slice(&incorrect).is_err());
+        for offset in [0, 7, 15] {
+            let mut incorrect = answer.clone();
+            incorrect[offset] ^= 1;
+            assert!(mac.clone().verify_slice(&incorrect).is_err());
+        }
+        for wrong_len in [&[][..], &answer[..15], &[0; 17][..]] {
+            assert!(mac.clone().verify_slice(wrong_len).is_err());
+        }
     }
 }
 

@@ -7,9 +7,9 @@ use crate::smb::{connection::{sessions::{RunningServerGuid,challenge::tests::pro
     setup::tests::{body,frame},transport::DirectStream},session::{ChallengeService,HmacForSessionFixture as Hmac},
     wire::preauth::tests::synthetic_exchange};
 use crate::smb::session::SigningMacForSessionFixture;
-use digest::{KeyInit,Mac};
+use crate::smb::fixed_output::{KeyInit,Mac};
 use crate::smb::handshake_hash::{Sha256,Sha512};
-use digest::Digest;
+use crate::smb::fixed_output::Digest;
 use std::{collections::VecDeque,io::{self,ErrorKind,Read,Write},sync::{Arc,Mutex}};
 
 #[derive(Default)]

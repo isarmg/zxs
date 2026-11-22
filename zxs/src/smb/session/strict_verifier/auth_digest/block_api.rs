@@ -2,7 +2,7 @@
 //! Modified by ZXS for private module paths and fixed state erasure.
 
 use core::fmt;
-use digest::{
+use crate::smb::fixed_output::{
     HashMarker, Output,
     array::Array,
     block_api::{
@@ -94,13 +94,13 @@ impl fmt::Debug for Md5Core {
 
 impl Drop for Md5Core {
     fn drop(&mut self) {
-        use digest::zeroize::Zeroize;
+        use crate::smb::fixed_output::zeroize::Zeroize;
         self.state.zeroize();
         self.block_len.zeroize();
     }
 }
 
-impl digest::zeroize::ZeroizeOnDrop for Md5Core {}
+impl crate::smb::fixed_output::zeroize::ZeroizeOnDrop for Md5Core {}
 
 impl SerializableState for Md5Core {
     type SerializedStateSize = U24;

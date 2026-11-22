@@ -369,3 +369,29 @@ impl challenge::ChallengeService {
          frame::resp(None,false,Some(&e.three),Some(&e.client_list)))
     }
 }
+
+#[test]
+fn hmac_md5_full_and_left_prefix_tag_boundaries_match_rfc2202() {
+    // RFC 2202 §2 case 1, with the eight-byte prefix used by this verifier.
+    let tag = 0x9294_727a_3638_bb1c_13f4_8ef8_158b_fc9d_u128.to_be_bytes();
+    let compute = || hmac(&[0x0b; 16], &[b"Hi There"]).unwrap();
+
+    compute().verify_slice(&tag).unwrap();
+    compute().verify_truncated_left(&tag[..8]).unwrap();
+
+    for offset in [0, 7, 15] {
+        let mut wrong = tag;
+        wrong[offset] ^= 1;
+        assert!(compute().verify_slice(&wrong).is_err());
+    }
+    for offset in [0, 4, 7] {
+        let mut wrong = tag;
+        wrong[offset] ^= 1;
+        assert!(compute().verify_truncated_left(&wrong[..8]).is_err());
+    }
+    for wrong_len in [&[][..], &tag[..15], &[0; 17][..]] {
+        assert!(compute().verify_slice(wrong_len).is_err());
+    }
+    assert!(compute().verify_truncated_left(&[]).is_err());
+    assert!(compute().verify_truncated_left(&[0; 17]).is_err());
+}

@@ -17,15 +17,9 @@ Original CMAC [README](README.upstream.md), [VCS record](upstream-vcs.json),
 [MIT](double/LICENSE-MIT) and [Apache 2.0](double/LICENSE-APACHE) notices.
 These files were retained unchanged, not refreshed from upstream.
 
-ZXS replaced the crate-level header and public re-exports with a private
-module and adjusted the doubling import. The used 128-bit forward doubling
-constant and body, CMAC block processing, padding, subkeys, and
-`digest::buffer_fixed!` invocation are unchanged. Other doubling sizes and
-the inverse operation are unused and were not moved. `digest::array`
-re-exports the same hybrid-array type already used by both traits. The
-original always-selected erasure is not an option inside this module. The
-AES type, selected cipher/digest/block-buffer features and session signing
-state/verification checks remain the same.
+This private module uses the same 128-bit forward doubling, CMAC padding,
+subkeys, AES type, buffer and erasure. The [fixed-output support](../../fixed_output/ORIGIN.md)
+uses the original array types and MAC verification.
 
 The tests include [RFC 4493 §4](https://www.rfc-editor.org/rfc/rfc4493#section-4)
 known answers at the session signer, separate from the existing signed wire

@@ -6,7 +6,7 @@ use crate::smb::{
         ordinary::{Admission,Step},tests::connected},setup::tests::{frame,parsed},transport::DirectStream},
     session::SigningMacForSessionFixture,
 };
-use digest::{KeyInit,Mac};
+use crate::smb::fixed_output::{KeyInit,Mac};
 use std::{io::{self,Read,Write},sync::{Arc,Mutex}};
 
 fn request(extra_zero:bool,maximum:u32)->Vec<u8>{

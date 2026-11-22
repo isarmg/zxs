@@ -1,15 +1,11 @@
-//! Low-level traits operating on blocks and wrappers around them.
-//!
-//! Usage of traits in this module in user code is discouraged. Instead use
-//! core algorithm wrapped by the wrapper types, which implement the
-//! higher-level traits.
-use crate::{Digest, HashMarker, InvalidOutputSize};
+// ZXS adaptation of RustCrypto fixed-output support; see ORIGIN.md.
+use super::{Digest, HashMarker, InvalidOutputSize};
 
 pub use block_buffer::{Eager, Lazy};
-pub use common::{AlgorithmName, Block, BlockSizeUser, OutputSizeUser, Reset};
+pub use crypto_common::{AlgorithmName, Block, BlockSizeUser, OutputSizeUser, Reset};
 
 use block_buffer::{BlockBuffer, BlockSizes, BufferKind};
-use common::Output;
+use crypto_common::Output;
 
 mod ct_variable;
 pub use ct_variable::CtOutWrapper;
@@ -84,22 +80,6 @@ pub trait FixedOutputCore: UpdateCore + BufferKindUser + OutputSizeUser {
     fn finalize_fixed_core(&mut self, buffer: &mut Buffer<Self>, out: &mut Output<Self>);
 }
 
-/// Core trait for hash functions with extendable (XOF) output size.
-pub trait ExtendableOutputCore: UpdateCore + BufferKindUser {
-    /// XOF reader core state.
-    type ReaderCore: XofReaderCore;
-
-    /// Retrieve XOF reader using remaining data stored in the block buffer
-    /// and leave hasher in a dirty state.
-    fn finalize_xof_core(&mut self, buffer: &mut Buffer<Self>) -> Self::ReaderCore;
-}
-
-/// Core reader trait for extendable-output function (XOF) result.
-pub trait XofReaderCore: BlockSizeUser {
-    /// Read next XOF block.
-    fn read_block(&mut self) -> Block<Self>;
-}
-
 /// Core trait for hash functions with variable output size.
 ///
 /// Maximum output size is equal to [`OutputSizeUser::OutputSize`].
@@ -135,12 +115,6 @@ pub trait VariableOutputCore: UpdateCore + OutputSizeUser + BufferKindUser + Siz
     fn finalize_variable_core(&mut self, buffer: &mut Buffer<Self>, out: &mut Output<Self>);
 }
 
-/// Trait adding customization string to hash functions with variable output.
-pub trait VariableOutputCoreCustomized: VariableOutputCore {
-    /// Create new hasher instance with the given customization string and output size.
-    fn new_customized(customization: &[u8], output_size: usize) -> Self;
-}
-
 /// Type which used for defining truncation side in the [`VariableOutputCore`]
 /// trait.
 #[derive(Copy, Clone, Debug)]
@@ -155,9 +129,4 @@ pub enum TruncSide {
 pub trait CoreProxy {
     /// Core block-level type.
     type Core: BufferKindUser;
-
-    /// Create `Self` from core and buffer.
-    fn compose(core: Self::Core, buffer: Buffer<Self::Core>) -> Self;
-    /// Decompose `self` into core and buffer.
-    fn decompose(self) -> (Self::Core, Buffer<Self::Core>);
 }

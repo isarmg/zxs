@@ -4,7 +4,7 @@
 use cipher::{BlockCipherEncBackend, BlockCipherEncClosure, BlockCipherEncrypt};
 use core::fmt;
 use super::double::Dbl;
-use digest::{
+use crate::smb::fixed_output::{
     MacMarker, Output, OutputSizeUser, Reset,
     array::{Array, ArraySize},
     block_api::{
@@ -15,7 +15,7 @@ use digest::{
     common::{InnerInit, InnerUser},
 };
 
-use digest::zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::smb::fixed_output::zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Generic core CMAC instance, which operates over blocks.
 #[derive(Clone)]

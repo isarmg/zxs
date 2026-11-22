@@ -39,16 +39,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "digest"
-version = "0.11.3"
-dependencies = [
- "block-buffer",
- "crypto-common",
- "ctutils",
- "zeroize",
-]
-
-[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 dependencies = [
@@ -79,8 +69,10 @@ version = "1.9.2"
 name = "zxs"
 version = "0.1.0"
 dependencies = [
+ "block-buffer",
  "cipher",
- "digest",
+ "crypto-common",
+ "ctutils",
  "libc",
  "zeroize",
 ]

@@ -7,7 +7,7 @@
 use super::{Error, Result, bytes, message::{Compound, Routing, SIGNED}, negotiate::{CmacChoice, Offer},
             setup_reply::Echo, u16le, u32le, u64le};
 use crate::smb::handshake_hash::Sha512;
-use digest::Digest;
+use crate::smb::fixed_output::Digest;
 
 const MAX_PACKET: usize = 68 * 1024;
 const MAX_CONTINUES: u8 = 8; // bounded ZXS new-session profile, not an SMB constant

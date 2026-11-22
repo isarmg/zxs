@@ -3,7 +3,7 @@
 
 use super::consts;
 use core::fmt;
-use digest::{
+use crate::smb::fixed_output::{
     HashMarker, InvalidOutputSize, Output,
     array::Array,
     block_api::{
@@ -94,13 +94,13 @@ impl fmt::Debug for Sha256VarCore {
 
 impl Drop for Sha256VarCore {
     fn drop(&mut self) {
-        use digest::zeroize::Zeroize;
+        use crate::smb::fixed_output::zeroize::Zeroize;
         self.state.zeroize();
         self.block_len.zeroize();
     }
 }
 
-impl digest::zeroize::ZeroizeOnDrop for Sha256VarCore {}
+impl crate::smb::fixed_output::zeroize::ZeroizeOnDrop for Sha256VarCore {}
 
 impl SerializableState for Sha256VarCore {
     type SerializedStateSize = U40;
@@ -215,12 +215,12 @@ impl fmt::Debug for Sha512VarCore {
 
 impl Drop for Sha512VarCore {
     fn drop(&mut self) {
-        use digest::zeroize::Zeroize;
+        use crate::smb::fixed_output::zeroize::Zeroize;
         self.state.zeroize();
         self.block_len.zeroize();
     }
 }
-impl digest::zeroize::ZeroizeOnDrop for Sha512VarCore {}
+impl crate::smb::fixed_output::zeroize::ZeroizeOnDrop for Sha512VarCore {}
 
 impl SerializableState for Sha512VarCore {
     type SerializedStateSize = U80;

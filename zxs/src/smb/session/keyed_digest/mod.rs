@@ -9,9 +9,9 @@ mod simple_reset;
 mod utils;
 
 use core::fmt;
-use digest::block_api::{AlgorithmName, CoreProxy, EagerHash};
+use crate::smb::fixed_output::block_api::{AlgorithmName, CoreProxy, EagerHash};
 
-digest::buffer_fixed!(
+crate::smb::fixed_output::buffer_fixed!(
     /// Generic HMAC instance.
     #[derive(Clone)]
     pub struct Hmac<D: EagerHash>(block_api::HmacCore<D>);
@@ -24,7 +24,7 @@ impl<D: EagerHash + AlgorithmName> AlgorithmName for Hmac<D> {
     }
 }
 
-digest::buffer_fixed!(
+crate::smb::fixed_output::buffer_fixed!(
     /// Generic HMAC instance with reset support.
     #[derive(Clone)]
     pub struct HmacReset<D: EagerHash>(block_api::HmacResetCore<D>);

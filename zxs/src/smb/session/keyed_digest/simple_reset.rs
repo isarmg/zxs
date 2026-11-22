@@ -1,11 +1,11 @@
 // Modified by ZXS: import the same primitives through this private module's parent.
 use super::utils::{IPAD, OPAD, get_der_key};
 use core::fmt;
-use digest::{
+use crate::smb::fixed_output::{
     Digest, FixedOutput, KeyInit, MacMarker, Output, OutputSizeUser, Update,
     common::{Block, BlockSizeUser, InvalidLength, Key, KeySizeUser},
 };
-use digest::{FixedOutputReset, Reset};
+use crate::smb::fixed_output::{FixedOutputReset, Reset};
 
 /// Simplified HMAC instance with reset support able to operate
 /// over hash functions which do not expose block-level API and

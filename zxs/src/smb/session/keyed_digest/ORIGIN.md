@@ -17,13 +17,8 @@ original files were refreshed. The original Rust source Git blobs are:
 | `simple_reset.rs` | `c676aedaebcb56f41a8b670f5990a961afcb46b7` |
 | `utils.rs` | `833108c778870a7e3035472138afef55ae0aa981` |
 
-ZXS adapted only the crate header/re-exports and the three module-relative
-imports. The same `digest::buffer_fixed!` invocations, implementations and
-key processing are retained. The former HMAC dependency enabled the default
-`digest` block API and its `mac` and `zeroize` features. ZXS now declares
-those three features on the same local `digest` package; it does not enable
-new traits, a new erasure mode, or a different hashing backend. The existing
-session and NTLM cleanup and proof logic did not change.
+ZXS scopes this module to SMB and uses the [private fixed-output support](../../fixed_output/ORIGIN.md).
+The key processing, buffering, erasure and session verification are unchanged.
 
 This is only for the existing private ZXS SMB session derivations and NTLM
 verifier, not a public MAC API or a general-purpose service. The synthetic

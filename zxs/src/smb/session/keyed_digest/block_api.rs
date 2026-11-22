@@ -1,7 +1,7 @@
 // Modified by ZXS: import the same primitives through this private module's parent.
 use super::utils::{IPAD, OPAD, get_der_key};
 use core::{fmt, slice};
-use digest::{
+use crate::smb::fixed_output::{
     InvalidLength, KeyInit, MacMarker, Output, Reset,
     block_api::{
         AlgorithmName, Block, BlockSizeUser, Buffer, BufferKindUser, EagerHash, FixedOutputCore,

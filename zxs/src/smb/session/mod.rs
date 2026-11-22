@@ -22,7 +22,7 @@ use crate::smb::wire::{
 };
 use self::block_cipher::Aes128;
 use crate::smb::handshake_hash::Sha256;
-use digest::{FixedOutput, KeyInit, Mac, Output};
+use crate::smb::fixed_output::{FixedOutput, KeyInit, Mac, Output};
 use self::keyed_digest::Hmac;
 use std::num::NonZeroU64;
 use zeroize::{Zeroize, Zeroizing};

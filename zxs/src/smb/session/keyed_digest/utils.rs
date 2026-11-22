@@ -1,4 +1,4 @@
-use digest::{
+use crate::smb::fixed_output::{
     Digest,
     block_api::{Block, BlockSizeUser},
 };

@@ -14,7 +14,7 @@ use super::{
     ntlm_shape::{self as ntlm, Authenticate, Challenge},
 };
 use crate::smb::{InheritedRun,wire::{message::Compound, preauth::RequestKeyContext}};
-use digest::{Digest, FixedOutput, KeyInit, Mac, Output};
+use crate::smb::fixed_output::{Digest, FixedOutput, KeyInit, Mac, Output};
 use std::{num::NonZeroU64, sync::{Arc,Weak}, time::Instant};
 use zeroize::{Zeroize, Zeroizing};
 

@@ -56,9 +56,9 @@ not a Cargo package. It uses the same compression choices and original
 state and buffer erasure; its upstream OID and alloc options remain off.
 
 HMAC now belongs to the [private SMB keyed-digest module](../../src/smb/session/keyed_digest/ORIGIN.md),
-not a Cargo package. Its RustCrypto block-buffer macro and MAC traits still
-come from the same `digest` package. The product's fixed HMAC-SHA-256 session
-derivation and HMAC-MD5 verifier, including their typed digests, are unchanged.
+not a Cargo package. The [private fixed-output support](../../src/smb/fixed_output/ORIGIN.md)
+provides the used block wrappers and MAC traits. HMAC-SHA-256 session
+derivation and HMAC-MD5 verification are unchanged.
 
 CMAC and the forward 128-bit doubling it uses are now part of the
 [private SMB packet MAC](../../src/smb/session/packet_mac/ORIGIN.md), not
@@ -84,16 +84,15 @@ The ZXS workspace excludes the remaining local path packages, so their own
 upstream dev and unselected optional dependencies do not enter the normal ZXS
 graph. The cipher manifest has no default feature; ZXS makes the already active
 stream-wrapper and zeroize edges explicit on its one direct cipher dependency.
-The one direct digest dependency retains the already active block-api, mac and
-zeroize features used by the internal HMAC and CMAC.
+The existing block buffer, common traits and constant-time comparisons are
+used directly by the private fixed-output code, with the same features.
 No derive, alloc/oid, C provider, generated binding, system crypto or external
 service is required by this selection. Enabled path edges, also spelled out in
 Cargo.lock:
 
 ```text
-zxs -> cipher [stream-wrapper, zeroize], digest [block-api, default, mac, zeroize], libc, zeroize
+zxs -> block-buffer [zeroize], cipher [stream-wrapper, zeroize], crypto-common, ctutils, libc, zeroize
 cipher -> block-buffer, crypto-common [alias common], inout, zeroize
-digest -> block-buffer, crypto-common [alias common], ctutils, zeroize
 block-buffer -> hybrid-array, zeroize
 crypto-common -> hybrid-array
 inout -> hybrid-array
@@ -103,8 +102,7 @@ ctutils -> cmov
 
 All other nodes are leaves in this selected closure. All of these paths
 are inside ZXS. Inactive optional/dev declarations are not silently
-vendored or enabled; the now in-module SHA-2 is no longer named in the
-excluded digest development suite. Any feature change needs a new closure review.
+vendored or enabled. Any feature change needs a new closure review.
 Local path packages have no registry checksum field in Cargo.lock; use
 SOURCES.toml to check their published origin. The highest remaining package minimum is
 Rust 1.87 (ctutils, edition 2024), below ZXS's existing Rust 1.100 / pinned

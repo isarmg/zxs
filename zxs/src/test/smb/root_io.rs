@@ -7,7 +7,7 @@ use crate::smb::connection::{
 };
 use std::{io::{Read,Write},sync::Mutex};
 use crate::smb::session::SigningMacForSessionFixture;
-use digest::{KeyInit,Mac};
+use crate::smb::fixed_output::{KeyInit,Mac};
 use crate::smb::wire::fixed_reply::{LOGOFF,TREE_DISCONNECT};
 use crate::smb::wire::io_reply::{FLUSH,WRITE};
 use crate::smb::wire::set_info::SET_INFO;

@@ -26,9 +26,7 @@ the [RFC 6234 §8.5](https://www.rfc-editor.org/rfc/rfc6234.html#section-8.5)
 answers and existing SMB/NTLM synthetic transcripts are not real client
 or formal acceptance.
 
-The [private backend selector](../backend_select/ORIGIN.md) is the same
-original cfg-if macro. [CPU detection](../hardware_capabilities/ORIGIN.md)
-is now internal; `digest` features are unchanged. The excluded digest package's inactive
-development reference to the removed SHA-2 package is no longer valid;
-its original upstream manifest stays in the provenance files rather
-than adding a reverse dependency on the product.
+The [compile-time selector](../backend_select/ORIGIN.md) and
+[CPU detection](../hardware_capabilities/ORIGIN.md) stay private. The
+[fixed-output support](../fixed_output/ORIGIN.md) retains the required
+buffering and type widths.

@@ -8,7 +8,7 @@ mod consts;
 mod sha256;
 mod sha512;
 
-use digest::{
+use crate::smb::fixed_output::{
     block_api::{Buffer, CtOutWrapper},
     consts::{U32, U64},
     zeroize::ZeroizeOnDrop,
@@ -17,12 +17,12 @@ use digest::{
 type Core256 = CtOutWrapper<block_api::Sha256VarCore, U32>;
 type Core512 = CtOutWrapper<block_api::Sha512VarCore, U64>;
 
-digest::buffer_fixed!(
+crate::smb::fixed_output::buffer_fixed!(
     /// SHA-256 for this SMB session's key derivation.
     pub(super) struct Sha256(Core256);
     impl: BaseFixedTraits AlgorithmName Default Clone HashMarker Reset FixedOutputReset SerializableState;
 );
-digest::buffer_fixed!(
+crate::smb::fixed_output::buffer_fixed!(
     /// SHA-512 for the SMB 3.1.1 negotiation transcript.
     pub(super) struct Sha512(Core512);
     impl: BaseFixedTraits AlgorithmName Default Clone HashMarker Reset FixedOutputReset SerializableState;
@@ -43,7 +43,7 @@ impl ZeroizeOnDrop for Sha512 {}
 #[cfg(test)]
 mod tests {
     use super::{Sha256,Sha512};
-    use digest::Digest;
+    use crate::smb::fixed_output::{Digest, FixedOutputReset, common::hazmat::SerializableState};
 
     fn split_answer<D: Digest>(input: &[u8], hex: &str) {
         let bytes: Vec<u8> = (0..hex.len()).step_by(2).map(|i|
@@ -55,6 +55,27 @@ mod tests {
             state.update(&input[split..]);
             assert_eq!(state.finalize().as_slice(), bytes.as_slice(), "{split}");
         }
+    }
+
+    #[test]
+    fn fixed_hash_roundtrips_pending_bytes_and_resets_to_the_same_empty_state() {
+        fn check<D: Digest + FixedOutputReset + SerializableState>() {
+            let input = b"checkpoint a partial block and continue the same digest";
+            let mut original = D::new();
+            Digest::update(&mut original, &input[..7]);
+            let bytes = original.serialize();
+            let mut resumed = D::deserialize(&bytes).unwrap();
+            assert_eq!(resumed.serialize().as_slice(), bytes.as_slice());
+
+            Digest::update(&mut resumed, &input[7..]);
+            assert_eq!(
+                resumed.finalize_fixed_reset().as_slice(),
+                D::digest(input).as_slice(),
+            );
+            assert_eq!(resumed.finalize().as_slice(), D::digest(b"").as_slice());
+        }
+        check::<Sha256>();
+        check::<Sha512>();
     }
 
     #[test]

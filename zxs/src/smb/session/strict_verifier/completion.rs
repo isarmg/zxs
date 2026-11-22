@@ -99,7 +99,7 @@ impl BoundSession {
     }
     fn reply_tag(&self,stamp:&BatchRevision,id:NonZeroU64,exact:&[u8])
         ->std::result::Result<[u8;16],crate::smb::session::Fault>{
-        use digest::Mac;
+        use crate::smb::fixed_output::Mac;
         let signer=self.signer_for(stamp).filter(|s|s.id==id).ok_or(crate::smb::session::Fault::UnknownSession)?;
         let mut mac=signer.mac()?;mac.update(exact);let result=mac.finalize();
         let mut public_tag=[0;16];public_tag.copy_from_slice(result.as_bytes());

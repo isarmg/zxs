@@ -8,9 +8,9 @@ mod double;
 
 use block_api::CmacCipher;
 use core::fmt;
-use digest::block_api::{AlgorithmName, CoreProxy};
+use crate::smb::fixed_output::block_api::{AlgorithmName, CoreProxy};
 
-digest::buffer_fixed!(
+crate::smb::fixed_output::buffer_fixed!(
     /// Generic CMAC instance.
     #[derive(Clone)]
     pub struct Cmac<C: CmacCipher>(block_api::CmacCore<C>);

@@ -1,11 +1,10 @@
+// ZXS adaptation of RustCrypto fixed-output support; see ORIGIN.md.
 use super::{
     AlgorithmName, Buffer, BufferKindUser, FixedOutputCore, Reset, TruncSide, UpdateCore,
-    VariableOutputCore, VariableOutputCoreCustomized,
+    VariableOutputCore,
 };
-#[cfg(feature = "mac")]
-use crate::MacMarker;
-use crate::{CollisionResistance, CustomizedInit, HashMarker};
-use common::{
+use super::super::HashMarker;
+use crypto_common::{
     Block, BlockSizeUser, OutputSizeUser,
     array::{Array, ArraySize},
     hazmat::{DeserializeStateError, SerializableState, SerializedState},
@@ -41,22 +40,6 @@ where
     T: VariableOutputCore + HashMarker,
     OutSize: ArraySize + IsLessOrEqual<T::OutputSize, Output = True>,
 {
-}
-
-#[cfg(feature = "mac")]
-impl<T, OutSize> MacMarker for CtOutWrapper<T, OutSize>
-where
-    T: VariableOutputCore + MacMarker,
-    OutSize: ArraySize + IsLessOrEqual<T::OutputSize, Output = True>,
-{
-}
-
-impl<T, OutSize> CollisionResistance for CtOutWrapper<T, OutSize>
-where
-    T: VariableOutputCore + CollisionResistance,
-    OutSize: ArraySize + IsLessOrEqual<T::OutputSize, Output = True>,
-{
-    type CollisionResistance = T::CollisionResistance;
 }
 
 impl<T, OutSize> BlockSizeUser for CtOutWrapper<T, OutSize>
@@ -130,20 +113,6 @@ where
     }
 }
 
-impl<T, OutSize> CustomizedInit for CtOutWrapper<T, OutSize>
-where
-    T: VariableOutputCoreCustomized,
-    OutSize: ArraySize + IsLessOrEqual<T::OutputSize, Output = True>,
-{
-    #[inline]
-    fn new_customized(customization: &[u8]) -> Self {
-        Self {
-            inner: T::new_customized(customization, OutSize::USIZE),
-            _out: PhantomData,
-        }
-    }
-}
-
 impl<T, OutSize> Reset for CtOutWrapper<T, OutSize>
 where
     T: VariableOutputCore,
@@ -167,7 +136,6 @@ where
     }
 }
 
-#[cfg(feature = "zeroize")]
 impl<T, OutSize> zeroize::ZeroizeOnDrop for CtOutWrapper<T, OutSize>
 where
     T: VariableOutputCore + zeroize::ZeroizeOnDrop,

@@ -4,7 +4,7 @@ use super::*;
 use crate::smb::{connection::{sessions::tests::running,setup::tests::frame},
     wire::preauth::tests::synthetic_exchange};
 use crate::smb::handshake_hash::Sha512;
-use digest::Digest;
+use crate::smb::fixed_output::Digest;
 use std::{io::{self,ErrorKind,Read,Write},sync::Mutex,time::Instant};
 
 #[derive(Default)]
