@@ -1,6 +1,6 @@
-"""Explicit, nonprivileged foreground mount of one selected, fully checked Linux snapshot."""
+"""Linux read-only mount policy, receipt observation, and foreground command."""
 import argparse
-from contextlib import contextmanager, ExitStack
+from contextlib import ExitStack, contextmanager
 import os
 from pathlib import Path
 import stat
@@ -8,9 +8,52 @@ import sys
 import zipfile
 
 from .document import named_document, native_identity
-from .model import Rejected
+from .model import Rejected, check_id, new_id
 from .private_freeze import local_mount, mount_id
 from .snapshot_view import SnapshotView
+
+MOUNTINFO_BUDGET = 2 << 20
+
+
+def mount_source(token):
+    return "zip-workspace-ro-" + check_id(token)
+
+
+def mountinfo_path(point):
+    path = os.fsencode(point)
+    for ch, encoded in ((b"\\", b"\\134"), (b" ", b"\\040"), (b"\t", b"\\011"), (b"\n", b"\\012")):
+        path = path.replace(ch, encoded)
+    return path
+
+
+def mount_receipt(lines, point, token, parent_id):
+    """Look for the one matching read-only mount without opening its FUSE path."""
+    path = mountinfo_path(point)
+    matches = []
+    for line in lines.splitlines():
+        a, sep, b = line.partition(b" - ")
+        left, right = a.split(), b.split()
+        if len(left) >= 5 and left[4] == path:
+            matches.append((left, sep, right))
+    if len(matches) != 1: return None
+    left, sep, right = matches[0]
+    if (not sep or len(left) < 6 or len(right) < 3 or b"ro" not in left[5].split(b",")
+            or not (1 <= len(left[0]) <= 20 and left[0].isdigit()) or left[0] == parent_id or left[1] != parent_id
+            or not (right[0] == b"fuse" or right[0].startswith(b"fuse."))
+            or right[1] != mount_source(token).encode("ascii")):
+        return None
+    return left[0]
+
+
+def observe_mount_receipt(point, token, parent_id):
+    """Best-effort observation in this process's mount namespace, not a durable or current state promise."""
+    try:
+        with open("/proc/self/mountinfo", "rb") as f: rows = f.read(MOUNTINFO_BUDGET + 1)
+    except OSError:
+        return None
+    if 0 < len(rows) <= MOUNTINFO_BUDGET and rows.endswith(b"\n"):
+        return mount_receipt(rows, point, token, parent_id)
+    return None
 
 
 def _ordinary_user(*, read_proc=None):
@@ -79,16 +122,10 @@ def held_point(spelling, uid, *, leaf=None, chain=None):
         yield path, fds, recheck
 
 
-@contextmanager
-def selected_point(spelling, uid):
-    with held_point(spelling, uid) as (path, _, recheck):
-        yield path, recheck
-
-
 def main(args=None):
     p = argparse.ArgumentParser(prog="zip-workspace-mount-ro",
         description="Mount one verified .zxs snapshot read-only in a dedicated empty directory. "
-                    "Keep the mountpoint and its ancestors stable. Unmount explicitly with fusermount3.")
+                    "Keep the mountpoint and its ancestors stable. Recheck the reported SOURCE and ID before manual unmount.")
     p.add_argument("archive", type=Path)
     p.add_argument("mountpoint", help="existing, private 0700, absolute path; no mount/rename/sync here until unmount")
     ns = p.parse_args(args)
@@ -99,17 +136,33 @@ def main(args=None):
         except ImportError as err:
             raise Rejected("a working optional mount extra and system FUSE3 are required; nothing is installed automatically") from err
         source = ns.archive.absolute()
-        with selected_point(ns.mountpoint, uid) as (point, recheck), named_document(source) as doc:
+        with held_point(ns.mountpoint, uid) as (point, fds, recheck), named_document(source) as doc:
             view = SnapshotView(doc, display_name=source.name)
+            parent_id = mount_id(fds[-1])
+            token = new_id()
+            label = mount_source(token)
+            print(f"Read-only mount request for snapshot {view.commit.operation} at {str(point)!r}; "
+                  f"SOURCE={label}. Not yet confirmed.", flush=True)
+
             def last_check():
                 if native_identity(source.stat(follow_symlinks=False), stat.S_IFREG) != view.original[:2]:
                     raise Rejected("the selected archive name was replaced before mounting")
                 view.check()
                 recheck()
-            serve(view, point, last_check)
+
+            def accepted():
+                mid = observe_mount_receipt(point, token, parent_id)
+                if mid is None:
+                    print("FUSE accepted the request; no matching mount ID has been observed.", flush=True)
+                else:
+                    print("Observed this read-only mount in the kernel table: "
+                          f"SOURCE={label}, ID={mid.decode('ascii')}.", flush=True)
+
+            serve(view, point, last_check, token=token, accepted=accepted)
         return 0
     except KeyboardInterrupt:
-        print("Interrupted. If the mount remains, verify the point and unmount it explicitly.", file=sys.stderr)
+        print("Interrupted; this does not confirm unmounting. If a mount was requested, "
+              "recheck its recorded identity in the same mount namespace.", file=sys.stderr)
         return 130
     except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as err:
         print(f"zip-workspace-mount-ro: {err}", file=sys.stderr)

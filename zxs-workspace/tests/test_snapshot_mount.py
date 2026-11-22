@@ -1,4 +1,5 @@
 """Unit fixtures: verified Store bytes / mountpoint selection. No test here performs a mount."""
+from contextlib import contextmanager, redirect_stdout
 import errno
 import hashlib
 import io
@@ -6,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import zipfile
@@ -159,6 +161,50 @@ class SnapshotReads(unittest.TestCase):
             with self.assertRaises(OSError) as err: view.read(*args)
             self.assertEqual(err.exception.errno, code)
 
+    def test_foreground_reports_a_new_source_even_when_a_mount_id_is_reused(self):
+        point = Path("/private/view here")
+        old, current = "1"*32, "2"*32
+
+        @contextmanager
+        def selected(spelling, uid):
+            self.assertEqual(spelling, str(point))
+            yield point, (41, 42), check_point
+
+        for token, observed_token, complete, matched in (
+                (old, old, True, True), (current, old, True, False),
+                (current, current, True, True), (current, current, False, False)):
+            with self.subTest(request=token, observed=observed_token, complete=complete):
+                output = io.StringIO()
+                check_point = mock.Mock()
+                rows = (b"73 5 0:8 / /private/view\\040here ro,nosuid,nodev - fuse.zip-workspace "
+                        + linux_mount.mount_source(observed_token).encode("ascii") + b" ro")
+                if complete: rows += b"\n"
+
+                def unmapped_driver(view, selected_point, check, *, token, accepted):
+                    self.assertEqual(selected_point, point)
+                    self.assertEqual(view.commit, self.marker)  # Real immutable input/index, no kernel mount.
+                    self.assertIn(f"SOURCE={linux_mount.mount_source(token)}. Not yet confirmed.", output.getvalue())
+                    self.assertNotIn("ID=", output.getvalue())
+                    check()
+                    accepted()
+
+                with mock.patch.dict(sys.modules, {"zipworkspace._fuse3": SimpleNamespace(serve=unmapped_driver)}), \
+                     mock.patch.object(linux_mount, "_ordinary_user", return_value=1000), \
+                     mock.patch.object(linux_mount, "held_point", selected), \
+                     mock.patch.object(linux_mount, "mount_id", return_value=b"5") as parent, \
+                     mock.patch.object(linux_mount, "new_id", return_value=token), \
+                     mock.patch.object(linux_mount, "open", return_value=io.BytesIO(rows), create=True) as table, \
+                     redirect_stdout(output):
+                    self.assertEqual(linux_mount.main([str(self.path), str(point)]), 0)
+                parent.assert_called_once_with(42)
+                table.assert_called_once_with("/proc/self/mountinfo", "rb")
+                check_point.assert_called_once()
+                if matched:
+                    self.assertIn(f"SOURCE={linux_mount.mount_source(token)}, ID=73.", output.getvalue())
+                else:
+                    self.assertIn("no matching mount ID has been observed", output.getvalue())
+                    self.assertNotIn("ID=", output.getvalue())
+
 
 @unittest.skipUnless(sys.platform == "linux", "Linux mountpoint descriptors")
 class PointSelection(unittest.TestCase):
@@ -166,7 +212,7 @@ class PointSelection(unittest.TestCase):
         with mock.patch("zipworkspace.linux_mount.os.open", side_effect=AssertionError):
             for point in ("/", "/x/../y", "/tmp//x", "/tmp/x/", "relative", "/dev/fd/7", "/proc/self/fd/9"):
                 with self.subTest(point=point), self.assertRaises(Rejected):
-                    with linux_mount.selected_point(point, os.getuid()): pass
+                    with linux_mount.held_point(point, os.getuid()): pass
 
     def test_held_private_empty_point_is_rechecked_before_libfuse_gets_the_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -182,8 +228,8 @@ class PointSelection(unittest.TestCase):
                 def mounted_leaf(fd):
                     return b"other" if os.fstat(fd).st_ino == leaf.stat().st_ino else b"original"
                 with mock.patch.object(linux_mount, "mount_id", side_effect=mounted_leaf), self.assertRaises(Rejected):
-                    with linux_mount.selected_point("/parent/view", os.getuid()): pass
-                with linux_mount.selected_point("/parent/view", os.getuid()) as (_, check):
+                    with linux_mount.held_point("/parent/view", os.getuid()): pass
+                with linux_mount.held_point("/parent/view", os.getuid()) as (_, _, check):
                     check()
                     (leaf/"occupied").touch()
                     with self.assertRaises(Rejected): check()
@@ -193,7 +239,7 @@ class PointSelection(unittest.TestCase):
                 leaf.rename(parent/"other")
                 leaf.symlink_to(parent/"other", target_is_directory=True)
                 with self.assertRaises(OSError):
-                    with linux_mount.selected_point("/parent/view", os.getuid()): pass
+                    with linux_mount.held_point("/parent/view", os.getuid()): pass
 
 
 try:
@@ -238,12 +284,16 @@ class AdapterContract(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         view, _ = case.view()
+        token, accepted = "6"*32, mock.Mock()
         with mock.patch.object(driver.pyfuse3, "init") as init, mock.patch.object(driver.pyfuse3, "close") as close, \
                 mock.patch.object(driver.trio, "run", side_effect=RuntimeError("disconnected")):
             with self.assertRaises(Rejected):
-                driver.serve(view, Path("/unused"), mock.Mock(side_effect=Rejected("replaced")))
-            init.assert_not_called(); close.assert_not_called()
-            with self.assertRaises(RuntimeError): driver.serve(view, Path("/unused"), lambda: None)
+                driver.serve(view, Path("/unused"), mock.Mock(side_effect=Rejected("replaced")),
+                             token=token, accepted=accepted)
+            init.assert_not_called(); close.assert_not_called(); accepted.assert_not_called()
+            with self.assertRaises(RuntimeError):
+                driver.serve(view, Path("/unused"), lambda: None, token=token, accepted=accepted)
             self.assertEqual(init.call_args.args[2], {"ro","nodev","nosuid","noexec","default_permissions",
-                                                      "fsname=zip-workspace-ro"})
+                                                      "fsname=" + linux_mount.mount_source(token)})
+            accepted.assert_called_once()
             close.assert_called_once_with(unmount=False)

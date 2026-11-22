@@ -98,7 +98,7 @@ class DesktopMount(unittest.TestCase):
             accepted()
         events = []
         with mock.patch("zipworkspace.document.named_document", side_effect=AssertionError("no second pathname open")), \
-             mock.patch.object(child, "receipt", return_value=b"123"):
+             mock.patch.object(child, "observe_mount_receipt", return_value=b"123"):
             child.mount_selected(self.req, self.doc, self.chain, lambda: events.append(b"G"),
                                  events.append, driver=driver)
         self.assertEqual(events, [b"G", b"I", b"M123"])
@@ -179,11 +179,11 @@ class DesktopMount(unittest.TestCase):
     def test_mountinfo_requires_one_exact_escaped_point_old_parent_tag_type_and_read_only_flags(self):
         token, path = "9"*32, Path("/private/view here")
         line = b"73 5 0:8 / /private/view\\040here ro,nosuid,nodev - fuse.zip-workspace zip-workspace-ro-"+token.encode()+b" ro\n"
-        self.assertEqual(child.mount_receipt(line,path,token,b"5"),b"73")
+        self.assertEqual(linux_mount.mount_receipt(line,path,token,b"5"),b"73")
         for wrong in (line+line, line.replace(b"73 5 ",b"73 6 "), line.replace(b"ro,nosuid",b"rw,nosuid"),
                       line.replace(b"fuse.zip-workspace",b"ext4"), line.replace(token.encode(),b"7"*32),
-                      line.replace(b"view\\040here",b"view")):
-            self.assertIsNone(child.mount_receipt(wrong,path,token,b"5"))
+                      line.replace(b"view\\040here",b"view"), line.replace(b"73 5 ",b"5 5 ")):
+            self.assertIsNone(linux_mount.mount_receipt(wrong,path,token,b"5"))
 
     def test_observation_refuses_reused_id_stacked_point_moved_label_or_incomplete_table(self):
         token, path = "9"*32, Path("/private/view here")

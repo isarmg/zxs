@@ -11,22 +11,19 @@ import sys
 import threading
 
 from ..archive import stamp
-from .._mount_child import mount_receipt, mountinfo_path
 from ..document import native_identity
 from ..linux_authority import ProcView, owned_directory
-from ..linux_mount import _ordinary_user, held_point, point_path
+from ..linux_mount import (MOUNTINFO_BUDGET, _ordinary_user, held_point, mount_receipt, mount_source,
+                           mountinfo_path, point_path)
 from ..model import Rejected, new_id
 from ..private_freeze import mount_id
-
-MOUNTINFO_BUDGET = 2 << 20
-
 
 def mount_presence(rows, point, token, parent_id, original_id):
     """An exact original mount, absence, or conflicting/incomplete evidence."""
     if original_id == parent_id: raise Rejected("原挂载 ID 不能也是自己的父挂载")
     if not 0 < len(rows) <= MOUNTINFO_BUDGET or not rows.endswith(b"\n"):
         raise Rejected("内核挂载表没有完整读回")
-    path, source = mountinfo_path(point), ("zip-workspace-ro-" + token).encode("ascii")
+    path, source = mountinfo_path(point), mount_source(token).encode("ascii")
     related = []
     for row in rows.split(b"\n")[:-1]:
         head, sep, tail = row.partition(b" - ")
@@ -184,7 +181,7 @@ class MountProcess:
 
     def instructions(self):
         path = shlex.quote(str(self.point))
-        label = "zip-workspace-ro-" + self.token
+        label = mount_source(self.token)
         ident = f"，ID 必须为 {self.mid}" if self.mid is not None else ""
         return (f"在同一挂载命名空间另开终端，先执行：\nfindmnt --kernel --nocanonicalize --mountpoint {path} "
                 f"--output ID,TARGET,FSTYPE,SOURCE\n核对仅一项、类型为 fuse 或 fuse.*、SOURCE 为 {label}{ident}。"

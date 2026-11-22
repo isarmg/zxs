@@ -22,46 +22,12 @@ if __name__ == "__main__" and not __package__:
 
 from .archive import stamp
 from .document import PositionalDocument, archive_sha, native_identity
-from .linux_mount import _ordinary_user, held_point
+from .linux_mount import _ordinary_user, held_point, observe_mount_receipt
 from .model import Commit, Rejected, check_id
 from .private_freeze import mount_id
 from .snapshot_view import SnapshotView
 
 LIMIT = 16 << 10
-
-
-def mountinfo_path(point):
-    path = os.fsencode(point)
-    for ch, encoded in ((b"\\", b"\\134"), (b" ", b"\\040"), (b"\t", b"\\011"), (b"\n", b"\\012")):
-        path = path.replace(ch, encoded)
-    return path
-
-
-def mount_receipt(lines, point, token, parent_id):
-    # /proc mountinfo escapes precisely these bytes; no stat/open of our own waiting FUSE mount.
-    path = mountinfo_path(point)
-    matches = []
-    for line in lines.splitlines():
-        a, sep, b = line.partition(b" - ")
-        left, right = a.split(), b.split()
-        if len(left) >= 5 and left[4] == path:
-            matches.append((left, sep, right))
-    if len(matches) != 1: return None
-    left, sep, right = matches[0]
-    if (not sep or len(left) < 6 or len(right) < 3 or b"ro" not in left[5].split(b",")
-            or not left[0].isdigit() or left[1] != parent_id or
-            not (right[0] == b"fuse" or right[0].startswith(b"fuse.")) or
-            right[1] != ("zip-workspace-ro-" + check_id(token)).encode("ascii")):
-        return None
-    return left[0]
-
-
-def receipt(point, token, parent_id):
-    try:
-        with open("/proc/self/mountinfo", "rb") as f: rows = f.read((2 << 20) + 1)
-        if len(rows) <= 2 << 20: return mount_receipt(rows, point, token, parent_id)
-    except OSError: pass
-    return None
 
 
 def mount_selected(req, doc, chain, authorize, notify, *, driver=None):
@@ -96,7 +62,7 @@ def mount_selected(req, doc, chain, authorize, notify, *, driver=None):
             view.check(); check_point()
             notify(b"I")
         def accepted():
-            mid = receipt(point, token, original_parent)
+            mid = observe_mount_receipt(point, token, original_parent)
             notify(b"M" + mid if mid is not None else b"A")
         driver(view, point, last_check, token=token, accepted=accepted)
 

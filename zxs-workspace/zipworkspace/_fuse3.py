@@ -1,4 +1,4 @@
-"""Optional Linux FUSE3 adapter. Import only when the foreground mount command is requested."""
+"""Optional Linux FUSE3 adapter for the explicit foreground and desktop mount paths."""
 from contextlib import contextmanager
 import errno
 import os
@@ -7,6 +7,7 @@ import stat
 import pyfuse3
 import trio
 
+from .linux_mount import mount_source
 from .snapshot_view import ROOT
 
 
@@ -105,22 +106,15 @@ class Operations(pyfuse3.Operations):
     setxattr = removexattr = fallocate = _readonly
 
 
-def serve(view, point, last_check, *, token=None, accepted=None):
+def serve(view, point, last_check, *, token, accepted):
     if pyfuse3.ROOT_INODE != ROOT:
         raise RuntimeError("unsupported FUSE root inode")
     ops = Operations(view)
-    fsname = "zip-workspace-ro"
-    if token is not None:
-        from .model import check_id
-        fsname += "-" + check_id(token)
-    options = {"ro", "nodev", "nosuid", "noexec", "default_permissions", "fsname=" + fsname}
+    options = {"ro", "nodev", "nosuid", "noexec", "default_permissions", "fsname=" + mount_source(token)}
     last_check()
     pyfuse3.init(ops, str(point), options)
     try:
-        if accepted is None:
-            print(f"Mounted read-only snapshot {view.commit.operation} at {str(point)!r}", flush=True)
-        else:
-            accepted()  # pyfuse3.init has actually returned; not an assertion about later unmount.
+        accepted()  # pyfuse3.init has returned; only the caller's table observation can identify the mount.
         trio.run(pyfuse3.main, 1, 4)
     finally:
         # Never unmount by a possibly reused pathname. A normal, external unmount ends main().
