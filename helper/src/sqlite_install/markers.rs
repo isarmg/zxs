@@ -153,6 +153,19 @@ impl OrdinaryMark{
     pub(super) fn verify(&self,dir:&File,wanted:&[u8;101])->io::Result<()>{self.0.verify(dir,wanted)}
 }
 
+/// An ordinary marker under the passive discovery boundary. This type cannot
+/// fall back to the normal marker path for either acquisition or rechecks.
+pub(super) struct DiscoveryOrdinaryMark(Mark);
+impl DiscoveryOrdinaryMark{
+    pub(super) fn select(dir:&File,uid:u32,wanted:&[u8;101])->io::Result<Self>{
+        if wanted[20]!=2{return Err(bad("not an ordinary volume marker"));}
+        let held=Mark::pin_system(dir,uid,true)?;
+        held.verify_system(dir,wanted,true)?;
+        Ok(Self(held))
+    }
+    pub(super) fn verify(&self,dir:&File,wanted:&[u8;101])->io::Result<()>{self.0.verify_system(dir,wanted,true)}
+}
+
 /// Fixed physical leaf proof for only the one committed INIT recycle role.
 pub(super) struct RecycleMark(Mark);
 impl RecycleMark{

@@ -115,10 +115,9 @@ impl Question {
 fn place(pin:&Pinned)->io::Result<[u64;3]>{
     let e=pin.entity();Ok([e.dev,e.ino,pin.require_same_named_mount()?.id])
 }
-// The dedicated synthetic route admits only the earlier enrollment marker
-// in selected F/R. Inspect names once on the actual held original directory;
-// never follow or read any added object.
-fn no_foreign_media(dir:&File)->io::Result<()>{
+// An empty originally enrolled root contains only its earlier marker.
+// Inspect names on the held directory; never open any added object.
+pub(in crate::sqlite_install::pair) fn no_foreign_media(dir:&File)->io::Result<()>{
     use rustix::fs::{Mode,OFlags,RawDir,openat};
     use std::mem::MaybeUninit;
     let scan=File::from(openat(dir,c".",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOATIME|OFlags::NONBLOCK|

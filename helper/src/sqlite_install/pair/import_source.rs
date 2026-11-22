@@ -1,5 +1,8 @@
 //! Offline, non-authorizing H03 source inventory for exact independently maintained v19.
-//! A complete result describes two bounded metadata walks, not a copy plan.
+//! A complete result describes two bounded metadata walks and optionally
+//! the selected target's observed constraints. No copy authority exists here.
+mod target;
+pub(super) use target::{COMPONENT,Facts as TargetFacts,READ_ONLY,RELATIVE,Target};
 use super::{Id,observed,retire_ordinary};
 use crate::{maintenance::DiscoveryView,pinned::{self,Entity,Mount,Pinned},sqlite_install::{DATABASE,bad,
     catalog::{self,Canonical,Initial},engine::{self,Access},markers::SystemMark,
@@ -35,7 +38,7 @@ impl Counts{
     }
 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(super) enum Finding { Blocked(u16), Inventoried(Counts) }
+pub(super) enum Finding { Blocked(u16), Inventoried(Counts), Planned(Counts,TargetFacts) }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 struct Stamp{entity:Entity,mount:Mount,mode:u32,uid:u32,gid:u32,links:u64,len:u64,mtime:i64,mtime_ns:i64,ctime:i64,ctime_ns:i64}
@@ -66,8 +69,7 @@ fn overlap(a:&Pinned,b:&Pinned)->bool{
         ||a.entity_is_visible_ancestor_of(b)||b.entity_is_visible_ancestor_of(a)
 }
 
-// No R/F media descriptor is opened or read. These O_PATH names are
-// exclusions only, never a source/target selection or a grant.
+// These O_PATH names are exclusions only, never a selection or a grant.
 struct Exclusions(Vec<(Pinned,Mount)>);
 impl Exclusions{
     fn pin(claims:&[Initial],scope:&Arc<DiscoveryView>)->io::Result<Self>{
@@ -148,7 +150,7 @@ fn old_volume(dir:&File)->io::Result<bool>{
     }
 }
 #[derive(Debug,Eq,PartialEq)]
-struct Snapshot{stamp:[u8;32],entries:u16,counts:Counts,blockers:u16}
+struct Snapshot{stamp:[u8;32],entries:u16,counts:Counts,blockers:u16,component:usize,relative:usize}
 impl Snapshot{
     fn finding(self)->io::Result<Finding>{
         if self.blockers!=0{return Ok(Finding::Blocked(self.blockers));}
@@ -157,12 +159,13 @@ impl Snapshot{
         Ok(Finding::Inventoried(self.counts))
     }
 }
-struct Walk{root:Stamp,hash:Sha256,entries:u16,counts:Counts,blockers:u16,dirs:BTreeSet<u64>}
+struct Walk{root:Stamp,hash:Sha256,entries:u16,counts:Counts,blockers:u16,dirs:BTreeSet<u64>,component:usize,relative:usize}
 fn scan(dir:&File,root:Stamp)->io::Result<Snapshot>{
     let mut walk=Walk{root,hash:Sha256::new_with_prefix(b"helper import inventory one live source 1\0"),entries:0,
-        counts:Counts::default(),blockers:0,dirs:BTreeSet::new()};
+        counts:Counts::default(),blockers:0,dirs:BTreeSet::new(),component:0,relative:0};
     walk.visit(dir,root,0,0)?;
-    Ok(Snapshot{stamp:walk.hash.finalize().into(),entries:walk.entries,counts:walk.counts,blockers:walk.blockers})
+    Ok(Snapshot{stamp:walk.hash.finalize().into(),entries:walk.entries,counts:walk.counts,blockers:walk.blockers,
+        component:walk.component,relative:walk.relative})
 }
 impl Walk{
     fn visit(&mut self,dir:&File,original:Stamp,depth:u8,prefix:usize)->io::Result<()>{
@@ -208,6 +211,9 @@ impl Walk{
             if first.entity.ino!=ino{return Err(unknown());}
             if first.dir()||first.plain(){
                 if !user_name(name.to_bytes(),first.dir()){self.blockers|=NAME;}
+                let suffix=if first.dir(){0}else{33}; // "-" and the future FileId's 32 hex bytes.
+                self.component=self.component.max(name.to_bytes().len()+suffix);
+                self.relative=self.relative.max(length+suffix);
                 if first.dir(){
                     self.counts.dirs+=1;
                     let opened=scan_dir(&child)?;
@@ -246,8 +252,12 @@ fn vfs_without_access_time(locked:&LockedSystem)->io::Result<()>{
 /// Only invoked by the attested lowered observer, with the actual original
 /// S EX lent by its foreground parent. The callback gets bounded facts,
 /// not source paths, descriptors, a resume ID or any authority.
-pub(super) fn observe<T>(locked:&LockedSystem,pool:&Id,init:&Id,actor:&Id,path:&Path,location:[u64;3],
-    report:impl FnOnce(Finding)->T)->io::Result<T>{
+pub(super) struct Selection<'a>{
+    pub(super) pool:&'a Id,pub(super) init:&'a Id,pub(super) actor:&'a Id,
+    pub(super) path:&'a Path,pub(super) location:[u64;3],pub(super) target:Option<(&'a Target,[u64;3])>,
+}
+pub(super) fn observe<T>(locked:&LockedSystem,selected:Selection<'_>,report:impl FnOnce(Finding)->T)->io::Result<T>{
+    let Selection{pool,init,actor,path,location,target}=selected;
     retire_ordinary::compiled_schema()?;
     let (host,system)=locked.retirement_host()?;
     let scope=system.local_scope().ok_or_else(unknown)?;
@@ -265,9 +275,11 @@ pub(super) fn observe<T>(locked:&LockedSystem,pool:&Id,init:&Id,actor:&Id,path:&
             WHERE op_id=?1 AND actor_id=?2 AND kind=1 AND state=1)",
             rusqlite::params![&init[..],&actor[..]],|r|r.get(0)).map_err(|_|unknown())?;
         if !original{return Err(unknown());}
-        catalog::initial_metadata(tx,&template,source,pool,init)
+        let claims=catalog::initial_metadata(tx,&template,source,pool,init)?;
+        let chosen=target.map(|(t,_)|t.claim(tx,init,&claims)).transpose()?;
+        Ok((claims,chosen))
     };
-    let (before,claims)=observed::OriginalRead::new(locked,&original,&template,&marker).snapshot(&mut anchor,pool,init,read)?;
+    let (before,(claims,chosen))=observed::OriginalRead::new(locked,&original,&template,&marker).snapshot(&mut anchor,pool,init,read)?;
     // Obvious enrolled path intersection is conclusive without even opening
     // a source directory stream. Otherwise preserve passive alias exclusions.
     let obvious=claims.iter().any(|c|spelling(path,&c.path));
@@ -275,12 +287,27 @@ pub(super) fn observe<T>(locked:&LockedSystem,pool:&Id,init:&Id,actor:&Id,path:&
     let blocked=obvious||exclusions.as_ref().is_some_and(|e|e.excludes(&pin));
     let held=if blocked{None}else{Some(HeldSource::open(&pin,host,source.uid())?)};
     let first=held.as_ref().map(|f|f.snapshot(host,source.uid())).transpose()?;
+    let target_pin=match (target,chosen,exclusions.as_ref(),first.as_ref()){
+        (Some((t,at)),Some(claim),Some(excluded),Some(first)) if first.blockers==0&&first.entries!=0=>{
+            let f=Pinned::local_storage(&t.path,scope)?;
+            if named_place(&f)?!=at||overlap(&f,&pin)
+                ||excluded.0.iter().any(|(p,_)|p.path()!=t.path&&overlap(&f,p)){return Err(unknown());}
+            // Passive R evidence only, like the existing F observation. No
+            // recycle directory stream, marker read or R lease is needed.
+            let (recycle,mount)=excluded.0.get(1).ok_or_else(unknown)?;
+            if f.entity().dev==recycle.entity().dev||at[2]==mount.id
+                ||scope.full_local_mount(at[2])?.1==scope.full_local_mount(mount.id)?.1{return Err(unknown());}
+            Some(target::Held::open(f,claim,host,source.uid())?)
+        }
+        _=>None,
+    };
+    let availability=target_pin.as_ref().map(|f|f.sample(host,source.uid())).transpose()?;
     if !anchor.is_autocommit(){return Err(unknown());}
     engine::original_name(&anchor)?;
     vfs_without_access_time(locked)?;
-    let (after,repeat)=observed::at_original(pool,init,locked,&original,&template,&marker,read)?;
+    let (after,(repeat,chosen_again))=observed::at_original(pool,init,locked,&original,&template,&marker,read)?;
     let equal=claims.iter().map(|c|(&c.path,&c.marker)).eq(repeat.iter().map(|c|(&c.path,&c.marker)));
-    if before!=after||!equal{return Err(unknown());}
+    if before!=after||!equal||chosen!=chosen_again{return Err(unknown());}
     if held.as_ref().map(|f|f.snapshot(host,source.uid())).transpose()?!=first{return Err(unknown());}
     engine::original_name(&anchor)?;original.sidecars_absent()?;marker.verify(source,&before)?;
     anchor.close().map_err(|_|unknown())?;
@@ -290,7 +317,24 @@ pub(super) fn observe<T>(locked:&LockedSystem,pool:&Id,init:&Id,actor:&Id,path:&
     if let Some(e)=&exclusions{e.require()?;}
     if named_place(&pin)?!=location{return Err(unknown());}
     if let Some(f)=&held {f.require(host,source.uid())?;}
-    let value=report(match first{Some(f)=>f.finding()?,None if blocked=>Finding::Blocked(MANAGED),None=>return Err(unknown())});
+    let found=match first{
+        Some(f)=>{
+            let (component,relative)=(f.component,f.relative);
+            match (f.finding()?,target,availability,target_pin.as_ref()){
+                (Finding::Inventoried(counts),Some(_),Some(earlier),Some(t))=>{
+                    let current=t.sample(host,source.uid())?;
+                    Finding::Planned(counts,earlier.restrict(current,component,relative)?)
+                }
+                (Finding::Inventoried(_),Some(_),_,_)=>return Err(unknown()),
+                (result,_,_,_)=>result,
+            }
+        }
+        None if blocked=>Finding::Blocked(MANAGED),
+        None=>return Err(unknown()),
+    };
+    if target.is_some(){scope.require_unchanged()?;if let Some(f)=&held{f.require(host,source.uid())?;}}
+    let value=report(found);
+    drop(target_pin);
     drop(held);Ok(value)
 }
 

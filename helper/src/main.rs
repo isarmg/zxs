@@ -63,6 +63,7 @@ fn usage() -> String {
     if cfg!(feature = "embedded-zxs") {
         help.push_str("\n\nOptional image extraction:\n  helper install-zxs-image [--destination-dir DIR] --zxs-sha256 HEX (default /zxs/bin/zxs)");
     }
+    help.push_str("\n\nRead-only import planning:\n  helper plan-nonempty-import --init-actor ID --storage-uid N --storage-gid N \\\n      --system DIR --pool ID --init INIT_OP --source DIR --target-volume VOLUME_ID --target DIR");
     help
 }
 
@@ -113,6 +114,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(|setup|Command::Setup(Box::new(setup)));}
     if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
     if op == "check-nonempty-source"{return sqlite_install::ImportCheck::parse(args).map(Command::ImportCheck);}
+    if op == "plan-nonempty-import"{return sqlite_install::ImportCheck::parse_plan(args).map(Command::ImportCheck);}
     if op == "check-ordinary-retirement"{return sqlite_install::RetirementCheck::parse(args).map(Command::RetirementCheck);}
     if op == "check-deployment" {
         if args.next().is_some(){return Err("the read-only deployment check takes no paths or options");}
