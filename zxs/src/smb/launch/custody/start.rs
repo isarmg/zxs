@@ -2,11 +2,11 @@
 //! two fixed components. No user-visible separate launcher or selectable
 //! role backend. Only the application retains this private scope and both
 //! original children during life and drain.
-use super::{Fault,Parent,Role,VerifiedPreflight,birth::Ready,descriptor,foreground,kernel::{sock,sock_int},
+use super::{Fault,Parent,Role,VerifiedPreflight,birth::Ready,descriptor,foreground,
     listeners::Listeners,preflight::nonce,view::{self,Kind,Source,View}};
 use crate::smb::launch::{
     cohort::{self,PairOffer},envelope::{self,ENV_MAX},pair_gate::{GateOwner,GateStamp,ReadLoans},
-    site::{SiteLease,Terminal,media::Media},transport::seal_public,web,
+    site::{SiteLease,Terminal,media::Media},socket_facts::{self,Integer},transport::seal_public,web,
 };
 use std::{io,net::{Ipv4Addr,SocketAddr,TcpListener},os::fd::{AsFd,AsRawFd,BorrowedFd},time::{Duration,Instant}};
 
@@ -173,7 +173,7 @@ pub(in crate::smb::launch) fn launch_internal_web<'m,'v,'s,'p>(scope:&mut Author
     // audience, never a browser-selected or environment-supplied setting.
     let listener=TcpListener::bind((Ipv4Addr::UNSPECIFIED,8443))?;
     listener.set_nonblocking(true)?;
-    let cookie=u64::from_ne_bytes(sock(listener.as_raw_fd(),libc::SOL_SOCKET,libc::SO_COOKIE).map_err(|_|no())?);
+    let cookie=socket_facts::cookie(listener.as_fd()).map_err(|_|no())?;
     let read_only=view::flags(system).map_err(|_|no())?.read_only();
     let (header,body)=web::encode(selected.plan(),nonce().map_err(|_|no())?,cookie,read_only,scope.pair).map_err(|_|no())?;
     let sealed=seal_public(&body,web::MAX).map_err(|_|no())?;
@@ -206,15 +206,15 @@ pub(in crate::smb::launch) fn launch_internal_web<'m,'v,'s,'p>(scope:&mut Author
     Ok(Running{original:ready,_media:media,_site:site,pair:scope.pair})
 }
 fn require_web(listener:&TcpListener,cookie:u64)->super::Result<()>{
-    let raw=listener.as_raw_fd();
+    let socket=listener.as_fd();let raw=socket.as_raw_fd();
     descriptor::cloexec(raw)?;
-    if cookie==0||u64::from_ne_bytes(sock(raw,libc::SOL_SOCKET,libc::SO_COOKIE)?)!=cookie||
+    if cookie==0||socket_facts::cookie(socket)?!=cookie||
         !descriptor::status(raw)?.nonblocking()||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_DOMAIN)?!=libc::AF_INET||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_PROTOCOL)?!=libc::IPPROTO_TCP||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_ACCEPTCONN)?!=1||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_REUSEPORT)?!=0||
+        socket_facts::integer(socket,Integer::Domain)?!=libc::AF_INET||
+        socket_facts::integer(socket,Integer::SocketType)?!=libc::SOCK_STREAM||
+        socket_facts::integer(socket,Integer::Protocol)?!=libc::IPPROTO_TCP||
+        socket_facts::integer(socket,Integer::Accepting)?!=1||
+        socket_facts::integer(socket,Integer::ReusePort)?!=0||
         listener.local_addr().map_err(|_|Fault::Handoff)?!=SocketAddr::from((Ipv4Addr::UNSPECIFIED,8443)){
         return Err(Fault::Handoff);
     }

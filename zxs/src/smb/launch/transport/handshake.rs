@@ -2,7 +2,8 @@
 //! Different role frames and public payloads are still decoded separately;
 //! this code never selects credentials, plans, listeners or paths.
 use super::{BootSocket,Control,Fault,KernelControl,MAX_RIGHTS,OriginalProcess,Result,SEALS,START_BYTES,Supervisor,
-    CONTROL_SIZE,cloexec,descriptor,inherit,initial_child,recv,sock,sock_int};
+    CONTROL_SIZE,cloexec,descriptor,inherit,initial_child,recv};
+use crate::smb::launch::socket_facts::{self,Integer};
 use std::{
     fs::File,io::{self,Write},mem::{size_of_val,zeroed},net::{Ipv4Addr,SocketAddr,TcpListener},
     os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{FileExt,MetadataExt},
@@ -124,15 +125,15 @@ impl UnverifiedWebListener{
 }
 #[allow(dead_code)]
 fn require_web_socket(fd:&OwnedFd,cookie:u64)->Result<()>{
-    let fd=fd.as_raw_fd();
+    let socket=fd.as_fd();let fd=socket.as_raw_fd();
     cloexec(fd)?;
-    if cookie==0||u64::from_ne_bytes(sock(fd,libc::SOL_SOCKET,libc::SO_COOKIE)?)!=cookie||
+    if cookie==0||socket_facts::cookie(socket)?!=cookie||
         !descriptor::status(fd)?.nonblocking()||
-        sock_int(fd,libc::SOL_SOCKET,libc::SO_DOMAIN)?!=libc::AF_INET||
-        sock_int(fd,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
-        sock_int(fd,libc::SOL_SOCKET,libc::SO_PROTOCOL)?!=libc::IPPROTO_TCP||
-        sock_int(fd,libc::SOL_SOCKET,libc::SO_REUSEPORT)?!=0||
-        sock_int(fd,libc::SOL_SOCKET,libc::SO_ACCEPTCONN)?!=1{
+        socket_facts::integer(socket,Integer::Domain)?!=libc::AF_INET||
+        socket_facts::integer(socket,Integer::SocketType)?!=libc::SOCK_STREAM||
+        socket_facts::integer(socket,Integer::Protocol)?!=libc::IPPROTO_TCP||
+        socket_facts::integer(socket,Integer::ReusePort)?!=0||
+        socket_facts::integer(socket,Integer::Accepting)?!=1{
         return Err(Fault::Handoff);
     }
     Ok(())

@@ -1,6 +1,7 @@
 //! Approved exact host listeners only: no externally adopted sockets,
 //! wildcard, reuseport, system network setting, routing or name discovery.
-use super::{Fault,Result,descriptor,kernel::{sock,sock_int}};
+use super::{Fault,Result,descriptor};
+use crate::smb::launch::socket_facts::{self,Integer};
 use std::{collections::BTreeSet,mem::size_of,net::{IpAddr,Ipv4Addr,Ipv6Addr,SocketAddr,TcpListener},
     os::fd::{AsFd,AsRawFd,FromRawFd,BorrowedFd,OwnedFd},ptr};
 
@@ -73,21 +74,21 @@ impl Original{
             }
         };
         if rc!=0{return Err(Fault::Handoff);}
-        let cookie=u64::from_ne_bytes(sock(n,libc::SOL_SOCKET,libc::SO_COOKIE)?);
+        let cookie=socket_facts::cookie(fd.as_fd())?;
         let original=Self{listener:TcpListener::from(fd),endpoint,cookie};
         original.require(false)?;Ok(original)
     }
     fn require(&self,listening:bool)->Result<()>{
-        let fd=self.listener.as_raw_fd();let ip=self.endpoint.0;
+        let socket=self.listener.as_fd();let fd=socket.as_raw_fd();let ip=self.endpoint.0;
         let family=if ip.is_ipv4(){libc::AF_INET}else{libc::AF_INET6};
         descriptor::cloexec(fd)?;
         if !descriptor::status(fd)?.nonblocking()||self.cookie==0||
-            u64::from_ne_bytes(sock(fd,libc::SOL_SOCKET,libc::SO_COOKIE)?)!=self.cookie||
-            sock_int(fd,libc::SOL_SOCKET,libc::SO_DOMAIN)?!=family||sock_int(fd,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
-            sock_int(fd,libc::SOL_SOCKET,libc::SO_PROTOCOL)?!=libc::IPPROTO_TCP||
-            sock_int(fd,libc::SOL_SOCKET,libc::SO_REUSEPORT)?!=0||
-            sock_int(fd,libc::SOL_SOCKET,libc::SO_ACCEPTCONN)?!=listening as i32||
-            ip.is_ipv6()&&sock_int(fd,libc::IPPROTO_IPV6,libc::IPV6_V6ONLY)?!=1||
+            socket_facts::cookie(socket)?!=self.cookie||
+            socket_facts::integer(socket,Integer::Domain)?!=family||socket_facts::integer(socket,Integer::SocketType)?!=libc::SOCK_STREAM||
+            socket_facts::integer(socket,Integer::Protocol)?!=libc::IPPROTO_TCP||
+            socket_facts::integer(socket,Integer::ReusePort)?!=0||
+            socket_facts::integer(socket,Integer::Accepting)?!=listening as i32||
+            ip.is_ipv6()&&socket_facts::integer(socket,Integer::V6Only)?!=1||
             self.listener.local_addr().map_err(|_|Fault::Handoff)?!=SocketAddr::new(ip,PORT){return Err(Fault::Handoff);}
         // SAFETY: bounded kernel query on the original socket; no peer path.
         let mut address:libc::sockaddr_storage=unsafe{std::mem::zeroed()};

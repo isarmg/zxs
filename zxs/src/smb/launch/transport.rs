@@ -10,11 +10,11 @@ pub(super) use handshake::{InheritedControl,child_receipt,offer_packet,read_seal
 use super::{Fault,Result,descriptor::{self,Access,cloexec},
     envelope::{ENV_MAX,Envelope,MAX_LISTENERS,START_BYTES,Start,VaultStamp},
     held_open::{self,ProcOpen},
-    kernel::{BootSocket,OriginalProcess,fs_magic,sock,sock_int}};
+    kernel::{BootSocket,OriginalProcess,fs_magic},socket_facts::{self,Integer}};
 use crate::smb::readiness::{self,Interest,Watch};
 use std::{
     fs::{File,OpenOptions},io,mem::{size_of,zeroed},net::{IpAddr,SocketAddr,TcpListener},
-    os::fd::{AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{MetadataExt,OpenOptionsExt},
+    os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{MetadataExt,OpenOptionsExt},
     path::Path,sync::{Mutex,atomic::AtomicU8},time::{Duration,Instant},
 };
 
@@ -136,16 +136,16 @@ unsafe fn inherit(fd:RawFd)->Result<OwnedFd>{
     Ok(own)
 }
 fn listener(fd:OwnedFd,cookie:u64)->Result<TcpListener>{
-    let raw=fd.as_raw_fd();cloexec(raw)?;
+    let socket=fd.as_fd();let raw=socket.as_raw_fd();cloexec(raw)?;
     if !descriptor::status(raw)?.nonblocking(){return Err(Fault::Handoff);}
-    let family=sock_int(raw,libc::SOL_SOCKET,libc::SO_DOMAIN)?;
+    let family=socket_facts::integer(socket,Integer::Domain)?;
     if !matches!(family,libc::AF_INET|libc::AF_INET6)||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_TYPE)?!=libc::SOCK_STREAM||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_PROTOCOL)?!=libc::IPPROTO_TCP||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_ACCEPTCONN)?!=1||
-        sock_int(raw,libc::SOL_SOCKET,libc::SO_REUSEPORT)?!=0||
-        (family==libc::AF_INET6&&sock_int(raw,libc::IPPROTO_IPV6,libc::IPV6_V6ONLY)?!=1)||
-        u64::from_ne_bytes(sock(raw,libc::SOL_SOCKET,libc::SO_COOKIE)?)!=cookie{return Err(Fault::Handoff);}
+        socket_facts::integer(socket,Integer::SocketType)?!=libc::SOCK_STREAM||
+        socket_facts::integer(socket,Integer::Protocol)?!=libc::IPPROTO_TCP||
+        socket_facts::integer(socket,Integer::Accepting)?!=1||
+        socket_facts::integer(socket,Integer::ReusePort)?!=0||
+        (family==libc::AF_INET6&&socket_facts::integer(socket,Integer::V6Only)?!=1)||
+        socket_facts::cookie(socket)?!=cookie{return Err(Fault::Handoff);}
     let listener=TcpListener::from(fd);let local=listener.local_addr().map_err(|_|Fault::Handoff)?;
     let ip=local.ip();
     if local.port()!=445||ip.is_unspecified()||ip.is_multicast()||ip.is_loopback()||

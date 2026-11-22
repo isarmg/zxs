@@ -418,8 +418,63 @@ int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_
 }
 
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <sys/un.h>
 #include <stddef.h>
+
+/* Linux v6.12 socket UAPI, for older host headers. */
+#ifndef SO_PASSPIDFD
+# if defined(__sparc__)
+#  define SO_PASSPIDFD 0x0055
+# elif defined(__hppa__)
+#  define SO_PASSPIDFD 0x404a
+# else
+#  define SO_PASSPIDFD 76
+# endif
+#endif
+
+enum {
+    SOCKET_DOMAIN=1, SOCKET_TYPE=2, SOCKET_PROTOCOL=3, SOCKET_ACCEPTING=4,
+    SOCKET_REUSE_PORT=5, SOCKET_PASS_CREDENTIALS=6, SOCKET_PASS_PIDFD=7, SOCKET_V6_ONLY=8
+};
+struct socket_integer_fact { int level, option; };
+static const struct socket_integer_fact socket_integer_facts[] = {
+    [SOCKET_DOMAIN] = {SOL_SOCKET, SO_DOMAIN},
+    [SOCKET_TYPE] = {SOL_SOCKET, SO_TYPE},
+    [SOCKET_PROTOCOL] = {SOL_SOCKET, SO_PROTOCOL},
+    [SOCKET_ACCEPTING] = {SOL_SOCKET, SO_ACCEPTCONN},
+    [SOCKET_REUSE_PORT] = {SOL_SOCKET, SO_REUSEPORT},
+    [SOCKET_PASS_CREDENTIALS] = {SOL_SOCKET, SO_PASSCRED},
+    [SOCKET_PASS_PIDFD] = {SOL_SOCKET, SO_PASSPIDFD},
+    [SOCKET_V6_ONLY] = {IPPROTO_IPV6, IPV6_V6ONLY},
+};
+static int socket_value(int fd, int level, int option, void *out, socklen_t width) {
+    socklen_t bytes = width;
+    if (getsockopt(fd, level, option, out, &bytes) != 0 || bytes != width) return -1;
+    return 0;
+}
+int observe_socket_integer(int fd, uint8_t kind, int *out) {
+    if (kind == 0 || kind >= sizeof(socket_integer_facts) / sizeof(socket_integer_facts[0])) return -1;
+    struct socket_integer_fact fact = socket_integer_facts[kind];
+    int value = 0;
+    if (socket_value(fd, fact.level, fact.option, &value, sizeof(value)) != 0) return -1;
+    *out = value;
+    return 0;
+}
+int observe_socket_cookie(int fd, uint64_t *out) {
+    uint64_t value = 0;
+    if (socket_value(fd, SOL_SOCKET, SO_COOKIE, &value, sizeof(value)) != 0) return -1;
+    *out = value;
+    return 0;
+}
+struct socket_peer_credentials { int32_t pid; uint32_t uid, gid; };
+int observe_socket_peer(int fd, struct socket_peer_credentials *out) {
+    struct ucred value = {0};
+    _Static_assert(sizeof(value) == 12, "Linux SO_PEERCRED width");
+    if (socket_value(fd, SOL_SOCKET, SO_PEERCRED, &value, sizeof(value)) != 0) return -1;
+    *out = (struct socket_peer_credentials){value.pid, value.uid, value.gid};
+    return 0;
+}
 
 #include <poll.h>
 

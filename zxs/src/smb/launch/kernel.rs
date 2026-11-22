@@ -1,7 +1,8 @@
 //! Exact kernel evidence shared by the existing inherited role and the
 //! proposed same-ELF parent. Neither a pidfd nor a channel grants a site,
 //! a credential generation, or permission to listen.
-use super::{Fault,Result,descriptor::{cloexec,filesystem_type}};
+use super::{Fault,Result,descriptor::{cloexec,filesystem_type},
+    socket_facts::{self,Integer}};
 use crate::smb::readiness::{self,Interest,Watch};
 use std::{
     fs::File,mem::size_of,
@@ -54,9 +55,9 @@ pub(super) struct BootSocket(OwnedFd);
 impl BootSocket{
     pub(super) fn pin(fd:OwnedFd)->Result<Self>{
         cloexec(fd.as_raw_fd())?;
-        for (opt,value) in [(libc::SO_DOMAIN,libc::AF_UNIX),(libc::SO_TYPE,libc::SOCK_SEQPACKET),
-            (libc::SO_PASSCRED,1),(libc::SO_PASSPIDFD,1),(libc::SO_ACCEPTCONN,0)]{
-            if sock_int(fd.as_raw_fd(),libc::SOL_SOCKET,opt)?!=value{return Err(Fault::Handoff);}
+        for (kind,value) in [(Integer::Domain,libc::AF_UNIX),(Integer::SocketType,libc::SOCK_SEQPACKET),
+            (Integer::PassCredentials,1),(Integer::PassPidFd,1),(Integer::Accepting,0)]{
+            if socket_facts::integer(fd.as_fd(),kind)?!=value{return Err(Fault::Handoff);}
         }
         Ok(Self(fd))
     }
@@ -81,16 +82,11 @@ pub(super) fn fresh_pair()->Result<(BootSocket,BootSocket)>{
     let [left,right]=fds.map(|fd|unsafe{OwnedFd::from_raw_fd(fd)});
     // SAFETY: read actual local credentials, not user-supplied claims.
     let own=unsafe{(libc::getpid(),libc::geteuid(),libc::getegid())};
-    const _:()={assert!(size_of::<libc::ucred>()==12);};
-    for fd in [&left,&right]{
-        let fd=fd.as_raw_fd();
-        let who=sock::<12>(fd,libc::SOL_SOCKET,libc::SO_PEERCRED)?;
-        let (pid,uid,gid)=(i32::from_ne_bytes(who[..4].try_into().expect("four bytes")),
-            u32::from_ne_bytes(who[4..8].try_into().expect("four bytes")),
-            u32::from_ne_bytes(who[8..].try_into().expect("four bytes")));
-        if (pid,uid,gid)!=own{return Err(Fault::Handoff);}
-        for opt in [libc::SO_PASSCRED,libc::SO_PASSPIDFD]{
-            if sock_int(fd,libc::SOL_SOCKET,opt)?!=0{return Err(Fault::Handoff);}
+    for socket in [&left,&right]{
+        let fd=socket.as_raw_fd();
+        if socket_facts::peer_credentials(socket.as_fd())?!=own{return Err(Fault::Handoff);}
+        for (kind,opt) in [(Integer::PassCredentials,libc::SO_PASSCRED),(Integer::PassPidFd,libc::SO_PASSPIDFD)]{
+            if socket_facts::integer(socket.as_fd(),kind)?!=0{return Err(Fault::Handoff);}
             let yes:libc::c_int=1;
             // SAFETY: fixed integer setting on this new private endpoint.
             if unsafe{libc::setsockopt(fd,libc::SOL_SOCKET,opt,(&raw const yes).cast(),size_of::<libc::c_int>() as _)}!=0{
@@ -102,17 +98,6 @@ pub(super) fn fresh_pair()->Result<(BootSocket,BootSocket)>{
 }
 pub(super) fn fs_magic(fd:RawFd)->Result<std::ffi::c_long>{
     filesystem_type(fd).ok_or(Fault::Handoff)
-}
-pub(super) fn sock<const N:usize>(fd:RawFd,layer:libc::c_int,typ:libc::c_int)->Result<[u8;N]>{
-    let mut b=[0;N];let mut n=N as libc::socklen_t;
-    // SAFETY: output pointer and its in/out length cover the live array.
-    if unsafe{libc::getsockopt(fd,layer,typ,b.as_mut_ptr().cast(),&mut n)}!=0||n as usize!=N{
-        return Err(Fault::Handoff);
-    }
-    Ok(b)
-}
-pub(super) fn sock_int(fd:RawFd,layer:libc::c_int,typ:libc::c_int)->Result<libc::c_int>{
-    Ok(libc::c_int::from_ne_bytes(sock(fd,layer,typ)?))
 }
 /// Wrap only a fresh Linux descriptor just returned by the stated syscall.
 ///
