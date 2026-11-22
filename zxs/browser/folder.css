@@ -6,7 +6,10 @@
   min-width: 0;
   padding: .9rem 1rem;
 }
-.zxs-file-manager[hidden], #zxs-folder-load-error[hidden] { display: none; }
+#zxs-files[hidden], #zxs-shares[hidden], #zxs-versions[hidden], #zxs-credentials[hidden],
+#zxs-console-secondary[hidden], #zxs-folder-load-error[hidden] { display: none; }
+#zxs-console-secondary[data-zxs-single] { grid-template-columns: minmax(0, 1fr); }
+.zxs-header-navigation a[aria-current="page"] { color: var(--zxs-link); background: var(--zxs-bg-hover); }
 #zxs-folder-content { display: grid; gap: .7rem; margin-block-start: .6rem; }
 #zxs-folder-content > .zxs-button { justify-self: start; }
 .zxs-breadcrumb ol, .zxs-file-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .65rem; }

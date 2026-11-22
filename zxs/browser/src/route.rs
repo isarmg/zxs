@@ -48,8 +48,28 @@ impl Folder {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Panel {
+    Folders,
+    Shares,
+    Versions,
+    Account,
+}
+
+impl Panel {
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Self::Folders => "zxs-files",
+            Self::Shares => "zxs-shares",
+            Self::Versions => "zxs-versions",
+            Self::Account => "zxs-credentials",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Location {
-    Roots,
+    Landing,
+    Panel(Panel),
     Directory(Folder),
     Other,
     InvalidDirectory,
@@ -57,8 +77,16 @@ pub(crate) enum Location {
 
 impl Location {
     pub(crate) fn parse(hash: &str) -> Self {
-        if hash.is_empty() || hash == ROOTS {
-            return Self::Roots;
+        let at = match hash {
+            "" => return Self::Landing,
+            ROOTS => Some(Panel::Folders),
+            "#zxs-shares" => Some(Panel::Shares),
+            "#zxs-versions" => Some(Panel::Versions),
+            "#zxs-credentials" => Some(Panel::Account),
+            _ => None,
+        };
+        if let Some(panel) = at {
+            return Self::Panel(panel);
         }
         let Some(raw) = hash.strip_prefix(DIRECTORY) else {
             return if hash == "#zxs-d" { Self::InvalidDirectory } else { Self::Other };
@@ -72,6 +100,14 @@ impl Location {
             segments.next().is_none().then_some(Folder { share, parent, page })
         })();
         folder.map(Self::Directory).unwrap_or(Self::InvalidDirectory)
+    }
+
+    pub(crate) fn selected(self) -> Option<Panel> {
+        match self {
+            Self::Panel(panel) => Some(panel),
+            Self::Directory(_) | Self::InvalidDirectory => Some(Panel::Folders),
+            Self::Landing | Self::Other => None,
+        }
     }
 }
 
@@ -95,7 +131,9 @@ mod tests {
 
     #[test]
     fn no_guessed_ids_paths_or_percent_decoding() {
-        assert_eq!(Location::parse("#zxs-versions"), Location::Other);
+        assert_eq!(Location::parse("#zxs-versions"), Location::Panel(Panel::Versions));
+        assert_eq!(Location::parse("#not-a-panel"), Location::Other);
+        assert_eq!(Location::parse(""), Location::Landing);
         for bad in [
             format!("{DIRECTORY}{SHARE}/../-"),
             format!("{DIRECTORY}{SHARE}/%2d/-"),

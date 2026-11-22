@@ -3,7 +3,7 @@ mod route;
 
 use data::{Failure, Kind, Page};
 use js_sys::futures::spawn_local;
-use route::{Folder, Id, Location, ROOTS};
+use route::{Folder, Id, Location, Panel, ROOTS};
 use std::{cell::Cell, rc::Rc};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure, prelude::wasm_bindgen};
 use web_sys::{Document, Element, Event, HtmlElement, Window};
@@ -15,13 +15,19 @@ struct Share {
     label: String,
 }
 
+struct View {
+    kind: Panel,
+    panel: Element,
+    heading: HtmlElement,
+    link: Element,
+}
+
 struct Console {
     window: Window,
     document: Document,
-    section: Element,
-    title: HtmlElement,
+    views: [View; 4],
+    secondary: Element,
     content: Element,
-    navigation: Element,
     shares: Vec<Share>,
     next_share: Option<Id>,
     generation: Cell<u64>,
@@ -31,10 +37,9 @@ struct Console {
 pub fn mount() -> Result<(), JsValue> {
     let window = web_sys::window().ok_or_else(missing)?;
     let document = window.document().ok_or_else(missing)?;
-    let section = element(&document, "zxs-files")?;
-    let title = element(&document, "zxs-folder-title")?.dyn_into::<HtmlElement>()?;
     let content = element(&document, "zxs-folder-content")?;
     let slot = element(&document, "zxs-console-nav")?;
+    let secondary = element(&document, "zxs-console-secondary")?;
     let roots = element(&document, "zxs-browser-roots")?;
     let mut shares = Vec::new();
     let nodes = roots.query_selector_all("[data-zxs-share]")?;
@@ -55,9 +60,15 @@ pub fn mount() -> Result<(), JsValue> {
     let next_share = roots.get_attribute("data-zxs-next")
         .map(|value| Id::parse(&value).ok_or_else(missing))
         .transpose()?;
-    let navigation = link(&document, ROOTS, "目录")?;
+    let directory_link = link(&document, ROOTS, "目录")?;
+    let views = [
+        View::new(&document, Panel::Folders, directory_link.clone())?,
+        View::native(&document, &slot, Panel::Shares)?,
+        View::native(&document, &slot, Panel::Versions)?,
+        View::native(&document, &slot, Panel::Account)?,
+    ];
     let console = Rc::new(Console {
-        window, document, section, title, content, navigation,
+        window, document, views, secondary, content,
         shares, next_share, generation: Cell::new(0),
     });
     let owner = Rc::clone(&console);
@@ -68,11 +79,59 @@ pub fn mount() -> Result<(), JsValue> {
     });
     console.window.add_event_listener_with_callback("hashchange", on_hash.as_ref().unchecked_ref())?;
     on_hash.forget();
-    slot.insert_before(&console.navigation, slot.first_child().as_ref())?;
+    slot.insert_before(&directory_link, slot.first_child().as_ref())?;
     console.navigate(false)
 }
 
+impl View {
+    fn new(document: &Document, kind: Panel, link: Element) -> Result<Self, JsValue> {
+        let panel = element(document, kind.id())?;
+        let id = panel.get_attribute("aria-labelledby").ok_or_else(missing)?;
+        let heading = element(document, &id)?.dyn_into::<HtmlElement>()?;
+        Ok(Self { kind, panel, heading, link })
+    }
+
+    fn native(document: &Document, slot: &Element, kind: Panel) -> Result<Self, JsValue> {
+        let selector = format!(r##"a[href="#{}"]"##, kind.id());
+        let link = slot.query_selector(&selector)?.ok_or_else(missing)?;
+        Self::new(document, kind, link)
+    }
+
+    fn show(&self, visible: bool, selected: bool) -> Result<(), JsValue> {
+        visibility(&self.panel, visible)?;
+        if selected {
+            self.link.set_attribute("aria-current", "page")
+        } else {
+            self.link.remove_attribute("aria-current")
+        }
+    }
+}
+
 impl Console {
+    fn select(&self, location: Location, focus: bool) -> Result<(), JsValue> {
+        let selected = location.selected();
+        for view in &self.views {
+            let active = selected == Some(view.kind);
+            let visible = match selected {
+                Some(_) => active,
+                None => view.kind != Panel::Folders || location == Location::Landing,
+            };
+            view.show(visible, active)?;
+        }
+        let one = matches!(selected, Some(Panel::Versions | Panel::Account));
+        visibility(&self.secondary, one || selected.is_none())?;
+        if one {
+            self.secondary.set_attribute("data-zxs-single", "")?;
+        } else {
+            self.secondary.remove_attribute("data-zxs-single")?;
+        }
+        if focus && let Some(view) = self.views.iter().find(|v| selected == Some(v.kind)) {
+            view.heading.set_attribute("tabindex", "-1")?;
+            view.heading.focus()?;
+        }
+        Ok(())
+    }
+
     fn navigate(self: &Rc<Self>, focus: bool) -> Result<(), JsValue> {
         let hash = self.window.location().hash()?;
         if hash == SKIP {
@@ -82,22 +141,14 @@ impl Console {
         let ticket = self.generation.get().wrapping_add(1);
         self.generation.set(ticket);
         self.content.set_text_content(None);
-        self.section.remove_attribute("aria-busy")?;
-        if location == Location::Other {
-            self.section.set_attribute("hidden", "")?;
-            self.navigation.remove_attribute("aria-current")?;
-            return Ok(());
-        }
-        self.section.remove_attribute("hidden")?;
-        self.navigation.set_attribute("aria-current", "page")?;
-        if focus {
-            self.title.focus()?;
-        }
+        self.select(location, focus)?;
+        let listing = self.content.clone();
+        listing.remove_attribute("aria-busy")?;
         match location {
-            Location::Roots => self.show_roots(),
+            Location::Landing | Location::Panel(Panel::Folders) => self.show_roots(),
             Location::InvalidDirectory => self.directory_error("目录链接无效。"),
             Location::Directory(folder) => {
-                self.section.set_attribute("aria-busy", "true")?;
+                listing.set_attribute("aria-busy", "true")?;
                 self.message("正在加载…", false)?;
                 let owner = Rc::clone(self);
                 spawn_local(async move {
@@ -108,7 +159,7 @@ impl Console {
                     {
                         return;
                     }
-                    let _ = owner.section.remove_attribute("aria-busy");
+                    let _ = listing.remove_attribute("aria-busy");
                     owner.content.set_text_content(None);
                     let rendered = match result {
                         Ok(page) => owner.show_folder(folder, page),
@@ -123,7 +174,7 @@ impl Console {
                 });
                 Ok(())
             }
-            Location::Other => Ok(()),
+            Location::Panel(_) | Location::Other => Ok(()),
         }
     }
 
@@ -266,6 +317,14 @@ impl Console {
         p.set_attribute("role", if alert { "alert" } else { "status" })?;
         self.content.append_child(&p)?;
         Ok(())
+    }
+}
+
+fn visibility(element: &Element, shown: bool) -> Result<(), JsValue> {
+    if shown {
+        element.remove_attribute("hidden")
+    } else {
+        element.set_attribute("hidden", "")
     }
 }
 

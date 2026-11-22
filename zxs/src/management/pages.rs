@@ -32,12 +32,27 @@ pub(super) fn sign_in(failed: bool, secure: bool) -> String {
 }
 
 pub(super) fn overview(data: &Overview, csrf: &str) -> io::Result<String> {
+    render_overview(data, csrf, false)
+}
+
+pub(super) fn browser_overview(data: &Overview, csrf: &str) -> io::Result<String> {
+    render_overview(data, csrf, true)
+}
+
+fn render_overview(data: &Overview, csrf: &str, browser: bool) -> io::Result<String> {
     let mut out = String::from(HEAD);
+    if browser {
+        out.push_str(r#"<link rel="stylesheet" href="/ui/v1/folder.css"><script type="module" src="/ui/v1/boot.js"></script>"#);
+    }
     out.push_str("<title>管理概览 · ZXS</title></head><body>");
     out.push_str(G4_DEFS);
     out.push_str(include_str!("../../web/shell-start.html"));
     out.push_str(r#"<div class="zxs-page-intro"><h1>管理概览</h1><dl class="zxs-endpoint"><dt>SMB 共享名</dt><dd><code>ZXS</code></dd></dl></div>
-<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><h2 id="zxs-shares-title">共享配置</h2>"#);
+"#);
+    if browser {
+        browser_panel(&mut out, data);
+    }
+    out.push_str(r#"<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><h2 id="zxs-shares-title">共享配置</h2>"#);
     if data.shares.is_empty() {
         out.push_str(r#"<p class="zxs-share-frame zxs-share-empty">暂无共享目录。</p>"#);
     } else {
@@ -80,7 +95,7 @@ pub(super) fn overview(data: &Overview, csrf: &str) -> io::Result<String> {
     if let Some(k) = data.next {
         write!(out, r##"<p class="zxs-pagination"><a class="zxs-button" href="/?after={k}#zxs-shares">下一页目录</a></p>"##).unwrap();
     }
-    out.push_str(r#"</section><div class="zxs-overview-actions"><section id="zxs-versions" class="zxs-utility-card zxs-g4-surface" aria-labelledby="zxs-versions-title">"#);
+    out.push_str(r#"</section><div id="zxs-console-secondary" class="zxs-overview-actions"><section id="zxs-versions" class="zxs-utility-card zxs-g4-surface" aria-labelledby="zxs-versions-title">"#);
     out.push_str(G4_PAINT);
     out.push_str(r#"<h2 id="zxs-versions-title">手动提交版本</h2><p><a class="zxs-button" href="/versions">选择文件</a></p></section>
 <section id="zxs-credentials" class="zxs-utility-card zxs-g4-surface" aria-labelledby="zxs-credentials-title">"#);
@@ -91,6 +106,26 @@ pub(super) fn overview(data: &Overview, csrf: &str) -> io::Result<String> {
     text(&mut out, csrf);
     out.push_str(r#""><button class="zxs-button" type="submit">退出登录</button></form></div></section></div></main></div></body></html>"#);
     Ok(out)
+}
+
+fn browser_panel(out: &mut String, data: &Overview) {
+    out.push_str(r#"<section id="zxs-files" class="zxs-file-manager zxs-g4-surface" aria-labelledby="zxs-folder-title" hidden>"#);
+    out.push_str(G4_PAINT);
+    out.push_str(r#"<h2 id="zxs-folder-title" tabindex="-1">目录</h2><div id="zxs-folder-content"></div></section>
+<p id="zxs-folder-load-error" role="alert" hidden>目录未加载，请刷新。</p>
+<div id="zxs-browser-roots" hidden"#);
+    if let Some(next) = data.next {
+        write!(out, r#" data-zxs-next="{next}""#).unwrap();
+    }
+    out.push('>');
+    for share in &data.shares {
+        if share.mode != Mode::Disabled {
+            write!(out, r#"<span data-zxs-share="{}">"#, share.share).unwrap();
+            text(out, &share.label);
+            out.push_str("</span>");
+        }
+    }
+    out.push_str("</div>");
 }
 
 #[cfg(test)]
