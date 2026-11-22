@@ -89,8 +89,8 @@ fn configure(db:&Connection,ro:bool)->io::Result<()>{
 }
 
 pub(super) fn limits(db:&Connection)->io::Result<()>{
-    let fail=|_|bad("cannot establish the SQLite schema/data limits");
     use rusqlite::limits::Limit;
+    let fail=|_|bad("cannot establish the SQLite schema/data limits");
     for (key,n) in [(Limit::SQLITE_LIMIT_LENGTH,1024*1024),(Limit::SQLITE_LIMIT_SCHEMA,MAX_ENGINE_SCHEMA_OBJECTS)]{
         db.set_limit(key,n).map_err(fail)?;
         let actual=db.limit(key).map_err(fail)?;

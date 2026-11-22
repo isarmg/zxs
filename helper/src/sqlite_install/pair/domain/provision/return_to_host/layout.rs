@@ -88,11 +88,11 @@ fn host_mount(site:&Site)->io::Result<()>{
     Ok(())
 }
 fn creation_rights(status:&[u8])->bool{
-    if status.len()>65536||!status.ends_with(b"\n"){return false;}
     fn field<'a>(s:&'a[u8],k:&[u8])->Option<&'a str>{
         let mut rows=s.split(|&c|c==b'\n').filter_map(|row|row.strip_prefix(k));
         let x=std::str::from_utf8(rows.next()?).ok()?;(rows.next().is_none()).then_some(x)
     }
+    if status.len()>65536||!status.ends_with(b"\n"){return false;}
     let Some(mask)=field(status,b"Umask:\t").filter(|v|v.len()==4&&v.as_bytes()[0]==b'0'&&v.bytes().all(|c|matches!(c,b'0'..=b'7')))
         .and_then(|v|u32::from_str_radix(v,8).ok())else{return false;};
     let Some(cap)=field(status,b"CapEff:\t").filter(|v|v.len()==16&&v.bytes().all(|c|c.is_ascii_hexdigit()))

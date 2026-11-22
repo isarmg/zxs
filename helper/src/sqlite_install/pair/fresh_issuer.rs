@@ -33,13 +33,13 @@ impl ExplicitSubject{
     }
     pub(in crate::sqlite_install) fn parse(it:&mut impl Iterator<Item=OsString>)->Result<Self,&'static str>{
         use super::command::{key,value};
-        let actor=key(it,"--init-actor")?;
         fn who(it:&mut impl Iterator<Item=OsString>,key:&str)->Result<u32,&'static str>{
             let os=value(it,key)?;
             let s=os.to_str().ok_or("expected a canonical numeric storage credential")?;
             s.parse::<u32>().ok().filter(|v|!matches!(*v,0|65534|u32::MAX)&&v.to_string()==s)
                 .ok_or("expected a canonical nonroot numeric storage UID/GID")
         }
+        let actor=key(it,"--init-actor")?;
         let uid=who(it,"--storage-uid")?;let gid=who(it,"--storage-gid")?;
         Self::checked(actor,uid,gid).map_err(|_|"wrong original explicit storage subject")
     }

@@ -65,6 +65,13 @@ mod enabled{
         // The production caller can only pass the compiled immutable asset
         // and digest. Tests compile this path but never enter it.
         fn publish(self,asset:&[u8],packaged:[u8;32])->io::Result<()>{
+            fn absent(dir:&File)->io::Result<()>{
+                match openat2(dir,DEST,PIN,Mode::empty(),WITHIN){
+                    Err(rustix::io::Errno::NOENT)=>Ok(()),
+                    Ok(_)=>Err(io::Error::new(io::ErrorKind::AlreadyExists,"the fixed ZXS executable name is already occupied; left untouched")),
+                    Err(e)=>Err(e.into()),
+                }
+            }
             require_v18()?;
             let digest=verify(asset,packaged,self.independent)?;
             approval::no_inherited_descriptors()?;
@@ -86,13 +93,6 @@ mod enabled{
             super::super::path::check_image(&path)?;
             let protected=site.protect_image_destination(dir_id)?;
             if target.includes(protected){return Err(denied());}
-            fn absent(dir:&File)->io::Result<()>{
-                match openat2(dir,DEST,PIN,Mode::empty(),WITHIN){
-                    Err(rustix::io::Errno::NOENT)=>Ok(()),
-                    Ok(_)=>Err(io::Error::new(io::ErrorKind::AlreadyExists,"the fixed ZXS executable name is already occupied; left untouched")),
-                    Err(e)=>Err(e.into()),
-                }
-            }
             let require=||->io::Result<()>{
                 tty.check()?;site.before_original_sql(&scope)?;target.require()?;
                 if cancelled()||dir_id!=identity((&directory,mount))?||directory.metadata()?.mode()&0o2000!=0||

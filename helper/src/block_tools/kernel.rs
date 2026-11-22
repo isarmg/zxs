@@ -28,9 +28,9 @@ fn diskseq(dir:&File)->Field<u64>{
     if n==0 {Err(Reason::Invalid)} else {Ok(n)}
 }
 fn label(raw:&[u8])->Field<String>{
+    use fmt::Write;
     if raw.is_empty() || raw.len()>96 {return Err(Reason::Invalid);}
     let mut s=String::new();
-    use fmt::Write;
     for &b in raw {
         if b.is_ascii_alphanumeric() || b"._-+:".contains(&b){s.push(char::from(b));}
         else {write!(&mut s,"%{b:02X}").expect("String formatting is infallible");}

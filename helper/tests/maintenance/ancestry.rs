@@ -5,6 +5,7 @@ use std::fs;
 
 #[test]
 fn stateless_discovery_uses_only_escaped_whole_local_mount_names_and_is_bounded(){
+    use std::fmt::Write;
     let raw=b"41 41 8:1 / / rw - ext4 /dev/root rw\n\
         42 41 8:2 / /mnt/one\\040space\\134disk\\012line\\011tab rw - ext4 /dev/local rw\n\
         43 41 8:2 /subtree /mnt/bind rw - ext4 /dev/local rw\n\
@@ -32,7 +33,6 @@ fn stateless_discovery_uses_only_escaped_whole_local_mount_names_and_is_bounded(
     assert_eq!(named.named(Path::new("/mnt/ordinary-subdir"),Some(41)).unwrap(),None);
     assert!(Mounts::discover(&raw[..raw.len()-1]).is_err());
     let mut oversized=String::from("999 999 8:1 / / rw - ext4 /dev/root rw\n");
-    use std::fmt::Write;
     for i in 1..=DISCOVERY_ROOTS+1{
         writeln!(oversized,"{i} 999 8:2 / /mnt/r{i} rw - ext4 /dev/local rw").unwrap();
     }

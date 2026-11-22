@@ -144,10 +144,6 @@ mod tests{
     fn stateless_discovery_retains_real_exact_marker_and_metadata_only(){
         use std::{fs::{self,File},os::unix::fs::PermissionsExt};
         use crate::sqlite_install::{DATABASE,MARKER,catalog::claimed_marker};
-        assert!(std::env::var_os("HELPER_TEST_DATA_PARENT").is_some());
-        assert!(!rustix::process::getuid().is_root());
-        let temp=crate::test_area::data_directory();
-        let path=temp.path();
         // One explicitly created disposable path, no real mount table
         // enumeration. This fixture authorizes NO mount crossing at all.
         struct Flat{fds:pinned::DiscoveryFdInfo,id:u64}
@@ -160,6 +156,10 @@ mod tests{
                 Ok(id)
             }
         }
+        assert!(std::env::var_os("HELPER_TEST_DATA_PARENT").is_some());
+        assert!(!rustix::process::getuid().is_root());
+        let temp=crate::test_area::data_directory();
+        let path=temp.path();
         let fds=pinned::DiscoveryFdInfo::open().unwrap();
         let root=File::from(rustix::fs::open(c"/",rustix::fs::OFlags::PATH|rustix::fs::OFlags::CLOEXEC,rustix::fs::Mode::empty()).unwrap());
         let gate=Flat{id:fds.mount(&root).unwrap(),fds};

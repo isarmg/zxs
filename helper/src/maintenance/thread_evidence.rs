@@ -87,10 +87,10 @@ pub(crate) fn diagnostic_worker(uid:u32,gid:u32)->io::Result<()> {
 }
 
 fn check_status(data: &[u8], uid: u32, service_gid: u32) -> io::Result<()> {
+    const KEYS: [&[u8]; 8] = [b"Uid:", b"Gid:", b"Groups:", b"CapInh:", b"CapPrm:", b"CapEff:", b"CapAmb:", b"NoNewPrivs:"];
     let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "need the unprivileged, no-new-privileges storage worker");
     if [uid, service_gid].iter().any(|v| *v == 0 || *v == u32::MAX)
         || data.len() > STATUS_MAX || !data.ends_with(b"\n") { return Err(denied()); }
-    const KEYS: [&[u8]; 8] = [b"Uid:", b"Gid:", b"Groups:", b"CapInh:", b"CapPrm:", b"CapEff:", b"CapAmb:", b"NoNewPrivs:"];
     let uid = uid.to_string();
     let gid = service_gid.to_string();
     let mut seen = [false; KEYS.len()];

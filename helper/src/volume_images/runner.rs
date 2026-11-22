@@ -197,6 +197,7 @@ impl<'a> Operand<'a>{
 }
 struct Captured{code:i32,out:Vec<u8>,err:Vec<u8>,status:Vec<u8>}
 fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<Captured>{
+    use helper_linux_evidence::diagnostic_process::{prepare_diagnostic_exec,prepare_leased_diagnostic_exec,prepare_xfs_diagnostic_exec};
     let repairing_ext=matches!(copy,Operand::RepairExt4{..});
     let repairing_fat=matches!(copy,Operand::RepairExfat{..}|Operand::RepairFat32{..});
     let ext=repairing_ext||matches!(copy,Operand::LeasedExt4(_));
@@ -260,7 +261,6 @@ fn invoke(runtime:&Runtime,copy:Operand<'_>)->io::Result<Captured>{
     else{b.args(["-n","/image"]);} // includes the limited NTFS observer
     runtime.recheck()?;
     not_cancelled()?;
-    use helper_linux_evidence::diagnostic_process::{prepare_diagnostic_exec,prepare_leased_diagnostic_exec,prepare_xfs_diagnostic_exec};
     match copy{
         Operand::Sealed(_)=>prepare_diagnostic_exec(&mut b,runtime.launcher())?,
         Operand::LeasedExt4(image)=>{image.require()?;prepare_leased_diagnostic_exec(&mut b,runtime.launcher())?;},

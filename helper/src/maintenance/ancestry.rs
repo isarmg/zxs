@@ -185,13 +185,13 @@ impl Mounts {
         Self::parse_each(bytes,|_,_,_|Ok(()))
     }
     fn parse_each(bytes: &[u8],mut visit:impl FnMut(u64,Row,&[u8])->io::Result<()>) -> io::Result<Self> {
-        let bad = || unknown("incomplete, oversized or ambiguous mountinfo");
-        if bytes.is_empty() || bytes.len() > TABLE_BYTES || !bytes.ends_with(b"\n") { return Err(bad()); }
-        let mut rows = BTreeMap::new();
         fn number(b: &[u8]) -> Option<u64> {
             if b.is_empty() || !b.iter().all(u8::is_ascii_digit) { return None; }
             std::str::from_utf8(b).ok()?.parse().ok()
         }
+        let bad = || unknown("incomplete, oversized or ambiguous mountinfo");
+        if bytes.is_empty() || bytes.len() > TABLE_BYTES || !bytes.ends_with(b"\n") { return Err(bad()); }
+        let mut rows = BTreeMap::new();
         for line in bytes[..bytes.len()-1].split(|&c| c == b'\n') {
             if rows.len() >= TABLE_ROWS { return Err(bad()); }
             let mut words = line.split(|&c| c == b' ');

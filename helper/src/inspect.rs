@@ -98,6 +98,16 @@ pub(crate) fn compare(left: &Path, right: &Path) -> io::Result<Comparison> {
 }
 
 fn exact_bytes(a: &mut impl Read, mut remaining_a: u64, b: &mut impl Read, mut remaining_b: u64) -> io::Result<bool> {
+    fn at_end(r: &mut impl Read) -> io::Result<bool> {
+        let mut byte = [0_u8];
+        loop {
+            match r.read(&mut byte) {
+                Ok(n) => return Ok(n == 0),
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
     let mut left = vec![0_u8; 64 * 1024];
     let mut right = vec![0_u8; left.len()];
     let mut same = remaining_a == remaining_b;
@@ -110,16 +120,6 @@ fn exact_bytes(a: &mut impl Read, mut remaining_a: u64, b: &mut impl Read, mut r
         same = same && left[..na] == right[..nb];
         remaining_a -= na as u64;
         remaining_b -= nb as u64;
-    }
-    fn at_end(r: &mut impl Read) -> io::Result<bool> {
-        let mut byte = [0_u8];
-        loop {
-            match r.read(&mut byte) {
-                Ok(n) => return Ok(n == 0),
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
-            }
-        }
     }
     if !at_end(a)? || !at_end(b)? { return Err(invalid("actual bytes exceed the observed file size")); }
     Ok(same)

@@ -92,9 +92,9 @@ impl<'s> AccountCut<'s>{
 }
 impl<'s> WriteGate<'_, 's> {
     pub(in crate::sqlite_install) fn database(&self)->io::Result<&Existing<'s>> {
+        use rustix::fs::{StatVfsMountFlags, fstatvfs};
         expired(self.until)?;
         self.source.clean()?;
-        use rustix::fs::{StatVfsMountFlags, fstatvfs};
         if fstatvfs(self.source.locking.source().dir())?.f_flag.contains(StatVfsMountFlags::RDONLY) {
             return Err(bad("cannot write the original SYSTEM mount"));
         }
