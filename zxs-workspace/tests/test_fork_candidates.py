@@ -75,15 +75,81 @@ class PendingFork(unittest.TestCase):
 
     def test_exact_original_bytes_fork_and_lost_reply_reuses_only_recorded_successor(self):
         (self.work/"original").write_bytes(b"later working bytes")
-        final, marker = self.fork()
+        hold, publish = worktree.held_store, worktree._publish
+        held = []
+
+        @contextmanager
+        def keep_original(store):
+            with hold(store) as scope:
+                held.append(scope)
+                yield scope
+
+        def use_original(local, scope, marker, digest):
+            self.assertEqual(held, [scope])
+            self.assertTrue(os.path.samestat(os.fstat(scope.fd), self.store.stat()))
+            return publish(local, scope, marker, digest)
+
+        with patch.object(worktree, "held_store", keep_original), \
+             patch.object(worktree, "publish", side_effect=AssertionError("do not reopen STORE")), \
+             patch.object(worktree, "_publish", side_effect=use_original):
+            final, marker = self.fork()  # CLI first-generation conflicts remain eligible.
         self.assertEqual((marker.branch,marker.operation,marker.parent,marker.tree),
                          (self.branch,self.operation,self.old.parent,self.old.tree))
         self.assertEqual(read_archive(self.output)[0], marker)
         self.assertEqual(final.read_bytes(),self.output.read_bytes())
         self.assertEqual(self.source.read_bytes(),self.raw)
         self.source.rename(self.state/"offline-original")
-        with patch.object(CandidateDirectory, "fork", side_effect=AssertionError("must not rebranch")):
+        self.winner.rename(self.root/"offline-winner")
+        with patch.object(CandidateDirectory, "fork", side_effect=AssertionError("must not rebranch")), \
+             patch.object(worktree, "relative_document", side_effect=AssertionError("no old winner needed")):
             self.assertEqual(worktree.fork_pending(self.state, self.old.operation), (final,marker))
+
+    def test_slot_symlink_does_not_authorize_a_new_successor(self):
+        retained = self.root/"held-winner"
+        self.winner.rename(retained); self.winner.symlink_to(retained)
+        with patch.object(CandidateDirectory, "fork", side_effect=AssertionError("no private fork")):
+            with self.assertRaises((OSError, Rejected)): self.fork()
+        self.assertTrue(self.winner.is_symlink())
+        self.assertFalse(self.output.exists())
+        self.still_pending()
+
+    def test_equal_byte_winner_rebound_after_private_copy_rolls_back_the_successor(self):
+        copy = CandidateDirectory.fork
+        retained = self.root/"held-winner"
+
+        def copy_then_rebind(area, old, expected_sha, new):
+            digest = copy(area, old, expected_sha, new)
+            self.winner.rename(retained); self.winner.write_bytes(retained.read_bytes())
+            return digest
+
+        with patch.object(CandidateDirectory, "fork", copy_then_rebind), \
+             patch.object(worktree, "finish", side_effect=AssertionError("no accepted successor to finish")):
+            with self.assertRaisesRegex(Rejected, "original archive leaf was replaced or modified"): self.fork()
+        self.assertFalse(os.path.samestat(self.winner.stat(), retained.stat()))
+        self.assertTrue(self.output.is_file())  # The unaccepted private output is not cleaned up or published.
+        self.still_pending()
+
+    def test_store_change_after_local_receipt_never_retargets_the_first_publish(self):
+        finish, retained = worktree.finish, self.root/"held-store"
+
+        def switch_store(state, operation, *, original_store):
+            self.assertEqual(operation, self.operation)
+            self.assertTrue(os.path.samestat(os.fstat(original_store.fd), self.store.stat()))
+            self.store.rename(retained); self.store.mkdir()
+            return finish(state, operation, original_store=original_store)
+
+        with patch.object(worktree, "finish", side_effect=switch_store), \
+             patch.object(worktree, "_publish", side_effect=AssertionError("no upload into a renamed STORE")):
+            with self.assertRaisesRegex(Rejected, "selected archive store changed"): self.fork()
+        self.assertEqual(list(self.store.iterdir()), [])
+        self.assertEqual(list(retained.iterdir()), [retained/self.winner.name])
+        self.assertEqual(worktree.status(self.state)["pending_operation"], self.operation)
+        self.assertTrue(self.output.is_file())
+        self.store.rename(self.root/"replacement-store"); retained.rename(self.store)
+        self.winner.rename(self.root/"offline-winner")
+        with patch.object(worktree, "relative_document", side_effect=AssertionError("no old winner needed")):
+            final, marker = worktree.fork_pending(self.state, self.old.operation)
+        self.assertEqual((final.parent, marker.operation), (self.store, self.operation))
 
     def test_input_name_changes_after_admission_never_copies_the_other_input(self):
         candidate = CandidateDirectory.candidate

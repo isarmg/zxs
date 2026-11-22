@@ -1,19 +1,20 @@
 """One client-owned SQLite catalog per checkout, outside both its tree and share."""
 from __future__ import annotations
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 import os
 from pathlib import Path
 import sqlite3
 import tempfile
 from . import lifecycle
-from .archive import read_archive
+from .archive import read_managed_document, stamp
 from .capacity import note, writing
+from .document import check_relative, relative_document
 from .freeze import frozen_tree, pack
 from .model import Commit, Rejected, check_id, new_id
 from .private_candidates import held_candidates
 from .private_freeze import anonymous_capture
-from .publish import _publish, confirm_final, publish, rename_new, rename_new_at, require_native_writer, sync_dir
+from .publish import _publish, confirm_final, held_store, publish, rename_new, rename_new_at, require_native_writer, sync_dir
 
 
 def paths(work, store, state):
@@ -157,28 +158,37 @@ def sync_live_state(live, operation, phase, *, local_only=False):
     live.check_catalog(db, local_only=local_only)
 
 
-def finish(state, operation, *, selected=None):
+def finish(state, operation, *, selected=None, original_store=None):
+    """Finish a recorded operation; a fresh CLI fork can reuse its held STORE."""
     operation = check_id(operation)
     live = None if selected is None else selected.live
     if selected is not None and (operation != selected.operation or selected.closed
                                  or not selected.used or not selected.ready):
         raise Rejected("not the reviewed original operation")
+    if selected is not None and original_store is not None:
+        raise Rejected("a reviewed operation already supplies its original store")
     with locked(state, live=live, operation=operation, journal_delete=live is not None,
                 phase="记原提交回执；正式归档可能已出现，不能按返回失败判断是否发布") as (con, row, state):
         if live is not None: live.check_instance(row, lifecycle.instance(con))
         if selected is not None and selected.purpose == "conflict-fork":
             selected.require_link(con)
+        store = Path(row["store"])
+        if original_store is not None:
+            if original_store.path != store.absolute():
+                raise Rejected("recorded archive store changed after the original fork decision")
+            original_store.check_store()
         done = con.execute("SELECT marker,digest FROM completed WHERE operation=?", (operation,)).fetchone()
         if done is not None:
             marker = Commit.decode(done["marker"])
-            target = Path(row["store"]) / marker.filename
+            target = store / marker.filename
             if marker.operation != operation: raise Rejected("completed record does not name the original operation")
             if selected is not None:
                 selected.check_marker(marker, done["digest"])
                 if selected.purpose in ("retry", "conflict-fork"):
                     raise Rejected("原操作已登记完成；本次没有上传，请只读查询其历史回执")
-            matched = (confirm_final(target, marker, done["digest"]) if selected is None else
-                       selected.store.confirm(marker, done["digest"]))
+            scope = original_store if selected is None else selected.store
+            matched = (confirm_final(target, marker, done["digest"]) if scope is None else
+                       scope.confirm(marker, done["digest"]))
             if not matched:
                 raise Rejected("completed original archive is unavailable; no replacement was published")
             return target, marker
@@ -189,7 +199,10 @@ def finish(state, operation, *, selected=None):
         if marker.operation != operation: raise Rejected("another operation is pending; no worktree was recaptured")
         local = state / (marker.operation + ".zxs")
         if selected is None:
-            target = publish(local, Path(row["store"]), marker, row["pending_sha"])
+            if original_store is None:
+                target = publish(local, store, marker, row["pending_sha"])
+            else:
+                target = _publish(local, original_store, marker, row["pending_sha"])
         else:
             selected.check_row(con, row)
             selected.check_marker(marker, row["pending_sha"])
@@ -364,22 +377,35 @@ def fork_pending(state, operation, *, selected=None):
     require_native_writer()  # Reject an unavailable native primitive before opening/recovering SQLite.
     if selected is not None:
         return _fork_reviewed(state, operation, selected)
-    with held_candidates(state) as area, locked(state) as (con, row, state):
-        area.check_state()
-        prior = con.execute("SELECT successor FROM forked_original WHERE operation=?", (operation,)).fetchone()
-        if prior is not None:
-            successor = prior[0]
-        else:
-            lifecycle.require_visible(con, row)
-            if row["pending"] is None: raise Rejected("no pending directory snapshot")
-            old = Commit.decode(row["pending"])
-            if old.operation != operation:
-                raise Rejected("refusing to replace a different pending operation")
-            winner, _ = read_archive(Path(row["store"]) / old.filename)
-            if (winner.repo, winner.branch, winner.generation) != (old.repo, old.branch, old.generation) or winner.operation == old.operation:
-                raise Rejected("not a verified conflicting commit in the original branch slot")
-            marker = Commit(old.repo, new_id(), 1, new_id(), old.parent, old.tree)
-            successor = marker.operation
-            digest = area.fork(old, row["pending_sha"], marker)
-            _record_fork(con, operation, marker, digest)
-    return finish(state, successor)
+    with ExitStack() as held:
+        store = None
+        with held_candidates(state) as area, locked(state) as (con, row, state):
+            area.check_state()
+            prior = con.execute("SELECT successor FROM forked_original WHERE operation=?", (operation,)).fetchone()
+            if prior is not None:
+                successor = prior[0]
+            else:
+                lifecycle.require_visible(con, row)
+                if row["pending"] is None: raise Rejected("no pending directory snapshot")
+                old = Commit.decode(row["pending"])
+                if old.operation != operation:
+                    raise Rejected("refusing to replace a different pending operation")
+                store = held.enter_context(held_store(Path(row["store"])))
+                name = old.filename
+                with relative_document(store.fd, name) as occupied:
+                    observed = stamp(occupied)
+                    winner, _ = read_managed_document(occupied, display_name=name)
+                    if ((winner.repo, winner.branch, winner.generation) != (old.repo, old.branch, old.generation)
+                            or winner.operation == old.operation):
+                        raise Rejected("not a verified conflicting commit in the original branch slot")
+                    check_relative(store.fd, name, occupied, observed)
+                    store.check_store()
+                    marker = Commit(old.repo, new_id(), 1, new_id(), old.parent, old.tree)
+                    successor = marker.operation
+                    digest = area.fork(old, row["pending_sha"], marker)
+                    _record_fork(con, operation, marker, digest)
+                    # This transaction still rolls back if the verified winner or STORE changed.
+                store.check_store()
+        if store is not None:
+            return finish(state, successor, original_store=store)
+    return finish(state, successor)  # The durable successor no longer needs the occupied old slot.
