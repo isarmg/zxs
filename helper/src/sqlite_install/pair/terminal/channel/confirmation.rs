@@ -47,10 +47,10 @@ impl PublicConfirmation{
         self.ask("INIT-ZXS-V18",Some(review),1100*1024)
     }
     #[cfg(any(test,feature="embedded-zxs"))]
-    pub(in crate::sqlite_install::pair) fn confirm_embedded_zxs(&self,review:String)->io::Result<()>{
+    pub(in crate::sqlite_install::pair) fn confirm_image_installation(&self,review:String)->io::Result<()>{
         self.ask("INSTALL-ZXS-IMAGE",Some(review),32*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_fresh_zxs(&self,review:String)->io::Result<()>{
+    pub(in crate::sqlite_install::pair) fn confirm_initial_deployment(&self,review:String)->io::Result<()>{
         self.ask("ISSUE-ZXS-V18",Some(review),1100*1024)
     }
     pub(in crate::sqlite_install::pair) fn confirm_ext_repair(&self,preview:String)->io::Result<()>{

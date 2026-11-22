@@ -1,6 +1,6 @@
 //! Preserve exact protected product ancestors plus nonreplacement publication.
-mod fresh_zxs;
-pub(in crate::sqlite_install::pair) use fresh_zxs::{FreshHome,FreshParent};
+mod initial_deployment;
+pub(in crate::sqlite_install::pair) use initial_deployment::{FreshHome,FreshParent};
 use super::{PRODUCT,Site,bad,child,contents,mark,product_leaf,product_pin,product_top,safe_dir};
 use super::super::Times;
 use crate::{maintenance::HostMounts,pinned::Mount,sqlite_install::product_layout};

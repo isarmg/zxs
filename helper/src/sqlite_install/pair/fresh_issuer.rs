@@ -191,7 +191,7 @@ impl<'a> FreshConsent<'a>{
             ||m.system!=site.system||f.subject!=site.subject||f.init_sha!=target.init_sha||change.previous().is_some(){
             return Err(bad("different exact fresh setup preview"));
         }
-        tty.confirm_fresh_zxs(preview)?;
+        tty.confirm_initial_deployment(preview)?;
         Ok(Self{tty,scope,site:stamp,action,target})
     }
     pub(in crate::sqlite_install::pair) fn terminal(&self)->&'a PublicConfirmation{self.tty}

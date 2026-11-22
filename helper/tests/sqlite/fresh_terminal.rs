@@ -17,7 +17,7 @@ fn fresh_v18_one_real_consent_allows_original_scoped_phase_without_second_prompt
         let stdin=io::stdin();setsid().unwrap();
         ioctl_tiocsctty(&stdin).unwrap();tcsetpgrp(&stdin,getpid()).unwrap();
         let tty=PublicConfirmation::select().unwrap();
-        tty.confirm_fresh_zxs("fixture initial preview (no site, no disk, no password)\n".into()).unwrap();
+        tty.confirm_initial_deployment("fixture initial preview (no site, no disk, no password)\n".into()).unwrap();
         filesystem_phase(&||tty.check(),|check|{check()?;check()}).unwrap();
         filesystem_phase(&||tty.check(),|check|check()).unwrap();
         tty.report("FRESH-FIXTURE-ONE-PROMPT-CLOSED\n").unwrap();

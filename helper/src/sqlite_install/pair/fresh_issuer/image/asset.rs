@@ -102,7 +102,7 @@ mod enabled{
                 Ok(())
             };
             require()?;absent(&directory)?;
-            tty.confirm_embedded_zxs(format!("只写入一个可独立运行的 ZXS 文件：{:?}\nSHA-256 {} / {} 字节；不覆盖、不启动、不设置账户、不创建或迁移任何池。\n",
+            tty.confirm_image_installation(format!("只写入一个可独立运行的 ZXS 文件：{:?}\nSHA-256 {} / {} 字节；不覆盖、不启动、不设置账户、不创建或迁移任何池。\n",
                 path,hex(&digest),asset.len()))?;
             watch_cancellation()?;
             let deadline=Instant::now()+Duration::from_mins(10);
