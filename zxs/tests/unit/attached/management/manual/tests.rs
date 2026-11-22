@@ -9,6 +9,6 @@ fn actual_stop_is_consulted_even_before_owner_mirrors_it(){
     assert!(live(&stop,&owner_mirror,&session,expires).is_ok());
     original.store(true,Ordering::Release);
     assert!(!owner_mirror.load(Ordering::Acquire));
-    assert_eq!(live(&stop,&owner_mirror,&session,expires).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+    assert!(access_refused(&live(&stop,&owner_mirror,&session,expires).unwrap_err()));
     assert!(owner_mirror.load(Ordering::Acquire));
 }

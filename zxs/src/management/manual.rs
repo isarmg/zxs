@@ -1,6 +1,6 @@
 //! Only same-origin, CSRF-checked and positively displayed manual work
 //! may be handed to the one bounded worker. No automatic publication path.
-use super::{App,BAD,REJECT,UNAVAILABLE,Reply,Request,Session,Token,pages,transport};
+use super::{App,BAD,REJECT,UNAVAILABLE,Reply,Request,Session,Token,access_refused,inactive_session,pages,transport};
 use crate::{FileId,OperationId,system::reader::account::manual_work::{Site,Target,Who}};
 use std::{io,sync::{Arc,atomic::{AtomicBool,Ordering},mpsc},time::Instant};
 
@@ -20,7 +20,7 @@ fn stale_form()->Reply{Reply::text("409 Conflict","表单已失效：这次没�
 pub(super) fn live(stopping:&impl Fn()->bool,closing:&AtomicBool,session:&AtomicBool,before:Instant)->io::Result<()>{
     if stopping(){closing.store(true,Ordering::Release);}
     if closing.load(Ordering::Acquire)||!session.load(Ordering::Acquire)||Instant::now()>=before{
-        Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        Err(inactive_session())
     }else{Ok(())}
 }
 impl Work{
@@ -28,7 +28,7 @@ impl Work{
         let qualifies=||live(stopping,closing,&self.session,self.before);
         match site.freeze(self.who,self.op,self.target,qualifies) {
             Ok(r)=>pages::frozen(r),
-            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>REJECT(),
+            Err(e)if access_refused(&e)=>REJECT(),
             Err(e)if matches!(e.kind(),io::ErrorKind::InvalidInput|io::ErrorKind::WouldBlock)=>conflict(),
             Err(e)if e.kind()==io::ErrorKind::NotFound=>Reply::text("503 Service Unavailable","文件已登记，但暂时无法核对原数据盘和文件。"),
             Err(_)=>Reply::text("503 Service Unavailable","未确认本次结果。原会话与表单仍有效时，可用“只查本次回执”核对；勿用新表单重发。"),
@@ -49,7 +49,7 @@ impl<'s> App<'s>{
         let prepared=s.admin.manual_files(after).map(|(items,next)|pages::manual_index(&items,next));
         match s.finish_read(prepared){
             Ok(reply)=>reply,
-            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);Reply::redirect("/login")},
+            Err(e)if access_refused(&e)=>{self.sessions.remove(key);Reply::redirect("/login")},
             Err(_)=>UNAVAILABLE(),
         }
     }
@@ -67,7 +67,7 @@ impl<'s> App<'s>{
         let prepared=s.admin.manual_timeline(file,upper).map(|history|pages::version_history(&history));
         match s.finish_read(prepared){
             Ok(reply)=>reply,
-            Err(e) if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);Reply::redirect("/login")},
+            Err(e) if access_refused(&e)=>{self.sessions.remove(key);Reply::redirect("/login")},
             Err(e) if e.kind()==io::ErrorKind::NotFound=>Reply::text("404 Not Found","没有此文件。"),
             Err(_)=>UNAVAILABLE(),
         }
@@ -83,7 +83,7 @@ impl<'s> App<'s>{
         });
         match s.finish_read(prepared){
             Ok((op,target,reply))=>{s.chosen=Some((op,target));reply},
-            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);Reply::redirect("/login")},
+            Err(e)if access_refused(&e)=>{self.sessions.remove(key);Reply::redirect("/login")},
             Err(e)if e.kind()==io::ErrorKind::NotFound=>Reply::text("404 Not Found","没有此文件。"),
             Err(e)if e.kind()==io::ErrorKind::WouldBlock=>conflict(),
             Err(_)=>UNAVAILABLE(),
@@ -105,7 +105,7 @@ impl<'s> App<'s>{
         });
         match s.finish_read(prepared){
             Ok(reply)=>reply,
-            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>{
+            Err(e)if access_refused(&e)=>{
                 if let Some(key)=q.cookie.as_ref(){self.sessions.remove(key);}
                 REJECT()
             },

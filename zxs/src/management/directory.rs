@@ -1,5 +1,5 @@
 //! Wire adapter for the same authenticated, metadata-only directory read.
-use super::{App,BAD,LOGIN_REQUIRED,REJECT,Reply,Request,Session,UNAVAILABLE};
+use super::{App,BAD,LOGIN_REQUIRED,REJECT,Reply,Request,Session,UNAVAILABLE,access_refused};
 use crate::{DirectoryId,OperationId,identity::ShareId,system::reader::account::navigation::{Cursor,Directory,Entry,Page}};
 use std::{borrow::Cow,collections::VecDeque,fmt::Write as _,io,time::Instant};
 
@@ -98,8 +98,8 @@ impl App<'_>{
         let Some(s)=self.sessions.get_mut(key)else{return Some(LOGIN_REQUIRED());};
         Some(match page(s,&query){
             Ok(reply)=>reply,
+            Err(e) if access_refused(&e)=>{self.sessions.remove(key);LOGIN_REQUIRED()},
             Err(e)=>match e.kind(){
-                io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);LOGIN_REQUIRED()},
                 io::ErrorKind::NotFound=>Reply::text("404 Not Found","没有此目录。"),
                 io::ErrorKind::WouldBlock=>Reply::text("409 Conflict","请重新打开目录。"),
                 _=>UNAVAILABLE(),

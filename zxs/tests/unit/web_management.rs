@@ -8,13 +8,18 @@ fn completed_web_reads_obey_both_expiry_boundaries_without_refreshing_failures()
     let born=Instant::now();
     let second=Duration::from_secs(1);
     let missing=||Err::<(),_>(io::ErrorKind::NotFound.into());
+    let unavailable=||Err::<(),_>(io::ErrorKind::PermissionDenied.into());
     for (original,expiry) in [(born+second,born+second+IDLE),(born+ABSOLUTE-second,born+ABSOLUTE)]{
         let mut last=original;
         let just_before=expiry-second;
         assert_eq!(finish_read_at(born,&mut last,just_before,missing()).unwrap_err().kind(),io::ErrorKind::NotFound);
         assert_eq!(last,original);
-        assert_eq!(finish_read_at(born,&mut last,expiry,Ok(())).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
-        assert_eq!(finish_read_at(born,&mut last,expiry,missing()).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+        let refused=finish_read_at(born,&mut last,just_before,unavailable()).unwrap_err();
+        assert_eq!(refused.kind(),io::ErrorKind::PermissionDenied);
+        assert!(!access_refused(&refused));
+        assert!(access_refused(&finish_read_at(born,&mut last,expiry,Ok(())).unwrap_err()));
+        assert!(access_refused(&finish_read_at(born,&mut last,expiry,missing()).unwrap_err()));
+        assert!(access_refused(&finish_read_at(born,&mut last,expiry,unavailable()).unwrap_err()));
         assert_eq!(last,original);
         assert!(finish_read_at(born,&mut last,just_before,Ok(())).is_ok());
         assert_eq!(last,just_before);

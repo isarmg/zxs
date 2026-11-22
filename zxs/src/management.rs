@@ -1,6 +1,6 @@
 //! ZXS management HTTP. Authentication and authorization stay with the original site.
-use crate::{OperationId,identity::ShareId,system::reader::{InitialReader,account::WebAdmin}};
-use std::{borrow::Cow,collections::{BTreeMap,VecDeque},fmt::Write as _,io::{self,Write},net::TcpListener,
+use crate::{OperationId,identity::ShareId,system::reader::{InitialReader,account::{WebAdmin,credentials_refused}}};
+use std::{borrow::Cow,collections::{BTreeMap,VecDeque},fmt::{self,Write as _},io::{self,Write},net::TcpListener,
     sync::{Arc,atomic::{AtomicBool,Ordering}},time::{Duration,Instant}};
 mod pages;
 mod transport;
@@ -33,6 +33,16 @@ impl Token{
     fn hex(&self)->String{let mut s=String::with_capacity(64);for x in self.0{write!(s,"{x:02x}").unwrap();}s}
     fn matches(&self,other:&Self)->bool{self.0.iter().zip(other.0).fold(0u8,|n,(a,b)|n|(a^b))==0}
 }
+#[derive(Debug)]
+struct InactiveSession;
+impl fmt::Display for InactiveSession{
+    fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{f.write_str("Web session is no longer active")}
+}
+impl std::error::Error for InactiveSession{}
+fn inactive_session()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,InactiveSession)}
+fn access_refused(error:&io::Error)->bool{
+    credentials_refused(error)||error.get_ref().is_some_and(|cause|cause.is::<InactiveSession>())
+}
 struct Session<'s>{audience:Audience,admin:WebAdmin<'s>,csrf:Token,born:Instant,last:Instant,
     permit:Arc<AtomicBool>,chosen:manual::Chosen,directory_pages:directory::HeldPages<'s>}
 impl Drop for Session<'_>{fn drop(&mut self){self.permit.store(false,Ordering::Release);}}
@@ -48,7 +58,7 @@ fn finish_read_at<T>(born:Instant,last:&mut Instant,checked:Instant,prepared:io:
     // Even a refusal can reveal metadata, such as whether a FILE exists.
     // Check the unrefreshed session after preparing the response, before
     // returning it or adopting a new form or continuation.
-    if !session_live_at(born,*last,checked){return Err(io::ErrorKind::PermissionDenied.into());}
+    if !session_live_at(born,*last,checked){return Err(inactive_session());}
     let prepared=prepared?;
     *last=checked;
     Ok(prepared)
@@ -125,7 +135,7 @@ impl<'s> App<'s>{
             let prepared=s.admin.overview(after).and_then(|data|browser::overview(&data,&s.csrf.hex()));
             return match s.finish_read(prepared){
                 Ok(page)=>page,
-                Err(e) if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(k);Reply::redirect("/login")},
+                Err(e) if access_refused(&e)=>{self.sessions.remove(k);Reply::redirect("/login")},
                 _=>UNAVAILABLE()
             };
         }
@@ -152,7 +162,7 @@ impl<'s> App<'s>{
             let m=match mode{"off"=>Mode::Disabled,"ro"=>Mode::ReadOnly,"rw"=>Mode::ReadWrite,_=>return BAD()};
             let changed=session.admin.set_installed_mode(op,share,previous,m).map(|_|());
             return match changed{Ok(())=>{session.last=now;Reply::redirect("/")},
-                Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>REJECT(),
+                Err(e)if credentials_refused(&e)=>REJECT(),
                 Err(e)if e.kind()==io::ErrorKind::InvalidInput=>Reply::text("409 Conflict","参数、共享设置或原操作不符。请先核对当前状态。"),
                 Err(_)=>Reply::text("503 Service Unavailable","本次结果未确认。原会话仍有效时请只重送原表单；若已过期，请重新登录先核对当前设置。")};
         }
@@ -161,7 +171,7 @@ impl<'s> App<'s>{
         if self.attempts.len()>=MAX_ATTEMPTS{return Reply::text("429 Too Many Requests","登录尝试过多，请稍后再试。");}
         self.attempts.push_back(now);
         let admin=match self.source.authenticate_web(login,password){Ok(a)=>a,
-            Err(e)if e.kind()==io::ErrorKind::PermissionDenied=>return Reply::html("403 Forbidden",pages::sign_in(true)),
+            Err(e)if credentials_refused(&e)=>return Reply::html("403 Forbidden",pages::sign_in(true)),
             Err(_)=>return UNAVAILABLE()};
         let(Ok(key),Ok(csrf))=(Token::fresh(),Token::fresh())else{return UNAVAILABLE();};
         if self.sessions.contains_key(&key)||key==csrf{return UNAVAILABLE();}

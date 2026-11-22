@@ -20,7 +20,18 @@ impl WebCurrent{
         Ok(Pair::qualified_web(db,c)?.map(|(pair,epoch,verifier)|(Self::from_head(pair,epoch),verifier)))
     }
 }
-fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"Web credentials not accepted")}
+#[derive(Debug)]
+struct CredentialsRefused;
+impl std::fmt::Display for CredentialsRefused{
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.write_str("Web credentials not accepted")}
+}
+impl std::error::Error for CredentialsRefused{}
+fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,CredentialsRefused)}
+
+/// Only the original Web authority can issue this rejection, not a read failure.
+pub(crate) fn credentials_refused(error:&io::Error)->bool{
+    error.get_ref().is_some_and(|cause|cause.is::<CredentialsRefused>())
+}
 
 /// Only this type can issue a Web management operation. It has no data-open
 /// methods, never accepts a remote SID or a claimed account id.
