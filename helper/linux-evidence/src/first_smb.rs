@@ -187,12 +187,12 @@ const RUST_AUTH_DOMAIN:&[u8]=b"ZXSLOCAL";
 const RUST_V2:&[u8;16]=b"ZXS-RUST-SMB-V2\0";
 
 fn rust_login(prefix:&[u8;RUST_PREFIX])->io::Result<&[u8]>{
-    let mut coords=prefix[24..152].chunks_exact(16);
+    let coords=prefix[24..152].as_chunks::<16>().0;
     let generation=u64::from_be_bytes(prefix[152..160].try_into().expect("fixed generation"));
     let n=usize::from(prefix[17]);
     let init=&prefix[40..56];let setup=&prefix[56..72];let current=&prefix[120..136];
     if &prefix[..16]!=RUST_V2||prefix[16]!=1||prefix[18..24]!=[0;6]||
-        coords.any(|id|id==[0;16])||generation==0||generation>i64::MAX as u64||!(1..=64).contains(&n)||
+        coords.contains(&[0;16])||generation==0||generation>i64::MAX as u64||!(1..=64).contains(&n)||
         init==setup||current==init||(generation==1)!=(current==setup){
         return Err(no());
     }
@@ -209,9 +209,10 @@ fn rust_login(prefix:&[u8;RUST_PREFIX])->io::Result<&[u8]>{
 #[doc(hidden)]
 pub fn require_rust_v2_public_prefix(prefix:&[u8;RUST_PREFIX])->io::Result<()>{
     rust_login(prefix)?;
-    let install=prefix[24..104].chunks_exact(16).collect::<Vec<_>>();
+    let install=prefix[24..104].as_chunks::<16>().0;
+    let current:&[u8;16]=prefix[120..136].try_into().expect("fixed current operation");
     if install.iter().enumerate().any(|(i,id)|install[..i].contains(id))
-        ||prefix[152..160]!=1u64.to_be_bytes()&&install.contains(&&prefix[120..136]){
+        ||prefix[152..160]!=1u64.to_be_bytes()&&install.contains(current){
         return Err(no());
     }
     Ok(())
