@@ -152,15 +152,46 @@ int zxs_claim(int fd, const unsigned char *buf, size_t n) {
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <linux/openat2.h>
+#include <linux/capability.h>
 #include <signal.h>
+
+_Static_assert(sizeof(uid_t) == sizeof(uint32_t) && (uid_t)-1 > 0, "unsigned Linux uid");
+_Static_assert(sizeof(gid_t) == sizeof(uint32_t) && (gid_t)-1 > 0, "unsigned Linux gid");
+
+int observe_own_user_triplet(uint32_t (*out)[3]) {
+    uid_t ids[3] = {0};
+    int rc = getresuid(&ids[0], &ids[1], &ids[2]);
+    if (rc == 0) for (size_t i = 0; i < 3; ++i) (*out)[i] = ids[i];
+    return rc;
+}
+int observe_own_group_triplet(uint32_t (*out)[3]) {
+    gid_t ids[3] = {0};
+    int rc = getresgid(&ids[0], &ids[1], &ids[2]);
+    if (rc == 0) for (size_t i = 0; i < 3; ++i) (*out)[i] = ids[i];
+    return rc;
+}
+int observe_own_group_count(void) {
+    return getgroups(0, NULL);
+}
+
+long observe_own_capability_words(uint32_t (*out)[2][3]) {
+    _Static_assert(_LINUX_CAPABILITY_U32S_3 == 2, "original Linux capget version 3 word count");
+    struct __user_cap_header_struct header = {_LINUX_CAPABILITY_VERSION_3, 0};
+    struct __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3] = {0};
+    long rc = syscall(SYS_capget, &header, data);
+    if (rc == 0) for (size_t i = 0; i < _LINUX_CAPABILITY_U32S_3; ++i) {
+        (*out)[i][0] = data[i].effective;
+        (*out)[i][1] = data[i].permitted;
+        (*out)[i][2] = data[i].inheritable;
+    }
+    return rc;
+}
 
 #if defined(__x86_64__) && UINTPTR_MAX == UINT64_MAX
 #include <linux/sched.h>
 #include <sys/wait.h>
 
 _Static_assert(sizeof(pid_t) == sizeof(int32_t) && (pid_t)-1 < 0, "signed Linux pid");
-_Static_assert(sizeof(uid_t) == sizeof(uint32_t) && (uid_t)-1 > 0, "unsigned Linux uid");
-_Static_assert(sizeof(gid_t) == sizeof(uint32_t) && (gid_t)-1 > 0, "unsigned Linux gid");
 
 int32_t observe_own_task_ids(long *tid) {
     pid_t pid = getpid();

@@ -5,7 +5,7 @@
 use super::{Fault,Result,entry::InstalledTerm,transport::{InheritedControl,seal_public}};
 use crate::{Entity,VolumeId,fs::{self,ComponentLimit,NameBudget},hash::digest,system::{ROOT_MARK,
     reader::{InitialReader,smb::runtime::{PreflightClaim,PreflightEpoch,PreflightPlan,PreflightRead,PreflightSelection,preflight_read,web_reader}}}};
-use std::{collections::BTreeSet,ffi::OsStr,io,net::IpAddr,os::unix::ffi::OsStrExt,path::{Path,PathBuf},
+use std::{collections::BTreeSet,ffi::{OsStr,c_int,c_long},io,net::IpAddr,os::unix::ffi::OsStrExt,path::{Path,PathBuf},
     time::{Duration,Instant}};
 
 const START:&[u8;16]=b"ZXS-RUST/PREFL1\0";
@@ -44,25 +44,26 @@ pub(super) unsafe fn enter(term:InstalledTerm)->Result<()>{
     if term.stopping(){return Err(Fault::Handoff);}Ok(())
 }
 
+unsafe extern "C"{
+    fn observe_own_user_triplet(out:*mut[u32;3])->c_int;
+    fn observe_own_group_triplet(out:*mut[u32;3])->c_int;
+    fn observe_own_group_count()->c_int;
+    fn observe_own_capability_words(out:*mut[[u32;3];2])->c_long;
+}
+
 pub(super) fn require_reduced((uid,gid):(u32,u32))->Result<()>{
-    // Linux capget version 3 uses two 32-bit words for each current set.
-    // No effective, permitted, inheritable or thus ambient privilege
-    // may survive this dedicated public read. The active worker remains
-    // on its already approved independent transport contract.
-    #[repr(C)] struct Header{version:u32,pid:libc::c_int}
-    #[repr(C)] #[derive(Clone,Copy)] struct Word{effective:u32,permitted:u32,inheritable:u32}
-    let mut header=Header{version:0x2008_0522,pid:0};
-    let mut caps=[Word{effective:0,permitted:0,inheritable:0};2];
-    let(mut u,mut e,mut s)=(0,0,0);
-    let(mut g,mut h,mut i)=(0,0,0);
-    // SAFETY: only this task is observed. Sized writable uid/gid/capget
-    // destinations and the zero-length supplementary-group query own no FD.
+    // Preflight, Web and SMB inherited entries require the same
+    // reduced-subject evidence alongside their transport checks.
+    let mut uids=[0;3];
+    let mut gids=[0;3];
+    let mut caps=[[0;3];2];
+    // SAFETY: this task's read-only queries use live fixed-width output arrays.
     unsafe{
-        if libc::getresuid(&mut u,&mut e,&mut s)!=0||[u,e,s]!=[uid;3]||
-            libc::getresgid(&mut g,&mut h,&mut i)!=0||[g,h,i]!=[gid;3]||
-            libc::getgroups(0,std::ptr::null_mut())!=0||
-            libc::syscall(libc::SYS_capget,&raw mut header,caps.as_mut_ptr())!=0||
-            caps.iter().any(|w|w.effective!=0||w.permitted!=0||w.inheritable!=0){
+        if observe_own_user_triplet(&raw mut uids)!=0||uids!=[uid;3]||
+            observe_own_group_triplet(&raw mut gids)!=0||gids!=[gid;3]||
+            observe_own_group_count()!=0||
+            observe_own_capability_words(&raw mut caps)!=0||
+            caps.iter().any(|[effective,permitted,inheritable]|*effective!=0||*permitted!=0||*inheritable!=0){
             return Err(Fault::Handoff);
         }
     }
