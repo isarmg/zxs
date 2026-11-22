@@ -24,6 +24,8 @@ const MAX_SCHEMA_OBJECTS:u16=177;
 impl Connection{
     pub(super) fn prepare(&self,sql:&CStr)->io::Result<Statement<'_>>{
         let mut p=ptr::null_mut();
+        // SAFETY: the connection and NUL-terminated SQL are live, and p is a
+        // writable statement slot. The returned statement borrows this connection.
         check(unsafe{sqlite3_prepare_v2(self.0,sql.as_ptr(),-1,&mut p,ptr::null_mut())})?;
         if p.is_null(){return Err(invalid("SQLite returned no statement"));}
         Ok(Statement{raw:p,_connection:self})
@@ -31,8 +33,8 @@ impl Connection{
     pub(super) fn initial_catalog<'a>(&'a self,pool:&'a PoolId)->io::Result<Statement<'a>>{
         let select=CString::new(CATALOG).expect("compiled static SELECT is NUL-free");
         let s=self.prepare(&select)?;
-        // SQLITE_STATIC for this fixed 16-byte parameter, tied by the
-        // returned statement's lifetime to both its connection and the pool.
+        // SAFETY: the NULL destructor means SQLITE_STATIC. The statement
+        // borrows these 16 PoolId bytes through finalization.
         check(unsafe{sqlite3_bind_blob(s.raw,1,pool.0.as_ptr().cast(),16,None)})?;
         Ok(s)
     }
@@ -55,7 +57,8 @@ impl Connection{
                             let n=usize::try_from(unsafe{sqlite3_column_bytes(s.raw,k)}).map_err(|_|invalid("invalid schema cell size"))?;
                             if p.is_null()||n>65536||n>remaining{return Err(invalid("schema metadata exceeds its qualified bound"));}
                             remaining-=n;h.update(&[1])?;h.update(&(n as u32).to_be_bytes())?;
-                            // Same actual row bytes while the original statement is on SQLITE_ROW.
+                            // SAFETY: column_text then column_bytes supplies a bounded non-null
+                            // TEXT span; the hash consumes it before the next SQLite call.
                             h.update(unsafe{std::slice::from_raw_parts(p,n)})?;
                         }
                         _=>return Err(invalid("unexpected schema storage class")),
@@ -69,12 +72,17 @@ impl Connection{
 }
 
 pub(super) struct Statement<'a>{raw:*mut Stmt,_connection:&'a Connection}
-impl Drop for Statement<'_>{fn drop(&mut self){let _=unsafe{sqlite3_finalize(self.raw)};}}
+impl Drop for Statement<'_>{
+    fn drop(&mut self){
+        // SAFETY: this owns the statement handle; its connection outlives finalization.
+        let _=unsafe{sqlite3_finalize(self.raw)};
+    }
+}
 impl<'a> Statement<'a>{
     pub(super) fn bind_integer(&self,k:i32,n:i64)->io::Result<()>{check(unsafe{sqlite3_bind_int64(self.raw,k,n)})}
     pub(super) fn bind_bytes(&self,k:i32,b:&[u8])->io::Result<()>{
         let n=i32::try_from(b.len()).map_err(|_|invalid("oversize SQLite parameter"))?;
-        // SQLITE_TRANSIENT: SQLite takes its own bytes before this function returns.
+        // SAFETY: SQLITE_TRANSIENT limits SQLite's use of this slice to the bind call.
         check(unsafe{zxs_sql_bind_copy(self.raw,k,b.as_ptr().cast(),n)})
     }
     pub(super) fn step(&self)->i32{unsafe{sqlite3_step(self.raw)}}
@@ -92,8 +100,9 @@ impl<'a> Statement<'a>{
         let p=unsafe{sqlite3_column_blob(self.raw,k)};
         let n=usize::try_from(unsafe{sqlite3_column_bytes(self.raw,k)}).map_err(|_|invalid("bad SQLite blob length"))?;
         if p.is_null()||n==0||n>max{return Err(invalid("missing or oversized SQLite blob"));}
-        // The storage class forbids coercion. Callers below either consume
-        // these bytes immediately or use an exclusive live Row borrow.
+        // SAFETY: SQLite supplies a non-null span of n bytes for the current BLOB.
+        // The private copy/compare callers consume it at once; only Row lends it
+        // farther, with an exclusive cursor borrow and no coercing read.
         Ok(unsafe{std::slice::from_raw_parts(p.cast::<u8>(),n)})
     }
     pub(super) fn blob_eq(&self,k:i32,max:usize,expected:&[u8])->io::Result<bool>{
