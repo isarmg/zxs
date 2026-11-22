@@ -1,10 +1,10 @@
 // ZXS adaptation of RustCrypto fixed-output support; see ORIGIN.md.
 use super::{Digest, HashMarker, InvalidOutputSize};
 
-pub use block_buffer::{Eager, Lazy};
+pub use crate::smb::block_accumulator::{Eager, Lazy};
 pub use crate::smb::crypto_types::{AlgorithmName, Block, BlockSizeUser, OutputSizeUser, Reset};
 
-use block_buffer::{BlockBuffer, BlockSizes, BufferKind};
+use crate::smb::block_accumulator::{BlockBuffer, BlockSizes, BufferKind};
 use crate::smb::crypto_types::Output;
 
 mod ct_variable;

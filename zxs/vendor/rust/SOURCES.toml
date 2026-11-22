@@ -25,6 +25,7 @@ commit = "cbd0963c685df025c42bed31f78c50d1bada3805"
 upstream_subdirectory = "block-buffer"
 archive = "https://static.crates.io/crates/block-buffer/block-buffer-0.12.1.crate"
 sha256 = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+internal_module = "src/smb/block_accumulator"
 
 [[package]]
 name = "cfg-if"

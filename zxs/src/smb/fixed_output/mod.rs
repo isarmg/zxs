@@ -7,7 +7,7 @@ mod buffer_fixed;
 mod hash;
 mod mac;
 
-pub(super) use block_buffer;
+pub(super) use super::block_accumulator as block_buffer;
 pub(super) use buffer_fixed::buffer_fixed;
 pub(super) use super::crypto_types as common;
 pub(super) use crate::smb::crypto_types::{InvalidLength, Key, KeyInit, Output, OutputSizeUser, Reset, array, typenum};

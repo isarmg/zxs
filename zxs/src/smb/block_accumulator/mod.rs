@@ -1,57 +1,12 @@
-//! Fixed size buffer for block processing of data.
+//! Pending blocks for digest and MAC updates.
 //!
-//! # Examples
-//! ```
-//! use block_buffer::{EagerBuffer, array::typenum::U4};
-//!
-//! let mut buf = EagerBuffer::<U4>::default();
-//!
-//! let mut accum = Vec::new();
-//! let msg1: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-//! let msg2: &[u8] = &[10, 11, 12];
-//!
-//! buf.digest_blocks(msg1, |blocks| accum.extend_from_slice(blocks));
-//! buf.digest_blocks(msg2, |blocks| accum.extend_from_slice(blocks));
-//!
-//! assert_eq!(accum.len(), 3);
-//! assert_eq!(accum[0], [0, 1, 2, 3]);
-//! assert_eq!(accum[1], [4, 5, 6, 7]);
-//! assert_eq!(accum[2], [8, 9, 10, 11]);
-//!
-//! let padded_block = buf.pad_with_zeros();
-//! assert_eq!(padded_block, [12, 0, 0, 0]);
-//! ```
-//!
-//! Note that block size used with buffers MUST be bigger than zero and smaller than 256.
-//! You will get a compilation error with an invalid block size:
-//!
-//! ```compile_fail
-//! use block_buffer::{EagerBuffer, array::typenum::U0};
-//! let buf = EagerBuffer::<U0>::default();
-//! ```
-//! ```compile_fail
-//! use block_buffer::{EagerBuffer, array::typenum::U256};
-//! let buf = EagerBuffer::<U256>::default();
-//! ```
-#![no_std]
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg",
-    html_favicon_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg"
-)]
-#![allow(clippy::undocumented_unsafe_blocks)] // TODO(tarcieri): document all unsafe blocks
+//! Adapted by ZXS from `RustCrypto`; see ORIGIN.md and the retained licenses.
 
-pub use hybrid_array as array;
-
-use array::{Array, ArraySize, typenum::Sum};
 use core::{fmt, mem::MaybeUninit, ptr, slice};
-
-#[cfg(feature = "zeroize")]
+use hybrid_array::{Array, ArraySize, typenum::Sum};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-mod read;
 mod sealed;
-
-pub use read::ReadBuffer;
 
 /// Trait implemented for supported block sizes, i.e. for types from `U1` to `U255`.
 pub trait BlockSizes: ArraySize + sealed::BlockSizes {}
@@ -74,11 +29,6 @@ pub struct Lazy {}
 impl BufferKind for Eager {}
 
 impl BufferKind for Lazy {}
-
-/// Eager block buffer.
-pub type EagerBuffer<B> = BlockBuffer<B, Eager>;
-/// Lazy block buffer.
-pub type LazyBuffer<B> = BlockBuffer<B, Lazy>;
 
 /// Block buffer error.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -109,51 +59,13 @@ impl<BS: BlockSizes, K: BufferKind> Default for BlockBuffer<BS, K> {
 impl<BS: BlockSizes, K: BufferKind> Clone for BlockBuffer<BS, K> {
     #[inline]
     fn clone(&self) -> Self {
-        // SAFETY: `BlockBuffer` does not implement `Drop` (i.e. it could be a `Copy` type),
-        // so we can safely clone it using `ptr::read`.
+        // SAFETY: the bytes are in MaybeUninit and the sealed cursor is () or u8.
+        // The copy owns no resources and has its own zeroizing Drop.
         unsafe { ptr::read(self) }
     }
 }
 
-impl<BS: BlockSizes, K: BufferKind> fmt::Debug for BlockBuffer<BS, K> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        f.debug_struct(K::NAME)
-            .field("pos", &self.get_pos())
-            .field("block_size", &BS::USIZE)
-            .field("data", &self.get_data())
-            .finish()
-    }
-}
-
 impl<BS: BlockSizes, K: BufferKind> BlockBuffer<BS, K> {
-    /// Create new buffer from slice.
-    ///
-    /// # Panics
-    /// If slice length is not valid for used buffer kind.
-    #[inline(always)]
-    #[must_use]
-    #[track_caller]
-    pub fn new(buf: &[u8]) -> Self {
-        Self::try_new(buf).expect("invalid slice length for buffer kind")
-    }
-
-    /// Create new buffer from slice.
-    ///
-    /// # Errors
-    /// If slice length is not valid for used buffer kind.
-    #[inline(always)]
-    pub fn try_new(buf: &[u8]) -> Result<Self, Error> {
-        if !K::invariant(buf.len(), BS::USIZE) {
-            return Err(Error);
-        }
-        let mut res = Self::default();
-        // SAFETY: we have checked that buffer length satisfies the buffer kind invariant
-        unsafe {
-            res.set_data_unchecked(buf);
-        }
-        Ok(res)
-    }
-
     /// Digest data in `input` in blocks of size `BlockSize` using
     /// the `compress` function, which accepts slice of blocks.
     #[inline]
@@ -171,9 +83,8 @@ impl<BS: BlockSizes, K: BufferKind> BlockBuffer<BS, K> {
         // panic branches. Using `unreachable_unchecked` in `get_pos`
         // we convince compiler that `BlockSize - pos` never underflows.
         if K::invariant(n, rem) {
-            // SAFETY: we have checked that length of `input` is smaller than
-            // number of remaining bytes in `buffer`, so we can safely write data
-            // into them and update cursor position.
+            // SAFETY: input fits the free bytes and the resulting cursor
+            // satisfies this kind's bound.
             unsafe {
                 let buf_ptr = self.buffer.as_mut_ptr().cast::<u8>().add(pos);
                 ptr::copy_nonoverlapping(input.as_ptr(), buf_ptr, input.len());
@@ -205,8 +116,8 @@ impl<BS: BlockSizes, K: BufferKind> BlockBuffer<BS, K> {
             compress(blocks);
         }
 
-        // SAFETY: `leftover` is always smaller than block size,
-        // so it satisfies the method's safety requirements for all buffer kinds
+        // SAFETY: the eager tail is shorter than a block; a lazy tail can
+        // also be one full block, satisfying its inclusive bound.
         unsafe {
             self.set_data_unchecked(leftover);
         }
@@ -253,41 +164,17 @@ impl<BS: BlockSizes, K: BufferKind> BlockBuffer<BS, K> {
         unsafe { slice::from_raw_parts(self.buffer.as_ptr().cast(), self.get_pos()) }
     }
 
-    /// Set buffer content and cursor position.
-    ///
-    /// # Panics
-    /// If `pos` is bigger or equal to block size.
-    #[inline]
-    pub fn set(&mut self, buf: Array<u8, BS>, pos: usize) {
-        assert!(K::invariant(pos, BS::USIZE));
-        self.buffer = MaybeUninit::new(buf);
-        // SAFETY: we have asserted that `pos` satisfies the invariant and
-        // the `buffer` field is fully initialized
-        unsafe {
-            self.set_pos_unchecked(pos);
-        }
-    }
-
     /// Return size of the internal buffer in bytes.
     #[inline(always)]
     pub fn size(&self) -> usize {
         BS::USIZE
     }
 
-    /// Return number of remaining bytes in the internal buffer.
-    #[inline(always)]
-    pub fn remaining(&self) -> usize {
-        self.size() - self.get_pos()
-    }
-
     /// Set buffer position.
     ///
     /// # Safety
-    /// Bytes in the range of `0..pos` in the `buffer` field must be properly initialized.
-    ///
-    /// `pos` must satisfy invariant of buffer kind, i.e. for eager hashes it must be
-    /// strictly smaller than block size and for lazy hashes it must be smaller or equal
-    /// to block size.
+    /// The cursor must satisfy its kind's bound. The prefix `0..pos`
+    /// must be initialized before reading or exposing the updated buffer.
     #[inline(always)]
     unsafe fn set_pos_unchecked(&mut self, pos: usize) {
         debug_assert!(K::invariant(pos, BS::USIZE));
@@ -302,6 +189,8 @@ impl<BS: BlockSizes, K: BufferKind> BlockBuffer<BS, K> {
     /// to block size.
     #[inline(always)]
     unsafe fn set_data_unchecked(&mut self, buf: &[u8]) {
+        // SAFETY: the caller's valid length fits the destination and the
+        // prefix is initialized under the exclusive borrow before it is read.
         unsafe {
             self.set_pos_unchecked(buf.len());
             let dst_ptr: *mut u8 = self.buffer.as_mut_ptr().cast();
@@ -320,8 +209,11 @@ where
     BS: core::ops::Add<K::Overhead>,
     Sum<BS, K::Overhead>: ArraySize,
 {
-    /// Serialize buffer into a byte array.
-    #[allow(clippy::missing_panics_doc)]
+    /// Serialize the cursor, pending bytes and zero tail.
+    ///
+    /// # Panics
+    /// A pending length beyond one byte would panic; a valid buffer cannot
+    /// reach it because the block size is bounded by 255.
     pub fn serialize(&self) -> SerializedBuffer<BS, K> {
         let mut buf = SerializedBuffer::<BS, K>::default();
         let data = self.get_data();
@@ -350,6 +242,7 @@ where
         }
 
         let mut res = Self::default();
+        // SAFETY: the cursor was validated and data has exactly that length.
         unsafe { res.set_data_unchecked(data) };
         Ok(res)
     }
@@ -421,7 +314,6 @@ impl<BS: BlockSizes> BlockBuffer<BS, Eager> {
     }
 }
 
-#[cfg(feature = "zeroize")]
 impl<BS: BlockSizes, K: BufferKind> Zeroize for BlockBuffer<BS, K> {
     #[inline]
     fn zeroize(&mut self) {
@@ -433,12 +325,10 @@ impl<BS: BlockSizes, K: BufferKind> Zeroize for BlockBuffer<BS, K> {
 impl<BS: BlockSizes, K: BufferKind> Drop for BlockBuffer<BS, K> {
     #[inline]
     fn drop(&mut self) {
-        #[cfg(feature = "zeroize")]
         self.zeroize();
     }
 }
 
-#[cfg(feature = "zeroize")]
 impl<BS: BlockSizes, K: BufferKind> ZeroizeOnDrop for BlockBuffer<BS, K> {}
 
 /// Resets the referenced buffer on drop.
@@ -449,3 +339,7 @@ impl<BS: BlockSizes, K: BufferKind> Drop for ResetGuard<'_, BS, K> {
         self.0.reset();
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/smb/block_accumulator.rs"]
+mod tests;

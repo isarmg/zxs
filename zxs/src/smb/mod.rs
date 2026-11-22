@@ -1,6 +1,7 @@
 //! Private SMB 3.1.1 implementation of the one ZXS application. The
 //! authenticated startup and Core storage authority are not public interfaces.
 mod backend_select;
+mod block_accumulator;
 mod crypto_types;
 mod fixed_output;
 mod tag_choice;
