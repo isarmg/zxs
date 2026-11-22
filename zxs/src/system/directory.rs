@@ -1,6 +1,8 @@
 //! Exact business children, never the host's directory stream. Ordinary
 //! directory and FILE rows occupy the same parent-local byte name.
-use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,DirectoryPlace,Route}};
+use super::{Catalog,Connection,InitialReader,check,file_create,file_number,ordinary_directory::{self,DirectoryPlace}};
+#[cfg(test)]
+use super::{Tree,ordinary_directory::Route};
 use super::super::{file_location::Placed,volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Members,ReadRecord}};
 use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,
     fs::{DIRECTORY_NAMES,HeldDir,WitnessRead,invalid,directory_birth::{DirectoryHold,DirectoryParent}},
@@ -36,9 +38,12 @@ impl Pick{
     fn name(&self)->&str{match self{Self::Directory(d)=>d.name(),Self::File(p)=>&p.placed.here.name}}
 }
 enum Held{Directory(DirectoryHold),File(Installed)}
+// In-process SQLite Tree fixture adapter; SMB uses the bound page reader.
+#[cfg(test)]
 pub(crate) struct RootFiles<'t,'s,'r>{
     tree:&'t Tree<'s,'r>,root:OrdinaryRoot<'r>,after:Vec<u8>,ended:bool,
 }
+#[cfg(test)]
 impl<'s,'r> Tree<'s,'r>{
     pub(crate) fn root_files<'t>(&'t self)->io::Result<RootFiles<'t,'s,'r>>{
         let src=self.session.source;
@@ -195,18 +200,22 @@ fn read_page_bound(at:PageAt<'_>,root:OrdinaryView<'_>,after:&[u8],limit:u8,mixe
         }
     }).collect())
 }
+#[cfg(test)]
 fn read_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,mixed:bool,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
     let at=PageAt{source:tree.session.source,volume:tree.setting.volume,parent:tree.parent};
     read_page_bound(at,root.view(),after,limit,mixed,None,|db,c|tree.require(db,c,false),at_cut)
 }
+#[cfg(test)]
 pub(super) fn page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Entry>>{
     read_page(tree,root,after,limit,false,at_cut)?.into_iter().map(|item|match item{
         Child::File(f)=>Ok(f),Child::Directory(_)=>Err(invalid("not a FILE listing")),
     }).collect()
 }
+#[cfg(test)]
 pub(super) fn mixed_page(tree:&Tree<'_,'_>,root:&OrdinaryRoot<'_>,after:&[u8],limit:u8,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Child>>{
     read_page(tree,root,after,limit,true,at_cut)
 }
+#[cfg(test)]
 impl RootFiles<'_,'_,'_>{
     pub(crate) fn next(&mut self,limit:u8)->io::Result<Vec<Entry>>{self.next_after(limit,||Ok(()))}
     pub(in crate::system::reader) fn next_after(&mut self,limit:u8,at_cut:impl FnOnce()->io::Result<()>)->io::Result<Vec<Entry>>{
