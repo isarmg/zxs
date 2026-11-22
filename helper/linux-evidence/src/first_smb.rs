@@ -59,6 +59,11 @@ struct Abi{
 /// called before the parent binds every address to its approved original ELF.
 pub struct Libraries(std::rc::Rc<Abi>);
 impl Libraries{
+    /// Load the two fixed libraries for the caller to verify by address.
+    ///
+    /// # Errors
+    /// Returns an error for a previously mapped provider, a failed load or
+    /// missing symbol, or a different support dependency.
     pub fn load()->io::Result<Self>{
         Dso::require_absent(c"libgpg-error.so.0")?;Dso::require_absent(c"libgcrypt.so.20")?;
         let support=Dso::open(c"/usr/lib/local-ops-helper/disk-tools-v1/lib/libgpg-error.so.0")?;
@@ -91,6 +96,7 @@ impl Libraries{
             _gcrypt:gcrypt,_support:support,
         })))
     }
+    #[must_use]
     pub fn entry_sites(&self)->([usize;13],usize){
         let a=&self.0;
         ([a.version as *const () as usize,a.control as *const () as usize,a.algo_info as *const () as usize,a.algo_len as *const () as usize,a.open as *const () as usize,a.enabled as *const () as usize,a.secure as *const () as usize,a.setkey as *const () as usize,a.write as *const () as usize,a.ctl as *const () as usize,a.read as *const () as usize,a.ptr_secure as *const () as usize,a.close as *const () as usize],a.support_version as *const () as usize)
@@ -122,7 +128,7 @@ impl Handle{
         // no data or requested size for the two standard informational operations.
         if unsafe{(lib.algo_info)(algo,TEST_ALGO,ptr::null_mut(),ptr::null_mut())}!=0
             ||unsafe{(lib.algo_len)(algo)}!=16
-            ||unsafe{(lib.open)(&mut p,algo,flags)}!=0{return Err(no());}
+            ||unsafe{(lib.open)(&raw mut p,algo,flags)}!=0{return Err(no());}
         let h=Self{raw:NonNull::new(p).ok_or_else(no)?,algo,lib:lib.clone()};
         // SAFETY: the live unique handle was created above. Do not fall back to pageable crypto memory.
         if unsafe{(lib.enabled)(p,algo)}!=1||unsafe{(lib.secure)(p)}!=1{return Err(no());}Ok(h)
@@ -157,6 +163,11 @@ fn permitted(lib:&Abi)->io::Result<()>{
 /// A failure consumes this single attempt; do not switch libraries or restart it.
 pub struct Enrollment(Handle);
 impl Libraries{
+    /// Qualify the already pinned provider in the one credential-worker attempt.
+    ///
+    /// # Errors
+    /// Returns an error on prior initialization, unexpected versions or FIPS
+    /// policy, or failure of secure allocation or the fixed known-answer checks.
     pub fn qualify(&self)->io::Result<Enrollment>{
         let lib=&self.0;
         if CLAIMED.swap(true,Ordering::AcqRel){return Err(no());}

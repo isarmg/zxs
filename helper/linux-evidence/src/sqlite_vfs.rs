@@ -6,6 +6,10 @@ use libsqlite3_sys as native;
 const SOURCE:&CStr=c"2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76";
 
 /// Must succeed before *any* storage path is opened by SQLite (including read-only checks).
+///
+/// # Errors
+/// Returns `Unsupported` unless the linked source, build options, and Unix VFS
+/// match, with a positive pathname limit.
 #[allow(unsafe_code)]
 pub fn unix_sqlite_path_limit()->io::Result<usize>{
     let no=||io::Error::new(io::ErrorKind::Unsupported,"unsupported SQLite source, build options or Unix VFS");
@@ -33,6 +37,10 @@ pub fn unix_sqlite_path_limit()->io::Result<usize>{
 /// authorized cold account-order confirmation. Caller has independently
 /// established this private connection's original Unix VFS, its no-journal
 /// cut and true exclusive directory lease. No new FD, lock or raw read.
+///
+/// # Errors
+/// Returns an error if engine or main-file verification fails, a transaction
+/// is active, or the VFS cannot confirm the synchronous flush.
 #[allow(unsafe_code)]
 pub fn sync_held_unix_main(connection:&rusqlite::Connection)->io::Result<()>{
     unix_sqlite_path_limit()?;

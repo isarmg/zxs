@@ -10,6 +10,10 @@ pub fn cancelled()->bool{CANCELLED.load(Ordering::Relaxed)}
 
 /// Only for the dedicated CLI process. Cancellation is recorded without
 /// allocation or non-signal-safe I/O. exec resets caught signals in the child.
+///
+/// # Errors
+/// Returns an error if a cancellation signal is blocked or its handler
+/// cannot be installed.
 pub fn watch_cancellation()->io::Result<()>{
     watch(&[libc::SIGINT,libc::SIGTERM,libc::SIGHUP,libc::SIGQUIT])
 }
@@ -25,11 +29,11 @@ fn watch(signals:&[libc::c_int])->io::Result<()>{
             return Err(io::Error::last_os_error());
         }
         let current=current.assume_init();
-        if libc::sigemptyset(&mut action.sa_mask)!=0{return Err(io::Error::last_os_error());}
+        if libc::sigemptyset(&raw mut action.sa_mask)!=0{return Err(io::Error::last_os_error());}
         for &sig in signals{
             // A blocked inherited cancellation signal is not observable by our handler.
-            if libc::sigismember(&current,sig)!=0{return Err(io::Error::other("diagnostic cancellation signals must be unblocked"));}
-            if libc::sigaction(sig,&action,std::ptr::null_mut())!=0{return Err(io::Error::last_os_error());}
+            if libc::sigismember(&raw const current,sig)!=0{return Err(io::Error::other("diagnostic cancellation signals must be unblocked"));}
+            if libc::sigaction(sig,&raw const action,std::ptr::null_mut())!=0{return Err(io::Error::last_os_error());}
         }
     } Ok(())
 }
@@ -37,6 +41,10 @@ fn watch(signals:&[libc::c_int])->io::Result<()>{
 /// Only a dedicated image-check CLI uses this, on its own new readonly
 /// description of a previously admitted local regular copy. No replacement
 /// lease is taken when a break request has started.
+///
+/// # Errors
+/// Returns an error if the copy is not held read-only, cancellation is pending,
+/// or the notification and kernel read lease cannot both be established.
 #[allow(unsafe_code)]
 pub fn acquire_copy_read_lease(file:&File)->io::Result<()>{
     use rustix::fs::{OFlags,fcntl_getfl};
@@ -55,6 +63,10 @@ pub fn acquire_copy_read_lease(file:&File)->io::Result<()>{
     require_copy_read_lease(file)
 }
 
+/// Recheck the read lease of the original copy.
+///
+/// # Errors
+/// Returns `Interrupted` if cancelled or the kernel no longer reports the lease.
 #[allow(unsafe_code)]
 pub fn require_copy_read_lease(file:&File)->io::Result<()>{
     // F_GETLEASE reads this exact open description and reports the target
@@ -69,6 +81,9 @@ pub fn require_copy_read_lease(file:&File)->io::Result<()>{
 
 /// The group leader must stay waitable (therefore its numeric PGID pinned)
 /// until the last signal to the dedicated session. Reject auto-reaping.
+///
+/// # Errors
+/// Returns an error if `SIGCHLD` is not verifiably in its default waitable state.
 #[allow(unsafe_code)]
 pub fn require_waitable_children()->io::Result<()> {
     let mut a=MaybeUninit::<libc::sigaction>::uninit();
@@ -86,16 +101,28 @@ pub fn require_waitable_children()->io::Result<()> {
 
 /// In the spawned child, establish a new session/group *before* any launcher
 /// setup, then exec the verified ELF by descriptor. No /proc path or PATH lookup.
-/// On any error pre_exec returns Err, never Ok: std cannot execute its nominal path.
+/// A failing `pre_exec` hook aborts the spawn.
+///
+/// # Errors
+/// Returns an error for out-of-budget or invalid launcher arguments, or an
+/// executable descriptor that cannot be duplicated.
 pub fn prepare_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
     prepare_checker_exec(cmd,original,None)
 }
 
-// A full copy hash need not share the checker's CPU allowance. Lower the
-// sandbox child's ceiling only, before its landscape or executable changes.
+/// Prepare the checker with a child-only CPU ceiling after the copy hash.
+///
+/// # Errors
+/// Returns an error for invalid launcher arguments or an executable
+/// descriptor that cannot be duplicated.
 pub fn prepare_leased_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
     prepare_checker_exec(cmd,original,Some(300))
 }
+/// Prepare the pinned XFS checker and require one CPU in the spawned child.
+///
+/// # Errors
+/// Returns an error for invalid launcher arguments or a failed descriptor
+/// duplication. An unavailable single-CPU affinity fails the later spawn.
 #[allow(unsafe_code)]
 pub fn prepare_xfs_diagnostic_exec(cmd:&mut Command,original:&File)->io::Result<()>{
     // The pinned XFS binary uses sysconf(_SC_NPROCESSORS_ONLN) as a work
@@ -156,6 +183,7 @@ const PANEL_WORKERS: [(CheckFormat, &str); 6] = [
 ];
 
 impl CheckFormat {
+    #[must_use]
     pub fn from_worker_argument(argument: &std::ffi::OsStr) -> Option<Self> {
         PANEL_WORKERS.into_iter().find_map(|(format, fixed)| (argument == fixed).then_some(format))
     }
@@ -169,12 +197,17 @@ impl CheckFormat {
 /// Prepare only the fixed checker entry of the same protected Helper. Its stdin
 /// must be the already sealed copy or the selected volume's new readonly
 /// description (only the worker can lease it), according to `format`.
+///
+/// # Errors
+/// Returns an error if the fixed worker arguments cannot be built or its
+/// executable descriptor cannot be duplicated.
 pub fn prepare_panel_worker_exec(cmd:&mut Command,original:&File,format:CheckFormat,digest:&[u8;32])->io::Result<()>{
+    use std::fmt::Write as _;
     let action = format.worker_argument()?;
-    use std::fmt::Write;
-    let mut hex=String::with_capacity(64);for byte in digest{write!(&mut hex,"{byte:02x}").expect("String formatting");}
-    let args=vec![CString::new("helper").expect("literal"),CString::new(action).expect("literal"),
-        CString::new(hex).expect("hex digest")];
+    let mut hex=String::with_capacity(64);
+    for byte in digest{write!(&mut hex,"{byte:02x}").map_err(io::Error::other)?;}
+    let args=vec![c"helper".to_owned(),CString::new(action).map_err(io::Error::other)?,
+        CString::new(hex).map_err(io::Error::other)?];
     pinned_exec(cmd,original,args,Some(std::process::id() as libc::pid_t),None)
 }
 
@@ -186,6 +219,10 @@ pub enum OfflineSql { FirstLayout, FirstBrowser, RustAccount, RustVaultWriter, C
 /// The account SQL child retains the operator's TERMINAL session (not
 /// the unrelated diagnostic worker session). Only 3=private seqpacket and
 /// 4=sealed nonsecret order are introduced; all other caller FDs close.
+///
+/// # Errors
+/// Returns an error if the executable, channel or sealed order descriptor
+/// cannot be duplicated for the fixed child. A failed child setup aborts the spawn.
 #[allow(unsafe_code)]
 pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,order:&File,mode:OfflineSql)->io::Result<()>{
     use std::os::fd::AsFd;
@@ -198,10 +235,10 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
     unsafe{cmd.pre_exec(move||{
         let mut action:libc::sigaction=std::mem::zeroed();action.sa_sigaction=libc::SIG_DFL;
         let mut term:libc::sigset_t=std::mem::zeroed();
-        if libc::sigemptyset(&mut action.sa_mask)!=0||libc::sigemptyset(&mut term)!=0
-            ||libc::sigaddset(&mut term,libc::SIGTERM)!=0
-            ||libc::sigaction(libc::SIGTERM,&action,std::ptr::null_mut())!=0
-            ||libc::sigprocmask(libc::SIG_UNBLOCK,&term,std::ptr::null_mut())!=0
+        if libc::sigemptyset(&raw mut action.sa_mask)!=0||libc::sigemptyset(&raw mut term)!=0
+            ||libc::sigaddset(&raw mut term,libc::SIGTERM)!=0
+            ||libc::sigaction(libc::SIGTERM,&raw const action,std::ptr::null_mut())!=0
+            ||libc::sigprocmask(libc::SIG_UNBLOCK,&raw const term,std::ptr::null_mut())!=0
             ||libc::syscall(libc::SYS_close_range,3u32,u32::MAX,libc::CLOSE_RANGE_CLOEXEC)!=0
             ||libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGTERM as libc::c_ulong,0 as libc::c_ulong,0 as libc::c_ulong,0 as libc::c_ulong)!=0{
             return Err(io::Error::last_os_error());
@@ -216,7 +253,7 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
         };
         let argv=[c"helper".as_ptr(),action.as_ptr(),std::ptr::null()];
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
-        libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),
+        libc::syscall(libc::c_long::from(uapi::__NR_execveat),executable.as_raw_fd(),c"".as_ptr(),
             argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);
         Err(io::Error::last_os_error())
     });}
@@ -225,6 +262,9 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
 
 /// Only the fixed exec-child entry uses this, after proving that exactly 3/4
 /// already exist. Mark both CLOEXEC before any future system action.
+///
+/// # Errors
+/// Propagates failure to mark either inherited descriptor close-on-exec.
 #[allow(unsafe_code)]
 pub fn account_sql_descriptors()->io::Result<[File;2]>{
     use std::os::fd::FromRawFd;
@@ -249,10 +289,10 @@ fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<li
             // is detected by the getppid check. No checker exists in this window.
             let mut action:libc::sigaction=std::mem::zeroed();action.sa_sigaction=libc::SIG_DFL;
             let mut term:libc::sigset_t=std::mem::zeroed();
-            if libc::sigemptyset(&mut action.sa_mask)!=0 || libc::sigemptyset(&mut term)!=0
-                || libc::sigaddset(&mut term,libc::SIGTERM)!=0
-                || libc::sigaction(libc::SIGTERM,&action,std::ptr::null_mut())!=0
-                || libc::sigprocmask(libc::SIG_UNBLOCK,&term,std::ptr::null_mut())!=0 {
+            if libc::sigemptyset(&raw mut action.sa_mask)!=0 || libc::sigemptyset(&raw mut term)!=0
+                || libc::sigaddset(&raw mut term,libc::SIGTERM)!=0
+                || libc::sigaction(libc::SIGTERM,&raw const action,std::ptr::null_mut())!=0
+                || libc::sigprocmask(libc::SIG_UNBLOCK,&raw const term,std::ptr::null_mut())!=0 {
                 return Err(io::Error::last_os_error());
             }
             if libc::syscall(libc::SYS_close_range,3u32,u32::MAX,libc::CLOSE_RANGE_CLOEXEC)!=0
@@ -268,13 +308,13 @@ fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<li
             let mut value=value.assume_init();
             value.rlim_max=value.rlim_max.min(limit);
             value.rlim_cur=value.rlim_cur.min(value.rlim_max);
-            if libc::setrlimit(libc::RLIMIT_CPU,&value)!=0{return Err(io::Error::last_os_error());}
+            if libc::setrlimit(libc::RLIMIT_CPU,&raw const value)!=0{return Err(io::Error::last_os_error());}
         }
-        let mut argv=[std::ptr::null::<libc::c_char>();80];
-        for (dst,src) in argv.iter_mut().zip(args.iter()){*dst=src.as_ptr();}
+        let mut pointers=[std::ptr::null::<libc::c_char>();80];
+        for (dst,src) in pointers.iter_mut().zip(args.iter()){*dst=src.as_ptr();}
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
-        libc::syscall(uapi::__NR_execveat as libc::c_long,executable.as_raw_fd(),c"".as_ptr(),
-                      argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);
+        libc::syscall(libc::c_long::from(uapi::__NR_execveat),executable.as_raw_fd(),c"".as_ptr(),
+                      pointers.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);
         Err(io::Error::last_os_error())
     });}
     Ok(())
@@ -282,13 +322,16 @@ fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<li
 
 /// Native x86-64 classic BPF for --seccomp. Only group-lifetime constraints,
 /// not a general syscall security policy. Never allow independent children.
+#[must_use]
 pub fn diagnostic_group_filter()->Vec<u8>{group_filter(false,false)}
 
 // The pinned libext2fs checks bitmaps in threads on a sufficiently large
 // filesystem. Allow only the actual glibc 2.41 NPTL thread in this profile.
+#[must_use]
 pub fn ext4_group_filter()->Vec<u8>{group_filter(true,false)}
 // The pinned XFS xfile path falls back to O_TMPFILE in its bounded private
 // tmpfs. Do not let it use unlimited anonymous shmem instead.
+#[must_use]
 pub fn xfs_group_filter()->Vec<u8>{group_filter(true,true)}
 const NPTL_CLONE:u32=uapi::CLONE_VM|uapi::CLONE_FS|uapi::CLONE_FILES|uapi::CLONE_SIGHAND
     |uapi::CLONE_THREAD|uapi::CLONE_SYSVSEM|uapi::CLONE_SETTLS|uapi::CLONE_PARENT_SETTID
@@ -328,6 +371,10 @@ fn group_filter(threads:bool,xfs:bool)->Vec<u8>{
 
 /// Only this kernel null object may be exposed as a device. Its pathname is
 /// never taken from the environment, manifest or command arguments.
+///
+/// # Errors
+/// Returns an error if the genuine null device or its reopened identity
+/// cannot be verified.
 pub fn null_device()->io::Result<File>{
     use rustix::fs::{Mode,OFlags,PROC_SUPER_MAGIC,fstatfs,open,openat};
     use std::os::unix::fs::{FileTypeExt,MetadataExt};
@@ -337,7 +384,7 @@ pub fn null_device()->io::Result<File>{
     let pin=File::from(openat(&dev,c"null",OFlags::PATH|OFlags::CLOEXEC|OFlags::NOFOLLOW,Mode::empty())?);
     let m=pin.metadata()?;
     if !m.file_type().is_char_device()||m.rdev()!=rustix::fs::makedev(1,3)||m.uid()!=0||m.gid()!=0||
-        m.mode()&0o7777!=0o666||!matches!(fstatfs(&pin)?.f_type as u64,0x01021994){return Err(fail());}
+        m.mode()&0o7777!=0o666||fstatfs(&pin)?.f_type!=libc::c_long::from(uapi::TMPFS_MAGIC){return Err(fail());}
     // Use the genuine, held current proc-fd identity, not a second /dev name.
     let p=File::from(open(c"/proc",DIR,Mode::empty())?);
     if fstatfs(&p)?.f_type!=PROC_SUPER_MAGIC{return Err(fail());}
@@ -371,12 +418,15 @@ mod tests {
     // Independent interpreter restricted to the four emitted classic-BPF operations.
     fn decision_with_flags(p:&[u8],arch:u32,nr:u32,flags:u64)->u32{
         let (mut a,mut pc)=(0,0usize);
+        let flag_bytes=flags.to_le_bytes();
+        let (words,_)=flag_bytes.as_chunks::<4>();
         loop {
             let f=&p[pc*8..(pc+1)*8];pc+=1;
             let ins=u16::from_ne_bytes(f[..2].try_into().unwrap());
             let k=u32::from_ne_bytes(f[4..].try_into().unwrap());
             match ins{
-                0x20=>a=match k{0=>nr,4=>arch,16=>flags as u32,20=>(flags>>32) as u32,_=>panic!("unexpected seccomp_data offset")},
+                0x20=>a=match k{0=>nr,4=>arch,16=>u32::from_le_bytes(words[0]),20=>u32::from_le_bytes(words[1]),
+                    _=>panic!("unexpected seccomp_data offset")},
                 0x15=>pc+=usize::from(if a==k{f[2]}else{f[3]}),
                 0x35=>pc+=usize::from(if a>=k{f[2]}else{f[3]}),
                 0x06=>return k,_=>panic!("unexpected fixed diagnostic instruction"),
@@ -391,7 +441,8 @@ mod tests {
         let ext=ext4_group_filter();
         let raw=|flags|decision_with_flags(&ext,arch,uapi::__NR_clone,flags);
         assert_eq!(raw(glibc_flags),0x7fff_0000);
-        for flags in [0,17,glibc_flags|17,glibc_flags&!u64::from(uapi::CLONE_THREAD),
+        let exit_signal=u64::from(uapi::SIGCHLD);
+        for flags in [0,exit_signal,glibc_flags|exit_signal,glibc_flags&!u64::from(uapi::CLONE_THREAD),
                       glibc_flags|u64::from(uapi::CLONE_NEWUSER),glibc_flags|(1<<32)]{
             assert_eq!(raw(flags),0x0005_0001);
         }

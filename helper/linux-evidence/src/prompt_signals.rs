@@ -15,26 +15,31 @@ pub struct PromptSignals {
 }
 
 impl PromptSignals {
+    /// Hold a single-thread mask during the protected prompt.
+    ///
+    /// # Errors
+    /// Returns an error for blocked, pending or unexpected interruption
+    /// signals, or if the kernel cannot inspect or set the mask.
     #[allow(unsafe_code)]
     pub fn begin() -> io::Result<Self> {
         // SAFETY: initialized, process-local POSIX sets; no signal handler or
         // foreign pointer retained. pthread_sigmask returns errno directly.
         unsafe {
             let mut set: libc::sigset_t = zeroed();
-            if libc::sigemptyset(&mut set) != 0 { return Err(io::Error::last_os_error()); }
+            if libc::sigemptyset(&raw mut set) != 0 { return Err(io::Error::last_os_error()); }
             for s in INTERRUPTS {
-                if libc::sigaddset(&mut set, s) != 0 { return Err(io::Error::last_os_error()); }
+                if libc::sigaddset(&raw mut set, s) != 0 { return Err(io::Error::last_os_error()); }
             }
             let mut old: libc::sigset_t = zeroed();
-            let rc = libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut old);
+            let rc = libc::pthread_sigmask(libc::SIG_BLOCK, &raw const set, &raw mut old);
             if rc != 0 { return Err(io::Error::from_raw_os_error(rc)); }
             let this = Self { old, active: true, _this_thread: PhantomData };
             for sig in INTERRUPTS {
-                if libc::sigismember(&this.old, sig) != 0 {
+                if libc::sigismember(&raw const this.old, sig) != 0 {
                     return Err(io::Error::other("local secret entry cannot inherit blocked cancellation signals"));
                 }
                 let mut action: libc::sigaction = zeroed();
-                if libc::sigaction(sig, ptr::null(), &mut action) != 0 {
+                if libc::sigaction(sig, ptr::null(), &raw mut action) != 0 {
                     return Err(io::Error::last_os_error());
                 }
                 // The Rust runtime may ignore broken pipes; terminal output
@@ -49,6 +54,11 @@ impl PromptSignals {
         }
     }
 
+    /// Inspect pending interruptions without consuming them.
+    ///
+    /// # Errors
+    /// Returns `Interrupted` for a pending cancellation signal, or a system
+    /// error if the pending set cannot be inspected.
     #[allow(unsafe_code)]
     pub fn check(&self) -> io::Result<()> {
         // SAFETY: sigpending initializes the local result on success. Leave
@@ -56,9 +66,9 @@ impl PromptSignals {
         // restoring the terminal, rather than being suppressed or auto-resumed.
         unsafe {
             let mut pending: libc::sigset_t = zeroed();
-            if libc::sigpending(&mut pending) != 0 { return Err(io::Error::last_os_error()); }
+            if libc::sigpending(&raw mut pending) != 0 { return Err(io::Error::last_os_error()); }
             for sig in INTERRUPTS {
-                match libc::sigismember(&pending, sig) {
+                match libc::sigismember(&raw const pending, sig) {
                     0 => (), 1 => return Err(io::Error::new(io::ErrorKind::Interrupted,"local secret entry cancelled")),
                     _ => return Err(io::Error::last_os_error()),
                 }
@@ -72,12 +82,16 @@ impl PromptSignals {
         if self.active {
             // SAFETY: self cannot be sent to another thread. Restore the exact
             // mask returned by this thread's successful pthread_sigmask.
-            let rc = unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &self.old, ptr::null_mut()) };
+            let rc = unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &raw const self.old, ptr::null_mut()) };
             if rc != 0 { return Err(io::Error::from_raw_os_error(rc)); }
             self.active = false;
         }
         Ok(())
     }
+    /// Restore the same thread's original mask.
+    ///
+    /// # Errors
+    /// Propagates a failure to restore the original mask.
     pub fn finish(mut self) -> io::Result<()> { self.restore() }
 }
 

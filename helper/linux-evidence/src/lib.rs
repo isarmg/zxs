@@ -32,6 +32,7 @@ const _: () = {
 
 /// One whitelist for both opaque-data inspection and this narrower kernel call.
 /// This is not a claim that every accepted filesystem actually implements either request.
+#[must_use]
 pub fn supported_local_magic(magic: u32) -> bool {
     matches!(magic, uapi::EXT4_SUPER_MAGIC | uapi::XFS_SUPER_MAGIC | uapi::BTRFS_SUPER_MAGIC | uapi::F2FS_SUPER_MAGIC)
 }
@@ -43,7 +44,9 @@ fn unsupported(message: &'static str) -> io::Error { io::Error::new(io::ErrorKin
 #[derive(PartialEq, Eq)]
 pub struct Birth(Vec<u8>);
 impl Birth {
+    #[must_use]
     pub fn payload(&self) -> &[u8] { &self.0 }
+    #[must_use]
     pub fn filesystem_uuid(&self) -> &[u8] { &self.0[..16] }
 }
 
@@ -72,20 +75,25 @@ fn local_object(file: &File) -> io::Result<Metadata> {
     if (!m.is_dir() && !m.is_file()) || fcntl_getfl(file)?.contains(OFlags::PATH) {
         return Err(unsupported("expected a real open local directory or regular file"));
     }
-    if !u32::try_from(fstatfs(file)?.f_type).ok().is_some_and(supported_local_magic) {
+    if !u32::try_from(fstatfs(file)?.f_type).is_ok_and(supported_local_magic) {
         return Err(unsupported("object filesystem is not an admitted local data filesystem"));
     }
     Ok(m)
 }
 
 fn encoded_name_max(value: libc::c_long) -> io::Result<u8> {
-    if value <= 0 { return Err(unsupported("native directory component limit is unavailable or indeterminate")); }
-    Ok(value.min(255) as u8)
+    u8::try_from(value.min(libc::c_long::from(u8::MAX)))
+        .ok().filter(|n| *n > 0)
+        .ok_or_else(|| unsupported("native directory component limit is unavailable or indeterminate"))
 }
 
 /// Component budget of this exact open directory, not a path-based guess.
 /// POSIX permits -1 without setting errno. Both indeterminate and error refuse
 /// the observation; never report an unrelated stale errno, zero, or default 255.
+///
+/// # Errors
+/// The descriptor must be an open directory on an admitted local filesystem,
+/// and the kernel must report a positive name limit.
 pub fn component_limit(dir: &File) -> io::Result<u8> {
     local_object(dir)?; // preserve the historical MAINT-1 input boundary
     portable_component_limit(dir)
@@ -93,6 +101,10 @@ pub fn component_limit(dir: &File) -> io::Result<u8> {
 
 /// Ordinary POSIX limit at this real directory; no filesystem brand or UUID
 /// is involved. This cannot establish whether a mount is suitable for storage.
+///
+/// # Errors
+/// Returns an error if the descriptor is not an open directory or the kernel
+/// cannot supply a positive name limit.
 #[allow(unsafe_code)]
 pub fn portable_component_limit(dir: &File) -> io::Result<u8> {
     if !dir.metadata()?.is_dir() || fcntl_getfl(dir)?.contains(OFlags::PATH) {
@@ -105,8 +117,12 @@ pub fn portable_component_limit(dir: &File) -> io::Result<u8> {
 }
 
 /// Read ONLY from the supplied live descriptor. The caller has separately
-/// selected its path and obtained existing_mount from statx on this same FD.
+/// selected its path and obtained `existing_mount` from `statx` on this same FD.
 /// No guess, path reopening, retry with a bigger buffer, or partial result.
+///
+/// # Errors
+/// Returns an error if the descriptor, mount, filesystem UUID, or bounded
+/// native handle cannot be verified, or if either kernel query fails.
 #[allow(unsafe_code)]
 pub fn read_birth(file: &File, existing_mount: u64) -> io::Result<Birth> {
     if existing_mount == 0 { return Err(unsupported("original mount is unknown")); }
@@ -121,7 +137,8 @@ pub fn read_birth(file: &File, existing_mount: u64) -> io::Result<Birth> {
     if rc != 0 { return Err(unsupported("kernel did not report a filesystem UUID")); }
     let uuid = filesystem_uuid(uuid)?;
 
-    let mut h = HandleBuffer { len: CAPACITY as libc::c_uint, kind: 0, opaque: [0; CAPACITY] };
+    let len = libc::c_uint::try_from(CAPACITY).map_err(|_| unsupported("file handle capacity exceeds the native ABI"))?;
+    let mut h = HandleBuffer { len, kind: 0, opaque: [0; CAPACITY] };
     let mut mount: libc::c_int = 0;
     // SAFETY: the empty static C string with AT_EMPTY_PATH selects this exact live
     // FD. The kernel may copy a header plus at most its declared 128 bytes into
@@ -139,6 +156,9 @@ pub fn read_birth(file: &File, existing_mount: u64) -> io::Result<Birth> {
 /// unknown inherited ones. This does not close or retarget existing objects.
 /// Only explicitly chosen read-only runtime/image FDs and the monitor pipe
 /// may be reintroduced before spawn. No retries with a weaker descriptor set.
+///
+/// # Errors
+/// Propagates failure of the kernel's atomic `close_range` operation.
 #[allow(unsafe_code)]
 pub fn isolate_check_descriptors()->io::Result<()> {
     // SAFETY: close_range accepts only unsigned scalars; no pointer, Rust
