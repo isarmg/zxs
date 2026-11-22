@@ -14,7 +14,10 @@ mod isolated_group;
 mod smb_profile;
 mod maintenance;
 mod path_rules;
+// Historical byte vectors only; the product has no portable legacy reader.
+#[cfg(test)]
 mod portable_claim;
+#[cfg(test)]
 mod portable_genesis;
 mod pinned;
 mod sqlite_install;

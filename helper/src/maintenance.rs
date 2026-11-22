@@ -1,19 +1,31 @@
-//! Maintenance internals; no CLI or Web command can allocate, publish or adopt a register.
+//! Kernel mount/process evidence used by live Helper commands. Old
+//! MAINT-1 registration workflows exist only in the development tests.
 mod ancestry;
-mod genesis;
-mod identity;
-mod pending;
-mod root_set;
-mod register_flock;
 mod thread_evidence;
 
-// These two host observations have no dependence on the experimental MAINT-1 medium.
-pub(crate) use ancestry::{DiscoveryMount,DiscoveryView,Mounts as HostMounts};
-pub(crate) use thread_evidence::{WorkerPolicy,diagnostic_worker,thread_file};
+// Keep historical proof fixtures buildable without admitting these operations
+// to the product. Active INIT, receipt and account work use sqlite_install.
+#[cfg(test)]
+mod genesis;
+#[cfg(test)]
+mod identity;
+#[cfg(test)]
+mod pending;
+#[cfg(test)]
+mod root_set;
+#[cfg(test)]
+mod register_flock;
 
-/// Fixed entries of the same registration, never names supplied by a caller.
+pub(crate) use ancestry::{DiscoveryMount,DiscoveryView,Mounts as HostMounts};
+pub(crate) use thread_evidence::{diagnostic_worker,thread_file};
+#[cfg(test)]
+pub(crate) use thread_evidence::WorkerPolicy;
+
+/// Fixed entries of the legacy registration fixtures, not product paths.
+#[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterName { Pending, Ready }
+#[cfg(test)]
 impl RegisterName {
     fn entry(self) -> &'static std::ffi::CStr {
         match self { Self::Pending => c"INITIALIZING", Self::Ready => c"REGISTRATION" }

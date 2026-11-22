@@ -1,19 +1,25 @@
 //! Mount evidence in the current maintenance thread's namespace.
 //! Ancestry never searches other paths or recovers a hidden parent. The
 //! separate discovery cut returns only bounded, admitted mountpoint names.
-use crate::pinned::{DiscoveryAdmission,DiscoveryFdInfo,Entity, Mount, Pinned, invalid, local_data_filesystem};
+use crate::pinned::{DiscoveryAdmission, DiscoveryFdInfo, Entity, Mount};
+#[cfg(test)]
+use crate::pinned::{Pinned, invalid, local_data_filesystem};
 use crate::sqlite_install::product_layout;
 use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
-use rustix::fs::{Mode, OFlags, fgetxattr, makedev, openat};
-use rustix::io::Errno;
+use rustix::fs::makedev;
+#[cfg(test)]
+use rustix::{fs::{Mode, OFlags, fgetxattr, openat}, io::Errno};
 use std::{collections::BTreeMap, ffi::OsStr, fs::File, io::{self, Read},
-    os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};
+    os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
+#[cfg(test)]
+use std::os::unix::fs::MetadataExt;
 
 const TABLE_BYTES: usize = 4 * 1024 * 1024;
 const TABLE_ROWS: usize = 16_384;
 const DISCOVERY_ROOTS: usize = 64;
 fn unknown(why: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Unsupported, why) }
 
+#[cfg(test)]
 fn no_claim(dir: &File) -> io::Result<()> {
     let mut v = [0u8; 1];
     match fgetxattr(dir, c"user.zxs.volume", &mut v[..]) {
@@ -245,6 +251,12 @@ impl Mounts {
         }
     }
 
+}
+
+// Backward physical ancestry and legacy xattr evidence are only needed for
+// MAINT-1 historical fixtures. The production mount table above is unchanged.
+#[cfg(test)]
+impl Mounts {
     fn whole(&self, id: u64, device: u64) -> io::Result<Row> {
         match self.0.get(&id) {
             Some(r) if r.whole && r.device == device => Ok(*r),

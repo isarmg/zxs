@@ -43,9 +43,11 @@ pub(super) fn passive_mountinfo()->io::Result<File>{
 
 const STATUS_MAX: usize = 64 * 1024;
 
-// Trusted host subject, not operator authorization. There is no production
-// issuer/constructor: these values cannot presently come from a request, disk or UI.
+// Fixture policy for the retired non-SQLite workflows. The product has no
+// issuer or consumer of this type; its diagnostics use diagnostic_worker.
+#[cfg(test)]
 pub(crate) struct WorkerPolicy { uid: u32, gid: u32 }
+#[cfg(test)]
 impl WorkerPolicy {
     pub(crate) fn require(&self, registered_uid: u32) -> io::Result<()> {
         if registered_uid != self.uid {
@@ -54,7 +56,6 @@ impl WorkerPolicy {
         require_storage_worker(self.uid, self.gid)
     }
 
-    #[cfg(test)]
     pub(crate) fn fixture() -> Self {
         let id = |key| std::env::var(key).expect("dedicated worker test requires explicit UID/GID policy")
             .parse::<u32>().expect("expected decimal fixture UID/GID");
@@ -64,6 +65,7 @@ impl WorkerPolicy {
 
 // This identifies a restricted storage *executor*, never the operator or approval of a job.
 // No privilege-setting API, credential switch, shell or other process is used.
+#[cfg(test)]
 fn require_storage_worker(uid: u32, service_gid: u32) -> io::Result<()> {
     let mut data = Vec::new();
     thread_file(c"thread-self/status")?.take(STATUS_MAX as u64 + 1).read_to_end(&mut data)?;

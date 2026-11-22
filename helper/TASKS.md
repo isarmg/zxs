@@ -36,7 +36,7 @@
 
 ### 曾审过、不再作为交付门的原型
 
-旧 MAINT‑1 和 REGISTRATION/CONFIRMED 的编码、卷标、逐卷同步、改名、冷确认以及四个中断窗口仍可在[切换前的完整清单](https://github.com/isarmg/zxs/blob/bdfc434f3c56f2f948e52550915107bbccc08486/helper/TASKS.md)查看。此前都是源代码静审，不是断电实测。它们不会打开 SQLite 池、为新卷发权、替代 SQLite journal，也不是迁移器；不要再补旧写入口。
+旧 MAINT‑1 和 REGISTRATION/CONFIRMED 的编码、卷标、逐卷同步、改名、冷确认以及四个中断窗口仍可在[切换前的完整清单](https://github.com/isarmg/zxs/blob/bdfc434f3c56f2f948e52550915107bbccc08486/helper/TASKS.md)查看。此前都是源代码静审，不是断电实测。它们不会打开 SQLite 池、为新卷发权、替代 SQLite journal，也不是迁移器；不要再补旧写入口。 两支原型的高层登记和落位模块仅在测试构建中编译，保留历史向量和隔离夹具；生产构建仍编译实际使用的 Linux 挂载/进程证据与当前 SQLite 维护实现。
 
 ## 待写：一次性部署和离线维护
 
