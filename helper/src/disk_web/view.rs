@@ -1,7 +1,7 @@
 //! Small tabular, text-only view of the same typed observations as the CLI.
 //! No row may contribute HTML, control fields, device paths or arguments.
 use super::http::Reply;
-use crate::{block_tools as disks,fs_tools,pinned::storage_status as storage};
+use crate::{block_tools as disks,fs_tools,hardware,pinned::storage_status as storage};
 use std::fmt::Display;
 
 fn clean(s:&str)->String{s.chars().map(|c|if c.is_control(){'\u{fffd}'}else{c}).collect()}
@@ -79,6 +79,35 @@ pub(super) fn storage(report:&storage::Report)->Reply{
     }
     Reply::plain(200,out)
 }
+pub(super) fn hardware(report: &hardware::Report) -> Reply {
+    let mut out = String::new();
+    let sampled = match (report.started_ms, report.ended_ms) {
+        (Some(a), Some(b)) => format!("Unix 毫秒 {a} 至 {b}"),
+        _ => "时间未知".into(),
+    };
+    line(&mut out, [format!("Linux /proc/stat 与 /proc/meminfo；{sampled}。内核汇总，不代表 ZXS 进程或容器配额。")]);
+    line(&mut out, ["指标", "数值", "说明"].map(str::to_owned));
+    let mut row = |name: &str, value: String, note: String| line(&mut out, [name.into(), value, note]);
+    let unknown = |why: hardware::Unknown| format!("未知：{}", why.label());
+    match report.cpu {
+        Ok(c) => {
+            let ms = c.interval_ns / 1_000_000;
+            row("CPU 执行", format!("{}%", c.active), format!("两次计数相隔 {ms} 毫秒"));
+            row("I/O 等待（估计）", format!("{}%", c.iowait), "不是磁盘忙碌率".into());
+            row("虚拟化宿主占用的 CPU 时间", format!("{}%", c.steal), "内核 steal 计数占比".into());
+        }
+        Err(why) => row("CPU", unknown(why), "本次没有可比较的区间".into()),
+    }
+    match report.memory {
+        Ok(m) => {
+            row("内存总量", m.total_bytes.to_string(), "字节，内核可管理的 RAM 总量".into());
+            row("内存可用（估计）", m.available_bytes.to_string(), "字节，含可回收空间，不是 MemFree".into());
+        }
+        Err(why) => row("内存", unknown(why), "本次没有可信的总量与可用量".into()),
+    }
+    Reply::plain(200, out)
+}
+
 pub(super) fn tools()->Reply{
     let mut out=String::new();let report=fs_tools::Query::catalog().observe();
     line(&mut out,["固定位置的安装元数据，不执行工具、读取镜像或检查磁盘。程序存在不代表版本、签名、健康、可修复或已获授权。".into()]);
@@ -91,6 +120,21 @@ pub(super) fn tools()->Reply{
 #[cfg(test)]
 mod tests{
     use super::*;
+    #[test]
+    fn hardware_renders_only_the_typed_partial_report() {
+        let report = hardware::Report {
+            started_ms: Some(12), ended_ms: Some(34),
+            cpu: Err(hardware::Unknown::CounterDecrease),
+            memory: Ok(hardware::Memory { total_bytes: 8192, available_bytes: 0 }),
+        };
+        let reply = hardware(&report);
+        assert_eq!(reply.code, 200);
+        assert!(reply.body.contains("CPU\t未知：counter-decreased"));
+        assert!(reply.body.contains("内存可用（估计）\t0\t"));
+        let records: Vec<_> = reply.body.lines().collect();
+        assert_eq!(records.len(), 5);
+        assert!(records[1..].iter().all(|r| r.split('\t').count() == 3));
+    }
     #[test]
     fn disk_attachment_labels_preserve_source_and_optional_failure(){
         let direct=disks::Attachment{subsystem:"nvme",source:disks::AttachmentSource::KernelAncestor,nvme_transport:Ok("pcie")};

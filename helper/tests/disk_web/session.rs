@@ -109,3 +109,26 @@ fn the_old_setup_guide_has_no_paired_or_unpaired_route(){
     assert_eq!(panel.handle(approved("/api/install/guide"),now).code,404);
     assert!(!panel.closed&&panel.check.is_none()&&panel.session.is_some());
 }
+
+
+#[test]
+fn hardware_route_rejects_nonlocal_unauthenticated_or_parameterized_requests_before_sampling() {
+    let now=Instant::now();let mut p=logged(now);
+    let path="/api/hardware";
+    assert_eq!(p.handle(req(path),now).code,403);
+    let mut r=approved(path);r.host="example.invalid:7654".into();
+    assert_eq!(p.handle(r,now).code,403);
+    let mut r=approved(path);r.origin=Some("http://127.0.0.1:7655".into());
+    assert_eq!(p.handle(r,now).code,403);
+    let mut r=approved(path);r.csrf=None;
+    assert_eq!(p.handle(r,now).code,403);
+    let mut r=approved(path);r.method="GET".into();
+    assert_eq!(p.handle(r,now).code,404);
+    let mut r=approved(path);r.body=b"/proc/sys/example".to_vec();
+    assert_eq!(p.handle(r,now).code,400);
+    let mut r=approved(path);r.content_type=Some("text/plain".into());
+    assert_eq!(p.handle(r,now).code,400);
+    assert_eq!(p.handle(approved("/api/hardware?interval=1"),now).code,404);
+    assert_eq!(p.handle(approved(path),now+SESSION).code,403);
+    assert!(!p.closed&&p.check.is_none()&&p.handoff.is_none());
+}

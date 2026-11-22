@@ -71,10 +71,7 @@ impl WebRoot {
         // The observer can only sample its original O_PATH handle. The
         // independently resolved name, all visible parents and the mount
         // must match both before and after; the recheck is never a fallback.
-        let current = self.pin.require_same_named_mount().map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::NotADirectory => Reason::Changed,
-            _ => Reason::from(e),
-        })?;
+        let current = self.pin.require_same_named_mount().map_err(Reason::recheck_directory)?;
         if current == self.mount { Ok(()) } else { Err(Reason::Changed) }
     }
 
@@ -107,6 +104,13 @@ impl Reason {
         if matches!(e.kind(), io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData | io::ErrorKind::NotADirectory) {
             Self::Invalid
         } else { e.into() }
+    }
+    fn recheck_directory(e: io::Error) -> Self {
+        match e.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData |
+                io::ErrorKind::NotADirectory => Self::Changed,
+            _ => e.into(),
+        }
     }
 }
 impl Display for Reason {
@@ -147,17 +151,18 @@ pub(crate) struct Mounted { pub(crate) mount: Mount, pub(crate) space: Result<Sp
 #[derive(Debug)]
 pub(crate) struct Observed { pub(crate) entity: Entity, pub(crate) mount: Result<Mounted, Reason> }
 
-// Keep the original directory descriptor alive until attribution has been rechecked.
+// CLI as well as Web observes only the already-mounted directory. Keep its
+// O_PATH descriptor through attribution; do not take a pool or volume lock.
 struct HeldSample { root: Pinned, mount: Result<Mounted, Reason> }
 impl HeldSample {
     fn take(path: &Path) -> Result<Self, Reason> {
-        let root = Pinned::open(path, Kind::StorageRoot).map_err(Reason::opening_directory)?;
+        let root = Pinned::already_mounted(path, Kind::StorageRoot).map_err(Reason::opening_directory)?;
         // Per-directory filesystem accounting can differ between subvolumes.
         let mount = observed_mount(&root.fd).map(|mount| Mounted { mount, space: Space::read(&root.fd) });
         Ok(Self { root, mount })
     }
     fn finish(self) -> Result<Observed, Reason> {
-        let now = Pinned::open(&self.root.path, Kind::StorageRoot).map_err(Reason::opening_directory)?;
+        let now = Pinned::already_mounted(&self.root.path, Kind::StorageRoot).map_err(Reason::recheck_directory)?;
         if self.root.chain != now.chain { return Err(Reason::Changed); }
         let mount = match self.mount {
             Ok(held) => match observed_mount(&now.fd) {
@@ -227,6 +232,38 @@ impl Display for Report {
 mod tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn online_storage_observers_do_not_require_an_offline_system_lease() {
+        use rustix::fs::{FlockOperation, flock};
+
+        let area = tempfile::tempdir().unwrap();
+        let system = area.path().join("system");
+        let recycle = area.path().join("recycle");
+        let data = area.path().join("data");
+        for dir in [&system, &recycle, &data] {
+            std::fs::create_dir(dir).unwrap();
+        }
+        let selection = || Selection { system: system.clone(), recycle: recycle.clone(), data: vec![data.clone()] };
+        let owner = File::open(&system).unwrap();
+        // Simulate an online lifecycle hold and then a separate exclusive
+        // holder, using only this temporary directory, not a deployed S.
+        for held in [FlockOperation::NonBlockingLockShared, FlockOperation::NonBlockingLockExclusive] {
+            flock(&owner, held).unwrap();
+            let original = HeldSample::take(&system).unwrap();
+            assert!(original.root.passive_mount_observation());
+            let cli = selection().observe();
+            let web = WebSelection::pin(selection()).observe();
+            for report in [cli, web] {
+                assert_eq!(report.rows.len(), 3);
+                assert!(report.rows.iter().all(|(_, v)| v.as_ref().is_ok_and(|r| r.mount.is_ok())));
+            }
+            let other = File::open(&system).unwrap();
+            assert_eq!(flock(&other, FlockOperation::NonBlockingLockExclusive), Err(rustix::io::Errno::WOULDBLOCK));
+            flock(&owner, FlockOperation::Unlock).unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&system).unwrap().count(), 0);
+    }
 
     #[test]
     fn role_selection_is_bounded_and_preserves_non_utf8_unix_names() {

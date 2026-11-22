@@ -93,6 +93,7 @@ impl Panel {
             "/api/copy/preview"=>match self.check.as_mut(){Some(c)=>c.preview(now),
                 None=>Reply::plain(403,"本次终端只开放观察，没有预选卷镜像。")},
             "/api/disks"=>view::disks(false),"/api/rates"=>view::disks(true),"/api/tools"=>view::tools(),
+            "/api/hardware"=>view::hardware(&crate::hardware::observe()),
             "/api/storage"=>match &self.storage{Some(roots)=>view::storage(&roots.observe()),
                 None=>Reply::plain(403,"本次终端没有预选挂载目录；请另从本机终端以 disk-web --storage-roots 启动。")},
             "/api/close"=>{self.closed=true;Reply::plain(200,"不再接受操作；终端可能仍在等工作进程收尾。此回复不能作为升级许可。")},

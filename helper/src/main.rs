@@ -7,6 +7,7 @@ compile_error!("helper currently supports Linux x86_64 (LP64) only");
 mod block_tools;
 mod disk_web;
 mod fs_tools;
+mod hardware;
 mod fat32_check;
 mod inspect;
 mod isolated_group;
@@ -29,7 +30,7 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper check-deployment\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-nonempty-source --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --source DIR\n  helper check-ordinary-retirement --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper install-pool web new|resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper --help | --version\n\n\
+helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper check-deployment\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-nonempty-source --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --source DIR\n  helper check-ordinary-retirement --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper hardware\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper install-pool web new|resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper --help | --version\n\n\
 install-pool defaults to /zxs/disks/system and /zxs/disks/recycle; choose each ordinary root explicitly.\nSupply already mounted directories; storage-status reports observations, not an approved layout.";
 
 #[derive(Debug)]
@@ -49,6 +50,7 @@ enum Command {
     #[cfg(feature="embedded-zxs")]
     EmbeddedInstall(sqlite_install::EmbeddedInstall),
     Disks(block_tools::Query),
+    Hardware,
     DiskWeb(Option<fat32_check::panel::Job>),
     DiskWebStorage(Selection),
     SealedWorker(fat32_check::Format,[u8;32]),
@@ -152,6 +154,10 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "check-exfat-copy" {return fat32_check::Request::parse_exfat(args).map(Command::Exfat);}
     if op == "check-fat32-copy" { return fat32_check::Request::parse(args).map(Command::Fat32); }
     if op == "fs-tools" { return fs_tools::Query::parse(args).map(Command::FsTools); }
+    if op == "hardware" {
+        if args.next().is_some() { return Err("hardware takes no paths or options"); }
+        return Ok(Command::Hardware);
+    }
     if op == "disks" { return block_tools::Query::parse(args).map(Command::Disks); }
     if op == "storage-status" { return Selection::parse(args).map(Command::Storage); }
     if op == "compare-files" {
@@ -227,6 +233,11 @@ fn run(command: Command) -> io::Result<ExitCode> {
             line(&report.to_string())?;
             return Ok(if report.complete() { ExitCode::SUCCESS } else { ExitCode::from(2) });
         }
+        Command::Hardware => {
+            let report = hardware::observe();
+            line(&report.to_string())?;
+            return Ok(if report.complete() { ExitCode::SUCCESS } else { ExitCode::from(2) });
+        }
         Command::Storage(selection) => {
             let report = selection.observe();
             line(&report.to_string())?;
@@ -259,6 +270,14 @@ fn main() -> ExitCode {
 mod copy_arguments{
     use super::*;
     use fat32_check::{LeasedFormat,panel::Job};
+
+    #[test]
+    fn hardware_argv_only_selects_a_fixed_passive_observation() {
+        assert!(matches!(parse(["hardware"].map(OsString::from)), Ok(Command::Hardware)));
+        for extra in ["--loop", "--write", "/proc/self/status", "/dev/sda"] {
+            assert!(parse(["hardware", extra].map(OsString::from)).is_err());
+        }
+    }
 
     #[test]
     fn the_repair_worker_gets_no_path_format_or_tool_arguments(){

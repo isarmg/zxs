@@ -2,7 +2,7 @@
 (() => {
   const el = id => document.getElementById(id);
   let bearer = "", csrf = "", ticket = "", busy = false;
-  const labels = {disks:"设备与挂载", rates:"被动 I/O 速率", storage:"终端预选挂载容量", tools:"随包与宿主工具"};
+  const labels = {disks:"设备与挂载", rates:"被动 I/O 速率", hardware:"CPU 与内存", storage:"终端预选挂载容量", tools:"随包与宿主工具"};
   const buttons = ["pair",...Object.keys(labels),"preview","confirm","receipt","close"].map(el);
   const leasedTools=new Map([
     ["ext4",["ext 文件系统（ext2/3/4） · e2fsck -fn","check-ext4-copy"]],
@@ -46,7 +46,7 @@
     el("rows").replaceChildren(fragment);show("result",true);state(rows.length ? "已取得本次观察。未知、缺失或无权限的项不会补成正常值。" : "此次观察没有行。");
   }
   async function observe(id){
-    show("result",false);state(id==="rates"?"正在等待第二次计数采样……":"正在观察……");
+    show("result",false);state((id==="rates"||id==="hardware")?"正在等待第二次计数采样……":"正在观察……");
     const response=await post("/api/"+id,auth());const msg=await response.text();
     if(!response.ok){state(msg);return;}render(labels[id],msg);
   }
