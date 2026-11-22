@@ -17,8 +17,8 @@ RUST = "1.100.0"
 RUST_COMMIT = "0ef1bc386059596dada8fb65b50425aab2ea637a"
 MAX_IMAGE = 128 * 1024 * 1024
 BROWSER_TARGET = "wasm32-unknown-unknown"
-BROWSER_AUTHORED = ("boot.js", "folder.css")
-BROWSER_ASSETS = (*BROWSER_AUTHORED, "zxs_browser.js", "zxs_browser_bg.wasm")
+BROWSER_AUTHORED = ("boot.js", "folder.css", "console_host.js")
+BROWSER_ASSETS = ("boot.js", "folder.css", "zxs_browser.js", "zxs_browser_bg.wasm")
 BROWSER_RECEIPT = "provenance.json"
 MAX_BROWSER_FILE = 8 * 1024 * 1024
 

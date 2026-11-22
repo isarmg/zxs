@@ -12,15 +12,6 @@ resolver = "3"
 [lib]
 crate-type = ["cdylib"]
 
-[dependencies]
-js-sys = { version = "=0.3.106", default-features = false }
-wasm-bindgen = { version = "=0.2.129", default-features = false }
-web-sys = { version = "=0.3.106", default-features = false, features = [
-    "Document", "Element", "Event", "Headers", "HtmlElement",
-    "Location", "NodeList", "Request", "RequestCache", "RequestCredentials",
-    "RequestInit", "RequestMode", "RequestRedirect", "Response", "Window",
-] }
-
 [profile.release]
 lto = true
 codegen-units = 1

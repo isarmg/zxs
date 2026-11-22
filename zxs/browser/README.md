@@ -10,6 +10,8 @@ Rust/WASM 负责目录导航、层级路径和文件行。登录、共享设置�
 
 `GET /ui/v1/d/<ShareId>/<DirectoryId 或 ->/<页标识或 ->` 每次重新鉴权；页标识属于同会话同目录。成功响应为最多 128 KiB 的 `application/json`，含实际长度：`ancestors` 为根下到当前目录（不含共享根，最多 256 层），`entries` 为本页最多 32 个直接子项（`kind` 为 `directory` 或 `file`），`next` 为页标识或 `null`。每项仅 `id`、`name` 和所需类型。无会话返回 401。仅点击实际链接才打开新的手动提交表单。
 
-## 构建交接
+## 浏览层边界与构建
 
-浏览器依赖只有 wasm-bindgen、js-sys 和 web-sys；构建保留锁文件和依赖许可证。需要匹配的可信 Rust 1.100.0 `wasm32-unknown-unknown` 目标和 `wasm-bindgen` 0.2.129 CLI。用已审核的锁与本地 Cargo 依赖构建 cdylib，以 `wasm-bindgen --target web --out-name zxs_browser` 生成模块和 WASM。[正式构建](../BUILD.md)将固定资源及 MIME 嵌入同一个 ZXS ELF。
+目录状态、路径/分页标识校验和界面渲染留在 Rust。`console_host.js` 只接浏览器自身的 DOM、历史片段和有大小上限的目录响应：只发同源 GET，不跟随重定向；解码和渲染仅接收当前请求。它不代替服务端鉴权，也不生成或执行脚本文本。登录和手动版本表单不加载这个模块。
+
+独立浏览器 crate 没有第三方 Cargo 包。使用受核对的本地 Rust 和官方 `wasm32-unknown-unknown` 标准库离线构建。构建把同源浏览器接口与 Rust WebAssembly 模块写到原四个资产位置；[正式构建](../BUILD.md)核对来源和摘要后嵌入同一 ZXS ELF。

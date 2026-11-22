@@ -59,35 +59,27 @@ toolchain described above:
 
 ```sh
 python3 build_browser.py /path/to/reviewed/rust-1.100.0/bin \
-  --wasm-std /path/to/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz \
-  --wasm-bindgen /path/to/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz \
-  --crates /path/to/local/crates-io-archives
+  --wasm-std /path/to/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz
 ```
 
-Prepare the inputs before building:
+Use the official [Rust wasm32 standard library, 1.100.0](https://static.rust-lang.org/dist/2026-11-12/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz)
+(SHA-256 `19b7954d650fc0d22767eceb76b8e03d07ce0d6a9f4234f33c32a17ee8d6d7b9`).
+The browser crate has no third-party Cargo packages or generated bindings.
 
-- [Rust wasm32 standard library, 1.100.0](https://static.rust-lang.org/dist/2026-11-12/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz)
-  (SHA-256 `19b7954d650fc0d22767eceb76b8e03d07ce0d6a9f4234f33c32a17ee8d6d7b9`).
-- [wasm-bindgen CLI, 0.2.129 Linux x86-64 musl](https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz)
-  (SHA-256 `82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e`).
-- The official crates.io `<name>-<version>.crate` archives named in
-  [`browser/Cargo.lock`](browser/Cargo.lock), in one local directory. The recipe
-  checks every selected archive against its lock checksum and preserves its
-  license files when staging it for Cargo.
+The recipe checks the host toolchain and target archive, then builds a
+hashed private copy of the browser source, manifest and lock with a
+private target sysroot and Cargo home. It does not read local build
+scripts, fetch dependencies, or modify the toolchain. It writes
+`target/browser-assets/` without replacement: `boot.js`, `folder.css`,
+`zxs_browser.js` (the checked-in browser host code), and
+`zxs_browser_bg.wasm` (the Rust console). Build-only `provenance.json`
+records source, recipe, tool and output digests. Reproduce in a clean
+private worktree with the same inputs.
 
-The recipe checks the reviewed host toolchain's version, the archive pins
-and the extracted CLI hash. Cargo builds a hashed private copy of the
-manifest, lock and browser source, with a private target sysroot and Cargo
-home. Local build scripts are not inputs. The build is locked and offline;
-it does not modify the trusted toolchain. It writes `target/browser-assets/`
-without replacement: `boot.js`, `folder.css`, `zxs_browser.js` and
-`zxs_browser_bg.wasm`. Build-only `provenance.json` records the source and lock
-hashes, tool inputs, and byte count and SHA-256 of each asset. Keep the reviewed
-source revision and upstream license material with the build evidence.
-Reproduce in a clean private worktree using the same complete inputs.
-
-This command builds only the browser component. Match the receipt to the
-reviewed build inputs and verify the four asset hashes before approving a
+This command builds only the browser component. To check the compiled module
+with the synthetic browser host (no server), run
+`node tests/browser/console-host.mjs target/browser-assets`.
+Match the receipt to the reviewed build inputs and verify the four asset hashes before approving a
 stage pin. Keep the stage and source worktree under your exclusive control.
 Keep the reviewed pin separate from the stage and supply it explicitly to the
 release command; a digest calculated from an unreviewed directory is not

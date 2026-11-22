@@ -34,7 +34,7 @@ impl Folder {
     }
 
     fn path(self, prefix: &str) -> String {
-        let segment = |id: Option<Id>| id.map(|id| id.to_string()).unwrap_or_else(|| "-".into());
+        let segment = |id: Option<Id>| id.map_or_else(|| "-".into(), |id| id.to_string());
         format!("{prefix}{}/{}/{}", self.share, segment(self.parent), segment(self.page))
     }
 
@@ -99,7 +99,7 @@ impl Location {
             let page = segment(segments.next()?)?;
             segments.next().is_none().then_some(Folder { share, parent, page })
         })();
-        folder.map(Self::Directory).unwrap_or(Self::InvalidDirectory)
+        folder.map_or(Self::InvalidDirectory, Self::Directory)
     }
 
     pub(crate) fn selected(self) -> Option<Panel> {
@@ -124,6 +124,8 @@ mod tests {
         let hash = format!("{DIRECTORY}{SHARE}/{DIR}/{CURSOR}");
         let Location::Directory(folder) = Location::parse(&hash) else { panic!("directory") };
         assert_eq!(folder.fragment(), hash);
+        assert_eq!(Location::Directory(folder).selected(), Some(Panel::Folders));
+        assert_eq!(Panel::Folders.id(), "zxs-files");
         assert_eq!(folder.request_path(), format!("/ui/v1/d/{SHARE}/{DIR}/{CURSOR}"));
         assert_eq!(folder.request_path().len(), 107);
         assert_eq!(folder.destination(None).fragment(), format!("{DIRECTORY}{SHARE}/-/-"));
