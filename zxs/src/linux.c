@@ -150,6 +150,8 @@ int zxs_claim(int fd, const unsigned char *buf, size_t n) {
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/syscall.h>
+#include <linux/openat2.h>
 
 /* Linux v6.12 UAPI. Older libc headers may omit the unique mount ID bit. */
 #ifndef STATX_MNT_ID_UNIQUE
@@ -190,6 +192,42 @@ int observe_character_device(int fd, struct character_device_identity *out) {
         .special_device = (uint64_t)observed.st_rdev, .major = major(observed.st_rdev), .minor = minor(observed.st_rdev)
     };
     return 0;
+}
+
+/* Each recipe keeps its original openat2 scope; all are read-only or O_PATH. */
+enum {
+    HELD_PROC_PIN = 1, HELD_PROC_DIRECTORY = 2, HELD_PROC_RECORD = 3,
+    HELD_VIEW_PIN = 4, HELD_VIEW_LOCAL_PIN = 5,
+    HELD_SITE_LOCAL_PIN = 6, HELD_SITE_CACHED_PIN = 7, HELD_SITE_DIRECTORY = 8
+};
+#define HELD_PIN_FLAGS (O_PATH | O_NOFOLLOW | O_CLOEXEC)
+#define HELD_PROC_SCOPE (RESOLVE_BENEATH | RESOLVE_NO_XDEV | RESOLVE_NO_MAGICLINKS)
+#define HELD_VIEW_SCOPE (RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)
+#define HELD_SITE_SCOPE (HELD_VIEW_SCOPE | RESOLVE_NO_MAGICLINKS)
+static const struct open_how held_read_recipes[] = {
+    [HELD_PROC_PIN] = { .flags = HELD_PIN_FLAGS, .resolve = HELD_PROC_SCOPE },
+    [HELD_PROC_DIRECTORY] = {
+        .flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC, .resolve = HELD_PROC_SCOPE
+    },
+    [HELD_PROC_RECORD] = {
+        .flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC, .resolve = HELD_PROC_SCOPE
+    },
+    [HELD_VIEW_PIN] = { .flags = HELD_PIN_FLAGS, .resolve = HELD_VIEW_SCOPE },
+    [HELD_VIEW_LOCAL_PIN] = { .flags = HELD_PIN_FLAGS, .resolve = HELD_VIEW_SCOPE | RESOLVE_NO_XDEV },
+    [HELD_SITE_LOCAL_PIN] = { .flags = HELD_PIN_FLAGS, .resolve = HELD_SITE_SCOPE | RESOLVE_NO_XDEV },
+    [HELD_SITE_CACHED_PIN] = { .flags = HELD_PIN_FLAGS, .resolve = HELD_SITE_SCOPE | RESOLVE_CACHED },
+    [HELD_SITE_DIRECTORY] = {
+        .flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NOATIME,
+        .resolve = HELD_SITE_SCOPE | RESOLVE_NO_XDEV
+    }
+};
+_Static_assert(sizeof(struct open_how) == 24, "original openat2 UAPI");
+long open_held_read(int parent, const char *name, uint8_t recipe) {
+    if (recipe == 0 || recipe >= sizeof(held_read_recipes) / sizeof(held_read_recipes[0])) {
+        errno = EINVAL;
+        return -1;
+    }
+    return syscall(SYS_openat2, parent, name, &held_read_recipes[recipe], sizeof(struct open_how));
 }
 
 int zxs_mount_id(int fd, uint64_t *out) {

@@ -2,14 +2,13 @@
 //! approved paths. Durable IDs never come from kernel mount numbering.
 mod diagnostics;
 use super::{approval::check_path,denied,layout};
-use crate::{fs::Entity,smb::launch::descriptor::{self,Access,DescriptorFlags}};
+use crate::{fs::Entity,smb::launch::{descriptor::{self,Access,DescriptorFlags},
+    held_open::{self,ProcOpen,SiteOpen}}};
 use std::{collections::BTreeMap,ffi::{CStr,CString},fs::File,io::{self,Read},
     os::{fd::{AsRawFd,FromRawFd,RawFd},unix::{ffi::OsStrExt,fs::{FileExt,MetadataExt}}},
     path::{Component,Path,PathBuf}};
 
-const BASE:u64=libc::RESOLVE_BENEATH|libc::RESOLVE_NO_MAGICLINKS|libc::RESOLVE_NO_SYMLINKS;
 const PIN:i32=libc::O_PATH|libc::O_NOFOLLOW|libc::O_CLOEXEC;
-const RD_DIR:i32=libc::O_RDONLY|libc::O_DIRECTORY|libc::O_NOFOLLOW|libc::O_CLOEXEC|libc::O_NOATIME;
 const MAX_INDEX:usize=4*1024*1024;
 const MAX_MOUNTS:usize=16_384;
 const BTRFS:u32=0x9123_683e;
@@ -21,16 +20,14 @@ fn fd(raw:RawFd)->io::Result<File>{
     // SAFETY: every caller transfers a newly opened descriptor or -1.
     Ok(unsafe{File::from_raw_fd(raw)})
 }
-fn open(parent:&File,name:&CStr,flags:i32,resolve:u64)->io::Result<File>{
-    // SAFETY: open_how is a C ABI integer record; reserved fields stay zero.
-    let mut how:libc::open_how=unsafe{std::mem::zeroed()};
-    how.flags=flags as u64;how.resolve=resolve;
-    // SAFETY: fixed live names, open_how and parent. No O_CREAT, no write access.
-    let h=unsafe{libc::syscall(libc::SYS_openat2,parent.as_raw_fd(),name.as_ptr(),&how,std::mem::size_of_val(&how))};
-    if h<0{return Err(io::Error::last_os_error());}
-    fd(i32::try_from(h).map_err(|_|denied())?)
+fn held_file(result:held_open::Result)->io::Result<File>{
+    result.map(File::from).map_err(|error|match error{
+        held_open::Error::Native(error)=>error, held_open::Error::InvalidDescriptor=>denied(),
+    })
 }
-pub(super) fn leaf(parent:&File,name:&CStr)->io::Result<File>{open(parent,name,PIN,BASE|libc::RESOLVE_NO_XDEV)}
+pub(super) fn leaf(parent:&File,name:&CStr)->io::Result<File>{
+    held_file(held_open::site(parent,name,SiteOpen::LocalPin))
+}
 pub(super) fn fd_mount(raw:RawFd)->io::Result<u64>{
     let mut v=0;
     // SAFETY: this exact descriptor and one writable result live for the call.
@@ -87,7 +84,7 @@ pub(super) fn no_xattr(file:&File,name:&CStr)->io::Result<()>{
     Err(denied())
 }
 pub(super) fn dir_reader(pin:&File)->io::Result<File>{
-    let out=open(pin,c".",RD_DIR,BASE|libc::RESOLVE_NO_XDEV)?;
+    let out=held_file(held_open::site(pin,c".",SiteOpen::Directory))?;
     if place(&out)?!=place(pin)?{return Err(denied());}
     rdonly(&out)?;Ok(out)
 }
@@ -96,7 +93,7 @@ pub(super) fn proc_pin(parent:&File,name:&CStr)->io::Result<File>{
     if magic(parent)?!=libc::PROC_SUPER_MAGIC as u32{return Err(denied());}
     // A terminal bare O_PATH lookup does not request O_DIRECTORY and never
     // activates unqualified proc children, magic links or mount crossings.
-    let f=open(parent,name,PIN,libc::RESOLVE_BENEATH|libc::RESOLVE_NO_XDEV|libc::RESOLVE_NO_MAGICLINKS)?;
+    let f=held_file(held_open::proc(parent,name,ProcOpen::Pin))?;
     if mount(&f)?!=mount(parent)?||magic(&f)?!=libc::PROC_SUPER_MAGIC as u32{return Err(denied());}
     Ok(f)
 }
@@ -318,10 +315,10 @@ impl PathPin{
             let crossing=tab.crossing(prefix.as_os_str().as_bytes(),parent,
                 role.permits_crossing(&prefix))?;
             let c=CString::new(n.as_bytes()).map_err(|_|denied())?;
-            let resolve=BASE|if crossing.is_some(){libc::RESOLVE_CACHED}else{libc::RESOLVE_NO_XDEV};
+            let recipe=if crossing.is_some(){SiteOpen::CachedCrossingPin}else{SiteOpen::LocalPin};
             // Open a bare O_PATH so an unexpected special entry is never
             // activated. Only the exact known whole local crossing is tried.
-            file=open(&file,&c,PIN,resolve)?;
+            file=held_file(held_open::site(&file,&c,recipe))?;
             let found=tab.observe(&file,crossing.unwrap_or(parent))?;
             if matches!(role,Role::FixedDir){
                 // Below the product root, even a same-mount device change

@@ -5,7 +5,7 @@ mod child;
 use super::{Fault,ImageStamp,Namespace,Parent,PreparedHandoff,PROC,Result,Role,bounded,caps,current_task,
     follow_kernel_link,foreground,kernel,object,proc_dir,row,view,words};
 use kernel::{BootSocket,OriginalProcess};
-use crate::smb::launch::transport::{child_receipt,offer_packet};
+use crate::smb::launch::{held_open::{self,ViewOpen},transport::{child_receipt,offer_packet}};
 use std::{ffi::CString,fs::File,io::{self,Read},mem::{size_of,zeroed},
     os::{fd::{AsRawFd,BorrowedFd,RawFd},unix::fs::MetadataExt},thread,time::{Duration,Instant}};
 
@@ -373,12 +373,7 @@ fn task(parent:&Parent,pidfd:&File)->Result<(String,File)>{
     Ok((id,proc_dir(&parent.proc,&name)?))
 }
 fn view_proc(root:&File)->Result<File>{
-    // SAFETY: resolve only the mounted proc leaf of the actual child root.
-    let mut h:libc::open_how=unsafe{zeroed()};
-    h.flags=(libc::O_PATH|libc::O_NOFOLLOW|libc::O_CLOEXEC)as u64;
-    h.resolve=libc::RESOLVE_BENEATH|libc::RESOLVE_NO_SYMLINKS;
-    let f=unsafe{File::from(kernel::new_fd(libc::syscall(libc::SYS_openat2,root.as_raw_fd(),c"proc".as_ptr(),&raw const h,
-        size_of::<libc::open_how>()))?)};
+    let f=File::from(held_open::view(root,c"proc",ViewOpen::ProjectedPin).map_err(|_|Fault::Handoff)?);
     if !f.metadata().map_err(|_|Fault::Handoff)?.is_dir(){return Err(Fault::Handoff);}
     Ok(f)
 }

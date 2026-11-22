@@ -1,8 +1,8 @@
 //! Detached data-only view for an independently approved static ZXS image.
 //! No host /etc, runtime program, loader/DSO, site or credential is projected.
 use super::{Fault,Parent,PROC,Result,Role,descriptor,kernel,object};
-use crate::fs::MountFlags;
-use std::{ffi::{CStr,CString},fs::File,mem::{size_of,zeroed},os::{fd::AsRawFd,unix::{ffi::OsStrExt,fs::MetadataExt}},
+use crate::{fs::MountFlags,smb::launch::held_open::{self,ViewOpen}};
+use std::{ffi::{CStr,CString},fs::File,mem::size_of,os::{fd::AsRawFd,unix::{ffi::OsStrExt,fs::MetadataExt}},
     path::Path,ptr,thread};
 
 // Linux v6.12 include/uapi/linux/mount.h. These are deliberately fixed
@@ -161,13 +161,8 @@ fn tmpfs()->Result<File>{
     }
 }
 fn directory_at(parent:&File,name:&CStr,no_cross:bool)->Result<File>{
-    // SAFETY: scoped retained root, literal/generated component, valid ABI.
-    // No intermediate path symlinks, device reads or mount actions here.
-    let mut how:libc::open_how=unsafe{zeroed()};
-    how.flags=PIN as u64;how.resolve=libc::RESOLVE_BENEATH|libc::RESOLVE_NO_SYMLINKS;
-    if no_cross{how.resolve|=libc::RESOLVE_NO_XDEV;}
-    let selected=unsafe{File::from(kernel::new_fd(libc::syscall(libc::SYS_openat2,parent.as_raw_fd(),
-        name.as_ptr(),&raw const how,size_of::<libc::open_how>()))?)};
+    let recipe=if no_cross{ViewOpen::LocalPin}else{ViewOpen::ProjectedPin};
+    let selected=File::from(held_open::view(parent,name,recipe).map_err(|_|Fault::Handoff)?);
     if !selected.metadata().map_err(|_|Fault::Handoff)?.is_dir(){return Err(Fault::Handoff);}
     Ok(selected)
 }

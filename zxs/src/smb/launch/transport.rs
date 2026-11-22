@@ -9,6 +9,7 @@ pub(in crate::smb) use accept::OwnedAccepted;
 pub(super) use handshake::{InheritedControl,child_receipt,offer_packet,read_sealed,seal_public};
 use super::{Fault,Result,descriptor::{self,Access,cloexec},
     envelope::{ENV_MAX,Envelope,MAX_LISTENERS,START_BYTES,Start,VaultStamp},
+    held_open::{self,ProcOpen},
     kernel::{BootSocket,OriginalProcess,fs_magic,sock,sock_int}};
 use crate::smb::readiness::{self,Interest,Watch};
 use std::{
@@ -107,16 +108,7 @@ fn initial_child()->Result<(u32,u32)>{
         .open("/proc").map_err(|_|Fault::Handoff)?;
     if fs_magic(proc.as_raw_fd())?!=libc::PROC_SUPER_MAGIC as libc::c_long||
         proc.metadata().map_err(|_|Fault::Handoff)?.ino()!=1{return Err(Fault::Handoff);}
-    // SAFETY: open_how has only integer fields; all required zeroes are set.
-    let mut how:libc::open_how=unsafe{zeroed()};
-    how.flags=(libc::O_PATH|libc::O_NOFOLLOW|libc::O_CLOEXEC) as u64;
-    how.resolve=libc::RESOLVE_BENEATH|libc::RESOLVE_NO_XDEV|libc::RESOLVE_NO_MAGICLINKS;
-    // SAFETY: known directory, literal Linux path and sized live C arguments.
-    let raw=unsafe{libc::syscall(libc::SYS_openat2,proc.as_raw_fd(),c"thread-self/ns/user".as_ptr(),
-        &how,size_of::<libc::open_how>())};
-    if raw<0{return Err(Fault::Handoff);}
-    // SAFETY: openat2 returns a fresh descriptor within the Linux int range.
-    let link=unsafe{OwnedFd::from_raw_fd(RawFd::try_from(raw).map_err(|_|Fault::Handoff)?)};
+    let link=held_open::proc(&proc,c"thread-self/ns/user",ProcOpen::Pin).map_err(|_|Fault::Handoff)?;
     let mut buf=[0u8;40];
     // SAFETY: the O_PATH symlink and writable output span are retained.
     let n=unsafe{libc::readlinkat(link.as_raw_fd(),c"".as_ptr(),buf.as_mut_ptr().cast(),buf.len())};

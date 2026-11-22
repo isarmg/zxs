@@ -9,7 +9,8 @@ mod preflight;
 mod start;
 pub(super) use preflight::VerifiedPreflight;
 pub(super) use start::{PreparedPair,authorize,prepare_site,stopping,launch_internal_smb,launch_internal_web};
-use super::{Fault,Result,Role,descriptor::{self,UniqueMountId},kernel::{self,BootSocket,OriginalProcess}};
+use super::{Fault,Result,Role,descriptor::{self,UniqueMountId},
+    held_open::{self,ProcOpen},kernel::{self,BootSocket,OriginalProcess}};
 use std::{
     ffi::{CStr,CString},fs::{File,OpenOptions},io::Read,marker::PhantomData,mem::{size_of,zeroed},
     os::fd::AsRawFd,os::unix::fs::{MetadataExt,OpenOptionsExt},rc::Rc,
@@ -25,7 +26,6 @@ const PID_INIT:u64=0xefff_fffc;
 const USER_INIT:u64=0xefff_fffd;
 const PIN:i32=libc::O_PATH|libc::O_CLOEXEC|libc::O_NOFOLLOW;
 const DIR:i32=PIN|libc::O_DIRECTORY;
-const SAFE:u64=libc::RESOLVE_BENEATH|libc::RESOLVE_NO_XDEV|libc::RESOLVE_NO_MAGICLINKS;
 const SERVICE_CAPS:u64=(1<<0)|(1<<1)|(1<<3)|(1<<6)|(1<<7)|(1<<10);
 const SUPERVISOR_CAPS:u64=SERVICE_CAPS|(1<<5)|(1<<8)|(1<<18)|(1<<19)|(1<<21);
 
@@ -126,20 +126,13 @@ fn proc_root()->Result<File>{
     if kernel::fs_magic(p.as_raw_fd())?!=PROC||!m.is_dir()||m.ino()!=1{return Err(Fault::Handoff);}
     Ok(p)
 }
-fn proc_at(dir:&File,name:&CStr,flags:i32)->Result<File>{
-    // SAFETY: fixed Linux openat2 UAPI, initialized fields, retained directory
-    // and usable C path. No magic link or submount is followed by this call.
-    let mut how:libc::open_how=unsafe{zeroed()};
-    how.flags=flags as u64;how.resolve=SAFE;
-    let f=unsafe{
-        let ret=libc::syscall(libc::SYS_openat2,dir.as_raw_fd(),name.as_ptr(),&raw const how,size_of::<libc::open_how>());
-        File::from(kernel::new_fd(ret)?)
-    };
+fn proc_at(dir:&File,name:&CStr,recipe:ProcOpen)->Result<File>{
+    let f=File::from(held_open::proc(dir,name,recipe).map_err(|_|Fault::Handoff)?);
     if kernel::fs_magic(f.as_raw_fd())?!=PROC{return Err(Fault::Handoff);}
     Ok(f)
 }
 fn follow_kernel_link(dir:&File,name:&CStr,flags:i32)->Result<File>{
-    let link=proc_at(dir,name,PIN)?;
+    let link=proc_at(dir,name,ProcOpen::Pin)?;
     let stamp=object(&link)?;
     if !link.metadata().map_err(|_|Fault::Handoff)?.file_type().is_symlink()||stamp.mount!=object(dir)?.mount{
         return Err(Fault::Handoff);
@@ -151,11 +144,11 @@ fn follow_kernel_link(dir:&File,name:&CStr,flags:i32)->Result<File>{
         let ret=libc::openat(dir.as_raw_fd(),name.as_ptr(),flags|libc::O_CLOEXEC);
         File::from(kernel::new_fd(ret.into())?)
     };
-    if object(&proc_at(dir,name,PIN)?)?!=stamp{return Err(Fault::Handoff);}
+    if object(&proc_at(dir,name,ProcOpen::Pin)?)?!=stamp{return Err(Fault::Handoff);}
     Ok(target)
 }
 fn proc_dir(parent:&File,name:&CStr)->Result<File>{
-    let f=proc_at(parent,name,PIN)?;
+    let f=proc_at(parent,name,ProcOpen::Pin)?;
     if !f.metadata().map_err(|_|Fault::Handoff)?.is_dir(){return Err(Fault::Handoff);}
     Ok(f)
 }
@@ -166,7 +159,7 @@ fn current_task(proc:&File)->Result<File>{
     // thread-self is a terminal *ordinary symlink*, not a directory.
     // Validate its real bounded spelling, then pin the generated numeric
     // path inside this procfs without following the terminal alias.
-    let link=proc_at(proc,c"thread-self",PIN)?;
+    let link=proc_at(proc,c"thread-self",ProcOpen::Pin)?;
     let stamp=object(&link)?;
     if !link.metadata().map_err(|_|Fault::Handoff)?.file_type().is_symlink(){return Err(Fault::Handoff);}
     let name=CString::new(format!("{pid}/task/{tid}")).map_err(|_|Fault::Handoff)?;
@@ -180,7 +173,7 @@ fn current_task(proc:&File)->Result<File>{
     let process=proc_dir(proc,&id)?;
     let tasks=proc_dir(&process,c"task")?;
     let thread=proc_dir(&tasks,&id)?;
-    if object(&proc_at(proc,c"thread-self",PIN)?)?!=stamp{return Err(Fault::Handoff);}
+    if object(&proc_at(proc,c"thread-self",ProcOpen::Pin)?)?!=stamp{return Err(Fault::Handoff);}
     Ok(thread)
 }
 fn running_image(proc:&File)->Result<File>{
@@ -189,7 +182,7 @@ fn running_image(proc:&File)->Result<File>{
 fn no_other_descriptors(proc:&File)->Result<()>{
     let task=current_task(proc)?;
     let anchor=proc_dir(&task,c"fd")?;
-    let dir=proc_at(&anchor,c".",libc::O_RDONLY|libc::O_DIRECTORY|libc::O_NOFOLLOW|libc::O_CLOEXEC)?;
+    let dir=proc_at(&anchor,c".",ProcOpen::Directory)?;
     if object(&anchor)?!=object(&dir)?{return Err(Fault::Handoff);}
     let allowed=[0,1,2,proc.as_raw_fd(),task.as_raw_fd(),anchor.as_raw_fd(),dir.as_raw_fd()];
     let mut buf=[0u8;4096];
@@ -230,14 +223,14 @@ fn caps(data:&[u8],key:&[u8])->Result<u64>{
     u64::from_str_radix(text,16).map_err(|_|Fault::Handoff)
 }
 fn bounded(proc:&File,path:&CStr,max:u64)->Result<Vec<u8>>{
-    let pin=proc_at(proc,path,PIN)?;
+    let pin=proc_at(proc,path,ProcOpen::Pin)?;
     if !pin.metadata().map_err(|_|Fault::Handoff)?.is_file(){return Err(Fault::Handoff);}
     let stamp=object(&pin)?;
-    let f=proc_at(proc,path,libc::O_RDONLY|libc::O_NONBLOCK|libc::O_CLOEXEC|libc::O_NOFOLLOW)?;
+    let f=proc_at(proc,path,ProcOpen::Record)?;
     if object(&f)?!=stamp{return Err(Fault::Handoff);}
     let mut data=Vec::new();
     f.take(max+1).read_to_end(&mut data).map_err(|_|Fault::Handoff)?;
-    if data.len() as u64>max||!data.ends_with(b"\n")||object(&proc_at(proc,path,PIN)?)?!=stamp{return Err(Fault::Handoff);}
+    if data.len() as u64>max||!data.ends_with(b"\n")||object(&proc_at(proc,path,ProcOpen::Pin)?)?!=stamp{return Err(Fault::Handoff);}
     Ok(data)
 }
 fn waitable_children()->Result<()>{

@@ -3,9 +3,9 @@
 //! matching two PREPARED receipts can reach the common terminal seal.
 use super::{Fault,Result,descriptor::{self,Access},kernel};
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
-use super::custody::Parent;
+use super::{custody::Parent,held_open::{self,ProcOpen}};
 use std::{
-    ffi::{CStr,CString},fs::{File,Permissions},io::Write,mem::{size_of,zeroed},os::fd::{AsRawFd,OwnedFd},
+    ffi::{CStr,CString},fs::{File,Permissions},io::Write,os::fd::{AsRawFd,OwnedFd},
     os::unix::fs::{FileExt,MetadataExt,PermissionsExt},time::{Duration,Instant},
 };
 
@@ -13,8 +13,6 @@ const MAGIC:&[u8;16]=b"ZXS-ADMIT-PAIR1\0";
 type GateBody=[u8;80];
 const HELD:libc::c_int=libc::F_SEAL_EXEC|libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK;
 const RELEASED:libc::c_int=HELD|libc::F_SEAL_SEAL;
-#[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
-const PIN:libc::c_int=libc::O_PATH|libc::O_NOFOLLOW|libc::O_CLOEXEC;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 const PROC:libc::c_long=libc::PROC_SUPER_MAGIC as libc::c_long;
 pub(super) const MAX_PAIR_WAIT:Duration=Duration::from_secs(45);
@@ -122,14 +120,7 @@ fn add_seals(original:&File,seals:libc::c_int)->Result<()>{
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 fn proc_pin(dir:&File,name:&CStr)->Result<File>{
     if kernel::fs_magic(dir.as_raw_fd())?!=PROC{return Err(Fault::Handoff);}
-    // SAFETY: open_how contains only integer fields; all unused values stay zero.
-    let mut how:libc::open_how=unsafe{zeroed()};
-    how.flags=PIN as u64;
-    how.resolve=libc::RESOLVE_BENEATH|libc::RESOLVE_NO_XDEV|libc::RESOLVE_NO_MAGICLINKS;
-    // SAFETY: a single exact component relative to the checked own proc
-    // task or fd table, with no link follow, submount or directory trigger.
-    let f=unsafe{File::from(kernel::new_fd(libc::syscall(libc::SYS_openat2,dir.as_raw_fd(),
-        name.as_ptr(),&raw const how,size_of::<libc::open_how>()))?)};
+    let f=File::from(held_open::proc(dir,name,ProcOpen::Pin).map_err(|_|Fault::Handoff)?);
     if kernel::fs_magic(f.as_raw_fd())?!=PROC{return Err(Fault::Handoff);}
     Ok(f)
 }

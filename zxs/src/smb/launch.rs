@@ -4,6 +4,7 @@
 mod envelope;
 mod kernel;
 mod descriptor;
+mod held_open;
 mod pair_gate;
 mod cohort;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
