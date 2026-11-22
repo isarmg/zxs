@@ -4,7 +4,7 @@ use super::{
     BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
     attribute_tag::PreparedAttributeTag,
     file_access::PreparedFileAccess,
-    range_lock::{LockError,PreparedLock},
+    range_lock::{LockError,PreparedLock,RangeIoError},
     disposition::{DELETE_ACCESS,DispositionError,PreparedDisposition,Snapshot},
     file_open::{EXECUTE,FILE_READ_RIGHTS,FileAnswers,FileCloseError,FileOpenError,FileReadError,FileStandardError,MAXIMUM_ALLOWED,READ_DATA,
         allocation,normalized_name_error,normalized_query},
@@ -19,7 +19,7 @@ use crate::{
 };
 use std::{io as stdio,sync::Arc};
 
-const WRITE_DATA:u32=2;
+pub(super) const WRITE_DATA:u32=2;
 const APPEND_DATA:u32=4;
 const WRITE_RIGHTS:u32=WRITE_DATA|APPEND_DATA;
 pub(super) const FILE_RIGHTS:u32=FILE_READ_RIGHTS|WRITE_RIGHTS|DELETE_ACCESS;
@@ -116,6 +116,9 @@ impl PreparedWriterName{
         open.held.original.require_normalized_name(tree,&self.scope,&self.view)
     }
 }
+#[derive(Clone,Copy)]
+enum DraftSize{EndOfFile(u64),Overwrite}
+enum DraftResizeError{Range(RangeIoError),Original(stdio::Error)}
 struct OriginalTurn{scope:RustSessionWitness,view:RustStagedState}
 impl OriginalTurn{
     fn accepted(scope:RustSessionWitness,open:&WritableFileOpen)->Self{
@@ -283,20 +286,37 @@ impl WritableFileOpen{
         let Change::EndOfFile(end)=request.change() else{return Err(FileWriteError::NotSupported);};
         if self.held.grant.0&WRITE_DATA==0{return Err(FileWriteError::Fault(WriteFault::AccessDenied));}
         let scope=self.begin(tree,request.original())?;
+        self.resize_draft(tree,&scope,DraftSize::EndOfFile(end)).map_err(|e|FileWriteError::Fault(match e{
+            DraftResizeError::Range(e)=>WriteFault::Range(e),
+            DraftResizeError::Original(e)=>WriteFault::Original(e),
+        }))?;
+        Ok(PreparedFileEof{original:OriginalTurn::accepted(scope,self)})
+    }
+    pub(super) fn overwrite_on_create(&mut self,tree:&RustRoot,scope:&RustSessionWitness)->Result<(),FileOpenError>{
+        if self.held.grant.0&WRITE_DATA==0{return Err(FileOpenError::AccessDenied);}
+        self.resize_draft(tree,scope,DraftSize::Overwrite).map_err(|e|match e{
+            DraftResizeError::Range(e)=>FileOpenError::Range(e),
+            DraftResizeError::Original(e)=>FileOpenError::Original(e),
+        })
+    }
+    fn resize_draft(&mut self,tree:&RustRoot,scope:&RustSessionWitness,change:DraftSize)->Result<(),DraftResizeError>{
+        let end=match change{DraftSize::EndOfFile(end)=>end,DraftSize::Overwrite=>0};
         // A deferred refresh must preserve this exact draft EOF before
         // resize may proceed. Only the changed length interval is reserved.
         let Held{_slot:slot,original,..}=&mut self.held;
-        let old=original.eof();
-        let permit=match slot.resize_permit(old,end){
+        let permit=match slot.resize_permit(original.eof(),end){
             Ok(permit)=>permit,
             Err(fault)=>{
-                original.require_current(tree,&scope).map_err(|e|FileWriteError::Fault(WriteFault::Original(e)))?;
-                return Err(FileWriteError::Fault(WriteFault::Range(fault)));
+                original.require_current(tree,scope).map_err(DraftResizeError::Original)?;
+                return Err(DraftResizeError::Range(fault));
             }
         };
-        original.resize(tree,&scope,end).map_err(|e|FileWriteError::Fault(WriteFault::Original(e)))?;
-        drop(permit); // length mutation settled before taking the reply snapshot
-        Ok(PreparedFileEof{original:OriginalTurn::accepted(scope,self)})
+        match change{
+            DraftSize::EndOfFile(end)=>original.resize(tree,scope,end),
+            DraftSize::Overwrite=>original.truncate_on_create(tree,scope),
+        }.map_err(DraftResizeError::Original)?;
+        drop(permit); // only this held draft changed; normal FLUSH/CLOSE still owns SAVE
+        Ok(())
     }
     pub(in crate::smb) fn read(&mut self,tree:&RustRoot,member:&VerifiedMember<'_,'_>,room:usize)
         ->Result<PreparedWriterRead,FileReadError>{

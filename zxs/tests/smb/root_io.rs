@@ -295,7 +295,8 @@ fn a_signed_named_open_alone_cannot_publish_a_retained_slot(){
 #[test]
 fn paid_named_create_or_open_if_without_its_actual_tree_never_reserves_or_creates(){
     for (operation,kind,disk) in [(2u8,0x40,false),(3,0x40,false),(2,0x40,true),(3,0x40,true),
-                                  (2,0x1,false),(3,0x1,false)]{
+                                  (2,0x1,false),(3,0x1,false),
+                                  (4,0x40,false),(5,0x40,false),(4,0x40,true),(5,0x40,true)]{
         let instance=provider();let mut peer=connected(&instance);assert_eq!(publish_at(&mut peer,1),1);
         let seen=Arc::new(Mutex::new(Vec::new()));peer.stream=Some(DirectStream::Fixture(Box::new(Sink(Arc::clone(&seen)))));
         let mut request=input(CREATE,false,false);request.truncate(120);
@@ -322,6 +323,10 @@ fn paid_named_create_or_open_if_without_its_actual_tree_never_reserves_or_create
     }
     assert!(matches!(file_open_failure(FileOpenError::Original(io::ErrorKind::AlreadyExists.into())),
         Ok(RootFailure::ObjectNameCollision)));
+    assert!(matches!(file_open_failure(FileOpenError::Original(io::ErrorKind::NotFound.into())),
+        Ok(RootFailure::ObjectNameNotFound)));
+    assert!(matches!(file_open_failure(FileOpenError::Range(RangeIoError::Conflict)),
+        Ok(RootFailure::FileLockConflict)));
     assert!(matches!(file_open_failure(FileOpenError::Original(io::ErrorKind::ConnectionAborted.into())),
         Err(Fault::WriteOutcomeUnknown)));
     assert!(matches!(directory_open_failure(DirectoryOpenError::Original(io::ErrorKind::AlreadyExists.into())),

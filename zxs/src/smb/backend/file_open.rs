@@ -4,7 +4,7 @@
 use super::{BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,ReserveError,Share,
     attribute_tag::PreparedAttributeTag,
     file_access::PreparedFileAccess,
-    range_lock::{LockError,PreparedLock},
+    range_lock::{LockError,PreparedLock,RangeIoError},
     disposition::{DELETE_ACCESS,DELETE_ON_CLOSE,DispositionError,PreparedDisposition,Snapshot},
     io::{CloseCompletion,ReadCompletion,ReadFault,seal_read},
     path::{NameError,TreeName},writable_file_open::{self,WritableFileOpen}};
@@ -26,7 +26,7 @@ pub(super) const FILE_OPTIONS:u32=0x0020_4846|DELETE_ON_CLOSE;
 #[derive(Debug)]
 pub(in crate::smb) enum FileOpenError{
     Fields(CreateError),Special(SpecialOpen),Name(NameError),NotFile,ContextRequired,UnsupportedOptions,
-    AccessDenied,ShareViolation,DeletePending,Resources,Session(ConnectionFault),Original(stdio::Error),WrongTree,
+    AccessDenied,ShareViolation,DeletePending,Resources,Range(RangeIoError),Session(ConnectionFault),Original(stdio::Error),WrongTree,
 }
 #[derive(Debug)]
 pub(in crate::smb) enum FileReadError {

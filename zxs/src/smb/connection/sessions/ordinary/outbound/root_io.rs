@@ -1,11 +1,12 @@
 //! Original paid and signed standalone CREATE/CLOSE. Only CREATE resolves
-//! an exact approved name; close never reopens or searches by name.
+//! an exact approved name. Overwrite selects the same FILE's private work draft;
+//! close never reopens or searches by name.
 use super::{CheckedBatch,Connection,Fault,Payload,Result,RustRoot,RustSessionWitness,SyncReply,
     TreeTable,UnsignedSmall,VerifiedMember,current};
 use super::super::{SessionView,opens::{OpenCloseError,OpenSeat,Opened,OpenSlot,OpenTable}};
 use super::super::super::Phase;
 use crate::smb::{backend::{CloseCompletion,DIRECTORY_ATTRIBUTES,DirectoryCloseError,DirectoryOpenError,FileCloseError,FileOpenError,FILE_ATTRIBUTES,
-    PreparedBirth,PreparedDirectoryBirth,PreparedNamedFile,RootCloseError,RootOpenError,path::NameError},session::BatchRevision,
+    PreparedBirth,PreparedDirectoryBirth,PreparedNamedFile,RangeIoError,RootCloseError,RootOpenError,path::NameError},session::BatchRevision,
     wire::{create_fields::{CurrentName,Disposition,Error as CreateError,SpecialOpen},fixed_reply::RootFailure,io_fields::{IoFieldError,OpenReference,WireOpenId},
         io_reply::FileReply,message::{Message,RELATED,Routing},path_fields::FieldError}};
 use std::{io,num::NonZeroU64,sync::Arc};
@@ -40,7 +41,8 @@ impl CheckedBatch<'_,'_>{
         let sid=self.ids.at(0).ok_or(Fault::SessionState)?;
         let original=RequestSlot{sid,tree,mid:m.header.message};
         match m.header.command {
-            CREATE if m.create_fields().is_ok_and(|f|matches!(f.disposition(),Disposition::Create|Disposition::OpenIf))
+            CREATE if m.create_fields().is_ok_and(|f|matches!(f.disposition(),
+                Disposition::Create|Disposition::OpenIf|Disposition::Overwrite|Disposition::OverwriteIf))
                 =>self.create_named(m,original)?,
             CREATE=>self.open_object(m,original)?,
             CLOSE=>self.close_object(m,original)?,
@@ -81,6 +83,7 @@ impl CheckedBatch<'_,'_>{
                 match modes.prepare_file_birth(admission){
                     Ok(PreparedBirth::Opened(file))=>Ok((Opened::Writer(file),CreateAction::Opened)),
                     Ok(PreparedBirth::Created(file))=>Ok((Opened::Writer(file),CreateAction::Created)),
+                    Ok(PreparedBirth::Overwritten(file))=>Ok((Opened::Writer(file),CreateAction::Overwritten)),
                     Err(e)=>Err(file_open_failure(e)?),
                 }
             };
@@ -247,6 +250,11 @@ fn file_open_failure(why:FileOpenError)->Result<RootFailure>{
         FileOpenError::ShareViolation=>W::SharingViolation,
         FileOpenError::DeletePending=>W::DeletePending,
         FileOpenError::Resources=>W::InsufficientResources,
+        FileOpenError::Range(e)=>match e{
+            RangeIoError::Conflict=>W::FileLockConflict,
+            RangeIoError::Resources=>W::InsufficientResources,
+            RangeIoError::Unavailable=>W::ServerUnavailable,
+        },
         FileOpenError::Session(e)=>return Err(e),
         FileOpenError::Original(e) if e.kind()==io::ErrorKind::ConnectionAborted=>return Err(Fault::WriteOutcomeUnknown),
         FileOpenError::Original(e)=>named_original_failure(e),
@@ -367,7 +375,7 @@ impl RequestSlot {
 pub(in crate::smb) struct PendingOpen {request:RequestSlot,scope:RustSessionWitness,slot:OpenSlot,action:CreateAction}
 #[repr(u32)]
 #[derive(Clone,Copy)]
-enum CreateAction{Opened=1,Created=2}
+enum CreateAction{Opened=1,Created=2,Overwritten=3}
 impl PendingOpen {
     pub(super) fn existing(request:RequestSlot,scope:RustSessionWitness,slot:OpenSlot)->Self{
         Self{request,scope,slot,action:CreateAction::Opened}

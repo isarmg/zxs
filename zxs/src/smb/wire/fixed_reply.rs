@@ -26,6 +26,11 @@ const MAXIMAL_CONTEXT:usize=32;
 const QUERY_DISK_CONTEXT:usize=56;
 pub(in crate::smb) const MAX_SMALL_REPLY:usize=CREATE_FIXED+MAXIMAL_CONTEXT+QUERY_DISK_CONTEXT;
 
+fn create_action_matches(disposition:Disposition,action:u32)->bool{
+    matches!((disposition,action),
+        (Disposition::Open,1)|(Disposition::OpenIf,1|2)|(Disposition::Create,2)|
+        (Disposition::Overwrite,3)|(Disposition::OverwriteIf,2|3))
+}
 struct OpenContexts{maximum:Option<u32>,disk_id:Option<(u64,u64)>}
 impl OpenContexts{
     fn length(&self)->usize{
@@ -61,6 +66,7 @@ pub(in crate::smb) enum RootFailure {
     ObjectNameCollision=0xc000_0035,
     ObjectPathNotFound=0xc000_003a,
     SharingViolation=0xc000_0043,
+    FileLockConflict=0xc000_0054,
     DeletePending=0xc000_0056,
     DiskFull=0xc000_007f,
     InsufficientResources=0xc000_009a,
@@ -400,8 +406,7 @@ impl UnsignedSmall {
     fn open_size(member:&VerifiedMember<'_,'_>,sid:NonZeroU64,pending:&PendingOpen)->Result<(usize,OpenContexts)>{
         if !pending.matches(member,sid){return Err(Error::InvalidRequest);}
         let fields=member.message().create_fields().map_err(|_|Error::InvalidRequest)?;
-        if !matches!((fields.disposition(),pending.action()),
-            (Disposition::Open,1)|(Disposition::OpenIf,1|2)|(Disposition::Create,2)){
+        if !create_action_matches(fields.disposition(),pending.action()){
             return Err(Error::InvalidRequest);
         }
         let intent=fields.current_intent().map_err(|_|Error::InvalidRequest)?;
@@ -421,7 +426,7 @@ impl UnsignedSmall {
         Ok((CREATE_FIXED+contexts.length(),contexts))
     }
     fn fill_open(&mut self,pending:&PendingOpen,contexts:OpenContexts)->Result<()>{
-        // Actual opened/created object. No reparse point, oplock, generic context or
+        // Actual opened/created/overwritten object. No reparse point, oplock, generic context or
         // invented FILETIMEs. A FILE's sizes are from its exact logical view.
         self.raw[64..66].copy_from_slice(&89u16.to_le_bytes());
         self.raw[68..72].copy_from_slice(&pending.action().to_le_bytes());

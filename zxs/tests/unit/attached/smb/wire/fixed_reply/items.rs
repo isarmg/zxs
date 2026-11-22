@@ -13,3 +13,18 @@ fn asynchronous_move_overlays_only_its_flags_and_routing_union(){
     assert_eq!(raw[20..32],fixed[20..32]);
     assert_eq!(raw[40..],fixed[40..]);
 }
+
+#[test]
+fn create_action_depends_on_the_exact_original_disposition(){
+    let cases:[(Disposition,&[u32]);6]=[
+        (Disposition::Supersede,&[]),(Disposition::Open,&[1]),
+        (Disposition::Create,&[2]),(Disposition::OpenIf,&[1,2]),
+        (Disposition::Overwrite,&[3]),(Disposition::OverwriteIf,&[2,3]),
+    ];
+    for (disposition,allowed) in cases{
+        for action in 0..=4{
+            assert_eq!(create_action_matches(disposition,action),allowed.contains(&action));
+        }
+    }
+    assert_eq!(RootFailure::FileLockConflict as u32,WriteFailure::FileLockConflict as u32);
+}

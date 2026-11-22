@@ -2,7 +2,7 @@
 //! No CREATE unless the protocol owner already holds a real undisclosed seat.
 use super::{BindError,Facts,Grant,Held,Object,OpenCoordinator,OriginalRequest,ParentWrite,Pending,ReserveError,Share,
     disposition::DELETE_ON_CLOSE,file_open::{FILE_OPTIONS,FileAnswers,FileOpenError,MAXIMUM_ALLOWED,with_path},
-    writable_file_open::{WritableFileOpen,explicit_writer,write_grant}};
+    writable_file_open::{WRITE_DATA,WritableFileOpen,explicit_writer,write_grant}};
 use crate::{FileId,PoolId,smb::{RustSessionWitness,
     connection::sessions::ordinary::BirthAdmission,
     wire::create_fields::{CurrentName,Disposition}},
@@ -42,7 +42,7 @@ impl FileBirthVote<'_,'_>{
 }
 
 #[must_use]
-pub(in crate::smb) enum PreparedBirth{Opened(WritableFileOpen),Created(WritableFileOpen)}
+pub(in crate::smb) enum PreparedBirth{Opened(WritableFileOpen),Created(WritableFileOpen),Overwritten(WritableFileOpen)}
 
 impl OpenCoordinator{
     pub(in crate::smb) fn prepare_file_birth(self:&Arc<Self>,admission:BirthAdmission<'_,'_,'_>)
@@ -51,17 +51,21 @@ impl OpenCoordinator{
         let fields=member.message().create_fields().map_err(FileOpenError::Fields)?;
         let intent=fields.current_intent().map_err(FileOpenError::Special)?;
         let CurrentName::Relative(raw)=intent.name() else{return Err(FileOpenError::NotFile);};
-        let open_if=match fields.disposition(){
-            Disposition::Create=>false,Disposition::OpenIf=>true,
+        let disposition=fields.disposition();
+        let open_if=match disposition{
+            Disposition::Create=>false,
+            Disposition::OpenIf|Disposition::Overwrite|Disposition::OverwriteIf=>true,
             _=>return Err(FileOpenError::UnsupportedOptions),
         };
+        let overwrite=matches!(disposition,Disposition::Overwrite|Disposition::OverwriteIf);
         let answers=FileAnswers::for_intent(intent)?;
         let options=fields.effective_options();
-        // No directory birth, overwrite, or create-then-delete lane.
+        // No directory birth or create-then-delete in this named FILE lane.
         if options&!(FILE_OPTIONS&!DELETE_ON_CLOSE)!=0{return Err(FileOpenError::UnsupportedOptions);}
         let desired=fields.desired_access();
         if !explicit_writer(desired)&&desired&MAXIMUM_ALLOWED==0{return Err(FileOpenError::AccessDenied);}
         let grant=write_grant(desired)?;
+        if overwrite&&grant.0&WRITE_DATA==0{return Err(FileOpenError::AccessDenied);}
         let share=Share::from_bits(u32::from(fields.share_access())).ok_or(FileOpenError::AccessDenied)?;
         let scope=member.rust_session_witness().map_err(FileOpenError::Session)?;
         let write_through=options&2!=0;
@@ -70,8 +74,15 @@ impl OpenCoordinator{
         })?;
         match chosen{
             RustNamedWrite::Existing(original)=>{
-                self.bind_writable(tree,&scope,original,grant,share,write_through,false,answers).map(PreparedBirth::Opened)
+                let mut open=self.bind_writable(tree,&scope,original,grant,share,write_through,false,answers)?;
+                if overwrite{
+                    open.overwrite_on_create(tree,&scope)?;
+                    Ok(PreparedBirth::Overwritten(open))
+                }else{Ok(PreparedBirth::Opened(open))}
             },
+            // Classification only; FILE_OVERWRITE may never use this birth ticket.
+            RustNamedWrite::Vacant(_) if disposition==Disposition::Overwrite=>
+                Err(FileOpenError::Original(io::ErrorKind::NotFound.into())),
             RustNamedWrite::Vacant(actual)=>{
                 let opening=Opening{tree,scope:&scope,grant};
                 let mut refused=None;

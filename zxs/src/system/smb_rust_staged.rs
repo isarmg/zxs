@@ -176,6 +176,14 @@ impl RustStagedWriter{
     }
     pub(crate) fn resize(&mut self,tree:&RustRoot,member:&RustSessionWitness,eof:u64)->io::Result<()>{
         if !member.is_set_info(){return Err(denied());}
+        self.resize_original(tree,member,eof)
+    }
+    /// Called only in the signed OVERWRITE CREATE lane, before publishing the new OPEN.
+    pub(crate) fn truncate_on_create(&mut self,tree:&RustRoot,member:&RustSessionWitness)->io::Result<()>{
+        if !member.is_create(){return Err(denied());}
+        self.resize_original(tree,member,0)
+    }
+    fn resize_original(&mut self,tree:&RustRoot,member:&RustSessionWitness,eof:u64)->io::Result<()>{
         self.changing(tree,member)?;
         self.invalidate_prepared()?;
         let writer=&self.writer;

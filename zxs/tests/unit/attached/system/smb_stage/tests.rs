@@ -164,3 +164,17 @@ fn one_original_writer_sees_private_ranges_and_authorizes_a_real_flush_once() {
     let mut latest=Vec::new();read.open_current(name).unwrap().range_to(0,stage.eof(),&mut latest).unwrap();
     assert_eq!(latest,overlay);
 }
+
+#[test]
+fn zero_truncate_and_short_write_keep_no_suffix_from_the_previous_work(){
+    let mut stage=ram_draft(8);
+    let refused=||Err(io::ErrorKind::PermissionDenied.into());
+    assert_eq!(stage.resize(0,refused).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+    assert_eq!((stage.eof,stage.retained),(8,8));
+    stage.resize(0,||Ok(())).unwrap();
+    assert_eq!((stage.eof,stage.retained),(0,0));
+    stage.write(0,b"new",||Ok(()),||unreachable!()).unwrap();
+    let (data,_)=stage.read_buffer(0,8,|_,_,_|panic!("would reuse the old working bytes")).unwrap();
+    assert_eq!(data,b"new");
+    assert_eq!((stage.eof,stage.retained,stage.live_bytes),(3,0,3));
+}
