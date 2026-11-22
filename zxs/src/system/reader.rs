@@ -21,6 +21,22 @@ unsafe extern "C"{
     fn sqlite3_close(db:*mut Db)->c_int;
     fn sqlite3_get_autocommit(db:*mut Db)->c_int;
 }
+#[derive(Debug)]
+struct SqliteFailure{code:c_int,why:&'static str}
+impl SqliteFailure{
+    const FULL:c_int=13; // SQLITE_FULL in the bundled public header.
+
+    fn is_full(error:&io::Error)->bool{
+        error.get_ref().and_then(|cause|cause.downcast_ref::<Self>()).is_some_and(|err|err.code==Self::FULL)
+    }
+}
+impl std::fmt::Display for SqliteFailure{
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{
+        write!(f,"SQLite {}: {}",self.code,self.why)
+    }
+}
+impl std::error::Error for SqliteFailure{}
+
 fn check(rc:c_int)->io::Result<()>{
     if rc==0{return Ok(());}
     let(kind,why)=match rc{
@@ -28,7 +44,7 @@ fn check(rc:c_int)->io::Result<()>{
         _ if rc&255==5 || rc&255==6=>(io::ErrorKind::WouldBlock,"busy or locked; not a successful outcome"),
         _=>(io::ErrorKind::InvalidData,"cannot positively verify this database"),
     };
-    Err(io::Error::new(kind,format!("SQLite {rc}: {why}")))
+    Err(io::Error::new(kind,SqliteFailure{code:rc,why}))
 }
 struct Connection(*mut Db);
 fn cached_schema_template(cache:&Mutex<Option<[u8;32]>>,compile:impl FnOnce()->io::Result<[u8;32]>)->io::Result<[u8;32]>{

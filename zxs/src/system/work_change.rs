@@ -2,6 +2,7 @@
 //! native directory EX is held across all saves on this handle; compatible
 //! read handles never take it. SQLite carries only the exact original decisions.
 use super::{Catalog,Connection,InitialReader,Tree,check,file_create};
+use super::super::SqliteFailure;
 use super::super::{file_location::{Place,Placed},volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Edit,Issued,Members,ReadRecord}};
 use crate::{
     FileId,OperationId,display,fs::{HeldDir,WitnessRead,invalid,directory_birth::DirectoryParent},
@@ -34,6 +35,22 @@ impl std::fmt::Display for UnconfirmedSave{
 }
 impl std::error::Error for UnconfirmedSave{}
 fn unconfirmed(message:&'static str)->io::Error{io::Error::other(UnconfirmedSave(message))}
+
+fn require_absent_edit(db:&Connection,op:OperationId)->io::Result<()>{
+    let q=db.prepare(c"SELECT 1 FROM main.work_edit WHERE edit_op=?1")?;
+    q.bind_bytes(1,&op.0)?;
+    if work_record::start_one(&q)?{return Err(invalid("SAVE metadata exists without its original operation"));}
+    Ok(())
+}
+
+fn resolve_failed_reservation(error:io::Error,proposed:Edit,observed:io::Result<Option<Issued>>)->io::Result<()>{
+    match observed{
+        Ok(Some(same)) if same.edit==proposed=>Ok(()),
+        Ok(None) if SqliteFailure::is_full(&error)=>Err(io::Error::new(io::ErrorKind::StorageFull,error)),
+        Ok(None)=>Err(error),
+        _=>Err(unconfirmed("SAVE reservation unconfirmed; inspect the exact original")),
+    }
+}
 
 #[derive(Eq,PartialEq)]
 struct State {
@@ -293,11 +310,14 @@ impl WriteAt<'_>{
             });
             drop(w);
             if let Err(err)=outcome{
-                match src.at(|db,c|{self.state(db,&c)?;self.original(db,op)}){
-                    Ok(Some(same))if same.edit==proposed=>{},
-                    Ok(None)=>return Err(err),
-                    _=>return Err(unconfirmed("SAVE reservation unconfirmed; inspect the exact original")),
-                }
+                let observed=src.at(|db,c|{
+                    self.state(db,&c)?;
+                    let original=self.original(db,op)?;
+                    // Only a definite absence of both original SQL rows can report SQLite FULL.
+                    if original.is_none()&&SqliteFailure::is_full(&err){require_absent_edit(db,op)?;}
+                    Ok(original)
+                });
+                resolve_failed_reservation(err,proposed,observed)?;
             }
             proposed
         };
@@ -330,6 +350,10 @@ impl WriteAt<'_>{
         }}
     }
 }
+
+#[cfg(test)]
+#[path="../../tests/unit/attached/system/work_change/tests.rs"]
+mod tests;
 
 #[path="smb_rust_writer.rs"]
 mod rust;
