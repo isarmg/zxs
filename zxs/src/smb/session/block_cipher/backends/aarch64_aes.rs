@@ -2,7 +2,7 @@
 use crate::smb::session::cipher_interface::{
     BlockCipherDecBackend, BlockCipherDecClosure, BlockCipherEncBackend, BlockCipherEncClosure,
 };
-use crypto_common::{Block, BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::{U8, U16}};
+use crate::smb::crypto_types::{Block, BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::{U8, U16}};
 use crate::smb::session::cipher_buffers::InOut;
 
 mod encdec;

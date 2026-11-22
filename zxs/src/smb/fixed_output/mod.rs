@@ -9,9 +9,9 @@ mod mac;
 
 pub(super) use block_buffer;
 pub(super) use buffer_fixed::buffer_fixed;
-pub(super) use crypto_common as common;
-pub(super) use crypto_common::{InvalidLength, Key, KeyInit, Output, OutputSizeUser, Reset, array, typenum};
-pub(super) use crypto_common::typenum::consts;
+pub(super) use super::crypto_types as common;
+pub(super) use crate::smb::crypto_types::{InvalidLength, Key, KeyInit, Output, OutputSizeUser, Reset, array, typenum};
+pub(super) use crate::smb::crypto_types::typenum::consts;
 pub(super) use hash::{Digest, HashMarker};
 pub(super) use mac::{Mac, MacMarker};
 pub(super) use zeroize;

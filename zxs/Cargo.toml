@@ -17,7 +17,6 @@ resolver = "3"
 # Vendored upstream libraries are dependencies, not ZXS workspace/test members.
 exclude = [
     "vendor/rust/block-buffer-0.12.1",
-    "vendor/rust/crypto-common-0.2.2",
     "vendor/rust/hybrid-array-0.4.15",
     "vendor/rust/libc-0.2.191",
     "vendor/rust/typenum-1.20.1",
@@ -27,8 +26,7 @@ exclude = [
 # Native storage libraries are not part of the browser module.
 [target.'cfg(target_os = "linux")'.dependencies]
 block-buffer = { version = "=0.12.1", path = "vendor/rust/block-buffer-0.12.1", features = ["zeroize"] }
-crypto-common = { version = "=0.2.2", path = "vendor/rust/crypto-common-0.2.2", features = ["zeroize"] }
-hybrid-array = { version = "=0.4.15", path = "vendor/rust/hybrid-array-0.4.15" }
+hybrid-array = { version = "=0.4.15", path = "vendor/rust/hybrid-array-0.4.15", features = ["zeroize"] }
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
 zeroize = { version = "=1.9.2", path = "vendor/rust/zeroize-1.9.2", default-features = false }
 

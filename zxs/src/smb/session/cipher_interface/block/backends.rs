@@ -1,7 +1,7 @@
 // Adapted from RustCrypto (MIT OR Apache-2.0); see ORIGIN.md and the licenses.
 // ZXS retains the methods used by SMB and its known-answer tests.
 
-use crypto_common::{Block, BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::Unsigned};
+use crate::smb::crypto_types::{Block, BlockSizeUser, ParBlocks, ParBlocksSizeUser, typenum::Unsigned};
 use crate::smb::session::cipher_buffers::{InOut, InOutBuf};
 
 /// Block encryption backend.

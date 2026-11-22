@@ -2,7 +2,7 @@
 use super::{FixedOutput, Update};
 use crate::smb::tag_choice::tag_equal_choice;
 use core::{fmt, hint::black_box};
-use crypto_common::{Output, OutputSizeUser, typenum::Unsigned};
+use crate::smb::crypto_types::{Output, OutputSizeUser, typenum::Unsigned};
 
 #[inline]
 fn tags_equal(expected: &[u8], supplied: &[u8]) -> bool {

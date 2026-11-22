@@ -9,7 +9,7 @@ use crate::smb::fixed_output::{
         AlgorithmName, Block, BlockSizeUser, Buffer, BufferKindUser, Eager, FixedOutputCore,
         OutputSizeUser, Reset, UpdateCore,
     },
-    common::hazmat::{DeserializeStateError, SerializableState, SerializedState},
+    common::state::{DeserializeStateError, SerializableState, SerializedState},
     typenum::{U16, U24, U64, Unsigned},
 };
 

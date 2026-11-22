@@ -1,5 +1,5 @@
 use super::{Sha256,Sha512};
-use crate::smb::fixed_output::{Digest, FixedOutputReset, common::hazmat::SerializableState};
+use crate::smb::fixed_output::{Digest, FixedOutputReset, common::state::SerializableState};
 
 fn split_answer<D: Digest>(input: &[u8], hex: &str) {
     let bytes: Vec<u8> = (0..hex.len()).step_by(2).map(|i|

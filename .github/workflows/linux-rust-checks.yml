@@ -89,7 +89,7 @@ jobs:
           python3 build_browser.py "$ZXS_RUST_BIN" --wasm-std "$input/rust-std.tar.xz"
           printf 'ZXS_WASM_STD=%s\n' "$input/rust-std.tar.xz" >> "$GITHUB_ENV"
           printf 'ZXS_BROWSER_ASSETS=%s\n' "$(pwd -P)/target/browser-assets" >> "$GITHUB_ENV"
-          printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=f6a2fe3232520352ad452fb57d9f41d879b6c02fe055d03a9cbb3709a6a4cb5a' >> "$GITHUB_ENV"
+          printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=8258b04a66b8501f5509ec29336a7af00b951d845daa7f88e550248b6c3db86f' >> "$GITHUB_ENV"
 
       - name: Strict Clippy
         id: lint

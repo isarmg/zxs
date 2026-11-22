@@ -1,7 +1,7 @@
 // ZXS adaptation of RustCrypto AES; see block_cipher/ORIGIN.md.
 use super::{RoundKeys, utils};
 use crate::smb::session::block_cipher::Block;
-use crypto_common::array::{Array, ArraySize};
+use crate::smb::crypto_types::array::{Array, ArraySize};
 use crate::smb::session::cipher_buffers::InOut;
 
 #[cfg(target_arch = "x86")]

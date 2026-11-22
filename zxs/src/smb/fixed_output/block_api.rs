@@ -2,10 +2,10 @@
 use super::{Digest, HashMarker, InvalidOutputSize};
 
 pub use block_buffer::{Eager, Lazy};
-pub use crypto_common::{AlgorithmName, Block, BlockSizeUser, OutputSizeUser, Reset};
+pub use crate::smb::crypto_types::{AlgorithmName, Block, BlockSizeUser, OutputSizeUser, Reset};
 
 use block_buffer::{BlockBuffer, BlockSizes, BufferKind};
-use crypto_common::Output;
+use crate::smb::crypto_types::Output;
 
 mod ct_variable;
 pub use ct_variable::CtOutWrapper;

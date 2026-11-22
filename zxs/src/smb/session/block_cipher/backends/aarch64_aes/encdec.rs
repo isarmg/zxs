@@ -5,7 +5,7 @@
 //! https://doc.rust-lang.org/reference/attributes/codegen.html#r-attributes.codegen.target_feature.aarch64
 use super::utils::{load_block, store_block};
 use crate::smb::session::block_cipher::Block;
-use crypto_common::array::{Array, ArraySize};
+use crate::smb::crypto_types::array::{Array, ArraySize};
 use crate::smb::session::cipher_buffers::InOut;
 use core::arch::aarch64::*;
 

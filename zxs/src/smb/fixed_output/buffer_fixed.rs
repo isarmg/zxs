@@ -338,9 +338,9 @@ macro_rules! buffer_fixed {
         ($core_ty:ty);
         SerializableState $($trait_name:ident)*;
     ) => {
-        impl$(< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? $crate::smb::fixed_output::common::hazmat::SerializableState for $name$(< $( $lt ),+ >)? {
+        impl$(< $( $lt $( : $clt $(+ $dlt )* )? ),+ >)? $crate::smb::fixed_output::common::state::SerializableState for $name$(< $( $lt ),+ >)? {
             type SerializedStateSize = $crate::smb::fixed_output::typenum::Sum<
-                <$core_ty as $crate::smb::fixed_output::common::hazmat::SerializableState>::SerializedStateSize,
+                <$core_ty as $crate::smb::fixed_output::common::state::SerializableState>::SerializedStateSize,
                 $crate::smb::fixed_output::block_buffer::SerializedBufferSize<
                     <$core_ty as $crate::smb::fixed_output::block_api::BlockSizeUser>::BlockSize,
                     <$core_ty as $crate::smb::fixed_output::block_api::BufferKindUser>::BufferKind,
@@ -348,7 +348,7 @@ macro_rules! buffer_fixed {
             >;
 
             #[inline]
-            fn serialize(&self) -> $crate::smb::fixed_output::common::hazmat::SerializedState<Self> {
+            fn serialize(&self) -> $crate::smb::fixed_output::common::state::SerializedState<Self> {
                 let serialized_core = self.core.serialize();
                 let serialized_buf = self.buffer.serialize();
                 serialized_core.concat(serialized_buf)
@@ -356,9 +356,9 @@ macro_rules! buffer_fixed {
 
             #[inline]
             fn deserialize(
-                serialized_state: &$crate::smb::fixed_output::common::hazmat::SerializedState<Self>,
-            ) -> Result<Self, $crate::smb::fixed_output::common::hazmat::DeserializeStateError> {
-                use $crate::smb::fixed_output::common::hazmat::{SerializableState, DeserializeStateError};
+                serialized_state: &$crate::smb::fixed_output::common::state::SerializedState<Self>,
+            ) -> Result<Self, $crate::smb::fixed_output::common::state::DeserializeStateError> {
+                use $crate::smb::fixed_output::common::state::{SerializableState, DeserializeStateError};
 
                 let (serialized_core, serialized_buf) = serialized_state
                     .split_ref::<<$core_ty as SerializableState>::SerializedStateSize>();

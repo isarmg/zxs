@@ -48,3 +48,18 @@ fn aes128_batch_matches_single_blocks_at_backend_boundaries() {
         assert_eq!(batch, input);
     }
 }
+
+#[test]
+fn fixed_keys_keep_size_checks_and_array_erasure() {
+    use crate::smb::session::packet_mac::Cmac;
+
+    let mut key: Key<Aes128> = Array::from([0x35; 16]);
+    assert!(Aes128::new_from_slice(&key[..15]).is_err());
+    assert!(Aes128::new_from_slice(&[0x35; 17]).is_err());
+    assert!(Aes128::new_from_slice(&key).is_ok());
+    assert!(Cmac::<Aes128>::new_from_slice(&key[..15]).is_err());
+    assert!(Cmac::<Aes128>::new_from_slice(&key).is_ok());
+
+    zeroize::Zeroize::zeroize(&mut key);
+    assert_eq!(&key[..], &[0; 16]);
+}

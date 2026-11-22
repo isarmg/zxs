@@ -11,13 +11,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crypto-common"
-version = "0.2.2"
-dependencies = [
- "hybrid-array",
-]
-
-[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 dependencies = [
@@ -34,7 +27,6 @@ name = "storage-server"
 version = "0.1.0"
 dependencies = [
  "block-buffer",
- "crypto-common",
  "hybrid-array",
  "libc",
  "zeroize",

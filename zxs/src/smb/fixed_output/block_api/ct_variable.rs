@@ -4,10 +4,10 @@ use super::{
     VariableOutputCore,
 };
 use super::super::HashMarker;
-use crypto_common::{
+use crate::smb::crypto_types::{
     Block, BlockSizeUser, OutputSizeUser,
     array::{Array, ArraySize},
-    hazmat::{DeserializeStateError, SerializableState, SerializedState},
+    state::{DeserializeStateError, SerializableState, SerializedState},
     typenum::{IsLessOrEqual, True},
 };
 use core::{fmt, marker::PhantomData};
