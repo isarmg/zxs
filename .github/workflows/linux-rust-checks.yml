@@ -1,0 +1,115 @@
+name: Linux Rust source checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/linux-rust-checks.yml
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    if: github.ref == 'refs/heads/main'
+    name: ${{ matrix.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: zxs
+            profile: ZXS default
+            feature: ''
+          - project: zxs
+            profile: ZXS with reviewed browser stage
+            feature: private-browser-ui
+          - project: helper
+            profile: Helper default
+            feature: ''
+          - project: helper
+            profile: Helper with private v18 setup
+            feature: private-fresh-zxs-v18
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.project }}
+    env:
+      FEATURE: ${{ matrix.feature }}
+      CC: /usr/bin/gcc
+      AR: /usr/bin/ar
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: ${{ matrix.project }}
+
+      - name: Prepare the pinned GNU Rust toolchain
+        run: |
+          test "$(id -u)" -ne 0
+          export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo"
+          export RUSTUP_DIST_SERVER=https://static.rust-lang.org
+          rustup toolchain install 1.100.0-x86_64-unknown-linux-gnu --profile minimal --component clippy
+          bin="$(dirname "$(rustup which --toolchain 1.100.0-x86_64-unknown-linux-gnu rustc)")"
+          (
+            cd "$bin"
+            sha256sum -c <<'SUMS'
+          5073422953727c9427a76b7fce03aa9404da46315e5a1e4965389512a41e8db0  rustc
+          84d55d77232a921da96bcf2e1f78532ef5c5221803aae4448d9e220d48ebd808  cargo
+          5352349174538b94cb92878248e88a57be25c2e770c03d7175670a80eec7ee91  cargo-clippy
+          b20543523b921c8c57b14fb80e04209a6d9e7290c935e0bb5d50f622c45b9160  clippy-driver
+          SUMS
+          )
+          printf '%s\n' "$bin" >> "$GITHUB_PATH"
+          printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\nRUSTC=%s\nRUSTDOC=%s\n' \
+            "$CARGO_HOME" "$RUNNER_TEMP/target" "$bin/rustc" "$bin/rustdoc" >> "$GITHUB_ENV"
+          printf 'ZXS_RUST_BIN=%s\n' "$bin" >> "$GITHUB_ENV"
+
+      - name: Fetch Helper's locked registry inputs
+        if: matrix.project == 'helper'
+        run: cargo fetch --locked
+
+      - name: Stage the reviewed ZXS browser inputs
+        if: matrix.feature == 'private-browser-ui'
+        run: |
+          input="$(mktemp -d "$RUNNER_TEMP/zxs-browser.XXXXXXXX")"
+          mkdir "$input/crates"
+          curl --proto '=https' --proto-redir '=https' -fsSL --retry 2 \
+            https://static.rust-lang.org/dist/2026-11-12/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz \
+            -o "$input/rust-std.tar.xz"
+          curl --proto '=https' --proto-redir '=https' -fsSL --retry 2 \
+            https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz \
+            -o "$input/wasm-bindgen.tar.gz"
+          python3 - "$input/crates" <<'PY'
+          import pathlib, subprocess, sys, tomllib
+          directory = pathlib.Path(sys.argv[1])
+          lock = tomllib.loads(pathlib.Path("browser/Cargo.lock").read_text())
+          for package in lock["package"]:
+              if package.get("source") != "registry+https://github.com/rust-lang/crates.io-index":
+                  continue
+              name = package["name"]
+              leaf = f"{name}-{package['version']}.crate"
+              subprocess.run(["curl", "--proto", "=https", "--proto-redir", "=https",
+                              "-fsSL", "--retry", "2", f"https://static.crates.io/crates/{name}/{leaf}",
+                              "-o", str(directory / leaf)], check=True)
+          PY
+          python3 build_browser.py "$ZXS_RUST_BIN" --wasm-std "$input/rust-std.tar.xz" \
+            --wasm-bindgen "$input/wasm-bindgen.tar.gz" --crates "$input/crates"
+          printf 'ZXS_BROWSER_ASSETS=%s\n' "$(pwd -P)/target/browser-assets" >> "$GITHUB_ENV"
+          printf '%s\n' 'ZXS_BROWSER_ASSET_PIN=e9f4a1f19980a50a4cb34533c31348eb2e67df3ca6ca5ce216b580c6fda5270b' >> "$GITHUB_ENV"
+
+      - name: Strict Clippy
+        id: lint
+        run: |
+          features=()
+          if [[ -n "$FEATURE" ]]; then features=(--features "$FEATURE"); fi
+          cargo clippy --workspace --all-targets --locked --offline "${features[@]}" -- -D warnings
+
+      - name: Unit tests
+        if: ${{ !cancelled() && (steps.lint.outcome == 'success' || steps.lint.outcome == 'failure') }}
+        run: |
+          features=()
+          if [[ -n "$FEATURE" ]]; then features=(--features "$FEATURE"); fi
+          cargo test --workspace --lib --bins --locked --offline "${features[@]}"
