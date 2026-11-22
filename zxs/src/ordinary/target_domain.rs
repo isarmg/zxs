@@ -3,16 +3,9 @@
 //! writer separately checks before sealing/installing. Unknown, unissued
 //! and partly recognizable names never become namespace members.
 use super::{directory::{self,types::Parent},journal::Journal,material,storage_name::file_leaf};
-use crate::{FileId,VolumeId,fs::{self,HeldDir,invalid},pool::lease::LocalPool};
+use crate::{FileId,fs::{HeldDir,invalid}};
 use std::{collections::{BTreeMap,BTreeSet},ffi::CString,io};
 
-pub(super) fn ordinary_target_domain(p:&LocalPool,s:&Journal,id:VolumeId,root:&HeldDir,display:&str,
-    subject:FileId,raw:&[Vec<u8>])->io::Result<()>{
-    let address=Parent::Root(id);let birth=fs::Birth::read(&root.file)?;
-    if !p.journal_registration().file(id,fs::local_uid(),root.entity,&birth,true){
-        return Err(invalid("target census is not its registered ordinary parent"));}
-    root.require_named()?;at(s,address,root,display,subject,raw)
-}
 /// A child never passes as its volume root. Start from the installed
 /// lineage and freshly admitted SYSTEM names, then reuse the same direct
 /// sibling census as the ordinary root.

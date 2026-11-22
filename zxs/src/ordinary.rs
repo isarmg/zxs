@@ -30,7 +30,6 @@ mod directory;
 pub use directory::{DirectoryParent,DirectoryEntry,DirectoryInfo,DirectoryListing,make_directory,list_directory};
 mod material;
 mod target_domain;
-use target_domain::ordinary_target_domain;
 pub(crate) use directory::path::{HeldParent as OrdinaryParentLease,NameSample as OrdinaryNameSample};
 mod placement;
 mod allocation;
