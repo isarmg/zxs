@@ -5,6 +5,8 @@ use super::Reply;
 use std::{fmt::Write,io};
 
 pub(super) const CSS:&str=include_str!("../../web/management.css");
+const G4_DEFS:&str=include_str!("../../web/g4-corner.svg");
+const G4_PAINT:&str=include_str!("../../web/g4-paint.html");
 const HEAD:&str=r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/management.css">"#;
 fn text(out:&mut String,s:&str){
     for c in s.chars(){match c{'&'=>out.push_str("&amp;"),'<'=>out.push_str("&lt;"),'>'=>out.push_str("&gt;"),
@@ -12,7 +14,11 @@ fn text(out:&mut String,s:&str){
 }
 pub(super) fn sign_in(failed:bool,secure:bool)->String{
     let mut out=String::from(HEAD);
-    out.push_str(r#"<title>管理员登录 · ZXS</title></head><body><main class="authentication-shell" data-zxs-scope><div class="authentication-content"><div class="authentication-card"><p>ZXS 管理</p><h1>管理员登录</h1><p>请使用 ZXS 账号登录，登录名和口令与 SMB 相同。</p>"#);
+    out.push_str("<title>管理员登录 · ZXS</title></head><body>");
+    out.push_str(G4_DEFS);
+    out.push_str(r#"<main class="authentication-shell" data-zxs-scope><div class="authentication-content"><div class="authentication-card zxs-g4-surface">"#);
+    out.push_str(G4_PAINT);
+    out.push_str("<p>ZXS 管理</p><h1>管理员登录</h1><p>请使用 ZXS 账号登录，登录名和口令与 SMB 相同。</p>");
     if !secure{out.push_str(r#"<p>此连接使用 HTTP，不加密口令。请仅在可信网络登录，或使用你自己的 HTTPS 入口。</p>"#);}
     if failed{out.push_str(r#"<p class="zxs-error" role="alert">管理员登录名或口令不正确。</p>"#);}
     out.push_str(r#"<form method="post" action="/login" accept-charset="UTF-8">"#);
@@ -21,12 +27,15 @@ pub(super) fn sign_in(failed:bool,secure:bool)->String{
 }
 pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
     let mut out=String::from(HEAD);out.push_str("<title>管理概览 · ZXS</title></head><body>");
+    out.push_str(G4_DEFS);
     out.push_str(include_str!("../../web/shell-start.html"));
     out.push_str(r#"<section id="zxs-shares" class="zxs-panel"><h2>共享配置</h2>"#);
     out.push_str(r#"<p>SMB 只有 <code>\\服务器\ZXS</code> 一个业务入口。这里管理首装已选的数据盘目录及其访问模式，不新建共享或暴露宿主路径。</p>"#);
     if data.shares.is_empty(){out.push_str("<p>本页没有首装已选的数据盘目录。</p>");}
     else{
-        out.push_str(r#"<div class="zxs-table-scroll"><table class="zxs-table"><thead><tr><th scope="col">ZXS 下的目录</th><th scope="col">普通卷</th><th scope="col">SMB 设置</th><th scope="col">修改设置</th></tr></thead><tbody>"#);
+        out.push_str(r#"<div class="zxs-table-frame zxs-g4-surface">"#);
+        out.push_str(G4_PAINT);
+        out.push_str(r#"<div class="zxs-table-scroll" tabindex="0" role="region" aria-label="共享配置表"><table class="zxs-table"><thead><tr><th scope="col">ZXS 下的目录</th><th scope="col">普通卷</th><th scope="col">SMB 设置</th><th scope="col">修改设置</th></tr></thead><tbody>"#);
         for share in &data.shares{
             let mode=match share.mode{Mode::Disabled=>"停用",Mode::ReadOnly=>"只读",Mode::ReadWrite=>"读写"};
             out.push_str("<tr><td><bdi>");text(&mut out,&share.label);
@@ -37,13 +46,30 @@ pub(super) fn overview(data:&Overview,csrf:&str)->io::Result<String>{
             }
             out.push_str(r#"</select></label><button type="submit" class="zxs-button">保存</button></form></td></tr>"#);
         }
-        out.push_str("</tbody></table></div><p>请使用站点提供的服务器地址。这里显示的是本池授权，不代表网络已上线或磁盘可用。</p>");
+        out.push_str("</tbody></table></div></div><p>请使用站点提供的服务器地址。这里显示的是本池授权，不代表网络已上线或磁盘可用。</p>");
     }
     if let Some(k)=data.next{write!(out,r##"<p><a href="/?after={k}#zxs-shares">下一页目录</a></p>"##).unwrap();}
-    out.push_str(r#"</section><section id="zxs-versions" class="zxs-panel"><h2>手动提交版本</h2><p>保存只更新工作稿。关闭应用写入后，在此选择文件并明确提交才会生成正式版本。</p><p><a href="/versions">从文件列表选择</a></p></section><section id="zxs-credentials" class="zxs-panel"><h2>Web 与 SMB 共用账号</h2><div class="zxs-account-grid"><article class="zxs-account-card"><h3>登录名</h3><bdi>"#);
+    out.push_str(r#"</section><section id="zxs-versions" class="zxs-panel"><h2>手动提交版本</h2><p>保存只更新工作稿。关闭应用写入后，在此选择文件并明确提交才会生成正式版本。</p><p><a href="/versions">从文件列表选择</a></p></section><section id="zxs-credentials" class="zxs-panel"><h2>Web 与 SMB 共用账号</h2><div class="zxs-account-grid"><article class="zxs-account-card zxs-g4-surface">"#);
+    out.push_str(G4_PAINT);
+    out.push_str("<h3>登录名</h3><bdi>");
     text(&mut out,&data.login);
     out.push_str(r#"</bdi><small>Web 仅用于管理，SMB 只能按已启用目录的模式访问文件。</small></article></div></section><form method="post" action="/logout"><input type="hidden" name="csrf" value=""#);
     text(&mut out,csrf);out.push_str(r#""><button class="zxs-button" type="submit">退出管理</button></form></main></div></div></body></html>"#);Ok(out)
+}
+
+#[cfg(test)]
+#[test]
+fn contours_are_inert_local_decoration_on_the_original_native_pages() {
+    let login = sign_in(true, false);
+    let details = overview(&Overview { login: "A<&".into(), shares: Vec::new(), next: None }, "example").unwrap();
+    for page in [&login, &details] {
+        assert_eq!(page.matches("id=\"zxs-g4-corner\"").count(), 1);
+        assert_eq!(page.matches("href=\"#zxs-g4-corner\"").count(), 4);
+        assert!(page.contains("class=\"zxs-g4-paint\" aria-hidden=\"true\""));
+        assert!(!page.contains("<script") && !page.contains(" style="));
+    }
+    assert!(login.contains("action=\"/login\"") && login.contains("autocomplete=\"current-password\""));
+    assert!(details.contains("<bdi>A&lt;&amp;</bdi>") && details.contains("action=\"/logout\""));
 }
 
 fn hidden(out:&mut String,csrf:&str)->io::Result<()>{
