@@ -1,7 +1,7 @@
 //! Business authority belongs to the original authenticated session, not
 //! a raw name/SID or permission to use the other protocol. The in-process
 //! test session below never issues a live SMB grant.
-use super::{Catalog,Connection,InitialReader,account::share_mode::{self,Mode,Setting},credential::Pair,check,sqlite3_step};
+use super::{Catalog,Connection,InitialReader,account::share_mode::{self,Mode,Setting},credential::Pair,check};
 use crate::{OperationId,fs::directory_birth::DirectoryParent,identity::{AccountId,ShareId}};
 use std::io;
 

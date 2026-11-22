@@ -1,6 +1,6 @@
 //! Exact business children, never the host's directory stream. Ordinary
 //! directory and FILE rows occupy the same parent-local byte name.
-use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,DirectoryPlace,Route},sqlite3_step};
+use super::{Catalog,Connection,InitialReader,Tree,check,file_create,file_number,ordinary_directory::{self,DirectoryPlace,Route}};
 use super::super::{file_location::Placed,volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Members,ReadRecord}};
 use crate::{EntryId,FileId,OperationId,PoolId,VolumeId,display,
     fs::{DIRECTORY_NAMES,HeldDir,WitnessRead,invalid,directory_birth::{DirectoryHold,DirectoryParent}},
@@ -79,7 +79,7 @@ struct PageAt<'a>{source:&'a InitialReader,volume:VolumeId,parent:DirectoryParen
 type NameFilter<'a>=dyn Fn(&str,&mut usize)->io::Result<bool>+'a;
 fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:bool,
     filter:Option<&NameFilter<'_>>)->io::Result<Vec<Pick>>{
-    let q=db.prepare(c"SELECT p.display AS name,p.file_id,0 FROM main.file_location p JOIN main.operation o ON o.op_id=p.position_op
+    let mut q=db.prepare(c"SELECT p.display AS name,p.file_id,0 FROM main.file_location p JOIN main.operation o ON o.op_id=p.position_op
         WHERE p.role=2 AND p.volume_id=?1 AND p.parent_id=?2 AND p.display>?3 AND o.state=1
           AND NOT EXISTS(SELECT 1 FROM main.pending_rename r WHERE r.file_id=p.file_id AND r.source_op=p.position_op)
         UNION ALL SELECT d.display,d.directory_id,1 FROM main.directory_slot d
@@ -93,10 +93,11 @@ fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:boo
     let mut last=[0;display::MAX];
     let mut last_len=after.len();
     if filter.is_some(){last[..last_len].copy_from_slice(after);}
-    loop{match unsafe{sqlite3_step(q.0)}{
+    loop{match q.step(){
         101=>return Ok(page),
         100=>{
-            let name=display::component(q.blob(0,255)?,255)?;
+            let row=q.row()?;
+            let name=display::component(row.blob(0,255)?,255)?;
             if let Some(accept)=filter{
                 // A limit sentinel is NOT source exhaustion. Compare all
                 // scanned keys, including names skipped by the expression.
@@ -111,9 +112,9 @@ fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:boo
             }
             let prior=page.last().map_or(after,|p|p.name().as_bytes());
             if page.len()>=usize::from(limit)||name.as_bytes()<=prior{return Err(invalid("unordered or oversized ordinary page"));}
-            match q.byte(2)?{
+            match row.byte(2)?{
                 0=>{
-                    let placed=file_create::placed_at(db,c,at.volume,at.parent,name,Some(FileId(q.array(1)?)))?;
+                    let placed=file_create::placed_at(db,c,at.volume,at.parent,name,Some(FileId(row.array(1)?)))?;
                     let birth=&placed.birth;
                     let members=work_record::members(db,c,birth)?;
                     let visible=work_record::selected(db,birth)?;
@@ -123,10 +124,10 @@ fn select(at:PageAt<'_>,db:&Connection,c:&Catalog,after:&[u8],limit:u8,mixed:boo
                     page.push(Pick::File(Plan{placed,members,visible,display_owner,number}));
                 },
                 1 if mixed=>{
-                    let row=ordinary_directory::lookup(db,c,at.volume,at.parent,name)?
+                    let directory=ordinary_directory::lookup(db,c,at.volume,at.parent,name)?
                         .ok_or_else(||invalid("selected directory is no longer published"))?;
-                    if row.birth().id.0!=q.array::<16>(1)?{return Err(invalid("different selected directory"));}
-                    page.push(Pick::Directory(row));
+                    if directory.birth().id.0!=row.array::<16>(1)?{return Err(invalid("different selected directory"));}
+                    page.push(Pick::Directory(directory));
                 },
                 _=>return Err(invalid("unknown ordinary member type")),
             }

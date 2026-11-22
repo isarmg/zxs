@@ -1,7 +1,7 @@
 //! One bounded business writer for this original ordinary FILE. The per-FILE
 //! native directory EX is held across all saves on this handle; compatible
 //! read handles never take it. SQLite carries only the exact original decisions.
-use super::{Catalog,Connection,InitialReader,Tree,check,file_create,sqlite3_step};
+use super::{Catalog,Connection,InitialReader,Tree,check,file_create};
 use super::super::{file_location::{Place,Placed},volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Edit,Issued,Members,ReadRecord}};
 use crate::{
     FileId,OperationId,display,fs::{HeldDir,WitnessRead,invalid,directory_birth::DirectoryParent},
@@ -317,7 +317,7 @@ impl WriteAt<'_>{
         let out=src.transaction(&w,c"BEGIN IMMEDIATE",|db,c|{
             if self.state(db,&c)?!=pending{return Err(busy("SAVE inputs or authority changed before confirmation"));}
             alive()?;let u=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=10 AND state=0 RETURNING op_id")?;
-            u.bind_bytes(1,&op.0)?;match unsafe{sqlite3_step(u.0)}{
+            u.bind_bytes(1,&op.0)?;match u.step(){
                 100 if u.array::<16>(0)?==op.0=>u.done()?,
                 rc=>{check(rc)?;return Err(invalid("SAVE did not confirm its original row"));}
             }

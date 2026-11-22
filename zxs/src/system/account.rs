@@ -1,6 +1,6 @@
 //! One shared identity in the original SQLite pool. A Web role remains a
 //! separate authority with no SMB secret or FILE body access.
-use super::{Catalog,Connection,InitialReader,check,sqlite3_step};
+use super::{Catalog,Connection,InitialReader,check};
 use crate::{OperationId,identity::AccountId,password::Verifier};
 use std::io;
 

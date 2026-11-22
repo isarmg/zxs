@@ -106,7 +106,7 @@ fn count_manual(s:&InitialReader,file:crate::FileId)->i64{
     s.at(|db,_|{
         let q=db.prepare(c"SELECT count(*) FROM main.manual_node WHERE file_id=?1")?;
         q.bind_bytes(1,&file.0)?;
-        if unsafe{sqlite3_step(q.0)}!=100{return Err(invalid("cannot count fixture manual history"));}
+        if q.step()!=100{return Err(invalid("cannot count fixture manual history"));}
         let count=q.integer(0)?;q.done()?;Ok(count)
     }).unwrap()
 }
@@ -205,7 +205,7 @@ fn true_next_writer_preserves_partial_tail_before_raising_the_next_original_wind
     assert_eq!(std::fs::read(&raw).unwrap(),b"ABCD0z");
     let p=independent.at(|db,_|{
         let q=db.prepare(c"SELECT raw_at FROM work_edit WHERE edit_op=?1")?;q.bind_bytes(1,&q_id())?;
-        if unsafe{sqlite3_step(q.0)}!=100{return Err(invalid("missing actual successor"));}
+        if q.step()!=100{return Err(invalid("missing actual successor"));}
         let v=q.integer(0)?;q.done()?;Ok(v)
     }).unwrap();
     fn q_id()->[u8;16]{[0xc4;16]}
@@ -286,7 +286,7 @@ fn replacing_unconfirmed_new_rounds_keeps_only_names_that_were_actually_created(
         for (current,old,mask) in [(partial,lost,0),(good,partial,1)]{
             let q=db.prepare(c"SELECT previous_pending,retained_mask FROM main.work_edit WHERE edit_op=?1 AND file_id=?2")?;
             q.bind_bytes(1,&current.0)?;q.bind_bytes(2,&file.0)?;
-            if unsafe{sqlite3_step(q.0)}!=100{return Err(invalid("missing exact retained work row"));}
+            if q.step()!=100{return Err(invalid("missing exact retained work row"));}
             assert_eq!((q.array::<16>(0)?,q.byte(1)?),(old.0,mask));q.done()?;
         }
         Ok(())

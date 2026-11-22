@@ -1,12 +1,12 @@
 //! Deliver a native SMB read only through a private pending reply, then
 //! recheck the selected reader's exact source before acknowledging it.
-use super::{InitialReader,check,sqlite3_step};
+use super::{InitialReader,check};
 use crate::{fs::invalid,ordinary::working_round::Used};
 use std::io::{self,Write};
 
 pub(super) fn data_version(source:&InitialReader)->io::Result<i64>{
     let q=source.conn.prepare(c"PRAGMA main.data_version")?;
-    match unsafe{sqlite3_step(q.0)}{100=>{},rc=>{check(rc)?;return Err(invalid("cannot observe SQLite data version"));}}
+    match q.step(){100=>{},rc=>{check(rc)?;return Err(invalid("cannot observe SQLite data version"));}}
     let n=q.integer(0)?;q.done()?;Ok(n)
 }
 pub(super) struct Buffer{data:Vec<u8>,limit:usize}

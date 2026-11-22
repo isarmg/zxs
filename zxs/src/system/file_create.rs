@@ -2,7 +2,7 @@
 //! conditional commit after the ordinary root/FILE header names have synced.
 //! No secondary ledger. No source pathname, credential or permission boolean
 //! is accepted from the client; a share never owns its own namespace.
-use super::{Tree,Catalog,Connection,InitialReader,check,ordinary_directory::{self,Additional,Route},sqlite3_step};
+use super::{Tree,Catalog,Connection,InitialReader,check,ordinary_directory::{self,Additional,Route}};
 use super::super::{account::share_mode::Setting,file_location::{Place,Placed},volume::OrdinaryRoot,work_record::{self,Members}};
 use crate::{BranchId,EntryId,FileId,HistoryId,OperationId,PoolId,Role,VolumeId,display,
     fs::{HeldDir,invalid,directory_birth::DirectoryParent},hash::Sha256,
@@ -50,18 +50,18 @@ fn new_geometry(c:&Catalog,b:&Birth,route:&Route)->io::Result<()>{
     b.validate_transfer_geometry(&b.name,(&role.path,role.limit),b.ticket)
 }
 fn by_op(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Origin>>{
-    let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,b.share_id,b.setting_op,b.auth_op,b.volume_id,b.display,b.terminal,b.entry_id,b.file_id,b.history_id,b.branch_id,b.ticket,r.volume_id,m.mode,m.share_id,a.smb_id,k.credential_op,k.generation,b.parent_id FROM main.operation o LEFT JOIN main.root_entry b ON b.create_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=b.share_id LEFT JOIN main.share_mode m ON m.change_op=b.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=b.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
+    let mut s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,b.share_id,b.setting_op,b.auth_op,b.volume_id,b.display,b.terminal,b.entry_id,b.file_id,b.history_id,b.branch_id,b.ticket,r.volume_id,m.mode,m.share_id,a.smb_id,k.credential_op,k.generation,b.parent_id FROM main.operation o LEFT JOIN main.root_entry b ON b.create_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=b.share_id LEFT JOIN main.share_mode m ON m.change_op=b.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=b.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
     s.bind_bytes(1,&op.0)?;
-    match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("failed to inspect original FILE operation"));}}
+    match s.step(){101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("failed to inspect original FILE operation"));}}
     if s.integer(0)?!=5{return Err(invalid("operation belongs to a different business object"));}
     let committed=match s.integer(1)?{1=>true,0=>false,_=>return Err(invalid("unknown FILE creation state"))};
     let actor=AccountId(s.array(2)?);let sha=s.array::<32>(3)?;let share=ShareId(s.array(4)?);
     let mode=OperationId(s.array(5)?);let auth=OperationId(s.array(6)?);let volume=VolumeId(s.array(7)?);
-    let name=display::component(s.blob(8,222)?,222)?.to_owned();
+    let name=display::component(s.row()?.blob(8,222)?,222)?.to_owned();
     let parent=DirectoryParent::from_bytes(s.array(21)?);
     let b=Birth{pool:c.birth.pool,volume,operation:op,name,entry:EntryId(s.array(10)?),file:FileId(s.array(11)?),
         history:HistoryId(s.array(12)?),branch:BranchId(s.array(13)?),ticket:OperationId(s.array(14)?),slot:0};
-    if b.container()?.to_bytes()!=s.blob(9,255)?||s.array::<16>(15)?!=volume.0||s.byte(16)?!=2||
+    if !s.blob_eq(9,255,b.container()?.to_bytes())?||s.array::<16>(15)?!=volume.0||s.byte(16)?!=2||
        s.array::<16>(17)?!=share.0||s.array::<16>(18)?!=actor.0||s.array::<16>(19)?!=auth.0||
        [b.entry.0,b.file.0,b.history.0,b.branch.0,b.ticket.0].contains(&[0;16])||
        sha!=request(b.pool,op,actor,auth,s.integer(20)?,share,mode,volume,parent,&b.name)?{return Err(invalid("FILE membership disagrees with its original creation"));}
@@ -74,7 +74,7 @@ pub(in crate::system::reader) fn committed_file(db:&Connection,c:&Catalog,id:Fil
 pub(in crate::system::reader) fn committed_origin(db:&Connection,c:&Catalog,id:FileId)->io::Result<(Birth,DirectoryParent)>{
     let s=db.prepare(c"SELECT create_op FROM main.root_entry WHERE file_id=?1")?;
     s.bind_bytes(1,&id.0)?;
-    match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("FILE lookup failed"));}}
+    match s.step(){100=>{},101=>return Err(io::ErrorKind::NotFound.into()),rc=>{check(rc)?;return Err(invalid("FILE lookup failed"));}}
     let op=OperationId(s.array(0)?);s.done()?;
     by_op(db,c,op)?.filter(|x|x.committed&&x.birth.file==id).map(|x|(x.birth,x.parent)).ok_or_else(||io::ErrorKind::NotFound.into())
 }
@@ -117,7 +117,7 @@ pub(in crate::system::reader) fn display_owner(db:&Connection,c:&Catalog,b:&Birt
 }
 pub(in crate::system::reader) fn display_owner_at(db:&Connection,c:&Catalog,volume:VolumeId,parent:DirectoryParent,name:&str)->io::Result<Option<Alias>>{
     if Birth::reserved_spelling(name.as_bytes()){return Ok(None);}
-    let s=db.prepare(c"SELECT e.create_op,1,l.display,l.file_id,l.position_op,l.generation FROM main.file_location l
+    let mut s=db.prepare(c"SELECT e.create_op,1,l.display,l.file_id,l.position_op,l.generation FROM main.file_location l
       JOIN main.root_entry e ON e.file_id=l.file_id
       JOIN main.operation o ON o.op_id=l.position_op AND o.state=1
       WHERE l.volume_id=?1 AND l.flat_terminal=?2 AND l.parent_id=?3 AND l.role=2 AND l.backing_op IS NULL
@@ -132,9 +132,9 @@ pub(in crate::system::reader) fn display_owner_at(db:&Connection,c:&Catalog,volu
               AND r.source_gen+1=m.source_gen AND r.volume_id=m.source_id AND r.target_parent=m.source_parent
               AND r.target_name=m.source_name AND r.target_terminal=m.source_terminal AND r.backing_op IS NULL)))")?;
     s.bind_bytes(1,&volume.0)?;s.bind_bytes(2,name.as_bytes())?;s.bind_bytes(3,&parent.bytes())?;
-    match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(None),rc=>{check(rc)?;return Err(invalid("cannot inspect a colliding native name"));}}
+    match s.step(){100=>{},101=>return Ok(None),rc=>{check(rc)?;return Err(invalid("cannot inspect a colliding native name"));}}
     let op=OperationId(s.array(0)?);let current=s.byte(1)?==1;
-    let source=display::component(s.blob(2,222)?,222)?.to_owned();
+    let source=display::component(s.row()?.blob(2,222)?,222)?.to_owned();
     let file=FileId(s.array(3)?);let position=OperationId(s.array(4)?);let generation=s.integer(5)?;s.done()?;
     let Some(other)=by_op(db,c,op)?.filter(|o|o.committed)else{return Ok(None);};
     let leaf=Birth::placed_container(&source,other.birth.file)?;
@@ -355,7 +355,7 @@ impl<'s,'r> Tree<'s,'r>{
             if same.birth!=initial{return Err(invalid("different original FILE before confirmation"));}
             if !same.committed{
                 let u=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=5 AND state=0 RETURNING op_id")?;
-                u.bind_bytes(1,&op.0)?;match unsafe{sqlite3_step(u.0)}{100 if u.array::<16>(0)?==op.0=>u.done()?,
+                u.bind_bytes(1,&op.0)?;match u.step(){100 if u.array::<16>(0)?==op.0=>u.done()?,
                     rc=>{check(rc)?;return Err(invalid("FILE was not confirmed exactly once"));}}
             }
             display_free(db,&c,root.folder(),&initial,self.parent)?;root.require()?;held.require_newborn(root.folder())?;

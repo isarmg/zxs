@@ -22,7 +22,7 @@ pub(super) fn first_with_storage(t:&PrivateTemp,recycle:Option<PathBuf>,second:O
 }
 fn share_count(online:&InitialReader)->i64{
     online.at(|db,_|{let s=db.prepare(c"SELECT count(*) FROM main.root_share")?;
-        assert_eq!(unsafe{sqlite3_step(s.0)},100);let n=s.integer(0)?;s.done()?;Ok(n)
+        assert_eq!(s.step(),100);let n=s.integer(0)?;s.done()?;Ok(n)
     }).unwrap()
 }
 #[test]
@@ -43,7 +43,7 @@ fn exact_original_publication_is_reusable_without_looking_at_unmounted_filesyste
         let a=m.publish_root(op,f,"报告").unwrap();
         let recorded=online.at(|db,_|{
             let s=db.prepare(c"SELECT request_sha FROM main.operation WHERE op_id=?1 AND kind=3")?;
-            s.bind_bytes(1,&op.0)?;assert_eq!(unsafe{sqlite3_step(s.0)},100);
+            s.bind_bytes(1,&op.0)?;assert_eq!(s.step(),100);
             let sha=s.array::<32>(0)?;s.done()?;Ok(sha)
         }).unwrap();
         assert_eq!(hex(&recorded),"0816ce4b59a4fc93d642a8dba7c7442ed22916cf9547dda3287acbea9eb865f7");

@@ -1,7 +1,6 @@
 //! One setting per ordinary-root share. This module cannot authenticate SMB,
 //! issue an IO handle or convert a WebAdmin into the file user.
-use super::{Catalog,Choice,Connection,WebAdmin,check,sqlite3_step};
-use super::super::sqlite3_column_type;
+use super::{Catalog,Choice,Connection,WebAdmin,check};
 use crate::{OperationId,PoolId,Role,VolumeId,fs::invalid,hash::Sha256,identity::{AccountId,ShareId}};
 use std::io;
 
@@ -24,22 +23,22 @@ pub(crate) struct Setting{
 // doesn't enumerate the previous pages or make one extra SELECT per share.
 fn selected(db:&Connection,c:&Catalog,lo:ShareId,hi:ShareId,skip_lo:bool,limit:u8,installed_only:bool,
             mut visit:impl FnMut(Setting,&str))->io::Result<()>{
-    let s=db.prepare(c"SELECT r.volume_id,r.publish_op,p.kind,p.state,m.change_op,m.revision,m.mode,o.kind,o.state,r.share_id,r.display_label FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op LEFT JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=(SELECT max(h.revision) FROM main.share_mode h WHERE h.share_id=r.share_id) LEFT JOIN main.operation o ON o.op_id=m.change_op WHERE r.share_id>=?1 AND r.share_id<=?2 AND (?3=0 OR r.share_id>?1) AND (?5=0 OR EXISTS(SELECT 1 FROM main.account_pair a JOIN main.share_mode initial_mode ON initial_mode.share_id=r.share_id AND initial_mode.revision=1 JOIN main.operation initial_op ON initial_op.op_id=initial_mode.change_op WHERE a.birth_op=r.author_auth_op AND initial_mode.author_auth_op=a.birth_op AND initial_op.actor_id=a.web_id AND initial_op.kind=4 AND initial_op.state=1)) ORDER BY r.share_id LIMIT ?4")?;
+    let mut s=db.prepare(c"SELECT r.volume_id,r.publish_op,p.kind,p.state,m.change_op,m.revision,m.mode,o.kind,o.state,r.share_id,r.display_label FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op LEFT JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=(SELECT max(h.revision) FROM main.share_mode h WHERE h.share_id=r.share_id) LEFT JOIN main.operation o ON o.op_id=m.change_op WHERE r.share_id>=?1 AND r.share_id<=?2 AND (?3=0 OR r.share_id>?1) AND (?5=0 OR EXISTS(SELECT 1 FROM main.account_pair a JOIN main.share_mode initial_mode ON initial_mode.share_id=r.share_id AND initial_mode.revision=1 JOIN main.operation initial_op ON initial_op.op_id=initial_mode.change_op WHERE a.birth_op=r.author_auth_op AND initial_mode.author_auth_op=a.birth_op AND initial_op.actor_id=a.web_id AND initial_op.kind=4 AND initial_op.state=1)) ORDER BY r.share_id LIMIT ?4")?;
     s.bind_bytes(1,&lo.0)?;s.bind_bytes(2,&hi.0)?;s.bind_integer(3,i64::from(u8::from(skip_lo)))?;s.bind_integer(4,i64::from(limit))?;s.bind_integer(5,i64::from(u8::from(installed_only)))?;
     loop{
-        match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Ok(()),rc=>{check(rc)?;return Err(invalid("cannot select share"));}}
+        match s.step(){100=>{},101=>return Ok(()),rc=>{check(rc)?;return Err(invalid("cannot select share"));}}
         let share=ShareId(s.array(9)?);if share.0==[0;16]{return Err(invalid("invalid share identity"));}
         let volume=VolumeId(s.array(0)?);let publish=OperationId(s.array(1)?);
         if publish.0==[0;16]||s.integer(2)?!=3||s.integer(3)?!=1||
             !c.rows().iter().any(|v|v.volume==volume&&v.role==Role::File){return Err(invalid("share has no active ordinary-root origin"));}
-        let (op,revision,mode)=if unsafe{sqlite3_column_type(s.0,4)}==5{
+        let (op,revision,mode)=if s.is_null(4){
             (publish,0,Mode::Disabled)
         }else{
             let op=OperationId(s.array(4)?);let rev=s.integer(5)?;
             if op.0==[0;16]||rev<1||s.integer(7)?!=4||s.integer(8)?!=1{return Err(invalid("share setting has no committed origin"));}
             (op,rev,Mode::parse(s.byte(6)?)?)
         };
-        visit(Setting{share,volume,op,revision,mode},crate::display::component(s.blob(10,crate::display::MAX)?,crate::display::MAX)?);
+        visit(Setting{share,volume,op,revision,mode},crate::display::component(s.row()?.blob(10,crate::display::MAX)?,crate::display::MAX)?);
     }
 }
 pub(in crate::system::reader) fn current(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Setting>{
@@ -71,7 +70,7 @@ impl Change{
         let now=current(db,c,self.share)?;
         let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,m.share_id,m.previous_op,m.author_auth_op,m.revision,m.mode FROM main.operation o LEFT JOIN main.share_mode m ON m.change_op=o.op_id WHERE o.op_id=?1")?;
         s.bind_bytes(1,&self.op.0)?;
-        match unsafe{sqlite3_step(s.0)}{
+        match s.step(){
             100=>{
                 if s.integer(0)?!=4||s.integer(1)?!=1||s.array::<16>(2)?!=self.actor.0||s.array::<32>(3)?!=self.sha||
                     s.array::<16>(4)?!=self.share.0||s.array::<16>(5)?!=self.previous.0||s.array::<16>(6)?!=self.auth.0||

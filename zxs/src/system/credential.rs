@@ -1,7 +1,7 @@
 //! Qualified reads for one account. Must be used only inside the same original
 //! S transaction as its validated catalog. Nothing here issues a credential,
 //! opens the vault or a writer, or makes an authenticated role.
-use super::{Catalog,Connection,check,sqlite3_step,sqlite3_column_type,super::shared_account::{PublicEpoch,SharedScope}};
+use super::{Catalog,Connection,check,super::shared_account::{PublicEpoch,SharedScope}};
 use crate::{OperationId,PoolId,fs::invalid,identity::AccountId,password::{self,Verifier}};
 use std::io;
 
@@ -38,17 +38,17 @@ impl OneAccount{
             original_actor:c.birth.actor,login:self.login.as_bytes(),sid:self.sid}
     }
     pub(super) fn confirmed(db:&Connection,c:&Catalog)->io::Result<Option<Self>>{
-        let s=db.prepare(c"SELECT a.birth_op,a.setup_bound_sha,a.instance_id,a.smb_rust_bind_id,
+        let mut s=db.prepare(c"SELECT a.birth_op,a.setup_bound_sha,a.instance_id,a.smb_rust_bind_id,
                  a.account_id,a.web_id,a.smb_id,a.login,a.smb_sid,v.record_id,
                  o.actor_id,a.approval_ref,o.request_sha
             FROM main.account_pair a
             CROSS JOIN main.operation o ON o.op_id=a.birth_op AND o.kind=2 AND o.state=1
             LEFT JOIN main.smb_rust_revision v ON v.credential_op=a.birth_op
             WHERE a.singleton=1")?;
-        match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(bad());}}
+        match s.step(){101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(bad());}}
         let identity=Self{setup:OperationId(s.array(0)?),setup_bound:s.array(1)?,instance:s.array(2)?,
             bind:s.array(3)?,canonical:AccountId(s.array(4)?),web:AccountId(s.array(5)?),smb:AccountId(s.array(6)?),
-            login:password::login_name(s.blob(7,64)?)?.to_owned(),sid:s.array(8)?,first:s.array(9)?};
+            login:password::login_name(s.row()?.blob(7,64)?)?.to_owned(),sid:s.array(8)?,first:s.array(9)?};
         let scope=identity.scope(c);let keys=scope.role_keys()?;
         if s.array::<16>(10)?!=c.birth.actor||keys.web!=identity.web.0||keys.smb!=identity.smb.0||
             scope.setup_request(s.array(11)?,identity.first)?!=s.array::<32>(12)?{return Err(bad());}
@@ -86,9 +86,9 @@ impl OneAccount{
             LEFT JOIN main.operation po ON po.op_id=r.previous_op
             LEFT JOIN main.smb_rust_revision vp ON vp.credential_op=r.previous_op
             WHERE e.slot=1")?;
-        match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(bad());}}
+        match s.step(){101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(bad());}}
         let result=PublicEpoch{op:s.array(0)?,generation:s.integer(1)?,record:s.array(2)?};
-        let is_null=|i|unsafe{sqlite3_column_type(s.0,i)}==5;
+        let is_null=|i|s.is_null(i);
         if s.array::<16>(3)?!=c.birth.actor{return Err(bad());}
         if result.generation==1{
             if result.op!=self.setup.0||result.record!=self.first||(5..13).any(|i|!is_null(i)){return Err(bad());}
@@ -115,7 +115,7 @@ fn web_material(db:&Connection,e:PublicEpoch)->io::Result<Verifier>{
         CROSS JOIN main.web_password w ON w.slot=a.slot AND w.credential_op=a.credential_op AND w.generation=a.generation
         WHERE a.credential_op=?1 AND a.generation=?2 AND a.record_id=?3")?;
     s.bind_bytes(1,&e.op)?;s.bind_integer(2,e.generation)?;s.bind_bytes(3,&e.record)?;
-    match unsafe{sqlite3_step(s.0)}{100=>{},rc=>{check(rc)?;return Err(bad());}}
+    match s.step(){100=>{},rc=>{check(rc)?;return Err(bad());}}
     let result=Verifier::new(s.array(0)?,s.array(1)?);
     s.done()?;
     Ok(result)

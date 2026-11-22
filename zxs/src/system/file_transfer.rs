@@ -175,7 +175,7 @@ impl Route{
     }
     fn receipt(tree:&TransferAt<'_>,db:&Connection,c:&Catalog,ask:&Handoff,op:OperationId)->io::Result<Option<Moved>>{
         tree.authorized(db,c)?;
-        let q=db.prepare(c"SELECT m.file_id,m.direction,m.source_op,m.source_gen,m.source_id,m.source_name,
+        let mut q=db.prepare(c"SELECT m.file_id,m.direction,m.source_op,m.source_gen,m.source_id,m.source_name,
                m.target_id,m.target_name,m.save_op,m.manual_op,m.source_parent,m.target_parent,m.source_backing,m.source_terminal,m.target_setting_op
                FROM main.operation o JOIN main.file_transfer m ON m.transfer_op=o.op_id
                WHERE o.op_id=?1 AND o.kind=12 AND o.state=1")?;
@@ -183,11 +183,11 @@ impl Route{
         if !work_record::start_one(&q)?{return Ok(None);}
         let file=crate::FileId(q.array(0)?);
         let kind=Direction::from_stored(q.byte(1)?).ok_or_else(||invalid("wrong original transfer direction"))?;
-        let name=display::component(q.blob(5,222)?,222)?.to_owned();
+        let name=display::component(q.row()?.blob(5,222)?,222)?.to_owned();
         let backing=Place::read_backing(&q,12,13,file,&name)?;
         let src=Place{file,op:OperationId(q.array(2)?),generation:q.integer(3)?,volume:VolumeId(q.array(4)?),
             role:kind.source_role(),name,parent:DirectoryParent::from_bytes(q.array(10)?),backing};
-        let to=VolumeId(q.array(6)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
+        let to=VolumeId(q.array(6)?);let name=display::component(q.row()?.blob(7,222)?,222)?.to_owned();
         let save=work_record::optional(&q,8)?;let head=work_record::optional(&q,9)?;
         let parent=DirectoryParent::from_bytes(q.array(11)?);let target_op=work_record::optional(&q,14)?;q.done()?;
         let allowed=match ask{
@@ -251,7 +251,7 @@ impl Route{
         let f=&self.from.here;
         if q.byte(0)?!=12||q.byte(1)?!=u8::from(committed)||q.array::<16>(2)?!=self.actor.0||q.array::<32>(3)?!=self.digest(op)?||
             q.array::<16>(4)?!=f.file.0||q.byte(5)?!=self.kind.stored()||q.array::<16>(6)?!=f.op.0||q.integer(7)?!=f.generation||
-            q.array::<16>(8)?!=f.volume.0||q.blob(9,222)?!=f.name.as_bytes()||q.array::<16>(10)?!=self.to.0||q.blob(11,222)?!=self.name.as_bytes()||
+            q.array::<16>(8)?!=f.volume.0||!q.blob_eq(9,222,f.name.as_bytes())?||q.array::<16>(10)?!=self.to.0||!q.blob_eq(11,222,self.name.as_bytes())?||
             q.array::<16>(12)?!=self.share.0||q.array::<16>(13)?!=self.setting.0||q.array::<16>(14)?!=self.auth.0||
             work_record::optional(&q,15)?!=self.work.map(|r|r.record.key().save)||work_record::optional(&q,16)?!=self.head||
             q.array::<16>(17)?!=f.parent.bytes()||q.array::<16>(18)?!=self.parent.bytes()||

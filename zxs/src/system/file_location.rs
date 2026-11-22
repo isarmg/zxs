@@ -1,7 +1,7 @@
 //! SQLite current placement, separate from original birth/receipt identity.
 //! Neither a name nor an old DeleteOp is proof that this FILE still lives
 //! on a volume. The actual selected root and its role are checked outside SQL.
-use super::{Catalog,Connection,Statement,smb::file_create,sqlite3_column_type,work_record};
+use super::{Catalog,Connection,Statement,smb::file_create,work_record};
 use crate::{FileId,OperationId,Role,VolumeId,display,fs::{HeldDir,invalid,directory_birth::DirectoryParent},
     ordinary::portable_birth::{Birth,Installed}};
 use std::{collections::BTreeSet,ffi::CString,io};
@@ -17,12 +17,12 @@ pub(super) struct Place{
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Placed {pub(super) birth:Birth,pub(super) here:Place}
 impl Place{
-    fn decode(q:&Statement<'_>,c:&Catalog)->io::Result<(Self,bool)>{
+    fn decode(q:&mut Statement<'_>,c:&Catalog)->io::Result<(Self,bool)>{
         let file=FileId(q.array(0)?);let op=OperationId(q.array(1)?);let generation=q.integer(2)?;
         let volume=VolumeId(q.array(3)?);let role=match q.byte(4)?{
             1=>Role::Recycle,2=>Role::File,_=>return Err(invalid("invalid FILE placement role")),
         };
-        let name=display::component(q.blob(5,222)?,222)?.to_owned();let kind=q.byte(6)?;let state=q.byte(7)?;
+        let name=display::component(q.row()?.blob(5,222)?,222)?.to_owned();let kind=q.byte(6)?;let state=q.byte(7)?;
         let parent=DirectoryParent::from_bytes(q.array(8)?);
         let backing=Self::read_backing(q,9,10,file,&name)?;
         let placed_receipt=match kind{
@@ -43,18 +43,18 @@ impl Place{
         let selected=work_record::optional(q,slot)?;
         if let Some(op)=selected{
             Birth::placement_parent(op)?;
-            if unsafe{sqlite3_column_type(q.0,terminal)}!=5{return Err(invalid("private FILE backing has a flat name"));}
-        }else if Birth::placed_container(name,file)?.to_bytes()!=q.blob(terminal,255)?{
+            if !q.is_null(terminal){return Err(invalid("private FILE backing has a flat name"));}
+        }else if !q.blob_eq(terminal,255,Birth::placed_container(name,file)?.to_bytes())?{
             return Err(invalid("flat FILE terminal differs from the exact name and FileId"));
         }
         Ok(selected)
     }
     pub(super) fn current(db:&Connection,c:&Catalog,file:FileId)->io::Result<Self>{
-        let q=db.prepare(c"SELECT l.file_id,l.position_op,l.generation,l.volume_id,l.role,l.display,o.kind,o.state,l.parent_id,l.backing_op,l.flat_terminal
+        let mut q=db.prepare(c"SELECT l.file_id,l.position_op,l.generation,l.volume_id,l.role,l.display,o.kind,o.state,l.parent_id,l.backing_op,l.flat_terminal
           FROM main.file_location l JOIN main.operation o ON o.op_id=l.position_op WHERE l.file_id=?1")?;
         q.bind_bytes(1,&file.0)?;
         if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
-        let (p,done)=Self::decode(&q,c)?;q.done()?;
+        let (p,done)=Self::decode(&mut q,c)?;q.done()?;
         if !done||p.file!=file{return Err(io::ErrorKind::NotFound.into());}
         Ok(p)
     }
@@ -63,12 +63,12 @@ impl Place{
         if Self::renaming_name(db,volume,parent,name)?{
             return Err(io::Error::new(io::ErrorKind::WouldBlock,"this exact FILE name belongs to an unconfirmed rename"));
         }
-        let q=db.prepare(c"SELECT l.file_id,l.position_op,l.generation,l.volume_id,l.role,l.display,o.kind,o.state,l.parent_id,l.backing_op,l.flat_terminal
+        let mut q=db.prepare(c"SELECT l.file_id,l.position_op,l.generation,l.volume_id,l.role,l.display,o.kind,o.state,l.parent_id,l.backing_op,l.flat_terminal
           FROM main.file_location l JOIN main.operation o ON o.op_id=l.position_op
           WHERE l.role=2 AND l.volume_id=?1 AND l.display=?2 AND l.parent_id=?3")?;
         q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,name.as_bytes())?;q.bind_bytes(3,&parent.bytes())?;
         if work_record::start_one(&q)?{
-            let (p,done)=Self::decode(&q,c)?;q.done()?;
+            let (p,done)=Self::decode(&mut q,c)?;q.done()?;
             if !done{return Err(io::Error::new(io::ErrorKind::WouldBlock,"this exact FILE name belongs to an unconfirmed birth"));}
             if p.role!=Role::File||p.volume!=volume||p.parent!=parent||p.name!=name{return Err(invalid("ordinary name is not the original placement"));}
             return Ok(Some(p));
@@ -98,13 +98,13 @@ impl Place{
     }
     pub(super) fn retained(db:&Connection,c:&Catalog,volume:VolumeId,deleted:OperationId,name:&str)->io::Result<Self>{
         display::component(name.as_bytes(),222)?;
-        let q=db.prepare(c"SELECT l.file_id,l.position_op,l.generation,l.volume_id,l.role,l.display,o.kind,o.state,l.parent_id,l.backing_op,l.flat_terminal
+        let mut q=db.prepare(c"SELECT l.file_id,l.position_op,l.generation,l.volume_id,l.role,l.display,o.kind,o.state,l.parent_id,l.backing_op,l.flat_terminal
           FROM main.file_location l JOIN main.operation o ON o.op_id=l.position_op
           JOIN main.file_transfer t ON t.transfer_op=l.position_op AND t.direction=1 AND t.file_id=l.file_id
           WHERE l.role=1 AND l.volume_id=?1 AND l.position_op=?2 AND l.display=?3")?;
         q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&deleted.0)?;q.bind_bytes(3,name.as_bytes())?;
         if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
-        let (p,done)=Self::decode(&q,c)?;q.done()?;
+        let (p,done)=Self::decode(&mut q,c)?;q.done()?;
         if !done||p.role!=Role::Recycle||p.op!=deleted||p.volume!=volume||p.name!=name{return Err(io::ErrorKind::NotFound.into());}
         Ok(p)
     }

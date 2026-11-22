@@ -17,7 +17,7 @@ const NAME:&str="方案.xlsx";
 const SAVE:OperationId=OperationId([0xb2;16]);
 fn pending(s:&InitialReader,op:OperationId)->Option<i64>{
     s.at(|db,_|{let q=db.prepare(c"SELECT state FROM main.operation WHERE kind=6 AND op_id=?1")?;
-        q.bind_bytes(1,&op.0)?;match unsafe{sqlite3_step(q.0)}{101=>Ok(None),100=>{let x=q.integer(0)?;q.done()?;Ok(Some(x))},
+        q.bind_bytes(1,&op.0)?;match q.step(){101=>Ok(None),100=>{let x=q.integer(0)?;q.done()?;Ok(Some(x))},
             rc=>{check(rc)?;Err(invalid("bad fixture working result"))}}
     }).unwrap()
 }

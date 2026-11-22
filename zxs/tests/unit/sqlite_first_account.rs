@@ -20,7 +20,7 @@ const NEW_TAG:&str="f4a5f283ce9072614dea2ca3c7a38d78312a46fef3d0aedaaa2797da5589
 fn scope(db:&Builder)->SharedScope<'static>{
     let q=db.0.prepare(c"SELECT b.pool_id,b.init_op,o.actor_id,o.request_sha FROM main.pool_birth b
         JOIN main.operation o ON o.op_id=b.init_op WHERE b.singleton=1 AND o.kind=1 AND o.state=1").unwrap();
-    assert_eq!(unsafe{sqlite3_step(q.0)},100);
+    assert_eq!(q.step(),100);
     let mut sid=[0x22;28];
     sid[..12].copy_from_slice(b"\x01\x05\x00\x00\x00\x00\x00\x05\x15\x00\x00\x00");
     sid[24..].copy_from_slice(&1000u32.to_le_bytes());

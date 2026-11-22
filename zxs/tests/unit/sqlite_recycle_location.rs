@@ -5,11 +5,11 @@ use crate::{FileId,identity::ShareId,system::reader::{account::share_mode::Mode,
 
 fn at(src:&InitialReader,file:FileId)->(OperationId,i64,Role,VolumeId,String){
     src.at(|db,_|{
-        let q=db.prepare(c"SELECT position_op,generation,role,volume_id,display FROM file_location WHERE file_id=?1")?;
-        q.bind_bytes(1,&file.0)?;assert_eq!(unsafe{sqlite3_step(q.0)},100);
+        let mut q=db.prepare(c"SELECT position_op,generation,role,volume_id,display FROM file_location WHERE file_id=?1")?;
+        q.bind_bytes(1,&file.0)?;assert_eq!(q.step(),100);
         let role=match q.byte(2)?{1=>Role::Recycle,2=>Role::File,_=>panic!("fixture location")};
         let result=(OperationId(q.array(0)?),q.integer(1)?,role,VolumeId(q.array(3)?),
-            String::from_utf8(q.blob(4,222)?.to_vec()).unwrap());
+            String::from_utf8(q.row()?.blob(4,222)?.to_vec()).unwrap());
         q.done()?;Ok(result)
     }).unwrap()
 }
@@ -91,7 +91,7 @@ fn one_current_location_keeps_birth_and_readers_separate_from_a_stale_delete_or_
         let q=db.prepare(c"SELECT o.state,w.save_op,(SELECT count(*) FROM pending_edit WHERE file_id=w.file_id)
              FROM main.selected_work w JOIN main.operation o ON o.op_id=?2 WHERE w.file_id=?1")?;
         q.bind_bytes(1,&b.file.0)?;q.bind_bytes(2,&lost_save.0)?;
-        assert_eq!(unsafe{sqlite3_step(q.0)},100);assert_eq!(q.byte(0)?,0);
+        assert_eq!(q.step(),100);assert_eq!(q.byte(0)?,0);
         assert_eq!(q.array::<16>(1)?,first_save.0);assert_eq!(q.integer(2)?,0);q.done()
     }).unwrap();
     let origin=format!("SELECT file_id,create_op,1,volume_id,2,display,parent_id,NULL,terminal FROM root_entry WHERE file_id=X'{file}';");

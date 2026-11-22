@@ -1,6 +1,6 @@
 //! Exact selected/issued SAVE metadata. SQLite owns the order and current
 //! authority, while only real FILE code can witness or append its bytes.
-use super::{Connection,Statement,check,sqlite3_column_type,sqlite3_step};
+use super::{Connection,Statement,check};
 use super::smb::first_work;
 use crate::{
     FileId,OperationId,VolumeId,fs::invalid,hash::Sha256,identity::{AccountId,ShareId},
@@ -73,13 +73,13 @@ pub(super) struct Issued {
     pub(super) confirmed:bool,
 }
 pub(super) fn start_one(s:&Statement<'_>)->io::Result<bool>{
-    match unsafe{sqlite3_step(s.0)}{100=>Ok(true),101=>Ok(false),e=>{check(e)?;Err(invalid("cannot inspect original work metadata"))}}
+    match s.step(){100=>Ok(true),101=>Ok(false),e=>{check(e)?;Err(invalid("cannot inspect original work metadata"))}}
 }
 pub(super) fn natural(s:&Statement<'_>,i:i32)->io::Result<u64>{
     u64::try_from(s.integer(i)?).map_err(|_|invalid("negative original work coordinates"))
 }
 pub(super) fn optional(s:&Statement<'_>,i:i32)->io::Result<Option<OperationId>>{
-    if unsafe{sqlite3_column_type(s.0,i)}==5{Ok(None)}else{Ok(Some(OperationId(s.array(i)?)))}
+    if s.is_null(i){Ok(None)}else{Ok(Some(OperationId(s.array(i)?)))}
 }
 
 pub(super) fn edit(db:&Connection,b:&Birth,op:OperationId)->io::Result<Option<Issued>>{

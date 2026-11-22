@@ -25,7 +25,7 @@ pub(super) fn configure(src:&InitialReader)->(ShareId,ShareId){
 fn state(src:&InitialReader,op:OperationId)->Option<(i64,FileId,OperationId)>{
     src.at(|db,_|{let s=db.prepare(c"SELECT o.state,e.file_id,e.ticket FROM main.operation o JOIN main.root_entry e ON e.create_op=o.op_id WHERE o.op_id=?1")?;
         s.bind_bytes(1,&op.0)?;
-        match unsafe{sqlite3_step(s.0)}{101=>Ok(None),100=>{let b=(s.integer(0)?,FileId(s.array(1)?),OperationId(s.array(2)?));s.done()?;Ok(Some(b))},
+        match s.step(){101=>Ok(None),100=>{let b=(s.integer(0)?,FileId(s.array(1)?),OperationId(s.array(2)?));s.done()?;Ok(Some(b))},
         rc=>{check(rc)?;Err(invalid("unexpected test row"))}}
     }).unwrap()
 }

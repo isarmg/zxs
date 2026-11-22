@@ -1,7 +1,7 @@
 //! First online metadata writer. An actual management identity may publish
 //! one logical ordinary root. A new share is disabled for the dedicated SMB account.
 use super::{Choice,WebAdmin};
-use super::super::{Catalog,Connection,check,sqlite3_step};
+use super::super::{Catalog,Connection,check};
 use crate::{OperationId,PoolId,Role,VolumeId,display,fs::invalid,hash::Sha256,identity::{AccountId,ShareId}};
 use std::io;
 
@@ -28,9 +28,9 @@ impl<'a> Request<'a>{
     fn prior(&self,db:&Connection)->io::Result<Option<PublishedRoot>>{
         let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,s.share_id,s.author_auth_op,s.volume_id,s.display_label FROM main.operation o LEFT JOIN main.root_share s ON s.publish_op=o.op_id WHERE o.op_id=?1")?;
         s.bind_bytes(1,&self.op.0)?;
-        match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("unexpected receipt lookup"));}}
+        match s.step(){101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("unexpected receipt lookup"));}}
         if s.integer(0)?!=3||s.integer(1)?!=1||s.array::<16>(2)?!=self.actor.0||s.array::<32>(3)?!=self.sha||
-            s.array::<16>(5)?!=self.credential.0||s.array::<16>(6)?!=self.volume.0||s.blob(7,display::MAX)?!=self.label.as_bytes(){
+            s.array::<16>(5)?!=self.credential.0||s.array::<16>(6)?!=self.volume.0||!s.blob_eq(7,display::MAX,self.label.as_bytes())?{
             return Err(invalid("operation belongs to a different action, principal, scope or request"));
         }
         let share=ShareId(s.array(4)?);if share.0==[0;16]{return Err(invalid("missing original ShareId"));}

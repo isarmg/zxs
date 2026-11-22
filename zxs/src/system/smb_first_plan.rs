@@ -1,7 +1,7 @@
 //! The approved exact boot plan and its original committed setup receipts.
 //! Decoding a plan never creates an SMB session or a directory handle.
 use super::{Connection,InitialReader,denied};
-use super::super::{Catalog,check,share_mode::{self,Mode,Setting},sqlite3_step};
+use super::super::{Catalog,check,share_mode::{self,Mode,Setting}};
 use crate::system::reader::credential::{ActiveRustMeta,Pair};
 use crate::{OperationId,Role,VolumeId,display,fs::invalid,hash::{Sha256,digest},identity::ShareId};
 use std::{collections::BTreeSet,io,net::{IpAddr,Ipv4Addr,Ipv6Addr,SocketAddr},rc::{Rc,Weak},sync::Arc};
@@ -189,10 +189,10 @@ impl Plan{
         first_sha.update(&f.share.0)?;first_sha.update(&f.publish.0)?;first_sha.update(&[f.mode as u8])?;
         let s=db.prepare(c"SELECT p.kind,p.state,p.actor_id,p.request_sha,r.share_id,r.author_auth_op,r.volume_id,r.display_label,o.kind,o.state,o.actor_id,o.request_sha,m.share_id,m.previous_op,m.author_auth_op,m.revision,m.mode FROM main.root_share r JOIN main.operation p ON p.op_id=r.publish_op JOIN main.share_mode m ON m.share_id=r.share_id AND m.revision=1 JOIN main.operation o ON o.op_id=m.change_op WHERE r.publish_op=?1 AND m.change_op=?2")?;
         s.bind_bytes(1,&f.publish.0)?;s.bind_bytes(2,&f.first.0)?;
-        match unsafe{sqlite3_step(s.0)}{100=>{},101=>return Err(denied()),rc=>{check(rc)?;return Err(invalid("invalid original planned share receipt"));}}
+        match s.step(){100=>{},101=>return Err(denied()),rc=>{check(rc)?;return Err(invalid("invalid original planned share receipt"));}}
         if s.integer(0)?!=3||s.integer(1)?!=1||s.array::<16>(2)?!=pair.web.0||s.array::<32>(3)?!=pub_sha.finish()||
             s.array::<16>(4)?!=f.share.0||s.array::<16>(5)?!=pair.setup.0||s.array::<16>(6)?!=f.volume.0||
-            s.blob(7,display::MAX)?!=f.name.as_bytes()||s.integer(8)?!=4||s.integer(9)?!=1||
+            !s.blob_eq(7,display::MAX,f.name.as_bytes())?||s.integer(8)?!=4||s.integer(9)?!=1||
             s.array::<16>(10)?!=pair.web.0||s.array::<32>(11)?!=first_sha.finish()||s.array::<16>(12)?!=f.share.0||
             s.array::<16>(13)?!=f.publish.0||s.array::<16>(14)?!=pair.setup.0||s.integer(15)?!=1||s.byte(16)?!=f.mode as u8{
             return Err(denied());

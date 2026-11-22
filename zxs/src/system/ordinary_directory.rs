@@ -1,6 +1,6 @@
 //! The same SYSTEM authority selects a real ordinary parent and its original
 //! directory births. Neither physical names nor an old operation grant SMB.
-use super::{Catalog,Connection,InitialReader,Tree,check,denied,sqlite3_step};
+use super::{Catalog,Connection,InitialReader,Tree,check,denied};
 use super::super::{account::share_mode::Setting,file_location::Place,volume::OrdinaryRoot,work_record};
 use crate::{FileId,DirectoryId,EntryId,OperationId,PoolId,Role,VolumeId,display,
     fs::{DIRECTORY_BYTES,DIRECTORY_NAMES,HeldDir,MAX_PATH_DEPTH,invalid,path_budget,
@@ -127,7 +127,7 @@ fn digest(b:&DirectoryBirth,actor:AccountId,auth:OperationId,epoch:i64,share:Sha
 #[derive(Clone,Debug,Eq,PartialEq)]
 struct Original{birth:DirectoryBirth,done:bool,aborted:bool,actor:AccountId,share:ShareId,setting:OperationId,auth:OperationId,epoch:i64}
 fn original(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Original>>{
-    let q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,d.directory_id,d.entry_id,d.volume_id,d.parent_id,d.display,
+    let mut q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,d.directory_id,d.entry_id,d.volume_id,d.parent_id,d.display,
         d.share_id,d.setting_op,d.auth_op,e.generation,a.smb_id,s.volume_id,m.share_id,m.mode,
         EXISTS(SELECT 1 FROM main.directory_abort a WHERE a.create_op=d.create_op)
       FROM main.directory_entry d JOIN main.operation o ON o.op_id=d.create_op AND o.kind=13
@@ -137,7 +137,7 @@ fn original(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Origina
     if !work_record::start_one(&q)?{return Ok(None);}
     let state=q.byte(0)?;let actor=AccountId(q.array(1)?);
     let birth=DirectoryBirth{pool:c.birth.pool,volume:VolumeId(q.array(5)?),parent:DirectoryParent::from_bytes(q.array(6)?),
-        id:DirectoryId(q.array(3)?),entry:EntryId(q.array(4)?),original:op,name:display::component(q.blob(7,255)?,255)?.to_owned()};
+        id:DirectoryId(q.array(3)?),entry:EntryId(q.array(4)?),original:op,name:display::component(q.row()?.blob(7,255)?,255)?.to_owned()};
     let share=ShareId(q.array(8)?);let setting=OperationId(q.array(9)?);let auth=OperationId(q.array(10)?);let epoch=q.integer(11)?;
     let aborted=q.byte(16)?==1;
     if state>1||(aborted&&state!=0)||q.array::<16>(12)?!=actor.0||q.array::<16>(13)?!=birth.volume.0||
@@ -155,13 +155,13 @@ fn published(db:&Connection,c:&Catalog,op:OperationId,position:OperationId,gener
     Ok(DirectoryPlace{birth:rename.birth,name,position,generation})
 }
 fn by_id(db:&Connection,c:&Catalog,volume:VolumeId,id:DirectoryId)->io::Result<(DirectoryPlace,bool)>{
-    let q=db.prepare(c"SELECT d.create_op,d.position_op,d.generation,d.display,
+    let mut q=db.prepare(c"SELECT d.create_op,d.position_op,d.generation,d.display,
         EXISTS(SELECT 1 FROM main.pending_directory_rename m WHERE m.directory_id=d.directory_id AND m.source_op=d.position_op)
       FROM main.directory_selected d WHERE d.directory_id=?1 AND d.volume_id=?2 AND d.state=1")?;
     q.bind_bytes(1,&id.0)?;q.bind_bytes(2,&volume.0)?;
     if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
     let op=OperationId(q.array(0)?);let position=OperationId(q.array(1)?);let generation=q.integer(2)?;
-    let name=display::component(q.blob(3,255)?,255)?.to_owned();let moving=q.byte(4)?==1;q.done()?;
+    let name=display::component(q.row()?.blob(3,255)?,255)?.to_owned();let moving=q.byte(4)?==1;q.done()?;
     drop(q);
     let at=published(db,c,op,position,generation,name)?;
     if at.birth.id!=id||at.birth.volume!=volume{return Err(denied());}
@@ -468,64 +468,64 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
     let marker=if parent==DirectoryParent::Root{ROOT_MARK}else{DIRECTORY_MARK};
     if !census.contains(marker.to_bytes()){return Err(invalid("selected ordinary parent has no original marker"));}
     let mut b=NameBudget{unaccounted:census.clone(),promised:BTreeSet::new(),count:0,bytes:0};
-    let q=db.prepare(c"SELECT e.create_op,e.ticket,l.flat_terminal,o.state,l.file_id,r.target_terminal FROM main.file_location l
+    let mut q=db.prepare(c"SELECT e.create_op,e.ticket,l.flat_terminal,o.state,l.file_id,r.target_terminal FROM main.file_location l
         JOIN main.root_entry e ON e.file_id=l.file_id JOIN main.operation o ON o.op_id=e.create_op
         LEFT JOIN main.pending_rename r ON r.file_id=l.file_id AND r.source_op=l.position_op AND r.target_parent=l.parent_id
         WHERE l.role=2 AND l.flat_terminal IS NOT NULL AND l.volume_id=?1 AND l.parent_id=?2")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
     let mut charged_rename=false;
-    loop{match unsafe{sqlite3_step(q.0)}{
-        100=>{let (pin,stage)=Birth::reservation_leaves(OperationId(q.array(0)?),OperationId(q.array(1)?))?;
-             let old=q.blob(2,255)?;
+    loop{match q.step(){
+        100=>{let row=q.row()?;let (pin,stage)=Birth::reservation_leaves(OperationId(row.array(0)?),OperationId(row.array(1)?))?;
+             let old=row.blob(2,255)?;
              let requested=match &more{
-                 Some(Additional::Rename(file,new)) if file.0==q.array::<16>(4)?=>Some(new.to_bytes()),
+                 Some(Additional::Rename(file,new)) if file.0==row.array::<16>(4)?=>Some(new.to_bytes()),
                  _=>None,
              };
              if let Some(new)=requested{
-                 if unsafe{super::super::sqlite3_column_type(q.0,5)}!=5{return Err(busy());}
+                 if !row.is_null(5){return Err(busy());}
                  charged_rename=true;b.rename_edge(&pin,old,new)?;
-             }else if unsafe{super::super::sqlite3_column_type(q.0,5)}!=5{
-                 b.rename_edge(&pin,old,q.blob(5,255)?)?;
-             }else{b.pair(&pin,&stage,old,q.byte(3)?==0)?;}
+             }else if !row.is_null(5){
+                 b.rename_edge(&pin,old,row.blob(5,255)?)?;
+             }else{b.pair(&pin,&stage,old,row.byte(3)?==0)?;}
         }
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
-    let q=db.prepare(c"SELECT d.create_op,d.display,COALESCE(d.state,0),d.directory_id,r.target_name
+    let mut q=db.prepare(c"SELECT d.create_op,d.display,COALESCE(d.state,0),d.directory_id,r.target_name
          FROM main.directory_selected d LEFT JOIN main.pending_directory_rename r
            ON r.directory_id=d.directory_id AND r.source_op=d.position_op WHERE d.volume_id=?1 AND d.parent_id=?2")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
     let mut charged_directory=false;
-    loop{match unsafe{sqlite3_step(q.0)}{
-        100=>{
-            let op=OperationId(q.array(0)?);let(pin,stage)=dir_reserved(op)?;let old=q.blob(1,255)?;
+    loop{match q.step(){
+        100=>{let row=q.row()?;
+            let op=OperationId(row.array(0)?);let(pin,stage)=dir_reserved(op)?;let old=row.blob(1,255)?;
             let requested=match &more{
-                Some(Additional::RenameDirectory(id,name)) if id.0==q.array::<16>(3)?=>Some(name.to_bytes()),
+                Some(Additional::RenameDirectory(id,name)) if id.0==row.array::<16>(3)?=>Some(name.to_bytes()),
                 _=>None,
             };
-            let pending=unsafe{super::super::sqlite3_column_type(q.0,4)}!=5;
+            let pending=!row.is_null(4);
             if let Some(new)=requested{
-                if pending||q.byte(2)?!=1{return Err(busy());}
+                if pending||row.byte(2)?!=1{return Err(busy());}
                 charged_directory=true;b.rename_edge(&pin,old,new)?;
             }else if pending{
-                if q.byte(2)?!=1{return Err(invalid("pending move did not follow an installed directory"));}
-                b.rename_edge(&pin,old,q.blob(4,255)?)?;
-            }else{b.pair(&pin,&stage,old,q.byte(2)?==0)?;}
+                if row.byte(2)?!=1{return Err(invalid("pending move did not follow an installed directory"));}
+                b.rename_edge(&pin,old,row.blob(4,255)?)?;
+            }else{b.pair(&pin,&stage,old,row.byte(2)?==0)?;}
         },
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
     // A two-parent move bills both parents for all of that FILE's own
     // names until selection/abort, including the source rollback room.
-    let q=db.prepare(c"SELECT b.create_op,b.ticket,r.file_id,r.target_name,r.target_terminal FROM main.pending_rename r
+    let mut q=db.prepare(c"SELECT b.create_op,b.ticket,r.file_id,r.target_name,r.target_terminal FROM main.pending_rename r
         JOIN main.root_entry b ON b.file_id=r.file_id
         WHERE r.volume_id=?1 AND r.target_parent=?2 AND r.parent_id<>r.target_parent AND r.backing_op IS NULL")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
-    loop{match unsafe{sqlite3_step(q.0)}{
-        100=>{
-            let file=FileId(q.array(2)?);
-            let name=crate::display::component(q.blob(3,222)?,222)?;
+    loop{match q.step(){
+        100=>{let row=q.row()?;
+            let file=FileId(row.array(2)?);
+            let name=crate::display::component(row.blob(3,222)?,222)?;
             let terminal=Birth::placed_container(name,file)?;
-            if terminal.to_bytes()!=q.blob(4,255)?{return Err(invalid("wrong original incoming FILE terminal"));}
-            let(pin,_)=Birth::reservation_leaves(OperationId(q.array(0)?),OperationId(q.array(1)?))?;
+            if terminal.to_bytes()!=row.blob(4,255)?{return Err(invalid("wrong original incoming FILE terminal"));}
+            let(pin,_)=Birth::reservation_leaves(OperationId(row.array(0)?),OperationId(row.array(1)?))?;
             b.incoming_flat(&pin,&terminal)?;
         },
         101=>break,n=>{check(n)?;return Err(denied());}
@@ -535,7 +535,7 @@ pub(super) fn budget(db:&Connection,volume:VolumeId,parent:DirectoryParent,censu
         UNION ALL SELECT backing_op FROM main.pending_rename WHERE volume_id=?1 AND target_parent=?2
               AND parent_id<>target_parent AND backing_op IS NOT NULL")?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent.bytes())?;
-    loop{match unsafe{sqlite3_step(q.0)}{
+    loop{match q.step(){
         100=>b.pocket(&Birth::placement_parent(OperationId(q.array(0)?))?)?,
         101=>break,n=>{check(n)?;return Err(denied());}
     }}
@@ -629,9 +629,9 @@ mod tests{
         }).is_err());
         assert!(stopped.get());
         let terminal=other.at(|db,_|{
-            let q=db.prepare(c"SELECT terminal FROM main.root_entry WHERE create_op=?1")?;
+            let mut q=db.prepare(c"SELECT terminal FROM main.root_entry WHERE create_op=?1")?;
             q.bind_bytes(1,&op(0xa3).0)?;assert!(work_record::start_one(&q)?);
-            let name=display::component(q.blob(0,255)?,255)?.to_owned();q.done()?;Ok(name)
+            let name=display::component(q.row()?.blob(0,255)?,255)?.to_owned();q.done()?;Ok(name)
         }).unwrap();
         assert!(!f.join(&terminal).exists());
         assert!(tree.make_ordinary_directory(&root,op(0xa4),&terminal,|_|panic!("pending FILE owns this physical slot"),&||Ok(()),|_|Ok(())).is_err());

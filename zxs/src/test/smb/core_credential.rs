@@ -3,7 +3,7 @@
 use super::RustPlan;
 use crate::{OperationId,PoolId,Role as VolumeRole,VolumeId,fs::ComponentLimit};
 use crate::system::{BirthRow,Catalog,ClaimRow,InitState,SCHEMA,init_request};
-use crate::system::reader::{Connection,check,sqlite3_step,zxs_sql_template,credential::{Epoch,Pair}};
+use crate::system::reader::{Connection,check,zxs_sql_template,credential::{Epoch,Pair}};
 use crate::system::shared_account::{PublicEpoch,SharedScope};
 use std::{ffi::CString,io,path::Path,ptr};
 

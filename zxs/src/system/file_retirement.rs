@@ -17,16 +17,17 @@ pub(super) fn record(db:&Connection,op:OperationId,proof:Option<&[u8]>,target:&[
 struct Ticket{seq:i64,op:OperationId,source:Place,direction:Direction,target:VolumeId,parent:DirectoryParent,names:Vec<u8>}
 fn next(src:&InitialReader,after:i64)->io::Result<Option<Ticket>>{
     src.at(|db,_|{
-        let q=db.prepare(c"SELECT r.seq,r.transfer_op,r.guard,m.file_id,m.source_op,m.source_gen,m.source_id,m.source_name,
+        let mut q=db.prepare(c"SELECT r.seq,r.transfer_op,r.guard,m.file_id,m.source_op,m.source_gen,m.source_id,m.source_name,
             m.direction,m.target_id,m.source_parent,m.target_parent,m.source_backing,m.source_terminal
             FROM main.file_transfer_source r JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
             JOIN main.operation o ON o.op_id=r.transfer_op AND o.kind=12 AND o.state=1
             WHERE r.status=0 AND r.seq>?1 ORDER BY r.seq LIMIT 1")?;
         q.bind_integer(1,after)?;
         if !work_record::start_one(&q)?{return Ok(None);}
-        let seq=q.integer(0)?;let op=OperationId(q.array(1)?);let names=q.blob(2,MAX_RETIRE_PROOF)?.to_vec();
-        let direction=Direction::from_stored(q.byte(8)?).ok_or_else(||invalid("wrong completed transfer direction"))?;
-        let file=FileId(q.array(3)?);let name=display::component(q.blob(7,222)?,222)?.to_owned();
+        let seq=q.integer(0)?;let op=OperationId(q.array(1)?);let row=q.row()?;
+        let names=row.blob(2,MAX_RETIRE_PROOF)?.to_vec();
+        let direction=Direction::from_stored(row.byte(8)?).ok_or_else(||invalid("wrong completed transfer direction"))?;
+        let file=FileId(row.array(3)?);let name=display::component(row.blob(7,222)?,222)?.to_owned();
         let backing=Place::read_backing(&q,12,13,file,&name)?;
         let source=Place{file,op:OperationId(q.array(4)?),generation:q.integer(5)?,
             volume:VolumeId(q.array(6)?),name,role:direction.source_role(),parent:DirectoryParent::from_bytes(q.array(10)?),backing};
@@ -59,7 +60,7 @@ impl Ticket{
 }
 pub(super) fn applied_target(db:&Connection,place:&Place)->io::Result<RetireProof>{
     let backing=place.backing.ok_or_else(||invalid("no physical transfer outputs this selected FILE"))?;
-    let q=db.prepare(c"SELECT r.target_guard FROM main.file_transfer_source r
+    let mut q=db.prepare(c"SELECT r.target_guard FROM main.file_transfer_source r
         JOIN main.file_transfer m ON m.transfer_op=r.transfer_op
         JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
         JOIN main.file_location l ON l.file_id=m.file_id AND l.backing_op=m.transfer_op
@@ -73,7 +74,7 @@ pub(super) fn applied_target(db:&Connection,place:&Place)->io::Result<RetireProo
                        AND z.target_name=l.display AND z.backing_op=m.transfer_op)))")?;
     q.bind_bytes(1,&backing.0)?;q.bind_bytes(2,&place.op.0)?;q.bind_bytes(3,&place.file.0)?;
     if !work_record::start_one(&q)?{return Err(invalid("no genuine physical confirmation of current retirement target"));}
-    let result=RetireProof::decode(q.blob(0,MAX_RETIRE_PROOF)?)?;q.done()?;Ok(result)
+    let result=RetireProof::decode(q.row()?.blob(0,MAX_RETIRE_PROOF)?)?;q.done()?;Ok(result)
 }
 enum Volume<'a>{Ordinary(OrdinaryRoot<'a>),Retained(RecycleRoot<'a>)}
 impl<'a> Volume<'a>{

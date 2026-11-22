@@ -68,7 +68,7 @@ impl RetainedAt<'_>{
         matching:Option<MatchRound<'_>>,
     )->io::Result<Vec<Item>>{
         self.select(db,c)?;
-        let q=db.prepare(c"SELECT l.position_op,l.display,l.file_id FROM main.file_location l
+        let mut q=db.prepare(c"SELECT l.position_op,l.display,l.file_id FROM main.file_location l
           JOIN main.operation o ON l.position_op=o.op_id AND o.kind=12 AND o.state=1
           JOIN main.file_transfer m ON m.transfer_op=l.position_op AND m.file_id=l.file_id AND m.direction=1
           WHERE l.volume_id=?1 AND l.role=1 AND l.position_op>?2 ORDER BY l.position_op LIMIT ?3")?;
@@ -86,7 +86,7 @@ impl RetainedAt<'_>{
                 if !matched(&op.to_string(),&mut work)?{continue;}
                 rows.try_reserve(1).map_err(|_|io::ErrorKind::OutOfMemory)?;
             }
-            rows.push(Item{op,name:crate::display::component(q.blob(1,222)?,222)?.to_owned(),
+            rows.push(Item{op,name:crate::display::component(q.row()?.blob(1,222)?,222)?.to_owned(),
                 file:FileId(q.array(2)?)});
             if rows.len()==usize::from(limit)&&matching.is_some(){break;}
         }
@@ -109,13 +109,13 @@ impl RetainedAt<'_>{
     fn deletion(&self,op:OperationId)->io::Result<Item>{
         let cut=|db:&Connection,c:&Catalog|->io::Result<Item>{
             self.select(db,c)?;
-            let q=db.prepare(c"SELECT l.display,l.file_id FROM main.file_location l
+            let mut q=db.prepare(c"SELECT l.display,l.file_id FROM main.file_location l
                JOIN main.file_transfer m ON m.transfer_op=l.position_op AND m.direction=1 AND m.file_id=l.file_id
                JOIN main.operation o ON o.op_id=m.transfer_op AND o.kind=12 AND o.state=1
                WHERE l.volume_id=?1 AND l.role=1 AND l.position_op=?2")?;
             q.bind_bytes(1,&self.media.volume().0)?;q.bind_bytes(2,&op.0)?;
             if !work_record::start_one(&q)?{return Err(io::ErrorKind::NotFound.into());}
-            let item=Item{op,name:crate::display::component(q.blob(0,222)?,222)?.to_owned(),file:FileId(q.array(1)?)};
+            let item=Item{op,name:crate::display::component(q.row()?.blob(0,222)?,222)?.to_owned(),file:FileId(q.array(1)?)};
             q.done()?;Ok(item)
         };
         let src=self.source;let start=src.at(|db,c|cut(db,&c))?;

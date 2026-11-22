@@ -1,7 +1,7 @@
 //! Stable native locking/stat projection, not access authority. Check the
 //! original 16-byte BLOB via the existing unique root_entry.file_id index.
 //! A tentative, retained or otherwise invisible birth still owns its number.
-use super::{Connection,check,sqlite3_step};
+use super::{Connection,check};
 use crate::{FileId,PoolId,fs::invalid};
 use std::io;
 
@@ -33,7 +33,7 @@ fn owners(db:&Connection,id:FileId)->io::Result<Owners>{
     let q=db.prepare(c"SELECT file_id FROM main.root_entry WHERE file_id>=?1 AND file_id<=?2 ORDER BY file_id LIMIT 2")?;
     q.bind_bytes(1,&lo)?;q.bind_bytes(2,&hi)?;
     let mut first=None;
-    loop{match unsafe{sqlite3_step(q.0)}{
+    loop{match q.step(){
         101=>return Ok(first.map_or(Owners::None,Owners::One)),
         100=>{let got=FileId(q.array(0)?);if got.0[..8]!=id.0[..8]{return Err(invalid("wrong FILE number index result"));}
             if first.replace(got).is_some(){return Ok(Owners::Multiple);}}

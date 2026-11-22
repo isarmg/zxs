@@ -65,7 +65,7 @@ impl Original{
         command.bind_bytes(3,&self.digest(birth)?)?;command.done()
     }
     fn fetch(db:&Connection,birth:&Birth,op:OperationId)->io::Result<Option<(Self,Status)>>{
-        let q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,r.file_id,r.source_op,r.source_gen,r.volume_id,
+        let mut q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,r.file_id,r.source_op,r.source_gen,r.volume_id,
           r.parent_id,r.source_name,r.target_name,r.backing_op,r.source_terminal,r.target_terminal,
           r.share_id,r.setting_op,r.auth_op,r.save_op,r.manual_op,e.generation,
           EXISTS(SELECT 1 FROM main.file_rename_abort a WHERE a.rename_op=o.op_id),r.target_parent
@@ -82,8 +82,9 @@ impl Original{
             _=>return Err(invalid("impossible original rename state")),
         };
         let file=FileId(q.array(3)?);
-        let name=display::component(q.blob(9,222)?,222)?.to_owned();
-        let old=display::component(q.blob(8,222)?,222)?.to_owned();
+        let row=q.row()?;
+        let name=display::component(row.blob(9,222)?,222)?.to_owned();
+        let old=display::component(row.blob(8,222)?,222)?.to_owned();
         let backing=Place::read_backing(&q,10,11,file,&old)?;
         if Place::read_backing(&q,10,12,file,&name)?!=backing{return Err(invalid("rename changed physical backing"));}
         let from=Place{file,op:OperationId(q.array(4)?),generation:q.integer(5)?,volume:VolumeId(q.array(6)?),

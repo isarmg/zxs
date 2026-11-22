@@ -1,8 +1,8 @@
 //! One true SQLite -> ordinary FILE -> SQLite working revision. Not a
 //! protocol login, not a confirmed formal version. All selected roots/IDs
 //! come from current business membership, never a pathname from the client.
-use super::{Catalog,Connection,InitialReader,Tree,check,sqlite3_step,file_create};
-use super::super::{file_location::{Placed,Place},volume::{OrdinaryRoot,OrdinaryView},sqlite3_column_type,work_record::{self,Members,ReadRecord}};
+use super::{Catalog,Connection,InitialReader,Tree,check,file_create};
+use super::super::{file_location::{Placed,Place},volume::{OrdinaryRoot,OrdinaryView},work_record::{self,Members,ReadRecord}};
 use crate::ordinary::working_round::{End,Selected,Used};
 use crate::{FileId,OperationId,VolumeId,display,fs::{HeldDir,invalid,directory_birth::DirectoryParent},hash::Sha256,identity::{AccountId,ShareId},
     ordinary::{portable_birth::{Birth,Installed},working_sql::{self,Incoming,Retained,Spec}}};
@@ -33,12 +33,12 @@ fn request(b:&Birth,x:Row)->io::Result<[u8;32]>{
 fn original(db:&Connection,b:&Birth,op:OperationId)->io::Result<Option<Row>>{
     let s=db.prepare(c"SELECT o.kind,o.state,o.actor_id,o.request_sha,w.file_id,w.share_id,w.setting_op,w.auth_op,w.logical_bytes,w.content_sha,w.directory_sha,r.volume_id,m.share_id,m.mode,a.smb_id,k.credential_op,w.attempt_no,w.previous_save,w.retained_mask,k.generation FROM main.operation o LEFT JOIN main.first_work w ON w.save_op=o.op_id LEFT JOIN main.root_share r ON r.share_id=w.share_id LEFT JOIN main.share_mode m ON m.change_op=w.setting_op LEFT JOIN main.credential_epoch k ON k.role=1 AND k.credential_op=w.auth_op LEFT JOIN main.account_pair a ON a.singleton=k.slot WHERE o.op_id=?1")?;
     s.bind_bytes(1,&op.0)?;
-    match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("cannot select working original"));}}
+    match s.step(){101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("cannot select working original"));}}
     if s.integer(0)?!=6||s.array::<16>(4)?!=b.file.0{return Err(invalid("operation does not belong to this working FILE"));}
     let done=match s.byte(1)?{0=>false,1=>true,_=>return Err(invalid("unknown working state"))};
     let len=u64::try_from(s.integer(8)?).map_err(|_|invalid("negative working extent"))?;
     let x=Row{done,actor:AccountId(s.array(2)?),auth:OperationId(s.array(7)?),generation:s.integer(19)?,share:ShareId(s.array(5)?),
-        mode:OperationId(s.array(6)?),attempt:s.integer(16)?,previous:if unsafe{sqlite3_column_type(s.0,17)}==5{None}else{Some(OperationId(s.array(17)?))},mask:s.byte(18)?,spec:Spec::checked(b.pool,b.file,op,len,s.array(9)?,s.array(10)?)?};
+        mode:OperationId(s.array(6)?),attempt:s.integer(16)?,previous:if s.is_null(17){None}else{Some(OperationId(s.array(17)?))},mask:s.byte(18)?,spec:Spec::checked(b.pool,b.file,op,len,s.array(9)?,s.array(10)?)?};
     if x.attempt<1||x.mask>15||(x.attempt==1)!=(x.previous.is_none())||(x.previous.is_none()&&x.mask!=0)||s.array::<16>(11)?!=b.volume.0||s.array::<16>(12)?!=x.share.0||s.byte(13)?!=2||
         s.array::<16>(14)?!=x.actor.0||s.array::<16>(15)?!=x.auth.0||request(b,x)?!=s.array::<32>(3)?{
         return Err(invalid("working original does not match its exact birth, writer and input"));}
@@ -50,7 +50,7 @@ pub(in crate::system::reader) fn confirmed_record(db:&Connection,b:&Birth,op:Ope
 }
 fn by_file(db:&Connection,b:&Birth)->io::Result<Option<Row>>{
     let s=db.prepare(c"SELECT save_op FROM main.first_work WHERE file_id=?1 ORDER BY attempt_no DESC LIMIT 1")?;s.bind_bytes(1,&b.file.0)?;
-    match unsafe{sqlite3_step(s.0)}{101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("cannot select FILE working head"));}}
+    match s.step(){101=>return Ok(None),100=>{},rc=>{check(rc)?;return Err(invalid("cannot select FILE working head"));}}
     let op=OperationId(s.array(0)?);s.done()?;
     Ok(Some(original(db,b,op)?.ok_or_else(||invalid("missing issued working operation"))?))
 }
@@ -59,7 +59,7 @@ fn retained(db:&Connection,b:&Birth)->io::Result<Retained>{
     // before any local bytes create no rows in this index.
     let s=db.prepare(c"SELECT n.previous_save,n.retained_mask,p.file_id,o.state FROM main.first_work n JOIN main.first_work p ON p.save_op=n.previous_save JOIN main.operation o ON o.op_id=p.save_op WHERE n.file_id=?1 AND n.retained_mask<>0")?;
     s.bind_bytes(1,&b.file.0)?;let mut names=Retained::new();
-    loop{match unsafe{sqlite3_step(s.0)}{101=>return Ok(names),100=>{
+    loop{match s.step(){101=>return Ok(names),100=>{
         if s.array::<16>(2)?!=b.file.0||s.byte(3)?!=0{return Err(invalid("retained names do not belong to an unconfirmed attempt of this FILE"));}
         working_sql::include_retained(&mut names,OperationId(s.array(0)?),s.byte(1)?)?;
     },rc=>{check(rc)?;return Err(invalid("cannot read retained working names"));}}}
@@ -174,7 +174,7 @@ impl Tree<'_,'_>{
             let x=self.match_input(by_file(db,&b)?.ok_or_else(||invalid("no current first working original"))?,spec)?;
             if !x.done{
                 let s=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=6 AND state=0 RETURNING op_id")?;
-                s.bind_bytes(1,&op.0)?;match unsafe{sqlite3_step(s.0)}{100 if s.array::<16>(0)?==op.0=>s.done()?,rc=>{check(rc)?;return Err(invalid("SAVE did not confirm its one pending row"));}}
+                s.bind_bytes(1,&op.0)?;match s.step(){100 if s.array::<16>(0)?==op.0=>s.done()?,rc=>{check(rc)?;return Err(invalid("SAVE did not confirm its one pending row"));}}
             }
             spec.members(&crate::fs::WitnessRead::at(held.directory())?,true,&kept)?;
             f.require()?;held.require(f.folder())?;proof.require(held.directory())?;Ok(WorkReceipt::from(spec))

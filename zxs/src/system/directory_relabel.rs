@@ -78,7 +78,7 @@ impl Rename{
 /// is usable. Its predecessor must be the original birth or an earlier
 /// confirmed placement of this exact directory, never another directory ID.
 pub(super) fn selected(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Rename>>{
-    let q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,d.create_op,r.directory_id,r.source_op,r.source_gen,
+    let mut q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,d.create_op,r.directory_id,r.source_op,r.source_gen,
         r.source_name,r.target_name,r.share_id,r.setting_op,r.auth_op,e.generation,
         EXISTS(SELECT 1 FROM main.directory_rename_abort a WHERE a.rename_op=r.rename_op)
       FROM main.directory_rename r JOIN main.operation o ON o.op_id=r.rename_op AND o.kind=16
@@ -100,7 +100,7 @@ pub(super) fn selected(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Opt
     let (state,aborted)=(q.byte(0)?,q.byte(13)?);
     if state>1||aborted>1||state+aborted>1{return Err(invalid("impossible directory rename state"));}
     let r=Rename{op,birth,source:OperationId(q.array(5)?),source_gen:q.integer(6)?,
-        old:display::component(q.blob(7,255)?,255)?.into(),target:display::component(q.blob(8,255)?,255)?.into(),
+        old:display::component(q.row()?.blob(7,255)?,255)?.into(),target:display::component(q.row()?.blob(8,255)?,255)?.into(),
         share:ShareId(q.array(9)?),setting:OperationId(q.array(10)?),auth:OperationId(q.array(11)?),
         actor:AccountId(q.array(1)?),epoch:q.integer(12)?,confirmed:state==1,aborted:aborted==1};
     if q.array::<32>(2)?!=r.digest()?{return Err(invalid("directory rename differs from its original request"));}
