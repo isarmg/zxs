@@ -78,7 +78,7 @@ pub(super) fn browser_overview(data: &Overview, csrf: &str) -> io::Result<String
         out.push_str("</ul></div>");
     }
     if let Some(k) = data.next {
-        write!(out, r##"<p class="zxs-pagination"><a class="zxs-button" href="/?after={k}#zxs-shares">下一页目录</a></p>"##).unwrap();
+        write!(out, r#"<p class="zxs-pagination"><a class="zxs-button" href="/?after={k}#zxs-shares">下一页目录</a></p>"#).unwrap();
     }
     out.push_str(r#"</section><div id="zxs-console-secondary" class="zxs-overview-actions"><section id="zxs-versions" class="zxs-utility-card zxs-g4-surface" aria-labelledby="zxs-versions-title">"#);
     out.push_str(G4_PAINT);
@@ -124,7 +124,7 @@ fn hidden(out:&mut String,csrf:&str)->io::Result<()>{
 
 pub(super) fn manual_index(items:&[manual_work::PickerItem],next:Option<FileId>)->Reply{
     let mut out=String::from(HEAD);
-    out.push_str(r#"<title>选择文件 · ZXS</title></head><body><main data-zxs-scope><h1>选择文件</h1>"#);
+    out.push_str("<title>选择文件 · ZXS</title></head><body><main data-zxs-scope><h1>选择文件</h1>");
     if items.is_empty(){out.push_str("<p>没有已确认的文件。</p>");}
     else{
         out.push_str(r#"<table class="zxs-table"><thead><tr><th>FileId</th><th>卷内路径</th><th>数据卷</th><th>工作稿</th></tr></thead><tbody>"#);

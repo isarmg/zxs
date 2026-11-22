@@ -45,7 +45,7 @@ impl<'s> App<'s>{
     pub(super) fn manual_index(&mut self,q:&Request,after:Option<&str>)->Reply{
         let Some(key)=q.cookie.as_ref()else{return Reply::redirect("/login")};
         let Some(s)=self.sessions.get_mut(key)else{return Reply::redirect("/login")};
-        let after=match after.map(str::parse::<FileId>).transpose(){Ok(k)=>k,Err(_)=>return BAD()};
+        let Ok(after)=after.map(str::parse::<FileId>).transpose() else{return BAD()};
         let prepared=s.admin.manual_files(after).map(|(items,next)|pages::manual_index(&items,next));
         match s.finish_read(prepared){
             Ok(reply)=>reply,

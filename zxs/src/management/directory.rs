@@ -71,7 +71,7 @@ fn metadata(page:&Page<'_>,next:Option<Handle>)->io::Result<Reply>{
     if out.len()>MAX_JSON{return Err(io::Error::other("directory metadata exceeds its response bound"));}
     Ok(Reply::content("200 OK","application/json; charset=utf-8",Cow::Owned(out.into_bytes())))
 }
-fn page(s:&mut Session<'_>,query:Query)->io::Result<Reply>{
+fn page(s:&mut Session<'_>,query:&Query)->io::Result<Reply>{
     let prepared=(||{
         let after=match query.after{
             None=>None,
@@ -96,7 +96,7 @@ impl App<'_>{
         if self.sessions.get(key).is_some_and(|s|s.audience!=q.audience){return Some(REJECT());}
         self.expire(now);
         let Some(s)=self.sessions.get_mut(key)else{return Some(LOGIN_REQUIRED());};
-        Some(match page(s,query){
+        Some(match page(s,&query){
             Ok(reply)=>reply,
             Err(e)=>match e.kind(){
                 io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);LOGIN_REQUIRED()},
