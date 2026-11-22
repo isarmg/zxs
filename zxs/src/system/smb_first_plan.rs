@@ -4,7 +4,7 @@ use super::{Connection,InitialReader,denied};
 use super::super::{Catalog,check,share_mode::{self,Mode,Setting}};
 use crate::system::reader::credential::{ActiveRustMeta,Pair};
 use crate::{OperationId,Role,VolumeId,display,fs::invalid,hash::{Sha256,digest},identity::ShareId};
-use std::{collections::BTreeSet,io,net::{IpAddr,Ipv4Addr,Ipv6Addr,SocketAddr},rc::{Rc,Weak},sync::Arc};
+use std::{collections::BTreeSet,io,rc::{Rc,Weak},sync::Arc};
 
 #[path="smb_rust_maintenance.rs"]
 mod maintenance;
@@ -16,30 +16,11 @@ pub(crate) use capacity::{CapacityUnits,RustRootCapacity};
 #[path="smb_rust_preflight.rs"]
 pub(super) mod preflight;
 
-const RUST_MAGIC:&[u8;16]=b"ZXS-RUST-SMB-I1\0";
-const RUST_IDS:&[u8]=b"ZXS-RUST-SMB-I1/ID\0";
-const MAX_RUST_WIRE:usize=17_885;
+pub(crate) const PLAN_MAGIC:&[u8;16]=b"ZXS-RUST-SMB-I2\0";
+const RUST_IDS:&[u8]=b"ZXS-RUST-SMB-I2/ID\0";
+pub(crate) const PLAN_MAX_BYTES:usize=17_596;
 type Id=[u8;16];
 
-#[derive(Clone,Copy,Eq,Ord,PartialEq,PartialOrd)]
-pub(super) struct Endpoint{pub(super) ip:IpAddr,pub(super) prefix:u8}
-impl Endpoint{
-    fn new(ip:IpAddr,prefix:u8)->io::Result<Self>{
-        match ip{
-            IpAddr::V4(a) if a.octets()[0]!=0&&!a.is_loopback()&&!a.is_multicast()&&!a.is_broadcast()&&
-                (1..=32).contains(&prefix)=>{
-                    if prefix<31{
-                        let mask=u32::MAX>>prefix;
-                        if matches!(u32::from(a)&mask,0) || u32::from(a)&mask==mask{return Err(denied());}
-                    }
-                },
-            IpAddr::V6(a) if !a.is_unspecified()&&!a.is_loopback()&&!a.is_multicast()&&!a.is_unicast_link_local()&&
-                a.to_ipv4().is_none()&&(1..=128).contains(&prefix)=>{},
-            _=>return Err(denied()),
-        }
-        Ok(Self{ip,prefix})
-    }
-}
 pub(super) struct Folder{
     name:String,volume:VolumeId,share:ShareId,publish:OperationId,first:OperationId,mode:Mode,
 }
@@ -50,7 +31,7 @@ impl Folder{
 }
 
 pub(super) struct Plan{
-    scope:[Id;5], sha:[u8;32], endpoints:Vec<Endpoint>, folders:Vec<Folder>, recycle:String,
+    scope:[Id;5], sha:[u8;32], folders:Vec<Folder>, recycle:String,
 }
 
 fn take<'a>(p:&mut &'a[u8],len:usize)->io::Result<&'a[u8]>{
@@ -87,31 +68,13 @@ fn host(p:&mut &[u8])->io::Result<String>{
 pub(super) struct RustPlan{plan:Plan,host:String}
 impl RustPlan{
     pub(super) fn parse(raw:&[u8])->io::Result<Self>{
-        let mut p=raw.strip_prefix(RUST_MAGIC).filter(|_|raw.len()<=MAX_RUST_WIRE).ok_or_else(denied)?;
+        let mut p=raw.strip_prefix(PLAN_MAGIC).filter(|_|raw.len()<=PLAN_MAX_BYTES).ok_or_else(denied)?;
         let (ids,seen)=scope(&mut p)?;
         let host=host(&mut p)?;
         let plan=Plan::parse_namespace(p,ids,seen,digest(raw)?)?;
         Ok(Self{plan,host})
     }
     pub(super) fn hostname(&self)->&str{&self.host}
-    fn listener_is(&self,index:usize,local:SocketAddr)->bool{
-        local.port()==445&&(!matches!(local,SocketAddr::V6(v) if v.scope_id()!=0))&&
-            self.plan.endpoints().get(index).is_some_and(|e|e.ip==local.ip())
-    }
-    pub(super) fn admits_addresses(&self,local:SocketAddr,peer:SocketAddr)->bool{
-        if local.port()!=445||peer.port()==0||local.is_ipv4()!=peer.is_ipv4()||
-            [local,peer].into_iter().any(|a|matches!(a,SocketAddr::V6(v) if v.scope_id()!=0)){
-            return false;
-        }
-        let Some(e)=self.plan.endpoints().iter().find(|e|e.ip==local.ip())else{return false;};
-        if Endpoint::new(peer.ip(),e.prefix).is_err(){return false;}
-        let n=u32::from(e.prefix);
-        match(e.ip,peer.ip()){
-            (IpAddr::V4(a),IpAddr::V4(b))=>(u32::from(a)^u32::from(b))&!u32::MAX.checked_shr(n).unwrap_or(0)==0,
-            (IpAddr::V6(a),IpAddr::V6(b))=>(u128::from(a)^u128::from(b))&!u128::MAX.checked_shr(n).unwrap_or(0)==0,
-            _=>false,
-        }
-    }
     /// Same original S cut as the installed folder receipts. The caller must
     /// still prove the actual site/record/lock and authenticate the client.
     pub(super) fn active_at(&self,db:&Connection,c:&Catalog)->io::Result<ActiveRustMeta>{
@@ -125,20 +88,6 @@ impl RustPlan{
 }
 impl Plan{
     fn parse_namespace(mut p:&[u8],scope:[Id;5],mut seen:BTreeSet<Id>,sha:[u8;32])->io::Result<Self>{
-        let [n]=fixed(&mut p)?;
-        if !(1..=16).contains(&n){return Err(denied());}
-        let mut endpoints=Vec::<Endpoint>::with_capacity(n as usize);
-        for _ in 0..n{
-            let [family,prefix]=fixed(&mut p)?;
-            let ip=match family{
-                4=>IpAddr::V4(Ipv4Addr::from(fixed::<4>(&mut p)?)),
-                6=>IpAddr::V6(Ipv6Addr::from(fixed::<16>(&mut p)?)),
-                _=>return Err(denied()),
-            };
-            let e=Endpoint::new(ip,prefix)?;
-            if endpoints.last().is_some_and(|old|old.ip>=e.ip){return Err(denied());}
-            endpoints.push(e);
-        }
         let [n]=fixed(&mut p)?;
         if !(1..=62).contains(&n){return Err(denied());}
         let mut folders=Vec::<Folder>::with_capacity(n as usize);
@@ -166,10 +115,9 @@ impl Plan{
                 if id==[0;16]||!seen.insert(id){return Err(denied());}
             }
         }
-        Ok(Self{scope,sha,endpoints,folders,recycle:recycle.to_owned()})
+        Ok(Self{scope,sha,folders,recycle:recycle.to_owned()})
     }
     pub(super) fn sha(&self)->[u8;32]{self.sha}
-    pub(super) fn endpoints(&self)->&[Endpoint]{&self.endpoints}
     pub(super) fn folders(&self)->&[Folder]{&self.folders}
     fn require_original_namespace(&self,db:&Connection,c:&Catalog,pair:&Pair)->io::Result<()>{
         if !c.rows().get(1).is_some_and(|r|r.ordinal==1&&r.role==Role::Recycle){return Err(denied());}
@@ -220,11 +168,7 @@ impl QualifiedRustInstall{
         open:impl FnOnce(&std::path::Path,crate::PoolId)->io::Result<InitialReader>)->io::Result<Self>{
         origin.require_live_source()?;
         let installed=RustPlan::parse(origin.rust_plan())?;
-        let count=installed.plan.endpoints().len();
-        if origin.listener_count()!=count||(0..count).any(|i|
-            !origin.listen_addr(i).is_some_and(|a|installed.listener_is(i,a))){
-            return Err(denied());
-        }
+        origin.require_listener_binding()?;
         let source=open(origin.system_path(),crate::PoolId(installed.plan.scope[0]))?;
         if source.dir.root.entity!=origin.system_entity(){return Err(denied());}
         let original=source.at(|db,c|installed.active_at(db,&c))?;
@@ -288,14 +232,6 @@ impl QualifiedRustInstall{
             generation==m.epoch.generation&&login==m.login.as_str()
     }
 
-    /// Only matching plan data: these addresses must come from the same
-    /// original owned kernel socket. This predicate never issues a grant.
-    pub(crate) fn admits_original_addresses(&self,local:SocketAddr,peer:SocketAddr)->bool{
-        self.installed.admits_addresses(local,peer)
-    }
-    pub(crate) fn original_listener_is(&self,index:usize,local:SocketAddr)->bool{
-        self.installed.listener_is(index,local)
-    }
 }
 
 

@@ -79,7 +79,7 @@ helper setup-pair issue-fresh
   --zxs-sha256 ZXS_SHA256 --helper-sha256 HELPER_SHA256
   --gcrypt-sha256 GCRYPT_SHA256 --gpgerror-sha256 GPG_ERROR_SHA256
   --host HOST --login LOGIN --recycle-name RECYCLE_NAME
-  (--listen IP/PREFIX | --share F_DIR NAME MODE | --share-label DISK_LABEL NAME MODE) ...
+  (--share F_DIR NAME MODE | --share-label DISK_LABEL NAME MODE) ...
 ```
 
 - Reuse the same INIT actor, storage UID/GID and exact SYSTEM path. Copy
@@ -91,15 +91,17 @@ helper setup-pair issue-fresh
 - Use the already approved executable at `/zxs/bin/zxs`, or explicitly
   select an eligible protected `DIR/zxs` path. Always supply the independent
   image hash. The original protected site binds that path and hash.
-- Plan 1–16 explicit SMB listen IP/prefix pairs (not wildcard or loopback)
-  and 1–62 shares from ordinary roots in the original INIT. `DISK_LABEL`
+- Plan 1–62 shares from ordinary roots in the original INIT. ZXS itself
+  listens on IPv4 TCP `0.0.0.0:445` without per-client IP or subnet rules.
+  SMB still requires the original account, SMB 3.1.1 and signing. `DISK_LABEL`
   selects a directory under `/zxs/disks/data`; `NAME` is the share name and
   `RECYCLE_NAME` is the logical recycle name, not a path. `MODE` is `ro` or
   `rw`. No disk scanning and no listeners are started by this command.
 - Use one canonical lowercase hostname and **one** non-guest login shared
   by Web and SMB. The original terminal gives one setup approval, then
   prompts for the same hidden password and its confirmation. There is no
-  password argument or second username.
+  password argument or second username. The paired binaries use the current
+  I2 plan. This does not adopt or convert previously issued I1 plans.
 
 The root coordinator holds the original product parent, original S and then
 instance leases. It grants a new write-only vault stage to the already

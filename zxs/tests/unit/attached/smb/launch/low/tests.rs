@@ -1,8 +1,8 @@
 use super::*;
 pub(in crate::smb::launch) fn question()->PreflightQuestion{
-    let mut w=b"ZXS-RUST-SMB-I1\0".to_vec();
+    let mut w=crate::system::reader::smb::runtime::PLAN_MAGIC.to_vec();
     for id in 1..=5{w.extend([id;16]);}
-    w.extend_from_slice(b"\x0bfixture.lan\x01\x04\x18\xc0\x00\x02\x11\x01");
+    w.extend_from_slice(b"\x0bfixture.lan\x01");
     w.extend([0x31;16]);w.extend_from_slice(b"\x02\x00\x04Docs\x00\x07Recycle");
     PreflightQuestion::encode(QuestionSource{nonce:[66;32],release:[67;32],installed:hash(&w).unwrap(),
         init_actor:[68;16],uid:4012,gid:4013,entity:Entity{device:12,inode:32},
@@ -18,7 +18,6 @@ fn claim(q:&PreflightQuestion,ordinal:u8,id:u8,path:&[u8])->PreflightClaim{
 fn rust_low_preflight_reply_binds_exact_private_question_and_original_media(){
     let q=question();
     assert_eq!(q.hostname(),"fixture.lan");
-    assert_eq!(q.endpoints(),&[("192.0.2.17".parse::<IpAddr>().unwrap(),24)]);
     assert_eq!(q.planned_folders().collect::<Vec<_>>(),vec![(VolumeId([0x31;16]),"Docs",true)]);
     assert_eq!(q.recycle_label(),"Recycle");
     assert!(PreflightQuestion::decode_request(&q.start(),q.bytes().to_vec(),q.subject()).is_ok());

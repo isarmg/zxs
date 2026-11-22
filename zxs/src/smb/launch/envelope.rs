@@ -1,6 +1,7 @@
 //! Bounded framing of the private supervisor's public START payload.
 //! These values do not prove the supervisor or grant use of the vault.
 use super::{Fault,Result,cohort::{self,PairOffer,WIRE_BYTES}};
+use crate::system::reader::smb::runtime::PLAN_MAX_BYTES;
 use std::path::Path;
 #[cfg(all(target_arch="x86_64",target_pointer_width="64"))]
 pub(super) mod send;
@@ -9,11 +10,10 @@ const START_MAGIC:&[u8;16]=b"ZXS-RUST/START2\0";
 const READY_MAGIC:&[u8;16]=b"ZXS-RUST/PREP02\0";
 const ENV_MAGIC:&[u8;19]=b"ZXS-RUST-SMB-ENV-2\0";
 pub(super) const START_BYTES:usize=80;
-pub(super) const MAX_LISTENERS:usize=16;
 const MAX_PATH:usize=4096;
-const MAX_PLAN:usize=17_885;
+const MAX_PLAN:usize=PLAN_MAX_BYTES;
 pub(super) const ENV_MAX:usize=ENV_MAGIC.len()+32+32+4+4+8+8+2+MAX_PATH+2+MAX_PLAN+
-    1+MAX_LISTENERS*8+16*3+40+28+8+1+64+WIRE_BYTES;
+    1+8+16*3+40+28+8+1+64+WIRE_BYTES;
 
 #[must_use]
 pub(super) struct Start{nonce:[u8;32],digest:[u8;32]}
@@ -48,7 +48,7 @@ pub(super) struct Envelope {
     pub(super) uid:u32,pub(super) gid:u32,
     pub(super) sdev:u64,pub(super) sino:u64,
     pub(super) system:String,pub(super) plan:Vec<u8>,
-    cookie_count:usize,cookies:[u64;MAX_LISTENERS],
+    pub(super) listener_cookie:u64,
     pub(super) account:Id,pub(super) credential:Id,pub(super) record:Id,
     pub(super) vault:VaultStamp,
     pub(super) sid:[u8;28],pub(super) generation:i64,pub(super) login:String,
@@ -80,14 +80,9 @@ impl Envelope{
         let system=std::str::from_utf8(c.counted(MAX_PATH)?).map_err(|_|Fault::Shape)?;
         crate::fs::check_path(Path::new(system)).map_err(|_|Fault::Shape)?;
         let public_plan=c.counted(MAX_PLAN)?; // Core qualifies its actual plan and SQL.
-        let cookie_count=usize::from(c.byte()?);
-        if !(1..=MAX_LISTENERS).contains(&cookie_count){return Err(Fault::Shape);}
-        let mut cookies=[0;MAX_LISTENERS];
-        for i in 0..cookie_count{
-            let v=c.u64()?;
-            if v==0||cookies[..i].contains(&v){return Err(Fault::Shape);}
-            cookies[i]=v;
-        }
+        if c.byte()?!=1{return Err(Fault::Shape);} // same START layout, exactly one listener
+        let listener_cookie=c.u64()?;
+        if listener_cookie==0{return Err(Fault::Shape);}
         let account=c.id()?;let credential=c.id()?;let record=c.id()?;
         let vault=VaultStamp::decode(&mut c)?;
         let sid=c.array()?; // A raw SID here is not a session principal.
@@ -104,10 +99,9 @@ impl Envelope{
         }
         let mut plan=Vec::new();plan.try_reserve_exact(public_plan.len()).map_err(|_|Fault::Resources)?;
         plan.extend_from_slice(public_plan);
-        Ok(Self{nonce,release_sha,uid,gid,sdev,sino,system:text(system)?,plan,cookie_count,cookies,
+        Ok(Self{nonce,release_sha,uid,gid,sdev,sino,system:text(system)?,plan,listener_cookie,
             account,credential,record,vault,sid,generation,login:epoch.login,pair})
     }
-    pub(super) fn cookies(&self)->&[u64]{&self.cookies[..self.cookie_count]}
 }
 fn text(s:&str)->Result<String>{
     let mut out=String::new();out.try_reserve_exact(s.len()).map_err(|_|Fault::Resources)?;

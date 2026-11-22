@@ -4,8 +4,8 @@
 #![allow(dead_code)] // The matching same-ELF original parent is a separate slice.
 use super::{Fault,Result,entry::InstalledTerm,transport::{InheritedControl,seal_public}};
 use crate::{Entity,VolumeId,fs::{self,ComponentLimit,NameBudget},hash::digest,system::{ROOT_MARK,
-    reader::{InitialReader,smb::runtime::{PreflightClaim,PreflightEpoch,PreflightPlan,PreflightRead,PreflightSelection,preflight_read,web_reader}}}};
-use std::{collections::BTreeSet,ffi::{OsStr,c_int,c_long},io,net::IpAddr,os::unix::ffi::OsStrExt,path::{Path,PathBuf},
+    reader::{InitialReader,smb::runtime::{PLAN_MAX_BYTES,PreflightClaim,PreflightEpoch,PreflightPlan,PreflightRead,PreflightSelection,preflight_read,web_reader}}}};
+use std::{collections::BTreeSet,ffi::{OsStr,c_int,c_long},io,os::unix::ffi::OsStrExt,path::{Path,PathBuf},
     time::{Duration,Instant}};
 
 const START:&[u8;16]=b"ZXS-RUST/PREFL1\0";
@@ -13,7 +13,7 @@ const DONE:&[u8;16]=b"ZXS-RUST/PFDONE\0";
 const INPUT:&[u8]=b"ZXS-RUST/PF-ENV-1\0";
 const OUTPUT:&[u8]=b"ZXS-RUST/PF-OUT-1\0";
 const PATH:usize=4096;
-const PLAN:usize=17_885;
+const PLAN:usize=PLAN_MAX_BYTES;
 const FOLDERS:usize=62;
 pub(super) const QUESTION_MAX:usize=INPUT.len()+32+32+32+16+8+16+2+PATH+2+PLAN;
 pub(super) const REPLY_MAX:usize=OUTPUT.len()+32+80+32+16*3+28+8+1+64+1+(FOLDERS+1)*(2+2+PATH+101);
@@ -130,9 +130,6 @@ impl PreflightQuestion{
     }
     pub(super) fn subject(&self)->(u32,u32){(self.uid,self.gid)}
     pub(super) fn release(&self)->[u8;32]{self.release}
-    /// These are only the immutable approved PLAN spellings. Compare
-    /// independently against real local interfaces before binding sockets.
-    pub(super) fn endpoints(&self)->&[(IpAddr,u8)]{self.plan.endpoints()}
     pub(super) fn hostname(&self)->&str{self.plan.hostname()}
     pub(super) fn planned_folders(&self)->impl ExactSizeIterator<Item=(VolumeId,&str,bool)>+'_{
         self.plan.planned_folders()

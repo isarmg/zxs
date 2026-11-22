@@ -31,9 +31,10 @@ upgrade storage, including any v17 split-account pool.
   site.v1 and vault. Trusted root-owned ancestors deny group/other writes and
   path substitution. The former `/var/lib/zxs/rust-smb` and legacy
   Helper-only records are not consulted, copied or migrated.
-- rust.install is the original ZXS-RUST-SMB-I1 public binary descriptor,
-  root:root 0444 and one link. It already defines host/one SMB share, exact
-  LAN endpoints and prefixes, earliest folder names/modes and recycle label.
+- rust.install is the original ZXS-RUST-SMB-I2 public binary descriptor,
+  root:root 0444 and one link. It defines the approved host/one SMB share,
+  earliest folder names/modes and recycle label. It contains no IP settings.
+  The former descriptor is rejected; existing records are not migrated.
   A separate lower-privilege reader independently qualifies its entire shape
   and the original shared-account receipts; this root selector recognizes only the matching
   five IDs and the selected whole SHA-256.
@@ -106,7 +107,7 @@ log or creates a fresh layout.
 The same foreground terminal renders only the authenticated low ACTIVE facts
 and the actual retained media selection, then issues one typed confirmation
 consumed by the same ZXS instance, reply and selected view before listeners or
-the serving handoff. Web uses only the original HTTP listener on
+the serving handoff. SMB opens one IPv4 TCP listener on 0.0.0.0:445, with no IPv6 listener or client-source filter. Hostname, authentication and signing still apply. Web uses only the original HTTP listener on
 0.0.0.0:8443, without endpoint or scheme configuration. The Web child gets
 the same original SYSTEM and selected ordinary media read-only for the
 manual version proof, with no recycle, vault, or SMB socket. Both lowered

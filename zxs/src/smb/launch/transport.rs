@@ -7,20 +7,20 @@ mod handshake;
 pub(in crate::smb) use accept::OwnedAccepted;
 #[allow(unused_imports)] // the standalone low preflight is added separately
 pub(super) use handshake::{InheritedControl,child_receipt,offer_packet,read_sealed,seal_public};
-use super::{Fault,Result,descriptor::{self,Access,cloexec},
-    envelope::{ENV_MAX,Envelope,MAX_LISTENERS,START_BYTES,Start,VaultStamp},
+use super::{DIRECT_BIND,Fault,Result,descriptor::{self,Access,cloexec},
+    envelope::{ENV_MAX,Envelope,START_BYTES,Start,VaultStamp},
     held_open::{self,ProcOpen},
     kernel::{BootSocket,OriginalProcess,fs_magic},socket_facts::{self,Integer}};
 use crate::smb::readiness::{self,Interest,Watch};
 use std::{
-    fs::{File,OpenOptions},io,mem::{size_of,zeroed},net::{IpAddr,SocketAddr,TcpListener},
+    fs::{File,OpenOptions},io,mem::{size_of,zeroed},net::TcpListener,
     os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd,RawFd},os::unix::fs::{MetadataExt,OpenOptionsExt},
     path::Path,sync::{Mutex,atomic::AtomicU8},time::{Duration,Instant},
 };
 
 const SCM_PIDFD:libc::c_int=4; // Linux v6.12 include/linux/socket.h
 const WAIT:Duration=Duration::from_secs(10);
-const MAX_RIGHTS:usize=3+MAX_LISTENERS;
+const MAX_RIGHTS:usize=4;
 const CONTROL_SIZE:usize=unsafe{
     libc::CMSG_SPACE((MAX_RIGHTS*size_of::<RawFd>()) as u32) as usize+
     libc::CMSG_SPACE(size_of::<libc::ucred>() as u32) as usize+
@@ -42,7 +42,7 @@ pub(crate) struct InheritedRun {
     env:Envelope,
     pair:Mutex<Option<super::pair_gate::WaitingGate>>,
     vault:Mutex<Option<VaultInput>>,
-    listeners:Vec<TcpListener>,
+    listener:TcpListener,
 }
 impl InheritedRun {
     pub(crate) fn system_path(&self)->&Path{Path::new(&self.env.system)}
@@ -61,8 +61,12 @@ impl InheritedRun {
         self.supervisor.require_live().map_err(|_|io::Error::new(io::ErrorKind::PermissionDenied,
             "the original Rust SMB supervisor is not live"))
     }
-    pub(crate) fn listener_count(&self)->usize{self.listeners.len()}
-    pub(crate) fn listen_addr(&self,index:usize)->Option<SocketAddr>{self.listeners.get(index)?.local_addr().ok()}
+    pub(crate) fn require_listener_binding(&self)->io::Result<()>{
+        if self.listener.local_addr()?!=DIRECT_BIND{
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        Ok(())
+    }
 
     /// One call in the dedicated child, before any worker or other users of
     /// the fixed launch descriptors. The only binary caller is the
@@ -83,18 +87,15 @@ impl InheritedRun {
         let sealed=File::from(control.take(0)?);
         let env=start.verify(&frozen(&sealed)?)?;
         drop(sealed);
-        if (uid,gid)!=(env.uid,env.gid)||control.count()!=3+env.cookies().len(){return Err(Fault::Handoff);}
+        if (uid,gid)!=(env.uid,env.gid)||control.count()!=MAX_RIGHTS{return Err(Fault::Handoff);}
         let file=File::from(control.take(1)?);
         let stamp=env.vault;
         vault_file(&file,&stamp)?;
-        let mut listeners=Vec::new();listeners.try_reserve_exact(env.cookies().len()).map_err(|_|Fault::Resources)?;
-        for (i,&cookie) in env.cookies().iter().enumerate(){
-            listeners.push(listener(control.take(i+2)?,cookie)?);
-        }
-        let pair=super::pair_gate::WaitingGate::from_start(control.take(2+env.cookies().len())?,
+        let listener=listener(control.take(2)?,env.listener_cookie)?;
+        let pair=super::pair_gate::WaitingGate::from_start(control.take(3)?,
             env.pair.gate,env.pair.nonce,env.pair.cohort)?;
         supervisor.require_live()?;
-        Ok(Self{supervisor,start,until,ready:AtomicU8::new(0),env,pair:Mutex::new(Some(pair)),vault:Mutex::new(Some(VaultInput{file,stamp})),listeners})
+        Ok(Self{supervisor,start,until,ready:AtomicU8::new(0),env,pair:Mutex::new(Some(pair)),vault:Mutex::new(Some(VaultInput{file,stamp})),listener})
     }
 }
 impl Supervisor {
@@ -138,23 +139,14 @@ unsafe fn inherit(fd:RawFd)->Result<OwnedFd>{
 fn listener(fd:OwnedFd,cookie:u64)->Result<TcpListener>{
     let socket=fd.as_fd();let raw=socket.as_raw_fd();cloexec(raw)?;
     if !descriptor::status(raw)?.nonblocking(){return Err(Fault::Handoff);}
-    let family=socket_facts::integer(socket,Integer::Domain)?;
-    if !matches!(family,libc::AF_INET|libc::AF_INET6)||
+    if socket_facts::integer(socket,Integer::Domain)?!=libc::AF_INET||
         socket_facts::integer(socket,Integer::SocketType)?!=libc::SOCK_STREAM||
         socket_facts::integer(socket,Integer::Protocol)?!=libc::IPPROTO_TCP||
         socket_facts::integer(socket,Integer::Accepting)?!=1||
         socket_facts::integer(socket,Integer::ReusePort)?!=0||
-        (family==libc::AF_INET6&&socket_facts::integer(socket,Integer::V6Only)?!=1)||
         socket_facts::cookie(socket)?!=cookie{return Err(Fault::Handoff);}
-    let listener=TcpListener::from(fd);let local=listener.local_addr().map_err(|_|Fault::Handoff)?;
-    let ip=local.ip();
-    if local.port()!=445||ip.is_unspecified()||ip.is_multicast()||ip.is_loopback()||
-        matches!(ip,IpAddr::V4(a) if a.is_broadcast())||
-        matches!(local,SocketAddr::V6(a) if a.scope_id()!=0||a.ip().is_unicast_link_local()||a.ip().to_ipv4_mapped().is_some()){
-        return Err(Fault::Handoff);
-    }
-    // These structural facts still don't choose the approved address or
-    // that address's peer prefix; Core independently checks the same plan.
+    let listener=TcpListener::from(fd);
+    if listener.local_addr().map_err(|_|Fault::Handoff)?!=DIRECT_BIND{return Err(Fault::Handoff);}
     Ok(listener)
 }
 fn frozen(file:&File)->Result<Vec<u8>>{handshake::read_sealed(file,ENV_MAX)}

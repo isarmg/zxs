@@ -74,7 +74,6 @@ unsafe fn enter()->Result<()>{
             relabel_start.send(()).map_err(|_|Fault::Handoff)
         });
         drop(retirement_start);drop(rename_start);drop(relabel_start);
-        let mut from=0usize;
         let result=admitted.and_then(|()|{
             while !stopping(){
                 if retirement.is_finished()||rename.is_finished()||relabel.is_finished(){return Err(Fault::Handoff);}
@@ -84,9 +83,8 @@ unsafe fn enter()->Result<()>{
                         complete(peers.swap_remove(i))?;
                     }else{i+=1;}
                 }
-                let Some(index)=worker.first_ready(from,peers.len()<MAX_PEERS)? else{continue;};
-                from=index+1; // round robin across actual retained listeners
-                let Some((accepted,lane))=worker.accept(index)? else{continue;};
+                if !worker.listener_ready(peers.len()<MAX_PEERS)?{continue;}
+                let Some((accepted,lane))=worker.accept()? else{continue;};
                 let spawned=thread::Builder::new().spawn(move||lane.serve(accepted)).map_err(|_|Fault::Resources)?;
                 peers.push(spawned); // capacity already reserved before READY
             }

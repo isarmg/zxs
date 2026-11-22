@@ -78,10 +78,7 @@ impl Terminal{
         let mut detail=format!("本配置的 Web HTTP 监听固定 0.0.0.0:8443。\n站点 {}，唯一共享 ZXS；原 SMB 用户 {}（第 {} 代），禁用来宾。\n",
             escaped(plan.hostname().as_bytes()),escaped(facts.epoch.login.as_bytes()),facts.epoch.generation);
         if plan.planned_folders().len()!=facts.ordinary.len(){return Err(denied());}
-        for &(ip,prefix) in plan.endpoints(){
-            writeln!(detail,"  监听 {}；仅限相应客户前缀 {ip}/{prefix}。",
-                std::net::SocketAddr::new(ip,445)).expect("write to String");
-        }
+        detail.push_str("  SMB 0.0.0.0:445（固定 IPv4，不限制客户端来源）。\n");
         for (i,((volume,label,rw),claim)) in plan.planned_folders().zip(&facts.ordinary).enumerate(){
             if volume!=claim.volume{return Err(denied());}
             writeln!(detail,"  普通数据卷 {}，目录 \"{}\"，原首设{}；{}。",

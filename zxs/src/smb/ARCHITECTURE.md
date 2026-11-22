@@ -28,7 +28,7 @@
 
 未来已启用的服务所有者只能交付一条**尚未读取、独占**的 TCP/445 连接以及同次运行的私有实例。这里不建监听、不接收外部传来的已登录连接、不克隆或替换流；内核取得的这对地址只作连接元数据。[接入状态](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/91e2ec0b-530b-4558-aee0-2ca4d586f66a)与认证身份是两回事。每个未协商的入口在首次阻塞读之前与已协商连接共享最多 128 席；失败释放，成功将同一席转为原连接登记，不在注册锁内做 I/O。
 
-首字节前用 [TcpStream::local_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.local_addr) 和 [peer_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.peer_addr) 从独占的同一 socket 取得完整 `SocketAddr` 对，拒绝本地非 445、对端零端口、不同地址族或非具体单播地址。地址对只随原流进入同一个 origin，保留 IPv6 scope、端口和地址族，不从 UNC、转发信息或测试的输入地址取值。原已付额、验签的 TREE_CONNECT 只能短借查看这一对，不能单独提供本机和客户地址。地址形状正确不等于获准：正式入口仍须在读取前识别真正已批准的本地监听及**该监听自己的**客户前缀，且业务授权仍需同一 Core 安装与账号代。此处没有准入发行者、监听或密验文件读入。
+首字节前用 [TcpStream::local_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.local_addr) 和 [peer_addr](https://doc.rust-lang.org/stable/std/net/struct.TcpStream.html#method.peer_addr) 从独占的同一 socket 取得实际本地与对端地址。只认具体 IPv4 TCP、原本地 445 和非零对端端口，不把监听通配地址当作连接地址，也不从 UNC 或转发信息取值。地址对随原流保留为传输证据，不按来源 IP 或网段做授权。已付额、验签的 TREE_CONNECT 仍须使用原连接并核准配置主机名、原 Core 安装与账号代。
 
 按 [Direct TCP 帧格式](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/1dfacde4-b5c7-4494-8a14-a09d3ab4cc83)先完整读四字节、检查本地首次 NEGOTIATE 68 KiB 上限后才分配，不误吞后续帧。接入首包有固定五秒预算，不把它当成已登录客户端的空闲时间。输出只加四字节前缀，原议定 SMB 全文完整写入同一 TCP 后才发布初始额度与 preauth 链；EOF、超限、零写或半包失败终止这条流，无手工“已发送”生产入口。成功写完不等于对端已经收到，更不代表有账户或文件权。三类 SESSION_SETUP 回复和后续原帧读取见下；业务持有者与通用派发仍未启用。源码夹具在 `tests/smb/accepted.rs`，未运行或开 socket。
 
@@ -49,14 +49,14 @@
 
 专用降权子进程的私有接收源码只认固定的原 `fd3` SEQPACKET 与 `fd4` 父 pidfd，不接受 CLI 指定 FD 或外传连接。先从本线程实际 procfs 及内核身份确认初始 user namespace、真实 UID/GID、PID1 与 no-new-privs，关闭自身可转储性，再接一条有界 START 与原流 EOF。消息必须有初始 namespace 下 root 的逐条 SCM_CREDENTIALS 与匹配所持原父 pidfd 的 SCM_PIDFD；数字 PID 不替代真实 pidfs 对象。每个收到的内核 FD 始终有所有者并关闭执行继承，异常／多条／截断不留下可用 FD。[Linux 逐条凭据和 pidfd](https://github.com/torvalds/linux/blob/v6.12/include/net/scm.h)和[受限内核路径查找](https://docs.kernel.org/filesystems/path-lookup.html)分别定义了这些边界。
 
-首个 FD 必须是真正封住写入和长度变化的公开 envelope，匹配原 80 字节消息的 SHA-256 与 nonce。第二个是父端原名重开的 240 字节 root:root 0600 单链接只读 vault，按原 dev/ino、ctime/mtime 和 FD 形状匹配，但此接收器不读密验正文或产生账户。随后 1–16 个来自内核的直接 TCP/445 非通配监听必须按 envelope 的 SO_COOKIE 顺序，IPv6 仅该地址族；形状仍不等于获准。最后一项是本次两角色共同放行门的原只读描述符，绑定同代与同一绝对截止。Core 只从同一真实接收所有者核原 SYSTEM、审批计划、当代账号和每个监听对应的地址／客户范围。只为 Linux ABI 显式引用既有锁定的 libc 源码，无新包或网络源。夹具只用固定公开合成字节和匿名本地 FD，未运行。
+首个 FD 必须是真正封住写入和长度变化的公开 envelope，匹配原 80 字节消息的 SHA-256 与 nonce。第二个是父端原名重开的 240 字节 root:root 0600 单链接只读 vault，按原 dev/ino、ctime/mtime 和 FD 形状匹配，但此接收器不读密验正文或产生账户。随后是唯一 TCP/445 IPv4 通配监听，须与 envelope 的 SO_COOKIE 和实际 `0.0.0.0:445` 匹配；形状仍不等于获准。最后一项是本次两角色共同放行门的原只读描述符，绑定同代与同一绝对截止。Core 只从同一真实接收所有者核原 SYSTEM、审批计划、当代账号和原监听。只为 Linux ABI 显式引用既有锁定的 libc 源码，无新包或网络源。夹具只用固定公开合成字节和匿名本地 FD，未运行。
 
 严格验证器只消费同一个真实启动对象中的原只读 vault，但必须先从 Core 同原 SYSTEM 原位锁、批准计划、独立 Rust 家族下取得已核当代账户。安装还活着才一次移出该 FD，读前/后核原 inode 与变更时间，恰读 240 字节并检查 EOF，随后再核 Core 原切面。密码等效字节只传给不可在该模块外构造的严格解码能力；自有输入和密钥缓冲退出时尽力清除，不承诺抹掉内核或编译器副本。比较真实池/INIT/SETUP/实例/Bind/共同 AccountId/凭据操作/记录号以及完整代和登录名，没有原名重开、旧凭据导入、默认密码或任意字面构造。仅采用同安装批准的主机实名和固定 ZXSLOCAL，VERSION 调试字段取本地 Linux release。会话在已有真实签名、原连接注册和当前验密代下才可用弱见证联结同一启动；单有数字 SID、ECHO 或合成测试 provider 不能拿业务 Tree。
 
 
 从真实 `QualifiedRustInstall` 和原已签、付额的独立 TREE_CONNECT，成功支路现能把该 Core 逻辑根装入**原 Session** 唯一有界 TreeId 表。先由真实清单和权限生成 DISK、NO_CACHING、无 DFS/持久句柄和真实共享权限上界（只有真实 RW 子目录才带产品所需写位），虚拟根自身的只读状态不冒充整树权限。TreeId 不复用、预留不对查询可见。同一个已占信用并签名的回复先写完原流，再复核原会话及同一 Core 清单和模式代，才一次发布 TreeId 与账；失败/撤销关闭原流，不新增 Tree 或信用，已交 TCP 的字节不能召回。这条握手的源级夹具不建立真实挂载，也不证明后续 OPEN / 读写已经验收。
 
-同一 `zxs` 的低权子角色先于正常入口分派，只用私有 `argv[0]` 精确角色标记、不得有附加参数。标记不是许可；缺原受信约束就拒绝，不回退到另一个入口，也不接受环境、配置或 FD 参数来启动。正常入口只按同一[原站点契约](launch/site/CONTRACT.md)选择与启动。实际 Core 原 S 读锁和密验、同次运行新 GUID 都准备好，并安装／解屏蔽 SIGTERM 后，只向前述原 [SEQPACKET](https://man7.org/linux/man-pages/man7/unix.7.html) 写一次精确 80 B PREPARED、关闭写半边。只在原父核两边都已预备并封印共同门、本人仍核现行门与父存活后才 accept 或启动冷写任务。PREPARED 或监听已存在都不表示消费过真实客户端。主线程用实际原父 pidfd 和原监听轮询，最多 8 条连接；不足席才非阻塞 accept，不另 bind 或改到父方原 OFD。只把原始未读的新连接和相同 `InheritedRun` 交到其线程；另在同线程重开／核准原 S 的 Reader，不能搬已登录连接、SQLite 或权限票。首字节前从这一原 socket 检验**该输入监听自己的**本地地址和客户网段，不用其他监听的前缀。收到 TERM 或实际父端失效即停止接收，各原连接排空／释放后再丢父 pidfd 和原 S 主读锁，不隐含保存或删除。固定字节源例不创建监听或重放受托启动，本清理未运行启动或客户端，不声明已安装服务。
+同一 `zxs` 的低权子角色先于正常入口分派，只用私有 `argv[0]` 精确角色标记、不得有附加参数。标记不是许可；缺原受信约束就拒绝，不回退到另一个入口，也不接受环境、配置或 FD 参数来启动。正常入口只按同一[原站点契约](launch/site/CONTRACT.md)选择与启动。实际 Core 原 S 读锁和密验、同次运行新 GUID 都准备好，并安装／解屏蔽 SIGTERM 后，只向前述原 [SEQPACKET](https://man7.org/linux/man-pages/man7/unix.7.html) 写一次精确 80 B PREPARED、关闭写半边。只在原父核两边都已预备并封印共同门、本人仍核现行门与父存活后才 accept 或启动冷写任务。PREPARED 或监听已存在都不表示消费过真实客户端。主线程用实际原父 pidfd 和原监听轮询，最多 8 条连接；不足席才非阻塞 accept，不另 bind 或改到父方原 OFD。只把原始未读的新连接和相同 `InheritedRun` 交到其线程；另在同线程重开／核准原 S 的 Reader，不能搬已登录连接、SQLite 或权限票。首字节前从这一原 socket 核对真实 IPv4 TCP 地址形状，不按客户端来源限制；签名与账号要求不变。收到 TERM 或实际父端失效即停止接收，各原连接排空／释放后再丢父 pidfd 和原 S 主读锁，不隐含保存或删除。固定字节源例不创建监听或重放受托启动，本清理未运行启动或客户端，不声明已安装服务。
 
 ## 每条直连 TCP/445 的 MessageId 和 credits
 

@@ -50,7 +50,7 @@ Private v19 setup on an isolated fresh pool; prefix each first action with web t
   helper setup-pair [web] issue-fresh --init-actor ID --storage-uid N --storage-gid N [--system DIR]
       --pool ID --init ID --instance ID --bind ID --setup-op ID --init-sha256 HEX --approval ID
       [--zxs-image DIR/zxs] --zxs-sha256 HEX --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX
-      --host HOST --login LOGIN --recycle-name NAME (--listen IP/PREFIX | --share DIR NAME ro|rw | --share-label LABEL NAME ro|rw) ...
+      --host HOST --login LOGIN --recycle-name NAME (--share DIR NAME ro|rw | --share-label LABEL NAME ro|rw) ...
   helper reset-account new --op ID --approval ID --previous ID --previous-generation N
       --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX
   helper reset-account receipt --op ID --approval ID --previous ID --previous-generation N --helper-sha256 HEX";

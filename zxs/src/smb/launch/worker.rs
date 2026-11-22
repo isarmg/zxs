@@ -32,12 +32,12 @@ impl Worker {
         self.original.publish_prepared(&self.selected,&self.server,term)?;
         self.original.await_pair(term)
     }
-    pub(super) fn first_ready(&self,from:usize,have_room:bool)->Result<Option<usize>>{
-        self.original.next_listener(from,have_room)
+    pub(super) fn listener_ready(&self,have_room:bool)->Result<bool>{
+        self.original.listener_ready(have_room)
     }
-    pub(super) fn accept(&self,index:usize)->Result<Option<(OwnedAccepted,Lane)>>{
+    pub(super) fn accept(&self)->Result<Option<(OwnedAccepted,Lane)>>{
         if stopping(){return Ok(None);}
-        let accepted=self.original.accept_original(&self.selected,index).map_err(|_|Fault::Handoff)?;
+        let accepted=self.original.accept_original(&self.selected).map_err(|_|Fault::Handoff)?;
         Ok(accepted.map(|a|(a,Lane{original:Arc::clone(&self.original),server:Arc::clone(&self.server)})))
     }
 }

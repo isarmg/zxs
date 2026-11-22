@@ -135,9 +135,9 @@ impl<'a> Cursor<'a>{
 mod tests{
     use super::*;
     fn plan()->RustPlan{
-        // Same immutable 147-byte public sample as the ZXS consumer's
-        // launch/site/approval.rs (not the 197-byte first-share vector).
-        let hex="5a58532d525553542d534d422d49310011111111111111111111111111111111121212121212121212121212121212121616161616161616161616161616161617171717171717171717171717171717131313131313131313131313131313130b666978747572652e6c616e010418c00002110133333333333333333333333333333333020004446f63730006e59b9ee694b6";
+        // Same immutable 140-byte public sample as the ZXS consumer's
+        // launch/site/approval.rs (not the 172-byte first-share vector).
+        let hex="5a58532d525553542d534d422d49320011111111111111111111111111111111121212121212121212121212121212121616161616161616161616161616161617171717171717171717171717171717131313131313131313131313131313130b666978747572652e6c616e0133333333333333333333333333333333020004446f63730006e59b9ee694b6";
         let raw=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).unwrap()).collect::<Vec<_>>();
         RustPlan::decode(&raw).unwrap()
     }
@@ -161,7 +161,7 @@ mod tests{
             Path::new("/fresh S/SYSTEM"),Path::new("/opt/zxs/bin/zxs"),[41;32]).unwrap();
         let bytes=r.encode().unwrap();
         assert_eq!(bytes.len(),219);
-        assert_eq!(r.sha().unwrap(),crate::fs_tools::hex("34989e400121d47b34411106da0789b0e2ad60d8d1d27cb7492aa9a17e5f18ef").unwrap());
+        assert_eq!(r.sha().unwrap(),crate::fs_tools::hex("43165db572d843db3e6fb72ce943a88688e4c04a0161f88a6d540141ec38d23d").unwrap());
         assert!(SitePayload::decode(&bytes).unwrap()==r);
         for len in 0..bytes.len(){assert!(SitePayload::decode(&bytes[..len]).is_err());}
         let p=activation(&r).unwrap();

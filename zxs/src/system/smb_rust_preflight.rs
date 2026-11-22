@@ -5,7 +5,7 @@
 use super::{ActiveRustMeta,Connection,Catalog,InitialReader,Mode,RustPlan,denied};
 use crate::system::reader::credential::Pair;
 use crate::{Entity,PoolId,Role,VolumeId,fs,system::{ClaimRow,lease::SystemDir,reader::zxs_sql_path_limit}};
-use std::{fs::File,io,net::IpAddr,path::{Path,PathBuf}};
+use std::{fs::File,io,path::{Path,PathBuf}};
 
 /// The parent provides exact public facts from the independently approved
 /// site and a clone of its held S projected read-only into the low view.
@@ -22,7 +22,7 @@ pub(crate) struct PreflightRead<'a>{
 /// Immutable public comparison facts, not a storage or launch grant.
 pub(crate) struct PreflightPlan{
     pub(crate) origin:[[u8;16];5],pub(crate) ordinary:Vec<VolumeId>,
-    hostname:String,endpoints:Vec<(IpAddr,u8)>,
+    hostname:String,
     labels:Vec<(String,bool)>,recycle:String,
 }
 fn approved_plan(raw:&[u8],expected:[u8;32])->io::Result<RustPlan>{
@@ -35,10 +35,9 @@ impl PreflightPlan{
         let (ordinary,labels)=p.plan.folders().iter().map(|f|(f.volume(),(f.name().to_owned(),f.mode==Mode::ReadWrite)))
             .unzip();
         Ok(Self{origin:p.plan.scope,ordinary,labels,recycle:p.plan.recycle.clone(),
-            hostname:p.hostname().to_owned(),endpoints:p.plan.endpoints().iter().map(|e|(e.ip,e.prefix)).collect()})
+            hostname:p.hostname().to_owned()})
     }
     pub(crate) fn hostname(&self)->&str{&self.hostname}
-    pub(crate) fn endpoints(&self)->&[(IpAddr,u8)]{&self.endpoints}
     /// PLAN order with the enrolled initial modes only, not current authority.
     pub(crate) fn planned_folders(&self)->impl ExactSizeIterator<Item=(VolumeId,&str,bool)>+'_{
         self.ordinary.iter().copied().zip(&self.labels).map(|(v,(name,rw))|(v,name.as_str(),*rw))

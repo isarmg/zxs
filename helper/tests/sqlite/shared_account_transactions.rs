@@ -19,8 +19,8 @@ fn setup_spec()->SetupSpec{
     SetupSpec{account:vector("account"),login:field("login").as_bytes().to_vec(),sid:vector("sid"),record:vector("first_record")}
 }
 fn seed()->(Connection,RustPlan,[u8;32]){
-    let wire=include_str!("../smb-host/rust-install-v1.txt").lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
-    let raw=decode::<197>(wire);
+    let wire=include_str!("../smb-host/rust-install-v2.txt").lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
+    let raw=decode::<172>(wire);
     let plan=RustPlan::decode(&raw).unwrap();let o=plan.origin;let actor=vector::<16>("actor");
     let approval=[72;16];
     let roots=[([73;16],PathBuf::from("/synthetic/S")),([74;16],"/synthetic/R".into())].into_iter()

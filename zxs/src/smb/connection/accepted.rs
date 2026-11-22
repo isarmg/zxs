@@ -6,7 +6,8 @@ use super::{Connection,Fault,Opening,OpeningSend,Origin,Result,Window,ones,
     sessions::{AcceptSeat,RunningServerGuid},transport::{DirectStream,deadline}};
 use crate::smb::wire::{direct::Frame,message::Compound,negotiate::{CmacChoice,MAX_OPENING_BYTES}};
 use crate::system::reader::smb::runtime::QualifiedRustInstall;
-use std::{net::{IpAddr,SocketAddr,TcpStream},sync::{Arc,atomic::AtomicBool}};
+use crate::smb::launch::DIRECT_PORT;
+use std::{net::{SocketAddr,TcpStream},sync::{Arc,atomic::AtomicBool}};
 
 /// Exclusive protocol owner. No raw Connection getter, stream replacement,
 /// separate response sink or numeric-ID constructor.
@@ -18,7 +19,7 @@ pub(in crate::smb) struct Peer {
 
 /// A pair observed on the SAME owned kernel socket before reading any SMB
 /// bytes. Neither address may be substituted or moved to a different
-/// stream. This is evidence for network admission, not admission itself.
+/// stream. This is transport evidence, not an IP-based access policy.
 pub(in crate::smb) struct AcceptedEndpoints { local:SocketAddr, peer:SocketAddr }
 impl AcceptedEndpoints {
     fn inspect(socket:&TcpStream)->Result<Self> {
@@ -27,24 +28,13 @@ impl AcceptedEndpoints {
         if !direct_pair(local,peer) {return Err(Fault::Transport);}
         Ok(Self{local,peer})
     }
-    pub(in crate::smb) fn local(&self)->SocketAddr {self.local}
-    pub(in crate::smb) fn peer(&self)->SocketAddr {self.peer}
+    pub(in crate::smb) fn is_direct(&self)->bool{direct_pair(self.local,self.peer)}
 }
 
 fn direct_pair(local:SocketAddr,peer:SocketAddr)->bool {
-    local.port()==445 && peer.port()!=0 &&
-        local.is_ipv4()==peer.is_ipv4() &&
-        concrete_address(local) && concrete_address(peer)
-}
-fn concrete_address(addr:SocketAddr)->bool {
-    let ip=match addr.ip() {
-        // Classification only. Retain the kernel's original sockaddr,
-        // including its address family and v6 scope, for authorization.
-        IpAddr::V6(a)=>a.to_ipv4_mapped().map_or(IpAddr::V6(a),IpAddr::V4),
-        v4=>v4,
-    };
-    !ip.is_unspecified() && !ip.is_multicast() &&
-        !matches!(ip,IpAddr::V4(a) if a.is_broadcast())
+    let (SocketAddr::V4(local),SocketAddr::V4(peer))=(local,peer) else{return false;};
+    local.port()==DIRECT_PORT&&peer.port()!=0&&[local.ip(),peer.ip()].into_iter().all(|a|
+        !a.is_unspecified()&&!a.is_multicast()&&!a.is_broadcast())
 }
 
 struct Incoming {
@@ -64,13 +54,10 @@ impl RunningServerGuid {
     /// socket. No socket is obtained, accepted or connected by this module.
     pub(in crate::smb) fn negotiate_accepted(&self,accepted:crate::smb::launch::OwnedAccepted,
         installation:&QualifiedRustInstall)->Result<Peer> {
-        let (socket,start,index)=accepted.unpack();
+        let (socket,start)=accepted.unpack();
         if !self.is_original_start(&start)||!installation.is_original_start(&start){return Err(Fault::NoVerifier);}
         installation.require_current().map_err(|_|Fault::NoVerifier)?;
         let input=Incoming::inspect(socket)?;
-        let pair=input.endpoints.as_ref().ok_or(Fault::Transport)?;
-        if !installation.original_listener_is(index,pair.local())||
-            !installation.admits_original_addresses(pair.local(),pair.peer()){return Err(Fault::Transport);}
         // No bytes have been read or written. This exact OS accepted stream
         // now enters the same origin's normal NEGOTIATE.
         Peer::open(self,input)

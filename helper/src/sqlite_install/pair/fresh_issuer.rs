@@ -51,7 +51,7 @@ pub(super) mod image;
 pub(crate) use image::EmbeddedInstall;
 use super::{command::{key,name,sha,value},domain::{FreshHome,FreshParent},native_run::{Choice,FirstShares,FreshScope,ResolvedRust,offer_account_web,transact_fresh},
     native_sql::rust_vault::{ActiveRustMeta,Desired,RustChange,RustOrder,SetupSpec,shared_login},rust_enroll::{crypto::Cryptography,manifest::{Authority,Intent,Manifest},receipt::Observed},terminal::PublicConfirmation};
-use crate::{smb_profile::{self,first::{Endpoint,Mode,RecycleName,MAX_ENDPOINTS,MAX_FOLDERS},
+use crate::{smb_profile::{self,first::{Mode,RecycleName,MAX_FOLDERS},
     rust_first::{self,Origin}},sqlite_install::{approval,product_layout,stage::random}};
 use helper_linux_evidence::prompt_signals::PromptSignals;
 use std::{ffi::OsStr,fmt::Write as _,path::PathBuf,time::{Duration,Instant}};
@@ -104,12 +104,9 @@ impl Selection{
         if !shared_login(&login){return Err("expected one canonical non-guest login for both Web and SMB");}
         let recycle=RecycleName::new(value(&mut it,"--recycle-name")?.into_string()
             .map_err(|_|"expected a valid logical recycle name")?)?;
-        let mut endpoints=Vec::new();let mut folders:Vec<Choice>=Vec::new();
+        let mut folders:Vec<Choice>=Vec::new();
         while let Some(flag)=it.next(){
-            if flag=="--listen"&&endpoints.len()<MAX_ENDPOINTS{
-                let ep=it.next().ok_or("missing explicitly selected LAN listener")?;
-                endpoints.push(Endpoint::named(ep.to_str().ok_or("expected exact IP and prefix")?)?);
-            }else if (flag=="--share"||flag=="--share-label")&&folders.len()<MAX_FOLDERS{
+            if (flag=="--share"||flag=="--share-label")&&folders.len()<MAX_FOLDERS{
                 let selected=it.next().ok_or("missing actual original data root or explicit DATA label")?;
                 let p=if flag=="--share-label"{product_layout::data_label(selected)?}else{PathBuf::from(selected)};
                 product_layout::media(&p)?;
@@ -121,10 +118,10 @@ impl Selection{
                     Some("ro")=>Mode::ReadOnly,Some("rw")=>Mode::ReadWrite,_=>return Err("select the explicit folder mode ro or rw"),
                 };
                 folders.push(Choice{path:p,folder,mode});
-            }else{return Err("only explicit --listen and --share/--share-label entries; no recovery, password or second executable");}
+            }else{return Err("only explicit --share/--share-label entries; no recovery, password or second executable");}
         }
-        if endpoints.is_empty()||folders.is_empty(){return Err("select at least one LAN listener and original ordinary folder");}
-        let shares=FirstShares{host:hostname,endpoints,choices:folders,recycle};
+        if folders.is_empty(){return Err("select at least one original ordinary folder");}
+        let shares=FirstShares{host:hostname,choices:folders,recycle};
         Ok(Self{subject,system,origin,reference,init_sha,image_path,image,crypto,login,shares})
     }
     pub(super) fn run(self,web:bool)->io::Result<(u8,String)>{
@@ -237,7 +234,7 @@ fn preview(resolved:&ResolvedRust,payload:&SitePayload,target:&FreshHome,shared:
         payload.image,hex(&payload.elf_sha),hex(&payload.plan_sha),hex(&payload.sha()?),hex(&crypto.helper),hex(&crypto.gcrypt),
         hex(&crypto.gpgerror),resolved.preview(),p.host(),std::str::from_utf8(&shared.login).map_err(|_|bad("invalid shared login"))?,
         hex(&shared.account),hex(&shared.record),hex(&shared.sid),hex(&action));
-    for e in p.endpoints(){writeln!(out,"  SMB {}:{} / 子网前缀 {}（预定而未监听）",e.address(),445,e.prefix()).expect("writing String");}
+    out.push_str("  SMB 0.0.0.0:445（固定 IPv4，尚未监听）\n");
     out.push_str("  原回收路径在 ZXS 中的计划名称 \"");
     smb_profile::escaped(&mut out,p.recycle().as_str().as_bytes());out.push_str("\"\n");
     for(f,_) in p.folders(){
@@ -256,7 +253,7 @@ mod tests{
         let form=format!("--init-actor {} --storage-uid 1001 --storage-gid 1002 --system /lab/S --pool {} --init {} \
             --instance {} --bind {} --setup-op {} --init-sha256 {} --approval {} --zxs-image /fixture/bin/zxs --zxs-sha256 {} --helper-sha256 {} --gcrypt-sha256 {} \
             --gpgerror-sha256 {} --host fresh.test --login first.zxs --recycle-name Recycle \
-            --listen 192.0.2.17/24 --share /lab/F Work rw",hex(&[31;16]),hex(&[1;16]),hex(&[2;16]),hex(&[3;16]),
+            --share /lab/F Work rw",hex(&[31;16]),hex(&[1;16]),hex(&[2;16]),hex(&[3;16]),
             hex(&[4;16]),hex(&[5;16]),hex(&[45;32]),hex(&[6;16]),hex(&[41;32]),hex(&[42;32]),hex(&[43;32]),hex(&[44;32]));
         let selected=Selection::parse(arg(&form)).unwrap();
         assert_eq!(selected.image_path,PathBuf::from("/fixture/bin/zxs"));
@@ -269,7 +266,7 @@ mod tests{
         assert_eq!(selected.shares.choices[0].path,PathBuf::from("/zxs/disks/data/工具"));
         for bad in [format!("{form} --resume"),format!("{form} --password bogus"),format!("{form} --site /other"),
             form.replace("first.zxs","guest"),form.replace("--login first.zxs","--web-login first.web --smb-login first.smb"),form.replace("/lab/F","/lab/S/F"),form.replace("1001","01001"),
-            form.replace(&hex(&[3;16]),&hex(&[2;16])),form.replace("192.0.2.17/24","0.0.0.0/0"),
+            form.replace(&hex(&[3;16]),&hex(&[2;16])),format!("{form} --listen 192.0.2.17/24"),form.replace("--share /lab/F Work rw",""),
             defaults.replace(&format!("--zxs-sha256 {} ",hex(&[41;32])),""),defaults.replace("--share-label 工具","--share-label .."),
             form.replace("/fixture/bin/zxs","/lab/S/zxs"),form.replace("/fixture/bin/zxs","/zxs/state/zxs"),
             form.replace("/fixture/bin/zxs","/lab/F/zxs"),form.replace("/fixture/bin/zxs","/fixture/bin/other"),

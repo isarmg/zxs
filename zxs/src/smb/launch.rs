@@ -28,6 +28,10 @@ pub fn start_original_zxs()->std::io::Result<()>{
 mod transport;
 pub(crate) use transport::InheritedRun;
 pub(in crate::smb) use transport::OwnedAccepted;
+
+pub(in crate::smb) const DIRECT_PORT:u16=445;
+const DIRECT_BIND:std::net::SocketAddr=std::net::SocketAddr::V4(
+    std::net::SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED,DIRECT_PORT));
 mod worker;
 mod maintenance;
 mod entry;

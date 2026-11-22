@@ -153,7 +153,7 @@ pub(crate) fn check_deployment()->(u8,String){
 mod tests{
     use super::*;
     fn question()->Question{
-        let text=include_str!("../../../../../tests/smb-host/rust-install-v1.txt");
+        let text=include_str!("../../../../../tests/smb-host/rust-install-v2.txt");
         let hex=text.lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
         let raw=(0..hex.len()).step_by(2).map(|i|u8::from_str_radix(&hex[i..i+2],16).unwrap()).collect::<Vec<_>>();
         let plan=RustPlan::decode(&raw).unwrap();

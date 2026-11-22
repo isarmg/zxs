@@ -165,7 +165,7 @@ impl<'a> Cursor<'a>{
 mod tests{
     use super::*;
     fn sample(intent:Intent)->Manifest{
-        let fixture=include_str!("../../../../tests/smb-host/rust-install-v1.txt");
+        let fixture=include_str!("../../../../tests/smb-host/rust-install-v2.txt");
         let raw=fixture.lines().find_map(|l|l.strip_prefix("wire_hex=")).unwrap();
         let bytes=(0..raw.len()).step_by(2).map(|i|u8::from_str_radix(&raw[i..i+2],16).unwrap()).collect::<Vec<_>>();
         let plan=RustPlan::decode(&bytes).unwrap();

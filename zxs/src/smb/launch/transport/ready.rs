@@ -1,6 +1,6 @@
 //! Original control record and listener readiness; no supplied FD or
 //! network address can become an input to either operation.
-use super::{Fault,InheritedRun,MAX_LISTENERS,Result};
+use super::{Fault,InheritedRun,Result};
 use crate::{smb::{connection::sessions::RunningServerGuid,readiness::{self,Interest,Watch}},
     system::reader::smb::runtime::QualifiedRustInstall};
 use std::{io::ErrorKind,os::fd::{AsFd,AsRawFd},sync::{Arc,atomic::Ordering},time::Instant};
@@ -53,27 +53,20 @@ impl InheritedRun {
         self.ready.compare_exchange(1,2,Ordering::Release,Ordering::Acquire).map_err(|_|Fault::Handoff)?;
         Ok(())
     }
-    pub(in crate::smb::launch) fn next_listener(&self,from:usize,admit:bool)->Result<Option<usize>>{
+    pub(in crate::smb::launch) fn listener_ready(&self,admit:bool)->Result<bool>{
         if self.ready.load(Ordering::Acquire)!=2{return Err(Fault::Handoff);}
-        let n=self.listeners.len();
-        let mut p:[Watch<'_>;MAX_LISTENERS+1]=std::array::from_fn(|_|Watch::vacant());
-        p[0]=self.supervisor.parent.poll_watch();
-        if admit{
-            for (dst,s) in p[1..].iter_mut().zip(&self.listeners){
-                *dst=Watch::new(s.as_fd(),Interest::Read);
-            }
-        }
-        let used=if admit{n+1}else{1};
+        let mut p=[self.supervisor.parent.poll_watch(),Watch::vacant()];
+        if admit{p[1]=Watch::new(self.listener.as_fd(),Interest::Read);}
+        let used=if admit{2}else{1};
         // Readiness of borrowed originals is not an endpoint or permission.
         let r=match readiness::wait(&mut p[..used],100){
             Ok(r)=>r,
-            Err(e) if e.kind()==ErrorKind::Interrupted=>return Ok(None),
+            Err(e) if e.kind()==ErrorKind::Interrupted=>return Ok(false),
             Err(_)=>return Err(Fault::Handoff),
         };
         if p[0].events().any()||p[1..used].iter().any(|v|v.events().broken()){
             return Err(Fault::Handoff);
         }
-        if !admit||r==0{return Ok(None);}
-        Ok((0..n).map(|j|(from+j)%n).find(|&i|p[i+1].events().readable()))
+        Ok(admit&&r!=0&&p[1].events().readable())
     }
 }

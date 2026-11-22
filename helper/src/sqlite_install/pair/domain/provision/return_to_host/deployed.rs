@@ -236,7 +236,7 @@ mod tests{
 
     #[test]
     fn reattach_and_shared_account_workers_keep_only_the_exact_image_from_the_protected_site(){
-        let text=include_str!("../../../../../../tests/smb-host/rust-install-v1.txt");
+        let text=include_str!("../../../../../../tests/smb-host/rust-install-v2.txt");
         let hex=text.lines().find_map(|s|s.strip_prefix("wire_hex=")).unwrap();
         let raw=hex.as_bytes().as_chunks::<2>().0.iter().map(|b|u8::from_str_radix(std::str::from_utf8(b).unwrap(),16).unwrap()).collect::<Vec<_>>();
         let plan=RustPlan::decode(&raw).unwrap();

@@ -7,7 +7,7 @@ pub(crate) use retirement_check::RetirementCheck;
 // Only the authenticated lower-privilege process opens the actual SQLite ledger.
 use super::{bad,host::Worker,manifest::{read_sealed,sealed_owner},transport::{self,Channel,Kind},worker::original_parent};
 use crate::{path_rules::MAX_PATH_BYTES,pinned::{Kind as PathKind,Pinned,helper_elf::ForegroundElf},
-    smb_profile::{self,first::{Endpoint,Folder,Id,Mode,RecycleName,MAX_FOLDERS}},
+    smb_profile::{self,first::{Folder,Id,Mode,RecycleName,MAX_FOLDERS}},
     sqlite_install::{approval,catalog::{self,Initial},markers::OrdinaryMark,originals::{SelectedSystem,named_backing},pair::{domain::{
         give_live_approval,request_live_approval,require_lent_ex,sealed,FreshParent},observed,terminal::PublicConfirmation},
         pair::{fresh_issuer::{ExplicitSubject,InitialDatabase,require_private_install},recycle::Recycle},stage::random}};
@@ -32,7 +32,6 @@ pub(in crate::sqlite_install::pair) struct Choice {
 #[derive(Debug)]
 pub(in crate::sqlite_install::pair) struct FirstShares{
     pub(in crate::sqlite_install::pair) host:String,
-    pub(in crate::sqlite_install::pair) endpoints:Vec<Endpoint>,
     pub(in crate::sqlite_install::pair) choices:Vec<Choice>,
     pub(in crate::sqlite_install::pair) recycle:RecycleName,
 }
@@ -219,10 +218,10 @@ impl ResolvedRust {
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{self.original.require()}
     pub(in crate::sqlite_install::pair) fn fresh(parent:&FreshParent,system:&Path,origin:crate::smb_profile::rust_first::Origin,
         shares:FirstShares,scope:FreshScope)->io::Result<Self>{
-        let FirstShares{host,endpoints,choices,recycle}=shares;
+        let FirstShares{host,choices,recycle}=shares;
         parent.before_original_sql(&origin.instance)?;
         let (original,plan)=Originals::select(system,(origin.pool,origin.init),choices,scope,
-            move|folders|crate::smb_profile::rust_first::RustPlan::selected(origin,host,endpoints,folders,recycle).map_err(bad))?;
+            move|folders|crate::smb_profile::rust_first::RustPlan::selected(origin,host,folders,recycle).map_err(bad))?;
         parent.before_original_sql(&origin.instance)?;
         Ok(Self{original,plan})
     }

@@ -17,7 +17,7 @@ pub(in crate::smb) enum Error {
 }
 
 /// A request for the one ZXS share. This is not an accepted share: the
-/// actual listener's server/alias scope and the current Core principal and
+/// approved symbolic server/alias scope and the current Core principal and
 /// unified root still need to be checked. Keep the original paid member for
 /// both the operation and its eventual reply; never use naked wire IDs.
 #[must_use]
@@ -45,8 +45,8 @@ impl<'step, 'raw> TreeConnectRequest<'step, 'raw> {
     /// a pool. The eventual resolver uses only trusted service/alias scope.
     pub(in crate::smb) fn server_spelling(&self) -> &str { &self.server }
 
-    /// Check the local listener and its own peer prefix as a pair; neither
-    /// address is claimed by the client's UNC. This is not a share grant.
+    /// Require the original direct IPv4 transport; neither address is
+    /// claimed by the client's UNC or grants access.
     pub(in crate::smb) fn accepted_endpoints(&self) -> Option<&AcceptedEndpoints> {
         self.original.session().accepted_endpoints()
     }
@@ -58,8 +58,7 @@ impl<'step, 'raw> TreeConnectRequest<'step, 'raw> {
         ->Result<QualifiedTreeConnect<'step,'raw>,(Self,QualificationError)>{
         fn original_root(req:&TreeConnectRequest<'_,'_>,install:Rc<QualifiedRustInstall>)
             ->Result<(RustRoot,RustRootProjection),QualificationError>{
-            let connected=req.accepted_endpoints().ok_or(QualificationError::Endpoint)?;
-            if !install.admits_original_addresses(connected.local(),connected.peer()){
+            if !req.accepted_endpoints().is_some_and(AcceptedEndpoints::is_direct){
                 return Err(QualificationError::Endpoint);}
             if !install.hostname().eq_ignore_ascii_case(req.server_spelling()){
                 return Err(QualificationError::UnapprovedServer);}

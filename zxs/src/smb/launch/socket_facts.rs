@@ -6,7 +6,7 @@ use std::{ffi::c_int,os::fd::{AsRawFd,BorrowedFd}};
 #[repr(u8)]
 pub(super) enum Integer {
     Domain=1, SocketType=2, Protocol=3, Accepting=4, ReusePort=5,
-    PassCredentials=6, PassPidFd=7, V6Only=8,
+    PassCredentials=6, PassPidFd=7,
 }
 #[cfg(target_arch="x86_64")]
 #[repr(C)]

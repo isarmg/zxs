@@ -1,53 +1,17 @@
-//! The approved first-install plan contains names and addresses, not paths,
+//! The approved first-install plan contains names, not paths,
 //! credentials, service readiness, or authority to initialise another pool.
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, net::{IpAddr, Ipv4Addr, Ipv6Addr}};
+use std::collections::BTreeSet;
 
 pub(crate) type Id = [u8; 16];
-pub(crate) const MAX_ENDPOINTS: usize = 16;
 pub(crate) const MAX_FOLDERS: usize = 62;
 const MAX_NAME: usize = 255;
-pub(crate) const MAX_WIRE: usize = 16 + 5 * 16 + 1 + MAX_ENDPOINTS * 18
+pub(crate) const MAX_WIRE: usize = 16 + 5 * 16
     + 1 + MAX_FOLDERS * (16 + 1 + 2 + MAX_NAME) + 2 + MAX_NAME;
-const _: () = assert!(MAX_WIRE == 17_631);
+const _: () = assert!(MAX_WIRE == 17_342);
 type Result<T> = std::result::Result<T, &'static str>;
 const BAD: &str = "not one canonical first SMB plan for this original installation";
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct Endpoint { ip: IpAddr, prefix: u8 }
-impl Endpoint {
-    fn checked(ip: IpAddr, prefix: u8) -> Result<Self> {
-        match ip {
-            IpAddr::V4(a) if a.octets()[0] != 0 && !a.is_loopback() && !a.is_multicast() && !a.is_broadcast()
-                && (1..=32).contains(&prefix) => {
-                if prefix < 31 {
-                    let raw = u32::from(a);
-                    let host = u32::MAX >> prefix;
-                    if raw & host == 0 || raw & host == host { return Err(BAD); }
-                }
-            }
-            IpAddr::V6(a) if !a.is_unspecified() && !a.is_loopback() && !a.is_multicast() && !a.is_unicast_link_local()
-                && a.to_ipv4().is_none() && (1..=128).contains(&prefix) => {}
-            _ => return Err(BAD),
-        }
-        Ok(Self { ip, prefix })
-    }
-    pub(crate) fn named(text: &str) -> Result<Self> {
-        let (address, bits) = text.split_once('/').ok_or(BAD)?;
-        let ip: IpAddr = address.parse().map_err(|_| BAD)?;
-        let prefix: u8 = bits.parse().map_err(|_| BAD)?;
-        if ip.to_string() != address || prefix.to_string() != bits { return Err(BAD); }
-        Self::checked(ip, prefix) // no wildcard, loopback, ambiguous zone, or RFC1918-only rule
-    }
-    pub(crate) fn address(self) -> IpAddr { self.ip }
-    pub(crate) fn prefix(self) -> u8 { self.prefix }
-    fn emit(self, out: &mut Vec<u8>) {
-        match self.ip {
-            IpAddr::V4(a) => { out.extend([4, self.prefix]); out.extend(a.octets()); }
-            IpAddr::V6(a) => { out.extend([6, self.prefix]); out.extend(a.octets()); }
-        }
-    }
-}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Mode { ReadOnly, ReadWrite }
 impl Mode {
@@ -89,12 +53,10 @@ fn send_name(out: &mut Vec<u8>, s: &str) {
 
 /// The common suffix is only syntax and chosen names/IDs; it is not an
 /// installation authority or a credential-family selector.
-pub(super) fn sort_selection(ids:[Id;5],endpoints:&mut[Endpoint],chosen:&mut[Folder],recycle:&RecycleName)->Result<BTreeSet<Id>>{
+pub(super) fn sort_selection(ids:[Id;5],chosen:&mut[Folder],recycle:&RecycleName)->Result<BTreeSet<Id>>{
     let mut done = BTreeSet::new();
     if !ids.into_iter().all(|p| p != [0; 16] && done.insert(p))
-        || !(1..=MAX_ENDPOINTS).contains(&endpoints.len()) || !(1..=MAX_FOLDERS).contains(&chosen.len()) { return Err(BAD); }
-    endpoints.sort_unstable();
-    if endpoints.windows(2).any(|p| p[0].address() == p[1].address()) { return Err(BAD); }
+        || !(1..=MAX_FOLDERS).contains(&chosen.len()) { return Err(BAD); }
     chosen.sort_unstable_by_key(|f| f.volume);
     {
         let mut names = BTreeSet::from([recycle.as_str()]);
@@ -106,9 +68,7 @@ pub(super) fn sort_selection(ids:[Id;5],endpoints:&mut[Endpoint],chosen:&mut[Fol
     } // Case remains exact; these are real ZXS folder names.
     Ok(done)
 }
-pub(super) fn emit_layout(wire:&mut Vec<u8>,endpoints:&[Endpoint],chosen:&[Folder],recycle:&RecycleName){
-    wire.push(endpoints.len() as u8);
-    for &e in endpoints { e.emit(wire); }
+pub(super) fn emit_layout(wire:&mut Vec<u8>,chosen:&[Folder],recycle:&RecycleName){
     wire.push(chosen.len() as u8);
     for f in chosen {
         wire.extend(f.volume);
@@ -144,19 +104,7 @@ fn label(p: &mut &[u8]) -> Result<String> {
     Ok(std::str::from_utf8(take(p, n)?).map_err(|_| BAD)?.to_owned())
 }
 
-pub(super) fn decode_layout(p:&mut &[u8])->Result<(Vec<Endpoint>,Vec<Folder>,RecycleName)>{
-    let [ep] = fixed(p)?;
-    if !(1..=MAX_ENDPOINTS).contains(&(ep as usize)) { return Err(BAD); }
-    let mut endpoints = Vec::with_capacity(ep as usize);
-    for _ in 0..ep {
-        let [family, prefix] = fixed(p)?;
-        let ip = match family {
-            4 => IpAddr::V4(Ipv4Addr::from(fixed::<4>(p)?)),
-            6 => IpAddr::V6(Ipv6Addr::from(fixed::<16>(p)?)),
-            _ => return Err(BAD),
-        };
-        endpoints.push(Endpoint::checked(ip, prefix)?);
-    }
+pub(super) fn decode_layout(p:&mut &[u8])->Result<(Vec<Folder>,RecycleName)>{
     let [n] = fixed(p)?;
     if !(1..=MAX_FOLDERS).contains(&(n as usize)) { return Err(BAD); }
     let mut folders = Vec::with_capacity(n as usize);
@@ -166,5 +114,5 @@ pub(super) fn decode_layout(p:&mut &[u8])->Result<(Vec<Endpoint>,Vec<Folder>,Rec
         folders.push(Folder { volume: v, mode: Mode::parse(mode)?, name: label(p)? });
     }
     let recycle = RecycleName::new(label(p)?)?;
-    Ok((endpoints,folders,recycle))
+    Ok((folders,recycle))
 }

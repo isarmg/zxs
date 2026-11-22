@@ -1,7 +1,7 @@
 use super::*;
 fn public_plan()->Vec<u8>{
     // Immutable public plan, never a credential or real installation path.
-    let hex=b"5a58532d525553542d534d422d49310011111111111111111111111111111111121212121212121212121212121212121616161616161616161616161616161617171717171717171717171717171717131313131313131313131313131313130b666978747572652e6c616e010418c00002110133333333333333333333333333333333020004446f63730006e59b9ee694b6";
+    let hex=b"5a58532d525553542d534d422d49320011111111111111111111111111111111121212121212121212121212121212121616161616161616161616161616161617171717171717171717171717171717131313131313131313131313131313130b666978747572652e6c616e0133333333333333333333333333333333020004446f63730006e59b9ee694b6";
     hex.as_chunks::<2>().0.iter().map(|n|u8::from_str_radix(std::str::from_utf8(n).unwrap(),16).unwrap()).collect()
 }
 fn record(system:&[u8],image:&[u8])->Vec<u8>{
@@ -19,6 +19,12 @@ fn rust_site_record_binds_original_scope_and_the_whole_plan(){
     assert_eq!((r.subject.uid,r.subject.gid),(1001,1002));
     assert_eq!(r.system.as_path(),Path::new("/zxs/disks/system"));assert_eq!(r.image_sha,[41;32]);
     let p=public_plan();r.require_plan(&p).unwrap();
+    let mut i1=p.clone();i1[14]=b'1';
+    let after_host=97+usize::from(i1[96]);
+    i1.splice(after_host..after_host,[1,4,24,192,0,2,17]);
+    let mut old_site=Approval::decode(&b).unwrap();
+    old_site.plan_sha=crate::hash::digest(&i1).unwrap();
+    assert!(old_site.require_plan(&i1).is_err());
     for i in [0,17,96,p.len()-1]{let mut other=p.clone();other[i]^=1;assert!(r.require_plan(&other).is_err());}
     for k in 0..b.len(){assert!(Approval::decode(&b[..k]).is_err());}
 }

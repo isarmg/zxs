@@ -79,9 +79,9 @@ fn pair(db:&Connection,s:&SharedScope<'_>){
     exec(db,&format!("INSERT INTO web_password VALUES(1,{},1,zeroblob(16),zeroblob(32))",literal(&SETUP.0))).unwrap();
 }
 fn roots(db:&Connection,web:[u8;16]){
-    let share=literal(&octets("b5203c873ae8c37befe82574a4f157c5"));let p=literal(&octets("e9653a5d2d051054c2496eb0a19d3672"));let m=literal(&octets("9b95192b020c378ba058a588d3026df2"));
+    let share=literal(&octets("c94640448309832bfd618d007462ae28"));let p=literal(&octets("f91393b8c5f08af0e12da493a1845556"));let m=literal(&octets("3bca408a4df417ff75ff7300c664ec3c"));
     let file=literal(&[0x33;16]);let admin=literal(&web);let born=literal(&SETUP.0);
-    let pub_sha=literal(&octets("8e05fe3bd5b8a31a79bc5f6c230d827dc5da29445e7da45a836f03b31dd0a4ce"));let mode_sha=literal(&octets("0852efed9978ac8bd4b92a73a1ae897e3486a5a6920a88c7299a2289b63f2b66"));
+    let pub_sha=literal(&octets("aa3477e46aa7d2af94f4383e7a9b423a0cccd0574e9821e9e8f0503b9588bd30"));let mode_sha=literal(&octets("9609b5a84ecd7ff7bb37b513ba03ea93bb272753e5d283aba547b6eaadaafd32"));
     db.fixed(c"BEGIN IMMEDIATE").unwrap();
     exec(db,&format!("INSERT INTO root_share VALUES({share},{p},{born},{file},X'446f6373')")).unwrap();
     exec(db,&format!("INSERT INTO operation VALUES({p},3,{admin},{pub_sha},1)")).unwrap();
@@ -89,8 +89,8 @@ fn roots(db:&Connection,web:[u8;16]){
     exec(db,&format!("INSERT INTO operation VALUES({m},4,{admin},{mode_sha},1)")).unwrap();
     db.fixed(c"COMMIT").unwrap();
 }
-const PLAN_BYTES:&str="5a58532d525553542d534d422d49310011111111111111111111111111111111121212121212121212121212121212121616161616161616161616161616161617171717171717171717171717171717131313131313131313131313131313130b666978747572652e6c616e010418c00002110133333333333333333333333333333333020004446f63730006e59b9ee694b6";
-const BOUND:&str="e06d3be19b79dbbc03395e297938370a1aa8f66f9c680b92db721823fb1e8e00";
+const PLAN_BYTES:&str="5a58532d525553542d534d422d49320011111111111111111111111111111111121212121212121212121212121212121616161616161616161616161616161617171717171717171717171717171717131313131313131313131313131313130b666978747572652e6c616e0133333333333333333333333333333333020004446f63730006e59b9ee694b6";
+const BOUND:&str="17e08c7c898fdfeef4da8c07f05191002ea4720086719cfed85a707b7c21b764";
 const SID:&str="010500000000000515000000292929292929292929292929e8030000";
 #[test]
 fn only_the_original_rust_record_and_its_plan_are_current(){
@@ -105,15 +105,12 @@ fn only_the_original_rust_record_and_its_plan_are_current(){
     let reset=scope.reset_request(RESET_APPROVAL,first,next).unwrap();
     let rust=RustPlan::parse(&bytes).unwrap();
     assert_eq!(rust.hostname(),"fixture.lan");
-    let addr=|v:&str|v.parse::<std::net::SocketAddr>().unwrap();
-    let local=addr("192.0.2.17:445");
-    assert!(rust.listener_is(0,local));
-    assert!(!rust.listener_is(1,local));
-    assert!(rust.admits_addresses(local,addr("192.0.2.51:53119")));
-    assert!(!rust.admits_addresses(local,addr("192.0.3.51:53119")));
-    assert!(!rust.admits_addresses(local,addr("[::ffff:192.0.2.51]:53119")));
-    assert!(!rust.admits_addresses(local,addr("192.0.2.0:53119")));
-    assert!(!rust.admits_addresses(addr("192.0.2.18:445"),addr("192.0.2.51:53119")));
+    let mut old_layout=bytes.clone();
+    let after_host=97+usize::from(old_layout[96]);
+    old_layout.splice(after_host..after_host,[1,4,24,192,0,2,17]);
+    assert!(RustPlan::parse(&old_layout).is_err()); // never interpret endpoint fields in I2
+    old_layout[14]=b'1';
+    assert!(RustPlan::parse(&old_layout).is_err()); // an original I1 plan has no fallback
     let mut old_transport=bytes.clone();old_transport[..16].copy_from_slice(b"ZXS-SMB-FIRST-1\0");
     assert!(RustPlan::parse(&old_transport).is_err());
     assert!(RustPlan::parse(&bytes[..bytes.len()-1]).is_err());
@@ -197,8 +194,8 @@ fn management_navigation_is_current_parent_scoped_and_byte_ordered(){
     db.fixed(c"COMMIT").unwrap();
     roots(&db,keys.web);
 
-    let share=ShareId(octets("b5203c873ae8c37befe82574a4f157c5").try_into().unwrap());
-    let mode:[u8;16]=octets("9b95192b020c378ba058a588d3026df2").try_into().unwrap();
+    let share=ShareId(octets("c94640448309832bfd618d007462ae28").try_into().unwrap());
+    let mode:[u8;16]=octets("3bca408a4df417ff75ff7300c664ec3c").try_into().unwrap();
     let volume=VolumeId([0x33;16]);let root=[0;16];
     let id=|kind:u8,n:u8|{let mut out=[0x81;16];out[5]=n;out[15]=kind;out};
     let write=|x:String|exec(&db,&x).unwrap_or_else(|e|panic!("{x}: {e}"));

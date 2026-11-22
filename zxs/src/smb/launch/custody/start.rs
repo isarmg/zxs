@@ -3,12 +3,12 @@
 //! role backend. Only the application retains this private scope and both
 //! original children during life and drain.
 use super::{Fault,Parent,Role,VerifiedPreflight,birth::Ready,descriptor,foreground,
-    listeners::Listeners,preflight::nonce,view::{self,Kind,Source,View}};
+    listeners::Listener,preflight::nonce,view::{self,Kind,Source,View}};
 use crate::smb::launch::{
     cohort::{self,PairOffer},envelope::{self,ENV_MAX},pair_gate::{GateOwner,GateStamp,ReadLoans},
     site::{SiteLease,Terminal,media::Media},socket_facts::{self,Integer},transport::seal_public,web,
 };
-use std::{io,net::{Ipv4Addr,SocketAddr,TcpListener},os::fd::{AsFd,AsRawFd,BorrowedFd},time::{Duration,Instant}};
+use std::{io,net::{Ipv4Addr,SocketAddr,TcpListener},os::fd::{AsFd,AsRawFd},time::{Duration,Instant}};
 
 fn no()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"the original ZXS start or drain could not be confirmed")}
 
@@ -124,24 +124,20 @@ pub(in crate::smb::launch) fn launch_internal_smb<'m,'v,'s,'p>(scope:&mut Author
     let view=View::prepare(parent,sources,Role::Server).map_err(|_|no())?;
     let vault=site.vault(selected)?; // no host-root verifier read
     scope.live()?;view.require_prepared(parent).map_err(|_|no())?;
-    let endpoints=selected.plan().endpoints();
-    let listeners=Listeners::bind(endpoints,||scope.live().map_err(|_|Fault::Handoff)).map_err(|_|no())?;
-    let cookies=listeners.cookies();
+    let listener=Listener::bind(||scope.live().map_err(|_|Fault::Handoff)).map_err(|_|no())?;
     let (vault_fd,witness)=vault.offer()?;
     let who=site.subject();let subject=(who.uid,who.gid);
     let epoch=&selected.qualified_for(site)?.epoch;
     let (header,public)=envelope::send::encode(envelope::send::Scope{
         nonce:nonce().map_err(|_|no())?,release:site.image_sha(),subject,system:location.entity,
-        path:path.to_str().ok_or_else(no)?,plan:site.plan_bytes(),cookies:&cookies,vault:witness,epoch,pair:scope.pair,
+        path:path.to_str().ok_or_else(no)?,plan:site.plan_bytes(),listener_cookie:listener.cookie(),vault:witness,epoch,pair:scope.pair,
     }).map_err(|_|no())?;
     let sealed=seal_public(&public,ENV_MAX).map_err(|_|no())?;
-    let mut fds:Vec<BorrowedFd<'_>>=vec![vault_fd];
-    fds.extend(listeners.rights());
-    fds.push(scope.loans.smb.as_fd());
+    let fds=[vault_fd,listener.descriptor(),scope.loans.smb.as_fd()];
     let before=||->io::Result<()>{
         scope.live()?;vault.require()?;
         view.require_sources().map_err(|_|no())?;
-        listeners.require(endpoints).map_err(|_|no())?;
+        listener.require().map_err(|_|no())?;
         foreground::require().map_err(|_|no())
     };
     before()?;

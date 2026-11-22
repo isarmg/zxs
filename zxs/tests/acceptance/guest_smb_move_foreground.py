@@ -22,7 +22,6 @@ GID = 23100
 LOGIN = "movecheck"
 HOST = "zxs-lab.test"
 ADDRESS = "192.0.2.1"
-SCOPE = ADDRESS + "/30"
 ENV = {"LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/bin", "HOME": "/nonexistent"}
 LOCK_BYTES = 128 * 1024 * 1024
 MAX_TTY = 2 * 1024 * 1024
@@ -203,12 +202,12 @@ def issue(ids, request, providers, subject, init, password):
             "--init-sha256", init_sha, "--approval", ids["setup_approval"], "--zxs-sha256", zxs,
             "--helper-sha256", helper, "--gcrypt-sha256", providers["gcrypt"],
             "--gpgerror-sha256", providers["gpgerror"], "--host", HOST, "--login", LOGIN,
-            "--recycle-name", "Recycle", "--listen", SCOPE, "--share", str(selected("source")), "Source", "rw",
+            "--recycle-name", "Recycle", "--share", str(selected("source")), "Source", "rw",
             "--share", str(selected("target")), "Target", "rw")
     mounted = [str(selected(role)) for role in ROLES.values()]
     scope = (pool, operation, init_sha, ids["actor"], ids["instance"], ids["bind"], ids["setup"],
              ids["setup_approval"], zxs, helper, *providers.values(), *mounted, HOST, LOGIN,
-             f"SMB {ADDRESS}:445 / 子网前缀 30", '目录 "Source"', '目录 "Target"')
+             "SMB 0.0.0.0:445（固定 IPv4，尚未监听）", '目录 "Source"', '目录 "Target"')
     with foreground(argv, lock_budget=True) as tty:
         tty.approve("ISSUE-FRESH-ACCOUNT", scope)
         for line in PASSWORD:
@@ -269,7 +268,7 @@ def run_server(ids, init, server_sha):
     pool, operation, _ = init
     expected = (f"Pool {pool} / INIT {operation} / Setup {ids['setup']} / Instance {ids['instance']} / Bind {ids['bind']}。",
                 f'原 SYSTEM "{selected("system")}"', f"存储 UID/GID {UID}/{GID}",
-                f'"{SERVER}" SHA-256 {server_sha}', HOST, LOGIN, f"{ADDRESS}:445",
+                f'"{SERVER}" SHA-256 {server_sha}', HOST, LOGIN, "SMB 0.0.0.0:445（固定 IPv4，不限制客户端来源）。",
                 '目录 "Source"', '目录 "Target"', '专用回收目录 "Recycle"')
     with foreground((SERVER,)) as tty:
         tty.approve("RUN-ZXS", expected)

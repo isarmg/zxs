@@ -604,7 +604,7 @@ int zxs_storage_capacity_full(int fd,uint64_t *total,uint64_t *available,uint64_
 
 enum {
     SOCKET_DOMAIN=1, SOCKET_TYPE=2, SOCKET_PROTOCOL=3, SOCKET_ACCEPTING=4,
-    SOCKET_REUSE_PORT=5, SOCKET_PASS_CREDENTIALS=6, SOCKET_PASS_PIDFD=7, SOCKET_V6_ONLY=8
+    SOCKET_REUSE_PORT=5, SOCKET_PASS_CREDENTIALS=6, SOCKET_PASS_PIDFD=7
 };
 struct socket_integer_fact { int level, option; };
 static const struct socket_integer_fact socket_integer_facts[] = {
@@ -615,7 +615,6 @@ static const struct socket_integer_fact socket_integer_facts[] = {
     [SOCKET_REUSE_PORT] = {SOL_SOCKET, SO_REUSEPORT},
     [SOCKET_PASS_CREDENTIALS] = {SOL_SOCKET, SO_PASSCRED},
     [SOCKET_PASS_PIDFD] = {SOL_SOCKET, SO_PASSPIDFD},
-    [SOCKET_V6_ONLY] = {IPPROTO_IPV6, IPV6_V6ONLY},
 };
 static int socket_value(int fd, int level, int option, void *out, socklen_t width) {
     socklen_t bytes = width;

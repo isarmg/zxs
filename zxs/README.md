@@ -1,6 +1,6 @@
 # ZXS
 
-ZXS 是 Linux 文件容器存储服务。用 [Web 管理](docs/web-management.md)设置首装选定目录的访问模式、编辑和筛选文件标签、查看版本和手动提交；普通文件读写走内置 Rust SMB 3.1.1 的 `\\服务器\ZXS`。两个入口共用[一个账户](docs/first-account-v1.md)，分别认证、授权。管理界面仅监听 HTTP 0.0.0.0:8443。
+ZXS 是 Linux 文件容器存储服务。用 [Web 管理](docs/web-management.md)设置首装选定目录的访问模式、编辑和筛选文件标签、查看版本和手动提交；普通文件读写走内置 Rust SMB 3.1.1 的 `\\服务器\ZXS`。两个入口共用[一个账户](docs/first-account-v1.md)，分别认证、授权。Web 仅监听 HTTP `0.0.0.0:8443`；SMB 监听 IPv4 `0.0.0.0:445`，不按客户端来源限制。
 
 ## 新安装的默认目录
 

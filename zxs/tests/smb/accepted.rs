@@ -103,28 +103,24 @@ fn incompatible_signing_list_is_answered_in_full_without_exposing_a_negotiated_p
 }
 
 #[test]
-fn shape_checks_both_ends_and_leaves_exact_interface_scope_for_policy() {
-    use std::net::SocketAddrV6;
-    let local="192.0.2.50:445".parse::<SocketAddr>().unwrap();
-    let peer="192.0.2.42:51013".parse::<SocketAddr>().unwrap();
-    let local6="[2001:db8:a::2]:445".parse::<SocketAddr>().unwrap();
-    let peer6="[2001:db8:a::3]:51013".parse::<SocketAddr>().unwrap();
-    assert!(direct_pair(local,peer));
-    assert!(direct_pair(local6,peer6));
-    let scoped_local=SocketAddr::V6(SocketAddrV6::new("fe80::1".parse().unwrap(),445,0,9));
-    let scoped_peer=SocketAddr::V6(SocketAddrV6::new("fe80::2".parse().unwrap(),51013,0,9));
-    assert!(direct_pair(scoped_local,scoped_peer)); // shape only, not a policy match
-    assert!(!direct_pair(local,peer6));
-    assert!(!direct_pair(local6,peer));
-    for (l,r) in [
-        ("0.0.0.0:445","192.0.2.42:51013"), ("[::]:445","[2001:db8:a::3]:51013"),
-        ("192.0.2.50:139","192.0.2.42:51013"), ("224.0.0.1:445","192.0.2.42:51013"),
-        ("[ff02::1]:445","[2001:db8:a::3]:51013"), ("255.255.255.255:445","192.0.2.42:51013"),
-        ("[::ffff:0.0.0.0]:445","[::ffff:192.0.2.42]:51013"), ("[::ffff:224.0.0.1]:445","[::ffff:192.0.2.42]:51013"),
+fn direct_ipv4_evidence_does_not_select_local_ips_or_client_subnets() {
+    let addr=|s:&str|s.parse::<SocketAddr>().unwrap();
+    for (local,peer) in [
+        ("192.0.2.50:445","192.0.2.42:51013"),
+        ("198.51.100.70:445","203.0.113.5:51013"),
+        ("127.0.0.1:445","127.0.0.1:51013"),
+    ] {
+        assert!(direct_pair(addr(local),addr(peer)));
+    }
+    for (local,peer) in [
+        ("0.0.0.0:445","192.0.2.42:51013"), ("192.0.2.50:8443","192.0.2.42:51013"),
+        ("224.0.0.1:445","192.0.2.42:51013"), ("255.255.255.255:445","192.0.2.42:51013"),
         ("192.0.2.50:445","192.0.2.42:0"), ("192.0.2.50:445","0.0.0.0:51013"),
         ("192.0.2.50:445","224.0.0.1:51013"), ("192.0.2.50:445","255.255.255.255:51013"),
-        ("[2001:db8:a::2]:445","[ff02::1]:51013"), ("[2001:db8:a::2]:445","[::ffff:0.0.0.0]:51013"),
+        ("192.0.2.50:445","[::ffff:192.0.2.42]:51013"),
+        ("[2001:db8:a::2]:445","[2001:db8:a::3]:51013"),
+        ("[::]:445","[2001:db8:a::3]:51013"),
     ] {
-        assert!(!direct_pair(l.parse().unwrap(),r.parse().unwrap()));
+        assert!(!direct_pair(addr(local),addr(peer)));
     }
 }

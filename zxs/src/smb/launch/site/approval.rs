@@ -1,13 +1,13 @@
 //! Nonsecret bindings in the ZXS-owned site record. Parsing bytes, even with
 //! a valid format, is not authorization to attach the site, storage or image.
 use super::denied;
+use crate::system::reader::smb::runtime::{PLAN_MAGIC,PLAN_MAX_BYTES};
 use std::{io,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
 
 const MAGIC: &[u8;16] = b"ZXS-RUST-SITE-1\0";
-const PLAN_MAGIC: &[u8;16] = b"ZXS-RUST-SMB-I1\0";
 const MAX_PATH:usize=4095;
 pub(super) const MAX_RECORD:usize=MAGIC.len()+16*6+4*2+32*2+2*(2+MAX_PATH);
-pub(super) const MAX_PLAN:usize=17_885;
+pub(super) const MAX_PLAN:usize=PLAN_MAX_BYTES;
 type Id=[u8;16];
 
 #[derive(Clone,Copy,Eq,PartialEq)]
