@@ -1,0 +1,154 @@
+name: Linux disposable guest terminal preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/linux-guest-terminal-preflight.yml
+
+permissions: {}
+
+jobs:
+  guest:
+    if: github.repository == 'isarmg/zxs' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Verify the signed guest and prepare local QEMU tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(id -u)" -ne 0
+          work=$(mktemp -d "$RUNNER_TEMP/terminal-guest.XXXXXXXX")
+          printf 'TERMINAL_GUEST_WORK=%s\n' "$work" >> "$GITHUB_ENV"
+          cd "$work"
+
+          image=ubuntu-26.04-minimal-cloudimg-amd64.img
+          release=https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20261118
+          fetch() {
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --connect-timeout 15 --max-time 240 --retry 2 --max-filesize 600000000 "$release/$1" -o "$1"
+          }
+          fetch SHA256SUMS
+          fetch SHA256SUMS.gpg
+          mkdir gnupg
+          GNUPGHOME="$work/gnupg" gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg \
+            --status-fd 1 SHA256SUMS.gpg SHA256SUMS > image.signature
+          grep -qF '[GNUPG:] VALIDSIG D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81 ' image.signature
+          pin=f6c630c04d4fad012f2c4ed3a21a2b0c0f814f13f6873568da4c31d8df65c12e
+          grep -qxF "$pin *$image" SHA256SUMS
+          fetch "$image"
+          printf '%s *%s\n' "$pin" "$image" | sha256sum -c -
+
+          mkdir -p apt/{etc/empty,lists/partial,archives/partial} tools
+          : > apt/status
+          export APT_CONFIG="$work/apt/config"
+          cat > "$APT_CONFIG" <<EOF
+          Dir::Etc "$work/apt/etc";
+          Dir::Etc::main "/dev/null";
+          Dir::Etc::parts "empty";
+          Dir::Etc::sourceparts "empty";
+          Dir::Etc::sourcelist "sources.list";
+          Dir::State "$work/apt";
+          Dir::State::status "$work/apt/status";
+          Dir::Cache "$work/apt";
+          Dir::Log "$work/apt";
+          Dir::Cache::pkgcache "";
+          Dir::Cache::srcpkgcache "";
+          Acquire::Languages "none";
+          Acquire::Retries "2";
+          APT::Get::Always-Include-Phased-Updates "true";
+          APT::Update::Error-Mode "any";
+          EOF
+          snapshot=https://snapshot.ubuntu.com/ubuntu/20261118T120000Z
+          archive_key=/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+          for suite in noble noble-updates noble-security; do
+            printf 'deb [arch=amd64 signed-by=%s] %s %s main universe\n' "$archive_key" "$snapshot" "$suite"
+          done > apt/etc/sources.list
+          /usr/bin/apt-get update
+          (
+            cd apt/lists
+            cat <<'PINS' | sha256sum -c -
+          cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble_InRelease
+          a4dfe9c58d77db89e8b45240d1cc14a3e6dd9159bc29395aebfe6e893594dccb  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble-updates_InRelease
+          65a6f9c5cf5b8d887e45c2a638b19bedd86e9d3630afee8b3a7b46ea5803dc22  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble-security_InRelease
+          PINS
+          )
+          /usr/bin/apt-get --assume-yes --download-only --no-install-recommends install \
+            qemu-system-x86 ovmf genisoimage
+          for package in apt/archives/*.deb; do
+            dpkg-deb --extract "$package" tools
+          done
+          sha256sum apt/archives/*.deb
+
+      - name: Observe a foreground PTY, its audit flags, and inherited MEMLOCK
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$TERMINAL_GUEST_WORK"
+          tools="$PWD/tools"
+          libs="$tools/usr/lib/x86_64-linux-gnu:$tools/lib/x86_64-linux-gnu"
+          loader="$tools/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+          tool_env=(env -i LANG=C PATH=/usr/bin:/bin HOME="$PWD" TMPDIR="$PWD"
+            QEMU_MODULE_DIR="$tools/usr/lib/x86_64-linux-gnu/qemu"
+            "$loader" --inhibit-cache --library-path "$libs")
+          for exe in usr/bin/genisoimage usr/bin/qemu-system-x86_64; do
+            "${tool_env[@]}" --list "$tools/$exe" |
+              awk -v base="$tools/" '$2 == "=>" && index($3, base) != 1 {exit 1}'
+          done
+          mkdir seed source
+          git_source=(env -i LANG=C PATH=/usr/bin:/bin HOME="$PWD" TMPDIR="$PWD"
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+            /usr/bin/git -C source -c core.hooksPath=/dev/null)
+          "${git_source[@]}" init -q
+          "${git_source[@]}" fetch --no-tags --depth=1 https://github.com/isarmg/zxs.git "$GITHUB_SHA"
+          test "$("${git_source[@]}" rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          "${git_source[@]}" cat-file blob "$GITHUB_SHA:zxs/test/acceptance/guest_terminal_preflight.py" > observation.py
+          sha256sum observation.py
+          printf '%s\n' 'instance-id: terminal-observation' > seed/meta-data
+          cat > seed/user-data <<'CLOUD'
+          #cloud-config
+          cloud_init_modules: [write_files]
+          cloud_config_modules: [runcmd]
+          cloud_final_modules: [scripts_user, power_state_change]
+          write_files:
+            - path: /run/guest-terminal-observation.py
+              permissions: '0600'
+              encoding: b64
+          CLOUD
+          printf '    content: %s\n' "$(base64 -w0 observation.py)" >> seed/user-data
+          cat >> seed/user-data <<'CLOUD'
+          runcmd:
+            - - /bin/sh
+              - -ec
+              - |
+                exec > /dev/ttyS0 2>&1
+                /usr/bin/python3 -I /run/guest-terminal-observation.py
+          power_state:
+            mode: poweroff
+            timeout: 60
+            condition: true
+          CLOUD
+          "${tool_env[@]}" "$tools/usr/bin/genisoimage" -quiet -volid cidata -joliet -rock -output seed.iso seed
+          firmware="$tools/usr/share/OVMF"
+          cp "$firmware/OVMF_VARS_4M.fd" vars.fd
+          boot_status=0
+          timeout -k 15s 12m "${tool_env[@]}" "$tools/usr/bin/qemu-system-x86_64" \
+            -no-user-config -nodefaults -machine q35 -accel tcg,thread=multi -smp 2 -m 2048 \
+            -nic none -display none -monitor none -serial file:serial.log -no-reboot \
+            -L "$tools/usr/share/qemu" \
+            -drive if=pflash,format=raw,readonly=on,file="$firmware/OVMF_CODE_4M.fd" \
+            -drive if=pflash,format=raw,file=vars.fd \
+            -drive if=virtio,format=qcow2,file=ubuntu-26.04-minimal-cloudimg-amd64.img \
+            -drive if=virtio,format=raw,readonly=on,file=seed.iso || boot_status=$?
+          test -f serial.log
+          tr -d '\r' < serial.log | grep -a '^TERMINAL-PREFLIGHT ' > observations.log
+          cat observations.log
+          test "$boot_status" -eq 0
+          for kind in scope pty audit memlock; do
+            test "$(grep -c "^TERMINAL-PREFLIGHT $kind " observations.log)" -eq 1
+          done
+          test "$(grep -cFx 'TERMINAL-PREFLIGHT observations complete; no product run' observations.log)" -eq 1
