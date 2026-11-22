@@ -80,3 +80,23 @@ Reproduce in a clean private worktree using the same complete inputs.
 This command builds only the browser component. The native recipe above is
 unchanged. When embedding is enabled, match the receipt to the reviewed build
 inputs, check the four asset hashes and embed only those four files in the ELF.
+
+### Check the paired native source
+
+`private-browser-ui` is off by default. To check the opt-in source with the
+same reviewed browser stage and native toolchain above, keep the private
+stage under your exclusive control throughout the check:
+
+```sh
+ZXS_BROWSER_ASSETS=/absolute/path/to/target/browser-assets \
+ZXS_BROWSER_ASSET_PIN='independently-reviewed-stage-sha256' \
+cargo check --lib --locked --offline --features private-browser-ui
+```
+
+The one stage pin covers `boot.js`, `folder.css`, `zxs_browser.js`,
+`zxs_browser_bg.wasm` and `provenance.json`, in that order. Hash the ASCII
+domain `ZXS-BROWSER-ASSET-STAGE-1` plus one NUL, then each file's one-byte
+name length, name bytes, eight-byte big-endian length and 32 raw SHA-256
+bytes. Compare the stage pin against independently reviewed inputs, not a
+value supplied by the stage itself. Only the four fixed resources go into the
+ELF. The native release recipe and independent whole-ELF approval still apply.

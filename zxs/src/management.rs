@@ -7,6 +7,8 @@ mod transport;
 mod access;
 mod manual;
 mod directory;
+#[cfg(feature="private-browser-ui")]
+mod browser;
 pub(crate) use access::{MAX_HTTPS_ORIGIN,WebAccess};
 use access::Audience;
 
@@ -43,20 +45,40 @@ fn session_live_at(born:Instant,last:Instant,now:Instant)->bool{
 struct App<'s>{source:&'s InitialReader,sessions:BTreeMap<Token,Session<'s>>,attempts:VecDeque<Instant>}
 struct Request{method:String,target:String,audience:Audience,origin:Option<String>,content_type:String,
     cookie:Option<Token>,body:transport::PrivateBytes}
-struct Reply{status:&'static str,ty:&'static str,body:Cow<'static,str>,location:Option<&'static str>,set_cookie:Option<String>}
-impl Reply{
-    fn text(status:&'static str,body:&'static str)->Self{
-        Self{status,ty:"text/plain; charset=utf-8",body:Cow::Borrowed(body),location:None,set_cookie:None}
-    }
-    fn html(status:&'static str,body:String)->Self{let mut r=Self::text(status,"");r.ty="text/html; charset=utf-8";r.body=Cow::Owned(body);r}
-    fn redirect(to:&'static str)->Self{let mut r=Self::text("303 See Other","");r.location=Some(to);r}
-    fn write(self,mut out:impl Write)->io::Result<()>{
-        write!(out,"HTTP/1.1 {}\r\nConnection: close\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'\r\n",self.status,self.ty,self.body.len())?;
-        if let Some(v)=self.location{write!(out,"Location: {v}\r\n")?;}
-        if let Some(v)=self.set_cookie{write!(out,"Set-Cookie: {v}\r\n")?;}
-        out.write_all(b"\r\n")?;out.write_all(self.body.as_bytes())?;out.flush()
+impl Request{
+    fn same_origin_if_present(&self)->bool{self.origin.as_deref().is_none_or(|o|o==self.audience.origin)}
+}
+#[derive(Clone,Copy)]
+enum Csp{
+    Native,
+    #[cfg(feature="private-browser-ui")]
+    BrowserOverview,
+}
+impl Csp{
+    fn value(self)->&'static str{
+        match self{
+            Self::Native=>"default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            #[cfg(feature="private-browser-ui")]
+            Self::BrowserOverview=>"default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; worker-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        }
     }
 }
+struct Reply{status:&'static str,ty:&'static str,body:Cow<'static,[u8]>,csp:Csp,location:Option<&'static str>,set_cookie:Option<String>}
+impl Reply{
+    fn content(status:&'static str,ty:&'static str,body:Cow<'static,[u8]>)->Self{
+        Self{status,ty,body,csp:Csp::Native,location:None,set_cookie:None}
+    }
+    fn text(status:&'static str,body:&'static str)->Self{Self::content(status,"text/plain; charset=utf-8",Cow::Borrowed(body.as_bytes()))}
+    fn html(status:&'static str,body:String)->Self{Self::content(status,"text/html; charset=utf-8",Cow::Owned(body.into_bytes()))}
+    fn redirect(to:&'static str)->Self{let mut r=Self::text("303 See Other","");r.location=Some(to);r}
+    fn write(self,mut out:impl Write)->io::Result<()>{
+        write!(out,"HTTP/1.1 {}\r\nConnection: close\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: same-origin\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: {}\r\n",self.status,self.ty,self.body.len(),self.csp.value())?;
+        if let Some(v)=self.location{write!(out,"Location: {v}\r\n")?;}
+        if let Some(v)=self.set_cookie{write!(out,"Set-Cookie: {v}\r\n")?;}
+        out.write_all(b"\r\n")?;out.write_all(&self.body)?;out.flush()
+    }
+}
+const LOGIN_REQUIRED:fn()->Reply=||Reply::text("401 Unauthorized","请先登录。");
 const REJECT:fn()->Reply=||Reply::text("403 Forbidden","请求未获准。");
 const UNAVAILABLE:fn()->Reply=||Reply::text("503 Service Unavailable","当前无法核对管理状态，请稍后重试。");
 const BAD:fn()->Reply=||Reply::text("400 Bad Request","请求格式不正确。");
@@ -77,7 +99,12 @@ impl<'s> App<'s>{
             if !q.body.0.is_empty(){return BAD();}
             if q.target=="/login"{return Reply::html("200 OK",pages::sign_in(false,q.audience.secure));}
             if q.target=="/management.css"{
-                let mut r=Reply::text("200 OK",pages::CSS);r.ty="text/css; charset=utf-8";return r;
+                return Reply::content("200 OK","text/css; charset=utf-8",Cow::Borrowed(pages::CSS.as_bytes()));
+            }
+            #[cfg(feature="private-browser-ui")]
+            {
+                if let Some(reply)=self.browser_asset(&q){return reply;}
+                if let Some(reply)=self.directory_metadata(&q,now){return reply;}
             }
             if let Some(args)=q.target.strip_prefix("/versions/history?file="){return self.manual_history(&q,args,now);}
             if let Some(id)=q.target.strip_prefix("/versions?file="){return self.manual_page(&q,id,now);}
@@ -86,12 +113,26 @@ impl<'s> App<'s>{
             let after=if q.target=="/"{None}else if let Some(s)=q.target.strip_prefix("/?after="){
                 match s.parse::<ShareId>(){Ok(k)=>Some(k),Err(_)=>return BAD()}
             }else{return Reply::text("404 Not Found","没有此管理页面。");};
+            #[cfg(feature="private-browser-ui")]
+            if !q.same_origin_if_present(){return REJECT();}
             let Some(k)=q.cookie.as_ref()else{return Reply::redirect("/login");};
             let Some(s)=self.sessions.get_mut(k)else{return Reply::redirect("/login");};
-            return match s.admin.overview(after){
-                Ok(data)=>match pages::overview(&data,&s.csrf.hex()){Ok(page)=>{s.last=now;Reply::html("200 OK",page)},Err(_)=>UNAVAILABLE()},
+            let prepared=s.admin.overview(after).map(|data|{
+                #[cfg(feature="private-browser-ui")]
+                {browser::overview(&data,&s.csrf.hex())}
+                #[cfg(not(feature="private-browser-ui"))]
+                {pages::overview(&data,&s.csrf.hex()).map(|page|Reply::html("200 OK",page))}
+            });
+            #[cfg(feature="private-browser-ui")]
+            let now={
+                let checked=Instant::now();
+                if !session_live_at(s.born,s.last,checked){self.sessions.remove(k);return Reply::redirect("/login");}
+                checked
+            };
+            return match prepared{
+                Ok(Ok(page))=>{s.last=now;page},
                 Err(e) if e.kind()==io::ErrorKind::PermissionDenied=>{self.sessions.remove(k);Reply::redirect("/login")},
-                Err(_)=>UNAVAILABLE()
+                _=>UNAVAILABLE()
             };
         }
         if q.method=="POST"&&q.target==manual::RECEIPT{return self.manual_receipt(q,now);}

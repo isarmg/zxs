@@ -2,6 +2,10 @@
 // download, system crypto/SQLite fallback, package discovery or CLI tools.
 use std::{env, path::{Path,PathBuf}, process::Command};
 
+#[cfg(feature="private-browser-ui")]
+#[path="build_browser_assets.rs"]
+mod browser_assets;
+
 const ARGON2:&str="vendor/argon2";
 const ARGON2_C:[(&str,&str);6]=[
     ("src/argon2.c","argon2.o"),("src/core.c","core.o"),("src/encoding.c","encoding.o"),
@@ -24,6 +28,8 @@ fn main() {
         assert!(!cross,"set {key} to the target toolchain when cross-compiling");default.into()
     });
     let out=PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    #[cfg(feature="private-browser-ui")]
+    browser_assets::embed(&out).expect("verify and embed the reviewed browser stage");
     let objects=[out.join("linux.o"),out.join("sqlite-read.o"),out.join("sqlite3.o")];
     let cc=tool("CC","cc");
     let compile=|source:&str,object:&Path,flags:&[&str]|{

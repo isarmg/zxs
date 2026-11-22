@@ -44,7 +44,7 @@ impl Sha256 {
     }
     pub(crate) fn update(&mut self, mut input:&[u8]) -> std::io::Result<()> {
         self.bytes=self.bytes.checked_add(input.len() as u64).filter(|b|*b<=u64::MAX/8)
-            .ok_or_else(||crate::fs::invalid("material exceeds the SHA-256 length bound"))?;
+            .ok_or_else(||std::io::Error::new(std::io::ErrorKind::InvalidInput,"material exceeds the SHA-256 length bound"))?;
         if self.used != 0 {
             let n=(64-self.used).min(input.len());
             self.block[self.used..self.used+n].copy_from_slice(&input[..n]);

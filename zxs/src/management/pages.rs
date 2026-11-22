@@ -206,9 +206,10 @@ fn an_unsettled_parent_never_becomes_an_old_path_or_a_submit_link(){
     let page=manual_index(&[PickerItem::ParentPending(blocked),PickerItem::Named(Item{
         file:other,name:"Other.txt".into(),volume:VolumeId([0x42;16]),
     })],None);
-    assert!(page.body.contains(&format!("<code>{blocked}</code>"))&&page.body.contains("所属目录改名尚未确认"));
-    assert!(!page.body.contains(&format!("?file={blocked}")));
-    assert!(page.body.contains(&format!("/versions?file={other}"))&&page.body.contains("Other.txt"));
+    let body=std::str::from_utf8(&page.body).unwrap();
+    assert!(body.contains(&format!("<code>{blocked}</code>"))&&body.contains("所属目录改名尚未确认"));
+    assert!(!body.contains(&format!("?file={blocked}")));
+    assert!(body.contains(&format!("/versions?file={other}"))&&body.contains("Other.txt"));
 }
 
 pub(super) fn version_history(history:&Timeline)->Reply{
@@ -253,7 +254,8 @@ fn pending_parent_history_displays_only_original_identity_versions_and_read_navi
     let file=FileId([0x41;16]);let version=VersionId([0x42;16]);let node=NodeId([0x43;16]);
     let history=Timeline{file,place:TimelinePlace::ParentPending,next:Some(1),
         rows:vec![Version{order:2,node,version,parent:Some(NodeId([0x44;16])),revision:3,length:7}]};
-    let body=version_history(&history).body;
+    let page=version_history(&history);
+    let body=std::str::from_utf8(&page.body).unwrap();
     assert!(body.contains(&format!("<code>{file}</code>"))&&body.contains("所属目录改名尚未确认"));
     assert!(body.contains(&format!("<code>{version}</code>"))&&body.contains(&format!("<code>{node}</code>")));
     assert!(body.contains(&format!("/versions/history?file={file}&amp;before=1")));

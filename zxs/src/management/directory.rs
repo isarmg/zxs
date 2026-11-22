@@ -1,5 +1,5 @@
 //! Wire adapter for the same authenticated, metadata-only directory read.
-use super::{App,BAD,REJECT,Reply,Request,Session,UNAVAILABLE,session_live_at};
+use super::{App,BAD,LOGIN_REQUIRED,REJECT,Reply,Request,Session,UNAVAILABLE,session_live_at};
 use crate::{DirectoryId,OperationId,identity::ShareId,system::reader::account::navigation::{Cursor,Directory,Entry,Page}};
 use std::{borrow::Cow,collections::VecDeque,fmt::Write as _,io,time::Instant};
 
@@ -69,10 +69,7 @@ fn metadata(page:&Page<'_>,next:Option<Handle>)->io::Result<Reply>{
     if let Some(id)=next{write!(out,"\"{}\"",id.0).unwrap();}else{out.push_str("null");}
     out.push('}');
     if out.len()>MAX_JSON{return Err(io::Error::other("directory metadata exceeds its response bound"));}
-    let mut reply=Reply::text("200 OK","");
-    reply.ty="application/json; charset=utf-8";
-    reply.body=Cow::Owned(out);
-    Ok(reply)
+    Ok(Reply::content("200 OK","application/json; charset=utf-8",Cow::Owned(out.into_bytes())))
 }
 fn live_reply<T>(born:Instant,last:Instant,checked:Instant,prepared:io::Result<T>)->io::Result<T>{
     if session_live_at(born,last,checked){prepared}else{Err(io::ErrorKind::PermissionDenied.into())}
@@ -94,22 +91,20 @@ fn page(s:&mut Session<'_>,query:Query)->io::Result<Reply>{
     s.last=checked;
     Ok(reply)
 }
-fn login_required()->Reply{Reply::text("401 Unauthorized","请先登录。")}
 impl App<'_>{
-    /// The UI composition selects this route; the stock dispatcher has no entry.
     pub(super) fn directory_metadata(&mut self,q:&Request,now:Instant)->Option<Reply>{
         let parts=q.target.strip_prefix(PREFIX)?;
         if q.method!="GET"||!q.body.0.is_empty(){return Some(BAD());}
         let Some(query)=Query::parse(parts)else{return Some(BAD());};
-        if q.origin.as_deref().is_some_and(|origin|origin!=q.audience.origin){return Some(REJECT());}
-        let Some(key)=q.cookie.as_ref()else{return Some(login_required());};
+        if !q.same_origin_if_present(){return Some(REJECT());}
+        let Some(key)=q.cookie.as_ref()else{return Some(LOGIN_REQUIRED());};
         if self.sessions.get(key).is_some_and(|s|s.audience!=q.audience){return Some(REJECT());}
         self.expire(now);
-        let Some(s)=self.sessions.get_mut(key)else{return Some(login_required());};
+        let Some(s)=self.sessions.get_mut(key)else{return Some(LOGIN_REQUIRED());};
         Some(match page(s,query){
             Ok(reply)=>reply,
             Err(e)=>match e.kind(){
-                io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);login_required()},
+                io::ErrorKind::PermissionDenied=>{self.sessions.remove(key);LOGIN_REQUIRED()},
                 io::ErrorKind::NotFound=>Reply::text("404 Not Found","没有此目录。"),
                 io::ErrorKind::WouldBlock=>Reply::text("409 Conflict","请重新打开目录。"),
                 _=>UNAVAILABLE(),
@@ -159,9 +154,9 @@ mod tests{
             "\"entries\":[{\"kind\":\"directory\",\"id\":\"13131313131313131313131313131313\",\"name\":\"第一层\"},",
             "{\"kind\":\"file\",\"id\":\"14141414141414141414141414141414\",\"name\":\"页 \\\"一\\\"\\u000a\"}],",
             "\"next\":\"15151515151515151515151515151515\"}"));
-        assert!(metadata(&p,None).unwrap().body.ends_with("\"next\":null}"));
+        assert!(metadata(&p,None).unwrap().body.ends_with(b"\"next\":null}"));
         let empty=Page{ancestors:Vec::new(),entries:Vec::new(),next:None};
-        assert_eq!(metadata(&empty,None).unwrap().body,"{\"ancestors\":[],\"entries\":[],\"next\":null}");
+        assert_eq!(&*metadata(&empty,None).unwrap().body,b"{\"ancestors\":[],\"entries\":[],\"next\":null}");
     }
 
     #[test]
