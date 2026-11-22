@@ -7,7 +7,7 @@ import stat
 import pyfuse3
 import trio
 
-from .linux_mount import mount_source
+from .linux_mount import READ_ONLY_MOUNT_FLAGS, mount_source
 from .snapshot_view import ROOT
 
 
@@ -110,7 +110,7 @@ def serve(view, point, last_check, *, token, accepted):
     if pyfuse3.ROOT_INODE != ROOT:
         raise RuntimeError("unsupported FUSE root inode")
     ops = Operations(view)
-    options = {"ro", "nodev", "nosuid", "noexec", "default_permissions", "fsname=" + mount_source(token)}
+    options = {*READ_ONLY_MOUNT_FLAGS, "default_permissions", "fsname=" + mount_source(token)}
     last_check()
     pyfuse3.init(ops, str(point), options)
     try:

@@ -178,8 +178,18 @@ class DesktopMount(unittest.TestCase):
 
     def test_mountinfo_requires_one_exact_escaped_point_old_parent_tag_type_and_read_only_flags(self):
         token, path = "9"*32, Path("/private/view here")
-        line = b"73 5 0:8 / /private/view\\040here ro,nosuid,nodev - fuse.zip-workspace zip-workspace-ro-"+token.encode()+b" ro\n"
+        flags = b"ro,nosuid,nodev,noexec"
+        def row(per_mount, superblock=b"ro"):
+            return (b"73 5 0:8 / /private/view\\040here " + per_mount + b" - fuse.zip-workspace zip-workspace-ro-"
+                    + token.encode() + b" " + superblock + b"\n")
+        line = row(flags)
         self.assertEqual(linux_mount.mount_receipt(line,path,token,b"5"),b"73")
+        self.assertEqual(linux_mount.mount_receipt(row(b"nodev,noexec,ro,nosuid,relatime", b"rw"),path,token,b"5"),b"73")
+        for missing in flags.split(b","):
+            with self.subTest(missing=missing):
+                actual = b",".join(flag for flag in flags.split(b",") if flag != missing)
+                self.assertIsNone(linux_mount.mount_receipt(row(actual,flags),path,token,b"5"))
+        self.assertIsNone(linux_mount.mount_receipt(row(flags+b",rw"),path,token,b"5"))
         for wrong in (line+line, line.replace(b"73 5 ",b"73 6 "), line.replace(b"ro,nosuid",b"rw,nosuid"),
                       line.replace(b"fuse.zip-workspace",b"ext4"), line.replace(token.encode(),b"7"*32),
                       line.replace(b"view\\040here",b"view"), line.replace(b"73 5 ",b"5 5 ")):
@@ -188,7 +198,7 @@ class DesktopMount(unittest.TestCase):
     def test_observation_refuses_reused_id_stacked_point_moved_label_or_incomplete_table(self):
         token, path = "9"*32, Path("/private/view here")
         root = b"5 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
-        original = (b"73 5 0:8 / /private/view\\040here ro,nosuid,nodev - fuse.zip-workspace "
+        original = (b"73 5 0:8 / /private/view\\040here ro,nosuid,nodev,noexec - fuse.zip-workspace "
                     + ("zip-workspace-ro-"+token).encode()+b" ro\n")
         def observe(rows): return action.mount_presence(rows, path, token, b"5", b"73")
         self.assertEqual(observe(root), "absent")
@@ -197,6 +207,7 @@ class DesktopMount(unittest.TestCase):
                         original.replace(b"view\\040here", b"elsewhere"),
                         original.replace(b"zip-workspace-ro-", b"other-"),
                         original.replace(b"73 5 ", b"73 6 "),
+                        original.replace(b",noexec ", b" "),
                         b"74 5 0:8 / /private/view\\040here rw - tmpfs other rw\n",
                         b"73 5 0:8 / /elsewhere rw - tmpfs other rw\n"):
             self.assertEqual(observe(root+altered), "unknown")
@@ -216,7 +227,8 @@ class DesktopMount(unittest.TestCase):
         self.assertIn("未据此认定已经卸载",p.status())
         self.assertTrue(p.can_check_exit)
         table = b"5 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
-        original = table + (identifier + b" " + parent + b" 0:8 / /view\\040here ro - fuse.zip-workspace "
+        original = table + (identifier + b" " + parent
+                            + b" 0:8 / /view\\040here ro,nosuid,nodev,noexec - fuse.zip-workspace "
                             + ("zip-workspace-ro-"+p.token).encode()+b" ro\n")
         rows = []
         class NativeMetadata:

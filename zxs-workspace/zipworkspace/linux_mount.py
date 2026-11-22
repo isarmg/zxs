@@ -13,6 +13,8 @@ from .private_freeze import local_mount, mount_id
 from .snapshot_view import SnapshotView
 
 MOUNTINFO_BUDGET = 2 << 20
+READ_ONLY_MOUNT_FLAGS = frozenset({"ro", "nodev", "nosuid", "noexec"})
+_RECEIPT_FLAGS = frozenset(flag.encode("ascii") for flag in READ_ONLY_MOUNT_FLAGS)
 
 
 def mount_source(token):
@@ -27,7 +29,7 @@ def mountinfo_path(point):
 
 
 def mount_receipt(lines, point, token, parent_id):
-    """Look for the one matching read-only mount without opening its FUSE path."""
+    """Match the original mount and its per-mount flags without opening its FUSE path."""
     path = mountinfo_path(point)
     matches = []
     for line in lines.splitlines():
@@ -37,10 +39,13 @@ def mount_receipt(lines, point, token, parent_id):
             matches.append((left, sep, right))
     if len(matches) != 1: return None
     left, sep, right = matches[0]
-    if (not sep or len(left) < 6 or len(right) < 3 or b"ro" not in left[5].split(b",")
+    if (not sep or len(left) < 6 or len(right) < 3
             or not (1 <= len(left[0]) <= 20 and left[0].isdigit()) or left[0] == parent_id or left[1] != parent_id
             or not (right[0] == b"fuse" or right[0].startswith(b"fuse."))
             or right[1] != mount_source(token).encode("ascii")):
+        return None
+    flags = set(left[5].split(b","))  # The trailing options apply to the superblock, not this mount.
+    if not _RECEIPT_FLAGS <= flags or b"rw" in flags:
         return None
     return left[0]
 

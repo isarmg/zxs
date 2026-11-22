@@ -170,13 +170,15 @@ class SnapshotReads(unittest.TestCase):
             self.assertEqual(spelling, str(point))
             yield point, (41, 42), check_point
 
-        for token, observed_token, complete, matched in (
-                (old, old, True, True), (current, old, True, False),
-                (current, current, True, True), (current, current, False, False)):
-            with self.subTest(request=token, observed=observed_token, complete=complete):
+        full, missing_flag = b"ro,nosuid,nodev,noexec", b"ro,nosuid,nodev"
+        for token, observed_token, complete, flags, matched in (
+                (old, old, True, full, True), (current, old, True, full, False),
+                (current, current, True, full, True), (current, current, False, full, False),
+                (current, current, True, missing_flag, False)):
+            with self.subTest(request=token, observed=observed_token, complete=complete, flags=flags):
                 output = io.StringIO()
                 check_point = mock.Mock()
-                rows = (b"73 5 0:8 / /private/view\\040here ro,nosuid,nodev - fuse.zip-workspace "
+                rows = (b"73 5 0:8 / /private/view\\040here " + flags + b" - fuse.zip-workspace "
                         + linux_mount.mount_source(observed_token).encode("ascii") + b" ro")
                 if complete: rows += b"\n"
 
