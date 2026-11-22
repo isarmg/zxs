@@ -26,4 +26,4 @@ helper install-pool receipt --init-actor ID --storage-uid N --storage-gid N --op
 | 只有半个标、标有空洞或意外日志 | 保留失败现场，不覆盖、不删除、不猜。 |
 | 全部标可见，最后 SQL 未提交或回执丢失 | 原 INIT 仍待决则全组重同步/复读才完成。若原 SQL 已提交，仅返回历史，不补标、不启动服务。 |
 
-Web 与 SMB 共用的一个账户由[独立新池首设](private-fresh-zxs-v18.md)发行。原初装或原确认回执既不是登录检查，也不启动 ZXS。
+Web 与 SMB 共用的一个账户由[独立新池首设](fresh-deployment.md)发行。原初装或原确认回执既不是登录检查，也不启动 ZXS。

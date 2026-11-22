@@ -3,7 +3,7 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 18;
+PRAGMA user_version = 19;
 
 -- Both INIT (1) and SETUP_ACCOUNT (2) name the separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
@@ -244,6 +244,14 @@ WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
 BEGIN SELECT RAISE(ABORT,'FILE requires this live read-write share, original SMB credential and vacant root member'); END;
 CREATE TRIGGER keep_entry BEFORE UPDATE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE birth'); END;
 CREATE TRIGGER retain_entry BEFORE DELETE ON root_entry BEGIN SELECT RAISE(ABORT,'retain original FILE reservation'); END;
+
+-- User labels stay with a FILE birth, not its current placement or any node.
+-- Each label is an exact UTF-8 spelling; the Web owner validates text.
+CREATE TABLE file_label (
+  file_id BLOB NOT NULL REFERENCES root_entry(file_id),
+  label   BLOB NOT NULL CHECK(length(label) BETWEEN 1 AND 255 AND instr(label,X'00')=0),
+  PRIMARY KEY(file_id,label)
+) STRICT, WITHOUT ROWID;
 
 -- A FILE's immutable birth is not its pathname. Only the selected role,
 -- name and placement generation confer current membership. The source

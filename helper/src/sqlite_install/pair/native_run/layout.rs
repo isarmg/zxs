@@ -10,7 +10,7 @@ use crate::{path_rules::MAX_PATH_BYTES,pinned::{Kind as PathKind,Pinned,helper_e
     smb_profile::{self,first::{Endpoint,Folder,Id,Mode,RecycleName,MAX_FOLDERS}},
     sqlite_install::{approval,catalog::{self,Initial},markers::OrdinaryMark,originals::{SelectedSystem,named_backing},pair::{domain::{
         give_live_approval,request_live_approval,require_lent_ex,sealed,FreshParent},observed,terminal::PublicConfirmation},
-        pair::{fresh_issuer::{ExplicitSubject,InitialDatabase,require_v18},recycle::Recycle},stage::random}};
+        pair::{fresh_issuer::{ExplicitSubject,InitialDatabase,require_private_install},recycle::Recycle},stage::random}};
 use helper_linux_evidence::diagnostic_process::{OfflineSql,account_sql_descriptors};
 use rustix::{fs::{FlockOperation,flock},net::UCred,process::{DumpableBehavior,Gid,Signal,Uid,dumpable_behavior,
     getppid,set_dumpable_behavior,set_parent_process_death_signal}};
@@ -43,14 +43,14 @@ impl FreshScope{
         Self{subject,helper,init_sha}
     }
     fn encode(self,out:&mut Vec<u8>)->io::Result<()>{
-        require_v18()?;
+        require_private_install()?;
         if self.helper==[0;32]||self.init_sha==[0;32]{return Err(bad_question());}
         let (actor,uid,gid)=self.subject.tuple();
         out.extend_from_slice(FRESH);out.extend(actor);
         out.extend(uid.to_be_bytes());out.extend(gid.to_be_bytes());out.extend(self.helper);out.extend(self.init_sha);Ok(())
     }
     fn decode(bytes:&[u8])->io::Result<Self>{
-        require_v18()?;
+        require_private_install()?;
         let r=bytes.strip_prefix(FRESH).filter(|r|r.len()==88).ok_or_else(bad_question)?;
         let subject=ExplicitSubject::checked(r[..16].try_into().map_err(|_|bad_question())?,
             u32::from_be_bytes(r[16..20].try_into().map_err(|_|bad_question())?),
@@ -454,7 +454,7 @@ mod tests {
     #[test] fn fresh_v18_question_roundtrips_the_distinct_exact_init_and_helper_digests(){
         let q=Question{nonce:[7;32],actor:[1;16],pool:[2;16],init:[3;16],location:[9,10,15],
             system:"/fixture/S".into(),paths:vec!["/fixture/F".into()],fresh:fresh_scope()};
-        if !cfg!(feature="private-fresh-zxs-v18"){assert!(q.encode().is_err());return;}
+        if !cfg!(feature="private-fresh-install"){assert!(q.encode().is_err());return;}
         let raw=q.encode().unwrap();
         let accepted=crate::fs_tools::hex("a4ccc67c9bd77c3f81bb195af060e5e8820424ec69d3aad103968e556b2c14cd").unwrap();
         assert_eq!(<[u8;32]>::from(Sha256::digest(&raw)),accepted);
@@ -467,7 +467,7 @@ mod tests {
     #[test] fn exact_raw_paths_are_distinct_and_not_normalized(){
         let mut q=Question{nonce:[7;32],actor:[1;16],pool:[2;16],init:[3;16],location:[0,9,15],
             system:"/system".into(),paths:vec![PathBuf::from(OsString::from_vec(b"/mnt/data-\xff".to_vec())),"/mnt/Data".into()],fresh:fresh_scope()};
-        if !cfg!(feature="private-fresh-zxs-v18"){assert!(q.encode().is_err());return;}
+        if !cfg!(feature="private-fresh-install"){assert!(q.encode().is_err());return;}
         let raw=q.encode().unwrap();assert_eq!(Question::decode(&raw).unwrap().paths,q.paths);
         let mut extra=raw.clone();extra.push(0);assert!(Question::decode(&extra).is_err());
         assert!(Question::decode(&raw[..raw.len()-1]).is_err());

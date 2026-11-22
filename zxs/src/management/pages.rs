@@ -56,7 +56,7 @@ pub(super) fn browser_overview(data: &Overview, csrf: &str) -> io::Result<String
     out.push_str(G4_DEFS);
     out.push_str(include_str!("assets/shell-start.html"));
     out.push_str(r#"<h1 class="zxs-visually-hidden">管理概览</h1>"#);
-    browser_panel(&mut out, data);
+    browser_panel(&mut out, data, csrf);
     out.push_str(r#"<section id="zxs-shares" class="zxs-section" aria-labelledby="zxs-shares-title"><div class="zxs-section-heading zxs-flow"><h2 id="zxs-shares-title" class="zxs-row">共享配置</h2><dl class="zxs-endpoint zxs-row"><dt>SMB 共享名</dt><dd><code>ZXS</code></dd></dl></div>"#);
     if data.shares.is_empty() {
         out.push_str(r#"<p class="zxs-share-frame zxs-share-empty">暂无共享目录。</p>"#);
@@ -128,12 +128,14 @@ pub(super) fn browser_overview(data: &Overview, csrf: &str) -> io::Result<String
     Ok(out)
 }
 
-fn browser_panel(out: &mut String, data: &Overview) {
+fn browser_panel(out: &mut String, data: &Overview, csrf: &str) {
     out.push_str(r#"<section id="zxs-files" class="zxs-file-manager zxs-stack" aria-labelledby="zxs-folder-title" hidden><div id="zxs-file-corner-source" hidden>"#);
     out.push_str(G4_PAINT);
     out.push_str(r#"</div><h2 id="zxs-folder-title" class="zxs-row" tabindex="-1">目录</h2><div id="zxs-folder-content"></div></section>
 <p id="zxs-folder-load-error" role="alert" hidden>目录未加载，请刷新。</p>
-<div id="zxs-browser-roots" hidden"#);
+<div id="zxs-browser-roots" hidden data-zxs-csrf=""#);
+    text(out, csrf);
+    out.push('"');
     if let Some(next) = data.next {
         write!(out, r#" data-zxs-next="{next}""#).unwrap();
     }

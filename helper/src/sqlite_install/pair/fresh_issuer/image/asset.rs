@@ -23,7 +23,7 @@ fn verify(bytes:&[u8],compiler_expected:[u8;32],approved:[u8;32])->io::Result<[u
 mod enabled{
     use super::{denied,verify};
     use crate::{pinned::{Entity,Mount},sqlite_install::{approval,pair::{
-        command::{sha,value},domain::FreshParent,fresh_issuer::{require_v18,hex},
+        command::{sha,value},domain::FreshParent,fresh_issuer::{require_private_install,hex},
         terminal::PublicConfirmation},product_layout,stage::random}};
     use crate::sqlite_install::pair::fresh_issuer::image::{Image,path::{OriginalPath,PIN,WITHIN,no_attribute}};
     #[cfg(feature="embedded-zxs")]
@@ -72,7 +72,7 @@ mod enabled{
                     Err(e)=>Err(e.into()),
                 }
             }
-            require_v18()?;
+            require_private_install()?;
             let digest=verify(asset,packaged,self.independent)?;
             approval::no_inherited_descriptors()?;
             // The same dedicated real ZXS product lock as issuance. Source

@@ -9,7 +9,7 @@ fn typed_route_round_trip_and_wire_size() {
     let hash = format!("{DIRECTORY}{SHARE}/{DIR}/{CURSOR}");
     let Location::Directory(folder) = Location::parse(&hash) else { panic!("directory") };
     assert_eq!(folder.fragment(), hash);
-    assert_eq!(Location::Directory(folder).selected(), Some(Panel::Folders));
+    assert_eq!(Location::Directory(folder.clone()).selected(), Some(Panel::Folders));
     assert_eq!(Panel::Folders.id(), "zxs-files");
     assert_eq!(folder.request_path(), format!("/ui/v1/d/{SHARE}/{DIR}/{CURSOR}"));
     assert_eq!(folder.request_path().len(), 107);
@@ -32,4 +32,17 @@ fn no_guessed_ids_paths_or_percent_decoding() {
     ] {
         assert_eq!(Location::parse(&bad), Location::InvalidDirectory, "{bad}");
     }
+}
+
+#[test]
+fn exact_label_is_in_the_fragment_and_post_body_only() {
+    let hash = format!("{DIRECTORY}{SHARE}/{DIR}/{CURSOR}/{}", "61".repeat(MAX));
+    assert_eq!(hash.len(), MAX_FRAGMENT);
+    let Location::Directory(folder) = Location::parse(&hash) else { panic!("filtered directory") };
+    assert_eq!(folder.fragment(), hash);
+    assert_eq!(folder.request_path().len(), 107);
+    assert!(folder.form("proof").unwrap().ends_with(&("61".repeat(MAX))));
+    assert_eq!(folder.filtered(None).fragment(), format!("{DIRECTORY}{SHARE}/{DIR}/-"));
+    assert!(folder.destination(None).fragment().ends_with(&("61".repeat(MAX))));
+    assert_eq!(Location::parse(&(hash + "61")), Location::InvalidDirectory);
 }

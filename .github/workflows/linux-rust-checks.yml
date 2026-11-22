@@ -41,8 +41,8 @@ jobs:
             profile: Helper default
             feature: ''
           - project: helper
-            profile: Helper with private v18 setup
-            feature: private-fresh-zxs-v18
+            profile: Helper with private fresh install
+            feature: private-fresh-install
     defaults:
       run:
         shell: bash

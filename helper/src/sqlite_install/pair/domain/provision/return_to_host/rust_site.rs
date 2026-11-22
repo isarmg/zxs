@@ -1,6 +1,6 @@
 //! The original protected product site, no runtime or alternate account store.
 use super::{DeployedSite,Site,approval,bad,child,contents,layout,mark,public_record::Public,site_lease::SiteLease};
-use crate::{pinned::{Pinned,private_inode_reader},sqlite_install::pair::fresh_issuer::{CredentialScope,MAX_SITE,SitePayload,require_v18},
+use crate::{pinned::{Pinned,private_inode_reader},sqlite_install::pair::fresh_issuer::{CredentialScope,MAX_SITE,SitePayload,require_private_install},
     smb_profile::rust_first::{MAX_WIRE,RustPlan}};
 use rustix::fs::{Mode,OFlags,ResolveFlags,openat2};
 use std::{fs::File,io::{self,Read},os::{unix::fs::MetadataExt},path::Path};
@@ -16,7 +16,7 @@ pub(in crate::sqlite_install::pair) struct RustSite{
 }
 impl RustSite{
     pub(super) fn selected_product(held:SiteLease,payload:SitePayload,expected:&RustPlan)->io::Result<Self>{
-        require_v18()?;
+        require_private_install()?;
         if held.subject!=payload.subject.tuple(){return Err(no());}
         let base=&held.site_ex;
         contents(base,PRODUCT)?;
@@ -130,7 +130,7 @@ impl PublicAuthority{
 /// No site or vault FD is retained by the low SQL worker, and no secret or
 /// deploy selector enters this check. Parent retains the actual EXs.
 pub(in crate::sqlite_install::pair) fn verify_fresh_worker(system:&Path,plan:&RustPlan,scope:&CredentialScope)->io::Result<()>{
-    require_v18()?;
+    require_private_install()?;
     let site=Site::product(approval::host_admin()?,&plan.origin.instance,false)?;
     layout::verify_registered_instance(&site,scope.subject.tuple().2)?;
     let dir=child(site.base(),c".")?;

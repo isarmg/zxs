@@ -1,4 +1,4 @@
-//! H04 read-only evidence for one explicitly selected original F. v18
+//! H04 read-only evidence for one explicitly selected original F. v19
 //! has no retirement operation, unpublish or state writer. A clear observation
 //! is not a durable receipt, permission to retire, or a reusable lease.
 use super::{Id,observed};
@@ -10,9 +10,9 @@ use rustix::fs::{FlockOperation,RawDir,flock};
 use std::{fs::File,io,mem::MaybeUninit,os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};
 
 const ROW_CEILING:i64=2048;
-const V17_TABLES:&[&str]=&[
+const AUDITED_TABLES:&[&str]=&[
     "operation","pool_birth","volume_claim","account_pair","web_password","credential_reset",
-    "smb_rust_revision","root_share","share_mode","root_entry","file_location","directory_entry","directory_abort",
+    "smb_rust_revision","root_share","share_mode","root_entry","file_label","file_location","directory_entry","directory_abort",
     "directory_location","directory_rename","directory_rename_abort","file_transfer","file_transfer_source",
     "file_transfer_void","file_rename","file_rename_abort","first_work","work_edit","manual_node",
 ];
@@ -66,17 +66,17 @@ impl std::fmt::Display for ProtectedVolume{
 impl std::error::Error for ProtectedVolume{}
 pub(super) fn protected_volume(e:&io::Error)->bool{e.get_ref().is_some_and(|x|x.is::<ProtectedVolume>())}
 
-pub(super) fn compiled_v18()->io::Result<()>{super::fresh_issuer::compiled_v18()}
-fn template()->io::Result<Canonical>{compiled_v18()?;Canonical::new()}
+pub(super) fn compiled_schema()->io::Result<()>{super::fresh_issuer::compiled_schema()}
+fn template()->io::Result<Canonical>{compiled_schema()?;Canonical::new()}
 
-/// Some v18 relationships have no index by volume. Bound each complete
+/// Some v19 relationships have no index by volume. Bound each complete
 /// input first, in the SAME transaction. A partial search never gives a
 /// negative witness. Only static table names, no raw row data, are used.
 fn complete_small_cut(tx:&Transaction<'_>)->io::Result<()>{
-    for name in V17_TABLES{
+    for name in AUDITED_TABLES{
         let query=format!("SELECT count(*) FROM (SELECT 1 FROM main.{name} LIMIT ?1)");
         let n:i64=tx.query_row(&query,[ROW_CEILING+1],|r|r.get(0)).map_err(sql)?;
-        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded v18 snapshot; not cleared"));}
+        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded v19 snapshot; not cleared"));}
     }
     let mut verify=tx.prepare("PRAGMA main.foreign_key_check").map_err(sql)?;
     if verify.column_count()!=4{return Err(unknown());}

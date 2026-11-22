@@ -130,7 +130,7 @@ jobs:
               print(f"Embedded {name}: {len(resource)} bytes at {at}, SHA256 {sha256(resource).hexdigest()}")
           PYTHON
 
-      - name: Build and inspect Helper with the private v18 issuer
+      - name: Build and inspect Helper with the private fresh issuer
         if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
         shell: bash
         run: |
@@ -145,7 +145,7 @@ jobs:
           target=x86_64-unknown-linux-gnu
           "${build_env[@]}" "$toolchain/cargo" fetch --locked --target "$target"
           "${build_env[@]}" "$toolchain/cargo" build --locked --offline --release --target "$target" \
-            --bin helper --features private-fresh-zxs-v18
+            --bin helper --features private-fresh-install
           image="$PAIR_BUILD/target/$target/release/helper"
           size=$(stat -c %s "$image")
           [[ "$size" -ge 64 && "$size" -le 67108864 ]]
@@ -156,5 +156,5 @@ jobs:
           awk '$1 == "GNU_STACK" {++stacks; for(i=7; i<NF; ++i) if($i ~ /E/) bad=1} END {exit stacks!=1 || bad}' \
             "$PAIR_BUILD/helper.readelf"
           if grep -qE '\(NEEDED\).*(libgcrypt|libgpg-error)' "$PAIR_BUILD/helper.readelf"; then exit 1; fi
-          printf 'Helper private-fresh-zxs-v18: %s bytes\n' "$size"
+          printf 'Helper private-fresh-install: %s bytes\n' "$size"
           sha256sum "$image"

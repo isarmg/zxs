@@ -94,12 +94,12 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 部署默认从 `/zxs` 开始：独立可执行文件在 `/zxs/bin/zxs`，ZXS 权属状态只在 `/zxs/state`（`deployment.v1` 与 `<instance-hex>/`），SYSTEM 是 `/zxs/disks/system/SYSTEM.sqlite3`，回收卷是 `/zxs/disks/recycle`，普通卷按明确选择用 `/zxs/disks/data/<标签>`。可在相关命令中显式指定合格的可执行文件或媒体路径；复查和重置只认已登记的原路径，不找旧部署目录。目录与挂载由 Linux 管理员事先准备；Helper 不配置挂载或日志、不安装服务、也不格式化或迁移任何卷。
 
-[共用账户离线重置与只读回执](docs/shared-account-reset.md)只认确切原 v18 站点与同一原前序。Web 与 SMB 使用一个用户名和口令；两者只能切到同一已确认代次。该写路径默认禁用，不接管未知暂存。
+[共用账户离线重置与只读回执](docs/shared-account-reset.md)只认确切原 v19 站点与同一原前序。Web 与 SMB 使用一个用户名和口令；两者只能切到同一已确认代次。该写路径默认禁用，不接管未知暂存。
 
 - [无状态发现](docs/discovery.md)只根据本次实际挂载和固定的 SYSTEM 元数据，或本会话给出的绝对目录，报告候选。候选不是授权，不自动选盘或初始化。
 - [新池、同一原 INIT 续作与查询](docs/sqlite-first-install.md)要求当前有前台授权、明确提供原 INIT 主体和数值 UID/GID；不设置 Helper 偏好或保存授权。继续原单需要原件及原标记，查询不自动修改。
-- [新 v18 私有首设](docs/private-fresh-zxs-v18.md)可从原始 INIT 依据、受保护单 ELF 路径（默认 `/zxs/bin/zxs`）、独立预期 SHA-256 和实际前台确认，接原低权限的 SQLite 与新凭据发行。此处没有迁移、服务启停或自动接管。
-- [可选内嵌精确 ZXS 文件](docs/embedded-image.md)另用独立批准的完整 v18 ELF；只允许一次显式、不覆盖的文件落位，不发账户、不启动 ZXS。默认 Helper 无负载；本源码没有交付已核验的内嵌制品。
+- [新 v19 私有首设](docs/fresh-deployment.md)可从原始 INIT 依据、受保护单 ELF 路径（默认 `/zxs/bin/zxs`）、独立预期 SHA-256 和实际前台确认，接原低权限的 SQLite 与新凭据发行。此处没有迁移、服务启停或自动接管。
+- [可选内嵌精确 ZXS 文件](docs/embedded-image.md)另用独立批准的完整 v19 ELF；只允许一次显式、不覆盖的文件落位，不发账户、不启动 ZXS。默认 Helper 无负载；本源码没有交付已核验的内嵌制品。
 - [复查原 ZXS 部署](docs/reattach-check.md)使用 ZXS 自己的受保护持久依据，只有只读结论，不采纳、不重装、不授权维护。
 - [普通卷退登记预检](docs/retire-ordinary-preflight.md)只核本次真实原件与已知阻挡，不是真的退登记，也不表示可移除、擦除或卸载。
 

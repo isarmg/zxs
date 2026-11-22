@@ -8,6 +8,10 @@
 #[cfg(any(test, target_arch = "wasm32"))]
 mod browser;
 
+#[cfg(any(test, target_os = "linux", target_arch = "wasm32"))]
+#[path = "browser/label.rs"]
+mod label_text;
+
 #[cfg(target_os = "linux")]
 mod smb;
 #[cfg(target_os = "linux")]

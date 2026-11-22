@@ -133,7 +133,7 @@ fn layout_v18_optional_top_allows_only_positive_final_same_mount_absence(){
 }
 impl Site{
     fn product(host:File,instance:&Id,missing_final:bool)->io::Result<Self>{
-        crate::sqlite_install::pair::compiled_v18()?;
+        crate::sqlite_install::pair::compiled_schema()?;
         let leaf=CString::new(instance.iter().map(|b|format!("{b:02x}")).collect::<String>()).expect("lower hex");
         let mut chain=Vec::from(state_pins(&host)?);
         match product_pin(&chain[1],&leaf){

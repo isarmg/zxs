@@ -1,27 +1,29 @@
 //! Management's logical ordinary namespace, from one held SYSTEM read cut.
-use super::{WebAdmin,WebCurrent,Connection,Catalog,InitialReader,check,share_mode::{self,Mode,Setting}};
+use super::{file_labels::{self,Selected},WebAdmin,WebCurrent,Connection,Catalog,InitialReader,check,share_mode::{self,Mode,Setting}};
 use super::super::{Db,file_location::Place,smb::ordinary_directory::Route,work_record};
 use crate::{DirectoryId,FileId,OperationId,PoolId,Role,display,fs::{DIRECTORY_NAMES,invalid,directory_birth::DirectoryParent},
-    hash::Sha256,identity::ShareId};
+    hash::Sha256,identity::ShareId,label_text::Label};
 use std::{cell::Cell,ffi::{c_int,c_void},io};
 
-const PAGE:usize=32;
+pub(super) const PAGE:usize=32;
 const INSTRUCTIONS_PER_VOTE:c_int=1000;
 const VOTES:u32=4000;
 
 #[derive(Debug,Eq,PartialEq)]
 pub(crate) struct Directory{pub(crate) id:DirectoryId,pub(crate) name:String}
 #[derive(Debug,Eq,PartialEq)]
-pub(crate) enum Entry{Directory(Directory),File{id:FileId,name:String}}
+pub(crate) enum Entry{Directory(Directory),File{id:FileId,name:String,position:OperationId}}
 pub(crate) struct Page<'s>{
     pub(crate) ancestors:Vec<Directory>,
     pub(crate) entries:Vec<Entry>,
     pub(crate) next:Option<Cursor<'s>>,
+    pub(crate) scope:[u8;32],
+    pub(crate) writable:bool,
 }
 /// A caller retains this on the original Web session. Each page is live:
 /// a changed parent, grant or final entry requires restarting the branch.
 pub(crate) struct Cursor<'s>{original:&'s InitialReader,continuation:Continuation}
-pub(in crate::system::reader) struct Continuation{scope:[u8;32],last:Key}
+pub(in crate::system::reader) struct Continuation{scope:[u8;32],filter:Option<Label>,last:Key}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 enum Member{Directory(DirectoryId),File(FileId)}
 #[derive(Clone,Debug,Eq,PartialEq)]
@@ -44,7 +46,7 @@ impl Key{
     fn entry(self)->Entry{
         match self.member{
             Member::Directory(id)=>Entry::Directory(Directory{id,name:self.name}),
-            Member::File(id)=>Entry::File{id,name:self.name},
+            Member::File(id)=>Entry::File{id,name:self.name,position:self.position},
         }
     }
 }
@@ -99,11 +101,12 @@ const CHILDREN:&std::ffi::CStr=c"SELECT p.display AS name,p.file_id,0,p.position
     FROM main.file_location p INDEXED BY current_ordinary_name JOIN main.operation o ON o.op_id=p.position_op
     WHERE p.role=2 AND p.volume_id=?1 AND p.parent_id=?2 AND p.display>?3 AND o.state=1
       AND NOT EXISTS(SELECT 1 FROM main.pending_rename r WHERE r.file_id=p.file_id AND r.source_op=p.position_op)
+      AND (?5=0 OR EXISTS(SELECT 1 FROM main.file_label a WHERE a.file_id=p.file_id AND a.label=?6))
     UNION ALL SELECT d.display,d.directory_id,1,d.position_op,d.generation FROM main.directory_selected d
     WHERE d.volume_id=?1 AND d.parent_id=?2 AND d.display>?3 AND d.state=1
       AND NOT EXISTS(SELECT 1 FROM main.pending_directory_rename r WHERE r.directory_id=d.directory_id AND r.source_op=d.position_op)
     ORDER BY name LIMIT ?4";
-fn candidates(db:&Connection,parent:&Route,after:&[u8])
+fn candidates(db:&Connection,parent:&Route,after:&[u8],filter:Option<&Label>)
     ->io::Result<Vec<Key>>{
     let parent_id=parent.parent().bytes();let volume=parent.volume();
     let count=db.prepare(CANDIDATES)?;
@@ -115,6 +118,7 @@ fn candidates(db:&Connection,parent:&Route,after:&[u8])
 
     let mut q=db.prepare(CHILDREN)?;
     q.bind_bytes(1,&volume.0)?;q.bind_bytes(2,&parent_id)?;q.bind_bytes(3,after)?;q.bind_integer(4,(PAGE+1) as i64)?;
+    q.bind_integer(5,i64::from(filter.is_some()))?;q.bind_bytes(6,filter.map_or(&[],Label::bytes))?;
     let mut rows=Vec::<Key>::with_capacity(PAGE+1);
     loop{match q.step(){
         101=>return Ok(rows),
@@ -148,32 +152,48 @@ fn scope_identity(pool:PoolId,admin:&WebCurrent,setting:Setting,parent:&Route)->
     }
     Ok(h.finish())
 }
-fn select_page(db:&Connection,c:&Catalog,identity:&WebCurrent,share:ShareId,parent:Option<DirectoryId>,after:Option<&Continuation>)
-    ->io::Result<(Vec<Directory>,Vec<Entry>,Option<Continuation>)>{
+type SelectedPage = (Vec<Directory>, Vec<Entry>, Option<Continuation>, [u8;32], bool);
+
+fn select_page(db:&Connection,c:&Catalog,identity:&WebCurrent,share:ShareId,parent:Option<DirectoryId>,
+               after:Option<&Continuation>,filter:Option<&Label>)->io::Result<SelectedPage>{
     let setting=browseable(db,c,share)?;
     let route=Route::at(db,c,setting.volume,parent.map_or(DirectoryParent::Root,DirectoryParent::Directory))?;
     let scope=scope_identity(c.birth.pool,identity,setting,&route)?;
     let after=if let Some(p)=after{
-        if p.scope!=scope{return Err(stale());}
+        if p.scope!=scope||p.filter.as_ref()!=filter{return Err(stale());}
         p.last.require(db,c,&route)?;
+        if let (Some(label),Member::File(file))=(filter,p.last.member)
+            && !file_labels::contains(db,file,label)?{return Err(stale());}
         p.last.name.as_bytes()
     }else{b""};
-    let mut rows=candidates(db,&route,after)?;
+    let mut rows=candidates(db,&route,after,filter)?;
     for key in &rows{key.require(db,c,&route)?;}
     let next=if rows.len()>PAGE{
         rows.truncate(PAGE);
-        rows.last().cloned().map(|last|Continuation{scope,last})
+        rows.last().cloned().map(|last|Continuation{scope,filter:filter.cloned(),last})
     }else{None};
     let ancestors=route.logical_positions().map(|(id,_,_,name)|Directory{id,name:name.into()}).collect();
-    Ok((ancestors,rows.into_iter().map(Key::entry).collect(),next))
+    Ok((ancestors,rows.into_iter().map(Key::entry).collect(),next,scope,setting.mode==Mode::ReadWrite))
 }
+pub(super) fn require_label_file(db:&Connection,c:&Catalog,identity:&WebCurrent,selected:Selected,write:bool)->io::Result<()>{
+    let setting=browseable(db,c,selected.share)?;
+    if write && setting.mode!=Mode::ReadWrite{return Err(io::ErrorKind::PermissionDenied.into());}
+    let route=Route::at(db,c,setting.volume,selected.parent.map_or(DirectoryParent::Root,DirectoryParent::Directory))?;
+    if selected.scope!=scope_identity(c.birth.pool,identity,setting,&route)?{return Err(stale());}
+    let actual=Place::current(db,c,selected.file)?.bind(db,c)?;
+    if (actual.here.op,actual.here.volume,actual.here.role,actual.here.parent)!=
+       (selected.position,route.volume(),Role::File,route.parent()){return Err(stale());}
+    Place::require_no_rename(db,selected.file)
+}
+
 impl<'s> WebAdmin<'s>{
-    pub(crate) fn navigation(&self,share:ShareId,parent:Option<DirectoryId>,after:Option<&Cursor<'s>>)->io::Result<Page<'s>>{
+    pub(crate) fn navigation(&self,share:ShareId,parent:Option<DirectoryId>,after:Option<&Cursor<'s>>,
+                             filter:Option<&Label>)->io::Result<Page<'s>>{
         self.source.at(|db,c|navigation_cut(db,VOTES,||{
             let identity=self.current(db,&c)?;
             if after.is_some_and(|p|!std::ptr::eq(p.original,self.source)){return Err(stale());}
-            let (ancestors,entries,next)=select_page(db,&c,&identity,share,parent,after.map(|p|&p.continuation))?;
-            Ok(Page{ancestors,entries,next:next.map(|continuation|Cursor{original:self.source,continuation})})
+            let (ancestors,entries,next,scope,writable)=select_page(db,&c,&identity,share,parent,after.map(|p|&p.continuation),filter)?;
+            Ok(Page{ancestors,entries,next:next.map(|continuation|Cursor{original:self.source,continuation}),scope,writable})
         }))
     }
 }

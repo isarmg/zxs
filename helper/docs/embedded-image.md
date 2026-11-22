@@ -2,7 +2,7 @@
 
 The normal Helper has no placeholder payload. Build the optional separate
 Helper only with the already reviewed and independently measured **complete**
-standalone ZXS ELF from the exact current paired v18 source. Do not use an older
+standalone ZXS ELF from the exact current paired v19 source. Do not use an older
 split-account image or a development stand-in. This action neither releases
 nor starts either program.
 The final runnable ZXS remains that one unchanged file; it never calls Helper.
@@ -63,7 +63,7 @@ as found and do not blindly retry or delete. The command never starts ZXS,
 writes site/account state, resets a credential, migrates a pool, or
 overwrites an existing file.
 
-Explicit [fresh v18 setup](private-fresh-zxs-v18.md) is a separate original
+Explicit [fresh v19 setup](fresh-deployment.md) is a separate original
 approval. Give it the independently expected `--zxs-sha256` and, when not
 using `/zxs/bin/zxs`, the installed `--zxs-image DIR/zxs`. It checks that executable and the original enrolled
 media before issuing **one** shared Web/SMB account; extraction by itself
@@ -72,7 +72,7 @@ bind the chosen canonical path and whole-image hash. Later check/reset
 uses that same original protected site, with no path override, and ZXS
 independently verifies its actual running image. No Helper preferences or
 duplicate authority are retained. The optional feature enables the same
-private v18 account commands but does not run them.
+private v19 account commands but does not run them.
 
 Unit tests type-check the publisher and exercise inert validation data.
 They do not supply a compile-time payload, emit an optional release

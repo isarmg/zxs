@@ -42,12 +42,12 @@ usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
 helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper check-deployment\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-nonempty-source --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --source DIR\n  helper check-ordinary-retirement --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper hardware\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper install-pool web new|resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper --help | --version\n\n\
 install-pool defaults to /zxs/disks/system and /zxs/disks/recycle; choose each ordinary root explicitly.\nSupply already mounted directories; storage-status reports observations, not an approved layout.";
 
-const PRIVATE_V18_USAGE: &str = "
+const PRIVATE_INSTALL_USAGE: &str = "
 
-Private v18 setup on an isolated fresh pool; stop ZXS before account reset:
-  helper install-pool new-zxs-v18 --init-actor ID --storage-uid N --storage-gid N
+Private v19 setup on an isolated fresh pool; stop ZXS before account reset:
+  helper install-pool new-deployment --init-actor ID --storage-uid N --storage-gid N
       --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...
-  helper setup-pair issue-fresh-zxs-v18 --init-actor ID --storage-uid N --storage-gid N [--system DIR]
+  helper setup-pair issue-fresh --init-actor ID --storage-uid N --storage-gid N [--system DIR]
       --pool ID --init ID --instance ID --bind ID --setup-op ID --init-sha256 HEX --approval ID
       [--zxs-image DIR/zxs] --zxs-sha256 HEX --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX
       --host HOST --login LOGIN --recycle-name NAME (--listen IP/PREFIX | --share DIR NAME ro|rw | --share-label LABEL NAME ro|rw) ...
@@ -57,8 +57,8 @@ Private v18 setup on an isolated fresh pool; stop ZXS before account reset:
 
 fn usage() -> String {
     let mut help = USAGE.to_owned();
-    if cfg!(feature = "private-fresh-zxs-v18") {
-        help.push_str(PRIVATE_V18_USAGE);
+    if cfg!(feature = "private-fresh-install") {
+        help.push_str(PRIVATE_INSTALL_USAGE);
     }
     if cfg!(feature = "embedded-zxs") {
         help.push_str("\n\nOptional image extraction:\n  helper install-zxs-image [--destination-dir DIR] --zxs-sha256 HEX (default /zxs/bin/zxs)");
@@ -272,12 +272,12 @@ fn user_help_matches_compiled_account_modes() {
     let help = usage();
     assert!(help.contains("install-pool new|resume|receipt"));
     for command in [
-        "install-pool new-zxs-v18",
-        "setup-pair issue-fresh-zxs-v18",
+        "install-pool new-deployment",
+        "setup-pair issue-fresh",
         "reset-account new",
         "reset-account receipt",
     ] {
-        assert_eq!(help.contains(command), cfg!(feature = "private-fresh-zxs-v18"));
+        assert_eq!(help.contains(command), cfg!(feature = "private-fresh-install"));
     }
     assert_eq!(
         help.contains("install-zxs-image"),

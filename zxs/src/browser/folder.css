@@ -49,3 +49,17 @@
 @media (forced-colors: active) {
   .zxs-file-list-panel.zxs-g4-surface { background: Canvas; border: 1px solid CanvasText; }
 }
+
+.zxs-label-controls, .zxs-label-form, .zxs-label-row, .zxs-file-actions {
+  display: flex; align-items: center; gap: .4em .75em; flex-wrap: wrap; min-width: 0;
+}
+.zxs-label-controls, .zxs-label-editor { margin: .25em var(--zxs-list-content-inset); }
+.zxs-label-form > .zxs-input { max-width: 100%; }
+.zxs-label-editor { padding-block: .5em; }
+.zxs-label-editor ul { list-style: none; margin: 0; padding: 0; }
+.zxs-label-editor h3, .zxs-label-row bdi { overflow-wrap: anywhere; }
+.zxs-label-row bdi { white-space: pre-wrap; }
+.zxs-file-row > .zxs-file-actions { grid-column: 3; }
+@media (max-width: 32rem) {
+  .zxs-file-row > .zxs-file-actions { grid-column: 1 / -1; justify-self: end; }
+}

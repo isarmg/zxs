@@ -19,7 +19,7 @@ unsafe extern "C"{
     fn sqlite3_column_bytes(s:*mut Stmt,k:c_int)->c_int;
     fn sqlite3_column_int64(s:*mut Stmt,k:c_int)->i64;
 }
-const MAX_SCHEMA_OBJECTS:u16=177;
+const MAX_SCHEMA_OBJECTS:u16=178;
 
 impl Connection{
     pub(super) fn prepare(&self,sql:&CStr)->io::Result<Statement<'_>>{

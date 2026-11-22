@@ -42,7 +42,7 @@ impl RetirementCheck{
             .map_err(|_|"invalid original SYSTEM or distinct ordinary path/identity for read-only preflight")
     }
     fn query(&self)->io::Result<Reply>{
-        retire_ordinary::compiled_v18()?;
+        retire_ordinary::compiled_schema()?;
         approval::no_inherited_descriptors()?;
         let _host=approval::host_admin()?;let tty=PublicConfirmation::select()?;let subject=self.1.tuple();
         let pin=Pinned::already_mounted(self.0.system(),PathKind::StorageRoot)?;
@@ -95,7 +95,7 @@ impl Question{
         let system=path(&mut bytes)?;let ordinary=path(&mut bytes)?;
         let scope=Scope::new(pool,init,volume,system,ordinary)?;
         if !bytes.is_empty()||encode(&scope,&nonce,subject,location)?.as_slice()!=raw{return Err(invalid());}
-        retire_ordinary::compiled_v18()?;
+        retire_ordinary::compiled_schema()?;
         Ok(Self{subject,location,scope})
     }
     pub(super) fn original_system(&self)->(ExplicitSubject,[u64;3],&Path){(self.subject,self.location,self.scope.system())}

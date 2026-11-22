@@ -27,8 +27,8 @@ class SharedEpoch(unittest.TestCase):
         d.execute("PRAGMA foreign_keys=ON")
         d.execute("PRAGMA trusted_schema=OFF")
         d.executescript(SCHEMA.read_text())
-        self.assertEqual(d.execute("PRAGMA user_version").fetchone(), (18,))
-        self.assertEqual(d.execute("SELECT count(*) FROM main.sqlite_schema").fetchone(), (177,))
+        self.assertEqual(d.execute("PRAGMA user_version").fetchone(), (19,))
+        self.assertEqual(d.execute("SELECT count(*) FROM main.sqlite_schema").fetchone(), (178,))
         with d:
             self.op(d, vec("init"), 1, vec("actor"), 0, vec("init_sha"))
             d.execute("INSERT INTO pool_birth VALUES(1,?,?,?,1000,3)", (

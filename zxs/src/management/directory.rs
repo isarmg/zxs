@@ -1,6 +1,6 @@
 //! Wire adapter for the same authenticated, metadata-only directory read.
 use super::{App,BAD,LOGIN_REQUIRED,REJECT,Reply,Request,Session,UNAVAILABLE,access_refused};
-use crate::{DirectoryId,OperationId,identity::ShareId,system::reader::account::navigation::{Cursor,Directory,Entry,Page}};
+use crate::{DirectoryId,OperationId,identity::ShareId,label_text::{Label,to_hex},system::reader::account::navigation::{Cursor,Directory,Entry,Page}};
 use std::{borrow::Cow,collections::VecDeque,fmt::Write as _,io,time::Instant};
 
 const PREFIX:&str="/ui/v1/d/";
@@ -10,14 +10,21 @@ const MAX_JSON:usize=128*1024;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 struct Handle(OperationId);
 #[derive(Debug,Eq,PartialEq)]
-struct Query{share:ShareId,parent:Option<DirectoryId>,after:Option<Handle>}
+pub(super) struct Query{share:ShareId,parent:Option<DirectoryId>,after:Option<Handle>,filter:Option<Label>}
 impl Query{
     fn parse(parts:&str)->Option<Self>{
         let mut segments=parts.split('/');
-        let share=segments.next()?.parse().ok()?;
-        let parent=match segments.next()?{"-"=>None,id=>Some(id.parse().ok()?)};
-        let after=match segments.next()?{"-"=>None,id=>Some(Handle(id.parse().ok()?))};
-        segments.next().is_none().then_some(Self{share,parent,after})
+        let query=Self::parts(segments.next()?,segments.next()?,segments.next()?,None)?;
+        segments.next().is_none().then_some(query)
+    }
+    pub(super) fn filtered(share:&str,parent:&str,after:&str,label:&str)->Option<Self>{
+        Self::parts(share,parent,after,Some(Label::from_hex(label)?))
+    }
+    fn parts(share:&str,parent:&str,after:&str,filter:Option<Label>)->Option<Self>{
+        let share=share.parse().ok()?;
+        let parent=match parent{"-"=>None,id=>Some(id.parse().ok()?)};
+        let after=match after{"-"=>None,id=>Some(Handle(id.parse().ok()?))};
+        Some(Self{share,parent,after,filter})
     }
 }
 
@@ -46,38 +53,43 @@ fn string(out:&mut String,text:&str){
     }}
     out.push('"');
 }
-fn node(out:&mut String,kind:Option<&str>,id:impl std::fmt::Display,name:&str){
+fn node(out:&mut String,kind:Option<&str>,id:impl std::fmt::Display,name:&str,position:Option<OperationId>){
     out.push('{');
     if let Some(kind)=kind{out.push_str("\"kind\":");string(out,kind);out.push(',');}
-    write!(out,"\"id\":\"{id}\",\"name\":").unwrap();string(out,name);out.push('}');
+    write!(out,"\"id\":\"{id}\",\"name\":").unwrap();string(out,name);
+    if let Some(position)=position{write!(out,",\"position\":\"{position}\"").unwrap();}
+    out.push('}');
 }
 fn metadata(page:&Page<'_>,next:Option<Handle>)->io::Result<Reply>{
     let mut out=String::from("{\"ancestors\":[");
     for (i,Directory{id,name}) in page.ancestors.iter().enumerate(){
         if i!=0{out.push(',');}
-        node(&mut out,None,id,name);
+        node(&mut out,None,id,name,None);
     }
     out.push_str("],\"entries\":[");
     for (i,entry) in page.entries.iter().enumerate(){
         if i!=0{out.push(',');}
         match entry{
-            Entry::Directory(Directory{id,name})=>node(&mut out,Some("directory"),id,name),
-            Entry::File{id,name}=>node(&mut out,Some("file"),id,name),
+            Entry::Directory(Directory{id,name})=>node(&mut out,Some("directory"),id,name,None),
+            Entry::File{id,name,position}=>node(&mut out,Some("file"),id,name,Some(*position)),
         }
     }
     out.push_str("],\"next\":");
     if let Some(id)=next{write!(out,"\"{}\"",id.0).unwrap();}else{out.push_str("null");}
-    out.push('}');
+    write!(out,",\"scope\":\"{}\",\"writable\":{}}}",to_hex(&page.scope),page.writable).unwrap();
+    json(out)
+}
+pub(super) fn json(out:String)->io::Result<Reply>{
     if out.len()>MAX_JSON{return Err(io::Error::other("directory metadata exceeds its response bound"));}
     Ok(Reply::content("200 OK","application/json; charset=utf-8",Cow::Owned(out.into_bytes())))
 }
-fn page(s:&mut Session<'_>,query:&Query)->io::Result<Reply>{
+pub(super) fn page(s:&mut Session<'_>,query:&Query)->io::Result<Reply>{
     let prepared=(||{
         let after=match query.after{
             None=>None,
             Some(k)=>Some(s.directory_pages.find(k).ok_or_else(||io::Error::from(io::ErrorKind::WouldBlock))?),
         };
-        let mut page=s.admin.navigation(query.share,query.parent,after)?;
+        let mut page=s.admin.navigation(query.share,query.parent,after,query.filter.as_ref())?;
         let next=page.next.take().map(|cursor|Ok::<_,io::Error>((s.directory_pages.reserve()?,cursor))).transpose()?;
         let reply=metadata(&page,next.as_ref().map(|(id,_)|*id))?;
         Ok((reply,next))

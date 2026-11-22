@@ -1,4 +1,4 @@
-//! Fixed, local maintenance for the sole shared Web/SMB identity in exact v18;
+//! Fixed, local maintenance for the sole shared Web/SMB identity in exact v19;
 //! no retired SQL SMB credential issuer, migration or protocol fallback.
 mod command;
 mod native_sql;
@@ -17,7 +17,7 @@ mod rust_enroll;
 mod fresh_issuer;
 #[cfg(feature="embedded-zxs")]
 pub(crate) use fresh_issuer::EmbeddedInstall;
-pub(super) use fresh_issuer::{ExplicitSubject,compiled_v18,require_v18};
+pub(super) use fresh_issuer::{ExplicitSubject,compiled_schema,require_private_install};
 pub(crate) use native_run::{rust_account_worker,rust_vault_worker,SharedAccountReset};
 mod recycle;
 mod domain;

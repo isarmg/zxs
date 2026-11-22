@@ -151,7 +151,7 @@ jobs:
           cd source/helper
           "${build_env[@]}" "$work/rust/bin/cargo" fetch --locked --target "$target"
           "${build_env[@]}" "$work/rust/bin/cargo" test --locked --offline \
-            --features private-fresh-zxs-v18 --bin helper --no-run --message-format=json > "$work/build.jsonl"
+            --features private-fresh-install --bin helper --no-run --message-format=json > "$work/build.jsonl"
           python3 -I - "$work" <<'PYTHON'
           import hashlib, json, shutil, sys
           from pathlib import Path

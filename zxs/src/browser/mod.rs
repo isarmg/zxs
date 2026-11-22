@@ -8,3 +8,5 @@ mod console;
 mod data;
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(target_arch = "wasm32")]
+mod labels;

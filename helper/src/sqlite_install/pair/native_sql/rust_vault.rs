@@ -263,7 +263,7 @@ pub(in crate::sqlite_install::pair) struct RustAccountCut<'s,'p>{
 impl<'s,'p> RustAccountCut<'s,'p>{
     pub(in crate::sqlite_install::pair) fn open_deployed_reset(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,
         site:&super::super::fresh_issuer::SitePayload)->io::Result<Self>{
-        super::super::fresh_issuer::compiled_v18()?;
+        super::super::fresh_issuer::compiled_schema()?;
         let (actor,uid,_)=site.subject.tuple();
         if !matches!(&order.role,Desired::Reset{..})||actor!=order.actor||site.origin!=plan.origin||
             site.plan_sha!=plan.sha()||locked.source().path()!=site.system||locked.source().uid()!=uid{return Err(wrong());}
@@ -273,7 +273,7 @@ impl<'s,'p> RustAccountCut<'s,'p>{
     }
     pub(in crate::sqlite_install::pair) fn open_new_first(locked:&'s LockedSystem,plan:&'p RustPlan,order:RustOrder,
         init_sha:[u8;32],database:[u64;3])->io::Result<Self>{
-        super::super::fresh_issuer::require_v18()?;
+        super::super::fresh_issuer::require_private_install()?;
         RustChange::for_fresh(plan,&order,init_sha)?;
         let p=plan.origin;
         let s=Self{cut:AccountCut::at(locked,p.pool,p.init)?,plan,order,init_sha:Some(init_sha)};

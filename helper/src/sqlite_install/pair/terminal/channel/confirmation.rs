@@ -43,15 +43,15 @@ impl PublicConfirmation{
     pub(in crate::sqlite_install) fn confirm_init(&self,fresh:bool,preview:String)->io::Result<()>{
         self.ask(if fresh{"INIT"}else{"RESUME"},Some(preview),1100*1024)
     }
-    pub(in crate::sqlite_install) fn confirm_v18_initialization(&self,review:String)->io::Result<()>{
-        self.ask("INIT-ZXS-V18",Some(review),1100*1024)
+    pub(in crate::sqlite_install) fn confirm_fresh_pool(&self,review:String)->io::Result<()>{
+        self.ask("INIT-FRESH-POOL",Some(review),1100*1024)
     }
     #[cfg(any(test,feature="embedded-zxs"))]
     pub(in crate::sqlite_install::pair) fn confirm_image_installation(&self,review:String)->io::Result<()>{
         self.ask("INSTALL-ZXS-IMAGE",Some(review),32*1024)
     }
     pub(in crate::sqlite_install::pair) fn confirm_initial_deployment(&self,review:String)->io::Result<()>{
-        self.ask("ISSUE-ZXS-V18",Some(review),1100*1024)
+        self.ask("ISSUE-FRESH-ACCOUNT",Some(review),1100*1024)
     }
     pub(in crate::sqlite_install::pair) fn confirm_ext_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-EXT-COPY",Some(preview),64*1024)

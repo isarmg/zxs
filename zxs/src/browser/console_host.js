@@ -3,12 +3,13 @@
 const SVG = "http://www.w3.org/2000/svg";
 const MAX_BODY = 128 * 1024;
 const SAME_ORIGIN = { mode: "same-origin", credentials: "same-origin", cache: "no-store", redirect: "error" };
+const MAX_FRAGMENT = "#zxs-d/".length + 3 * 32 + 3 + 2 * 255;
+const MAX_FORM = 4096;
 const DIRECTORY = /^\/ui\/v1\/d\/[0-9a-f]{32}\/(?:-|[0-9a-f]{32})\/(?:-|[0-9a-f]{32})$/u;
 
-async function directory(win, path, signal) {
-  if (!DIRECTORY.test(path)) return [0, null];
-  const response = await win.fetch(path, { ...SAME_ORIGIN, method: "GET", signal });
-  if (response.status !== 200) return [response.status, null];
+async function metadata(win, path, options, edit = false) {
+  const response = await win.fetch(path, { ...SAME_ORIGIN, ...options });
+  if (edit || response.status !== 200) return [response.status, null];
   const mime = response.headers.get("content-type")?.split(";", 1)[0];
   const length = response.headers.get("content-length");
   if (mime !== "application/json" || length === null || !/^[0-9]+$/u.test(length) ||
@@ -31,6 +32,7 @@ async function directory(win, path, signal) {
   } finally {
     reader.releaseLock();
   }
+  if (used !== Number(length)) return [0, null];
   const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, used)));
   return [200, value];
 }
@@ -92,16 +94,22 @@ export default async function start() {
     active = undefined;
   }
 
-  function request(ticket, path) {
-    cancel();
-    const controller = new AbortController();
-    active = controller;
+  function request(ticket, path, options, edit = false) {
+    let controller;
+    if (!edit) {
+      cancel();
+      controller = new AbortController();
+      active = controller;
+      options.signal = controller.signal;
+    }
+    // Navigation may cancel reads. It cannot undo an edit submitted to the
+    // server; its response is ignored unless the original Rust view is live.
     void (async () => {
       let result;
-      try { result = await directory(win, path, controller.signal); }
+      try { result = await metadata(win, path, options, edit); }
       catch { result = [0, null]; }
-      if (active !== controller) return; // The Rust ticket/hash also have to match.
-      active = undefined;
+      if (controller && active !== controller) return;
+      if (controller) active = undefined;
       page = result[1];
       try { wasm.zxs_directory_result(ticket, result[0]); }
       catch { error(); }
@@ -109,7 +117,8 @@ export default async function start() {
     })();
   }
 
-  const group = (at) => at === 0 ? page?.ancestors : at === 1 ? page?.entries : undefined;
+  const group = (at) => at === 0 ? page?.ancestors : at === 1 ? page?.entries :
+    at === 3 ? page?.labels : undefined;
   const imports = {
     find: (ptr, len) => get(() => doc.getElementById(text(ptr, len))),
     query: (id, ptr, len) => get(() => element(id).querySelector(text(ptr, len))),
@@ -132,22 +141,44 @@ export default async function start() {
     move_focus: (id) => checked(() => element(id).focus()),
     read_attr: (id, ptr, len, out, cap) => put(element(id).getAttribute(text(ptr, len)), out, cap),
     read_text: (id, out, cap) => put(element(id).textContent, out, cap),
+    read_value: (id, out, cap) => put(element(id).value, out, cap),
     read_location: (out, cap) => {
       const hash = win.location.hash;
-      // A valid route fits in 107 ASCII bytes. A huge hash is still an
-      // invalid directory route or an unrelated fragment, never a prefix.
-      const bounded = hash.length <= 128 ? hash : hash.startsWith("#zxs-d/") ? "#zxs-d" : "#other";
+      // A huge hash is still invalid or unrelated, never a valid prefix.
+      const bounded = hash.length <= MAX_FRAGMENT ? hash : hash.startsWith("#zxs-d/") ? "#zxs-d" : "#other";
       return put(bounded, out, cap);
     },
     to_sign_in: () => checked(() => win.location.assign("/login")),
-    begin_read: (ticket, ptr, len) => request(ticket, text(ptr, len)),
+    set_location: (ptr, len) => checked(() => {
+      const hash = text(ptr, len);
+      if (len > MAX_FRAGMENT || !hash.startsWith("#zxs-d/")) throw new Error("invalid folder fragment");
+      win.location.hash = hash;
+    }),
+    begin_read: (ticket, ptr, len) => {
+      const path = text(ptr, len);
+      if (!DIRECTORY.test(path)) { queueMicrotask(() => wasm.zxs_directory_result(ticket, 0)); return; }
+      request(ticket, path, { method: "GET" });
+    },
+    begin_post: (ticket, kind, ptr, len) => {
+      if (kind > 2 || len > MAX_FORM) { queueMicrotask(() => wasm.zxs_directory_result(ticket, 0)); return; }
+      request(ticket, kind === 0 ? "/ui/v1/df" : "/ui/v1/labels", {
+        method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: text(ptr, len),
+      }, kind === 2);
+    },
     cancel_read: cancel,
     row_count: (at) => { const rows = group(at); return Array.isArray(rows) ? rows.length : -2; },
     read_row: (at, index, which, out, cap) => {
-      if (at === 2) return put(page?.next, out, cap);
+      if (at === 2) {
+        const value = which === 0 ? page?.next : which === 1 ? page?.scope :
+          page?.writable === true ? "1" : page?.writable === false ? "0" : undefined;
+        return put(value, out, cap);
+      }
+      if (at === 4) return put(page?.next, out, cap);
       const row = group(at)?.[index >>> 0];
-      const value = which === 0 ? row?.id : which === 1 ? row?.name : row?.kind;
-      return typeof value === "string" ? put(value, out, cap) : -2;
+      if (at === 3) return put(row, out, cap);
+      const value = which === 0 ? row?.id : which === 1 ? row?.name : which === 2 ? row?.kind :
+        row?.kind === "directory" ? null : row?.position;
+      return put(value, out, cap);
     },
   };
 
@@ -156,6 +187,15 @@ export default async function start() {
   const { instance } = await WebAssembly.instantiateStreaming(response, { zxs_console: imports });
   wasm = instance.exports;
   if (wasm.zxs_mount() !== 1) throw new Error("incomplete ZXS console");
+  doc.getElementById("zxs-folder-content").addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!(form instanceof win.Element) || form.getAttribute("data-zxs-action") === null) return;
+    event.preventDefault();
+    const id = keep(form);
+    try { wasm.zxs_folder_form(id); }
+    catch { error(); }
+    finally { if (held.get(id) === form) imports.release(id); }
+  });
   win.addEventListener("hashchange", () => {
     try { wasm.zxs_hash_changed(); }
     catch { error(); }

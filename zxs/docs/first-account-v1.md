@@ -16,6 +16,6 @@
 
 ## 公开字节与验收边界
 
-[唯一 v18 DDL](../src/system/schema.sql)、[公开比较字节实现](../src/system/shared_account.rs)与[固定独立样本](../tests/sqlite/shared-account-public-v1.txt)定义同一合同。两个操作分别用含尾 NUL 的 `ZXS-SQLITE-1/SHARED-SETUP-1\0` 和 `ZXS-SQLITE-1/SHARED-RESET-1\0`。共有前像依次为 Pool、INIT、SETUP、Instance、Bind、AccountId（各 16 B），原 INIT 与整份安装描述的 SHA-256（各 32 B），1 B 名长与原名、28 B SID、原维护主体和本次批准（各 16 B）。首设追加首记录号；重置追加本 Op、前驱 Op、前驱记录号、8 B 大端前驱正代及目标记录号。两个业务主体键分别取 `SHA256("ZXS-SQLITE-1/ACCOUNT-ACTOR-1\0" | AccountId | role:u8)` 前 16 B（Web=0、SMB=1）。没有秘密进入这些摘要、配置、命令行、普通日志或回执；知道摘要不能授予权限。
+[唯一 SYSTEM DDL](../src/system/schema.sql)、[公开比较字节实现](../src/system/shared_account.rs)与[固定独立样本](../tests/sqlite/shared-account-public-v1.txt)定义同一合同。两个操作分别用含尾 NUL 的 `ZXS-SQLITE-1/SHARED-SETUP-1\0` 和 `ZXS-SQLITE-1/SHARED-RESET-1\0`。共有前像依次为 Pool、INIT、SETUP、Instance、Bind、AccountId（各 16 B），原 INIT 与整份安装描述的 SHA-256（各 32 B），1 B 名长与原名、28 B SID、原维护主体和本次批准（各 16 B）。首设追加首记录号；重置追加本 Op、前驱 Op、前驱记录号、8 B 大端前驱正代及目标记录号。两个业务主体键分别取 `SHA256("ZXS-SQLITE-1/ACCOUNT-ACTOR-1\0" | AccountId | role:u8)` 前 16 B（Web=0、SMB=1）。没有秘密进入这些摘要、配置、命令行、普通日志或回执；知道摘要不能授予权限。
 
 SQL 的唯一当前选择先看**最高尝试代**，再验证这代完整且已提交；历史代仅供解释原操作。部署启动须两角色各自核同一原 SYSTEM 安装/当代，给出本次原 PREPARED，由父进程一次共同放行，之后才接受客户端或启动冷写任务。新 SQL 族标识和新 SMB 正本版本是隔离旧双代语义，不是升级程序。旧格式不打开为业务、不改写、不迁移，没有长期并行维护路径。公开向量、真实隔离 SQLite/Argon2 测试与原生客户端端到端验证是不同证据；完整离线签发、实际双角色冷启、断电/换物和两协议同账号登录仍需以同一批 **ZXS＋Helper** 制品检验。

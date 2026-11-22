@@ -105,5 +105,8 @@ pub(crate) mod history;
 #[path="navigation.rs"]
 pub(crate) mod navigation;
 
+#[path = "file_labels.rs"]
+pub(crate) mod file_labels;
+
 #[cfg(test)]
 include!("../../tests/unit/attached/system/account/items.rs");

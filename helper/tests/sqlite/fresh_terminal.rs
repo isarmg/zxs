@@ -35,7 +35,7 @@ fn fresh_v18_one_real_consent_allows_original_scoped_phase_without_second_prompt
     let pass=(||->io::Result<()>{
         let stop=Instant::now()+Duration::from_secs(12);
         let mut observed=Vec::new();let mut stage=0;let mut buf=[0;2048];
-        let stages=[b"ISSUE-ZXS-V18".as_slice()];
+        let stages=[b"ISSUE-FRESH-ACCOUNT".as_slice()];
         while Instant::now()<stop{
             match rustix::io::read(&master,&mut buf[..]){
                 Ok(n)=>observed.extend_from_slice(&buf[..n]),

@@ -1,7 +1,7 @@
 //! Exact foreground-approved offline Rust vault providers.
 //! No stored Helper approval, caller-named library or runtime dependency.
 use crate::{fs_tools::RuntimeFile,pinned::helper_elf::ForegroundElf,sqlite_install::pair::{bad,smb_policy}};
-use crate::sqlite_install::pair::fresh_issuer::{CryptoPins,compiled_v18,require_v18};
+use crate::sqlite_install::pair::fresh_issuer::{CryptoPins,compiled_schema,require_private_install};
 use helper_linux_evidence::first_smb::{Enrollment,Libraries};
 use rustix::process::Pid;
 use std::io;
@@ -34,7 +34,7 @@ pub(in crate::sqlite_install::pair) struct Cryptography{
 }
 impl Cryptography{
     pub(in crate::sqlite_install::pair) fn fresh(pins:CryptoPins)->io::Result<Self>{
-        require_v18()?;
+        require_private_install()?;
         Self::provider_policy(pins)?;
         let helper=CredentialHelper::bind(ForegroundElf::host()?,pins.helper)?;
         Self::selected_providers(pins,helper)
@@ -48,7 +48,7 @@ impl Cryptography{
         Self::selected_providers(pins,helper)
     }
     fn provider_policy(pins:CryptoPins)->io::Result<()>{
-        compiled_v18()?;pins.check()?;smb_policy::system_policy()?;
+        compiled_schema()?;pins.check()?;smb_policy::system_policy()?;
         if !smb_policy::clean_environment(){return Err(no());}
         Ok(())
     }
@@ -59,7 +59,7 @@ impl Cryptography{
     }
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
         self.helper.require()?;
-        compiled_v18()?;
+        compiled_schema()?;
         self.gcrypt.recheck()?;self.gpgerr.recheck()?;smb_policy::system_policy()
     }
     pub(in crate::sqlite_install::pair) fn before_dropping(&self)->io::Result<Libraries>{

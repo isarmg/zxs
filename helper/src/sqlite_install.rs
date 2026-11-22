@@ -46,9 +46,9 @@ impl Installation{
         let mut first=args.next().and_then(|s|s.into_string().ok());
         let browser=first.as_deref()==Some("web");
         if browser{first=args.next().and_then(|s|s.into_string().ok());}
-        let private=first.as_deref()==Some("new-zxs-v18")&&!browser&&cfg!(feature="private-fresh-zxs-v18");
+        let private=first.as_deref()==Some("new-deployment")&&!browser&&cfg!(feature="private-fresh-install");
         let action=match first.as_deref(){
-            Some("new-zxs-v18") if private=>InitAction::Apply(Purpose::Fresh),
+            Some("new-deployment") if private=>InitAction::Apply(Purpose::Fresh),
             Some("new")=>InitAction::Apply(Purpose::Fresh),Some("resume")=>InitAction::Apply(Purpose::Original),
             Some("receipt") if !browser=>InitAction::Receipt,
             _=>return Err("choose new, resume or receipt explicitly; never automatically switch")};
@@ -113,7 +113,7 @@ fn receipt_fields(pool:Id,op:Id,confirmed_sha:Option<[u8;32]>)->String{
 fn completion_line(result:complete::Receipt,private:bool)->String{
     let fields=receipt_fields(result.pool,result.op,Some(result.request_sha));
     if private{
-        format!("fresh-v18-init=confirmed {fields}; original volume markers verified")
+        format!("fresh-init=confirmed {fields}; original volume markers verified")
     }else{
         let outcome=if result.previous{"original INIT was already committed (historical receipt only)"}
             else{"original INIT committed after all initial volume markers were synchronized"};
@@ -148,10 +148,12 @@ mod command_cases{
         assert!(pending.starts_with("init=pending ")&&!pending.contains("init_request_sha256"));
     }
     #[test]
-    fn fresh_v18_init_is_a_distinct_explicit_terminal_only_mode(){
+    fn fresh_deployment_init_is_a_distinct_explicit_terminal_only_mode(){
         let d=|v:&str|v.repeat(16);
-        let t=format!("new-zxs-v18 --init-actor {} --storage-uid 1001 --storage-gid 1002 --op {} --approval {} --system /s --recycle /r --data /f",d("31"),d("32"),d("33"));
-        if cfg!(feature="private-fresh-zxs-v18"){
+        let t=format!("new-deployment --init-actor {} --storage-uid 1001 --storage-gid 1002 --op {} --approval {} --system /s --recycle /r --data /f",d("31"),d("32"),d("33"));
+        let retired=t.replacen("new-deployment","new-zxs-v18",1);
+        assert!(Installation::parse(retired.split_ascii_whitespace().map(OsString::from)).is_err());
+        if cfg!(feature="private-fresh-install"){
             let v=Installation::parse(args(&t)).unwrap();
             assert!(v.private&&!v.browser&&matches!(v.action,InitAction::Apply(Purpose::Fresh)));
         }else{assert!(Installation::parse(args(&t)).is_err());}

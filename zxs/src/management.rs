@@ -6,6 +6,7 @@ mod pages;
 mod transport;
 mod manual;
 mod directory;
+mod file_labels;
 mod browser;
 use transport::Audience;
 
@@ -139,6 +140,7 @@ impl<'s> App<'s>{
                 _=>UNAVAILABLE()
             };
         }
+        if q.method=="POST"&&matches!(q.target.as_str(),file_labels::FILTER|file_labels::LABELS){return self.label_form(q);}
         if q.method=="POST"&&q.target==manual::RECEIPT{return self.manual_receipt(q,now);}
         if q.method!="POST"||!matches!(q.target.as_str(),"/login"|"/logout"|"/shares/mode"){return Reply::text("404 Not Found","没有此管理页面。");}
         if q.origin.as_deref()!=Some(q.audience.origin.as_str()){return REJECT();}

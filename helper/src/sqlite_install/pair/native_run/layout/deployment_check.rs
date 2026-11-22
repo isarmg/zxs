@@ -3,7 +3,7 @@
 //! can leave the lowered original SYSTEM reader.
 use super::{Channel,Kind,PublicConfirmation,bad,observed,place,query_with,random,sealed,sealed_owner};
 use crate::{smb_profile::rust_first::{MAX_WIRE,RustPlan},sqlite_install::{markers::SystemObservation,originals::LockedSystem,pair::{
-    domain::DeployedSite,fresh_issuer::{ExplicitSubject,InitialDatabase,MAX_SITE,SitePayload,compiled_v18,image}
+    domain::DeployedSite,fresh_issuer::{ExplicitSubject,InitialDatabase,MAX_SITE,SitePayload,compiled_schema,image}
 }}};
 use rustix::process::{Pid,getppid};
 use sha2::{Digest,Sha256};
@@ -21,7 +21,7 @@ pub(super) struct Question{
 }
 impl Question{
     fn encode(&self)->io::Result<Vec<u8>>{
-        compiled_v18()?;
+        compiled_schema()?;
         let site=self.site.encode()?;
         let plan=self.plan.wire();
         if self.nonce==[0;32]||self.where_system[1..].contains(&0)||self.site.origin!=self.plan.origin||

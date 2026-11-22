@@ -23,8 +23,8 @@ pub(super) fn name(it:&mut impl Iterator<Item=OsString>,flag:&str)->Result<Vec<u
 
 impl Setup{
     pub(crate) fn parse(mut it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        if !(cfg!(feature="private-fresh-zxs-v18")&&it.next().as_deref()==Some(OsStr::new("issue-fresh-zxs-v18"))){
-            return Err("no public setup/SMB service command; the private fresh v18 fixture is separately enabled");
+        if !(cfg!(feature="private-fresh-install")&&it.next().as_deref()==Some(OsStr::new("issue-fresh"))){
+            return Err("no public setup/SMB service command; the private fresh v19 fixture is separately enabled");
         }
         super::fresh_issuer::Selection::parse(it).map(Self)
     }

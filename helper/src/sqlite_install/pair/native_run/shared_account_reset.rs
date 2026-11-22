@@ -1,8 +1,8 @@
-//! The one installed v18 shared account has one new or historical operation.
+//! The one installed v19 shared account has one new or historical operation.
 //! The command never selects an alternate site, identity, database or vault.
 use super::rust_credentials::transact_deployed;
 use crate::sqlite_install::{bad,pair::{Id,command::{key,sha,value},domain::DeployedSite,
-    fresh_issuer::require_v18,native_sql::rust_vault::{Desired,RustOrder},
+    fresh_issuer::require_private_install,native_sql::rust_vault::{Desired,RustOrder},
     rust_enroll::manifest::{Authority,DeployedScope,Intent,Manifest},terminal::PublicConfirmation},stage::random};
 use std::{ffi::OsString,io};
 
@@ -13,7 +13,7 @@ pub(crate) struct Selection{
 }
 impl Selection{
     pub(crate) fn parse(mut it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        if !cfg!(feature="private-fresh-zxs-v18"){return Err("private v18 shared-account maintenance is disabled");}
+        if !cfg!(feature="private-fresh-install"){return Err("private v19 shared-account maintenance is disabled");}
         let intent=match it.next().as_deref().and_then(|s|s.to_str()){
             Some("new")=>Intent::Fresh,Some("receipt")=>Intent::Lookup,
             _=>return Err("choose reset-account new or receipt explicitly"),
@@ -30,7 +30,7 @@ impl Selection{
         Ok(Self{intent,op,approval,previous,generation,helper,providers})
     }
     pub(crate) fn run(self)->io::Result<u8>{
-        require_v18()?;
+        require_private_install()?;
         // Select the exact installed original and local SYSTEM first,
         // while the original process still holds only stdio.
         let site=DeployedSite::select_for_account_reset()?;
@@ -80,7 +80,7 @@ mod tests{
         let parse=|a:&[&str]|Selection::parse(a.iter().map(|s|OsString::from(*s)));
         let (op,approval,previous,d)=(hex(&[1;16]),hex(&[2;16]),hex(&[3;16]),hex(&[4;32]));
         let base=["receipt","--op",&op,"--approval",&approval,"--previous",&previous,"--previous-generation","2","--helper-sha256",&d];
-        if !cfg!(feature="private-fresh-zxs-v18"){assert!(parse(&base).is_err());return;}
+        if !cfg!(feature="private-fresh-install"){assert!(parse(&base).is_err());return;}
         assert!(parse(&base).unwrap().providers.is_none());
         let mut branch=base.to_vec();branch[0]="new";
         assert!(parse(&branch).is_err());

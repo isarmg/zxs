@@ -1,7 +1,11 @@
+use crate::label_text::{Label, MAX};
 use std::fmt;
 
 pub(crate) const ROOTS: &str = "#zxs-files";
 const DIRECTORY: &str = "#zxs-d/";
+// Two ids and a continuation leave room for one hex label in the fragment,
+// not in the HTTP request target.
+pub(crate) const MAX_FRAGMENT: usize = DIRECTORY.len() + 3 * 32 + 3 + 2 * MAX;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Id([u8; 32]);
@@ -21,28 +25,45 @@ impl fmt::Display for Id {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Folder {
     pub(crate) share: Id,
     pub(crate) parent: Option<Id>,
     pub(crate) page: Option<Id>,
+    pub(crate) filter: Option<Label>,
 }
 
 impl Folder {
-    pub(crate) fn destination(self, parent: Option<Id>) -> Self {
-        Self { parent, page: None, ..self }
+    pub(crate) fn destination(&self, parent: Option<Id>) -> Self {
+        Self { parent, page: None, ..self.clone() }
     }
 
-    fn path(self, prefix: &str) -> String {
+    fn path(&self, prefix: &str) -> String {
         let segment = |id: Option<Id>| id.map_or_else(|| "-".into(), |id| id.to_string());
         format!("{prefix}{}/{}/{}", self.share, segment(self.parent), segment(self.page))
     }
 
-    pub(crate) fn fragment(self) -> String {
-        self.path(DIRECTORY)
+    pub(crate) fn fragment(&self) -> String {
+        let mut path = self.path(DIRECTORY);
+        if let Some(name) = &self.filter {
+            path.push('/');
+            path.push_str(&name.encoded());
+        }
+        path
     }
 
-    pub(crate) fn request_path(self) -> String {
+    pub(crate) fn form(&self, csrf: &str) -> Option<String> {
+        let label = self.filter.as_ref()?.encoded();
+        let parent = self.parent.map_or_else(|| "-".into(), |id| id.to_string());
+        let after = self.page.map_or_else(|| "-".into(), |id| id.to_string());
+        Some(format!("csrf={csrf}&share={}&parent={parent}&after={after}&label={label}", self.share))
+    }
+
+    pub(crate) fn filtered(&self, filter: Option<Label>) -> Self {
+        Self { filter, page: None, ..self.clone() }
+    }
+
+    pub(crate) fn request_path(&self) -> String {
         self.path("/ui/v1/d/")
     }
 }
@@ -66,7 +87,7 @@ impl Panel {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Location {
     Landing,
     Panel(Panel),
@@ -97,14 +118,18 @@ impl Location {
             let segment = |part: &str| if part == "-" { Some(None) } else { Id::parse(part).map(Some) };
             let parent = segment(segments.next()?)?;
             let page = segment(segments.next()?)?;
-            segments.next().is_none().then_some(Folder { share, parent, page })
+            let filter = match segments.next() {
+                None => None,
+                Some(label) => Some(Label::from_hex(label)?),
+            };
+            segments.next().is_none().then_some(Folder { share, parent, page, filter })
         })();
         folder.map_or(Self::InvalidDirectory, Self::Directory)
     }
 
-    pub(crate) fn selected(self) -> Option<Panel> {
+    pub(crate) fn selected(&self) -> Option<Panel> {
         match self {
-            Self::Panel(panel) => Some(panel),
+            Self::Panel(panel) => Some(*panel),
             Self::Directory(_) | Self::InvalidDirectory => Some(Panel::Folders),
             Self::Landing | Self::Other => None,
         }

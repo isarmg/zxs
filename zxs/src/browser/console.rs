@@ -1,5 +1,7 @@
 //! The original folder view: navigation, validation and presentation in Rust.
-use super::{data::{self, Kind, Page}, host::{self, Element, Fault, Result}, route::{Folder, Id, Location, Panel, ROOTS}};
+use super::{data::{self, Entry, Kind, Page}, host::{self, Element, Fault, Post, Result},
+    labels::{self, Editor, Outcome}, route::{Folder, Id, Location, Panel, ROOTS}};
+use crate::label_text;
 use std::cell::{Cell, OnceCell, RefCell};
 
 const SKIP: &str = "#zxs-main-content";
@@ -22,6 +24,13 @@ struct Pending {
     hash: String,
 }
 
+struct Shown {
+    folder: Folder,
+    entries: Vec<Entry>,
+    scope: [u8; 32],
+    writable: bool,
+}
+
 struct Console {
     views: [View; 4],
     secondary: Element,
@@ -31,6 +40,9 @@ struct Console {
     next_share: Option<Id>,
     generation: Cell<u64>,
     pending: RefCell<Option<Pending>>,
+    shown: RefCell<Option<Shown>>,
+    csrf: String,
+    editor: Editor,
 }
 
 thread_local! {
@@ -67,6 +79,17 @@ pub extern "C" fn zxs_directory_result(ticket: u64, status: u32) {
     });
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn zxs_folder_form(handle: u32) {
+    OWNER.with(|slot| {
+        if let Ok(form) = Element::take(handle)
+            && let Some(console) = slot.get()
+            && console.form(&form).is_err() {
+            let _ = console.message("无法处理此标签操作。", true);
+        }
+    });
+}
+
 impl View {
     fn new(kind: Panel, link: Element) -> Result<Self> {
         let panel = Element::by_id(kind.id())?;
@@ -98,6 +121,7 @@ impl Console {
         let slot = Element::by_id("zxs-console-nav")?;
         let secondary = Element::by_id("zxs-console-secondary")?;
         let roots = Element::by_id("zxs-browser-roots")?;
+        let csrf = roots.attr("data-zxs-csrf")?.filter(|value| label_text::hex::<32>(value).is_some()).ok_or(Fault)?;
         let count = roots.shares()?;
         if count > 64 { return Err(Fault); }
         let mut shares = Vec::new();
@@ -122,16 +146,17 @@ impl Console {
         ];
         slot.prepend(&directory_link)?;
         Ok(Self {views, secondary, content, corner_paint, shares, next_share,
-            generation: Cell::new(0), pending: RefCell::new(None)})
+            generation: Cell::new(0), pending: RefCell::new(None), shown: RefCell::new(None),
+            csrf, editor: Editor::new()? })
     }
 
-    fn select(&self, location: Location, focus: bool) -> Result<()> {
+    fn select(&self, location: &Location, focus: bool) -> Result<()> {
         let selected = location.selected();
         for view in &self.views {
             let active = selected == Some(view.kind);
             let visible = match selected {
                 Some(_) => active,
-                None => view.kind != Panel::Folders || location == Location::Landing,
+                None => view.kind != Panel::Folders || *location == Location::Landing,
             };
             view.show(visible, active)?;
         }
@@ -149,12 +174,13 @@ impl Console {
             return Ok(());
         }
         let location = Location::parse(&hash);
-        let ticket = self.generation.get().wrapping_add(1);
-        self.generation.set(ticket);
+        let ticket = self.ticket();
         self.pending.borrow_mut().take();
+        self.shown.borrow_mut().take();
+        self.editor.close()?;
         host::cancel_request();
         self.content.set_text("")?;
-        self.select(location, focus)?;
+        self.select(&location, focus)?;
         self.content.remove_attribute("aria-busy")?;
         match location {
             Location::Landing | Location::Panel(Panel::Folders) => self.show_roots(),
@@ -162,27 +188,89 @@ impl Console {
             Location::Directory(folder) => {
                 self.content.set_attribute("aria-busy", "true")?;
                 self.message("正在加载…", false)?;
+                if let Some(form) = folder.form(&self.csrf) {
+                    host::post(ticket, Post::Filter, &form);
+                } else {
+                    host::request(ticket, &folder.request_path());
+                }
                 *self.pending.borrow_mut() = Some(Pending { ticket, folder, hash });
-                host::request(ticket, &folder.request_path());
                 Ok(())
             }
             Location::Panel(_) | Location::Other => Ok(()),
         }
     }
 
+    fn ticket(&self) -> u64 {
+        let ticket = self.generation.get().wrapping_add(1);
+        self.generation.set(ticket);
+        ticket
+    }
+
+    fn matches_hash(hash: &str) -> bool {
+        matches!(host::hash().as_deref(), Ok(current) if current == hash || current == SKIP)
+    }
+
+    fn set_folder(&self, folder: &Folder) -> Result<()> {
+        let hash = folder.fragment();
+        if host::hash()? == hash { self.navigate(false) } else { host::set_hash(&hash) }
+    }
+
+    fn form(&self, form: &Element) -> Result<()> {
+        let action = labels::action(form)?;
+        let shown_guard = self.shown.borrow();
+        let Some(shown) = shown_guard.as_ref() else { return Ok(()) };
+        if !Self::matches_hash(&shown.folder.fragment()) { return Ok(()); }
+        match action.as_str() {
+            "filter" => {
+                if let Some(next) = labels::filtered(form, &shown.folder)? {
+                    drop(shown_guard);
+                    // set_folder may directly restart an already-current first page.
+                    return self.set_folder(&next);
+                }
+                Ok(())
+            }
+            "open" => {
+                let file = labels::chosen(form)?;
+                let row = shown.entries.iter().find(|row| row.id == file && row.kind == Kind::File).ok_or(Fault)?;
+                self.editor.open(labels::Selection { folder: shown.folder.clone(), file,
+                    position: row.position.ok_or(Fault)?, scope: shown.scope, writable: shown.writable,
+                    name: row.name.clone() }, self.ticket(), &self.csrf)
+            }
+            "refresh" => {
+                let at = shown.folder.destination(shown.folder.parent);
+                drop(shown_guard);
+                self.set_folder(&at)
+            }
+            other => self.editor.submit(other, form, self.ticket(), &self.csrf),
+        }
+    }
+
+    fn label_result(&self, ticket: u64, status: u32) -> Result<()> {
+        let visible = self.shown.borrow().as_ref().is_some_and(|page| Self::matches_hash(&page.folder.fragment()));
+        if !visible { return Ok(()); }
+        match self.editor.completion(ticket, status, self.ticket(), &self.csrf)? {
+            Outcome::NoChange => Ok(()),
+            Outcome::Reload(folder) => self.set_folder(&folder),
+            Outcome::SignIn => host::sign_in(),
+        }
+    }
+
     fn directory_result(&self, ticket: u64, status: u32) {
         if self.pending.borrow().as_ref().is_none_or(|pending| pending.ticket != ticket) {
+            if self.label_result(ticket, status).is_err() {
+                let _ = self.message("暂时无法显示标签。", true);
+            }
             return;
         }
         let Some(pending) = self.pending.borrow_mut().take() else { return };
-        if !matches!(host::hash().as_deref(), Ok(current) if current == pending.hash || current == SKIP) {
+        if !Self::matches_hash(&pending.hash) {
             return;
         }
         let render = || {
             self.content.remove_attribute("aria-busy")?;
             self.content.set_text("")?;
             match status {
-                200 => match data::decode(pending.folder) {
+                200 => match data::decode(&pending.folder) {
                     Some(page) => self.show_folder(pending.folder, page),
                     None => self.directory_error("读取失败，请稍后重试。"),
                 },
@@ -207,7 +295,7 @@ impl Console {
         } else {
             let list = Self::list()?;
             for share in &self.shares {
-                let folder = Folder { share: share.id, parent: None, page: None };
+                let folder = Folder { share: share.id, parent: None, page: None, filter: None };
                 Self::entry(&list, &share.label, Kind::Directory, &folder.fragment())?;
             }
             self.show_rows(&list, false)?;
@@ -220,15 +308,19 @@ impl Console {
     }
 
     fn show_folder(&self, folder: Folder, page: Page) -> Result<()> {
-        let crumb = self.breadcrumb(folder, &page)?;
+        let crumb = self.breadcrumb(&folder, &page)?;
         self.content.append_child(&crumb)?;
+        self.content.append_child(&labels::filter(&folder)?)?;
+        self.editor.attach(&self.content)?;
         if page.entries.is_empty() {
-            let message = if folder.page.is_some() { "此页没有更多项目。" } else { "这个文件夹是空的。" };
+            let message = if folder.page.is_some() { "此页没有更多项目。" }
+                else if folder.filter.is_some() { "这个目录没有匹配标签的文件或子目录。" }
+                else { "这个文件夹是空的。" };
             self.message(message, false)?;
         } else {
             let list = Self::list()?;
             let actions = page.entries.iter().any(|row| row.kind == Kind::File);
-            for row in page.entries {
+            for row in &page.entries {
                 let href = match row.kind {
                     Kind::Directory => folder.destination(Some(row.id)).fragment(),
                     Kind::File => format!("/versions/history?file={}", row.id),
@@ -237,7 +329,10 @@ impl Console {
                 if row.kind == Kind::File {
                     let button = Self::button(&format!("/versions?file={}", row.id), "手动提交")?;
                     button.set_attribute("aria-label", &format!("手动提交 {} 的版本", row.name))?;
-                    line.append_child(&button)?;
+                    let operations = node("div", "zxs-file-actions")?;
+                    operations.append_child(&button)?;
+                    operations.append_child(&labels::open_button(row.id, &row.name)?)?;
+                    line.append_child(&operations)?;
                 }
             }
             self.show_rows(&list, actions)?;
@@ -250,15 +345,16 @@ impl Console {
                 pager.append_child(&first)?;
             }
             if let Some(page) = page.next {
-                let next = Self::button(&Folder {page: Some(page), ..folder}.fragment(), "下一页")?;
+                let next = Self::button(&Folder {page: Some(page), ..folder.clone()}.fragment(), "下一页")?;
                 pager.append_child(&next)?;
             }
             self.content.append_child(&pager)?;
         }
+        *self.shown.borrow_mut() = Some(Shown { folder, entries: page.entries, scope: page.scope, writable: page.writable });
         Ok(())
     }
 
-    fn breadcrumb(&self, folder: Folder, page: &Page) -> Result<Element> {
+    fn breadcrumb(&self, folder: &Folder, page: &Page) -> Result<Element> {
         let nav = node("nav", "zxs-breadcrumb")?;
         nav.set_attribute("aria-label", "当前位置")?;
         let items = Element::new("ol", false)?;
@@ -369,19 +465,19 @@ fn visibility(element: &Element, shown: bool) -> Result<()> {
     }
 }
 
-fn node(tag: &str, class: &str) -> Result<Element> {
+pub(super) fn node(tag: &str, class: &str) -> Result<Element> {
     let element = Element::new(tag, false)?;
     element.set_class_name(class)?;
     Ok(element)
 }
 
-fn text(tag: &str, value: &str) -> Result<Element> {
+pub(super) fn text(tag: &str, value: &str) -> Result<Element> {
     let element = Element::new(tag, false)?;
     element.set_text(value)?;
     Ok(element)
 }
 
-fn link(href: &str, label: &str) -> Result<Element> {
+pub(super) fn link(href: &str, label: &str) -> Result<Element> {
     let link = text("a", label)?;
     link.set_attribute("href", href)?;
     Ok(link)

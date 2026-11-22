@@ -17,8 +17,12 @@ try {
   const { default: start } = await import(pathToFileURL(host));
   const share = "1".repeat(32), parent = "2".repeat(32), file = "3".repeat(32), cursor = "4".repeat(32);
   const panelIds = ["zxs-files", "zxs-shares", "zxs-versions", "zxs-credentials"];
-  let focused, assigned, changed;
+  let focused, assigned, changed, submitted;
   const requests = [];
+  const canonical = (x) => Buffer.from(x, "utf8").toString("hex");
+  const position = "5".repeat(32), csrf = "06".repeat(32), scope = "07".repeat(32);
+  const entries = [{ id: file, name: "<模型&>.zxs", kind: "file", position }];
+  const current = { ancestors: [{ id: parent, name: "设计文件" }], entries, next: cursor, scope, writable: true };
 
   class Element {
     constructor(name, namespace = null) { this.name = name; this.namespace = namespace; }
@@ -26,6 +30,9 @@ try {
     children = [];
     parent = null;
     literal = "";
+    currentValue = null;
+    get value() { return this.currentValue ?? this.getAttribute("value") ?? ""; }
+    set value(v) { this.currentValue = v; }
     get firstChild() { return this.children[0] ?? null; }
     get firstElementChild() { return this.firstChild; }
     get textContent() { return this.literal + this.children.map((node) => node.textContent).join(""); }
@@ -46,7 +53,17 @@ try {
     }
     appendChild(node) { this.insertBefore(node, null); }
     walk() { return this.children.flatMap((node) => [node, ...node.walk()]); }
+    addEventListener(name, callback) {
+      assert.equal(name, "submit");
+      submitted = callback;
+    }
     querySelector(selector) {
+      if (selector === "input[name=label]") {
+        return this.walk().find((el) => el.name === "input" && el.getAttribute("name") === "label") ?? null;
+      }
+      if (selector === "[role=status]") {
+        return this.walk().find((el) => el.getAttribute("role") === "status") ?? null;
+      }
       const href = /^a\[href="([^"]+)"\]$/u.exec(selector)?.[1];
       return this.walk().find((el) => el.name === "a" && el.getAttribute("href") === href) ?? null;
     }
@@ -72,6 +89,7 @@ try {
   fixture("zxs-file-corner-source").appendChild(paint);
   const roots = fixture("zxs-browser-roots");
   roots.setAttribute("data-zxs-next", cursor);
+  roots.setAttribute("data-zxs-csrf", csrf);
   const root = new Element("span");
   root.textContent = "项目 <&>";
   root.setAttribute("data-zxs-share", share);
@@ -107,8 +125,15 @@ try {
         assert.equal(basename(path.pathname), "zxs_browser_bg.wasm");
         return Promise.resolve(new Response(bytes, { headers: { "content-type": "application/wasm" } }));
       }
-      assert.equal(options.method, "GET");
-      return new Promise((resolve) => requests.push({ path, signal: options.signal, resolve }));
+      assert.ok(options.method === "GET" || options.method === "POST");
+      let form = null;
+      if (options.method === "POST") {
+        assert.equal(options.headers["content-type"], "application/x-www-form-urlencoded");
+        assert.ok(path === "/ui/v1/df" || path === "/ui/v1/labels");
+        form = Object.fromEntries(new URLSearchParams(options.body));
+        assert.equal(form.csrf, csrf);
+      }
+      return new Promise((resolve) => requests.push({ path, method: options.method, form, signal: options.signal, resolve }));
     },
   };
 
@@ -116,9 +141,10 @@ try {
   const flush = () => new Promise((resolve) => setImmediate(resolve));
   function reply(at, value, options = {}) {
     const payload = typeof value === "string" ? value : JSON.stringify(value);
-    requests[at].resolve(new Response(payload, {
+    const content = options.status === 204 ? null : payload;
+    requests[at].resolve(new Response(content, {
       status: options.status ?? 200,
-      headers: { "content-type": options.mime ?? "application/json", "content-length": String(options.length ?? Buffer.byteLength(payload)) },
+      headers: { "content-type": options.mime ?? "application/json", "content-length": String(options.length ?? Buffer.byteLength(content ?? "")) },
     }));
   }
 
@@ -145,8 +171,7 @@ try {
 
   // The skip link doesn't invalidate an already selected directory.
   navigate("#zxs-main-content");
-  reply(1, { ancestors: [{ id: parent, name: "设计文件" }],
-    entries: [{ id: file, name: "<模型&>.zxs", kind: "file" }], next: cursor });
+  reply(1, current);
   await flush();
   assert.equal(content.getAttribute("aria-busy"), null);
   assert.ok(content.textContent.includes("设计文件") && content.textContent.includes("<模型&>.zxs"));
@@ -177,7 +202,86 @@ try {
   reply(5, {}, { status: 401 });
   await flush();
   assert.equal(assigned, "/login");
-  console.log("Real WASM: original folder navigation, typed responses, stale cancellation and same-origin transport passed.");
+
+  function submit(action, input = undefined) {
+    const form = content.walk().find((el) => el.getAttribute("data-zxs-action") === action && el.name === "form");
+    assert.ok(form, `rendered ${action} form`);
+    if (input !== undefined) form.querySelector("input[name=label]").value = input;
+    let prevented = false;
+    submitted({ target: form, preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+  }
+  navigate(base);
+  reply(6, current);
+  await flush();
+  submit("filter", "中".repeat(100)); // 100 codepoints, 300 UTF-8 bytes; no truncation.
+  assert.ok(content.textContent.includes("255"));
+  assert.equal(requests.length, 7);
+  const exact = "图纸 <&>";
+  const selected = canonical(exact), filtered = `${base}/${selected}`;
+  submit("filter", exact);
+  assert.equal(window.location.hash, filtered);
+  changed();
+  assert.equal(requests[7].path, "/ui/v1/df");
+  assert.deepEqual(requests[7].form, { csrf, share, parent, after: "-", label: selected });
+  const child = "8".repeat(32);
+  reply(7, { ...current, entries: [{ id: child, name: "子目录", kind: "directory" }, ...entries] });
+  await flush();
+  assert.ok(links().includes(base) && links().includes(`#zxs-d/${share}/${child}/-/${selected}`));
+  assert.ok(links().includes(`#zxs-d/${share}/${parent}/${cursor}/${selected}`));
+
+  submit("open");
+  assert.deepEqual(requests[8].form, { csrf, share, parent, file, position, scope, action: "list", label: "-" });
+  const labels = Array.from({ length: 31 }, (_, i) => canonical(`caption ${String(i).padStart(2,"0")}`));
+  labels.push(selected);
+  reply(8, { labels, next: selected });
+  await flush();
+  assert.ok(content.walk().some((el) => el.name === "bdi" && el.textContent === exact));
+  submit("next");
+  assert.equal(requests[9].form.label, selected);
+  reply(9, { labels: [], next: null });
+  await flush();
+  assert.ok(content.textContent.includes("此页没有更多标签"));
+  submit("add", exact);
+  assert.equal(requests[10].form.action, "add");
+  assert.equal(requests[10].form.label, selected);
+  assert.equal(requests[10].signal, undefined); // Navigation cannot undo a sent edit.
+  reply(10, null, { status: 204 });
+  await flush();
+  assert.equal(requests[11].form.action, "list"); // Only a read follows success.
+  reply(11, { labels: [selected], next: null });
+  await flush();
+  submit("remove");
+  assert.equal(requests[12].form.action, "remove");
+  assert.equal(requests[12].form.label, selected);
+  reply(12, null, { status: 204 });
+  await flush();
+  assert.equal(requests[13].path, "/ui/v1/df"); // Changed membership reopens folder on the first page.
+  reply(13, { ...current, entries: [], next: null });
+  await flush();
+  assert.ok(content.textContent.includes("没有匹配标签") && !content.textContent.includes("模型"));
+
+  navigate(base);
+  reply(14, current);
+  await flush();
+  submit("open");
+  reply(15, { labels: [], next: null });
+  await flush();
+  submit("add", "late");
+  navigate("#zxs-credentials");
+  reply(16, null, { status: 204 });
+  await flush();
+  assert.equal(requests.length, 17); // Stale result must not start a read or rewrite another view.
+  assert.ok(!content.textContent.includes("正在保存标签"));
+  navigate(base);
+  reply(17, { ...current, writable: false });
+  await flush();
+  submit("open");
+  reply(18, { labels: [selected], next: null });
+  await flush();
+  assert.ok(content.textContent.includes(exact));
+  assert.ok(!content.walk().some((el) => ["add", "remove"].includes(el.getAttribute("data-zxs-action"))));
+  console.log("Real WASM: folders, exact label filter/edit/paging, stale results, read-only controls and same-origin transport passed.");
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

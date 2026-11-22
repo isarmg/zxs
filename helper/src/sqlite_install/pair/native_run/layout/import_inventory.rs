@@ -42,7 +42,7 @@ impl ImportCheck{
         Ok(())
     }
     fn query(&self)->io::Result<Reply>{
-        retire_ordinary::compiled_v18()?;
+        retire_ordinary::compiled_schema()?;
         approval::no_inherited_descriptors()?;
         let scope=mount_scope()?;
         let _host=approval::host_admin()?;
@@ -103,7 +103,7 @@ impl Question{
         let system=location(&mut b)?;let source=location(&mut b)?;
         let q=ImportCheck{system:path(&mut b)?,source:path(&mut b)?,pool,init,subject};
         if !b.is_empty()||encode(&q,&nonce,system,source)?.as_slice()!=raw{return Err(invalid());}
-        retire_ordinary::compiled_v18()?;
+        retire_ordinary::compiled_schema()?;
         Ok(Self{q,system,source})
     }
     pub(super) fn original_system(&self)->(ExplicitSubject,[u64;3],&Path){(self.q.subject,self.system,&self.q.system)}

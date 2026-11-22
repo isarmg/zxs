@@ -3,7 +3,7 @@
 use super::{PRODUCT,Site,approval,bad,child,contents,layout,lease,mark,product_pin,public_record::Public,
     rust_site::{PublicAuthority,VaultStamp,checked_vault_stamp},shared_lease,state_pins};
 use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::{MAX_WIRE,RustPlan},
-    sqlite_install::{pair::fresh_issuer::{SitePayload,compiled_v18,image},product_layout}};
+    sqlite_install::{pair::fresh_issuer::{SitePayload,compiled_schema,image},product_layout}};
 use rustix::fs::{FlockOperation,Mode,OFlags,ResolveFlags,flock,openat2};
 use sha2::{Digest,Sha256};
 use std::{ffi::CStr,fs::File,io,os::unix::fs::{FileExt,MetadataExt},path::Path};
@@ -63,7 +63,7 @@ impl DeployedSite{
         })
     }
     fn select_with_system(find:impl FnOnce(&Path)->io::Result<Pinned>)->io::Result<Self>{
-        compiled_v18()?;
+        compiled_schema()?;
         approval::no_inherited_descriptors()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         let host=approval::host_admin()?;
@@ -97,7 +97,7 @@ impl DeployedSite{
         result.require()?;Ok(result)
     }
     pub(in crate::sqlite_install::pair) fn require(&self)->io::Result<()>{
-        compiled_v18()?;
+        compiled_schema()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         let (_,uid,gid)=self.payload.subject.tuple();
         layout::protected_control(&self.parent)?;
@@ -199,7 +199,7 @@ fn qualify_payload(bytes:&[u8],plan:&RustPlan,site_sha:[u8;32])->io::Result<Site
 /// Qualify the original installed origin in a private worker before
 /// lowering, without opening the vault or acquiring a second lock.
 pub(in crate::sqlite_install::pair) fn deployed_worker_payload(plan:&RustPlan,site_sha:[u8;32])->io::Result<SitePayload>{
-    compiled_v18()?;
+    compiled_schema()?;
     if site_sha==[0;32]{return Err(unknown());}
     let expected=SelectedSite{instance:plan.origin.instance,sha:site_sha};
     let site=Site::product(approval::host_admin()?,&expected.instance,false)?;

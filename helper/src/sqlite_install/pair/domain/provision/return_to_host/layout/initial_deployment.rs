@@ -6,7 +6,7 @@ use super::{attrs,bare_acl,creation_preflight,fstatvfs,host_mount,mark,new_dir,n
 use super::super::{Site,approval,bad,child,lease,public_record::Public,
     rust_site::{PublicAuthority,RustSite},site_lease::SiteLease};
 use crate::{pinned::{Kind,Pinned,private_inode_reader},smb_profile::rust_first::MAX_WIRE,sqlite_install::{product_layout,pair::{
-    fresh_issuer::{DEPLOYMENT_BYTES,FreshConsent,SitePayload,activation,require_v18},
+    fresh_issuer::{DEPLOYMENT_BYTES,FreshConsent,SitePayload,activation,require_private_install},
     native_run::{FreshActive,ResolvedRust},terminal::PublicConfirmation}}};
 use rustix::fs::{FlockOperation,Mode,OFlags,RawDir,ResolveFlags,flock,openat2};
 use std::{ffi::{CStr,CString},fs::File,io::{self,Read},mem::MaybeUninit,os::unix::fs::FileExt,path::Path};
@@ -73,7 +73,7 @@ fn verify_file(parent:&File,name:&CStr,original:&File,wanted:&[u8],mode:Mode)->i
 pub(in crate::sqlite_install::pair) struct FreshParent{parent:Site,ex:File,stage:CString,instance:[u8;16]}
 impl FreshParent{
     pub(in crate::sqlite_install::pair) fn select(instance:[u8;16])->io::Result<Self>{
-        require_v18()?;
+        require_private_install()?;
         approval::no_inherited_descriptors()?;
         approval::same_terminal(&io::stdin(),&io::stderr())?;
         if instance==[0;16]{return Err(no());}

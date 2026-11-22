@@ -1,7 +1,7 @@
 //! The public fields have no password or reusable grant. Detached receiver
 //! matches the actual ROOT sender, current original setup, inherited lease
 //! and sealed scope before using them. This is not another catalog.
-use super::{ExplicitSubject,bad,require_v18};
+use super::{ExplicitSubject,bad,require_private_install};
 use crate::{path_rules::Kind,smb_profile::rust_first::{Origin,RustPlan},sqlite_install::product_layout};
 use sha2::{Digest,Sha256};
 use std::{io,os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
@@ -37,7 +37,7 @@ pub(in crate::sqlite_install::pair) struct CredentialScope{
 impl CredentialScope{
     pub(in crate::sqlite_install::pair) const WIDTH:usize=ORDER.len()+16+8+96+32+32+24;
     pub(in crate::sqlite_install::pair) fn encode(self,out:&mut Vec<u8>)->io::Result<()>{
-        require_v18()?;self.check()?;
+        require_private_install()?;self.check()?;
         let (actor,uid,gid)=self.subject.tuple();
         out.extend_from_slice(ORDER);out.extend_from_slice(&actor);
         out.extend_from_slice(&uid.to_be_bytes());out.extend_from_slice(&gid.to_be_bytes());
@@ -51,7 +51,7 @@ impl CredentialScope{
         Ok(())
     }
     pub(in crate::sqlite_install::pair) fn decode(raw:&[u8])->io::Result<Self>{
-        require_v18()?;
+        require_private_install()?;
         if raw.len()!=Self::WIDTH{return Err(no());}
         let mut c=Cursor(raw.strip_prefix(ORDER).ok_or_else(no)?);
         let subject=ExplicitSubject::checked(c.a()?,u32::from_be_bytes(c.a()?),u32::from_be_bytes(c.a()?))?;

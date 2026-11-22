@@ -5,7 +5,7 @@ use crate::sqlite_install::stage;
 use rusqlite::Connection;
 
 #[test]
-fn v18_has_exactly_the_audited_table_set(){
+fn current_schema_has_exactly_the_audited_table_set(){
     let mut db=Connection::open_in_memory().unwrap();
     engine::limits(&db).unwrap();
     db.execute_batch(stage::SCHEMA).unwrap();
@@ -14,7 +14,7 @@ fn v18_has_exactly_the_audited_table_set(){
     let tables=tx.prepare("SELECT name FROM main.sqlite_schema WHERE type='table'").unwrap()
         .query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
     let observed=tables.iter().map(String::as_str).collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(observed,V17_TABLES.iter().copied().collect());
+    assert_eq!(observed,AUDITED_TABLES.iter().copied().collect());
     complete_small_cut(&tx).unwrap();
     assert!(!responsibilities(&tx,&[9;16]).unwrap().any());
 }

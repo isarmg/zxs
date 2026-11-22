@@ -35,7 +35,7 @@ upgrade storage, including any v17 split-account pool.
   root:root 0444 and one link. It already defines host/one SMB share, exact
   LAN endpoints and prefixes, earliest folder names/modes and recycle label.
   A separate lower-privilege reader independently qualifies its entire shape
-  and original v18 shared-account receipts; this root selector recognizes only the matching
+  and the original shared-account receipts; this root selector recognizes only the matching
   five IDs and the selected whole SHA-256.
 - site.v1 is exactly one root:root 0600 ordinary, one-link file on that site.
   Binary bytes in order: ZXS-RUST-SITE-1 plus NUL (16 bytes); Pool, Init,

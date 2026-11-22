@@ -8,18 +8,18 @@ use super::bad;
 use sha2::{Digest,Sha256};
 use std::{ffi::OsString,io};
 
-const SCHEMA_SHA:&str="8379dfa3b66040540995ebf863d3f12c7fddbb57ce05e98961011dc7429dfc4b";
-pub(in crate::sqlite_install) fn compiled_v18()->io::Result<()>{
-    let wanted=crate::fs_tools::hex(SCHEMA_SHA).expect("frozen v18 DDL hash");
+const SCHEMA_SHA:&str="5cf057fe1df72bd606ad47f11beec7747779a67206b781bab89d2aeeaf8c8495";
+pub(in crate::sqlite_install) fn compiled_schema()->io::Result<()>{
+    let wanted=crate::fs_tools::hex(SCHEMA_SHA).expect("frozen v19 DDL hash");
     let actual:[u8;32]=Sha256::digest(crate::sqlite_install::stage::SCHEMA.as_bytes()).into();
-    if crate::sqlite_install::catalog::SCHEMA_VERSION!=18||actual!=wanted{
-        return Err(bad("the private fresh ZXS issuer is not qualified for this exact v18 format"));
+    if crate::sqlite_install::catalog::SCHEMA_VERSION!=19||actual!=wanted{
+        return Err(bad("the private fresh ZXS issuer is not qualified for this exact v19 format"));
     }
     Ok(())
 }
-pub(in crate::sqlite_install) fn require_v18()->io::Result<()>{
-    if !cfg!(feature="private-fresh-zxs-v18"){return Err(bad("private fresh ZXS issuance is disabled"));}
-    compiled_v18()
+pub(in crate::sqlite_install) fn require_private_install()->io::Result<()>{
+    if !cfg!(feature="private-fresh-install"){return Err(bad("private fresh ZXS issuance is disabled"));}
+    compiled_schema()
 }
 type Id=[u8;16];
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -128,7 +128,7 @@ impl Selection{
         Ok(Self{subject,system,origin,reference,init_sha,image_path,image,crypto,login,shares})
     }
     pub(super) fn run(self)->io::Result<(u8,String)>{
-        require_v18()?;
+        require_private_install()?;
         let Self{subject,system,origin,reference,init_sha,image_path,image,crypto,login,shares}=self;
         // Check host/stdin custody before obtaining any unrelated FD. This
         // genuine low reader holds the original S EX and no root SQL.
@@ -214,7 +214,7 @@ fn hex(bytes:&[u8])->String{bytes.iter().map(|b|format!("{b:02x}")).collect()}
 fn preview(resolved:&ResolvedRust,payload:&SitePayload,target:&FreshHome,shared:&ActiveRustMeta,reference:&Id,action:[u8;32],crypto:CryptoPins)
     ->io::Result<String>{
     let p=resolved.plan();let o=p.origin;let(actor,uid,gid)=payload.subject.tuple();
-    let mut out=format!("仅发行从未设置账号的 v18 新 ZXS 池。不会续单、覆盖、清理、迁移，也不会启动任何服务。若中断则保留所有原件，不能盲目重做。\n\
+    let mut out=format!("仅发行从未设置账号的 v19 新 ZXS 池。不会续单、覆盖、清理、迁移，也不会启动任何服务。若中断则保留所有原件，不能盲目重做。\n\
         原池 {} / INIT {} / 原请求 SHA-256 {} / 原主体 {} / 存储 UID:GID {uid}:{gid}。\n\
         新站点 {} / Bind {} / SETUP {} / 批准参考 {}。\n\
         实际受保护的目标 {}。此操作最后独立写入新 deployment.v1；已有文件一律不接管。\n\
@@ -241,7 +241,7 @@ mod tests{
     use super::*;
     fn arg(s:&str)->impl Iterator<Item=OsString>+'_{s.split_ascii_whitespace().map(OsString::from)}
     #[test]
-    fn fresh_v18_issue_parser_cannot_select_an_old_action_or_credential_path(){
+    fn fresh_deployment_issue_parser_cannot_select_an_old_action_or_credential_path(){
         let form=format!("--init-actor {} --storage-uid 1001 --storage-gid 1002 --system /lab/S --pool {} --init {} \
             --instance {} --bind {} --setup-op {} --init-sha256 {} --approval {} --zxs-image /fixture/bin/zxs --zxs-sha256 {} --helper-sha256 {} --gcrypt-sha256 {} \
             --gpgerror-sha256 {} --host fresh.test --login first.zxs --recycle-name Recycle \
@@ -263,8 +263,10 @@ mod tests{
             form.replace("/fixture/bin/zxs","/lab/S/zxs"),form.replace("/fixture/bin/zxs","/zxs/state/zxs"),
             form.replace("/fixture/bin/zxs","/lab/F/zxs"),form.replace("/fixture/bin/zxs","/fixture/bin/other"),
             form.replace("/fixture/bin/zxs","zxs"),form.replace(&hex(&[41;32]),&hex(&[0;32]))]{assert!(Selection::parse(arg(&bad)).is_err());}
-        let public=format!("issue-fresh-zxs-v18 {form}");
-        assert_eq!(super::super::command::Setup::parse(arg(&public)).is_ok(),cfg!(feature="private-fresh-zxs-v18"));
+        let public=format!("issue-fresh {form}");
+        let retired=format!("issue-fresh-zxs-v18 {form}");
+        assert!(super::super::command::Setup::parse(arg(&retired)).is_err());
+        assert_eq!(super::super::command::Setup::parse(arg(&public)).is_ok(),cfg!(feature="private-fresh-install"));
     }
 }
 

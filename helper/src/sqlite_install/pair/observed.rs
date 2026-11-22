@@ -76,12 +76,12 @@ pub(super) fn isolated_first_init(tx:&Transaction<'_>,pool:&Id,init:&Id,actor:&I
         AND NOT EXISTS(SELECT 1 FROM main.root_share)
         AND NOT EXISTS(SELECT 1 FROM main.share_mode)",
         params![&pool[..],&init[..],&actor[..],&init_sha[..]],|r|r.get(0)).map_err(sql)?;
-    if !found{return Err(bad("not the exact committed account-free first v18 INIT"));}
+    if !found{return Err(bad("not the exact committed account-free first v19 INIT"));}
     Ok(())
 }
 pub(super) fn isolated_first_claims(pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32],locked:&LockedSystem)
     ->io::Result<(Vec<Initial>,std::fs::File)>{
-    super::fresh_issuer::require_v18()?;
+    super::fresh_issuer::require_private_install()?;
     let source=locked.source();let schema=Canonical::new()?;let db=Existing::observed_system(locked)?;
     let marker=SystemMark::before_sql(source)?;
     let pin=db.fresh_observation_pin()?;
@@ -98,12 +98,12 @@ pub(super) fn isolated_first_claims(pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32
 pub(super) fn deployed_active(locked:&LockedSystem,site:&super::fresh_issuer::SitePayload,plan:&crate::smb_profile::rust_first::RustPlan)
     ->io::Result<(std::fs::File,[u8;64],SystemObservation,[u8;224])>{
     use super::{fresh_issuer::InitialDatabase,native_sql::rust_vault::active_at};
-    super::fresh_issuer::compiled_v18()?;
+    super::fresh_issuer::compiled_schema()?;
     let (actor,uid,_)=site.subject.tuple();
     let o=site.origin;
     let source=locked.source();
     if site.plan_sha!=plan.sha()||o!=plan.origin||site.system!=source.path()||uid!=source.uid(){
-        return Err(bad("different held SYSTEM or installed v18 plan"));
+        return Err(bad("different held SYSTEM or installed v19 plan"));
     }
     let schema=Canonical::new()?;
     let db=Existing::observed_system(locked)?;

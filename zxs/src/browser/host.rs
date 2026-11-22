@@ -1,5 +1,6 @@
 //! Fixed synchronous boundary to the console's browser APIs. Import pointers
 //! address only the given Rust slices during the call; the host retains none.
+use super::route::MAX_FRAGMENT;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug)]
@@ -22,9 +23,12 @@ unsafe extern "C" {
     fn move_focus(element: u32) -> u32;
     fn read_attr(element: u32, name: *const u8, name_len: usize, out: *mut u8, capacity: usize) -> i32;
     fn read_text(element: u32, out: *mut u8, capacity: usize) -> i32;
+    fn read_value(element: u32, out: *mut u8, capacity: usize) -> i32;
     fn read_location(out: *mut u8, capacity: usize) -> i32;
     fn to_sign_in() -> u32;
+    fn set_location(value: *const u8, length: usize) -> u32;
     fn begin_read(ticket: u64, path: *const u8, length: usize);
+    fn begin_post(ticket: u64, kind: u32, form: *const u8, length: usize);
     fn cancel_read();
     fn row_count(group: u32) -> i32;
     fn read_row(group: u32, index: u32, field: u32, out: *mut u8, capacity: usize) -> i32;
@@ -57,7 +61,7 @@ impl Drop for Held {
 pub(crate) struct Element(Rc<Held>);
 
 impl Element {
-    fn take(key: u32) -> Result<Self> {
+    pub(super) fn take(key: u32) -> Result<Self> {
         if key == 0 { Err(Fault) } else { Ok(Self(Rc::new(Held(key)))) }
     }
 
@@ -100,9 +104,17 @@ impl Element {
     }
 
     pub(crate) fn attr(&self, name: &str) -> Result<Option<String>> {
-        read::<255>(|out| unsafe {
+        self.attr_with::<255>(name)
+    }
+
+    pub(crate) fn attr_with<const N: usize>(&self, name: &str) -> Result<Option<String>> {
+        read::<N>(|out| unsafe {
             read_attr(self.key(), name.as_ptr(), name.len(), out.as_mut_ptr(), out.len())
         })
+    }
+
+    pub(crate) fn value<const N: usize>(&self) -> Result<String> {
+        read::<N>(|out| unsafe { read_value(self.key(), out.as_mut_ptr(), out.len()) })?.ok_or(Fault)
     }
 
     pub(crate) fn set_text(&self, value: &str) -> Result<()> {
@@ -134,21 +146,31 @@ impl Element {
 }
 
 pub(crate) fn hash() -> Result<String> {
-    read::<512>(|out| unsafe { read_location(out.as_mut_ptr(), out.len()) })?.ok_or(Fault)
+    read::<MAX_FRAGMENT>(|out| unsafe { read_location(out.as_mut_ptr(), out.len()) })?.ok_or(Fault)
 }
 
 pub(crate) fn sign_in() -> Result<()> { status(unsafe { to_sign_in() }) }
 
+pub(crate) fn set_hash(value: &str) -> Result<()> {
+    status(unsafe { set_location(value.as_ptr(), value.len()) })
+}
+
 pub(crate) fn request(ticket: u64, path: &str) {
     unsafe { begin_read(ticket, path.as_ptr(), path.len()) }
+}
+
+pub(crate) enum Post { Filter, Labels, Edit }
+
+pub(crate) fn post(ticket: u64, purpose: Post, form: &str) {
+    unsafe { begin_post(ticket, purpose as u32, form.as_ptr(), form.len()) }
 }
 
 pub(crate) fn cancel_request() {
     unsafe { cancel_read() }
 }
 
-// Groups 0/1 are ancestor/entry rows; group 2 is the single optional cursor.
-// Fields 0/1/2 are id/name/kind. The host sees only the current completion.
+// Borrowed from this completion only: ancestors, entries, directory header,
+// and label rows. Typed decoding belongs to the application.
 pub(crate) fn rows(group: u32) -> Option<u32> {
     u32::try_from(unsafe { row_count(group) }).ok()
 }

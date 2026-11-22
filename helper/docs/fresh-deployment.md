@@ -1,12 +1,13 @@
-# Private fresh-only ZXS v18 issuer
+# Private fresh deployment
 
 A default Helper build rejects both commands below. For authorized fixture
 validation, use the [independent
 locked, offline Helper build](../RELEASE.md) with
-`--features private-fresh-zxs-v18`. The private route accepts only the exact
-v18 SQLite schema (SHA-256
-`8379dfa3b66040540995ebf863d3f12c7fddbb57ce05e98961011dc7429dfc4b`), with no
-migration, adoption, or automatic upgrade.
+`--features private-fresh-install`. The private route accepts only the exact
+v19 SQLite schema (SHA-256
+`5cf057fe1df72bd606ad47f11beec7747779a67206b781bab89d2aeeaf8c8495`), with no
+migration, adoption, or automatic upgrade. Prior v18 catalogs are refused;
+this Helper does not initialize or modify FILE labels.
 
 The intended later acceptance fixture is a **disposable Linux environment**:
 already mounted and properly protected original SYSTEM (S), independent
@@ -52,7 +53,7 @@ The command forms below describe the required order, not copy-paste shell
 commands. Brackets mark optional fields; repeat the indicated media options.
 
 ```text
-helper install-pool new-zxs-v18
+helper install-pool new-deployment
   --init-actor INIT_ACTOR_ID --storage-uid UID --storage-gid GID
   --op INIT_OP_ID --approval INIT_APPROVAL_ID
   [--system S_DIR] [--recycle R_DIR] (--data F_DIR | --data-label DISK_LABEL) ...
@@ -61,7 +62,7 @@ helper install-pool new-zxs-v18
 Give 1–62 explicit ordinary roots and prepare S/R/F first. The defaults for S and R are `/zxs/disks/system` and
 `/zxs/disks/recycle`. The protected `/zxs` layout is checked before and after
 the original foreground INIT approval. After successful marker readback,
-retain the `fresh-v18-init=confirmed` receipt fields `pool`, `operation` and
+retain the `fresh-init=confirmed` receipt fields `pool`, `operation` and
 `init_request_sha256`, along with the original subject, paths and approval
 reference for step 2. If the output was lost, `install-pool receipt` with the
 same original INIT inputs returns the same fields when confirmed. A pending
@@ -71,7 +72,7 @@ guidance](sqlite-first-install.md); do not start another pool to obtain a receip
 ## 2. Issue the shared account on that fresh pool
 
 ```text
-helper setup-pair issue-fresh-zxs-v18
+helper setup-pair issue-fresh
   --init-actor INIT_ACTOR_ID --storage-uid UID --storage-gid GID [--system S_DIR]
   --pool POOL_ID --init INIT_OP_ID --instance INSTANCE_ID --bind BIND_ID --setup-op SETUP_OP_ID
   --init-sha256 INIT_REQUEST_SHA256 --approval SETUP_APPROVAL_ID [--zxs-image DIR/zxs]

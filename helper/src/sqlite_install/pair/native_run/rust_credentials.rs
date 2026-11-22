@@ -7,7 +7,7 @@ use crate::{maintenance::HostMounts,pinned::{Kind as PathKind,Pinned,helper_elf:
     originals::SelectedSystem,pair::{
         domain::{Allocated,CredentialSite,CurrentVault,PlacedVault,RustSite,VaultStamp,checked_vault_stamp,deployed_worker_payload,
             give_live_approval,request_live_approval,sealed,verify_fresh_worker},
-        fresh_issuer::{FreshConsent,InitialDatabase,SitePayload,require_v18},
+        fresh_issuer::{FreshConsent,InitialDatabase,SitePayload,require_private_install},
         native_sql::{Original,rust_vault::{ActiveRustMeta,RustAccountCut,RustChange,observed_binding,require_observed}},
         rust_enroll::{crypto::{CredentialHelper,Cryptography},manifest::{Authority,Intent,Manifest,seal_bytes},receipt::Observed,secret_order::{SecretOrder,scope as secret_scope}},
         terminal::{HeldQuiet,PublicConfirmation,SelectedInput},
@@ -101,7 +101,7 @@ impl VaultWitness {
     }
 }
 pub(crate) fn account_worker()->io::Result<()>{
-    require_v18()?;
+    require_private_install()?;
     let [fd,meta]=account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3,4])?;
     let parent=getppid().ok_or_else(||bad("the offline Rust account owner is absent"))?;
@@ -183,7 +183,7 @@ pub(crate) fn account_worker()->io::Result<()>{
 }
 
 pub(crate) fn vault_worker()->io::Result<()>{
-    require_v18()?;
+    require_private_install()?;
     let [fd,meta]=account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3,4])?;
     let parent=getppid().ok_or_else(||bad("the original Rust secret owner is absent"))?;
@@ -304,7 +304,7 @@ impl Completed<'_>{
 }
 fn transact_inner<'s>(site:CredentialSite<'s>,m:Manifest,tty:&PublicConfirmation,
     fresh_consent:Option<(&FreshConsent<'_>,&dyn Fn()->io::Result<()>)>)->io::Result<TransactionResult<'s>>{
-    require_v18()?;
+    require_private_install()?;
     let fresh=fresh_consent.map(|(_,live)|live);
     if let Some((consent,check))=fresh_consent{consent.require_manifest(&m)?;check()?;}
     site.require()?;tty.check()?;prerequisite()?;

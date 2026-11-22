@@ -1,7 +1,7 @@
 //! Exact nonsecret order from the original root account owner. Decode is
 //! not approval. The child still proves ancestry, parent and the lent S.
 use super::bad;
-use crate::sqlite_install::pair::fresh_issuer::{CredentialScope,CryptoPins,ExplicitSubject,compiled_v18};
+use crate::sqlite_install::pair::fresh_issuer::{CredentialScope,CryptoPins,ExplicitSubject,compiled_schema};
 use crate::{path_rules::Kind,smb_profile::rust_first::{MAX_WIRE,RustPlan},
     sqlite_install::pair::native_sql::rust_vault::{Desired,RustOrder,RustChange,SetupSpec,shared_login}};
 use rustix::fs::{SealFlags,fcntl_get_seals};
@@ -22,7 +22,7 @@ pub(in crate::sqlite_install::pair) struct DeployedScope{
 impl DeployedScope{
     const WIDTH:usize=DEPLOYED_TAG.len()+24+128;
     fn check(self)->io::Result<()>{
-        compiled_v18()?;
+        compiled_schema()?;
         if self.site==[0;32]||self.helper==[0;32]{return Err(no());}
         if let Some(p)=self.crypto(){p.check()?;}
         Ok(())
@@ -64,7 +64,7 @@ pub(in crate::sqlite_install::pair) struct Manifest{
 }
 impl Manifest{
     fn require(&self)->io::Result<()>{
-        compiled_v18()?;
+        compiled_schema()?;
         let o=self.plan.origin;let w=&self.order;
         let path=self.system.to_str().ok_or_else(no)?.as_bytes();
         Kind::StorageRoot.check_path(path).map_err(bad)?;

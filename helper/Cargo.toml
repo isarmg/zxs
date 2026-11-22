@@ -16,8 +16,8 @@ name = "helper"
 path = "src/main.rs"
 
 [features]
-private-fresh-zxs-v18 = []
-embedded-zxs = ["private-fresh-zxs-v18"]
+private-fresh-install = []
+embedded-zxs = ["private-fresh-install"]
 
 [dependencies]
 argon2 = { version = "=0.5.3", default-features = false, features = ["zeroize"] }

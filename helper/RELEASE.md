@@ -17,7 +17,7 @@
    cargo +1.100.0 test --workspace --locked --offline --target x86_64-unknown-linux-gnu
    ```
 
-   上面的默认构建不接受私有 v18 首设命令。仅在另获批准的隔离配套验证中，按[确切 v18 首设说明](docs/private-fresh-zxs-v18.md)给构建命令加 `--features private-fresh-zxs-v18`。这仍是源码候选，不代表已有可部署或已验收的制品。
+   上面的默认构建不接受私有 v19 首设命令。仅在另获批准的隔离配套验证中，按[确切 v19 首设说明](docs/fresh-deployment.md)给构建命令加 `--features private-fresh-install`。这仍是源码候选，不代表已有可部署或已验收的制品。
 
    测试与发行构建是两项证据。正向文件用例需要允许的文件系统、私有专用测试目录和相应只读权限；`HELPER_TEST_DATA_PARENT` 只供测试，不能指向真实业务数据。记录实际用例数、失败、跳过及原因。以下是旧 MAINT‑1 原型的测试条件，不是通用新池的发行资格：旧原生身份与互斥用例需支持 O_TMPFILE、FS UUID / 文件句柄及指定的首次具名权限。全组锁的正向用例另需 `HELPER_TEST_RECYCLE_PARENT` 明确指定另一独立的本地专用测试区域，dev 和真实文件系统 UUID 都须与数据测试区不同；没有这个区域时不能把两目录伪装成两盘。完整祖先阳性要求所选根到当前维护进程的根目录可逐级核对、支持读固定卷标签、各所用挂载露出完整本地文件系统根，实际命名空间根行须 self-parent。即使普通宿主，也不能把缺失的 initramfs 父行当作终点正证。子树 bind 反例另需预置私有 HELPER_TEST_SUBTREE_BIND_PARENT，用例不创建挂载，也不读取测试区其他数据。缺少前提不是通过；没有用同一配置复建比对，不声称可复现。[Cargo 参数说明](https://doc.rust-lang.org/cargo/commands/cargo-build.html#manifest-options)
 

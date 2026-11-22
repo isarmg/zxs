@@ -186,7 +186,8 @@ fn only_the_original_rust_record_and_its_plan_are_current(){
 #[test]
 fn management_navigation_is_current_parent_scoped_and_byte_ordered(){
     use crate::{DirectoryId,FileId,hash::Sha256,identity::ShareId,
-        ordinary::portable_birth::Birth,system::reader::account::navigation::{Directory,Entry,memory_navigation}};
+        label_text::Label,ordinary::portable_birth::Birth,system::reader::account::{
+            file_labels::Selected,navigation::{Directory,Entry,memory_label_check,memory_label_navigation,memory_navigation}}};
     let (db,c)=on_memory();
     let scope=spec(&c,octets(BOUND).try_into().unwrap(),octets(SID).try_into().unwrap());
     let keys=scope.role_keys().unwrap();
@@ -225,16 +226,20 @@ fn management_navigation_is_current_parent_scoped_and_byte_ordered(){
     let parent=make_dir(0,root,"Projects",true);
     let pending=make_dir(254,root,"Pending",false);
     for n in 1..=34{make_dir(n,parent.0,&format!("Folder-{n:02}"),true);}
-    let leaf=FileId(id(4,1));
-    let file=OperationId(id(3,1));
-    let mut h=prefix(b"ZXS-SQLITE-1/CREATE-FILE-IN-PARENT\0",file.0);
-    for value in [share.0,mode,volume.0,parent.0]{h.update(&value).unwrap();}
-    bytes(&mut h,"Notes.txt");
-    write(format!("INSERT INTO root_entry VALUES({},{},{},{},{},{},{},{},{},{},{},{},{})",
-        literal(&file.0),literal(&share.0),literal(&mode),literal(&SETUP.0),literal(&volume.0),literal(b"Notes.txt"),
-        literal(Birth::placed_container("Notes.txt",leaf).unwrap().to_bytes()),literal(&id(5,1)),literal(&leaf.0),
-        literal(&id(6,1)),literal(&id(7,1)),literal(&id(8,1)),literal(&parent.0)));
-    operation(file.0,5,keys.smb,h.finish(),0);activate(&db,file).unwrap();
+    let make_file=|n:u8,name:&str|{
+        let leaf=FileId(id(4,n));
+        let file=OperationId(id(3,n));
+        let mut h=prefix(b"ZXS-SQLITE-1/CREATE-FILE-IN-PARENT\0",file.0);
+        for value in [share.0,mode,volume.0,parent.0]{h.update(&value).unwrap();}
+        bytes(&mut h,name);
+        write(format!("INSERT INTO root_entry VALUES({},{},{},{},{},{},{},{},{},{},{},{},{})",
+            literal(&file.0),literal(&share.0),literal(&mode),literal(&SETUP.0),literal(&volume.0),literal(name.as_bytes()),
+            literal(Birth::placed_container(name,leaf).unwrap().to_bytes()),literal(&id(5,n)),literal(&leaf.0),
+            literal(&id(6,n)),literal(&id(7,n)),literal(&id(8,n)),literal(&parent.0)));
+        operation(file.0,5,keys.smb,h.finish(),0);activate(&db,file).unwrap();
+        (leaf,file)
+    };
+    let (leaf,file)=make_file(1,"Notes.txt");
     db.fixed(c"COMMIT").unwrap();
 
     let read=|at,after|memory_navigation(&db,&c,share,at,after);
@@ -251,9 +256,32 @@ fn management_navigation_is_current_parent_scoped_and_byte_ordered(){
     assert_eq!(last,vec![
         Entry::Directory(Directory{id:DirectoryId(id(1,33)),name:"Folder-33".into()}),
         Entry::Directory(Directory{id:DirectoryId(id(1,34)),name:"Folder-34".into()}),
-        Entry::File{id:leaf,name:"Notes.txt".into()},
+        Entry::File{id:leaf,name:"Notes.txt".into(),position:file},
     ]);
     assert!(next_page.is_none());
+
+    db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    for n in 2..=36{make_file(n,&format!("Before-{n:02}.txt"));}
+    db.fixed(c"COMMIT").unwrap();
+    assert!(read(Some(parent),None).unwrap().1.iter().all(|item| matches!(item,Entry::File{..})));
+    let exact=Label::parse("CAD").unwrap();
+    let other_case=Label::parse("cad").unwrap();
+    write(format!("INSERT INTO file_label VALUES({},{})",literal(&leaf.0),literal(exact.bytes())));
+    let filtered=|name,after|memory_label_navigation(&db,&c,share,Some(parent),after,Some(name));
+    let (_,first_filtered,next_filtered,route_scope,writable)=filtered(&exact,None).unwrap();
+    assert_eq!(first_filtered,first); // Navigation remains available in a filtered view.
+    assert!(writable);
+    let second=filtered(&exact,next_filtered.as_ref()).unwrap().1;
+    assert_eq!(second,last); // A label beyond the first page still matches.
+    assert_eq!(filtered(&other_case,next_filtered.as_ref()).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+    let (_,_,case_next,_,_)=filtered(&other_case,None).unwrap();
+    assert_eq!(filtered(&other_case,case_next.as_ref()).unwrap().1,last[..2]);
+    let selected=Selected{share,parent:Some(parent),file:leaf,position:file,scope:route_scope};
+    assert!(memory_label_check(&db,&c,selected,true).is_ok());
+    assert_eq!(memory_label_check(&db,&c,Selected{position:OperationId([0x19;16]),..selected},true)
+        .unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    assert_eq!(memory_label_check(&db,&c,Selected{scope:[0;32],..selected},false)
+        .unwrap_err().kind(),io::ErrorKind::WouldBlock);
 
     let op=id(9,0);let old=id(0,0);let member=id(2,0);
     let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/RENAME-DIRECTORY\0").unwrap();
@@ -271,11 +299,60 @@ fn management_navigation_is_current_parent_scoped_and_byte_ordered(){
     activate(&db,OperationId(op)).unwrap();
     assert_eq!(read(Some(parent),next).err().unwrap().kind(),io::ErrorKind::WouldBlock);
     assert_eq!(read(Some(parent),None).unwrap().0,vec![Directory{id:parent,name:"Renamed".into()}]);
+    assert_eq!(memory_label_check(&db,&c,selected,false).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    let (_,_,still_next,renamed_scope,_)=filtered(&exact,None).unwrap();
+    assert_eq!(filtered(&exact,still_next.as_ref()).unwrap().1,last);
+    let after_rename=Selected{scope:renamed_scope,..selected};
+    assert!(memory_label_check(&db,&c,after_rename,true).is_ok());
+
+    // Move-shaped logical cuts exercise the real placement triggers only.
+    // This fixture has no mounted roots, bytes, SMB sessions or cleanup.
+    let transfer=|op:OperationId,direction:u8,target:VolumeId,name:&str,target_parent:[u8;16]|{
+        db.fixed(c"BEGIN IMMEDIATE").unwrap();
+        write(format!("INSERT INTO file_transfer(transfer_op,file_id,direction,source_op,source_gen,source_id,source_name,
+                target_id,target_name,share_id,setting_op,auth_op,save_op,manual_op,
+                source_parent,target_parent,source_backing,source_terminal,target_setting_op)
+            SELECT {},l.file_id,{direction},l.position_op,l.generation,l.volume_id,l.display,
+                {},{},a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op,l.parent_id,{},l.backing_op,l.flat_terminal,NULL
+            FROM transferable_location l JOIN live_ordinary_writer a ON a.share_id={}
+            WHERE l.file_id={}",
+            literal(&op.0),literal(&target.0),literal(name.as_bytes()),literal(&target_parent),
+            literal(&share.0),literal(&leaf.0)));
+        operation(op.0,12,keys.smb,[0x66;32],0);
+        activate(&db,op).unwrap();
+        db.fixed(c"COMMIT").unwrap();
+    };
+    transfer(OperationId(id(15,1)),1,VolumeId([0x32;16]),"Notes.txt",root);
+    assert_eq!(memory_label_check(&db,&c,after_rename,false).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    let (unlabelled_namesake,_)=make_file(37,"Notes.txt");
+    db.fixed(c"COMMIT").unwrap();
+    assert_ne!(unlabelled_namesake,leaf);
+    let restored=OperationId(id(15,2));
+    transfer(restored,2,volume,"Restored.txt",parent.0);
+    assert_eq!(memory_label_check(&db,&c,after_rename,true).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+    let after_restore=Selected{position:restored,..after_rename};
+    assert!(memory_label_check(&db,&c,after_restore,true).is_ok());
+    let (_,_,restored_next,_,_)=filtered(&exact,None).unwrap();
+    let restored_tail=filtered(&exact,restored_next.as_ref()).unwrap().1;
+    assert!(restored_tail.contains(&Entry::File{id:leaf,name:"Restored.txt".into(),position:restored}));
+    assert!(!restored_tail.iter().any(|item|matches!(item,Entry::File{id,..} if *id==unlabelled_namesake)));
 
     activate(&db,OperationId(id(0,254))).unwrap();
+    let readonly=id(14,0);db.fixed(c"BEGIN IMMEDIATE").unwrap();
+    write(format!("INSERT INTO share_mode VALUES({},{},{},{},2,1)",
+        literal(&readonly),literal(&share.0),literal(&mode),literal(&SETUP.0)));
+    operation(readonly,4,keys.web,[0x63;32],1);
+    db.fixed(c"COMMIT").unwrap();
+    let (_,_,_,ro_scope,writable)=filtered(&exact,None).unwrap();
+    assert!(!writable);
+    let ro=Selected{scope:ro_scope,..after_restore};
+    assert!(memory_label_check(&db,&c,ro,false).is_ok());
+    assert_eq!(memory_label_check(&db,&c,ro,true).unwrap_err().kind(),io::ErrorKind::PermissionDenied);
+
     let disabled=id(10,0);db.fixed(c"BEGIN IMMEDIATE").unwrap();
-    write(format!("INSERT INTO share_mode VALUES({},{},{},{},2,0)",
-        literal(&disabled),literal(&share.0),literal(&mode),literal(&SETUP.0)));
+    write(format!("INSERT INTO share_mode VALUES({},{},{},{},3,0)",
+        literal(&disabled),literal(&share.0),literal(&readonly),literal(&SETUP.0)));
     operation(disabled,4,keys.web,[0x64;32],1);
     db.fixed(c"COMMIT").unwrap();
     assert_eq!(read(Some(parent),None).err().unwrap().kind(),io::ErrorKind::NotFound);

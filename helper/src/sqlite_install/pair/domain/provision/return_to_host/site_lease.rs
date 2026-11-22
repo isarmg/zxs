@@ -16,7 +16,7 @@ impl SiteLease{
     /// real creator's directory lease. There is no lookup/recovery here.
     pub(super) fn from_product(system:Pinned,system_lock:File,original:Site,site_ex:File,
         subject:crate::sqlite_install::pair::ExplicitSubject)->io::Result<Self>{
-        crate::sqlite_install::pair::require_v18()?;
+        crate::sqlite_install::pair::require_private_install()?;
         let x=Self{system,system_lock,original,site_ex,subject:subject.tuple(),explicit:subject};
         x.require()?;Ok(x)
     }
@@ -24,7 +24,7 @@ impl SiteLease{
         layout::verify_registered_instance(&self.original,self.subject.2)?;
         self.system.require_same_named_mount()?;
         let m=self.system.metadata()?;
-        crate::sqlite_install::pair::require_v18()?;
+        crate::sqlite_install::pair::require_private_install()?;
         let subject=self.explicit.tuple();
         if subject!=self.subject||!m.is_dir()||m.uid()!=self.subject.1||m.mode()!=0o040_700{
             return Err(bad("SYSTEM authorization, scope or writable mount changed"));

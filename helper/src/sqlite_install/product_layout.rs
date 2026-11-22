@@ -1,4 +1,4 @@
-//! Fixed deployed v18 names. Parser defaults only choose paths; the
+//! Fixed deployment names. Parser defaults only choose paths; the
 //! read-only checks inspect already admitted held directory members before
 //! their separate operational gates. No mount, formatting or grant lives here.
 use crate::{maintenance::HostMounts,path_rules::Kind,pinned::{Entity,Mount,Pinned}};
