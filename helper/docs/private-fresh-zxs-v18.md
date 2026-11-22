@@ -1,12 +1,14 @@
 # Private fresh-only ZXS v18 issuer
 
-This is paired development source, not a published release, migration, or
-runtime acceptance result. The account commands are disabled by default.
-When explicitly built with `private-fresh-zxs-v18`, the candidate uses only
-the exact v18 SQLite schema (SHA-256
-`8379dfa3b66040540995ebf863d3f12c7fddbb57ce05e98961011dc7429dfc4b`).
-It never opens a v17 pool as this format. There is no account adoption or
-automatic upgrade.
+This is an opt-in paired **source candidate**, not a supported installation or
+an accepted deployment binary. A default Helper build rejects both commands
+below. For separately authorized fixture validation, use the [independent
+locked, offline Helper build](../RELEASE.md) with
+`--features private-fresh-zxs-v18`. The private route accepts only the exact
+v18 SQLite schema (SHA-256
+`8379dfa3b66040540995ebf863d3f12c7fddbb57ce05e98961011dc7429dfc4b`), with no
+migration, adoption, or automatic upgrade. Building the candidate does not
+qualify any deployment.
 
 The intended later acceptance fixture is a **disposable Linux environment**:
 already mounted and properly protected original SYSTEM (S), independent
@@ -23,39 +25,78 @@ under `/zxs/state/<instance-hex>`; the sole selector is
 names and a complete bounded listing (4,096 non-dot names and 256 KiB per
 checked parent); they do not open unrelated entries. No prior deployment
 path is probed or migrated.
-The live Helper and its exact
-offline libgcrypt/libgpg-error inputs also need independent expected hashes.
-There is no installed Helper profile, configuration, service, or signing
-sidecar as authority. These offline libraries are not ZXS runtime
-dependencies. This source does not install an ELF, mount or format devices,
-manage services, change policy, or embed a placeholder asset. The independent [optional image
-extractor](embedded-image.md) requires a separately approved exact asset
-and does not itself issue a site or an account.
 
-1. `install-pool new-zxs-v18` creates only the pool: explicit original INIT
-   actor, storage UID/GID, non-secret operation and approval IDs, actual
-   S/R/F handoff. If omitted, SYSTEM and recycle use `/zxs/disks/system`
-   and `/zxs/disks/recycle`; use `--data DIR` or `--data-label LABEL`
-   for each original ordinary root. The exact existing `/zxs` protection
-   is checked before and after foreground INIT consent, before opening a
-   new database. The separately lowered installer returns the committed
-   pool/INIT/request SHA-256 only after complete original-marker readback.
-   This is a separate storage action, not account setup.
-2. `setup-pair issue-fresh-zxs-v18` takes that exact existing INIT evidence,
-   SYSTEM (optional `--system DIR`, otherwise `/zxs/disks/system`), the
-   original first LAN/share plan, separate protected-site/operation IDs,
-   and required independent ELF/provider hashes. Optional `--zxs-image
-   DIR/zxs` selects an eligible protected path instead of `/zxs/bin/zxs`.
-   Each ordinary root is selected by `--share DIR NAME ro|rw` or
-   `--share-label DISK_LABEL NAME ro|rw`; `DISK_LABEL` is a directory
-   component under `/zxs/disks/data`, not the share's displayed `NAME`. No
-   storage roots are inferred by scanning. The actual image path and digest
-   are kept only in the original protected ZXS site. It
-   accepts **one** canonical `--login`, shared by Web and SMB; no alternate
-   username or password option. One preview binds the proposed account,
-   exact public successor and original plan. Only one setup approval is
-   taken at the actual foreground terminal. Afterwards, enter and confirm
-   the **same** hidden password once, not one per protocol.
+Run neither command on production media. The fixture uses a real root
+foreground controlling terminal in the disposable guest, with stdin, stdout
+and stderr on that terminal, not redirected or piped. No ZXS service is
+started by these steps. Linux must already provide the qualified mounts and
+paths; the fixture does not partition, format, mount, install services, or
+change host policy. The [optional image extractor](embedded-image.md) is a
+separate approved action and does not issue a site or an account.
+
+For account issuance, approve the whole-file SHA-256 of the actual Helper
+(root:root, 0755, one link) and of the selected standalone ZXS ELF. The two
+fixed offline credential providers must be protected root:root 0644 regular
+files with one link: `/usr/lib/local-ops-helper/disk-tools-v1/lib/libgcrypt.so.20`
+and `/usr/lib/local-ops-helper/disk-tools-v1/lib/libgpg-error.so.0`. Use their
+independently approved file digests, not archive digests. The [Debian material
+recipe](../packaging/debian13-amd64/README.md) stages these bytes; it neither
+installs nor approves them. These libraries are not ZXS runtime dependencies.
+
+## 1. Create the fresh pool
+
+The command forms below describe the required order, not copy-paste shell
+commands. Brackets mark optional fields; repeat the indicated media options.
+
+```text
+helper install-pool new-zxs-v18
+  --init-actor INIT_ACTOR_ID --storage-uid UID --storage-gid GID
+  --op INIT_OP_ID --approval INIT_APPROVAL_ID
+  [--system S_DIR] [--recycle R_DIR] (--data F_DIR | --data-label DISK_LABEL) ...
+```
+
+This only creates the pool. Use 1–62 explicit ordinary roots and already
+prepared S/R/F. The defaults for S and R are `/zxs/disks/system` and
+`/zxs/disks/recycle`. The protected `/zxs` layout is checked before and after
+the original foreground INIT approval. After successful marker readback,
+retain the `fresh-v18-init=confirmed` receipt fields `pool`, `operation` and
+`init_request_sha256`, along with the original subject, paths and approval
+reference. The next step needs those exact values; the receipt neither
+issues credentials nor starts ZXS. For uncertain INIT outcomes, see the
+[original-operation guidance](sqlite-first-install.md); do not start another
+pool to obtain a receipt.
+
+## 2. Issue the shared account on that fresh pool
+
+```text
+helper setup-pair issue-fresh-zxs-v18
+  --init-actor INIT_ACTOR_ID --storage-uid UID --storage-gid GID [--system S_DIR]
+  --pool POOL_ID --init INIT_OP_ID --instance INSTANCE_ID --bind BIND_ID --setup-op SETUP_OP_ID
+  --init-sha256 INIT_REQUEST_SHA256 --approval SETUP_APPROVAL_ID [--zxs-image DIR/zxs]
+  --zxs-sha256 ZXS_SHA256 --helper-sha256 HELPER_SHA256
+  --gcrypt-sha256 GCRYPT_SHA256 --gpgerror-sha256 GPG_ERROR_SHA256
+  --host HOST --login LOGIN --recycle-name RECYCLE_NAME
+  (--listen IP/PREFIX | --share F_DIR NAME MODE | --share-label DISK_LABEL NAME MODE) ...
+```
+
+- Reuse the same INIT actor, storage UID/GID and exact SYSTEM path. Copy
+  `pool`, `operation` and `init_request_sha256` to `--pool`, `--init` and
+  `--init-sha256`. Choose new instance, bind and SETUP operation IDs. The
+  five pool/INIT/instance/bind/SETUP IDs must be distinct. IDs are 32 lowercase
+  hex digits and nonzero; SHA-256 values are 64 lowercase hex digits and
+  nonzero. `--approval` refers to the separate setup approval.
+- Use the already approved executable at `/zxs/bin/zxs`, or explicitly
+  select an eligible protected `DIR/zxs` path. Always supply the independent
+  image hash. The original protected site binds that path and hash.
+- Plan 1–16 explicit SMB listen IP/prefix pairs (not wildcard or loopback)
+  and 1–62 shares from ordinary roots in the original INIT. `DISK_LABEL`
+  selects a directory under `/zxs/disks/data`; `NAME` is the share name and
+  `RECYCLE_NAME` is the logical recycle name, not a path. `MODE` is `ro` or
+  `rw`. No disk scanning and no listeners are started by this command.
+- Use one canonical lowercase hostname and **one** non-guest login shared
+  by Web and SMB. The original terminal gives one setup approval, then
+  prompts for the same hidden password and its confirmation. There is no
+  password argument or second username.
 
 The root coordinator holds the original product parent, original S and then
 instance leases. It grants a new write-only vault stage to the already
