@@ -46,11 +46,6 @@ fn start_both_stops(mut smb:impl FnMut()->super::Result<()>,mut web:impl FnMut()
 pub(in crate::smb::launch) fn prepare_site<'s,'p>(parent:&'p Parent,site:&'s SiteLease<'p>,terminal:&Terminal)
     ->io::Result<VerifiedPreflight<'s,'p>>{
     if !site.is_original_parent(parent){return Err(no());}
-    // Old environment input never authorizes an audience or turns a
-    // malformed intended proxy scope into direct HTTP.
-    if ["ZXS_WEB_TRUSTED_PROXY","ZXS_WEB_PUBLIC_ORIGIN"].into_iter().any(|key|std::env::var_os(key).is_some()){
-        return Err(io::Error::new(io::ErrorKind::Unsupported,"legacy Web proxy environment is not accepted; choose the audience at the original foreground confirmation"));
-    }
     terminal.require()?;site.require()?;
     foreground::install().map_err(|_|no())?;
     VerifiedPreflight::execute(parent,site)
