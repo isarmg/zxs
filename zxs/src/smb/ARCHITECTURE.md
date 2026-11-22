@@ -197,7 +197,14 @@ READ 保持原请求长度供 MaxReadSize／credits 核验，偏移与终点不�
 
 逐请求 WRITE_THROUGH 不是 CREATE 的 FILE_WRITE_THROUGH 模式。按 3.1.1 组合规则，普通缓冲打开上只有逐请求写穿标志时返回参数错误；真正的直接写没有接，不退化成缓冲成功。[Apple 原生源码](https://github.com/apple-oss-distributions/SMBClient/blob/99da2d9a4bbe17cde3cee382ad3edc16e25f5535/kernel/netsmb/smb_smb_2.c#L10684-L10720) 有特定错误后的重试，不代表该平台已验收。原持有打开要求写穿时，实际写入后还必须等同一写者完成确认；[显式 FLUSH](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/026984f6-38af-4408-8200-50557eb0a286) 也只让实际有写权的原 FILE 写者确认；目录权限不变成卷同步。写穿确认失败冻结该原写者后续数据动作；只准以原暂存态正常显式 FLUSH／CLOSE 求确认。正常 CLOSE 开始后失败也不能复活。不冒充刷盘、成功关闭或正式提交。
 
-WRITE 和 FLUSH 成功各有私有 Held 收据。按 [WRITE 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/7b80a339-f4d3-4575-8ce2-70a06f24f133)，Count 来自原写者核实的实际接收字节数，不从请求的 Length 生成；当前业务要求整段成功，计数矛盾不给成功，也不推断回退或自动重写。合法空 WRITE 可回实际 Count=0，这与 READ 的 EOF 不同。合格的空写仍核原权限、范围及原写者状态；即使写穿也不改稿件、不确认先前 EOF。确认待决或尚未重新绑定时仍拒绝。[FLUSH 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/42f78e6a-e25f-48f5-8f08-b4f1bb4c4fa4) 只在原确认完成后能生成；原 I/O 失败与确认失败分开传给真实状态映射，不能包装成成功体。正文编码自身不签发会话。原命令的封闭同步出口核 SESSION→真 TREE→两半 OPEN、权限和实际输入额度，将收据和原 MID 配对，强签精确原流，发送前后都验同一写者的状态和权限，才结本帧信用。发送失败不推断撤销已确认 SAVE，也不重跑业务。
+WRITE 和 FLUSH 成功各有私有 Held 收据。
+
+- **WRITE。** 按 [WRITE 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/7b80a339-f4d3-4575-8ce2-70a06f24f133)，Count 是原写者核实的实际接收字节数，不从请求的 Length 生成。当前要求整段成功。计数不符时不报成功，也不推断回退或自动重写。
+- **空 WRITE。** 合法空写可回实际 Count=0，与 READ 的 EOF 不同。仍要核原权限、范围和原写者状态。即使写穿，也不改稿件、不确认先前 EOF。确认待决或尚未重新绑定时仍拒绝。
+- **FLUSH。** 原写者没有待确认变更，或本次原变更已经确认，才生成成功的 [FLUSH 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/42f78e6a-e25f-48f5-8f08-b4f1bb4c4fa4)。原 I/O 失败与确认失败分别传给真实状态映射，不能包装成成功体。
+- **发送应答。** 正文编码自身不签发会话。原命令的封闭同步出口核 SESSION→真实 TREE→两半 OPEN、权限和实际输入额度。收据与原 MID 配对，在同一原流发送精确强签应答。发送前后均核同一写者的状态和权限，之后才结本帧信用。发送失败不推断已确认 SAVE 撤销，也不重跑业务。
+
+客户端验收见[当前范围与验证](../../docs/status.md)。
 
 `wire/set_info` 只从仍有效、已签名／付额度的原成员读 [FILE SET_INFO](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/ee9614c4-be54-4a3c-98f1-769a7032a0e4)，用同连接 MaxTransactSize 和完整声明长度；不借下一成员或缓冲区尾填。普通 [FileDispositionInformation](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/12c3dd1c-14f6-4229-9d29-75fb2cb392f6) 的 mark/clear 与 CREATE 每个 OPEN 的 FILE_DELETE_ON_CLOSE 分开；后者必须明确请求 DELETE，再由真实对象授予。文件 [EndOfFile](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/75241cca-3167-472f-8058-a52d77c6bb17) 是非负绝对位置，只能交给已按 FILE_WRITE_DATA 授权的同原暂存 writer；不当作 allocation、append 或普通 WRITE 偏移。Ex、DFS 和 replay 不从本通道读取。复合的 related 成员只能用本链前件的实际 OPEN。两半 FileId、具体树／对象和当前写权仍需真实核对。独立的 EOF 请求已接原写者：必须原 FILE_WRITE_DATA（仅 APPEND_DATA 不够），仅调整其同一 Core 暂存稿，沿已存在的显式 FLUSH 或正常 CLOSE 确认，不暗中保存或发布历史。原暂存收据在强签原流完整写入前后核对，按 [SET_INFO 响应](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/c4318eb4-bdab-49b7-9352-abd7005c7f19) 仅回二字节 StructureSize；目录、过短/未付额和其他不支持的信息类不改状态或回假成功。独立普通 FILE `FileDispositionInformation` 的 2 字节成功只承认原 OPEN 上当前真实的 mark/clear。它只接受原普通读柄／写柄以及它自己的 DELETE，绝不借 R 的专用恢复权限或牵动其他 OPEN；新开遇实际待删返回 `STATUS_DELETE_PENDING`。
 
