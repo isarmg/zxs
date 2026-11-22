@@ -1,0 +1,59 @@
+name: Linux isolated SMB MOVE acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_source:
+        description: Exact reviewed main source commit
+        required: true
+        type: string
+      approved_server_sha256:
+        description: Independently approved standalone server ELF SHA-256
+        required: true
+        type: string
+      approved_helper_sha256:
+        description: Independently approved standalone Helper ELF SHA-256
+        required: true
+        type: string
+      approved_guest_inputs_sha256:
+        description: Independently approved offline guest inputs manifest SHA-256
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      APPROVED_SOURCE: ${{ inputs.approved_source }}
+      APPROVED_SERVER_SHA256: ${{ inputs.approved_server_sha256 }}
+      APPROVED_HELPER_SHA256: ${{ inputs.approved_helper_sha256 }}
+      APPROVED_GUEST_INPUTS_SHA256: ${{ inputs.approved_guest_inputs_sha256 }}
+    steps:
+      - name: Run the reviewed single-guest acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(id -u)" -ne 0
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch &&
+             "$GITHUB_REPOSITORY" == isarmg/zxs &&
+             "$GITHUB_REF" == refs/heads/main &&
+             "$GITHUB_ACTOR" == isarmg &&
+             "$GITHUB_TRIGGERING_ACTOR" == isarmg ]]
+          [[ "$APPROVED_SOURCE" =~ ^[0-9a-f]{40}$ && "$APPROVED_SOURCE" == "$GITHUB_SHA" ]]
+          for digest in "$APPROVED_SERVER_SHA256" "$APPROVED_HELPER_SHA256" "$APPROVED_GUEST_INPUTS_SHA256"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ && "$digest" =~ [1-9a-f] ]]
+          done
+          work="$(mktemp -d "$RUNNER_TEMP/smb-move.XXXXXXXX")"
+          mkdir "$work"/{repo,source,guest}
+          git_source=(env -i PATH=/usr/bin:/bin LC_ALL=C HOME="$work" TMPDIR="$work"
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+            /usr/bin/git -C "$work/repo" -c core.hooksPath=/dev/null)
+          "${git_source[@]}" init -q
+          "${git_source[@]}" fetch --no-tags --depth=1 https://github.com/isarmg/zxs.git "$APPROVED_SOURCE"
+          test "$("${git_source[@]}" rev-parse FETCH_HEAD)" = "$APPROVED_SOURCE"
+          "${git_source[@]}" archive "$APPROVED_SOURCE" --             .github/workflows/linux-paired-build.yml             .github/workflows/linux-guest-preflight.yml             .github/workflows/linux-guest-terminal-preflight.yml             helper zxs | /usr/bin/tar -xf - -C "$work/source"
+          env -i PATH=/usr/bin:/bin LC_ALL=C TZ=UTC HOME="$work" TMPDIR="$work"             /usr/bin/python3 -I "$work/source/zxs/tests/acceptance/rust_smb_move_ci.py"               "$work/source" "$work/guest" "$APPROVED_SOURCE"               "$APPROVED_SERVER_SHA256" "$APPROVED_HELPER_SHA256" "$APPROVED_GUEST_INPUTS_SHA256"

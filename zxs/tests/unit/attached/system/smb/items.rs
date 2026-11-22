@@ -7,3 +7,7 @@ impl<'r> SmbSession<'r> {
     /// A SQL fixture may choose a typed ShareId; it is not a wire service name.
     pub(crate) fn connect(&self,share:ShareId)->io::Result<Tree<'_,'r>>{self.connect_id(share)}
 }
+
+mod guest_move_history {
+    include!("guest_move_history.rs");
+}

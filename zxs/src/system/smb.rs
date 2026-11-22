@@ -83,4 +83,8 @@ pub(crate) use ordinary_directory::RustNamedDirectory;
 pub(crate) mod runtime;
 
 #[cfg(test)]
+#[path="../../tests/unit/attached/system/smb/cross_f_observe.rs"]
+pub(crate) mod cross_f_observe;
+
+#[cfg(test)]
 include!("../../tests/unit/attached/system/smb/items.rs");

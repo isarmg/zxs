@@ -47,6 +47,17 @@ python3 -I tests/acceptance/rust_smb_client.py operations --evidence-fd 7 --cred
 （F2 逻辑名）及 `move_case`（`stock` 或 `original`）。`data_label` 为 F1，
 `recycle_label` 必须提供本次独立 R 的真实名。现有 `stock`、`operations` 继续用旧公告。
 
+Ubuntu 26.04 的 `move_case=stock` 另可使用这次批准的
+[Resolute amd64 smbclient 4.23.6+dfsg-1ubuntu2.2](https://packages.ubuntu.com/resolute/amd64/smbclient/download)。
+监督者从已核原发行材料记录 `ubuntu_smbclient` 的三个精确字符串：`package_sha256`、
+`elf_sha256` 和实测完整 `version` 行（按发行源码为 `Version 4.23.6-Ubuntu-4.23.6+dfsg-1ubuntu2.2`）。
+只接受固定发行包摘要与获准原 ELF；
+查询版本和执行改名都使用同一原描述符。其余手工夹具仍按原 4.22 约定。
+[4.23.6 客户端](https://github.com/samba-team/samba/blob/5eb5fcf368e69faef9c16b8d64bb15323c658398/source3/client/client.c#L4296-L4369)
+用一次无覆盖改名并以实际状态决定退出码；
+[明确 445 端口](https://github.com/samba-team/samba/blob/5eb5fcf368e69faef9c16b8d64bb15323c658398/source3/libsmb/smbsock_connect.c#L348-L374)
+仍只选择一个 TCP 传输。
+
 1. 以同样参数运行 `seed-move-a`，随后用现有 Web 提交 A。再运行
    `seed-move-b`，用 Web 提交 B。两步分别在 F1 的同一
    `zxs-normal-move.bin` 确认 4096 字节的数据；同一 FileId 各得一版。

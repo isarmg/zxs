@@ -2,7 +2,7 @@
 """Opt-in client checks only. See rust-smb-client.md before use."""
 
 import argparse
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 import fcntl
 import hashlib
 import importlib.metadata
@@ -34,6 +34,11 @@ EVIDENCE_KEYS = {
 }
 MOVE_MODES = ("seed-move-a", "seed-move-b", "move-stock", "move-original")
 MOVE_KEYS = {"target_data_label", "move_case"}
+UBUNTU_CLIENT = "ubuntu_smbclient"
+# Canonical Resolute amd64 smbclient 2:4.23.6+dfsg-1ubuntu2.2 archive.
+UBUNTU_CLIENT_PACKAGE = "b1adf344e27e90c1c851f10ea8a800e001fefaed89f7898b5d514f01b6197d6b"
+UBUNTU_CLIENT_VERSION = "Version 4.23.6-Ubuntu-4.23.6+dfsg-1ubuntu2.2"
+MAX_CLIENT_ELF = 16 * 1024 * 1024
 MOVE_LEAF = "zxs-normal-move.bin"
 MOVE_A, MOVE_B, MOVE_C = (bytes([letter]) * 4096 for letter in b"ABC")
 WHEELS = {"smbprotocol": "1.17.0", "pyspnego": "0.12.4"}
@@ -87,8 +92,19 @@ def ns_id(value):
 def evidence(raw, mode):
     move = mode in MOVE_MODES
     v = json.loads(raw.decode("ascii"), object_pairs_hook=unique_object)
-    need(isinstance(v, dict) and set(v) == (EVIDENCE_KEYS | MOVE_KEYS if move else EVIDENCE_KEYS),
-         "bad-evidence-shape")
+    need(isinstance(v, dict), "bad-evidence-shape")
+    keys = EVIDENCE_KEYS | MOVE_KEYS if move else EVIDENCE_KEYS
+    if move and UBUNTU_CLIENT in v:
+        client = v[UBUNTU_CLIENT]
+        need(v.get("move_case") == "stock"
+             and isinstance(client, dict) and set(client) == {"package_sha256", "elf_sha256", "version"}
+             and client["package_sha256"] == UBUNTU_CLIENT_PACKAGE
+             and isinstance(client["elf_sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", client["elf_sha256"])
+             and int(client["elf_sha256"], 16) != 0
+             and client["version"] == UBUNTU_CLIENT_VERSION,
+             "bad-ubuntu-stock-client-evidence")
+        keys = keys | {UBUNTU_CLIENT}
+    need(set(v) == keys, "bad-evidence-shape")
     profile = "ZXS-ISOLATED-SMB-MOVE-1" if move else "ZXS-ISOLATED-SMB-ACCEPT-1"
     cut = "same-elf-listen-and-distinct-original-media" if move else "same-elf-listen-confirmed"
     need(v["profile"] == profile and v["observed"] == cut and v["host"] == SERVER and v["address"] == TARGET,
@@ -150,22 +166,54 @@ def credentials(fd):
     return match[1].decode("ascii"), match[2].decode("ascii")
 
 
-def stock(fd, move=None):
+@contextmanager
+def exact_ubuntu_client(path, expected):
+    raw = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(raw, "rb") as image:
+        first = os.fstat(raw)
+        need(stat.S_ISREG(first.st_mode) and first.st_nlink == 1
+             and first.st_uid == first.st_gid == 0 and stat.S_IMODE(first.st_mode) == 0o755
+             and 0 < first.st_size <= MAX_CLIENT_ELF and os.pread(raw, 4, 0) == b"\x7fELF",
+             "unqualified-ubuntu-stock-executable")
+        digest = hashlib.file_digest(image, "sha256").hexdigest()
+        last = os.fstat(raw)
+        need(digest == expected
+             and (first.st_size, first.st_mtime_ns, first.st_ctime_ns) ==
+                 (last.st_size, last.st_mtime_ns, last.st_ctime_ns),
+             "changed-ubuntu-stock-executable")
+        yield raw
+
+
+def stock(fd, move=None, ubuntu=None):
     binary = "/usr/bin/smbclient"
     opts = {"timeout": TIMEOUT * 2, "stdin": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "env": ENV}
-    ver = subprocess.run([binary, "--version"], check=True, stdout=subprocess.PIPE, **opts).stdout.strip()
-    need(re.fullmatch(rb"Version (4\.22\.[0-9]{1,3}(?:[-+][A-Za-z0-9.+~-]{1,40})?)", ver), "unreviewed-stock-client")
-    if move is None:
-        phase, command = "stock-tree-echo", "echo 1 zxs-acceptance"
-    else:
-        source, target = move
-        phase, command = "stock-signed-rename-only", f"rename {source} {target}"
-    cmd = [binary, f"//{SERVER}/ZXS", f"--ip-address={TARGET}", f"--port={PORT}",
-           "--configfile=/dev/null", "--option=client min protocol=SMB3_11", "--max-protocol=SMB3_11",
-           "--use-kerberos=off", "--client-protection=sign", "--name-resolve=host",
-           f"--authentication-file=/proc/self/fd/{fd}", "--debuglevel=0", f"--timeout={TIMEOUT}",
-           f"--command={command}"]
-    rc = subprocess.run(cmd, stdout=subprocess.DEVNULL, pass_fds=(fd,), **opts).returncode
+    need(ubuntu is None or move is not None, "ubuntu-client-only-for-move")
+    kept = exact_ubuntu_client(binary, ubuntu["elf_sha256"]) if ubuntu is not None else nullcontext(None)
+    with kept as image:
+        # A reviewed Ubuntu intake executes the actual hashed fd, not another
+        # object rebound at the name. The ordinary manual path is unchanged.
+        call = {"executable": f"/proc/self/fd/{image}"} if image is not None else {}
+        image_fds = (image,) if image is not None else ()
+        banner = subprocess.run([binary, "--version"], check=True, stdout=subprocess.PIPE,
+                                pass_fds=image_fds, **opts, **call).stdout
+        if ubuntu is not None:
+            need(banner == ubuntu["version"].encode("ascii") + b"\n", "wrong-original-ubuntu-stock-version")
+            ver = banner[:-1]
+        else:
+            ver = banner.strip()
+            need(re.fullmatch(rb"Version (4\.22\.[0-9]{1,3}(?:[-+][A-Za-z0-9.+~-]{1,40})?)", ver),
+                 "unreviewed-stock-client")
+        if move is None:
+            phase, command = "stock-tree-echo", "echo 1 zxs-acceptance"
+        else:
+            source, target = move
+            phase, command = "stock-signed-rename-only", f"rename {source} {target}"
+        cmd = [binary, f"//{SERVER}/ZXS", f"--ip-address={TARGET}", f"--port={PORT}",
+               "--configfile=/dev/null", "--option=client min protocol=SMB3_11", "--max-protocol=SMB3_11",
+               "--use-kerberos=off", "--client-protection=sign", "--name-resolve=host",
+               f"--authentication-file=/proc/self/fd/{fd}", "--debuglevel=0", f"--timeout={TIMEOUT}",
+               f"--command={command}"]
+        rc = subprocess.run(cmd, stdout=subprocess.DEVNULL, pass_fds=(fd, *image_fds), **opts, **call).returncode
     if rc != 0:
         report("fail", phase, exit_code=rc, version=ver.decode("ascii"))
         return 1
@@ -429,7 +477,7 @@ def typed(v, user, password, phase, mode="operations", credential_fd=None):
                 read_view(original, MOVE_B)
                 close_acked(original)
             phase[0] = "stock-signed-rename"
-            need(stock(credential_fd, (source, target)) == 0, "stock-rename-not-confirmed")
+            need(stock(credential_fd, (source, target), v.get(UBUNTU_CLIENT)) == 0, "stock-rename-not-confirmed")
             expected = MOVE_B
         else:
             with tree("move-owner") as owner:

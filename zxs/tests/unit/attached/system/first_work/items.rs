@@ -12,3 +12,10 @@ impl<'t,'s,'r> Current<'t,'s,'r> {
         self.with_read(|reader|reader.check_with(cut,|_|Ok(())))
     }
 }
+
+impl<'s,'r> Tree<'s,'r> {
+    pub(super) fn fixture_version_at<'t>(&'t self,root:&'t OrdinaryRoot<'r>,name:&str,version:crate::NodeId)
+        ->io::Result<Current<'t,'s,'r>>{
+        self.open_member(name,None,Some(root),Some(version),|_,_|Ok(())).map(|(reader,())|reader)
+    }
+}

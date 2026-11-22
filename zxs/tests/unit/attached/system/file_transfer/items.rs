@@ -31,3 +31,12 @@ fn stored_transfer_directions_bind_the_exact_source_and_target_roles(){
         assert_eq!(Direction::from_stored(tag),None);
     }
 }
+
+impl Tree<'_,'_>{
+    pub(super) fn fixture_confirmed_move(&self,target:&Tree<'_,'_>,db:&Connection,c:&Catalog,
+        original:&Place,op:OperationId)->io::Result<Moved>{
+        self.with_transfer(Some(target),|at|
+            Route::receipt(&at,db,c,&Handoff::MoveOrdinary{source:original.clone(),target:original.name.clone()},op)?
+                .ok_or_else(||invalid("no confirmed original fixture move")))
+    }
+}

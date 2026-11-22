@@ -1,0 +1,216 @@
+{
+  "archive_key_sha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+  "artifacts": [
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/liba/libarchive/libarchive13t64_3.8.5-1ubuntu2.3_amd64.deb",
+      "package": "libarchive13t64",
+      "sha256": "0e4e57918da8bf8ba56460d00d82a5cf27c303f000f10ab4c40c51aa181cc58a",
+      "size": 397154,
+      "suite": "resolute-updates",
+      "version": "3.8.5-1ubuntu2.3"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/a/avahi/libavahi-client3_0.8-18ubuntu1.1_amd64.deb",
+      "package": "libavahi-client3",
+      "sha256": "a0677750521663c898d25ddd0566127712ff4803108ec67182330a27fce85774",
+      "size": 27220,
+      "suite": "resolute-updates",
+      "version": "0.8-18ubuntu1.1"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/a/avahi/libavahi-common-data_0.8-18ubuntu1.1_amd64.deb",
+      "package": "libavahi-common-data",
+      "sha256": "db013cab614418c47073faac4e16f652cb4532458cd8b919f70c717f235d1091",
+      "size": 27194,
+      "suite": "resolute-updates",
+      "version": "0.8-18ubuntu1.1"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/a/avahi/libavahi-common3_0.8-18ubuntu1.1_amd64.deb",
+      "package": "libavahi-common3",
+      "sha256": "2213977fd25dab90f3566d3163576955eb74dc89954c48ba6e2bd960fdcd45e2",
+      "size": 23580,
+      "suite": "resolute-updates",
+      "version": "0.8-18ubuntu1.1"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/i/icu/libicu78_78.2-2ubuntu1_amd64.deb",
+      "package": "libicu78",
+      "sha256": "c8b97930f9e365d6d00978144b468ac8397ef07d2fb2c453869f05fc3a98c4ca",
+      "size": 11456466,
+      "suite": "resolute",
+      "version": "78.2-2ubuntu1"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/j/jansson/libjansson4_2.14-2build4_amd64.deb",
+      "package": "libjansson4",
+      "sha256": "1dc986ac3cf112384919d1a339a952e8a86bede9890a4489c016fdc266a036ca",
+      "size": 33250,
+      "suite": "resolute",
+      "version": "2.14-2build4"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/libldb2_2.11.0+samba4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "libldb2",
+      "sha256": "d9c599cde03ad8f07e75a0318cbb7c381b968ad77ca7f47ccfb397218f218270",
+      "size": 150184,
+      "suite": "resolute-updates",
+      "version": "2:2.11.0+samba4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/l/lmdb/liblmdb0_0.9.31-1build2_amd64.deb",
+      "package": "liblmdb0",
+      "sha256": "b702706b751b51516988230cefbe74643a373dcf28878dd77f735048117f88b5",
+      "size": 49516,
+      "suite": "resolute",
+      "version": "0.9.31-1build2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/n/nftables/libnftables1_1.1.6-1_amd64.deb",
+      "package": "libnftables1",
+      "sha256": "0e5abb5719052d9f12aadf91a3f3d5192a2e85d035ee81d07c3055a0f79d8b8f",
+      "size": 390468,
+      "suite": "resolute",
+      "version": "1.1.6-1"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/libn/libnftnl/libnftnl11_1.3.1-1_amd64.deb",
+      "package": "libnftnl11",
+      "sha256": "a2f4d4a4ce3fac7e473c8de60a3d8948a58e9850cd8e2ced17263aa73dda7199",
+      "size": 72288,
+      "suite": "resolute",
+      "version": "1.3.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/p/popt/libpopt0_1.19+dfsg-2build1_amd64.deb",
+      "package": "libpopt0",
+      "sha256": "ae57295d9a5d1551b866824c766a279f675172a05dd8d759fcdd52da3c3ac28f",
+      "size": 29376,
+      "suite": "resolute",
+      "version": "1.19+dfsg-2build1"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/libsmbclient0_4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "libsmbclient0",
+      "sha256": "d607a125cf912b23f5a432ee28a8e358bda17f6eb4b1561b72930b1262aeff80",
+      "size": 63740,
+      "suite": "resolute-updates",
+      "version": "2:4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/libtalloc2_2.4.3+samba4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "libtalloc2",
+      "sha256": "f2d5bb6a77cbe17efbd9e077caf41757dc5b602b5c15fc243077beb87c20e184",
+      "size": 50956,
+      "suite": "resolute-updates",
+      "version": "2:2.4.3+samba4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/libtdb1_1.4.14+samba4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "libtdb1",
+      "sha256": "12a81cae04403ab6abf1239876c1ccf6142067ecb923e8af5854829898965101",
+      "size": 70458,
+      "suite": "resolute-updates",
+      "version": "2:1.4.14+samba4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/libtevent0t64_0.17.1+samba4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "libtevent0t64",
+      "sha256": "c44b855af26408fec0aa149bc7d00acd7595621215ba278885173f7eee033f44",
+      "size": 41968,
+      "suite": "resolute-updates",
+      "version": "2:0.17.1+samba4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/libwbclient0_4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "libwbclient0",
+      "sha256": "94f2f8e193ccd6b8901c36846391ac198d9ac77224fe66717f6e206f4720b02e",
+      "size": 57916,
+      "suite": "resolute-updates",
+      "version": "2:4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/libx/libxml2/libxml2-16_2.15.2+dfsg-0.1ubuntu0.3_amd64.deb",
+      "package": "libxml2-16",
+      "sha256": "e82ce35fd61483c1febf83232e76e54a296a6a78391983a24a904ff640b75c09",
+      "size": 606694,
+      "suite": "resolute-updates",
+      "version": "2.15.2+dfsg-0.1ubuntu0.3"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/n/nftables/nftables_1.1.6-1_amd64.deb",
+      "package": "nftables",
+      "sha256": "fcdeae9ed9761550619d062f8ae87a2399c84ab87f4535bcb9ab0d3649aba59a",
+      "size": 76202,
+      "suite": "resolute",
+      "version": "1.1.6-1"
+    },
+    {
+      "architecture": "all",
+      "filename": "pool/main/s/samba/samba-common_4.23.6+dfsg-1ubuntu2.2_all.deb",
+      "package": "samba-common",
+      "sha256": "cdb9c56c3ec0425b07f27cd4948b7e3aeb314f4f49be34113c28a76642e59979",
+      "size": 47914,
+      "suite": "resolute-updates",
+      "version": "2:4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/samba-libs_4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "samba-libs",
+      "sha256": "b76c628d7198bcdbb06cdd562f0264bf9482b35f95593296e02b570a188f99e9",
+      "size": 6648704,
+      "suite": "resolute-updates",
+      "version": "2:4.23.6+dfsg-1ubuntu2.2"
+    },
+    {
+      "architecture": "amd64",
+      "filename": "pool/main/s/samba/smbclient_4.23.6+dfsg-1ubuntu2.2_amd64.deb",
+      "package": "smbclient",
+      "sha256": "b1adf344e27e90c1c851f10ea8a800e001fefaed89f7898b5d514f01b6197d6b",
+      "size": 480010,
+      "suite": "resolute-updates",
+      "version": "2:4.23.6+dfsg-1ubuntu2.2"
+    }
+  ],
+  "index": {
+    "resolute": {
+      "index_path": "main/binary-amd64/Packages.xz",
+      "index_sha256": "ed9ac41cb263efaecc5a06a0742dc56570e2fb5ff94c4f2e4b2fbdcddd73cf24",
+      "index_size": 1480032,
+      "inrelease_sha256": "45f95ce276cdba3e41870516a130e03c58b8b7a79e9546b0efe9e526d255740c"
+    },
+    "resolute-security": {
+      "index_path": "main/binary-amd64/Packages.xz",
+      "index_sha256": "6973905d10bf5d47474491e7e14a7da2869ffb2b655cf5d1f47ce4d19f024c66",
+      "index_size": 718432,
+      "inrelease_sha256": "ff3a585138b31d7be41a640f49cf776e6d7c852a23e7a477c5a5455628ed0c20"
+    },
+    "resolute-updates": {
+      "index_path": "main/binary-amd64/Packages.xz",
+      "index_sha256": "fa366205e3592ceb4c593e0c2dbd11729b5a654ad1dfdb9c33ed95f5eb66ce17",
+      "index_size": 872388,
+      "inrelease_sha256": "6dbfb9c07bd988a6d44f5a48c457434c90126e7e21ad19f458d1c1a17868a026"
+    }
+  },
+  "signer": "F6ECB3762474EDA9D21B7022871920D1991BC93C",
+  "snapshot": "https://snapshot.ubuntu.com/ubuntu/20261118T120000Z"
+}
