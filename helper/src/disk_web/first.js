@@ -1,12 +1,18 @@
 "use strict";
 const pair = document.querySelector("#pair-form"), scope = document.querySelector("#scoped");
 const code = document.querySelector("#code"), plan = document.querySelector("#plan"), status = document.querySelector("#status");
-const proceed = document.querySelector("#continue"), cancel = document.querySelector("#cancel");
+const refresh = document.querySelector("#preview"), proceed = document.querySelector("#continue"), cancel = document.querySelector("#cancel");
 const hex = /^[0-9a-f]{64}$/;
 const repair = document.querySelector("main").dataset.purpose === "copy-repair";
 const route = repair ? "/api/copy-repair" : "/api/install";
 const validByteCount = b => /^[1-9][0-9]{0,18}$/.test(b) && (b.length < 19 || b <= "9223372036854775807");
 let auth = null, csrf = null, ticket = null;
+// Match the server's maximum in first.rs, measured conservatively from before
+// the preview request. Linux checks the actual ticket and expiry on handoff.
+const TICKET_MS = 90_000;
+function lockControls() {
+    refresh.disabled = proceed.disabled = cancel.disabled = true;
+}
 async function post(path, body, authenticated = true) {
     const headers = {};
     if (body !== null) headers["Content-Type"] = "application/octet-stream";
@@ -19,7 +25,7 @@ async function post(path, body, authenticated = true) {
     if (!r.ok) throw new Error();
     return r.text();
 }
-async function preview() {
+async function fetchPreview() {
     const fields = (await post(route + "/preview", null)).split("\n");
     if (fields.length !== 3 || !hex.test(fields[2])) throw new Error();
     if (repair) {
@@ -30,13 +36,30 @@ async function preview() {
         plan.textContent = (fields[0] === "new" ? "新建空池" : "只续同一原单") + "：终端已选 1 个 SYSTEM、1 个独立回收盘和 " +
             fields[1] + " 个数据根。终端将显示实际原名和身份，本次预览不核盘内内容。";
     }
-    ticket = fields[2];
-    proceed.disabled = false;
+    return fields[2];
 }
+async function preview() {
+    if (auth === null || refresh.disabled) return;
+    lockControls();
+    ticket = null;
+    plan.textContent = status.textContent = "";
+    const before = performance.now() + TICKET_MS;
+    try {
+        const value = await fetchPreview();
+        ticket = {value, before};
+        proceed.disabled = false;
+        status.textContent = "已显示本次范围。预览票过期后请重新预览。";
+    } catch (_) {
+        status.textContent = "未取得有效预览。可重新预览或回原终端取消；网页未发起操作。";
+    } finally {
+        refresh.disabled = cancel.disabled = false;
+    }
+}
+refresh.addEventListener("click", preview);
 pair.addEventListener("submit", async e => {
     e.preventDefault();
-    if (auth !== null || !hex.test(code.value)) return;
     const button = pair.querySelector("button");
+    if (button.disabled || auth !== null || !hex.test(code.value)) return;
     button.disabled = true;
     try {
         const proof = code.value; code.value = "";
@@ -46,16 +69,22 @@ pair.addEventListener("submit", async e => {
         pair.hidden = true; scope.hidden = false; proceed.disabled = true;
         await preview();
     } catch (_) {
-        status.textContent = "未取得有效预览。请核原终端和配对码；网页未启动任何操作。";
+        status.textContent = "配对未确认。请核原终端和配对码；网页未发起操作。";
     } finally {
         if (auth === null) button.disabled = false;
     }
 });
 proceed.addEventListener("click", async () => {
     if (ticket === null) return;
-    const proposed = ticket; ticket = null; proceed.disabled = true; cancel.disabled = true;
+    const proposed = ticket; ticket = null;
+    if (performance.now() >= proposed.before) {
+        proceed.disabled = true;
+        status.textContent = "预览票已过期。请重新预览；网页未发起操作。";
+        return;
+    }
+    lockControls();
     try {
-        await post(route + "/request", proposed);
+        await post(route + "/request", proposed.value);
         status.textContent = "请求已交给本机终端，网页将关闭。请回原终端核对原件并决定；现在还没有开始。";
     } catch (_) {
         status.textContent = "未取得网页回执。先看原终端；收到本机确认提示才可继续，不另开新单。";
@@ -64,7 +93,9 @@ proceed.addEventListener("click", async () => {
     }
 });
 cancel.addEventListener("click", async () => {
-    proceed.disabled = cancel.disabled = true;
+    if (auth === null || cancel.disabled) return;
+    lockControls();
+    ticket = null;
     try {
         await post("/api/close", null);
         status.textContent = "网页已取消。";
