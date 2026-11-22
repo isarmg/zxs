@@ -116,7 +116,7 @@ jobs:
         run: |
           features=()
           if [[ -n "$FEATURE" ]]; then features=(--features "$FEATURE"); fi
-          cargo clippy --workspace --all-targets --locked --offline "${features[@]}" -- -D warnings
+          cargo clippy --workspace --all-targets --locked --offline "${features[@]}" -- -D warnings -D clippy::pedantic
 
       - name: Unit tests
         if: ${{ !cancelled() && (steps.lint.outcome == 'success' || steps.lint.outcome == 'failure') }}
