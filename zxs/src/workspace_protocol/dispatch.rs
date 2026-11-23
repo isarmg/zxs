@@ -197,7 +197,7 @@ pub(crate) fn dispatch<R: Read>(
             receipt_for(receipt, op, &change)
         }
         (history @ (Request::BranchNodes { .. } | Request::BranchHistory { .. }), Body::Empty) => {
-            read_history(store, history, &allowed)
+            read_history(store, &history, &allowed)
         }
         _ => Err(Failure::BadBody),
     }
@@ -205,10 +205,10 @@ pub(crate) fn dispatch<R: Read>(
 
 fn read_history(
     store: &core::Store,
-    request: Request,
+    request: &Request,
     allowed: &impl Fn(Access) -> bool,
 ) -> Result<Reply, Failure> {
-    match request {
+    match *request {
         Request::BranchNodes { container, branch } => Ok(Reply::BranchNodes(
             store
                 .branch_nodes(container.bytes(), &branch_key(branch))
