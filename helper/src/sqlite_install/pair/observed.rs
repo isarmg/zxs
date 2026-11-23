@@ -284,10 +284,10 @@ mod fresh_v18_tests {
                 "INSERT INTO volume_claim VALUES(?1,?2,?2,?3,?4,255,?5)",
                 params![
                     &init[..],
-                    i as i64,
-                    &[11u8 + i as u8; 16][..],
+                    i64::try_from(i).unwrap(),
+                    &[11u8 + u8::try_from(i).unwrap(); 16][..],
                     path,
-                    &[21u8 + i as u8; 32][..]
+                    &[21u8 + u8::try_from(i).unwrap(); 32][..]
                 ],
             )
             .unwrap();

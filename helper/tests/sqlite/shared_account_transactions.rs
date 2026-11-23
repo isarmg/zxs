@@ -77,7 +77,12 @@ fn seed() -> (Connection, RustPlan, [u8; 32]) {
     .unwrap();
     tx.execute(
         "INSERT INTO main.pool_birth VALUES(1,?1,?2,?3,1001,?4)",
-        params![&o.pool[..], &o.init[..], &approval[..], roots.len() as i64],
+        params![
+            &o.pool[..],
+            &o.init[..],
+            &approval[..],
+            i64::try_from(roots.len()).unwrap()
+        ],
     )
     .unwrap();
     for (i, (volume, path)) in roots.iter().enumerate() {
@@ -85,11 +90,11 @@ fn seed() -> (Connection, RustPlan, [u8; 32]) {
             "INSERT INTO main.volume_claim VALUES(?1,?2,?3,?4,?5,255,?6)",
             params![
                 &o.init[..],
-                i as i64,
+                i64::try_from(i).unwrap(),
                 crate::sqlite_install::request::role(i),
                 &volume[..],
                 path.as_os_str().as_encoded_bytes(),
-                &[(100 + i) as u8; 32][..]
+                &[u8::try_from(100 + i).unwrap(); 32][..]
             ],
         )
         .unwrap();
@@ -250,11 +255,11 @@ fn shared_driver_first_t1_closes_both_then_t2_publishes_same_epoch_and_first_roo
     assert_eq!(attempt(&db, &b.head().op), 1);
     assert_eq!(
         scalar(&db, "SELECT count(*) FROM main.root_share"),
-        plan.folders().len() as i64
+        i64::try_from(plan.folders().len()).unwrap()
     );
     assert_eq!(
         scalar(&db, "SELECT count(*) FROM main.share_mode"),
-        plan.folders().len() as i64
+        i64::try_from(plan.folders().len()).unwrap()
     );
 }
 

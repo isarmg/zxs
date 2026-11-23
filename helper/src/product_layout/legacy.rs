@@ -159,7 +159,7 @@ fn media_members(path: &Path, level: usize) -> io::Result<[Option<(usize, &OsStr
     let suffix = path
         .components()
         .skip(level + 1)
-        .map(|c| c.as_os_str())
+        .map(std::path::Component::as_os_str)
         .collect::<Vec<_>>();
     let head = *suffix.first().ok_or_else(denied)?;
     let relative = suffix.iter().collect::<PathBuf>();

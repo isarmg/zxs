@@ -58,7 +58,7 @@ impl<'g> Reserved<'g> {
             || meta.mode() & 0o7777 != 0o600
             || meta.nlink() != 1
             || meta.len() != 0
-            || !Mount::on(s)?.is_some_and(|m| m.id == mount)
+            || Mount::on(s)?.is_none_or(|m| m.id != mount)
             || s.metadata()?.dev() != meta.dev()
         {
             return Err(bad(

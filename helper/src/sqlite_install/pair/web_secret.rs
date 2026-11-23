@@ -181,7 +181,7 @@ impl PreparedWeb {
                 || !matches!(flags & OFlags::ACCMODE, OFlags::RDONLY | OFlags::RDWR)
                 || !fcntl_getfd(file)?.contains(FdFlags::CLOEXEC)
                 || !fcntl_get_seals(file)?.contains(expected)
-                || rustix::fs::fstatfs(file)?.f_type as u64
+                || rustix::fs::fstatfs(file)?.f_type.cast_unsigned()
                     != u64::from(linux_raw_sys::general::TMPFS_MAGIC)
             {
                 return Err(bad_joint_record());

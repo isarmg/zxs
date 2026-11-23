@@ -149,7 +149,7 @@ impl Selection {
             PathBuf::from(product_layout::SYSTEM)
         };
         product_layout::media(&system)?;
-        if !system.to_str().is_some_and(|s| s.len() <= 4095) {
+        if system.to_str().is_none_or(|s| s.len() > 4095) {
             return Err("SYSTEM must be an exact protected UTF-8 path");
         }
         let origin = Origin {

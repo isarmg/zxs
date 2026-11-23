@@ -31,7 +31,7 @@ fn stateless_discovery_uses_only_escaped_whole_local_mount_names_and_is_bounded(
     assert_eq!(got[1].id, 50);
     assert_eq!(got[2].id, 47);
     let named = Mounts::discovery_table(raw, false).unwrap();
-    assert!(named.roots.is_empty()); // explicit selection does not collect targets
+    assert_eq!(named.roots, [] as [DiscoveryMount; 0]); // explicit selection does not collect targets
     assert_eq!(named.named(Path::new("/"), None).unwrap(), Some(41));
     assert_eq!(named.named(&got[0].path, Some(41)).unwrap(), Some(42));
     assert!(named.named(&got[0].path, Some(47)).is_err());
@@ -291,7 +291,7 @@ fn nonempty_v17_rejects_remote_ancestors_and_ambiguous_crossings_before_a_path_o
         47 46 0:10 / /mnt/stack rw - cifs //server/other rw
 ";
     let cut = Mounts::discovery_table(raw, false).unwrap();
-    assert!(cut.roots.is_empty());
+    assert_eq!(cut.roots, [] as [DiscoveryMount; 0]);
     assert_eq!(cut.named(Path::new("/"), None).unwrap(), Some(41));
     let local = Path::new(OsStr::from_bytes(b"/mnt/local-\xff"));
     assert_eq!(cut.named(local, Some(41)).unwrap(), Some(42));

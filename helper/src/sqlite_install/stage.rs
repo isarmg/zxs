@@ -210,7 +210,12 @@ pub(super) fn seed_retirement_fixture(
     let issue = Issue {
         pool: [4; 16],
         rows: (0..request.paths().len())
-            .map(|i| ([0x11 + i as u8; 16], [0x21 + i as u8; 32]))
+            .map(|i| {
+                (
+                    [0x11 + u8::try_from(i).unwrap(); 16],
+                    [0x21 + u8::try_from(i).unwrap(); 32],
+                )
+            })
             .collect(),
     };
     let pending = first(request, group, &issue)?;

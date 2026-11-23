@@ -411,9 +411,9 @@ impl SystemObservation {
             s.ino,
             s.mount,
             s.len,
-            s.ct.0 as u64,
+            s.ct.0.cast_unsigned(),
             u64::from(s.ct.1),
-            s.mt.0 as u64,
+            s.mt.0.cast_unsigned(),
             u64::from(s.mt.1),
         ]) {
             *x = n.to_be_bytes();

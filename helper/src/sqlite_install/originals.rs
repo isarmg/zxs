@@ -349,8 +349,8 @@ impl Group {
         self.originals
             .selected
             .iter()
-            .map(|r| r.path())
-            .eq(request.paths().iter().map(|p| p.as_path()))
+            .map(super::super::pinned::Pinned::path)
+            .eq(request.paths().iter().map(std::path::PathBuf::as_path))
     }
     fn root(&self, i: usize) -> HeldRoot<'_> {
         HeldRoot {

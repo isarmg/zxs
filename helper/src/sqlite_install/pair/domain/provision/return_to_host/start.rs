@@ -185,7 +185,7 @@ mod tests {
         assert!(check_reply(&c, local(), &n, &s).unwrap());
         put(&c, &frame(b'?', &n, &s)).unwrap();
         let mut wrong = local();
-        wrong.uid = Uid::from_raw(if wrong.uid.is_root() { 1 } else { 0 });
+        wrong.uid = Uid::from_raw(u32::from(wrong.uid.is_root()));
         assert!(
             respond(&p, wrong, &s, || panic!(
                 "wrong peer may not reach the grant"

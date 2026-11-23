@@ -312,7 +312,7 @@ pub(super) fn host_admin() -> io::Result<File> {
             OFlags::PATH | OFlags::CLOEXEC,
             Mode::empty(),
         )?);
-        if fstatfs(&ns)?.f_type as u64 != 0x6e73_6673 {
+        if fstatfs(&ns)?.f_type.cast_unsigned() != 0x6e73_6673 {
             return Err(denied());
         } // Linux NSFS_MAGIC
         Entity::of(&ns.metadata()?)
