@@ -386,6 +386,11 @@ impl Pinned {
     pub(crate) fn visible_chain(&self) -> &[Entity] {
         &self.chain
     }
+    /// Reject only a lexical overlap or a same/nested original visible in
+    /// these walks; shared ancestors alone do not make siblings overlap.
+    pub(crate) fn overlaps(&self, other: &Self) -> bool {
+        overlaps((&self.path, &self.chain), (&other.path, &other.chain))
+    }
     pub(crate) fn entity_is_visible_ancestor_of(&self, other: &Self) -> bool {
         other.chain[..other.chain.len() - 1].contains(&self.entity())
     }
@@ -1180,5 +1185,33 @@ mod tests {
         ] {
             assert!(require_local_data_fs(rejected).is_err());
         }
+    }
+}
+
+fn overlaps((left, chain): (&Path, &[Entity]), (right, other): (&Path, &[Entity])) -> bool {
+    let a = chain.last().expect("pinned path has at least the root");
+    let b = other.last().expect("pinned path has at least the root");
+    left.starts_with(right) || right.starts_with(left) || other.contains(a) || chain.contains(b)
+}
+
+#[cfg(test)]
+mod role_overlap {
+    use super::{Entity, Path, overlaps};
+
+    #[test]
+    fn protected_paths_reject_same_and_nested_originals_but_not_siblings() {
+        let entry = |ino| Entity { dev: 10, ino };
+        let (root, state, child, sibling) = (entry(1), entry(20), entry(21), entry(22));
+        let original = (Path::new("/state"), &[root, state][..]);
+        let same = (Path::new("/other/view"), &[root, state][..]);
+        let nested = (Path::new("/mounted/child"), &[root, state, child][..]);
+        let separate = (Path::new("/independent"), &[root, sibling][..]);
+        let lexical_child = (Path::new("/state/child"), &[root, child][..]);
+        for candidate in [same, nested, lexical_child] {
+            assert!(overlaps(original, candidate));
+            assert!(overlaps(candidate, original));
+        }
+        assert!(!overlaps(original, separate));
+        assert!(!overlaps(separate, original));
     }
 }

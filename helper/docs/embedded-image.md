@@ -45,7 +45,7 @@ Only the optional embedded build can offer:
 
 A supported Linux host, real root foreground terminal, and the already
 prepared protected `/zxs` and empty ZXS-owned `/zxs/state` (both root:root
-0755 with no access/default POSIX ACL) are required. This action does not create that parent or take over an old site.
+0755 with no access/default POSIX ACL) are required. Run extraction **before** creating `/zxs/state/headless` for first setup: the protected state parent must still be empty. This action does not create that parent or take over an old site.
 The default writes `/zxs/bin/zxs`; `--destination-dir DIR` may select another
 already existing, eligible protected local directory distinct from the ZXS
 state, log and media trees. Only the fixed leaf `zxs` is allowed. It requires an independent expected digest, exact payload

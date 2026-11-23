@@ -154,29 +154,15 @@ fn changed() -> io::Error {
     blocked("the original source changed during the metadata walk")
 }
 
-fn same_or_nested((left, a): (&Path, Entity), (right, b): (&Path, Entity)) -> bool {
-    a == b || left.starts_with(right) || right.starts_with(left)
-}
-
-fn overlapping(source: &Pinned, original: &Pinned) -> bool {
-    // Visible-ancestor tests omit the leaf; a differently named whole-mount
-    // alias of the very same role or deployment directory is still protected.
-    same_or_nested(
-        (source.path(), source.entity()),
-        (original.path(), original.entity()),
-    ) || source.entity_is_visible_ancestor_of(original)
-        || original.entity_is_visible_ancestor_of(source)
-}
-
 pub(super) fn pin_source(selected: &SelectedRoles, source: &Path) -> io::Result<Pinned> {
     let pin = Pinned::local_storage(source, &selected.scope)?;
     // Refuse protected roles, aliases, ancestors and descendants. The source
     // is external; this path can never stand in for a missing DATA root.
-    if overlapping(&pin, &selected.state.original)
+    if pin.overlaps(&selected.state.original)
         || selected
             .roots
             .iter()
-            .any(|root| overlapping(&pin, &root.original))
+            .any(|root| pin.overlaps(&root.original))
     {
         return Err(blocked(
             "the source overlaps the selected state or storage roles",
@@ -184,7 +170,7 @@ pub(super) fn pin_source(selected: &SelectedRoles, source: &Path) -> io::Result<
     }
     for protected in ["/zxs/state", "/zxs/bin"] {
         let dir = Pinned::local_storage(Path::new(protected), &selected.scope)?;
-        if overlapping(&pin, &dir) {
+        if pin.overlaps(&dir) {
             return Err(blocked("the source overlaps protected deployment paths"));
         }
     }

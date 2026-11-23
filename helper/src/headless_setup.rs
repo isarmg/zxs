@@ -188,7 +188,6 @@ fn require_layout<'a>(
         return Err(refused());
     }
     let (original_state, _) = require_held(state, uid)?;
-    let state_path = state.original.path();
     let mut seen: Vec<(&Pinned, Entity, Mount)> = Vec::new();
     for (i, root) in roots.enumerate() {
         let path = root.original.path();
@@ -199,14 +198,8 @@ fn require_layout<'a>(
             || absolute
                 .split(|b| *b == b'/')
                 .any(|part| matches!(part, b"" | b"." | b".."))
-            || state_path.starts_with(path)
-            || path.starts_with(state_path)
-            || seen.iter().any(|(old, _, _)| {
-                path.starts_with(old.path())
-                    || old.path().starts_with(path)
-                    || old.entity_is_visible_ancestor_of(root.original)
-                    || root.original.entity_is_visible_ancestor_of(old)
-            })
+            || state.original.overlaps(root.original)
+            || seen.iter().any(|(old, _, _)| old.overlaps(root.original))
         {
             return Err(refused());
         }

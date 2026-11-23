@@ -61,16 +61,6 @@ fn data_roster_length_is_bounded() {
 }
 
 #[test]
-fn same_protected_leaf_under_a_different_absolute_name_is_not_an_external_source() {
-    let a = Entity { dev: 10, ino: 20 };
-    let b = Entity { dev: 10, ino: 21 };
-    let source = (Path::new("/source/tree"), a);
-    assert!(same_or_nested(source, (Path::new("/elsewhere/role"), a)));
-    assert!(same_or_nested(source, (Path::new("/source/tree/child"), b)));
-    assert!(!same_or_nested(source, (Path::new("/elsewhere/role"), b)));
-}
-
-#[test]
 fn typed_inventory_includes_directories_raw_paths_and_changed_file_witnesses() {
     use std::{fs, os::unix::fs::symlink};
     let temp = crate::test_area::data_directory();
