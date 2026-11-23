@@ -11,10 +11,9 @@ use crate::{
 use std::{
     collections::BTreeSet,
     ffi::{CStr, CString},
-    fs::{self, File},
+    fs::File,
     io::{self, Read},
     os::unix::fs::MetadataExt,
-    path::PathBuf,
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -135,6 +134,16 @@ pub(super) fn qualify_arrival(
     ready: RecycleReceipt,
     access: ReadAccess,
 ) -> io::Result<HeldDir> {
+    qualified_envelope(arrived, ready, access)?
+        .child_directory(c"container")?
+        .ok_or_else(|| invalid("selected recycled container is absent"))
+}
+
+fn qualified_envelope(
+    arrived: &HeldDir,
+    ready: RecycleReceipt,
+    access: ReadAccess,
+) -> io::Result<HeldDir> {
     let selected = held_arrived_at(arrived, ready.mutation)?
         .ok_or_else(|| invalid("selected recycle directory is absent"))?;
     let known = selected.file.metadata()?;
@@ -145,9 +154,7 @@ pub(super) fn qualify_arrival(
             "recycle location differs from its original ready receipt",
         ));
     }
-    selected
-        .child_directory(c"container")?
-        .ok_or_else(|| invalid("selected recycled container is absent"))
+    Ok(selected)
 }
 
 pub(super) fn read_retired_data(
@@ -189,7 +196,6 @@ pub(super) struct Recycle {
     system: HeldDir,
     pool: Id,
     archive_root: HeldDir,
-    arrived: PathBuf,
     moves_directory: HeldDir,
     staging_directory: HeldDir,
     arrived_directory: HeldDir,
@@ -284,14 +290,12 @@ impl Recycle {
         moves_directory.require_named()?;
         moves_directory.file.sync_all()?;
         moves_directory.require_named()?;
-        let arrived = arrived_directory.path.clone();
         system.require_named()?;
         recycle.require_named()?;
         Ok(Self {
             system,
             pool,
             archive_root: recycle,
-            arrived,
             _recycle_owner: owner,
             moves_directory,
             staging_directory,
@@ -321,12 +325,6 @@ impl Recycle {
         self.staging_directory.require_named()?;
         self.arrived_directory.require_named()
     }
-    fn arrived_dir(&self, mutation: Mutation) -> PathBuf {
-        // A ready but unselected copy is private to its original operation.
-        // A later operation must not adopt or be blocked by that copy.
-        self.arrived.join(arrived_leaf(mutation))
-    }
-
     fn held_arrived(&self, mutation: Mutation) -> io::Result<Option<HeldDir>> {
         held_arrived_at(&self.arrived_directory, mutation)
     }
@@ -500,17 +498,16 @@ impl Recycle {
             .values()
             .map(|r| entry_leaf(r.sequence, r.mutation.request))
             .collect::<BTreeSet<_>>();
-        for item in fs::read_dir(&original.path)? {
-            let name = item?.file_name();
-            if !name.to_str().is_some_and(|s| entries.contains(s)) {
-                return Err(invalid("unknown source descendant prevents retirement"));
+        original.each_name(ReadAccess::Ordinary, |name| {
+            if std::str::from_utf8(name).is_ok_and(|s| entries.contains(s)) {
+                Ok(())
+            } else {
+                Err(invalid("unknown source descendant prevents retirement"))
             }
-        }
+        })?;
         original.require_named()?;
-        let proof_root = HeldDir::trusted_storage(&self.arrived_dir(receipt.mutation))?;
-        if !self.archive_root.same_mount(&proof_root)? {
-            return Err(invalid("retirement evidence crosses original R mount"));
-        }
+        let proof_root =
+            qualified_envelope(&self.arrived_directory, receipt, ReadAccess::Ordinary)?;
         let proof = proof_root
             .opaque_pin(c"source-proof")?
             .ok_or_else(|| invalid("retirement evidence is absent"))?;

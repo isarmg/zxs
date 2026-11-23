@@ -1,5 +1,5 @@
 //! Exact R3 reply DTOs; no filesystem locations or diagnostic internals.
-use super::super::dispatch::{ReceiptLookup, Reply};
+use super::super::dispatch::Reply;
 use crate::{
     container_store as core,
     headless_http::{Outcome, Problem},
@@ -19,27 +19,23 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
                 body: Box::new(bytes.file),
             });
         }
-        Reply::Receipt(ReceiptLookup::NotFound) => return Ok(Outcome::ReceiptAbsent),
-        Reply::Receipt(ReceiptLookup::Unknown) => return Err(Problem::Unavailable),
-        other => match other {
-            Reply::Catalog(page) => out.catalog(&page),
-            Reply::Detail(page) => out.detail(&page),
-            Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
-            Reply::BranchHistory(page) => out.history(&page),
-            Reply::Mutation(receipt) | Reply::Receipt(ReceiptLookup::Mutation(receipt)) => {
-                out.receipt(&receipt)
-            }
-            Reply::Recycle {
-                selected,
-                source_cleanup_pending,
-            } => out.recycle(selected, Some(source_cleanup_pending)),
-            Reply::Receipt(ReceiptLookup::Recycle(receipt)) => out.recycle(receipt, None),
-            Reply::Node(_) | Reply::Receipt(ReceiptLookup::NotFound | ReceiptLookup::Unknown) => {
-                return Err(Problem::Unavailable);
-            }
+        Reply::Receipt(None) => return Ok(Outcome::ReceiptAbsent),
+
+        Reply::Catalog(page) => out.catalog(&page),
+        Reply::Detail(page) => out.detail(&page),
+        Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
+        Reply::BranchHistory(page) => out.history(&page),
+        Reply::Mutation(receipt)
+        | Reply::Receipt(Some(core::OperationReceipt::Mutation(receipt))) => out.receipt(&receipt),
+        Reply::Recycle {
+            selected,
+            source_cleanup_pending,
+        } => out.recycle(selected, Some(source_cleanup_pending)),
+        Reply::Receipt(Some(core::OperationReceipt::Recycle(receipt))) => {
+            out.recycle(receipt, None)
         }
-        .map_err(|_| Problem::Unavailable)?,
     }
+    .map_err(|_| Problem::Unavailable)?;
     Ok(Outcome::Json(out.0.into_bytes()))
 }
 

@@ -37,14 +37,7 @@ pub(crate) enum Reply {
         selected: core::RecycleReceipt,
         source_cleanup_pending: bool,
     },
-    Receipt(ReceiptLookup),
-}
-pub(crate) enum ReceiptLookup {
-    Mutation(core::Receipt),
-    /// Durable R selection only, not proof that cleanup finished.
-    Recycle(core::RecycleReceipt),
-    NotFound,
-    Unknown,
+    Receipt(Option<core::OperationReceipt>),
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Failure {
@@ -113,11 +106,32 @@ pub(crate) fn dispatch<R: Read>(
             Err(io::Error::new(io::ErrorKind::PermissionDenied, Revoked))
         }
     };
+    let result = execute(store, request, body, &allowed, authorize);
+    // Never expose a read projection (including a negative receipt) after
+    // revocation. Writers recheck at the exact selection/publication cut.
+    if matches!(requested, Access::Read(_)) && !allowed(requested) {
+        return Err(Failure::Denied);
+    }
+    result
+}
+
+fn execute<R: Read>(
+    store: &core::Store,
+    request: Request,
+    body: Body<R>,
+    allowed: &impl Fn(Access) -> bool,
+    authorize: impl Fn() -> io::Result<()>,
+) -> Result<Reply, Failure> {
     match (request, body) {
-        (Request::ListCompact { after }, Body::Empty) => list_catalog(store, after, &allowed),
-        (detail @ Request::ContainerDetail { .. }, Body::Empty) => {
-            read_detail(store, &detail, &allowed)
-        }
+        (Request::ListCompact { after }, Body::Empty) => list_catalog(store, after, allowed),
+        (
+            Request::ContainerDetail {
+                container,
+                sequence,
+                after,
+            },
+            Body::Empty,
+        ) => read_detail(store, container, sequence, after),
         (Request::Tags(id), Body::Empty) => Ok(Reply::Tags(
             store
                 .tags(id.bytes())
@@ -136,7 +150,10 @@ pub(crate) fn dispatch<R: Read>(
                 operation,
             },
             Body::Empty,
-        ) => Ok(Reply::Receipt(lookup_receipt(store, container, operation))),
+        ) => store
+            .operation_receipt(mutation(container, operation))
+            .map(Reply::Receipt)
+            .map_err(|_| Failure::Unavailable),
         (Request::SaveNode(save), Body::Blob(reader)) => save_node(store, save, reader, authorize),
         (Request::Delete(scope), Body::Empty) => recycle(store, scope, authorize),
         (
@@ -197,32 +214,22 @@ pub(crate) fn dispatch<R: Read>(
                 next,
             },
             Body::Empty,
-        ) => read_history(store, container, branch, head, next, &allowed),
+        ) => read_history(store, container, branch, head, next),
         _ => Err(Failure::BadBody),
     }
 }
 
 fn read_detail(
     store: &core::Store,
-    request: &Request,
-    allowed: &impl Fn(Access) -> bool,
+    container: Id,
+    sequence: Option<u64>,
+    after: Option<Branch>,
 ) -> Result<Reply, Failure> {
-    let Request::ContainerDetail {
-        container,
-        sequence,
-        after,
-    } = *request
-    else {
-        return Err(Failure::BadBody);
-    };
     let after = after.map(branch_key);
     let page = store
         .detail_page(container.bytes(), sequence, after.as_deref())
         .map_err(|error| failed(&error))?
         .ok_or(Failure::Missing)?;
-    if !allowed(Access::Read(container)) {
-        return Err(Failure::Denied);
-    }
     Ok(Reply::Detail(page))
 }
 
@@ -232,7 +239,6 @@ fn read_history(
     branch: Branch,
     head: Id,
     next: Option<Id>,
-    allowed: &impl Fn(Access) -> bool,
 ) -> Result<Reply, Failure> {
     let page = store
         .branch_history(
@@ -243,20 +249,7 @@ fn read_history(
         )
         .map_err(|error| failed(&error))?
         .ok_or(Failure::Missing)?;
-    if !allowed(Access::Read(container)) {
-        return Err(Failure::Denied);
-    }
     Ok(Reply::BranchHistory(page))
-}
-
-fn lookup_receipt(store: &core::Store, container: Id, operation: Id) -> ReceiptLookup {
-    let op = mutation(container, operation);
-    match (store.receipt(op), store.recycle_receipt(op)) {
-        (Ok(Some(r)), Ok(None)) if r.mutation == op => ReceiptLookup::Mutation(r),
-        (Ok(None), Ok(Some(r))) if r.mutation == op => ReceiptLookup::Recycle(r),
-        (Ok(None), Ok(None)) => ReceiptLookup::NotFound,
-        _ => ReceiptLookup::Unknown,
-    }
 }
 
 fn recycle(

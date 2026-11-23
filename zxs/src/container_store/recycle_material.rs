@@ -1,7 +1,7 @@
 //! Whole-container F→R staging. No visibility switch or source deletion here.
 mod tree;
 
-use super::{Change, Error, FlatStage, Id, Receipt, codec, entry_leaf, held_entry, invalid, read};
+use super::{Change, Error, FlatStage, Id, Receipt, codec, entry_leaf, held_entry, invalid};
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
     hash::Sha256,
@@ -67,27 +67,7 @@ pub(super) fn copy(
             }
             row[16 + OPAQUE_STAMP_BYTES..].copy_from_slice(&pinned.stamp());
             let output = to.create(c"payload")?;
-            let mut digest = Sha256::new();
-            let mut left = body.length;
-            let mut block = vec![0; 64 * 1024];
-            while left != 0 {
-                live()?;
-                let take = usize::try_from(left.min(block.len() as u64))
-                    .map_err(|_| invalid("invalid recycle node window"))?;
-                let n = read(&mut input, &mut block[..take])?;
-                if n == 0 {
-                    return Err(Error::WrongLength);
-                }
-                digest.update(&block[..n])?;
-                output.write_all(&block[..n])?;
-                left -= n as u64;
-            }
-            if read(&mut input, &mut block[..1])? != 0 {
-                return Err(Error::WrongLength);
-            }
-            if digest.finish() != body.sha256 {
-                return Err(Error::WrongDigest);
-            }
+            body.copy_exact(&mut input, output, &live)?;
             pinned.require(&from, c"payload")?;
             output.sync_all()?;
         }

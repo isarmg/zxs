@@ -1,7 +1,8 @@
 //! One explicitly planned complete import to an already initialized DATA disk.
 use super::{
-    Body, Change, Conflict, DataRoot, DataVolume, Error, Id, MAIN, Mutation, NodeId, Receipt,
-    Routes, Store, Target, invalid, qualify_roster, recycle::Recycle, unenrolled_data,
+    Body, Change, Conflict, DataRoot, DataVolume, Error, Id, MAIN, Mutation, NodeId,
+    OperationReceipt, Receipt, Routes, Store, Target, invalid, qualify_roster, recycle::Recycle,
+    unenrolled_data,
 };
 use crate::{display, fs::HeldDir, hash::Sha256};
 use std::{
@@ -208,8 +209,10 @@ impl OfflineImport {
         change: &Change,
         routed: bool,
     ) -> Result<Option<Receipt>, Error> {
-        let Some(receipt) = self.store.receipt(mutation)? else {
-            return Ok(None);
+        let receipt = match self.store.operation_receipt(mutation)? {
+            Some(OperationReceipt::Mutation(receipt)) => receipt,
+            Some(OperationReceipt::Recycle(_)) => return Err(Conflict::RequestReused.into()),
+            None => return Ok(None),
         };
         if !routed
             || receipt.mutation != mutation

@@ -4,6 +4,8 @@ pub(crate) mod import_one;
 pub(crate) mod init_data;
 mod model;
 pub(crate) mod offline_catalog;
+mod operation;
+mod payload;
 mod recycle;
 mod recycle_material;
 mod routes;
@@ -12,12 +14,12 @@ mod volume;
 
 #[cfg(test)]
 use crate::fs::local_uid;
-use crate::{
-    fs::{HeldDir, ReadAccess},
-    hash::Sha256,
-};
-use model::State;
+use crate::fs::{HeldDir, ReadAccess};
+#[cfg(test)]
+use crate::hash::Sha256;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
+use model::{Decision, State};
+pub(crate) use operation::OperationReceipt;
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
 use stage::FlatStage;
@@ -26,7 +28,7 @@ use std::{
     ffi::CString,
     fmt,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -37,6 +39,7 @@ use volume::DataVolume;
 #[cfg(test)]
 use std::{
     fs::{self, DirBuilder, OpenOptions},
+    io::Write,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
@@ -426,26 +429,7 @@ impl Store {
         let mut stage = self.stage(volume)?;
         {
             let file = stage.create(c"payload")?;
-            let mut digest = Sha256::new();
-            let mut left = body.length;
-            let mut block = vec![0; 64 * 1024];
-            while left != 0 {
-                let take = usize::try_from(left.min(block.len() as u64))
-                    .map_err(|_| invalid("invalid node intake window"))?;
-                let n = read(&mut input, &mut block[..take])?;
-                if n == 0 {
-                    return Err(Error::WrongLength);
-                }
-                digest.update(&block[..n])?;
-                file.write_all(&block[..n])?;
-                left -= n as u64;
-            }
-            if read(&mut input, &mut block[..1])? != 0 {
-                return Err(Error::WrongLength);
-            }
-            if digest.finish() != body.sha256 {
-                return Err(Error::WrongDigest);
-            }
+            body.copy_exact(&mut input, file, || Ok(()))?;
             file.sync_all()?;
         }
         self.publish(mutation, change, volume, &mut stage, authorize)
@@ -499,23 +483,19 @@ impl Store {
         } else {
             &mut first
         };
-        match selected.replay(mutation, &change) {
-            Ok(None) => {}
-            result => {
+        let pending = match selected.plan(mutation, change) {
+            Ok(Decision::New(pending)) => pending,
+            Ok(Decision::Replay(receipt)) => {
                 authorize()?;
-                return result?
-                    .cloned()
-                    .ok_or_else(|| invalid("missing replay").into());
+                return Ok(receipt);
             }
-        }
-        let receipt = match selected.next(mutation, change) {
-            Ok(receipt) => receipt,
-            Err(e) => {
+            Err(error) => {
                 authorize()?;
-                return Err(e.into());
+                return Err(error.into());
             }
         };
-        stage.write(c"receipt", &codec::encode(&receipt)?)?;
+        let receipt = pending.receipt();
+        stage.write(c"receipt", &codec::encode(receipt)?)?;
         stage.directory.file.sync_all()?;
 
         let wanted = match &receipt.change {
@@ -554,7 +534,7 @@ impl Store {
         }
         // Also covers a prior failed first publication of this directory.
         volume.sync_data()?;
-        let destination = receipt_name(&receipt)?;
+        let destination = receipt_name(receipt)?;
         volume.require_named()?;
         directory.require_named()?;
         stage.publish_directory(&directory, &destination, authorize)?;
@@ -566,13 +546,7 @@ impl Store {
             *memory = None;
             return Err(Error::Uncertain(e));
         }
-        if let Err(e) = selected.select(receipt.clone()) {
-            // A durable rename already selected. The next reader must requalify.
-            *memory = None;
-            return Err(Error::Uncertain(io::Error::other(format!(
-                "selected object could not update memory: {e:?}"
-            ))));
-        }
+        let receipt = pending.commit();
         if !reserved {
             *memory = Some(first);
         }
@@ -594,27 +568,6 @@ impl Store {
             }
         }
         Ok(true)
-    }
-
-    pub(crate) fn receipt(&self, mutation: Mutation) -> io::Result<Option<Receipt>> {
-        let object = self.object(mutation.container)?;
-        let mut memory = object
-            .lock()
-            .map_err(|_| invalid("container selection unavailable"))?;
-        if let Some((_receipt, at)) = self.recycled(mutation.container)? {
-            return Ok(read_state(&at, mutation.container)?
-                .receipts
-                .get(&mutation.request)
-                .cloned());
-        }
-        let Some(volume) = self.routed(mutation.container)? else {
-            return Ok(None);
-        };
-        Ok(volume
-            .load(mutation.container, &mut memory)?
-            .receipts
-            .get(&mutation.request)
-            .cloned())
     }
 
     pub(crate) fn tags(&self, id: Id) -> io::Result<Option<Vec<String>>> {
@@ -669,17 +622,6 @@ impl Store {
                 name: name.to_owned(),
             })
         })
-    }
-
-    pub(crate) fn recycle_receipt(&self, mutation: Mutation) -> io::Result<Option<RecycleReceipt>> {
-        let object = self.object(mutation.container)?;
-        let _selection = object
-            .lock()
-            .map_err(|_| invalid("container selection unavailable"))?;
-        Ok(self
-            .recycled(mutation.container)?
-            .map(|(r, _)| r)
-            .filter(|r| r.mutation == mutation))
     }
 
     /// Recycle an entire selected container, not a branch or a node.
@@ -891,7 +833,7 @@ fn replay_selected_entries(directory: &HeldDir, id: Id, access: ReadAccess) -> i
                 "selected receipt differs from its recorded position",
             ));
         }
-        state.select(receipt).map_err(|e| {
+        state.recover(receipt).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("invalid selected history: {e:?}"),
@@ -917,14 +859,6 @@ fn invalid(message: &'static str) -> io::Error {
 }
 fn unenrolled_data() -> io::Error {
     io::Error::new(io::ErrorKind::NotConnected, "selected DATA is not enrolled")
-}
-fn read(input: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
-    loop {
-        match input.read(buffer) {
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            value => return value,
-        }
-    }
 }
 #[cfg(test)]
 fn private_dir(path: &Path) -> io::Result<()> {

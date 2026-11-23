@@ -135,27 +135,42 @@ fn identity(value: Id) -> Result<(), Conflict> {
     Ok(())
 }
 
-impl State {
-    /// Returns the original result on exact replay, never another node.
-    pub(crate) fn replay(
-        &self,
-        mutation: Mutation,
-        change: &Change,
-    ) -> Result<Option<&Receipt>, Conflict> {
-        identity(mutation.container)?;
-        identity(mutation.request)?;
-        match self.receipts.get(&mutation.request) {
-            None => Ok(None),
-            Some(receipt) if receipt.mutation == mutation && receipt.change == *change => {
-                Ok(Some(receipt))
-            }
-            Some(_) => Err(Conflict::RequestReused),
-        }
+/// A new receipt is bound to the exact mutable selection that admitted it.
+/// Dropping it before durable publication leaves that selection untouched.
+pub(super) struct Pending<'a> {
+    state: &'a mut State,
+    receipt: Receipt,
+}
+
+pub(super) enum Decision<'a> {
+    Replay(Receipt),
+    New(Pending<'a>),
+}
+
+impl Pending<'_> {
+    pub(super) fn receipt(&self) -> &Receipt {
+        &self.receipt
     }
 
-    pub(crate) fn next(&self, mutation: Mutation, change: Change) -> Result<Receipt, Conflict> {
-        if let Some(original) = self.replay(mutation, &change)? {
-            return Ok(original.clone());
+    /// The caller holds the container lock through publication and parent sync.
+    pub(super) fn commit(self) -> Receipt {
+        self.state.apply(self.receipt.clone());
+        self.receipt
+    }
+}
+
+impl State {
+    pub(super) fn plan(
+        &mut self,
+        mutation: Mutation,
+        change: Change,
+    ) -> Result<Decision<'_>, Conflict> {
+        if let Some(prior) = self.receipts.get(&mutation.request) {
+            return if prior.mutation == mutation && prior.change == change {
+                Ok(Decision::Replay(prior.clone()))
+            } else {
+                Err(Conflict::RequestReused)
+            };
         }
         let receipt = Receipt {
             mutation,
@@ -166,26 +181,22 @@ impl State {
             change,
         };
         self.validate(&receipt)?;
-        Ok(receipt)
+        Ok(Decision::New(Pending {
+            state: self,
+            receipt,
+        }))
     }
 
-    fn ancestor_of_main(&self, target: NodeId) -> Result<bool, Conflict> {
-        let mut current = self.branches.get(MAIN).copied().flatten();
-        // Traversal is bounded by the actual immutable history. Each node
-        // has an earlier position, so no arbitrary depth limit is added.
-        let mut before = self.sequence.saturating_add(1);
-        while let Some(id) = current {
-            let node = self.nodes.get(&id).ok_or(Conflict::MissingNode)?;
-            if node.sequence >= before {
-                return Err(io::Error::other("unordered original node history").into());
-            }
-            if id == target {
-                return Ok(true);
-            }
-            before = node.sequence;
-            current = node.prior;
-        }
-        Ok(false)
+    /// First-main creates the only root. Main can only append at its current
+    /// head, and no command rewrites a parent or moves an existing branch.
+    /// Thus a node born on main, except its current head, is precisely a
+    /// historical main node. Forks share ancestors, not the birth branch.
+    fn historical_main(&self, id: NodeId) -> bool {
+        self.branches.get(MAIN).copied().flatten() != Some(id)
+            && self
+                .nodes
+                .get(&id)
+                .is_some_and(|node| node.original_branch == MAIN)
     }
 
     fn validate(&self, receipt: &Receipt) -> Result<(), Conflict> {
@@ -272,9 +283,7 @@ impl State {
                         if self.branches.contains_key(new_branch) {
                             return Err(Conflict::AlreadyExists);
                         }
-                        if self.branches.get(MAIN).copied().flatten() == Some(*original)
-                            || !self.ancestor_of_main(*original)?
-                        {
+                        if !self.historical_main(*original) {
                             return Err(Conflict::NotHistoricalMain);
                         }
                     }
@@ -284,9 +293,14 @@ impl State {
         Ok(())
     }
 
-    /// Used after durable commit and while reconstructing an exact ledger.
-    pub(crate) fn select(&mut self, receipt: Receipt) -> Result<(), Conflict> {
+    /// A record read from disk has no live plan: qualify it at this boundary.
+    pub(super) fn recover(&mut self, receipt: Receipt) -> Result<(), Conflict> {
         self.validate(&receipt)?;
+        self.apply(receipt);
+        Ok(())
+    }
+
+    fn apply(&mut self, receipt: Receipt) {
         match &receipt.change {
             Change::Rename { name, .. } => self.name = Some(name.clone()),
             Change::Tags { tags, .. } => self.tags.clone_from(tags),
@@ -327,6 +341,5 @@ impl State {
         }
         self.sequence = receipt.sequence;
         self.receipts.insert(receipt.mutation.request, receipt);
-        Ok(())
     }
 }

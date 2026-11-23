@@ -180,7 +180,10 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     assert_eq!(read_node(&store, 12), b"old");
     drop(store);
     let store = open_fixture(&dir);
-    assert_eq!(store.receipt(mutation(2)).unwrap(), Some(first.clone()));
+    assert_eq!(
+        store.operation_receipt(mutation(2)).unwrap(),
+        Some(OperationReceipt::Mutation(first.clone()))
+    );
     assert_eq!(
         store
             .save(
@@ -200,6 +203,60 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
         Some(id(11))
     );
 }
+#[test]
+fn only_a_published_main_ancestor_can_start_a_historical_fork() {
+    let (_temp, _, store) = fixture();
+    let save = |request, target, node, name| {
+        store.save(
+            mutation(request),
+            full(target, id(node), body(b"x"), name),
+            &b"x"[..],
+            || Ok(()),
+        )
+    };
+    save(2, main(None), 10, Some("original".into())).unwrap();
+    save(3, main(Some(id(10))), 11, None).unwrap();
+    let fork = |name: &str, original| Target::HistoricalMain {
+        new_branch: name.into(),
+        original: id(original),
+    };
+    save(4, fork("first-fork", 10), 12, None).unwrap();
+    for wrong_base in [11, 12, 99] {
+        // current main, another branch, missing
+        assert!(matches!(
+            save(5, fork("second-fork", wrong_base), 13, None),
+            Err(Error::Conflict(Conflict::NotHistoricalMain))
+        ));
+        assert!(store.operation_receipt(mutation(5)).unwrap().is_none());
+    }
+    save(5, fork("second-fork", 10), 13, None).unwrap();
+    assert_eq!(
+        store.node(id(1), id(13)).unwrap().unwrap().node.prior,
+        Some(id(10))
+    );
+}
+
+#[test]
+fn a_read_revoked_during_lookup_does_not_expose_an_absent_receipt() {
+    use crate::workspace_protocol::{
+        self,
+        dispatch::{self, Body as Incoming, Failure},
+    };
+    let (_temp, _, store) = fixture();
+    let url = format!(
+        "/zxs/v1/containers/{}/operations/{}",
+        hex(id(1)),
+        hex(id(2))
+    );
+    let request = workspace_protocol::request("GET", &url, &[]).unwrap();
+    let permitted = std::cell::Cell::new(true);
+    assert!(matches!(
+        dispatch::dispatch(&store, request, Incoming::<io::Empty>::Empty, |_| permitted
+            .replace(false)),
+        Err(Failure::Denied)
+    ));
+}
+
 #[test]
 fn renames_tags_and_branch_references_never_write_another_payload() {
     let (_temp, _dir, store) = fixture();
@@ -379,13 +436,66 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     // Simulate F path/name being unavailable, with independent SYSTEM and R
     // roots still held. Exact receipts make no ordinary path lookup.
     fs::rename(&ordinary, local.0.join("ordinary-offline")).unwrap();
-    assert_eq!(store.recycle_receipt(mutation(6)).unwrap(), Some(recycled));
-    assert_eq!(store.receipt(mutation(2)).unwrap(), Some(first));
+    assert_eq!(
+        store.operation_receipt(mutation(6)).unwrap(),
+        Some(OperationReceipt::Recycle(recycled))
+    );
+    assert_eq!(
+        store.operation_receipt(mutation(2)).unwrap(),
+        Some(OperationReceipt::Mutation(first))
+    );
     assert_eq!(store.routes.get(id(1)).unwrap(), Some([1; 32]));
     assert!(matches!(
         store.move_to_recycle(mutation(6), 4, || Ok(())),
         Err(Error::CleanupPending { receipt, .. }) if receipt == recycled
     ));
+}
+
+#[test]
+#[ignore = "requires private writable /dev/shm on a different filesystem"]
+fn an_archived_operation_lookup_never_turns_a_missing_receipt_into_absence() {
+    let local = PrivateTemp::under(&std::env::temp_dir());
+    let remote = PrivateTemp::under(Path::new("/dev/shm"));
+    let system = local.0.join("system");
+    let data = local.0.join("data");
+    let recycle = remote.0.join("recycle");
+    for path in [&system, &data, &recycle] {
+        ensure_dir(path).unwrap();
+    }
+    let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
+    let store = Store::open_with_recycle(
+        held(&system),
+        vec![held_data(&data, 1)],
+        held(&recycle),
+        POOL,
+    )
+    .unwrap();
+    store
+        .save(
+            mutation(2),
+            full(main(None), id(10), body(b"x"), Some("saved".into())),
+            &b"x"[..],
+            || Ok(()),
+        )
+        .unwrap();
+    let selected = store.move_to_recycle(mutation(3), 1, || Ok(())).unwrap();
+    assert_eq!(
+        store.operation_receipt(mutation(3)).unwrap(),
+        Some(OperationReceipt::Recycle(selected))
+    );
+    assert!(store.operation_receipt(mutation(4)).unwrap().is_none());
+    let (_, archived) = store
+        .archive
+        .as_ref()
+        .unwrap()
+        .selected(id(1))
+        .unwrap()
+        .unwrap();
+    let record = archived.path.join(entry_leaf(1, id(2))).join("receipt");
+    fs::rename(&record, record.with_file_name("offline-record")).unwrap();
+    for request in [2, 3, 4] {
+        assert!(store.operation_receipt(mutation(request)).is_err());
+    }
 }
 
 #[test]
@@ -438,7 +548,10 @@ fn retired_data_proof_settles_only_the_exact_recycled_retry() {
     };
     let store = open(&remaining, 2, POOL);
     pending(&store);
-    assert_eq!(store.recycle_receipt(mutation(6)).unwrap(), Some(done));
+    assert_eq!(
+        store.operation_receipt(mutation(6)).unwrap(),
+        Some(OperationReceipt::Recycle(done))
+    );
     drop(store);
 
     let retired = system.join("retired-data");
@@ -537,7 +650,10 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
     let Err(Error::CleanupPending { receipt, .. }) = result else {
         panic!("retirement may not unlink changed members");
     };
-    assert_eq!(store.recycle_receipt(mutation(6)).unwrap(), Some(receipt));
+    assert_eq!(
+        store.operation_receipt(mutation(6)).unwrap(),
+        Some(OperationReceipt::Recycle(receipt))
+    );
     assert!(store.detail_page(id(1), None, None).unwrap().is_none());
     assert_eq!(fs::read(first.join("payload")).unwrap(), b"one");
     assert!(first.join("receipt").exists());
@@ -645,7 +761,10 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
     fs::rename(&staged, &selected).unwrap();
     drop(store);
     let opened = open();
-    assert_eq!(opened.recycle_receipt(mutation(6)).unwrap(), Some(receipt));
+    assert_eq!(
+        opened.operation_receipt(mutation(6)).unwrap(),
+        Some(OperationReceipt::Recycle(receipt))
+    );
     assert!(opened.detail_page(id(1), None, None).unwrap().is_none());
 }
 
@@ -689,7 +808,7 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
             })
             .unwrap();
     }
-    assert!(store.recycle_receipt(mutation(6)).unwrap().is_none());
+    assert!(store.operation_receipt(mutation(6)).unwrap().is_none());
     store
         .save(
             mutation(3),
@@ -699,8 +818,11 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
         )
         .unwrap();
     let done = store.move_to_recycle(mutation(7), 2, || Ok(())).unwrap();
-    assert_eq!(store.recycle_receipt(mutation(7)).unwrap(), Some(done));
-    assert!(store.recycle_receipt(mutation(6)).unwrap().is_none());
+    assert_eq!(
+        store.operation_receipt(mutation(7)).unwrap(),
+        Some(OperationReceipt::Recycle(done))
+    );
+    assert!(store.operation_receipt(mutation(6)).unwrap().is_none());
     let (_, chosen) = archive.selected(id(1)).unwrap().unwrap();
     assert_eq!(
         read_state(&chosen, id(1)).unwrap().branches[MAIN],
@@ -782,7 +904,7 @@ fn reopen_discards_interrupted_intake_without_touching_selected_data() {
             .is_symlink()
     );
     assert_eq!(read_node(&reopened, 10), b"saved");
-    assert!(reopened.receipt(mutation(3)).unwrap().is_none());
+    assert!(reopened.operation_receipt(mutation(3)).unwrap().is_none());
 }
 
 #[test]
@@ -886,7 +1008,7 @@ fn first_save_reserves_only_on_valid_intake_and_reuses_reserved_disk_after_reope
     ));
     assert_eq!(gates.get(), 2);
     assert_eq!(store.routes.get(id(1)).unwrap(), Some([1; 32]));
-    assert!(store.receipt(mutation(2)).unwrap().is_none());
+    assert!(store.operation_receipt(mutation(2)).unwrap().is_none());
     drop(store);
 
     let store = open_fixture(&directory);
@@ -894,7 +1016,10 @@ fn first_save_reserves_only_on_valid_intake_and_reuses_reserved_disk_after_reope
     let receipt = store
         .save(mutation(2), save(), &b"new"[..], || Ok(()))
         .unwrap();
-    assert_eq!(store.receipt(mutation(2)).unwrap(), Some(receipt));
+    assert_eq!(
+        store.operation_receipt(mutation(2)).unwrap(),
+        Some(OperationReceipt::Mutation(receipt))
+    );
     assert_eq!(read_node(&store, 10), b"new");
 }
 
@@ -956,7 +1081,7 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
 
     fs::rename(&right, local.0.join("right-offline")).unwrap();
     assert!(store.detail_page(id(1), None, None).is_err());
-    assert!(store.receipt(op(1, 5)).is_err());
+    assert!(store.operation_receipt(op(1, 5)).is_err());
     assert!(store.catalog_page(None, |_| true).is_err());
     assert!(matches!(
         store.change(
@@ -974,7 +1099,7 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
         Err(Error::Io(_))
     ));
     assert_eq!(store.routes.get(id(4)).unwrap(), None);
-    assert!(store.receipt(op(2, 5)).unwrap().is_some());
+    assert!(store.operation_receipt(op(2, 5)).unwrap().is_some());
     assert!(
         store
             .save(
