@@ -1,9 +1,20 @@
 //! Append one empty DATA disk using the exact offline descriptor lease.
-use super::*;
-use crate::headless_setup::{
-    Held, MARK_BYTES, MARK_MAGIC, MARKER, RootInput, read_role_token, require_only, role_proof,
+use super::{DESCRIPTOR, FIXED_ROOTS, LOGIN, MAX_DATA, Record, Reset, SCOPED, read, stamp};
+use crate::{
+    headless_setup::{
+        FreshSelection, Held, MARK_BYTES, MARK_MAGIC, MARKER, RootInput, random, read_role_token,
+        refused, require_only, role_proof,
+    },
+    pinned::Entity,
 };
-use rustix::fs::{RenameFlags, renameat_with};
+use rustix::fs::{Mode, OFlags, RenameFlags, fchmod, openat2, renameat, renameat_with};
+use std::{
+    fs::File,
+    io::{self, Write},
+    os::unix::ffi::OsStrExt,
+    path::Path,
+};
+use zeroize::Zeroizing;
 
 const ADD_STAGE: &str = ".server-stage-add-data";
 const DATA: u8 = 1;
@@ -94,16 +105,7 @@ impl Reset {
         };
         original_and_candidate()?;
 
-        let mut updated = Zeroizing::new(self.original.full.to_vec());
-        updated[LOGIN + 1 + self.login.len()] += 1;
-        let path = candidate.original.path().as_os_str().as_bytes();
-        updated.extend_from_slice(
-            &u16::try_from(path.len())
-                .map_err(|_| refused())?
-                .to_be_bytes(),
-        );
-        updated.extend_from_slice(path);
-        updated.extend_from_slice(&token);
+        let updated = self.descriptor_with_disk(&candidate, &token)?;
 
         // A previously prepared replacement is useful only if it is the exact
         // append to the still-current descriptor for this selected disk.
@@ -114,24 +116,7 @@ impl Reset {
         }
 
         if !has_role_file {
-            let prove_marker = || {
-                original_and_candidate()?;
-                require_only(&candidate.directory, Some(ROLE_STAGE.as_bytes()))
-            };
-            let staged =
-                finish_stage(&candidate.directory, ROLE_STAGE, &marker, uid, prove_marker)?;
-            prove_marker()?;
-            if stamp(&read(&candidate.directory, ROLE_STAGE, uid)?.meta) != stamp(&staged.meta) {
-                return Err(refused());
-            }
-            renameat_with(
-                &candidate.directory,
-                ROLE_STAGE,
-                &candidate.directory,
-                MARKER,
-                RenameFlags::NOREPLACE,
-            )?;
-            candidate.directory.sync_all()?;
+            publish_role_marker(&candidate, &marker, uid, original_and_candidate)?;
         }
         let prove = || {
             original_and_candidate()?;
@@ -162,6 +147,44 @@ impl Reset {
         role_proof(&root(), DATA, pool, uid)?;
         self.selected.require_site()
     }
+
+    fn descriptor_with_disk(
+        &self,
+        candidate: &Held,
+        token: &[u8; 32],
+    ) -> io::Result<Zeroizing<Vec<u8>>> {
+        let mut updated = Zeroizing::new(self.original.full.to_vec());
+        updated[LOGIN + 1 + self.login.len()] += 1;
+        let path = candidate.original.path().as_os_str().as_bytes();
+        updated.extend_from_slice(
+            &u16::try_from(path.len())
+                .map_err(|_| refused())?
+                .to_be_bytes(),
+        );
+        updated.extend_from_slice(path);
+        updated.extend_from_slice(token);
+        Ok(updated)
+    }
+}
+
+fn publish_role_marker(
+    candidate: &Held,
+    marker: &[u8; MARK_BYTES],
+    uid: u32,
+    prove_original: impl Fn() -> io::Result<()>,
+) -> io::Result<()> {
+    let directory = &candidate.directory;
+    let prove_marker = || {
+        prove_original()?;
+        require_only(directory, Some(ROLE_STAGE.as_bytes()))
+    };
+    let staged = finish_stage(directory, ROLE_STAGE, marker, uid, prove_marker)?;
+    prove_marker()?;
+    if stamp(&read(directory, ROLE_STAGE, uid)?.meta) != stamp(&staged.meta) {
+        return Err(refused());
+    }
+    renameat_with(directory, ROLE_STAGE, directory, MARKER, RenameFlags::NOREPLACE)?;
+    directory.sync_all()
 }
 
 pub(super) fn read_stage(dir: &File, name: &str, uid: u32) -> io::Result<Option<Record>> {

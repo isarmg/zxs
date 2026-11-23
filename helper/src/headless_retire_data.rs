@@ -1,8 +1,16 @@
 //! Offline retirement of a clean DATA root. The disk itself is never changed.
-use super::add_data::{finish_stage, read_stage};
-use super::*;
-use crate::headless_setup::{Held, MARKER, read_role_token};
-use rustix::fs::{RenameFlags, mkdirat, renameat_with};
+use super::{
+    DESCRIPTOR, FIXED_ROOTS, LOGIN, Reset, SCOPED,
+    add_data::{finish_stage, read_stage},
+    field, fixed, read, stamp,
+};
+use crate::{
+    headless_setup::{FreshSelection, Held, MARKER, read_role_token, refused},
+    pinned::Entity,
+};
+use rustix::fs::{Mode, OFlags, RawDir, RenameFlags, mkdirat, openat2, renameat, renameat_with};
+use std::{fs::File, io, mem::MaybeUninit, os::unix::fs::MetadataExt, path::Path};
+use zeroize::Zeroizing;
 
 pub(super) const RETIRE_STAGE: &str = ".server-stage-retire-data";
 const RETIRED: &str = "retired-data";
@@ -76,10 +84,10 @@ impl Reset {
         let end = first + skip_root(&mut tail)?;
         updated.drain(first..end);
         updated[count_at] -= 1;
-        if let Some(stage) = read_stage(&self.locked, RETIRE_STAGE, uid)? {
-            if !updated.starts_with(&stage.full) || !retired(system, pool, &token, uid)? {
-                return Err(refused());
-            }
+        if let Some(stage) = read_stage(&self.locked, RETIRE_STAGE, uid)?
+            && (!updated.starts_with(&stage.full) || !retired(system, pool, &token, uid)?)
+        {
+            return Err(refused());
         }
 
         if child(system, RETIRED, uid)?.is_none() {
