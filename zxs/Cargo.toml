@@ -30,17 +30,3 @@ exclude = [
 # Linux ABI declarations use the retained local libc bindings.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
-
-[lints.rust.unexpected_cfgs]
-level = "warn"
-check-cfg = [
-    'cfg(aes_backend, values("soft"))',
-    'cfg(aes_backend_soft, values("compact"))',
-    'cfg(cpubits, values("16", "32", "64"))',
-    'cfg(md5_backend, values("soft"))',
-    'cfg(sha2_backend, values("soft", "riscv-zknh"))',
-    'cfg(sha2_256_backend, values("aarch64-sha2", "soft", "riscv-zknh", "x86-sha"))',
-    'cfg(sha2_512_backend, values("aarch64-sha3", "soft", "riscv-zknh", "x86-avx2"))',
-    'cfg(sha2_backend_soft, values("compact"))',
-    'cfg(sha2_backend_riscv_zknh, values("compact"))',
-]
