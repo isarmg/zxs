@@ -73,11 +73,9 @@ pub(crate) enum JsonMutation {
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Request {
-    List,
     ListCompact {
         after: Option<Id>,
     },
-    Container(Id),
     ContainerDetail {
         container: Id,
         sequence: Option<u64>,
@@ -87,10 +85,6 @@ pub(crate) enum Request {
     NodeData {
         container: Id,
         node: Id,
-    },
-    BranchNodes {
-        container: Id,
-        branch: Branch,
     },
     BranchHistory {
         container: Id,

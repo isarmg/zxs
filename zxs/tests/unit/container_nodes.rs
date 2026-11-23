@@ -62,6 +62,12 @@ fn fixture() -> (PrivateTemp, PathBuf, Store) {
     let store = open_fixture(&root);
     (temp, root, store)
 }
+fn head(page: &DetailPage, branch: &str) -> Option<NodeId> {
+    page.heads
+        .iter()
+        .find_map(|(name, node)| (name == branch).then_some(*node))
+}
+
 fn read_node(store: &Store, node: u8) -> Vec<u8> {
     let mut selected = store.node(id(1), id(node)).unwrap().unwrap();
     let mut bytes = Vec::new();
@@ -110,7 +116,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
         ),
         Err(Error::WrongLength)
     ));
-    assert!(store.describe(id(1)).unwrap().is_none());
+    assert!(store.detail_page(id(1), None, None).unwrap().is_none());
     assert_eq!(store.routes.get(id(1)).unwrap(), None);
     let first = store
         .save(
@@ -121,7 +127,10 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
         )
         .unwrap();
     assert_eq!(
-        store.describe(id(1)).unwrap().unwrap().heads[MAIN],
+        head(
+            &store.detail_page(id(1), None, None).unwrap().unwrap(),
+            MAIN
+        ),
         Some(id(10))
     );
     store
@@ -147,14 +156,15 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
             || Ok(()),
         )
         .unwrap();
-    let current = store.describe(id(1)).unwrap().unwrap();
-    assert_eq!(current.heads[MAIN], Some(id(11)));
-    assert_eq!(current.heads["alternate"], Some(id(12)));
+    let current = store.detail_page(id(1), None, None).unwrap().unwrap();
+    assert_eq!(head(&current, MAIN), Some(id(11)));
+    assert_eq!(head(&current, "alternate"), Some(id(12)));
     let history = |branch| {
         store
-            .branch_nodes(id(1), branch)
+            .branch_history(id(1), branch, head(&current, branch).unwrap(), None)
             .unwrap()
             .unwrap()
+            .nodes
             .into_iter()
             .map(|(node, _)| node)
             .collect::<Vec<_>>()
@@ -183,7 +193,10 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
         first
     );
     assert_eq!(
-        store.describe(id(1)).unwrap().unwrap().heads[MAIN],
+        head(
+            &store.detail_page(id(1), None, None).unwrap().unwrap(),
+            MAIN
+        ),
         Some(id(11))
     );
 }
@@ -239,10 +252,10 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
             || Ok(()),
         )
         .unwrap();
-    let state = store.describe(id(1)).unwrap().unwrap();
+    let state = store.detail_page(id(1), None, None).unwrap().unwrap();
     assert_eq!(state.name, "renamed");
     assert_eq!(state.tags, ["已选"]);
-    assert_eq!(state.heads["branch"], Some(id(10)));
+    assert_eq!(head(&state, "branch"), Some(id(10)));
     for (sequence, request) in [(2, id(3)), (3, id(4)), (4, id(5))] {
         assert!(
             !store.volumes[0]
@@ -337,13 +350,16 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     let original = store.volumes[0].container(id(1));
     leave_prepared_recycle_unselected(&store);
     assert_eq!(read_node(&store, 11), b"two");
-    assert_eq!(store.describe(id(1)).unwrap().unwrap().name, "name");
+    assert_eq!(
+        store.detail_page(id(1), None, None).unwrap().unwrap().name,
+        "name"
+    );
     let recycled = store.move_to_recycle(mutation(6), 4, || Ok(())).unwrap();
     assert_eq!(recycled.original_sequence, 4);
     assert!(!original.exists());
-    assert!(store.describe(id(1)).unwrap().is_none());
+    assert!(store.detail_page(id(1), None, None).unwrap().is_none());
     assert!(store.node(id(1), id(10)).unwrap().is_none());
-    assert!(store.list().unwrap().is_empty());
+    assert!(store.catalog_page(None, |_| true).unwrap().items.is_empty());
 
     let archive = store.archive.as_ref().unwrap();
     let (_receipt, moved) = archive.selected(id(1)).unwrap().unwrap();
@@ -453,8 +469,8 @@ fn retired_data_proof_settles_only_the_exact_recycled_retry() {
     ));
     assert_eq!(store.routes.get(id(1)).unwrap(), Some(token));
     assert!(matches!(
-        store.describe(not_recycled.container),
-        Err(e) if e.kind() == io::ErrorKind::NotConnected
+        store.detail_page(not_recycled.container, None, None),
+        Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotConnected
     ));
     assert!(matches!(
         store.move_to_recycle(not_recycled, 1, || Ok(())),
@@ -522,7 +538,7 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
         panic!("retirement may not unlink changed members");
     };
     assert_eq!(store.recycle_receipt(mutation(6)).unwrap(), Some(receipt));
-    assert!(store.describe(id(1)).unwrap().is_none());
+    assert!(store.detail_page(id(1), None, None).unwrap().is_none());
     assert_eq!(fs::read(first.join("payload")).unwrap(), b"one");
     assert!(first.join("receipt").exists());
     assert_eq!(fs::read(second.join("payload")).unwrap(), b"two");
@@ -630,7 +646,7 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
     drop(store);
     let opened = open();
     assert_eq!(opened.recycle_receipt(mutation(6)).unwrap(), Some(receipt));
-    assert!(opened.describe(id(1)).unwrap().is_none());
+    assert!(opened.detail_page(id(1), None, None).unwrap().is_none());
 }
 
 #[test]
@@ -824,7 +840,7 @@ fn new_routes_do_not_adopt_legacy_data_or_an_unrouted_leaf() {
     fs::rename(&orphan, local.0.join("retained-legacy")).unwrap();
     let store = open().unwrap();
     fs::rename(local.0.join("retained-legacy"), &orphan).unwrap();
-    assert!(store.describe(id(1)).unwrap().is_none());
+    assert!(store.detail_page(id(1), None, None).unwrap().is_none());
     assert!(matches!(
         store.save(
             mutation(2),
@@ -874,7 +890,7 @@ fn first_save_reserves_only_on_valid_intake_and_reuses_reserved_disk_after_reope
     drop(store);
 
     let store = open_fixture(&directory);
-    assert!(store.describe(id(1)).unwrap().is_none());
+    assert!(store.detail_page(id(1), None, None).unwrap().is_none());
     let receipt = store
         .save(mutation(2), save(), &b"new"[..], || Ok(()))
         .unwrap();
@@ -924,20 +940,24 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
     let store = open(true);
     assert_eq!(
         store
-            .list()
+            .catalog_page(None, |_| true)
             .unwrap()
+            .items
             .iter()
             .map(|item| item.id)
             .collect::<Vec<_>>(),
         [id(1), id(2)]
     );
     store.routes.reserve(id(3), [9; 32]).unwrap();
-    assert!(matches!(store.describe(id(3)), Err(e) if e.kind() == io::ErrorKind::NotConnected));
+    assert!(matches!(
+        store.detail_page(id(3), None, None),
+        Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotConnected
+    ));
 
     fs::rename(&right, local.0.join("right-offline")).unwrap();
-    assert!(store.describe(id(1)).is_err());
+    assert!(store.detail_page(id(1), None, None).is_err());
     assert!(store.receipt(op(1, 5)).is_err());
-    assert!(store.list().is_err());
+    assert!(store.catalog_page(None, |_| true).is_err());
     assert!(matches!(
         store.change(
             op(2, 6),
@@ -966,7 +986,10 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
             .is_ok()
     );
     assert_eq!(
-        store.describe(id(2)).unwrap().unwrap().heads[MAIN],
+        head(
+            &store.detail_page(id(2), None, None).unwrap().unwrap(),
+            MAIN
+        ),
         Some(id(11))
     );
     assert!(!left.join("data").join(hex(id(1))).exists());
@@ -977,7 +1000,12 @@ fn absent_reads_cannot_grow_idle_slots_or_split_an_active_container_lock() {
     let (_temp, _dir, store) = fixture();
     let active = store.object(id(1)).unwrap();
     for missing in 2..=u8::MAX {
-        assert!(store.describe(id(missing)).unwrap().is_none());
+        assert!(
+            store
+                .detail_page(id(missing), None, None)
+                .unwrap()
+                .is_none()
+        );
     }
     assert!(Arc::ptr_eq(&active, &store.object(id(1)).unwrap()));
     assert!(store.objects.lock().unwrap().len() <= OBJECT_SLOT_TARGET);

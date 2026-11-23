@@ -80,14 +80,6 @@ impl From<Conflict> for Error {
     }
 }
 
-pub(crate) struct Container {
-    pub(crate) id: Id,
-    pub(crate) name: String,
-    pub(crate) tags: Vec<String>,
-    pub(crate) sequence: u64,
-    pub(crate) heads: BTreeMap<String, Option<NodeId>>,
-}
-
 pub(crate) const CATALOG_PAGE_ROWS: usize = 256;
 
 pub(crate) struct CatalogRow {
@@ -612,8 +604,8 @@ impl Store {
             .cloned())
     }
 
-    pub(crate) fn describe(&self, id: Id) -> io::Result<Option<Container>> {
-        self.describe_at(id, false)
+    pub(crate) fn tags(&self, id: Id) -> io::Result<Option<Vec<String>>> {
+        self.project_container(id, false, |state, _| state.tags.clone())
     }
 
     pub(crate) fn detail_page(
@@ -626,16 +618,6 @@ impl Store {
             select_detail_page(id, name, state, sequence, after)
         })?
         .transpose()
-    }
-
-    fn describe_at(&self, id: Id, recorded: bool) -> io::Result<Option<Container>> {
-        self.project_container(id, recorded, |state, name| Container {
-            id,
-            name: name.to_owned(),
-            tags: state.tags.clone(),
-            sequence: state.sequence,
-            heads: state.branches.clone(),
-        })
     }
 
     fn project_container<T>(
@@ -662,17 +644,6 @@ impl Store {
         let state = volume.load(id, &mut memory)?;
         Ok(state.name.as_deref().map(|name| project(state, name)))
     }
-    pub(crate) fn list(&self) -> io::Result<Vec<Container>> {
-        let mut items = Vec::new();
-        for id in self.routes.ids()? {
-            if let Some(current) = self.describe_at(id, true)? {
-                items.push(current);
-            }
-        }
-        items.sort_unstable_by_key(|item| item.id);
-        Ok(items)
-    }
-
     pub(crate) fn catalog_page(
         &self,
         after: Option<Id>,
@@ -788,46 +759,6 @@ impl Store {
             return Err(unenrolled_data());
         }
         archive.require_selected(done, &read_state(at, id)?)
-    }
-
-    /// Immutable ancestry of the selected branch, newest node first.
-    /// This does not read any payload bytes.
-    pub(crate) fn branch_nodes(
-        &self,
-        id: Id,
-        branch: &str,
-    ) -> io::Result<Option<Vec<(NodeId, Node)>>> {
-        let object = self.object(id)?;
-        let mut memory = object
-            .lock()
-            .map_err(|_| invalid("container selection unavailable"))?;
-        if self.recycled(id)?.is_some() {
-            return Ok(None);
-        }
-        let Some(volume) = self.routed(id)? else {
-            return Ok(None);
-        };
-        let state = volume.load(id, &mut memory)?;
-        let Some(mut next) = state.branches.get(branch).copied() else {
-            return Ok(None);
-        };
-        let mut out = Vec::new();
-        let mut upper = None;
-        while let Some(id) = next {
-            let exact = state
-                .nodes
-                .get(&id)
-                .ok_or_else(|| invalid("branch refers to a missing node"))?;
-            if upper.is_some_and(|latest| exact.sequence >= latest) {
-                return Err(invalid(
-                    "branch ancestry did not advance toward the original node",
-                ));
-            }
-            upper = Some(exact.sequence);
-            next = exact.prior;
-            out.push((id, exact.clone()));
-        }
-        Ok(Some(out))
     }
 
     /// Verify the incoming continuation by walking back from this branch's

@@ -3,7 +3,7 @@
 use super::{Branch, Id, JsonMutation, MetadataMutation, Request};
 mod project;
 use crate::container_store as core;
-use project::{Revoked, branch_key, describe, failed, receipt_for, save_node};
+use project::{Revoked, branch_key, failed, receipt_for, save_node};
 use std::io::{self, Read};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,13 +27,10 @@ pub(crate) enum Body<R> {
     },
 }
 pub(crate) enum Reply {
-    Containers(Vec<core::Container>),
     Catalog(core::CatalogPage),
-    Container(core::Container),
     Detail(core::DetailPage),
     Tags(Vec<String>),
     Node(core::NodeBytes),
-    BranchNodes(Vec<(core::NodeId, core::Node)>),
     BranchHistory(core::HistoryPage),
     Mutation(core::Receipt),
     Recycle {
@@ -60,11 +57,10 @@ pub(crate) enum Failure {
 }
 fn access(request: &Request) -> Access {
     match request {
-        Request::List | Request::ListCompact { .. } => Access::List,
-        Request::Container(id) | Request::Tags(id) => Access::Read(*id),
+        Request::ListCompact { .. } => Access::List,
+        Request::Tags(id) => Access::Read(*id),
         Request::NodeData { container, .. }
         | Request::ContainerDetail { container, .. }
-        | Request::BranchNodes { container, .. }
         | Request::BranchHistory { container, .. }
         | Request::Receipt { container, .. } => Access::Read(*container),
         Request::SaveNode(save) => Access::Write(save.container),
@@ -84,20 +80,10 @@ fn metadata(scope: MetadataMutation) -> core::Mutation {
 
 fn list_catalog(
     store: &core::Store,
-    list: &Request,
+    after: Option<Id>,
     allowed: &impl Fn(Access) -> bool,
 ) -> Result<Reply, Failure> {
     let readable = |id| allowed(Access::Read(Id(id)));
-    let Request::ListCompact { after } = list else {
-        return Ok(Reply::Containers(
-            store
-                .list()
-                .map_err(|_| Failure::Unavailable)?
-                .into_iter()
-                .filter(|row| readable(row.id))
-                .collect(),
-        ));
-    };
     let page = store
         .catalog_page(after.map(Id::bytes), readable)
         .map_err(|_| Failure::Unavailable)?;
@@ -128,14 +114,16 @@ pub(crate) fn dispatch<R: Read>(
         }
     };
     match (request, body) {
-        (list @ (Request::List | Request::ListCompact { .. }), Body::Empty) => {
-            list_catalog(store, &list, &allowed)
-        }
-        (Request::Container(id), Body::Empty) => Ok(Reply::Container(describe(store, id)?)),
+        (Request::ListCompact { after }, Body::Empty) => list_catalog(store, after, &allowed),
         (detail @ Request::ContainerDetail { .. }, Body::Empty) => {
             read_detail(store, &detail, &allowed)
         }
-        (Request::Tags(id), Body::Empty) => Ok(Reply::Tags(describe(store, id)?.tags)),
+        (Request::Tags(id), Body::Empty) => Ok(Reply::Tags(
+            store
+                .tags(id.bytes())
+                .map_err(|_| Failure::Unavailable)?
+                .ok_or(Failure::Missing)?,
+        )),
         (Request::NodeData { container, node }, Body::Empty) => Ok(Reply::Node(
             store
                 .node(container.bytes(), node.bytes())
@@ -201,9 +189,15 @@ pub(crate) fn dispatch<R: Read>(
                 .map_err(|error| failed(&error))?;
             receipt_for(receipt, op, &change)
         }
-        (history @ (Request::BranchNodes { .. } | Request::BranchHistory { .. }), Body::Empty) => {
-            read_history(store, &history, &allowed)
-        }
+        (
+            Request::BranchHistory {
+                container,
+                branch,
+                head,
+                next,
+            },
+            Body::Empty,
+        ) => read_history(store, container, branch, head, next, &allowed),
         _ => Err(Failure::BadBody),
     }
 }
@@ -234,38 +228,25 @@ fn read_detail(
 
 fn read_history(
     store: &core::Store,
-    request: &Request,
+    container: Id,
+    branch: Branch,
+    head: Id,
+    next: Option<Id>,
     allowed: &impl Fn(Access) -> bool,
 ) -> Result<Reply, Failure> {
-    match *request {
-        Request::BranchNodes { container, branch } => Ok(Reply::BranchNodes(
-            store
-                .branch_nodes(container.bytes(), &branch_key(branch))
-                .map_err(|_| Failure::Unavailable)?
-                .ok_or(Failure::Missing)?,
-        )),
-        Request::BranchHistory {
-            container,
-            branch,
-            head,
-            next,
-        } => {
-            let page = store
-                .branch_history(
-                    container.bytes(),
-                    &branch_key(branch),
-                    head.bytes(),
-                    next.map(Id::bytes),
-                )
-                .map_err(|error| failed(&error))?
-                .ok_or(Failure::Missing)?;
-            if !allowed(Access::Read(container)) {
-                return Err(Failure::Denied);
-            }
-            Ok(Reply::BranchHistory(page))
-        }
-        _ => Err(Failure::BadBody),
+    let page = store
+        .branch_history(
+            container.bytes(),
+            &branch_key(branch),
+            head.bytes(),
+            next.map(Id::bytes),
+        )
+        .map_err(|error| failed(&error))?
+        .ok_or(Failure::Missing)?;
+    if !allowed(Access::Read(container)) {
+        return Err(Failure::Denied);
     }
+    Ok(Reply::BranchHistory(page))
 }
 
 fn lookup_receipt(store: &core::Store, container: Id, operation: Id) -> ReceiptLookup {

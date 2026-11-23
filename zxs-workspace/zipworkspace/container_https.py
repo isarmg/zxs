@@ -26,7 +26,6 @@ _TARGETS = {
     "PUT": re.compile(rf"{_ROOT}/{_ID}/(?:name|tags|branches/{_ID})"),
     "POST": re.compile(rf"{_ROOT}/{_ID}/branches/{_BRANCH}/nodes"),
 }
-_METADATA = re.compile(rf"{_ROOT}(?:/{_ID}(?:/branches/{_BRANCH}/nodes)?)?")
 _LOOKUP = re.compile(rf"{_ROOT}/{_ID}/operations/{_ID}")
 
 
@@ -277,12 +276,6 @@ class HttpsExchange:
             # Only exact original durable receipt lookup resolves uncertainty.
             return Reply(ReplyKind.UNKNOWN)
 
-    def read_metadata(self, target):
-        """Read only the fixed R3 collection, container, and branch-node metadata routes."""
-        if type(target) is not str or _METADATA.fullmatch(target) is None:
-            raise Rejected("not a supported Workspace metadata route")
-        return self._read_metadata(target, {})
-
     def read_catalog_page(self, after=None):
         if after is not None and not _read_id(after):
             raise Rejected("invalid Workspace catalog cursor")
@@ -332,8 +325,6 @@ class HttpsExchange:
         if type(result) not in (dict, list):
             raise Rejected("unexpected Workspace metadata shape")
         return result
-
-    read_json = read_metadata
 
     @staticmethod
     def _node_target(container, node, length, sha256):

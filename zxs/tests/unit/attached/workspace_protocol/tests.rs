@@ -180,7 +180,7 @@ fn initial_name_uses_the_storage_display_rule_before_body_intake() {
 
 #[test]
 fn compact_catalog_accepts_only_singleton_collection_headers() {
-    assert_eq!(request("GET", ROOT, &[]), Ok(Request::List));
+    assert_eq!(request("GET", ROOT, &[]), Err(Rejected::Header));
     assert_eq!(
         request("GET", ROOT, &[("Zxs-View", "compact")]),
         Ok(Request::ListCompact { after: None })
@@ -220,13 +220,7 @@ fn compact_catalog_accepts_only_singleton_collection_headers() {
 #[test]
 fn history_page_headers_require_the_exact_branch_read_and_a_distinct_parent_cursor() {
     let path = format!("{ROOT}/{CONT}/branches/main/nodes");
-    assert_eq!(
-        request("GET", &path, &[]),
-        Ok(Request::BranchNodes {
-            container: id(1),
-            branch: Branch::Main,
-        })
-    );
+    assert_eq!(request("GET", &path, &[]), Err(Rejected::Route));
     assert_eq!(
         request("GET", &path, &[("zxs-history-head", NODE)]),
         Ok(Request::BranchHistory {
@@ -269,7 +263,7 @@ fn history_page_headers_require_the_exact_branch_read_and_a_distinct_parent_curs
 #[test]
 fn paged_detail_refuses_unbound_or_noncanonical_request_fields() {
     let target = format!("{ROOT}/{CONT}");
-    assert_eq!(request("GET", &target, &[]), Ok(Request::Container(id(1))));
+    assert_eq!(request("GET", &target, &[]), Err(Rejected::Route));
     assert_eq!(
         request("GET", &target, &[("Zxs-Detail", "paged")]),
         Ok(Request::ContainerDetail {

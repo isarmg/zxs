@@ -61,7 +61,6 @@ fn list_request(
     let after = field(headers, "zxs-after")?;
     if target == ROOT && method == "GET" {
         return match (view, after) {
-            (None, None) => Ok(Some(Request::List)),
             (Some("compact"), after) => Ok(Some(Request::ListCompact {
                 after: after.map(Id::parse).transpose()?,
             })),
@@ -228,15 +227,10 @@ pub(crate) fn request(
     };
 
     match (method, a, b, c) {
-        ("GET", None, None, None) => Ok(Request::Container(container)),
         ("GET", Some("tags"), None, None) => Ok(Request::Tags(container)),
         ("GET", Some("nodes"), Some(node), Some("data")) => Ok(Request::NodeData {
             container,
             node: Id::parse(node)?,
-        }),
-        ("GET", Some("branches"), Some(branch), Some("nodes")) => Ok(Request::BranchNodes {
-            container,
-            branch: Branch::parse(branch)?,
         }),
         ("GET", Some("operations"), Some(operation), None) => Ok(Request::Receipt {
             container,

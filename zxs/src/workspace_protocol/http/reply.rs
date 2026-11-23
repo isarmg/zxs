@@ -22,12 +22,9 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
         Reply::Receipt(ReceiptLookup::NotFound) => return Ok(Outcome::ReceiptAbsent),
         Reply::Receipt(ReceiptLookup::Unknown) => return Err(Problem::Unavailable),
         other => match other {
-            Reply::Containers(rows) => out.array(&rows, Json::container),
             Reply::Catalog(page) => out.catalog(&page),
-            Reply::Container(row) => out.container(&row),
             Reply::Detail(page) => out.detail(&page),
             Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
-            Reply::BranchNodes(nodes) => out.array(&nodes, |o, (id, node)| o.node(id, node)),
             Reply::BranchHistory(page) => out.history(&page),
             Reply::Mutation(receipt) | Reply::Receipt(ReceiptLookup::Mutation(receipt)) => {
                 out.receipt(&receipt)
@@ -115,25 +112,6 @@ impl Json {
         self.write_str(",\"next_after\":")?;
         self.id_or_null(page.next_after)?;
         self.write_char('}')
-    }
-
-    fn container(&mut self, row: &core::Container) -> fmt::Result {
-        self.write_str("{\"container_id\":")?;
-        self.hex(&row.id)?;
-        write!(self, ",\"sequence\":{},\"name\":", row.sequence)?;
-        self.string(&row.name)?;
-        self.write_str(",\"tags\":")?;
-        self.array(&row.tags, |o, tag| o.string(tag))?;
-        self.write_str(",\"heads\":{")?;
-        for (offset, (branch, node)) in row.heads.iter().enumerate() {
-            if offset != 0 {
-                self.write_char(',')?;
-            }
-            self.string(branch)?;
-            self.write_char(':')?;
-            self.id_or_null(*node)?;
-        }
-        self.write_str("}}")
     }
 
     fn detail(&mut self, page: &core::DetailPage) -> fmt::Result {

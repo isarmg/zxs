@@ -45,19 +45,20 @@ class ExchangeFixture(HttpsExchange):
 class NativeReadTest(unittest.TestCase):
     def test_metadata_fixed_routes_and_strict_json(self):
         media = b"application/json"
-        for path in (ROOT, f"{ROOT}/{CONTAINER}", f"{ROOT}/{CONTAINER}/branches/main/nodes"):
-            exchange = ExchangeFixture(reply((b"[", b"]"), media))
-            self.assertEqual(exchange.read_metadata(path), [])
-            self.assertTrue(exchange.closed)
-            self.assertEqual(exchange.calls, [("GET", path, "application/json", None)])
+        path = f"{ROOT}/{CONTAINER}"
+        exchange = ExchangeFixture(reply((b"{", b"}"), media))
+        self.assertEqual(exchange.read_container_detail_page(CONTAINER), {})
+        self.assertTrue(exchange.closed)
+        self.assertEqual(exchange.calls, [("GET", path, "application/json", None)])
+        self.assertEqual(exchange.headers[0]["Zxs-Detail"], "paged")
         for body in (b'{"x":0,"x":1}', b"[NaN]", b"[\xff]", b"[]tail"):
             exchange = ExchangeFixture(reply((body,), media))
             with self.assertRaises(Rejected):
-                exchange.read_json(ROOT)
+                exchange.read_container_detail_page(CONTAINER)
         exchange = ExchangeFixture(reply((b"[]",), media))
-        for path in ("/outside", ROOT + "?q=1", f"{ROOT}/{CONTAINER}/nodes/{NODE}/data"):
+        for invalid in ("/outside", ROOT, ROOT + "?q=1", f"{path}/nodes/{NODE}/data"):
             with self.assertRaises(Rejected):
-                exchange.read_metadata(path)
+                exchange.read_container_detail_page(invalid)
         self.assertFalse(exchange.calls)
 
     def test_non_h2_response_never_reaches_metadata_or_node_reader(self):
@@ -65,7 +66,7 @@ class NativeReadTest(unittest.TestCase):
             with self.subTest(extensions=extensions):
                 exchange = ExchangeFixture(SimpleNamespace(extensions=extensions))
                 with self.assertRaisesRegex(Rejected, "HTTP/2"):
-                    exchange.read_metadata(ROOT)
+                    exchange.read_container_detail_page(CONTAINER)
                 with self.assertRaisesRegex(Rejected, "HTTP/2"):
                     exchange.read_node_into(CONTAINER, NODE, length=0, sha256="0" * 64,
                                             write=lambda _: self.fail("non-HTTP/2 response reached node sink"))

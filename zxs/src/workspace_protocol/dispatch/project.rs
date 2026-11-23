@@ -1,19 +1,7 @@
 use super::super::{SaveNode, Target};
-use super::{Branch, Failure, Id, Reply, mutation};
+use super::{Branch, Failure, Reply, mutation};
 use crate::container_store as core;
 use std::io::{self, Read};
-
-pub(super) fn describe(store: &core::Store, id: Id) -> Result<core::Container, Failure> {
-    let row = store
-        .describe(id.bytes())
-        .map_err(|_| Failure::Unavailable)?
-        .ok_or(Failure::Missing)?;
-    if row.id == id.bytes() {
-        Ok(row)
-    } else {
-        Err(Failure::Unavailable)
-    }
-}
 
 pub(super) fn branch_key(branch: Branch) -> String {
     match branch {
