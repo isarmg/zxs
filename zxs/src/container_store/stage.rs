@@ -1,6 +1,9 @@
 //! Per-operation custody of original private staging directories and records.
 use super::invalid;
+mod sealed;
+
 use crate::fs::{HeldDir, OpaquePin};
+pub(super) use sealed::SealedStage;
 use std::{
     ffi::{CStr, CString},
     fs::File,
@@ -13,6 +16,7 @@ pub(super) struct FlatStage<'a> {
     name: CString,
     pub(super) directory: HeldDir,
     files: Vec<(&'static CStr, File)>,
+    clean_on_drop: bool,
 }
 
 impl<'a> FlatStage<'a> {
@@ -24,6 +28,7 @@ impl<'a> FlatStage<'a> {
             name,
             directory,
             files: Vec::new(),
+            clean_on_drop: true,
         })
     }
 
@@ -107,6 +112,15 @@ impl<'a> FlatStage<'a> {
             .rename_child_if_absent(original, parent, name, authorize)
     }
 
+    pub(super) fn seal(mut self) -> io::Result<SealedStage> {
+        self.directory.file.sync_all()?;
+        self.require_named()?;
+        let sealed = SealedStage::capture(&self)?;
+        self.require_named()?;
+        self.clean_on_drop = false;
+        Ok(sealed)
+    }
+
     fn clean(&self) -> io::Result<()> {
         self.require_named()?;
         // A successful publication has moved the whole stage, so the
@@ -130,6 +144,8 @@ impl<'a> FlatStage<'a> {
 
 impl Drop for FlatStage<'_> {
     fn drop(&mut self) {
-        let _ = self.clean();
+        if self.clean_on_drop {
+            let _ = self.clean();
+        }
     }
 }

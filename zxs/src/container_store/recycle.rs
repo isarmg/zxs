@@ -1,8 +1,8 @@
 //! Directed whole-container move from ordinary storage to recycle storage.
 //! A small SYSTEM receipt selects exactly one qualified R installation.
 use super::{
-    Change, DataRoot, Error, FlatStage, Id, Mutation, Stage, State, create_file, ensure_dir,
-    entry_leaf, hex, invalid, recycle_material, sync_dir, volume::DataVolume, write_file,
+    Change, DataRoot, Error, FlatStage, Id, Mutation, State, entry_leaf, hex, invalid,
+    recycle_material, volume::DataVolume,
 };
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
@@ -14,7 +14,7 @@ use std::{
     fs::{self, File},
     io::{self, Read},
     os::unix::fs::MetadataExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -108,7 +108,6 @@ pub(super) struct Recycle {
     system: HeldDir,
     pool: Id,
     archive_root: HeldDir,
-    staging: PathBuf,
     arrived: PathBuf,
     moves_directory: HeldDir,
     staging_directory: HeldDir,
@@ -178,7 +177,6 @@ impl Recycle {
         moves_directory.require_named()?;
         moves_directory.file.sync_all()?;
         moves_directory.require_named()?;
-        let staging = staging_directory.path.clone();
         let arrived = arrived_directory.path.clone();
         system.require_named()?;
         recycle.require_named()?;
@@ -186,7 +184,6 @@ impl Recycle {
             system,
             pool,
             archive_root: recycle,
-            staging,
             arrived,
             _recycle_owner: owner,
             moves_directory,
@@ -197,9 +194,9 @@ impl Recycle {
         })
     }
 
-    pub(super) fn staging(&self) -> io::Result<&Path> {
+    pub(super) fn staging(&self) -> io::Result<&HeldDir> {
         self.held()?;
-        Ok(&self.staging)
+        Ok(&self.staging_directory)
     }
     pub(super) fn moves(&self) -> io::Result<&HeldDir> {
         self.system_held()?;
@@ -275,7 +272,7 @@ impl Recycle {
         mutation: Mutation,
         ordinary: &DataVolume,
         state: &State,
-        candidate: &Stage,
+        candidate: &mut FlatStage<'_>,
         live: impl Fn() -> io::Result<()>,
     ) -> Result<RecycleReceipt, Error> {
         self.held()?;
@@ -284,7 +281,8 @@ impl Recycle {
             .held_container(mutation.container)?
             .ok_or_else(|| invalid("original container is absent from its routed DATA"))?;
         let before = held.file.metadata()?;
-        let destination = self.arrived_dir(mutation);
+        let destination = CString::new(arrived_leaf(mutation))
+            .map_err(|_| invalid("invalid recycle arrival position"))?;
         if let Some(arrived) = self.held_arrived(mutation)? {
             let old = RecycleReceipt::read(&arrived, c"ready")?.ok_or_else(|| {
                 invalid("recycle position is occupied without matching ready proof")
@@ -303,31 +301,16 @@ impl Recycle {
             self.staging_directory.file.sync_all()?;
             return Ok(old);
         }
-        if !matches!(fs::symlink_metadata(&destination),Err(e) if e.kind()==io::ErrorKind::NotFound)
-        {
-            return Err(
-                invalid("recycle position is occupied without matching ready proof").into(),
-            );
-        }
-        let data = candidate.path.join("container");
-        if !ensure_dir(&data)? {
-            return Err(invalid("recycle staging is not private and fresh").into());
-        }
-        let target = HeldDir::trusted_storage(&candidate.path)?;
-        let target_data = HeldDir::trusted_storage(&data)?;
-        if !self.archive_root.same_mount(&target)? || !target.same_mount(&target_data)? {
-            return Err(invalid("recycle candidate crossed its enrolled R mount").into());
-        }
-        let mut evidence = create_file(&candidate.path.join("source-proof"))?;
+        let mut tree = recycle_material::CopyTree::new(&candidate.directory)?;
+        let evidence = candidate.create(c"source-proof")?;
         let source_proof =
-            recycle_material::copy(&state.receipts, &held, &data, &mut evidence, || {
+            recycle_material::copy(&state.receipts, &held, &mut tree, evidence, || {
                 self.held()?;
                 ordinary.require_named()?;
                 held.require_named()?;
-                target.require_named()?;
                 live()
             })?;
-        let into = target.file.metadata()?;
+        let into = candidate.directory.file.metadata()?;
         let proof = RecycleReceipt {
             mutation,
             original_sequence: state.sequence,
@@ -337,8 +320,8 @@ impl Recycle {
             recycle_inode: into.ino(),
             source_proof,
         };
-        write_file(&candidate.path.join("ready"), &proof.encode())?;
-        sync_dir(&candidate.path)?;
+        candidate.write(c"ready", &proof.encode())?;
+        candidate.directory.file.sync_all()?;
         self.held()?;
         live()?;
         held.require_named()?;
@@ -346,7 +329,8 @@ impl Recycle {
         if (before.dev(), before.ino()) != (after.dev(), after.ino()) {
             return Err(invalid("source container changed while recycling").into());
         }
-        fs::rename(&candidate.path, &destination)?;
+        tree.require_named()?;
+        candidate.publish_directory(&self.arrived_directory, &destination, live)?;
         self.arrived_directory.file.sync_all()?;
         self.staging_directory.file.sync_all()?;
         self.qualify(proof)?;

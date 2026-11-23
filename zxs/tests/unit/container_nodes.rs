@@ -261,9 +261,11 @@ fn leave_prepared_recycle_unselected(store: &Store) {
     let mut memory = object.lock().unwrap();
     let state = store.volumes[0].load(id(1), &mut memory).unwrap();
     let archive = store.archive.as_ref().unwrap();
-    let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
+    let mut incoming = store.flat_stage_at(archive.staging().unwrap()).unwrap();
     let tentative = archive
-        .prepare(mutation(6), &store.volumes[0], state, &incoming, || Ok(()))
+        .prepare(mutation(6), &store.volumes[0], state, &mut incoming, || {
+            Ok(())
+        })
         .unwrap();
     let mut selector = store.flat_stage_at(archive.moves().unwrap()).unwrap();
     assert!(
@@ -503,9 +505,11 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
         let mut memory = source.lock().unwrap();
         let state = store.volumes[0].load(id(1), &mut memory).unwrap();
         let archive = store.archive.as_ref().unwrap();
-        let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
+        let mut incoming = store.flat_stage_at(archive.staging().unwrap()).unwrap();
         archive
-            .prepare(mutation(6), &store.volumes[0], state, &incoming, || Ok(()))
+            .prepare(mutation(6), &store.volumes[0], state, &mut incoming, || {
+                Ok(())
+            })
             .unwrap();
     }
     // Simulate an unexpected local replacement that preserves both the
@@ -662,9 +666,11 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
         let object = store.object(id(1)).unwrap();
         let mut memory = object.lock().unwrap();
         let state = store.volumes[0].load(id(1), &mut memory).unwrap();
-        let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
+        let mut incoming = store.flat_stage_at(archive.staging().unwrap()).unwrap();
         archive
-            .prepare(mutation(6), &store.volumes[0], state, &incoming, || Ok(()))
+            .prepare(mutation(6), &store.volumes[0], state, &mut incoming, || {
+                Ok(())
+            })
             .unwrap();
     }
     assert!(store.recycle_receipt(mutation(6)).unwrap().is_none());

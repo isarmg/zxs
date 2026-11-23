@@ -1,19 +1,18 @@
 //! Whole-container F→R staging. No visibility switch or source deletion here.
-use super::{
-    Change, Error, Id, Receipt, codec, create_file, ensure_dir, entry_leaf, held_entry, invalid,
-    private_dir, read, sync_dir, write_file,
-};
+mod tree;
+
+use super::{Change, Error, FlatStage, Id, Receipt, codec, entry_leaf, held_entry, invalid, read};
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
     hash::Sha256,
 };
 use std::{
     collections::BTreeMap,
+    ffi::CString,
     fs::File,
     io::{self, Read, Write},
-    os::unix::fs::MetadataExt,
-    path::Path,
 };
+pub(super) use tree::CopyTree;
 
 pub(super) const PROOF_ROW: usize = 16 + OPAQUE_STAMP_BYTES * 2;
 
@@ -25,13 +24,13 @@ pub(super) const PROOF_ROW: usize = 16 + OPAQUE_STAMP_BYTES * 2;
 pub(super) fn copy(
     selected: &BTreeMap<Id, Receipt>,
     original: &HeldDir,
-    candidate: &Path,
+    candidate: &mut CopyTree,
     proof: &mut File,
     live: impl Fn() -> io::Result<()>,
 ) -> Result<[u8; 32], Error> {
     original.require_named()?;
-    private_dir(candidate)?;
-    if original.entity.device == std::fs::metadata(candidate)?.dev() {
+    candidate.require_named()?;
+    if original.entity.device == candidate.directory().entity.device {
         return Err(invalid("recycle storage must be on a distinct filesystem").into());
     }
     live()?;
@@ -40,7 +39,7 @@ pub(super) fn copy(
         live()?;
         let leaf = entry_leaf(receipt.sequence, receipt.mutation.request);
         let from = held_entry(original, &leaf)?;
-        let to = candidate.join(&leaf);
+        let name = CString::new(leaf).map_err(|_| invalid("invalid recycle entry name"))?;
         let pinned_receipt = from
             .opaque_pin(c"receipt")?
             .ok_or_else(|| invalid("stored source receipt absent"))?;
@@ -56,9 +55,8 @@ pub(super) fn copy(
         row[..8].copy_from_slice(&from.entity.device.to_be_bytes());
         row[8..16].copy_from_slice(&from.entity.inode.to_be_bytes());
         row[16..16 + OPAQUE_STAMP_BYTES].copy_from_slice(&pinned_receipt.stamp());
-        if !ensure_dir(&to)? {
-            return Err(invalid("private recycle candidate is not a fresh object").into());
-        }
+        candidate.reserve_entry()?;
+        let mut to = FlatStage::new(candidate.directory(), name)?;
         if let Change::Save { body, .. } = &receipt.change {
             let pinned = from
                 .opaque_pin(c"payload")?
@@ -68,7 +66,7 @@ pub(super) fn copy(
                 return Err(Error::WrongLength);
             }
             row[16 + OPAQUE_STAMP_BYTES..].copy_from_slice(&pinned.stamp());
-            let mut output = create_file(&to.join("payload"))?;
+            let output = to.create(c"payload")?;
             let mut digest = Sha256::new();
             let mut left = body.length;
             let mut block = vec![0; 64 * 1024];
@@ -96,11 +94,13 @@ pub(super) fn copy(
         pinned_receipt.require(&from, c"receipt")?;
         proof.write_all(&row)?;
         proof_hash.update(&row)?;
-        write_file(&to.join("receipt"), &canonical)?;
-        sync_dir(&to)?;
+        to.write(c"receipt", &canonical)?;
+        let sealed = to.seal()?;
+        candidate.record_entry(sealed);
     }
     proof.sync_all()?;
-    sync_dir(candidate)?;
+    candidate.directory().file.sync_all()?;
+    candidate.require_named()?;
     live()?;
     Ok(proof_hash.finish())
 }

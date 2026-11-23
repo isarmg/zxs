@@ -7,10 +7,9 @@ mod routes;
 mod stage;
 mod volume;
 
-use crate::{
-    fs::{HeldDir, local_uid},
-    hash::Sha256,
-};
+#[cfg(test)]
+use crate::fs::local_uid;
+use crate::{fs::HeldDir, hash::Sha256};
 use model::State;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 pub(crate) use recycle::RecycleReceipt;
@@ -20,19 +19,22 @@ use std::{
     collections::BTreeMap,
     ffi::CString,
     fmt,
-    fs::{self, DirBuilder, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
-    },
-    path::{Path, PathBuf},
+    os::fd::AsRawFd,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
 use volume::DataVolume;
+
+#[cfg(test)]
+use std::{
+    fs::{DirBuilder, OpenOptions},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    path::{Path, PathBuf},
+};
 
 const TAG_BYTES: usize = 1024 * 1024;
 const OBJECT_SLOT_TARGET: usize = 128;
@@ -287,18 +289,6 @@ impl Store {
                 CString::new(format!("{n:016x}")).map_err(|_| invalid("invalid stage name"))?;
             match FlatStage::new(root, name) {
                 Ok(stage) => return Ok(stage),
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    fn stage_at(&self, root: &Path) -> io::Result<Stage> {
-        loop {
-            let n = self.next_stage.fetch_add(1, Ordering::Relaxed);
-            let path = root.join(format!("{n:016x}"));
-            match DirBuilder::new().mode(0o700).create(&path) {
-                Ok(()) => return Ok(Stage { path }),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
             }
@@ -633,8 +623,8 @@ impl Store {
         if state.sequence != expected_sequence {
             return Err(Conflict::SequenceChanged(state.sequence).into());
         }
-        let incoming = self.stage_at(archive.staging()?)?;
-        let done = archive.prepare(mutation, volume, state, &incoming, || {
+        let mut incoming = self.flat_stage_at(archive.staging()?)?;
+        let done = archive.prepare(mutation, volume, state, &mut incoming, || {
             authorize()?;
             volume.require_named()
         })?;
@@ -828,17 +818,6 @@ fn read_selected_entries(directory: &HeldDir, id: Id) -> io::Result<State> {
     Ok(state)
 }
 
-struct Stage {
-    path: PathBuf,
-}
-impl Drop for Stage {
-    fn drop(&mut self) {
-        // Own only the staging directory created by this invocation.
-        // Never scan/remove a prior application object or another request.
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -853,6 +832,7 @@ fn read(input: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
         }
     }
 }
+#[cfg(test)]
 fn private_dir(path: &Path) -> io::Result<()> {
     let m = fs::symlink_metadata(path)?;
     if !m.is_dir() || m.uid() != local_uid() || m.mode() & 0o077 != 0 {
@@ -862,6 +842,7 @@ fn private_dir(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+#[cfg(test)]
 fn ensure_dir(path: &Path) -> io::Result<bool> {
     match DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => Ok(true),
@@ -872,9 +853,7 @@ fn ensure_dir(path: &Path) -> io::Result<bool> {
         Err(e) => Err(e),
     }
 }
-fn sync_dir(path: &Path) -> io::Result<()> {
-    File::open(path)?.sync_all()
-}
+#[cfg(test)]
 fn create_file(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .write(true)
@@ -882,6 +861,7 @@ fn create_file(path: &Path) -> io::Result<File> {
         .mode(0o600)
         .open(path)
 }
+#[cfg(test)]
 fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = create_file(path)?;
     file.write_all(bytes)?;
