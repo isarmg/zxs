@@ -5,7 +5,7 @@
 | 首设前检查 | `setup-headless check SYSTEM RECYCLE DATA [DATA ...]` | 无 |
 | 服务单元预览（可选） | `setup-headless preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...]` | 无，写标准输出 |
 | 首设 | `setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 所选磁盘的角色标记及 `/zxs/state/headless/server.conf` |
-| 源目录预检 | `preflight-import SOURCE SYSTEM RECYCLE DATA [DATA ...]` | 无，仅统计目录元数据 |
+| 源目录预检 | `preflight-import [--show-names] SOURCE SYSTEM RECYCLE DATA [DATA ...]` | 无，仅统计目录元数据 |
 | 网页首设 | `setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 同首设，仍在终端确认 |
 | 重置密码 | `setup-headless reset SYSTEM RECYCLE DATA [DATA ...]` | 同一份 `server.conf` 中的账号代次、随机盐和验证值 |
 
@@ -33,6 +33,10 @@
 并单列提示。遇到链接、特殊项、意外跨挂载或观察到原件变化时不显示部分结果。
 预检另行统计需要明确映射的子目录文件，以及不能原样用作服务端显示名的顶层文件。
 保留大小写和原始拼写，不自动展平或改名。预检尚未比对现有容器名，也未检查 Workspace 本地名称限制。
+加上 `--show-names` 可逐个查看来源相对路径。只有可原样使用的顶层文件才有建议名称；
+其他文件显示 `mapping-required`，建议名称留空。名称按原字节转义，避免控制字符混入输出。
+名称列表在清点完成后统一输出，内存随列表大小增长；默认预检只统计。
+输出仅记录此次观察，不是目录快照或导入清单。
 不设总项数或自定超时，路径长度和可用描述符仍受系统限制。预检不读取正文，不选择目标，不预留空间，也不执行转换。
 
 

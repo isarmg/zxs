@@ -194,18 +194,21 @@ impl FreshSelection {
         out.require_original()?;
         Ok(out)
     }
-    /// The callback receives census counts only while the current offline
-    /// lease is held. No sync, credential write or mutable Reset escapes.
+    /// Deliver the complete census and optional rows under the offline lease.
     pub(super) fn inspect_import_source<T>(
         self,
         path: &Path,
-        report: impl FnOnce(super::import_preflight::Counts) -> io::Result<T>,
+        mut preview: Option<&mut Vec<u8>>,
+        report: impl FnOnce(super::import_preflight::Counts, Option<&[u8]>) -> io::Result<T>,
     ) -> io::Result<T> {
         let selected = self.open_offline(None)?;
-        let result = super::import_preflight::scan(&selected.selected, path, || {
-            selected.require_original()
-        })?;
-        report(result)
+        let result = super::import_preflight::scan(
+            &selected.selected,
+            path,
+            preview.as_deref_mut(),
+            || selected.require_original(),
+        )?;
+        report(result, preview.as_deref().map(Vec::as_slice))
     }
 }
 

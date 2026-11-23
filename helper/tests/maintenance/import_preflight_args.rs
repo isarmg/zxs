@@ -11,6 +11,12 @@ fn only_explicit_source_and_ordered_current_roles_are_accepted() {
     ];
     let q = Preflight::parse(good.map(OsString::from).into_iter()).unwrap();
     assert_eq!(q.source, Path::new("/old"));
+    assert!(!q.show_names);
+    let show_names = ["--show-names"]
+        .into_iter()
+        .chain(good)
+        .map(OsString::from);
+    assert!(Preflight::parse(show_names).unwrap().show_names);
     assert_eq!(
         q.roles,
         good[1..]
@@ -65,4 +71,20 @@ fn same_name_candidates_follow_server_spelling_not_workspace_alias_rules() {
     ] {
         assert!(!same_name_candidate(denied));
     }
+}
+
+#[test]
+fn preview_keeps_source_bytes_and_does_not_flatten_nested_names() {
+    let mut rows = Vec::new();
+    write_preview_row(&mut rows, std::iter::empty(), c"File", 4, true).unwrap();
+    write_preview_row(&mut rows, [c"first"].into_iter(), c"File", 10, false).unwrap();
+    write_preview_row(&mut rows, [c"other"].into_iter(), c"File", 10, false).unwrap();
+    write_preview_row(&mut rows, std::iter::empty(), c"odd\n\xff", 5, false).unwrap();
+    assert_eq!(
+        rows,
+        b"File\tsame-name\tFile\n\
+          first/File\tmapping-required\t\n\
+          other/File\tmapping-required\t\n\
+          odd\\n\\xff\tmapping-required\t\n"
+    );
 }

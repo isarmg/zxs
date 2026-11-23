@@ -1,4 +1,4 @@
-//! Metadata-only census of an externally selected source directory.
+//! Metadata-only census and optional naming preview of an external source.
 use super::{FreshSelection, parse_paths, refused};
 use crate::{
     maintenance::diagnostic_worker,
@@ -25,22 +25,35 @@ const SCOPED: ResolveFlags = ResolveFlags::BENEATH
 pub(crate) struct Preflight {
     source: PathBuf,
     roles: Vec<PathBuf>,
+    show_names: bool,
 }
 
 impl Preflight {
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        const USAGE: &str = "expected preflight-import SOURCE SYSTEM RECYCLE DATA [DATA ...]";
-        let source = PathBuf::from(args.next().ok_or(USAGE)?);
+        const USAGE: &str =
+            "expected preflight-import [--show-names] SOURCE SYSTEM RECYCLE DATA [DATA ...]";
+        let first = args.next().ok_or(USAGE)?;
+        let show_names = first == "--show-names";
+        let source = PathBuf::from(if show_names {
+            args.next().ok_or(USAGE)?
+        } else {
+            first
+        });
         crate::path_rules::Kind::StorageRoot.check_path(source.as_os_str().as_bytes())?;
         let roles = parse_paths(args)?;
-        Ok(Self { source, roles })
+        Ok(Self {
+            source,
+            roles,
+            show_names,
+        })
     }
 
     pub(crate) fn run(self) -> io::Result<ExitCode> {
         rustix::thread::set_no_new_privs(true)?;
         diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
         let selected = FreshSelection::select(&self.roles)?;
-        selected.inspect_import_source(&self.source, |observed| {
+        let mut preview = self.show_names.then(Vec::new);
+        selected.inspect_import_source(&self.source, preview.as_mut(), |observed, rows| {
             let mut out = io::stdout().lock();
             writeln!(
                 out,
@@ -64,6 +77,10 @@ impl Preflight {
             if observed.files == 0 && observed.dirs == 0 {
                 writeln!(out, "The selected source is empty.")?;
                 return Ok(ExitCode::from(2));
+            }
+            if let Some(rows) = rows {
+                writeln!(out, "name preview: source path, status, proposed display name")?;
+                out.write_all(rows)?;
             }
             Ok(ExitCode::SUCCESS)
         })
@@ -132,6 +149,7 @@ fn overlapping(source: &Pinned, original: &Pinned) -> bool {
 pub(super) fn scan(
     selected: &FreshSelection,
     source: &Path,
+    preview: Option<&mut Vec<u8>>,
     require_roles: impl Fn() -> io::Result<()>,
 ) -> io::Result<Counts> {
     let pin = Pinned::local_storage(source, &selected.scope)?;
@@ -170,7 +188,7 @@ pub(super) fn scan(
         Ok(())
     };
     check()?;
-    let counts = census(directory.try_clone()?, root, before)?;
+    let counts = census(directory.try_clone()?, root, before, preview)?;
     check()?;
     Ok(counts)
 }
@@ -259,11 +277,16 @@ fn same_name_candidate(raw: &[u8]) -> bool {
         })
 }
 
-fn census(dir: File, root: Stamp, mount: Mount) -> io::Result<Counts> {
+fn census(
+    dir: File,
+    root: Stamp,
+    mount: Mount,
+    mut preview: Option<&mut Vec<u8>>,
+) -> io::Result<Counts> {
     let mut frames = vec![Frame::open(dir, root, mount, 0, None)?];
     let mut counts = Counts::default();
     // Iterative depth-first walk; open descriptors and memory follow path
-    // depth, never the total number of entries or siblings.
+    // depth. Only the opt-in preview buffers output until the final recheck.
     while let Some(frame) = frames.last_mut() {
         let Some(next) = frame.stream.read() else {
             if Stamp::read(&frame.original, mount, root.entity.dev)? != frame.stamp {
@@ -314,10 +337,21 @@ fn census(dir: File, root: Stamp, mount: Mount) -> io::Result<Counts> {
                     return Err(changed());
                 }
                 add_count(&mut counts.files)?;
-                if frame.parent_name.is_some() {
+                let nested = frame.parent_name.is_some();
+                let candidate = !nested && same_name_candidate(raw);
+                if nested {
                     add_count(&mut counts.nested_files)?;
-                } else if !same_name_candidate(raw) {
+                } else if !candidate {
                     add_count(&mut counts.invalid_top_level_names)?;
+                }
+                if let Some(rows) = preview.as_deref_mut() {
+                    write_preview_row(
+                        rows,
+                        frames.iter().filter_map(|part| part.parent_name.as_deref()),
+                        name,
+                        width,
+                        candidate,
+                    )?;
                 }
                 if one.links > 1 {
                     add_count(&mut counts.hard_links)?;
@@ -335,6 +369,36 @@ fn census(dir: File, root: Stamp, mount: Mount) -> io::Result<Counts> {
         }
     }
     Ok(counts)
+}
+
+fn write_preview_row<'a>(
+    out: &mut Vec<u8>,
+    parents: impl Iterator<Item = &'a CStr>,
+    name: &CStr,
+    path_width: usize,
+    same_name: bool,
+) -> io::Result<()> {
+    // Each byte expands to at most four ASCII bytes. The scanner bounds the
+    // input path; reserve before writing and fail without a partial report.
+    out.try_reserve(4 * (path_width + name.to_bytes().len()) + 32)
+        .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+    for parent in parents {
+        append_escaped(out, parent.to_bytes());
+        out.push(b'/');
+    }
+    append_escaped(out, name.to_bytes());
+    if same_name {
+        out.extend_from_slice(b"\tsame-name\t");
+        append_escaped(out, name.to_bytes());
+    } else {
+        out.extend_from_slice(b"\tmapping-required\t");
+    }
+    out.push(b'\n');
+    Ok(())
+}
+
+fn append_escaped(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend(bytes.iter().copied().flat_map(std::ascii::escape_default));
 }
 
 #[cfg(test)]
