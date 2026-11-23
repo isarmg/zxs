@@ -17,3 +17,12 @@ int ZwDraftStopNewOpens(FSP_FILE_SYSTEM *fs, ULONG *remaining);
 /* GIL held; MUST already have stopped/joined every native dispatcher/fixture caller.
  * Always abandonment, including zero contexts: never creates an accepted SaveNode cut. */
 int ZwDraftAbandonFilePlane(FSP_FILE_SYSTEM *fs);
+
+/* Private owner operations only. Move to actual SDK fs prior to dispatch, home after complete join. */
+int ZwDraftMoveBinding(FSP_FILE_SYSTEM *from, FSP_FILE_SYSTEM *to, BOOL attach);
+int ZwDraftPresent(FSP_FILE_SYSTEM *fs);
+int ZwDraftFenceIfIdle(FSP_FILE_SYSTEM *fs, ULONG *remaining); /* -1 fault, 0 still busy, 1 fenced. */
+int ZwDraftAcceptDeleted(FSP_FILE_SYSTEM *keeper);
+int ZwDraftConsumeCertificate(PyObject *proof, PyObject *plane, PyObject *lease);
+int ZwDraftRememberLease(FSP_FILE_SYSTEM *fs, PyObject *choice);
+void ZwDraftDropAfterJoin(FSP_FILE_SYSTEM *keeper);

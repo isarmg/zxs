@@ -1,5 +1,5 @@
 /* Included only by draft_io.c. The separate frozen-snapshot interface is not writable. */
-static NTSTATUS scoped_enter(FSP_FILE_SYSTEM *fs, FSP_FSCTL_TRANSACT_REQ *req, FSP_FSCTL_TRANSACT_RSP *rsp)
+static NTSTATUS check_enter(FSP_FILE_SYSTEM *fs, FSP_FSCTL_TRANSACT_REQ *req, FSP_FSCTL_TRANSACT_RSP *rsp)
 {
     DRAFT_BINDING *b = binding(fs);
     if (!b || !b->scoped || !b->ready || !req || !rsp) return STATUS_ACCESS_DENIED;
@@ -17,6 +17,70 @@ static NTSTATUS scoped_enter(FSP_FILE_SYSTEM *fs, FSP_FSCTL_TRANSACT_REQ *req, F
          * Open then constrains the exact requested member/stream, options and granted rights. */
     }
     return FspFileSystemOpEnter(fs, req, rsp);
+}
+
+static NTSTATUS scoped_enter(FSP_FILE_SYSTEM *fs, FSP_FSCTL_TRANSACT_REQ *req, FSP_FSCTL_TRANSACT_RSP *rsp)
+{
+    DRAFT_BINDING *b = binding(fs);
+    if (!b || !b->scoped || !b->ready || !req || !rsp) return STATUS_ACCESS_DENIED;
+    AcquireSRWLockExclusive(&b->gate);
+    if (b->hidden || b->fenced) {
+        if (b->fenced && (req->Kind == FspFsctlTransactWriteKind || req->Kind == FspFsctlTransactSetInformationKind ||
+                (req->Kind == FspFsctlTransactFlushBuffersKind && req->Req.FlushBuffers.UserContext2) ||
+                (req->Kind == FspFsctlTransactCleanupKind && req->Req.Cleanup.UserContext2) ||
+                (req->Kind == FspFsctlTransactCloseKind && req->Req.Close.UserContext2) ||
+                (req->Kind == FspFsctlTransactReadKind && req->Req.Read.UserContext2) ||
+                (req->Kind == FspFsctlTransactQueryInformationKind && req->Req.QueryInformation.UserContext2) ||
+                (req->Kind == FspFsctlTransactQueryDirectoryKind && req->Req.QueryDirectory.UserContext2) ||
+                (req->Kind == FspFsctlTransactQueryStreamInformationKind && req->Req.QueryStreamInformation.UserContext2) ||
+                (req->Kind == FspFsctlTransactQuerySecurityKind && req->Req.QuerySecurity.UserContext2)))
+            b->late = TRUE;
+        ReleaseSRWLockExclusive(&b->gate); return STATUS_DEVICE_NOT_READY;
+    }
+    ++b->active;
+    ReleaseSRWLockExclusive(&b->gate);
+    NTSTATUS status = check_enter(fs, req, rsp);
+    if (!NT_SUCCESS(status)) {
+        AcquireSRWLockExclusive(&b->gate); --b->active; ReleaseSRWLockExclusive(&b->gate);
+    }
+    return status;
+}
+
+static NTSTATUS scoped_leave(FSP_FILE_SYSTEM *fs, FSP_FSCTL_TRANSACT_REQ *req, FSP_FSCTL_TRANSACT_RSP *rsp)
+{
+    DRAFT_BINDING *b = binding(fs);
+    NTSTATUS s = FspFileSystemOpLeave(fs, req, rsp);
+    AcquireSRWLockExclusive(&b->gate);
+    if (!NT_SUCCESS(s) || b->active <= 0) b->late = TRUE;
+    --b->active;
+    ReleaseSRWLockExclusive(&b->gate);
+    return s;
+}
+
+static NTSTATUS scoped_capacity(FSP_FILE_SYSTEM *fs, FSP_FSCTL_VOLUME_INFO *info)
+{
+    static const WCHAR label[] = L"Workspace";
+    PyObject *plane = owner(fs);
+    if (!plane) return STATUS_DEVICE_NOT_READY;
+    PyGILState_STATE g = PyGILState_Ensure();
+    PyObject *row = PyObject_CallMethod(plane, "volume", NULL);
+    NTSTATUS s = STATUS_SUCCESS;
+    if (!row) s = failure();
+    else if (!PyTuple_CheckExact(row) || PyTuple_GET_SIZE(row) != 2 ||
+             !PyLong_CheckExact(PyTuple_GET_ITEM(row, 0)) || !PyLong_CheckExact(PyTuple_GET_ITEM(row, 1)))
+        s = STATUS_DATA_ERROR;
+    else {
+        memset(info, 0, sizeof *info);
+        info->TotalSize = PyLong_AsUnsignedLongLong(PyTuple_GET_ITEM(row, 0));
+        info->FreeSize = PyLong_AsUnsignedLongLong(PyTuple_GET_ITEM(row, 1));
+        if (PyErr_Occurred()) s = failure();
+        else if (!info->TotalSize || info->TotalSize > INT64_MAX || info->FreeSize > info->TotalSize) s = STATUS_DATA_ERROR;
+        else {
+            memcpy(info->VolumeLabel, label, sizeof label - sizeof(WCHAR));
+            info->VolumeLabelLength = (UINT16)(sizeof label - sizeof(WCHAR));
+        }
+    }
+    Py_XDECREF(row); PyGILState_Release(g); return s;
 }
 
 static NTSTATUS scoped_sd(FSP_FILE_SYSTEM *fs, long kind, PSECURITY_DESCRIPTOR sd, SIZE_T *size)
@@ -153,6 +217,7 @@ void ZwDraftNamespaceInterface(FSP_FSCTL_VOLUME_PARAMS *vp, FSP_FILE_SYSTEM_INTE
     vp->UmFileContextIsUserContext2 = vp->PersistentAcls = vp->NamedStreams = 1;
     vp->FlushAndPurgeOnCleanup = 1; /* Cache preference, never detach evidence. */
     vp->FileInfoTimeout = 0; vp->AllowOpenInKernelMode = 0;
+    ops->GetVolumeInfo = scoped_capacity;
     ops->GetSecurityByName = scoped_name; ops->GetSecurity = scoped_security;
     ops->ReadDirectory = scoped_directory; ops->GetStreamInfo = scoped_streams;
 }

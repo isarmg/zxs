@@ -14,7 +14,13 @@
 #define SLOT(fc) ((unsigned long long)(UINT_PTR)(fc))
 
 static NTSTATUS open_file(FSP_FILE_SYSTEM *, PWSTR, UINT32, UINT32, PVOID *, FSP_FSCTL_FILE_INFO *);
-typedef struct { PyObject *plane, *lease; SessionPolicy policy; AlignedBuffer zone; DWORD zone_bytes; BOOL ready, scoped; } DRAFT_BINDING;
+typedef struct {
+    PyObject *plane, *lease;
+    SessionPolicy policy; AlignedBuffer zone; DWORD zone_bytes;
+    BOOL ready, scoped, hidden, fenced, late, real;
+    SRWLOCK gate; LONG active;
+    DWORD cert_thread; BOOL cert_unused;
+} DRAFT_BINDING;
 
 static DRAFT_BINDING *binding(FSP_FILE_SYSTEM *fs)
 {
@@ -272,6 +278,7 @@ static int bind_file_plane(FSP_FILE_SYSTEM *fs, PyObject *plane, BOOL scoped)
             PyMem_Free(b); PyErr_SetString(PyExc_PermissionError, "cannot establish the origin-stream descriptor"); return 0;
         }
     }
+    InitializeSRWLock(&b->gate);
     b->scoped = scoped;
     b->lease = PyObject_CallNoArgs((PyObject *)&PyBaseObject_Type);
     if (!b->lease) { PyMem_Free(b); return 0; }
@@ -286,7 +293,7 @@ static int bind_file_plane(FSP_FILE_SYSTEM *fs, PyObject *plane, BOOL scoped)
         return 0;
     }
     b->ready = TRUE;
-    if (scoped) FspFileSystemSetOperationGuard(fs, scoped_enter, FspFileSystemOpLeave);
+    if (scoped) FspFileSystemSetOperationGuard(fs, scoped_enter, scoped_leave);
     Py_DECREF(r); return 1;
 }
 
@@ -315,4 +322,84 @@ int ZwDraftAbandonFilePlane(FSP_FILE_SYSTEM *fs)
     Py_DECREF(r); fs->UserContext = NULL;
     Py_DECREF(b->plane); Py_DECREF(b->lease); PyMem_Free(b);
     return 1;
+}
+
+/* Only the dedicated native owner transfers a preclaimed lease to the exact SDK instance.
+ * The shell cannot access the original working file through the guard before verification. */
+int ZwDraftMoveBinding(FSP_FILE_SYSTEM *from, FSP_FILE_SYSTEM *to, BOOL attach)
+{
+    DRAFT_BINDING *b = binding(from);
+    if (!b || !b->scoped || !b->ready || !to || to->UserContext || from->Interface != to->Interface ||
+        !from->UmFileContextIsUserContext2 || !to->UmFileContextIsUserContext2 ||
+        from->UmFileContextIsFullContext || to->UmFileContextIsFullContext) return 0;
+    if (attach) {
+        if (from->VolumeHandle || !to->VolumeHandle || to->DispatcherThread || b->real) return 0;
+        b->hidden = b->real = TRUE;
+        FspFileSystemSetOperationGuard(to, scoped_enter, scoped_leave);
+    } else if (!from->VolumeHandle || to->VolumeHandle || !b->real) return 0;
+    to->UserContext = b; from->UserContext = NULL; return 1;
+}
+
+int ZwDraftPresent(FSP_FILE_SYSTEM *fs)
+{
+    DRAFT_BINDING *b = binding(fs);
+    if (!b || !b->ready || !b->scoped || !b->real || !fs->VolumeHandle || !fs->MountHandle ||
+        !fs->DispatcherThread) return 0;
+    AcquireSRWLockExclusive(&b->gate);
+    BOOL ok = b->hidden && !b->fenced && !b->late;
+    if (ok) b->hidden = FALSE;
+    ReleaseSRWLockExclusive(&b->gate); return ok;
+}
+
+int ZwDraftFenceIfIdle(FSP_FILE_SYSTEM *fs, ULONG *remaining)
+{
+    DRAFT_BINDING *b = binding(fs);
+    if (!b || !b->ready || !b->scoped || !b->real || !ZwDraftStopNewOpens(fs, remaining)) return -1;
+    AcquireSRWLockExclusive(&b->gate);
+    int result = 0;
+    if (b->late || b->active < 0 || b->hidden) result = -1;
+    else if (!*remaining && !b->active) { b->fenced = TRUE; result = 1; }
+    ReleaseSRWLockExclusive(&b->gate); return result;
+}
+
+static const char cert_name[] = "zipworkspace.private.winfsp.deleted.original";
+int ZwDraftConsumeCertificate(PyObject *proof, PyObject *plane, PyObject *lease)
+{
+    if (!PyCapsule_IsValid(proof, cert_name)) return 0;
+    DRAFT_BINDING *b = PyCapsule_GetPointer(proof, cert_name);
+    if (!b || b->plane != plane || b->lease != lease || !b->cert_unused ||
+        b->cert_thread != GetCurrentThreadId()) return 0;
+    b->cert_unused = FALSE; return 1;
+}
+
+int ZwDraftRememberLease(FSP_FILE_SYSTEM *fs, PyObject *choice)
+{
+    DRAFT_BINDING *b = binding(fs);
+    return b && PyObject_SetAttrString(choice, "_cleanup_lease", b->lease) == 0;
+}
+
+void ZwDraftDropAfterJoin(FSP_FILE_SYSTEM *fs)
+{
+    DRAFT_BINDING *b = binding(fs);
+    if (!b) return;
+    fs->UserContext = NULL;
+    Py_DECREF(b->plane); Py_DECREF(b->lease); PyMem_Free(b);
+}
+
+int ZwDraftAcceptDeleted(FSP_FILE_SYSTEM *keeper)
+{
+    DRAFT_BINDING *b = binding(keeper);
+    if (!b || keeper->VolumeHandle || !b->ready || !b->scoped || !b->real ||
+        b->hidden || !b->fenced || b->active || b->late) return 0;
+    b->ready = FALSE;
+    PyObject *proof = PyCapsule_New(b, cert_name, NULL);
+    if (!proof) return 0;
+    b->cert_thread = GetCurrentThreadId(); b->cert_unused = TRUE;
+    PyObject *r = PyObject_CallMethod(b->plane, "_finish_native", "OO", b->lease, proof);
+    int ok = r == Py_None && !b->cert_unused;
+    b->cert_thread = 0; b->cert_unused = FALSE;
+    PyCapsule_SetName(proof, "zipworkspace.expired"); /* Even a retained Python reference cannot be reused. */
+    Py_DECREF(proof); Py_XDECREF(r);
+    if (ok) ZwDraftDropAfterJoin(keeper);
+    return ok;
 }

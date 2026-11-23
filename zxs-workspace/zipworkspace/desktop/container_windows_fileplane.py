@@ -209,6 +209,25 @@ class WindowsDraftFilePlane:
                 raise Rejected("native and backing file-context counts disagree")
             return count
 
+    def volume(self):
+        # Does not disclose the private file length, alias, ID, account, path or origin.
+        from .container_windows_mount import _capacity
+        with self._lock:
+            if not self._namespace or self._state not in ("bound", "draining"):
+                raise PermissionError("no original Windows volume")
+            self._draft._home.check()
+            return _capacity(self._draft._home)
+
+    def _finish_native(self, lease, proof):
+        from .. import _workspace_winfsp_draft_host
+        with self._lock:
+            if not _workspace_winfsp_draft_host.consume_certificate(proof, self, lease):
+                raise Rejected("the original joined and deleted driver instance did not attest its drain")
+            if self._lease is not lease or not self._namespace or self._state != "draining" or self._rows:
+                raise Rejected("missing the original drained Windows namespace lease")
+            self._draft._finish_provider(self)
+            self._state, self._lease = "closed", None
+
     def fault(self):
         with self._lock:
             self._state = "fault"

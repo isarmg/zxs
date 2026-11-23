@@ -243,6 +243,18 @@ class WindowsHeldDraft:
                 size = len(self._mark) if kind == 3 else self._length
                 return size, basic.birth, basic.access, basic.write, basic.change, kind
 
+    def _finish_provider(self, owner):
+        # Only the private host calls this after its real directory, dispatcher and volume are gone.
+        with self._lock:
+            if owner is None or owner is not self._provider or self._state != "draining" or self._contexts:
+                raise Rejected("the original Windows draft still has outstanding ownership")
+            with self._fault_on_error():
+                self._observe(self._length, policy=True)
+                self._home.api.flush(self._h)
+                self._home.api.flush(self._home.handle)
+                self._observe(self._length, policy=True)
+            self._project_origin, self._provider = False, None
+
     def _abandon_provider(self, owner, *, missing_ok=False):
         # A callback table or an SDK StopDispatcher return is not a normal OS detach receipt.
         with self._lock:

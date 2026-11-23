@@ -1,0 +1,193 @@
+"""Private WinFsp directory-mount owner for one R3 draft. No public loader, network or implicit submit."""
+import ctypes as c
+import re
+import struct
+from threading import Event, Lock, current_thread, main_thread
+
+from .._windows_access import ACL, ALLOW, SD, FILE_ALL
+from .._windows_output import ATTR, OPEN, READ_CONTROL, SYNC
+from ..model import Rejected, new_id
+from ..windows_nt import I32, I64, P, U32, _Basic, _Id, _IO, _Standard, _function
+from .container_windows_fileplane import WindowsDraftFilePlane
+
+_DEVICE = re.compile(r"\\Device\\Volume\{[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}")
+
+
+class _FullSize(c.Structure):
+    _fields_ = [("total", I64), ("caller", I64), ("actual", I64), ("sectors", U32), ("bytes", U32)]
+
+
+def _capacity(home):
+    # Aggregate backing-volume capacity, NOT object size, promised reservation or remote quota.
+    full, io = _FullSize(), _IO()
+    status = home.api.volume_info(home.handle, c.byref(io), c.byref(full), c.sizeof(full), 7)
+    unit = full.sectors * full.bytes
+    if (status or io.result.status or io.information < c.sizeof(full) or not unit or unit & (unit-1)
+            or not 0 <= full.caller <= full.actual <= full.total or full.total <= 0
+            or full.total * unit >= 1 << 63):
+        raise Rejected("cannot establish the original local NTFS capacity")
+    return full.total * unit, full.caller * unit
+
+
+def _reparse_record(device):
+    if type(device) is not str or not _DEVICE.fullmatch(device):
+        raise Rejected("not an original local WinFsp kernel disk identifier")
+    name = (device + "\\").encode("utf-16-le")
+    each = name + b"\0\0"
+    return struct.pack("<I6H", 0xa0000003, 8+2*len(each), 0, 0, len(name), len(each), len(name)) + each*2
+
+
+class WindowsPrivateDraftMount:
+    """One original owner, one generated new leaf, one foreground choice. No cold adoption by name."""
+    def __init__(self, draft, alias, *, confirmed=False):
+        self._plane = WindowsDraftFilePlane(draft, alias, confirmed=confirmed)
+        self._draft, self._home = draft, draft._home
+        self._leaf = new_id() + ".zwm"
+        self._native = self._home.name(self._leaf)
+        self._shell = self._home.shell_name(self._leaf)
+        self._lock, self._ready = Lock(), Event()
+        self._used = self._running = self._claimed = self._sealing = False
+        self._mode = 0  # 0 active, 1 orderly stop, 2 explicitly abandon including outstanding references
+        self._visible, self._identity, self.remaining, self._cleanup_lease = None, None, None, None
+        self._check_parent()
+        self._home.api.absent(self._home.handle, self._leaf)
+
+    def _check_parent(self):
+        self._draft._choice._live()
+        self._home.check()
+        self._draft._choice._protection.check()
+        if (self._home.name(self._leaf), self._home.shell_name(self._leaf)) != (self._native, self._shell):
+            raise Rejected("the approved private Windows mount parent or spelling changed")
+
+    def _junction_sd(self):
+        # Explicit protected ACL created ONLY on a newly generated SDK mount directory; never
+        # modify the selected parent. Let Windows choose owner/group and verify both after create.
+        grants = self._draft._choice._protection.original.grants
+        aces = b"".join(ALLOW.pack(0, 3, ALLOW.size + len(sid), FILE_ALL) + sid for sid, _ in grants)
+        acl = ACL.pack(2, 0, ACL.size + len(aces), len(grants), 0) + aces
+        return SD.pack(1, 0, 0x9004, 0, 0, 0, SD.size) + acl
+
+    def _claim(self, plane):
+        self._check_parent()
+        self._home.api.absent(self._home.handle, self._leaf)
+        with self._lock:
+            if plane is not self._plane or not self._running or self._claimed:
+                raise Rejected("not this active one-shot Windows directory mount")
+            if self._mode:
+                return None
+            self._claimed = True
+            return self._native, self._junction_sd()
+
+    def _verify(self, plane, device, volume, fid):
+        if plane is not self._plane or type(fid) is not bytes or len(fid) != 16 or not any(fid):
+            raise Rejected("missing the actual WinFsp mount directory identity")
+        required = _reparse_record(device)
+        self._check_parent()
+        H, api = self._home, self._home.api
+        if type(volume) is not int or volume != H.volume:
+            raise Rejected("the mount directory is not on the original held NTFS")
+        # Open ONLY the relative, original reparse directory. Never follow it to validate itself.
+        with api._request(H.handle, self._leaf, SYNC | ATTR | READ_CONTROL, 7, OPEN, 0) as witness:
+            id_ = api._info(witness, 18, _Id)
+            b, st = api._info(witness, 0, _Basic), api._info(witness, 1, _Standard)
+            if (id_.volume != volume or bytes(id_.fid) != fid or not st.directory or not st.links
+                    or b.attrs & 0x410 != 0x410 or b.attrs & 0x4000 or api.guid_name(witness) != self._native):
+                raise Rejected("SDK mount handle and original directory-relative name no longer identify one junction")
+            protection = self._draft._choice._protection
+            access = protection.api.read(witness, protection.actor, directory=True)
+            if (access.group != protection.original.group or not access.control & 0x1000 or
+                    set(access.grants) != {(sid, 3) for sid, _ in protection.original.grants}):
+                raise Rejected("the generated mount directory does not have the selected private grants")
+            k = c.WinDLL("kernel32.dll", use_last_error=True, winmode=0x800)
+            ioctl = _function(k, "DeviceIoControl", I32, P, U32, P, U32, P, U32, c.POINTER(U32), P)
+            buf, used = c.create_string_buffer(16384), U32()
+            if (not ioctl(witness, 0x000900a8, None, 0, buf, len(buf), c.byref(used), None)
+                    or bytes(buf)[:used.value] != required):
+                raise Rejected("the original WinFsp junction does not name precisely this kernel volume")
+        with self._lock:
+            now = (device, volume, fid)
+            if not self._claimed or self._identity not in (None, now):
+                raise Rejected("the original Windows mount identity changed")
+            self._identity = now
+        self._check_parent()
+
+    def _advertise(self):
+        with self._lock:
+            if self._identity is None or not self._running or self._mode:
+                return False
+            self._visible = self._shell
+            self._ready.set()
+            return True
+
+    def _gone(self):
+        self._check_parent()
+        self._home.api.absent(self._home.handle, self._leaf)
+        self._home.api.flush(self._home.handle)
+        self._home.api.absent(self._home.handle, self._leaf)
+
+    def _poll(self):
+        with self._lock:
+            return self._mode
+
+    def _final_choice(self):
+        # Linearization point *after* deletion and final physical absence. A force that won
+        # earlier cannot create a clean cut; after this point the worker owns the final result.
+        with self._lock:
+            self._sealing = bool(self._running and self._claimed and self._identity and self._mode == 1)
+            return self._sealing
+
+    def _count(self, remaining):
+        with self._lock:
+            self.remaining = remaining
+
+    def wait_location(self, timeout):
+        if not self._ready.wait(timeout):
+            return None
+        with self._lock:
+            return self._visible  # Past observation only, never authority to adopt/remove a path.
+
+    def stop(self):
+        with self._lock:
+            self._mode = max(self._mode, 1)
+            self._visible = None
+
+    def abandon(self, *, confirmed=False):
+        if confirmed is not True:
+            raise Rejected("forced removal can lose outstanding editor writes; explicitly confirm")
+        with self._lock:
+            if not self._sealing:
+                self._mode = 2
+            self._visible = None
+            return not self._sealing
+
+    def release_fault(self):
+        # A Python interruption can outlast joined/deleted native ownership. Retry only the
+        # original per-fs lease retained before Create. This can never produce a normal cut.
+        with self._lock:
+            if self._running or not self._used:
+                raise Rejected("wait for the original native owner to finish first")
+            lease = self._cleanup_lease
+        if lease is not None:
+            self._plane.abandon(lease)
+            with self._lock:
+                if self._cleanup_lease is lease:
+                    self._cleanup_lease = None
+
+    def run(self, *, allow_installed_driver_start=False, allow_directory_mount=False):
+        if (allow_installed_driver_start is not True or allow_directory_mount is not True
+                or current_thread() is main_thread()):
+            raise Rejected("confirm native volume/possible installed service start and private directory mount on a worker")
+        with self._lock:
+            if self._used:
+                raise Rejected("this Windows directory mount was already used")
+            self._used = self._running = True
+        try:
+            from .. import _workspace_winfsp_draft_host  # Trusted private build only, never install or search for a DLL.
+            result = _workspace_winfsp_draft_host.run(self, self._plane, True, True)
+            if not result["local_release_pending"]:
+                self._cleanup_lease = None
+            return result
+        finally:
+            with self._lock:
+                self._visible, self._running = None, False
+                self._ready.set()
