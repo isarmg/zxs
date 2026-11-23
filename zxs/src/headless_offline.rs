@@ -180,7 +180,7 @@ fn exclusive_fdinfo(bytes: &[u8], device: u64, inode: u64) -> bool {
             _ => {}
         }
     }
-    lock && flags.is_some_and(|bits| bits & 3 == 0) && observed == Some(inode)
+    lock && flags.is_some_and(|bits| bits.trailing_zeros() >= 2) && observed == Some(inode)
 }
 
 fn write_frame(

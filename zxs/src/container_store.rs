@@ -23,7 +23,7 @@ use std::{
     collections::BTreeMap,
     ffi::CString,
     fmt,
-    fs::{self, File},
+    fs::File,
     io::{self, Read, Write},
     sync::{
         Arc, Mutex,
@@ -34,7 +34,7 @@ use volume::DataVolume;
 
 #[cfg(test)]
 use std::{
-    fs::{DirBuilder, OpenOptions},
+    fs::{self, DirBuilder, OpenOptions},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };

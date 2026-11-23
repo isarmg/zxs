@@ -205,7 +205,9 @@ impl FreshSelection {
         report: impl FnOnce(super::import_preflight::Counts, Option<&[u8]>) -> io::Result<T>,
     ) -> io::Result<T> {
         let selected = self.open_offline(None)?;
-        let names = check_target.then(|| offline_catalog::read_names(&selected)).transpose()?;
+        let names = check_target
+            .then(|| offline_catalog::read_names(&selected))
+            .transpose()?;
         let result = super::import_preflight::scan(
             &selected.selected,
             path,
