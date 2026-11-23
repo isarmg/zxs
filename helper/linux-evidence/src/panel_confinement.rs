@@ -23,9 +23,6 @@ fn no() -> io::Error {
 /// Returns an error for an invalid listener or worker identity, insufficient
 /// Landlock ABI, or failure to install the fixed Landlock and seccomp rules.
 pub fn first_install_panel(listener: &std::net::TcpListener) -> io::Result<()> {
-    const KILL: u32 = 0x8000_0000;
-    const ALLOW: u32 = 0x7fff_0000;
-    const DENY: u32 = 0x0005_0000 | (libc::EPERM as u32);
     let addr = listener.local_addr()?;
     if !matches!(addr.ip(),std::net::IpAddr::V4(ip) if ip==std::net::Ipv4Addr::LOCALHOST)
         || addr.port() == 0
@@ -34,6 +31,11 @@ pub fn first_install_panel(listener: &std::net::TcpListener) -> io::Result<()> {
     {
         return Err(no());
     }
+    restrict_landlock()?;
+    restrict_syscalls(listener)
+}
+
+fn restrict_landlock() -> io::Result<()> {
     // Deny FS content/traversal and every new TCP bind/connect. The one
     // already-bound socket remains usable for accepting paired requests.
     if unsafe {
@@ -68,6 +70,13 @@ pub fn first_install_panel(listener: &std::net::TcpListener) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     drop(empty);
+    Ok(())
+}
+
+fn restrict_syscalls(listener: &std::net::TcpListener) -> io::Result<()> {
+    const KILL: u32 = 0x8000_0000;
+    const ALLOW: u32 = 0x7fff_0000;
+    const DENY: u32 = 0x0005_0000 | (libc::EPERM as u32);
     let mut p = Vec::new();
     let mut b = |code, jt, jf, k| p.push(libc::sock_filter { code, jt, jf, k });
     b(0x20, 0, 0, 4);
