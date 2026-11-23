@@ -4,11 +4,11 @@ mod return_to_host;
 use super::bad;
 pub(in crate::sqlite_install::pair) use crate::local_worker::sealed;
 use crate::pinned::{Entity, Mount};
+pub(in crate::sqlite_install) use return_to_host::lease as require_lent_ex;
 pub(in crate::sqlite_install::pair) use return_to_host::{
-    FreshParent, VaultStamp, checked_vault_stamp, deployed_worker_payload, give_live_approval,
-    request_live_approval, verify_fresh_worker,
+    FreshParent, VaultStamp, checked_vault_stamp, deployed_worker_payload, request_live_approval,
+    verify_fresh_worker,
 };
-pub(in crate::sqlite_install) use return_to_host::{InitialLayout, lease as require_lent_ex};
 use rustix::fs::{Mode, OFlags, RawDir, openat};
 use std::{fs::File, io, mem::MaybeUninit, os::unix::fs::MetadataExt};
 

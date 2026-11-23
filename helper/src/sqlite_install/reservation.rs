@@ -20,6 +20,7 @@ struct DbName<'g> {
 #[derive(Clone, Copy)]
 enum DbUse {
     InitialGroup,
+    #[cfg(test)]
     InitialReceipt,
     AccountObservation,
 }
@@ -108,6 +109,7 @@ impl<'g> Existing<'g> {
     }
     /// Must never authorize a writable VFS. Pending INIT can legitimately
     /// exist before any original marker, so this admits its optional S slot.
+    #[cfg(test)]
     pub(super) fn initial_receipt(locked: &'g LockedSystem, r: &Request) -> io::Result<Self> {
         locked.require()?;
         let source = locked.source();

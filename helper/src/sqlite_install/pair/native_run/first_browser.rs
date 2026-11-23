@@ -3,9 +3,8 @@
 //! HTTP. Only the authenticated exact process can return a request.
 use super::{
     bad,
-    host::Worker,
     manifest::read_sealed,
-    transport::{self, Channel, Kind},
+    transport::{Channel, Kind},
     worker::original_parent,
 };
 use crate::{
@@ -13,23 +12,16 @@ use crate::{
     pinned::helper_elf::ForegroundElf,
     sqlite_install::{
         approval,
-        pair::{
-            ExplicitSubject,
-            domain::{give_live_approval, request_live_approval, sealed},
-            terminal::PublicConfirmation,
-        },
-        stage::random,
+        pair::{ExplicitSubject, domain::request_live_approval},
     },
 };
-use helper_linux_evidence::{
-    diagnostic_process::{OfflineSql, account_sql_descriptors},
-    prompt_signals::PromptSignals,
-};
+use helper_linux_evidence::diagnostic_process::account_sql_descriptors;
 use rustix::net::UCred;
 use rustix::process::{
     DumpableBehavior, Gid, Signal, Uid, dumpable_behavior, getppid, set_dumpable_behavior,
     set_parent_process_death_signal,
 };
+use rustix::rand::{GetRandomFlags, getrandom};
 use sha2::{Digest, Sha256};
 use std::{
     io,
@@ -43,97 +35,6 @@ const PANEL: Duration = Duration::from_mins(8);
 fn no() -> io::Error {
     bad("the original first-install browser request is unconfirmed; no installation was started")
 }
-pub(in crate::sqlite_install) fn offer(
-    tty: &PublicConfirmation,
-    scope: ([u8; 32], bool, u8, ExplicitSubject),
-    require: impl Fn() -> io::Result<()>,
-) -> io::Result<()> {
-    let (scope, fresh, count, subject) = scope;
-    let phase = if fresh {
-        InstallPhase::Initialize
-    } else {
-        InstallPhase::Resume
-    };
-    offer_phase(tty, (scope, phase, count, subject), require)
-}
-pub(in crate::sqlite_install::pair) fn offer_phase(
-    tty: &PublicConfirmation,
-    scope: ([u8; 32], InstallPhase, u8, ExplicitSubject),
-    require: impl Fn() -> io::Result<()>,
-) -> io::Result<()> {
-    require()?;
-    tty.check()?;
-    let (actor, uid, gid) = scope.3.tuple();
-    let sig = PromptSignals::begin()?;
-    let check = || {
-        sig.check()?;
-        tty.check()
-    };
-    let mut raw = TAG.to_vec();
-    raw.extend(scope.0);
-    raw.extend(random::<32>()?);
-    raw.extend(actor);
-    raw.extend(uid.to_be_bytes());
-    raw.extend(gid.to_be_bytes());
-    raw.push(scope.1.wire());
-    raw.push(scope.2);
-    let digest = Sha256::digest(&raw).into();
-    let order = sealed(&raw)?;
-    let helper = ForegroundElf::host()?;
-    let (local, remote) = transport::pair()?;
-    let mut original = Worker::spawn(
-        helper.descriptor(),
-        &remote,
-        &order,
-        OfflineSql::FirstBrowser,
-    )?;
-    drop(remote);
-    drop(order);
-    let who = UCred {
-        pid: original.pid,
-        uid: Uid::from_raw(uid),
-        gid: Gid::from_raw(gid),
-    };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        check()?;
-        original.live()?;
-        if Instant::now() >= deadline {
-            return Err(no());
-        }
-        if give_live_approval(&local, who, &digest, || {
-            require()?;
-            helper.require()
-        })? {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let channel = Channel::from_owned_child_session(local, who, digest)?;
-    let (address, []) =
-        channel.wait_checked::<0>(Kind::FirstBrowserReady, &digest, deadline, &check)?;
-    let port = u16::from_be_bytes([address[0], address[1]]);
-    if port == 0 || address[2..34] == [0; 32] || address[34..] != [0; 31] {
-        return Err(no());
-    }
-    let code = crate::fs_tools::lower_hex(&address[2..34]);
-    tty.report(&format!("仅本机首次安装请求：http://127.0.0.1:{port}/\n配对码（2 分钟有效，请勿分享）：{code}\n网页不提供存储写权限。确认之后回本终端校验原范围。\n"))?;
-    drop(code);
-    let end = Instant::now() + PANEL + Duration::from_secs(3);
-    let (requested, []) =
-        channel.wait_checked::<0>(Kind::FirstBrowserRequest, &digest, end, &check)?;
-    if requested != [0; 65] {
-        return Err(no());
-    }
-    // No browser/IPC work remains when the original foreground can ask.
-    original.finish(&channel, end)?;
-    check()?;
-    sig.finish()?;
-    drop(channel);
-    drop(original);
-    require()
-}
-
 pub(crate) fn worker() -> io::Result<()> {
     let [fd, meta] = account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3, 4])?;
@@ -180,7 +81,6 @@ pub(crate) fn worker() -> io::Result<()> {
     helper_linux_evidence::panel_confinement::first_install_panel(&listener)?;
     let port = listener.local_addr()?.port();
     let mut code = [0u8; 32];
-    use rustix::rand::{GetRandomFlags, getrandom};
     if getrandom(&mut code[..], GetRandomFlags::NONBLOCK)? != code.len() || code == [0; 32] {
         return Err(no());
     }

@@ -88,18 +88,6 @@ impl PublicConfirmation {
         Ok(())
     }
     #[cfg(any(test, feature = "embedded-zxs"))]
-    pub(crate) fn confirm_init(&self, fresh: bool, preview: String) -> io::Result<()> {
-        self.ask(
-            if fresh { "INIT" } else { "RESUME" },
-            Some(preview),
-            1100 * 1024,
-        )
-    }
-    #[cfg(any(test, feature = "embedded-zxs"))]
-    pub(crate) fn confirm_fresh_pool(&self, review: String) -> io::Result<()> {
-        self.ask("INIT-FRESH-POOL", Some(review), 1100 * 1024)
-    }
-    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn confirm_image_installation(&self, review: String) -> io::Result<()> {
         self.ask("INSTALL-ZXS-IMAGE", Some(review), 32 * 1024)
     }

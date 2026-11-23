@@ -1,12 +1,5 @@
-//! One foreground local administrator authorizes one already-pinned set. No
-//! browser, environment, SQL row, plain UID argument or saved grant can issue it.
-use super::{
-    Purpose,
-    originals::Originals,
-    pair::{InitialLayout, PublicConfirmation},
-    product_layout,
-    request::{Id, Request},
-};
+//! Actual host authority and permanent privilege selection for private workers.
+//! No browser, environment, SQL row or saved grant can provide that authority.
 pub(super) use crate::foreground::{
     no_inherited_descriptors, only_inherited_descriptors, same_terminal,
 };
@@ -24,178 +17,9 @@ use rustix::{
 };
 use std::{
     ffi::CStr,
-    fmt::Write as _,
     fs::File,
     io::{self, Read},
-    os::unix::ffi::OsStrExt,
-    path::{Path, PathBuf},
 };
-
-pub(super) struct Approved {
-    request: Request,
-    originals: Originals,
-    purpose: Purpose,
-}
-
-/// Pins the selected original names without opening directories for data or
-/// acquiring a lease. A paired browser may ask to display the terminal
-/// confirmation, but only this live root foreground can make it Approved.
-pub(super) struct Proposal {
-    request: Request,
-    originals: Originals,
-    purpose: Purpose,
-    subject: (Id, u32, u32),
-    explicit: super::pair::ExplicitSubject,
-    private: bool,
-    layout: Option<InitialLayout>,
-}
-impl Proposal {
-    /// Non-secret op/reference may be recorded BEFORE any write; they are not authority.
-    pub(super) fn select(
-        purpose: Purpose,
-        op: Id,
-        reference: Id,
-        paths: Vec<PathBuf>,
-        explicit: super::pair::ExplicitSubject,
-        private: bool,
-    ) -> io::Result<Self> {
-        super::pair::compiled_schema()?;
-        if private {
-            super::pair::require_private_install()?;
-            if !matches!(purpose, Purpose::Fresh) {
-                return Err(denied());
-            }
-        }
-        // A privileged FD inherited across lowering credentials retains its
-        // original rights. A fresh terminal tool accepts only stdio, no inherited
-        // file/socket/cwd-like authority from a shell, web worker or supervisor.
-        no_inherited_descriptors()?;
-        let host = host_admin()?;
-        let subject = explicit.tuple();
-        let request = Request::new(op, subject.0, reference, subject.1, paths)?;
-        let layout = if matches!(purpose, Purpose::Fresh) {
-            // Outside-only spellings can still traverse the actual product
-            // through a whole local alias. Only definite absence exempts that
-            // independent INIT; it never needs an existing /zxs/state.
-            let required = private
-                || request
-                    .paths()
-                    .iter()
-                    .any(|p| p.starts_with(Path::new(product_layout::TOP)));
-            Some(InitialLayout::select(&host, required)?)
-        } else {
-            None
-        };
-        // Check paths/SQLite capabilities before even showing a proposal. No SQL
-        // connection, data read, directory allocation or privilege is granted here.
-        request.database(super::engine::path_limit()?)?;
-        let originals = Originals::pin_passive(&request, host.try_clone()?)?;
-        let layout = layout
-            .map(|origin| origin.match_media(&host, &originals.selected))
-            .transpose()?;
-        let out = Self {
-            request,
-            originals,
-            purpose,
-            subject,
-            explicit,
-            private,
-            layout,
-        };
-        out.require()?;
-        Ok(out)
-    }
-    pub(super) fn require(&self) -> io::Result<()> {
-        let current = host_admin()?;
-        self.originals.require_host(&current)?;
-        super::pair::compiled_schema()?;
-        if self.private {
-            super::pair::require_private_install()?;
-        }
-        if self.explicit.tuple() != self.subject {
-            return Err(denied());
-        }
-        same_terminal(&io::stdin(), &io::stderr())?;
-        for n in &self.originals.selected {
-            n.require_same_named_mount()?;
-        }
-        if let Some(layout) = &self.layout {
-            layout.require(&current, &self.originals.selected)?;
-        }
-        Ok(())
-    }
-    pub(super) fn browser_scope(&self) -> ([u8; 32], bool, u8, super::pair::ExplicitSubject) {
-        (
-            self.request.sha(),
-            matches!(self.purpose, Purpose::Fresh),
-            (self.request.paths().len() - 2) as u8,
-            self.explicit,
-        )
-    }
-    pub(super) fn authorize(self, tty: PublicConfirmation) -> io::Result<Approved> {
-        self.require()?;
-        tty.check()?;
-        let (actor, uid, gid) = self.subject;
-        let op = self.request.op();
-        let reference = self.request.approval();
-        let mut preview=match self.purpose{
-            Purpose::Fresh=>"新建空池：将创建 SYSTEM.sqlite3、写入原卷标并提交初始卷组。不会格式化、清空或覆盖。\n".to_owned(),
-            Purpose::Original=>"续原单：仅当下面仍是原先确认的原目录/介质时，才可重同步并补齐该原单的卷标；已提交则只读历史回执。不新建数据库。\n".to_owned(),
-        };
-        writeln!(preview,"原操作 {}，审批参考 {}，本机维护主体 {}，存储 UID/GID {uid}/{gid}，原申请 SHA-256 {}。请先保存这两个操作参考。",
-            hex(&op),hex(&reference),hex(&actor),hex(&self.request.sha())).expect("writing to String");
-        for (i, n) in self.originals.selected.iter().enumerate() {
-            let label = match i {
-                0 => "SYSTEM",
-                1 => "RECYCLE",
-                _ => "FILE",
-            };
-            writeln!(
-                preview,
-                "{label}  {}  [dev {}, inode {}, mount {}]",
-                escaped(n.path().as_os_str().as_bytes()),
-                n.entity().dev,
-                n.entity().ino,
-                n.mount()?.id
-            )
-            .expect("writing to String");
-        }
-        preview.push_str("请独立核实这些原件和本机目录、锁、同步条件，以及回收卷确是独立文件系统。不确定就取消。\n");
-        // Also used after the browser worker has really closed and been
-        // reaped. The same retained TTY issues a new challenge, clearing all
-        // previously queued input; the repeatable request SHA is not an answer.
-        if self.private {
-            tty.confirm_fresh_pool(preview)?;
-        } else {
-            tty.confirm_init(matches!(self.purpose, Purpose::Fresh), preview)?;
-        }
-        self.require()?;
-        tty.check()?;
-        drop(tty);
-        let Self {
-            request,
-            originals,
-            purpose,
-            layout,
-            ..
-        } = self;
-        drop(layout);
-        // End the privileged phase BEFORE opening any storage directory for data or
-        // reserving a file. This code runs only in a fresh, single-threaded CLI.
-        // Any partial transition terminates the operation; no recovery as root.
-        drop_to_storage(uid, gid)?;
-        Ok(Approved {
-            request,
-            originals,
-            purpose,
-        })
-    }
-}
-impl Approved {
-    pub(super) fn into_parts(self) -> (Purpose, Request, Originals) {
-        (self.purpose, self.request, self.originals)
-    }
-}
 
 // Fresh single-threaded host processes only. No escalation or recovery.
 pub(super) fn drop_to_storage(uid: u32, gid: u32) -> io::Result<()> {
@@ -212,9 +36,7 @@ pub(super) fn drop_to_storage(uid: u32, gid: u32) -> io::Result<()> {
     diagnostic_worker(uid, gid)
 }
 
-fn hex(v: &[u8]) -> String {
-    crate::fs_tools::lower_hex(v)
-}
+#[cfg(test)]
 fn escaped(raw: &[u8]) -> String {
     raw.iter()
         .copied()

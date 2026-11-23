@@ -1,7 +1,6 @@
 //! One pending SQL birth transaction. No marker, online-ready response or account
 //! arises here. Retry lookup/completion is a separate action, never a fresh INIT.
 use super::{
-    approval::Approved,
     bad, engine,
     originals::Group,
     request::{Id, Request, role},
@@ -16,22 +15,6 @@ struct Issue {
     pool: Id,
     rows: Vec<(Id, [u8; 32])>,
 }
-impl Issue {
-    fn new(n: usize) -> io::Result<Self> {
-        let pool = random()?;
-        let mut rows = Vec::with_capacity(n);
-        for _ in 0..n {
-            let id = random()?;
-            let mark = random()?;
-            if id == pool || rows.iter().any(|(old, token)| *old == id || *token == mark) {
-                return Err(bad("random enrollment identity collision"));
-            }
-            rows.push((id, mark));
-        }
-        Ok(Self { pool, rows })
-    }
-}
-
 pub(super) struct Pending<'g> {
     pub(super) pool: Id,
     pub(super) op: Id,
@@ -62,23 +45,6 @@ impl Pending<'_> {
         }
         Ok(())
     }
-}
-pub(super) fn install(approved: Approved) -> io::Result<super::complete::Receipt> {
-    let (purpose, request, originals) = approved.into_parts();
-    // Ensure the exact bounded release schema is accepted before reserving a real DB.
-    let template = super::catalog::Canonical::new()?;
-    let group = originals.lock(request.uid())?;
-    if matches!(purpose, super::Purpose::Fresh) {
-        let p = first(&request, &group, &Issue::new(group.dirs().len())?)?;
-        let done = super::complete::original(&template, &request, &group, Some(&p))?;
-        if done.pool != p.pool || done.op != p.op || done.previous {
-            return Err(bad(
-                "fresh result did not agree with its own pending original",
-            ));
-        }
-        return Ok(done);
-    }
-    super::complete::original(&template, &request, &group, None)
 }
 fn first<'g>(request: &Request, group: &'g Group, issue: &Issue) -> io::Result<Pending<'g>> {
     if group.limits().len() != issue.rows.len() || issue.rows.len() != request.paths().len() {

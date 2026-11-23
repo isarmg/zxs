@@ -1,47 +1,20 @@
 //! Read the exact original INIT on the once-selected SYSTEM alone. No data
 //! volume is opened, inferred from SQL, synchronized or granted a new role.
 use super::{
-    DATABASE, MARKER, approval, bad,
+    DATABASE, MARKER, bad,
     catalog::{self, Canonical, Catalog},
     engine::{self, Access},
     markers::SystemMark,
-    originals::{LockedSystem, SelectedSystem},
+    originals::LockedSystem,
     request::{Id, Request},
     reservation::Existing,
 };
-use std::{io, path::PathBuf};
+use std::io;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct Receipt {
     pub(super) pool: Id,
     pub(super) committed_sha: Option<[u8; 32]>,
-}
-
-pub(super) fn foreground(
-    op: Id,
-    reference: Id,
-    paths: Vec<PathBuf>,
-    subject: super::pair::ExplicitSubject,
-) -> io::Result<Receipt> {
-    super::pair::compiled_schema()?;
-    approval::no_inherited_descriptors()?;
-    let host = approval::host_admin()?;
-    let (actor, uid, gid) = subject.tuple();
-    approval::same_terminal(&io::stdin(), &io::stderr())?;
-    let original = Request::new(op, actor, reference, uid, paths)?;
-    let path = crate::pinned::Pinned::already_mounted(
-        &original.paths()[0],
-        crate::pinned::Kind::StorageRoot,
-    )?;
-    let system = SelectedSystem::from_origin(path, host, uid, gid)?;
-    approval::same_terminal(&io::stdin(), &io::stderr())?;
-    // Actual SQLite and marker content are opened only after permanently
-    // lowering to the same configured storage identity as the birth action.
-    approval::drop_to_storage(uid, gid)?;
-    let locked = system.lock()?;
-    let observed = read(&locked, &original)?;
-    approval::same_terminal(&io::stdin(), &io::stderr())?;
-    Ok(observed)
 }
 
 pub(super) fn read(system: &LockedSystem, original: &Request) -> io::Result<Receipt> {

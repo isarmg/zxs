@@ -62,9 +62,9 @@ impl ImportCheck {
         }
         let subject = ExplicitSubject::parse(&mut args)?;
         let system = PathBuf::from(field(&mut args, "--system")?);
-        let pool = id(field(&mut args, "--pool")?)
+        let pool = id(&field(&mut args, "--pool")?)
             .ok_or("expected a 32-digit nonzero lowercase PoolId")?;
-        let init = id(field(&mut args, "--init")?)
+        let init = id(&field(&mut args, "--init")?)
             .ok_or("expected a 32-digit nonzero lowercase original INIT Op")?;
         let source = PathBuf::from(field(&mut args, "--source")?);
         if args.next().is_some() {

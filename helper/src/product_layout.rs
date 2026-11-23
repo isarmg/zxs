@@ -7,5 +7,5 @@ mod legacy;
 #[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) use legacy::{
     CONTROL_MODE, IMAGE, RECYCLE, STATE_COMPONENTS, SYSTEM, TOP, data_label, image_separate, media,
-    raw_member, require_original_media,
+    raw_member,
 };

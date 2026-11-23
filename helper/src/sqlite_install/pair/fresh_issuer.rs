@@ -6,8 +6,8 @@ use super::bad;
 pub(super) use db::InitialDatabase;
 use sha2::{Digest, Sha256};
 #[cfg(test)]
-use std::ffi::OsStr;
-use std::{ffi::OsString, io};
+use std::ffi::{OsStr, OsString};
+use std::io;
 pub(super) use wire::{CredentialScope, CryptoPins, MAX_SITE, SitePayload};
 
 const SCHEMA_SHA: &str = "4d54de32c0004f7b5c0ed6af44a556d8add56517518cf7d8b0a5fe8bb158a0f4";
@@ -47,6 +47,7 @@ impl ExplicitSubject {
         }
         Ok(Self { actor, uid, gid })
     }
+    #[cfg(test)]
     pub(in crate::sqlite_install) fn parse(
         it: &mut impl Iterator<Item = OsString>,
     ) -> Result<Self, &'static str> {

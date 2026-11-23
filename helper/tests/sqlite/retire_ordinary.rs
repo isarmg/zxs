@@ -135,7 +135,7 @@ fn an_unexamined_tail_never_counts_as_complete() {
 #[test]
 #[ignore = "source-only example; requires explicitly provisioned disposable parents on separate filesystems"]
 fn the_actual_original_is_clear_only_with_another_ordinary_and_no_extra_entry() {
-    use crate::sqlite_install::{originals::Originals, request::Request};
+    use crate::sqlite_install::{originals::Originals, receipt, request::Request};
     use std::{fs, os::unix::fs::PermissionsExt};
     let area = |key| {
         let p = tempfile::Builder::new()
@@ -167,6 +167,9 @@ fn the_actual_original_is_clear_only_with_another_ordinary_and_no_extra_entry() 
             stage::seed_retirement_fixture(&init, &group).unwrap()
         };
         let locked = LockedSystem::from_passive_fixture(&init.paths()[0]).unwrap();
+        let registered = receipt::read(&locked, &init).unwrap();
+        assert_eq!(registered.pool, pool);
+        assert_eq!(registered.committed_sha, Some(init.sha()));
         let scope = |id, n: usize| {
             Scope::new(
                 pool,

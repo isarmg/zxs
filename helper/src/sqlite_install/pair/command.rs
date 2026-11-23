@@ -1,5 +1,7 @@
 //! Private fresh-only issuance; no server/start, separate domain or generic credentials.
+#[cfg(test)]
 use super::Id;
+#[cfg(test)]
 use crate::sqlite_install::id;
 use std::ffi::{OsStr, OsString};
 
@@ -15,8 +17,9 @@ pub(super) fn value(
     }
     it.next().ok_or("missing setup field")
 }
+#[cfg(test)]
 pub(super) fn key(it: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<Id, &'static str> {
-    id(value(it, flag)?).ok_or("setup identifiers must be 32 lowercase nonzero hex digits")
+    id(&value(it, flag)?).ok_or("setup identifiers must be 32 lowercase nonzero hex digits")
 }
 pub(super) fn sha(
     it: &mut impl Iterator<Item = OsString>,

@@ -79,6 +79,7 @@ fn put(fd: &impl AsFd, msg: &Frame) -> io::Result<()> {
         _ => Err(bad("incomplete dedicated permission record")),
     }
 }
+#[cfg(test)]
 fn request(fd: &impl AsFd, cred: UCred, scope: &[u8; 32]) -> io::Result<Option<[u8; 32]>> {
     let b = match start_control(fd, cred) {
         Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
@@ -90,9 +91,9 @@ fn request(fd: &impl AsFd, cred: UCred, scope: &[u8; 32]) -> io::Result<Option<[
     }
     Ok(Some(n))
 }
-/// Called ONLY by the parent that still owns this consumed foreground grant
-/// and the unreaped real child. Ignore no received malformed/extra fields.
-pub(in crate::sqlite_install::pair) fn respond(
+/// Fixture-side reply; it must validate the exact child and scope before allowing it.
+#[cfg(test)]
+fn respond(
     fd: &impl AsFd,
     cred: UCred,
     scope: &[u8; 32],

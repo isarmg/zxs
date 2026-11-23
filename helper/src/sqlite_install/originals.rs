@@ -120,6 +120,7 @@ pub(super) struct SelectedSystem {
 }
 #[derive(Clone, Copy)]
 enum ExclusiveLease {
+    #[cfg(test)]
     Owned,
     Lent,
 }
@@ -131,16 +132,6 @@ pub(super) struct LockedSystem {
     lease: ExclusiveLease,
 }
 impl SelectedSystem {
-    #[cfg(test)]
-    pub(super) fn from_host(
-        path: &std::path::Path,
-        host: File,
-        uid: u32,
-        gid: u32,
-    ) -> io::Result<Self> {
-        let pin = Pinned::open(path, Kind::StorageRoot)?;
-        Self::from_origin(pin, host, uid, gid)
-    }
     // For the already authenticated, permanently lowered host worker. Its
     // O_PATH was matched against the parent's still-held original before use.
     pub(super) fn from_origin(pin: Pinned, host: File, uid: u32, gid: u32) -> io::Result<Self> {
@@ -166,10 +157,7 @@ impl SelectedSystem {
             gid,
         })
     }
-    pub(super) fn lock(self) -> io::Result<LockedSystem> {
-        crate::maintenance::diagnostic_worker(self.uid, self.gid)?;
-        self.take_original()
-    }
+    #[cfg(test)]
     fn take_original(self) -> io::Result<LockedSystem> {
         let dir = self.pin.storage_directory()?;
         flock(&dir, FlockOperation::NonBlockingLockExclusive)?;
@@ -243,16 +231,6 @@ impl LockedSystem {
         Ok((&self.selected.host, &self.selected.pin))
     }
     #[cfg(test)]
-    pub(super) fn from_fixture(path: &std::path::Path) -> io::Result<Self> {
-        SelectedSystem::from_host(
-            path,
-            File::open("/")?,
-            rustix::process::getuid().as_raw(),
-            rustix::process::getgid().as_raw(),
-        )?
-        .take_original()
-    }
-    #[cfg(test)]
     pub(super) fn from_passive_fixture(path: &std::path::Path) -> io::Result<Self> {
         let pin = Pinned::already_mounted(path, Kind::StorageRoot)?;
         SelectedSystem::from_origin(
@@ -266,20 +244,9 @@ impl LockedSystem {
 }
 
 impl Originals {
-    pub(super) fn require_host(&self, fd: &File) -> io::Result<()> {
-        if location(&self.host)? != location(fd)? {
-            return Err(bad("host root changed during operator approval"));
-        }
-        Ok(())
-    }
     #[cfg(test)]
     pub(super) fn pin(request: &Request, host: File) -> io::Result<Self> {
         Self::pin_with(request, host, Pinned::open)
-    }
-    // Before displaying the real root list, use the held host root and verify
-    // already mounted originals without consulting an on-disk declaration.
-    pub(super) fn pin_passive(request: &Request, host: File) -> io::Result<Self> {
-        Self::pin_with(request, host, Pinned::already_mounted)
     }
     fn pin_with(
         request: &Request,

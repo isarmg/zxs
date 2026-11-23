@@ -1,4 +1,5 @@
-//! Explicit terminal-only pool installation and original-operation resumption. Separate local pair enrollment; no remote requests or legacy-format fallback.
+//! Retained private worker source and historical SQLite fixtures. The
+//! standalone embedded image publisher is selected separately.
 pub(crate) use crate::product_layout;
 mod approval;
 mod catalog;
@@ -7,6 +8,7 @@ mod engine;
 mod markers;
 mod originals;
 mod pair;
+#[cfg(test)]
 mod receipt;
 mod request;
 mod reservation;
@@ -15,9 +17,10 @@ mod stage;
 pub(crate) use pair::EmbeddedInstall;
 #[cfg(test)]
 mod discovery;
+#[cfg(test)]
+pub(crate) use pair::exec_first_browser;
 pub(crate) use pair::{
-    exec_first_browser, exec_layout_sql_child as layout_sql_worker, rust_account_worker,
-    rust_vault_worker,
+    exec_layout_sql_child as layout_sql_worker, rust_account_worker, rust_vault_worker,
 };
 
 const DATABASE: &str = "SYSTEM.sqlite3";
@@ -29,30 +32,37 @@ fn unsupported(message: &'static str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Unsupported, message)
 }
 
+#[cfg(test)]
 use request::Id;
-use std::{ffi::OsString, fmt::Write as _, io, path::PathBuf};
+#[cfg(test)]
+use std::{
+    ffi::{OsStr, OsString},
+    fmt::Write as _,
+    path::PathBuf,
+};
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 enum Purpose {
     Fresh,
     Original,
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 enum InitAction {
     Apply(Purpose),
     Receipt,
 }
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct Installation {
     action: InitAction,
     browser: bool,
-    op: Id,
-    approval: Id,
     paths: Vec<PathBuf>,
-    explicit: pair::ExplicitSubject,
     private: bool,
 }
-fn id(s: OsString) -> Option<Id> {
+#[cfg(test)]
+fn id(s: &OsStr) -> Option<Id> {
     let text = s.to_str()?;
     if text.len() != 32
         || !text
@@ -67,6 +77,7 @@ fn id(s: OsString) -> Option<Id> {
     }
     (out != [0; 16]).then_some(out)
 }
+#[cfg(test)]
 impl Installation {
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
         let mut first = args.next().and_then(|s| s.into_string().ok());
@@ -85,17 +96,18 @@ impl Installation {
                 return Err("choose new, resume or receipt explicitly; never automatically switch");
             }
         };
-        let explicit = pair::ExplicitSubject::parse(&mut args)?;
+        pair::ExplicitSubject::parse(&mut args)?;
         let mut tag = |label: &str| -> Result<Id, &'static str> {
             if args.next().as_deref() != Some(std::ffi::OsStr::new(label)) {
                 return Err("expected --op ID --approval ID");
             }
             args.next()
+                .as_deref()
                 .and_then(id)
                 .ok_or("expected 32 lowercase nonzero hex digits")
         };
-        let op = tag("--op")?;
-        let approval = tag("--approval")?;
+        tag("--op")?;
+        tag("--approval")?;
         drop(tag);
         let mut args = args.peekable();
         let mut paths = Vec::new();
@@ -147,42 +159,13 @@ impl Installation {
         Ok(Self {
             action,
             browser,
-            op,
-            approval,
             paths,
-            explicit,
             private,
         })
     }
-    pub(crate) fn run(self) -> io::Result<(u8, String)> {
-        match self.action {
-            InitAction::Apply(purpose) => {
-                let proposal = approval::Proposal::select(
-                    purpose,
-                    self.op,
-                    self.approval,
-                    self.paths,
-                    self.explicit,
-                    self.private,
-                )?;
-                let terminal = pair::PublicConfirmation::select()?;
-                if self.browser {
-                    pair::offer_init_web(&terminal, proposal.browser_scope(), || {
-                        proposal.require()
-                    })?;
-                }
-                let result = stage::install(proposal.authorize(terminal)?)?;
-                Ok((0, completion_line(result, self.private)))
-            }
-            InitAction::Receipt => {
-                let result =
-                    receipt::foreground(self.op, self.approval, self.paths, self.explicit)?;
-                Ok(original_receipt_line(self.op, result))
-            }
-        }
-    }
 }
 
+#[cfg(test)]
 fn receipt_fields(pool: Id, op: Id, confirmed_sha: Option<[u8; 32]>) -> String {
     fn hex(v: &[u8]) -> String {
         crate::fs_tools::lower_hex(v)
@@ -193,6 +176,7 @@ fn receipt_fields(pool: Id, op: Id, confirmed_sha: Option<[u8; 32]>) -> String {
     }
     fields
 }
+#[cfg(test)]
 fn completion_line(result: complete::Receipt, private: bool) -> String {
     let fields = receipt_fields(result.pool, result.op, Some(result.request_sha));
     if private {
@@ -206,6 +190,7 @@ fn completion_line(result: complete::Receipt, private: bool) -> String {
         format!("{outcome} {fields}")
     }
 }
+#[cfg(test)]
 fn original_receipt_line(op: Id, result: receipt::Receipt) -> (u8, String) {
     let (code, tag, meaning) = if result.committed_sha.is_some() {
         (0, "confirmed", "historical receipt only")

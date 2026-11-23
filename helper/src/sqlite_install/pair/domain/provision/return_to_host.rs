@@ -24,9 +24,7 @@ use rustix::{
     fs::{FlockOperation, OFlags, fcntl_getfl, flock},
     io::Errno,
 };
-pub(in crate::sqlite_install::pair) use start::{
-    child as request_live_approval, respond as give_live_approval,
-};
+pub(in crate::sqlite_install::pair) use start::child as request_live_approval;
 use std::{
     ffi::{CStr, CString, OsStr},
     fs::File,
@@ -130,75 +128,6 @@ fn state_pins(host: &File) -> io::Result<[File; 2]> {
     let state = product_pin(&top, PRODUCT[1])?;
     layout::state_spelling(host, &top, &state)?;
     Ok([top, state])
-}
-/// The fixed protected product origin (or a positively absent optional top)
-/// during foreground INIT. No lock, body or writable grant survives lowering.
-pub(in crate::sqlite_install) struct InitialLayout(InitProduct);
-enum InitProduct {
-    Required([File; 2]),
-    External(Option<File>),
-}
-impl InitialLayout {
-    pub(in crate::sqlite_install) fn select(host: &File, required: bool) -> io::Result<Self> {
-        if required {
-            return Ok(Self(InitProduct::Required(state_pins(host)?)));
-        }
-        let top = observe_top(host)?;
-        if let Some(pin) = &top {
-            layout::top_spelling(host, pin)?;
-        }
-        Ok(Self(InitProduct::External(top)))
-    }
-    pub(in crate::sqlite_install) fn match_media(
-        self,
-        host: &File,
-        media: &[crate::pinned::Pinned],
-    ) -> io::Result<Self> {
-        let InitProduct::External(Some(top)) = self.0 else {
-            return Ok(self);
-        };
-        let product = mark(&top)?.0;
-        if media
-            .iter()
-            .any(|pin| pin.visible_chain().contains(&product))
-        {
-            product_layout::require_original_media(product, media)?;
-            // The operator chose a real member of the original product even
-            // through another name. Keep the same held top, plus its now
-            // mandatory protected state, through the actual consent cuts.
-            let state = product_pin(&top, PRODUCT[1])?;
-            layout::state_spelling(host, &top, &state)?;
-            Ok(Self(InitProduct::Required([top, state])))
-        } else {
-            Ok(Self(InitProduct::External(Some(top))))
-        }
-    }
-    pub(in crate::sqlite_install) fn require(
-        &self,
-        host: &File,
-        media: &[crate::pinned::Pinned],
-    ) -> io::Result<()> {
-        let changed = || bad("the observed original /zxs layout changed");
-        match &self.0 {
-            InitProduct::Required([top, state]) => {
-                let now = state_pins(host)?;
-                if mark(&now[0])? != mark(top)? || mark(&now[1])? != mark(state)? {
-                    return Err(changed());
-                }
-                product_layout::require_original_media(mark(top)?.0, media)?;
-                layout::state_spelling(host, top, state)
-            }
-            InitProduct::External(original) => match (original, observe_top(host)?) {
-                (None, None) => Ok(()),
-                (Some(top), Some(current)) if mark(top)? == mark(&current)? => {
-                    layout::top_spelling(host, top)?;
-                    product_layout::require_original_media(mark(top)?.0, media)?;
-                    layout::top_spelling(host, top)
-                }
-                _ => Err(changed()),
-            },
-        }
-    }
 }
 #[cfg(test)]
 #[test]

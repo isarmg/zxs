@@ -3,9 +3,8 @@
 //! their separate operational gates. No mount, formatting or grant lives here.
 use super::BIN;
 use crate::{
-    maintenance::HostMounts,
     path_rules::Kind,
-    pinned::{Entity, Mount, Pinned},
+    pinned::{Entity, Mount},
 };
 use rustix::fs::{Mode, OFlags, RawDir, ResolveFlags, openat2};
 use std::{
@@ -155,6 +154,7 @@ fn exactly_one_member(
 // alias, apply exactly the same restrictions to the remainder. Check the
 // first name on /zxs and a terminal child of its exact `disks` group; no
 // arbitrary old data directory contents are enumerated.
+#[cfg(test)]
 fn media_members(path: &Path, level: usize) -> io::Result<[Option<(usize, &OsStr)>; 2]> {
     let suffix = path
         .components()
@@ -171,32 +171,6 @@ fn media_members(path: &Path, level: usize) -> io::Result<[Option<(usize, &OsStr
         (suffix.len() == 2 && head == "disks").then(|| (level + 1, suffix[1])),
     ])
 }
-pub(crate) fn require_original_media<'a>(
-    product: Entity,
-    selected: impl IntoIterator<Item = &'a Pinned>,
-) -> io::Result<()> {
-    let mut view = None;
-    for pin in selected {
-        let Some(level) = pin.visible_chain().iter().position(|p| *p == product) else {
-            continue;
-        };
-        let members = media_members(pin.path(), level)?;
-        if view.is_none() {
-            view = Some(HostMounts::discovery_view(false)?);
-        }
-        pin.same_admitted_chain(
-            view.as_ref().expect("one actual local mount cut"),
-            |held, i| {
-                for &(_, name) in members.iter().flatten().filter(|&&(at, _)| at == i) {
-                    raw_member(held, name, || Ok(()))?;
-                }
-                Ok(())
-            },
-        )?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
