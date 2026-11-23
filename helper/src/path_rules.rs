@@ -35,3 +35,14 @@ impl Kind {
         Ok(())
     }
 }
+
+/// Write the same escaped, quoted path as the standard library's path
+/// debug format. Using plain `Path::display()` here would hand control
+/// characters in user-selected Unix names to the confirmation terminal.
+pub(crate) struct QuotedPath<'a>(pub(crate) &'a std::path::Path);
+
+impl std::fmt::Display for QuotedPath<'_> {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.0, out)
+    }
+}

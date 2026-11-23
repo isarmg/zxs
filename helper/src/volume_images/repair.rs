@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     fs_tools::hex,
+    path_rules::QuotedPath,
     pinned::{Entity, Kind, Mount, Pinned, invalid, local_data_filesystem, private_inode_reader},
 };
 use helper_linux_evidence::diagnostic_process::cancelled;
@@ -31,7 +32,7 @@ use std::{
         ffi::OsStrExt,
         fs::{FileExt, MetadataExt},
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 const DIRECTORY: OFlags = OFlags::DIRECTORY
@@ -193,13 +194,7 @@ impl Request {
                 "只在新工作副本上运行 fsck.fat -p，再独立只读复查。该版本的自动修复与 -a/-y 相同，可能截短文件、改名、删除坏目录项，或把孤立簇链保存为恢复文件。不会找回全部文件，也不验证文件正文。",
             ),
         };
-        let preview = format!(
-            "{action}不会挂载或修改输入镜像、原磁盘或现有目标。\n输入镜像 {:?}，{length} 字节，外部提供的 SHA-256 {}。\n只有成功复查后才无覆盖地发布 {:?}。预留工作目录 {:?}；空间不足、中断或结果不明时可能留在这两个名字之一，请保留并不要用作已复查镜像。\n",
-            self.source,
-            print_sha(&self.digest),
-            dest.output_image(),
-            dest.work_path()
-        );
+        let preview = repair_preview(action, &self.source, &self.digest, &dest, length);
         let require = || {
             dest.require_unoccupied()?;
             original.require()?;
@@ -263,23 +258,39 @@ impl Request {
                 )?,
             };
             Ok(format!(
-                "format={} result=working-copy-rechecked source=unmodified-by-helper preen_status={preen_exit} recheck=no-findings-reported image_bytes={length} sha256={} output={:?}",
+                "format={} result=working-copy-rechecked source=unmodified-by-helper preen_status={preen_exit} recheck=no-findings-reported image_bytes={length} sha256={} output={}",
                 self.format.label(),
                 print_sha(&sha),
-                dest.output_image()
+                QuotedPath(&dest.output_image())
             ))
         })();
         result.map_err(|e: io::Error| {
             io::Error::new(
                 e.kind(),
                 format!(
-                    "{e}; no confirmed output; preserve any new work at {:?} or {:?}",
-                    dest.work_path(),
-                    dest.output
+                    "{e}; no confirmed output; preserve any new work at {} or {}",
+                    QuotedPath(&dest.work_path()),
+                    QuotedPath(&dest.output)
                 ),
             )
         })
     }
+}
+
+fn repair_preview(
+    action: &str,
+    source: &Path,
+    digest: &[u8; 32],
+    dest: &Destination,
+    length: u64,
+) -> String {
+    format!(
+        "{action}不会挂载或修改输入镜像、原磁盘或现有目标。\n输入镜像 {}，{length} 字节，外部提供的 SHA-256 {}。\n只有成功复查后才无覆盖地发布 {}。预留工作目录 {}；空间不足、中断或结果不明时可能留在这两个名字之一，请保留并不要用作已复查镜像。\n",
+        QuotedPath(source),
+        print_sha(digest),
+        QuotedPath(&dest.output_image()),
+        QuotedPath(&dest.work_path())
+    )
 }
 
 fn no_recheck() -> io::Error {

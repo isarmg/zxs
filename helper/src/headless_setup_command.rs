@@ -1,5 +1,8 @@
 //! Explicit local first setup. No daemon, server account reuse or credential in argv.
-use crate::headless_setup::{FreshSelection, IssueError, MAX_DATA, parse_paths};
+use crate::{
+    headless_setup::{FreshSelection, IssueError, MAX_DATA, parse_paths},
+    path_rules::QuotedPath,
+};
 use helper_linux_evidence::prompt_signals::PromptSignals;
 use rustix::{
     fs::{OFlags, fcntl_getfl},
@@ -16,7 +19,10 @@ use std::{
     ffi::OsString,
     io::{self, Write},
     net::SocketAddr,
-    os::fd::{AsFd, BorrowedFd},
+    os::{
+        fd::{AsFd, BorrowedFd},
+        unix::ffi::OsStrExt,
+    },
     path::{Path, PathBuf},
     process::ExitCode,
     time::{Duration, Instant},
@@ -37,8 +43,8 @@ pub(crate) struct Setup {
 
 impl Setup {
     pub(crate) fn parse(args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        let mut args = args.peekable();
         const USAGE: &str = "expected setup-headless check|new|reset SYSTEM RECYCLE DATA [DATA ...] [LOGIN], preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...], web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN, or add-data|init-data|retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]";
+        let mut args = args.peekable();
         let mut mode = args.next().ok_or(USAGE)?;
         let web = mode == "web";
         if web {
@@ -69,7 +75,6 @@ impl Setup {
                 args.next()
                     .ok_or("expected operated DATA directory before current roots")?,
             );
-            use std::os::unix::ffi::OsStrExt;
             crate::path_rules::Kind::StorageRoot.check_path(candidate.as_os_str().as_bytes())?;
             let paths = parse_paths(args)?;
             let (add_data, retire_data, init_data) = if mode == "init-data" {
@@ -145,34 +150,7 @@ impl Setup {
             return Ok(ExitCode::SUCCESS);
         }
         if self.reset {
-            let reset = selected.begin_reset()?;
-            let selected_text = format!(
-                "Offline password reset for {}\n{}",
-                reset.login(),
-                summarize_paths(reset.paths())
-            );
-            let (first, second) =
-                hidden_pair(&selected_text, b"Type RESET to approve: ", b"RESET")?;
-            let first =
-                std::str::from_utf8(&first).map_err(|_| invalid("password must be UTF-8"))?;
-            let second =
-                std::str::from_utf8(&second).map_err(|_| invalid("password must be UTF-8"))?;
-            return match reset.apply(first, second) {
-                Ok(()) => {
-                    writeln!(
-                        io::stdout().lock(),
-                        "Password reset confirmed. Login and storage roles are unchanged."
-                    )?;
-                    Ok(ExitCode::SUCCESS)
-                }
-                Err(IssueError::Refused(reason)) => Err(reason),
-                Err(IssueError::Uncertain(reason)) => {
-                    eprintln!(
-                        "Password reset uncertain; preserve the original state and inspect before retrying ({reason})."
-                    );
-                    Ok(ExitCode::from(3))
-                }
-            };
+            return reset_password(selected);
         }
         let current = selected.check_ready()?;
         if !self.web
@@ -240,13 +218,44 @@ impl Setup {
     }
 }
 
+fn reset_password(selected: FreshSelection) -> io::Result<ExitCode> {
+    let reset = selected.begin_reset()?;
+    let selected_text = format!(
+        "Offline password reset for {}\n{}",
+        reset.login(),
+        summarize_paths(reset.paths())
+    );
+    let (first, second) = hidden_pair(&selected_text, b"Type RESET to approve: ", b"RESET")?;
+    let first = std::str::from_utf8(&first).map_err(|_| invalid("password must be UTF-8"))?;
+    let second = std::str::from_utf8(&second).map_err(|_| invalid("password must be UTF-8"))?;
+    match reset.apply(first, second) {
+        Ok(()) => {
+            writeln!(
+                io::stdout().lock(),
+                "Password reset confirmed. Login and storage roles are unchanged."
+            )?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(IssueError::Refused(reason)) => Err(reason),
+        Err(IssueError::Uncertain(reason)) => {
+            eprintln!(
+                "Password reset uncertain; preserve the original state and inspect before retrying ({reason})."
+            );
+            Ok(ExitCode::from(3))
+        }
+    }
+}
+
 fn summarize_paths<'a>(paths: impl Iterator<Item = &'a Path>) -> String {
     paths
         .enumerate()
-        .map(|(i, path)| match i {
-            0 => format!("SYSTEM {path:?}"),
-            1 => format!("RECYCLE {path:?}"),
-            _ => format!("DATA {} {path:?}", i - 1),
+        .map(|(i, path)| {
+            let path = QuotedPath(path);
+            match i {
+                0 => format!("SYSTEM {path}"),
+                1 => format!("RECYCLE {path}"),
+                _ => format!("DATA {} {path}", i - 1),
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
