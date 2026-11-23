@@ -7,3 +7,5 @@
 `Extension.entitlements` 与 `Host-Required.entitlements` 是申请和核验发布配置的输入，**不授予**权限。两边需要同一真实团队与专用已配置 `group.org.zipworkspace.desktop.remotefs`；单独取得宿主的 `com.apple.developer.fskit.mount`，不要用扩展的 fsmodule 权限代替。真实签名、配置、用户在系统设置启用和访问 OS 管理组的效果必须独立证明。不从终端代办安装、接受提示、改权限、拼主目录或向任意路径请求 scope。本仓库没有签名凭据或团队 ID。
 
 元数据对照 [Apple FSKit 原始示例](https://developer.apple.com/documentation/fskit/building-a-passthrough-file-system)：单一 `com.apple.fskit.fsmodule` 扩展点、短名 `zxswork`、仅支持 path URL。本应用必须拒绝任意 URL、块设备、格式化、强制加载；普通 App Group 访问不同于示例的用户选择目录，故不要求传一个 security-scoped 目录。[Apple 共享组文档](https://developer.apple.com/documentation/xcode/accessing-app-group-containers)说明 `group.` 标识各自需要受权配置；一个路径字符串、签名文件或 0700 不能证明系统真的授予两边访问。发布前在真正 27+ 系统检查最终生成/嵌入的两份签名产品、有效 entitlement、组实际读写、ExtensionKit 发现、权限提示和正常卸载再决定是否开放功能。
+
+SDK 编译、正式签名交付与参考机验收是三个独立关口，见[发行资格清单](QUALIFICATION.md)。

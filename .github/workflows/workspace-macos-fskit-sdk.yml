@@ -1,0 +1,65 @@
+name: Workspace macOS FSKit SDK contract
+
+# Separate opt-in compile-only lane. Pushing this file does not start it. A pass
+# is not a signed or enabled provider, mount test, Finder acceptance, or release.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    if: github.ref == 'refs/heads/main'
+    runs-on: xcode-27
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    defaults:
+      run:
+        working-directory: zxs-workspace
+        shell: bash
+    steps:
+      - name: Check out the original Workspace sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, shared desktop checkout pin
+        with:
+          persist-credentials: false
+          sparse-checkout: zxs-workspace
+
+      - name: Compile native C and emit the two Swift modules against the macOS 27.0 SDK
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          xcodebuild -version | grep -Fx 'Build version 27A266a'
+          test "$(xcrun --sdk macosx27.0 --show-sdk-version)" = 27.0
+          sdk="$(xcrun --sdk macosx27.0 --show-sdk-path)"
+          out="$(mktemp -d "${RUNNER_TEMP}/workspace-fskit-sdk.XXXXXXXX")"
+          native=macos-fskit
+          target=arm64-apple-macosx27.0
+          cflags=(-target "$target" -isysroot "$sdk" -std=gnu17 -fblocks -Werror=implicit-function-declaration)
+          xcrun --sdk macosx27.0 clang "${cflags[@]}" -fapplication-extension -c "$native/WorkEvidence.c" -o "$out/WorkEvidence.o"
+          xcrun --sdk macosx27.0 clang "${cflags[@]}" -c "$native/host/MountAnchor.c" -o "$out/MountAnchor.o"
+          xcrun --sdk macosx27.0 clang "${cflags[@]}" -c tests/qualification/macos_fskit_held_eof.c -o "$out/HeldEOF.o"
+
+          swift=(xcrun --sdk macosx27.0 swiftc -sdk "$sdk" -target "$target" -swift-version 6 -parse-as-library)
+          common=("$native/WorkIdentity.swift" "$native/HeldMountTicket.swift" "$native/WorkRegistration.swift" "$native/host/HostSigning.swift")
+          data=("$native/WorkFile.swift" "$native/Names.swift" "$native/NamespaceVolume.swift" "$native/RemoteDataVolume.swift" "$native/RemoteUnaryFileSystem.swift")
+          host=("$native/host/OriginalMountHost.swift" "$native/host/DesktopHostABI.swift")
+          "${swift[@]}" -application-extension -D ZXS_FSKIT_PROVIDER -import-objc-header "$native/WorkEvidence.h" \
+            -module-cache-path "$out/extension-cache" -module-name ZxsRemoteFS -emit-module -emit-module-path "$out/ZxsRemoteFS.swiftmodule" \
+            "${common[@]}" "${data[@]}" "$native/RemoteExtension.swift"
+          "${swift[@]}" -D ZXS_FSKIT_HOST -import-objc-header "$native/host/HostBridge.h" \
+            -module-cache-path "$out/host-cache" -module-name ZxsRemoteHost -emit-module -emit-module-path "$out/ZxsRemoteHost.swiftmodule" \
+            -emit-objc-header -emit-objc-header-path "$out/ZxsRemoteHost-Swift.h" "${common[@]}" "${host[@]}"
+          # Compare the actual emitted @_cdecl declarations with the desktop's C ABI.
+          # Both name sets must match, and Clang must accept both headers in one translation unit.
+          LC_ALL=C grep -Eo 'zxs_fskit_[a-z0-9_]+' "$native/host/DesktopHostABI.h" | LC_ALL=C sort -u > "$out/expected"
+          LC_ALL=C grep -Eo 'zxs_fskit_[a-z0-9_]+' "$out/ZxsRemoteHost-Swift.h" | LC_ALL=C sort -u > "$out/emitted"
+          test -s "$out/expected" && cmp "$out/expected" "$out/emitted"
+          xcrun --sdk macosx27.0 clang "${cflags[@]}" -fmodules -fmodules-cache-path="$out/header-cache" \
+            -I "$native" -I "$native/host" -include "$out/ZxsRemoteHost-Swift.h" -include "$native/host/DesktopHostABI.h" \
+            -x objective-c -fsyntax-only /dev/null
+          # Cross-target source assertions only; the real two modules above are independently compiled.
+          "${swift[@]}" -import-objc-header "$native/host/HostBridge.h" -module-cache-path "$out/fixture-cache" \
+            -module-name ZxsFSKitFixtureContract -typecheck "${common[@]}" "${data[@]}" "${host[@]}" \
+            tests/qualification/macos_fskit_{host,names,projection}.swift
