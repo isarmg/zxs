@@ -196,8 +196,3 @@ impl Sha256 {
         out
     }
 }
-pub(crate) fn digest(bytes: &[u8]) -> std::io::Result<[u8; 32]> {
-    let mut h = Sha256::new();
-    h.update(bytes)?;
-    Ok(h.finish())
-}
