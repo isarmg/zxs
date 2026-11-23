@@ -10,6 +10,7 @@ if __name__ == "__main__":
 from windows_draft_qualification import LocalWorkingFile
 from windows_node_qualification import ORIGIN, TARGET
 from zipworkspace._windows_access import NativeSecurity
+from zipworkspace._windows_node import _remote_mark
 from zipworkspace._windows_output import PinnedParent
 from zipworkspace.desktop.container_windows_draft import _effective_zone
 from zipworkspace.desktop.container_windows_fileplane import WindowsDraftFilePlane
@@ -33,6 +34,21 @@ class FileCallbacks(LocalWorkingFile):
         self.assertEqual(self.requests, [TARGET])
 
 
+    def test_original_namespace_and_attachment(self):
+        from _workspace_winfsp_draft_io import check_namespace
+        choice, _ = self.choose_draft(b"seed", max_bytes=32)
+        location = choice.local_file
+        with choice.begin(confirmed=True) as draft:
+            plane = WindowsDraftFilePlane(draft, "review.bin", confirmed=True)
+            with self.assertRaises(Rejected):
+                WindowsDraftFilePlane(draft, "a" * 234, confirmed=True).bind(object(), True)
+            check_namespace(plane, _remote_mark(ORIGIN + TARGET, _effective_zone(ORIGIN + TARGET)))
+            with self.assertRaises(Rejected):
+                draft.review(confirmed=True)
+        self.assertEqual(Path(location).read_bytes(), b"Weed")
+        self.assertEqual(self.requests, [TARGET])
+
+
 def qualify(spelling):
     if sys.platform != "win32":
         raise SystemExit("Requires a real ordinary Windows NTFS user and the separate trusted native extension.")
@@ -43,9 +59,10 @@ def qualify(spelling):
         zone = _effective_zone(ORIGIN + TARGET)
         if zone not in (3, 4):
             raise SystemExit("No qualifying existing policy for the inert synthetic URL.")
-        case = FileCallbacks("test_exact_file_through_native_sdk_callbacks", root, spelling, security, actor, profile, zone)
-        result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([case]))
-        return int(not (result.wasSuccessful() and result.testsRun == 1 and not result.skipped))
+        names = ("test_exact_file_through_native_sdk_callbacks", "test_original_namespace_and_attachment")
+        suite = unittest.TestSuite(FileCallbacks(name, root, spelling, security, actor, profile, zone) for name in names)
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        return int(not (result.wasSuccessful() and result.testsRun == len(names) and not result.skipped))
 
 
 if __name__ == "__main__":

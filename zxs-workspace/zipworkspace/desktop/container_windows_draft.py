@@ -195,13 +195,13 @@ class WindowsHeldDraft:
         self._h, self._file_id, self._url, self._zone, self._mark = h, file_id, url, zone, mark
         self._length = choice.source.head.length
         self._lock, self._contexts, self._state, self._keep = Lock(), {}, "editing", None
-        self._provider = None
+        self._provider, self._project_origin = None, False
 
     def _observe(self, length, *, policy=False):
         self._choice._live()  # Checks this window in memory only, never initiates a request.
         self._home.check()
         self._choice._protection.check(self._h)
-        if policy and _effective_zone(self._url) != self._zone:
+        if (policy or self._project_origin) and _effective_zone(self._url) != self._zone:
             raise Rejected("the original OS download-origin policy changed")
         row = _same_file(self._home, self._h, self._leaf, length, self._file_id)
         _check_origin(self._home.api, self._h, row, self._mark)
@@ -218,14 +218,14 @@ class WindowsHeldDraft:
             self._state = "fault"
             raise
 
-    def _claim_provider(self, owner):
+    def _claim_provider(self, owner, *, project_origin=False):
         with self._lock:
             if owner is None or self._provider is not None or self._state != "editing" or self._contexts:
                 raise Rejected("the Windows draft is not exclusively available to the native provider")
             self._observe(self._length, policy=True)
-            self._provider = owner
+            self._provider, self._project_origin = owner, project_origin
 
-    def _provider_info(self, owner):
+    def _provider_info(self, owner, kind=2):
         from ..windows_nt import _Basic
         with self._lock:
             if owner is not self._provider or owner is None or self._state not in ("editing", "draining"):
@@ -236,7 +236,12 @@ class WindowsHeldDraft:
                 if ((basic.birth, basic.write, basic.change) != (row.birth, row.write, row.change)
                         or basic.access <= 0):
                     raise Rejected("inconsistent original Windows draft timestamps")
-                return self._length, basic.birth, basic.access, basic.write, basic.change
+                if kind == 1:  # Stable synthetic root, never disclose unrelated private-parent activity.
+                    return 0, basic.birth, basic.birth, basic.birth, basic.birth, 1
+                if kind == 3 and self._mark is None:
+                    raise Rejected("this original has no verified Windows origin stream")
+                size = len(self._mark) if kind == 3 else self._length
+                return size, basic.birth, basic.access, basic.write, basic.change, kind
 
     def _abandon_provider(self, owner, *, missing_ok=False):
         # A callback table or an SDK StopDispatcher return is not a normal OS detach receipt.
@@ -245,7 +250,7 @@ class WindowsHeldDraft:
                 if missing_ok and owner is not None:
                     return  # A failed bind never acquired this draft; never seize a different owner.
                 raise Rejected("cannot detach another Windows draft owner")
-            self._state, self._provider = "fault", None
+            self._state, self._provider, self._project_origin = "fault", None, False
             self._contexts.clear()
 
     def open(self, *, writable=False, _provider=None):

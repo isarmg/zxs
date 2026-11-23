@@ -1,4 +1,4 @@
-"""One exact Windows working-file callback target. No volume creation, transfer or public namespace."""
+"""One exact remote working file and its Windows-native local alias. No transfer or volume creation."""
 import re
 from threading import Lock
 
@@ -8,9 +8,12 @@ from .container_windows_draft import WindowsHeldDraft
 READ, WRITE, APPEND = 1, 2, 4
 ATTR, CONTROL, SYNC = 0x80, 0x20000, 0x100000
 _ALLOWED = READ | WRITE | APPEND | ATTR | CONTROL | SYNC
+_ROOT, _DATA, _ZONE = 1, 2, 3
+_READ_EA, _TRAVERSE = 0x8, 0x20
+_MARK = ":Zone.Identifier"
 _DIRECTORY, _NON_DIRECTORY = 0x1, 0x40
 # Sequential/random hints, synchronous alert/nonalert and the ordinary nondirectory constraint.
-_OPTIONS = 0x4 | 0x10 | 0x20 | _NON_DIRECTORY | 0x800
+_OPTIONS = 0x4 | 0x10 | 0x20 | 0x800
 _DEVICE = re.compile(r"CON|PRN|AUX|NUL|CLOCK\$|CONIN\$|CONOUT\$|(?:COM|LPT)[1-9¹²³]", re.ASCII | re.I)
 
 
@@ -31,8 +34,8 @@ def _alias(leaf):
 class WindowsDraftFilePlane:
     """Owner of a bounded table of distinct original opens. Numeric IDs are never native pointers.
 
-    This is the callable target for the native SDK file operations; it does not attest the
-    Windows caller, publish a root/ADS, or perform an OS detach. No namespace is enabled.
+    The separate scoped native table can request the single-entry root and physical origin
+    stream. Native per-create checks, never this Python code, establish OS caller scope.
     """
     def __init__(self, draft, alias, *, confirmed=False):
         if (confirmed is not True or type(draft) is not WindowsHeldDraft
@@ -42,14 +45,17 @@ class WindowsDraftFilePlane:
         self._lock, self._rows = Lock(), {}
         self._next, self._state, self._lease = 1, "ready", None
 
-    def bind(self, lease):
+    def bind(self, lease, namespace=False):
         with self._lock:
-            if self._state != "ready" or type(lease) is not object:
+            if self._state != "ready" or type(lease) is not object or type(namespace) is not bool:
                 raise Rejected("Windows file plane was already claimed")
-            self._lease = lease
+            # Pinned FSD bounds the full component *before* stripping the stream/type suffix.
+            if namespace and len((self._path[1:] + _MARK + ":$DATA").encode("utf-16-le")) > 510:
+                raise Rejected("choose a shorter Windows alias so the complete provenance stream remains addressable")
+            self._lease, self._namespace = lease, namespace
             self._state = "binding"
             try:
-                self._draft._claim_provider(self)
+                self._draft._claim_provider(self, project_origin=namespace)
                 self._state = "bound"
             except BaseException:
                 self._draft._abandon_provider(self, missing_ok=True)
@@ -61,17 +67,40 @@ class WindowsDraftFilePlane:
             raise PermissionError("stale or unavailable Windows file context")
         return self._rows[slot]
 
+    def _kind(self, path):
+        if path == self._path:
+            return _DATA
+        if self._namespace:
+            if path == "\\":
+                return _ROOT
+            # WinFsp normalizes the NT $DATA type before calling Open. Never case-fold a server name.
+            if path == self._path + _MARK and self._draft._mark is not None:
+                return _ZONE
+        raise FileNotFoundError("not the selected Windows alias or its verified stream")
+
+    def lookup(self, path):
+        with self._lock:
+            if not self._namespace or self._state != "bound":
+                raise PermissionError("not accepting Windows name lookups")
+            return self._draft._provider_info(self, self._kind(path))
+
     def open_file(self, path, options, granted):
         with self._lock:
             if self._state != "bound":
                 raise PermissionError("not accepting Windows file opens")
-            if path != self._path:
-                raise FileNotFoundError("not the one exact selected alias or stream")
-            if type(options) is not int or type(granted) is not int or granted < 0 or granted & ~_ALLOWED:
-                raise PermissionError("unapproved Windows file access")
-            if options & _DIRECTORY:
-                raise NotADirectoryError("the selected item is an ordinary remote file")
-            if options >> 24 != 1 or options & 0xffffff & ~_OPTIONS:  # Only FILE_OPEN.
+            kind = self._kind(path)
+            rights = (_ALLOWED if kind == _DATA else READ | ATTR | CONTROL | SYNC)
+            if self._namespace:
+                rights |= _READ_EA  # Generic read; this volume does not implement EAs.
+            if kind == _ROOT:
+                rights |= _TRAVERSE
+            if type(options) is not int or type(granted) is not int or granted < 0 or granted & ~rights:
+                raise PermissionError("unapproved Windows object access")
+            if options & _DIRECTORY and kind != _ROOT:
+                raise NotADirectoryError("not a Windows directory")
+            if options & _NON_DIRECTORY and kind == _ROOT:
+                raise IsADirectoryError("the Windows view root is not a file")
+            if options >> 24 != 1 or options & 0xffffff & ~(_OPTIONS | _DIRECTORY | _NON_DIRECTORY):
                 raise PermissionError("this Windows callback profile never creates or replaces")
             if len(self._rows) >= 1024 or self._next >= 1 << 63:
                 raise MemoryError("Windows file-context budget exhausted")
@@ -79,8 +108,8 @@ class WindowsDraftFilePlane:
             self._next += 1
             handle = self._draft.open(writable=bool(granted & (WRITE | APPEND)), _provider=self)
             try:
-                info = self._draft._provider_info(self)
-                self._rows[slot] = (handle, granted)
+                info = self._draft._provider_info(self, kind)
+                self._rows[slot] = (handle, granted, kind)
                 return slot, info
             except BaseException:
                 self._rows.pop(slot, None)
@@ -89,31 +118,68 @@ class WindowsDraftFilePlane:
 
     def info(self, slot):
         with self._lock:
-            self._row(slot)
-            return self._draft._provider_info(self)
+            _, _, kind = self._row(slot)
+            return self._draft._provider_info(self, kind)
+
+    def security_info(self, slot):
+        with self._lock:
+            _, rights, kind = self._row(slot)
+            if not rights & CONTROL:
+                raise PermissionError("read-control access required for a security descriptor")
+            return self._draft._provider_info(self, kind)
+
+    def directory(self, slot, marker):
+        with self._lock:
+            _, rights, kind = self._row(slot)
+            if kind != _ROOT:
+                raise NotADirectoryError("not the Windows volume root")
+            if not rights & READ:
+                raise PermissionError("list-directory access required")
+            self._draft._provider_info(self, _ROOT)
+            alias = self._path[1:]
+            if marker is not None and alias.encode("utf-16-be") <= marker.encode("utf-16-be"):
+                return None
+            return alias, self._draft._provider_info(self, _DATA)
+
+    def streams(self, slot):
+        with self._lock:
+            _, rights, kind = self._row(slot)
+            if not rights & (READ | ATTR):
+                raise PermissionError("read attributes or data required to enumerate Windows streams")
+            data = self._draft._provider_info(self, _DATA)
+            if kind == _ROOT:
+                return ()  # No default $DATA on a directory and no hidden parent streams.
+            if self._draft._mark is None:
+                return (data,)
+            return data, self._draft._provider_info(self, _ZONE)
 
     def read(self, slot, offset, length):
         with self._lock:
-            handle, rights = self._row(slot)
-            if not rights & READ:
+            handle, rights, kind = self._row(slot)
+            if not rights & READ or kind == _ROOT:
                 raise PermissionError("Windows file context has no read-data access")
-            data = self._draft.read(handle, offset, length)
+            if kind == _ZONE:
+                self._draft._span(offset, length)
+                self._draft._provider_info(self, _ZONE)  # Reads and verifies the real held ADS and current policy.
+                data = self._draft._mark[offset:offset+length]
+            else:
+                data = self._draft.read(handle, offset, length)
             if not data and length:
-                raise EOFError("end of this original Windows file")
+                raise EOFError("end of this original Windows stream")
             return data
 
     def write(self, slot, offset, data, append, constrained):
         with self._lock:
-            handle, rights = self._row(slot)
-            if not (rights & WRITE or (rights & APPEND and append is True)):
+            handle, rights, kind = self._row(slot)
+            if kind != _DATA or not (rights & WRITE or (rights & APPEND and append is True)):
                 raise PermissionError("Windows file context does not grant this write")
             count = self._draft.write(handle, offset, data, append=append, constrained=constrained)
             return count, self._draft._provider_info(self)
 
     def resize(self, slot, length, allocation):
         with self._lock:
-            handle, rights = self._row(slot)
-            if not rights & WRITE:
+            handle, rights, kind = self._row(slot)
+            if kind != _DATA or not rights & WRITE:
                 raise PermissionError("write-data access required to change EOF")
             if allocation is not False:
                 raise NotImplementedError("allocation-size changes are not EOF changes")
@@ -122,13 +188,13 @@ class WindowsDraftFilePlane:
 
     def flush(self, slot):
         with self._lock:
-            handle, _ = self._row(slot)
+            handle, _, kind = self._row(slot)
             self._draft.flush(handle)
-            return self._draft._provider_info(self)
+            return self._draft._provider_info(self, kind)
 
     def close_file(self, slot):
         with self._lock:
-            handle, _ = self._row(slot)
+            handle, _, _ = self._row(slot)
             self._draft.release(handle)
             del self._rows[slot]
 
