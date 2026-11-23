@@ -123,11 +123,11 @@ fn read_ticket(input: impl Read) -> io::Result<Ticket> {
     input
         .take(u64::try_from(LIMIT + 1).map_err(|_| invalid())?)
         .read_to_end(&mut line)?;
-    if line.len() > LIMIT
-        || line.pop() != Some(b'\n')
-        || line.is_empty()
-        || !line.len().is_multiple_of(2)
-    {
+    if line.len() > LIMIT || line.pop() != Some(b'\n') || line.is_empty() {
+        return Err(invalid());
+    }
+    let (pairs, remainder) = line.as_chunks::<2>();
+    if !remainder.is_empty() {
         return Err(invalid());
     }
     let value = |byte| match byte {
@@ -135,9 +135,9 @@ fn read_ticket(input: impl Read) -> io::Result<Ticket> {
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         _ => Err(invalid()),
     };
-    let raw: Vec<u8> = line
-        .chunks_exact(2)
-        .map(|pair| Ok((value(pair[0])? << 4) | value(pair[1])?))
+    let raw: Vec<u8> = pairs
+        .iter()
+        .map(|[high, low]| Ok((value(*high)? << 4) | value(*low)?))
         .collect::<io::Result<_>>()?;
     Ticket::decode(&raw).map_err(|_| invalid())
 }
