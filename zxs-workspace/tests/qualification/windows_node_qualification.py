@@ -167,6 +167,22 @@ class NativeNodePublication(unittest.TestCase):
         self.assertEqual(list(self.staging.iterdir()), [])
         self.assertEqual(list(self.destination.iterdir()), [])
 
+    def test_revocation_during_last_client_callback_never_publishes(self):
+        callbacks = []
+        with self.choose("revoked.bin") as plan:
+            exchange = self.response((PAYLOAD,), PAYLOAD)
+
+            def disconnect():
+                callbacks.append(True)
+                exchange._authorization.revoke()
+
+            with self.assertRaisesRegex(Rejected, "this window disconnected"):
+                plan.publish(exchange, CONTAINER, NODE, length=len(PAYLOAD), sha256=sha256(PAYLOAD).hexdigest(),
+                             confirmed=True, checkpoint=lambda: None, begin_publication=disconnect)
+        self.assertEqual(callbacks, [True])
+        self.assertEqual(self.requests, [TARGET])
+        self.assertEqual(list(self.destination.iterdir()), [])
+
     def test_close_and_second_publish_cannot_take_worker_handles(self):
         started, resume = Event(), Event()
 
@@ -206,14 +222,14 @@ def qualify(spelling, *, hosted):
             return 0 if hosted else 2
 
         names = unittest.defaultTestLoader.getTestCaseNames(NativeNodePublication)
-        if len(names) != 5:
-            raise RuntimeError("expected all five mandatory Windows native output cases")
+        if len(names) != 6:
+            raise RuntimeError("expected all six mandatory Windows native output cases")
         suite = unittest.TestSuite(NativeNodePublication(name, root, spelling, security, actor, profile, zone)
                                    for name in names)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         if not result.wasSuccessful() or result.testsRun != len(names) or result.skipped:
             return 1
-        print("Windows native exact-node output: five cases passed on NTFS with real URL policy "
+        print("Windows native exact-node output: six cases passed on NTFS with real URL policy "
               "and synthetic H2 responses; no actual TLS connection or UI.", flush=True)
         return 0
 

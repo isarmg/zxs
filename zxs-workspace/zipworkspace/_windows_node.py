@@ -174,17 +174,25 @@ class WindowsNodeOutput:
             with stack, ExitStack() as opened:
                 dst, stage, output, private = self._destination, self._staging, self._output, self._stage
                 api, final_name, stage_name = dst.api, dst.name(output), stage.name(private)
-                if type(exchange) is not HttpsExchange or exchange._authorization is None:
+                if type(exchange) is not HttpsExchange:
+                    raise Rejected("另存需要这次已认证连接的原 HTTPS 读取器。")
+                authority = exchange._authorization
+                if not callable(getattr(authority, "require_live", None)):
                     raise Rejected("另存需要这次已认证连接的原 HTTPS 读取器。")
                 target = exchange._node_target(container, node, length, sha256)
                 if length >= 1 << 63:  # Native FileStandardInformation has a signed 64-bit EOF.
                     raise Rejected("所选节点长度超出 NTFS 文件长度表示范围。")
                 origin, identity = exchange._location, exchange.destination_identity
 
+                def require_original():
+                    if (exchange._location != origin or exchange.destination_identity != identity
+                            or exchange._authorization is not authority):
+                        raise Rejected("这次另存的原 HTTPS 连接已改变。")
+                    authority.require_live()
+
                 def check():
                     checkpoint()
-                    if (exchange._location != origin or exchange.destination_identity != identity):
-                        raise Rejected("这次另存的原 HTTPS 地址或信任配置已改变。")
+                    require_original()
 
                 url = origin + target
                 check()
@@ -239,6 +247,7 @@ class WindowsNodeOutput:
                 self._parents(held)  # Again after the potentially blocking policy lookup.
                 check()
                 begin_publication()
+                require_original()
                 may_be_published = True
                 try:
                     api.rename_new(held, dst.handle, output)
