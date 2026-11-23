@@ -5,6 +5,7 @@ import base64
 import errno
 import hashlib
 import http.client
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -331,6 +332,23 @@ class Smoke:
         self.recycle(receipt, accepted, base, new)
 
 
+def run_workspace_fixture(smoke):
+    fixture = Path("/opt/zxs-fixture-workspace")
+    workspace = fixture / "zxs-workspace"
+    implementation = workspace / "tests/qualification/live_r3_loopback.py"
+    cert = fixture / "certs"
+    require(implementation.resolve(strict=True) == implementation and implementation.stat().st_uid == 0,
+            "Workspace fixture source not on its exact root-owned path")
+    sys.path[:0] = [str(workspace), str(fixture / "packages")]
+    spec = importlib.util.spec_from_file_location("workspace_live_r3_fixture", implementation)
+    require(spec is not None and spec.loader is not None, "Workspace fixture could not be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.run_live_r3(backend_port=PORT, fixture_authorization=smoke.authorization,
+                       certfile=cert / "server.pem", keyfile=cert / "server.key",
+                       ca_pem=(cert / "ca.pem").read_text(encoding="ascii"))
+
+
 def main():
     if sys.argv[1:] == ["--remount-control"]:
         guard(initialized=True)
@@ -341,7 +359,7 @@ def main():
             smoke.stop()
         print("ZXS-PRODUCT-SMOKE same service became ready after original DATA remount", flush=True)
         return
-    require(len(sys.argv) == 1, "unknown fixture mode")
+    require(sys.argv[1:] in ([], ["--workspace-h2"]), "unknown fixture mode")
     guard()
     password = secrets.token_hex(24).encode("ascii")
     issue_setup(password)
@@ -349,6 +367,8 @@ def main():
     try:
         smoke.start()
         smoke.run()
+        if sys.argv[1:] == ["--workspace-h2"]:
+            run_workspace_fixture(smoke)
     finally:
         smoke.stop()
     print("ZXS-PRODUCT-SMOKE setup, full append, two DATA disks, recycle and exact retries passed", flush=True)

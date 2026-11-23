@@ -2,6 +2,12 @@ name: Linux disposable ZXS product smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      workspace_h2:
+        description: 'Also exercise the real Workspace HTTPS/HTTP2 client in loopback'
+        type: boolean
+        required: false
+        default: false
 
 permissions: {}
 
@@ -160,8 +166,54 @@ jobs:
           sha256sum apt/archives/*.deb
 
 
+      - name: Prepare the exact Workspace source and H2 runtime without installing on the runner
+        if: ${{ inputs.workspace_h2 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$ZXS_GUEST_WORK"
+          mkdir -m 0755 workspace-h2 workspace-h2/packages
+          git --git-dir="$PAIR_BUILD/source.git" archive "$GITHUB_SHA" \
+            zxs-workspace/zipworkspace \
+            zxs-workspace/tests/qualification/live_r3_loopback.py \
+            zxs-workspace/packaging/network-r3/requirements.txt |
+            tar -xf - -C workspace-h2 --no-same-owner --no-same-permissions
+          printf 'Workspace source tree: %s\n' "$(git --git-dir="$PAIR_BUILD/source.git" rev-parse "$GITHUB_SHA:zxs-workspace")"
+          python3 -I -B -m venv h2-venv
+          mkdir h2-wheels
+          pip=(h2-venv/bin/python -I -B -m pip --isolated --disable-pip-version-check --no-input)
+          lock=(--no-deps --only-binary=:all: --require-hashes --no-cache-dir
+                -r workspace-h2/zxs-workspace/packaging/network-r3/requirements.txt)
+          "${pip[@]}" download --index-url https://pypi.org/simple --dest h2-wheels "${lock[@]}"
+          test "$(find h2-wheels -maxdepth 1 -name '*-py3-none-any.whl' -type f | wc -l)" -eq 6
+          "${pip[@]}" install --no-index --find-links h2-wheels --target workspace-h2/packages "${lock[@]}"
+          # Isolated, short-lived certificate material for this fixture only.
+          mkdir -m 0755 workspace-h2/certs
+          openssl req -new -newkey rsa:2048 -nodes -x509 -days 2 -sha256 \
+            -subj '/CN=ZXS workspace fixture root' -addext 'basicConstraints=critical,CA:TRUE' \
+            -addext 'keyUsage=critical,keyCertSign,cRLSign' -keyout fixture-ca.key \
+            -out workspace-h2/certs/ca.pem 2>cert-generation.log
+          openssl req -new -newkey rsa:2048 -nodes -subj '/CN=127.0.0.1' \
+            -keyout workspace-h2/certs/server.key -out fixture-leaf.csr 2>>cert-generation.log
+          cat > fixture-leaf.extensions <<'EXTENSIONS'
+          basicConstraints=critical,CA:FALSE
+          keyUsage=critical,digitalSignature,keyEncipherment
+          extendedKeyUsage=serverAuth
+          subjectAltName=IP:127.0.0.1
+          EXTENSIONS
+          openssl x509 -req -days 1 -sha256 -CA workspace-h2/certs/ca.pem -CAkey fixture-ca.key \
+            -CAcreateserial -in fixture-leaf.csr -extfile fixture-leaf.extensions \
+            -out workspace-h2/certs/server.pem 2>>cert-generation.log
+          openssl verify -purpose sslserver -verify_ip 127.0.0.1 -CAfile workspace-h2/certs/ca.pem \
+            workspace-h2/certs/server.pem
+          test -z "$(find workspace-h2 ! -type f ! -type d -print -quit)"
+          tar -cf workspace-h2.tar -C workspace-h2 .
+
       - name: Run the same-commit products in an isolated guest
         shell: bash
+        env:
+          WORKSPACE_H2: ${{ inputs.workspace_h2 }}
         run: |
           set -euo pipefail
           umask 077
@@ -184,7 +236,12 @@ jobs:
           install -m 0755 "$PAIR_BUILD/source/zxs/target/standalone/zxs" seed/zxs
           install -m 0755 "$PAIR_BUILD/target/x86_64-unknown-linux-gnu/release/helper" seed/helper
           install -m 0444 "$PAIR_BUILD/source/zxs/tests/acceptance/guest_product_smoke.py" seed/guest_product_smoke.py
-          (cd seed && sha256sum zxs helper guest_product_smoke.py) | tee seed/SHA256SUMS
+          seed_members=(zxs helper guest_product_smoke.py)
+          if [[ "$WORKSPACE_H2" == true ]]; then
+            install -m 0400 workspace-h2.tar seed/workspace-h2.tar
+            seed_members+=(workspace-h2.tar)
+          fi
+          (cd seed && sha256sum "${seed_members[@]}") | tee seed/SHA256SUMS
           printf '%s\n' 'instance-id: zxs-acceptance-product-smoke' > seed/meta-data
           cat > seed/user-data <<'CLOUD'
           #cloud-config
@@ -215,6 +272,17 @@ jobs:
                 install -d -m 0755 /zxs /zxs/bin /zxs/state
                 install -m 0755 zxs helper /zxs/bin/
                 install -m 0444 guest_product_smoke.py /run/zxs-acceptance-smoke.py
+                h2_args=()
+                if test -f workspace-h2.tar; then
+                  install -d -m 0755 /opt/zxs-fixture-workspace
+                  tar -xf workspace-h2.tar -C /opt/zxs-fixture-workspace --no-same-owner --no-same-permissions
+                  find /opt/zxs-fixture-workspace -type d -exec chmod 0755 {} +
+                  key=/opt/zxs-fixture-workspace/certs/server.key
+                  find /opt/zxs-fixture-workspace -type f ! -path "$key" -exec chmod 0644 {} +
+                  chmod 0400 "$key"
+                  chown 23100:23100 "$key"
+                  h2_args+=(--workspace-h2)
+                fi
                 cd /
                 umount /mnt/zxs-acceptance-payload
                 install -d -m 0700 -o 23100 -g 23100 /zxs/state/headless /var/lib/zxs-acceptance-system
@@ -231,7 +299,7 @@ jobs:
                 chmod 0444 /run/zxs-acceptance-fixture
                 stage=ordinary-product-smoke
                 setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
-                  python3 -I /run/zxs-acceptance-smoke.py
+                  python3 -I -B /run/zxs-acceptance-smoke.py "${h2_args[@]}"
                 stage=cold-start-missing-data
                 umount /mnt/zxs-acceptance-data-a
                 if mountpoint -q /mnt/zxs-acceptance-data-a; then exit 1; fi
@@ -272,9 +340,12 @@ jobs:
             -drive if=none,id=recycle,format=raw,file=recycle.ext4 \
             -device virtio-blk-pci,drive=recycle,serial=zxs-smoke-recycle || boot_status=$?
           if test -f serial.log; then
-            tr -d '\r' < serial.log | grep -aE '^ZXS-PRODUCT-SMOKE ' || true
+            tr -d '\r' < serial.log | grep -aE '^ZXS-(PRODUCT-SMOKE|WORKSPACE-H2) ' || true
           fi
           test "$boot_status" -eq 0
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE setup, full append, two DATA disks, recycle and exact retries passed')" -eq 1
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE cold start rejected absent enrolled DATA disk')" -eq 1
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE same service became ready after original DATA remount')" -eq 1
+          if [[ "$WORKSPACE_H2" == true ]]; then
+            test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-WORKSPACE-H2 fixture negotiated TLS, saved, looked up, and read exact bytes')" -eq 1
+          fi
