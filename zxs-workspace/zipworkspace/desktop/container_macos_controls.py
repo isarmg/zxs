@@ -11,6 +11,7 @@ from ..macos_fskit_handoff import CompletedDrive
 from ..macos_fskit_registration import SelectionRequest
 from ..macos_retained_submit import Phase, retry_original, status_original, submit_original
 from ..model import Rejected
+from .container_macos_first import MacFirstDialog
 from .macos_fskit_host import MountPhase, OriginalDrive
 from .widgets import button, confirm, label
 
@@ -25,7 +26,10 @@ class MacDiskControls(QWidget):
         row=QHBoxLayout()
         self.edit=button("将所选节点作为本机磁盘打开…", lambda: self.open(False))
         self.recover=button("核对原磁盘及提交…", lambda: self.open(True))
-        row.addWidget(self.edit); row.addWidget(self.recover); layout.addLayout(row)
+        self.first=button("提交新的本机文件…", lambda: self.open_first(False))
+        self.first_recover=button("核对首次提交…", lambda: self.open_first(True))
+        for widget in (self.edit,self.recover,self.first,self.first_recover): row.addWidget(widget)
+        layout.addLayout(row)
 
     def scope(self, cold):
         p, conn=self.panel, self.panel._owned
@@ -44,7 +48,10 @@ class MacDiskControls(QWidget):
 
     def paint(self):
         self.edit.setEnabled(not self.busy() and self.scope(False) is not None)
-        self.recover.setEnabled(not self.busy() and self.scope(True) is not None)
+        cold_ready = not self.busy() and self.scope(True) is not None
+        self.recover.setEnabled(cold_ready)
+        self.first.setEnabled(cold_ready)
+        self.first_recover.setEnabled(cold_ready)
 
     def busy(self):
         return self.active is not None
@@ -52,6 +59,23 @@ class MacDiskControls(QWidget):
     def finish(self):
         if self.busy():
             raise Rejected("请先完成关闭 macOS 原生磁盘窗口。")
+
+    def open_first(self,cold):
+        selected=self.scope(True)
+        if self.busy() or selected is None:
+            return
+        box=self.active=MacFirstDialog(self,selected,cold)
+        self.panel._paint()
+
+        def done(_):
+            if self.active is box:
+                self.active=None
+                if box.invalidate:
+                    self.panel._load()
+                self.panel._paint()
+            box.deleteLater()
+        box.finished.connect(done)
+        box.open()
 
     def open(self,cold):
         selected=self.scope(cold)

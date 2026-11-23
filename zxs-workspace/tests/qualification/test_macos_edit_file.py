@@ -347,6 +347,75 @@ class MacEditBody(unittest.TestCase):
             with self.assertRaises(Rejected):
                 store.retain_edit(file, seal, ident, confirmed=True)
 
+    def test_first_local_post_and_lost_reply_recover_same_name_operation_and_bytes(self):
+        from zipworkspace import macos_retained_submit as sender
+        from zipworkspace.container_http import Reply, ReplyKind, lookup_message, project_reply
+        from zipworkspace.macos_first_local import MacFirstLocalChoice
+
+        path = self.root / "native-source.bin"
+        data = b"regular file, exact whole bytes"
+        path.write_bytes(data)
+        with self.retention_state() as (_, ident, state):
+            conn = self.new_connection()
+            choice = MacFirstLocalChoice(conn, path, "Exact remote name.bin")
+            try:
+                review = choice.review
+                with self.assertRaises(Rejected):
+                    choice.capture(replace(review), ident, confirmed=True)
+                key = choice.capture(review, ident, confirmed=True)
+            finally:
+                choice.close()
+            self.assertEqual(path.read_bytes(), data)
+            path.write_bytes(b"later local changes")
+            fresh = self.new_connection()
+            chosen = sender.review_original(fresh, ident, key.container, "main", None, confirmed=True)
+            self.assertEqual(chosen.key, key)
+            op = chosen.action
+            self.assertEqual((op.base_revision, op.branch, op.head, op.name, key.node),
+                             (0, "main", None, "Exact remote name.bin", None))
+            calls, effect = [], None
+
+            def wire(exchange, message):
+                nonlocal effect
+                self.assertIs(exchange, fresh._exchange)
+                calls.append(message.method)
+                if message == lookup_message(op):
+                    if effect is None:
+                        return Reply(ReplyKind.ABSENT)
+                    return project_reply(200, json.dumps(effect).encode(), lookup=True)
+                self.assertEqual(message.method, "POST")
+                self.assertEqual(dict(message.headers)["Zxs-Base-Node"], "0")
+                self.assertEqual(dict(message.headers)["Zxs-Initial-Name"], op.name.encode().hex())
+                attempt = state / ("attempt-" + key.submission)
+                self.assertEqual(json.loads(attempt.read_bytes())["value"], op.operation_id)
+                self.assertEqual(b"".join(message.body), data)
+                effect = dict(container_id=key.container, operation_id=op.operation_id, kind="save_node",
+                              sequence=1, node_id=op.node_id, length=len(data), sha256=op.body.sha256,
+                              target={"kind": "first_main", "name": op.name})
+                return Reply(ReplyKind.UNKNOWN)  # The operation settled, not the initial reply.
+
+            with patch.object(edit.HttpsExchange, "request", wire):
+                self.assertIs(sender.submit_original(fresh, chosen, confirmed=True).phase, sender.Phase.UNKNOWN)
+                again = sender.review_original(fresh, ident, key.container, "main", None, confirmed=True)
+                self.assertEqual(again, chosen)
+                self.assertIs(sender.status_original(fresh, again, confirmed=True).phase, sender.Phase.CONFIRMED)
+            self.assertEqual(calls, ["GET", "POST", "GET"])
+
+    def test_first_local_source_changed_after_review_does_not_reserve(self):
+        from zipworkspace.macos_first_local import MacFirstLocalChoice
+
+        path = self.root / "native-source.bin"
+        path.write_bytes(b"original")
+        with self.retention_state() as (_, ident, state):
+            choice = MacFirstLocalChoice(self.new_connection(), path, "remote.bin")
+            try:
+                path.write_bytes(b"replaced")
+                with self.assertRaises(Rejected):
+                    choice.capture(choice.review, ident, confirmed=True)
+            finally:
+                choice.close()
+            self.assertEqual(list(state.iterdir()), [])
+
     def test_exact_retained_post_is_preceded_by_absence_and_a_durable_original_attempt(self):
         from zipworkspace import macos_retained_submit as sender
         data = b"verified original whole file"

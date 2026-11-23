@@ -16,3 +16,12 @@
 `macos_edit_file.selected_edit_file` 是进程内的匿名 APFS 编辑原语，不是卷或恢复票据。独占建立 0600 空暂存，开真正独立的读写与只读句柄，核实体、[移去名字](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/unlink.2)、同步原私有父目录并确认链接数为零后才接收正文。停写后等本会话内全部句柄结束，显式封存整份；未移交前退出进程会丢失编辑。它与真正的 FSKit 正常后移交共享原整文件留存、计划和回执代码，不假装共用 OS 挂载或进程内锁。
 
 公开 Finder「另存」仍须读回真正系统隔离标记与确切 [Launch Services DataURL](https://developer.apple.com/documentation/coreservices/klsquarantinedataurlkey)。已观察到隔离类型正确但系统未返回实际 URL；不以成功 setter、Finder 来源文本或应用私写属性替代，公开另存继续关闭。挂载限制也不替代独立下载的来源证明。以上源码和[资格断言](../tests/qualification/)未在 macOS 执行，特别不能据普通 fsync 声称[设备断电持久性](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/fsync.2)。
+
+
+## 首次提交一个本机文件
+
+已准入的 macOS 客户端可在「存储容器」里选择「提交新的本机文件」。不用先选服务器容器，不挂载磁盘。选择本人所有的本机 APFS 普通文件，不接受符号链接、占位、资源叉或系统隔离来源。服务器文件名单独确认，按原拼写提交，不改本机原件。
+
+应用只持同一文件句柄核对完整长度和摘要。首次确认只把完整文件和原号封存在本机私有 APFS 状态中；再次确认才查原回执并按原号发送，全量成功后才产生 `main` 首版。同名冲突不覆盖或自动改名；丢回复后不新开一笔。
+
+如果关闭窗口，保持同一服务器和账号，点「核对首次提交」并输入原容器编号。即使新容器尚不在列表，也能核对同一份保留记录，不重开原文件。没有原件或只剩部分记录时不接管或补造。本功能沿用签名客户端准入，不启动 FSKit。新增首次全量发送、晚到回执和原件变更的资格源例，还没有运行真实平台验收。

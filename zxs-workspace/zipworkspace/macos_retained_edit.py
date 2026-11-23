@@ -84,7 +84,7 @@ class RetentionKey:
     account: str
     container: str
     branch: str
-    node: str
+    node: str | None  # None only for first-save owner on main.
     issuer: tuple
     intent_sha256: str
 
@@ -93,7 +93,7 @@ class RetentionKey:
         _id(self.submission)
         _destination(self.destination)
         _destination(self.intent_sha256)
-        _owner_name(self.destination, self.account, self.container, self.branch, self.node)
+        _packet_owner(self.destination, self.account, self.container, self.branch, self.node)
         if type(self.issuer) is not tuple or len(self.issuer) != 2 or any(
                 type(n) is not int or n <= 0 for n in self.issuer):
             raise Rejected("unknown original key identity")
@@ -237,7 +237,25 @@ def _read(area, leaf, fd, length, *, metadata=False):
     return (bytes(result) if metadata else result.hexdigest()), stamp
 
 
+@dataclass(frozen=True, slots=True)
+class FirstFile:
+    """A new container, not an existing branch or node selection."""
+    destination: str
+    account: str
+    container: Container
+    branch: str = "main"
+
+
+def _source_node(src):
+    return None if type(src) is FirstFile else src.node.id
+
+
 def _operation(src, body, operation, node, fork):
+    if type(src) is FirstFile:
+        if src.branch != "main" or src.container.revision != 0 or fork is not None:
+            raise Rejected("a first local file must create main on a new container")
+        return Action(operation, src.container.id, "save_node", 0, None, body=body,
+                      name=src.container.name, branch="main", node_id=node)
     tip = src.head == src.node.id
     if not tip and src.branch != "main":
         raise Rejected("a historical save requires the original main selection")
@@ -248,7 +266,7 @@ def _operation(src, body, operation, node, fork):
 
 def _plan(seal):
     src = seal.selected
-    action = _operation(src, seal.body, new_id(), new_id(), new_id() if src.head != src.node.id else None)
+    action = _operation(src, seal.body, new_id(), new_id(), new_id() if type(src) is SelectedFile and src.head != src.node.id else None)
     # Internal placement only, never the remote display name or an invented rename.
     return Plan((action,), ((src.container.id, _leaf(src.container.id)),))
 
@@ -261,9 +279,18 @@ def _names(child, leaf):
 
 
 def _owner_name(destination, account, container, branch, node):
+    _id(node)
+    return _packet_owner(destination, account, container, branch, node)
+
+
+def _packet_owner(destination, account, container, branch, node):
     _destination(destination)
     _id(container)
-    _id(node)
+    if node is None:
+        if branch != "main":
+            raise Rejected("a first file requires the original main owner")
+    else:
+        _id(node)
     if type(account) is not str or _LOGIN.fullmatch(account) is None or not branch_ok(branch):
         raise Rejected("unknown original selection")
     return "owner-" + hashlib.sha256(canonical([destination, account, container, branch, node])).hexdigest()
@@ -297,7 +324,10 @@ def _retain(edit, seal, expected, attempted, *, mount=None):
         require_exclusive_rename(root)
         edit._claim_retention(seal)
         src = seal.selected
-        owner = _owner_name(src.destination, src.account, src.container.id, src.branch, src.node.id)
+        node = _source_node(src)
+        if node is None and mount is not None:
+            raise Rejected("a first file cannot use an existing native mount")
+        owner = _packet_owner(src.destination, src.account, src.container.id, src.branch, node)
         _absent(root, owner)  # An existing owner (even incomplete) must never be overwritten.
         plan, submission, scratch = _plan(seal), new_id(), ".capture-" + new_id()
         cid = src.container.id
@@ -337,6 +367,8 @@ def _retain(edit, seal, expected, attempted, *, mount=None):
                           "source": asdict(seal.selected), "plan": plan.encode().decode("utf-8")}
                 if mount is not None:
                     record.update(format="macos-fskit-submit-1", mount=mount)
+                elif node is None:
+                    record["format"] = "macos-first-submit-1"
                 raw = canonical(record)
                 if len(raw) > _LIMIT:
                     raise Rejected("private single-file intent is too large")
@@ -347,7 +379,7 @@ def _retain(edit, seal, expected, attempted, *, mount=None):
                 if saved != raw:
                     raise Rejected("did not read back the exact original private intent")
             os.fsync(child)
-            key = RetentionKey(identity, submission, src.destination, src.account, cid, src.branch, src.node.id,
+            key = RetentionKey(identity, submission, src.destination, src.account, cid, src.branch, node,
                                _birth(kfd), hashlib.sha256(raw).hexdigest())
             key_bytes = key.encode()
             _write_all(kfd, key_bytes)
@@ -407,7 +439,7 @@ def read_retained(connection, root_identity, container, branch, node, consume, *
 def _visit_original(connection, root_identity, container, branch, node, visit, *, exact_key=None):
     destination, account, authorize = _connection(connection)
     source = destination, account, container, branch, node
-    owner = _owner_name(*source)
+    owner = _packet_owner(*source)
     if exact_key is not None and (type(exact_key) is not RetentionKey or exact_key.root != root_identity
                 or (exact_key.destination,exact_key.account,exact_key.container,exact_key.branch,exact_key.node) != source):
         raise Rejected("the chosen key belongs to another original")
@@ -440,7 +472,7 @@ def _visit_original(connection, root_identity, container, branch, node, visit, *
 @dataclass(frozen=True, slots=True)
 class _Packet:
     key: RetentionKey
-    source: SelectedFile
+    source: SelectedFile | FirstFile
     action: Action
     pending: object
     root_area: _PrivateArea
@@ -510,28 +542,36 @@ def _read_retained(identity, source, owner, authorize, visit, occupied):
             action, = plan.actions
             cid, leaf = action.container_id, _leaf(action.container_id)
             saved = obj["source"]
-            src = SelectedFile(saved["destination"], saved["account"], Container(**saved["container"]),
-                               saved["branch"], saved["head"], Node(**saved["node"]))
+            first = obj.get("format") == "macos-first-submit-1"
+            if first:
+                src = FirstFile(saved["destination"], saved["account"], Container(**saved["container"]), saved["branch"])
+                valid_source = type(src.container.revision) is int and src.container.revision == 0 and src.branch == "main"
+                fork = None
+            else:
+                src = SelectedFile(saved["destination"], saved["account"], Container(**saved["container"]),
+                                   saved["branch"], saved["head"], Node(**saved["node"]))
+                valid_source = (type(src.container.revision) is int and src.container.revision > 0
+                                and branch_ok(src.branch) and id_ok(src.head) and _node(src.node)
+                                and src.node.length <= MAX_FILE
+                                and (src.node.length, src.node.sha256) != (action.body.length, action.body.sha256))
+                fork = action.branch
             fields = {"format", "submission", "state", "packet", "body", "intent", "key", "source", "plan"}
             if obj.get("format") == "macos-fskit-submit-1":
                 if type(obj.get("mount")) is not list:
                     raise ValueError()
                 mount = _mount_binding(tuple(obj["mount"]))
                 fields.add("mount")
-            elif obj.get("format") == "macos-private-submit-1":
+            elif obj.get("format") in ("macos-private-submit-1", "macos-first-submit-1"):
                 mount = None
             else:
                 raise ValueError()
             if (obj.keys() != fields or obj["submission"] != key.submission
                     or obj["state"] != list(key.root) or obj["packet"] != list(_birth(child))
                     or obj["intent"] != list(_birth(fd)) or obj["key"] != list(key.issuer) or asdict(src) != saved
-                    or (src.destination, src.account, src.container.id, src.branch, src.node.id) != source
-                    or src.container.id != cid or not _catalog_name(src.container.name)
-                    or type(src.container.revision) is not int or src.container.revision <= 0
-                    or not branch_ok(src.branch) or not id_ok(src.head) or not _node(src.node)
-                    or src.node.length > MAX_FILE or action.kind != "save_node" or action.body.length > MAX_FILE
-                    or action != _operation(src, action.body, action.operation_id, action.node_id, action.branch)
-                    or (src.node.length, src.node.sha256) == (action.body.length, action.body.sha256)
+                    or (src.destination, src.account, src.container.id, src.branch, _source_node(src)) != source
+                    or src.container.id != cid or not _catalog_name(src.container.name) or not valid_source
+                    or action.kind != "save_node" or action.body.length > MAX_FILE
+                    or action != _operation(src, action.body, action.operation_id, action.node_id, fork)
                     or plan.placements != ((cid, leaf),) or canonical(obj) != raw):
                 raise ValueError()
         except (TypeError, KeyError, AttributeError, ValueError, RecursionError) as exc:
