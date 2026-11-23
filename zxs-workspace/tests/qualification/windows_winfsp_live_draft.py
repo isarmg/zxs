@@ -26,11 +26,11 @@ CONSENT = "--consent-create-volume-start-installed-winfsp-and-mount-private-dire
 
 class ActualDirectory(LocalWorkingFile):
     @contextmanager
-    def handle(self, path, rights):
+    def handle(self, path, rights, *, disposition=3, flags=0x80):
         k = c.WinDLL("kernel32.dll", use_last_error=True, winmode=0x800)
         open_ = _function(k, "CreateFileW", P, c.c_wchar_p, U32, U32, P, U32, U32, P)
         close = _function(k, "CloseHandle", I32, P)
-        h = open_(str(path), rights, 7, None, 3, 0x80, None)
+        h = open_(str(path), rights, 7, None, disposition, flags, None)
         if h in (None, c.c_void_p(-1).value):
             raise c.WinError(c.get_last_error())
         try:
@@ -45,6 +45,8 @@ class ActualDirectory(LocalWorkingFile):
         read = _function(k, "ReadFile", I32, P, P, U32, c.POINTER(U32), P)
         write = _function(k, "WriteFile", I32, P, P, U32, c.POINTER(U32), P)
         flush = _function(k, "FlushFileBuffers", I32, P)
+        seek = _function(k, "SetFilePointerEx", I32, P, c.c_int64, P, U32)
+        end = _function(k, "SetEndOfFile", I32, P)
         expected = _remote_mark(ORIGIN + TARGET, self.zone)
         with choice.begin(confirmed=True) as draft, ThreadPoolExecutor(max_workers=1) as worker:
             owner = WindowsPrivateDraftMount(draft, "review.bin", confirmed=True)
@@ -61,9 +63,27 @@ class ActualDirectory(LocalWorkingFile):
                 with self.assertRaises(OSError):
                     with self.handle(path + ":Zone.Identifier", 2):
                         self.fail("the actual native provenance stream granted write")
-                with self.handle(path, 2) as editor:
+                with self.handle(location, 1, flags=0x02000000):  # FILE_FLAG_BACKUP_SEMANTICS, ordinary root list only.
+                    pass
+                with self.handle(path, 0xc0000000, disposition=4):  # OPEN_ALWAYS on an EXISTING file does not create.
+                    pass
+                for rejected, access, disposition in ((str(Path(location) / "other"), 0xc0000000, 4),
+                        (path, 0xc0000000, 2), (path, 0x10000, 3), (path, 0x20, 3),
+                        (path + ":Zone.Identifier", 0x40000000, 3)):
+                    with self.subTest(rejected=rejected, access=access, disposition=disposition), self.assertRaises(OSError):
+                        with self.handle(rejected, access, disposition=disposition):
+                            self.fail("unexpected namespace, overwrite or access grant")
+                with self.handle(path, 0xc0000000) as editor:  # Ordinary GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING.
+                    self.assertTrue(read(editor, buf, 4, c.byref(n), None))
+                    self.assertEqual((n.value, bytes(buf)[:4]), (4, b"seed"))
+                    self.assertTrue(seek(editor, 3, None, 0))
+                    self.assertTrue(end(editor))
+                    self.assertTrue(seek(editor, 0, None, 0))
                     self.assertTrue(write(editor, b"N", 1, c.byref(n), None))
                     self.assertEqual(n.value, 1)
+                    with self.handle(path + ":Zone.Identifier", 0x80000000) as zone:
+                        self.assertTrue(read(zone, buf, len(buf), c.byref(n), None))
+                        self.assertEqual(bytes(buf)[:n.value], expected)
                     owner.stop()
                     until = time.monotonic() + 15
                     while owner.remaining is None and not job.done() and time.monotonic() < until:
@@ -80,7 +100,7 @@ class ActualDirectory(LocalWorkingFile):
                 self.assertEqual(report["outcome"], "original-detached", report)
                 self.assertEqual(report["drained"], 1)
                 review = draft.review(confirmed=True)
-                self.assertEqual((review.length, review.sha256), (4, sha256(b"NWed").hexdigest()))
+                self.assertEqual((review.length, review.sha256), (3, sha256(b"NWe").hexdigest()))
                 self.assertFalse(Path(location).exists())
             finally:
                 if not job.done():

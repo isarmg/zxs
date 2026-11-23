@@ -133,11 +133,18 @@ static PyObject *check_namespace(PyObject *module, PyObject *args)
     req.Req.Create.UserMode = 1; req.Req.Create.OpenTargetDirectory = 1;
     REQUIRE(FspFileSystemEnterOperation(&fs, &req, &rsp) == STATUS_ACCESS_DENIED);
     req.Req.Create.OpenTargetDirectory = 0;
+    req.Req.Create.HasBackupPrivilege = 1;
+    req.Req.Create.CreateOptions = existing | FILE_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT;
+    REQUIRE(FspFileSystemEnterOperation(&fs, &req, &rsp) == STATUS_ACCESS_DENIED);
+    req.Req.Create.HasBackupPrivilege = 0; req.Req.Create.HasRestorePrivilege = 1;
+    REQUIRE(FspFileSystemEnterOperation(&fs, &req, &rsp) == STATUS_ACCESS_DENIED);
+    req.Req.Create.HasRestorePrivilege = 0;
     REQUIRE(FspFileSystemEnterOperation(&fs, &req, &rsp) == STATUS_SUCCESS);
     REQUIRE(FspFileSystemLeaveOperation(&fs, &req, &rsp) == STATUS_SUCCESS);
     REQUIRE(ops.GetSecurityByName(&fs, L"\\", NULL, NULL, NULL) == STATUS_SUCCESS);
     REQUIRE(ops.GetSecurityByName(&fs, data, NULL, sd, &sdbytes) == STATUS_SUCCESS && IsValidSecurityDescriptor(sd));
-    REQUIRE(grants(sd, client, FILE_WRITE_DATA, TRUE) && grants(sd, client, FILE_EXECUTE, FALSE));
+    REQUIRE(grants(sd, client, FILE_GENERIC_READ | FILE_GENERIC_WRITE, TRUE) && grants(sd, client, FILE_EXECUTE, FALSE) &&
+            grants(sd, client, DELETE, FALSE) && grants(sd, client, WRITE_DAC, FALSE));
     REQUIRE(ops.GetSecurityByName(&fs, (PWSTR)other, NULL, NULL, NULL) == STATUS_OBJECT_NAME_NOT_FOUND);
     REQUIRE(ops.Open(&fs, L"\\", existing | FILE_DIRECTORY_FILE, FILE_GENERIC_READ | FILE_TRAVERSE,
                      &root, &fi) == STATUS_SUCCESS && (fi.FileAttributes & FILE_ATTRIBUTE_DIRECTORY));
@@ -148,7 +155,10 @@ static PyObject *check_namespace(PyObject *module, PyObject *args)
             !memcmp(di->FileNameBuf, alias, sizeof alias - sizeof(WCHAR)));
     REQUIRE(ops.ReadDirectory(&fs, root, NULL, (PWSTR)alias, b, 2, &used) == STATUS_SUCCESS && used == 2 && !*(UINT16 *)b);
     REQUIRE(ops.Open(&fs, data, existing, FILE_EXECUTE, &refused, &fi) == STATUS_ACCESS_DENIED && !refused);
-    REQUIRE(ops.Open(&fs, data, existing, FILE_GENERIC_READ | FILE_WRITE_DATA, &file, &fi) == STATUS_SUCCESS);
+    REQUIRE(ops.Open(&fs, data, existing | FILE_OPEN_FOR_BACKUP_INTENT, FILE_GENERIC_READ, &refused, &fi) == STATUS_ACCESS_DENIED);
+    REQUIRE(ops.Open(&fs, data, FILE_OVERWRITE_IF << 24, FILE_GENERIC_WRITE, &refused, &fi) == STATUS_ACCESS_DENIED);
+    REQUIRE(ops.Open(&fs, data, (FILE_OPEN_IF << 24) | FILE_WRITE_THROUGH, FILE_GENERIC_WRITE, &refused, &fi) == STATUS_ACCESS_DENIED);
+    REQUIRE(ops.Open(&fs, data, FILE_OPEN_IF << 24, FILE_GENERIC_READ | FILE_GENERIC_WRITE, &file, &fi) == STATUS_SUCCESS);
     REQUIRE(ops.GetStreamInfo(&fs, file, b, sizeof(FSP_FSCTL_STREAM_INFO), &used) == STATUS_BUFFER_TOO_SMALL && !used);
     REQUIRE(ops.GetStreamInfo(&fs, file, b, sizeof b, &used) == STATUS_SUCCESS);
     FSP_FSCTL_STREAM_INFO *def = (FSP_FSCTL_STREAM_INFO *)b;
@@ -165,7 +175,7 @@ static PyObject *check_namespace(PyObject *module, PyObject *args)
             grants(b, client, FILE_APPEND_DATA, FALSE) && grants(b, client, FILE_EXECUTE, FALSE));
     REQUIRE(ops.Write(&fs, mark, (PVOID)"X", 0, 1, FALSE, FALSE, &used, &fi) == STATUS_ACCESS_DENIED);
     REQUIRE(ops.Write(&fs, file, (PVOID)"W", 0, 1, FALSE, FALSE, &used, &fi) == STATUS_SUCCESS && used == 1);
-    REQUIRE(!ops.SetSecurity && !ops.SetDelete && !ops.Rename);
+    REQUIRE(!ops.SetSecurity && !ops.SetDelete && !ops.Rename && !ops.SetEa && !ops.SetBasicInfo);
     REQUIRE(ZwDraftStopNewOpens(&fs, &count) && count == 3);
     ops.Close(&fs, root); ops.Close(&fs, mark); ops.Close(&fs, file);
     REQUIRE(ZwDraftStopNewOpens(&fs, &count) && !count);

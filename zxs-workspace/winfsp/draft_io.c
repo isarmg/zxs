@@ -267,7 +267,7 @@ static int bind_file_plane(FSP_FILE_SYSTEM *fs, PyObject *plane, BOOL scoped)
     FspFileSystemSetOperationGuard(fs, deny_dispatch, NULL);
     DRAFT_BINDING *b = PyMem_Calloc(1, sizeof *b);
     if (!b) { PyErr_NoMemory(); return 0; }
-    if (scoped && !session_policy(&b->policy, FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_APPEND_DATA,
+    if (scoped && !session_policy(&b->policy, FILE_GENERIC_READ | FILE_GENERIC_WRITE,
                                    FILE_GENERIC_READ | FILE_TRAVERSE)) {
         PyMem_Free(b); PyErr_SetString(PyExc_PermissionError, "ordinary Windows logon required"); return 0;
     }

@@ -9,7 +9,8 @@ READ, WRITE, APPEND = 1, 2, 4
 ATTR, CONTROL, SYNC = 0x80, 0x20000, 0x100000
 _ALLOWED = READ | WRITE | APPEND | ATTR | CONTROL | SYNC
 _ROOT, _DATA, _ZONE = 1, 2, 3
-_READ_EA, _TRAVERSE = 0x8, 0x20
+_READ_EA, _WRITE_EA, _TRAVERSE, _WRITE_ATTR = 0x8, 0x10, 0x20, 0x100
+_BACKUP_INTENT = 0x4000
 _MARK = ":Zone.Identifier"
 _DIRECTORY, _NON_DIRECTORY = 0x1, 0x40
 # Sequential/random hints, synchronous alert/nonalert and the ordinary nondirectory constraint.
@@ -92,6 +93,10 @@ class WindowsDraftFilePlane:
             rights = (_ALLOWED if kind == _DATA else READ | ATTR | CONTROL | SYNC)
             if self._namespace:
                 rights |= _READ_EA  # Generic read; this volume does not implement EAs.
+                if kind == _DATA:
+                    # Ordinary GENERIC_WRITE includes these compatibility bits; the volume
+                    # still does not implement SetEa/SetBasicInfo, execute or delete.
+                    rights |= _WRITE_EA | _WRITE_ATTR
             if kind == _ROOT:
                 rights |= _TRAVERSE
             if type(options) is not int or type(granted) is not int or granted < 0 or granted & ~rights:
@@ -100,8 +105,16 @@ class WindowsDraftFilePlane:
                 raise NotADirectoryError("not a Windows directory")
             if options & _NON_DIRECTORY and kind == _ROOT:
                 raise IsADirectoryError("the Windows view root is not a file")
-            if options >> 24 != 1 or options & 0xffffff & ~(_OPTIONS | _DIRECTORY | _NON_DIRECTORY):
-                raise PermissionError("this Windows callback profile never creates or replaces")
+            allowed = _OPTIONS | _DIRECTORY | _NON_DIRECTORY
+            if self._namespace and kind == _ROOT:
+                # Win32 needs FILE_FLAG_BACKUP_SEMANTICS to open a directory handle. This is
+                # NOT an elevated backup: the native guard refused backup/restore privileges
+                # and the SDK checked this ordinary user against the original root SD.
+                allowed |= _BACKUP_INTENT
+            dispositions = (1, 3) if self._namespace and kind == _DATA else (1,)  # FILE_OPEN[_IF].
+            if options >> 24 not in dispositions or options & 0xffffff & ~allowed:
+                raise PermissionError("only an existing admitted Windows object may be opened")
+
             if len(self._rows) >= 1024 or self._next >= 1 << 63:
                 raise MemoryError("Windows file-context budget exhausted")
             slot = self._next

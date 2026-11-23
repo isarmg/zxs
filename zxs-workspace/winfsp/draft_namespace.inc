@@ -5,10 +5,13 @@ static NTSTATUS check_enter(FSP_FILE_SYSTEM *fs, FSP_FSCTL_TRANSACT_REQ *req, FS
     if (!b || !b->scoped || !b->ready || !req || !rsp) return STATUS_ACCESS_DENIED;
     if (FspFsctlTransactCreateKind == req->Kind) {
         UINT32 opts = req->Req.Create.CreateOptions;
+        UINT32 disposition = opts >> 24;
         if (!req->Req.Create.UserMode || req->Req.Create.OpenTargetDirectory ||
             req->Req.Create.HasBackupPrivilege || req->Req.Create.HasRestorePrivilege ||
-            FILE_OPEN != (opts >> 24) || (opts & (FILE_DELETE_ON_CLOSE | FILE_OPEN_BY_FILE_ID |
-                       FILE_OPEN_FOR_BACKUP_INTENT | FILE_OPEN_REPARSE_POINT)))
+            (disposition != FILE_OPEN && disposition != FILE_OPEN_IF) ||
+            (opts & (FILE_DELETE_ON_CLOSE | FILE_OPEN_BY_FILE_ID | FILE_OPEN_REPARSE_POINT)) ||
+            ((opts & FILE_OPEN_FOR_BACKUP_INTENT) && disposition != FILE_OPEN) ||
+            req->Req.Create.Ea.Size || req->Req.Create.EaIsReparsePoint)
             return STATUS_ACCESS_DENIED;
         AlignedBuffer buffer;
         PSID sid = local_logon(FSP_FSCTL_TRANSACT_REQ_TOKEN_HANDLE(req->Req.Create.AccessToken), &buffer);
