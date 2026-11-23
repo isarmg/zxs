@@ -334,7 +334,7 @@ impl Reply {
         }
     }
     fn render(self, pool: Id, init: Id) -> (u8, String) {
-        let hex = |v: Id| v.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let hex = |v: Id| crate::fs_tools::lower_hex(&v);
         let mut text = format!(
             "池 {}，已指定的历史 INIT {}（不是导入凭据）。\n",
             hex(pool),

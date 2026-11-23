@@ -2,7 +2,7 @@
 //! digest and framing. A valid receipt for an incomplete check is not a clean result.
 use super::{Framing, Outcome, Report, valid_counts};
 use crate::pinned::invalid;
-use std::io;
+use std::{fmt::Write as _, io};
 impl Report {
     pub(in crate::volume_images) const WIRE_SIZE: usize = 57;
     pub(in crate::volume_images) fn packet(&self, digest: &[u8; 32]) -> [u8; 57] {
@@ -91,7 +91,7 @@ impl Report {
             }
         );
         if let Some((d, f)) = self.counts {
-            s.push_str(&format!("上游报告目录数：{d}（含根）；文件数：{f}。"));
+            write!(s, "上游报告目录数：{d}（含根）；文件数：{f}。").expect("writing to String");
         }
         s.push_str("只检查这份封存副本，未修复。");
         s

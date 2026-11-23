@@ -185,7 +185,7 @@ impl Installation {
 
 fn receipt_fields(pool: Id, op: Id, confirmed_sha: Option<[u8; 32]>) -> String {
     fn hex(v: &[u8]) -> String {
-        v.iter().map(|b| format!("{b:02x}")).collect()
+        crate::fs_tools::lower_hex(v)
     }
     let mut fields = format!("pool={} operation={}", hex(&pool), hex(&op));
     if let Some(sha) = confirmed_sha {

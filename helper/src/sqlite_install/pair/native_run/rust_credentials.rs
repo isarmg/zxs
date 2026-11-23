@@ -508,7 +508,7 @@ fn launch(
     ))
 }
 fn hex(b: &[u8]) -> String {
-    b.iter().map(|v| format!("{v:02x}")).collect()
+    crate::fs_tools::lower_hex(b)
 }
 fn preview(m: &Manifest, v: &Observed) -> io::Result<String> {
     let site = m.plan.origin;

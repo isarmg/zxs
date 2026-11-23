@@ -213,7 +213,7 @@ pub(super) fn drop_to_storage(uid: u32, gid: u32) -> io::Result<()> {
 }
 
 fn hex(v: &[u8]) -> String {
-    v.iter().map(|b| format!("{b:02x}")).collect()
+    crate::fs_tools::lower_hex(v)
 }
 fn escaped(raw: &[u8]) -> String {
     raw.iter()

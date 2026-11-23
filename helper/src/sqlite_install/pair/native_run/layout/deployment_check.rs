@@ -30,7 +30,7 @@ fn unavailable() -> io::Error {
 }
 type Id = [u8; 16];
 fn hex(id: &Id) -> String {
-    id.iter().map(|v| format!("{v:02x}")).collect()
+    crate::fs_tools::lower_hex(id)
 }
 
 pub(super) struct Question {

@@ -85,10 +85,7 @@ pub(super) fn offer(
     child.live()?;
     helper.require()?;
     require()?;
-    let code = ready[2..34]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let code = crate::fs_tools::lower_hex(&ready[2..34]);
     tty.report(&format!("仅本机 {} 镜像工作副本请求：http://127.0.0.1:{port}/\n一次性配对码（2 分钟有效，请勿分享）：{code}\n网页只把请求交回这个终端，不读取或修复镜像。\n",format.panel_label()))?;
     let end = wait + WINDOW;
     let (request, []) =

@@ -50,7 +50,7 @@ fn live() -> io::Result<()> {
     }
 }
 fn print_sha(v: &[u8; 32]) -> String {
-    v.iter().map(|b| format!("{b:02x}")).collect()
+    crate::fs_tools::lower_hex(v)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -343,7 +343,7 @@ impl Destination {
         let work = OsString::from(format!(
             "{}{}",
             format.slug(),
-            slug.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            crate::fs_tools::lower_hex(&slug)
         ));
         if name == work {
             return Err(no());

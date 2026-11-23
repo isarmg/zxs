@@ -480,7 +480,7 @@ impl<'a> FreshConsent<'a> {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::fs_tools::lower_hex(bytes)
 }
 fn preview(
     resolved: &ResolvedRust,

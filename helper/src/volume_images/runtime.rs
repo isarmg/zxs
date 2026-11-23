@@ -443,11 +443,12 @@ mod tests {
     }
     #[test]
     fn protected_profile_has_exact_version_eight_named_digests_and_no_paths_or_extra_switches() {
-        let lines = KEYS
-            .iter()
-            .map(|k| format!("{k} {}\n", "12".repeat(32)))
-            .collect::<String>();
-        let valid = format!("{PROFILE}\n{lines}");
+        use std::fmt::Write as _;
+        let mut valid = format!("{PROFILE}\n");
+        let digest = "12".repeat(32);
+        for key in KEYS {
+            writeln!(valid, "{key} {digest}").unwrap();
+        }
         assert!(pins_for(Engine::Copy(Format::Fat32), valid.as_bytes()).is_ok());
         let ex = valid
             .replace(PROFILE, EX_PROFILE)

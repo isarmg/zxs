@@ -93,7 +93,7 @@ struct Report {
     unknown: usize,
 }
 fn hex(id: &[u8; 16]) -> String {
-    id.iter().map(|b| format!("{b:02x}")).collect()
+    crate::fs_tools::lower_hex(id)
 }
 fn escaped(path: &Path) -> String {
     path.as_os_str()

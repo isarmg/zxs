@@ -305,7 +305,7 @@ impl Reply {
         }
     }
     fn render(self, [pool, init, volume]: [Id; 3]) -> (u8, String) {
-        let hex = |v: Id| v.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let hex = |v: Id| crate::fs_tools::lower_hex(&v);
         let mut text = format!(
             "池 {}，请求检查卷 {}；所给历史 INIT {} 不是退盘凭据。\n",
             hex(pool),

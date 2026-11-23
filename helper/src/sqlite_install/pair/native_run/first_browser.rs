@@ -116,10 +116,7 @@ pub(in crate::sqlite_install::pair) fn offer_phase(
     if port == 0 || address[2..34] == [0; 32] || address[34..] != [0; 31] {
         return Err(no());
     }
-    let code = address[2..34]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let code = crate::fs_tools::lower_hex(&address[2..34]);
     tty.report(&format!("仅本机首次安装请求：http://127.0.0.1:{port}/\n配对码（2 分钟有效，请勿分享）：{code}\n网页不提供存储写权限。确认之后回本终端校验原范围。\n"))?;
     drop(code);
     let end = Instant::now() + PANEL + Duration::from_secs(3);

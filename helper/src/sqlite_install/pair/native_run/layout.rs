@@ -444,7 +444,7 @@ impl Originals {
         );
         paths_preview.push_str("\"；只核卷身份与固定标记。\n");
         for (c, (id, _)) in choices.iter().zip(&ordinary) {
-            let hex = id.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            let hex = crate::fs_tools::lower_hex(id);
             paths_preview.push_str("  已选原路径 \"");
             smb_profile::escaped(&mut paths_preview, c.path.as_os_str().as_bytes());
             writeln!(paths_preview, "\" → 原普通卷 {hex}。").expect("writing a String");

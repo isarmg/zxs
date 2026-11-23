@@ -27,7 +27,7 @@ fn challenge() -> io::Result<String> {
     loop {
         match getrandom(&mut bytes[..], GetRandomFlags::NONBLOCK) {
             Ok(16) if bytes != [0; 16] => {
-                return Ok(bytes.iter().map(|b| format!("{b:02x}")).collect());
+                return Ok(crate::fs_tools::lower_hex(&bytes[..]));
             }
             Err(Errno::INTR) => {}
             Err(e) => return Err(e.into()),

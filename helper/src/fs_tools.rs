@@ -149,6 +149,24 @@ pub(crate) fn hex(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+/// Fixed lower-case ASCII, two digits for each byte, including leading zeroes.
+pub(crate) fn lower_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::new();
+    for &byte in bytes {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
+#[cfg(test)]
+#[test]
+fn byte_hex_keeps_both_digits_and_lowercase() {
+    assert_eq!(lower_hex(&[]), "");
+    assert_eq!(lower_hex(&[0, 0x0f, 0x10, 0xba, 0xff]), "000f10baff");
+}
+
 #[derive(Debug)]
 pub(crate) struct Query {
     selected: Option<usize>,
