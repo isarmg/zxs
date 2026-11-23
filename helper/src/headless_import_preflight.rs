@@ -162,7 +162,7 @@ pub(super) fn scan(
     selected: &FreshSelection,
     source: &Path,
     preview: Option<&mut Vec<u8>>,
-    names: Option<&[String]>,
+    target_names: Option<&[String]>,
     require_roles: impl Fn() -> io::Result<()>,
 ) -> io::Result<Counts> {
     let pin = Pinned::local_storage(source, &selected.scope)?;
@@ -201,7 +201,7 @@ pub(super) fn scan(
         Ok(())
     };
     check()?;
-    let counts = census(directory.try_clone()?, root, before, preview, names)?;
+    let counts = census(directory.try_clone()?, root, before, preview, target_names)?;
     check()?;
     Ok(counts)
 }
@@ -295,7 +295,7 @@ fn census(
     root: Stamp,
     mount: Mount,
     mut preview: Option<&mut Vec<u8>>,
-    names: Option<&[String]>,
+    target_names: Option<&[String]>,
 ) -> io::Result<Counts> {
     let mut frames = vec![Frame::open(dir, root, mount, 0, None)?];
     let mut counts = Counts::default();
@@ -358,7 +358,7 @@ fn census(
                 } else if !candidate {
                     add_count(&mut counts.invalid_top_level_names)?;
                 }
-                let status = name_status(raw, candidate, names);
+                let status = name_status(raw, candidate, target_names);
                 if matches!(status, PreviewName::Occupied) {
                     add_count(&mut counts.target_collisions)?;
                 }
@@ -389,7 +389,7 @@ fn census(
     Ok(counts)
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PreviewName {
     MappingRequired,
     SameName,

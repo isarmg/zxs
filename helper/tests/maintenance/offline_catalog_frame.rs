@@ -23,10 +23,9 @@ fn catalog_frames_preserve_case_and_require_a_complete_footer_and_eof() {
         decode_frame(&mut good.as_slice(), DESCRIPTOR).unwrap(),
         ["A", "a", "方案"]
     );
-    assert!(
-        decode_frame(&mut framed(&[]).as_slice(), DESCRIPTOR)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        decode_frame(&mut framed(&[]).as_slice(), DESCRIPTOR).unwrap(),
+        Vec::<String>::new()
     );
     for cut in 0..good.len() {
         assert!(decode_frame(&mut &good[..cut], DESCRIPTOR).is_err());
