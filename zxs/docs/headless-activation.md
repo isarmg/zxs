@@ -1,6 +1,6 @@
 # 部署 HTTPS 入口
 
-服务只监听私有 Unix 套接字 `/zxs/run/headless.sock`。Workspace 连接独立的 nginx HTTPS 入口，优先 HTTP/2。外部 nginx 负责 TLS 和接收完整 HTTP 请求，服务用专用 Unix 对端 UID 和原始账户凭据认证。代理不承担容器授权，不把转发的用户或来源当作身份。
+服务只监听私有 Unix 套接字 `/zxs/run/headless.sock`。Workspace 经 HTTPS HTTP/2 访问独立的 nginx 网关，不回退到 HTTP/1.1。只有 nginx 到存储服务的私有 Unix 套接字使用 HTTP/1.1。外部 nginx 负责 TLS 和接收完整 HTTP 请求，服务用专用 Unix 对端 UID 和原始账户凭据认证。代理不承担容器授权，不把转发的用户或来源当作身份。
 
 ## 准备主机
 
@@ -11,6 +11,8 @@
 - 有效配置固定为 `/etc/zxs-gateway/nginx.conf`。`/etc/zxs-gateway` 和配置文件由 root 所有、组和其他用户不可写；配置文件为普通文件、单硬链接，服务 UID 必须能遍历父目录并只读打开此文件（例如目录 `0755`、文件 `0644`）。不要在配置里放私钥内容。配置必须独立，禁止 include、热更新、重载和在线二进制替换。变更时停止两个进程，重新审核和入选。
 
 ## 审核和入选
+
+模板启用 TLS HTTP/2，在服务器级检查 nginx 的 [`$http2`](https://nginx.org/en/docs/http/ngx_http_v2_module.html#variables)，只允许 `h2` 进入路由。原版 nginx 仍可能在 TLS 握手中选出 `http/1.1`；若请求进入处理阶段，网关以 [`return 444`](https://nginx.org/en/docs/http/ngx_http_rewrite_module.html#return) 断开，不发响应头，也不转发给存储服务。部署时核对客户端确实协商为 `h2`，并确认 HTTP/1.1 不会到达后端。
 
 使用已审核的 nginx 构建。模板依据 [nginx 请求缓冲文档](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_request_buffering)和 [nginx 1.30.7 HTTP/2 请求体实现](https://github.com/nginx/nginx/blob/release-1.30.7/src/http/v2/ngx_http_v2.c#L3859-L3984)：完整收完原始请求且声明长度正确，才建立上游请求。同样确认所选构建和最终配置对取消、提前断流和正文长度不符的请求不发给上游。禁止改变请求路径、自动重试、升级、转发 trailers 或重设原始 Authorization；不把客户端声明的 Content-Length 直接覆盖到上游。GET/DELETE 必须无正文；写请求提供单一、规范的 Content-Length。前端只转发协议路由前缀，具体操作和权限仍由服务判定。校对证书、HTTP/2、账户映射、暂存空间和进程隔离后再入选。
 

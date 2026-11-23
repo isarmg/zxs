@@ -31,6 +31,9 @@ http {
         client_max_body_size 0;
         gzip off;
 
+        # Enforce HTTP/2 before any public location can reach the private upstream.
+        if ($http2 != h2) { return 444; }
+
         location /zxs/v1/ {
             if ($zxs_bad_original_length) { return 400; }
             if ($http_transfer_encoding != "") { return 400; }
