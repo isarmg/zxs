@@ -281,13 +281,13 @@ fn management_navigation_is_current_parent_scoped_and_byte_ordered(){
         .unwrap_err().kind(),io::ErrorKind::WouldBlock);
 
     let op=id(9,0);let old=id(0,0);let member=id(2,0);
-    let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/RENAME-DIRECTORY\0").unwrap();
-    for value in [POOL.0,old,volume.0,root,parent.0,member,op,old,share.0,mode,SETUP.0,keys.smb]{h.update(&value).unwrap();}
+    let mut h=Sha256::new();h.update(b"ZXS-SQLITE-1/PLACE-DIRECTORY\0").unwrap();
+    for value in [POOL.0,old,volume.0,root,parent.0,member,op,old,root,root,share.0,mode,SETUP.0,keys.smb]{h.update(&value).unwrap();}
     h.update(&1i64.to_be_bytes()).unwrap();h.update(&1i64.to_be_bytes()).unwrap();
     bytes(&mut h,"Projects");bytes(&mut h,"Renamed");
     db.fixed(c"BEGIN IMMEDIATE").unwrap();
-    write(format!("INSERT INTO directory_rename VALUES({},{},{},1,{},{},{},{},{})",
-        literal(&op),literal(&parent.0),literal(&old),literal(b"Projects"),literal(b"Renamed"),
+    write(format!("INSERT INTO directory_rename VALUES({},{},{},1,{},{},{},{},{},{},{})",
+        literal(&op),literal(&parent.0),literal(&old),literal(&root),literal(&root),literal(b"Projects"),literal(b"Renamed"),
         literal(&share.0),literal(&mode),literal(&SETUP.0)));
     operation(op,16,keys.smb,h.finish(),0);
     db.fixed(c"COMMIT").unwrap();

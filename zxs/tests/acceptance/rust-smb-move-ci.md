@@ -10,7 +10,7 @@
 
 ## 实际正向证据
 
-1. 复用[配对构建](../../../.github/workflows/linux-paired-build.yml)的固定工具链、浏览器嵌入校验和独立 `private-fresh-install` Helper。配对测量仅保留独立 `measurement.json`，使用同一构建和精确的 v20 目录；其摘要须单独批准后才能交给来宾。源自同一修订的历史只读观察程序以前置 `cargo test --no-run` 单独产生，不进入正式 ELF。
+1. 复用[配对构建](../../../.github/workflows/linux-paired-build.yml)的固定工具链、浏览器嵌入校验和独立 `private-fresh-install` Helper。配对测量仅保留独立 `measurement.json`，使用同一构建和精确的 v21 目录；其摘要须单独批准后才能交给来宾。源自同一修订的历史只读观察程序以前置 `cargo test --no-run` 单独产生，不进入正式 ELF。
 2. 复用[来宾挂载预检](../../../.github/workflows/linux-guest-preflight.yml)和[终端观察](../../../.github/workflows/linux-guest-terminal-preflight.yml)的签名 Ubuntu 镜像、无外部网卡 QEMU TCG 与只读种子。分别新建 S/F1/F2/R 四份整盘 ext4，验证虚拟序列号、设备、大小、RW 保护挂载和不同 UUID。之前的只读 A/B 与两份 Helper 测试盘不同于这四份盘。
 3. 在原真实前台 PTY 完成 INIT、SETUP 和正常 `zxs` 启动，核 exact preview/原回执、关闭的终端审计、候选凭据进程限额及原产品内存锁检查。实际确认两个降权同 ELF 子进程共用放行；独立 Web 登录和签名 SMB 用客户端验证监听真能用。口令只在来宾中临时生成，进入原隐藏终端和继承的密封只读 FD。Runner 没有外部桥接、代理或共享主机盘。Ubuntu 官方 Samba 仅用其独立客户端；只传原执行文件和依赖文件，未运行包安装脚本或 Samba 服务。
 4. 真实 SMB 写入 A、B 后以原 Web 手动表单分别提交，保留两个 Node 和 SAVE。`stock` 用签名 Samba rename 验证现行 B；`original` 验证同一原 OPEN 仍读 B、签名完成、重新打开读 C。对照原 SYSTEM 稳定的 FileId、唯一 kind-12/direction=3、原放置代和准确工作头。通过实际持有的对应 F1/F2 分别读出两个历史全文，核对原源名称清退，再真正排空和回收服务。丢答、目标磁盘失联另作验收。

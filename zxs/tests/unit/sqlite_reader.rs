@@ -119,7 +119,7 @@ fn pending_pool_extra_schema_and_unexpected_wal_are_not_accepted_or_repaired(){
 #[test]
 #[ignore="source-only exact older header fixtures; never open an existing pool"]
 fn previous_formats_are_rejected_by_the_family_gate_and_not_rewritten(){
-    for version in [16,17,18,19]{
+    for version in [16,17,18,19,20]{
         let t=PrivateTemp::under(&std::env::temp_dir());
         // Give it otherwise-canonical rows/shape to isolate the header gate.
         // A prior version must fail before its catalog/credentials are read.

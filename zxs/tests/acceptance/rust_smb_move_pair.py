@@ -18,7 +18,7 @@ HELPER_BUILD_PATH = "/helper/build"
 HELPER_FEATURE = "private-fresh-install"  # The one exact fresh deployment used by both acceptance and measurement.
 HELPER_CARGO_CONFIG = Path("helper/.cargo/config.toml")
 HELPER_CARGO_CONFIG_SHA256 = "9523c1d40a68e848d7ab68b258828f7f5ccb38e6e63e740ed8369e93776fd29e"
-SCHEMA_SHA256 = "1a88b3e09eb8604340967f2d4f4e95177099a6ac3f54aef0af8f7f9a8f7bd3f3"
+SCHEMA_SHA256 = "4d54de32c0004f7b5c0ed6af44a556d8add56517518cf7d8b0a5fe8bb158a0f4"
 RUST_RELEASE = "https://static.rust-lang.org/dist/2026-11-12"
 # Same distribution archives as the Linux paired build receipts workflow.
 ARCHIVES = (
@@ -222,7 +222,7 @@ def _build_pair(repo, commit, build, inspect_digest, mark=lambda _phase: None):
     staged, trees, helper_config = stage_source(repo, commit, build, env)
     zxs, helper = staged / "zxs", staged / "helper"
     require(sha256(zxs / "src/system/schema.sql") == sha256(helper / "src/sqlite_install/schema.sql") == SCHEMA_SHA256,
-            "both products must contain the exact immutable v20 acceptance schema")
+            "both products must contain the exact immutable v21 acceptance schema")
     raw_pin = bounded_read(zxs / "browser-stage.sha256", 65)
     require(re.fullmatch(rb"[0-9a-f]{64}\n", raw_pin), "invalid reviewed browser stage pin")
     pin = raw_pin[:-1].decode("ascii")

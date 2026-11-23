@@ -12,7 +12,7 @@ pub(crate) struct DirectoryRename<'a>{
     old:CString,new:CString,side:DirectoryRenameSide,live_owner:bool,
 }
 
-fn leaf(value:&str)->io::Result<CString>{
+pub(super) fn leaf(value:&str)->io::Result<CString>{
     let raw=crate::display::component(value.as_bytes(),255)?;
     if crate::ordinary::portable_birth::Birth::reserved_spelling(raw.as_bytes()){return Err(unknown());}
     CString::new(value).map_err(|_|unknown())
@@ -57,9 +57,7 @@ impl<'a> DirectoryRename<'a>{
             if live_owner{
                 let target=result.target_room(&formed)?;
                 if result.new.to_bytes().len()>result.old.to_bytes().len(){
-                    let mut remaining=MAX_GEOMETRY_NAMES;
-                    let maximum=CString::new(vec![b'x';255]).map_err(|_|unknown())?;
-                    subtree_fits(&result.held.dir,target,&maximum,&mut remaining)?;
+                    check_subtree_growth(&result.held.dir,target)?;
                 }
             }
             Ok(())
@@ -175,6 +173,11 @@ impl<'a> DirectoryRename<'a>{
 // retained relative FDs and no regular file is opened for its contents.
 // Large trees fail before a request is issued instead of pausing forever.
 const MAX_GEOMETRY_NAMES:usize=32_768;
+pub(super) fn check_subtree_growth(dir:&HeldDir,proposed:PathBudget)->io::Result<()>{
+    let maximum=CString::new(vec![b'x';255]).map_err(|_|unknown())?;
+    let mut remaining=MAX_GEOMETRY_NAMES;
+    subtree_fits(dir,proposed,&maximum,&mut remaining)
+}
 fn subtree_fits(dir:&HeldDir,proposed:PathBudget,maximum:&CStr,remaining:&mut usize)->io::Result<()>{
     // Preserve future names too, not only today's material. At a currently
     // real directory the widest reserved shape is a private transfer

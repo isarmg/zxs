@@ -165,11 +165,12 @@ impl RustOrdinaryDirectory{
     pub(crate) fn original_parent_components(&self)->impl Iterator<Item=&str>{
         std::iter::once(self.label.as_str()).chain(self.route.parent_components())
     }
+    pub(crate) fn original_folder_label(&self)->&str{&self.label}
     pub(crate) fn original_leaf(&self)->Option<&str>{self.route.selected().map(|p|p.name())}
 
-    pub(crate) fn rename_in_parent(&mut self,tree:&RustRoot,ask:&OrdinaryDirectoryRenameAdmission<'_>)
+    pub(crate) fn rename_original(&mut self,tree:&RustRoot,ask:&OrdinaryDirectoryRenameAdmission<'_>)
         ->io::Result<RustDirectoryRename>{
-        let (member,_)=ask.held(tree.pool(),self.nested().ok_or_else(denied)?)?;
+        let (member,_,_)=ask.held(tree.pool(),self.nested().ok_or_else(denied)?)?;
         if !self.parent_allows_file_write(){return Err(denied());}
         self.require_current(tree,member)?;
         let source=self.source(tree,member)?;
@@ -179,7 +180,7 @@ impl RustOrdinaryDirectory{
         let media=self.media.take().ok_or_else(denied)?;
         let mut physical=OrdinaryRoot::adopt_media(source,media);
         let mut owner=Some(physical.take_directory_leaf().map_err(unknown_relabel)?);
-        let (route,leaf,receipt)=match ordinary_directory::relabel_rust(tree,ask,&self.label,self.grant,&self.route,&mut owner){
+        let (route,leaf,receipt,destination)=match ordinary_directory::relabel_rust(tree,ask,&self.label,self.grant,&self.route,&mut owner){
             Ok(moved)=>moved,
             Err(e) if e.kind()==io::ErrorKind::ConnectionAborted=>return Err(e),
             Err(e)=>{
@@ -189,7 +190,13 @@ impl RustOrdinaryDirectory{
                 return Err(e);
             },
         };
-        physical.return_directory_leaf(leaf).map_err(unknown_relabel)?;
+        if let Some(media)=destination{
+            let destination=OrdinaryRoot::adopt_media(source,media);
+            let containing=destination.parent();
+            physical.adopt_directory_parent(destination,containing,leaf).map_err(unknown_relabel)?;
+        }else{
+            physical.return_directory_leaf(leaf).map_err(unknown_relabel)?;
+        }
         self.route=route;
         self.media=Some(physical.into_media());
         let proof=RustDirectoryRename{original:receipt,open:Rc::downgrade(&self.open)};

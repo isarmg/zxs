@@ -202,6 +202,8 @@ unsafe extern "C"{
 #[path="directory_rename.rs"]
 mod rename;
 pub(crate) use rename::{DirectoryRename,DirectoryRenameSide};
+#[path="directory_parent_move.rs"]
+pub(crate) mod parent_move;
 
 #[cfg(test)]
 #[path = "../../tests/unit/attached/fs/directory_birth/tests.rs"]

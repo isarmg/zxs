@@ -79,5 +79,5 @@ int zxs_sql_template(const char *ddl,sqlite3 **result) {
 int zxs_sql_family(sqlite3 *actual) {
     if(sqlite3_get_autocommit(actual))return SQLITE_MISUSE;
     int rc=one(actual,"PRAGMA main.application_id",SQLITE_INTEGER,0x5a585331,NULL);
-    return rc==SQLITE_OK ? one(actual,"PRAGMA main.user_version",SQLITE_INTEGER,20,NULL) : rc;
+    return rc==SQLITE_OK ? one(actual,"PRAGMA main.user_version",SQLITE_INTEGER,21,NULL) : rc;
 }

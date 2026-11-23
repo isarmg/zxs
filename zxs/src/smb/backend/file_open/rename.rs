@@ -40,22 +40,31 @@ struct NativeMoveName<'a>{label:&'a str,parents:Vec<&'a str>,name:&'a str}
 const NATIVE_MOVE_RELATIVE_BYTES:usize=4096;
 fn file_target<'n,'p>(path:&'n TreeName,rooted:bool,replace:bool,standalone:bool,label:&str,
     parent:impl Iterator<Item=&'p str>)->Result<FileRenameTarget<'n>,NameError>{
-    match same_parent_leaf(path,rooted,parent){
+    rename_target(path,rooted,replace,standalone,label,parent,222)
+}
+
+pub(in crate::smb::backend) fn rename_target<'n,'p>(path:&'n TreeName,rooted:bool,replace:bool,standalone:bool,label:&str,
+    parent:impl Iterator<Item=&'p str>,maximum:usize)->Result<FileRenameTarget<'n>,NameError>{
+    match ordinary_parent_leaf(path,rooted,parent,maximum){
         Ok(leaf)=>return Ok(FileRenameTarget::SameParent(leaf)),
         Err(NameError::Field(FieldError::Unsupported)) if standalone&&!rooted&&!replace=>{},
         Err(e)=>return Err(e),
     }
     // Native's narrow explicit MOVE form, not general SMB path resolution.
     // The only permitted label is the source OPEN's own enrolled F.
-    let NativeMoveName{label,parents,name}=native_move_name(path,|s|s==label)?;
+    let NativeMoveName{label,parents,name}=native_move_name_with_max(path,|s|s==label,maximum)?;
     Ok(FileRenameTarget::OtherParent{label,parents,name})
 }
 
 fn native_move_name(path:&TreeName,accept_label:impl FnOnce(&str)->bool)->Result<NativeMoveName<'_>,NameError>{
+    native_move_name_with_max(path,accept_label,222)
+}
+
+fn native_move_name_with_max(path:&TreeName,accept_label:impl FnOnce(&str)->bool,maximum:usize)->Result<NativeMoveName<'_>,NameError>{
     let mut parts=path.components();
     let name=parts.next_back().ok_or(NameError::InvalidName)?;
     let label=parts.next().filter(|s|accept_label(s)).ok_or(NameError::Field(FieldError::Unsupported))?;
-    if name.len()>222{return Err(NameError::TooLong);}
+    if name.len()>maximum{return Err(NameError::TooLong);}
     // The Native relative part excludes the F label. Its depth includes
     // the terminal FILE name and its byte budget includes separators.
     let (mut depth,mut bytes)=(1, name.len());

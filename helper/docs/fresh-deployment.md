@@ -4,8 +4,8 @@ A default Helper build rejects both commands below. For authorized fixture
 validation, use the [independent
 locked, offline Helper build](../RELEASE.md) with
 `--features private-fresh-install`. The private route accepts only the exact
-v20 SQLite schema (SHA-256
-`1a88b3e09eb8604340967f2d4f4e95177099a6ac3f54aef0af8f7f9a8f7bd3f3`), with no
+v21 SQLite schema (SHA-256
+`4d54de32c0004f7b5c0ed6af44a556d8add56517518cf7d8b0a5fe8bb158a0f4`), with no
 migration, adoption, or automatic upgrade. Prior v18 catalogs are refused;
 this Helper does not initialize or modify FILE labels.
 

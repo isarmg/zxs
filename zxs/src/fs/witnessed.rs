@@ -28,7 +28,7 @@ impl LiveStamp{
         b[48..52].copy_from_slice(&self.owner.to_be_bytes());b[52..56].copy_from_slice(&self.group.to_be_bytes());b
     }
     pub(crate) fn same(self,other:Self)->bool{(self.dev,self.ino)==(other.dev,other.ino)}
-    /// A controlled rename of the FILE header's outer hard link may
+    /// A controlled rename of an original outer header/marker link may
     /// change its inode ctime. No data or other stamp field is relaxed.
     pub(crate) fn same_moved_file_header(self,now:Self)->bool{
         Self{ctime:now.ctime,..self}==now
@@ -67,6 +67,31 @@ impl HeldBytes{
         let p=parent.pin_record(name)?.ok_or_else(||invalid("portable original lost a required name"))?;
         if !parent.shares_file_mount(&p)?{return Err(invalid("portable original name is on a different mount"));}
         self.require_object(&p)?;self.unchanged()
+    }
+    /// A two-parent directory move keeps its exclusive marker OFD across
+    /// both physical steps. Reopening an SH through WitnessRead would not
+    /// prove that OFD. Only the actual outer-link rename may refresh ctime.
+    pub(super) fn recheck_directory_marker(&mut self,body:&HeldDir,outer:&HeldDir,
+        link:&CStr,expected:&[u8],moved_link:bool)->io::Result<()>{
+        use super::directory_birth::DIRECTORY_MARK;
+        use std::os::unix::fs::FileExt;
+        let now=LiveStamp::read(&self.file)?;
+        let same=if moved_link{self.original.same_moved_file_header(now)}else{self.original==now};
+        if self.extent!=Extent::Whole||!same||now.owner!=local_uid()||now.mode&0o7777!=0o600||
+           now.links!=2||now.len!=expected.len() as u64||now.dev!=body.entity.device||
+           !body.shares_file_mount(&self.file)?||!body.same_mount(outer)?{
+            return Err(invalid("directory move lost its original two-name marker"));
+        }
+        let confirm=|parent:&HeldDir,name:&CStr|->io::Result<()>{
+            let pin=parent.pin_record(name)?.ok_or_else(||invalid("directory move marker name is absent"))?;
+            if !parent.shares_file_mount(&pin)?{return Err(invalid("directory move marker name crossed a mount"));}
+            now.require(&pin)
+        };
+        confirm(body,DIRECTORY_MARK)?;confirm(outer,link)?;
+        let mut bytes=vec![0;expected.len()];self.file.read_exact_at(&mut bytes,0)?;
+        if bytes.as_slice()!=expected{return Err(invalid("directory move marker differs from its original birth"));}
+        confirm(body,DIRECTORY_MARK)?;confirm(outer,link)?;now.require(&self.file)?;
+        self.original=now;Ok(())
     }
 }
 
@@ -135,12 +160,16 @@ impl<'a> WitnessRead<'a>{
     /// its body; ordinary opens still require the same immediate parent.
     pub(crate) fn moved_file_header(&self,body_parent:&HeldDir,link_parent:&HeldDir,
         link_names:&BTreeSet<Vec<u8>>,witness:&CStr,size:u64)->io::Result<HeldBytes>{
+        self.two_parent_header(body_parent,link_parent,link_names,c"FILE",witness,size)
+    }
+    pub(super) fn two_parent_header(&self,body_parent:&HeldDir,link_parent:&HeldDir,
+        link_names:&BTreeSet<Vec<u8>>,inner:&CStr,witness:&CStr,size:u64)->io::Result<HeldBytes>{
         if self.dir.path.parent()!=Some(body_parent.path.as_path())||
             !self.dir.same_mount(body_parent)?||!body_parent.same_mount(link_parent)?{
             return Err(invalid("FILE move header crosses its original held mount or parent"));
         }
         body_parent.require_named()?;link_parent.require_named()?;
-        let held=self.open_pair(c"FILE",link_parent,link_names,witness,size..=size)?;
+        let held=self.open_pair(inner,link_parent,link_names,witness,size..=size)?;
         body_parent.require_named()?;link_parent.require_named()?;
         Self::require_parent(self.dir)?;held.unchanged()?;Ok(held)
     }

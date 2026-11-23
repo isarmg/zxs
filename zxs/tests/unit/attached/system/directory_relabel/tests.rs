@@ -47,11 +47,11 @@ fn exact_pending_names_and_single_location_survive_real_directory_rename(){
     // digest is a positive pending result. Keep both probes uncommitted.
     let breached=src.transaction(&raw,c"BEGIN IMMEDIATE",|db,c|->io::Result<()>{
         let q=db.prepare(c"INSERT INTO main.directory_rename(rename_op,directory_id,source_op,source_gen,
-                   source_name,target_name,share_id,setting_op,auth_op) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?;
-        for(i,id)in [(1,unproved.op.0),(2,unproved.birth.id.0),(3,unproved.source.0),(7,unproved.share.0),
-                    (8,unproved.setting.0),(9,unproved.auth.0)]{q.bind_bytes(i,&id)?;}
-        q.bind_integer(4,unproved.source_gen)?;q.bind_bytes(5,unproved.old.as_bytes())?;
-        q.bind_bytes(6,unproved.target.as_bytes())?;q.done()?;drop(q);
+                   source_parent,target_parent,source_name,target_name,share_id,setting_op,auth_op) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)")?;
+        for(i,id)in [(1,unproved.op.0),(2,unproved.birth.id.0),(3,unproved.source.0),(5,unproved.source_parent().bytes()),(6,unproved.target_parent().bytes()),
+                    (9,unproved.share.0),(10,unproved.setting.0),(11,unproved.auth.0)]{q.bind_bytes(i,&id)?;}
+        q.bind_integer(4,unproved.source_gen)?;q.bind_bytes(7,unproved.old.as_bytes())?;
+        q.bind_bytes(8,unproved.target.as_bytes())?;q.done()?;drop(q);
         let scope=DirectoryParent::Directory(child.id);
         let orphan=Route::settled_at(db,&c,born.volume,scope).unwrap_err();
         assert!(orphan.to_string().contains("does not have its exact original rename"));
@@ -177,4 +177,86 @@ fn the_hot_operation_and_cold_exact_recovery_do_not_invent_a_new_directory(){
     let(_,winner)=again.ordinary_route(&["Accepted".into()],false).unwrap();
     assert_eq!(winner.selected().unwrap().birth(),&born);
     assert_eq!(std::fs::metadata(f.join("Accepted")).unwrap().ino(),mark);
+}
+
+#[test]
+#[ignore="source-only same-F cross-parent slots, exact committed proof, unchanged child identities"]
+fn two_parents_reserve_both_names_then_publish_one_directory_position(){
+    use crate::fs::directory_birth::parent_move::DirectoryParentMove;
+    let tmp=PrivateTemp::under(&std::env::temp_dir());
+    let (s,pool,_,rw,_)=ordinary_pool(&tmp);
+    let src=InitialReader::open(&s,pool).unwrap();let reader=InitialReader::open(&s,pool).unwrap();
+    let session=SmbSession::fixture_authenticated(&src,"first.admin").unwrap();let tree=session.connect(rw).unwrap();
+    let (_,top)=tree.ordinary_route(&[],true).unwrap();
+    let (left,_)=tree.make_ordinary_directory(&top,op(0xa1),"Left",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let (right,_)=tree.make_ordinary_directory(&top,op(0xa2),"Right",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let (_,left_route)=tree.ordinary_route(&["Left".into()],true).unwrap();
+    let (catalog,right_route)=tree.ordinary_route(&["Right".into()],true).unwrap();
+    let (born,held)=tree.make_ordinary_directory(&left_route,op(0xa3),"Draft",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let (_,original)=tree.ordinary_route(&["Left".into(),"Draft".into()],true).unwrap();
+    let (child,_)=tree.make_ordinary_directory(&original,op(0xa4),"Inside",|_|Ok(()),&||Ok(()),|_|Ok(())).unwrap();
+    let child_tree=tree.scoped(DirectoryParent::Directory(child.id));
+    let contained=child_tree.create_file(op(0xb4),"Inside.txt").unwrap();
+    let expected=reader.authenticate_web("first.admin","correct horse battery staple").unwrap();
+    let bytes=std::fs::OpenOptions::new().read(true).write(true).create_new(true).mode(0o600)
+        .open(tmp.0.join("k16-history-input")).unwrap();
+    bytes.write_all_at(b"v",0).unwrap();bytes.sync_all().unwrap();
+    child_tree.open_writer("Inside.txt",contained.file).unwrap().save(op(0xb5),None,Some(0),1,&bytes).unwrap();
+    let node=expected.freeze(op(0xb6),expected.manual_target(contained.file).unwrap()).unwrap();
+    assert_eq!(expected.manual_timeline(contained.file,None).unwrap().place,
+        TimelinePlace::Ordinary{name:"Left\\Draft\\Inside\\Inside.txt".into(),volume:born.volume});
+    let occupied=tree.scoped(DirectoryParent::Directory(right.id)).create_file(op(0xa5),"Taken").unwrap();
+    let terminal=Birth::placed_container("Taken",occupied.file).unwrap();
+    let file=held.directory().entity;let a=&session.original;let from=original.selected().unwrap();
+    let request=|n,parent,name:&str|Rename::prepare_at(op(n),from,parent,name,tree.setting.share,
+        tree.setting.op,a.op,a.account,a.generation).unwrap();
+    let sql=Connection::open(&src.dir,true).unwrap();
+    let to=right_route.parent();
+    for bad in [request(0xa6,DirectoryParent::Directory(child.id),"Draft"),
+                request(0xa7,to,"Taken"),request(0xa8,to,terminal.to_str().unwrap())]{
+        assert!(src.transaction(&sql,c"BEGIN IMMEDIATE",|db,_|bad.issue(db)).is_err());
+        assert!(reader.at(|db,c|selected(db,&c,bad.op)).unwrap().is_none());
+    }
+    let move_it=request(0xa9,to,"Draft"); // equal spelling is still a different logical slot
+    assert_eq!(move_it.source_parent(),DirectoryParent::Directory(left.id));
+    let old=OrdinaryRoot::at_parent(&src,&catalog,&left_route,None).unwrap();
+    let new=OrdinaryRoot::at_parent(&src,&catalog,&right_route,None).unwrap();
+    let mut owner=Some(held);
+    let mut physical=DirectoryParentMove::hold_live(&born,&old.root,old.folder(),new.folder(),"Draft","Draft",&mut owner).unwrap();
+    let (old_names,new_names)=physical.reservation_sample().unwrap();
+    let charged=super::Additional::IncomingDirectory(&born,c"Draft");
+    src.transaction(&sql,c"BEGIN IMMEDIATE",|db,_|{
+        super::super::budget(db,born.volume,left_route.parent(),&old_names,None)?;
+        super::super::budget(db,born.volume,right_route.parent(),&new_names,Some(charged))?;
+        move_it.issue(db)
+    }).unwrap();
+    assert_eq!(reader.at(|db,c|selected(db,&c,move_it.op)).unwrap(),Some(move_it.clone()));
+    for parent in ["Left","Right"]{
+        assert_eq!(tree.ordinary_route(&[parent.into(),"Draft".into()],false).err().unwrap().kind(),io::ErrorKind::WouldBlock);
+    }
+    assert_eq!(reader.at(|db,c|super::super::directory_vacant(db,&c,&right_route,"Draft")).err().unwrap().kind(),
+        io::ErrorKind::WouldBlock);
+    assert!(tree.scoped(to).create_file(op(0xb0),"Draft").is_err());
+    let other=request(0xa9,DirectoryParent::Root,"Draft"); // same operation, different approved parent
+    assert!(src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|other.confirm(db,&c)).is_err());
+    let (moved,published)=physical.settle(DirectoryRenameSide::Destination,|_|reader.at(|db,_|move_it.live(db)),|_|Ok(()),|_|{
+        src.transaction(&sql,c"BEGIN IMMEDIATE",|db,c|{move_it.confirm(db,&c)?;move_it.confirmed_position(db,&c)})
+    }).unwrap();
+    assert_eq!(moved.directory().entity,file);
+    assert_eq!(published.selected().unwrap().containing(),to);
+    assert_eq!(published.selected().unwrap().birth().parent,left_route.parent());
+    assert_eq!(tree.ordinary_route(&["Left".into(),"Draft".into()],false).err().unwrap().kind(),io::ErrorKind::NotFound);
+    let (_,nested)=tree.ordinary_route(&["Right".into(),"Draft".into(),"Inside".into()],false).unwrap();
+    assert_eq!(nested.selected().unwrap().birth(),&child);
+    let history=expected.manual_timeline(contained.file,None).unwrap();
+    assert_eq!(history.file,contained.file);
+    assert!(matches!(&history.rows[..],[row] if (row.node,row.version,row.length)==(node.node,node.version,1)));
+    assert_eq!(history.place,TimelinePlace::Ordinary{name:"Right\\Draft\\Inside\\Inside.txt".into(),volume:born.volume});
+    assert_eq!(reader.at(|db,c|Route::at(db,&c,born.volume,DirectoryParent::Directory(child.id))).unwrap(),nested);
+    let mut now=Some(moved);
+    let (latest,dir)=tree.scoped(DirectoryParent::Directory(born.id)).relabel_directory("Final",op(0xb1),&published,
+        &mut now,&||Ok(()),|_|Ok(())).unwrap();
+    let exact=latest.selected().unwrap();
+    assert_eq!((exact.containing(),exact.generation(),exact.birth().id),(to,3,born.id));
+    assert_eq!(dir.directory().entity,file);
 }

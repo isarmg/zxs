@@ -1,4 +1,4 @@
-"""Untriggered compile-only evidence for an explicitly approved immutable v20 pair.
+"""Untriggered compile-only evidence for an explicitly approved immutable v21 pair.
 
 In a disposable non-root runner, stage the reviewed upstream commit in adjacent
 private `repo` (FETCH_HEAD) and `source` (Git archive) directories. Use

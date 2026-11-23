@@ -8,12 +8,12 @@ use super::bad;
 use sha2::{Digest,Sha256};
 use std::{ffi::OsString,io};
 
-const SCHEMA_SHA:&str="1a88b3e09eb8604340967f2d4f4e95177099a6ac3f54aef0af8f7f9a8f7bd3f3";
+const SCHEMA_SHA:&str="4d54de32c0004f7b5c0ed6af44a556d8add56517518cf7d8b0a5fe8bb158a0f4";
 pub(in crate::sqlite_install) fn compiled_schema()->io::Result<()>{
-    let wanted=crate::fs_tools::hex(SCHEMA_SHA).expect("frozen v20 DDL hash");
+    let wanted=crate::fs_tools::hex(SCHEMA_SHA).expect("frozen v21 DDL hash");
     let actual:[u8;32]=Sha256::digest(crate::sqlite_install::stage::SCHEMA.as_bytes()).into();
-    if crate::sqlite_install::catalog::SCHEMA_VERSION!=20||actual!=wanted{
-        return Err(bad("the private fresh ZXS issuer is not qualified for this exact v20 format"));
+    if crate::sqlite_install::catalog::SCHEMA_VERSION!=21||actual!=wanted{
+        return Err(bad("the private fresh ZXS issuer is not qualified for this exact v21 format"));
     }
     Ok(())
 }
@@ -222,7 +222,7 @@ fn hex(bytes:&[u8])->String{bytes.iter().map(|b|format!("{b:02x}")).collect()}
 fn preview(resolved:&ResolvedRust,payload:&SitePayload,target:&FreshHome,shared:&ActiveRustMeta,reference:&Id,action:[u8;32],crypto:CryptoPins)
     ->io::Result<String>{
     let p=resolved.plan();let o=p.origin;let(actor,uid,gid)=payload.subject.tuple();
-    let mut out=format!("仅发行从未设置账号的 v20 新 ZXS 池。不会续单、覆盖、清理、迁移，也不会启动任何服务。若中断则保留所有原件，不能盲目重做。\n\
+    let mut out=format!("仅发行从未设置账号的 v21 新 ZXS 池。不会续单、覆盖、清理、迁移，也不会启动任何服务。若中断则保留所有原件，不能盲目重做。\n\
         原池 {} / INIT {} / 原请求 SHA-256 {} / 原主体 {} / 存储 UID:GID {uid}:{gid}。\n\
         新站点 {} / Bind {} / SETUP {} / 批准参考 {}。\n\
         实际受保护的目标 {}。此操作最后独立写入新 deployment.v1；已有文件一律不接管。\n\

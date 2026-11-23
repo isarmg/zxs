@@ -1,41 +1,50 @@
-//! One immutable request for a directory's same-parent name. The original
-//! directory marker and all child parent keys continue to identify the birth.
+//! One immutable request to change the selected position of a directory.
+//! Its marker and all child parent keys still identify the original birth.
 use super::{Additional,Catalog,Connection,DirectoryBirth,DirectoryPlace,DirectoryHold,DirectoryParent,
     OperationId,OrdinaryRoot,Route,Tree,AccountId,ShareId,VolumeId,display,denied,invalid,work_record};
 use super::super::super::{InitialReader,volume::measure};
-use crate::{fs::directory_birth::{DirectoryRename,DirectoryRenameSide},smb::OrdinaryDirectoryRenameAdmission,
-    system::reader::{account::share_mode::{Mode,Setting},smb::runtime::RustRoot}};
-use crate::ordinary::portable_birth::Birth;
+use crate::{fs::directory_birth::{DirectoryRename,DirectoryRenameSide,parent_move::DirectoryParentMove},smb::OrdinaryDirectoryRenameAdmission,system::reader::{account::share_mode::{Mode,Setting},smb::runtime::RustRoot}};
+use crate::ordinary::portable_birth::{Birth,ParentMoveStep};
 use crate::hash::Sha256;
-use std::{ffi::CString,io,thread,time::Duration};
+use std::{collections::BTreeSet,ffi::{CStr,CString},io,thread,time::Duration};
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) struct Rename{
     pub(super) op:OperationId,pub(super) birth:DirectoryBirth,pub(super) source:OperationId,
     pub(super) source_gen:i64,pub(super) old:String,pub(super) target:String,
+    source_parent:DirectoryParent,target_parent:DirectoryParent,
     pub(super) share:ShareId,pub(super) setting:OperationId,pub(super) auth:OperationId,
     pub(super) actor:AccountId,pub(super) epoch:i64,
     pub(super) confirmed:bool,pub(super) aborted:bool,
 }
 impl Rename{
+    pub(super) fn source_parent(&self)->DirectoryParent{self.source_parent}
+    pub(super) fn target_parent(&self)->DirectoryParent{self.target_parent}
     pub(super) fn prepare(op:OperationId,from:&DirectoryPlace,target:&str,share:ShareId,setting:OperationId,
                          auth:OperationId,actor:AccountId,epoch:i64)->io::Result<Self>{
+        Self::prepare_at(op,from,from.containing(),target,share,setting,auth,actor,epoch)
+    }
+    fn prepare_at(op:OperationId,from:&DirectoryPlace,to:DirectoryParent,target:&str,share:ShareId,setting:OperationId,
+                         auth:OperationId,actor:AccountId,epoch:i64)->io::Result<Self>{
         let x=Self{op,birth:from.birth().clone(),source:from.position(),source_gen:from.generation(),old:from.name().into(),
-            target:target.into(),share,setting,auth,actor,epoch,confirmed:false,aborted:false};
+            target:target.into(),source_parent:from.containing(),target_parent:to,share,setting,auth,actor,epoch,confirmed:false,aborted:false};
         x.digest()?;Ok(x)
     }
     fn digest(&self)->io::Result<[u8;32]>{
         let b=&self.birth;b.valid()?;
         if [self.op.0,self.source.0,self.share.0,self.setting.0,self.auth.0,self.actor.0].contains(&[0;16])
-            ||self.op.0==[0xff;16]||self.op==self.source||self.op==b.original||self.old==self.target
+            ||self.op.0==[0xff;16]||self.op==self.source||self.op==b.original
+            ||(self.source_parent==self.target_parent&&self.old==self.target)
+            ||[self.source_parent,self.target_parent].into_iter().any(|p|matches!(p,DirectoryParent::Directory(id) if id==b.id||id.0==[0;16]))
             || !(1..(i64::MAX-1)).contains(&self.source_gen)||self.epoch<1
-            ||(self.source_gen==1&&(self.source!=b.original||self.old!=b.name))
+            ||(self.source_gen==1&&(self.source!=b.original||self.old!=b.name||self.source_parent!=b.parent))
             ||(self.source_gen>1&&self.source==b.original){
             return Err(invalid("directory rename lacks its original source and authority"));
         }
-        let mut sha=Sha256::new();sha.update(b"ZXS-SQLITE-1/RENAME-DIRECTORY\0")?;
+        let mut sha=Sha256::new();sha.update(b"ZXS-SQLITE-1/PLACE-DIRECTORY\0")?;
         for id in [b.pool.0,b.original.0,b.volume.0,b.parent.bytes(),b.id.0,b.entry.0,
-                   self.op.0,self.source.0,self.share.0,self.setting.0,self.auth.0,self.actor.0]{
+                   self.op.0,self.source.0,self.source_parent.bytes(),self.target_parent.bytes(),
+                   self.share.0,self.setting.0,self.auth.0,self.actor.0]{
             sha.update(&id)?;
         }
         sha.update(&self.source_gen.to_be_bytes())?;sha.update(&self.epoch.to_be_bytes())?;
@@ -52,11 +61,13 @@ impl Rename{
         if self.confirmed||self.aborted{return Err(invalid("not a new directory rename"));}
         let digest=self.digest()?;
         let q=db.prepare(c"INSERT INTO main.directory_rename(rename_op,directory_id,source_op,source_gen,
-              source_name,target_name,share_id,setting_op,auth_op) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)")?;
-        for(i,x)in [(1,self.op.0),(2,self.birth.id.0),(3,self.source.0),(7,self.share.0),(8,self.setting.0),(9,self.auth.0)]{
+              source_parent,target_parent,source_name,target_name,share_id,setting_op,auth_op)
+              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)")?;
+        for(i,x)in [(1,self.op.0),(2,self.birth.id.0),(3,self.source.0),(5,self.source_parent.bytes()),(6,self.target_parent.bytes()),
+            (9,self.share.0),(10,self.setting.0),(11,self.auth.0)]{
             q.bind_bytes(i,&x)?;
         }
-        q.bind_integer(4,self.source_gen)?;q.bind_bytes(5,self.old.as_bytes())?;q.bind_bytes(6,self.target.as_bytes())?;q.done()?;drop(q);
+        q.bind_integer(4,self.source_gen)?;q.bind_bytes(7,self.old.as_bytes())?;q.bind_bytes(8,self.target.as_bytes())?;q.done()?;drop(q);
         let q=db.prepare(c"INSERT INTO main.operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,16,?2,?3,0)")?;
         q.bind_bytes(1,&self.op.0)?;q.bind_bytes(2,&self.actor.0)?;q.bind_bytes(3,&digest)?;q.done()
     }
@@ -79,7 +90,7 @@ impl Rename{
 /// confirmed placement of this exact directory, never another directory ID.
 pub(super) fn selected(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Option<Rename>>{
     let mut q=db.prepare(c"SELECT o.state,o.actor_id,o.request_sha,d.create_op,r.directory_id,r.source_op,r.source_gen,
-        r.source_name,r.target_name,r.share_id,r.setting_op,r.auth_op,e.generation,
+        r.source_parent,r.target_parent,r.source_name,r.target_name,r.share_id,r.setting_op,r.auth_op,e.generation,
         EXISTS(SELECT 1 FROM main.directory_rename_abort a WHERE a.rename_op=r.rename_op)
       FROM main.directory_rename r JOIN main.operation o ON o.op_id=r.rename_op AND o.kind=16
       JOIN main.directory_entry d ON d.directory_id=r.directory_id
@@ -89,26 +100,28 @@ pub(super) fn selected(db:&Connection,c:&Catalog,op:OperationId)->io::Result<Opt
       JOIN main.root_share s ON s.share_id=r.share_id AND s.volume_id=d.volume_id
       JOIN main.share_mode m ON m.share_id=r.share_id AND m.change_op=r.setting_op AND m.mode=2
       LEFT JOIN main.directory_rename old ON p.kind=16 AND old.rename_op=p.op_id
-      WHERE r.rename_op=?1 AND ((p.kind=13 AND p.op_id=d.create_op AND r.source_gen=1 AND r.source_name=d.display)
+      WHERE r.rename_op=?1 AND ((p.kind=13 AND p.op_id=d.create_op AND r.source_gen=1 AND r.source_name=d.display
+                                   AND r.source_parent=d.parent_id)
           OR (p.kind=16 AND old.directory_id=d.directory_id AND old.target_name=r.source_name
-                 AND old.source_gen=r.source_gen-1))")?;
+                 AND old.source_gen=r.source_gen-1 AND old.target_parent=r.source_parent))")?;
     q.bind_bytes(1,&op.0)?;
     if !work_record::start_one(&q)?{return Ok(None);}
     let op_birth=OperationId(q.array(3)?);
     let birth=super::original(db,c,op_birth)?.filter(|b|b.done&&!b.aborted).ok_or_else(super::denied)?.birth;
     if birth.id.0!=q.array::<16>(4)?{return Err(invalid("receipt differs from its actual directory identity"));}
-    let (state,aborted)=(q.byte(0)?,q.byte(13)?);
+    let (state,aborted)=(q.byte(0)?,q.byte(15)?);
     if state>1||aborted>1||state+aborted>1{return Err(invalid("impossible directory rename state"));}
     let r=Rename{op,birth,source:OperationId(q.array(5)?),source_gen:q.integer(6)?,
-        old:display::component(q.row()?.blob(7,255)?,255)?.into(),target:display::component(q.row()?.blob(8,255)?,255)?.into(),
-        share:ShareId(q.array(9)?),setting:OperationId(q.array(10)?),auth:OperationId(q.array(11)?),
-        actor:AccountId(q.array(1)?),epoch:q.integer(12)?,confirmed:state==1,aborted:aborted==1};
+        source_parent:DirectoryParent::from_bytes(q.array(7)?),target_parent:DirectoryParent::from_bytes(q.array(8)?),
+        old:display::component(q.row()?.blob(9,255)?,255)?.into(),target:display::component(q.row()?.blob(10,255)?,255)?.into(),
+        share:ShareId(q.array(11)?),setting:OperationId(q.array(12)?),auth:OperationId(q.array(13)?),
+        actor:AccountId(q.array(1)?),epoch:q.integer(14)?,confirmed:state==1,aborted:aborted==1};
     if q.array::<32>(2)?!=r.digest()?{return Err(invalid("directory rename differs from its original request"));}
     q.done()?;Ok(Some(r))
 }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(in crate::system::reader::smb) enum RelabelCut{Reserved,NameChanged,Confirmed}
+pub(in crate::system::reader::smb) enum RelabelCut{Reserved,OuterMoved,NameChanged,Confirmed}
 
 fn unknown()->io::Error{
     io::Error::new(io::ErrorKind::ConnectionAborted,"directory rename outcome is unknown on this original handle")
@@ -119,9 +132,9 @@ impl Rename{
         let id=DirectoryParent::Directory(self.birth.id);
         let route=Route::at(db,c,self.birth.volume,id)?;
         let position=route.selected().ok_or_else(denied)?;
-        let (op,generation,name)=if done{(self.op,self.source_gen+1,self.target.as_str())}
-            else{(self.source,self.source_gen,self.old.as_str())};
-        if position.birth()!=&self.birth||(position.position(),position.generation(),position.name())!=(op,generation,name){
+        let (op,generation,parent,name)=if done{(self.op,self.source_gen+1,self.target_parent(),self.target.as_str())}
+            else{(self.source,self.source_gen,self.source_parent(),self.old.as_str())};
+        if position.birth()!=&self.birth||(position.position(),position.generation(),position.containing(),position.name())!=(op,generation,parent,name){
             return Err(denied());
         }
         Ok(route)
@@ -148,6 +161,88 @@ impl Rename{
     }
 }
 
+/// The two checked branches are authority only under the importing caller's
+/// current grant. Holding a path in the other F never substitutes for it.
+struct HeldParents<'a>{from:OrdinaryRoot<'a>,to:Option<OrdinaryRoot<'a>>}
+impl<'a> HeldParents<'a>{
+    fn open(src:&'a InitialReader,c:&Catalog,from:&Route,to:&Route)->io::Result<Self>{
+        if from.volume()!=to.volume()||(from.parent()==to.parent()&&from!=to){return Err(denied());}
+        let roots=Self{from:OrdinaryRoot::at_parent(src,c,from,None)?,
+            to:if from==to{None}else{Some(OrdinaryRoot::at_parent(src,c,to,None)?)}};
+        if measure(&roots.from.root)?.read_only{return Err(io::ErrorKind::PermissionDenied.into());}
+        roots.require()?;Ok(roots)
+    }
+    fn require(&self)->io::Result<()>{
+        self.from.require_streaming()?;
+        if let Some(to)=&self.to{
+            to.require_streaming()?;
+            if self.from.root.entity!=to.root.entity||!self.from.root.same_mount(&to.root)?{
+                return Err(denied());
+            }
+        }
+        Ok(())
+    }
+}
+
+type Names=BTreeSet<Vec<u8>>;
+enum Reservation{Within(Names),Across(Names,Names)}
+impl Reservation{
+    fn charge(&self,db:&Connection,r:&Rename,end:&CStr)->io::Result<()>{
+        let volume=r.birth.volume;
+        match self{
+            Self::Within(names)=>super::budget(db,volume,r.target_parent(),names,Some(Additional::RenameDirectory(r.birth.id,end))),
+            Self::Across(old,new)=>{
+                super::budget(db,volume,r.source_parent(),old,None)?;
+                super::budget(db,volume,r.target_parent(),new,Some(Additional::IncomingDirectory(&r.birth,end)))
+            }
+        }
+    }
+}
+
+enum MovingDirectory<'a>{Within(DirectoryRename<'a>),Across(DirectoryParentMove<'a>)}
+impl<'a> MovingDirectory<'a>{
+    fn live(r:&'a Rename,parents:&'a HeldParents<'_>,owner:&mut Option<DirectoryHold>)->io::Result<Self>{
+        match &parents.to{
+            None=>DirectoryRename::hold_live(&r.birth,parents.from.folder(),&r.old,&r.target,owner).map(Self::Within),
+            Some(to)=>DirectoryParentMove::hold_live(&r.birth,&parents.from.root,parents.from.folder(),to.folder(),
+                &r.old,&r.target,owner).map(Self::Across),
+        }
+    }
+    fn cold(r:&'a Rename,parents:&'a HeldParents<'_>)->io::Result<Self>{
+        match &parents.to{
+            None=>DirectoryRename::hold(&r.birth,parents.from.folder(),&r.old,&r.target,None).map(Self::Within),
+            Some(to)=>DirectoryParentMove::hold_reserved(&r.birth,&parents.from.root,parents.from.folder(),to.folder(),
+                &r.old,&r.target).map(Self::Across),
+        }
+    }
+    fn reservation(&mut self)->io::Result<Reservation>{
+        match self{
+            Self::Within(m)=>m.reservation_sample().map(Reservation::Within),
+            Self::Across(m)=>m.reservation_sample().map(|(a,b)|Reservation::Across(a,b)),
+        }
+    }
+    fn release_unchanged(self)->io::Result<DirectoryHold>{
+        match self{Self::Within(m)=>m.release_unchanged(),Self::Across(m)=>m.release_unchanged()}
+    }
+    fn started(&self)->bool{
+        match self{Self::Within(m)=>m.side()!=DirectoryRenameSide::Original,Self::Across(m)=>m.phase()!=ParentMoveStep::Old}
+    }
+    fn settle<T>(self,want:DirectoryRenameSide,admit:impl Fn()->io::Result<()>,point:impl Fn(RelabelCut)->io::Result<()>,
+        finish:impl FnOnce(&DirectoryHold)->io::Result<T>)->io::Result<(DirectoryHold,T)>{
+        match self{
+            Self::Within(m)=>m.settle(want,admit,||point(RelabelCut::NameChanged),finish),
+            Self::Across(m)=>m.settle(want,|_|admit(),|at|point(if at==ParentMoveStep::LinkAtNew{RelabelCut::OuterMoved}
+                else{RelabelCut::NameChanged}),finish),
+        }
+    }
+}
+
+fn exact_parents(db:&Connection,c:&Catalog,r:&Rename,from:&Route,to:&Route)->io::Result<()>{
+    if Route::at(db,c,r.birth.volume,r.source_parent())?!=*from||
+       (from!=to&&Route::at(db,c,r.birth.volume,r.target_parent())?!=*to){return Err(denied());}
+    Ok(())
+}
+
 impl Tree<'_,'_>{
     /// The directory itself has already been opened by this exact session.
     /// It must be the sole user of its original marker OFD (including all
@@ -163,7 +258,7 @@ impl Tree<'_,'_>{
         };
         let original=RelabelAt{source:src,setting:g,directory:self.parent,actor:a.account,
             auth:a.op,epoch:a.generation,require:&require};
-        original.relabel(target,op,old,owner,live,point).map(|(route,hold,_)|(route,hold))
+        original.relabel(target,op,old,None,owner,live,point).map(|(route,hold,_,_)|(route,hold))
     }
 }
 
@@ -189,48 +284,45 @@ impl ConfirmedRelabel{
         Ok(())
     }
 }
-impl RelabelAt<'_>{
+impl<'a> RelabelAt<'a>{
     /// One operation, one existing directory marker. Both SMB families
     /// use these same physical and SQL transitions, but not the authority
     /// that certifies each of their exact active account/setting cuts.
-    fn relabel(&self,target:&str,op:OperationId,old:&Route,owner:&mut Option<DirectoryHold>,
+    fn relabel(&self,target:&str,op:OperationId,old:&Route,into:Option<&Route>,owner:&mut Option<DirectoryHold>,
         live:&impl Fn()->io::Result<()>,point:impl Fn(RelabelCut)->io::Result<()>)
-        ->io::Result<(Route,DirectoryHold,ConfirmedRelabel)>{
+        ->io::Result<(Route,DirectoryHold,ConfirmedRelabel,Option<OrdinaryRoot<'a>>)>{
         let src=self.source;let g=self.setting;
         if old.volume()!=g.volume||old.parent()!=self.directory||owner.is_none(){return Err(denied());}
         let authorize=|db:&Connection,catalog:&Catalog|(self.require)(&DirectoryRelabelCut{source:src,db,catalog});
         let mut parent=old.clone();
         let previous=parent.steps.pop().ok_or_else(denied)?; // never the enrolled F itself
-        let r=Rename::prepare(op,&previous,target,g.share,g.op,self.auth,self.actor,self.epoch)?;
-        if old.parent()!=DirectoryParent::Directory(r.birth.id)||parent.parent()!=r.birth.parent{return Err(denied());}
-        let exact_parent=|db:&Connection,c:&Catalog|{
-            if Route::at(db,c,g.volume,r.birth.parent)?!=parent{return Err(denied());}
-            Ok(())
-        };
+        let to=into.unwrap_or(&parent);
+        if to.volume()!=g.volume||to.steps.iter().any(|s|s.birth().id==previous.birth().id){return Err(denied());}
+        let r=if into.is_none(){Rename::prepare(op,&previous,target,g.share,g.op,self.auth,self.actor,self.epoch)?}
+            else{Rename::prepare_at(op,&previous,to.parent(),target,g.share,g.op,self.auth,self.actor,self.epoch)?};
+        if old.parent()!=DirectoryParent::Directory(r.birth.id)||parent.parent()!=r.source_parent(){return Err(denied());}
         let exact_old=|db:&Connection,c:&Catalog|{
-            exact_parent(db,c)?;
+            exact_parents(db,c,&r,&parent,to)?;
             if r.placed_at(db,c,false)?!=*old||!r.is_unused(db)?{return Err(denied());}
-            super::directory_vacant(db,c,&parent,target)
+            super::directory_vacant(db,c,to,target)
         };
         let new=CString::new(r.target.as_bytes()).map_err(|_|denied())?;
         let catalog=src.at(|db,c|{
             authorize(db,&c)?;exact_old(db,&c)?;live()?;Ok(c)
         })?;
-        let ordinary=OrdinaryRoot::at_parent(src,&catalog,&parent,None)?;
-        if measure(&ordinary.root)?.read_only{return Err(io::ErrorKind::PermissionDenied.into());}
-        ordinary.require_streaming()?;live()?;
-        let move_one=match DirectoryRename::hold_live(&r.birth,ordinary.folder(),&r.old,&r.target,owner){
+        let roots=HeldParents::open(src,&catalog,&parent,to)?;live()?;
+        let mut moving=match MovingDirectory::live(&r,&roots,owner){
             Err(_) if owner.is_none()=>return Err(unknown()),
             Err(e)=>return Err(e),
             Ok(x)=>x,
         };
         let attempt=(||{
-            let census=move_one.reservation_sample()?;
-            ordinary.require_streaming()?;
+            let census=moving.reservation()?;
+            roots.require()?;
             let out=Connection::open(&src.dir,true)?;
             src.transaction_before_commit(&out,c"BEGIN IMMEDIATE",|db,c|{
                 authorize(db,&c)?;exact_old(db,&c)?;
-                super::budget(db,g.volume,r.birth.parent,&census,Some(Additional::RenameDirectory(r.birth.id,&new)))?;
+                census.charge(db,&r,&new)?;
                 live()?;r.issue(db)
             },live)
         })();
@@ -239,7 +331,7 @@ impl RelabelAt<'_>{
                 if r.is_unused(db)?{Ok(false)}else{r.require_pending(db,&c)?;Ok(true)}
             }){
                 Ok(false)=>{
-                    *owner=move_one.release_unchanged().ok();
+                    *owner=moving.release_unchanged().ok();
                     return Err(if owner.is_some(){error}else{unknown()});
                 },
                 Ok(true)=>{}, // the actual original request survived the uncertain COMMIT
@@ -249,38 +341,39 @@ impl RelabelAt<'_>{
         let changed=(||{
             point(RelabelCut::Reserved)?;
             let admit=||{
-                ordinary.require_streaming()?;
+                roots.require()?;
                 src.at(|db,c|{
-                    authorize(db,&c)?;exact_parent(db,&c)?;r.require_pending(db,&c)?;r.live(db)?;live()
+                    authorize(db,&c)?;exact_parents(db,&c,&r,&parent,to)?;r.require_pending(db,&c)?;r.live(db)?;live()
                 })?;
                 // The transaction may have done additional S-name I/O.
                 live()
             };
-            let (held,selected)=move_one.settle(DirectoryRenameSide::Destination,admit,||point(RelabelCut::NameChanged),|_|{
-                ordinary.require_streaming()?;
+            let (held,selected)=moving.settle(DirectoryRenameSide::Destination,admit,&point,|_|{
+                roots.require()?;
                 let out=Connection::open(&src.dir,true)?;
                 let decided=src.transaction_before_commit(&out,c"BEGIN IMMEDIATE",|db,c|{
-                    authorize(db,&c)?;exact_parent(db,&c)?;r.live(db)?;live()?;
+                    authorize(db,&c)?;exact_parents(db,&c,&r,&parent,to)?;r.live(db)?;live()?;
                     r.confirm(db,&c)?;r.confirmed_position(db,&c)
                 },live);
                 drop(out);
                 match decided{
                     Ok(new)=>Ok(new),
-                    Err(_)=>src.at(|db,c|{authorize(db,&c)?;exact_parent(db,&c)?;r.confirmed_position(db,&c)}),
+                    Err(_)=>src.at(|db,c|{authorize(db,&c)?;exact_parents(db,&c,&r,&parent,to)?;r.confirmed_position(db,&c)}),
                 }
             })?;
             point(RelabelCut::Confirmed)?;
             live()?;Ok((selected,held))
         })();
-        changed.map(|(route,held)|(route,held,ConfirmedRelabel{original:r})).map_err(|_:io::Error|unknown())
+        let (route,held)=changed.map_err(|_:io::Error|unknown())?;
+        Ok((route,held,ConfirmedRelabel{original:r},roots.to))
     }
 }
 
 pub(in crate::system::reader::smb) fn relabel_rust(tree:&RustRoot,ask:&OrdinaryDirectoryRenameAdmission<'_>,label:&str,
     setting:Setting,old:&Route,owner:&mut Option<DirectoryHold>)
-    ->io::Result<(Route,DirectoryHold,ConfirmedRelabel)>{
+    ->io::Result<(Route,DirectoryHold,ConfirmedRelabel,Option<super::super::super::volume::OrdinaryMedia>)>{
     let DirectoryParent::Directory(directory)=old.parent() else{return Err(denied());};
-    let (member,target)=ask.held(tree.pool(),directory)?;
+    let (member,target,parents)=ask.held(tree.pool(),directory)?;
     if !member.is_set_info()||setting.mode!=Mode::ReadWrite||old.volume()!=setting.volume{return Err(denied());}
     let source=tree.ordinary_reader(member)?;
     let (actor,auth,epoch,grant)=source.at(|db,catalog|
@@ -291,8 +384,10 @@ pub(in crate::system::reader::smb) fn relabel_rust(tree:&RustRoot,ask:&OrdinaryD
         Ok(())
     };
     let original=RelabelAt{source,setting,directory:old.parent(),actor,auth,epoch,require:&require};
+    let into=parents.map(|names|source.at(|db,c|Route::by_names(db,&c,setting.volume,names))).transpose()?;
     let op=OperationId::new()?;
-    original.relabel(target,op,old,owner,&||tree.original_write_live(member),|_|Ok(()))
+    original.relabel(target,op,old,into.as_ref(),owner,&||tree.original_write_live(member),|_|Ok(()))
+        .map(|(route,held,proof,parent)|(route,held,proof,parent.map(OrdinaryRoot::into_media)))
 }
 
 type Allowed<'a>=dyn Fn(&Connection,&Catalog,ShareId,VolumeId)->io::Result<()>+'a;
@@ -304,9 +399,11 @@ impl Rename{
         allowed(db,c,self.share,self.birth.volume)?;
         let q=db.prepare(c"SELECT a.setting_op,a.auth_op,a.actor_id
             FROM main.live_ordinary_writer a JOIN main.directory_selected d ON d.volume_id=a.volume_id
-            WHERE a.share_id=?1 AND d.directory_id=?2 AND d.state=1 AND d.position_op=?3 AND d.generation=?4 AND d.display=?5")?;
+            WHERE a.share_id=?1 AND d.directory_id=?2 AND d.state=1 AND d.position_op=?3 AND d.generation=?4 AND d.display=?5
+                AND d.parent_id=?6")?;
         q.bind_bytes(1,&self.share.0)?;q.bind_bytes(2,&self.birth.id.0)?;q.bind_bytes(3,&self.source.0)?;
         q.bind_integer(4,self.source_gen)?;q.bind_bytes(5,self.old.as_bytes())?;
+        q.bind_bytes(6,&self.source_parent().bytes())?;
         if !work_record::start_one(&q)?||q.array::<16>(2)?!=self.actor.0{return Err(denied());}
         let(setting,auth)=(OperationId(q.array(0)?),OperationId(q.array(1)?));q.done()?;
         let forward=(setting,auth)==(self.setting,self.auth);
@@ -322,37 +419,36 @@ impl Rename{
 }
 
 fn recover(src:&InitialReader,op:OperationId,allowed:&Allowed<'_>,alive:&impl Fn()->io::Result<()>)->io::Result<()>{
-    let (catalog,original,parent,authority)=src.at(|db,c|{
+    let (catalog,original,from,to,authority)=src.at(|db,c|{
         let r=selected(db,&c,op)?.ok_or_else(denied)?;
         let authority=r.cold(db,&c,allowed)?;
-        let parent=Route::at(db,&c,r.birth.volume,r.birth.parent)?;
-        alive()?;Ok((c,r,parent,authority))
+        let from=Route::at(db,&c,r.birth.volume,r.source_parent())?;
+        let to=if r.source_parent()==r.target_parent(){from.clone()}else{Route::at(db,&c,r.birth.volume,r.target_parent())?};
+        alive()?;Ok((c,r,from,to,authority))
     })?;
-    let actual=OrdinaryRoot::at_parent(src,&catalog,&parent,None)?;
-    if measure(&actual.root)?.read_only{return Err(io::ErrorKind::PermissionDenied.into());}
-    let move_one=DirectoryRename::hold(&original.birth,actual.folder(),&original.old,&original.target,None)?;
-    let was_new=move_one.side()==DirectoryRenameSide::Destination;
-    let advance=was_new&&authority.forward;
+    let parents=HeldParents::open(src,&catalog,&from,&to)?;
+    let moving=MovingDirectory::cold(&original,&parents)?;
+    let started=moving.started();
+    let advance=started&&authority.forward;
     let terminal=if advance{DirectoryRenameSide::Destination}else{DirectoryRenameSide::Original};
     let require=|db:&Connection,c:&Catalog|{
-        if original.cold(db,c,allowed)?!=authority||Route::at(db,c,original.birth.volume,original.birth.parent)?!=parent{
-            return Err(denied());
-        }
+        exact_parents(db,c,&original,&from,&to)?;
+        if original.cold(db,c,allowed)?!=authority{return Err(denied());}
         alive()
     };
-    let admit=||{actual.require_streaming()?;src.at(|db,c|require(db,&c))?;alive()};
+    let admit=||{parents.require()?;src.at(|db,c|require(db,&c))?;alive()};
     // Even a cold no-syscall terminal checks the original admission and
     // current mounted scope; the final write repeats the exact SQL cut.
     admit()?;
-    move_one.settle(terminal,admit,||Ok(()),|_|{
-        actual.require_streaming()?;
+    moving.settle(terminal,admit,|_|Ok(()),|_|{
+        parents.require()?;
         let w=Connection::open(&src.dir,true)?;
         src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
             require(db,&c)?;
             if advance{
                 original.confirm(db,&c)?;original.confirmed_position(db,&c)?;
             }else{
-                original.abort(db,&c,authority,if was_new{2}else{1})?;original.placed_at(db,&c,false)?;
+                original.abort(db,&c,authority,if started{2}else{1})?;original.placed_at(db,&c,false)?;
             }
             Ok(())
         },alive)

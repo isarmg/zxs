@@ -90,8 +90,10 @@ fn browseable(db:&Connection,c:&Catalog,share:ShareId)->io::Result<Setting>{
     share_mode::installed(db,c,share)?.filter(|s|s.mode!=Mode::Disabled).ok_or_else(unavailable)
 }
 
+// Count the indexed position rows the listing can actually visit. Incoming
+// reservations are enforced by mutations, not scanned during Web browsing.
 const CANDIDATES:&std::ffi::CStr=c"SELECT
-    (SELECT count(*) FROM (SELECT 1 FROM main.directory_entry INDEXED BY ordinary_directory_name
+    (SELECT count(*) FROM (SELECT 1 FROM main.directory_location INDEXED BY ordinary_directory_name
          WHERE volume_id=?1 AND parent_id=?2 LIMIT ?3))+
     (SELECT count(*) FROM (SELECT 1 FROM main.file_location INDEXED BY current_ordinary_name
          WHERE role=2 AND volume_id=?1 AND parent_id=?2 LIMIT ?3))";
@@ -104,7 +106,7 @@ const CHILDREN:&std::ffi::CStr=c"SELECT p.display AS name,p.file_id,0,p.position
       AND (?5=0 OR EXISTS(SELECT 1 FROM main.file_label a WHERE a.file_id=p.file_id AND a.label=?6))
     UNION ALL SELECT d.display,d.directory_id,1,d.position_op,d.generation FROM main.directory_selected d
     WHERE d.volume_id=?1 AND d.parent_id=?2 AND d.display>?3 AND d.state=1
-      AND NOT EXISTS(SELECT 1 FROM main.pending_directory_rename r WHERE r.directory_id=d.directory_id AND r.source_op=d.position_op)
+      AND NOT EXISTS(SELECT 1 FROM main.pending_directory_rename r WHERE r.directory_id=d.directory_id AND r.source_op=d.position_op AND r.source_parent=d.parent_id)
     ORDER BY name LIMIT ?4";
 fn candidates(db:&Connection,parent:&Route,after:&[u8],filter:Option<&Label>)
     ->io::Result<Vec<Key>>{

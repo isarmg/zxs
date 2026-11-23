@@ -3,7 +3,8 @@ from pathlib import Path
 import sqlite3
 import unittest
 
-SCHEMA = Path(__file__).resolve().parents[2] / "src" / "system" / "schema.sql"
+SYSTEM = Path(__file__).resolve().parents[2] / "src" / "system"
+SCHEMA = SYSTEM / "schema.sql"
 VECTOR = {
     k: bytes.fromhex(v)
     for k, v in (line.split("=", 1) for line in Path(__file__).with_name(
@@ -21,21 +22,24 @@ def vec(k):
 
 
 class SharedEpoch(unittest.TestCase):
-    def init_db(self):
+    def init_db(self, extra_volume=False):
         d = sqlite3.connect(":memory:")
         self.addCleanup(d.close)
         d.execute("PRAGMA foreign_keys=ON")
         d.execute("PRAGMA trusted_schema=OFF")
         d.executescript(SCHEMA.read_text())
-        self.assertEqual(d.execute("PRAGMA user_version").fetchone(), (20,))
-        self.assertEqual(d.execute("SELECT count(*) FROM main.sqlite_schema").fetchone(), (190,))
+        self.assertEqual(d.execute("PRAGMA user_version").fetchone(), (21,))
+        self.assertEqual(d.execute("SELECT count(*) FROM main.sqlite_schema").fetchone(), (191,))
         with d:
             self.op(d, vec("init"), 1, vec("actor"), 0, vec("init_sha"))
-            d.execute("INSERT INTO pool_birth VALUES(1,?,?,?,1000,3)", (
-                vec("pool"), vec("init"), ident(99)))
-            for ordinal, name in enumerate((b"/system", b"/recycle", b"/files")):
+            names = (b"/system", b"/recycle", b"/files")
+            if extra_volume:
+                names += (b"/other",)
+            d.execute("INSERT INTO pool_birth VALUES(1,?,?,?,1000,?)", (
+                vec("pool"), vec("init"), ident(99), len(names)))
+            for ordinal, name in enumerate(names):
                 d.execute("INSERT INTO volume_claim VALUES(?,?,?,?,?,255,?)", (
-                    vec("init"), ordinal, ordinal, ident(80 + ordinal), name, bytes([90 + ordinal])*32))
+                    vec("init"), ordinal, min(ordinal, 2), ident(80 + ordinal), name, bytes([90 + ordinal])*32))
             self.finish(d, vec("init"))
         return d
 
@@ -163,6 +167,63 @@ class SharedEpoch(unittest.TestCase):
             self.stage_setup(d)
             self.finish(d, vec("setup"))
             self.create_shares(d)
+
+    def test_directory_move_navigation_counts_selected_slots_and_hides_reservations(self):
+        db = self.init_db(extra_volume=True)
+        self.ready_original(db)
+        with db:
+            db.execute("INSERT INTO root_share VALUES(?,?,?,?,?)",
+                       (ident(301), ident(302), vec("setup"), ident(83), b"other"))
+            self.op(db, ident(302), 3, vec("web_actor"), 1)
+            db.execute("INSERT INTO share_mode VALUES(?,?,?,?,1,2)",
+                       (ident(303), ident(301), ident(302), vec("setup")))
+            self.op(db, ident(303), 4, vec("web_actor"), 1)
+            origin = self.dir_birth(db, 1, False)
+            self.finish(db, origin)
+            self.finish(db, self.dir_birth(db, 2, False))
+            db.execute("INSERT INTO directory_entry VALUES(?,?,?,?,?,?,?,?,?)",
+                       (ident(1100), ident(2100), ident(3100), ident(83), bytes(16), b"folder1",
+                        ident(301), ident(303), vec("setup")))
+            self.op(db, ident(1100), 13, vec("smb_actor"), 0)
+            self.finish(db, ident(1100))
+        source = (SYSTEM / "navigation.rs").read_text()
+
+        def query(name):
+            tail = source.split(f"const {name}:&std::ffi::CStr=c\"", 1)[1]
+            return tail.split('";', 1)[0]
+
+        root, folder = bytes(16), ident(2002)
+        def count(volume, parent):
+            return db.execute(query("CANDIDATES"), (ident(volume), parent, 9)).fetchone()[0]
+
+        def children(volume, parent):
+            return [r[0] for r in db.execute(query("CHILDREN"),
+                                             (ident(volume), parent, b"", 9, 0, b""))]
+
+        self.assertEqual((count(82, root), count(82, folder), count(83, root)), (2, 0, 1))
+        with db:
+            db.execute("INSERT INTO directory_rename VALUES(?,?,?,1,?,?,?,?,?,?,?)",
+                       (ident(1200), ident(2001), origin, root, folder, b"folder1", b"folder1",
+                        ident(201), ident(203), vec("setup")))
+            self.op(db, ident(1200), 16, vec("smb_actor"), 0)
+        self.assertEqual((count(82, root), count(82, folder), count(83, root)), (2, 0, 1))
+        reserved = db.execute("""SELECT parent_id,state,moving FROM directory_slot
+            WHERE directory_id=? AND display=? ORDER BY parent_id""", (ident(2001), b"folder1"))
+        self.assertEqual(reserved.fetchall(), [(root, 0, ident(1200)), (folder, 0, ident(1200))])
+        for parent in (root, folder):
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "vacant shared logical name"):
+                db.execute("INSERT INTO directory_entry VALUES(?,?,?,?,?,?,?,?,?)",
+                    (ident(1300), ident(2300), ident(3300), ident(82), parent, b"folder1",
+                     ident(201), ident(203), vec("setup")))
+        self.assertEqual((children(82, root), children(82, folder), children(83, root)),
+                         ([b"folder2"], [], [b"folder1"]))
+        with db:
+            self.finish(db, ident(1200))
+        self.assertEqual((count(82, root), count(82, folder), count(83, root)), (1, 1, 1))
+        self.assertEqual((children(82, root), children(82, folder), children(83, root)),
+                         ([b"folder2"], [b"folder1"], [b"folder1"]))
+        self.assertEqual(db.execute("SELECT parent_id,volume_id FROM directory_entry WHERE directory_id=?",
+                                    (ident(2001),)).fetchone(), (root, ident(82)))
 
     def test_old_file_and_directory_births_refuse_rotation_before_pending(self):
         for kind in (5, 13):

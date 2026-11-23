@@ -1,21 +1,21 @@
-//! Same-parent relabel of an existing, actual directory DELETE OPEN.
+//! Same-volume relabel of an existing, actual directory DELETE OPEN.
 //! No source pathname reopen, second authority, or replacement grant.
 use super::{DELETE_ACCESS,DirectoryOpen,Object};
-use super::super::file_open::{OrdinaryRenameError,RenameTurn,ordinary_parent_leaf};
+use super::super::file_open::{OrdinaryRenameError,RenameTurn,rename_target,FileRenameTarget};
 use crate::{DirectoryId,PoolId,display,
     smb::{RustSessionWitness,wire::{io_fields::OpenReference,set_info::RenameRequest}},
     system::reader::smb::{directory::RustDirectoryRename,runtime::RustRoot}};
 use std::io;
 
 pub(crate) struct OrdinaryDirectoryRenameAdmission<'a>{
-    turn:&'a RenameTurn,scope:&'a RustSessionWitness,target:&'a str,
+    turn:&'a RenameTurn,scope:&'a RustSessionWitness,target:&'a str,parents:Option<&'a [&'a str]>,
 }
 impl OrdinaryDirectoryRenameAdmission<'_>{
-    pub(crate) fn held(&self,pool:PoolId,id:DirectoryId)->io::Result<(&RustSessionWitness,&str)>{
+    pub(crate) fn held(&self,pool:PoolId,id:DirectoryId)->io::Result<(&RustSessionWitness,&str,Option<&[&str]>)>{
         if !self.scope.is_set_info()||!self.turn.represents(Object::Directory(pool,id)){
             return Err(io::ErrorKind::PermissionDenied.into());
         }
-        Ok((self.scope,self.target))
+        Ok((self.scope,self.target,self.parents))
     }
 }
 
@@ -42,19 +42,26 @@ impl DirectoryOpen{
         if !matches!(request.open(),OpenReference::Explicit(_))||!scope.is_set_info(){
             return Err(OrdinaryRenameError::Original(io::ErrorKind::Unsupported.into()));
         }
-        let target=ordinary_parent_leaf(request.destination(),request.had_root_separator(),
+        // This is the explicit single-message lane. Use the existing
+        // same-volume canonical move name, never a second volume label.
+        let target=rename_target(request.destination(),request.had_root_separator(),
+            request.requested_replace(),true,self.held.original.original_folder_label(),
             self.held.original.original_parent_components(),display::MAX).map_err(OrdinaryRenameError::Name)?;
+        let (target,parents)=match &target{
+            FileRenameTarget::SameParent(name)=>(*name,None),
+            FileRenameTarget::OtherParent{parents,name,..}=>(*name,Some(parents.as_slice())),
+        };
         // No apparent success for a request that this exact native engine
         // cannot carry. Same-name no-op is outside this first Rust lane.
-        if self.held.original.original_leaf()==Some(target){
+        if parents.is_none()&&self.held.original.original_leaf()==Some(target){
             return Err(OrdinaryRenameError::Original(io::ErrorKind::Unsupported.into()));
         }
         let turn=RenameTurn::for_directory(&self.held._slot)?;
         turn.require(&self.held._slot).map_err(OrdinaryRenameError::Original)?;
-        let admission=OrdinaryDirectoryRenameAdmission{turn:&turn,scope:&scope,target};
+        let admission=OrdinaryDirectoryRenameAdmission{turn:&turn,scope:&scope,target,parents};
         // ReplaceIfExists is not authority. Both SQLite reservation and
         // the original physical rename still require no replacement.
-        let proof=self.held.original.rename_in_parent(tree,&admission).map_err(OrdinaryRenameError::Original)?;
+        let proof=self.held.original.rename_original(tree,&admission).map_err(OrdinaryRenameError::Original)?;
         Ok(PreparedDirectoryRename{turn,scope,proof})
     }
 }

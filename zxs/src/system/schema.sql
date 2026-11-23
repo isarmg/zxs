@@ -3,7 +3,7 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 20;
+PRAGMA user_version = 21;
 
 -- Both INIT (1) and SETUP_ACCOUNT (2) name the separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
@@ -293,7 +293,6 @@ CREATE TABLE directory_entry (
   setting_op  BLOB NOT NULL REFERENCES share_mode(change_op),
   auth_op     BLOB NOT NULL REFERENCES operation(op_id)
 ) STRICT, WITHOUT ROWID;
-CREATE INDEX ordinary_directory_name ON directory_entry(volume_id,parent_id,display);
 -- Releasing a failed/revoked tentative directory reserves no new authority.
 -- The original receipt survives; a legitimate directory or unknown media
 -- candidate remains off-limits to automatic adoption or destructive cleanup.
@@ -303,31 +302,37 @@ CREATE TABLE directory_abort (
   auth_op     BLOB NOT NULL REFERENCES operation(op_id),
   reason      INTEGER NOT NULL CHECK(reason IN (1,2)) -- old grant lost, originally unbound stage
 ) STRICT, WITHOUT ROWID;
--- Only this row holds a directory's currently selected spelling. The
--- volume, parent, identity and physical birth marker cannot change.
+-- Only this row holds a directory's currently selected parent and spelling.
+-- Its volume and every byte of the original birth remain immutable.
 CREATE TABLE directory_location (
   directory_id BLOB NOT NULL PRIMARY KEY REFERENCES directory_entry(directory_id),
+  volume_id   BLOB NOT NULL REFERENCES volume_claim(volume_id),
   position_op  BLOB NOT NULL UNIQUE REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED,
   generation   INTEGER NOT NULL CHECK(generation BETWEEN 1 AND 9223372036854775806),
+  parent_id    BLOB NOT NULL CHECK(length(parent_id)=16 AND parent_id<>directory_id),
   display      BLOB NOT NULL CHECK(length(display) BETWEEN 1 AND 255 AND instr(display,X'00')=0
                    AND instr(display,X'2F')=0 AND instr(display,X'5C')=0 AND display NOT IN (X'2E',X'2E2E'))
 ) STRICT, WITHOUT ROWID;
+CREATE INDEX ordinary_directory_name ON directory_location(volume_id,parent_id,display);
 CREATE TABLE directory_rename (
   rename_op    BLOB NOT NULL PRIMARY KEY REFERENCES operation(op_id) DEFERRABLE INITIALLY DEFERRED
                    CHECK(rename_op<>zeroblob(16) AND rename_op<>X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'),
   directory_id BLOB NOT NULL REFERENCES directory_entry(directory_id),
   source_op    BLOB NOT NULL REFERENCES operation(op_id),
   source_gen   INTEGER NOT NULL CHECK(source_gen BETWEEN 1 AND 9223372036854775805),
+  source_parent BLOB NOT NULL CHECK(length(source_parent)=16 AND source_parent<>directory_id),
+  target_parent BLOB NOT NULL CHECK(length(target_parent)=16 AND target_parent<>directory_id),
   source_name  BLOB NOT NULL CHECK(length(source_name) BETWEEN 1 AND 255 AND instr(source_name,X'00')=0
                    AND instr(source_name,X'2F')=0 AND instr(source_name,X'5C')=0 AND source_name NOT IN (X'2E',X'2E2E')),
   target_name  BLOB NOT NULL CHECK(length(target_name) BETWEEN 1 AND 255 AND instr(target_name,X'00')=0
                    AND instr(target_name,X'2F')=0 AND instr(target_name,X'5C')=0 AND target_name NOT IN (X'2E',X'2E2E')
-                   AND target_name<>source_name),
+                   AND (target_parent<>source_parent OR target_name<>source_name)),
   share_id     BLOB NOT NULL REFERENCES root_share(share_id),
   setting_op   BLOB NOT NULL REFERENCES share_mode(change_op),
   auth_op      BLOB NOT NULL REFERENCES operation(op_id)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX directory_rename_source ON directory_rename(directory_id,source_op);
+CREATE INDEX directory_rename_destination ON directory_rename(target_parent,target_name);
 CREATE TABLE directory_rename_abort (
   rename_op   BLOB NOT NULL PRIMARY KEY REFERENCES directory_rename(rename_op),
   setting_op  BLOB NOT NULL REFERENCES share_mode(change_op),
@@ -339,7 +344,7 @@ SELECT r.* FROM directory_rename r LEFT JOIN operation o ON o.op_id=r.rename_op
 WHERE (o.op_id IS NULL OR (o.kind=16 AND o.state=0))
  AND NOT EXISTS(SELECT 1 FROM directory_rename_abort x WHERE x.rename_op=r.rename_op);
 CREATE VIEW directory_selected AS
-SELECT d.create_op,d.directory_id,d.entry_id,d.volume_id,d.parent_id,l.display,
+SELECT d.create_op,d.directory_id,d.entry_id,l.volume_id,l.parent_id,l.display,
        d.share_id,d.setting_op,d.auth_op,o.state,l.position_op,l.generation
 FROM directory_entry d JOIN directory_location l ON l.directory_id=d.directory_id
 LEFT JOIN operation o ON o.op_id=d.create_op
@@ -350,11 +355,13 @@ WHERE (o.op_id IS NULL OR (o.kind=13 AND o.state IN (0,1)))
 CREATE VIEW directory_slot AS
 SELECT d.create_op,d.directory_id,d.entry_id,d.volume_id,d.parent_id,d.display,d.share_id,d.setting_op,d.auth_op,
        CASE WHEN r.rename_op IS NULL THEN d.state ELSE 0 END AS state,d.position_op,d.generation,r.rename_op AS moving
-FROM directory_selected d LEFT JOIN pending_directory_rename r ON r.directory_id=d.directory_id AND r.source_op=d.position_op
+FROM directory_selected d LEFT JOIN pending_directory_rename r ON r.directory_id=d.directory_id
+    AND r.source_op=d.position_op AND r.source_parent=d.parent_id
 UNION ALL
-SELECT d.create_op,d.directory_id,d.entry_id,d.volume_id,d.parent_id,r.target_name,d.share_id,d.setting_op,d.auth_op,
+SELECT d.create_op,d.directory_id,d.entry_id,d.volume_id,r.target_parent,r.target_name,d.share_id,d.setting_op,d.auth_op,
        0,d.position_op,d.generation,r.rename_op
-FROM directory_selected d JOIN pending_directory_rename r ON r.directory_id=d.directory_id AND r.source_op=d.position_op;
+FROM directory_selected d JOIN pending_directory_rename r ON r.directory_id=d.directory_id
+    AND r.source_op=d.position_op AND r.source_parent=d.parent_id;
 CREATE VIEW live_directory_writer AS
 SELECT d.*,a.actor_id
 FROM directory_selected d
@@ -369,16 +376,25 @@ FROM pending_directory_rename r JOIN directory_selected d ON d.directory_id=r.di
 JOIN live_ordinary_writer a ON a.share_id=r.share_id AND a.volume_id=d.volume_id
                            AND a.setting_op=r.setting_op AND a.auth_op=r.auth_op
 WHERE d.state=1 AND d.position_op=r.source_op AND d.generation=r.source_gen AND d.display=r.source_name
- AND (d.parent_id=zeroblob(16) OR EXISTS(SELECT 1 FROM directory_slot p
-           WHERE p.directory_id=d.parent_id AND p.volume_id=d.volume_id AND p.state=1))
- AND NOT EXISTS(SELECT 1 FROM directory_slot other WHERE other.volume_id=d.volume_id AND other.parent_id=d.parent_id
+ AND d.parent_id=r.source_parent
+ -- Both endpoints must reach the same enrolled F root through positively
+ -- selected parents. A pending or cyclic ancestor cannot supply a path.
+ AND (WITH RECURSIVE path(edge,parent,hops) AS (
+       VALUES(0,r.source_parent,0),(1,r.target_parent,0)
+       UNION ALL SELECT path.edge,p.parent_id,path.hops+1 FROM path
+         JOIN directory_selected p ON p.directory_id=path.parent AND p.volume_id=d.volume_id AND p.state=1
+       WHERE path.hops<256 AND path.parent<>zeroblob(16) AND path.parent<>r.directory_id
+         AND NOT EXISTS(SELECT 1 FROM pending_directory_rename m WHERE m.directory_id=p.directory_id
+                 AND m.source_op=p.position_op AND m.source_parent=p.parent_id)
+     ) SELECT count(DISTINCT edge) FROM path WHERE parent=zeroblob(16))=2
+ AND NOT EXISTS(SELECT 1 FROM directory_slot other WHERE other.volume_id=d.volume_id AND other.parent_id=r.target_parent
             AND other.directory_id<>d.directory_id AND other.display=r.target_name)
- AND NOT EXISTS(SELECT 1 FROM file_location f WHERE f.volume_id=d.volume_id AND f.role=2 AND f.parent_id=d.parent_id
+ AND NOT EXISTS(SELECT 1 FROM file_location f WHERE f.volume_id=d.volume_id AND f.role=2 AND f.parent_id=r.target_parent
             AND r.target_name IN (f.display,f.flat_terminal))
- AND NOT EXISTS(SELECT 1 FROM pending_rename f WHERE f.volume_id=d.volume_id AND f.target_parent=d.parent_id
+ AND NOT EXISTS(SELECT 1 FROM pending_rename f WHERE f.volume_id=d.volume_id AND f.target_parent=r.target_parent
             AND r.target_name IN (f.target_name,f.target_terminal))
  AND NOT EXISTS(SELECT 1 FROM pending_transfer f WHERE f.direction IN (2,3) AND f.target_id=d.volume_id
-            AND f.target_parent=d.parent_id AND f.target_name=r.target_name);
+            AND f.target_parent=r.target_parent AND f.target_name=r.target_name);
 
 CREATE TRIGGER start_directory BEFORE INSERT ON directory_entry
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.create_op)
@@ -414,35 +430,38 @@ WHEN NEW.generation<>1
  OR EXISTS(SELECT 1 FROM directory_location l WHERE l.directory_id=NEW.directory_id OR l.position_op=NEW.position_op)
  OR EXISTS(SELECT 1 FROM operation o WHERE o.op_id=NEW.position_op)
  OR NOT EXISTS(SELECT 1 FROM directory_entry d WHERE d.directory_id=NEW.directory_id
-            AND d.create_op=NEW.position_op AND d.display=NEW.display)
+            AND d.create_op=NEW.position_op AND d.volume_id=NEW.volume_id AND d.parent_id=NEW.parent_id AND d.display=NEW.display)
 BEGIN SELECT RAISE(ABORT,'directory position must begin at its original immutable birth'); END;
 CREATE TRIGGER publish_directory_location AFTER INSERT ON directory_entry
 BEGIN
-  INSERT INTO directory_location(directory_id,position_op,generation,display)
-    VALUES(NEW.directory_id,NEW.create_op,1,NEW.display);
+  INSERT INTO directory_location(directory_id,volume_id,position_op,generation,parent_id,display)
+    VALUES(NEW.directory_id,NEW.volume_id,NEW.create_op,1,NEW.parent_id,NEW.display);
 END;
 CREATE TRIGGER retain_directory_location BEFORE DELETE ON directory_location
 BEGIN SELECT RAISE(ABORT,'retain the one selected directory position'); END;
 CREATE TRIGGER advance_directory_location BEFORE UPDATE ON directory_location
-WHEN NEW.directory_id<>OLD.directory_id OR NEW.generation<>OLD.generation+1
+WHEN NEW.directory_id<>OLD.directory_id OR NEW.volume_id<>OLD.volume_id OR NEW.generation<>OLD.generation+1
  OR NOT EXISTS(SELECT 1 FROM directory_rename r JOIN operation o ON o.op_id=r.rename_op AND o.kind=16 AND o.state=1
       WHERE r.directory_id=OLD.directory_id AND r.source_op=OLD.position_op AND r.source_gen=OLD.generation
-        AND r.source_name=OLD.display AND r.target_name=NEW.display AND r.rename_op=NEW.position_op)
-BEGIN SELECT RAISE(ABORT,'directory position needs its exact confirmed same-parent rename'); END;
+        AND r.source_name=OLD.display AND r.target_name=NEW.display AND r.rename_op=NEW.position_op
+        AND r.source_parent=OLD.parent_id AND r.target_parent=NEW.parent_id)
+BEGIN SELECT RAISE(ABORT,'directory position needs its exact confirmed original rename'); END;
 CREATE TRIGGER start_directory_rename BEFORE INSERT ON directory_rename
 WHEN EXISTS(SELECT 1 FROM operation WHERE op_id=NEW.rename_op)
  OR EXISTS(SELECT 1 FROM directory_rename WHERE rename_op=NEW.rename_op)
  OR EXISTS(SELECT 1 FROM pending_directory_rename r WHERE r.directory_id=NEW.directory_id)
+ OR NOT EXISTS(SELECT 1 FROM directory_selected d WHERE d.directory_id=NEW.directory_id AND d.state=1
+      AND d.position_op=NEW.source_op AND d.generation=NEW.source_gen AND d.parent_id=NEW.source_parent AND d.display=NEW.source_name)
 BEGIN SELECT RAISE(ABORT,'only one original pending rename for this directory'); END;
 CREATE TRIGGER abort_directory_rename BEFORE INSERT ON directory_rename_abort
 WHEN EXISTS(SELECT 1 FROM directory_rename_abort x WHERE x.rename_op=NEW.rename_op)
  OR NOT EXISTS(SELECT 1 FROM pending_directory_rename r JOIN operation o ON o.op_id=r.rename_op AND o.kind=16 AND o.state=0
       JOIN directory_selected d ON d.directory_id=r.directory_id AND d.state=1 AND d.position_op=r.source_op
-       AND d.generation=r.source_gen AND d.display=r.source_name
+       AND d.generation=r.source_gen AND d.display=r.source_name AND d.parent_id=r.source_parent
       JOIN live_ordinary_writer a ON a.volume_id=d.volume_id AND a.share_id=r.share_id
        AND a.setting_op=NEW.setting_op AND a.auth_op=NEW.auth_op
       WHERE r.rename_op=NEW.rename_op AND (NEW.reason=1 OR r.setting_op<>a.setting_op OR r.auth_op<>a.auth_op))
-BEGIN SELECT RAISE(ABORT,'only the original unselected directory move can return to its same approved parent'); END;
+BEGIN SELECT RAISE(ABORT,'only the original unselected directory move can return to its approved source'); END;
 CREATE TRIGGER keep_directory_rename BEFORE UPDATE ON directory_rename BEGIN SELECT RAISE(ABORT,'immutable directory rename'); END;
 CREATE TRIGGER retain_directory_rename BEFORE DELETE ON directory_rename BEGIN SELECT RAISE(ABORT,'retain directory rename origin'); END;
 CREATE TRIGGER keep_directory_rename_abort BEFORE UPDATE ON directory_rename_abort BEGIN SELECT RAISE(ABORT,'immutable directory rename cancellation'); END;
@@ -451,6 +470,7 @@ CREATE TRIGGER select_renamed_directory AFTER UPDATE OF state ON operation
 WHEN NEW.kind=16 AND NEW.state=1
 BEGIN
   UPDATE directory_location SET position_op=NEW.op_id,generation=generation+1,
+    parent_id=(SELECT target_parent FROM directory_rename WHERE rename_op=NEW.op_id),
     display=(SELECT target_name FROM directory_rename WHERE rename_op=NEW.op_id)
     WHERE directory_id=(SELECT directory_id FROM directory_rename WHERE rename_op=NEW.op_id);
 END;

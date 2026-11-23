@@ -339,7 +339,7 @@ impl FileOpen {
 mod rename;
 pub(crate) use rename::{FileRenameTarget,OrdinaryMoveAdmission,OrdinaryRenameAdmission,OrdinaryReplaceAdmission};
 pub(in crate::smb) use rename::{MoveOpenWitness,WorkingMoveGuard,OrdinaryRenameError,PreparedCrossFilesystemMove,PreparedOrdinaryRename,RetiredOrdinaryRename};
-pub(super) use rename::{RenameTurn,ordinary_parent_leaf};
+pub(super) use rename::{RenameTurn,rename_target,ordinary_parent_leaf};
 
 #[cfg(test)]
 #[path="../../../tests/smb/backend_file_open.rs"]

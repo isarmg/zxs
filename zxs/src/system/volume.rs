@@ -184,6 +184,19 @@ impl<'a> OrdinaryRoot<'a>{
         self.media.ancestors.push(leaf);self.require_streaming()
     }
     pub(super) fn view(&self)->OrdinaryView<'_>{self.media.view(self.source)}
+    /// A quiescent directory handle keeps its original leaf identity, but a
+    /// cross-parent decision supplies the already held new ancestry. It is
+    /// never reconstructed from a client name after the physical move.
+    pub(super) fn adopt_directory_parent(&mut self,mut prepared:Self,containing:DirectoryParent,leaf:DirectoryHold)->io::Result<()>{
+        let directory=self.parent();
+        if directory==DirectoryParent::Root||directory==containing||prepared.parent()!=containing||
+            !self.for_tree(prepared.source,prepared.media.volume)||self.root.entity!=prepared.root.entity||!self.root.same_mount(&prepared.root)?{
+            return Err(invalid("relocated directory does not keep its original volume and destination parent"));
+        }
+        prepared.media.parent=directory;
+        prepared.return_directory_leaf(leaf)?;
+        *self=prepared;Ok(())
+    }
     pub(super) fn duplicate_media(&self)->io::Result<OrdinaryMedia>{self.media.duplicate()}
     /// Attach the hold the actual directory birth just installed under
     /// this exact F/parent. No reopening by client display spelling.
