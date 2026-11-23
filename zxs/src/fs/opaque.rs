@@ -1,7 +1,7 @@
 //! Mount-bound original regular files for whole opaque container retirements.
 use super::{
-    HeldDir, invalid, local_uid, mounts, os_result, zxs_open_pinned_record, zxs_remove_empty_dir,
-    zxs_remove_name,
+    HeldDir, ReadAccess, invalid, local_uid, mounts, os_result, zxs_open_pinned_record,
+    zxs_remove_empty_dir, zxs_remove_name,
 };
 use std::{
     ffi::CStr,
@@ -13,6 +13,10 @@ use std::{
         unix::fs::MetadataExt,
     },
 };
+
+unsafe extern "C" {
+    fn zxs_open_pinned_record_noatime(pin: c_int) -> c_int;
+}
 
 pub(crate) const OPAQUE_STAMP_BYTES: usize = 56;
 
@@ -68,6 +72,14 @@ fn opaque_stamp(file: &File) -> io::Result<[u8; OPAQUE_STAMP_BYTES]> {
 }
 impl HeldDir {
     pub(crate) fn opaque_pin(&self, name: &CStr) -> io::Result<Option<OpaquePin>> {
+        self.opaque_pin_with(name, ReadAccess::Ordinary)
+    }
+
+    pub(crate) fn opaque_pin_with(
+        &self,
+        name: &CStr,
+        access: ReadAccess,
+    ) -> io::Result<Option<OpaquePin>> {
         self.require_named()?;
         let Some(pin) = self.pin_record(name)? else {
             return Ok(None);
@@ -78,7 +90,12 @@ impl HeldDir {
             return Err(invalid("opaque file crosses its enrolled mount"));
         }
         // SAFETY: reopen the already validated held, regular O_PATH inode.
-        let raw = unsafe { zxs_open_pinned_record(pin.as_raw_fd(), 0) };
+        let raw = unsafe {
+            match access {
+                ReadAccess::Ordinary => zxs_open_pinned_record(pin.as_raw_fd(), 0),
+                ReadAccess::NoAtime => zxs_open_pinned_record_noatime(pin.as_raw_fd()),
+            }
+        };
         if raw < 0 {
             return Err(io::Error::last_os_error());
         }

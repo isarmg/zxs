@@ -5,7 +5,7 @@
 | 首设前检查 | `setup-headless check SYSTEM RECYCLE DATA [DATA ...]` | 无 |
 | 服务单元预览（可选） | `setup-headless preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...]` | 无，写标准输出 |
 | 首设 | `setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 所选磁盘的角色标记及 `/zxs/state/headless/server.conf` |
-| 源目录预检 | `preflight-import [--show-names] SOURCE SYSTEM RECYCLE DATA [DATA ...]` | 无，仅统计目录元数据 |
+| 源目录预检 | `preflight-import [--show-names \| --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]` | 无，仅观察源目录和可选目标目录元数据 |
 | 网页首设 | `setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 同首设，仍在终端确认 |
 | 重置密码 | `setup-headless reset SYSTEM RECYCLE DATA [DATA ...]` | 同一份 `server.conf` 中的账号代次、随机盐和验证值 |
 
@@ -32,10 +32,16 @@
 逐项观察元数据，显示文件数、目录数、空目录数和文件逻辑总字节。多硬链接按名字计数，
 并单列提示。遇到链接、特殊项、意外跨挂载或观察到原件变化时不显示部分结果。
 预检另行统计需要明确映射的子目录文件，以及不能原样用作服务端显示名的顶层文件。
-保留大小写和原始拼写，不自动展平或改名。预检尚未比对现有容器名，也未检查 Workspace 本地名称限制。
+保留大小写和原始拼写，不自动展平或改名。不检查 Workspace 本地名称限制。
 加上 `--show-names` 可逐个查看来源相对路径。只有可原样使用的顶层文件才有建议名称；
 其他文件显示 `mapping-required`，建议名称留空。名称按原字节转义，避免控制字符混入输出。
 名称列表在清点完成后统一输出，内存随列表大小增长；默认预检只统计。
+用 `--check-target` 代替 `--show-names` 可同时比对现有容器的名称。Helper 使用同一个
+离线排他锁和已安装的受保护 ZXS 程序，先完整确认目标目录，再清点源目录。
+`/zxs/bin/zxs` 及其父目录须由 root 持有，其他账号不得写入。
+顶层候选文件如果与现有容器精确同名，会显示 `target-name-exists`；找不到精确同名则显示
+`no-exact-target-name`。例如 `Report` 与 `report` 分别检查。需要映射的文件仍不建议名称。
+目录读取或证明失败时不输出部分预检结果。不写入目标，不分配名称，也不读取源文件正文。
 输出仅记录此次观察，不是目录快照或导入清单。
 不设总项数或自定超时，路径长度和可用描述符仍受系统限制。预检不读取正文，不选择目标，不预留空间，也不执行转换。
 

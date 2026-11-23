@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/vfs.h>
 #include <unistd.h>
@@ -80,7 +82,30 @@ static int open_proc_child(const char *name,int flags) {
 static int proc_fd_directory(void) { return open_proc_child("fd",O_RDONLY|O_DIRECTORY); }
 int zxs_open_mountinfo(void) { return open_proc_child("mountinfo",O_RDONLY); }
 
-int zxs_open_pinned_record(int pin, int write) {
+int zxs_open_lock_fdinfo(int target) {
+    char name[32];
+    if (target < 0) { errno = EBADF; return -1; }
+    int n = snprintf(name, sizeof name, "%d", target);
+    if (n < 0 || (size_t)n >= sizeof name) { errno = EOVERFLOW; return -1; }
+    int parent = open_proc_child("fdinfo", O_RDONLY | O_DIRECTORY);
+    if (parent < 0) return -1;
+    int file = openat(parent, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (file >= 0 && require_same_mount(parent, file) < 0) {
+        int e = errno;
+        close(file);
+        file = -1;
+        errno = e;
+    }
+    int e = errno;
+    close(parent);
+    errno = e;
+    return file;
+}
+uint64_t zxs_lock_device(unsigned int device_major, unsigned int device_minor) {
+    return makedev(device_major, device_minor);
+}
+
+static int open_pinned_record(int pin, int flags) {
     struct stat st;
     if (fstat(pin,&st)<0) return -1;
     if (!S_ISREG(st.st_mode)) { errno=EINVAL; return -1; }
@@ -89,8 +114,29 @@ int zxs_open_pinned_record(int pin, int write) {
     if (n<0 || (size_t)n>=sizeof path) { errno=EOVERFLOW; return -1; }
     int fds=proc_fd_directory();
     if (fds<0) return -1;
-    int result=openat(fds,path,(write ? O_RDWR : O_RDONLY)|O_NONBLOCK|O_NOCTTY|O_CLOEXEC);
+    int result=openat(fds,path,flags|O_NONBLOCK|O_NOCTTY|O_CLOEXEC);
     int e=errno; close(fds); errno=e; return result;
+}
+
+int zxs_open_pinned_record(int pin, int write) {
+    return open_pinned_record(pin, write ? O_RDWR : O_RDONLY);
+}
+int zxs_open_pinned_record_noatime(int pin) {
+    return open_pinned_record(pin, O_RDONLY | O_NOATIME);
+}
+
+int zxs_open_noatime_directory(int parent) {
+    int fd = openat(parent, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NOATIME | O_CLOEXEC);
+    if (fd >= 0 && require_same_mount(parent, fd) < 0) {
+        int e = errno;
+        close(fd);
+        errno = e;
+        return -1;
+    }
+    return fd;
+}
+ssize_t zxs_getdents_page(int fd, unsigned char *out, size_t size) {
+    return syscall(SYS_getdents64, fd, out, size);
 }
 
 int zxs_mkdir_private(int fd,const char *name) { return mkdirat(fd,name,0700); }

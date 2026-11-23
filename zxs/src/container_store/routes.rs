@@ -1,9 +1,9 @@
 //! Stable per-container DATA placement, selected by SYSTEM before publication.
 use super::{Id, hex, invalid, parse_container_id};
-use crate::fs::HeldDir;
+use crate::fs::{HeldDir, ReadAccess};
 use std::{
     ffi::{CStr, CString, c_char, c_int, c_uint},
-    fs::{self, File},
+    fs::File,
     io::{self, Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
@@ -12,7 +12,7 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-const DIRECTORY: &CStr = c"container-routes";
+pub(super) const DIRECTORY: &CStr = c"container-routes";
 const MAGIC: &[u8; 4] = b"CR1\0";
 const BYTES: usize = 52;
 const STAGE_SUFFIX: &[u8] = b".incoming";
@@ -45,8 +45,7 @@ impl Routes {
     /// Look up the held catalog without creating it. Confirm both the
     /// directory birth and any prior unsynced route publication.
     pub(super) fn open_existing(system: &HeldDir) -> io::Result<Option<Self>> {
-        let Some(directory) = system.child_directory(DIRECTORY)? else {
-            system.require_named()?;
+        let Some(directory) = existing_directory(system)? else {
             return Ok(None);
         };
         directory.file.sync_all()?;
@@ -78,20 +77,7 @@ impl Routes {
     }
 
     fn read(&self, id: Id, name: &CStr) -> io::Result<Option<[u8; 32]>> {
-        let Some(pin) = self.directory.opaque_pin(name)? else {
-            return Ok(None);
-        };
-        if pin.file.metadata()?.len() != BYTES as u64 {
-            return Err(invalid("invalid container route size"));
-        }
-        let mut raw = [0; BYTES];
-        (&pin.file).read_exact(&mut raw)?;
-        pin.require(&self.directory, name)?;
-        let (found, token) = decode(raw)?;
-        if found != id {
-            return Err(invalid("container route names a different container"));
-        }
-        Ok(Some(token))
+        read_route(&self.directory, id, name, ReadAccess::Ordinary)
     }
 
     pub(super) fn get(&self, id: Id) -> io::Result<Option<[u8; 32]>> {
@@ -102,23 +88,7 @@ impl Routes {
 
     pub(super) fn ids(&self) -> io::Result<Vec<Id>> {
         let _cut = self.cut()?;
-        let held = format!("/proc/self/fd/{}", self.directory.file.as_raw_fd());
-        let mut ids = Vec::new();
-        for entry in fs::read_dir(held)? {
-            let name = entry?.file_name();
-            let bytes = name.as_encoded_bytes();
-            if let Some(stage) = bytes
-                .strip_prefix(b".")
-                .and_then(|name| name.strip_suffix(STAGE_SUFFIX))
-            {
-                parse_container_id(stage)?;
-                continue; // Private interrupted stage, never a selected route.
-            }
-            ids.push(parse_container_id(bytes)?);
-        }
-        self.directory.require_named()?;
-        ids.sort_unstable();
-        Ok(ids)
+        read_ids(&self.directory, ReadAccess::Ordinary)
     }
 
     /// Call after validating bootstrap and the complete staged DATA body, but
@@ -183,6 +153,60 @@ impl Routes {
         *unsure = false;
         Ok(())
     }
+}
+
+pub(super) fn existing_directory(system: &HeldDir) -> io::Result<Option<HeldDir>> {
+    let directory = system.child_directory(DIRECTORY)?;
+    system.require_named()?;
+    Ok(directory)
+}
+
+pub(super) fn lookup_route(
+    directory: &HeldDir,
+    id: Id,
+    access: ReadAccess,
+) -> io::Result<Option<[u8; 32]>> {
+    read_route(directory, id, &route_name(id)?, access)
+}
+
+fn read_route(
+    directory: &HeldDir,
+    id: Id,
+    name: &CStr,
+    access: ReadAccess,
+) -> io::Result<Option<[u8; 32]>> {
+    let Some(pin) = directory.opaque_pin_with(name, access)? else {
+        return Ok(None);
+    };
+    if pin.file.metadata()?.len() != BYTES as u64 {
+        return Err(invalid("invalid container route size"));
+    }
+    let mut raw = [0; BYTES];
+    (&pin.file).read_exact(&mut raw)?;
+    pin.require(directory, name)?;
+    let (found, token) = decode(raw)?;
+    if found != id {
+        return Err(invalid("container route names a different container"));
+    }
+    Ok(Some(token))
+}
+
+pub(super) fn read_ids(directory: &HeldDir, access: ReadAccess) -> io::Result<Vec<Id>> {
+    let mut ids = Vec::new();
+    directory.each_name(access, |name| {
+        if let Some(stage) = name
+            .strip_prefix(b".")
+            .and_then(|name| name.strip_suffix(STAGE_SUFFIX))
+        {
+            parse_container_id(stage)?;
+        } else {
+            ids.push(parse_container_id(name)?);
+        }
+        Ok(())
+    })?;
+    directory.require_named()?;
+    ids.sort_unstable();
+    Ok(ids)
 }
 
 fn route_name(id: Id) -> io::Result<CString> {

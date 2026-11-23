@@ -14,6 +14,8 @@ mod headless_boot;
 mod headless_http;
 #[cfg(target_os = "linux")]
 mod headless_lifecycle;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod headless_offline;
 #[cfg(target_os = "linux")]
 mod headless_start;
 #[cfg(target_os = "linux")]
@@ -23,6 +25,12 @@ mod workspace_protocol;
 #[doc(hidden)]
 pub fn start_headless(listen: std::net::SocketAddr) -> std::io::Result<()> {
     headless_boot::run(listen, workspace_protocol::http::dispatch_request)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[doc(hidden)]
+pub fn offline_live_names_v1() -> std::io::Result<()> {
+    headless_offline::run()
 }
 
 #[cfg(target_os = "linux")]

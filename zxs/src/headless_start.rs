@@ -1,10 +1,11 @@
 //! Retain the qualified system, recycle and data roster through the native Store.
 use crate::{
-    container_store::{DataRoot, Store},
-    fs::{HeldDir, local_uid},
+    container_store::{DataRoot, Store, offline_catalog},
+    fs::{HeldDir, ReadAccess, local_uid},
     headless_auth::{Account, Descriptor, SelectedRoot},
 };
 use std::{
+    collections::BTreeSet,
     ffi::{CStr, c_char, c_int, c_long},
     fs::File,
     io::{self, Read},
@@ -20,7 +21,7 @@ unsafe extern "C" {
 }
 
 pub(crate) const DEFAULT_STATE: &str = "/zxs/state/headless";
-const DESCRIPTOR: &CStr = c"server.conf";
+pub(super) const DESCRIPTOR: &CStr = c"server.conf";
 const MARKER: &CStr = c".zxs-role-v1";
 const MARK_MAGIC: &[u8] = b"ZXS-ROLE-V1\0";
 const MARK_BYTES: usize = MARK_MAGIC.len() + 1 + 16 + 32;
@@ -43,9 +44,25 @@ fn open_member(parent: &HeldDir, name: &CStr) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn root(selected: &SelectedRoot, role: u8, pool: &[u8; 16], uid: u32) -> io::Result<HeldDir> {
+fn role_member(root: &HeldDir, access: ReadAccess) -> io::Result<File> {
+    match access {
+        ReadAccess::Ordinary => open_member(root, MARKER),
+        ReadAccess::NoAtime => root
+            .opaque_pin_with(MARKER, access)?
+            .map(|pin| pin.file)
+            .ok_or_else(refused),
+    }
+}
+
+fn root(
+    selected: &SelectedRoot,
+    role: u8,
+    pool: &[u8; 16],
+    uid: u32,
+    access: ReadAccess,
+) -> io::Result<HeldDir> {
     let held = HeldDir::trusted_storage(selected.path())?;
-    let mut marker = open_member(&held, MARKER)?;
+    let mut marker = role_member(&held, access)?;
     let initial = marker.metadata()?;
     if !initial.is_file()
         || initial.mode() & 0o7777 != 0o600
@@ -61,7 +78,7 @@ fn root(selected: &SelectedRoot, role: u8, pool: &[u8; 16], uid: u32) -> io::Res
     if body[0] != role || body[1..17] != pool[..] || body[17..] != selected.token {
         return Err(refused());
     }
-    let observed = open_member(&held, MARKER)?.metadata()?;
+    let observed = role_member(&held, access)?.metadata()?;
     let stamp = |m: &std::fs::Metadata| {
         (
             m.dev(),
@@ -101,17 +118,26 @@ impl SelectedStart {
         }
         let state = HeldDir::trusted_storage(Path::new(DEFAULT_STATE))?;
         state.share()?; // same original directory lease used by the offline issuer
-        let (roots, account) =
-            Descriptor::read_selected(&open_member(&state, DESCRIPTOR)?, uid)?.into_parts();
-        let system = root(&roots.system, 0, &roots.pool, uid)?;
-        let recycle = root(&roots.recycle, 2, &roots.pool, uid)?;
+        let descriptor = Descriptor::read_selected(&open_member(&state, DESCRIPTOR)?, uid)?;
+        Self::from_original(state, descriptor, ReadAccess::Ordinary)
+    }
+
+    pub(super) fn from_original(
+        state: HeldDir,
+        descriptor: Descriptor,
+        access: ReadAccess,
+    ) -> io::Result<Self> {
+        let uid = local_uid();
+        let (roots, account) = descriptor.into_parts();
+        let system = root(&roots.system, 0, &roots.pool, uid, access)?;
+        let recycle = root(&roots.recycle, 2, &roots.pool, uid, access)?;
         let data = roots
             .data
             .iter()
             .map(|selected| {
                 Ok(DataRoot {
                     token: selected.token,
-                    root: root(selected, 1, &roots.pool, uid)?,
+                    root: root(selected, 1, &roots.pool, uid, access)?,
                 })
             })
             .collect::<io::Result<Vec<_>>>()?;
@@ -153,6 +179,16 @@ impl SelectedStart {
         };
         start.require_named()?;
         Ok(start)
+    }
+
+    pub(super) fn offline_names(
+        &self,
+        require_state: impl Fn(&HeldDir) -> io::Result<()>,
+    ) -> io::Result<BTreeSet<String>> {
+        offline_catalog::live_names(&self.system, &self.recycle, &self.data, self.pool, || {
+            require_state(&self.state)?;
+            self.require_named()
+        })
     }
 
     fn require_named(&self) -> io::Result<()> {

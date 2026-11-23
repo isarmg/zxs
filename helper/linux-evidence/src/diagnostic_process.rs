@@ -275,6 +275,15 @@ pub fn account_sql_descriptors()->io::Result<[File;2]>{
     Ok(unsafe{[File::from_raw_fd(3),File::from_raw_fd(4)]})
 }
 #[allow(unsafe_code)]
+/// Execute only the fixed installed ZXS read-only catalog worker.
+///
+/// # Errors
+/// Fails if the protected executable cannot be duplicated for exec.
+pub fn prepare_offline_catalog_exec(cmd: &mut Command, original: &File) -> io::Result<()> {
+    let args = vec![c"zxs".to_owned(), c"__offline-live-names-v1".to_owned()];
+    pinned_exec(cmd, original, args, Some(std::process::id() as libc::pid_t), None)
+}
+
 fn pinned_exec(cmd:&mut Command,original:&File,args:Vec<CString>,panel:Option<libc::pid_t>,cpu:Option<libc::rlim_t>)->io::Result<()> {
     let executable=original.try_clone()?;
     // SAFETY: all memory and C strings are owned and allocated before fork.

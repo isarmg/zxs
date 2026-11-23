@@ -19,6 +19,8 @@ use zeroize::Zeroizing;
 
 #[path = "headless_add_data.rs"]
 mod add_data;
+#[path = "headless_offline_catalog.rs"]
+mod offline_catalog;
 #[path = "headless_retire_data.rs"]
 mod retire_data;
 
@@ -199,13 +201,16 @@ impl FreshSelection {
         self,
         path: &Path,
         mut preview: Option<&mut Vec<u8>>,
+        check_target: bool,
         report: impl FnOnce(super::import_preflight::Counts, Option<&[u8]>) -> io::Result<T>,
     ) -> io::Result<T> {
         let selected = self.open_offline(None)?;
+        let names = check_target.then(|| offline_catalog::read_names(&selected)).transpose()?;
         let result = super::import_preflight::scan(
             &selected.selected,
             path,
             preview.as_deref_mut(),
+            names.as_deref(),
             || selected.require_original(),
         )?;
         report(result, preview.as_deref().map(Vec::as_slice))

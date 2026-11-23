@@ -9,7 +9,9 @@ use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Component, Path, PathBuf};
 
 mod mounts;
+mod noatime;
 mod relative;
+pub(crate) use noatime::ReadAccess;
 
 unsafe extern "C" {
     fn zxs_open_directory(parent: c_int, name: *const c_char) -> c_int;

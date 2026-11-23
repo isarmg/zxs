@@ -23,6 +23,16 @@ fn listen_address() -> io::Result<SocketAddr> {
 }
 
 fn run() -> io::Result<()> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        let mut args = env::args_os().skip(1);
+        if args.next().as_deref() == Some(OsStr::new("__offline-live-names-v1")) {
+            if args.next().is_some() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            return storage_server::offline_live_names_v1();
+        }
+    }
     let listen = listen_address()?;
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     return storage_server::start_headless(listen);

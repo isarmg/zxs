@@ -26,14 +26,15 @@ pub(crate) struct Preflight {
     source: PathBuf,
     roles: Vec<PathBuf>,
     show_names: bool,
+    check_target: bool,
 }
 
 impl Preflight {
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        const USAGE: &str =
-            "expected preflight-import [--show-names] SOURCE SYSTEM RECYCLE DATA [DATA ...]";
+        const USAGE: &str = "expected preflight-import [--show-names | --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]";
         let first = args.next().ok_or(USAGE)?;
-        let show_names = first == "--show-names";
+        let check_target = first == "--check-target";
+        let show_names = check_target || first == "--show-names";
         let source = PathBuf::from(if show_names {
             args.next().ok_or(USAGE)?
         } else {
@@ -45,6 +46,7 @@ impl Preflight {
             source,
             roles,
             show_names,
+            check_target,
         })
     }
 
@@ -53,7 +55,7 @@ impl Preflight {
         diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
         let selected = FreshSelection::select(&self.roles)?;
         let mut preview = self.show_names.then(Vec::new);
-        selected.inspect_import_source(&self.source, preview.as_mut(), |observed, rows| {
+        selected.inspect_import_source(&self.source, preview.as_mut(), self.check_target, |observed, rows| {
             let mut out = io::stdout().lock();
             writeln!(
                 out,
@@ -70,10 +72,19 @@ impl Preflight {
                 "source naming: {} nested files need an explicit mapping; {} top-level names cannot be used as-is",
                 observed.nested_files, observed.invalid_top_level_names
             )?;
-            writeln!(
-                out,
-                "Metadata only; destination collisions and Workspace names are not checked."
-            )?;
+            if self.check_target {
+                writeln!(
+                    out,
+                    "target naming: {} top-level files match existing exact container names",
+                    observed.target_collisions
+                )?;
+                writeln!(out, "Metadata only; Workspace names are not checked.")?;
+            } else {
+                writeln!(
+                    out,
+                    "Metadata only; destination collisions and Workspace names are not checked."
+                )?;
+            }
             if observed.files == 0 && observed.dirs == 0 {
                 writeln!(out, "The selected source is empty.")?;
                 return Ok(ExitCode::from(2));
@@ -95,6 +106,7 @@ pub(super) struct Counts {
     hard_links: u64,
     nested_files: u64,
     invalid_top_level_names: u64,
+    target_collisions: u64,
     bytes: u128,
 }
 
@@ -150,6 +162,7 @@ pub(super) fn scan(
     selected: &FreshSelection,
     source: &Path,
     preview: Option<&mut Vec<u8>>,
+    names: Option<&[String]>,
     require_roles: impl Fn() -> io::Result<()>,
 ) -> io::Result<Counts> {
     let pin = Pinned::local_storage(source, &selected.scope)?;
@@ -188,7 +201,7 @@ pub(super) fn scan(
         Ok(())
     };
     check()?;
-    let counts = census(directory.try_clone()?, root, before, preview)?;
+    let counts = census(directory.try_clone()?, root, before, preview, names)?;
     check()?;
     Ok(counts)
 }
@@ -261,7 +274,7 @@ fn add_count(value: &mut u64) -> io::Result<()> {
 
 // Match the server's display component for same-name candidates only.
 // Workspace path portability and collisions belong to the conversion plan.
-fn same_name_candidate(raw: &[u8]) -> bool {
+pub(super) fn same_name_candidate(raw: &[u8]) -> bool {
     const MAX: usize = 255;
     if raw.is_empty() || raw.len() > MAX {
         return false;
@@ -282,6 +295,7 @@ fn census(
     root: Stamp,
     mount: Mount,
     mut preview: Option<&mut Vec<u8>>,
+    names: Option<&[String]>,
 ) -> io::Result<Counts> {
     let mut frames = vec![Frame::open(dir, root, mount, 0, None)?];
     let mut counts = Counts::default();
@@ -344,13 +358,17 @@ fn census(
                 } else if !candidate {
                     add_count(&mut counts.invalid_top_level_names)?;
                 }
+                let status = name_status(raw, candidate, names);
+                if matches!(status, PreviewName::Occupied) {
+                    add_count(&mut counts.target_collisions)?;
+                }
                 if let Some(rows) = preview.as_deref_mut() {
                     write_preview_row(
                         rows,
                         frames.iter().filter_map(|part| part.parent_name.as_deref()),
                         name,
                         width,
-                        candidate,
+                        status,
                     )?;
                 }
                 if one.links > 1 {
@@ -371,12 +389,37 @@ fn census(
     Ok(counts)
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum PreviewName {
+    MappingRequired,
+    SameName,
+    Occupied,
+    NotFound,
+}
+
+fn name_status(raw: &[u8], candidate: bool, target: Option<&[String]>) -> PreviewName {
+    if !candidate {
+        return PreviewName::MappingRequired;
+    }
+    let Some(target) = target else {
+        return PreviewName::SameName;
+    };
+    if target
+        .binary_search_by(|name| name.as_bytes().cmp(raw))
+        .is_ok()
+    {
+        PreviewName::Occupied
+    } else {
+        PreviewName::NotFound
+    }
+}
+
 fn write_preview_row<'a>(
     out: &mut Vec<u8>,
     parents: impl Iterator<Item = &'a CStr>,
     name: &CStr,
     path_width: usize,
-    same_name: bool,
+    status: PreviewName,
 ) -> io::Result<()> {
     // Each byte expands to at most four ASCII bytes. The scanner bounds the
     // input path; reserve before writing and fail without a partial report.
@@ -387,11 +430,15 @@ fn write_preview_row<'a>(
         out.push(b'/');
     }
     append_escaped(out, name.to_bytes());
-    if same_name {
-        out.extend_from_slice(b"\tsame-name\t");
+    let field: &[u8] = match status {
+        PreviewName::MappingRequired => b"\tmapping-required\t",
+        PreviewName::SameName => b"\tsame-name\t",
+        PreviewName::Occupied => b"\ttarget-name-exists\t",
+        PreviewName::NotFound => b"\tno-exact-target-name\t",
+    };
+    out.extend_from_slice(field);
+    if status != PreviewName::MappingRequired {
         append_escaped(out, name.to_bytes());
-    } else {
-        out.extend_from_slice(b"\tmapping-required\t");
     }
     out.push(b'\n');
     Ok(())

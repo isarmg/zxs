@@ -1,5 +1,8 @@
 //! Fresh headless credential binding. No listener, HTTP parser or setup writer.
-use crate::password::{Verifier, login_name};
+use crate::{
+    hash::Sha256,
+    password::{Verifier, login_name},
+};
 use std::{
     ffi::OsStr,
     fs::File,
@@ -20,6 +23,12 @@ const MAX_AUTH_SCHEME_VALUE: usize = 6 + 4 * (64usize + 1 + fresh_password::MAX_
 
 fn invalid() -> io::Error {
     io::ErrorKind::InvalidData.into()
+}
+
+fn descriptor_digest(raw: &[u8]) -> io::Result<[u8; 32]> {
+    let mut digest = Sha256::new();
+    digest.update(raw)?;
+    Ok(digest.finish())
 }
 
 pub(crate) struct Descriptor {
@@ -55,6 +64,24 @@ impl Descriptor {
     /// protected directory. This function does not discover root identity or
     /// trust a user-selected pathname. Keep the lease through service drain.
     pub(crate) fn read_selected(file: &File, owner: u32) -> io::Result<Self> {
+        Self::read_checked(file, owner, Self::parse)
+    }
+
+    pub(crate) fn read_bound(file: &File, owner: u32) -> io::Result<(Self, [u8; 32])> {
+        Self::read_checked(file, owner, |raw| {
+            Ok((Self::parse(raw)?, descriptor_digest(raw)?))
+        })
+    }
+
+    pub(crate) fn binding(file: &File, owner: u32) -> io::Result<[u8; 32]> {
+        Self::read_checked(file, owner, descriptor_digest)
+    }
+
+    fn read_checked<T>(
+        file: &File,
+        owner: u32,
+        checked: impl FnOnce(&[u8]) -> io::Result<T>,
+    ) -> io::Result<T> {
         let info = file.metadata()?;
         if !info.is_file()
             || info.nlink() != 1
@@ -83,7 +110,7 @@ impl Descriptor {
         if raw.len() as u64 != info.len() || stamp(&file.metadata()?) != stamp(&info) {
             return Err(invalid());
         }
-        Self::parse(&raw)
+        checked(&raw)
     }
 
     fn parse(raw: &[u8]) -> io::Result<Self> {

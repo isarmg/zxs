@@ -1,6 +1,7 @@
 //! Complete opaque node saves and metadata selection for individual containers.
 mod codec;
 mod model;
+pub(crate) mod offline_catalog;
 mod recycle;
 mod recycle_material;
 mod routes;
@@ -9,7 +10,10 @@ mod volume;
 
 #[cfg(test)]
 use crate::fs::local_uid;
-use crate::{fs::HeldDir, hash::Sha256};
+use crate::{
+    fs::{HeldDir, ReadAccess},
+    hash::Sha256,
+};
 use model::State;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 pub(crate) use recycle::RecycleReceipt;
@@ -21,7 +25,6 @@ use std::{
     fmt,
     fs::{self, File},
     io::{self, Read, Write},
-    os::fd::AsRawFd,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -835,23 +838,28 @@ fn read_state(directory: &HeldDir, id: Id) -> io::Result<State> {
 }
 
 fn read_selected_entries(directory: &HeldDir, id: Id) -> io::Result<State> {
+    replay_selected_entries(directory, id, ReadAccess::Ordinary)
+}
+
+fn replay_selected_entries(directory: &HeldDir, id: Id, access: ReadAccess) -> io::Result<State> {
     let mut entries = Vec::new();
-    // Enumerate the already-held directory without imposing a generation cap.
-    let held_path = format!("/proc/self/fd/{}", directory.file.as_raw_fd());
-    for item in fs::read_dir(held_path)? {
-        let name = item?.file_name();
-        let name = name
-            .into_string()
-            .map_err(|_| invalid("invalid container receipt path"))?;
-        let (sequence, request) = generation_name(&name)?;
-        entries.push((sequence, parse_container_id(request.as_bytes())?, name));
-    }
+    directory.each_name(access, |raw| {
+        let name =
+            std::str::from_utf8(raw).map_err(|_| invalid("invalid container receipt path"))?;
+        let (sequence, request) = generation_name(name)?;
+        entries.push((
+            sequence,
+            parse_container_id(request.as_bytes())?,
+            name.to_owned(),
+        ));
+        Ok(())
+    })?;
     entries.sort_unstable_by_key(|entry| entry.0);
     let mut state = State::default();
     for (sequence, request, name) in entries {
         let entry = held_entry(directory, &name)?;
         let original = entry
-            .opaque_pin(c"receipt")?
+            .opaque_pin_with(c"receipt", access)?
             .ok_or_else(|| invalid("stored receipt is absent"))?;
         let mut bytes = Vec::new();
         (&original.file)

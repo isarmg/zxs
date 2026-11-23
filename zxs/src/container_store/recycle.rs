@@ -5,7 +5,7 @@ use super::{
     recycle_material, volume::DataVolume,
 };
 use crate::{
-    fs::{HeldDir, OPAQUE_STAMP_BYTES},
+    fs::{HeldDir, OPAQUE_STAMP_BYTES, ReadAccess},
     hash::Sha256,
 };
 use std::{
@@ -57,7 +57,11 @@ impl RecycleReceipt {
         value
     }
     fn read(parent: &HeldDir, name: &CStr) -> io::Result<Option<Self>> {
-        let Some(original) = parent.opaque_pin(name)? else {
+        Self::read_with(parent, name, ReadAccess::Ordinary)
+    }
+
+    fn read_with(parent: &HeldDir, name: &CStr, access: ReadAccess) -> io::Result<Option<Self>> {
+        let Some(original) = parent.opaque_pin_with(name, access)? else {
             parent.require_named()?;
             return Ok(None);
         };
@@ -100,6 +104,83 @@ impl RecycleReceipt {
         }
         Ok(Some(receipt))
     }
+}
+
+pub(super) fn read_selector(
+    moves: &HeldDir,
+    id: Id,
+    access: ReadAccess,
+) -> io::Result<Option<RecycleReceipt>> {
+    let name = CString::new(hex(id)).map_err(|_| invalid("invalid recycle selector name"))?;
+    let Some(ready) = RecycleReceipt::read_with(moves, &name, access)? else {
+        return Ok(None);
+    };
+    if ready.mutation.container != id {
+        return Err(invalid("SYSTEM selected a different recycle container"));
+    }
+    Ok(Some(ready))
+}
+
+fn held_arrived_at(arrived: &HeldDir, mutation: Mutation) -> io::Result<Option<HeldDir>> {
+    let name =
+        CString::new(arrived_leaf(mutation)).map_err(|_| invalid("invalid recycle position"))?;
+    arrived.require_named()?;
+    let held = arrived.child_directory(&name)?;
+    arrived.require_named()?;
+    Ok(held)
+}
+
+pub(super) fn qualify_arrival(
+    arrived: &HeldDir,
+    ready: RecycleReceipt,
+    access: ReadAccess,
+) -> io::Result<HeldDir> {
+    let selected = held_arrived_at(arrived, ready.mutation)?
+        .ok_or_else(|| invalid("selected recycle directory is absent"))?;
+    let known = selected.file.metadata()?;
+    if (known.dev(), known.ino()) != (ready.recycle_device, ready.recycle_inode)
+        || RecycleReceipt::read_with(&selected, c"ready", access)? != Some(ready)
+    {
+        return Err(invalid(
+            "recycle location differs from its original ready receipt",
+        ));
+    }
+    selected
+        .child_directory(c"container")?
+        .ok_or_else(|| invalid("selected recycled container is absent"))
+}
+
+pub(super) fn read_retired_data(
+    system: &HeldDir,
+    pool: Id,
+    token: [u8; 32],
+    access: ReadAccess,
+) -> io::Result<bool> {
+    system.require_named()?;
+    let Some(directory) = system.child_directory(c"retired-data")? else {
+        return Ok(false);
+    };
+    let name = CString::new(hex(token)).map_err(|_| invalid("invalid retired DATA name"))?;
+    let Some(pin) = directory.opaque_pin_with(&name, access)? else {
+        return Ok(false);
+    };
+    if pin.file.metadata()?.len() != RETIRED_BYTES as u64 {
+        return Err(invalid("invalid retired DATA record size"));
+    }
+    let mut raw = [0; RETIRED_BYTES];
+    (&pin.file).read_exact(&mut raw)?;
+    if &raw[..4] != b"DT1\0" || raw[4..20] != pool || raw[20..] != token {
+        return Err(invalid(
+            "retired DATA record differs from its original pool or disk",
+        ));
+    }
+    if matches!(access, ReadAccess::Ordinary) {
+        directory.file.sync_all()?;
+        system.file.sync_all()?;
+    }
+    pin.require(&directory, &name)?;
+    system.require_named()?;
+    Ok(true)
 }
 
 /// Holds the SYSTEM and recycle namespaces under Store's service leases.
@@ -221,30 +302,12 @@ impl Recycle {
     }
 
     fn held_arrived(&self, mutation: Mutation) -> io::Result<Option<HeldDir>> {
-        let name = CString::new(arrived_leaf(mutation))
-            .map_err(|_| invalid("invalid recycle position"))?;
-        self.arrived_directory.require_named()?;
-        let held = self.arrived_directory.child_directory(&name)?;
-        self.arrived_directory.require_named()?;
-        Ok(held)
+        held_arrived_at(&self.arrived_directory, mutation)
     }
 
     fn qualify(&self, ready: RecycleReceipt) -> io::Result<HeldDir> {
         self.held()?;
-        let selected = self
-            .held_arrived(ready.mutation)?
-            .ok_or_else(|| invalid("selected recycle directory is absent"))?;
-        let known = selected.file.metadata()?;
-        if (known.dev(), known.ino()) != (ready.recycle_device, ready.recycle_inode)
-            || RecycleReceipt::read(&selected, c"ready")? != Some(ready)
-        {
-            return Err(invalid(
-                "recycle location differs from its original ready receipt",
-            ));
-        }
-        selected
-            .child_directory(c"container")?
-            .ok_or_else(|| invalid("selected recycled container is absent"))
+        qualify_arrival(&self.arrived_directory, ready, ReadAccess::Ordinary)
     }
 
     pub(super) fn selected(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
@@ -257,13 +320,9 @@ impl Recycle {
             self.moves_directory.file.sync_all()?;
             self.unsure.store(false, Ordering::Release);
         }
-        let name = CString::new(hex(id)).map_err(|_| invalid("invalid recycle selector name"))?;
-        let Some(ready) = RecycleReceipt::read(&self.moves_directory, &name)? else {
+        let Some(ready) = read_selector(&self.moves_directory, id, ReadAccess::Ordinary)? else {
             return Ok(None);
         };
-        if ready.mutation.container != id {
-            return Err(invalid("SYSTEM selected a different recycle container"));
-        }
         Ok(Some((ready, self.qualify(ready)?)))
     }
 
@@ -382,29 +441,7 @@ impl Recycle {
     /// The offline owner publishes this record before removing the disk
     /// from the roster. The caller checks that the original token is absent.
     pub(super) fn retired_data(&self, token: [u8; 32]) -> io::Result<bool> {
-        self.system.require_named()?;
-        let Some(directory) = self.system.child_directory(c"retired-data")? else {
-            return Ok(false);
-        };
-        let name = CString::new(hex(token)).map_err(|_| invalid("invalid retired DATA name"))?;
-        let Some(pin) = directory.opaque_pin(&name)? else {
-            return Ok(false);
-        };
-        if pin.file.metadata()?.len() != RETIRED_BYTES as u64 {
-            return Err(invalid("invalid retired DATA record size"));
-        }
-        let mut raw = [0; RETIRED_BYTES];
-        (&pin.file).read_exact(&mut raw)?;
-        if &raw[..4] != b"DT1\0" || raw[4..20] != self.pool || raw[20..] != token {
-            return Err(invalid(
-                "retired DATA record differs from its original pool or disk",
-            ));
-        }
-        directory.file.sync_all()?;
-        self.system.file.sync_all()?;
-        pin.require(&directory, &name)?;
-        self.system.require_named()?;
-        Ok(true)
+        read_retired_data(&self.system, self.pool, token, ReadAccess::Ordinary)
     }
 
     /// Validate the full original metadata proof before the first unlink.
