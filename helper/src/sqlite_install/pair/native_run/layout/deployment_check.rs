@@ -1,21 +1,12 @@
 //! One read-only observation of the original ZXS-owned deployment. The
 //! service and its media are not entered; only public credential metadata
 //! can leave the lowered original SYSTEM reader.
-use super::{
-    Channel, Kind, PublicConfirmation, bad, observed, place, query_with, random, sealed,
-    sealed_owner,
-};
+use super::{Channel, Kind, bad, observed, sealed};
 use crate::{
     smb_profile::rust_first::{MAX_WIRE, RustPlan},
     sqlite_install::{
-        markers::SystemObservation,
         originals::LockedSystem,
-        pair::{
-            domain::DeployedSite,
-            fresh_issuer::{
-                ExplicitSubject, InitialDatabase, MAX_SITE, SitePayload, compiled_schema, image,
-            },
-        },
+        pair::fresh_issuer::{ExplicitSubject, MAX_SITE, SitePayload, compiled_schema, image},
     },
 };
 use rustix::process::{Pid, getppid};
@@ -28,11 +19,6 @@ const _: () = assert!(CAP <= super::BUDGET);
 fn unavailable() -> io::Error {
     bad("the exact original offline ZXS deployment is not confirmed")
 }
-type Id = [u8; 16];
-fn hex(id: &Id) -> String {
-    crate::fs_tools::lower_hex(id)
-}
-
 pub(super) struct Question {
     nonce: [u8; 32],
     where_system: [u64; 3],
@@ -156,6 +142,7 @@ fn make_reply(site: &[u8; 32], prefix: &[u8; 224]) -> [u8; 65] {
     b[33..].copy_from_slice(&Sha256::digest(prefix));
     b
 }
+#[cfg(test)]
 fn checked_reply(meta: &[u8; 65], site: &SitePayload, raw: &[u8]) -> io::Result<([u8; 224], u64)> {
     let prefix: [u8; 224] = raw.try_into().map_err(|_| unavailable())?;
     let o = site.origin;
@@ -180,99 +167,6 @@ fn checked_reply(meta: &[u8; 65], site: &SitePayload, raw: &[u8]) -> io::Result<
         return Err(unavailable());
     }
     Ok((prefix, generation))
-}
-
-fn observe() -> io::Result<(Id, Id, Id, Id, u64)> {
-    // Site selection requires pristine inherited stdio. Only then open the
-    // extra descriptors needed to keep the original terminal pinned.
-    let site = DeployedSite::select()?;
-    let tty = PublicConfirmation::select()?;
-    let (system, locked) = site.original();
-    let q = Question {
-        nonce: random()?,
-        where_system: place(system)?,
-        site: site.payload().clone(),
-        plan: site.plan().clone(),
-    };
-    let subject = q.site.subject.tuple();
-    let check = || {
-        tty.check()?;
-        site.require()
-    };
-    check()?;
-    let (db, witness, marker, marker_witness, prefix, generation) = query_with(
-        &q.encode()?,
-        locked,
-        subject,
-        None,
-        check,
-        |ch, scope, until| {
-            let (proof, [fd]) =
-                ch.wait_checked::<1>(Kind::DeployedDatabase, scope, until, &check)?;
-            let db = InitialDatabase::received(fd, subject.1)?;
-            let place = db.named(locked)?;
-            let witness = db.observation()?;
-            if proof[0] != 1
-                || proof[1..] != witness
-                || place[0] != q.where_system[0]
-                || place[2] != q.where_system[2]
-            {
-                return Err(unavailable());
-            }
-            let (marker_frame, [fd]) =
-                ch.wait_checked::<1>(Kind::DeployedMarker, scope, until, &check)?;
-            let marker = SystemObservation::received(fd, locked, subject.1)?;
-            let marker_witness = marker.require(locked)?;
-            if marker_frame[0] != 1 || marker_frame[1..] != marker_witness {
-                return Err(unavailable());
-            }
-            let (meta, [fd]) = ch.wait_checked::<1>(Kind::DeployedActive, scope, until, &check)?;
-            let raw = sealed_owner(&fd, 224, (subject.1, subject.2))?;
-            if meta[1..33] != site.site_sha() {
-                return Err(unavailable());
-            }
-            let (prefix, generation) = checked_reply(&meta, &q.site, &raw)?;
-            Ok((db, witness, marker, marker_witness, prefix, generation))
-        },
-    )?; // matching lowered PID/UID/GID, normal exit and exact EOF
-    db.named(locked)?;
-    if db.observation()? != witness || marker.require(locked)? != marker_witness {
-        return Err(unavailable());
-    }
-    site.require_vault_prefix(&prefix)?;
-    check()?;
-    db.named(locked)?;
-    if db.observation()? != witness || marker.require(locked)? != marker_witness {
-        return Err(unavailable());
-    }
-    let o = q.site.origin;
-    let op = prefix[120..136]
-        .try_into()
-        .expect("checked original SMB operation");
-    Ok((o.pool, o.init, o.instance, op, generation))
-}
-pub(crate) fn check_deployment() -> (u8, String) {
-    const SCOPE: &str =
-        "仅核对原部署：不启动、不授权维护、不变更配置、密码或介质。未核对数据卷和回收卷的可用性。";
-    match observe() {
-        Ok((pool, init, instance, op, generation)) => (
-            0,
-            format!(
-                "已核对原离线 ZXS 部署：池 {}，历史 INIT {}，实例 {}，当前 SMB 凭据操作 {}／代次 {}。\n{SCOPE}",
-                hex(&pool),
-                hex(&init),
-                hex(&instance),
-                hex(&op),
-                generation
-            ),
-        ),
-        Err(_) => (
-            2,
-            format!(
-                "未确认原离线 ZXS 部署：原件缺失、在用、发生变化或证据不足。不会另找实例或自动初始化。\n{SCOPE}"
-            ),
-        ),
-    }
 }
 
 #[cfg(test)]

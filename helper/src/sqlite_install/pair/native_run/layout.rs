@@ -1,9 +1,6 @@
 mod deployment_check;
-pub(crate) use deployment_check::check_deployment;
 mod import_inventory;
-pub(crate) use import_inventory::ImportCheck;
 mod retirement_check;
-pub(crate) use retirement_check::RetirementCheck;
 // Only the authenticated lower-privilege process opens the actual SQLite ledger.
 use super::{
     bad,

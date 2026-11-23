@@ -1,12 +1,11 @@
 //! Fixed, read-only argument and one result for the existing lowered worker.
-use super::{
-    Channel, Id, Kind, MAX_PATH_BYTES, PathKind, Pinned, PublicConfirmation, approval, place,
-    query_with, random, require,
-};
+use super::{Channel, Id, Kind, MAX_PATH_BYTES, PathKind, Pinned};
+#[cfg(test)]
+use crate::sqlite_install::id;
 use crate::{
     maintenance::{DiscoveryView, HostMounts},
     sqlite_install::{
-        bad, id,
+        bad,
         originals::LockedSystem,
         pair::{
             ExplicitSubject,
@@ -15,13 +14,11 @@ use crate::{
         },
     },
 };
-use rustix::{
-    fs::{FlockOperation, flock},
-    process::{Pid, getppid},
-};
+use rustix::process::{Pid, getppid};
+#[cfg(test)]
+use std::{ffi::OsStr, fmt::Write};
 use std::{
-    ffi::{OsStr, OsString},
-    fmt::Write,
+    ffi::OsString,
     io,
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
@@ -31,6 +28,7 @@ use std::{
 pub(super) const DOMAIN: &[u8] = b"helper nonempty source inventory exact v18 1\0";
 const HEAD: usize = 32 + 3 * 16 + 8 + 6 * 8;
 const BUDGET: usize = DOMAIN.len() + HEAD + 2 * (2 + MAX_PATH_BYTES);
+#[cfg(test)]
 const ONLY_READ: &str =
     "仅源目录元数据清点；未读源文件正文、未确定目标与空间，也没有导入、写入或移除。";
 fn invalid() -> io::Error {
@@ -43,7 +41,7 @@ pub(super) fn mount_scope() -> io::Result<Arc<DiscoveryView>> {
 }
 
 #[derive(Debug)]
-pub(crate) struct ImportCheck {
+struct ImportCheck {
     system: PathBuf,
     source: PathBuf,
     pool: Id,
@@ -51,6 +49,7 @@ pub(crate) struct ImportCheck {
     subject: ExplicitSubject,
 }
 impl ImportCheck {
+    #[cfg(test)]
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
         fn field(
             args: &mut impl Iterator<Item = OsString>,
@@ -96,49 +95,6 @@ impl ImportCheck {
             return Err(invalid());
         }
         Ok(())
-    }
-    fn query(&self) -> io::Result<Reply> {
-        retire_ordinary::compiled_schema()?;
-        approval::no_inherited_descriptors()?;
-        let scope = mount_scope()?;
-        let _host = approval::host_admin()?;
-        let tty = PublicConfirmation::select()?;
-        let actor = self.subject.tuple();
-        let system = Pinned::local_storage(&self.system, &scope)?;
-        let original = system.storage_directory()?;
-        flock(&original, FlockOperation::NonBlockingLockExclusive)?;
-        let source = Pinned::local_storage(&self.source, &scope)?;
-        let location = place(&source)?;
-        let checked = || {
-            tty.check()?;
-            require(&system, &original, actor)?;
-            if place(&source)? != location {
-                return Err(invalid());
-            }
-            Ok(())
-        };
-        checked()?;
-        let raw = encode(self, &random::<32>()?, place(&system)?, location)?;
-        let found = query_with(
-            &raw,
-            &original,
-            actor,
-            None,
-            checked,
-            |channel, digest, until| {
-                let (body, []) =
-                    channel.wait_checked::<0>(Kind::ImportInventory, digest, until, &checked)?;
-                Reply::decode(&body, self.pool, self.init, location[2])
-            },
-        )?;
-        scope.require_unchanged()?;
-        checked()?;
-        Ok(found)
-    }
-    pub(crate) fn run(self) -> (u8, String) {
-        self.query()
-            .unwrap_or(Reply::Unknown)
-            .render(self.pool, self.init)
     }
 }
 
@@ -299,6 +255,7 @@ impl Reply {
         }
         b
     }
+    #[cfg(test)]
     fn decode(b: &[u8; 65], pool: Id, init: Id, original_mount: u64) -> io::Result<Self> {
         if b[33..49] != pool || b[49..65] != init || original_mount == 0 {
             return Err(invalid());
@@ -333,6 +290,7 @@ impl Reply {
             _ => Err(invalid()),
         }
     }
+    #[cfg(test)]
     fn render(self, pool: Id, init: Id) -> (u8, String) {
         let hex = |v: Id| crate::fs_tools::lower_hex(&v);
         let mut text = format!(

@@ -1,11 +1,8 @@
 //! One read-only H04 request on the existing layout observer process. No
 //! runtime site, account data, ACT, write grant or reusable retirement ticket.
-use super::{
-    Channel, Id, Kind, MAX_PATH_BYTES, PathKind, Pinned, PublicConfirmation, approval, place,
-    query_with, random, require,
-};
+use super::{Channel, Id, Kind, MAX_PATH_BYTES, PathKind};
 use crate::sqlite_install::{
-    bad, id,
+    bad,
     originals::LockedSystem,
     pair::{
         ExplicitSubject,
@@ -13,9 +10,10 @@ use crate::sqlite_install::{
     },
 };
 use rustix::process::{Pid, getppid};
+#[cfg(test)]
+use std::fmt::Write;
 use std::{
-    ffi::{OsStr, OsString},
-    fmt::Write,
+    ffi::OsString,
     io,
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
@@ -34,76 +32,12 @@ const CLEANUP: u16 = 1 << 7;
 const CLEANUP_UNKNOWN: u16 = 1 << 8;
 const ONLY_ORDINARY: u16 = 1 << 9;
 const EXTRA: u16 = 1 << 10;
+#[cfg(test)]
 const ALL: u16 = (1 << 11) - 1;
+#[cfg(test)]
 const NO_CHANGE: &str = "仅只读预检；没有退登记、修改、清除或卸载。";
 fn invalid() -> io::Error {
     bad("different or incomplete original ordinary-volume preflight scope")
-}
-
-#[derive(Debug)]
-pub(crate) struct RetirementCheck(Scope, ExplicitSubject);
-impl RetirementCheck {
-    pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        fn field(
-            args: &mut impl Iterator<Item = OsString>,
-            key: &str,
-        ) -> Result<OsString, &'static str> {
-            if args.next().as_deref() != Some(OsStr::new(key)) {
-                return Err("expected the displayed read-only fields in order");
-            }
-            args.next().ok_or("missing read-only preflight value")
-        }
-        fn key(args: &mut impl Iterator<Item = OsString>, name: &str) -> Result<Id, &'static str> {
-            id(field(args, name)?)
-                .ok_or("expected 32 nonzero lowercase hexadecimal identifier digits")
-        }
-        let subject = ExplicitSubject::parse(&mut args)?;
-        let system = PathBuf::from(field(&mut args, "--system")?);
-        let pool = key(&mut args, "--pool")?;
-        let init = key(&mut args, "--init")?;
-        let volume = key(&mut args, "--volume")?;
-        let ordinary = PathBuf::from(field(&mut args, "--data")?);
-        if args.next().is_some() {
-            return Err("read-only preflight has no options to change or apply anything");
-        }
-        Scope::new(pool,init,volume,system,ordinary).map(|s|Self(s,subject))
-            .map_err(|_|"invalid original SYSTEM or distinct ordinary path/identity for read-only preflight")
-    }
-    fn query(&self) -> io::Result<Reply> {
-        retire_ordinary::compiled_schema()?;
-        approval::no_inherited_descriptors()?;
-        let _host = approval::host_admin()?;
-        let tty = PublicConfirmation::select()?;
-        let subject = self.1.tuple();
-        let pin = Pinned::already_mounted(self.0.system(), PathKind::StorageRoot)?;
-        let original = pin.storage_directory()?;
-        rustix::fs::flock(
-            &original,
-            rustix::fs::FlockOperation::NonBlockingLockExclusive,
-        )?;
-        let check = || {
-            tty.check()?;
-            require(&pin, &original, subject)
-        };
-        check()?;
-        let raw = encode(&self.0, &random::<32>()?, self.1, place(&pin)?)?;
-        query_with(
-            &raw,
-            &original,
-            subject,
-            None,
-            check,
-            |channel, digest, until| {
-                let (body, []) =
-                    channel.wait_checked::<0>(Kind::RetirementCheck, digest, until, &check)?;
-                Reply::decode(&body, self.0.ids())
-            },
-        )
-    }
-    pub(crate) fn run(self) -> (u8, String) {
-        let report = self.query().unwrap_or(Reply::Unknown);
-        report.render(self.0.ids())
-    }
 }
 
 pub(super) struct Question {
@@ -283,6 +217,7 @@ impl Reply {
         }
         b
     }
+    #[cfg(test)]
     fn decode(b: &[u8; 65], [pool, init, volume]: [Id; 3]) -> io::Result<Self> {
         if b[4..20] != pool || b[20..36] != init || b[36..52] != volume || b[52..] != [0; 13] {
             return Err(invalid());
@@ -304,6 +239,7 @@ impl Reply {
             _ => Err(invalid()),
         }
     }
+    #[cfg(test)]
     fn render(self, [pool, init, volume]: [Id; 3]) -> (u8, String) {
         let hex = |v: Id| crate::fs_tools::lower_hex(&v);
         let mut text = format!(

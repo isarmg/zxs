@@ -16,8 +16,8 @@ pub(crate) use pair::EmbeddedInstall;
 #[cfg(test)]
 mod discovery;
 pub(crate) use pair::{
-    ImportCheck, RetirementCheck, Setup, SharedAccountReset, check_deployment, exec_first_browser,
-    exec_layout_sql_child as layout_sql_worker, rust_account_worker, rust_vault_worker,
+    exec_first_browser, exec_layout_sql_child as layout_sql_worker, rust_account_worker,
+    rust_vault_worker,
 };
 
 const DATABASE: &str = "SYSTEM.sqlite3";

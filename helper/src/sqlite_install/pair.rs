@@ -9,21 +9,19 @@ mod smb_policy;
 mod terminal;
 mod web_secret;
 pub(super) use crate::foreground::PublicConfirmation;
+mod fresh_issuer;
 mod import_source;
 mod observed;
 mod retire_ordinary;
-pub(crate) use native_run::{ImportCheck, RetirementCheck, check_deployment};
-mod fresh_issuer;
 mod rust_enroll;
 #[cfg(feature = "embedded-zxs")]
 pub(crate) use fresh_issuer::EmbeddedInstall;
 pub(super) use fresh_issuer::{ExplicitSubject, compiled_schema, require_private_install};
-pub(crate) use native_run::{SharedAccountReset, rust_account_worker, rust_vault_worker};
+pub(crate) use native_run::{rust_account_worker, rust_vault_worker};
 mod domain;
 mod recycle;
 
 use super::{bad, request::Id};
-pub(crate) use command::Setup;
 pub(super) use domain::{InitialLayout, require_lent_ex};
 pub(crate) use native_run::exec_layout_sql_child;
 pub(super) use native_sql::WriteGate as NativeWriteGate;
