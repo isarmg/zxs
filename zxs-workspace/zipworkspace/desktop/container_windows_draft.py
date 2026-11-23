@@ -43,6 +43,20 @@ class DraftReview:
         return (self.length, self.sha256) != (self.source.head.length, self.source.head.sha256)
 
 
+def _require_reader(connection, reader, exchange, auth, destination, origin, account):
+    if (sys.platform != "win32" or type(connection) is not OpenConnection or not connection._listed
+            or connection.writable or type(reader) is not ContainerClient or type(exchange) is not HttpsExchange
+            or type(auth) is not _Authorization or type(account) is not str or _LOGIN.fullmatch(account) is None
+            or connection.operations is not reader or reader._exchange is not exchange
+            or reader._outbox is not None or type(reader._selected) is not _Metadata
+            or reader._selected._exchange is not exchange or reader._selected._profile is not None
+            or connection._exchange is not exchange or connection._authorization is not auth
+            or exchange._authorization is not auth or connection._account != account
+            or (exchange.destination_identity, exchange._location) != (destination, origin)):
+        raise Rejected("the original authenticated R3 reader, account or destination changed")
+    auth.require_live()
+
+
 class WindowsDraftChoice:
     """Review an already listed connection, branch head and explicitly selected private parent.
 
@@ -96,15 +110,9 @@ class WindowsDraftChoice:
         return self._local_file
 
     def _live(self):
-        reader, exchange, s = self._reader, self._exchange, self._source
-        if (self._connection.operations is not reader or reader._exchange is not exchange
-                or reader._outbox is not None or type(reader._selected) is not _Metadata
-                or reader._selected._exchange is not exchange or reader._selected._profile is not None
-                or self._connection._exchange is not exchange or self._connection._authorization is not self._auth
-                or exchange._authorization is not self._auth or self._connection._account != s.account
-                or (exchange.destination_identity, exchange._location) != (s.destination, s.origin)):
-            raise Rejected("the original authenticated R3 reader, account or destination changed")
-        self._auth.require_live()
+        s = self._source
+        _require_reader(self._connection, self._reader, self._exchange, self._auth,
+                        s.destination, s.origin, s.account)
 
     def _check_acquisition(self):
         if self._abandoned.is_set():
@@ -338,8 +346,21 @@ class WindowsHeldDraft:
                     raise Rejected("original Windows draft changed during full-body review")
                 result = DraftReview(self._choice.source, self._home.name(self._leaf),
                                      self._home.volume, self._file_id, length, digest.hexdigest())
-                self._state = "reviewed"
+                self._review, self._review_row, self._state = result, first, "reviewed"
                 return result
+
+    def prepare_save(self, review, *, confirmed=False):
+        """Persist one exact existing-branch full-body intent. Never contact the server."""
+        from .container_windows_save import _capture_review
+
+        with self._lock:
+            if (confirmed is not True or self._state != "reviewed" or review is not self._review
+                    or not review.changed or self._contexts):
+                raise Rejected("confirm this original, changed, fully reviewed Windows draft")
+            with self._fault_on_error():
+                key = _capture_review(self, review)
+                self._state = "prepared"
+                return key
 
     def close(self):
         # Abandonment, even with outstanding contexts, cannot manufacture a drained review.
