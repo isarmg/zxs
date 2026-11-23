@@ -1,4 +1,4 @@
-"""Manual NTFS original-save custody qualification. Never connect, send or mount."""
+"""Manual NTFS original-save custody and synthetic transfer qualification. Never connect or mount."""
 from dataclasses import replace
 from pathlib import Path
 import json
@@ -14,12 +14,14 @@ from windows_draft_qualification import LocalWorkingFile
 from windows_node_qualification import CONTAINER, ORIGIN, TARGET
 from zipworkspace._windows_access import NativeSecurity
 from zipworkspace._windows_output import PinnedParent, OutputNative
-from zipworkspace.container_http import lookup_message, project_reply
+from zipworkspace.container_http import Reply, ReplyKind, lookup_message, project_reply
 from zipworkspace.desktop.container_connection import _Authorization
 from zipworkspace.desktop.container_management import Phase
 from zipworkspace.desktop import container_windows_receipt as receipts
 from zipworkspace.desktop.container_windows_draft import _effective_zone
 from zipworkspace.desktop import container_windows_save as saves
+from zipworkspace.desktop.container_windows_submit import WindowsOriginalSaveChoice
+from zipworkspace.desktop.container_windows_retire import WindowsRetirementPending, retire_original_windows_save
 from zipworkspace.model import Rejected
 
 
@@ -240,6 +242,120 @@ class OriginalSave(LocalWorkingFile):
             receipts.lookup_original_windows_receipt(forged_label, self.staging, key, confirmed=True)
         self.assertEqual(seen, [])
 
+    def outgoing(self):
+        conn, key, _, answer = self.receipt_case()
+        get, post, messages = [Reply(ReplyKind.ABSENT)], [], []
+        correct = project_reply(200, json.dumps(answer[1]).encode("utf-8"))
+        def exchange(message):
+            messages.append((message.method, message.target, message.headers))
+            if message.method == "GET":
+                return get[0]
+            self.assertEqual(message.method, "POST")
+            self.assertTrue((self.staging / (key.submission + ".zsa")).exists())
+            self.assertEqual(dict(message.headers)["Zxs-Operation"], key.operation)
+            self.assertNotIn("Zxs-Initial-Name", dict(message.headers))
+            self.assertEqual(b"".join(message.body), b"edited")
+            return post[0]() if post else correct
+        conn._exchange.request = exchange
+        return conn, key, get, post, messages, correct
+
+    def test_save_submit_original_explicit_then_archived_key_does_not_touch_new_slot(self):
+        conn, key, get, post, wire, correct = self.outgoing()
+        decision = WindowsOriginalSaveChoice(conn, self.staging, key)
+        self.assertEqual(decision.review.source.container.name, "CON")
+        for review, confirmed in ((replace(decision.review), True), (decision.review, False)):
+            with self.assertRaises(Rejected):
+                decision.apply(review, confirmed=confirmed)
+        self.assertEqual(wire, [])
+        outcome = decision.apply(decision.review, confirmed=True)
+        self.assertEqual((outcome.phase, outcome.receipt.revision), (Phase.CONFIRMED, 3))
+        self.assertEqual([m[0] for m in wire], ["GET", "POST"])
+        with self.assertRaises(Rejected):
+            decision.apply(decision.review, confirmed=True)
+        for suffix in (".zwk", ".zwi", ".zrr", ".zvb", ".zsa"):
+            self.assertTrue((self.staging / (key.submission + suffix)).exists())
+        # A fresh exact local operation can now occupy the active slots (no send on prepare).
+        other, draft, review = self.edited(after=b"next")
+        next_key = draft.prepare_save(review, confirmed=True)
+        draft.close()
+        self.assertEqual(self.recover(other._connection), next_key)
+        before = len(wire)
+        old = WindowsOriginalSaveChoice(conn, self.staging, key)
+        self.assertEqual(old.apply(old.review, confirmed=True).phase, Phase.UNKNOWN)  # contradictory remote absence
+        self.assertEqual([m[0] for m in wire[before:]], ["GET"])
+        self.assertEqual(self.recover(other._connection), next_key)
+        get[0] = correct
+        self.assertEqual(receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True), outcome)
+
+    def test_save_submit_unknown_then_same_key_single_wire_retry(self):
+        conn, key, get, post, wire, correct = self.outgoing()
+        post.append(lambda: (_ for _ in ()).throw(OSError("lost POST response")))
+        once = WindowsOriginalSaveChoice(conn, self.staging, key)
+        self.assertEqual(once.apply(once.review, confirmed=True).phase, Phase.UNKNOWN)
+        self.assertTrue((self.staging / (key.submission+".zsa")).exists())
+        self.assertEqual(self.recover(conn), key)
+        get[0] = Reply(ReplyKind.UNKNOWN)
+        self.assertEqual(receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True).phase, Phase.UNKNOWN)
+        get[0] = Reply(ReplyKind.ABSENT)
+        post.clear()
+        again = WindowsOriginalSaveChoice(conn, self.staging, key)
+        self.assertEqual(again.apply(again.review, confirmed=True).phase, Phase.CONFIRMED)
+        self.assertEqual([m[0] for m in wire], ["GET", "POST", "GET", "GET", "POST"])
+        self.assertEqual(wire[1], wire[-1])  # Original branch/operation/node/precondition/hash/length.
+
+    def test_save_submit_unknown_authority_never_arms_or_posts(self):
+        conn, key, get, _, wire, _ = self.outgoing()
+        for observed, phase in ((ReplyKind.UNKNOWN, Phase.UNKNOWN), (ReplyKind.CONFLICT, Phase.CONFLICT)):
+            get[0] = Reply(observed)
+            attempt = WindowsOriginalSaveChoice(conn, self.staging, key)
+            self.assertEqual(attempt.apply(attempt.review, confirmed=True).phase, phase)
+        self.assertEqual([m[0] for m in wire], ["GET", "GET"])
+        self.assertFalse((self.staging / (key.submission+".zsa")).exists())
+
+    def test_save_submit_exact_server_reply_then_revoked_local_authority(self):
+        conn, key, _, post, wire, correct = self.outgoing()
+        def revoke():
+            conn._authorization.revoke()
+            return correct
+        post.append(revoke)
+        attempt = WindowsOriginalSaveChoice(conn, self.staging, key)
+        with self.assertRaises(receipts.WindowsReceiptUncertain) as lost:
+            attempt.apply(attempt.review, confirmed=True)
+        self.assertEqual((lost.exception.key, lost.exception.receipt.revision), (key, 3))
+        self.assertEqual([m[0] for m in wire], ["GET", "POST"])
+        self.assertTrue((self.staging / (key.submission + ".zsa")).exists())
+
+    def test_save_retirement_lost_first_rename_finishes_only_original_key(self):
+        conn, key, _, _, wire, _ = self.outgoing()
+        first, last = (self.staging / (key.submission+s) for s in (".zwi", ".zwk"))
+        rename = OutputNative.rename_new
+        def lose(api, handle, parent, name):
+            done = rename(api, handle, parent, name)
+            if name == first.name:
+                raise OSError("lost first archive rename response")
+            return done
+        choice = WindowsOriginalSaveChoice(conn, self.staging, key)
+        with patch.object(OutputNative, "rename_new", lose), self.assertRaises(WindowsRetirementPending) as lost:
+            choice.apply(choice.review, confirmed=True)
+        self.assertEqual((lost.exception.key, lost.exception.receipt.revision), (key, 3))
+        self.assertTrue(first.exists())
+        self.assertFalse(last.exists())
+        self.assertEqual(self.recover(conn), key)
+        self.assertEqual(retire_original_windows_save(conn, self.staging, key, confirmed=True), lost.exception.receipt)
+        self.assertTrue(last.exists())
+        self.assertEqual([m[0] for m in wire], ["GET", "POST"])
+
+    def test_save_unavailable_body_keeps_independent_original_status_route(self):
+        conn, key, get, _, wire, correct = self.outgoing()
+        (self.staging / (key.submission+".zvb")).rename(self.staging / "unavailable.fixture")
+        request = WindowsOriginalSaveChoice(conn, self.staging, key)
+        with self.assertRaises(Rejected):
+            request.apply(request.review, confirmed=True)
+        self.assertEqual(wire, [])
+        get[0] = correct
+        self.assertEqual(receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True).phase, Phase.CONFIRMED)
+        self.assertEqual([m[0] for m in wire], ["GET"])
+
 
 def qualify(spelling):
     if sys.platform != "win32":
@@ -255,8 +371,8 @@ def qualify(spelling):
             raise SystemExit("This synthetic origin requires the unmodified Windows marking policy.")
         cases = [name for name in unittest.defaultTestLoader.getTestCaseNames(OriginalSave)
                  if name.startswith("test_save_")]
-        if len(cases) != 10:
-            raise RuntimeError("all ten original-save and receipt cases are required")
+        if len(cases) != 16:
+            raise RuntimeError("all sixteen original-save, receipt and transfer cases are required")
         suite = unittest.TestSuite(OriginalSave(name, root, spelling, security, actor, profile, zone) for name in cases)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return int(not (result.wasSuccessful() and result.testsRun == len(cases) and not result.skipped))

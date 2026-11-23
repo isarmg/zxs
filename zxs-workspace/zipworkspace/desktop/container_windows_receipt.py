@@ -89,7 +89,7 @@ def lookup_original_windows_receipt(connection, private_parent, key, *, confirme
     intent, grant a writable connection, remove/replace a pending slot or publish anything to R3.
     """
     with _original_record(connection, private_parent, key, confirmed=confirmed) as selection:
-        home, source, plan, _, _, check_record, _ = selection
+        home, source, plan, _, _, check_record, _, retired = selection
         action = plan.actions[0]
         ticket = _ticket(key, source, plan)
         # Only the actual native credential supplier may attest the account, not just a replaced
@@ -108,28 +108,33 @@ def lookup_original_windows_receipt(connection, private_parent, key, *, confirme
         if type(reply) is not Reply:
             return Outcome(ticket, Phase.UNKNOWN)
         if reply.kind is not ReplyKind.SELECTED:
-            if prior is not None or reply.receipt is not None:
+            if retired or prior is not None or reply.receipt is not None:
                 return Outcome(ticket, Phase.UNKNOWN)  # A locally settled operation never becomes absent/retryable.
             phase = {ReplyKind.ABSENT: Phase.ABSENT, ReplyKind.CONFLICT: Phase.CONFLICT}.get(reply.kind, Phase.UNKNOWN)
             return Outcome(ticket, phase)
         try:
             result = verified_result(action, ticket.base_sequence, reply.receipt)
-            receipt = _receipt(ticket, action, result)
         except SubmitUnconfirmed:
             return Outcome(ticket, Phase.UNKNOWN)
-        confirmed_outcome = Outcome(ticket, Phase.CONFIRMED, receipt)
-        if not _outcome(confirmed_outcome, ticket) or (prior is not None and prior != receipt):
-            return Outcome(ticket, Phase.UNKNOWN)
-        try:
-            if prior is None:
-                _retain(home, key, receipt, check)
-            else:
-                # If a prior publication lost its final directory-sync response, finish that
-                # barrier; do not write another marker, replace it, or rearm the original Save.
-                home.api.flush(home.handle)
-            if _original_proof(home, key, ticket) != receipt:
-                raise Rejected("retained Windows proof no longer matches the server")
-            check()
-        except Exception as error:
-            raise WindowsReceiptUncertain(key, receipt) from error
-        return confirmed_outcome
+        return _retain_verified(home, key, ticket, action, result, prior, check)
+
+
+def _retain_verified(home, key, ticket, action, result, prior, check):
+    receipt = _receipt(ticket, action, result)
+    confirmed_outcome = Outcome(ticket, Phase.CONFIRMED, receipt)
+    if not _outcome(confirmed_outcome, ticket) or (prior is not None and prior != receipt):
+        return Outcome(ticket, Phase.UNKNOWN)
+    try:
+        check()
+        if prior is None:
+            _retain(home, key, receipt, check)
+        else:
+            # If a prior publication lost its final directory-sync response, finish that
+            # barrier; do not write another marker, replace it, or rearm the original Save.
+            home.api.flush(home.handle)
+        if _original_proof(home, key, ticket) != receipt:
+            raise Rejected("retained Windows proof no longer matches the server")
+        check()
+    except Exception as error:
+        raise WindowsReceiptUncertain(key, receipt) from error
+    return confirmed_outcome

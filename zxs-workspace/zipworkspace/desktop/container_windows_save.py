@@ -284,7 +284,7 @@ class _HeldWindowsSave:
     def __init__(self, plan, source, api, body, observe):
         self._plan, self._destination = plan, source.destination
         self._api, self._body, self._observe = api, body, observe
-        self._lock, self._active, self._live = Lock(), None, True
+        self._lock, self._active, self._payload, self._live = Lock(), None, None, True
 
     @property
     def plan(self):
@@ -303,7 +303,13 @@ class _HeldWindowsSave:
         # Serialize revocation with every original-handle operation. A yielded generator
         # never keeps the lock, cannot read a closed/reused HANDLE and cannot steal the offset.
         with self._lock:
-            self._live, self._active = False, None
+            self._live, self._active, self._payload = False, None, None
+
+    def _issued(self, payload):
+        with self._lock:
+            if self._active is None or payload is not self._payload:
+                raise Rejected("not the original live Windows whole-file transfer stream")
+            self._check(policy=True)
 
     @contextmanager
     def body(self, action):
@@ -333,13 +339,18 @@ class _HeldWindowsSave:
                     digest.update(block)
                 yield block
         try:
-            yield blocks()
+            stream = blocks()
+            with self._lock:
+                if self._active is not scope:
+                    raise Rejected("Windows original body lease was released before issuance")
+                self._payload = stream
+            yield stream
             with self._lock:
                 self._check(policy=True)
         finally:
             with self._lock:
                 if self._active is scope:
-                    self._active = None
+                    self._active, self._payload = None, None
 
 
 @contextmanager
@@ -355,7 +366,16 @@ def _original_record(connection, private_parent, key, *, confirmed):
     live()
     with PinnedParent(private_parent, output=True) as home:
         api, slot = home.api, _slot(destination, account, key.container)
-        with api.inspected_file(home.handle, slot) as intent:
+        archived = key.submission + ".zwi"
+        try:
+            owner = api.inspected_file(home.handle, archived)
+        except _NTError as error:
+            if error.code not in (0xc0000034, 0xc000000f):
+                raise
+            owner, retired = api.inspected_file(home.handle, slot), False
+        else:
+            slot, retired = archived, True  # Exact-key archive only, never scan or seize a newer live slot.
+        with owner as intent:
             intent_acl = OutputProtection(home.handle)
             original = api.ordinary(intent, home.volume, home.name(slot))
             raw = _read_record(home, intent, slot, original.file_id, intent_acl)
@@ -367,14 +387,22 @@ def _original_record(connection, private_parent, key, *, confirmed):
                 if _same_file(home, intent, slot, len(raw), original.file_id) != original:
                     raise Rejected("original Windows transfer record changed")
             observe_record()
-            yield home, source, plan, body_id, zone, observe_record, live
+            yield home, source, plan, body_id, zone, observe_record, live, retired
 
 
 @contextmanager
 def open_original_windows_save(connection, private_parent, key, *, confirmed=False):
     """Recover the exact private plan+body (no request or new IDs). Keep existing files share-zero."""
-    with _original_record(connection, private_parent, key, confirmed=confirmed) as selection, ExitStack() as keep:
-        home, source, plan, body_id, zone, observe_record, live = selection
+    with _original_record(connection, private_parent, key, confirmed=confirmed) as selection:
+        with _held_windows_body(selection, connection, key) as pending:
+            yield pending
+
+
+@contextmanager
+def _held_windows_body(selection, connection, key):
+    """Lend only from the already exclusively held original intent (never recursively reopen it)."""
+    with ExitStack() as keep:
+        home, source, plan, body_id, zone, observe_record, live, _ = selection
         api, h2 = home.api, connection._exchange
         action, body_leaf = plan.actions[0], key.submission + ".zvb"
         url = source.origin + h2._node_target(key.container, source.head.id, source.head.length, source.head.sha256)
