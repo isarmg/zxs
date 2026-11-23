@@ -3,6 +3,7 @@ mod codec;
 mod model;
 mod recycle;
 mod recycle_material;
+mod volume;
 
 use crate::{
     fs::{HeldDir, local_uid},
@@ -13,11 +14,9 @@ pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId,
 pub(crate) use recycle::RecycleReceipt;
 use std::{
     collections::BTreeMap,
-    ffi::CString,
     fmt,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Read, Write},
-    os::fd::AsRawFd,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{
@@ -25,6 +24,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use volume::DataVolume;
 
 const TAG_BYTES: usize = 1024 * 1024;
 
@@ -83,18 +83,13 @@ pub(crate) struct NodeBytes {
 }
 
 pub(crate) struct Store {
-    data: PathBuf,
-    staging: PathBuf,
-    _owner: File,
+    volume: DataVolume,
     next_stage: AtomicU64,
     // Catalogue lock selects an independent short per-container lock.
     // No upload reads, hashing, or fsync while acquiring this map.
     objects: Mutex<BTreeMap<Id, Arc<Mutex<Option<State>>>>>,
     // Only bootstrap and rename require a shared display-namespace cut.
     names: Mutex<()>,
-    data_root: HeldDir,
-    data_directory: HeldDir,
-    staging_directory: HeldDir,
     archive: Option<recycle::Recycle>,
 }
 
@@ -105,24 +100,11 @@ impl Store {
     }
 
     fn open_ordinary(data_root: HeldDir) -> io::Result<Self> {
-        data_root.require_named()?;
-        let owner = data_root.opaque_owner(c"owner")?;
-        let data_directory = data_root.opaque_subdirectory(c"data")?;
-        let staging_directory = data_root.opaque_subdirectory(c"staging")?;
-        discard_interrupted_intake(&data_root, &staging_directory, &owner)?;
-        let data = data_directory.path.clone();
-        let staging = staging_directory.path.clone();
-        data_root.require_named()?;
         Ok(Self {
-            data,
-            staging,
-            _owner: owner,
+            volume: DataVolume::open(data_root)?,
             next_stage: AtomicU64::new(0),
             objects: Mutex::new(BTreeMap::new()),
             names: Mutex::new(()),
-            data_root,
-            data_directory,
-            staging_directory,
             archive: None,
         })
     }
@@ -137,16 +119,15 @@ impl Store {
     ) -> io::Result<Self> {
         recycle::Recycle::require_roles(&system, &recycled, &ordinary)?;
         let mut store = Self::open_ordinary(ordinary)?;
-        store.archive = Some(recycle::Recycle::open(system, recycled, &store.data_root)?);
-        store.data_held()?;
+        store.archive = Some(recycle::Recycle::open(
+            system,
+            recycled,
+            store.volume.root(),
+        )?);
+        store.volume.require_named()?;
         Ok(store)
     }
 
-    fn data_held(&self) -> io::Result<()> {
-        self.data_root.require_named()?;
-        self.data_directory.require_named()?;
-        self.staging_directory.require_named()
-    }
     fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, PathBuf)>> {
         self.archive
             .as_ref()
@@ -163,20 +144,9 @@ impl Store {
             .map_err(|_| invalid("container catalogue unavailable"))?;
         Ok(objects.entry(id).or_default().clone())
     }
-    fn load<'a>(&self, id: Id, memory: &'a mut Option<State>) -> io::Result<&'a mut State> {
-        if memory.is_none() {
-            // Covers process cuts and same-process post-rename sync errors.
-            // Only metadata is read; previous complete node bodies aren't scanned.
-            self.staging_directory.file.sync_all()?;
-            *memory = Some(read_state(&self.data.join(hex(id)), id)?);
-        }
-        memory
-            .as_mut()
-            .ok_or_else(|| invalid("container state unavailable"))
-    }
     fn stage(&self) -> io::Result<Stage> {
-        self.data_held()?;
-        self.stage_at(&self.staging)
+        self.volume.require_named()?;
+        self.stage_at(self.volume.staging())
     }
     fn stage_at(&self, root: &Path) -> io::Result<Stage> {
         loop {
@@ -250,7 +220,7 @@ impl Store {
         authorize: impl FnOnce() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
         let id = mutation.container;
-        self.data_held()?;
+        self.volume.require_named()?;
         let object = self.object(id)?;
         let mut memory = object
             .lock()
@@ -259,7 +229,7 @@ impl Store {
             authorize()?;
             return Err(Conflict::MissingContainer.into());
         }
-        let selected = self.load(id, &mut memory)?;
+        let selected = self.volume.load(id, &mut memory)?;
         match selected.replay(mutation, &change) {
             Ok(None) => {}
             result => {
@@ -297,11 +267,11 @@ impl Store {
             authorize()?;
             return Err(Conflict::AlreadyExists.into());
         }
-        let directory = self.data.join(hex(id));
+        let directory = self.volume.container(id);
         ensure_dir(&directory)?;
         // Also covers a prior failed first publication of this directory.
-        self.data_held()?;
-        self.data_directory.file.sync_all()?;
+        self.volume.require_named()?;
+        self.volume.sync_data()?;
         let destination = directory.join(entry_leaf(receipt.sequence, receipt.mutation.request));
         match fs::symlink_metadata(&destination) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -309,9 +279,9 @@ impl Store {
             Ok(_) => return Err(invalid("container receipt position already exists").into()),
         }
         authorize()?;
-        self.data_held()?;
+        self.volume.require_named()?;
         fs::rename(&stage.path, destination)?;
-        if let Err(e) = sync_dir(&directory).and_then(|()| self.staging_directory.file.sync_all()) {
+        if let Err(e) = sync_dir(&directory).and_then(|()| self.volume.sync_staging()) {
             *memory = None;
             return Err(Error::Uncertain(e));
         }
@@ -326,7 +296,7 @@ impl Store {
     }
 
     fn vacant(&self, except: Id, name: &str) -> io::Result<bool> {
-        for item in fs::read_dir(&self.data)? {
+        for item in fs::read_dir(self.volume.data())? {
             let item = item?;
             let file_name = item.file_name();
             let id = parse_container_id(file_name.as_encoded_bytes())?;
@@ -351,8 +321,9 @@ impl Store {
                 .get(&mutation.request)
                 .cloned());
         }
-        self.data_held()?;
+        self.volume.require_named()?;
         Ok(self
+            .volume
             .load(mutation.container, &mut memory)?
             .receipts
             .get(&mutation.request)
@@ -367,8 +338,8 @@ impl Store {
         if self.recycled(id)?.is_some() {
             return Ok(None);
         }
-        self.data_held()?;
-        let state = self.load(id, &mut memory)?;
+        self.volume.require_named()?;
+        let state = self.volume.load(id, &mut memory)?;
         Ok(state.name.as_ref().map(|name| Container {
             id,
             name: name.clone(),
@@ -379,7 +350,7 @@ impl Store {
     }
     pub(crate) fn list(&self) -> io::Result<Vec<Container>> {
         let mut items = Vec::new();
-        for item in fs::read_dir(&self.data)? {
+        for item in fs::read_dir(self.volume.data())? {
             let item = item?;
             let name = item.file_name();
             let id = parse_container_id(name.as_encoded_bytes())?;
@@ -413,7 +384,7 @@ impl Store {
             .archive
             .as_ref()
             .ok_or_else(|| invalid("no qualified recycle storage"))?;
-        let ordinary = &self.data_root;
+        let ordinary = self.volume.root();
         if mutation.request == [0; 16] {
             return Err(invalid("zero recycle request identity").into());
         }
@@ -421,7 +392,7 @@ impl Store {
         let mut memory = object
             .lock()
             .map_err(|_| invalid("container selection unavailable"))?;
-        let original = self.data.join(hex(mutation.container));
+        let original = self.volume.container(mutation.container);
         authorize()?;
         if let Some((done, at)) = archive.selected(mutation.container)? {
             if (done.mutation, done.original_sequence) != (mutation, expected_sequence) {
@@ -429,7 +400,7 @@ impl Store {
             }
             // The result remains available from SYSTEM and R when F is
             // absent. A caller may separately query the selected receipt.
-            if let Err(error) = self.data_held().and_then(|()| {
+            if let Err(error) = self.volume.require_named().and_then(|()| {
                 let known = read_state(&at, mutation.container)?;
                 archive.retire(done, ordinary, &original, &known)
             }) {
@@ -440,8 +411,8 @@ impl Store {
             }
             return Ok(done);
         }
-        self.data_held()?;
-        let state = self.load(mutation.container, &mut memory)?;
+        self.volume.require_named()?;
+        let state = self.volume.load(mutation.container, &mut memory)?;
         if state.name.is_none() {
             return Err(Conflict::MissingContainer.into());
         }
@@ -454,7 +425,7 @@ impl Store {
         let incoming = self.stage_at(archive.staging()?)?;
         let done = archive.prepare(mutation, ordinary, &original, state, &incoming, || {
             authorize()?;
-            self.data_held()
+            self.volume.require_named()
         })?;
         let selector = self.stage_at(archive.moves()?)?;
         // Only one small SYSTEM rename switches logical visibility. The
@@ -466,7 +437,7 @@ impl Store {
                 .map_err(|_| invalid("container name selection unavailable"))?;
             archive.choose(done, &selector, || {
                 authorize()?;
-                self.data_held()
+                self.volume.require_named()
             })?;
         }
         if let Err(error) = archive.retire(done, ordinary, &original, state) {
@@ -493,8 +464,8 @@ impl Store {
         if self.recycled(id)?.is_some() {
             return Ok(None);
         }
-        self.data_held()?;
-        let state = self.load(id, &mut memory)?;
+        self.volume.require_named()?;
+        let state = self.volume.load(id, &mut memory)?;
         let Some(mut next) = state.branches.get(branch).copied() else {
             return Ok(None);
         };
@@ -525,14 +496,14 @@ impl Store {
         if self.recycled(id)?.is_some() {
             return Ok(None);
         }
-        self.data_held()?;
-        let state = self.load(id, &mut memory)?;
+        self.volume.require_named()?;
+        let state = self.volume.load(id, &mut memory)?;
         let Some(node) = state.nodes.get(&node).cloned() else {
             return Ok(None);
         };
         let entry = self
-            .data
-            .join(hex(id))
+            .volume
+            .container(id)
             .join(entry_leaf(node.sequence, node.request));
         private_dir(&entry)?;
         let file = open_file(&entry.join("payload"))?;
@@ -601,76 +572,6 @@ fn read_state(path: &Path, id: Id) -> io::Result<State> {
         })?;
     }
     Ok(state)
-}
-
-/// The ordinary owner lease excludes new intake during this cold cleanup.
-/// Recognize only the flat staging format; selected data and recycle roots
-/// are not traversed. Never follow an unexpected member or read file bytes.
-fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -> io::Result<()> {
-    let original_lease = owner.metadata()?;
-    let require_base = || {
-        root.require_named()?;
-        staging.require_named()?;
-        let named = root
-            .opaque_pin(c"owner")?
-            .ok_or_else(|| invalid("intake owner lease lost its name"))?;
-        let seen = named.file.metadata()?;
-        if (original_lease.dev(), original_lease.ino()) != (seen.dev(), seen.ino())
-            || !root.shares_file_mount(owner)?
-        {
-            return Err(invalid("intake owner lease was replaced"));
-        }
-        Ok(())
-    };
-    require_base()?;
-    // Enumerate the still-held staging directory on Linux, not its former
-    // pathname. The borrowed File outlives the streamed enumeration.
-    let held_path = format!("/proc/self/fd/{}", staging.file.as_raw_fd());
-    let mut changed = false;
-    for item in fs::read_dir(held_path)? {
-        let name = item?.file_name();
-        let bytes = name.as_encoded_bytes();
-        if bytes.len() != 16 || !bytes.iter().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-            continue;
-        }
-        let leaf = CString::new(bytes).map_err(|_| invalid("invalid stage name"))?;
-        let candidate = || {
-            let Some(stage) = staging.child_directory(&leaf)? else {
-                return Ok::<_, io::Error>(None);
-            };
-            if stage
-                .names()?
-                .iter()
-                .any(|name| !matches!(name.as_slice(), b"payload" | b"receipt"))
-            {
-                return Ok(None);
-            }
-            // Prove the whole flat shape before unlinking either member.
-            let payload = stage.opaque_pin(c"payload")?;
-            let receipt = stage.opaque_pin(c"receipt")?;
-            Ok(Some((stage, payload, receipt)))
-        };
-        let qualified = candidate();
-        // Candidate-local foreign layouts (including symlinks, unsupported
-        // mounts and non-regular members) are left alone. A displaced base
-        // or original owner record always invalidates the entire cleanup.
-        require_base()?;
-        let Ok(Some((stage, payload, receipt))) = qualified else {
-            continue;
-        };
-        if let Some(pin) = payload.as_ref() {
-            stage.unlink_opaque_original(c"payload", pin)?;
-        }
-        if let Some(pin) = receipt.as_ref() {
-            stage.unlink_opaque_original(c"receipt", pin)?;
-        }
-        staging.unlink_empty_opaque_original(&leaf, &stage)?;
-        changed = true;
-    }
-    if changed {
-        staging.file.sync_all()?;
-    }
-    require_base()
 }
 
 struct Stage {

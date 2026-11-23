@@ -192,8 +192,8 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
     for (sequence, request) in [(2, id(3)), (3, id(4)), (4, id(5))] {
         assert!(
             !store
-                .data
-                .join(hex(id(1)))
+                .volume
+                .container(id(1))
                 .join(entry_leaf(sequence, request))
                 .join("payload")
                 .exists()
@@ -206,13 +206,13 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
 fn leave_prepared_recycle_unselected(store: &Store, original: &Path) {
     let object = store.object(id(1)).unwrap();
     let mut memory = object.lock().unwrap();
-    let state = store.load(id(1), &mut memory).unwrap();
+    let state = store.volume.load(id(1), &mut memory).unwrap();
     let archive = store.archive.as_ref().unwrap();
     let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
     let tentative = archive
         .prepare(
             mutation(6),
-            &store.data_root,
+            store.volume.root(),
             original,
             state,
             &incoming,
@@ -280,7 +280,7 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
         )
         .unwrap();
 
-    let original = store.data.join(hex(id(1)));
+    let original = store.volume.container(id(1));
     leave_prepared_recycle_unselected(&store, &original);
     assert_eq!(read_node(&store, 11), b"two");
     assert_eq!(store.describe(id(1)).unwrap().unwrap().name, "name");
@@ -341,19 +341,19 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
             || Ok(()),
         )
         .unwrap();
-    let original = store.data.join(hex(id(1)));
+    let original = store.volume.container(id(1));
     let first = original.join(entry_leaf(1, id(2)));
     let second = original.join(entry_leaf(2, id(3)));
     {
         let source = store.object(id(1)).unwrap();
         let mut memory = source.lock().unwrap();
-        let state = store.load(id(1), &mut memory).unwrap();
+        let state = store.volume.load(id(1), &mut memory).unwrap();
         let archive = store.archive.as_ref().unwrap();
         let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
         archive
             .prepare(
                 mutation(6),
-                &store.data_root,
+                store.volume.root(),
                 &original,
                 state,
                 &incoming,
@@ -421,7 +421,7 @@ fn a_later_staging_substitution_cannot_redirect_a_whole_node_upload() {
         || Ok(()),
     );
     assert!(matches!(result,Err(Error::Io(ref e)) if e.to_string().contains("replaced")));
-    for path in [&staging, &displaced, &store.data] {
+    for path in [staging.as_path(), displaced.as_path(), store.volume.data()] {
         assert!(fs::read_dir(path).unwrap().next().is_none());
     }
 }
@@ -484,16 +484,16 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
         )
         .unwrap();
     let archive = store.archive.as_ref().unwrap();
-    let original = store.data.join(hex(id(1)));
+    let original = store.volume.container(id(1));
     {
         let object = store.object(id(1)).unwrap();
         let mut memory = object.lock().unwrap();
-        let state = store.load(id(1), &mut memory).unwrap();
+        let state = store.volume.load(id(1), &mut memory).unwrap();
         let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
         archive
             .prepare(
                 mutation(6),
-                &store.data_root,
+                store.volume.root(),
                 &original,
                 state,
                 &incoming,
