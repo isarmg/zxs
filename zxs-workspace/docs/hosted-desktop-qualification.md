@@ -17,3 +17,17 @@
 - 虚拟盘不在此作业：[Windows](../winfsp/README.md)有 WinFsp 数据回调和拒绝分派的封闭生命周期，未接成桌面盘符；[macOS](macos-snapshot-volume.md)有只读回调及无卷会话，未接公开 macFUSE/FSKit 挂载。CI 不装驱动、启动挂载、改系统安全设置、访问真实档案或共享，也不上传候选二进制。
 
 这里列的是验收项目。实测结果以对应的 GitHub run 为准。
+
+## Windows 远程原节点另存（独立资格）
+
+Windows 托管作业先查询当前进程令牌、原暂存目录的固定本机 NTFS 与现有权限。标准托管 Windows VM 以管理员运行并禁用 UAC，预计打印 **NOT RUN**。不新建账号、不降低应用的普通用户门槛、不调整系统策略或目录 ACL。此状态不算写入验收，现有只读和窗口用例仍单独执行。若实际进程、目录和来源条件均符合，则五项原生用例都必须执行，不容许跳过后报通过。
+
+可在 **Windows 11 非提权普通用户** 下，从 `zxs-workspace` 运行：
+
+```powershell
+python -I -B -X utf8 tests/qualification/windows_node_qualification.py 'C:\路径\现有私用测试目录'
+```
+
+明确指定本人所有、已经存在且符合原私用权限形状的固定本机 NTFS 测试目录；勿用共享盘、同步目录、EFS 或存有真实资料的目录。脚本不改变 ACL 或下载来源策略。若现有 Windows 策略不标记保留域 `workspace-node-qualification.invalid`，此次来源流验收不运行，手动入口返回非零。脚本保留专用合成案例目录供检查，不递归清理。
+
+仅以合成 H2 响应提供正文，不登录或连接实际服务器。原生文件、文件身份、两父同步、ACL 与 Windows URL 安全区域查询均实际执行。核对精确正文与零字节、同一 FileId 和来源 ADS、晚到的大小写同名占用、非 H2/短读/错误摘要、未确认与并行关闭。不是网络 TLS、杀毒、实际桌面另存或断电耐久验收。

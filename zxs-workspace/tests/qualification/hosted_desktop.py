@@ -229,6 +229,9 @@ def hosted_run():
                    ZIP_WORKSPACE_GUI_TESTS="1", QT_QPA_PLATFORM="cocoa" if mac else "windows")
         if mac:
             env["ZIPWORKSPACE_APFS_DISPOSABLE_PRIVATE_DIRECTORY"] = str(tests)
+        else:
+            # The native write profile must NOT be loosened for a hosted administrator.
+            run([*python_args(sys.executable), HERE.with_name("windows_node_qualification.py"), "--hosted", tests], env)
         executable = prepare_environment(root, mac, env)
         run([*python_args(executable), HERE, "source-suite"], env)
         run([*python_args(executable), HERE, "native-window"], env)
