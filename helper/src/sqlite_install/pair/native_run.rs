@@ -1,22 +1,26 @@
 //! Host-side decisions and the authenticated result for the private v20
 //! handoff. No mode can choose media by parsing a UUID or receipt.
 use crate::local_worker::transport;
-pub(super) mod joint_material;
-mod manifest;
-mod worker;
-mod layout;
 mod first_browser;
-mod rust_credentials;
+pub(super) mod joint_material;
+mod layout;
+mod manifest;
 mod objects;
+mod rust_credentials;
 mod shared_account_reset;
-pub(crate) use shared_account_reset::Selection as SharedAccountReset;
-pub(in crate::sqlite_install::pair) use rust_credentials::{DurableRustPending,RustEnrollmentApproval,FreshActive,transact_fresh};
-pub(crate) use rust_credentials::{account_worker as rust_account_worker,vault_worker as rust_vault_worker};
+mod worker;
 pub(in crate::sqlite_install) use first_browser::offer as offer_init_web;
 pub(super) use first_browser::offer_phase as offer_account_web;
 pub(crate) use first_browser::worker as exec_first_browser;
-pub(super) use layout::{Choice,FirstShares,FreshScope,ResolvedRust};
-pub(crate) use layout::{RetirementCheck,ImportCheck,check_deployment};
 pub(crate) use layout::worker as exec_layout_sql_child;
+pub(super) use layout::{Choice, FirstShares, FreshScope, ResolvedRust};
+pub(crate) use layout::{ImportCheck, RetirementCheck, check_deployment};
+pub(in crate::sqlite_install::pair) use rust_credentials::{
+    DurableRustPending, FreshActive, RustEnrollmentApproval, transact_fresh,
+};
+pub(crate) use rust_credentials::{
+    account_worker as rust_account_worker, vault_worker as rust_vault_worker,
+};
+pub(crate) use shared_account_reset::Selection as SharedAccountReset;
 mod host;
 use super::bad;

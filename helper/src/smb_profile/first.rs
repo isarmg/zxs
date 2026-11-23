@@ -6,23 +6,41 @@ use std::collections::BTreeSet;
 pub(crate) type Id = [u8; 16];
 pub(crate) const MAX_FOLDERS: usize = 62;
 const MAX_NAME: usize = 255;
-pub(crate) const MAX_WIRE: usize = 16 + 5 * 16
-    + 1 + MAX_FOLDERS * (16 + 1 + 2 + MAX_NAME) + 2 + MAX_NAME;
+pub(crate) const MAX_WIRE: usize =
+    16 + 5 * 16 + 1 + MAX_FOLDERS * (16 + 1 + 2 + MAX_NAME) + 2 + MAX_NAME;
 const _: () = assert!(MAX_WIRE == 17_342);
 type Result<T> = std::result::Result<T, &'static str>;
 const BAD: &str = "not one canonical first SMB plan for this original installation";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Mode { ReadOnly, ReadWrite }
+pub(crate) enum Mode {
+    ReadOnly,
+    ReadWrite,
+}
 impl Mode {
-    pub(crate) fn code(self) -> u8 { match self { Self::ReadOnly => 1, Self::ReadWrite => 2 } }
+    pub(crate) fn code(self) -> u8 {
+        match self {
+            Self::ReadOnly => 1,
+            Self::ReadWrite => 2,
+        }
+    }
     fn parse(value: u8) -> Result<Self> {
-        match value { 1 => Ok(Self::ReadOnly), 2 => Ok(Self::ReadWrite), _ => Err(BAD) }
+        match value {
+            1 => Ok(Self::ReadOnly),
+            2 => Ok(Self::ReadWrite),
+            _ => Err(BAD),
+        }
     }
 }
 fn name(s: &str) -> bool {
-    !s.is_empty() && s.len() <= MAX_NAME && s != "." && s != ".." && !s.ends_with([' ', '.'])
-        && !s.chars().any(|c| c.is_control() || matches!(c, '"' | '\\' | '/' | ':' | '|' | '<' | '>' | '*' | '?'))
+    !s.is_empty()
+        && s.len() <= MAX_NAME
+        && s != "."
+        && s != ".."
+        && !s.ends_with([' ', '.'])
+        && !s.chars().any(|c| {
+            c.is_control() || matches!(c, '"' | '\\' | '/' | ':' | '|' | '<' | '>' | '*' | '?')
+        })
 }
 /// One explicitly named logical route. It is neither a volume selector nor
 /// an independent `ShareId`, operation, or login.
@@ -30,15 +48,29 @@ fn name(s: &str) -> bool {
 pub(crate) struct RecycleName(String);
 impl RecycleName {
     pub(crate) fn new(label: String) -> Result<Self> {
-        if name(&label) { Ok(Self(label)) } else { Err(BAD) }
+        if name(&label) {
+            Ok(Self(label))
+        } else {
+            Err(BAD)
+        }
     }
-    pub(crate) fn as_str(&self) -> &str { &self.0 }
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Folder { pub(crate) volume: Id, pub(crate) name: String, pub(crate) mode: Mode }
+pub(crate) struct Folder {
+    pub(crate) volume: Id,
+    pub(crate) name: String,
+    pub(crate) mode: Mode,
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FolderIds { pub(crate) share: Id, pub(crate) publish: Id, pub(crate) setting: Id }
-fn derive(domain:&[u8],sha: &[u8; 32], kind: u8, volume: &Id) -> Id {
+pub(crate) struct FolderIds {
+    pub(crate) share: Id,
+    pub(crate) publish: Id,
+    pub(crate) setting: Id,
+}
+fn derive(domain: &[u8], sha: &[u8; 32], kind: u8, volume: &Id) -> Id {
     let mut h = Sha256::new();
     h.update(domain);
     h.update(sha);
@@ -53,22 +85,33 @@ fn send_name(out: &mut Vec<u8>, s: &str) {
 
 /// The common suffix is only syntax and chosen names/IDs; it is not an
 /// installation authority or a credential-family selector.
-pub(super) fn sort_selection(ids:[Id;5],chosen:&mut[Folder],recycle:&RecycleName)->Result<BTreeSet<Id>>{
+pub(super) fn sort_selection(
+    ids: [Id; 5],
+    chosen: &mut [Folder],
+    recycle: &RecycleName,
+) -> Result<BTreeSet<Id>> {
     let mut done = BTreeSet::new();
     if !ids.into_iter().all(|p| p != [0; 16] && done.insert(p))
-        || !(1..=MAX_FOLDERS).contains(&chosen.len()) { return Err(BAD); }
+        || !(1..=MAX_FOLDERS).contains(&chosen.len())
+    {
+        return Err(BAD);
+    }
     chosen.sort_unstable_by_key(|f| f.volume);
     {
         let mut names = BTreeSet::from([recycle.as_str()]);
         for f in chosen.iter() {
-            if f.volume == [0; 16] || !done.insert(f.volume) || !name(&f.name) || !names.insert(f.name.as_str()) {
+            if f.volume == [0; 16]
+                || !done.insert(f.volume)
+                || !name(&f.name)
+                || !names.insert(f.name.as_str())
+            {
                 return Err(BAD);
             }
         }
     } // Case remains exact; these are real ZXS folder names.
     Ok(done)
 }
-pub(super) fn emit_layout(wire:&mut Vec<u8>,chosen:&[Folder],recycle:&RecycleName){
+pub(super) fn emit_layout(wire: &mut Vec<u8>, chosen: &[Folder], recycle: &RecycleName) {
     wire.push(chosen.len() as u8);
     for f in chosen {
         wire.extend(f.volume);
@@ -79,15 +122,31 @@ pub(super) fn emit_layout(wire:&mut Vec<u8>,chosen:&[Folder],recycle:&RecycleNam
     send_name(wire, recycle.as_str());
 }
 
-pub(super) fn folder_ids(domain:&[u8],sha:&[u8;32],chosen:Vec<Folder>,mut done:BTreeSet<Id>)->Result<Vec<(Folder,FolderIds)>>{
+pub(super) fn folder_ids(
+    domain: &[u8],
+    sha: &[u8; 32],
+    chosen: Vec<Folder>,
+    mut done: BTreeSet<Id>,
+) -> Result<Vec<(Folder, FolderIds)>> {
     let mut next = |kind, vol: &Id| {
         let id = derive(domain, sha, kind, vol);
-        if id == [0; 16] || !done.insert(id) { Err(BAD) } else { Ok(id) }
+        if id == [0; 16] || !done.insert(id) {
+            Err(BAD)
+        } else {
+            Ok(id)
+        }
     };
     let mut folders = Vec::with_capacity(chosen.len());
     for f in chosen {
         let v = f.volume;
-        folders.push((f, FolderIds { share: next(1, &v)?, publish: next(2, &v)?, setting: next(3, &v)? }));
+        folders.push((
+            f,
+            FolderIds {
+                share: next(1, &v)?,
+                publish: next(2, &v)?,
+                setting: next(3, &v)?,
+            },
+        ));
     }
     Ok(folders)
 }
@@ -97,22 +156,34 @@ pub(super) fn take<'a>(p: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
     *p = b;
     Ok(a)
 }
-pub(super) fn fixed<const N: usize>(p: &mut &[u8]) -> Result<[u8; N]> { Ok(take(p, N)?.try_into().expect("exact length")) }
+pub(super) fn fixed<const N: usize>(p: &mut &[u8]) -> Result<[u8; N]> {
+    Ok(take(p, N)?.try_into().expect("exact length"))
+}
 fn label(p: &mut &[u8]) -> Result<String> {
     let n = u16::from_be_bytes(fixed(p)?) as usize;
-    if n == 0 || n > MAX_NAME { return Err(BAD); }
-    Ok(std::str::from_utf8(take(p, n)?).map_err(|_| BAD)?.to_owned())
+    if n == 0 || n > MAX_NAME {
+        return Err(BAD);
+    }
+    Ok(std::str::from_utf8(take(p, n)?)
+        .map_err(|_| BAD)?
+        .to_owned())
 }
 
-pub(super) fn decode_layout(p:&mut &[u8])->Result<(Vec<Folder>,RecycleName)>{
+pub(super) fn decode_layout(p: &mut &[u8]) -> Result<(Vec<Folder>, RecycleName)> {
     let [n] = fixed(p)?;
-    if !(1..=MAX_FOLDERS).contains(&(n as usize)) { return Err(BAD); }
+    if !(1..=MAX_FOLDERS).contains(&(n as usize)) {
+        return Err(BAD);
+    }
     let mut folders = Vec::with_capacity(n as usize);
     for _ in 0..n {
         let v = fixed(p)?;
         let [mode] = fixed(p)?;
-        folders.push(Folder { volume: v, mode: Mode::parse(mode)?, name: label(p)? });
+        folders.push(Folder {
+            volume: v,
+            mode: Mode::parse(mode)?,
+            name: label(p)?,
+        });
     }
     let recycle = RecycleName::new(label(p)?)?;
-    Ok((folders,recycle))
+    Ok((folders, recycle))
 }

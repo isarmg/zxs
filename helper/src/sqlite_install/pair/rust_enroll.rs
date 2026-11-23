@@ -3,4 +3,4 @@ pub(super) mod crypto;
 pub(super) mod manifest;
 pub(super) mod receipt;
 pub(super) mod secret_order;
-use super::{Id,bad};
+use super::{Id, bad};
