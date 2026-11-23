@@ -21,6 +21,8 @@ _CATALOG_KEYS = frozenset(("items", "next_after"))
 _CATALOG_ROW = frozenset(("container_id", "sequence", "name"))
 _CATALOG_PAGE_ROWS = 256
 _NODE = frozenset(("node_id", "operation_id", "parent_node", "original_branch", "sequence", "length", "sha256"))
+_HISTORY_KEYS = frozenset(("head", "nodes", "next"))
+_HISTORY_PAGE_ROWS = 256
 _LOGIN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 _HASH = re.compile(r"[0-9a-f]{64}")
 
@@ -204,26 +206,44 @@ def _catalog_page(raw, after):
     return rows, required
 
 
-def _nodes(raw, branch, head, sequence):
-    if type(raw) is not list or not raw:
-        raise Rejected("no exact R3 branch ancestry")
-    expected, ceiling = head, sequence + 1
-    seen, views = set(), []
-    for row in raw:
+class _History:
+    """Validate the entire anchored chain before returning a branch view."""
+
+    def __init__(self, branch, head, sequence):
+        self.branch, self.head = branch, head
+        self.expected, self.ceiling = head, sequence + 1
+        self.seen, self.views = set(), []
+
+    def accept(self, raw):
+        if (self.expected is None or type(raw) is not dict or raw.keys() != _HISTORY_KEYS
+                or raw["head"] != self.head or type(raw["nodes"]) is not list
+                or not 1 <= len(raw["nodes"]) <= _HISTORY_PAGE_ROWS):
+            raise Rejected("invalid R3 branch history page")
+        rows = raw["nodes"]
+        for row in rows:
+            self._accept_node(row)
+        if (raw["next"] != self.expected
+                or (self.expected is not None
+                    and (len(rows) != _HISTORY_PAGE_ROWS or self.expected in self.seen))):
+            raise Rejected("invalid R3 branch history continuation")
+
+    def _accept_node(self, row):
         if (type(row) is not dict or row.keys() != _NODE or not id_ok(row["node_id"])
-                or row["node_id"] != expected or row["node_id"] in seen
+                or row["node_id"] != self.expected or row["node_id"] in self.seen
                 or not id_ok(row["operation_id"]) or not branch_ok(row["original_branch"])
-                or not number(row["sequence"]) or not 0 < row["sequence"] < ceiling
+                or not number(row["sequence"]) or not 0 < row["sequence"] < self.ceiling
                 or not number(row["length"]) or type(row["sha256"]) is not str
                 or _HASH.fullmatch(row["sha256"]) is None
                 or (row["parent_node"] is not None and not id_ok(row["parent_node"]))):
             raise Rejected("inconsistent R3 ancestry for the selected branch")
-        seen.add(row["node_id"])
-        views.append(Node(row["node_id"], row["parent_node"], row["length"], row["sha256"]))
-        expected, ceiling = row["parent_node"], row["sequence"]
-    if expected is not None:
-        raise Rejected("truncated R3 branch ancestry")
-    return Branch(branch, head, tuple(views))
+        self.seen.add(row["node_id"])
+        self.views.append(Node(row["node_id"], row["parent_node"], row["length"], row["sha256"]))
+        self.expected, self.ceiling = row["parent_node"], row["sequence"]
+
+    def finish(self):
+        if self.expected is not None or not self.views:
+            raise Rejected("truncated R3 branch ancestry")
+        return Branch(self.branch, self.head, tuple(self.views))
 
 
 class _Metadata:
@@ -257,6 +277,19 @@ class _Metadata:
             if after is None:
                 return tuple(rows)
 
+    def _branch_history(self, container, branch, head, sequence):
+        history, next_node = _History(branch, head, sequence), None
+        while True:
+            if self._profile is not None:
+                self._profile.require_state()
+            raw = self._exchange.read_history_page(container, branch, head, next_node)
+            if self._profile is not None:
+                self._profile.require_state()
+            history.accept(raw)
+            next_node = history.expected
+            if next_node is None:
+                return history.finish()
+
     def open_container(self, container):
         if not id_ok(container):
             raise Rejected("invalid selected container")
@@ -265,8 +298,8 @@ class _Metadata:
         owner, tags, heads = observed
         if owner.id != container:
             raise Rejected("metadata was not for the selected container")
-        views = tuple(_nodes(self._read(f"{target}/branches/{branch}/nodes"),
-                             branch, head, owner.revision) for branch, head in heads)
+        views = tuple(self._branch_history(container, branch, head, owner.revision)
+                      for branch, head in heads)
         # Branch lists come from separate requests. A deleted container or
         # changed sequence/head set cannot be returned as the same selection.
         if _container(self._read(target)) != observed:

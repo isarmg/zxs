@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from zipworkspace.container_https import HttpsExchange
-from zipworkspace.desktop.container_connection import _Metadata, _catalog_page
+from zipworkspace.desktop.container_connection import _History, _Metadata, _catalog_page
 from zipworkspace.model import Rejected
 
 
@@ -152,3 +152,53 @@ class CompactCatalogTest(unittest.TestCase):
                 _catalog_page(raw, after)
         with self.assertRaises(Rejected):
             _Metadata(Pages((first, dict(terminal, next_after=cursor)))).list_containers()
+
+class BranchHistoryTest(unittest.TestCase):
+    def test_history_uses_only_the_original_branch_get_and_anchor_headers(self):
+        exchange = ExchangeFixture(reply((b'{"head":"fixture","nodes":[],"next":null}',),
+                                         b"application/json"))
+        first = "3" * 32
+        next_node = "4" * 32
+        exchange.read_history_page(CONTAINER, "main", first)
+        exchange.read_history_page(CONTAINER, "main", first, next_node)
+        self.assertEqual(exchange.calls,
+                         [("GET", f"{ROOT}/{CONTAINER}/branches/main/nodes", "application/json", None)] * 2)
+        self.assertEqual(exchange.headers[0]["Zxs-History-Head"], first)
+        self.assertNotIn("Zxs-History-Next", exchange.headers[0])
+        self.assertEqual(exchange.headers[1]["Zxs-History-Head"], first)
+        self.assertEqual(exchange.headers[1]["Zxs-History-Next"], next_node)
+        for branch, cursor in (("main", first), ("main", "F" * 32), ("../nodes", None)):
+            with self.assertRaises(Rejected):
+                exchange.read_history_page(CONTAINER, branch, first, cursor)
+        self.assertEqual(len(exchange.calls), 2)
+
+    def test_history_rejects_unbound_and_incomplete_pages(self):
+        def key(n):
+            return f"{n:032x}"
+
+        def row(n):
+            return {"node_id": key(n), "operation_id": key(n + 500), "parent_node": key(n - 1) if n > 1 else None,
+                    "original_branch": "main", "sequence": n, "length": 0, "sha256": "0" * 64}
+
+        head, parent = key(257), key(1)
+        full = {"head": head, "nodes": [row(n) for n in range(257, 1, -1)], "next": parent}
+        end = {"head": head, "nodes": [row(1)], "next": None}
+        chain = _History("main", head, 257)
+        chain.accept(full)
+        with self.assertRaises(Rejected):
+            chain.finish()
+        chain.accept(end)
+        self.assertEqual([entry.id for entry in chain.finish().nodes], [key(n) for n in range(257, 0, -1)])
+
+        for bad in (dict(full, next=None), dict(full, next=key(2)), dict(full, head=key(256)),
+                    dict(full, nodes=full["nodes"][:1]), dict(full, nodes=full["nodes"] + [row(1)]),
+                    dict(full, nodes=[])):
+            with self.assertRaises(Rejected):
+                _History("main", head, 257).accept(bad)
+
+        for bad in (dict(end, nodes=[row(2)]), dict(end, nodes=[dict(row(1), sequence=2)]),
+                    dict(end, nodes=[dict(row(1), parent_node=head)], next=head)):
+            chain = _History("main", head, 257)
+            chain.accept(full)
+            with self.assertRaises(Rejected):
+                chain.accept(bad)

@@ -291,6 +291,17 @@ class HttpsExchange:
             headers["Zxs-After"] = after
         return self._read_metadata(_ROOT, headers)
 
+    def read_history_page(self, container, branch, head, next_node=None):
+        if (not _read_id(container) or type(branch) is not str
+                or (branch != "main" and not _read_id(branch))
+                or not _read_id(head)
+                or (next_node is not None and (not _read_id(next_node) or next_node == head))):
+            raise Rejected("invalid Workspace branch history selection")
+        headers = {"Zxs-History-Head": head}
+        if next_node is not None:
+            headers["Zxs-History-Next"] = next_node
+        return self._read_metadata(f"{_ROOT}/{container}/branches/{branch}/nodes", headers)
+
     def _read_metadata(self, target, fields):
         headers = {"Accept": "application/json", "Accept-Encoding": "identity", **fields}
         try:

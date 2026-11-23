@@ -87,6 +87,12 @@ pub(crate) enum Request {
         container: Id,
         branch: Branch,
     },
+    BranchHistory {
+        container: Id,
+        branch: Branch,
+        head: Id,
+        next: Option<Id>,
+    },
     Receipt {
         container: Id,
         operation: Id,

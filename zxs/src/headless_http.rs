@@ -47,6 +47,7 @@ fn body_for<'a>(request: &Request, source: &'a mut dyn Read) -> Result<Incoming<
         | Request::Tags(_)
         | Request::NodeData { .. }
         | Request::BranchNodes { .. }
+        | Request::BranchHistory { .. }
         | Request::Receipt { .. }
         | Request::Delete(_) => Ok(Incoming::Empty),
     }

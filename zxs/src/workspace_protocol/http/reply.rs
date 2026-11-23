@@ -27,6 +27,7 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
             Reply::Container(row) => out.container(&row),
             Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
             Reply::BranchNodes(nodes) => out.array(&nodes, |o, (id, node)| o.node(id, node)),
+            Reply::BranchHistory(page) => out.history(&page),
             Reply::Mutation(receipt) | Reply::Receipt(ReceiptLookup::Mutation(receipt)) => {
                 out.receipt(&receipt)
             }
@@ -132,6 +133,16 @@ impl Json {
             self.id_or_null(*node)?;
         }
         self.write_str("}}")
+    }
+
+    fn history(&mut self, page: &core::HistoryPage) -> fmt::Result {
+        self.write_str("{\"head\":")?;
+        self.hex(&page.head)?;
+        self.write_str(",\"nodes\":")?;
+        self.array(&page.nodes, |out, (id, node)| out.node(id, node))?;
+        self.write_str(",\"next\":")?;
+        self.id_or_null(page.next)?;
+        self.write_char('}')
     }
 
     fn node(&mut self, id: &core::NodeId, node: &core::Node) -> fmt::Result {

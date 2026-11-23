@@ -33,6 +33,7 @@ pub(crate) enum Reply {
     Tags(Vec<String>),
     Node(core::NodeBytes),
     BranchNodes(Vec<(core::NodeId, core::Node)>),
+    BranchHistory(core::HistoryPage),
     Mutation(core::Receipt),
     Recycle {
         selected: core::RecycleReceipt,
@@ -62,6 +63,7 @@ fn access(request: &Request) -> Access {
         Request::Container(id) | Request::Tags(id) => Access::Read(*id),
         Request::NodeData { container, .. }
         | Request::BranchNodes { container, .. }
+        | Request::BranchHistory { container, .. }
         | Request::Receipt { container, .. } => Access::Read(*container),
         Request::SaveNode(save) => Access::Write(save.container),
         Request::CreateBranch { container, .. } => Access::Write(*container),
@@ -194,12 +196,45 @@ pub(crate) fn dispatch<R: Read>(
                 .map_err(|error| failed(&error))?;
             receipt_for(receipt, op, &change)
         }
-        (Request::BranchNodes { container, branch }, Body::Empty) => Ok(Reply::BranchNodes(
+        (history @ (Request::BranchNodes { .. } | Request::BranchHistory { .. }), Body::Empty) => {
+            read_history(store, history, &allowed)
+        }
+        _ => Err(Failure::BadBody),
+    }
+}
+
+fn read_history(
+    store: &core::Store,
+    request: Request,
+    allowed: &impl Fn(Access) -> bool,
+) -> Result<Reply, Failure> {
+    match request {
+        Request::BranchNodes { container, branch } => Ok(Reply::BranchNodes(
             store
                 .branch_nodes(container.bytes(), &branch_key(branch))
                 .map_err(|_| Failure::Unavailable)?
                 .ok_or(Failure::Missing)?,
         )),
+        Request::BranchHistory {
+            container,
+            branch,
+            head,
+            next,
+        } => {
+            let page = store
+                .branch_history(
+                    container.bytes(),
+                    &branch_key(branch),
+                    head.bytes(),
+                    next.map(Id::bytes),
+                )
+                .map_err(|error| failed(&error))?
+                .ok_or(Failure::Missing)?;
+            if !allowed(Access::Read(container)) {
+                return Err(Failure::Denied);
+            }
+            Ok(Reply::BranchHistory(page))
+        }
         _ => Err(Failure::BadBody),
     }
 }

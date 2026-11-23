@@ -92,6 +92,54 @@ fn required_header<'a>(headers: &[(&str, &'a str)], name: &str) -> Result<&'a st
     field(headers, name)?.ok_or(Rejected::Header)
 }
 
+fn selected_read_request(
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+) -> Result<Option<Request>, Rejected> {
+    let catalog = list_request(method, target, headers)?;
+    let history = history_request(method, target, headers)?;
+    Ok(catalog.or(history))
+}
+
+fn history_request(
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+) -> Result<Option<Request>, Rejected> {
+    let head = field(headers, "zxs-history-head")?;
+    let next = field(headers, "zxs-history-next")?;
+    if head.is_none() && next.is_none() {
+        return Ok(None);
+    }
+    let rest = target
+        .strip_prefix(ROOT)
+        .and_then(|part| part.strip_prefix('/'))
+        .filter(|_| method == "GET")
+        .ok_or(Rejected::Header)?;
+    let mut path = rest.split('/');
+    let (Some(container), Some("branches"), Some(branch), Some("nodes"), None) = (
+        path.next(),
+        path.next(),
+        path.next(),
+        path.next(),
+        path.next(),
+    ) else {
+        return Err(Rejected::Header);
+    };
+    let head = Id::parse(head.ok_or(Rejected::Header)?)?;
+    let next = next.map(Id::parse).transpose()?;
+    if next == Some(head) {
+        return Err(Rejected::Value);
+    }
+    Ok(Some(Request::BranchHistory {
+        container: Id::parse(container)?,
+        branch: Branch::parse(branch)?,
+        head,
+        next,
+    }))
+}
+
 pub(crate) fn request(
     method: &str,
     target: &str,
@@ -111,8 +159,8 @@ pub(crate) fn request(
     if matches!(method, "GET" | "DELETE") && length.unwrap_or_default() != 0 {
         return Err(Rejected::Header);
     }
-    if let Some(list) = list_request(method, target, headers)? {
-        return Ok(list);
+    if let Some(read) = selected_read_request(method, target, headers)? {
+        return Ok(read);
     }
     let rest = target
         .strip_prefix(ROOT)

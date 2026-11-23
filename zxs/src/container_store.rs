@@ -128,6 +128,67 @@ fn catalog_rows(
     })
 }
 
+pub(crate) const HISTORY_PAGE_ROWS: usize = 256;
+
+pub(crate) struct HistoryPage {
+    pub(crate) head: NodeId,
+    pub(crate) nodes: Vec<(NodeId, Node)>,
+    pub(crate) next: Option<NodeId>,
+}
+
+fn select_history_page(
+    state: &State,
+    branch: &str,
+    head: NodeId,
+    next: Option<NodeId>,
+) -> Result<HistoryPage, Error> {
+    let current = *state.branches.get(branch).ok_or(Conflict::MissingBranch)?;
+    if current != Some(head) {
+        return Err(Conflict::HeadChanged(current).into());
+    }
+    if next == Some(head) {
+        return Err(Conflict::MissingNode.into());
+    }
+    let first = next.unwrap_or(head);
+    let mut at = Some(head);
+    let mut previous = None;
+    let mut emitted = false;
+    let mut nodes = Vec::with_capacity(HISTORY_PAGE_ROWS);
+    while let Some(id) = at {
+        let node = state
+            .nodes
+            .get(&id)
+            .ok_or_else(|| invalid("branch refers to a missing node"))?;
+        if node.sequence == 0
+            || node.sequence > state.sequence
+            || previous.is_some_and(|upper| node.sequence >= upper)
+        {
+            return Err(invalid("branch ancestry is not strictly descending").into());
+        }
+        emitted |= id == first;
+        if emitted {
+            if nodes.len() == HISTORY_PAGE_ROWS {
+                return Ok(HistoryPage {
+                    head,
+                    nodes,
+                    next: Some(id),
+                });
+            }
+            nodes.push((id, node.clone()));
+        }
+        previous = Some(node.sequence);
+        at = node.prior;
+    }
+    if !emitted {
+        return Err(Conflict::MissingNode.into());
+    }
+    Ok(HistoryPage {
+        head,
+        nodes,
+        next: None,
+    })
+}
+
 pub(crate) struct NodeBytes {
     pub(crate) node: Node,
     pub(crate) file: File,
@@ -709,6 +770,21 @@ impl Store {
             out.push((id, exact.clone()));
         }
         Ok(Some(out))
+    }
+
+    /// Verify the incoming continuation by walking back from this branch's
+    /// exact still-selected head. Only the bounded page is cloned.
+    pub(crate) fn branch_history(
+        &self,
+        id: Id,
+        branch: &str,
+        head: NodeId,
+        next: Option<NodeId>,
+    ) -> Result<Option<HistoryPage>, Error> {
+        self.project_container(id, false, |state, _| {
+            select_history_page(state, branch, head, next)
+        })?
+        .transpose()
     }
 
     pub(crate) fn node(&self, id: Id, node: NodeId) -> io::Result<Option<NodeBytes>> {

@@ -1059,3 +1059,65 @@ fn compact_catalog_bounds_the_page_and_never_reads_denied_ids() {
     assert_eq!(last.items[0].id, key(257));
     assert_eq!(last.next_after, None);
 }
+
+#[test]
+fn branch_history_resume_is_an_exact_descending_parent_chain() {
+    let key = |sequence: u16| {
+        let mut bytes = [0; 16];
+        bytes[14..].copy_from_slice(&sequence.to_be_bytes());
+        bytes
+    };
+    let mut state = State {
+        sequence: 258,
+        ..State::default()
+    };
+    state.branches.insert(MAIN.into(), Some(key(257)));
+    state.branches.insert(String::from("fork"), Some(key(258)));
+    let body = body(b"");
+    for sequence in 1_u16..=258 {
+        let prior = match sequence {
+            1 => None,
+            258 => Some(key(2)),
+            n => Some(key(n - 1)),
+        };
+        state.nodes.insert(
+            key(sequence),
+            Node {
+                prior,
+                original_branch: if sequence == 258 { "fork" } else { MAIN }.into(),
+                body: body.clone(),
+                sequence: u64::from(sequence),
+                request: key(sequence),
+            },
+        );
+    }
+    let first = select_history_page(&state, MAIN, key(257), None).unwrap();
+    assert_eq!(first.head, key(257));
+    assert_eq!(first.nodes.len(), HISTORY_PAGE_ROWS);
+    assert_eq!(first.nodes[0].0, key(257));
+    assert_eq!(first.nodes.last().unwrap().0, key(2));
+    assert_eq!(first.next, Some(key(1)));
+    let last = select_history_page(&state, MAIN, first.head, first.next).unwrap();
+    assert_eq!(last.nodes.len(), 1);
+    assert_eq!(last.nodes[0].0, key(1));
+    assert_eq!(last.next, None);
+    assert!(matches!(
+        select_history_page(&state, MAIN, first.head, Some(key(258))),
+        Err(Error::Conflict(Conflict::MissingNode))
+    ));
+    let shared = select_history_page(&state, "fork", key(258), Some(key(2))).unwrap();
+    assert_eq!(
+        shared.nodes.iter().map(|item| item.0).collect::<Vec<_>>(),
+        [key(2), key(1)]
+    );
+    state.branches.insert(MAIN.into(), Some(key(256)));
+    assert!(matches!(
+        select_history_page(&state, MAIN, first.head, first.next),
+        Err(Error::Conflict(Conflict::HeadChanged(Some(id)))) if id == key(256)
+    ));
+    state.branches.insert(MAIN.into(), None);
+    assert!(matches!(
+        select_history_page(&state, MAIN, first.head, first.next),
+        Err(Error::Conflict(Conflict::HeadChanged(None)))
+    ));
+}

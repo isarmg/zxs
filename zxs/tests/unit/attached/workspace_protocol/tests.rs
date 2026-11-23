@@ -216,3 +216,52 @@ fn compact_catalog_accepts_only_singleton_collection_headers() {
     assert!(request("GET", &detail, &[("Zxs-After", CONT)]).is_err());
     assert!(request("POST", ROOT, &[("Zxs-View", "compact")]).is_err());
 }
+
+#[test]
+fn history_page_headers_require_the_exact_branch_read_and_a_distinct_parent_cursor() {
+    let path = format!("{ROOT}/{CONT}/branches/main/nodes");
+    assert_eq!(
+        request("GET", &path, &[]),
+        Ok(Request::BranchNodes {
+            container: id(1),
+            branch: Branch::Main,
+        })
+    );
+    assert_eq!(
+        request("GET", &path, &[("zxs-history-head", NODE)]),
+        Ok(Request::BranchHistory {
+            container: id(1),
+            branch: Branch::Main,
+            head: id(3),
+            next: None,
+        })
+    );
+    let continued = [("Zxs-History-Head", NODE), ("Zxs-History-Next", OLD)];
+    assert_eq!(
+        request("GET", &path, &continued),
+        Ok(Request::BranchHistory {
+            container: id(1),
+            branch: Branch::Main,
+            head: id(3),
+            next: Some(id(5)),
+        })
+    );
+    for invalid in [
+        vec![("zxs-history-next", OLD)],
+        vec![("zxs-history-head", NODE), ("zxs-history-next", NODE)],
+        vec![("zxs-history-head", NODE), ("Zxs-History-Head", NODE)],
+        vec![
+            ("zxs-history-head", NODE),
+            ("zxs-history-next", OLD),
+            ("Zxs-History-Next", OLD),
+        ],
+        vec![("zxs-history-head", "00000000000000000000000000000000")],
+        vec![("zxs-history-head", "AA030303030303030303030303030303")],
+        vec![("zxs-history-head", NODE), ("Content-Length", "1")],
+        vec![("zxs-history-head", NODE), ("zxs-view", "compact")],
+    ] {
+        assert!(request("GET", &path, &invalid).is_err());
+    }
+    assert!(request("GET", ROOT, &continued).is_err());
+    assert!(request("POST", &path, &continued).is_err());
+}
