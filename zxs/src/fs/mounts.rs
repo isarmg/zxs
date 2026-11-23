@@ -14,7 +14,7 @@ unsafe extern "C" {
 pub(super) fn id(file: &File) -> io::Result<u64> {
     let mut value = 0u64;
     // SAFETY: held FD and initialized writable result for statx.
-    if unsafe { zxs_mount_id(file.as_raw_fd(), &mut value) } < 0 {
+    if unsafe { zxs_mount_id(file.as_raw_fd(), &raw mut value) } < 0 {
         return Err(io::Error::last_os_error());
     }
     if value == 0 {

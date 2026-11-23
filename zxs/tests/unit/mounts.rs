@@ -4,7 +4,7 @@ fn kernel_subtree_and_missing_mounts_are_not_whole_ancestor_evidence() {
     let table=Mounts::parse(b"14 1 1:2 / / rw - tmpfs tmpfs rw\n21 14 1:2 /private/subdir /an-alias rw - tmpfs tmpfs rw\n").unwrap();
     assert_eq!(table.0.get(&14).map(|m| m.whole), Some(true));
     assert_eq!(table.0.get(&21).map(|m| m.whole), Some(false));
-    assert!(table.0.get(&99).is_none());
+    assert!(!table.0.contains_key(&99));
     assert!(Mounts::parse(b"14 1 1:2 / / rw\n14 1 1:2 / / rw\n").is_err());
     assert!(Mounts::parse(b"14 1 1:2 / / rw").is_err());
 }

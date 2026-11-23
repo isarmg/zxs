@@ -1,5 +1,18 @@
 //! Mount-bound original regular files for whole opaque container retirements.
-use super::*;
+use super::{
+    HeldDir, invalid, local_uid, mounts, os_result, zxs_open_pinned_record, zxs_remove_empty_dir,
+    zxs_remove_name,
+};
+use std::{
+    ffi::CStr,
+    fs::File,
+    io,
+    os::{
+        fd::{AsRawFd, FromRawFd},
+        raw::{c_char, c_int},
+        unix::fs::MetadataExt,
+    },
+};
 
 pub(crate) const OPAQUE_STAMP_BYTES: usize = 56;
 
@@ -38,20 +51,18 @@ fn opaque_stamp(file: &File) -> io::Result<[u8; OPAQUE_STAMP_BYTES]> {
     {
         return Err(invalid("not an original private opaque file"));
     }
+    let fields = [
+        m.dev().to_be_bytes(),
+        m.ino().to_be_bytes(),
+        m.len().to_be_bytes(),
+        m.mtime().to_be_bytes(),
+        m.mtime_nsec().to_be_bytes(),
+        m.ctime().to_be_bytes(),
+        m.ctime_nsec().to_be_bytes(),
+    ];
     let mut out = [0; OPAQUE_STAMP_BYTES];
-    for (i, v) in [
-        m.dev(),
-        m.ino(),
-        m.len(),
-        m.mtime() as u64,
-        m.mtime_nsec() as u64,
-        m.ctime() as u64,
-        m.ctime_nsec() as u64,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        out[i * 8..i * 8 + 8].copy_from_slice(&v.to_be_bytes());
+    for (slot, bytes) in out.as_chunks_mut::<8>().0.iter_mut().zip(fields) {
+        *slot = bytes;
     }
     Ok(out)
 }
@@ -112,34 +123,31 @@ impl HeldDir {
     pub(crate) fn opaque_owner(&self, name: &CStr) -> io::Result<File> {
         self.checked_child_path(name)?;
         self.require_named()?;
-        let file = match self.opaque_pin(name)? {
-            Some(pin) => {
-                if pin.file.metadata()?.len() != 0 {
-                    return Err(invalid("service lease record is not empty"));
-                }
-                // SAFETY: reopen the exact bounded private inode for its
-                // advisory exclusive lease, not a newly resolved pathname.
-                let fd = unsafe { zxs_open_pinned_record(pin.file.as_raw_fd(), 1) };
-                if fd < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                // SAFETY: successful native open returns one owning FD.
-                let file = unsafe { File::from_raw_fd(fd) };
-                if !self.shares_file_mount(&file)? || opaque_stamp(&file)? != pin.stamp() {
-                    return Err(invalid("opened service lease is not the original record"));
-                }
-                file
+        let file = if let Some(pin) = self.opaque_pin(name)? {
+            if pin.file.metadata()?.len() != 0 {
+                return Err(invalid("service lease record is not empty"));
             }
-            None => {
-                // SAFETY: one checked relative component, supplied root FD,
-                // and exclusive-create semantics; never replace a name.
-                let fd = unsafe { zxs_create_new_regular(self.file.as_raw_fd(), name.as_ptr()) };
-                if fd < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                // SAFETY: successful native creation returns one owning FD.
-                unsafe { File::from_raw_fd(fd) }
+            // SAFETY: reopen the exact bounded private inode for its
+            // advisory exclusive lease, not a newly resolved pathname.
+            let fd = unsafe { zxs_open_pinned_record(pin.file.as_raw_fd(), 1) };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
             }
+            // SAFETY: successful native open returns one owning FD.
+            let file = unsafe { File::from_raw_fd(fd) };
+            if !self.shares_file_mount(&file)? || opaque_stamp(&file)? != pin.stamp() {
+                return Err(invalid("opened service lease is not the original record"));
+            }
+            file
+        } else {
+            // SAFETY: one checked relative component, supplied root FD,
+            // and exclusive-create semantics; never replace a name.
+            let fd = unsafe { zxs_create_new_regular(self.file.as_raw_fd(), name.as_ptr()) };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: successful native creation returns one owning FD.
+            unsafe { File::from_raw_fd(fd) }
         };
         file.try_lock().map_err(io::Error::from)?;
         let named = self

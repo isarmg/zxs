@@ -1,6 +1,6 @@
 //! First, offline headless setup on explicitly selected empty mounted directories.
 //! The optional caller supplies the approved selection and one confirmed password.
-use crate::{fresh_password, maintenance::{DiscoveryView, HostMounts}, pinned::{Entity, Kind, Mount, Pinned}};
+use crate::{fresh_password, maintenance::{DiscoveryView, HostMounts}, pinned::{Entity, Mount, Pinned}};
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use rustix::{
     fs::{FlockOperation, Mode, OFlags, RawDir, RenameFlags, ResolveFlags, fchmod, flock, openat, openat2, renameat_with},

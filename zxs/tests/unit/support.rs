@@ -29,18 +29,15 @@ impl PrivateTemp {
         }
         panic!("no fresh fixture name");
     }
-    pub(crate) fn child(&self, name: &str) -> PathBuf {
-        let path = self.0.join(name);
-        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
-        path
-    }
 }
 impl Drop for PrivateTemp {
     fn drop(&mut self) {
-        if let Ok(m) = fs::symlink_metadata(&self.0) {
-            if m.is_dir() && m.dev() == self.1.device && m.ino() == self.1.inode {
-                let _ = fs::remove_dir_all(&self.0);
-            }
+        if let Ok(m) = fs::symlink_metadata(&self.0)
+            && m.is_dir()
+            && m.dev() == self.1.device
+            && m.ino() == self.1.inode
+        {
+            let _ = fs::remove_dir_all(&self.0);
         }
     }
 }

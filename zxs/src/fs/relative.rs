@@ -1,6 +1,17 @@
 //! Exact single-component operations against an original held directory.
-use super::*;
-use std::ffi::OsStr;
+use super::{
+    DIRECTORY_BYTES, DIRECTORY_NAMES, HeldDir, check_path, child, entity, invalid, local_uid,
+    mounts, os_result, zxs_mkdir_private, zxs_root_names,
+};
+use std::{
+    ffi::{CStr, OsStr},
+    io,
+    os::{
+        fd::AsRawFd,
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
+    path::PathBuf,
+};
 
 fn leaf(name: &CStr) -> io::Result<&OsStr> {
     let b = name.to_bytes();
@@ -64,7 +75,7 @@ impl HeldDir {
             return Err(io::Error::last_os_error());
         }
         let mut input = buf
-            .get(..n as usize)
+            .get(..usize::try_from(n).map_err(|_| invalid("invalid directory listing length"))?)
             .ok_or_else(|| invalid("invalid directory listing length"))?;
         let mut result = Vec::new();
         while let Some((&len, tail)) = input.split_first() {

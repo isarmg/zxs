@@ -227,14 +227,12 @@ impl HeldDir {
                 name.map_or(std::ptr::null(), CStr::as_ptr),
             )
         };
-        if rc < 0 {
-            Err(io::Error::last_os_error())
-        } else if rc == 0 {
-            Err(invalid(
+        match rc.cmp(&0) {
+            std::cmp::Ordering::Less => Err(io::Error::last_os_error()),
+            std::cmp::Ordering::Equal => Err(invalid(
                 "unexpected existing contents at registration boundary",
-            ))
-        } else {
-            Ok(())
+            )),
+            std::cmp::Ordering::Greater => Ok(()),
         }
     }
     pub(crate) fn pin_record(&self, name: &CStr) -> io::Result<Option<File>> {
