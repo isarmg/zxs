@@ -1,7 +1,8 @@
 """Translate exact Linux edit-session evidence into one durable per-container Submit."""
 from dataclasses import dataclass
 
-from .container_plan import Baseline, BranchIntent, DeleteIntent, LocalFile, _id, plan_submit
+from .container_plan import (Baseline, BranchIntent, DeleteIntent, IgnoredOriginalNameConflict, LocalFile,
+                             _id, plan_submit)
 from .container_spool import capture_submit
 from .linux_edit import NamespaceEvent
 from .linux_upload_ignore import RULE_FILE
@@ -89,7 +90,7 @@ def _select(cut, originals, new_identities, *, admit_created):
                 original = previous[0]
                 baseline = original.baseline
                 if local in local_only or ignored(path):
-                    kept[baseline.container_id] = original
+                    kept[baseline.container_id] = (original, local, path)
                 else:
                     deletions.append(DeleteIntent(baseline.container_id, baseline.revision))
         elif event.kind == "replace" and event.destination_path == path and previous:
@@ -138,10 +139,10 @@ def _select(cut, originals, new_identities, *, admit_created):
     for local, (original, path) in bound.items():
         old = original.baseline
         if local in local_only or ignored(path):
-            kept[old.container_id] = original
+            kept[old.container_id] = (original, local, path)
         else:
             current[old.container_id] = (path, old)
-    for container, original in kept.items():
+    for container, (original, _identity, _retained_name) in kept.items():
         current[container] = (original.path, original.baseline)
     seen_members, used_new = set(), set()
     for member in files:
@@ -170,6 +171,11 @@ def _select(cut, originals, new_identities, *, admit_created):
         raise Rejected("explicit new container lacks an exact changed-file member")
     projected = {tuple(part.casefold() for part in member_name(path)) for path, _ in current.values()}
     if len(projected) != len(current):
+        moved = {original.path: path for original, local, path in kept.values()
+                 if local == original.local_identity and path != original.path and ignored(path)}
+        for path, old in current.values():
+            if old is None and path in moved:
+                raise IgnoredOriginalNameConflict(path, moved[path])
         raise Rejected("destination collides with a retained original container name")
     forced = (replaced & current.keys()) - kept.keys()
     if not forced <= selected.keys():

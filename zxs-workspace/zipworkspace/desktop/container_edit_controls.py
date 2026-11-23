@@ -8,7 +8,7 @@ from threading import Event
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
 
-from ..container_plan import Baseline, FullBody
+from ..container_plan import Baseline, FullBody, IgnoredOriginalNameConflict
 from ..model import Rejected, new_id
 from ..publish import Uncertain
 from .container_client import index_for
@@ -608,6 +608,14 @@ class ContainerEditControls(QWidget):
             if self.run.done():
                 try:
                     result = self.run.result()
+                except IgnoredOriginalNameConflict as err:
+                    self._end(
+                        f"无法准备提交：「{err.path}」仍保留给原容器。"
+                        f"记录显示原文件曾移到忽略路径「{err.ignored_path}」，同名的新文件不是原件。\n"
+                        "本次操作未修改或删除本机文件，提交未创建、未发送。"
+                        "本窗口仍暂停旧工作树操作，请保留原件。",
+                        uncertain=True,
+                    )
                 except Exception as err:
                     uncertain = self.edit.granted.is_set() or isinstance(err, Uncertain)
                     if uncertain:

@@ -6,6 +6,15 @@ import re
 from .model import Rejected, canonical, check_id, member_name, new_id
 
 
+class IgnoredOriginalNameConflict(Rejected):
+    """A new file wants a name reserved for the ignored original."""
+
+    def __init__(self, path: str, ignored_path: str):
+        super().__init__("new file conflicts with the retained original name")
+        self.path = path
+        self.ignored_path = ignored_path
+
+
 def _id(value):
     value = check_id(value)
     if value == "0" * 32:
