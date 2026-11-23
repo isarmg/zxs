@@ -170,7 +170,7 @@ final class LocalWorkspaceStore {
         return new Reopened(file.name, verified.text);
     }
 
-    private static final class Handle implements AutoCloseable {
+    static final class Handle implements AutoCloseable {
         final FileDescriptor fd;
         Handle(File path, int flags, int mode) throws ErrnoException {
             fd = Os.open(path.getPath(), flags, mode);
@@ -178,7 +178,7 @@ final class LocalWorkspaceStore {
         @Override public void close() throws ErrnoException { Os.close(fd); }
     }
 
-    private static boolean same(StructStat a, StructStat b) {
+    static boolean same(StructStat a, StructStat b) {
         return a.st_ino != 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino && a.st_uid == b.st_uid;
     }
 
@@ -186,7 +186,7 @@ final class LocalWorkspaceStore {
         if (!ok) throw new IOException("The original local storage could not be verified");
     }
 
-    private static final class Directory implements AutoCloseable {
+    static final class Directory implements AutoCloseable {
         final File path;
         final Handle handle;
         final StructStat original;
