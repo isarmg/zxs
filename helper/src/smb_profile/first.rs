@@ -78,9 +78,10 @@ fn derive(domain: &[u8], sha: &[u8; 32], kind: u8, volume: &Id) -> Id {
     h.update(volume); // stable identity of the explicitly selected ordinary volume
     h.finalize()[..16].try_into().expect("16 bytes")
 }
-fn send_name(out: &mut Vec<u8>, s: &str) {
-    out.extend((s.len() as u16).to_be_bytes());
+fn send_name(out: &mut Vec<u8>, s: &str) -> Result<()> {
+    out.extend(u16::try_from(s.len()).map_err(|_| BAD)?.to_be_bytes());
     out.extend_from_slice(s.as_bytes());
+    Ok(())
 }
 
 /// The common suffix is only syntax and chosen names/IDs; it is not an
@@ -111,15 +112,19 @@ pub(super) fn sort_selection(
     } // Case remains exact; these are real ZXS folder names.
     Ok(done)
 }
-pub(super) fn emit_layout(wire: &mut Vec<u8>, chosen: &[Folder], recycle: &RecycleName) {
-    wire.push(chosen.len() as u8);
+pub(super) fn emit_layout(
+    wire: &mut Vec<u8>,
+    chosen: &[Folder],
+    recycle: &RecycleName,
+) -> Result<()> {
+    wire.push(u8::try_from(chosen.len()).map_err(|_| BAD)?);
     for f in chosen {
         wire.extend(f.volume);
         wire.push(f.mode.code());
-        send_name(wire, &f.name);
+        send_name(wire, &f.name)?;
     }
     // Only the exact directory name, never a physical R path or ID.
-    send_name(wire, recycle.as_str());
+    send_name(wire, recycle.as_str())
 }
 
 pub(super) fn folder_ids(

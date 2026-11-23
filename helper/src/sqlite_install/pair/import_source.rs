@@ -390,7 +390,11 @@ impl Walk {
                 return Err(unknown());
             }
             self.hash.update(b"N");
-            self.hash.update((raw.len() as u16).to_be_bytes());
+            self.hash.update(
+                u16::try_from(raw.len())
+                    .map_err(|_| unknown())?
+                    .to_be_bytes(),
+            );
             self.hash.update(&raw);
             self.hash.update(ino.to_be_bytes());
             if control_name(&raw) {

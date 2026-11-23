@@ -277,7 +277,7 @@ fn at_scope(
         WHERE claim_op=?1 AND ordinal=?2 AND role=2 AND volume_id=?3 AND root_path=?4",
             params![
                 &scope.init[..],
-                n as i64,
+                i64::try_from(n).map_err(|_| unknown())?,
                 &scope.volume[..],
                 scope.ordinary.as_os_str().as_bytes()
             ],
@@ -291,7 +291,7 @@ fn at_scope(
     complete_small_cut(tx)?;
     Ok(Selection {
         marker: claim.marker,
-        ordinal: n as u8,
+        ordinal: u8::try_from(n).map_err(|_| unknown())?,
         limit,
         recycle_name,
         other_names: claims

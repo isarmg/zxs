@@ -43,7 +43,11 @@ impl Request {
         h.update(actor);
         h.update(approval);
         h.update(uid.to_be_bytes());
-        h.update((paths.len() as u16).to_be_bytes());
+        h.update(
+            u16::try_from(paths.len())
+                .map_err(|_| bad("INIT path count exceeds wire limit"))?
+                .to_be_bytes(),
+        );
         for (i, path) in paths.iter().enumerate() {
             let raw = path.as_os_str().as_bytes();
             product_layout::media(path).map_err(bad)?;
@@ -62,7 +66,11 @@ impl Request {
                 ));
             }
             h.update([role(i)]);
-            h.update((raw.len() as u16).to_be_bytes());
+            h.update(
+                u16::try_from(raw.len())
+                    .map_err(|_| bad("INIT path exceeds wire limit"))?
+                    .to_be_bytes(),
+            );
             h.update(raw);
         }
         Ok(Self {

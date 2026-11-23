@@ -152,7 +152,11 @@ impl Question {
             crate::path_rules::Kind::StorageRoot
                 .check_path(p)
                 .map_err(bad)?;
-            b.extend((p.len() as u16).to_be_bytes());
+            b.extend(
+                u16::try_from(p.len())
+                    .map_err(|_| bad_question())?
+                    .to_be_bytes(),
+            );
             b.extend(p);
             Ok(())
         }
@@ -174,7 +178,7 @@ impl Question {
             b.extend(n.to_be_bytes());
         }
         path(&mut b, &self.system)?;
-        b.push(self.paths.len() as u8);
+        b.push(u8::try_from(self.paths.len()).map_err(|_| bad_question())?);
         let mut seen = BTreeSet::new();
         for p in &self.paths {
             if self.system == *p || !seen.insert(p.as_os_str().as_bytes()) {
@@ -600,11 +604,11 @@ fn database_payload(place: [u64; 3]) -> [u8; 65] {
     }
     bytes
 }
-fn body(i: usize, id: Id) -> [u8; 65] {
+fn body(i: usize, id: Id) -> io::Result<[u8; 65]> {
     let mut b = [0; 65];
-    b[0] = i as u8;
+    b[0] = u8::try_from(i).map_err(|_| bad_question())?;
     b[1..17].copy_from_slice(&id);
-    b
+    Ok(b)
 }
 fn query_with<T>(
     raw: &[u8],
@@ -683,7 +687,7 @@ fn read_layout(
                 let (v, []) =
                     channel.wait_checked::<0>(Kind::ChosenFolder, scope, until, &check)?;
                 let id: Id = v[1..17].try_into().expect("fixed reply");
-                if v != body(i, id)
+                if v != body(i, id)?
                     || id == [0; 16]
                     || ordinary.iter().any(|(known, _)| *known == id)
                 {
@@ -711,11 +715,11 @@ fn read_layout(
         },
     )
 }
-fn volume_reply(i: usize, raw: &[u8]) -> [u8; 65] {
+fn volume_reply(i: usize, raw: &[u8]) -> io::Result<[u8; 65]> {
     let mut b = [0; 65];
-    b[0] = i as u8;
+    b[0] = u8::try_from(i).map_err(|_| bad_question())?;
     b[1..33].copy_from_slice(&Sha256::digest(raw));
-    b
+    Ok(b)
 }
 fn media_bytes(record: &crate::sqlite_install::catalog::Initial) -> Vec<u8> {
     let mut out = record.marker.to_vec();
@@ -758,7 +762,7 @@ fn receive_scoped_media(
     let (reply, [fd]) = channel.wait_checked::<1>(Kind::VolumeClaim, scope, until, check)?;
     let (_, uid, gid) = q.fresh.subject.tuple();
     let value = sealed_owner(&fd, 101 + MAX_PATH_BYTES, (uid, gid))?;
-    if reply != volume_reply(i, &value) {
+    if reply != volume_reply(i, &value)? {
         return Err(bad_question());
     }
     scoped_material(&value, volume, q.pool, q.init)
@@ -766,7 +770,7 @@ fn receive_scoped_media(
 fn send_media(channel: &Channel, scope: &[u8; 32], i: usize, claim: &Initial) -> io::Result<()> {
     let bytes = media_bytes(claim);
     let report = sealed(&bytes)?;
-    channel.send_original(Kind::VolumeClaim, scope, &volume_reply(i, &bytes), &report)
+    channel.send_original(Kind::VolumeClaim, scope, &volume_reply(i, &bytes)?, &report)
 }
 pub(crate) fn worker() -> io::Result<()> {
     let [fd, meta] = account_sql_descriptors()?;
@@ -875,7 +879,7 @@ pub(crate) fn worker() -> io::Result<()> {
         channel.send(
             Kind::ChosenFolder,
             &scope,
-            &body(i, volume.marker[37..53].try_into().expect("VolumeId")),
+            &body(i, volume.marker[37..53].try_into().expect("VolumeId"))?,
         )?;
         send_media(&channel, &scope, i, volume)?;
     }

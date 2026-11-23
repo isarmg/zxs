@@ -67,9 +67,9 @@ impl RustPlan {
         for id in origin.ids() {
             raw.extend(id);
         }
-        raw.push(host.len() as u8);
+        raw.push(u8::try_from(host.len()).map_err(|_| BAD)?);
         raw.extend_from_slice(host.as_bytes());
-        emit_layout(&mut raw, &folders, &recycle);
+        emit_layout(&mut raw, &folders, &recycle)?;
         if raw.len() > MAX_WIRE {
             return Err(BAD);
         }

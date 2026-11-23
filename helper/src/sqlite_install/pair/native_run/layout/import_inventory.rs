@@ -126,7 +126,11 @@ fn encode(
     }
     for p in [&q.system, &q.source] {
         let name = p.as_os_str().as_bytes();
-        b.extend((name.len() as u16).to_be_bytes());
+        b.extend(
+            u16::try_from(name.len())
+                .map_err(|_| invalid())?
+                .to_be_bytes(),
+        );
         b.extend(name);
     }
     if b.len() > BUDGET {

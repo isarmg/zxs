@@ -191,7 +191,11 @@ impl SitePayload {
         }
         for p in [&self.system, &self.image] {
             let s = p.as_os_str().as_bytes();
-            b.extend_from_slice(&(s.len() as u16).to_be_bytes());
+            b.extend_from_slice(
+                &u16::try_from(s.len())
+                    .map_err(|_| bad("site path exceeds wire limit"))?
+                    .to_be_bytes(),
+            );
             b.extend_from_slice(s);
         }
         Ok(b)

@@ -199,10 +199,10 @@ impl Manifest {
         for n in self.entity {
             e.extend(n.to_be_bytes());
         }
-        e.extend((path.len() as u16).to_be_bytes());
+        e.extend(u16::try_from(path.len()).map_err(|_| no())?.to_be_bytes());
         e.extend(path);
         let raw = self.plan.wire();
-        e.extend((raw.len() as u16).to_be_bytes());
+        e.extend(u16::try_from(raw.len()).map_err(|_| no())?.to_be_bytes());
         e.extend(raw);
         match &self.order.role {
             Desired::Setup(spec) => {
@@ -210,7 +210,7 @@ impl Manifest {
                 e.extend(spec.account);
                 e.extend(spec.record);
                 e.extend(spec.sid);
-                e.push(spec.login.len() as u8);
+                e.push(u8::try_from(spec.login.len()).map_err(|_| no())?);
                 e.extend(&spec.login);
             }
             Desired::Reset {

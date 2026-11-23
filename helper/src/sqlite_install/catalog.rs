@@ -125,9 +125,9 @@ pub(super) fn initial_receipt(
     if system.uid() != r.uid() || system.path() != r.paths()[0].as_path() {
         return Err(bad("different SYSTEM for the original INIT receipt"));
     }
+    let min = i64::try_from(super::MARKER.len()).map_err(|_| bad("invalid marker limit"))?;
     read_rows(tx, template, r, |i, limit| {
-        (super::MARKER.len() as i64..=255).contains(&limit)
-            && (i != 0 || i64::from(system.byte_limit()) == limit)
+        (min..=255).contains(&limit) && (i != 0 || i64::from(system.byte_limit()) == limit)
     })
 }
 /// Canonical committed INIT metadata. Its selected raw R/F path bytes
@@ -199,7 +199,8 @@ pub(super) fn initial_metadata(
         let sha: [u8; 32] = b(3)?
             .try_into()
             .map_err(|_| bad("invalid original INIT request digest"))?;
-        let mut paths = Vec::with_capacity(count as usize);
+        let mut paths =
+            Vec::with_capacity(usize::try_from(count).map_err(|_| bad("invalid INIT count"))?);
         paths.push(system.path().to_path_buf());
         for _ in 1..count {
             let row = rows
@@ -280,8 +281,8 @@ fn read_rows(
             || num(4)? != state
             || blob(5)? != r.approval()
             || num(6)? != i64::from(r.uid())
-            || num(7)? != r.paths().len() as i64
-            || num(8)? != i as i64
+            || num(7)? != i64::try_from(r.paths().len()).map_err(|_| bad("invalid INIT count"))?
+            || num(8)? != i64::try_from(i).map_err(|_| bad("invalid INIT ordinal"))?
             || num(9)? != i64::from(role(i))
             || blob(11)? != path.as_os_str().as_bytes()
             || !limit_ok(i, num(12)?)

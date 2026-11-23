@@ -69,7 +69,7 @@ fn encode(
     for path in [scope.system(), scope.ordinary()] {
         let v = path.as_os_str().as_bytes();
         PathKind::StorageRoot.check_path(v).map_err(bad)?;
-        raw.extend((v.len() as u16).to_be_bytes());
+        raw.extend(u16::try_from(v.len()).map_err(|_| invalid())?.to_be_bytes());
         raw.extend(v);
     }
     if raw.len() > BUDGET {
