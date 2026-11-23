@@ -158,6 +158,14 @@ impl HeldDir {
     /// Acquire one exact private service lease record below the already
     /// enrolled root. Neither open branch resolves the root by pathname.
     pub(crate) fn opaque_owner(&self, name: &CStr) -> io::Result<File> {
+        self.select_opaque_owner(name, true)
+    }
+
+    pub(crate) fn existing_opaque_owner(&self, name: &CStr) -> io::Result<File> {
+        self.select_opaque_owner(name, false)
+    }
+
+    fn select_opaque_owner(&self, name: &CStr, may_create: bool) -> io::Result<File> {
         self.checked_child_path(name)?;
         self.require_named()?;
         let file = if let Some(pin) = self.opaque_pin(name)? {
@@ -177,6 +185,9 @@ impl HeldDir {
             }
             file
         } else {
+            if !may_create {
+                return Err(invalid("the existing service owner lease is absent"));
+            }
             // SAFETY: one checked relative component, supplied root FD,
             // and exclusive-create semantics; never replace a name.
             let fd = unsafe { zxs_create_new_regular(self.file.as_raw_fd(), name.as_ptr()) };

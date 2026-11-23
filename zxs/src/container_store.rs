@@ -1,5 +1,6 @@
 //! Complete opaque node saves and metadata selection for individual containers.
 mod codec;
+pub(crate) mod import_one;
 mod model;
 pub(crate) mod offline_catalog;
 mod recycle;
@@ -269,14 +270,7 @@ impl Store {
     }
 
     fn open_roster(system: &HeldDir, mut data: Vec<DataRoot>, owner: File) -> io::Result<Self> {
-        data.sort_unstable_by_key(|volume| volume.token);
-        if data.is_empty()
-            || data[0].token == [0; 32]
-            || data.windows(2).any(|pair| pair[0].token == pair[1].token)
-        {
-            return Err(invalid("invalid enrolled DATA roster"));
-        }
-
+        qualify_roster(&mut data)?;
         let routes = Routes::open_existing(system)?;
         let fresh = match &routes {
             Some(routes) => match routes.ids()?.first() {
@@ -303,7 +297,11 @@ impl Store {
             Some(routes) => routes,
             None => Routes::open(system)?,
         };
-        Ok(Self {
+        Ok(Self::from_roster(volumes, routes, owner))
+    }
+
+    fn from_roster(volumes: Vec<DataVolume>, routes: Routes, owner: File) -> Self {
+        Self {
             volumes,
             routes,
             next_stage: AtomicU64::new(0),
@@ -311,7 +309,7 @@ impl Store {
             names: Mutex::new(()),
             archive: None,
             _system_owner: owner,
-        })
+        }
     }
 
     fn enrolled(&self, token: [u8; 32]) -> Option<&DataVolume> {
@@ -403,16 +401,27 @@ impl Store {
         &self,
         mutation: Mutation,
         change: Change,
-        mut input: impl Read,
+        input: impl Read,
         authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
-        let Change::Save {
-            body, initial_name, ..
-        } = &change
-        else {
+        let Change::Save { initial_name, .. } = &change else {
             return Err(invalid("a node requires a complete save operation").into());
         };
         let volume = self.write_volume(mutation.container, initial_name.is_some(), &authorize)?;
+        self.save_on(mutation, change, input, volume, authorize)
+    }
+
+    fn save_on(
+        &self,
+        mutation: Mutation,
+        change: Change,
+        mut input: impl Read,
+        volume: &DataVolume,
+        authorize: impl Fn() -> io::Result<()>,
+    ) -> Result<Receipt, Error> {
+        let Change::Save { body, .. } = &change else {
+            return Err(invalid("a node requires a complete save operation").into());
+        };
         let mut stage = self.stage(volume)?;
         {
             let file = stage.create(c"payload")?;
@@ -889,6 +898,17 @@ fn replay_selected_entries(directory: &HeldDir, id: Id, access: ReadAccess) -> i
         })?;
     }
     Ok(state)
+}
+
+fn qualify_roster(data: &mut [DataRoot]) -> io::Result<()> {
+    data.sort_unstable_by_key(|volume| volume.token);
+    if data.is_empty()
+        || data[0].token == [0; 32]
+        || data.windows(2).any(|pair| pair[0].token == pair[1].token)
+    {
+        return Err(invalid("invalid enrolled DATA roster"));
+    }
+    Ok(())
 }
 
 fn invalid(message: &'static str) -> io::Error {

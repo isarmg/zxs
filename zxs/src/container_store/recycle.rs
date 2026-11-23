@@ -248,10 +248,36 @@ impl Recycle {
 
     /// The caller already retains the original SYSTEM owner.
     pub(super) fn open(system: HeldDir, recycle: HeldDir, pool: Id) -> io::Result<Self> {
-        let owner = recycle.opaque_owner(c"container-owner")?;
-        let moves_directory = system.opaque_subdirectory(c"container-moves")?;
-        let staging_directory = recycle.opaque_subdirectory(c"incoming-containers")?;
-        let arrived_directory = recycle.opaque_subdirectory(c"containers")?;
+        Self::select_namespaces(system, recycle, pool, true)
+    }
+
+    pub(super) fn open_existing(system: HeldDir, recycle: HeldDir, pool: Id) -> io::Result<Self> {
+        Self::select_namespaces(system, recycle, pool, false)
+    }
+
+    fn select_namespaces(
+        system: HeldDir,
+        recycle: HeldDir,
+        pool: Id,
+        may_create: bool,
+    ) -> io::Result<Self> {
+        let owner = if may_create {
+            recycle.opaque_owner(c"container-owner")?
+        } else {
+            recycle.existing_opaque_owner(c"container-owner")?
+        };
+        let directory = |parent: &HeldDir, name: &CStr| {
+            if may_create {
+                parent.opaque_subdirectory(name)
+            } else {
+                parent
+                    .child_directory(name)?
+                    .ok_or_else(|| invalid("the existing recycle namespace is absent"))
+            }
+        };
+        let moves_directory = directory(&system, c"container-moves")?;
+        let staging_directory = directory(&recycle, c"incoming-containers")?;
+        let arrived_directory = directory(&recycle, c"containers")?;
         // A former service can stop after the selector rename but before
         // syncing its directory. Qualify that namespace before any cold
         // read or retirement; the previous process's unsure bit is gone.

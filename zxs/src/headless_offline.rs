@@ -33,7 +33,21 @@ fn refused() -> io::Error {
     )
 }
 
-pub(crate) fn run() -> io::Result<()> {
+pub(super) struct OfflineFence {
+    lease: File,
+    original: OpaquePin,
+    uid: u32,
+    pub(super) binding: [u8; 32],
+}
+
+impl OfflineFence {
+    pub(super) fn require(&self, state: &HeldDir) -> io::Result<()> {
+        verify_lease(&self.lease, state, self.uid)?;
+        verify_descriptor(state, &self.original, self.uid, self.binding)
+    }
+}
+
+pub(super) fn retain() -> io::Result<(OfflineFence, SelectedStart)> {
     let uid = local_uid();
     if matches!(uid, 0 | 65534 | u32::MAX) {
         return Err(refused());
@@ -47,12 +61,22 @@ pub(crate) fn run() -> io::Result<()> {
     let (descriptor, binding) = Descriptor::read_bound(&original.file, uid)?;
     original.require(&state, DESCRIPTOR)?;
     let selection = SelectedStart::from_original(state, descriptor, ReadAccess::NoAtime)?;
-    let names = selection.offline_names(|state| {
-        verify_lease(&lease, state, uid)?;
-        verify_descriptor(state, &original, uid, binding)
-    })?;
+    Ok((
+        OfflineFence {
+            lease,
+            original,
+            uid,
+            binding,
+        },
+        selection,
+    ))
+}
+
+pub(crate) fn run() -> io::Result<()> {
+    let (proof, selection) = retain()?;
+    let names = selection.offline_names(|state| proof.require(state))?;
     let mut output = io::stdout().lock();
-    write_frame(&mut output, binding, &names)?;
+    write_frame(&mut output, proof.binding, &names)?;
     output.flush()
 }
 

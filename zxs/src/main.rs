@@ -26,11 +26,18 @@ fn run() -> io::Result<()> {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
         let mut args = env::args_os().skip(1);
-        if args.next().as_deref() == Some(OsStr::new("__offline-live-names-v1")) {
-            if args.next().is_some() {
-                return Err(io::ErrorKind::InvalidInput.into());
+        match args.next().as_deref().and_then(OsStr::to_str) {
+            Some(operation @ ("__offline-live-names-v1" | "__offline-import-one-v1")) => {
+                if args.next().is_some() {
+                    return Err(io::ErrorKind::InvalidInput.into());
+                }
+                return if operation == "__offline-live-names-v1" {
+                    storage_server::offline_live_names_v1()
+                } else {
+                    storage_server::offline_import_one_v1()
+                };
             }
-            return storage_server::offline_live_names_v1();
+            _ => {}
         }
     }
     let listen = listen_address()?;

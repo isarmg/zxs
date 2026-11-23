@@ -12,7 +12,7 @@ pub(crate) type Payload=[u8;65];
 #[derive(Clone,Copy)]
 pub(crate) enum Kind{Reserved=3,Complete=5,Lease=6,ChosenFolder=9,VolumeClaim=10,FirstBrowserReady=12,FirstBrowserRequest=13,RustInspect=15,RustStage=16,RustVaultPlaced=17,RustVaultSealed=18,
     CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23,RetirementCheck=29,ImportInventory=30,FreshDatabase=31,DeployedActive=32,DeployedDatabase=33,DeployedMarker=34,SharedAccountDurable=38,JointWriterReady=39,
-    JointWebReceiverReady=40,JointWebMaterial=41,JointSqlPeer=42,JointWriterPeer=43,JointVaultDurable=44}
+    JointWebReceiverReady=40,JointWebMaterial=41,JointSqlPeer=42,JointWriterPeer=43,JointVaultDurable=44,ImportStep=45}
 
 pub(crate) struct Channel {fd:File,peer:UCred,scope:[u8;32]}
 pub(crate) fn pair()->io::Result<(File,File)>{
@@ -20,6 +20,20 @@ pub(crate) fn pair()->io::Result<(File,File)>{
     for f in [&a,&b]{sockopt::set_socket_passcred(f,true)?;}
     Ok((File::from(a),File::from(b)))
 }
+pub(crate) fn seal_import_ticket(bytes: &[u8]) -> io::Result<File> {
+    use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, fcntl_get_seals, memfd_create};
+    use std::io::{Seek, Write};
+    let mut ticket = File::from(memfd_create(c"helper-fixed-import", MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)?);
+    ticket.write_all(bytes)?;
+    let seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+    fcntl_add_seals(&ticket, seals)?;
+    if !fcntl_get_seals(&ticket)?.contains(seals) {
+        return Err(bad("incomplete fixed import ticket"));
+    }
+    ticket.rewind()?;
+    Ok(ticket)
+}
+
 impl Channel {
     pub(crate) fn from_owned_child_session(fd:File,peer:UCred,scope:[u8;32])->io::Result<Self>{
         // Caller verifies actual supervising spawn, user/subject and startup
@@ -68,6 +82,24 @@ impl Channel {
         }
         let fds:[OwnedFd;K]=rights.try_into().map_err(|_|bad("wrong maintenance descriptor count"))?;
         Ok((wire[73..].try_into().expect("fixed payload"),fds.map(File::from)))
+    }
+    pub(crate) fn wait_import(&self,digest:&[u8;32],live:impl Fn()->io::Result<()>)->io::Result<Payload>{
+        loop {
+            match self.receive::<0>(Kind::ImportStep,digest) {
+                Err(error) if error.kind()==io::ErrorKind::WouldBlock=>{
+                    if let Err(exited) = live() {
+                        // A terminal packet may have arrived between EAGAIN and observing exit.
+                        return match self.receive::<0>(Kind::ImportStep,digest) {
+                            Err(error) if error.kind()==io::ErrorKind::WouldBlock=>Err(exited),
+                            result=>result.map(|(payload,_)|payload),
+                        };
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) if error.kind()==io::ErrorKind::Interrupted=>continue,
+                result=>return result.map(|(payload,_)|payload),
+            }
+        }
     }
     pub(crate) fn wait<const K:usize>(&self,kind:Kind,digest:&[u8;32],until:Instant)->io::Result<(Payload,[File;K])>{
         self.wait_checked(kind,digest,until,||Ok(()))

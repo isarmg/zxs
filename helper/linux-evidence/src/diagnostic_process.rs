@@ -223,8 +223,24 @@ pub enum OfflineSql { FirstLayout, FirstBrowser, RustAccount, RustVaultWriter, C
 /// # Errors
 /// Returns an error if the executable, channel or sealed order descriptor
 /// cannot be duplicated for the fixed child. A failed child setup aborts the spawn.
-#[allow(unsafe_code)]
 pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,order:&File,mode:OfflineSql)->io::Result<()>{
+        let action=match mode{OfflineSql::FirstLayout=>c"__first-layout-sql-v9",OfflineSql::FirstBrowser=>c"__first-install-browser-v1",
+            OfflineSql::RustAccount=>c"__zxs-shared-account-sql-v2",OfflineSql::RustVaultWriter=>c"__zxs-shared-vault-writer-v2",
+            OfflineSql::CopyRepairBrowser=>c"__copy-repair-browser-v2",
+        };
+    prepare_fixed_peer_exec(cmd,original,channel,order,c"helper",action)
+}
+
+/// Select the fixed local file import entrypoint on the exact installed executable.
+///
+/// # Errors
+/// Errors if its selected executable or descriptor capabilities cannot be retained.
+pub fn prepare_import_one_exec(cmd:&mut Command,original:&File,channel:&File,order:&File)->io::Result<()>{
+    prepare_fixed_peer_exec(cmd,original,channel,order,c"zxs",c"__offline-import-one-v1")
+}
+
+#[allow(unsafe_code)]
+fn prepare_fixed_peer_exec(cmd:&mut Command,original:&File,channel:&File,order:&File,program:&'static std::ffi::CStr,action:&'static std::ffi::CStr)->io::Result<()>{
     use std::os::fd::AsFd;
     let high=|f:&File|rustix::io::fcntl_dupfd_cloexec(f.as_fd(),16).map(File::from).map_err(io::Error::from);
     let executable=high(original)?;let channel=high(channel)?;let order=high(order)?;
@@ -247,11 +263,7 @@ pub fn prepare_account_sql_exec(cmd:&mut Command,original:&File,channel:&File,or
         if libc::dup3(channel.as_raw_fd(),3,0)!=3||libc::dup3(order.as_raw_fd(),4,0)!=4{
             return Err(io::Error::last_os_error());
         }
-        let action=match mode{OfflineSql::FirstLayout=>c"__first-layout-sql-v9",OfflineSql::FirstBrowser=>c"__first-install-browser-v1",
-            OfflineSql::RustAccount=>c"__zxs-shared-account-sql-v2",OfflineSql::RustVaultWriter=>c"__zxs-shared-vault-writer-v2",
-            OfflineSql::CopyRepairBrowser=>c"__copy-repair-browser-v2",
-        };
-        let argv=[c"helper".as_ptr(),action.as_ptr(),std::ptr::null()];
+        let argv=[program.as_ptr(),action.as_ptr(),std::ptr::null()];
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
         libc::syscall(libc::c_long::from(uapi::__NR_execveat),executable.as_raw_fd(),c"".as_ptr(),
             argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);

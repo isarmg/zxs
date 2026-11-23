@@ -12,6 +12,8 @@ mod headless_auth;
 mod headless_boot;
 #[cfg(target_os = "linux")]
 mod headless_http;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod headless_import_worker;
 #[cfg(target_os = "linux")]
 mod headless_lifecycle;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -31,6 +33,12 @@ pub fn start_headless(listen: std::net::SocketAddr) -> std::io::Result<()> {
 #[doc(hidden)]
 pub fn offline_live_names_v1() -> std::io::Result<()> {
     headless_offline::run()
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[doc(hidden)]
+pub fn offline_import_one_v1() -> std::io::Result<()> {
+    headless_import_worker::run()
 }
 
 #[cfg(target_os = "linux")]

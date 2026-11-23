@@ -50,6 +50,8 @@ helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR -
   helper setup-headless add-data NEW_DATA SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]
   helper preflight-import [--show-names | --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]
+  helper import-one prepare SOURCE RELATIVE NAME TARGET-DATA SYSTEM RECYCLE DATA [DATA ...]
+  helper import-one apply SYSTEM RECYCLE DATA [DATA ...]
   helper --help | --version\n\n\
 Supply already mounted directories; storage-status reports observations, not an approved layout.";
 
@@ -70,6 +72,7 @@ enum Command {
     Compare(PathBuf, PathBuf),
     HeadlessSetup(headless_setup_command::Setup),
     ImportCensus(headless_setup::Preflight),
+    ImportSingle(headless_setup::ImportOne),
     Storage(Selection),
     #[cfg(feature="embedded-zxs")]
     EmbeddedInstall(embedded_image::EmbeddedInstall),
@@ -104,6 +107,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
     if op == "preflight-import" { return headless_setup::Preflight::parse(args).map(Command::ImportCensus); }
+    if op == "import-one" { return headless_setup::ImportOne::parse(args).map(Command::ImportSingle); }
     if op == "setup-headless" { return headless_setup_command::Setup::parse(args).map(Command::HeadlessSetup); }
     #[cfg(feature="embedded-zxs")]
     if op=="install-zxs-image"{return embedded_image::EmbeddedInstall::parse(args).map(Command::EmbeddedInstall);}
@@ -188,6 +192,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
     match command {
         Command::HeadlessSetup(setup) => return setup.run(),
         Command::ImportCensus(request) => return request.run(),
+        Command::ImportSingle(request) => return request.run(),
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::DiskWebStorage(s)=>disk_web::serve_storage(s)?,
         Command::DiskHealth(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}

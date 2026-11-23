@@ -36,6 +36,29 @@ impl DataVolume {
         })
     }
 
+    pub(super) fn open_existing(DataRoot { root, token }: DataRoot) -> io::Result<Self> {
+        root.require_named()?;
+        let owner = root.existing_opaque_owner(c"owner")?;
+        let data = root
+            .child_directory(c"data")?
+            .ok_or_else(|| invalid("the existing DATA container namespace is absent"))?;
+        let staging = root
+            .child_directory(c"staging")?
+            .ok_or_else(|| invalid("the existing DATA staging namespace is absent"))?;
+        root.require_named()?;
+        Ok(Self {
+            token,
+            root,
+            data,
+            staging,
+            _owner: owner,
+        })
+    }
+
+    pub(super) fn root(&self) -> &HeldDir {
+        &self.root
+    }
+
     pub(super) fn contents(&self) -> &HeldDir {
         &self.data
     }

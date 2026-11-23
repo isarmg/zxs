@@ -123,3 +123,20 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 本目录有独立 Cargo 工程、Rust 工具链和[依赖来源记录](DEPENDENCIES.md)。允许验证时，入口为 `cargo build --locked` 和 `cargo test --locked`。后者的正向文件用例须在上述受支持文件系统上的专用临时位置创建自己的测试文件；如系统临时目录不满足，可由操作者设置 `HELPER_TEST_DATA_PARENT` 指向合格的专用目录。该变量仅供测试使用；先决条件缺失是测试失败，不算验证通过。
 
 尚未安装、运行现场服务或操作实际介质；冷启动和 Workspace 登录待现场验收。块设备 CLI 验收须显式提供稳定的试验设备号 `HELPER_TEST_BLOCK_DEV`。独立构建和发行需要哪些输入与证据，见[交付核对表](RELEASE.md)；待办见[项目任务清单](TASKS.md)。
+
+## 从非空盘导入一个文件
+
+停止存储服务，用同一个专用服务账号执行。先确定一个原文件和目标文件名，再从当前存储池中指定一个已加入且初始化完成的 DATA 盘。两个命令都要按当前登记顺序填写完整的 SYSTEM、RECYCLE 和 DATA。不会递归导入目录、自动压平路径、覆盖同名文件或替你改名。
+
+选择一个只供自己使用的目录保存导入单。这个目录应在源目录、存储盘和部署目录之外，并使用一个不存在的新文件名。下面的重定向由 shell 完成，不是 Helper 写入文件；`set -C` 避免覆盖已有文件。
+
+```sh
+umask 077
+set -C
+helper import-one prepare /external documents/report.pdf report.pdf /data-two /system /recycle /data-one /data-two > /private/import-tickets/report.ticket
+helper import-one apply /system /recycle /data-one /data-two < /private/import-tickets/report.ticket
+```
+
+第一条只读取所选文件并在标准输出写出一行导入单；不会改文件，也不会写入容器。源文件必须允许服务账号以不更新访问时间的方式打开。权限或文件系统不允许时直接退出，不降级读取或改变权限。第二条用原始导入单创建一个容器和首个 `main` 节点，保留源文件和原路径。目标名称区分大小写，若当时已有同名容器则停止。目标为已登记的盘，不用这一命令加盘。
+
+成功后保留输出的容器和节点编号。若结果不明确，保留原文件和原始导入单，用同一份导入单重试；不要重新生成导入单或换盘、改名重试。已完成时会返回原收据，不重新读取原文件或创建第二个容器。导入单含本机路径，保存在你选的位置；Helper 不留副本。

@@ -30,6 +30,13 @@ fn invalid() -> io::Error {
 }
 
 pub(super) fn read_names(reset: &Reset) -> io::Result<Vec<String>> {
+    with_installed(reset, |executable| {
+        let expected = Sha256::digest(reset.original.full.as_slice()).into();
+        capture(executable, &reset.locked, expected)
+    })
+}
+
+pub(super) fn with_installed<T>(reset: &Reset, run: impl FnOnce(&File) -> io::Result<T>) -> io::Result<T> {
     reset.require_original()?;
     let bin = Pinned::local_storage(Path::new(BIN), &reset.selected.scope)?;
     let original_dir = bin.relative_directory()?;
@@ -77,10 +84,9 @@ pub(super) fn read_names(reset: &Reset) -> io::Result<Vec<String>> {
         Ok(())
     };
     verify()?;
-    let expected = Sha256::digest(reset.original.full.as_slice()).into();
-    let names = capture(&executable, &reset.locked, expected)?;
+    let result = run(&executable)?;
     verify()?;
-    Ok(names)
+    Ok(result)
 }
 
 fn capture(executable: &File, lease: &File, expected: [u8; 32]) -> io::Result<Vec<String>> {

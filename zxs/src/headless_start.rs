@@ -1,6 +1,6 @@
 //! Retain the qualified system, recycle and data roster through the native Store.
 use crate::{
-    container_store::{DataRoot, Store, offline_catalog},
+    container_store::{DataRoot, Store, import_one::OfflineImport, offline_catalog},
     fs::{HeldDir, ReadAccess, local_uid},
     headless_auth::{Account, Descriptor, SelectedRoot},
 };
@@ -198,6 +198,23 @@ impl SelectedStart {
         self.data
             .iter()
             .try_for_each(|volume| volume.root.require_named())
+    }
+
+    pub(super) fn bind_import(
+        self,
+        require_state: impl Fn(&HeldDir) -> io::Result<()>,
+    ) -> io::Result<(OfflineImport, HeldDir)> {
+        self.require_named()?;
+        let Self {
+            pool,
+            state,
+            system,
+            data,
+            recycle,
+            ..
+        } = self;
+        let writer = OfflineImport::open(system, recycle, data, pool, || require_state(&state))?;
+        Ok((writer, state))
     }
 
     /// Move the original capabilities, never their strings, into Store.

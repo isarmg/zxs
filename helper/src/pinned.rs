@@ -406,6 +406,24 @@ fn selected_claim_reader(pin:&File,entity:Entity,mount:u64,passive:bool)->io::Re
         else{ReaderBoundary::SelectedControlMount(mount)})
 }
 
+/// Reopen the exact, already-admitted external import operand, never its name.
+pub(crate) fn external_import_reader(
+    pin: &File,
+    original: Entity,
+    mount: u64,
+) -> io::Result<File> {
+    let meta = pin.metadata()?;
+    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)
+        || !meta.is_file()
+        || meta.nlink() == 0
+        || Entity::of(&meta)? != original
+        || Mount::on(pin)?.is_none_or(|now| now.id != mount)
+    {
+        return Err(invalid("external import no longer selects the original local file"));
+    }
+    reopen_admitted_reader(pin, original, ReaderBoundary::DiscoveryControlMount(mount))
+}
+
 /// Only the root-owned nonsecret live configuration or bound record below a separately
 /// admitted instance root. The worker may update atime; no arbitrary path.
 pub(crate) fn public_record_reader(pin:&File,mount:u64,length:u64)->io::Result<File>{

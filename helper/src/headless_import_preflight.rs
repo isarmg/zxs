@@ -158,13 +158,7 @@ fn overlapping(source: &Pinned, original: &Pinned) -> bool {
         || original.entity_is_visible_ancestor_of(source)
 }
 
-pub(super) fn scan(
-    selected: &FreshSelection,
-    source: &Path,
-    preview: Option<&mut Vec<u8>>,
-    target_names: Option<&[String]>,
-    require_roles: impl Fn() -> io::Result<()>,
-) -> io::Result<Counts> {
+pub(super) fn pin_source(selected: &FreshSelection, source: &Path) -> io::Result<Pinned> {
     let pin = Pinned::local_storage(source, &selected.scope)?;
     // Refuse protected roles, aliases, ancestors and descendants. The source
     // is external; this path can never stand in for a missing DATA root.
@@ -184,6 +178,17 @@ pub(super) fn scan(
             return Err(blocked("the source overlaps protected deployment paths"));
         }
     }
+    Ok(pin)
+}
+
+pub(super) fn scan(
+    selected: &FreshSelection,
+    source: &Path,
+    preview: Option<&mut Vec<u8>>,
+    target_names: Option<&[String]>,
+    require_roles: impl Fn() -> io::Result<()>,
+) -> io::Result<Counts> {
+    let pin = pin_source(selected, source)?;
     let before = pin.require_same_named_mount()?;
     selected.scope.full_local_mount(before.id)?;
     let directory = pin.storage_directory()?;

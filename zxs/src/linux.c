@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
@@ -39,6 +40,96 @@ int zxs_directory_has_only(int fd, const char *allowed) {
 }
 
 uid_t zxs_effective_uid(void) { return geteuid(); }
+
+int zxs_import_take_inherited(int fd) {
+    if (fd != 3 && fd != 4) { errno = EINVAL; return -1; }
+    return fcntl(fd, F_SETFD, FD_CLOEXEC);
+}
+int zxs_import_socket(int fd, int parent) {
+    int enabled = 0, type = 0, domain = 0;
+    struct ucred peer;
+    socklen_t n = sizeof(int);
+    if (getsockopt(fd, SOL_SOCKET, SO_PASSCRED, &enabled, &n) < 0 ||
+        n != sizeof(int) || enabled != 1) { errno = EACCES; return -1; }
+    n = sizeof(int);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &n) < 0 ||
+        n != sizeof(int) || type != SOCK_SEQPACKET) { errno = EACCES; return -1; }
+    n = sizeof(int);
+    if (getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &domain, &n) < 0 ||
+        n != sizeof(int) || domain != AF_UNIX) { errno = EACCES; return -1; }
+    n = sizeof(peer);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &n) < 0 ||
+        n != sizeof(peer) || peer.pid != parent || peer.uid != geteuid() || peer.gid != getegid()) {
+        errno = EACCES; return -1;
+    }
+    return 0;
+}
+int zxs_import_parent(void) { return getppid(); }
+
+int zxs_import_sealed(int fd) {
+    const int required = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+    struct stat stamp;
+    if (fstat(fd, &stamp) < 0) return -1;
+    if (!S_ISREG(stamp.st_mode) || stamp.st_uid != geteuid() || stamp.st_gid != getegid() || stamp.st_nlink != 0) {
+        errno = EACCES;
+        return -1;
+    }
+    int seals = fcntl(fd, F_GET_SEALS);
+    if (seals < 0) return -1;
+    if ((seals & required) != required) { errno = EACCES; return -1; }
+    return 0;
+}
+int zxs_import_reader(int fd) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0) return -1;
+    if ((flags & (O_ACCMODE | O_PATH)) != O_RDONLY || !(flags & O_NOATIME)) {
+        errno = EACCES; return -1;
+    }
+    return 0;
+}
+ssize_t zxs_import_send(int fd, const unsigned char *data, size_t size) {
+    return send(fd, data, size, MSG_NOSIGNAL);
+}
+ssize_t zxs_import_receive(int fd, unsigned char *data, size_t size, int parent, int *body_fd) {
+    *body_fd = -1;
+    union {
+        struct cmsghdr alignment;
+        unsigned char bytes[CMSG_SPACE(sizeof(struct ucred)) + CMSG_SPACE(2 * sizeof(int))];
+    } control;
+    struct iovec row = { .iov_base = data, .iov_len = size };
+    struct msghdr message = { .msg_iov = &row, .msg_iovlen = 1,
+        .msg_control = control.bytes, .msg_controllen = sizeof control.bytes };
+    ssize_t got = recvmsg(fd, &message, MSG_CMSG_CLOEXEC);
+    if (got < 0) return got;
+    int bad = got != (ssize_t)size || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC));
+    int credentials = 0, rights = 0;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(&message); c; c = CMSG_NXTHDR(&message, c)) {
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS &&
+            c->cmsg_len >= CMSG_LEN(0)) {
+            size_t bytes = c->cmsg_len - CMSG_LEN(0);
+            if (rights++ || bytes != sizeof(int)) bad = 1;
+            for (size_t i = 0; i < bytes / sizeof(int); ++i) {
+                int incoming;
+                memcpy(&incoming, CMSG_DATA(c) + i * sizeof(int), sizeof incoming);
+                if (*body_fd < 0) *body_fd = incoming;
+                else { close(incoming); bad = 1; }
+            }
+        } else if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS &&
+                   c->cmsg_len == CMSG_LEN(sizeof(struct ucred)) && !credentials) {
+            struct ucred peer;
+            memcpy(&peer, CMSG_DATA(c), sizeof peer);
+            if (peer.pid != parent || peer.uid != geteuid() || peer.gid != getegid()) bad = 1;
+            credentials = 1;
+        } else bad = 1;
+    }
+    if (bad || !credentials) {
+        if (*body_fd >= 0) close(*body_fd);
+        *body_fd = -1;
+        errno = EACCES;
+        return -1;
+    }
+    return got;
+}
 
 int zxs_pin_record(int fd, const char *name) {
     return openat(fd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
