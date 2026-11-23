@@ -22,6 +22,6 @@ dependencies. Record the reported output SHA-256, source revision and
 complete toolchain inputs when comparing builds.
 
 The build does not start the server or configure a deployment. The
-installed binary is selected separately and requires the protected
-gateway and storage handoff. The release does not open or migrate a
+installed binary runs as the storage owner and takes an explicit HTTP listen
+address after Helper enrolls the storage roots. The release does not open or migrate a
 legacy pool.
