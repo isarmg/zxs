@@ -1,16 +1,19 @@
 //! A private nonblocking prompt channel to the same actual foreground tty.
 //! No terminal path, device selection, mutable standard-stream flags, shell,
 //! caller-supplied output or secret output. Keep one original slave/VT open.
-use super::{failure,refuse,same_terminal};
-use crate::{disk_web::require_terminal,sqlite_install::approval::own_descriptor_table};
+use super::{own_descriptor_table,same_terminal};
+use crate::disk_web::require_terminal;
 use rustix::{fs::{self,AtFlags,Mode,OFlags,StatxFlags},io::Errno,termios::{tcgetpgrp,tcgetsid}};
 use std::{fs::File,io,os::fd::{AsFd,BorrowedFd},time::{Duration,Instant}};
 
 mod confirmation;
-pub(in crate::sqlite_install) use confirmation::PublicConfirmation;
+pub(crate) use confirmation::PublicConfirmation;
+
+fn refuse(s: &'static str) -> io::Error { io::Error::new(io::ErrorKind::PermissionDenied, s) }
+fn failure(s: &'static str) -> io::Error { io::Error::new(io::ErrorKind::InvalidInput, s) }
 
 #[derive(Clone,Copy)]
-pub(super) enum Prompt { Joint }
+pub(crate) enum Prompt { Joint }
 impl Prompt {
     fn wording(self)->[&'static [u8];2] {
         match self {
@@ -43,9 +46,9 @@ impl Surface {
         Ok(Self{dev:st.st_dev,ino:st.st_ino,rdev:st.st_rdev,mount:x.stx_mnt_id})
     }
 }
-pub(super) struct Channel { out:File, original:Surface, session:i32, group:i32 }
+pub(crate) struct Channel { out:File, original:Surface, session:i32, group:i32 }
 impl Channel {
-    pub(super) fn select()->io::Result<Self> {
+    pub(crate) fn select()->io::Result<Self> {
         let err=io::stderr();same_terminal(&io::stdin(),&err)?;
         let original=Surface::at(&err)?;
         if !already_writable(fs::fcntl_getfl(&err)?) {
@@ -66,7 +69,7 @@ impl Channel {
         drop(proc);drop(table);
         let this=Self{out,original,session,group};this.require()?;Ok(this)
     }
-    pub(super) fn require(&self)->io::Result<()> {
+    pub(crate) fn require(&self)->io::Result<()> {
         let input=io::stdin();let stdout=io::stdout();let err=io::stderr(); same_terminal(&input,&err)?;require_terminal(&self.out)?;
         for fd in [self.out.as_fd(),input.as_fd(),stdout.as_fd(),err.as_fd()] {
             if Surface::at(fd)?!=self.original{return Err(refuse("selected terminal object or mount changed"));}
@@ -76,7 +79,7 @@ impl Channel {
             return Err(refuse("selected terminal session, group or private prompt fd changed"));
         }Ok(())
     }
-    pub(super) fn prompt(&self,prompt:Prompt,index:usize,end:Instant,check:impl Fn()->io::Result<()>)->io::Result<()> {
+    pub(crate) fn prompt(&self,prompt:Prompt,index:usize,end:Instant,check:impl Fn()->io::Result<()>)->io::Result<()> {
         let bytes=*prompt.wording().get(index).ok_or_else(||failure("unknown credential prompt"))?;
         nonblocking_prompt(self.out.as_fd(),bytes,end,check)
     }

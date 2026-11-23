@@ -1,9 +1,9 @@
 //! The optional fixed working-copy page is a request to display the existing
 //! terminal challenge. The child receives neither source, destination, checker
 //! nor terminal. Nothing here can act on a disk or grant the parent authority.
-use super::{host::Worker,manifest::sealed_owner,transport::{self,Channel,Kind}};
-use crate::{disk_web,volume_images::repair::{RepairFormat, authorization::{TAG, SHAPE, no, raw_scope}},pinned::helper_elf::ForegroundElf,maintenance,sqlite_install::{approval,pair::{
-    domain::sealed,terminal::PublicConfirmation}},fresh_random::operation as random};
+use crate::local_worker::{Worker, sealed, sealed_owner, transport::{self,Channel,Kind}};
+use crate::{disk_web,volume_images::repair::{RepairFormat, authorization::{TAG, SHAPE, no, raw_scope}},pinned::helper_elf::ForegroundElf,maintenance,foreground::{PublicConfirmation,only_inherited_descriptors},
+    fresh_random::operation as random};
 use helper_linux_evidence::{diagnostic_process::{OfflineSql,account_sql_descriptors},prompt_signals::PromptSignals};
 use rustix::{net::{UCred,sockopt},process::{DumpableBehavior,Pid,Signal,dumpable_behavior,getgid,getppid,getuid,
     parent_process_death_signal,set_dumpable_behavior}};
@@ -44,7 +44,7 @@ pub(in crate::sqlite_install::pair) fn offer(tty:&PublicConfirmation,format:Repa
 
 pub(crate) fn worker()->io::Result<()>{
     let [fd,meta]=account_sql_descriptors()?;
-    approval::only_inherited_descriptors(&[3,4])?;
+    only_inherited_descriptors(&[3,4])?;
     let (uid,gid)=(getuid(),getgid());
     maintenance::diagnostic_worker(uid.as_raw(),gid.as_raw())?;
     let same=|parent:Pid|{if getppid()==Some(parent){Ok(())}else{Err(no())}};

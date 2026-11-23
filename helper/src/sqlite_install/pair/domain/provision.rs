@@ -5,9 +5,10 @@ pub(in crate::sqlite_install::pair) use return_to_host::{DeployedSite,deployed_w
     checked_vault_stamp,verify_fresh_worker,Allocated,CurrentVault,PlacedVault,FreshHome,FreshParent};
 pub(in crate::sqlite_install) use return_to_host::{InitialLayout,lease as require_lent_ex};
 use super::bad;
+pub(in crate::sqlite_install::pair) use crate::local_worker::sealed;
 use crate::pinned::{Entity,Mount};
 use rustix::fs::{Mode,OFlags,RawDir,openat};
-use std::{fs::File,io::{self,Seek,Write},mem::MaybeUninit,os::unix::fs::MetadataExt};
+use std::{fs::File,io,mem::MaybeUninit,os::unix::fs::MetadataExt};
 
 fn mark(fd:&File)->io::Result<(Entity,u64)>{
     Ok((Entity::of(&fd.metadata()?)?,Mount::on(fd)?.ok_or_else(||bad("missing original mount identity"))?.id))
@@ -34,12 +35,4 @@ fn contents(dir:&File,expected:&[&[u8]])->io::Result<()>{
     }
     if seen!=(1u16<<expected.len())-1||Times::on(&other)?!=before||Times::on(dir)?!=before{return Err(bad("incomplete or changed selected product directory"));}
     Ok(())
-}
-pub(in crate::sqlite_install::pair) fn sealed(bytes:&[u8])->io::Result<File>{
-    use rustix::fs::{MemfdFlags,SealFlags,fcntl_add_seals,fcntl_get_seals,memfd_create};
-    let mut f=File::from(memfd_create(c"helper-fixed-origin",MemfdFlags::CLOEXEC|MemfdFlags::ALLOW_SEALING|MemfdFlags::NOEXEC_SEAL)?);
-    f.write_all(bytes)?;let seals=SealFlags::WRITE|SealFlags::GROW|SealFlags::SHRINK|SealFlags::SEAL;
-    fcntl_add_seals(&f,seals)?;
-    if !fcntl_get_seals(&f)?.contains(seals|SealFlags::EXEC)||f.metadata()?.len()!=bytes.len() as u64{return Err(bad("incomplete fixed bootstrap artifact"));}
-    f.rewind()?;Ok(f)
 }

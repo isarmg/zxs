@@ -1,10 +1,9 @@
 //! Local, unbuffered entry on the already-open controlling terminal. Private:
 //! this is not maintenance authorization, runtime installation evidence or an issuer.
 mod audit;
-mod channel;
-pub(in crate::sqlite_install) use channel::PublicConfirmation;
+use crate::foreground::channel::{self, Prompt};
+pub(in crate::sqlite_install) use crate::foreground::PublicConfirmation;
 use audit::UnauditedInput;
-use channel::Prompt;
 use helper_linux_evidence::first_smb::Enrollment;
 use super::{native_run::joint_material::Binding,web_secret::{PreparedWeb,WebWorkspace}};
 use super::super::approval::{host_admin,same_terminal};

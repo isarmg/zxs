@@ -6,7 +6,7 @@ use rustix::{fs::{Mode,OFlags},io::Errno,rand::{GetRandomFlags,getrandom},
     termios::{LocalModes,QueueSelector,tcflush,tcgetattr}};
 use std::{fs::File,io,os::fd::AsFd,time::{Duration,Instant}};
 
-pub(in crate::sqlite_install) struct PublicConfirmation{terminal:Channel,reader:File}
+pub(crate) struct PublicConfirmation{terminal:Channel,reader:File}
 fn readable(f:OFlags)->bool{
     matches!(f&OFlags::ACCMODE,OFlags::RDONLY|OFlags::RDWR)&&!f.contains(OFlags::PATH)
 }
@@ -19,7 +19,7 @@ fn challenge()->io::Result<String>{
 }
 fn clear(f:&File)->io::Result<()>{Ok(tcflush(f,QueueSelector::IFlush)?)}
 impl PublicConfirmation{
-    pub(in crate::sqlite_install) fn select()->io::Result<Self>{
+    pub(crate) fn select()->io::Result<Self>{
         let terminal=Channel::select()?; // rejects /dev/tty aliases; holds original stderr slave/VT
         if !readable(fs::fcntl_getfl(io::stdin())?){return Err(refuse("standard input must already have read access"));}
         let (_proc,table)=own_descriptor_table()?;
@@ -31,7 +31,7 @@ impl PublicConfirmation{
         let reader=File::from(fs::openat(&table,c"0",OFlags::RDONLY|OFlags::NONBLOCK|OFlags::NOCTTY|OFlags::CLOEXEC,Mode::empty())?);
         let selected=Self{terminal,reader};selected.check()?;Ok(selected)
     }
-    pub(in crate::sqlite_install) fn check(&self)->io::Result<()>{
+    pub(crate) fn check(&self)->io::Result<()>{
         self.terminal.require()?;
         let key=tcgetattr(&self.reader)?;
         if !readable(fs::fcntl_getfl(io::stdin())?)||Surface::at(&self.reader)?!=self.terminal.original
@@ -40,32 +40,32 @@ impl PublicConfirmation{
             return Err(refuse("the original nonblocking foreground canonical terminal is required"));}
         Ok(())
     }
-    pub(in crate::sqlite_install) fn confirm_init(&self,fresh:bool,preview:String)->io::Result<()>{
+    pub(crate) fn confirm_init(&self,fresh:bool,preview:String)->io::Result<()>{
         self.ask(if fresh{"INIT"}else{"RESUME"},Some(preview),1100*1024)
     }
-    pub(in crate::sqlite_install) fn confirm_fresh_pool(&self,review:String)->io::Result<()>{
+    pub(crate) fn confirm_fresh_pool(&self,review:String)->io::Result<()>{
         self.ask("INIT-FRESH-POOL",Some(review),1100*1024)
     }
     #[cfg(any(test,feature="embedded-zxs"))]
-    pub(in crate::sqlite_install::pair) fn confirm_image_installation(&self,review:String)->io::Result<()>{
+    pub(crate) fn confirm_image_installation(&self,review:String)->io::Result<()>{
         self.ask("INSTALL-ZXS-IMAGE",Some(review),32*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_initial_deployment(&self,review:String)->io::Result<()>{
+    pub(crate) fn confirm_initial_deployment(&self,review:String)->io::Result<()>{
         self.ask("ISSUE-FRESH-ACCOUNT",Some(review),1100*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_ext_repair(&self,preview:String)->io::Result<()>{
+    pub(crate) fn confirm_ext_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-EXT-COPY",Some(preview),64*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_exfat_repair(&self,preview:String)->io::Result<()>{
+    pub(crate) fn confirm_exfat_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-EXFAT-COPY",Some(preview),64*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_fat32_repair(&self,preview:String)->io::Result<()>{
+    pub(crate) fn confirm_fat32_repair(&self,preview:String)->io::Result<()>{
         self.ask("REPAIR-FAT32-COPY",Some(preview),64*1024)
     }
-    pub(in crate::sqlite_install::pair) fn confirm_shared_account_reset(&self,review:String)->io::Result<()>{
+    pub(crate) fn confirm_shared_account_reset(&self,review:String)->io::Result<()>{
         self.ask("RESET-ZXS-ACCOUNT",Some(review),96*1024)
     }
-    pub(in crate::sqlite_install::pair) fn report(&self,line:&str)->io::Result<()>{
+    pub(crate) fn report(&self,line:&str)->io::Result<()>{
         nonblocking_prompt(self.terminal.out.as_fd(),line.as_bytes(),Instant::now()+Duration::from_secs(2),||self.check())
     }
     fn ask(&self,verb:&'static str,preview:Option<String>,limit:usize)->io::Result<()>{

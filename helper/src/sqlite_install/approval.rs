@@ -1,10 +1,11 @@
 //! One foreground local administrator authorizes one already-pinned set. No
 //! browser, environment, SQL row, plain UID argument or saved grant can issue it.
 use super::{Purpose,originals::Originals,pair::{InitialLayout,PublicConfirmation},product_layout,request::{Id,Request}};
-use crate::{disk_web::require_terminal,maintenance::{diagnostic_worker,thread_file},pinned::{Entity,Mount}};
-use rustix::{fs::{Mode,OFlags,RawDir,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2},process::{Gid,Uid,getgid,getuid,getegid,geteuid},
+use crate::{maintenance::{diagnostic_worker,thread_file},pinned::{Entity,Mount}};
+pub(super) use crate::foreground::{no_inherited_descriptors,only_inherited_descriptors,same_terminal};
+use rustix::{fs::{Mode,OFlags,PROC_SUPER_MAGIC,ResolveFlags,fstatfs,open,openat,openat2},process::{Gid,Uid,getgid,getuid,getegid,geteuid},
     thread::{set_keep_capabilities,set_no_new_privs,set_thread_groups,set_thread_res_gid,set_thread_res_uid}};
-use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read},mem::MaybeUninit,os::{fd::{AsFd,AsRawFd},unix::ffi::OsStrExt},path::{Path,PathBuf}};
+use std::{ffi::CStr,fmt::Write as _,fs::File,io::{self,Read},os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
 
 pub(super) struct Approved {request:Request, originals:Originals, purpose:Purpose}
 
@@ -103,35 +104,6 @@ pub(super) fn drop_to_storage(uid:u32,gid:u32)->io::Result<()>{
 fn hex(v:&[u8])->String{v.iter().map(|b|format!("{b:02x}")).collect()}
 fn escaped(raw:&[u8])->String{raw.iter().copied().flat_map(std::ascii::escape_default).map(char::from).collect()}
 fn denied()->io::Error{io::Error::new(io::ErrorKind::PermissionDenied,"exact protected host administrator, explicit original scope and controlling terminal required")}
-pub(super) fn same_terminal(input:&io::Stdin,output:&io::Stderr)->io::Result<()>{
-    let stdout=io::stdout();
-    require_terminal(input.as_fd())?;require_terminal(output.as_fd())?;require_terminal(stdout.as_fd())?;
-    let a=rustix::fs::fstat(input)?;
-    for b in [rustix::fs::fstat(output)?,rustix::fs::fstat(stdout)?]{
-        if a.st_dev!=b.st_dev||a.st_ino!=b.st_ino||a.st_rdev!=b.st_rdev{return Err(denied());}
-    }Ok(())
-}
-pub(super) fn own_descriptor_table()->io::Result<(File,File)>{
-    let flags=OFlags::PATH|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC;
-    let proc=File::from(open(c"/proc",flags,Mode::empty())?);
-    let mount=Mount::on(&proc)?.filter(|m|m.at_root==Some(true)).ok_or_else(denied)?;
-    if fstatfs(&proc)?.f_type!=PROC_SUPER_MAGIC{return Err(denied());}
-    let dir=File::from(openat2(&proc,c"thread-self/fd",OFlags::RDONLY|OFlags::DIRECTORY|OFlags::NOFOLLOW|OFlags::CLOEXEC,
-        Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|ResolveFlags::NO_MAGICLINKS)?);
-    if Mount::on(&dir)?.is_none_or(|m|m.id!=mount.id)||fstatfs(&dir)?.f_type!=PROC_SUPER_MAGIC{return Err(denied());}
-    Ok((proc,dir))
-}
-pub(super) fn no_inherited_descriptors()->io::Result<()>{ only_inherited_descriptors(&[]) }
-pub(super) fn only_inherited_descriptors(already_verified:&[i32])->io::Result<()>{
-    let (proc,dir)=own_descriptor_table()?;
-    let mut buf=[MaybeUninit::uninit();4096];let mut entries=RawDir::new(&dir,&mut buf);
-    while let Some(e)=entries.next(){
-        let e=e?;let bytes=e.file_name().to_bytes();if bytes==b"."||bytes==b".."{continue;}
-        let fd=std::str::from_utf8(bytes).ok().and_then(|s|s.parse::<i32>().ok()).ok_or_else(denied)?;
-        if !matches!(fd,0..=2)&&fd!=proc.as_raw_fd()&&fd!=dir.as_raw_fd()&&!already_verified.contains(&fd){return Err(denied());}
-    }
-    Ok(())
-}
 fn fields(raw:&[u8])->impl Iterator<Item=&[u8]>{raw.split(u8::is_ascii_whitespace).filter(|s|!s.is_empty())}
 fn kernel(name:&CStr,max:u64)->io::Result<Vec<u8>>{
     let mut v=Vec::new();thread_file(name)?.take(max+1).read_to_end(&mut v)?;

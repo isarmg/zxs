@@ -8,7 +8,7 @@ pub(crate) use native_run::{exec_first_browser,exec_copy_repair_browser};
 mod web_secret;
 mod smb_policy;
 mod terminal;
-pub(super) use terminal::PublicConfirmation;
+pub(super) use crate::foreground::PublicConfirmation;
 mod observed;
 mod retire_ordinary;
 mod import_source;
@@ -32,7 +32,7 @@ use super::{bad,request::Id};
 pub(crate) fn confirm_copy_repair(format:crate::volume_images::repair::RepairFormat,preview:String,web:Option<u64>,
     require:impl Fn()->std::io::Result<()>)->std::io::Result<()>{
     use crate::volume_images::repair::RepairFormat;
-    let tty=terminal::PublicConfirmation::select()?;
+    let tty=PublicConfirmation::select()?;
     if let Some(bytes)=web{native_run::offer_copy_repair_web(&tty,format,bytes,&require)?;}
     require()?;
     match format{

@@ -1,6 +1,6 @@
 //! Host-side decisions and the authenticated result for the private v20
 //! handoff. No mode can choose media by parsing a UUID or receipt.
-mod transport;
+use crate::local_worker::transport;
 pub(super) mod joint_material;
 mod manifest;
 mod worker;

@@ -1,27 +1,27 @@
 //! Dedicated original-maintenance control, not an externally callable service.
 //! Every receive is from the other still-live process of this one invocation,
 //! with `SCM_CREDENTIALS` and exactly the descriptors fixed by this stage.
-use crate::sqlite_install::bad;
+use super::bad;
 use rustix::{fd::{AsFd,OwnedFd},net::{AddressFamily,RecvAncillaryBuffer,RecvAncillaryMessage,RecvFlags,ReturnFlags,
     SendAncillaryBuffer,SendAncillaryMessage,SendFlags,Shutdown,SocketFlags,SocketType,UCred,recvmsg,sendmsg,shutdown,socketpair,sockopt}};
 use std::{fs::File,io::{self,IoSlice,IoSliceMut},mem::MaybeUninit,time::{Duration,Instant}};
 const MAGIC:&[u8;8]=b"ZXSAMW1\0";
 const WIRE:usize=8+1+32+32+65;
-pub(super) type Payload=[u8;65];
+pub(crate) type Payload=[u8;65];
 
 #[derive(Clone,Copy)]
-pub(super) enum Kind{Reserved=3,Complete=5,Lease=6,ChosenFolder=9,VolumeClaim=10,FirstBrowserReady=12,FirstBrowserRequest=13,RustInspect=15,RustStage=16,RustVaultPlaced=17,RustVaultSealed=18,
+pub(crate) enum Kind{Reserved=3,Complete=5,Lease=6,ChosenFolder=9,VolumeClaim=10,FirstBrowserReady=12,FirstBrowserRequest=13,RustInspect=15,RustStage=16,RustVaultPlaced=17,RustVaultSealed=18,
     CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23,RetirementCheck=29,ImportInventory=30,FreshDatabase=31,DeployedActive=32,DeployedDatabase=33,DeployedMarker=34,SharedAccountDurable=38,JointWriterReady=39,
     JointWebReceiverReady=40,JointWebMaterial=41,JointSqlPeer=42,JointWriterPeer=43,JointVaultDurable=44}
 
-pub(super) struct Channel {fd:File,peer:UCred,scope:[u8;32]}
-pub(super) fn pair()->io::Result<(File,File)>{
+pub(crate) struct Channel {fd:File,peer:UCred,scope:[u8;32]}
+pub(crate) fn pair()->io::Result<(File,File)>{
     let (a,b)=socketpair(AddressFamily::UNIX,SocketType::SEQPACKET,SocketFlags::CLOEXEC,None)?;
     for f in [&a,&b]{sockopt::set_socket_passcred(f,true)?;}
     Ok((File::from(a),File::from(b)))
 }
 impl Channel {
-    pub(super) fn from_owned_child_session(fd:File,peer:UCred,scope:[u8;32])->io::Result<Self>{
+    pub(crate) fn from_owned_child_session(fd:File,peer:UCred,scope:[u8;32])->io::Result<Self>{
         // Caller verifies actual supervising spawn, user/subject and startup
         // challenge before using this transport. SO_PEERCRED alone is only
         // the original socketpair creator, not this packet's sender.
@@ -44,8 +44,8 @@ impl Channel {
             return Err(bad("incomplete maintenance message"));
         }Ok(())
     }
-    pub(super) fn send(&self,kind:Kind,digest:&[u8;32],body:&Payload)->io::Result<()>{self.send_inner(kind,digest,body,&[])}
-    pub(super) fn send_original(&self,kind:Kind,digest:&[u8;32],body:&Payload,original:&File)->io::Result<()>{
+    pub(crate) fn send(&self,kind:Kind,digest:&[u8;32],body:&Payload)->io::Result<()>{self.send_inner(kind,digest,body,&[])}
+    pub(crate) fn send_original(&self,kind:Kind,digest:&[u8;32],body:&Payload,original:&File)->io::Result<()>{
         self.send_inner(kind,digest,body,&[original])
     }
     fn receive<const K:usize>(&self,kind:Kind,digest:&[u8;32])->io::Result<(Payload,[File;K])>{
@@ -69,10 +69,10 @@ impl Channel {
         let fds:[OwnedFd;K]=rights.try_into().map_err(|_|bad("wrong maintenance descriptor count"))?;
         Ok((wire[73..].try_into().expect("fixed payload"),fds.map(File::from)))
     }
-    pub(super) fn wait<const K:usize>(&self,kind:Kind,digest:&[u8;32],until:Instant)->io::Result<(Payload,[File;K])>{
+    pub(crate) fn wait<const K:usize>(&self,kind:Kind,digest:&[u8;32],until:Instant)->io::Result<(Payload,[File;K])>{
         self.wait_checked(kind,digest,until,||Ok(()))
     }
-    pub(super) fn wait_checked<const K:usize>(&self,kind:Kind,digest:&[u8;32],until:Instant,
+    pub(crate) fn wait_checked<const K:usize>(&self,kind:Kind,digest:&[u8;32],until:Instant,
         check:impl Fn()->io::Result<()>)->io::Result<(Payload,[File;K])>{
         loop {
             check()?;
@@ -83,8 +83,8 @@ impl Channel {
             }
         }
     }
-    pub(super) fn finish_writing(&self)->io::Result<()>{shutdown(&self.fd,Shutdown::Write).map_err(Into::into)}
-    pub(super) fn eof(&self)->io::Result<()>{
+    pub(crate) fn finish_writing(&self)->io::Result<()>{shutdown(&self.fd,Shutdown::Write).map_err(Into::into)}
+    pub(crate) fn eof(&self)->io::Result<()>{
         let mut buffer=[0];let mut ctl=[MaybeUninit::uninit();rustix::cmsg_space!(ScmRights(1),ScmCredentials(1))];
         let mut extras=RecvAncillaryBuffer::new(&mut ctl);
         let msg=recvmsg(&self.fd,&mut [IoSliceMut::new(&mut buffer)],&mut extras,RecvFlags::DONTWAIT|RecvFlags::CMSG_CLOEXEC)?;
