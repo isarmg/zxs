@@ -14,6 +14,7 @@ mod enabled {
         path::{OriginalPath, PIN, WITHIN, no_attribute},
     };
     use crate::{
+        path_rules::QuotedPath,
         pinned::{Entity, Mount},
         product_layout,
         sqlite_install::{
@@ -93,16 +94,6 @@ mod enabled {
         // The production caller can only pass the compiled immutable asset
         // and digest. Tests compile this path but never enter it.
         fn publish(self, asset: &[u8], packaged: [u8; 32]) -> io::Result<()> {
-            fn absent(dir: &File) -> io::Result<()> {
-                match openat2(dir, DEST, PIN, Mode::empty(), WITHIN) {
-                    Err(rustix::io::Errno::NOENT) => Ok(()),
-                    Ok(_) => Err(io::Error::new(
-                        io::ErrorKind::AlreadyExists,
-                        "the fixed ZXS executable name is already occupied; left untouched",
-                    )),
-                    Err(e) => Err(e.into()),
-                }
-            }
             require_private_install()?;
             let digest = verify(asset, packaged, self.independent)?;
             approval::no_inherited_descriptors()?;
@@ -114,14 +105,8 @@ mod enabled {
             let product = site.product_root()?;
             let target = OriginalPath::selected(&self.directory, true, product)?;
             let directory = target.directory()?;
-            let identity = |(f, m): (&File, u64)| -> io::Result<_> {
-                if Mount::on(f)?.is_none_or(|got| got.id != m) {
-                    return Err(denied());
-                }
-                Entity::of(&f.metadata()?)
-            };
             let mount = Mount::on(&directory)?.ok_or_else(denied)?.id;
-            let dir_id = identity((&directory, mount))?;
+            let dir_id = identity(&directory, mount)?;
             let path = target.path().join("zxs");
             super::super::path::check_image(&path)?;
             let protected = site.protect_image_destination(dir_id)?;
@@ -133,7 +118,7 @@ mod enabled {
                 site.before_original_sql(&scope)?;
                 target.require()?;
                 if cancelled()
-                    || dir_id != identity((&directory, mount))?
+                    || dir_id != identity(&directory, mount)?
                     || directory.metadata()?.mode() & 0o2000 != 0
                     || fstatvfs(&directory)?
                         .f_flag
@@ -145,8 +130,8 @@ mod enabled {
             };
             require()?;
             absent(&directory)?;
-            tty.confirm_image_installation(format!("只写入一个可独立运行的 ZXS 文件：{:?}\nSHA-256 {} / {} 字节；不覆盖、不启动、不设置账户、不创建或迁移任何池。\n",
-                path,hex(&digest),asset.len()))?;
+            tty.confirm_image_installation(format!("只写入一个可独立运行的 ZXS 文件：{}\nSHA-256 {} / {} 字节；不覆盖、不启动、不设置账户、不创建或迁移任何池。\n",
+                QuotedPath(&path),hex(&digest),asset.len()))?;
             watch_cancellation()?;
             let deadline = Instant::now() + Duration::from_mins(10);
             let alive = || -> io::Result<()> {
@@ -158,55 +143,10 @@ mod enabled {
             alive()?;
             require()?;
             absent(&directory)?;
-            // No named fallback or cleanup path. This is one new unlinked
-            // inode on the admitted parent mount and cannot overwrite anything.
-            let file = File::from(openat2(
-                &directory,
-                c".",
-                OFlags::TMPFILE | OFlags::RDWR | OFlags::CLOEXEC,
-                Mode::RUSR | Mode::WUSR,
-                WITHIN,
-            )?);
-            let born = identity((&file, mount))?;
-            let shape = |perm: u32, bytes: u64| -> io::Result<()> {
-                let m = file.metadata()?;
-                if (m.uid(), m.gid(), m.mode(), m.nlink(), m.len())
-                    != (0, 0, 0o100_000 | perm, 0, bytes)
-                    || identity((&file, mount))? != born
-                {
-                    return Err(denied());
-                }
-                for key in [c"system.posix_acl_access", c"security.capability"] {
-                    no_attribute(&file, key)?;
-                }
-                Ok(())
-            };
-            shape(0o600, 0)?;
-            let mut start = 0u64;
-            for block in asset.chunks(512 << 10) {
-                alive()?;
-                file.write_all_at(block, start)?;
-                start += block.len() as u64;
-            }
-            shape(0o600, asset.len() as u64)?;
-            let mut offset = 0u64;
-            let mut back = [0; 64 << 10];
-            for wanted in asset.chunks(back.len()) {
-                alive()?;
-                file.read_exact_at(&mut back[..wanted.len()], offset)?;
-                if &back[..wanted.len()] != wanted {
-                    return Err(denied());
-                }
-                offset += wanted.len() as u64;
-            }
-            if file.read_at(&mut [0], offset)? != 0 {
-                return Err(denied());
-            }
-            fchmod(&file, Mode::from_bits_retain(0o755))?;
-            file.sync_all()?;
+            let (file, born) = stage(&directory, mount, asset, &alive)?;
             require()?;
             absent(&directory)?;
-            shape(0o755, asset.len() as u64)?;
+            unlinked_shape(&file, mount, born, 0o755, asset.len() as u64)?;
             alive()?;
             // EMPTY_PATH publishes that same exact inode, never identifies a
             // source by its name. EEXIST is a definite non-publication only.
@@ -218,13 +158,13 @@ mod enabled {
                         "another file occupies the chosen name; nothing was overwritten",
                     ));
                 }
-                Err(e) => return Err(uncertain(e.into())),
+                Err(e) => return Err(uncertain(&e.into())),
             }
             let finish = (|| -> io::Result<()> {
                 let m = file.metadata()?;
                 if (m.uid(), m.gid(), m.mode(), m.nlink(), m.len())
                     != (0, 0, 0o100_755, 1, asset.len() as u64)
-                    || identity((&file, mount))? != born
+                    || identity(&file, mount)? != born
                 {
                     return Err(denied());
                 }
@@ -246,16 +186,95 @@ mod enabled {
                 installed.require_same_published(&file)?;
                 Ok(())
             })();
-            finish.map_err(uncertain)?;
+            finish.map_err(|e| uncertain(&e))?;
             tty.report(&format!(
-                "已写入并核对 ZXS 文件 {:?}，SHA-256 {}。没有创建站点、设置账户或启动服务。\n",
-                path,
+                "已写入并核对 ZXS 文件 {}，SHA-256 {}。没有创建站点、设置账户或启动服务。\n",
+                QuotedPath(&path),
                 hex(&digest)
             ))
-            .map_err(uncertain)
+            .map_err(|e| uncertain(&e))
         }
     }
-    fn uncertain(e: io::Error) -> io::Error {
+    fn absent(dir: &File) -> io::Result<()> {
+        match openat2(dir, DEST, PIN, Mode::empty(), WITHIN) {
+            Err(rustix::io::Errno::NOENT) => Ok(()),
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the fixed ZXS executable name is already occupied; left untouched",
+            )),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn identity(f: &File, m: u64) -> io::Result<Entity> {
+        if Mount::on(f)?.is_none_or(|got| got.id != m) {
+            return Err(denied());
+        }
+        Entity::of(&f.metadata()?)
+    }
+
+    fn unlinked_shape(
+        file: &File,
+        mount: u64,
+        born: Entity,
+        perm: u32,
+        bytes: u64,
+    ) -> io::Result<()> {
+        let m = file.metadata()?;
+        if (m.uid(), m.gid(), m.mode(), m.nlink(), m.len()) != (0, 0, 0o100_000 | perm, 0, bytes)
+            || identity(file, mount)? != born
+        {
+            return Err(denied());
+        }
+        for key in [c"system.posix_acl_access", c"security.capability"] {
+            no_attribute(file, key)?;
+        }
+        Ok(())
+    }
+
+    fn stage(
+        directory: &File,
+        mount: u64,
+        asset: &[u8],
+        alive: &impl Fn() -> io::Result<()>,
+    ) -> io::Result<(File, Entity)> {
+        // No named fallback or cleanup path. This is one new unlinked
+        // inode on the admitted parent mount and cannot overwrite anything.
+        let file = File::from(openat2(
+            directory,
+            c".",
+            OFlags::TMPFILE | OFlags::RDWR | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+            WITHIN,
+        )?);
+        let born = identity(&file, mount)?;
+        unlinked_shape(&file, mount, born, 0o600, 0)?;
+        let mut start = 0u64;
+        for block in asset.chunks(512 << 10) {
+            alive()?;
+            file.write_all_at(block, start)?;
+            start += block.len() as u64;
+        }
+        unlinked_shape(&file, mount, born, 0o600, asset.len() as u64)?;
+        let mut offset = 0u64;
+        let mut back = vec![0; 64 << 10];
+        for wanted in asset.chunks(back.len()) {
+            alive()?;
+            file.read_exact_at(&mut back[..wanted.len()], offset)?;
+            if &back[..wanted.len()] != wanted {
+                return Err(denied());
+            }
+            offset += wanted.len() as u64;
+        }
+        if file.read_at(&mut [0], offset)? != 0 {
+            return Err(denied());
+        }
+        fchmod(&file, Mode::from_bits_retain(0o755))?;
+        file.sync_all()?;
+        Ok((file, born))
+    }
+
+    fn uncertain(e: &io::Error) -> io::Error {
         io::Error::new(
             e.kind(),
             format!("ZXS 文件发布结果未确认；保留原目标，不能盲目重试或删除: {e}"),

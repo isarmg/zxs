@@ -96,7 +96,7 @@ use helper_linux_evidence::prompt_signals::PromptSignals;
 #[cfg(feature = "embedded-zxs")]
 pub(crate) use image::EmbeddedInstall;
 #[cfg(test)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // Before and after password prompts only. Do not leave process-wide
 // handlers or a blocked signal mask across the next independent TTY guard.
@@ -188,53 +188,63 @@ impl Selection {
                 .into_string()
                 .map_err(|_| "expected a valid logical recycle name")?,
         )?;
-        let mut folders: Vec<Choice> = Vec::new();
-        while let Some(flag) = it.next() {
-            if (flag == "--share" || flag == "--share-label") && folders.len() < MAX_FOLDERS {
-                let selected = it
-                    .next()
-                    .ok_or("missing actual original data root or explicit DATA label")?;
-                let p = if flag == "--share-label" {
-                    product_layout::data_label(&selected)?
-                } else {
-                    PathBuf::from(selected)
-                };
-                product_layout::media(&p)?;
-                if system.starts_with(&p)
-                    || p.starts_with(&system)
-                    || image_path.starts_with(&p)
-                    || p.starts_with(&image_path)
-                    || folders
-                        .iter()
-                        .any(|f| p.starts_with(&f.path) || f.path.starts_with(&p))
-                {
-                    return Err("SYSTEM, ordinary media and the selected image must not overlap");
-                }
-                it.next()
-                    .and_then(|s| s.into_string().ok())
-                    .ok_or("missing exact UTF-8 folder name")?;
-                match it.next().as_deref().and_then(OsStr::to_str) {
-                    Some("ro") => Mode::ReadOnly,
-                    Some("rw") => Mode::ReadWrite,
-                    _ => return Err("select the explicit folder mode ro or rw"),
-                };
-                folders.push(Choice { path: p });
-            } else {
-                return Err(
-                    "only explicit --share/--share-label entries; no recovery, password or second executable",
-                );
-            }
-        }
-        if folders.is_empty() {
-            return Err("select at least one original ordinary folder");
-        }
+        let choices = share_choices(it, &system, &image_path)?;
         Ok(Self {
             system,
             image_path,
-            choices: folders,
+            choices,
         })
     }
 }
+#[cfg(test)]
+fn share_choices(
+    mut it: impl Iterator<Item = OsString>,
+    system: &Path,
+    image_path: &Path,
+) -> Result<Vec<Choice>, &'static str> {
+    let mut folders: Vec<Choice> = Vec::new();
+    while let Some(flag) = it.next() {
+        if (flag == "--share" || flag == "--share-label") && folders.len() < MAX_FOLDERS {
+            let selected = it
+                .next()
+                .ok_or("missing actual original data root or explicit DATA label")?;
+            let p = if flag == "--share-label" {
+                product_layout::data_label(&selected)?
+            } else {
+                PathBuf::from(selected)
+            };
+            product_layout::media(&p)?;
+            if system.starts_with(&p)
+                || p.starts_with(system)
+                || image_path.starts_with(&p)
+                || p.starts_with(image_path)
+                || folders
+                    .iter()
+                    .any(|f| p.starts_with(&f.path) || f.path.starts_with(&p))
+            {
+                return Err("SYSTEM, ordinary media and the selected image must not overlap");
+            }
+            it.next()
+                .and_then(|s| s.into_string().ok())
+                .ok_or("missing exact UTF-8 folder name")?;
+            match it.next().as_deref().and_then(OsStr::to_str) {
+                Some("ro") => Mode::ReadOnly,
+                Some("rw") => Mode::ReadWrite,
+                _ => return Err("select the explicit folder mode ro or rw"),
+            };
+            folders.push(Choice { path: p });
+        } else {
+            return Err(
+                "only explicit --share/--share-label entries; no recovery, password or second executable",
+            );
+        }
+    }
+    if folders.is_empty() {
+        return Err("select at least one original ordinary folder");
+    }
+    Ok(folders)
+}
+
 fn hex(bytes: &[u8]) -> String {
     crate::fs_tools::lower_hex(bytes)
 }

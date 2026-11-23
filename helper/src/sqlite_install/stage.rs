@@ -7,7 +7,7 @@ use super::{
     reservation::Reserved,
 };
 pub(super) use crate::fresh_random::operation as random;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 use std::{io, os::unix::ffi::OsStrExt};
 pub(super) const SCHEMA: &str = include_str!("schema.sql");
 
@@ -46,6 +46,20 @@ impl Pending<'_> {
         Ok(())
     }
 }
+fn pending_uncertain(_: rusqlite::Error) -> io::Error {
+    bad(
+        "INIT transaction did not produce a confirmed pending receipt; retain the original operation and media",
+    )
+}
+
+fn root_count(issue: &Issue) -> io::Result<i64> {
+    i64::try_from(issue.rows.len()).map_err(|_| bad("invalid original claim count"))
+}
+
+fn ordinal(index: usize) -> io::Result<i64> {
+    i64::try_from(index).map_err(|_| bad("invalid original claim ordinal"))
+}
+
 fn first<'g>(request: &Request, group: &'g Group, issue: &Issue) -> io::Result<Pending<'g>> {
     if group.limits().len() != issue.rows.len() || issue.rows.len() != request.paths().len() {
         return Err(bad("incomplete proposed original result"));
@@ -54,21 +68,16 @@ fn first<'g>(request: &Request, group: &'g Group, issue: &Issue) -> io::Result<P
     // Both the original group and its S OFD outlive this connection and all its
     // statements. No APIs on this path open/close another raw FD for the DB inode.
     let mut db = engine::open_reserved(&reserved)?;
-    let fail = |_| {
-        bad(
-            "INIT transaction did not produce a confirmed pending receipt; retain the original operation and media",
-        )
-    };
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(fail)?;
+        .map_err(pending_uncertain)?;
     let objects: i64 = tx
         .query_row("SELECT count(*) FROM main.sqlite_schema", [], |r| r.get(0))
-        .map_err(fail)?;
+        .map_err(pending_uncertain)?;
     if objects != 0 {
         return Err(bad("unexpected schema in the freshly reserved original"));
     }
-    tx.execute_batch(SCHEMA).map_err(fail)?;
+    tx.execute_batch(SCHEMA).map_err(pending_uncertain)?;
     let op = request.op();
     let actor = request.actor();
     let approval = request.approval();
@@ -85,69 +94,19 @@ fn first<'g>(request: &Request, group: &'g Group, issue: &Issue) -> io::Result<P
             "INSERT INTO operation(op_id,kind,actor_id,request_sha,state) VALUES(?1,1,?2,?3,0)",
             params![&op[..], &actor[..], &sha[..]],
         )
-        .map_err(fail)?,
+        .map_err(pending_uncertain)?,
     )?;
     once(tx.execute("INSERT INTO pool_birth(singleton,pool_id,init_op,approval_ref,storage_uid,root_count) VALUES(1,?1,?2,?3,?4,?5)",
-         params![&issue.pool[..],&op[..],&approval[..],i64::from(request.uid()),issue.rows.len() as i64]).map_err(fail)?)?;
+         params![&issue.pool[..],&op[..],&approval[..],i64::from(request.uid()),root_count(issue)?]).map_err(pending_uncertain)?)?;
     for (i, ((id, token), path)) in issue.rows.iter().zip(request.paths()).enumerate() {
         once(tx.execute("INSERT INTO volume_claim(claim_op,ordinal,role,volume_id,root_path,component_limit,claim_token) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-          params![&op[..],i as i64,i64::from(role(i)),&id[..],path.as_os_str().as_bytes(),i64::from(group.limits()[i]),&token[..]]).map_err(fail)?)?;
+          params![&op[..],ordinal(i)?,i64::from(role(i)),&id[..],path.as_os_str().as_bytes(),i64::from(group.limits()[i]),&token[..]]).map_err(pending_uncertain)?)?;
     }
     group.recheck()?;
     reserved.require_name(false)?;
     engine::original_name(&tx)?;
-    tx.commit().map_err(fail)?;
-    // A committed SQL pending birth is NOT an active pool. Query every bound
-    // result in one fresh short read; do not call a marker a commit witness.
-    {
-        let slice = db.transaction().map_err(fail)?;
-        let app: i64 = slice
-            .query_row("PRAGMA main.application_id", [], |r| r.get(0))
-            .map_err(fail)?;
-        let version: i64 = slice
-            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
-            .map_err(fail)?;
-        if (app, version) != (0x5a58_5331, super::catalog::SCHEMA_VERSION) {
-            return Err(bad("fresh database does not identify the agreed schema"));
-        }
-        let mut stmt = slice
-            .prepare(include_str!("initial-catalog.sql"))
-            .map_err(fail)?;
-        let mut rows = stmt.query([&issue.pool[..]]).map_err(fail)?;
-        for (i, ((id, token), path)) in issue.rows.iter().zip(request.paths()).enumerate() {
-            let r = rows
-                .next()
-                .map_err(fail)?
-                .ok_or_else(|| bad("missing pending claim on independent readback"))?;
-            let bytes = |col| r.get::<_, Vec<u8>>(col).map_err(fail);
-            let number = |col| r.get::<_, i64>(col).map_err(fail);
-            if bytes(0)? != issue.pool
-                || bytes(1)? != op
-                || bytes(2)? != actor
-                || bytes(3)? != sha
-                || number(4)? != 0
-                || bytes(5)? != approval
-                || number(6)? != i64::from(request.uid())
-                || number(7)? != issue.rows.len() as i64
-                || number(8)? != i as i64
-                || number(9)? != i64::from(role(i))
-                || bytes(10)? != *id
-                || bytes(11)? != path.as_os_str().as_bytes()
-                || number(12)? != i64::from(group.limits()[i])
-                || bytes(13)? != *token
-            {
-                return Err(bad(
-                    "pending SQL result does not match the original request and issued values",
-                ));
-            }
-        }
-        if rows.next().map_err(fail)?.is_some() {
-            return Err(bad("unexpected extra initial claim"));
-        }
-        drop(rows);
-        drop(stmt);
-        slice.commit().map_err(fail)?;
-    }
+    tx.commit().map_err(pending_uncertain)?;
+    read_pending(&mut db, request, group, issue)?;
     engine::verified(&db, false)?;
     reserved.require_name(false)?;
     db.close()
@@ -165,6 +124,68 @@ fn first<'g>(request: &Request, group: &'g Group, issue: &Issue) -> io::Result<P
         source: reserved,
         result: issue.rows.clone(),
     })
+}
+
+fn read_pending(
+    db: &mut Connection,
+    request: &Request,
+    group: &Group,
+    issue: &Issue,
+) -> io::Result<()> {
+    // A committed SQL pending birth is NOT an active pool. Query every bound
+    // result in one fresh short read; do not call a marker a commit witness.
+    let op = request.op();
+    let actor = request.actor();
+    let approval = request.approval();
+    let sha = request.sha();
+    let slice = db.transaction().map_err(pending_uncertain)?;
+    let app: i64 = slice
+        .query_row("PRAGMA main.application_id", [], |r| r.get(0))
+        .map_err(pending_uncertain)?;
+    let version: i64 = slice
+        .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+        .map_err(pending_uncertain)?;
+    if (app, version) != (0x5a58_5331, super::catalog::SCHEMA_VERSION) {
+        return Err(bad("fresh database does not identify the agreed schema"));
+    }
+    let mut stmt = slice
+        .prepare(include_str!("initial-catalog.sql"))
+        .map_err(pending_uncertain)?;
+    let mut rows = stmt.query([&issue.pool[..]]).map_err(pending_uncertain)?;
+    for (i, ((id, token), path)) in issue.rows.iter().zip(request.paths()).enumerate() {
+        let r = rows
+            .next()
+            .map_err(pending_uncertain)?
+            .ok_or_else(|| bad("missing pending claim on independent readback"))?;
+        let bytes = |col| r.get::<_, Vec<u8>>(col).map_err(pending_uncertain);
+        let number = |col| r.get::<_, i64>(col).map_err(pending_uncertain);
+        if bytes(0)? != issue.pool
+            || bytes(1)? != op
+            || bytes(2)? != actor
+            || bytes(3)? != sha
+            || number(4)? != 0
+            || bytes(5)? != approval
+            || number(6)? != i64::from(request.uid())
+            || number(7)? != root_count(issue)?
+            || number(8)? != ordinal(i)?
+            || number(9)? != i64::from(role(i))
+            || bytes(10)? != *id
+            || bytes(11)? != path.as_os_str().as_bytes()
+            || number(12)? != i64::from(group.limits()[i])
+            || bytes(13)? != *token
+        {
+            return Err(bad(
+                "pending SQL result does not match the original request and issued values",
+            ));
+        }
+    }
+    if rows.next().map_err(pending_uncertain)?.is_some() {
+        return Err(bad("unexpected extra initial claim"));
+    }
+    drop(rows);
+    drop(stmt);
+    slice.commit().map_err(pending_uncertain)?;
+    Ok(())
 }
 
 #[cfg(test)]

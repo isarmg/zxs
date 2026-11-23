@@ -274,6 +274,38 @@ fn send_media(channel: &Channel, scope: &[u8; 32], i: usize, claim: &Initial) ->
     let report = sealed(&bytes)?;
     channel.send_original(Kind::VolumeClaim, scope, &volume_reply(i, &bytes)?, &report)
 }
+enum QuestionKind {
+    Fresh(Question),
+    Retirement(retirement_check::Question),
+    Deployment(Box<deployment_check::Question>),
+    Import(import_inventory::Question),
+}
+impl QuestionKind {
+    fn decode(raw: &[u8], helper: &ForegroundElf) -> io::Result<Self> {
+        let result = if raw.starts_with(retirement_check::DOMAIN) {
+            QuestionKind::Retirement(retirement_check::Question::decode(raw)?)
+        } else if raw.starts_with(deployment_check::DOMAIN) {
+            QuestionKind::Deployment(Box::new(deployment_check::Question::decode(raw)?))
+        } else if raw.starts_with(import_inventory::DOMAIN) {
+            QuestionKind::Import(import_inventory::Question::decode(raw)?)
+        } else {
+            let q = Question::decode(raw)?;
+            helper.require_independent_digest(&q.fresh.helper)?;
+            QuestionKind::Fresh(q)
+        };
+        Ok(result)
+    }
+
+    fn original_system(&self) -> (ExplicitSubject, [u64; 3], &Path) {
+        match self {
+            Self::Fresh(q) => (q.fresh.subject, q.location, q.system.as_path()),
+            Self::Retirement(q) => q.original_system(),
+            Self::Deployment(q) => q.original_system(),
+            Self::Import(q) => q.original_system(),
+        }
+    }
+}
+
 pub(crate) fn worker() -> io::Result<()> {
     let [fd, meta] = account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3, 4])?;
@@ -283,34 +315,13 @@ pub(crate) fn worker() -> io::Result<()> {
     helper.parent_is_same_image(parent)?;
     let raw = read_sealed(&meta, BUDGET)?;
     drop(meta);
-    enum QuestionKind {
-        Fresh(Question),
-        Retirement(retirement_check::Question),
-        Deployment(Box<deployment_check::Question>),
-        Import(import_inventory::Question),
-    }
-    let q = if raw.starts_with(retirement_check::DOMAIN) {
-        QuestionKind::Retirement(retirement_check::Question::decode(&raw)?)
-    } else if raw.starts_with(deployment_check::DOMAIN) {
-        QuestionKind::Deployment(Box::new(deployment_check::Question::decode(&raw)?))
-    } else if raw.starts_with(import_inventory::DOMAIN) {
-        QuestionKind::Import(import_inventory::Question::decode(&raw)?)
-    } else {
-        let q = Question::decode(&raw)?;
-        helper.require_independent_digest(&q.fresh.helper)?;
-        QuestionKind::Fresh(q)
-    };
+    let q = QuestionKind::decode(&raw, &helper)?;
     let local = matches!(&q, QuestionKind::Import(_))
         .then(import_inventory::mount_scope)
         .transpose()?;
     let host = approval::host_admin()?;
     drop(helper);
-    let (subject, location, path) = match &q {
-        QuestionKind::Fresh(q) => (q.fresh.subject, q.location, q.system.as_path()),
-        QuestionKind::Retirement(q) => q.original_system(),
-        QuestionKind::Deployment(q) => q.original_system(),
-        QuestionKind::Import(q) => q.original_system(),
-    };
+    let (subject, location, path) = q.original_system();
     let (actor, uid, gid) = subject.tuple();
     approval::drop_to_storage(uid, gid)?;
     set_parent_process_death_signal(Some(Signal::TERM))?;

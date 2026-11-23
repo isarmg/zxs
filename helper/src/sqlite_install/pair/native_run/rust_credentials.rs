@@ -9,11 +9,12 @@ use super::{
     worker::original_parent,
 };
 use crate::{
-    maintenance::HostMounts,
+    maintenance::{DiscoveryView, HostMounts},
     pinned::{Kind as PathKind, Pinned, helper_elf::ForegroundElf},
+    smb_profile::rust_first::RustPlan,
     sqlite_install::{
         approval,
-        originals::SelectedSystem,
+        originals::{LockedSystem, SelectedSystem},
         pair::{
             domain::{
                 VaultStamp, checked_vault_stamp, deployed_worker_payload, request_live_approval,
@@ -22,7 +23,7 @@ use crate::{
             fresh_issuer::{InitialDatabase, SitePayload, require_private_install},
             native_sql::{
                 Original,
-                rust_vault::{RustAccountCut, RustChange, observed_binding},
+                rust_vault::{RustAccountCut, RustChange, RustOrder, observed_binding},
             },
             rust_enroll::{
                 crypto::{CredentialHelper, Cryptography},
@@ -199,55 +200,45 @@ impl VaultWitness {
         placed.require()
     }
 }
-pub(crate) fn account_worker() -> io::Result<()> {
-    require_private_install()?;
+fn original_account_sender() -> io::Result<(File, File, Pid, ForegroundElf)> {
     let [fd, meta] = account_sql_descriptors()?;
     approval::only_inherited_descriptors(&[3, 4])?;
     let parent = getppid().ok_or_else(|| bad("the offline Rust account owner is absent"))?;
     let original = exact_parent(&fd, parent)?;
-    let host = approval::host_admin()?;
-    let m = Manifest::read(&meta)?;
-    drop(meta);
-    let helper = CredentialHelper::from_worker(original, m.authority.helper(), parent)?;
-    let ((_, uid, gid), deployed) = subject(&m, &helper)?;
-    drop(helper); // the SQL child never needs the root executable reader
-    let scope = m.scope()?;
-    let (channel, until) = isolated(fd, parent, uid, gid, scope)?;
-    let (zero, [lease]) =
-        channel.wait_checked::<1>(Kind::Lease, &scope, until, || live_parent(parent, until))?;
-    if zero != [0; 65] {
-        return Err(bad("wrong original SYSTEM lease"));
-    }
-    let local = if deployed.is_some() {
+    Ok((fd, meta, parent, original))
+}
+
+fn select_account_system(
+    host: File,
+    lease: File,
+    manifest: &Manifest,
+    deployed: bool,
+    (uid, gid): (u32, u32),
+) -> io::Result<(Option<Arc<DiscoveryView>>, LockedSystem)> {
+    let local = if deployed {
         Some(Arc::new(HostMounts::discovery_view(false)?))
     } else {
         None
     };
     let pinned = if let Some(view) = &local {
         Pinned::require_local_root(view)?;
-        Pinned::local_storage(&m.system, view)?
+        Pinned::local_storage(&manifest.system, view)?
     } else {
-        Pinned::already_mounted(&m.system, PathKind::StorageRoot)?
+        Pinned::already_mounted(&manifest.system, PathKind::StorageRoot)?
     };
     let e = pinned.entity();
-    if [e.dev, e.ino, pinned.require_same_named_mount()?.id] != m.entity {
+    if [e.dev, e.ino, pinned.require_same_named_mount()?.id] != manifest.entity {
         return Err(bad("different original SYSTEM"));
     }
     let locked = SelectedSystem::from_origin(pinned, host, uid, gid)?.hold_lent_ex(lease)?;
-    let cut = match (m.authority, deployed.as_ref()) {
-        (Authority::Fresh(f), None) => {
-            RustAccountCut::open_new_first(&locked, &m.plan, m.order, f.init_sha, f.database)?
-        }
-        (Authority::Deployed(_), Some(actual)) => {
-            RustAccountCut::open_deployed_reset(&locked, &m.plan, m.order, actual)?
-        }
-        _ => return Err(bad("no exact original Rust scope")),
-    };
-    let alive = || {
-        live_parent(parent, until)?;
-        locked.require()
-    };
-    let result = match (m.intent, cut.observe()?) {
+    Ok((local, locked))
+}
+
+fn inspect_original_change(
+    cut: &RustAccountCut<'_, '_>,
+    intent: Intent,
+) -> io::Result<Option<(u8, RustChange)>> {
+    let result = match (intent, cut.observe()?) {
         (Intent::Fresh, Original::Absent) => Some((1, cut.propose_new()?)),
         (Intent::Lookup, Original::Absent) => None,
         (Intent::Lookup, Original::Pending(v)) => Some((2, v)),
@@ -258,6 +249,59 @@ pub(crate) fn account_worker() -> io::Result<()> {
             ));
         }
     };
+    Ok(result)
+}
+
+fn receive_account_lease(
+    channel: &Channel,
+    scope: &[u8; 32],
+    parent: Pid,
+    until: Instant,
+) -> io::Result<File> {
+    let (zero, [lease]) =
+        channel.wait_checked::<1>(Kind::Lease, scope, until, || live_parent(parent, until))?;
+    if zero != [0; 65] {
+        return Err(bad("wrong original SYSTEM lease"));
+    }
+    Ok(lease)
+}
+
+fn open_account_cut<'s, 'p>(
+    locked: &'s LockedSystem,
+    plan: &'p RustPlan,
+    (authority, order): (Authority, RustOrder),
+    deployed: Option<&SitePayload>,
+) -> io::Result<RustAccountCut<'s, 'p>> {
+    match (authority, deployed) {
+        (Authority::Fresh(f), None) => {
+            RustAccountCut::open_new_first(locked, plan, order, f.init_sha, f.database)
+        }
+        (Authority::Deployed(_), Some(actual)) => {
+            RustAccountCut::open_deployed_reset(locked, plan, order, actual)
+        }
+        _ => Err(bad("no exact original Rust scope")),
+    }
+}
+
+pub(crate) fn account_worker() -> io::Result<()> {
+    require_private_install()?;
+    let (fd, meta, parent, original) = original_account_sender()?;
+    let host = approval::host_admin()?;
+    let m = Manifest::read(&meta)?;
+    drop(meta);
+    let helper = CredentialHelper::from_worker(original, m.authority.helper(), parent)?;
+    let ((_, uid, gid), deployed) = subject(&m, &helper)?;
+    drop(helper); // the SQL child never needs the root executable reader
+    let scope = m.scope()?;
+    let (channel, until) = isolated(fd, parent, uid, gid, scope)?;
+    let lease = receive_account_lease(&channel, &scope, parent, until)?;
+    let (local, locked) = select_account_system(host, lease, &m, deployed.is_some(), (uid, gid))?;
+    let cut = open_account_cut(&locked, &m.plan, (m.authority, m.order), deployed.as_ref())?;
+    let alive = || {
+        live_parent(parent, until)?;
+        locked.require()
+    };
+    let result = inspect_original_change(&cut, m.intent)?;
     // Exact protected metadata descriptors; never lend a readable SYSTEM
     // file to the high process. Both successful new paths keep these names
     // and entities through final closure (the fresh path through selector).

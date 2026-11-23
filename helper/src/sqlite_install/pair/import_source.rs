@@ -333,21 +333,7 @@ fn scan(dir: &File, root: Stamp) -> io::Result<Snapshot> {
     })
 }
 impl Walk {
-    fn visit(&mut self, dir: &File, original: Stamp, depth: u8, prefix: usize) -> io::Result<()> {
-        if depth > MAX_DEPTH
-            || !original.dir()
-            || !self.dirs.insert(original.entity.ino)
-            || Stamp::get(dir)? != original
-        {
-            return Err(unknown());
-        }
-        self.hash.update(b"D");
-        original.add(&mut self.hash);
-        if old_volume(dir)? {
-            self.blockers |= CONTROL;
-            self.hash.update(b"V");
-            return Ok(());
-        }
+    fn read_names(&mut self, dir: &File) -> io::Result<BTreeMap<Vec<u8>, u64>> {
         let mut buf = [MaybeUninit::uninit(); 4096];
         let mut entries = RawDir::new(dir, &mut buf);
         let mut names = BTreeMap::new();
@@ -375,6 +361,52 @@ impl Walk {
             }
             self.entries += 1;
         }
+        Ok(names)
+    }
+
+    fn count_file(&mut self, child: &File, first: Stamp) -> io::Result<()> {
+        self.counts.files += 1;
+        if first.links != 1 {
+            self.blockers |= HARD_LINK;
+        }
+        if first.len > i64::MAX as u64 {
+            return Err(unknown());
+        }
+        self.counts.logical_bytes += u128::from(first.len);
+        // Permission evidence only. An ordinary file never gets
+        // a reader (not even when the read permission check passes).
+        match accessat(
+            child,
+            c"",
+            Perm::READ_OK,
+            AtFlags::EMPTY_PATH | AtFlags::EACCESS,
+        ) {
+            Ok(()) => self.hash.update(b"A"),
+            Err(Errno::ACCESS | Errno::PERM) => {
+                self.blockers |= PERMISSION;
+                self.hash.update(b"X");
+            }
+            Err(e) => return Err(e.into()),
+        }
+        Ok(())
+    }
+
+    fn visit(&mut self, dir: &File, original: Stamp, depth: u8, prefix: usize) -> io::Result<()> {
+        if depth > MAX_DEPTH
+            || !original.dir()
+            || !self.dirs.insert(original.entity.ino)
+            || Stamp::get(dir)? != original
+        {
+            return Err(unknown());
+        }
+        self.hash.update(b"D");
+        original.add(&mut self.hash);
+        if old_volume(dir)? {
+            self.blockers |= CONTROL;
+            self.hash.update(b"V");
+            return Ok(());
+        }
+        let names = self.read_names(dir)?;
         if Stamp::get(dir)? != original {
             return Err(unknown());
         }
@@ -431,29 +463,7 @@ impl Walk {
                     let opened = scan_dir(&child)?;
                     self.visit(&opened, first, depth + 1, length)?;
                 } else {
-                    self.counts.files += 1;
-                    if first.links != 1 {
-                        self.blockers |= HARD_LINK;
-                    }
-                    if first.len > i64::MAX as u64 {
-                        return Err(unknown());
-                    }
-                    self.counts.logical_bytes += u128::from(first.len);
-                    // Permission evidence only. An ordinary file never gets
-                    // a reader (not even when the read permission check passes).
-                    match accessat(
-                        &child,
-                        c"",
-                        Perm::READ_OK,
-                        AtFlags::EMPTY_PATH | AtFlags::EACCESS,
-                    ) {
-                        Ok(()) => self.hash.update(b"A"),
-                        Err(Errno::ACCESS | Errno::PERM) => {
-                            self.blockers |= PERMISSION;
-                            self.hash.update(b"X");
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
+                    self.count_file(&child, first)?;
                 }
             } else {
                 self.blockers |= NON_PLAIN;
