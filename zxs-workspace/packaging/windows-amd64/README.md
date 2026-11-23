@@ -2,7 +2,7 @@
 
 这个配方把现有 ZIP Workspace Qt 窗口做成 **本机单目录候选**，不依赖其他项目。成品入口是 `ZipWorkspace.exe`，运行时应携带同目录的 `_internal`，不是只有一个 EXE，也不是安装器。不添加 PATH、文件关联、服务、开机启动、管理员权限或驱动。
 
-包内只有窗口入口：已核快照浏览、同库历史/版本对照、适用本机 NTFS 目录的只读比较和普通 Store ZIP 预览。窗口原有平台准入不变。**不创建可编辑副本、不签出或提交、不启动或打包 WinFsp**；内部附件服务、虚拟盘和单文件写入资格源码不属于这个包。原 Windows 写入合同仍待对正式路径来源、权限、原件和实际恢复验收。
+默认不带原生磁盘组件的候选只有窗口入口：已核快照浏览、同库历史/版本对照、适用本机 NTFS 目录的只读比较和普通 Store ZIP 预览。窗口原有平台准入不变。**不创建可编辑副本、不签出或提交、不启动或打包 WinFsp**；内部附件服务、虚拟盘和单文件写入资格源码不属于这个包。原 Windows 写入合同仍待对正式路径来源、权限、原件和实际恢复验收。
 
 ## 准备经核对的离线环境
 
@@ -44,3 +44,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Candidate not complete' }
 
   脚本重算完整成品，实际启动固定的窗口入口，等到 `ZIP Workspace` 主窗口后正常关闭，再重核成品。然后用独立合成归档查浏览、两版本对照和 NTFS 比较，记录是否需要预装的 MSVC runtime。保持系统安全设置不变。GitHub 的 `windows-2025` 是 Server x64，只查源码和 PE 规则；[托管的 Windows 11](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) 是 Arm64，便携构建和普通账户启动要用独立的 Win11 x64 测试机。
 - 先落实本产品的分发权，逐项核真正带入的 Python、Qt/Shiboken、PyInstaller 启动器与可能的系统运行库许可；[随包告知](COPYRIGHT-NOTICE.txt)不是许可合规证明。若之后由获权所有者在单独阶段签名，核真实签名及独立信任的发布身份，为签过的文件重新计算摘要，不能用候选摘要代替。**未构建、未运行、未签名、未发布 Windows 安装包或便携包。**
+
+## 可选 R3 原生组件（不是 ZIP 写入，也不附带厂商驱动）
+
+以上无参数候选仍不含磁盘宿主。可选构建路径先在经核对的离线 x64 Visual Studio Native Tools 环境用本目录的
+`build-provider.py --sdk <已准备的 WinFsp 2.1 SDK> --import-lib-sha256 <来自独立 SDK 交付单> --output <新目录>`
+链接本项目的 `draft_host.c` 和 `draft_io.c` 到 `_workspace_winfsp_draft_host.pyd`。头文件须用固定上游提交的原始字节（不转换换行），导入库按独立 SDK 交付单核验。配方核对原厂头文件、导入库和现有 Python 构建配置，不获取或启动任何厂商组件，不签名。编译环境应由构建者独占，包括 SDK、系统头文件/库及链接工具；构建输入的散列和工具链版本记入构建凭据。
+
+由有权发布者在独立阶段复核依赖、授权和签名。仅在真实 Win11 x64 普通账户验收现有驱动、受控挂载、正常/异常停止、来源流、编辑/提交/恢复、拒绝条件后，向源码 `zipworkspace/_windows_release.py` 的单个记录加入**签名后**本项目 PYD、原厂 DLL/SYS 和独立验收报告的确切 SHA-256。当前没有这样的记录。先以可审计开发资格夹具核验同一签名 PYD 与厂商字节，再更新内嵌记录。最终签名冻结 onedir 须由独立原生环境复验整套流程；任何失败都不发布，不能以开发夹具代替最终包验收。之后使用已有构建命令附加 `--native-provider <已签并验收的同名 PYD>`，只将这个文件放入 `_internal/zipworkspace`；其他 WinFsp 文件仍拒绝。可执行入口最终由有权发布者签名，并对完整 onedir 重新出具独立发布清单。候选清单不是发布/签名证明。不得从环境变量、裸 DLL 搜索路径、当前目录或旁置 JSON 解锁。
+
+运行侧只在该冻结布局中使用 Windows 自身的 [WinVerifyTrust](https://learn.microsoft.com/windows/win32/api/wintrust/nf-wintrust-winverifytrust)，核对完整离线签名链及固定字节；系统吊销缓存不足或仅有目录签名而无法证明原件时拒绝。普通固定 NTFS 上逐级持有原目录及不分享写入/删除的单链接原件。[原厂 MSI](https://github.com/winfsp/winfsp/blob/v2.1/build/VStudio/installer/Product.wxs) 的 HKLM 32 位视图指定原 SxS 物理目录，不走公共 bin 联接。核实精确 [WinFsp SxS 实例](https://github.com/winfsp/winfsp/blob/v2.1/src/dll/sxs.c) 及其 [既有文件系统服务](https://github.com/winfsp/winfsp/blob/v2.1/src/dll/fsctl.c)；为避免把以前已加载的未知驱动当作当下 SYS，进程首次准入要求该实例服务处于停止状态；不会替使用者停止服务。第一次使用整个内存会话都保留原件和模块，第三方服务变更或原安装升级后重新评估，绝不自动安装或降级。原生 DLL/PYD 均先按已经持有的绝对原件路径以 SYSTEM32 依赖查找加载，再初始化 CPython 模块；包无驱动、安装器、启动器或厂商 DLL，未获准的不启用挂载。此源码工作未运行构建或真实验收。

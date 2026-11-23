@@ -1,4 +1,4 @@
-"""Private WinFsp directory-mount owner for one R3 draft. No public loader, network or implicit submit."""
+"""Private WinFsp directory-mount owner for one R3 draft. No network or implicit submit."""
 import ctypes as c
 import re
 import struct
@@ -182,8 +182,8 @@ class WindowsPrivateDraftMount:
                 raise Rejected("this Windows directory mount was already used")
             self._used = self._running = True
         try:
-            from .. import _workspace_winfsp_draft_host  # Trusted private build only, never install or search for a DLL.
-            result = _workspace_winfsp_draft_host.run(self, self._plane, True, True)
+            from .._windows_provider import selected_host
+            result = selected_host().run(self, self._plane, True, True)
             if not result["local_release_pending"]:
                 self._cleanup_lease = None
             return result

@@ -219,9 +219,9 @@ class WindowsDraftFilePlane:
             return _capacity(self._draft._home)
 
     def _finish_native(self, lease, proof):
-        from .. import _workspace_winfsp_draft_host
+        from .._windows_provider import selected_host
         with self._lock:
-            if not _workspace_winfsp_draft_host.consume_certificate(proof, self, lease):
+            if not selected_host().consume_certificate(proof, self, lease):
                 raise Rejected("the original joined and deleted driver instance did not attest its drain")
             if self._lease is not lease or not self._namespace or self._state != "draining" or self._rows:
                 raise Rejected("missing the original drained Windows namespace lease")

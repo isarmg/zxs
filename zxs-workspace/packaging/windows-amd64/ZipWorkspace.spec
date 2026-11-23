@@ -24,6 +24,7 @@ analysis = Analysis(
         "zipworkspace._mount_child", "zipworkspace.desktop.mount_action", "zipworkspace.desktop.mount_pane",
         "zipworkspace.macos_copy", "zipworkspace._macos_copy_evidence",
         "zipworkspace.macos_snapshot", "zipworkspace._macos_session",
+        "zipworkspace._workspace_winfsp_draft_host",  # only stage the signed, admitted application extension explicitly
         "zipworkspace.windows_snapshot", "zipworkspace._winfsp_session",
         "zipworkspace._windows_member", "zipworkspace._windows_attachment",
     ],

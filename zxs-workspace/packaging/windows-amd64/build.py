@@ -174,7 +174,38 @@ def require_entry_image(path):
         raise ValueError("Malformed Windows executable image") from err
 
 
-def bundle_hashes(bundle):
+def native_support():
+    # Only this trusted repository's embedded release matrix, never a candidate-provided manifest.
+    if str(PROJECT) not in sys.path:
+        sys.path.insert(0, str(PROJECT))
+    from zipworkspace import _windows_release
+    return _windows_release
+
+
+def stage_provider(bundle, provider):
+    from contextlib import ExitStack
+    policy = native_support()
+    from zipworkspace._windows_provider import _Image
+    require(provider.is_absolute() and provider.name == policy.PROVIDER,
+            "Select the exact signed Workspace AMD64 provider, not a vendor DLL or directory")
+    with ExitStack() as keep:
+        image = _Image(keep, provider)
+        row = policy.for_provider(image.hash)
+        target = bundle / policy.PACKED
+        target.parent.mkdir(exist_ok=True)
+        ordinary(target.parent, stat.S_IFDIR)
+        with target.open("xb") as dest:
+            api, h = image.parent.api, image.file
+            api.rewind(h)
+            while block := api.read(h, 1024 * 1024):
+                dest.write(block)
+        image.check()
+        with target.open("rb") as src:
+            require(hashlib.file_digest(src, "sha256").hexdigest() == row.provider, "staged provider differs")
+        return row
+
+
+def bundle_hashes(bundle, *, provider=None):
     ordinary(bundle, stat.S_IFDIR)
     files = {}
     for parent, dirs, names in bundle.walk(on_error=raise_walk_error):
@@ -190,15 +221,20 @@ def bundle_hashes(bundle):
                 "_internal/PySide6/plugins/platforms/qwindows.dll", "_internal/COPYRIGHT-NOTICE.txt", "_internal/certifi/cacert.pem"}
     require(required <= files.keys() and all(files[p]["bytes"] > 0 for p in required),
             "Missing executable, Python, Windows Qt platform plugin or notice")
+    policy = native_support()
+    if provider is not None:
+        require(files.get(policy.PACKED, {}).get("sha256") == provider.provider, "missing exact qualified application provider")
+    forbidden = [k for k in files if "winfsp" in Path(k).name.casefold() or Path(k).suffix.casefold() == ".sys"]
+    require(forbidden == ([policy.PACKED] if provider is not None else []),
+            "unexpected WinFsp artifact: never bundle vendor DLL, driver, service or installer")
     names = {Path(k).name.casefold() for k in files}
-    require({"qt6core.dll", "qt6gui.dll", "qt6widgets.dll"} <= names
-            and not any("winfsp" in n or n.endswith(".sys") for n in names), "Wrong Qt runtime or unexpected driver artifact")
+    require({"qt6core.dll", "qt6gui.dll", "qt6widgets.dll"} <= names, "Wrong Qt runtime")
     require(not any(k.casefold() == "zipworkspace.exe.manifest" for k in files), "Unexpected external launch manifest")
     require_entry_image(bundle / "ZipWorkspace.exe")
     return dict(sorted(files.items()))
 
 
-def build(out):
+def build(out, provider=None):
     release, wheels = profile()
     # The output parent must be operator-controlled for the entire build, not synced or substituted.
     require(out.is_absolute() and re.fullmatch(r"[A-Za-z]:", out.drive) and out.parent != out
@@ -225,8 +261,10 @@ def build(out):
                    cwd=PROJECT, env=env, check=True)
     ordinary(stage, stat.S_IFDIR)
     require([p.name for p in stage.iterdir()] == ["ZipWorkspace"], "Unexpected candidate output directory")
+    admitted = stage_provider(stage / "ZipWorkspace", provider) if provider is not None else None
     record = {"bundle": "dist/ZipWorkspace", "version": release, "platform": "windows-amd64",
-              "python": "3.14.10", "build_wheels": wheels, "files": bundle_hashes(stage / "ZipWorkspace")}
+              "python": "3.14.10", "build_wheels": wheels, "native_provider_qualification": admitted.qualification if admitted else None,
+              "files": bundle_hashes(stage / "ZipWorkspace", provider=admitted)}
     with (out / "candidate.json").open("x", encoding="utf-8") as f:
         json.dump(record, f, indent=2)
         f.write("\n")
@@ -235,7 +273,9 @@ def build(out):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="new absolute directory under your stable private parent")
+    parser.add_argument("--native-provider", type=Path, help="one signed application PYD in the embedded qualified release matrix")
     try:
-        build(parser.parse_args().output)
+        options = parser.parse_args()
+        build(options.output, options.native_provider)
     except (OSError, ValueError, PackageNotFoundError, subprocess.SubprocessError) as err:
         parser.exit(1, f"No complete candidate: {err}\n")
