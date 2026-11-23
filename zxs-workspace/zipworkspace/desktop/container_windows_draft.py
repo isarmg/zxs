@@ -54,7 +54,7 @@ def _require_reader(connection, reader, exchange, auth, destination, origin, acc
             or exchange._authorization is not auth or connection._account != account
             or (exchange.destination_identity, exchange._location) != (destination, origin)):
         raise Rejected("the original authenticated R3 reader, account or destination changed")
-    auth.require_live()
+    auth.require_account(account)
 
 
 class WindowsDraftChoice:
@@ -195,6 +195,7 @@ class WindowsHeldDraft:
         self._h, self._file_id, self._url, self._zone, self._mark = h, file_id, url, zone, mark
         self._length = choice.source.head.length
         self._lock, self._contexts, self._state, self._keep = Lock(), {}, "editing", None
+        self._provider = None
 
     def _observe(self, length, *, policy=False):
         self._choice._live()  # Checks this window in memory only, never initiates a request.
@@ -217,9 +218,39 @@ class WindowsHeldDraft:
             self._state = "fault"
             raise
 
-    def open(self, *, writable=False):
+    def _claim_provider(self, owner):
         with self._lock:
-            if self._state != "editing" or type(writable) is not bool:
+            if owner is None or self._provider is not None or self._state != "editing" or self._contexts:
+                raise Rejected("the Windows draft is not exclusively available to the native provider")
+            self._observe(self._length, policy=True)
+            self._provider = owner
+
+    def _provider_info(self, owner):
+        from ..windows_nt import _Basic
+        with self._lock:
+            if owner is not self._provider or owner is None or self._state not in ("editing", "draining"):
+                raise Rejected("not the current original Windows file provider")
+            with self._fault_on_error():
+                row = self._observe(self._length)
+                basic = self._home.api._info(self._h, 0, _Basic)
+                if ((basic.birth, basic.write, basic.change) != (row.birth, row.write, row.change)
+                        or basic.access <= 0):
+                    raise Rejected("inconsistent original Windows draft timestamps")
+                return self._length, basic.birth, basic.access, basic.write, basic.change
+
+    def _abandon_provider(self, owner, *, missing_ok=False):
+        # A callback table or an SDK StopDispatcher return is not a normal OS detach receipt.
+        with self._lock:
+            if self._provider is not owner or owner is None:
+                if missing_ok and owner is not None:
+                    return  # A failed bind never acquired this draft; never seize a different owner.
+                raise Rejected("cannot detach another Windows draft owner")
+            self._state, self._provider = "fault", None
+            self._contexts.clear()
+
+    def open(self, *, writable=False, _provider=None):
+        with self._lock:
+            if self._provider is not _provider or self._state != "editing" or type(writable) is not bool:
                 raise Rejected("no new Windows draft contexts")
             with self._fault_on_error():
                 self._observe(self._length)
@@ -317,16 +348,16 @@ class WindowsHeldDraft:
                 raise Rejected("unknown or previously released Windows draft context")
             del self._contexts[key]
 
-    def begin_drain(self):
+    def begin_drain(self, *, _provider=None):
         with self._lock:
-            if self._state not in ("editing", "draining"):
+            if self._provider is not _provider or self._state not in ("editing", "draining"):
                 raise Rejected("this Windows draft cannot begin a local drain")
             self._state = "draining"
             return len(self._contexts)
 
     def review(self, *, confirmed=False):
         with self._lock:
-            if confirmed is not True or self._state != "draining" or self._contexts:
+            if confirmed is not True or self._provider is not None or self._state != "draining" or self._contexts:
                 raise Rejected("stop new opens, release every original context, then confirm local review")
             with self._fault_on_error():
                 api, length = self._home.api, self._length
@@ -366,6 +397,8 @@ class WindowsHeldDraft:
         # Abandonment, even with outstanding contexts, cannot manufacture a drained review.
         # Keep the generated private file, including dirty/partial edits. Never unlink or upload.
         with self._lock:
+            if self._provider is not None:
+                raise Rejected("the native dispatcher still owns the original Windows draft")
             self._state = "closed"
             self._contexts.clear()
             keep, self._keep = self._keep, None

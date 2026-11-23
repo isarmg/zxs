@@ -31,3 +31,11 @@ Windows Server x64 托管作业使用固定的 [WinFsp 2.1 头文件](https://gi
 `tests/test_winfsp_sealed.py` 的原生用例在普通环境跳过，要求已知合成包和独立的服务启动同意；资格扩展由 `lifecycle.c` 与 `provider.c` 对应的厂商 SDK/CPython 单独构建。未编译或运行。
 
 另有独立的[远端节点本机编辑正文源码](../docs/windows-remote-draft.md)，在已核私用 NTFS 保存一个原节点，并提供按偏移读写、停接新上下文和完整正文审阅。它不接入此只读提供方或封闭生命周期，不创建 WinFsp 卷，不向服务器提交。
+
+## 远程工作文件的 Write/Close 数据接口（不创建卷）
+
+`draft_io.c` 是独立的 WinFsp 2.1 x64 C 回调表，不借用 ZIP 快照的读句柄或切换快照的只读位。目前只可在同进程、专用的原生资格夹具中调用；本表给真实 SDK 分派安装拒绝守卫，没有发布盘符、目录、真实根目录或 ADS。选择明确的本机别名后，打开的是已核私有 NTFS 工作文件，不改服务器名。每次 FILE_OPEN 有独立不可复用的上下文号（同时最多 1,024 个），分别判定读、写、仅追加和查属性；不授予执行、更改权限、创建、整体覆盖、改名或删除。
+
+已实现原生 Open、GetFileInfo、Read、Write、SetFileSize（EOF）、单文件 Flush、Cleanup、Close；一次数据请求至多 1 MiB，普通写、在锁内取得 EOF 的追加、受限写的实际短计数与文件信息一起返回。分配长度请求不当作截断，卷刷新也不当作单文件刷新。[厂商 2.1 的 Write/Flush 契约](https://github.com/winfsp/winfsp/blob/v2.1/inc/winfsp/winfsp.h#L439-L487)。停止接入后既有上下文仍接受末次写；Cleanup 本身不释放，只有最终 Close 注销。即使数到零，释放此资格表仍仅属放弃，无真实内核排空证明，不得由此生成远端提交。
+
+`tests/qualification/winfsp_draft_callbacks.c` 与 `windows_winfsp_draft.py` 提供独立、未编译/未运行的受信任合成夹具；不需要或调用创建卷、安装驱动、改系统配置。不可替代真实登录会话访问检查、虚拟文件夹及 Zone.Identifier 来源投影（否则复制会丢标记）、编辑器保存替换、缓存/映射、正常卸载身份和完整发布验收。
