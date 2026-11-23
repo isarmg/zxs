@@ -23,13 +23,7 @@ pub(super) fn id(file: &File) -> io::Result<u64> {
     Ok(value)
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct MountInfo {
-    #[cfg(test)]
-    whole: bool,
-    superblock: (u32, u32),
-}
-pub(super) struct Mounts(BTreeMap<u64, MountInfo>);
+pub(super) struct Mounts(BTreeMap<u64, (u32, u32)>);
 impl Mounts {
     pub(super) fn read() -> io::Result<Self> {
         // SAFETY: native shim returns a private FD on the process' procfs.
@@ -69,14 +63,9 @@ impl Mounts {
                 device.1.parse::<u32>().map_err(|_| bad())?,
             );
             let root = fields.next().ok_or_else(bad)?;
-            let info = MountInfo {
-                #[cfg(test)]
-                whole: root == b"/",
-                superblock,
-            };
             if !root.starts_with(b"/")
                 || table.len() >= 16384
-                || table.insert(number, info).is_some()
+                || table.insert(number, superblock).is_some()
             {
                 return Err(bad());
             }
@@ -92,7 +81,7 @@ impl Mounts {
         let get = |i| {
             self.0
                 .get(&i)
-                .map(|p| p.superblock)
+                .copied()
                 .ok_or_else(|| invalid("held filesystem is not in this mount namespace"))
         };
         Ok(get(a)? != get(b)?)

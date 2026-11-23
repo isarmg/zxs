@@ -115,25 +115,6 @@ pub(crate) struct HeldDir {
     pub(crate) entity: Entity,
 }
 
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Location {
-    entity: Entity,
-    mount: u64,
-}
-#[cfg(test)]
-fn lineage_end(here: Location, parent: Location, namespace_root: Location) -> io::Result<bool> {
-    if here.entity != parent.entity {
-        return Ok(false);
-    }
-    if here != parent || here != namespace_root {
-        return Err(invalid(
-            "repeated directory entity is not the same held namespace root",
-        ));
-    }
-    Ok(true)
-}
-
 impl HeldDir {
     pub(crate) fn open(path: &Path) -> io::Result<Self> {
         let file = open_absolute(path)?;
