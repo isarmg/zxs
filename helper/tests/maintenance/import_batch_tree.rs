@@ -24,7 +24,7 @@ fn top_level_names_are_exact_and_explicit_overrides_consume_each_nested_path() {
         b"two/Report",
     ];
     let rows = resolve(files(&paths), &choices).unwrap();
-    let names: Vec<_> = rows.iter().map(|(_, name, _)| *name).collect();
+    let names: Vec<_> = rows.iter().map(|(_, name, ())| *name).collect();
     assert_eq!(
         names,
         ["Report", "原件", "甲", "report", "乙"].map(OsStr::new)
@@ -53,13 +53,13 @@ fn default_and_mapped_names_must_also_agree_with_the_final_catalog_check() {
     let choices = [mapping(b"sub/file", "Report")];
     let rows = resolve(files(&paths), &choices).unwrap();
     let result = check_mappings(
-        rows.iter().map(|(p, n, _)| (p.as_bytes(), n.as_bytes())),
+        rows.iter().map(|(p, n, ())| (p.as_bytes(), n.as_bytes())),
         &[],
     );
     assert!(result.is_err());
     let choices = [mapping(b"sub/file", "report")];
     let rows = resolve(files(&paths), &choices).unwrap();
-    let entries = || rows.iter().map(|(p, n, _)| (p.as_bytes(), n.as_bytes()));
+    let entries = || rows.iter().map(|(p, n, ())| (p.as_bytes(), n.as_bytes()));
     assert!(check_mappings(entries(), &[]).is_ok());
     assert!(check_mappings(entries(), &[String::from("report")]).is_err());
 }

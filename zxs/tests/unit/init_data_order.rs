@@ -10,7 +10,7 @@ fn raw(path: &[u8]) -> Vec<u8> {
     for item in [11_u64, 12, 13, 21, 22, 23, 31, 32, 33] {
         raw.extend_from_slice(&item.to_be_bytes());
     }
-    raw.extend_from_slice(&(path.len() as u16).to_be_bytes());
+    raw.extend_from_slice(&u16::try_from(path.len()).unwrap().to_be_bytes());
     raw.extend_from_slice(path);
     raw
 }

@@ -167,6 +167,16 @@ fn initialize_selected(
     };
     current()?;
     no_routes(&catalog, target.token)?;
+    complete_prefix(root, marker, &catalog, target.token, current)
+}
+
+fn complete_prefix(
+    root: &HeldDir,
+    marker: &CStr,
+    catalog: &HeldDir,
+    token: [u8; 32],
+    current: impl Fn() -> io::Result<()>,
+) -> io::Result<()> {
     let before = phase(root, marker)?;
     let old_owner = (before >= 1)
         .then(|| empty_owner(root, c"owner"))
@@ -243,7 +253,7 @@ fn initialize_selected(
     contents.require_named()?;
     staging.require_named()?;
     root.file.sync_all()?;
-    no_routes(&catalog, target.token)?;
+    no_routes(catalog, token)?;
     require_phase(root, marker, 3)?;
     contents.require_named()?;
     staging.require_named()?;
