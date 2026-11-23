@@ -7,58 +7,52 @@ use rustix::{
     termios::{InputModes, LocalModes, OptionalActions, QueueSelector, SpecialCodeIndex, Termios, tcflush,
         tcgetattr, tcgetpgrp, tcgetsid, tcsetattr},
 };
-use std::{ffi::OsString, io::{self, Write}, os::fd::{AsFd, BorrowedFd}, path::{Path, PathBuf},
+use std::{ffi::OsString, io::{self, Write}, net::SocketAddr, os::fd::{AsFd, BorrowedFd}, path::{Path, PathBuf},
     process::ExitCode, time::{Duration, Instant}};
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug)]
 pub(crate) struct Setup {
     paths: [PathBuf; 3],
-    gateway: u32,
-    ipc: u32,
     login: Option<String>,
     web: bool,
-    web_unit: bool,
     reset: bool,
-    preview_unit: bool,
+    preview: Option<SocketAddr>,
 }
 
 impl Setup {
     pub(crate) fn parse(args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
         let mut args = args.peekable();
-        const USAGE: &str = "expected setup-headless [web] check|new|reset|preview-unit SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID [LOGIN]";
-        fn id(value: Option<OsString>) -> Option<u32> {
-            let text = value?.into_string().ok()?;
-            let number: u32 = text.parse().ok()?;
-            (number.to_string() == text && !matches!(number, 0 | 65534 | u32::MAX)).then_some(number)
-        }
+        const USAGE: &str = "expected setup-headless check|new|reset SYSTEM DATA RECYCLE [LOGIN], preview-unit IP:PORT SYSTEM DATA RECYCLE, or web new [--preview-unit IP:PORT] SYSTEM DATA RECYCLE LOGIN";
         let mut mode = args.next().ok_or(USAGE)?;
         let web = mode == "web";
         if web { mode = args.next().ok_or(USAGE)?; }
         if web && mode != "new" { return Err(USAGE); }
-        let web_unit = web && args.next_if(|word| word.as_os_str() == "--preview-unit").is_some();
+        let preview_unit = mode == "preview-unit";
+        let preview = if preview_unit || web && args.next_if(|word| word.as_os_str() == "--preview-unit").is_some() {
+            let listen = args.next().and_then(|arg| arg.to_str()?.parse::<SocketAddr>().ok())
+                .filter(|addr| addr.port() != 0).ok_or("expected an explicit numeric HTTP listen address with a nonzero port")?;
+            Some(listen)
+        } else { None };
         let paths = [
             PathBuf::from(args.next().ok_or(USAGE)?), PathBuf::from(args.next().ok_or(USAGE)?),
             PathBuf::from(args.next().ok_or(USAGE)?),
         ];
         if paths.iter().any(|p| !p.is_absolute()) { return Err(USAGE); }
-        let gateway = id(args.next()).ok_or(USAGE)?;
-        let ipc = id(args.next()).ok_or(USAGE)?;
         let reset = mode == "reset";
-        let preview_unit = mode == "preview-unit";
         let login = if mode == "check" || reset || preview_unit { None } else if mode == "new" {
             let name = args.next().ok_or(USAGE)?.into_string().map_err(|_| USAGE)?;
             if !crate::headless_setup::login_ok(&name) { return Err("invalid headless login name"); }
             Some(name)
         } else { return Err(USAGE); };
         if args.next().is_some() { return Err(USAGE); }
-        Ok(Self { paths, gateway, ipc, login, web, web_unit, reset, preview_unit })
+        Ok(Self { paths, login, web, reset, preview })
     }
 
     pub(crate) fn run(self) -> io::Result<ExitCode> {
         rustix::thread::set_no_new_privs(true)?;
         crate::maintenance::diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
-        let selected = FreshSelection::select(self.paths.each_ref().map(PathBuf::as_path), self.gateway, self.ipc)?;
+        let selected = FreshSelection::select(self.paths.each_ref().map(PathBuf::as_path))?;
         if self.reset {
             let reset = selected.begin_reset()?;
             let [system, data, recycle] = reset.paths();
@@ -81,9 +75,9 @@ impl Setup {
             };
         }
         let current = selected.check_ready()?;
-        if self.preview_unit {
+        if !self.web && let Some(listen) = self.preview {
             if !current.is_ready() { return Err(io::Error::other(current.to_string())); }
-            let unit = preview_unit(selected.paths())?;
+            let unit = preview_unit(selected.paths(), selected.storage_uid(), listen)?;
             io::stdout().lock().write_all(unit.as_bytes())?;
             return Ok(ExitCode::SUCCESS);
         }
@@ -98,7 +92,7 @@ impl Setup {
         let display = output.as_fd();
         require_terminal(tty, display)?;
         if self.web {
-            let unit = self.web_unit.then(|| preview_unit(selected.paths())).transpose()?;
+            let unit = self.preview.map(|listen| preview_unit(selected.paths(), selected.storage_uid(), listen)).transpose()?;
             if !crate::disk_web::request_headless_review(unit, || require_terminal(tty, display))? {
                 return Err(io::Error::other("setup cancelled; no role changed"));
             }
@@ -108,14 +102,13 @@ impl Setup {
         }
         let [system, data, recycle] = selected.paths();
         let selection = format!(
-            "Fresh headless setup (no format or service start)\nSYSTEM {system:?}\nDATA {data:?}\nRECYCLE {recycle:?}\nLogin {login}; gateway UID {}; IPC GID {}",
-            self.gateway, self.ipc);
+            "Fresh headless setup (no format or service start)\nSYSTEM {system:?}\nDATA {data:?}\nRECYCLE {recycle:?}\nLogin {login}");
         let (first, second) = hidden_pair(&selection, b"Type SETUP to approve: ", b"SETUP")?;
         let first = std::str::from_utf8(&first).map_err(|_| invalid("password must be UTF-8"))?;
         let second = std::str::from_utf8(&second).map_err(|_| invalid("password must be UTF-8"))?;
         match selected.prepare(&login, first, second) {
             Ok(_) => {
-                println!("Setup confirmed: the three role markers and server.v1 are durable. The server has not started.");
+                println!("Setup confirmed: the three role markers and server.conf are durable. The server has not started.");
                 Ok(ExitCode::SUCCESS)
             }
             Err(IssueError::Refused(reason)) => Err(reason),
@@ -143,19 +136,20 @@ fn mount_word(path: &Path) -> io::Result<String> {
     Ok(word)
 }
 
-fn preview_unit(paths: [&Path; 3]) -> io::Result<String> {
+fn preview_unit(paths: [&Path; 3], uid: u32, listen: SocketAddr) -> io::Result<String> {
     let [system, data, recycle] = paths.map(mount_word);
     let (system, data, recycle) = (system?, data?, recycle?);
     Ok(format!(
-        "# Preview only. Use after setup, with the reviewed foreground launcher installed.\n\
-         # Mount ordering by selected path; the launcher verifies storage identity.\n\
+        "# Preview only. Use after setup, with the ZXS executable installed.\n\
+         # Mount ordering by selected path; the server verifies storage identity.\n\
          [Unit]\n\
-         Description=ZXS foreground supervisor\n\
+         Description=ZXS storage server\n\
          RequiresMountsFor={system} {data} {recycle}\n\
          \n\
          [Service]\n\
          Type=simple\n\
-         ExecStart=/zxs/bin/activate-headless\n\
+         User={uid}\n\
+         ExecStart=/zxs/bin/zxs --listen {listen}\n\
          KillMode=mixed\n\
          TimeoutStopSec=infinity\n\
          SendSIGKILL=no\n"

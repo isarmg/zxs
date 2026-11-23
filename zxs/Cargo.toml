@@ -11,14 +11,6 @@ build = "build.rs"
 name = "zxs"
 path = "src/main.rs"
 
-[features]
-host-activation = []
-
-[[bin]]
-name = "activate-headless"
-path = "src/activate_headless.rs"
-required-features = ["host-activation"]
-
 # This project builds alone, including after removal of its enclosing checkout.
 [workspace]
 resolver = "3"

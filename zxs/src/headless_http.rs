@@ -1,17 +1,18 @@
-//! One HTTP/1.1 request on an already accepted private Unix hop.
-//! Standard HTTPS terminates upstream. This module opens no listener.
+//! One HTTP/1.1 request on one accepted TCP connection; no TLS or forwarding policy.
 use crate::{
     headless_auth::{Account, AuthError},
     workspace_protocol::{self, Request},
 };
 use std::{
     io::{self, BufRead, BufReader, Read, Take, Write},
-    os::unix::net::UnixStream,
+    net::TcpStream,
+    time::{Duration, Instant},
 };
 
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_FIELDS: usize = 64;
 const MAX_JSON: u64 = 64 * 1024;
+pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) struct Body<'a>(Take<&'a mut dyn Read>);
 impl Body<'_> {
@@ -110,10 +111,14 @@ struct Head<'a> {
     fields: Vec<(&'a str, &'a str)>,
 }
 
-fn read_head(input: &mut impl BufRead) -> io::Result<Vec<u8>> {
+fn read_head(
+    input: &mut impl BufRead,
+    before_read: impl Fn() -> io::Result<()>,
+) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut ended = 0;
     loop {
+        before_read()?;
         let available = input.fill_buf()?;
         if available.is_empty() {
             return Err(io::ErrorKind::UnexpectedEof.into());
@@ -177,15 +182,15 @@ fn head(raw: &[u8]) -> Result<Head<'_>, Problem> {
             }
             hosts += 1;
         }
-        // Upstream ends message transformations, upgrade, trailers and
-        // 100-continue. They do not become private framing options.
+        // This single-request transport accepts no transfer coding, trailers,
+        // upgrades or 100-continue.
         if ["transfer-encoding", "trailer", "te", "upgrade", "expect"]
             .iter()
             .any(|name| key.eq_ignore_ascii_case(name))
         {
             return Err(bad);
         }
-        // Preserve duplicates and raw target; no proxy identity is promoted.
+        // Preserve the exact Authorization fields, including duplicates.
         fields.push((key, value));
     }
     if hosts != 1 {
@@ -198,33 +203,46 @@ fn head(raw: &[u8]) -> Result<Head<'_>, Problem> {
     })
 }
 
-/// Own exactly one accepted socket and close it upon return. The terminator
-/// uses a fresh private Unix request per connection and leaves exactly one
-/// validated Content-Length, without transfer coding. It supplies TLS,
-/// timeouts and secret-free logs.
+/// Own exactly one accepted socket and close it after one HTTP request.
+/// The canonical Content-Length delimits this body, not TCP EOF; no following
+/// bytes can become another admitted request on this connection.
 ///
 /// Dispatcher must decode one exact bounded JSON object or consume the full
 /// streaming `SaveNode`, checking length and digest before selection.
 /// DELETE delegates to the container store; the adapter does not create receipts.
 pub(crate) fn serve_one(
     account: &Account,
-    stream: UnixStream,
+    stream: TcpStream,
+    stopping: &dyn Fn() -> bool,
     dispatch: impl FnOnce(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
 ) -> io::Result<()> {
-    let result = serve_request(account, &stream, dispatch);
+    let result = serve_request(account, &stream, stopping, dispatch);
     drop(stream);
     result
 }
 
 fn serve_request(
     account: &Account,
-    stream: &UnixStream,
+    stream: &TcpStream,
+    stopping: &dyn Fn() -> bool,
     dispatch: impl FnOnce(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
 ) -> io::Result<()> {
-    let peer = account.admit_peer(stream)?;
     let mut input = BufReader::new(stream);
     let mut output = stream;
-    let raw = match read_head(&mut input) {
+    let deadline = Instant::now() + IO_TIMEOUT;
+    // Bound the complete head, rather than granting a new idle interval
+    // for every byte. Body reads keep the existing per-read idle timeout.
+    let before_head_read = || {
+        if stopping() {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        stream.set_read_timeout(Some(left))
+    };
+    let raw = match read_head(&mut input, before_head_read) {
         Ok(raw) => raw,
         Err(e)
             if matches!(
@@ -236,11 +254,18 @@ fn serve_request(
         }
         Err(e) => return Err(e),
     };
+    if Instant::now() >= deadline {
+        return Err(io::ErrorKind::TimedOut.into());
+    }
+    if stopping() {
+        return Ok(());
+    }
+    stream.set_read_timeout(Some(IO_TIMEOUT))?;
     let head = match head(&raw) {
         Ok(head) => head,
         Err(p) => return write_outcome(&mut output, Outcome::Failed(p)),
     };
-    let permit = match peer.authenticate(&head.fields) {
+    let permit = match account.authenticate(&head.fields) {
         Ok(permit) => permit,
         Err(e) => return write_outcome(&mut output, Outcome::Failed(e.into())),
     };
@@ -255,8 +280,14 @@ fn serve_request(
         Ok(body) => body,
         Err(problem) => return write_outcome(&mut output, Outcome::Failed(problem)),
     };
-    let outcome = match permit.with_admission(account, |live| dispatch(request, &mut bounded, live))
-    {
+    let outcome = match permit.with_admission(account, |live| {
+        // This is the final admission cut. Once admitted, normal stop does
+        // not revoke the original operation's permit before it can finish.
+        if stopping() {
+            return Outcome::Failed(Problem::Unavailable);
+        }
+        dispatch(request, &mut bounded, live)
+    }) {
         Ok(result) if matches!(result, Outcome::Failed(_)) || bounded.exhausted() => result,
         Ok(_) => Outcome::Failed(Problem::Unavailable),
         Err(e) => Outcome::Failed(e.into()),

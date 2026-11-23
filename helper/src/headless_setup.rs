@@ -4,7 +4,7 @@ use crate::{fresh_password, fresh_random::headless as random, maintenance::{Disc
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use rustix::{
     fs::{FlockOperation, Mode, OFlags, RawDir, RenameFlags, ResolveFlags, fchmod, flock, openat, openat2, renameat_with},
-    process::{getegid, geteuid, getuid},
+    process::{geteuid, getuid},
 };
 use std::{fs::File, io::{self, Read, Write}, mem::MaybeUninit, os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::Path, sync::Arc};
@@ -18,8 +18,8 @@ mod import_preflight;
 pub(crate) use import_preflight::Preflight;
 
 pub(crate) const DEFAULT_STATE: &str = "/zxs/state/headless";
-const DESCRIPTOR: &str = "server.v1";
-const FORMAT: &[u8] = b"ZXS-HEADLESS-1\0";
+const DESCRIPTOR: &str = "server.conf";
+const FORMAT: &[u8] = b"ZXS-HTTP\0";
 const MARKER: &str = ".zxs-role-v1";
 const MARK_MAGIC: &[u8] = b"ZXS-ROLE-V1\0";
 const MARK_BYTES: usize = MARK_MAGIC.len() + 1 + 16 + 32;
@@ -43,7 +43,6 @@ struct Issue<'a> {
     pub(crate) roots: [RootInput<'a>; 3], // SYSTEM, data, recycle
     pub(crate) pool: [u8; 16],
     pub(crate) storage_uid: u32,
-    pub(crate) proxy_uid: u32,
     pub(crate) login: &'a str,
 }
 
@@ -94,8 +93,7 @@ impl Issue<'_> {
         let uid = self.storage_uid;
         if self.state.original.path() != Path::new(DEFAULT_STATE)
             || matches!(uid, 0 | 65534 | u32::MAX)
-            || matches!(self.proxy_uid, 0 | 65534 | u32::MAX)
-            || self.proxy_uid == uid || self.pool == [0;16]
+            || self.pool == [0;16]
         { return Err(refused()); }
         let (state, _) = require_held(&self.state, uid)?;
         let mut held = Vec::new();
@@ -146,7 +144,6 @@ impl Issue<'_> {
         encoded.extend_from_slice(FORMAT);
         encoded.extend_from_slice(&self.pool);
         encoded.extend_from_slice(&epoch);
-        encoded.extend_from_slice(&self.proxy_uid.to_be_bytes());
         encoded.extend_from_slice(&salt);
         encoded.extend_from_slice(&tag[..]);
         encoded.push(u8::try_from(self.login.len()).map_err(|_| refused())?);
@@ -255,31 +252,27 @@ impl Held {
 }
 
 /// Read-only selection for a trusted offline setup UI. No disk formatting,
-/// daemon, privileged account creation, service start or gateway enrollment.
+/// daemon, privileged account creation or service start.
 pub(crate) struct FreshSelection {
     state: Held,
     roots: [Held; 3],
     scope: Arc<DiscoveryView>,
     uid: u32,
-    ipc_gid: u32,
-    gateway_uid: u32,
     pool: [u8; 16],
     tokens: [[u8; 32]; 3],
 }
 
 impl FreshSelection {
-    pub(crate) fn select(paths: [&Path; 3], gateway_uid: u32, ipc_gid: u32) -> io::Result<Self> {
+    pub(crate) fn select(paths: [&Path; 3]) -> io::Result<Self> {
         let uid = geteuid().as_raw();
-        if getuid().as_raw() != uid || matches!(uid, 0 | 65534 | u32::MAX)
-            || matches!(ipc_gid, 0 | 65534 | u32::MAX) || getegid().as_raw() != ipc_gid
-            || gateway_uid == uid || matches!(gateway_uid, 0 | 65534 | u32::MAX) {
+        if getuid().as_raw() != uid || matches!(uid, 0 | 65534 | u32::MAX) {
             return Err(refused());
         }
         let scope = Arc::new(HostMounts::discovery_view(false)?);
         let selected = Self {
             state: Held::select(Path::new(DEFAULT_STATE), uid, &scope)?,
             roots: [Held::select(paths[0], uid, &scope)?, Held::select(paths[1], uid, &scope)?, Held::select(paths[2], uid, &scope)?],
-            scope, uid, ipc_gid, gateway_uid, pool: random::<16>()?,
+            scope, uid, pool: random::<16>()?,
             tokens: [random::<32>()?, random::<32>()?, random::<32>()?],
         };
         selected.require_site()?;
@@ -291,6 +284,8 @@ impl FreshSelection {
         self.roots.each_ref().map(|entry| entry.original.path())
     }
 
+    pub(crate) fn storage_uid(&self) -> u32 { self.uid }
+
     fn require_site(&self) -> io::Result<()> {
         self.scope.require_unchanged()?;
         for name in ["/zxs", "/zxs/bin", "/zxs/state"] {
@@ -299,12 +294,6 @@ impl FreshSelection {
             if m.uid() != 0 || m.mode() & 0o022 != 0 { return Err(refused()); }
             dir.require_same_named_mount()?;
         }
-        let parent = Pinned::local_storage(Path::new("/zxs/run"), &self.scope)?;
-        let m = parent.metadata()?;
-        if m.uid() != self.uid || m.gid() != self.ipc_gid || m.mode() & 0o7777 != 0o710 {
-            return Err(refused());
-        }
-        parent.require_same_named_mount()?;
         Ok(())
     }
 
@@ -316,7 +305,7 @@ impl FreshSelection {
                 RootInput { held: self.roots[1].input(), token: self.tokens[1] },
                 RootInput { held: self.roots[2].input(), token: self.tokens[2] },
             ],
-            pool: self.pool, storage_uid: self.uid, proxy_uid: self.gateway_uid, login,
+            pool: self.pool, storage_uid: self.uid, login,
         }
     }
 

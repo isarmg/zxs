@@ -1,21 +1,18 @@
 //! Fresh headless credential binding. No listener, HTTP parser or setup writer.
 use crate::password::{Verifier, login_name};
 use std::{
-    ffi::{OsStr, c_int},
+    ffi::OsStr,
     fs::File,
     io::{self, Read},
-    os::{
-        fd::AsRawFd,
-        unix::{ffi::OsStrExt, fs::MetadataExt, net::UnixStream},
-    },
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
 
-const MAGIC: &[u8] = b"ZXS-HEADLESS-1\0";
+const MAGIC: &[u8] = b"ZXS-HTTP\0";
 const MAX_ROLE_PATH: usize = 4095;
 const MAX_DESCRIPTOR: usize =
-    MAGIC.len() + 16 + 16 + 4 + 16 + 32 + 1 + 64 + 3 * (2 + MAX_ROLE_PATH + 32);
+    MAGIC.len() + 16 + 16 + 16 + 32 + 1 + 64 + 3 * (2 + MAX_ROLE_PATH + 32);
 #[path = "headless_fresh_password.rs"]
 mod fresh_password;
 const MAX_AUTH_SCHEME_VALUE: usize = 6 + 4 * (64usize + 1 + fresh_password::MAX_BYTES).div_ceil(3);
@@ -27,7 +24,6 @@ fn invalid() -> io::Error {
 pub(crate) struct Descriptor {
     pool: [u8; 16],
     epoch: [u8; 16],
-    terminator_uid: u32,
     salt: [u8; 16],
     tag: [u8; 32],
     login: String,
@@ -96,7 +92,6 @@ impl Descriptor {
         let mut raw = raw.strip_prefix(MAGIC).ok_or_else(invalid)?;
         let pool = fixed(&mut raw)?;
         let epoch = fixed(&mut raw)?;
-        let terminator_uid = u32::from_be_bytes(fixed(&mut raw)?);
         let salt = fixed(&mut raw)?;
         let tag = fixed(&mut raw)?;
         let [login_len] = fixed(&mut raw)?;
@@ -110,7 +105,6 @@ impl Descriptor {
             || pool == epoch
             || salt == [0; 16]
             || tag == [0; 32]
-            || matches!(terminator_uid, 0 | 65534 | u32::MAX)
             || !raw.is_empty()
             || roots.iter().enumerate().any(|(i, root)| {
                 roots[..i].iter().any(|old| {
@@ -125,7 +119,6 @@ impl Descriptor {
         Ok(Self {
             pool,
             epoch,
-            terminator_uid,
             salt,
             tag,
             login,
@@ -144,7 +137,6 @@ impl Descriptor {
             epoch: self.epoch,
             login: self.login,
             verifier: Verifier::new(self.salt, self.tag),
-            terminator_uid: self.terminator_uid,
             open: AtomicBool::new(true),
         };
         (self.roots, account)
@@ -188,13 +180,7 @@ pub(crate) struct Account {
     epoch: [u8; 16],
     login: String,
     verifier: Verifier,
-    terminator_uid: u32,
     open: AtomicBool,
-}
-
-pub(crate) struct Peer<'owner> {
-    account: &'owner Account,
-    _stream: &'owner UnixStream,
 }
 
 pub(crate) struct Permit<'owner> {
@@ -210,25 +196,30 @@ pub(crate) enum AuthError {
 }
 
 impl Account {
-    pub(crate) fn gateway_uid(&self) -> u32 {
-        self.terminator_uid
-    }
-    pub(crate) fn epoch(&self) -> [u8; 16] {
-        self.epoch
-    }
-
-    /// Private Unix accepted socket only. The terminator forwards the
-    /// original Authorization header and never supplies an account ID.
-    pub(crate) fn admit_peer<'owner>(
-        &'owner self,
-        stream: &'owner UnixStream,
-    ) -> io::Result<Peer<'owner>> {
-        if !self.open.load(Ordering::Acquire) || peer_uid(stream)? != self.terminator_uid {
-            return Err(io::ErrorKind::PermissionDenied.into());
+    /// Authenticate one direct HTTP request before parsing its body. Preserve
+    /// individual Authorization field occurrences for the duplicate check.
+    pub(crate) fn authenticate(&self, headers: &[(&str, &str)]) -> Result<Permit<'_>, AuthError> {
+        if !self.open.load(Ordering::Acquire) {
+            return Err(AuthError::Unavailable);
         }
-        Ok(Peer {
+        let credentials = credentials(headers)?;
+        if credentials.login() != self.login.as_str() {
+            return Err(AuthError::Invalid);
+        }
+        if !self
+            .verifier
+            .matches(credentials.password())
+            .map_err(|_| AuthError::Unavailable)?
+        {
+            return Err(AuthError::Invalid);
+        }
+        if !self.open.load(Ordering::Acquire) {
+            return Err(AuthError::Unavailable);
+        }
+        Ok(Permit {
             account: self,
-            _stream: stream,
+            pool: self.pool,
+            epoch: self.epoch,
         })
     }
 
@@ -259,53 +250,6 @@ impl Permit<'_> {
             return Err(AuthError::Unavailable);
         }
         Ok(one_request(&allowed))
-    }
-}
-
-impl<'owner> Peer<'owner> {
-    /// Call before parsing body or entering typed dispatch, using original
-    /// headers (duplicate occurrences must not be combined or discarded).
-    pub(crate) fn authenticate(
-        &self,
-        headers: &[(&str, &str)],
-    ) -> Result<Permit<'owner>, AuthError> {
-        let account = self.account;
-        if !account.open.load(Ordering::Acquire) {
-            return Err(AuthError::Unavailable);
-        }
-        let credentials = credentials(headers)?;
-        if credentials.login() != account.login.as_str() {
-            return Err(AuthError::Invalid);
-        }
-        if !account
-            .verifier
-            .matches(credentials.password())
-            .map_err(|_| AuthError::Unavailable)?
-        {
-            return Err(AuthError::Invalid);
-        }
-        if !account.open.load(Ordering::Acquire) {
-            return Err(AuthError::Unavailable);
-        }
-        Ok(Permit {
-            account,
-            pool: account.pool,
-            epoch: account.epoch,
-        })
-    }
-}
-
-unsafe extern "C" {
-    fn zxs_startup_peer_uid(fd: c_int, uid: *mut u32) -> c_int;
-}
-
-fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
-    let mut uid = 0;
-    // SAFETY: the accepted socket stays borrowed and the UID output is writable.
-    match unsafe { zxs_startup_peer_uid(stream.as_raw_fd(), &raw mut uid) } {
-        0 => Ok(uid),
-        -1 => Err(io::Error::last_os_error()),
-        _ => Err(invalid()),
     }
 }
 

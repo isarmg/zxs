@@ -17,18 +17,10 @@ use std::{
 
 unsafe extern "C" {
     fn zxs_startup_open_member(parent: c_int, name: *const c_char) -> c_long;
-    #[cfg(target_arch = "x86_64")]
-    fn zxs_startup_effective_gid() -> u32;
-}
-
-#[cfg(target_arch = "x86_64")]
-pub(super) fn effective_group() -> u32 {
-    // SAFETY: the C shim only reads the process effective group.
-    unsafe { zxs_startup_effective_gid() }
 }
 
 pub(crate) const DEFAULT_STATE: &str = "/zxs/state/headless";
-const DESCRIPTOR: &CStr = c"server.v1";
+const DESCRIPTOR: &CStr = c"server.conf";
 const MARKER: &CStr = c".zxs-role-v1";
 const MARK_MAGIC: &[u8] = b"ZXS-ROLE-V1\0";
 const MARK_BYTES: usize = MARK_MAGIC.len() + 1 + 16 + 32;
@@ -97,22 +89,6 @@ pub(crate) struct SelectedStart {
 }
 
 impl SelectedStart {
-    pub(crate) fn gateway_uid(&self) -> u32 {
-        self.account.gateway_uid()
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub(crate) fn service_epoch(&self) -> crate::headless_gateway::ServiceEpoch {
-        let group = effective_group();
-        crate::headless_gateway::ServiceEpoch {
-            owner: local_uid(),
-            group,
-            device: self.state.entity.device,
-            inode: self.state.entity.inode,
-            epoch: self.account.epoch(),
-        }
-    }
-
     pub(crate) fn open_default() -> io::Result<Self> {
         let uid = local_uid();
         if matches!(uid, 0 | 65534 | u32::MAX) {

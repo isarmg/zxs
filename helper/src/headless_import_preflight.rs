@@ -16,18 +16,11 @@ const SCOPED: ResolveFlags = ResolveFlags::BENEATH.union(ResolveFlags::NO_SYMLIN
 pub(crate) struct Preflight {
     source: PathBuf,
     roles: [PathBuf; 3],
-    gateway: u32,
-    ipc: u32,
 }
 
 impl Preflight {
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        const USAGE: &str = "expected preflight-import SOURCE SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID";
-        fn id(raw: Option<OsString>) -> Option<u32> {
-            let text = raw?.into_string().ok()?;
-            let val = text.parse::<u32>().ok()?;
-            (val.to_string() == text && !matches!(val, 0 | 65534 | u32::MAX)).then_some(val)
-        }
+        const USAGE: &str = "expected preflight-import SOURCE SYSTEM DATA RECYCLE";
         let source = PathBuf::from(args.next().ok_or(USAGE)?);
         let roles = [
             PathBuf::from(args.next().ok_or(USAGE)?), PathBuf::from(args.next().ok_or(USAGE)?),
@@ -36,16 +29,14 @@ impl Preflight {
         for path in std::iter::once(&source).chain(&roles) {
             crate::path_rules::Kind::StorageRoot.check_path(path.as_os_str().as_bytes())?;
         }
-        let gateway = id(args.next()).ok_or(USAGE)?;
-        let ipc = id(args.next()).ok_or(USAGE)?;
         if args.next().is_some() { return Err(USAGE); }
-        Ok(Self { source, roles, gateway, ipc })
+        Ok(Self { source, roles })
     }
 
     pub(crate) fn run(self) -> io::Result<ExitCode> {
         rustix::thread::set_no_new_privs(true)?;
         diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
-        let selected = FreshSelection::select(self.roles.each_ref().map(PathBuf::as_path), self.gateway, self.ipc)?;
+        let selected = FreshSelection::select(self.roles.each_ref().map(PathBuf::as_path))?;
         selected.inspect_import_source(&self.source, |observed| {
             let mut out = io::stdout().lock();
             writeln!(out, "source metadata only: {} files, {} directories ({} empty), {} logical bytes",
@@ -111,7 +102,7 @@ pub(super) fn scan(selected: &FreshSelection, source: &Path, require_roles: impl
         || selected.roots.iter().any(|root| overlapping(&pin, &root.original)) {
         return Err(blocked("the source overlaps the selected state or storage roles"));
     }
-    for protected in ["/zxs/state", "/zxs/run", "/zxs/bin"] {
+    for protected in ["/zxs/state", "/zxs/bin"] {
         let dir = Pinned::local_storage(Path::new(protected), &selected.scope)?;
         if overlapping(&pin, &dir) { return Err(blocked("the source overlaps protected deployment paths")); }
     }

@@ -10,7 +10,7 @@ use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 const EPOCH: usize = FORMAT.len() + 16;
-const SALT: usize = EPOCH + 16 + 4;
+const SALT: usize = EPOCH + 16;
 const TAG: usize = SALT + 16;
 const LOGIN: usize = TAG + 32;
 const MAX_DESCRIPTOR: usize = LOGIN + 1 + 64 + 3 * (2 + 4095 + 32);
@@ -84,12 +84,11 @@ impl FreshSelection {
         let mut body = original.full.strip_prefix(FORMAT).ok_or_else(refused)?;
         let pool = fixed::<16>(&mut body)?;
         let epoch = fixed::<16>(&mut body)?;
-        let gateway = u32::from_be_bytes(fixed(&mut body)?);
         let salt = fixed::<16>(&mut body)?;
         let tag = Zeroizing::new(fixed::<32>(&mut body)?);
         let [len] = fixed(&mut body)?;
         let login = std::str::from_utf8(field(&mut body, usize::from(len))?).map_err(|_| refused())?;
-        if !login_ok(login) || gateway != self.gateway_uid || pool == [0; 16] || epoch == [0; 16]
+        if !login_ok(login) || pool == [0; 16] || epoch == [0; 16]
             || pool == epoch || salt == [0; 16] || *tag == [0; 32] { return Err(refused()); }
         let login = login.to_owned();
         let mut tokens = [[0; 32]; 3];

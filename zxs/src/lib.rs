@@ -10,8 +10,6 @@ mod hash;
 mod headless_auth;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod headless_boot;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-mod headless_gateway;
 #[cfg(target_os = "linux")]
 mod headless_http;
 #[cfg(target_os = "linux")]
@@ -23,18 +21,8 @@ mod workspace_protocol;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[doc(hidden)]
-pub fn start_headless() -> std::io::Result<()> {
-    let gateway = headless_gateway::LaunchFds::inherit()?;
-    headless_boot::run(Some(gateway), workspace_protocol::http::dispatch_request)
-}
-#[cfg(all(
-    target_os = "linux",
-    target_arch = "x86_64",
-    feature = "host-activation"
-))]
-#[doc(hidden)]
-pub fn activate_headless() -> std::io::Result<()> {
-    headless_gateway::activate()
+pub fn start_headless(listen: std::net::SocketAddr) -> std::io::Result<()> {
+    headless_boot::run(listen, workspace_protocol::http::dispatch_request)
 }
 
 #[cfg(target_os = "linux")]

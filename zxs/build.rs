@@ -5,10 +5,9 @@ use std::{
     process::Command,
 };
 
-const LINUX_C: [(&str, &str); 3] = [
+const LINUX_C: [(&str, &str); 2] = [
     ("src/linux.c", "linux.o"),
     ("src/startup_native.c", "startup_native.o"),
-    ("src/gateway_native.c", "gateway_native.o"),
 ];
 const PASSWORD: &str = "src/password/verification";
 const PASSWORD_C: [(&str, &str); 6] = [
@@ -71,14 +70,9 @@ fn main() {
             "compile {source}"
         );
     };
-    let linux_flags: &[&str] = if env::var_os("CARGO_FEATURE_HOST_ACTIVATION").is_some() {
-        &["-Wall", "-Wextra", "-Werror", "-DZXS_HOST_ACTIVATION"]
-    } else {
-        &["-Wall", "-Wextra", "-Werror"]
-    };
     let linux_objects = LINUX_C.map(|(source, name)| {
         let object = out.join(name);
-        compile(source, &object, linux_flags);
+        compile(source, &object, &["-Wall", "-Wextra", "-Werror"]);
         object
     });
     let password_dir = out.join("password");

@@ -6,13 +6,13 @@ Helper 可在业务服务停机时完成首次设置，也可在业务服务运�
 
 ## 首次设置
 
-先挂载存储目录，并按 [服务部署要求](../zxs/docs/headless-activation.md)创建专用服务账号和 IPC 组。以下两个命令作为该非 root 服务账号运行；三个大写目录参数替换为各自的绝对路径，两项 ID 使用数字。
+先挂载存储目录，并按 [服务部署要求](../zxs/docs/headless-activation.md)创建专用服务账号。以下命令用同一非 root 服务账号运行；三个大写目录参数替换为各自的绝对路径。
 
 ```sh
-helper setup-headless check SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
-helper setup-headless preview-unit SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
-helper setup-headless new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
-helper setup-headless web new [--preview-unit] SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
+helper setup-headless check SYSTEM DATA RECYCLE
+helper setup-headless preview-unit IP:PORT SYSTEM DATA RECYCLE
+helper setup-headless new SYSTEM DATA RECYCLE LOGIN
+helper setup-headless web new [--preview-unit IP:PORT] SYSTEM DATA RECYCLE LOGIN
 ```
 
 `check` 只检查目录是否可用于首设；`new` 展示本次选择的三个目录，要求输入 `SETUP` 并在本地控制终端两次输入不回显的密码。成功后写好三个角色标记和服务账户文件，不格式化磁盘，也不启动服务。加上 `web` 可先打开[回环设置向导](docs/disk-web.md#可选首次设置向导)，再回到同一终端确认。若报告结果不确定，先核对同一组目录中已写下的记录，不要覆盖或另选目录直接重跑。
@@ -109,8 +109,8 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 离线密码重置见[首设与重置](docs/headless-offline.md)。
 
-默认业务程序位于 `/zxs/bin/zxs`，本次首设发布 `/zxs/state/headless/server.v1`。
-存储目录由 Linux 管理员挂载，按[激活说明](../zxs/docs/headless-activation.md)另外核准并启动。
+默认业务程序位于 `/zxs/bin/zxs`，本次首设发布 `/zxs/state/headless/server.conf`。
+存储目录由 Linux 管理员挂载。首设后用同一非 root 服务账号直接运行 `/zxs/bin/zxs --listen IP:PORT`，按[部署说明](../zxs/docs/headless-activation.md)显式选择 HTTP 监听地址。
 旧池不迁移；不修改旧池；当前格式的密码可离线重置，磁盘变更另行实现。只读宿主诊断仍可在线使用。
 
 ## 按需使用同一个 Helper 文件

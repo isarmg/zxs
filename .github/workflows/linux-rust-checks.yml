@@ -98,11 +98,6 @@ jobs:
             cargo test --workspace --lib --bins --locked --offline "${features[@]}"
           fi
 
-      - name: Check offline ZXS host activation (compile only)
-        if: ${{ !cancelled() && matrix.project == 'zxs' && steps.toolchain.outcome == 'success' }}
-        run: |
-          "$ZXS_RUST_BIN/cargo" check --locked --offline --features host-activation --bin activate-headless
-
       - name: Check first-party Rust formatting
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && matrix.feature == '' }}
         env:
