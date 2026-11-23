@@ -2,7 +2,7 @@
 use crate::{
     container_store::Store,
     fs::{Entity, HeldDir, local_uid},
-    headless_gateway::{GatewayRun, LaunchFds},
+    headless_gateway::{GatewayRun, LaunchFds, ReadyWriter},
     headless_http::{Incoming, Outcome},
     headless_lifecycle::{SOCKET, serve_selected},
     headless_start::{SelectedStart, effective_group},
@@ -180,6 +180,7 @@ pub(crate) fn run(
             "no original approved gateway launch was selected",
         )
     })?;
+    let ready = ReadyWriter::inherit()?;
     let selected = SelectedStart::open_default()?;
     let uid = selected.gateway_uid();
     let gateway = GatewayRun::retain(gateway, uid, &selected.service_epoch())?;
@@ -197,6 +198,7 @@ pub(crate) fn run(
         listener,
         require_gateway,
         || STOP.load(Ordering::Acquire),
+        move || ready.report(),
         dispatch,
     );
     // Bound owns the shared deployment lease through socket drain/retirement.

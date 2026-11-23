@@ -26,4 +26,6 @@ ZXS-HOST-ACTIVATION-1
 <IPC 组 GID>
 ```
 
-使用 `host-activation` feature 构建临时 `activate-headless`，由 root 无参数调用。它启动已入选 nginx，按原始 PIDFD 和入选状态调用低权限 `zxs`，随后退出；不安装开机服务。用实际 Workspace 客户端确认可连接后再提供使用。若残留 `/run/zxs-gateway.pid` 或 `/zxs/run/headless.sock`，程序不会清理或接管；先由主机管理员核实原进程已退出，再处理残留。单次启动返回成功表示已执行进程交接，独立确认套接字和容器访问后才算启动检查完成。
+使用 `host-activation` feature 构建 `activate-headless`，由 root 无参数在前台调用。它启动已入选的 nginx 和低权限 `zxs`，并持续监督这两个原进程。ZXS 打开存储并核实私有监听器后，启动器显示 `ZXS backend ready`。这表示后端就绪；在提供使用前用 Workspace 确认实际 HTTPS 和容器访问。启动器不安装开机服务，也不会自动重启原进程。
+
+向启动器发 `SIGTERM`，停止原 ZXS 接收新请求并等待已接收的请求，同时请求原 nginx 平滑退出。启动器等待两者退出，不强制中断正常收尾。一个进程意外退出时，启动器停止另一个并报告失败。若残留 `/run/zxs-gateway.pid` 或 `/zxs/run/headless.sock`，程序不会清理或接管；先核实原进程已退出，再由管理员处理。

@@ -4,7 +4,9 @@
 #include <linux/magic.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <sys/socket.h>
 #include <sys/vfs.h>
+#include <unistd.h>
 
 /* Some build-host Linux headers predate PIDFS; the Linux UAPI magic is
    fixed independently of the running kernel or the native statfs layout. */
@@ -14,8 +16,10 @@
 
 static const int receipt_seals = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
 
+enum { READY_SLOT = 6 };
+
 int zxs_gateway_duplicate(int fd) {
-    return fcntl(fd, F_DUPFD_CLOEXEC, 6);
+    return fcntl(fd, F_DUPFD_CLOEXEC, READY_SLOT + 1);
 }
 
 int zxs_gateway_read_flags(bool directory) {
@@ -47,6 +51,25 @@ bool zxs_gateway_is_readonly_file(int fd) {
     return flags >= 0 && (flags & (O_ACCMODE | O_PATH)) == O_RDONLY;
 }
 
+/* The original root launcher created the stream before fork. A named
+   endpoint is rejected separately by the Rust UnixStream address checks. */
+int zxs_gateway_ready_peer(int fd) {
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0) return -1;
+    if ((flags & (O_ACCMODE | O_NONBLOCK | O_PATH)) != (O_RDWR | O_NONBLOCK)) return 0;
+    int kind = 0;
+    socklen_t size = sizeof(kind);
+    if (getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &kind, &size) != 0) return -1;
+    if (size != sizeof(kind) || kind != AF_UNIX) return 0;
+    size = sizeof(kind);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &kind, &size) != 0) return -1;
+    if (size != sizeof(kind) || kind != SOCK_STREAM) return 0;
+    struct ucred peer = {0};
+    size = sizeof(peer);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) != 0) return -1;
+    return size == sizeof(peer) && peer.uid == 0 && peer.pid > 0 && peer.pid == getppid();
+}
+
 #ifdef ZXS_HOST_ACTIVATION
 #include <errno.h>
 #include <grp.h>
@@ -60,7 +83,6 @@ bool zxs_gateway_is_readonly_file(int fd) {
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
-#include <unistd.h>
 
 _Static_assert(_Generic((pid_t)0, int: 1, default: 0), "native pid_t is the checked int");
 _Static_assert(_Generic((uid_t)0, uint32_t: 1, default: 0), "native uid_t is uint32_t");
@@ -102,12 +124,13 @@ int zxs_gateway_prepare_nginx_exec(int config) {
     return 0;
 }
 
-int zxs_gateway_prepare_service_exec(int pidfd, int config, int receipt,
+int zxs_gateway_prepare_service_exec(int pidfd, int config, int receipt, int ready,
                                     uint32_t uid, uint32_t gid) {
     if (protect_inherited_fds() != 0 ||
         dup2(pidfd, 3) != 3 ||
         dup2(config, 4) != 4 ||
         dup2(receipt, 5) != 5 ||
+        dup2(ready, READY_SLOT) != READY_SLOT ||
         prctl(PR_SET_NO_NEW_PRIVS, 1ul, 0ul, 0ul, 0ul) != 0 ||
         prctl(PR_SET_KEEPCAPS, 0ul, 0ul, 0ul, 0ul) != 0 ||
         prctl(PR_CAP_AMBIENT, (unsigned long)PR_CAP_AMBIENT_CLEAR_ALL, 0ul, 0ul, 0ul) != 0 ||

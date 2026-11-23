@@ -113,18 +113,25 @@ fn selected_name(parent: &HeldDir, uid: u32) -> io::Result<Original> {
 /// and independent positive evidence that today's effective gateway edition
 /// and configuration enforce the single-complete-request contract. Merely
 /// having a peer UID, TLS or Content-Length does not furnish that evidence.
-/// This function has no default producer; a caller without the proof returns
-/// Unsupported before invoking it. The documented gateway audit remains
-/// outside this transport module and may not be replaced by an always-OK hook.
+/// The documented gateway audit remains outside this transport module. The
+/// native launcher receives readiness only after the Store and listener are
+/// proved locally; this does not attest to external HTTPS reachability.
 pub(crate) fn serve_selected(
     bound: &Bound,
     listener: UnixListener,
     require_gateway: impl Fn() -> io::Result<()>,
     stopping: impl Fn() -> bool,
+    report_ready: impl FnOnce() -> io::Result<()>,
     dispatch: impl Fn(&Store, Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome + Sync,
 ) -> io::Result<()> {
     require_gateway()?;
     let selected = Selected::open(listener)?;
+    require_gateway()?;
+    if stopping() {
+        bound.account().stop_admission();
+        return Ok(());
+    }
+    report_ready()?;
     thread::scope(|scope| {
         let mut workers: Vec<thread::ScopedJoinHandle<'_, ()>> = Vec::new();
         let mut result = loop {

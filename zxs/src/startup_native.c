@@ -51,7 +51,13 @@ int zxs_startup_install_stop_handlers(void (*handler)(int)) {
     return sigaction(SIGINT, &action, NULL);
 }
 
+#ifdef ZXS_HOST_ACTIVATION
 long zxs_startup_quit_gateway(int pidfd) {
     return syscall(SYS_pidfd_send_signal, pidfd, SIGQUIT, (const siginfo_t *)NULL, 0U);
 }
+
+long zxs_startup_term_service(int pidfd) {
+    return syscall(SYS_pidfd_send_signal, pidfd, SIGTERM, (const siginfo_t *)NULL, 0U);
+}
+#endif
 #endif

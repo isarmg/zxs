@@ -3,10 +3,14 @@ use crate::hash::digest;
 use std::{
     ffi::c_int,
     fs::{File, OpenOptions},
-    io,
+    io::{self, Write},
+    net::Shutdown,
     os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::{
+            fs::{FileExt, MetadataExt, OpenOptionsExt},
+            net::UnixStream,
+        },
     },
 };
 
@@ -14,6 +18,8 @@ const CONFIG: &str = "/etc/zxs-gateway/nginx.conf";
 const PREFIX: &[u8] = b"ZXS-GATEWAY-1\0";
 const RECORD: usize = PREFIX.len() + 4 + 8 * 5 + 32;
 const MAX_CONFIG: u64 = 64 * 1024;
+const READY_SLOT: c_int = 6;
+const READY_RECORD: &[u8] = b"ZXS-BACKEND-READY-1\0";
 
 unsafe extern "C" {
     fn zxs_gateway_duplicate(fd: c_int) -> c_int;
@@ -22,11 +28,12 @@ unsafe extern "C" {
     fn zxs_gateway_is_live(fd: c_int) -> c_int;
     fn zxs_gateway_has_receipt_seals(fd: c_int) -> bool;
     fn zxs_gateway_is_readonly_file(fd: c_int) -> bool;
+    fn zxs_gateway_ready_peer(fd: c_int) -> c_int;
 }
 
 fn duplicate_for_handoff(slot: c_int) -> io::Result<File> {
     // SAFETY: the kernel validates the slot without dereferencing memory
-    // or taking ownership of the original; new descriptors cannot alias 3–5.
+    // or taking ownership of the original; new descriptors cannot alias 3–6.
     let fd = unsafe { zxs_gateway_duplicate(slot) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
@@ -74,6 +81,40 @@ impl LaunchFds {
                 "no complete approved gateway descriptor handoff",
             )
         })
+    }
+}
+
+/// Slot 6 is an original startup-only stream, not an application or gateway socket.
+pub(crate) struct ReadyWriter(UnixStream);
+
+impl ReadyWriter {
+    pub(crate) fn inherit() -> io::Result<Self> {
+        let file = duplicate_for_handoff(READY_SLOT)?;
+        // SAFETY: this only observes the independent descriptor just obtained.
+        let origin = unsafe { zxs_gateway_ready_peer(file.as_raw_fd()) };
+        if origin < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let stream = UnixStream::from(OwnedFd::from(file));
+        if origin != 1 || !stream.local_addr()?.is_unnamed() || !stream.peer_addr()?.is_unnamed() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "no private readiness channel from the original root launcher",
+            ));
+        }
+        Ok(Self(stream))
+    }
+
+    pub(crate) fn report(mut self) -> io::Result<()> {
+        if self.0.write(READY_RECORD)? != READY_RECORD.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "the storage readiness report was not written completely",
+            ));
+        }
+        // A half-close also ends the stream on the inherited original slot.
+        // Do not take ownership of a raw inherited descriptor to obtain EOF.
+        self.0.shutdown(Shutdown::Write)
     }
 }
 
@@ -256,7 +297,7 @@ impl GatewayRun {
 #[cfg(feature = "host-activation")]
 use std::{
     ffi::{c_char, c_long},
-    io::{Read, Write},
+    io::Read,
     os::unix::{fs::PermissionsExt, process::CommandExt},
     process::{Child, Command, Stdio},
     thread,
@@ -282,6 +323,7 @@ unsafe extern "C" {
         pidfd: c_int,
         config: c_int,
         receipt: c_int,
+        ready: c_int,
         uid: u32,
         gid: u32,
     ) -> c_int;
@@ -480,7 +522,7 @@ pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, Laun
             // its own pidfile; SIGKILL would leave both duties unfinished.
             if let Err(stop) = stop_failed_launch(&mut child) {
                 return Err(io::Error::other(format!(
-                    "gateway proof failed ({error}); original gateway shutdown was not requested ({stop})"
+                    "gateway proof failed ({error}); original gateway shutdown could not be confirmed ({stop})"
                 )));
             }
             Err(error)
@@ -495,11 +537,11 @@ fn stop_failed_launch(child: &mut Child) -> io::Result<()> {
     }
     let pid = c_int::try_from(child.id()).map_err(|_| bad())?;
     // SAFETY: this is our direct unreaped child, never a value from the
-    // pidfile. The one-shot launcher has no other child waiter.
+    // pidfile. The supervisor has no other child waiter.
     if unsafe { zxs_gateway_quit_owned_child(pid) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(())
+    child.wait().map(|_| ())
 }
 
 #[cfg(feature = "host-activation")]
@@ -637,12 +679,112 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
     Ok((image, state, epoch.seal(&initial)?))
 }
 
-/// Native one-shot launch from an approved actual provisioner. The returned
-/// Child is ordinary OS custody; no RPC, helper daemon, restart, or reload.
 #[cfg(feature = "host-activation")]
-pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<Child> {
+#[derive(Clone, Copy)]
+enum ReadyProgress {
+    Prefix(usize),
+    Complete,
+    Failed,
+}
+
+#[cfg(feature = "host-activation")]
+pub(crate) struct Readiness {
+    reader: UnixStream,
+    progress: ReadyProgress,
+}
+
+#[cfg(feature = "host-activation")]
+impl Readiness {
+    /// One nonblocking poll: require the complete fixed record and EOF.
+    pub(crate) fn try_ready(&mut self) -> io::Result<bool> {
+        let result = self.read_until_pending_or_eof();
+        if result.is_err() {
+            self.progress = ReadyProgress::Failed;
+        }
+        result
+    }
+
+    fn read_until_pending_or_eof(&mut self) -> io::Result<bool> {
+        let mut matched = match self.progress {
+            ReadyProgress::Prefix(n) => n,
+            ReadyProgress::Complete => return Ok(true),
+            ReadyProgress::Failed => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the readiness channel already failed",
+                ));
+            }
+        };
+        let mut bytes = [0; READY_RECORD.len() + 1];
+        loop {
+            match self.reader.read(&mut bytes) {
+                Ok(0) if matched == READY_RECORD.len() => {
+                    self.progress = ReadyProgress::Complete;
+                    return Ok(true);
+                }
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the storage child closed its readiness channel without a complete report",
+                    ));
+                }
+                Ok(n) if READY_RECORD[matched..].starts_with(&bytes[..n]) => {
+                    matched += n;
+                    self.progress = ReadyProgress::Prefix(matched);
+                }
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "invalid or excess storage readiness bytes",
+                    ));
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
+#[cfg(feature = "host-activation")]
+fn readiness_pair() -> io::Result<(Readiness, File)> {
+    let (reader, writer) = UnixStream::pair()?;
+    reader.set_nonblocking(true)?;
+    writer.set_nonblocking(true)?;
+    reader.shutdown(Shutdown::Write)?;
+    writer.shutdown(Shutdown::Read)?;
+    let read = duplicate_for_handoff(reader.as_raw_fd())?;
+    let write = duplicate_for_handoff(writer.as_raw_fd())?;
+    Ok((
+        Readiness {
+            reader: UnixStream::from(OwnedFd::from(read)),
+            progress: ReadyProgress::Prefix(0),
+        },
+        write,
+    ))
+}
+
+#[cfg(feature = "host-activation")]
+pub(crate) struct LaunchedService {
+    pub(crate) child: Child,
+    pub(crate) readiness: Readiness,
+}
+
+/// Launch the exact service and retain its original child and readiness proof.
+#[cfg(feature = "host-activation")]
+pub(crate) fn launch_service(
+    policy: &ApprovedService,
+    gateway: &LaunchFds,
+) -> io::Result<LaunchedService> {
     let spare = |file: &File| duplicate_for_handoff(file.as_raw_fd());
     let (image, _original_state_lease, sealed) = load_service(policy, gateway)?;
+    let (readiness, ready_writer) = readiness_pair()?;
     let image = spare(&image)?;
     let descriptors = [
         spare(&gateway.original_pidfd)?,
@@ -666,6 +808,7 @@ pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> i
                 descriptors[0].as_raw_fd(),
                 descriptors[1].as_raw_fd(),
                 descriptors[2].as_raw_fd(),
+                ready_writer.as_raw_fd(),
                 uid,
                 gid,
             ) != 0
@@ -675,7 +818,11 @@ pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> i
             Ok(())
         });
     }
-    command.spawn()
+    let child = command.spawn()?;
+    // The pre-exec closure owns the parent's last writer. Only the launched
+    // child can now report or keep this attempt's readiness stream open.
+    drop(command);
+    Ok(LaunchedService { child, readiness })
 }
 
 #[cfg(feature = "host-activation")]
