@@ -293,7 +293,7 @@ pub(crate) fn account_worker() -> io::Result<()> {
     let reader = JointReader::connect(
         link,
         child_peer(peer, &target.record, uid, gid)?,
-        binding,
+        &binding,
         alive,
     )?;
     let stage = VaultWitness::receive(&channel, Kind::JointVaultDurable, 1, &change, until, alive)?;
@@ -372,13 +372,13 @@ pub(crate) fn vault_worker() -> io::Result<()> {
         &target.target,
         target.previous.as_ref(),
     )?;
-    let complete = tty.reserve_joint(uid, gid, crypto, binding)?;
+    let complete = tty.reserve_joint(uid, gid, crypto, &binding)?;
     let (peer, [link]) =
         channel.wait_checked::<1>(Kind::JointWriterPeer, &target.action, until, &alive)?;
     let writer = JointWriter::connect(
         link,
         child_peer(peer, &target.target.record, uid, gid)?,
-        binding,
+        &binding,
         until,
         alive,
     )?;

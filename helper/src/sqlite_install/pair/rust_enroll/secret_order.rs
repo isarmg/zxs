@@ -18,22 +18,6 @@ pub(in crate::sqlite_install::pair) struct SecretOrder {
     pub(in crate::sqlite_install::pair) selected: Observed,
 }
 impl SecretOrder {
-    pub(in crate::sqlite_install::pair) fn encode(
-        m: &Manifest,
-        s: &Observed,
-    ) -> io::Result<Vec<u8>> {
-        let raw = m.encode()?;
-        let n = u16::try_from(raw.len()).map_err(|_| no())?;
-        let mut exact = Vec::with_capacity(LIMIT);
-        exact.extend(DOMAIN);
-        exact.extend(n.to_be_bytes());
-        exact.extend(raw);
-        exact.extend(s.encode()?);
-        if exact.len() > LIMIT {
-            return Err(no());
-        }
-        Ok(exact)
-    }
     pub(in crate::sqlite_install::pair) fn read(sealed: &File) -> io::Result<(Self, [u8; 32])> {
         let raw = manifest::seal_bytes(sealed, LIMIT)?;
         let digest = scope(&raw);

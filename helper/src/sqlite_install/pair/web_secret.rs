@@ -2,7 +2,6 @@
 //! provider, authentication result, setup authority, or database writer.
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use rusqlite::{Transaction, params};
-use rustix::process::{Resource, getrlimit};
 use rustix::rand::{GetRandomFlags, getrandom};
 use std::{
     fs::File,
@@ -12,6 +11,7 @@ use std::{
 use zeroize::Zeroizing;
 
 const KIB: u32 = 65_536;
+#[cfg(test)]
 const WORKSPACE_BYTES: u64 = KIB as u64 * 1024;
 const PASSES: u32 = 3;
 const LANES: u32 = 4;
@@ -65,12 +65,6 @@ pub(super) struct WebWorkspace {
     params: Params,
 }
 impl WebWorkspace {
-    /// Reject only a guaranteed shortfall before changing site state. The
-    /// lowered credential worker still has to lock and reserve real memory.
-    pub(super) fn check_inherited_lock_budget() -> io::Result<()> {
-        check_lock_budget(getrlimit(Resource::Memlock).current)
-    }
-
     pub(super) fn reserve() -> io::Result<Self> {
         let params = Params::new(KIB, PASSES, LANES, Some(OUTPUT))
             .map_err(|_| io::Error::other("invalid fixed Web credential parameters"))?;
@@ -87,6 +81,7 @@ impl WebWorkspace {
     }
 }
 
+#[cfg(test)]
 fn check_lock_budget(soft_limit: Option<u64>) -> io::Result<()> {
     if soft_limit.is_some_and(|bytes| bytes <= WORKSPACE_BYTES) {
         return Err(io::Error::other(

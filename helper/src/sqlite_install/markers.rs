@@ -319,20 +319,6 @@ impl OrdinaryMark {
     }
 }
 
-/// Fixed physical leaf proof for only the one committed INIT recycle role.
-pub(super) struct RecycleMark(Mark);
-impl RecycleMark {
-    pub(super) fn select(dir: &File, uid: u32, wanted: &[u8; 101]) -> io::Result<Self> {
-        if wanted[20] != 1 {
-            return Err(bad("not an original recycle volume marker"));
-        }
-        Ok(Self(Mark::read_original(dir, uid, wanted)?))
-    }
-    pub(super) fn verify(&self, dir: &File, wanted: &[u8; 101]) -> io::Result<()> {
-        self.0.verify(dir, wanted)
-    }
-}
-
 /// Retains the original private marker across a short readonly SYSTEM observation.
 pub(super) struct SystemMark(Mark);
 impl SystemMark {

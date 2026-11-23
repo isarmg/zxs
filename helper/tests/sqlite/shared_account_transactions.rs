@@ -143,7 +143,7 @@ fn install(db: &mut Connection, plan: &RustPlan, sha: [u8; 32]) -> ActiveRustMet
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
-    let staged = stage_shared(&tx, plan, &b, &k, Received::synthetic(k, 0x42)).unwrap();
+    let staged = stage_shared(&tx, plan, &b, &k, Received::synthetic(&k, 0x42)).unwrap();
     tx.commit().unwrap();
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -233,7 +233,7 @@ fn shared_driver_first_t1_closes_both_then_t2_publishes_same_epoch_and_first_roo
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
-    let staged = stage_shared(&tx, &plan, &b, &k, Received::synthetic(k, 0x42)).unwrap();
+    let staged = stage_shared(&tx, &plan, &b, &k, Received::synthetic(&k, 0x42)).unwrap();
     tx.commit().unwrap();
     assert_eq!(attempt(&db, &b.head().op), 0);
     assert_eq!(
@@ -273,7 +273,7 @@ fn shared_driver_reset_t1_cuts_both_roles_without_fallback_and_t2_reopens_one_ne
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
-    let staged = stage_shared(&tx, &plan, &r, &k, Received::synthetic(k, 0x55)).unwrap();
+    let staged = stage_shared(&tx, &plan, &r, &k, Received::synthetic(&k, 0x55)).unwrap();
     tx.commit().unwrap();
     assert_eq!(attempt(&db, &r.head().op), 0);
     assert_eq!(
@@ -324,7 +324,7 @@ fn shared_driver_crossed_low_web_scope_rolls_back_and_interrupted_t2_remains_ori
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
-        assert!(stage_shared(&tx, &plan, &r, &k, Received::synthetic(cross, 0x55)).is_err());
+        assert!(stage_shared(&tx, &plan, &r, &k, Received::synthetic(&cross, 0x55)).is_err());
         assert_eq!(scalar(&tx, "SELECT count(*) FROM main.credential_reset"), 1); // partial before rollback
         tx.rollback().unwrap();
     }
@@ -334,7 +334,7 @@ fn shared_driver_crossed_low_web_scope_rolls_back_and_interrupted_t2_remains_ori
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
-    let staged = stage_shared(&tx, &plan, &r, &k, Received::synthetic(k, 0x55)).unwrap();
+    let staged = stage_shared(&tx, &plan, &r, &k, Received::synthetic(&k, 0x55)).unwrap();
     tx.commit().unwrap();
     {
         let tx = db
@@ -395,7 +395,7 @@ fn shared_driver_open_old_file_or_directory_birth_refuses_before_capture_and_aga
         assert!(forbid_unsettled_births(&tx, old.op).is_err()); // the same actual pre-prompt helper
         let change = reset(old.clone());
         let k = key(&change);
-        assert!(stage_shared(&tx, &plan, &change, &k, Received::synthetic(k, 0x55)).is_err()); // repeat inside T1
+        assert!(stage_shared(&tx, &plan, &change, &k, Received::synthetic(&k, 0x55)).is_err()); // repeat inside T1
         assert_eq!(scalar(&tx, "SELECT count(*) FROM main.credential_reset"), 0);
         tx.rollback().unwrap();
         two(&db, &old);

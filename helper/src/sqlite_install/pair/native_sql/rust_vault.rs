@@ -200,23 +200,6 @@ pub(in crate::sqlite_install::pair) struct SetupSpec {
     pub sid: [u8; 28],
     pub record: Id,
 }
-impl SetupSpec {
-    pub(in crate::sqlite_install::pair) fn new(login: Vec<u8>) -> io::Result<Self> {
-        if !shared_login(&login) {
-            return Err(wrong());
-        }
-        let mut sid = [0; 28];
-        sid[..12].copy_from_slice(&SID_PREFIX);
-        sid[12..24].copy_from_slice(&random::<12>()?);
-        sid[24..].copy_from_slice(&1000u32.to_le_bytes());
-        Ok(Self {
-            account: random()?,
-            login,
-            sid,
-            record: random()?,
-        })
-    }
-}
 #[derive(Clone, Debug)]
 pub(in crate::sqlite_install::pair) enum Desired {
     Setup(SetupSpec),

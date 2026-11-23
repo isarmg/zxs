@@ -108,29 +108,28 @@ impl Scope {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct Responsibilities {
-    pub(super) publication: bool,
-    pub(super) selected_file: bool,
-    pub(super) directory_origin: bool,
-    pub(super) file_birth: bool,
-    pub(super) file_rename_history: bool,
-    pub(super) transfer_history: bool,
-    pub(super) pending_transfer: bool,
-    pub(super) armed_cleanup: bool,
-    pub(super) unproved_cleanup: bool,
+/// Column order in the bounded responsibilities query.
+#[derive(Clone, Copy)]
+#[repr(usize)]
+pub(super) enum Witness {
+    Publication = 0,
+    SelectedFile = 1,
+    DirectoryOrigin = 2,
+    FileBirth = 3,
+    FileRenameHistory = 4,
+    TransferHistory = 5,
+    PendingTransfer = 6,
+    ArmedCleanup = 7,
+    UnprovedCleanup = 8,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Responsibilities([bool; 9]);
 impl Responsibilities {
+    pub(super) fn present(&self, witness: Witness) -> bool {
+        self.0[witness as usize]
+    }
     fn any(&self) -> bool {
-        self.publication
-            || self.selected_file
-            || self.directory_origin
-            || self.file_birth
-            || self.file_rename_history
-            || self.transfer_history
-            || self.pending_transfer
-            || self.armed_cleanup
-            || self.unproved_cleanup
+        self.0.contains(&true)
     }
 }
 
@@ -218,17 +217,17 @@ fn responsibilities(tx: &Transaction<'_>, volume: &Id) -> io::Result<Responsibil
         include_str!("retire_ordinary/responsibilities.sql"),
         [&volume[..]],
         |r| {
-            Ok(Responsibilities {
-                publication: r.get(0)?,
-                selected_file: r.get(1)?,
-                directory_origin: r.get(2)?,
-                file_birth: r.get(3)?,
-                file_rename_history: r.get(4)?,
-                transfer_history: r.get(5)?,
-                pending_transfer: r.get(6)?,
-                armed_cleanup: r.get(7)?,
-                unproved_cleanup: r.get(8)?,
-            })
+            Ok(Responsibilities([
+                r.get(Witness::Publication as usize)?,
+                r.get(Witness::SelectedFile as usize)?,
+                r.get(Witness::DirectoryOrigin as usize)?,
+                r.get(Witness::FileBirth as usize)?,
+                r.get(Witness::FileRenameHistory as usize)?,
+                r.get(Witness::TransferHistory as usize)?,
+                r.get(Witness::PendingTransfer as usize)?,
+                r.get(Witness::ArmedCleanup as usize)?,
+                r.get(Witness::UnprovedCleanup as usize)?,
+            ]))
         },
     )
     .map_err(sql)

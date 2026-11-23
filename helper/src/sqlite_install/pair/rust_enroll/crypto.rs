@@ -1,8 +1,6 @@
 //! Exact foreground-approved offline Rust vault providers.
 //! No stored Helper approval, caller-named library or runtime dependency.
-use crate::sqlite_install::pair::fresh_issuer::{
-    CryptoPins, compiled_schema, require_private_install,
-};
+use crate::sqlite_install::pair::fresh_issuer::{CryptoPins, compiled_schema};
 use crate::{
     fs_tools::RuntimeFile,
     pinned::helper_elf::ForegroundElf,
@@ -66,12 +64,6 @@ pub(in crate::sqlite_install::pair) struct Cryptography {
     gpgerr: RuntimeFile,
 }
 impl Cryptography {
-    pub(in crate::sqlite_install::pair) fn fresh(pins: CryptoPins) -> io::Result<Self> {
-        require_private_install()?;
-        Self::provider_policy(pins)?;
-        let helper = CredentialHelper::bind(ForegroundElf::host()?, pins.helper)?;
-        Self::selected_providers(pins, helper)
-    }
     pub(in crate::sqlite_install::pair) fn from_worker(
         pins: CryptoPins,
         helper: CredentialHelper,

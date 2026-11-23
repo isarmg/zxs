@@ -94,9 +94,6 @@ impl Image {
         }
         Ok(())
     }
-    pub(in crate::sqlite_install::pair) fn path(&self) -> &Path {
-        self.original.path()
-    }
     pub(in crate::sqlite_install::pair) fn includes(&self, entity: Entity) -> bool {
         self.original.includes(entity)
     }

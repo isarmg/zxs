@@ -61,14 +61,14 @@ fn historic_origins_never_clear_a_currently_empty_volume() {
         params![&id[..], &op[..]],
     )
     .unwrap();
-    assert!(r().publication); // independent of live SMB setting; none exists here
+    assert!(r().present(Witness::Publication)); // independent of live SMB setting; none exists here
     t.execute("DELETE FROM root_share", []).unwrap();
     t.execute(
         "INSERT INTO file_transfer VALUES(?1,?2,?3,1)",
         params![&other[..], &id[..], &op[..]],
     )
     .unwrap();
-    assert!(r().pending_transfer);
+    assert!(r().present(Witness::PendingTransfer));
     t.execute("UPDATE file_transfer SET pending=0", []).unwrap();
     for status in [0, 1, 2] {
         t.execute("DELETE FROM file_transfer_source", []).unwrap();
@@ -78,9 +78,16 @@ fn historic_origins_never_clear_a_currently_empty_volume() {
         )
         .unwrap();
         let now = r();
-        assert!(now.transfer_history && now.any() && !now.pending_transfer);
+        assert!(
+            now.present(Witness::TransferHistory)
+                && now.any()
+                && !now.present(Witness::PendingTransfer)
+        );
         assert_eq!(
-            (now.armed_cleanup, now.unproved_cleanup),
+            (
+                now.present(Witness::ArmedCleanup),
+                now.present(Witness::UnprovedCleanup)
+            ),
             (status == 0, status == 2)
         );
     }
@@ -90,13 +97,13 @@ fn historic_origins_never_clear_a_currently_empty_volume() {
         params![&id[..], &op[..]],
     )
     .unwrap();
-    assert!(r().file_birth && !r().selected_file);
+    assert!(r().present(Witness::FileBirth) && !r().present(Witness::SelectedFile));
     t.execute(
         "INSERT INTO directory_entry VALUES(?1,?2)",
         params![&id[..], &op[..]],
     )
     .unwrap();
-    assert!(r().directory_origin);
+    assert!(r().present(Witness::DirectoryOrigin));
     t.execute("INSERT INTO operation VALUES(?1,14)", [&op[..]])
         .unwrap();
     let missing = || {
@@ -113,7 +120,7 @@ fn historic_origins_never_clear_a_currently_empty_volume() {
         params![&id[..], &op[..]],
     )
     .unwrap();
-    assert!(r().file_rename_history && !missing());
+    assert!(r().present(Witness::FileRenameHistory) && !missing());
 }
 
 #[test]

@@ -63,9 +63,6 @@ impl InitialDatabase {
     }
     // Metadata only, on the same non-readable SQLite inode. The agreeing
     // low reader and final host verifier use this only for a short observation.
-    pub(in crate::sqlite_install::pair) fn observation(&self) -> io::Result<[u8; 64]> {
-        Self::observation_on(&self.original, self.uid)
-    }
     pub(in crate::sqlite_install::pair) fn observation_on(
         fd: &File,
         uid: u32,

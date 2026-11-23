@@ -1,10 +1,10 @@
 //! Nonsecret observations of the exact authorized transaction cut; none
 //! grants permission or represents a received NTLM credential.
-use super::{Id, bad, manifest::seal_bytes};
+use super::{Id, bad};
 use crate::{
     smb_profile::rust_first::RustPlan, sqlite_install::pair::native_sql::rust_vault::ActiveRustMeta,
 };
-use std::{fs::File, io};
+use std::io;
 
 const MAGIC: &[u8; 16] = b"ZXS-RUST-OBS-02\0";
 const PART: usize = 252;
@@ -41,9 +41,6 @@ impl Observed {
             b.extend(v.sid);
         }
         Ok(b)
-    }
-    pub(in crate::sqlite_install::pair) fn read(file: &File, plan: &RustPlan) -> io::Result<Self> {
-        Self::decode(&seal_bytes(file, LIMIT)?, plan)
     }
     pub(super) fn decode(bytes: &[u8], plan: &RustPlan) -> io::Result<Self> {
         if bytes.len() > LIMIT {

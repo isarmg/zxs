@@ -138,7 +138,7 @@ struct End {
     peer: UCred,
 }
 impl End {
-    fn original(fd: File, peer: UCred, binding: Binding) -> io::Result<Self> {
+    fn original(fd: File, peer: UCred, binding: &Binding) -> io::Result<Self> {
         if peer.pid == getpid()
             || peer.uid.is_root()
             || peer.gid.is_root()
@@ -150,7 +150,7 @@ impl End {
         let channel = Channel::from_owned_child_session(fd, peer, binding.transcript)?;
         Ok(Self {
             channel,
-            binding,
+            binding: *binding,
             peer,
         })
     }
@@ -164,7 +164,7 @@ impl Writer {
     pub(super) fn connect(
         fd: File,
         peer: UCred,
-        binding: Binding,
+        binding: &Binding,
         until: Instant,
         alive: impl Fn() -> io::Result<()>,
     ) -> io::Result<Self> {
@@ -205,9 +205,9 @@ pub(in crate::sqlite_install::pair) struct StagedWeb {
 }
 impl Received {
     #[cfg(test)]
-    pub(in crate::sqlite_install::pair) fn synthetic(binding: Binding, pattern: u8) -> Self {
+    pub(in crate::sqlite_install::pair) fn synthetic(binding: &Binding, pattern: u8) -> Self {
         Self {
-            binding,
+            binding: *binding,
             web: PreparedWeb::synthetic([pattern; 16], [pattern.wrapping_add(1); 32]),
         }
     }
@@ -259,7 +259,7 @@ impl Reader {
     pub(super) fn connect(
         fd: File,
         peer: UCred,
-        binding: Binding,
+        binding: &Binding,
         alive: impl Fn() -> io::Result<()>,
     ) -> io::Result<Self> {
         protected_process(peer.uid.as_raw(), peer.gid.as_raw())?;
@@ -437,7 +437,7 @@ mod tests {
         }
     }
     fn exact_material() -> File {
-        JointWeb::synthetic(binding())
+        JointWeb::synthetic(&binding())
             .seal_for_peer(&binding())
             .unwrap()
     }
@@ -445,7 +445,7 @@ mod tests {
         let socket = File::from(fcntl_dupfd_cloexec(io::stdin(), 3).unwrap());
         // Unit test for genuine different process SCM only. No privilege,
         // tracing change, credential, database on disk or host runtime.
-        let end = End::original(socket, peer(getppid().unwrap()), binding()).unwrap();
+        let end = End::original(socket, peer(getppid().unwrap()), &binding()).unwrap();
         let until = Instant::now() + Duration::from_secs(5);
         if case == "wrong_ready" {
             assert!(end.await_reader(until, || Ok(())).is_err());
@@ -548,7 +548,7 @@ mod tests {
             } else {
                 pid
             };
-            let end = End::original(connected, peer(wanted), binding()).unwrap();
+            let end = End::original(connected, peer(wanted), &binding()).unwrap();
             if case == "wrong_ready" {
                 // Even with the correct reader's genuine SCM credentials,
                 // a different Ready tuple may not obtain any material.
@@ -702,7 +702,7 @@ mod tests {
         let other = other();
         // Deliberately impossible pair: reject before even creating a memfd,
         // or binding the derived Web tuple to any SQLite statement.
-        assert!(JointWeb::synthetic(b).seal_for_peer(&other).is_err());
+        assert!(JointWeb::synthetic(&b).seal_for_peer(&other).is_err());
         let material = || Received {
             binding: b,
             web: PreparedWeb::synthetic([0x31; 16], [0x32; 32]),

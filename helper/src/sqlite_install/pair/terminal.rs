@@ -322,7 +322,7 @@ impl SelectedInput {
         uid: u32,
         gid: u32,
         crypto: Enrollment,
-        binding: Binding,
+        binding: &Binding,
     ) -> io::Result<JointEntry<'_>> {
         self.audit.require_current()?;
         self.channel.require()?;
@@ -332,7 +332,7 @@ impl SelectedInput {
             selected: self,
             workspace,
             crypto,
-            binding,
+            binding: *binding,
         })
     }
     fn held_password(&self, prompt: Prompt) -> io::Result<Entry> {
@@ -389,9 +389,9 @@ impl JointWeb {
         self.web.seal_for_joint_peer(JointPacking(()))
     }
     #[cfg(test)]
-    pub(super) fn synthetic(binding: Binding) -> Self {
+    pub(super) fn synthetic(binding: &Binding) -> Self {
         Self {
-            binding,
+            binding: *binding,
             web: PreparedWeb::synthetic([0x31; 16], [0x32; 32]),
         }
     }

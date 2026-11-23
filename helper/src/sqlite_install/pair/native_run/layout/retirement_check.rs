@@ -6,7 +6,7 @@ use crate::sqlite_install::{
     originals::LockedSystem,
     pair::{
         ExplicitSubject,
-        retire_ordinary::{self, Preflight, Scope},
+        retire_ordinary::{self, Preflight, Scope, Witness},
     },
 };
 use rustix::process::{Pid, getppid};
@@ -177,15 +177,15 @@ impl Reply {
         }
         let w = &p.witnesses;
         let blockers = [
-            (w.publication, PUBLICATION),
-            (w.selected_file, SELECTED_FILE),
-            (w.directory_origin, DIRECTORY),
-            (w.file_birth, FILE_BIRTH),
-            (w.file_rename_history, RENAME),
-            (w.transfer_history, TRANSFER),
-            (w.pending_transfer, PENDING),
-            (w.armed_cleanup, CLEANUP),
-            (w.unproved_cleanup, CLEANUP_UNKNOWN),
+            (w.present(Witness::Publication), PUBLICATION),
+            (w.present(Witness::SelectedFile), SELECTED_FILE),
+            (w.present(Witness::DirectoryOrigin), DIRECTORY),
+            (w.present(Witness::FileBirth), FILE_BIRTH),
+            (w.present(Witness::FileRenameHistory), RENAME),
+            (w.present(Witness::TransferHistory), TRANSFER),
+            (w.present(Witness::PendingTransfer), PENDING),
+            (w.present(Witness::ArmedCleanup), CLEANUP),
+            (w.present(Witness::UnprovedCleanup), CLEANUP_UNKNOWN),
             (p.only_ordinary, ONLY_ORDINARY),
             (p.extra_entry, EXTRA),
         ]
