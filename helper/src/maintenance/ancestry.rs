@@ -1,7 +1,9 @@
 //! Mount evidence in the current maintenance thread's namespace.
 //! Ancestry never searches other paths or recovers a hidden parent. The
 //! separate discovery cut returns only bounded, admitted mountpoint names.
-use crate::pinned::{DiscoveryAdmission, DiscoveryFdInfo, Entity, Mount};
+use crate::pinned::{DiscoveryAdmission, DiscoveryFdInfo};
+#[cfg(any(test, feature = "embedded-zxs"))]
+use crate::pinned::{Entity, Mount};
 const PRODUCT_TOP: &str = "/zxs";
 use linux_raw_sys::general::{
     BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC,
@@ -24,14 +26,19 @@ fn unknown(why: &'static str) -> io::Error {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
+enum MountPlace {
+    NamespaceRoot,
+    ProductRoot,
+    Other,
+}
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct Row {
     parent: u64,
     device: u64,
     whole: bool,
     devtmpfs: bool,
-    product_root: bool,
     magic: Option<u32>,
-    namespace_root: bool,
+    place: MountPlace,
 }
 fn data_magic(fs: &[u8]) -> Option<u32> {
     match fs {
@@ -104,6 +111,7 @@ impl DiscoveryTable {
         }
         Ok(Some(id))
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     fn product_crossing(&self, parent: u64) -> io::Result<Option<u64>> {
         let next = self.named(Path::new(PRODUCT_TOP), Some(parent))?;
         // Rule out a subtree before crossing, not after querying it. The
@@ -124,9 +132,11 @@ pub(crate) struct DiscoveryView {
     fds: DiscoveryFdInfo,
 }
 impl DiscoveryView {
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn product_crossing(&self, parent: u64) -> io::Result<Option<u64>> {
         self.table.product_crossing(parent)
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn require_product_mount(
         &self,
         child: Mount,
@@ -214,7 +224,7 @@ impl Mounts {
                 automatic
                     && row.whole
                     && row.device != 0
-                    && !row.namespace_root
+                    && row.place != MountPlace::NamespaceRoot
                     && path.to_str().is_some()
             }) {
                 if roots.len() == DISCOVERY_ROOTS {
@@ -251,7 +261,7 @@ impl Mounts {
             else {
                 return false;
             };
-            if row.namespace_root {
+            if row.place == MountPlace::NamespaceRoot {
                 return true;
             }
             if row.parent == id {
@@ -326,9 +336,12 @@ impl Mounts {
                 device,
                 whole: root == b"/",
                 devtmpfs: fs_type == b"devtmpfs",
-                product_root: point == PRODUCT_TOP.as_bytes(),
                 magic: data_magic(fs_type),
-                namespace_root: point == b"/",
+                place: match point {
+                    b"/" => MountPlace::NamespaceRoot,
+                    path if path == PRODUCT_TOP.as_bytes() => MountPlace::ProductRoot,
+                    _ => MountPlace::Other,
+                },
             };
             if !(0..2).all(|_| words.next().is_some_and(|w| !w.is_empty()))
                 || words.next().is_some()
@@ -372,6 +385,7 @@ impl Mounts {
     /// than the mountinfo superblock device, so check the root inode there.
     /// This does not prove the underlying physical drive or exclude a bind
     /// of a whole independently selected filesystem root.
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn require_product_mount(
         &self,
         child: Mount,
@@ -382,7 +396,7 @@ impl Mounts {
         if child.id != parent
             && child.at_root == Some(true)
             && self.0.get(&child.id).is_some_and(|row| {
-                row.product_root
+                row.place == MountPlace::ProductRoot
                     && row.whole
                     && row.parent == parent
                     && row.magic == Some(magic)

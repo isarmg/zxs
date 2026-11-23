@@ -274,6 +274,7 @@ impl Pinned {
         one.local = Some(Arc::clone(scope));
         Ok(one)
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn require_local_root(scope: &DiscoveryView) -> io::Result<()> {
         Self::open_guarded(Path::new("/"), Kind::Directory, true, Some(scope)).map(drop)
     }
@@ -381,6 +382,7 @@ impl Pinned {
     pub(crate) fn entity(&self) -> Entity {
         *self.chain.last().expect("root and leaf are present")
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn visible_chain(&self) -> &[Entity] {
         &self.chain
     }
@@ -392,6 +394,7 @@ impl Pinned {
         self.fd.metadata()
     }
 
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn local_scope(&self) -> Option<&Arc<DiscoveryView>> {
         self.local.as_ref()
     }
@@ -443,6 +446,7 @@ impl Pinned {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn passive_mount_observation(&self) -> bool {
         self.no_automount
     }
@@ -653,14 +657,17 @@ impl LocalDataFile {
 
 /// A fixed 101-byte SQLite claim, only below a separately authorized and
 /// held storage directory. Never a data/backup/health or caller-path reader.
+#[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) fn sqlite_claim_reader(pin: &File, entity: Entity, mount: u64) -> io::Result<File> {
     selected_claim_reader(pin, entity, mount, false)
 }
 
+#[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) fn discovery_claim_reader(pin: &File, entity: Entity, mount: u64) -> io::Result<File> {
     selected_claim_reader(pin, entity, mount, true)
 }
 
+#[cfg(any(test, feature = "embedded-zxs"))]
 fn selected_claim_reader(
     pin: &File,
     entity: Entity,
@@ -682,9 +689,9 @@ fn selected_claim_reader(
         pin,
         entity,
         if passive {
-            ReaderBoundary::DiscoveryControlMount(mount)
+            ReaderBoundary::Mount(mount, MountRead::PassiveNoAtime)
         } else {
-            ReaderBoundary::SelectedControlMount(mount)
+            ReaderBoundary::Mount(mount, MountRead::ProcNoAtime)
         },
     )
 }
@@ -702,11 +709,16 @@ pub(crate) fn external_import_reader(pin: &File, original: Entity, mount: u64) -
             "external import no longer selects the original local file",
         ));
     }
-    reopen_admitted_reader(pin, original, ReaderBoundary::DiscoveryControlMount(mount))
+    reopen_admitted_reader(
+        pin,
+        original,
+        ReaderBoundary::Mount(mount, MountRead::PassiveNoAtime),
+    )
 }
 
 /// Only the root-owned nonsecret live configuration or bound record below a separately
 /// admitted instance root. The worker may update atime; no arbitrary path.
+#[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) fn public_record_reader(pin: &File, mount: u64, length: u64) -> io::Result<File> {
     let m = pin.metadata()?;
     if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)
@@ -724,7 +736,7 @@ pub(crate) fn public_record_reader(pin: &File, mount: u64, length: u64) -> io::R
     reopen_admitted_reader(
         pin,
         Entity::of(&m)?,
-        ReaderBoundary::PublicRecordMount(mount),
+        ReaderBoundary::Mount(mount, MountRead::PublicAtime),
     )
 }
 
@@ -779,11 +791,17 @@ pub(crate) fn installed_regular_reader(pin: &File) -> io::Result<File> {
 // caller only reads fixed private control names below a separately selected, held
 // storage directory. A current mount ID binds its descriptors, not its provenance.
 #[derive(Copy, Clone)]
+enum MountRead {
+    PassiveNoAtime,
+    #[cfg(any(test, feature = "embedded-zxs"))]
+    ProcNoAtime,
+    #[cfg(any(test, feature = "embedded-zxs"))]
+    PublicAtime,
+}
+#[derive(Copy, Clone)]
 enum ReaderBoundary {
     DataFilesystem(u32),
-    SelectedControlMount(u64),
-    DiscoveryControlMount(u64),
-    PublicRecordMount(u64),
+    Mount(u64, MountRead),
     InstalledRegular(u32),
 }
 impl ReaderBoundary {
@@ -792,20 +810,24 @@ impl ReaderBoundary {
             Self::DataFilesystem(magic) | Self::InstalledRegular(magic) => {
                 Ok(filesystem(fd)? == Some(magic))
             }
-            Self::SelectedControlMount(id)
-            | Self::DiscoveryControlMount(id)
-            | Self::PublicRecordMount(id) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
+            Self::Mount(id, _) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
         }
+    }
+    fn uses_passive_proc(self) -> bool {
+        matches!(self, Self::Mount(_, MountRead::PassiveNoAtime))
+    }
+    fn permits_atime(self) -> bool {
+        #[cfg(any(test, feature = "embedded-zxs"))]
+        if matches!(self, Self::Mount(_, MountRead::PublicAtime)) {
+            return true;
+        }
+        matches!(self, Self::InstalledRegular(_))
     }
 }
 
-fn reopen_admitted_reader(
-    pin: &File,
-    entity: Entity,
-    boundary: ReaderBoundary,
-) -> io::Result<File> {
+fn original_fd_directory(passive: bool) -> io::Result<(File, Option<u64>)> {
     let pid = std::process::id().to_string();
-    let (fds, passive_mount) = if matches!(boundary, ReaderBoundary::DiscoveryControlMount(_)) {
+    let resolved = if passive {
         let (proc, mount) = passive_proc_root()?;
         let proc_pid = passive_proc_child(&proc, OsStr::new(&pid), mount, true)?;
         (
@@ -827,6 +849,15 @@ fn reopen_admitted_reader(
         }
         (fds, None)
     };
+    Ok(resolved)
+}
+
+fn reopen_admitted_reader(
+    pin: &File,
+    entity: Entity,
+    boundary: ReaderBoundary,
+) -> io::Result<File> {
+    let (fds, passive_mount) = original_fd_directory(boundary.uses_passive_proc())?;
     // Even a procfs directory must belong to our descriptor table. Follow the kernel
     // link for the directory's own held fd and compare identities before using it.
     let myself = fds.as_raw_fd().to_string();
@@ -887,10 +918,7 @@ fn reopen_admitted_reader(
         ));
     }
     let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC;
-    let flags = if matches!(
-        boundary,
-        ReaderBoundary::InstalledRegular(_) | ReaderBoundary::PublicRecordMount(_)
-    ) {
+    let flags = if boundary.permits_atime() {
         flags
     } else {
         flags | OFlags::NOATIME
@@ -1097,7 +1125,9 @@ mod tests {
     }
     #[test]
     fn reopening_a_pinned_public_object_does_not_open_its_replacement_by_name() {
-        use super::{Entity, Kind, Mount, Pinned, ReaderBoundary, reopen_admitted_reader};
+        use super::{
+            Entity, Kind, Mount, MountRead, Pinned, ReaderBoundary, reopen_admitted_reader,
+        };
         use std::io::Read;
         let area = tempfile::tempdir().unwrap();
         let named = area.path().join("original");
@@ -1107,9 +1137,12 @@ mod tests {
         let id = Mount::on(&old.fd).unwrap().unwrap().id;
         std::fs::rename(&named, retained).unwrap();
         std::os::unix::fs::symlink("does-not-exist", &named).unwrap();
-        let mut reopened =
-            reopen_admitted_reader(&old.fd, old.entity(), ReaderBoundary::PublicRecordMount(id))
-                .unwrap();
+        let mut reopened = reopen_admitted_reader(
+            &old.fd,
+            old.entity(),
+            ReaderBoundary::Mount(id, MountRead::PublicAtime),
+        )
+        .unwrap();
         let mut b = Vec::new();
         reopened.read_to_end(&mut b).unwrap();
         assert_eq!(b, b"selected bytes");

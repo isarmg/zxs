@@ -10,6 +10,7 @@ use rustix::{
     io::Errno,
     process::{Pid, getegid, geteuid, getgid, getpid, getppid, getuid},
 };
+#[cfg(any(test, feature = "embedded-zxs"))]
 use sha2::{Digest, Sha256};
 use std::{
     ffi::OsStr,
@@ -35,16 +36,21 @@ fn no() -> io::Error {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Role {
+    #[cfg(any(test, feature = "embedded-zxs"))]
     Privileged,
-    Local { uid: u32, gid: u32 },
+    Local {
+        uid: u32,
+        gid: u32,
+    },
 }
 impl Role {
     fn require(self) -> io::Result<()> {
         let (uid, gid) = (getuid().as_raw(), getgid().as_raw());
         let want = match self {
+            #[cfg(any(test, feature = "embedded-zxs"))]
             Self::Privileged => (0, 0),
             Self::Local { uid, gid } if uid != 0 && gid != 0 => (uid, gid),
-            _ => return Err(no()),
+            Self::Local { .. } => return Err(no()),
         };
         if (uid, gid) != want || geteuid().as_raw() != uid || getegid().as_raw() != gid {
             return Err(no());
@@ -56,6 +62,7 @@ impl Role {
             return false;
         }
         match self {
+            #[cfg(any(test, feature = "embedded-zxs"))]
             Self::Privileged => (s.uid, s.gid, s.mode) == (0, 0, 0o100_755),
             Self::Local { uid, .. } => match s.uid {
                 0 => s.gid == 0 && s.mode == 0o100_755,
@@ -451,6 +458,7 @@ pub(crate) struct ForegroundElf {
     role: Role,
 }
 impl ForegroundElf {
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn host() -> io::Result<Self> {
         Self::select(Role::Privileged)
     }
@@ -504,6 +512,7 @@ impl ForegroundElf {
     /// A later privileged cut still independently attests the *current*
     /// proc, file policy and actual executable mapping. Its original data
     /// reader is already owned; never reopen it or accept another inode.
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn requalify_host_image(&self) -> io::Result<()> {
         if self.role != Role::Privileged {
             return Err(no());
@@ -538,6 +547,7 @@ impl ForegroundElf {
         }
         self.require()
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn require_independent_digest(&self, expected: &[u8; 32]) -> io::Result<()> {
         if expected == &[0; 32] {
             return Err(no());

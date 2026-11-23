@@ -366,7 +366,7 @@ impl Display for Report {
         )?;
         match (self.started, self.ended) {
             (Some(started), Some(ended)) if ended >= started => {
-                write!(f, " sample_unix_ms={started}..{ended}")?
+                write!(f, " sample_unix_ms={started}..{ended}")?;
             }
             _ => f.write_str(" sample_unix_ms=unavailable")?,
         }
