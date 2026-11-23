@@ -10,9 +10,11 @@ pub(crate) use recycle::RecycleReceipt;
 use crate::{fs::{HeldDir, local_uid}, hash::Sha256};
 use std::{
     collections::BTreeMap,
+    ffi::CString,
     fmt,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Read, Write},
+    os::fd::AsRawFd,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
@@ -90,6 +92,7 @@ impl Store {
         let owner = data_root.opaque_owner(c"owner")?;
         let data_directory = data_root.opaque_subdirectory(c"data")?;
         let staging_directory = data_root.opaque_subdirectory(c"staging")?;
+        discard_interrupted_intake(&data_root, &staging_directory, &owner)?;
         let data = data_directory.path.clone();
         let staging = staging_directory.path.clone();
         data_root.require_named()?;
@@ -412,6 +415,64 @@ fn read_state(path: &Path, id: Id) -> io::Result<State> {
         state.select(receipt).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid selected history: {e:?}")))?;
     }
     Ok(state)
+}
+
+/// The ordinary owner lease excludes new intake during this cold cleanup.
+/// Recognize only the flat staging format; selected data and recycle roots
+/// are not traversed. Never follow an unexpected member or read file bytes.
+fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -> io::Result<()> {
+    let owned = owner.metadata()?;
+    let require_base = || {
+        root.require_named()?;
+        staging.require_named()?;
+        let named = root.opaque_pin(c"owner")?.ok_or_else(|| invalid("intake owner lease lost its name"))?;
+        let seen = named.file.metadata()?;
+        if (owned.dev(), owned.ino()) != (seen.dev(), seen.ino()) || !root.shares_file_mount(owner)? {
+            return Err(invalid("intake owner lease was replaced"));
+        }
+        Ok(())
+    };
+    require_base()?;
+    // Enumerate the still-held staging directory on Linux, not its former
+    // pathname. The borrowed File outlives the streamed enumeration.
+    let held_path = format!("/proc/self/fd/{}", staging.file.as_raw_fd());
+    let mut changed = false;
+    for item in fs::read_dir(held_path)? {
+        let name = item?.file_name();
+        let bytes = name.as_encoded_bytes();
+        if bytes.len() != 16 || !bytes.iter().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            continue;
+        }
+        let leaf = CString::new(bytes).map_err(|_| invalid("invalid stage name"))?;
+        let candidate = || {
+            let Some(stage) = staging.child_directory(&leaf)? else { return Ok::<_, io::Error>(None); };
+            if stage.names()?.iter().any(|name| !matches!(name.as_slice(), b"payload" | b"receipt")) {
+                return Ok(None);
+            }
+            // Prove the whole flat shape before unlinking either member.
+            let payload = stage.opaque_pin(c"payload")?;
+            let receipt = stage.opaque_pin(c"receipt")?;
+            Ok(Some((stage, payload, receipt)))
+        };
+        let qualified = candidate();
+        // Candidate-local foreign layouts (including symlinks, unsupported
+        // mounts and non-regular members) are left alone. A displaced base
+        // or original owner record always invalidates the entire cleanup.
+        require_base()?;
+        let Ok(Some((stage, payload, receipt))) = qualified else { continue };
+        if let Some(pin) = payload.as_ref() {
+            stage.unlink_opaque_original(c"payload", pin)?;
+        }
+        if let Some(pin) = receipt.as_ref() {
+            stage.unlink_opaque_original(c"receipt", pin)?;
+        }
+        staging.unlink_empty_opaque_original(&leaf, &stage)?;
+        changed = true;
+    }
+    if changed {
+        staging.file.sync_all()?;
+    }
+    require_base()
 }
 
 struct Stage { path: PathBuf }

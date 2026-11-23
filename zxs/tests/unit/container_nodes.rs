@@ -291,3 +291,35 @@ fn diagnostics_keep_the_outcome_but_not_private_details() {
         "SequenceChanged(3)"
     );
 }
+
+#[test]
+fn reopen_discards_interrupted_intake_without_touching_selected_data() {
+    let (_temp, root, store) = fixture();
+    store.save(mutation(2), main(None), id(10), body(b"saved"), Some("name".into()), &b"saved"[..], || Ok(())).unwrap();
+    let unfinished = root.join("staging/0000000000000001");
+    let unknown = root.join("staging/0000000000000002");
+    let foreign_link = root.join("staging/0000000000000003");
+    let foreign_file = root.join("staging/0000000000000004");
+    let wrong_member = root.join("staging/0000000000000005");
+    ensure_dir(&unfinished).unwrap();
+    ensure_dir(&unknown).unwrap();
+    write_file(&unfinished.join("payload"), b"unfinished").unwrap();
+    write_file(&unknown.join("not-an-intake-file"), b"leave alone").unwrap();
+    std::os::unix::fs::symlink(&unknown, &foreign_link).unwrap();
+    write_file(&foreign_file, b"not a directory").unwrap();
+    ensure_dir(&wrong_member).unwrap();
+    write_file(&wrong_member.join("payload"), b"keep both old names").unwrap();
+    std::os::unix::fs::symlink(&foreign_file, wrong_member.join("receipt")).unwrap();
+    // A killed service cannot run Stage::drop; these represent the cold
+    // on-disk records without needing to start or stop a real service.
+    drop(store);
+    let reopened = Store::open(&root).unwrap();
+    assert!(!unfinished.exists());
+    assert!(unknown.join("not-an-intake-file").is_file());
+    assert!(fs::symlink_metadata(foreign_link).unwrap().is_symlink());
+    assert!(foreign_file.is_file());
+    assert_eq!(fs::read(wrong_member.join("payload")).unwrap(), b"keep both old names");
+    assert!(fs::symlink_metadata(wrong_member.join("receipt")).unwrap().is_symlink());
+    assert_eq!(read_node(&reopened, 10), b"saved");
+    assert!(reopened.receipt(mutation(3)).unwrap().is_none());
+}
