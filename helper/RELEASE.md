@@ -1,6 +1,6 @@
 # helper 独立交付核对表
 
-**现状：只有源码、测试源码和已核对的依赖来源，没有由此源码合图验收的可执行文件。** [清单](Cargo.toml)中的 `1.0.0` 是源码包版本，不是发行记录；包名是 `local-ops-helper`，命令名是 `helper`。`publish = false`，不向 crates.io 发布本包。
+**[默认 Linux 版已在 GitHub Actions 构建](https://github.com/isarmg/zxs/actions/runs/45223533959)，日志记录 ELF 摘要，未上传制品。内嵌版和实机安装仍待验收。** [清单](Cargo.toml)中的 `1.0.0` 是源码包版本，不是发行记录；包名是 `local-ops-helper`，命令名是 `helper`。`publish = false`，不向 crates.io 发布本包。
 
 [Debian 13 amd64 离线工具材料配方](packaging/debian13-amd64/README.md)已经写入：随包提取的上游 ELF、库、版权和对应源码均有来源链；本次未生成制品、安装或执行。
 

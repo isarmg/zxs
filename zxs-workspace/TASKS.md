@@ -1,12 +1,11 @@
 # ZIP Workspace 交付清单
 
-Linux 走独立本机验收；Windows、macOS 走[桌面 CI](docs/hosted-desktop-qualification.md)。下表列源码和待验项；既有验证见 [README](README.md#平台与发行状态)。
+Linux、Windows、macOS 的原生功能分别实机验收。[桌面 CI](docs/hosted-desktop-qualification.md)和[手动 FSKit SDK 检查](macos-fskit/target/QUALIFICATION.md)覆盖的范围见各自文档；既有结果见 [README](README.md#平台与发行状态)。
 
 ## 远程文件容器
 
 - 已写完待测试（Linux）：HTTPS 连接、容器和分支历史、精确节点另存、接入本机编辑卷、显式提交及按原号恢复。
-- 未写完：把 Windows 和 macOS 的原生文件交付接入桌面容器页，完成这两个平台的可编辑远程工作卷。
-- macOS 远程编辑已有[单文件私有编辑、显式封存及原键留存／恢复源码](docs/macos-remote-edit.md)，不开放 Finder 挂载或远程提交；不替代另存的系统隔离来源核验。
+- 已接入桌面容器页，待发行验收：[Windows（WinFsp）](docs/windows-remote-draft.md)和 [macOS（FSKit）](docs/macos-remote-edit.md)均有挂载、编辑、正常卸载、显式全量提交和按原操作号恢复的源码。两端默认发行包尚未启用可写挂载；待签名包和实机端到端验证。Office/WPS 等通过临时文件替换原件的保存方式尚未支持。
 
 ## 独立 ZIP 工作区
 
