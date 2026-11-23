@@ -1,7 +1,7 @@
 //! Retain the qualified system, recycle and data roster through the native Store.
 use crate::{
     container_store::{DataRoot, Store, import_one::OfflineImport, offline_catalog},
-    fs::{HeldDir, ReadAccess, local_uid},
+    fs::{HeldDir, ReadAccess, TrustedRoot, local_uid},
     headless_auth::{Account, Descriptor, SelectedRoot},
 };
 use std::{
@@ -60,9 +60,10 @@ fn root(
     pool: &[u8; 16],
     uid: u32,
     access: ReadAccess,
-) -> io::Result<HeldDir> {
-    let held = HeldDir::trusted_storage(selected.path())?;
-    let mut marker = role_member(&held, access)?;
+) -> io::Result<TrustedRoot> {
+    let selection = TrustedRoot::open(selected.path())?;
+    let held = &selection.held;
+    let mut marker = role_member(held, access)?;
     let initial = marker.metadata()?;
     if !initial.is_file()
         || initial.mode() & 0o7777 != 0o600
@@ -78,7 +79,7 @@ fn root(
     if body[0] != role || body[1..17] != pool[..] || body[17..] != selected.token {
         return Err(refused());
     }
-    let observed = role_member(&held, access)?.metadata()?;
+    let observed = role_member(held, access)?.metadata()?;
     let stamp = |m: &std::fs::Metadata| {
         (
             m.dev(),
@@ -94,7 +95,7 @@ fn root(
         return Err(refused());
     }
     held.require_named()?;
-    Ok(held)
+    Ok(selection)
 }
 
 fn recycle_disjoint(recycle: &HeldDir, other: &HeldDir) -> io::Result<bool> {
@@ -116,14 +117,14 @@ impl SelectedStart {
         if matches!(uid, 0 | 65534 | u32::MAX) {
             return Err(refused());
         }
-        let state = HeldDir::trusted_storage(Path::new(DEFAULT_STATE))?;
-        state.share()?; // same original directory lease used by the offline issuer
-        let descriptor = Descriptor::read_selected(&open_member(&state, DESCRIPTOR)?, uid)?;
+        let state = TrustedRoot::open(Path::new(DEFAULT_STATE))?;
+        state.held.share()?; // same original directory lease used by the offline issuer
+        let descriptor = Descriptor::read_selected(&open_member(&state.held, DESCRIPTOR)?, uid)?;
         Self::from_original(state, descriptor, ReadAccess::Ordinary)
     }
 
     pub(super) fn from_original(
-        state: HeldDir,
+        state: TrustedRoot,
         descriptor: Descriptor,
         access: ReadAccess,
     ) -> io::Result<Self> {
@@ -134,26 +135,27 @@ impl SelectedStart {
         let data = roots
             .data
             .iter()
-            .map(|selected| {
-                Ok(DataRoot {
-                    token: selected.token,
-                    root: root(selected, 1, &roots.pool, uid, access)?,
-                })
-            })
+            .map(|selected| Ok((selected.token, root(selected, 1, &roots.pool, uid, access)?)))
             .collect::<io::Result<Vec<_>>>()?;
-        let held = [&system, &recycle]
+        let roles = [&state, &system, &recycle]
             .into_iter()
-            .chain(data.iter().map(|volume| &volume.root))
+            .chain(data.iter().map(|(_, root)| root))
             .collect::<Vec<_>>();
-        for (i, root) in held.iter().enumerate() {
-            if state.path.starts_with(&root.path)
-                || root.path.starts_with(&state.path)
-                || root.entity == state.entity
-                || held[..i].iter().any(|older| older.entity == root.entity)
-            {
-                return Err(refused());
-            }
+        if roles
+            .iter()
+            .enumerate()
+            .any(|(i, root)| roles[..i].iter().any(|older| root.overlaps(older)))
+        {
+            return Err(refused());
         }
+        let (state, system, recycle) = (state.held, system.held, recycle.held);
+        let data = data
+            .into_iter()
+            .map(|(token, at)| DataRoot {
+                token,
+                root: at.held,
+            })
+            .collect::<Vec<_>>();
         if !recycle_disjoint(&recycle, &system)? {
             return Err(refused());
         }

@@ -11,7 +11,9 @@ use std::path::{Component, Path, PathBuf};
 mod mounts;
 mod noatime;
 mod relative;
+mod trusted;
 pub(crate) use noatime::ReadAccess;
+pub(crate) use trusted::TrustedRoot;
 
 unsafe extern "C" {
     fn zxs_open_directory(parent: c_int, name: *const c_char) -> c_int;
@@ -151,43 +153,9 @@ impl HeldDir {
         })
     }
 
-    /// Each canonical path component must resist untrusted rename, not
-    /// just the selected directory.
-    /// A trusted-owned sticky ancestor (e.g. /tmp) protects its existing,
-    /// trusted-owned child. Symlink traversal is never allowed.
+    #[cfg(test)]
     pub(crate) fn trusted_storage(path: &Path) -> io::Result<Self> {
-        check_path(path)?;
-        let uid = local_uid();
-        if uid == 0 || uid == u32::MAX {
-            return Err(invalid("storage requires a real non-root service account"));
-        }
-        let mut file = File::open("/")?;
-        for component in path.components() {
-            if let Component::Normal(name) = component {
-                let p = file.metadata()?;
-                if !(p.uid() == 0 || p.uid() == uid)
-                    || (p.mode() & 0o022 != 0 && p.mode() & 0o1000 == 0)
-                {
-                    return Err(invalid("untrusted storage ancestor"));
-                }
-                file = child(
-                    &file,
-                    &CString::new(name.as_bytes())
-                        .map_err(|_| invalid("invalid storage component"))?,
-                )?;
-            }
-        }
-        let m = file.metadata()?;
-        if m.uid() != uid || m.mode() & 0o7777 != 0o700 {
-            return Err(invalid(
-                "selected storage requires its exact private directory",
-            ));
-        }
-        Ok(Self {
-            entity: entity(&file)?,
-            file,
-            path: path.to_owned(),
-        })
+        Ok(TrustedRoot::open(path)?.held)
     }
 
     pub(crate) fn require_named(&self) -> io::Result<()> {

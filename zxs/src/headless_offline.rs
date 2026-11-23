@@ -1,7 +1,7 @@
 //! Private Helper bridge. One inherited read-only state directory, no listener.
 use crate::{
     display,
-    fs::{HeldDir, OpaquePin, ReadAccess, local_uid},
+    fs::{HeldDir, OpaquePin, ReadAccess, TrustedRoot, local_uid},
     headless_auth::Descriptor,
     headless_start::{DEFAULT_STATE, DESCRIPTOR, SelectedStart},
 };
@@ -53,13 +53,14 @@ pub(super) fn retain() -> io::Result<(OfflineFence, SelectedStart)> {
         return Err(refused());
     }
     let lease = File::from(io::stdin().as_fd().try_clone_to_owned()?);
-    let state = HeldDir::trusted_storage(Path::new(DEFAULT_STATE))?;
-    verify_lease(&lease, &state, uid)?;
+    let state = TrustedRoot::open(Path::new(DEFAULT_STATE))?;
+    verify_lease(&lease, &state.held, uid)?;
     let original = state
+        .held
         .opaque_pin_with(DESCRIPTOR, ReadAccess::NoAtime)?
         .ok_or_else(refused)?;
     let (descriptor, binding) = Descriptor::read_bound(&original.file, uid)?;
-    original.require(&state, DESCRIPTOR)?;
+    original.require(&state.held, DESCRIPTOR)?;
     let selection = SelectedStart::from_original(state, descriptor, ReadAccess::NoAtime)?;
     Ok((
         OfflineFence {
