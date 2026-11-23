@@ -162,3 +162,18 @@ fn deletion_is_an_exact_recycle_request_and_never_a_purge_route() {
         })
     );
 }
+
+#[test]
+fn initial_name_uses_the_storage_display_rule_before_body_intake() {
+    for invalid in ["612e", "6120", "613a62", "613c62", "610062", "ff"] {
+        assert_eq!(
+            parsed(
+                "main",
+                &[("Zxs-Base-Node", "0"), ("Zxs-Initial-Name", invalid)]
+            ),
+            Err(Rejected::Value)
+        );
+    }
+    assert!(name_hex(&"61".repeat(255)).is_ok());
+    assert!(matches!(name_hex(&"61".repeat(256)), Err(Rejected::Value)));
+}

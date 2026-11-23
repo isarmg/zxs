@@ -27,24 +27,19 @@ fn hex<const N: usize>(s: &str) -> Result<[u8; N], Rejected> {
 }
 // Initial logical name enters the control headers as ASCII hex of its UTF-8.
 fn name_hex(s: &str) -> Result<String, Rejected> {
+    use crate::display::{MAX, component};
+
     let (pairs, tail) = s.as_bytes().as_chunks::<2>();
-    if pairs.is_empty() || !tail.is_empty() {
+    if pairs.is_empty() || pairs.len() > MAX || !tail.is_empty() {
         return Err(Rejected::Value);
     }
     let bytes = pairs
         .iter()
         .map(|[high, low]| Ok((nibble(*high)? << 4) | nibble(*low)?))
         .collect::<Result<Vec<_>, Rejected>>()?;
-    let name = String::from_utf8(bytes).map_err(|_| Rejected::Value)?;
-    if name == "."
-        || name == ".."
-        || name
-            .chars()
-            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\'))
-    {
-        return Err(Rejected::Value);
-    }
-    Ok(name)
+    component(&bytes, MAX)
+        .map(str::to_owned)
+        .map_err(|_| Rejected::Value)
 }
 
 fn decimal(s: &str) -> Result<u64, Rejected> {
