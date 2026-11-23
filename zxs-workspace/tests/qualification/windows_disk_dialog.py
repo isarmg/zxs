@@ -75,6 +75,33 @@ class DesktopDecision(unittest.TestCase):
             self.assertIn(self.c.id[:8], box.alias.text())
             self.assertIsNone(box.job)
 
+    def test_historical_main_only_and_atomic_fork(self):
+        from zipworkspace.container_plan import FullBody
+        from zipworkspace.desktop.container_windows_receipt import _ticket
+        from zipworkspace.desktop.container_windows_save import _save_action
+
+        head = Node("9"*32, self.n.id, 10, "a"*64)
+        main = Branch("main", head.id, (head, self.n))
+        other = Branch("other", head.id, (head, self.n))
+        self.info.branches = (main, other)
+        self.panel.branches.currentData = lambda: main
+        with patch.object(ui, "packaged", return_value=True):
+            self.assertIs(self.ctrl._scope(False)[-1], self.n)
+            self.panel.branches.currentData = lambda: other
+            self.assertIsNone(self.ctrl._scope(False))
+
+        source = DraftSource(self.src.destination, self.src.origin, self.src.account,
+                             self.c, "main", self.n, head.id)
+        action = _save_action(source, self.key.operation, "8"*32, FullBody(6, "7"*64), "a"*32)
+        self.assertIsNone(action.head)
+        self.assertEqual(action.fork_from_main, self.n.id)
+        ticket = _ticket(self.key, source, NS(actions=(action,)))
+        self.assertEqual(ticket.change.body.branch, "main")
+        self.assertEqual(ticket.change.branch, "a"*32)
+        self.assertEqual(ticket.change.from_main, self.n.id)
+        with self.assertRaises(ui.Rejected):
+            _save_action(source, self.key.operation, "8"*32, FullBody(6, "7"*64), "main")
+
     def test_opt_in_scratch_keeps_both_files_and_original_selection(self):
         with (patch.object(ui, "packaged", return_value=True),
               patch.object(ui, "confirm", return_value=True) as consent):

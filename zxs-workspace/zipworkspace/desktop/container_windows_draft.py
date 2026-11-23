@@ -1,4 +1,4 @@
-"""Dormant NTFS working body of one exact remote branch head. No WinFsp mount or Submit."""
+"""Dormant NTFS working body of one exact remote node. No WinFsp mount or Submit."""
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from errno import EBUSY
@@ -26,7 +26,8 @@ class DraftSource:
     account: str
     container: Container  # Exact wire spelling, ID and observed sequence; never a local leaf.
     branch: str
-    head: Node
+    head: Node  # Selected base node; retained key spelling.
+    observed_main_head: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +60,7 @@ def _require_reader(connection, reader, exchange, auth, destination, origin, acc
 
 
 class WindowsDraftChoice:
-    """Review an already listed connection, branch head and explicitly selected private parent.
+    """Review an already listed connection, an eligible remote node and a private parent.
 
     Construction opens the parent only. begin() claims its handles once; closing a choice
     during acquisition cancels the handoff without seizing the worker's handles. Once begun,
@@ -75,15 +76,16 @@ class WindowsDraftChoice:
                 or type(detail) is not Detail or not _container(detail.container)
                 or not detail.container.revision or type(branch) is not Branch or not _branch(branch)
                 or branch not in detail.branches or not _node(node)
-                or node.id != branch.head or node not in branch.nodes):
-            raise Rejected("choose the original authenticated Windows reader and one exact branch head")
+                or node not in branch.nodes or (node.id != branch.head and branch.id != "main")):
+            raise Rejected("choose the original authenticated Windows reader and one exact branch head or historical main node")
         if type(max_bytes) is not int or not node.length <= max_bytes <= _LIMIT:
             raise Rejected("select an explicit logical byte ceiling large enough for the original Windows draft")
         self._max_bytes = max_bytes
         self._connection, self._reader = connection, connection.operations
         self._exchange, self._auth = connection._exchange, connection._authorization
         self._source = DraftSource(self._exchange.destination_identity, self._exchange._location,
-                                   connection._account, detail.container, branch.id, node)
+                                   connection._account, detail.container, branch.id, node,
+                                   branch.head if node.id != branch.head else None)
         self._lock, self._abandoned = Lock(), Event()
         self._stack = ExitStack()
         try:
@@ -131,7 +133,7 @@ class WindowsDraftChoice:
         s = self._source
         detail = open_checked(self._reader, s.container.id)
         branch = next((b for b in detail.branches if b.id == s.branch), None)
-        if (detail.container != s.container or branch is None or branch.head != s.head.id
+        if (detail.container != s.container or branch is None or branch.head != (s.observed_main_head or s.head.id)
                 or s.head not in branch.nodes):
             raise Rejected("selected container, sequence, branch or original head changed")
         self._check_acquisition()

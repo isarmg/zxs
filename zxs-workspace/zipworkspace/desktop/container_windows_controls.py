@@ -41,7 +41,7 @@ class WindowsDiskControls(QWidget):
         self.note = label("Windows 原节点磁盘：本机编辑；只有明确提交才发送完整文件。" if packaged()
                           else "本版本没有已签名且通过 Windows 原生验收的磁盘组件。仍可浏览远端容器。")
         row = QHBoxLayout()
-        self.edit = button("将分支头作为本机磁盘打开…", lambda: self.open(False))
+        self.edit = button("将所选节点作为本机磁盘打开…", lambda: self.open(False))
         self.recover = button("核对待处理的原提交…", lambda: self.open(True))
         row.addWidget(self.edit)
         row.addWidget(self.recover)
@@ -59,7 +59,8 @@ class WindowsDiskControls(QWidget):
             return owner, p._epoch, cid, None, None, None
         info, br, node = p.details.get(cid), p.branches.currentData(), p.nodes.currentData()
         if (info is None or info.container != p.listed[cid] or not info.container.revision or br is None
-                or br not in info.branches or node is None or node not in br.nodes or node.id != br.head):
+                or br not in info.branches or node is None or node not in br.nodes
+                or (node.id != br.head and br.id != "main")):
             return None
         return owner, p._epoch, cid, info, br, node
 
@@ -214,7 +215,7 @@ class _Disk(QDialog):
             row.addWidget(btn)
         layout.addLayout(row)
         self.note("不会扫描目录或自动重试。核对回执无需打开原正文。" if recovery else
-                  "默认只呈现所选分支头的文件，支持原位读写。可明确选择一次同目录临时文件替换；其他重命名、任意另存为、删除和执行不支持。\n"
+                  "只呈现所选节点的文件，支持原位读写。编辑历史 main 节点后，明确提交才创建新分支。可明确选择一次同目录临时文件替换；其他重命名、任意另存为、删除和执行不支持。\n"
                   "选择自己的普通本机私有 NTFS 子目录，不要用同步目录、联接或共享目录。关闭编辑器和该目录的资源管理器窗口，再正常停止。只有之后点击提交才会上传。")
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
@@ -325,7 +326,7 @@ class _Disk(QDialog):
         if confirm(self, "打开所选原节点", text, attestation="我选择这个原节点和私有目录，并允许本次服务启动及挂载。",
                    action_text="下载并打开") and self.current():
             self.state = "mount"
-            self.note("正在核对签名、原服务与私有位置，再读取所选分支头。")
+            self.note("正在核对签名、原服务与私有位置，再读取所选节点。")
             self.work("mount", partial(self.capture.run, self.selected, folder, alias, int(raw), replacement))
 
     def prepare(self):
@@ -339,7 +340,7 @@ class _Disk(QDialog):
         src, ticket = self.choice.review.source, self.choice.review.ticket
         body = ticket.change.body
         return (f"服务器 {src.origin!r}　账号 {src.account!r}\n容器 {src.container.name!r} ({src.container.id})，"
-                f"原修订 {ticket.base_sequence}\n分支 {src.branch!r}\n原节点 {src.head.id}\n新节点 {body.node}\n"
+                f"原修订 {ticket.base_sequence}\n分支 {src.branch!r} → {body.target_branch!r}\n原节点 {src.head.id}\n新节点 {body.node}\n"
                 f"完整正文 {body.length:,} 字节　SHA-256 {body.sha256}\n原传输信息（可复制，不含口令）：\n"
                 + display_key(self.key))
 

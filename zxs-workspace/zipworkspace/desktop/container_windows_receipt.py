@@ -23,10 +23,10 @@ class WindowsReceiptUncertain(Uncertain):
 def _ticket(key, source, plan):
     action, = plan.actions
     body = Body(key.container, key.submission, source.branch, source.head.id,
-                action.body.length, action.body.sha256, source.branch, action.node_id)
-    ticket = Ticket(Save(source.container, body, source.branch), key.operation, key.submission, action.base_revision)
+                action.body.length, action.body.sha256, action.branch, action.node_id)
+    ticket = Ticket(Save(source.container, body, action.branch, action.fork_from_main), key.operation, key.submission, action.base_revision)
     if not valid_ticket(ticket):
-        raise Rejected("Windows original record has no exact existing-branch ticket")
+        raise Rejected("Windows original record has no exact save ticket")
     return ticket
 
 

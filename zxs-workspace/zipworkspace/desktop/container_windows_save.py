@@ -49,7 +49,10 @@ def _slot(destination, account, container):
 
 
 def _record(source, plan, submission, home, body_id, record_id, zone):
-    return canonical({"format": "windows-r3-save/1", "source": asdict(source), "submission": submission,
+    wire_source = asdict(source)
+    if source.observed_main_head is None:
+        del wire_source["observed_main_head"]  # Preserve existing branch-head intent bytes.
+    return canonical({"format": "windows-r3-save/1", "source": wire_source, "submission": submission,
                       "plan": plan.encode().decode("utf-8"), "source_zone": zone,
                       "folder": _folder(home),
                       "body_file_id": body_id.hex(), "intent_file_id": record_id.hex()})
@@ -162,10 +165,10 @@ def _capture_review(draft, review):
     # plain complete body is flushed, hashed by readback and visible in its original directory.
     home, s = draft._home, review.source
     check, api = draft._choice._live, home.api
-    head, owner = s.head, s.container
+    owner = s.container
     operation, node, submission = new_id(), new_id(), new_id()
-    action = Action(operation, owner.id, "save_node", owner.revision, None,
-                    body=FullBody(review.length, review.sha256), branch=s.branch, head=head.id, node_id=node)
+    action = _save_action(s, operation, node, FullBody(review.length, review.sha256),
+                          new_id() if s.observed_main_head is not None else s.branch)
     plan = Plan((action,), ((owner.id, draft._leaf),))  # Local generated leaf only. No remote rename.
     slot, temp, body_leaf = _slot(s.destination, s.account, owner.id), new_id() + ".zwt", submission + ".zvb"
     key, possible, material = None, False, False
@@ -252,6 +255,19 @@ def _capture_review(draft, review):
         raise
 
 
+def _save_action(source, operation, node, body, target):
+    old_head = source.observed_main_head
+    if old_head is None:
+        if target != source.branch:
+            raise Rejected("an existing-branch Windows save must keep its original target")
+    elif (source.branch != "main" or not id_ok(old_head) or old_head == source.head.id
+          or not id_ok(target) or target == "main"):
+        raise Rejected("a historical Windows save must fork the selected main base")
+    return Action(operation, source.container.id, "save_node", source.container.revision, None, body=body,
+                  branch=target, head=source.head.id if old_head is None else None, node_id=node,
+                  fork_from_main=source.head.id if old_head is not None else None)
+
+
 def _decode(raw, key, home, record_id, connection):
     if sha256(raw).hexdigest() != key.record_sha256:
         raise Rejected("this is not the independently pinned original Windows submit record")
@@ -259,7 +275,7 @@ def _decode(raw, key, home, record_id, connection):
         value = json.loads(raw)
         info = value["source"]
         s = DraftSource(info["destination"], info["origin"], info["account"], Container(**info["container"]),
-                        info["branch"], Node(**info["head"]))
+                        info["branch"], Node(**info["head"]), info.get("observed_main_head"))
         plan = Plan.decode(value["plan"].encode("utf-8"))
         (action,), ((cid, leaf),) = plan.actions, plan.placements
         body_id, zone = bytes.fromhex(value["body_file_id"]), value["source_zone"]
@@ -269,10 +285,9 @@ def _decode(raw, key, home, record_id, connection):
                 or s.head.length >= 1 << 63 or len(body_id) != 16 or not any(body_id) or body_id == record_id
                 or value["submission"] != key.submission
                 or (zone is not None and (type(zone) is not int or zone not in range(5)))
-                or action != Action(key.operation, cid, "save_node", s.container.revision, None, body=action.body,
-                                    branch=s.branch, head=s.head.id, node_id=action.node_id)
+                or action != _save_action(s, key.operation, action.node_id, action.body, action.branch)
                 or _record(s, plan, key.submission, home, body_id, record_id, zone) != raw):
-            raise Rejected("not an exact existing-branch Windows save intent")
+            raise Rejected("not an exact Windows save intent")
         _require_reader(connection, connection.operations, connection._exchange, connection._authorization,
                         s.destination, s.origin, s.account)
         return s, plan, body_id, zone
