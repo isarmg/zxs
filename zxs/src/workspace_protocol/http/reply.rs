@@ -173,18 +173,13 @@ impl Json {
         self.mutation(row.mutation)?;
         write!(self, ",\"sequence\":{}", row.sequence)?;
         match &row.change {
-            core::Change::Save {
-                target,
-                node,
-                body,
-                initial_name,
-            } => {
+            core::Change::Save { target, node, body } => {
                 self.write_str(",\"kind\":\"save_node\",\"node_id\":")?;
                 self.hex(node)?;
                 write!(self, ",\"length\":{},\"sha256\":", body.length)?;
                 self.hex(&body.sha256)?;
                 self.write_str(",\"target\":")?;
-                self.target(target, initial_name.as_deref())?;
+                self.target(target)?;
             }
             core::Change::Branch { name, from } => {
                 self.write_str(",\"kind\":\"create_branch\",\"branch\":")?;
@@ -216,43 +211,30 @@ impl Json {
         self.write_char('}')
     }
 
-    fn target(&mut self, target: &core::Target, first: Option<&str>) -> fmt::Result {
-        match (target, first) {
-            (
-                core::Target::Branch {
-                    name,
-                    expected_head: None,
-                },
-                Some(initial),
-            ) if name == core::MAIN => {
+    fn target(&mut self, target: &core::Target) -> fmt::Result {
+        match target {
+            core::Target::FirstMain { name } => {
                 self.write_str("{\"kind\":\"first_main\",\"name\":")?;
-                self.string(initial)?;
+                self.string(name)?;
             }
-            (
-                core::Target::Branch {
-                    name,
-                    expected_head: Some(head),
-                },
-                None,
-            ) => {
+            core::Target::Branch {
+                name,
+                expected_head,
+            } => {
                 self.write_str("{\"kind\":\"branch\",\"branch\":")?;
                 self.string(name)?;
                 self.write_str(",\"expected_head\":")?;
-                self.hex(head)?;
+                self.hex(expected_head)?;
             }
-            (
-                core::Target::HistoricalMain {
-                    new_branch,
-                    original,
-                },
-                None,
-            ) => {
+            core::Target::HistoricalMain {
+                new_branch,
+                original,
+            } => {
                 self.write_str("{\"kind\":\"historical_main\",\"branch\":")?;
                 self.string(new_branch)?;
                 self.write_str(",\"from_node\":")?;
                 self.hex(original)?;
             }
-            _ => return Err(fmt::Error),
         }
         self.write_char('}')
     }
@@ -271,3 +253,7 @@ impl Json {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/save_target_json.rs"]
+mod tests;

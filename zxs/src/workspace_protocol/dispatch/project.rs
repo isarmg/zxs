@@ -71,41 +71,24 @@ pub(super) fn save_node<R: Read>(
         sha256: save.sha256,
     };
     let raw = save.body(reader);
-    let (target, name) = match save.target {
-        Target::FirstMain { name } => (
-            core::Target::Branch {
-                name: branch_key(Branch::Main),
-                expected_head: None,
-            },
-            Some(name),
-        ),
+    let target = match save.target {
+        Target::FirstMain { name } => core::Target::FirstMain { name },
         Target::Branch {
             branch,
             expected_head,
-        } => (
-            core::Target::Branch {
-                name: branch_key(branch),
-                expected_head: Some(expected_head.bytes()),
-            },
-            None,
-        ),
+        } => core::Target::Branch {
+            name: branch_key(branch),
+            expected_head: expected_head.bytes(),
+        },
         Target::HistoricalMain {
             new_branch,
             original,
-        } => (
-            core::Target::HistoricalMain {
-                new_branch: branch_key(Branch::Named(new_branch)),
-                original: original.bytes(),
-            },
-            None,
-        ),
+        } => core::Target::HistoricalMain {
+            new_branch: branch_key(Branch::Named(new_branch)),
+            original: original.bytes(),
+        },
     };
-    let exact = core::Change::Save {
-        target,
-        node,
-        body,
-        initial_name: name,
-    };
+    let exact = core::Change::Save { target, node, body };
     let receipt = store
         .save(op, exact.clone(), raw, authorize)
         .map_err(|error| failed(&error))?;

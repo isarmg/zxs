@@ -14,9 +14,12 @@ pub(crate) struct Mutation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Target {
+    FirstMain {
+        name: String,
+    },
     Branch {
         name: String,
-        expected_head: Option<NodeId>,
+        expected_head: NodeId,
     },
     HistoricalMain {
         new_branch: String,
@@ -36,7 +39,6 @@ pub(crate) enum Change {
         target: Target,
         node: NodeId,
         body: Body,
-        initial_name: Option<String>,
     },
     Branch {
         name: String,
@@ -72,7 +74,7 @@ pub(crate) struct Node {
 pub(crate) struct State {
     pub(crate) name: Option<String>,
     pub(crate) tags: Vec<String>,
-    pub(crate) branches: BTreeMap<String, Option<NodeId>>,
+    pub(crate) branches: BTreeMap<String, NodeId>,
     pub(crate) nodes: BTreeMap<NodeId, Node>,
     pub(crate) receipts: BTreeMap<Id, Receipt>,
     pub(crate) sequence: u64,
@@ -83,7 +85,7 @@ pub(crate) enum Conflict {
     MissingContainer,
     MissingBranch,
     MissingNode,
-    HeadChanged(Option<NodeId>),
+    HeadChanged(NodeId),
     SequenceChanged(u64),
     NotHistoricalMain,
     RequestReused,
@@ -101,7 +103,7 @@ impl fmt::Debug for Conflict {
             Self::MissingNode => f.write_str("MissingNode"),
             Self::HeadChanged(observed) => f
                 .debug_struct("HeadChanged")
-                .field("head_exists", &observed.is_some())
+                .field("head_exists", &(*observed != [0; 16]))
                 .finish(),
             Self::SequenceChanged(observed) => {
                 f.debug_tuple("SequenceChanged").field(observed).finish()
@@ -192,7 +194,7 @@ impl State {
     /// Thus a node born on main, except its current head, is precisely a
     /// historical main node. Forks share ancestors, not the birth branch.
     fn historical_main(&self, id: NodeId) -> bool {
-        self.branches.get(MAIN).copied().flatten() != Some(id)
+        self.branches.get(MAIN).copied() != Some(id)
             && self
                 .nodes
                 .get(&id)
@@ -238,34 +240,19 @@ impl State {
                     return Err(Conflict::MissingNode);
                 }
             }
-            Change::Save {
-                target,
-                node,
-                initial_name,
-                ..
-            } => {
+            Change::Save { target, node, .. } => {
                 identity(*node)?;
                 if self.nodes.contains_key(node) {
                     return Err(Conflict::AlreadyExists);
                 }
                 if self.name.is_none() {
-                    if let (
-                        Some(display),
-                        Target::Branch {
-                            name,
-                            expected_head: None,
-                        },
-                    ) = (initial_name, target)
-                        && name == MAIN
-                    {
-                        return label(display);
-                    }
-                    return Err(Conflict::MissingContainer);
-                }
-                if initial_name.is_some() {
-                    return Err(Conflict::AlreadyExists);
+                    return match target {
+                        Target::FirstMain { name } => label(name),
+                        _ => Err(Conflict::MissingContainer),
+                    };
                 }
                 match target {
+                    Target::FirstMain { .. } => return Err(Conflict::AlreadyExists),
                     Target::Branch {
                         name,
                         expected_head,
@@ -305,38 +292,34 @@ impl State {
             Change::Rename { name, .. } => self.name = Some(name.clone()),
             Change::Tags { tags, .. } => self.tags.clone_from(tags),
             Change::Branch { name, from } => {
-                self.branches.insert(name.clone(), Some(*from));
+                self.branches.insert(name.clone(), *from);
             }
-            Change::Save {
-                target,
-                node,
-                body,
-                initial_name,
-            } => {
-                if let Some(name) = initial_name {
-                    self.name = Some(name.clone());
-                }
+            Change::Save { target, node, body } => {
                 let (branch, prior) = match target {
+                    Target::FirstMain { name } => {
+                        self.name = Some(name.clone());
+                        (MAIN, None)
+                    }
                     Target::Branch {
                         name,
                         expected_head,
-                    } => (name, *expected_head),
+                    } => (name.as_str(), Some(*expected_head)),
                     Target::HistoricalMain {
                         new_branch,
                         original,
-                    } => (new_branch, Some(*original)),
+                    } => (new_branch.as_str(), Some(*original)),
                 };
                 self.nodes.insert(
                     *node,
                     Node {
                         prior,
-                        original_branch: branch.clone(),
+                        original_branch: branch.to_owned(),
                         body: body.clone(),
                         sequence: receipt.sequence,
                         request: receipt.mutation.request,
                     },
                 );
-                self.branches.insert(branch.clone(), Some(*node));
+                self.branches.insert(branch.to_owned(), *node);
             }
         }
         self.sequence = receipt.sequence;

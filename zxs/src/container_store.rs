@@ -143,7 +143,7 @@ fn select_history_page(
     next: Option<NodeId>,
 ) -> Result<HistoryPage, Error> {
     let current = *state.branches.get(branch).ok_or(Conflict::MissingBranch)?;
-    if current != Some(head) {
+    if current != head {
         return Err(Conflict::HeadChanged(current).into());
     }
     if next == Some(head) {
@@ -218,8 +218,7 @@ fn select_detail_page(
         .range::<str, _>((after.map_or(Unbounded, Excluded), Unbounded))
         .take(DETAIL_PAGE_ROWS)
     {
-        let node = node.ok_or_else(|| invalid("selected branch has no head"))?;
-        heads.push((branch.clone(), node));
+        heads.push((branch.clone(), *node));
     }
     let next_after = heads
         .last()
@@ -408,10 +407,14 @@ impl Store {
         input: impl Read,
         authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
-        let Change::Save { initial_name, .. } = &change else {
+        let Change::Save { target, .. } = &change else {
             return Err(invalid("a node requires a complete save operation").into());
         };
-        let volume = self.write_volume(mutation.container, initial_name.is_some(), &authorize)?;
+        let volume = self.write_volume(
+            mutation.container,
+            matches!(target, Target::FirstMain { .. }),
+            &authorize,
+        )?;
         self.save_on(mutation, change, input, volume, authorize)
     }
 
@@ -499,8 +502,11 @@ impl Store {
         stage.directory.file.sync_all()?;
 
         let wanted = match &receipt.change {
-            Change::Save { initial_name, .. } => initial_name.as_deref(),
-            Change::Rename { name, .. } => Some(name.as_str()),
+            Change::Save {
+                target: Target::FirstMain { name },
+                ..
+            }
+            | Change::Rename { name, .. } => Some(name.as_str()),
             _ => None,
         };
         let _namespace = wanted

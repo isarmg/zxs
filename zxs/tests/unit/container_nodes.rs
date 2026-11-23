@@ -20,19 +20,17 @@ fn body(bytes: &[u8]) -> Body {
         sha256: sha.finish(),
     }
 }
-fn main(head: Option<NodeId>) -> Target {
+fn main(head: NodeId) -> Target {
     Target::Branch {
         name: MAIN.into(),
         expected_head: head,
     }
 }
-fn full(target: Target, node: NodeId, body: Body, initial_name: Option<String>) -> Change {
-    Change::Save {
-        target,
-        node,
-        body,
-        initial_name,
-    }
+fn full(target: Target, node: NodeId, body: Body) -> Change {
+    Change::Save { target, node, body }
+}
+fn first_node(node: NodeId, body: Body, name: String) -> Change {
+    full(Target::FirstMain { name }, node, body)
 }
 fn held_data(path: &Path, token: u8) -> DataRoot {
     DataRoot {
@@ -80,7 +78,7 @@ fn rejected_payload_leaves_no_staging_directory() {
     assert!(matches!(
         store.save(
             mutation(2),
-            full(main(None), id(10), body(b"right"), Some("x.bin".into())),
+            first_node(id(10), body(b"right"), "x.bin".into()),
             &b"wrong"[..],
             || Ok(())
         ),
@@ -110,7 +108,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     assert!(matches!(
         store.save(
             mutation(2),
-            full(main(None), id(10), body(b"new"), Some("x.bin".into())),
+            first_node(id(10), body(b"new"), "x.bin".into()),
             &b"ne"[..],
             || Ok(())
         ),
@@ -121,7 +119,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     let first = store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"new"), Some("x.bin".into())),
+            first_node(id(10), body(b"new"), "x.bin".into()),
             &b"new"[..],
             || Ok(()),
         )
@@ -136,14 +134,14 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     store
         .save(
             mutation(3),
-            full(main(Some(id(10))), id(11), body(b"second"), None),
+            full(main(id(10)), id(11), body(b"second")),
             &b"second"[..],
             || Ok(()),
         )
         .unwrap();
     assert!(matches!(
-        store.save(mutation(4), full(main(Some(id(10))), id(12), body(b"old"), None), &b"old"[..], || Ok(())),
-        Err(Error::Conflict(Conflict::HeadChanged(Some(head)))) if head==id(11)));
+        store.save(mutation(4), full(main(id(10)), id(12), body(b"old")), &b"old"[..], || Ok(())),
+        Err(Error::Conflict(Conflict::HeadChanged(head))) if head==id(11)));
     let fork = Target::HistoricalMain {
         new_branch: "alternate".into(),
         original: id(10),
@@ -151,7 +149,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     store
         .save(
             mutation(4),
-            full(fork, id(12), body(b"old"), None),
+            full(fork, id(12), body(b"old")),
             &b"old"[..],
             || Ok(()),
         )
@@ -188,7 +186,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
         store
             .save(
                 mutation(2),
-                full(main(None), id(10), body(b"new"), Some("x.bin".into())),
+                first_node(id(10), body(b"new"), "x.bin".into()),
                 &b"new"[..],
                 || Ok(())
             )
@@ -206,30 +204,37 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
 #[test]
 fn only_a_published_main_ancestor_can_start_a_historical_fork() {
     let (_temp, _, store) = fixture();
-    let save = |request, target, node, name| {
+    let save = |request, target, node| {
         store.save(
             mutation(request),
-            full(target, id(node), body(b"x"), name),
+            full(target, id(node), body(b"x")),
             &b"x"[..],
             || Ok(()),
         )
     };
-    save(2, main(None), 10, Some("original".into())).unwrap();
-    save(3, main(Some(id(10))), 11, None).unwrap();
+    save(
+        2,
+        Target::FirstMain {
+            name: "original".into(),
+        },
+        10,
+    )
+    .unwrap();
+    save(3, main(id(10)), 11).unwrap();
     let fork = |name: &str, original| Target::HistoricalMain {
         new_branch: name.into(),
         original: id(original),
     };
-    save(4, fork("first-fork", 10), 12, None).unwrap();
+    save(4, fork("first-fork", 10), 12).unwrap();
     for wrong_base in [11, 12, 99] {
         // current main, another branch, missing
         assert!(matches!(
-            save(5, fork("second-fork", wrong_base), 13, None),
+            save(5, fork("second-fork", wrong_base), 13),
             Err(Error::Conflict(Conflict::NotHistoricalMain))
         ));
         assert!(store.operation_receipt(mutation(5)).unwrap().is_none());
     }
-    save(5, fork("second-fork", 10), 13, None).unwrap();
+    save(5, fork("second-fork", 10), 13).unwrap();
     assert_eq!(
         store.node(id(1), id(13)).unwrap().unwrap().node.prior,
         Some(id(10))
@@ -263,7 +268,7 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
     store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"x"), Some("first".into())),
+            first_node(id(10), body(b"x"), "first".into()),
             &b"x"[..],
             || Ok(()),
         )
@@ -370,7 +375,7 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     let first = store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"one"), Some("name".into())),
+            first_node(id(10), body(b"one"), "name".into()),
             &b"one"[..],
             || Ok(()),
         )
@@ -378,7 +383,7 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     store
         .save(
             mutation(3),
-            full(main(Some(id(10))), id(11), body(b"two"), None),
+            full(main(id(10)), id(11), body(b"two")),
             &b"two"[..],
             || Ok(()),
         )
@@ -423,8 +428,8 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     let state = read_state(&moved, id(1)).unwrap();
     assert_eq!(state.name.as_deref(), Some("name"));
     assert_eq!(state.tags, ["known"]);
-    assert_eq!(state.branches[MAIN], Some(id(11)));
-    assert_eq!(state.branches["older"], Some(id(10)));
+    assert_eq!(state.branches[MAIN], id(11));
+    assert_eq!(state.branches["older"], id(10));
     for (node, payload) in [(10, b"one"), (11, b"two")] {
         let exact = &state.nodes[&id(node)];
         let path = moved
@@ -473,7 +478,7 @@ fn an_archived_operation_lookup_never_turns_a_missing_receipt_into_absence() {
     store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"x"), Some("saved".into())),
+            first_node(id(10), body(b"x"), "saved".into()),
             &b"x"[..],
             || Ok(()),
         )
@@ -524,7 +529,7 @@ fn retired_data_proof_settles_only_the_exact_recycled_retry() {
     store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"one"), Some("name".into())),
+            first_node(id(10), body(b"one"), "name".into()),
             &b"one"[..],
             || Ok(()),
         )
@@ -613,7 +618,7 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
     store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"one"), Some("name".into())),
+            first_node(id(10), body(b"one"), "name".into()),
             &b"one"[..],
             || Ok(()),
         )
@@ -621,7 +626,7 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
     store
         .save(
             mutation(3),
-            full(main(Some(id(10))), id(11), body(b"two"), None),
+            full(main(id(10)), id(11), body(b"two")),
             &b"two"[..],
             || Ok(()),
         )
@@ -707,7 +712,7 @@ fn a_later_staging_substitution_cannot_redirect_a_whole_node_upload() {
     ensure_dir(&staging).unwrap();
     let result = store.save(
         mutation(2),
-        full(main(None), id(10), body(b"one"), Some("first".into())),
+        first_node(id(10), body(b"one"), "first".into()),
         &b"one"[..],
         || Ok(()),
     );
@@ -746,7 +751,7 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
     store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"one"), Some("name".into())),
+            first_node(id(10), body(b"one"), "name".into()),
             &b"one"[..],
             || Ok(()),
         )
@@ -790,7 +795,7 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
     store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"one"), Some("name".into())),
+            first_node(id(10), body(b"one"), "name".into()),
             &b"one"[..],
             || Ok(()),
         )
@@ -812,7 +817,7 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
     store
         .save(
             mutation(3),
-            full(main(Some(id(10))), id(11), body(b"two"), None),
+            full(main(id(10)), id(11), body(b"two")),
             &b"two"[..],
             || Ok(()),
         )
@@ -824,10 +829,7 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
     );
     assert!(store.operation_receipt(mutation(6)).unwrap().is_none());
     let (_, chosen) = archive.selected(id(1)).unwrap().unwrap();
-    assert_eq!(
-        read_state(&chosen, id(1)).unwrap().branches[MAIN],
-        Some(id(11))
-    );
+    assert_eq!(read_state(&chosen, id(1)).unwrap().branches[MAIN], id(11));
     assert!(!original.exists());
 }
 
@@ -852,7 +854,7 @@ fn diagnostics_keep_the_outcome_but_not_private_details() {
         "Invalid(PermissionDenied)"
     );
     assert_eq!(
-        format!("{:?}", Conflict::HeadChanged(Some(id(1)))),
+        format!("{:?}", Conflict::HeadChanged(id(1))),
         "HeadChanged { head_exists: true }"
     );
     assert_eq!(
@@ -867,7 +869,7 @@ fn reopen_discards_interrupted_intake_without_touching_selected_data() {
     store
         .save(
             mutation(2),
-            full(main(None), id(10), body(b"saved"), Some("name".into())),
+            first_node(id(10), body(b"saved"), "name".into()),
             &b"saved"[..],
             || Ok(()),
         )
@@ -966,7 +968,7 @@ fn new_routes_do_not_adopt_legacy_data_or_an_unrouted_leaf() {
     assert!(matches!(
         store.save(
             mutation(2),
-            full(main(None), id(10), body(b"new"), Some("name".into())),
+            first_node(id(10), body(b"new"), "name".into()),
             &b"new"[..],
             || Ok(()),
         ),
@@ -979,7 +981,7 @@ fn new_routes_do_not_adopt_legacy_data_or_an_unrouted_leaf() {
 #[test]
 fn first_save_reserves_only_on_valid_intake_and_reuses_reserved_disk_after_reopen() {
     let (_root, directory, store) = fixture();
-    let save = || full(main(None), id(10), body(b"new"), Some("name".into()));
+    let save = || first_node(id(10), body(b"new"), "name".into());
     assert!(matches!(
         store.save(mutation(2), save(), &b"bad"[..], || Ok(())),
         Err(Error::WrongDigest)
@@ -1044,7 +1046,7 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
         container: id(container),
         request: id(request),
     };
-    let first = |name: &str| full(main(None), id(10), body(b"one"), Some(name.into()));
+    let first = |name: &str| first_node(id(10), body(b"one"), name.into());
     store
         .save(op(1, 5), first("first"), &b"one"[..], || Ok(()))
         .unwrap();
@@ -1104,7 +1106,7 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
         store
             .save(
                 op(2, 7),
-                full(main(Some(id(10))), id(11), body(b"two"), None),
+                full(main(id(10)), id(11), body(b"two")),
                 &b"two"[..],
                 || Ok(())
             )
@@ -1146,7 +1148,7 @@ fn compact_catalog_uses_selected_store_names_in_raw_id_order() {
                     container: id(n),
                     request: id(2),
                 },
-                full(main(None), id(10), body(b""), Some(format!("file-{n}"))),
+                first_node(id(10), body(b""), format!("file-{n}")),
                 &b""[..],
                 || Ok(()),
             )
@@ -1224,8 +1226,8 @@ fn branch_history_resume_is_an_exact_descending_parent_chain() {
         sequence: 258,
         ..State::default()
     };
-    state.branches.insert(MAIN.into(), Some(key(257)));
-    state.branches.insert(String::from("fork"), Some(key(258)));
+    state.branches.insert(MAIN.into(), key(257));
+    state.branches.insert(String::from("fork"), key(258));
     let body = body(b"");
     for sequence in 1_u16..=258 {
         let prior = match sequence {
@@ -1263,15 +1265,15 @@ fn branch_history_resume_is_an_exact_descending_parent_chain() {
         shared.nodes.iter().map(|item| item.0).collect::<Vec<_>>(),
         [key(2), key(1)]
     );
-    state.branches.insert(MAIN.into(), Some(key(256)));
+    state.branches.insert(MAIN.into(), key(256));
     assert!(matches!(
         select_history_page(&state, MAIN, first.head, first.next),
-        Err(Error::Conflict(Conflict::HeadChanged(Some(id)))) if id == key(256)
+        Err(Error::Conflict(Conflict::HeadChanged(id))) if id == key(256)
     ));
-    state.branches.insert(MAIN.into(), None);
+    state.branches.remove(MAIN);
     assert!(matches!(
         select_history_page(&state, MAIN, first.head, first.next),
-        Err(Error::Conflict(Conflict::HeadChanged(None)))
+        Err(Error::Conflict(Conflict::MissingBranch))
     ));
 }
 
@@ -1282,10 +1284,10 @@ fn detail_heads_page_preserves_revision_and_exact_lexical_order() {
         tags: vec!["标签".into()],
         ..State::default()
     };
-    state.branches.insert(String::from("main"), Some(id(1)));
+    state.branches.insert(String::from("main"), id(1));
     state
         .branches
-        .extend((1..=DETAIL_PAGE_ROWS).map(|n| (format!("{n:032x}"), Some(id(1)))));
+        .extend((1..=DETAIL_PAGE_ROWS).map(|n| (format!("{n:032x}"), id(1))));
     let first = select_detail_page(id(2), "original", &state, None, None).unwrap();
     assert_eq!(first.id, id(2));
     assert_eq!(first.sequence, 700);

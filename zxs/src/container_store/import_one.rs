@@ -1,8 +1,7 @@
 //! One explicitly planned complete import to an already initialized DATA disk.
 use super::{
-    Body, Change, Conflict, DataRoot, DataVolume, Error, Id, MAIN, Mutation, NodeId,
-    OperationReceipt, Receipt, Routes, Store, Target, invalid, qualify_roster, recycle::Recycle,
-    unenrolled_data,
+    Body, Change, Conflict, DataRoot, DataVolume, Error, Id, Mutation, NodeId, OperationReceipt,
+    Receipt, Routes, Store, Target, invalid, qualify_roster, recycle::Recycle, unenrolled_data,
 };
 use crate::{display, fs::HeldDir, hash::Sha256};
 use std::{
@@ -97,13 +96,11 @@ impl ImportIntent {
 
     fn change(&self, node: NodeId) -> Change {
         Change::Save {
-            target: Target::Branch {
-                name: MAIN.into(),
-                expected_head: None,
+            target: Target::FirstMain {
+                name: self.name.clone(),
             },
             node,
             body: self.body.clone(),
-            initial_name: Some(self.name.clone()),
         }
     }
 }

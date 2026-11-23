@@ -1,7 +1,7 @@
 //! Canonical request receipt, kept physically separate from opaque payload.
 use super::{
     decode_tags, encode_tags, invalid,
-    model::{Body, Change, Id, Mutation, Receipt, Target},
+    model::{Body, Change, MAIN, Mutation, Receipt, Target},
 };
 use std::io;
 
@@ -13,34 +13,28 @@ fn put_text(out: &mut Vec<u8>, value: &str) -> io::Result<()> {
     out.extend_from_slice(raw);
     Ok(())
 }
-fn put_optional(out: &mut Vec<u8>, id: Option<Id>) {
-    out.push(u8::from(id.is_some()));
-    if let Some(id) = id {
-        out.extend_from_slice(&id);
-    }
-}
-
 pub(super) fn encode(r: &Receipt) -> io::Result<Vec<u8>> {
     let mut out = b"OC2\0".to_vec();
     out.extend_from_slice(&r.mutation.container);
     out.extend_from_slice(&r.mutation.request);
     out.extend_from_slice(&r.sequence.to_be_bytes());
     match &r.change {
-        Change::Save {
-            target,
-            node,
-            body,
-            initial_name,
-        } => {
+        Change::Save { target, node, body } => {
             out.push(1);
             match target {
+                Target::FirstMain { .. } => {
+                    out.push(0);
+                    put_text(&mut out, MAIN)?;
+                    out.push(0); // no previous node on first publication
+                }
                 Target::Branch {
                     name,
                     expected_head,
                 } => {
                     out.push(0);
                     put_text(&mut out, name)?;
-                    put_optional(&mut out, *expected_head);
+                    out.push(1);
+                    out.extend_from_slice(expected_head);
                 }
                 Target::HistoricalMain {
                     new_branch,
@@ -54,9 +48,11 @@ pub(super) fn encode(r: &Receipt) -> io::Result<Vec<u8>> {
             out.extend_from_slice(node);
             out.extend_from_slice(&body.length.to_be_bytes());
             out.extend_from_slice(&body.sha256);
-            out.push(u8::from(initial_name.is_some()));
-            if let Some(name) = initial_name {
+            if let Target::FirstMain { name } = target {
+                out.push(1);
                 put_text(&mut out, name)?;
+            } else {
+                out.push(0);
             }
         }
         Change::Branch { name, from } => {
@@ -120,6 +116,37 @@ impl Decoder<'_> {
         }
     }
 }
+/// OC2 stores the first display name after the body description. Parse the
+/// separate fields only here; never give the model a contradictory target.
+fn save(input: &mut Decoder<'_>) -> io::Result<Change> {
+    let mode = input.byte()?;
+    let branch = input.text()?;
+    let parent = match mode {
+        0 => input.optional(Decoder::array::<16>)?,
+        1 => Some(input.array()?),
+        _ => return Err(invalid("unknown save target")),
+    };
+    let node = input.array()?;
+    let body = Body {
+        length: input.word()?,
+        sha256: input.array()?,
+    };
+    let initial = input.optional(Decoder::text)?;
+    let target = match (mode, parent, initial) {
+        (0, None, Some(name)) if branch == MAIN => Target::FirstMain { name },
+        (0, Some(expected_head), None) => Target::Branch {
+            name: branch,
+            expected_head,
+        },
+        (1, Some(original), None) => Target::HistoricalMain {
+            new_branch: branch,
+            original,
+        },
+        _ => return Err(invalid("inconsistent save target in container receipt")),
+    };
+    Ok(Change::Save { target, node, body })
+}
+
 pub(super) fn decode(bytes: &[u8]) -> io::Result<Receipt> {
     let mut input = Decoder(bytes);
     if input.array::<4>()? != *b"OC2\0" {
@@ -131,33 +158,7 @@ pub(super) fn decode(bytes: &[u8]) -> io::Result<Receipt> {
     };
     let sequence = input.word()?;
     let change = match input.byte()? {
-        1 => {
-            let mode = input.byte()?;
-            let branch = input.text()?;
-            let target = match mode {
-                0 => Target::Branch {
-                    name: branch,
-                    expected_head: input.optional(Decoder::array::<16>)?,
-                },
-                1 => Target::HistoricalMain {
-                    new_branch: branch,
-                    original: input.array()?,
-                },
-                _ => return Err(invalid("unknown save target")),
-            };
-            let node = input.array()?;
-            let body = Body {
-                length: input.word()?,
-                sha256: input.array()?,
-            };
-            let initial_name = input.optional(Decoder::text)?;
-            Change::Save {
-                target,
-                node,
-                body,
-                initial_name,
-            }
-        }
+        1 => save(&mut input)?,
         2 => Change::Branch {
             name: input.text()?,
             from: input.array()?,
@@ -186,3 +187,7 @@ pub(super) fn decode(bytes: &[u8]) -> io::Result<Receipt> {
         change,
     })
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/save_codec.rs"]
+mod tests;

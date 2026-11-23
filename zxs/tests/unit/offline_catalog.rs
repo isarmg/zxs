@@ -1,8 +1,6 @@
 use super::*;
 use crate::{
-    container_store::{
-        Body, Change, MAIN, Mutation, Store, Target, create_file, ensure_dir, entry_leaf,
-    },
+    container_store::{Body, Change, Mutation, Store, Target, create_file, ensure_dir, entry_leaf},
     hash::Sha256,
     test_support::PrivateTemp,
 };
@@ -66,16 +64,14 @@ fn save(store: &Store, container: Id, name: &str) {
                 request: [2; 16],
             },
             Change::Save {
-                target: Target::Branch {
-                    name: MAIN.into(),
-                    expected_head: None,
+                target: Target::FirstMain {
+                    name: name.to_owned(),
                 },
                 node: [3; 16],
                 body: Body {
                     length: 0,
                     sha256: Sha256::new().finish(),
                 },
-                initial_name: Some(name.to_owned()),
             },
             &b""[..],
             || Ok(()),
