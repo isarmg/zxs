@@ -238,7 +238,7 @@ impl Store {
         loop {
             let n = self
                 .next_stage
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
                 .map_err(|_| invalid("staging name counter exhausted"))?;
             let name =
                 CString::new(format!("{n:016x}")).map_err(|_| invalid("invalid stage name"))?;
