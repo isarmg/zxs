@@ -3,6 +3,7 @@
 | 操作 | 命令 | 写入范围 |
 | --- | --- | --- |
 | 首设前检查 | `setup-headless check SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID` | 无 |
+| 服务单元预览（可选） | `setup-headless preview-unit SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID` | 无，写标准输出 |
 | 首设 | `setup-headless [web] new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN` | 三个角色标记及 `/zxs/state/headless/server.v1` |
 | 源目录预检 | `preflight-import SOURCE SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID` | 无，仅统计目录元数据 |
 | 重置密码 | `setup-headless reset SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID` | 同一份 `server.v1` 中的账号代次、随机盐和验证值 |
@@ -31,3 +32,10 @@
 并单列提示。遇到链接、特殊项、意外跨挂载或观察到原件变化时不显示部分结果。
 不设总项数或自定超时，路径长度和可用描述符仍受系统限制。统计不确认目标命名兼容性，
 不读取正文，不选择目标，不预留空间，也不执行转换。
+
+
+## 可选服务单元预览
+
+与首次检查使用同一次有序的 SYSTEM、DATA、RECYCLE 原目录准入；仅在初始目录检查通过时生成。请在首次设置之前运行预览。输出的 `RequiresMountsFor` 是按这三个实际目录路径排序，不认定目录本身就是独立挂载点；启动时服务仍核对原卷。预览保留可表示路径的精确内容；含控制字符或非 UTF-8 字节的路径不生成单元。
+
+预览供管理员审阅，需要另行在 `/zxs/bin/activate-headless` 安装已审阅的前台启动器（构建时启用 ZXS 的 `host-activation`）。单元只以 `Type=simple` 跟踪前台进程，不把 systemd 的启动状态当作后端或 HTTPS 的就绪回执。停机先通知前台启动器，等待它收尾，不由预览配置强制杀死服务。Helper 不写 unit、不调用 systemd，也不启动或启用任何服务。

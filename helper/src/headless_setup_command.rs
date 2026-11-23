@@ -7,7 +7,7 @@ use rustix::{
     termios::{InputModes, LocalModes, OptionalActions, QueueSelector, SpecialCodeIndex, Termios, tcflush,
         tcgetattr, tcgetpgrp, tcgetsid, tcsetattr},
 };
-use std::{ffi::OsString, io::{self, Write}, os::fd::{AsFd, BorrowedFd}, path::PathBuf,
+use std::{ffi::OsString, io::{self, Write}, os::fd::{AsFd, BorrowedFd}, path::{Path, PathBuf},
     process::ExitCode, time::{Duration, Instant}};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -19,11 +19,12 @@ pub(crate) struct Setup {
     login: Option<String>,
     web: bool,
     reset: bool,
+    preview_unit: bool,
 }
 
 impl Setup {
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        const USAGE: &str = "expected setup-headless [web] check|new|reset SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID [LOGIN]";
+        const USAGE: &str = "expected setup-headless [web] check|new|reset|preview-unit SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID [LOGIN]";
         fn id(value: Option<OsString>) -> Option<u32> {
             let text = value?.into_string().ok()?;
             let number: u32 = text.parse().ok()?;
@@ -41,13 +42,14 @@ impl Setup {
         let gateway = id(args.next()).ok_or(USAGE)?;
         let ipc = id(args.next()).ok_or(USAGE)?;
         let reset = mode == "reset";
-        let login = if mode == "check" || reset { None } else if mode == "new" {
+        let preview_unit = mode == "preview-unit";
+        let login = if mode == "check" || reset || preview_unit { None } else if mode == "new" {
             let name = args.next().ok_or(USAGE)?.into_string().map_err(|_| USAGE)?;
             if !crate::headless_setup::login_ok(&name) { return Err("invalid headless login name"); }
             Some(name)
         } else { return Err(USAGE); };
         if args.next().is_some() { return Err(USAGE); }
-        Ok(Self { paths, gateway, ipc, login, web, reset })
+        Ok(Self { paths, gateway, ipc, login, web, reset, preview_unit })
     }
 
     pub(crate) fn run(self) -> io::Result<ExitCode> {
@@ -76,6 +78,12 @@ impl Setup {
             };
         }
         let current = selected.check_ready()?;
+        if self.preview_unit {
+            if !current.is_ready() { return Err(io::Error::other(current.to_string())); }
+            let unit = preview_unit(selected.paths())?;
+            io::stdout().lock().write_all(unit.as_bytes())?;
+            return Ok(ExitCode::SUCCESS);
+        }
         let Some(login) = self.login else {
             writeln!(io::stdout().lock(), "{current}")?;
             return Ok(if current.is_ready() { ExitCode::SUCCESS } else { ExitCode::from(2) });
@@ -113,6 +121,41 @@ impl Setup {
             }
         }
     }
+}
+
+/// Quote one RequiresMountsFor word (systemd unquotes before expanding %).
+fn mount_word(path: &Path) -> io::Result<String> {
+    let path = path.to_str().filter(|s| !s.chars().any(char::is_control))
+        .ok_or_else(|| invalid("systemd preview needs UTF-8 paths without control characters"))?;
+    let mut word = String::from("\"");
+    for ch in path.chars() {
+        match ch {
+            '%' => word.push_str("%%"),
+            '\\' | '"' => { word.push('\\'); word.push(ch); }
+            _ => word.push(ch),
+        }
+    }
+    word.push('"');
+    Ok(word)
+}
+
+fn preview_unit(paths: [&Path; 3]) -> io::Result<String> {
+    let [system, data, recycle] = paths.map(mount_word);
+    let (system, data, recycle) = (system?, data?, recycle?);
+    Ok(format!(
+        "# Preview only. Use after setup, with the reviewed foreground launcher installed.\n\
+         # Mount ordering by selected path; the launcher verifies storage identity.\n\
+         [Unit]\n\
+         Description=ZXS foreground supervisor\n\
+         RequiresMountsFor={system} {data} {recycle}\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         ExecStart=/zxs/bin/activate-headless\n\
+         KillMode=mixed\n\
+         TimeoutStopSec=infinity\n\
+         SendSIGKILL=no\n"
+    ))
 }
 
 type Secret = Zeroizing<Vec<u8>>;
