@@ -1,9 +1,4 @@
 //! Standalone ZXS storage. Inspection of a fresh selection is read-only.
-// The optional RISC-V SHA-2 backend uses experimental intrinsics.
-#![cfg_attr(
-    any(sha2_backend = "riscv-zknh", sha2_256_backend = "riscv-zknh"),
-    feature(riscv_ext_intrinsics)
-)]
 
 #[cfg(target_os = "linux")]
 pub(crate) mod container_store;
