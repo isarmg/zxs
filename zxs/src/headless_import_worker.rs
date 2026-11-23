@@ -23,6 +23,9 @@ const PATH_BYTES: usize = 4095;
 const MAX_ENVELOPE: usize = 72 + 8 + 16 + 16 + 32 + 3 * (2 + PATH_BYTES) + 104 + 2 + 255;
 type Payload = [u8; 65];
 
+#[path = "headless_init_data_worker.rs"]
+pub(crate) mod init_data;
+
 unsafe extern "C" {
     fn zxs_import_take_inherited(fd: i32) -> i32;
     fn zxs_import_socket(fd: i32, parent: i32) -> i32;
@@ -40,7 +43,7 @@ unsafe extern "C" {
     ) -> isize;
 }
 
-pub(crate) fn run() -> io::Result<()> {
+fn inherited_order() -> io::Result<(File, i32, Vec<u8>)> {
     let socket = inherited(3)?;
     let order = inherited(4)?;
     // SAFETY: getppid takes no arguments; socket lives across the descriptor check.
@@ -48,7 +51,11 @@ pub(crate) fn run() -> io::Result<()> {
     if parent <= 1 || unsafe { zxs_import_socket(socket.as_raw_fd(), parent) } != 0 {
         return Err(refused());
     }
-    let order_bytes = retained_order(order)?;
+    Ok((socket, parent, retained_order(order)?))
+}
+
+pub(crate) fn run() -> io::Result<()> {
+    let (socket, parent, order_bytes) = inherited_order()?;
     let (fence, selection) = headless_offline::retain()?;
     let (scope, digest, intent) = order_intent(&order_bytes, fence.binding)?;
     let channel = Channel {
@@ -56,6 +63,7 @@ pub(crate) fn run() -> io::Result<()> {
         parent,
         scope,
         digest,
+        kind: 45,
     };
     let (writer, state) = selection.bind_import(|state| fence.require(state))?;
     let (_, node) = intent.identity()?;
@@ -244,13 +252,14 @@ struct Channel {
     parent: i32,
     scope: [u8; 32],
     digest: [u8; 32],
+    kind: u8,
 }
 
 impl Channel {
     fn wire(&self, payload: Payload) -> [u8; WIRE] {
         let mut out = [0; WIRE];
         out[..8].copy_from_slice(b"ZXSAMW1\0");
-        out[8] = 45;
+        out[8] = self.kind;
         out[9..41].copy_from_slice(&self.scope);
         out[41..HEADER].copy_from_slice(&self.digest);
         out[HEADER..].copy_from_slice(&payload);

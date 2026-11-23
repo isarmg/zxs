@@ -31,13 +31,14 @@ pub(crate) struct Setup {
     reset: bool,
     add_data: Option<PathBuf>,
     retire_data: Option<PathBuf>,
+    init_data: Option<PathBuf>,
     preview: Option<SocketAddr>,
 }
 
 impl Setup {
     pub(crate) fn parse(args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
         let mut args = args.peekable();
-        const USAGE: &str = "expected setup-headless check|new|reset SYSTEM RECYCLE DATA [DATA ...] [LOGIN], preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...], or web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN";
+        const USAGE: &str = "expected setup-headless check|new|reset SYSTEM RECYCLE DATA [DATA ...] [LOGIN], preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...], web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN, or add-data|init-data|retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]";
         let mut mode = args.next().ok_or(USAGE)?;
         let web = mode == "web";
         if web {
@@ -63,17 +64,19 @@ impl Setup {
             None
         };
         let reset = mode == "reset";
-        if mode == "add-data" || mode == "retire-data" {
+        if mode == "add-data" || mode == "retire-data" || mode == "init-data" {
             let candidate = PathBuf::from(args.next().ok_or("expected operated DATA directory before current roots")?);
             use std::os::unix::ffi::OsStrExt;
             crate::path_rules::Kind::StorageRoot.check_path(candidate.as_os_str().as_bytes())?;
             let paths = parse_paths(args)?;
-            let (add_data, retire_data) = if mode == "add-data" {
-                (Some(candidate), None)
+            let (add_data, retire_data, init_data) = if mode == "init-data" {
+                (None, None, Some(candidate))
+            } else if mode == "add-data" {
+                (Some(candidate), None, None)
             } else {
-                (None, Some(candidate))
+                (None, Some(candidate), None)
             };
-            return Ok(Self { paths, login: None, web, reset, preview, add_data, retire_data });
+            return Ok(Self { paths, login: None, web, reset, preview, add_data, retire_data, init_data });
         }
         let (paths, login) = if mode == "new" {
             // The last argument is the login; all preceding words name roots.
@@ -100,6 +103,7 @@ impl Setup {
             preview,
             add_data: None,
             retire_data: None,
+            init_data: None,
         })
     }
 
@@ -110,6 +114,11 @@ impl Setup {
         if let Some(candidate) = self.add_data {
             selected.add_data(&candidate)?;
             writeln!(io::stdout().lock(), "Data disk registered.")?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        if let Some(target) = self.init_data {
+            selected.init_data(&target)?;
+            writeln!(io::stdout().lock(), "Selected empty DATA layout confirmed; no service started.")?;
             return Ok(ExitCode::SUCCESS);
         }
         if let Some(target) = self.retire_data {

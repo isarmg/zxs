@@ -19,6 +19,8 @@ use zeroize::Zeroizing;
 
 #[path = "headless_add_data.rs"]
 mod add_data;
+#[path = "headless_init_data.rs"]
+mod init_data;
 #[path = "headless_import_command.rs"]
 pub(super) mod import_command;
 #[path = "headless_import_one.rs"]

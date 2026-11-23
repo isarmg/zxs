@@ -48,6 +48,7 @@ helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR -
   helper setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN
   helper setup-headless reset SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless add-data NEW_DATA SYSTEM RECYCLE DATA [DATA ...]
+  helper setup-headless init-data TARGET SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]
   helper preflight-import [--show-names | --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]
   helper import-one prepare SOURCE RELATIVE NAME TARGET-DATA SYSTEM RECYCLE DATA [DATA ...]

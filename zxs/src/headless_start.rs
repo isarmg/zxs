@@ -200,6 +200,69 @@ impl SelectedStart {
             .try_for_each(|volume| volume.root.require_named())
     }
 
+    pub(super) fn init_data(
+        &self,
+        pool: [u8; 16],
+        token: [u8; 32],
+        path: &[u8],
+        roles: &[[u64; 3]],
+        require_state: impl Fn(&HeldDir) -> io::Result<()>,
+    ) -> io::Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+        if pool != self.pool || roles.len() != self.data.len() + 2 {
+            return Err(refused());
+        }
+        // The parent and child independently resolve names. Under the same
+        // namespace prove that both actually hold the same original role FDs,
+        // including the SYSTEM whose prior routes we will consult.
+        let prove_roles = || -> io::Result<()> {
+            let held = [&self.system, &self.recycle]
+                .into_iter()
+                .chain(self.data.iter().map(|d| &d.root));
+            for (dir, expected) in held.zip(roles) {
+                if dir.live_identity()? != *expected {
+                    return Err(refused());
+                }
+            }
+            Ok(())
+        };
+        prove_roles()?;
+        let target = self
+            .data
+            .iter()
+            .find(|disk| disk.token == token && disk.root.path.as_os_str().as_bytes() == path)
+            .ok_or_else(refused)?;
+        let mark = target
+            .root
+            .opaque_pin_with(MARKER, ReadAccess::NoAtime)?
+            .ok_or_else(refused)?;
+        let mut bytes = [0; MARK_BYTES];
+        if mark.file.metadata()?.len() != MARK_BYTES as u64 {
+            return Err(refused());
+        }
+        (&mark.file).read_exact(&mut bytes)?;
+        if !bytes.starts_with(MARK_MAGIC)
+            || bytes[MARK_MAGIC.len()] != 1
+            || bytes[MARK_MAGIC.len() + 1..MARK_MAGIC.len() + 17] != pool
+            || bytes[MARK_MAGIC.len() + 17..] != token
+        {
+            return Err(refused());
+        }
+        crate::container_store::init_data::initialize(
+            &self.system,
+            &self.recycle,
+            &self.data,
+            pool,
+            target,
+            MARKER,
+            || {
+                require_state(&self.state)?;
+                prove_roles()?;
+                mark.require(&target.root, MARKER)
+            },
+        )
+    }
+
     pub(super) fn bind_import(
         self,
         require_state: impl Fn(&HeldDir) -> io::Result<()>,

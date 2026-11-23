@@ -12,7 +12,7 @@ pub(crate) type Payload=[u8;65];
 #[derive(Clone,Copy)]
 pub(crate) enum Kind{Reserved=3,Complete=5,Lease=6,ChosenFolder=9,VolumeClaim=10,FirstBrowserReady=12,FirstBrowserRequest=13,RustInspect=15,RustStage=16,RustVaultPlaced=17,RustVaultSealed=18,
     CopyRepairBrowserReady=22,CopyRepairBrowserRequest=23,RetirementCheck=29,ImportInventory=30,FreshDatabase=31,DeployedActive=32,DeployedDatabase=33,DeployedMarker=34,SharedAccountDurable=38,JointWriterReady=39,
-    JointWebReceiverReady=40,JointWebMaterial=41,JointSqlPeer=42,JointWriterPeer=43,JointVaultDurable=44,ImportStep=45}
+    JointWebReceiverReady=40,JointWebMaterial=41,JointSqlPeer=42,JointWriterPeer=43,JointVaultDurable=44,ImportStep=45,InitData=46}
 
 pub(crate) struct Channel {fd:File,peer:UCred,scope:[u8;32]}
 pub(crate) fn pair()->io::Result<(File,File)>{
@@ -84,12 +84,15 @@ impl Channel {
         Ok((wire[73..].try_into().expect("fixed payload"),fds.map(File::from)))
     }
     pub(crate) fn wait_import(&self,digest:&[u8;32],live:impl Fn()->io::Result<()>)->io::Result<Payload>{
+        self.wait_offline(Kind::ImportStep,digest,live)
+    }
+    pub(crate) fn wait_offline(&self,kind:Kind,digest:&[u8;32],live:impl Fn()->io::Result<()>)->io::Result<Payload>{
         loop {
-            match self.receive::<0>(Kind::ImportStep,digest) {
+            match self.receive::<0>(kind,digest) {
                 Err(error) if error.kind()==io::ErrorKind::WouldBlock=>{
                     if let Err(exited) = live() {
                         // A terminal packet may have arrived between EAGAIN and observing exit.
-                        return match self.receive::<0>(Kind::ImportStep,digest) {
+                        return match self.receive::<0>(kind,digest) {
                             Err(error) if error.kind()==io::ErrorKind::WouldBlock=>Err(exited),
                             result=>result.map(|(payload,_)|payload),
                         };

@@ -1,6 +1,7 @@
 //! Complete opaque node saves and metadata selection for individual containers.
 mod codec;
 pub(crate) mod import_one;
+pub(crate) mod init_data;
 mod model;
 pub(crate) mod offline_catalog;
 mod recycle;

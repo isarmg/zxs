@@ -214,7 +214,16 @@ fn os_result(rc: c_int) -> io::Result<()> {
 }
 
 impl HeldDir {
-    /// Same open directory, not a fresh lookup; retains the existing flock.
+    /// Ephemeral identity of this held directory for one offline local handoff.
+    pub(crate) fn live_identity(&self) -> io::Result<[u64; 3]> {
+        self.require_named()?;
+        Ok([
+            self.entity.device,
+            self.entity.inode,
+            mounts::id(&self.file)?,
+        ])
+    }
+
     pub(crate) fn same_mount(&self, other: &Self) -> io::Result<bool> {
         Ok(mounts::id(&self.file)? == mounts::id(&other.file)?)
     }

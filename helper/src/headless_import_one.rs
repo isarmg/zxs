@@ -339,7 +339,7 @@ impl Ticket {
     }
 }
 
-fn selected_data(reset: &Reset, bytes: &[u8]) -> io::Result<[u8; 32]> {
+pub(super) fn selected_data(reset: &Reset, bytes: &[u8]) -> io::Result<[u8; 32]> {
     reset
         .selected
         .roots

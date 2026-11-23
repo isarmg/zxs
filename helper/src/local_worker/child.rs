@@ -1,6 +1,6 @@
 //! Actual reaped private workers for offline provisioning and interactive diagnostics.
 use super::{bad,transport::Channel};
-use helper_linux_evidence::diagnostic_process::{OfflineSql,prepare_account_sql_exec,prepare_import_one_exec,require_waitable_children};
+use helper_linux_evidence::diagnostic_process::{OfflineSql,prepare_account_sql_exec,prepare_import_one_exec,prepare_init_data_exec,require_waitable_children};
 use rustix::{io::Errno,process::{Pid,PidfdFlags,Signal,pidfd_open,pidfd_send_signal,waitid,WaitId,WaitIdOptions}};
 use std::{fs::File,io,os::fd::AsFd,process::{Child,Command,Stdio},thread,time::{Duration,Instant}};
 
@@ -18,10 +18,17 @@ impl Worker {
         Self::spawn_prepared(&mut cmd)
     }
     pub(crate) fn spawn_import(exe:&File,peer:&File,order:&File,lease:&File)->io::Result<Self>{
+        Self::spawn_storage(exe,peer,order,lease,prepare_import_one_exec)
+    }
+    pub(crate) fn spawn_data_init(exe:&File,peer:&File,order:&File,lease:&File)->io::Result<Self>{
+        Self::spawn_storage(exe,peer,order,lease,prepare_init_data_exec)
+    }
+    fn spawn_storage(exe:&File,peer:&File,order:&File,lease:&File,
+        prepare:fn(&mut Command,&File,&File,&File)->io::Result<()>)->io::Result<Self>{
         require_waitable_children()?;
-        let mut cmd=Command::new("/not-an-offline-import-program");
+        let mut cmd=Command::new("/not-an-offline-storage-program");
         cmd.env_clear().stdin(Stdio::from(lease.try_clone()?)).stdout(Stdio::null()).stderr(Stdio::null());
-        prepare_import_one_exec(&mut cmd,exe,peer,order)?;
+        prepare(&mut cmd,exe,peer,order)?;
         Self::spawn_prepared(&mut cmd)
     }
     fn spawn_prepared(cmd:&mut Command)->io::Result<Self>{
@@ -41,7 +48,7 @@ impl Worker {
         }}
     }
     pub(crate) fn live(&self)->io::Result<()>{
-        if !self.done&&self.peek()?.is_none(){Ok(())}else{Err(bad("the original SQLite worker ended before the next step"))}
+        if !self.done&&self.peek()?.is_none(){Ok(())}else{Err(bad("the original maintenance worker ended before the next step"))}
     }
     pub(crate) fn finish_import(&mut self,channel:&Channel)->io::Result<()>{
         let status = self.child.wait()?;

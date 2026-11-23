@@ -239,6 +239,14 @@ pub fn prepare_import_one_exec(cmd:&mut Command,original:&File,channel:&File,ord
     prepare_fixed_peer_exec(cmd,original,channel,order,c"zxs",c"__offline-import-one-v1")
 }
 
+/// Select the dedicated enrolled-DATA initialization worker on the pinned binary.
+///
+/// # Errors
+/// Fails if the exact executable, order or channel cannot be retained.
+pub fn prepare_init_data_exec(cmd:&mut Command,original:&File,channel:&File,order:&File)->io::Result<()>{
+    prepare_fixed_peer_exec(cmd,original,channel,order,c"zxs",c"__offline-init-data-v1")
+}
+
 #[allow(unsafe_code)]
 fn prepare_fixed_peer_exec(cmd:&mut Command,original:&File,channel:&File,order:&File,program:&'static std::ffi::CStr,worker_argument:&'static std::ffi::CStr)->io::Result<()>{
     use std::os::fd::AsFd;
