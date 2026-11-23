@@ -36,10 +36,7 @@ use std::{
     collections::BTreeSet,
     ffi::OsString,
     io,
-    os::unix::{
-        ffi::{OsStrExt, OsStringExt},
-        fs::MetadataExt,
-    },
+    os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };

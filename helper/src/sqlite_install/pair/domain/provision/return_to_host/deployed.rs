@@ -1,32 +1,23 @@
-//! A read-only, one-session owner for the ZXS deployment locator and the
-//! authoritative existing site. No Helper state or credential is consulted.
+//! Qualify the deployment locator and original protected site in the retained
+//! historical worker. No Helper state or credential is consulted.
 use super::{
-    PRODUCT, Site, approval, bad, child, contents, layout, lease, mark, product_pin,
-    public_record::Public,
-    rust_site::{PublicAuthority, VaultStamp, checked_vault_stamp},
-    shared_lease, state_pins,
+    PRODUCT, Site, approval, bad, child, contents, layout, mark, public_record::Public,
+    rust_site::PublicAuthority,
 };
 use crate::{
-    pinned::{Kind, Pinned, private_inode_reader},
+    pinned::private_inode_reader,
     smb_profile::rust_first::{MAX_WIRE, RustPlan},
-    sqlite_install::{
-        pair::fresh_issuer::{SitePayload, compiled_schema, image},
-        product_layout,
-    },
+    sqlite_install::pair::fresh_issuer::{SitePayload, compiled_schema, image},
 };
-use rustix::fs::{FlockOperation, Mode, OFlags, ResolveFlags, flock, openat2};
-use sha2::{Digest, Sha256};
+use rustix::fs::{Mode, OFlags, ResolveFlags, openat2};
 use std::{
     ffi::CStr,
     fs::File,
     io,
     os::unix::fs::{FileExt, MetadataExt},
-    path::Path,
 };
 
 const LOCATOR: &CStr = c"deployment.v1";
-const VAULT: &CStr = c"vault";
-use crate::sqlite_install::pair::native_sql::rust_vault::VAULT_NAME as RECORD;
 const MAGIC: &[u8; 16] = b"ZXS-DEPLOYED-V1\0";
 fn unknown() -> io::Error {
     bad("the original independently managed ZXS deployment was not confirmed")
@@ -87,238 +78,6 @@ fn locator(parent: &File) -> io::Result<Selector> {
         return Err(unknown());
     }
     Ok(Selector { pin, value })
-}
-
-#[must_use]
-pub(in crate::sqlite_install::pair) struct DeployedSite {
-    parent: File,
-    selector: Selector,
-    original: Site,
-    site_ex: File,
-    system: Pinned,
-    system_ex: File,
-    authority: PublicAuthority,
-    plan_file: Public,
-    payload: SitePayload,
-    plan: RustPlan,
-    verified_image: image::Image,
-}
-impl DeployedSite {
-    pub(in crate::sqlite_install::pair) fn select() -> io::Result<Self> {
-        Self::select_with_system(|path| Pinned::already_mounted(path, Kind::StorageRoot))
-    }
-    pub(in crate::sqlite_install::pair) fn select_for_account_reset() -> io::Result<Self> {
-        Self::select_with_system(|path| {
-            let scope = std::sync::Arc::new(crate::maintenance::HostMounts::discovery_view(false)?);
-            Pinned::require_local_root(&scope)?;
-            Pinned::local_storage(path, &scope)
-        })
-    }
-    fn select_with_system(find: impl FnOnce(&Path) -> io::Result<Pinned>) -> io::Result<Self> {
-        compiled_schema()?;
-        approval::no_inherited_descriptors()?;
-        approval::same_terminal(&io::stdin(), &io::stderr())?;
-        let host = approval::host_admin()?;
-        let [top, base] = state_pins(&host)?;
-        let parent = child(&base, c".")?;
-        if mark(&base)? != mark(&parent)? {
-            return Err(unknown());
-        }
-        layout::protected_control(&parent)?;
-        flock(&parent, FlockOperation::NonBlockingLockShared)?;
-        let selector = locator(&parent)?;
-        let original = Site::product(host, &selector.value.instance, false)?;
-        if mark(&original.chain[0])? != mark(&top)?
-            || mark(&original.chain[PRODUCT.len() - 1])? != mark(&parent)?
-        {
-            return Err(unknown());
-        }
-        let site_ex = child(original.base(), c".")?;
-        let authority = PublicAuthority::select(&site_ex)?;
-        let payload = SitePayload::decode(authority.bytes())?;
-        if payload.origin.instance != selector.value.instance
-            || <[u8; 32]>::from(Sha256::digest(authority.bytes())) != selector.value.sha
-        {
-            return Err(unknown());
-        }
-        layout::verify_registered_instance(&original, payload.subject.tuple().2)?;
-        let plan_file = Public::select(&site_ex, c"rust.install", 1..=MAX_WIRE)?;
-        let plan = RustPlan::decode(plan_file.bytes()).map_err(bad)?;
-        if plan.origin != payload.origin || plan.sha() != payload.plan_sha {
-            return Err(unknown());
-        }
-        let product = mark(&original.chain[0])?.0;
-        let verified_image = image::Image::select(&payload.image, &payload.elf_sha, product)?;
-        let system = find(&payload.system)?;
-        product_layout::require_original_media(product, [&system])?;
-        let system_ex = system.storage_directory()?;
-        // Same kernel order as the only original cold supervisor. An online
-        // participant holds S SH, in which case this check cannot qualify.
-        flock(&system_ex, FlockOperation::NonBlockingLockExclusive)?;
-        flock(&site_ex, FlockOperation::NonBlockingLockExclusive)?;
-        let result = Self {
-            parent,
-            selector,
-            original,
-            site_ex,
-            system,
-            system_ex,
-            authority,
-            plan_file,
-            payload,
-            plan,
-            verified_image,
-        };
-        result.require()?;
-        Ok(result)
-    }
-    pub(in crate::sqlite_install::pair) fn require(&self) -> io::Result<()> {
-        compiled_schema()?;
-        approval::same_terminal(&io::stdin(), &io::stderr())?;
-        let (_, uid, gid) = self.payload.subject.tuple();
-        layout::protected_control(&self.parent)?;
-        layout::verify_registered_instance(&self.original, gid)?;
-        product_layout::require_original_media(mark(&self.original.chain[0])?.0, [&self.system])?;
-        shared_lease(&self.parent, mark(&self.original.chain[PRODUCT.len() - 1])?)?;
-        let s = self.system.require_same_named_mount()?;
-        if !self.system.passive_mount_observation()
-            || self.system.metadata()?.uid() != uid
-            || self.system.metadata()?.mode() != 0o040_700
-            || self.payload.system.as_path() != self.system.path()
-        {
-            return Err(unknown());
-        }
-        lease(&self.system_ex, (self.system.entity(), s.id))?;
-        lease(&self.site_ex, mark(self.original.base())?)?;
-        layout::bare_acl(&self.site_ex, c"system.posix_acl_default")?;
-        // Both names are retained even if a future product pair uses one
-        // physical backing; never let an origin be inside the other role.
-        if self
-            .system
-            .visible_chain()
-            .contains(&mark(self.original.base())?.0)
-            || mark(&self.original.host)?.0 == self.system.entity()
-        {
-            return Err(unknown());
-        }
-        for path in &self.original.chain {
-            if mark(path)?.0 == self.system.entity() {
-                return Err(unknown());
-            }
-        }
-        if self.verified_image.includes(self.system.entity())
-            || self
-                .system
-                .visible_chain()
-                .contains(&self.verified_image.entity())
-            || self.verified_image.includes(mark(&self.parent)?.0)
-        {
-            return Err(unknown());
-        }
-        let located = locator(&self.parent)?;
-        if located.value != self.selector.value
-            || super::live::Stamp::on(&located.pin)? != super::live::Stamp::on(&self.selector.pin)?
-        {
-            return Err(unknown());
-        }
-        contents(&self.site_ex, &[b"rust.install", b"site.v1", b"vault"])?;
-        self.authority.require(&self.site_ex)?;
-        self.plan_file.require(&self.site_ex, c"rust.install")?;
-        self.verified_image.require()
-    }
-    pub(in crate::sqlite_install::pair) fn original(&self) -> (&Pinned, &File) {
-        (&self.system, &self.system_ex)
-    }
-    pub(in crate::sqlite_install::pair) fn payload(&self) -> &SitePayload {
-        &self.payload
-    }
-    pub(in crate::sqlite_install::pair) fn plan(&self) -> &RustPlan {
-        &self.plan
-    }
-    pub(in crate::sqlite_install::pair) fn site_sha(&self) -> [u8; 32] {
-        self.selector.value.sha
-    }
-    pub(in crate::sqlite_install::pair) fn require_vault_prefix(
-        &self,
-        wanted: &[u8; 224],
-    ) -> io::Result<()> {
-        self.observe_vault(wanted).map(drop)
-    }
-    pub(super) fn offline_vault_directory(&self) -> io::Result<File> {
-        self.require()?;
-        let pin = || product_pin(&self.site_ex, VAULT);
-        let vault = pin()?;
-        let m = vault.metadata()?;
-        if m.mode() != 0o040_700 || m.uid() != 0 || m.gid() != 0 {
-            return Err(unknown());
-        }
-        let dir = child(&vault, c".")?;
-        if mark(&dir)? != mark(&vault)? || mark(&dir)?.1 != mark(&self.site_ex)?.1 {
-            return Err(unknown());
-        }
-        layout::exact_with(&self.site_ex, VAULT, &vault, pin)?;
-        layout::bare_acl(&dir, c"system.posix_acl_access")?;
-        layout::bare_acl(&dir, c"system.posix_acl_default")?;
-        self.require()?;
-        Ok(dir)
-    }
-    pub(in crate::sqlite_install::pair) fn observe_vault(
-        &self,
-        wanted: &[u8; 224],
-    ) -> io::Result<ObservedVault<'_>> {
-        let dir = self.offline_vault_directory()?;
-        contents(&dir, &[RECORD.to_bytes()])?;
-        let original = leaf(&dir, RECORD)?;
-        let mount = mark(&dir)?.1;
-        let stamp = checked_vault_stamp(&original, mount)?;
-        let read = private_inode_reader(&original, 0, mount)?;
-        layout::bare_acl(&read, c"system.posix_acl_access")?;
-        let mut prefix = [0; 224];
-        read.read_exact_at(&mut prefix, 0)?; // never the 16-byte credential
-        if &prefix != wanted
-            || checked_vault_stamp(&read, mount)? != stamp
-            || checked_vault_stamp(&leaf(&dir, RECORD)?, mount)? != stamp
-            || mark(&product_pin(&self.site_ex, VAULT)?)? != mark(&dir)?
-        {
-            return Err(unknown());
-        }
-        // Retain only the original non-readable pin, never the prefix reader.
-        drop(read);
-        let witness = ObservedVault {
-            site: self,
-            dir,
-            original,
-            stamp,
-            mount,
-        };
-        witness.require()?;
-        Ok(witness)
-    }
-}
-pub(in crate::sqlite_install::pair) struct ObservedVault<'a> {
-    site: &'a DeployedSite,
-    dir: File,
-    original: File,
-    stamp: VaultStamp,
-    mount: u64,
-}
-impl ObservedVault<'_> {
-    pub(in crate::sqlite_install::pair) fn require(&self) -> io::Result<()> {
-        self.site.require()?;
-        let parent = mark(&self.dir)?;
-        if parent.1 != self.mount || mark(&product_pin(&self.site.site_ex, VAULT)?)? != parent {
-            return Err(unknown());
-        }
-        contents(&self.dir, &[RECORD.to_bytes()])?;
-        layout::bare_acl(&self.dir, c"system.posix_acl_access")?;
-        layout::bare_acl(&self.dir, c"system.posix_acl_default")?;
-        if checked_vault_stamp(&self.original, self.mount)? != self.stamp
-            || checked_vault_stamp(&leaf(&self.dir, RECORD)?, self.mount)? != self.stamp
-        {
-            return Err(unknown());
-        }
-        self.site.require()
-    }
 }
 
 fn qualify_payload(bytes: &[u8], plan: &RustPlan, site_sha: [u8; 32]) -> io::Result<SitePayload> {
@@ -386,6 +145,7 @@ pub(in crate::sqlite_install::pair) fn deployed_worker_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     #[test]
     fn reattach_only_the_exact_complete_nonzero_zxs_selector() {
         let mut bytes = [0; 64];

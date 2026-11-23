@@ -1,47 +1,21 @@
 //! Preserve exact protected product ancestors plus nonreplacement publication.
 mod initial_deployment;
 use super::super::Times;
-use super::{
-    PRODUCT, Site, bad, child, contents, mark, product_leaf, product_pin, product_top, safe_dir,
-};
+use super::{PRODUCT, Site, bad, child, mark, product_pin, product_top, safe_dir};
 use crate::{maintenance::HostMounts, pinned::Mount, sqlite_install::product_layout};
 pub(in crate::sqlite_install::pair) use initial_deployment::FreshParent;
+#[cfg(test)]
+use rustix::fs::{RenameFlags, renameat_with};
 use rustix::{
-    fs::{Mode, RenameFlags, fchmod, fchown, fgetxattr, mkdirat, renameat_with},
+    fs::{Mode, fgetxattr},
     io::Errno,
-    process::{Gid, Uid},
 };
 use std::{
     ffi::{CStr, OsStr},
     fs::File,
-    io::{self, Read},
+    io,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
 };
-const OWNER: Mode = Mode::RWXU;
-const INSTANCE: Mode = Mode::from_bits_retain(0o750);
-const PUBLIC: Mode = Mode::from_bits_retain(0o444);
-fn conflict() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "layout or stage already exists; no takeover or automatic retry",
-    )
-}
-fn noentry(parent: &File, n: &CStr) -> io::Result<()> {
-    match product_leaf(parent, n) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Ok(_) => Err(conflict()),
-        Err(e) => Err(e),
-    }
-}
-fn same_name(parent: &File, n: &CStr, original: &File) -> io::Result<()> {
-    let now = product_leaf(parent, n)?;
-    let (a, m) = mark(original)?;
-    let (p, pm) = mark(parent)?;
-    if mark(&now)? != (a, m) || pm != m || p.dev != a.dev || p == a {
-        return Err(bad("different original layout name, entity or mount"));
-    }
-    Ok(())
-}
 // Do not infer write/search rights from group bits while a named Linux POSIX
 // ACL or inherited default ACL may alter them. Unknown on this host is not
 // permission to chown/chmod an existing object.
@@ -139,52 +113,6 @@ fn host_mount(site: &Site) -> io::Result<()> {
     }
     Ok(())
 }
-fn creation_rights(status: &[u8]) -> bool {
-    fn field<'a>(s: &'a [u8], k: &[u8]) -> Option<&'a str> {
-        let mut rows = s
-            .split(|&c| c == b'\n')
-            .filter_map(|row| row.strip_prefix(k));
-        let x = std::str::from_utf8(rows.next()?).ok()?;
-        (rows.next().is_none()).then_some(x)
-    }
-    if status.len() > 65536 || !status.ends_with(b"\n") {
-        return false;
-    }
-    let Some(mask) = field(status, b"Umask:\t")
-        .filter(|v| {
-            v.len() == 4 && v.as_bytes()[0] == b'0' && v.bytes().all(|c| matches!(c, b'0'..=b'7'))
-        })
-        .and_then(|v| u32::from_str_radix(v, 8).ok())
-    else {
-        return false;
-    };
-    let Some(cap) = field(status, b"CapEff:\t")
-        .filter(|v| v.len() == 16 && v.bytes().all(|c| c.is_ascii_hexdigit()))
-        .and_then(|v| u64::from_str_radix(v, 16).ok())
-    else {
-        return false;
-    };
-    // CHOWN, FOWNER and either DAC_OVERRIDE or DAC_READ_SEARCH. Do not
-    // change the process mask or capabilities to make a site acceptable.
-    mask & 0o700 == 0 && cap & 0x9 == 0x9 && cap & 0x6 != 0
-}
-pub(super) fn creation_preflight(parent: &File) -> io::Result<()> {
-    if parent.metadata()?.mode() & 0o2000 != 0 {
-        return Err(bad(
-            "setgid on the immediate installation parent is not supported; not changing it",
-        ));
-    }
-    let mut status = Vec::new();
-    crate::maintenance::thread_file(c"thread-self/status")?
-        .take(65537)
-        .read_to_end(&mut status)?;
-    if !creation_rights(&status) {
-        return Err(bad(
-            "current umask or effective privileges cannot create the exact new layout",
-        ));
-    }
-    Ok(())
-}
 fn access_chain(site: &Site, gid: u32) -> io::Result<()> {
     site.check()?;
     host_mount(site)?;
@@ -223,29 +151,6 @@ pub(super) fn verify_registered_instance(site: &Site, gid: u32) -> io::Result<()
     })?;
     site.check()
 }
-fn new_dir(parent: &File, n: &CStr) -> io::Result<File> {
-    // Only the actual successful creator goes on to open this name. Even an
-    // already-empty directory is ineligible, never a candidate for chmod/chown.
-    mkdirat(parent, n, OWNER)?;
-    let pin = product_pin(parent, n)?;
-    let f = child(&pin, c".")?;
-    if mark(&pin)? != mark(&f)? {
-        return Err(bad("changed newly created directory"));
-    }
-    same_name(parent, n, &f)?;
-    let m = f.metadata()?;
-    if !m.is_dir()
-        || m.uid() != rustix::process::geteuid().as_raw()
-        || m.nlink() == 0
-        || m.mode() & 0o7777 != 0o700
-    {
-        return Err(bad("new temporary directory was not private"));
-    }
-    bare_acl(&f, c"system.posix_acl_access")?;
-    bare_acl(&f, c"system.posix_acl_default")?;
-    contents(&f, &[])?;
-    Ok(f)
-}
 fn attrs(f: &File, u: u32, g: u32, mode: Mode, directory: bool) -> io::Result<()> {
     let md = f.metadata()?;
     if (if directory {
@@ -262,12 +167,7 @@ fn attrs(f: &File, u: u32, g: u32, mode: Mode, directory: bool) -> io::Result<()
     }
     Ok(())
 }
-fn owned(f: &File, u: u32, g: u32, m: Mode) -> io::Result<()> {
-    fchown(f, Some(Uid::from_raw(u)), Some(Gid::from_raw(g)))?;
-    fchmod(f, m)?;
-    Ok(())
-}
-
+#[cfg(test)]
 fn publish(parent: &File, stage: &CStr, dest: &CStr) -> io::Result<()> {
     renameat_with(parent, stage, parent, dest, RenameFlags::NOREPLACE)?;
     Ok(())

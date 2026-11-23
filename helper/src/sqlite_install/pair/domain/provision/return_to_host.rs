@@ -5,7 +5,6 @@ mod public_record;
 mod rust_site;
 #[cfg(test)]
 mod rust_vault_io;
-mod site_lease;
 mod start;
 use super::{bad, child, contents, live, mark};
 use crate::{
@@ -16,7 +15,7 @@ use crate::{
     },
     sqlite_install::{approval, product_layout, request::Id},
 };
-pub(in crate::sqlite_install::pair) use deployed::{DeployedSite, deployed_worker_payload};
+pub(in crate::sqlite_install::pair) use deployed::deployed_worker_payload;
 pub(in crate::sqlite_install::pair) use layout::FreshParent;
 pub(in crate::sqlite_install::pair) use rust_site::{
     VaultStamp, checked_vault_stamp, verify_fresh_worker,
@@ -350,13 +349,6 @@ fn require_owned(fd: &File, id: (Entity, u64), mode: &str) -> io::Result<()> {
     Ok(())
 }
 pub(in crate::sqlite_install) fn lease(fd: &File, id: (Entity, u64)) -> io::Result<()> {
-    prove_lease(fd, id, true)
-}
-pub(in crate::sqlite_install) fn shared_lease(fd: &File, id: (Entity, u64)) -> io::Result<()> {
-    prove_lease(fd, id, false)
-}
-fn prove_lease(fd: &File, id: (Entity, u64), exclusive: bool) -> io::Result<()> {
-    let mode = if exclusive { "WRITE" } else { "READ" };
     let flags = fcntl_getfl(fd)?;
     if flags.contains(OFlags::PATH)
         || !flags.contains(OFlags::DIRECTORY)
@@ -366,20 +358,15 @@ fn prove_lease(fd: &File, id: (Entity, u64), exclusive: bool) -> io::Result<()> 
     {
         return Err(bad("not the expected original worker lease"));
     }
-    require_owned(fd, id, mode)?;
+    require_owned(fd, id, "WRITE")?;
     // Probe a competing independent OFD; never convert or reacquire the
-    // original. A READ loan can never be used as a WRITE loan.
+    // original. A READ loan can never satisfy this WRITE-lease check.
     let other = child(fd, c".")?;
     if mark(&other)? != id {
         return Err(bad("lease original changed"));
     }
-    let competing = if exclusive {
-        FlockOperation::NonBlockingLockShared
-    } else {
-        FlockOperation::NonBlockingLockExclusive
-    };
-    match flock(&other, competing) {
-        Err(Errno::WOULDBLOCK) => require_owned(fd, id, mode),
+    match flock(&other, FlockOperation::NonBlockingLockShared) {
+        Err(Errno::WOULDBLOCK) => require_owned(fd, id, "WRITE"),
         Err(e) => Err(e.into()),
         Ok(()) => Err(bad("original lease no longer conflicts")),
     }
