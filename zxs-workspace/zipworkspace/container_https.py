@@ -326,7 +326,7 @@ class HttpsExchange:
             raise Rejected("node GET needs exact selected IDs, length and SHA-256")
         return f"{_ROOT}/{container}/nodes/{node}/data"
 
-    def _receive_node(self, target, length, sha256, output):
+    def _receive_node(self, target, length, sha256, write):
         headers = {"Accept": "application/octet-stream", "Accept-Encoding": "identity"}
         with self._exchange("GET", target, headers, None) as response:
             declared, fields = _read_headers(response, b"application/octet-stream")
@@ -334,13 +334,19 @@ class HttpsExchange:
                 raise Rejected("node GET disagreed with the selected metadata")
             digest = hashlib.sha256()
             for block in _read_parts(response, declared):
-                if output.write(block) != len(block):
+                if write(block) != len(block):
                     raise OSError("short local node write")
                 digest.update(block)
             if digest.hexdigest() != sha256:
                 raise Rejected("node GET bytes disagreed with the selected SHA-256")
-        output.flush()
-        os.fsync(output.fileno())
+
+    def read_node_into(self, container, node, *, length, sha256, write):
+        """Stream one verified node into an already private sink; the caller publishes."""
+        target = self._node_target(container, node, length, sha256)
+        try:
+            self._receive_node(target, length, sha256, write)
+        except self._exchange_errors() as exc:
+            raise Rejected("Workspace node read did not complete") from exc
 
     @contextmanager
     def download_node(self, container, node, *, length, sha256):
@@ -355,7 +361,9 @@ class HttpsExchange:
             body = Path(directory) / "body"
             try:
                 with body.open("xb") as output:
-                    self._receive_node(target, length, sha256, output)
+                    self._receive_node(target, length, sha256, output.write)
+                    output.flush()
+                    os.fsync(output.fileno())
                 original = body.open("rb")
             except self._exchange_errors() as exc:
                 raise Rejected("Workspace node read did not complete") from exc
@@ -370,7 +378,9 @@ class HttpsExchange:
         target = self._node_target(container, node, length, sha256)
         with stage_pair() as (output, original):
             try:
-                self._receive_node(target, length, sha256, output)
+                self._receive_node(target, length, sha256, output.write)
+                output.flush()
+                os.fsync(output.fileno())
                 output.close()
                 if os.fstat(original.fileno()).st_size != length:
                     raise Rejected("the held node byte count changed")

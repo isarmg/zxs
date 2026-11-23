@@ -8,7 +8,7 @@ import sys
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-                               QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QSplitter,
+                               QFileDialog, QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QSplitter,
                                QTextBrowser, QVBoxLayout, QWidget)
 
 from ..model import new_id
@@ -39,6 +39,7 @@ class ContainerPanel(QWidget):
     def __init__(self, operations=None, *, write_profile=None, native_window=None):
         super().__init__()
         self.ops, self.editor, self.cold = operations, None, None
+        self._download_window = native_window if sys.platform == "linux" else None
         self._configured_profile = self._profile = write_profile
         self._owned = None
         self._checking_connection = False
@@ -103,7 +104,10 @@ class ContainerPanel(QWidget):
         actions.addRow(self.save_button, self.branch_button)
         actions.addRow(self.recycle_button, self.status_button)
         actions.addRow(self.retry_button)
-        self.copy_transfer_button = None
+        self.copy_transfer_button = self.download_button = None
+        if self._download_window is not None:
+            self.download_button = button("另存所选节点…", self._download)
+            actions.addRow(self.download_button)
         if sys.platform == "linux":
             self.copy_transfer_button = button("复制原传输信息", self._copy_selected_transfer)
             actions.addRow(self.copy_transfer_button)
@@ -391,6 +395,8 @@ class ContainerPanel(QWidget):
         self.disconnect_button.setEnabled(self.ops is not None)
         self.refresh.setEnabled(self._available(None))
         self.open_button.setEnabled(active and key in self.listed)
+        if self.download_button is not None:
+            self.download_button.setEnabled(self._download_scope() is not None)
         self.rename_button.setEnabled(self._scope(Kind.RENAME) is not None)
         self.tags_button.setEnabled(self._scope(Kind.TAGS) is not None)
         self.recycle_button.setEnabled(self._scope(Kind.RECYCLE) is not None)
@@ -444,6 +450,69 @@ class ContainerPanel(QWidget):
             self.editor.paint()
         if self.cold is not None:
             self.cold.paint()
+
+    def _download_scope(self):
+        key, owner = self._current(), self._owned
+        info = self.details.get(key)
+        branch, node = self.branches.currentData(), self.nodes.currentData()
+        if (self._download_window is None or self._download_window._container_edit_locked
+                or owner is None or owner.operations is not self.ops or not owner._listed
+                or self._checking_connection or key not in self.listed or not self._available(key)
+                or info is None or info.container.id != key or branch not in info.branches
+                or node is None or node not in branch.nodes):
+            return None
+        return owner, info, branch, node
+
+    def _download(self):
+        selected, host = self._download_scope(), self._download_window
+        if selected is None or host.pending is not None:
+            return
+
+        def still_selected():
+            now = self._download_scope()
+            return (now is not None and now[0] is selected[0] and now[1] is selected[1]
+                    and now[2:] == selected[2:])
+
+        # The picker supplies a spelling, not a write or an overwrite grant.
+        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.DontResolveSymlinks | QFileDialog.Option.DontConfirmOverwrite)
+        name, _ = QFileDialog.getSaveFileName(self, "选择现有本机目录和新文件名（不覆盖）",
+                                              "", "所有文件 (*)", options=opts)
+        if not name or not still_selected():
+            return
+        from .container_download import ContainerNodeCopy
+        try:
+            plan = ContainerNodeCopy(*selected, name)
+        except Exception as error:
+            host.inform(str(error))
+            return
+
+        def submit(title, work, done, **options):
+            try:
+                future = host.job(title, work, done, failed=lambda _error: plan.close(), **options)
+                if future is None:
+                    plan.close()
+                else:
+                    future.add_done_callback(lambda f: plan.close() if f.cancelled() else None)
+            except BaseException:
+                plan.close()
+                raise
+
+        def reviewed(detail):
+            try:
+                if still_selected() and confirm(self, "另存此原节点", detail,
+                        attestation="我选择这个新文件名，并保持原目的目录不被移动或改写。",
+                        action_text="下载并核验") and still_selected():
+                    submit("正在下载并核验所选原节点…", partial(plan.run, confirmed=True), host.inform,
+                           cancel=plan.cancel, progress_report=plan.progress)
+                else:
+                    plan.close()
+                    host.inform("已取消，未下载或写入。")
+            except BaseException:
+                plan.close()
+                raise
+
+        submit("正在核对所选本机目录，尚未下载或写入…", plan.review, reviewed)
 
     def _submit(self, info, change):
         key = info.container.id
