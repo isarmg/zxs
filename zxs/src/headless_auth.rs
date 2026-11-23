@@ -1,12 +1,11 @@
 //! Fresh headless credential binding. No listener, HTTP parser or setup writer.
 use crate::password::{Verifier, login_name};
 use std::{
-    ffi::OsStr,
+    ffi::{OsStr, c_int},
     fs::File,
     io::{self, Read},
-    mem::{MaybeUninit, size_of},
     os::{
-        fd::AsFd,
+        fd::AsRawFd,
         unix::{ffi::OsStrExt, fs::MetadataExt, net::UnixStream},
     },
     path::{Path, PathBuf},
@@ -296,33 +295,18 @@ impl<'owner> Peer<'owner> {
     }
 }
 
+unsafe extern "C" {
+    fn zxs_startup_peer_uid(fd: c_int, uid: *mut u32) -> c_int;
+}
+
 fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
-    use std::os::fd::AsRawFd;
-    let mut cred = MaybeUninit::<libc::ucred>::uninit();
-    let mut len = libc::socklen_t::try_from(size_of::<libc::ucred>()).map_err(|_| invalid())?;
-    // SAFETY: the borrowed socket stays open; both output buffers are
-    // writable and sized for the fixed Linux SO_PEERCRED result.
-    let result = unsafe {
-        libc::getsockopt(
-            stream.as_fd().as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            cred.as_mut_ptr().cast(),
-            &raw mut len,
-        )
-    };
-    if result != 0 {
-        return Err(io::Error::last_os_error());
+    let mut uid = 0;
+    // SAFETY: the accepted socket stays borrowed and the UID output is writable.
+    match unsafe { zxs_startup_peer_uid(stream.as_raw_fd(), &raw mut uid) } {
+        0 => Ok(uid),
+        -1 => Err(io::Error::last_os_error()),
+        _ => Err(invalid()),
     }
-    if usize::try_from(len).ok() != Some(size_of::<libc::ucred>()) {
-        return Err(invalid());
-    }
-    // SAFETY: successful SO_PEERCRED initialized exactly the requested struct.
-    let cred = unsafe { cred.assume_init() };
-    if cred.pid <= 0 {
-        return Err(invalid());
-    }
-    Ok(cred.uid)
 }
 
 struct BasicCredentials {

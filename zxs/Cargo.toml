@@ -22,11 +22,3 @@ required-features = ["host-activation"]
 # This project builds alone, including after removal of its enclosing checkout.
 [workspace]
 resolver = "3"
-# Vendored upstream libraries are dependencies, not ZXS workspace/test members.
-exclude = [
-    "vendor/rust/libc-0.2.191",
-]
-
-# Linux ABI declarations use the retained local libc bindings.
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }

@@ -5,6 +5,11 @@ use std::{
     process::Command,
 };
 
+const LINUX_C: [(&str, &str); 3] = [
+    ("src/linux.c", "linux.o"),
+    ("src/startup_native.c", "startup_native.o"),
+    ("src/gateway_native.c", "gateway_native.o"),
+];
 const PASSWORD: &str = "src/password/verification";
 const PASSWORD_C: [(&str, &str); 6] = [
     ("argon2.c", "argon2.o"),
@@ -30,7 +35,9 @@ fn main() {
         "linux",
         "ZXS requires Linux"
     );
-    println!("cargo:rerun-if-changed=src/linux.c");
+    for (source, _) in LINUX_C {
+        println!("cargo:rerun-if-changed={source}");
+    }
     for p in PASSWORD_C.iter().map(|&(p, _)| p).chain(PASSWORD_HEADERS) {
         println!("cargo:rerun-if-changed={PASSWORD}/{p}");
     }
@@ -48,7 +55,6 @@ fn main() {
         })
     };
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let linux = out.join("linux.o");
     let cc = tool("CC", "cc");
     let compile = |source: &str, object: &Path, flags: &[&str]| {
         assert!(
@@ -65,7 +71,16 @@ fn main() {
             "compile {source}"
         );
     };
-    compile("src/linux.c", &linux, &["-Wall", "-Wextra", "-Werror"]);
+    let linux_flags: &[&str] = if env::var_os("CARGO_FEATURE_HOST_ACTIVATION").is_some() {
+        &["-Wall", "-Wextra", "-Werror", "-DZXS_HOST_ACTIVATION"]
+    } else {
+        &["-Wall", "-Wextra", "-Werror"]
+    };
+    let linux_objects = LINUX_C.map(|(source, name)| {
+        let object = out.join(name);
+        compile(source, &object, linux_flags);
+        object
+    });
     let password_dir = out.join("password");
     std::fs::create_dir_all(&password_dir).expect("password verifier build directory");
     let password_headers = format!("-I{PASSWORD}");
@@ -99,7 +114,7 @@ fn main() {
             "archive {name}"
         );
     };
-    archive("libzxs_linux.a", &[linux]);
+    archive("libzxs_linux.a", &linux_objects);
     archive("libzxs_password.a", &password_objects);
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=zxs_linux");

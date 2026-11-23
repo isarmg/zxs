@@ -3,12 +3,5 @@
 version = 4
 
 [[package]]
-name = "libc"
-version = "0.2.191"
-
-[[package]]
 name = "storage-server"
 version = "0.1.0"
-dependencies = [
- "libc",
-]

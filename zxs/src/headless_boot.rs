@@ -5,14 +5,13 @@ use crate::{
     headless_gateway::{GatewayRun, LaunchFds},
     headless_http::{Incoming, Outcome},
     headless_lifecycle::{SOCKET, serve_selected},
-    headless_start::SelectedStart,
+    headless_start::{SelectedStart, effective_group},
     workspace_protocol::Request,
 };
 use std::{
-    ffi::{CStr, c_int},
+    ffi::{CStr, c_char, c_int, c_long},
     fs::File,
     io,
-    mem::MaybeUninit,
     os::{
         fd::AsRawFd,
         unix::{
@@ -23,6 +22,12 @@ use std::{
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
+
+unsafe extern "C" {
+    fn zxs_startup_socket_mode(fd: c_int) -> c_long;
+    fn zxs_startup_install_stop_handlers(handler: extern "C" fn(c_int)) -> c_int;
+    fn zxs_remove_name(fd: c_int, name: *const c_char) -> c_int;
+}
 
 const RUN: &str = "/zxs/run";
 const LEAF: &CStr = c"headless.sock";
@@ -37,8 +42,7 @@ fn refused() -> io::Error {
 
 fn protected_parent() -> io::Result<HeldDir> {
     let uid = local_uid();
-    // SAFETY: getegid is a side-effect-free process credential observation.
-    let group = unsafe { libc::getegid() };
+    let group = effective_group();
     if matches!(uid, 0 | 65534 | u32::MAX) || matches!(group, 0 | 65534 | u32::MAX) {
         return Err(refused());
     }
@@ -103,15 +107,7 @@ impl PrivateName {
             name.require_named()?;
             // SAFETY: Linux fchmodat2 with AT_EMPTY_PATH uses the retained
             // O_PATH socket inode, never another name or a symlink target.
-            let rc = unsafe {
-                libc::syscall(
-                    libc::SYS_fchmodat2,
-                    name.pin.as_raw_fd(),
-                    c"".as_ptr(),
-                    0o660 as libc::mode_t,
-                    libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
+            let rc = unsafe { zxs_startup_socket_mode(name.pin.as_raw_fd()) };
             if rc != 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -150,7 +146,7 @@ impl PrivateName {
         self.require_named()?;
         // SAFETY: only this invocation's retained original inode matched,
         // under the protected parent. Never remove a previous or foreign name.
-        let rc = unsafe { libc::unlinkat(self.parent.file.as_raw_fd(), LEAF.as_ptr(), 0) };
+        let rc = unsafe { zxs_remove_name(self.parent.file.as_raw_fd(), LEAF.as_ptr()) };
         if rc == 0 {
             Ok(())
         } else {
@@ -164,21 +160,10 @@ extern "C" fn request_stop(_: c_int) {
 }
 
 fn install_signals() -> io::Result<()> {
-    // Only the dedicated single-threaded native initial entry may call this.
-    // SAFETY: sigaction contains integer/pointer representation; set the
-    // handler and native empty mask before passing it to the kernel.
-    let mut action = unsafe { MaybeUninit::<libc::sigaction>::zeroed().assume_init() };
-    action.sa_sigaction = request_stop as *const () as usize;
-    // SAFETY: writable set of the native sigset size.
-    if unsafe { libc::sigemptyset(&raw mut action.sa_mask) } != 0 {
+    // SAFETY: only the dedicated single-threaded initial entry calls this.
+    // The static C-ABI handler performs one lock-free AtomicBool store.
+    if unsafe { zxs_startup_install_stop_handlers(request_stop) } != 0 {
         return Err(io::Error::last_os_error());
-    }
-    for signal in [libc::SIGTERM, libc::SIGINT] {
-        // SAFETY: initialized action lives for the kernel copy. Handler
-        // performs only one lock-free AtomicBool store.
-        if unsafe { libc::sigaction(signal, &raw const action, std::ptr::null_mut()) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
     }
     Ok(())
 }

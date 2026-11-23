@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+fn native_peer_credentials_observe_both_ends_of_a_private_socket_pair() {
+    let (left, right) = UnixStream::pair().unwrap();
+    let expected = crate::fs::local_uid();
+    assert_eq!(peer_uid(&left).unwrap(), expected);
+    assert_eq!(peer_uid(&right).unwrap(), expected);
+}
+
 fn raw(data: &[u8], recycle: &[u8]) -> Vec<u8> {
     raw_roots([b"/zxs/disks/system", data, recycle])
 }

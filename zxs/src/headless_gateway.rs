@@ -1,11 +1,11 @@
 //! Retained local authority for one already loaded, independently approved gateway.
 use crate::hash::digest;
 use std::{
+    ffi::c_int,
     fs::{File, OpenOptions},
     io,
-    mem::MaybeUninit,
     os::{
-        fd::AsRawFd,
+        fd::{AsRawFd, FromRawFd},
         unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
     },
 };
@@ -14,7 +14,32 @@ const CONFIG: &str = "/etc/zxs-gateway/nginx.conf";
 const PREFIX: &[u8] = b"ZXS-GATEWAY-1\0";
 const RECORD: usize = PREFIX.len() + 4 + 8 * 5 + 32;
 const MAX_CONFIG: u64 = 64 * 1024;
-const PID_FS_MAGIC: libc::c_long = 0x5049_4446;
+
+unsafe extern "C" {
+    fn zxs_gateway_duplicate(fd: c_int) -> c_int;
+    fn zxs_gateway_read_flags(directory: bool) -> c_int;
+    fn zxs_gateway_pidfs(fd: c_int) -> c_int;
+    fn zxs_gateway_is_live(fd: c_int) -> c_int;
+    fn zxs_gateway_has_receipt_seals(fd: c_int) -> bool;
+    fn zxs_gateway_is_readonly_file(fd: c_int) -> bool;
+}
+
+fn duplicate_for_handoff(slot: c_int) -> io::Result<File> {
+    // SAFETY: the kernel validates the slot without dereferencing memory
+    // or taking ownership of the original; new descriptors cannot alias 3–5.
+    let fd = unsafe { zxs_gateway_duplicate(slot) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful duplication allocated a fresh owned descriptor.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn open_original(path: &str, directory: bool) -> io::Result<File> {
+    // SAFETY: these are fixed system open flags with no descriptor or memory access.
+    let flags = unsafe { zxs_gateway_read_flags(directory) };
+    OpenOptions::new().read(true).custom_flags(flags).open(path)
+}
 
 fn bad() -> io::Error {
     io::Error::new(
@@ -36,22 +61,11 @@ impl LaunchFds {
     /// Reserved native invocation ABI: 3 original PIDFD, 4 approved config,
     /// 5 sealed root launch receipt. No user arguments or environment vars.
     pub(crate) fn inherit() -> io::Result<Self> {
-        use std::os::fd::FromRawFd;
-        fn duplicate(slot: libc::c_int) -> io::Result<File> {
-            // SAFETY: syscall validates the slot without dereferencing memory
-            // or taking ownership of the original; duplicates cannot alias 3–5.
-            let fd = unsafe { libc::fcntl(slot, libc::F_DUPFD_CLOEXEC, 6 as libc::c_int) };
-            if fd < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            // SAFETY: successful duplicate allocated a fresh owned descriptor.
-            Ok(unsafe { File::from_raw_fd(fd) })
-        }
         let result = (|| {
             Ok(Self {
-                original_pidfd: duplicate(3)?,
-                approved_config: duplicate(4)?,
-                loaded_receipt: duplicate(5)?,
+                original_pidfd: duplicate_for_handoff(3)?,
+                approved_config: duplicate_for_handoff(4)?,
+                loaded_receipt: duplicate_for_handoff(5)?,
             })
         })();
         result.map_err(|_: io::Error| {
@@ -108,20 +122,16 @@ fn named_config() -> io::Result<File> {
             return Err(bad());
         }
     }
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(CONFIG)
+    open_original(CONFIG, false)
 }
 
 fn process_id(pidfd: &File) -> io::Result<(u64, u64)> {
-    let mut stat = MaybeUninit::<libc::statfs>::zeroed();
-    // SAFETY: kernel receives a valid retained fd and writable statfs result.
-    if unsafe { libc::fstatfs(pidfd.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+    // SAFETY: this only observes the filesystem of the retained fd.
+    let original_type = unsafe { zxs_gateway_pidfs(pidfd.as_raw_fd()) };
+    if original_type < 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: successful fstatfs initialized the structure.
-    if unsafe { stat.assume_init() }.f_type != PID_FS_MAGIC {
+    if original_type != 1 {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "expected a native PIDFS process descriptor",
@@ -135,21 +145,12 @@ fn process_id(pidfd: &File) -> io::Result<(u64, u64)> {
 }
 
 fn live(pidfd: &File) -> io::Result<()> {
-    let mut item = libc::pollfd {
-        fd: pidfd.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    // SAFETY: the retained process fd and one bounded pollfd remain live.
-    let result = unsafe { libc::poll(&raw mut item, 1, 0) };
+    // SAFETY: zero-timeout observation of the retained original fd only.
+    let result = unsafe { zxs_gateway_is_live(pidfd.as_raw_fd()) };
     if result < 0 {
         return Err(io::Error::last_os_error());
     }
-    if result == 0 && item.revents == 0 {
-        Ok(())
-    } else {
-        Err(bad())
-    }
+    if result == 1 { Ok(()) } else { Err(bad()) }
 }
 
 fn checked_receipt<const N: usize>(file: &File) -> io::Result<[u8; N]> {
@@ -162,10 +163,8 @@ fn checked_receipt<const N: usize>(file: &File) -> io::Result<[u8; N]> {
     {
         return Err(bad());
     }
-    // SAFETY: fcntl F_GET_SEALS consumes only the retained descriptor.
-    let seals = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) };
-    let required = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
-    if seals < 0 || seals & required != required {
+    // SAFETY: the seal check only observes the retained descriptor.
+    if !unsafe { zxs_gateway_has_receipt_seals(file.as_raw_fd()) } {
         return Err(bad());
     }
     let mut data = [0; N];
@@ -210,9 +209,8 @@ impl GatewayRun {
         }
 
         // Keep the exact kernel objects; never reconstruct from a numeric PID.
-        // SAFETY: F_GETFL observes only the retained config descriptor.
-        let flags = unsafe { libc::fcntl(approved.as_raw_fd(), libc::F_GETFL) };
-        if flags < 0 || flags & (libc::O_ACCMODE | libc::O_PATH) != libc::O_RDONLY {
+        // SAFETY: the status check only observes the retained config descriptor.
+        if !unsafe { zxs_gateway_is_readonly_file(approved.as_raw_fd()) } {
             return Err(bad());
         }
         if process_id(&pidfd)? != process {
@@ -257,11 +255,9 @@ impl GatewayRun {
 // and no-include standalone configuration with a dedicated worker UID.
 #[cfg(feature = "host-activation")]
 use std::{
+    ffi::{c_char, c_long},
     io::{Read, Write},
-    os::{
-        fd::FromRawFd,
-        unix::{fs::PermissionsExt, process::CommandExt},
-    },
+    os::unix::{fs::PermissionsExt, process::CommandExt},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -274,8 +270,22 @@ const PID_FILE: &str = "/run/zxs-gateway.pid";
 #[cfg(feature = "host-activation")]
 const CWD: &str = "/etc/zxs-gateway";
 #[cfg(feature = "host-activation")]
-const SEALS: libc::c_int =
-    libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+unsafe extern "C" {
+    fn zxs_gateway_create_memfd(label: *const c_char) -> c_int;
+    fn zxs_gateway_seal_memfd(fd: c_int) -> c_int;
+    fn zxs_gateway_open_pidfd(owned_child: c_int) -> c_long;
+    fn zxs_gateway_lock_config(fd: c_int) -> c_int;
+    fn zxs_gateway_quit_owned_child(owned_child: c_int) -> c_int;
+    fn zxs_gateway_open_service_record(state: c_int) -> c_int;
+    fn zxs_gateway_prepare_nginx_exec(config: c_int) -> c_int;
+    fn zxs_gateway_prepare_service_exec(
+        pidfd: c_int,
+        config: c_int,
+        receipt: c_int,
+        uid: u32,
+        gid: u32,
+    ) -> c_int;
+}
 
 /// Only the qualified root installer supplies these approved measured bytes
 /// and UID. They are not accepted from the application socket or caller argv.
@@ -288,10 +298,7 @@ pub(crate) struct ApprovedNginx {
 
 #[cfg(feature = "host-activation")]
 fn protected_file(path: &str, expected_limit: u64) -> io::Result<File> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-        .open(path)?;
+    let file = open_original(path, false)?;
     let m = file.metadata()?;
     if !m.is_file()
         || m.uid() != 0
@@ -316,8 +323,7 @@ fn protected_dir(path: &str) -> io::Result<()> {
 #[cfg(feature = "host-activation")]
 fn sealed(label: &std::ffi::CStr, contents: &[u8]) -> io::Result<File> {
     // SAFETY: label is a terminated C string; a successful fd is new.
-    let fd =
-        unsafe { libc::memfd_create(label.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+    let fd = unsafe { zxs_gateway_create_memfd(label.as_ptr()) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -326,7 +332,7 @@ fn sealed(label: &std::ffi::CStr, contents: &[u8]) -> io::Result<File> {
     file.write_all(contents)?;
     file.set_permissions(std::fs::Permissions::from_mode(0o400))?;
     // SAFETY: seals are applied only to this private memfd.
-    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_ADD_SEALS, SEALS) } < 0 {
+    if unsafe { zxs_gateway_seal_memfd(file.as_raw_fd()) } < 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(file)
@@ -339,15 +345,15 @@ fn handoff(
     stamp: Stamp,
     policy: &ApprovedNginx,
 ) -> io::Result<LaunchFds> {
-    let child_pid = libc::pid_t::try_from(child.id()).map_err(|_| bad())?;
+    let child_pid = c_int::try_from(child.id()).map_err(|_| bad())?;
     // SAFETY: child is a directly spawned child owned here, not an externally
     // specified PID. No other thread or handler is permitted to reap it.
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0u32) };
+    let fd = unsafe { zxs_gateway_open_pidfd(child_pid) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: successful pidfd_open created this new descriptor.
-    let pidfd = unsafe { File::from_raw_fd(libc::c_int::try_from(fd).map_err(|_| bad())?) };
+    let pidfd = unsafe { File::from_raw_fd(c_int::try_from(fd).map_err(|_| bad())?) };
     let (dev, ino) = process_id(&pidfd)?;
     let expected = format!("{child_pid}\n");
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -399,8 +405,7 @@ fn handoff(
 /// three descriptors to boot over private IPC. No reload or binary upgrade.
 #[cfg(feature = "host-activation")]
 pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, LaunchFds)> {
-    // SAFETY: no arguments; this reads current effective identity only.
-    if unsafe { libc::geteuid() } != 0 || matches!(policy.worker_uid, 0 | 65534 | u32::MAX) {
+    if crate::fs::local_uid() != 0 || matches!(policy.worker_uid, 0 | 65534 | u32::MAX) {
         return Err(bad());
     }
     for path in ["/usr", "/usr/sbin", "/run", CWD] {
@@ -409,7 +414,7 @@ pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, Laun
     let approved = named_config()?;
     // SAFETY: flock acts only on the protected config inode, serializing
     // competing invocations of this prototype until the original PID is live.
-    if unsafe { libc::flock(approved.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if unsafe { zxs_gateway_lock_config(approved.as_raw_fd()) } != 0 {
         return Err(io::Error::last_os_error());
     }
     match std::fs::symlink_metadata(PID_FILE) {
@@ -459,10 +464,7 @@ pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, Laun
     // only the input sealed config to the approved gateway child.
     unsafe {
         nginx.pre_exec(move || {
-            const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
-            if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0
-                || libc::fcntl(config_fd, libc::F_SETFD, 0) < 0
-            {
+            if zxs_gateway_prepare_nginx_exec(config_fd) != 0 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())
@@ -491,18 +493,13 @@ fn stop_failed_launch(child: &mut Child) -> io::Result<()> {
     if child.try_wait()?.is_some() {
         return Ok(());
     }
-    let pid = libc::pid_t::try_from(child.id()).map_err(|_| bad())?;
+    let pid = c_int::try_from(child.id()).map_err(|_| bad())?;
     // SAFETY: this is our direct unreaped child, never a value from the
     // pidfile. The one-shot launcher has no other child waiter.
-    let status = unsafe { libc::kill(pid, libc::SIGQUIT) };
-    if status == 0 {
-        return Ok(());
+    if unsafe { zxs_gateway_quit_owned_child(pid) } != 0 {
+        return Err(io::Error::last_os_error());
     }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
-    }
-    Err(error)
+    Ok(())
 }
 
 #[cfg(feature = "host-activation")]
@@ -556,8 +553,7 @@ impl ServiceEpoch {
 fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(File, File, File)> {
     use crate::{headless_auth::Descriptor, headless_start::DEFAULT_STATE};
 
-    // SAFETY: no inputs; read effective host credentials.
-    if unsafe { libc::geteuid() } != 0
+    if crate::fs::local_uid() != 0
         || matches!(policy.uid, 0 | 65534 | u32::MAX)
         || matches!(policy.ipc_gid, 0 | 65534 | u32::MAX)
     {
@@ -566,12 +562,7 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
     for directory in ["/zxs", "/zxs/bin", "/zxs/state"] {
         protected_dir(directory)?;
     }
-    let open_directory = |path: &str| {
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
-            .open(path)
-    };
+    let open_directory = |path: &str| open_original(path, true);
     let state = open_directory(DEFAULT_STATE)?;
     let info = state.metadata()?;
     if info.uid() != policy.uid || info.mode() & 0o7777 != 0o700 {
@@ -580,13 +571,7 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
     state.try_lock_shared()?;
     // SAFETY: state is an original retained directory and the static
     // NUL-terminated component has no path separators.
-    let fd = unsafe {
-        libc::openat(
-            state.as_raw_fd(),
-            c"server.v1".as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-        )
-    };
+    let fd = unsafe { zxs_gateway_open_service_record(state.as_raw_fd()) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -656,15 +641,7 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
 /// Child is ordinary OS custody; no RPC, helper daemon, restart, or reload.
 #[cfg(feature = "host-activation")]
 pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<Child> {
-    fn spare(file: &File) -> io::Result<File> {
-        // SAFETY: fcntl only duplicates our known live fd outside reserved slots.
-        let fd = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 6 as libc::c_int) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: successful duplication created a fresh unique descriptor.
-        Ok(unsafe { File::from_raw_fd(fd) })
-    }
+    let spare = |file: &File| duplicate_for_handoff(file.as_raw_fd());
     let (image, _original_state_lease, sealed) = load_service(policy, gateway)?;
     let image = spare(&image)?;
     let descriptors = [
@@ -685,31 +662,14 @@ pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> i
     // and immediate values, no locks, allocation, or shared-memory mutation.
     unsafe {
         command.pre_exec(move || {
-            const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
-            if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0
-                || libc::dup2(descriptors[0].as_raw_fd(), 3) != 3
-                || libc::dup2(descriptors[1].as_raw_fd(), 4) != 4
-                || libc::dup2(descriptors[2].as_raw_fd(), 5) != 5
-                || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-                || libc::prctl(libc::PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0
-                || libc::prctl(
-                    libc::PR_CAP_AMBIENT,
-                    libc::PR_CAP_AMBIENT_CLEAR_ALL,
-                    0,
-                    0,
-                    0,
-                ) != 0
-                || libc::setgroups(0, std::ptr::null()) != 0
-                || libc::setresgid(gid, gid, gid) != 0
-                || libc::setresuid(uid, uid, uid) != 0
+            if zxs_gateway_prepare_service_exec(
+                descriptors[0].as_raw_fd(),
+                descriptors[1].as_raw_fd(),
+                descriptors[2].as_raw_fd(),
+                uid,
+                gid,
+            ) != 0
             {
-                return Err(io::Error::last_os_error());
-            }
-            // Linux capability ABI v3: header [version, pid] and two
-            // independent effective/permitted/inheritable 32-bit words each.
-            let header = [0x2008_0522_u32, 0];
-            let zero_caps = [0_u32; 6];
-            if libc::syscall(libc::SYS_capset, header.as_ptr(), zero_caps.as_ptr()) != 0 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())

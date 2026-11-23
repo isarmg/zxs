@@ -10,9 +10,10 @@ Build as a regular user in a private worktree with Python 3.11 or newer,
 GNU GCC with its static C runtime, GNU ar, ld and readelf. The recipe uses
 the supplied Rust 1.100.0 toolchain, commit
 `0ef1bc386059596dada8fb65b50425aab2ea637a`, and the locked offline Cargo
-inputs. No browser resources or installed SQLite library are needed.
-The C ABI and [password verifier](src/password/verification/ORIGIN.md)
-build from source in this project.
+inputs. There are no external Rust crates. The Linux ABI shims use the
+target toolchain’s C and Linux headers; the
+[password verifier](src/password/verification/ORIGIN.md) builds from source
+in this project. No browser resources or installed SQLite library are needed.
 
 The recipe writes one file, `target/standalone/zxs`, without replacing
 an existing output. It inspects the x86-64 static PIE for a valid

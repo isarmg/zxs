@@ -3,10 +3,16 @@ use super::{
     ApprovedNginx, ApprovedService, LaunchFds, bad, launch_approved, launch_service, live,
     protected_dir, protected_file,
 };
+use crate::fs::local_uid;
 use std::{
+    ffi::{c_int, c_long},
     io::{self, Read},
     os::fd::AsRawFd,
 };
+
+unsafe extern "C" {
+    fn zxs_startup_quit_gateway(pidfd: c_int) -> c_long;
+}
 
 const ENROLLMENT: &str = "/etc/zxs-gateway/activation.v1";
 const LIMIT: u64 = 256;
@@ -99,15 +105,7 @@ fn enrollment() -> io::Result<(ApprovedNginx, ApprovedService)> {
 fn ask_gateway_to_stop(gateway: &LaunchFds) -> io::Result<()> {
     // SAFETY: PIDFD names the directly owned original process. The kernel
     // receives a null siginfo and no privileges are inferred from a PID.
-    let status = unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            gateway.original_pidfd.as_raw_fd(),
-            libc::SIGQUIT,
-            std::ptr::null::<libc::siginfo_t>(),
-            0u32,
-        )
-    };
+    let status = unsafe { zxs_startup_quit_gateway(gateway.original_pidfd.as_raw_fd()) };
     if status != 0 {
         return Err(io::Error::last_os_error());
     }
@@ -115,8 +113,7 @@ fn ask_gateway_to_stop(gateway: &LaunchFds) -> io::Result<()> {
 }
 
 pub(crate) fn activate() -> io::Result<()> {
-    // SAFETY: only observes effective identity, does not change it.
-    if unsafe { libc::geteuid() } != 0 {
+    if local_uid() != 0 {
         return Err(bad());
     }
     let (nginx, service) = enrollment()?;

@@ -5,16 +5,27 @@ use crate::{
     headless_auth::{Account, Descriptor, SelectedRoot},
 };
 use std::{
-    ffi::CStr,
+    ffi::{CStr, c_char, c_int, c_long},
     fs::File,
     io::{self, Read},
-    mem::{MaybeUninit, size_of},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::MetadataExt,
     },
     path::Path,
 };
+
+unsafe extern "C" {
+    fn zxs_startup_open_member(parent: c_int, name: *const c_char) -> c_long;
+    #[cfg(target_arch = "x86_64")]
+    fn zxs_startup_effective_gid() -> u32;
+}
+
+#[cfg(target_arch = "x86_64")]
+pub(super) fn effective_group() -> u32 {
+    // SAFETY: the C shim only reads the process effective group.
+    unsafe { zxs_startup_effective_gid() }
+}
 
 pub(crate) const DEFAULT_STATE: &str = "/zxs/state/headless";
 const DESCRIPTOR: &CStr = c"server.v1";
@@ -30,22 +41,8 @@ fn refused() -> io::Error {
 }
 
 fn open_member(parent: &HeldDir, name: &CStr) -> io::Result<File> {
-    // SAFETY: Linux open_how is a C struct of three integers; zero initializes all fields.
-    let mut how = unsafe { MaybeUninit::<libc::open_how>::zeroed().assume_init() };
-    how.flags =
-        u64::try_from(libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .map_err(|_| refused())?;
-    how.resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_XDEV;
-    // SAFETY: original parent is held; the one component and initialized how remain live.
-    let fd = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            parent.file.as_raw_fd(),
-            name.as_ptr(),
-            &raw const how,
-            size_of::<libc::open_how>(),
-        )
-    };
+    // SAFETY: the original directory and NUL-terminated member stay live.
+    let fd = unsafe { zxs_startup_open_member(parent.file.as_raw_fd(), name.as_ptr()) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -106,8 +103,7 @@ impl SelectedStart {
 
     #[cfg(target_arch = "x86_64")]
     pub(crate) fn service_epoch(&self) -> crate::headless_gateway::ServiceEpoch {
-        // SAFETY: getegid only observes this process's effective group.
-        let group = unsafe { libc::getegid() };
+        let group = effective_group();
         crate::headless_gateway::ServiceEpoch {
             owner: local_uid(),
             group,
