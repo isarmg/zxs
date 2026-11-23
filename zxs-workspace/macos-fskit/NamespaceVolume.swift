@@ -25,9 +25,10 @@ extension RemoteDataVolume: FSVolume.Handler {
 
     var volumeStatistics: FSStatFSResult {
         let out = FSStatFSResult(fileSystemTypeName: "zxswork")
+        out.blockSize = 4096; out.ioSize = 4096
         // No new files in this namespace. Space means actual LOCAL APFS backing,
         // not available bytes on the server. A property cannot return an errno.
-        if let s = try? names.stats(), s.f_bsize > 0 {
+        if (try? visibility()) != nil, let s = try? names.stats(), s.f_bsize > 0 {
             out.blockSize = Int(s.f_bsize); out.ioSize = Int(s.f_iosize)
             out.totalBlocks = UInt64(s.f_blocks); out.freeBlocks = UInt64(s.f_bfree)
             out.availableBlocks = UInt64(s.f_bavail)
@@ -52,7 +53,7 @@ extension RemoteDataVolume: FSVolume.Handler {
 
     func getAttributes(_ request: FSItem.GetAttributesRequest, of item: FSItem, context: FSContext,
                        replyHandler reply: @escaping @Sendable (FSGetAttributesResult?, (any Error)?) -> Void) {
-        serve(reply) {
+        serve(rootMetadata: item === rootItem, reply) {
             try WorkFile.authorize(context)
             let a: FSItem.Attributes
             guard FSGetAttributesResult.requestedAttributes.wantedAttributes.subtracting(WorkFile.provided).isEmpty

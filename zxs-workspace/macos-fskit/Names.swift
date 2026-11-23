@@ -165,6 +165,16 @@ final class NameIndex {
         return r
     }
 
+    func checkOwner(_ ticket: HeldMountTicket) throws {
+        try check(); try ticket.check()
+        var named = stat(), held = stat()
+        guard original.volumeHex == ticket.directoryID.volumeHex, ordered.allSatisfy({ $0.source.file.hasParent(ticket.directoryID) }),
+              fstat(parent.fileDescriptor, &held) == 0,
+              fstatat(ticket.directory.fileDescriptor, "names", &named, AT_SYMLINK_NOFOLLOW) == 0,
+              held.st_dev == named.st_dev, held.st_ino == named.st_ino,
+              zxs_work_spelling(parent.fileDescriptor,"names") == 0 else { throw workError(ESTALE) }
+    }
+
     func stats() throws -> statfs {
         try check(); var s = statfs()
         guard fstatfs(parent.fileDescriptor, &s) == 0 else { throw workError(errno) }

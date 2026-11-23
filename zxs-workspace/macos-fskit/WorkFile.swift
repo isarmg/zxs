@@ -5,7 +5,7 @@ import FSKit
 
 // These values must come from the controller's existing durable, private work
 // registration, not from URL input or statting a new selection under a display name.
-struct WorkWitness {
+struct WorkWitness: Equatable {
     let volumeHex: String
     let inode: UInt64
     let birthSec: Int64
@@ -163,6 +163,8 @@ final class WorkFile {
         return a
     }
 
+    func hasParent(_ expected: WorkWitness) -> Bool { parentID == expected }
+
     func matchesRegistration(container: String, volume: String) -> Bool {
         leaf == "body-" + container && fileID.volumeHex == volume
     }
@@ -300,9 +302,10 @@ final class WorkFile {
 
     private func barrier() throws {
         _ = try current()
-        guard !writerClosed else { throw workError(EBADF) }
+        guard !writerClosed || (stopping && originalOpen.isEmpty) else { throw workError(EBADF) }
+        let original = writerClosed ? reader.number : writer.number
         do {
-            guard fsync(writer.number) == 0, fcntl(writer.number, F_FULLFSYNC) == 0
+            guard fsync(original) == 0, fcntl(original, F_FULLFSYNC) == 0
             else { throw workError(errno) }
             _ = try current()
         } catch { failure = error; throw error }
@@ -313,6 +316,13 @@ final class WorkFile {
 
     // Local half only. A host must also prove the ORIGINAL normal unmount/kernel drain
     // separately before borrowing the private whole file. This method cannot authorize Submit.
+    func readyToFence() throws -> Bool {
+        try withLock {
+            if let failure { throw failure }
+            return stopping && originalOpen.isEmpty && !writerClosed
+        }
+    }
+
     func requireDrained() throws {
         try withLock {
             guard stopping, originalOpen.isEmpty, !writerClosed else { throw workError(EBUSY) }

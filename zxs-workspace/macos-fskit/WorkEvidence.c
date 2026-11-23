@@ -67,13 +67,17 @@ int zxs_work_spelling(int fd, const char *expected) {
     return memcmp((char *)&out + at + out.ref.attr_dataoffset, expected, n) == 0 ? 0 : ESTALE;
 }
 
-int zxs_resident_work_leaf(int parent, const char *name, uint64_t inode, int64_t sec, int64_t nsec) {
+static int resident_leaf(int parent, const char *name, mode_t mode, uint64_t inode, int64_t sec, int64_t nsec) {
     struct stat st;
     if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) < 0) return errno;
     if (!S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_flags || st.st_uid != geteuid() ||
-        (st.st_mode & ALLPERMS) != 0600 || st.st_ino != inode ||
+        (st.st_mode & ALLPERMS) != mode || st.st_ino != inode ||
         st.st_birthtimespec.tv_sec != sec || st.st_birthtimespec.tv_nsec != nsec) return ESTALE;
     return 0;
+}
+
+int zxs_resident_work_leaf(int parent, const char *name, uint64_t inode, int64_t sec, int64_t nsec) {
+    return resident_leaf(parent,name,0600,inode,sec,nsec);
 }
 
 #include <dispatch/dispatch.h>
@@ -84,6 +88,7 @@ int zxs_resident_work_leaf(int parent, const char *name, uint64_t inode, int64_t
  * native thread changes policy. No FSKit/shared worker inherits an altered policy. */
 struct open_job {
     int parent, flags, fd, error;
+    mode_t mode;
     const char *name;
     uint64_t inode;
     int64_t sec, nsec;
@@ -98,7 +103,7 @@ static void *open_worker(void *p) {
                        IOPOL_MATERIALIZE_DATALESS_FILES_OFF) {
         j->error = errno ? errno : EIO;
     } else {
-        j->error = zxs_resident_work_leaf(j->parent, j->name, j->inode, j->sec, j->nsec);
+        j->error = resident_leaf(j->parent,j->name,j->mode,j->inode,j->sec,j->nsec);
         if (!j->error) {
             j->fd = openat(j->parent, j->name, j->flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
             if (j->fd < 0) j->error = errno;
@@ -110,11 +115,9 @@ static void *open_worker(void *p) {
     return NULL; /* No other work ever runs on this thread. */
 }
 
-int zxs_open_work_leaf(int parent, const char *name, int flags, uint64_t inode, int64_t sec, int64_t nsec) {
-    if (flags != O_RDONLY && flags != O_RDWR) { errno = EINVAL; return -1; }
-    if (name == NULL || strnlen(name, 38) != 37 || strncmp(name, "body-", 5) ||
-        strspn(name + 5, "0123456789abcdef") != 32) { errno = EINVAL; return -1; }
-    struct open_job job = {.parent=parent, .flags=flags, .fd=-1, .name=name, .inode=inode, .sec=sec, .nsec=nsec};
+static int open_resident(int parent, const char *name, int flags, mode_t mode,
+                         uint64_t inode, int64_t sec, int64_t nsec) {
+    struct open_job job = {.parent=parent,.flags=flags,.fd=-1,.name=name,.mode=mode,.inode=inode,.sec=sec,.nsec=nsec};
     job.done = dispatch_semaphore_create(0);
     if (!job.done) { errno = ENOMEM; return -1; }
     pthread_t thread;
@@ -133,6 +136,34 @@ int zxs_open_work_leaf(int parent, const char *name, int flags, uint64_t inode, 
     dispatch_release(job.done);
     if (err || job.error) { errno = err ? err : job.error; return -1; }
     return job.fd;
+}
+
+int zxs_open_work_leaf(int parent, const char *name, int flags, uint64_t inode, int64_t sec, int64_t nsec) {
+    if ((flags != O_RDONLY && flags != O_RDWR) || name == NULL || strnlen(name,38)!=37 ||
+        strncmp(name,"body-",5) || strspn(name+5,"0123456789abcdef")!=32) { errno=EINVAL; return -1; }
+    return open_resident(parent,name,flags,0600,inode,sec,nsec);
+}
+
+int zxs_open_marker(int parent, const char *name, uint64_t inode, int64_t sec, int64_t nsec) {
+    static const char *const names[]={"host-attempt","provider-loaded","host-verified","host-stop","provider-stopped",
+                                      "host-normal-gone","provider-local-clean"};
+    int match=0;
+    if (name) for (size_t i=0; i<sizeof(names)/sizeof(names[0]); ++i) if (!strcmp(name,names[i])) match=1;
+    if (!match) { errno=EINVAL; return -1; }
+    int fd=open_resident(parent,name,O_RDONLY,0400,inode,sec,nsec);
+    if (fd<0) return -1;
+    filesec_t secinfo=filesec_init();
+    int present=-1,e=0; struct stat st;
+    if (!secinfo) e=errno?errno:EIO;
+    else {
+        if (fstatx_np(fd,&st,secinfo)<0 || filesec_query_property(secinfo,FILESEC_ACL,&present)<0) e=errno?errno:EIO;
+        else if (present || !S_ISREG(st.st_mode) || (st.st_mode&ALLPERMS)!=0400 || st.st_flags || st.st_nlink!=1 ||
+                 st.st_uid!=geteuid() || st.st_ino!=inode || st.st_birthtimespec.tv_sec!=sec ||
+                 st.st_birthtimespec.tv_nsec!=nsec) e=ESTALE;
+        filesec_free(secinfo);
+    }
+    if (e) { close(fd); errno=e; return -1; }
+    return fd;
 }
 
 #include <dirent.h>

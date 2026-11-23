@@ -19,7 +19,7 @@
 
 仅选 Apple [FSClient.mountSingleVolume(resource:bundleID:options:)](https://developer.apple.com/documentation/fskit/fsclient/mountsinglevolume(resource:bundleid:options:completionhandler:))。它指定扩展 bundle ID，原系统在 `/Volumes` 创建挂载点。正式宿主必须由实际签名和配置授予 `com.apple.developer.fskit.mount`；扩展须有 [FS 模块 entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.fskit.fsmodule)。由用户另行安装、在系统设置中启用。宿主需检查系统列出的模块、启用状态及预期签名，核已登记工作资源；不能把短文件系统名、URL 字符串或自己的测试开关当身份。现有 ad-hoc Qt 包没有这些资格。不调用安装程序、不打开权限设置、不降级到命令、短名或内核驱动，不强制卸载。
 
-`RemoteDataVolume` 实现的是一个固定、可在原件上改写但不能增删条目的 FSKit 命名空间；尚未注册为已签名扩展，不能挂载。资源加载器尚须从用户授权资源和事先登记的本机工作身份取得原句柄，不接受任意路径；显示名和冲突处理属于真实 APFS 目录，人为大小写折叠不能改远端名。尚须证明：持久编辑与进程崩溃后的原所有者状态；实际访问者与禁执行/映射；独立挂载身份及正常卸载（忙时保留卷与草稿，不强制）；内核排空与无遗留写入；成功后按原选择显式提交。这些不是调用本机同步或关闭回调就能取得的证明。公开另存的 Launch Services 来源核验仍单独生效。
+`RemoteDataVolume` 实现的是一个固定、可在原件上改写但不能增删条目的 FSKit 命名空间；尚未注册为已签名扩展，不能挂载。下一步的进程间登记加载须把用户所选资源和已登记本机工作身份交给本页内部 unary 回调，不接受任意路径；显示名和冲突处理属于真实 APFS 目录，人为大小写折叠不能改远端名。尚须证明：持久编辑与进程崩溃后的原所有者状态；实际访问者与禁执行/映射；独立挂载身份及正常卸载（忙时保留卷与草稿，不强制）；内核排空与无遗留写入；成功后按原选择显式提交。这些不是调用本机同步或关闭回调就能取得的证明。公开另存的 Launch Services 来源核验仍单独生效。
 
 ## 尚未运行的原机验收
 
@@ -28,3 +28,14 @@
 [原生 APFS 命名用例](../tests/qualification/macos_fskit_names.swift)也没有入口：在各自新建的大小写敏感／不敏感 APFS 目录核对 A/a、NFC/NFD、恰好长得像生成别名的真实名、未登记占位和原远程名称不变。还需内核小页有／无属性分页、混用游标拒绝及 lookup/reclaim 并发验证。
 
 另外在原系统验证：普通/其他账号、共享映射和撤权；原标记时间或相同字节替件；两份数据回执到达次序；写一半/空间不足/最后刷盘失败，之后 close 不报成功且常规卸载期间保留不确定状态；停接后已有写者完成/只读者延迟释放时不能封存；强制中断后不盲重放。未编译或执行本源码，未挂载或触碰任何设备。
+
+### 签名宿主和正常卸载的源码边界
+
+此内部切片已有真实的 [FSClient](https://developer.apple.com/documentation/fskit/fsclient/mountsinglevolume(resource:bundleid:options:completionhandler:)) 单入口和已绑定实例的 [FSUnaryFileSystemOperations](https://developer.apple.com/documentation/fskit/fsunaryfilesystemoperations) 回调；**没有**把它加入 ad-hoc 桌面包或开放挂载。Host 与扩展各自在自己的进程核 Apple 签名链、发布团队、bundle ID、运行 entitlement 及已配置的 [同一 App Group](https://developer.apple.com/documentation/xcode/accessing-app-group-containers)。Host 还核系统列出且由用户启用的唯一内嵌扩展。制作正式版本的团队必须合法取得签名／配置、在两个签名包中设置其真实的 `ZxsDistributionTeam` 并独立核验发行身份。离线代码检查不是公证、联网撤销检查或实际设备验收。
+
+1. 已登记的原会话目录含单独的空 `ticket`、`names` 零字节标记目录和私有工作件。Host 仅将这个空文件作为只读的 [FSPathURLResource](https://developer.apple.com/documentation/fskit/fspathurlresource) 交给指定扩展；不交目录、凭据或正文。名字或 app-group URL 本身不是授权。加载前必须已有原卷／目录／票据实体和每件输入的登记证据；无对应原件时不按名接管，普通用户路径与强制／只读加载请求拒绝。只使用此签名 App Group 已有的访问权限，不把普通 URL 当作已授权的 security-scoped bookmark，不为其他路径申请权限。
+2. Host 先保留 `/Volumes` 与原内核挂载表，独占持久写尝试标记，再以固定参数请求系统挂载。从系统返回原路径上取得 **O_EVTONLY** 根句柄，不占普通文件读写引用；核新 FSID、原卷 UUID、FSKit 标志、根节点身份、属主和 `noexec,nodev,nosuid,owners` 的实际内核状态，而非相信调用参数。核对前扩展只给绑定所需的根元数据，不给文件名或正文。不能核对时保留现场，无命令、短名、其他驱动或自动重试。
+3. 正常卸载要让扩展停接新引用，等待原读写项关闭和在途回调完成，先给每件原 APFS 工作件刷盘、关闭所有写句柄；迟到写入或失败不能换取干净回执。然后只允许公开 [`funmount(原根FD,0)`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/vfs/vfs_syscalls.c)；若忙，保留原卷等待使用者，不改用路径、不强制。成功还须从 [原生挂载表](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/mount.h) 独立确认原 FSID 和位置均消失。扩展正常停用后只在卸载资源时对私有原件作收尾，绝不在 FSVolume 停用回调中做 I/O。顺序不对的资源卸载保留原对象；确实未挂载即停用的对象可释放，但不出具干净回执。Host 不要求扩展在系统调用返回后依然活着；缺少系统或正常扩展回执，均保留未知，不认定移交或提交成功。
+4. 非尝试阶段标记先同步私有原件，再在同一登记目录独占改名公布，每个标记绑定原票据、卷、阶段及自身创建身份；不覆盖碎片或扫描其他会话。它们只证明本机生命周期；不能充当已封存字节、R3 身份或远端收据。
+
+[无入口的宿主源码用例](../tests/qualification/macos_fskit_host.swift)仅定义错资源、未明确授权和双回执断言；没有运行。在明确批准的真实 macOS 27 参考机，仍须独立验证：实际签名／entitlement 和开启流程、空只读票据搭配可写卷、FSClient 选项实际传递、根事件 FD 是否不阻塞正常卸载、跨用户／可执行／映射、双进程崩溃与忙卷收尾。须将真实 ZXS 选择登记为原 App Group 工作件，接入签名扩展入口、在进程间核原始登记，移交后复核最终文件代次及整份摘要，才可与已实现的原号提交相接；普通 Qt 发布入口仍关闭。
