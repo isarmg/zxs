@@ -45,7 +45,7 @@ def profile():
         name, pin = match.groups()
         require(name not in pins and version(name) == pin, "Wheel version differs from lock: " + name)
         pins[name] = pin
-    require(len(pins) == 8, "Incomplete macOS wheel lock")
+    require(len(pins) == 14, "Incomplete macOS wheel lock")
     with (PROJECT / "pyproject.toml").open("rb") as f:
         meta = tomllib.load(f)["project"]
     release = RELEASE.fullmatch(meta["version"])
@@ -73,7 +73,7 @@ def verify_app(app, marketing, env):
                 file_names.add(leaf)
             else:
                 require(stat.S_ISDIR(mode), "Unexpected special file in app: " + str(path))
-    require({"Python", "QtCore", "QtGui", "QtWidgets", "COPYRIGHT-NOTICE.txt"} <= file_names
+    require({"Python", "QtCore", "QtGui", "QtWidgets", "COPYRIGHT-NOTICE.txt", "cacert.pem"} <= file_names
             and (app / "Contents/Frameworks/PySide6/Qt/plugins/platforms/libqcocoa.dylib").is_file(),
             "Missing Python, Qt, Cocoa platform plugin or provenance notice")
     require(not any("macfuse" in n.casefold() or "winfsp" in n.casefold() for n in file_names),

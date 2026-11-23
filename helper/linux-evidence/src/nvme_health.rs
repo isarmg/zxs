@@ -3,11 +3,12 @@ use linux_raw_sys::ioctl::{BLKGETDISKSEQ, NVME_IOCTL_ADMIN_CMD};
 use rustix::{fs::{OFlags, fcntl_getfl}, io::{FdFlags, fcntl_getfd}};
 use std::{fs::File, io, mem::{align_of, offset_of, size_of}, os::{fd::AsRawFd, unix::fs::{FileTypeExt, MetadataExt}}};
 
-pub const LOG_BYTES: usize = 512;
+const LOG_BYTES_U32: u32 = 512;
+pub const LOG_BYTES: usize = LOG_BYTES_U32 as usize;
 const GET_LOG_PAGE: u8 = 0x02;
 const SMART_INFORMATION: u32 = 0x02;
 const RETAIN_EVENT: u32 = 1 << 15;
-const CDW10: u32 = (((LOG_BYTES as u32 / 4) - 1) << 16) | RETAIN_EVENT | SMART_INFORMATION;
+const CDW10: u32 = (((LOG_BYTES_U32 / 4) - 1) << 16) | RETAIN_EVENT | SMART_INFORMATION;
 
 // Linux UAPI linux/nvme_ioctl.h, struct nvme_passthru_cmd (not the 64-bit result form).
 #[repr(C)]
@@ -31,7 +32,7 @@ impl From<io::Error> for Failure {
 
 /// Never opens a device, requests a controller state change, clears event
 /// notices, or accepts a command from its caller. The caller proves which
-/// NVMe subsystem owns this held namespace, before and after this observation.
+/// `NVMe` subsystem owns this held namespace, before and after this observation.
 ///
 /// # Errors
 /// Refuses a different device or generation, a non-read-only FD, any control
@@ -60,7 +61,7 @@ pub fn read(original:&File, expected_device:u64, expected_generation:u64)->Resul
     let mut log=[0u8;LOG_BYTES];
     let mut command=LogCommand{
         opcode:GET_LOG_PAGE,flags:0,reserved:0,namespace:u32::MAX,cdw2:0,cdw3:0,metadata:0,
-        address:log.as_mut_ptr() as u64,metadata_len:0,data_len:LOG_BYTES as u32,cdw10:CDW10,
+        address:log.as_mut_ptr() as u64,metadata_len:0,data_len:LOG_BYTES_U32,cdw10:CDW10,
         cdw11:0,cdw12:0,cdw13:0,cdw14:0,cdw15:0,timeout_ms:0,result:0,
     };
     // SAFETY: synchronous fixed Linux LP64 UAPI struct and its one live

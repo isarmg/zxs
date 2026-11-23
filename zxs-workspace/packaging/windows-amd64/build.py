@@ -64,7 +64,7 @@ def profile():
         name, pin = match.groups()
         require(name not in pins and version(name) == pin, "Wheel version differs from lock: " + name)
         pins[name] = pin
-    require(len(pins) == 9, "Incomplete Windows wheel lock")
+    require(len(pins) == 15, "Incomplete Windows wheel lock")
     with (PROJECT / "pyproject.toml").open("rb") as f:
         meta = tomllib.load(f)["project"]
     require(meta["name"] == "zip-workspace" and
@@ -187,7 +187,7 @@ def bundle_hashes(bundle):
                 digest = hashlib.file_digest(src, "sha256").hexdigest()
             files[child.relative_to(bundle).as_posix()] = {"bytes": meta.st_size, "sha256": digest}
     required = {"ZipWorkspace.exe", "_internal/python314.dll",
-                "_internal/PySide6/plugins/platforms/qwindows.dll", "_internal/COPYRIGHT-NOTICE.txt"}
+                "_internal/PySide6/plugins/platforms/qwindows.dll", "_internal/COPYRIGHT-NOTICE.txt", "_internal/certifi/cacert.pem"}
     require(required <= files.keys() and all(files[p]["bytes"] > 0 for p in required),
             "Missing executable, Python, Windows Qt platform plugin or notice")
     names = {Path(k).name.casefold() for k in files}

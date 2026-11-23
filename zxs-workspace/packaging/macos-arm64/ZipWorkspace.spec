@@ -2,6 +2,7 @@
 import os
 import platform
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 import re
 import sys
 import tomllib
@@ -19,10 +20,15 @@ marketing = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)(?:\.dev[0-9]+)?", release)
 if not marketing:
     raise SystemExit("Update this profile for the new version syntax.")
 
+network = ["httpcore", "h2", "h11", "hpack", "hyperframe", "certifi"]
+network_data = collect_data_files("certifi", includes=["cacert.pem"])
+for package in network:
+    network_data.extend(copy_metadata(package))
+
 analysis = Analysis(
     [str(here / "desktop_entry.py")], pathex=[str(workspace)],
-    binaries=[], datas=[(str(here / "COPYRIGHT-NOTICE.txt"), ".")],
-    hiddenimports=[], hookspath=[], hooksconfig={}, runtime_hooks=[],
+    binaries=[], datas=[(str(here / "COPYRIGHT-NOTICE.txt"), "."), *network_data],
+    hiddenimports=network, hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=[
         "mfusepy", "fuse", "pyfuse3", "winfspy", "zipworkspace.cli",
         "zipworkspace.macos_snapshot", "zipworkspace._macos_session",

@@ -8,3 +8,11 @@ pyinstaller-hooks-contrib==2026.7 --hash=sha256:24257a04c7a5a7a034cf28e39dcee20f
 pyside6-essentials==6.11.2 --hash=sha256:77795c145202e65a78d88f7cd409d186e3ba23d159bdb3ba2dcd159ae5e5f0d9  # pyside6_essentials-6.11.2-cp310-abi3-macosx_13_0_universal2.whl
 setuptools==84.1.0 --hash=sha256:5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9  # setuptools-84.1.0-py3-none-any.whl
 shiboken6==6.11.2 --hash=sha256:53659683b1f7a08e9f87eff9b1065f1ceb7110cd7a4bc09fdf5efe43d286604d  # shiboken6-6.11.2-cp310-abi3-macosx_13_0_universal2.whl
+
+# Pinned universal wheels for the existing R3 HTTPS reader.
+httpcore==1.0.9 --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55
+h11==0.16.0 --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+h2==4.3.0 --hash=sha256:c438f029a25f7945c69e0ccf0fb951dc3f73a5f6412981daee861431b70e2bdd
+hpack==4.1.0 --hash=sha256:157ac792668d995c657d93111f46b4535ed114f0c9c8d672271bbec7eae1b496
+hyperframe==6.1.0 --hash=sha256:b03380493a519fce58ea5af42e4a42317bf9bd425596f7a0835ffce80f1a42e5
+certifi==2026.11.20 --hash=sha256:7422df25243767b9877031a2248cb14d09ddac9beee846f4cef3d5c9191d488f
