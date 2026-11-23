@@ -193,3 +193,156 @@ class MacEditBody(unittest.TestCase):
             with self.assertRaises(Rejected):
                 file.seal_for_submit(confirmed=True)
         self.assertEqual(list(self.root.iterdir()), [])
+
+    @contextmanager
+    def retention_state(self):
+        from zipworkspace import macos_retained_edit as retained
+        # Separate disposable root: the product does not accept this path, and
+        # anonymous GET assertions still apply inside self.root.
+        support = self.root.parent / ("mock-application-support-" + new_id())
+        support.mkdir(mode=0o700)
+        with patch.object(retained, "_support", return_value=support):
+            with self.assertRaises(Rejected):
+                retained.initialize_state()
+            ident = retained.initialize_state(confirmed=True)
+            with self.assertRaises(FileExistsError):
+                retained.initialize_state(confirmed=True)
+            yield retained, ident, support / retained._ROOT
+
+    @staticmethod
+    def change(file, data):
+        writer = file.open_handle(writable=True)
+        file.truncate(writer, 0)
+        file.write(writer, 0, data)
+        file.release(writer)
+        file.stop_new_handles()
+        return file.seal_for_submit(confirmed=True)
+
+    def new_connection(self, *, credential_login="test", presented_login="test"):
+        exchange = object.__new__(edit.HttpsExchange)
+        exchange._identity, exchange._location = self.exchange._identity, self.exchange._location
+        auth = exchange._authorization = _Authorization(credential_login, "synthetic reconnect only")
+        self.addCleanup(auth.revoke)
+        return edit.OpenConnection(edit.ContainerClient(_Metadata(exchange), exchange), auth, exchange,
+                                   presented_login, _listed=True)
+
+    def test_retention_records_key_before_rename_and_reopens_original_account_and_body(self):
+        with self.retention_state() as (store, ident, root):
+            source = _CONTAINER, "main", _NODE
+            owner = root / store._owner_name(self.exchange.destination_identity, "test", *source)
+            seen_keys = []
+            rename = store.rename_new_at
+            def observe_rename(parent, scratch, final, **kwargs):
+                key = store.RetentionKey.decode(owner.read_bytes())
+                self.assertEqual(final, key.submission + ".pending")
+                self.assertEqual(owner.stat().st_mode & 0o777, 0o400)
+                self.assertFalse((root / final).exists())
+                seen_keys.append(key)
+                return rename(parent, scratch, final, **kwargs)
+            with self.opened() as file:
+                seal = self.change(file, b"retained whole file")
+                with self.assertRaises(Rejected):
+                    store.retain_edit(file, replace(seal), ident, confirmed=True)
+                with patch.object(store, "rename_new_at", side_effect=observe_rename):
+                    key = store.retain_edit(file, seal, ident, confirmed=True)
+                with self.assertRaises(Rejected):
+                    store.retain_edit(file, seal, ident, confirmed=True)
+            self.assertEqual(seen_keys, [key])
+            self.connection.revoke()
+            packet = root / (key.submission + ".pending")
+            leaf = "body-" + _CONTAINER
+            self.assertEqual({p.name for p in packet.iterdir()}, {leaf, "submit.json"})
+            self.assertEqual((packet / leaf).stat().st_mode & 0o777, 0o400)
+            fresh = self.new_connection()
+            def read(connection, consume, selection=source):
+                return store.read_retained(connection, ident, *selection, consume, confirmed=True)
+            with self.assertRaises(Rejected):
+                read(self.connection, lambda *_: self.fail())
+            with self.assertRaises(Rejected):
+                read(self.new_connection(credential_login="other"), lambda *_: self.fail())
+            with self.assertRaises(FileNotFoundError):
+                read(fresh, lambda *_: self.fail(), (_CONTAINER, "main", _HEAD))
+            seen = []
+            def inspect(plan, blocks):
+                action, = plan.actions
+                self.assertEqual((action.container_id, action.fork_from_main, action.head, action.base_revision),
+                                 (_CONTAINER, _NODE, None, 7))
+                self.assertNotEqual(action.branch, "main")
+                self.assertIsNone(action.name)
+                self.assertEqual(plan.placements, ((_CONTAINER, leaf),))
+                seen.append(plan.encode())
+                return b"".join(blocks)
+            for _ in range(2):
+                self.assertEqual(read(fresh, inspect), b"retained whole file")
+            self.assertEqual(seen[0], seen[1])
+            later = read(fresh, lambda _, blocks: blocks)
+            with self.assertRaises(Rejected):
+                next(later)
+            # A byte-identical replacement is not the original APFS body.
+            (packet / leaf).rename(root / ("original-body-" + new_id()))
+            (packet / leaf).write_bytes(b"retained whole file")
+            (packet / leaf).chmod(0o400)
+            with self.assertRaises(store.Uncertain):
+                read(fresh, lambda *_: self.fail("no bytes may be lent"))
+
+    def test_pre_rename_interruption_keeps_the_reservation_without_a_final_or_retry(self):
+        with self.retention_state() as (store, ident, root):
+            with self.opened() as file:
+                file.stop_new_handles()
+                unchanged = file.seal_for_submit(confirmed=True)
+                with self.assertRaises(Rejected):
+                    store.retain_edit(file, unchanged, ident, confirmed=True)
+                self.assertEqual(list(root.iterdir()), [])
+            with self.opened() as file:
+                seal = self.change(file, b"changed")
+                with self.assertRaises(Rejected):
+                    store.retain_edit(file, seal, ident)
+                with patch.object(store, "rename_new_at", side_effect=OSError(errno.EIO, "before rename")):
+                    with self.assertRaises(store.Uncertain):
+                        store.retain_edit(file, seal, ident, confirmed=True)
+                self.assertEqual(b"".join(file.blocks(seal)), b"changed")
+            with self.assertRaises(store.Uncertain):
+                store.read_retained(self.connection, ident, _CONTAINER, "main", _NODE,
+                                    lambda *_: self.fail("do not adopt orphaned scratch"), confirmed=True)
+            old = {p.name for p in root.iterdir()}
+            self.assertFalse(any(name.endswith(".pending") for name in old))
+            # A second independent session cannot write another packet for the same pending source.
+            with self.opened() as another:
+                other = self.change(another, b"another")
+                with self.assertRaises(Rejected):
+                    store.retain_edit(another, other, ident, confirmed=True)
+            self.assertEqual({p.name for p in root.iterdir()}, old)
+
+    def test_after_rename_uncertainty_reopens_known_selection_without_a_returned_key(self):
+        with self.retention_state() as (store, ident, root), self.opened() as file:
+            seal = self.change(file, b"")
+            real = store._barrier
+            def late(fd):
+                if list(root.glob("*.pending")):
+                    raise OSError(errno.EIO, "injected final device flush failure")
+                real(fd)
+            with patch.object(store, "_barrier", side_effect=late), self.assertRaises(store.Uncertain):
+                store.retain_edit(file, seal, ident, confirmed=True)
+            self.assertEqual(len(list(root.glob("*.pending"))), 1)
+            with self.assertRaises(Rejected):
+                store.retain_edit(file, seal, ident, confirmed=True)
+            self.assertEqual(store.read_retained(self.connection, ident, _CONTAINER, "main", _NODE,
+                                                 lambda _, blocks: b"".join(blocks), confirmed=True), b"")
+            self.assertEqual(len(self.requests), 1)  # No send, extra GET, or remote lookup from recovery.
+
+
+    def test_early_body_barrier_failure_reserves_only_the_original_source(self):
+        with self.retention_state() as (store, ident, root), self.opened() as file:
+            seal = self.change(file, b"early failure")
+            with patch.object(store, "_barrier", side_effect=OSError(errno.EIO, "before key completes")):
+                with self.assertRaises(store.Uncertain):
+                    store.retain_edit(file, seal, ident, confirmed=True)
+            owner = root / store._owner_name(self.exchange.destination_identity, "test", _CONTAINER, "main", _NODE)
+            self.assertTrue(owner.is_file())
+            self.assertEqual(owner.stat().st_size, 0)
+            self.assertFalse(any(p.name.endswith(".pending") for p in root.iterdir()))
+            with self.assertRaises(store.Uncertain):
+                store.read_retained(self.connection, ident, _CONTAINER, "main", _NODE,
+                                    lambda *_: self.fail("incomplete owner never lends a body"), confirmed=True)
+            with self.assertRaises(Rejected):
+                store.retain_edit(file, seal, ident, confirmed=True)

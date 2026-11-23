@@ -6,7 +6,7 @@ Linux 走独立本机验收；Windows、macOS 走[桌面 CI](docs/hosted-desktop
 
 - 已写完待测试（Linux）：HTTPS 连接、容器和分支历史、精确节点另存、接入本机编辑卷、显式提交及按原号恢复。
 - 未写完：把 Windows 和 macOS 的原生文件交付接入桌面容器页，完成这两个平台的可编辑远程工作卷。
-- macOS 远程编辑已有[单文件私有编辑与显式封存源码](docs/macos-remote-edit.md)，不开放 Finder 挂载或远程提交；不替代另存的系统隔离来源核验。
+- macOS 远程编辑已有[单文件私有编辑、显式封存及原键留存／恢复源码](docs/macos-remote-edit.md)，不开放 Finder 挂载或远程提交；不替代另存的系统隔离来源核验。
 
 ## 独立 ZIP 工作区
 

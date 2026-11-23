@@ -8,8 +8,21 @@
 
 同一个本机匿名文件会话可有多个读者，只能有一个写者；这不是跨会话或跨客户端的写锁；读、写、截断及同步都使用在手的原文件。写请求不超过 16 MiB，单文件上限 128 GiB。停接新句柄后，原句柄仍可完成最后一次写入再关闭。写入或同步出现错误时不能封存；关闭、普通保存、同步和停写都不生成远端版本。只有另行明确请求、该会话所有句柄均已释放，才会同步并关闭最后一个可写系统句柄，从原只读句柄计算完整长度和 SHA-256。后续只能在原会话存活时按块取这份封存，断开认证则停止。
 
-**边界：** 本机封存不是持久提交票据，退出进程会失去未移交的修改。尚无目录与大小写别名展示、系统卷挂载、编辑器临时文件替换、原卷正常卸载、持久待提交队列或网络提交的接线。正式接入前须证明内核端已停止接收新写入且缓存和在途写入均已排空，不能把最后一次关闭当作该证明。[macFUSE 5.5.0 的 FSKit 限制](https://github.com/macfuse/macfuse/releases/tag/macfuse-5.5.0)和[文件系统同步的保证](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/fsync.2)应分别验证。
+**边界：** 本机封存不是持久提交票据，退出进程会失去未移交的修改。下面的明确移交只保护已经封存的一个完整文件；尚无卷上持续编辑日志、系统挂载、编辑器临时文件替换、正常卸载或网络提交接线。正式接入前须证明内核端已停止接收新写入且缓存和在途写入均已排空，不能把最后一次关闭当作该证明。[macFUSE 5.5.0 的 FSKit 限制](https://github.com/macfuse/macfuse/releases/tag/macfuse-5.5.0)和[文件系统同步的保证](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/fsync.2)应分别验证。
 
 这个匿名编辑文件不替代「另存」。公开可见的 macOS 下载仍需系统隔离标记并读回与实际请求完全一致的 [Launch Services 下载 URL](https://developer.apple.com/documentation/coreservices/klsquarantinedataurlkey)。已观察到隔离类型正确但系统未返回下载 URL；这与 [Chromium 记录的系统行为](https://chromium.googlesource.com/chromium/src/+/e1c0d01fecb19602388a71798c63c15f69d13f55/components/services/quarantine/quarantine_mac.mm)一致。不能用设置调用成功、Finder 来源文本或应用自写属性代替，入口仍关闭。
 
 [合成资格用例](../tests/qualification/test_macos_edit_file.py)覆盖原生匿名句柄、单写者、停写后排空、显式整文件封存、空文件、不提交即关闭、短写／同步失败、来源变化和断开；未在 macOS 运行。
+
+
+## 已封存的整文件可明确留存，重启后按原选择重开
+
+仅供原生控制器内部使用。用户明确留存后，才能从当前匿名封存复制**这一份完整文件**到应用自己的 [Application Support](https://developer.apple.com/documentation/foundation/using-the-file-system-effectively)；函数不能接受下载路径、用户文件名或替代 STATE。首次登记独占建立 0700 私有目录，不接管同名旧目录。控制器必须保留最初登记的卷 UUID、原目录 inode 和创建时刻；若首次登记后尚未保存这份身份便中断，不按同名目录重新登记。要求本机 APFS、可验证的所有权/权限、无扩展 ACL、无物化、无同步软件和同账户协作程序干扰；这不是对系统备份或同一用户内恶意进程的隔离。
+
+1. 以已认证目的地、凭据实际登录名、原容器／分支／节点生成内部所有者键名。独占预留在同一 STATE，相同选择已有记录就停止，不创建第二份。没有变化不写任何记录。原远端显示名只作为元数据保存。
+2. 在 0700 临时子目录写一份 0400 正文和一份 0400 `submit.json`。原读写句柄关闭后只借真正只读的原件。意图绑定原 APFS 卷、STATE、子目录、正文、键与意图实体，绑定原版次、选中节点、原分支头和整文件 SHA。沿用共用 `Plan / SaveNode`：编辑分支头时以原头为基准；编辑历史 main 节点时在**一次**保存中分出新枝，不改现有 main。
+3. 在无覆盖发布 `<submission>.pending` **前**，将含意图完整摘要的原所有者键写为 0400、读回，同步其所在 STATE 并要求设备刷新。封存子目录用原实体执行独占改名，再同步原目录并要求设备刷新。所用 [Darwin 文件刷盘](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/fsync.2)和[原句柄创建时刻](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/getattrlist.2)均须实际原机资格验证；源码不等于断电试验。
+4. 新的同账户认证连接只需已登记 STATE 身份和原选择的三个 ID；即使前次未返回提交号，也只读该键，不扫描、不取最新远端节点、不发网络请求。先核可信键、原意图以及原正文实体，并将整份正文读完校验；之后才在本次调用内按块借出。正常关闭或重开不删除状态。
+5. 没有键与“有键但内容不全、终名不存在或已替换”不同。后者结果未知，保留原地；不能采用孤立的暂存文件、重造号、重试或当远端已经提交。相同原选择一直占用，直至未来经真实回执处理的本机状态转换。不同文件不是一项原子提交。
+
+只保护明确移交并能重新验出的封存。尚未移交的编辑会话退出仍会消失；这里没有 Finder 写入成功、远端回执、公开下载或包装成标准 ZIP 的含义。源码用例包含：原键先于发布、进程未取得返回键仍可按原号恢复、相同选择重复被拒、相同字节替件、空文件、撤销/换账号、改名前后故障。未运行。

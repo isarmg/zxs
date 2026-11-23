@@ -38,6 +38,7 @@ class _Authorization:
         if not 1 <= len(credential) <= 1024 or any(value < 32 or value == 127 for value in credential):
             raise Rejected("invalid native password")
         self._lock = Lock()
+        self._login = login  # Non-secret identity bound to this exact credential, not a UI label.
         self._header = bytearray(b"Basic " + b64encode(login.encode("ascii") + b":" + credential))
 
     def __call__(self):
@@ -50,6 +51,11 @@ class _Authorization:
         with self._lock:
             if not self._header:
                 raise Rejected("this window disconnected")
+
+    def require_account(self, login):
+        self.require_live()
+        if login != self._login:
+            raise Rejected("not the account of this original credential")
 
     def revoke(self):
         with self._lock:

@@ -14,7 +14,7 @@ from ._macos_copy_evidence import _attributes, apfs
 from .container_https import HttpsExchange
 from .container_plan import FullBody
 from .desktop.container_client import ContainerClient
-from .desktop.container_connection import OpenConnection, _Metadata
+from .desktop.container_connection import OpenConnection, _Authorization, _Metadata
 from .desktop.container_management import Branch, Container, Detail, Node, _node, id_ok
 from .document import archive_observation
 from .model import CHUNK, MAX_FILE, Rejected, new_id
@@ -49,6 +49,8 @@ def _admit(connection, detail, branch, node):
             or node.length > MAX_FILE or (node.id != branch.head and branch.id != "main")):
         raise Rejected("need a selected current branch head or exact historical main node")
     exchange, authority = connection._exchange, connection._authorization
+    if type(authority) is not _Authorization:
+        raise Rejected("an original native authentication supplier is required")
     source = SelectedFile(exchange.destination_identity, connection._account, detail.container,
                           branch.id, branch.head, node)
     location = exchange._location
@@ -58,7 +60,7 @@ def _admit(connection, detail, branch, node):
         if (connection.operations._exchange is not exchange or exchange._authorization is not authority
                 or exchange.destination_identity != source.destination or exchange._location != location):
             raise Rejected("the original authenticated connection changed")
-        authority.require_live()
+        authority.require_account(source.account)
 
     def selection():
         # A detached selection with the same visible name is not authority.
@@ -172,6 +174,7 @@ class _EditFile:
         self._writer, self._reader, self._generation = writer, reader, generation
         self._lock, self._handles, self._sealed = Lock(), {}, None
         self._phase = "editing"
+        self._retention_started = False
 
     def _check_file(self):
         self._original()
@@ -280,6 +283,15 @@ class _EditFile:
                 self._check_file()
                 offset += len(block)
             yield block
+
+    def _claim_retention(self, seal):
+        with self._lock:
+            if self._phase != "sealed" or seal is not self._sealed or self._retention_started:
+                raise Rejected("retention requires this original unclaimed whole-file seal")
+            self._check_file()
+            if seal.body == FullBody(seal.selected.node.length, seal.selected.node.sha256):
+                raise Rejected("unchanged original: no SaveNode to retain")
+            self._retention_started = True  # On uncertainty reopen the original; never issue another operation.
 
     def _retire(self):
         with self._lock:
