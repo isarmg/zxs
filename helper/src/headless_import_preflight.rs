@@ -54,7 +54,12 @@ impl Preflight {
             )?;
             writeln!(
                 out,
-                "Metadata estimate only; no file contents read or import authorized."
+                "source naming: {} nested files need an explicit mapping; {} top-level names cannot be used as-is",
+                observed.nested_files, observed.invalid_top_level_names
+            )?;
+            writeln!(
+                out,
+                "Metadata only; destination collisions and Workspace names are not checked."
             )?;
             if observed.files == 0 && observed.dirs == 0 {
                 writeln!(out, "The selected source is empty.")?;
@@ -71,6 +76,8 @@ pub(super) struct Counts {
     dirs: u64,
     empty_dirs: u64,
     hard_links: u64,
+    nested_files: u64,
+    invalid_top_level_names: u64,
     bytes: u128,
 }
 
@@ -234,6 +241,24 @@ fn add_count(value: &mut u64) -> io::Result<()> {
     Ok(())
 }
 
+// Match the server's display component for same-name candidates only.
+// Workspace path portability and collisions belong to the conversion plan.
+fn same_name_candidate(raw: &[u8]) -> bool {
+    const MAX: usize = 255;
+    if raw.is_empty() || raw.len() > MAX {
+        return false;
+    }
+    let Ok(name) = std::str::from_utf8(raw) else {
+        return false;
+    };
+    !matches!(name, "." | "..")
+        && !name.ends_with(['.', ' '])
+        && name.encode_utf16().count() <= MAX
+        && !name.chars().any(|c| {
+            c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        })
+}
+
 fn census(dir: File, root: Stamp, mount: Mount) -> io::Result<Counts> {
     let mut frames = vec![Frame::open(dir, root, mount, 0, None)?];
     let mut counts = Counts::default();
@@ -289,6 +314,11 @@ fn census(dir: File, root: Stamp, mount: Mount) -> io::Result<Counts> {
                     return Err(changed());
                 }
                 add_count(&mut counts.files)?;
+                if frame.parent_name.is_some() {
+                    add_count(&mut counts.nested_files)?;
+                } else if !same_name_candidate(raw) {
+                    add_count(&mut counts.invalid_top_level_names)?;
+                }
                 if one.links > 1 {
                     add_count(&mut counts.hard_links)?;
                 }

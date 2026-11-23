@@ -44,3 +44,25 @@ fn data_roster_length_is_bounded() {
     assert!(Preflight::parse(args(62)).is_ok());
     assert!(Preflight::parse(args(63)).is_err());
 }
+
+#[test]
+fn same_name_candidates_follow_server_spelling_not_workspace_alias_rules() {
+    assert!(same_name_candidate(&[b'a'; 255]));
+    assert!(!same_name_candidate(&[b'a'; 256]));
+    for allowed in ["方案.xlsx", "NUL.txt", "e\u{301}.txt", "REPORT", "report"] {
+        assert!(same_name_candidate(allowed.as_bytes()));
+    }
+    for denied in [
+        b"".as_slice(),
+        b".",
+        b"..",
+        b"name.",
+        b"name ",
+        b"a/b",
+        b"a\\b",
+        b"a\x7fb",
+        b"\xff",
+    ] {
+        assert!(!same_name_candidate(denied));
+    }
+}
