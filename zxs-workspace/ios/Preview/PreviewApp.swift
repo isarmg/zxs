@@ -6,13 +6,32 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {}
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    private var draftShield: UIView?
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
         guard let scene = scene as? UIWindowScene else { return }
         let w = UIWindow(windowScene: scene)
         w.rootViewController = PreviewController()
         self.window = w; w.makeKeyAndVisible()
     }
+    func sceneWillResignActive(_ scene: UIScene) { coverDraft() }
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        draftShield?.removeFromSuperview()
+        draftShield = nil
+    }
+    private func coverDraft() {
+        guard draftShield == nil, let window,
+              let sheet = window.rootViewController?.presentedViewController as? UINavigationController,
+              sheet.topViewController is LocalDraftController else { return }
+        let shield = UIView(frame: window.bounds)
+        shield.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        shield.backgroundColor = .systemBackground
+        shield.isOpaque = true
+        shield.accessibilityViewIsModal = true
+        window.addSubview(shield)
+        draftShield = shield
+    }
     func sceneDidEnterBackground(_ scene: UIScene) {
+        coverDraft()
         (window?.rootViewController as? PreviewController)?.clearSelection()
     }
     func sceneDidDisconnect(_ scene: UIScene) {
@@ -124,6 +143,8 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         }
         let pick = UIButton(type: .system)
         wire(pick, "选择 .zxs 或 Store ZIP", #selector(choose))
+        let localDraft = UIButton(type: .system)
+        wire(localDraft, "本地草稿…", #selector(openLocalDraft))
         wire(cancelButton, "取消并关闭文件", #selector(cancelRead))
         wire(find, "按名称查找…", #selector(offerFind))
         wire(checkAll, "核验原归档…", #selector(offerArchive))
@@ -158,7 +179,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         literal.font = .preferredFont(forTextStyle: .body); literal.adjustsFontForContentSizeCategory = true
         literal.isAccessibilityElement = true
         tableHost.axis = .vertical
-        let stack = UIStackView(arrangedSubviews: [notice, pick, find, form, checkAll, cancelButton, status, location, directoryNav,
+        let stack = UIStackView(arrangedSubviews: [notice, pick, localDraft, find, form, checkAll, cancelButton, status, location, directoryNav,
                                                    textNav, literal, tableHost])
         stack.axis = .vertical; stack.spacing = 5; stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
@@ -195,6 +216,20 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
             status.text = "已取消查找，保留原目录与页。"
             render()
         } else { clearSelection(); reset("已取消本次读取。") }
+    }
+
+    @objc private func openLocalDraft() {
+        guard active == nil, presentedViewController == nil else { return }
+        do {
+            let editor = LocalDraftController(store: try LocalDraft.applicationStore())
+            let sheet = UINavigationController(rootViewController: editor)
+            sheet.isModalInPresentation = true
+            present(sheet, animated: true)
+        } catch {
+            let alert = UIAlertController(title: "无法打开本地草稿", message: nil, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "关闭", style: .cancel))
+            present(alert, animated: true)
+        }
     }
 
     @objc private func choose() {
