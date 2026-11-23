@@ -1,4 +1,4 @@
-"""Native macOS evidence for whole-archive writes. Never creates or changes a label."""
+"""Read-only native macOS filesystem evidence for local publication."""
 from contextlib import ExitStack, contextmanager
 import ctypes as C
 import errno
@@ -96,13 +96,21 @@ class Native:
         return values
 
     @contextmanager
-    def _quarantine_property(self, path, fd, directory):
-        """One fresh system query on a reference to this exact held vnode."""
+    def _file_reference(self, path, fd, directory, *, literal=False):
+        """Bind one transient CoreFoundation file reference to this held vnode."""
         bpath = os.fsencode(path)
         kind = stat.S_IFDIR if directory else stat.S_IFREG
         def match(raw):
             held = native_identity(os.fstat(fd), kind)
-            if native_identity(os.stat(raw, follow_symlinks=False), kind) != held:
+            if literal:
+                # New publication requires the original literal component walk,
+                # even for the spelling returned by CoreFoundation.
+                if raw != bpath: raise Rejected("系统文件引用未返回本次原名")
+                with macos_read.literal_name(path, directory=directory) as named:
+                    identity = native_identity(os.fstat(named), kind)
+            else:
+                identity = native_identity(os.stat(raw, follow_symlinks=False), kind)
+            if identity != held:
                 raise Rejected("系统查询的文件不是选定原件")
         match(bpath)
         with ExitStack() as stack:
@@ -123,6 +131,11 @@ class Native:
                     match(buf.value)
                 match(bpath)
             check_ref()
+            yield ref, check_ref
+
+    @contextmanager
+    def _quarantine_property(self, path, fd, directory, *, literal=False):
+        with self._file_reference(path, fd, directory, literal=literal) as (ref, check_ref), ExitStack() as stack:
             prop = C.c_void_p()
             ok = self.property(ref, self.key, C.byref(prop), None)
             if prop.value: stack.callback(self.release, prop.value)
@@ -132,14 +145,14 @@ class Native:
             check_ref()
 
     @contextmanager
-    def quarantine(self, path, fd):
+    def quarantine(self, path, fd, *, literal=False):
         """Read a positive quarantine value; never serialize, log or set it."""
-        with self._quarantine_property(path, fd, False) as prop:
+        with self._quarantine_property(path, fd, False, literal=literal) as prop:
             if not prop or self.type(prop) != self.dict_type() or not 0 < self.count(prop) <= 64:
                 raise Rejected("macOS 未返回可核实的隔离来源；不会补造来源")
             yield prop
 
-    def no_payload_metadata(self, path, fd, *, directory=False):
+    def no_payload_metadata(self, path, fd, *, directory=False, literal=False):
         # A positive null from the public CFURL query is distinct from an
         # error. Also require a successful empty visible FD attribute list;
         # never inspect/copy the values or treat an unsupported query as empty.
@@ -156,7 +169,7 @@ class Native:
             if n >= 0: raise Rejected("原件有资源叉，不生成省略这些信息的快照")
             if C.get_errno() != getattr(errno, "ENOATTR", None):
                 raise _error("无法从原句柄排除资源叉")
-        with self._quarantine_property(path, fd, directory) as prop:
+        with self._quarantine_property(path, fd, directory, literal=literal) as prop:
             if prop is not None: raise Rejected("原件有系统隔离来源，不生成独立快照")
             empty()
 
@@ -190,3 +203,19 @@ def require_exclusive_rename(fd):
     if (size != C.sizeof(result) or common != _RET or vol not in (_CAPABILITIES, _RET | _CAPABILITIES)
             or dirs or files or forks or not (result[7] & result[11] & _EXCLUSIVE_RENAME)):
         raise Rejected("原卷未明确返回无覆盖改名能力")
+
+
+def _attributes(fd, *, directory=False):
+    s = os.fstat(fd)
+    native_identity(s, stat.S_IFDIR if directory else stat.S_IFREG)
+    mode = stat.S_IMODE(s.st_mode)
+    if (os.geteuid() == 0 or os.geteuid() != os.getuid() or s.st_uid != os.geteuid() or
+            s.st_flags != 0 or (not directory and s.st_nlink != 1) or mode != (0o700 if directory else 0o600)):
+        raise Rejected("源和副本须为本人所有的 0600 普通文件，目的目录须 0700；不会修改现有权限")
+    native().no_acl(fd)
+
+
+def _absent(parent, name):
+    try: os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError: return
+    raise Rejected("新名称已被文件、目录或链接占用；不会覆盖")

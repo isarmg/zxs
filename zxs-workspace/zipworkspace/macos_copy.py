@@ -8,7 +8,8 @@ import stat
 import sys
 
 from . import macos_read
-from ._macos_copy_evidence import apfs, check_literal_path, check_spelling, native, require_exclusive_rename
+from ._macos_copy_evidence import (_absent, _attributes, apfs, check_literal_path, check_spelling,
+                                  native, require_exclusive_rename)
 from ._transfer import _BeforePublication, _CheckedReads
 from .archive import read_managed_document, stamp
 from .comparison import Folder
@@ -16,22 +17,6 @@ from .document import PositionalDocument, archive_sha, check_relative, native_id
 from .freeze import _dir_flags, pack_chosen_folder
 from .model import Rejected, member_name, new_id
 from .publish import Uncertain, rename_new_at, require_native_writer
-
-
-def _attributes(fd, *, directory=False):
-    s = os.fstat(fd)
-    native_identity(s, stat.S_IFDIR if directory else stat.S_IFREG)
-    mode = stat.S_IMODE(s.st_mode)
-    if (os.geteuid() == 0 or os.geteuid() != os.getuid() or s.st_uid != os.geteuid() or
-            s.st_flags != 0 or (not directory and s.st_nlink != 1) or mode != (0o700 if directory else 0o600)):
-        raise Rejected("源和副本须为本人所有的 0600 普通文件，目的目录须 0700；不会修改现有权限")
-    native().no_acl(fd)
-
-
-def _absent(parent, name):
-    try: os.stat(name, dir_fd=parent, follow_symlinks=False)
-    except FileNotFoundError: return
-    raise Rejected("新名称已被文件、目录或链接占用；不会覆盖")
 
 
 def _outside_source(parent, source):
