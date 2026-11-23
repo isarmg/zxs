@@ -90,7 +90,7 @@ pub(crate) fn require_no_automount(fd: &File) -> io::Result<()> {
         AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT | AtFlags::STATX_DONT_SYNC,
         StatxFlags::TYPE,
     )?;
-    if fstatfs(fd)?.f_type as u64 == AUTOFS_SUPER_MAGIC
+    if fstatfs(fd)?.f_type.cast_unsigned() == AUTOFS_SUPER_MAGIC
         || s.stx_attributes.contains(StatxAttributes::AUTOMOUNT)
     {
         return Err(invalid(

@@ -243,7 +243,11 @@ pub(crate) fn require_terminal(fd: impl AsFd) -> io::Result<()> {
         )
     };
     let stat = fstat(&fd)?;
-    if !supported_terminal(stat.st_mode, stat.st_rdev, fstatfs(&fd)?.f_type as u64) {
+    if !supported_terminal(
+        stat.st_mode,
+        stat.st_rdev,
+        fstatfs(&fd)?.f_type.cast_unsigned(),
+    ) {
         return Err(deny());
     }
     if !foreground(

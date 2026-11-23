@@ -390,7 +390,9 @@ impl Running {
         }
         // The single-threaded panel is the sole parent/reaper. This still
         // unreaped child's identity cannot be reused before the wait below.
-        let pid = Pid::from_raw(self.child.id() as i32)
+        let pid = i32::try_from(self.child.id())
+            .ok()
+            .and_then(Pid::from_raw)
             .ok_or_else(|| invalid("invalid checker child identity"))?;
         match kill_process(pid, Signal::TERM) {
             Ok(()) | Err(rustix::io::Errno::SRCH) => {}

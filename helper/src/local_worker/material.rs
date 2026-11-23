@@ -25,7 +25,7 @@ pub(crate) fn sealed_owner(f: &File, max: usize, owner: (u32, u32)) -> io::Resul
     {
         return Err(error());
     }
-    let mut v = vec![0; m.len() as usize];
+    let mut v = vec![0; usize::try_from(m.len()).map_err(|_| error())?];
     f.read_exact_at(&mut v, 0)?;
     loop {
         match f.read_at(&mut [0], m.len()) {

@@ -92,7 +92,7 @@ impl Sys {
 
     fn fixed_root() -> io::Result<File> {
         let root = BlockRoot::Sysfs.pin()?;
-        if fstatfs(&root)?.f_type as u64 != SYSFS_MAGIC
+        if fstatfs(&root)?.f_type.cast_unsigned() != SYSFS_MAGIC
             || Mount::on(&root)?.is_none_or(|m| m.at_root != Some(true))
         {
             return Err(unsupported(

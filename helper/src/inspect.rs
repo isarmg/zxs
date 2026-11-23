@@ -164,8 +164,12 @@ fn exact_bytes(
     let mut same = remaining_a == remaining_b;
     // Validate both complete streams even when their lengths or an early byte differ.
     while remaining_a > 0 || remaining_b > 0 {
-        let na = remaining_a.min(left.len() as u64) as usize;
-        let nb = remaining_b.min(right.len() as u64) as usize;
+        let na = usize::try_from(remaining_a)
+            .unwrap_or(usize::MAX)
+            .min(left.len());
+        let nb = usize::try_from(remaining_b)
+            .unwrap_or(usize::MAX)
+            .min(right.len());
         a.read_exact(&mut left[..na])?;
         b.read_exact(&mut right[..nb])?;
         same = same && left[..na] == right[..nb];

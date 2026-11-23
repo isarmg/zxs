@@ -186,7 +186,7 @@ fn digest(
     mut observe: impl FnMut(u64, &[u8]) -> io::Result<()>,
 ) -> io::Result<[u8; 32]> {
     let mut hash = Sha256::new();
-    let mut buf = [0; 128 * 1024];
+    let mut buf = vec![0; 128 * 1024];
     let mut at = 0;
     while at != length {
         require_copy_read_lease(file)?;

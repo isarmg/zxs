@@ -19,7 +19,7 @@ pub(crate) fn small() -> Vec<u8> {
 }
 fn check(b: &[u8]) -> io::Result<()> {
     standalone(b.len() as u64, |o, out| {
-        let o = o as usize;
+        let o = usize::try_from(o).map_err(|_| denied())?;
         out.copy_from_slice(b.get(o..o + out.len()).ok_or_else(denied)?);
         Ok(())
     })

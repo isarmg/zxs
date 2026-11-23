@@ -544,10 +544,12 @@ impl ForegroundElf {
         }
         self.require()?;
         let mut hash = Sha256::new();
-        let mut buf = [0u8; 32 << 10];
+        let mut buf = vec![0_u8; 32 << 10];
         let mut offset = 0;
         while offset < self.stamp.len {
-            let n = (self.stamp.len - offset).min(buf.len() as u64) as usize;
+            let n = usize::try_from(self.stamp.len - offset)
+                .unwrap_or(usize::MAX)
+                .min(buf.len());
             self.reader.read_exact_at(&mut buf[..n], offset)?;
             hash.update(&buf[..n]);
             offset += n as u64;
@@ -645,7 +647,8 @@ mod tests {
             }
         }
         let read = |o: u64, b: &mut [u8]| -> io::Result<()> {
-            b.copy_from_slice(&data[o as usize..o as usize + b.len()]);
+            let start = usize::try_from(o).unwrap();
+            b.copy_from_slice(&data[start..start + b.len()]);
             Ok(())
         };
         let here = base + 4160;

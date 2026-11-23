@@ -47,10 +47,10 @@ fn sealed_copy_is_not_the_input_and_wrong_expected_bytes_never_become_a_checked_
     drop(out);
     let mut h = Sha256::new();
     h.update(boot);
-    let zeros = [0u8; 32768];
+    let zeros = vec![0_u8; 32_768];
     let mut left = len - 512;
     while left > 0 {
-        let n = left.min(zeros.len() as u64) as usize;
+        let n = usize::try_from(left).unwrap_or(usize::MAX).min(zeros.len());
         h.update(&zeros[..n]);
         left -= n as u64;
     }

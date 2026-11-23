@@ -160,7 +160,7 @@ fn capture<T>(
         c"helper-check-image",
         MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING | MemfdFlags::NOEXEC_SEAL,
     )?);
-    let mut buf = [0_u8; 32768];
+    let mut buf = vec![0_u8; 32_768];
     let mut remaining = length;
     while remaining != 0 {
         let n = usize::try_from(remaining)
@@ -200,7 +200,7 @@ fn verify_copy(
         ));
     }
     copy.rewind()?;
-    let mut buf = [0u8; 32768];
+    let mut buf = vec![0_u8; 32_768];
     let mut hash = Sha256::new();
     let mut left = length;
     while left != 0 {

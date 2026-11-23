@@ -42,7 +42,7 @@ pub(crate) fn verify(
 // Same bounded ELF structure as the ZXS consumer's private image gate.
 const MAX_PH: u16 = 128;
 const MAX_DYN: u64 = 128 * 1024;
-const PH_LEN: u64 = 56;
+const PH_LEN: usize = 56;
 const ET_EXEC: u16 = 2;
 const ET_DYN: u16 = 3;
 const PT_LOAD: u32 = 1;
@@ -77,16 +77,17 @@ pub(crate) fn standalone(
     let n = short(&head, 56);
     let entry = long(&head, 24);
     let ph = long(&head, 32);
+    let row_size = PH_LEN as u64;
     if !head.starts_with(b"\x7fELF\x02\x01\x01")
         || machine != 62
         || word(&head, 20) != 1
         || !matches!(ty, ET_EXEC | ET_DYN)
         || entry == 0
         || short(&head, 52) != 64
-        || short(&head, 54) != PH_LEN as u16
+        || usize::from(short(&head, 54)) != PH_LEN
         || !(1..=MAX_PH).contains(&n)
         || ph < 64
-        || !range(ph, u64::from(n) * PH_LEN, len)
+        || !range(ph, u64::from(n) * row_size, len)
     {
         return Err(denied());
     }
@@ -94,8 +95,8 @@ pub(crate) fn standalone(
     let mut dyn_rows = None;
     let mut loads = Vec::with_capacity(usize::from(n));
     for i in 0..u64::from(n) {
-        let mut p = [0; PH_LEN as usize];
-        read(ph + i * PH_LEN, &mut p)?;
+        let mut p = [0; PH_LEN];
+        read(ph + i * row_size, &mut p)?;
         let k = word(&p, 0);
         let flags = word(&p, 4);
         let (o, address, bytes, mem) = (long(&p, 8), long(&p, 16), long(&p, 32), long(&p, 40));

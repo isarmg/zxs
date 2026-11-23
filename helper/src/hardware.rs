@@ -181,10 +181,12 @@ impl Ticks {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Percent(u16);
 impl Percent {
-    fn of(numerator: u128, total: u128) -> Self {
+    fn of(numerator: u128, total: u128) -> Field<Self> {
         // In this caller: 0 <= numerator <= total; sum of at most 8 u64
         // deltas, so hundredths-of-percent rounding cannot overflow u128.
-        Self(((numerator * 10_000 + total / 2) / total) as u16)
+        u16::try_from((numerator * 10_000 + total / 2) / total)
+            .map(Self)
+            .map_err(|_| Unknown::Invalid)
     }
 }
 impl Display for Percent {
@@ -213,9 +215,9 @@ impl Cpu {
         let [user, nice, system, _, iowait, irq, softirq, steal] = delta;
         Ok(Self {
             interval_ns: elapsed.as_nanos(),
-            active: Percent::of(user + nice + system + irq + softirq, total),
-            iowait: Percent::of(iowait, total),
-            steal: Percent::of(steal, total),
+            active: Percent::of(user + nice + system + irq + softirq, total)?,
+            iowait: Percent::of(iowait, total)?,
+            steal: Percent::of(steal, total)?,
         })
     }
 }

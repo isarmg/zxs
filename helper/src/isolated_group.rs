@@ -35,7 +35,10 @@ impl Group {
     pub(crate) fn new(child: Child) -> Self {
         // Linux PID is a positive pid_t; successful exec also proves setsid
         // was performed by this very child. No untrusted process can join this new session.
-        let id = Pid::from_raw(child.id() as i32).expect("fresh Linux child");
+        let id = i32::try_from(child.id())
+            .ok()
+            .and_then(Pid::from_raw)
+            .expect("fresh Linux child");
         Self {
             child,
             id,

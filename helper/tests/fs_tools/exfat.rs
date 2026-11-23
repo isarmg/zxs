@@ -179,7 +179,7 @@ fn only_the_matching_held_exfat_operand_worker_exit_and_whole_typed_receipt_can_
         let status = Some(expected);
         let read = Report::from_packet(&p, status, frame, &h).unwrap();
         assert_eq!(read.state, r.state);
-        assert_eq!(read.exit(), expected as u8);
+        assert_eq!(read.exit(), u8::try_from(expected).unwrap());
         assert_eq!(read.counts, r.counts);
         assert!(!read.panel_text().contains("untrusted"));
         assert!(Report::from_packet(&[], Some(2), frame, &h).is_err()); // naked 2 != typed "incomplete"

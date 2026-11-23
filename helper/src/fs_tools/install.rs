@@ -218,7 +218,7 @@ pub(crate) fn hash_upto(file: &mut impl Read, size: u64, max: u64) -> io::Result
     }
     let mut hash = Sha256::new();
     let mut left = size;
-    let mut buf = [0; 32 * 1024];
+    let mut buf = vec![0; 32 * 1024];
     while left != 0 {
         let n = usize::try_from(left).unwrap_or(usize::MAX).min(buf.len());
         file.read_exact(&mut buf[..n])?;
