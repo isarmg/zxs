@@ -265,8 +265,9 @@ fn serve_request(
         Ok(head) => head,
         Err(p) => return write_outcome(&mut output, Outcome::Failed(p)),
     };
-    let permit = match account.authenticate(&head.fields) {
+    let permit = match account.authenticate(&head.fields, stopping) {
         Ok(permit) => permit,
+        Err(_) if stopping() => return Ok(()),
         Err(e) => return write_outcome(&mut output, Outcome::Failed(e.into())),
     };
     let request = match workspace_protocol::request(head.method, head.target, &head.fields) {

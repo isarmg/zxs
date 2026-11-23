@@ -2,8 +2,52 @@
 use std::{
     ffi::{CString, c_char, c_int, c_void},
     io,
-    sync::Mutex,
+    sync::{Mutex, MutexGuard, TryLockError},
+    thread,
+    time::{Duration, Instant},
 };
+
+const SLOT_WAIT: Duration = Duration::from_millis(500);
+const SLOT_POLL: Duration = Duration::from_millis(10);
+
+fn unavailable() -> io::Error {
+    io::Error::new(io::ErrorKind::WouldBlock, "password verifier unavailable")
+}
+
+fn acquire_slot<'a>(
+    slot: &'a Mutex<()>,
+    budget: Duration,
+    stopping: &dyn Fn() -> bool,
+) -> io::Result<MutexGuard<'a, ()>> {
+    let start = Instant::now();
+    let mut contended = false;
+    loop {
+        if stopping() {
+            return Err(unavailable());
+        }
+        match slot.try_lock() {
+            Ok(held) => {
+                return if stopping() || (contended && start.elapsed() >= budget) {
+                    Err(unavailable())
+                } else {
+                    Ok(held)
+                };
+            }
+            Err(TryLockError::WouldBlock) => contended = true,
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(io::Error::other("password verifier unavailable"));
+            }
+        }
+        let remaining = budget.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return Err(unavailable());
+        }
+        thread::sleep(SLOT_POLL.min(remaining));
+        if start.elapsed() >= budget {
+            return Err(unavailable());
+        }
+    }
+}
 
 pub(crate) fn login_name(raw: &[u8]) -> io::Result<&str> {
     if !(1..=64).contains(&raw.len())
@@ -29,7 +73,7 @@ impl Verifier {
     pub(crate) fn new(salt: [u8; 16], tag: [u8; 32]) -> Self {
         Self { salt, tag }
     }
-    pub(crate) fn matches(&self, password: &str) -> io::Result<bool> {
+    pub(crate) fn matches(&self, password: &str, stopping: &dyn Fn() -> bool) -> io::Result<bool> {
         // A single process can allocate at most one 64 MiB verification at once.
         // Per-client/remote login throttling remains the network endpoint's job.
         static KDF: Mutex<()> = Mutex::new(());
@@ -41,9 +85,7 @@ impl Verifier {
             static FIXTURE_KDF: Mutex<()> = Mutex::new(());
             FIXTURE_KDF.lock().expect("password fixture lock poisoned")
         };
-        let _slot = KDF.try_lock().map_err(|_| {
-            io::Error::new(io::ErrorKind::WouldBlock, "password verifier unavailable")
-        })?;
+        let _slot = acquire_slot(&KDF, SLOT_WAIT, stopping)?;
         let encoded = CString::new(format!(
             "$argon2id$v=19$m=65536,t=3,p=4${}${}",
             b64(&self.salt),

@@ -209,23 +209,28 @@ pub(crate) enum AuthError {
 impl Account {
     /// Authenticate one direct HTTP request before parsing its body. Preserve
     /// individual Authorization field occurrences for the duplicate check.
-    pub(crate) fn authenticate(&self, headers: &[(&str, &str)]) -> Result<Permit<'_>, AuthError> {
-        if !self.open.load(Ordering::Acquire) {
+    pub(crate) fn authenticate(
+        &self,
+        headers: &[(&str, &str)],
+        stopping: &dyn Fn() -> bool,
+    ) -> Result<Permit<'_>, AuthError> {
+        let stopped = || stopping() || !self.open.load(Ordering::Acquire);
+        if stopped() {
             return Err(AuthError::Unavailable);
         }
         let credentials = credentials(headers)?;
         if credentials.login() != self.login.as_str() {
             return Err(AuthError::Invalid);
         }
-        if !self
+        let matched = self
             .verifier
-            .matches(credentials.password())
-            .map_err(|_| AuthError::Unavailable)?
-        {
-            return Err(AuthError::Invalid);
-        }
-        if !self.open.load(Ordering::Acquire) {
+            .matches(credentials.password(), &stopped)
+            .map_err(|_| AuthError::Unavailable)?;
+        if stopped() {
             return Err(AuthError::Unavailable);
+        }
+        if !matched {
+            return Err(AuthError::Invalid);
         }
         Ok(Permit {
             account: self,

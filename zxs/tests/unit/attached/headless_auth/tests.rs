@@ -146,18 +146,18 @@ fn direct_request_authenticates_the_original_live_account() {
         "Basic b3RoZXI6ZnJlc2ggd29ya3NwYWNlIHRlc3Qgc2VjcmV0",
     )];
     assert_eq!(
-        account.authenticate(&other_login).err(),
+        account.authenticate(&other_login, &|| false).err(),
         Some(AuthError::Invalid)
     );
     assert_eq!(
         account
-            .authenticate(&exact)
+            .authenticate(&exact, &|| false)
             .unwrap()
             .with_admission(&another, |_| ()),
         Err(AuthError::Unavailable)
     );
     account
-        .authenticate(&exact)
+        .authenticate(&exact, &|| false)
         .unwrap()
         .with_admission(&account, |allowed| {
             assert!(allowed());
@@ -166,7 +166,7 @@ fn direct_request_authenticates_the_original_live_account() {
         })
         .unwrap();
     assert_eq!(
-        account.authenticate(&exact).err(),
+        account.authenticate(&exact, &|| false).err(),
         Some(AuthError::Unavailable)
     );
 }
