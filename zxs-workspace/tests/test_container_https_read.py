@@ -57,6 +57,16 @@ class NativeReadTest(unittest.TestCase):
                 exchange.read_metadata(path)
         self.assertFalse(exchange.calls)
 
+    def test_non_h2_response_never_reaches_metadata_or_node_reader(self):
+        for extensions in ({"http_version": b"HTTP/1.1"}, {}):
+            with self.subTest(extensions=extensions):
+                exchange = ExchangeFixture(SimpleNamespace(extensions=extensions))
+                with self.assertRaisesRegex(Rejected, "HTTP/2"):
+                    exchange.read_metadata(ROOT)
+                with self.assertRaisesRegex(Rejected, "HTTP/2"):
+                    exchange.read_node_into(CONTAINER, NODE, length=0, sha256="0" * 64,
+                                            write=lambda _: self.fail("non-HTTP/2 response reached node sink"))
+
     def test_large_file_uses_exact_node_route_and_no_metadata_cap(self):
         block = b"a" * (600 * 1024)
         digest = hashlib.sha256(block + block).hexdigest()

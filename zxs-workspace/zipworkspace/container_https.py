@@ -1,4 +1,4 @@
-"""Single-attempt, streaming HTTPS for R3 control and mutations (H2 preferred)."""
+"""Single-attempt, streaming HTTPS for R3 control and mutations (HTTP/2 only)."""
 import hashlib
 import ipaddress
 import json
@@ -105,8 +105,8 @@ def _control(message):
 
 
 def _read_headers(response, media):
-    if response.extensions.get("http_version") not in (b"HTTP/2", b"HTTP/1.1"):
-        raise Rejected("unrecognized HTTP version for a Workspace read")
+    if response.extensions.get("http_version") != b"HTTP/2":
+        raise Rejected("Workspace requires an HTTP/2 response")
     if response.status in (401, 403):
         raise Rejected("Workspace read authorization refused")
     if response.status != 200:
@@ -146,7 +146,7 @@ def _invalid_constant(_value):
 
 
 def _reply(response, lookup):
-    if response.extensions.get("http_version") not in (b"HTTP/2", b"HTTP/1.1") or response.status not in (200, 404, 409):
+    if response.extensions.get("http_version") != b"HTTP/2" or response.status not in (200, 404, 409):
         return Reply(ReplyKind.UNKNOWN)
     header = {}
     for name, value in response.headers:
@@ -171,44 +171,27 @@ def _reply(response, lookup):
     return project_reply(response.status, bytes(data), lookup=lookup)
 
 
-def _backend(core, hostname, expected_port):
-    # httpcore 1.0.9 sets h1 first before start_tls. Its documented backend
-    # boundary lets us prefer H2 without implementing HTTP, DNS or TLS.
-    class AlpnStream(core.NetworkStream):
-        def __init__(self, original):
-            self.original = original
-
-        def read(self, max_bytes, timeout=None):
-            return self.original.read(max_bytes, timeout)
-
-        def write(self, buffer, timeout=None):
-            return self.original.write(buffer, timeout)
-
-        def close(self):
-            return self.original.close()
-
-        def get_extra_info(self, info):
-            return self.original.get_extra_info(info)
-
-        def start_tls(self, ssl_context, server_hostname=None, timeout=None):
-            if (server_hostname != hostname or not ssl_context.check_hostname
-                    or ssl_context.verify_mode != ssl.CERT_REQUIRED):
-                self.original.close()
-                raise Rejected("selected origin and verified TLS are required")
-            ssl_context.set_alpn_protocols(["h2", "http/1.1"])
-            return self.original.start_tls(ssl_context, server_hostname, timeout)
-
-    class OriginBackend(core.NetworkBackend):
-        def __init__(self):
-            self.original = core.SyncBackend()
-
-        def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
-            if (host, port) != (hostname, expected_port):
-                raise Rejected("connection changed its already selected origin")
-            original = self.original.connect_tcp(host, port, timeout, local_address, socket_options)
-            return AlpnStream(original)
-
-    return OriginBackend()
+def _connect_h2(core, origin, tls, timeout):
+    if origin.scheme != b"https" or not tls.check_hostname or tls.verify_mode != ssl.CERT_REQUIRED:
+        raise Rejected("selected origin and verified TLS are required")
+    # HTTPConnection advertises h1 as well even with http1 disabled in
+    # httpcore 1.0.9. Establish TLS explicitly before using HTTP2Connection.
+    host = origin.host.decode("ascii")
+    tls.set_alpn_protocols(["h2"])
+    plain = core.SyncBackend().connect_tcp(host, origin.port, timeout=timeout)
+    try:
+        secure = plain.start_tls(tls, server_hostname=host, timeout=timeout)
+    except BaseException:
+        plain.close()
+        raise
+    try:
+        peer = secure.get_extra_info("ssl_object")
+        if peer is None or peer.selected_alpn_protocol() != "h2":
+            raise Rejected("Workspace requires TLS ALPN h2")
+        return core.HTTP2Connection(origin, stream=secure)
+    except BaseException:
+        secure.close()
+        raise
 
 
 class HttpsExchange:
@@ -252,7 +235,7 @@ class HttpsExchange:
         return self._identity
 
     def _tls(self):
-        # Per-request context avoids concurrent ALPN mutations of the same context.
+        # A per-request context keeps the single ALPN offer local to this connection.
         if self._trust is None:
             tls = self._core.default_ssl_context()
         else:
@@ -268,20 +251,19 @@ class HttpsExchange:
 
     @contextmanager
     def _exchange(self, method, target, headers, body):
-        # Exact known authority also handles bracketed IPv6 in Host / :authority.
-        headers["Host"] = self._authority
-        if self._authorization is not None:
-            value = self._authorization()
-            if not _header_text(value) or len(value) > 8192:
-                raise Rejected("invalid native authorization header")
-            headers["Authorization"] = value
         core = self._core
-        limits = dict.fromkeys(("connect", "read", "write"), self._timeout)
+        limits = dict.fromkeys(("read", "write"), self._timeout)
         origin = core.Origin(b"https", self._host.encode("ascii"), self._port)
-        connection = core.HTTPConnection(origin, ssl_context=self._tls(), http1=True, http2=True, retries=0,
-                                         network_backend=_backend(core, self._host, self._port))
-        with connection:
-            # The connection-pool variant can replay a request after H2 GOAWAY.
+        with _connect_h2(core, origin, self._tls(), self._timeout) as connection:
+            # Resolve native authorization only after verified ALPN. The same
+            # authority, including brackets for IPv6, becomes :authority.
+            headers["Host"] = self._authority
+            if self._authorization is not None:
+                value = self._authorization()
+                if not _header_text(value) or len(value) > 8192:
+                    raise Rejected("invalid native authorization header")
+                headers["Authorization"] = value
+            # One connection and one attempt, with no pool to replay on GOAWAY.
             with connection.stream(method, self._location + target,
                                    headers=headers, content=body, extensions={"timeout": limits}) as response:
                 yield response
