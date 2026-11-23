@@ -1,0 +1,263 @@
+name: Linux disposable ZXS product smoke
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  smoke:
+    if: github.repository == 'isarmg/zxs' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Snapshot the exact source and prepare verified Rust inputs
+        id: inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(id -u)" -ne 0
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          work=$(mktemp -d "$RUNNER_TEMP/zxs-paired-build.XXXXXXXX")
+          printf 'PAIR_BUILD=%s\n' "$work" >> "$GITHUB_ENV"
+          cd "$work"
+          mkdir source home rust cargo target
+          git_env=(env -i PATH=/usr/bin:/bin LC_ALL=C HOME="$work/home"
+            GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0)
+          "${git_env[@]}" git init --quiet --bare source.git
+          "${git_env[@]}" git --git-dir=source.git fetch --quiet --no-tags --depth=1 \
+            https://github.com/isarmg/zxs.git "$GITHUB_SHA"
+          test "$(git --git-dir=source.git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git --git-dir=source.git archive "$GITHUB_SHA" helper zxs | tar -xf - -C source
+          printf 'Source commit: %s\n' "$GITHUB_SHA"
+          for project in helper zxs; do
+            printf '%s source tree: %s\n' "$project" "$(git --git-dir=source.git rev-parse "$GITHUB_SHA:$project")"
+            sha256sum "source/$project/Cargo.lock"
+          done
+
+          release=https://static.rust-lang.org/dist/2026-11-12
+          while read -r hash target component member; do
+            name="$component-1.100.0-$target"
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --connect-timeout 15 --max-time 120 --retry 2 --max-filesize 120000000 "$release/$name.tar.xz" -o "$name.tar.xz"
+            printf '%s  %s.tar.xz\n' "$hash" "$name" | sha256sum -c -
+            if [[ "$target" == x86_64-unknown-linux-gnu ]]; then
+              tar -xJf "$name.tar.xz" -C rust --no-same-owner --no-same-permissions \
+                --strip-components=2 --exclude="$name/$member/manifest.in" "$name/$member"
+            fi
+          done <<'RUST'
+          f1d0b1dec81dab6f523cd098507763487b0d4bd7fd2c87582f154128719be03b x86_64-unknown-linux-gnu rustc rustc
+          7e29ce07d7c6e92d1826870575ba27d57fff6cb3e754aa57d99099cb88fab35d x86_64-unknown-linux-gnu cargo cargo
+          4591b6486594ded52ecd6135db95bf9355bbd3ca7a380888b141528bbcf9a5d4 x86_64-unknown-linux-gnu rust-std rust-std-x86_64-unknown-linux-gnu
+          RUST
+          sha256sum /usr/bin/gcc /usr/bin/ar /usr/bin/ld
+
+      - name: Build and verify the standalone ZXS ELF
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$PAIR_BUILD/source/zxs"
+          sha256sum build_release.py
+          python3 build_release.py "$PAIR_BUILD/rust/bin"
+          sha256sum target/standalone/zxs
+
+      - name: Build and inspect the standalone Helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$PAIR_BUILD/source/helper"
+          toolchain="$PAIR_BUILD/rust/bin"
+          build_env=(env -i PATH=/usr/bin:/bin HOME="$PAIR_BUILD/home" TMPDIR="$PAIR_BUILD" LC_ALL=C TZ=UTC
+            CARGO_HOME="$PAIR_BUILD/cargo" CARGO_TARGET_DIR="$PAIR_BUILD/target" CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+            RUSTC="$toolchain/rustc" RUSTDOC="$toolchain/rustdoc" CC=/usr/bin/gcc AR=/usr/bin/ar
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc)
+          target=x86_64-unknown-linux-gnu
+          "${build_env[@]}" "$toolchain/cargo" fetch --locked --target "$target"
+          "${build_env[@]}" "$toolchain/cargo" build --locked --offline --release --target "$target" \
+            --bin helper
+          image="$PAIR_BUILD/target/$target/release/helper"
+          size=$(stat -c %s "$image")
+          [[ "$size" -ge 64 && "$size" -le 67108864 ]]
+          LC_ALL=C /usr/bin/readelf -hlWd "$image" > "$PAIR_BUILD/helper.readelf"
+          grep -E '^ *(Class:|Type:|Machine:|GNU_STACK |INTERP )|\(NEEDED\)' "$PAIR_BUILD/helper.readelf"
+          grep -qE '^ *Class: +ELF64$' "$PAIR_BUILD/helper.readelf"
+          grep -qE '^ *Machine: +Advanced Micro Devices X86-64$' "$PAIR_BUILD/helper.readelf"
+          awk '$1 == "GNU_STACK" {++stacks; for(i=7; i<NF; ++i) if($i ~ /E/) bad=1} END {exit stacks!=1 || bad}' \
+            "$PAIR_BUILD/helper.readelf"
+          if grep -qE '\(NEEDED\).*(libgcrypt|libgpg-error)' "$PAIR_BUILD/helper.readelf"; then exit 1; fi
+          printf 'Helper: %s bytes\n' "$size"
+          sha256sum "$image"
+
+      - name: Verify the signed guest and prepare local QEMU tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(id -u)" -ne 0
+          work=$(mktemp -d "$RUNNER_TEMP/zxs-guest.XXXXXXXX")
+          printf 'ZXS_GUEST_WORK=%s\n' "$work" >> "$GITHUB_ENV"
+          cd "$work"
+
+          image=ubuntu-26.04-minimal-cloudimg-amd64.img
+          release=https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20261118
+          fetch() {
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --connect-timeout 15 --max-time 240 --retry 2 --max-filesize 600000000 "$release/$1" -o "$1"
+          }
+          fetch SHA256SUMS
+          fetch SHA256SUMS.gpg
+          mkdir gnupg
+          GNUPGHOME="$work/gnupg" gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg \
+            --status-fd 1 SHA256SUMS.gpg SHA256SUMS > image.signature
+          grep -qF '[GNUPG:] VALIDSIG D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81 ' image.signature
+          pin=f6c630c04d4fad012f2c4ed3a21a2b0c0f814f13f6873568da4c31d8df65c12e
+          grep -qxF "$pin *$image" SHA256SUMS
+          fetch "$image"
+          printf '%s *%s\n' "$pin" "$image" | sha256sum -c -
+
+          mkdir -p apt/{etc/empty,lists/partial,archives/partial} tools
+          : > apt/status
+          export APT_CONFIG="$work/apt/config"
+          cat > "$APT_CONFIG" <<EOF
+          Dir::Etc "$work/apt/etc";
+          Dir::Etc::main "/dev/null";
+          Dir::Etc::parts "empty";
+          Dir::Etc::sourceparts "empty";
+          Dir::Etc::sourcelist "sources.list";
+          Dir::State "$work/apt";
+          Dir::State::status "$work/apt/status";
+          Dir::Cache "$work/apt";
+          Dir::Log "$work/apt";
+          Dir::Cache::pkgcache "";
+          Dir::Cache::srcpkgcache "";
+          Acquire::Languages "none";
+          Acquire::Retries "2";
+          APT::Get::Always-Include-Phased-Updates "true";
+          APT::Update::Error-Mode "any";
+          EOF
+          snapshot=https://snapshot.ubuntu.com/ubuntu/20261118T120000Z
+          archive_key=/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+          for suite in noble noble-updates noble-security; do
+            printf 'deb [arch=amd64 signed-by=%s] %s %s main universe\n' "$archive_key" "$snapshot" "$suite"
+          done > apt/etc/sources.list
+          /usr/bin/apt-get update
+          (
+            cd apt/lists
+            cat <<'PINS' | sha256sum -c -
+          cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble_InRelease
+          a4dfe9c58d77db89e8b45240d1cc14a3e6dd9159bc29395aebfe6e893594dccb  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble-updates_InRelease
+          65a6f9c5cf5b8d887e45c2a638b19bedd86e9d3630afee8b3a7b46ea5803dc22  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_noble-security_InRelease
+          PINS
+          )
+          /usr/bin/apt-get --assume-yes --download-only --no-install-recommends install \
+            qemu-system-x86 ovmf genisoimage e2fsprogs
+          for package in apt/archives/*.deb; do
+            dpkg-deb --extract "$package" tools
+          done
+          sha256sum apt/archives/*.deb
+
+
+      - name: Run the same-commit products in an isolated guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$ZXS_GUEST_WORK"
+          tools="$PWD/tools"
+          libs="$tools/usr/lib/x86_64-linux-gnu:$tools/lib/x86_64-linux-gnu"
+          loader="$tools/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+          tool_env=(env -i LANG=C PATH=/usr/bin:/bin HOME="$PWD" TMPDIR="$PWD"
+            QEMU_MODULE_DIR="$tools/usr/lib/x86_64-linux-gnu/qemu"
+            MKE2FS_CONFIG="$tools/etc/mke2fs.conf" "$loader" --inhibit-cache --library-path "$libs")
+          for exe in usr/sbin/mke2fs usr/bin/genisoimage usr/bin/qemu-system-x86_64; do
+            "${tool_env[@]}" --list "$tools/$exe" |
+              awk -v base="$tools/" '$2 == "=>" && index($3, base) != 1 {exit 1}'
+          done
+          mkdir -m 0755 empty seed
+          for role in data-a data-b recycle; do
+            truncate -s 64M "$role.ext4"
+            "${tool_env[@]}" "$tools/usr/sbin/mke2fs" -q -t ext4 -d empty -L "zxs-$role" "$role.ext4"
+          done
+          install -m 0755 "$PAIR_BUILD/source/zxs/target/standalone/zxs" seed/zxs
+          install -m 0755 "$PAIR_BUILD/target/x86_64-unknown-linux-gnu/release/helper" seed/helper
+          install -m 0444 "$PAIR_BUILD/source/zxs/tests/acceptance/guest_product_smoke.py" seed/guest_product_smoke.py
+          (cd seed && sha256sum zxs helper guest_product_smoke.py) | tee seed/SHA256SUMS
+          printf '%s\n' 'instance-id: zxs-acceptance-product-smoke' > seed/meta-data
+          cat > seed/user-data <<'CLOUD'
+          #cloud-config
+          users: []
+          ssh_pwauth: false
+          ssh_genkeytypes: []
+          package_update: false
+          package_upgrade: false
+          runcmd:
+            - - /bin/bash
+              - -ec
+              - |
+                exec > /dev/ttyS0 2>&1
+                stage=guard
+                trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "ZXS-PRODUCT-SMOKE failed at %s (exit %s)\n" "$stage" "$rc"; fi' EXIT
+                for ns in pid user mnt net; do
+                  test "$(stat -Lc '%d:%i' "/proc/thread-self/ns/$ns")" = "$(stat -Lc '%d:%i' "/proc/1/ns/$ns")"
+                done
+                test "$(stat -Lc '%d:%i' /)" = "$(stat -Lc '%d:%i' /proc/1/root)"
+                test -z "$(getent passwd 23100 || :)"
+                test ! -e /zxs
+                udevadm settle --timeout=15
+                mkdir /mnt/zxs-acceptance-payload
+                mount -o ro,nosuid,nodev,noexec /dev/disk/by-id/virtio-zxs-seed /mnt/zxs-acceptance-payload
+                stage=install
+                cd /mnt/zxs-acceptance-payload
+                sha256sum -c SHA256SUMS
+                install -d -m 0755 /zxs /zxs/bin /zxs/state
+                install -m 0755 zxs helper /zxs/bin/
+                install -m 0444 guest_product_smoke.py /run/zxs-acceptance-smoke.py
+                cd /
+                umount /mnt/zxs-acceptance-payload
+                install -d -m 0700 -o 23100 -g 23100 /zxs/state/headless /var/lib/zxs-acceptance-system
+                stage=writable-mounts
+                for role in data-a data-b recycle; do
+                  dest="/mnt/zxs-acceptance-$role"
+                  mkdir "$dest"
+                  mount -t ext4 -o rw,nosuid,nodev,noexec "/dev/disk/by-id/virtio-zxs-smoke-$role" "$dest"
+                  rmdir "$dest/lost+found"
+                  chown 23100:23100 "$dest"
+                  chmod 0700 "$dest"
+                done
+                printf '%s\n' same-sha-disposable-guest > /run/zxs-acceptance-fixture
+                chmod 0444 /run/zxs-acceptance-fixture
+                stage=ordinary-product-smoke
+                setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
+                  python3 -I /run/zxs-acceptance-smoke.py
+          power_state:
+            mode: poweroff
+            timeout: 60
+            condition: true
+          CLOUD
+          "${tool_env[@]}" "$tools/usr/bin/genisoimage" -quiet -volid cidata -joliet -rock -output seed.iso seed
+          firmware="$tools/usr/share/OVMF"
+          cp "$firmware/OVMF_VARS_4M.fd" vars.fd
+          boot_status=0
+          timeout -k 15s 12m "${tool_env[@]}" "$tools/usr/bin/qemu-system-x86_64" \
+            -no-user-config -nodefaults -machine q35 -accel tcg,thread=multi -smp 2 -m 2048 \
+            -nic none -display none -monitor none -serial file:serial.log -no-reboot \
+            -L "$tools/usr/share/qemu" \
+            -drive if=pflash,format=raw,readonly=on,file="$firmware/OVMF_CODE_4M.fd" \
+            -drive if=pflash,format=raw,file=vars.fd \
+            -drive if=virtio,format=qcow2,file=ubuntu-26.04-minimal-cloudimg-amd64.img \
+            -drive if=none,id=seed,format=raw,readonly=on,file=seed.iso \
+            -device virtio-blk-pci,drive=seed,serial=zxs-seed \
+            -drive if=none,id=dataa,format=raw,file=data-a.ext4 \
+            -device virtio-blk-pci,drive=dataa,serial=zxs-smoke-data-a \
+            -drive if=none,id=datab,format=raw,file=data-b.ext4 \
+            -device virtio-blk-pci,drive=datab,serial=zxs-smoke-data-b \
+            -drive if=none,id=recycle,format=raw,file=recycle.ext4 \
+            -device virtio-blk-pci,drive=recycle,serial=zxs-smoke-recycle || boot_status=$?
+          if test -f serial.log; then
+            tr -d '\r' < serial.log | grep -aE '^ZXS-PRODUCT-SMOKE ' || true
+          fi
+          test "$boot_status" -eq 0
+          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE setup, full append, lost reply, restart and exact retry passed')" -eq 1
