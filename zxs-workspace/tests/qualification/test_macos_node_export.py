@@ -159,3 +159,68 @@ class MacNodePublication(unittest.TestCase):
             with self.assertRaises(Rejected): self.publish(output, b"")
         self.assertEqual(list(self.root.iterdir()), [])
         self.assertEqual(self.request, [])
+
+    def test_native_setter_value_representations(self):
+        """Record native observation only; qualification still requires the exact URL."""
+        native, fields = export.native(), export._download_quarantine()
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+        with mac.no_materialization(), mac.literal_name(self.root, directory=True) as parent:
+            with fields.url(_ORIGIN + _TARGET) as url:
+                string = fields._url_string(url)
+                self.assertTrue(string and native.type(string) == fields._string_type())
+                for label, supplied in (("CFURL", url), ("CFString", string)):
+                    with self.subTest(value=label):
+                        leaf = "origin-probe-" + label
+                        fd = os.open(leaf, flags, 0o600, dir_fd=parent)
+                        try:
+                            path = self.root / leaf
+                            export._attributes(fd)
+                            self.assertEqual(export.apfs(fd), export.apfs(parent))
+                            native.no_payload_metadata(path, fd, literal=True)
+                            try:
+                                result = self.native_setter_probe(native, fields, path, fd, supplied, string)
+                            except Rejected:
+                                result = "native query rejected"
+                        finally:
+                            os.close(fd)
+                        print(f"macOS quarantine probe {label}: {result}", flush=True)
+
+    def native_setter_probe(self, native, fields, path, fd, supplied, expected):
+        keys = (C.c_void_p * 2)(fields._kind, fields._data)
+        values = (C.c_void_p * 2)(fields._download, supplied)
+        attrs = fields._dictionary(None, keys, values, 2, fields._keys, fields._values)
+        self.assertTrue(attrs, "cannot create native probe dictionary")
+        try:
+            with native._file_reference(path, fd, False, literal=True) as (reference, check):
+                check()
+                accepted = bool(fields._set(reference, native.key, attrs, None))
+                check()
+        finally:
+            native.release(attrs)
+        with native._quarantine_property(path, fd, False, literal=True) as observed:
+            if not observed:
+                return f"setter_accepted={accepted} property=absent"
+            if native.type(observed) != native.dict_type() or not 0 < native.count(observed) <= 64:
+                return f"setter_accepted={accepted} property=unexpected"
+            kind = fields._get(observed, fields._kind)
+            kind_matches = bool(kind and native.type(kind) == fields._string_type()
+                                and native.equal(kind, fields._download))
+            return self.native_probe_url(fields, native, accepted, kind_matches,
+                                         fields._get(observed, fields._data), expected)
+
+    @staticmethod
+    def native_probe_url(fields, native, accepted, kind_matches, source, expected):
+        source_type, match = "absent", False
+        if source:
+            type_id = native.type(source)
+            if type_id == fields._url_type():
+                source_type = "CFURL"
+                source = fields._url_string(source)
+            elif type_id == fields._string_type():
+                source_type = "CFString"
+            else:
+                source_type, source = "unexpected", None
+            match = bool(source and native.type(source) == fields._string_type()
+                         and native.equal(source, expected))
+        return (f"setter_accepted={accepted} kind_matches={kind_matches} "
+                f"source={source_type} source_matches={match}")
