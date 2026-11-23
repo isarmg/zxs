@@ -1,4 +1,6 @@
-# 按需复查原 ZXS 部署
+# 历史设计：按需复查原 ZXS 部署
+
+> 当前 Helper 不提供 `check-deployment` 或 `discover` 命令。下文只记录已退役的 v20 SQLite 部署设计。
 
 `helper check-deployment` 只在真实宿主前台管理终端按需执行。没有参数、浏览器入口、另一份 Helper 配置，也不查找其他位置。它不启动或停止 ZXS；原部署正在使用或无法确认时，只报告「未确认」，不会建议重装、改写或自动采用另一个实例。
 

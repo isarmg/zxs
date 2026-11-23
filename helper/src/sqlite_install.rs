@@ -13,8 +13,8 @@ mod receipt;
 mod pair;
 #[cfg(feature="embedded-zxs")]
 pub(crate) use pair::EmbeddedInstall;
+#[cfg(test)]
 mod discovery;
-pub(crate) use discovery::Discovery;
 pub(crate) use pair::{RetirementCheck,ImportCheck,Setup,check_deployment,exec_layout_sql_child as layout_sql_worker,exec_first_browser,rust_account_worker,rust_vault_worker,SharedAccountReset};
 
 const DATABASE:&str="SYSTEM.sqlite3";

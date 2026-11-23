@@ -542,10 +542,12 @@ impl Pinned {
 
 /// The same mount admission is mandatory for every walk and held read. No
 /// methods expose the inner Pinned to a path opener lacking the live gate.
+#[cfg(test)]
 pub(crate) struct DiscoveryPin<'a> {
     original: Pinned,
     admit: &'a dyn DiscoveryAdmission,
 }
+#[cfg(test)]
 impl<'a> DiscoveryPin<'a> {
     pub(crate) fn select(path: &Path, admit: &'a dyn DiscoveryAdmission) -> io::Result<Self> {
         Ok(Self {

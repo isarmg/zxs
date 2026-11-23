@@ -89,6 +89,7 @@ fn discovery_path(mut raw: &[u8]) -> Option<PathBuf> {
 struct DiscoveryTable {
     mounts: Mounts,
     names: BTreeMap<PathBuf, Option<(u64, u64)>>,
+    #[cfg(test)]
     roots: Vec<DiscoveryMount>,
 }
 impl DiscoveryTable {
@@ -123,9 +124,6 @@ pub(crate) struct DiscoveryView {
     fds: DiscoveryFdInfo,
 }
 impl DiscoveryView {
-    pub(crate) fn roots(&self) -> &[DiscoveryMount] {
-        &self.table.roots
-    }
     pub(crate) fn product_crossing(&self, parent: u64) -> io::Result<Option<u64>> {
         self.table.product_crossing(parent)
     }
@@ -152,11 +150,6 @@ impl DiscoveryView {
             return Err(unknown("local mount evidence changed"));
         }
         Ok(())
-    }
-    pub(crate) fn same_scope(&self, other: &Self) -> bool {
-        self.table.names == other.table.names
-            && self.table.mounts.0 == other.table.mounts.0
-            && self.table.roots == other.table.roots
     }
 }
 impl DiscoveryAdmission for DiscoveryView {
@@ -245,6 +238,7 @@ impl Mounts {
         Ok(DiscoveryTable {
             mounts: table,
             names,
+            #[cfg(test)]
             roots,
         })
     }

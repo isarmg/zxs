@@ -1,46 +1,9 @@
 //! Stateless discovery only. No credentials, filesystem inventory, database
 //! connection, lifecycle control or authorization capability is produced.
 use super::{bad,markers::DiscoveredSystem};
-use crate::{maintenance::{DiscoveryMount,HostMounts},pinned::{self,DiscoveryAdmission,DiscoveryPin,Entity,Kind,Mount}};
+use crate::{maintenance::DiscoveryMount,pinned::{self,DiscoveryAdmission,DiscoveryPin,Entity,Mount}};
 use linux_raw_sys::general::BTRFS_SUPER_MAGIC;
-use std::{ffi::OsString,fmt::Write,fs::Metadata,io,os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};
-
-#[derive(Debug)]
-pub(crate) struct Discovery(Option<PathBuf>);
-impl Discovery{
-    pub(crate) fn parse(mut args:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        match args.next(){
-            None=>Ok(Self(None)),
-            Some(f) if f=="--system"=>{
-                let p=PathBuf::from(args.next().ok_or("expected one existing --system directory")?);
-                Kind::StorageRoot.check_path(p.as_os_str().as_bytes())?;
-                if p.to_str().is_none()||args.next().is_some(){
-                    return Err("choose exactly one UTF-8 absolute SYSTEM directory for this observation");
-                }
-                Ok(Self(Some(p)))
-            }
-            _=>Err("discover accepts only one optional --system DIR"),
-        }
-    }
-    pub(crate) fn run(self)->(u8,String){
-        let automatic=self.0.is_none();
-        let scope=if automatic{"mounted-local-filesystem-roots"}else{"one-explicit-directory"};
-        let Ok(current)=HostMounts::discovery_view(automatic) else{
-            return (2,format!("discovery=incomplete scope={scope} authorization=none\n无法确认有界的当前本机挂载；不代表未安装。"));
-        };
-        let mut report=Report::default();
-        if let Some(p)=self.0{
-            report.note(&p,inspect(&p,None,&current));
-        }else{
-            for root in current.roots(){report.note(&root.path,inspect(&root.path,Some(root),&current));}
-        }
-        // A table change cannot turn a mixture of mounts into one result.
-        if !HostMounts::discovery_view(automatic).is_ok_and(|again|current.same_scope(&again)){
-            return (2,format!("discovery=incomplete scope={scope} authorization=none\n挂载证据在查询期间未能保持一致；不保留之前的候选。不代表未安装。"));
-        }
-        report.finish(scope)
-    }
-}
+use std::{fmt::Write,fs::Metadata,io,os::unix::{ffi::OsStrExt,fs::MetadataExt},path::Path};
 
 #[derive(Clone,Copy,Eq,PartialEq)]
 struct Directory{entity:Entity,uid:u32,gid:u32,mode:u32,links:u64}
