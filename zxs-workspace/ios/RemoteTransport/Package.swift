@@ -17,9 +17,15 @@ let package = Package(
         .target(name: "RemoteTransport", dependencies: [
             .product(name: "NIOCore", package: "swift-nio"),
             .product(name: "NIOHTTP2", package: "swift-nio-http2"),
+            .product(name: "NIOHPACK", package: "swift-nio-http2"),
             .product(name: "NIOTransportServices", package: "swift-nio-transport-services"),
         ]),
-        .testTarget(name: "RemoteTransportTests", dependencies: ["RemoteTransport"]),
+        .testTarget(name: "RemoteTransportTests", dependencies: [
+            "RemoteTransport",
+            .product(name: "NIOCore", package: "swift-nio"),
+            .product(name: "NIOHPACK", package: "swift-nio-http2"),
+            .product(name: "NIOHTTP2", package: "swift-nio-http2"),
+        ]),
     ],
     swiftLanguageModes: [.v5]
 )

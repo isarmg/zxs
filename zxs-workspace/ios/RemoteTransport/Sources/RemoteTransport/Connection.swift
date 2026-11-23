@@ -1,15 +1,19 @@
 import Darwin
+import Foundation
 import Network
 import NIOCore
 import NIOHTTP2
 import NIOTransportServices
 import Security
 
-enum TransportFailure: Error { case invalidOrigin, invalidALPN, serverStream }
+enum TransportFailure: Error {
+    case invalidOrigin, invalidALPN, serverStream, invalidRequest, invalidResponse, timeout, interrupted
+}
 
 struct TransportAddress {
     let host: String
     let port: Int
+    var authority: String { (host.contains(":") ? "[\(host)]" : host) + ":\(port)" }
 
     init(host: String, port: Int) throws {
         // Network.framework receives a host, not a URL, DNS search expression,
@@ -20,7 +24,24 @@ struct TransportAddress {
                       || (97...122).contains(byte) || [45, 46, 58].contains(byte)
               }),
               host.utf8.contains(where: { $0 != 46 }) else { throw TransportFailure.invalidOrigin }
-        self.host = host
+        if host.utf8.contains(58) {
+            var address = in6_addr()
+            guard host.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else {
+                throw TransportFailure.invalidOrigin
+            }
+        } else if host.utf8.allSatisfy({ (48...57).contains($0) || $0 == 46 }) {
+            var address = in_addr()
+            guard host.withCString({ inet_pton(AF_INET, $0, &address) }) == 1 else {
+                throw TransportFailure.invalidOrigin
+            }
+        } else {
+            let bare = host.hasSuffix(".") ? host.dropLast() : host[...]
+            let labels = bare.split(separator: ".", omittingEmptySubsequences: false)
+            guard !labels.isEmpty, labels.allSatisfy({
+                (1...63).contains($0.utf8.count) && $0.utf8.first != 45 && $0.utf8.last != 45
+            }) else { throw TransportFailure.invalidOrigin }
+        }
+        self.host = host.lowercased()
         self.port = port
     }
 }
@@ -72,6 +93,45 @@ struct NegotiatedHTTP2 {
     }
 
     static func matchesHTTP2(_ negotiated: String?) -> Bool { negotiated == "h2" }
+
+    static func sendOnce(_ request: R3Request, address: TransportAddress, group: NIOTSEventLoopGroup,
+                         authorization: @escaping () throws -> String) -> EventLoopFuture<R3Response> {
+        connect(address, group: group).flatMap { connection in
+            let prepared = connection.channel.eventLoop.makeCompletedFuture {
+                // No material from the credential supplier is evaluated until
+                // this exact TLS channel proved h2 and installed the H2 codec.
+                try request.frames(authority: address.authority, authorization: authorization)
+            }
+            return prepared.flatMap { frames in
+                connection.exchange(frames: frames)
+            }.always { _ in
+                connection.channel.close(promise: nil)
+            }
+        }
+    }
+
+    private func exchange(frames: [HTTP2Frame.FramePayload]) -> EventLoopFuture<R3Response> {
+        let loop = channel.eventLoop
+        let promise = loop.makePromise(of: R3Response.self)
+        let receiver = R3ResponseReceiver(result: promise)
+        let timeout = loop.scheduleTask(in: .seconds(30)) {
+            receiver.fail(TransportFailure.timeout)
+        }
+        multiplexer.createStreamChannel { stream in
+            stream.pipeline.addHandler(receiver)
+        }.whenComplete { outcome in
+            switch outcome {
+            case let .failure(error): receiver.fail(error)
+            case let .success(stream):
+                guard !receiver.finished else { stream.close(promise: nil); return }
+                for frame in frames.dropLast() { stream.write(frame, promise: nil) }
+                if let last = frames.last {
+                    stream.writeAndFlush(last).whenFailure { receiver.fail($0) }
+                }
+            }
+        }
+        return promise.futureResult.always { _ in timeout.cancel() }
+    }
 
     func close() -> EventLoopFuture<Void> { channel.close() }
 }
