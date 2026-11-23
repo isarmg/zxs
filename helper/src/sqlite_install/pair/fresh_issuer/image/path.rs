@@ -1,7 +1,7 @@
 //! Protected original image or destination parent. No supplied path may
 //! select a program to run here; only our known local mount cut is walked.
 use crate::{maintenance::HostMounts,pinned::{DiscoveryAdmission,Entity,Kind,Mount,discover_component,local_data_filesystem},
-    sqlite_install::{approval,product_layout}};
+    product_layout,sqlite_install::approval};
 use super::denied;
 use rustix::{fs::{Mode,OFlags,ResolveFlags,fgetxattr,openat2},io::Errno};
 use std::{ffi::OsStr,fs::File,io,os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};

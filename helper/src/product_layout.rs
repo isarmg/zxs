@@ -7,15 +7,15 @@ use std::{ffi::{CStr,OsStr,OsString},fs::File,io,mem::MaybeUninit,
     os::unix::{ffi::OsStrExt,fs::MetadataExt},path::{Path,PathBuf}};
 
 pub(crate) const TOP:&str="/zxs";
-pub(super) const STATE_COMPONENTS:[&CStr;2]=[c"zxs",c"state"];
-pub(super) const STATE:&str="/zxs/state";
-pub(super) const CONTROL_MODE:u32=0o755;
-pub(super) const BIN:&str="/zxs/bin";
-pub(super) const IMAGE:&str="/zxs/bin/zxs";
-pub(super) const DISKS:&str="/zxs/disks";
-pub(super) const SYSTEM:&str="/zxs/disks/system";
-pub(super) const DATA:&str="/zxs/disks/data";
-pub(super) const RECYCLE:&str="/zxs/disks/recycle";
+pub(crate) const STATE_COMPONENTS:[&CStr;2]=[c"zxs",c"state"];
+pub(crate) const STATE:&str="/zxs/state";
+pub(crate) const CONTROL_MODE:u32=0o755;
+pub(crate) const BIN:&str="/zxs/bin";
+pub(crate) const IMAGE:&str="/zxs/bin/zxs";
+pub(crate) const DISKS:&str="/zxs/disks";
+pub(crate) const SYSTEM:&str="/zxs/disks/system";
+pub(crate) const DATA:&str="/zxs/disks/data";
+pub(crate) const RECYCLE:&str="/zxs/disks/recycle";
 const LOG:&str="/zxs/log";
 
 fn overlaps(path:&Path,reserved:&str)->bool{
@@ -24,23 +24,23 @@ fn overlaps(path:&Path,reserved:&str)->bool{
 fn separated_media(path:&Path)->bool{
     ![STATE,BIN,LOG].iter().any(|p|overlaps(path,p))&&![DISKS,DATA].iter().any(|p|Path::new(p)==path)
 }
-pub(super) fn media(path:&Path)->Result<(),&'static str>{
+pub(crate) fn media(path:&Path)->Result<(),&'static str>{
     Kind::StorageRoot.check_path(path.as_os_str().as_bytes())?;
     if !separated_media(path){
         return Err("a volume must be separate from protected /zxs state, bin, log and grouping directories");
     }
     Ok(())
 }
-pub(super) fn image_separate(path:&Path)->bool{
+pub(crate) fn image_separate(path:&Path)->bool{
     ![STATE,LOG,DISKS].iter().any(|p|overlaps(path,p))
 }
-pub(super) fn data_label(label:OsString)->Result<PathBuf,&'static str>{
+pub(crate) fn data_label(label:OsString)->Result<PathBuf,&'static str>{
     let name=label.to_str().filter(|v|!(v.is_empty()||matches!(*v,"."|".."))&&v.len()<=255&&
         !v.contains('/')&&!v.chars().any(char::is_control)).ok_or("DATA label must be one nonempty UTF-8 path component")?;
     let p=Path::new(DATA).join(name);media(&p)?;Ok(p)
 }
 
-fn denied()->io::Error{super::bad("the original protected /zxs path member or reserved boundary was not verified")}
+fn denied()->io::Error{io::Error::new(io::ErrorKind::InvalidData,"the original protected /zxs path member or reserved boundary was not verified")}
 fn stamp(dir:&File)->io::Result<(Entity,Mount,[i64;4])>{
     let m=dir.metadata()?;
     if !m.is_dir()||m.nlink()==0{return Err(denied());}
@@ -49,7 +49,7 @@ fn stamp(dir:&File)->io::Result<(Entity,Mount,[i64;4])>{
 // Bounded raw-byte membership, not a recursive scan or a name-discovery
 // API. The already-admitted original directory is the only data source.
 // A successful lookup on a casefold mount is not proof of its spelling.
-pub(super) fn raw_member(dir:&File,name:&OsStr,also:impl FnOnce()->io::Result<()>)->io::Result<()>{
+pub(crate) fn raw_member(dir:&File,name:&OsStr,also:impl FnOnce()->io::Result<()>)->io::Result<()>{
     let original=stamp(dir)?;
     let reader=File::from(openat2(dir,c".",OFlags::RDONLY|OFlags::CLOEXEC|OFlags::DIRECTORY|OFlags::NOFOLLOW|
         OFlags::NOATIME|OFlags::NONBLOCK,Mode::empty(),ResolveFlags::BENEATH|ResolveFlags::NO_XDEV|
@@ -89,7 +89,7 @@ fn media_members(path:&Path,level:usize)->io::Result<[Option<(usize,&OsStr)>;2]>
     if !separated_media(&Path::new(TOP).join(relative)){return Err(denied());}
     Ok([Some((level,head)),(suffix.len()==2&&head=="disks").then(||(level+1,suffix[1]))])
 }
-pub(super) fn require_original_media<'a>(product:Entity,selected:impl IntoIterator<Item=&'a Pinned>)->io::Result<()>{
+pub(crate) fn require_original_media<'a>(product:Entity,selected:impl IntoIterator<Item=&'a Pinned>)->io::Result<()>{
     let mut view=None;
     for pin in selected {
         let Some(level)=pin.visible_chain().iter().position(|p|*p==product)else{continue;};

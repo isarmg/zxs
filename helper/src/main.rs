@@ -21,6 +21,7 @@ mod smb_profile;
 mod maintenance;
 mod path_rules;
 mod pinned;
+pub(crate) mod product_layout;
 mod sqlite_install;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]

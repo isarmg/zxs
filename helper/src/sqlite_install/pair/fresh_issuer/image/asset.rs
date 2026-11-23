@@ -7,9 +7,9 @@ use crate::embedded_image::{denied, verify};
 #[cfg_attr(not(feature="embedded-zxs"),allow(dead_code))]
 mod enabled{
     use super::{denied,verify};
-    use crate::{pinned::{Entity,Mount},sqlite_install::{approval,pair::{
+    use crate::{pinned::{Entity,Mount},product_layout,sqlite_install::{approval,pair::{
         command::{sha,value},domain::FreshParent,fresh_issuer::{require_private_install,hex},
-        terminal::PublicConfirmation},product_layout,stage::random}};
+        terminal::PublicConfirmation},stage::random}};
     use crate::sqlite_install::pair::fresh_issuer::image::{Image,path::{OriginalPath,PIN,WITHIN,no_attribute}};
     #[cfg(feature="embedded-zxs")]
     use crate::embedded_image::MAX_IMAGE;

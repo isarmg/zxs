@@ -1,5 +1,5 @@
 //! Explicit terminal-only pool installation and original-operation resumption. Separate local pair enrollment; no remote requests or legacy-format fallback.
-pub(crate) mod product_layout;
+pub(crate) use crate::product_layout;
 mod request;
 mod engine;
 mod originals;
