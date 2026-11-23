@@ -934,3 +934,14 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
     );
     assert!(!left.join("data").join(hex(id(1))).exists());
 }
+
+#[test]
+fn absent_reads_cannot_grow_idle_slots_or_split_an_active_container_lock() {
+    let (_temp, _dir, store) = fixture();
+    let active = store.object(id(1)).unwrap();
+    for missing in 2..=u8::MAX {
+        assert!(store.describe(id(missing)).unwrap().is_none());
+    }
+    assert!(Arc::ptr_eq(&active, &store.object(id(1)).unwrap()));
+    assert!(store.objects.lock().unwrap().len() <= OBJECT_SLOT_TARGET);
+}

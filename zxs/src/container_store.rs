@@ -29,6 +29,7 @@ use std::{
 use volume::DataVolume;
 
 const TAG_BYTES: usize = 1024 * 1024;
+const OBJECT_SLOT_TARGET: usize = 128;
 
 pub(crate) enum Error {
     Io(io::Error),
@@ -211,6 +212,18 @@ impl Store {
             .objects
             .lock()
             .map_err(|_| invalid("container catalogue unavailable"))?;
+        if let Some(active) = objects.get(&id) {
+            return Ok(Arc::clone(active));
+        }
+        // Only the registry can issue a new strong reference. A slot owned
+        // solely by the registry has no in-flight reader or writer.
+        while objects.len() >= OBJECT_SLOT_TARGET {
+            let idle = objects
+                .iter()
+                .find_map(|(id, slot)| (Arc::strong_count(slot) == 1).then_some(*id));
+            let Some(id) = idle else { break };
+            objects.remove(&id);
+        }
         Ok(objects.entry(id).or_default().clone())
     }
     fn stage(&self, volume: &DataVolume) -> io::Result<Stage> {
