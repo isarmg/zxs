@@ -1,35 +1,30 @@
-//! Offline replacement of the one current native account verifier.
+//! An enrolled pool, held under the original state directory's exclusive lock.
+//! Every operation on an existing roster starts here; host observation never does.
 use super::{
-    DESCRIPTOR, FIXED_ROOTS, FORMAT, FreshSelection, IssueError, MAX_DATA, fresh_verifier,
-    login_ok, random, refused, require_held, stage_name,
+    DESCRIPTOR, FIXED_ROOTS, FORMAT, MAX_DATA, PoolIdentity, SelectedRoles, login_ok, random,
+    refused, require_held,
 };
-use crate::{fresh_password, pinned::Entity};
-use rustix::fs::{
-    FlockOperation, Mode, OFlags, RawDir, ResolveFlags, fchmod, flock, openat, openat2, renameat,
-};
+use crate::pinned::Entity;
+use rustix::fs::{FlockOperation, Mode, OFlags, RawDir, ResolveFlags, flock, openat, openat2};
 use std::{
     fs::{File, Metadata},
-    io::{self, Read, Write},
+    io::{self, Read},
     mem::MaybeUninit,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::Path,
 };
-use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-#[path = "headless_add_data.rs"]
 mod add_data;
-#[path = "headless_import_command.rs"]
 pub(super) mod import_command;
-#[path = "headless_import_one.rs"]
 mod import_one;
-#[path = "headless_init_data.rs"]
 mod init_data;
 pub(crate) use import_one::batch::ImportBatch;
-#[path = "headless_offline_catalog.rs"]
+mod installed;
 mod offline_catalog;
-#[path = "headless_retire_data.rs"]
+mod password;
 mod retire_data;
+mod stage;
 
 const EPOCH: usize = FORMAT.len() + 16;
 const SALT: usize = EPOCH + 16;
@@ -40,10 +35,11 @@ const SCOPED: ResolveFlags = ResolveFlags::BENEATH
     .union(ResolveFlags::NO_SYMLINKS)
     .union(ResolveFlags::NO_XDEV);
 
-pub(crate) struct Reset {
-    selected: FreshSelection,
+pub(crate) struct OfflineSession {
+    selected: SelectedRoles,
     locked: File,
     original: Record,
+    identity: PoolIdentity,
     login: String,
     epoch: [u8; 16],
 }
@@ -129,10 +125,10 @@ fn fixed<const N: usize>(raw: &mut &[u8]) -> io::Result<[u8; N]> {
     field(raw, N)?.try_into().map_err(|_| refused())
 }
 
-impl FreshSelection {
+impl SelectedRoles {
     /// Acquire the same state EX used by fresh provisioning. Core's shared
     /// lease makes this fail while a native service is still active/draining.
-    fn open_offline(mut self, allowed_stage: Option<&str>) -> io::Result<Reset> {
+    fn open_offline(self, allowed_stage: Option<&str>) -> io::Result<OfflineSession> {
         self.require_site()?;
         let locked = File::from(openat(
             &self.state.directory,
@@ -181,10 +177,9 @@ impl FreshSelection {
         if !body.is_empty() {
             return Err(refused());
         }
-        self.pool = pool;
-        self.tokens = tokens;
-        let out = Reset {
+        let out = OfflineSession {
             selected: self,
+            identity: PoolIdentity { pool, tokens },
             locked,
             original,
             login,
@@ -194,7 +189,7 @@ impl FreshSelection {
         Ok(out)
     }
 
-    pub(crate) fn begin_reset(self) -> io::Result<Reset> {
+    pub(crate) fn open_durable(self) -> io::Result<OfflineSession> {
         let out = self.open_offline(None)?;
         // Establish the current descriptor's durability after any earlier
         // stopped writer with a visible name. This is not credential rotation.
@@ -226,7 +221,18 @@ impl FreshSelection {
     }
 }
 
-impl Reset {
+impl OfflineSession {
+    fn data_token(&self, bytes: &[u8]) -> io::Result<[u8; 32]> {
+        self.selected
+            .roots
+            .iter()
+            .zip(&self.identity.tokens)
+            .skip(FIXED_ROOTS)
+            .find(|(root, _)| root.original.path().as_os_str().as_bytes() == bytes)
+            .map(|(_, token)| *token)
+            .ok_or_else(refused)
+    }
+
     pub(crate) fn paths(&self) -> impl Iterator<Item = &Path> {
         self.selected.paths()
     }
@@ -241,7 +247,9 @@ impl Reset {
         {
             return Err(refused());
         }
-        self.selected.issue(&self.login).require_roots(true)?;
+        self.selected
+            .issue(&self.login, &self.identity)?
+            .require_roots(true)?;
         let now = read(&self.locked, DESCRIPTOR, self.selected.uid)?;
         if stamp(&now.meta) != stamp(&self.original.meta)
             || stamp(&self.original.held.metadata()?) != stamp(&now.meta)
@@ -250,72 +258,5 @@ impl Reset {
             return Err(refused());
         }
         Ok(())
-    }
-
-    pub(crate) fn apply(self, secret: &str, repeated: &str) -> Result<(), IssueError> {
-        if !fresh_password::admissible(secret)
-            || !fresh_password::admissible(repeated)
-            || !bool::from(secret.as_bytes().ct_eq(repeated.as_bytes()))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the two valid account password entries must match",
-            )
-            .into());
-        }
-        self.require_original()?;
-        let epoch = random::<16>()?;
-        if epoch == self.epoch || epoch == self.selected.pool {
-            return Err(refused().into());
-        }
-        let salt = random::<16>()?;
-        let tag = fresh_verifier(secret, &salt)?;
-        if *tag == [0; 32] {
-            return Err(refused().into());
-        }
-        let mut updated = Zeroizing::new(self.original.full.to_vec());
-        updated[EPOCH..EPOCH + 16].copy_from_slice(&epoch);
-        updated[SALT..TAG].copy_from_slice(&salt);
-        updated[TAG..LOGIN].copy_from_slice(&tag[..]);
-        let stage = stage_name(&epoch);
-
-        let commit = || -> io::Result<()> {
-            let mut candidate = File::from(openat2(
-                &self.locked,
-                stage.as_str(),
-                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
-                Mode::RUSR | Mode::WUSR,
-                SCOPED,
-            )?);
-            fchmod(&candidate, Mode::RUSR | Mode::WUSR)?;
-            candidate.write_all(&updated)?;
-            candidate.sync_all()?;
-            let prepared = read(&self.locked, &stage, self.selected.uid)?;
-            let expected = stamp(&candidate.metadata()?);
-            if stamp(&prepared.meta) != expected || prepared.full.as_slice() != updated.as_slice() {
-                return Err(refused());
-            }
-            self.require_original()?;
-            if stamp(&candidate.metadata()?) != expected
-                || stamp(&read(&self.locked, &stage, self.selected.uid)?.meta) != expected
-            {
-                return Err(refused());
-            }
-            // One intentional overwrite of the proved current descriptor.
-            // The state EX excludes Core/Helper adoption throughout; a name
-            // changed outside the dedicated service owner is not supported.
-            renameat(&self.locked, stage.as_str(), &self.locked, DESCRIPTOR)?;
-            self.locked.sync_all()?;
-            self.selected.require_site()?;
-            self.selected.issue(&self.login).require_roots(true)?;
-            let selected = read(&self.locked, DESCRIPTOR, self.selected.uid)?;
-            if Entity::of(&selected.meta)? != Entity::of(&candidate.metadata()?)?
-                || selected.full.as_slice() != updated.as_slice()
-            {
-                return Err(refused());
-            }
-            Ok(())
-        };
-        commit().map_err(IssueError::Uncertain)
     }
 }

@@ -1,6 +1,6 @@
 //! Fixed, authenticated local handoff to the installed storage binary.
-use super::super::{offline_catalog::with_installed, random};
-use super::{ExternalSource, Reset, Ticket, refused};
+use super::super::random;
+use super::{ExternalSource, OfflineSession, Ticket, refused};
 use crate::local_worker::{
     Worker,
     transport::{self, Channel, Kind, Payload},
@@ -18,19 +18,22 @@ pub(in super::super) struct ApplyOutcome {
     pub(in super::super) node: [u8; 16],
 }
 
-pub(in super::super) fn apply(reset: &Reset, ticket: &Ticket) -> io::Result<ApplyOutcome> {
-    ticket.require_target(reset)?;
+pub(in super::super) fn apply(
+    session: &OfflineSession,
+    ticket: &Ticket,
+) -> io::Result<ApplyOutcome> {
+    ticket.require_target(session)?;
     if getuid() != geteuid() || getgid() != getegid() {
         return Err(refused());
     }
-    with_installed(reset, |executable| run(executable, reset, ticket))
+    session.with_installed(|executable| run(executable, session, ticket))
 }
 
-fn run(executable: &File, reset: &Reset, ticket: &Ticket) -> io::Result<ApplyOutcome> {
+fn run(executable: &File, session: &OfflineSession, ticket: &Ticket) -> io::Result<ApplyOutcome> {
     let raw = ticket.encode()?;
     let digest = Sha256::digest(&raw).into();
     let (container, node) = result_ids(&raw, ticket.seed)?;
-    let binding: [u8; 32] = Sha256::digest(reset.original.full.as_slice()).into();
+    let binding: [u8; 32] = Sha256::digest(session.original.full.as_slice()).into();
     let scope = random::<32>()?;
     if scope == [0; 32] {
         return Err(refused());
@@ -42,7 +45,7 @@ fn run(executable: &File, reset: &Reset, ticket: &Ticket) -> io::Result<ApplyOut
     envelope.extend_from_slice(&raw);
     let order = transport::seal_import_ticket(&envelope)?;
     let (local, peer) = transport::pair()?;
-    let mut worker = Worker::spawn_import(executable, &peer, &order, &reset.locked)?;
+    let mut worker = Worker::spawn_import(executable, &peer, &order, &session.locked)?;
     drop(peer);
     drop(order);
     let channel = Channel::from_owned_child_session(
@@ -59,7 +62,7 @@ fn run(executable: &File, reset: &Reset, ticket: &Ticket) -> io::Result<ApplyOut
         &channel,
         &digest,
         ticket,
-        reset,
+        session,
         container,
         node,
     )?;
@@ -75,7 +78,7 @@ fn exchange(
     channel: &Channel,
     digest: &[u8; 32],
     ticket: &Ticket,
-    reset: &Reset,
+    session: &OfflineSession,
     container: [u8; 16],
     node: [u8; 16],
 ) -> io::Result<bool> {
@@ -85,8 +88,8 @@ fn exchange(
         let payload = channel.wait_import(digest, || worker.live())?;
         match payload[0] {
             1 if source.is_none() && payload == step(1, 0) => {
-                ticket.require_target(reset)?;
-                let selected = ticket.source(reset)?;
+                ticket.require_target(session)?;
+                let selected = ticket.source(session)?;
                 let body = selected.reader()?;
                 channel.send_original(
                     Kind::ImportStep,
@@ -101,7 +104,7 @@ fn exchange(
                 if payload != step(3, nonce) {
                     return Err(refused());
                 }
-                ticket.require_target(reset)?;
+                ticket.require_target(session)?;
                 source.as_ref().ok_or_else(refused)?.verify()?;
                 channel.send(Kind::ImportStep, digest, &step(4, nonce))?;
             }
@@ -118,7 +121,7 @@ fn exchange(
         }
     };
     worker.finish_import(channel)?;
-    ticket.require_target(reset)?;
+    ticket.require_target(session)?;
     if let Some(source) = source {
         source.verify()?;
     }

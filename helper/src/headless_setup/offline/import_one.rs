@@ -1,5 +1,5 @@
 //! An operator-retained single-file ticket and the original external source.
-use super::{FIXED_ROOTS, Reset, refused};
+use super::{OfflineSession, refused};
 use crate::{
     headless_setup::import_preflight::{SourceTree, Stamp, pin_source, same_name_candidate},
     path_rules::Kind,
@@ -15,9 +15,7 @@ use std::{
     path::Path,
 };
 
-#[path = "headless_import_batch.rs"]
 pub(super) mod batch;
-#[path = "headless_import_ipc.rs"]
 mod ipc;
 
 pub(super) use ipc::{ApplyOutcome, apply};
@@ -81,13 +79,13 @@ fn entry(parent: &File, relative: &[u8]) -> io::Result<File> {
 }
 
 impl ExternalSource {
-    fn select(reset: &Reset, source: &Path, relative: &[u8]) -> io::Result<Self> {
+    fn select(session: &OfflineSession, source: &Path, relative: &[u8]) -> io::Result<Self> {
         if !relative_path(relative) {
             return Err(refused());
         }
-        let root = pin_source(&reset.selected, source)?;
+        let root = pin_source(&session.selected, source)?;
         let mount = root.require_same_named_mount()?;
-        reset.selected.scope.full_local_mount(mount.id)?;
+        session.selected.scope.full_local_mount(mount.id)?;
         let directory = root.storage_directory()?;
         let held = entry(&directory, relative)?;
         let witness = Witness::read(&held, mount)?;
@@ -173,17 +171,17 @@ pub(super) struct Ticket {
 
 impl Ticket {
     pub(super) fn prepare(
-        reset: &Reset,
+        session: &OfflineSession,
         target: &Path,
         source: &Path,
         relative: &[u8],
         name: &[u8],
     ) -> io::Result<Self> {
-        Self::prepare_observed(reset, target, source, relative, name, None)
+        Self::prepare_observed(session, target, source, relative, name, None)
     }
 
     fn prepare_observed(
-        reset: &Reset,
+        session: &OfflineSession,
         target: &Path,
         source: &Path,
         relative: &[u8],
@@ -193,9 +191,9 @@ impl Ticket {
         if !same_name_candidate(name) {
             return Err(refused());
         }
-        reset.require_original()?;
-        let token = selected_data(reset, target.as_os_str().as_bytes())?;
-        let origin = ExternalSource::select(reset, source, relative)?;
+        session.require_original()?;
+        let token = session.data_token(target.as_os_str().as_bytes())?;
+        let origin = ExternalSource::select(session, source, relative)?;
         let confirm_observation = || {
             if let Some((tree, stamp)) = observation {
                 tree.require_file(&origin.root, origin.mount, &origin.held, stamp)?;
@@ -205,11 +203,11 @@ impl Ticket {
         confirm_observation()?;
         let sha256 = origin.fingerprint()?;
         confirm_observation()?;
-        reset.require_original()?;
+        session.require_original()?;
         let seed = super::random::<16>()?;
         let ticket = Self {
             seed,
-            pool: reset.selected.pool,
+            pool: session.identity.pool,
             token,
             target: target.as_os_str().as_bytes().to_vec(),
             source_root: source.as_os_str().as_bytes().to_vec(),
@@ -222,19 +220,19 @@ impl Ticket {
         Ok(ticket)
     }
 
-    pub(super) fn require_target(&self, reset: &Reset) -> io::Result<()> {
-        reset.require_original()?;
-        if self.pool != reset.selected.pool || selected_data(reset, &self.target)? != self.token {
+    pub(super) fn require_target(&self, session: &OfflineSession) -> io::Result<()> {
+        session.require_original()?;
+        if self.pool != session.identity.pool || session.data_token(&self.target)? != self.token {
             return Err(refused());
         }
         Ok(())
     }
 
     /// Call only after checking for the original prior receipt.
-    pub(super) fn source(&self, reset: &Reset) -> io::Result<ExternalSource> {
-        self.require_target(reset)?;
+    pub(super) fn source(&self, session: &OfflineSession) -> io::Result<ExternalSource> {
+        self.require_target(session)?;
         let original = ExternalSource::select(
-            reset,
+            session,
             Path::new(OsStr::from_bytes(&self.source_root)),
             &self.relative,
         )?;
@@ -339,18 +337,6 @@ impl Ticket {
     }
 }
 
-pub(super) fn selected_data(reset: &Reset, bytes: &[u8]) -> io::Result<[u8; 32]> {
-    reset
-        .selected
-        .roots
-        .iter()
-        .zip(&reset.selected.tokens)
-        .skip(FIXED_ROOTS)
-        .find(|(root, _)| root.original.path().as_os_str().as_bytes() == bytes)
-        .map(|(_, token)| *token)
-        .ok_or_else(refused)
-}
-
 fn field(out: &mut Vec<u8>, value: &[u8]) -> io::Result<()> {
     out.extend_from_slice(
         &u16::try_from(value.len())
@@ -382,5 +368,5 @@ fn pair(bytes: &mut &[u8]) -> io::Result<(i64, i64)> {
 }
 
 #[cfg(test)]
-#[path = "../tests/maintenance/import_one_ticket.rs"]
+#[path = "../../../tests/maintenance/import_one_ticket.rs"]
 mod tests;

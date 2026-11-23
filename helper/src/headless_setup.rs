@@ -25,12 +25,10 @@ use std::{
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-#[path = "headless_import_preflight.rs"]
 mod import_preflight;
-#[path = "headless_reset.rs"]
-mod reset;
+mod offline;
 pub(crate) use import_preflight::Preflight;
-pub(crate) use reset::{ImportBatch, import_command::ImportOne};
+pub(crate) use offline::{ImportBatch, import_command::ImportOne};
 
 pub(crate) const DEFAULT_STATE: &str = "/zxs/state/headless";
 const DESCRIPTOR: &str = "server.conf";
@@ -48,6 +46,7 @@ fn refused() -> io::Error {
     )
 }
 
+#[derive(Clone, Copy)]
 struct HeldInput<'a> {
     pub(crate) original: &'a Pinned,
     pub(crate) directory: &'a File,
@@ -177,66 +176,77 @@ pub(crate) fn parse_paths(
     Ok(paths)
 }
 
-impl Issue<'_> {
-    fn require_roots(&self, marked: bool) -> io::Result<()> {
-        let uid = self.storage_uid;
-        if self.state.original.path() != Path::new(DEFAULT_STATE)
-            || matches!(uid, 0 | 65534 | u32::MAX)
-            || self.pool == [0; 16]
+// The same directory/identity rules apply to fresh, read-only preflight and to
+// a roster proved from durable markers. Only the latter needs already issued IDs.
+fn require_layout<'a>(
+    state: &HeldInput<'_>,
+    uid: u32,
+    roots: impl Iterator<Item = HeldInput<'a>>,
+    mut prove: impl FnMut(usize, &HeldInput<'a>) -> io::Result<(Entity, Mount)>,
+) -> io::Result<()> {
+    if state.original.path() != Path::new(DEFAULT_STATE) || matches!(uid, 0 | 65534 | u32::MAX) {
+        return Err(refused());
+    }
+    let (original_state, _) = require_held(state, uid)?;
+    let state_path = state.original.path();
+    let mut seen: Vec<(&Pinned, Entity, Mount)> = Vec::new();
+    for (i, root) in roots.enumerate() {
+        let path = root.original.path();
+        let bytes = path.as_os_str().as_bytes();
+        let absolute = bytes.strip_prefix(b"/").ok_or_else(refused)?;
+        if bytes.len() > 4095
+            || bytes.contains(&0)
+            || absolute
+                .split(|b| *b == b'/')
+                .any(|part| matches!(part, b"" | b"." | b".."))
+            || state_path.starts_with(path)
+            || path.starts_with(state_path)
+            || seen.iter().any(|(old, _, _)| {
+                path.starts_with(old.path())
+                    || old.path().starts_with(path)
+                    || old.entity_is_visible_ancestor_of(root.original)
+                    || root.original.entity_is_visible_ancestor_of(old)
+            })
         {
             return Err(refused());
         }
-        let (state, _) = require_held(&self.state, uid)?;
-        let mut held = Vec::new();
-        let state_path = self.state.original.path();
-        for (i, root) in self.roots.iter().enumerate() {
-            let path = root.held.original.path();
-            let bytes = path.as_os_str().as_bytes();
-            let absolute = bytes.strip_prefix(b"/").ok_or_else(refused)?;
-            if bytes.len() > 4095
-                || bytes.contains(&0)
-                || absolute
-                    .split(|b| *b == b'/')
-                    .any(|part| matches!(part, b"" | b"." | b".."))
-                || state_path.starts_with(path)
-                || path.starts_with(state_path)
-                || root.token == [0; 32]
-                || self.roots[..i].iter().any(|old| {
-                    let original = old.held.original.path();
-                    old.token == root.token
-                        || path.starts_with(original)
-                        || original.starts_with(path)
-                        || old
-                            .held
-                            .original
-                            .entity_is_visible_ancestor_of(root.held.original)
-                        || root
-                            .held
-                            .original
-                            .entity_is_visible_ancestor_of(old.held.original)
-                })
-            {
-                return Err(refused());
-            }
-            let actual = if marked {
-                role_proof(root, root_role(i), &self.pool, uid)?
-            } else {
-                require_held(&root.held, uid)?
-            };
-            if actual.0 == state
-                || held.iter().enumerate().any(
-                    |(j, &(entity, mount)): (usize, &(Entity, Mount))| {
-                        entity == actual.0
-                            || (i == 1 || j >= 1)
-                                && (entity.dev == actual.0.dev || mount.id == actual.1.id)
-                    },
-                )
-            {
-                return Err(refused());
-            }
-            held.push(actual);
+        let (entity, mount) = prove(i, &root)?;
+        if entity == original_state
+            || seen.iter().enumerate().any(|(j, (_, other, at))| {
+                *other == entity
+                    || (i == 1 || j >= 1) && (other.dev == entity.dev || at.id == mount.id)
+            })
+        {
+            return Err(refused());
         }
-        Ok(())
+        seen.push((root.original, entity, mount));
+    }
+    Ok(())
+}
+
+impl Issue<'_> {
+    fn require_roots(&self, marked: bool) -> io::Result<()> {
+        if self.pool == [0; 16] {
+            return Err(refused());
+        }
+        require_layout(
+            &self.state,
+            self.storage_uid,
+            self.roots.iter().map(|r| r.held),
+            |i, held| {
+                let root = &self.roots[i];
+                if root.token == [0; 32]
+                    || self.roots[..i].iter().any(|old| old.token == root.token)
+                {
+                    return Err(refused());
+                }
+                if marked {
+                    role_proof(root, root_role(i), &self.pool, self.storage_uid)
+                } else {
+                    require_held(held, self.storage_uid)
+                }
+            },
+        )
     }
 
     fn publish_locked(&self, dir: &File, password: &str) -> Result<[u8; 16], IssueError> {
@@ -449,18 +459,21 @@ impl Held {
     }
 }
 
-/// Read-only selection for a trusted offline setup UI. No disk formatting,
-/// daemon, privileged account creation or service start.
-pub(crate) struct FreshSelection {
+/// Pinned role directories. A selection alone neither creates fresh identities
+/// nor establishes enrollment in an existing pool.
+pub(crate) struct SelectedRoles {
     state: Held,
     roots: Vec<Held>,
     scope: Arc<DiscoveryView>,
     uid: u32,
+}
+
+struct PoolIdentity {
     pool: [u8; 16],
     tokens: Vec<[u8; 32]>,
 }
 
-impl FreshSelection {
+impl SelectedRoles {
     pub(crate) fn select(paths: &[std::path::PathBuf]) -> io::Result<Self> {
         if !(FIXED_ROOTS + 1..=FIXED_ROOTS + MAX_DATA).contains(&paths.len()) {
             return Err(refused());
@@ -478,11 +491,6 @@ impl FreshSelection {
                 .collect::<io::Result<_>>()?,
             scope,
             uid,
-            pool: random::<16>()?,
-            tokens: paths
-                .iter()
-                .map(|_| random::<32>())
-                .collect::<io::Result<_>>()?,
         };
         selected.require_site()?;
         Ok(selected)
@@ -510,29 +518,37 @@ impl FreshSelection {
         Ok(())
     }
 
-    fn issue<'a>(&'a self, login: &'a str) -> Issue<'a> {
-        Issue {
+    fn issue<'a>(&'a self, login: &'a str, identity: &PoolIdentity) -> io::Result<Issue<'a>> {
+        if self.roots.len() != identity.tokens.len() {
+            return Err(refused());
+        }
+        Ok(Issue {
             state: self.state.input(),
             roots: self
                 .roots
                 .iter()
-                .zip(&self.tokens)
+                .zip(&identity.tokens)
                 .map(|(root, &token)| RootInput {
                     held: root.input(),
                     token,
                 })
                 .collect(),
-            pool: self.pool,
+            pool: identity.pool,
             storage_uid: self.uid,
             login,
-        }
+        })
     }
 
     /// Read-only observation; the same objects are revalidated under the
     /// offline lease before changing anything.
     pub(crate) fn check_ready(&self) -> io::Result<Readiness> {
         self.require_site()?;
-        self.issue("").require_roots(false)?;
+        require_layout(
+            &self.state.input(),
+            self.uid,
+            self.roots.iter().map(Held::input),
+            |_, root| require_held(root, self.uid),
+        )?;
         for held in std::iter::once(&self.state).chain(&self.roots) {
             match require_empty(&held.directory) {
                 Ok(()) => {}
@@ -575,7 +591,17 @@ impl FreshSelection {
             .map_err(io::Error::from)?,
         );
         flock(&dir, FlockOperation::NonBlockingLockExclusive).map_err(io::Error::from)?;
-        let issue = self.issue(login);
+        // Fresh IDs belong only to an approved new installation. Existing
+        // maintenance derives them from the locked, validated descriptor.
+        let identity = PoolIdentity {
+            pool: random()?,
+            tokens: self
+                .roots
+                .iter()
+                .map(|_| random())
+                .collect::<io::Result<_>>()?,
+        };
+        let issue = self.issue(login, &identity)?;
         self.require_site()?;
         let epoch = issue.publish_locked(&dir, secret)?;
         self.require_site().map_err(IssueError::Uncertain)?;

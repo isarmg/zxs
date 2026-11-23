@@ -1,11 +1,11 @@
 //! Offline retirement of a clean DATA root. The disk itself is never changed.
 use super::{
-    DESCRIPTOR, FIXED_ROOTS, LOGIN, Reset, SCOPED,
-    add_data::{finish_stage, read_stage},
-    field, fixed, read, stamp,
+    DESCRIPTOR, FIXED_ROOTS, LOGIN, OfflineSession, SCOPED, field, fixed, read,
+    stage::{finish_stage, read_stage},
+    stamp,
 };
 use crate::{
-    headless_setup::{FreshSelection, Held, MARKER, read_role_token, refused},
+    headless_setup::{Held, MARKER, SelectedRoles, read_role_token, refused},
     pinned::Entity,
 };
 use rustix::fs::{Mode, OFlags, RawDir, RenameFlags, mkdirat, openat2, renameat, renameat_with};
@@ -18,7 +18,7 @@ const DATA_ROLE: u8 = 1;
 const ROLE_ONLY: u8 = 0b0001;
 const INITIALIZED: u8 = 0b1111;
 
-impl FreshSelection {
+impl SelectedRoles {
     pub(crate) fn retire_data(self, target: &Path) -> io::Result<()> {
         let paths: Vec<_> = self.paths().map(Path::to_path_buf).collect();
         let index = paths
@@ -29,38 +29,42 @@ impl FreshSelection {
             return Err(refused());
         }
         match self.open_offline(Some(RETIRE_STAGE)) {
-            Ok(reset) => reset.retire(index),
+            Ok(session) => session.retire(index),
             Err(error) => {
                 let mut remaining = paths;
                 remaining.remove(index);
-                let reset = Self::select(&remaining)
-                    .and_then(FreshSelection::begin_reset)
+                let session = Self::select(&remaining)
+                    .and_then(SelectedRoles::open_durable)
                     .map_err(|_| error)?;
-                let selected = &reset.selected;
+                let selected = &session.selected;
                 let original = Held::select(target, selected.uid, &selected.scope)?;
-                let (_, token) =
-                    read_role_token(&original.input(), DATA_ROLE, &selected.pool, selected.uid)?;
-                if selected.tokens.contains(&token) {
+                let (_, token) = read_role_token(
+                    &original.input(),
+                    DATA_ROLE,
+                    &session.identity.pool,
+                    selected.uid,
+                )?;
+                if session.identity.tokens.contains(&token) {
                     return Err(refused());
                 }
                 let system = &selected.roots[0].directory;
-                if !retired(system, &selected.pool, &token, selected.uid)? {
+                if !retired(system, &session.identity.pool, &token, selected.uid)? {
                     return Err(refused());
                 }
-                reset.require_original()
+                session.require_original()
             }
         }
     }
 }
 
-impl Reset {
+impl OfflineSession {
     fn retire(&self, index: usize) -> io::Result<()> {
         let selected = &self.selected;
         let uid = selected.uid;
         let system = &selected.roots[0].directory;
         let target = &selected.roots[index].directory;
-        let token = selected.tokens[index];
-        let pool = &selected.pool;
+        let token = self.identity.tokens[index];
+        let pool = &self.identity.pool;
         let prove = || {
             self.require_original()?;
             let initialized = match data_members(target)? {

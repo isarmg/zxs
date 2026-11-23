@@ -1,5 +1,5 @@
 //! A batch is an ordered list of original, individually replayable file tickets.
-use super::super::{FreshSelection, Reset, import_command::write_receipt, offline_catalog};
+use super::super::{OfflineSession, SelectedRoles, import_command::write_receipt, offline_catalog};
 use super::{SourceTree, Stamp, TICKET_BYTES, Ticket, apply, relative_path, same_name_candidate};
 use crate::{headless_setup::parse_paths, maintenance::diagnostic_worker, path_rules::Kind};
 use rustix::{
@@ -16,11 +16,8 @@ use std::{
     process::ExitCode,
 };
 
-#[path = "headless_import_batch_frame.rs"]
 mod frame;
-#[path = "headless_import_batch_mapping.rs"]
 mod mapping_input;
-#[path = "headless_import_batch_tree.rs"]
 mod tree;
 
 const PREPARE: &str = "expected SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...], followed by -- RELATIVE NAME pairs or --map0; prepare-tree also allows no mappings";
@@ -111,11 +108,11 @@ impl ImportBatch {
                 if !whole_tree && mapping.is_empty() {
                     return Err(message("an explicit batch must select at least one file"));
                 }
-                let reset = FreshSelection::select(&roles)?.open_offline(None)?;
+                let session = SelectedRoles::select(&roles)?.open_offline(None)?;
                 let plan = if whole_tree {
-                    Batch::prepare_tree(&reset, &source, &target, &mapping)?
+                    Batch::prepare_tree(&session, &source, &target, &mapping)?
                 } else {
-                    Batch::prepare(&reset, &source, &target, &mapping)?
+                    Batch::prepare(&session, &source, &target, &mapping)?
                 };
                 plan.write(&mut io::stdout().lock())?;
             }
@@ -131,8 +128,8 @@ impl ImportBatch {
                     ));
                 }
                 let plan = Batch::read(&mut input.lock())?;
-                let reset = FreshSelection::select(&roles)?.open_offline(None)?;
-                plan.apply(&reset, &mut io::stdout().lock())?;
+                let session = SelectedRoles::select(&roles)?.open_offline(None)?;
+                plan.apply(&session, &mut io::stdout().lock())?;
             }
         }
         Ok(ExitCode::SUCCESS)
@@ -201,9 +198,14 @@ fn check_mappings<'a>(
 }
 
 impl Batch {
-    fn prepare(reset: &Reset, source: &Path, target: &Path, rows: &[Mapping]) -> io::Result<Self> {
+    fn prepare(
+        session: &OfflineSession,
+        source: &Path,
+        target: &Path,
+        rows: &[Mapping],
+    ) -> io::Result<Self> {
         Self::prepare_rows(
-            reset,
+            session,
             source,
             target,
             rows.iter()
@@ -212,13 +214,13 @@ impl Batch {
     }
 
     fn prepare_rows<'a>(
-        reset: &Reset,
+        session: &OfflineSession,
         source: &Path,
         target: &Path,
         rows: impl ExactSizeIterator<Item = (&'a OsStr, &'a OsStr, Option<(&'a SourceTree, &'a Stamp)>)>
         + Clone,
     ) -> io::Result<Self> {
-        let existing = offline_catalog::read_names(reset)?;
+        let existing = offline_catalog::read_names(session)?;
         check_mappings(
             rows.clone()
                 .map(|(path, name, _)| (path.as_bytes(), name.as_bytes())),
@@ -228,7 +230,7 @@ impl Batch {
         tickets.try_reserve_exact(rows.len()).map_err(no_memory)?;
         for (index, (path, name, observation)) in rows.enumerate() {
             let ticket = Ticket::prepare_observed(
-                reset,
+                session,
                 target,
                 source,
                 path.as_bytes(),
@@ -238,7 +240,7 @@ impl Batch {
             .map_err(|e| io::Error::new(e.kind(), format!("batch item {}: {e}", index + 1)))?;
             tickets.push(ticket);
         }
-        reset.require_original()?;
+        session.require_original()?;
         Self::checked(tickets)
     }
 
@@ -292,16 +294,16 @@ impl Batch {
         output.flush()
     }
 
-    fn apply(&self, reset: &Reset, output: &mut impl Write) -> io::Result<()> {
+    fn apply(&self, session: &OfflineSession, output: &mut impl Write) -> io::Result<()> {
         // checked() proved every ticket belongs to this same pool, target token,
         // target path and source root. Do not pre-open sources or recheck all
         // names here: a completed item is its own collision and may lack a source.
         self.0
             .first()
             .ok_or_else(|| message("empty plan"))?
-            .require_target(reset)?;
+            .require_target(session)?;
         self.visit(|index, ticket| {
-            let outcome = apply(reset, ticket)?;
+            let outcome = apply(session, ticket)?;
             write!(output, "{}/{} ", index + 1, self.0.len())?;
             write_receipt(output, &outcome)?;
             output.flush()
@@ -326,5 +328,5 @@ impl Batch {
 }
 
 #[cfg(test)]
-#[path = "../tests/maintenance/import_batch.rs"]
+#[path = "../../../../tests/maintenance/import_batch.rs"]
 mod tests;

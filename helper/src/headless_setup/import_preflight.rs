@@ -1,5 +1,5 @@
 //! Metadata-only census and optional naming preview of an external source.
-use super::{FreshSelection, parse_paths, refused};
+use super::{SelectedRoles, parse_paths, refused};
 use crate::{
     maintenance::diagnostic_worker,
     pinned::{Entity, Mount, Pinned, require_no_automount},
@@ -56,7 +56,7 @@ impl Preflight {
     pub(crate) fn run(self) -> io::Result<ExitCode> {
         rustix::thread::set_no_new_privs(true)?;
         diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
-        let selected = FreshSelection::select(&self.roles)?;
+        let selected = SelectedRoles::select(&self.roles)?;
         let mut preview = self.show_names.then(Vec::new);
         selected.inspect_import_source(&self.source, preview.as_mut(), self.check_target, |observed, rows| {
             let mut out = io::stdout().lock();
@@ -168,7 +168,7 @@ fn overlapping(source: &Pinned, original: &Pinned) -> bool {
         || original.entity_is_visible_ancestor_of(source)
 }
 
-pub(super) fn pin_source(selected: &FreshSelection, source: &Path) -> io::Result<Pinned> {
+pub(super) fn pin_source(selected: &SelectedRoles, source: &Path) -> io::Result<Pinned> {
     let pin = Pinned::local_storage(source, &selected.scope)?;
     // Refuse protected roles, aliases, ancestors and descendants. The source
     // is external; this path can never stand in for a missing DATA root.
@@ -192,7 +192,7 @@ pub(super) fn pin_source(selected: &FreshSelection, source: &Path) -> io::Result
 }
 
 pub(super) fn scan(
-    selected: &FreshSelection,
+    selected: &SelectedRoles,
     source: &Path,
     preview: Option<&mut Vec<u8>>,
     target_names: Option<&[String]>,
@@ -236,7 +236,7 @@ impl Inventory {
 }
 
 impl SourceTree {
-    pub(super) fn open(selected: &FreshSelection, source: &Path) -> io::Result<Self> {
+    pub(super) fn open(selected: &SelectedRoles, source: &Path) -> io::Result<Self> {
         let pin = pin_source(selected, source)?;
         let mount = pin.require_same_named_mount()?;
         selected.scope.full_local_mount(mount.id)?;
@@ -586,5 +586,5 @@ fn append_escaped(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 #[cfg(test)]
-#[path = "../tests/maintenance/import_preflight_args.rs"]
+#[path = "../../tests/maintenance/import_preflight_args.rs"]
 mod tests;

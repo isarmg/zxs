@@ -1,6 +1,6 @@
 //! Explicit local first setup. No daemon, server account reuse or credential in argv.
 use crate::{
-    headless_setup::{FreshSelection, IssueError, MAX_DATA, parse_paths},
+    headless_setup::{IssueError, MAX_DATA, SelectedRoles, parse_paths},
     path_rules::QuotedPath,
 };
 use helper_linux_evidence::prompt_signals::PromptSignals;
@@ -32,203 +32,197 @@ use zeroize::{Zeroize, Zeroizing};
 #[derive(Debug)]
 pub(crate) struct Setup {
     paths: Vec<PathBuf>,
-    login: Option<String>,
-    web: bool,
-    reset: bool,
-    add_data: Option<PathBuf>,
-    retire_data: Option<PathBuf>,
-    init_data: Option<PathBuf>,
-    preview: Option<SocketAddr>,
+    action: Action,
+}
+
+#[derive(Debug)]
+enum Action {
+    Check,
+    PreviewUnit(SocketAddr),
+    New { login: String, review: Review },
+    ResetPassword,
+    AddData(PathBuf),
+    InitData(PathBuf),
+    RetireData(PathBuf),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Review {
+    Terminal,
+    Browser(Option<SocketAddr>),
 }
 
 impl Setup {
     pub(crate) fn parse(args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
         const USAGE: &str = "expected setup-headless check|new|reset SYSTEM RECYCLE DATA [DATA ...] [LOGIN], preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...], web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN, or add-data|init-data|retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]";
         let mut args = args.peekable();
-        let mut mode = args.next().ok_or(USAGE)?;
-        let web = mode == "web";
-        if web {
-            mode = args.next().ok_or(USAGE)?;
-        }
-        if web && mode != "new" {
-            return Err(USAGE);
-        }
-        let preview_unit = mode == "preview-unit";
-        let preview = if preview_unit
-            || web
-                && args
-                    .next_if(|word| word.as_os_str() == "--preview-unit")
-                    .is_some()
-        {
-            let listen = args
-                .next()
-                .and_then(|arg| arg.to_str()?.parse::<SocketAddr>().ok())
-                .filter(|addr| addr.port() != 0)
-                .ok_or("expected an explicit numeric HTTP listen address with a nonzero port")?;
-            Some(listen)
-        } else {
-            None
-        };
-        let reset = mode == "reset";
-        if mode == "add-data" || mode == "retire-data" || mode == "init-data" {
-            let candidate = PathBuf::from(
-                args.next()
-                    .ok_or("expected operated DATA directory before current roots")?,
-            );
-            crate::path_rules::Kind::StorageRoot.check_path(candidate.as_os_str().as_bytes())?;
-            let paths = parse_paths(args)?;
-            let (add_data, retire_data, init_data) = if mode == "init-data" {
-                (None, None, Some(candidate))
-            } else if mode == "add-data" {
-                (Some(candidate), None, None)
-            } else {
-                (None, Some(candidate), None)
-            };
-            return Ok(Self {
-                paths,
-                login: None,
-                web,
-                reset,
-                preview,
-                add_data,
-                retire_data,
-                init_data,
-            });
-        }
-        let (paths, login) = if mode == "new" {
-            // The last argument is the login; all preceding words name roots.
-            let mut values: Vec<_> = args.take(MAX_DATA + 4).collect();
-            let name = values
-                .pop()
-                .ok_or(USAGE)?
-                .into_string()
-                .map_err(|_| USAGE)?;
-            if !crate::headless_setup::login_ok(&name) {
-                return Err("invalid headless login name");
+        let mode = args.next().ok_or(USAGE)?;
+        let action = match mode.to_str() {
+            Some("check") => Action::Check,
+            Some("reset") => Action::ResetPassword,
+            Some("preview-unit") => Action::PreviewUnit(parse_listen(args.next())?),
+            Some("new" | "web") => {
+                let review = if mode == "web" {
+                    if args.next().is_none_or(|w| w != "new") {
+                        return Err(USAGE);
+                    }
+                    let preview = if args.next_if(|w| w == "--preview-unit").is_some() {
+                        Some(parse_listen(args.next())?)
+                    } else {
+                        None
+                    };
+                    Review::Browser(preview)
+                } else {
+                    Review::Terminal
+                };
+                // Include one extra to reject (not truncate) an oversized roster.
+                let mut values: Vec<_> = args.take(MAX_DATA + 4).collect();
+                let login = values
+                    .pop()
+                    .ok_or(USAGE)?
+                    .into_string()
+                    .map_err(|_| USAGE)?;
+                if !crate::headless_setup::login_ok(&login) {
+                    return Err("invalid headless login name");
+                }
+                return Ok(Self {
+                    paths: parse_paths(values.into_iter())?,
+                    action: Action::New { login, review },
+                });
             }
-            (parse_paths(values.into_iter())?, Some(name))
-        } else if mode == "check" || reset || preview_unit {
-            (parse_paths(args)?, None)
-        } else {
-            return Err(USAGE);
+            Some("add-data" | "init-data" | "retire-data") => {
+                let target = PathBuf::from(
+                    args.next()
+                        .ok_or("expected operated DATA directory before current roots")?,
+                );
+                crate::path_rules::Kind::StorageRoot.check_path(target.as_os_str().as_bytes())?;
+                if mode == "add-data" {
+                    Action::AddData(target)
+                } else if mode == "init-data" {
+                    Action::InitData(target)
+                } else {
+                    Action::RetireData(target)
+                }
+            }
+            _ => return Err(USAGE),
         };
         Ok(Self {
-            paths,
-            login,
-            web,
-            reset,
-            preview,
-            add_data: None,
-            retire_data: None,
-            init_data: None,
+            paths: parse_paths(args)?,
+            action,
         })
     }
 
     pub(crate) fn run(self) -> io::Result<ExitCode> {
         rustix::thread::set_no_new_privs(true)?;
         crate::maintenance::diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
-        let selected = FreshSelection::select(&self.paths)?;
-        if let Some(candidate) = self.add_data {
-            selected.add_data(&candidate)?;
-            writeln!(io::stdout().lock(), "Data disk registered.")?;
-            return Ok(ExitCode::SUCCESS);
-        }
-        if let Some(target) = self.init_data {
-            selected.init_data(&target)?;
-            writeln!(
-                io::stdout().lock(),
-                "Selected empty DATA layout confirmed; no service started."
-            )?;
-            return Ok(ExitCode::SUCCESS);
-        }
-        if let Some(target) = self.retire_data {
-            selected.retire_data(&target)?;
-            writeln!(
-                io::stdout().lock(),
-                "Data disk retired; files on disk unchanged."
-            )?;
-            return Ok(ExitCode::SUCCESS);
-        }
-        if self.reset {
-            return reset_password(selected);
-        }
-        let current = selected.check_ready()?;
-        if !self.web
-            && let Some(listen) = self.preview
-        {
-            if !current.is_ready() {
-                return Err(io::Error::other(current.to_string()));
+        let selected = SelectedRoles::select(&self.paths)?;
+        match self.action {
+            Action::Check => {
+                let current = selected.check_ready()?;
+                writeln!(io::stdout().lock(), "{current}")?;
+                return Ok(if current.is_ready() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(2)
+                });
             }
-            let unit = preview_unit(selected.paths(), selected.storage_uid(), listen)?;
-            io::stdout().lock().write_all(unit.as_bytes())?;
-            return Ok(ExitCode::SUCCESS);
+            Action::New { login, review } => return install(selected, &login, review),
+            Action::ResetPassword => return reset_password(selected),
+            Action::PreviewUnit(listen) => {
+                require_ready(&selected)?;
+                let unit = preview_unit(selected.paths(), selected.storage_uid(), listen)?;
+                io::stdout().lock().write_all(unit.as_bytes())?;
+            }
+            Action::AddData(path) => {
+                selected.add_data(&path)?;
+                writeln!(io::stdout().lock(), "Data disk registered.")?;
+            }
+            Action::InitData(path) => {
+                selected.init_data(&path)?;
+                writeln!(
+                    io::stdout().lock(),
+                    "Selected empty DATA layout confirmed; no service started."
+                )?;
+            }
+            Action::RetireData(path) => {
+                selected.retire_data(&path)?;
+                writeln!(
+                    io::stdout().lock(),
+                    "Data disk retired; files on disk unchanged."
+                )?;
+            }
         }
-        let Some(login) = self.login else {
-            writeln!(io::stdout().lock(), "{current}")?;
-            return Ok(if current.is_ready() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            });
-        };
-        if !current.is_ready() {
-            return Err(io::Error::other(current.to_string()));
+        Ok(ExitCode::SUCCESS)
+    }
+}
+
+fn parse_listen(arg: Option<OsString>) -> Result<SocketAddr, &'static str> {
+    arg.and_then(|v| v.to_str()?.parse::<SocketAddr>().ok())
+        .filter(|addr| addr.port() != 0)
+        .ok_or("expected an explicit numeric HTTP listen address with a nonzero port")
+}
+
+fn require_ready(roles: &SelectedRoles) -> io::Result<()> {
+    let readiness = roles.check_ready()?;
+    if readiness.is_ready() {
+        Ok(())
+    } else {
+        Err(io::Error::other(readiness.to_string()))
+    }
+}
+
+fn install(selected: SelectedRoles, login: &str, review: Review) -> io::Result<ExitCode> {
+    require_ready(&selected)?;
+    let input = io::stdin();
+    let output = io::stderr();
+    let tty = input.as_fd();
+    let display = output.as_fd();
+    require_terminal(tty, display)?;
+    if let Review::Browser(preview) = review {
+        let unit = preview
+            .map(|listen| preview_unit(selected.paths(), selected.storage_uid(), listen))
+            .transpose()?;
+        if !crate::disk_web::request_headless_review(unit, || require_terminal(tty, display))? {
+            return Err(io::Error::other("setup cancelled; no role changed"));
         }
-        let input = io::stdin();
-        let output = io::stderr();
-        let tty = input.as_fd();
-        let display = output.as_fd();
         require_terminal(tty, display)?;
-        if self.web {
-            let unit = self
-                .preview
-                .map(|listen| preview_unit(selected.paths(), selected.storage_uid(), listen))
-                .transpose()?;
-            if !crate::disk_web::request_headless_review(unit, || require_terminal(tty, display))? {
-                return Err(io::Error::other("setup cancelled; no role changed"));
-            }
-            require_terminal(tty, display)?;
-            let current = selected.check_ready()?;
-            if !current.is_ready() {
-                return Err(io::Error::other(current.to_string()));
-            }
+        require_ready(&selected)?;
+    }
+    let selection = format!(
+        "Fresh headless setup (no format or service start)\n{}\nLogin {login}",
+        summarize_paths(selected.paths())
+    );
+    let (first, second) = hidden_pair(&selection, b"Type SETUP to approve: ", b"SETUP")?;
+    let first = std::str::from_utf8(&first).map_err(|_| invalid("password must be UTF-8"))?;
+    let second = std::str::from_utf8(&second).map_err(|_| invalid("password must be UTF-8"))?;
+    match selected.prepare(login, first, second) {
+        Ok(_) => {
+            println!(
+                "Setup confirmed: the selected role markers and server.conf are durable. The server has not started."
+            );
+            Ok(ExitCode::SUCCESS)
         }
-        let selection = format!(
-            "Fresh headless setup (no format or service start)\n{}\nLogin {login}",
-            summarize_paths(selected.paths())
-        );
-        let (first, second) = hidden_pair(&selection, b"Type SETUP to approve: ", b"SETUP")?;
-        let first = std::str::from_utf8(&first).map_err(|_| invalid("password must be UTF-8"))?;
-        let second = std::str::from_utf8(&second).map_err(|_| invalid("password must be UTF-8"))?;
-        match selected.prepare(&login, first, second) {
-            Ok(_) => {
-                println!(
-                    "Setup confirmed: the selected role markers and server.conf are durable. The server has not started."
-                );
-                Ok(ExitCode::SUCCESS)
-            }
-            Err(IssueError::Refused(reason)) => Err(reason),
-            Err(IssueError::Uncertain(reason)) => {
-                eprintln!(
-                    "Setup uncertain: original records may remain; do not overwrite or rerun blindly ({reason})."
-                );
-                Ok(ExitCode::from(3))
-            }
+        Err(IssueError::Refused(reason)) => Err(reason),
+        Err(IssueError::Uncertain(reason)) => {
+            eprintln!(
+                "Setup uncertain: original records may remain; do not overwrite or rerun blindly ({reason})."
+            );
+            Ok(ExitCode::from(3))
         }
     }
 }
 
-fn reset_password(selected: FreshSelection) -> io::Result<ExitCode> {
-    let reset = selected.begin_reset()?;
+fn reset_password(selected: SelectedRoles) -> io::Result<ExitCode> {
+    let session = selected.open_durable()?;
     let selected_text = format!(
         "Offline password reset for {}\n{}",
-        reset.login(),
-        summarize_paths(reset.paths())
+        session.login(),
+        summarize_paths(session.paths())
     );
     let (first, second) = hidden_pair(&selected_text, b"Type RESET to approve: ", b"RESET")?;
     let first = std::str::from_utf8(&first).map_err(|_| invalid("password must be UTF-8"))?;
     let second = std::str::from_utf8(&second).map_err(|_| invalid("password must be UTF-8"))?;
-    match reset.apply(first, second) {
+    match session.reset_password(first, second) {
         Ok(()) => {
             writeln!(
                 io::stdout().lock(),
@@ -504,4 +498,51 @@ fn read_hidden(
         }
     }
     Err(invalid("too many terminal input events"))
+}
+
+#[cfg(test)]
+mod setup_actions {
+    use super::*;
+
+    #[test]
+    fn only_fresh_setup_accepts_the_browser_and_login() {
+        let command =
+            |words: &[&str]| Setup::parse(words.iter().map(OsString::from)).map(|cmd| cmd.action);
+        let roles = ["/s", "/r", "/d"];
+        let new = |words: &[&str]| command(&[words, &roles, &["login"]].concat());
+        assert!(matches!(
+            new(&["new"]),
+            Ok(Action::New {
+                review: Review::Terminal,
+                ..
+            })
+        ));
+        assert!(matches!(
+            new(&["web", "new"]),
+            Ok(Action::New {
+                review: Review::Browser(None),
+                ..
+            })
+        ));
+        let listen = "127.0.0.1:8123".parse::<SocketAddr>().unwrap();
+        assert!(
+            matches!(new(&["web", "new", "--preview-unit", "127.0.0.1:8123"]), Ok(Action::New {review: Review::Browser(Some(addr)), ..}) if addr == listen)
+        );
+        for mode in [
+            "reset",
+            "check",
+            "add-data",
+            "retire-data",
+            "init-data",
+            "preview-unit",
+        ] {
+            assert!(command(&[&["web", mode], &roles[..]].concat()).is_err());
+        }
+        assert!(command(&[&["reset"], &roles[..], &["login"]].concat()).is_err());
+        assert!(new(&["web", "new", "--preview-unit", "127.0.0.1:0"]).is_err());
+        let mut too_many = vec!["new", "/s", "/r"];
+        too_many.extend(std::iter::repeat_n("/d", MAX_DATA + 1));
+        too_many.push("login");
+        assert!(command(&too_many).is_err());
+    }
 }

@@ -1,20 +1,13 @@
 //! Private existing-only ZXS name frame. No storage format parser here.
-use super::Reset;
-use crate::{
-    headless_setup::import_preflight::same_name_candidate,
-    pinned::{Entity, Mount, Pinned, installed_regular_reader, same_mount_leaf},
-    product_layout::BIN,
-};
+use super::OfflineSession;
+use crate::headless_setup::import_preflight::same_name_candidate;
 use helper_linux_evidence::diagnostic_process::{
     prepare_offline_catalog_exec, require_waitable_children,
 };
 use sha2::{Digest, Sha256};
 use std::{
-    ffi::OsStr,
-    fs::{File, Metadata},
+    fs::File,
     io::{self, BufReader, Read},
-    os::unix::fs::MetadataExt,
-    path::Path,
     process::{Command, Stdio},
 };
 
@@ -29,67 +22,11 @@ fn invalid() -> io::Error {
     )
 }
 
-pub(super) fn read_names(reset: &Reset) -> io::Result<Vec<String>> {
-    with_installed(reset, |executable| {
-        let expected = Sha256::digest(reset.original.full.as_slice()).into();
-        capture(executable, &reset.locked, expected)
+pub(super) fn read_names(session: &OfflineSession) -> io::Result<Vec<String>> {
+    session.with_installed(|executable| {
+        let expected = Sha256::digest(session.original.full.as_slice()).into();
+        capture(executable, &session.locked, expected)
     })
-}
-
-pub(super) fn with_installed<T>(
-    reset: &Reset,
-    run: impl FnOnce(&File) -> io::Result<T>,
-) -> io::Result<T> {
-    reset.require_original()?;
-    let bin = Pinned::local_storage(Path::new(BIN), &reset.selected.scope)?;
-    let original_dir = bin.relative_directory()?;
-    let leaf = OsStr::new("zxs");
-    let original = same_mount_leaf(&original_dir, leaf)?;
-    let executable = installed_regular_reader(&original)?;
-    let stamp = |info: &Metadata| {
-        (
-            info.dev(),
-            info.ino(),
-            info.mode(),
-            info.uid(),
-            info.len(),
-            info.mtime(),
-            info.mtime_nsec(),
-            info.ctime(),
-            info.ctime_nsec(),
-            info.nlink(),
-        )
-    };
-    let meta = original.metadata()?;
-    let exact = stamp(&meta);
-    let verify = || {
-        reset.require_original()?;
-        let mount = bin.same_local_chain(|dir, _| {
-            let info = dir.metadata()?;
-            if info.uid() != 0 || info.mode() & 0o022 != 0 {
-                return Err(invalid());
-            }
-            Ok(())
-        })?;
-        let named = same_mount_leaf(&original_dir, leaf)?;
-        if Entity::of(&original_dir.metadata()?)? != bin.entity()
-            || Mount::on(&original_dir)? != Some(mount)
-            || Mount::on(&original)? != Some(mount)
-            || Mount::on(&executable)? != Some(mount)
-            || Mount::on(&named)? != Some(mount)
-            || meta.mode() & 0o111 == 0
-            || stamp(&named.metadata()?) != exact
-            || stamp(&original.metadata()?) != exact
-            || stamp(&executable.metadata()?) != exact
-        {
-            return Err(invalid());
-        }
-        Ok(())
-    };
-    verify()?;
-    let result = run(&executable)?;
-    verify()?;
-    Ok(result)
 }
 
 fn capture(executable: &File, lease: &File, expected: [u8; 32]) -> io::Result<Vec<String>> {
@@ -162,5 +99,5 @@ fn decode_frame(input: &mut impl Read, expected: [u8; 32]) -> io::Result<Vec<Str
 }
 
 #[cfg(test)]
-#[path = "../tests/maintenance/offline_catalog_frame.rs"]
+#[path = "../../../tests/maintenance/offline_catalog_frame.rs"]
 mod tests;

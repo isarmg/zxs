@@ -1,23 +1,23 @@
 //! Exact whole-source selection, without inferring destination paths.
 use super::{
-    Batch, Escaped, Mapping, Reset, SourceTree, check_mappings, message, no_memory,
+    Batch, Escaped, Mapping, OfflineSession, SourceTree, check_mappings, message, no_memory,
     same_name_candidate,
 };
 use std::{collections::HashMap, ffi::OsStr, io, os::unix::ffi::OsStrExt, path::Path};
 
 impl Batch {
     pub(super) fn prepare_tree(
-        reset: &Reset,
+        session: &OfflineSession,
         source: &Path,
         target: &Path,
         overrides: &[Mapping],
     ) -> io::Result<Self> {
-        let tree = SourceTree::open(&reset.selected, source)?;
-        let before = tree.inventory(|| reset.require_original())?;
+        let tree = SourceTree::open(&session.selected, source)?;
+        let before = tree.inventory(|| session.require_original())?;
         before.report(&mut io::stderr().lock())?;
         let rows = resolve(before.files(), overrides)?;
         let batch = Self::prepare_rows(
-            reset,
+            session,
             source,
             target,
             rows.iter()
@@ -25,7 +25,7 @@ impl Batch {
         )?;
         // Never publish a changed or partially scanned selection. This second
         // pass compares all raw names and witnesses, including empty directories.
-        if before != tree.inventory(|| reset.require_original())? {
+        if before != tree.inventory(|| session.require_original())? {
             return Err(message(
                 "the selected tree changed while preparing; no complete plan was written",
             ));
@@ -80,5 +80,5 @@ fn resolve<'a, T>(
 }
 
 #[cfg(test)]
-#[path = "../tests/maintenance/import_batch_tree.rs"]
+#[path = "../../../../../tests/maintenance/import_batch_tree.rs"]
 mod tests;

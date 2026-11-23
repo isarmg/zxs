@@ -1,8 +1,5 @@
 //! Explicitly initialize exactly one enrolled DATA using the installed Store.
-use super::{
-    FreshSelection, Reset, import_one::selected_data, offline_catalog::with_installed, random,
-    refused, require_held,
-};
+use super::{OfflineSession, SelectedRoles, random, refused, require_held};
 use crate::local_worker::{
     Worker,
     transport::{self, Channel, Kind, Payload},
@@ -14,30 +11,30 @@ use rustix::{
 use sha2::{Digest, Sha256};
 use std::{fs::File, io, os::unix::ffi::OsStrExt, path::Path};
 
-impl FreshSelection {
+impl SelectedRoles {
     pub(crate) fn init_data(self, path: &Path) -> io::Result<()> {
         if getuid() != geteuid() || getgid() != getegid() {
             return Err(refused());
         }
-        let reset = self.open_offline(None)?;
+        let session = self.open_offline(None)?;
         let path = path.as_os_str().as_bytes();
-        let token = selected_data(&reset, path)?;
+        let token = session.data_token(path)?;
         let scope = random::<32>()?;
         if scope == [0; 32] {
             return Err(refused());
         }
-        let binding = Sha256::digest(reset.original.full.as_slice()).into();
-        let roles = reset
+        let binding = Sha256::digest(session.original.full.as_slice()).into();
+        let roles = session
             .selected
             .roots
             .iter()
             .map(|root| {
-                let (entity, mount) = require_held(&root.input(), reset.selected.uid)?;
+                let (entity, mount) = require_held(&root.input(), session.selected.uid)?;
                 Ok([entity.dev, entity.ino, mount.id])
             })
             .collect::<io::Result<Vec<_>>>()?;
-        let order = encode(binding, scope, reset.selected.pool, token, &roles, path)?;
-        with_installed(&reset, |executable| exchange(&reset, executable, scope, &order))
+        let order = encode(binding, scope, session.identity.pool, token, &roles, path)?;
+        session.with_installed(|executable| exchange(&session, executable, scope, &order))
             .map_err(|e| io::Error::new(e.kind(), format!(
                 "DATA initialization not confirmed: {e}; preserve the selected root and retry only the same command"
             )))
@@ -83,11 +80,16 @@ fn step(kind: u8, nonce: u64) -> Payload {
     out
 }
 
-fn exchange(reset: &Reset, executable: &File, scope: [u8; 32], raw: &[u8]) -> io::Result<()> {
+fn exchange(
+    session: &OfflineSession,
+    executable: &File,
+    scope: [u8; 32],
+    raw: &[u8],
+) -> io::Result<()> {
     let digest: [u8; 32] = Sha256::digest(raw).into();
     let order = transport::seal_import_ticket(raw)?;
     let (local, peer) = transport::pair()?;
-    let mut worker = Worker::spawn_data_init(executable, &peer, &order, &reset.locked)?;
+    let mut worker = Worker::spawn_data_init(executable, &peer, &order, &session.locked)?;
     drop(peer);
     drop(order);
     let channel = Channel::from_owned_child_session(
@@ -122,13 +124,13 @@ fn exchange(reset: &Reset, executable: &File, scope: [u8; 32], raw: &[u8]) -> io
         if packet != step(1, nonce) {
             return Err(refused());
         }
-        reset.require_original()?;
+        session.require_original()?;
         channel.send(Kind::InitData, &digest, &step(2, nonce))?;
     }
     worker.finish_import(&channel)?;
-    reset.require_original()
+    session.require_original()
 }
 
 #[cfg(test)]
-#[path = "../tests/maintenance/init_data_order.rs"]
+#[path = "../../../tests/maintenance/init_data_order.rs"]
 mod tests;

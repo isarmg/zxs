@@ -1,19 +1,18 @@
 //! Append one empty DATA disk using the exact offline descriptor lease.
-use super::{DESCRIPTOR, FIXED_ROOTS, LOGIN, MAX_DATA, Record, Reset, SCOPED, read, stamp};
+use super::{
+    DESCRIPTOR, FIXED_ROOTS, LOGIN, MAX_DATA, OfflineSession, read,
+    stage::{finish_stage, read_stage},
+    stamp,
+};
 use crate::{
     headless_setup::{
-        FreshSelection, Held, MARK_BYTES, MARK_MAGIC, MARKER, RootInput, random, read_role_token,
+        Held, MARK_BYTES, MARK_MAGIC, MARKER, RootInput, SelectedRoles, random, read_role_token,
         refused, require_only, role_proof,
     },
     pinned::Entity,
 };
-use rustix::fs::{Mode, OFlags, RenameFlags, fchmod, openat2, renameat, renameat_with};
-use std::{
-    fs::File,
-    io::{self, Write},
-    os::unix::ffi::OsStrExt,
-    path::Path,
-};
+use rustix::fs::{RenameFlags, renameat, renameat_with};
+use std::{io, os::unix::ffi::OsStrExt, path::Path};
 use zeroize::Zeroizing;
 
 const ADD_STAGE: &str = ".server-stage-add-data";
@@ -21,35 +20,35 @@ const DATA: u8 = 1;
 const ROLE_STAGE: &str = ".role-stage-add-data";
 const TOKEN_AT: usize = MARK_MAGIC.len() + 17;
 
-impl FreshSelection {
+impl SelectedRoles {
     pub(crate) fn add_data(self, path: &Path) -> io::Result<()> {
         // An exact rerun after descriptor replacement can recognize the
         // same selected path as the final roster entry without writing again.
         let current_paths = self.paths().map(Path::to_path_buf).collect::<Vec<_>>();
-        let reset = match self.open_offline(Some(ADD_STAGE)) {
-            Ok(reset) => reset,
+        let session = match self.open_offline(Some(ADD_STAGE)) {
+            Ok(session) => session,
             Err(error) if current_paths.len() < FIXED_ROOTS + MAX_DATA => {
                 let mut already = current_paths;
                 already.push(path.to_owned());
                 return Self::select(&already)
-                    .and_then(FreshSelection::begin_reset)
+                    .and_then(SelectedRoles::open_durable)
                     .map(|_| ())
                     .map_err(|_| error);
             }
             Err(error) => return Err(error),
         };
-        reset.append_data(path)
+        session.append_data(path)
     }
 }
 
-impl Reset {
+impl OfflineSession {
     fn append_data(&self, path: &Path) -> io::Result<()> {
         if self.selected.roots.len() == FIXED_ROOTS + MAX_DATA {
             return Err(refused());
         }
         self.require_original()?;
         let uid = self.selected.uid;
-        let pool = &self.selected.pool;
+        let pool = &self.identity.pool;
         let candidate = Held::select(path, uid, &self.selected.scope)?;
         let mut marker = [0; MARK_BYTES];
         let offset = MARK_MAGIC.len();
@@ -95,7 +94,7 @@ impl Reset {
         };
         let original_and_candidate = || {
             self.require_original()?;
-            let mut issue = self.selected.issue(&self.login);
+            let mut issue = self.selected.issue(&self.login, &self.identity)?;
             issue.roots.push(root());
             issue.require_roots(false)?;
             if super::retire_data::retired(system, pool, &token, uid)? {
@@ -191,59 +190,4 @@ fn publish_role_marker(
         RenameFlags::NOREPLACE,
     )?;
     directory.sync_all()
-}
-
-pub(super) fn read_stage(dir: &File, name: &str, uid: u32) -> io::Result<Option<Record>> {
-    match read(dir, name, uid) {
-        Ok(record) => Ok(Some(record)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-pub(super) fn finish_stage(
-    dir: &File,
-    name: &str,
-    expected: &[u8],
-    uid: u32,
-    prove: impl Fn() -> io::Result<()>,
-) -> io::Result<Record> {
-    prove()?;
-    let (mut file, written) = if let Some(original) = read_stage(dir, name, uid)? {
-        if !expected.starts_with(&original.full) {
-            return Err(refused());
-        }
-        let file = File::from(openat2(
-            dir,
-            name,
-            OFlags::WRONLY | OFlags::APPEND | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-            SCOPED,
-        )?);
-        if stamp(&file.metadata()?) != stamp(&original.meta) {
-            return Err(refused());
-        }
-        (file, original.full.len())
-    } else {
-        let file = File::from(openat2(
-            dir,
-            name,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR,
-            SCOPED,
-        )?);
-        fchmod(&file, Mode::RUSR | Mode::WUSR)?;
-        (file, 0)
-    };
-    prove()?;
-    if stamp(&read(dir, name, uid)?.meta) != stamp(&file.metadata()?) {
-        return Err(refused());
-    }
-    file.write_all(&expected[written..])?;
-    file.sync_all()?;
-    let record = read(dir, name, uid)?;
-    if stamp(&record.meta) != stamp(&file.metadata()?) || record.full.as_slice() != expected {
-        return Err(refused());
-    }
-    Ok(record)
 }

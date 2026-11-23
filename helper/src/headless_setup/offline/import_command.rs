@@ -1,6 +1,6 @@
 //! Explicit one-file conversion: prepare a ticket, then apply exactly that ticket.
 use super::{
-    FreshSelection,
+    SelectedRoles,
     import_one::{ApplyOutcome, TICKET_BYTES, Ticket, apply},
 };
 use crate::{headless_setup::parse_paths, maintenance::diagnostic_worker, path_rules::Kind};
@@ -65,9 +65,9 @@ impl ImportOne {
                 name,
                 target,
             } => {
-                let reset = FreshSelection::select(&roles)?.open_offline(None)?;
+                let session = SelectedRoles::select(&roles)?.open_offline(None)?;
                 let ticket = Ticket::prepare(
-                    &reset,
+                    &session,
                     &target,
                     &source,
                     relative.as_os_str().as_bytes(),
@@ -80,8 +80,8 @@ impl ImportOne {
             Self::Apply(roles) => {
                 let input = io::stdin().lock();
                 let ticket = read_ticket(input)?;
-                let reset = FreshSelection::select(&roles)?.open_offline(None)?;
-                let outcome = apply(&reset, &ticket).map_err(|_| uncertain())?;
+                let session = SelectedRoles::select(&roles)?.open_offline(None)?;
+                let outcome = apply(&session, &ticket).map_err(|_| uncertain())?;
                 write_receipt(&mut io::stdout().lock(), &outcome).map_err(|_| uncertain())?;
             }
         }
@@ -155,5 +155,5 @@ fn hex_line(bytes: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
-#[path = "../tests/maintenance/import_one_command.rs"]
+#[path = "../../../tests/maintenance/import_one_command.rs"]
 mod tests;
