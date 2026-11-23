@@ -1,4 +1,4 @@
-//! One standalone nonblocking LOCK element. Decoding grants no access.
+//! One standalone nonblocking LOCK request on one OPEN. Decoding grants no access.
 use super::{
     io_fields::WireOpenId,
     message::{Message, RELATED, Routing},
@@ -10,6 +10,8 @@ pub(in crate::smb) const LOCK: u16 = 10;
 const REPLAY: u32 = 0x2000_0000;
 const FIXED: usize = 24;
 const ELEMENT: usize = 24;
+const UNLOCK: u32 = 0x04;
+const FAIL_IMMEDIATELY: u32 = 0x10;
 
 /// A nonempty unsigned byte range, including a possible byte at `u64::MAX`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,28 +39,32 @@ pub(in crate::smb) enum LockChange {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::smb) struct LockFields {
+pub(in crate::smb) struct LockFields<'raw> {
     open: WireOpenId,
-    span: Span,
-    change: LockChange,
+    elements: &'raw [[u8; ELEMENT]],
 }
 
-impl LockFields {
+impl<'raw> LockFields<'raw> {
     pub(in crate::smb) fn open(self) -> WireOpenId {
         self.open
     }
-    pub(in crate::smb) fn span(self) -> Span {
-        self.span
+
+    pub(in crate::smb) fn unlocking(self) -> bool {
+        self.elements.first().is_some_and(|raw| flags(raw) & UNLOCK != 0)
     }
-    pub(in crate::smb) fn change(self) -> LockChange {
-        self.change
+
+    pub(in crate::smb) fn ordered(
+        self,
+    ) -> impl Iterator<Item = Result<(Span, LockChange), LockFieldError>> + 'raw {
+        let unlocking = self.unlocking();
+        self.elements.iter().map(move |raw| element(raw, unlocking))
     }
 }
 
 #[must_use]
 pub(in crate::smb) struct LockRequest<'step, 'raw> {
     member: VerifiedMember<'step, 'raw>,
-    fields: LockFields,
+    fields: LockFields<'raw>,
 }
 
 impl<'step, 'raw> LockRequest<'step, 'raw> {
@@ -72,7 +78,7 @@ impl<'step, 'raw> LockRequest<'step, 'raw> {
     pub(in crate::smb) fn original(&self) -> &VerifiedMember<'step, 'raw> {
         &self.member
     }
-    pub(in crate::smb) fn fields(&self) -> LockFields {
+    pub(in crate::smb) fn fields(&self) -> LockFields<'raw> {
         self.fields
     }
 }
@@ -83,11 +89,12 @@ pub(in crate::smb) enum LockFieldError {
     FileClosed,
     NotSupported,
     InvalidRange,
+    UnexpectedUnlock,
 }
 
-impl Message<'_> {
-    fn lock_fields(&self) -> Result<LockFields, LockFieldError> {
-        use LockFieldError::{FileClosed, InvalidParameter, InvalidRange, NotSupported};
+impl<'raw> Message<'raw> {
+    fn lock_fields(&self) -> Result<LockFields<'raw>, LockFieldError> {
+        use LockFieldError::{FileClosed, InvalidParameter, NotSupported};
         if self.header.command != LOCK {
             return Err(InvalidParameter);
         }
@@ -103,16 +110,14 @@ impl Message<'_> {
             return Err(InvalidParameter);
         }
         let count = usize::from(u16le(body, 2).map_err(invalid)?);
-        if count == 0 || body.len() != FIXED + count * ELEMENT {
+        let (elements, tail) = body.get(FIXED..).ok_or(InvalidParameter)?.as_chunks::<ELEMENT>();
+        if count == 0 || elements.len() != count || !tail.is_empty() {
             return Err(InvalidParameter);
         }
         // The ordinary profile does not negotiate multi-channel or durable,
         // persistent or resilient OPENs. No lock-sequence replay succeeds.
         if u32le(body, 4).map_err(invalid)? >> 4 > 64 {
             return Err(InvalidParameter);
-        }
-        if count != 1 {
-            return Err(NotSupported);
         }
         let open = WireOpenId {
             persistent: u64le(body, 8).map_err(invalid)?,
@@ -124,24 +129,48 @@ impl Message<'_> {
         {
             return Err(FileClosed);
         }
-        let offset = u64le(body, FIXED).map_err(invalid)?;
-        let length = u64le(body, FIXED + 8).map_err(invalid)?;
-        if length == 0 {
-            return Err(NotSupported);
+        let fields = LockFields { open, elements };
+        let unlocking = fields.unlocking();
+        if let [raw] = elements {
+            // Preserve the singleton's field-error check before OPEN lookup.
+            element(raw, unlocking)?;
+        } else if !unlocking && elements.iter().any(|raw| flags(raw) & FAIL_IMMEDIATELY == 0) {
+            return Err(InvalidParameter);
         }
-        let span = Span::new(offset, length).ok_or(InvalidRange)?;
-        let change = match u32le(body, FIXED + 16).map_err(invalid)? {
-            0x11 => LockChange::Shared,
-            0x12 => LockChange::Exclusive,
-            0x04 => LockChange::Unlock,
-            0x01 | 0x02 => return Err(NotSupported),
-            _ => return Err(InvalidParameter),
-        };
-        // MS-SMB2 2.2.26.1: ignore the element's Reserved word.
-        Ok(LockFields { open, span, change })
+        Ok(fields)
     }
+}
+
+fn flags(raw: &[u8; ELEMENT]) -> u32 {
+    u32::from_le_bytes([raw[16], raw[17], raw[18], raw[19]])
+}
+
+fn element(raw: &[u8; ELEMENT], unlocking: bool) -> Result<(Span, LockChange), LockFieldError> {
+    use LockFieldError::{InvalidParameter, InvalidRange, NotSupported, UnexpectedUnlock};
+    let flags = flags(raw);
+    if unlocking && !matches!(flags, 0x04 | 0x14) {
+        return Err(InvalidParameter);
+    }
+    if !unlocking && flags & UNLOCK != 0 {
+        return Err(UnexpectedUnlock);
+    }
+    let invalid = |_| InvalidParameter;
+    let length = u64le(raw, 8).map_err(invalid)?;
+    if length == 0 {
+        return Err(NotSupported);
+    }
+    let span = Span::new(u64le(raw, 0).map_err(invalid)?, length).ok_or(InvalidRange)?;
+    let change = match (unlocking, flags) {
+        (true, 0x04 | 0x14) => LockChange::Unlock, // the immediate bit may be ignored for unlock
+        (false, 0x11) => LockChange::Shared,
+        (false, 0x12) => LockChange::Exclusive,
+        (false, 0x01 | 0x02) => return Err(NotSupported),
+        _ => return Err(InvalidParameter),
+    };
+    // MS-SMB2 2.2.26.1: ignore the element's Reserved word.
+    Ok((span, change))
 }
 
 #[cfg(test)]
 #[path = "../../../tests/smb/lock_fields.rs"]
-mod tests;
+pub(in crate::smb) mod tests;

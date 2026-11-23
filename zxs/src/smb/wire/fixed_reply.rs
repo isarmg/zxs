@@ -242,7 +242,7 @@ impl UnsignedSmall {
     }
 
     /// MS-SMB2 2.2.27: this fixed success needs a real lock mutation.
-    pub(in crate::smb) fn locked(request:&LockRequest<'_,'_>,pending:&PendingLock)->Result<Self>{
+    pub(in crate::smb) fn locked(request:&LockRequest<'_,'_>,pending:&PendingLock<'_>)->Result<Self>{
         if !pending.matches(request){return Err(Error::InvalidRequest);}
         let mut result=Self::standalone(request.original(),pending.sid(),LOCK,0,68)?;
         result.raw[64]=4;Ok(result)

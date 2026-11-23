@@ -87,7 +87,7 @@ impl CheckedBatch<'_, '_> {
 
 fn field_failure(error: LockFieldError) -> LockFailure {
     match error {
-        LockFieldError::InvalidParameter => LockFailure::InvalidParameter,
+        LockFieldError::InvalidParameter | LockFieldError::UnexpectedUnlock => LockFailure::InvalidParameter,
         LockFieldError::FileClosed => LockFailure::FileClosed,
         LockFieldError::NotSupported => LockFailure::NotSupported,
         LockFieldError::InvalidRange => LockFailure::InvalidRange,
@@ -105,6 +105,7 @@ fn lock_failure(error: LockError) -> Result<LockFailure> {
             io::ErrorKind::OutOfMemory => LockFailure::Resources,
             _ => LockFailure::ServerUnavailable,
         },
+        LockError::Fields(error) => field_failure(error),
         LockError::AccessDenied => LockFailure::AccessDenied,
         LockError::LockNotGranted => LockFailure::LockNotGranted,
         LockError::RangeNotLocked => LockFailure::RangeNotLocked,
@@ -126,13 +127,13 @@ impl<'a, 'raw> LockRefusal<'a, 'raw> {
 }
 
 #[must_use]
-pub(in crate::smb) struct PendingLock {
+pub(in crate::smb) struct PendingLock<'raw> {
     original: RequestSlot,
     wire: WireOpenId,
-    proof: PreparedLock,
+    proof: PreparedLock<'raw>,
 }
 
-impl PendingLock {
+impl PendingLock<'_> {
     pub(in crate::smb) fn sid(&self) -> NonZeroU64 {
         self.original.sid
     }
@@ -160,7 +161,7 @@ impl PendingLock {
 }
 
 impl SyncReply<'_> {
-    fn send_locked(self, pending: PendingLock) -> Result<()> {
+    fn send_locked(self, pending: PendingLock<'_>) -> Result<()> {
         // The LOCK/UNLOCK changed volatile state on this original OPEN.
         // Losing the reply closes the connection and retires its OPENs.
         pending.check(self.tx.plan.owner)?;

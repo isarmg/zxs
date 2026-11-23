@@ -4,7 +4,7 @@ use super::{Held, Object, Slot};
 use crate::smb::{
     RustSessionWitness,
     connection::Fault,
-    wire::lock_fields::{LockChange, LockFields, LockRequest, Span},
+    wire::lock_fields::{LockChange, LockFieldError, LockFields, LockRequest, Span},
 };
 use std::{
     io,
@@ -26,6 +26,7 @@ pub(in crate::smb) enum RangeIoError {
 pub(in crate::smb) enum LockError {
     Session(Fault),
     Original(io::Error),
+    Fields(LockFieldError),
     AccessDenied,
     LockNotGranted,
     RangeNotLocked,
@@ -70,11 +71,30 @@ impl Ranges {
         self.active.retain(|io| !io.owner.ptr_eq(&owner));
     }
 
-    fn change(&mut self, owner: Weak<()>, span: Span, change: LockChange) -> Result<(), LockError> {
+    fn change_batch(&mut self, owner: &Weak<()>, request: LockFields<'_>) -> Result<(), LockError> {
+        let before = self.locks.len();
+        let unlocking = request.unlocking();
+        for entry in request.ordered() {
+            let result = entry
+                .map_err(LockError::Fields)
+                .and_then(|(span, change)| self.change(owner, span, change));
+            if let Err(error) = result {
+                // Acquisitions only append. Unlocks, and the MS-SMB2
+                // unexpected unlock in a lock batch, keep the completed prefix.
+                if !unlocking && !matches!(error, LockError::Fields(LockFieldError::UnexpectedUnlock)) {
+                    self.locks.truncate(before);
+                }
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn change(&mut self, owner: &Weak<()>, span: Span, change: LockChange) -> Result<(), LockError> {
         let mode = match change {
             LockChange::Shared => Mode::Shared,
             LockChange::Exclusive => Mode::Exclusive,
-            LockChange::Unlock => return self.unlock(&owner, span),
+            LockChange::Unlock => return self.unlock(owner, span),
         };
 
         // MS-FSA 2.1.4.10. A second exclusive acquisition conflicts even
@@ -83,25 +103,25 @@ impl Ranges {
         let conflicts_locks = self.locks.iter().any(|lock| {
             span.overlaps(lock.span)
                 && (mode == Mode::Exclusive
-                    || (lock.mode == Mode::Exclusive && !lock.owner.ptr_eq(&owner)))
+                    || (lock.mode == Mode::Exclusive && !lock.owner.ptr_eq(owner)))
         });
         let conflicts_io = self.active.iter().any(|io| {
             span.overlaps(io.span)
                 && match mode {
                     Mode::Shared => io.access == Intent::Write,
-                    Mode::Exclusive => !io.owner.ptr_eq(&owner),
+                    Mode::Exclusive => !io.owner.ptr_eq(owner),
                 }
         });
         if conflicts_locks || conflicts_io {
             return Err(LockError::LockNotGranted);
         }
         if self.locks.len() >= LOCKS_PER_FILE
-            || self.locks.iter().filter(|lock| lock.owner.ptr_eq(&owner)).count() >= LOCKS_PER_OPEN
+            || self.locks.iter().filter(|lock| lock.owner.ptr_eq(owner)).count() >= LOCKS_PER_OPEN
         {
             return Err(LockError::Resources);
         }
         self.locks.try_reserve(1).map_err(|_| LockError::Resources)?;
-        self.locks.push(Lock { span, owner, mode });
+        self.locks.push(Lock { span, owner: owner.clone(), mode });
         Ok(())
     }
 
@@ -181,28 +201,28 @@ impl Slot {
         self.range_io(old.min(new), old.abs_diff(new), Intent::Write)
     }
 
-    fn change_lock(&self, span: Span, change: LockChange) -> Result<(), LockError> {
+    fn change_lock(&self, request: LockFields<'_>) -> Result<(), LockError> {
         if !self.bound || self.released || self.retained || !matches!(self.object, Object::File(..)) {
             return Err(LockError::AccessDenied);
         }
         let mut table = self.owner.table.lock().map_err(|_| LockError::Unavailable)?;
         let row = table.objects.get_mut(&self.object).ok_or(LockError::Unavailable)?;
-        row.ranges.change(Arc::downgrade(&self.identity), span, change)
+        row.ranges.change_batch(&Arc::downgrade(&self.identity), request)
     }
 }
 
 /// An exact mutation of the original OPEN's in-memory locks, not a wire ID
 /// or new authority. The same synchronous lane cannot retask it before send.
 #[must_use]
-pub(in crate::smb) struct PreparedLock {
+pub(in crate::smb) struct PreparedLock<'raw> {
     owner: Weak<()>,
     object: Object,
-    request: LockFields,
+    request: LockFields<'raw>,
     scope: RustSessionWitness,
 }
 
-impl PreparedLock {
-    pub(in crate::smb) fn matches(&self, request: LockFields) -> bool {
+impl PreparedLock<'_> {
+    pub(in crate::smb) fn matches(&self, request: LockFields<'_>) -> bool {
         self.request == request
     }
 
@@ -225,11 +245,11 @@ impl PreparedLock {
 }
 
 impl<H> Held<H> {
-    pub(super) fn change_lock(
+    pub(super) fn change_lock<'raw>(
         &self,
-        request: &LockRequest<'_, '_>,
+        request: &LockRequest<'_, 'raw>,
         current: impl FnOnce(&RustSessionWitness) -> io::Result<()>,
-    ) -> Result<PreparedLock, LockError> {
+    ) -> Result<PreparedLock<'raw>, LockError> {
         let scope = request.original().rust_session_witness().map_err(LockError::Session)?;
         let request = request.fields();
         if !scope.is_lock() || self.grant.0 & FILE_DATA == 0 {
@@ -237,7 +257,7 @@ impl<H> Held<H> {
         }
         current(&scope).map_err(LockError::Original)?;
         let Held { _slot: slot, .. } = self;
-        slot.change_lock(request.span(), request.change())?;
+        slot.change_lock(request)?;
         Ok(PreparedLock {
             owner: Arc::downgrade(&slot.identity),
             object: slot.object,

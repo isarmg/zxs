@@ -273,11 +273,11 @@ impl WritableFileOpen{
         }).map_err(FileWriteError::Fault)?;
         Ok(PreparedFileFlush{result,original:OriginalTurn::accepted(scope,self)})
     }
-    pub(in crate::smb) fn change_lock(&self,tree:&RustRoot,request:&LockRequest<'_,'_>)
-        ->Result<PreparedLock,LockError>{
+    pub(in crate::smb) fn change_lock<'raw>(&self,tree:&RustRoot,request:&LockRequest<'_,'raw>)
+        ->Result<PreparedLock<'raw>,LockError>{
         self.held.change_lock(request,|scope|self.require_current(tree,scope))
     }
-    pub(in crate::smb) fn require_lock(&self,tree:&RustRoot,proof:&PreparedLock)->stdio::Result<()>{
+    pub(in crate::smb) fn require_lock(&self,tree:&RustRoot,proof:&PreparedLock<'_>)->stdio::Result<()>{
         let Held{_slot:slot,..}=&self.held;
         proof.require(slot,|scope|self.require_current(tree,scope))
     }
