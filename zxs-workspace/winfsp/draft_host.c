@@ -97,13 +97,16 @@ static PyObject *run(PyObject *module, PyObject *args)
     NTSTATUS status = STATUS_SUCCESS, dispatcher_status = STATUS_UNSUCCESSFUL;
     BOOL created = FALSE, moved = FALSE, started = FALSE, linked = FALSE, shown = FALSE;
     BOOL normal = FALSE, absent = FALSE, joined = FALSE, accepted = FALSE, release_pending = FALSE;
+    BOOL replacement = FALSE, checked_replacement = FALSE;
     const char *reason = "cancelled-before-create";
     pair = PyObject_CallMethod(choice, "_claim", "O", plane);
     if (!pair) return NULL;
     if (pair == Py_None) goto end;
-    if (!PyTuple_CheckExact(pair) || PyTuple_GET_SIZE(pair) != 2 ||
-        !PyUnicode_CheckExact(PyTuple_GET_ITEM(pair, 0)) || !PyBytes_CheckExact(PyTuple_GET_ITEM(pair, 1)))
+    if (!PyTuple_CheckExact(pair) || PyTuple_GET_SIZE(pair) != 3 ||
+        !PyUnicode_CheckExact(PyTuple_GET_ITEM(pair, 0)) || !PyBytes_CheckExact(PyTuple_GET_ITEM(pair, 1)) ||
+        !PyBool_Check(PyTuple_GET_ITEM(pair, 2)))
         { reason = "invalid-original-mount-choice"; status = STATUS_INVALID_PARAMETER; goto end; }
+    replacement = PyTuple_GET_ITEM(pair, 2) == Py_True;
     path = PyUnicode_AsWideCharString(PyTuple_GET_ITEM(pair, 0), &units);
     sd = PyTuple_GET_ITEM(pair, 1);
     if (!path || units < 80 || units >= 32768 || wcslen(path) != (size_t)units ||
@@ -112,7 +115,7 @@ static PyObject *run(PyObject *module, PyObject *args)
         GetSecurityDescriptorLength(PyBytes_AS_STRING(sd)) != (DWORD)PyBytes_GET_SIZE(sd))
         { reason = "invalid-original-path-or-acl"; status = STATUS_INVALID_PARAMETER; goto end; }
     /* Preclaim the original before Create can start a service, even before any kernel volume exists. */
-    ZwDraftNamespaceInterface(&vp, &host.ops); host.ops.DispatcherStopped = stopped;
+    ZwDraftPrepareNamespace(&vp, &host.ops, replacement); host.ops.DispatcherStopped = stopped;
     keeper.Interface = &host.ops; keeper.UmFileContextIsUserContext2 = TRUE;
     if (!ZwDraftBindNamespace(&keeper, plane)) { reason = "original-claim-refused"; status = STATUS_ACCESS_DENIED; goto end; }
     if (!ZwDraftRememberLease(&keeper, choice)) {
@@ -178,6 +181,17 @@ static PyObject *run(PyObject *module, PyObject *args)
             continue;
         }
         if (selected != 1) { reason = "forced-or-controller-lost"; status = STATUS_CANCELLED; break; }
+        if (replacement && !checked_replacement) {
+            checked_replacement = TRUE;
+            /* Independent real FSD by-name witness before stopping admission. It cannot make
+             * a session normal and failure cannot prevent orderly drain; review refuses it. */
+            if (verify_pair(choice, plane, fs, disk, path, &mount, FALSE, &status)) {
+                PyObject *device = PyUnicode_FromWideChar(disk, NAME_COUNT - 1);
+                PyObject *observed = device ? PyObject_CallMethod(choice, "_observe_replace_name", "OO", plane, device) : NULL;
+                Py_XDECREF(observed); Py_XDECREF(device);
+            }
+            PyErr_Clear();
+        }
         ULONG remaining = 0;
         int fenced = ZwDraftFenceIfIdle(fs, &remaining);
         PyObject *r = fenced >= 0 ? PyObject_CallMethod(choice, "_count", "k", (unsigned long)remaining) : NULL;

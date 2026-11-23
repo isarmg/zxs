@@ -5,10 +5,10 @@ import struct
 from threading import Event, Lock, current_thread, main_thread
 
 from .._windows_access import ACL, ALLOW, SD, FILE_ALL
-from .._windows_output import ATTR, OPEN, READ_CONTROL, SYNC
+from .._windows_output import ATTR, OPEN, READ_CONTROL, SYNC, _ok
 from ..model import Rejected, new_id
-from ..windows_nt import I32, I64, P, U32, _Basic, _Id, _IO, _Standard, _function
-from .container_windows_fileplane import WindowsDraftFilePlane
+from ..windows_nt import I32, I64, P, U32, _Basic, _Id, _IO, _Object, _Standard, _String, _function
+from .container_windows_fileplane import WindowsDraftFilePlane, _MARK
 
 _DEVICE = re.compile(r"\\Device\\Volume\{[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}")
 
@@ -39,12 +39,16 @@ def _reparse_record(device):
 
 class WindowsPrivateDraftMount:
     """One original owner, one generated new leaf, one foreground choice. No cold adoption by name."""
-    def __init__(self, draft, alias, *, confirmed=False):
-        self._plane = WindowsDraftFilePlane(draft, alias, confirmed=confirmed)
+    def __init__(self, draft, alias, *, confirmed=False, replacement=False):
+        self._plane = WindowsDraftFilePlane(draft, alias, confirmed=confirmed, replacement=replacement)
+        self._replace = replacement
+        self.retained_scratch = self._plane.retained_scratch
         self._draft, self._home = draft, draft._home
         self._leaf = new_id() + ".zwm"
         self._native = self._home.name(self._leaf)
         self._shell = self._home.shell_name(self._leaf)
+        if replacement and len((self._shell + "\\" + "x"*120 + _MARK + ":$DATA").encode("utf-16-le")) >= 520:
+            raise Rejected("choose a shorter Windows private directory to leave room for editor/stream names")
         self._lock, self._ready = Lock(), Event()
         self._used = self._running = self._claimed = self._sealing = False
         self._mode = 0  # 0 active, 1 orderly stop, 2 explicitly abandon including outstanding references
@@ -76,7 +80,7 @@ class WindowsPrivateDraftMount:
             if self._mode:
                 return None
             self._claimed = True
-            return self._native, self._junction_sd()
+            return self._native, self._junction_sd(), self._replace
 
     def _verify(self, plane, device, volume, fid):
         if plane is not self._plane or type(fid) is not bytes or len(fid) != 16 or not any(fid):
@@ -110,6 +114,63 @@ class WindowsPrivateDraftMount:
                 raise Rejected("the original Windows mount identity changed")
             self._identity = now
         self._check_parent()
+
+    def _observe_replace_name(self, plane, device):
+        # Separate from the dispatcher's Rename callback. Even a returned callback does
+        # not prove the FSD finished installing the new name on the original volume.
+        if plane is not self._plane or not self._replace or not _DEVICE.fullmatch(device):
+            raise Rejected("not this original native replacement owner")
+        snapshot = plane.replacement_witness()
+        if snapshot is None:
+            return
+        alias, scratch, index = snapshot
+        self._check_parent()
+        with self._lock:
+            if self._identity is None or self._identity[0] != device:
+                raise Rejected("the native lookup does not use this original virtual volume")
+        k = c.WinDLL("kernel32.dll", use_last_error=True, winmode=0x800)
+        n = c.WinDLL("ntdll.dll", winmode=0x800)
+        open_ = _function(n, "NtOpenFile", I32, c.POINTER(P), U32, c.POINTER(_Object), c.POINTER(_IO), U32, U32)
+        close = _function(k, "CloseHandle", I32, P)
+        name = _function(k, "GetFinalPathNameByHandleW", U32, P, c.POINTER(c.c_wchar), U32, U32)
+
+        def by_name(suffix):
+            # The mount pair was independently pinned before this lookup. Do not wait
+            # for a conflicting editor oplock: treat its alternate status as unconfirmed.
+            raw = ("\\??\\" + self._native[4:] + suffix).encode("utf-16-le")
+            buf = c.create_string_buffer(raw + b"\0\0")
+            us = _String(len(raw), len(raw) + 2, c.addressof(buf))
+            obj = _Object(c.sizeof(_Object), None, c.pointer(us), 0x40, None, None)
+            h, io = P(), _IO()
+            status = open_(c.byref(h), ATTR | SYNC, c.byref(obj), c.byref(io), 7,
+                           0x100 | 0x40 | 0x20)  # COMPLETE_IF_OPLOCKED | NON_DIRECTORY | SYNCHRONOUS_NONALERT.
+            return h.value, status, io
+
+        actual, status, io = by_name(alias)
+        if not actual:
+            raise Rejected("could not independently open the current WinFsp alias")
+        try:
+            _ok("independently open the current WinFsp alias without waiting for an oplock", status, io)
+            got_path = c.create_unicode_buffer(1024)
+            got = name(actual, got_path, len(got_path), 2)  # VOLUME_NAME_NT, FILE_NAME_NORMALIZED.
+            number, io = I64(), _IO()
+            result = self._home.api.query_info(actual, c.byref(io), c.byref(number), c.sizeof(number), 6)
+            _ok("query the independently reopened WinFsp file index", result, io)  # FileInternalInformation.
+            if (not 0 < got < len(got_path) or got_path.value != device + alias
+                    or io.information != c.sizeof(number) or number.value != index):
+                raise Rejected("the actual original WinFsp target has not confirmed the promoted file index")
+        finally:
+            if not close(actual):
+                raise c.WinError(c.get_last_error())
+        old, status, io = by_name(scratch)
+        if old:
+            if not close(old):
+                raise c.WinError(c.get_last_error())
+            raise Rejected("the original temporary alias may still resolve")
+        if status & 0xffffffff != 0xc0000034:  # STATUS_OBJECT_NAME_NOT_FOUND at the fixed volume/root only.
+            raise Rejected("could not establish the original scratch alias is absent")
+        self._check_parent()
+        plane.confirm_replacement(alias, scratch, index)
 
     def _advertise(self):
         with self._lock:

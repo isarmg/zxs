@@ -75,6 +75,29 @@ class DesktopDecision(unittest.TestCase):
             self.assertIn(self.c.id[:8], box.alias.text())
             self.assertIsNone(box.job)
 
+    def test_opt_in_scratch_keeps_both_files_and_original_selection(self):
+        with (patch.object(ui, "packaged", return_value=True),
+              patch.object(ui, "confirm", return_value=True) as consent):
+            box = self.open(False)
+            self.assertFalse(box.replacement.isChecked())
+            box.replacement.setChecked(True)
+            box.primary()  # Non-ASCII fallback alias cannot be used in this narrow mode.
+            consent.assert_not_called()
+            self.assertIsNone(box.job)
+            box.alias.setText("report.txt")
+            captured = []
+            def mount(*args):
+                captured.append(args)
+                box.capture.owner = NS(retained_scratch="retained-private-scratch")
+                return self.draft_review
+            box.capture.run = mount
+            box.primary(); self.finish()
+            self.assertTrue(captured[0][-1])
+            self.assertIs(captured[0][0], box.selected)
+            self.assertIn("不会删除", consent.call_args.args[2])
+            self.assertIn("retained-private-scratch", box.info.toPlainText())
+            self.assertEqual(box.state, "reviewed")
+
     def test_intent_and_retry_are_never_implicit(self):
         effects = []
         receipts = [Phase.UNKNOWN, Phase.CONFIRMED]

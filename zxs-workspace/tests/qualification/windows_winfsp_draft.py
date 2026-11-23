@@ -2,6 +2,7 @@
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 if __name__ == "__main__":
     here = Path(__file__).resolve()
@@ -49,6 +50,52 @@ class FileCallbacks(LocalWorkingFile):
         self.assertEqual(self.requests, [TARGET])
 
 
+    def test_scratch_barrier_failure_does_not_displace_the_selected_primary(self):
+        # Model only: real held NTFS and provenance; no driver, mount or accepted detach.
+        choice, _ = self.choose_draft(b"seed", max_bytes=16)
+        with choice.begin(confirmed=True) as draft:
+            plane = WindowsDraftFilePlane(draft, "review.bin", confirmed=True, replacement=True)
+            lease = object()
+            plane.bind(lease, True, True)
+            scratch = plane.retained_scratch
+            try:
+                writer, info = plane.create_scratch("\\editor.tmp", 2 << 24, 2)
+                self.assertEqual((info[0], info[-1]), (0, 3))
+                self.assertEqual(plane.write(writer, 0, b"new", False, False)[0], 3)
+                plane.flush(writer)
+                plane.close_file(writer)
+                rename, _ = plane.open_file("\\editor.tmp", 1 << 24, 0x10000)
+                old, info = plane.open_file("\\review.bin", 1 << 24, 1)
+                self.assertEqual((info[0], info[-1]), (4, 2))
+                with self.assertRaises(BlockingIOError):
+                    plane.replace(rename, "\\editor.tmp", "\\review.bin")
+                self.assertEqual(plane.read(old, 0, 16), b"seed")
+                plane.close_file(old)
+
+                def lost_barrier(h):
+                    if h is draft._scratch.handle:
+                        raise OSError("synthetic scratch flush failure")
+                    return flush(h)
+                api = draft._home.api
+                flush = api.flush
+                with patch.object(api, "flush", lost_barrier), self.assertRaises(OSError):
+                    plane.replace(rename, "\\editor.tmp", "\\review.bin")
+                old, info = plane.open_file("\\review.bin", 1 << 24, 1)
+                self.assertEqual((info[-1], plane.read(old, 0, 16)), (2, b"seed"))
+                self.assertEqual(draft._file_id, draft._initial.file_id)
+                self.assertIsNone(plane.replacement_witness())
+                plane.close_file(old)
+                plane.close_file(rename)
+                self.assertEqual(plane.stop_opening(), 0)
+            finally:
+                plane.abandon(lease)
+            with self.assertRaises(Rejected):
+                draft.review(confirmed=True)
+        self.assertEqual(Path(choice.local_file).read_bytes(), b"seed")
+        self.assertEqual(Path(scratch).read_bytes(), b"new")
+        self.assertEqual(self.requests, [TARGET])
+
+
 def qualify(spelling):
     if sys.platform != "win32":
         raise SystemExit("Requires a real ordinary Windows NTFS user and the separate trusted native extension.")
@@ -59,7 +106,8 @@ def qualify(spelling):
         zone = _effective_zone(ORIGIN + TARGET)
         if zone not in (3, 4):
             raise SystemExit("No qualifying existing policy for the inert synthetic URL.")
-        names = ("test_exact_file_through_native_sdk_callbacks", "test_original_namespace_and_attachment")
+        names = ("test_exact_file_through_native_sdk_callbacks", "test_original_namespace_and_attachment",
+                 "test_scratch_barrier_failure_does_not_displace_the_selected_primary")
         suite = unittest.TestSuite(FileCallbacks(name, root, spelling, security, actor, profile, zone) for name in names)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return int(not (result.wasSuccessful() and result.testsRun == len(names) and not result.skipped))

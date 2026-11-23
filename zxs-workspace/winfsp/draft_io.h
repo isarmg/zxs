@@ -6,6 +6,7 @@
 /* Native ordinary-logon view: root + one exact alias + verified read-only provenance stream.
  * No host, mounted volume, edit completion or normal detach is implied by building an interface. */
 void ZwDraftNamespaceInterface(FSP_FSCTL_VOLUME_PARAMS *params, FSP_FILE_SYSTEM_INTERFACE *ops);
+void ZwDraftPrepareNamespace(FSP_FSCTL_VOLUME_PARAMS *params, FSP_FILE_SYSTEM_INTERFACE *ops, BOOL replacement);
 int ZwDraftBindNamespace(FSP_FILE_SYSTEM *fs, PyObject *plane);
 void ZwDraftFileInterface(FSP_FILE_SYSTEM_INTERFACE *ops);
 /* GIL held. Original one-shot WindowsDraftFilePlane only, before any dispatcher starts.

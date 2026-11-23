@@ -44,7 +44,7 @@ Windows Server x64 托管作业使用固定的 [WinFsp 2.1 头文件](https://gi
 
 另一张专用回调表声明一个区分大小写的根目录、一项操作者指定的 Windows 别名，以及原下载策略要求时的只读 `Zone.Identifier` 数据流。ZIP 只读掩码与原归档规则保持不变。新表使用真实 SDK 的目录及数据流记录；输出缓冲不足时不会谎报完整列表。为完整来源流语法预留 22 个 UTF-16 单元（含流类型），本接口本机别名上限 233 个单元；别名不替代 R3 容器名；未支持目录内创建、编辑器临时文件替换、其他 ADS 或可执行映像。根目录属性不暴露私有工作目录的邻居、名称或修改时间。
 
-分派守卫只接受同一普通中完整性登录会话的用户模式 FILE_OPEN，不接收备份意图、打开目标目录、重解析点或按 ID 打开。真实 SDK 继续核对同一登录 SID 的自相对安全描述符，之后再逐个上下文约束数据、目录和来源流的实际操作。保留执行拒绝不是 SmartScreen 或防病毒检查。每次投影都重新验证现有 Windows 来源政策及原 NTFS 文件上的实际 ADS；不合时拒绝，不提供去掉标记的回退。完整读取来源流及 SDK 枚举还不等于已验证 Windows 资源管理器、复制工具或附件管理器会传播来源；[固定版本示例的数据流接口](https://github.com/winfsp/winfsp/blob/v2.1/tst/memfs/memfs.cpp#L1973-L2031)。
+分派守卫只接受同一普通中完整性登录会话的用户模式 FILE_OPEN，不接收备份意图、打开目标目录、重解析点或按 ID 打开。真实 SDK 继续核对同一登录 SID 的自相对安全描述符，之后再逐个上下文约束数据、目录和来源流的实际操作。保留执行拒绝不是 SmartScreen 或防病毒检查。[固定版 FSD 查命名流前](https://github.com/winfsp/winfsp/blob/ddca7bd5481857a65ba552f643b8776fd070836f/src/sys/file.c#L2746-L2761)还会发出一个带强制访问检查的只读主文件属性 (FILE_OPEN + OPEN_REPARSE_POINT) 请求；只给同一普通登录的实际现有正文通过这条无数据权路径，不放宽真正的重解析、创建、删除或根目录访问。每次投影都重新验证现有 Windows 来源政策及原 NTFS 文件上的实际 ADS；不合时拒绝，不提供去掉标记的回退。完整读取来源流及 SDK 枚举还不等于已验证 Windows 资源管理器、复制工具或附件管理器会传播来源；[固定版本示例的数据流接口](https://github.com/winfsp/winfsp/blob/v2.1/tst/memfs/memfs.cpp#L1973-L2031)。
 
 本表不装驱动、不启动原生卷、不创建盘符或目录挂载点。原不分派的文件回调资格仍保留，新的普通登录资格用例也只直接调用 SDK 回调、没有运行。真正的私用挂载、排空、卸载与手动提交仍须另行集成和验证。
 
@@ -60,4 +60,13 @@ Windows Server x64 托管作业使用固定的 [WinFsp 2.1 头文件](https://gi
 
 R3 单文件目录挂载的数据文件允许普通 `GENERIC_READ | GENERIC_WRITE` 打开现存原件（`OPEN_EXISTING` 和只命中该原件的 `OPEN_ALWAYS`），按偏移读取/写入、SetEndOfFile 改 EOF 和 FlushFileBuffers。泛型写包含 EA/属性授权位，**不等于**支持设置 EA、任意元数据、写穿、执行、删除或改 ACL。根仍只能列出/遍历，普通 Win32 目录句柄的 BACKUP_SEMANTICS 仅允许在此根上且发起者不具有备份/还原特权；同一标志不能用于文件。来源流始终只读。缺失名字的 `OPEN_ALWAYS` 不能创建。用文件指针和 SetEndOfFile 原位截短不会重建数据文件或丢标记。
 
-刻意不把 `CREATE_ALWAYS`/`FILE_OVERWRITE` 当作普通截短：[WinFsp 2.1 内核完成覆盖时会另外处理原命名流](https://github.com/winfsp/winfsp/blob/v2.1/src/sys/create.c#L1137-L1155)。在没有完整的临时文件替换和来源证明之前，不支持靠新建/重命名/覆盖的编辑器。既有 ZIP 只读快照、未知名称和可执行访问不因此开放。正式 Windows 验收要从真实 Win32 API 验证泛型打开、偏移写/截短后的来源流、目录浏览、晚到写和正常回执；这里只写了源码和独立资格用例。
+刻意不把 `CREATE_ALWAYS`/`FILE_OVERWRITE` 当作普通截短：[WinFsp 2.1 内核完成覆盖时会另外处理原命名流](https://github.com/winfsp/winfsp/blob/v2.1/src/sys/create.c#L1137-L1155)。默认不支持靠新建/重命名/覆盖的编辑器。下节为另外明确选择的一次经典替换源码。既有 ZIP 只读快照、未知名称和可执行访问不因此开放。正式 Windows 验收要从真实 Win32 API 验证泛型打开、偏移写/截短后的来源流、目录浏览、晚到写和正常回执；这里只写了源码和独立资格用例。
+
+
+### 可选的同目录经典替换（单个临时文件）
+
+单独选择时，额外只准一个未存在的普通本机临时文件。真实普通登录的 `FILE_CREATE` 经 SDK 查原根允许添加，随后严格检验 ASCII 不冲突的实际名字和权限；不接受任意另存、目录、重解析点、外来安全描述符、覆盖式创建或备用命名流。每个实际私用 NTFS 正文（包括新临时文件）保持独立真实文件身份和独占句柄，每项分配独立且不复用的虚拟 FileIndex。临时文件在写正文前先同步并核原来源流。根枚举最多两项，续页不谎报 EOF。
+
+只处理 [WinFsp 2.1 经典 FileRenameInformation](https://github.com/winfsp/winfsp/blob/v2.1/src/sys/fileinfo.c#L1609-L1798) 的同目录正向覆盖：临时文件用曾授权的 DELETE 句柄（但无写正文权），目的只可能是所选原别名。验证这次原请求的登录令牌和确切上下文；只在 SDK 当次目标核验中提供对原名的 DELETE 检查，不给普通原文件打开授予 DELETE。显式拦截 FileDispositionInformation／Ex、RenameEx 和 DeleteOnClose；其他改名、硬链接、ACL、EA、执行和删除照旧不支持。旧正文未最终 Close、有兄弟打开、临时写没有实际 Flush 或不再可证时拒绝；任何情况下都不删除原实物。只在双原件核实及同步后一次改变所选别名指向。物理目录不进行破坏式改名。
+
+用户停止时（先关闭编辑器和相关资源管理器引用），宿主独立从已验证原卷重开所选名，核对真实 FileInternalInformation 与内核路径，确认虚拟临时名不存在；再走真实 Close/原卷正常撤下证明。没有重开证据或临时内容未成功替换时不能审阅、准备或上载。保留两份文件及其位置。源例 `windows_winfsp_live_draft.py --consent-live-winfsp-scratch-replace-and-retain-both-private-files` 要求独立可丢弃原生环境及专用构建；以真实 Win32 `SetFileInformationByHandle(FileRenameInfo)` 和同一原号的本机封存验证窄路径，拒绝未刷/忙句柄、其他名字/权限；不向服务器发送数据。未运行。正式验证仍需覆盖编辑器具体版本、失答/停止、来源流复制与真实签名包；不等于已支持 ReplaceFileW、MoveFileExW、QSaveFile 6.11.2、WPS 或 Office；实际 API 差别见[桌面正文说明](../docs/windows-remote-draft.md#可选一次同目录临时文件替换)。

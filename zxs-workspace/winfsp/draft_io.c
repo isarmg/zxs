@@ -1,8 +1,9 @@
-/* One existing working file through actual WinFsp 2.1 callback ABIs. No archive, mount or R3 send. */
+/* One selected working file and optional local scratch through WinFsp 2.1. No archive, mount or R3 send. */
 #include "draft_io.h"
 #include "logon_policy.h"
 #include <stdint.h>
 #include <limits.h>
+#include <stddef.h>
 #include <string.h>
 #include <wchar.h>
 
@@ -16,8 +17,10 @@
 static NTSTATUS open_file(FSP_FILE_SYSTEM *, PWSTR, UINT32, UINT32, PVOID *, FSP_FSCTL_FILE_INFO *);
 typedef struct {
     PyObject *plane, *lease;
-    SessionPolicy policy; AlignedBuffer zone; DWORD zone_bytes;
-    BOOL ready, scoped, hidden, fenced, late, real;
+    SessionPolicy policy;
+    AlignedBuffer zone, scratch, add_file;
+    DWORD zone_bytes, scratch_bytes, add_file_bytes;
+    BOOL ready, scoped, replacement, hidden, fenced, late, real;
     SRWLOCK gate; LONG active;
     DWORD cert_thread; BOOL cert_unused;
 } DRAFT_BINDING;
@@ -38,6 +41,8 @@ static NTSTATUS failure(void)
 {
     NTSTATUS s = STATUS_IO_DEVICE_ERROR;
     if (PyErr_ExceptionMatches(PyExc_FileNotFoundError)) s = STATUS_OBJECT_NAME_NOT_FOUND;
+    else if (PyErr_ExceptionMatches(PyExc_FileExistsError)) s = STATUS_OBJECT_NAME_COLLISION;
+    else if (PyErr_ExceptionMatches(PyExc_BlockingIOError)) s = STATUS_SHARING_VIOLATION;
     else if (PyErr_ExceptionMatches(PyExc_NotADirectoryError)) s = STATUS_NOT_A_DIRECTORY;
     else if (PyErr_ExceptionMatches(PyExc_IsADirectoryError)) s = STATUS_FILE_IS_A_DIRECTORY;
     else if (PyErr_ExceptionMatches(PyExc_PermissionError)) s = STATUS_ACCESS_DENIED;
@@ -59,7 +64,7 @@ static void poison(PyObject *plane)
 static NTSTATUS file_info(PyObject *row, FSP_FSCTL_FILE_INFO *out)
 {
     if (!row) return failure();
-    if (!PyTuple_CheckExact(row) || 6 != PyTuple_GET_SIZE(row)) return STATUS_DATA_ERROR;
+    if (!PyTuple_CheckExact(row) || 7 != PyTuple_GET_SIZE(row)) return STATUS_DATA_ERROR;
     UINT64 fields[5];
     for (int i = 0; i < 5; i++) {
         PyObject *v = PyTuple_GET_ITEM(row, i);
@@ -74,9 +79,14 @@ static NTSTATUS file_info(PyObject *row, FSP_FSCTL_FILE_INFO *out)
     if (!PyLong_CheckExact(k)) return STATUS_DATA_ERROR;
     long kind = PyLong_AsLong(k);
     if (PyErr_Occurred()) return failure();
-    if (kind < 1 || kind > 3 || (1 == kind && fields[0])) return STATUS_DATA_ERROR;
+    PyObject *id = PyTuple_GET_ITEM(row, 6);
+    if (!PyLong_CheckExact(id)) return STATUS_DATA_ERROR;
+    UINT64 index = PyLong_AsUnsignedLongLong(id);
+    if (PyErr_Occurred()) return failure();
+    if (kind < 1 || kind > 4 || (1 == kind ? fields[0] || index != 1 : index < 2 || index > 3) ||
+        (kind == 4 && index != 3)) return STATUS_DATA_ERROR;
     out->FileAttributes = 1 == kind ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_ARCHIVE;
-    out->IndexNumber = 1 == kind ? 1 : 2; /* A named stream belongs to the same Windows file. */
+    out->IndexNumber = index; /* A named stream keeps its actual virtual backing FileIndex. */
     out->FileSize = fields[0];
     out->AllocationSize = (fields[0] + 4095) & ~(UINT64)4095;
     out->CreationTime = fields[1]; out->LastAccessTime = fields[2];
@@ -84,18 +94,28 @@ static NTSTATUS file_info(PyObject *row, FSP_FSCTL_FILE_INFO *out)
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS open_file(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 granted,
-                          PVOID *ctx, FSP_FSCTL_FILE_INFO *info)
+static const FSP_FSCTL_TRANSACT_REQ *real_request(FSP_FILE_SYSTEM *fs)
+{
+    DRAFT_BINDING *b = binding(fs);
+    if (!b || !b->real || !b->ready || !b->replacement) return NULL;
+    FSP_FILE_SYSTEM_OPERATION_CONTEXT *op = FspFileSystemGetOperationContext();
+    return op ? op->Request : NULL;
+}
+
+static NTSTATUS finish_open(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 granted,
+                            BOOL create, BOOL target, BOOL probe, PVOID *ctx, FSP_FSCTL_FILE_INFO *info)
 {
     *ctx = NULL;
     PyObject *plane = owner(fs);
     if (!plane) return STATUS_DEVICE_NOT_READY;
-    size_t length = name ? wcsnlen_s(name, 274) : 0; /* slash, 255 UTF-16 units, optional fixed ADS */
-    if (length == 0 || length >= 274) return STATUS_OBJECT_NAME_INVALID;
+    size_t length = name ? wcsnlen_s(name, 274) : 0;
+    if (!length || length >= 274) return STATUS_OBJECT_NAME_INVALID;
     PyGILState_STATE gil = PyGILState_Ensure();
     PyObject *path = PyUnicode_FromWideChar(name, (Py_ssize_t)length);
-    PyObject *r = path ? PyObject_CallMethod(plane, "open_file", "Okk", path,
-                                             (unsigned long)opts, (unsigned long)granted) : NULL;
+    PyObject *r = !path ? NULL : create ?
+        PyObject_CallMethod(plane, "create_scratch", "Okk", path, (unsigned long)opts, (unsigned long)granted) :
+        PyObject_CallMethod(plane, "open_file", "OkkOO", path, (unsigned long)opts, (unsigned long)granted,
+                            target ? Py_True : Py_False, probe ? Py_True : Py_False);
     Py_XDECREF(path);
     NTSTATUS s = STATUS_SUCCESS;
     if (!r) s = failure();
@@ -108,7 +128,6 @@ static NTSTATUS open_file(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 g
         else s = file_info(PyTuple_GET_ITEM(r, 1), info);
         if (s == STATUS_SUCCESS) *ctx = (PVOID)(UINT_PTR)id;
         else {
-            /* Open may have created a context before producing malformed evidence. No accepted cut. */
             if (id && id <= INT64_MAX) {
                 PyObject *closed = PyObject_CallMethod(plane, "close_file", "K", (unsigned long long)id);
                 Py_XDECREF(closed); PyErr_Clear();
@@ -118,6 +137,17 @@ static NTSTATUS open_file(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 g
     }
     Py_XDECREF(r); PyGILState_Release(gil);
     return s;
+}
+
+static NTSTATUS open_file(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 granted,
+                          PVOID *ctx, FSP_FSCTL_FILE_INFO *info)
+{
+    const FSP_FSCTL_TRANSACT_REQ *req = real_request(fs);
+    BOOL create = req && req->Kind == FspFsctlTransactCreateKind;
+    BOOL target = create && req->Req.Create.OpenTargetDirectory;
+    BOOL probe = create && !target && (opts & FILE_COMPLETE_IF_OPLOCKED) &&
+        FSP_FSCTL_TRANSACT_REQ_TOKEN_PID(req->Req.Create.AccessToken) == GetCurrentProcessId();
+    return finish_open(fs, name, opts, granted, FALSE, target, probe, ctx, info);
 }
 
 static NTSTATUS information(FSP_FILE_SYSTEM *fs, PVOID ctx, FSP_FSCTL_FILE_INFO *info)
@@ -254,6 +284,8 @@ static int bind_file_plane(FSP_FILE_SYSTEM *fs, PyObject *plane, BOOL scoped)
         (scoped && (!fs->UmFileContextIsUserContext2 || fs->UmFileContextIsFullContext ||
                     fs->Interface->GetStreamInfo != scoped_streams || fs->Interface->GetSecurity != scoped_security)))
         return 0;
+    BOOL replacement = scoped && fs->Interface->Rename == scoped_rename;
+    if (replacement != (fs->Interface->Create == scoped_create)) return 0;
     PyObject *name = PyUnicode_FromString("zipworkspace.desktop.container_windows_fileplane");
     PyObject *loaded = name ? PyImport_GetModule(name) : NULL; /* Existing trusted application module only. */
     Py_XDECREF(name);
@@ -274,17 +306,23 @@ static int bind_file_plane(FSP_FILE_SYSTEM *fs, PyObject *plane, BOOL scoped)
     if (scoped) {
         PSID system = NULL; BOOL defaulted = FALSE;
         if (!GetSecurityDescriptorOwner(b->policy.file.bytes, &system, &defaulted) || !system ||
-            !descriptor(b->policy.sid.bytes, system, FILE_GENERIC_READ, &b->zone, &b->zone_bytes)) {
+            !descriptor(b->policy.sid.bytes, system, FILE_GENERIC_READ, &b->zone, &b->zone_bytes) ||
+            (replacement && (!descriptor(b->policy.sid.bytes, system, FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE,
+                                          &b->scratch, &b->scratch_bytes) ||
+                             !descriptor(b->policy.sid.bytes, system, FILE_GENERIC_READ | FILE_TRAVERSE | FILE_ADD_FILE,
+                                         &b->add_file, &b->add_file_bytes)))) {
             PyMem_Free(b); PyErr_SetString(PyExc_PermissionError, "cannot establish the origin-stream descriptor"); return 0;
         }
     }
     InitializeSRWLock(&b->gate);
     b->scoped = scoped;
+    b->replacement = replacement;
     b->lease = PyObject_CallNoArgs((PyObject *)&PyBaseObject_Type);
     if (!b->lease) { PyMem_Free(b); return 0; }
     b->plane = Py_NewRef(plane);
     fs->UserContext = b; /* Retain before the claim; never route requests through an unaccepted lease. */
-    PyObject *r = PyObject_CallMethod(plane, "bind", "OO", b->lease, scoped ? Py_True : Py_False);
+    PyObject *r = PyObject_CallMethod(plane, "bind", "OOO", b->lease, scoped ? Py_True : Py_False,
+                                      replacement ? Py_True : Py_False);
     if (!r || r != Py_None) {
         Py_XDECREF(r);
         PyObject *error = PyErr_GetRaisedException();

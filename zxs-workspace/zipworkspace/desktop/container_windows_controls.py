@@ -5,14 +5,14 @@ import re
 from threading import Event, Lock
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import (QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit,
+from PySide6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit,
                                QPlainTextEdit, QVBoxLayout, QWidget)
 
 from .._windows_provider import admitted_client, admitted_provider, packaged
 from ..model import Rejected
 from .container_management import Phase
 from .container_windows_draft import WindowsDraftChoice
-from .container_windows_fileplane import _alias
+from .container_windows_fileplane import _TEMP_ALIAS, _alias
 from .container_windows_mount import WindowsPrivateDraftMount
 from .container_windows_receipt import WindowsReceiptUncertain, lookup_original_windows_receipt
 from .container_windows_retire import WindowsRetirementPending, retire_original_windows_save
@@ -116,7 +116,7 @@ class _Capture:
         if self.cancelled.is_set():
             raise Rejected("已取消打开；没有提交。")
 
-    def run(self, selected, folder, alias, limit):
+    def run(self, selected, folder, alias, limit, replacement=False):
         self._check()
         admitted_provider()  # Refuse a missing/untrusted packaged component before writing or downloading.
         self._check()
@@ -136,7 +136,7 @@ class _Capture:
                 raise Rejected("该私有目录中已有此容器的原提交。请先使用「核对待处理的原提交」。") from error
             draft = self.draft = choice.begin(confirmed=True)
             self._check()
-            owner = WindowsPrivateDraftMount(draft, alias, confirmed=True)
+            owner = WindowsPrivateDraftMount(draft, alias, confirmed=True, replacement=replacement)
             with self.lock:
                 self._check()
                 self.owner, self.seed = owner, None
@@ -186,6 +186,7 @@ class _Disk(QDialog):
         self.browse = button("选择现有私有 NTFS 目录…", self._browse)
         form.addRow(self.browse, self.folder)
         self.alias, self.limit, self.prior = QLineEdit(), QLineEdit(), QLineEdit()
+        self.replacement = QCheckBox("允许一个本机临时文件替换所选文件（高级）")
         if recovery:
             self.prior.setPlaceholderText("留空读取该容器的活动原号；已归档时粘贴四段原号")
             form.addRow("原传输信息", self.prior)
@@ -196,8 +197,10 @@ class _Disk(QDialog):
                 alias = "文件-" + self.cid[:8]
             self.alias.setText(alias)
             self.limit.setText(str(max(64 << 20, node.length)))
+            self.replacement.setToolTip("仅限创建一个普通临时文件，刷新并关写后，同目录经典覆盖改名；不支持 QSaveFile、ReplaceFileW 或 Office/WPS 备份保存。")
             form.addRow("仅本机名称（不改变服务器名称）", self.alias)
-            form.addRow("本次文件大小上限（字节）", self.limit)
+            form.addRow("每份正文的大小上限（字节）", self.limit)
+            form.addRow(self.replacement)
         layout.addLayout(form)
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
@@ -211,7 +214,7 @@ class _Disk(QDialog):
             row.addWidget(btn)
         layout.addLayout(row)
         self.note("不会扫描目录或自动重试。核对回执无需打开原正文。" if recovery else
-                  "只呈现所选分支头的一个文件。使用能原位读写的编辑器；当前不支持新建临时文件后替换、重命名或执行程序。\n"
+                  "默认只呈现所选分支头的文件，支持原位读写。可明确选择一次同目录临时文件替换；其他重命名、任意另存为、删除和执行不支持。\n"
                   "选择自己的普通本机私有 NTFS 子目录，不要用同步目录、联接或共享目录。关闭编辑器和该目录的资源管理器窗口，再正常停止。只有之后点击提交才会上传。")
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
@@ -256,7 +259,7 @@ class _Disk(QDialog):
         self.force.setVisible(task == "mount" and state not in ("abandoned", "cancelling"))
         self.force.setEnabled(not self.done_closing)
         self.exit.setEnabled(idle and not stopping)
-        for w in (self.browse, self.alias, self.limit, self.prior):
+        for w in (self.browse, self.alias, self.limit, self.prior, self.replacement):
             w.setEnabled(idle and state == "setup")
 
     def primary(self):
@@ -309,15 +312,21 @@ class _Disk(QDialog):
         raw, node = self.limit.text(), self.selected[-1]
         if not re.fullmatch(r"[0-9]{1,19}", raw) or not node.length <= int(raw) <= (1 << 63)-4096:
             raise Rejected("输入能容纳原文件的明确字节上限。")
+        replacement = self.replacement.isChecked()
+        if replacement and _TEMP_ALIAS.fullmatch(alias) is None:
+            raise Rejected("此临时替换模式需要 1 至 120 个简单 ASCII 字符的本机别名；不会改服务器名。")
+        scratch = ("本次另允许创建并保留一个私有临时正文，不会删除被替换的私有原件；两份最多 "
+                   f"{2*int(raw):,} 字节。准备提交时还需要一份完整正文。仅支持经典同目录覆盖改名，"
+                   "编辑器必须先刷新和关闭临时写句柄。\n" if replacement else "")
         text = (f"服务器 {self.site!r}　账号 {self.conn._account!r}\n容器 {self.cid}，分支 {self.selected[-2].id!r}\n"
                 f"原节点 {node.id}\n本机目录 {folder!r}\n磁盘内的名称 {alias!r}，最多 {int(raw):,} 字节。\n"
-                "下载此原节点；Windows 可能启动已安装的 WinFsp 文件系统服务，并在所选目录创建新的私有目录挂载点。"
+                + scratch + "下载此原节点；Windows 可能启动已安装的 WinFsp 文件系统服务，并在所选目录创建新的私有目录挂载点。"
                 "不会安装驱动、占用盘符或自动提交。")
         if confirm(self, "打开所选原节点", text, attestation="我选择这个原节点和私有目录，并允许本次服务启动及挂载。",
                    action_text="下载并打开") and self.current():
             self.state = "mount"
             self.note("正在核对签名、原服务与私有位置，再读取所选分支头。")
-            self.work("mount", partial(self.capture.run, self.selected, folder, alias, int(raw)))
+            self.work("mount", partial(self.capture.run, self.selected, folder, alias, int(raw), replacement))
 
     def prepare(self):
         key = self.capture.draft.prepare_save(self.review, confirmed=True)
@@ -385,9 +394,11 @@ class _Disk(QDialog):
             self.paint()
 
     def _tail(self):
-        _, path = self.capture.live()
+        owner, path = self.capture.live()
+        scratch = getattr(owner, "retained_scratch", None)
         key = "\n原传输信息（可复制）：\n" + display_key(self.key) if self.key is not None else ""
-        return key + ("\n私有文件原计划位置（若已创建则保留）：" + path if path else "")
+        return (key + ("\n私有原稿位置（若已创建则保留）：" + path if path else "")
+                + ("\n私有临时正文位置（若已创建则保留）：" + scratch if scratch else ""))
 
     def poll(self):
         job, task = self.job, self.task
@@ -401,7 +412,8 @@ class _Disk(QDialog):
                     if self.state == "mount" and visible:
                         text = ("磁盘已就绪。在资源管理器中粘贴下面的目录（不会自动运行任何文件）：\n" + visible +
                                 "\n本机文件名：" + repr(self.alias.text()) +
-                                "\n编辑并关闭文件后点击「正常停止并核对修改」。现在没有上传。")
+                                "\n编辑并关闭文件后点击「正常停止并核对修改」。现在没有上传。"
+                                + (self._tail() if owner.retained_scratch is not None else ""))
                         if self.info.toPlainText() != text:
                             self.note(text)
                     elif self.state in ("stopping", "abandoned"):
@@ -425,7 +437,7 @@ class _Disk(QDialog):
                 self.state = "reviewed" if result.changed else "unchanged"
                 self.note(("已正常卸载，发现本地修改。准备提交只会封存字节和原号，不访问服务器。"
                            if result.changed else "已正常卸载，完整正文与原节点一致，无需上传。")
-                          + f"\n{result.length:,} 字节　SHA-256 {result.sha256}" + self._tail())
+                          + f"\n审阅原件：{result.local_file}\n{result.length:,} 字节　SHA-256 {result.sha256}" + self._tail())
             elif task in ("prepare", "recover"):
                 self.key, self.choice = result
                 self.matched = self.controls._known.get(self.key)
