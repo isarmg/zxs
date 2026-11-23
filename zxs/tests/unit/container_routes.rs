@@ -12,7 +12,7 @@ fn reserved_route_survives_reopen_and_cannot_change_disks() {
     let stage = routes.directory.path.join(format!(".{}.incoming", hex(id)));
     super::super::write_file(&stage, b"interrupted").unwrap();
     assert_eq!(routes.get(id).unwrap(), None);
-    assert!(routes.ids().unwrap().is_empty());
+    assert_eq!(routes.ids().unwrap(), [] as [Id; 0]);
     routes.reserve(id, token).unwrap();
     assert!(!stage.exists());
     routes.reserve(id, token).unwrap();

@@ -103,10 +103,7 @@ fn descriptor_requires_exact_ordered_nonempty_data_roster() {
     let maximum = (0..MAX_DATA_ROOTS)
         .map(|i| format!("/data-{i}"))
         .collect::<Vec<_>>();
-    let paths = maximum
-        .iter()
-        .map(|path| path.as_bytes())
-        .collect::<Vec<_>>();
+    let paths = maximum.iter().map(String::as_bytes).collect::<Vec<_>>();
     assert!(Descriptor::parse(&raw_roster(b"/system", b"/recycle", &paths)).is_ok());
     assert!(Descriptor::parse(&raw_roster(b"/system", b"/recycle", &[])).is_err());
 }

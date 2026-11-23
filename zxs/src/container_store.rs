@@ -369,14 +369,7 @@ impl Store {
         }
         // Also covers a prior failed first publication of this directory.
         volume.sync_data()?;
-        let destination = directory
-            .path
-            .join(entry_leaf(receipt.sequence, receipt.mutation.request));
-        match fs::symlink_metadata(&destination) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-            Ok(_) => return Err(invalid("container receipt position already exists").into()),
-        }
+        let destination = vacant_receipt_path(&directory, &receipt)?;
         volume.require_named()?;
         directory.require_named()?;
         authorize()?;
@@ -635,6 +628,17 @@ impl Store {
             ));
         }
         Ok(Some(NodeBytes { node, file }))
+    }
+}
+
+fn vacant_receipt_path(directory: &HeldDir, receipt: &Receipt) -> io::Result<PathBuf> {
+    let destination = directory
+        .path
+        .join(entry_leaf(receipt.sequence, receipt.mutation.request));
+    match fs::symlink_metadata(&destination) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(destination),
+        Err(e) => Err(e),
+        Ok(_) => Err(invalid("container receipt position already exists")),
     }
 }
 
