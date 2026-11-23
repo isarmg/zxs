@@ -2,6 +2,13 @@
 
 Linux 走独立本机验收；Windows、macOS 走[桌面 CI](docs/hosted-desktop-qualification.md)。下表列源码和待验项；既有验证见 [README](README.md#平台与发行状态)。
 
+## 远程文件容器
+
+- 已写完待测试（Linux）：HTTPS 连接、容器和分支历史、精确节点另存、接入本机编辑卷、显式提交及按原号恢复。
+- 未写完：把 Windows 和 macOS 的原生文件交付接入桌面容器页，完成这两个平台的可编辑远程工作卷。
+
+## 独立 ZIP 工作区
+
 | 工作流 | 当前状态 | 下一道验收 |
 | --- | --- | --- |
 | 整目录 Store ZIP/ZIP64、历史与工作树 CLI | 可签出、查历史和手动提交。 | 验无覆盖发布、断线、单成员 4 GiB、峰值占用与真实 SMB。 |
