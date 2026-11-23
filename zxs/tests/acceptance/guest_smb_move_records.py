@@ -1,4 +1,4 @@
-"""Independently observe the one original v19 SYSTEM for the disposable case."""
+"""Independently observe the one original v20 SYSTEM for the disposable case."""
 
 from collections import defaultdict
 from contextlib import contextmanager
@@ -14,7 +14,7 @@ TARGET = b"Target"
 NAME = b"zxs-normal-move.bin"
 ROOT = bytes(16)
 APPLICATION = 0x5A585331
-SCHEMA = 19
+SCHEMA = 20
 DB = "SYSTEM.sqlite3"
 QUERY = Path(__file__).with_name("rust_smb_cross_f_receipt.sql")
 

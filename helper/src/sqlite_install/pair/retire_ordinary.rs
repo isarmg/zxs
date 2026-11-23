@@ -1,4 +1,4 @@
-//! H04 read-only evidence for one explicitly selected original F. v19
+//! H04 read-only evidence for one explicitly selected original F. v20
 //! has no retirement operation, unpublish or state writer. A clear observation
 //! is not a durable receipt, permission to retire, or a reusable lease.
 use super::{Id,observed};
@@ -69,14 +69,14 @@ pub(super) fn protected_volume(e:&io::Error)->bool{e.get_ref().is_some_and(|x|x.
 pub(super) fn compiled_schema()->io::Result<()>{super::fresh_issuer::compiled_schema()}
 fn template()->io::Result<Canonical>{compiled_schema()?;Canonical::new()}
 
-/// Some v19 relationships have no index by volume. Bound each complete
+/// Some v20 relationships have no index by volume. Bound each complete
 /// input first, in the SAME transaction. A partial search never gives a
 /// negative witness. Only static table names, no raw row data, are used.
 fn complete_small_cut(tx:&Transaction<'_>)->io::Result<()>{
     for name in AUDITED_TABLES{
         let query=format!("SELECT count(*) FROM (SELECT 1 FROM main.{name} LIMIT ?1)");
         let n:i64=tx.query_row(&query,[ROW_CEILING+1],|r|r.get(0)).map_err(sql)?;
-        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded v19 snapshot; not cleared"));}
+        if !(0..=ROW_CEILING).contains(&n){return Err(bad("retirement inventory exceeds the bounded v20 snapshot; not cleared"));}
     }
     let mut verify=tx.prepare("PRAGMA main.foreign_key_check").map_err(sql)?;
     if verify.column_count()!=4{return Err(unknown());}

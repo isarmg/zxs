@@ -1,4 +1,4 @@
-//! The one installed v19 shared account has one new or historical operation.
+//! The one installed v20 shared account has one new or historical operation.
 //! The command never selects an alternate site, identity, database or vault.
 use super::rust_credentials::transact_deployed;
 use crate::sqlite_install::{bad,pair::{Id,command::{key,sha,value},domain::DeployedSite,
@@ -13,7 +13,7 @@ pub(crate) struct Selection{
 }
 impl Selection{
     pub(crate) fn parse(mut it:impl Iterator<Item=OsString>)->Result<Self,&'static str>{
-        if !cfg!(feature="private-fresh-install"){return Err("private v19 shared-account maintenance is disabled");}
+        if !cfg!(feature="private-fresh-install"){return Err("private v20 shared-account maintenance is disabled");}
         let intent=match it.next().as_deref().and_then(|s|s.to_str()){
             Some("new")=>Intent::Fresh,Some("receipt")=>Intent::Lookup,
             _=>return Err("choose reset-account new or receipt explicitly"),

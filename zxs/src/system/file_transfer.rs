@@ -5,7 +5,19 @@ use super::{Tree,Catalog,Connection,InitialReader,directory,file_create,ordinary
 use super::super::{account::share_mode::Setting,file_location::{Place,Placed},transfer_material::Manifest,volume::{OrdinaryRoot,RecycleRoot},work_record::{self,ReadRecord}};
 use crate::{OperationId,Role,VolumeId,display,fs::{HeldDir,invalid,directory_birth::DirectoryParent},hash::Sha256,
     identity::{AccountId,ShareId},ordinary::portable_birth::{Birth,Installed,MoveInstall,MoveRoom}};
+use super::{file_replace::{Pair,State as PairState},work_change::ReplacementSave};
 use std::{cell::Cell,io};
+
+/// Authenticated, distinct source and target already held by the SMB caller.
+struct JoinedReplacement<'j,'writer,'input>{
+    id:OperationId,source_save:Option<OperationId>,source_installed:&'j Installed,
+    target:&'j ReplacementSave<'writer,'input>,
+}
+impl JoinedReplacement<'_, '_, '_>{
+    fn pair(&self,recycle:OperationId)->Pair{
+        Pair{replacement:self.id,save:self.target.op(),recycle}
+    }
+}
 
 #[derive(Clone,Debug,Eq,PartialEq)]
 pub(super) enum Handoff{
@@ -55,6 +67,31 @@ pub(super) struct Moved{
 }
 pub(super) struct OrdinaryMoveSource{
     pub(super) place:Place,pub(super) physical:Installed,pub(super) view:Option<ReadRecord>,pub(super) grant:Setting,
+}
+/// The already synced physical handoff ready for its short SQL selection.
+struct PreparedSelection<'a>{
+    route:&'a Route,op:OperationId,alias:Option<&'a file_create::Alias>,
+    retirement:Option<&'a [u8]>,target_proof:&'a [u8],
+}
+impl PreparedSelection<'_>{
+    fn require_ready(&self,db:&Connection,c:&Catalog)->io::Result<()>{
+        let plan=self.route;
+        plan.still_live(db,self.op)?;plan.vacant(db,Some(self.op))?;
+        if plan.kind.ordinary_destination()&&
+            file_create::display_owner_at(db,c,plan.to,plan.parent,&plan.name)?.as_ref()!=self.alias{
+            return Err(invalid("ordinary destination alias evidence changed"));
+        }
+        Ok(())
+    }
+    fn select(&self,db:&Connection)->io::Result<Moved>{
+        let st=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=12 AND state=0")?;
+        st.bind_bytes(1,&self.op.0)?;st.done()?;drop(st);
+        self.record_selected(db)
+    }
+    fn record_selected(&self,db:&Connection)->io::Result<Moved>{
+        super::retirement::record(db,self.op,self.retirement,self.target_proof)?;
+        self.route.confirmed_at(db,self.op)?.ok_or_else(||invalid("transfer did not select the original receipt"))
+    }
 }
 /// A decision for this held ordinary FILE only, consumed at the final
 /// selected-placement COMMIT hook. Earlier durable reservations are not
@@ -323,6 +360,18 @@ impl Route{
         if work_record::start_one(&q)?&&Some(OperationId(q.array(0)?))!=except{return Err(pending());}
         Ok(())
     }
+    /// Checks the original reservation slot without creating its SQL row.
+    /// The caller still owes its live gate before asking issue to insert.
+    fn require_reservation_slot(&self,db:&Connection,op:OperationId,fresh:bool,
+        ordinary_target:Option<(&std::collections::BTreeSet<Vec<u8>>,&std::ffi::CStr)>)->io::Result<()>{
+        self.vacant(db,None)?;
+        if fresh{self.require_fresh(db,op)?;}
+        else if self.reservation(db)?.is_some(){return Err(pending());}
+        if let Some((names,pocket))=ordinary_target{
+            ordinary_directory::budget(db,self.to,self.parent,names,Some(Additional::Pocket(pocket)))?;
+        }
+        Ok(())
+    }
     fn issue(&self,db:&Connection,op:OperationId)->io::Result<()>{
         let p=&self.from.here;
         let q=db.prepare(c"INSERT INTO main.file_transfer(transfer_op,file_id,direction,source_op,source_gen,source_id,source_name,
@@ -438,7 +487,50 @@ impl TransferAt<'_>{
         self.transfer_started(ask,TransferStart::ContinueExisting(supplied),opened,live,wait_last,point)
     }
     fn transfer_started(&self,ask:&Handoff,start:TransferStart,opened:Option<OpenedOrdinaryMove<'_>>,live:impl Fn()->io::Result<()>,
-        wait_last:bool,mut point:impl FnMut(Cut)->io::Result<()>)->io::Result<Moved>{
+        wait_last:bool,point:impl FnMut(Cut)->io::Result<()>)->io::Result<Moved>{
+        self.transfer_joined(ask,start,opened,live,wait_last,point,None)
+    }
+    fn transfer_joined(&self,ask:&Handoff,start:TransferStart,opened:Option<OpenedOrdinaryMove<'_>>,live:impl Fn()->io::Result<()>,
+        wait_last:bool,point:impl FnMut(Cut)->io::Result<()>,paired:Option<&JoinedReplacement<'_,'_,'_>>,
+    )->io::Result<Moved>{
+        let recycle=start.op();
+        let outcome=self.transfer_joined_inner(ask,start,opened,&live,wait_last,point,paired);
+        let (Err(error),Some(joined))=(&outcome,paired) else{return outcome;};
+        // Both original owners still belong to this invocation. A failed
+        // physical stage may leave an off-namespace candidate, but only a
+        // pending exact SQL pair may be released, and no file is deleted.
+        match self.release_failed_replacement(ask,joined.pair(recycle),&live){
+            Ok(())=>outcome,
+            Err(_)=>Err(io::Error::new(io::ErrorKind::ConnectionAborted,
+                format!("replacement outcome requires exact reconciliation: {error}"))),
+        }
+    }
+    fn release_failed_replacement(&self,ask:&Handoff,pair:Pair,live:&impl Fn()->io::Result<()>)->io::Result<()>{
+        let src=self.source;
+        match src.at(|db,_|pair.state(db))?{
+            None|Some(PairState::Voided)=>return Ok(()),
+            Some(PairState::Selected)=>return Err(io::ErrorKind::ConnectionAborted.into()),
+            Some(PairState::Pending)=>{},
+        }
+        live()?;
+        let w=Connection::open(&src.dir,true)?;
+        src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
+            self.authorized(db,&c)?;
+            match pair.state(db)?{
+                Some(PairState::Pending)=>{
+                    let plan=Route::select(self,db,&c,ask)?;
+                    plan.still_live(db,pair.recycle)?;
+                    live()?;
+                    pair.release(db,plan.setting,plan.auth,2)
+                }
+                Some(PairState::Voided)=>Ok(()),
+                _=>Err(io::ErrorKind::ConnectionAborted.into()),
+            }
+        },live)
+    }
+    fn transfer_joined_inner(&self,ask:&Handoff,start:TransferStart,opened:Option<OpenedOrdinaryMove<'_>>,live:&impl Fn()->io::Result<()>,
+        wait_last:bool,mut point:impl FnMut(Cut)->io::Result<()>,paired:Option<&JoinedReplacement<'_,'_,'_>>,
+    )->io::Result<Moved>{
         let supplied=start.op();let fresh=start.is_fresh();
         if supplied.0==[0;16]||supplied.0==[0xff;16]{return Err(invalid("reserved transfer operation ID"));}
         if self.destination.is_some()!=opened.is_some()||fresh&&(opened.is_none()||wait_last){
@@ -446,7 +538,13 @@ impl TransferAt<'_>{
         }
         let src=self.source;
         live()?;
-        if !fresh&&let Some(done)=src.at(|db,c|Route::receipt(self,db,&c,ask,supplied))?{live()?;return Ok(done);}
+        if paired.is_some()&&(!matches!(ask,Handoff::Delete(_))||fresh||wait_last){
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        if paired.is_none()&&!fresh&&let Some(done)=src.at(|db,c|{
+            Pair::require_unpaired(db,supplied)?;
+            Route::receipt(self,db,&c,ask,supplied)
+        })?{live()?;return Ok(done);}
         let (c,from_position,ordinary_parent,second_parent)=src.at(|db,c|{
             let original=Route::select(self,db,&c,ask)?;
             let parent=DirectoryRoute::at(db,&c,self.setting.volume,self.parent)?;
@@ -484,7 +582,7 @@ impl TransferAt<'_>{
                 Err(e)=>return Err(e),
             }
         };
-        let original_file=opened.as_ref().map(|m|m.original);
+        let original_file=opened.as_ref().map(|m|m.original).or_else(||paired.map(|j|j.source_installed));
         let original_source=|| match original_file{
             Some(h)=>h.require_copy_source(from,&real),
             None=>real.require(from),
@@ -496,6 +594,12 @@ impl TransferAt<'_>{
             require_routes(db,&c)?;
             start.require_selection(db,&plan,&ordinary_parent,second_parent.as_ref())?;
             let existing=if fresh{None}else{plan.reservation(db)?};
+            if let Some(j)=paired{
+                if existing.is_some(){return Err(pending());}
+                if plan.work.map(|r|r.record.key().save)!=j.source_save{
+                    return Err(io::Error::new(io::ErrorKind::WouldBlock,"replacement source working revision changed"));
+                }
+            }else if let Some((old,_))=existing{Pair::require_unpaired(db,old)?;}
             let retry=existing.filter(|p|p.1).map(|p|p.0);
             let retire=existing.filter(|p|!p.1).map(|p|p.0);
             let op=retry.unwrap_or(supplied);
@@ -515,10 +619,14 @@ impl TransferAt<'_>{
         // Do not reserve a target at all when an allowed unselected lone
         // source link makes retirement unprovable. This is held FILE EX
         // and does not read, alter or repair that old residue.
-        let ordinary_source=if plan.kind==Direction::Ordinary{
+        let ordinary_source=if plan.kind==Direction::Ordinary||paired.is_some(){
             Some(real.capture_retirement(from)?.encode())
         }else{None};
-        let pending_admission=||if plan.kind==Direction::Ordinary{live()}else{Ok(())};
+        let pending_admission=||if paired.is_some()||plan.kind==Direction::Ordinary{live()}else{Ok(())};
+        let release_this=|db:&Connection|match paired{
+            Some(j)=>j.pair(op).release(db,plan.setting,plan.auth,2),
+            None=>plan.release_unselected(db,op,2),
+        };
         if let Some(old)=retire{
             // Keep potentially real old stage bytes untouched. Only the
             // exact reservation from an invalidated grant can be released.
@@ -545,7 +653,7 @@ impl TransferAt<'_>{
             if retry{
                 let w=Connection::open(&src.dir,true)?;
                 src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
-                    unchanged(db,&c)?;plan.still_live(db,op)?;live()?;plan.release_unselected(db,op,2)
+                    unchanged(db,&c)?;plan.still_live(db,op)?;live()?;release_this(db)
                 },&pending_admission)?;
             }
             return Err(io::ErrorKind::StorageFull.into());
@@ -558,11 +666,11 @@ impl TransferAt<'_>{
             let w=Connection::open(&src.dir,true)?;
             let issued_here=Cell::new(false);
             let issued=src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
-                unchanged(db,&c)?;plan.vacant(db,None)?;
-                if fresh{plan.require_fresh(db,op)?;}
-                else if plan.reservation(db)?.is_some(){return Err(pending());}
-                if let Some(names)=&census{ordinary_directory::budget(db,plan.to,plan.parent,names,Some(Additional::Pocket(&pocket)))?;}
-                live()?;plan.issue(db,op)?;issued_here.set(true);Ok(())
+                unchanged(db,&c)?;
+                plan.require_reservation_slot(db,op,fresh,census.as_ref().map(|names|(names,pocket.as_c_str())))?;
+                live()?;plan.issue(db,op)?;
+                if let Some(j)=paired{j.target.reserve(db,&c)?;j.pair(op).reserve(db)?;}
+                issued_here.set(true);Ok(())
             },&pending_admission);
             drop(w);
             if let Err(err)=issued{
@@ -573,11 +681,35 @@ impl TransferAt<'_>{
                     return Err(if issued_here.get(){io::Error::new(io::ErrorKind::ConnectionAborted,
                         "fresh ordinary move reservation outcome is unknown")}else{err});
                 }
-                if !src.at(|db,c|{unchanged(db,&c)?;plan.pending_at(db,op)})?{return Err(err);}
+                let observed=src.at(|db,c|{
+                    unchanged(db,&c)?;
+                    if let Some(j)=paired{
+                        return Ok(j.pair(op).state(db)?==Some(PairState::Pending)&&plan.pending_at(db,op)?);
+                    }
+                    plan.pending_at(db,op)
+                });
+                let exact=match observed{
+                    Ok(exact)=>exact,
+                    Err(_) if paired.is_some()&&issued_here.get()=>return Err(io::Error::new(
+                        io::ErrorKind::ConnectionAborted,"exact replacement reservation outcome unknown")),
+                    Err(error)=>return Err(error),
+                };
+                if !exact{return Err(err);}
             }
         }
         src.at(|db,c|{unchanged(db,&c)?;plan.still_live(db,op)})?;
         point(Cut::Reserved)?;
+        let paired_ready=match paired.map(|j|j.target.sync()).transpose(){
+            Ok(ready)=>ready,
+            Err(error)=>{
+                gates()?;original_source()?;
+                let w=Connection::open(&src.dir,true)?;
+                src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
+                    unchanged(db,&c)?;plan.still_live(db,op)?;live()?;release_this(db)
+                },&pending_admission)?;
+                return Err(error);
+            },
+        };
         let candidate=match MoveInstall::attach(&locked,&plan.from.birth,op,&plan.name){
             Ok(candidate)=>candidate,
             Err(err)=>{
@@ -588,7 +720,7 @@ impl TransferAt<'_>{
                     gates()?;original_source()?;
                     let w=Connection::open(&src.dir,true)?;
                     src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
-                        unchanged(db,&c)?;plan.still_live(db,op)?;live()?;plan.release_unselected(db,op,2)
+                        unchanged(db,&c)?;plan.still_live(db,op)?;live()?;release_this(db)
                     },&pending_admission)?;
                 }
                 return Err(err);
@@ -606,7 +738,7 @@ impl TransferAt<'_>{
                     if candidate.pair_incomplete(&error,&root)?{
                         let w=Connection::open(&src.dir,true)?;
                         src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
-                            unchanged(db,&c)?;plan.still_live(db,op)?;live()?;plan.release_unselected(db,op,2)
+                            unchanged(db,&c)?;plan.still_live(db,op)?;live()?;release_this(db)
                         },&pending_admission)?;
                     }
                 }
@@ -632,28 +764,39 @@ impl TransferAt<'_>{
         if final_root.entity!=to.entity||!final_root.same_mount(to)?{return Err(invalid("target changed before final transfer selection"));}
         gates()?;original_source()?;candidate.require_members(&final_root,&names)?;
         let _alias=alias_at()?; // original held native alias until exact SQL switch
+        let prepared=PreparedSelection{route:&plan,op,alias:alias.as_ref(),
+            retirement:retirement.as_deref(),target_proof:&target_proof};
+        if let (Some(j),Some(ready))=(paired,&paired_ready){j.target.require_synced(ready)?;}
         let w=Connection::open(&src.dir,true)?;
         // Only this transaction selects the new placement and publishes
         // old-source retirement evidence. A final pre-COMMIT refusal
         // rolls it back, without pretending any staged pocket is gone.
         let result=src.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
-            unchanged(db,&c)?;plan.still_live(db,op)?;plan.vacant(db,Some(op))?;
-            if plan.kind.ordinary_destination()&&file_create::display_owner_at(db,&c,plan.to,plan.parent,&plan.name)?!=alias{
-                return Err(invalid("ordinary destination alias evidence changed"));
+            unchanged(db,&c)?;prepared.require_ready(db,&c)?;live()?;
+            if let (Some(j),Some(ready))=(paired,&paired_ready){
+                j.target.require_selectable(db,&c,ready)?;
+                j.pair(op).confirm(db,prepared.retirement,prepared.target_proof)?;
+                if !j.target.confirmed_at(db)?{return Err(invalid("replacement target did not select the exact SAVE"));}
+                return plan.confirmed_at(db,op)?.ok_or_else(||invalid("replacement source was not selected for recycle"));
             }
-            live()?;
-            let st=db.prepare(c"UPDATE main.operation SET state=1 WHERE op_id=?1 AND kind=12 AND state=0")?;
-            st.bind_bytes(1,&op.0)?;st.done()?;drop(st);
-            super::retirement::record(db,op,retirement.as_deref(),&target_proof)?;
-            plan.confirmed_at(db,op)?.ok_or_else(||invalid("transfer did not select the original receipt"))
-        },move||opened.map_or(Ok(()),OpenedOrdinaryMove::before_selection));
+            prepared.select(db)
+        },||{
+            if paired.is_some(){live()?;}
+            opened.map_or(Ok(()),OpenedOrdinaryMove::before_selection)
+        });
         drop(w);
         match result{
             Ok(confirmed)=>Ok(confirmed),
             Err(error)=>{
                 // A failing COMMIT need not mean it was rolled back. Never
                 // move again on that assumption; only exact readback settles it.
-                if let Ok(Some(confirmed))=src.at(|db,c|{self.authorized(db,&c)?;plan.confirmed_at(db,op)}){
+                if let Ok(Some(confirmed))=src.at(|db,c|{
+                    self.authorized(db,&c)?;
+                    if let Some(j)=paired{
+                        if j.pair(op).state(db)?!=Some(PairState::Selected)||!j.target.confirmed_at(db)?{return Ok(None);}
+                    }
+                    plan.confirmed_at(db,op)
+                }){
                     return Ok(confirmed);
                 }
                 if src.at(|db,c|{self.authorized(db,&c)?;plan.pending_at(db,op)}).unwrap_or(false){
@@ -669,7 +812,7 @@ impl TransferAt<'_>{
 
 #[path="smb_rust_transfer.rs"]
 mod rust;
-pub(crate) use rust::{ConfirmedFileDelete,RustFileDelete,RustRetainedRestore};
+pub(crate) use rust::{ConfirmedExistingReplacement,ConfirmedFileDelete,RustFileDelete,RustRetainedRestore};
 
 #[path="smb_rust_ordinary_move.rs"]
 mod ordinary_move;

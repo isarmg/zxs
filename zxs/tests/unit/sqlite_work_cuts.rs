@@ -300,3 +300,90 @@ fn replacing_unconfirmed_new_rounds_keeps_only_names_that_were_actually_created(
     bytes.clear();tree.open_version(name,second.node).unwrap().range_to(0,4,&mut bytes).unwrap();assert_eq!(bytes,b"ZAAA");
     assert!(read.open_current(name).is_ok());
 }
+
+// Exercises the shipped catalog and its real triggers. The initial two SAVEs
+// are physical; successor geometry here tests SQLite, not SMB or disk I/O.
+#[test]
+#[ignore = "isolated v20 catalog fixture with ordinary FILE setup; no SMB process"]
+fn replacement_selection_is_paired_and_void_preserves_the_old_head() {
+    for select in [true, false] {
+        let temp = PrivateTemp::under(&std::env::temp_dir());
+        let (site, pool, _, rw, _) = ordinary_pool(&temp);
+        let reader = InitialReader::open(&site, pool).unwrap();
+        let session = SmbSession::fixture_authenticated(&reader, "first.admin").unwrap();
+        let tree = session.connect(rw).unwrap();
+        let source = tree.create_file(OperationId([0xc1; 16]), "draft.tmp").unwrap();
+        let target = tree.create_file(OperationId([0xc2; 16]), "report.xlsx").unwrap();
+        let source_save = OperationId([0xc3; 16]);
+        let target_save = OperationId([0xc4; 16]);
+        let input = stage(&temp, "first", b"x");
+        tree.save_first(source_save, "draft.tmp", source.file, &input).unwrap();
+        tree.save_first(target_save, "report.xlsx", target.file, &input).unwrap();
+
+        let raw = Builder::existing(&site.join("SYSTEM.sqlite3"));
+        raw.exec("PRAGMA foreign_keys=ON; PRAGMA trusted_schema=OFF;");
+        let from = hex(&source.file.0);
+        let to = hex(&target.file.0);
+        let sharing = hex(&rw.0);
+        let prior = hex(&target_save.0);
+        let edit = hex(&[0xc5; 16]);
+        let recycle = hex(&[0xc6; 16]);
+        let replacement = hex(&[0xc7; 16]);
+        let nonce = hex(&[0xc8; 16]);
+        let r = hex(&[0x12; 16]);
+
+        raw.exec(&format!(
+            "BEGIN IMMEDIATE;
+             INSERT INTO work_edit VALUES(X'{edit}',X'{to}',X'{sharing}',
+                (SELECT setting_op FROM live_ordinary_writer WHERE share_id=X'{sharing}'),
+                (SELECT auth_op FROM live_ordinary_writer WHERE share_id=X'{sharing}'),
+                (SELECT position_op FROM file_location WHERE file_id=X'{to}'),X'{nonce}',1,
+                X'{prior}',X'{prior}',NULL,2,1,1,2,159,318,163,481,zeroblob(32),zeroblob(32),zeroblob(32),NULL,0);
+             INSERT INTO operation VALUES(X'{edit}',10,(SELECT smb_id FROM account_pair WHERE singleton=1),zeroblob(32),0);
+             INSERT INTO file_transfer(transfer_op,file_id,direction,source_op,source_gen,source_id,source_name,
+                target_id,target_name,share_id,setting_op,auth_op,save_op,manual_op,source_parent,target_parent,
+                source_backing,source_terminal,target_setting_op)
+             SELECT X'{recycle}',l.file_id,1,l.position_op,l.generation,l.volume_id,l.display,
+               X'{r}',l.display,a.share_id,a.setting_op,a.auth_op,l.save_op,l.manual_op,l.parent_id,
+               zeroblob(16),l.backing_op,l.flat_terminal,NULL
+             FROM transferable_location l JOIN live_ordinary_writer a ON a.share_id=X'{sharing}' WHERE l.file_id=X'{from}';
+             INSERT INTO operation SELECT X'{recycle}',12,a.actor_id,zeroblob(32),0 FROM live_ordinary_writer a WHERE a.share_id=X'{sharing}';
+             INSERT INTO file_replace VALUES(X'{replacement}',X'{edit}',X'{recycle}',0);
+             COMMIT;"
+        ));
+        for id in [&edit, &recycle] {
+            assert!(raw.try_exec(&format!("UPDATE operation SET state=1 WHERE op_id=X'{id}';")).is_err());
+        }
+        if select {
+            raw.exec(&format!("UPDATE file_replace SET state=1 WHERE replace_op=X'{replacement}';"));
+        } else {
+            raw.exec(&format!(
+                "BEGIN IMMEDIATE;
+                 UPDATE file_replace SET state=2 WHERE replace_op=X'{replacement}';
+                 INSERT INTO file_transfer_void
+                 SELECT X'{recycle}',setting_op,auth_op,2 FROM live_ordinary_writer WHERE share_id=X'{sharing}';
+                 COMMIT;"
+            ));
+        }
+        reader.at(|db, _| {
+            let q = db.prepare(c"SELECT p.state,e.state,t.state,src.role,dst.role,w.save_op,
+                EXISTS(SELECT 1 FROM pending_edit WHERE edit_op=e.op_id),
+                EXISTS(SELECT 1 FROM active_pending_edit WHERE edit_op=e.op_id),
+                EXISTS(SELECT 1 FROM manual_ready WHERE file_id=dst.file_id),
+                EXISTS(SELECT 1 FROM pending_transfer WHERE transfer_op=t.op_id)
+                FROM file_replace p JOIN operation e ON e.op_id=p.save_op
+                JOIN operation t ON t.op_id=p.recycle_op
+                JOIN file_location src ON src.file_id=?1 JOIN file_location dst ON dst.file_id=?2
+                JOIN selected_work w ON w.file_id=dst.file_id")?;
+            q.bind_bytes(1, &source.file.0)?;
+            q.bind_bytes(2, &target.file.0)?;
+            assert_eq!(q.step(), 100);
+            let terminal = (q.byte(0)?, q.byte(1)?, q.byte(2)?, q.byte(3)?, q.byte(4)?);
+            assert_eq!(terminal, if select { (1, 1, 1, 1, 2) } else { (2, 0, 0, 2, 2) });
+            assert_eq!(q.array::<16>(5)?, if select { [0xc5; 16] } else { target_save.0 });
+            let pending = (q.byte(6)?, q.byte(7)?, q.byte(8)?, q.byte(9)?);
+            assert_eq!(pending, if select { (0, 0, 1, 0) } else { (1, 0, 1, 0) });
+            q.done()
+        }).unwrap();
+    }
+}

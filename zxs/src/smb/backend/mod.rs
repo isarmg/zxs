@@ -21,7 +21,7 @@ mod file_access;
 pub(in crate::smb) use file_access::PreparedFileAccess;
 mod attribute_tag;
 pub(in crate::smb) use attribute_tag::{DIRECTORY_ATTRIBUTES,FILE_ATTRIBUTES,PreparedAttributeTag};
-pub(crate) use file_open::{FileRenameTarget,OrdinaryMoveAdmission,OrdinaryRenameAdmission};
+pub(crate) use file_open::{FileRenameTarget,OrdinaryMoveAdmission,OrdinaryRenameAdmission,OrdinaryReplaceAdmission};
 mod file_birth;
 pub(crate) use file_birth::FileBirthVote;
 pub(in crate::smb) use file_birth::PreparedBirth;

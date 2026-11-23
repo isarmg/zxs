@@ -355,6 +355,10 @@ impl WriteAt<'_>{
 #[path="../../tests/unit/attached/system/work_change/tests.rs"]
 mod tests;
 
+#[path="temp_replace_save.rs"]
+mod replacement;
+pub(in crate::system::reader::smb) use replacement::ReplacementSave;
+
 #[path="smb_rust_writer.rs"]
 mod rust;
 pub(crate) use rust::{RustWorkWriter,RustWriterSelection};

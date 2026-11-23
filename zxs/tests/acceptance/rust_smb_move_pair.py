@@ -16,7 +16,9 @@ TARGET = "x86_64-unknown-linux-gnu"
 RUST = "1.100.0"
 HELPER_BUILD_PATH = "/helper/build"
 HELPER_FEATURE = "private-fresh-install"  # The one exact fresh deployment used by both acceptance and measurement.
-SCHEMA_SHA256 = "5cf057fe1df72bd606ad47f11beec7747779a67206b781bab89d2aeeaf8c8495"
+HELPER_CARGO_CONFIG = Path("helper/.cargo/config.toml")
+HELPER_CARGO_CONFIG_SHA256 = "9523c1d40a68e848d7ab68b258828f7f5ccb38e6e63e740ed8369e93776fd29e"
+SCHEMA_SHA256 = "1a88b3e09eb8604340967f2d4f4e95177099a6ac3f54aef0af8f7f9a8f7bd3f3"
 RUST_RELEASE = "https://static.rust-lang.org/dist/2026-11-12"
 # Same distribution archives as the Linux paired build receipts workflow.
 ARCHIVES = (
@@ -85,6 +87,9 @@ def stage_source(repo, commit, build, env):
     require(records and records.endswith(b"\0")
             and all(row.startswith((b"100644 blob ", b"100755 blob ")) for row in records[:-1].split(b"\0")),
             "paired source must consist of ordinary tracked files")
+    config_blob = f"{commit}:{HELPER_CARGO_CONFIG}"
+    require(0 < int(read_git("cat-file", "-s", config_blob)) <= 4096, "unexpected Helper Cargo configuration size")
+    helper_config = command(*git, "cat-file", "blob", config_blob, env=env, cwd=build, capture=True)
     dest = build / "source"
     dest.mkdir(mode=0o700)
     archive = build / "source.tar"
@@ -92,7 +97,7 @@ def stage_source(repo, commit, build, env):
     command("/usr/bin/tar", "-xf", archive, "-C", dest, "--no-same-owner", "--no-same-permissions",
             env=env, cwd=build)
     archive.unlink()
-    return dest, trees
+    return dest, trees, helper_config
 
 
 def stage_rust(build, env):
@@ -162,13 +167,26 @@ def helper_elf(path, env, cwd):
     return {"interpreter": loaders[0], "needed": sorted(needed), "readelf_sha256": hashlib.sha256(info.encode()).hexdigest()}
 
 
-def build_helper(source, build, bindir, env):
+def verify_helper_config(source, tracked):
+    config = source / ".cargo" / "config.toml"
+    require(not os.path.lexists(config.with_name("config"))
+            and not any(os.path.lexists(parent / ".cargo" / name)
+                        for parent in source.parents for name in ("config", "config.toml")),
+            "ambient Helper Cargo configuration")
+    # Keep the checked-in bundled SQLite build flags; never substitute a host config.
+    require(config.parent.resolve(strict=True) == config.parent
+            and hashlib.sha256(tracked).hexdigest() == HELPER_CARGO_CONFIG_SHA256
+            and bounded_read(config, 4096) == tracked, "Helper Cargo configuration differs from its reviewed source")
+
+
+def build_helper(source, build, bindir, env, tracked_config, mark):
     # Use the same official locked registry and sanitized native build as the paired workflow.
+    mark("helper-config")
     lock = tomllib.loads((source / "Cargo.lock").read_text("utf-8"))
     require(all("source" not in entry or entry["source"] == "registry+https://github.com/rust-lang/crates.io-index"
                 and hex_id(entry.get("checksum"), 64) for entry in lock["package"]), "unexpected Helper registry input")
-    require(not any(os.path.lexists(parent / ".cargo" / name) for parent in (source, *source.parents)
-                    for name in ("config", "config.toml")), "ambient Helper Cargo configuration")
+    verify_helper_config(source, tracked_config)
+    mark("helper-build")
     cargo_home, target = build / "cargo", build / "target"
     cargo_home.mkdir(mode=0o700)
     env = dict(env, CARGO_HOME=str(cargo_home), CARGO_TARGET_DIR=str(target), CARGO_BUILD_JOBS="2",
@@ -196,31 +214,37 @@ def _private_paths(repo, source, work):
     return repo, source, work
 
 
-def _build_pair(repo, commit, build, inspect_digest):
+def _build_pair(repo, commit, build, inspect_digest, mark=lambda _phase: None):
     """The exact same compiler and ELF inspections for measurement and acceptance."""
+    mark("source")
     build.mkdir(mode=0o700)
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TZ": "UTC", "HOME": str(build), "TMPDIR": str(build)}
-    staged, trees = stage_source(repo, commit, build, env)
+    staged, trees, helper_config = stage_source(repo, commit, build, env)
     zxs, helper = staged / "zxs", staged / "helper"
     require(sha256(zxs / "src/system/schema.sql") == sha256(helper / "src/sqlite_install/schema.sql") == SCHEMA_SHA256,
-            "both products must contain the exact immutable v19 acceptance schema")
+            "both products must contain the exact immutable v20 acceptance schema")
     raw_pin = bounded_read(zxs / "browser-stage.sha256", 65)
     require(re.fullmatch(rb"[0-9a-f]{64}\n", raw_pin), "invalid reviewed browser stage pin")
     pin = raw_pin[:-1].decode("ascii")
     locks = {key: sha256(project / "Cargo.lock") for key, project in (("zxs", zxs), ("helper", helper))}
     recipes = {key: sha256(zxs / key) for key in ("build_browser.py", "build_release.py")}
+    mark("toolchain")
     bindir, wasm_std, archives = stage_rust(build, env)
     tools = {name: sha256(Path("/usr/bin") / name) for name in ("gcc", "ar", "ld", "readelf")}
     tools.update({name: sha256(bindir / name) for name in ("rustc", "cargo", "rustdoc")})
     assets = zxs / "target" / "browser-assets"
+    mark("browser")
     command("/usr/bin/python3", "-B", zxs / "build_browser.py", bindir, "--wasm-std", wasm_std, env=env, cwd=zxs)
+    mark("server-build")
     command("/usr/bin/python3", "-B", zxs / "build_release.py", bindir,
             "--browser-assets", assets, "--browser-asset-pin", pin, env=env, cwd=zxs)
+    mark("server-proof")
     server_raw = bounded_read(zxs / "target" / "standalone" / "zxs", MAX_ELF, 64)
     server_sha = hashlib.sha256(server_raw).hexdigest()
     inspect_digest("server_sha256", server_sha)
     embedded = embedded_resources(server_raw, assets)
-    helper_path = build_helper(helper, build, bindir, env)
+    helper_path = build_helper(helper, build, bindir, env, helper_config, mark)
+    mark("helper-proof")
     helper_raw = bounded_read(helper_path, MAX_ELF, 64)
     helper_sha = hashlib.sha256(helper_raw).hexdigest()
     inspect_digest("helper_sha256", helper_sha)
@@ -241,13 +265,29 @@ def measure(repo, source, work, commit):
     repo, _, work = _private_paths(repo, source, work)
     require(hex_id(commit, 40) and not any(work.iterdir()), "expected a pinned commit and empty measurement directory")
     observed = {}
-    with TemporaryDirectory(prefix=".pair-measure-", dir=work) as temporary:
-        _, facts = _build_pair(repo, commit, Path(temporary) / "pair-build", observed.__setitem__)
-    require(observed == {key: facts[key] for key in ("server_sha256", "helper_sha256")}
-            and not any(work.iterdir()), "unexpected measurement inputs or outputs")
-    with (work / "measurement.json").open("x", encoding="ascii") as stream:
-        json.dump(dict(facts, profile="SMB-MOVE-PAIR-MEASUREMENT-1", schema_sha256=SCHEMA_SHA256), stream, sort_keys=True)
-        stream.write("\n")
+    phase = "source"
+
+    def mark(value):
+        nonlocal phase
+        phase = value
+
+    try:
+        with TemporaryDirectory(prefix=".pair-measure-", dir=work) as temporary:
+            _, facts = _build_pair(repo, commit, Path(temporary) / "pair-build", observed.__setitem__, mark)
+            mark("receipt")
+        require(observed == {key: facts[key] for key in ("server_sha256", "helper_sha256")}
+                and not any(work.iterdir()), "unexpected measurement inputs or outputs")
+        with (work / "measurement.json").open("x", encoding="ascii") as stream:
+            json.dump(dict(facts, profile="SMB-MOVE-PAIR-MEASUREMENT-1", schema_sha256=SCHEMA_SHA256),
+                      stream, sort_keys=True)
+            stream.write("\n")
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        reason = ("tool-failed" if isinstance(error, subprocess.CalledProcessError)
+                  else "io-failed" if isinstance(error, OSError) else "check-failed")
+        # The workflow may publish these categories, not the original exception or compiler output.
+        with (work / "failure").open("x", encoding="ascii") as stream:
+            stream.write(f"{phase} {reason}\n")
+        raise
 
 
 def prepare(repo, source, work):

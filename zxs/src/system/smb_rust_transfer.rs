@@ -1,6 +1,6 @@
 //! A real R-to-F restore on the existing ZXS kind-12 transfer. Does not
 //! make R writable, replace a target or reissue a FILE, working round or Node.
-use super::{Cut,DirectoryRoute,Handoff,Moved,OrdinaryRoot,Place,Route,Setting,TransferAt,TransferCut};
+use super::{JoinedReplacement,TransferStart,Cut,DirectoryRoute,Handoff,Moved,OrdinaryRoot,Place,Route,Setting,TransferAt,TransferCut};
 use crate::{FileId,OperationId,PoolId,Role,display,fs::invalid,identity::AccountId,smb::RustSessionWitness,
     system::reader::smb::{RustRetainedFile,RustStagedWriter,denied,first_work::RustReadFile,runtime::RustRoot}};
 use std::{io,rc::Weak};
@@ -100,7 +100,95 @@ pub(crate) struct RustFileDelete{pool:PoolId,from:Place,target:Target}
 /// Original historical kind-12 success, with no OPEN or mutating authority.
 #[must_use]
 pub(crate) struct ConfirmedFileDelete(Moved);
+/// Proven paired result; neither automatic version issuance nor a new FILE.
+#[must_use]
+pub(crate) struct ConfirmedExistingReplacement {
+    delete: RustFileDelete,
+    moved: Moved,
+    pair: super::super::file_replace::Pair,
+}
+impl ConfirmedExistingReplacement{
+    pub(crate) fn require_receipt(&self,tree:&RustRoot,scope:&RustSessionWitness)->io::Result<()>{
+        if !(scope.is_set_info()||scope.is_close())||tree.pool()!=self.delete.pool{return Err(denied());}
+        let ask=Handoff::Delete(self.delete.from.clone());
+        self.delete.target.with_transfer(tree,scope,|at|at.source.at(|db,c|{
+            if self.pair.state(db)?!=Some(super::super::file_replace::State::Selected)||
+               Route::receipt(&at,db,&c,&ask,self.moved.op)?.as_ref()!=Some(&self.moved){return Err(denied());}
+            Ok(())
+        }))
+    }
+}
 impl RustRoot{
+    /// An authenticated exact retry may release an abandoned pending pair.
+    /// No published data or placement is changed and no candidate is deleted.
+    pub(crate) fn release_abandoned_replacement(&self,source:&RustReadFile,
+        target:&crate::system::reader::smb::work_change::RustWorkWriter,
+        admission:&crate::smb::OrdinaryReplaceAdmission<'_>,
+        live:&impl Fn()->io::Result<()>,
+    )->io::Result<()>{
+        use super::super::file_replace::Pair;
+        let (scope,leaf)=admission.require(self.pool(),source.file())?;
+        if source.file()==target.file()||target.original_place().name!=leaf{return Err(denied());}
+        target.require_current(self,scope)?;
+        let delete=self.plan_read_file_delete(source,scope)?;
+        let source_installed=source.replacement_original(self,scope)?;
+        let ask=Handoff::Delete(delete.from.clone());
+        let target_place=target.original_place();
+        delete.target.with_transfer(self,scope,|at|{
+            let check=|db:&super::Connection,c:&super::Catalog|{
+                if Place::current(db,c,target_place.file)?!=*target_place{return Err(denied());}
+                let plan=Route::select(&at,db,c,&ask)?;
+                let pair=Pair::pending_for(db,&plan.from.here,target_place)?;
+                if let Some(pair)=pair{plan.still_live(db,pair.recycle)?;}
+                Ok((plan,pair))
+            };
+            let (plan,Some(pair))=at.source.at(|db,c|check(db,&c))? else{return Ok(());};
+            // Source read OPEN owns no FILE flock. Take independent source EX
+            // while the genuine target writer's EX is still held by the caller.
+            live()?;
+            let media=delete.writable_source(&at,&ask)?;
+            let dir=media.folder();
+            let members=dir.names()?.into_iter().collect();
+            let acquired=plan.from.open(dir,&members,true,|_|Ok(()))?;
+            source_installed.require_copy_source(dir,&acquired)?;
+            target.require_current(self,scope)?;
+            let w=super::Connection::open(&at.source.dir,true)?;
+            at.source.transaction_before_commit(&w,c"BEGIN IMMEDIATE",|db,c|{
+                let (actual,found)=check(db,&c)?;
+                if actual!=plan||found!=Some(pair){return Err(io::ErrorKind::WouldBlock.into());}
+                live()?;
+                pair.release(db,plan.setting,plan.auth,2)
+            },||{live()?;self.original_write_live(scope)})
+        })
+    }
+
+    /// The caller holds the original DELETE OPEN and exact target writer vote/ranges.
+    pub(crate) fn replace_completed_read_source(&self,source:&RustReadFile,
+        target:&crate::system::reader::smb::work_change::RustWorkWriter,
+        admission:&crate::smb::OrdinaryReplaceAdmission<'_>,
+        live:&impl Fn()->io::Result<()>,
+    )->io::Result<ConfirmedExistingReplacement>{
+        let (scope,_)=admission.require(self.pool(),source.file())?;
+        live()?;
+        let delete=self.plan_read_file_delete(source,scope)?;
+        let source_installed=source.replacement_original(self,scope)?;
+        let mut input=super::super::smb_stage::ReplacementInput::new(target.actual_staging_parent())?;
+        let (source_save,len)=source.copy_completed_replacement_source(self,scope,&mut input,live)?;
+        let input=input.input(len)?;
+        let pair_id=OperationId::new()?;let save=OperationId::new()?;let recycle=OperationId::new()?;
+        target.with_replacement_target(self,admission,source.file(),save,input,len,|target|{
+            let joined=JoinedReplacement{id:pair_id,source_save,source_installed,target:&target};
+            let ask=Handoff::Delete(delete.from.clone());
+            let moved=delete.target.with_transfer(self,scope,|at|{
+                let media=delete.writable_source(&at,&ask)?;
+                at.transfer_joined(&ask,TransferStart::ContinueExisting(recycle),None,
+                    ||{live()?;self.original_write_live(scope)},false,
+                    |_:Cut|require_writable(&media),Some(&joined))
+            })?;
+            Ok(ConfirmedExistingReplacement{delete,moved,pair:joined.pair(recycle)})
+        })
+    }
+
     pub(crate) fn plan_read_file_delete(&self,held:&RustReadFile,scope:&RustSessionWitness)->io::Result<RustFileDelete>{
         if !(scope.is_create()||scope.is_set_info()){return Err(denied());}
         held.require_current(self,scope)?;

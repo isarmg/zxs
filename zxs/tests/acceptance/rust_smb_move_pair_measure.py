@@ -1,12 +1,13 @@
-"""Untriggered compile-only evidence for an explicitly approved immutable v19 pair.
+"""Untriggered compile-only evidence for an explicitly approved immutable v20 pair.
 
 In a disposable non-root runner, stage the reviewed upstream commit in adjacent
 private `repo` (FETCH_HEAD) and `source` (Git archive) directories. Use
 `python3 -I source/zxs/tests/acceptance/rust_smb_move_pair_measure.py --repo …
 --source … --work … --commit …`, with absolute paths and a new empty private work
-directory. Its only retained output is `measurement.json`: not a guest receipt,
-binary archive or an approval. Independently approve measured digests before
-requesting the separate material-bound guest acceptance. No previous schema fallback.
+directory. A successful run retains only `measurement.json`: not a guest receipt,
+binary archive or an approval. A failed build may record a fixed `failure` category.
+Independently approve measured digests before requesting the separate guest
+acceptance. No previous schema fallback.
 """
 
 import argparse

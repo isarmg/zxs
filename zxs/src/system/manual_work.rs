@@ -68,7 +68,7 @@ struct Cut {
     ord:i64,
 }
 fn target(db:&Connection,b:&Birth)->io::Result<(Target,ReadRecord,i64)>{
-    if work_record::pending_current(db,b)?.is_some(){
+    if work_record::active_pending(db,b)?.is_some(){
         return Err(busy("original FILE still has an unsettled SAVE"));
     }
     let chosen=work_record::selected(db,b)?.ok_or_else(||busy("no confirmed working revision to freeze"))?;

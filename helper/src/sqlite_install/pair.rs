@@ -1,4 +1,4 @@
-//! Fixed, local maintenance for the sole shared Web/SMB identity in exact v19;
+//! Fixed, local maintenance for the sole shared Web/SMB identity in exact v20;
 //! no retired SQL SMB credential issuer, migration or protocol fallback.
 mod command;
 mod native_sql;

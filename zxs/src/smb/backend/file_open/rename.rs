@@ -1,10 +1,11 @@
 //! Same-parent FILE rename through the actual read-like DELETE OPEN.
 //! No path resolution of its source and no write-buffer side effects.
 use super::{CloseCompletion,DELETE_ACCESS,FileOpen,Held,VerifiedMember};
-use super::super::{Counts,Object,OpenCoordinator,Slot,path::{NameError,TreeName}};
+use super::super::{ALL,BindError,Counts,Facts,Grant,Object,OpenCoordinator,OriginalRequest,
+    ParentWrite,ReserveError,Share,Slot,path::{NameError,TreeName},range_lock::{Intent,RangeIoError}};
 use crate::{FileId,PoolId,fs::MAX_PATH_DEPTH,smb::{RustSessionWitness,connection::Fault,
     wire::{io_fields::OpenReference,message::{RELATED,Routing},path_fields::FieldError,set_info::RenameRequest}},
-    system::reader::smb::{ConfirmedOrdinaryMove,first_work::{RustAdoptedMove,RustOrdinaryMove,RustOrdinaryRename,RustRetiredOrdinaryRename},runtime::RustRoot}};
+    system::reader::smb::{ConfirmedExistingReplacement,ConfirmedOrdinaryMove,work_change::RustWorkWriter,first_work::{RustAdoptedMove,RustOrdinaryMove,RustOrdinaryRename,RustRetiredOrdinaryRename},runtime::RustRoot}};
 use std::{io,sync::{Arc,Weak}};
 
 #[derive(Debug)]
@@ -93,7 +94,7 @@ fn one_original(row:&Counts)->Result<(),OrdinaryRenameError>{
 #[must_use]
 pub(in crate::smb::backend) struct RenameTurn{table:Arc<OpenCoordinator>,object:Object,open:Weak<()>,token:Arc<()>,retired:bool}
 impl RenameTurn{
-    fn take(slot:&Slot)->Result<Self,OrdinaryRenameError>{
+    pub(in crate::smb::backend) fn take(slot:&Slot)->Result<Self,OrdinaryRenameError>{
         if !matches!(slot.object,Object::File(..)){return Err(OrdinaryRenameError::AccessDenied);}
         Self::reserve(slot)
     }
@@ -172,6 +173,35 @@ impl Drop for RenameTurn{
 /// selector or reconstructed path stands in for either authority.
 pub(crate) struct OrdinaryRenameAdmission<'a>{
     turn:&'a RenameTurn,scope:&'a RustSessionWitness,target:&'a FileRenameTarget<'a>,
+}
+
+/// Exact replace intent of one signed SET and the original DELETE OPEN.
+pub(crate) struct OrdinaryReplaceAdmission<'a>{
+    turn:&'a RenameTurn,scope:RustSessionWitness,leaf:&'a str,
+}
+impl<'a> OrdinaryReplaceAdmission<'a>{
+    pub(in crate::smb::backend) fn from_request<'p>(
+        turn:&'a RenameTurn,slot:&Slot,delete_granted:bool,request:&'a RenameRequest<'_,'_>,
+        parent:impl Iterator<Item=&'p str>,
+    )->Result<Self,OrdinaryRenameError>{
+        if !delete_granted||!request.requested_replace(){return Err(OrdinaryRenameError::AccessDenied);}
+        if !matches!(request.open(),OpenReference::Explicit(_))||
+            request.original().message().header.flags&RELATED!=0{
+            return Err(OrdinaryRenameError::Name(NameError::Field(FieldError::Unsupported)));
+        }
+        turn.require(slot).map_err(OrdinaryRenameError::Original)?;
+        let leaf=same_parent_leaf(request.destination(),request.had_root_separator(),parent)
+            .map_err(OrdinaryRenameError::Name)?;
+        let scope=request.original().rust_session_witness().map_err(OrdinaryRenameError::Session)?;
+        if !scope.is_set_info(){return Err(OrdinaryRenameError::AccessDenied);}
+        Ok(Self{turn,scope,leaf})
+    }
+    pub(crate) fn require(&self,pool:PoolId,source:FileId)->io::Result<(&RustSessionWitness,&str)>{
+        if !self.turn.represents(Object::File(pool,source))||!self.scope.is_set_info(){
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        Ok((&self.scope,self.leaf))
+    }
 }
 
 /// No caller can create this from bare FILE/volume IDs or a Core root.
@@ -286,15 +316,51 @@ impl OrdinaryRenameAdmission<'_>{
     }
 }
 
+struct ReplaceOpening<'a>{tree:&'a RustRoot,scope:&'a RustSessionWitness,facts:Facts}
+impl OriginalRequest for ReplaceOpening<'_>{
+    type Held=RustWorkWriter;
+    type Error=OrdinaryRenameError;
+    fn recheck(&self,held:&RustWorkWriter)->Result<Facts,OrdinaryRenameError>{
+        if !held.belongs_to(self.tree)||self.facts.object!=Object::File(self.tree.pool(),held.file()){
+            return Err(OrdinaryRenameError::WrongTree);
+        }
+        held.require_current(self.tree,self.scope).map_err(OrdinaryRenameError::Original)?;
+        Ok(self.facts)
+    }
+}
+fn require_replacement_target(slot:&Slot)->io::Result<()>{
+    use std::sync::TryLockError;
+    let unavailable=||io::Error::from(io::ErrorKind::PermissionDenied);
+    if !slot.bound||slot.retained||slot.released{return Err(unavailable());}
+    let table=slot.owner.table.try_lock().map_err(|e|match e{
+        TryLockError::WouldBlock=>io::ErrorKind::WouldBlock.into(),
+        TryLockError::Poisoned(_)=>unavailable(),
+    })?;
+    let row=table.objects.get(&slot.object).ok_or_else(unavailable)?;
+    if row.deletion.is_some()||row.renaming.is_some()||row.bound==0{return Err(unavailable());}
+    Ok(())
+}
+enum RenameProof{
+    Ordinary(RustOrdinaryRename),
+    Replacement{target:Held<RustWorkWriter>,confirmed:ConfirmedExistingReplacement},
+}
+
 #[must_use]
 pub(in crate::smb) struct PreparedOrdinaryRename{
-    turn:RenameTurn,scope:RustSessionWitness,proof:RustOrdinaryRename,following:Option<usize>,
+    turn:RenameTurn,scope:RustSessionWitness,proof:RenameProof,following:Option<usize>,
 }
 impl PreparedOrdinaryRename{
     pub(in crate::smb) fn require_current(&self,open:&FileOpen,tree:&RustRoot)->io::Result<()>{
         if open.held.grant.0&DELETE_ACCESS==0{return Err(io::ErrorKind::PermissionDenied.into());}
         self.turn.require(&open.held._slot)?;
-        open.held.original.require_rename(tree,&self.scope,&self.proof)
+        match &self.proof{
+            RenameProof::Ordinary(proof)=>open.held.original.require_rename(tree,&self.scope,proof),
+            RenameProof::Replacement{target,confirmed}=>{
+                require_replacement_target(&target._slot)?;
+                target.original.require_current(tree,&self.scope)?;
+                confirmed.require_receipt(tree,&self.scope)
+            }
+        }
     }
     /// The sender must pick an actual related CLOSE from the same verified
     /// frame and the immediately preceding original's own already-held FILE.
@@ -312,6 +378,7 @@ impl PreparedOrdinaryRename{
         tree.ensure_current(&closing).map_err(unknown)?;
         self.require_current(&open,tree).map_err(unknown)?;
         let Self{mut turn,scope,proof,..}=self;
+        let RenameProof::Ordinary(proof)=proof else{return Err(io::ErrorKind::ConnectionAborted.into());};
         let Held{original,_slot,..}=open.held;
         let proof=original.retire_rename(tree,&scope,proof).map_err(unknown)?;
         turn.retire(_slot).map_err(unknown)?;
@@ -369,8 +436,50 @@ impl FileOpen{
         if !matches!(request.open(),OpenReference::Explicit(_)){
             return Err(OrdinaryRenameError::Name(NameError::Field(FieldError::Unsupported)));
         }
+        if request.requested_replace()&&!self.allows_read_data(){
+            if let Some(ready)=self.prepare_existing_replacement(tree,request)?{return Ok(ready);}
+        }
         self.rename_checked(tree,request,true)
     }
+
+    // Narrow, useful FILE_OPEN-for-DELETE sequence: the original still gets
+    // ordinary explicit CLOSE; it is never re-bound to a different FileId.
+    fn prepare_existing_replacement(&self,tree:&RustRoot,request:&RenameRequest<'_,'_>)
+        ->Result<Option<PreparedOrdinaryRename>,OrdinaryRenameError>{
+        let turn=RenameTurn::take(&self.held._slot)?;
+        let admission=OrdinaryReplaceAdmission::from_request(&turn,&self.held._slot,
+            self.held.grant.0&DELETE_ACCESS!=0,request,self.held.original.original_parent_components())?;
+        let Some(original)=tree.choose_replace_writer(&admission,&self.held.original)
+            .map_err(OrdinaryRenameError::Original)? else{return Ok(None);};
+        let (scope,_)=admission.require(tree.pool(),self.held.original.file()).map_err(OrdinaryRenameError::Original)?;
+        let facts=Facts{object:Object::File(tree.pool(),original.file()),grant:Grant(2),parent_write:ParentWrite::Granted};
+        let opening=ReplaceOpening{tree,scope,facts};
+        let pending=self.held._slot.owner.reserve(&opening,facts,Share(ALL)).map_err(|e|match e{
+            ReserveError::SharingViolation=>OrdinaryRenameError::SharingViolation,
+            ReserveError::DeletePending=>OrdinaryRenameError::DeletePending,
+            ReserveError::Resources=>OrdinaryRenameError::Name(NameError::Resources),
+            ReserveError::Unavailable=>OrdinaryRenameError::Original(io::Error::other("unavailable replacement sharing state")),
+        })?;
+        let writer=original.acquire().map_err(OrdinaryRenameError::Original)?;
+        let target=pending.bind(writer).map_err(|e|match e{
+            BindError::Original(e)=>e,BindError::Changed=>OrdinaryRenameError::WrongTree,
+        })?;
+        let live=||{turn.require_move_open(self,tree)?;require_replacement_target(&target._slot)};
+        tree.release_abandoned_replacement(&self.held.original,&target.original,&admission,&live)
+            .map_err(OrdinaryRenameError::Original)?;
+        let old=target.original.replacement_eof(tree,&admission,self.held.original.file()).map_err(OrdinaryRenameError::Original)?;
+        let new=self.held.original.eof();
+        let permit=target._slot.range_io(0,old.max(new),Intent::Write).map_err(|e|match e{
+            RangeIoError::Conflict=>OrdinaryRenameError::SharingViolation,
+            _=>OrdinaryRenameError::Original(io::Error::other("unavailable exact replacement byte range")),
+        })?;
+        let confirmed=tree.replace_completed_read_source(&self.held.original,&target.original,&admission,&live)
+            .map_err(OrdinaryRenameError::Original)?;
+        drop(permit);
+        let scope=admission.scope;
+        Ok(Some(PreparedOrdinaryRename{turn,scope,proof:RenameProof::Replacement{target,confirmed},following:None}))
+    }
+
     fn rename_checked(&mut self,tree:&RustRoot,request:&RenameRequest<'_,'_>,standalone:bool)
         ->Result<PreparedOrdinaryRename,OrdinaryRenameError>{
         if !self.held.original.belongs_to(tree){return Err(OrdinaryRenameError::WrongTree);}
@@ -388,7 +497,7 @@ impl FileOpen{
         let following=if request.open()==OpenReference::PreviousInCompound{
             request.original().ordinal().checked_add(1)
         }else{None};
-        Ok(PreparedOrdinaryRename{turn,scope,proof,following})
+        Ok(PreparedOrdinaryRename{turn,scope,proof:RenameProof::Ordinary(proof),following})
     }
 }
 

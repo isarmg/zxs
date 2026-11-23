@@ -7,8 +7,8 @@ use std::{io,time::Duration};
 // SQLite bounds internal table/index/trigger hash entries, including the
 // schema table and WITHOUT ROWID primary indexes that have no sqlite_schema
 // row. This parser/engine budget is not the canonical catalogue row limit.
-// This paired definition uses 178 visible + 24 hidden PKs + the schema table.
-const MAX_ENGINE_SCHEMA_OBJECTS:i32=208;
+// This paired definition uses 190 visible + 25 hidden PKs + the schema table.
+const MAX_ENGINE_SCHEMA_OBJECTS:i32=221;
 
 pub(super) fn path_limit()->io::Result<usize>{helper_linux_evidence::sqlite_vfs::unix_sqlite_path_limit()}
 

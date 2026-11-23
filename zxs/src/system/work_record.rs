@@ -143,6 +143,13 @@ pub(super) fn pending_current(db:&Connection,b:&Birth)->io::Result<Option<Issued
     let op=OperationId(q.array(0)?);q.done()?;
     Ok(Some(edit(db,b,op)?.filter(|e|!e.confirmed).ok_or_else(||invalid("missing actual pending SAVE"))?))
 }
+/// Policy-only unsettled work; do not use in physical member/offset accounting.
+pub(super) fn active_pending(db:&Connection,b:&Birth)->io::Result<Option<Issued>>{
+    let q=db.prepare(c"SELECT edit_op FROM main.active_pending_edit WHERE file_id=?1")?;
+    q.bind_bytes(1,&b.file.0)?;if !start_one(&q)?{return Ok(None);}
+    let op=OperationId(q.array(0)?);q.done()?;
+    Ok(Some(edit(db,b,op)?.filter(|e|!e.confirmed).ok_or_else(||invalid("missing active pending SAVE"))?))
+}
 pub(super) fn latest_commit(db:&Connection,b:&Birth)->io::Result<Option<(OperationId,OperationId,OperationId,i64)>>{
     let q=db.prepare(c"SELECT commit_op,save_op,round_op,ord FROM main.last_manual WHERE file_id=?1")?;
     q.bind_bytes(1,&b.file.0)?;if !start_one(&q)?{return Ok(None);}

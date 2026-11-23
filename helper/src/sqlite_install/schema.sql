@@ -3,7 +3,7 @@
 -- empty DB; insert the complete pending operation and all its selected rows
 -- in that SAME transaction. No CREATE or installation on normal open.
 PRAGMA application_id = 0x5A585331;
-PRAGMA user_version = 19;
+PRAGMA user_version = 20;
 
 -- Both INIT (1) and SETUP_ACCOUNT (2) name the separately authenticated offline
 -- maintenance principal. PUBLISH_ROOT (3) is an authenticated online account.
@@ -936,7 +936,7 @@ SELECT h.file_id,h.save_op,h.round_op,h.revision,a.credential_op AS auth_op,
 FROM selected_work h LEFT JOIN last_manual n ON n.file_id=h.file_id
 JOIN file_location l ON l.file_id=h.file_id AND l.role=2
 CROSS JOIN active_credential a
-WHERE a.role=0 AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=h.file_id)
+WHERE a.role=0 AND NOT EXISTS(SELECT 1 FROM active_pending_edit p WHERE p.file_id=h.file_id)
  AND NOT EXISTS(SELECT 1 FROM pending_transfer m WHERE m.file_id=h.file_id)
  AND NOT EXISTS(SELECT 1 FROM pending_rename r WHERE r.file_id=h.file_id);
 
@@ -1103,3 +1103,62 @@ WHEN OLD.state<>0 OR NEW.state<>1
     WHERE e.create_op=OLD.op_id AND a.smb_id=OLD.actor_id AND m.mode=2
       AND m.revision=(SELECT max(h.revision) FROM share_mode h WHERE h.share_id=e.share_id))))
 BEGIN SELECT RAISE(ABORT,'incomplete, revoked or already completed operation'); END;
+
+-- Paired ordinary replacement: publish the target's new working revision
+-- and the source's recycle placement on the same original database cut.
+CREATE TABLE file_replace (
+  replace_op BLOB NOT NULL PRIMARY KEY CHECK(length(replace_op)=16 AND replace_op<>zeroblob(16)),
+  save_op BLOB NOT NULL UNIQUE REFERENCES work_edit(edit_op),
+  recycle_op BLOB NOT NULL UNIQUE REFERENCES file_transfer(transfer_op),
+  state INTEGER NOT NULL CHECK(state IN (0,1,2)),
+  CHECK(replace_op<>save_op AND replace_op<>recycle_op AND save_op<>recycle_op)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER admit_file_replace BEFORE INSERT ON file_replace
+WHEN NEW.state<>0 OR NOT EXISTS(
+  SELECT 1 FROM work_edit w JOIN operation so ON so.op_id=w.edit_op AND so.kind=10 AND so.state=0
+  JOIN live_transfer m ON m.transfer_op=NEW.recycle_op AND m.direction=1 AND m.file_id<>w.file_id
+  JOIN operation ro ON ro.op_id=m.transfer_op AND ro.kind=12 AND ro.state=0 AND ro.actor_id=so.actor_id
+  JOIN file_location l ON l.file_id=w.file_id AND l.position_op=w.position_op AND l.role=2
+  WHERE w.edit_op=NEW.save_op AND w.share_id=m.share_id AND w.setting_op=m.setting_op AND w.auth_op=m.auth_op
+    AND l.volume_id=m.source_id AND l.parent_id=m.source_parent
+    AND EXISTS(SELECT 1 FROM pending_edit p WHERE p.edit_op=w.edit_op)
+    AND NOT EXISTS(SELECT 1 FROM pending_edit p WHERE p.file_id=m.file_id)
+    AND NOT EXISTS(SELECT 1 FROM pending_transfer t WHERE t.file_id=w.file_id)
+    AND NOT EXISTS(SELECT 1 FROM pending_rename r WHERE r.file_id=w.file_id))
+BEGIN SELECT RAISE(ABORT,'replacement requires the exact paired source and destination'); END;
+CREATE TRIGGER keep_file_replace BEFORE UPDATE ON file_replace
+WHEN OLD.state<>0 OR NEW.state NOT IN (1,2) OR NEW.replace_op<>OLD.replace_op
+  OR NEW.save_op<>OLD.save_op OR NEW.recycle_op<>OLD.recycle_op
+BEGIN SELECT RAISE(ABORT,'only an original pending replacement may conclude'); END;
+CREATE TRIGGER retain_file_replace BEFORE DELETE ON file_replace
+BEGIN SELECT RAISE(ABORT,'retain the original replacement outcome'); END;
+CREATE TRIGGER confirm_paired_file_replace BEFORE UPDATE OF state ON operation
+WHEN EXISTS(SELECT 1 FROM file_replace r WHERE (r.save_op=OLD.op_id OR r.recycle_op=OLD.op_id) AND r.state<>1)
+BEGIN SELECT RAISE(ABORT,'a replacement member cannot confirm alone'); END;
+CREATE TRIGGER select_file_replace AFTER UPDATE OF state ON file_replace
+WHEN NEW.state=1
+BEGIN
+  UPDATE operation SET state=1 WHERE op_id=NEW.save_op AND kind=10 AND state=0;
+  SELECT CASE WHEN changes()<>1 THEN RAISE(ABORT,'exact replacement SAVE did not advance') END;
+  UPDATE operation SET state=1 WHERE op_id=NEW.recycle_op AND kind=12 AND state=0;
+  SELECT CASE WHEN changes()<>1 THEN RAISE(ABORT,'exact replacement recycle did not advance') END;
+END;
+CREATE TRIGGER hold_paired_file_replace_save BEFORE INSERT ON work_edit
+WHEN EXISTS(SELECT 1 FROM file_replace r JOIN work_edit w ON w.edit_op=r.save_op
+            WHERE r.state=0 AND NEW.file_id=w.file_id)
+BEGIN SELECT RAISE(ABORT,'the original replacement SAVE is still pending'); END;
+CREATE TRIGGER hold_paired_file_replace_target BEFORE INSERT ON file_transfer
+WHEN EXISTS(SELECT 1 FROM file_replace r JOIN work_edit w ON w.edit_op=r.save_op
+            WHERE r.state=0 AND NEW.file_id=w.file_id)
+BEGIN SELECT RAISE(ABORT,'the original replacement target is still pending'); END;
+CREATE TRIGGER hold_paired_file_replace_recycle BEFORE INSERT ON file_transfer_void
+WHEN EXISTS(SELECT 1 FROM file_replace r WHERE r.recycle_op=NEW.transfer_op AND r.state=0)
+BEGIN SELECT RAISE(ABORT,'the original replacement recycle is still pending'); END;
+
+-- An expressly voided paired SAVE no longer blocks ordinary policy.
+-- Keep pending_edit itself intact: offsets and material census consume it.
+CREATE VIEW active_pending_edit AS
+SELECT p.* FROM pending_edit p
+WHERE NOT EXISTS(
+  SELECT 1 FROM file_replace x JOIN file_transfer_void v ON v.transfer_op=x.recycle_op
+  WHERE x.save_op=p.edit_op AND x.state=2);

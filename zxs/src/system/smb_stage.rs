@@ -139,6 +139,24 @@ fn overlay(parts:&[Part],add:Part)->io::Result<Vec<Part>>{
     Ok(result)
 }
 
+/// Private stream of already-confirmed source bytes, never an SMB upload.
+pub(super) struct ReplacementInput(Spool);
+impl ReplacementInput {
+    pub(super) fn new(parent:&HeldDir)->io::Result<Self>{
+        Ok(Self(Spool::new(parent,Rc::new(Cell::new(0)))?))
+    }
+    pub(super) fn input(&self,len:u64)->io::Result<&File>{
+        if self.0.poisoned||self.0.len!=len{return Err(invalid("replacement stream did not carry the full source"));}
+        Ok(&self.0.file)
+    }
+}
+impl Write for ReplacementInput{
+    fn write(&mut self,bytes:&[u8])->io::Result<usize>{
+        self.0.append(bytes)?;Ok(bytes.len())
+    }
+    fn flush(&mut self)->io::Result<()>{self.0.file.sync_data()}
+}
+
 pub(super) struct Scratch(Spool);
 impl Scratch{
     pub(super) fn before_birth(dir:&HeldDir)->io::Result<Self>{

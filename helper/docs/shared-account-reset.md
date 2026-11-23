@@ -1,6 +1,6 @@
 # 共用账户：离线重置及原单回执
 
-默认构建不接受此命令。私有 `private-fresh-install` 候选只接受确切 v19 的原部署，不迁移或修复 v18 及更早格式，不更改用户名或业务记录，不启动或停止服务。ZXS 必须已经完全退出：Helper 要独立拿到原 SYSTEM 和实例的排他租约，再核原 INIT、原库、卷标、站点及实际原凭据版本。只由 `/zxs/state/deployment.v1` 定位原受保护实例，使用它保存的单 ELF 路径与完整 SHA-256；没有旧路径回退，也没有新的路径或摘要覆盖参数。
+默认构建不接受此命令。私有 `private-fresh-install` 候选只接受确切 v20 的原部署，不迁移或修复旧格式，不更改用户名或业务记录，不启动或停止服务。ZXS 必须已经完全退出：Helper 要独立拿到原 SYSTEM 和实例的排他租约，再核原 INIT、原库、卷标、站点及实际原凭据版本。只由 `/zxs/state/deployment.v1` 定位原受保护实例，使用它保存的单 ELF 路径与完整 SHA-256；没有旧路径回退，也没有新的路径或摘要覆盖参数。
 
 ```text
 helper reset-account new --op ID --approval ID --previous ID --previous-generation N --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX

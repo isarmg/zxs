@@ -76,7 +76,7 @@ pub(super) fn isolated_first_init(tx:&Transaction<'_>,pool:&Id,init:&Id,actor:&I
         AND NOT EXISTS(SELECT 1 FROM main.root_share)
         AND NOT EXISTS(SELECT 1 FROM main.share_mode)",
         params![&pool[..],&init[..],&actor[..],&init_sha[..]],|r|r.get(0)).map_err(sql)?;
-    if !found{return Err(bad("not the exact committed account-free first v19 INIT"));}
+    if !found{return Err(bad("not the exact committed account-free first v20 INIT"));}
     Ok(())
 }
 pub(super) fn isolated_first_claims(pool:&Id,init:&Id,actor:&Id,init_sha:&[u8;32],locked:&LockedSystem)
@@ -103,7 +103,7 @@ pub(super) fn deployed_active(locked:&LockedSystem,site:&super::fresh_issuer::Si
     let o=site.origin;
     let source=locked.source();
     if site.plan_sha!=plan.sha()||o!=plan.origin||site.system!=source.path()||uid!=source.uid(){
-        return Err(bad("different held SYSTEM or installed v19 plan"));
+        return Err(bad("different held SYSTEM or installed v20 plan"));
     }
     let schema=Canonical::new()?;
     let db=Existing::observed_system(locked)?;

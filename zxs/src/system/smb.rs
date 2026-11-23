@@ -57,9 +57,12 @@ mod smb_buffer;
 mod retained_read;
 pub(crate) use retained_read::{RustRetainedDirectory,RustRetainedFile,RustRetainedKind,RustRetainedPage,RustRetainedReadProof};
 
+#[path="smb_rust_replace_pair.rs"]
+mod file_replace;
+
 #[path="file_transfer.rs"]
 mod file_transfer;
-pub(crate) use file_transfer::{CheckedMoveTarget,ConfirmedFileDelete,ConfirmedOrdinaryMove,MoveTargetKey,RustFileDelete,RustRetainedRestore};
+pub(crate) use file_transfer::{CheckedMoveTarget,ConfirmedExistingReplacement,ConfirmedFileDelete,ConfirmedOrdinaryMove,MoveTargetKey,RustFileDelete,RustRetainedRestore};
 #[path="file_rename.rs"]
 mod file_rename;
 #[path="file_retirement.rs"]

@@ -44,7 +44,7 @@ install-pool defaults to /zxs/disks/system and /zxs/disks/recycle; choose each o
 
 const PRIVATE_INSTALL_USAGE: &str = "
 
-Private v19 setup on an isolated fresh pool; prefix each first action with web to request its original terminal confirmation. Stop ZXS before account reset:
+Private v20 setup on an isolated fresh pool; prefix each first action with web to request its original terminal confirmation. Stop ZXS before account reset:
   helper install-pool [web] new-deployment --init-actor ID --storage-uid N --storage-gid N
       --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...
   helper setup-pair [web] issue-fresh --init-actor ID --storage-uid N --storage-gid N [--system DIR]

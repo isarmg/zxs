@@ -327,6 +327,40 @@ impl RustReadFile {
         writer.require_current(tree,member)?;
         Ok(reader)
     }
+    pub(in crate::system::reader::smb) fn replacement_original<'a>(
+        &'a self,tree:&RustRoot,member:&RustSessionWitness,
+    )->io::Result<&'a crate::ordinary::portable_birth::Installed>{
+        if !member.is_set_info()||!self.parent_allows_file_write(){return Err(denied());}
+        self.require_current(tree,member)?;
+        Ok(&self.file.container)
+    }
+
+    /// Stream only the latest completed revision. A fixed earlier SMB view
+    /// or any unresolved source SAVE cannot become a replacement payload.
+    pub(in crate::system::reader::smb) fn copy_completed_replacement_source(
+        &self,tree:&RustRoot,member:&RustSessionWitness,output:impl Write,
+        live:&impl Fn()->io::Result<()>,
+    )->io::Result<(Option<OperationId>,u64)>{
+        if !member.is_set_info()||!self.parent_allows_file_write(){return Err(denied());}
+        self.with_read(tree,member,|reader|{
+            let exact=|db:&Connection|{
+                live()?;
+                if work_record::selected(db,&reader.file.birth)?!=reader.file.live||
+                    work_record::pending_current(db,&reader.file.birth)?.is_some(){
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                Ok(())
+            };
+            reader.check_with(||Ok(()),exact)?;
+            if reader.file.live.is_none(){
+                return Err(io::Error::new(io::ErrorKind::WouldBlock,"replacement source has no completed original SAVE"));
+            }
+            let eof=reader.file.size();
+            let used=reader.range_evidence_while(0,eof,output,live)?;
+            reader.check_with(||used.require(reader.file.container.directory()),exact)?;
+            Ok((self.working_original(),eof))
+        })
+    }
     pub(in crate::system::reader::smb) fn working_original(&self)->Option<OperationId>{
         self.file.live.map(|r|r.record.key().save)
     }

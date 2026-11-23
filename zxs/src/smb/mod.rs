@@ -28,7 +28,7 @@ pub(crate) use connection::accepted::incoming::OriginalMoveFence;
 mod session;
 #[allow(dead_code, reason = "share votes are staged before real storage-open integration")]
 mod backend;
-pub(crate) use backend::{DirectoryBirthVote,FileBirthVote,FileRenameTarget,OrdinaryDirectoryRenameAdmission,OrdinaryMoveAdmission,OrdinaryRenameAdmission};
+pub(crate) use backend::{DirectoryBirthVote,FileBirthVote,FileRenameTarget,OrdinaryDirectoryRenameAdmission,OrdinaryMoveAdmission,OrdinaryRenameAdmission,OrdinaryReplaceAdmission};
 
 #[cfg(test)]
 #[path = "../../tests/smb/mod.rs"]

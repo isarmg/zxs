@@ -3,7 +3,7 @@
 //! the same native business engine and its single original working round.
 use super::{Catalog,EditAuthority,Place,Placed,Receipt,State,WriteAt,WriteFile,WriterCut,UnconfirmedSave,busy,file_create};
 use crate::{FileId,OperationId,display,fs::{HeldDir,invalid},identity::AccountId,
-    smb::RustSessionWitness,
+    smb::{OrdinaryReplaceAdmission,RustSessionWitness},
     ordinary::working_round::{Draft,Span},
     system::reader::{account::share_mode::{Mode,Setting},smb::{denied,file_number::SmbFileIndex,ordinary_directory::Route,runtime::{RustRoot,RustRootStamp}},
         volume::{OrdinaryMedia,OrdinaryRoot}}};
@@ -16,6 +16,12 @@ pub(crate) struct RustWriterSelection<'a>{
     tree:&'a RustRoot,member:&'a RustSessionWitness,label:String,
     catalog:Catalog,route:Route,placed:Placed,selected:State,authority:EditAuthority,
 }
+#[derive(Debug)]
+struct VacantReplaceName;
+impl std::fmt::Display for VacantReplaceName{
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.write_str("no selected replacement target")}
+}
+impl std::error::Error for VacantReplaceName{}
 impl RustRoot{
     pub(crate) fn choose_existing_writer<'a>(&'a self,member:&'a RustSessionWitness,
         label:&str,parents:&[&str],leaf:&str)->io::Result<RustWriterSelection<'a>>{
@@ -32,6 +38,7 @@ impl RustRoot{
     pub(in crate::system::reader::smb) fn choose_selected_writer<'a>(&'a self,
         member:&'a RustSessionWitness,label:&str,expected:&Placed,parent:&Route,setting:Setting,
     )->io::Result<RustWriterSelection<'a>>{
+        if !member.is_create(){return Err(denied());}
         self.select_writer(member,label,|db,c,volume|{
             if volume!=setting.volume{return Err(denied());}
             let route=Route::at(db,c,volume,parent.parent())?;
@@ -41,10 +48,42 @@ impl RustRoot{
             Ok((route,placed))
         }).and_then(|r|if r.authority.setting==setting{Ok(r)}else{Err(denied())})
     }
+    /// Return None only for the same parent's verified vacant name.
+    pub(crate) fn choose_replace_writer<'a>(
+        &'a self,admission:&'a OrdinaryReplaceAdmission<'_>,opened:&super::super::first_work::RustReadFile,
+    )->io::Result<Option<RustWriterSelection<'a>>>{
+        let (member,leaf)=admission.require(self.pool(),opened.file())?;
+        opened.require_current(self,member)?;
+        let (original,label,parent,setting)=opened.deletion_coordinates();
+        display::component(leaf.as_bytes(),222)?;
+        match self.select_writer(member,label,|db,c,volume|{
+            if volume!=setting.volume||setting.mode!=Mode::ReadWrite{return Err(denied());}
+            let route=Route::at(db,c,volume,parent.parent())?;
+            if &route!=parent||file_create::placed_at(db,c,volume,parent.parent(),&original.name,Some(original.file))?.here!=*original{
+                return Err(denied());
+            }
+            let target=match Place::named(db,c,volume,parent.parent(),leaf)?{
+                Some(place) if place.file!=original.file=>place,
+                Some(_)=>return Err(io::ErrorKind::AlreadyExists.into()),
+                None=>{
+                    if super::super::ordinary_directory::lookup(db,c,volume,parent.parent(),leaf)?.is_some(){
+                        return Err(io::ErrorKind::IsADirectory.into());
+                    }
+                    return Err(io::Error::new(io::ErrorKind::NotFound,VacantReplaceName));
+                }
+            };
+            Ok((route,target.bind(db,c)?))
+        }){
+            Ok(choice) if choice.authority.setting==setting=>Ok(Some(choice)),
+            Ok(_)=>Err(denied()),
+            Err(e) if e.get_ref().is_some_and(|cause|cause.is::<VacantReplaceName>())=>Ok(None),
+            Err(e)=>Err(e),
+        }
+    }
     fn select_writer<'a>(&'a self,member:&'a RustSessionWitness,label:&str,
         select:impl FnOnce(&super::Connection,&Catalog,crate::VolumeId)->io::Result<(Route,Placed)>,
     )->io::Result<RustWriterSelection<'a>>{
-        if !member.is_create(){return Err(denied());}
+        // Exact CREATE and replacement capabilities are checked at entry.
         let source=self.ordinary_reader(member)?;
         let (catalog,route,placed,selected,authority)=source.at(|db,c|{
             let author=self.ordinary_writer_at(&WriterCut{source,db,catalog:&c},label)?;
@@ -97,6 +136,27 @@ pub(crate) struct RustWorkWriter{
     authority:EditAuthority,label:String,route:Route,
 }
 impl RustWorkWriter{
+    pub(crate) fn replacement_eof(&self,tree:&RustRoot,admission:&OrdinaryReplaceAdmission<'_>,
+        source:FileId,
+    )->io::Result<u64>{
+        let (member,leaf)=admission.require(tree.pool(),source)?;
+        if source==self.file()||self.original_place().name!=leaf{return Err(denied());}
+        self.with_writer_at(tree,member,|at|at.source.at(|db,c|{
+            let current=at.state(db,&c)?;
+            if crate::system::reader::work_record::active_pending(db,&at.birth)?.is_some(){return Err(busy("settle the original target SAVE first"));}
+            Ok(current.selected.map_or(0,|(record,_)|record.record.logical()))
+        }))
+    }
+    pub(in crate::system::reader::smb) fn with_replacement_target<'input,T>(
+        &self,tree:&RustRoot,admission:&OrdinaryReplaceAdmission<'_>,source:FileId,
+        save:OperationId,input:&'input File,len:u64,
+        consume:impl FnOnce(super::ReplacementSave<'_,'input>)->io::Result<T>,
+    )->io::Result<T>{
+        let (member,leaf)=admission.require(tree.pool(),source)?;
+        if source==self.file()||self.original_place().name!=leaf{return Err(denied());}
+        self.with_writer_at(tree,member,|target|consume(target.prepare_replacement(save,input,len)?))
+    }
+
     pub(in crate::system::reader::smb) fn from_newborn(
         born:super::super::file_create::NativeBorn<'_>,tree:&RustRoot,member:&RustSessionWitness,
         label:String,route:Route,who:(AccountId,OperationId,i64,Setting),nonce:OperationId,

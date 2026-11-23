@@ -44,7 +44,7 @@ directory. This recipe does not create `/zxs` or install the executable.
 
 A digest and an ELF check are build evidence, not installation approval or
 SMB/Web acceptance. Fresh site setup still uses independent administrator
-approval, the exact fresh schema-19 shared-account SYSTEM and the original
+approval, the exact fresh schema-20 shared-account SYSTEM and the original
 protected deployment/site records. This build does not upgrade earlier pools. An optional
 Helper must embed the complete unchanged bytes, not confer trust by hashing
 an arbitrary installed executable. The primary runtime qualification is
