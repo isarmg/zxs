@@ -86,6 +86,7 @@ fn recycle_disjoint(recycle: &HeldDir, other: &HeldDir) -> io::Result<bool> {
 
 pub(crate) struct SelectedStart {
     account: Account,
+    pool: [u8; 16],
     state: HeldDir,
     system: HeldDir,
     data: Vec<DataRoot>,
@@ -144,6 +145,7 @@ impl SelectedStart {
         }
         let start = Self {
             account,
+            pool: roots.pool,
             state,
             system,
             data,
@@ -168,12 +170,13 @@ impl SelectedStart {
         self.require_named()?;
         let Self {
             account,
+            pool,
             state,
             system,
             data,
             recycle,
         } = self;
-        let store = Store::open_with_recycle(system, data, recycle)?;
+        let store = Store::open_with_recycle(system, data, recycle, pool)?;
         state.require_named()?;
         Ok(Bound {
             store,

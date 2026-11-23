@@ -1,6 +1,8 @@
 use super::*;
 use crate::test_support::PrivateTemp;
 
+const POOL: Id = [7; 16];
+
 fn id(n: u8) -> Id {
     [n; 16]
 }
@@ -256,9 +258,13 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let store =
-        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
-            .unwrap();
+    let store = Store::open_with_recycle(
+        held(&system),
+        vec![held_data(&ordinary, 1)],
+        held(&recycle),
+        POOL,
+    )
+    .unwrap();
     let first = store
         .save(
             mutation(2),
@@ -335,6 +341,96 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
 
 #[test]
 #[ignore = "requires private writable /dev/shm on a filesystem distinct from the ordinary temporary storage"]
+fn retired_data_proof_settles_only_the_exact_recycled_retry() {
+    let local = PrivateTemp::under(&std::env::temp_dir());
+    let remote = PrivateTemp::under(Path::new("/dev/shm"));
+    let system = local.0.join("system");
+    let original = local.0.join("original");
+    let remaining = local.0.join("remaining");
+    let recycle = remote.0.join("recycle");
+    for path in [&system, &original, &remaining, &recycle] {
+        ensure_dir(path).unwrap();
+    }
+    let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
+    let open = |data: &Path, token, pool| {
+        Store::open_with_recycle(
+            held(&system),
+            vec![held_data(data, token)],
+            held(&recycle),
+            pool,
+        )
+        .unwrap()
+    };
+    let store = open(&original, 1, POOL);
+    store
+        .save(
+            mutation(2),
+            full(main(None), id(10), body(b"one"), Some("name".into())),
+            &b"one"[..],
+            || Ok(()),
+        )
+        .unwrap();
+    let done = store.move_to_recycle(mutation(6), 1, || Ok(())).unwrap();
+    let not_recycled = Mutation {
+        container: id(11),
+        request: id(12),
+    };
+    store
+        .routes
+        .reserve(not_recycled.container, [1; 32])
+        .unwrap();
+    drop(store);
+
+    let pending = |store: &Store| {
+        assert!(matches!(
+            store.move_to_recycle(mutation(6), 1, || Ok(())),
+            Err(Error::CleanupPending { receipt, .. }) if receipt == done
+        ));
+    };
+    let store = open(&remaining, 2, POOL);
+    pending(&store);
+    assert_eq!(store.recycle_receipt(mutation(6)).unwrap(), Some(done));
+    drop(store);
+
+    let retired = system.join("retired-data");
+    ensure_dir(&retired).unwrap();
+    let token = [1; 32];
+    let mut proof = [0; 52];
+    proof[..4].copy_from_slice(b"DT1\0");
+    proof[4..20].copy_from_slice(&POOL);
+    proof[20..].copy_from_slice(&token);
+    write_file(&retired.join(hex(token)), &proof).unwrap();
+
+    let store = open(&remaining, 2, [8; 16]);
+    pending(&store);
+    drop(store);
+    let store = open(&original, 1, POOL);
+    fs::rename(&original, local.0.join("original-offline")).unwrap();
+    pending(&store);
+    drop(store);
+
+    let store = open(&remaining, 2, POOL);
+    assert_eq!(
+        store.move_to_recycle(mutation(6), 1, || Ok(())).unwrap(),
+        done
+    );
+    assert!(matches!(
+        store.move_to_recycle(mutation(7), 1, || Ok(())),
+        Err(Error::Conflict(Conflict::RequestReused))
+    ));
+    assert_eq!(store.routes.get(id(1)).unwrap(), Some(token));
+    assert!(matches!(
+        store.describe(not_recycled.container),
+        Err(e) if e.kind() == io::ErrorKind::NotConnected
+    ));
+    assert!(matches!(
+        store.move_to_recycle(not_recycled, 1, || Ok(())),
+        Err(Error::Io(e)) if e.kind() == io::ErrorKind::NotConnected
+    ));
+}
+
+#[test]
+#[ignore = "requires private writable /dev/shm on a filesystem distinct from the ordinary temporary storage"]
 fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink() {
     let local = PrivateTemp::under(&std::env::temp_dir());
     let remote = PrivateTemp::under(Path::new("/dev/shm"));
@@ -345,9 +441,13 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let store =
-        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
-            .unwrap();
+    let store = Store::open_with_recycle(
+        held(&system),
+        vec![held_data(&ordinary, 1)],
+        held(&recycle),
+        POOL,
+    )
+    .unwrap();
     store
         .save(
             mutation(2),
@@ -421,6 +521,7 @@ fn startup_refuses_a_replaced_qualified_ordinary_directory_before_writing_layout
             root: original,
         }],
         held(&recycle),
+        POOL,
     )
     .err()
     .unwrap();
@@ -466,8 +567,13 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
     let open = || {
-        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
-            .unwrap()
+        Store::open_with_recycle(
+            held(&system),
+            vec![held_data(&ordinary, 1)],
+            held(&recycle),
+            POOL,
+        )
+        .unwrap()
     };
     let store = open();
     store
@@ -504,9 +610,13 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let store =
-        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
-            .unwrap();
+    let store = Store::open_with_recycle(
+        held(&system),
+        vec![held_data(&ordinary, 1)],
+        held(&recycle),
+        POOL,
+    )
+    .unwrap();
     store
         .save(
             mutation(2),
@@ -635,6 +745,7 @@ fn startup_refuses_aliased_data_roles_before_writing_layout() {
         HeldDir::trusted_storage(&system).unwrap(),
         vec![held_data(&data, 1), held_data(&data, 2)],
         HeldDir::trusted_storage(&recycle).unwrap(),
+        POOL,
     )
     .err()
     .unwrap();

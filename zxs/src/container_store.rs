@@ -108,11 +108,12 @@ impl Store {
         system: HeldDir,
         data: Vec<DataRoot>,
         recycled: HeldDir,
+        pool: Id,
     ) -> io::Result<Self> {
         recycle::Recycle::require_roles(&system, &recycled, &data)?;
         let owner = system.opaque_owner(c"container-owner")?;
         let mut store = Self::open_roster(&system, data, owner)?;
-        store.archive = Some(recycle::Recycle::open(system, recycled)?);
+        store.archive = Some(recycle::Recycle::open(system, recycled, pool)?);
         Ok(store)
     }
 
@@ -162,17 +163,17 @@ impl Store {
         })
     }
 
+    fn enrolled(&self, token: [u8; 32]) -> Option<&DataVolume> {
+        self.volumes
+            .binary_search_by_key(&token, |volume| volume.token)
+            .ok()
+            .map(|i| &self.volumes[i])
+    }
+
     fn routed(&self, id: Id) -> io::Result<Option<&DataVolume>> {
         self.routes
             .get(id)?
-            .map(|token| {
-                self.volumes
-                    .binary_search_by_key(&token, |volume| volume.token)
-                    .map(|i| &self.volumes[i])
-                    .map_err(|_| {
-                        io::Error::new(io::ErrorKind::NotConnected, "selected DATA is not enrolled")
-                    })
-            })
+            .map(|token| self.enrolled(token).ok_or_else(unenrolled_data))
             .transpose()
     }
 
@@ -507,12 +508,7 @@ impl Store {
             if (done.mutation, done.original_sequence) != (mutation, expected_sequence) {
                 return Err(Conflict::RequestReused.into());
             }
-            // The result remains available from SYSTEM and R when F is
-            // absent. A caller may separately query the selected receipt.
-            if let Err(error) = self.recorded(mutation.container).and_then(|volume| {
-                let known = read_state(&at, mutation.container)?;
-                archive.retire(done, volume, &known)
-            }) {
+            if let Err(error) = self.finish_recycle(archive, done, &at) {
                 return Err(Error::CleanupPending {
                     receipt: done,
                     error,
@@ -559,6 +555,26 @@ impl Store {
         }
         *memory = None;
         Ok(done)
+    }
+
+    fn finish_recycle(
+        &self,
+        archive: &recycle::Recycle,
+        done: RecycleReceipt,
+        at: &Path,
+    ) -> io::Result<()> {
+        let id = done.mutation.container;
+        let token = self
+            .routes
+            .get(id)?
+            .ok_or_else(|| invalid("selected container route is absent"))?;
+        if let Some(volume) = self.enrolled(token) {
+            return archive.retire(done, volume, &read_state(at, id)?);
+        }
+        if !archive.retired_data(token)? {
+            return Err(unenrolled_data());
+        }
+        archive.require_selected(done, &read_state(at, id)?)
     }
 
     /// Immutable ancestry of the selected branch, newest node first.
@@ -718,6 +734,9 @@ impl Drop for Stage {
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+fn unenrolled_data() -> io::Error {
+    io::Error::new(io::ErrorKind::NotConnected, "selected DATA is not enrolled")
+}
 fn read(input: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     loop {
         match input.read(buffer) {
@@ -782,9 +801,9 @@ fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-fn hex(id: [u8; 16]) -> String {
+fn hex<const N: usize>(id: [u8; N]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(32);
+    let mut out = String::with_capacity(2 * N);
     for b in id {
         out.push(DIGITS[usize::from(b >> 4)] as char);
         out.push(DIGITS[usize::from(b & 15)] as char);

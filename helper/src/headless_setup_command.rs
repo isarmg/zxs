@@ -30,6 +30,7 @@ pub(crate) struct Setup {
     web: bool,
     reset: bool,
     add_data: Option<PathBuf>,
+    retire_data: Option<PathBuf>,
     preview: Option<SocketAddr>,
 }
 
@@ -62,12 +63,17 @@ impl Setup {
             None
         };
         let reset = mode == "reset";
-        if mode == "add-data" {
-            let candidate = PathBuf::from(args.next().ok_or("expected NEW_DATA before current roots")?);
+        if mode == "add-data" || mode == "retire-data" {
+            let candidate = PathBuf::from(args.next().ok_or("expected operated DATA directory before current roots")?);
             use std::os::unix::ffi::OsStrExt;
             crate::path_rules::Kind::StorageRoot.check_path(candidate.as_os_str().as_bytes())?;
             let paths = parse_paths(args)?;
-            return Ok(Self { paths, login: None, web, reset, preview, add_data: Some(candidate) });
+            let (add_data, retire_data) = if mode == "add-data" {
+                (Some(candidate), None)
+            } else {
+                (None, Some(candidate))
+            };
+            return Ok(Self { paths, login: None, web, reset, preview, add_data, retire_data });
         }
         let (paths, login) = if mode == "new" {
             // The last argument is the login; all preceding words name roots.
@@ -93,6 +99,7 @@ impl Setup {
             reset,
             preview,
             add_data: None,
+            retire_data: None,
         })
     }
 
@@ -103,6 +110,11 @@ impl Setup {
         if let Some(candidate) = self.add_data {
             selected.add_data(&candidate)?;
             writeln!(io::stdout().lock(), "Data disk registered.")?;
+            return Ok(ExitCode::SUCCESS);
+        }
+        if let Some(target) = self.retire_data {
+            selected.retire_data(&target)?;
+            writeln!(io::stdout().lock(), "Data disk retired; files on disk unchanged.")?;
             return Ok(ExitCode::SUCCESS);
         }
         if self.reset {

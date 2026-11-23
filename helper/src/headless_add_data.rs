@@ -1,8 +1,7 @@
 //! Append one empty DATA disk using the exact offline descriptor lease.
 use super::*;
 use crate::headless_setup::{
-    Held, MARK_BYTES, MARK_MAGIC, MARKER, RootInput, read_role_token, require_only,
-    role_proof,
+    Held, MARK_BYTES, MARK_MAGIC, MARKER, RootInput, read_role_token, require_only, role_proof,
 };
 use rustix::fs::{RenameFlags, renameat_with};
 
@@ -16,7 +15,7 @@ impl FreshSelection {
         // An exact rerun after descriptor replacement can recognize the
         // same selected path as the final roster entry without writing again.
         let current_paths = self.paths().map(Path::to_path_buf).collect::<Vec<_>>();
-        let reset = match self.open_offline(true) {
+        let reset = match self.open_offline(Some(ADD_STAGE)) {
             Ok(reset) => reset,
             Err(error) if current_paths.len() < FIXED_ROOTS + MAX_DATA => {
                 let mut already = current_paths;
@@ -64,26 +63,45 @@ impl Reset {
             }
             Err(error) => return Err(error),
         };
+        let system = &self.selected.roots[0].directory;
+        if super::retire_data::retired(system, pool, &token, uid)? {
+            return Err(refused());
+        }
         marker[TOKEN_AT..].copy_from_slice(&token);
         let marker_name = Some(MARKER.as_bytes());
         require_only(
             &candidate.directory,
-            if has_role_file { marker_name } else { Some(ROLE_STAGE.as_bytes()) },
+            if has_role_file {
+                marker_name
+            } else {
+                Some(ROLE_STAGE.as_bytes())
+            },
         )?;
 
-        let root = || RootInput { held: candidate.input(), token };
+        let root = || RootInput {
+            held: candidate.input(),
+            token,
+        };
         let original_and_candidate = || {
             self.require_original()?;
             let mut issue = self.selected.issue(&self.login);
             issue.roots.push(root());
-            issue.require_roots(false)
+            issue.require_roots(false)?;
+            if super::retire_data::retired(system, pool, &token, uid)? {
+                return Err(refused());
+            }
+            Ok(())
         };
         original_and_candidate()?;
 
         let mut updated = Zeroizing::new(self.original.full.to_vec());
         updated[LOGIN + 1 + self.login.len()] += 1;
         let path = candidate.original.path().as_os_str().as_bytes();
-        updated.extend_from_slice(&u16::try_from(path.len()).map_err(|_| refused())?.to_be_bytes());
+        updated.extend_from_slice(
+            &u16::try_from(path.len())
+                .map_err(|_| refused())?
+                .to_be_bytes(),
+        );
         updated.extend_from_slice(path);
         updated.extend_from_slice(&token);
 
@@ -100,13 +118,17 @@ impl Reset {
                 original_and_candidate()?;
                 require_only(&candidate.directory, Some(ROLE_STAGE.as_bytes()))
             };
-            let staged = finish_stage(&candidate.directory, ROLE_STAGE, &marker, uid, prove_marker)?;
+            let staged =
+                finish_stage(&candidate.directory, ROLE_STAGE, &marker, uid, prove_marker)?;
             prove_marker()?;
             if stamp(&read(&candidate.directory, ROLE_STAGE, uid)?.meta) != stamp(&staged.meta) {
                 return Err(refused());
             }
             renameat_with(
-                &candidate.directory, ROLE_STAGE, &candidate.directory, MARKER,
+                &candidate.directory,
+                ROLE_STAGE,
+                &candidate.directory,
+                MARKER,
                 RenameFlags::NOREPLACE,
             )?;
             candidate.directory.sync_all()?;
@@ -142,7 +164,7 @@ impl Reset {
     }
 }
 
-fn read_stage(dir: &File, name: &str, uid: u32) -> io::Result<Option<Record>> {
+pub(super) fn read_stage(dir: &File, name: &str, uid: u32) -> io::Result<Option<Record>> {
     match read(dir, name, uid) {
         Ok(record) => Ok(Some(record)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -150,7 +172,7 @@ fn read_stage(dir: &File, name: &str, uid: u32) -> io::Result<Option<Record>> {
     }
 }
 
-fn finish_stage(
+pub(super) fn finish_stage(
     dir: &File,
     name: &str,
     expected: &[u8],
@@ -163,8 +185,11 @@ fn finish_stage(
             return Err(refused());
         }
         let file = File::from(openat2(
-            dir, name, OFlags::WRONLY | OFlags::APPEND | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(), SCOPED,
+            dir,
+            name,
+            OFlags::WRONLY | OFlags::APPEND | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+            SCOPED,
         )?);
         if stamp(&file.metadata()?) != stamp(&original.meta) {
             return Err(refused());
@@ -172,8 +197,11 @@ fn finish_stage(
         (file, original.full.len())
     } else {
         let file = File::from(openat2(
-            dir, name, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
-            Mode::RUSR | Mode::WUSR, SCOPED,
+            dir,
+            name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+            SCOPED,
         )?);
         fchmod(&file, Mode::RUSR | Mode::WUSR)?;
         (file, 0)

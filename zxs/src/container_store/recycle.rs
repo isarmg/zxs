@@ -22,6 +22,7 @@ use std::{
 };
 
 const BYTES: usize = 108;
+const RETIRED_BYTES: usize = 52;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RecycleReceipt {
@@ -101,6 +102,7 @@ impl RecycleReceipt {
 /// Selected receipts never require opening the former DATA container.
 pub(super) struct Recycle {
     system: HeldDir,
+    pool: Id,
     archive_root: HeldDir,
     moves: PathBuf,
     staging: PathBuf,
@@ -162,7 +164,7 @@ impl Recycle {
     }
 
     /// The caller already retains the original SYSTEM owner.
-    pub(super) fn open(system: HeldDir, recycle: HeldDir) -> io::Result<Self> {
+    pub(super) fn open(system: HeldDir, recycle: HeldDir, pool: Id) -> io::Result<Self> {
         let owner = recycle.opaque_owner(c"container-owner")?;
         let moves_directory = system.opaque_subdirectory(c"container-moves")?;
         let staging_directory = recycle.opaque_subdirectory(c"incoming-containers")?;
@@ -180,6 +182,7 @@ impl Recycle {
         recycle.require_named()?;
         Ok(Self {
             system,
+            pool,
             archive_root: recycle,
             moves,
             staging,
@@ -381,15 +384,9 @@ impl Recycle {
         Ok(())
     }
 
-    /// Validate the full original metadata proof before the first unlink.
-    /// The per-entry retirement step re-pins its exact names under the same
-    /// exclusive source lease. No node payload is opened for content.
-    /// The store's service-owner lock and private tree admit no other
-    /// cooperating writer between the final relative name check and unlink.
-    pub(super) fn retire(
+    pub(super) fn require_selected(
         &self,
         receipt: RecycleReceipt,
-        ordinary: &DataVolume,
         known: &State,
     ) -> io::Result<()> {
         if self
@@ -403,6 +400,49 @@ impl Recycle {
                 "source cannot retire before exact recycle selection",
             ));
         }
+        Ok(())
+    }
+
+    /// The offline owner publishes this record before removing the disk
+    /// from the roster. The caller checks that the original token is absent.
+    pub(super) fn retired_data(&self, token: [u8; 32]) -> io::Result<bool> {
+        self.system.require_named()?;
+        let Some(directory) = self.system.child_directory(c"retired-data")? else {
+            return Ok(false);
+        };
+        let name = CString::new(hex(token)).map_err(|_| invalid("invalid retired DATA name"))?;
+        let Some(pin) = directory.opaque_pin(&name)? else {
+            return Ok(false);
+        };
+        if pin.file.metadata()?.len() != RETIRED_BYTES as u64 {
+            return Err(invalid("invalid retired DATA record size"));
+        }
+        let mut raw = [0; RETIRED_BYTES];
+        (&pin.file).read_exact(&mut raw)?;
+        if &raw[..4] != b"DT1\0" || raw[4..20] != self.pool || raw[20..] != token {
+            return Err(invalid(
+                "retired DATA record differs from its original pool or disk",
+            ));
+        }
+        directory.file.sync_all()?;
+        self.system.file.sync_all()?;
+        pin.require(&directory, &name)?;
+        self.system.require_named()?;
+        Ok(true)
+    }
+
+    /// Validate the full original metadata proof before the first unlink.
+    /// The per-entry retirement step re-pins its exact names under the same
+    /// exclusive source lease. No node payload is opened for content.
+    /// The store's service-owner lock and private tree admit no other
+    /// cooperating writer between the final relative name check and unlink.
+    pub(super) fn retire(
+        &self,
+        receipt: RecycleReceipt,
+        ordinary: &DataVolume,
+        known: &State,
+    ) -> io::Result<()> {
+        self.require_selected(receipt, known)?;
         let parent = ordinary.contents();
         let leaf = CString::new(hex(receipt.mutation.container))
             .map_err(|_| invalid("invalid original container name"))?;
