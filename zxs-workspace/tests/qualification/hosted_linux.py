@@ -25,6 +25,13 @@ FILESYSTEM = (
     "test_desktop_mount.DesktopMount.test_real_inherited_snapshot_and_ancestors_serve_the_displayed_node_without_opening_its_name",
     "test_desktop_mount.DesktopMount.test_mountinfo_requires_one_exact_escaped_point_old_parent_tag_type_and_read_only_flags",
     "test_linux_package",
+    "test_container_plan",
+    "test_container_spool",
+    "test_container_outbox",
+    "test_container_management",
+    "test_container_http",
+    "test_container_https",
+    "test_container_https_read",
 )
 VIRTUAL_QT = (
     "test_desktop_commit.ExplicitDesktopCommit.test_window_cancels_without_writing_then_commits_once_after_fresh_consent",
@@ -89,6 +96,24 @@ def virtual_display():
     return app
 
 
+def https_imports():
+    import ssl
+
+    import certifi
+    from zipworkspace.container_https import HttpsExchange
+
+    # Constructor and trust initialization only: no socket, server or enrollment.
+    exchange = HttpsExchange("https://workspace-ci.invalid")
+    tls = exchange._tls()
+    require(ssl.HAS_ALPN and tls.check_hostname and tls.verify_mode == ssl.CERT_REQUIRED,
+            "the locked HTTPS runtime cannot validate a TLS hostname with ALPN")
+    ca = Path(certifi.where()).resolve(strict=True)
+    require(ca.is_relative_to(Path(sys.prefix).resolve()) and ca.is_file()
+            and tls.cert_store_stats()["x509_ca"] > 0,
+            "the locked wheel's CA data was not loaded from the isolated environment")
+    print("Locked HTTP/2 prerequisites and CA bundle loaded; no requests made", flush=True)
+
+
 def run_required(names):
     suite = unittest.defaultTestLoader.loadTestsFromNames(names)
     count = suite.countTestCases()
@@ -101,7 +126,7 @@ def run_required(names):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=("filesystem", "virtual-qt"))
+    parser.add_argument("phase", choices=("filesystem", "virtual-qt", "https-imports"))
     parser.add_argument("scratch")
     options = parser.parse_args()
     require(sys.platform == "linux" and os.uname().machine == "x86_64" and sys.version_info[:3] == (3, 14, 10),
@@ -113,6 +138,8 @@ def main():
         app = virtual_display()
         run_required(VIRTUAL_QT)
         require(app.platformName() == "xcb", "Qt platform changed")
+    elif options.phase == "https-imports":
+        https_imports()
     else:
         run_required(FILESYSTEM)
 

@@ -10,6 +10,7 @@ on:
       - zxs-workspace/pyproject.toml
       - zxs-workspace/tests/**
       - zxs-workspace/packaging/ubuntu-26.10/**
+      - zxs-workspace/packaging/network-r3/requirements.txt
 
 permissions:
   contents: read
@@ -55,13 +56,13 @@ jobs:
           else
             echo 'Stock FUSE device and helper are not both present; no kernel mounting attempted.'
           fi
-      - name: Verify package inputs and run filesystem and mount-receipt fixtures
+      - name: Verify package inputs and run filesystem, mount-receipt and R3 source fixtures
         env:
           WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
         run: |
           sha256sum --strict --check packaging/ubuntu-26.10/INPUTS.sha256
           python -I -B -X utf8 tests/qualification/hosted_linux.py filesystem "$WORKSPACE_SCRATCH"
-      - name: Prepare locked Qt wheels in a private virtual environment
+      - name: Prepare locked Qt and HTTPS wheels in a private virtual environment
         env:
           WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
         run: |
@@ -73,10 +74,14 @@ jobs:
           python -I -B -m venv "$WORKSPACE_SCRATCH/venv"
           mkdir "$WORKSPACE_SCRATCH/wheels"
           pip=("$WORKSPACE_SCRATCH/venv/bin/python" -I -B -m pip --isolated --disable-pip-version-check --no-input)
-          lock=(--no-deps --only-binary=:all: --require-hashes --no-cache-dir -r tests/qualification/hosted-linux-requirements.txt)
+          lock=(--no-deps --only-binary=:all: --require-hashes --no-cache-dir
+                -r tests/qualification/hosted-linux-requirements.txt
+                -r packaging/network-r3/requirements.txt)
           "${pip[@]}" download --index-url https://pypi.org/simple --dest "$WORKSPACE_SCRATCH/wheels" "${lock[@]}"
           "${pip[@]}" install --no-index --find-links "$WORKSPACE_SCRATCH/wheels" "${lock[@]}"
           "${pip[@]}" check
+          "$WORKSPACE_SCRATCH/venv/bin/python" -I -B -X utf8 \
+            tests/qualification/hosted_linux.py https-imports "$WORKSPACE_SCRATCH"
       - name: Stage and verify official Ubuntu XCB and GL dispatch libraries
         env:
           WORKSPACE_SCRATCH: ${{ steps.scratch.outputs.root }}
@@ -95,7 +100,9 @@ jobs:
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'SCOPE'
           This job covers source fixtures on the actual Ubuntu 26.04 runner filesystem,
-          read-only mount handoff/receipt fixtures and, if successful, XCB Qt on Xvfb.
+          read-only mount handoff/receipt fixtures, per-container R3 source fixtures,
+          the exact locked Python HTTPS runtime imports (without a connection), and XCB Qt on Xvfb.
           It does not cover a physical desktop, installed Ubuntu 26.10 packages, desktop
-          file association, pyfuse3 callbacks or kernel mounting. Nothing was installed system-wide.
+          file association, pyfuse3 callbacks, kernel mounting, or an actual HTTPS gateway.
+          Nothing was installed system-wide.
           SCOPE
