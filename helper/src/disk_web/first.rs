@@ -178,7 +178,8 @@ fn serve(
     }
     let hex = b"0123456789abcdef";
     let mut text = zeroize::Zeroizing::new([0; 64]);
-    for (byte, pair) in code.iter().zip(text.chunks_exact_mut(2)) {
+    let (pairs, _) = text.as_chunks_mut::<2>();
+    for (byte, pair) in code.iter().zip(pairs) {
         pair[0] = hex[usize::from(*byte >> 4)];
         pair[1] = hex[usize::from(*byte & 15)];
     }

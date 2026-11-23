@@ -154,7 +154,7 @@ fn exact_bytes(
         loop {
             match r.read(&mut byte) {
                 Ok(n) => return Ok(n == 0),
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => return Err(e),
             }
         }

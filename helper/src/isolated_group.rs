@@ -81,7 +81,7 @@ impl Group {
                         leader = Some(status.exit_status());
                     }
                 }
-                Err(Errno::INTR) => continue,
+                Ok(None) | Err(Errno::INTR) => {}
                 Err(Errno::CHILD) => {
                     return leader
                         .map(|leader_code| Reaped {
@@ -93,7 +93,6 @@ impl Group {
                             io::Error::other("original sandbox launcher wait status unavailable")
                         });
                 }
-                Ok(None) => continue,
                 Err(e) => return Err(e.into()),
             }
         }

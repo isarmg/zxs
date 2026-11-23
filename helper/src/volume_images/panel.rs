@@ -367,7 +367,7 @@ impl Running {
     fn waitable(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
         loop {
             match self.child.try_wait() {
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 r => return r,
             }
         }
@@ -400,7 +400,7 @@ impl Running {
         }
         loop {
             match self.child.wait() {
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 r => return r,
             }
         }

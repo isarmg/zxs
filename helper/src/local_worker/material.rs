@@ -30,7 +30,7 @@ pub(crate) fn sealed_owner(f: &File, max: usize, owner: (u32, u32)) -> io::Resul
     loop {
         match f.read_at(&mut [0], m.len()) {
             Ok(0) => break,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             _ => return Err(error()),
         }
     }

@@ -113,7 +113,7 @@ impl Worker {
                 WaitId::PidFd(self.fd.as_fd()),
                 WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
             ) {
-                Err(Errno::INTR) => continue,
+                Err(Errno::INTR) => {}
                 Ok(s) => return Ok(s.map(|s| s.exit_status().unwrap_or(-1))),
                 Err(e) => return Err(e.into()),
             }
@@ -174,7 +174,7 @@ impl Worker {
         }
         loop {
             match self.child.wait() {
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Ok(_) => {
                     self.done = true;
                     break;

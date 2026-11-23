@@ -29,7 +29,7 @@ fn challenge() -> io::Result<String> {
             Ok(16) if bytes != [0; 16] => {
                 return Ok(bytes.iter().map(|b| format!("{b:02x}")).collect());
             }
-            Err(Errno::INTR) => continue,
+            Err(Errno::INTR) => {}
             Err(e) => return Err(e.into()),
             _ => return Err(failure("missing complete fresh confirmation challenge")),
         }
@@ -159,7 +159,7 @@ impl PublicConfirmation {
                             "this exact foreground installation was not approved",
                         ));
                     }
-                    Err(Errno::INTR) => continue,
+                    Err(Errno::INTR) => {}
                     Err(Errno::AGAIN) => std::thread::sleep(Duration::from_millis(20)),
                     Err(e) => return Err(e.into()),
                 }

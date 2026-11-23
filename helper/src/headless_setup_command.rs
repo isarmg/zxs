@@ -466,9 +466,8 @@ fn read_hidden(
             return Err(io::ErrorKind::TimedOut.into());
         }
         match rustix::io::read(quiet.fd, &mut byte[..]) {
-            Ok(0) => continue,
+            Ok(0) | Err(rustix::io::Errno::INTR) => continue,
             Ok(1) => {}
-            Err(rustix::io::Errno::INTR) => continue,
             Ok(_) => return Err(invalid("invalid terminal read")),
             Err(e) => return Err(e.into()),
         }

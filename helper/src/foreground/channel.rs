@@ -194,7 +194,7 @@ fn nonblocking_prompt(
         match rustix::io::write(fd, msg) {
             Ok(0) => return Err(failure("no terminal output progress")),
             Ok(n) => msg = &msg[n..],
-            Err(Errno::INTR) => continue,
+            Err(Errno::INTR) => {}
             Err(Errno::AGAIN) => std::thread::sleep(Duration::from_millis(20)),
             Err(e) => return Err(e.into()),
         }

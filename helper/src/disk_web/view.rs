@@ -37,14 +37,11 @@ fn attachment_cells(a: Result<disks::Attachment, disks::Reason>) -> [String; 3] 
     ]
 }
 pub(super) fn disks(rates: bool) -> Reply {
-    let report = match disks::Query::inventory(rates).observe() {
-        Ok(x) => x,
-        Err(_) => {
-            return Reply::plain(
-                503,
-                "未能从当前命名空间核得系统设备盘点；未检查健康或登记。",
-            );
-        }
+    let Ok(report) = disks::Query::inventory(rates).observe() else {
+        return Reply::plain(
+            503,
+            "未能从当前命名空间核得系统设备盘点；未检查健康或登记。",
+        );
     };
     let mut out = String::new();
     let sampled = match (report.start_ms, report.end_ms) {

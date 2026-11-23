@@ -278,9 +278,8 @@ pub(super) fn inspect(p: &Profile, expected: Option<&[u8; 32]>) -> Evidence {
         })();
         read.unwrap_or_else(|e| e)
     });
-    let now = match lookup(&parts, true) {
-        Ok(Lookup::Present(s)) => s,
-        _ => return Evidence::Changed,
+    let Ok(Lookup::Present(now)) = lookup(&parts, true) else {
+        return Evidence::Changed;
     };
     if first.marks != now.marks || !first.unchanged() || !now.unchanged() {
         return Evidence::Changed;

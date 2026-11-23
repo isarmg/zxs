@@ -647,7 +647,7 @@ fn drain(f: &mut impl Read, v: &mut Vec<u8>, max: usize) -> io::Result<bool> {
                 v.extend_from_slice(&buf[..n]);
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
         }
     }

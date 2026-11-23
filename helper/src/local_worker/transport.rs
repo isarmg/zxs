@@ -229,7 +229,7 @@ impl Channel {
                     }
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 result => return result.map(|(payload, _)| payload),
             }
         }
@@ -261,7 +261,7 @@ impl Channel {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 r => return r,
             }
         }
