@@ -38,7 +38,7 @@ class _LocalPage(QTextBrowser):
 class ContainerPanel(QWidget):
     def __init__(self, operations=None, *, write_profile=None, native_window=None):
         super().__init__()
-        self.ops, self.editor, self.cold = operations, None, None
+        self.ops, self.editor, self.cold, self.platform_disk = operations, None, None, None
         self._download_window = native_window if sys.platform == "linux" else None
         self._configured_profile = self._profile = write_profile
         self._owned = None
@@ -122,13 +122,22 @@ class ContainerPanel(QWidget):
             from .container_cold_controls import ColdTransferControls
             self.cold = ColdTransferControls(self)
             outer.addWidget(self.cold)
+        if sys.platform == "win32" and native_window is not None:
+            from .container_windows_controls import WindowsDiskControls
+            self.platform_disk = WindowsDiskControls(native_window, self)
+            outer.addWidget(self.platform_disk)
         self._paint()
 
     def busy(self):
-        return bool(self.jobs)
+        return bool(self.jobs) or self._disk_busy()
+
+    def _disk_busy(self):
+        return self.platform_disk is not None and self.platform_disk.busy()
 
     def finish(self):
         self.timer.stop()
+        if self.platform_disk is not None:
+            self.platform_disk.finish()
         if self.editor is not None:
             self.editor.finish()
         if self.cold is not None:
@@ -188,6 +197,8 @@ class ContainerPanel(QWidget):
                 self._paint()
 
     def _disconnect(self):
+        if self._disk_busy():
+            return
         self._forget("已断开连接。")
 
     def _forget(self, message):
@@ -214,7 +225,7 @@ class ContainerPanel(QWidget):
         return item.data(_ID) if item is not None else None
 
     def _available(self, key):
-        return (self.ops is not None and key not in self.jobs
+        return (self.ops is not None and key not in self.jobs and not self._disk_busy()
                 and (self.editor is None or not self.editor.blocks(key))
                 and (not self.jobs if key is None else None not in self.jobs))
 
@@ -392,7 +403,7 @@ class ContainerPanel(QWidget):
         branch, node = self.branches.currentData(), self.nodes.currentData()
         self.connect_button.setEnabled(self.ops is None and not self.jobs
                                        and (self.editor is None or not self.editor.busy()))
-        self.disconnect_button.setEnabled(self.ops is not None)
+        self.disconnect_button.setEnabled(self.ops is not None and not self._disk_busy())
         self.refresh.setEnabled(self._available(None))
         self.open_button.setEnabled(active and key in self.listed)
         if self.download_button is not None:
@@ -446,6 +457,8 @@ class ContainerPanel(QWidget):
         if html != getattr(self, "_html", None):
             self._html = html
             self.browser.setHtml(html)
+        if self.platform_disk is not None:
+            self.platform_disk.paint()
         if self.editor is not None:
             self.editor.paint()
         if self.cold is not None:

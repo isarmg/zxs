@@ -114,6 +114,10 @@ class WindowsDraftChoice:
         _require_reader(self._connection, self._reader, self._exchange, self._auth,
                         s.destination, s.origin, s.account)
 
+    def cancel_acquisition(self):
+        """Signal only. The worker keeps its original file/connection custody until the next checkpoint."""
+        self._abandoned.set()
+
     def _check_acquisition(self):
         if self._abandoned.is_set():
             raise Rejected("the selected Windows draft acquisition was abandoned")
