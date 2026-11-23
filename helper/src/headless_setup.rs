@@ -1,11 +1,10 @@
 //! First, offline headless setup on explicitly selected empty mounted directories.
 //! The optional caller supplies the approved selection and one confirmed password.
-use crate::{fresh_password, maintenance::{DiscoveryView, HostMounts}, pinned::{Entity, Mount, Pinned}};
+use crate::{fresh_password, fresh_random::headless as random, maintenance::{DiscoveryView, HostMounts}, pinned::{Entity, Mount, Pinned}};
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use rustix::{
     fs::{FlockOperation, Mode, OFlags, RawDir, RenameFlags, ResolveFlags, fchmod, flock, openat, openat2, renameat_with},
     process::{getegid, geteuid, getuid},
-    rand::{GetRandomFlags, getrandom},
 };
 use std::{fs::File, io::{self, Read, Write}, mem::MaybeUninit, os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::Path, sync::Arc};
@@ -373,17 +372,6 @@ pub(crate) fn login_ok(login: &str) -> bool {
     let raw = login.as_bytes();
     (1..=64).contains(&raw.len()) && (raw[0].is_ascii_lowercase() || raw[0].is_ascii_digit())
         && raw.iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(b))
-}
-fn random<const N: usize>() -> io::Result<[u8; N]> {
-    let mut bytes = [0; N];
-    loop {
-        match getrandom(&mut bytes, GetRandomFlags::NONBLOCK) {
-            Err(rustix::io::Errno::INTR) => {},
-            Err(error) => return Err(error.into()),
-            Ok(written) if written == N && bytes != [0; N] => return Ok(bytes),
-            _ => return Err(io::Error::other("OS did not return complete fresh randomness")),
-        }
-    }
 }
 fn fresh_verifier(password: &str, salt: &[u8;16]) -> io::Result<Zeroizing<[u8;32]>> {
     let params = Params::new(65_536, 3, 4, Some(32)).map_err(|_| refused())?;

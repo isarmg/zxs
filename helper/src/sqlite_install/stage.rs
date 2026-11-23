@@ -2,20 +2,10 @@
 //! arises here. Retry lookup/completion is a separate action, never a fresh INIT.
 use super::{approval::Approved,bad,engine,originals::Group,request::{role,Id,Request},reservation::Reserved};
 use rusqlite::{params,TransactionBehavior};
-use rustix::rand::{GetRandomFlags,getrandom};
+pub(super) use crate::fresh_random::operation as random;
 use std::{io,os::unix::ffi::OsStrExt};
 pub(super) const SCHEMA:&str=include_str!("schema.sql");
 
-pub(super) fn random<const N:usize>()->io::Result<[u8;N]>{
-    let mut v=[0;N];
-    loop{
-        match getrandom(&mut v,GetRandomFlags::NONBLOCK){
-            Err(rustix::io::Errno::INTR)=>continue,Err(e)=>return Err(e.into()),
-            Ok(n) if n==N && v!=[0;N]=>return Ok(v),
-            _=>return Err(bad("incomplete or zero identity from the OS; nothing issued")),
-        }
-    }
-}
 struct Issue{pool:Id,rows:Vec<(Id,[u8;32])>}
 impl Issue{
     fn new(n:usize)->io::Result<Self>{

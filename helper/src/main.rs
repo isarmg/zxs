@@ -8,6 +8,7 @@ mod disk_web;
 mod embedded_image;
 mod fs_tools;
 mod fresh_password;
+mod fresh_random;
 mod headless_setup;
 mod headless_setup_command;
 mod hardware;
