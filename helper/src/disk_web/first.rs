@@ -1,5 +1,6 @@
 //! A one-shot browser handoff on its own already isolated listener. It has
-//! a typed install phase and count or a fixed format and byte length. No paths or commands.
+//! a typed phase and count, fixed repair format and size, or opt-in parent-rendered
+//! setup unit text. The browser supplies no paths, executable, or unit contents.
 use super::{Panel,Reply,Request,digest,http,matches,token};
 use crate::volume_images::repair::RepairFormat;
 use std::{io,net::TcpListener,thread,time::{Duration,Instant}};
@@ -17,8 +18,7 @@ impl InstallPhase {
         match self { Self::Resume => "resume", Self::Initialize => "new", Self::Account => "setup" }
     }
 }
-#[derive(Clone,Copy)]
-enum Purpose{Headless,Install{phase:InstallPhase,count:u8},CopyRepair{format:RepairFormat,bytes:u64}}
+enum Purpose{Headless,HeadlessUnit(String),Install{phase:InstallPhase,count:u8},CopyRepair{format:RepairFormat,bytes:u64}}
 pub(super) struct Offer{
     purpose:Purpose,ticket:Option<([u8;32],Instant)>,requested:bool,
 }
@@ -26,7 +26,7 @@ impl Offer{
     pub(super) fn is_repair(&self)->bool{matches!(self.purpose,Purpose::CopyRepair{..})}
     pub(super) fn route(&mut self,r:Request,now:Instant)->(Reply,bool){
         let (preview,request,requested,cancelled)=match self.purpose{
-            Purpose::Headless | Purpose::Install{..}=>("/api/install/preview","/api/install/request",
+            Purpose::Headless | Purpose::HeadlessUnit(_) | Purpose::Install{..}=>("/api/install/preview","/api/install/request",
                 "请求已交回本机终端。网页将关闭；尚未启用、设密或写盘。","安装请求已取消。未写入。"),
             Purpose::CopyRepair{..}=>("/api/copy-repair/preview","/api/copy-repair/request",
                 "请求已交回本机终端。网页将关闭；尚未读取或修复镜像。","工作副本请求已取消。未写入。"),
@@ -50,6 +50,7 @@ impl Offer{
                 self.ticket=Some((digest(ticket.as_bytes()),now+TICKET));
                 let page=match self.purpose{
                     Purpose::Headless=>format!("headless\n1\n{ticket}"),
+                    Purpose::HeadlessUnit(ref unit)=>format!("headless\n1\n{ticket}\n{unit}"),
                     Purpose::Install{phase,count}=>format!("{}\n{count}\n{ticket}",phase.name()),
                     Purpose::CopyRepair{format,bytes}=>format!("{}\n{bytes}\n{ticket}",format.panel_label()),
                 };
@@ -66,8 +67,9 @@ pub(crate) fn serve_first(listener:TcpListener,phase:InstallPhase,count:u8,code:
     serve(listener,Purpose::Install{phase,count},zeroize::Zeroizing::new(code),end,check)
 }
 pub(super) fn serve_headless(listener: TcpListener, code: zeroize::Zeroizing<[u8; 32]>, end: Instant,
-    check: impl Fn() -> io::Result<()>) -> io::Result<bool> {
-    serve(listener, Purpose::Headless, code, end, check)
+    unit: Option<String>, check: impl Fn() -> io::Result<()>) -> io::Result<bool> {
+    let purpose = unit.map_or(Purpose::Headless, Purpose::HeadlessUnit);
+    serve(listener, purpose, code, end, check)
 }
 
 pub(crate) fn serve_repair(listener:TcpListener,format:RepairFormat,bytes:u64,code:[u8;32],end:Instant,

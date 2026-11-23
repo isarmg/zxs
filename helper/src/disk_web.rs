@@ -123,7 +123,7 @@ pub(crate) fn require_terminal(fd:impl AsFd)->io::Result<()>{
     Ok(())
 }
 
-pub(crate) fn request_headless_review(check: impl Fn() -> io::Result<()>) -> io::Result<bool> {
+pub(crate) fn request_headless_review(unit: Option<String>, check: impl Fn() -> io::Result<()>) -> io::Result<bool> {
     check()?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     listener.set_nonblocking(true)?;
@@ -139,7 +139,7 @@ pub(crate) fn request_headless_review(check: impl Fn() -> io::Result<()>) -> io:
         writeln!(terminal)?;
         terminal.flush()?;
     }
-    first::serve_headless(listener, raw, now + Duration::from_secs(600), check)
+    first::serve_headless(listener, raw, now + Duration::from_secs(600), unit, check)
 }
 
 enum Launch { Ordinary(Option<CopyCheck>), Storage(Selection) }

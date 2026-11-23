@@ -21,6 +21,11 @@
   </form>
   <section id="scoped" hidden>
     <p id="plan"></p>
+    <details id="unit-preview" hidden>
+      <summary>可选：查看只读 systemd 单元预览</summary>
+      <p>仅供审阅，不安装、不启用、不启动服务。</p>
+      <pre id="unit-preview-text"></pre>
+    </details>
     <button id="preview" type="button">重新预览</button>
     <button id="continue" type="button" disabled>请求在原终端确认</button>
     <button id="cancel" type="button">取消并关闭</button>

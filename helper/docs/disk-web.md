@@ -25,14 +25,16 @@ helper disk-web --storage-roots --system /mnt/control/pool --recycle /mnt/recycl
 ### 可选：首次设置向导
 
 ```sh
-helper setup-headless web new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
+helper setup-headless web new [--preview-unit] SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
 ```
 
 使用已准备好的专用服务账号，在同一前台终端选定三个已挂载的目录。
 
-1. 打开终端显示的回环地址，用一次性配对码打开本次预览。页面只列出已选角色，不读取原路径、文件或口令。
+1. 打开终端显示的回环地址，用一次性配对码打开本次预览。默认页面只列出已选角色，不显示原路径。仅从终端明确加 `--preview-unit`，配对后才可展开只读单元文本，其中含本次已准入的目录路径。不读取文件或口令，也不安装或启动服务。
 2. 点“请求在原终端确认”。一次性票只结束网页环节；取消、超时或不匹配都不写入。
 3. 回到原终端核对实际路径，键入 `SETUP`，再输入两次不回显的密码。首设结果由终端报告，激活服务另行进行。
+
+若所选路径无法表示为 unit 文本，加 `--preview-unit` 的启动会拒绝；去掉该开关可继续默认首次设置向导。单元的部署前提见[离线设置说明](headless-offline.md#可选服务单元预览)。
 
 ### 可选：在网页上检查一个已保存的卷镜像
 

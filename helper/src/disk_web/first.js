@@ -4,6 +4,7 @@ const code = document.querySelector("#code"), plan = document.querySelector("#pl
 const refresh = document.querySelector("#preview"), proceed = document.querySelector("#continue"), cancel = document.querySelector("#cancel");
 const hex = /^[0-9a-f]{64}$/;
 const repair = document.querySelector("main").dataset.purpose === "copy-repair";
+const unitPreview = document.querySelector("#unit-preview"), unitText = document.querySelector("#unit-preview-text");
 const route = repair ? "/api/copy-repair" : "/api/install";
 const steps = repair ? [] : [...document.querySelectorAll("#install-steps > li[id]")];
 function currentStep(id) {
@@ -33,8 +34,10 @@ async function post(path, body, authenticated = true) {
     return r.text();
 }
 async function fetchPreview() {
-    const fields = (await post(route + "/preview", null)).split("\n");
-    if (fields.length !== 3 || !hex.test(fields[2])) throw new Error();
+    const [phase, count, proof, ...tail] = (await post(route + "/preview", null)).split("\n");
+    const fields = [phase, count, proof];
+    if (typeof proof !== "string" || !hex.test(proof)) throw new Error();
+    if (tail.length && (repair || phase !== "headless" || tail[0] === "")) throw new Error();
     if (repair) {
         if (!["ext", "exFAT", "FAT32"].includes(fields[0]) || !validByteCount(fields[1])) throw new Error();
         plan.textContent = "终端已选一份 " + fields[1] + " 字节的 " + fields[0] + " 输入镜像和一个新工作副本位置。这里只发起终端确认，尚未读取镜像，也未创建文件。自动修复可能丢弃工作副本中的受损内容。";
@@ -51,13 +54,22 @@ async function fetchPreview() {
                 fields[1] + " 个数据根。终端将显示实际原名和身份，本次预览不核盘内内容。";
         }
     }
-    return {value: fields[2], phase: repair ? null : fields[0]};
+    if (tail.length && unitPreview !== null && unitText !== null) {
+        unitText.textContent = tail.join("\n");
+        unitPreview.hidden = false;
+    }
+    return {value: proof, phase: repair ? null : phase};
 }
 async function preview() {
     if (auth === null || refresh.disabled) return;
     lockControls();
     ticket = null;
     plan.textContent = status.textContent = "";
+    if (unitPreview !== null && unitText !== null) {
+        unitPreview.hidden = true;
+        unitPreview.open = false;
+        unitText.textContent = "";
+    }
     currentStep(null);
     const before = performance.now() + TICKET_MS;
     try {

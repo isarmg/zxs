@@ -12,7 +12,7 @@ Helper 可在业务服务停机时完成首次设置，也可在业务服务运�
 helper setup-headless check SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
 helper setup-headless preview-unit SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
 helper setup-headless new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
-helper setup-headless web new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
+helper setup-headless web new [--preview-unit] SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
 ```
 
 `check` 只检查目录是否可用于首设；`new` 展示本次选择的三个目录，要求输入 `SETUP` 并在本地控制终端两次输入不回显的密码。成功后写好三个角色标记和服务账户文件，不格式化磁盘，也不启动服务。加上 `web` 可先打开[回环设置向导](docs/disk-web.md#可选首次设置向导)，再回到同一终端确认。若报告结果不确定，先核对同一组目录中已写下的记录，不要覆盖或另选目录直接重跑。

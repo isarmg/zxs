@@ -18,12 +18,14 @@ pub(crate) struct Setup {
     ipc: u32,
     login: Option<String>,
     web: bool,
+    web_unit: bool,
     reset: bool,
     preview_unit: bool,
 }
 
 impl Setup {
-    pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
+    pub(crate) fn parse(args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
+        let mut args = args.peekable();
         const USAGE: &str = "expected setup-headless [web] check|new|reset|preview-unit SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID [LOGIN]";
         fn id(value: Option<OsString>) -> Option<u32> {
             let text = value?.into_string().ok()?;
@@ -34,6 +36,7 @@ impl Setup {
         let web = mode == "web";
         if web { mode = args.next().ok_or(USAGE)?; }
         if web && mode != "new" { return Err(USAGE); }
+        let web_unit = web && args.next_if(|word| word.as_os_str() == "--preview-unit").is_some();
         let paths = [
             PathBuf::from(args.next().ok_or(USAGE)?), PathBuf::from(args.next().ok_or(USAGE)?),
             PathBuf::from(args.next().ok_or(USAGE)?),
@@ -49,7 +52,7 @@ impl Setup {
             Some(name)
         } else { return Err(USAGE); };
         if args.next().is_some() { return Err(USAGE); }
-        Ok(Self { paths, gateway, ipc, login, web, reset, preview_unit })
+        Ok(Self { paths, gateway, ipc, login, web, web_unit, reset, preview_unit })
     }
 
     pub(crate) fn run(self) -> io::Result<ExitCode> {
@@ -95,7 +98,8 @@ impl Setup {
         let display = output.as_fd();
         require_terminal(tty, display)?;
         if self.web {
-            if !crate::disk_web::request_headless_review(|| require_terminal(tty, display))? {
+            let unit = self.web_unit.then(|| preview_unit(selected.paths())).transpose()?;
+            if !crate::disk_web::request_headless_review(unit, || require_terminal(tty, display))? {
                 return Err(io::Error::other("setup cancelled; no role changed"));
             }
             require_terminal(tty, display)?;
