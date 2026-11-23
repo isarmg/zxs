@@ -95,16 +95,16 @@ fn require_held(input: &HeldInput<'_>, uid: u32) -> io::Result<(Entity, Mount)> 
     Ok((entity, mount))
 }
 
-fn role_proof(
-    input: &RootInput<'_>,
+fn read_role_token(
+    input: &HeldInput<'_>,
     role: u8,
     pool: &[u8; 16],
     uid: u32,
-) -> io::Result<(Entity, Mount)> {
-    let root = require_held(&input.held, uid)?;
+) -> io::Result<((Entity, Mount), [u8; 32])> {
+    let root = require_held(input, uid)?;
     let open = || {
         openat2(
-            input.held.directory,
+            input.directory,
             MARKER,
             OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOATIME | OFlags::CLOEXEC,
             Mode::empty(),
@@ -126,10 +126,23 @@ fn role_proof(
     let bytes = expected.strip_prefix(MARK_MAGIC).ok_or_else(refused)?;
     if bytes[0] != role
         || bytes[1..17] != pool[..]
-        || bytes[17..] != input.token
         || Entity::of(&File::from(open()?).metadata()?)? != Entity::of(&m)?
-        || root != require_held(&input.held, uid)?
+        || root != require_held(input, uid)?
     {
+        return Err(refused());
+    }
+    let token = bytes[17..].try_into().map_err(|_| refused())?;
+    if token == [0; 32] {
+        return Err(refused());
+    }
+    Ok((root, token))
+}
+
+fn role_proof(
+    input: &RootInput<'_>, role: u8, pool: &[u8; 16], uid: u32,
+) -> io::Result<(Entity, Mount)> {
+    let (root, token) = read_role_token(&input.held, role, pool, uid)?;
+    if token != input.token {
         return Err(refused());
     }
     Ok(root)
@@ -316,6 +329,10 @@ impl Issue<'_> {
 }
 
 fn require_empty(dir: &File) -> io::Result<()> {
+    require_only(dir, None)
+}
+
+fn require_only(dir: &File, allowed: Option<&[u8]>) -> io::Result<()> {
     let reader = File::from(openat2(
         dir,
         ".",
@@ -326,7 +343,9 @@ fn require_empty(dir: &File) -> io::Result<()> {
     let mut buf = [MaybeUninit::uninit(); 4096];
     let mut scan = RawDir::new(&reader, &mut buf);
     while let Some(item) = scan.next() {
-        if !matches!(item?.file_name().to_bytes(), b"." | b"..") {
+        let item = item?;
+        let name = item.file_name().to_bytes();
+        if !matches!(name, b"." | b"..") && Some(name) != allowed {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "fresh setup requires empty original directories",

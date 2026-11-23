@@ -29,6 +29,7 @@ pub(crate) struct Setup {
     login: Option<String>,
     web: bool,
     reset: bool,
+    add_data: Option<PathBuf>,
     preview: Option<SocketAddr>,
 }
 
@@ -61,6 +62,13 @@ impl Setup {
             None
         };
         let reset = mode == "reset";
+        if mode == "add-data" {
+            let candidate = PathBuf::from(args.next().ok_or("expected NEW_DATA before current roots")?);
+            use std::os::unix::ffi::OsStrExt;
+            crate::path_rules::Kind::StorageRoot.check_path(candidate.as_os_str().as_bytes())?;
+            let paths = parse_paths(args)?;
+            return Ok(Self { paths, login: None, web, reset, preview, add_data: Some(candidate) });
+        }
         let (paths, login) = if mode == "new" {
             // The last argument is the login; all preceding words name roots.
             let mut values: Vec<_> = args.take(MAX_DATA + 4).collect();
@@ -84,6 +92,7 @@ impl Setup {
             web,
             reset,
             preview,
+            add_data: None,
         })
     }
 
@@ -91,6 +100,11 @@ impl Setup {
         rustix::thread::set_no_new_privs(true)?;
         crate::maintenance::diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
         let selected = FreshSelection::select(&self.paths)?;
+        if let Some(candidate) = self.add_data {
+            selected.add_data(&candidate)?;
+            writeln!(io::stdout().lock(), "Data disk registered.")?;
+            return Ok(ExitCode::SUCCESS);
+        }
         if self.reset {
             let reset = selected.begin_reset()?;
             let selected_text = format!(

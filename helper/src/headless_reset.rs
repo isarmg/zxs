@@ -17,6 +17,9 @@ use std::{
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
+#[path = "headless_add_data.rs"]
+mod add_data;
+
 const EPOCH: usize = FORMAT.len() + 16;
 const SALT: usize = EPOCH + 16;
 const TAG: usize = SALT + 16;
@@ -83,7 +86,7 @@ fn read(dir: &File, name: &str, uid: u32) -> io::Result<Record> {
     Ok(Record { held, meta, full })
 }
 
-fn require_no_stage(dir: &File) -> io::Result<()> {
+fn require_no_stage(dir: &File, resume_add: bool) -> io::Result<()> {
     let reader = File::from(openat2(
         dir,
         ".",
@@ -94,7 +97,9 @@ fn require_no_stage(dir: &File) -> io::Result<()> {
     let mut buf = [MaybeUninit::uninit(); 4096];
     let mut rows = RawDir::new(&reader, &mut buf);
     while let Some(row) = rows.next() {
-        if row?.file_name().to_bytes().starts_with(b".server-stage-") {
+        let row = row?;
+        let name = row.file_name().to_bytes();
+        if name.starts_with(b".server-stage-") && !(resume_add && name == b".server-stage-add-data") {
             return Err(io::Error::other(
                 "an original credential stage remains; preserve it for offline inspection",
             ));
@@ -116,7 +121,7 @@ fn fixed<const N: usize>(raw: &mut &[u8]) -> io::Result<[u8; N]> {
 impl FreshSelection {
     /// Acquire the same state EX used by fresh provisioning. Core's shared
     /// lease makes this fail while a native service is still active/draining.
-    fn open_offline(mut self) -> io::Result<Reset> {
+    fn open_offline(mut self, resume_add: bool) -> io::Result<Reset> {
         self.require_site()?;
         let locked = File::from(openat(
             &self.state.directory,
@@ -128,7 +133,7 @@ impl FreshSelection {
         if Entity::of(&locked.metadata()?)? != require_held(&self.state.input(), self.uid)?.0 {
             return Err(refused());
         }
-        require_no_stage(&locked)?;
+        require_no_stage(&locked, resume_add)?;
         let original = read(&locked, DESCRIPTOR, self.uid)?;
         let mut body = original.full.strip_prefix(FORMAT).ok_or_else(refused)?;
         let pool = fixed::<16>(&mut body)?;
@@ -179,7 +184,7 @@ impl FreshSelection {
     }
 
     pub(crate) fn begin_reset(self) -> io::Result<Reset> {
-        let out = self.open_offline()?;
+        let out = self.open_offline(false)?;
         // Establish the current descriptor's durability after any earlier
         // stopped writer with a visible name. This is not credential rotation.
         out.original.held.sync_all()?;
@@ -194,7 +199,7 @@ impl FreshSelection {
         path: &Path,
         report: impl FnOnce(super::import_preflight::Counts) -> io::Result<T>,
     ) -> io::Result<T> {
-        let selected = self.open_offline()?;
+        let selected = self.open_offline(false)?;
         let result = super::import_preflight::scan(&selected.selected, path, || {
             selected.require_original()
         })?;

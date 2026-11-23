@@ -47,6 +47,7 @@ helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR -
   helper setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN
   helper setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN
   helper setup-headless reset SYSTEM RECYCLE DATA [DATA ...]
+  helper setup-headless add-data NEW_DATA SYSTEM RECYCLE DATA [DATA ...]
   helper preflight-import SOURCE SYSTEM RECYCLE DATA [DATA ...]
   helper --help | --version\n\n\
 Supply already mounted directories; storage-status reports observations, not an approved layout.";
