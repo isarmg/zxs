@@ -4,40 +4,27 @@ mod retirement_check;
 // Only the authenticated lower-privilege process opens the actual SQLite ledger.
 use super::{
     bad,
-    host::Worker,
-    manifest::{read_sealed, sealed_owner},
-    transport::{self, Channel, Kind},
+    manifest::read_sealed,
+    transport::{Channel, Kind},
     worker::original_parent,
 };
 use crate::{
     path_rules::MAX_PATH_BYTES,
     pinned::{Kind as PathKind, Pinned, helper_elf::ForegroundElf},
-    smb_profile::{
-        self,
-        first::{Folder, Id, MAX_FOLDERS, Mode, RecycleName},
-    },
+    smb_profile::first::{Id, MAX_FOLDERS},
     sqlite_install::{
         approval,
         catalog::{self, Initial},
-        markers::OrdinaryMark,
-        originals::{SelectedSystem, named_backing},
+        originals::SelectedSystem,
+        pair::fresh_issuer::{ExplicitSubject, InitialDatabase, require_private_install},
         pair::{
-            domain::{
-                FreshParent, give_live_approval, request_live_approval, require_lent_ex, sealed,
-            },
+            domain::{request_live_approval, sealed},
             observed,
-            terminal::PublicConfirmation,
         },
-        pair::{
-            fresh_issuer::{ExplicitSubject, InitialDatabase, require_private_install},
-            recycle::Recycle,
-        },
-        stage::random,
     },
 };
-use helper_linux_evidence::diagnostic_process::{OfflineSql, account_sql_descriptors};
+use helper_linux_evidence::diagnostic_process::account_sql_descriptors;
 use rustix::{
-    fs::{FlockOperation, flock},
     net::UCred,
     process::{
         DumpableBehavior, Gid, Signal, Uid, dumpable_behavior, getppid, set_dumpable_behavior,
@@ -48,8 +35,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     ffi::OsString,
-    fmt::Write,
-    fs::File,
     io,
     os::unix::{
         ffi::{OsStrExt, OsStringExt},
@@ -65,17 +50,10 @@ const FRESH_SIZE: usize = FRESH.len() + 16 + 8 + 32 + 32;
 const BUDGET: usize =
     DOMAIN.len() + 32 + 3 * 16 + 3 * 8 + 1 + (MAX_FOLDERS + 1) * (2 + MAX_PATH_BYTES) + FRESH_SIZE;
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(in crate::sqlite_install::pair) struct Choice {
     pub(in crate::sqlite_install::pair) path: PathBuf,
-    pub(in crate::sqlite_install::pair) folder: String,
-    pub(in crate::sqlite_install::pair) mode: Mode,
-}
-#[derive(Debug)]
-pub(in crate::sqlite_install::pair) struct FirstShares {
-    pub(in crate::sqlite_install::pair) host: String,
-    pub(in crate::sqlite_install::pair) choices: Vec<Choice>,
-    pub(in crate::sqlite_install::pair) recycle: RecycleName,
 }
 #[derive(Clone, Copy)]
 pub(in crate::sqlite_install::pair) struct FreshScope {
@@ -84,17 +62,6 @@ pub(in crate::sqlite_install::pair) struct FreshScope {
     init_sha: [u8; 32],
 }
 impl FreshScope {
-    pub(in crate::sqlite_install::pair) fn new(
-        subject: ExplicitSubject,
-        helper: [u8; 32],
-        init_sha: [u8; 32],
-    ) -> Self {
-        Self {
-            subject,
-            helper,
-            init_sha,
-        }
-    }
     fn encode(self, out: &mut Vec<u8>) -> io::Result<()> {
         require_private_install()?;
         if self.helper == [0; 32] || self.init_sha == [0; 32] {
@@ -254,347 +221,6 @@ fn place(pin: &Pinned) -> io::Result<[u64; 3]> {
     let e = pin.entity();
     Ok([e.dev, e.ino, pin.require_same_named_mount()?.id])
 }
-// The dedicated synthetic route admits only the earlier enrollment marker
-// in selected F/R. Inspect names once on the actual held original directory;
-// never follow or read any added object.
-fn no_foreign_media(dir: &File) -> io::Result<()> {
-    use rustix::fs::{Mode, OFlags, RawDir, openat};
-    use std::mem::MaybeUninit;
-    let scan = File::from(openat(
-        dir,
-        c".",
-        OFlags::RDONLY
-            | OFlags::DIRECTORY
-            | OFlags::NOATIME
-            | OFlags::NONBLOCK
-            | OFlags::NOFOLLOW
-            | OFlags::CLOEXEC,
-        Mode::empty(),
-    )?);
-    let a = dir.metadata()?;
-    let b = scan.metadata()?;
-    let stamp = |m: &std::fs::Metadata| {
-        (
-            m.dev(),
-            m.ino(),
-            m.len(),
-            m.mtime(),
-            m.mtime_nsec(),
-            m.ctime(),
-            m.ctime_nsec(),
-        )
-    };
-    if stamp(&a) != stamp(&b) || crate::pinned::Mount::on(dir)? != crate::pinned::Mount::on(&scan)?
-    {
-        return Err(bad_question());
-    }
-    let mut scratch = [MaybeUninit::uninit(); 4096];
-    let mut data = RawDir::new(&scan, &mut scratch);
-    let mut mark = false;
-    while let Some(row) = data.next() {
-        let row = row?;
-        let name = row.file_name().to_bytes();
-        if matches!(name, b"." | b"..") {
-            continue;
-        }
-        if name != crate::sqlite_install::MARKER || std::mem::replace(&mut mark, true) {
-            return Err(bad(
-                "the original fresh data or recycle directory contains unexplained names",
-            ));
-        }
-    }
-    if !mark || stamp(&dir.metadata()?) != stamp(&a) || stamp(&scan.metadata()?) != stamp(&b) {
-        return Err(bad_question());
-    }
-    Ok(())
-}
-struct OriginalFolder {
-    pin: Pinned,
-    dir: File,
-    mark: OrdinaryMark,
-    body: [u8; 101],
-}
-impl OriginalFolder {
-    fn require(&self, host: &File, uid: u32) -> io::Result<()> {
-        let m = self.dir.metadata()?;
-        if !m.is_dir() || m.uid() != uid || m.mode() != 0o040_700 || m.nlink() == 0 {
-            return Err(bad_question());
-        }
-        named_backing(
-            &self.pin,
-            &self.dir,
-            &crate::maintenance::HostMounts::current()?,
-            host,
-            uid,
-        )?;
-        self.mark.verify(&self.dir, &self.body)?;
-        no_foreign_media(&self.dir)?;
-        self.mark.verify(&self.dir, &self.body)
-    }
-}
-fn separate(a: &Pinned, b: &Pinned) -> bool {
-    a.entity() != b.entity()
-        && !a.entity_is_visible_ancestor_of(b)
-        && !b.entity_is_visible_ancestor_of(a)
-        && !a.path().starts_with(b.path())
-        && !b.path().starts_with(a.path())
-}
-struct Originals {
-    system: Pinned,
-    ex: File,
-    subject: ExplicitSubject,
-    paths_preview: String,
-    host: File,
-    recycle: Recycle,
-    chosen_paths: Vec<PathBuf>,
-    physical: Vec<OriginalFolder>,
-    database: InitialDatabase,
-}
-impl Originals {
-    fn require(&self) -> io::Result<()> {
-        let subject = self.subject.tuple();
-        require(&self.system, &self.ex, subject)?;
-        self.database.named(&self.ex)?;
-        for f in &self.physical {
-            f.require(&self.host, subject.1)?;
-        }
-        self.recycle.require(
-            &self.host,
-            subject.1,
-            std::iter::once((&self.system, &self.ex))
-                .chain(self.physical.iter().map(|f| (&f.pin, &f.dir))),
-        )?;
-        no_foreign_media(self.recycle.source().1)
-    }
-    fn select<T>(
-        system: &Path,
-        (pool, init): (Id, Id),
-        choices: Vec<Choice>,
-        fresh: FreshScope,
-        build: impl FnOnce(Vec<Folder>) -> io::Result<T>,
-    ) -> io::Result<(Self, T)> {
-        let host = approval::host_admin()?;
-        let tty = PublicConfirmation::select()?;
-        let subject = fresh.subject.tuple();
-        let system = Pinned::already_mounted(system, PathKind::StorageRoot)?;
-        let ex = system.storage_directory()?;
-        flock(&ex, FlockOperation::NonBlockingLockExclusive)?;
-        let check = || {
-            tty.check()?;
-            require(&system, &ex, subject)
-        };
-        check()?;
-        let nonce = random::<32>()?;
-        let req = Question {
-            nonce,
-            actor: subject.0,
-            pool,
-            init,
-            location: place(&system)?,
-            system: system.path().to_path_buf(),
-            paths: choices.iter().map(|c| c.path.clone()).collect(),
-            fresh,
-        };
-        let LayoutEvidence {
-            ordinary,
-            recycle,
-            database,
-        } = read_layout(&req, &ex, check)?;
-        let f = choices
-            .iter()
-            .zip(&ordinary)
-            .map(|(c, (volume, _))| Folder {
-                volume: *volume,
-                name: c.folder.clone(),
-                mode: c.mode,
-            })
-            .collect();
-        let plan = build(f)?;
-        // Setup cannot be issued for an absent, unconfirmed or read-only R.
-        // Prove its actual original before asking for the layout approval.
-        let mut physical: Vec<OriginalFolder> = Vec::new();
-        for (_, c) in &ordinary {
-            let pin = Pinned::already_mounted(&c.path, PathKind::StorageRoot)?;
-            if !separate(&pin, &system) || physical.iter().any(|p| !separate(&pin, &p.pin)) {
-                return Err(bad_question());
-            }
-            let dir = pin.storage_directory()?;
-            let mark = OrdinaryMark::select(&dir, subject.1, &c.marker)?;
-            let original = OriginalFolder {
-                pin,
-                dir,
-                mark,
-                body: c.marker,
-            };
-            original.require(&host, subject.1)?;
-            physical.push(original);
-        }
-        let recycle = Recycle::select(
-            &recycle,
-            &host,
-            subject.1,
-            std::iter::once((&system, &ex)).chain(physical.iter().map(|f| (&f.pin, &f.dir))),
-        )?;
-        let mut paths_preview = String::from("本次低权限只读核对的原 SYSTEM：\"");
-        smb_profile::escaped(&mut paths_preview, system.path().as_os_str().as_bytes());
-        paths_preview.push_str("\"；普通盘核原声明与原卷标。\n");
-        paths_preview.push_str("  已核独立回收盘原路径 \"");
-        smb_profile::escaped(
-            &mut paths_preview,
-            recycle.source().0.as_os_str().as_bytes(),
-        );
-        paths_preview.push_str("\"；只核卷身份与固定标记。\n");
-        for (c, (id, _)) in choices.iter().zip(&ordinary) {
-            let hex = crate::fs_tools::lower_hex(id);
-            paths_preview.push_str("  已选原路径 \"");
-            smb_profile::escaped(&mut paths_preview, c.path.as_os_str().as_bytes());
-            writeln!(paths_preview, "\" → 原普通卷 {hex}。").expect("writing a String");
-        }
-        let out = Self {
-            system,
-            ex,
-            subject: fresh.subject,
-            paths_preview,
-            host,
-            recycle,
-            physical,
-            database,
-            chosen_paths: choices.into_iter().map(|c| c.path).collect(),
-        };
-        out.require()?;
-        Ok((out, plan))
-    }
-}
-
-pub(in crate::sqlite_install::pair) struct ResolvedRust {
-    original: Originals,
-    plan: crate::smb_profile::rust_first::RustPlan,
-}
-impl ResolvedRust {
-    pub(in crate::sqlite_install::pair) fn plan(
-        &self,
-    ) -> &crate::smb_profile::rust_first::RustPlan {
-        &self.plan
-    }
-    pub(in crate::sqlite_install::pair) fn preview(&self) -> &str {
-        &self.original.paths_preview
-    }
-    pub(in crate::sqlite_install::pair) fn require(&self) -> io::Result<()> {
-        self.original.require()
-    }
-    pub(in crate::sqlite_install::pair) fn fresh(
-        parent: &FreshParent,
-        system: &Path,
-        origin: crate::smb_profile::rust_first::Origin,
-        shares: FirstShares,
-        scope: FreshScope,
-    ) -> io::Result<Self> {
-        let FirstShares {
-            host,
-            choices,
-            recycle,
-        } = shares;
-        parent.before_original_sql(&origin.instance)?;
-        let (original, plan) = Originals::select(
-            system,
-            (origin.pool, origin.init),
-            choices,
-            scope,
-            move |folders| {
-                crate::smb_profile::rust_first::RustPlan::selected(origin, host, folders, recycle)
-                    .map_err(bad)
-            },
-        )?;
-        parent.before_original_sql(&origin.instance)?;
-        Ok(Self { original, plan })
-    }
-    pub(in crate::sqlite_install::pair) fn fresh_database(&self) -> io::Result<[u64; 3]> {
-        self.original.database.named(&self.original.ex)
-    }
-    pub(in crate::sqlite_install::pair) fn protected_new_system(
-        &self,
-    ) -> io::Result<(&Pinned, &File, ExplicitSubject)> {
-        self.require()?;
-        Ok((
-            &self.original.system,
-            &self.original.ex,
-            self.original.subject,
-        ))
-    }
-    pub(in crate::sqlite_install::pair) fn require_product_parent(
-        &self,
-        chain: &[crate::pinned::Entity],
-    ) -> io::Result<()> {
-        let [_, product, parent] = chain else {
-            return Err(bad_question());
-        };
-        let media = || {
-            std::iter::once(&self.original.system)
-                .chain([self.original.recycle.pinned()])
-                .chain(self.original.physical.iter().map(|f| &f.pin))
-        };
-        for p in media() {
-            if chain.contains(&p.entity()) || p.visible_chain().contains(parent) {
-                return Err(bad(
-                    "protected product parent aliases an original volume path",
-                ));
-            }
-        }
-        crate::sqlite_install::product_layout::require_original_media(*product, media())?;
-        self.require()
-    }
-    pub(in crate::sqlite_install::pair) fn require_distinct_image(
-        &self,
-        image: &crate::sqlite_install::pair::fresh_issuer::image::Image,
-    ) -> io::Result<()> {
-        self.original.require()?;
-        for p in std::iter::once(&self.original.system)
-            .chain([self.original.recycle.pinned()])
-            .chain(self.original.physical.iter().map(|f| &f.pin))
-        {
-            if image.path().starts_with(p.path())
-                || p.path().starts_with(image.path())
-                || image.includes(p.entity())
-                || p.visible_chain().contains(&image.entity())
-            {
-                return Err(bad(
-                    "the original executable overlaps enrolled SYSTEM, data or recycle",
-                ));
-            }
-        }
-        image.require()
-    }
-    pub(in crate::sqlite_install::pair) fn require_distinct_site(
-        &self,
-        site: &Path,
-    ) -> io::Result<()> {
-        if std::iter::once(self.original.system.path())
-            .chain([self.original.recycle.source().0])
-            .chain(self.original.chosen_paths.iter().map(PathBuf::as_path))
-            .any(|p| p.starts_with(site) || site.starts_with(p))
-        {
-            return Err(bad(
-                "the new Rust instance overlaps original SYSTEM, recycle or selected data",
-            ));
-        }
-        self.original.require()
-    }
-}
-fn require(pin: &Pinned, file: &File, subject: (Id, u32, u32)) -> io::Result<()> {
-    approval::host_admin()?;
-    let m = pin.metadata()?;
-    if !pin.passive_mount_observation()
-        || !m.is_dir()
-        || m.mode() != 0o040_700
-        || m.uid() != subject.1
-        || m.nlink() == 0
-    {
-        return Err(bad(
-            "different protected original SYSTEM or maintenance subject",
-        ));
-    }
-    require_lent_ex(file, (pin.entity(), pin.require_same_named_mount()?.id))
-}
 fn database_payload(place: [u64; 3]) -> [u8; 65] {
     let mut bytes = [0; 65];
     bytes[0] = 1;
@@ -610,111 +236,6 @@ fn body(i: usize, id: Id) -> io::Result<[u8; 65]> {
     b[1..17].copy_from_slice(&id);
     Ok(b)
 }
-fn query_with<T>(
-    raw: &[u8],
-    original: &File,
-    subject: (Id, u32, u32),
-    helper_sha: Option<[u8; 32]>,
-    check: impl Fn() -> io::Result<()>,
-    receive: impl FnOnce(&Channel, &[u8; 32], Instant) -> io::Result<T>,
-) -> io::Result<T> {
-    let helper = ForegroundElf::host()?;
-    if let Some(expected) = helper_sha {
-        helper.require_independent_digest(&expected)?;
-    }
-    let scope: [u8; 32] = Sha256::digest(raw).into();
-    let meta = sealed(raw)?;
-    let (parent, child) = transport::pair()?;
-    let mut hired = Worker::spawn(helper.descriptor(), &child, &meta, OfflineSql::FirstLayout)?;
-    drop(child);
-    drop(meta);
-    let who = UCred {
-        pid: hired.pid,
-        uid: Uid::from_raw(subject.1),
-        gid: Gid::from_raw(subject.2),
-    };
-    let until = Instant::now() + Duration::from_secs(20);
-    loop {
-        check()?;
-        hired.live()?;
-        if Instant::now() >= until {
-            return Err(bad("the original read-only SYSTEM worker did not respond"));
-        }
-        if give_live_approval(&parent, who, &scope, || {
-            check()?;
-            helper.require()
-        })? {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let channel = Channel::from_owned_child_session(parent, who, scope)?;
-    channel.send_original(Kind::Lease, &scope, &[0; 65], original)?;
-    let v = receive(&channel, &scope, until)?;
-    hired.finish(&channel, until)?;
-    check()?;
-    Ok(v)
-}
-struct LayoutEvidence {
-    ordinary: Vec<(Id, Initial)>,
-    recycle: Initial,
-    database: InitialDatabase,
-}
-fn read_layout(
-    q: &Question,
-    ex: &File,
-    check: impl Fn() -> io::Result<()>,
-) -> io::Result<LayoutEvidence> {
-    let subject = q.fresh.subject.tuple();
-    query_with(
-        &q.encode()?,
-        ex,
-        subject,
-        Some(q.fresh.helper),
-        &check,
-        |channel, scope, until| {
-            let (b, [fd]) = channel.wait_checked::<1>(Kind::FreshDatabase, scope, until, &check)?;
-            let database = InitialDatabase::received(fd, subject.1)?;
-            let place = database.named(ex)?;
-            if b != database_payload(place)
-                || place[0] != q.location[0]
-                || place[2] != q.location[2]
-            {
-                return Err(bad_question());
-            }
-            let mut ordinary = Vec::with_capacity(q.paths.len());
-            for (i, path) in q.paths.iter().enumerate() {
-                let (v, []) =
-                    channel.wait_checked::<0>(Kind::ChosenFolder, scope, until, &check)?;
-                let id: Id = v[1..17].try_into().expect("fixed reply");
-                if v != body(i, id)?
-                    || id == [0; 16]
-                    || ordinary.iter().any(|(known, _)| *known == id)
-                {
-                    return Err(bad_question());
-                }
-                let fact = receive_scoped_media(channel, scope, until, &check, i, Some(id), q)?;
-                if fact.path.as_os_str() != path.as_os_str() {
-                    return Err(bad_question());
-                }
-                ordinary.push((id, fact));
-            }
-            let recycle =
-                receive_scoped_media(channel, scope, until, &check, q.paths.len(), None, q)?;
-            if ordinary
-                .iter()
-                .any(|(id, _)| id.as_slice() == &recycle.marker[37..53])
-            {
-                return Err(bad_question());
-            }
-            Ok(LayoutEvidence {
-                ordinary,
-                recycle,
-                database,
-            })
-        },
-    )
-}
 fn volume_reply(i: usize, raw: &[u8]) -> io::Result<[u8; 65]> {
     let mut b = [0; 65];
     b[0] = u8::try_from(i).map_err(|_| bad_question())?;
@@ -727,6 +248,7 @@ fn media_bytes(record: &crate::sqlite_install::catalog::Initial) -> Vec<u8> {
     out
 }
 // A missing `expected` can represent only the uniquely issued ordinal-one R.
+#[cfg(test)]
 fn scoped_material(raw: &[u8], expected: Option<Id>, pool: Id, init: Id) -> io::Result<Initial> {
     let (prefix, path) = raw.split_at_checked(101).ok_or_else(bad_question)?;
     let marker: [u8; 101] = prefix.try_into().expect("control marker width");
@@ -749,23 +271,6 @@ fn scoped_material(raw: &[u8], expected: Option<Id>, pool: Id, init: Id) -> io::
         path: PathBuf::from(OsString::from_vec(path.to_vec())),
         marker,
     })
-}
-fn receive_scoped_media(
-    channel: &Channel,
-    scope: &[u8; 32],
-    until: Instant,
-    check: impl Fn() -> io::Result<()>,
-    i: usize,
-    volume: Option<Id>,
-    q: &Question,
-) -> io::Result<Initial> {
-    let (reply, [fd]) = channel.wait_checked::<1>(Kind::VolumeClaim, scope, until, check)?;
-    let (_, uid, gid) = q.fresh.subject.tuple();
-    let value = sealed_owner(&fd, 101 + MAX_PATH_BYTES, (uid, gid))?;
-    if reply != volume_reply(i, &value)? {
-        return Err(bad_question());
-    }
-    scoped_material(&value, volume, q.pool, q.init)
 }
 fn send_media(channel: &Channel, scope: &[u8; 32], i: usize, claim: &Initial) -> io::Result<()> {
     let bytes = media_bytes(claim);

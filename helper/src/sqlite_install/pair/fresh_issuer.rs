@@ -209,20 +209,15 @@ impl Selection {
                 {
                     return Err("SYSTEM, ordinary media and the selected image must not overlap");
                 }
-                let folder = it
-                    .next()
+                it.next()
                     .and_then(|s| s.into_string().ok())
                     .ok_or("missing exact UTF-8 folder name")?;
-                let mode = match it.next().as_deref().and_then(OsStr::to_str) {
+                match it.next().as_deref().and_then(OsStr::to_str) {
                     Some("ro") => Mode::ReadOnly,
                     Some("rw") => Mode::ReadWrite,
                     _ => return Err("select the explicit folder mode ro or rw"),
                 };
-                folders.push(Choice {
-                    path: p,
-                    folder,
-                    mode,
-                });
+                folders.push(Choice { path: p });
             } else {
                 return Err(
                     "only explicit --share/--share-label entries; no recovery, password or second executable",

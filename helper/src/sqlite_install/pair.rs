@@ -19,6 +19,7 @@ pub(crate) use fresh_issuer::EmbeddedInstall;
 pub(super) use fresh_issuer::{ExplicitSubject, compiled_schema, require_private_install};
 pub(crate) use native_run::{rust_account_worker, rust_vault_worker};
 mod domain;
+#[cfg(test)]
 mod recycle;
 
 use super::{bad, request::Id};
