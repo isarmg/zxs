@@ -1,5 +1,5 @@
 //! Optional, explicitly labelled udev aliases are O_PATH-only. The separate
-//! NVMe health selection can hold one checked direct namespace read-only.
+//! `NVMe` health selection can hold one checked direct namespace read-only.
 use super::*;
 use crate::pinned::Mount;
 use rustix::fs::{Mode, OFlags, RawDir, ResolveFlags, openat2};

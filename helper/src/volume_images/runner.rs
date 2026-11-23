@@ -770,10 +770,10 @@ fn classify(
     clusters: u32,
 ) -> io::Result<super::Report> {
     if !delivered(status, code)
-        || !out
+        || out
             .split(|b| *b == b'\n')
             .next()
-            .is_some_and(|v| v == FAT_BANNER)
+            .is_none_or(|v| v != FAT_BANNER)
     {
         return Err(invalid(
             "checker launch, expected version or completed status not established",

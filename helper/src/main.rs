@@ -345,7 +345,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
         Command::RepairExt4(job) | Command::RepairExfat(job) | Command::RepairFat32(job) => {
-            line(&job.run()?)?
+            line(&job.run()?)?;
         }
         Command::CopyCheck(job) => {
             let (code, report) = job.run()?;

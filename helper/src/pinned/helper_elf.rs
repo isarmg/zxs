@@ -209,7 +209,7 @@ fn code_map(bytes: &[u8], address: u64) -> io::Result<CodeMap> {
             return Err(no());
         }
         let mut fields = line
-            .split(|b| b.is_ascii_whitespace())
+            .split(u8::is_ascii_whitespace)
             .filter(|b| !b.is_empty());
         let (start, end) = range(fields.next().ok_or_else(no)?).ok_or_else(no)?;
         if start >= end {

@@ -1,4 +1,4 @@
-//! One opt-in controller log for the exact selected PCIe namespace.
+//! One opt-in controller log for the exact selected `PCIe` namespace.
 use super::{
     Dev, Field, Reason,
     aliases::NvmeNamespace,
@@ -12,7 +12,7 @@ use std::{ffi::OsString, fmt, os::unix::ffi::OsStrExt};
 pub(crate) struct HealthQuery(Dev);
 impl HealthQuery {
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        if !args.next().is_some_and(|x| x == "--device") {
+        if args.next().is_none_or(|x| x != "--device") {
             return Err("expected --device MAJOR:MINOR");
         }
         let dev = args

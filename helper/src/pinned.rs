@@ -215,7 +215,7 @@ fn discovery_mount_id(bytes: &[u8]) -> io::Result<u64> {
     }
     let mut rows = bytes
         .split(|&c| c == b'\n')
-        .filter_map(|r| r.strip_prefix(b"mnt_id:").map(|v| v.trim_ascii()));
+        .filter_map(|r| r.strip_prefix(b"mnt_id:").map(<[u8]>::trim_ascii));
     let raw = rows.next().ok_or_else(no)?;
     let id = std::str::from_utf8(raw)
         .ok()

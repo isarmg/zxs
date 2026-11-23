@@ -214,7 +214,7 @@ fn serve(
             }
             Ok(_) => (),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(30))
+                thread::sleep(Duration::from_millis(30));
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => (),
             Err(e) => return Err(e),

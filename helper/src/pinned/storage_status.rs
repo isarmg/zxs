@@ -177,7 +177,7 @@ pub(crate) enum Reason {
 }
 impl From<io::Error> for Reason {
     fn from(value: io::Error) -> Self {
-        use io::ErrorKind::*;
+        use io::ErrorKind::{NotFound, PermissionDenied, Unsupported};
         if value.raw_os_error() == Some(rustix::io::Errno::NOSYS.raw_os_error()) {
             return Self::Unsupported;
         }

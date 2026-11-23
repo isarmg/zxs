@@ -318,8 +318,8 @@ impl RuntimeFile {
             return Err(unavailable());
         }
         let result = Self {
-            file,
             chain,
+            file,
             parts,
             executable,
         };

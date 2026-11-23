@@ -5,9 +5,7 @@ use tempfile::{Builder, TempDir};
 
 pub fn data_directory() -> TempDir {
     private_directory(
-        std::env::var_os("HELPER_TEST_DATA_PARENT")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir),
+        std::env::var_os("HELPER_TEST_DATA_PARENT").map_or_else(std::env::temp_dir, PathBuf::from),
     )
 }
 

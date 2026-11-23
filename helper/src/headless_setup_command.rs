@@ -252,7 +252,7 @@ fn summarize_paths<'a>(paths: impl Iterator<Item = &'a Path>) -> String {
         .join("\n")
 }
 
-/// Quote one RequiresMountsFor word (systemd unquotes before expanding %).
+/// Quote one `RequiresMountsFor` word (systemd unquotes before expanding %).
 fn mount_word(path: &Path) -> io::Result<String> {
     let path = path
         .to_str()

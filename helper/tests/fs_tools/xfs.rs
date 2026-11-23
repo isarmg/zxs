@@ -59,13 +59,13 @@ fn only_a_full_single_volume_with_consistent_internal_log_and_no_rt_is_admitted(
 fn transcript(geometry: bool, ag3: &[u32], ag4: &[u32]) -> Vec<u8> {
     let mut lines = Vec::<Vec<u8>>::new();
     let add = |rows: &mut Vec<Vec<u8>>, extras: &[&[u8]]| {
-        rows.extend(extras.iter().map(|line| line.to_vec()))
+        rows.extend(extras.iter().map(|line| line.to_vec()));
     };
     let ags = |rows: &mut Vec<Vec<u8>>, ids: &[u32]| {
         rows.extend(
             ids.iter()
                 .map(|id| format!("        - agno = {id}").into_bytes()),
-        )
+        );
     };
     if geometry {
         add(&mut lines, &BOUNDARY);

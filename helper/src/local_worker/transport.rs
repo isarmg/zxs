@@ -172,7 +172,7 @@ impl Channel {
         for c in ancillary.drain() {
             match c {
                 RecvAncillaryMessage::ScmCredentials(who) if credentials.is_none() => {
-                    credentials = Some(who)
+                    credentials = Some(who);
                 }
                 RecvAncillaryMessage::ScmRights(fds) if !submitted => {
                     submitted = true;
@@ -259,7 +259,7 @@ impl Channel {
             }
             match self.receive(kind, digest) {
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(20))
+                    std::thread::sleep(Duration::from_millis(20));
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 r => return r,
@@ -319,7 +319,7 @@ mod tests {
         root.send(Kind::Reserved, &[7; 32], &data).unwrap();
         assert!(worker.receive::<0>(Kind::Reserved, &digest).is_err());
         let mut wrong = c;
-        wrong.uid = Uid::from_raw(if c.uid.is_root() { 1 } else { 0 });
+        wrong.uid = Uid::from_raw(u32::from(c.uid.is_root()));
         let worker = Channel::from_owned_child_session(worker.fd, wrong, [8; 32]).unwrap();
         root.send(Kind::Reserved, &digest, &data).unwrap();
         assert!(worker.receive::<0>(Kind::Reserved, &digest).is_err());

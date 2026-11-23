@@ -36,18 +36,18 @@ fn stamp(p: &Path) -> (u64, u64, u64, u32, u64, i64, i64, i64, i64, i64, i64) {
         m.ctime_nsec(),
     )
 }
-fn refusal(result: Output) {
+fn refusal(result: &Output) {
     assert_eq!(result.status.code(), Some(2));
-    assert!(result.stdout.is_empty());
+    assert_eq!(result.stdout, [] as [u8; 0]);
 }
 
 #[test]
 fn usage_and_unknown_commands_do_not_bootstrap_anything() {
     let tmp = tempfile::tempdir().unwrap();
-    refusal(run(tmp.path(), &[]));
+    refusal(&run(tmp.path(), &[]));
     assert!(run(tmp.path(), &[Path::new("--help")]).status.success());
     assert!(run(tmp.path(), &[Path::new("--version")]).status.success());
-    refusal(run(tmp.path(), &[Path::new("unknown")]));
+    refusal(&run(tmp.path(), &[Path::new("unknown")]));
     assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0);
 }
 
@@ -79,7 +79,7 @@ fn directory_observations_report_identity_visible_ancestry_and_device_separately
         a.join(".."),
         "relative".into(),
     ] {
-        refusal(run(tmp.path(), &[op, &a, &path]));
+        refusal(&run(tmp.path(), &[op, &a, &path]));
     }
     let mut maximum: Vec<&Path> = vec![op];
     maximum.extend(std::iter::repeat_n(a.as_path(), 16));
@@ -95,7 +95,7 @@ fn directory_observations_report_identity_visible_ancestry_and_device_separately
         120
     );
     maximum.push(&a);
-    refusal(run(tmp.path(), &maximum));
+    refusal(&run(tmp.path(), &maximum));
 }
 
 #[test]
@@ -122,20 +122,20 @@ fn ordinary_byte_comparison_is_bounded_and_does_not_touch_observed_files() {
     assert_eq!(run(tmp.path(), &[op, &a, &b]).status.code(), Some(1));
     let alias = tmp.path().join("alias");
     symlink(&a, &alias).unwrap();
-    refusal(run(tmp.path(), &[op, &alias, &b]));
-    refusal(run(tmp.path(), &[op, &a, &a]));
-    refusal(run(tmp.path(), &[op, tmp.path(), &b]));
+    refusal(&run(tmp.path(), &[op, &alias, &b]));
+    refusal(&run(tmp.path(), &[op, &a, &a]));
+    refusal(&run(tmp.path(), &[op, tmp.path(), &b]));
     let pipe = tmp.path().join("fifo");
     mkfifoat(CWD, pipe.as_path(), Mode::RUSR | Mode::WUSR).unwrap();
-    refusal(run(tmp.path(), &[op, &pipe, &b]));
+    refusal(&run(tmp.path(), &[op, &pipe, &b]));
     assert_eq!(original.0, stamp(&a));
     let hard = tmp.path().join("hard");
     fs::hard_link(&a, &hard).unwrap();
-    refusal(run(tmp.path(), &[op, &hard, &b]));
+    refusal(&run(tmp.path(), &[op, &hard, &b]));
     let large = tmp.path().join("large");
     File::create(&large)
         .unwrap()
         .set_len((256 << 20) + 1)
         .unwrap();
-    refusal(run(tmp.path(), &[op, &large, &b]));
+    refusal(&run(tmp.path(), &[op, &large, &b]));
 }

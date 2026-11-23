@@ -71,7 +71,7 @@ fn image(path: &std::path::Path) -> String {
     out.sync_all().unwrap();
     out.rewind().unwrap();
     let mut hash = Sha256::new();
-    let mut buffer = [0; 32768];
+    let mut buffer = vec![0; 32_768];
     loop {
         let n = out.read(&mut buffer).unwrap();
         if n == 0 {

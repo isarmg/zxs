@@ -318,7 +318,7 @@ impl Node {
     }
 }
 
-/// Retain the actual direct NVMe controller ancestor, not just its label.
+/// Retain the actual direct `NVMe` controller ancestor, not just its label.
 /// Multipath/subsystem routing, partitions, fabrics and inferred owners refuse.
 pub(in crate::block_tools) struct NvmeOwner {
     cut: Cut,

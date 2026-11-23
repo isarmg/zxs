@@ -374,7 +374,7 @@ fn serve_mode(launch: Launch) -> io::Result<()> {
                     let _ = reply.send(&mut socket); // a disconnected browser does not extend the session
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(40))
+                    thread::sleep(Duration::from_millis(40));
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => return Err(e),

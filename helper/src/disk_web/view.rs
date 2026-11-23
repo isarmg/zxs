@@ -73,7 +73,7 @@ pub(super) fn disks(rates: bool) -> Reply {
     if rates {
         cols.extend(["采样间隔（纳秒）", "读取 B/s", "写入 B/s"]);
     }
-    line(&mut out, cols.iter().map(|s| s.to_string()));
+    line(&mut out, cols.iter().map(std::string::ToString::to_string));
     for (dev, row) in &report.rows {
         let mut cells = vec![dev.to_string()];
         match row {
@@ -113,7 +113,11 @@ pub(super) fn disks(rates: bool) -> Reply {
                             x.bps(x.write_bytes),
                         ]),
                         Err(why) => {
-                            cells.extend([format!("未知：{}", why.label()), "—".into(), "—".into()])
+                            cells.extend([
+                                format!("未知：{}", why.label()),
+                                "—".into(),
+                                "—".into(),
+                            ]);
                         }
                     }
                 }

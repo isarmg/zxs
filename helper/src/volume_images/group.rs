@@ -97,7 +97,7 @@ mod tests {
                             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                         ) =>
                     {
-                        std::thread::sleep(Duration::from_millis(5))
+                        std::thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => panic!("{e}"),
                 }
