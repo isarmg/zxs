@@ -18,7 +18,9 @@ from zipworkspace._windows_access import NativeSecurity
 from zipworkspace._windows_origin import DATA, ZONE
 from zipworkspace._windows_output import PinnedParent
 from zipworkspace.container_https import HttpsExchange
-from zipworkspace.desktop.container_connection import _Authorization
+from zipworkspace.desktop.container_connection import OpenConnection, _Authorization
+from zipworkspace.desktop.container_management import Branch, Container, Detail, Node
+from zipworkspace.desktop.container_windows_download import WindowsContainerNodeCopy
 from zipworkspace.model import Rejected, new_id
 
 
@@ -183,6 +185,36 @@ class NativeNodePublication(unittest.TestCase):
         self.assertEqual(self.requests, [TARGET])
         self.assertEqual(list(self.destination.iterdir()), [])
 
+    def test_desktop_plan_review_decline_and_disconnect_never_requests(self):
+        exchange = self.response((PAYLOAD,), PAYLOAD)
+        authorization = exchange._authorization
+        connection = OpenConnection(None, authorization, exchange, "fixture", _listed=True)
+        node = Node(NODE, None, len(PAYLOAD), sha256(PAYLOAD).hexdigest())
+        branch = Branch("main", NODE, (node,))
+        detail = Detail(Container(CONTAINER, "selected", 1), (), (branch,))
+        plan = WindowsContainerNodeCopy(connection, detail, branch, node, self.destination,
+                                        "reviewed.bin", staging_parent=self.staging)
+        try:
+            review = plan.review()
+            self.assertIn(NODE, review)
+            self.assertIn(node.sha256, review)
+            self.assertIn("reviewed.bin", review)
+            self.assertEqual(self.requests, [])
+            self.assertEqual(list(self.staging.iterdir()), [])
+            self.assertEqual(list(self.destination.iterdir()), [])
+            with self.assertRaisesRegex(Rejected, "请先确认"):
+                plan.run(confirmed=False)
+            authorization.revoke()
+            with self.assertRaisesRegex(Rejected, "this window disconnected"):
+                plan.run(confirmed=True)
+            with self.assertRaises(Rejected):
+                plan.run(confirmed=True)
+        finally:
+            plan.close()
+        self.assertEqual(self.requests, [])
+        self.assertEqual(list(self.staging.iterdir()), [])
+        self.assertEqual(list(self.destination.iterdir()), [])
+
     def test_close_and_second_publish_cannot_take_worker_handles(self):
         started, resume = Event(), Event()
 
@@ -222,14 +254,14 @@ def qualify(spelling, *, hosted):
             return 0 if hosted else 2
 
         names = unittest.defaultTestLoader.getTestCaseNames(NativeNodePublication)
-        if len(names) != 6:
-            raise RuntimeError("expected all six mandatory Windows native output cases")
+        if len(names) != 7:
+            raise RuntimeError("expected all seven mandatory Windows native output cases")
         suite = unittest.TestSuite(NativeNodePublication(name, root, spelling, security, actor, profile, zone)
                                    for name in names)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         if not result.wasSuccessful() or result.testsRun != len(names) or result.skipped:
             return 1
-        print("Windows native exact-node output: six cases passed on NTFS with real URL policy "
+        print("Windows native exact-node output: seven cases passed on NTFS with real URL policy "
               "and synthetic H2 responses; no actual TLS connection or UI.", flush=True)
         return 0
 
