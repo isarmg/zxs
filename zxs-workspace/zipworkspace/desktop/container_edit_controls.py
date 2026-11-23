@@ -35,7 +35,7 @@ def _local_profile(reader, live, point, live_index, initialize):
         keep.callback(choice.close)
         preview = choice.review()  # Qualify existing point before any journal creation.
         owner = keep.enter_context(linux_write_profile(
-            reader, live, allowed=frozenset({Kind.SAVE, Kind.RENAME, Kind.TAGS, Kind.RECYCLE}),
+            reader, live, allowed=frozenset({Kind.SAVE, Kind.RENAME, Kind.TAGS, Kind.RECYCLE, Kind.CREATE_BRANCH}),
             confirmed=True, initialize=initialize))
         active = reader.adopt_local(owner.profile, confirmed=True)
         index = index_for(active.operations, live_index)  # use the prior authenticated snapshot
@@ -206,7 +206,7 @@ class ContainerEditControls(QWidget):
         dialog.setWindowTitle("接入本机编辑")
         dialog.setTextFormat(Qt.TextFormat.PlainText)
         dialog.setText(f"原工作目录：{live.work}\n原私有 STATE：{live.state}\n现有空挂载点：{point!r}\n\n"
-                       "仅为当前已认证账号接入本机保存、重命名、标签与回收操作。"
+                       "仅为当前已认证账号接入本机保存、新建分支、重命名、标签与回收操作。"
                        "本步不联网、不挂载。已有登记就使用原登记；只有首次才新建。")
         old = dialog.addButton("使用原登记", QMessageBox.ButtonRole.AcceptRole)
         new = dialog.addButton("首次创建本机登记", QMessageBox.ButtonRole.ActionRole)

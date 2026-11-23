@@ -8,7 +8,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from .container_cold_transfer import reopen_original_transfer
-from .container_management import Outcome, Phase, id_ok, kind, valid_ticket
+from .container_management import CreateBranch, Outcome, Phase, id_ok, kind, valid_ticket
 from .widgets import button, confirm, label
 
 
@@ -210,6 +210,8 @@ class ColdTransferControls(QWidget):
                     extra += "（原盘清理待完成）"
                 elif receipt.recycle_source_cleanup_pending is None:
                     extra += "（原盘清理未核对）"
+            elif type(outcome.ticket.change) is CreateBranch:
+                extra = f" · 新分支 {receipt.branch} · 继承原节点 {receipt.node}"
             elif receipt.node is not None:
                 extra = f" · 节点 {receipt.node}"
         self.note.setText(f"{outcome.phase.value}{extra} · 原操作 {outcome.ticket.operation}")

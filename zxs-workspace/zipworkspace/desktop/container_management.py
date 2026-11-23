@@ -80,6 +80,7 @@ class Kind(Enum):
     TAGS = "替换标签"
     RECYCLE = "删除到回收盘"
     SAVE = "保存新节点"
+    CREATE_BRANCH = "新建分支"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,8 +108,17 @@ class Save:
     from_main: str | None = None  # If present, fork and first complete save are one operation.
 
 
-Change = Rename | Tags | Recycle | Save
-_KINDS = {Rename: Kind.RENAME, Tags: Kind.TAGS, Recycle: Kind.RECYCLE, Save: Kind.SAVE}
+@dataclass(frozen=True, slots=True)
+class CreateBranch:
+    target: Container
+    source_branch: str
+    source_node: str
+    branch: str
+
+
+Change = Rename | Tags | Recycle | Save | CreateBranch
+_KINDS = {Rename: Kind.RENAME, Tags: Kind.TAGS, Recycle: Kind.RECYCLE,
+          Save: Kind.SAVE, CreateBranch: Kind.CREATE_BRANCH}
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +237,9 @@ def valid_change(value):
     if type(value) is Tags:
         return (value.target.revision != 0 and tags_ok(value.values)
                 and len(set(value.values)) == len(value.values))
+    if type(value) is CreateBranch:
+        return (value.target.revision != 0 and branch_ok(value.source_branch)
+                and id_ok(value.source_node) and id_ok(value.branch) and value.branch != value.source_branch)
     if type(value) is Save:
         if not _body(value.body, value.target.id) or value.branch != value.body.target_branch:
             return False
@@ -273,6 +286,9 @@ def _outcome(value, ticket):
     if (result.recycled is not False or cleanup is not None or not number(result.revision)
             or not ticket.base_sequence < result.revision < _MAX):
         return False
+    if type(change) is CreateBranch:
+        return (result.branch == change.branch and result.node == change.source_node
+                and result.parent is None and result.length is None and result.sha256 is None)
     if type(change) is Save:
         return (result.node == change.body.node and result.branch == change.branch
                 and result.parent == change.body.selected_base and number(result.length)
@@ -345,6 +361,18 @@ def _observe(method, ticket):
     except Exception:
         pass  # a lost reply is not evidence of failure or success
     return Outcome(ticket, Phase.UNKNOWN)
+
+
+def branch_source(info, source, node):
+    return (info.container.revision != 0 and Kind.CREATE_BRANCH in info.allowed
+            and source in info.branches and id_ok(node) and any(version.id == node for version in source.nodes))
+
+
+def branch_choice(info, source, node, new_branch):
+    if (branch_source(info, source, node) and id_ok(new_branch)
+            and all(item.id != new_branch for item in info.branches)):
+        return CreateBranch(info.container, source.id, node, new_branch)
+    return None
 
 
 def save_mode(info, branch, node):

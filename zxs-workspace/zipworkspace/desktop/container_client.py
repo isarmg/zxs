@@ -10,8 +10,9 @@ from ..container_http import AuthenticatedExchange, ConfirmedAction, SubmitAbsen
 from ..container_plan import FullBody, ReceiptFence
 from ..container_spool import reopen_submit
 from ..model import Rejected
-from .container_management import (Change, Container, Detail, Outcome, Phase, Receipt, Recycle,
-                                   Rename, Save, Tags, Ticket, id_ok, list_checked, valid_change, valid_ticket)
+from .container_management import (Change, Container, CreateBranch, Detail, Outcome, Phase, Receipt,
+                                   Recycle, Rename, Save, Tags, Ticket, branch_choice, id_ok, list_checked,
+                                   open_checked, valid_change, valid_ticket)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +171,14 @@ class ContainerClient:
             raise Rejected("invalid selected container change")
         container = change.target.id
         outbox = self._require_outbox()
+        if type(change) is CreateBranch:
+            # Recheck the exact inherited node and grant before reserving.
+            # The current head and unrelated metadata are not the wire target.
+            read = open_checked(self._selected, container)
+            source = next((branch for branch in read.branches if branch.id == change.source_branch), None)
+            if (read.container.revision < change.target.revision
+                    or branch_choice(read, source, change.source_node, change.branch) is None):
+                raise Rejected("selected source node or new branch is no longer available")
         registry = outbox.registry
         with registry.hold(container):
             self._require_outbox()
@@ -259,6 +268,8 @@ def _matches(action, base, original, change):
         )
     if base != change.target.revision or not base:
         return False
+    if type(change) is CreateBranch:
+        return action.kind == "create_branch" and (action.branch, action.head) == (change.branch, change.source_node)
     if type(change) is Rename:
         return action.kind == "rename" and action.name == change.name
     if type(change) is Tags:
@@ -277,6 +288,11 @@ def _receipt(ticket, action, result):
             raise Rejected("no exact dedicated recycle receipt")
         return Receipt(ticket, None, recycled=True,
                        recycle_source_cleanup_pending=result.recycle_source_cleanup_pending)
+    if type(ticket.change) is CreateBranch:
+        change = ticket.change
+        if (fence.branch, fence.head, fence.base_revision) != (change.branch, change.source_node, None):
+            raise Rejected("new branch receipt differs from the selected original node")
+        return Receipt(ticket, fence.sequence, branch=fence.branch, node=fence.head)
     if type(ticket.change) is Save:
         if (fence.branch, fence.head, fence.base_revision) != (action.branch, action.node_id, None):
             raise Rejected("save receipt differs from original branch or node")

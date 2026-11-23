@@ -213,7 +213,9 @@ class Plan:
             prev = last.get(op.container_id)
             key = (op.container_id, op.kind)
             if (op.operation_id in operations or key in mutations or op.after != prev
-                    or (op.kind == "delete") == (op.container_id in seen)
+                    or (op.kind == "delete" and op.container_id in seen)
+                    # Explicit CreateBranch may be a no-body metadata command with no local file.
+                    or (op.kind not in ("delete", "create_branch") and op.container_id not in seen)
                     or (prev is not None and op.kind == "delete")):
                 raise Rejected("ambiguous operation set or missing exact predecessor")
             operations.add(op.operation_id)

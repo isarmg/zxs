@@ -1,10 +1,15 @@
 import unittest
 from dataclasses import replace
 
+from zipworkspace.container_http import ConfirmedAction
+from zipworkspace.container_plan import ReceiptFence
+from zipworkspace.desktop.container_client import Original, _matches, _receipt
 from zipworkspace.desktop.container_management import (
-    Body, Branch, Container, Detail, Kind, Node, Outcome, Phase, Receipt, Recycle,
-    Ticket, lookup, open_checked, page, perform, save_choice, save_mode,
+    Body, Branch, Container, CreateBranch, Detail, Kind, Node, Outcome, Phase, Receipt, Recycle,
+    Ticket, branch_choice, lookup, open_checked, page, perform, save_choice, save_mode,
 )
+from zipworkspace.desktop.container_outbox import _change, _change_bytes, _metadata_plan
+from zipworkspace.model import Rejected
 
 C = Container("1" * 32, "容器工艺", 7)
 BASE = Node("2" * 32, None, 1, "a" * 64)
@@ -78,6 +83,39 @@ class ContainerManagement(unittest.TestCase):
         self.assertEqual(result.phase, Phase.CONFIRMED)
         self.assertEqual((change.branch, change.from_main, result.receipt.node), (FORK_ID, BASE.id, NEW_NODE))
         self.assertEqual(fixture.calls, [("prepare", change), ("apply", Ticket(change, OP, SPOOL, C.revision))])
+        self.assertEqual(MAIN.head, HEAD.id)
+
+    def test_explicit_branch_is_one_no_body_original_and_inherits_exact_node(self):
+        fixture = NativeFixture()
+        info = replace(fixture.info, allowed=frozenset({Kind.CREATE_BRANCH}))
+        original = Original(SPOOL, OP)
+        change = branch_choice(info, MAIN, BASE.id, FORK_ID)
+        self.assertEqual(change, CreateBranch(C, "main", BASE.id, FORK_ID))
+        self.assertIsNone(branch_choice(info, MAIN, NEW_NODE, FORK_ID))
+        self.assertIsNone(branch_choice(info, MAIN, BASE.id, OTHER.id))
+        self.assertIsNone(branch_choice(fixture.info, MAIN, BASE.id, FORK_ID))
+        self.assertEqual(_change(_change_bytes(change)), change)
+
+        plan = _metadata_plan(change, original.operation)
+        action, base = plan.next_for(C.id)
+        self.assertEqual((plan.placements, action.kind, action.body, action.branch, action.head),
+                         ((), "create_branch", None, FORK_ID, BASE.id))
+        self.assertTrue(_matches(action, base, original, change))
+        self.assertFalse(_matches(action, base, original, replace(change, source_node=HEAD.id)))
+
+        fence = ReceiptFence(C.id, OP, "create_branch", None, 11, FORK_ID, BASE.id)
+        fixture.reply = lambda ticket: Outcome(ticket, Phase.CONFIRMED,
+                                               _receipt(ticket, action, ConfirmedAction(fence, None)))
+        result = perform(fixture, change)
+        self.assertEqual((result.phase, result.receipt.branch, result.receipt.node, result.receipt.length),
+                         (Phase.CONFIRMED, FORK_ID, BASE.id, None))
+        self.assertIsNone(plan.next_for(C.id, (fence,)))
+        self.assertEqual([kind for kind, _ in fixture.calls], ["prepare", "apply"])
+        with self.assertRaises(Rejected):
+            _receipt(result.ticket, action, ConfirmedAction(replace(fence, head=HEAD.id), None))
+        fixture.reply = lambda ticket: Outcome(ticket, Phase.CONFIRMED,
+                                               Receipt(ticket, 11, branch=FORK_ID, node=HEAD.id))
+        self.assertEqual(lookup(fixture, result.ticket).phase, Phase.UNKNOWN)
         self.assertEqual(MAIN.head, HEAD.id)
 
     def test_unsupported_nonmain_history_keeps_readable_metadata(self):

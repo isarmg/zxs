@@ -18,8 +18,8 @@ from ..private_candidates import held_candidates
 from ..private_freeze import local_mount, mount_id
 from ..publish import rename_new_at
 from .container_client import Original, _matches
-from .container_management import (Body, Container, Outcome, Phase, Recycle, Rename, Save, Tags, Ticket,
-                                   branch_ok, id_ok, valid_change, valid_ticket)
+from .container_management import (Body, Change, Container, CreateBranch, Outcome, Phase, Recycle,
+                                   Rename, Save, Tags, Ticket, branch_ok, id_ok, valid_change, valid_ticket)
 
 _APP = 0x5A584F31
 _LIMIT = 2 << 20
@@ -39,7 +39,7 @@ CREATE TABLE receipts(container TEXT NOT NULL, submission TEXT NOT NULL, positio
 """
 _SHAPE = frozenset(q.strip() for q in _SCHEMA.split(";") if q.strip())
 _ACCOUNT = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
-_CHANGE = {Rename: "rename", Tags: "set_tags", Recycle: "delete", Save: "save_node"}
+_CHANGE = {Rename: "rename", Tags: "set_tags", Recycle: "delete", Save: "save_node", CreateBranch: "create_branch"}
 
 
 def _destination(value):
@@ -90,6 +90,8 @@ def _change(raw):
             change = Rename(**fields)
         elif kind == "delete":
             change = Recycle(**fields)
+        elif kind == "create_branch":
+            change = CreateBranch(**fields)
         else:
             raise Rejected("unknown local mutation kind")
         if _change_bytes(change) != raw:
@@ -103,6 +105,9 @@ def _metadata_plan(change, operation):
     if type(change) is Save:
         raise Rejected("an absent save must never be recaptured as metadata")
     key = change.target.id
+    if type(change) is CreateBranch:
+        return Plan((Action(operation, key, "create_branch", change.target.revision, None,
+                            branch=change.branch, head=change.source_node),), ())
     return Plan((Action(operation, key, _CHANGE[type(change)], change.target.revision, None,
                         name=change.name if type(change) is Rename else None,
                         tags=tuple(sorted(change.values)) if type(change) is Tags else None),),
@@ -381,7 +386,7 @@ class NativeOutbox:
                 raise Rejected("the unarmed original metadata changed before sealing")
             db.execute("UPDATE plans SET ready=1 WHERE container=? AND submission=?", (key, submission))
 
-    def reserve(self, change: Save | Rename | Tags | Recycle) -> Original:
+    def reserve(self, change: Change) -> Original:
         raw = _change_bytes(change)
         key = change.target.id
         self._require(key)
@@ -424,7 +429,7 @@ class NativeOutbox:
                 raise Rejected("the original prepared action has a different body")
         return original
 
-    def require_prepared(self, original: Original, change: Save | Rename | Tags | Recycle, *,
+    def require_prepared(self, original: Original, change: Change, *,
                          settled: bool = False) -> None:
         """Prove one durable ticket; settled selects readback-only admission."""
         if type(original) is not Original or type(settled) is not bool:

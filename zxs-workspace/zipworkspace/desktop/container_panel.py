@@ -11,11 +11,12 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout
                                QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QSplitter,
                                QTextBrowser, QVBoxLayout, QWidget)
 
+from ..model import new_id
 from .container_client import ContainerIndex, index_for
 from .container_connection import open_connection
-from .container_management import (Kind, Phase, Recycle, Rename, Tags, kind,
-                                   lookup, open_checked, page, perform, retry, save_choice, save_mode,
-                                   tags_ok, text_ok, unresolved)
+from .container_management import (CreateBranch, Kind, Phase, Recycle, Rename, Tags, branch_choice,
+                                   branch_source, kind, lookup, open_checked, page, perform, retry,
+                                   save_choice, save_mode, tags_ok, text_ok, unresolved)
 from .widgets import button, confirm, label
 
 _PARALLEL = 4
@@ -94,11 +95,12 @@ class ContainerPanel(QWidget):
         self.rename_button = button("重命名…", self._rename)
         self.tags_button = button("替换标签…", self._tags)
         self.save_button = button("保存该容器的新节点…", self._save)
+        self.branch_button = button("从所选节点新建分支…", self._create_branch)
         self.recycle_button = button("删除到回收盘…", self._recycle)
         self.status_button = button("查询原回执", self._status)
         self.retry_button = button("重试这笔原操作…", self._retry)
         actions.addRow(self.rename_button, self.tags_button)
-        actions.addRow(self.save_button)
+        actions.addRow(self.save_button, self.branch_button)
         actions.addRow(self.recycle_button, self.status_button)
         actions.addRow(self.retry_button)
         self.copy_transfer_button = None
@@ -396,6 +398,9 @@ class ContainerPanel(QWidget):
                 if self._scope(Kind.SAVE) is not None and branch is not None else None)
         self.save_button.setText("保存到新分支…" if mode == "fork" else "保存该容器的新节点…")
         self.save_button.setEnabled(mode is not None)
+        can_branch = self._scope(Kind.CREATE_BRANCH)
+        self.branch_button.setEnabled(can_branch is not None
+                                      and branch_source(can_branch, branch, node.id if node is not None else None))
         result = self.outcomes.get(key)
         self.status_button.setEnabled(active and unresolved(result))
         if self.copy_transfer_button is not None:
@@ -425,7 +430,10 @@ class ContainerPanel(QWidget):
                 if result.receipt is not None:
                     if result.receipt.revision is not None:
                         facts.append(("已确认修订", str(result.receipt.revision)))
-                    if result.receipt.node is not None:
+                    if type(result.ticket.change) is CreateBranch:
+                        facts.extend((("已新建分支", result.receipt.branch),
+                                      ("继承原节点", result.receipt.node)))
+                    elif result.receipt.node is not None:
                         facts.extend((("回执分支", result.receipt.branch),
                                       ("回执节点", result.receipt.node)))
             html = page(title, self._description(key), facts)
@@ -505,6 +513,25 @@ class ContainerPanel(QWidget):
         if confirm(self, "删除到专用回收盘", f"{target.name}\n容器 {target.id}\n修订 {target.revision}",
                    attestation="确认将这个原容器移入专用回收盘。", action_text="确认删除"):
             self._submit(info, Recycle(target))
+
+    def _create_branch(self):
+        info = self._scope(Kind.CREATE_BRANCH)
+        source, node = self._choice()
+        if info is None or not branch_source(info, source, node):
+            return
+        change = branch_choice(info, source, node, new_id())
+        if change is None:
+            self.notice.setText("新分支标识已被占用，本次未发起。")
+            return
+        target = change.target
+        if (confirm(self, "从所选原节点新建分支",
+                    f"{target.name!r} · 容器 {target.id}\n"
+                    f"来源分支 {change.source_branch} · 原节点 {change.source_node}\n"
+                    f"新分支 {change.branch}",
+                    attestation="只新建分支指向这个节点，不上传内容或改变原分支。",
+                    action_text="确认新建分支")
+                and self._choice() == (source, node)):
+            self._submit(info, change)
 
     def _save(self):
         info = self._scope(Kind.SAVE)
