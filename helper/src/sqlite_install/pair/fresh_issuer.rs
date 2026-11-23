@@ -195,7 +195,7 @@ impl Selection {
                     .next()
                     .ok_or("missing actual original data root or explicit DATA label")?;
                 let p = if flag == "--share-label" {
-                    product_layout::data_label(selected)?
+                    product_layout::data_label(&selected)?
                 } else {
                     PathBuf::from(selected)
                 };

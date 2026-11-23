@@ -161,10 +161,7 @@ impl Site {
         this.check()?;
         Ok(this)
     }
-    fn prefix(&self) -> &'static [&'static CStr; 2] {
-        &PRODUCT
-    }
-    fn component(&self, parent: &File, name: &CStr, level: usize) -> io::Result<File> {
+    fn component(parent: &File, name: &CStr, level: usize) -> io::Result<File> {
         if level == 0 && name == PRODUCT[0] {
             product_top(parent)
         } else {
@@ -188,14 +185,14 @@ impl Site {
             .chain
             .iter()
             .zip(
-                self.prefix()
+                PRODUCT
                     .iter()
                     .copied()
                     .chain(std::iter::once(self.leaf.as_c_str())),
             )
             .enumerate()
         {
-            let next = self.component(&p, n, level)?;
+            let next = Self::component(&p, n, level)?;
             safe_dir(original)?;
             if mark(original)? != mark(&next)? {
                 return Err(bad("protected installation path changed"));

@@ -136,7 +136,7 @@ fn access_chain(site: &Site, gid: u32) -> io::Result<()> {
     site.check()
 }
 pub(super) fn verify_registered_instance(site: &Site, gid: u32) -> io::Result<()> {
-    if site.chain.len() != site.prefix().len() + 1 {
+    if site.chain.len() != PRODUCT.len() + 1 {
         return Err(bad("the full original instance path is required"));
     }
     access_chain(site, gid)?;
@@ -145,9 +145,9 @@ pub(super) fn verify_registered_instance(site: &Site, gid: u32) -> io::Result<()
     if m.gid() != gid || m.mode() & 0o7777 != 0o750 {
         return Err(bad("not the protected original instance parent"));
     }
-    let parent = &site.chain[site.prefix().len() - 1];
+    let parent = &site.chain[PRODUCT.len() - 1];
     exact_with(parent, &site.leaf, base, || {
-        site.component(parent, &site.leaf, site.prefix().len())
+        Site::component(parent, &site.leaf, PRODUCT.len())
     })?;
     site.check()
 }

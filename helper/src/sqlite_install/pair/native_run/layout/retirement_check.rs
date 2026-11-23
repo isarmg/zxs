@@ -149,9 +149,9 @@ impl Question {
         // The success callback runs while both originals are held, outside
         // SQLite. An uncertain send must not generate a second packet.
         match retire_ordinary::observe(locked, &self.scope, &self.subject.tuple().0, |snapshot| {
-            send(Reply::from(snapshot, self.scope.ids())?)
+            send(Reply::from(&snapshot, self.scope.ids())?)
         }) {
-            Ok(sent) => sent,
+            Ok(result) => result,
             Err(e) => {
                 let status = if retire_ordinary::protected_volume(&e) {
                     Reply::Protected
@@ -171,7 +171,7 @@ enum Reply {
     Unknown,
 }
 impl Reply {
-    fn from(p: Preflight, [_, init, volume]: [Id; 3]) -> io::Result<Self> {
+    fn from(p: &Preflight, [_, init, volume]: [Id; 3]) -> io::Result<Self> {
         if p.original_init != init || p.volume != volume || !(2..=63).contains(&p.ordinal) {
             return Err(invalid());
         }

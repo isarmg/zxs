@@ -65,7 +65,7 @@ fn nonce() -> io::Result<[u8; 32]> {
     let mut out = [0; 32];
     loop {
         match getrandom(&mut out, GetRandomFlags::NONBLOCK) {
-            Err(rustix::io::Errno::INTR) => continue,
+            Err(rustix::io::Errno::INTR) => {}
             Err(e) => return Err(e.into()),
             Ok(32) if out != [0; 32] => return Ok(out),
             _ => return Err(bad("no complete fresh kernel challenge")),

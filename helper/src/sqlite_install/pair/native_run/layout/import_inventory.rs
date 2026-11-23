@@ -225,7 +225,7 @@ impl Question {
                 })
             },
         ) {
-            Ok(sent) => sent,
+            Ok(result) => result,
             Err(_) => send(Reply::Unknown),
         }
     }

@@ -123,13 +123,13 @@ fn walk(path: &Path, is_dir: bool, product: Entity) -> io::Result<Vec<Prior>> {
     while let Some(part) = names.next() {
         let name = OsStr::from_bytes(part);
         let from = chain.last().expect("held host root");
-        let opener = qualified_dir(&from.original)?;
+        let directory = qualified_dir(&from.original)?;
         if from.at.entity == product {
             let rest = path.strip_prefix(&prefix).map_err(|_| denied())?;
             if !product_layout::image_separate(&Path::new(product_layout::TOP).join(rest)) {
                 return Err(denied());
             }
-            product_layout::raw_member(&opener, name, || Ok(()))?;
+            product_layout::raw_member(&directory, name, || Ok(()))?;
         }
         prefix.push(name);
         let crossing = table.crossing(from.at.mount, &prefix)?;
@@ -137,7 +137,7 @@ fn walk(path: &Path, is_dir: bool, product: Entity) -> io::Result<Vec<Prior>> {
         if last_file && crossing.is_some() {
             return Err(denied());
         }
-        let opened = discover_component(&opener, name, crossing.is_some())?;
+        let opened = discover_component(&directory, name, crossing.is_some())?;
         let expected = crossing.unwrap_or(from.at.mount);
         if table.admit(&opened)? != expected {
             return Err(denied());

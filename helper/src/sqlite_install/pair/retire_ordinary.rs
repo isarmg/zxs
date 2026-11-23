@@ -161,11 +161,8 @@ impl std::fmt::Display for ProtectedVolume {
 }
 impl std::error::Error for ProtectedVolume {}
 pub(super) fn protected_volume(e: &io::Error) -> bool {
-    e.get_ref().is_some_and(
-        <(dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static)>::is::<
-            ProtectedVolume,
-        >,
-    )
+    e.get_ref()
+        .is_some_and(<dyn std::error::Error + Send + Sync + 'static>::is::<ProtectedVolume>)
 }
 
 pub(super) fn compiled_schema() -> io::Result<()> {

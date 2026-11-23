@@ -52,9 +52,8 @@ pub(super) fn clean_environment() -> bool {
 // non-FIPS provider. Respect the upstream administrator force-file as well.
 pub(super) fn system_policy() -> io::Result<()> {
     match std::fs::symlink_metadata("/etc/gcrypt/fips_enabled") {
-        Ok(_) => return Err(no()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(_) => return Err(no()),
+        Ok(_) | Err(_) => return Err(no()),
     }
     match thread_file(c"sys/crypto/fips_enabled") {
         Ok(f) => {

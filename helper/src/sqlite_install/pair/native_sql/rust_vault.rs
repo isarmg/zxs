@@ -107,7 +107,7 @@ impl ActiveRustMeta {
         let mut out = [0u8; 224];
         out[..16].copy_from_slice(VAULT_MAGIC);
         out[16] = 1;
-        out[17] = self.login.len() as u8;
+        out[17] = u8::try_from(self.login.len()).map_err(|_| wrong())?;
         for (slot, id) in
             out[24..152]
                 .as_chunks_mut::<16>()
@@ -139,7 +139,7 @@ impl ActiveRustMeta {
         }
         h.update(self.init_sha);
         h.update(self.descriptor_sha);
-        h.update([self.login.len() as u8]);
+        h.update([u8::try_from(self.login.len()).map_err(|_| wrong())?]);
         h.update(&self.login);
         h.update(self.sid);
         h.update(actor);

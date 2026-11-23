@@ -8,7 +8,7 @@ use crate::{
 };
 use rustix::fs::{Mode, OFlags, RawDir, ResolveFlags, openat2};
 use std::{
-    ffi::{CStr, OsStr, OsString},
+    ffi::{CStr, OsStr},
     fs::File,
     io,
     mem::MaybeUninit,
@@ -46,14 +46,15 @@ pub(crate) fn media(path: &Path) -> Result<(), &'static str> {
 pub(crate) fn image_separate(path: &Path) -> bool {
     ![STATE, LOG, DISKS].iter().any(|p| overlaps(path, p))
 }
-pub(crate) fn data_label(label: OsString) -> Result<PathBuf, &'static str> {
+pub(crate) fn data_label(label: &OsStr) -> Result<PathBuf, &'static str> {
     let name = label
         .to_str()
         .filter(|v| {
-            !(v.is_empty() || matches!(*v, "." | ".."))
-                && v.len() <= 255
-                && !v.contains('/')
-                && !v.chars().any(char::is_control)
+            !(v.is_empty()
+                || matches!(*v, "." | "..")
+                || v.len() > 255
+                || v.contains('/')
+                || v.chars().any(char::is_control))
         })
         .ok_or("DATA label must be one nonempty UTF-8 path component")?;
     let p = Path::new(DATA).join(name);
@@ -273,11 +274,11 @@ mod tests {
             assert!(image_separate(Path::new(accepted)), "{accepted}");
         }
         assert_eq!(
-            data_label("资料 1".into()).unwrap(),
+            data_label(OsStr::new("资料 1")).unwrap(),
             Path::new("/zxs/disks/data/资料 1")
         );
         for label in ["", "/absolute", "a/b", "..", ".", "bad\nname"] {
-            assert!(data_label(label.into()).is_err());
+            assert!(data_label(OsStr::new(label)).is_err());
         }
     }
 }

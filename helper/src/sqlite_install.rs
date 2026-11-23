@@ -135,7 +135,7 @@ impl Installation {
                     PathBuf::from(args.next().ok_or("missing selected data directory")?)
                 }
                 Some("--data-label") => {
-                    product_layout::data_label(args.next().ok_or("missing selected DATA label")?)?
+                    product_layout::data_label(&args.next().ok_or("missing selected DATA label")?)?
                 }
                 _ => {
                     return Err(
@@ -177,7 +177,7 @@ fn receipt_fields(pool: Id, op: Id, confirmed_sha: Option<[u8; 32]>) -> String {
     fields
 }
 #[cfg(test)]
-fn completion_line(result: complete::Receipt, private: bool) -> String {
+fn completion_line(result: &complete::Receipt, private: bool) -> String {
     let fields = receipt_fields(result.pool, result.op, Some(result.request_sha));
     if private {
         format!("fresh-init=confirmed {fields}; original volume markers verified")
@@ -191,7 +191,7 @@ fn completion_line(result: complete::Receipt, private: bool) -> String {
     }
 }
 #[cfg(test)]
-fn original_receipt_line(op: Id, result: receipt::Receipt) -> (u8, String) {
+fn original_receipt_line(op: Id, result: &receipt::Receipt) -> (u8, String) {
     let (code, tag, meaning) = if result.committed_sha.is_some() {
         (0, "confirmed", "historical receipt only")
     } else {
@@ -224,13 +224,13 @@ mod command_cases {
             request_sha: sha,
             previous,
         };
-        assert!(completion_line(applied(false), true).contains(&digest));
-        assert!(completion_line(applied(false), false).contains(&digest));
-        let resumed = completion_line(applied(true), false);
+        assert!(completion_line(&applied(false), true).contains(&digest));
+        assert!(completion_line(&applied(false), false).contains(&digest));
+        let resumed = completion_line(&applied(true), false);
         assert!(resumed.contains(&digest) && resumed.contains("historical receipt only"));
         let (code, confirmed) = original_receipt_line(
             op,
-            receipt::Receipt {
+            &receipt::Receipt {
                 pool,
                 committed_sha: Some(sha),
             },
@@ -239,7 +239,7 @@ mod command_cases {
         assert!(confirmed.contains(&digest) && confirmed.starts_with("init=confirmed "));
         let (code, pending) = original_receipt_line(
             op,
-            receipt::Receipt {
+            &receipt::Receipt {
                 pool,
                 committed_sha: None,
             },

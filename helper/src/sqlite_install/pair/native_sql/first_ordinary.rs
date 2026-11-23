@@ -86,12 +86,16 @@ impl Authority {
         h.update(1i64.to_be_bytes());
         h
     }
-    fn publish(self, f: &Folder, k: FolderIds) -> [u8; 32] {
+    fn publish(self, f: &Folder, k: FolderIds) -> io::Result<[u8; 32]> {
         let mut h = self.prefix(b"ZXS-SQLITE-1/PUBLISH-ROOT\0", &k.publish);
         h.update(f.volume);
-        h.update((f.name.len() as u16).to_be_bytes());
+        h.update(
+            u16::try_from(f.name.len())
+                .map_err(|_| bad("first share name is too long"))?
+                .to_be_bytes(),
+        );
         h.update(f.name.as_bytes());
-        h.finalize().into()
+        Ok(h.finalize().into())
     }
     fn mode(self, f: &Folder, k: FolderIds) -> [u8; 32] {
         let mut h = self.prefix(b"ZXS-SQLITE-1/SHARE-MODE\0", &k.setting);
@@ -108,7 +112,7 @@ impl Authority {
         one(tx.execute("INSERT INTO main.root_share(share_id,publish_op,author_auth_op,volume_id,display_label)
                          VALUES(?1,?2,?3,?4,?5)",
             params![&k.share[..],&k.publish[..],&self.setup[..],&f.volume[..],f.name.as_bytes()]))?;
-        self.op(tx, &k.publish, 3, &self.publish(f, k))?;
+        self.op(tx, &k.publish, 3, &self.publish(f, k)?)?;
         one(tx.execute("INSERT INTO main.share_mode(change_op,share_id,previous_op,author_auth_op,revision,mode)
                          VALUES(?1,?2,?3,?4,1,?5)",
             params![&k.setting[..],&k.share[..],&k.publish[..],&self.setup[..],i64::from(f.mode.code())]))?;
@@ -125,7 +129,7 @@ impl Authority {
         if v.get::<_, i64>(0).map_err(sql)? != 3
             || v.get::<_, i64>(1).map_err(sql)? != 1
             || blob::<16>(v, 2)? != self.web
-            || blob::<32>(v, 3)? != self.publish(f, k)
+            || blob::<32>(v, 3)? != self.publish(f, k)?
             || blob::<16>(v, 4)? != k.share
             || blob::<16>(v, 5)? != self.setup
             || blob::<16>(v, 6)? != f.volume

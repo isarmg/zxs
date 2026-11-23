@@ -689,9 +689,9 @@ fn selected_claim_reader(
         pin,
         entity,
         if passive {
-            ReaderBoundary::Mount(mount, MountRead::PassiveNoAtime)
+            ReaderBoundary::Mount(mount, MountRead::PassiveSource)
         } else {
-            ReaderBoundary::Mount(mount, MountRead::ProcNoAtime)
+            ReaderBoundary::Mount(mount, MountRead::SelectedControl)
         },
     )
 }
@@ -712,7 +712,7 @@ pub(crate) fn external_import_reader(pin: &File, original: Entity, mount: u64) -
     reopen_admitted_reader(
         pin,
         original,
-        ReaderBoundary::Mount(mount, MountRead::PassiveNoAtime),
+        ReaderBoundary::Mount(mount, MountRead::PassiveSource),
     )
 }
 
@@ -736,7 +736,7 @@ pub(crate) fn public_record_reader(pin: &File, mount: u64, length: u64) -> io::R
     reopen_admitted_reader(
         pin,
         Entity::of(&m)?,
-        ReaderBoundary::Mount(mount, MountRead::PublicAtime),
+        ReaderBoundary::Mount(mount, MountRead::PublicRecord),
     )
 }
 
@@ -792,11 +792,11 @@ pub(crate) fn installed_regular_reader(pin: &File) -> io::Result<File> {
 // storage directory. A current mount ID binds its descriptors, not its provenance.
 #[derive(Copy, Clone)]
 enum MountRead {
-    PassiveNoAtime,
+    PassiveSource,
     #[cfg(any(test, feature = "embedded-zxs"))]
-    ProcNoAtime,
+    SelectedControl,
     #[cfg(any(test, feature = "embedded-zxs"))]
-    PublicAtime,
+    PublicRecord,
 }
 #[derive(Copy, Clone)]
 enum ReaderBoundary {
@@ -814,11 +814,11 @@ impl ReaderBoundary {
         }
     }
     fn uses_passive_proc(self) -> bool {
-        matches!(self, Self::Mount(_, MountRead::PassiveNoAtime))
+        matches!(self, Self::Mount(_, MountRead::PassiveSource))
     }
     fn permits_atime(self) -> bool {
         #[cfg(any(test, feature = "embedded-zxs"))]
-        if matches!(self, Self::Mount(_, MountRead::PublicAtime)) {
+        if matches!(self, Self::Mount(_, MountRead::PublicRecord)) {
             return true;
         }
         matches!(self, Self::InstalledRegular(_))
@@ -1140,7 +1140,7 @@ mod tests {
         let mut reopened = reopen_admitted_reader(
             &old.fd,
             old.entity(),
-            ReaderBoundary::Mount(id, MountRead::PublicAtime),
+            ReaderBoundary::Mount(id, MountRead::PublicRecord),
         )
         .unwrap();
         let mut b = Vec::new();

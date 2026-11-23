@@ -1,6 +1,6 @@
 //! Exact protected parent for the optional standalone image publisher.
 //! An occupied name or a loss of the original never authorizes publication.
-use super::super::{Site, approval, bad, child, lease};
+use super::super::{PRODUCT, Site, approval, bad, child, lease};
 #[cfg(test)]
 use super::publish;
 use super::{Times, host_mount, mark, protected_control, state_spelling};
@@ -75,7 +75,7 @@ impl FreshParent {
             return Err(no());
         }
         let parent = Site::product(approval::host_admin()?, &instance, true)?;
-        if parent.chain.len() != parent.prefix().len() {
+        if parent.chain.len() != PRODUCT.len() {
             return Err(no());
         }
         let ex = child(parent.base(), c".")?;

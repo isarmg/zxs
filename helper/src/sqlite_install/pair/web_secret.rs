@@ -104,14 +104,14 @@ impl PreparedWeb {
         used: usize,
         workspace: WebWorkspace,
     ) -> io::Result<Self> {
-        Self::with_new_salt(WebInput::joint(owner, used)?, workspace)
+        Self::with_new_salt(&WebInput::joint(owner, used)?, workspace)
     }
 
-    fn with_new_salt(input: WebInput<'_>, workspace: WebWorkspace) -> io::Result<Self> {
+    fn with_new_salt(input: &WebInput<'_>, workspace: WebWorkspace) -> io::Result<Self> {
         let mut salt = [0; 16];
         loop {
             match getrandom(&mut salt, GetRandomFlags::NONBLOCK) {
-                Err(rustix::io::Errno::INTR) => continue,
+                Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(e.into()),
                 Ok(16) if salt != [0; 16] => break,
                 _ => {
@@ -127,7 +127,7 @@ impl PreparedWeb {
     // Deterministic only for the exact already-chosen salt; never offered as an
     // operator choice. A lost or unknown account transaction is a history query,
     // not grounds to re-enter this function, rehash or mint another salt.
-    fn derive(input: WebInput<'_>, salt: [u8; 16], workspace: WebWorkspace) -> io::Result<Self> {
+    fn derive(input: &WebInput<'_>, salt: [u8; 16], workspace: WebWorkspace) -> io::Result<Self> {
         let WebWorkspace { mut blocks, params } = workspace;
         let fail = |_| io::Error::other("fixed Web credential derivation did not complete");
         let mut verifier = Zeroizing::new(vec![0u8; OUTPUT].into_boxed_slice());
@@ -322,7 +322,7 @@ mod tests {
         let salt: [u8; 16] = value("web_salt").try_into().unwrap();
         let owner = input(b"correct horse battery staple");
         let secret = WebInput::check(&owner).unwrap();
-        let made = PreparedWeb::derive(secret, salt, WebWorkspace::reserve().unwrap()).unwrap();
+        let made = PreparedWeb::derive(&secret, salt, WebWorkspace::reserve().unwrap()).unwrap();
         assert_eq!(made.salt, salt);
         // Do not make a real issuer's secret-bearing type printable to run this fixture.
         assert!(&**made.verifier == value("web_verifier").as_slice());
@@ -353,7 +353,7 @@ mod tests {
         let admitted = WebInput::joint(&owner, public.len()).unwrap();
         assert!(admitted.0 == public && admitted.0.as_ptr() == owner.as_ptr());
         let salt = value("web_salt").try_into().unwrap();
-        let web = PreparedWeb::derive(admitted, salt, WebWorkspace::reserve().unwrap()).unwrap();
+        let web = PreparedWeb::derive(&admitted, salt, WebWorkspace::reserve().unwrap()).unwrap();
         assert!(&**web.verifier == value("web_verifier").as_slice());
         for used in [0, public.len() + 1, 1025] {
             assert!(WebInput::joint(&owner, used).is_err());

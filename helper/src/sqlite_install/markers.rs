@@ -92,7 +92,7 @@ fn exact_bytes(f: &File) -> io::Result<[u8; 101]> {
     loop {
         match f.read_at(&mut [0], 101) {
             Ok(0) => break,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
             _ => return Err(bad("extra bytes on original marker")),
         }

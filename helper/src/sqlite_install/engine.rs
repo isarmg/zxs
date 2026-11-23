@@ -81,6 +81,7 @@ pub(super) fn open_reserved(reserved: &super::reservation::Reserved<'_>) -> io::
     verified(&db, false)?;
     Ok(db)
 }
+#[derive(Clone, Copy)]
 pub(super) enum Access {
     Read,
     Write,

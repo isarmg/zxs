@@ -65,42 +65,42 @@ pub(super) fn original(
 }
 pub(super) fn publish(
     db: &Existing<'_>,
-    t: &Canonical,
-    g: &Group,
-    r: &Request,
+    template: &Canonical,
+    group: &Group,
+    request: &Request,
     claim: &Catalog,
     marks: &Synced,
 ) -> io::Result<Receipt> {
     db.sidecars_absent()?;
-    marks.verify_clean(g, &claim.markers)?;
-    let mut c = engine::existing(db, Access::Write)?;
-    let tx = c
+    marks.verify_clean(group, &claim.markers)?;
+    let mut conn = engine::existing(db, Access::Write)?;
+    let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(uncertain)?;
-    if claim.committed || &catalog::read(&tx, t, g, r)? != claim {
+    if claim.committed || &catalog::read(&tx, template, group, request)? != claim {
         return Err(bad("original INIT changed after marker synchronization"));
     }
     db.require()?;
     engine::original_name(&tx)?;
-    marks.verify_clean(g, &claim.markers)?;
+    marks.verify_clean(group, &claim.markers)?;
     {
-        let mut s = tx
+        let mut stmt = tx
             .prepare(include_str!("complete-initial.sql"))
             .map_err(uncertain)?;
-        let mut rows = s
+        let mut rows = stmt
             .query(params![
-                &r.op()[..],
-                &r.actor()[..],
-                &r.sha()[..],
+                &request.op()[..],
+                &request.actor()[..],
+                &request.sha()[..],
                 &claim.pool[..],
-                &r.approval()[..]
+                &request.approval()[..]
             ])
             .map_err(uncertain)?;
         let returned = rows
             .next()
             .map_err(uncertain)?
             .ok_or_else(|| bad("no original pending claim to finish"))?;
-        if returned.get::<_, Vec<u8>>(0).map_err(uncertain)? != r.op()
+        if returned.get::<_, Vec<u8>>(0).map_err(uncertain)? != request.op()
             || rows.next().map_err(uncertain)?.is_some()
         {
             return Err(bad(
@@ -110,21 +110,21 @@ pub(super) fn publish(
     }
     db.require()?;
     engine::original_name(&tx)?;
-    marks.verify_committing(g, &tx, &claim.markers)?;
+    marks.verify_committing(group, &tx, &claim.markers)?;
     tx.commit().map_err(uncertain)?;
-    c.close()
+    conn.close()
         .map_err(|_| bad("final connection close uncertain; retain original operation"))?;
-    g.system().sync_all()?;
+    group.system().sync_all()?;
     db.sidecars_absent()?;
-    let after = snapshot(db, t, g, r)?;
+    let after = snapshot(db, template, group, request)?;
     if !after.committed || after.pool != claim.pool || after.markers != claim.markers {
         return Err(bad("original committed receipt is not confirmed"));
     }
-    marks.verify_clean(g, &claim.markers)?;
+    marks.verify_clean(group, &claim.markers)?;
     Ok(Receipt {
         pool: after.pool,
-        op: r.op(),
-        request_sha: r.sha(),
+        op: request.op(),
+        request_sha: request.sha(),
         previous: false,
     })
 }
