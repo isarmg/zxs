@@ -1,6 +1,8 @@
 //! Optional, explicitly labelled udev aliases are O_PATH-only. The separate
 //! `NVMe` health selection can hold one checked direct namespace read-only.
-use super::*;
+use super::{
+    BlockRoot, Dev, Entity, Field, File, HostMounts, Identity, Kind, Reason, io, unsupported,
+};
 use crate::pinned::Mount;
 use rustix::fs::{Mode, OFlags, RawDir, ResolveFlags, openat2};
 use std::{
@@ -71,17 +73,6 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
     .map(File::from)
     .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
     protected(&dir).map_err(|error| Reason::io_kind(error.kind()))?;
-    let stamp = |f: &File| -> io::Result<_> {
-        let m = f.metadata()?;
-        Ok((
-            m.dev(),
-            m.ino(),
-            m.mtime(),
-            m.mtime_nsec(),
-            m.ctime(),
-            m.ctime_nsec(),
-        ))
-    };
     let original_dir = stamp(&dir).map_err(|error| Reason::io_kind(error.kind()))?;
     let original_disk = stamp(&root).map_err(|error| Reason::io_kind(error.kind()))?;
     let mut buffer = [MaybeUninit::<u8>::uninit(); 4096];
@@ -100,58 +91,7 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
         if !legal(name) {
             continue;
         } // unusual identifier: no guess, no output from that name
-        let alias = OsStr::from_bytes(name);
-        let before = openat2(
-            &dir,
-            alias,
-            path() | OFlags::NOFOLLOW,
-            Mode::empty(),
-            confined(),
-        )
-        .map(File::from)
-        .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
-        let m = before
-            .metadata()
-            .map_err(|error| Reason::io_kind(error.kind()))?;
-        if !m.file_type().is_symlink() || m.uid() != 0 {
-            return Err(Reason::Invalid);
-        }
-        let name = std::str::from_utf8(name).map_err(|_| Reason::Invalid)?;
-        let link = format!("disk/{set}/{name}");
-        let resolve = || {
-            openat2(dev, link.as_str(), path(), Mode::empty(), confined())
-                .map(File::from)
-                .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))
-        };
-        let node = resolve()?;
-        let n = node
-            .metadata()
-            .map_err(|error| Reason::io_kind(error.kind()))?;
-        if !n.file_type().is_block_device() {
-            return Err(Reason::Invalid);
-        }
-        let again = openat2(
-            &dir,
-            alias,
-            path() | OFlags::NOFOLLOW,
-            Mode::empty(),
-            confined(),
-        )
-        .map(File::from)
-        .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
-        let still = resolve()?
-            .metadata()
-            .map_err(|error| Reason::io_kind(error.kind()))?;
-        if stamp(&before).map_err(|error| Reason::io_kind(error.kind()))?
-            != stamp(&again).map_err(|error| Reason::io_kind(error.kind()))?
-            || !still.file_type().is_block_device()
-            || (n.dev(), n.ino(), n.rdev()) != (still.dev(), still.ino(), still.rdev())
-        {
-            return Err(Reason::Changed);
-        }
-        out.entry(n.rdev())
-            .and_modify(|value| *value = Err(Reason::Invalid))
-            .or_insert_with(|| Ok(name.to_owned()));
+        record_alias(dev, &dir, set, name, &mut out)?;
     }
     let again = openat2(
         dev,
@@ -169,6 +109,74 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
         return Err(Reason::Changed);
     }
     Ok(out)
+}
+
+fn stamp(file: &File) -> io::Result<(u64, u64, i64, i64, i64, i64)> {
+    let m = file.metadata()?;
+    Ok((
+        m.dev(),
+        m.ino(),
+        m.mtime(),
+        m.mtime_nsec(),
+        m.ctime(),
+        m.ctime_nsec(),
+    ))
+}
+
+fn record_alias(dev: &File, dir: &File, set: &str, name: &[u8], out: &mut AliasMap) -> Field<()> {
+    let alias = OsStr::from_bytes(name);
+    let before = openat2(
+        dir,
+        alias,
+        path() | OFlags::NOFOLLOW,
+        Mode::empty(),
+        confined(),
+    )
+    .map(File::from)
+    .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
+    let m = before
+        .metadata()
+        .map_err(|error| Reason::io_kind(error.kind()))?;
+    if !m.file_type().is_symlink() || m.uid() != 0 {
+        return Err(Reason::Invalid);
+    }
+    let name = std::str::from_utf8(name).map_err(|_| Reason::Invalid)?;
+    let link = format!("disk/{set}/{name}");
+    let resolve = || {
+        openat2(dev, link.as_str(), path(), Mode::empty(), confined())
+            .map(File::from)
+            .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))
+    };
+    let node = resolve()?;
+    let n = node
+        .metadata()
+        .map_err(|error| Reason::io_kind(error.kind()))?;
+    if !n.file_type().is_block_device() {
+        return Err(Reason::Invalid);
+    }
+    let again = openat2(
+        dir,
+        alias,
+        path() | OFlags::NOFOLLOW,
+        Mode::empty(),
+        confined(),
+    )
+    .map(File::from)
+    .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
+    let still = resolve()?
+        .metadata()
+        .map_err(|error| Reason::io_kind(error.kind()))?;
+    if stamp(&before).map_err(|error| Reason::io_kind(error.kind()))?
+        != stamp(&again).map_err(|error| Reason::io_kind(error.kind()))?
+        || !still.file_type().is_block_device()
+        || (n.dev(), n.ino(), n.rdev()) != (still.dev(), still.ino(), still.rdev())
+    {
+        return Err(Reason::Changed);
+    }
+    out.entry(n.rdev())
+        .and_modify(|value| *value = Err(Reason::Invalid))
+        .or_insert_with(|| Ok(name.to_owned()));
+    Ok(())
 }
 
 pub(super) struct DevRoot {

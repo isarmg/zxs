@@ -389,15 +389,7 @@ struct Captured {
     status: Vec<u8>,
 }
 fn invoke(runtime: &Runtime, copy: Operand<'_>) -> io::Result<Captured> {
-    use helper_linux_evidence::diagnostic_process::{
-        prepare_diagnostic_exec, prepare_leased_diagnostic_exec, prepare_xfs_diagnostic_exec,
-    };
-    let repairing_ext = matches!(copy, Operand::RepairExt4 { .. });
-    let repairing_fat = matches!(
-        copy,
-        Operand::RepairExfat { .. } | Operand::RepairFat32 { .. }
-    );
-    let ext = repairing_ext || matches!(copy, Operand::LeasedExt4(_));
+    let ext = matches!(copy, Operand::RepairExt4 { .. } | Operand::LeasedExt4(_));
     let xfs = matches!(copy, Operand::LeasedXfs(_));
     let ntfs = matches!(copy, Operand::LeasedNtfs(_));
     let btrfs = matches!(copy, Operand::LeasedBtrfs(_));
@@ -439,7 +431,69 @@ fn invoke(runtime: &Runtime, copy: Operand<'_>) -> io::Result<Captured> {
         b.args(["--ro-bind-fd", &fd.as_raw_fd().to_string(), dest]);
         given.push(fd);
     }
-    if let Some(ref fd) = empty {
+    checker_scratch(&mut b, empty.as_ref(), ext, ntfs, xfs);
+    let (filter_read, filter_write) = pipe_with(PipeFlags::CLOEXEC)?;
+    {
+        use helper_linux_evidence::diagnostic_process::{
+            diagnostic_group_filter, ext4_group_filter, xfs_group_filter,
+        };
+        let mut w = File::from(filter_write);
+        w.write_all(&if ext {
+            ext4_group_filter()
+        } else if xfs {
+            xfs_group_filter()
+        } else {
+            diagnostic_group_filter()
+        })?;
+    }
+    let filter = give(&filter_read)?;
+    b.args(["--seccomp", &filter.as_raw_fd().to_string()]);
+    let operand = copy.sandbox(&mut b)?;
+    let status = give(&wstatus)?;
+    b.args([
+        "--remount-ro",
+        "/",
+        "--json-status-fd",
+        &status.as_raw_fd().to_string(),
+        "--",
+        "/checker",
+    ]);
+    checker_args(&mut b, copy);
+    runtime.recheck()?;
+    not_cancelled()?;
+    prepare_launcher(&mut b, runtime, copy)?;
+    let mut group = Group::new(b.spawn()?);
+    // Only the sandbox monitor and its explicitly selected setup descriptions
+    // retain writers. In particular the parent must not keep the status pipe open.
+    drop(b);
+    drop(given);
+    drop(operand);
+    drop(status);
+    drop(wstatus);
+    drop(filter);
+    drop(filter_read);
+    drop(empty);
+    let lease = copy.lease();
+    let result = collect(
+        &mut group,
+        File::from(rstatus),
+        if lease.is_some() { LEASED_LIMIT } else { LIMIT },
+        lease,
+    );
+    let reaped = group.finish()?;
+    let captured = result?;
+    not_cancelled()?;
+    if reaped.leader_code != Some(captured.code) {
+        return Err(invalid(
+            "monitor exit did not match its independently reaped status",
+        ));
+    }
+    runtime.recheck()?;
+    Ok(captured)
+}
+
+fn checker_scratch(b: &mut Command, empty: Option<&OwnedFd>, ext: bool, ntfs: bool, xfs: bool) {
+    if let Some(fd) = empty {
         if ext {
             // This e2fsck opens /dev/null O_RDWR only for open/close fd checks.
             // It is an empty regular file on a dedicated tiny tmpfs, never a
@@ -497,40 +551,14 @@ fn invoke(runtime: &Runtime, copy: Operand<'_>) -> io::Result<Captured> {
             "/dev/shm",
         ]);
     }
-    let (filter_read, filter_write) = pipe_with(PipeFlags::CLOEXEC)?;
-    {
-        use helper_linux_evidence::diagnostic_process::{
-            diagnostic_group_filter, ext4_group_filter, xfs_group_filter,
-        };
-        let mut w = File::from(filter_write);
-        w.write_all(&if ext {
-            ext4_group_filter()
-        } else if xfs {
-            xfs_group_filter()
-        } else {
-            diagnostic_group_filter()
-        })?;
-    }
-    let filter = give(&filter_read)?;
-    b.args(["--seccomp", &filter.as_raw_fd().to_string()]);
-    let operand = copy.sandbox(&mut b)?;
-    let status = give(&wstatus)?;
-    b.args([
-        "--remount-ro",
-        "/",
-        "--json-status-fd",
-        &status.as_raw_fd().to_string(),
-        "--",
-        "/checker",
-    ]);
-    if repairing_ext {
-        b.args(["-fp", "-N", "/image", "/image"]);
-    } else if repairing_fat {
-        b.args(["-p", "/image"]);
-    } else if ext {
-        b.args(["-fn", "-N", "/image", "/image"]);
-    } else if xfs {
-        b.args([
+}
+
+fn checker_args(b: &mut Command, copy: Operand<'_>) {
+    match copy {
+        Operand::RepairExt4 { .. } => b.args(["-fp", "-N", "/image", "/image"]),
+        Operand::RepairExfat { .. } | Operand::RepairFat32 { .. } => b.args(["-p", "/image"]),
+        Operand::LeasedExt4(_) => b.args(["-fn", "-N", "/image", "/image"]),
+        Operand::LeasedXfs(_) => b.args([
             "-n",
             "-f",
             "-P",
@@ -539,84 +567,62 @@ fn invoke(runtime: &Runtime, copy: Operand<'_>) -> io::Result<Captured> {
             "-o",
             "phase2_threads=1",
             "/image",
-        ]);
-    } else if btrfs {
-        b.args(["check", "--readonly", "/image"]);
-    } else {
-        b.args(["-n", "/image"]);
-    } // includes the limited NTFS observer
-    runtime.recheck()?;
-    not_cancelled()?;
+        ]),
+        Operand::LeasedBtrfs(_) => b.args(["check", "--readonly", "/image"]),
+        Operand::Sealed(_)
+        | Operand::LeasedExfat(_)
+        | Operand::LeasedFat32(_)
+        | Operand::LeasedNtfs(_) => b.args(["-n", "/image"]),
+    };
+}
+
+fn prepare_launcher(b: &mut Command, runtime: &Runtime, copy: Operand<'_>) -> io::Result<()> {
+    use helper_linux_evidence::diagnostic_process::{
+        prepare_diagnostic_exec, prepare_leased_diagnostic_exec, prepare_xfs_diagnostic_exec,
+    };
     match copy {
-        Operand::Sealed(_) => prepare_diagnostic_exec(&mut b, runtime.launcher())?,
+        Operand::Sealed(_) => prepare_diagnostic_exec(b, runtime.launcher())?,
         Operand::LeasedExt4(image) => {
             image.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::LeasedExfat(work) => {
             work.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::LeasedFat32(work) => {
             work.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::LeasedNtfs(image) => {
             image.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::LeasedBtrfs(image) => {
             image.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::LeasedXfs(image) => {
             image.require()?;
-            prepare_xfs_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_xfs_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::RepairExt4 { work, source } => {
             work.require()?;
             source.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::RepairExfat { work, source } => {
             work.require()?;
             source.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
         Operand::RepairFat32 { work, source } => {
             work.require()?;
             source.require()?;
-            prepare_leased_diagnostic_exec(&mut b, runtime.launcher())?;
+            prepare_leased_diagnostic_exec(b, runtime.launcher())?;
         }
     }
-    let mut group = Group::new(b.spawn()?);
-    // Only the sandbox monitor and its explicitly selected setup descriptions
-    // retain writers. In particular the parent must not keep the status pipe open.
-    drop(b);
-    drop(given);
-    drop(operand);
-    drop(status);
-    drop(wstatus);
-    drop(filter);
-    drop(filter_read);
-    drop(empty);
-    let lease = copy.lease();
-    let result = collect(
-        &mut group,
-        File::from(rstatus),
-        if lease.is_some() { LEASED_LIMIT } else { LIMIT },
-        lease,
-    );
-    let reaped = group.finish()?;
-    let captured = result?;
-    not_cancelled()?;
-    if reaped.leader_code != Some(captured.code) {
-        return Err(invalid(
-            "monitor exit did not match its independently reaped status",
-        ));
-    }
-    runtime.recheck()?;
-    Ok(captured)
+    Ok(())
 }
 
 fn not_cancelled() -> io::Result<()> {

@@ -285,11 +285,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::ImportBatch(request) => return request.run(),
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::DiskWebStorage(s) => disk_web::serve_storage(s)?,
-        Command::DiskHealth(query) => {
-            let (code, public) = query.run();
-            line(&public)?;
-            return Ok(ExitCode::from(code));
-        }
+        Command::DiskHealth(query) => return disk_health(query),
         #[cfg(test)]
         Command::RustAccountWorker => {
             return Ok(fixed_worker_status(
@@ -382,6 +378,12 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Compare(a, b) => return compare(&a, &b),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn disk_health(query: block_tools::HealthQuery) -> io::Result<ExitCode> {
+    let (code, public) = query.run();
+    line(&public)?;
+    Ok(ExitCode::from(code))
 }
 
 fn compare(a: &std::path::Path, b: &std::path::Path) -> io::Result<ExitCode> {

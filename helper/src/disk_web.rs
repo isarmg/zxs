@@ -89,33 +89,7 @@ impl Panel {
             return Reply::plain(403, "需要本机准确的回环地址和端口。");
         }
         if r.method == "GET" && r.body.is_empty() {
-            return match r.path.as_str() {
-                "/" if self.handoff.as_ref().is_some_and(first::Offer::is_repair) => Reply::asset(
-                    "text/html; charset=utf-8",
-                    include_str!("disk_web/repair.html"),
-                ),
-                "/" if self.handoff.is_some() => Reply::asset(
-                    "text/html; charset=utf-8",
-                    include_str!("disk_web/first.html"),
-                ),
-                "/panel.js" if self.handoff.is_some() => Reply::asset(
-                    "text/javascript; charset=utf-8",
-                    include_str!("disk_web/first.js"),
-                ),
-                "/" => Reply::asset(
-                    "text/html; charset=utf-8",
-                    include_str!("disk_web/index.html"),
-                ),
-                "/panel.js" => Reply::asset(
-                    "text/javascript; charset=utf-8",
-                    include_str!("disk_web/panel.js"),
-                ),
-                "/panel.css" => Reply::asset(
-                    "text/css; charset=utf-8",
-                    include_str!("disk_web/panel.css"),
-                ),
-                _ => Reply::plain(404, "未提供此页面。"),
-            };
+            return self.asset(&r.path);
         }
         if r.method != "POST" {
             return Reply::plain(405, "不支持此请求。");
@@ -124,41 +98,7 @@ impl Panel {
             return Reply::plain(403, "来源不匹配。");
         }
         if r.path == "/api/pair" {
-            let Some(expect) = self.pairing.as_ref() else {
-                return Reply::plain(403, "配对已结束。");
-            };
-            if r.content_type.as_deref() != Some("application/octet-stream")
-                || r.auth.is_some()
-                || r.csrf.is_some()
-            {
-                return Reply::plain(400, "不支持的配对请求。");
-            }
-            if !matches(&r.body, expect) {
-                self.failed += 1;
-                if self.failed >= 6 {
-                    self.closed = true;
-                    return Reply::plain(429, "配对尝试已用完，请重新启动。");
-                }
-                return Reply::plain(403, "配对失败。");
-            }
-            let (Ok(bearer), Ok(csrf)) = (token(), token()) else {
-                self.closed = true;
-                return Reply::plain(503, "无法建立会话。");
-            };
-            if bearer == csrf
-                || matches(bearer.as_bytes(), expect)
-                || matches(csrf.as_bytes(), expect)
-            {
-                self.closed = true;
-                return Reply::plain(503, "无法建立独立凭据。");
-            }
-            self.pairing = None;
-            self.expires = now + SESSION;
-            self.session = Some(Session {
-                bearer: digest(bearer.as_bytes()),
-                csrf: digest(csrf.as_bytes()),
-            });
-            return Reply::plain(200, format!("{bearer}\n{csrf}"));
+            return self.pair(&r, now);
         }
         let Some(ref session) = self.session else {
             return Reply::plain(401, "请先在本机终端配对。");
@@ -217,6 +157,71 @@ impl Panel {
             }
             _ => Reply::plain(404, "没有该操作。"),
         }
+    }
+    fn asset(&self, path: &str) -> Reply {
+        match path {
+            "/" if self.handoff.as_ref().is_some_and(first::Offer::is_repair) => Reply::asset(
+                "text/html; charset=utf-8",
+                include_str!("disk_web/repair.html"),
+            ),
+            "/" if self.handoff.is_some() => Reply::asset(
+                "text/html; charset=utf-8",
+                include_str!("disk_web/first.html"),
+            ),
+            "/panel.js" if self.handoff.is_some() => Reply::asset(
+                "text/javascript; charset=utf-8",
+                include_str!("disk_web/first.js"),
+            ),
+            "/" => Reply::asset(
+                "text/html; charset=utf-8",
+                include_str!("disk_web/index.html"),
+            ),
+            "/panel.js" => Reply::asset(
+                "text/javascript; charset=utf-8",
+                include_str!("disk_web/panel.js"),
+            ),
+            "/panel.css" => Reply::asset(
+                "text/css; charset=utf-8",
+                include_str!("disk_web/panel.css"),
+            ),
+            _ => Reply::plain(404, "未提供此页面。"),
+        }
+    }
+
+    fn pair(&mut self, r: &Request, now: Instant) -> Reply {
+        let Some(expect) = self.pairing.as_ref() else {
+            return Reply::plain(403, "配对已结束。");
+        };
+        if r.content_type.as_deref() != Some("application/octet-stream")
+            || r.auth.is_some()
+            || r.csrf.is_some()
+        {
+            return Reply::plain(400, "不支持的配对请求。");
+        }
+        if !matches(&r.body, expect) {
+            self.failed += 1;
+            if self.failed >= 6 {
+                self.closed = true;
+                return Reply::plain(429, "配对尝试已用完，请重新启动。");
+            }
+            return Reply::plain(403, "配对失败。");
+        }
+        let (Ok(bearer), Ok(csrf)) = (token(), token()) else {
+            self.closed = true;
+            return Reply::plain(503, "无法建立会话。");
+        };
+        if bearer == csrf || matches(bearer.as_bytes(), expect) || matches(csrf.as_bytes(), expect)
+        {
+            self.closed = true;
+            return Reply::plain(503, "无法建立独立凭据。");
+        }
+        self.pairing = None;
+        self.expires = now + SESSION;
+        self.session = Some(Session {
+            bearer: digest(bearer.as_bytes()),
+            csrf: digest(csrf.as_bytes()),
+        });
+        Reply::plain(200, format!("{bearer}\n{csrf}"))
     }
 }
 

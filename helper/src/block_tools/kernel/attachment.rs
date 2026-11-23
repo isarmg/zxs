@@ -1,6 +1,9 @@
 //! Optional, bounded kernel attachment evidence. Walk the actual canonical
 //! /sys/devices devpath, not guesses from names, "device" links or slaves.
-use super::*;
+use super::{
+    Attachment, AttachmentSource, Dev, Entity, Field, File, Identity, Kind, Mode, Node, OFlags,
+    Reason, ResolveFlags, Sys, attr, confined, diskseq, io, obj, openat2, path_dir,
+};
 use rustix::{fs::readlinkat_raw, io::Errno};
 use std::{
     ffi::OsStr,
