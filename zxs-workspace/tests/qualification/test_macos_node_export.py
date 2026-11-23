@@ -4,6 +4,7 @@ Use only a caller-designated, private disposable directory. The only Apple
 origin changes are on fresh synthetic outputs, never existing files or settings.
 """
 from contextlib import contextmanager
+import ctypes as C
 from hashlib import sha256
 import os
 from pathlib import Path
@@ -61,31 +62,60 @@ class MacNodePublication(unittest.TestCase):
             return output.publish(self.exchange, _CONTAINER, _NODE, length=len(body), sha256=digest,
                                   confirmed=True, **hooks)
 
+    def require_system_download(self, path, fd):
+        # Separate readback on the now-published name. Do not use the publisher's
+        # verify() result as the oracle, or treat a setter returning true as proof.
+        native, fields = export.native(), export._download_quarantine()
+        cf = C.CDLL(export._CF)
+        string_bytes = export._bind(cf, "CFStringGetCString", C.c_ubyte, C.c_void_p,
+                                    C.POINTER(C.c_char), C.c_long, C.c_uint32)
+        expected = (_ORIGIN + _TARGET).encode("ascii") + b"\0"
+        actual = C.create_string_buffer(len(expected))
+        self.assertIn(b"com.apple.quarantine", native.attrs(fd))
+        with native.quarantine(path, fd, literal=True) as value:
+            kind, source = fields._get(value, fields._kind), fields._get(value, fields._data)
+            self.assertTrue(kind and native.equal(kind, fields._download), "wrong native quarantine type")
+            self.assertTrue(source, "native quarantine has no download URL")
+            if native.type(source) == fields._url_type(): source = fields._url_string(source)
+            self.assertTrue(source and native.type(source) == fields._string_type())
+            self.assertTrue(string_bytes(source, actual, len(actual), 0x08000100), "no complete native URL bytes")
+            self.assertEqual(actual.raw, expected)
+
     def test_review_has_no_effect_then_exact_body_and_system_origin_survive_real_rename(self):
         for name, body in (("file.txt", b"abc"), ("empty.txt", b"")):
             with self.subTest(name=name), export.MacNodeOutput(self.root, name) as output:
                 self.assertFalse(output.path.exists())
-                self.assertFalse((self.root / output._stage).exists())
-                self.assertEqual(self.publish(output, body), output.path)
-                self.assertFalse((self.root / output._stage).exists())
+                stage = self.root / output._stage
+                self.assertFalse(stage.exists())
+                staged_identity = []
+
+                def before_rename():
+                    observed = stage.stat(follow_symlinks=False)
+                    staged_identity.append((observed.st_dev, observed.st_ino))
+
+                self.assertEqual(self.publish(output, body, begin_publication=before_rename), output.path)
+                self.assertFalse(stage.exists())
                 with mac.no_materialization(), output.path.open("rb") as file:
                     self.assertEqual(file.read(), body)
-                    self.assertEqual(os.fstat(file.fileno()).st_mode & 0o777, 0o600)
-                    mark = export._download_quarantine()
-                    with mark.url(_ORIGIN + _TARGET) as url:
-                        mark.verify(output.path, file.fileno(), url)
+                    meta = os.fstat(file.fileno())
+                    self.assertEqual(meta.st_mode & 0o777, 0o600)
+                    self.assertEqual(staged_identity, [(meta.st_dev, meta.st_ino)])
+                    self.require_system_download(output.path, file.fileno())
                 with self.assertRaises(Rejected):
                     self.publish(output, body)
         self.assertEqual(self.request, [("GET", _TARGET, "application/octet-stream", None)] * 2)
 
     def test_wrong_body_or_ignored_origin_setter_never_publishes(self):
-        with export.MacNodeOutput(self.root, "bad.txt") as output, self.assertRaises(Rejected):
+        with export.MacNodeOutput(self.root, "bad.txt") as output, self.assertRaisesRegex(
+                Rejected, "node GET bytes disagreed with the selected SHA-256"):
             self.publish(output, b"bad", digest=sha256(b"one").hexdigest())
         self.assertFalse((self.root / "bad.txt").exists())
         with export.MacNodeOutput(self.root, "ignored.txt") as output, patch.object(
-                export._download_quarantine(), "_set", return_value=True), self.assertRaises(Rejected):
-            self.publish(output, b"no marker")
+                export._download_quarantine(), "_set", return_value=True) as ignored:
+            with self.assertRaises(Rejected): self.publish(output, b"no marker")
+            ignored.assert_called_once()
         self.assertFalse((self.root / "ignored.txt").exists())
+        self.assertEqual(self.request, [("GET", _TARGET, "application/octet-stream", None)] * 2)
 
     def test_late_occupied_name_remains_unchanged(self):
         def occupy():

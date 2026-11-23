@@ -46,6 +46,7 @@ MACOS = (
     "test_macos_snapshot_save.FreshFolderSnapshot.test_fresh_unmarked_snapshot_can_open_but_mark_preserving_zip_save_never_stages",
     "test_macos_snapshot.MacCallbacks.test_nfd_nfc_original_inode_case_and_no_synthetic_appledouble",
     "test_macos_snapshot.MacCallbacks.test_missing_retention_wrong_listed_raw_and_no_shared_display_cursor",
+    "test_macos_node_export.MacNodePublication",
 )
 
 
