@@ -15,6 +15,8 @@ use std::{
     path::Path,
 };
 
+#[path = "headless_import_batch.rs"]
+pub(super) mod batch;
 #[path = "headless_import_ipc.rs"]
 mod ipc;
 
@@ -42,7 +44,9 @@ impl Witness {
     fn read(file: &File, mount: Mount) -> io::Result<Self> {
         require_no_automount(file)?;
         let m = file.metadata()?;
-        if !m.is_file() || m.nlink() == 0 || Mount::on(file)? != Some(mount) {
+        // Mount-root status describes an individual inode, not mount identity:
+        // an ordinary file in a selected mount root is not itself that root.
+        if !m.is_file() || m.nlink() == 0 || Mount::on(file)?.is_none_or(|now| now.id != mount.id) {
             return Err(refused());
         }
         Ok(Self {

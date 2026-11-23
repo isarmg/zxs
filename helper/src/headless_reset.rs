@@ -23,6 +23,7 @@ mod add_data;
 pub(super) mod import_command;
 #[path = "headless_import_one.rs"]
 mod import_one;
+pub(crate) use import_one::batch::ImportBatch;
 #[path = "headless_offline_catalog.rs"]
 mod offline_catalog;
 #[path = "headless_retire_data.rs"]

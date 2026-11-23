@@ -6,6 +6,7 @@
 | 服务单元预览（可选） | `setup-headless preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...]` | 无，写标准输出 |
 | 首设 | `setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 所选磁盘的角色标记及 `/zxs/state/headless/server.conf` |
 | 源目录预检 | `preflight-import [--show-names \| --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]` | 无，仅观察源目录和可选目标目录元数据 |
+| 选定文件导入 | [`import-one` 和 `import-batch`](../README.md#从非空盘批量导入所选文件) 分两次 prepare/apply | prepare 仅输出计划；apply 逐项写入已登记 DATA，在 SYSTEM 留存容器记录，保留来源 |
 | 网页首设 | `setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 同首设，仍在终端确认 |
 | 重置密码 | `setup-headless reset SYSTEM RECYCLE DATA [DATA ...]` | 同一份 `server.conf` 中的账号代次、随机盐和验证值 |
 

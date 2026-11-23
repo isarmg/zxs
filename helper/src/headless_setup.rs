@@ -30,7 +30,7 @@ mod import_preflight;
 #[path = "headless_reset.rs"]
 mod reset;
 pub(crate) use import_preflight::Preflight;
-pub(crate) use reset::import_command::ImportOne;
+pub(crate) use reset::{ImportBatch, import_command::ImportOne};
 
 pub(crate) const DEFAULT_STATE: &str = "/zxs/state/headless";
 const DESCRIPTOR: &str = "server.conf";

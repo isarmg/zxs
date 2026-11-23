@@ -52,6 +52,8 @@ helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR -
   helper preflight-import [--show-names | --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]
   helper import-one prepare SOURCE RELATIVE NAME TARGET-DATA SYSTEM RECYCLE DATA [DATA ...]
   helper import-one apply SYSTEM RECYCLE DATA [DATA ...]
+  helper import-batch prepare SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...] -- RELATIVE NAME [RELATIVE NAME ...]
+  helper import-batch apply SYSTEM RECYCLE DATA [DATA ...]
   helper --help | --version\n\n\
 Supply already mounted directories; storage-status reports observations, not an approved layout.";
 
@@ -73,6 +75,7 @@ enum Command {
     HeadlessSetup(headless_setup_command::Setup),
     ImportCensus(headless_setup::Preflight),
     ImportSingle(headless_setup::ImportOne),
+    ImportBatch(headless_setup::ImportBatch),
     Storage(Selection),
     #[cfg(feature="embedded-zxs")]
     EmbeddedInstall(embedded_image::EmbeddedInstall),
@@ -107,6 +110,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
     if op == "preflight-import" { return headless_setup::Preflight::parse(args).map(Command::ImportCensus); }
+    if op == "import-batch" { return headless_setup::ImportBatch::parse(args).map(Command::ImportBatch); }
     if op == "import-one" { return headless_setup::ImportOne::parse(args).map(Command::ImportSingle); }
     if op == "setup-headless" { return headless_setup_command::Setup::parse(args).map(Command::HeadlessSetup); }
     #[cfg(feature="embedded-zxs")]
@@ -193,6 +197,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::HeadlessSetup(setup) => return setup.run(),
         Command::ImportCensus(request) => return request.run(),
         Command::ImportSingle(request) => return request.run(),
+        Command::ImportBatch(request) => return request.run(),
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::DiskWebStorage(s)=>disk_web::serve_storage(s)?,
         Command::DiskHealth(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}

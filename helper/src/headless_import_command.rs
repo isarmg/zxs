@@ -81,28 +81,22 @@ impl ImportOne {
                 let input = io::stdin().lock();
                 let ticket = read_ticket(input)?;
                 let reset = FreshSelection::select(&roles)?.open_offline(None)?;
-                let ApplyOutcome {
-                    prior,
-                    container,
-                    node,
-                } = apply(&reset, &ticket).map_err(|_| uncertain())?;
-                let text = |id: [u8; 16]| String::from_utf8_lossy(&hex_line(&id)).into_owned();
-                let result = if prior {
-                    "existing exact import receipt"
-                } else {
-                    "imported complete file"
-                };
-                writeln!(
-                    io::stdout().lock(),
-                    "{result}: container {} node {}",
-                    text(container),
-                    text(node)
-                )
-                .map_err(|_| uncertain())?;
+                let outcome = apply(&reset, &ticket).map_err(|_| uncertain())?;
+                write_receipt(&mut io::stdout().lock(), &outcome).map_err(|_| uncertain())?;
             }
         }
         Ok(ExitCode::SUCCESS)
     }
+}
+
+pub(super) fn write_receipt(output: &mut impl Write, outcome: &ApplyOutcome) -> io::Result<()> {
+    let text = |id: [u8; 16]| String::from_utf8_lossy(&hex_line(&id)).into_owned();
+    let result = if outcome.prior {
+        "existing exact import receipt"
+    } else {
+        "imported complete file"
+    };
+    writeln!(output, "{result}: container {} node {}", text(outcome.container), text(outcome.node))
 }
 
 fn invalid() -> io::Error {
