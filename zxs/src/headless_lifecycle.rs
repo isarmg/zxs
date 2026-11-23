@@ -8,7 +8,10 @@ use crate::{
 };
 use std::{
     io,
-    os::unix::{fs::{FileTypeExt, MetadataExt}, net::UnixListener},
+    os::unix::{
+        fs::{FileTypeExt, MetadataExt},
+        net::UnixListener,
+    },
     path::Path,
     thread,
     time::Duration,
@@ -22,7 +25,10 @@ const POLL: Duration = Duration::from_millis(20);
 const IDLE: Duration = Duration::from_secs(60);
 
 fn refused() -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, "the qualified private gateway or listener was not proved")
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "the qualified private gateway or listener was not proved",
+    )
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -48,7 +54,11 @@ impl Selected {
         }
         let parent = HeldDir::open(Path::new(PARENT))?;
         let socket = selected_name(&parent, uid)?;
-        let selected = Self { listener, parent, socket };
+        let selected = Self {
+            listener,
+            parent,
+            socket,
+        };
         selected.require()?;
         selected.listener.set_nonblocking(true)?;
         Ok(selected)
@@ -72,21 +82,31 @@ fn selected_name(parent: &HeldDir, uid: u32) -> io::Result<Original> {
     }
     parent.require_named()?;
     let directory = parent.file.metadata()?;
-    if !directory.is_dir() || directory.uid() != uid || directory.mode() & 0o7777 != 0o710
+    if !directory.is_dir()
+        || directory.uid() != uid
+        || directory.mode() & 0o7777 != 0o710
         || matches!(directory.gid(), 0 | 65534 | u32::MAX)
     {
         return Err(refused());
     }
     let pinned = parent.pin_record(LEAF)?.ok_or_else(refused)?;
     let socket = pinned.metadata()?;
-    if !socket.file_type().is_socket() || socket.uid() != uid || socket.gid() != directory.gid()
-        || socket.dev() != directory.dev() || socket.ino() == 0 || socket.nlink() != 1
+    if !socket.file_type().is_socket()
+        || socket.uid() != uid
+        || socket.gid() != directory.gid()
+        || socket.dev() != directory.dev()
+        || socket.ino() == 0
+        || socket.nlink() != 1
         || socket.mode() & 0o7777 != 0o660
     {
         return Err(refused());
     }
     parent.require_named()?;
-    Ok(Original { dev: socket.dev(), ino: socket.ino(), group: socket.gid() })
+    Ok(Original {
+        dev: socket.dev(),
+        ino: socket.ino(),
+        group: socket.gid(),
+    })
 }
 
 /// The native startup owner supplies an already bound exact private socket
@@ -117,16 +137,24 @@ pub(crate) fn serve_selected(
                     next += 1;
                 }
             }
-            if panicked { break Err(io::Error::other("headless worker stopped unexpectedly")); }
-            if stopping() { break Ok(()); }
+            if panicked {
+                break Err(io::Error::other("headless worker stopped unexpectedly"));
+            }
+            if stopping() {
+                break Ok(());
+            }
             if workers.len() >= WORKERS {
                 thread::sleep(POLL);
                 continue;
             }
             match selected.listener.accept() {
                 Ok((stream, _)) => {
-                    if stopping() { break Ok(()); }
-                    if let Err(error) = selected.require().and_then(|()| require_gateway()) { break Err(error); }
+                    if stopping() {
+                        break Ok(());
+                    }
+                    if let Err(error) = selected.require().and_then(|()| require_gateway()) {
+                        break Err(error);
+                    }
                     if stream.set_nonblocking(false).is_err()
                         || stream.set_read_timeout(Some(IDLE)).is_err()
                         || stream.set_write_timeout(Some(IDLE)).is_err()
@@ -146,7 +174,7 @@ pub(crate) fn serve_selected(
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => break Err(error),
             }
         };
@@ -154,7 +182,9 @@ pub(crate) fn serve_selected(
         // and complete their already started durable business operations.
         // The standard proxy ceases new upstream work on service shutdown.
         drop(selected);
-        if result.is_err() { bound.account().stop_admission(); }
+        if result.is_err() {
+            bound.account().stop_admission();
+        }
         for worker in workers {
             if worker.join().is_err() && result.is_ok() {
                 result = Err(io::Error::other("headless worker stopped during drain"));

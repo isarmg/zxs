@@ -4,7 +4,10 @@ use std::{
     fs::{File, OpenOptions},
     io,
     mem::MaybeUninit,
-    os::{fd::AsRawFd, unix::fs::{MetadataExt, OpenOptionsExt, FileExt}},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
+    },
 };
 
 const CONFIG: &str = "/etc/zxs-gateway/nginx.conf";
@@ -14,7 +17,10 @@ const MAX_CONFIG: u64 = 64 * 1024;
 const PID_FS_MAGIC: libc::c_long = 0x5049_4446;
 
 fn bad() -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, "the original enrolled HTTPS gateway was not proved")
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "the original enrolled HTTPS gateway was not proved",
+    )
 }
 
 /// Only the protected, directly controlling host Helper launcher can supply
@@ -35,25 +41,36 @@ impl LaunchFds {
             // SAFETY: syscall validates the slot without dereferencing memory
             // or taking ownership of the original; duplicates cannot alias 3–5.
             let fd = unsafe { libc::fcntl(slot, libc::F_DUPFD_CLOEXEC, 6 as libc::c_int) };
-            if fd < 0 { return Err(io::Error::last_os_error()); }
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
             // SAFETY: successful duplicate allocated a fresh owned descriptor.
             Ok(unsafe { File::from_raw_fd(fd) })
         }
-        let result = (|| Ok(Self {
-            original_pidfd: duplicate(3)?,
-            approved_config: duplicate(4)?,
-            loaded_receipt: duplicate(5)?,
-        }))();
-        result.map_err(|_: io::Error| io::Error::new(io::ErrorKind::Unsupported,
-            "no complete approved gateway descriptor handoff"))
+        let result = (|| {
+            Ok(Self {
+                original_pidfd: duplicate(3)?,
+                approved_config: duplicate(4)?,
+                loaded_receipt: duplicate(5)?,
+            })
+        })();
+        result.map_err(|_: io::Error| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "no complete approved gateway descriptor handoff",
+            )
+        })
     }
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Stamp {
-    device: u64, inode: u64, bytes: u64, mode: u32,
-    modified: (i64, i64), changed: (i64, i64),
+    device: u64,
+    inode: u64,
+    bytes: u64,
+    mode: u32,
+    modified: (i64, i64),
+    changed: (i64, i64),
 }
 
 pub(crate) struct GatewayRun {
@@ -65,13 +82,23 @@ pub(crate) struct GatewayRun {
 
 fn config_stamp(file: &File) -> io::Result<Stamp> {
     let m = file.metadata()?;
-    if !m.is_file() || m.uid() != 0 || m.nlink() != 1 || m.ino() == 0
-        || m.mode() & 0o022 != 0 || !(1..=MAX_CONFIG).contains(&m.len())
+    if !m.is_file()
+        || m.uid() != 0
+        || m.nlink() != 1
+        || m.ino() == 0
+        || m.mode() & 0o022 != 0
+        || !(1..=MAX_CONFIG).contains(&m.len())
     {
         return Err(bad());
     }
-    Ok(Stamp { device: m.dev(), inode: m.ino(), bytes: m.len(), mode: m.mode(),
-        modified: (m.mtime(), m.mtime_nsec()), changed: (m.ctime(), m.ctime_nsec()) })
+    Ok(Stamp {
+        device: m.dev(),
+        inode: m.ino(),
+        bytes: m.len(),
+        mode: m.mode(),
+        modified: (m.mtime(), m.mtime_nsec()),
+        changed: (m.ctime(), m.ctime_nsec()),
+    })
 }
 
 fn named_config() -> io::Result<File> {
@@ -81,7 +108,8 @@ fn named_config() -> io::Result<File> {
             return Err(bad());
         }
     }
-    OpenOptions::new().read(true)
+    OpenOptions::new()
+        .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(CONFIG)
 }
@@ -94,24 +122,42 @@ fn process_id(pidfd: &File) -> io::Result<(u64, u64)> {
     }
     // SAFETY: successful fstatfs initialized the structure.
     if unsafe { stat.assume_init() }.f_type != PID_FS_MAGIC {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, "expected a native PIDFS process descriptor"));
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "expected a native PIDFS process descriptor",
+        ));
     }
     let id = pidfd.metadata()?;
-    if id.ino() == 0 { return Err(bad()); }
+    if id.ino() == 0 {
+        return Err(bad());
+    }
     Ok((id.dev(), id.ino()))
 }
 
 fn live(pidfd: &File) -> io::Result<()> {
-    let mut item = libc::pollfd { fd: pidfd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    let mut item = libc::pollfd {
+        fd: pidfd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
     // SAFETY: the retained process fd and one bounded pollfd remain live.
     let result = unsafe { libc::poll(&raw mut item, 1, 0) };
-    if result < 0 { return Err(io::Error::last_os_error()); }
-    if result == 0 && item.revents == 0 { Ok(()) } else { Err(bad()) }
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if result == 0 && item.revents == 0 {
+        Ok(())
+    } else {
+        Err(bad())
+    }
 }
 
 fn checked_receipt<const N: usize>(file: &File) -> io::Result<[u8; N]> {
     let m = file.metadata()?;
-    if !m.is_file() || m.uid() != 0 || m.nlink() != 0 || m.mode() & 0o7777 != 0o400
+    if !m.is_file()
+        || m.uid() != 0
+        || m.nlink() != 0
+        || m.mode() & 0o7777 != 0o400
         || m.len() != N as u64
     {
         return Err(bad());
@@ -119,7 +165,9 @@ fn checked_receipt<const N: usize>(file: &File) -> io::Result<[u8; N]> {
     // SAFETY: fcntl F_GET_SEALS consumes only the retained descriptor.
     let seals = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) };
     let required = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
-    if seals < 0 || seals & required != required { return Err(bad()); }
+    if seals < 0 || seals & required != required {
+        return Err(bad());
+    }
     let mut data = [0; N];
     file.read_exact_at(&mut data, 0)?;
     Ok(data)
@@ -132,16 +180,27 @@ fn next<const N: usize>(record: &mut &[u8]) -> io::Result<[u8; N]> {
 }
 
 impl GatewayRun {
-    pub(crate) fn retain(inputs: LaunchFds, enrolled_uid: u32, state: &ServiceEpoch) -> io::Result<Self> {
+    pub(crate) fn retain(
+        inputs: LaunchFds,
+        enrolled_uid: u32,
+        state: &ServiceEpoch,
+    ) -> io::Result<Self> {
         let raw = checked_receipt::<{ RECORD + SERVICE_TAIL }>(&inputs.loaded_receipt)?;
         let mut data = raw.strip_prefix(PREFIX).ok_or_else(bad)?;
         let uid = u32::from_be_bytes(next(&mut data)?);
-        let process = (u64::from_be_bytes(next(&mut data)?), u64::from_be_bytes(next(&mut data)?));
+        let process = (
+            u64::from_be_bytes(next(&mut data)?),
+            u64::from_be_bytes(next(&mut data)?),
+        );
         let device = u64::from_be_bytes(next(&mut data)?);
         let inode = u64::from_be_bytes(next(&mut data)?);
         let bytes = u64::from_be_bytes(next(&mut data)?);
         let sha: [u8; 32] = next(&mut data)?;
-        if &ServiceEpoch::parse(&mut data)? != state || !data.is_empty() || uid != enrolled_uid || matches!(uid, 0 | 65534 | u32::MAX) {
+        if &ServiceEpoch::parse(&mut data)? != state
+            || !data.is_empty()
+            || uid != enrolled_uid
+            || matches!(uid, 0 | 65534 | u32::MAX)
+        {
             return Err(bad());
         }
 
@@ -153,7 +212,9 @@ impl GatewayRun {
         if flags < 0 || flags & (libc::O_ACCMODE | libc::O_PATH) != libc::O_RDONLY {
             return Err(bad());
         }
-        if process_id(&pidfd)? != process { return Err(bad()); }
+        if process_id(&pidfd)? != process {
+            return Err(bad());
+        }
         live(&pidfd)?;
         let config = config_stamp(&approved)?;
         if (config.device, config.inode, config.bytes) != (device, inode, bytes)
@@ -168,13 +229,20 @@ impl GatewayRun {
         if digest(&contents)? != sha || config_stamp(&approved)? != config {
             return Err(bad());
         }
-        let selected = Self { pidfd, approved, config, uid };
+        let selected = Self {
+            pidfd,
+            approved,
+            config,
+            uid,
+        };
         selected.require_same_original(enrolled_uid)?;
         Ok(selected)
     }
 
     pub(crate) fn require_same_original(&self, enrolled_uid: u32) -> io::Result<()> {
-        if enrolled_uid != self.uid || config_stamp(&self.approved)? != self.config || config_stamp(&named_config()?)? != self.config
+        if enrolled_uid != self.uid
+            || config_stamp(&self.approved)? != self.config
+            || config_stamp(&named_config()?)? != self.config
         {
             return Err(bad());
         }
@@ -222,7 +290,10 @@ fn protected_file(path: &str, expected_limit: u64) -> io::Result<File> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)?;
     let m = file.metadata()?;
-    if !m.is_file() || m.uid() != 0 || m.nlink() != 1 || m.mode() & 0o022 != 0
+    if !m.is_file()
+        || m.uid() != 0
+        || m.nlink() != 1
+        || m.mode() & 0o022 != 0
         || m.len() > expected_limit
     {
         return Err(bad());
@@ -242,8 +313,11 @@ fn protected_dir(path: &str) -> io::Result<()> {
 #[cfg(feature = "host-activation")]
 fn sealed(label: &std::ffi::CStr, contents: &[u8]) -> io::Result<File> {
     // SAFETY: label is a terminated C string; a successful fd is new.
-    let fd = unsafe { libc::memfd_create(label.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
-    if fd < 0 { return Err(io::Error::last_os_error()); }
+    let fd =
+        unsafe { libc::memfd_create(label.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
     // SAFETY: this consumes the newly created unique descriptor.
     let mut file = unsafe { File::from_raw_fd(fd) };
     file.write_all(contents)?;
@@ -256,12 +330,19 @@ fn sealed(label: &std::ffi::CStr, contents: &[u8]) -> io::Result<File> {
 }
 
 #[cfg(feature = "host-activation")]
-fn handoff(child: &mut Child, approved: File, stamp: Stamp, policy: &ApprovedNginx) -> io::Result<LaunchFds> {
+fn handoff(
+    child: &mut Child,
+    approved: File,
+    stamp: Stamp,
+    policy: &ApprovedNginx,
+) -> io::Result<LaunchFds> {
     let child_pid = libc::pid_t::try_from(child.id()).map_err(|_| bad())?;
     // SAFETY: child is a directly spawned child owned here, not an externally
     // specified PID. No other thread or handler is permitted to reap it.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0u32) };
-    if fd < 0 { return Err(io::Error::last_os_error()); }
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
     // SAFETY: successful pidfd_open created this new descriptor.
     let pidfd = unsafe { File::from_raw_fd(libc::c_int::try_from(fd).map_err(|_| bad())?) };
     let (dev, ino) = process_id(&pidfd)?;
@@ -273,14 +354,21 @@ fn handoff(child: &mut Child, approved: File, stamp: Stamp, policy: &ApprovedNgi
             Ok(file) => {
                 let mut pid_bytes = Vec::with_capacity(32);
                 file.take(33).read_to_end(&mut pid_bytes)?;
-                if pid_bytes == expected.as_bytes() { break; }
-                if !expected.as_bytes().starts_with(&pid_bytes) { return Err(bad()); }
+                if pid_bytes == expected.as_bytes() {
+                    break;
+                }
+                if !expected.as_bytes().starts_with(&pid_bytes) {
+                    return Err(bad());
+                }
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
         if Instant::now() >= deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "gateway did not load its approved configuration"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "gateway did not load its approved configuration",
+            ));
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -296,7 +384,11 @@ fn handoff(child: &mut Child, approved: File, stamp: Stamp, policy: &ApprovedNgi
     bytes.extend_from_slice(&policy.configuration_sha);
     let loaded_receipt = sealed(c"zxs-gateway-loaded", &bytes)?;
     live(&pidfd)?;
-    Ok(LaunchFds { original_pidfd: pidfd, approved_config: approved, loaded_receipt })
+    Ok(LaunchFds {
+        original_pidfd: pidfd,
+        approved_config: approved,
+        loaded_receipt,
+    })
 }
 
 /// Caller retains the returned direct child. On successful handoff it must
@@ -308,7 +400,9 @@ pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, Laun
     if unsafe { libc::geteuid() } != 0 || matches!(policy.worker_uid, 0 | 65534 | u32::MAX) {
         return Err(bad());
     }
-    for path in ["/usr", "/usr/sbin", "/run", CWD] { protected_dir(path)?; }
+    for path in ["/usr", "/usr/sbin", "/run", CWD] {
+        protected_dir(path)?;
+    }
     let approved = named_config()?;
     // SAFETY: flock acts only on the protected config inode, serializing
     // competing invocations of this prototype until the original PID is live.
@@ -316,13 +410,20 @@ pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, Laun
         return Err(io::Error::last_os_error());
     }
     match std::fs::symlink_metadata(PID_FILE) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {},
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
-        Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "gateway pidfile already exists")),
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "gateway pidfile already exists",
+            ));
+        }
     }
     let executable = protected_file(NGINX, 64 * 1024 * 1024)?;
     let mut image = Vec::new();
-    (&executable).take(64 * 1024 * 1024 + 1).read_to_end(&mut image)?;
+    (&executable)
+        .take(64 * 1024 * 1024 + 1)
+        .read_to_end(&mut image)?;
     if image.len() > 64 * 1024 * 1024 || digest(&image)? != policy.executable_sha {
         return Err(bad());
     }
@@ -337,8 +438,20 @@ pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, Laun
     let program = format!("/proc/self/fd/{}", executable.as_raw_fd());
     let config_path = format!("/proc/self/fd/{config_fd}");
     let mut nginx = Command::new(program);
-    nginx.env_clear().current_dir(CWD).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-        .args(["-p", "/etc/zxs-gateway/", "-c", &config_path, "-g", "daemon off;"]);
+    nginx
+        .env_clear()
+        .current_dir(CWD)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .args([
+            "-p",
+            "/etc/zxs-gateway/",
+            "-c",
+            &config_path,
+            "-g",
+            "daemon off;",
+        ]);
     // SAFETY: mark every nonstandard inherited FD CLOEXEC, then expose
     // only the input sealed config to the approved gateway child.
     unsafe {
@@ -372,14 +485,20 @@ pub(crate) fn launch_approved(policy: &ApprovedNginx) -> io::Result<(Child, Laun
 
 #[cfg(feature = "host-activation")]
 fn stop_failed_launch(child: &mut Child) -> io::Result<()> {
-    if child.try_wait()?.is_some() { return Ok(()); }
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
     let pid = libc::pid_t::try_from(child.id()).map_err(|_| bad())?;
     // SAFETY: this is our direct unreaped child, never a value from the
     // pidfile. The one-shot launcher has no other child waiter.
     let status = unsafe { libc::kill(pid, libc::SIGQUIT) };
-    if status == 0 { return Ok(()); }
+    if status == 0 {
+        return Ok(());
+    }
     let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) { return Ok(()); }
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
     Err(error)
 }
 
@@ -441,9 +560,12 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
     {
         return Err(bad());
     }
-    for directory in ["/zxs", "/zxs/bin", "/zxs/state"] { protected_dir(directory)?; }
+    for directory in ["/zxs", "/zxs/bin", "/zxs/state"] {
+        protected_dir(directory)?;
+    }
     let open_directory = |path: &str| {
-        OpenOptions::new().read(true)
+        OpenOptions::new()
+            .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
             .open(path)
     };
@@ -456,21 +578,30 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
     // SAFETY: state is an original retained directory and the static
     // NUL-terminated component has no path separators.
     let fd = unsafe {
-        libc::openat(state.as_raw_fd(), c"server.v1".as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        libc::openat(
+            state.as_raw_fd(),
+            c"server.v1".as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        )
     };
-    if fd < 0 { return Err(io::Error::last_os_error()); }
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
     // SAFETY: successful openat created a unique owned descriptor.
     let descriptor = unsafe { File::from_raw_fd(fd) };
     let (_, account) = Descriptor::read_selected(descriptor, policy.uid)?.into_parts();
     let uid = account.gateway_uid();
-    if uid == policy.uid { return Err(bad()); }
+    if uid == policy.uid {
+        return Err(bad());
+    }
     let initial = checked_receipt::<RECORD>(&gateway.loaded_receipt)?;
     let data = initial.strip_prefix(PREFIX).ok_or_else(bad)?;
     let mut raw = data;
     if u32::from_be_bytes(next(&mut raw)?) != uid
-        || (u64::from_be_bytes(next(&mut raw)?), u64::from_be_bytes(next(&mut raw)?))
-            != process_id(&gateway.original_pidfd)?
+        || (
+            u64::from_be_bytes(next(&mut raw)?),
+            u64::from_be_bytes(next(&mut raw)?),
+        ) != process_id(&gateway.original_pidfd)?
     {
         return Err(bad());
     }
@@ -481,27 +612,40 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
     }
     let image = protected_file(SERVICE, 128 * 1024 * 1024)?;
     let image_info = image.metadata()?;
-    if image_info.mode() & 0o7111 != 0o111 { return Err(bad()); }
+    if image_info.mode() & 0o7111 != 0o111 {
+        return Err(bad());
+    }
     let mut digestor = crate::hash::Sha256::new();
     let mut reader = (&image).take(128 * 1024 * 1024 + 1);
     let mut block = [0u8; 64 * 1024];
     let mut size = 0;
     loop {
         let n = reader.read(&mut block)?;
-        if n == 0 { break; }
-        if size == 0 && !block[..n].starts_with(b"\x7fELF") { return Err(bad()); }
+        if n == 0 {
+            break;
+        }
+        if size == 0 && !block[..n].starts_with(b"\x7fELF") {
+            return Err(bad());
+        }
         size += n;
         digestor.update(&block[..n])?;
     }
-    if size == 0 || size > 128 * 1024 * 1024 || digestor.finish() != policy.image_sha
+    if size == 0
+        || size > 128 * 1024 * 1024
+        || digestor.finish() != policy.image_sha
         || image_info.ctime() != image.metadata()?.ctime()
         || image_info.ctime_nsec() != image.metadata()?.ctime_nsec()
         || !matches!(open_directory(DEFAULT_STATE)?.metadata(), Ok(m) if m.dev() == info.dev() && m.ino() == info.ino())
     {
         return Err(bad());
     }
-    let epoch = ServiceEpoch { owner: policy.uid, group: policy.ipc_gid,
-        device: info.dev(), inode: info.ino(), epoch: account.epoch() };
+    let epoch = ServiceEpoch {
+        owner: policy.uid,
+        group: policy.ipc_gid,
+        device: info.dev(),
+        inode: info.ino(),
+        epoch: account.epoch(),
+    };
     Ok((image, state, epoch.seal(&initial)?))
 }
 
@@ -512,7 +656,9 @@ pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> i
     fn spare(file: &File) -> io::Result<File> {
         // SAFETY: fcntl only duplicates our known live fd outside reserved slots.
         let fd = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 6 as libc::c_int) };
-        if fd < 0 { return Err(io::Error::last_os_error()); }
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
         // SAFETY: successful duplication created a fresh unique descriptor.
         Ok(unsafe { File::from_raw_fd(fd) })
     }
@@ -524,7 +670,12 @@ pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> i
         spare(&sealed)?,
     ];
     let mut command = Command::new(format!("/proc/self/fd/{}", image.as_raw_fd()));
-    command.env_clear().current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    command
+        .env_clear()
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let uid = policy.uid;
     let gid = policy.ipc_gid;
     // SAFETY: pre-exec performs only local syscalls on retained descriptors
@@ -538,7 +689,13 @@ pub(crate) fn launch_service(policy: &ApprovedService, gateway: &LaunchFds) -> i
                 || libc::dup2(descriptors[2].as_raw_fd(), 5) != 5
                 || libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
                 || libc::prctl(libc::PR_SET_KEEPCAPS, 0, 0, 0, 0) != 0
-                || libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0
+                || libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_CLEAR_ALL,
+                    0,
+                    0,
+                    0,
+                ) != 0
                 || libc::setgroups(0, std::ptr::null()) != 0
                 || libc::setresgid(gid, gid, gid) != 0
                 || libc::setresuid(uid, uid, uid) != 0

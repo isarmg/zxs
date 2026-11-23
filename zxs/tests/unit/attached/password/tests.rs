@@ -34,8 +34,20 @@ fn argon2id_uses_the_exact_password_bytes() {
 
 #[test]
 fn login_accepts_only_the_exact_account_spelling() {
-    assert_eq!(login_name(b"workspace.operator").unwrap(), "workspace.operator");
-    for invalid in [b"".as_slice(), b"Workspace.operator", b"-operator", b"workspace\x00operator", b"workspace/operator"] {
-        assert_eq!(login_name(invalid).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        login_name(b"workspace.operator").unwrap(),
+        "workspace.operator"
+    );
+    for invalid in [
+        b"".as_slice(),
+        b"Workspace.operator",
+        b"-operator",
+        b"workspace\x00operator",
+        b"workspace/operator",
+    ] {
+        assert_eq!(
+            login_name(invalid).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 }

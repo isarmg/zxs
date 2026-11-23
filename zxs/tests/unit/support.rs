@@ -1,16 +1,27 @@
 use crate::Entity;
-use std::{fs,io,path::{Path,PathBuf},os::unix::fs::{DirBuilderExt,MetadataExt},sync::atomic::{AtomicU64,Ordering}};
+use std::{
+    fs, io,
+    os::unix::fs::{DirBuilderExt, MetadataExt},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct PrivateTemp(pub(crate) PathBuf, pub(crate) Entity);
 impl PrivateTemp {
     pub(crate) fn under(parent: &Path) -> Self {
         for _ in 0..64 {
             let serial = SERIAL.fetch_add(1, Ordering::Relaxed);
-            let path = parent.join(format!("zxs-source-test-{}-{serial}",std::process::id()));
+            let path = parent.join(format!("zxs-source-test-{}-{serial}", std::process::id()));
             match fs::DirBuilder::new().mode(0o700).create(&path) {
                 Ok(()) => {
                     let m = fs::metadata(&path).unwrap();
-                    return Self(path, Entity { device:m.dev(), inode:m.ino() });
+                    return Self(
+                        path,
+                        Entity {
+                            device: m.dev(),
+                            inode: m.ino(),
+                        },
+                    );
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => panic!("create private fixture: {e}"),

@@ -1,13 +1,29 @@
 use super::*;
 use crate::test_support::PrivateTemp;
 
-fn id(n: u8) -> Id { [n; 16] }
-fn mutation(n: u8) -> Mutation { Mutation { container: id(1), request: id(n) } }
-fn body(bytes: &[u8]) -> Body {
-    let mut sha = Sha256::new(); sha.update(bytes).unwrap();
-    Body { length: bytes.len() as u64, sha256: sha.finish() }
+fn id(n: u8) -> Id {
+    [n; 16]
 }
-fn main(head: Option<NodeId>) -> Target { Target::Branch { name: MAIN.into(), expected_head: head } }
+fn mutation(n: u8) -> Mutation {
+    Mutation {
+        container: id(1),
+        request: id(n),
+    }
+}
+fn body(bytes: &[u8]) -> Body {
+    let mut sha = Sha256::new();
+    sha.update(bytes).unwrap();
+    Body {
+        length: bytes.len() as u64,
+        sha256: sha.finish(),
+    }
+}
+fn main(head: Option<NodeId>) -> Target {
+    Target::Branch {
+        name: MAIN.into(),
+        expected_head: head,
+    }
+}
 fn fixture() -> (PrivateTemp, PathBuf, Store) {
     let temp = PrivateTemp::under(&std::env::temp_dir());
     let root = temp.0.join("store");
@@ -17,57 +33,183 @@ fn fixture() -> (PrivateTemp, PathBuf, Store) {
 }
 fn read_node(store: &Store, node: u8) -> Vec<u8> {
     let mut selected = store.node(id(1), id(node)).unwrap().unwrap();
-    let mut bytes = Vec::new(); selected.file.read_to_end(&mut bytes).unwrap(); bytes
+    let mut bytes = Vec::new();
+    selected.file.read_to_end(&mut bytes).unwrap();
+    bytes
 }
 #[test]
 fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     let (_temp, dir, store) = fixture();
     assert!(matches!(
-        store.save(mutation(2), main(None), id(10), body(b"new"), Some("x.bin".into()), &b"ne"[..], || Ok(())),
-        Err(Error::WrongLength)));
+        store.save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"new"),
+            Some("x.bin".into()),
+            &b"ne"[..],
+            || Ok(())
+        ),
+        Err(Error::WrongLength)
+    ));
     assert!(store.describe(id(1)).unwrap().is_none());
-    let first = store.save(mutation(2), main(None), id(10), body(b"new"), Some("x.bin".into()), &b"new"[..], || Ok(())).unwrap();
-    assert_eq!(store.describe(id(1)).unwrap().unwrap().heads[MAIN], Some(id(10)));
-    store.save(mutation(3), main(Some(id(10))), id(11), body(b"second"), None, &b"second"[..], || Ok(())).unwrap();
+    let first = store
+        .save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"new"),
+            Some("x.bin".into()),
+            &b"new"[..],
+            || Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        store.describe(id(1)).unwrap().unwrap().heads[MAIN],
+        Some(id(10))
+    );
+    store
+        .save(
+            mutation(3),
+            main(Some(id(10))),
+            id(11),
+            body(b"second"),
+            None,
+            &b"second"[..],
+            || Ok(()),
+        )
+        .unwrap();
     assert!(matches!(
         store.save(mutation(4), main(Some(id(10))), id(12), body(b"old"), None, &b"old"[..], || Ok(())),
         Err(Error::Conflict(Conflict::HeadChanged(Some(head)))) if head==id(11)));
-    let fork = Target::HistoricalMain { new_branch: "alternate".into(), original: id(10) };
-    store.save(mutation(4), fork, id(12), body(b"old"), None, &b"old"[..], || Ok(())).unwrap();
+    let fork = Target::HistoricalMain {
+        new_branch: "alternate".into(),
+        original: id(10),
+    };
+    store
+        .save(
+            mutation(4),
+            fork,
+            id(12),
+            body(b"old"),
+            None,
+            &b"old"[..],
+            || Ok(()),
+        )
+        .unwrap();
     let current = store.describe(id(1)).unwrap().unwrap();
     assert_eq!(current.heads[MAIN], Some(id(11)));
     assert_eq!(current.heads["alternate"], Some(id(12)));
-    let history = |branch| store.branch_nodes(id(1), branch).unwrap().unwrap().into_iter()
-        .map(|(node, _)| node).collect::<Vec<_>>();
+    let history = |branch| {
+        store
+            .branch_nodes(id(1), branch)
+            .unwrap()
+            .unwrap()
+            .into_iter()
+            .map(|(node, _)| node)
+            .collect::<Vec<_>>()
+    };
     assert_eq!(history(MAIN), [id(11), id(10)]);
     assert_eq!(history("alternate"), [id(12), id(10)]);
-    assert_eq!(store.node(id(1), id(12)).unwrap().unwrap().node.prior, Some(id(10)));
-    assert_eq!(read_node(&store,10), b"new");
-    assert_eq!(read_node(&store,11), b"second");
-    assert_eq!(read_node(&store,12), b"old");
+    assert_eq!(
+        store.node(id(1), id(12)).unwrap().unwrap().node.prior,
+        Some(id(10))
+    );
+    assert_eq!(read_node(&store, 10), b"new");
+    assert_eq!(read_node(&store, 11), b"second");
+    assert_eq!(read_node(&store, 12), b"old");
     drop(store);
-    let store=Store::open(&dir).unwrap();
-    assert_eq!(store.receipt(mutation(2)).unwrap(),Some(first.clone()));
-    assert_eq!(store.save(mutation(2),main(None),id(10),body(b"new"),Some("x.bin".into()), &b"new"[..], || Ok(())).unwrap(),first);
-    assert_eq!(store.describe(id(1)).unwrap().unwrap().heads[MAIN],Some(id(11)));
+    let store = Store::open(&dir).unwrap();
+    assert_eq!(store.receipt(mutation(2)).unwrap(), Some(first.clone()));
+    assert_eq!(
+        store
+            .save(
+                mutation(2),
+                main(None),
+                id(10),
+                body(b"new"),
+                Some("x.bin".into()),
+                &b"new"[..],
+                || Ok(())
+            )
+            .unwrap(),
+        first
+    );
+    assert_eq!(
+        store.describe(id(1)).unwrap().unwrap().heads[MAIN],
+        Some(id(11))
+    );
 }
 #[test]
 fn renames_tags_and_branch_references_never_write_another_payload() {
     let (_temp, _dir, store) = fixture();
-    store.save(mutation(2),main(None),id(10),body(b"x"),Some("first".into()), &b"x"[..], || Ok(())).unwrap();
-    store.change(mutation(3), Change::Rename { expected_sequence: 1, name: "renamed".into() }, || Ok(())).unwrap();
-    assert!(matches!(store.change(mutation(4), Change::Tags { expected_sequence: 1, tags: vec![] }, || Ok(())),
-                     Err(Error::Conflict(Conflict::SequenceChanged(2)))));
-    store.change(mutation(4), Change::Tags { expected_sequence: 2, tags: vec!["已选".into()] }, || Ok(())).unwrap();
-    store.change(mutation(5), Change::Branch { name: "branch".into(), from: id(10) }, || Ok(())).unwrap();
+    store
+        .save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"x"),
+            Some("first".into()),
+            &b"x"[..],
+            || Ok(()),
+        )
+        .unwrap();
+    store
+        .change(
+            mutation(3),
+            Change::Rename {
+                expected_sequence: 1,
+                name: "renamed".into(),
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.change(
+            mutation(4),
+            Change::Tags {
+                expected_sequence: 1,
+                tags: vec![]
+            },
+            || Ok(())
+        ),
+        Err(Error::Conflict(Conflict::SequenceChanged(2)))
+    ));
+    store
+        .change(
+            mutation(4),
+            Change::Tags {
+                expected_sequence: 2,
+                tags: vec!["已选".into()],
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    store
+        .change(
+            mutation(5),
+            Change::Branch {
+                name: "branch".into(),
+                from: id(10),
+            },
+            || Ok(()),
+        )
+        .unwrap();
     let state = store.describe(id(1)).unwrap().unwrap();
-    assert_eq!(state.name,"renamed");
-    assert_eq!(state.tags,["已选"]);
-    assert_eq!(state.heads["branch"],Some(id(10)));
-    for (sequence, request) in [(2,id(3)),(3,id(4)),(4,id(5))] {
-        assert!(!store.data.join(hex(id(1))).join(entry_leaf(sequence,request)).join("payload").exists());
+    assert_eq!(state.name, "renamed");
+    assert_eq!(state.tags, ["已选"]);
+    assert_eq!(state.heads["branch"], Some(id(10)));
+    for (sequence, request) in [(2, id(3)), (3, id(4)), (4, id(5))] {
+        assert!(
+            !store
+                .data
+                .join(hex(id(1)))
+                .join(entry_leaf(sequence, request))
+                .join("payload")
+                .exists()
+        );
     }
-    assert_eq!(read_node(&store,10),b"x");
+    assert_eq!(read_node(&store, 10), b"x");
 }
 
 #[test]
@@ -78,13 +220,53 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     let system = local.0.join("system");
     let ordinary = local.0.join("ordinary");
     let recycle = remote.0.join("recycle");
-    for path in [&system, &ordinary, &recycle] { ensure_dir(path).unwrap(); }
+    for path in [&system, &ordinary, &recycle] {
+        ensure_dir(path).unwrap();
+    }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
     let store = Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
-    let first = store.save(mutation(2), main(None), id(10), body(b"one"), Some("name".into()), &b"one"[..], || Ok(())).unwrap();
-    store.save(mutation(3), main(Some(id(10))), id(11), body(b"two"), None, &b"two"[..], || Ok(())).unwrap();
-    store.change(mutation(4), Change::Branch { name: "older".into(), from: id(10) }, || Ok(())).unwrap();
-    store.change(mutation(5), Change::Tags { expected_sequence: 3, tags: vec!["known".into()] }, || Ok(())).unwrap();
+    let first = store
+        .save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"one"),
+            Some("name".into()),
+            &b"one"[..],
+            || Ok(()),
+        )
+        .unwrap();
+    store
+        .save(
+            mutation(3),
+            main(Some(id(10))),
+            id(11),
+            body(b"two"),
+            None,
+            &b"two"[..],
+            || Ok(()),
+        )
+        .unwrap();
+    store
+        .change(
+            mutation(4),
+            Change::Branch {
+                name: "older".into(),
+                from: id(10),
+            },
+            || Ok(()),
+        )
+        .unwrap();
+    store
+        .change(
+            mutation(5),
+            Change::Tags {
+                expected_sequence: 3,
+                tags: vec!["known".into()],
+            },
+            || Ok(()),
+        )
+        .unwrap();
 
     // The first terminal authorization will be revoked after the R copy.
     // A ready R candidate is not a selected recycle position on its own.
@@ -96,12 +278,29 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
         let state = store.load(id(1), &mut memory).unwrap();
         let archive = store.archive.as_ref().unwrap();
         let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
-        let tentative = archive.prepare(mutation(6), &store.data_root, &original, state, &incoming, || Ok(())).unwrap();
+        let tentative = archive
+            .prepare(
+                mutation(6),
+                &store.data_root,
+                &original,
+                state,
+                &incoming,
+                || Ok(()),
+            )
+            .unwrap();
         allow.set(false);
         let selector = store.stage_at(archive.moves().unwrap()).unwrap();
-        assert!(archive.choose(tentative, &selector, || {
-            if allow.get() { Ok(()) } else { Err(io::ErrorKind::PermissionDenied.into()) }
-        }).is_err());
+        assert!(
+            archive
+                .choose(tentative, &selector, || {
+                    if allow.get() {
+                        Ok(())
+                    } else {
+                        Err(io::ErrorKind::PermissionDenied.into())
+                    }
+                })
+                .is_err()
+        );
         assert!(archive.selected(id(1)).unwrap().is_none());
     }
     assert_eq!(read_node(&store, 11), b"two");
@@ -120,9 +319,11 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     assert_eq!(state.tags, ["known"]);
     assert_eq!(state.branches[MAIN], Some(id(11)));
     assert_eq!(state.branches["older"], Some(id(10)));
-    for (node, payload) in [(10,b"one"),(11,b"two")] {
+    for (node, payload) in [(10, b"one"), (11, b"two")] {
         let exact = &state.nodes[&id(node)];
-        let path = moved.join(entry_leaf(exact.sequence, exact.request)).join("payload");
+        let path = moved
+            .join(entry_leaf(exact.sequence, exact.request))
+            .join("payload");
         assert_eq!(fs::read(path).unwrap(), payload);
     }
     // Simulate F path/name being unavailable, with independent SYSTEM and R
@@ -140,36 +341,72 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
     let system = local.0.join("system");
     let ordinary = local.0.join("ordinary");
     let recycle = remote.0.join("recycle");
-    for path in [&system, &ordinary, &recycle] { ensure_dir(path).unwrap(); }
+    for path in [&system, &ordinary, &recycle] {
+        ensure_dir(path).unwrap();
+    }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
     let store = Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
-    store.save(mutation(2), main(None), id(10), body(b"one"), Some("name".into()), &b"one"[..], || Ok(())).unwrap();
-    store.save(mutation(3), main(Some(id(10))), id(11), body(b"two"), None, &b"two"[..], || Ok(())).unwrap();
+    store
+        .save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"one"),
+            Some("name".into()),
+            &b"one"[..],
+            || Ok(()),
+        )
+        .unwrap();
+    store
+        .save(
+            mutation(3),
+            main(Some(id(10))),
+            id(11),
+            body(b"two"),
+            None,
+            &b"two"[..],
+            || Ok(()),
+        )
+        .unwrap();
     let original = store.data.join(hex(id(1)));
-    let first = original.join(entry_leaf(1,id(2)));
-    let second = original.join(entry_leaf(2,id(3)));
+    let first = original.join(entry_leaf(1, id(2)));
+    let second = original.join(entry_leaf(2, id(3)));
     {
         let source = store.object(id(1)).unwrap();
         let mut memory = source.lock().unwrap();
-        let state = store.load(id(1),&mut memory).unwrap();
+        let state = store.load(id(1), &mut memory).unwrap();
         let archive = store.archive.as_ref().unwrap();
         let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
-        archive.prepare(mutation(6),&store.data_root,&original,state,&incoming,|| Ok(())).unwrap();
+        archive
+            .prepare(
+                mutation(6),
+                &store.data_root,
+                &original,
+                state,
+                &incoming,
+                || Ok(()),
+            )
+            .unwrap();
     }
     // Simulate an unexpected local replacement that preserves both the
     // exact path and bytes, but not the copied original native identity.
     let forged = local.0.join("other-owned");
-    write_file(&forged,b"two").unwrap();
-    fs::rename(&forged,second.join("payload")).unwrap();
-    let result = store.move_to_recycle(mutation(6),2,|| Ok(()));
-    let Err(Error::CleanupPending{receipt,..})=result else { panic!("retirement may not unlink changed members"); };
-    assert_eq!(store.recycle_receipt(mutation(6)).unwrap(),Some(receipt));
+    write_file(&forged, b"two").unwrap();
+    fs::rename(&forged, second.join("payload")).unwrap();
+    let result = store.move_to_recycle(mutation(6), 2, || Ok(()));
+    let Err(Error::CleanupPending { receipt, .. }) = result else {
+        panic!("retirement may not unlink changed members");
+    };
+    assert_eq!(store.recycle_receipt(mutation(6)).unwrap(), Some(receipt));
     assert!(store.describe(id(1)).unwrap().is_none());
-    assert_eq!(fs::read(first.join("payload")).unwrap(),b"one");
+    assert_eq!(fs::read(first.join("payload")).unwrap(), b"one");
     assert!(first.join("receipt").exists());
-    assert_eq!(fs::read(second.join("payload")).unwrap(),b"two");
+    assert_eq!(fs::read(second.join("payload")).unwrap(), b"two");
     assert!(second.join("receipt").exists());
-    assert!(matches!(store.move_to_recycle(mutation(6),2,|| Ok(())),Err(Error::CleanupPending{..})));
+    assert!(matches!(
+        store.move_to_recycle(mutation(6), 2, || Ok(())),
+        Err(Error::CleanupPending { .. })
+    ));
 }
 
 #[test]
@@ -179,14 +416,18 @@ fn startup_refuses_a_replaced_qualified_ordinary_directory_before_writing_layout
     let ordinary = local.0.join("ordinary");
     let recycle = local.0.join("recycle");
     let displaced = local.0.join("displaced");
-    for path in [&system, &ordinary, &recycle] { ensure_dir(path).unwrap(); }
+    for path in [&system, &ordinary, &recycle] {
+        ensure_dir(path).unwrap();
+    }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
     let original = held(&ordinary);
     fs::rename(&ordinary, &displaced).unwrap();
     ensure_dir(&ordinary).unwrap();
     // The held-role admission runs before checking the volume pair or
     // creating an owner/layout entry anywhere. This fixture needs no mount.
-    let error = Store::open_with_recycle(held(&system), original, held(&recycle)).err().unwrap();
+    let error = Store::open_with_recycle(held(&system), original, held(&recycle))
+        .err()
+        .unwrap();
     assert!(error.to_string().contains("replaced"));
     for path in [&ordinary, &displaced, &system, &recycle] {
         assert!(fs::read_dir(path).unwrap().next().is_none());
@@ -200,7 +441,15 @@ fn a_later_staging_substitution_cannot_redirect_a_whole_node_upload() {
     let displaced = root.join("displaced");
     fs::rename(&staging, &displaced).unwrap();
     ensure_dir(&staging).unwrap();
-    let result = store.save(mutation(2), main(None), id(10), body(b"one"), Some("first".into()), &b"one"[..], || Ok(()));
+    let result = store.save(
+        mutation(2),
+        main(None),
+        id(10),
+        body(b"one"),
+        Some("first".into()),
+        &b"one"[..],
+        || Ok(()),
+    );
     assert!(matches!(result,Err(Error::Io(ref e)) if e.to_string().contains("replaced")));
     for path in [&staging, &displaced, &store.data] {
         assert!(fs::read_dir(path).unwrap().next().is_none());
@@ -215,11 +464,23 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
     let system = local.0.join("system");
     let ordinary = local.0.join("ordinary");
     let recycle = remote.0.join("recycle");
-    for path in [&system, &ordinary, &recycle] { ensure_dir(path).unwrap(); }
+    for path in [&system, &ordinary, &recycle] {
+        ensure_dir(path).unwrap();
+    }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
     let open = || Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
     let store = open();
-    store.save(mutation(2), main(None), id(10), body(b"one"), Some("name".into()), &b"one"[..], || Ok(())).unwrap();
+    store
+        .save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"one"),
+            Some("name".into()),
+            &b"one"[..],
+            || Ok(()),
+        )
+        .unwrap();
     let receipt = store.move_to_recycle(mutation(6), 1, || Ok(())).unwrap();
     let moves = store.archive.as_ref().unwrap().moves().unwrap();
     let selected = moves.join(hex(id(1)));
@@ -242,10 +503,22 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
     let system = local.0.join("system");
     let ordinary = local.0.join("ordinary");
     let recycle = remote.0.join("recycle");
-    for path in [&system, &ordinary, &recycle] { ensure_dir(path).unwrap(); }
+    for path in [&system, &ordinary, &recycle] {
+        ensure_dir(path).unwrap();
+    }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
     let store = Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
-    store.save(mutation(2), main(None), id(10), body(b"one"), Some("name".into()), &b"one"[..], || Ok(())).unwrap();
+    store
+        .save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"one"),
+            Some("name".into()),
+            &b"one"[..],
+            || Ok(()),
+        )
+        .unwrap();
     let archive = store.archive.as_ref().unwrap();
     let original = store.data.join(hex(id(1)));
     {
@@ -253,15 +526,37 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
         let mut memory = object.lock().unwrap();
         let state = store.load(id(1), &mut memory).unwrap();
         let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
-        archive.prepare(mutation(6), &store.data_root, &original, state, &incoming, || Ok(())).unwrap();
+        archive
+            .prepare(
+                mutation(6),
+                &store.data_root,
+                &original,
+                state,
+                &incoming,
+                || Ok(()),
+            )
+            .unwrap();
     }
     assert!(store.recycle_receipt(mutation(6)).unwrap().is_none());
-    store.save(mutation(3), main(Some(id(10))), id(11), body(b"two"), None, &b"two"[..], || Ok(())).unwrap();
+    store
+        .save(
+            mutation(3),
+            main(Some(id(10))),
+            id(11),
+            body(b"two"),
+            None,
+            &b"two"[..],
+            || Ok(()),
+        )
+        .unwrap();
     let done = store.move_to_recycle(mutation(7), 2, || Ok(())).unwrap();
     assert_eq!(store.recycle_receipt(mutation(7)).unwrap(), Some(done));
     assert!(store.recycle_receipt(mutation(6)).unwrap().is_none());
     let (_, chosen) = archive.selected(id(1)).unwrap().unwrap();
-    assert_eq!(read_state(&chosen, id(1)).unwrap().branches[MAIN], Some(id(11)));
+    assert_eq!(
+        read_state(&chosen, id(1)).unwrap().branches[MAIN],
+        Some(id(11))
+    );
     assert!(!original.exists());
 }
 
@@ -273,7 +568,10 @@ fn diagnostics_keep_the_outcome_but_not_private_details() {
             "/not-a-real-path/private; account=fixture-account",
         )
     };
-    assert_eq!(format!("{:?}", Error::Io(private())), "Io(PermissionDenied)");
+    assert_eq!(
+        format!("{:?}", Error::Io(private())),
+        "Io(PermissionDenied)"
+    );
     assert_eq!(
         format!("{:?}", Error::Uncertain(private())),
         "Uncertain(PermissionDenied)"
@@ -295,7 +593,17 @@ fn diagnostics_keep_the_outcome_but_not_private_details() {
 #[test]
 fn reopen_discards_interrupted_intake_without_touching_selected_data() {
     let (_temp, root, store) = fixture();
-    store.save(mutation(2), main(None), id(10), body(b"saved"), Some("name".into()), &b"saved"[..], || Ok(())).unwrap();
+    store
+        .save(
+            mutation(2),
+            main(None),
+            id(10),
+            body(b"saved"),
+            Some("name".into()),
+            &b"saved"[..],
+            || Ok(()),
+        )
+        .unwrap();
     let unfinished = root.join("staging/0000000000000001");
     let unknown = root.join("staging/0000000000000002");
     let foreign_link = root.join("staging/0000000000000003");
@@ -318,8 +626,15 @@ fn reopen_discards_interrupted_intake_without_touching_selected_data() {
     assert!(unknown.join("not-an-intake-file").is_file());
     assert!(fs::symlink_metadata(foreign_link).unwrap().is_symlink());
     assert!(foreign_file.is_file());
-    assert_eq!(fs::read(wrong_member.join("payload")).unwrap(), b"keep both old names");
-    assert!(fs::symlink_metadata(wrong_member.join("receipt")).unwrap().is_symlink());
+    assert_eq!(
+        fs::read(wrong_member.join("payload")).unwrap(),
+        b"keep both old names"
+    );
+    assert!(
+        fs::symlink_metadata(wrong_member.join("receipt"))
+            .unwrap()
+            .is_symlink()
+    );
     assert_eq!(read_node(&reopened, 10), b"saved");
     assert!(reopened.receipt(mutation(3)).unwrap().is_none());
 }

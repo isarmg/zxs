@@ -3,7 +3,7 @@ use super::*;
 fn raw(data: &[u8], recycle: &[u8]) -> Vec<u8> {
     raw_roots([b"/zxs/disks/system", data, recycle])
 }
-fn raw_roots(roots: [&[u8];3]) -> Vec<u8> {
+fn raw_roots(roots: [&[u8]; 3]) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.extend([1; 16]);
     out.extend([2; 16]);
@@ -36,7 +36,15 @@ fn fresh_descriptor_rejects_extra_wrong_or_ambiguous_fields() {
     new = first;
     new[MAGIC.len() + 32..MAGIC.len() + 36].fill(0);
     assert!(Descriptor::parse(&new).is_err());
-    for path in [b"relative".as_slice(), b"/", b"/data/", b"/data//file", b"/data/./file", b"/data/../file", b"/data/\x00"] {
+    for path in [
+        b"relative".as_slice(),
+        b"/",
+        b"/data/",
+        b"/data//file",
+        b"/data/./file",
+        b"/data/../file",
+        b"/data/\x00",
+    ] {
         assert!(Descriptor::parse(&raw(path, b"/recycle")).is_err());
         assert!(Descriptor::parse(&raw(b"/data", path)).is_err());
     }
@@ -46,9 +54,11 @@ fn fresh_descriptor_rejects_extra_wrong_or_ambiguous_fields() {
     let start = duplicate.len() - 32;
     duplicate[start..].fill(8);
     assert!(Descriptor::parse(&duplicate).is_err());
-    for (data, recycle) in [(b"/same".as_slice(), b"/same".as_slice()),
-                            (b"/one".as_slice(), b"/one/child".as_slice()),
-                            (b"/one/child".as_slice(), b"/one".as_slice())] {
+    for (data, recycle) in [
+        (b"/same".as_slice(), b"/same".as_slice()),
+        (b"/one".as_slice(), b"/one/child".as_slice()),
+        (b"/one/child".as_slice(), b"/one".as_slice()),
+    ] {
         assert!(Descriptor::parse(&raw(data, recycle)).is_err());
     }
 }
@@ -56,14 +66,53 @@ fn fresh_descriptor_rejects_extra_wrong_or_ambiguous_fields() {
 #[test]
 fn exact_basic_header_and_canonical_padding_only() {
     let exact = ("Authorization", "bAsIc dXNlcjpwYXNz");
-    assert_eq!(credentials(&[exact]).unwrap().decoded.as_bytes(), b"user:pass");
-    assert_eq!(credentials(&[("Authorization", "Basic YTpiYw==")]).unwrap().decoded.as_bytes(), b"a:bc");
-    assert_eq!(credentials(&[("Authorization", "Basic YTpiY2Q=")]).unwrap().decoded.as_bytes(), b"a:bcd");
-    assert_eq!(credentials(&[("Authorization", "Basic YTpiYzp4")]).unwrap().decoded.as_bytes(), b"a:bc:x");
-    assert_eq!(credentials(&[("x-forwarded-user", "user")]).err(), Some(AuthError::Invalid));
-    assert_eq!(credentials(&[exact, ("authorization", exact.1)]).err(), Some(AuthError::Invalid));
-    for value in ["Bearer dXNlcjpwYXNz", "Basic  dXNlcjpwYXNz", "Basic YTpiYx==", "Basic YTpiY2R=",
-                  "Basic YTpiYw==YQ==", "Basic YTp9_", "Basic YToA", "Basic "] {
-        assert_eq!(credentials(&[("Authorization", value)]).err(), Some(AuthError::Invalid), "{value}");
+    assert_eq!(
+        credentials(&[exact]).unwrap().decoded.as_bytes(),
+        b"user:pass"
+    );
+    assert_eq!(
+        credentials(&[("Authorization", "Basic YTpiYw==")])
+            .unwrap()
+            .decoded
+            .as_bytes(),
+        b"a:bc"
+    );
+    assert_eq!(
+        credentials(&[("Authorization", "Basic YTpiY2Q=")])
+            .unwrap()
+            .decoded
+            .as_bytes(),
+        b"a:bcd"
+    );
+    assert_eq!(
+        credentials(&[("Authorization", "Basic YTpiYzp4")])
+            .unwrap()
+            .decoded
+            .as_bytes(),
+        b"a:bc:x"
+    );
+    assert_eq!(
+        credentials(&[("x-forwarded-user", "user")]).err(),
+        Some(AuthError::Invalid)
+    );
+    assert_eq!(
+        credentials(&[exact, ("authorization", exact.1)]).err(),
+        Some(AuthError::Invalid)
+    );
+    for value in [
+        "Bearer dXNlcjpwYXNz",
+        "Basic  dXNlcjpwYXNz",
+        "Basic YTpiYx==",
+        "Basic YTpiY2R=",
+        "Basic YTpiYw==YQ==",
+        "Basic YTp9_",
+        "Basic YToA",
+        "Basic ",
+    ] {
+        assert_eq!(
+            credentials(&[("Authorization", value)]).err(),
+            Some(AuthError::Invalid),
+            "{value}"
+        );
     }
 }

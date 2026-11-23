@@ -9,42 +9,88 @@ const FORK: &str = "06060606060606060606060606060606";
 const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn full() -> [(&'static str, &'static str); 5] {
-    [("Content-Length", "4"), ("Content-Type", "application/octet-stream"),
-     ("Zxs-Operation", OP), ("Zxs-Node", NODE), ("Zxs-Sha256", SHA)]
+    [
+        ("Content-Length", "4"),
+        ("Content-Type", "application/octet-stream"),
+        ("Zxs-Operation", OP),
+        ("Zxs-Node", NODE),
+        ("Zxs-Sha256", SHA),
+    ]
 }
 fn parsed(branch: &str, extra: &[(&str, &str)]) -> Result<Request, Rejected> {
     let mut fields = full().to_vec();
     fields.extend(extra);
-    request("POST", &format!("{ROOT}/{CONT}/branches/{branch}/nodes"), &fields)
+    request(
+        "POST",
+        &format!("{ROOT}/{CONT}/branches/{branch}/nodes"),
+        &fields,
+    )
 }
-fn id(byte: u8) -> Id { Id([byte; 16]) }
+fn id(byte: u8) -> Id {
+    Id([byte; 16])
+}
 fn expected(target: Target) -> Request {
-    Request::SaveNode(SaveNode { container: id(1), operation: id(2), node: id(3),
-        target, length: 4, sha256: [0xaa; 32] })
+    Request::SaveNode(SaveNode {
+        container: id(1),
+        operation: id(2),
+        node: id(3),
+        target,
+        length: 4,
+        sha256: [0xaa; 32],
+    })
 }
 
 #[test]
 fn first_main_is_one_opaque_save_with_exact_name_node_and_operation() {
-    let r = parsed("main", &[("Zxs-Base-Node", "0"), ("Zxs-Initial-Name", "e696b0")]);
-    assert_eq!(r, Ok(expected(Target::FirstMain { name: String::from("新") })));
+    let r = parsed(
+        "main",
+        &[("Zxs-Base-Node", "0"), ("Zxs-Initial-Name", "e696b0")],
+    );
+    assert_eq!(
+        r,
+        Ok(expected(Target::FirstMain {
+            name: String::from("新")
+        }))
+    );
     assert!(parsed("main", &[("Zxs-Base-Node", "0")]).is_err());
     assert!(parsed(FORK, &[("Zxs-Base-Node", "0"), ("Zxs-Initial-Name", "61")]).is_err());
-    assert!(parsed("main", &[("Zxs-Base-Node", "0"), ("Zxs-Initial-Name", "2f")]).is_err());
+    assert!(
+        parsed(
+            "main",
+            &[("Zxs-Base-Node", "0"), ("Zxs-Initial-Name", "2f")]
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn append_current_uses_exact_requested_head_not_generation_or_filename() {
-    assert_eq!(parsed("main", &[("Zxs-Base-Node", OLD)]),
-        Ok(expected(Target::Branch { branch: Branch::Main, expected_head: id(5) })));
-    assert_eq!(parsed(FORK, &[("Zxs-Base-Node", OLD)]),
-        Ok(expected(Target::Branch { branch: Branch::Named(id(6)), expected_head: id(5) })));
+    assert_eq!(
+        parsed("main", &[("Zxs-Base-Node", OLD)]),
+        Ok(expected(Target::Branch {
+            branch: Branch::Main,
+            expected_head: id(5)
+        }))
+    );
+    assert_eq!(
+        parsed(FORK, &[("Zxs-Base-Node", OLD)]),
+        Ok(expected(Target::Branch {
+            branch: Branch::Named(id(6)),
+            expected_head: id(5)
+        }))
+    );
     assert!(parsed("main", &[("Zxs-Base-Generation", "1")]).is_err());
 }
 
 #[test]
 fn historical_main_is_explicitly_a_new_branch_with_the_same_whole_body() {
-    assert_eq!(parsed(FORK, &[("Zxs-Fork-From-Main", OLD)]),
-        Ok(expected(Target::HistoricalMain { new_branch: id(6), original: id(5) })));
+    assert_eq!(
+        parsed(FORK, &[("Zxs-Fork-From-Main", OLD)]),
+        Ok(expected(Target::HistoricalMain {
+            new_branch: id(6),
+            original: id(5)
+        }))
+    );
     assert!(parsed("main", &[("Zxs-Fork-From-Main", OLD)]).is_err());
 }
 
@@ -57,14 +103,17 @@ fn mixed_duplicate_or_partial_save_inputs_do_not_decode() {
         [("Zxs-Base-Node", OLD), ("Content-Length", "4")],
         [("Zxs-Base-Node", OLD), ("Content-Range", "bytes 0-3/8")],
         [("Zxs-Base-Node", OLD), ("Transfer-Encoding", "chunked")],
-    ] { assert!(parsed(FORK, &invalid).is_err()); }
+    ] {
+        assert!(parsed(FORK, &invalid).is_err());
+    }
 }
 
 #[test]
 fn body_is_exactly_one_opaque_extent_not_workspace_archive_or_delta() {
     use std::io::Read as _;
-    let Request::SaveNode(save) = parsed("main", &[("Zxs-Base-Node", OLD)]).unwrap()
-        else { panic!("expected one container save"); };
+    let Request::SaveNode(save) = parsed("main", &[("Zxs-Base-Node", OLD)]).unwrap() else {
+        panic!("expected one container save");
+    };
     let mut parts = &b"\x00\xff\x01\x7ftail"[..];
     let mut body = save.body(&mut parts);
     let mut out = Vec::new();
@@ -82,14 +131,34 @@ fn body_is_exactly_one_opaque_extent_not_workspace_archive_or_delta() {
 #[test]
 fn deletion_is_an_exact_recycle_request_and_never_a_purge_route() {
     let fields = [("Zxs-Operation", OP), ("Zxs-Base-Generation", "11")];
-    assert_eq!(request("DELETE", &format!("{ROOT}/{CONT}"), &fields),
-        Ok(Request::Delete(MetadataMutation { container: id(1), operation: id(2), revision: 11 })));
+    assert_eq!(
+        request("DELETE", &format!("{ROOT}/{CONT}"), &fields),
+        Ok(Request::Delete(MetadataMutation {
+            container: id(1),
+            operation: id(2),
+            revision: 11
+        }))
+    );
     assert!(request("DELETE", &format!("{ROOT}/{CONT}/purge"), &fields).is_err());
-    let invalid = [("Zxs-Operation", OP), ("Zxs-Base-Generation", "11"), ("Content-Length","1")];
+    let invalid = [
+        ("Zxs-Operation", OP),
+        ("Zxs-Base-Generation", "11"),
+        ("Content-Length", "1"),
+    ];
     assert!(request("DELETE", &format!("{ROOT}/{CONT}"), &invalid).is_err());
     // Decoding DELETE never implies the disk transfer or its receipt happened.
-    assert_eq!(request("GET", &format!("{ROOT}/{CONT}/operations/{OP}"), &[]),
-        Ok(Request::Receipt { container: id(1), operation: id(2) }));
-    assert_eq!(request("GET", &format!("{ROOT}/{OTHER}/operations/{OP}"), &[]),
-        Ok(Request::Receipt { container: id(4), operation: id(2) }));
+    assert_eq!(
+        request("GET", &format!("{ROOT}/{CONT}/operations/{OP}"), &[]),
+        Ok(Request::Receipt {
+            container: id(1),
+            operation: id(2)
+        })
+    );
+    assert_eq!(
+        request("GET", &format!("{ROOT}/{OTHER}/operations/{OP}"), &[]),
+        Ok(Request::Receipt {
+            container: id(4),
+            operation: id(2)
+        })
+    );
 }

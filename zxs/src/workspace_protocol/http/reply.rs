@@ -1,6 +1,9 @@
 //! Exact R3 reply DTOs; no filesystem locations or diagnostic internals.
 use super::super::dispatch::{ReceiptLookup, Reply};
-use crate::{container_store as core, headless_http::{Outcome, Problem}};
+use crate::{
+    container_store as core,
+    headless_http::{Outcome, Problem},
+};
 use std::fmt::{self, Write as _};
 
 // A metadata reply is all-or-error, never a silently truncated listing.
@@ -9,9 +12,13 @@ const MAX_REPLY: usize = 1024 * 1024;
 pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
     let mut out = Json(String::new());
     match reply {
-        Reply::Node(bytes) => return Ok(Outcome::Node {
-            length: bytes.node.body.length, sha256: bytes.node.body.sha256, body: Box::new(bytes.file),
-        }),
+        Reply::Node(bytes) => {
+            return Ok(Outcome::Node {
+                length: bytes.node.body.length,
+                sha256: bytes.node.body.sha256,
+                body: Box::new(bytes.file),
+            });
+        }
         Reply::Receipt(ReceiptLookup::NotFound) => return Ok(Outcome::ReceiptAbsent),
         Reply::Receipt(ReceiptLookup::Unknown) => return Err(Problem::Unavailable),
         other => match other {
@@ -19,14 +26,19 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
             Reply::Container(row) => out.container(&row),
             Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
             Reply::BranchNodes(nodes) => out.array(&nodes, |o, (id, node)| o.node(id, node)),
-            Reply::Mutation(receipt) | Reply::Receipt(ReceiptLookup::Mutation(receipt)) =>
-                out.receipt(&receipt),
-            Reply::Recycle { selected, source_cleanup_pending } =>
-                out.recycle(selected, Some(source_cleanup_pending)),
+            Reply::Mutation(receipt) | Reply::Receipt(ReceiptLookup::Mutation(receipt)) => {
+                out.receipt(&receipt)
+            }
+            Reply::Recycle {
+                selected,
+                source_cleanup_pending,
+            } => out.recycle(selected, Some(source_cleanup_pending)),
             Reply::Receipt(ReceiptLookup::Recycle(receipt)) => out.recycle(receipt, None),
-            Reply::Node(_) | Reply::Receipt(ReceiptLookup::NotFound | ReceiptLookup::Unknown) =>
-                return Err(Problem::Unavailable),
-        }.map_err(|_| Problem::Unavailable)?,
+            Reply::Node(_) | Reply::Receipt(ReceiptLookup::NotFound | ReceiptLookup::Unknown) => {
+                return Err(Problem::Unavailable);
+            }
+        }
+        .map_err(|_| Problem::Unavailable)?,
     }
     Ok(Outcome::Json(out.0.into_bytes()))
 }
@@ -35,7 +47,9 @@ struct Json(String);
 
 impl fmt::Write for Json {
     fn write_str(&mut self, value: &str) -> fmt::Result {
-        if value.len() > MAX_REPLY - self.0.len() { return Err(fmt::Error); }
+        if value.len() > MAX_REPLY - self.0.len() {
+            return Err(fmt::Error);
+        }
         self.0.push_str(value);
         Ok(())
     }
@@ -57,18 +71,30 @@ impl Json {
 
     fn hex(&mut self, value: &[u8]) -> fmt::Result {
         self.write_char('"')?;
-        for byte in value { write!(self, "{byte:02x}")?; }
+        for byte in value {
+            write!(self, "{byte:02x}")?;
+        }
         self.write_char('"')
     }
 
     fn id_or_null(&mut self, value: Option<core::Id>) -> fmt::Result {
-        if let Some(id) = value { self.hex(&id) } else { self.write_str("null") }
+        if let Some(id) = value {
+            self.hex(&id)
+        } else {
+            self.write_str("null")
+        }
     }
 
-    fn array<T>(&mut self, values: &[T], mut emit: impl FnMut(&mut Self, &T) -> fmt::Result) -> fmt::Result {
+    fn array<T>(
+        &mut self,
+        values: &[T],
+        mut emit: impl FnMut(&mut Self, &T) -> fmt::Result,
+    ) -> fmt::Result {
         self.write_char('[')?;
         for (offset, value) in values.iter().enumerate() {
-            if offset != 0 { self.write_char(',')?; }
+            if offset != 0 {
+                self.write_char(',')?;
+            }
             emit(self, value)?;
         }
         self.write_char(']')
@@ -83,7 +109,9 @@ impl Json {
         self.array(&row.tags, |o, tag| o.string(tag))?;
         self.write_str(",\"heads\":{")?;
         for (offset, (branch, node)) in row.heads.iter().enumerate() {
-            if offset != 0 { self.write_char(',')?; }
+            if offset != 0 {
+                self.write_char(',')?;
+            }
             self.string(branch)?;
             self.write_char(':')?;
             self.id_or_null(*node)?;
@@ -100,7 +128,11 @@ impl Json {
         self.id_or_null(node.prior)?;
         self.write_str(",\"original_branch\":")?;
         self.string(&node.original_branch)?;
-        write!(self, ",\"sequence\":{},\"length\":{},\"sha256\":", node.sequence, node.body.length)?;
+        write!(
+            self,
+            ",\"sequence\":{},\"length\":{},\"sha256\":",
+            node.sequence, node.body.length
+        )?;
         self.hex(&node.body.sha256)?;
         self.write_char('}')
     }
@@ -116,7 +148,12 @@ impl Json {
         self.mutation(row.mutation)?;
         write!(self, ",\"sequence\":{}", row.sequence)?;
         match &row.change {
-            core::Change::Save { target, node, body, initial_name } => {
+            core::Change::Save {
+                target,
+                node,
+                body,
+                initial_name,
+            } => {
                 self.write_str(",\"kind\":\"save_node\",\"node_id\":")?;
                 self.hex(node)?;
                 write!(self, ",\"length\":{},\"sha256\":", body.length)?;
@@ -130,12 +167,24 @@ impl Json {
                 self.write_str(",\"from_node\":")?;
                 self.hex(from)?;
             }
-            core::Change::Rename { expected_sequence, name } => {
-                write!(self, ",\"kind\":\"rename\",\"expected_sequence\":{expected_sequence},\"name\":")?;
+            core::Change::Rename {
+                expected_sequence,
+                name,
+            } => {
+                write!(
+                    self,
+                    ",\"kind\":\"rename\",\"expected_sequence\":{expected_sequence},\"name\":"
+                )?;
                 self.string(name)?;
             }
-            core::Change::Tags { expected_sequence, tags } => {
-                write!(self, ",\"kind\":\"replace_tags\",\"expected_sequence\":{expected_sequence},\"tags\":")?;
+            core::Change::Tags {
+                expected_sequence,
+                tags,
+            } => {
+                write!(
+                    self,
+                    ",\"kind\":\"replace_tags\",\"expected_sequence\":{expected_sequence},\"tags\":"
+                )?;
                 self.array(tags, |o, tag| o.string(tag))?;
             }
         }
@@ -144,17 +193,35 @@ impl Json {
 
     fn target(&mut self, target: &core::Target, first: Option<&str>) -> fmt::Result {
         match (target, first) {
-            (core::Target::Branch { name, expected_head: None }, Some(initial)) if name == core::MAIN => {
+            (
+                core::Target::Branch {
+                    name,
+                    expected_head: None,
+                },
+                Some(initial),
+            ) if name == core::MAIN => {
                 self.write_str("{\"kind\":\"first_main\",\"name\":")?;
                 self.string(initial)?;
             }
-            (core::Target::Branch { name, expected_head: Some(head) }, None) => {
+            (
+                core::Target::Branch {
+                    name,
+                    expected_head: Some(head),
+                },
+                None,
+            ) => {
                 self.write_str("{\"kind\":\"branch\",\"branch\":")?;
                 self.string(name)?;
                 self.write_str(",\"expected_head\":")?;
                 self.hex(head)?;
             }
-            (core::Target::HistoricalMain { new_branch, original }, None) => {
+            (
+                core::Target::HistoricalMain {
+                    new_branch,
+                    original,
+                },
+                None,
+            ) => {
                 self.write_str("{\"kind\":\"historical_main\",\"branch\":")?;
                 self.string(new_branch)?;
                 self.write_str(",\"from_node\":")?;
@@ -167,8 +234,15 @@ impl Json {
 
     fn recycle(&mut self, row: core::RecycleReceipt, cleanup: Option<bool>) -> fmt::Result {
         self.mutation(row.mutation)?;
-        let pending = match cleanup { Some(true) => "true", Some(false) => "false", None => "null" };
-        write!(self, ",\"kind\":\"recycle\",\"original_sequence\":{},\"source_cleanup_pending\":{pending}}}",
-            row.original_sequence)
+        let pending = match cleanup {
+            Some(true) => "true",
+            Some(false) => "false",
+            None => "null",
+        };
+        write!(
+            self,
+            ",\"kind\":\"recycle\",\"original_sequence\":{},\"source_cleanup_pending\":{pending}}}",
+            row.original_sequence
+        )
     }
 }

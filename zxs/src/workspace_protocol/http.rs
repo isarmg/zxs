@@ -2,8 +2,14 @@
 mod json;
 mod reply;
 
-use super::{Request, dispatch::{self, Body, Failure}};
-use crate::{container_store::Store, headless_http::{Incoming, Outcome, Problem}};
+use super::{
+    Request,
+    dispatch::{self, Body, Failure},
+};
+use crate::{
+    container_store::Store,
+    headless_http::{Incoming, Outcome, Problem},
+};
 
 pub(crate) fn dispatch_request(
     store: &Store,
@@ -29,13 +35,14 @@ fn execute(
             Body::Json { length, decoded }
         }
     };
-    let result = dispatch::dispatch(store, request, body, |_| live()).map_err(|failure| match failure {
-        Failure::Denied => Problem::Denied,
-        Failure::BadBody => Problem::Malformed,
-        Failure::Missing => Problem::Missing,
-        Failure::Conflict => Problem::Conflict,
-        Failure::InvalidBody => Problem::InvalidBody,
-        Failure::Unavailable => Problem::Unavailable,
-    })?;
+    let result =
+        dispatch::dispatch(store, request, body, |_| live()).map_err(|failure| match failure {
+            Failure::Denied => Problem::Denied,
+            Failure::BadBody => Problem::Malformed,
+            Failure::Missing => Problem::Missing,
+            Failure::Conflict => Problem::Conflict,
+            Failure::InvalidBody => Problem::InvalidBody,
+            Failure::Unavailable => Problem::Unavailable,
+        })?;
     reply::project(result)
 }

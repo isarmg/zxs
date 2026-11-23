@@ -9,8 +9,17 @@ use crate::{
     workspace_protocol::Request,
 };
 use std::{
-    ffi::{CStr, c_int}, fs::File, io, mem::MaybeUninit,
-    os::{fd::AsRawFd, unix::{fs::{FileTypeExt, MetadataExt}, net::UnixListener}},
+    ffi::{CStr, c_int},
+    fs::File,
+    io,
+    mem::MaybeUninit,
+    os::{
+        fd::AsRawFd,
+        unix::{
+            fs::{FileTypeExt, MetadataExt},
+            net::UnixListener,
+        },
+    },
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -20,7 +29,10 @@ const LEAF: &CStr = c"headless.sock";
 static STOP: AtomicBool = AtomicBool::new(false);
 
 fn refused() -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, "the original private headless socket was not proved")
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "the original private headless socket was not proved",
+    )
 }
 
 fn protected_parent() -> io::Result<HeldDir> {
@@ -36,8 +48,11 @@ fn protected_parent() -> io::Result<HeldDir> {
     }
     let parent = HeldDir::open(Path::new(RUN))?;
     let info = parent.file.metadata()?;
-    if !info.is_dir() || info.uid() != uid || info.gid() != group
-        || info.mode() & 0o7777 != 0o710 || info.nlink() == 0
+    if !info.is_dir()
+        || info.uid() != uid
+        || info.gid() != group
+        || info.mode() & 0o7777 != 0o710
+        || info.nlink() == 0
     {
         return Err(refused());
     }
@@ -65,23 +80,44 @@ impl PrivateName {
         let pin = parent.pin_record(LEAF)?.ok_or_else(refused)?;
         let info = pin.metadata()?;
         let group = parent.file.metadata()?.gid();
-        if !info.file_type().is_socket() || info.uid() != local_uid() || info.gid() != group
-            || info.dev() != parent.entity.device || info.ino() == 0 || info.nlink() != 1
+        if !info.file_type().is_socket()
+            || info.uid() != local_uid()
+            || info.gid() != group
+            || info.dev() != parent.entity.device
+            || info.ino() == 0
+            || info.nlink() != 1
         {
             return Err(refused());
         }
-        let entity = Entity { device: info.dev(), inode: info.ino() };
-        let name = Self { parent, pin, entity, group };
+        let entity = Entity {
+            device: info.dev(),
+            inode: info.ino(),
+        };
+        let name = Self {
+            parent,
+            pin,
+            entity,
+            group,
+        };
         let finish = (|| {
             name.require_named()?;
             // SAFETY: Linux fchmodat2 with AT_EMPTY_PATH uses the retained
             // O_PATH socket inode, never another name or a symlink target.
             let rc = unsafe {
-                libc::syscall(libc::SYS_fchmodat2, name.pin.as_raw_fd(), c"".as_ptr(),
-                    0o660 as libc::mode_t, libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW)
+                libc::syscall(
+                    libc::SYS_fchmodat2,
+                    name.pin.as_raw_fd(),
+                    c"".as_ptr(),
+                    0o660 as libc::mode_t,
+                    libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
+                )
             };
-            if rc != 0 { return Err(io::Error::last_os_error()); }
-            if name.pin.metadata()?.mode() & 0o7777 != 0o660 { return Err(refused()); }
+            if rc != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if name.pin.metadata()?.mode() & 0o7777 != 0o660 {
+                return Err(refused());
+            }
             name.require_named()
         })();
         if let Err(error) = finish {
@@ -97,8 +133,12 @@ impl PrivateName {
         let named = self.parent.pin_record(LEAF)?.ok_or_else(refused)?;
         for file in [&self.pin, &named] {
             let info = file.metadata()?;
-            if !info.file_type().is_socket() || info.uid() != local_uid() || info.gid() != self.group
-                || info.nlink() != 1 || info.dev() != self.entity.device || info.ino() != self.entity.inode
+            if !info.file_type().is_socket()
+                || info.uid() != local_uid()
+                || info.gid() != self.group
+                || info.nlink() != 1
+                || info.dev() != self.entity.device
+                || info.ino() != self.entity.inode
             {
                 return Err(refused());
             }
@@ -111,7 +151,11 @@ impl PrivateName {
         // SAFETY: only this invocation's retained original inode matched,
         // under the protected parent. Never remove a previous or foreign name.
         let rc = unsafe { libc::unlinkat(self.parent.file.as_raw_fd(), LEAF.as_ptr(), 0) };
-        if rc == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
     }
 }
 
@@ -145,8 +189,12 @@ pub(crate) fn run(
     gateway: Option<LaunchFds>,
     dispatch: impl Fn(&Store, Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome + Sync,
 ) -> io::Result<()> {
-    let gateway = gateway.ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported,
-        "no original approved gateway launch was selected"))?;
+    let gateway = gateway.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "no original approved gateway launch was selected",
+        )
+    })?;
     let selected = SelectedStart::open_default()?;
     let uid = selected.gateway_uid();
     let gateway = GatewayRun::retain(gateway, uid, &selected.service_epoch())?;
@@ -154,10 +202,18 @@ pub(crate) fn run(
     require_gateway()?;
     install_signals()?;
     let bound = selected.bind()?;
-    if STOP.load(Ordering::Acquire) { return Ok(()); }
+    if STOP.load(Ordering::Acquire) {
+        return Ok(());
+    }
     require_gateway()?;
     let (listener, original) = PrivateName::bind()?;
-    let result = serve_selected(&bound, listener, require_gateway, || STOP.load(Ordering::Acquire), dispatch);
+    let result = serve_selected(
+        &bound,
+        listener,
+        require_gateway,
+        || STOP.load(Ordering::Acquire),
+        dispatch,
+    );
     // Bound owns the shared deployment lease through socket drain/retirement.
     let retired = original.retire();
     result.and(retired)

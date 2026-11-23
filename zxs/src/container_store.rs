@@ -4,10 +4,13 @@ mod model;
 mod recycle;
 mod recycle_material;
 
-pub(crate) use model::{Body, Change, Conflict, Id, Mutation, Node, NodeId, Receipt, Target, MAIN};
+use crate::{
+    fs::{HeldDir, local_uid},
+    hash::Sha256,
+};
 use model::State;
+pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 pub(crate) use recycle::RecycleReceipt;
-use crate::{fs::{HeldDir, local_uid}, hash::Sha256};
 use std::{
     collections::BTreeMap,
     ffi::CString,
@@ -17,7 +20,10 @@ use std::{
     os::fd::AsRawFd,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 const TAG_BYTES: usize = 1024 * 1024;
@@ -28,7 +34,10 @@ pub(crate) enum Error {
     WrongLength,
     WrongDigest,
     Uncertain(io::Error),
-    CleanupPending { receipt: RecycleReceipt, error: io::Error },
+    CleanupPending {
+        receipt: RecycleReceipt,
+        error: io::Error,
+    },
 }
 
 // A local diagnostic can name the disposition and error kind without
@@ -49,8 +58,16 @@ impl fmt::Debug for Error {
     }
 }
 
-impl From<io::Error> for Error { fn from(value: io::Error) -> Self { Self::Io(value) } }
-impl From<Conflict> for Error { fn from(value: Conflict) -> Self { Self::Conflict(value) } }
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+impl From<Conflict> for Error {
+    fn from(value: Conflict) -> Self {
+        Self::Conflict(value)
+    }
+}
 
 pub(crate) struct Container {
     pub(crate) id: Id,
@@ -96,15 +113,28 @@ impl Store {
         let data = data_directory.path.clone();
         let staging = staging_directory.path.clone();
         data_root.require_named()?;
-        Ok(Self { data, staging, _owner: owner, next_stage: AtomicU64::new(0),
-            objects: Mutex::new(BTreeMap::new()), names: Mutex::new(()),
-            data_root, data_directory, staging_directory, archive: None })
+        Ok(Self {
+            data,
+            staging,
+            _owner: owner,
+            next_stage: AtomicU64::new(0),
+            objects: Mutex::new(BTreeMap::new()),
+            names: Mutex::new(()),
+            data_root,
+            data_directory,
+            staging_directory,
+            archive: None,
+        })
     }
 
     /// Consume the exact three already-qualified original root FDs. The
     /// caller's deployment lease remains valid during startup; the Store
     /// initializes its own layout under the independent root-owner leases.
-    pub(crate) fn open_with_recycle(system: HeldDir, ordinary: HeldDir, recycled: HeldDir) -> io::Result<Self> {
+    pub(crate) fn open_with_recycle(
+        system: HeldDir,
+        ordinary: HeldDir,
+        recycled: HeldDir,
+    ) -> io::Result<Self> {
         recycle::Recycle::require_roles(&system, &recycled, &ordinary)?;
         let mut store = Self::open_ordinary(ordinary)?;
         store.archive = Some(recycle::Recycle::open(system, recycled, &store.data_root)?);
@@ -118,12 +148,19 @@ impl Store {
         self.staging_directory.require_named()
     }
     fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, PathBuf)>> {
-        self.archive.as_ref().map_or(Ok(None), |archive| archive.selected(id))
+        self.archive
+            .as_ref()
+            .map_or(Ok(None), |archive| archive.selected(id))
     }
 
     fn object(&self, id: Id) -> io::Result<Arc<Mutex<Option<State>>>> {
-        if id == [0; 16] { return Err(invalid("zero container identity")); }
-        let mut objects = self.objects.lock().map_err(|_| invalid("container catalogue unavailable"))?;
+        if id == [0; 16] {
+            return Err(invalid("zero container identity"));
+        }
+        let mut objects = self
+            .objects
+            .lock()
+            .map_err(|_| invalid("container catalogue unavailable"))?;
         Ok(objects.entry(id).or_default().clone())
     }
     fn load<'a>(&self, id: Id, memory: &'a mut Option<State>) -> io::Result<&'a mut State> {
@@ -133,7 +170,9 @@ impl Store {
             self.staging_directory.file.sync_all()?;
             *memory = Some(read_state(&self.data.join(hex(id)), id)?);
         }
-        memory.as_mut().ok_or_else(|| invalid("container state unavailable"))
+        memory
+            .as_mut()
+            .ok_or_else(|| invalid("container state unavailable"))
     }
     fn stage(&self) -> io::Result<Stage> {
         self.data_held()?;
@@ -153,9 +192,16 @@ impl Store {
 
     /// One data call validates and durably selects one complete node.
     /// Its body reader must end at this request. No payload parsing or second copy.
-    pub(crate) fn save(&self, mutation: Mutation, target: Target, node: NodeId, body: Body,
-        initial_name: Option<String>, mut input: impl Read,
-        authorize: impl FnOnce() -> io::Result<()>) -> Result<Receipt, Error> {
+    pub(crate) fn save(
+        &self,
+        mutation: Mutation,
+        target: Target,
+        node: NodeId,
+        body: Body,
+        initial_name: Option<String>,
+        mut input: impl Read,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> Result<Receipt, Error> {
         let stage = self.stage()?;
         {
             let mut file = create_file(&stage.path.join("payload"))?;
@@ -166,31 +212,59 @@ impl Store {
                 let take = usize::try_from(left.min(block.len() as u64))
                     .map_err(|_| invalid("invalid node intake window"))?;
                 let n = read(&mut input, &mut block[..take])?;
-                if n == 0 { return Err(Error::WrongLength); }
-                digest.update(&block[..n])?; file.write_all(&block[..n])?;
+                if n == 0 {
+                    return Err(Error::WrongLength);
+                }
+                digest.update(&block[..n])?;
+                file.write_all(&block[..n])?;
                 left -= n as u64;
             }
-            if read(&mut input, &mut block[..1])? != 0 { return Err(Error::WrongLength); }
-            if digest.finish() != body.sha256 { return Err(Error::WrongDigest); }
+            if read(&mut input, &mut block[..1])? != 0 {
+                return Err(Error::WrongLength);
+            }
+            if digest.finish() != body.sha256 {
+                return Err(Error::WrongDigest);
+            }
             file.sync_all()?;
         }
-        self.publish(mutation, Change::Save { target, node, body, initial_name }, stage, authorize)
+        self.publish(
+            mutation,
+            Change::Save {
+                target,
+                node,
+                body,
+                initial_name,
+            },
+            stage,
+            authorize,
+        )
     }
 
-    pub(crate) fn change(&self, mutation: Mutation, change: Change,
-        authorize: impl FnOnce() -> io::Result<()>) -> Result<Receipt, Error> {
+    pub(crate) fn change(
+        &self,
+        mutation: Mutation,
+        change: Change,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> Result<Receipt, Error> {
         if matches!(change, Change::Save { .. }) {
             return Err(invalid("a node must carry the original complete body").into());
         }
         self.publish(mutation, change, self.stage()?, authorize)
     }
 
-    fn publish(&self, mutation: Mutation, change: Change, stage: Stage,
-        authorize: impl FnOnce() -> io::Result<()>) -> Result<Receipt, Error> {
+    fn publish(
+        &self,
+        mutation: Mutation,
+        change: Change,
+        stage: Stage,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> Result<Receipt, Error> {
         let id = mutation.container;
         self.data_held()?;
         let object = self.object(id)?;
-        let mut memory = object.lock().map_err(|_| invalid("container selection unavailable"))?;
+        let mut memory = object
+            .lock()
+            .map_err(|_| invalid("container selection unavailable"))?;
         if self.recycled(id)?.is_some() {
             authorize()?;
             return Err(Conflict::MissingContainer.into());
@@ -198,11 +272,19 @@ impl Store {
         let state = self.load(id, &mut memory)?;
         match state.replay(mutation, &change) {
             Ok(None) => {}
-            result => { authorize()?; return result?.cloned().ok_or_else(|| invalid("missing replay").into()); }
+            result => {
+                authorize()?;
+                return result?
+                    .cloned()
+                    .ok_or_else(|| invalid("missing replay").into());
+            }
         }
         let receipt = match state.next(mutation, change) {
             Ok(receipt) => receipt,
-            Err(e) => { authorize()?; return Err(e.into()); }
+            Err(e) => {
+                authorize()?;
+                return Err(e.into());
+            }
         };
         write_file(&stage.path.join("receipt"), &codec::encode(&receipt)?)?;
         sync_dir(&stage.path)?;
@@ -212,7 +294,12 @@ impl Store {
             Change::Rename { name, .. } => Some(name.as_str()),
             _ => None,
         };
-        let _namespace = wanted.map(|_| self.names.lock().map_err(|_| invalid("container name selection unavailable")))
+        let _namespace = wanted
+            .map(|_| {
+                self.names
+                    .lock()
+                    .map_err(|_| invalid("container name selection unavailable"))
+            })
             .transpose()?;
         if let Some(name) = wanted {
             if !self.vacant(id, name)? {
@@ -231,7 +318,8 @@ impl Store {
             Err(e) => return Err(e.into()),
             Ok(_) => return Err(invalid("container receipt position already exists").into()),
         }
-        authorize()?; self.data_held()?;
+        authorize()?;
+        self.data_held()?;
         fs::rename(&stage.path, destination)?;
         if let Err(e) = sync_dir(&directory).and_then(|()| self.staging_directory.file.sync_all()) {
             *memory = None;
@@ -240,7 +328,9 @@ impl Store {
         if let Err(e) = state.select(receipt.clone()) {
             // A durable rename already selected. The next reader must requalify.
             *memory = None;
-            return Err(Error::Uncertain(io::Error::other(format!("selected object could not update memory: {e:?}"))));
+            return Err(Error::Uncertain(io::Error::other(format!(
+                "selected object could not update memory: {e:?}"
+            ))));
         }
         Ok(receipt)
     }
@@ -250,7 +340,10 @@ impl Store {
             let item = item?;
             let file_name = item.file_name();
             let id = parse_container_id(file_name.as_encoded_bytes())?;
-            if id != except && self.recycled(id)?.is_none() && read_state(&item.path(), id)?.name.as_deref() == Some(name) {
+            if id != except
+                && self.recycled(id)?.is_none()
+                && read_state(&item.path(), id)?.name.as_deref() == Some(name)
+            {
                 return Ok(false);
             }
         }
@@ -259,22 +352,39 @@ impl Store {
 
     pub(crate) fn receipt(&self, mutation: Mutation) -> io::Result<Option<Receipt>> {
         let object = self.object(mutation.container)?;
-        let mut memory = object.lock().map_err(|_| invalid("container selection unavailable"))?;
+        let mut memory = object
+            .lock()
+            .map_err(|_| invalid("container selection unavailable"))?;
         if let Some((_receipt, at)) = self.recycled(mutation.container)? {
-            return Ok(read_state(&at, mutation.container)?.receipts.get(&mutation.request).cloned());
+            return Ok(read_state(&at, mutation.container)?
+                .receipts
+                .get(&mutation.request)
+                .cloned());
         }
         self.data_held()?;
-        Ok(self.load(mutation.container, &mut memory)?.receipts.get(&mutation.request).cloned())
+        Ok(self
+            .load(mutation.container, &mut memory)?
+            .receipts
+            .get(&mutation.request)
+            .cloned())
     }
 
     pub(crate) fn describe(&self, id: Id) -> io::Result<Option<Container>> {
         let object = self.object(id)?;
-        let mut memory = object.lock().map_err(|_| invalid("container selection unavailable"))?;
-        if self.recycled(id)?.is_some() { return Ok(None); }
+        let mut memory = object
+            .lock()
+            .map_err(|_| invalid("container selection unavailable"))?;
+        if self.recycled(id)?.is_some() {
+            return Ok(None);
+        }
         self.data_held()?;
         let state = self.load(id, &mut memory)?;
         Ok(state.name.as_ref().map(|name| Container {
-            id, name: name.clone(), tags: state.tags.clone(), sequence: state.sequence, heads: state.branches.clone(),
+            id,
+            name: name.clone(),
+            tags: state.tags.clone(),
+            sequence: state.sequence,
+            heads: state.branches.clone(),
         }))
     }
     pub(crate) fn list(&self) -> io::Result<Vec<Container>> {
@@ -283,7 +393,9 @@ impl Store {
             let item = item?;
             let name = item.file_name();
             let id = parse_container_id(name.as_encoded_bytes())?;
-            if let Some(current) = self.describe(id)? { items.push(current); }
+            if let Some(current) = self.describe(id)? {
+                items.push(current);
+            }
         }
         items.sort_unstable_by_key(|item| item.id);
         Ok(items)
@@ -291,18 +403,34 @@ impl Store {
 
     pub(crate) fn recycle_receipt(&self, mutation: Mutation) -> io::Result<Option<RecycleReceipt>> {
         let object = self.object(mutation.container)?;
-        let _selection = object.lock().map_err(|_| invalid("container selection unavailable"))?;
-        Ok(self.recycled(mutation.container)?.map(|(r, _)| r).filter(|r| r.mutation == mutation))
+        let _selection = object
+            .lock()
+            .map_err(|_| invalid("container selection unavailable"))?;
+        Ok(self
+            .recycled(mutation.container)?
+            .map(|(r, _)| r)
+            .filter(|r| r.mutation == mutation))
     }
 
     /// Recycle an entire selected container, not a branch or a node.
-    pub(crate) fn move_to_recycle(&self, mutation: Mutation, expected_sequence: u64,
-        authorize: impl Fn() -> io::Result<()>) -> Result<RecycleReceipt, Error> {
-        let archive = self.archive.as_ref().ok_or_else(|| invalid("no qualified recycle storage"))?;
-        let ordinary=&self.data_root;
-        if mutation.request == [0; 16] { return Err(invalid("zero recycle request identity").into()); }
+    pub(crate) fn move_to_recycle(
+        &self,
+        mutation: Mutation,
+        expected_sequence: u64,
+        authorize: impl Fn() -> io::Result<()>,
+    ) -> Result<RecycleReceipt, Error> {
+        let archive = self
+            .archive
+            .as_ref()
+            .ok_or_else(|| invalid("no qualified recycle storage"))?;
+        let ordinary = &self.data_root;
+        if mutation.request == [0; 16] {
+            return Err(invalid("zero recycle request identity").into());
+        }
         let object = self.object(mutation.container)?;
-        let mut memory = object.lock().map_err(|_| invalid("container selection unavailable"))?;
+        let mut memory = object
+            .lock()
+            .map_err(|_| invalid("container selection unavailable"))?;
         let original = self.data.join(hex(mutation.container));
         authorize()?;
         if let Some((done, at)) = archive.selected(mutation.container)? {
@@ -315,28 +443,47 @@ impl Store {
                 let known = read_state(&at, mutation.container)?;
                 archive.retire(done, ordinary, &original, &known)
             }) {
-                return Err(Error::CleanupPending { receipt: done, error });
+                return Err(Error::CleanupPending {
+                    receipt: done,
+                    error,
+                });
             }
             return Ok(done);
         }
         self.data_held()?;
         let state = self.load(mutation.container, &mut memory)?;
-        if state.name.is_none() { return Err(Conflict::MissingContainer.into()); }
-        if state.receipts.contains_key(&mutation.request) { return Err(Conflict::RequestReused.into()); }
-        if state.sequence != expected_sequence { return Err(Conflict::SequenceChanged(state.sequence).into()); }
+        if state.name.is_none() {
+            return Err(Conflict::MissingContainer.into());
+        }
+        if state.receipts.contains_key(&mutation.request) {
+            return Err(Conflict::RequestReused.into());
+        }
+        if state.sequence != expected_sequence {
+            return Err(Conflict::SequenceChanged(state.sequence).into());
+        }
         let incoming = self.stage_at(archive.staging()?)?;
         let done = archive.prepare(mutation, ordinary, &original, state, &incoming, || {
-            authorize()?; self.data_held()
+            authorize()?;
+            self.data_held()
         })?;
         let selector = self.stage_at(archive.moves()?)?;
         // Only one small SYSTEM rename switches logical visibility. The
         // ordinary namespace guard contains no streaming/hash work.
         {
-            let _names = self.names.lock().map_err(|_| invalid("container name selection unavailable"))?;
-            archive.choose(done, &selector, || { authorize()?; self.data_held() })?;
+            let _names = self
+                .names
+                .lock()
+                .map_err(|_| invalid("container name selection unavailable"))?;
+            archive.choose(done, &selector, || {
+                authorize()?;
+                self.data_held()
+            })?;
         }
         if let Err(error) = archive.retire(done, ordinary, &original, state) {
-            return Err(Error::CleanupPending { receipt: done, error });
+            return Err(Error::CleanupPending {
+                receipt: done,
+                error,
+            });
         }
         *memory = None;
         Ok(done)
@@ -344,19 +491,34 @@ impl Store {
 
     /// Immutable ancestry of the selected branch, newest node first.
     /// This does not read any payload bytes.
-    pub(crate) fn branch_nodes(&self, id: Id, branch: &str) -> io::Result<Option<Vec<(NodeId, Node)>>> {
+    pub(crate) fn branch_nodes(
+        &self,
+        id: Id,
+        branch: &str,
+    ) -> io::Result<Option<Vec<(NodeId, Node)>>> {
         let object = self.object(id)?;
-        let mut memory = object.lock().map_err(|_| invalid("container selection unavailable"))?;
-        if self.recycled(id)?.is_some() { return Ok(None); }
+        let mut memory = object
+            .lock()
+            .map_err(|_| invalid("container selection unavailable"))?;
+        if self.recycled(id)?.is_some() {
+            return Ok(None);
+        }
         self.data_held()?;
         let state = self.load(id, &mut memory)?;
-        let Some(mut next) = state.branches.get(branch).copied() else { return Ok(None); };
+        let Some(mut next) = state.branches.get(branch).copied() else {
+            return Ok(None);
+        };
         let mut out = Vec::new();
         let mut upper = None;
         while let Some(id) = next {
-            let exact = state.nodes.get(&id).ok_or_else(|| invalid("branch refers to a missing node"))?;
+            let exact = state
+                .nodes
+                .get(&id)
+                .ok_or_else(|| invalid("branch refers to a missing node"))?;
             if upper.is_some_and(|latest| exact.sequence >= latest) {
-                return Err(invalid("branch ancestry did not advance toward the original node"));
+                return Err(invalid(
+                    "branch ancestry did not advance toward the original node",
+                ));
             }
             upper = Some(exact.sequence);
             next = exact.prior;
@@ -367,16 +529,27 @@ impl Store {
 
     pub(crate) fn node(&self, id: Id, node: NodeId) -> io::Result<Option<NodeBytes>> {
         let object = self.object(id)?;
-        let mut memory = object.lock().map_err(|_| invalid("container selection unavailable"))?;
-        if self.recycled(id)?.is_some() { return Ok(None); }
+        let mut memory = object
+            .lock()
+            .map_err(|_| invalid("container selection unavailable"))?;
+        if self.recycled(id)?.is_some() {
+            return Ok(None);
+        }
         self.data_held()?;
         let state = self.load(id, &mut memory)?;
-        let Some(node) = state.nodes.get(&node).cloned() else { return Ok(None); };
-        let entry = self.data.join(hex(id)).join(entry_leaf(node.sequence, node.request));
+        let Some(node) = state.nodes.get(&node).cloned() else {
+            return Ok(None);
+        };
+        let entry = self
+            .data
+            .join(hex(id))
+            .join(entry_leaf(node.sequence, node.request));
         private_dir(&entry)?;
         let file = open_file(&entry.join("payload"))?;
         if file.metadata()?.len() != node.body.length {
-            return Err(invalid("complete node length differs from its durable receipt"));
+            return Err(invalid(
+                "complete node length differs from its durable receipt",
+            ));
         }
         Ok(Some(NodeBytes { file, node }))
     }
@@ -397,22 +570,45 @@ fn read_state(path: &Path, id: Id) -> io::Result<State> {
     for item in fs::read_dir(path)? {
         let item = item?;
         let name = item.file_name();
-        let name = name.to_str().ok_or_else(|| invalid("invalid container receipt path"))?;
+        let name = name
+            .to_str()
+            .ok_or_else(|| invalid("invalid container receipt path"))?;
         let (sequence, request) = generation_name(name)?;
-        entries.push((sequence, parse_container_id(request.as_bytes())?, item.path()));
+        entries.push((
+            sequence,
+            parse_container_id(request.as_bytes())?,
+            item.path(),
+        ));
     }
     entries.sort_unstable_by_key(|entry| entry.0);
     let mut state = State::default();
     for (sequence, request, entry) in entries {
         private_dir(&entry)?;
         let mut bytes = Vec::new();
-        open_file(&entry.join("receipt"))?.take((codec::MAX_RECEIPT + 1) as u64).read_to_end(&mut bytes)?;
-        if bytes.len() > codec::MAX_RECEIPT { return Err(invalid("stored receipt exceeds metadata capacity")); }
-        let receipt = codec::decode(&bytes)?;
-        if receipt.mutation != (Mutation { container: id, request }) || receipt.sequence != sequence {
-            return Err(invalid("selected receipt differs from its recorded position"));
+        open_file(&entry.join("receipt"))?
+            .take((codec::MAX_RECEIPT + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > codec::MAX_RECEIPT {
+            return Err(invalid("stored receipt exceeds metadata capacity"));
         }
-        state.select(receipt).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("invalid selected history: {e:?}")))?;
+        let receipt = codec::decode(&bytes)?;
+        if receipt.mutation
+            != (Mutation {
+                container: id,
+                request,
+            })
+            || receipt.sequence != sequence
+        {
+            return Err(invalid(
+                "selected receipt differs from its recorded position",
+            ));
+        }
+        state.select(receipt).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid selected history: {e:?}"),
+            )
+        })?;
     }
     Ok(state)
 }
@@ -425,9 +621,13 @@ fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -
     let require_base = || {
         root.require_named()?;
         staging.require_named()?;
-        let named = root.opaque_pin(c"owner")?.ok_or_else(|| invalid("intake owner lease lost its name"))?;
+        let named = root
+            .opaque_pin(c"owner")?
+            .ok_or_else(|| invalid("intake owner lease lost its name"))?;
         let seen = named.file.metadata()?;
-        if (owned.dev(), owned.ino()) != (seen.dev(), seen.ino()) || !root.shares_file_mount(owner)? {
+        if (owned.dev(), owned.ino()) != (seen.dev(), seen.ino())
+            || !root.shares_file_mount(owner)?
+        {
             return Err(invalid("intake owner lease was replaced"));
         }
         Ok(())
@@ -445,8 +645,14 @@ fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -
         }
         let leaf = CString::new(bytes).map_err(|_| invalid("invalid stage name"))?;
         let candidate = || {
-            let Some(stage) = staging.child_directory(&leaf)? else { return Ok::<_, io::Error>(None); };
-            if stage.names()?.iter().any(|name| !matches!(name.as_slice(), b"payload" | b"receipt")) {
+            let Some(stage) = staging.child_directory(&leaf)? else {
+                return Ok::<_, io::Error>(None);
+            };
+            if stage
+                .names()?
+                .iter()
+                .any(|name| !matches!(name.as_slice(), b"payload" | b"receipt"))
+            {
                 return Ok(None);
             }
             // Prove the whole flat shape before unlinking either member.
@@ -459,7 +665,9 @@ fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -
         // mounts and non-regular members) are left alone. A displaced base
         // or original owner record always invalidates the entire cleanup.
         require_base()?;
-        let Ok(Some((stage, payload, receipt))) = qualified else { continue };
+        let Ok(Some((stage, payload, receipt))) = qualified else {
+            continue;
+        };
         if let Some(pin) = payload.as_ref() {
             stage.unlink_opaque_original(c"payload", pin)?;
         }
@@ -475,7 +683,9 @@ fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -
     require_base()
 }
 
-struct Stage { path: PathBuf }
+struct Stage {
+    path: PathBuf,
+}
 impl Drop for Stage {
     fn drop(&mut self) {
         // Own only the staging directory created by this invocation.
@@ -484,7 +694,9 @@ impl Drop for Stage {
     }
 }
 
-fn invalid(message: &'static str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, message) }
+fn invalid(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
 fn read(input: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     loop {
         match input.read(buffer) {
@@ -496,29 +708,47 @@ fn read(input: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
 fn private_dir(path: &Path) -> io::Result<()> {
     let m = fs::symlink_metadata(path)?;
     if !m.is_dir() || m.uid() != local_uid() || m.mode() & 0o077 != 0 {
-        return Err(invalid("container storage directory must be private and service-owned"));
+        return Err(invalid(
+            "container storage directory must be private and service-owned",
+        ));
     }
     Ok(())
 }
 fn private_file(path: &Path, file: &File) -> io::Result<()> {
     let named = fs::symlink_metadata(path)?;
     let opened = file.metadata()?;
-    if !named.is_file() || named.dev() != opened.dev() || named.ino() != opened.ino()
-        || opened.uid() != local_uid() || opened.mode() & 0o077 != 0 || opened.nlink() != 1 {
-        return Err(invalid("container storage or metadata file is not its original private file"));
+    if !named.is_file()
+        || named.dev() != opened.dev()
+        || named.ino() != opened.ino()
+        || opened.uid() != local_uid()
+        || opened.mode() & 0o077 != 0
+        || opened.nlink() != 1
+    {
+        return Err(invalid(
+            "container storage or metadata file is not its original private file",
+        ));
     }
     Ok(())
 }
 fn ensure_dir(path: &Path) -> io::Result<bool> {
     match DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => { private_dir(path)?; Ok(false) }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            private_dir(path)?;
+            Ok(false)
+        }
         Err(e) => Err(e),
     }
 }
-fn sync_dir(path: &Path) -> io::Result<()> { File::open(path)?.sync_all() }
+fn sync_dir(path: &Path) -> io::Result<()> {
+    File::open(path)?.sync_all()
+}
 fn create_file(path: &Path) -> io::Result<File> {
-    OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
 }
 fn open_file(path: &Path) -> io::Result<File> {
     let file = File::open(path)?;
@@ -541,7 +771,9 @@ fn hex(id: [u8; 16]) -> String {
     out
 }
 fn parse_container_id(name: &[u8]) -> io::Result<Id> {
-    if name.len() != 32 { return Err(invalid("invalid container directory identifier")); }
+    if name.len() != 32 {
+        return Err(invalid("invalid container directory identifier"));
+    }
     let digit = |b| match b {
         b'0'..=b'9' => Ok(b - b'0'),
         b'a'..=b'f' => Ok(b - b'a' + 10),
@@ -551,24 +783,41 @@ fn parse_container_id(name: &[u8]) -> io::Result<Id> {
     for (byte, pair) in id.iter_mut().zip(name.chunks_exact(2)) {
         *byte = (digit(pair[0])? << 4) | digit(pair[1])?;
     }
-    if id == [0; 16] { return Err(invalid("invalid zero container directory identifier")); }
+    if id == [0; 16] {
+        return Err(invalid("invalid zero container directory identifier"));
+    }
     Ok(id)
 }
 fn generation_name(leaf: &str) -> io::Result<(u64, &str)> {
-    let (generation, request) = leaf.split_once('-').ok_or_else(|| invalid("invalid selected container entry"))?;
+    let (generation, request) = leaf
+        .split_once('-')
+        .ok_or_else(|| invalid("invalid selected container entry"))?;
     let lower_hex = |bytes: &[u8]| bytes.iter().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-    if generation.len() != 16 || request.len() != 32 || !lower_hex(generation.as_bytes()) || !lower_hex(request.as_bytes()) {
+    if generation.len() != 16
+        || request.len() != 32
+        || !lower_hex(generation.as_bytes())
+        || !lower_hex(request.as_bytes())
+    {
         return Err(invalid("invalid selected container entry"));
     }
-    let generation = u64::from_str_radix(generation, 16).map_err(|_| invalid("invalid selected generation"))?;
-    if generation == 0 { return Err(invalid("invalid selected generation")); }
+    let generation =
+        u64::from_str_radix(generation, 16).map_err(|_| invalid("invalid selected generation"))?;
+    if generation == 0 {
+        return Err(invalid("invalid selected generation"));
+    }
     Ok((generation, request))
 }
 fn encode_tags(tags: &[String]) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     for tag in tags {
-        if tag.is_empty() || tag.contains('\0') || 4 + tag.len() > TAG_BYTES.saturating_sub(bytes.len()) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid tag or excessive tag metadata"));
+        if tag.is_empty()
+            || tag.contains('\0')
+            || 4 + tag.len() > TAG_BYTES.saturating_sub(bytes.len())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid tag or excessive tag metadata",
+            ));
         }
         bytes.extend_from_slice(&(tag.len() as u32).to_be_bytes());
         bytes.extend_from_slice(tag.as_bytes());
@@ -578,11 +827,21 @@ fn encode_tags(tags: &[String]) -> io::Result<Vec<u8>> {
 fn decode_tags(mut bytes: &[u8]) -> io::Result<Vec<String>> {
     let mut tags = Vec::new();
     while !bytes.is_empty() {
-        let (length, suffix) = bytes.split_at_checked(4).ok_or_else(|| invalid("truncated tag length"))?;
-        let length = u32::from_be_bytes(length.try_into().map_err(|_| invalid("truncated tag length"))?) as usize;
-        let (text, rest) = suffix.split_at_checked(length).ok_or_else(|| invalid("truncated tag"))?;
+        let (length, suffix) = bytes
+            .split_at_checked(4)
+            .ok_or_else(|| invalid("truncated tag length"))?;
+        let length = u32::from_be_bytes(
+            length
+                .try_into()
+                .map_err(|_| invalid("truncated tag length"))?,
+        ) as usize;
+        let (text, rest) = suffix
+            .split_at_checked(length)
+            .ok_or_else(|| invalid("truncated tag"))?;
         let tag = std::str::from_utf8(text).map_err(|_| invalid("invalid tag encoding"))?;
-        if tag.is_empty() || tag.contains('\0') { return Err(invalid("invalid stored tag")); }
+        if tag.is_empty() || tag.contains('\0') {
+            return Err(invalid("invalid stored tag"));
+        }
         tags.push(tag.to_owned());
         bytes = rest;
     }
