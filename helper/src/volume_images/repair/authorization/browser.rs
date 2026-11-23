@@ -2,7 +2,8 @@
 //! terminal challenge. The child receives neither source, destination, checker
 //! nor terminal. Nothing here can act on a disk or grant the parent authority.
 use crate::local_worker::{Worker, sealed, sealed_owner, transport::{self,Channel,Kind}};
-use crate::{disk_web,volume_images::repair::{RepairFormat, authorization::{TAG, SHAPE, no, raw_scope}},pinned::helper_elf::ForegroundElf,maintenance,foreground::{PublicConfirmation,only_inherited_descriptors},
+use super::{RepairFormat, TAG, SHAPE, no, raw_scope};
+use crate::{disk_web,pinned::helper_elf::ForegroundElf,maintenance,foreground::{PublicConfirmation,only_inherited_descriptors},
     fresh_random::operation as random};
 use helper_linux_evidence::{diagnostic_process::{OfflineSql,account_sql_descriptors},prompt_signals::PromptSignals};
 use rustix::{net::{UCred,sockopt},process::{DumpableBehavior,Pid,Signal,dumpable_behavior,getgid,getppid,getuid,
@@ -12,7 +13,7 @@ use std::{io,net::{Ipv4Addr,TcpListener},time::{Duration,Instant}};
 
 const WINDOW:Duration=Duration::from_mins(8);
 
-pub(in crate::sqlite_install::pair) fn offer(tty:&PublicConfirmation,format:RepairFormat,bytes:u64,require:impl Fn()->io::Result<()>)->io::Result<()>{
+pub(super) fn offer(tty:&PublicConfirmation,format:RepairFormat,bytes:u64,require:impl Fn()->io::Result<()>)->io::Result<()>{
     tty.check()?;require()?;
     let (uid,gid)=(getuid(),getgid());
     maintenance::diagnostic_worker(uid.as_raw(),gid.as_raw())?;
@@ -42,7 +43,7 @@ pub(in crate::sqlite_install::pair) fn offer(tty:&PublicConfirmation,format:Repa
     helper.require()?;require()
 }
 
-pub(crate) fn worker()->io::Result<()>{
+pub(super) fn worker()->io::Result<()>{
     let [fd,meta]=account_sql_descriptors()?;
     only_inherited_descriptors(&[3,4])?;
     let (uid,gid)=(getuid(),getgid());

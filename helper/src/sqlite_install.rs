@@ -17,8 +17,6 @@ mod discovery;
 pub(crate) use discovery::Discovery;
 pub(crate) use pair::{RetirementCheck,ImportCheck,Setup,check_deployment,exec_layout_sql_child as layout_sql_worker,exec_first_browser,rust_account_worker,rust_vault_worker,SharedAccountReset};
 
-pub(crate) use pair::{confirm_copy_repair,exec_copy_repair_browser};
-
 const DATABASE:&str="SYSTEM.sqlite3";
 const MARKER:&[u8]=b".zxs-new-ffffffffffffffffffffffffffffffff-0";
 fn bad(message:&'static str)->std::io::Error{std::io::Error::new(std::io::ErrorKind::InvalidData,message)}
