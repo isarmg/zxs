@@ -133,7 +133,7 @@ pub(crate) fn dispatch<R: Read>(
         }
         (Request::Container(id), Body::Empty) => Ok(Reply::Container(describe(store, id)?)),
         (detail @ Request::ContainerDetail { .. }, Body::Empty) => {
-            read_detail(store, detail, &allowed)
+            read_detail(store, &detail, &allowed)
         }
         (Request::Tags(id), Body::Empty) => Ok(Reply::Tags(describe(store, id)?.tags)),
         (Request::NodeData { container, node }, Body::Empty) => Ok(Reply::Node(
@@ -210,14 +210,14 @@ pub(crate) fn dispatch<R: Read>(
 
 fn read_detail(
     store: &core::Store,
-    request: Request,
+    request: &Request,
     allowed: &impl Fn(Access) -> bool,
 ) -> Result<Reply, Failure> {
     let Request::ContainerDetail {
         container,
         sequence,
         after,
-    } = request
+    } = *request
     else {
         return Err(Failure::BadBody);
     };
