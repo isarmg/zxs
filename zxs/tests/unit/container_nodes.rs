@@ -323,6 +323,7 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     for (node, payload) in [(10, b"one"), (11, b"two")] {
         let exact = &state.nodes[&id(node)];
         let path = moved
+            .path
             .join(entry_leaf(exact.sequence, exact.request))
             .join("payload");
         assert_eq!(fs::read(path).unwrap(), payload);

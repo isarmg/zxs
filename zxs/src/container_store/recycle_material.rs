@@ -1,7 +1,7 @@
 //! Whole-container F→R staging. No visibility switch or source deletion here.
 use super::{
-    Change, Error, Id, Receipt, codec, create_file, ensure_dir, entry_leaf, invalid, private_dir,
-    read, sync_dir, write_file,
+    Change, Error, Id, Receipt, codec, create_file, ensure_dir, entry_leaf, held_entry, invalid,
+    private_dir, read, sync_dir, write_file,
 };
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
@@ -9,7 +9,6 @@ use crate::{
 };
 use std::{
     collections::BTreeMap,
-    ffi::CString,
     fs::File,
     io::{self, Read, Write},
     os::unix::fs::MetadataExt,
@@ -17,17 +16,6 @@ use std::{
 };
 
 pub(super) const PROOF_ROW: usize = 16 + OPAQUE_STAMP_BYTES * 2;
-
-pub(super) fn entry(original: &HeldDir, leaf: &str) -> io::Result<HeldDir> {
-    let native = CString::new(leaf).map_err(|_| invalid("invalid original receipt position"))?;
-    let from = original
-        .child_directory(&native)?
-        .ok_or_else(|| invalid("selected original node directory is absent"))?;
-    if !original.same_mount(&from)? {
-        return Err(invalid("opaque node directory crosses its enrolled mount"));
-    }
-    Ok(from)
-}
 
 /// Caller keeps exact original container lock and both enrolled root
 /// capabilities. This walks only that container's explicit receipts, not a
@@ -51,7 +39,7 @@ pub(super) fn copy(
     for receipt in selected.values() {
         live()?;
         let leaf = entry_leaf(receipt.sequence, receipt.mutation.request);
-        let from = entry(original, &leaf)?;
+        let from = held_entry(original, &leaf)?;
         let to = candidate.join(&leaf);
         let pinned_receipt = from
             .opaque_pin(c"receipt")?

@@ -1,5 +1,5 @@
 //! An original data root and its owner lease, selected data and intake.
-use super::{DataRoot, Id, State, hex, invalid, read_selected_entries};
+use super::{DataRoot, Id, State, hex, invalid, read_state};
 use crate::fs::HeldDir;
 use std::{
     ffi::CString,
@@ -74,12 +74,7 @@ impl DataVolume {
         let Some(container) = self.held_container(id)? else {
             return Ok(State::default());
         };
-        // A receipt rename can be visible before its directory sync succeeds.
-        container.file.sync_all()?;
-        container.require_named()?;
-        let state = read_selected_entries(&container.path, id)?;
-        container.require_named()?;
-        Ok(state)
+        read_state(&container, id)
     }
 
     pub(super) fn require_named(&self) -> io::Result<()> {

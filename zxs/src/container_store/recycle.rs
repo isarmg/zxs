@@ -2,7 +2,7 @@
 //! A small SYSTEM receipt selects exactly one qualified R installation.
 use super::{
     Change, DataRoot, Error, Id, Mutation, Stage, State, create_file, ensure_dir, entry_leaf, hex,
-    invalid, open_file, private_dir, recycle_material, sync_dir, volume::DataVolume, write_file,
+    invalid, recycle_material, sync_dir, volume::DataVolume, write_file,
 };
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
@@ -10,7 +10,7 @@ use crate::{
 };
 use std::{
     collections::BTreeSet,
-    ffi::CString,
+    ffi::{CStr, CString},
     fs::{self, File},
     io::{self, Read},
     os::unix::fs::MetadataExt,
@@ -56,13 +56,17 @@ impl RecycleReceipt {
         value[76..108].copy_from_slice(&self.source_proof);
         value
     }
-    fn read(path: &Path) -> io::Result<Self> {
-        let mut file = open_file(path)?;
-        if file.metadata()?.len() != BYTES as u64 {
+    fn read(parent: &HeldDir, name: &CStr) -> io::Result<Option<Self>> {
+        let Some(original) = parent.opaque_pin(name)? else {
+            parent.require_named()?;
+            return Ok(None);
+        };
+        if original.file.metadata()?.len() != BYTES as u64 {
             return Err(invalid("invalid recycle receipt size"));
         }
         let mut bytes = [0; BYTES];
-        file.read_exact(&mut bytes)?;
+        (&original.file).read_exact(&mut bytes)?;
+        original.require(parent, name)?;
         if &bytes[..4] != b"RC1\0" {
             return Err(invalid("unknown recycle receipt"));
         }
@@ -94,7 +98,7 @@ impl RecycleReceipt {
         {
             return Err(invalid("invalid recycle transaction identity"));
         }
-        Ok(receipt)
+        Ok(Some(receipt))
     }
 }
 
@@ -219,36 +223,37 @@ impl Recycle {
     fn arrived_dir(&self, mutation: Mutation) -> PathBuf {
         // A ready but unselected copy is private to its original operation.
         // A later operation must not adopt or be blocked by that copy.
-        self.arrived.join(format!(
-            "{}-{}",
-            hex(mutation.container),
-            hex(mutation.request)
-        ))
+        self.arrived.join(arrived_leaf(mutation))
     }
-    fn qualify(&self, ready: RecycleReceipt, directory: &Path) -> io::Result<PathBuf> {
+
+    fn held_arrived(&self, mutation: Mutation) -> io::Result<Option<HeldDir>> {
+        let name = CString::new(arrived_leaf(mutation))
+            .map_err(|_| invalid("invalid recycle position"))?;
+        self.arrived_directory.require_named()?;
+        let held = self.arrived_directory.child_directory(&name)?;
+        self.arrived_directory.require_named()?;
+        Ok(held)
+    }
+
+    fn qualify(&self, ready: RecycleReceipt) -> io::Result<HeldDir> {
         self.held()?;
-        private_dir(directory)?;
-        let selected = HeldDir::trusted_storage(directory)?;
+        let selected = self
+            .held_arrived(ready.mutation)?
+            .ok_or_else(|| invalid("selected recycle directory is absent"))?;
         let known = selected.file.metadata()?;
-        if !self.archive_root.same_mount(&selected)? {
-            return Err(invalid("selected recycle data crosses its enrolled mount"));
-        }
         if (known.dev(), known.ino()) != (ready.recycle_device, ready.recycle_inode)
-            || RecycleReceipt::read(&directory.join("ready"))? != ready
+            || RecycleReceipt::read(&selected, c"ready")? != Some(ready)
         {
             return Err(invalid(
                 "recycle location differs from its original ready receipt",
             ));
         }
-        let payload = directory.join("container");
-        let copy = HeldDir::trusted_storage(&payload)?;
-        if !selected.same_mount(&copy)? {
-            return Err(invalid("recycle body crosses its original parent mount"));
-        }
-        Ok(payload)
+        selected
+            .child_directory(c"container")?
+            .ok_or_else(|| invalid("selected recycled container is absent"))
     }
 
-    pub(super) fn selected(&self, id: Id) -> io::Result<Option<(RecycleReceipt, PathBuf)>> {
+    pub(super) fn selected(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
         self.system_held()?;
         let _cut = self
             .receipt_fence
@@ -258,19 +263,14 @@ impl Recycle {
             self.moves_directory.file.sync_all()?;
             self.unsure.store(false, Ordering::Release);
         }
-        match RecycleReceipt::read(&self.moves.join(hex(id))) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-            Ok(ready) => {
-                if ready.mutation.container != id {
-                    return Err(invalid("SYSTEM selected a different recycle container"));
-                }
-                Ok(Some((
-                    ready,
-                    self.qualify(ready, &self.arrived_dir(ready.mutation))?,
-                )))
-            }
+        let name = CString::new(hex(id)).map_err(|_| invalid("invalid recycle selector name"))?;
+        let Some(ready) = RecycleReceipt::read(&self.moves_directory, &name)? else {
+            return Ok(None);
+        };
+        if ready.mutation.container != id {
+            return Err(invalid("SYSTEM selected a different recycle container"));
         }
+        Ok(Some((ready, self.qualify(ready)?)))
     }
 
     pub(super) fn prepare(
@@ -288,24 +288,23 @@ impl Recycle {
             .ok_or_else(|| invalid("original container is absent from its routed DATA"))?;
         let before = held.file.metadata()?;
         let destination = self.arrived_dir(mutation);
-        match RecycleReceipt::read(&destination.join("ready")) {
-            Ok(old) => {
-                if (
-                    old.mutation,
-                    old.original_sequence,
-                    old.source_device,
-                    old.source_inode,
-                ) != (mutation, state.sequence, before.dev(), before.ino())
-                {
-                    return Err(super::Conflict::RequestReused.into());
-                }
-                self.qualify(old, &destination)?;
-                self.arrived_directory.file.sync_all()?;
-                self.staging_directory.file.sync_all()?;
-                return Ok(old);
+        if let Some(arrived) = self.held_arrived(mutation)? {
+            let old = RecycleReceipt::read(&arrived, c"ready")?.ok_or_else(|| {
+                invalid("recycle position is occupied without matching ready proof")
+            })?;
+            if (
+                old.mutation,
+                old.original_sequence,
+                old.source_device,
+                old.source_inode,
+            ) != (mutation, state.sequence, before.dev(), before.ino())
+            {
+                return Err(super::Conflict::RequestReused.into());
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
+            self.qualify(old)?;
+            self.arrived_directory.file.sync_all()?;
+            self.staging_directory.file.sync_all()?;
+            return Ok(old);
         }
         if !matches!(fs::symlink_metadata(&destination),Err(e) if e.kind()==io::ErrorKind::NotFound)
         {
@@ -353,7 +352,7 @@ impl Recycle {
         fs::rename(&candidate.path, &destination)?;
         self.arrived_directory.file.sync_all()?;
         self.staging_directory.file.sync_all()?;
-        self.qualify(proof, &destination)?;
+        self.qualify(proof)?;
         Ok(proof)
     }
 
@@ -367,7 +366,7 @@ impl Recycle {
             .receipt_fence
             .lock()
             .map_err(|_| invalid("recycle receipt cut unavailable"))?;
-        self.qualify(receipt, &self.arrived_dir(receipt.mutation))?;
+        self.qualify(receipt)?;
         let staged = candidate.path.join("selector");
         write_file(&staged, &receipt.encode())?;
         let selected = self.moves.join(hex(receipt.mutation.container));
@@ -503,6 +502,10 @@ impl Recycle {
         parent.unlink_empty_opaque_original(&leaf, &original)
     }
 }
+fn arrived_leaf(mutation: Mutation) -> String {
+    format!("{}-{}", hex(mutation.container), hex(mutation.request))
+}
+
 fn retire_entry(
     original: &HeldDir,
     receipt: &super::Receipt,

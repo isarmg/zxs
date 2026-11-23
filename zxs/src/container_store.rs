@@ -16,10 +16,14 @@ pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
 use std::{
     collections::BTreeMap,
+    ffi::CString,
     fmt,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    },
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -198,7 +202,7 @@ impl Store {
         Err(Conflict::MissingContainer.into())
     }
 
-    fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, PathBuf)>> {
+    fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
         self.archive
             .as_ref()
             .map_or(Ok(None), |archive| archive.selected(id))
@@ -574,7 +578,7 @@ impl Store {
         &self,
         archive: &recycle::Recycle,
         done: RecycleReceipt,
-        at: &Path,
+        at: &HeldDir,
     ) -> io::Result<()> {
         let id = done.mutation.container;
         let token = self
@@ -648,9 +652,12 @@ impl Store {
         let container = volume
             .held_container(id)?
             .ok_or_else(|| invalid("selected DATA container is absent"))?;
-        let entry = container.path.join(entry_leaf(node.sequence, node.request));
-        private_dir(&entry)?;
-        let file = open_file(&entry.join("payload"))?;
+        let position = entry_leaf(node.sequence, node.request);
+        let entry = held_entry(&container, &position)?;
+        let payload = entry
+            .opaque_pin(c"payload")?
+            .ok_or_else(|| invalid("selected node payload is absent"))?;
+        let file = payload.file;
         if file.metadata()?.len() != node.body.length {
             return Err(invalid(
                 "complete node length differs from its durable receipt",
@@ -675,39 +682,46 @@ fn entry_leaf(sequence: u64, request: Id) -> String {
     format!("{sequence:016x}-{}", hex(request))
 }
 
-fn read_state(path: &Path, id: Id) -> io::Result<State> {
-    match private_dir(path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(State::default()),
-        result => result?,
-    }
-    // Required before exposing any receipt/node after a prior process died.
-    sync_dir(path)?;
-    read_selected_entries(path, id)
+fn held_entry(original: &HeldDir, leaf: &str) -> io::Result<HeldDir> {
+    let native = CString::new(leaf).map_err(|_| invalid("invalid original receipt position"))?;
+    original
+        .child_directory(&native)?
+        .ok_or_else(|| invalid("selected original node directory is absent"))
 }
 
-fn read_selected_entries(path: &Path, id: Id) -> io::Result<State> {
+fn read_state(directory: &HeldDir, id: Id) -> io::Result<State> {
+    directory.require_named()?;
+    // Required before exposing any receipt/node after a prior process died.
+    directory.file.sync_all()?;
+    let state = read_selected_entries(directory, id)?;
+    directory.require_named()?;
+    Ok(state)
+}
+
+fn read_selected_entries(directory: &HeldDir, id: Id) -> io::Result<State> {
     let mut entries = Vec::new();
-    for item in fs::read_dir(path)? {
-        let item = item?;
-        let name = item.file_name();
+    // Enumerate the already-held directory without imposing a generation cap.
+    let held_path = format!("/proc/self/fd/{}", directory.file.as_raw_fd());
+    for item in fs::read_dir(held_path)? {
+        let name = item?.file_name();
         let name = name
-            .to_str()
-            .ok_or_else(|| invalid("invalid container receipt path"))?;
-        let (sequence, request) = generation_name(name)?;
-        entries.push((
-            sequence,
-            parse_container_id(request.as_bytes())?,
-            item.path(),
-        ));
+            .into_string()
+            .map_err(|_| invalid("invalid container receipt path"))?;
+        let (sequence, request) = generation_name(&name)?;
+        entries.push((sequence, parse_container_id(request.as_bytes())?, name));
     }
     entries.sort_unstable_by_key(|entry| entry.0);
     let mut state = State::default();
-    for (sequence, request, entry) in entries {
-        private_dir(&entry)?;
+    for (sequence, request, name) in entries {
+        let entry = held_entry(directory, &name)?;
+        let original = entry
+            .opaque_pin(c"receipt")?
+            .ok_or_else(|| invalid("stored receipt is absent"))?;
         let mut bytes = Vec::new();
-        open_file(&entry.join("receipt"))?
+        (&original.file)
             .take((codec::MAX_RECEIPT + 1) as u64)
             .read_to_end(&mut bytes)?;
+        original.require(&entry, c"receipt")?;
         if bytes.len() > codec::MAX_RECEIPT {
             return Err(invalid("stored receipt exceeds metadata capacity"));
         }
@@ -767,22 +781,6 @@ fn private_dir(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-fn private_file(path: &Path, file: &File) -> io::Result<()> {
-    let named = fs::symlink_metadata(path)?;
-    let opened = file.metadata()?;
-    if !named.is_file()
-        || named.dev() != opened.dev()
-        || named.ino() != opened.ino()
-        || opened.uid() != local_uid()
-        || opened.mode() & 0o077 != 0
-        || opened.nlink() != 1
-    {
-        return Err(invalid(
-            "container storage or metadata file is not its original private file",
-        ));
-    }
-    Ok(())
-}
 fn ensure_dir(path: &Path) -> io::Result<bool> {
     match DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => Ok(true),
@@ -802,11 +800,6 @@ fn create_file(path: &Path) -> io::Result<File> {
         .create_new(true)
         .mode(0o600)
         .open(path)
-}
-fn open_file(path: &Path) -> io::Result<File> {
-    let file = File::open(path)?;
-    private_file(path, &file)?;
-    Ok(file)
 }
 fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = create_file(path)?;
