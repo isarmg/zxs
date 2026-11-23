@@ -6,7 +6,6 @@ use std::{
     fs::{self, File},
     io,
     os::{fd::AsRawFd, unix::fs::MetadataExt},
-    path::Path,
 };
 
 pub(super) struct DataVolume {
@@ -41,8 +40,8 @@ impl DataVolume {
         &self.data
     }
 
-    pub(super) fn staging(&self) -> &Path {
-        &self.staging.path
+    pub(super) fn staging(&self) -> &HeldDir {
+        &self.staging
     }
 
     #[cfg(test)]

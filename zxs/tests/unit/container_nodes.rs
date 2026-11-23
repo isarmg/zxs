@@ -69,6 +69,36 @@ fn read_node(store: &Store, node: u8) -> Vec<u8> {
     bytes
 }
 #[test]
+fn rejected_payload_leaves_no_staging_directory() {
+    let (_temp, _dir, store) = fixture();
+    assert!(matches!(
+        store.save(
+            mutation(2),
+            full(main(None), id(10), body(b"right"), Some("x.bin".into())),
+            &b"wrong"[..],
+            || Ok(())
+        ),
+        Err(Error::WrongDigest)
+    ));
+    let staging = store.volumes[0].staging();
+    assert!(fs::read_dir(&staging.path).unwrap().next().is_none());
+    assert_eq!(store.routes.get(id(1)).unwrap(), None);
+}
+
+#[test]
+fn stage_cleanup_leaves_unregistered_member_untouched() {
+    let (_temp, _dir, store) = fixture();
+    let mut stage = store.stage(&store.volumes[0]).unwrap();
+    stage.write(c"payload", b"staged").unwrap();
+    let known = stage.directory.path.join("payload");
+    let unrelated = stage.directory.path.join("other");
+    write_file(&unrelated, b"other").unwrap();
+    drop(stage);
+    assert!(!known.exists());
+    assert_eq!(fs::read(unrelated).unwrap(), b"other");
+}
+
+#[test]
 fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     let (_temp, dir, store) = fixture();
     assert!(matches!(

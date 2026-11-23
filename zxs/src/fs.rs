@@ -266,4 +266,4 @@ impl HeldDir {
 }
 
 mod opaque;
-pub(crate) use opaque::OPAQUE_STAMP_BYTES;
+pub(crate) use opaque::{OPAQUE_STAMP_BYTES, OpaquePin};

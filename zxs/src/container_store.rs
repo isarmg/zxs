@@ -4,6 +4,7 @@ mod model;
 mod recycle;
 mod recycle_material;
 mod routes;
+mod stage;
 mod volume;
 
 use crate::{
@@ -14,6 +15,7 @@ use model::State;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
+use stage::DataStage;
 use std::{
     collections::BTreeMap,
     ffi::CString,
@@ -230,10 +232,24 @@ impl Store {
         }
         Ok(objects.entry(id).or_default().clone())
     }
-    fn stage(&self, volume: &DataVolume) -> io::Result<Stage> {
+    fn stage<'a>(&self, volume: &'a DataVolume) -> io::Result<DataStage<'a>> {
         volume.require_named()?;
-        self.stage_at(volume.staging())
+        let root = volume.staging();
+        loop {
+            let n = self
+                .next_stage
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+                .map_err(|_| invalid("staging name counter exhausted"))?;
+            let name =
+                CString::new(format!("{n:016x}")).map_err(|_| invalid("invalid stage name"))?;
+            match DataStage::new(root, name) {
+                Ok(stage) => return Ok(stage),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e),
+            }
+        }
     }
+
     fn stage_at(&self, root: &Path) -> io::Result<Stage> {
         loop {
             let n = self.next_stage.fetch_add(1, Ordering::Relaxed);
@@ -262,9 +278,9 @@ impl Store {
             return Err(invalid("a node requires a complete save operation").into());
         };
         let volume = self.write_volume(mutation.container, initial_name.is_some(), &authorize)?;
-        let stage = self.stage(volume)?;
+        let mut stage = self.stage(volume)?;
         {
-            let mut file = create_file(&stage.path.join("payload"))?;
+            let file = stage.create(c"payload")?;
             let mut digest = Sha256::new();
             let mut left = body.length;
             let mut block = vec![0; 64 * 1024];
@@ -287,7 +303,7 @@ impl Store {
             }
             file.sync_all()?;
         }
-        self.publish(mutation, change, volume, &stage, authorize)
+        self.publish(mutation, change, volume, &mut stage, authorize)
     }
 
     pub(crate) fn change(
@@ -300,7 +316,13 @@ impl Store {
             return Err(invalid("a node must carry the original complete body").into());
         }
         let volume = self.write_volume(mutation.container, false, &authorize)?;
-        self.publish(mutation, change, volume, &self.stage(volume)?, authorize)
+        self.publish(
+            mutation,
+            change,
+            volume,
+            &mut self.stage(volume)?,
+            authorize,
+        )
     }
 
     fn publish(
@@ -308,7 +330,7 @@ impl Store {
         mutation: Mutation,
         change: Change,
         volume: &DataVolume,
-        stage: &Stage,
+        stage: &mut DataStage<'_>,
         authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
         let id = mutation.container;
@@ -348,8 +370,8 @@ impl Store {
                 return Err(e.into());
             }
         };
-        write_file(&stage.path.join("receipt"), &codec::encode(&receipt)?)?;
-        sync_dir(&stage.path)?;
+        stage.write(c"receipt", &codec::encode(&receipt)?)?;
+        stage.directory.file.sync_all()?;
 
         let wanted = match &receipt.change {
             Change::Save { initial_name, .. } => initial_name.as_deref(),
@@ -387,11 +409,10 @@ impl Store {
         }
         // Also covers a prior failed first publication of this directory.
         volume.sync_data()?;
-        let destination = vacant_receipt_path(&directory, &receipt)?;
+        let destination = receipt_name(&receipt)?;
         volume.require_named()?;
         directory.require_named()?;
-        authorize()?;
-        fs::rename(&stage.path, destination)?;
+        stage.publish_directory(&directory, &destination, authorize)?;
         if let Err(e) = directory
             .file
             .sync_all()
@@ -667,15 +688,9 @@ impl Store {
     }
 }
 
-fn vacant_receipt_path(directory: &HeldDir, receipt: &Receipt) -> io::Result<PathBuf> {
-    let destination = directory
-        .path
-        .join(entry_leaf(receipt.sequence, receipt.mutation.request));
-    match fs::symlink_metadata(&destination) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(destination),
-        Err(e) => Err(e),
-        Ok(_) => Err(invalid("container receipt position already exists")),
-    }
+fn receipt_name(receipt: &Receipt) -> io::Result<CString> {
+    CString::new(entry_leaf(receipt.sequence, receipt.mutation.request))
+        .map_err(|_| invalid("invalid container receipt name"))
 }
 
 fn entry_leaf(sequence: u64, request: Id) -> String {

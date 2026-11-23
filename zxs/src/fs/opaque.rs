@@ -118,6 +118,26 @@ impl HeldDir {
 }
 
 impl HeldDir {
+    /// Exclusively create one ordinary record relative to the held staging FD.
+    pub(crate) fn create_opaque_record(&self, name: &CStr) -> io::Result<File> {
+        self.checked_child_path(name)?;
+        self.require_named()?;
+        // SAFETY: the parent FD and checked component are held for Linux exclusive creation.
+        let fd = unsafe { zxs_create_new_regular(self.file.as_raw_fd(), name.as_ptr()) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: successful creation returned one owning FD.
+        let file = unsafe { File::from_raw_fd(fd) };
+        let named = self
+            .opaque_pin(name)?
+            .ok_or_else(|| invalid("new staging record lost its name"))?;
+        if !self.shares_file_mount(&file)? || named.stamp() != opaque_stamp(&file)? {
+            return Err(invalid("new staging record differs from the original file"));
+        }
+        Ok(file)
+    }
+
     /// Acquire one exact private service lease record below the already
     /// enrolled root. Neither open branch resolves the root by pathname.
     pub(crate) fn opaque_owner(&self, name: &CStr) -> io::Result<File> {

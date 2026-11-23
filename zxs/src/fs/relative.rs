@@ -4,7 +4,7 @@ use super::{
     mounts, os_result, zxs_mkdir_private, zxs_root_names,
 };
 use std::{
-    ffi::{CStr, OsStr},
+    ffi::{CStr, OsStr, c_char, c_int},
     io,
     os::{
         fd::AsRawFd,
@@ -21,7 +21,48 @@ fn leaf(name: &CStr) -> io::Result<&OsStr> {
     Ok(OsStr::from_bytes(b))
 }
 
+unsafe extern "C" {
+    fn renameat(from: c_int, source: *const c_char, to: c_int, destination: *const c_char)
+    -> c_int;
+}
+
 impl HeldDir {
+    /// Publish under the caller's existing private store/namespace lease.
+    /// Absence is checked on the held destination, not enforced by renameat
+    /// against other software using this same service account.
+    pub(crate) fn rename_child_if_absent(
+        &self,
+        source: &CStr,
+        destination: &Self,
+        name: &CStr,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        leaf(source)?;
+        leaf(name)?;
+        self.require_named()?;
+        destination.require_named()?;
+        if !self.same_mount(destination)? {
+            return Err(invalid("staging publication crossed its enrolled mount"));
+        }
+        if destination.pin_record(name)?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staging publication destination already exists",
+            ));
+        }
+        authorize()?;
+        // SAFETY: both FDs are held and both CStr values are checked single
+        // components. The kernel resolves neither parent by an absolute path.
+        os_result(unsafe {
+            renameat(
+                self.file.as_raw_fd(),
+                source.as_ptr(),
+                destination.file.as_raw_fd(),
+                name.as_ptr(),
+            )
+        })
+    }
+
     pub(crate) fn checked_child_path(&self, name: &CStr) -> io::Result<PathBuf> {
         let path = self.path.join(leaf(name)?);
         check_path(&path)?;
