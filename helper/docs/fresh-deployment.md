@@ -1,4 +1,6 @@
-# Private fresh deployment
+# Historical design: private fresh deployment
+
+> No current Helper build ships `issue-fresh` or `web issue-fresh`. The design below records the retired SQLite flow. Current setup is [headless](headless-offline.md); optional standalone image extraction is [separate](embedded-image.md).
 
 A default Helper build rejects both commands below. For authorized fixture
 validation, use the [independent

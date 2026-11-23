@@ -5,6 +5,8 @@ mod wire;
 use super::bad;
 pub(super) use db::InitialDatabase;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::ffi::OsStr;
 use std::{ffi::OsString, io};
 pub(super) use wire::{
     CredentialScope, CryptoPins, DEPLOYMENT_BYTES, MAX_SITE, SitePayload, activation,
@@ -73,41 +75,40 @@ impl ExplicitSubject {
 
 pub(super) mod image;
 use super::{
-    command::{key, name, sha, value},
-    domain::{FreshHome, FreshParent},
-    native_run::{
-        Choice, FirstShares, FreshScope, ResolvedRust, offer_account_web, transact_fresh,
-    },
-    native_sql::rust_vault::{
-        ActiveRustMeta, Desired, RustChange, RustOrder, SetupSpec, shared_login,
-    },
+    command::{key, value},
+    domain::FreshHome,
+    native_run::ResolvedRust,
+    native_sql::rust_vault::{ActiveRustMeta, RustChange},
     rust_enroll::{
-        crypto::Cryptography,
-        manifest::{Authority, Intent, Manifest},
+        manifest::{Authority, Manifest},
         receipt::Observed,
     },
     terminal::PublicConfirmation,
 };
+#[cfg(test)]
+use super::{
+    command::{name, sha},
+    native_run::Choice,
+    native_sql::rust_vault::shared_login,
+};
+use crate::smb_profile;
+#[cfg(test)]
 use crate::{
     smb_profile::{
-        self,
         first::{MAX_FOLDERS, Mode, RecycleName},
         rust_first::{self, Origin},
     },
-    sqlite_install::{approval, product_layout, stage::random},
+    sqlite_install::product_layout,
 };
+#[cfg(test)]
 use helper_linux_evidence::prompt_signals::PromptSignals;
 #[cfg(feature = "embedded-zxs")]
 pub(crate) use image::EmbeddedInstall;
-use std::{
-    ffi::OsStr,
-    fmt::Write as _,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{fmt::Write as _, path::PathBuf};
 
 // Before and after password prompts only. Do not leave process-wide
 // handlers or a blocked signal mask across the next independent TTY guard.
+#[cfg(test)]
 fn filesystem_phase<T>(
     live: &dyn Fn() -> io::Result<()>,
     phase: impl FnOnce(&dyn Fn() -> io::Result<()>) -> io::Result<T>,
@@ -125,23 +126,18 @@ fn filesystem_phase<T>(
     value
 }
 
-/// No alternate runtime/site/secret path or receipt/recovery is accepted.
+/// Historical parser fixture. It does not open or mutate an installation.
+#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct Selection {
-    subject: ExplicitSubject,
     system: PathBuf,
-    origin: Origin,
-    reference: Id,
-    init_sha: [u8; 32],
     image_path: PathBuf,
-    image: [u8; 32],
-    crypto: CryptoPins,
-    login: Vec<u8>,
-    shares: FirstShares,
+    choices: Vec<Choice>,
 }
+#[cfg(test)]
 impl Selection {
     pub(super) fn parse(mut it: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        let subject = ExplicitSubject::parse(&mut it)?;
+        ExplicitSubject::parse(&mut it)?;
         let mut it = it.peekable();
         let system = if it.peek().is_some_and(|s| s == "--system") {
             PathBuf::from(value(&mut it, "--system")?)
@@ -169,8 +165,8 @@ impl Selection {
         if ids.iter().enumerate().any(|(i, n)| ids[..i].contains(n)) {
             return Err("fresh installation identities must be distinct");
         }
-        let init_sha = sha(&mut it, "--init-sha256")?;
-        let reference = key(&mut it, "--approval")?;
+        sha(&mut it, "--init-sha256")?;
+        key(&mut it, "--approval")?;
         let image_path = if it.peek().is_some_and(|s| s == "--zxs-image") {
             PathBuf::from(value(&mut it, "--zxs-image")?)
         } else {
@@ -182,13 +178,11 @@ impl Selection {
         if system.starts_with(&image_path) || image_path.starts_with(&system) {
             return Err("SYSTEM must not contain the executable");
         }
-        let image = sha(&mut it, "--zxs-sha256")?;
-        let crypto = CryptoPins {
-            helper: sha(&mut it, "--helper-sha256")?,
-            gcrypt: sha(&mut it, "--gcrypt-sha256")?,
-            gpgerror: sha(&mut it, "--gpgerror-sha256")?,
-        };
-        let hostname = value(&mut it, "--host")?
+        sha(&mut it, "--zxs-sha256")?;
+        sha(&mut it, "--helper-sha256")?;
+        sha(&mut it, "--gcrypt-sha256")?;
+        sha(&mut it, "--gpgerror-sha256")?;
+        value(&mut it, "--host")?
             .into_string()
             .ok()
             .filter(|v| rust_first::valid_host(v))
@@ -197,7 +191,7 @@ impl Selection {
         if !shared_login(&login) {
             return Err("expected one canonical non-guest login for both Web and SMB");
         }
-        let recycle = RecycleName::new(
+        RecycleName::new(
             value(&mut it, "--recycle-name")?
                 .into_string()
                 .map_err(|_| "expected a valid logical recycle name")?,
@@ -247,154 +241,11 @@ impl Selection {
         if folders.is_empty() {
             return Err("select at least one original ordinary folder");
         }
-        let shares = FirstShares {
-            host: hostname,
-            choices: folders,
-            recycle,
-        };
         Ok(Self {
-            subject,
             system,
-            origin,
-            reference,
-            init_sha,
             image_path,
-            image,
-            crypto,
-            login,
-            shares,
+            choices: folders,
         })
-    }
-    pub(super) fn run(self, web: bool) -> io::Result<(u8, String)> {
-        require_private_install()?;
-        if web {
-            // The browser never holds originals or takes the SYSTEM lease.
-            // It can only ask this one foreground instance to show its normal
-            // review; the protected originals are checked after the child exits.
-            approval::no_inherited_descriptors()?;
-            let require = || approval::host_admin().map(drop);
-            require()?;
-            let terminal = PublicConfirmation::select()?;
-            let count = u8::try_from(self.shares.choices.len())
-                .map_err(|_| bad("invalid fresh share count"))?;
-            offer_account_web(
-                &terminal,
-                (
-                    self.init_sha,
-                    crate::disk_web::InstallPhase::Account,
-                    count,
-                    self.subject,
-                ),
-                require,
-            )?;
-        }
-        let Self {
-            subject,
-            system,
-            origin,
-            reference,
-            init_sha,
-            image_path,
-            image,
-            crypto,
-            login,
-            shares,
-        } = self;
-        // Check host/stdin custody before obtaining any unrelated FD. This
-        // genuine low reader holds the original S EX and no root SQL.
-        let parent = FreshParent::select(origin.instance)?;
-        let resolved = ResolvedRust::fresh(
-            &parent,
-            &system,
-            origin,
-            shares,
-            FreshScope::new(subject, crypto.helper, init_sha),
-        )?;
-        let tty = PublicConfirmation::select()?;
-        super::web_secret::WebWorkspace::check_inherited_lock_budget()?;
-        let image_file = image::Image::select(&image_path, &image, parent.product_root()?)?;
-        resolved.require_distinct_image(&image_file)?;
-        parent.require_distinct_image(&image_file)?;
-        let providers = Cryptography::fresh(crypto)?;
-        let payload =
-            SitePayload::new(resolved.plan(), subject, &system, image_file.path(), image)?;
-        let target = parent.bind(&resolved, payload.clone())?;
-        let (pin, _, original_subject) = resolved.protected_new_system()?;
-        if original_subject != subject {
-            return Err(bad("selected original INIT subject changed"));
-        }
-        let entity = pin.entity();
-        let m = Manifest {
-            intent: Intent::Fresh,
-            nonce: random()?,
-            system: system.clone(),
-            entity: [entity.dev, entity.ino, pin.require_same_named_mount()?.id],
-            plan: resolved.plan().clone(),
-            order: RustOrder {
-                op: origin.setup,
-                actor: subject.actor,
-                approval: reference,
-                role: Desired::Setup(SetupSpec::new(login)?),
-            },
-            authority: Authority::Fresh(CredentialScope {
-                subject,
-                crypto,
-                site: payload.sha()?,
-                init_sha,
-                database: resolved.fresh_database()?,
-            }),
-        };
-        let change = RustChange::for_fresh(&m.plan, &m.order, init_sha)?;
-        let spec = change.target();
-        let review = preview(
-            &resolved,
-            &payload,
-            &target,
-            &spec,
-            &reference,
-            change.digest(),
-            crypto,
-        )?;
-        let consent = FreshConsent::approve(&tty, &m, &payload, change, review)?;
-        super::web_secret::WebWorkspace::check_inherited_lock_budget()?;
-        let deadline = Instant::now() + Duration::from_mins(10);
-        let live = || -> io::Result<()> {
-            if Instant::now() >= deadline {
-                return Err(bad("the original fresh product approval expired"));
-            }
-            // The single low secret capture temporarily changes the TTY flags. That
-            // stage checks the same original tty through HeldQuiet instead.
-            approval::host_admin()?;
-            providers.require()?;
-            resolved.require_distinct_image(&image_file)
-        };
-        let phase = (|| -> io::Result<_> {
-            live()?;
-            tty.check()?;
-            let site = filesystem_phase(&live, |guarded| {
-                target.prepare(&resolved, &consent, guarded)
-            })?;
-            let active = transact_fresh(&site, m, consent, &live)?;
-            let record = active.at(&site)?.record;
-            let site_sha = filesystem_phase(&live, |guarded| {
-                target.activate(&resolved, &site, active, &tty, guarded)
-            })?;
-            Ok((site_sha, record))
-        })();
-        let(site_sha,record)=phase.map_err(|e|io::Error::new(e.kind(),
-            format!("fresh ZXS issuance outcome not confirmed; preserve the exact original INIT, SETUP and all stage/final names; do not retry, adopt or delete: {e}")))?;
-        Ok((
-            0,
-            format!(
-                "fresh-zxs=confirmed pool={} init={} instance={} setup={} site_sha256={} generation=1 record={}; installed authority only, no service started or login checked",
-                hex(&origin.pool),
-                hex(&origin.init),
-                hex(&origin.instance),
-                hex(&origin.setup),
-                hex(&site_sha),
-                hex(&record)
-            ),
-        ))
     }
 }
 /// One real original-terminal challenge, before creating site or vault
@@ -586,7 +437,7 @@ mod tests {
         assert_eq!(selected.system, PathBuf::from(product_layout::SYSTEM));
         assert_eq!(selected.image_path, PathBuf::from(product_layout::IMAGE));
         assert_eq!(
-            selected.shares.choices[0].path,
+            selected.choices[0].path,
             PathBuf::from("/zxs/disks/data/工具")
         );
         for bad in [

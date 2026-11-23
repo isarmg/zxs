@@ -1,4 +1,6 @@
-# 共用账户：离线重置及原单回执
+# 历史设计：共用账户离线重置及原单回执
+
+> 当前 Helper 不提供 `reset-account`，任何编译功能都不会启用下述旧 SQLite 操作。当前格式使用 [`setup-headless reset`](headless-offline.md)。
 
 默认构建不接受此命令。私有 `private-fresh-install` 候选只接受确切 v20 的原部署，不迁移或修复旧格式，不更改用户名或业务记录，不启动或停止服务。ZXS 必须已经完全退出：Helper 要独立拿到原 SYSTEM 和实例的排他租约，再核原 INIT、原库、卷标、站点及实际原凭据版本。只由 `/zxs/state/deployment.v1` 定位原受保护实例，使用它保存的单 ELF 路径与完整 SHA-256；没有旧路径回退，也没有新的路径或摘要覆盖参数。
 

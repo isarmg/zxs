@@ -1,16 +1,11 @@
 //! Private fresh-only issuance; no server/start, separate domain or generic credentials.
 use super::Id;
 use crate::sqlite_install::id;
-use std::{
-    ffi::{OsStr, OsString},
-    io,
-};
+use std::ffi::{OsStr, OsString};
 
+#[cfg(test)]
 #[derive(Debug)]
-pub(crate) struct Setup {
-    selection: super::fresh_issuer::Selection,
-    web: bool,
-}
+pub(crate) struct Setup;
 pub(super) fn value(
     it: &mut impl Iterator<Item = OsString>,
     flag: &str,
@@ -37,6 +32,7 @@ pub(super) fn sha(
         .filter(|x| *x != [0; 32])
         .ok_or("expected the independent original receipt SHA-256 (64 lowercase hex digits)")
 }
+#[cfg(test)]
 pub(super) fn name(
     it: &mut impl Iterator<Item = OsString>,
     flag: &str,
@@ -49,6 +45,7 @@ pub(super) fn name(
     Ok(b.to_vec())
 }
 
+#[cfg(test)]
 impl Setup {
     pub(crate) fn parse(mut it: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
         if !cfg!(feature = "private-fresh-install") {
@@ -60,10 +57,7 @@ impl Setup {
         if action.as_deref() != Some(OsStr::new("issue-fresh")) {
             return Err("choose issue-fresh or web issue-fresh; no service command");
         }
-        let selection = super::fresh_issuer::Selection::parse(it)?;
-        Ok(Self { selection, web })
-    }
-    pub(crate) fn run(self) -> io::Result<(u8, String)> {
-        self.selection.run(self.web)
+        super::fresh_issuer::Selection::parse(it)?;
+        Ok(Self)
     }
 }
