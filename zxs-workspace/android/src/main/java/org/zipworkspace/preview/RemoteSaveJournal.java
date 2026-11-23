@@ -28,6 +28,8 @@ import java.util.regex.Pattern;
 final class RemoteSaveJournal {
     private static final String STORE = "remote-saves";
     private static final int MAGIC = 0x52533331; // RS31
+    private static final int ATTEMPT_MAGIC = 0x52534131; // RSA1
+    private static final int RECEIPT_MAGIC = 0x52535231; // RSR1
     private static final int MAX_BODY = PlainText.LIMIT;
     private static final int MAX_RECORD = MAX_BODY + 4096;
     private static final int RECORD_DIGEST_SIZE = 32;
@@ -81,10 +83,58 @@ final class RemoteSaveJournal {
         requireBody(save, body);
         var prepared = new Prepared(authority, save, body);
         byte[] bytes = encode(prepared);
-        return inStore(context, true, (home, local, target) -> {
-            String operation = save.operation();
-            File stage = new File(target.path, "." + operation + ".pending");
-            File published = new File(target.path, fileName(operation));
+        writeRecord(context, fileName(save.operation()), bytes);
+        return prepared;
+    }
+
+    record Plan(Authority authority, RemoteSaveContract.Save save) {}
+
+    /** An attempted submission can be looked up without reading its frozen body. */
+    static synchronized Plan attempted(Context context, Authority authority, String operation) throws IOException {
+        byte[] record = readRecord(context, nameFor(operation, ".attempt"), true);
+        return record == null ? null : decodeMarker(record, authority, operation, ATTEMPT_MAGIC).plan();
+    }
+
+    static synchronized Prepared beginAttempt(Context context, Prepared proposed) throws IOException {
+        var save = proposed.save();
+        var prepared = reopen(context, proposed.authority(), save.operation());
+        need(save.equals(prepared.save()) && Arrays.equals(proposed.body, prepared.body));
+        Plan plan = new Plan(prepared.authority(), prepared.save());
+        Plan existing = attempted(context, plan.authority(), save.operation());
+        if (existing == null) {
+            writeRecord(context, nameFor(save.operation(), ".attempt"),
+                    encodeMarker(plan, ATTEMPT_MAGIC, null));
+        } else {
+            need(plan.equals(existing));
+        }
+        return prepared;
+    }
+
+    static synchronized BigInteger receipt(Context context, Plan original) throws IOException {
+        byte[] record = readRecord(context, nameFor(original.save().operation(), ".receipt"), true);
+        if (record == null) return null;
+        need(original.equals(attempted(context, original.authority(), original.save().operation())));
+        Marker intake = decodeMarker(record, original.authority(), original.save().operation(), RECEIPT_MAGIC);
+        need(original.equals(intake.plan()));
+        return intake.sequence();
+    }
+
+    static synchronized void settle(Context context, Plan original, BigInteger sequence) throws IOException {
+        validateSequence(original, sequence);
+        need(original.equals(attempted(context, original.authority(), original.save().operation())));
+        var previous = receipt(context, original);
+        if (previous != null) {
+            need(previous.equals(sequence));
+            return;
+        }
+        writeRecord(context, nameFor(original.save().operation(), ".receipt"),
+                encodeMarker(original, RECEIPT_MAGIC, sequence));
+    }
+
+    private static void writeRecord(Context context, String finalName, byte[] bytes) throws IOException {
+        inStore(context, true, (home, local, target) -> {
+            File stage = new File(target.path, stageName(finalName));
+            File published = new File(target.path, finalName);
             try (var original = new LocalWorkspaceStore.Handle(stage, CREATE, 0600)) {
                 var created = Os.fstat(original.fd);
                 checkFile(created, created, target, 1);
@@ -96,23 +146,21 @@ final class RemoteSaveJournal {
                 }
                 var sealed = Os.fstat(original.fd);
                 need(LocalWorkspaceStore.same(created, sealed));
-                checkFile(Os.lstat(stage.getPath()), sealed, target, 1);
-                byte[] readback = readExact(original.fd, sealed.st_size);
-                need(Arrays.equals(bytes, readback));
-                Prepared verified = decode(readback, operation, authority);
+                unchanged(Os.lstat(stage.getPath()), sealed, target);
+                need(Arrays.equals(bytes, readExact(original.fd, sealed.st_size)));
+                unchanged(Os.fstat(original.fd), sealed, target);
                 Os.fsync(original.fd);
                 home.check();
                 local.check();
                 target.check();
-                checkFile(Os.lstat(stage.getPath()), sealed, target, 1);
-                // Exclusive publication. Never remove or replace an occupied result.
+                unchanged(Os.lstat(stage.getPath()), sealed, target);
+                // Both names are derived from one exact app-owned record. Do not
+                // retry or clean a stage with an uncertain publication outcome.
                 Os.link(stage.getPath(), published.getPath());
                 target.check();
                 checkFile(Os.lstat(published.getPath()), sealed, target, 2);
                 checkFile(Os.lstat(stage.getPath()), sealed, target, 2);
                 try (var names = target.openNames()) {
-                    // This generated stage is the only removed name. On an ambiguous failure,
-                    // keep both names; a later open validates the final name and single link.
                     checkFile(Os.lstat(stage.getPath()), sealed, target, 2);
                     names.deleteFile(stage.toPath().getFileName());
                 }
@@ -127,7 +175,7 @@ final class RemoteSaveJournal {
                 need(Arrays.equals(bytes, readExact(original.fd, finalRead.st_size)));
                 unchanged(Os.fstat(original.fd), finalRead, target);
                 unchanged(Os.lstat(published.getPath()), finalRead, target);
-                return verified;
+                return null;
             }
         });
     }
@@ -135,10 +183,27 @@ final class RemoteSaveJournal {
     /** Reopen this exact original operation, not an arbitrary path or latest draft. */
     static synchronized Prepared reopen(Context context, Authority authority, String operation)
             throws IOException {
-        String name = fileName(operation);
+        byte[] bytes = readRecord(context, fileName(operation), false);
+        return decode(bytes, operation, authority);
+    }
+
+    private static byte[] readRecord(Context context, String name, boolean optional) throws IOException {
         return inStore(context, false, (home, local, target) -> {
             File published = new File(target.path, name);
-            var named = Os.lstat(published.getPath());
+            StructStat named;
+            try {
+                named = Os.lstat(published.getPath());
+            } catch (ErrnoException absent) {
+                if (!optional || absent.errno != OsConstants.ENOENT) throw absent;
+                File stage = new File(target.path, stageName(name));
+                try {
+                    Os.lstat(stage.getPath());
+                } catch (ErrnoException stageAbsent) {
+                    if (stageAbsent.errno == OsConstants.ENOENT) return null;
+                    throw stageAbsent;
+                }
+                throw new IOException("original record publication remains unresolved");
+            }
             checkFile(named, named, target, 1);
             try (var held = new LocalWorkspaceStore.Handle(published, READ, 0)) {
                 var before = Os.fstat(held.fd);
@@ -146,13 +211,12 @@ final class RemoteSaveJournal {
                 byte[] bytes = readExact(held.fd, before.st_size);
                 unchanged(Os.fstat(held.fd), before, target);
                 unchanged(Os.lstat(published.getPath()), before, target);
-                Prepared verified = decode(bytes, operation, authority);
-                // Reestablish directory durability after a possibly interrupted prepare.
+                // Reestablish namespace durability after an interrupted operation.
                 target.sync();
                 local.sync();
                 home.sync();
                 unchanged(Os.lstat(published.getPath()), before, target);
-                return verified;
+                return bytes;
             }
         });
     }
@@ -204,8 +268,12 @@ final class RemoteSaveJournal {
     }
 
     private static String fileName(String operation) throws IOException {
+        return nameFor(operation, ".save");
+    }
+
+    private static String nameFor(String operation, String suffix) throws IOException {
         need(operation != null && ID.matcher(operation).matches() && !operation.equals("0".repeat(32)));
-        return operation + ".save";
+        return operation + suffix;
     }
 
     private static void checkFile(StructStat seen, StructStat original,
@@ -234,77 +302,142 @@ final class RemoteSaveJournal {
         return result;
     }
 
+    private static String stageName(String name) {
+        // Keep the established original-body staging name across the ledger change.
+        String stem = name.endsWith(".save") ? name.substring(0, name.length() - 5) : name;
+        return "." + stem + ".pending";
+    }
+
     private static byte[] encode(Prepared prepared) throws IOException {
-        var save = prepared.save;
         var bytes = new ByteArrayOutputStream();
         try (var out = new DataOutputStream(bytes)) {
             out.writeInt(MAGIC);
-            out.writeUTF(prepared.authority.destinationIdentity());
-            out.writeUTF(prepared.authority.account());
-            out.writeUTF(save.container());
-            out.writeUTF(save.operation());
-            out.writeUTF(save.node());
-            out.writeUTF(save.baseSequence().toString());
-            if (save.target() instanceof RemoteSaveContract.FirstMain first) {
-                out.writeByte(1);
-                out.writeUTF(first.name());
-            } else if (save.target() instanceof RemoteSaveContract.BranchHead head) {
-                out.writeByte(2);
-                out.writeUTF(head.branch());
-                out.writeUTF(head.expectedHead());
-            } else if (save.target() instanceof RemoteSaveContract.HistoricalMain fork) {
-                out.writeByte(3);
-                out.writeUTF(fork.branch());
-                out.writeUTF(fork.fromNode());
-            } else {
-                throw new IOException("unknown save target");
-            }
-            out.writeUTF(save.sha256());
-            out.writeInt(prepared.body.length);
+            writePlan(out, new Plan(prepared.authority, prepared.save));
             out.write(prepared.body);
         }
+        return sealedRecord(bytes);
+    }
+
+    private static Prepared decode(byte[] record, String expectedOperation, Authority expectedAuthority)
+            throws IOException {
+        try (var input = openRecord(record, MAGIC)) {
+            Plan plan = readPlan(input, expectedOperation, expectedAuthority);
+            int count = (int) plan.save().length();
+            need(count == input.available());
+            byte[] body = new byte[count];
+            input.readFully(body);
+            requireBody(plan.save(), body);
+            var original = new Prepared(plan.authority(), plan.save(), body);
+            need(Arrays.equals(record, encode(original)));
+            return original;
+        } catch (IllegalArgumentException invalid) {
+            throw new IOException("invalid original remote draft", invalid);
+        }
+    }
+
+    private record Marker(Plan plan, BigInteger sequence) {}
+
+    private static byte[] encodeMarker(Plan plan, int kind, BigInteger sequence) throws IOException {
+        var bytes = new ByteArrayOutputStream();
+        try (var out = new DataOutputStream(bytes)) {
+            out.writeInt(kind);
+            writePlan(out, plan);
+            if (kind == RECEIPT_MAGIC) out.writeUTF(sequence.toString());
+        }
+        return sealedRecord(bytes);
+    }
+
+    private static Marker decodeMarker(byte[] record, Authority authority, String operation, int kind)
+            throws IOException {
+        try (var input = openRecord(record, kind)) {
+            Plan plan = readPlan(input, operation, authority);
+            BigInteger sequence = null;
+            if (kind == RECEIPT_MAGIC) {
+                sequence = readSequence(input);
+                validateSequence(plan, sequence);
+            }
+            need(input.read() == -1 && Arrays.equals(record, encodeMarker(plan, kind, sequence)));
+            return new Marker(plan, sequence);
+        } catch (IllegalArgumentException invalid) {
+            throw new IOException("invalid original remote record", invalid);
+        }
+    }
+
+    private static void validateSequence(Plan plan, BigInteger sequence) throws IOException {
+        need(sequence != null && sequence.compareTo(plan.save().baseSequence()) > 0
+                && sequence.compareTo(BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)) < 0);
+    }
+
+    private static byte[] sealedRecord(ByteArrayOutputStream bytes) throws IOException {
         bytes.write(sha256(bytes.toByteArray()));
         byte[] record = bytes.toByteArray();
         need(record.length <= MAX_RECORD);
         return record;
     }
 
-    private static Prepared decode(byte[] record, String expectedOperation, Authority expectedAuthority)
-            throws IOException {
-        need(record.length > RECORD_DIGEST_SIZE && record.length <= MAX_RECORD);
+    private static DataInputStream openRecord(byte[] record, int kind) throws IOException {
+        need(record.length > RECORD_DIGEST_SIZE + 4 && record.length <= MAX_RECORD);
         int end = record.length - RECORD_DIGEST_SIZE;
         need(MessageDigest.isEqual(sha256(Arrays.copyOfRange(record, 0, end)),
                 Arrays.copyOfRange(record, end, record.length)));
-        try (var input = new DataInputStream(new ByteArrayInputStream(record, 0, end))) {
-            need(input.readInt() == MAGIC);
-            var authority = new Authority(input.readUTF(), input.readUTF());
-            need(authority.equals(expectedAuthority));
-            String container = input.readUTF();
-            String operation = input.readUTF();
-            need(operation.equals(expectedOperation));
-            String node = input.readUTF();
-            String sequence = input.readUTF();
-            need(sequence.matches("0|[1-9][0-9]{0,19}"));
-            RemoteSaveContract.Target target = switch (input.readUnsignedByte()) {
-                case 1 -> new RemoteSaveContract.FirstMain(input.readUTF());
-                case 2 -> new RemoteSaveContract.BranchHead(input.readUTF(), input.readUTF());
-                case 3 -> new RemoteSaveContract.HistoricalMain(input.readUTF(), input.readUTF());
-                default -> throw new IOException("unknown save target");
-            };
-            String digest = input.readUTF();
-            int count = input.readInt();
-            need(count >= 0 && count <= MAX_BODY && count == input.available());
-            byte[] body = new byte[count];
-            input.readFully(body);
-            var save = new RemoteSaveContract.Save(container, operation, node, new BigInteger(sequence),
-                    target, count, digest);
-            requireBody(save, body);
-            var original = new Prepared(authority, save, body);
-            need(Arrays.equals(record, encode(original)));
-            return original;
-        } catch (IllegalArgumentException invalid) {
-            throw new IOException("invalid original remote draft", invalid);
+        var input = new DataInputStream(new ByteArrayInputStream(record, 0, end));
+        need(input.readInt() == kind);
+        return input;
+    }
+
+    private static void writePlan(DataOutputStream out, Plan plan) throws IOException {
+        RemoteSaveContract.Save save = plan.save();
+        need(save.length() <= MAX_BODY);
+        out.writeUTF(plan.authority().destinationIdentity());
+        out.writeUTF(plan.authority().account());
+        out.writeUTF(save.container());
+        out.writeUTF(save.operation());
+        out.writeUTF(save.node());
+        out.writeUTF(save.baseSequence().toString());
+        if (save.target() instanceof RemoteSaveContract.FirstMain first) {
+            out.writeByte(1);
+            out.writeUTF(first.name());
+        } else if (save.target() instanceof RemoteSaveContract.BranchHead head) {
+            out.writeByte(2);
+            out.writeUTF(head.branch());
+            out.writeUTF(head.expectedHead());
+        } else if (save.target() instanceof RemoteSaveContract.HistoricalMain fork) {
+            out.writeByte(3);
+            out.writeUTF(fork.branch());
+            out.writeUTF(fork.fromNode());
+        } else {
+            throw new IOException("unknown save target");
         }
+        out.writeUTF(save.sha256());
+        out.writeInt((int) save.length());
+    }
+
+    private static Plan readPlan(DataInputStream input, String expectedOperation, Authority expectedAuthority)
+            throws IOException {
+        var authority = new Authority(input.readUTF(), input.readUTF());
+        need(authority.equals(expectedAuthority));
+        String container = input.readUTF();
+        String operation = input.readUTF();
+        need(operation.equals(expectedOperation));
+        String node = input.readUTF();
+        BigInteger sequence = readSequence(input);
+        RemoteSaveContract.Target target = switch (input.readUnsignedByte()) {
+            case 1 -> new RemoteSaveContract.FirstMain(input.readUTF());
+            case 2 -> new RemoteSaveContract.BranchHead(input.readUTF(), input.readUTF());
+            case 3 -> new RemoteSaveContract.HistoricalMain(input.readUTF(), input.readUTF());
+            default -> throw new IOException("unknown save target");
+        };
+        String digest = input.readUTF();
+        int count = input.readInt();
+        need(count >= 0 && count <= MAX_BODY);
+        return new Plan(authority,
+                new RemoteSaveContract.Save(container, operation, node, sequence, target, count, digest));
+    }
+
+    private static BigInteger readSequence(DataInputStream input) throws IOException {
+        String sequence = input.readUTF();
+        need(sequence.matches("0|[1-9][0-9]{0,19}"));
+        return new BigInteger(sequence);
     }
 
     private static void requireBody(RemoteSaveContract.Save save, byte[] bytes) throws IOException {
