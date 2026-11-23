@@ -1,9 +1,10 @@
 """Translate exact Linux edit-session evidence into one durable per-container Submit."""
 from dataclasses import dataclass
 
-from .container_plan import Baseline, DeleteIntent, LocalFile, _id, plan_submit
+from .container_plan import Baseline, BranchIntent, DeleteIntent, LocalFile, _id, plan_submit
 from .container_spool import capture_submit
 from .linux_edit import NamespaceEvent
+from .linux_upload_ignore import RULE_FILE
 from .model import Rejected, member_name, new_id
 
 
@@ -29,11 +30,13 @@ class OriginalBinding:
 
     def __post_init__(self):
         _native(self.local_identity)
-        if type(self.baseline) is not Baseline or member_name(self.path)[-1] != self.baseline.name:
+        if (type(self.baseline) is not Baseline or self.path == RULE_FILE
+                or member_name(self.path)[-1] != self.baseline.name):
             raise Rejected("local binding lacks original display name and baseline")
 
 
-def _select(cut, originals, new_identities):
+def _select(cut, originals, new_identities, *, admit_created):
+    ignored = cut.upload_ignore.matches
     bound = {}
     seen_paths, container_ids = set(), set()
     for original in originals:
@@ -44,7 +47,8 @@ def _select(cut, originals, new_identities):
         seen_paths.add(original.path)
         container_ids.add(original.baseline.container_id)
     reserved = set(bound)
-    retired, replaced, deletions, witnessed = set(), set(), [], {}
+    retired, replaced, local_only = set(), set(), set()
+    deletions, witnessed, kept = [], {}, {}
     for event in cut.namespace_events:
         if type(event) is not NamespaceEvent:
             raise Rejected("untyped Linux namespace event")
@@ -52,14 +56,24 @@ def _select(cut, originals, new_identities):
         if local in retired or (local in witnessed and witnessed[local] != path):
             raise Rejected("namespace chain disagrees with the exact recorded original")
         previous = bound.get(local)
-        if type(event.local_birth) is not bool or (previous is None) != event.local_birth:
-            raise Rejected("namespace mutation lacks an original binding or positive native birth")
+        if type(event.local_birth) is not bool or (previous is not None and event.local_birth):
+            raise Rejected("namespace mutation conflicts with its original binding")
+        if previous is None and not event.local_birth:
+            if local not in local_only and not ignored(path):
+                raise Rejected("namespace mutation lacks an original binding or positive native birth")
+            local_only.add(local)  # An unbound existing local-only file never acquires a container.
+        if path == RULE_FILE:
+            local_only.add(local)  # Even a renamed rules inode cannot become an upload.
         if previous and previous[1] != path:
             raise Rejected("namespace action did not name the original container path")
         if not previous and path in seen_paths:
             raise Rejected("unexpected native identity at a bound path")
         if event.kind == "rename" and event.replacement_identity is None:
             destination = _path(event.destination_path)
+            if destination == RULE_FILE:
+                if previous is not None:
+                    raise Rejected("an original container cannot become .zxsignore")
+                local_only.add(local)
             if destination in seen_paths:
                 raise Rejected("native rename conflicts with an existing container binding")
             witnessed[local] = destination
@@ -72,8 +86,12 @@ def _select(cut, originals, new_identities):
             if previous:
                 del bound[local]
                 seen_paths.remove(path)
-                baseline = previous[0].baseline
-                deletions.append(DeleteIntent(baseline.container_id, baseline.revision))
+                original = previous[0]
+                baseline = original.baseline
+                if local in local_only or ignored(path):
+                    kept[baseline.container_id] = original
+                else:
+                    deletions.append(DeleteIntent(baseline.container_id, baseline.revision))
         elif event.kind == "replace" and event.destination_path == path and previous:
             new = _native(event.replacement_identity)
             if new in reserved or new in retired or new == local:
@@ -89,8 +107,26 @@ def _select(cut, originals, new_identities):
         else:
             raise Rejected("unsupported or unbound Linux namespace event")
 
+    # Validate the complete native birth set, then allocate IDs only for the
+    # exact unbound identities still eligible at their final paths.
+    files = cut.changed_files
+    exact = {id(row): row for row in files}
+    births = {}
+    for row in cut.created_files:
+        local = _native(row.local_identity)
+        if exact.get(id(row)) is not row or local in births:
+            raise Rejected("unattested native file creation")
+        births[local] = row
+    eligible = {local for local, row in births.items()
+                if local not in local_only and not ignored(row.path)}
+    proposed = dict(new_identities)
+    if len(proposed) != len(new_identities) or not proposed.keys() <= eligible:
+        raise Rejected("container ID allocation needs a proved, non-ignored native creation")
+    if admit_created:
+        for local in sorted(eligible - proposed.keys()):
+            proposed[local] = new_id()
     created = {}
-    for local, container in new_identities:
+    for local, container in proposed.items():
         _native(local)
         _id(container)
         if local in reserved or local in retired or local in created or container in container_ids:
@@ -99,11 +135,16 @@ def _select(cut, originals, new_identities):
         container_ids.add(container)
 
     selected, current = {}, {}
-    for original, path in bound.values():
+    for local, (original, path) in bound.items():
         old = original.baseline
-        current[old.container_id] = (path, old)
+        if local in local_only or ignored(path):
+            kept[old.container_id] = original
+        else:
+            current[old.container_id] = (path, old)
+    for container, original in kept.items():
+        current[container] = (original.path, original.baseline)
     seen_members, used_new = set(), set()
-    for member in cut.changed_files:
+    for member in files:
         local, path = _native(member.local_identity), _path(member.path)
         if local in retired or local in seen_members or (local in witnessed and witnessed[local] != path):
             raise Rejected("ambiguous exact changed-file membership")
@@ -113,7 +154,11 @@ def _select(cut, originals, new_identities):
             if previous[1] != path:
                 raise Rejected("modified original file moved without a journal event")
             container = previous[0].baseline.container_id
+            if container in kept:
+                continue
         else:
+            if local in local_only or ignored(path):
+                continue
             if local not in created or path in seen_paths:
                 raise Rejected("changed file has no exact original binding or explicit new container")
             container = created[local]
@@ -123,10 +168,13 @@ def _select(cut, originals, new_identities):
         selected[container] = member
     if created.keys() != used_new:
         raise Rejected("explicit new container lacks an exact changed-file member")
-    forced = replaced & current.keys()
+    projected = {tuple(part.casefold() for part in member_name(path)) for path, _ in current.values()}
+    if len(projected) != len(current):
+        raise Rejected("destination collides with a retained original container name")
+    forced = (replaced & current.keys()) - kept.keys()
     if not forced <= selected.keys():
         raise Rejected("replaced original lacks its final complete changed-file member")
-    return selected, current, tuple(deletions), tuple(sorted(forced))
+    return selected, current, tuple(deletions), tuple(sorted(forced)), frozenset(kept)
 
 
 def capture_linux_submit(state, owner, *, submission, destination, originals,
@@ -139,25 +187,13 @@ def capture_linux_submit(state, owner, *, submission, destination, originals,
 
     def select(cut):
         nonlocal selected_state
-        exact = {id(row): row for row in cut.changed_files}
-        births = {}
-        for row in cut.created_files:
-            if exact.get(id(row)) is not row or row.local_identity in births:
-                raise Rejected("unattested native file creation")
-            births[row.local_identity] = row
-        proposed = dict(new_identities)
-        if len(proposed) != len(new_identities) or not proposed.keys() <= births.keys():
-            raise Rejected("container ID allocation needs a proved native creation")
-        if admit_created:
-            for key in sorted(births):
-                if key not in proposed:
-                    proposed[key] = new_id()
-        chosen, current, deletions, forced = _select(cut, originals, tuple(proposed.items()))
-        selected_state = (frozenset(chosen), current, deletions, forced)
+        chosen, current, deletions, forced, kept = _select(cut, originals, new_identities,
+                                                            admit_created=admit_created)
+        selected_state = (frozenset(chosen), current, deletions, forced, kept)
         return chosen
 
     def build(captured):
-        expected, current, deletions, forced = selected_state
+        expected, current, deletions, forced, kept = selected_state
         if captured.keys() != expected:
             raise Rejected("private captures do not cover the exact chosen effects")
         observed = []
@@ -169,8 +205,9 @@ def capture_linux_submit(state, owner, *, submission, destination, originals,
             else:
                 body = old.body
             observed.append(LocalFile(container, path, body, old.tags if old else ()))
+        intents = (row for row in branch_intents if not (type(row) is BranchIntent and row.container_id in kept))
         return plan_submit((item.baseline for item in originals), observed, deletions,
-                           branch_intents=branch_intents, attested_complete=True, force_save=forced)
+                           branch_intents=intents, attested_complete=True, force_save=forced)
 
     return capture_submit(state, owner, submission=submission, destination=destination,
                           select_cut=select, build_plan=build)

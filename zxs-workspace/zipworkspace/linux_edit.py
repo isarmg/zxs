@@ -18,6 +18,7 @@ from .document import native_identity
 from .linux_authority import ProcView, owned_directory
 from .linux_edit_state import exchange_closed_at
 from .linux_mount import _ordinary_user
+from .linux_upload_ignore import RULE_FILE, UploadIgnore, held_upload_ignore
 from .model import MAX_FILE, MAX_MEMBERS, Rejected, member_name
 from .private_freeze import local_mount, mount_id
 from .publish import rename_new_at
@@ -148,6 +149,7 @@ class _FrozenWork:
     _changed: Mapping[int, tuple[_BoundFile, tuple]]
     namespace_events: tuple[NamespaceEvent, ...]
     created_files: tuple[_BoundFile, ...]
+    upload_ignore: UploadIgnore
     _owner: object
 
     @property
@@ -498,6 +500,8 @@ class _LocalEdit:
         with self._lock:
             self._gate()
             node = self._file(ino)
+            if node.path == (RULE_FILE,):
+                _refuse(errno.EINVAL, ".zxsignore is reserved for local upload rules")
             record = self._known_file(node, self._observe(node))
             if not record.original_binding and (record.born_here or record.changed or record.namespace_changed):
                 _refuse(errno.EINVAL, "bind the original container before any local edit")
@@ -612,7 +616,8 @@ class _LocalEdit:
         # Binding authority is supplied by the controller, not guessed from a filename.
         temp = self._tracked.get(node.ino)
         target = self._paths.get(new)
-        if self._journal is None or temp is None or not temp.born_here or temp.original_binding or target is None:
+        if (node.path == (RULE_FILE,) or self._journal is None or temp is None
+                or not temp.born_here or temp.original_binding or target is None):
             return None
         kept = self._tracked.get(target.ino)
         if kept is not None and kept.original_binding:
@@ -711,6 +716,9 @@ class _LocalEdit:
                     return  # Ordinary exact same-name rename is not an edit.
                 if node.opens:
                     _refuse(errno.EBUSY, "close the original file before moving or removing it")
+                record = self._tracked.get(node.ino)
+                if new == (RULE_FILE,) and record is not None and record.original_binding:
+                    _refuse(errno.EINVAL, "an original container cannot become .zxsignore")
                 if dest is source and not no_replace:
                     replacement = self._editor_replacement(node, new)
                     if replacement is not None:
@@ -1025,7 +1033,8 @@ class _LocalEdit:
                                  key=lambda record: record.bound.path)
                 entries = {record.bound._node.ino: (record.bound, record.stamp) for record in changed}
                 births = tuple(r.bound for r in changed if r.born_here and not r.original_binding)
-                cut = _FrozenWork(fd, MappingProxyType(entries), tuple(self._namespace), births, self)
+                ignore = loans.enter_context(held_upload_ignore(fd, self.proc, self.mount, self.uid))
+                cut = _FrozenWork(fd, MappingProxyType(entries), tuple(self._namespace), births, ignore, self)
                 self._cut = cut
                 try:
                     cut.check_work()

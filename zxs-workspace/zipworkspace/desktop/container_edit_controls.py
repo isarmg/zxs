@@ -520,7 +520,8 @@ class ContainerEditControls(QWidget):
         if (receipt is None or self.stopped
                 or prepare and self.panel._owned is not edit.connection):
             return
-        detail = ("正常卸载后，从这次原卷的改动准备本机提交和原队列。此处不发送。"
+        detail = ("正常卸载后按原 WORK 的忽略规则准备提交，不发送。"
+                  "忽略项保留在本机；已签出且被忽略的容器保留服务器原版本和名称。"
                   if prepare else "只停写，不准备提交。有改动时会保留原记录待核对。")
         if not confirm(self, "停止这次原卷编辑", f"{receipt.point}\n{detail}",
                        attestation="已保存本机改动，不再从编辑器写入这个卷。",
@@ -619,6 +620,8 @@ class ContainerEditControls(QWidget):
                 else:
                     if result is None:
                         self._end("原编辑卷已正常结束，本次没有准备提交。")
+                    elif not result.ready:
+                        self._end("原编辑卷已正常结束。没有需要上传的改动；忽略项留在本机。")
                     else:
                         self._end(f"已在本机准备原提交 {result.submission}，涉及 {len(result.ready)} 个容器。尚未发送。")
                         self._load_first()

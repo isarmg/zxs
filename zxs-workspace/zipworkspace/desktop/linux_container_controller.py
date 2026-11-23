@@ -12,6 +12,7 @@ from ..container_spool import reopen_submit
 from ..linux_authority import ProcView
 from ..linux_edit_state import _RUNNING
 from ..linux_submit import OriginalBinding
+from ..linux_upload_ignore import RULE_FILE
 from ..model import CHUNK, Rejected, member_name, new_id
 from ..private_freeze import local_mount, mount_id
 from ..publish import Uncertain
@@ -99,6 +100,8 @@ class LinuxContainerController:
         if len(chosen) != 1:
             raise Rejected("no original selected node in this branch")
         owner = detail.container
+        if owner.name == RULE_FILE:
+            raise Rejected(".zxsignore 是本机规则文件；请先用容器管理页更改原容器名称。")
         return Baseline(owner.id, owner.name, owner.revision, FullBody(chosen[0].length, chosen[0].sha256),
                         detail.tags, branch, node, found[0].head)
 
