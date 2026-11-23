@@ -14,7 +14,7 @@ const AUDITED_TABLES:&[&str]=&[
     "operation","pool_birth","volume_claim","account_pair","web_password","credential_reset",
     "smb_rust_revision","root_share","share_mode","root_entry","file_label","file_location","directory_entry","directory_abort",
     "directory_location","directory_rename","directory_rename_abort","file_transfer","file_transfer_source",
-    "file_transfer_void","file_rename","file_rename_abort","first_work","work_edit","manual_node",
+    "file_transfer_void","file_replace","file_rename","file_rename_abort","first_work","work_edit","manual_node",
 ];
 fn unknown()->io::Error{bad("cannot prove a complete original ordinary-volume retirement inventory")}
 fn sql(_:rusqlite::Error)->io::Error{unknown()}
