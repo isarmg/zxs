@@ -55,6 +55,39 @@ fn all_explicit_pairs_follow_the_complete_role_list() {
 }
 
 #[test]
+fn tree_and_saved_raw_maps_do_not_require_all_overrides_in_argv() {
+    assert!(matches!(parse(&["prepare-tree", "/src", "/data", "/sys", "/rec", "/data"]),
+        Ok(ImportBatch::Prepare { whole_tree: true, from_stdin: false, .. })));
+    assert!(matches!(parse(&["prepare-tree", "/src", "/data", "/sys", "/rec", "/data", "--map0"]),
+        Ok(ImportBatch::Prepare { whole_tree: true, from_stdin: true, .. })));
+    assert!(parse(&["prepare-tree", "/src", "/data", "/sys", "/rec", "/data", "--map0", "extra"]).is_err());
+    assert!(matches!(parse(&["show"]), Ok(ImportBatch::Show)));
+    assert!(parse(&["show", "/extra"]).is_err());
+    let valid = b"n/one\t\xff\0First\0next\nname\0Second\0\0";
+    let rows = mapping_input::read(&mut valid.as_slice()).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0.as_bytes(), b"n/one\t\xff");
+    assert_eq!(rows[1].0.as_bytes(), b"next\nname");
+    for cut in 0..valid.len() {
+        assert!(mapping_input::read(&mut &valid[..cut]).is_err());
+    }
+    for malformed in [b"\0tail".as_slice(), b"x\0\0\0", b"x\0y\0\0\0"] {
+        assert!(mapping_input::read(&mut &malformed[..]).is_err());
+    }
+}
+
+#[test]
+fn show_lists_paths_without_control_injection_and_preserves_printable_unicode() {
+    let rows = vec![ticket(1, b"line\n\t\\\xff", "项目".as_bytes())];
+    let batch = Batch::checked(rows).unwrap();
+    let mut view = Vec::new();
+    batch.show(&mut view).unwrap();
+    let text = String::from_utf8(view).unwrap();
+    assert_eq!(text.lines().count(), 3);
+    assert!(text.contains("1\tline\\n\\t\\\\\\xff\t项目\t0\n"));
+}
+
+#[test]
 fn rows_preserve_raw_sources_case_and_exact_original_ticket_bytes() {
     let original = pair();
     let originals: Vec<_> = original.iter().map(|t| t.encode().unwrap()).collect();

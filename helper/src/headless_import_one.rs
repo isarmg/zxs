@@ -1,7 +1,7 @@
 //! An operator-retained single-file ticket and the original external source.
 use super::{FIXED_ROOTS, Reset, refused};
 use crate::{
-    headless_setup::import_preflight::{pin_source, same_name_candidate},
+    headless_setup::import_preflight::{SourceTree, Stamp, pin_source, same_name_candidate},
     path_rules::Kind,
     pinned::{Entity, Mount, Pinned, external_import_reader, require_no_automount},
 };
@@ -179,13 +179,32 @@ impl Ticket {
         relative: &[u8],
         name: &[u8],
     ) -> io::Result<Self> {
+        Self::prepare_observed(reset, target, source, relative, name, None)
+    }
+
+    fn prepare_observed(
+        reset: &Reset,
+        target: &Path,
+        source: &Path,
+        relative: &[u8],
+        name: &[u8],
+        observation: Option<(&SourceTree, &Stamp)>,
+    ) -> io::Result<Self> {
         if !same_name_candidate(name) {
             return Err(refused());
         }
         reset.require_original()?;
         let token = selected_data(reset, target.as_os_str().as_bytes())?;
         let origin = ExternalSource::select(reset, source, relative)?;
+        let confirm_observation = || {
+            if let Some((tree, stamp)) = observation {
+                tree.require_file(&origin.root, origin.mount, &origin.held, stamp)?;
+            }
+            Ok::<(), io::Error>(())
+        };
+        confirm_observation()?;
         let sha256 = origin.fingerprint()?;
+        confirm_observation()?;
         reset.require_original()?;
         let seed = super::random::<16>()?;
         let ticket = Self {

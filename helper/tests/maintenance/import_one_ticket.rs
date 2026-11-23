@@ -40,6 +40,17 @@ fn the_ticket_preserves_byte_exact_source_and_does_not_infer_a_name() {
 }
 
 #[test]
+fn an_ordinary_file_does_not_have_to_share_its_sources_mount_root_bit() {
+    let temp = crate::test_area::data_directory();
+    let file = File::create_new(temp.path().join("file")).unwrap();
+    let actual = Mount::on(&file).unwrap().unwrap();
+    for root in [Some(true), Some(false), None] {
+        assert!(Witness::read(&file, Mount { id: actual.id, at_root: root }).is_ok());
+    }
+    assert!(Witness::read(&file, Mount { id: actual.id ^ 1, at_root: Some(false) }).is_err());
+}
+
+#[test]
 fn symbolic_traversal_is_not_a_canonical_source_path() {
     let mut ticket = sample();
     for relative in [b"a/../b".as_slice(), b"/a", b"a//b", b"./b", b"a/\0"] {

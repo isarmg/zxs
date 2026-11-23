@@ -61,6 +61,46 @@ fn data_roster_length_is_bounded() {
 }
 
 #[test]
+fn same_protected_leaf_under_a_different_absolute_name_is_not_an_external_source() {
+    let a = Entity { dev: 10, ino: 20 };
+    let b = Entity { dev: 10, ino: 21 };
+    let source = (Path::new("/source/tree"), a);
+    assert!(same_or_nested(source, (Path::new("/elsewhere/role"), a)));
+    assert!(same_or_nested(source, (Path::new("/source/tree/child"), b)));
+    assert!(!same_or_nested(source, (Path::new("/elsewhere/role"), b)));
+}
+
+#[test]
+fn typed_inventory_includes_directories_raw_paths_and_changed_file_witnesses() {
+    use std::{fs, os::unix::fs::symlink};
+    let temp = crate::test_area::data_directory();
+    let root = temp.path();
+    fs::create_dir(root.join("empty")).unwrap();
+    fs::create_dir(root.join("nested")).unwrap();
+    let path = root.join("nested").join(OsStr::from_bytes(b"x\t\xff"));
+    fs::write(&path, b"1").unwrap();
+    fs::hard_link(&path, root.join("linked")).unwrap();
+    let observe = || -> io::Result<Inventory> {
+        let dir = File::open(root)?;
+        let mount = Mount::on(&dir)?.ok_or_else(changed)?;
+        let stamp = Stamp::read(&dir, mount, dir.metadata()?.dev())?;
+        let mut entries = Vec::new();
+        let counts = census(dir, stamp, mount, None, None, Some(&mut entries))?;
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        Ok(Inventory { counts, entries })
+    };
+    let before = observe().unwrap();
+    assert_eq!((before.counts.files, before.counts.dirs, before.counts.empty_dirs, before.counts.hard_links), (2, 2, 1, 2));
+    let paths: Vec<_> = before.files().map(|(p, _)| p.as_bytes()).collect();
+    assert_eq!(paths, [b"linked".as_slice(), b"nested/x\t\xff"]);
+    assert!(before == observe().unwrap());
+    fs::write(&path, b"longer").unwrap();
+    assert!(before != observe().unwrap());
+    symlink("linked", root.join("symbolic")).unwrap();
+    assert!(observe().is_err());
+}
+
+#[test]
 fn same_name_candidates_follow_server_spelling_not_workspace_alias_rules() {
     assert!(same_name_candidate(&[b'a'; 255]));
     assert!(!same_name_candidate(&[b'a'; 256]));

@@ -9,10 +9,10 @@ use rustix::{
     process::{getgid, getuid},
 };
 use std::{
-    ffi::{CStr, CString, OsString},
+    ffi::{CStr, CString, OsStr, OsString},
     fs::File,
     io::{self, Write},
-    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    os::unix::{ffi::{OsStrExt, OsStringExt}, fs::MetadataExt},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -111,7 +111,7 @@ pub(super) struct Counts {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Stamp {
+pub(super) struct Stamp {
     entity: Entity,
     kind: u32,
     mode: u32,
@@ -151,9 +151,14 @@ fn changed() -> io::Error {
     blocked("the original source changed during the metadata walk")
 }
 
+fn same_or_nested((left, a): (&Path, Entity), (right, b): (&Path, Entity)) -> bool {
+    a == b || left.starts_with(right) || right.starts_with(left)
+}
+
 fn overlapping(source: &Pinned, original: &Pinned) -> bool {
-    source.path().starts_with(original.path())
-        || original.path().starts_with(source.path())
+    // Visible-ancestor tests omit the leaf; a differently named whole-mount
+    // alias of the very same role or deployment directory is still protected.
+    same_or_nested((source.path(), source.entity()), (original.path(), original.entity()))
         || source.entity_is_visible_ancestor_of(original)
         || original.entity_is_visible_ancestor_of(source)
 }
@@ -188,27 +193,94 @@ pub(super) fn scan(
     target_names: Option<&[String]>,
     require_roles: impl Fn() -> io::Result<()>,
 ) -> io::Result<Counts> {
-    let pin = pin_source(selected, source)?;
-    let before = pin.require_same_named_mount()?;
-    selected.scope.full_local_mount(before.id)?;
-    let directory = pin.storage_directory()?;
-    let root = Stamp::read(&directory, before, pin.entity().dev)?;
-    if root.kind != 0o040_000 || root.entity != pin.entity() {
-        return Err(refused());
+    SourceTree::open(selected, source)?.observe(preview, target_names, None, require_roles)
+}
+
+/// Keep the same root and mounted directory across every census and fingerprint.
+pub(super) struct SourceTree {
+    pin: Pinned,
+    mount: Mount,
+    directory: File,
+    root: Stamp,
+}
+
+#[derive(Eq, PartialEq)]
+pub(super) struct Inventory {
+    counts: Counts,
+    entries: Vec<(OsString, Stamp)>, // includes directory names and witnesses
+}
+
+impl Inventory {
+    pub(super) fn files(&self) -> impl Iterator<Item = (&OsStr, &Stamp)> {
+        self.entries.iter().filter_map(|(path, stamp)| {
+            (stamp.kind == 0o100_000).then_some((path.as_os_str(), stamp))
+        })
     }
-    let check = || {
-        require_roles()?;
-        if pin.require_same_named_mount()? != before
-            || Stamp::read(&directory, before, root.entity.dev)? != root
+
+    pub(super) fn report(&self, out: &mut impl Write) -> io::Result<()> {
+        writeln!(out, "source census: {} files, {} logical bytes, {} directories ({} empty); directories stay on the source; {} hard-linked entries would be imported by name",
+            self.counts.files, self.counts.bytes, self.counts.dirs, self.counts.empty_dirs,
+            self.counts.hard_links)
+    }
+}
+
+impl SourceTree {
+    pub(super) fn open(selected: &FreshSelection, source: &Path) -> io::Result<Self> {
+        let pin = pin_source(selected, source)?;
+        let mount = pin.require_same_named_mount()?;
+        selected.scope.full_local_mount(mount.id)?;
+        let directory = pin.storage_directory()?;
+        let root = Stamp::read(&directory, mount, pin.entity().dev)?;
+        if root.kind != 0o040_000 || root.entity != pin.entity() {
+            return Err(refused());
+        }
+        Ok(Self { pin, mount, directory, root })
+    }
+
+    fn verify(&self) -> io::Result<()> {
+        if self.pin.require_same_named_mount()? != self.mount
+            || Stamp::read(&self.directory, self.mount, self.root.entity.dev)? != self.root
         {
             return Err(changed());
         }
         Ok(())
-    };
-    check()?;
-    let counts = census(directory.try_clone()?, root, before, preview, target_names)?;
-    check()?;
-    Ok(counts)
+    }
+
+    /// The actual FD selected for hashing, not just later totals or a display path.
+    pub(super) fn require_file(&self, root: &Pinned, mount: Mount, held: &File, stamp: &Stamp) -> io::Result<()> {
+        self.verify()?;
+        if self.pin.entity() != root.entity() || self.mount != mount
+            || Stamp::read(held, self.mount, self.root.entity.dev)? != *stamp
+        {
+            return Err(changed());
+        }
+        Ok(())
+    }
+
+    fn observe(
+        &self,
+        preview: Option<&mut Vec<u8>>,
+        target_names: Option<&[String]>,
+        entries: Option<&mut Vec<(OsString, Stamp)>>,
+        require_roles: impl Fn() -> io::Result<()>,
+    ) -> io::Result<Counts> {
+        require_roles()?;
+        self.verify()?;
+        let counts = census(self.directory.try_clone()?, self.root, self.mount, preview, target_names, entries)?;
+        self.verify()?;
+        require_roles()?;
+        Ok(counts)
+    }
+
+    pub(super) fn inventory(&self, require_roles: impl Fn() -> io::Result<()>) -> io::Result<Inventory> {
+        let mut entries = Vec::new();
+        let counts = self.observe(None, None, Some(&mut entries), require_roles)?;
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(changed());
+        }
+        Ok(Inventory { counts, entries })
+    }
 }
 
 fn dir_reader(dir: &File) -> io::Result<File> {
@@ -301,11 +373,12 @@ fn census(
     mount: Mount,
     mut preview: Option<&mut Vec<u8>>,
     target_names: Option<&[String]>,
+    mut entries: Option<&mut Vec<(OsString, Stamp)>>,
 ) -> io::Result<Counts> {
     let mut frames = vec![Frame::open(dir, root, mount, 0, None)?];
     let mut counts = Counts::default();
     // Iterative depth-first walk; open descriptors and memory follow path
-    // depth. Only the opt-in preview buffers output until the final recheck.
+    // depth; only explicit preview or full-tree selection buffers row data.
     while let Some(frame) = frames.last_mut() {
         let Some(next) = frame.stream.read() else {
             if Stamp::read(&frame.original, mount, root.entity.dev)? != frame.stamp {
@@ -322,6 +395,9 @@ fn census(
                 }
                 if !done.saw_member {
                     add_count(&mut counts.empty_dirs)?;
+                }
+                if let Some(rows) = entries.as_deref_mut() {
+                    record_entry(rows, &frames, &name, done.width, done.stamp)?;
                 }
             }
             continue;
@@ -376,6 +452,9 @@ fn census(
                         status,
                     )?;
                 }
+                if let Some(rows) = entries.as_deref_mut() {
+                    record_entry(rows, &frames, name, width, one)?;
+                }
                 if one.links > 1 {
                     add_count(&mut counts.hard_links)?;
                 }
@@ -392,6 +471,20 @@ fn census(
         }
     }
     Ok(counts)
+}
+
+fn record_entry(rows: &mut Vec<(OsString, Stamp)>, parents: &[Frame], name: &CStr, width: usize, stamp: Stamp) -> io::Result<()> {
+    let allocation = |_| io::Error::from(io::ErrorKind::OutOfMemory);
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(width).map_err(allocation)?;
+    for component in parents.iter().filter_map(|f| f.parent_name.as_deref()) {
+        raw.extend_from_slice(component.to_bytes());
+        raw.push(b'/');
+    }
+    raw.extend_from_slice(name.to_bytes());
+    rows.try_reserve(1).map_err(allocation)?;
+    rows.push((OsString::from_vec(raw), stamp));
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

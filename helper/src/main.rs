@@ -52,7 +52,9 @@ helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR -
   helper preflight-import [--show-names | --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]
   helper import-one prepare SOURCE RELATIVE NAME TARGET-DATA SYSTEM RECYCLE DATA [DATA ...]
   helper import-one apply SYSTEM RECYCLE DATA [DATA ...]
-  helper import-batch prepare SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...] -- RELATIVE NAME [RELATIVE NAME ...]
+  helper import-batch prepare SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...] (-- RELATIVE NAME [RELATIVE NAME ...] | --map0)
+  helper import-batch prepare-tree SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...] [-- RELATIVE NAME ... | --map0]
+  helper import-batch show
   helper import-batch apply SYSTEM RECYCLE DATA [DATA ...]
   helper --help | --version\n\n\
 Supply already mounted directories; storage-status reports observations, not an approved layout.";
