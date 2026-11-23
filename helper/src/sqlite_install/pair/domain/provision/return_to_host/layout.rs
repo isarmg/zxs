@@ -5,12 +5,9 @@ use super::{
     PRODUCT, Site, bad, child, contents, mark, product_leaf, product_pin, product_top, safe_dir,
 };
 use crate::{maintenance::HostMounts, pinned::Mount, sqlite_install::product_layout};
-pub(in crate::sqlite_install::pair) use initial_deployment::{FreshHome, FreshParent};
+pub(in crate::sqlite_install::pair) use initial_deployment::FreshParent;
 use rustix::{
-    fs::{
-        Mode, RenameFlags, StatVfsMountFlags, fchmod, fchown, fgetxattr, fstatvfs, mkdirat,
-        renameat_with,
-    },
+    fs::{Mode, RenameFlags, fchmod, fchown, fgetxattr, mkdirat, renameat_with},
     io::Errno,
     process::{Gid, Uid},
 };

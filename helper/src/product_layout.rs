@@ -6,6 +6,6 @@ pub(crate) const BIN: &str = "/zxs/bin";
 mod legacy;
 #[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) use legacy::{
-    CONTROL_MODE, IMAGE, RECYCLE, STATE, STATE_COMPONENTS, SYSTEM, TOP, data_label, image_separate,
-    media, raw_member, require_original_media,
+    CONTROL_MODE, IMAGE, RECYCLE, STATE_COMPONENTS, SYSTEM, TOP, data_label, image_separate, media,
+    raw_member, require_original_media,
 };

@@ -8,9 +8,7 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::ffi::OsStr;
 use std::{ffi::OsString, io};
-pub(super) use wire::{
-    CredentialScope, CryptoPins, DEPLOYMENT_BYTES, MAX_SITE, SitePayload, activation,
-};
+pub(super) use wire::{CredentialScope, CryptoPins, MAX_SITE, SitePayload};
 
 const SCHEMA_SHA: &str = "4d54de32c0004f7b5c0ed6af44a556d8add56517518cf7d8b0a5fe8bb158a0f4";
 pub(in crate::sqlite_install) fn compiled_schema() -> io::Result<()> {
@@ -74,24 +72,16 @@ impl ExplicitSubject {
 }
 
 pub(super) mod image;
-use super::{
-    command::{key, value},
-    domain::FreshHome,
-    native_run::ResolvedRust,
-    native_sql::rust_vault::{ActiveRustMeta, RustChange},
-    rust_enroll::{
-        manifest::{Authority, Manifest},
-        receipt::Observed,
-    },
-    terminal::PublicConfirmation,
-};
+#[cfg(test)]
+use super::command::{key, value};
+#[cfg(test)]
+use super::terminal::PublicConfirmation;
 #[cfg(test)]
 use super::{
     command::{name, sha},
     native_run::Choice,
     native_sql::rust_vault::shared_login,
 };
-use crate::smb_profile;
 #[cfg(test)]
 use crate::{
     smb_profile::{
@@ -104,7 +94,8 @@ use crate::{
 use helper_linux_evidence::prompt_signals::PromptSignals;
 #[cfg(feature = "embedded-zxs")]
 pub(crate) use image::EmbeddedInstall;
-use std::{fmt::Write as _, path::PathBuf};
+#[cfg(test)]
+use std::path::PathBuf;
 
 // Before and after password prompts only. Do not leave process-wide
 // handlers or a blocked signal mask across the next independent TTY guard.
@@ -248,158 +239,9 @@ impl Selection {
         })
     }
 }
-/// One real original-terminal challenge, before creating site or vault
-/// material. The same exact manifest and independently lowered public tuple
-/// must still agree to use it; no child may ask for another setup approval.
-#[must_use]
-pub(in crate::sqlite_install::pair) struct FreshConsent<'a> {
-    tty: &'a PublicConfirmation,
-    scope: [u8; 32],
-    site: [u8; 32],
-    action: [u8; 32],
-    target: ActiveRustMeta,
-}
-impl<'a> FreshConsent<'a> {
-    fn approve(
-        tty: &'a PublicConfirmation,
-        m: &Manifest,
-        site: &SitePayload,
-        change: RustChange,
-        preview: String,
-    ) -> io::Result<Self> {
-        let scope = m.scope()?;
-        let stamp = site.sha()?;
-        let target = change.target();
-        let action = change.digest();
-        let Authority::Fresh(f) = m.authority else {
-            return Err(bad("missing exact approved fresh account"));
-        };
-        if f.site != stamp
-            || m.plan.sha() != site.plan_sha
-            || m.plan.origin != site.origin
-            || m.system != site.system
-            || f.subject != site.subject
-            || f.init_sha != target.init_sha
-            || change.previous().is_some()
-        {
-            return Err(bad("different exact fresh setup preview"));
-        }
-        tty.confirm_initial_deployment(preview)?;
-        Ok(Self {
-            tty,
-            scope,
-            site: stamp,
-            action,
-            target,
-        })
-    }
-    pub(in crate::sqlite_install::pair) fn terminal(&self) -> &'a PublicConfirmation {
-        self.tty
-    }
-    pub(in crate::sqlite_install::pair) fn require_site(
-        &self,
-        site: &SitePayload,
-    ) -> io::Result<()> {
-        if site.sha()? != self.site {
-            return Err(bad("not this originally approved site"));
-        }
-        self.tty.check()
-    }
-    pub(in crate::sqlite_install::pair) fn require_manifest(&self, m: &Manifest) -> io::Result<()> {
-        if m.scope()? != self.scope {
-            return Err(bad("not this originally approved shared setup"));
-        }
-        self.tty.check()
-    }
-    pub(in crate::sqlite_install::pair) fn require_observed(
-        &self,
-        m: &Manifest,
-        v: &Observed,
-    ) -> io::Result<()> {
-        self.require_manifest(m)?;
-        if v.state != 1
-            || v.target != self.target
-            || v.previous.is_some()
-            || v.action != self.action
-        {
-            return Err(bad(
-                "lowered observation differs from the sole original setup consent",
-            ));
-        }
-        Ok(())
-    }
-}
-
 fn hex(bytes: &[u8]) -> String {
     crate::fs_tools::lower_hex(bytes)
 }
-fn preview(
-    resolved: &ResolvedRust,
-    payload: &SitePayload,
-    target: &FreshHome,
-    shared: &ActiveRustMeta,
-    reference: &Id,
-    action: [u8; 32],
-    crypto: CryptoPins,
-) -> io::Result<String> {
-    let p = resolved.plan();
-    let o = p.origin;
-    let (actor, uid, gid) = payload.subject.tuple();
-    let mut out = format!(
-        "仅发行从未设置账号的 v21 新 ZXS 池。不会续单、覆盖、清理、迁移，也不会启动任何服务。若中断则保留所有原件，不能盲目重做。\n\
-        原池 {} / INIT {} / 原请求 SHA-256 {} / 原主体 {} / 存储 UID:GID {uid}:{gid}。\n\
-        新站点 {} / Bind {} / SETUP {} / 批准参考 {}。\n\
-        实际受保护的目标 {}。此操作最后独立写入新 deployment.v1；已有文件一律不接管。\n\
-        已独立确认的单一 {:?} SHA-256 {}；原描述 SHA-256 {}；新站点记录 SHA-256 {}。\n\
-        当前指定 Helper {}、离线 libgcrypt {}、离线 libgpg-error {}；这些不随 ZXS 运行。\n\
-        {}本次 ZXS 主机 {}；Web 与 SMB 共用唯一用户名 {}、账户 {}（首代），凭据正本 {}、固定 SID {}。\n\
-        共用设置请求 SHA-256 {}；仅此一次批准，之后在本原终端输入和复输同一个口令。\n",
-        hex(&o.pool),
-        hex(&o.init),
-        hex(&shared.init_sha),
-        hex(&actor),
-        hex(&o.instance),
-        hex(&o.bind),
-        hex(&o.setup),
-        hex(reference),
-        target.evidence()?,
-        payload.image,
-        hex(&payload.elf_sha),
-        hex(&payload.plan_sha),
-        hex(&payload.sha()?),
-        hex(&crypto.helper),
-        hex(&crypto.gcrypt),
-        hex(&crypto.gpgerror),
-        resolved.preview(),
-        p.host(),
-        std::str::from_utf8(&shared.login).map_err(|_| bad("invalid shared login"))?,
-        hex(&shared.account),
-        hex(&shared.record),
-        hex(&shared.sid),
-        hex(&action)
-    );
-    out.push_str("  SMB 0.0.0.0:445（固定 IPv4，尚未监听）\n");
-    out.push_str("  原回收路径在 ZXS 中的计划名称 \"");
-    smb_profile::escaped(&mut out, p.recycle().as_str().as_bytes());
-    out.push_str("\"\n");
-    for (f, _) in p.folders() {
-        out.push_str("  ZXS 目录 \"");
-        smb_profile::escaped(&mut out, f.name.as_bytes());
-        writeln!(
-            out,
-            "\"，原卷 {}，初始 {}",
-            hex(&f.volume),
-            if f.mode == Mode::ReadWrite {
-                "rw"
-            } else {
-                "ro"
-            }
-        )
-        .expect("writing String");
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

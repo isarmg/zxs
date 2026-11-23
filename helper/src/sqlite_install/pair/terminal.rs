@@ -1,7 +1,7 @@
 //! Local, unbuffered entry on the already-open controlling terminal. Private:
 //! this is not maintenance authorization, runtime installation evidence or an issuer.
 mod audit;
-use super::super::approval::{host_admin, same_terminal};
+use super::super::approval::host_admin;
 use super::{
     native_run::joint_material::Binding,
     web_secret::{PreparedWeb, WebWorkspace},
@@ -234,6 +234,7 @@ impl Drop for Quiet<'_> {
     }
 }
 
+#[cfg(test)]
 fn begin_held_quiet(fd: BorrowedFd<'_>) -> io::Result<(Quiet<'_>, PromptSignals)> {
     let signals = PromptSignals::begin()?;
     let tty = Quiet::begin(fd)?;
@@ -314,16 +315,6 @@ impl SelectedInput {
         self.channel.require()?;
         protect_memory()
     }
-    pub(super) fn hold_for_birth<'a>(&'a self, tty: &'a io::Stdin) -> io::Result<HeldQuiet<'a>> {
-        self.audit.require_current()?;
-        self.channel.require()?;
-        let (tty, signals) = begin_held_quiet(tty.as_fd())?;
-        Ok(HeldQuiet {
-            tty,
-            signals,
-            selected: self,
-        })
-    }
     /// Complete both fixed providers and memory preparation before the
     /// real coordinator grants any new writable stage or hidden input.
     pub(super) fn reserve_joint(
@@ -374,27 +365,6 @@ impl SelectedInput {
         let [accepted, repeat] = entries;
         drop(repeat); // erase confirmation before doing anything with the password
         Ok(accepted)
-    }
-}
-
-// Quiet is dropped BEFORE the original signal mask (including errors).
-pub(super) struct HeldQuiet<'a> {
-    tty: Quiet<'a>,
-    signals: PromptSignals,
-    selected: &'a SelectedInput,
-}
-impl HeldQuiet<'_> {
-    pub(super) fn require(&self) -> io::Result<()> {
-        self.signals.check()?;
-        self.selected.audit.require_current()?;
-        self.selected.channel.require()?;
-        self.tty.verify()
-    }
-    pub(super) fn finish(mut self) -> io::Result<()> {
-        self.tty.restore()?;
-        let pending = self.signals.check();
-        self.signals.finish()?;
-        pending
     }
 }
 

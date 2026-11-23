@@ -3,6 +3,7 @@ mod deployed;
 mod layout;
 mod public_record;
 mod rust_site;
+#[cfg(test)]
 mod rust_vault_io;
 mod site_lease;
 mod start;
@@ -16,11 +17,10 @@ use crate::{
     sqlite_install::{approval, product_layout, request::Id},
 };
 pub(in crate::sqlite_install::pair) use deployed::{DeployedSite, deployed_worker_payload};
-pub(in crate::sqlite_install::pair) use layout::{FreshHome, FreshParent};
+pub(in crate::sqlite_install::pair) use layout::FreshParent;
 pub(in crate::sqlite_install::pair) use rust_site::{
-    CredentialSite, RustSite, VaultStamp, checked_vault_stamp, verify_fresh_worker,
+    VaultStamp, checked_vault_stamp, verify_fresh_worker,
 };
-pub(in crate::sqlite_install::pair) use rust_vault_io::{Allocated, CurrentVault, PlacedVault};
 use rustix::{
     fs::{FlockOperation, OFlags, fcntl_getfl, flock},
     io::Errno,

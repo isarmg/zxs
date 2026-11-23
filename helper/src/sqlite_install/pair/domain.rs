@@ -2,8 +2,7 @@
 mod provision;
 use super::bad;
 pub(super) use provision::{
-    Allocated, CredentialSite, CurrentVault, DeployedSite, FreshHome, FreshParent, PlacedVault,
-    RustSite, VaultStamp, checked_vault_stamp, deployed_worker_payload, give_live_approval,
+    FreshParent, VaultStamp, checked_vault_stamp, deployed_worker_payload, give_live_approval,
     request_live_approval, sealed, verify_fresh_worker,
 };
 pub(in crate::sqlite_install) use provision::{InitialLayout, require_lent_ex};

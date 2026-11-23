@@ -5,8 +5,7 @@ use super::bad;
 pub(in crate::sqlite_install::pair) use crate::local_worker::sealed;
 use crate::pinned::{Entity, Mount};
 pub(in crate::sqlite_install::pair) use return_to_host::{
-    Allocated, CredentialSite, CurrentVault, DeployedSite, FreshHome, FreshParent, PlacedVault,
-    RustSite, VaultStamp, checked_vault_stamp, deployed_worker_payload, give_live_approval,
+    FreshParent, VaultStamp, checked_vault_stamp, deployed_worker_payload, give_live_approval,
     request_live_approval, verify_fresh_worker,
 };
 pub(in crate::sqlite_install) use return_to_host::{InitialLayout, lease as require_lent_ex};
