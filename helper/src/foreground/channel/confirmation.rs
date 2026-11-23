@@ -141,7 +141,7 @@ impl PublicConfirmation {
         let result = (|| -> io::Result<()> {
             check()?;
             clear(&self.reader)?; // stale lines cannot provide this confirmation
-            if let Some(text) = preview.as_ref() {
+            if let Some(text) = preview {
                 // The bounded action preview and challenge share one
                 // nonblocking OFD and the same real deadline.
                 if text.len() > limit {

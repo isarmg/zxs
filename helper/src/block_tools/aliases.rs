@@ -59,8 +59,8 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
         confined() | ResolveFlags::NO_SYMLINKS,
     )
     .map(File::from)
-    .map_err(|e| Reason::io(e.into()))?;
-    protected(&root).map_err(Reason::io)?;
+    .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
+    protected(&root).map_err(|error| Reason::io_kind(error.kind()))?;
     let dir = openat2(
         &root,
         set,
@@ -69,8 +69,8 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
         confined() | ResolveFlags::NO_SYMLINKS,
     )
     .map(File::from)
-    .map_err(|e| Reason::io(e.into()))?;
-    protected(&dir).map_err(Reason::io)?;
+    .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
+    protected(&dir).map_err(|error| Reason::io_kind(error.kind()))?;
     let stamp = |f: &File| -> io::Result<_> {
         let m = f.metadata()?;
         Ok((
@@ -82,13 +82,13 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
             m.ctime_nsec(),
         ))
     };
-    let original_dir = stamp(&dir).map_err(Reason::io)?;
-    let original_disk = stamp(&root).map_err(Reason::io)?;
+    let original_dir = stamp(&dir).map_err(|error| Reason::io_kind(error.kind()))?;
+    let original_disk = stamp(&root).map_err(|error| Reason::io_kind(error.kind()))?;
     let mut buffer = [MaybeUninit::<u8>::uninit(); 4096];
     let mut entries = RawDir::new(&dir, &mut buffer);
     let (mut count, mut out) = (0, BTreeMap::new());
     while let Some(next) = entries.next() {
-        let item = next.map_err(|e| Reason::io(e.into()))?;
+        let item = next.map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
         let name = item.file_name().to_bytes();
         if matches!(name, b"." | b"..") {
             continue;
@@ -109,8 +109,10 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
             confined(),
         )
         .map(File::from)
-        .map_err(|e| Reason::io(e.into()))?;
-        let m = before.metadata().map_err(Reason::io)?;
+        .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
+        let m = before
+            .metadata()
+            .map_err(|error| Reason::io_kind(error.kind()))?;
         if !m.file_type().is_symlink() || m.uid() != 0 {
             return Err(Reason::Invalid);
         }
@@ -119,10 +121,12 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
         let resolve = || {
             openat2(dev, link.as_str(), path(), Mode::empty(), confined())
                 .map(File::from)
-                .map_err(|e| Reason::io(e.into()))
+                .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))
         };
         let node = resolve()?;
-        let n = node.metadata().map_err(Reason::io)?;
+        let n = node
+            .metadata()
+            .map_err(|error| Reason::io_kind(error.kind()))?;
         if !n.file_type().is_block_device() {
             return Err(Reason::Invalid);
         }
@@ -134,9 +138,12 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
             confined(),
         )
         .map(File::from)
-        .map_err(|e| Reason::io(e.into()))?;
-        let still = resolve()?.metadata().map_err(Reason::io)?;
-        if stamp(&before).map_err(Reason::io)? != stamp(&again).map_err(Reason::io)?
+        .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
+        let still = resolve()?
+            .metadata()
+            .map_err(|error| Reason::io_kind(error.kind()))?;
+        if stamp(&before).map_err(|error| Reason::io_kind(error.kind()))?
+            != stamp(&again).map_err(|error| Reason::io_kind(error.kind()))?
             || !still.file_type().is_block_device()
             || (n.dev(), n.ino(), n.rdev()) != (still.dev(), still.ino(), still.rdev())
         {
@@ -154,10 +161,10 @@ fn read_one(dev: &File, set: &str) -> Field<AliasMap> {
         confined() | ResolveFlags::NO_SYMLINKS,
     )
     .map(File::from)
-    .map_err(|e| Reason::io(e.into()))?;
-    if stamp(&again).map_err(Reason::io)? != original_dir
-        || stamp(&dir).map_err(Reason::io)? != original_dir
-        || stamp(&root).map_err(Reason::io)? != original_disk
+    .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
+    if stamp(&again).map_err(|error| Reason::io_kind(error.kind()))? != original_dir
+        || stamp(&dir).map_err(|error| Reason::io_kind(error.kind()))? != original_dir
+        || stamp(&root).map_err(|error| Reason::io_kind(error.kind()))? != original_disk
     {
         return Err(Reason::Changed);
     }
@@ -171,11 +178,17 @@ pub(super) struct DevRoot {
 }
 impl DevRoot {
     pub(super) fn pin() -> Field<Self> {
-        let fd = BlockRoot::DeviceAliases.pin().map_err(Reason::io)?;
-        protected(&fd).map_err(Reason::io)?;
-        let entity = Entity::of(&fd.metadata().map_err(Reason::io)?).map_err(Reason::io)?;
+        let fd = BlockRoot::DeviceAliases
+            .pin()
+            .map_err(|error| Reason::io_kind(error.kind()))?;
+        protected(&fd).map_err(|error| Reason::io_kind(error.kind()))?;
+        let entity = Entity::of(
+            &fd.metadata()
+                .map_err(|error| Reason::io_kind(error.kind()))?,
+        )
+        .map_err(|error| Reason::io_kind(error.kind()))?;
         let mount = Mount::on(&fd)
-            .map_err(Reason::io)?
+            .map_err(|error| Reason::io_kind(error.kind()))?
             .ok_or(Reason::Unsupported)?;
         if mount.at_root != Some(true) {
             return Err(Reason::Unsupported);
@@ -192,7 +205,7 @@ impl DevRoot {
 
     fn require_devtmpfs(&self) -> Field<()> {
         if !HostMounts::current()
-            .map_err(Reason::io)?
+            .map_err(|error| Reason::io_kind(error.kind()))?
             .is_full_devtmpfs(self.mount.id, self.entity.dev)
         {
             return Err(Reason::Unsupported);
@@ -231,21 +244,23 @@ impl<'a> NvmeNamespace<'a> {
             confined() | ResolveFlags::NO_SYMLINKS,
         )
         .map(File::from)
-        .map_err(|e| Reason::io(e.into()))
+        .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))
     }
 
     fn stamp(root: &DevRoot, fd: &File, dev: Dev) -> Field<Entity> {
-        let m = fd.metadata().map_err(Reason::io)?;
+        let m = fd
+            .metadata()
+            .map_err(|error| Reason::io_kind(error.kind()))?;
         if !m.file_type().is_block_device()
             || m.uid() != 0
             || m.rdev() != dev.rdev()
             || Mount::on(fd)
-                .map_err(Reason::io)?
+                .map_err(|error| Reason::io_kind(error.kind()))?
                 .is_none_or(|m| m.id != root.mount.id || m.at_root != Some(false))
         {
             return Err(Reason::Changed);
         }
-        Entity::of(&m).map_err(Reason::io)
+        Entity::of(&m).map_err(|error| Reason::io_kind(error.kind()))
     }
 
     pub(super) fn open(identity: &'a Identity) -> Field<Self> {

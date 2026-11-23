@@ -317,7 +317,7 @@ impl Mounts {
                 .next()
                 .filter(|w| w.starts_with(b"/"))
                 .ok_or_else(bad)?;
-            if words.next().is_none_or(|w| w.is_empty()) || !words.any(|w| w == b"-") {
+            if words.next().is_none_or(<[u8]>::is_empty) || !words.any(|w| w == b"-") {
                 return Err(bad());
             }
             let fs_type = words.next().filter(|v| !v.is_empty()).ok_or_else(bad)?;

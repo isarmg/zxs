@@ -26,16 +26,24 @@ impl HealthQuery {
     }
 
     fn observe(&self) -> Field<Health> {
-        let sys = Sys::open().map_err(Reason::io)?;
-        let node = sys.pin(self.0).map_err(Reason::io)?;
-        let identity = node.identity(&sys).map_err(Reason::io)?;
+        let sys = Sys::open().map_err(|error| Reason::io_kind(error.kind()))?;
+        let node = sys
+            .pin(self.0)
+            .map_err(|error| Reason::io_kind(error.kind()))?;
+        let identity = node
+            .identity(&sys)
+            .map_err(|error| Reason::io_kind(error.kind()))?;
         let owner = NvmeOwner::select(&sys, &node, &identity)?;
         let device = NvmeNamespace::open(&identity)?;
         owner.require(&sys)?;
         let seen = nvme_health::read(device.original(), self.0.rdev(), owner.generation());
         device.require()?;
         owner.require(&sys)?;
-        if node.identity(&sys).map_err(Reason::io)? != identity {
+        if node
+            .identity(&sys)
+            .map_err(|error| Reason::io_kind(error.kind()))?
+            != identity
+        {
             return Err(Reason::Changed);
         }
         Health::decode(&seen.map_err(reason)?)
@@ -71,7 +79,7 @@ fn reason(failure: Failure) -> Reason {
         {
             Reason::Unsupported
         }
-        Failure::Io(err) => Reason::io(err),
+        Failure::Io(err) => Reason::io_kind(err.kind()),
     }
 }
 

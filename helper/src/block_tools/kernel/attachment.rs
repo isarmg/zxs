@@ -70,15 +70,21 @@ fn pinned_link(dir: &File, name: &OsStr) -> Field<File> {
             Mode::empty(),
             confined() | ResolveFlags::NO_SYMLINKS,
         )
-        .map_err(|e| Reason::io(e.into()))?,
+        .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?,
     );
-    if !f.metadata().map_err(Reason::io)?.file_type().is_symlink() {
+    if !f
+        .metadata()
+        .map_err(|error| Reason::io_kind(error.kind()))?
+        .file_type()
+        .is_symlink()
+    {
         return Err(Reason::Invalid);
     }
     Ok(f)
 }
 fn read_link(pin: &File, buf: &mut [u8; LINK_BYTES]) -> Field<usize> {
-    let len = readlinkat_raw(pin, c"", &mut buf[..]).map_err(|e| Reason::io(e.into()))?;
+    let len = readlinkat_raw(pin, c"", &mut buf[..])
+        .map_err(|e| Reason::io_kind(io::Error::from(e).kind()))?;
     if len == buf.len() {
         return Err(Reason::Limit);
     }
@@ -107,7 +113,8 @@ fn canonical_devpath(raw: &[u8]) -> Field<PathBuf> {
     Ok(PathBuf::from(OsStr::from_bytes(path)))
 }
 fn equal(a: &File, b: &File) -> Field<bool> {
-    Ok(obj(a).map_err(Reason::io)? == obj(b).map_err(Reason::io)?)
+    Ok(obj(a).map_err(|error| Reason::io_kind(error.kind()))?
+        == obj(b).map_err(|error| Reason::io_kind(error.kind()))?)
 }
 fn directory_fd(sys: &Sys, path: &Path, links: bool) -> rustix::io::Result<File> {
     let resolve = if links {
@@ -118,7 +125,7 @@ fn directory_fd(sys: &Sys, path: &Path, links: bool) -> rustix::io::Result<File>
     openat2(&sys.root, path, path_dir(), Mode::empty(), resolve).map(File::from)
 }
 fn directory(sys: &Sys, path: &Path, links: bool) -> Field<File> {
-    directory_fd(sys, path, links).map_err(|e| Reason::io(e.into()))
+    directory_fd(sys, path, links).map_err(|e| Reason::io_kind(io::Error::from(e).kind()))
 }
 fn changed_edge(r: Reason) -> Reason {
     match r {
@@ -129,7 +136,7 @@ fn changed_edge(r: Reason) -> Reason {
 fn require_devpath(sys: &Sys, path: &Path, whole: &File) -> Field<()> {
     let named = directory_fd(sys, path, false).map_err(|e| match e {
         Errno::NOENT | Errno::NOTDIR | Errno::LOOP | Errno::XDEV | Errno::AGAIN => Reason::Changed,
-        other => Reason::io(other.into()),
+        other => Reason::io_kind(io::Error::from(other).kind()),
     })?;
     if !equal(whole, &named)? {
         return Err(Reason::Changed);
@@ -212,7 +219,9 @@ impl Parent {
         if self.kind != Subsystem::Nvme {
             return Err(Reason::Unsupported);
         }
-        transport_type(&attr(&self.dir, c"transport").map_err(Reason::io)?)
+        transport_type(
+            &attr(&self.dir, c"transport").map_err(|error| Reason::io_kind(error.kind()))?,
+        )
     }
 }
 struct Cut {
@@ -231,14 +240,16 @@ impl Cut {
         let path = canonical_devpath(&raw[..len])?;
         let whole = directory(sys, &path, false)?;
         let require_whole = || {
-            if obj(&whole).map_err(Reason::io)? != object
+            if obj(&whole).map_err(|error| Reason::io_kind(error.kind()))? != object
                 || !equal(
                     &whole,
-                    &sys.at(dev).map_err(Reason::io).map_err(changed_edge)?,
+                    &sys.at(dev)
+                        .map_err(|error| Reason::io_kind(error.kind()))
+                        .map_err(changed_edge)?,
                 )?
                 || Dev::parse(
                     &attr(&whole, c"dev")
-                        .map_err(Reason::io)
+                        .map_err(|error| Reason::io_kind(error.kind()))
                         .map_err(changed_edge)?,
                 ) != Some(dev)
                 || diskseq(&whole).map_err(changed_edge)? != generation
@@ -300,7 +311,9 @@ impl Cut {
 }
 impl Node {
     pub(in crate::block_tools) fn attachment(&self, sys: &Sys, id: &Identity) -> Field<Attachment> {
-        if self.dev != id.dev || obj(&self.dir).map_err(Reason::io)? != id.object {
+        if self.dev != id.dev
+            || obj(&self.dir).map_err(|error| Reason::io_kind(error.kind()))? != id.object
+        {
             return Err(Reason::Changed);
         }
         let generation = id.diskseq?;
@@ -331,7 +344,9 @@ impl NvmeOwner {
         if id.kind != Kind::Disk {
             return Err(Reason::Unsupported);
         }
-        if node.dev != id.dev || obj(&node.dir).map_err(Reason::io)? != id.object {
+        if node.dev != id.dev
+            || obj(&node.dir).map_err(|error| Reason::io_kind(error.kind()))? != id.object
+        {
             return Err(Reason::Changed);
         }
         let generation = id.diskseq?;
@@ -355,12 +370,14 @@ impl NvmeOwner {
         if verified.nvme_transport != Ok("pcie") {
             return Err(Reason::Changed);
         }
-        let state = attr(&later.parent.dir, c"state").map_err(Reason::io)?;
+        let state =
+            attr(&later.parent.dir, c"state").map_err(|error| Reason::io_kind(error.kind()))?;
         if state != b"live" {
             return Err(Reason::NotReported);
         }
         later.parent.require_named(sys).map_err(changed_edge)?;
-        sys.require_named().map_err(Reason::io)
+        sys.require_named()
+            .map_err(|error| Reason::io_kind(error.kind()))
     }
 
     pub(in crate::block_tools) fn generation(&self) -> u64 {

@@ -672,7 +672,8 @@ fn collect(
     nonblock(&out)?;
     nonblock(&err)?;
     nonblock(&status)?;
-    let (mut o, mut e, mut s) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut stdout_bytes, mut stderr_bytes, mut status_bytes) =
+        (Vec::new(), Vec::new(), Vec::new());
     let start = Instant::now();
     loop {
         not_cancelled()?;
@@ -685,19 +686,19 @@ fn collect(
                 "isolated checker timed out",
             ));
         }
-        let a = drain(&mut out, &mut o, OUTPUT - e.len())?;
-        let b = drain(&mut err, &mut e, OUTPUT - o.len())?;
-        let c = drain(&mut status, &mut s, STATUS)?;
+        let stdout_eof = drain(&mut out, &mut stdout_bytes, OUTPUT - stderr_bytes.len())?;
+        let stderr_eof = drain(&mut err, &mut stderr_bytes, OUTPUT - stdout_bytes.len())?;
+        let status_eof = drain(&mut status, &mut status_bytes, STATUS)?;
         if let Some(code) = group.peek_exit()?
-            && a
-            && b
-            && c
+            && stdout_eof
+            && stderr_eof
+            && status_eof
         {
             return Ok(Captured {
                 code,
-                out: o,
-                err: e,
-                status: s,
+                out: stdout_bytes,
+                err: stderr_bytes,
+                status: status_bytes,
             });
         }
         thread::sleep(Duration::from_millis(5));

@@ -27,8 +27,8 @@ pub(crate) enum Unknown {
 }
 
 impl Unknown {
-    fn io(err: io::Error) -> Self {
-        match err.kind() {
+    fn io_kind(kind: io::ErrorKind) -> Self {
+        match kind {
             io::ErrorKind::NotFound | io::ErrorKind::WouldBlock => Self::Unavailable,
             io::ErrorKind::PermissionDenied => Self::Denied,
             io::ErrorKind::Unsupported => Self::Unsupported,
@@ -76,8 +76,9 @@ struct Source<'a> {
 }
 impl<'a> Source<'a> {
     fn pin(root: &'a File, mount: u64, metric: Metric) -> Field<Self> {
-        let pin = passive_proc_child(root, metric.name(), mount, false).map_err(Unknown::io)?;
-        let entity = identity(&pin).map_err(Unknown::io)?;
+        let pin = passive_proc_child(root, metric.name(), mount, false)
+            .map_err(|error| Unknown::io_kind(error.kind()))?;
+        let entity = identity(&pin).map_err(|error| Unknown::io_kind(error.kind()))?;
         Ok(Self {
             root,
             mount,
@@ -100,18 +101,21 @@ impl<'a> Source<'a> {
                 ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_XDEV,
             )
             .map_err(io::Error::from)
-            .map_err(Unknown::io)?,
+            .map_err(|error| Unknown::io_kind(error.kind()))?,
         );
-        if !f.metadata().map_err(Unknown::io)?.is_file()
+        if !f
+            .metadata()
+            .map_err(|error| Unknown::io_kind(error.kind()))?
+            .is_file()
             || fstatfs(&f)
                 .map_err(io::Error::from)
-                .map_err(Unknown::io)?
+                .map_err(|error| Unknown::io_kind(error.kind()))?
                 .f_type
                 != PROC_SUPER_MAGIC
             || Mount::on(&f)
-                .map_err(Unknown::io)?
+                .map_err(|error| Unknown::io_kind(error.kind()))?
                 .is_none_or(|m| m.id != self.mount)
-            || identity(&f).map_err(Unknown::io)? != self.entity
+            || identity(&f).map_err(|error| Unknown::io_kind(error.kind()))? != self.entity
         {
             return Err(Unknown::Changed);
         }
@@ -120,9 +124,9 @@ impl<'a> Source<'a> {
 
     fn require_named(&self) -> Field<()> {
         let now = passive_proc_child(self.root, self.metric.name(), self.mount, false)
-            .map_err(Unknown::io)?;
-        if identity(&now).map_err(Unknown::io)? != self.entity
-            || identity(&self.pin).map_err(Unknown::io)? != self.entity
+            .map_err(|error| Unknown::io_kind(error.kind()))?;
+        if identity(&now).map_err(|error| Unknown::io_kind(error.kind()))? != self.entity
+            || identity(&self.pin).map_err(|error| Unknown::io_kind(error.kind()))? != self.entity
         {
             return Err(Unknown::Changed);
         }
@@ -263,7 +267,7 @@ fn cpu_read(source: &Source<'_>) -> Field<(Instant, Ticks)> {
     let mut bytes = Vec::new();
     BufReader::new(source.reader()?.take(CPU_LINE_LIMIT as u64))
         .read_until(b'\n', &mut bytes)
-        .map_err(Unknown::io)?;
+        .map_err(|error| Unknown::io_kind(error.kind()))?;
     let sampled = Instant::now();
     source.require_named()?;
     Ok((sampled, Ticks::decode(&bytes)?))
@@ -289,7 +293,7 @@ fn memory(root: &File, mount: u64) -> Field<Memory> {
         .reader()?
         .take((MEMORY_LIMIT + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(Unknown::io)?;
+        .map_err(|error| Unknown::io_kind(error.kind()))?;
     source.require_named()?;
     Memory::decode(&bytes)
 }
@@ -316,11 +320,13 @@ fn unix_ms() -> Option<u128> {
 pub(crate) fn observe() -> Report {
     let started_ms = unix_ms();
     let pair = (|| {
-        let (root, mount) = passive_proc_root().map_err(Unknown::io)?;
+        let (root, mount) = passive_proc_root().map_err(|error| Unknown::io_kind(error.kind()))?;
         let (cpu, memory) = (cpu(&root, mount), memory(&root, mount));
-        let (now, current_mount) = passive_proc_root().map_err(Unknown::io)?;
+        let (now, current_mount) =
+            passive_proc_root().map_err(|error| Unknown::io_kind(error.kind()))?;
         if current_mount != mount
-            || identity(&root).map_err(Unknown::io)? != identity(&now).map_err(Unknown::io)?
+            || identity(&root).map_err(|error| Unknown::io_kind(error.kind()))?
+                != identity(&now).map_err(|error| Unknown::io_kind(error.kind()))?
         {
             return Err(Unknown::Changed);
         }

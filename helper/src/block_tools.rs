@@ -35,8 +35,8 @@ pub(crate) enum Reason {
     Io,
 }
 impl Reason {
-    fn io(e: io::Error) -> Self {
-        match e.kind() {
+    fn io_kind(kind: io::ErrorKind) -> Self {
+        match kind {
             io::ErrorKind::PermissionDenied => Self::Denied,
             io::ErrorKind::NotFound => Self::NotReported,
             io::ErrorKind::Unsupported => Self::Unsupported,
@@ -314,8 +314,12 @@ impl Query {
         let mut samples = Vec::with_capacity(devices.len());
         for dev in devices {
             let entry: Field<_> = (|| {
-                let node = sys.pin(dev).map_err(Reason::io)?;
-                let identity = node.identity(&sys).map_err(Reason::io)?;
+                let node = sys
+                    .pin(dev)
+                    .map_err(|error| Reason::io_kind(error.kind()))?;
+                let identity = node
+                    .identity(&sys)
+                    .map_err(|error| Reason::io_kind(error.kind()))?;
                 let first = self.rates.then(|| node.counts());
                 Ok((node, identity, first))
             })();
@@ -326,7 +330,7 @@ impl Query {
             std::thread::sleep(Duration::from_secs(1));
         }
         let dev_root = aliases::DevRoot::pin(); // retain the original mount before taking the shared table
-        let mounts = HostMounts::current().map_err(Reason::io);
+        let mounts = HostMounts::current().map_err(|error| Reason::io_kind(error.kind()));
         let aliases = aliases::read(dev_root, mounts.as_ref().map_err(|r| *r));
         let mut rows = Vec::with_capacity(samples.len());
         for (dev, entry) in samples {
@@ -334,7 +338,9 @@ impl Query {
                 let second = self.rates.then(|| node.counts());
                 let model = node.model(&sys, &id);
                 let attachment = node.attachment(&sys, &id);
-                let current = node.identity(&sys).map_err(Reason::io)?;
+                let current = node
+                    .identity(&sys)
+                    .map_err(|error| Reason::io_kind(error.kind()))?;
                 if current != id {
                     return Err(Reason::Changed);
                 }

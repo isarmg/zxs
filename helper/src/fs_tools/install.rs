@@ -50,8 +50,8 @@ impl Evidence {
             _ => "not-verified",
         }
     }
-    fn from_io(e: io::Error) -> Self {
-        match e.kind() {
+    fn from_io_kind(kind: io::ErrorKind) -> Self {
+        match kind {
             io::ErrorKind::PermissionDenied => Self::Denied,
             _ => Self::Unavailable,
         }
@@ -72,11 +72,13 @@ struct Mark {
 }
 impl Mark {
     fn on(fd: &File) -> Result<Self> {
-        let m = fd.metadata().map_err(Evidence::from_io)?;
+        let m = fd
+            .metadata()
+            .map_err(|error| Evidence::from_io_kind(error.kind()))?;
         Ok(Self {
-            entity: Entity::of(&m).map_err(Evidence::from_io)?,
+            entity: Entity::of(&m).map_err(|error| Evidence::from_io_kind(error.kind()))?,
             mount: Mount::on(fd)
-                .map_err(Evidence::from_io)?
+                .map_err(|error| Evidence::from_io_kind(error.kind()))?
                 .ok_or(Evidence::Unavailable)?
                 .id,
             mode: m.mode(),
@@ -132,7 +134,7 @@ fn lookup(parts: &[&str], executable: bool) -> Result<Lookup> {
     };
     let root = File::from(
         open(c"/", path_flags() | OFlags::DIRECTORY, Mode::empty())
-            .map_err(|e| Evidence::from_io(e.into()))?,
+            .map_err(|e| Evidence::from_io_kind(io::Error::from(e).kind()))?,
     );
     let m = Mark::on(&root)?;
     if !m.accepts(true) {
@@ -155,7 +157,7 @@ fn lookup(parts: &[&str], executable: bool) -> Result<Lookup> {
                     component: index,
                 });
             }
-            Err(e) => return Err(Evidence::from_io(e.into())),
+            Err(e) => return Err(Evidence::from_io_kind(io::Error::from(e).kind())),
         };
         let m = Mark::on(&f)?;
         if if index + 1 < parts.len() {

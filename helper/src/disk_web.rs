@@ -312,7 +312,7 @@ fn serve_mode(launch: Launch) -> io::Result<()> {
     require_terminal(stderr.as_fd())?;
     let (image, storage) = match launch {
         Launch::Ordinary(image) => (image, None),
-        Launch::Storage(selection) => (None, Some(WebSelection::pin(selection))),
+        Launch::Storage(selection) => (None, Some(WebSelection::pin(&selection))),
     };
     let leased = image
         .as_ref()

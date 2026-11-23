@@ -96,19 +96,22 @@ pub(crate) struct Operand {
 impl Operand {
     pub(crate) fn capture(job: Request) -> io::Result<Self> {
         let helper = ForegroundElf::local()?;
-        let image = match job.format {
-            CheckFormat::Sealed(Format::Fat32) => {
-                Image::Fat32(Sealed::capture(&job.image, &job.digest)?)
-            }
+        let Request {
+            format,
+            image: path,
+            digest,
+        } = job;
+        let image = match format {
+            CheckFormat::Sealed(Format::Fat32) => Image::Fat32(Sealed::capture(&path, &digest)?),
             CheckFormat::Sealed(Format::Exfat) => {
-                Image::Exfat(ExfatSealed::capture(&job.image, &job.digest)?)
+                Image::Exfat(ExfatSealed::capture(&path, &digest)?)
             }
-            CheckFormat::Leased(kind) => Image::Leased(kind, leased::Selected::select(&job.image)?),
+            CheckFormat::Leased(kind) => Image::Leased(kind, leased::Selected::select(&path)?),
         };
         helper.require()?;
         Ok(Self {
             image,
-            expected: job.digest,
+            expected: digest,
             helper,
         })
     }

@@ -88,7 +88,7 @@ struct WebRoot {
     mount: Mount,
 }
 impl WebSelection {
-    pub(crate) fn pin(selection: Selection) -> Self {
+    pub(crate) fn pin(selection: &Selection) -> Self {
         Self {
             roots: selection
                 .paths()
@@ -365,13 +365,15 @@ impl Display for Report {
             "source=linux-statx+fstatvfs roles=operator-selected registration=not-checked filesystem_uuid=not-observed business_health=not-observed"
         )?;
         match (self.started, self.ended) {
-            (Some(a), Some(b)) if b >= a => write!(f, " sample_unix_ms={a}..{b}")?,
+            (Some(started), Some(ended)) if ended >= started => {
+                write!(f, " sample_unix_ms={started}..{ended}")?
+            }
             _ => f.write_str(" sample_unix_ms=unavailable")?,
         }
         for (role, row) in &self.rows {
             write!(f, "\nrole={role} ")?;
-            let o = match row {
-                Ok(o) => o,
+            let observed = match row {
+                Ok(observed) => observed,
                 Err(why) => {
                     write!(f, "path=unverified reason={why}")?;
                     continue;
@@ -380,9 +382,9 @@ impl Display for Report {
             write!(
                 f,
                 "path=observed dev={} ino={} ",
-                o.entity.dev, o.entity.ino
+                observed.entity.dev, observed.entity.ino
             )?;
-            let Mounted { mount: m, space: s } = match &o.mount {
+            let Mounted { mount, space } = match &observed.mount {
                 Ok(mounted) => mounted,
                 Err(why) => {
                     write!(
@@ -395,22 +397,26 @@ impl Display for Report {
             write!(
                 f,
                 "mount_id={} mount_root={} ",
-                m.id,
-                match m.at_root {
+                mount.id,
+                match mount.at_root {
                     Some(true) => "yes",
                     Some(false) => "no",
                     None => "not-reported",
                 }
             )?;
-            match s {
+            match space {
                 Err(why) => write!(f, "mount_ro_flag=unknown capacity=unknown reason={why}")?,
-                Ok(s) => {
+                Ok(capacity) => {
                     write!(
                         f,
                         "mount_ro_flag={} ",
-                        if s.readonly_flag { "set" } else { "clear" }
+                        if capacity.readonly_flag {
+                            "set"
+                        } else {
+                            "clear"
+                        }
                     )?;
-                    match s.capacity {
+                    match capacity.capacity {
                         Some(c) => write!(
                             f,
                             "total_bytes={} free_bytes={} available_bytes={}",
@@ -457,7 +463,7 @@ mod tests {
             let original = HeldSample::take(&system).unwrap();
             assert!(original.root.passive_mount_observation());
             let cli = selection().observe();
-            let web = WebSelection::pin(selection()).observe();
+            let web = WebSelection::pin(&selection()).observe();
             for report in [cli, web] {
                 assert_eq!(report.rows.len(), 3);
                 assert!(

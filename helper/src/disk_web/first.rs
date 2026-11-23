@@ -65,6 +65,12 @@ impl Offer {
         matches!(self.purpose, Purpose::CopyRepair { .. })
     }
     pub(super) fn route(&mut self, r: Request, now: Instant) -> (Reply, bool) {
+        let Request {
+            path,
+            content_type,
+            body,
+            ..
+        } = r;
         let (preview, request, requested, cancelled) = if self.is_repair() {
             (
                 "/api/copy-repair/preview",
@@ -80,14 +86,14 @@ impl Offer {
                 "安装请求已取消。未写入。",
             )
         };
-        if r.path == request {
-            if r.content_type.as_deref() != Some("application/octet-stream") || r.body.len() != 64 {
+        if path == request {
+            if content_type.as_deref() != Some("application/octet-stream") || body.len() != 64 {
                 return (Reply::plain(400, "这里只接受本机预览票。"), false);
             }
             if self.requested
                 || self
                     .ticket
-                    .is_none_or(|(h, until)| now >= until || !matches(&r.body, &h))
+                    .is_none_or(|(h, until)| now >= until || !matches(&body, &h))
             {
                 return (Reply::plain(403, "预览票不符或已失效。尚未写入。"), false);
             }
@@ -95,13 +101,13 @@ impl Offer {
             self.requested = true;
             return (Reply::plain(200, requested), true);
         }
-        if !r.body.is_empty() || r.content_type.is_some() {
+        if !body.is_empty() || content_type.is_some() {
             return (
                 Reply::plain(400, "这里不接受路径、口令、操作 ID 或工具选项。"),
                 false,
             );
         }
-        match r.path.as_str() {
+        match path.as_str() {
             p if p == preview && !self.requested => {
                 let Ok(ticket) = token() else {
                     return (Reply::plain(503, "暂不能准备本机确认票。"), false);

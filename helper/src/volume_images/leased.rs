@@ -94,7 +94,7 @@ impl<F: Copy> Image<F> {
         {
             return Err(invalid("expected the original readonly volume copy reader"));
         }
-        let stamp = Stamp::of(file.metadata()?)?;
+        let stamp = Stamp::of(&file.metadata()?)?;
         if !(2048..=i64::MAX as u64).contains(&stamp.len()) {
             return Err(invalid("invalid volume copy length"));
         }
@@ -102,7 +102,7 @@ impl<F: Copy> Image<F> {
         let mount =
             Mount::on(&file)?.ok_or_else(|| invalid("selected volume copy mount unavailable"))?;
         acquire_copy_read_lease(&file)?;
-        if Stamp::of(file.metadata()?)? != stamp || Mount::on(&file)? != Some(mount) {
+        if Stamp::of(&file.metadata()?)? != stamp || Mount::on(&file)? != Some(mount) {
             return Err(invalid(
                 "selected volume copy changed before acquiring its lease",
             ));
@@ -142,7 +142,7 @@ impl<F: Copy> Image<F> {
             selected.require()?;
         }
         let mut byte = [0];
-        if Stamp::of(self.file.metadata()?)? != self.stamp
+        if Stamp::of(&self.file.metadata()?)? != self.stamp
             || Mount::on(&self.file)? != Some(self.mount)
             || self.file.read_at(&mut byte, self.stamp.len())? != 0
         {

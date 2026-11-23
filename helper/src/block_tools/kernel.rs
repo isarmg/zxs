@@ -49,7 +49,7 @@ fn scalar(dir: &File, key: &CStr) -> io::Result<u64> {
     number(&attr(dir, key)?).ok_or_else(|| invalid("unrecognized numeric block attribute"))
 }
 fn diskseq(dir: &File) -> Field<u64> {
-    let n = scalar(dir, c"diskseq").map_err(Reason::io)?;
+    let n = scalar(dir, c"diskseq").map_err(|error| Reason::io_kind(error.kind()))?;
     if n == 0 { Err(Reason::Invalid) } else { Ok(n) }
 }
 fn label(raw: &[u8]) -> Field<String> {
@@ -242,7 +242,7 @@ impl Node {
                 )
             }
         };
-        let sectors = scalar(&self.dir, c"size").map_err(Reason::io);
+        let sectors = scalar(&self.dir, c"size").map_err(|error| Reason::io_kind(error.kind()));
         if obj(&sys.at(self.dev)?)? != object {
             return Err(invalid("block instance changed during observation"));
         }
@@ -257,7 +257,7 @@ impl Node {
     }
 
     pub(super) fn counts(&self) -> Field<(Instant, Counts)> {
-        let bytes = attr(&self.dir, c"stat").map_err(Reason::io)?;
+        let bytes = attr(&self.dir, c"stat").map_err(|error| Reason::io_kind(error.kind()))?;
         let time = Instant::now();
         Ok((time, Counts::parse(&bytes)?))
     }
@@ -266,10 +266,11 @@ impl Node {
         if !matches!(id.kind, Kind::Disk) {
             return Err(Reason::NotReported);
         }
-        let device = related(&self.dir, c"device").map_err(Reason::io)?;
+        let device =
+            related(&self.dir, c"device").map_err(|error| Reason::io_kind(error.kind()))?;
         let subsystem = related(&device, c"subsystem")
             .and_then(|f| obj(&f))
-            .map_err(Reason::io)?;
+            .map_err(|error| Reason::io_kind(error.kind()))?;
         // These two upstream show methods return cached model strings. Do not
         // try vendor-specific commands or trigger a device inquiry to fill a gap.
         if ![c"bus/scsi", c"class/nvme", c"class/nvme-subsystem"]
@@ -278,12 +279,12 @@ impl Node {
         {
             return Err(Reason::Unsupported);
         }
-        let raw = attr(&device, c"model").map_err(Reason::io)?;
+        let raw = attr(&device, c"model").map_err(|error| Reason::io_kind(error.kind()))?;
         let text = label(raw.trim_ascii())?;
         if related(&self.dir, c"device")
             .and_then(|f| obj(&f))
-            .map_err(Reason::io)?
-            != obj(&device).map_err(Reason::io)?
+            .map_err(|error| Reason::io_kind(error.kind()))?
+            != obj(&device).map_err(|error| Reason::io_kind(error.kind()))?
         {
             return Err(Reason::Changed);
         }
