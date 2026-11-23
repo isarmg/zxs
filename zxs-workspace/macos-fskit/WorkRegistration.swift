@@ -187,6 +187,46 @@ final class RegisteredWork {
               Self.recordName.withCString({ zxs_work_spelling(record.fileDescriptor,$0) })==0
         else { throw workError(ESTALE) }
     }
+    #if !ZXS_FSKIT_PROVIDER
+    var scopeSHA:String {
+        let parts=[ticket.token,ticket.digest,plan.destination,plan.account] + plan.entries.map {
+            $0.container+":"+$0.branch+":"+$0.node
+        }
+        return SHA256.hash(data:Data((parts.joined(separator:"\n")+"\n").utf8)).map { String(format:"%02x",$0) }.joined()
+    }
+    func drained() throws -> DrainedFiles {
+        try check()
+        guard let raw=try ticket.witness(.stopped) else { throw workError(EBUSY) }
+        return try DrainedFiles.decode(raw,registration:self)
+    }
+    struct Loan:Codable {
+        let token,digest,destination,account:String
+        let directory,emptyTicket:WorkWitness
+        let source:WorkProjection.Entry, final:DrainedFiles.Row
+    }
+    func loan(_ cid:String) throws -> (FileHandle,FileHandle,FileHandle,Data) {
+        let complete=try drained()
+        guard let i=complete.entries.firstIndex(where: { $0.container==cid }) else { throw workError(ENOENT) }
+        let row=complete.entries[i], src=plan.entries[i], name="body-"+cid
+        let fd=name.withCString { zxs_open_work_leaf(ticket.directory.fileDescriptor,$0,O_RDONLY,row.body.inode,
+                                                     row.body.birthSec,row.body.birthNsec) }
+        guard fd>=0 else { throw workError(errno) }
+        let held=FileHandle(fileDescriptor:fd,closeOnDealloc:true)
+        try row.body.check(fd,directory:false)
+        let flags=fcntl(fd,F_GETFL); var s=stat()
+        guard flags>=0, flags&O_ACCMODE==O_RDONLY, flags&O_APPEND==0,
+              flock(fd,LOCK_SH|LOCK_NB)==0 else { throw workError(errno==0 ? ESTALE : errno) }
+        guard fstat(fd,&s)==0, row.generation.matches(s), Self.same(s,try Self.statAt(ticket.directory,name)),
+              name.withCString({ zxs_work_spelling(fd,$0) })==0 else { throw workError(ESTALE) }
+        let proof=Loan(token:ticket.token,digest:ticket.digest,destination:plan.destination,account:plan.account,
+                       directory:plan.directory,emptyTicket:plan.emptyTicket,source:src,final:row)
+        let e=JSONEncoder(); e.outputFormatting=[.sortedKeys,.withoutEscapingSlashes]
+        let raw=try e.encode(proof)
+        try check()
+        return (held,ticket.directory,ticket.ticket,raw)
+    }
+    #endif
+
     // Module only, after the exclusive cross-process provider-loaded marker. Probe never opens
     // any body or creates namespace entries. Prior originals never reconstructed from DISPLAY names.
     #if !ZXS_FSKIT_HOST
@@ -210,4 +250,34 @@ final class RegisteredWork {
         try index.checkOwner(ticket); try authorized(); return index
     }
     #endif
+}
+
+/// Explicit local write generation, not a remote receipt. Computed after all original
+/// writers are closed, before host is allowed even to ask the kernel for normal detach.
+@available(macOS 27.0, *)
+struct DrainedFiles: Codable {
+    struct Row: Codable { let container:String, body:WorkWitness, generation:WorkGeneration }
+    let format, token, digest:String
+    let entries:[Row]
+
+    func encoded() throws -> Data {
+        let e=JSONEncoder(); e.outputFormatting=[.sortedKeys,.withoutEscapingSlashes]
+        let raw=try e.encode(self)
+        guard raw.count>0, raw.count<=256<<10 else { throw workError(EFBIG) }
+        return raw
+    }
+    static func decode(_ raw:Data,registration:RegisteredWork) throws -> Self {
+        guard !raw.isEmpty, raw.count<=256<<10 else { throw workError(EINVAL) }
+        let all=try JSONDecoder().decode(Self.self,from:raw)
+        guard try all.encoded()==raw, all.format=="zxs-fskit-stopped-1", all.token==registration.ticket.token,
+              all.digest==registration.ticket.digest, all.entries.count==registration.plan.entries.count
+        else { throw workError(ESTALE) }
+        for (f,src) in zip(all.entries,registration.plan.entries) {
+            let g=f.generation
+            guard f.container==src.container, f.body==src.body, g.size>=0, g.size<=maximumWorkFileBytes,
+                  WorkProjection.hex(g.sha256,64), (0..<1000000000).contains(g.mtimeNsec),
+                  (0..<1000000000).contains(g.ctimeNsec) else { throw workError(ESTALE) }
+        }
+        return all
+    }
 }

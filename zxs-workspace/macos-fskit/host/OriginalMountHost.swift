@@ -20,6 +20,8 @@ final class OriginalMountHost {
     private let registration: RegisteredWork
     private var ticket: HeldMountTicket { registration.ticket }
     private var anchor: MountEvidence?
+    private var leased = false
+    private var persisted: (stopped:Data,gone:Data,clean:Data)?
 
     init(registration: RegisteredWork) { self.registration = registration }
 
@@ -32,6 +34,7 @@ final class OriginalMountHost {
             for step in [HeldMountTicket.Step.attempted, .loaded, .verified, .stop, .stopped, .gone, .clean] {
                 guard try !ticket.marked(step) else { throw workError(EEXIST) }
             }
+            try takeLease()
             guard let before = zxs_mount_before() else { throw workError(errno) }
             anchor = MountEvidence(before)
             state = .uncertain // An interrupted exclusive reservation or a later error is not a fresh attempt.
@@ -65,12 +68,62 @@ final class OriginalMountHost {
         }
     }
 
+    private func takeLease() throws {
+        try registration.check()
+        if !leased {
+            // Separate original ticket lease, not the worker's writer flock: it
+            // remains held after all RW body handles close and throughout handoff.
+            guard flock(ticket.ticket.fileDescriptor,LOCK_EX|LOCK_NB)==0 else { throw workError(errno) }
+            leased=true
+        }
+    }
+    private func originalProofs() throws -> Bool {
+        try registration.check()
+        guard try ticket.marked(.attempted), try ticket.marked(.loaded), try ticket.marked(.verified),
+              try ticket.marked(.stop), try ticket.marked(.stopped) else { return false }
+        let fence=try ticket.stopFence()
+        guard let gone=try ticket.witness(.gone,entire:true), let clean=try ticket.witness(.clean,entire:true)
+        else { return false }
+        guard gone.suffix(64)==fence, clean.suffix(64)==fence else { throw workError(ESTALE) }
+        if let p=persisted {
+            guard p.stopped==fence, p.gone==gone, p.clean==clean else { throw workError(ESTALE) }
+        } else {
+            // Consumer persistence is an independent necessary step. A visible final
+            // decision alone is never a claim that another process already flushed it.
+            guard try ticket.witness(.gone,entire:true,persist:true)==gone,
+                  try ticket.witness(.clean,entire:true,persist:true)==clean,
+                  try ticket.witness(.gone,entire:true)==gone, try ticket.witness(.clean,entire:true)==clean,
+                  try ticket.stopFence()==fence else { throw workError(ESTALE) }
+            persisted=(fence,gone,clean)
+        }
+        return true
+    }
+
+    /// Explicit reopen of an already-completed, known registration, not evidence
+    /// about a currently mounted path. Never remount, resume a live write, or
+    /// infer a successful funmount solely from the absence of a mount point.
+    func restoreCompleted() throws {
+        guard state == .ready, !leased else { throw workError(EBUSY) }
+        try takeLease()
+        guard try originalProofs() else { throw workError(ESTALE) }
+        _=try registration.drained()
+        state = .normalGone
+    }
+
     /// Both OS disappearance and the matching provider's orderly teardown are required;
     /// if the process disappears before either, retain the original and report unknown.
     func confirmedLocalTeardown() throws -> Bool {
         guard state == .normalGone else { return false }
-        return try ticket.marked(.attempted) && ticket.marked(.loaded) && ticket.marked(.verified) &&
-            ticket.marked(.stop) && ticket.marked(.stopped) && ticket.marked(.gone) && ticket.marked(.clean)
+        guard leased, try originalProofs() else { return false }
+        _=try registration.drained()
+        return true
+    }
+
+    // Acquire only the registered postdrain original, never a GUI path. Full-body
+    // readback is repeated by the receiving worker before reserving any remote operation.
+    func loan(_ container:String) throws -> (FileHandle, FileHandle, FileHandle, Data) {
+        guard try confirmedLocalTeardown() else { throw workError(EBUSY) }
+        return try registration.loan(container)
     }
 
     func checkStillMounted() throws {
@@ -95,11 +148,14 @@ final class OriginalMountHost {
         guard try ticket.marked(.attempted), try ticket.marked(.verified), try ticket.marked(.stop)
         else { state = .uncertain; throw workError(ESTALE) }
         guard try ticket.marked(.stopped) else { throw workError(EBUSY) }
+        _=try registration.drained()
+        let fence=try ticket.stopFence()
         state = .uncertain
         let e = await Task.detached { zxs_mount_normal(anchor.raw) }.value
         if e == EBUSY { state = .stopping; throw workError(e) }
         guard e == 0 else { throw workError(e) }
-        try ticket.mark(.gone)
+        guard try ticket.stopFence()==fence else { throw workError(ESTALE) }
+        try ticket.mark(.gone,proof:fence)
         state = .normalGone // OS evidence only. Not a sealed generation or authority to send.
     }
 }

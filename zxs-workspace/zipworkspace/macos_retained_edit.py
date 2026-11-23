@@ -282,7 +282,17 @@ def retain_edit(edit, seal, root_identity, *, confirmed=False):
         raise
 
 
-def _retain(edit, seal, expected, attempted):
+def _mount_binding(value):
+    if type(value) is not tuple or len(value) != 3 or not id_ok(value[0]):
+        raise Rejected("not the exact original FSKit session")
+    _destination(value[1])
+    _destination(value[2])
+    return value
+
+
+def _retain(edit, seal, expected, attempted, *, mount=None):
+    if mount is not None:
+        _mount_binding(mount)
     with _state(expected, edit._original) as (root, path, identity, volume, guard):
         require_exclusive_rename(root)
         edit._claim_retention(seal)
@@ -322,9 +332,12 @@ def _retain(edit, seal, expected, attempted):
                 evidence = [*_birth(body), *stamp[2:]]  # Do not persist reboot-dependent device numbers.
             with _fd(child, _INTENT, create=True) as intent:
                 _attributes(intent)
-                raw = canonical({"format": "macos-private-submit-1", "submission": submission, "state": identity,
-                                 "packet": _birth(child), "body": evidence, "intent": _birth(intent), "key": _birth(kfd),
-                                 "source": asdict(seal.selected), "plan": plan.encode().decode("utf-8")})
+                record = {"format": "macos-private-submit-1", "submission": submission, "state": identity,
+                          "packet": _birth(child), "body": evidence, "intent": _birth(intent), "key": _birth(kfd),
+                          "source": asdict(seal.selected), "plan": plan.encode().decode("utf-8")}
+                if mount is not None:
+                    record.update(format="macos-fskit-submit-1", mount=mount)
+                raw = canonical(record)
                 if len(raw) > _LIMIT:
                     raise Rejected("private single-file intent is too large")
                 _write_all(intent, raw)
@@ -372,7 +385,8 @@ def _connection(connection):
     exchange, authority = connection._exchange, connection._authorization
     destination, account = exchange.destination_identity, connection._account
     def check():
-        if (connection._account != account or exchange.destination_identity != destination
+        if (connection._exchange is not exchange or connection._authorization is not authority
+                or connection._account != account or exchange.destination_identity != destination
                 or connection.operations._exchange is not exchange or exchange._authorization is not authority):
             raise Rejected("not the original authenticated destination or principal")
         authority.require_account(account)
@@ -410,6 +424,7 @@ class _Packet:
     pending: object
     root_area: _PrivateArea
     require: object
+    mount: tuple | None
 
 
 class _ScopedPending:
@@ -475,8 +490,17 @@ def _read_retained(identity, source, owner, authorize, visit, occupied):
             saved = obj["source"]
             src = SelectedFile(saved["destination"], saved["account"], Container(**saved["container"]),
                                saved["branch"], saved["head"], Node(**saved["node"]))
-            if (obj.keys() != {"format", "submission", "state", "packet", "body", "intent", "key", "source", "plan"}
-                    or obj["format"] != "macos-private-submit-1" or obj["submission"] != key.submission
+            fields = {"format", "submission", "state", "packet", "body", "intent", "key", "source", "plan"}
+            if obj.get("format") == "macos-fskit-submit-1":
+                if type(obj.get("mount")) is not list:
+                    raise ValueError()
+                mount = _mount_binding(tuple(obj["mount"]))
+                fields.add("mount")
+            elif obj.get("format") == "macos-private-submit-1":
+                mount = None
+            else:
+                raise ValueError()
+            if (obj.keys() != fields or obj["submission"] != key.submission
                     or obj["state"] != list(key.root) or obj["packet"] != list(_birth(child))
                     or obj["intent"] != list(_birth(fd)) or obj["key"] != list(key.issuer) or asdict(src) != saved
                     or (src.destination, src.account, src.container.id, src.branch, src.node.id) != source
@@ -509,7 +533,7 @@ def _read_retained(identity, source, owner, authorize, visit, occupied):
         members()
         try:
             checked = _ScopedPending(pending, members)
-            result = visit(_Packet(key, src, action, checked, root_area, members))
+            result = visit(_Packet(key, src, action, checked, root_area, members, mount))
             members()
             return result
         finally:

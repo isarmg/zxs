@@ -173,3 +173,65 @@ public func zxsDesktopStatus(_ key:UInt64,_ state:UnsafeMutablePointer<Int32>?,_
         path[bytes.count]=0; state.pointee=phase; lastError.pointee=error; return 0
     } catch { return abiErr(error) }
 }
+
+// Known key only. No FSClient call: handles from a surviving host prevent a
+// competing restore. An incomplete prior detach is not eligible even after reboot.
+@available(macOS 27.0, *)
+@_cdecl("zxs_fskit_completed")
+public func zxsDesktopCompleted(_ token:UnsafePointer<CChar>?,_ digest:UnsafePointer<CChar>?,
+                                _ scope:UnsafePointer<CChar>?, _ out:UnsafeMutablePointer<UInt64>?) -> Int32 {
+    guard Thread.isMainThread, let out else { return EINVAL }
+    do {
+        let t=try ascii(token,32), d=try ascii(digest,64), expected=try ascii(scope,64)
+        let key=try MainActor.assumeIsolated {
+            guard DesktopSession.sessions.count<128, DesktopSession.next != UInt64.max else { throw workError(EOVERFLOW) }
+            let original=try RegisteredWork.issued(token:t,digest:d)
+            guard original.scopeSHA==expected else { throw workError(EPERM) }
+            let s=DesktopSession(original)
+            try s.host.restoreCompleted()
+            let key=DesktopSession.next; DesktopSession.next+=1
+            DesktopSession.sessions[key]=s; return key
+        }
+        out.pointee=key; return 0
+    } catch { return abiErr(error) }
+}
+
+@available(macOS 27.0, *)
+@_cdecl("zxs_fskit_lend")
+public func zxsDesktopLend(_ key:UInt64,_ container:UnsafePointer<CChar>?,_ fds:UnsafeMutablePointer<Int32>?,
+                           _ output:UnsafeMutablePointer<CChar>?,_ capacity:Int) -> Int32 {
+    guard Thread.isMainThread, let fds, let output, capacity>0 else { return EINVAL }
+    do {
+        let cid=try ascii(container,32)
+        let (owned,raw)=try MainActor.assumeIsolated { () throws -> ([Int32],[UInt8]) in
+            guard let s=DesktopSession.sessions[key] else { throw workError(ESTALE) }
+            let (body,dir,ticket,proof)=try s.host.loan(cid)
+            guard proof.count<capacity else { throw workError(ERANGE) }
+            var completed=[Int32]()
+            for h in [body,dir,ticket] {
+                let fd=fcntl(h.fileDescriptor,F_DUPFD_CLOEXEC,0)
+                if fd<0 { let e=errno; for prior in completed { _=Darwin.close(prior) }; throw workError(e) }
+                completed.append(fd)
+            }
+            return (completed,Array(proof))
+        }
+        for i in 0..<3 { fds[i]=owned[i] }
+        for (i,b) in raw.enumerated() { output[i]=CChar(bitPattern:b) }; output[raw.count]=0
+        return 0 // Three truly owned descriptors; the ticket preserves original lease across a handoff.
+    } catch { return abiErr(error) }
+}
+
+@available(macOS 27.0, *)
+@_cdecl("zxs_fskit_release_completed")
+public func zxsDesktopRelease(_ key:UInt64) -> Int32 {
+    guard Thread.isMainThread else { return EINVAL }
+    do {
+        try MainActor.assumeIsolated {
+            guard let s=DesktopSession.sessions[key], !s.mounting, !s.detaching else { throw workError(EBUSY) }
+            guard try s.host.confirmedLocalTeardown() else { throw workError(EBUSY) }
+            DesktopSession.sessions.removeValue(forKey:key)
+            // Never remove a file, pending operation or known key. Any lent FD
+            // keeps its original OS lease. Cold reopen requires all original proofs.
+        }; return 0
+    } catch { return abiErr(error) }
+}

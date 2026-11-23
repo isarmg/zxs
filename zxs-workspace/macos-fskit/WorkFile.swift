@@ -64,18 +64,39 @@ final class WorkFile {
         self.leaf = name; self.reader = ro; self.writer = rw; self.last = stat()
         self.last = try observed()
         guard generation.matches(last), generation.sha256.utf8.count == 64 else { throw workError(ESTALE) }
-        var hash = SHA256(), at: off_t = 0
-        var block = [UInt8](repeating: 0, count: 1 << 20)
-        while at < generation.size {
-            let amount = Int(min(off_t(block.count), generation.size - at))
-            let n = block.withUnsafeMutableBytes { pread(ro.number, $0.baseAddress!, amount, at) }
-            if n < 0 && errno == EINTR { continue }
-            guard n > 0 else { throw workError(n == 0 ? EIO : errno) }
-            hash.update(data: Data(block.prefix(n)))
-            at += off_t(n)
+        guard try hashCurrent(last) == generation.sha256 else { throw workError(ESTALE) }
+    }
+
+    // Caller has exclusive admission (initializer or item lock). Each observed
+    // chunk is from a true O_RDONLY original and the same checked generation.
+    private func hashCurrent(_ initial:stat) throws -> String {
+        var hash=SHA256(), at:off_t=0
+        var block=[UInt8](repeating:0,count:1<<20)
+        while at<initial.st_size {
+            _=try current()
+            let amount=Int(min(off_t(block.count),initial.st_size-at))
+            let n=block.withUnsafeMutableBytes { pread(reader.number,$0.baseAddress!,amount,at) }
+            if n<0 && errno==EINTR { continue }
+            guard n>0 else { throw workError(n==0 ? EIO : errno) }
+            hash.update(data:Data(block.prefix(n))); at+=off_t(n)
         }
-        guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == generation.sha256,
-              generation.matches(try current()) else { throw workError(ESTALE) }
+        var extra:UInt8=0
+        guard pread(reader.number,&extra,1,initial.st_size)==0 else { throw workError(ESTALE) }
+        _=try current()
+        return hash.finalize().map { String(format:"%02x",$0) }.joined()
+    }
+
+    func finalGeneration(container:String) throws -> DrainedFiles.Row {
+        try withLock {
+            guard stopping, originalOpen.isEmpty, writerClosed, leaf=="body-"+container else { throw workError(EBUSY) }
+            do {
+                let st=try current(), hash=try hashCurrent(st)
+                let g=WorkGeneration(size:st.st_size,mtimeSec:Int64(st.st_mtimespec.tv_sec),mtimeNsec:Int64(st.st_mtimespec.tv_nsec),
+                                     ctimeSec:Int64(st.st_ctimespec.tv_sec),ctimeNsec:Int64(st.st_ctimespec.tv_nsec),sha256:hash)
+                guard g.matches(try current()) else { throw workError(ESTALE) }
+                return DrainedFiles.Row(container:container,body:fileID,generation:g)
+            } catch { failure=error; throw error }
+        }
     }
 
     private func withLock<T>(_ work: () throws -> T) rethrows -> T {

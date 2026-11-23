@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -76,7 +77,8 @@ final class HeldMountTicket {
     // Monotonic original witnesses. Preexisting or torn records never prompt a
     // rewrite or reissue. The distribution must protect the group/one original
     // session against other publishers; 0700 is not same-user isolation.
-    func mark(_ step: Step) throws {
+    func mark(_ step: Step, proof: Data = Data()) throws {
+        guard validProof(step,proof) else { throw workError(EINVAL) }
         try check()
         guard try !marked(step) else { throw workError(EEXIST) }
         let leaf = step == .attempted ? step.rawValue : "pre-" + step.rawValue
@@ -84,10 +86,11 @@ final class HeldMountTicket {
             O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC, 0o600) }
         guard fd >= 0 else { throw workError(errno) }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0 else { throw workError(errno) }
+        let contents = bytes(step, st) + proof
+        let terminal = step == .clean || step == .gone
         try withExtendedLifetime(handle) {
-            var st = stat()
-            guard fstat(fd, &st) == 0 else { throw workError(errno) }
-            let contents = bytes(step, st)
             try contents.withUnsafeBytes { buffer in
                 var at = 0
                 while at < buffer.count {
@@ -98,19 +101,51 @@ final class HeldMountTicket {
                 }
             }
             guard fchmod(fd, 0o400) == 0, fsync(fd) == 0, fcntl(fd, F_FULLFSYNC) == 0 else { throw workError(errno) }
+            if terminal {
+                // The sole externally positive decision is the final exclusive rename. Stage,
+                // independently read, sync and CLOSE the sole writer before that decision.
+                var sealed=stat()
+                guard fstat(fd,&sealed)==0 else { throw workError(errno) }
+                guard sealed.st_dev==st.st_dev, sealed.st_ino==st.st_ino, sealed.st_size==contents.count,
+                      sealed.st_nlink==1, sealed.st_flags==0, sealed.st_uid==geteuid(),
+                      (sealed.st_mode & 0o177777)==0o100400, try readBytes(fd,contents.count)==contents
+                else { throw workError(ESTALE) }
+                st=sealed
+                guard fsync(directory.fileDescriptor)==0, fcntl(fd,F_FULLFSYNC)==0 else { throw workError(errno) }
+                try handle.close()
+                try check()
+            }
             if step != .attempted {
                 var named = stat()
                 guard fstatat(directory.fileDescriptor, leaf, &named, AT_SYMLINK_NOFOLLOW) == 0,
-                      named.st_dev == st.st_dev, named.st_ino == st.st_ino else { throw workError(ESTALE) }
+                      named.st_dev == st.st_dev, named.st_ino == st.st_ino,
+                      !terminal || (named.st_size==st.st_size && named.st_ctimespec.tv_sec==st.st_ctimespec.tv_sec &&
+                        named.st_ctimespec.tv_nsec==st.st_ctimespec.tv_nsec) else { throw workError(ESTALE) }
                 let rc = leaf.withCString { old in step.rawValue.withCString { target in
                     renameatx_np(directory.fileDescriptor, old, directory.fileDescriptor, target, UInt32(RENAME_EXCL))
                 } }
                 guard rc == 0 else { throw workError(errno) }
             }
-            guard fsync(directory.fileDescriptor) == 0, fcntl(fd, F_FULLFSYNC) == 0 else { throw workError(errno) }
+            if !terminal {
+                guard fsync(directory.fileDescriptor) == 0, fcntl(fd, F_FULLFSYNC) == 0 else { throw workError(errno) }
+            }
         }
-        try handle.close() // A reported close failure is uncertain; never close a recycled numeric FD.
-        guard try marked(step) else { throw workError(ESTALE) }
+        if !terminal {
+            try handle.close() // Never retry a potentially reused numeric FD.
+            guard try witness(step) == proof else { throw workError(ESTALE) }
+        }
+        // No throwing publisher action after a terminal rename. A consumer must still
+        // persist/re-read *these exact* decisions; a fault or crash is never a guessed receipt.
+    }
+
+    private func readBytes(_ fd:Int32,_ length:Int) throws -> Data {
+        var observed=[UInt8](repeating:0,count:length), at=0
+        while at<length {
+            let n=observed.withUnsafeMutableBytes { pread(fd,$0.baseAddress!.advanced(by:at),length-at,off_t(at)) }
+            if n<0 && errno==EINTR { continue }
+            guard n>0 else { throw workError(n==0 ? EIO : errno) }; at+=n
+        }
+        return Data(observed)
     }
 
     private func bytes(_ step: Step, _ st: stat) -> Data {
@@ -118,15 +153,37 @@ final class HeldMountTicket {
                              String(st.st_birthtimespec.tv_sec) + ":" + String(st.st_birthtimespec.tv_nsec) + "\n").utf8)
     }
 
-    func marked(_ step: Step) throws -> Bool {
+    private static func fingerprint(_ contents:Data) -> Data {
+        Data(SHA256.hash(data:contents).map { String(format:"%02x",$0) }.joined().utf8)
+    }
+    private func validProof(_ step:Step,_ p:Data) -> Bool {
+        switch step {
+        case .stopped: return !p.isEmpty && p.count <= 256 << 10
+        case .gone,.clean: return p.count==64 && p.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        default: return p.isEmpty
+        }
+    }
+    func stopFence() throws -> Data {
+        guard let entire=try witness(.stopped,entire:true) else { throw workError(EBUSY) }
+        return Self.fingerprint(entire) // Includes original mark's physical inode/birth, projection SHA and every final row.
+    }
+
+    func marked(_ step: Step) throws -> Bool { try witness(step) != nil }
+
+    // Stopped carries the canonical final generation set. Gone and clean each pin
+    // that same physical stopped record's SHA. Prerequisite markers carry no payload.
+    func witness(_ step: Step, entire:Bool = false, persist:Bool = false) throws -> Data? {
+        guard !persist || step == .gone || step == .clean else { throw workError(EINVAL) }
         try check()
         var prior = stat()
         if fstatat(directory.fileDescriptor, step.rawValue, &prior, AT_SYMLINK_NOFOLLOW) != 0 {
-            if errno == ENOENT { return false }; throw workError(errno)
+            if errno == ENOENT { return nil }; throw workError(errno)
         }
         let expected = bytes(step, prior)
         guard (prior.st_mode & 0o177777) == 0o100400, prior.st_nlink == 1, prior.st_flags == 0,
-              prior.st_uid == geteuid(), prior.st_size == expected.count else { throw workError(ESTALE) }
+              prior.st_uid == geteuid(),
+              (step == .stopped ? (prior.st_size > expected.count && prior.st_size <= expected.count + (256 << 10))
+                                : prior.st_size == expected.count + (step == .gone || step == .clean ? 64 : 0)) else { throw workError(ESTALE) }
         let fd = step.rawValue.withCString { zxs_open_marker(directory.fileDescriptor, $0, prior.st_ino,
             Int64(prior.st_birthtimespec.tv_sec), Int64(prior.st_birthtimespec.tv_nsec)) }
         guard fd >= 0 else { throw workError(errno) }
@@ -143,11 +200,21 @@ final class HeldMountTicket {
                 try check()
             }
             try same()
-            var observed = [UInt8](repeating: 0, count: expected.count + 1)
-            let n = observed.withUnsafeMutableBytes { pread(fd, $0.baseAddress!, $0.count, 0) }
-            guard n == expected.count, Data(observed.prefix(n)) == expected else { throw workError(ESTALE) }
+            let length=Int(prior.st_size)
+            if persist, flock(fd,LOCK_SH|LOCK_NB) != 0 { throw workError(errno) }
+            let observed=try readBytes(fd,length)
+            guard Data(observed.prefix(expected.count))==expected else { throw workError(ESTALE) }
             try same()
-            return true
+            if persist {
+                guard fsync(fd)==0, fsync(directory.fileDescriptor)==0, fcntl(fd,F_FULLFSYNC)==0
+                else { throw workError(errno) }
+                guard try readBytes(fd,length)==observed else { throw workError(ESTALE) }
+                try same()
+                try file.close() // A consumer close/flush failure refuses positive handoff, even for a visible decision.
+            }
+            let proof=Data(observed.dropFirst(expected.count))
+            guard validProof(step,proof) else { throw workError(ESTALE) }
+            return entire ? Data(observed) : proof
         }
     }
 }

@@ -15,7 +15,7 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
     let lookupAndReclaim = NSLock(), rootAttributesLock = NSLock()
     private enum Phase { case new, active, preparing, mounted, draining, fencing, fenced, notified, inactive, completed, neverMounted, releasedWithoutMount, failed }
     private var phase = Phase.new, callbacks = 0
-    private var localFinishStarted = false
+    private var localFinishStarted = false, completedGeneration: Data?, completedFence: Data?
 
     init(ticket: HeldMountTicket, resource: FSPathURLResource, name: FSFileName, names: NameIndex) throws {
         try ticket.check()
@@ -56,9 +56,18 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
             // No new refs or admitted in-flight work. Close writers only after every
             // original has passed the local drain and device barriers. Kernel unmount
             // and the later per-provider clean acknowledgement are still independent.
-            try finishLocalFilesAfterDrain()
-            try state { guard phase == .fencing else { throw workError(EIO) }; phase = .fenced }
-            try ticket.mark(.stopped)
+            let checkpoint=try finishLocalFilesAfterDrain()
+            // The host may observe the rename before this call finishes its post-rename
+            // barriers. Serialize its resulting FSKit unmount/deactivation with the entire
+            // bounded marker publication; only a completed mark can ever authorize clean.
+            try state {
+                guard phase == .fencing, callbacks == 0 else { throw workError(EIO) }
+                do {
+                    try ticket.mark(.stopped,proof:checkpoint)
+                    completedFence=try ticket.stopFence()
+                    completedGeneration=checkpoint; phase = .fenced
+                } catch { phase = .failed; throw error }
+            }
         } catch { state { phase = .failed }; cancelObserver() }
     }
 
@@ -82,12 +91,15 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
         }
         guard orderly else { cancelObserver(); return }
         try names.checkOwner(ticket)
+        guard let checkpoint=state({ completedGeneration }), let fence=state({ completedFence }),
+              try ticket.witness(.stopped)==checkpoint, try ticket.stopFence()==fence
+        else { throw workError(ESTALE) }
         for r in names.ordered { _ = try names.row(r.item); try r.source.file.synchronize() }
         // Framework guarantees no further callbacks after an orderly unload; serialize
         // terminal local publication against already entered/error callbacks, never with a reply.
         try state {
             guard phase == .inactive, callbacks == 0 else { throw workError(EBUSY) }
-            do { try ticket.mark(.clean); phase = .completed }
+            do { try ticket.mark(.clean,proof:fence); phase = .completed }
             catch { phase = .failed; throw error }
         }
         cancelObserver()
@@ -110,8 +122,8 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
         return try action()
     }
 
-    // Never call an external reply, enumerate packer, or a potentially slow APFS
-    // operation while holding the lifecycle gate. Reject unordered teardown.
+    // No reply, directory packer, whole-file I/O or hash under the lifecycle gate.
+    // Only bounded terminal metadata publication is serialized with teardown.
     func serve<T>(admitting: Bool = false, rootMetadata: Bool = false, fencedSync: Bool = false,
                   lateMutation: Bool = false, _ reply: (T?, (any Error)?) -> Void, _ run: () throws -> T) {
         let entered = state {
@@ -200,7 +212,7 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
 
     // Local half only; must still independently prove original normal unmount,
     // establish a durable owner/error checkpoint and verify a complete sealed body.
-    private func finishLocalFilesAfterDrain() throws {
+    private func finishLocalFilesAfterDrain() throws -> Data {
         guard try ticket.marked(.verified), try ticket.marked(.stop) else { throw workError(EBUSY) }
         try state {
             guard phase == .fencing, callbacks == 0, !localFinishStarted else { throw workError(EBUSY) }
@@ -210,6 +222,10 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
             for r in names.ordered { try r.source.file.requireDrained() }
             for r in names.ordered { _ = try names.row(r.item); try r.source.file.synchronize() }
             for r in names.ordered { try r.source.file.closeLocalWriterAfterDrain() }
+            // Hash here, not while the kernel is blocked in funmount/unload.
+            let rows=try names.ordered.map { try $0.source.file.finalGeneration(container:$0.source.containerID) }
+                .sorted { $0.container < $1.container }
+            return try DrainedFiles(format:"zxs-fskit-stopped-1",token:ticket.token,digest:ticket.digest,entries:rows).encoded()
         } catch { state { phase = .failed }; throw error }
     }
 

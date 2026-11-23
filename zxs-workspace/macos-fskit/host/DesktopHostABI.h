@@ -12,4 +12,10 @@ int32_t zxs_fskit_session(const char *token,const char *sha256,uint64_t *out);
  * A return value of zero from 1 does NOT attest mount success. No release or auto-retry. */
 int32_t zxs_fskit_action(uint64_t session,int32_t action);
 int32_t zxs_fskit_status(uint64_t session,int32_t *state,int32_t *last_error,char *path,intptr_t capacity);
+/* Cold completed-only evidence (known token+digest), no attach or network. */
+int32_t zxs_fskit_completed(const char *token,const char *sha256,const char *scope_sha256,uint64_t *out);
+/* Three caller-owned descriptors: sealed RO body, original parent, owner lease.
+ * UTF-8 canonical evidence buffer is NUL-terminated on success. */
+int32_t zxs_fskit_lend(uint64_t session,const char *container,int32_t fds[3],char *proof,intptr_t capacity);
+int32_t zxs_fskit_release_completed(uint64_t session);
 #endif
