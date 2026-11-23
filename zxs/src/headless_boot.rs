@@ -48,11 +48,12 @@ pub(crate) fn run(
     if stopping() {
         return Ok(());
     }
+    // Reserve the numeric endpoint before opening the store, which can
+    // initialize storage and reconcile interrupted writes. Accept only once ready.
+    let listener = TcpListener::bind(listen)?;
     let bound = selected.bind()?;
     if stopping() {
         return Ok(());
     }
-    // A SocketAddr is one actual numeric bind, not DNS or address discovery.
-    let listener = TcpListener::bind(listen)?;
     serve_selected(&bound, listener, stopping, dispatch)
 }
