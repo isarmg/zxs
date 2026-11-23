@@ -26,6 +26,7 @@ FILESYSTEM = (
     "test_desktop_mount.DesktopMount.test_mountinfo_requires_one_exact_escaped_point_old_parent_tag_type_and_read_only_flags",
     "test_linux_package",
     "test_container_plan",
+    "test_linux_submit",
     "test_container_spool",
     "test_container_outbox",
     "test_container_management",
