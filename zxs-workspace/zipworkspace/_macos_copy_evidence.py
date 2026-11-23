@@ -5,6 +5,7 @@ import errno
 from functools import lru_cache
 import os
 import stat
+import struct
 import sys
 
 from . import macos_read
@@ -215,7 +216,61 @@ def _attributes(fd, *, directory=False):
     native().no_acl(fd)
 
 
+@lru_cache(maxsize=1)
+def _get_leaf_metadata():
+    return _bind(C.CDLL(None, use_errno=True), "getattrlistat", C.c_int,
+                 C.c_int, C.c_char_p, C.c_void_p, C.c_void_p, C.c_size_t, C.c_ulong)
+
+
+def _occupied_alias(parent, name, observed):
+    kind = stat.S_IFMT(observed.st_mode)
+    # XNU sys/vnode.h: VREG=1, VDIR=2.
+    native_kind = {stat.S_IFREG: 1, stat.S_IFDIR: 2}.get(kind)
+    if native_kind is None or (kind == stat.S_IFREG and observed.st_nlink != 1):
+        return False
+    raw_name = os.fsencode(name)
+    if not raw_name or raw_name in (b".", b"..") or b"/" in raw_name or b"\0" in raw_name:
+        return False
+    try:
+        identity = native_identity(observed, kind)
+        if observed.st_dev != os.fstat(parent).st_dev:
+            return False
+        macos_read.resident_stat(name, observed)
+        # XNU sys/attr.h: NAME, DEVID, OBJTYPE and FILEID; ask for the
+        # returned mask so an unsupported field never counts as evidence.
+        common = _RET | 0x1 | 0x2 | 0x8 | 0x02000000
+        request = macos_read._Attributes(5, 0, common)
+        buf = (C.c_uint32 * 272)()
+        # NOFOLLOW, REPORT_FULLSIZE, RETURN_REALDEV. This is a lookup on
+        # the held parent, never an open of the occupied entry.
+        if _get_leaf_metadata()(parent, raw_name, C.byref(request), buf, C.sizeof(buf), 0x205):
+            return False
+        raw = bytes(buf)
+        size, fields, vol, dirs, files, forks, off, n, dev, objtype, inode = struct.unpack_from(
+            "=6IiIIIQ", raw)
+        # The name's variable data starts beyond the 48-byte fixed part;
+        # attrreference's offset is relative to its start at byte 24.
+        if (not 48 <= size <= len(raw) or fields != common or vol or dirs or files or forks
+                or off < 24 or n < 2 or 24 + off + n > size
+                or (dev, inode, objtype) != (observed.st_dev & 0xffffffff, observed.st_ino, native_kind)):
+            return False
+        actual = raw[24 + off:24 + off + n]
+        if (not actual.endswith(b"\0") or b"\0" in actual[:-1]
+                or b"/" in actual or actual[:-1] == raw_name):
+            return False
+        named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        return (native_identity(named, kind) == identity
+                and (kind != stat.S_IFREG or named.st_nlink == 1))
+    except (AttributeError, OSError, Rejected):
+        # Failed diagnostics never turn an occupied lookup into absence.
+        return False
+
+
 def _absent(parent, name):
-    try: os.stat(name, dir_fd=parent, follow_symlinks=False)
-    except FileNotFoundError: return
+    try:
+        observed = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if _occupied_alias(parent, name, observed):
+        raise Rejected("本机文件系统将此名称与已有名称视为同一名称；请另选名称")
     raise Rejected("新名称已被文件、目录或链接占用；不会覆盖")

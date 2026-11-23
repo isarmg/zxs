@@ -105,6 +105,28 @@ class MacNodePublication(unittest.TestCase):
                     self.publish(output, body)
         self.assertEqual(self.request, [("GET", _TARGET, "application/octet-stream", None)] * 2)
 
+    def test_local_destination_preflight_reports_native_name_collision(self):
+        original = self.root / "Keep.txt"
+        with mac.no_materialization(), mac.literal_name(self.root, directory=True) as parent:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+            fd = os.open(original.name, flags, 0o600, dir_fd=parent)
+            with os.fdopen(fd, "wb") as out:
+                out.write(b"preserve")
+            with self.assertRaisesRegex(Rejected, "已被"):
+                export._absent(parent, original.name)
+            try:
+                alias = os.stat("keep.txt", dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                # Sensitive APFS must admit the different spelling at preflight.
+                export._absent(parent, "keep.txt")
+            else:
+                expected = os.stat(original.name, dir_fd=parent, follow_symlinks=False)
+                self.assertEqual((alias.st_dev, alias.st_ino), (expected.st_dev, expected.st_ino))
+                with self.assertRaisesRegex(Rejected, "与已有名称视为同一名称"):
+                    export._absent(parent, "keep.txt")
+        self.assertEqual(list(self.root.iterdir()), [original])
+        self.assertEqual(original.read_bytes(), b"preserve")
+
     def test_wrong_body_or_ignored_origin_setter_never_publishes(self):
         with export.MacNodeOutput(self.root, "bad.txt") as output, self.assertRaisesRegex(
                 Rejected, "node GET bytes disagreed with the selected SHA-256"):
