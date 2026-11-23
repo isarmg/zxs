@@ -15,6 +15,7 @@ from .container_connection import OpenConnection, _Authorization, _LOGIN, _Metad
 from .container_management import Branch, Container, Detail, Node, _branch, _container, _node, open_checked
 
 _LIMIT = (1 << 63) - 1
+_APPEND = (1 << 64) - 1  # Unsigned WinFsp WriteToEndOfFile sentinel, never an NTFS offset.
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +51,7 @@ class WindowsDraftChoice:
     the draft owns its own lifetime. Failures may leave the generated private file; no cleanup
     by name, user-visible export or cold adoption.
     """
-    def __init__(self, connection, detail, branch, node, private_parent):
+    def __init__(self, connection, detail, branch, node, private_parent, *, max_bytes):
         if (sys.platform != "win32" or type(connection) is not OpenConnection or not connection._listed
                 or connection.writable or type(connection.operations) is not ContainerClient
                 or type(connection._exchange) is not HttpsExchange
@@ -59,8 +60,11 @@ class WindowsDraftChoice:
                 or type(detail) is not Detail or not _container(detail.container)
                 or not detail.container.revision or type(branch) is not Branch or not _branch(branch)
                 or branch not in detail.branches or not _node(node)
-                or node.id != branch.head or node not in branch.nodes or node.length > _LIMIT):
+                or node.id != branch.head or node not in branch.nodes):
             raise Rejected("choose the original authenticated Windows reader and one exact branch head")
+        if type(max_bytes) is not int or not node.length <= max_bytes <= _LIMIT:
+            raise Rejected("select an explicit logical byte ceiling large enough for the original Windows draft")
+        self._max_bytes = max_bytes
         self._connection, self._reader = connection, connection.operations
         self._exchange, self._auth = connection._exchange, connection._authorization
         self._source = DraftSource(self._exchange.destination_identity, self._exchange._location,
@@ -82,6 +86,10 @@ class WindowsDraftChoice:
     @property
     def source(self):
         return self._source
+
+    @property
+    def max_bytes(self):
+        return self._max_bytes
 
     @property
     def local_file(self):
@@ -239,29 +247,54 @@ class WindowsHeldDraft:
                 self._choice._live()
                 return result
 
-    def write(self, key, offset, data):
+    def _write_range(self, offset, count, append, constrained):
+        # Called under the same lock as the ensuing seek/write. Concurrent appends cannot
+        # reuse a stale EOF; constrained lazy writes following a truncate cannot re-extend it.
+        if (type(append) is not bool or type(constrained) is not bool or type(offset) is not int
+                or not 0 <= count <= CHUNK or (offset != _APPEND if append else not 0 <= offset <= _LIMIT)):
+            raise Rejected("invalid Windows draft write flags, size, or offset")
+        start = self._length if append else offset
+        if constrained:
+            count = min(count, max(0, self._length - start))
+        if count and start > self._choice.max_bytes - count:
+            raise Rejected("Windows draft write would exceed the selected logical byte ceiling")
+        return start, count
+
+    def write(self, key, offset, data, *, append=False, constrained=False):
         if type(data) is not bytes:
             raise Rejected("Windows draft write requires immutable bytes")
-        self._span(offset, len(data))
         with self._lock:
             self._allow(key, write=True)
+            offset, count = self._write_range(offset, len(data), append, constrained)
             with self._fault_on_error():
                 self._observe(self._length)
-                if data:
+                if count:
                     api = self._home.api
                     if offset > self._length:
                         api.resize(self._h, offset)  # FileEndOfFileInformation zero-pads the gap.
                     api.position(self._h, offset)
-                    api.write(self._h, data)
-                    length = max(self._length, offset + len(data))
+                    api.write(self._h, data[:count])
+                    length = max(self._length, offset + count)
                     self._observe(length)
                     self._length = length
-                return len(data)
+                return count
+
+    def flush(self, key):
+        """Flush this original file only. Not a volume flush, drain, freeze or server request."""
+        with self._lock:
+            self._allow(key)
+            with self._fault_on_error():
+                self._observe(self._length)
+                self._home.api.flush(self._h)
+                self._observe(self._length)
+                return self._length
 
     def resize(self, key, size):
         self._span(size, 0)
         with self._lock:
             self._allow(key, write=True)
+            if size > self._choice.max_bytes:
+                raise Rejected("Windows draft resize would exceed the selected logical byte ceiling")
             with self._fault_on_error():
                 self._observe(self._length)
                 if size != self._length:

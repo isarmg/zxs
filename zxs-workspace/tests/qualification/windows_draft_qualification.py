@@ -22,7 +22,7 @@ from zipworkspace.model import CHUNK, Rejected
 
 
 class LocalWorkingFile(NativeNodePublication):
-    def choose_draft(self, body, **transport):
+    def choose_draft(self, body, *, max_bytes=None, **transport):
         h2 = self.response((body,), body, **transport)
         observed = {"name": "CON", "sequence": 2, "requests": []}  # Exact R3 name, never installed on NTFS.
         def catalog(after):
@@ -50,7 +50,9 @@ class LocalWorkingFile(NativeNodePublication):
         connection, _ = connection.establish(None)
         selected = open_checked(connection.operations, CONTAINER)
         branch = selected.branches[0]
-        choice = draft_model.WindowsDraftChoice(connection, selected, branch, branch.nodes[0], self.staging)
+        ceiling = max(64, len(body)) if max_bytes is None else max_bytes
+        choice = draft_model.WindowsDraftChoice(connection, selected, branch, branch.nodes[0], self.staging,
+                                               max_bytes=ceiling)
         self.addCleanup(choice.close)
         return choice, observed
 
@@ -184,6 +186,46 @@ class LocalWorkingFile(NativeNodePublication):
         self.assertEqual(Path(path).read_bytes(), b"after!")
         self.assertEqual(self.requests, [TARGET])
 
+    def test_draft_atomic_append_clipped_writes_and_file_flush(self):
+        append = (1 << 64) - 1
+        choice, _ = self.choose_draft(b"init", max_bytes=6)
+        with choice.begin(confirmed=True) as draft:
+            a, b = draft.open(writable=True), draft.open(writable=True)
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                jobs = [pool.submit(draft.write, h, append, suffix, append=True)
+                        for h, suffix in ((a, b"A"), (b, b"B"))]
+                self.assertEqual([job.result(timeout=45) for job in jobs], [1, 1])
+            self.assertIn(draft.read(a, 0, 6), (b"initAB", b"initBA"))
+            self.assertEqual(draft.flush(a), 6)
+            with self.assertRaisesRegex(Rejected, "byte ceiling"):
+                draft.write(b, append, b"C", append=True)
+            with self.assertRaisesRegex(Rejected, "byte ceiling"):
+                draft.resize(b, 7)
+            with self.assertRaises(Rejected):
+                draft.write(b, 0, b"x", append=True)
+            with self.assertRaises(Rejected):
+                draft.write(b, append, b"x")
+            self.assertEqual(draft.begin_drain(), 2)
+            draft.resize(a, 3)
+            self.assertEqual(draft.write(b, 1, b"HELLO", constrained=True), 2)
+            self.assertEqual(draft.write(b, 3, b"!", constrained=True), 0)
+            self.assertEqual(draft.write(b, (1 << 63) - 1, b"!", constrained=True), 0)
+            # Defensive function input only; v2.1 rejects paging IO plus append before dispatch.
+            self.assertEqual(draft.write(b, append, b"!", append=True, constrained=True), 0)
+            self.assertEqual(draft.flush(b), 3)
+            draft.release(a)
+            draft.release(b)
+            review = draft.review(confirmed=True)
+            self.assertEqual((review.length, review.sha256), (3, sha256(b"iHE").hexdigest()))
+        self.assertEqual(self.requests, [TARGET])
+
+    def test_draft_rejects_invalid_logical_ceiling_before_get_or_create(self):
+        for ceiling in (-1, 3, True, 1 << 63):
+            with self.subTest(ceiling=ceiling), self.assertRaisesRegex(Rejected, "ceiling"):
+                self.choose_draft(b"seed", max_bytes=ceiling)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(list(self.staging.iterdir()), [])
+
     def test_draft_cancel_during_get_does_not_handoff_or_steal_the_worker_handle(self):
         started, finish = Event(), Event()
         def pause():
@@ -218,8 +260,8 @@ def qualify(spelling):
             raise SystemExit("This fixture requires an unchanged native marking policy for the inert URL.")
         cases = [name for name in unittest.defaultTestLoader.getTestCaseNames(LocalWorkingFile)
                  if name.startswith("test_draft_")]
-        if len(cases) != 6:
-            raise RuntimeError("all six dedicated draft cases are mandatory")
+        if len(cases) != 8:
+            raise RuntimeError("all eight dedicated draft cases are mandatory")
         suite = unittest.TestSuite(LocalWorkingFile(name, root, spelling, security, actor, profile, zone)
                                    for name in cases)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
