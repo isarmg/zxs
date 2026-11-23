@@ -1,8 +1,11 @@
 //! A batch is an ordered list of original, individually replayable file tickets.
-use super::{SourceTree, Stamp, TICKET_BYTES, Ticket, apply, relative_path, same_name_candidate};
 use super::super::{FreshSelection, Reset, import_command::write_receipt, offline_catalog};
+use super::{SourceTree, Stamp, TICKET_BYTES, Ticket, apply, relative_path, same_name_candidate};
 use crate::{headless_setup::parse_paths, maintenance::diagnostic_worker, path_rules::Kind};
-use rustix::{fs::{FileType, fstat}, process::{getgid, getuid}};
+use rustix::{
+    fs::{FileType, fstat},
+    process::{getgid, getuid},
+};
 use std::{
     collections::HashSet,
     ffi::{OsStr, OsString},
@@ -53,7 +56,9 @@ impl ImportBatch {
                     !from_stdin && arg != "--"
                 }))?;
                 if from_stdin && args.next().is_some() {
-                    return Err("--map0 takes all mapping pairs from standard input, not arguments");
+                    return Err(
+                        "--map0 takes all mapping pairs from standard input, not arguments",
+                    );
                 }
                 let mut mapping = Vec::new();
                 while let Some(relative) = args.next() {
@@ -62,7 +67,14 @@ impl ImportBatch {
                 if !whole_tree && !from_stdin && mapping.is_empty() {
                     return Err(PREPARE);
                 }
-                Ok(Self::Prepare { source, target, roles, mapping, whole_tree, from_stdin })
+                Ok(Self::Prepare {
+                    source,
+                    target,
+                    roles,
+                    mapping,
+                    whole_tree,
+                    from_stdin,
+                })
             }
             Some(mode) if mode == OsStr::new("apply") => Ok(Self::Apply(parse_paths(args)?)),
             Some(mode) if mode == OsStr::new("show") && args.next().is_none() => Ok(Self::Show),
@@ -77,10 +89,19 @@ impl ImportBatch {
                 // Display only: no source FD, role directory, catalog or worker required.
                 Batch::read(&mut io::stdin().lock())?.show(&mut io::stdout().lock())?;
             }
-            Self::Prepare { source, target, roles, mapping, whole_tree, from_stdin } => {
+            Self::Prepare {
+                source,
+                target,
+                roles,
+                mapping,
+                whole_tree,
+                from_stdin,
+            } => {
                 diagnostic_worker(getuid().as_raw(), getgid().as_raw())?;
                 if io::stdout().is_terminal() {
-                    return Err(message("redirect the binary batch plan to a new private file"));
+                    return Err(message(
+                        "redirect the binary batch plan to a new private file",
+                    ));
                 }
                 let mapping = if from_stdin {
                     mapping_input::read(&mut io::stdin().lock())?
@@ -105,7 +126,9 @@ impl ImportBatch {
                 let input = io::stdin();
                 let stat = fstat(&input)?;
                 if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
-                    return Err(message("redirect the original saved batch plan to standard input"));
+                    return Err(message(
+                        "redirect the original saved batch plan to standard input",
+                    ));
                 }
                 let plan = Batch::read(&mut input.lock())?;
                 let reset = FreshSelection::select(&roles)?.open_offline(None)?;
@@ -152,13 +175,26 @@ fn check_mappings<'a>(
         paths.try_reserve(1).map_err(no_memory)?;
         names.try_reserve(1).map_err(no_memory)?;
         if !relative_path(relative) || !same_name_candidate(name) {
-            return Err(message(format!("batch item {}: invalid relative source or target name", index + 1)));
+            return Err(message(format!(
+                "batch item {}: invalid relative source or target name",
+                index + 1
+            )));
         }
         if !paths.insert(relative) || !names.insert(name) {
-            return Err(message(format!("batch item {}: repeated source path or exact target name", index + 1)));
+            return Err(message(format!(
+                "batch item {}: repeated source path or exact target name",
+                index + 1
+            )));
         }
-        if existing.binary_search_by(|entry| entry.as_bytes().cmp(name)).is_ok() {
-            return Err(message(format!("batch item {}: exact target name already exists: {}", index + 1, Escaped(name))));
+        if existing
+            .binary_search_by(|entry| entry.as_bytes().cmp(name))
+            .is_ok()
+        {
+            return Err(message(format!(
+                "batch item {}: exact target name already exists: {}",
+                index + 1,
+                Escaped(name)
+            )));
         }
     }
     Ok(())
@@ -166,21 +202,40 @@ fn check_mappings<'a>(
 
 impl Batch {
     fn prepare(reset: &Reset, source: &Path, target: &Path, rows: &[Mapping]) -> io::Result<Self> {
-        Self::prepare_rows(reset, source, target,
-            rows.iter().map(|(path, name)| (path.as_os_str(), name.as_os_str(), None)))
+        Self::prepare_rows(
+            reset,
+            source,
+            target,
+            rows.iter()
+                .map(|(path, name)| (path.as_os_str(), name.as_os_str(), None)),
+        )
     }
 
     fn prepare_rows<'a>(
-        reset: &Reset, source: &Path, target: &Path,
-        rows: impl ExactSizeIterator<Item = (&'a OsStr, &'a OsStr, Option<(&'a SourceTree, &'a Stamp)>)> + Clone,
+        reset: &Reset,
+        source: &Path,
+        target: &Path,
+        rows: impl ExactSizeIterator<Item = (&'a OsStr, &'a OsStr, Option<(&'a SourceTree, &'a Stamp)>)>
+        + Clone,
     ) -> io::Result<Self> {
         let existing = offline_catalog::read_names(reset)?;
-        check_mappings(rows.clone().map(|(path, name, _)| (path.as_bytes(), name.as_bytes())), &existing)?;
+        check_mappings(
+            rows.clone()
+                .map(|(path, name, _)| (path.as_bytes(), name.as_bytes())),
+            &existing,
+        )?;
         let mut tickets = Vec::new();
         tickets.try_reserve_exact(rows.len()).map_err(no_memory)?;
         for (index, (path, name, observation)) in rows.enumerate() {
-            let ticket = Ticket::prepare_observed(reset, target, source, path.as_bytes(), name.as_bytes(), observation)
-                .map_err(|e| io::Error::new(e.kind(), format!("batch item {}: {e}", index + 1)))?;
+            let ticket = Ticket::prepare_observed(
+                reset,
+                target,
+                source,
+                path.as_bytes(),
+                name.as_bytes(),
+                observation,
+            )
+            .map_err(|e| io::Error::new(e.kind(), format!("batch item {}: {e}", index + 1)))?;
             tickets.push(ticket);
         }
         reset.require_original()?;
@@ -188,16 +243,27 @@ impl Batch {
     }
 
     fn checked(tickets: Vec<Ticket>) -> io::Result<Self> {
-        let first = tickets.first().ok_or_else(|| message("an import batch cannot be empty"))?;
-        check_mappings(tickets.iter().map(|t| (t.relative.as_slice(), t.name.as_slice())), &[])?;
+        let first = tickets
+            .first()
+            .ok_or_else(|| message("an import batch cannot be empty"))?;
+        check_mappings(
+            tickets
+                .iter()
+                .map(|t| (t.relative.as_slice(), t.name.as_slice())),
+            &[],
+        )?;
         let mut seeds = HashSet::new();
         seeds.try_reserve(tickets.len()).map_err(no_memory)?;
         for ticket in &tickets {
-            if ticket.pool != first.pool || ticket.token != first.token
-                || ticket.target != first.target || ticket.source_root != first.source_root
+            if ticket.pool != first.pool
+                || ticket.token != first.token
+                || ticket.target != first.target
+                || ticket.source_root != first.source_root
                 || !seeds.insert(ticket.seed)
             {
-                return Err(message("batch tickets have mixed selections or repeated operation IDs"));
+                return Err(message(
+                    "batch tickets have mixed selections or repeated operation IDs",
+                ));
             }
         }
         Ok(Self(tickets))
@@ -205,12 +271,23 @@ impl Batch {
 
     fn show(&self, output: &mut impl Write) -> io::Result<()> {
         let first = self.0.first().ok_or_else(|| message("empty plan"))?;
-        writeln!(output, "{} files; source: {}; target DATA: {}", self.0.len(),
-            Escaped(&first.source_root), Escaped(&first.target))?;
+        writeln!(
+            output,
+            "{} files; source: {}; target DATA: {}",
+            self.0.len(),
+            Escaped(&first.source_root),
+            Escaped(&first.target)
+        )?;
         writeln!(output, "item\tsource relative path\ttarget name\tbytes")?;
         for (index, ticket) in self.0.iter().enumerate() {
-            writeln!(output, "{}\t{}\t{}\t{}", index + 1, Escaped(&ticket.relative),
-                Escaped(&ticket.name), ticket.source.length)?;
+            writeln!(
+                output,
+                "{}\t{}\t{}\t{}",
+                index + 1,
+                Escaped(&ticket.relative),
+                Escaped(&ticket.name),
+                ticket.source.length
+            )?;
         }
         output.flush()
     }
@@ -219,7 +296,10 @@ impl Batch {
         // checked() proved every ticket belongs to this same pool, target token,
         // target path and source root. Do not pre-open sources or recheck all
         // names here: a completed item is its own collision and may lack a source.
-        self.0.first().ok_or_else(|| message("empty plan"))?.require_target(reset)?;
+        self.0
+            .first()
+            .ok_or_else(|| message("empty plan"))?
+            .require_target(reset)?;
         self.visit(|index, ticket| {
             let outcome = apply(reset, ticket)?;
             write!(output, "{}/{} ", index + 1, self.0.len())?;
@@ -231,10 +311,14 @@ impl Batch {
     fn visit(&self, mut item: impl FnMut(usize, &Ticket) -> io::Result<()>) -> io::Result<()> {
         for (index, ticket) in self.0.iter().enumerate() {
             if let Err(error) = item(index, ticket) {
-                return Err(io::Error::new(error.kind(), format!(
-                    "batch item {} of {} not confirmed: {error}; this item and earlier items may already be committed. Keep the sources and retry only with the same intact batch plan",
-                    index + 1, self.0.len()
-                )));
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "batch item {} of {} not confirmed: {error}; this item and earlier items may already be committed. Keep the sources and retry only with the same intact batch plan",
+                        index + 1,
+                        self.0.len()
+                    ),
+                ));
             }
         }
         Ok(())

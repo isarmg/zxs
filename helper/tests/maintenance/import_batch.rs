@@ -1,5 +1,5 @@
-use super::*;
 use super::super::Witness;
+use super::*;
 use crate::pinned::Entity;
 
 fn ticket(index: u8, path: &[u8], name: &[u8]) -> Ticket {
@@ -11,7 +11,10 @@ fn ticket(index: u8, path: &[u8], name: &[u8]) -> Ticket {
         source_root: b"/source".to_vec(),
         relative: path.to_vec(),
         source: Witness {
-            entity: Entity { dev: 1, ino: u64::from(index) },
+            entity: Entity {
+                dev: 1,
+                ino: u64::from(index),
+            },
             uid: 1000,
             mode: 0o100_600,
             links: 1,
@@ -44,10 +47,14 @@ fn parse(words: &[&str]) -> Result<ImportBatch, &'static str> {
 
 #[test]
 fn all_explicit_pairs_follow_the_complete_role_list() {
-    let args = ["prepare", "/source", "/two", "/sys", "/recycle", "/one", "/two",
-        "--", "dir/a", "Report", "b", "report"];
-    assert!(matches!(parse(&args), Ok(ImportBatch::Prepare { roles, mapping, .. })
-        if roles.len() == 4 && mapping.len() == 2));
+    let args = [
+        "prepare", "/source", "/two", "/sys", "/recycle", "/one", "/two", "--", "dir/a", "Report",
+        "b", "report",
+    ];
+    assert!(
+        matches!(parse(&args), Ok(ImportBatch::Prepare { roles, mapping, .. })
+        if roles.len() == 4 && mapping.len() == 2)
+    );
     assert!(parse(&args[..args.len() - 1]).is_err());
     assert!(parse(&args[..8]).is_err());
     assert!(parse(&args[..7]).is_err());
@@ -56,11 +63,43 @@ fn all_explicit_pairs_follow_the_complete_role_list() {
 
 #[test]
 fn tree_and_saved_raw_maps_do_not_require_all_overrides_in_argv() {
-    assert!(matches!(parse(&["prepare-tree", "/src", "/data", "/sys", "/rec", "/data"]),
-        Ok(ImportBatch::Prepare { whole_tree: true, from_stdin: false, .. })));
-    assert!(matches!(parse(&["prepare-tree", "/src", "/data", "/sys", "/rec", "/data", "--map0"]),
-        Ok(ImportBatch::Prepare { whole_tree: true, from_stdin: true, .. })));
-    assert!(parse(&["prepare-tree", "/src", "/data", "/sys", "/rec", "/data", "--map0", "extra"]).is_err());
+    assert!(matches!(
+        parse(&["prepare-tree", "/src", "/data", "/sys", "/rec", "/data"]),
+        Ok(ImportBatch::Prepare {
+            whole_tree: true,
+            from_stdin: false,
+            ..
+        })
+    ));
+    assert!(matches!(
+        parse(&[
+            "prepare-tree",
+            "/src",
+            "/data",
+            "/sys",
+            "/rec",
+            "/data",
+            "--map0"
+        ]),
+        Ok(ImportBatch::Prepare {
+            whole_tree: true,
+            from_stdin: true,
+            ..
+        })
+    ));
+    assert!(
+        parse(&[
+            "prepare-tree",
+            "/src",
+            "/data",
+            "/sys",
+            "/rec",
+            "/data",
+            "--map0",
+            "extra"
+        ])
+        .is_err()
+    );
     assert!(matches!(parse(&["show"]), Ok(ImportBatch::Show)));
     assert!(parse(&["show", "/extra"]).is_err());
     let valid = b"n/one\t\xff\0First\0next\nname\0Second\0\0";
@@ -100,8 +139,20 @@ fn rows_preserve_raw_sources_case_and_exact_original_ticket_bytes() {
         assert_eq!(t.encode().unwrap(), expected);
     }
     let names = [String::from("REPORT")];
-    assert!(check_mappings([(b"a".as_slice(), b"Report".as_slice())].into_iter(), &names).is_ok());
-    assert!(check_mappings([(b"a".as_slice(), b"REPORT".as_slice())].into_iter(), &names).is_err());
+    assert!(
+        check_mappings(
+            [(b"a".as_slice(), b"Report".as_slice())].into_iter(),
+            &names
+        )
+        .is_ok()
+    );
+    assert!(
+        check_mappings(
+            [(b"a".as_slice(), b"REPORT".as_slice())].into_iter(),
+            &names
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -150,16 +201,27 @@ fn uncertain_item_stops_and_the_same_batch_revisits_the_original_ids() {
     let mut observed = Vec::new();
     let failed = batch.visit(|n, t| {
         observed.push((n, t.seed));
-        if n == 1 { Err(io::Error::new(io::ErrorKind::BrokenPipe, "lost reply")) } else { Ok(()) }
+        if n == 1 {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "lost reply"))
+        } else {
+            Ok(())
+        }
     });
     let error = failed.unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
-    assert!(error.to_string().contains("batch item 2 of 3 not confirmed: lost reply"));
+    assert!(
+        error
+            .to_string()
+            .contains("batch item 2 of 3 not confirmed: lost reply")
+    );
     assert_eq!(observed, [(0, [1; 16]), (1, [2; 16])]);
     let mut retried = Vec::new();
-    Batch::read(&mut raw.as_slice()).unwrap().visit(|n, t| {
-        retried.push((n, t.seed));
-        Ok(())
-    }).unwrap();
+    Batch::read(&mut raw.as_slice())
+        .unwrap()
+        .visit(|n, t| {
+            retried.push((n, t.seed));
+            Ok(())
+        })
+        .unwrap();
     assert_eq!(retried, [(0, [1; 16]), (1, [2; 16]), (2, [3; 16])]);
 }

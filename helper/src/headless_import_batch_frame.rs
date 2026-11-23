@@ -28,7 +28,11 @@ impl Batch {
         part(&count.to_be_bytes())?;
         for ticket in &self.0 {
             let raw = ticket.encode()?;
-            part(&u32::try_from(raw.len()).map_err(|_| invalid())?.to_be_bytes())?;
+            part(
+                &u32::try_from(raw.len())
+                    .map_err(|_| invalid())?
+                    .to_be_bytes(),
+            )?;
             part(&raw)?;
         }
         output.write_all(&hash.finalize())?;

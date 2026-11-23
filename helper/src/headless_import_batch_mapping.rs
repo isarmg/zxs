@@ -9,9 +9,14 @@ use std::{
 
 fn field(input: &mut impl BufRead, limit: usize) -> io::Result<Vec<u8>> {
     let mut raw = Vec::new();
-    let width = input.by_ref().take((limit + 2) as u64).read_until(0, &mut raw)?;
+    let width = input
+        .by_ref()
+        .take((limit + 2) as u64)
+        .read_until(0, &mut raw)?;
     if width == 0 || width > limit + 1 || raw.pop() != Some(0) {
-        return Err(message("incomplete or overlong NUL-delimited mapping field"));
+        return Err(message(
+            "incomplete or overlong NUL-delimited mapping field",
+        ));
     }
     Ok(raw)
 }
@@ -28,7 +33,9 @@ pub(super) fn read(input: &mut impl BufRead) -> io::Result<Vec<Mapping>> {
         }
         let name = field(input, 255)?;
         if name.is_empty() {
-            return Err(message("a mapping needs a nonempty destination display name"));
+            return Err(message(
+                "a mapping needs a nonempty destination display name",
+            ));
         }
         rows.try_reserve(1).map_err(no_memory)?;
         rows.push((OsString::from_vec(path), OsString::from_vec(name)));
