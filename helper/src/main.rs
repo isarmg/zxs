@@ -44,7 +44,7 @@ mod test_area;
 mod volume_images;
 
 use pinned::storage_status::Selection;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -161,53 +161,8 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
             }
         };
     }
-    #[cfg(test)]
-    if op == "__zxs-shared-account-sql-v2" || op == "__zxs-shared-vault-writer-v2" {
-        if args.next().is_some() {
-            return Err("invalid internal worker");
-        }
-        return Ok(if op == "__zxs-shared-account-sql-v2" {
-            Command::RustAccountWorker
-        } else {
-            Command::RustVaultWriter
-        });
-    }
-    #[cfg(test)]
-    if op == "__first-install-browser-v1" {
-        if args.next().is_some() {
-            return Err("unexpected browser worker argument");
-        }
-        return Ok(Command::FirstBrowserWorker);
-    }
-    if op == "__copy-repair-browser-v2" {
-        if args.next().is_some() {
-            return Err("unexpected copy-repair browser worker argument");
-        }
-        return Ok(Command::CopyRepairBrowserWorker);
-    }
-    #[cfg(test)]
-    if op == "__first-layout-sql-v9" {
-        if args.next().is_some() {
-            return Err("invalid internal worker");
-        }
-        return Ok(Command::LayoutSqlWorker);
-    }
-    if let Some(format) = CheckFormat::from_worker_argument(&op) {
-        let error = match format {
-            CheckFormat::Sealed(_) => "invalid internal worker",
-            CheckFormat::Leased(_) => "invalid internal leased worker",
-        };
-        let expected = args
-            .next()
-            .and_then(|s| fs_tools::hex(s.to_str()?))
-            .ok_or(error)?;
-        if args.next().is_some() {
-            return Err(error);
-        }
-        return Ok(match format {
-            CheckFormat::Sealed(kind) => Command::SealedWorker(kind, expected),
-            CheckFormat::Leased(kind) => Command::LeasedPanelWorker(kind, expected),
-        });
+    if let Some(worker) = parse_worker(&op, &mut args)? {
+        return Ok(worker);
     }
     if op == "inspect-dirs" {
         let dirs: Vec<_> = args
@@ -257,10 +212,69 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     Err("unknown command")
 }
 
+fn parse_worker(
+    op: &OsStr,
+    args: &mut impl Iterator<Item = OsString>,
+) -> Result<Option<Command>, &'static str> {
+    #[cfg(test)]
+    if op == "__zxs-shared-account-sql-v2" || op == "__zxs-shared-vault-writer-v2" {
+        if args.next().is_some() {
+            return Err("invalid internal worker");
+        }
+        return Ok(Some(if op == "__zxs-shared-account-sql-v2" {
+            Command::RustAccountWorker
+        } else {
+            Command::RustVaultWriter
+        }));
+    }
+    #[cfg(test)]
+    if op == "__first-install-browser-v1" {
+        if args.next().is_some() {
+            return Err("unexpected browser worker argument");
+        }
+        return Ok(Some(Command::FirstBrowserWorker));
+    }
+    if op == "__copy-repair-browser-v2" {
+        if args.next().is_some() {
+            return Err("unexpected copy-repair browser worker argument");
+        }
+        return Ok(Some(Command::CopyRepairBrowserWorker));
+    }
+    #[cfg(test)]
+    if op == "__first-layout-sql-v9" {
+        if args.next().is_some() {
+            return Err("invalid internal worker");
+        }
+        return Ok(Some(Command::LayoutSqlWorker));
+    }
+    if let Some(format) = CheckFormat::from_worker_argument(op) {
+        let error = match format {
+            CheckFormat::Sealed(_) => "invalid internal worker",
+            CheckFormat::Leased(_) => "invalid internal leased worker",
+        };
+        let expected = args
+            .next()
+            .and_then(|s| fs_tools::hex(s.to_str()?))
+            .ok_or(error)?;
+        if args.next().is_some() {
+            return Err(error);
+        }
+        return Ok(Some(match format {
+            CheckFormat::Sealed(kind) => Command::SealedWorker(kind, expected),
+            CheckFormat::Leased(kind) => Command::LeasedPanelWorker(kind, expected),
+        }));
+    }
+    Ok(None)
+}
+
 fn line(s: &str) -> io::Result<()> {
     let mut out = io::stdout().lock();
     writeln!(out, "{s}")?;
     out.flush()
+}
+
+fn fixed_worker_status(confirmed: bool) -> ExitCode {
+    ExitCode::from(if confirmed { 0 } else { 2 })
 }
 
 fn run(command: Command) -> io::Result<ExitCode> {
@@ -278,51 +292,31 @@ fn run(command: Command) -> io::Result<ExitCode> {
         }
         #[cfg(test)]
         Command::RustAccountWorker => {
-            return Ok(ExitCode::from(
-                if sqlite_install::rust_account_worker().is_ok() {
-                    0
-                } else {
-                    2
-                },
+            return Ok(fixed_worker_status(
+                sqlite_install::rust_account_worker().is_ok(),
             ));
         }
         #[cfg(test)]
         Command::RustVaultWriter => {
-            return Ok(ExitCode::from(
-                if sqlite_install::rust_vault_worker().is_ok() {
-                    0
-                } else {
-                    2
-                },
+            return Ok(fixed_worker_status(
+                sqlite_install::rust_vault_worker().is_ok(),
             ));
         }
         #[cfg(test)]
         Command::FirstBrowserWorker => {
-            return Ok(ExitCode::from(
-                if sqlite_install::exec_first_browser().is_ok() {
-                    0
-                } else {
-                    2
-                },
+            return Ok(fixed_worker_status(
+                sqlite_install::exec_first_browser().is_ok(),
             ));
         }
         Command::CopyRepairBrowserWorker => {
-            return Ok(ExitCode::from(
-                if volume_images::repair::authorization::browser_worker().is_ok() {
-                    0
-                } else {
-                    2
-                },
+            return Ok(fixed_worker_status(
+                volume_images::repair::authorization::browser_worker().is_ok(),
             ));
         }
         #[cfg(test)]
         Command::LayoutSqlWorker => {
-            return Ok(ExitCode::from(
-                if sqlite_install::layout_sql_worker().is_ok() {
-                    0
-                } else {
-                    2
-                },
+            return Ok(fixed_worker_status(
+                sqlite_install::layout_sql_worker().is_ok(),
             ));
         }
         Command::SealedWorker(fmt, digest) => {
@@ -385,23 +379,26 @@ fn run(command: Command) -> io::Result<ExitCode> {
                 ExitCode::from(2)
             });
         }
-        Command::Compare(a, b) => {
-            let observed = inspect::compare(&a, &b)?;
-            if observed.equal {
-                line(&format!(
-                    "equal: {} bytes in each distinct regular file",
-                    observed.left
-                ))?;
-            } else {
-                line(&format!(
-                    "different: reference={} bytes candidate={} bytes",
-                    observed.left, observed.right
-                ))?;
-                return Ok(ExitCode::from(1));
-            }
-        }
+        Command::Compare(a, b) => return compare(&a, &b),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn compare(a: &std::path::Path, b: &std::path::Path) -> io::Result<ExitCode> {
+    let observed = inspect::compare(a, b)?;
+    if observed.equal {
+        line(&format!(
+            "equal: {} bytes in each distinct regular file",
+            observed.left
+        ))?;
+        Ok(ExitCode::SUCCESS)
+    } else {
+        line(&format!(
+            "different: reference={} bytes candidate={} bytes",
+            observed.left, observed.right
+        ))?;
+        Ok(ExitCode::from(1))
+    }
 }
 
 fn main() -> ExitCode {
@@ -564,6 +561,12 @@ mod copy_arguments {
             assert!(cmd(&[worker, "/saved/volume", &digest]).is_err());
             assert!(cmd(&[worker, &digest, forbidden]).is_err());
         }
+    }
+
+    #[test]
+    fn readonly_rejects_unrecognized_formats_and_unapproved_worker_switches() {
+        let digest = "35".repeat(32);
+        let cmd = |a: &[&str]| parse(a.iter().copied().map(OsString::from));
         assert!(cmd(&["check-zfs-copy", "/saved/volume", "--sha256", &digest]).is_err());
         assert!(
             cmd(&[
