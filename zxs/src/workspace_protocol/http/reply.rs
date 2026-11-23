@@ -25,6 +25,7 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
             Reply::Containers(rows) => out.array(&rows, Json::container),
             Reply::Catalog(page) => out.catalog(&page),
             Reply::Container(row) => out.container(&row),
+            Reply::Detail(page) => out.detail(&page),
             Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
             Reply::BranchNodes(nodes) => out.array(&nodes, |o, (id, node)| o.node(id, node)),
             Reply::BranchHistory(page) => out.history(&page),
@@ -133,6 +134,30 @@ impl Json {
             self.id_or_null(*node)?;
         }
         self.write_str("}}")
+    }
+
+    fn detail(&mut self, page: &core::DetailPage) -> fmt::Result {
+        self.write_str("{\"container_id\":")?;
+        self.hex(&page.id)?;
+        write!(self, ",\"sequence\":{},\"name\":", page.sequence)?;
+        self.string(&page.name)?;
+        self.write_str(",\"tags\":")?;
+        self.array(&page.tags, |out, tag| out.string(tag))?;
+        self.write_str(",\"heads\":")?;
+        self.array(&page.heads, |out, (branch, head)| {
+            out.write_str("{\"branch\":")?;
+            out.string(branch)?;
+            out.write_str(",\"head\":")?;
+            out.hex(head)?;
+            out.write_char('}')
+        })?;
+        self.write_str(",\"next_after\":")?;
+        if let Some(after) = &page.next_after {
+            self.string(after)?;
+        } else {
+            self.write_str("null")?;
+        }
+        self.write_char('}')
     }
 
     fn history(&mut self, page: &core::HistoryPage) -> fmt::Result {

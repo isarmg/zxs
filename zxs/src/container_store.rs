@@ -189,6 +189,52 @@ fn select_history_page(
     })
 }
 
+pub(crate) const DETAIL_PAGE_ROWS: usize = 256;
+
+pub(crate) struct DetailPage {
+    pub(crate) id: Id,
+    pub(crate) sequence: u64,
+    pub(crate) name: String,
+    pub(crate) tags: Vec<String>,
+    pub(crate) heads: Vec<(String, NodeId)>,
+    pub(crate) next_after: Option<String>,
+}
+
+fn select_detail_page(
+    id: Id,
+    name: &str,
+    state: &State,
+    sequence: Option<u64>,
+    after: Option<&str>,
+) -> Result<DetailPage, Error> {
+    use std::ops::Bound::{Excluded, Unbounded};
+
+    if sequence.is_some_and(|sequence| sequence != state.sequence) {
+        return Err(Conflict::SequenceChanged(state.sequence).into());
+    }
+    let mut heads = Vec::with_capacity(DETAIL_PAGE_ROWS);
+    for (branch, node) in state
+        .branches
+        .range::<str, _>((after.map_or(Unbounded, Excluded), Unbounded))
+        .take(DETAIL_PAGE_ROWS)
+    {
+        let node = node.ok_or_else(|| invalid("selected branch has no head"))?;
+        heads.push((branch.clone(), node));
+    }
+    let next_after = heads
+        .last()
+        .filter(|_| heads.len() == DETAIL_PAGE_ROWS)
+        .map(|(branch, _)| branch.clone());
+    Ok(DetailPage {
+        id,
+        sequence: state.sequence,
+        name: name.to_owned(),
+        tags: state.tags.clone(),
+        heads,
+        next_after,
+    })
+}
+
 pub(crate) struct NodeBytes {
     pub(crate) node: Node,
     pub(crate) file: File,
@@ -568,6 +614,18 @@ impl Store {
 
     pub(crate) fn describe(&self, id: Id) -> io::Result<Option<Container>> {
         self.describe_at(id, false)
+    }
+
+    pub(crate) fn detail_page(
+        &self,
+        id: Id,
+        sequence: Option<u64>,
+        after: Option<&str>,
+    ) -> Result<Option<DetailPage>, Error> {
+        self.project_container(id, false, |state, name| {
+            select_detail_page(id, name, state, sequence, after)
+        })?
+        .transpose()
     }
 
     fn describe_at(&self, id: Id, recorded: bool) -> io::Result<Option<Container>> {

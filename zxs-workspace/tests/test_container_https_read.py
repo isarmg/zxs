@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from zipworkspace.container_https import HttpsExchange
-from zipworkspace.desktop.container_connection import _History, _Metadata, _catalog_page
+from zipworkspace.desktop.container_connection import _History, _Metadata, _catalog_page, _detail_page
 from zipworkspace.model import Rejected
 
 
@@ -202,3 +202,64 @@ class BranchHistoryTest(unittest.TestCase):
             chain.accept(full)
             with self.assertRaises(Rejected):
                 chain.accept(bad)
+
+class ContainerDetailTest(unittest.TestCase):
+    def test_detail_uses_only_original_get_and_revision_headers(self):
+        exchange = ExchangeFixture(reply((b'{"fixture":true}',), b"application/json"))
+        exchange.read_container_detail_page(CONTAINER)
+        exchange.read_container_detail_page(CONTAINER, 7, "main")
+        exchange.read_container_detail_page(CONTAINER, 7)
+        self.assertEqual(exchange.calls, [("GET", f"{ROOT}/{CONTAINER}", "application/json", None)] * 3)
+        self.assertEqual(exchange.headers[0]["Zxs-Detail"], "paged")
+        self.assertNotIn("Zxs-Detail-Sequence", exchange.headers[0])
+        self.assertEqual(exchange.headers[1]["Zxs-Detail-Sequence"], "7")
+        self.assertEqual(exchange.headers[1]["Zxs-Detail-After"], "main")
+        self.assertNotIn("Zxs-Detail-After", exchange.headers[2])
+        for revision, cursor in ((None, "main"), (0, None), (True, None), (7, "../nodes")):
+            with self.assertRaises(Rejected):
+                exchange.read_container_detail_page(CONTAINER, revision, cursor)
+        self.assertEqual(len(exchange.calls), 3)
+
+    def test_detail_pages_bind_original_revision_and_require_final_recheck(self):
+        def key(n):
+            return f"{n:032x}"
+
+        branch_heads = [{"branch": key(n), "head": key(n + 300)} for n in range(1, 257)]
+        first = {"container_id": CONTAINER, "sequence": 900, "name": "original",
+                 "tags": ["kept"], "heads": branch_heads, "next_after": key(256)}
+        final = dict(first, heads=[{"branch": "main", "head": key(900)}], next_after=None)
+
+        class Pages:
+            def __init__(self, revisions):
+                self.calls, self.revisions = [], iter(revisions)
+
+            def read_container_detail_page(self, container, sequence, after):
+                self.calls.append((container, sequence, after))
+                return next(self.revisions)
+
+            def read_history_page(self, _container, branch, head, cursor):
+                if cursor is not None:
+                    raise AssertionError("fixture contains only one node per branch")
+                return {"head": head, "nodes": [{"node_id": head, "operation_id": head,
+                                                "parent_node": None, "original_branch": branch,
+                                                "sequence": 1, "length": 0, "sha256": "0" * 64}],
+                        "next": None}
+
+        exchange = Pages((first, final, first))
+        detail = _Metadata(exchange).open_container(CONTAINER)
+        self.assertEqual(len(detail.branches), 257)
+        self.assertEqual(exchange.calls, [(CONTAINER, None, None), (CONTAINER, 900, key(256)),
+                                          (CONTAINER, 900, None)])
+        for later in (dict(final, sequence=901), dict(final, tags=["altered"]),
+                      dict(final, heads=[]), dict(final, heads=[branch_heads[-1]])):
+            with self.assertRaises(Rejected):
+                _Metadata(Pages((first, later))).open_container(CONTAINER)
+        with self.assertRaises(Rejected):
+            _Metadata(Pages((first, final, dict(first, name="renamed")))).open_container(CONTAINER)
+
+        for bad in (dict(first, next_after=None), dict(first, next_after=key(255)),
+                    dict(first, heads=branch_heads[::-1]),
+                    dict(first, heads=branch_heads + branch_heads[:1]),
+                    dict(first, container_id=key(999))):
+            with self.assertRaises(Rejected):
+                _detail_page(bad, CONTAINER)

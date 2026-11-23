@@ -1121,3 +1121,40 @@ fn branch_history_resume_is_an_exact_descending_parent_chain() {
         Err(Error::Conflict(Conflict::HeadChanged(None)))
     ));
 }
+
+#[test]
+fn detail_heads_page_preserves_revision_and_exact_lexical_order() {
+    let mut state = State {
+        sequence: 700,
+        tags: vec!["标签".into()],
+        ..State::default()
+    };
+    state.branches.insert(String::from("main"), Some(id(1)));
+    state
+        .branches
+        .extend((1..=DETAIL_PAGE_ROWS).map(|n| (format!("{n:032x}"), Some(id(1)))));
+    let first = select_detail_page(id(2), "original", &state, None, None).unwrap();
+    assert_eq!(first.id, id(2));
+    assert_eq!(first.sequence, 700);
+    assert_eq!(first.name, "original");
+    assert_eq!(first.tags, ["标签"]);
+    assert_eq!(first.heads.len(), DETAIL_PAGE_ROWS);
+    assert_eq!(
+        first.next_after.as_deref(),
+        Some("00000000000000000000000000000100")
+    );
+    let second = select_detail_page(
+        id(2),
+        "original",
+        &state,
+        Some(first.sequence),
+        first.next_after.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(second.heads, [(String::from("main"), id(1))]);
+    assert!(second.next_after.is_none());
+    assert!(matches!(
+        select_detail_page(id(2), "original", &state, Some(699), None),
+        Err(Error::Conflict(Conflict::SequenceChanged(700)))
+    ));
+}

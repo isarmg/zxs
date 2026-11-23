@@ -78,6 +78,11 @@ pub(crate) enum Request {
         after: Option<Id>,
     },
     Container(Id),
+    ContainerDetail {
+        container: Id,
+        sequence: Option<u64>,
+        after: Option<Branch>,
+    },
     Tags(Id),
     NodeData {
         container: Id,

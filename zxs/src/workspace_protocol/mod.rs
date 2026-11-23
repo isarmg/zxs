@@ -99,7 +99,37 @@ fn selected_read_request(
 ) -> Result<Option<Request>, Rejected> {
     let catalog = list_request(method, target, headers)?;
     let history = history_request(method, target, headers)?;
-    Ok(catalog.or(history))
+    let detail = detail_request(method, target, headers)?;
+    Ok(catalog.or(history).or(detail))
+}
+
+fn detail_request(
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+) -> Result<Option<Request>, Rejected> {
+    let mode = field(headers, "zxs-detail")?;
+    let sequence = field(headers, "zxs-detail-sequence")?;
+    let after = field(headers, "zxs-detail-after")?;
+    if mode.is_none() && sequence.is_none() && after.is_none() {
+        return Ok(None);
+    }
+    if mode != Some("paged") || method != "GET" || (after.is_some() && sequence.is_none()) {
+        return Err(Rejected::Header);
+    }
+    let id = target
+        .strip_prefix(ROOT)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .ok_or(Rejected::Header)?;
+    let sequence = sequence.map(decimal).transpose()?;
+    if sequence == Some(0) {
+        return Err(Rejected::Value);
+    }
+    Ok(Some(Request::ContainerDetail {
+        container: Id::parse(id)?,
+        sequence,
+        after: after.map(Branch::parse).transpose()?,
+    }))
 }
 
 fn history_request(

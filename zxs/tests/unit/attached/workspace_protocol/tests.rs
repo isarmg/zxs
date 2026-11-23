@@ -265,3 +265,50 @@ fn history_page_headers_require_the_exact_branch_read_and_a_distinct_parent_curs
     assert!(request("GET", ROOT, &continued).is_err());
     assert!(request("POST", &path, &continued).is_err());
 }
+
+#[test]
+fn paged_detail_refuses_unbound_or_noncanonical_request_fields() {
+    let target = format!("{ROOT}/{CONT}");
+    assert_eq!(request("GET", &target, &[]), Ok(Request::Container(id(1))));
+    assert_eq!(
+        request("GET", &target, &[("Zxs-Detail", "paged")]),
+        Ok(Request::ContainerDetail {
+            container: id(1),
+            sequence: None,
+            after: None
+        })
+    );
+    assert_eq!(
+        request(
+            "GET",
+            &target,
+            &[
+                ("Zxs-Detail", "paged"),
+                ("Zxs-Detail-Sequence", "7"),
+                ("Zxs-Detail-After", "main")
+            ]
+        ),
+        Ok(Request::ContainerDetail {
+            container: id(1),
+            sequence: Some(7),
+            after: Some(Branch::Main)
+        })
+    );
+    for bad in [
+        vec![("Zxs-Detail-Sequence", "7")],
+        vec![("Zxs-Detail", "paged"), ("Zxs-Detail-After", "main")],
+        vec![("Zxs-Detail", "paged"), ("Zxs-Detail-Sequence", "0")],
+        vec![("Zxs-Detail", "paged"), ("Zxs-Detail-Sequence", "07")],
+        vec![("Zxs-Detail", "paged"), ("zxs-detail", "paged")],
+        vec![
+            ("Zxs-Detail", "paged"),
+            ("Zxs-Detail-Sequence", "7"),
+            ("Zxs-Detail-After", "MAIN"),
+        ],
+    ] {
+        assert!(request("GET", &target, &bad).is_err());
+    }
+    assert!(request("GET", ROOT, &[("Zxs-Detail", "paged")]).is_err());
+    assert!(request("GET", &format!("{target}/tags"), &[("Zxs-Detail", "paged")]).is_err());
+    assert!(request("DELETE", &target, &[("Zxs-Detail", "paged")]).is_err());
+}

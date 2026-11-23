@@ -44,6 +44,7 @@ fn body_for<'a>(request: &Request, source: &'a mut dyn Read) -> Result<Incoming<
         Request::List
         | Request::ListCompact { .. }
         | Request::Container(_)
+        | Request::ContainerDetail { .. }
         | Request::Tags(_)
         | Request::NodeData { .. }
         | Request::BranchNodes { .. }

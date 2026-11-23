@@ -302,6 +302,19 @@ class HttpsExchange:
             headers["Zxs-History-Next"] = next_node
         return self._read_metadata(f"{_ROOT}/{container}/branches/{branch}/nodes", headers)
 
+    def read_container_detail_page(self, container, sequence=None, after=None):
+        if (not _read_id(container)
+                or (sequence is not None and (type(sequence) is not int or not 0 < sequence < 1 << 64))
+                or (after is not None and (sequence is None or type(after) is not str
+                                           or (after != "main" and not _read_id(after))))):
+            raise Rejected("invalid Workspace container detail selection")
+        headers = {"Zxs-Detail": "paged"}
+        if sequence is not None:
+            headers["Zxs-Detail-Sequence"] = str(sequence)
+        if after is not None:
+            headers["Zxs-Detail-After"] = after
+        return self._read_metadata(f"{_ROOT}/{container}", headers)
+
     def _read_metadata(self, target, fields):
         headers = {"Accept": "application/json", "Accept-Encoding": "identity", **fields}
         try:

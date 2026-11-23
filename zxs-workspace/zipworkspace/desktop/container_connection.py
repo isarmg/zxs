@@ -15,8 +15,9 @@ from .container_client import BoundOutbox, ContainerClient, index_for
 from .container_management import (Body, Branch, Container, Detail, Kind, Node, branch_ok, id_ok,
                                    list_checked, number, text_ok)
 
-_ROOT = "/zxs/v1/containers"
-_CONTAINER = frozenset(("container_id", "sequence", "name", "tags", "heads"))
+_DETAIL_KEYS = frozenset(("container_id", "sequence", "name", "tags", "heads", "next_after"))
+_DETAIL_HEAD = frozenset(("branch", "head"))
+_DETAIL_PAGE_ROWS = 256
 _CATALOG_KEYS = frozenset(("items", "next_after"))
 _CATALOG_ROW = frozenset(("container_id", "sequence", "name"))
 _CATALOG_PAGE_ROWS = 256
@@ -169,16 +170,27 @@ def open_connection(origin, login, password):
         raise
 
 
-def _container(raw):
-    if (type(raw) is not dict or raw.keys() != _CONTAINER
-            or not id_ok(raw["container_id"]) or not text_ok(raw["name"])
+def _detail_page(raw, container, after=None):
+    if (type(raw) is not dict or raw.keys() != _DETAIL_KEYS
+            or raw["container_id"] != container or not id_ok(container)
+            or not _catalog_name(raw["name"])
             or not number(raw["sequence"]) or raw["sequence"] == 0
             or type(raw["tags"]) is not list or not all(map(text_ok, raw["tags"]))
-            or type(raw["heads"]) is not dict or "main" not in raw["heads"]
-            or any(not branch_ok(branch) or not id_ok(head) for branch, head in raw["heads"].items())):
-        raise Rejected("invalid R3 container metadata")
-    return (Container(raw["container_id"], raw["name"], raw["sequence"]),
-            tuple(raw["tags"]), tuple(sorted(raw["heads"].items())))
+            or type(raw["heads"]) is not list or len(raw["heads"]) > _DETAIL_PAGE_ROWS):
+        raise Rejected("invalid R3 container detail page")
+    owner = Container(container, raw["name"], raw["sequence"])
+    heads, previous = [], after
+    for row in raw["heads"]:
+        if (type(row) is not dict or row.keys() != _DETAIL_HEAD
+                or not branch_ok(row["branch"]) or not id_ok(row["head"])
+                or (previous is not None and row["branch"] <= previous)):
+            raise Rejected("invalid or unordered R3 branch heads")
+        previous = row["branch"]
+        heads.append((previous, row["head"]))
+    required = previous if len(heads) == _DETAIL_PAGE_ROWS else None
+    if raw["next_after"] != required:
+        raise Rejected("invalid R3 detail continuation")
+    return owner, tuple(raw["tags"]), tuple(heads), required
 
 
 def _catalog_name(name):
@@ -256,13 +268,13 @@ class _Metadata:
     def destination_identity(self):
         return self._exchange.destination_identity
 
-    def _read(self, target):
+    def _read_detail(self, container, sequence=None, after=None):
         if self._profile is not None:
             self._profile.require_state()
-        result = self._exchange.read_metadata(target)
+        raw = self._exchange.read_container_detail_page(container, sequence, after)
         if self._profile is not None:
             self._profile.require_state()
-        return result
+        return _detail_page(raw, container, after)
 
     def list_containers(self):
         rows, after = [], None
@@ -293,16 +305,18 @@ class _Metadata:
     def open_container(self, container):
         if not id_ok(container):
             raise Rejected("invalid selected container")
-        target = f"{_ROOT}/{container}"
-        observed = _container(self._read(target))
-        owner, tags, heads = observed
-        if owner.id != container:
-            raise Rejected("metadata was not for the selected container")
-        views = tuple(self._branch_history(container, branch, head, owner.revision)
-                      for branch, head in heads)
-        # Branch lists come from separate requests. A deleted container or
-        # changed sequence/head set cannot be returned as the same selection.
-        if _container(self._read(target)) != observed:
+        first = self._read_detail(container)
+        owner, tags, initial_heads, after = first
+        heads = list(initial_heads)
+        while after is not None:
+            page_owner, page_tags, page_heads, after = self._read_detail(container, owner.revision, after)
+            if (page_owner, page_tags) != (owner, tags):
+                raise Rejected("container metadata changed while reading branch heads")
+            heads.extend(page_heads)
+        if not any(branch == "main" for branch, _ in heads):
+            raise Rejected("missing original main branch")
+        views = tuple(self._branch_history(container, branch, head, owner.revision) for branch, head in heads)
+        if self._read_detail(container, owner.revision) != first:
             raise Rejected("container metadata changed while reading the selected branches")
         read = Detail(owner, tags, views)
         return read if self._profile is None else self._profile.present(read)

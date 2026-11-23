@@ -30,6 +30,7 @@ pub(crate) enum Reply {
     Containers(Vec<core::Container>),
     Catalog(core::CatalogPage),
     Container(core::Container),
+    Detail(core::DetailPage),
     Tags(Vec<String>),
     Node(core::NodeBytes),
     BranchNodes(Vec<(core::NodeId, core::Node)>),
@@ -62,6 +63,7 @@ fn access(request: &Request) -> Access {
         Request::List | Request::ListCompact { .. } => Access::List,
         Request::Container(id) | Request::Tags(id) => Access::Read(*id),
         Request::NodeData { container, .. }
+        | Request::ContainerDetail { container, .. }
         | Request::BranchNodes { container, .. }
         | Request::BranchHistory { container, .. }
         | Request::Receipt { container, .. } => Access::Read(*container),
@@ -130,6 +132,9 @@ pub(crate) fn dispatch<R: Read>(
             list_catalog(store, &list, &allowed)
         }
         (Request::Container(id), Body::Empty) => Ok(Reply::Container(describe(store, id)?)),
+        (detail @ Request::ContainerDetail { .. }, Body::Empty) => {
+            read_detail(store, detail, &allowed)
+        }
         (Request::Tags(id), Body::Empty) => Ok(Reply::Tags(describe(store, id)?.tags)),
         (Request::NodeData { container, node }, Body::Empty) => Ok(Reply::Node(
             store
@@ -201,6 +206,30 @@ pub(crate) fn dispatch<R: Read>(
         }
         _ => Err(Failure::BadBody),
     }
+}
+
+fn read_detail(
+    store: &core::Store,
+    request: Request,
+    allowed: &impl Fn(Access) -> bool,
+) -> Result<Reply, Failure> {
+    let Request::ContainerDetail {
+        container,
+        sequence,
+        after,
+    } = request
+    else {
+        return Err(Failure::BadBody);
+    };
+    let after = after.map(branch_key);
+    let page = store
+        .detail_page(container.bytes(), sequence, after.as_deref())
+        .map_err(|error| failed(&error))?
+        .ok_or(Failure::Missing)?;
+    if !allowed(Access::Read(container)) {
+        return Err(Failure::Denied);
+    }
+    Ok(Reply::Detail(page))
 }
 
 fn read_history(
