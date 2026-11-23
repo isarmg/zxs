@@ -1,16 +1,9 @@
-//! Approve only the exact already positioned one-ELF ZXS product in the
-//! private disposable environment. An ELF header check is not cold acceptance.
-#[cfg(any(test, feature = "embedded-zxs"))]
-mod asset;
-mod path;
+//! Reopen and attest the exact image published on the protected original mount.
+use super::path::{OriginalPath, no_attribute};
 use crate::{
     embedded_image::{MAX_IMAGE, denied, standalone},
     pinned::{Entity, Mount, installed_regular_reader},
 };
-#[cfg(feature = "embedded-zxs")]
-pub(crate) use asset::EmbeddedInstall;
-pub(in crate::sqlite_install::pair) use path::check_image as check_path;
-use path::{OriginalPath, no_attribute};
 use rustix::fs::{StatVfsMountFlags, fstatvfs};
 use std::{
     fs::File,
@@ -47,17 +40,13 @@ impl ImageStamp {
         })
     }
 }
-pub(in crate::sqlite_install::pair) struct Image {
+pub(super) struct Image {
     original: OriginalPath,
     reader: File,
     stamp: ImageStamp,
 }
 impl Image {
-    pub(in crate::sqlite_install::pair) fn select(
-        path: &Path,
-        expected: &[u8; 32],
-        product: Entity,
-    ) -> io::Result<Self> {
+    pub(super) fn select(path: &Path, expected: &[u8; 32], product: Entity) -> io::Result<Self> {
         if expected == &[0; 32] {
             return Err(denied());
         }
@@ -79,7 +68,7 @@ impl Image {
         owned.require()?;
         Ok(owned)
     }
-    pub(in crate::sqlite_install::pair) fn require(&self) -> io::Result<()> {
+    pub(super) fn require(&self) -> io::Result<()> {
         self.original.require()?;
         for x in [c"security.capability", c"system.posix_acl_access"] {
             no_attribute(&self.reader, x)?;
@@ -94,18 +83,18 @@ impl Image {
         }
         Ok(())
     }
-    pub(in crate::sqlite_install::pair) fn includes(&self, entity: Entity) -> bool {
+    pub(super) fn includes(&self, entity: Entity) -> bool {
         self.original.includes(entity)
     }
-    pub(in crate::sqlite_install::pair) fn entity(&self) -> Entity {
+    pub(super) fn entity(&self) -> Entity {
         self.stamp.entity
     }
     #[cfg(any(test, feature = "embedded-zxs"))]
-    fn mount(&self) -> u64 {
+    pub(super) fn mount(&self) -> u64 {
         self.stamp.mount
     }
     #[cfg(any(test, feature = "embedded-zxs"))]
-    fn require_same_published(&self, original: &File) -> io::Result<()> {
+    pub(super) fn require_same_published(&self, original: &File) -> io::Result<()> {
         self.require()?;
         if ImageStamp::at(original)? != self.stamp {
             return Err(denied());

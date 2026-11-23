@@ -13,8 +13,6 @@ mod rust_enroll;
 mod smb_policy;
 mod terminal;
 mod web_secret;
-#[cfg(feature = "embedded-zxs")]
-pub(crate) use fresh_issuer::EmbeddedInstall;
 pub(super) use fresh_issuer::{ExplicitSubject, compiled_schema};
 pub(crate) use native_run::{rust_account_worker, rust_vault_worker};
 mod domain;

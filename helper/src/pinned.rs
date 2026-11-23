@@ -274,7 +274,7 @@ impl Pinned {
         one.local = Some(Arc::clone(scope));
         Ok(one)
     }
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     pub(crate) fn require_local_root(scope: &DiscoveryView) -> io::Result<()> {
         Self::open_guarded(Path::new("/"), Kind::Directory, true, Some(scope)).map(drop)
     }
@@ -382,7 +382,7 @@ impl Pinned {
     pub(crate) fn entity(&self) -> Entity {
         *self.chain.last().expect("root and leaf are present")
     }
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     pub(crate) fn visible_chain(&self) -> &[Entity] {
         &self.chain
     }
@@ -394,7 +394,7 @@ impl Pinned {
         self.fd.metadata()
     }
 
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     pub(crate) fn local_scope(&self) -> Option<&Arc<DiscoveryView>> {
         self.local.as_ref()
     }
@@ -446,7 +446,7 @@ impl Pinned {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     pub(crate) fn passive_mount_observation(&self) -> bool {
         self.no_automount
     }
@@ -657,17 +657,17 @@ impl LocalDataFile {
 
 /// A fixed 101-byte SQLite claim, only below a separately authorized and
 /// held storage directory. Never a data/backup/health or caller-path reader.
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 pub(crate) fn sqlite_claim_reader(pin: &File, entity: Entity, mount: u64) -> io::Result<File> {
     selected_claim_reader(pin, entity, mount, false)
 }
 
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 pub(crate) fn discovery_claim_reader(pin: &File, entity: Entity, mount: u64) -> io::Result<File> {
     selected_claim_reader(pin, entity, mount, true)
 }
 
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 fn selected_claim_reader(
     pin: &File,
     entity: Entity,
@@ -718,7 +718,7 @@ pub(crate) fn external_import_reader(pin: &File, original: Entity, mount: u64) -
 
 /// Only the root-owned nonsecret live configuration or bound record below a separately
 /// admitted instance root. The worker may update atime; no arbitrary path.
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 pub(crate) fn public_record_reader(pin: &File, mount: u64, length: u64) -> io::Result<File> {
     let m = pin.metadata()?;
     if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)
@@ -793,9 +793,9 @@ pub(crate) fn installed_regular_reader(pin: &File) -> io::Result<File> {
 #[derive(Copy, Clone)]
 enum MountRead {
     PassiveSource,
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     SelectedControl,
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     PublicRecord,
 }
 #[derive(Copy, Clone)]
@@ -817,7 +817,7 @@ impl ReaderBoundary {
         matches!(self, Self::Mount(_, MountRead::PassiveSource))
     }
     fn permits_atime(self) -> bool {
-        #[cfg(any(test, feature = "embedded-zxs"))]
+        #[cfg(test)]
         if matches!(self, Self::Mount(_, MountRead::PublicRecord)) {
             return true;
         }

@@ -3,9 +3,9 @@
 use super::denied;
 use crate::{
     maintenance::HostMounts,
+    maintenance::host_admin,
     pinned::{DiscoveryAdmission, Entity, Kind, Mount, discover_component, local_data_filesystem},
     product_layout,
-    sqlite_install::approval,
 };
 use rustix::{
     fs::{Mode, OFlags, ResolveFlags, fgetxattr, openat2},
@@ -46,7 +46,7 @@ fn canonical(path: &Path, folder: bool) -> io::Result<()> {
     }
     Ok(())
 }
-pub(in crate::sqlite_install::pair) fn check_image(path: &Path) -> io::Result<()> {
+pub(crate) fn check_image(path: &Path) -> io::Result<()> {
     canonical(path, false)
 }
 #[cfg(any(test, feature = "embedded-zxs"))]
@@ -103,7 +103,7 @@ fn qualified_dir(f: &File) -> io::Result<File> {
 }
 fn walk(path: &Path, is_dir: bool, product: Entity) -> io::Result<Vec<Prior>> {
     canonical(path, is_dir)?;
-    let home = approval::host_admin()?;
+    let home = host_admin()?;
     let table = HostMounts::discovery_view(false)?;
     let initial = table.root_mount()?;
     if table.admit(&home)? != initial {

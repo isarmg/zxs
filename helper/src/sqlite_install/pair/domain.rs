@@ -3,6 +3,6 @@ mod provision;
 use super::bad;
 pub(in crate::sqlite_install) use provision::require_lent_ex;
 pub(super) use provision::{
-    FreshParent, VaultStamp, checked_vault_stamp, deployed_worker_payload, request_live_approval,
-    sealed, verify_fresh_worker,
+    VaultStamp, checked_vault_stamp, deployed_worker_payload, request_live_approval, sealed,
+    verify_fresh_worker,
 };

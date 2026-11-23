@@ -2,8 +2,8 @@
 
 The normal Helper has no placeholder payload. Build the optional separate
 Helper only with the already reviewed and independently measured **complete**
-standalone ZXS ELF from the exact current paired v20 source. Do not use an older
-split-account image or a development stand-in. This action neither releases
+standalone ZXS ELF from the independently selected current ZXS source. Do not use a retired
+SQLite/SMB image or a development stand-in. This action neither releases
 nor starts either program.
 The final runnable ZXS remains that one unchanged file; it never calls Helper.
 
@@ -23,7 +23,7 @@ python3 build_embedded.py \
 
 Inputs are named canonical local paths, not auto-fetched dependencies. The
 script makes a private exact-byte copy, independently checks the approved
-input hash and static PIE shape, builds locked/offline with only the checked tracked SQLite flags and a fresh private Cargo home (no alternate or ancestor Cargo config), and verifies that
+input hash and static PIE shape, builds locked/offline with a fresh private Cargo home and only the known tracked config (its SQLite flags apply to historical test dependencies, not this binary) (no alternate or ancestor Cargo config), and verifies that
 the actual Helper ELF contains **one whole unchanged payload** in one read-only
 loadable region, with no other `PT_LOAD` mapping over its Linux x86-64 virtual
 pages, including a load's zero-filled memory range. See the
@@ -63,18 +63,11 @@ as found and do not blindly retry or delete. The command never starts ZXS,
 writes site/account state, resets a credential, migrates a pool, or
 overwrites an existing file.
 
-Explicit [fresh v20 setup](fresh-deployment.md) is a separate original
-approval. Give it the independently expected `--zxs-sha256` and, when not
-using `/zxs/bin/zxs`, the installed `--zxs-image DIR/zxs`. It checks that executable and the original enrolled
-media before issuing **one** shared Web/SMB account; extraction by itself
-does not issue a credential. The existing `site.v1` authority and selector
-bind the chosen canonical path and whole-image hash. Later check/reset
-uses that same original protected site, with no path override, and ZXS
-independently verifies its actual running image. No Helper preferences or
-duplicate authority are retained. The optional feature enables the same
-private v20 account commands but does not run them.
-
-Unit tests type-check the publisher and exercise inert validation data.
-They do not supply a compile-time payload, emit an optional release
-artifact, write an actual installation, start ZXS, or establish real Web/SMB
-logins. Those checks require separate approval and an exact paired asset.
+The separate [current first setup](headless-offline.md) uses the dedicated
+non-root service account, not this root publisher. Its default installed
+program location, also used by offline name lookup, DATA initialization and
+imports, is `/zxs/bin/zxs`. Extracting to a different protected directory
+does **not** reconfigure those commands. Extraction grants no account and
+creates no role markers or `server.conf`. The `embedded-zxs` build feature
+does not enable a legacy installation, unlock old workers, or require
+a SQLite schema or engine.

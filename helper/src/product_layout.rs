@@ -1,11 +1,11 @@
-//! The installed binary directory is shared by the current offline operations
-//! and the separately selected historical/embedded code.
+//! Installed locations. Shared host evidence is separate from retired media fixtures.
 pub(crate) const BIN: &str = "/zxs/bin";
 
 #[cfg(any(test, feature = "embedded-zxs"))]
-mod legacy;
+mod names;
 #[cfg(any(test, feature = "embedded-zxs"))]
-pub(crate) use legacy::{
-    CONTROL_MODE, IMAGE, RECYCLE, STATE_COMPONENTS, SYSTEM, TOP, data_label, image_separate, media,
-    raw_member,
-};
+pub(crate) mod protected;
+#[cfg(any(test, feature = "embedded-zxs"))]
+pub(crate) use names::{CONTROL_MODE, STATE_COMPONENTS, TOP, image_separate, raw_member};
+#[cfg(test)]
+pub(crate) use names::{IMAGE, RECYCLE, SYSTEM, data_label, media};

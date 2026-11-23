@@ -91,7 +91,7 @@ impl PublicConfirmation {
     pub(crate) fn confirm_image_installation(&self, review: String) -> io::Result<()> {
         self.ask("INSTALL-ZXS-IMAGE", Some(review), 32 * 1024)
     }
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     pub(crate) fn confirm_initial_deployment(&self, review: String) -> io::Result<()> {
         self.ask("ISSUE-FRESH-ACCOUNT", Some(review), 1100 * 1024)
     }
@@ -104,7 +104,7 @@ impl PublicConfirmation {
     pub(crate) fn confirm_fat32_repair(&self, preview: String) -> io::Result<()> {
         self.ask("REPAIR-FAT32-COPY", Some(preview), 64 * 1024)
     }
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     pub(crate) fn confirm_shared_account_reset(&self, review: String) -> io::Result<()> {
         self.ask("RESET-ZXS-ACCOUNT", Some(review), 96 * 1024)
     }

@@ -4,6 +4,8 @@ pub(crate) use crate::product_layout;
 mod approval;
 mod catalog;
 mod complete;
+#[cfg(test)]
+mod discovery;
 mod engine;
 mod markers;
 mod originals;
@@ -13,10 +15,6 @@ mod receipt;
 mod request;
 mod reservation;
 mod stage;
-#[cfg(feature = "embedded-zxs")]
-pub(crate) use pair::EmbeddedInstall;
-#[cfg(test)]
-mod discovery;
 #[cfg(test)]
 pub(crate) use pair::exec_first_browser;
 pub(crate) use pair::{

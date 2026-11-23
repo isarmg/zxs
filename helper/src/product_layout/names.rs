@@ -1,39 +1,47 @@
 //! Fixed deployment names. Parser defaults only choose paths; the
 //! read-only checks inspect already admitted held directory members before
 //! their separate operational gates. No mount, formatting or grant lives here.
+#[cfg(test)]
 use super::BIN;
-use crate::{
-    path_rules::Kind,
-    pinned::{Entity, Mount},
-};
+#[cfg(test)]
+use crate::path_rules::Kind;
+use crate::pinned::{Entity, Mount};
 use rustix::fs::{Mode, OFlags, RawDir, ResolveFlags, openat2};
+#[cfg(test)]
+use std::path::PathBuf;
 use std::{
     ffi::{CStr, OsStr},
     fs::File,
     io,
     mem::MaybeUninit,
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 pub(crate) const TOP: &str = "/zxs";
 pub(crate) const STATE_COMPONENTS: [&CStr; 2] = [c"zxs", c"state"];
 pub(crate) const STATE: &str = "/zxs/state";
 pub(crate) const CONTROL_MODE: u32 = 0o755;
+#[cfg(test)]
 pub(crate) const IMAGE: &str = "/zxs/bin/zxs";
 pub(crate) const DISKS: &str = "/zxs/disks";
+#[cfg(test)]
 pub(crate) const SYSTEM: &str = "/zxs/disks/system";
+#[cfg(test)]
 pub(crate) const DATA: &str = "/zxs/disks/data";
+#[cfg(test)]
 pub(crate) const RECYCLE: &str = "/zxs/disks/recycle";
 const LOG: &str = "/zxs/log";
 
 fn overlaps(path: &Path, reserved: &str) -> bool {
     path.starts_with(reserved) || Path::new(reserved).starts_with(path)
 }
+#[cfg(test)]
 fn separated_media(path: &Path) -> bool {
     ![STATE, BIN, LOG].iter().any(|p| overlaps(path, p))
         && ![DISKS, DATA].iter().any(|p| Path::new(p) == path)
 }
+#[cfg(test)]
 pub(crate) fn media(path: &Path) -> Result<(), &'static str> {
     Kind::StorageRoot.check_path(path.as_os_str().as_bytes())?;
     if !separated_media(path) {
@@ -46,6 +54,7 @@ pub(crate) fn media(path: &Path) -> Result<(), &'static str> {
 pub(crate) fn image_separate(path: &Path) -> bool {
     ![STATE, LOG, DISKS].iter().any(|p| overlaps(path, p))
 }
+#[cfg(test)]
 pub(crate) fn data_label(label: &OsStr) -> Result<PathBuf, &'static str> {
     let name = label
         .to_str()

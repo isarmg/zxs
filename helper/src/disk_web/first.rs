@@ -10,14 +10,14 @@ use std::{
     time::{Duration, Instant},
 };
 const TICKET: Duration = Duration::from_secs(90);
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InstallPhase {
     Resume,
     Initialize,
     Account,
 }
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 impl InstallPhase {
     pub(crate) fn wire(self) -> u8 {
         match self {
@@ -45,7 +45,7 @@ impl InstallPhase {
 enum Purpose {
     Headless,
     HeadlessUnit(String),
-    #[cfg(any(test, feature = "embedded-zxs"))]
+    #[cfg(test)]
     Install {
         phase: InstallPhase,
         count: u8,
@@ -116,7 +116,7 @@ impl Offer {
                 let page = match self.purpose {
                     Purpose::Headless => format!("headless\n1\n{ticket}"),
                     Purpose::HeadlessUnit(ref unit) => format!("headless\n1\n{ticket}\n{unit}"),
-                    #[cfg(any(test, feature = "embedded-zxs"))]
+                    #[cfg(test)]
                     Purpose::Install { phase, count } => {
                         format!("{}\n{count}\n{ticket}", phase.name())
                     }
@@ -134,7 +134,7 @@ impl Offer {
         }
     }
 }
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 pub(crate) fn serve_first(
     listener: TcpListener,
     phase: InstallPhase,

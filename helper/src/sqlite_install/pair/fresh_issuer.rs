@@ -72,7 +72,9 @@ impl ExplicitSubject {
     }
 }
 
-pub(super) mod image;
+pub(super) mod image {
+    pub(crate) use crate::embedded_image::path::check_image as check_path;
+}
 #[cfg(test)]
 use super::command::{key, value};
 #[cfg(test)]
@@ -93,8 +95,6 @@ use crate::{
 };
 #[cfg(test)]
 use helper_linux_evidence::prompt_signals::PromptSignals;
-#[cfg(feature = "embedded-zxs")]
-pub(crate) use image::EmbeddedInstall;
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 

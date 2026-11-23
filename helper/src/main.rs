@@ -31,12 +31,10 @@ mod maintenance;
 mod path_rules;
 mod pinned;
 pub(crate) mod product_layout;
-// Historical workers are exercised by the bin fixtures. The optional
-// embedded-image publisher still reaches this dependency graph through
-// the protected deployment parent checks; the default binary never does.
-#[cfg(any(test, feature = "embedded-zxs"))]
+// Retained fixture coverage only. Neither normal nor embedded Helper executes these protocols.
+#[cfg(test)]
 mod smb_profile;
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 mod sqlite_install;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]

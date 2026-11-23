@@ -5,7 +5,12 @@ use std::io;
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "embedded-zxs")]
-pub(crate) use crate::sqlite_install::EmbeddedInstall;
+pub(crate) use publisher::EmbeddedInstall;
+pub(crate) mod arguments;
+mod installed;
+pub(crate) mod path;
+mod publisher;
+mod site;
 
 pub(crate) const MAX_IMAGE: u64 = 64 << 20;
 

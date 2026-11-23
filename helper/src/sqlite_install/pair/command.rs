@@ -1,6 +1,7 @@
 //! Private fresh-only issuance; no server/start, separate domain or generic credentials.
 #[cfg(test)]
 use super::Id;
+pub(super) use crate::embedded_image::arguments::{sha, value};
 #[cfg(test)]
 use crate::sqlite_install::id;
 use std::ffi::{OsStr, OsString};
@@ -8,32 +9,9 @@ use std::ffi::{OsStr, OsString};
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct Setup;
-pub(super) fn value(
-    it: &mut impl Iterator<Item = OsString>,
-    flag: &str,
-) -> Result<OsString, &'static str> {
-    if it.next().as_deref() != Some(OsStr::new(flag)) {
-        return Err("expected named setup fields in the displayed order");
-    }
-    it.next().ok_or("missing setup field")
-}
 #[cfg(test)]
 pub(super) fn key(it: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<Id, &'static str> {
     id(&value(it, flag)?).ok_or("setup identifiers must be 32 lowercase nonzero hex digits")
-}
-pub(super) fn sha(
-    it: &mut impl Iterator<Item = OsString>,
-    flag: &str,
-) -> Result<[u8; 32], &'static str> {
-    value(it, flag)?
-        .to_str()
-        .filter(|s| {
-            s.bytes()
-                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
-        })
-        .and_then(crate::fs_tools::hex)
-        .filter(|x| *x != [0; 32])
-        .ok_or("expected the independent original receipt SHA-256 (64 lowercase hex digits)")
 }
 #[cfg(test)]
 pub(super) fn name(

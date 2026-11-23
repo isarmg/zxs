@@ -3,49 +3,15 @@ mod live;
 mod return_to_host;
 use super::bad;
 pub(in crate::sqlite_install::pair) use crate::local_worker::sealed;
-use crate::pinned::{Entity, Mount};
+use crate::product_layout::protected::{Times, child, mark};
 pub(in crate::sqlite_install) use return_to_host::lease as require_lent_ex;
 pub(in crate::sqlite_install::pair) use return_to_host::{
-    FreshParent, VaultStamp, checked_vault_stamp, deployed_worker_payload, request_live_approval,
+    VaultStamp, checked_vault_stamp, deployed_worker_payload, request_live_approval,
     verify_fresh_worker,
 };
-use rustix::fs::{Mode, OFlags, RawDir, openat};
-use std::{fs::File, io, mem::MaybeUninit, os::unix::fs::MetadataExt};
+use rustix::fs::RawDir;
+use std::{fs::File, io, mem::MaybeUninit};
 
-fn mark(fd: &File) -> io::Result<(Entity, u64)> {
-    Ok((
-        Entity::of(&fd.metadata()?)?,
-        Mount::on(fd)?
-            .ok_or_else(|| bad("missing original mount identity"))?
-            .id,
-    ))
-}
-fn child(parent: &File, name: &std::ffi::CStr) -> io::Result<File> {
-    Ok(File::from(openat(
-        parent,
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-        Mode::empty(),
-    )?))
-}
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct Times {
-    links: u64,
-    len: u64,
-    mtime: (i64, i64),
-    ctime: (i64, i64),
-}
-impl Times {
-    fn on(f: &File) -> io::Result<Self> {
-        let m = f.metadata()?;
-        Ok(Self {
-            links: m.nlink(),
-            len: m.len(),
-            mtime: (m.mtime(), m.mtime_nsec()),
-            ctime: (m.ctime(), m.ctime_nsec()),
-        })
-    }
-}
 fn contents(dir: &File, expected: &[&[u8]]) -> io::Result<()> {
     // All lists are small fixed constants. A raw, complete inventory rejects
     // case-folded aliases and previously allocated partial or final outputs.

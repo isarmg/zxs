@@ -2,7 +2,7 @@
 mod check;
 mod first;
 pub(crate) use first::serve_repair;
-#[cfg(any(test, feature = "embedded-zxs"))]
+#[cfg(test)]
 pub(crate) use first::{InstallPhase, serve_first};
 mod http;
 mod view;
