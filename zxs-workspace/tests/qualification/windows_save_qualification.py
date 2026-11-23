@@ -26,8 +26,8 @@ from zipworkspace.model import Rejected
 
 
 class OriginalSave(LocalWorkingFile):
-    def edited(self, before=b"seed", after=b"edited"):
-        choice, _ = self.choose_draft(before, max_bytes=max(64, len(after)))
+    def edited(self, before=b"seed", after=b"edited", *, historical=False):
+        choice, _ = self.choose_draft(before, max_bytes=max(64, len(after)), historical=historical)
         draft = choice.begin(confirmed=True)
         self.addCleanup(draft.close)
         h = draft.open(writable=True)
@@ -80,6 +80,29 @@ class OriginalSave(LocalWorkingFile):
         with self.assertRaises(Rejected):
             with pending.body(action):
                 self.fail("closed pending scope")
+        self.assertEqual(self.requests, [TARGET])
+
+    def test_save_historical_main_cold_reopen_keeps_exact_fork_and_body(self):
+        choice, draft, review = self.edited(historical=True)
+        conn = choice._connection
+        source = choice.source
+        key = draft.prepare_save(review, confirmed=True)
+        draft.close()
+        self.assertEqual(self.recover(conn), key)
+
+        original = WindowsOriginalSaveChoice(conn, self.staging, key).review
+        self.assertEqual(original.source, source)
+        self.assertEqual(original.ticket.change.from_main, source.head.id)
+        fork = original.ticket.change.branch
+        self.assertNotEqual(fork, source.branch)
+
+        with self.reopen(conn, key) as pending:
+            action, = pending.plan.actions
+            self.assertEqual((action.operation_id, action.branch, action.head, action.fork_from_main),
+                             (key.operation, fork, None, source.head.id))
+            with pending.body(action) as parts:
+                self.assertEqual(b"".join(parts), b"edited")
+        self.assertEqual(WindowsOriginalSaveChoice(conn, self.staging, key).review, original)
         self.assertEqual(self.requests, [TARGET])
 
     def test_save_competing_prepare_never_replaces_an_existing_transfer(self):

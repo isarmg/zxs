@@ -22,9 +22,11 @@ from zipworkspace.model import CHUNK, Rejected
 
 
 class LocalWorkingFile(NativeNodePublication):
-    def choose_draft(self, body, *, max_bytes=None, **transport):
+    def choose_draft(self, body, *, max_bytes=None, historical=False, **transport):
         h2 = self.response((body,), body, **transport)
         observed = {"name": "CON", "sequence": 2, "requests": []}  # Exact R3 name, never installed on NTFS.
+        observed["head"] = "8" * 32 if historical else NODE
+
         def catalog(after):
             self.assertIsNone(after)
             return {"items": [{"container_id": CONTAINER, "name": observed["name"],
@@ -35,14 +37,16 @@ class LocalWorkingFile(NativeNodePublication):
             self.assertIn(sequence, (None, observed["sequence"]))
             observed["requests"].append("detail")
             return {"container_id": CONTAINER, "name": observed["name"], "sequence": observed["sequence"],
-                    "tags": [], "heads": [{"branch": "main", "head": NODE}], "next_after": None}
+                    "tags": [], "heads": [{"branch": "main", "head": observed["head"]}], "next_after": None}
 
         def history(container, branch, head, after):
-            self.assertEqual((container, branch, head, after), (CONTAINER, "main", NODE, None))
+            self.assertEqual((container, branch, head, after), (CONTAINER, "main", observed["head"], None))
             observed["requests"].append("history")
-            return {"head": NODE, "nodes": [{"node_id": NODE, "operation_id": "3" * 32, "parent_node": None,
-                                             "original_branch": "main", "sequence": 1, "length": len(body),
-                                             "sha256": sha256(body).hexdigest()}], "next": None}
+            selected = {"node_id": NODE, "operation_id": "3" * 32, "parent_node": None,
+                        "original_branch": "main", "sequence": 1, "length": len(body),
+                        "sha256": sha256(body).hexdigest()}
+            newer = {**selected, "node_id": head, "operation_id": "4" * 32, "parent_node": NODE, "sequence": 2}
+            return {"head": head, "nodes": [newer, selected] if historical else [selected], "next": None}
 
         h2.read_catalog_page, h2.read_container_detail_page, h2.read_history_page = catalog, detail, history
         h2.request = lambda *_: self.fail("a local draft issued a remote operation")
@@ -51,10 +55,22 @@ class LocalWorkingFile(NativeNodePublication):
         selected = open_checked(connection.operations, CONTAINER)
         branch = selected.branches[0]
         ceiling = max(64, len(body)) if max_bytes is None else max_bytes
-        choice = draft_model.WindowsDraftChoice(connection, selected, branch, branch.nodes[0], self.staging,
+        choice = draft_model.WindowsDraftChoice(connection, selected, branch, branch.nodes[-1], self.staging,
                                                max_bytes=ceiling)
         self.addCleanup(choice.close)
         return choice, observed
+
+    def test_draft_historical_main_new_head_refuses_before_get_or_local_create(self):
+        choice, observed = self.choose_draft(b"selected historical bytes", historical=True)
+        self.assertEqual(choice.source.head.id, NODE)
+        self.assertEqual(choice.source.observed_main_head, observed["head"])
+        # Keep the sequence and selected historical node identical so only
+        # the captured branch-head fence can detect this inconsistent response.
+        observed["head"] = "9" * 32
+        with self.assertRaisesRegex(Rejected, "original head changed"):
+            choice.begin(confirmed=True)
+        self.assertFalse(Path(choice.local_file).exists())
+        self.assertEqual(self.requests, [])
 
     def test_draft_offsets_late_writes_full_review_and_source(self):
         mark = f"[ZoneTransfer]\r\nZoneId={self.zone}\r\nHostUrl={ORIGIN}{TARGET}\r\n".encode("ascii")
