@@ -1,5 +1,7 @@
 //! An opt-in repair of a newly created working image. The selected source is
 //! always readonly and never supplied to the writable sandbox.
+pub(crate) mod authorization;
+
 use super::{exfat,ext4,image,leased::{CopySource,Image,Selected},runner,runtime::Runtime};
 use crate::{fs_tools::hex,pinned::{Entity,Kind,Mount,Pinned,invalid,local_data_filesystem,private_inode_reader}};
 use helper_linux_evidence::diagnostic_process::cancelled;
@@ -85,7 +87,7 @@ impl Request{
         let require=||{
             dest.require_unoccupied()?;original.require()?;runtime.recheck()
         };
-        crate::sqlite_install::confirm_copy_repair(self.format,preview,self.web.then_some(length),require)?;
+        authorization::confirm(self.format, preview, self.web.then_some(length), require)?;
         require()?;
         runner::prepare_work_repair(length)?;
         // A partial copy is not adopted or cleaned up on paper after a

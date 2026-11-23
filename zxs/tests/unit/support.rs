@@ -33,21 +33,3 @@ impl Drop for PrivateTemp {
         }
     }
 }
-
-pub(crate) fn native_root_length(parent:&Path,n:usize)->PathBuf{
-    use std::os::unix::{ffi::OsStrExt,fs::DirBuilderExt};
-    let mut p=parent.to_owned();
-    while p.as_os_str().as_bytes().len()<n{
-        let delta=n-p.as_os_str().as_bytes().len();assert!(delta>=2);
-        let mut k=(delta-1).min(160);if delta-k-1==1{k-=1;}
-        p.push("a".repeat(k));fs::DirBuilder::new().mode(0o700).create(&p).unwrap();
-    }
-    assert_eq!(p.as_os_str().as_bytes().len(),n);p
-}
-
-/// Expected disk spelling from the public naming rule, independent of the
-/// production name codec. The original ID comes from the fixture's receipt.
-pub(crate) fn physical(display:&str,file:impl std::fmt::Display)->String{
-    let (stem,ext)=display.split_at(display.rfind('.').filter(|&p|p!=0).unwrap_or(display.len()));
-    format!("{stem}-{file}{ext}")
-}

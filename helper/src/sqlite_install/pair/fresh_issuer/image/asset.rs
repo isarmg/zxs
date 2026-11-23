@@ -1,20 +1,5 @@
 //! Optional complete ZXS image. There is no default or substitute asset.
-use super::{MAX_IMAGE,denied,standalone};
-use sha2::{Digest,Sha256};
-use std::io;
-
-fn verify(bytes:&[u8],compiler_expected:[u8;32],approved:[u8;32])->io::Result<[u8;32]>{
-    if compiler_expected==[0;32]||approved!=compiler_expected||bytes.is_empty()||bytes.len() as u64>MAX_IMAGE||
-        <[u8;32]>::from(Sha256::digest(bytes))!=approved{
-        return Err(denied());
-    }
-    standalone(bytes.len() as u64,|offset,out|{
-        let start=usize::try_from(offset).map_err(|_|denied())?;
-        let end=start.checked_add(out.len()).ok_or_else(denied)?;
-        out.copy_from_slice(bytes.get(start..end).ok_or_else(denied)?);Ok(())
-    })?;
-    Ok(approved)
-}
+use crate::embedded_image::{denied, verify};
 
 // Type-check the full protected publisher in unit tests without supplying
 // any asset or making the command available in a normal binary.
@@ -27,7 +12,7 @@ mod enabled{
         terminal::PublicConfirmation},product_layout,stage::random}};
     use crate::sqlite_install::pair::fresh_issuer::image::{Image,path::{OriginalPath,PIN,WITHIN,no_attribute}};
     #[cfg(feature="embedded-zxs")]
-    use super::MAX_IMAGE;
+    use crate::embedded_image::MAX_IMAGE;
     use helper_linux_evidence::diagnostic_process::{cancelled,watch_cancellation};
     use rustix::fs::{AtFlags,Mode,OFlags,StatVfsMountFlags,fchmod,fstatvfs,linkat,openat2};
     use std::{ffi::OsString,fs::File,io,os::unix::fs::{FileExt,MetadataExt},path::PathBuf,time::{Duration,Instant}};
@@ -180,7 +165,8 @@ pub(crate) use enabled::EmbeddedInstall;
 #[cfg(test)]
 mod tests{
     use super::*;
-    use crate::sqlite_install::pair::fresh_issuer::image::tests::small;
+    use crate::embedded_image::tests::small;
+    use sha2::{Digest,Sha256};
     #[test]
     fn embedded_asset_default_has_no_install_command_or_placeholder(){
         if !cfg!(feature="embedded-zxs"){

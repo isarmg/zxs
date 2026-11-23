@@ -1,13 +1,10 @@
-//! A bind mount of a subdirectory can hide a marked parent from openat("..").
-//! Inspect the kernel's mount-root field for every mount in the held lineage.
-//! Unknown mount IDs or an exposed subtree are not a proof of complete ancestry.
+//! Mount and backing-filesystem identity for retained Linux descriptors.
 use super::{invalid, File};
 use std::{collections::BTreeMap, io::{self,Read}, os::fd::{AsRawFd,FromRawFd}};
 
 unsafe extern "C" {
     fn zxs_mount_id(fd:std::os::raw::c_int, out:*mut u64)->std::os::raw::c_int;
     fn zxs_open_mountinfo()->std::os::raw::c_int;
-    fn zxs_mount_flags(fd:std::os::raw::c_int)->std::os::raw::c_int;
 }
 
 pub(super) fn id(file:&File)->io::Result<u64>{
@@ -18,27 +15,12 @@ pub(super) fn id(file:&File)->io::Result<u64>{
     Ok(value)
 }
 
-/// One flag sample from an already held descriptor; not a mount identity.
-#[derive(Clone,Copy)]
-pub(crate) struct MountFlags(u8);
-impl MountFlags{
-    const READ_ONLY:u8=1;
-    const DATA_RESTRICTIONS:u8=2|4|8; // nosuid, nodev, noexec
-    pub(crate) fn on_fd(file:&File)->io::Result<Self>{
-        // SAFETY: the borrowed descriptor remains live; the shim only reads its flags.
-        let raw=unsafe{zxs_mount_flags(file.as_raw_fd())};
-        if raw<0{return Err(io::Error::last_os_error());}
-        let bits=u8::try_from(raw).ok().filter(|bits|bits&!(Self::READ_ONLY|Self::DATA_RESTRICTIONS)==0)
-            .ok_or_else(||invalid("invalid mount flag result"))?;
-        Ok(Self(bits))
-    }
-    pub(crate) const fn read_only(self)->bool{self.0&Self::READ_ONLY!=0}
-    pub(crate) const fn has_data_restrictions(self)->bool{self.0&Self::DATA_RESTRICTIONS==Self::DATA_RESTRICTIONS}
-    pub(crate) const fn read_only_data(self)->bool{self.read_only()&&self.has_data_restrictions()}
-}
-
 #[derive(Clone,Copy,Eq,PartialEq)]
-struct MountInfo{whole:bool,superblock:(u32,u32)}
+struct MountInfo {
+    #[cfg(test)]
+    whole: bool,
+    superblock: (u32,u32),
+}
 pub(super) struct Mounts(BTreeMap<u64,MountInfo>);
 impl Mounts {
     pub(super) fn read()->io::Result<Self>{
@@ -61,14 +43,14 @@ impl Mounts {
             let device=fields.nth(1).and_then(|v|std::str::from_utf8(v).ok()).and_then(|s|s.split_once(':')).ok_or_else(bad)?;
             let superblock=(device.0.parse::<u32>().map_err(|_|bad())?,device.1.parse::<u32>().map_err(|_|bad())?);
             let root=fields.next().ok_or_else(bad)?;
-            let info=MountInfo{whole:root==b"/",superblock};
+            let info=MountInfo {
+                #[cfg(test)]
+                whole: root==b"/",
+                superblock,
+            };
             if !root.starts_with(b"/") || table.len()>=16384 || table.insert(number,info).is_some(){return Err(bad());}
         }
         Ok(Self(table))
-    }
-    pub(super) fn complete(&self,file:&File)->io::Result<()>{
-        if self.0.get(&id(file)?).is_none_or(|p|!p.whole){return Err(invalid("mount hides a physical ancestor or changed during selection"));}
-        Ok(())
     }
     /// Compare superblocks: bind mounts can have different mount IDs and
     /// still refer to the same filesystem.

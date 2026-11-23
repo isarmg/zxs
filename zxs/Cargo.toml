@@ -11,6 +11,14 @@ build = "build.rs"
 name = "zxs"
 path = "src/main.rs"
 
+[features]
+host-activation = []
+
+[[bin]]
+name = "activate-headless"
+path = "src/activate_headless.rs"
+required-features = ["host-activation"]
+
 # This project builds alone, including after removal of its enclosing checkout.
 [workspace]
 resolver = "3"
@@ -19,17 +27,9 @@ exclude = [
     "vendor/rust/libc-0.2.191",
 ]
 
-# Native storage libraries are not part of the browser module.
+# Linux ABI declarations use the retained local libc bindings.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "=0.2.191", path = "vendor/rust/libc-0.2.191", default-features = false }
-
-[profile.browser]
-inherits = "release"
-lto = true
-codegen-units = 1
-opt-level = "s"
-panic = "abort"
-strip = "debuginfo"
 
 [lints.rust.unexpected_cfgs]
 level = "warn"

@@ -1,14 +1,12 @@
-//! Shared Argon2id verifier for an account already selected by the caller.
-//! Has no physical storage format, issuing authority, FILE rights or logging.
-use crate::fs::invalid;
+//! Argon2id verification for the caller's selected account.
 use std::{ffi::{c_char,c_int,c_void,CString},io,sync::Mutex};
 
 pub(crate) fn login_name(raw:&[u8])->io::Result<&str>{
     if !(1..=64).contains(&raw.len()) || !(raw[0].is_ascii_lowercase() || raw[0].is_ascii_digit()) ||
         !raw.iter().all(|b|b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(b)){
-        return Err(invalid("invalid exact account login"));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid exact account login"));
     }
-    std::str::from_utf8(raw).map_err(|_|invalid("invalid login bytes"))
+    std::str::from_utf8(raw).map_err(|_|io::Error::new(io::ErrorKind::InvalidInput, "invalid login bytes"))
 }
 #[derive(Eq,PartialEq)]
 pub(crate) struct Verifier{salt:[u8;16],tag:[u8;32]}

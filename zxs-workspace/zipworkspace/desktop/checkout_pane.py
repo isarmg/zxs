@@ -1,5 +1,6 @@
 """Explicitly launch a new CLI-format working tree; never open or discover previous state."""
 from contextlib import closing
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QVBoxLayout, QWidget
 
 from ..capacity import describe
@@ -14,6 +15,8 @@ from .widgets import ReportPath, Table, button, confirm, label, line_diff_dialog
 
 
 class CheckoutPane(QWidget):
+    session_changed = Signal()
+
     def __init__(self, owner, current_store, *, open_baseline=None):
         super().__init__()
         self.owner, self.current_store = owner, current_store
@@ -306,6 +309,7 @@ class CheckoutPane(QWidget):
         self.commits.set_session(original)
         self.live, self.live_record = original, None
         self._worktree_actions()
+        self.session_changed.emit()
 
     def _complete(self, plan, result):
         # The checkout is already durable. A late or failed view may display the receipt,
@@ -377,6 +381,7 @@ class CheckoutPane(QWidget):
                 self.move_result.setText("")
                 self.details.setText("")
                 self.set_snapshot(self.snapshot)
+                self.session_changed.emit()
 
     def _worktree_actions(self):
         record = self.live_record or {}

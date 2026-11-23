@@ -1,4 +1,4 @@
-"""One immutable request at a time; GUI objects never enter the worker thread."""
+"""Keep local archive and container work off the GUI thread."""
 from concurrent.futures import ThreadPoolExecutor
 import sys
 from PySide6.QtCore import Qt, QTimer
@@ -6,10 +6,12 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFrame, QMainWindow, QProgressBar,
                                QTabWidget, QVBoxLayout, QWidget)
 
+from ..model import Rejected
 from . import local_snapshot_url, requested_snapshot
 from .archive_pane import ArchivePane
+from .container_panel import ContainerPanel
 from .import_pane import ImportPane
-from .widgets import button, label
+from .widgets import button, confirm, label
 
 
 class SnapshotDrop(QFrame):
@@ -54,11 +56,13 @@ class SnapshotDrop(QFrame):
 
 class DesktopWindows:
     """Each top-level window starts without inherited archive or writer authority."""
-    def __init__(self):
+    def __init__(self, *, container_write_profile=None):
         self.windows, self.request = {}, None
+        self._container_write_profile = container_write_profile
 
     def open(self):
-        window = Window(new_window=self.open, offer_snapshot=self.offer_snapshot)
+        window = Window(new_window=self.open, offer_snapshot=self.offer_snapshot,
+                        container_write_profile=self._container_write_profile)
         token = object()
         self.windows[token] = window
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -105,13 +109,14 @@ class DesktopWindows:
 
 
 class Window(QMainWindow):
-    def __init__(self, *, new_window=None, offer_snapshot=None):
+    def __init__(self, *, new_window=None, offer_snapshot=None, container_operations=None, container_write_profile=None):
         super().__init__()
         self.setWindowTitle("ZIP Workspace")
         self.resize(1000, 700)
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="workspace-operation")
         self.pending = self.stop_transfer = self.transfer_progress = None
         self.last_progress, self.cancel_requested = None, False
+        self._container_edit_locked = False
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -134,8 +139,13 @@ class Window(QMainWindow):
         self.tabs.addTab(self.archive, "快照与历史")
         self.plain_import = ImportPane(self)
         self.tabs.addTab(self.plain_import, "核验普通 ZIP")
+        self.container_panel = ContainerPanel(container_operations, write_profile=container_write_profile,
+                                              native_window=self)
+        self.tabs.addTab(self.container_panel, "存储容器")
         self.tabs.currentChanged.connect(lambda _index: self.plain_import.sync_work_action())
-        files = self.menuBar().addMenu("文件")
+        self.tabs.currentChanged.connect(lambda _index: self.container_panel._paint())
+        self.archive.checkout.session_changed.connect(self.container_panel.original_checkout_changed)
+        files = self._files_menu = self.menuBar().addMenu("文件")
         if new_window is not None:
             open_window = files.addAction("新窗口")
             open_window.setShortcut(QKeySequence(QKeySequence.StandardKey.New))
@@ -164,11 +174,40 @@ class Window(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
 
+    def offer_container_edit(self, choice):
+        """The native owner hands this window an original broker choice, not a path."""
+        if self.container_panel.editor is None:
+            raise Rejected("此窗口没有已授权的 Linux 原编辑卷配置")
+        self.container_panel.editor.offer(choice)
+
+    def _container_edit_ready(self, live):
+        checkout, mount = self.archive.checkout, self.archive.mount
+        record = checkout.live_record or {}
+        return (live is not None and checkout.live is live and not live.closed
+                and not self._container_edit_locked and self.pending is None
+                and not checkout.active and not checkout.unresolved and not checkout.visibility_blocked
+                and checkout.changes_dialog is None and checkout.restoring_member is None
+                and checkout.commits.running is None and not checkout.commits.blocked
+                and record.get("visibility", "visible") == "visible"
+                and record.get("pending_operation") is None and record.get("pending_visibility_operation") is None
+                and (mount is None or not (mount.planning or mount.checking or mount.process is not None)))
+
+    def _guard_container_edit(self, locked):
+        # The legacy archive jobs must not move, replace, close, or publish
+        # this WORK while its original editable volume owns it or is uncertain.
+        self._container_edit_locked = locked
+        for pane in (self.archive, self.plain_import):
+            self.tabs.setTabEnabled(self.tabs.indexOf(pane), not locked)
+        self._files_menu.setEnabled(not locked)
+        drop = getattr(self, "snapshot_drop", None)
+        if drop is not None:
+            drop.setEnabled(not locked)
+
     def inform(self, message):
         self.note.setText(str(message))
 
     def job(self, title, work, apply, *, failed=None, cancel=None, cancel_text=None, progress_report=None):
-        if self.pending is not None: return
+        if self.pending is not None or self._container_edit_locked: return
         self.tabs.setEnabled(False)
         self.inform(title)
         self.progress.setRange(0, 0)
@@ -245,10 +284,22 @@ class Window(QMainWindow):
                 self.inform(f"操作已返回，但显示结果失败。请先查看原状态，不要重复发起。{err}")
 
     def closeEvent(self, event):
-        if self.pending is not None or self.archive.checkout.active or self.archive.checkout.commits.running is not None:
+        editor = self.container_panel.editor
+        if editor is not None and editor.busy():
+            event.ignore()
+            self.inform("原编辑卷仍在处理。请在「存储容器」中停写、正常卸载并等待本机结果。")
+            return
+        if (self.pending is not None or self.archive.checkout.active
+                or self.archive.checkout.commits.running is not None or self.container_panel.busy()):
             event.ignore()
             self.inform("操作尚未返回，请等待。关闭窗口不等于撤销已登记的操作。")
         else:
+            if editor is not None and editor.uncertain and not confirm(
+                    self, "仅关闭窗口并保留原件",
+                    editor.note.text() + "\n关闭窗口不会另外卸载、提交、清理或重新打开原卷。",
+                    attestation="我已记录本窗口的原位置与待核对状态。",
+                    action_text="仅关闭窗口"):
+                event.ignore(); return
             if self.archive.mount is not None and not self.archive.mount.close_window():
                 event.ignore(); return
             self.archive.close_search()
@@ -260,5 +311,6 @@ class Window(QMainWindow):
             self.archive.checkout.close_session()
             if self.archive.selection is not None: self.archive.selection.release_display()
             self.plain_import.release_display()
+            self.container_panel.finish()
             self.pool.shutdown(wait=False)
             super().closeEvent(event)

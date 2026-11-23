@@ -2,7 +2,19 @@
 
 Helper 是 Linux x86_64 的本机诊断、首次部署和离线维护工具。无参数只显示用法，无后台服务。
 
-业务 Web 与嵌入的 Rust SMB 由同一个 ZXS 可执行文件直接提供。Helper 不负责启动、代理、启用或安装运行服务，不保存可供以后代用的路径、用户偏好或授权状态。
+Helper 可在业务服务停机时完成首次设置，也可在业务服务运行时查看宿主诊断。设置完成后无需保留 Helper，不用为它配置开机启动或 systemd。
+
+## 首次设置
+
+先挂载存储目录，并按 [服务部署要求](../zxs/docs/headless-activation.md)创建专用服务账号和 IPC 组。以下两个命令作为该非 root 服务账号运行；三个大写目录参数替换为各自的绝对路径，两项 ID 使用数字。
+
+```sh
+helper setup-headless check SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
+helper setup-headless new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
+helper setup-headless web new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
+```
+
+`check` 只检查目录是否可用于首设；`new` 展示本次选择的三个目录，要求输入 `SETUP` 并在本地控制终端两次输入不回显的密码。成功后写好三个角色标记和服务账户文件，不格式化磁盘，也不启动服务。加上 `web` 可先打开[回环设置向导](docs/disk-web.md#可选首次设置向导)，再回到同一终端确认。若报告结果不确定，先核对同一组目录中已写下的记录，不要覆盖或另选目录直接重跑。
 
 ```sh
 helper inspect-dirs /home/alice/downloads /home/alice/downloads/week-01 /mnt/incoming
@@ -92,25 +104,19 @@ exFAT 使用 `helper check-exfat-copy /绝对路径/volume.img --sha256 完整�
 
 ## 本机部署与离线维护
 
-部署默认从 `/zxs` 开始：独立可执行文件在 `/zxs/bin/zxs`，ZXS 权属状态只在 `/zxs/state`（`deployment.v1` 与 `<instance-hex>/`），SYSTEM 是 `/zxs/disks/system/SYSTEM.sqlite3`，回收卷是 `/zxs/disks/recycle`，普通卷按明确选择用 `/zxs/disks/data/<标签>`。可在相关命令中显式指定合格的可执行文件或媒体路径；复查和重置只认已登记的原路径，不找旧部署目录。目录与挂载由 Linux 管理员事先准备；Helper 不配置挂载或日志、不安装服务、也不格式化或迁移任何卷。
+离线密码重置见[首设与重置](docs/headless-offline.md)。
 
-[共用账户离线重置与只读回执](docs/shared-account-reset.md)只认确切原 v20 站点与同一原前序。Web 与 SMB 使用一个用户名和口令；两者只能切到同一已确认代次。该写路径默认禁用，不接管未知暂存。
-
-- [无状态发现](docs/discovery.md)只根据本次实际挂载和固定的 SYSTEM 元数据，或本会话给出的绝对目录，报告候选。候选不是授权，不自动选盘或初始化。
-- [新池、同一原 INIT 续作与查询](docs/sqlite-first-install.md)要求当前有前台授权、明确提供原 INIT 主体和数值 UID/GID；不设置 Helper 偏好或保存授权。继续原单需要原件及原标记，查询不自动修改。
-- [新 v20 私有首设](docs/fresh-deployment.md)可从原始 INIT 依据、受保护单 ELF 路径（默认 `/zxs/bin/zxs`）、独立预期 SHA-256 和实际前台确认，接原低权限的 SQLite 与新凭据发行。此处没有迁移、服务启停或自动接管。
-- [可选内嵌精确 ZXS 文件](docs/embedded-image.md)另用独立批准的完整 v20 ELF；只允许一次显式、不覆盖的文件落位，不发账户、不启动 ZXS。默认 Helper 无负载；本源码没有交付已核验的内嵌制品。
-- [复查原 ZXS 部署](docs/reattach-check.md)使用 ZXS 自己的受保护持久依据，只有只读结论，不采纳、不重装、不授权维护。
-- [普通卷退登记预检](docs/retire-ordinary-preflight.md)只核本次真实原件与已知阻挡，不是真的退登记，也不表示可移除、擦除或卸载。
-
-此版本不开放空盘追加或非空导入。
+默认业务程序位于 `/zxs/bin/zxs`，本次首设发布 `/zxs/state/headless/server.v1`。
+存储目录由 Linux 管理员挂载，按[激活说明](../zxs/docs/headless-activation.md)另外核准并启动。
+旧池不迁移；不修改旧池；当前格式的密码可离线重置，磁盘变更另行实现。只读宿主诊断仍可在线使用。
 
 ## 按需使用同一个 Helper 文件
 
-直接从本机受保护位置执行该 ELF，例如 `./helper --help`，不需要先安装到固定路径。特权离线操作仍必须从真实宿主的 root 前台进行，使用 root:root 0755 的唯一链接本机文件；只读非特权的副本检查可使用当前用户所有的受保护文件。内部工作进程只传递已经运行的原 ELF 描述符，不从 PATH 或文件名另选程序。需要发行凭据的首设仍要给出独立预期的 Helper 全文件 SHA-256；不会把从自身读出的值当作批准。已删除、替换、额外链接、扩权或来源不能确认时停止。通用盘工具仍按各自受保护的上游材料配置核对，不是 ZXS 的运行时依赖。
+直接从本机受保护位置运行 `./helper --help`。不需要安装或保留 Helper 服务。
+卷镜像检查和工作副本修复的权限与工具要求见各自章节。
 
 ## 独立开发
 
 本目录有独立 Cargo 工程、Rust 工具链和[依赖来源记录](DEPENDENCIES.md)。允许验证时，入口为 `cargo build --locked` 和 `cargo test --locked`。后者的正向文件用例须在上述受支持文件系统上的专用临时位置创建自己的测试文件；如系统临时目录不满足，可由操作者设置 `HELPER_TEST_DATA_PARENT` 指向合格的专用目录。该变量仅供测试使用；先决条件缺失是测试失败，不算验证通过。
 
-尚未安装、运行现场服务或操作实际介质；冷启动和 Web/SMB 登录待现场验收。块设备 CLI 验收须显式提供稳定的试验设备号 `HELPER_TEST_BLOCK_DEV`。独立构建和发行需要哪些输入与证据，见[交付核对表](RELEASE.md)；待办见[项目任务清单](TASKS.md)。
+尚未安装、运行现场服务或操作实际介质；冷启动和 Workspace 登录待现场验收。块设备 CLI 验收须显式提供稳定的试验设备号 `HELPER_TEST_BLOCK_DEV`。独立构建和发行需要哪些输入与证据，见[交付核对表](RELEASE.md)；待办见[项目任务清单](TASKS.md)。

@@ -5,7 +5,11 @@ compile_error!("helper currently supports Linux x86_64 (LP64) only");
 
 mod block_tools;
 mod disk_web;
+mod embedded_image;
 mod fs_tools;
+mod fresh_password;
+mod headless_setup;
+mod headless_setup_command;
 mod hardware;
 mod volume_images;
 mod inspect;
@@ -13,11 +17,6 @@ mod isolated_group;
 mod smb_profile;
 mod maintenance;
 mod path_rules;
-// Historical byte vectors only; the product has no portable legacy reader.
-#[cfg(test)]
-mod portable_claim;
-#[cfg(test)]
-mod portable_genesis;
 mod pinned;
 mod sqlite_install;
 #[cfg(test)]
@@ -39,27 +38,15 @@ use std::process::ExitCode;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper discover [--system DIR]\n  helper check-deployment\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper check-nonempty-source --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --source DIR\n  helper check-ordinary-retirement --init-actor ID --storage-uid N --storage-gid N --system DIR --pool ID --init INIT_OP --volume VOLUME_ID --data DIR\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper hardware\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper install-pool new|resume|receipt --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper install-pool web new|resume --init-actor ID --storage-uid N --storage-gid N --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...\n  helper --help | --version\n\n\
-install-pool defaults to /zxs/disks/system and /zxs/disks/recycle; choose each ordinary root explicitly.\nSupply already mounted directories; storage-status reports observations, not an approved layout.";
-
-const PRIVATE_INSTALL_USAGE: &str = "
-
-Private v20 setup on an isolated fresh pool; prefix each first action with web to request its original terminal confirmation. Stop ZXS before account reset:
-  helper install-pool [web] new-deployment --init-actor ID --storage-uid N --storage-gid N
-      --op ID --approval ID [--system DIR] [--recycle DIR] (--data DIR | --data-label LABEL) ...
-  helper setup-pair [web] issue-fresh --init-actor ID --storage-uid N --storage-gid N [--system DIR]
-      --pool ID --init ID --instance ID --bind ID --setup-op ID --init-sha256 HEX --approval ID
-      [--zxs-image DIR/zxs] --zxs-sha256 HEX --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX
-      --host HOST --login LOGIN --recycle-name NAME (--share DIR NAME ro|rw | --share-label LABEL NAME ro|rw) ...
-  helper reset-account new --op ID --approval ID --previous ID --previous-generation N
-      --helper-sha256 HEX --gcrypt-sha256 HEX --gpgerror-sha256 HEX
-  helper reset-account receipt --op ID --approval ID --previous ID --previous-generation N --helper-sha256 HEX";
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper hardware\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper setup-headless check SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
+  helper setup-headless [web] new SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID LOGIN
+  helper setup-headless reset SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
+  helper preflight-import SOURCE SYSTEM DATA RECYCLE GATEWAY_UID IPC_GID
+  helper --help | --version\n\n\
+Supply already mounted directories; storage-status reports observations, not an approved layout.";
 
 fn usage() -> String {
     let mut help = USAGE.to_owned();
-    if cfg!(feature = "private-fresh-install") {
-        help.push_str(PRIVATE_INSTALL_USAGE);
-    }
     if cfg!(feature = "embedded-zxs") {
         help.push_str("\n\nOptional image extraction:\n  helper install-zxs-image [--destination-dir DIR] --zxs-sha256 HEX (default /zxs/bin/zxs)");
     }
@@ -73,16 +60,11 @@ enum Command {
     Version,
     Directories(Vec<PathBuf>),
     Compare(PathBuf, PathBuf),
-    Discover(sqlite_install::Discovery),
-    CheckDeployment,
-    SharedAccountReset(sqlite_install::SharedAccountReset),
-    RetirementCheck(sqlite_install::RetirementCheck),
-    ImportCheck(sqlite_install::ImportCheck),
+    HeadlessSetup(headless_setup_command::Setup),
+    ImportCensus(headless_setup::Preflight),
     Storage(Selection),
-    Install(sqlite_install::Installation),
-    Setup(Box<sqlite_install::Setup>),
     #[cfg(feature="embedded-zxs")]
-    EmbeddedInstall(sqlite_install::EmbeddedInstall),
+    EmbeddedInstall(embedded_image::EmbeddedInstall),
     Disks(block_tools::Query),
     DiskHealth(block_tools::HealthQuery),
     Hardware,
@@ -90,9 +72,13 @@ enum Command {
     DiskWebStorage(Selection),
     SealedWorker(volume_images::Format,[u8;32]),
     LeasedPanelWorker(volume_images::LeasedFormat,[u8;32]),
+    #[cfg(test)]
     RustAccountWorker,
+    #[cfg(test)]
     RustVaultWriter,
+    #[cfg(test)]
     LayoutSqlWorker,
+    #[cfg(test)]
     FirstBrowserWorker,
     CopyRepairBrowserWorker,
     FsTools(fs_tools::Query),
@@ -109,18 +95,10 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if args.next().is_some() { return Err("unexpected argument"); }
         return Ok(if op == "--help" { Command::Help } else { Command::Version });
     }
-    if op=="reset-account"{return sqlite_install::SharedAccountReset::parse(args).map(Command::SharedAccountReset);}
+    if op == "preflight-import" { return headless_setup::Preflight::parse(args).map(Command::ImportCensus); }
+    if op == "setup-headless" { return headless_setup_command::Setup::parse(args).map(Command::HeadlessSetup); }
     #[cfg(feature="embedded-zxs")]
-    if op=="install-zxs-image"{return sqlite_install::EmbeddedInstall::parse(args).map(Command::EmbeddedInstall);}
-    if op == "setup-pair"{return sqlite_install::Setup::parse(args).map(|setup|Command::Setup(Box::new(setup)));}
-    if op == "install-pool"{return sqlite_install::Installation::parse(args).map(Command::Install);}
-    if op == "check-nonempty-source"{return sqlite_install::ImportCheck::parse(args).map(Command::ImportCheck);}
-    if op == "check-ordinary-retirement"{return sqlite_install::RetirementCheck::parse(args).map(Command::RetirementCheck);}
-    if op == "check-deployment" {
-        if args.next().is_some(){return Err("the read-only deployment check takes no paths or options");}
-        return Ok(Command::CheckDeployment);
-    }
-    if op == "discover"{return sqlite_install::Discovery::parse(args).map(Command::Discover);}
+    if op=="install-zxs-image"{return embedded_image::EmbeddedInstall::parse(args).map(Command::EmbeddedInstall);}
     if op == "disk-health"{return block_tools::HealthQuery::parse(args).map(Command::DiskHealth);}
     if op == "disk-web" {
         return match args.next() {
@@ -134,10 +112,12 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
             }
         };
     }
+    #[cfg(test)]
     if op=="__zxs-shared-account-sql-v2"||op=="__zxs-shared-vault-writer-v2"{
         if args.next().is_some(){return Err("invalid internal worker");}
         return Ok(if op=="__zxs-shared-account-sql-v2"{Command::RustAccountWorker}else{Command::RustVaultWriter});
     }
+    #[cfg(test)]
     if op=="__first-install-browser-v1"{
         if args.next().is_some(){return Err("unexpected browser worker argument");}
         return Ok(Command::FirstBrowserWorker);
@@ -146,6 +126,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
         if args.next().is_some(){return Err("unexpected copy-repair browser worker argument");}
         return Ok(Command::CopyRepairBrowserWorker);
     }
+    #[cfg(test)]
     if op=="__first-layout-sql-v9"{
         if args.next().is_some(){return Err("invalid internal worker");}
         return Ok(Command::LayoutSqlWorker);
@@ -197,27 +178,26 @@ fn line(s: &str) -> io::Result<()> {
 
 fn run(command: Command) -> io::Result<ExitCode> {
     match command {
+        Command::HeadlessSetup(setup) => return setup.run(),
+        Command::ImportCensus(request) => return request.run(),
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::DiskWebStorage(s)=>disk_web::serve_storage(s)?,
-        Command::ImportCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
         Command::DiskHealth(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}
-        Command::RetirementCheck(check)=>{let(code,public)=check.run();line(&public)?;return Ok(ExitCode::from(code));}
-        Command::SharedAccountReset(i)=>return Ok(ExitCode::from(i.run()?)),
-        Command::CheckDeployment=>{let(code,public)=sqlite_install::check_deployment();line(&public)?;return Ok(ExitCode::from(code));}
-        Command::Discover(query)=>{let(code,public)=query.run();line(&public)?;return Ok(ExitCode::from(code));}
+        #[cfg(test)]
         Command::RustAccountWorker=>return Ok(ExitCode::from(if sqlite_install::rust_account_worker().is_ok(){0}else{2})),
+        #[cfg(test)]
         Command::RustVaultWriter=>return Ok(ExitCode::from(if sqlite_install::rust_vault_worker().is_ok(){0}else{2})),
+        #[cfg(test)]
         Command::FirstBrowserWorker=>return Ok(ExitCode::from(if sqlite_install::exec_first_browser().is_ok(){0}else{2})),
-        Command::CopyRepairBrowserWorker=>return Ok(ExitCode::from(if sqlite_install::exec_copy_repair_browser().is_ok(){0}else{2})),
+        Command::CopyRepairBrowserWorker=>return Ok(ExitCode::from(if volume_images::repair::authorization::browser_worker().is_ok(){0}else{2})),
+        #[cfg(test)]
         Command::LayoutSqlWorker=>return Ok(ExitCode::from(if sqlite_install::layout_sql_worker().is_ok(){0}else{2})),
         Command::SealedWorker(fmt,digest) => return Ok(ExitCode::from(volume_images::panel::worker(fmt,digest).unwrap_or(2))),
         // Code 2 can describe a structured incomplete report. Internal
         // failure must never accept an already-written packet.
         Command::LeasedPanelWorker(kind,digest) => return Ok(ExitCode::from(volume_images::panel::leased_worker(kind,digest).unwrap_or(3))),
-        Command::Install(i)=>{let(code,public)=i.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         #[cfg(feature="embedded-zxs")]
         Command::EmbeddedInstall(s)=>{s.run()?;return Ok(ExitCode::SUCCESS);}
-        Command::Setup(s)=>{let(code,public)=s.run()?;line(&public)?;return Ok(ExitCode::from(code));}
         Command::Help => line(&usage())?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
@@ -272,16 +252,12 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 #[test]
-fn user_help_matches_compiled_account_modes() {
+fn user_help_only_offers_current_setup() {
     let help = usage();
-    assert!(help.contains("install-pool new|resume|receipt"));
-    for command in [
-        "install-pool [web] new-deployment",
-        "setup-pair [web] issue-fresh",
-        "reset-account new",
-        "reset-account receipt",
-    ] {
-        assert_eq!(help.contains(command), cfg!(feature = "private-fresh-install"));
+    assert!(help.contains("setup-headless [web] new"));
+    for name in ["install-pool", "setup-pair", "reset-account", "check-deployment", "discover"] {
+        assert!(!help.contains(&format!("helper {name} ")));
+        assert!(parse([name.into()]).is_err());
     }
     assert_eq!(
         help.contains("install-zxs-image"),

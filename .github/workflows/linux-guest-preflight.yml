@@ -77,105 +77,14 @@ jobs:
           PINS
           )
           /usr/bin/apt-get --assume-yes --download-only --no-install-recommends install \
-            qemu-system-x86 ovmf genisoimage e2fsprogs gcc-13 binutils libc6-dev
+            qemu-system-x86 ovmf genisoimage e2fsprogs
           for package in apt/archives/*.deb; do
             dpkg-deb --extract "$package" tools
           done
           sha256sum apt/archives/*.deb
 
-      - name: Build only the exact Helper test harness
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          cd "$ZXS_GUEST_WORK"
-          work="$PWD"
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
-          mkdir -p rust source build-home cargo target gcc-libs sysroot
-          mkdir -m 0755 seed
 
-          target=x86_64-unknown-linux-gnu
-          release=https://static.rust-lang.org/dist/2026-11-12
-          while read -r pin component member; do
-            name="$component-1.100.0-$target"
-            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-              --connect-timeout 15 --max-time 120 --retry 2 --max-filesize 120000000 "$release/$name.tar.xz" -o "$name.tar.xz"
-            printf '%s  %s.tar.xz\n' "$pin" "$name" | sha256sum -c -
-            tar -xJf "$name.tar.xz" -C rust --no-same-owner --no-same-permissions \
-              --strip-components=2 --exclude="$name/$member/manifest.in" "$name/$member"
-          done <<'RUST'
-          f1d0b1dec81dab6f523cd098507763487b0d4bd7fd2c87582f154128719be03b rustc rustc
-          7e29ce07d7c6e92d1826870575ba27d57fff6cb3e754aa57d99099cb88fab35d cargo cargo
-          4591b6486594ded52ecd6135db95bf9355bbd3ca7a380888b141528bbcf9a5d4 rust-std rust-std-x86_64-unknown-linux-gnu
-          RUST
-
-          git_env=(env -i PATH=/usr/bin:/bin LC_ALL=C HOME="$work/build-home"
-            GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0)
-          "${git_env[@]}" git init --quiet --bare source.git
-          "${git_env[@]}" git --git-dir=source.git fetch --quiet --no-tags --depth=1 \
-            https://github.com/isarmg/zxs.git "$GITHUB_SHA"
-          test "$(git --git-dir=source.git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
-          git --git-dir=source.git archive "$GITHUB_SHA" helper | tar -xf - -C source
-          printf 'Source commit: %s; Helper tree: %s\n' "$GITHUB_SHA" "$(git --git-dir=source.git rev-parse "$GITHUB_SHA:helper")"
-          sha256sum source/helper/Cargo.lock
-
-          export ZXS_TEST_SDK="$work/tools" ZXS_TEST_SYSROOT="$work/sysroot"
-          ln -s "$ZXS_TEST_SDK/usr" sysroot/usr
-          ln -s usr/lib sysroot/lib
-          ln -s usr/lib64 sysroot/lib64
-          for lib in libbfd-2.42-system.so libctf.so.0 libsframe.so.1 libjansson.so.4 libz.so.1 \
-            libzstd.so.1 libisl.so.23 libmpc.so.3 libmpfr.so.6 libgmp.so.10; do
-            file=$(realpath -e "$ZXS_TEST_SDK/usr/lib/x86_64-linux-gnu/$lib")
-            [[ "$file" == "$ZXS_TEST_SDK/"* ]]
-            ln -s "$file" "gcc-libs/$lib"
-          done
-          cat > gcc <<'GCC'
-          #!/bin/sh
-          exec "$ZXS_TEST_SDK/usr/bin/x86_64-linux-gnu-gcc-13" --sysroot="$ZXS_TEST_SYSROOT" \
-            -B"$ZXS_TEST_SDK/usr/libexec/gcc/x86_64-linux-gnu/13/" \
-            -B"$ZXS_TEST_SDK/usr/lib/gcc/x86_64-linux-gnu/13/" -B"$ZXS_TEST_SDK/usr/bin/" "$@"
-          GCC
-          chmod 0700 gcc
-          for check in '-print-prog-name=cc1' '-print-prog-name=as' '-print-prog-name=collect2' \
-            '-print-prog-name=ld' '-print-file-name=Scrt1.o' '-print-file-name=libc.so' '-print-file-name=libgcc.a'; do
-            item=$(realpath -e "$(LD_LIBRARY_PATH="$work/gcc-libs" ./gcc "$check")")
-            [[ "$item" == "$ZXS_TEST_SDK/"* ]]
-          done
-          build_env=(env -i PATH="$ZXS_TEST_SDK/usr/bin:/usr/bin:/bin" LC_ALL=C HOME="$work/build-home" TMPDIR="$work"
-            CARGO_HOME="$work/cargo" CARGO_TARGET_DIR="$work/target" CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
-            LD_LIBRARY_PATH="$work/gcc-libs"
-            ZXS_TEST_SDK="$ZXS_TEST_SDK" ZXS_TEST_SYSROOT="$ZXS_TEST_SYSROOT"
-            CC="$work/gcc" AR="$ZXS_TEST_SDK/usr/bin/ar"
-            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$work/gcc"
-            RUSTC="$work/rust/bin/rustc" RUSTDOC="$work/rust/bin/rustdoc")
-          cd source/helper
-          "${build_env[@]}" "$work/rust/bin/cargo" fetch --locked --target "$target"
-          "${build_env[@]}" "$work/rust/bin/cargo" test --locked --offline \
-            --features private-fresh-install --bin helper --no-run --message-format=json > "$work/build.jsonl"
-          python3 -I - "$work" <<'PYTHON'
-          import hashlib, json, shutil, sys
-          from pathlib import Path
-
-          work = Path(sys.argv[1])
-          entries = [json.loads(line) for line in (work / "build.jsonl").read_text().splitlines()]
-          tests = [entry.get("executable") for entry in entries
-                   if entry["reason"] == "compiler-artifact" and entry["target"]["name"] == "helper"
-                   and entry["target"]["kind"] == ["bin"] and entry["profile"]["test"]]
-          if len(tests) != 1 or not tests[0]:
-              raise RuntimeError("expected exactly one Helper libtest artifact")
-          binary = Path(tests[0]).resolve(strict=True)
-          if not binary.is_relative_to(work / "target"):
-              raise RuntimeError("test executable outside the private target")
-          output = work / "seed" / "helper-tests"
-          shutil.copyfile(binary, output)
-          output.chmod(0o555)
-          with output.open("rb") as handle:
-              digest = hashlib.file_digest(handle, "sha256").hexdigest()
-          (output.parent / "helper-tests.sha256").write_text(f"{digest}  helper-tests\n")
-          print(f"Helper libtest SHA256: {digest}")
-          PYTHON
-
-      - name: Boot without a NIC, verify private mounts and run Helper fixture tests
+      - name: Boot without a NIC and verify private mounts
         shell: bash
         run: |
           set -euo pipefail
@@ -191,7 +100,7 @@ jobs:
             "${tool_env[@]}" --list "$tools/$exe" |
               awk -v base="$tools/" '$2 == "=>" && index($3, base) != 1 {exit 1}'
           done
-          mkdir -m 0755 empty empty/subtree
+          mkdir -m 0755 empty empty/subtree seed
           for role in a b data recycle; do
             truncate -s 64M "$role.ext4"
             "${tool_env[@]}" "$tools/usr/sbin/mke2fs" -q -t ext4 -d empty -L "zxs-$role" "$role.ext4"
@@ -271,10 +180,10 @@ jobs:
                 check(a[0] != b[0] and a[2] != b[2] and au != bu)
                 check(bind[0] not in (a[0], b[0]) and bind[2] == a[2] and bind[3] == "/subtree" and "ro" in bind[5].split(","))
                 print(f"ZXS-GUEST independent_worker=23100:23100 nnp=1 subtree_mount={bind[0]} root={bind[3]}", flush=True)
-                print("ZXS-GUEST mounted preflight complete", flush=True)
                 data, du = original("/mnt/zxs-test-data", "rw")
                 recycle, ru = original("/mnt/zxs-test-recycle", "rw")
                 check(len({a[0], b[0], data[0], recycle[0]}) == len({a[2], b[2], data[2], recycle[2]}) == len({au, bu, du, ru}) == 4)
+                print("ZXS-GUEST mounted preflight complete", flush=True)
 
           runcmd:
             - - /bin/sh
@@ -295,35 +204,12 @@ jobs:
                 mount -t ext4 -o ro,noload /dev/disk/by-id/virtio-zxs-probe-b /mnt/zxs-b
                 mount --bind /mnt/zxs-a/subtree /mnt/zxs-bind
                 stage=writable-fixtures
-                mkdir /mnt/zxs-test-data /mnt/zxs-test-recycle /mnt/zxs-test-input
+                mkdir /mnt/zxs-test-data /mnt/zxs-test-recycle
                 mount -t ext4 -o rw,nosuid,nodev,noexec /dev/disk/by-id/virtio-zxs-probe-data /mnt/zxs-test-data
                 mount -t ext4 -o rw,nosuid,nodev,noexec /dev/disk/by-id/virtio-zxs-probe-recycle /mnt/zxs-test-recycle
                 stage=unprivileged-observations
                 setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
                   python3 -I /run/zxs-probe.py
-                stage=helper-tests
-                install -d -m 0700 -o 23100 -g 23100 /mnt/zxs-test-data/fixture /mnt/zxs-test-recycle/fixture
-                mount -t iso9660 -o ro,nosuid,nodev /dev/disk/by-id/virtio-zxs-seed /mnt/zxs-test-input
-                (cd /mnt/zxs-test-input && sha256sum -c helper-tests.sha256)
-                run_cases() {
-                  expected="$1"
-                  scope="$2"
-                  rc=0
-                  setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
-                    env -i PATH=/usr/bin:/bin LC_ALL=C \
-                    HELPER_TEST_WORKER_UID=23100 HELPER_TEST_WORKER_GID=23100 \
-                    HELPER_TEST_PORTABLE_DATA_PARENT=/mnt/zxs-test-data/fixture \
-                    HELPER_TEST_PORTABLE_RECYCLE_PARENT=/mnt/zxs-test-recycle/fixture \
-                    /mnt/zxs-test-input/helper-tests "$scope" --format pretty > /run/zxs-test.log 2>&1 || rc=$?
-                  sed 's/^/ZXS-GUEST Helper: /' /run/zxs-test.log
-                  test "$rc" -eq 0 && grep -Fq "test result: ok. $expected passed; 0 failed; 0 ignored;" /run/zxs-test.log
-                }
-                failed=0
-                run_cases 12 sqlite_install::stage::cases:: || failed=1
-                run_cases 12 pinned::portable_pending::group::tests:: || failed=1
-                run_cases 1 pinned::portable_pending::group::feedback_file::tests:: || failed=1
-                test "$failed" -eq 0
-                printf '%s\n' 'ZXS-GUEST Helper 25 targeted tests passed'
           power_state:
             mode: poweroff
             timeout: 60
@@ -355,4 +241,3 @@ jobs:
           fi
           test "$boot_status" -eq 0
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-GUEST mounted preflight complete')" -eq 1
-          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-GUEST Helper 25 targeted tests passed')" -eq 1

@@ -1,0 +1,67 @@
+# Standalone qualification template. Replace every __PLACEHOLDER__.
+# Do not include this in another nginx config. Activation supplies daemon off.
+user __GATEWAY_ACCOUNT__ __IPC_GROUP__;
+worker_processes auto;
+pid /run/zxs-gateway.pid;
+error_log __ABSOLUTE_PRIVATE_ERROR_LOG__ warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    access_log off;
+    client_body_temp_path __ABSOLUTE_PROTECTED_UPLOAD_SPOOL__;
+
+    map "$request_method:$http_content_length" $zxs_bad_original_length {
+        default 0;
+        ~^(PUT|POST):(0|[1-9][0-9]*)$ 0;
+        ~^(PUT|POST): 1;
+        ~^(GET|DELETE):(0)?$ 0;
+        ~^(GET|DELETE): 1;
+    }
+
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name __TLS_HOSTNAME__;
+        ssl_certificate __ABSOLUTE_CERTIFICATE_PATH__;
+        ssl_certificate_key __ABSOLUTE_PRIVATE_KEY_PATH__;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        client_max_body_size 0;
+        gzip off;
+
+        location /zxs/v1/ {
+            if ($zxs_bad_original_length) { return 400; }
+            if ($http_transfer_encoding != "") { return 400; }
+            if ($http_trailer != "") { return 400; }
+            if ($http_te != "") { return 400; }
+            if ($http_upgrade != "") { return 400; }
+
+            proxy_http_version 1.1;
+            proxy_set_header Host zxs.private;
+            proxy_set_header Connection close;
+            proxy_set_header Expect "";
+            proxy_set_header Forwarded "";
+            proxy_set_header X-Forwarded-For "";
+            proxy_set_header X-Forwarded-Host "";
+            proxy_set_header X-Forwarded-Proto "";
+            proxy_set_header X-Forwarded-User "";
+            proxy_set_header X-Real-IP "";
+            proxy_set_header Proxy-Authorization "";
+
+            proxy_request_buffering on;
+            proxy_buffering off;
+            proxy_pass_trailers off;
+            proxy_next_upstream off;
+            proxy_redirect off;
+            proxy_intercept_errors off;
+            proxy_cache off;
+            proxy_store off;
+            proxy_ignore_headers X-Accel-Redirect X-Accel-Buffering;
+            proxy_pass http://unix:/zxs/run/headless.sock;
+        }
+
+        location / { return 404; }
+    }
+}

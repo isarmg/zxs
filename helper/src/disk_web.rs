@@ -123,6 +123,25 @@ pub(crate) fn require_terminal(fd:impl AsFd)->io::Result<()>{
     Ok(())
 }
 
+pub(crate) fn request_headless_review(check: impl Fn() -> io::Result<()>) -> io::Result<bool> {
+    check()?;
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    listener.set_nonblocking(true)?;
+    let now = Instant::now();
+    let mut raw = zeroize::Zeroizing::new([0; 32]);
+    if getrandom(&mut raw[..], GetRandomFlags::NONBLOCK)? != raw.len() || *raw == [0; 32] {
+        return Err(io::Error::other("setup pairing code unavailable"));
+    }
+    {
+        let mut terminal = io::stderr().lock();
+        writeln!(terminal, "首次设置向导：http://{}/\n一次性配对码（2 分钟内使用）：", listener.local_addr()?)?;
+        for byte in raw.iter() { write!(terminal, "{byte:02x}")?; }
+        writeln!(terminal)?;
+        terminal.flush()?;
+    }
+    first::serve_headless(listener, raw, now + Duration::from_secs(600), check)
+}
+
 enum Launch { Ordinary(Option<CopyCheck>), Storage(Selection) }
 pub(crate) fn serve(image:Option<CopyCheck>)->io::Result<()>{serve_mode(Launch::Ordinary(image))}
 pub(crate) fn serve_storage(selection:Selection)->io::Result<()>{serve_mode(Launch::Storage(selection))}

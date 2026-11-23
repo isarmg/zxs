@@ -3,7 +3,6 @@
 import argparse
 from contextlib import contextmanager
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -16,16 +15,6 @@ TARGET = "x86_64-unknown-linux-gnu"
 RUST = "1.100.0"
 RUST_COMMIT = "0ef1bc386059596dada8fb65b50425aab2ea637a"
 MAX_IMAGE = 128 * 1024 * 1024
-BROWSER_TARGET = "wasm32-unknown-unknown"
-BROWSER_SOURCE = Path("src/browser")
-BROWSER_ENTRY_INPUTS = ("Cargo.toml", "Cargo.lock", "build.rs", "build_browser_assets.rs",
-                        "src/lib.rs", "src/hash.rs")
-BROWSER_AUTHORED = ("boot.js", "folder.css", "console_host.js")
-BROWSER_ASSETS = ("boot.js", "folder.css", "zxs_browser.js", "zxs_browser_bg.wasm")
-BROWSER_RECEIPT = "provenance.json"
-MAX_BROWSER_FILE = 8 * 1024 * 1024
-
-
 def need(ok, why):
     if not ok:
         raise ValueError(why)
@@ -78,71 +67,6 @@ def sha256(path):
         return hashlib.file_digest(data, "sha256").hexdigest()
 
 
-def browser_inputs(source):
-    # The browser is a target of the actual root package. Its build script is
-    # compiled on the host even though the WASM branch does not run native work.
-    frontend = source / BROWSER_SOURCE
-    need(stat.S_ISDIR((source / "src").lstat().st_mode) and stat.S_ISDIR(frontend.lstat().st_mode),
-         "missing original browser source directory")
-    inputs = {}
-    for path in (*(source / name for name in BROWSER_ENTRY_INPUTS), *sorted(frontend.rglob("*"))):
-        kind = path.lstat().st_mode
-        if not stat.S_ISDIR(kind):
-            need(stat.S_ISREG(kind), f"not a regular browser input: {path}")
-            if path != frontend / "README.md":
-                inputs[path.relative_to(source).as_posix()] = sha256(path)
-    need(all(str(BROWSER_SOURCE / name) in inputs for name in ("mod.rs", *BROWSER_AUTHORED)),
-         "incomplete browser sources")
-    return inputs
-
-
-def browser_recipe_inputs(source):
-    return {name: sha256(source / name) for name in ("build_browser.py", "build_release.py")}
-
-
-def read_browser_file(held, name):
-    expected = os.stat(name, dir_fd=held, follow_symlinks=False)
-    need(stat.S_ISREG(expected.st_mode) and 0 < expected.st_size <= MAX_BROWSER_FILE,
-         f"invalid browser stage file: {name}")
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-    with os.fdopen(os.open(name, flags, dir_fd=held), "rb") as inp:
-        observed = os.fstat(inp.fileno())
-        need(os.path.samestat(expected, observed) and stat.S_ISREG(observed.st_mode)
-             and observed.st_size == expected.st_size, f"browser stage file changed: {name}")
-        body = inp.read(MAX_BROWSER_FILE + 1)
-    need(len(body) == expected.st_size, f"browser stage file changed: {name}")
-    return body
-
-
-def prepare_browser_stage(source, approved, copied):
-    # Admit the same receipt bytes that Cargo later verifies with the supplied
-    # whole-stage pin. Merely checking a receipt in the original path would not
-    # bind this source check to the bytes selected by the embedding build step.
-    with directory(approved) as held:
-        cursor = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC, dir_fd=held)
-        try:
-            need(set(os.listdir(cursor)) == {*BROWSER_ASSETS, BROWSER_RECEIPT},
-                 "expected exactly four browser resources and their provenance")
-        finally:
-            os.close(cursor)
-        raw = read_browser_file(held, BROWSER_RECEIPT)
-        receipt = json.loads(raw.decode("utf-8"))
-        need(isinstance(receipt, dict) and receipt.get("format") == 1
-             and receipt.get("target") == BROWSER_TARGET, "invalid browser provenance")
-        need(receipt.get("recipe") == browser_recipe_inputs(source)
-             and receipt.get("source") == browser_inputs(source),
-             "restage browser resources from this exact release source and recipe")
-        copied.mkdir(mode=0o700)
-        records = {}
-        for name in BROWSER_ASSETS:
-            body = read_browser_file(held, name)
-            records[name] = {"bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()}
-            (copied / name).write_bytes(body)
-        need(receipt.get("assets") == records, "browser provenance does not match the four resources")
-        (copied / BROWSER_RECEIPT).write_bytes(raw)
-        require_name(approved, held)
-
-
 def qualify(path, env):
     """Check bytes, never test the image by starting ZXS or an ELF loader."""
     observed = path.lstat()
@@ -163,15 +87,7 @@ def qualify(path, env):
     return observed.st_size, sha256(path)
 
 
-def approved_browser_path(raw, pin):
-    need(re.fullmatch(r"[0-9a-f]{64}", pin), "expected one independently reviewed SHA-256 browser stage pin")
-    candidate = Path(raw)
-    need(raw.isprintable() and candidate.is_absolute() and str(candidate.resolve(strict=True)) == raw,
-         "browser stage must be one canonical absolute directory")
-    return candidate
-
-
-def build(source, bindir, browser_assets, browser_pin):
+def build(source, bindir):
     host = os.uname()
     need((host.sysname, host.machine) == ("Linux", "x86_64"), "the primary build host is Linux x86-64")
     need(os.getuid() == os.geteuid() != 0, "build in a private, unprivileged worktree")
@@ -182,7 +98,6 @@ def build(source, bindir, browser_assets, browser_pin):
         for name in ("config", "config.toml"):
             need(not os.path.lexists(parent / ".cargo" / name),
                  f"ambient Cargo configuration is not a release input: {parent / '.cargo' / name}")
-    approved = approved_browser_path(browser_assets, browser_pin)
     scratch = source / "target"
     with directory(source) as root, directory("target", root, create=True) as target, \
          directory("standalone", target, create=True) as output:
@@ -192,10 +107,10 @@ def build(source, bindir, browser_assets, browser_pin):
             pass
         else:
             raise ValueError(f"refusing to replace {scratch / 'standalone' / 'zxs'}")
-        compile_into(source, scratch, (root, target, output), cargo, rustc, rustdoc, approved, browser_pin)
+        compile_into(source, scratch, (root, target, output), cargo, rustc, rustdoc)
 
 
-def compile_into(source, scratch, originals, cargo, rustc, rustdoc, approved, browser_pin):
+def compile_into(source, scratch, originals, cargo, rustc, rustdoc):
     root, target, output = originals
     require_name(source, root)
     require_name("target", target, root)
@@ -205,8 +120,6 @@ def compile_into(source, scratch, originals, cargo, rustc, rustdoc, approved, br
         for p in (home, cargo_home, temp):
             p.mkdir(mode=0o700)
         dest = stage / "target"
-        browser = stage / "browser-assets"
-        prepare_browser_stage(source, approved, browser)
         # No inherited Cargo/Rust/C flags, wrappers, user config or source
         # credentials. This uses the local reviewed tools; no fetch/install.
         env = {
@@ -215,7 +128,6 @@ def compile_into(source, scratch, originals, cargo, rustc, rustdoc, approved, br
             "RUSTC": str(rustc), "RUSTDOC": str(rustdoc),
             "CC": "/usr/bin/gcc", "AR": "/usr/bin/ar", "CARGO_TARGET_DIR": str(dest),
             "CARGO_BUILD_JOBS": "2", "CARGO_INCREMENTAL": "0",
-            "ZXS_BROWSER_ASSETS": str(browser), "ZXS_BROWSER_ASSET_PIN": browser_pin,
             "CARGO_ENCODED_RUSTFLAGS": "\x1f".join((
                 "-C", "target-feature=+crt-static", "-C", "linker=/usr/bin/gcc",
                 f"--remap-path-prefix={source}=/zxs/source",
@@ -262,7 +174,6 @@ def compile_into(source, scratch, originals, cargo, rustc, rustdoc, approved, br
         ready.unlink()
     final = scratch / "standalone" / "zxs"
     print(f"{final}: {record[0]} bytes; SHA256 {record[1]}")
-    print(f"Browser asset stage: SHA256 {browser_pin}")
     print(version.strip())
     print(cargo_version)
     print(*c_versions, sep="\n")
@@ -274,12 +185,9 @@ def compile_into(source, scratch, originals, cargo, rustc, rustdoc, approved, br
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("toolchain_bin", type=Path, help="local, reviewed Rust 1.100.0 bin directory")
-    ap.add_argument("--browser-assets", required=True, help="absolute directory of the reviewed browser stage")
-    ap.add_argument("--browser-asset-pin", required=True, help="independently reviewed browser stage SHA-256")
     args = ap.parse_args()
     try:
-        build(Path(__file__).resolve().parent, args.toolchain_bin.resolve(strict=True),
-              args.browser_assets, args.browser_asset_pin)
+        build(Path(__file__).resolve().parent, args.toolchain_bin.resolve(strict=True))
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         ap.exit(1, f"ZXS build refused: {error}\n")
 

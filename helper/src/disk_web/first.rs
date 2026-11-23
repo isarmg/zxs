@@ -18,7 +18,7 @@ impl InstallPhase {
     }
 }
 #[derive(Clone,Copy)]
-enum Purpose{Install{phase:InstallPhase,count:u8},CopyRepair{format:RepairFormat,bytes:u64}}
+enum Purpose{Headless,Install{phase:InstallPhase,count:u8},CopyRepair{format:RepairFormat,bytes:u64}}
 pub(super) struct Offer{
     purpose:Purpose,ticket:Option<([u8;32],Instant)>,requested:bool,
 }
@@ -26,7 +26,7 @@ impl Offer{
     pub(super) fn is_repair(&self)->bool{matches!(self.purpose,Purpose::CopyRepair{..})}
     pub(super) fn route(&mut self,r:Request,now:Instant)->(Reply,bool){
         let (preview,request,requested,cancelled)=match self.purpose{
-            Purpose::Install{..}=>("/api/install/preview","/api/install/request",
+            Purpose::Headless | Purpose::Install{..}=>("/api/install/preview","/api/install/request",
                 "请求已交回本机终端。网页将关闭；尚未启用、设密或写盘。","安装请求已取消。未写入。"),
             Purpose::CopyRepair{..}=>("/api/copy-repair/preview","/api/copy-repair/request",
                 "请求已交回本机终端。网页将关闭；尚未读取或修复镜像。","工作副本请求已取消。未写入。"),
@@ -49,6 +49,7 @@ impl Offer{
                 let Ok(ticket)=token()else{return (Reply::plain(503,"暂不能准备本机确认票。"),false);};
                 self.ticket=Some((digest(ticket.as_bytes()),now+TICKET));
                 let page=match self.purpose{
+                    Purpose::Headless=>format!("headless\n1\n{ticket}"),
                     Purpose::Install{phase,count}=>format!("{}\n{count}\n{ticket}",phase.name()),
                     Purpose::CopyRepair{format,bytes}=>format!("{}\n{bytes}\n{ticket}",format.panel_label()),
                 };
@@ -62,19 +63,30 @@ impl Offer{
 pub(crate) fn serve_first(listener:TcpListener,phase:InstallPhase,count:u8,code:[u8;32],end:Instant,
     check:impl Fn()->io::Result<()>)->io::Result<bool>{
     if !(1..=62).contains(&count){return Err(io::Error::other("invalid fixed installation panel scope"));}
-    serve(listener,Purpose::Install{phase,count},code,end,check)
+    serve(listener,Purpose::Install{phase,count},zeroize::Zeroizing::new(code),end,check)
 }
+pub(super) fn serve_headless(listener: TcpListener, code: zeroize::Zeroizing<[u8; 32]>, end: Instant,
+    check: impl Fn() -> io::Result<()>) -> io::Result<bool> {
+    serve(listener, Purpose::Headless, code, end, check)
+}
+
 pub(crate) fn serve_repair(listener:TcpListener,format:RepairFormat,bytes:u64,code:[u8;32],end:Instant,
     check:impl Fn()->io::Result<()>)->io::Result<bool>{
     if !(1..=i64::MAX as u64).contains(&bytes){return Err(io::Error::other("invalid fixed copy-repair panel scope"));}
-    serve(listener,Purpose::CopyRepair{format,bytes},code,end,check)
+    serve(listener,Purpose::CopyRepair{format,bytes},zeroize::Zeroizing::new(code),end,check)
 }
-fn serve(listener:TcpListener,purpose:Purpose,code:[u8;32],end:Instant,
+fn serve(listener:TcpListener,purpose:Purpose,code:zeroize::Zeroizing<[u8;32]>,end:Instant,
     check:impl Fn()->io::Result<()>)->io::Result<bool>{
-    if code==[0;32]{return Err(io::Error::other("invalid fixed panel pairing code"));}
-    let code=code.iter().map(|b|format!("{b:02x}")).collect::<String>();
-    let mut panel=Panel::new(listener.local_addr()?.to_string(),code.as_bytes(),Instant::now());
+    if *code==[0;32]{return Err(io::Error::other("invalid fixed panel pairing code"));}
+    let hex = b"0123456789abcdef";
+    let mut text = zeroize::Zeroizing::new([0; 64]);
+    for (byte, pair) in code.iter().zip(text.chunks_exact_mut(2)) {
+        pair[0] = hex[usize::from(*byte >> 4)];
+        pair[1] = hex[usize::from(*byte & 15)];
+    }
     drop(code);
+    let mut panel=Panel::new(listener.local_addr()?.to_string(),&text[..],Instant::now());
+    drop(text);
     panel.handoff=Some(Offer{purpose,ticket:None,requested:false});
     let mut served=0;
     while !panel.closed&&Instant::now()<panel.expires.min(end)&&served<256{
@@ -107,6 +119,21 @@ mod tests{
             origin:Some("http://127.0.0.1:1900".into()),auth:None,csrf:None,
             content_type:(!body.is_empty()).then(||"application/octet-stream".into()),body:body.into()}
     }
+    #[test]
+    fn headless_preview_can_only_return_one_ticket_to_its_parent() {
+        let now = Instant::now();
+        let mut offer = Offer { purpose: Purpose::Headless, ticket: None, requested: false };
+        let (preview, closed) = offer.route(post("/api/install/preview", b""), now);
+        assert!(!closed && !offer.requested);
+        let fields: Vec<_> = preview.body.lines().collect();
+        assert_eq!(&fields[..2], &["headless", "1"]);
+        assert_eq!(offer.route(post("/api/install/request", b"password"), now).0.code, 400);
+        let (reply, closed) = offer.route(post("/api/install/request", fields[2].as_bytes()), now);
+        assert_eq!(reply.code, 200);
+        assert!(closed && offer.requested);
+        assert_eq!(offer.route(post("/api/install/request", fields[2].as_bytes()), now).0.code, 403);
+    }
+
     #[test]
     fn install_request_is_one_existing_ticket_not_a_path_or_a_disk_command(){
         let now=Instant::now();let token="a".repeat(64);

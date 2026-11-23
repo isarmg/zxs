@@ -4,7 +4,7 @@
 use crate::pinned::{DiscoveryAdmission, DiscoveryFdInfo, Entity, Mount};
 #[cfg(test)]
 use crate::pinned::{Pinned, invalid, local_data_filesystem};
-use crate::sqlite_install::product_layout;
+const PRODUCT_TOP: &str = "/zxs";
 use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
 use rustix::fs::makedev;
 #[cfg(test)]
@@ -79,7 +79,7 @@ impl DiscoveryTable{
         Ok(Some(id))
     }
     fn product_crossing(&self,parent:u64)->io::Result<Option<u64>>{
-        let next=self.named(Path::new(product_layout::TOP),Some(parent))?;
+        let next=self.named(Path::new(PRODUCT_TOP),Some(parent))?;
         // Rule out a subtree before crossing, not after querying it. The
         // named test also rules out remote, pseudo, autofs and stacked rows.
         if let Some(id)=next{
@@ -206,7 +206,7 @@ impl Mounts {
             if !words.next().is_some_and(|w| !w.is_empty()) || !words.any(|w| w == b"-") { return Err(bad()); }
             let fs_type=words.next().filter(|v|!v.is_empty()).ok_or_else(bad)?;
             let row=Row {parent,device,whole:root==b"/",devtmpfs:fs_type==b"devtmpfs",
-                product_root:point==product_layout::TOP.as_bytes(),magic:data_magic(fs_type),namespace_root:point==b"/"};
+                product_root:point==PRODUCT_TOP.as_bytes(),magic:data_magic(fs_type),namespace_root:point==b"/"};
             if !(0..2).all(|_| words.next().is_some_and(|w| !w.is_empty())) || words.next().is_some()
                 || rows.insert(id,row).is_some() {
                 return Err(bad());

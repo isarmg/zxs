@@ -11,7 +11,7 @@ on:
       - zxs/build*.rs
       - zxs/build_*.py
       - zxs/Cargo.*
-      - zxs/browser-stage.sha256
+      - zxs/rust-toolchain.toml
       - helper/src/**
       - helper/linux-evidence/**
       - helper/build.rs
@@ -65,7 +65,6 @@ jobs:
           f1d0b1dec81dab6f523cd098507763487b0d4bd7fd2c87582f154128719be03b x86_64-unknown-linux-gnu rustc rustc
           7e29ce07d7c6e92d1826870575ba27d57fff6cb3e754aa57d99099cb88fab35d x86_64-unknown-linux-gnu cargo cargo
           4591b6486594ded52ecd6135db95bf9355bbd3ca7a380888b141528bbcf9a5d4 x86_64-unknown-linux-gnu rust-std rust-std-x86_64-unknown-linux-gnu
-          19b7954d650fc0d22767eceb76b8e03d07ce0d6a9f4234f33c32a17ee8d6d7b9 wasm32-unknown-unknown rust-std -
           RUST
           sha256sum /usr/bin/gcc /usr/bin/ar /usr/bin/ld
 
@@ -75,62 +74,11 @@ jobs:
           set -euo pipefail
           umask 077
           cd "$PAIR_BUILD/source/zxs"
-          # This recorded approval is separate from the staged assets.
-          pin=$(python3 -I - <<'PYTHON'
-          import os, re, stat, sys
+          sha256sum build_release.py
+          python3 build_release.py "$PAIR_BUILD/rust/bin"
+          sha256sum target/standalone/zxs
 
-          with os.fdopen(os.open("browser-stage.sha256",
-                                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
-              if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-                  sys.exit("browser-stage.sha256 must be a regular file")
-              raw = source.read(66)
-          if re.fullmatch(rb"[0-9a-f]{64}\n", raw) is None:
-              sys.exit("browser-stage.sha256 must contain 64 lowercase hex digits followed by one LF")
-          print(raw[:64].decode("ascii"))
-          PYTHON
-          )
-          sha256sum build_browser.py build_release.py
-          python3 build_browser.py "$PAIR_BUILD/rust/bin" \
-            --wasm-std "$PAIR_BUILD/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz"
-          assets="$PWD/target/browser-assets"
-          python3 build_release.py "$PAIR_BUILD/rust/bin" --browser-assets "$assets" --browser-asset-pin "$pin"
-          python3 -I - target/standalone/zxs "$assets" <<'PYTHON'
-          from hashlib import sha256
-          from pathlib import Path
-          from struct import unpack_from
-          import sys
-
-          image, assets = map(Path, sys.argv[1:])
-          data = image.read_bytes()
-          page = 4096  # Linux x86-64 ELF_EXEC_PAGESIZE
-          start, = unpack_from("<Q", data, 32)
-          width, count = unpack_from("<HH", data, 54)
-          assert width == 56 and 1 <= count <= 128 and start + width * count <= len(data)
-          headers = (unpack_from("<IIQQQQQQ", data, start + width * i) for i in range(count))
-          loads = [row for row in headers if row[0] == 1]
-          for _, _, offset, address, _, length, memory, _ in loads:
-              assert offset + length <= len(data) and length <= memory and address + memory < 1 << 64
-              assert not length or offset % page == address % page
-          for name in ("boot.js", "folder.css", "zxs_browser.js", "zxs_browser_bg.wasm"):
-              resource = (assets / name).read_bytes()
-              at = data.find(resource)
-              end = at + len(resource)
-              assert resource and at >= 0 and data.find(resource, at + 1) == -1, name
-              owners = [r for r in loads if r[5] and r[2] < end and at < r[2] + r[5]]
-              assert len(owners) == 1, name
-              owner = owners[0]
-              assert owner[1] == 4 and owner[2] <= at and end <= owner[2] + owner[5], name
-              address = owner[3] + at - owner[2]
-              for row in loads:
-                  if row is owner or not row[6]:
-                      continue
-                  first = row[3] // page * page
-                  past = (row[3] + row[6] + page - 1) // page * page
-                  assert address + len(resource) <= first or past <= address, name
-              print(f"Embedded {name}: {len(resource)} bytes at {at}, SHA256 {sha256(resource).hexdigest()}")
-          PYTHON
-
-      - name: Build and inspect Helper with the private fresh issuer
+      - name: Build and inspect the standalone Helper
         if: ${{ !cancelled() && steps.inputs.outcome == 'success' }}
         shell: bash
         run: |
@@ -145,7 +93,7 @@ jobs:
           target=x86_64-unknown-linux-gnu
           "${build_env[@]}" "$toolchain/cargo" fetch --locked --target "$target"
           "${build_env[@]}" "$toolchain/cargo" build --locked --offline --release --target "$target" \
-            --bin helper --features private-fresh-install
+            --bin helper
           image="$PAIR_BUILD/target/$target/release/helper"
           size=$(stat -c %s "$image")
           [[ "$size" -ge 64 && "$size" -le 67108864 ]]
@@ -156,5 +104,5 @@ jobs:
           awk '$1 == "GNU_STACK" {++stacks; for(i=7; i<NF; ++i) if($i ~ /E/) bad=1} END {exit stacks!=1 || bad}' \
             "$PAIR_BUILD/helper.readelf"
           if grep -qE '\(NEEDED\).*(libgcrypt|libgpg-error)' "$PAIR_BUILD/helper.readelf"; then exit 1; fi
-          printf 'Helper private-fresh-install: %s bytes\n' "$size"
+          printf 'Helper: %s bytes\n' "$size"
           sha256sum "$image"

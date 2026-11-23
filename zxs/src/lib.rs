@@ -5,117 +5,44 @@
     feature(riscv_ext_intrinsics)
 )]
 
-#[cfg(any(test, target_arch = "wasm32"))]
-mod browser;
-
-#[cfg(any(test, target_os = "linux", target_arch = "wasm32"))]
-#[path = "browser/label.rs"]
-mod label_text;
-
-#[cfg(target_os = "linux")]
-mod smb;
-#[cfg(target_os = "linux")]
-#[doc(hidden)]
-pub use smb::{start_original_zxs,try_supervised_zxs_role};
 #[cfg(target_os = "linux")]
 mod fs;
 #[cfg(target_os = "linux")]
 mod hash;
 #[cfg(target_os = "linux")]
+pub(crate) mod container_store;
+#[cfg(target_os = "linux")]
+mod workspace_protocol;
+#[cfg(target_os = "linux")]
+mod headless_auth;
+#[cfg(target_os = "linux")]
+mod headless_http;
+#[cfg(target_os = "linux")]
+mod headless_lifecycle;
+#[cfg(target_os = "linux")]
+mod headless_start;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod headless_boot;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod headless_gateway;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[doc(hidden)]
+pub fn start_headless() -> std::io::Result<()> {
+    let gateway = headless_gateway::LaunchFds::inherit()?;
+    headless_boot::run(Some(gateway), workspace_protocol::http::dispatch_request)
+}
+#[cfg(all(target_os = "linux", target_arch = "x86_64", feature = "host-activation"))]
+#[doc(hidden)]
+pub fn activate_headless() -> std::io::Result<()> { headless_gateway::activate() }
+
+#[cfg(target_os = "linux")]
 mod password;
 #[cfg(target_os = "linux")]
 mod display;
-#[cfg(target_os = "linux")]
-mod net;
-#[cfg(target_os = "linux")]
-mod system;
-#[cfg(target_os = "linux")]
-mod management;
-#[cfg(target_os = "linux")]
-mod identity;
-#[cfg(target_os = "linux")]
-mod pool;
-#[cfg(target_os = "linux")]
-mod ordinary;
-#[cfg(target_os = "linux")]
-pub use ordinary::{PublishedVersion,DirectoryParent,DirectoryEntry,DirectoryInfo,DirectoryListing,make_directory,list_directory,apply_recycle,recycle_receipt,list_retained,DeletionKey,DeletionTime,RestoreTarget,RecycleAction,RecycleKind,RecycleReceipt,RecycleCursor,RecycleFilter,RecyclePage,RetainedEntry,move_file,move_file_at,move_receipt,move_receipt_at,MoveReceipt,MoveStatus,commit_working,formal_receipt,FormalStorage,LengthPolicy,SpanEdit,SpanReceipt,SpanObservation,save_interval,interval_receipt,read_current_range_to,FormalNode,FormalObservation,commit_first,first_commit_receipt,read_node_to,read_node_range_to,CurrentFile,DraftClaim,DraftReceipt,FirstSaveObservation,DRAFT_CHUNK,save_first,first_save_receipt,read_current_to,current_info,FileInfo,RootFiles,CreationStatus,CreationReceipt,create_empty_at,create_empty,creation_receipt,read_initial_file,list_initial_files,lookup_file_at,lookup_file};
-#[cfg(target_os = "linux")]
-pub use identity::{DirectoryId,BranchId,NodeId,VersionId,VersionStorageId,EntryId, FileId, HistoryId, OperationId, PoolId, VolumeId};
-#[cfg(target_os = "linux")]
-pub use pool::{initialize, inspect, PoolInfo, RegisteredVolume};
-#[cfg(target_os = "linux")]
-pub use fs::Entity;
-#[cfg(target_os = "linux")]
-use fs::{HeldDir, invalid};
-#[cfg(target_os = "linux")]
-use std::{collections::BTreeSet, io, path::{Path, PathBuf}};
 
-#[cfg(target_os = "linux")]
-pub const MAX_FILE_ROOTS: usize = 62;
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Role { System, File, Recycle }
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ObservedVolume {
-    pub role: Role,
-    pub path: PathBuf,
-    pub entity: Entity,
-}
-
-#[cfg(target_os = "linux")]
-struct Selection { roots: Vec<(Role,HeldDir)> }
-
-#[cfg(target_os = "linux")]
-impl Selection {
-    fn open(system: &Path, recycle: &Path, files: &[PathBuf]) -> io::Result<Self> {
-        Self::with_system(HeldDir::open(system)?,recycle,files)
-    }
-    fn with_system(system:HeldDir,recycle:&Path,files:&[PathBuf])->io::Result<Self>{
-        if files.is_empty() || files.len() > MAX_FILE_ROOTS {
-            return Err(invalid("select one or more FILE roots, within the registration limit"));
-        }
-        let mut roots = Vec::with_capacity(files.len() + 2);
-        roots.push((Role::System,system));
-        roots.push((Role::Recycle,HeldDir::open(recycle)?));
-        for file in files { roots.push((Role::File,HeldDir::open(file)?)); }
-        let entities: BTreeSet<_> = roots.iter().map(|(_,d)| d.entity).collect();
-        if entities.len() != roots.len() { return Err(invalid("multiple roles or names select the same directory")); }
-        let recycle_device = roots[1].1.entity.device;
-        if roots.iter().any(|(r,d)| *r != Role::Recycle && d.entity.device == recycle_device) {
-            return Err(invalid("recycle storage must use its own filesystem"));
-        }
-        let selection=Self{roots};
-        selection.require_lineage()?;
-        Ok(selection)
-    }
-    fn require_lineage(&self)->io::Result<()>{
-        fs::require_selected_lineages(&self.roots)
-    }
-    fn view(&self) -> Vec<ObservedVolume> {
-        self.roots.iter().map(|(role,d)| ObservedVolume { role:*role, path:d.path.clone(), entity:d.entity }).collect()
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub fn inspect_fresh(system: &Path, recycle: &Path, files: &[PathBuf]) -> io::Result<Vec<ObservedVolume>> {
-    let selection = Selection::open(system,recycle,files)?;
-    // flock acts on live directory FDs without creating sidecars. Nonblocking
-    // failure is not a reason to use a different root or drop an operand.
-    for (_,dir) in &selection.roots { dir.share()?; }
-    for (_,dir) in &selection.roots { dir.require_named()?; dir.require_fresh()?; }
-    for (_,dir) in &selection.roots { dir.require_named()?; }
-    Ok(selection.view())
-}
-
-#[cfg(target_os = "linux")]
-#[cfg(test)]
-#[path = "../tests/unit/fresh.rs"]
-mod fresh_tests;
-
-#[cfg(target_os = "linux")]
-#[cfg(test)]
-#[path="../tests/unit/support.rs"]
+#[cfg(all(target_os = "linux", test))]
+use fs::Entity;
+#[cfg(all(target_os = "linux", test))]
+#[path = "../tests/unit/support.rs"]
 mod test_support;

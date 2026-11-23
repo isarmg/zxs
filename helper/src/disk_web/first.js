@@ -39,8 +39,11 @@ async function fetchPreview() {
         if (!["ext", "exFAT", "FAT32"].includes(fields[0]) || !validByteCount(fields[1])) throw new Error();
         plan.textContent = "终端已选一份 " + fields[1] + " 字节的 " + fields[0] + " 输入镜像和一个新工作副本位置。这里只发起终端确认，尚未读取镜像，也未创建文件。自动修复可能丢弃工作副本中的受损内容。";
     } else {
-        if (!["new", "resume", "setup"].includes(fields[0]) || !/^(?:[1-9]|[1-5][0-9]|6[0-2])$/.test(fields[1])) throw new Error();
-        if (fields[0] === "setup") {
+        if (!["new", "resume", "setup", "headless"].includes(fields[0]) || !/^(?:[1-9]|[1-5][0-9]|6[0-2])$/.test(fields[1])) throw new Error();
+        if (fields[0] === "headless") {
+            if (fields[1] !== "1") throw new Error();
+            plan.textContent = "已在终端选择系统目录、数据盘和独立回收站盘。请返回该终端核对目录并设置账户。";
+        } else if (fields[0] === "setup") {
             plan.textContent = "发行单一 Web/SMB 账号：终端已预选 " + fields[1] +
                 " 个共享目录。尚未核实原池或设密；原终端将核对完整范围，并在确认后单独隐藏输入口令。";
         } else {

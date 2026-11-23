@@ -12,7 +12,7 @@ on:
       - zxs/build*.rs
       - zxs/build_*.py
       - zxs/Cargo.*
-      - zxs/browser-stage.sha256
+      - zxs/rust-toolchain.toml
       - helper/src/**
       - helper/tests/**
       - helper/linux-evidence/**
@@ -40,9 +40,6 @@ jobs:
           - project: helper
             profile: Helper default
             feature: ''
-          - project: helper
-            profile: Helper with private fresh install
-            feature: private-fresh-install
     defaults:
       run:
         shell: bash
@@ -83,33 +80,6 @@ jobs:
         if: matrix.project == 'helper'
         run: cargo fetch --locked
 
-      - name: Stage the reviewed ZXS browser inputs
-        id: browser_stage
-        if: matrix.project == 'zxs'
-        run: |
-          # This recorded approval is separate from the staged assets.
-          pin=$(python3 -I - <<'PYTHON'
-          import os, re, stat, sys
-
-          with os.fdopen(os.open("browser-stage.sha256",
-                                 os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
-              if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-                  sys.exit("browser-stage.sha256 must be a regular file")
-              raw = source.read(66)
-          if re.fullmatch(rb"[0-9a-f]{64}\n", raw) is None:
-              sys.exit("browser-stage.sha256 must contain 64 lowercase hex digits followed by one LF")
-          print(raw[:64].decode("ascii"))
-          PYTHON
-          )
-          input="$(mktemp -d "$RUNNER_TEMP/zxs-browser.XXXXXXXX")"
-          curl --proto '=https' --proto-redir '=https' -fsSL --retry 2 \
-            https://static.rust-lang.org/dist/2026-11-12/rust-std-1.100.0-wasm32-unknown-unknown.tar.xz \
-            -o "$input/rust-std.tar.xz"
-          python3 build_browser.py "$ZXS_RUST_BIN" --wasm-std "$input/rust-std.tar.xz"
-          printf 'ZXS_WASM_STD=%s\n' "$input/rust-std.tar.xz" >> "$GITHUB_ENV"
-          printf 'ZXS_BROWSER_ASSETS=%s\n' "$(pwd -P)/target/browser-assets" >> "$GITHUB_ENV"
-          printf 'ZXS_BROWSER_ASSET_PIN=%s\n' "$pin" >> "$GITHUB_ENV"
-
       - name: Strict Clippy
         id: lint
         run: |
@@ -117,20 +87,21 @@ jobs:
           if [[ -n "$FEATURE" ]]; then features=(--features "$FEATURE"); fi
           cargo clippy --workspace --all-targets --locked --offline "${features[@]}" -- -D warnings -D clippy::pedantic
 
-      - name: Unit tests
+      - name: Native tests
         if: ${{ !cancelled() && (steps.lint.outcome == 'success' || steps.lint.outcome == 'failure') }}
         run: |
           features=()
           if [[ -n "$FEATURE" ]]; then features=(--features "$FEATURE"); fi
-          cargo test --workspace --lib --bins --locked --offline "${features[@]}"
+          if [[ "${{ matrix.project }}" == zxs ]]; then
+            cargo test --workspace --all-targets --locked --offline
+          else
+            cargo test --workspace --lib --bins --locked --offline "${features[@]}"
+          fi
 
-      - name: Check the staged WASM with a synthetic browser host
-        if: ${{ !cancelled() && matrix.project == 'zxs' && (steps.lint.outcome == 'success' || steps.lint.outcome == 'failure') }}
-        run: node tests/browser/console-host.mjs "$ZXS_BROWSER_ASSETS"
-
-      - name: Strict Clippy for the wasm32 browser target
-        if: ${{ !cancelled() && matrix.project == 'zxs' && steps.browser_stage.outcome == 'success' }}
-        run: python3 tests/browser/strict_target.py "$ZXS_RUST_BIN" "$ZXS_WASM_STD"
+      - name: Check offline ZXS host activation (compile only)
+        if: ${{ !cancelled() && matrix.project == 'zxs' && steps.toolchain.outcome == 'success' }}
+        run: |
+          "$ZXS_RUST_BIN/cargo" check --locked --offline --features host-activation --bin activate-headless
 
       - name: Check first-party Rust formatting
         if: ${{ !cancelled() && steps.toolchain.outcome == 'success' && matrix.feature == '' }}
