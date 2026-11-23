@@ -358,8 +358,17 @@ fn archive_routes(system: &File, token: &[u8; 32], uid: u32, initialized: bool) 
                 "a marker-only DATA disk has a selected container route",
             ));
         }
-        let area = moves.as_ref().ok_or_else(refused)?;
-        let selected = read(area, name, uid)?;
+        let missing = || {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "DATA {}: container {name} has no selected recycle record",
+                    hex(token)
+                ),
+            )
+        };
+        let area = moves.as_ref().ok_or_else(missing)?;
+        let selected = read_stage(area, name, uid)?.ok_or_else(missing)?;
         let receipt = selected.full.as_slice();
         if receipt.len() != 108
             || &receipt[..4] != b"RC1\0"
@@ -368,9 +377,10 @@ fn archive_routes(system: &File, token: &[u8; 32], uid: u32, initialized: bool) 
             || receipt[36..44] == [0; 8]
             || receipt[44..52] == receipt[60..68]
         {
-            return Err(io::Error::other(
-                "an enrolled route has no valid selected recycle record",
-            ));
+            return Err(io::Error::other(format!(
+                "DATA {}: container {name} has an invalid selected recycle record",
+                hex(token)
+            )));
         }
         selected.held.sync_all()?;
     }
