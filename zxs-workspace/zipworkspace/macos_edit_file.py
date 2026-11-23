@@ -57,8 +57,9 @@ def _admit(connection, detail, branch, node):
     wire = _Metadata(exchange)  # Real read-only R3 reader, never an injected local metadata view.
 
     def original():
-        if (connection.operations._exchange is not exchange or exchange._authorization is not authority
-                or exchange.destination_identity != source.destination or exchange._location != location):
+        if (connection._exchange is not exchange or connection._authorization is not authority
+                or connection._account != source.account or connection.operations._exchange is not exchange
+                or exchange._authorization is not authority or exchange.destination_identity != source.destination or exchange._location != location):
             raise Rejected("the original authenticated connection changed")
         authority.require_account(source.account)
 

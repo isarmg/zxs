@@ -8,7 +8,7 @@ import FSKit
 final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.ReadWriteHandler, @unchecked Sendable {
     let rootItem = FSItem()
     let names: NameIndex
-    private let ticket: HeldMountTicket
+    private let ticket: HeldMountTicket, resource: FSPathURLResource
     private let signals = DispatchQueue(label: "org.zipworkspace.desktop.remotefs.volume-state")
     private var events: DispatchSourceFileSystemObject?
     private let gate = NSLock()
@@ -17,13 +17,14 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
     private var phase = Phase.new, callbacks = 0
     private var localFinishStarted = false
 
-    init(ticket: HeldMountTicket, name: FSFileName, names: NameIndex) throws {
+    init(ticket: HeldMountTicket, resource: FSPathURLResource, name: FSFileName, names: NameIndex) throws {
         try ticket.check()
-        guard try ticket.marked(.attempted), try !ticket.marked(.verified), try !ticket.marked(.stop)
+        guard !resource.isRevoked, !resource.isWritable, ticket.matches(resource.url), try ticket.marked(.attempted),
+              try !ticket.marked(.verified), try !ticket.marked(.stop)
         else { throw workError(ESTALE) }
         try names.checkOwner(ticket)
         try WorkFile.bind(names.ordered.map { ($0.source.file, $0.id) })
-        self.names = names; self.ticket = ticket
+        self.names = names; self.ticket = ticket; self.resource = resource
         super.init(volumeID: FSVolume.Identifier(uuid: ticket.volume), volumeName: name)
     }
 
@@ -45,6 +46,7 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
                 try stopNewFileOpens()
             }
             guard state({ phase == .draining }) else { return }
+            guard !resource.isRevoked else { throw workError(EACCES) }
             for row in names.ordered where try !row.source.file.readyToFence() { return }
             let entered = state {
                 guard phase == .draining, callbacks == 0 else { return false }
@@ -95,7 +97,7 @@ final class RemoteDataVolume: FSVolume, FSVolume.DataCacheHandler, FSVolume.Read
     // root handle. Never return names or a body until the host has independently
     // bound and verified the actual returned FSKit mount and required restrictions.
     func visibility(admitting: Bool = false) throws {
-        guard try ticket.marked(.verified) else { throw workError(EACCES) }
+        guard !resource.isRevoked, try ticket.marked(.verified) else { throw workError(EACCES) }
         if admitting, try ticket.marked(.stop) { throw workError(EBUSY) }
     }
 

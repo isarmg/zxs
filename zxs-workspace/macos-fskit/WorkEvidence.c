@@ -1,6 +1,7 @@
 #include "WorkEvidence.h"
 #include <sys/attr.h>
 #include <sys/mount.h>
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -70,8 +71,9 @@ int zxs_work_spelling(int fd, const char *expected) {
 static int resident_leaf(int parent, const char *name, mode_t mode, uint64_t inode, int64_t sec, int64_t nsec) {
     struct stat st;
     if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) < 0) return errno;
-    if (!S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_flags || st.st_uid != geteuid() ||
-        (st.st_mode & ALLPERMS) != mode || st.st_ino != inode ||
+    if ((S_ISDIR(mode) ? !S_ISDIR(st.st_mode) : (!S_ISREG(st.st_mode) || st.st_nlink != 1)) ||
+        st.st_flags || st.st_uid != geteuid() ||
+        (st.st_mode & ALLPERMS) != (mode & ALLPERMS) || st.st_ino != inode ||
         st.st_birthtimespec.tv_sec != sec || st.st_birthtimespec.tv_nsec != nsec) return ESTALE;
     return 0;
 }
@@ -103,10 +105,30 @@ static void *open_worker(void *p) {
                        IOPOL_MATERIALIZE_DATALESS_FILES_OFF) {
         j->error = errno ? errno : EIO;
     } else {
-        j->error = resident_leaf(j->parent,j->name,j->mode,j->inode,j->sec,j->nsec);
+        // The absolute Foundation App Group is only discovered here. An lstat on
+        // the caller thread could materialize an ancestor before the protected open.
+        struct stat before; int group=(j->mode==0);
+        if (group) {
+            if (lstat(j->name,&before)<0) j->error=errno;
+            else if (!S_ISDIR(before.st_mode) || before.st_flags || before.st_uid!=getuid() ||
+                     (before.st_mode&0022)) j->error=EPERM;
+            else {
+                j->mode=before.st_mode; j->inode=before.st_ino;
+                j->sec=before.st_birthtimespec.tv_sec; j->nsec=before.st_birthtimespec.tv_nsec;
+            }
+        }
+        if (!j->error) j->error=resident_leaf(j->parent,j->name,j->mode,j->inode,j->sec,j->nsec);
         if (!j->error) {
             j->fd = openat(j->parent, j->name, j->flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
             if (j->fd < 0) j->error = errno;
+            else if (group) {
+                struct stat held;
+                if (fstat(j->fd,&held)<0) j->error=errno;
+                else if (held.st_dev!=before.st_dev || held.st_ino!=before.st_ino || held.st_flags ||
+                         held.st_uid!=getuid() || !S_ISDIR(held.st_mode) || (held.st_mode&0022)) j->error=ESTALE;
+                else j->error=zxs_work_path(j->fd,j->name);
+                if (j->error) { close(j->fd); j->fd=-1; }
+            }
         }
     }
     dispatch_semaphore_t done = j->done;
@@ -144,9 +166,35 @@ int zxs_open_work_leaf(int parent, const char *name, int flags, uint64_t inode, 
     return open_resident(parent,name,flags,0600,inode,sec,nsec);
 }
 
+/* Only FileManager's already-entitled, fixed App Group URL reaches this entry.
+ * O_NOFOLLOW_ANY also forbids a symlink in an earlier component. Return an owned
+ * directory FD for descriptor-relative work, never a public path capability. */
+int zxs_work_path(int fd,const char *expected) {
+    char path[MAXPATHLEN];
+    if (!expected || expected[0]!='/') return EINVAL;
+    if (fcntl(fd,F_GETPATH,path)<0) return errno;
+    return strnlen(path,sizeof(path))<sizeof(path) && !strcmp(path,expected) ? 0 : ESTALE;
+}
+int zxs_open_group_dir(const char *path) {
+    if (!path || path[0]!='/') { errno=EINVAL; return -1; }
+    return open_resident(AT_FDCWD,path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW_ANY,0,0,0,0);
+}
+
+/* Registration candidates have a fixed grammar. A successful open alone NEVER
+ * proves registration: compare the canonical immutable projection, host attempt,
+ * APFS witnesses and raw pathname on the same held objects before use. */
+int zxs_open_registration_leaf(int parent,const char *leaf,int directory,uint64_t ino,int64_t sec,int64_t nsec) {
+    if (!leaf || (directory != 0 && directory != 1) ||
+        (directory ? (strcmp(leaf,"names") && (strnlen(leaf,38)!=37 || strncmp(leaf,"work-",5) ||
+                                              strspn(leaf+5,"0123456789abcdef")!=32))
+                   : strcmp(leaf,"ticket"))) { errno=EINVAL; return -1; }
+    return open_resident(parent,leaf,directory?(O_RDONLY|O_DIRECTORY):O_RDONLY,
+                         directory?(S_IFDIR|0700):0600,ino,sec,nsec);
+}
+
 int zxs_open_marker(int parent, const char *name, uint64_t inode, int64_t sec, int64_t nsec) {
     static const char *const names[]={"host-attempt","provider-loaded","host-verified","host-stop","provider-stopped",
-                                      "host-normal-gone","provider-local-clean"};
+                                      "host-normal-gone","provider-local-clean","projection.json"};
     int match=0;
     if (name) for (size_t i=0; i<sizeof(names)/sizeof(names[0]); ++i) if (!strcmp(name,names[i])) match=1;
     if (!match) { errno=EINVAL; return -1; }

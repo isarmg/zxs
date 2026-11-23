@@ -2,39 +2,22 @@ import Darwin
 import Foundation
 import FSKit
 
-/// Private registered-volume instance for the signed extension. No path discovery:
-/// the signed issuer supplies original group objects from the approved checkout.
+/// Actual unary extension instance. No credential, remote call, path discovery or
+/// pre-wired in-process object shared with the Qt host.
 @available(macOS 27.0, *)
 final class RemoteUnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
-    private let gate = NSLock(), ticket: HeldMountTicket, names: NameIndex
-    private var used = false, unloading = false
-    private var loaded: RemoteDataVolume?
-
-    init(ticket: HeldMountTicket, names: NameIndex) throws {
-        try HostSigning.checkRunningModule()
-        try names.checkOwner(ticket)
-        self.ticket = ticket; self.names = names
-        super.init()
-    }
-
-    private func exact(_ resource: FSResource) throws -> FSPathURLResource {
-        guard let item = resource as? FSPathURLResource, !item.isWritable, ticket.matches(item.url)
-        else { throw workError(EINVAL) }
-        return item
-    }
+    private let gate = NSLock()
+    private var claimed: String?, uncertainTokens = Set<String>(), unloading = false
+    private var loaded: (RegisteredWork, RemoteDataVolume)?
 
     func probeResource(resource: FSResource,
                        replyHandler reply: @escaping @Sendable (FSProbeResult?, (any Error)?) -> Void) {
-        guard (try? exact(resource)) != nil else { reply(.notRecognized, nil); return }
-        // Ordinary URLs from this pre-authorized App Group are not security-scoped bookmarks.
-        // Never obtain additional path permissions or inspect unrelated resources.
-        gate.lock(); let available = !used; gate.unlock()
-        guard available else { reply(.notRecognized,nil); return }
         do {
-            try ticket.check()
-            guard try ticket.marked(.attempted), try !ticket.marked(.loaded),
-                  try !ticket.marked(.verified), try !ticket.marked(.stop) else { throw workError(ESTALE) }
-            reply(.usable(name: "ZXS Workspace", containerID: FSContainerIdentifier(uuid: ticket.volume)), nil)
+            guard let token = try RegisteredWork.token(for:resource) else { reply(.notRecognized,nil); return }
+            gate.lock(); let available = claimed == nil && !uncertainTokens.contains(token) && uncertainTokens.count < 128; gate.unlock()
+            guard available else { reply(.notRecognized,nil); return }
+            let registration = try RegisteredWork.attempted(token:token)
+            reply(.usable(name: "ZXS Workspace", containerID: FSContainerIdentifier(uuid: registration.ticket.volume)), nil)
         } catch { reply(nil, error) }
     }
 
@@ -44,18 +27,26 @@ final class RemoteUnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperation
             guard options.taskOptions.isEmpty || options.taskOptions == ["-o","noexec,nodev,nosuid,owners"] else {
                 throw workError(ENOTSUP) // Reject forced, read-only and unrecognized variants; never upgrade rights.
             }
-            _ = try exact(resource)
-            try ticket.check()
+            guard let path=resource as? FSPathURLResource, let token = try RegisteredWork.token(for:path) else { throw workError(EINVAL) }
+            let registration = try RegisteredWork.attempted(token:token), ticket = registration.ticket
             gate.lock()
-            let fresh = !used
-            if fresh { used = true }
+            let fresh = claimed == nil && !uncertainTokens.contains(token) && uncertainTokens.count < 128
+            if fresh { claimed = token }
             gate.unlock()
-            guard fresh, try ticket.marked(.attempted), try !ticket.marked(.verified), try !ticket.marked(.stop)
+            guard fresh else { throw workError(EBUSY) }
+            var accepted = false
+            defer {
+                if !accepted {
+                    gate.lock(); uncertainTokens.insert(token); claimed = nil; gate.unlock()
+                }
+            }
+            guard try ticket.marked(.attempted), try !ticket.marked(.verified), try !ticket.marked(.stop)
             else { throw workError(ESTALE) }
             try ticket.mark(.loaded) // Cross-instance single-use admission; failure never invokes another attachment.
-            let volume = try RemoteDataVolume(ticket: ticket, name: FSFileName(data: Data("ZXS Workspace".utf8)), names: names)
+            let names = try registration.loadNames()
+            let volume = try RemoteDataVolume(ticket: ticket, resource:path, name: FSFileName(data: Data("ZXS Workspace".utf8)), names: names)
             gate.lock()
-            loaded = volume; containerStatus = .ready
+            loaded = (registration,volume); accepted = true; containerStatus = .ready
             gate.unlock()
             reply(volume, nil)
         } catch { reply(nil, error) }
@@ -64,19 +55,20 @@ final class RemoteUnaryFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperation
     func unloadResource(resource: FSResource, options: FSTaskOptions,
                         replyHandler reply: @escaping @Sendable ((any Error)?) -> Void) {
         do {
-            _ = try exact(resource)
+            guard let path = resource as? FSPathURLResource, !path.isWritable else { throw workError(EINVAL) }
             guard options.taskOptions.isEmpty else { throw workError(ENOTSUP) }
             gate.lock()
-            guard let volume = loaded, !unloading else { gate.unlock(); throw workError(EBUSY) }
+            guard let (registration, volume) = loaded, registration.ticket.matches(path.url), !unloading else { gate.unlock(); throw workError(EBUSY) }
             unloading = true; gate.unlock()
             do {
-                try ticket.check()
+                try registration.check()
                 try volume.acknowledgeUnload()
             } catch {
                 gate.lock(); unloading = false; gate.unlock()
                 throw error // Still own the original. Never drop a live/misordered volume.
             }
-            gate.lock(); loaded = nil; unloading = false; gate.unlock()
+            gate.lock(); loaded = nil; unloading = false; claimed = nil
+            containerStatus = .notReady(status:workError(EAGAIN)); gate.unlock()
             reply(nil)
         } catch { reply(error) }
     }

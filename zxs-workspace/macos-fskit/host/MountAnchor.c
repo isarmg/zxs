@@ -123,6 +123,14 @@ int zxs_mount_bind(zxs_mount_anchor *a, const char *path, const unsigned char uu
     return e;
 }
 
+int zxs_mount_live(zxs_mount_anchor *a) {
+    if (!a || a->unknown || a->detached || a->root<0) return ESTALE;
+    int e=gate_parent(a);
+    if (!e) e=table(a,0); /* MNT_NOWAIT. Never re-open the mounted path on the GUI poll. */
+    if (e) a->unknown=1;
+    return e;
+}
+
 int zxs_mount_check(zxs_mount_anchor *a) {
     if (!a || a->unknown || a->detached || a->root<0) return ESTALE;
     int e=gate_parent(a);

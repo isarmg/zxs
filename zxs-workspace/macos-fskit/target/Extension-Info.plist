@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>ZxsDistributionTeam</key><string>$(DEVELOPMENT_TEAM)</string>
+  <key>EXAppExtensionAttributes</key><dict>
+    <key>EXExtensionPointIdentifier</key><string>com.apple.fskit.fsmodule</string>
+    <key>FSShortName</key><string>zxswork</string>
+    <key>FSSupportsBlockResources</key><false/>
+    <key>FSSupportsPathURLs</key><true/>
+    <key>FSSupportsGenericURLResources</key><false/>
+    <key>FSRequiresSecurityScopedPathURLResources</key><false/>
+    <key>FSActivateOptionSyntax</key><dict><key>shortOptions</key><string>o:</string></dict>
+    <key>FSMediaTypes</key><dict/><key>FSPersonalities</key><dict/>
+  </dict>
+</dict></plist>

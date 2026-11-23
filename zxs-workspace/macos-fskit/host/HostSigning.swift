@@ -57,11 +57,12 @@ enum HostSigning {
                                    req) == errSecSuccess else { throw workError(EPERM) }
     }
 
-    static func checkInstalled() async throws {
+    #if !ZXS_FSKIT_PROVIDER
+    static func checkHostProcess() throws {
         guard let team = Bundle.main.object(forInfoDictionaryKey: "ZxsDistributionTeam") as? String,
-              Bundle.main.bundleIdentifier == hostID, let embedded = Bundle.main.builtInPlugInsURL,
+              Bundle.main.bundleIdentifier == hostID,
               getuid() != 0, geteuid() == getuid(), getgid() == getegid() else { throw workError(EPERM) }
-        let host = try requireCode(hostID, team: team), module = try requireCode(moduleID, team: team)
+        let host = try requireCode(hostID, team: team)
         var current: SecCode?
         guard SecCodeCopySelf(base, &current) == errSecSuccess, let current,
               SecCodeCheckValidity(current, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSNoNetworkAccess),
@@ -72,9 +73,15 @@ enum HostSigning {
                   as? [String], groups.contains(group),
               !yes(SecTaskCopyValueForEntitlement(task, "com.apple.security.get-task-allow" as CFString, nil))
         else { throw workError(EPERM) }
+    }
+
+    static func checkInstalled() async throws {
+        try checkHostProcess()
+        guard let team = Bundle.main.object(forInfoDictionaryKey: "ZxsDistributionTeam") as? String else { throw workError(EPERM) }
+        let host = try requireCode(hostID, team: team), module = try requireCode(moduleID, team: team)
         let modules = try await FSClient.shared.installedExtensions.filter { $0.bundleIdentifier == moduleID }
         guard modules.count == 1, let installed = modules.first, installed.isEnabled else { throw workError(ENODEV) }
-        let expected = embedded.appendingPathComponent("ZxsRemoteFS.appex", isDirectory: true)
+        let expected = Bundle.main.bundleURL.appendingPathComponent("Contents/Extensions/ZxsRemoteFS.appex", isDirectory: true)
         func literal(_ url: URL) throws -> [UInt8] {
             guard url.isFileURL, url.host == nil || url.host == "", url.query == nil, url.fragment == nil
             else { throw workError(ESTALE) }
@@ -96,4 +103,5 @@ enum HostSigning {
               let permitted = ent["com.apple.security.application-groups"] as? [String], permitted.contains(group)
         else { throw workError(EPERM) }
     }
+    #endif
 }

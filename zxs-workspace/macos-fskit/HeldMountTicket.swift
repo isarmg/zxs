@@ -7,18 +7,19 @@ import Foundation
 @available(macOS 27.0, *)
 final class HeldMountTicket {
     static let group = "group.org.zipworkspace.desktop.remotefs"
-    let token: String, volume: UUID
+    let token: String, digest: String, volume: UUID
     let directory: FileHandle, ticket: FileHandle
     let directoryID: WorkWitness, ticketID: WorkWitness
     let directoryURL: URL, url: URL
 
-    init(token: String, expectedVolume: UUID, directory: FileHandle, registered: WorkWitness,
+    init(token: String, digest: String, expectedVolume: UUID, directory: FileHandle, registered: WorkWitness,
          emptyTicket: FileHandle, issued: WorkWitness) throws {
-        guard token.utf8.count == 32, token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+        guard digest.utf8.count == 64, digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              token.utf8.count == 32, token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
               !token.utf8.allSatisfy({ $0 == 48 }), registered.volumeHex == issued.volumeHex,
               let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.group)
         else { throw workError(EINVAL) }
-        self.token = token; volume = expectedVolume
+        self.token = token; self.digest = digest; volume = expectedVolume
         directoryID = registered; ticketID = issued
         func duplicate(_ h: FileHandle) throws -> FileHandle {
             let fd = fcntl(h.fileDescriptor, F_DUPFD_CLOEXEC, 0)
@@ -37,17 +38,15 @@ final class HeldMountTicket {
         let ds = ("work-" + token).withCString { zxs_work_spelling(directory.fileDescriptor, $0) }
         let ts = "ticket".withCString { zxs_work_spelling(ticket.fileDescriptor, $0) }
         guard ds == 0, ts == 0 else { throw workError(ds == 0 ? ts : ds) }
-        var namedDir = stat(), heldDir = stat(), namedTicket = stat(), direct = stat(), original = stat()
-        let p = directoryURL.withUnsafeFileSystemRepresentation { $0 == nil ? -1 : lstat($0!, &namedDir) }
-        let t = url.withUnsafeFileSystemRepresentation { $0 == nil ? -1 : lstat($0!, &direct) }
-        guard p == 0, t == 0, fstat(directory.fileDescriptor, &heldDir) == 0,
-              fstatat(directory.fileDescriptor, "ticket", &namedTicket, AT_SYMLINK_NOFOLLOW) == 0,
-              fstat(ticket.fileDescriptor, &original) == 0 else { throw workError(errno) }
-        let flags = fcntl(ticket.fileDescriptor, F_GETFL)
-        guard flags >= 0, flags & O_ACCMODE == O_RDONLY, original.st_size == 0,
-              namedDir.st_dev == heldDir.st_dev, namedDir.st_ino == heldDir.st_ino,
-              namedTicket.st_dev == original.st_dev, namedTicket.st_ino == original.st_ino,
-              direct.st_dev == original.st_dev, direct.st_ino == original.st_ino else { throw workError(ESTALE) }
+        var namedTicket=stat(), original=stat()
+        let p=directoryURL.withUnsafeFileSystemRepresentation { $0==nil ? EINVAL : zxs_work_path(directory.fileDescriptor,$0!) }
+        let t=url.withUnsafeFileSystemRepresentation { $0==nil ? EINVAL : zxs_work_path(ticket.fileDescriptor,$0!) }
+        guard p==0, t==0 else { throw workError(p==0 ? t : p) }
+        guard fstatat(directory.fileDescriptor,"ticket",&namedTicket,AT_SYMLINK_NOFOLLOW)==0,
+              fstat(ticket.fileDescriptor,&original)==0 else { throw workError(errno) }
+        let flags=fcntl(ticket.fileDescriptor,F_GETFL)
+        guard flags>=0, flags&O_ACCMODE==O_RDONLY, original.st_size==0,
+              namedTicket.st_dev==original.st_dev, namedTicket.st_ino==original.st_ino else { throw workError(ESTALE) }
     }
 
     func matches(_ supplied: URL) -> Bool {
@@ -63,7 +62,7 @@ final class HeldMountTicket {
     }
 
     private var originalMark: Data {
-        Data(("ZXS-FSKIT-1\n" + token + "\n" + volume.uuidString.lowercased() + "\n" +
+        Data(("ZXS-FSKIT-2\n" + token + "\n" + digest + "\n" + volume.uuidString.lowercased() + "\n" +
               directoryID.volumeHex + "\n" + String(directoryID.inode) + ":" + String(directoryID.birthSec) +
               ":" + String(directoryID.birthNsec) + "\n" + String(ticketID.inode) + ":" + String(ticketID.birthSec) +
               ":" + String(ticketID.birthNsec) + "\n").utf8)

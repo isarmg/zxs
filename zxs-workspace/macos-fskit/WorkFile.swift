@@ -3,38 +3,6 @@ import Darwin
 import Foundation
 import FSKit
 
-// These values must come from the controller's existing durable, private work
-// registration, not from URL input or statting a new selection under a display name.
-struct WorkWitness: Equatable {
-    let volumeHex: String
-    let inode: UInt64
-    let birthSec: Int64
-    let birthNsec: Int64
-
-    func check(_ fd: Int32, directory: Bool) throws {
-        let code = volumeHex.withCString {
-            zxs_work_evidence(fd, directory ? 1 : 0, $0, inode, birthSec, birthNsec)
-        }
-        if code != 0 { throw workError(code) }
-    }
-}
-
-func workError(_ value: Int32) -> NSError {
-    NSError(domain: NSPOSIXErrorDomain, code: Int(value))
-}
-
-struct WorkGeneration {
-    let size: Int64
-    let mtimeSec: Int64, mtimeNsec: Int64
-    let ctimeSec: Int64, ctimeNsec: Int64
-    let sha256: String
-
-    func matches(_ s: stat) -> Bool {
-        size == s.st_size && mtimeSec == Int64(s.st_mtimespec.tv_sec) && mtimeNsec == Int64(s.st_mtimespec.tv_nsec)
-            && ctimeSec == Int64(s.st_ctimespec.tv_sec) && ctimeNsec == Int64(s.st_ctimespec.tv_nsec)
-    }
-}
-
 private final class OwnedFD {
     private(set) var number: Int32
     init(_ fd: Int32) { number = fd }
@@ -49,7 +17,7 @@ private final class OwnedFD {
 @available(macOS 27.0, *)
 final class WorkFile {
     static let maxIO = 16 << 20
-    static let maxFile: off_t = 128 << 30
+    static let maxFile = maximumWorkFileBytes
     private let lock = NSLock()
     private let parent: OwnedFD
     private let parentID: WorkWitness
