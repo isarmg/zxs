@@ -173,7 +173,7 @@ impl State {
         let mut current = self.branches.get(MAIN).copied().flatten();
         // Traversal is bounded by the actual immutable history. Each node
         // has an earlier position, so no arbitrary depth limit is added.
-        let mut before = self.sequence.checked_add(1).unwrap_or(u64::MAX);
+        let mut before = self.sequence.saturating_add(1);
         while let Some(id) = current {
             let node = self.nodes.get(&id).ok_or(Conflict::MissingNode)?;
             if node.sequence >= before {
@@ -245,10 +245,9 @@ impl State {
                             expected_head: None,
                         },
                     ) = (initial_name, target)
+                        && name == MAIN
                     {
-                        if name == MAIN {
-                            return label(display);
-                        }
+                        return label(display);
                     }
                     return Err(Conflict::MissingContainer);
                 }

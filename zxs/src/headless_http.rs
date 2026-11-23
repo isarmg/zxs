@@ -204,16 +204,26 @@ fn head(raw: &[u8]) -> Result<Head<'_>, Problem> {
 /// timeouts and secret-free logs.
 ///
 /// Dispatcher must decode one exact bounded JSON object or consume the full
-/// streaming SaveNode, checking length and digest before selection.
+/// streaming `SaveNode`, checking length and digest before selection.
 /// DELETE delegates to the container store; the adapter does not create receipts.
 pub(crate) fn serve_one(
     account: &Account,
     stream: UnixStream,
     dispatch: impl FnOnce(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
 ) -> io::Result<()> {
-    let peer = account.admit_peer(&stream)?;
-    let mut input = BufReader::new(&stream);
-    let mut output = &stream;
+    let result = serve_request(account, &stream, dispatch);
+    drop(stream);
+    result
+}
+
+fn serve_request(
+    account: &Account,
+    stream: &UnixStream,
+    dispatch: impl FnOnce(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
+) -> io::Result<()> {
+    let peer = account.admit_peer(stream)?;
+    let mut input = BufReader::new(stream);
+    let mut output = stream;
     let raw = match read_head(&mut input) {
         Ok(raw) => raw,
         Err(e)
@@ -245,7 +255,7 @@ pub(crate) fn serve_one(
         Ok(body) => body,
         Err(problem) => return write_outcome(&mut output, Outcome::Failed(problem)),
     };
-    let outcome = match account.with_admission(permit, |live| dispatch(request, &mut bounded, live))
+    let outcome = match permit.with_admission(account, |live| dispatch(request, &mut bounded, live))
     {
         Ok(result) if matches!(result, Outcome::Failed(_)) || bounded.exhausted() => result,
         Ok(_) => Outcome::Failed(Problem::Unavailable),

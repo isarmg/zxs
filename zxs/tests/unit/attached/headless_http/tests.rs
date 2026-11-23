@@ -22,15 +22,16 @@ fn r3_create_branch_uses_exact_json_extent() {
     let mut combined = wire.to_vec();
     combined.extend_from_slice(b"unrelated pipeline bytes");
     let mut physical = combined.as_slice();
-    let mut inbound = body_for(&request, &mut physical).ok().unwrap();
-    let Incoming::Json(body) = &mut inbound else {
-        panic!("expected bounded JSON");
-    };
-    let mut actual = Vec::new();
-    body.read_to_end(&mut actual).unwrap();
-    assert_eq!(actual, wire);
-    assert!(inbound.exhausted());
-    drop(inbound);
+    {
+        let mut inbound = body_for(&request, &mut physical).ok().unwrap();
+        let Incoming::Json(body) = &mut inbound else {
+            panic!("expected bounded JSON");
+        };
+        let mut actual = Vec::new();
+        body.read_to_end(&mut actual).unwrap();
+        assert_eq!(actual, wire);
+        assert!(inbound.exhausted());
+    }
     assert_eq!(physical, b"unrelated pipeline bytes");
 }
 

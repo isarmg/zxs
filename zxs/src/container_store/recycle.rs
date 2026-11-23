@@ -2,7 +2,7 @@
 //! A small SYSTEM receipt selects exactly one qualified R installation.
 use super::{
     Change, Error, Id, Mutation, Stage, State, create_file, ensure_dir, entry_leaf, hex, invalid,
-    open_file, private_dir, read_state, recycle_material, sync_dir, write_file,
+    open_file, private_dir, recycle_material, sync_dir, write_file,
 };
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
@@ -101,7 +101,7 @@ impl RecycleReceipt {
 /// selection. Chosen receipts never require opening the former F container.
 pub(super) struct Recycle {
     system: HeldDir,
-    recycle: HeldDir,
+    archive_root: HeldDir,
     moves: PathBuf,
     staging: PathBuf,
     arrived: PathBuf,
@@ -164,7 +164,7 @@ impl Recycle {
         recycle.require_named()?;
         Ok(Self {
             system,
-            recycle,
+            archive_root: recycle,
             moves,
             staging,
             arrived,
@@ -193,7 +193,7 @@ impl Recycle {
 
     fn held(&self) -> io::Result<()> {
         self.system_held()?;
-        self.recycle.require_named()?;
+        self.archive_root.require_named()?;
         self.staging_directory.require_named()?;
         self.arrived_directory.require_named()
     }
@@ -211,7 +211,7 @@ impl Recycle {
         private_dir(directory)?;
         let selected = HeldDir::trusted_storage(directory)?;
         let known = selected.file.metadata()?;
-        if !self.recycle.same_mount(&selected)? {
+        if !self.archive_root.same_mount(&selected)? {
             return Err(invalid("selected recycle data crosses its enrolled mount"));
         }
         if (known.dev(), known.ino()) != (ready.recycle_device, ready.recycle_inode)
@@ -302,7 +302,7 @@ impl Recycle {
         }
         let target = HeldDir::trusted_storage(&candidate.path)?;
         let target_data = HeldDir::trusted_storage(&data)?;
-        if !self.recycle.same_mount(&target)? || !target.same_mount(&target_data)? {
+        if !self.archive_root.same_mount(&target)? || !target.same_mount(&target_data)? {
             return Err(invalid("recycle candidate crossed its enrolled R mount").into());
         }
         let mut evidence = create_file(&candidate.path.join("source-proof"))?;
@@ -423,7 +423,7 @@ impl Recycle {
         }
         original.require_named()?;
         let proof_root = HeldDir::trusted_storage(&self.arrived_dir(receipt.mutation))?;
-        if !self.recycle.same_mount(&proof_root)? {
+        if !self.archive_root.same_mount(&proof_root)? {
             return Err(invalid("retirement evidence crosses original R mount"));
         }
         let proof = proof_root

@@ -5,7 +5,6 @@ compile_error!("helper currently supports Linux x86_64 (LP64) only");
 
 mod block_tools;
 mod disk_web;
-#[cfg(any(test, feature = "embedded-zxs"))]
 mod embedded_image;
 mod fs_tools;
 mod fresh_password;

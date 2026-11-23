@@ -195,19 +195,19 @@ impl Store {
     pub(crate) fn save(
         &self,
         mutation: Mutation,
-        target: Target,
-        node: NodeId,
-        body: Body,
-        initial_name: Option<String>,
+        change: Change,
         mut input: impl Read,
         authorize: impl FnOnce() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
+        let Change::Save { body, .. } = &change else {
+            return Err(invalid("a node requires a complete save operation").into());
+        };
         let stage = self.stage()?;
         {
             let mut file = create_file(&stage.path.join("payload"))?;
             let mut digest = Sha256::new();
             let mut left = body.length;
-            let mut block = [0; 64 * 1024];
+            let mut block = vec![0; 64 * 1024];
             while left != 0 {
                 let take = usize::try_from(left.min(block.len() as u64))
                     .map_err(|_| invalid("invalid node intake window"))?;
@@ -227,17 +227,7 @@ impl Store {
             }
             file.sync_all()?;
         }
-        self.publish(
-            mutation,
-            Change::Save {
-                target,
-                node,
-                body,
-                initial_name,
-            },
-            stage,
-            authorize,
-        )
+        self.publish(mutation, change, &stage, authorize)
     }
 
     pub(crate) fn change(
@@ -249,14 +239,14 @@ impl Store {
         if matches!(change, Change::Save { .. }) {
             return Err(invalid("a node must carry the original complete body").into());
         }
-        self.publish(mutation, change, self.stage()?, authorize)
+        self.publish(mutation, change, &self.stage()?, authorize)
     }
 
     fn publish(
         &self,
         mutation: Mutation,
         change: Change,
-        stage: Stage,
+        stage: &Stage,
         authorize: impl FnOnce() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
         let id = mutation.container;
@@ -269,8 +259,8 @@ impl Store {
             authorize()?;
             return Err(Conflict::MissingContainer.into());
         }
-        let state = self.load(id, &mut memory)?;
-        match state.replay(mutation, &change) {
+        let selected = self.load(id, &mut memory)?;
+        match selected.replay(mutation, &change) {
             Ok(None) => {}
             result => {
                 authorize()?;
@@ -279,7 +269,7 @@ impl Store {
                     .ok_or_else(|| invalid("missing replay").into());
             }
         }
-        let receipt = match state.next(mutation, change) {
+        let receipt = match selected.next(mutation, change) {
             Ok(receipt) => receipt,
             Err(e) => {
                 authorize()?;
@@ -301,11 +291,11 @@ impl Store {
                     .map_err(|_| invalid("container name selection unavailable"))
             })
             .transpose()?;
-        if let Some(name) = wanted {
-            if !self.vacant(id, name)? {
-                authorize()?;
-                return Err(Conflict::AlreadyExists.into());
-            }
+        if let Some(name) = wanted
+            && !self.vacant(id, name)?
+        {
+            authorize()?;
+            return Err(Conflict::AlreadyExists.into());
         }
         let directory = self.data.join(hex(id));
         ensure_dir(&directory)?;
@@ -325,7 +315,7 @@ impl Store {
             *memory = None;
             return Err(Error::Uncertain(e));
         }
-        if let Err(e) = state.select(receipt.clone()) {
+        if let Err(e) = selected.select(receipt.clone()) {
             // A durable rename already selected. The next reader must requalify.
             *memory = None;
             return Err(Error::Uncertain(io::Error::other(format!(
@@ -551,7 +541,7 @@ impl Store {
                 "complete node length differs from its durable receipt",
             ));
         }
-        Ok(Some(NodeBytes { file, node }))
+        Ok(Some(NodeBytes { node, file }))
     }
 }
 
@@ -617,7 +607,7 @@ fn read_state(path: &Path, id: Id) -> io::Result<State> {
 /// Recognize only the flat staging format; selected data and recycle roots
 /// are not traversed. Never follow an unexpected member or read file bytes.
 fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -> io::Result<()> {
-    let owned = owner.metadata()?;
+    let original_lease = owner.metadata()?;
     let require_base = || {
         root.require_named()?;
         staging.require_named()?;
@@ -625,7 +615,7 @@ fn discard_interrupted_intake(root: &HeldDir, staging: &HeldDir, owner: &File) -
             .opaque_pin(c"owner")?
             .ok_or_else(|| invalid("intake owner lease lost its name"))?;
         let seen = named.file.metadata()?;
-        if (owned.dev(), owned.ino()) != (seen.dev(), seen.ino())
+        if (original_lease.dev(), original_lease.ino()) != (seen.dev(), seen.ino())
             || !root.shares_file_mount(owner)?
         {
             return Err(invalid("intake owner lease was replaced"));
@@ -780,7 +770,7 @@ fn parse_container_id(name: &[u8]) -> io::Result<Id> {
         _ => Err(invalid("invalid container directory identifier")),
     };
     let mut id = [0; 16];
-    for (byte, pair) in id.iter_mut().zip(name.chunks_exact(2)) {
+    for (byte, pair) in id.iter_mut().zip(name.as_chunks::<2>().0) {
         *byte = (digit(pair[0])? << 4) | digit(pair[1])?;
     }
     if id == [0; 16] {
@@ -819,7 +809,13 @@ fn encode_tags(tags: &[String]) -> io::Result<Vec<u8>> {
                 "invalid tag or excessive tag metadata",
             ));
         }
-        bytes.extend_from_slice(&(tag.len() as u32).to_be_bytes());
+        let length = u32::try_from(tag.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "tag length exceeds its storage field",
+            )
+        })?;
+        bytes.extend_from_slice(&length.to_be_bytes());
         bytes.extend_from_slice(tag.as_bytes());
     }
     Ok(bytes)

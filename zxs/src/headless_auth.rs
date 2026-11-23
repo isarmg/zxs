@@ -58,7 +58,7 @@ impl Descriptor {
     /// open the exact Helper-selected, no-follow regular file beneath that
     /// protected directory. This function does not discover root identity or
     /// trust a user-selected pathname. Keep the lease through service drain.
-    pub(crate) fn read_selected(file: File, owner: u32) -> io::Result<Self> {
+    pub(crate) fn read_selected(file: &File, owner: u32) -> io::Result<Self> {
         let info = file.metadata()?;
         if !info.is_file()
             || info.nlink() != 1
@@ -83,9 +83,7 @@ impl Descriptor {
             )
         };
         let mut raw = Vec::with_capacity(MAX_DESCRIPTOR);
-        (&file)
-            .take(MAX_DESCRIPTOR as u64 + 1)
-            .read_to_end(&mut raw)?;
+        file.take(MAX_DESCRIPTOR as u64 + 1).read_to_end(&mut raw)?;
         if raw.len() as u64 != info.len() || stamp(&file.metadata()?) != stamp(&info) {
             return Err(invalid());
         }
@@ -240,21 +238,23 @@ impl Account {
     pub(crate) fn stop_admission(&self) {
         self.open.store(false, Ordering::Release);
     }
+}
 
+impl Permit<'_> {
     /// HTTP adapter runs the new typed dispatch here (exactly one complete
     /// request). Check the permit before inspecting Store, and pass the
     /// borrowed predicate into selection. The predicate never takes a Store
     /// lock, reads from the socket or authorizes any other Account/epoch.
     pub(crate) fn with_admission<T>(
-        &self,
-        permit: Permit<'_>,
+        self,
+        account: &Account,
         one_request: impl FnOnce(&dyn Fn() -> bool) -> T,
     ) -> Result<T, AuthError> {
         let allowed = || {
-            std::ptr::eq(self, permit.account)
-                && permit.pool == self.pool
-                && permit.epoch == self.epoch
-                && self.open.load(Ordering::Acquire)
+            std::ptr::eq(account, self.account)
+                && self.pool == account.pool
+                && self.epoch == account.epoch
+                && account.open.load(Ordering::Acquire)
         };
         if !allowed() {
             return Err(AuthError::Unavailable);
@@ -308,7 +308,7 @@ fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
             libc::SOL_SOCKET,
             libc::SO_PEERCRED,
             cred.as_mut_ptr().cast(),
-            &mut len,
+            &raw mut len,
         )
     };
     if result != 0 {
@@ -376,14 +376,14 @@ fn decode_basic(value: &str) -> Result<Vec<u8>, AuthError> {
     {
         return Err(invalid);
     }
-    let mut groups = encoded.as_bytes().chunks_exact(4).peekable();
+    let mut groups = encoded.as_bytes().as_chunks::<4>().0.iter().peekable();
     let mut data = Vec::with_capacity(encoded.len() / 4 * 3);
     while let Some(q) = groups.next() {
         let a = digit(q[0])?;
         let b = digit(q[1])?;
         data.push(a << 2 | b >> 4);
         match (q[2], q[3]) {
-            (b'=', b'=') if groups.peek().is_none() && b & 15 == 0 => {}
+            (b'=', b'=') if groups.peek().is_none() && b.trailing_zeros() >= 4 => {}
             (b'=', _) => return Err(invalid),
             (c, b'=') if groups.peek().is_none() => {
                 let c = digit(c)?;

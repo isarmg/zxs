@@ -30,6 +30,9 @@ impl Verifier {
         Self { salt, tag }
     }
     pub(crate) fn matches(&self, password: &str) -> io::Result<bool> {
+        // A single process can allocate at most one 64 MiB verification at once.
+        // Per-client/remote login throttling remains the network endpoint's job.
+        static KDF: Mutex<()> = Mutex::new(());
         if password.is_empty() || password.len() > 1024 {
             return Ok(false);
         }
@@ -38,9 +41,6 @@ impl Verifier {
             static FIXTURE_KDF: Mutex<()> = Mutex::new(());
             FIXTURE_KDF.lock().expect("password fixture lock poisoned")
         };
-        // A single process can allocate at most one 64 MiB verification at once.
-        // Per-client/remote login throttling remains the network endpoint's job.
-        static KDF: Mutex<()> = Mutex::new(());
         let _slot = KDF.try_lock().map_err(|_| {
             io::Error::new(io::ErrorKind::WouldBlock, "password verifier unavailable")
         })?;

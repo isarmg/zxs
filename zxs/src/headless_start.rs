@@ -54,7 +54,7 @@ fn open_member(parent: &HeldDir, name: &CStr) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn root(selected: SelectedRoot, role: u8, pool: &[u8; 16], uid: u32) -> io::Result<HeldDir> {
+fn root(selected: &SelectedRoot, role: u8, pool: &[u8; 16], uid: u32) -> io::Result<HeldDir> {
     let held = HeldDir::trusted_storage(selected.path())?;
     let mut marker = open_member(&held, MARKER)?;
     let initial = marker.metadata()?;
@@ -125,10 +125,10 @@ impl SelectedStart {
         let state = HeldDir::trusted_storage(Path::new(DEFAULT_STATE))?;
         state.share()?; // same original directory lease used by the offline issuer
         let (roots, account) =
-            Descriptor::read_selected(open_member(&state, DESCRIPTOR)?, uid)?.into_parts();
-        let system = root(roots.system, 0, &roots.pool, uid)?;
-        let data = root(roots.data, 1, &roots.pool, uid)?;
-        let recycle = root(roots.recycle, 2, &roots.pool, uid)?;
+            Descriptor::read_selected(&open_member(&state, DESCRIPTOR)?, uid)?.into_parts();
+        let system = root(&roots.system, 0, &roots.pool, uid)?;
+        let data = root(&roots.data, 1, &roots.pool, uid)?;
+        let recycle = root(&roots.recycle, 2, &roots.pool, uid)?;
         let roots = [&system, &data, &recycle];
         if roots.iter().any(|root| {
             state.path.starts_with(&root.path)

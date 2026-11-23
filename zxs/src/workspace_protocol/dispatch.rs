@@ -120,33 +120,9 @@ pub(crate) fn dispatch<R: Read>(
                 operation,
             },
             Body::Empty,
-        ) => {
-            let op = mutation(container, operation);
-            let evidence = match (store.receipt(op), store.recycle_receipt(op)) {
-                (Ok(Some(r)), Ok(None)) if r.mutation == op => ReceiptLookup::Mutation(r),
-                (Ok(None), Ok(Some(r))) if r.mutation == op => ReceiptLookup::Recycle(r),
-                (Ok(None), Ok(None)) => ReceiptLookup::NotFound,
-                _ => ReceiptLookup::Unknown,
-            };
-            Ok(Reply::Receipt(evidence))
-        }
+        ) => Ok(Reply::Receipt(lookup_receipt(store, container, operation))),
         (Request::SaveNode(save), Body::Blob(reader)) => save_node(store, save, reader, authorize),
-        (Request::Delete(scope), Body::Empty) => {
-            let op = metadata(scope);
-            let (selected, source_cleanup_pending) =
-                match store.move_to_recycle(op, scope.revision, authorize) {
-                    Ok(receipt) => (receipt, false),
-                    Err(core::Error::CleanupPending { receipt, .. }) => (receipt, true),
-                    Err(error) => return Err(failed(error)),
-                };
-            if selected.mutation != op || selected.original_sequence != scope.revision {
-                return Err(Failure::Unavailable);
-            }
-            Ok(Reply::Recycle {
-                selected,
-                source_cleanup_pending,
-            })
-        }
+        (Request::Delete(scope), Body::Empty) => recycle(store, scope, authorize),
         (
             Request::Json {
                 scope,
@@ -172,7 +148,7 @@ pub(crate) fn dispatch<R: Read>(
             let op = metadata(scope);
             let receipt = store
                 .change(op, change.clone(), authorize)
-                .map_err(failed)?;
+                .map_err(|error| failed(&error))?;
             receipt_for(receipt, op, &change)
         }
         (
@@ -194,7 +170,7 @@ pub(crate) fn dispatch<R: Read>(
             };
             let receipt = store
                 .change(op, change.clone(), authorize)
-                .map_err(failed)?;
+                .map_err(|error| failed(&error))?;
             receipt_for(receipt, op, &change)
         }
         (Request::BranchNodes { container, branch }, Body::Empty) => Ok(Reply::BranchNodes(
@@ -205,4 +181,35 @@ pub(crate) fn dispatch<R: Read>(
         )),
         _ => Err(Failure::BadBody),
     }
+}
+
+fn lookup_receipt(store: &core::Store, container: Id, operation: Id) -> ReceiptLookup {
+    let op = mutation(container, operation);
+    match (store.receipt(op), store.recycle_receipt(op)) {
+        (Ok(Some(r)), Ok(None)) if r.mutation == op => ReceiptLookup::Mutation(r),
+        (Ok(None), Ok(Some(r))) if r.mutation == op => ReceiptLookup::Recycle(r),
+        (Ok(None), Ok(None)) => ReceiptLookup::NotFound,
+        _ => ReceiptLookup::Unknown,
+    }
+}
+
+fn recycle(
+    store: &core::Store,
+    scope: MetadataMutation,
+    authorize: impl Fn() -> io::Result<()>,
+) -> Result<Reply, Failure> {
+    let op = metadata(scope);
+    let (selected, source_cleanup_pending) =
+        match store.move_to_recycle(op, scope.revision, authorize) {
+            Ok(receipt) => (receipt, false),
+            Err(core::Error::CleanupPending { receipt, .. }) => (receipt, true),
+            Err(error) => return Err(failed(&error)),
+        };
+    if selected.mutation != op || selected.original_sequence != scope.revision {
+        return Err(Failure::Unavailable);
+    }
+    Ok(Reply::Recycle {
+        selected,
+        source_cleanup_pending,
+    })
 }

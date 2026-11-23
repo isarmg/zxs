@@ -185,7 +185,12 @@ impl GatewayRun {
         enrolled_uid: u32,
         state: &ServiceEpoch,
     ) -> io::Result<Self> {
-        let raw = checked_receipt::<{ RECORD + SERVICE_TAIL }>(&inputs.loaded_receipt)?;
+        let LaunchFds {
+            original_pidfd: pidfd,
+            approved_config: approved,
+            loaded_receipt,
+        } = inputs;
+        let raw = checked_receipt::<{ RECORD + SERVICE_TAIL }>(&loaded_receipt)?;
         let mut data = raw.strip_prefix(PREFIX).ok_or_else(bad)?;
         let uid = u32::from_be_bytes(next(&mut data)?);
         let process = (
@@ -204,9 +209,7 @@ impl GatewayRun {
             return Err(bad());
         }
 
-        // Clone the exact kernel objects; never reconstruct from a numeric PID.
-        let pidfd = inputs.original_pidfd.try_clone()?;
-        let approved = inputs.approved_config.try_clone()?;
+        // Keep the exact kernel objects; never reconstruct from a numeric PID.
         // SAFETY: F_GETFL observes only the retained config descriptor.
         let flags = unsafe { libc::fcntl(approved.as_raw_fd(), libc::F_GETFL) };
         if flags < 0 || flags & (libc::O_ACCMODE | libc::O_PATH) != libc::O_RDONLY {
@@ -589,7 +592,7 @@ fn load_service(policy: &ApprovedService, gateway: &LaunchFds) -> io::Result<(Fi
     }
     // SAFETY: successful openat created a unique owned descriptor.
     let descriptor = unsafe { File::from_raw_fd(fd) };
-    let (_, account) = Descriptor::read_selected(descriptor, policy.uid)?.into_parts();
+    let (_, account) = Descriptor::read_selected(&descriptor, policy.uid)?.into_parts();
     let uid = account.gateway_uid();
     if uid == policy.uid {
         return Err(bad());

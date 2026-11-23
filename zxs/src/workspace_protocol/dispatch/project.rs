@@ -41,7 +41,7 @@ pub(super) fn receipt_for(
     Ok(Reply::Mutation(receipt))
 }
 
-pub(super) fn failed(error: core::Error) -> Failure {
+pub(super) fn failed(error: &core::Error) -> Failure {
     match error {
         core::Error::WrongLength | core::Error::WrongDigest => Failure::InvalidBody,
         core::Error::Conflict(
@@ -49,7 +49,7 @@ pub(super) fn failed(error: core::Error) -> Failure {
             | core::Conflict::MissingBranch
             | core::Conflict::MissingNode,
         ) => Failure::Missing,
-        core::Error::Conflict(core::Conflict::Invalid(ref error)) => {
+        core::Error::Conflict(core::Conflict::Invalid(error)) => {
             if error.kind() == io::ErrorKind::InvalidInput {
                 Failure::BadBody
             } else {
@@ -57,8 +57,10 @@ pub(super) fn failed(error: core::Error) -> Failure {
             }
         }
         core::Error::Conflict(_) => Failure::Conflict,
-        core::Error::Io(ref error)
-            if error.get_ref().is_some_and(|cause| cause.is::<Revoked>()) =>
+        core::Error::Io(error)
+            if error
+                .get_ref()
+                .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Revoked>) =>
         {
             Failure::Denied
         }
@@ -111,14 +113,14 @@ pub(super) fn save_node<R: Read>(
         ),
     };
     let exact = core::Change::Save {
-        target: target.clone(),
+        target,
         node,
-        body: body.clone(),
-        initial_name: name.clone(),
+        body,
+        initial_name: name,
     };
     let receipt = store
-        .save(op, target, node, body, name, raw, authorize)
-        .map_err(failed)?;
+        .save(op, exact.clone(), raw, authorize)
+        .map_err(|error| failed(&error))?;
     receipt_for(receipt, op, &exact)
 }
 

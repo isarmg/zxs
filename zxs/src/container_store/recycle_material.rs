@@ -83,7 +83,7 @@ pub(super) fn copy(
             let mut output = create_file(&to.join("payload"))?;
             let mut digest = Sha256::new();
             let mut left = body.length;
-            let mut block = [0; 64 * 1024];
+            let mut block = vec![0; 64 * 1024];
             while left != 0 {
                 live()?;
                 let take = usize::try_from(left.min(block.len() as u64))

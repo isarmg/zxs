@@ -24,6 +24,14 @@ fn main(head: Option<NodeId>) -> Target {
         expected_head: head,
     }
 }
+fn full(target: Target, node: NodeId, body: Body, initial_name: Option<String>) -> Change {
+    Change::Save {
+        target,
+        node,
+        body,
+        initial_name,
+    }
+}
 fn fixture() -> (PrivateTemp, PathBuf, Store) {
     let temp = PrivateTemp::under(&std::env::temp_dir());
     let root = temp.0.join("store");
@@ -43,10 +51,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     assert!(matches!(
         store.save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"new"),
-            Some("x.bin".into()),
+            full(main(None), id(10), body(b"new"), Some("x.bin".into())),
             &b"ne"[..],
             || Ok(())
         ),
@@ -56,10 +61,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     let first = store
         .save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"new"),
-            Some("x.bin".into()),
+            full(main(None), id(10), body(b"new"), Some("x.bin".into())),
             &b"new"[..],
             || Ok(()),
         )
@@ -71,16 +73,13 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     store
         .save(
             mutation(3),
-            main(Some(id(10))),
-            id(11),
-            body(b"second"),
-            None,
+            full(main(Some(id(10))), id(11), body(b"second"), None),
             &b"second"[..],
             || Ok(()),
         )
         .unwrap();
     assert!(matches!(
-        store.save(mutation(4), main(Some(id(10))), id(12), body(b"old"), None, &b"old"[..], || Ok(())),
+        store.save(mutation(4), full(main(Some(id(10))), id(12), body(b"old"), None), &b"old"[..], || Ok(())),
         Err(Error::Conflict(Conflict::HeadChanged(Some(head)))) if head==id(11)));
     let fork = Target::HistoricalMain {
         new_branch: "alternate".into(),
@@ -89,10 +88,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     store
         .save(
             mutation(4),
-            fork,
-            id(12),
-            body(b"old"),
-            None,
+            full(fork, id(12), body(b"old"), None),
             &b"old"[..],
             || Ok(()),
         )
@@ -125,10 +121,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
         store
             .save(
                 mutation(2),
-                main(None),
-                id(10),
-                body(b"new"),
-                Some("x.bin".into()),
+                full(main(None), id(10), body(b"new"), Some("x.bin".into())),
                 &b"new"[..],
                 || Ok(())
             )
@@ -146,10 +139,7 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
     store
         .save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"x"),
-            Some("first".into()),
+            full(main(None), id(10), body(b"x"), Some("first".into())),
             &b"x"[..],
             || Ok(()),
         )
@@ -212,6 +202,34 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
     assert_eq!(read_node(&store, 10), b"x");
 }
 
+// Leave an R copy ready but revoke the final publication authority.
+fn leave_prepared_recycle_unselected(store: &Store, original: &Path) {
+    let object = store.object(id(1)).unwrap();
+    let mut memory = object.lock().unwrap();
+    let state = store.load(id(1), &mut memory).unwrap();
+    let archive = store.archive.as_ref().unwrap();
+    let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
+    let tentative = archive
+        .prepare(
+            mutation(6),
+            &store.data_root,
+            original,
+            state,
+            &incoming,
+            || Ok(()),
+        )
+        .unwrap();
+    let selector = store.stage_at(archive.moves().unwrap()).unwrap();
+    assert!(
+        archive
+            .choose(tentative, &selector, || Err(
+                io::ErrorKind::PermissionDenied.into()
+            ))
+            .is_err()
+    );
+    assert!(archive.selected(id(1)).unwrap().is_none());
+}
+
 #[test]
 #[ignore = "requires private writable /dev/shm on a filesystem distinct from the ordinary temporary storage"]
 fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
@@ -228,10 +246,7 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     let first = store
         .save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"one"),
-            Some("name".into()),
+            full(main(None), id(10), body(b"one"), Some("name".into())),
             &b"one"[..],
             || Ok(()),
         )
@@ -239,10 +254,7 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     store
         .save(
             mutation(3),
-            main(Some(id(10))),
-            id(11),
-            body(b"two"),
-            None,
+            full(main(Some(id(10))), id(11), body(b"two"), None),
             &b"two"[..],
             || Ok(()),
         )
@@ -268,41 +280,8 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
         )
         .unwrap();
 
-    // The first terminal authorization will be revoked after the R copy.
-    // A ready R candidate is not a selected recycle position on its own.
-    let allow = std::cell::Cell::new(true);
     let original = store.data.join(hex(id(1)));
-    let object = store.object(id(1)).unwrap();
-    {
-        let mut memory = object.lock().unwrap();
-        let state = store.load(id(1), &mut memory).unwrap();
-        let archive = store.archive.as_ref().unwrap();
-        let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
-        let tentative = archive
-            .prepare(
-                mutation(6),
-                &store.data_root,
-                &original,
-                state,
-                &incoming,
-                || Ok(()),
-            )
-            .unwrap();
-        allow.set(false);
-        let selector = store.stage_at(archive.moves().unwrap()).unwrap();
-        assert!(
-            archive
-                .choose(tentative, &selector, || {
-                    if allow.get() {
-                        Ok(())
-                    } else {
-                        Err(io::ErrorKind::PermissionDenied.into())
-                    }
-                })
-                .is_err()
-        );
-        assert!(archive.selected(id(1)).unwrap().is_none());
-    }
+    leave_prepared_recycle_unselected(&store, &original);
     assert_eq!(read_node(&store, 11), b"two");
     assert_eq!(store.describe(id(1)).unwrap().unwrap().name, "name");
     let recycled = store.move_to_recycle(mutation(6), 4, || Ok(())).unwrap();
@@ -349,10 +328,7 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
     store
         .save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"one"),
-            Some("name".into()),
+            full(main(None), id(10), body(b"one"), Some("name".into())),
             &b"one"[..],
             || Ok(()),
         )
@@ -360,10 +336,7 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
     store
         .save(
             mutation(3),
-            main(Some(id(10))),
-            id(11),
-            body(b"two"),
-            None,
+            full(main(Some(id(10))), id(11), body(b"two"), None),
             &b"two"[..],
             || Ok(()),
         )
@@ -443,10 +416,7 @@ fn a_later_staging_substitution_cannot_redirect_a_whole_node_upload() {
     ensure_dir(&staging).unwrap();
     let result = store.save(
         mutation(2),
-        main(None),
-        id(10),
-        body(b"one"),
-        Some("first".into()),
+        full(main(None), id(10), body(b"one"), Some("first".into())),
         &b"one"[..],
         || Ok(()),
     );
@@ -473,10 +443,7 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
     store
         .save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"one"),
-            Some("name".into()),
+            full(main(None), id(10), body(b"one"), Some("name".into())),
             &b"one"[..],
             || Ok(()),
         )
@@ -511,10 +478,7 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
     store
         .save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"one"),
-            Some("name".into()),
+            full(main(None), id(10), body(b"one"), Some("name".into())),
             &b"one"[..],
             || Ok(()),
         )
@@ -541,10 +505,7 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
     store
         .save(
             mutation(3),
-            main(Some(id(10))),
-            id(11),
-            body(b"two"),
-            None,
+            full(main(Some(id(10))), id(11), body(b"two"), None),
             &b"two"[..],
             || Ok(()),
         )
@@ -596,10 +557,7 @@ fn reopen_discards_interrupted_intake_without_touching_selected_data() {
     store
         .save(
             mutation(2),
-            main(None),
-            id(10),
-            body(b"saved"),
-            Some("name".into()),
+            full(main(None), id(10), body(b"saved"), Some("name".into())),
             &b"saved"[..],
             || Ok(()),
         )

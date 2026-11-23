@@ -22,7 +22,7 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
         Reply::Receipt(ReceiptLookup::NotFound) => return Ok(Outcome::ReceiptAbsent),
         Reply::Receipt(ReceiptLookup::Unknown) => return Err(Problem::Unavailable),
         other => match other {
-            Reply::Containers(rows) => out.array(&rows, |o, row| o.container(row)),
+            Reply::Containers(rows) => out.array(&rows, Json::container),
             Reply::Container(row) => out.container(&row),
             Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
             Reply::BranchNodes(nodes) => out.array(&nodes, |o, (id, node)| o.node(id, node)),

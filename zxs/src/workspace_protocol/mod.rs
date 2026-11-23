@@ -15,24 +15,25 @@ fn nibble(b: u8) -> Result<u8, Rejected> {
     }
 }
 fn hex<const N: usize>(s: &str) -> Result<[u8; N], Rejected> {
-    if s.len() != N * 2 {
+    let (pairs, tail) = s.as_bytes().as_chunks::<2>();
+    if pairs.len() != N || !tail.is_empty() {
         return Err(Rejected::Value);
     }
     let mut value = [0; N];
-    for (out, pair) in value.iter_mut().zip(s.as_bytes().chunks_exact(2)) {
-        *out = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+    for (out, [high, low]) in value.iter_mut().zip(pairs) {
+        *out = (nibble(*high)? << 4) | nibble(*low)?;
     }
     Ok(value)
 }
 // Initial logical name enters the control headers as ASCII hex of its UTF-8.
 fn name_hex(s: &str) -> Result<String, Rejected> {
-    if s.is_empty() || s.len() % 2 != 0 {
+    let (pairs, tail) = s.as_bytes().as_chunks::<2>();
+    if pairs.is_empty() || !tail.is_empty() {
         return Err(Rejected::Value);
     }
-    let bytes = s
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| Ok((nibble(pair[0])? << 4) | nibble(pair[1])?))
+    let bytes = pairs
+        .iter()
+        .map(|[high, low]| Ok((nibble(*high)? << 4) | nibble(*low)?))
         .collect::<Result<Vec<_>, Rejected>>()?;
     let name = String::from_utf8(bytes).map_err(|_| Rejected::Value)?;
     if name == "."
@@ -66,6 +67,11 @@ fn field<'a>(headers: &[(&str, &'a str)], name: &str) -> Result<Option<&'a str>,
     }
     Ok(value)
 }
+
+fn required_header<'a>(headers: &[(&str, &'a str)], name: &str) -> Result<&'a str, Rejected> {
+    field(headers, name)?.ok_or(Rejected::Header)
+}
+
 pub(crate) fn request(
     method: &str,
     target: &str,
@@ -103,7 +109,7 @@ pub(crate) fn request(
         return Err(Rejected::Route);
     }
 
-    let required = |name| field(headers, name)?.ok_or(Rejected::Header);
+    let required = |name| required_header(headers, name);
     let op = || Id::parse(required("zxs-operation")?);
     let metadata = || -> Result<MetadataMutation, Rejected> {
         Ok(MetadataMutation {
@@ -165,38 +171,48 @@ pub(crate) fn request(
             })
         }
         ("POST", Some("branches"), Some(branch), Some("nodes")) => {
-            if required("content-type")? != "application/octet-stream" {
-                return Err(Rejected::Header);
-            }
-            let branch = Branch::parse(branch)?;
-            let head = field(headers, "zxs-base-node")?;
-            let name = field(headers, "zxs-initial-name")?;
-            let fork = field(headers, "zxs-fork-from-main")?;
-            let target = match (branch, head, name, fork) {
-                (Branch::Main, Some("0"), Some(name), None) => Target::FirstMain {
-                    name: name_hex(name)?,
-                },
-                (Branch::Named(new_branch), None, None, Some(original)) => Target::HistoricalMain {
-                    new_branch,
-                    original: Id::parse(original)?,
-                },
-                (branch, Some(head), None, None) => Target::Branch {
-                    branch,
-                    expected_head: Id::parse(head)?,
-                },
-                _ => return Err(Rejected::Header),
-            };
-            Ok(Request::SaveNode(SaveNode {
-                container,
-                operation: op()?,
-                node: Id::parse(required("zxs-node")?)?,
-                target,
-                length: length.ok_or(Rejected::Header)?,
-                sha256: hex(required("zxs-sha256")?)?,
-            }))
+            save_request(container, branch, headers, length)
         }
         _ => Err(Rejected::Route),
     }
+}
+
+fn save_request(
+    container: Id,
+    branch: &str,
+    headers: &[(&str, &str)],
+    length: Option<u64>,
+) -> Result<Request, Rejected> {
+    let required = |name| required_header(headers, name);
+    if required("content-type")? != "application/octet-stream" {
+        return Err(Rejected::Header);
+    }
+    let branch = Branch::parse(branch)?;
+    let head = field(headers, "zxs-base-node")?;
+    let name = field(headers, "zxs-initial-name")?;
+    let fork = field(headers, "zxs-fork-from-main")?;
+    let target = match (branch, head, name, fork) {
+        (Branch::Main, Some("0"), Some(name), None) => Target::FirstMain {
+            name: name_hex(name)?,
+        },
+        (Branch::Named(new_branch), None, None, Some(original)) => Target::HistoricalMain {
+            new_branch,
+            original: Id::parse(original)?,
+        },
+        (branch, Some(head), None, None) => Target::Branch {
+            branch,
+            expected_head: Id::parse(head)?,
+        },
+        _ => return Err(Rejected::Header),
+    };
+    Ok(Request::SaveNode(SaveNode {
+        container,
+        operation: Id::parse(required("zxs-operation")?)?,
+        node: Id::parse(required("zxs-node")?)?,
+        target,
+        length: length.ok_or(Rejected::Header)?,
+        sha256: hex(required("zxs-sha256")?)?,
+    }))
 }
 
 #[cfg(test)]
