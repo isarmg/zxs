@@ -1,8 +1,8 @@
 //! Directed whole-container move from ordinary storage to recycle storage.
 //! A small SYSTEM receipt selects exactly one qualified R installation.
 use super::{
-    Change, DataRoot, Error, Id, Mutation, Stage, State, create_file, ensure_dir, entry_leaf, hex,
-    invalid, recycle_material, sync_dir, volume::DataVolume, write_file,
+    Change, DataRoot, Error, FlatStage, Id, Mutation, Stage, State, create_file, ensure_dir,
+    entry_leaf, hex, invalid, recycle_material, sync_dir, volume::DataVolume, write_file,
 };
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
@@ -108,7 +108,6 @@ pub(super) struct Recycle {
     system: HeldDir,
     pool: Id,
     archive_root: HeldDir,
-    moves: PathBuf,
     staging: PathBuf,
     arrived: PathBuf,
     moves_directory: HeldDir,
@@ -179,7 +178,6 @@ impl Recycle {
         moves_directory.require_named()?;
         moves_directory.file.sync_all()?;
         moves_directory.require_named()?;
-        let moves = moves_directory.path.clone();
         let staging = staging_directory.path.clone();
         let arrived = arrived_directory.path.clone();
         system.require_named()?;
@@ -188,7 +186,6 @@ impl Recycle {
             system,
             pool,
             archive_root: recycle,
-            moves,
             staging,
             arrived,
             _recycle_owner: owner,
@@ -204,9 +201,9 @@ impl Recycle {
         self.held()?;
         Ok(&self.staging)
     }
-    pub(super) fn moves(&self) -> io::Result<&Path> {
+    pub(super) fn moves(&self) -> io::Result<&HeldDir> {
         self.system_held()?;
-        Ok(&self.moves)
+        Ok(&self.moves_directory)
     }
 
     fn system_held(&self) -> io::Result<()> {
@@ -359,7 +356,7 @@ impl Recycle {
     pub(super) fn choose(
         &self,
         receipt: RecycleReceipt,
-        candidate: &Stage,
+        candidate: &mut FlatStage<'_>,
         authorize: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), Error> {
         let _cut = self
@@ -367,15 +364,11 @@ impl Recycle {
             .lock()
             .map_err(|_| invalid("recycle receipt cut unavailable"))?;
         self.qualify(receipt)?;
-        let staged = candidate.path.join("selector");
-        write_file(&staged, &receipt.encode())?;
-        let selected = self.moves.join(hex(receipt.mutation.container));
-        if !matches!(fs::symlink_metadata(&selected),Err(e) if e.kind()==io::ErrorKind::NotFound) {
-            return Err(invalid("another recycle receipt is already selected").into());
-        }
-        authorize()?;
+        candidate.write(c"selector", &receipt.encode())?;
+        let selected = CString::new(hex(receipt.mutation.container))
+            .map_err(|_| invalid("invalid recycle selector name"))?;
         self.held()?;
-        fs::rename(staged, &selected)?;
+        candidate.publish_record(c"selector", &self.moves_directory, &selected, authorize)?;
         if let Err(e) = self.moves_directory.file.sync_all() {
             self.unsure.store(true, Ordering::Release);
             return Err(Error::Uncertain(e));

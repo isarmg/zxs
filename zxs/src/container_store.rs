@@ -15,7 +15,7 @@ use model::State;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
-use stage::DataStage;
+use stage::FlatStage;
 use std::{
     collections::BTreeMap,
     ffi::CString,
@@ -272,9 +272,12 @@ impl Store {
         }
         Ok(objects.entry(id).or_default().clone())
     }
-    fn stage<'a>(&self, volume: &'a DataVolume) -> io::Result<DataStage<'a>> {
+    fn stage<'a>(&self, volume: &'a DataVolume) -> io::Result<FlatStage<'a>> {
         volume.require_named()?;
-        let root = volume.staging();
+        self.flat_stage_at(volume.staging())
+    }
+
+    fn flat_stage_at<'a>(&self, root: &'a HeldDir) -> io::Result<FlatStage<'a>> {
         loop {
             let n = self
                 .next_stage
@@ -282,7 +285,7 @@ impl Store {
                 .map_err(|_| invalid("staging name counter exhausted"))?;
             let name =
                 CString::new(format!("{n:016x}")).map_err(|_| invalid("invalid stage name"))?;
-            match DataStage::new(root, name) {
+            match FlatStage::new(root, name) {
                 Ok(stage) => return Ok(stage),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
@@ -370,7 +373,7 @@ impl Store {
         mutation: Mutation,
         change: Change,
         volume: &DataVolume,
-        stage: &mut DataStage<'_>,
+        stage: &mut FlatStage<'_>,
         authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
         let id = mutation.container;
@@ -635,7 +638,7 @@ impl Store {
             authorize()?;
             volume.require_named()
         })?;
-        let selector = self.stage_at(archive.moves()?)?;
+        let mut selector = self.flat_stage_at(archive.moves()?)?;
         // Only one small SYSTEM rename switches logical visibility. The
         // ordinary namespace guard contains no streaming/hash work.
         {
@@ -643,9 +646,9 @@ impl Store {
                 .names
                 .lock()
                 .map_err(|_| invalid("container name selection unavailable"))?;
-            archive.choose(done, &selector, || {
-                authorize()?;
-                volume.require_named()
+            archive.choose(done, &mut selector, || {
+                volume.require_named()?;
+                authorize()
             })?;
         }
         if let Err(error) = archive.retire(done, volume, state) {

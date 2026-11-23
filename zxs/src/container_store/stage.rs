@@ -8,14 +8,14 @@ use std::{
     os::unix::fs::MetadataExt,
 };
 
-pub(super) struct DataStage<'a> {
+pub(super) struct FlatStage<'a> {
     parent: &'a HeldDir,
     name: CString,
     pub(super) directory: HeldDir,
     files: Vec<(&'static CStr, File)>,
 }
 
-impl<'a> DataStage<'a> {
+impl<'a> FlatStage<'a> {
     pub(super) fn new(parent: &'a HeldDir, name: CString) -> io::Result<Self> {
         let directory = parent.new_child_directory(&name)?;
         directory.only(None)?;
@@ -88,6 +88,25 @@ impl<'a> DataStage<'a> {
             .rename_child_if_absent(&self.name, parent, name, authorize)
     }
 
+    pub(super) fn publish_record(
+        &self,
+        original: &CStr,
+        parent: &HeldDir,
+        name: &CStr,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.require_named()?;
+        let (_, file) = self
+            .files
+            .iter()
+            .find(|(entry, _)| *entry == original)
+            .ok_or_else(|| invalid("staging record was not registered"))?;
+        self.current_file(original, file)?
+            .ok_or_else(|| invalid("staging record lost its name"))?;
+        self.directory
+            .rename_child_if_absent(original, parent, name, authorize)
+    }
+
     fn clean(&self) -> io::Result<()> {
         self.require_named()?;
         // A successful publication has moved the whole stage, so the
@@ -109,7 +128,7 @@ impl<'a> DataStage<'a> {
     }
 }
 
-impl Drop for DataStage<'_> {
+impl Drop for FlatStage<'_> {
     fn drop(&mut self) {
         let _ = self.clean();
     }

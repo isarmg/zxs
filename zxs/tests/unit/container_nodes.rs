@@ -265,10 +265,10 @@ fn leave_prepared_recycle_unselected(store: &Store) {
     let tentative = archive
         .prepare(mutation(6), &store.volumes[0], state, &incoming, || Ok(()))
         .unwrap();
-    let selector = store.stage_at(archive.moves().unwrap()).unwrap();
+    let mut selector = store.flat_stage_at(archive.moves().unwrap()).unwrap();
     assert!(
         archive
-            .choose(tentative, &selector, || Err(
+            .choose(tentative, &mut selector, || Err(
                 io::ErrorKind::PermissionDenied.into()
             ))
             .is_err()
@@ -617,8 +617,8 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
         .unwrap();
     let receipt = store.move_to_recycle(mutation(6), 1, || Ok(())).unwrap();
     let moves = store.archive.as_ref().unwrap().moves().unwrap();
-    let selected = moves.join(hex(id(1)));
-    let staged = moves.join("selector-cut");
+    let selected = moves.path.join(hex(id(1)));
+    let staged = moves.path.join("selector-cut");
     // Recreate the externally visible namespace at the post-rename
     // boundary; this fixture models a service stop, not physical power loss.
     write_file(&staged, &fs::read(&selected).unwrap()).unwrap();
