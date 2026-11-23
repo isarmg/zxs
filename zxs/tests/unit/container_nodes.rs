@@ -976,3 +976,80 @@ fn absent_reads_cannot_grow_idle_slots_or_split_an_active_container_lock() {
     assert!(Arc::ptr_eq(&active, &store.object(id(1)).unwrap()));
     assert!(store.objects.lock().unwrap().len() <= OBJECT_SLOT_TARGET);
 }
+
+#[test]
+fn compact_catalog_uses_selected_store_names_in_raw_id_order() {
+    let (_temp, _, store) = fixture();
+    for n in [3, 1, 2] {
+        store
+            .save(
+                Mutation {
+                    container: id(n),
+                    request: id(2),
+                },
+                full(main(None), id(10), body(b""), Some(format!("file-{n}"))),
+                &b""[..],
+                || Ok(()),
+            )
+            .unwrap();
+    }
+    let first = store.catalog_page(None, |key| key != id(2)).unwrap();
+    let actual: Vec<_> = first
+        .items
+        .into_iter()
+        .map(|row| (row.id, row.name, row.sequence))
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            (id(1), String::from("file-1"), 1),
+            (id(3), String::from("file-3"), 1)
+        ]
+    );
+    assert_eq!(first.next_after, None);
+    let tail = store.catalog_page(Some(id(2)), |_| true).unwrap();
+    assert_eq!(tail.items[0].id, id(3));
+    assert_eq!(tail.next_after, None);
+}
+
+#[test]
+fn compact_catalog_bounds_the_page_and_never_reads_denied_ids() {
+    let key = |number: u16| {
+        let mut result = [0; 16];
+        result[14..].copy_from_slice(&number.to_be_bytes());
+        result
+    };
+    let enumerated = || (1_u16..=257).map(key);
+    let project = |id| {
+        Ok(Some(CatalogRow {
+            id,
+            name: "file".into(),
+            sequence: 1,
+        }))
+    };
+    let visible = |id| id != key(2);
+    let first = catalog_rows(enumerated(), None, visible, |id| {
+        assert_ne!(id, key(2));
+        project(id)
+    })
+    .unwrap();
+    assert_eq!(first.items.len(), CATALOG_PAGE_ROWS);
+    assert_eq!(first.next_after, Some(key(257)));
+    let terminal = catalog_rows(enumerated(), first.next_after, visible, project).unwrap();
+    assert!(terminal.items.is_empty());
+    assert_eq!(terminal.next_after, None);
+    let full = catalog_rows(
+        enumerated(),
+        None,
+        |_| true,
+        |id| {
+            assert_ne!(id, key(257), "full page reads no lookahead");
+            project(id)
+        },
+    )
+    .unwrap();
+    assert_eq!(full.next_after, Some(key(256)));
+    let last = catalog_rows(enumerated(), full.next_after, |_| true, project).unwrap();
+    assert_eq!(last.items[0].id, key(257));
+    assert_eq!(last.next_after, None);
+}

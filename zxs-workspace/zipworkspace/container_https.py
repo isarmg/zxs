@@ -281,7 +281,18 @@ class HttpsExchange:
         """Read only the fixed R3 collection, container, and branch-node metadata routes."""
         if type(target) is not str or _METADATA.fullmatch(target) is None:
             raise Rejected("not a supported Workspace metadata route")
-        headers = {"Accept": "application/json", "Accept-Encoding": "identity"}
+        return self._read_metadata(target, {})
+
+    def read_catalog_page(self, after=None):
+        if after is not None and not _read_id(after):
+            raise Rejected("invalid Workspace catalog cursor")
+        headers = {"Zxs-View": "compact"}
+        if after is not None:
+            headers["Zxs-After"] = after
+        return self._read_metadata(_ROOT, headers)
+
+    def _read_metadata(self, target, fields):
+        headers = {"Accept": "application/json", "Accept-Encoding": "identity", **fields}
         try:
             with self._exchange("GET", target, headers, None) as response:
                 length, _ = _read_headers(response, b"application/json")

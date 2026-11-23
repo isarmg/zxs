@@ -52,6 +52,31 @@ fn decimal(s: &str) -> Result<u64, Rejected> {
     s.parse().map_err(|_| Rejected::Value)
 }
 
+fn list_request(
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+) -> Result<Option<Request>, Rejected> {
+    let view = field(headers, "zxs-view")?;
+    let after = field(headers, "zxs-after")?;
+    if target == ROOT && method == "GET" {
+        return match (view, after) {
+            (None, None) => Ok(Some(Request::List)),
+            (Some("compact"), after) => Ok(Some(Request::ListCompact {
+                after: after.map(Id::parse).transpose()?,
+            })),
+            _ => Err(Rejected::Header),
+        };
+    }
+    if view.is_some() || after.is_some() {
+        return Err(Rejected::Header);
+    }
+    if target == ROOT {
+        return Err(Rejected::Route);
+    }
+    Ok(None)
+}
+
 // The adapter must not silently merge duplicates, normalize targets or pass
 // trailers. It bounds headers/body syntax before dispatch and authorizes IDs.
 fn field<'a>(headers: &[(&str, &'a str)], name: &str) -> Result<Option<&'a str>, Rejected> {
@@ -86,12 +111,8 @@ pub(crate) fn request(
     if matches!(method, "GET" | "DELETE") && length.unwrap_or_default() != 0 {
         return Err(Rejected::Header);
     }
-    if target == ROOT {
-        return if method == "GET" {
-            Ok(Request::List)
-        } else {
-            Err(Rejected::Route)
-        };
+    if let Some(list) = list_request(method, target, headers)? {
+        return Ok(list);
     }
     let rest = target
         .strip_prefix(ROOT)

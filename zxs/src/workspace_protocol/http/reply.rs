@@ -23,6 +23,7 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
         Reply::Receipt(ReceiptLookup::Unknown) => return Err(Problem::Unavailable),
         other => match other {
             Reply::Containers(rows) => out.array(&rows, Json::container),
+            Reply::Catalog(page) => out.catalog(&page),
             Reply::Container(row) => out.container(&row),
             Reply::Tags(tags) => out.array(&tags, |o, tag| o.string(tag)),
             Reply::BranchNodes(nodes) => out.array(&nodes, |o, (id, node)| o.node(id, node)),
@@ -98,6 +99,20 @@ impl Json {
             emit(self, value)?;
         }
         self.write_char(']')
+    }
+
+    fn catalog(&mut self, page: &core::CatalogPage) -> fmt::Result {
+        self.write_str("{\"items\":")?;
+        self.array(&page.items, |out, row| {
+            out.write_str("{\"container_id\":")?;
+            out.hex(&row.id)?;
+            write!(out, ",\"sequence\":{},\"name\":", row.sequence)?;
+            out.string(&row.name)?;
+            out.write_char('}')
+        })?;
+        self.write_str(",\"next_after\":")?;
+        self.id_or_null(page.next_after)?;
+        self.write_char('}')
     }
 
     fn container(&mut self, row: &core::Container) -> fmt::Result {

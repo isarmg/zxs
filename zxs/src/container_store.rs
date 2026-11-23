@@ -86,6 +86,46 @@ pub(crate) struct Container {
     pub(crate) heads: BTreeMap<String, Option<NodeId>>,
 }
 
+pub(crate) const CATALOG_PAGE_ROWS: usize = 256;
+
+pub(crate) struct CatalogRow {
+    pub(crate) id: Id,
+    pub(crate) sequence: u64,
+    pub(crate) name: String,
+}
+
+pub(crate) struct CatalogPage {
+    pub(crate) items: Vec<CatalogRow>,
+    pub(crate) next_after: Option<Id>,
+}
+
+fn catalog_rows(
+    sorted: impl IntoIterator<Item = Id>,
+    after: Option<Id>,
+    readable: impl Fn(Id) -> bool,
+    mut project: impl FnMut(Id) -> io::Result<Option<CatalogRow>>,
+) -> io::Result<CatalogPage> {
+    let mut items = Vec::with_capacity(CATALOG_PAGE_ROWS);
+    for id in sorted {
+        if after.is_some_and(|bound| id <= bound) || !readable(id) {
+            continue;
+        }
+        if let Some(row) = project(id)? {
+            items.push(row);
+            if items.len() == CATALOG_PAGE_ROWS {
+                return Ok(CatalogPage {
+                    items,
+                    next_after: Some(id),
+                });
+            }
+        }
+    }
+    Ok(CatalogPage {
+        items,
+        next_after: None,
+    })
+}
+
 pub(crate) struct NodeBytes {
     pub(crate) node: Node,
     pub(crate) file: File,
@@ -477,6 +517,21 @@ impl Store {
     }
 
     fn describe_at(&self, id: Id, recorded: bool) -> io::Result<Option<Container>> {
+        self.project_container(id, recorded, |state, name| Container {
+            id,
+            name: name.to_owned(),
+            tags: state.tags.clone(),
+            sequence: state.sequence,
+            heads: state.branches.clone(),
+        })
+    }
+
+    fn project_container<T>(
+        &self,
+        id: Id,
+        recorded: bool,
+        project: impl FnOnce(&State, &str) -> T,
+    ) -> io::Result<Option<T>> {
         let object = self.object(id)?;
         let mut memory = object
             .lock()
@@ -493,13 +548,7 @@ impl Store {
             volume
         };
         let state = volume.load(id, &mut memory)?;
-        Ok(state.name.as_ref().map(|name| Container {
-            id,
-            name: name.clone(),
-            tags: state.tags.clone(),
-            sequence: state.sequence,
-            heads: state.branches.clone(),
-        }))
+        Ok(state.name.as_deref().map(|name| project(state, name)))
     }
     pub(crate) fn list(&self) -> io::Result<Vec<Container>> {
         let mut items = Vec::new();
@@ -510,6 +559,20 @@ impl Store {
         }
         items.sort_unstable_by_key(|item| item.id);
         Ok(items)
+    }
+
+    pub(crate) fn catalog_page(
+        &self,
+        after: Option<Id>,
+        readable: impl Fn(Id) -> bool,
+    ) -> io::Result<CatalogPage> {
+        catalog_rows(self.routes.ids()?, after, readable, |id| {
+            self.project_container(id, true, |state, name| CatalogRow {
+                id,
+                sequence: state.sequence,
+                name: name.to_owned(),
+            })
+        })
     }
 
     pub(crate) fn recycle_receipt(&self, mutation: Mutation) -> io::Result<Option<RecycleReceipt>> {

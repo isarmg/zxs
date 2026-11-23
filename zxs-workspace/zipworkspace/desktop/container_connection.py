@@ -17,6 +17,9 @@ from .container_management import (Body, Branch, Container, Detail, Kind, Node, 
 
 _ROOT = "/zxs/v1/containers"
 _CONTAINER = frozenset(("container_id", "sequence", "name", "tags", "heads"))
+_CATALOG_KEYS = frozenset(("items", "next_after"))
+_CATALOG_ROW = frozenset(("container_id", "sequence", "name"))
+_CATALOG_PAGE_ROWS = 256
 _NODE = frozenset(("node_id", "operation_id", "parent_node", "original_branch", "sequence", "length", "sha256"))
 _LOGIN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -176,6 +179,31 @@ def _container(raw):
             tuple(raw["tags"]), tuple(sorted(raw["heads"].items())))
 
 
+def _catalog_name(name):
+    return (text_ok(name) and len(name.encode("utf-8")) <= 255 and name not in (".", "..")
+            and not name.endswith((".", " "))
+            and not any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or ch in '<>:"/\\|?*' for ch in name))
+
+
+def _catalog_page(raw, after):
+    if (type(raw) is not dict or raw.keys() != _CATALOG_KEYS
+            or type(raw["items"]) is not list or len(raw["items"]) > _CATALOG_PAGE_ROWS):
+        raise Rejected("invalid R3 catalog page")
+    rows, previous = [], after
+    for row in raw["items"]:
+        if (type(row) is not dict or row.keys() != _CATALOG_ROW or not id_ok(row["container_id"])
+                or (previous is not None and row["container_id"] <= previous)
+                or not _catalog_name(row["name"])
+                or not number(row["sequence"]) or row["sequence"] == 0):
+            raise Rejected("invalid or unordered R3 catalog row")
+        previous = row["container_id"]
+        rows.append(Container(previous, row["name"], row["sequence"]))
+    required = previous if len(rows) == _CATALOG_PAGE_ROWS else None
+    if raw["next_after"] != required:
+        raise Rejected("invalid R3 catalog continuation")
+    return rows, required
+
+
 def _nodes(raw, branch, head, sequence):
     if type(raw) is not list or not raw:
         raise Rejected("no exact R3 branch ancestry")
@@ -217,10 +245,17 @@ class _Metadata:
         return result
 
     def list_containers(self):
-        raw = self._read(_ROOT)
-        if type(raw) is not list:
-            raise Rejected("did not receive the exact R3 container list")
-        return tuple(_container(row)[0] for row in raw)
+        rows, after = [], None
+        while True:
+            if self._profile is not None:
+                self._profile.require_state()
+            raw = self._exchange.read_catalog_page(after)
+            if self._profile is not None:
+                self._profile.require_state()
+            page, after = _catalog_page(raw, after)
+            rows.extend(page)
+            if after is None:
+                return tuple(rows)
 
     def open_container(self, container):
         if not id_ok(container):

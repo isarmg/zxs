@@ -28,6 +28,7 @@ pub(crate) enum Body<R> {
 }
 pub(crate) enum Reply {
     Containers(Vec<core::Container>),
+    Catalog(core::CatalogPage),
     Container(core::Container),
     Tags(Vec<String>),
     Node(core::NodeBytes),
@@ -57,7 +58,7 @@ pub(crate) enum Failure {
 }
 fn access(request: &Request) -> Access {
     match request {
-        Request::List => Access::List,
+        Request::List | Request::ListCompact { .. } => Access::List,
         Request::Container(id) | Request::Tags(id) => Access::Read(*id),
         Request::NodeData { container, .. }
         | Request::BranchNodes { container, .. }
@@ -75,6 +76,31 @@ pub(super) fn mutation(container: Id, request: Id) -> core::Mutation {
 }
 fn metadata(scope: MetadataMutation) -> core::Mutation {
     mutation(scope.container, scope.operation)
+}
+
+fn list_catalog(
+    store: &core::Store,
+    list: &Request,
+    allowed: &impl Fn(Access) -> bool,
+) -> Result<Reply, Failure> {
+    let readable = |id| allowed(Access::Read(Id(id)));
+    let Request::ListCompact { after } = list else {
+        return Ok(Reply::Containers(
+            store
+                .list()
+                .map_err(|_| Failure::Unavailable)?
+                .into_iter()
+                .filter(|row| readable(row.id))
+                .collect(),
+        ));
+    };
+    let page = store
+        .catalog_page(after.map(Id::bytes), readable)
+        .map_err(|_| Failure::Unavailable)?;
+    if !allowed(Access::List) || page.items.iter().any(|row| !readable(row.id)) {
+        return Err(Failure::Denied);
+    }
+    Ok(Reply::Catalog(page))
 }
 
 /// Callers must supply their actual authenticated liveness/authority checks.
@@ -98,14 +124,9 @@ pub(crate) fn dispatch<R: Read>(
         }
     };
     match (request, body) {
-        (Request::List, Body::Empty) => Ok(Reply::Containers(
-            store
-                .list()
-                .map_err(|_| Failure::Unavailable)?
-                .into_iter()
-                .filter(|c| allowed(Access::Read(Id(c.id))))
-                .collect(),
-        )),
+        (list @ (Request::List | Request::ListCompact { .. }), Body::Empty) => {
+            list_catalog(store, &list, &allowed)
+        }
         (Request::Container(id), Body::Empty) => Ok(Reply::Container(describe(store, id)?)),
         (Request::Tags(id), Body::Empty) => Ok(Reply::Tags(describe(store, id)?.tags)),
         (Request::NodeData { container, node }, Body::Empty) => Ok(Reply::Node(

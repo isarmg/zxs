@@ -177,3 +177,42 @@ fn initial_name_uses_the_storage_display_rule_before_body_intake() {
     assert!(name_hex(&"61".repeat(255)).is_ok());
     assert!(matches!(name_hex(&"61".repeat(256)), Err(Rejected::Value)));
 }
+
+#[test]
+fn compact_catalog_accepts_only_singleton_collection_headers() {
+    assert_eq!(request("GET", ROOT, &[]), Ok(Request::List));
+    assert_eq!(
+        request("GET", ROOT, &[("Zxs-View", "compact")]),
+        Ok(Request::ListCompact { after: None })
+    );
+    assert_eq!(
+        request("GET", ROOT, &[("zxs-VIEW", "compact"), ("Zxs-After", CONT)],),
+        Ok(Request::ListCompact { after: Some(id(1)) })
+    );
+    for fields in [
+        vec![("Zxs-After", CONT)],
+        vec![("Zxs-View", "Compact")],
+        vec![("Zxs-View", "compact"), ("zxs-view", "compact")],
+        vec![
+            ("Zxs-View", "compact"),
+            ("Zxs-After", CONT),
+            ("zxs-after", OTHER),
+        ],
+        vec![
+            ("Zxs-View", "compact"),
+            ("Zxs-After", "00000000000000000000000000000000"),
+        ],
+        vec![
+            ("Zxs-View", "compact"),
+            ("Zxs-After", "A1010101010101010101010101010101"),
+        ],
+        vec![("Zxs-View", "compact"), ("Zxs-After", "01")],
+        vec![("Zxs-View", "compact"), ("Content-Length", "1")],
+    ] {
+        assert!(request("GET", ROOT, &fields).is_err());
+    }
+    let detail = format!("{ROOT}/{CONT}");
+    assert!(request("GET", &detail, &[("Zxs-View", "compact")]).is_err());
+    assert!(request("GET", &detail, &[("Zxs-After", CONT)]).is_err());
+    assert!(request("POST", ROOT, &[("Zxs-View", "compact")]).is_err());
+}

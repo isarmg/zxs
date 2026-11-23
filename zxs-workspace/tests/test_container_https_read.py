@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from zipworkspace.container_https import HttpsExchange
+from zipworkspace.desktop.container_connection import _Metadata, _catalog_page
 from zipworkspace.model import Rejected
 
 
@@ -25,6 +26,7 @@ class ExchangeFixture(HttpsExchange):
         self.response = response
         self.fail_close = fail_close
         self.calls = []
+        self.headers = []
         self.closed = False
 
     def _exchange_errors(self):
@@ -33,6 +35,7 @@ class ExchangeFixture(HttpsExchange):
     @contextmanager
     def _exchange(self, method, target, headers, body):
         self.calls.append((method, target, headers["Accept"], body))
+        self.headers.append(headers)
         yield self.response
         self.closed = True
         if self.fail_close:
@@ -100,3 +103,52 @@ class NativeReadTest(unittest.TestCase):
                 with exchange.download_node(CONTAINER, NODE, length=2, sha256=digest):
                     self.fail("an incomplete node was offered to the caller")
             self.assertEqual(len(exchange.calls), 1)
+
+class CompactCatalogTest(unittest.TestCase):
+    def test_catalog_uses_fixed_get_and_cursor_headers(self):
+        exchange = ExchangeFixture(reply((b'{"items":[],"next_after":null}',), b"application/json"))
+        self.assertEqual(exchange.read_catalog_page(), {"items": [], "next_after": None})
+        self.assertEqual(exchange.read_catalog_page(CONTAINER), {"items": [], "next_after": None})
+        self.assertEqual(exchange.calls, [("GET", ROOT, "application/json", None)] * 2)
+        self.assertEqual(exchange.headers[0]["Zxs-View"], "compact")
+        self.assertNotIn("Zxs-After", exchange.headers[0])
+        self.assertEqual(exchange.headers[1]["Zxs-After"], CONTAINER)
+        with self.assertRaises(Rejected):
+            exchange.read_catalog_page("A" * 32)
+        self.assertEqual(len(exchange.calls), 2)
+
+    def test_catalog_no_partial_index_and_strict_continuation(self):
+        items = [{"container_id": f"{n:032x}", "name": f"文{n}", "sequence": n}
+                 for n in range(1, 257)]
+        cursor = items[-1]["container_id"]
+        first = {"items": items, "next_after": cursor}
+        terminal = {"items": [], "next_after": None}
+
+        class Pages:
+            def __init__(self, pages):
+                self.pages, self.after = iter(pages), []
+
+            def read_catalog_page(self, after):
+                self.after.append(after)
+                return next(self.pages)
+
+        exchange = Pages((first, terminal))
+        shown = _Metadata(exchange).list_containers()
+        self.assertEqual([row.id for row in shown], [row["container_id"] for row in items])
+        self.assertEqual(exchange.after, [None, cursor])
+        for raw, after in (
+            (dict(first, next_after=None), None),
+            (dict(first, next_after=CONTAINER), None),
+            (first, cursor),
+            (dict(first, items=items + items[:1]), None),
+            (dict(first, items=items[::-1]), None),
+            ({"items": [items[0], items[0]], "next_after": None}, None),
+            ({"items": [dict(items[0], name="bad/name")], "next_after": None}, None),
+            ({"items": [dict(items[0], sequence=True)], "next_after": None}, None),
+            ({"items": [dict(items[0], tags=[])], "next_after": None}, None),
+            ({"items": [], "next_after": cursor}, None),
+        ):
+            with self.subTest(after=after), self.assertRaises(Rejected):
+                _catalog_page(raw, after)
+        with self.assertRaises(Rejected):
+            _Metadata(Pages((first, dict(terminal, next_after=cursor)))).list_containers()

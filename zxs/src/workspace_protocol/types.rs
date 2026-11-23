@@ -74,6 +74,9 @@ pub(crate) enum JsonMutation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Request {
     List,
+    ListCompact {
+        after: Option<Id>,
+    },
     Container(Id),
     Tags(Id),
     NodeData {

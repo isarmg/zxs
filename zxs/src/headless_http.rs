@@ -42,6 +42,7 @@ fn body_for<'a>(request: &Request, source: &'a mut dyn Read) -> Result<Incoming<
             Ok(Incoming::Json(Body(source.take(*length))))
         }
         Request::List
+        | Request::ListCompact { .. }
         | Request::Container(_)
         | Request::Tags(_)
         | Request::NodeData { .. }
