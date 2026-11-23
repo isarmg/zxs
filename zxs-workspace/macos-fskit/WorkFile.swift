@@ -63,7 +63,8 @@ final class WorkFile {
     private var originalOpen: FSVolume.OpenModes = []
     private var stopping = false
     private var writerClosed = false
-    private var bound = false
+    private var virtualID: FSItem.Identifier = .invalid
+    private static let registrationLock = NSLock()
 
     // The registry loader must have independently authorized a one-use, private
     // RESOURCE for this volume. This primitive accepts a held directory, not a path.
@@ -142,7 +143,7 @@ final class WorkFile {
         } catch { failure = error; throw error }
     }
 
-    private static let provided: FSItem.Attribute = [
+    static let provided: FSItem.Attribute = [
         .fileID, .parentID, .type, .mode, .linkCount, .uid, .gid, .size, .allocSize, .flags,
         .accessTime, .modifyTime, .changeTime, .birthTime, .supportsLimitedXAttrs, .inhibitKernelOffloadedIO,
     ]
@@ -153,7 +154,7 @@ final class WorkFile {
 
     private func attributes(_ s: stat) -> FSItem.Attributes {
         let a = FSItem.Attributes() // Allocate the FSKit sequence INSIDE the same data-generation lock.
-        a.fileID = FSItem.Identifier(16); a.parentID = .rootDirectory; a.type = .file
+        a.fileID = virtualID; a.parentID = .rootDirectory; a.type = .file
         a.uid = uid; a.gid = gid; a.mode = 0o600; a.linkCount = 1
         a.size = UInt64(s.st_size); a.allocSize = UInt64(max(0, s.st_blocks)) * 512
         a.modifyTime = s.st_mtimespec; a.changeTime = s.st_ctimespec; a.birthTime = s.st_birthtimespec
@@ -162,17 +163,31 @@ final class WorkFile {
         return a
     }
 
-    func bindOnce() throws {
-        try withLock {
-            guard !bound else { throw workError(EBUSY) }
-            _ = try current()
-            bound = true
-        }
+    func matchesRegistration(container: String, volume: String) -> Bool {
+        leaf == "body-" + container && fileID.volumeHex == volume
     }
 
-    func authorize(_ context: FSContext) throws {
-        guard context.realUserID == Int(uid), context.effectiveUserID == Int(uid),
-              context.realGroupID == Int(gid), context.effectiveGroupID == Int(gid), uid != 0
+    // All-or-nothing ownership. A second volume cannot partially capture an earlier
+    // registration and cannot poison another volume's still-live data callbacks.
+    static func bind(_ proposed: [(WorkFile, FSItem.Identifier)]) throws {
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        var seen = Set<ObjectIdentifier>()
+        for (file, id) in proposed {
+            guard id != .invalid, seen.insert(ObjectIdentifier(file)).inserted else { throw workError(EINVAL) }
+            try file.withLock {
+                guard file.virtualID == .invalid else { throw workError(EBUSY) }
+                _ = try file.current()
+            }
+        }
+        for (file, id) in proposed { file.withLock { file.virtualID = id } }
+    }
+
+    static func authorize(_ context: FSContext) throws {
+        let uid = getuid(), gid = getgid()
+        guard uid != 0, uid == geteuid(), gid == getegid(),
+              context.realUserID == Int(uid), context.effectiveUserID == Int(uid),
+              context.realGroupID == Int(gid), context.effectiveGroupID == Int(gid)
         else { throw workError(EACCES) }
     }
 
@@ -204,7 +219,6 @@ final class WorkFile {
     func fileAttributes(_ request: FSItem.GetAttributesRequest) throws -> FSItem.Attributes {
         try withLock {
             try requireAttributes(request)
-            try requireAttributes(FSGetAttributesResult.requestedAttributes)
             return attributes(try current())
         }
     }
@@ -299,6 +313,13 @@ final class WorkFile {
 
     // Local half only. A host must also prove the ORIGINAL normal unmount/kernel drain
     // separately before borrowing the private whole file. This method cannot authorize Submit.
+    func requireDrained() throws {
+        try withLock {
+            guard stopping, originalOpen.isEmpty, !writerClosed else { throw workError(EBUSY) }
+            _ = try current()
+        }
+    }
+
     func closeLocalWriterAfterDrain() throws {
         try withLock {
             guard stopping, originalOpen.isEmpty, !writerClosed else { throw workError(EBUSY) }

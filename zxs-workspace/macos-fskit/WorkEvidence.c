@@ -134,3 +134,48 @@ int zxs_open_work_leaf(int parent, const char *name, int flags, uint64_t inode, 
     if (err || job.error) { errno = err ? err : job.error; return -1; }
     return job.fd;
 }
+
+#include <dirent.h>
+/* Immutable marker namespace only. The expected registered APFS identity/private
+ * mode is independently checked on this same held FD by the caller. */
+int zxs_new_names(int fd, int *sensitive) {
+    struct attrlist attrs = { .bitmapcount=ATTR_BIT_MAP_COUNT, .commonattr=ATTR_CMN_RETURNED_ATTRS,
+                              .volattr=ATTR_VOL_INFO | ATTR_VOL_CAPABILITIES };
+    struct { uint32_t len; attribute_set_t ret; vol_capabilities_attr_t caps; } out = {0};
+    if (fgetattrlist(fd,&attrs,&out,sizeof(out),FSOPT_REPORT_FULLSIZE)<0) return errno;
+    uint32_t mask = VOL_CAP_FMT_CASE_SENSITIVE | VOL_CAP_FMT_CASE_PRESERVING;
+    if (out.len!=sizeof(out) || out.ret.commonattr!=ATTR_CMN_RETURNED_ATTRS ||
+        (out.ret.volattr!=ATTR_VOL_CAPABILITIES && out.ret.volattr!=attrs.volattr) ||
+        out.ret.dirattr || out.ret.fileattr || out.ret.forkattr ||
+        (out.caps.valid[VOL_CAPABILITIES_FORMAT]&mask)!=mask ||
+        !(out.caps.capabilities[VOL_CAPABILITIES_FORMAT]&VOL_CAP_FMT_CASE_PRESERVING)) return ENOTSUP;
+    int copy=openat(fd,".",O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
+    if (copy<0) return errno;
+    DIR *dir=fdopendir(copy);
+    if (!dir) {int e=errno; close(copy); return e;}
+    int e=0;
+    for (;;) {
+        errno=0; struct dirent *d=readdir(dir);
+        if (!d) { e=errno; break; }
+        if (strcmp(d->d_name,".") && strcmp(d->d_name,"..")) { e=ENOTEMPTY; break; }
+    }
+    if (closedir(dir)<0 && !e) e=errno;
+    if (!e) *sensitive=!!(out.caps.capabilities[VOL_CAPABILITIES_FORMAT]&VOL_CAP_FMT_CASE_SENSITIVE);
+    return e;
+}
+
+int zxs_marker_name(int fd, unsigned char *bytes, size_t cap, size_t *length) {
+    struct attrlist attrs={.bitmapcount=ATTR_BIT_MAP_COUNT,.commonattr=ATTR_CMN_NAME|ATTR_CMN_RETURNED_ATTRS};
+    struct {uint32_t len; attribute_set_t ret; attrreference_t ref; char buf[256];} out={0};
+    if (fgetattrlist(fd,&attrs,&out,sizeof(out),FSOPT_REPORT_FULLSIZE)<0) return errno;
+    size_t ref=(size_t)((char *)&out.ref-(char *)&out);
+    if (out.len>sizeof(out) || out.len<ref+sizeof(out.ref) || out.ret.commonattr!=attrs.commonattr ||
+        out.ret.volattr || out.ret.dirattr || out.ret.fileattr || out.ret.forkattr ||
+        out.ref.attr_dataoffset<(int32_t)sizeof(out.ref) || (size_t)out.ref.attr_dataoffset>out.len-ref ||
+        out.ref.attr_length<2 || out.ref.attr_length>out.len-ref-(size_t)out.ref.attr_dataoffset ||
+        out.ref.attr_length>cap) return EIO;
+    const char *start=(char *)&out+ref+out.ref.attr_dataoffset;
+    size_t n=out.ref.attr_length-1;
+    if (start[n] || memchr(start,0,n) || memchr(start,'/',n)) return EIO;
+    memcpy(bytes,start,n); *length=n; return 0;
+}
