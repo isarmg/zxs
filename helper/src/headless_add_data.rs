@@ -46,7 +46,7 @@ impl Reset {
         marker[..offset].copy_from_slice(MARK_MAGIC);
         marker[offset] = DATA;
         marker[offset + 1..TOKEN_AT].copy_from_slice(pool);
-        let (marked, token) = match read_role_token(&candidate.input(), DATA, pool, uid) {
+        let (has_role_file, token) = match read_role_token(&candidate.input(), DATA, pool, uid) {
             Ok((_, token)) => (true, token),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let mut token = random::<32>()?;
@@ -68,7 +68,7 @@ impl Reset {
         let marker_name = Some(MARKER.as_bytes());
         require_only(
             &candidate.directory,
-            if marked { marker_name } else { Some(ROLE_STAGE.as_bytes()) },
+            if has_role_file { marker_name } else { Some(ROLE_STAGE.as_bytes()) },
         )?;
 
         let root = || RootInput { held: candidate.input(), token };
@@ -89,13 +89,13 @@ impl Reset {
 
         // A previously prepared replacement is useful only if it is the exact
         // append to the still-current descriptor for this selected disk.
-        if let Some(stage) = read_stage(&self.locked, ADD_STAGE, uid)? {
-            if !marked || !updated.starts_with(&stage.full) {
-                return Err(refused());
-            }
+        if let Some(stage) = read_stage(&self.locked, ADD_STAGE, uid)?
+            && (!has_role_file || !updated.starts_with(&stage.full))
+        {
+            return Err(refused());
         }
 
-        if !marked {
+        if !has_role_file {
             let prove_marker = || {
                 original_and_candidate()?;
                 require_only(&candidate.directory, Some(ROLE_STAGE.as_bytes()))
@@ -123,7 +123,7 @@ impl Reset {
         candidate.directory.sync_all()?;
         prove()?;
 
-        let stage = finish_stage(&self.locked, ADD_STAGE, &updated, uid, &prove)?;
+        let stage = finish_stage(&self.locked, ADD_STAGE, &updated, uid, prove)?;
         prove()?;
         let named = read(&self.locked, ADD_STAGE, uid)?;
         if stamp(&named.meta) != stamp(&stage.meta) || named.full.as_slice() != updated.as_slice() {
