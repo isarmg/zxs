@@ -156,10 +156,21 @@ class OutputNative(Native):
             raise c.WinError(c.get_last_error())
         if got.value != len(data): raise Rejected("incomplete native write; nothing was retried")
 
+    def _set_offset(self, h, cls, offset):
+        if type(offset) is not int or not 0 <= offset < 1 << 63:
+            raise Rejected("invalid signed NTFS file offset")
+        io, value = _IO(), I64(offset)
+        rc = self.set_info(h, c.byref(io), c.byref(value), c.sizeof(value), cls)
+        _ok("position or resize held data stream", rc, io)
+
+    def position(self, h, offset):
+        self._set_offset(h, 14, offset)  # FilePositionInformation; synchronous handle.
+
+    def resize(self, h, size):
+        self._set_offset(h, 20, size)  # FileEndOfFileInformation, never set valid-data length.
+
     def rewind(self, h):
-        io, position = _IO(), I64(0)
-        rc = self.set_info(h, c.byref(io), c.byref(position), c.sizeof(position), 14)
-        _ok("rewind held data stream", rc, io)
+        self.position(h, 0)
 
     def verify_bytes(self, h, size, sha, *, checkpoint=None, on_read=None):
         if checkpoint is not None: checkpoint()

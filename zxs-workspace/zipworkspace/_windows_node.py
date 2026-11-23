@@ -108,6 +108,44 @@ def _noop(*_args):
     pass
 
 
+def _receive_node(opened, stage, held, private, protection, exchange, container, node,
+                  length, sha256, mark, check, phase=_noop, progress=_noop):
+    """Mark the actual new private stream before GET, verify transport and read back the held bytes.
+
+    Caller owns the exclusive file/parent stack, foreground policy and final handoff boundary.
+    No rename, dispatcher, local edit authority or remote mutation is issued here.
+    """
+    api = stage.api
+    original = _same_file(stage, held, private, 0)
+    protection.check(held)
+    api.only_default_stream(held, 0)
+    if mark is not None:
+        zone = opened.enter_context(api.new_zone(held))
+        api.write(zone, mark)
+        api.flush(zone)
+        _check_origin(api, held, original, mark)
+
+    def write(data):
+        # H2 can yield an empty frame; native writes are nonempty and bounded.
+        check()
+        for start in range(0, len(data), CHUNK):
+            block = data[start:start + CHUNK]
+            api.write(held, block)
+            progress(len(block))
+            check()
+        return len(data)
+
+    phase("正在下载所选原节点到私用暂存文件", length)
+    check()
+    exchange.read_node_into(container, node, length=length, sha256=sha256, write=write)
+    check()
+    api.flush(held)
+    sealed = _same_file(stage, held, private, length, original.file_id)
+    phase("正在读回核验本机暂存文件", length)
+    api.verify_bytes(held, length, sha256, checkpoint=check, on_read=progress)
+    return sealed
+
+
 class WindowsNodeOutput:
     """Hold two existing private output parents on the same fixed local NTFS.
 
@@ -207,33 +245,8 @@ class WindowsNodeOutput:
                 check()
                 held = opened.enter_context(api.new_file(stage.handle, private))
                 staged = True
-                original = _same_file(stage, held, private, 0)
-                self._protection.check(held)
-                api.only_default_stream(held, 0)
-                if mark is not None:
-                    zone = opened.enter_context(api.new_zone(held))
-                    api.write(zone, mark)
-                    api.flush(zone)
-                    _check_origin(api, held, original, mark)
-
-                def write(data):
-                    # H2 can yield an empty frame; native writes are nonempty and bounded.
-                    check()
-                    for start in range(0, len(data), CHUNK):
-                        block = data[start:start + CHUNK]
-                        api.write(held, block)
-                        progress(len(block))
-                        check()
-                    return len(data)
-
-                phase("正在下载所选原节点到私用暂存文件", length)
-                check()
-                exchange.read_node_into(container, node, length=length, sha256=sha256, write=write)
-                check()
-                api.flush(held)
-                sealed = _same_file(stage, held, private, length, original.file_id)
-                phase("正在读回核验本机暂存文件", length)
-                api.verify_bytes(held, length, sha256, checkpoint=check, on_read=progress)
+                sealed = _receive_node(opened, stage, held, private, self._protection, exchange,
+                                       container, node, length, sha256, mark, check, phase, progress)
                 phase("正在复核 Windows 下载来源策略及两个原目录")
                 check()
                 # Reobserve supported OS policy on the same GET URL at the last
@@ -241,7 +254,7 @@ class WindowsNodeOutput:
                 if _effective_zone(url) != policy_zone:
                     raise Rejected("Windows 对原 HTTPS 地址的下载来源策略已经改变，没有发布文件。")
                 check()
-                if _same_file(stage, held, private, length, original.file_id) != sealed:
+                if _same_file(stage, held, private, length, sealed.file_id) != sealed:
                     raise Rejected("已同步的本机暂存文件在核验期间改变。")
                 _check_origin(api, held, sealed, mark)
                 self._parents(held)  # Again after the potentially blocking policy lookup.
@@ -254,12 +267,12 @@ class WindowsNodeOutput:
                 except _NTError as error:
                     if error.code != 0xc0000035:  # STATUS_OBJECT_NAME_COLLISION only.
                         raise
-                    _same_file(stage, held, private, length, original.file_id)
+                    _same_file(stage, held, private, length, sealed.file_id)
                     may_be_published = False
                     raise Rejected("目的名称已被占用，没有覆盖。") from error
                 api.flush(dst.handle)
                 api.flush(stage.handle)
-                actual = _same_file(dst, held, output, length, original.file_id)
+                actual = _same_file(dst, held, output, length, sealed.file_id)
                 _check_origin(api, held, actual, mark)
                 api.absent(stage.handle, private)
                 self._parents(held)

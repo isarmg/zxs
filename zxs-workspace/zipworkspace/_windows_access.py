@@ -139,8 +139,9 @@ class NativeSecurity:
 
 
 class OutputProtection:
-    def __init__(self, staging, destination):
-        self.api, self.parents = NativeSecurity(), (staging, destination)
+    def __init__(self, staging, destination=None):
+        self.api = NativeSecurity()
+        self.parents = (staging,) if destination is None else (staging, destination)
         self.actor = self.api.caller()
         self.original = self.api.read(staging, self.actor, directory=True)
         self.file = None
