@@ -71,11 +71,26 @@ class _DownloadQuarantine:
         attrs = api.attrs(fd)
         with api.quarantine(path, fd, literal=True) as observed:
             kind, value = self._get(observed, self._kind), self._get(observed, self._data)
-            if value and api.type(value) == self._url_type(): value = self._url_string(value)
+            string_type = self._string_type()
+            if not kind:
+                raise Rejected("macOS 未返回下载隔离类型。")
+            if api.type(kind) != string_type:
+                raise Rejected("macOS 返回的下载隔离类型不是文本。")
+            if not api.equal(kind, self._download):
+                raise Rejected("macOS 返回了不同的下载隔离类型。")
+            if not value:
+                raise Rejected("macOS 保留了下载隔离类型，但未返回下载 URL。")
+            if api.type(value) == self._url_type():
+                value = self._url_string(value)
+                if not value:
+                    raise Rejected("无法读取 macOS 返回的下载 URL。")
+            if api.type(value) != string_type:
+                raise Rejected("macOS 返回了无法识别的下载 URL 类型。")
             expected = self._url_string(url)
-            if (not kind or not api.equal(kind, self._download) or not expected or not value
-                    or api.type(value) != self._string_type() or not api.equal(value, expected)):
-                raise Rejected("系统读回不是这次原 HTTPS 节点的实际下载来源。")
+            if not expected:
+                raise Rejected("无法读取本次请求的下载 URL。")
+            if not api.equal(value, expected):
+                raise Rejected("macOS 返回的下载 URL 与本次请求不同。")
         if api.attrs(fd) != attrs:
             raise Rejected("原文件的下载来源在核验时改变。")
         return attrs
