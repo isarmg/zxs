@@ -34,13 +34,44 @@ class _SignedFile(c.Structure):
     _fields_ = [("size", U32), ("path", _W), ("file", P), ("subject", P)]
 
 
+class _SignatureSettings(c.Structure):
+    _fields_ = [("size", U32), ("index", U32), ("flags", U32), ("secondary", U32),
+                ("verified_index", U32), ("crypto_policy", P)]
+
+
 class _Policy(c.Structure):
     _fields_ = [("size", U32), ("callback", P), ("client", P), ("ui", U32), ("revoke", U32),
                 ("choice", U32), ("file", c.POINTER(_SignedFile)), ("action", U32), ("state", P),
-                ("url", _W), ("flags", U32), ("context", U32), ("signature", P)]
+                ("url", _W), ("flags", U32), ("context", U32), ("signature", c.POINTER(_SignatureSettings))]
 
 
-def signed(path, handle):
+class _CertPrefix(c.Structure):
+    _fields_ = [("encoding", U32), ("bytes", P), ("size", U32)]
+
+
+class _ProviderCertPrefix(c.Structure):
+    _fields_ = [("size", U32), ("cert", c.POINTER(_CertPrefix))]
+
+
+def _signer(trust, state, expected):
+    # Inspect the signer of THIS successful verification, not any unrelated embedded
+    # certificate or timestamp countersigner. Only used when a publisher supplies a pin.
+    _need(type(expected) is str and re.fullmatch(r"[0-9a-f]{64}", expected), "invalid publisher certificate digest")
+    data_fn = _function(trust, "WTHelperProvDataFromStateData", P, P)
+    sign_fn = _function(trust, "WTHelperGetProvSignerFromChain", P, P, U32, I32, U32)
+    cert_fn = _function(trust, "WTHelperGetProvCertFromChain", c.POINTER(_ProviderCertPrefix), P, U32)
+    data = data_fn(state) if state else None
+    signer = sign_fn(data, 0, False, 0) if data else None
+    ptr = cert_fn(signer, 0) if signer else None
+    _need(ptr and ptr.contents.size >= c.sizeof(_ProviderCertPrefix) and ptr.contents.cert,
+          "missing the Authenticode publisher of the verified signature")
+    cert = ptr.contents.cert.contents
+    _need(cert.encoding & 1 and cert.bytes and 0 < cert.size <= 256 << 10
+          and sha256(c.string_at(cert.bytes, cert.size)).hexdigest() == expected,
+          "the verified Authenticode publisher differs from the independent release identity")
+
+
+def signed(path, handle, *, signer=None):
     # Embedded Authenticode file signature; no UI, trust downloads, or caller-selected issuer.
     trust = c.WinDLL("wintrust.dll", winmode=0x800, use_last_error=True)
     fn = _function(trust, "WinVerifyTrust", I32, P, P, c.POINTER(_Policy))
@@ -50,15 +81,23 @@ def signed(path, handle):
     data = _Policy()
     data.size, data.ui, data.revoke, data.choice = c.sizeof(data), 2, 1, 1
     data.file, data.action, data.flags = c.pointer(file), 1, 0x1000 | 0x80
+    if signer is not None:
+        # WSS_VERIFY_SPECIFIC: bind an independent publisher pin to the primary signature,
+        # not an alternative secondary signature selected by provider defaults.
+        settings = _SignatureSettings(c.sizeof(_SignatureSettings), 0, 1, 0, 0xffffffff, None)
+        data.signature = c.pointer(settings)
     try:
         _need(fn(P(-1), c.byref(action), c.byref(data)) == 0, "the original file has no valid offline Authenticode chain")
+        if signer is not None:
+            _need(settings.verified_index == 0, "the primary Authenticode signature was not verified")
+            _signer(trust, data.state, signer)
     finally:
         data.action = 2
         fn(P(-1), c.byref(action), c.byref(data))
 
 
 class _Image:
-    def __init__(self, keep, path, *, digest=True):
+    def __init__(self, keep, path, *, digest=True, signer=None):
         self.parent = keep.enter_context(PinnedParent(path.parent))
         self.path = self.parent.name(path.name)
         self.file = keep.enter_context(self.parent.api.input_file(self.parent.handle, path.name))
@@ -76,7 +115,7 @@ class _Image:
             _need(not api.read(self.file, 1), "release image grew while checking")
             self.hash = h.hexdigest()
             api.rewind(self.file)
-        signed(self.path, self.file)
+        signed(self.path, self.file, signer=signer)
         self.check()
 
     def check(self):
