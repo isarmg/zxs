@@ -104,11 +104,10 @@ def _load(stack, area, name, kind, binding):
 
 
 @contextmanager
-def _lease(packet):
-    # A stable, private slot per endpoint/account/container, not a global network lock.
-    # The file holds no body or credentials. Never delete/recreate a corrupt/busy lease.
+def _container_lease(area, key):
+    # The same physically bound lock serializes first save, lookup, archive
+    # and the next desktop admission for this endpoint/account/container only.
     import fcntl
-    key, area = _binding(packet), packet.root_area
     name = "lease-" + key
     with ExitStack() as held:
         try:
@@ -120,14 +119,22 @@ def _lease(packet):
             raise Rejected("no original private container lease")
         _, check, fd = record
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        def guard():
-            packet.require(); check()
-        guard()
         try:
-            yield guard
-            guard()
+            check()
+            yield check
+            check()
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _lease(packet):
+    with _container_lease(packet.root_area, _binding(packet)) as owner:
+        def guard():
+            packet.require(); owner()
+        guard()
+        yield guard
+        guard()
 
 
 def _advance(connection, chosen, mode, confirmed):
@@ -148,6 +155,10 @@ def _advance(connection, chosen, mode, confirmed):
             settled = _load(records, area, done_name, "receipt", binding)
             if attempted is not None and attempted[0] != p.action.operation_id:
                 raise Rejected("attempt belongs to a different operation")
+            # An archived physical key is evidence of a retired original, never send authority.
+            # Do not translate lost/corrupt local receipt evidence into permission to POST.
+            if p.archived and settled is None:
+                return SaveResult(chosen, Phase.UNKNOWN, attempted is not None)
             fence = None
             if settled is not None:
                 try:
@@ -178,7 +189,7 @@ def _advance(connection, chosen, mode, confirmed):
                         guard()
                         can_write = result.kind is ReplyKind.ABSENT and result.receipt is None
                         return result
-                    if (not queried or not can_write or posted or mode == "status" or settled
+                    if (not queried or not can_write or posted or mode == "status" or p.archived or settled
                             or mode == "first" and attempted or mode == "retry" and not attempted):
                         raise SubmitUnconfirmed("no authorization for a new attempt on this exact save")
                     expected = mutation_message(p.action, p.action.base_revision, payload=message.body)
@@ -208,7 +219,7 @@ def _advance(connection, chosen, mode, confirmed):
                     return result
 
             guard()
-            send = not settled and ((mode == "first" and not attempted) or (mode == "retry" and attempted))
+            send = not p.archived and not settled and ((mode == "first" and not attempted) or (mode == "retry" and attempted))
             try:
                 result = invoke_original(p.pending, key.container, (), Exchange(), send_if_absent=bool(send))
             except SubmitAbsent:
@@ -234,4 +245,4 @@ def _advance(connection, chosen, mode, confirmed):
             _barrier(settled[2])
             guard()
             return SaveResult(chosen, Phase.CONFIRMED, attempted is not None, result.fence)
-    return _visit_original(connection, key.root, key.container, key.branch, key.node, visit)
+    return _visit_original(connection, key.root, key.container, key.branch, key.node, visit, exact_key=key)

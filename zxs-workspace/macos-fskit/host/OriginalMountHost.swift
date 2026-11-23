@@ -132,6 +132,23 @@ final class OriginalMountHost {
         if e != 0 { state = .uncertain; throw workError(e) }
     }
 
+    func releaseUnstarted() throws {
+        guard state == .ready else { throw workError(EBUSY) }
+        try registration.check()
+        for step in [HeldMountTicket.Step.attempted,.loaded,.verified,.stop,.stopped,.gone,.clean] {
+            guard try !ticket.marked(step) else { throw workError(EBUSY) }
+        }
+    }
+    func parkSystemGone() throws {
+        guard state == .normalGone, leased, try ticket.witness(.gone)==ticket.stopFence() else { throw workError(EBUSY) }
+        // Release only process-owned handles. No clean evidence is created, and a
+        // subsequent restore will still refuse an absent/torn provider decision.
+    }
+    func readyForNormalDetach() throws -> Bool {
+        guard state == .stopping, try ticket.marked(.stop) else { throw workError(EBUSY) }
+        return try ticket.marked(.stopped) // Not success; the original VROOT syscall still must succeed.
+    }
+
     func requestStop(confirmed: Bool) throws {
         guard confirmed, state == .mounted, let anchor else { throw workError(EPERM) }
         state = .uncertain

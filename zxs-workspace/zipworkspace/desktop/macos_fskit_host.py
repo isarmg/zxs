@@ -18,6 +18,7 @@ class MountPhase(IntEnum):
     GONE_WAITING_PROVIDER = 6
     LOCAL_NORMAL = 7
     DETACHING = 8
+    STOPPED_READY = 9  # Kernel normal unmount has not yet succeeded.
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +70,7 @@ class OriginalDrive:
         phase, error, path = C.c_int32(), C.c_int32(), C.create_string_buffer(1024)
         _ok(self._status(self._key, C.byref(phase), C.byref(error), path, len(path)))
         kind = MountPhase(phase.value)
-        if bool(path.value) != (kind in (MountPhase.MOUNTED, MountPhase.STOPPING)):
+        if bool(path.value) != (kind in (MountPhase.MOUNTED, MountPhase.STOPPING, MountPhase.STOPPED_READY)):
             raise Rejected("incoherent response from the original native mount")
         return MountStatus(kind, error.value, os.fsdecode(path.value) if path.value else None)
 
@@ -82,3 +83,12 @@ class OriginalDrive:
         if confirmed is not True:
             raise Rejected("explicit normal unmount is required")
         _ok(self._action(self._key, 3))  # Busy remains stopped; never automatically retry, force, submit or purge.
+
+
+    def release_unstarted(self):
+        _ok(self._action(self._key, 4))  # No filesystem mutation: never release an attempted or uncertain original.
+
+    def park_system_gone(self, *, confirmed=False):
+        if confirmed is not True:
+            raise Rejected("explicit parking of an already normally detached original is required")
+        _ok(self._action(self._key, 5))

@@ -126,6 +126,10 @@ class ContainerPanel(QWidget):
             from .container_windows_controls import WindowsDiskControls
             self.platform_disk = WindowsDiskControls(native_window, self)
             outer.addWidget(self.platform_disk)
+        elif sys.platform == "darwin" and native_window is not None:
+            from .container_macos_controls import MacDiskControls
+            self.platform_disk = MacDiskControls(native_window, self)
+            outer.addWidget(self.platform_disk)
         self._paint()
 
     def busy(self):

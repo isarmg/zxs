@@ -24,9 +24,10 @@ enum HostSigning {
         return out
     }
 
-    private static func checkFile(_ url: URL, requirement: SecRequirement) throws -> NSDictionary {
+    private static func checkFile(_ url: URL, requirement: SecRequirement, nested:Bool=false) throws -> NSDictionary {
         var code: SecStaticCode?, info: CFDictionary?
-        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSNoNetworkAccess)
+        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSNoNetworkAccess |
+                              (nested ? kSecCSCheckNestedCode : 0))
         guard SecStaticCodeCreateWithPath(url as CFURL, base, &code) == errSecSuccess, let code,
               SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess,
               SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
@@ -73,6 +74,26 @@ enum HostSigning {
                   as? [String], groups.contains(group),
               !yes(SecTaskCopyValueForEntitlement(task, "com.apple.security.get-task-allow" as CFString, nil))
         else { throw workError(EPERM) }
+    }
+
+    static func releaseIdentity() throws -> [String] {
+        try checkHostProcess()
+        guard let team=Bundle.main.object(forInfoDictionaryKey:"ZxsDistributionTeam") as? String,
+              let build=Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String,
+              !build.isEmpty, build.utf8.count<=32 else { throw workError(EPERM) }
+        let host=try checkFile(Bundle.main.bundleURL,requirement:requireCode(hostID,team:team),nested:true)
+        let url=Bundle.main.bundleURL.appendingPathComponent("Contents/Extensions/ZxsRemoteFS.appex",isDirectory:true)
+        let ext=try checkFile(url,requirement:requireCode(moduleID,team:team))
+        guard host[kSecCodeInfoTeamIdentifier] as? String==team, ext[kSecCodeInfoTeamIdentifier] as? String==team,
+              let signed=host[kSecCodeInfoPList] as? NSDictionary,
+              signed["CFBundleIdentifier"] as? String==hostID, signed["ZxsDistributionTeam"] as? String==team,
+              signed["CFBundleVersion"] as? String==build,
+              let unique=ext[kSecCodeInfoUnique] as? Data, [20,32].contains(unique.count) else { throw workError(EPERM) }
+        var version=[CChar](repeating:0,count:64), n=version.count
+        let rc=version.withUnsafeMutableBytes { sysctlbyname("kern.osversion",$0.baseAddress,&n,nil,0) }
+        guard rc==0, n>1, n<=version.count, version[n-1]==0 else { throw workError(EINVAL) }
+        let os=String(decoding:version.prefix(n-1).map { UInt8(bitPattern:$0) },as:UTF8.self)
+        return [team,build,os,unique.map { String(format:"%02x",$0) }.joined()]
     }
 
     static func checkInstalled() async throws {

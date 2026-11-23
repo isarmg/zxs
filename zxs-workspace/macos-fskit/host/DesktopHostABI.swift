@@ -20,6 +20,18 @@ private func abiErr(_ e: any Error) -> Int32 {
 }
 
 @available(macOS 27.0, *)
+@_cdecl("zxs_fskit_release_identity")
+public func zxsDesktopReleaseIdentity(_ out:UnsafeMutablePointer<CChar>?,_ capacity:Int) -> Int32 {
+    guard let out, capacity>0 else { return EINVAL }
+    do {
+        let raw=try JSONEncoder().encode(HostSigning.releaseIdentity())
+        guard raw.count<capacity else { throw workError(ERANGE) }
+        for (i,b) in raw.enumerated() { out[i]=CChar(bitPattern:b) }; out[raw.count]=0
+        return 0
+    } catch { return abiErr(error) }
+}
+
+@available(macOS 27.0, *)
 @MainActor
 private final class DesktopSession {
     static var sessions=[UInt64:DesktopSession](), next:UInt64=1
@@ -60,7 +72,7 @@ private final class DesktopSession {
         case .checking: return 2
         case .uncertain: return 3
         case .mounted: return 4
-        case .stopping: return 5
+        case .stopping: return try host.readyForNormalDetach() ? 9 : 5
         case .normalGone: return try host.confirmedLocalTeardown() ? 7 : 6
         }
     }
@@ -144,6 +156,11 @@ public func zxsDesktopAction(_ key:UInt64,_ verb:Int32) -> Int32 {
     do {
         try MainActor.assumeIsolated {
             guard let s=DesktopSession.sessions[key] else { throw workError(ESTALE) }
+            if verb==4 || verb==5 {
+                guard !s.mounting, !s.detaching else { throw workError(EBUSY) }
+                if verb==4 { try s.host.releaseUnstarted() } else { try s.host.parkSystemGone() }
+                DesktopSession.sessions.removeValue(forKey:key); return
+            }
             do { try s.action(verb) } catch { s.lastErr=abiErr(error); throw error }
         }; return 0
     } catch { return abiErr(error) }
@@ -158,7 +175,7 @@ public func zxsDesktopStatus(_ key:UInt64,_ state:UnsafeMutablePointer<Int32>?,_
         let (phase,error,bytes)=try MainActor.assumeIsolated { () throws -> (Int32,Int32,[UInt8]) in
             guard let s=DesktopSession.sessions[key] else { throw workError(ESTALE) }
             let phase=try s.status()
-            if phase==4 || phase==5 {
+            if phase==4 || phase==5 || phase==9 {
                 guard let url=s.returned else { throw workError(ESTALE) }
                 let b=try url.withUnsafeFileSystemRepresentation { p -> [UInt8] in
                     guard let p else { throw workError(EINVAL) }

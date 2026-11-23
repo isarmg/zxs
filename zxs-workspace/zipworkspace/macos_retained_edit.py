@@ -404,12 +404,33 @@ def read_retained(connection, root_identity, container, branch, node, consume, *
     return _visit_original(connection, root_identity, container, branch, node, read)
 
 
-def _visit_original(connection, root_identity, container, branch, node, visit):
+def _visit_original(connection, root_identity, container, branch, node, visit, *, exact_key=None):
     destination, account, authorize = _connection(connection)
     source = destination, account, container, branch, node
+    owner = _owner_name(*source)
+    if exact_key is not None and (type(exact_key) is not RetentionKey or exact_key.root != root_identity
+                or (exact_key.destination,exact_key.account,exact_key.container,exact_key.branch,exact_key.node) != source):
+        raise Rejected("the chosen key belongs to another original")
+    def bound(packet):
+        if exact_key is not None and packet.key != exact_key:
+            raise Rejected("not the supplied original physical key")
+        return visit(packet)
     occupied = []
+    def read():
+        if exact_key is not None:
+            # Only the caller's immutable receipt-fenced archive slot, never a scan or latest head.
+            name = "settled-"+exact_key.submission
+            with _state(root_identity,authorize) as (root,_,_,_,guard):
+                try:
+                    os.stat(name,dir_fd=root,follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    guard()
+                    return _read_retained(root_identity,source,name,authorize,bound,occupied)
+        return _read_retained(root_identity,source,owner,authorize,bound,occupied)
     try:
-        return _on_mac(_read_retained, root_identity, source, _owner_name(*source), authorize, visit, occupied)
+        return _on_mac(read)
     except (OSError, Rejected) as exc:
         if occupied:
             raise Uncertain("original or operation state unconfirmed; preserve it, never recapture or retry blindly") from exc
@@ -425,6 +446,7 @@ class _Packet:
     root_area: _PrivateArea
     require: object
     mount: tuple | None
+    archived: bool
 
 
 class _ScopedPending:
@@ -533,7 +555,7 @@ def _read_retained(identity, source, owner, authorize, visit, occupied):
         members()
         try:
             checked = _ScopedPending(pending, members)
-            result = visit(_Packet(key, src, action, checked, root_area, members, mount))
+            result = visit(_Packet(key, src, action, checked, root_area, members, mount, owner == "settled-"+key.submission))
             members()
             return result
         finally:

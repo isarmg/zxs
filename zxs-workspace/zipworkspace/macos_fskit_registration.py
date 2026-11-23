@@ -95,6 +95,13 @@ def _group():
         os.close(fd)
 
 
+def _headroom(group, remaining):
+    v = os.fstatvfs(group)
+    unit = v.f_frsize or v.f_bsize
+    if unit <= 0 or v.f_bavail < 0 or v.f_bavail * unit < remaining + (256 << 20):
+        raise OSError(28, "insufficient private APFS space for complete selections and 256 MiB headroom")
+
+
 class SelectionRequest:
     """One explicit prepare request. Keep token before any side effect. No automatic reissue or cleanup."""
     def __init__(self, connection, choices, *, confirmed=False):
@@ -179,12 +186,7 @@ class SelectionRequest:
                 principal()
             remaining = self.total_bytes
             def headroom():
-                v = os.fstatvfs(group)
-                unit = v.f_frsize or v.f_bsize
-                # Full acquisitions only (no sparse-size optimism). Keep metadata and
-                # user working room. Space can change concurrently; never promise a reservation.
-                if unit <= 0 or v.f_bavail < 0 or v.f_bavail * unit < remaining + (256 << 20):
-                    raise OSError(28, "insufficient private APFS space for complete selections and 256 MiB headroom")
+                _headroom(group, remaining)  # No reservation or sparse-size optimism; available space may change.
             headroom()
             reserved.append(True)
             os.mkdir(session_name, 0o700, dir_fd=group)

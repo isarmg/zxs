@@ -154,6 +154,15 @@ class CompletedDrive:
             _ok(release(self._slot))
             self._slot = 0
 
+    def park(self, *, confirmed=False):
+        # The private files and previously saved exact recovery reference survive.
+        # Never park a live mount, caller-owned outstanding loan or incomplete provider.
+        _, _, release = _functions()
+        with self._lock:
+            if confirmed is not True or not self._slot or self._borrowed:
+                raise Rejected("cannot park a live or borrowed original")
+            _ok(release(self._slot)); self._slot = 0
+
 
 def _close_all(fds):
     first = None
@@ -233,15 +242,15 @@ class _MountedOriginal:
     def retain(self, connection, root_identity, *, confirmed=False):
         if confirmed is not True:
             raise Rejected("explicit complete-file handoff is required")
-        destination, account, checked_account = _connection(connection)
-        if (destination, account) != (self.known.destination, self.known.account):
-            raise Rejected("cannot retain the original under another destination or account")
         with self._lock:
             if self._used:
                 raise Rejected("not a reusable held native original")
             self._used = True
         kept, attempted = False, []
         try:
+            destination, account, checked_account = _connection(connection)
+            if (destination, account) != (self.known.destination, self.known.account):
+                raise Rejected("cannot retain the original under another destination or account")
             def capture():
                 import fcntl
                 with _group() as (group, volume, group_ok):
