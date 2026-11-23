@@ -183,7 +183,13 @@ fn publish_role_marker(
     if stamp(&read(directory, ROLE_STAGE, uid)?.meta) != stamp(&staged.meta) {
         return Err(refused());
     }
-    renameat_with(directory, ROLE_STAGE, directory, MARKER, RenameFlags::NOREPLACE)?;
+    renameat_with(
+        directory,
+        ROLE_STAGE,
+        directory,
+        MARKER,
+        RenameFlags::NOREPLACE,
+    )?;
     directory.sync_all()
 }
 
