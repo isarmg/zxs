@@ -5,4 +5,6 @@ mod thread_evidence;
 #[cfg(test)]
 pub(crate) use ancestry::DiscoveryMount;
 pub(crate) use ancestry::{DiscoveryView, Mounts as HostMounts};
-pub(crate) use thread_evidence::{diagnostic_worker, thread_file};
+pub(crate) use thread_evidence::diagnostic_worker;
+#[cfg(any(test, feature = "embedded-zxs"))]
+pub(crate) use thread_evidence::thread_file;

@@ -1,7 +1,9 @@
 //! Explicit local disk panel. Pairing alone never authorizes a checker or repair.
 mod check;
 mod first;
-pub(crate) use first::{InstallPhase, serve_first, serve_repair};
+pub(crate) use first::serve_repair;
+#[cfg(any(test, feature = "embedded-zxs"))]
+pub(crate) use first::{InstallPhase, serve_first};
 mod http;
 mod view;
 

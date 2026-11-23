@@ -12,6 +12,7 @@ mod block_tools;
 #[path = "../tests/build/dependency_document.rs"]
 mod dependency_document;
 mod disk_web;
+#[cfg(any(test, feature = "embedded-zxs"))]
 mod embedded_image;
 #[cfg(test)]
 #[path = "../tests/common/child.rs"]

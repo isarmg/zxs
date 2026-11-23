@@ -25,10 +25,12 @@ fn failure(s: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, s)
 }
 
+#[cfg(any(test, feature = "embedded-zxs"))]
 #[derive(Clone, Copy)]
 pub(crate) enum Prompt {
     Joint,
 }
+#[cfg(any(test, feature = "embedded-zxs"))]
 impl Prompt {
     fn wording(self) -> [&'static [u8]; 2] {
         match self {
@@ -160,6 +162,7 @@ impl Channel {
         }
         Ok(())
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn prompt(
         &self,
         prompt: Prompt,

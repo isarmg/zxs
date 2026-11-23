@@ -2,7 +2,9 @@
 //! A format name is an operator selection, not detection evidence.
 mod install;
 
-pub(crate) use install::{Evidence, Record, RuntimeFile, hash_upto};
+#[cfg(any(test, feature = "embedded-zxs"))]
+pub(crate) use install::hash_upto;
+pub(crate) use install::{Evidence, Record, RuntimeFile};
 use std::{ffi::OsString, fmt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

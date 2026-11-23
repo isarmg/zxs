@@ -55,6 +55,7 @@ fn own_descriptor_table() -> io::Result<(File, File)> {
     }
     Ok((proc, dir))
 }
+#[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) fn no_inherited_descriptors() -> io::Result<()> {
     only_inherited_descriptors(&[])
 }

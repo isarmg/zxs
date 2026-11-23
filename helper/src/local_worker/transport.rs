@@ -2,12 +2,14 @@
 //! Every receive is from the other still-live process of this one invocation,
 //! with `SCM_CREDENTIALS` and exactly the descriptors fixed by this stage.
 use super::bad;
+#[cfg(any(test, feature = "embedded-zxs"))]
+use rustix::net::{Shutdown, shutdown};
 use rustix::{
     fd::{AsFd, OwnedFd},
     net::{
         AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags,
-        SendAncillaryBuffer, SendAncillaryMessage, SendFlags, Shutdown, SocketFlags, SocketType,
-        UCred, recvmsg, sendmsg, shutdown, socketpair, sockopt,
+        SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType, UCred,
+        recvmsg, sendmsg, socketpair, sockopt,
     },
 };
 use std::{
@@ -22,31 +24,55 @@ pub(crate) type Payload = [u8; 65];
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
+    #[cfg(any(test, feature = "embedded-zxs"))]
     Reserved = 3,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     Complete = 5,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     Lease = 6,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     ChosenFolder = 9,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     VolumeClaim = 10,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     FirstBrowserReady = 12,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     FirstBrowserRequest = 13,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     RustInspect = 15,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     RustStage = 16,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     RustVaultPlaced = 17,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     RustVaultSealed = 18,
     CopyRepairBrowserReady = 22,
     CopyRepairBrowserRequest = 23,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     RetirementCheck = 29,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     ImportInventory = 30,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     FreshDatabase = 31,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     DeployedActive = 32,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     DeployedDatabase = 33,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     DeployedMarker = 34,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     SharedAccountDurable = 38,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     JointWriterReady = 39,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     JointWebReceiverReady = 40,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     JointWebMaterial = 41,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     JointSqlPeer = 42,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     JointWriterPeer = 43,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     JointVaultDurable = 44,
     ImportStep = 45,
     InitData = 46,
@@ -234,6 +260,7 @@ impl Channel {
             }
         }
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn wait<const K: usize>(
         &self,
         kind: Kind,
@@ -266,6 +293,7 @@ impl Channel {
             }
         }
     }
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn finish_writing(&self) -> io::Result<()> {
         shutdown(&self.fd, Shutdown::Write).map_err(Into::into)
     }

@@ -10,12 +10,14 @@ use std::{
     time::{Duration, Instant},
 };
 const TICKET: Duration = Duration::from_secs(90);
+#[cfg(any(test, feature = "embedded-zxs"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InstallPhase {
     Resume,
     Initialize,
     Account,
 }
+#[cfg(any(test, feature = "embedded-zxs"))]
 impl InstallPhase {
     pub(crate) fn wire(self) -> u8 {
         match self {
@@ -43,8 +45,15 @@ impl InstallPhase {
 enum Purpose {
     Headless,
     HeadlessUnit(String),
-    Install { phase: InstallPhase, count: u8 },
-    CopyRepair { format: RepairFormat, bytes: u64 },
+    #[cfg(any(test, feature = "embedded-zxs"))]
+    Install {
+        phase: InstallPhase,
+        count: u8,
+    },
+    CopyRepair {
+        format: RepairFormat,
+        bytes: u64,
+    },
 }
 pub(super) struct Offer {
     purpose: Purpose,
@@ -56,19 +65,20 @@ impl Offer {
         matches!(self.purpose, Purpose::CopyRepair { .. })
     }
     pub(super) fn route(&mut self, r: Request, now: Instant) -> (Reply, bool) {
-        let (preview, request, requested, cancelled) = match self.purpose {
-            Purpose::Headless | Purpose::HeadlessUnit(_) | Purpose::Install { .. } => (
-                "/api/install/preview",
-                "/api/install/request",
-                "请求已交回本机终端。网页将关闭；尚未启用、设密或写盘。",
-                "安装请求已取消。未写入。",
-            ),
-            Purpose::CopyRepair { .. } => (
+        let (preview, request, requested, cancelled) = if self.is_repair() {
+            (
                 "/api/copy-repair/preview",
                 "/api/copy-repair/request",
                 "请求已交回本机终端。网页将关闭；尚未读取或修复镜像。",
                 "工作副本请求已取消。未写入。",
-            ),
+            )
+        } else {
+            (
+                "/api/install/preview",
+                "/api/install/request",
+                "请求已交回本机终端。网页将关闭；尚未启用、设密或写盘。",
+                "安装请求已取消。未写入。",
+            )
         };
         if r.path == request {
             if r.content_type.as_deref() != Some("application/octet-stream") || r.body.len() != 64 {
@@ -100,6 +110,7 @@ impl Offer {
                 let page = match self.purpose {
                     Purpose::Headless => format!("headless\n1\n{ticket}"),
                     Purpose::HeadlessUnit(ref unit) => format!("headless\n1\n{ticket}\n{unit}"),
+                    #[cfg(any(test, feature = "embedded-zxs"))]
                     Purpose::Install { phase, count } => {
                         format!("{}\n{count}\n{ticket}", phase.name())
                     }
@@ -117,6 +128,7 @@ impl Offer {
         }
     }
 }
+#[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) fn serve_first(
     listener: TcpListener,
     phase: InstallPhase,
