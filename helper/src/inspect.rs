@@ -10,9 +10,14 @@ const MAX_REPORT_BYTES: usize = 32 * 1024;
 const MAX_COMPARE: u64 = 256 << 20;
 
 pub(crate) fn directories(paths: &[PathBuf]) -> io::Result<String> {
-    if !(1..=MAX_DIRS).contains(&paths.len()) { return Err(invalid("expected 1–16 directories")); }
+    if !(1..=MAX_DIRS).contains(&paths.len()) {
+        return Err(invalid("expected 1–16 directories"));
+    }
     // One held leaf per operand, not a retained FD for every component of every path.
-    let held: Vec<Pinned> = paths.iter().map(|p| Pinned::open(p, Kind::Directory)).collect::<io::Result<_>>()?;
+    let held: Vec<Pinned> = paths
+        .iter()
+        .map(|p| Pinned::open(p, Kind::Directory))
+        .collect::<io::Result<_>>()?;
     let mut report = format!("directories={}", held.len());
     for (i, dir) in held.iter().enumerate() {
         let id = dir.entity();
@@ -28,49 +33,80 @@ pub(crate) fn directories(paths: &[PathBuf]) -> io::Result<String> {
             let ba = right.entity_is_visible_ancestor_of(left);
             write!(report, "\npair[{i},{j}] same_entity={} same_st_dev={} first_visible_ancestor={} second_visible_ancestor={}",
                    a == b, a.dev == b.dev, ab, ba).expect("writing to String");
-            if report.len() >= MAX_REPORT_BYTES { return Err(invalid("directory report exceeds output budget")); }
+            if report.len() >= MAX_REPORT_BYTES {
+                return Err(invalid("directory report exceeds output budget"));
+            }
         }
     }
-    for dir in &held { dir.require_same_path()?; }
+    for dir in &held {
+        dir.require_same_path()?;
+    }
     Ok(report)
 }
 
 #[derive(PartialEq, Eq)]
-pub(crate) struct Stamp { entity: Entity, size: u64, mode: u32, modified: (i64,i64), changed: (i64,i64) }
+pub(crate) struct Stamp {
+    entity: Entity,
+    size: u64,
+    mode: u32,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
 impl Stamp {
     pub(crate) fn of(meta: Metadata) -> io::Result<Self> {
-        if !meta.is_file() || meta.nlink() != 1 { return Err(invalid("expected a singly linked regular file")); }
-        Ok(Self { entity: Entity::of(&meta)?, size: meta.len(), mode: meta.mode(),
-            modified: (meta.mtime(), meta.mtime_nsec()), changed: (meta.ctime(), meta.ctime_nsec()) })
+        if !meta.is_file() || meta.nlink() != 1 {
+            return Err(invalid("expected a singly linked regular file"));
+        }
+        Ok(Self {
+            entity: Entity::of(&meta)?,
+            size: meta.len(),
+            mode: meta.mode(),
+            modified: (meta.mtime(), meta.mtime_nsec()),
+            changed: (meta.ctime(), meta.ctime_nsec()),
+        })
     }
-    pub(crate) fn len(&self)->u64{self.size}
+    pub(crate) fn len(&self) -> u64 {
+        self.size
+    }
 }
 
-pub(crate) struct Input { pinned: LocalDataFile, stamp: Stamp }
+pub(crate) struct Input {
+    pinned: LocalDataFile,
+    stamp: Stamp,
+}
 impl Input {
     pub(crate) fn select(path: &Path) -> io::Result<Self> {
-        Self::select_in(path,0..=MAX_COMPARE)
+        Self::select_in(path, 0..=MAX_COMPARE)
     }
     // Check the operation's budget on its original metadata before data access.
-    pub(crate) fn select_in(path:&Path,sizes:std::ops::RangeInclusive<u64>)->io::Result<Self>{
-        let pinned=LocalDataFile::select(path)?;
-        let stamp=Stamp::of(pinned.metadata()?)?;
-        if !sizes.contains(&stamp.size){
-            return Err(io::Error::new(io::ErrorKind::Unsupported,"regular input size is outside this operation's supported range"));
+    pub(crate) fn select_in(path: &Path, sizes: std::ops::RangeInclusive<u64>) -> io::Result<Self> {
+        let pinned = LocalDataFile::select(path)?;
+        let stamp = Stamp::of(pinned.metadata()?)?;
+        if !sizes.contains(&stamp.size) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "regular input size is outside this operation's supported range",
+            ));
         }
         Ok(Self { pinned, stamp })
     }
-    pub(crate) fn len(&self) -> u64 { self.stamp.size }
+    pub(crate) fn len(&self) -> u64 {
+        self.stamp.size
+    }
     // An ext image is carried through a name-resolving readonly bind, not
     // copied into a second file. Also require the current name's original mount.
-    pub(crate) fn copy_mount(&self)->io::Result<Mount>{
-        let mount=self.pinned.require_named_mount()?;
-        if Stamp::of(self.pinned.metadata()?)? != self.stamp {return Err(invalid("selected copy metadata changed"));}
+    pub(crate) fn copy_mount(&self) -> io::Result<Mount> {
+        let mount = self.pinned.require_named_mount()?;
+        if Stamp::of(self.pinned.metadata()?)? != self.stamp {
+            return Err(invalid("selected copy metadata changed"));
+        }
         Ok(mount)
     }
     pub(crate) fn reader(&self) -> io::Result<File> {
         let file = self.pinned.reader()?;
-        if Stamp::of(file.metadata()?)? != self.stamp { return Err(invalid("file changed before the comparison")); }
+        if Stamp::of(file.metadata()?)? != self.stamp {
+            return Err(invalid("file changed before the comparison"));
+        }
         Ok(file)
     }
     pub(crate) fn recheck(&self, file: &File) -> io::Result<()> {
@@ -82,11 +118,17 @@ impl Input {
     }
 }
 
-pub(crate) struct Comparison { pub left: u64, pub right: u64, pub equal: bool }
+pub(crate) struct Comparison {
+    pub left: u64,
+    pub right: u64,
+    pub equal: bool,
+}
 pub(crate) fn compare(left: &Path, right: &Path) -> io::Result<Comparison> {
     let a = Input::select(left)?;
     let b = Input::select(right)?;
-    if a.stamp.entity == b.stamp.entity { return Err(invalid("reference and candidate are the same file")); }
+    if a.stamp.entity == b.stamp.entity {
+        return Err(invalid("reference and candidate are the same file"));
+    }
     // Validate the filesystem and identity of BOTH operands without a read open or probe.
     let mut af = a.reader()?;
     let mut bf = b.reader()?;
@@ -94,10 +136,19 @@ pub(crate) fn compare(left: &Path, right: &Path) -> io::Result<Comparison> {
     let equal = exact_bytes(&mut af, na, &mut bf, nb)?;
     a.recheck(&af)?;
     b.recheck(&bf)?;
-    Ok(Comparison { left: na, right: nb, equal })
+    Ok(Comparison {
+        left: na,
+        right: nb,
+        equal,
+    })
 }
 
-fn exact_bytes(a: &mut impl Read, mut remaining_a: u64, b: &mut impl Read, mut remaining_b: u64) -> io::Result<bool> {
+fn exact_bytes(
+    a: &mut impl Read,
+    mut remaining_a: u64,
+    b: &mut impl Read,
+    mut remaining_b: u64,
+) -> io::Result<bool> {
     fn at_end(r: &mut impl Read) -> io::Result<bool> {
         let mut byte = [0_u8];
         loop {
@@ -121,14 +172,19 @@ fn exact_bytes(a: &mut impl Read, mut remaining_a: u64, b: &mut impl Read, mut r
         remaining_a -= na as u64;
         remaining_b -= nb as u64;
     }
-    if !at_end(a)? || !at_end(b)? { return Err(invalid("actual bytes exceed the observed file size")); }
+    if !at_end(a)? || !at_end(b)? {
+        return Err(invalid("actual bytes exceed the observed file size"));
+    }
     Ok(same)
 }
 
 #[cfg(test)]
 mod tests {
     use super::exact_bytes;
-    use std::{fs, io::{self, Read}};
+    use std::{
+        fs,
+        io::{self, Read},
+    };
     #[test]
     fn source_size_change_and_replaced_name_never_become_a_completed_result() {
         let temp = crate::test_area::data_directory();
@@ -146,13 +202,18 @@ mod tests {
     }
     #[test]
     fn equal_length_rewrite_or_new_hard_link_invalidates_the_original_descriptor() {
-        use std::{fs::{File, FileTimes}, os::unix::fs::MetadataExt, time::{Duration, UNIX_EPOCH}};
+        use std::{
+            fs::{File, FileTimes},
+            os::unix::fs::MetadataExt,
+            time::{Duration, UNIX_EPOCH},
+        };
         let temp = crate::test_area::data_directory();
         let path = temp.path().join("same-inode");
         let set_mtime = |seconds| {
-            File::open(&path).unwrap().set_times(
-                FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(seconds))
-            ).unwrap();
+            File::open(&path)
+                .unwrap()
+                .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(seconds)))
+                .unwrap();
         };
         fs::write(&path, b"aaaa").unwrap();
         set_mtime(1_000_000_000);
@@ -170,7 +231,10 @@ mod tests {
         let readable = fresh.reader().unwrap();
         assert!(fresh.recheck(&readable).is_ok());
         fs::hard_link(&path, temp.path().join("new-link")).unwrap();
-        assert_eq!(super::Entity::of(&readable.metadata().unwrap()).unwrap(), fresh.stamp.entity);
+        assert_eq!(
+            super::Entity::of(&readable.metadata().unwrap()).unwrap(),
+            fresh.stamp.entity
+        );
         assert_eq!(readable.metadata().unwrap().nlink(), 2);
         assert!(fresh.recheck(&readable).is_err());
     }
@@ -195,13 +259,21 @@ mod tests {
 
     #[test]
     fn difference_in_first_block_does_not_hide_later_io_failure_at_either_end() {
-        struct LaterFailure { remaining: usize, failed: bool }
+        struct LaterFailure {
+            remaining: usize,
+            failed: bool,
+        }
         impl Read for LaterFailure {
             fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-                if out.is_empty() { return Ok(0); }
+                if out.is_empty() {
+                    return Ok(0);
+                }
                 if self.remaining == 0 {
                     self.failed = true;
-                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "fixture late read failure"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "fixture late read failure",
+                    ));
                 }
                 let n = self.remaining.min(out.len());
                 out[..n].fill(0xff);
@@ -212,7 +284,10 @@ mod tests {
         let good = vec![0_u8; 64 * 1024 + 17];
         let n = good.len() as u64;
         for failing_left in [true, false] {
-            let mut bad = LaterFailure { remaining: 64 * 1024, failed: false };
+            let mut bad = LaterFailure {
+                remaining: 64 * 1024,
+                failed: false,
+            };
             let mut other = good.as_slice();
             let result = if failing_left {
                 exact_bytes(&mut bad, n, &mut other, n)
@@ -226,20 +301,42 @@ mod tests {
 
     #[test]
     fn interrupted_eof_probe_is_retried_before_reporting_equality_or_growth() {
-        struct Probe { data: &'static [u8], attempts: u8, extra: bool }
+        struct Probe {
+            data: &'static [u8],
+            attempts: u8,
+            extra: bool,
+        }
         impl Read for Probe {
             fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-                if out.is_empty() { return Ok(0); }
-                if !self.data.is_empty() { return self.data.read(out); }
+                if out.is_empty() {
+                    return Ok(0);
+                }
+                if !self.data.is_empty() {
+                    return self.data.read(out);
+                }
                 self.attempts += 1;
-                if self.attempts == 1 { return Err(io::ErrorKind::Interrupted.into()); }
-                if self.extra { self.extra = false; out[0] = 42; return Ok(1); }
+                if self.attempts == 1 {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                if self.extra {
+                    self.extra = false;
+                    out[0] = 42;
+                    return Ok(1);
+                }
                 Ok(0)
             }
         }
         for grew in [false, true] {
-            let mut a = Probe { data: b"x", attempts: 0, extra: false };
-            let mut b = Probe { data: b"x", attempts: 0, extra: grew };
+            let mut a = Probe {
+                data: b"x",
+                attempts: 0,
+                extra: false,
+            };
+            let mut b = Probe {
+                data: b"x",
+                attempts: 0,
+                extra: grew,
+            };
             let result = exact_bytes(&mut a, 1, &mut b, 1);
             assert_eq!((a.attempts, b.attempts), (2, 2));
             if grew {

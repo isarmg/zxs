@@ -78,7 +78,13 @@ impl<'a> Source<'a> {
     fn pin(root: &'a File, mount: u64, metric: Metric) -> Field<Self> {
         let pin = passive_proc_child(root, metric.name(), mount, false).map_err(Unknown::io)?;
         let entity = identity(&pin).map_err(Unknown::io)?;
-        Ok(Self { root, mount, metric, pin, entity })
+        Ok(Self {
+            root,
+            mount,
+            metric,
+            pin,
+            entity,
+        })
     }
 
     fn reader(&self) -> Field<File> {
@@ -97,8 +103,14 @@ impl<'a> Source<'a> {
             .map_err(Unknown::io)?,
         );
         if !f.metadata().map_err(Unknown::io)?.is_file()
-            || fstatfs(&f).map_err(io::Error::from).map_err(Unknown::io)?.f_type != PROC_SUPER_MAGIC
-            || Mount::on(&f).map_err(Unknown::io)?.is_none_or(|m| m.id != self.mount)
+            || fstatfs(&f)
+                .map_err(io::Error::from)
+                .map_err(Unknown::io)?
+                .f_type
+                != PROC_SUPER_MAGIC
+            || Mount::on(&f)
+                .map_err(Unknown::io)?
+                .is_none_or(|m| m.id != self.mount)
             || identity(&f).map_err(Unknown::io)? != self.entity
         {
             return Err(Unknown::Changed);
@@ -127,15 +139,23 @@ fn words(b: &[u8]) -> impl Iterator<Item = &[u8]> {
 }
 
 fn number(b: Option<&[u8]>) -> Field<u64> {
-    let b = b.filter(|v| !v.is_empty() && v.iter().all(u8::is_ascii_digit)).ok_or(Unknown::Invalid)?;
-    std::str::from_utf8(b).ok().and_then(|s| s.parse().ok()).ok_or(Unknown::Invalid)
+    let b = b
+        .filter(|v| !v.is_empty() && v.iter().all(u8::is_ascii_digit))
+        .ok_or(Unknown::Invalid)?;
+    std::str::from_utf8(b)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or(Unknown::Invalid)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Ticks([u64; 8]);
 impl Ticks {
     fn decode(line: &[u8]) -> Field<Self> {
-        if line.len() > CPU_LINE_LIMIT || !line.ends_with(b"\n") || line[..line.len()-1].contains(&b'\n') {
+        if line.len() > CPU_LINE_LIMIT
+            || !line.ends_with(b"\n")
+            || line[..line.len() - 1].contains(&b'\n')
+        {
             return Err(Unknown::Invalid);
         }
         let mut fields = words(line);
@@ -219,7 +239,10 @@ impl Memory {
                 _ => continue, // unrelated counters are not exposed or interpreted
             };
             let value = number(fields.next())?;
-            if fields.next() != Some(b"kB") || fields.next().is_some() || slot.replace(value).is_some() {
+            if fields.next() != Some(b"kB")
+                || fields.next().is_some()
+                || slot.replace(value).is_some()
+            {
                 return Err(Unknown::Invalid);
             }
         }
@@ -249,13 +272,22 @@ fn cpu(root: &File, mount: u64) -> Field<Cpu> {
     let (start, before) = cpu_read(&source)?;
     thread::sleep(Duration::from_secs(1));
     let (end, after) = cpu_read(&source)?;
-    Cpu::between(before, after, end.checked_duration_since(start).ok_or(Unknown::NoInterval)?)
+    Cpu::between(
+        before,
+        after,
+        end.checked_duration_since(start)
+            .ok_or(Unknown::NoInterval)?,
+    )
 }
 
 fn memory(root: &File, mount: u64) -> Field<Memory> {
     let source = Source::pin(root, mount, Metric::Memory)?;
     let mut bytes = Vec::new();
-    source.reader()?.take((MEMORY_LIMIT + 1) as u64).read_to_end(&mut bytes).map_err(Unknown::io)?;
+    source
+        .reader()?
+        .take((MEMORY_LIMIT + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(Unknown::io)?;
     source.require_named()?;
     Memory::decode(&bytes)
 }
@@ -273,7 +305,10 @@ impl Report {
 }
 
 fn unix_ms() -> Option<u128> {
-    SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|t| t.as_millis())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|t| t.as_millis())
 }
 
 pub(crate) fn observe() -> Report {
@@ -282,28 +317,49 @@ pub(crate) fn observe() -> Report {
         let (root, mount) = passive_proc_root().map_err(Unknown::io)?;
         let (cpu, memory) = (cpu(&root, mount), memory(&root, mount));
         let (now, current_mount) = passive_proc_root().map_err(Unknown::io)?;
-        if current_mount != mount || identity(&root).map_err(Unknown::io)? != identity(&now).map_err(Unknown::io)? {
+        if current_mount != mount
+            || identity(&root).map_err(Unknown::io)? != identity(&now).map_err(Unknown::io)?
+        {
             return Err(Unknown::Changed);
         }
         Ok((cpu, memory))
     })();
     let (cpu, memory) = pair.unwrap_or_else(|why| (Err(why), Err(why)));
     let ended_ms = unix_ms().filter(|end| started_ms.is_some_and(|start| start <= *end));
-    Report { started_ms, ended_ms, cpu, memory }
+    Report {
+        started_ms,
+        ended_ms,
+        cpu,
+        memory,
+    }
 }
 
 impl Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("source=linux-procfs scope=kernel-aggregate not=zxs-process-or-cgroup started_unix_ms=")?;
+        f.write_str(
+            "source=linux-procfs scope=kernel-aggregate not=zxs-process-or-cgroup started_unix_ms=",
+        )?;
         let stamp = |x: Option<u128>| x.map_or_else(|| "unknown".into(), |v| v.to_string());
-        writeln!(f, "{} ended_unix_ms={}", stamp(self.started_ms), stamp(self.ended_ms))?;
+        writeln!(
+            f,
+            "{} ended_unix_ms={}",
+            stamp(self.started_ms),
+            stamp(self.ended_ms)
+        )?;
         match self.cpu {
-            Ok(c) => writeln!(f, "cpu_interval_ns={} cpu_active_pct={} cpu_iowait_pct={} cpu_steal_pct={}",
-                c.interval_ns, c.active, c.iowait, c.steal)?,
+            Ok(c) => writeln!(
+                f,
+                "cpu_interval_ns={} cpu_active_pct={} cpu_iowait_pct={} cpu_steal_pct={}",
+                c.interval_ns, c.active, c.iowait, c.steal
+            )?,
             Err(why) => writeln!(f, "cpu=unknown({})", why.label())?,
         }
         match self.memory {
-            Ok(m) => write!(f, "ram_total_bytes={} ram_available_estimate_bytes={}", m.total_bytes, m.available_bytes),
+            Ok(m) => write!(
+                f,
+                "ram_total_bytes={} ram_available_estimate_bytes={}",
+                m.total_bytes, m.available_bytes
+            ),
             Err(why) => write!(f, "ram=unknown({})", why.label()),
         }
     }
@@ -319,8 +375,14 @@ mod tests {
         let after = Ticks::decode(b"cpu  38 8 21 122 38 4 5 19 14 2\n").unwrap();
         let c = Cpu::between(before, after, Duration::from_millis(1042)).unwrap();
         assert_eq!(c.interval_ns, 1_042_000_000);
-        assert_eq!((c.active.to_string(), c.iowait.to_string(), c.steal.to_string()),
-                   ("38.00".into(), "8.00".into(), "12.00".into()));
+        assert_eq!(
+            (
+                c.active.to_string(),
+                c.iowait.to_string(),
+                c.steal.to_string()
+            ),
+            ("38.00".into(), "8.00".into(), "12.00".into())
+        );
     }
 
     #[test]
@@ -329,14 +391,22 @@ mod tests {
         let mut decreased = first;
         decreased.0[4] -= 1;
         let window = Duration::from_secs(1);
-        assert_eq!(Cpu::between(first, decreased, window), Err(Unknown::CounterDecrease));
+        assert_eq!(
+            Cpu::between(first, decreased, window),
+            Err(Unknown::CounterDecrease)
+        );
         assert_eq!(Cpu::between(first, first, window), Err(Unknown::NoInterval));
-        assert_eq!(Cpu::between(first, Ticks([100; 8]), Duration::ZERO), Err(Unknown::NoInterval));
+        assert_eq!(
+            Cpu::between(first, Ticks([100; 8]), Duration::ZERO),
+            Err(Unknown::NoInterval)
+        );
         let idle = Cpu::between(Ticks([0; 8]), Ticks([0, 0, 0, 5, 0, 0, 0, 0]), window).unwrap();
         assert_eq!(idle.active.to_string(), "0.00");
         for bad in [
-            &b"cpu0 1 2 3 4 5 6 7 8 0 0\n"[..], b"cpu 1 2 3 4 5 6 7 8\n",
-            b"cpu 1 2 3 4 5 6 7 8 0 0", b"cpu -1 2 3 4 5 6 7 8 0 0\n",
+            &b"cpu0 1 2 3 4 5 6 7 8 0 0\n"[..],
+            b"cpu 1 2 3 4 5 6 7 8\n",
+            b"cpu 1 2 3 4 5 6 7 8 0 0",
+            b"cpu -1 2 3 4 5 6 7 8 0 0\n",
             b"cpu 1 2 3 4 5 6 7 8 0 0 99\n",
         ] {
             assert_eq!(Ticks::decode(bad), Err(Unknown::Invalid));
@@ -345,26 +415,44 @@ mod tests {
 
     #[test]
     fn hardware_memory_requires_both_exact_fields_and_preserves_measured_zero() {
-        let m = Memory::decode(b"MemTotal: 4096 kB\nMemFree: 75 kB\nMemAvailable: 2048 kB\n").unwrap();
+        let m =
+            Memory::decode(b"MemTotal: 4096 kB\nMemFree: 75 kB\nMemAvailable: 2048 kB\n").unwrap();
         assert_eq!((m.total_bytes, m.available_bytes), (4_194_304, 2_097_152));
-        assert_eq!(Memory::decode(b"MemTotal: 4096 kB\nMemAvailable: 0 kB\n").unwrap().available_bytes, 0);
-        assert_eq!(Memory::decode(b"MemTotal: 4096 kB\nMemFree: 1024 kB\n"), Err(Unknown::Unavailable));
+        assert_eq!(
+            Memory::decode(b"MemTotal: 4096 kB\nMemAvailable: 0 kB\n")
+                .unwrap()
+                .available_bytes,
+            0
+        );
+        assert_eq!(
+            Memory::decode(b"MemTotal: 4096 kB\nMemFree: 1024 kB\n"),
+            Err(Unknown::Unavailable)
+        );
         for bad in [
-            &b"MemTotal: 1 kB\nMemAvailable: 2 kB\n"[..], b"MemTotal: 0 kB\nMemAvailable: 0 kB\n",
+            &b"MemTotal: 1 kB\nMemAvailable: 2 kB\n"[..],
+            b"MemTotal: 0 kB\nMemAvailable: 0 kB\n",
             b"MemTotal: 9 kB\nMemAvailable: 1 kB\nMemAvailable: 1 kB\n",
-            b"MemTotal: 3 MB\nMemAvailable: 2 kB\n", b"MemTotal: 3 kB\nMemAvailable: 1 kB",
+            b"MemTotal: 3 MB\nMemAvailable: 2 kB\n",
+            b"MemTotal: 3 kB\nMemAvailable: 1 kB",
         ] {
             assert_eq!(Memory::decode(bad), Err(Unknown::Invalid));
         }
-        assert_eq!(Memory::decode(&vec![b'\n'; MEMORY_LIMIT + 1]), Err(Unknown::Invalid));
+        assert_eq!(
+            Memory::decode(&vec![b'\n'; MEMORY_LIMIT + 1]),
+            Err(Unknown::Invalid)
+        );
     }
 
     #[test]
     fn hardware_reports_partial_results_without_exposing_kernel_text() {
         let report = Report {
-            started_ms: Some(10), ended_ms: Some(12),
+            started_ms: Some(10),
+            ended_ms: Some(12),
             cpu: Err(Unknown::CounterDecrease),
-            memory: Ok(Memory { total_bytes: 8192, available_bytes: 4096 }),
+            memory: Ok(Memory {
+                total_bytes: 8192,
+                available_bytes: 4096,
+            }),
         };
         let shown = report.to_string();
         assert!(!report.complete());
