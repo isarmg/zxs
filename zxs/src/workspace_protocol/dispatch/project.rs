@@ -74,7 +74,7 @@ pub(super) fn save_node<R: Read>(
     store: &core::Store,
     save: SaveNode,
     reader: R,
-    authorize: impl FnOnce() -> io::Result<()>,
+    authorize: impl Fn() -> io::Result<()>,
 ) -> Result<Reply, Failure> {
     let op = mutation(save.container, save.operation);
     let node = save.node.bytes();

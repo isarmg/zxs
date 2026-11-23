@@ -1,15 +1,16 @@
 //! An original data root and its owner lease, selected data and intake.
-use super::{Id, State, hex, invalid, read_state};
+use super::{DataRoot, Id, State, hex, invalid, read_selected_entries};
 use crate::fs::HeldDir;
 use std::{
     ffi::CString,
     fs::{self, File},
     io,
     os::{fd::AsRawFd, unix::fs::MetadataExt},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 pub(super) struct DataVolume {
+    pub(super) token: [u8; 32],
     root: HeldDir,
     data: HeldDir,
     staging: HeldDir,
@@ -17,14 +18,18 @@ pub(super) struct DataVolume {
 }
 
 impl DataVolume {
-    pub(super) fn open(root: HeldDir) -> io::Result<Self> {
+    pub(super) fn open(DataRoot { root, token }: DataRoot, fresh: bool) -> io::Result<Self> {
         root.require_named()?;
         let owner = root.opaque_owner(c"owner")?;
         let data = root.opaque_subdirectory(c"data")?;
+        if fresh {
+            data.only(None)?;
+        }
         let staging = root.opaque_subdirectory(c"staging")?;
         discard_interrupted_intake(&root, &staging, &owner)?;
         root.require_named()?;
         Ok(Self {
+            token,
             root,
             data,
             staging,
@@ -32,20 +37,49 @@ impl DataVolume {
         })
     }
 
-    pub(super) fn root(&self) -> &HeldDir {
-        &self.root
-    }
-
-    pub(super) fn data(&self) -> &Path {
-        &self.data.path
+    pub(super) fn contents(&self) -> &HeldDir {
+        &self.data
     }
 
     pub(super) fn staging(&self) -> &Path {
         &self.staging.path
     }
 
-    pub(super) fn container(&self, id: Id) -> PathBuf {
-        self.data().join(hex(id))
+    #[cfg(test)]
+    pub(super) fn container(&self, id: Id) -> std::path::PathBuf {
+        self.data.path.join(hex(id))
+    }
+
+    pub(super) fn held_container(&self, id: Id) -> io::Result<Option<HeldDir>> {
+        self.require_named()?;
+        let found = self.data.child_directory(&leaf(id)?)?;
+        self.data.require_named()?;
+        Ok(found)
+    }
+
+    pub(super) fn require_vacant(&self, id: Id) -> io::Result<()> {
+        self.require_named()?;
+        if self.data.pin_record(&leaf(id)?)?.is_some() {
+            return Err(invalid("unrouted DATA container name is occupied"));
+        }
+        self.data.require_named()
+    }
+
+    pub(super) fn create_container(&self, id: Id) -> io::Result<HeldDir> {
+        self.require_named()?;
+        self.data.new_child_directory(&leaf(id)?)
+    }
+
+    pub(super) fn read(&self, id: Id) -> io::Result<State> {
+        let Some(container) = self.held_container(id)? else {
+            return Ok(State::default());
+        };
+        // A receipt rename can be visible before its directory sync succeeds.
+        container.file.sync_all()?;
+        container.require_named()?;
+        let state = read_selected_entries(&container.path, id)?;
+        container.require_named()?;
+        Ok(state)
     }
 
     pub(super) fn require_named(&self) -> io::Result<()> {
@@ -67,16 +101,21 @@ impl DataVolume {
         id: Id,
         memory: &'a mut Option<State>,
     ) -> io::Result<&'a mut State> {
+        self.require_named()?;
         if memory.is_none() {
             // Covers process cuts and same-process post-rename sync errors.
             // Only metadata is read; previous complete node bodies aren't scanned.
             self.sync_staging()?;
-            *memory = Some(read_state(&self.container(id), id)?);
+            *memory = Some(self.read(id)?);
         }
         memory
             .as_mut()
             .ok_or_else(|| invalid("container state unavailable"))
     }
+}
+
+fn leaf(id: Id) -> io::Result<CString> {
+    CString::new(hex(id)).map_err(|_| invalid("invalid DATA container name"))
 }
 
 /// The ordinary owner lease excludes new intake during this cold cleanup.

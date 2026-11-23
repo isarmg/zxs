@@ -1,6 +1,6 @@
-//! Retain the exact three qualified mount roots through the fresh native Store.
+//! Retain the qualified system, recycle and data roster through the native Store.
 use crate::{
-    container_store::Store,
+    container_store::{DataRoot, Store},
     fs::{HeldDir, local_uid},
     headless_auth::{Account, Descriptor, SelectedRoot},
 };
@@ -80,11 +80,15 @@ fn root(selected: &SelectedRoot, role: u8, pool: &[u8; 16], uid: u32) -> io::Res
     Ok(held)
 }
 
+fn recycle_disjoint(recycle: &HeldDir, other: &HeldDir) -> io::Result<bool> {
+    Ok(recycle.entity.device != other.entity.device && recycle.distinct_filesystems(other)?)
+}
+
 pub(crate) struct SelectedStart {
     account: Account,
     state: HeldDir,
     system: HeldDir,
-    data: HeldDir,
+    data: Vec<DataRoot>,
     recycle: HeldDir,
 }
 
@@ -99,20 +103,44 @@ impl SelectedStart {
         let (roots, account) =
             Descriptor::read_selected(&open_member(&state, DESCRIPTOR)?, uid)?.into_parts();
         let system = root(&roots.system, 0, &roots.pool, uid)?;
-        let data = root(&roots.data, 1, &roots.pool, uid)?;
         let recycle = root(&roots.recycle, 2, &roots.pool, uid)?;
-        let roots = [&system, &data, &recycle];
-        if roots.iter().any(|root| {
-            state.path.starts_with(&root.path)
+        let data = roots
+            .data
+            .iter()
+            .map(|selected| {
+                Ok(DataRoot {
+                    token: selected.token,
+                    root: root(selected, 1, &roots.pool, uid)?,
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let held = [&system, &recycle]
+            .into_iter()
+            .chain(data.iter().map(|volume| &volume.root))
+            .collect::<Vec<_>>();
+        for (i, root) in held.iter().enumerate() {
+            if state.path.starts_with(&root.path)
                 || root.path.starts_with(&state.path)
                 || root.entity == state.entity
-        }) || system.entity == data.entity
-            || system.entity == recycle.entity
-            || data.entity == recycle.entity
-            || !recycle.distinct_filesystems(&system)?
-            || !recycle.distinct_filesystems(&data)?
-        {
+                || held[..i].iter().any(|older| older.entity == root.entity)
+            {
+                return Err(refused());
+            }
+        }
+        if !recycle_disjoint(&recycle, &system)? {
             return Err(refused());
+        }
+        for (i, volume) in data.iter().enumerate() {
+            if !recycle_disjoint(&recycle, &volume.root)? {
+                return Err(refused());
+            }
+            for earlier in &data[..i] {
+                if volume.root.entity.device == earlier.root.entity.device
+                    || volume.root.same_mount(&earlier.root)?
+                {
+                    return Err(refused());
+                }
+            }
         }
         let start = Self {
             account,
@@ -128,8 +156,10 @@ impl SelectedStart {
     fn require_named(&self) -> io::Result<()> {
         self.state.require_named()?;
         self.system.require_named()?;
-        self.data.require_named()?;
-        self.recycle.require_named()
+        self.recycle.require_named()?;
+        self.data
+            .iter()
+            .try_for_each(|volume| volume.root.require_named())
     }
 
     /// Move the original capabilities, never their strings, into Store.

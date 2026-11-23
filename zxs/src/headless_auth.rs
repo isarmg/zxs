@@ -9,10 +9,11 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-const MAGIC: &[u8] = b"ZXS-HTTP\0";
+const MAGIC: &[u8] = b"ZXS-HTTP-ROSTER\0";
 const MAX_ROLE_PATH: usize = 4095;
+const MAX_DATA_ROOTS: usize = 62;
 const MAX_DESCRIPTOR: usize =
-    MAGIC.len() + 16 + 16 + 16 + 32 + 1 + 64 + 3 * (2 + MAX_ROLE_PATH + 32);
+    MAGIC.len() + 16 + 16 + 16 + 32 + 1 + 64 + 1 + (MAX_DATA_ROOTS + 2) * (2 + MAX_ROLE_PATH + 32);
 #[path = "headless_fresh_password.rs"]
 mod fresh_password;
 const MAX_AUTH_SCHEME_VALUE: usize = 6 + 4 * (64usize + 1 + fresh_password::MAX_BYTES).div_ceil(3);
@@ -35,8 +36,8 @@ pub(crate) struct Descriptor {
 pub(crate) struct SelectedRoots {
     pub(crate) pool: [u8; 16],
     pub(crate) system: SelectedRoot,
-    pub(crate) data: SelectedRoot,
     pub(crate) recycle: SelectedRoot,
+    pub(crate) data: Vec<SelectedRoot>,
 }
 pub(crate) struct SelectedRoot {
     path: PathBuf,
@@ -96,10 +97,20 @@ impl Descriptor {
         let tag = fixed(&mut raw)?;
         let [login_len] = fixed(&mut raw)?;
         let login = login_name(take(&mut raw, usize::from(login_len))?)?.to_owned();
+        let [data_count] = fixed(&mut raw)?;
+        let data_count = usize::from(data_count);
+        if !(1..=MAX_DATA_ROOTS).contains(&data_count) {
+            return Err(invalid());
+        }
         let system = root_field(&mut raw)?;
-        let data = root_field(&mut raw)?;
         let recycle = root_field(&mut raw)?;
-        let roots = [&system, &data, &recycle];
+        let data = (0..data_count)
+            .map(|_| root_field(&mut raw))
+            .collect::<io::Result<Vec<_>>>()?;
+        let roots = [&system, &recycle]
+            .into_iter()
+            .chain(&data)
+            .collect::<Vec<_>>();
         if pool == [0; 16]
             || epoch == [0; 16]
             || pool == epoch
@@ -125,8 +136,8 @@ impl Descriptor {
             roots: SelectedRoots {
                 pool,
                 system,
-                data,
                 recycle,
+                data,
             },
         })
     }

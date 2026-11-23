@@ -3,7 +3,11 @@ use super::*;
 fn raw(data: &[u8], recycle: &[u8]) -> Vec<u8> {
     raw_roots([b"/zxs/disks/system", data, recycle])
 }
-fn raw_roots(roots: [&[u8]; 3]) -> Vec<u8> {
+fn raw_roots([system, data, recycle]: [&[u8]; 3]) -> Vec<u8> {
+    raw_roster(system, recycle, &[data])
+}
+
+fn raw_roster(system: &[u8], recycle: &[u8], data: &[&[u8]]) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.extend([1; 16]);
     out.extend([2; 16]);
@@ -11,7 +15,12 @@ fn raw_roots(roots: [&[u8]; 3]) -> Vec<u8> {
     out.extend([4; 32]);
     out.push(4);
     out.extend(b"user");
-    for (i, root) in roots.into_iter().enumerate() {
+    out.push(u8::try_from(data.len()).unwrap());
+    for (i, root) in [system, recycle]
+        .into_iter()
+        .chain(data.iter().copied())
+        .enumerate()
+    {
         out.extend(u16::try_from(root.len()).unwrap().to_be_bytes());
         out.extend(root);
         out.extend([u8::try_from(i).unwrap() + 7; 32]);
@@ -24,7 +33,8 @@ fn fresh_descriptor_rejects_extra_wrong_or_ambiguous_fields() {
     let first = raw(b"/zxs/disks/data/opaque", b"/zxs/disks/recycle/opaque");
     let selected = Descriptor::parse(&first).unwrap();
     let (roots, _) = selected.into_parts();
-    assert_eq!(roots.data.path(), Path::new("/zxs/disks/data/opaque"));
+    assert_eq!(roots.data.len(), 1);
+    assert_eq!(roots.data[0].path(), Path::new("/zxs/disks/data/opaque"));
     assert_eq!(roots.recycle.path(), Path::new("/zxs/disks/recycle/opaque"));
     for cut in 0..first.len() {
         assert!(Descriptor::parse(&first[..cut]).is_err());
@@ -65,6 +75,57 @@ fn fresh_descriptor_rejects_extra_wrong_or_ambiguous_fields() {
         (b"/one/child".as_slice(), b"/one".as_slice()),
     ] {
         assert!(Descriptor::parse(&raw(data, recycle)).is_err());
+    }
+}
+
+#[test]
+fn descriptor_requires_exact_ordered_nonempty_data_roster() {
+    let raw = raw_roster(b"/system", b"/recycle", &[b"/disk-b", b"/disk-a"]);
+    let (roots, _) = Descriptor::parse(&raw).unwrap().into_parts();
+    assert_eq!(roots.system.path(), Path::new("/system"));
+    assert_eq!(roots.recycle.path(), Path::new("/recycle"));
+    assert_eq!(roots.data.len(), 2);
+    assert_eq!(roots.data[0].path(), Path::new("/disk-b"));
+    assert_eq!(roots.data[0].token, [9; 32]);
+    assert_eq!(roots.data[1].path(), Path::new("/disk-a"));
+    assert_eq!(roots.data[1].token, [10; 32]);
+
+    let count = MAGIC.len() + 16 + 16 + 16 + 32 + 1 + b"user".len();
+    for bad in [0, 1, 3, 63, 255] {
+        let mut changed = raw.clone();
+        changed[count] = bad;
+        assert!(Descriptor::parse(&changed).is_err());
+    }
+    let mut singleton_magic = raw;
+    drop(singleton_magic.splice(..MAGIC.len(), b"ZXS-HTTP\0".iter().copied()));
+    assert!(Descriptor::parse(&singleton_magic).is_err());
+
+    let maximum = (0..MAX_DATA_ROOTS)
+        .map(|i| format!("/data-{i}"))
+        .collect::<Vec<_>>();
+    let paths = maximum
+        .iter()
+        .map(|path| path.as_bytes())
+        .collect::<Vec<_>>();
+    assert!(Descriptor::parse(&raw_roster(b"/system", b"/recycle", &paths)).is_ok());
+    assert!(Descriptor::parse(&raw_roster(b"/system", b"/recycle", &[])).is_err());
+}
+
+#[test]
+fn descriptor_rejects_data_paths_or_tokens_aliasing_any_role() {
+    for paths in [
+        [b"/data".as_slice(), b"/data".as_slice()],
+        [b"/data".as_slice(), b"/data/sub".as_slice()],
+        [b"/data".as_slice(), b"/system/sub".as_slice()],
+        [b"/data".as_slice(), b"/recycle".as_slice()],
+    ] {
+        assert!(Descriptor::parse(&raw_roster(b"/system", b"/recycle", &paths)).is_err());
+    }
+    for duplicate in [7, 8, 9] {
+        let mut raw = raw_roster(b"/system", b"/recycle", &[b"/data1", b"/data2"]);
+        let token = raw.len() - 32;
+        raw[token..].fill(duplicate);
+        assert!(Descriptor::parse(&raw).is_err());
     }
 }
 

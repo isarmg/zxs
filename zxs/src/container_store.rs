@@ -3,6 +3,7 @@ mod codec;
 mod model;
 mod recycle;
 mod recycle_material;
+mod routes;
 mod volume;
 
 use crate::{
@@ -12,6 +13,7 @@ use crate::{
 use model::State;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 pub(crate) use recycle::RecycleReceipt;
+use routes::Routes;
 use std::{
     collections::BTreeMap,
     fmt,
@@ -82,8 +84,14 @@ pub(crate) struct NodeBytes {
     pub(crate) file: File,
 }
 
+pub(crate) struct DataRoot {
+    pub(crate) token: [u8; 32],
+    pub(crate) root: HeldDir,
+}
+
 pub(crate) struct Store {
-    volume: DataVolume,
+    volumes: Vec<DataVolume>,
+    routes: Routes,
     next_stage: AtomicU64,
     // Catalogue lock selects an independent short per-container lock.
     // No upload reads, hashing, or fsync while acquiring this map.
@@ -91,41 +99,101 @@ pub(crate) struct Store {
     // Only bootstrap and rename require a shared display-namespace cut.
     names: Mutex<()>,
     archive: Option<recycle::Recycle>,
+    _system_owner: File,
 }
 
 impl Store {
-    #[cfg(test)]
-    fn open(root: &Path) -> io::Result<Self> {
-        Self::open_ordinary(HeldDir::trusted_storage(root)?)
+    /// Startup supplies the already-qualified original roots.
+    pub(crate) fn open_with_recycle(
+        system: HeldDir,
+        data: Vec<DataRoot>,
+        recycled: HeldDir,
+    ) -> io::Result<Self> {
+        recycle::Recycle::require_roles(&system, &recycled, &data)?;
+        let owner = system.opaque_owner(c"container-owner")?;
+        let mut store = Self::open_roster(&system, data, owner)?;
+        store.archive = Some(recycle::Recycle::open(system, recycled)?);
+        Ok(store)
     }
 
-    fn open_ordinary(data_root: HeldDir) -> io::Result<Self> {
+    fn open_roster(system: &HeldDir, mut data: Vec<DataRoot>, owner: File) -> io::Result<Self> {
+        data.sort_unstable_by_key(|volume| volume.token);
+        if data.is_empty()
+            || data[0].token == [0; 32]
+            || data.windows(2).any(|pair| pair[0].token == pair[1].token)
+        {
+            return Err(invalid("invalid enrolled DATA roster"));
+        }
+
+        let routes = Routes::open_existing(system)?;
+        let fresh = match &routes {
+            Some(routes) => match routes.ids()?.first() {
+                Some(id) => {
+                    routes
+                        .get(*id)?
+                        .ok_or_else(|| invalid("selected route vanished at startup"))?;
+                    false
+                }
+                None => true,
+            },
+            None => true,
+        };
+        if fresh && let Some(old) = system.child_directory(c"container-moves")? {
+            old.only(None)?;
+        }
+        // An absent route layout is a new enrollment, not a legacy import.
+        // Check every DATA namespace under its own owner before creating it.
+        let volumes = data
+            .into_iter()
+            .map(|root| DataVolume::open(root, fresh))
+            .collect::<io::Result<Vec<_>>>()?;
+        let routes = match routes {
+            Some(routes) => routes,
+            None => Routes::open(system)?,
+        };
         Ok(Self {
-            volume: DataVolume::open(data_root)?,
+            volumes,
+            routes,
             next_stage: AtomicU64::new(0),
             objects: Mutex::new(BTreeMap::new()),
             names: Mutex::new(()),
             archive: None,
+            _system_owner: owner,
         })
     }
 
-    /// Consume the exact three already-qualified original root FDs. The
-    /// caller's deployment lease remains valid during startup; the Store
-    /// initializes its own layout under the independent root-owner leases.
-    pub(crate) fn open_with_recycle(
-        system: HeldDir,
-        ordinary: HeldDir,
-        recycled: HeldDir,
-    ) -> io::Result<Self> {
-        recycle::Recycle::require_roles(&system, &recycled, &ordinary)?;
-        let mut store = Self::open_ordinary(ordinary)?;
-        store.archive = Some(recycle::Recycle::open(
-            system,
-            recycled,
-            store.volume.root(),
-        )?);
-        store.volume.require_named()?;
-        Ok(store)
+    fn routed(&self, id: Id) -> io::Result<Option<&DataVolume>> {
+        self.routes
+            .get(id)?
+            .map(|token| {
+                self.volumes
+                    .binary_search_by_key(&token, |volume| volume.token)
+                    .map(|i| &self.volumes[i])
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::NotConnected, "selected DATA is not enrolled")
+                    })
+            })
+            .transpose()
+    }
+
+    fn write_volume(
+        &self,
+        id: Id,
+        first: bool,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<&DataVolume, Error> {
+        if self.recycled(id)?.is_none() {
+            if let Some(volume) = self.routed(id)? {
+                return Ok(volume);
+            }
+            if first {
+                // The roster is nonempty and sorted by stable disk token.
+                // Only an ID with no route can be assigned an intake root.
+                return Ok(&self.volumes[usize::from(id[0]) % self.volumes.len()]);
+            }
+        }
+        authorize()?;
+        Err(Conflict::MissingContainer.into())
     }
 
     fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, PathBuf)>> {
@@ -144,9 +212,9 @@ impl Store {
             .map_err(|_| invalid("container catalogue unavailable"))?;
         Ok(objects.entry(id).or_default().clone())
     }
-    fn stage(&self) -> io::Result<Stage> {
-        self.volume.require_named()?;
-        self.stage_at(self.volume.staging())
+    fn stage(&self, volume: &DataVolume) -> io::Result<Stage> {
+        volume.require_named()?;
+        self.stage_at(volume.staging())
     }
     fn stage_at(&self, root: &Path) -> io::Result<Stage> {
         loop {
@@ -167,12 +235,16 @@ impl Store {
         mutation: Mutation,
         change: Change,
         mut input: impl Read,
-        authorize: impl FnOnce() -> io::Result<()>,
+        authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
-        let Change::Save { body, .. } = &change else {
+        let Change::Save {
+            body, initial_name, ..
+        } = &change
+        else {
             return Err(invalid("a node requires a complete save operation").into());
         };
-        let stage = self.stage()?;
+        let volume = self.write_volume(mutation.container, initial_name.is_some(), &authorize)?;
+        let stage = self.stage(volume)?;
         {
             let mut file = create_file(&stage.path.join("payload"))?;
             let mut digest = Sha256::new();
@@ -197,30 +269,31 @@ impl Store {
             }
             file.sync_all()?;
         }
-        self.publish(mutation, change, &stage, authorize)
+        self.publish(mutation, change, volume, &stage, authorize)
     }
 
     pub(crate) fn change(
         &self,
         mutation: Mutation,
         change: Change,
-        authorize: impl FnOnce() -> io::Result<()>,
+        authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
         if matches!(change, Change::Save { .. }) {
             return Err(invalid("a node must carry the original complete body").into());
         }
-        self.publish(mutation, change, &self.stage()?, authorize)
+        let volume = self.write_volume(mutation.container, false, &authorize)?;
+        self.publish(mutation, change, volume, &self.stage(volume)?, authorize)
     }
 
     fn publish(
         &self,
         mutation: Mutation,
         change: Change,
+        volume: &DataVolume,
         stage: &Stage,
-        authorize: impl FnOnce() -> io::Result<()>,
+        authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
         let id = mutation.container;
-        self.volume.require_named()?;
         let object = self.object(id)?;
         let mut memory = object
             .lock()
@@ -229,7 +302,18 @@ impl Store {
             authorize()?;
             return Err(Conflict::MissingContainer.into());
         }
-        let selected = self.volume.load(id, &mut memory)?;
+        volume.require_named()?;
+        let reserved = match self.routes.get(id)? {
+            Some(token) if token == volume.token => true,
+            None if memory.is_none() => false,
+            _ => return Err(invalid("DATA route changed during intake").into()),
+        };
+        let mut first = State::default();
+        let selected = if reserved {
+            volume.load(id, &mut memory)?
+        } else {
+            &mut first
+        };
         match selected.replay(mutation, &change) {
             Ok(None) => {}
             result => {
@@ -267,21 +351,41 @@ impl Store {
             authorize()?;
             return Err(Conflict::AlreadyExists.into());
         }
-        let directory = self.volume.container(id);
-        ensure_dir(&directory)?;
+        let directory = if !reserved {
+            volume.require_vacant(id)?;
+            authorize()?;
+            self.routes.reserve(id, volume.token)?;
+            volume.create_container(id)?
+        } else if let Some(original) = volume.held_container(id)? {
+            original
+        } else if receipt.sequence == 1 {
+            // The SYSTEM reservation can survive an interrupted first save.
+            volume.create_container(id)?
+        } else {
+            return Err(invalid("recorded DATA container is absent").into());
+        };
+        if receipt.sequence == 1 {
+            directory.only(None)?;
+        }
         // Also covers a prior failed first publication of this directory.
-        self.volume.require_named()?;
-        self.volume.sync_data()?;
-        let destination = directory.join(entry_leaf(receipt.sequence, receipt.mutation.request));
+        volume.sync_data()?;
+        let destination = directory
+            .path
+            .join(entry_leaf(receipt.sequence, receipt.mutation.request));
         match fs::symlink_metadata(&destination) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
             Ok(_) => return Err(invalid("container receipt position already exists").into()),
         }
+        volume.require_named()?;
+        directory.require_named()?;
         authorize()?;
-        self.volume.require_named()?;
         fs::rename(&stage.path, destination)?;
-        if let Err(e) = sync_dir(&directory).and_then(|()| self.volume.sync_staging()) {
+        if let Err(e) = directory
+            .file
+            .sync_all()
+            .and_then(|()| volume.sync_staging())
+        {
             *memory = None;
             return Err(Error::Uncertain(e));
         }
@@ -292,17 +396,22 @@ impl Store {
                 "selected object could not update memory: {e:?}"
             ))));
         }
+        if !reserved {
+            *memory = Some(first);
+        }
         Ok(receipt)
     }
 
+    fn recorded(&self, id: Id) -> io::Result<&DataVolume> {
+        self.routed(id)?
+            .ok_or_else(|| invalid("selected container route is absent"))
+    }
+
     fn vacant(&self, except: Id, name: &str) -> io::Result<bool> {
-        for item in fs::read_dir(self.volume.data())? {
-            let item = item?;
-            let file_name = item.file_name();
-            let id = parse_container_id(file_name.as_encoded_bytes())?;
+        for id in self.routes.ids()? {
             if id != except
                 && self.recycled(id)?.is_none()
-                && read_state(&item.path(), id)?.name.as_deref() == Some(name)
+                && self.recorded(id)?.read(id)?.name.as_deref() == Some(name)
             {
                 return Ok(false);
             }
@@ -321,9 +430,10 @@ impl Store {
                 .get(&mutation.request)
                 .cloned());
         }
-        self.volume.require_named()?;
-        Ok(self
-            .volume
+        let Some(volume) = self.routed(mutation.container)? else {
+            return Ok(None);
+        };
+        Ok(volume
             .load(mutation.container, &mut memory)?
             .receipts
             .get(&mutation.request)
@@ -331,6 +441,10 @@ impl Store {
     }
 
     pub(crate) fn describe(&self, id: Id) -> io::Result<Option<Container>> {
+        self.describe_at(id, false)
+    }
+
+    fn describe_at(&self, id: Id, recorded: bool) -> io::Result<Option<Container>> {
         let object = self.object(id)?;
         let mut memory = object
             .lock()
@@ -338,8 +452,15 @@ impl Store {
         if self.recycled(id)?.is_some() {
             return Ok(None);
         }
-        self.volume.require_named()?;
-        let state = self.volume.load(id, &mut memory)?;
+        let volume = if recorded {
+            self.recorded(id)?
+        } else {
+            let Some(volume) = self.routed(id)? else {
+                return Ok(None);
+            };
+            volume
+        };
+        let state = volume.load(id, &mut memory)?;
         Ok(state.name.as_ref().map(|name| Container {
             id,
             name: name.clone(),
@@ -350,11 +471,8 @@ impl Store {
     }
     pub(crate) fn list(&self) -> io::Result<Vec<Container>> {
         let mut items = Vec::new();
-        for item in fs::read_dir(self.volume.data())? {
-            let item = item?;
-            let name = item.file_name();
-            let id = parse_container_id(name.as_encoded_bytes())?;
-            if let Some(current) = self.describe(id)? {
+        for id in self.routes.ids()? {
+            if let Some(current) = self.describe_at(id, true)? {
                 items.push(current);
             }
         }
@@ -384,7 +502,6 @@ impl Store {
             .archive
             .as_ref()
             .ok_or_else(|| invalid("no qualified recycle storage"))?;
-        let ordinary = self.volume.root();
         if mutation.request == [0; 16] {
             return Err(invalid("zero recycle request identity").into());
         }
@@ -392,7 +509,6 @@ impl Store {
         let mut memory = object
             .lock()
             .map_err(|_| invalid("container selection unavailable"))?;
-        let original = self.volume.container(mutation.container);
         authorize()?;
         if let Some((done, at)) = archive.selected(mutation.container)? {
             if (done.mutation, done.original_sequence) != (mutation, expected_sequence) {
@@ -400,9 +516,9 @@ impl Store {
             }
             // The result remains available from SYSTEM and R when F is
             // absent. A caller may separately query the selected receipt.
-            if let Err(error) = self.volume.require_named().and_then(|()| {
+            if let Err(error) = self.recorded(mutation.container).and_then(|volume| {
                 let known = read_state(&at, mutation.container)?;
-                archive.retire(done, ordinary, &original, &known)
+                archive.retire(done, volume, &known)
             }) {
                 return Err(Error::CleanupPending {
                     receipt: done,
@@ -411,8 +527,10 @@ impl Store {
             }
             return Ok(done);
         }
-        self.volume.require_named()?;
-        let state = self.volume.load(mutation.container, &mut memory)?;
+        let Some(volume) = self.routed(mutation.container)? else {
+            return Err(Conflict::MissingContainer.into());
+        };
+        let state = volume.load(mutation.container, &mut memory)?;
         if state.name.is_none() {
             return Err(Conflict::MissingContainer.into());
         }
@@ -423,9 +541,9 @@ impl Store {
             return Err(Conflict::SequenceChanged(state.sequence).into());
         }
         let incoming = self.stage_at(archive.staging()?)?;
-        let done = archive.prepare(mutation, ordinary, &original, state, &incoming, || {
+        let done = archive.prepare(mutation, volume, state, &incoming, || {
             authorize()?;
-            self.volume.require_named()
+            volume.require_named()
         })?;
         let selector = self.stage_at(archive.moves()?)?;
         // Only one small SYSTEM rename switches logical visibility. The
@@ -437,10 +555,10 @@ impl Store {
                 .map_err(|_| invalid("container name selection unavailable"))?;
             archive.choose(done, &selector, || {
                 authorize()?;
-                self.volume.require_named()
+                volume.require_named()
             })?;
         }
-        if let Err(error) = archive.retire(done, ordinary, &original, state) {
+        if let Err(error) = archive.retire(done, volume, state) {
             return Err(Error::CleanupPending {
                 receipt: done,
                 error,
@@ -464,8 +582,10 @@ impl Store {
         if self.recycled(id)?.is_some() {
             return Ok(None);
         }
-        self.volume.require_named()?;
-        let state = self.volume.load(id, &mut memory)?;
+        let Some(volume) = self.routed(id)? else {
+            return Ok(None);
+        };
+        let state = volume.load(id, &mut memory)?;
         let Some(mut next) = state.branches.get(branch).copied() else {
             return Ok(None);
         };
@@ -496,15 +616,17 @@ impl Store {
         if self.recycled(id)?.is_some() {
             return Ok(None);
         }
-        self.volume.require_named()?;
-        let state = self.volume.load(id, &mut memory)?;
+        let Some(volume) = self.routed(id)? else {
+            return Ok(None);
+        };
+        let state = volume.load(id, &mut memory)?;
         let Some(node) = state.nodes.get(&node).cloned() else {
             return Ok(None);
         };
-        let entry = self
-            .volume
-            .container(id)
-            .join(entry_leaf(node.sequence, node.request));
+        let container = volume
+            .held_container(id)?
+            .ok_or_else(|| invalid("selected DATA container is absent"))?;
+        let entry = container.path.join(entry_leaf(node.sequence, node.request));
         private_dir(&entry)?;
         let file = open_file(&entry.join("payload"))?;
         if file.metadata()?.len() != node.body.length {
@@ -527,6 +649,10 @@ fn read_state(path: &Path, id: Id) -> io::Result<State> {
     }
     // Required before exposing any receipt/node after a prior process died.
     sync_dir(path)?;
+    read_selected_entries(path, id)
+}
+
+fn read_selected_entries(path: &Path, id: Id) -> io::Result<State> {
     let mut entries = Vec::new();
     for item in fs::read_dir(path)? {
         let item = item?;

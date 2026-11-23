@@ -32,11 +32,32 @@ fn full(target: Target, node: NodeId, body: Body, initial_name: Option<String>) 
         initial_name,
     }
 }
+fn held_data(path: &Path, token: u8) -> DataRoot {
+    DataRoot {
+        root: HeldDir::trusted_storage(path).unwrap(),
+        token: [token; 32],
+    }
+}
+
+// Exercises the real SYSTEM routes and DATA layout under their owner leases,
+// without claiming that sibling temporary roots pass production mount admission.
+fn open_test_roster(system: &Path, data: Vec<DataRoot>) -> io::Result<Store> {
+    let system = HeldDir::trusted_storage(system)?;
+    let owner = system.opaque_owner(c"container-owner")?;
+    Store::open_roster(&system, data, owner)
+}
+
+fn open_fixture(data: &Path) -> Store {
+    let system = data.with_file_name("fixture-system");
+    ensure_dir(&system).unwrap();
+    open_test_roster(&system, vec![held_data(data, 1)]).unwrap()
+}
+
 fn fixture() -> (PrivateTemp, PathBuf, Store) {
     let temp = PrivateTemp::under(&std::env::temp_dir());
     let root = temp.0.join("store");
     ensure_dir(&root).unwrap();
-    let store = Store::open(&root).unwrap();
+    let store = open_fixture(&root);
     (temp, root, store)
 }
 fn read_node(store: &Store, node: u8) -> Vec<u8> {
@@ -58,6 +79,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
         Err(Error::WrongLength)
     ));
     assert!(store.describe(id(1)).unwrap().is_none());
+    assert_eq!(store.routes.get(id(1)).unwrap(), None);
     let first = store
         .save(
             mutation(2),
@@ -115,7 +137,7 @@ fn first_main_save_and_stale_head_and_historical_fork_are_exact() {
     assert_eq!(read_node(&store, 11), b"second");
     assert_eq!(read_node(&store, 12), b"old");
     drop(store);
-    let store = Store::open(&dir).unwrap();
+    let store = open_fixture(&dir);
     assert_eq!(store.receipt(mutation(2)).unwrap(), Some(first.clone()));
     assert_eq!(
         store
@@ -191,8 +213,7 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
     assert_eq!(state.heads["branch"], Some(id(10)));
     for (sequence, request) in [(2, id(3)), (3, id(4)), (4, id(5))] {
         assert!(
-            !store
-                .volume
+            !store.volumes[0]
                 .container(id(1))
                 .join(entry_leaf(sequence, request))
                 .join("payload")
@@ -203,21 +224,14 @@ fn renames_tags_and_branch_references_never_write_another_payload() {
 }
 
 // Leave an R copy ready but revoke the final publication authority.
-fn leave_prepared_recycle_unselected(store: &Store, original: &Path) {
+fn leave_prepared_recycle_unselected(store: &Store) {
     let object = store.object(id(1)).unwrap();
     let mut memory = object.lock().unwrap();
-    let state = store.volume.load(id(1), &mut memory).unwrap();
+    let state = store.volumes[0].load(id(1), &mut memory).unwrap();
     let archive = store.archive.as_ref().unwrap();
     let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
     let tentative = archive
-        .prepare(
-            mutation(6),
-            store.volume.root(),
-            original,
-            state,
-            &incoming,
-            || Ok(()),
-        )
+        .prepare(mutation(6), &store.volumes[0], state, &incoming, || Ok(()))
         .unwrap();
     let selector = store.stage_at(archive.moves().unwrap()).unwrap();
     assert!(
@@ -242,7 +256,9 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let store = Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
+    let store =
+        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
+            .unwrap();
     let first = store
         .save(
             mutation(2),
@@ -280,8 +296,8 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
         )
         .unwrap();
 
-    let original = store.volume.container(id(1));
-    leave_prepared_recycle_unselected(&store, &original);
+    let original = store.volumes[0].container(id(1));
+    leave_prepared_recycle_unselected(&store);
     assert_eq!(read_node(&store, 11), b"two");
     assert_eq!(store.describe(id(1)).unwrap().unwrap().name, "name");
     let recycled = store.move_to_recycle(mutation(6), 4, || Ok(())).unwrap();
@@ -310,6 +326,11 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     fs::rename(&ordinary, local.0.join("ordinary-offline")).unwrap();
     assert_eq!(store.recycle_receipt(mutation(6)).unwrap(), Some(recycled));
     assert_eq!(store.receipt(mutation(2)).unwrap(), Some(first));
+    assert_eq!(store.routes.get(id(1)).unwrap(), Some([1; 32]));
+    assert!(matches!(
+        store.move_to_recycle(mutation(6), 4, || Ok(())),
+        Err(Error::CleanupPending { receipt, .. }) if receipt == recycled
+    ));
 }
 
 #[test]
@@ -324,7 +345,9 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let store = Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
+    let store =
+        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
+            .unwrap();
     store
         .save(
             mutation(2),
@@ -341,24 +364,17 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
             || Ok(()),
         )
         .unwrap();
-    let original = store.volume.container(id(1));
+    let original = store.volumes[0].container(id(1));
     let first = original.join(entry_leaf(1, id(2)));
     let second = original.join(entry_leaf(2, id(3)));
     {
         let source = store.object(id(1)).unwrap();
         let mut memory = source.lock().unwrap();
-        let state = store.volume.load(id(1), &mut memory).unwrap();
+        let state = store.volumes[0].load(id(1), &mut memory).unwrap();
         let archive = store.archive.as_ref().unwrap();
         let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
         archive
-            .prepare(
-                mutation(6),
-                store.volume.root(),
-                &original,
-                state,
-                &incoming,
-                || Ok(()),
-            )
+            .prepare(mutation(6), &store.volumes[0], state, &incoming, || Ok(()))
             .unwrap();
     }
     // Simulate an unexpected local replacement that preserves both the
@@ -398,9 +414,16 @@ fn startup_refuses_a_replaced_qualified_ordinary_directory_before_writing_layout
     ensure_dir(&ordinary).unwrap();
     // The held-role admission runs before checking the volume pair or
     // creating an owner/layout entry anywhere. This fixture needs no mount.
-    let error = Store::open_with_recycle(held(&system), original, held(&recycle))
-        .err()
-        .unwrap();
+    let error = Store::open_with_recycle(
+        held(&system),
+        vec![DataRoot {
+            token: [1; 32],
+            root: original,
+        }],
+        held(&recycle),
+    )
+    .err()
+    .unwrap();
     assert!(error.to_string().contains("replaced"));
     for path in [&ordinary, &displaced, &system, &recycle] {
         assert!(fs::read_dir(path).unwrap().next().is_none());
@@ -421,7 +444,11 @@ fn a_later_staging_substitution_cannot_redirect_a_whole_node_upload() {
         || Ok(()),
     );
     assert!(matches!(result,Err(Error::Io(ref e)) if e.to_string().contains("replaced")));
-    for path in [staging.as_path(), displaced.as_path(), store.volume.data()] {
+    for path in [
+        staging.as_path(),
+        displaced.as_path(),
+        store.volumes[0].contents().path.as_path(),
+    ] {
         assert!(fs::read_dir(path).unwrap().next().is_none());
     }
 }
@@ -438,7 +465,10 @@ fn cold_open_qualifies_existing_recycle_selector_before_readback() {
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let open = || Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
+    let open = || {
+        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
+            .unwrap()
+    };
     let store = open();
     store
         .save(
@@ -474,7 +504,9 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let store = Store::open_with_recycle(held(&system), held(&ordinary), held(&recycle)).unwrap();
+    let store =
+        Store::open_with_recycle(held(&system), vec![held_data(&ordinary, 1)], held(&recycle))
+            .unwrap();
     store
         .save(
             mutation(2),
@@ -484,21 +516,14 @@ fn an_unselected_copy_does_not_block_a_later_exact_recycle() {
         )
         .unwrap();
     let archive = store.archive.as_ref().unwrap();
-    let original = store.volume.container(id(1));
+    let original = store.volumes[0].container(id(1));
     {
         let object = store.object(id(1)).unwrap();
         let mut memory = object.lock().unwrap();
-        let state = store.volume.load(id(1), &mut memory).unwrap();
+        let state = store.volumes[0].load(id(1), &mut memory).unwrap();
         let incoming = store.stage_at(archive.staging().unwrap()).unwrap();
         archive
-            .prepare(
-                mutation(6),
-                store.volume.root(),
-                &original,
-                state,
-                &incoming,
-                || Ok(()),
-            )
+            .prepare(mutation(6), &store.volumes[0], state, &incoming, || Ok(()))
             .unwrap();
     }
     assert!(store.recycle_receipt(mutation(6)).unwrap().is_none());
@@ -579,7 +604,7 @@ fn reopen_discards_interrupted_intake_without_touching_selected_data() {
     // A killed service cannot run Stage::drop; these represent the cold
     // on-disk records without needing to start or stop a real service.
     drop(store);
-    let reopened = Store::open(&root).unwrap();
+    let reopened = open_fixture(&root);
     assert!(!unfinished.exists());
     assert!(unknown.join("not-an-intake-file").is_file());
     assert!(fs::symlink_metadata(foreign_link).unwrap().is_symlink());
@@ -595,4 +620,206 @@ fn reopen_discards_interrupted_intake_without_touching_selected_data() {
     );
     assert_eq!(read_node(&reopened, 10), b"saved");
     assert!(reopened.receipt(mutation(3)).unwrap().is_none());
+}
+
+#[test]
+fn startup_refuses_aliased_data_roles_before_writing_layout() {
+    let local = PrivateTemp::under(&std::env::temp_dir());
+    let system = local.0.join("system");
+    let data = local.0.join("data");
+    let recycle = local.0.join("recycle");
+    for path in [&system, &data, &recycle] {
+        ensure_dir(path).unwrap();
+    }
+    let error = Store::open_with_recycle(
+        HeldDir::trusted_storage(&system).unwrap(),
+        vec![held_data(&data, 1), held_data(&data, 2)],
+        HeldDir::trusted_storage(&recycle).unwrap(),
+    )
+    .err()
+    .unwrap();
+    assert!(error.to_string().contains("overlap"));
+    for path in [&system, &data, &recycle] {
+        assert!(fs::read_dir(path).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn new_routes_do_not_adopt_legacy_data_or_an_unrouted_leaf() {
+    let local = PrivateTemp::under(&std::env::temp_dir());
+    let system = local.0.join("system");
+    let data = local.0.join("data");
+    let contents = data.join("data");
+    let orphan = contents.join(hex(id(1)));
+    for path in [&system, &data, &contents, &orphan] {
+        ensure_dir(path).unwrap();
+    }
+    let original = orphan.join("original");
+    write_file(&original, b"preserve").unwrap();
+    let open = || open_test_roster(&system, vec![held_data(&data, 1)]);
+    assert!(open().is_err());
+    let registry = system.join("container-routes");
+    assert!(!registry.exists());
+    assert_eq!(fs::read(&original).unwrap(), b"preserve");
+
+    // An empty existing directory or a staged-only route is not proof of enrollment.
+    ensure_dir(&registry).unwrap();
+    assert!(open().is_err());
+    write_file(
+        &registry.join(format!(".{}.incoming", hex(id(1)))),
+        b"stage",
+    )
+    .unwrap();
+    assert!(open().is_err());
+    assert_eq!(fs::read(&original).unwrap(), b"preserve");
+
+    fs::rename(&orphan, local.0.join("retained-legacy")).unwrap();
+    let store = open().unwrap();
+    fs::rename(local.0.join("retained-legacy"), &orphan).unwrap();
+    assert!(store.describe(id(1)).unwrap().is_none());
+    assert!(matches!(
+        store.save(
+            mutation(2),
+            full(main(None), id(10), body(b"new"), Some("name".into())),
+            &b"new"[..],
+            || Ok(()),
+        ),
+        Err(Error::Io(_))
+    ));
+    assert_eq!(store.routes.get(id(1)).unwrap(), None);
+    assert_eq!(fs::read(&original).unwrap(), b"preserve");
+}
+
+#[test]
+fn first_save_reserves_only_on_valid_intake_and_reuses_reserved_disk_after_reopen() {
+    let (_root, directory, store) = fixture();
+    let save = || full(main(None), id(10), body(b"new"), Some("name".into()));
+    assert!(matches!(
+        store.save(mutation(2), save(), &b"bad"[..], || Ok(())),
+        Err(Error::WrongDigest)
+    ));
+    assert!(matches!(
+        store.save(mutation(2), save(), &b"new"[..], || {
+            Err(io::ErrorKind::PermissionDenied.into())
+        }),
+        Err(Error::Io(_))
+    ));
+    assert_eq!(store.routes.get(id(1)).unwrap(), None);
+    assert!(!store.volumes[0].container(id(1)).exists());
+
+    let gates = std::cell::Cell::new(0);
+    assert!(matches!(
+        store.save(mutation(2), save(), &b"new"[..], || {
+            let n = gates.get();
+            gates.set(n + 1);
+            if n == 0 {
+                Ok(())
+            } else {
+                Err(io::ErrorKind::PermissionDenied.into())
+            }
+        }),
+        Err(Error::Io(_))
+    ));
+    assert_eq!(gates.get(), 2);
+    assert_eq!(store.routes.get(id(1)).unwrap(), Some([1; 32]));
+    assert!(store.receipt(mutation(2)).unwrap().is_none());
+    drop(store);
+
+    let store = open_fixture(&directory);
+    assert!(store.describe(id(1)).unwrap().is_none());
+    let receipt = store
+        .save(mutation(2), save(), &b"new"[..], || Ok(()))
+        .unwrap();
+    assert_eq!(store.receipt(mutation(2)).unwrap(), Some(receipt));
+    assert_eq!(read_node(&store, 10), b"new");
+}
+
+#[test]
+fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
+    let local = PrivateTemp::under(&std::env::temp_dir());
+    let system = local.0.join("system");
+    let left = local.0.join("left");
+    let right = local.0.join("right");
+    for path in [&system, &left, &right] {
+        ensure_dir(path).unwrap();
+    }
+    let open = |reverse: bool| {
+        let mut data = vec![held_data(&left, 1), held_data(&right, 2)];
+        if reverse {
+            data.reverse();
+        }
+        open_test_roster(&system, data).unwrap()
+    };
+    let store = open(false);
+    let op = |container, request| Mutation {
+        container: id(container),
+        request: id(request),
+    };
+    let first = |name: &str| full(main(None), id(10), body(b"one"), Some(name.into()));
+    store
+        .save(op(1, 5), first("first"), &b"one"[..], || Ok(()))
+        .unwrap();
+    assert!(matches!(
+        store.save(op(2, 5), first("first"), &b"one"[..], || Ok(())),
+        Err(Error::Conflict(Conflict::AlreadyExists))
+    ));
+    assert_eq!(store.routes.get(id(2)).unwrap(), None);
+    store
+        .save(op(2, 5), first("second"), &b"one"[..], || Ok(()))
+        .unwrap();
+    assert_eq!(store.routes.get(id(1)).unwrap(), Some([2; 32]));
+    assert_eq!(store.routes.get(id(2)).unwrap(), Some([1; 32]));
+    assert!(right.join("data").join(hex(id(1))).is_dir());
+    assert!(left.join("data").join(hex(id(2))).is_dir());
+    drop(store);
+
+    let store = open(true);
+    assert_eq!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+        [id(1), id(2)]
+    );
+    store.routes.reserve(id(3), [9; 32]).unwrap();
+    assert!(matches!(store.describe(id(3)), Err(e) if e.kind() == io::ErrorKind::NotConnected));
+
+    fs::rename(&right, local.0.join("right-offline")).unwrap();
+    assert!(store.describe(id(1)).is_err());
+    assert!(store.receipt(op(1, 5)).is_err());
+    assert!(store.list().is_err());
+    assert!(matches!(
+        store.change(
+            op(2, 6),
+            Change::Rename {
+                expected_sequence: 1,
+                name: "uncertain".into()
+            },
+            || Ok(())
+        ),
+        Err(Error::Io(_))
+    ));
+    assert!(matches!(
+        store.save(op(4, 5), first("uncertain"), &b"one"[..], || Ok(())),
+        Err(Error::Io(_))
+    ));
+    assert_eq!(store.routes.get(id(4)).unwrap(), None);
+    assert!(store.receipt(op(2, 5)).unwrap().is_some());
+    assert!(
+        store
+            .save(
+                op(2, 7),
+                full(main(Some(id(10))), id(11), body(b"two"), None),
+                &b"two"[..],
+                || Ok(())
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        store.describe(id(2)).unwrap().unwrap().heads[MAIN],
+        Some(id(11))
+    );
+    assert!(!left.join("data").join(hex(id(1))).exists());
 }

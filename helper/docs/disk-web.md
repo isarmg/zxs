@@ -25,7 +25,7 @@ helper disk-web --storage-roots --system /mnt/control/pool --recycle /mnt/recycl
 ### 可选：首次设置向导
 
 ```sh
-helper setup-headless web new [--preview-unit IP:PORT] SYSTEM DATA RECYCLE LOGIN
+helper setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN
 ```
 
 使用已准备好的专用服务账号，在同一前台终端选定三个已挂载的目录。

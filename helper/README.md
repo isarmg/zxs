@@ -6,16 +6,16 @@ Helper 可在业务服务停机时完成首次设置，也可在业务服务运�
 
 ## 首次设置
 
-先挂载存储目录，并按 [服务部署要求](../zxs/docs/headless-activation.md)创建专用服务账号。以下命令用同一非 root 服务账号运行；三个大写目录参数替换为各自的绝对路径。
+先挂载存储目录，并按 [服务部署要求](../zxs/docs/headless-activation.md)创建专用服务账号。以下命令用同一非 root 服务账号运行；SYSTEM 和 RECYCLE 各填一个绝对路径，DATA 填 1 至 62 个绝对路径。
 
 ```sh
-helper setup-headless check SYSTEM DATA RECYCLE
-helper setup-headless preview-unit IP:PORT SYSTEM DATA RECYCLE
-helper setup-headless new SYSTEM DATA RECYCLE LOGIN
-helper setup-headless web new [--preview-unit IP:PORT] SYSTEM DATA RECYCLE LOGIN
+helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]
+helper setup-headless preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...]
+helper setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN
+helper setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN
 ```
 
-`check` 只检查目录是否可用于首设；`new` 展示本次选择的三个目录，要求输入 `SETUP` 并在本地控制终端两次输入不回显的密码。成功后写好三个角色标记和服务账户文件，不格式化磁盘，也不启动服务。加上 `web` 可先打开[回环设置向导](docs/disk-web.md#可选首次设置向导)，再回到同一终端确认。若报告结果不确定，先核对同一组目录中已写下的记录，不要覆盖或另选目录直接重跑。
+`check` 只检查目录是否可用于首设；`new` 展示本次选择的全部目录，要求输入 `SETUP` 并在本地控制终端两次输入不回显的密码。成功后写好所选磁盘的角色标记和服务账户文件，不格式化磁盘，也不启动服务。加上 `web` 可先打开[回环设置向导](docs/disk-web.md#可选首次设置向导)，再回到同一终端确认。若报告结果不确定，先核对同一组目录中已写下的记录，不要覆盖或另选目录直接重跑。
 
 `preview-unit` 是可选的[只读服务单元预览](docs/headless-offline.md#可选服务单元预览)，只写标准输出，不安装或启动服务。
 

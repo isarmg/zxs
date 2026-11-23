@@ -1,8 +1,8 @@
 //! Directed whole-container move from ordinary storage to recycle storage.
 //! A small SYSTEM receipt selects exactly one qualified R installation.
 use super::{
-    Change, Error, Id, Mutation, Stage, State, create_file, ensure_dir, entry_leaf, hex, invalid,
-    open_file, private_dir, recycle_material, sync_dir, write_file,
+    Change, DataRoot, Error, Id, Mutation, Stage, State, create_file, ensure_dir, entry_leaf, hex,
+    invalid, open_file, private_dir, recycle_material, sync_dir, volume::DataVolume, write_file,
 };
 use crate::{
     fs::{HeldDir, OPAQUE_STAMP_BYTES},
@@ -97,8 +97,8 @@ impl RecycleReceipt {
     }
 }
 
-/// Exclusive service custody of the two non-payload authorities used after
-/// selection. Chosen receipts never require opening the former F container.
+/// Holds the SYSTEM and recycle namespaces under Store's service leases.
+/// Selected receipts never require opening the former DATA container.
 pub(super) struct Recycle {
     system: HeldDir,
     archive_root: HeldDir,
@@ -108,7 +108,7 @@ pub(super) struct Recycle {
     moves_directory: HeldDir,
     staging_directory: HeldDir,
     arrived_directory: HeldDir,
-    _owners: [File; 2],
+    _recycle_owner: File,
     receipt_fence: Mutex<()>,
     unsure: AtomicBool,
 }
@@ -117,9 +117,13 @@ impl Recycle {
     pub(super) fn require_roles(
         system: &HeldDir,
         recycle: &HeldDir,
-        data: &HeldDir,
+        data: &[DataRoot],
     ) -> io::Result<()> {
-        for role in [system, recycle, data] {
+        let roles = [system, recycle]
+            .into_iter()
+            .chain(data.iter().map(|volume| &volume.root))
+            .collect::<Vec<_>>();
+        for (i, role) in roles.iter().enumerate() {
             role.require_named()?;
             let meta = role.file.metadata()?;
             if !meta.is_dir()
@@ -130,24 +134,36 @@ impl Recycle {
                     "enrolled role is not a held private service directory",
                 ));
             }
-        }
-        for (a, b) in [(system, recycle), (system, data), (recycle, data)] {
-            if a.path.starts_with(&b.path) || b.path.starts_with(&a.path) || a.entity == b.entity {
+            if roles[..i].iter().any(|earlier| {
+                role.path.starts_with(&earlier.path)
+                    || earlier.path.starts_with(&role.path)
+                    || role.entity == earlier.entity
+            }) {
                 return Err(invalid("storage role paths overlap"));
             }
         }
-        if recycle.same_mount(data)? || recycle.entity.device == data.entity.device {
+        let separate = |a: &HeldDir, b: &HeldDir| {
+            Ok::<_, io::Error>(a.entity.device != b.entity.device && !a.same_mount(b)?)
+        };
+        if !separate(system, recycle)? {
             return Err(invalid("recycle requires a separate filesystem"));
+        }
+        for (i, volume) in data.iter().enumerate() {
+            if !separate(recycle, &volume.root)? {
+                return Err(invalid("recycle requires a separate filesystem"));
+            }
+            for earlier in &data[..i] {
+                if !separate(&volume.root, &earlier.root)? {
+                    return Err(invalid("enrolled DATA filesystems overlap"));
+                }
+            }
         }
         Ok(())
     }
 
-    pub(super) fn open(system: HeldDir, recycle: HeldDir, data: &HeldDir) -> io::Result<Self> {
-        Self::require_roles(&system, &recycle, data)?;
-        let owners = [
-            system.opaque_owner(c"container-owner")?,
-            recycle.opaque_owner(c"container-owner")?,
-        ];
+    /// The caller already retains the original SYSTEM owner.
+    pub(super) fn open(system: HeldDir, recycle: HeldDir) -> io::Result<Self> {
+        let owner = recycle.opaque_owner(c"container-owner")?;
         let moves_directory = system.opaque_subdirectory(c"container-moves")?;
         let staging_directory = recycle.opaque_subdirectory(c"incoming-containers")?;
         let arrived_directory = recycle.opaque_subdirectory(c"containers")?;
@@ -168,7 +184,7 @@ impl Recycle {
             moves,
             staging,
             arrived,
-            _owners: owners,
+            _recycle_owner: owner,
             moves_directory,
             staging_directory,
             arrived_directory,
@@ -257,18 +273,16 @@ impl Recycle {
     pub(super) fn prepare(
         &self,
         mutation: Mutation,
-        ordinary: &HeldDir,
-        original: &Path,
+        ordinary: &DataVolume,
         state: &State,
         candidate: &Stage,
         live: impl Fn() -> io::Result<()>,
     ) -> Result<RecycleReceipt, Error> {
         self.held()?;
         live()?;
-        let held = HeldDir::trusted_storage(original)?;
-        if !ordinary.same_mount(&held)? {
-            return Err(invalid("original container crosses its enrolled F mount").into());
-        }
+        let held = ordinary
+            .held_container(mutation.container)?
+            .ok_or_else(|| invalid("original container is absent from its routed DATA"))?;
         let before = held.file.metadata()?;
         let destination = self.arrived_dir(mutation);
         match RecycleReceipt::read(&destination.join("ready")) {
@@ -375,8 +389,7 @@ impl Recycle {
     pub(super) fn retire(
         &self,
         receipt: RecycleReceipt,
-        ordinary: &HeldDir,
-        source: &Path,
+        ordinary: &DataVolume,
         known: &State,
     ) -> io::Result<()> {
         if self
@@ -390,21 +403,14 @@ impl Recycle {
                 "source cannot retire before exact recycle selection",
             ));
         }
-        ordinary.require_named()?;
-        let parent = HeldDir::trusted_storage(
-            source
-                .parent()
-                .ok_or_else(|| invalid("missing source parent"))?,
-        )?;
+        let parent = ordinary.contents();
         let leaf = CString::new(hex(receipt.mutation.container))
             .map_err(|_| invalid("invalid original container name"))?;
-        let Some(original) = parent.child_directory(&leaf)? else {
-            return Ok(());
+        let Some(original) = ordinary.held_container(receipt.mutation.container)? else {
+            return parent.confirm_absence(&leaf);
         };
-        if !ordinary.same_mount(&parent)?
-            || !parent.same_mount(&original)?
-            || (original.entity.device, original.entity.inode)
-                != (receipt.source_device, receipt.source_inode)
+        if (original.entity.device, original.entity.inode)
+            != (receipt.source_device, receipt.source_inode)
         {
             return Err(invalid(
                 "source retirement no longer identifies the exact moved container",
