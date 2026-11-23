@@ -114,7 +114,7 @@ fn existing_import_placement_and_receipt_replay_never_touch_other_data_stages() 
         .map(|n| [n; 16])
         .find(|seed| {
             intent.seed = *seed;
-            intent.identity().unwrap().0.container[0] % 2 == 0
+            intent.identity().unwrap().0.container[0].is_multiple_of(2)
         })
         .unwrap();
     let (mutation, node) = intent.identity().unwrap();

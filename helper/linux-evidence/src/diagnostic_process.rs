@@ -240,7 +240,7 @@ pub fn prepare_import_one_exec(cmd:&mut Command,original:&File,channel:&File,ord
 }
 
 #[allow(unsafe_code)]
-fn prepare_fixed_peer_exec(cmd:&mut Command,original:&File,channel:&File,order:&File,program:&'static std::ffi::CStr,action:&'static std::ffi::CStr)->io::Result<()>{
+fn prepare_fixed_peer_exec(cmd:&mut Command,original:&File,channel:&File,order:&File,program:&'static std::ffi::CStr,worker_argument:&'static std::ffi::CStr)->io::Result<()>{
     use std::os::fd::AsFd;
     let high=|f:&File|rustix::io::fcntl_dupfd_cloexec(f.as_fd(),16).map(File::from).map_err(io::Error::from);
     let executable=high(original)?;let channel=high(channel)?;let order=high(order)?;
@@ -263,7 +263,7 @@ fn prepare_fixed_peer_exec(cmd:&mut Command,original:&File,channel:&File,order:&
         if libc::dup3(channel.as_raw_fd(),3,0)!=3||libc::dup3(order.as_raw_fd(),4,0)!=4{
             return Err(io::Error::last_os_error());
         }
-        let argv=[program.as_ptr(),action.as_ptr(),std::ptr::null()];
+        let argv=[program.as_ptr(),worker_argument.as_ptr(),std::ptr::null()];
         let env=[c"LC_ALL=C".as_ptr(),std::ptr::null()];
         libc::syscall(libc::c_long::from(uapi::__NR_execveat),executable.as_raw_fd(),c"".as_ptr(),
             argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);
