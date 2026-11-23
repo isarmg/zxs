@@ -346,3 +346,109 @@ class MacEditBody(unittest.TestCase):
                                     lambda *_: self.fail("incomplete owner never lends a body"), confirmed=True)
             with self.assertRaises(Rejected):
                 store.retain_edit(file, seal, ident, confirmed=True)
+
+    def test_exact_retained_post_is_preceded_by_absence_and_a_durable_original_attempt(self):
+        from zipworkspace import macos_retained_submit as sender
+        data = b"verified original whole file"
+        with self.retention_state() as (store, ident, root):
+            with self.opened() as file:
+                key = store.retain_edit(file, self.change(file, data), ident, confirmed=True)
+            fresh = self.new_connection()
+            calls, proof = [], {}
+            chosen = sender.review_original(fresh, ident, _CONTAINER, "main", _NODE, confirmed=True)
+            self.assertEqual(chosen.key, key)
+            op = chosen.action
+            attempt, receipt = root / ("attempt-" + key.submission), root / ("receipt-" + key.submission)
+            @contextmanager
+            def wire(exchange, method, target, headers, stream):
+                self.assertIs(exchange, fresh._exchange)
+                calls.append((method, target))
+                if method == "GET":
+                    self.assertEqual(target, f"/zxs/v1/containers/{_CONTAINER}/operations/{op.operation_id}")
+                    self.assertIsNone(stream)
+                else:
+                    self.assertEqual((method, target), ("POST", f"/zxs/v1/containers/{_CONTAINER}/branches/{op.branch}/nodes"))
+                    self.assertEqual(json.loads(attempt.read_bytes())["value"], op.operation_id)
+                    self.assertEqual(attempt.stat().st_mode & 0o777, 0o400)
+                    self.assertEqual(headers["Zxs-Operation"], op.operation_id)
+                    self.assertEqual(headers["Zxs-Fork-From-Main"], _NODE)
+                    self.assertEqual(b"".join(stream), data)
+                    if proof.get("respond"):
+                        proof["record"] = dict(container_id=_CONTAINER, operation_id=op.operation_id, kind="save_node",
+                            sequence=8, node_id=op.node_id, length=len(data), sha256=op.body.sha256,
+                            target={"kind": "historical_main", "branch": op.branch, "from_node": _NODE})
+                record = proof.get("record")
+                status = proof.get("status", 200 if record else (404 if method == "GET" else 500))
+                raw = json.dumps(record or {"state": "not_found"}).encode()
+                yield SimpleNamespace(status=status, headers=[(b"content-type",b"application/json"),
+                                      (b"content-length",str(len(raw)).encode())],
+                                      extensions={"http_version":b"HTTP/2"}, iter_stream=lambda: iter((raw,)))
+            with patch.object(edit.HttpsExchange, "_exchange", wire):
+                for connection in (fresh, self.new_connection(credential_login="other")):
+                    with self.assertRaises(Rejected):
+                        sender.submit_original(connection, chosen)
+                self.assertFalse(calls)
+                absent = sender.status_original(fresh, chosen, confirmed=True)
+                self.assertEqual((absent.phase, absent.attempted), (sender.Phase.ABSENT, False))
+                self.assertFalse(attempt.exists() or receipt.exists())
+                unknown = sender.submit_original(fresh, chosen, confirmed=True)
+                self.assertEqual((unknown.phase, unknown.attempted), (sender.Phase.UNKNOWN, True))
+                next_read = sender.submit_original(fresh, chosen, confirmed=True)
+                self.assertEqual((next_read.phase, next_read.attempted), (sender.Phase.ABSENT, True))
+                self.assertEqual([m for m, _ in calls], ["GET","GET","POST","GET"])
+                proof["respond"] = True
+                final = sender.retry_original(fresh, next_read, confirmed=True)
+                self.assertEqual((final.phase, final.fence.head), (sender.Phase.CONFIRMED, op.node_id))
+                self.assertEqual(json.loads(receipt.read_bytes())["value"]["sequence"], 8)
+                self.assertEqual(receipt.stat().st_mode & 0o777, 0o400)
+                self.assertEqual(sender.submit_original(fresh, chosen, confirmed=True), final)
+                self.assertEqual([m for m, _ in calls], ["GET","GET","POST","GET","GET","POST","GET"])
+                proof["record"] = {**proof["record"], "sha256": "0" * 64}
+                self.assertNotEqual(sender.status_original(fresh, chosen, confirmed=True).phase, sender.Phase.CONFIRMED)
+                self.assertEqual(sum(m == "POST" for m, _ in calls), 2)
+                proof["status"] = 409
+                self.assertEqual(sender.status_original(fresh, chosen, confirmed=True).phase, sender.Phase.UNKNOWN)
+                self.assertTrue(receipt.is_file())
+                self.assertEqual(sum(m == "POST" for m, _ in calls), 2)
+
+    def test_torn_attempt_or_foreign_login_does_not_contact_remote(self):
+        from zipworkspace import macos_retained_submit as sender
+        with self.retention_state() as (store, ident, root), self.opened() as file:
+            key = store.retain_edit(file, self.change(file, b"new"), ident, confirmed=True)
+            fresh = self.new_connection()
+            chosen = sender.review_original(fresh, ident, _CONTAINER, "main", _NODE, confirmed=True)
+            marker = root / ("attempt-" + key.submission)
+            marker.touch(mode=0o400)
+            with patch.object(edit.HttpsExchange, "request", side_effect=AssertionError("no request")):
+                with self.assertRaises(Rejected):
+                    sender.submit_original(fresh, chosen, confirmed=True)
+                with self.assertRaises(Rejected):
+                    sender.submit_original(self.new_connection(credential_login="other"), chosen, confirmed=True)
+
+    def test_attempt_device_flush_failure_after_valid_absence_cannot_start_post(self):
+        from zipworkspace import macos_retained_submit as sender
+        from zipworkspace.container_http import Reply, ReplyKind
+        with self.retention_state() as (store, ident, root), self.opened() as file:
+            key = store.retain_edit(file, self.change(file, b"save me"), ident, confirmed=True)
+            original = sender.review_original(self.connection, ident, _CONTAINER, "main", _NODE, confirmed=True)
+            attempt = root / ("attempt-" + key.submission)
+            requests = []
+            def wire(_exchange, message):
+                requests.append(message.method)
+                self.assertEqual(message.method, "GET", "cannot pass any POST before the attempted marker sync")
+                return Reply(ReplyKind.ABSENT)
+            native = sender._barrier
+            def fail_attempt(fd):
+                if attempt.exists() and os.path.samestat(attempt.stat(), os.fstat(fd)):
+                    raise OSError(errno.EIO, "injected attempted-marker flush uncertainty")
+                return native(fd)
+            with patch.object(edit.HttpsExchange, "request", wire):
+                with patch.object(sender, "_barrier", side_effect=fail_attempt), self.assertRaises(store.Uncertain):
+                    sender.submit_original(self.connection, original, confirmed=True)
+                self.assertEqual(requests, ["GET"])
+                self.assertTrue(attempt.exists())
+                # A complete but previously uncertain marker, still on the original vnode,
+                # permits only status through another FIRST call. Never automatically send.
+                got = sender.submit_original(self.connection, original, confirmed=True)
+                self.assertEqual((got.phase, got.attempted), (sender.Phase.ABSENT, True))
+                self.assertEqual(requests, ["GET", "GET"])

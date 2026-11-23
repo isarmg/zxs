@@ -384,18 +384,66 @@ def read_retained(connection, root_identity, container, branch, node, consume, *
     """Reopen by the known original selected IDs after restart, with no directory scan, GET or send."""
     if confirmed is not True or not callable(consume):
         raise Rejected("explicit selection of an original private packet and a scoped reader are required")
+    def read(packet):
+        with packet.pending.body(packet.action) as blocks:
+            return consume(packet.pending.plan, blocks)
+    return _visit_original(connection, root_identity, container, branch, node, read)
+
+
+def _visit_original(connection, root_identity, container, branch, node, visit):
     destination, account, authorize = _connection(connection)
     source = destination, account, container, branch, node
     occupied = []
     try:
-        return _on_mac(_read_retained, root_identity, source, _owner_name(*source), authorize, consume, occupied)
+        return _on_mac(_read_retained, root_identity, source, _owner_name(*source), authorize, visit, occupied)
     except (OSError, Rejected) as exc:
         if occupied:
-            raise Uncertain("existing original owner not verified; preserve it, never recapture or retry") from exc
+            raise Uncertain("original or operation state unconfirmed; preserve it, never recapture or retry blindly") from exc
         raise
 
 
-def _read_retained(identity, source, owner, authorize, consume, occupied):
+@dataclass(frozen=True, slots=True)
+class _Packet:
+    key: RetentionKey
+    source: SelectedFile
+    action: Action
+    pending: object
+    root_area: _PrivateArea
+    require: object
+
+
+class _ScopedPending:
+    """The common stream contract, narrowed to the original thread and open physical evidence."""
+    def __init__(self, pending, require):
+        self._pending, self._require = pending, require
+        self.plan, self.destination = pending.plan, pending.destination
+
+    @contextmanager
+    def body(self, action):
+        self._require()
+        with self._pending.body(action) as stream:
+            loan = True
+            def check():
+                self._require()
+                if not loan:
+                    raise Rejected("the original body loan is closed")
+            def blocks():
+                while True:
+                    check()
+                    try:
+                        part = next(stream)
+                    except StopIteration:
+                        return
+                    check()
+                    yield part
+            try:
+                yield blocks()
+                check()
+            finally:
+                loan = False
+
+
+def _read_retained(identity, source, owner, authorize, visit, occupied):
     with _state(identity, authorize) as (root, path, _, volume, guard), ExitStack() as held:
         # Absence of the original owner is different from a missing final after a key was reserved.
         os.stat(owner, dir_fd=root, follow_symlinks=False)
@@ -454,24 +502,15 @@ def _read_retained(identity, source, owner, authorize, consume, occupied):
         pending = PendingSubmit(key.submission, key.destination, plan, area, {cid: stamp})
         thread, live = get_ident(), True
         def members():
+            if not live or get_ident() != thread:
+                raise Rejected("retained blocks outlived their original APFS owner")
             _private(area, _INTENT, fd, intent_stamp)
             _private(area, leaf, body, stamp)
         members()
-        with pending.body(action) as stream:
-            def blocks():
-                while True:
-                    if not live or get_ident() != thread:
-                        raise Rejected("retained blocks outlived their owning read scope")
-                    members()
-                    try:
-                        block = next(stream)
-                    except StopIteration:
-                        return
-                    members()
-                    yield block
-            try:
-                result = consume(plan, blocks())
-                members()
-                return result
-            finally:
-                live = False
+        try:
+            checked = _ScopedPending(pending, members)
+            result = visit(_Packet(key, src, action, checked, root_area, members))
+            members()
+            return result
+        finally:
+            live = False
