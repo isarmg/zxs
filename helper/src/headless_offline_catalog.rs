@@ -36,7 +36,10 @@ pub(super) fn read_names(reset: &Reset) -> io::Result<Vec<String>> {
     })
 }
 
-pub(super) fn with_installed<T>(reset: &Reset, run: impl FnOnce(&File) -> io::Result<T>) -> io::Result<T> {
+pub(super) fn with_installed<T>(
+    reset: &Reset,
+    run: impl FnOnce(&File) -> io::Result<T>,
+) -> io::Result<T> {
     reset.require_original()?;
     let bin = Pinned::local_storage(Path::new(BIN), &reset.selected.scope)?;
     let original_dir = bin.relative_directory()?;

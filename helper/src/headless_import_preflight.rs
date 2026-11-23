@@ -12,7 +12,10 @@ use std::{
     ffi::{CStr, CString, OsStr, OsString},
     fs::File,
     io::{self, Write},
-    os::unix::{ffi::{OsStrExt, OsStringExt}, fs::MetadataExt},
+    os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::MetadataExt,
+    },
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -158,8 +161,10 @@ fn same_or_nested((left, a): (&Path, Entity), (right, b): (&Path, Entity)) -> bo
 fn overlapping(source: &Pinned, original: &Pinned) -> bool {
     // Visible-ancestor tests omit the leaf; a differently named whole-mount
     // alias of the very same role or deployment directory is still protected.
-    same_or_nested((source.path(), source.entity()), (original.path(), original.entity()))
-        || source.entity_is_visible_ancestor_of(original)
+    same_or_nested(
+        (source.path(), source.entity()),
+        (original.path(), original.entity()),
+    ) || source.entity_is_visible_ancestor_of(original)
         || original.entity_is_visible_ancestor_of(source)
 }
 
@@ -218,9 +223,15 @@ impl Inventory {
     }
 
     pub(super) fn report(&self, out: &mut impl Write) -> io::Result<()> {
-        writeln!(out, "source census: {} files, {} logical bytes, {} directories ({} empty); directories stay on the source; {} hard-linked entries would be imported by name",
-            self.counts.files, self.counts.bytes, self.counts.dirs, self.counts.empty_dirs,
-            self.counts.hard_links)
+        writeln!(
+            out,
+            "source census: {} files, {} logical bytes, {} directories ({} empty); directories stay on the source; {} hard-linked entries would be imported by name",
+            self.counts.files,
+            self.counts.bytes,
+            self.counts.dirs,
+            self.counts.empty_dirs,
+            self.counts.hard_links
+        )
     }
 }
 
@@ -234,7 +245,12 @@ impl SourceTree {
         if root.kind != 0o040_000 || root.entity != pin.entity() {
             return Err(refused());
         }
-        Ok(Self { pin, mount, directory, root })
+        Ok(Self {
+            pin,
+            mount,
+            directory,
+            root,
+        })
     }
 
     fn verify(&self) -> io::Result<()> {
@@ -247,9 +263,16 @@ impl SourceTree {
     }
 
     /// The actual FD selected for hashing, not just later totals or a display path.
-    pub(super) fn require_file(&self, root: &Pinned, mount: Mount, held: &File, stamp: &Stamp) -> io::Result<()> {
+    pub(super) fn require_file(
+        &self,
+        root: &Pinned,
+        mount: Mount,
+        held: &File,
+        stamp: &Stamp,
+    ) -> io::Result<()> {
         self.verify()?;
-        if self.pin.entity() != root.entity() || self.mount != mount
+        if self.pin.entity() != root.entity()
+            || self.mount != mount
             || Stamp::read(held, self.mount, self.root.entity.dev)? != *stamp
         {
             return Err(changed());
@@ -266,13 +289,23 @@ impl SourceTree {
     ) -> io::Result<Counts> {
         require_roles()?;
         self.verify()?;
-        let counts = census(self.directory.try_clone()?, self.root, self.mount, preview, target_names, entries)?;
+        let counts = census(
+            self.directory.try_clone()?,
+            self.root,
+            self.mount,
+            preview,
+            target_names,
+            entries,
+        )?;
         self.verify()?;
         require_roles()?;
         Ok(counts)
     }
 
-    pub(super) fn inventory(&self, require_roles: impl Fn() -> io::Result<()>) -> io::Result<Inventory> {
+    pub(super) fn inventory(
+        &self,
+        require_roles: impl Fn() -> io::Result<()>,
+    ) -> io::Result<Inventory> {
         let mut entries = Vec::new();
         let counts = self.observe(None, None, Some(&mut entries), require_roles)?;
         entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
@@ -473,7 +506,13 @@ fn census(
     Ok(counts)
 }
 
-fn record_entry(rows: &mut Vec<(OsString, Stamp)>, parents: &[Frame], name: &CStr, width: usize, stamp: Stamp) -> io::Result<()> {
+fn record_entry(
+    rows: &mut Vec<(OsString, Stamp)>,
+    parents: &[Frame],
+    name: &CStr,
+    width: usize,
+    stamp: Stamp,
+) -> io::Result<()> {
     let allocation = |_| io::Error::from(io::ErrorKind::OutOfMemory);
     let mut raw = Vec::new();
     raw.try_reserve_exact(width).map_err(allocation)?;

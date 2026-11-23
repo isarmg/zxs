@@ -45,9 +45,27 @@ fn an_ordinary_file_does_not_have_to_share_its_sources_mount_root_bit() {
     let file = File::create_new(temp.path().join("file")).unwrap();
     let actual = Mount::on(&file).unwrap().unwrap();
     for root in [Some(true), Some(false), None] {
-        assert!(Witness::read(&file, Mount { id: actual.id, at_root: root }).is_ok());
+        assert!(
+            Witness::read(
+                &file,
+                Mount {
+                    id: actual.id,
+                    at_root: root
+                }
+            )
+            .is_ok()
+        );
     }
-    assert!(Witness::read(&file, Mount { id: actual.id ^ 1, at_root: Some(false) }).is_err());
+    assert!(
+        Witness::read(
+            &file,
+            Mount {
+                id: actual.id ^ 1,
+                at_root: Some(false)
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]

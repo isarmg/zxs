@@ -140,7 +140,10 @@ fn read_role_token(
 }
 
 fn role_proof(
-    input: &RootInput<'_>, role: u8, pool: &[u8; 16], uid: u32,
+    input: &RootInput<'_>,
+    role: u8,
+    pool: &[u8; 16],
+    uid: u32,
 ) -> io::Result<(Entity, Mount)> {
     let (root, token) = read_role_token(&input.held, role, pool, uid)?;
     if token != input.token {

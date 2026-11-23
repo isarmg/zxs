@@ -96,7 +96,12 @@ pub(super) fn write_receipt(output: &mut impl Write, outcome: &ApplyOutcome) -> 
     } else {
         "imported complete file"
     };
-    writeln!(output, "{result}: container {} node {}", text(outcome.container), text(outcome.node))
+    writeln!(
+        output,
+        "{result}: container {} node {}",
+        text(outcome.container),
+        text(outcome.node)
+    )
 }
 
 fn invalid() -> io::Error {

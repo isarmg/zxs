@@ -90,7 +90,15 @@ fn typed_inventory_includes_directories_raw_paths_and_changed_file_witnesses() {
         Ok(Inventory { counts, entries })
     };
     let before = observe().unwrap();
-    assert_eq!((before.counts.files, before.counts.dirs, before.counts.empty_dirs, before.counts.hard_links), (2, 2, 1, 2));
+    assert_eq!(
+        (
+            before.counts.files,
+            before.counts.dirs,
+            before.counts.empty_dirs,
+            before.counts.hard_links
+        ),
+        (2, 2, 1, 2)
+    );
     let paths: Vec<_> = before.files().map(|(p, _)| p.as_bytes()).collect();
     assert_eq!(paths, [b"linked".as_slice(), b"nested/x\t\xff"]);
     assert!(before == observe().unwrap());

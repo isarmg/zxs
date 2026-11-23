@@ -65,7 +65,10 @@ impl Setup {
         };
         let reset = mode == "reset";
         if mode == "add-data" || mode == "retire-data" || mode == "init-data" {
-            let candidate = PathBuf::from(args.next().ok_or("expected operated DATA directory before current roots")?);
+            let candidate = PathBuf::from(
+                args.next()
+                    .ok_or("expected operated DATA directory before current roots")?,
+            );
             use std::os::unix::ffi::OsStrExt;
             crate::path_rules::Kind::StorageRoot.check_path(candidate.as_os_str().as_bytes())?;
             let paths = parse_paths(args)?;
@@ -76,7 +79,16 @@ impl Setup {
             } else {
                 (None, Some(candidate), None)
             };
-            return Ok(Self { paths, login: None, web, reset, preview, add_data, retire_data, init_data });
+            return Ok(Self {
+                paths,
+                login: None,
+                web,
+                reset,
+                preview,
+                add_data,
+                retire_data,
+                init_data,
+            });
         }
         let (paths, login) = if mode == "new" {
             // The last argument is the login; all preceding words name roots.
@@ -118,12 +130,18 @@ impl Setup {
         }
         if let Some(target) = self.init_data {
             selected.init_data(&target)?;
-            writeln!(io::stdout().lock(), "Selected empty DATA layout confirmed; no service started.")?;
+            writeln!(
+                io::stdout().lock(),
+                "Selected empty DATA layout confirmed; no service started."
+            )?;
             return Ok(ExitCode::SUCCESS);
         }
         if let Some(target) = self.retire_data {
             selected.retire_data(&target)?;
-            writeln!(io::stdout().lock(), "Data disk retired; files on disk unchanged.")?;
+            writeln!(
+                io::stdout().lock(),
+                "Data disk retired; files on disk unchanged."
+            )?;
             return Ok(ExitCode::SUCCESS);
         }
         if self.reset {

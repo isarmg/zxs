@@ -19,12 +19,12 @@ use zeroize::Zeroizing;
 
 #[path = "headless_add_data.rs"]
 mod add_data;
-#[path = "headless_init_data.rs"]
-mod init_data;
 #[path = "headless_import_command.rs"]
 pub(super) mod import_command;
 #[path = "headless_import_one.rs"]
 mod import_one;
+#[path = "headless_init_data.rs"]
+mod init_data;
 pub(crate) use import_one::batch::ImportBatch;
 #[path = "headless_offline_catalog.rs"]
 mod offline_catalog;
