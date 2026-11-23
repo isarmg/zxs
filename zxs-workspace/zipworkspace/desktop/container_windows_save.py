@@ -343,12 +343,8 @@ class _HeldWindowsSave:
 
 
 @contextmanager
-def open_original_windows_save(connection, private_parent, key, *, confirmed=False):
-    """Recover the exact private plan+body (no request or new IDs). Owner runs a single worker.
-
-    Input key must be the original independently retained selection, never derived from an arbitrary
-    pending filename. Hold existing read-only files with share zero throughout verification and use.
-    """
+def _original_record(connection, private_parent, key, *, confirmed):
+    """Lease this one selected record by ID. Receipt lookup must not depend on a usable body."""
     if (confirmed is not True or type(key) is not WindowsSaveKey or type(connection) is not OpenConnection
             or type(connection._exchange) is not HttpsExchange):
         raise Rejected("confirm the selected private directory, exact original key and authenticated reader")
@@ -357,16 +353,31 @@ def open_original_windows_save(connection, private_parent, key, *, confirmed=Fal
     def live():
         _require_reader(connection, reader, h2, auth, destination, origin, account)
     live()
-    with PinnedParent(private_parent, output=True) as home, ExitStack() as keep:
-        api = home.api
-        slot, body_leaf = _slot(destination, account, key.container), key.submission + ".zvb"
-        intent = keep.enter_context(api.inspected_file(home.handle, slot))
-        intent_acl = OutputProtection(home.handle)
-        original = api.ordinary(intent, home.volume, home.name(slot))
-        raw = _read_record(home, intent, slot, original.file_id, intent_acl)
-        source, plan, body_id, zone = _decode(raw, key, home, original.file_id, connection)
-        action = plan.actions[0]
-        url = origin + h2._node_target(key.container, source.head.id, source.head.length, source.head.sha256)
+    with PinnedParent(private_parent, output=True) as home:
+        api, slot = home.api, _slot(destination, account, key.container)
+        with api.inspected_file(home.handle, slot) as intent:
+            intent_acl = OutputProtection(home.handle)
+            original = api.ordinary(intent, home.volume, home.name(slot))
+            raw = _read_record(home, intent, slot, original.file_id, intent_acl)
+            source, plan, body_id, zone = _decode(raw, key, home, original.file_id, connection)
+            def observe_record():
+                live()
+                home.check()
+                intent_acl.check(intent)
+                if _same_file(home, intent, slot, len(raw), original.file_id) != original:
+                    raise Rejected("original Windows transfer record changed")
+            observe_record()
+            yield home, source, plan, body_id, zone, observe_record, live
+
+
+@contextmanager
+def open_original_windows_save(connection, private_parent, key, *, confirmed=False):
+    """Recover the exact private plan+body (no request or new IDs). Keep existing files share-zero."""
+    with _original_record(connection, private_parent, key, confirmed=confirmed) as selection, ExitStack() as keep:
+        home, source, plan, body_id, zone, observe_record, live = selection
+        api, h2 = home.api, connection._exchange
+        action, body_leaf = plan.actions[0], key.submission + ".zvb"
+        url = source.origin + h2._node_target(key.container, source.head.id, source.head.length, source.head.sha256)
         if _effective_zone(url) != zone:
             raise Rejected("the original Windows transfer source policy changed")
         mark = _remote_mark(url, zone)
@@ -375,15 +386,12 @@ def open_original_windows_save(connection, private_parent, key, *, confirmed=Fal
         sealed = _same_file(home, held, body_leaf, action.body.length, body_id)
 
         def observe(*, policy=False):
-            live()
+            observe_record()
             if policy and _effective_zone(url) != zone:
                 raise Rejected("original Windows transfer source policy changed")
-            home.check()
-            intent_acl.check(intent)
             body_acl.check(held)
-            if (_same_file(home, intent, slot, len(raw), original.file_id) != original
-                    or _same_file(home, held, body_leaf, action.body.length, body_id) != sealed):
-                raise Rejected("original Windows transfer record or sealed body changed")
+            if _same_file(home, held, body_leaf, action.body.length, body_id) != sealed:
+                raise Rejected("original Windows sealed body changed")
             _check_origin(api, held, sealed, mark)
         observe()
         api.verify_bytes(held, action.body.length, action.body.sha256, checkpoint=live)

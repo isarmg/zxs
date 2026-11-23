@@ -1,6 +1,7 @@
 """Manual NTFS original-save custody qualification. Never connect, send or mount."""
 from dataclasses import replace
 from pathlib import Path
+import json
 import sys
 import unittest
 from unittest.mock import patch
@@ -12,7 +13,11 @@ if __name__ == "__main__":
 from windows_draft_qualification import LocalWorkingFile
 from windows_node_qualification import CONTAINER, ORIGIN, TARGET
 from zipworkspace._windows_access import NativeSecurity
-from zipworkspace._windows_output import PinnedParent
+from zipworkspace._windows_output import PinnedParent, OutputNative
+from zipworkspace.container_http import lookup_message, project_reply
+from zipworkspace.desktop.container_connection import _Authorization
+from zipworkspace.desktop.container_management import Phase
+from zipworkspace.desktop import container_windows_receipt as receipts
 from zipworkspace.desktop.container_windows_draft import _effective_zone
 from zipworkspace.desktop import container_windows_save as saves
 from zipworkspace.model import Rejected
@@ -160,9 +165,87 @@ class OriginalSave(LocalWorkingFile):
         self.assertEqual(self.requests, [TARGET])
 
 
+    def receipt_case(self):
+        choice, draft, review = self.edited()
+        key = draft.prepare_save(review, confirmed=True)
+        conn = choice._connection
+        draft.close()
+        with self.reopen(conn, key) as pending:
+            action = pending.plan.actions[0]
+        seen = []
+        data = {"container_id": CONTAINER, "operation_id": key.operation, "kind": "save_node",
+                "sequence": 3, "node_id": action.node_id, "length": review.length, "sha256": review.sha256,
+                "target": {"kind": "branch", "branch": action.branch, "expected_head": action.head}}
+        answer = [200, data]
+        def get(message):
+            self.assertEqual(message, lookup_message(action))
+            seen.append(message)
+            return project_reply(answer[0], json.dumps(answer[1]).encode("utf-8"), lookup=True)
+        conn._exchange.request = get
+        return conn, key, seen, answer
+
+    def test_save_receipt_metadata_only_get_and_local_confirmation_survives_repeat(self):
+        conn, key, seen, answer = self.receipt_case()
+        original_body = self.staging / (key.submission + ".zvb")
+        original_body.rename(original_body.with_suffix(".unavailable"))
+        lookup = lambda: receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True)
+        with self.assertRaises(Rejected):
+            receipts.lookup_original_windows_receipt(conn, self.staging, key)
+        self.assertEqual(seen, [])
+        result = lookup()
+        self.assertEqual(result.phase, Phase.CONFIRMED)
+        self.assertEqual(result.receipt.revision, 3)
+        proof = self.staging / (key.submission + ".zrr")
+        original = proof.read_bytes()
+        self.assertEqual(lookup(), result)
+        answer[:] = [404, {"state": "not_found"}]
+        self.assertEqual(lookup().phase, Phase.UNKNOWN)
+        self.assertEqual(proof.read_bytes(), original)
+        self.assertEqual(len(seen), 3)
+
+    def test_save_receipt_absent_or_wrong_effect_never_arms_send(self):
+        conn, key, seen, answer = self.receipt_case()
+        lookup = lambda: receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True)
+        correct = answer[1]
+        for wire, phase in (([404, {"state": "not_found"}], Phase.ABSENT), ([409, {}], Phase.CONFLICT),
+                            ([200, {**correct, "sha256": "1" * 64}], Phase.UNKNOWN),
+                            ([200, {**correct, "operation_id": "4" * 32}], Phase.UNKNOWN)):
+            answer[:] = wire
+            self.assertEqual(lookup().phase, phase)
+        self.assertEqual(len(seen), 4)
+        self.assertFalse((self.staging / (key.submission + ".zrr")).exists())
+
+    def test_save_receipt_lost_local_rename_retains_same_verified_server_result(self):
+        conn, key, seen, _ = self.receipt_case()
+        rename = OutputNative.rename_new
+        def lose(api, h, parent, name):
+            result = rename(api, h, parent, name)
+            if name.endswith(".zrr"):
+                raise OSError("synthetic lost local receipt rename response")
+            return result
+        with patch.object(OutputNative, "rename_new", lose), self.assertRaises(receipts.WindowsReceiptUncertain) as lost:
+            receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True)
+        self.assertEqual(lost.exception.key, key)
+        self.assertEqual(lost.exception.receipt.revision, 3)
+        result = receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True)
+        self.assertEqual(result.receipt, lost.exception.receipt)
+        self.assertEqual(len(seen), 2)
+
+    def test_save_receipt_requires_supplier_login_not_just_connection_label(self):
+        conn, key, seen, _ = self.receipt_case()
+        wrong = _Authorization("other", "synthetic")
+        self.addCleanup(wrong.revoke)
+        forged_label = replace(conn, _authorization=wrong)
+        with patch.object(conn._exchange, "_authorization", wrong), self.assertRaises(Rejected):
+            receipts.lookup_original_windows_receipt(forged_label, self.staging, key, confirmed=True)
+        self.assertEqual(seen, [])
+
+
 def qualify(spelling):
     if sys.platform != "win32":
         raise SystemExit("An ordinary-user Windows NTFS environment is required.")
+    if not callable(getattr(_Authorization, "require_account", None)):
+        raise SystemExit("NOT RUN: receipt qualification requires native credential login attestation.")
     with PinnedParent(spelling, output=True) as root:
         security = NativeSecurity()
         actor = security.caller()
@@ -172,8 +255,8 @@ def qualify(spelling):
             raise SystemExit("This synthetic origin requires the unmodified Windows marking policy.")
         cases = [name for name in unittest.defaultTestLoader.getTestCaseNames(OriginalSave)
                  if name.startswith("test_save_")]
-        if len(cases) != 6:
-            raise RuntimeError("all six original-save cases are required")
+        if len(cases) != 10:
+            raise RuntimeError("all ten original-save and receipt cases are required")
         suite = unittest.TestSuite(OriginalSave(name, root, spelling, security, actor, profile, zone) for name in cases)
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         return int(not (result.wasSuccessful() and result.testsRun == len(cases) and not result.skipped))
