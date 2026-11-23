@@ -15,6 +15,7 @@ import select
 import signal
 import socket
 import subprocess
+import sys
 import time
 
 UID = 23100
@@ -36,7 +37,7 @@ def require(condition, reason):
         raise RuntimeError(reason)
 
 
-def guard():
+def guard(*, initialized=False):
     require(os.getuid() == os.geteuid() == UID and os.getgid() == os.getegid() == UID,
             "fixture runner must be the dedicated ordinary account")
     marker = Path("/run/zxs-acceptance-fixture")
@@ -47,8 +48,14 @@ def guard():
     require(set(os.listdir("/sys/class/net")) == {"lo"}, "guest has an unexpected interface")
     roots = (SYSTEM, RECYCLE, *DATA, STATE)
     require(all(p.resolve(strict=True) == p and p.stat().st_uid == UID
-                and p.stat().st_mode & 0o777 == 0o700 and not any(p.iterdir())
-                for p in roots), "fixture roots are not original empty private directories")
+                and p.stat().st_mode & 0o777 == 0o700 for p in roots),
+            "fixture roots are not original private directories")
+    if initialized:
+        require((STATE / "server.conf").is_file()
+                and all((p / ".zxs-role-v1").is_file() for p in roots[:-1]),
+                "fixture setup records did not survive remount")
+    else:
+        require(all(not any(p.iterdir()) for p in roots), "fixture roots must start empty")
     require(len({p.stat().st_dev for p in roots[:-1]}) == 4, "fixture disks are not distinct")
     mounts = {
         fields[4]: fields
@@ -133,6 +140,10 @@ class Smoke:
         self.authorization = "Basic " + base64.b64encode(ACCOUNT.encode() + b":" + password).decode("ascii")
         self.server = None
         self.container = ROOT + "/" + "11" * 16
+        self.peer = ROOT + "/" + "12" * 16
+        self.peer_node = "23" * 16
+        self.peer_operation = "33" * 16
+        self.recycle_operation = "34" * 16
         self.first_node = "21" * 16
         self.next_node = "22" * 16
         self.first_operation = "31" * 16
@@ -184,28 +195,108 @@ class Smoke:
             raise RuntimeError("ZXS did not drain normally") from None
         require(status == 0, "ZXS did not exit cleanly")
 
-    def save_headers(self, operation, node, body, parent=None):
+    def save_headers(self, operation, node, body, parent=None, *, name=b"fixture.bin"):
         fields = {"Content-Type": "application/octet-stream", "Content-Length": str(len(body)),
                   "Zxs-Operation": operation, "Zxs-Node": node, "Zxs-Sha256": digest(body),
                   "Zxs-Base-Node": parent or "0"}
         if parent is None:
-            fields["Zxs-Initial-Name"] = b"fixture.bin".hex()
+            fields["Zxs-Initial-Name"] = name.hex()
         return fields
 
     def receipt(self, operation, expected=200):
         _, raw = self.request("GET", self.container + "/operations/" + operation, expected)
         return json.loads(raw)
 
-    def read_body(self, node, expected):
-        headers, body = self.request("GET", self.container + "/nodes/" + node + "/data", 200)
+    def read_body(self, node, expected, container=None):
+        path = (container or self.container) + "/nodes/" + node + "/data"
+        headers, body = self.request("GET", path, 200)
         require(headers.get_all("Zxs-Sha256") == [digest(expected)] and body == expected,
                 "committed body or digest differs")
 
-    def expect_receipt(self, receipt, operation, node, seq, body, target):
-        require(receipt == {"container_id": self.container.rsplit("/", 1)[1],
+    def expect_receipt(self, receipt, operation, node, seq, body, target, container=None):
+        require(receipt == {"container_id": (container or self.container).rsplit("/", 1)[1],
                             "operation_id": operation, "sequence": seq, "kind": "save_node",
                             "node_id": node, "length": len(body), "sha256": digest(body),
                             "target": target}, "SAVE receipt does not exactly identify original content")
+
+    def send_without_reading(self, method, target, fields, body, operation):
+        wire = (f"{method} {target} HTTP/1.1\r\nHost: {HOST}:{PORT}\r\n"
+                f"Authorization: {self.authorization}\r\n"
+                + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("ascii")
+        with socket.create_connection((HOST, PORT), timeout=15) as discarded:
+            discarded.sendall(wire + body)
+            deadline = time.monotonic() + 40
+            while time.monotonic() < deadline:
+                status, raw = self.request("GET", self.container + "/operations/" + operation,
+                                           (200, 404))
+                receipt = json.loads(raw)
+                if status == 200:
+                    return receipt
+                require(receipt == {"state": "not_found"}, "unknown operation state")
+                time.sleep(0.2)
+        raise RuntimeError("receipt not visible after reply was discarded")
+
+    def physical_container(self, container):
+        leaf = container.rsplit("/", 1)[1]
+        found = [root / "data" / leaf for root in DATA if (root / "data" / leaf).is_dir()]
+        require(len(found) == 1 and not found[0].is_symlink(), "expected one ordinary DATA container")
+        return found[0]
+
+    def recycle(self, first_receipt, append_receipt, base, new):
+        peer_body = b"independent container on other DATA\n"
+        peer_target = {"kind": "first_main", "name": "peer.bin"}
+        peer_headers = self.save_headers(self.peer_operation, self.peer_node, peer_body, name=b"peer.bin")
+        _, raw = self.request("POST", self.peer + "/branches/main/nodes", 200,
+                              headers=peer_headers, body=peer_body)
+        self.expect_receipt(json.loads(raw), self.peer_operation, self.peer_node, 1, peer_body,
+                            peer_target, self.peer)
+        source = self.physical_container(self.container)
+        other = self.physical_container(self.peer)
+        require(source.stat().st_dev != other.stat().st_dev,
+                "the two known containers did not land on the two separate DATA disks")
+        self.read_body(self.peer_node, peer_body, self.peer)
+        require(self.receipt(self.recycle_operation, 404) == {"state": "not_found"},
+                "new recycle operation is not absent")
+
+        headers = {"Content-Length": "0", "Zxs-Operation": self.recycle_operation,
+                   "Zxs-Base-Generation": "2"}
+        result = self.send_without_reading("DELETE", self.container, headers, b"", self.recycle_operation)
+        leaf = self.container.rsplit("/", 1)[1]
+        expected = {"container_id": leaf, "operation_id": self.recycle_operation,
+                    "kind": "recycle", "original_sequence": 2, "source_cleanup_pending": None}
+        require(result == expected, "original recycle lookup differs")
+
+        self.stop()
+        self.start()
+        require(self.receipt(self.recycle_operation) == expected, "recycle receipt did not survive restart")
+        _, raw = self.request("DELETE", self.container, 200, headers=headers)
+        require(json.loads(raw) == {**expected, "source_cleanup_pending": False},
+                "exact recycle retry did not settle source cleanup")
+        require(self.receipt(self.first_operation) == first_receipt
+                and self.receipt(self.next_operation) == append_receipt,
+                "prior operation receipts changed on the recycle disk")
+        self.request("GET", self.container, 404, headers={"Zxs-Detail": "paged"})
+        self.request("GET", self.container + "/nodes/" + self.first_node + "/data", 404)
+        _, raw = self.request("GET", ROOT, 200, headers={"Zxs-View": "compact"})
+        require(json.loads(raw) == {"items": [{"container_id": self.peer.rsplit("/", 1)[1],
+                                              "sequence": 1, "name": "peer.bin"}],
+                                    "next_after": None},
+                "active catalogue did not retain exactly the other context")
+        self.read_body(self.peer_node, peer_body, self.peer)
+        require(not os.path.lexists(source) and other.is_dir(),
+                "source was not removed or the other DATA container disappeared")
+
+        # Archived bytes are intentionally not exposed by the live node endpoint.
+        # Read only the exact fixture paths, with no directory scan or fallback.
+        archive = RECYCLE / "containers" / (leaf + "-" + self.recycle_operation) / "container"
+        require(archive.resolve(strict=True) == archive and archive.stat().st_dev == RECYCLE.stat().st_dev,
+                "selected archive is not on the independent recycle disk")
+        for seq, operation, original in ((1, self.first_operation, base), (2, self.next_operation, new)):
+            payload = archive / f"{seq:016x}-{operation}" / "payload"
+            require(payload.resolve(strict=True) == payload and payload.stat().st_dev == RECYCLE.stat().st_dev,
+                    "archived payload does not belong to the selected recycle disk")
+            with payload.open("rb") as stream:
+                require(stream.read(len(original) + 1) == original, "recycled whole body differs")
 
     def run(self):
         endpoint = self.container + "/branches/main/nodes"
@@ -223,22 +314,7 @@ class Smoke:
 
         # Send the complete request but never read the reply. This represents a
         # lost client reply, not power loss. Wait for the *same* operation receipt.
-        wire = (f"POST {endpoint} HTTP/1.1\r\nHost: {HOST}:{PORT}\r\n"
-                f"Authorization: {self.authorization}\r\n"
-                + "".join(f"{k}: {v}\r\n" for k, v in append.items()) + "\r\n").encode("ascii")
-        with socket.create_connection((HOST, PORT), timeout=15) as discarded:
-            discarded.sendall(wire + new)
-            deadline = time.monotonic() + 40
-            while time.monotonic() < deadline:
-                status, raw = self.request("GET", self.container + "/operations/" + self.next_operation,
-                                           (200, 404))
-                if status == 200:
-                    accepted = json.loads(raw)
-                    break
-                require(json.loads(raw) == {"state": "not_found"}, "unknown operation state")
-                time.sleep(0.2)
-            else:
-                raise RuntimeError("receipt not visible after reply was discarded")
+        accepted = self.send_without_reading("POST", endpoint, append, new, self.next_operation)
         target = {"kind": "branch", "branch": "main", "expected_head": self.first_node}
         self.expect_receipt(accepted, self.next_operation, self.next_node, 2, new, target)
         self.stop()
@@ -252,9 +328,20 @@ class Smoke:
                 "retry changed the sequence or main head")
         self.read_body(self.first_node, base)
         self.read_body(self.next_node, new)
+        self.recycle(receipt, accepted, base, new)
 
 
 def main():
+    if sys.argv[1:] == ["--remount-control"]:
+        guard(initialized=True)
+        smoke = Smoke(b"unused")  # startup control sends no credentials
+        try:
+            smoke.start()
+        finally:
+            smoke.stop()
+        print("ZXS-PRODUCT-SMOKE same service became ready after original DATA remount", flush=True)
+        return
+    require(len(sys.argv) == 1, "unknown fixture mode")
     guard()
     password = secrets.token_hex(24).encode("ascii")
     issue_setup(password)
@@ -264,7 +351,7 @@ def main():
         smoke.run()
     finally:
         smoke.stop()
-    print("ZXS-PRODUCT-SMOKE setup, full append, lost reply, restart and exact retry passed", flush=True)
+    print("ZXS-PRODUCT-SMOKE setup, full append, two DATA disks, recycle and exact retries passed", flush=True)
 
 
 if __name__ == "__main__":

@@ -221,7 +221,7 @@ jobs:
                 stage=writable-mounts
                 for role in data-a data-b recycle; do
                   dest="/mnt/zxs-acceptance-$role"
-                  mkdir "$dest"
+                  mkdir -m 0755 "$dest"
                   mount -t ext4 -o rw,nosuid,nodev,noexec "/dev/disk/by-id/virtio-zxs-smoke-$role" "$dest"
                   rmdir "$dest/lost+found"
                   chown 23100:23100 "$dest"
@@ -232,6 +232,21 @@ jobs:
                 stage=ordinary-product-smoke
                 setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
                   python3 -I /run/zxs-acceptance-smoke.py
+                stage=cold-start-missing-data
+                umount /mnt/zxs-acceptance-data-a
+                if mountpoint -q /mnt/zxs-acceptance-data-a; then exit 1; fi
+                test "$(stat -c '%u:%a' /mnt/zxs-acceptance-data-a)" = 0:755
+                status=0
+                timeout -k 2s 15s setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
+                  /zxs/bin/zxs --listen 127.0.0.1:38831 > /run/zxs-cold-start.log 2>&1 || status=$?
+                test "$status" -eq 1
+                grep -qxF 'zxs: selected storage requires its exact private directory' /run/zxs-cold-start.log
+                printf '%s\n' 'ZXS-PRODUCT-SMOKE cold start rejected absent enrolled DATA disk'
+                stage=remount-positive-control
+                mount -t ext4 -o rw,nosuid,nodev,noexec \
+                  /dev/disk/by-id/virtio-zxs-smoke-data-a /mnt/zxs-acceptance-data-a
+                setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
+                  python3 -I /run/zxs-acceptance-smoke.py --remount-control
           power_state:
             mode: poweroff
             timeout: 60
@@ -260,4 +275,6 @@ jobs:
             tr -d '\r' < serial.log | grep -aE '^ZXS-PRODUCT-SMOKE ' || true
           fi
           test "$boot_status" -eq 0
-          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE setup, full append, lost reply, restart and exact retry passed')" -eq 1
+          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE setup, full append, two DATA disks, recycle and exact retries passed')" -eq 1
+          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE cold start rejected absent enrolled DATA disk')" -eq 1
+          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE same service became ready after original DATA remount')" -eq 1
