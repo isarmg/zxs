@@ -161,16 +161,20 @@ class OutputNative(Native):
         rc = self.set_info(h, c.byref(io), c.byref(position), c.sizeof(position), 14)
         _ok("rewind held data stream", rc, io)
 
-    def verify_bytes(self, h, size, sha):
+    def verify_bytes(self, h, size, sha, *, checkpoint=None, on_read=None):
+        if checkpoint is not None: checkpoint()
         self.rewind(h)
         out, left = hashlib.sha256(), size
         while left:
+            if checkpoint is not None: checkpoint()
             b = self.read(h, min(left, CHUNK))
             if not b or len(b) > min(left, CHUNK): raise Rejected("short or invalid held output read")
             out.update(b)
             left -= len(b)
+            if on_read is not None: on_read(len(b))
+        if checkpoint is not None: checkpoint()
         if self.read(h, 1) or out.hexdigest() != sha:
-            raise Rejected("the actual staged file does not contain the selected member bytes")
+            raise Rejected("the actual staged file does not contain the selected source bytes")
 
     def rename_new(self, h, parent, name):
         raw = leaf(name).encode("utf-16-le")
