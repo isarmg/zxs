@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 登录、连接 `ZXS`、退出 | 有严格 NTLMv2、适用 MIC、SHA-512 预认证和原流 AES-CMAC；使用真实 Core 当前账户与盘权限；ECHO、TREE_DISCONNECT、LOGOFF 有原命令分派。 | 未从源码推断 Windows 冷连接、Finder、Linux 挂载或任一真实客户端登录；已有离线构建与开发检查；仍未部署或原生客户端验收。 |
 | 浏览和目录 | 有真实虚拟根、普通 F 卷根/子目录和 R 相关目录的独立 OPEN、过滤枚举、继续分页和 CLOSE；普通子目录有带类型的 CREATE/OPEN_IF 和已授 DELETE 的同父不覆盖改名。 | 只有有限的关联形状；某些嵌套通配缺点目录支持。没有目录跨父/跨卷、整组回收和恢复；不是通用目录服务。 |
-| 普通 FILE 和写稿 | 有显式已授权 FILE_OPEN、窄 FILE_CREATE/OPEN_IF、偏移 READ/WRITE、已授权 SET EOF、FLUSH、显式正常 CLOSE；原对象单写、兼容读者读确认视图，工作稿保存不发正式版本；有窄范围的独立非阻塞字节锁。 | 不接覆盖式 CREATE、写属性/EA、阻塞或多元素字节锁。断开未确认写稿不等于删除已确认的新名字。 |
+| 普通 FILE 和写稿 | 支持已授权的 FILE_OPEN、CREATE/OPEN_IF、OVERWRITE/OVERWRITE_IF、偏移 READ/WRITE、已授权 SET EOF、FLUSH、显式正常 CLOSE；原对象单写、兼容读者读确认视图，工作稿保存不发正式版本；有窄范围的独立非阻塞字节锁。 | 不支持临时文件改名覆盖、写属性/EA、阻塞或多元素字节锁。断开未确认写稿不等于删除已确认的新名字。 |
 | 查询 | 支持普通读/写 FILE 的 Standard、稳定 Internal 和原 OPEN 的 Access，原普通 F 标签／嵌套目录与原读／写 FILE 句柄的 NormalizedName（仅返回当前已核准的共享内原拼写，写入状态未知时拒绝），普通文件/目录与虚拟根的 AttributeTag；已有普通 F 卷根/子目录和实际仍在 R 的 FILE 也支持独立 Standard。根的容量/卷属性及少量探测关联已有单独限界。 | Access 只报告原句柄已经取得的权限，不额外授权或表明写入成功。不对虚拟根或 R 查询 NormalizedName，不返回主机路径。FileAll、真时标及其它未证类不能用宿主或零值补齐；R 根/删除目录、虚拟根和关联形状不进入这些 Standard 路径，已还原旧 R 读柄不再报告当前 R 元数据。 |
 | 改名、移动、回收 | 普通非写者 FILE 已有原柄同父改名、限同一实际登记 F 的独立跨父移动（kind14）；普通 FILE 的最后正常 CLOSE 可按原删除标记入 R，实际保留 FILE 可在同树空位恢复（kind12）。同一 FileId、工作修订、历史不重发。 | 普通 FILE 跨不同实际文件系统 F→F 已接入；隔离 Linux 客户端未验。R 不开放普通写或覆盖；现有回收/恢复同步回合不是长请求/取消支持。 |
 | 截断、退场和取消 | 已有的 SET EOF 是同一已开 Writer 的工作操作；干净退场、未提交写稿及已确认但丢答分别处理。独立强签 CANCEL 无命中时不应答不授额。 | 跨卷普通 FILE 改名有原请求的在途 CANCEL 和 STATUS_PENDING；不适用于通用复合，也不承诺取消已进内核的 I/O。会话失效不触发 FLUSH/CLOSE/删除。 |
@@ -16,8 +16,8 @@
 ## 普通保存不是一个开关
 
 - **同一原件上写。** 窄受支持顺序是原有 `FILE_OPEN`，或新件的 `FILE_CREATE`/`FILE_OPEN_IF`，原柄 `WRITE`、需截短时 `SET_INFO(FileEndOfFileInformation)`，再 `FLUSH` 或显式正常脏 `CLOSE`，另开回读。当前只有足够且真实已授访问位的 OPEN 可走这条路；泛型/属性/EA 访问位不能削掉后假装原请求已满足。应用用普通保存还是另存、是否轮询元数据、是否发锁，都须记录确切构建和请求顺序。
-- **打开即截断。** [Linux v6.12 `cifs_get_disposition`](https://github.com/torvalds/linux/blob/v6.12/fs/smb/client/file.c#L414-L430) 的 `O_TRUNC`/`O_CREAT|O_TRUNC` 对应 `FILE_OVERWRITE`/`FILE_OVERWRITE_IF`；[Samba 4.22 `put`](https://github.com/samba-team/samba/blob/samba-4.22.0/source3/client/client.c#L1776-L1790) 实际请求 create+truncate。Rust 的字段枚举识别这些值，但实际业务拒绝；这不是普通 `FILE_OPEN_IF`，也不能至首条 WRITE 才悄悄截短。[实际覆盖的 FSA 规则](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fsa/41f3734a-5bba-4c3b-9d04-7baafc9b7bfe) 还约束访问、属性及 EA。若以后明确做，已有分支须以真实同一 FILE/单 Writer、合法属性和原授权为前提，先正确确认长度动作再给 `FILE_OVERWRITTEN`；空位分支才是真首次出生。`SUPERSEDE` 不等价于保持身份的截断；目前都不开。
-- **应用临时文件替换。** 写临时文件后 `SET_INFO(FileRenameInformation, ReplaceIfExists=1)` 替换已有目标，与截断原 FILE、无覆盖改名都不同；可能涉及两个 FileId、两份历史/权限和占用。不能把它模拟成覆盖成功、删旧重建或悄悄从源/目标各取一部分历史。无覆盖操作遇已有名字不修改；[TASKS.md 的 WPS 普通保存验收](../../TASKS.md) 不接受用同名新 FileId 或另存代证。当前不支持覆盖式替换；先拿实际应用证据和独立业务规则再设计。
+- **打开即截断。** 对已有普通文件，`FILE_OVERWRITE` 和 `FILE_OVERWRITE_IF` 在写入权限、单写锁和字节范围锁允许时，把同一 FileId 的私有工作稿截断为零。CREATE 成功返回 `FILE_OVERWRITTEN`；随后 `WRITE` 写入这个工作稿，`FLUSH` 或正常脏 `CLOSE` 确认工作修订。文件标签和已有历史不变，正式版本仍在 Web 手动提交。目标不存在时，`FILE_OVERWRITE_IF` 可新建，`FILE_OVERWRITE` 返回找不到文件。`FILE_OPEN_IF` 打开已有文件时不截断，`FILE_SUPERSEDE` 不支持。
+- **应用临时文件替换。** 应用先写临时文件，再用 `SET_INFO(FileRenameInformation, ReplaceIfExists=1)` 改名替换已有目标。这条路径与打开原文件截断不同，当前未上线。[WPS 普通保存验收](../../TASKS.md) 要在原 FileId 上核对工作稿和版本历史。
 - `FLUSH` 或正常 CLOSE 确认工作修订，不替 Web 手动提交。真正异常断开不隐式确认；结果无法判断时只核原单，不重发保存。若应用确实依赖范围锁、普通 `SET_INFO` 属性或某个数据类，按该已证行为补最小真实权限与存储实现，不把一个目录元数据答复当作保存或挂载证明。
 
 ## 普通 FILE 非阻塞字节锁
