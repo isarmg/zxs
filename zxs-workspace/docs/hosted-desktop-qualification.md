@@ -14,7 +14,7 @@
 - 使用 [GitHub 托管镜像标签](https://github.com/actions/runner-images#available-images)和 [Python 工具缓存的 CPython 3.14.10](https://github.com/actions/python-versions/blob/main/versions-manifest.json)，依照现有平台配方的 wheel SHA-256 下载；仅用 PyPI wheel，在作业独立目录离线安装这批文件。源码 Qt 流程、制包和解包后的启动分别记录。启动检查只读窗口的所属进程和大小，不录屏或更改设置；不走 Finder、文件关联或 Gatekeeper 安装验收。
 - Windows 托管环境是 Server，而且 [GitHub 运行账号有管理员权限](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges)。Windows 11 普通账户、便携配方、系统文件关联和权限隔离另验；现有配方仍拒绝 Server。CI 不建立需要改权限的符号链接。
 - macOS 只做本地 ad-hoc 签名。没有 Developer ID、公证、真实隔离来源输入或 Gatekeeper 验收。独立生成归档与托管工作树的签出、提交是不同入口；后者不在两个平台开放。
-- 虚拟盘不在此作业：[Windows](../winfsp/README.md)有 WinFsp 数据回调和拒绝分派的封闭生命周期，未接成桌面盘符；[macOS](macos-snapshot-volume.md)有只读回调及无卷会话，未接公开 macFUSE/FSKit 挂载。CI 不装驱动、启动挂载、改系统安全设置、访问真实档案或共享，也不上传候选二进制。
+- 本作业不验证虚拟盘。[Windows WinFsp](windows-remote-draft.md)和 [macOS FSKit](macos-remote-edit.md)的远程编辑已接入桌面源码，默认发行仍不启用；[手动 FSKit SDK 检查](../macos-fskit/target/QUALIFICATION.md)只检查源码与 SDK 接口。托管作业不安装驱动、挂载、修改系统安全设置、访问真实档案或共享，也不上传候选二进制。
 
 这里列的是验收项目。实测结果以对应的 GitHub run 为准。
 
