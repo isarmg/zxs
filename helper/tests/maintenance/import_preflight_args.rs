@@ -12,10 +12,7 @@ fn only_explicit_source_and_ordered_current_roles_are_accepted() {
     let q = Preflight::parse(good.map(OsString::from).into_iter()).unwrap();
     assert_eq!(q.source, Path::new("/old"));
     assert!(!q.show_names);
-    let show_names = ["--show-names"]
-        .into_iter()
-        .chain(good)
-        .map(OsString::from);
+    let show_names = ["--show-names"].into_iter().chain(good).map(OsString::from);
     assert!(Preflight::parse(show_names).unwrap().show_names);
     assert_eq!(
         q.roles,
