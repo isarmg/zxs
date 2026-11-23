@@ -26,7 +26,7 @@ class DraftSource:
     account: str
     container: Container  # Exact wire spelling, ID and observed sequence; never a local leaf.
     branch: str
-    head: Node  # Selected base node; retained key spelling.
+    head: Node | None  # None only for a first local-file capture.
     observed_main_head: str | None = None
 
 

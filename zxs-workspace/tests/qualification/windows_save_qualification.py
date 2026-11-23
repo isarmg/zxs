@@ -20,6 +20,7 @@ from zipworkspace.desktop.container_management import Phase
 from zipworkspace.desktop import container_windows_receipt as receipts
 from zipworkspace.desktop.container_windows_draft import _effective_zone
 from zipworkspace.desktop import container_windows_save as saves
+from zipworkspace.desktop.container_windows_first import WindowsFirstLocalChoice
 from zipworkspace.desktop.container_windows_submit import WindowsOriginalSaveChoice
 from zipworkspace.desktop.container_windows_retire import WindowsRetirementPending, retire_original_windows_save
 from zipworkspace.model import Rejected
@@ -42,6 +43,62 @@ class OriginalSave(LocalWorkingFile):
 
     def recover(self, conn):
         return saves.load_original_windows_key(conn, self.staging, CONTAINER, confirmed=True)
+
+    def test_first_local_file_retains_original_body_and_absent_catalog_recovery(self):
+        prior, _ = self.choose_draft(b"only the established account")
+        conn = prior._connection
+        source = self.destination / "local.bin"
+        content = b"first\0complete\xffbody"
+        source.write_bytes(content)
+        with WindowsFirstLocalChoice(conn, str(source), self.staging, "Exact server name.bin") as choice:
+            review = choice.review
+            self.assertEqual(review.length, len(content))
+            with self.assertRaises(Rejected):
+                choice.capture(replace(review), confirmed=True)
+            with self.assertRaises(Rejected):
+                choice.capture(review)
+            key = choice.capture(review, confirmed=True)
+            with self.assertRaises(Rejected):
+                choice.capture(review, confirmed=True)
+        self.assertEqual(source.read_bytes(), content)
+        self.assertEqual(self.requests, [])
+        self.assertNotEqual(key.container, CONTAINER)
+        self.assertEqual(saves.load_original_windows_key(conn, self.staging, key.container, confirmed=True), key)
+        source.write_bytes(b"later source edit")
+        ticket = WindowsOriginalSaveChoice(conn, self.staging, key).review.ticket
+        self.assertIsNone(ticket.change.body.selected_base)
+        self.assertEqual((ticket.change.branch, ticket.base_sequence), ("main", 0))
+        with self.reopen(conn, key) as pending:
+            action, = pending.plan.actions
+            self.assertEqual((action.operation_id, action.container_id, action.head, action.name),
+                             (key.operation, key.container, None, "Exact server name.bin"))
+            with pending.body(action) as blocks:
+                self.assertEqual(b"".join(blocks), content)
+        seen = []
+        answer = {"container_id": key.container, "operation_id": key.operation, "kind": "save_node",
+                  "sequence": 1, "node_id": action.node_id, "length": review.length, "sha256": review.sha256,
+                  "target": {"kind": "first_main", "name": action.name}}
+
+        def get(message):
+            self.assertEqual(message, lookup_message(action))
+            seen.append(message)
+            return project_reply(200, json.dumps(answer).encode("utf-8"), lookup=True)
+
+        conn._exchange.request = get
+        result = receipts.lookup_original_windows_receipt(conn, self.staging, key, confirmed=True)
+        self.assertEqual((result.phase, result.ticket, result.receipt.branch, result.receipt.parent),
+                         (Phase.CONFIRMED, ticket, "main", None))
+        self.assertEqual(len(seen), 1)
+
+    def test_first_local_file_refuses_extra_stream_before_capturing(self):
+        prior, _ = self.choose_draft(b"only the established account")
+        source = self.destination / "local.bin"
+        source.write_bytes(b"ordinary data")
+        Path(str(source) + ":outside").write_bytes(b"separate data")
+        with self.assertRaises(Rejected):
+            WindowsFirstLocalChoice(prior._connection, str(source), self.staging, "Server.bin")
+        self.assertEqual(list(self.staging.iterdir()), [])
+        self.assertEqual(self.requests, [])
 
     def test_save_changed_body_only_cold_reopen_and_inert_stale_iterator(self):
         choice, draft, review = self.edited()

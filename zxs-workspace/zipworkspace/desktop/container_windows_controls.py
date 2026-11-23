@@ -1,6 +1,7 @@
 """Windows R3 desktop workflow. No implicit upload on mount, last Close, dialog exit or reconnect."""
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from ntpath import basename
 import re
 from threading import Event, Lock
 
@@ -12,6 +13,7 @@ from .._windows_provider import admitted_client, admitted_provider, packaged
 from ..model import Rejected
 from .container_management import Phase
 from .container_windows_draft import WindowsDraftChoice
+from .container_windows_first import WindowsFirstLocalChoice
 from .container_windows_fileplane import _TEMP_ALIAS, _alias
 from .container_windows_mount import WindowsPrivateDraftMount
 from .container_windows_receipt import WindowsReceiptUncertain, lookup_original_windows_receipt
@@ -43,20 +45,26 @@ class WindowsDiskControls(QWidget):
         row = QHBoxLayout()
         self.edit = button("将所选节点作为本机磁盘打开…", lambda: self.open(False))
         self.recover = button("核对待处理的原提交…", lambda: self.open(True))
+        self.first = button("提交新的本机文件…", lambda: self.open(False, first=True))
         row.addWidget(self.edit)
+        row.addWidget(self.first)
         row.addWidget(self.recover)
         layout.addWidget(self.note)
         layout.addLayout(row)
 
-    def _scope(self, recovery):
+    def _scope(self, recovery, *, first=False):
         p, owner = self.panel, self.panel._owned
         cid = p._current()
         if (not packaged() or owner is None or owner.writable or not owner._listed or owner.operations is not p.ops
                 or p._checking_connection or p.jobs or self.host.pending is not None
-                or self.host._container_edit_locked or cid not in p.listed):
+                or self.host._container_edit_locked):
             return None
+        if first:
+            return owner, p._epoch, None, None, None, None
         if recovery:
-            return owner, p._epoch, cid, None, None, None
+            return owner, p._epoch, cid if cid in p.listed else None, None, None, None
+        if cid not in p.listed:
+            return None
         info, br, node = p.details.get(cid), p.branches.currentData(), p.nodes.currentData()
         if (info is None or info.container != p.listed[cid] or not info.container.revision or br is None
                 or br not in info.branches or node is None or node not in br.nodes
@@ -66,23 +74,27 @@ class WindowsDiskControls(QWidget):
 
     def paint(self):
         self.edit.setEnabled(not self.busy() and self._scope(False) is not None)
+        self.first.setEnabled(not self.busy() and self._scope(False, first=True) is not None)
         self.recover.setEnabled(not self.busy() and self._scope(True) is not None)
 
     def busy(self):
         return self.active is not None
 
-    def open(self, recovery):
-        selected = self._scope(recovery)
+    def open(self, recovery, *, first=False):
+        selected = self._scope(recovery, first=first)
         if self.busy() or selected is None:
             return
-        box = self.active = _Disk(self, selected, recovery)
+        box = self.active = _Disk(self, selected, recovery, first=first)
         self.panel._paint()
         def finished(_):
             if self.active is box:
                 self.active = None
                 if box.invalidate:
-                    self.panel.details.pop(selected[2], None)
-                    self.panel._select()
+                    self.panel.details.pop(box.cid, None)
+                    if box.first or (recovery and box.cid not in self.panel.listed):
+                        self.panel._load()
+                    else:
+                        self.panel._select()
                 self.panel._paint()
             box.deleteLater()
         box.finished.connect(finished)
@@ -163,11 +175,13 @@ class _Capture:
 
 
 class _Disk(QDialog):
-    def __init__(self, controls, selected, recovery):
+    def __init__(self, controls, selected, recovery, *, first=False):
         super().__init__(controls.panel)
         self.controls, self.selected, self.recovery = controls, selected, recovery
         self.conn, _, self.cid, info, branch, node = selected
-        self.setWindowTitle("核对 Windows 原提交" if recovery else "Windows 原生工作磁盘")
+        self.first, self.local_choice = first, None
+        self.setWindowTitle("首次提交本机文件" if first else
+                            "核对 Windows 原提交" if recovery else "Windows 原生工作磁盘")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.resize(650, 550)
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="workspace-windows-disk")
@@ -176,7 +190,9 @@ class _Disk(QDialog):
         self.done_closing, self.matched = False, None
         self.site = self.conn._exchange._location
         layout = QVBoxLayout(self)
-        detail = f"服务器 {self.site!r}　账号 {self.conn._account!r}\n容器 {self.cid}"
+        detail = f"服务器 {self.site!r}　账号 {self.conn._account!r}"
+        if self.cid is not None:
+            detail += f"\n容器 {self.cid}"
         if info:
             detail += (f"　{info.container.name!r}　修订 {info.container.revision}\n"
                        f"分支 {branch.id!r}　原节点 {node.id}　{node.length:,} 字节")
@@ -188,8 +204,14 @@ class _Disk(QDialog):
         form.addRow(self.browse, self.folder)
         self.alias, self.limit, self.prior = QLineEdit(), QLineEdit(), QLineEdit()
         self.replacement = QCheckBox("允许一个本机临时文件替换所选文件（高级）")
-        if recovery:
-            self.prior.setPlaceholderText("留空读取该容器的活动原号；已归档时粘贴四段原号")
+        self.source_file, self.remote_name = QLineEdit(), QLineEdit()
+        self.source_file.setReadOnly(True)
+        self.browse_source = button("选择本机文件…", self._browse_source)
+        if first:
+            form.addRow(self.browse_source, self.source_file)
+            form.addRow("服务器文件名", self.remote_name)
+        elif recovery:
+            self.prior.setPlaceholderText("粘贴四段原号或原容器编号；已选容器可留空")
             form.addRow("原传输信息", self.prior)
         else:
             try:
@@ -214,7 +236,8 @@ class _Disk(QDialog):
         for btn in (self.action, self.status, self.force, self.exit):
             row.addWidget(btn)
         layout.addLayout(row)
-        self.note("不会扫描目录或自动重试。核对回执无需打开原正文。" if recovery else
+        self.note("选中本机普通文件后先核对完整内容。准备和发送须分别确认，不挂载磁盘。"
+                  if first else "不会扫描目录或自动重试。核对回执无需打开原正文。" if recovery else
                   "只呈现所选节点的文件，支持原位读写。编辑历史 main 节点后，明确提交才创建新分支。可明确选择一次同目录临时文件替换；其他重命名、任意另存为、删除和执行不支持。\n"
                   "选择自己的普通本机私有 NTFS 子目录，不要用同步目录、联接或共享目录。关闭编辑器和该目录的资源管理器窗口，再正常停止。只有之后点击提交才会上传。")
         self.timer = QTimer(self)
@@ -226,7 +249,7 @@ class _Disk(QDialog):
             self.info.setPlainText(message)
 
     def current(self):
-        current = self.controls._scope(self.recovery)
+        current = self.controls._scope(self.recovery, first=self.first)
         return current is not None and current[0] is self.selected[0] and current[1:] == self.selected[1:]
 
     def _browse(self):
@@ -235,6 +258,15 @@ class _Disk(QDialog):
         path = QFileDialog.getExistingDirectory(self, "选择原本机私有 NTFS 目录", self.folder.text(), options=opts)
         if path and self.current() and self.state == "setup":
             self.folder.setText(path)
+            self.paint()
+
+    def _browse_source(self):
+        opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
+                QFileDialog.Option.DontResolveSymlinks)
+        filename, _ = QFileDialog.getOpenFileName(self, "选择本机普通文件", options=opts)
+        if filename and self.current() and self.state == "setup" and self.job is None:
+            self.source_file.setText(filename)
+            self.remote_name.setText(basename(filename))
             self.paint()
 
     def work(self, task, fn):
@@ -247,20 +279,23 @@ class _Disk(QDialog):
     def paint(self):
         task, state = self.task, self.state
         idle = self.job is None
-        names = {"setup": "读取原提交" if self.recovery else "打开本机磁盘…", "mount": "正常停止并核对修改",
+        names = {"setup": "核对本机文件" if self.first else "读取原提交" if self.recovery else "打开本机磁盘…",
+                 "first-reviewed": "准备首次提交…", "mount": "正常停止并核对修改",
                  "reviewed": "准备完整文件提交", "prepared": "提交完整文件…", "absent": "发送同一笔原提交",
                  "settled": "归档本地待处理记录"}
         self.action.setText(names.get(state, "等待"))
         owner, _ = self.capture.live()
         stopping = state in ("stopping", "abandoned", "cancelling")
-        self.action.setEnabled((idle and state in names and state != "mount" and bool(self.folder.text()))
+        setup_ok = not self.first or state != "setup" or bool(self.source_file.text() and self.remote_name.text())
+        self.action.setEnabled((idle and state in names and state != "mount" and bool(self.folder.text()) and setup_ok)
                                or (task == "mount" and state == "mount" and owner is not None and owner.wait_location(0) is not None))
         self.status.setEnabled(idle and self.key is not None and state not in ("closed", "closing"))
         self.force.setText("取消打开或下载" if owner is None else "强制结束…")
         self.force.setVisible(task == "mount" and state not in ("abandoned", "cancelling"))
         self.force.setEnabled(not self.done_closing)
         self.exit.setEnabled(idle and not stopping)
-        for w in (self.browse, self.alias, self.limit, self.prior, self.replacement):
+        for w in (self.browse, self.alias, self.limit, self.prior, self.replacement,
+                  self.source_file, self.browse_source, self.remote_name):
             w.setEnabled(idle and state == "setup")
 
     def primary(self):
@@ -276,6 +311,8 @@ class _Disk(QDialog):
         try:
             if self.state == "setup":
                 self.begin()
+            elif self.state == "first-reviewed":
+                self.confirm_first()
             elif self.state == "reviewed":
                 self.work("prepare", self.prepare)
             elif self.state in ("prepared", "absent"):
@@ -292,17 +329,32 @@ class _Disk(QDialog):
         if not folder:
             return
         self.directory = folder
+        if self.first:
+            filename, remote_name = self.source_file.text(), self.remote_name.text()
+            if not filename or not remote_name:
+                return
+            def choose():
+                admitted_client()
+                return WindowsFirstLocalChoice(self.conn, filename, folder, remote_name)
+            self.work("first-select", choose)
+            return
         if self.recovery:
             prior = self.prior.text().strip()
+            cid = self.selected[2]
             def read():
                 admitted_client()  # Does not require the vendor service, driver, live body or mount.
                 if prior:
                     fields = prior.split()
-                    if len(fields) != 4 or fields[0] != self.cid:
-                        raise Rejected("需要同一容器的原四段传输信息。")
-                    key = WindowsSaveKey(*fields)
+                    if len(fields) == 4:
+                        key = WindowsSaveKey(*fields)
+                    elif len(fields) == 1:
+                        key = load_original_windows_key(self.conn, folder, fields[0], confirmed=True)
+                    else:
+                        raise Rejected("请输入原容器编号或完整的四段传输信息。")
                 else:
-                    key = load_original_windows_key(self.conn, folder, self.cid, confirmed=True)
+                    if cid is None:
+                        raise Rejected("没有选定容器；请粘贴原容器编号或四段传输信息。")
+                    key = load_original_windows_key(self.conn, folder, cid, confirmed=True)
                 try:
                     return key, WindowsOriginalSaveChoice(self.conn, folder, key)
                 except Exception as error:
@@ -329,6 +381,29 @@ class _Disk(QDialog):
             self.note("正在核对签名、原服务与私有位置，再读取所选节点。")
             self.work("mount", partial(self.capture.run, self.selected, folder, alias, int(raw), replacement))
 
+    def confirm_first(self):
+        source = self.local_choice
+        review = source.review
+        text = (f"原文件 {review.source_path!r}\n私有目录 {review.private_directory!r}\n"
+                f"服务器 {review.destination!r}　账号 {review.account!r}\n"
+                f"新容器 {review.container.name!r} ({review.container.id})，main 首版\n"
+                f"{review.length:,} 字节　SHA-256 {review.sha256}\n"
+                "只封存全量正文和原号；本步不上传。请保留新容器编号和私有目录。")
+        if not confirm(self, "准备首次提交", text, attestation="确认封存这份原文件。",
+                       action_text="封存完整文件") or not self.current():
+            return
+        def freeze():
+            key = None
+            try:
+                with source:
+                    key = source.capture(review, confirmed=True)
+                return key, WindowsOriginalSaveChoice(self.conn, self.directory, key)
+            except Exception as error:
+                if key is not None:
+                    raise WindowsSaveUncertain(key, self.directory) from error
+                raise
+        self.work("prepare", freeze)
+
     def prepare(self):
         key = self.capture.draft.prepare_save(self.review, confirmed=True)
         try:
@@ -339,8 +414,9 @@ class _Disk(QDialog):
     def describe(self):
         src, ticket = self.choice.review.source, self.choice.review.ticket
         body = ticket.change.body
+        base = src.head.id if src.head is not None else "首次 main（新容器）"
         return (f"服务器 {src.origin!r}　账号 {src.account!r}\n容器 {src.container.name!r} ({src.container.id})，"
-                f"原修订 {ticket.base_sequence}\n分支 {src.branch!r} → {body.target_branch!r}\n原节点 {src.head.id}\n新节点 {body.node}\n"
+                f"原修订 {ticket.base_sequence}\n分支 {src.branch!r} → {body.target_branch!r}\n原节点 {base}\n新节点 {body.node}\n"
                 f"完整正文 {body.length:,} 字节　SHA-256 {body.sha256}\n原传输信息（可复制，不含口令）：\n"
                 + display_key(self.key))
 
@@ -439,8 +515,15 @@ class _Disk(QDialog):
                 self.note(("已正常卸载，发现本地修改。准备提交只会封存字节和原号，不访问服务器。"
                            if result.changed else "已正常卸载，完整正文与原节点一致，无需上传。")
                           + f"\n审阅原件：{result.local_file}\n{result.length:,} 字节　SHA-256 {result.sha256}" + self._tail())
+            elif task == "first-select":
+                self.local_choice = result
+                self.cid = result.review.container.id
+                self.state = "first-reviewed"
+                self.note(f"核对完整本机原件。\n新容器编号 {self.cid}\n"
+                          f"{result.review.length:,} 字节　SHA-256 {result.review.sha256}\n尚未封存或发送。")
             elif task in ("prepare", "recover"):
                 self.key, self.choice = result
+                self.cid = self.key.container
                 self.matched = self.controls._known.get(self.key)
                 self.state = "prepared" if task == "prepare" else "pending"
                 self.note(("本机已封存原意图；尚未提交。\n" if task == "prepare" else
@@ -491,13 +574,16 @@ class _Disk(QDialog):
                       + self._tail())
         except WindowsSaveUncertain as error:
             self.key, self.state = error.key, "pending"
+            self.cid = self.key.container
             self.matched = self.controls._known.get(self.key)
             self.note("已取得原传输号，但还不能证明完整原意图可用，请保留原私有目录和下面的信息。不要重新准备。" + self._tail())
         except Exception as error:
-            self.state = ("pending" if self.key else "setup" if task == "recover" else "fault")
+            self.state = ("pending" if self.key else "setup" if task in ("recover", "first-select") else "fault")
             self.note(f"本步未完成：{error}\n" +
                       ("只核对原号；此错误不能证明上次没有上传。" if self.key else
-                       "未由此错误取得可提交证明。不要移动或删除私有原件。") + self._tail())
+                       "未由此错误取得可提交证明。不要移动或删除私有原件。")
+                      + (f"\n如需核对，请保留原容器编号 {self.cid} 和私有目录。"
+                         if self.first and self.cid is not None else "") + self._tail())
         self.paint()
 
     def reject(self):
@@ -508,7 +594,11 @@ class _Disk(QDialog):
                     "还没有封存原提交。私有文件会保留，但关闭后不能凭路径恢复本次挂载的提交权限。" + self._tail(),
                     attestation="我已记录原件位置，本次不准备提交。", action_text="保留原件并关闭"):
                 return
-            self.work("close", self.capture.close)
+            def close():
+                if self.local_choice is not None:
+                    self.local_choice.close()
+                self.capture.close()
+            self.work("close", close)
 
     def closeEvent(self, event):
         if self.done_closing:

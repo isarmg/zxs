@@ -164,18 +164,28 @@ def _capture_review(draft, review):
     # No mutable draft handle escapes. Publish the small intent LAST, after the separate
     # plain complete body is flushed, hashed by readback and visible in its original directory.
     home, s = draft._home, review.source
-    check, api = draft._choice._live, home.api
+
+    def observe():
+        if draft._observe(review.length, policy=True) != draft._review_row:
+            raise Rejected("the held Windows draft changed after review")
+
+    return _capture_exact(s, home, draft._h, draft._leaf, review.length, review.sha256,
+                          draft._choice._live, observe, draft._url, draft._zone, draft._mark)
+
+
+def _capture_exact(s, home, source_handle, placement, length, digest_hex,
+                   check, observe, url=None, zone=None, mark=None):
+    api = home.api
     owner = s.container
     operation, node, submission = new_id(), new_id(), new_id()
-    action = _save_action(s, operation, node, FullBody(review.length, review.sha256),
+    action = _save_action(s, operation, node, FullBody(length, digest_hex),
                           new_id() if s.observed_main_head is not None else s.branch)
-    plan = Plan((action,), ((owner.id, draft._leaf),))  # Local generated leaf only. No remote rename.
+    plan = Plan((action,), ((owner.id, placement),))  # Inert local generated leaf only.
     slot, temp, body_leaf = _slot(s.destination, s.account, owner.id), new_id() + ".zwt", submission + ".zvb"
     key, possible, material = None, False, False
     try:
         with ExitStack() as keep:
-            if draft._observe(review.length, policy=True) != draft._review_row:
-                raise Rejected("the held Windows draft changed after review")
+            observe()
             try:
                 api.absent(home.handle, slot)
                 api.absent(home.handle, _key_slot(s.destination, s.account, owner.id))
@@ -186,7 +196,7 @@ def _capture_review(draft, review):
             material = True  # A failed create/open response need not mean no private name exists.
             body, body_id, body_acl = _new_record(keep, home, body_leaf)
             intent, intent_id, intent_acl = _new_record(keep, home, temp)
-            raw = _record(s, plan, submission, home, body_id, intent_id, draft._zone)
+            raw = _record(s, plan, submission, home, body_id, intent_id, zone)
             if len(raw) > _LIMIT:
                 raise Rejected("Windows submit intent too large")
             key = WindowsSaveKey(owner.id, submission, operation, sha256(raw).hexdigest())
@@ -195,38 +205,38 @@ def _capture_review(draft, review):
             if _read_record(home, intent, temp, intent_id, intent_acl) != raw:
                 raise Rejected("Windows submit record failed readback")
             original_key = _write_key(keep, home, key, s, check)  # Before any payload or pending rename.
-            mark = draft._mark
             if mark is not None:
                 ads = keep.enter_context(api.new_zone(body))
                 api.write(ads, mark)
                 api.flush(ads)
                 _check_origin(api, body, _same_file(home, body, body_leaf, 0, body_id), mark)
-            api.rewind(draft._h)
-            left, digest = review.length, sha256()
+            api.rewind(source_handle)
+            left, digest = length, sha256()
             while left:
                 check()
-                part = api.read(draft._h, min(CHUNK, left))
+                part = api.read(source_handle, min(CHUNK, left))
                 if not part or len(part) > left:
                     raise Rejected("the held draft did not supply the reviewed full body")
                 api.write(body, part)
                 digest.update(part)
                 left -= len(part)
-            if (api.read(draft._h, 1) or digest.hexdigest() != review.sha256
-                    or draft._observe(review.length, policy=True) != draft._review_row):
+            if api.read(source_handle, 1) or digest.hexdigest() != digest_hex:
                 raise Rejected("Windows capture differed from the reviewed original")
+            observe()
             api.flush(body)
-            sealed = _same_file(home, body, body_leaf, review.length, body_id)
-            api.verify_bytes(body, review.length, review.sha256, checkpoint=check)
+            sealed = _same_file(home, body, body_leaf, length, body_id)
+            api.verify_bytes(body, length, digest_hex, checkpoint=check)
             body_acl.check(body)
             _check_origin(api, body, sealed, mark)
             api.flush(home.handle)
             home.check()
             original_key()
             body_acl.check(body)
-            if (_same_file(home, body, body_leaf, review.length, body_id) != sealed
-                    or _effective_zone(draft._url) != draft._zone):
+            if (_same_file(home, body, body_leaf, length, body_id) != sealed
+                    or (url is not None and _effective_zone(url) != zone)):
                 raise Rejected("original frozen Windows body or source policy changed")
             _check_origin(api, body, sealed, mark)
+            observe()
             check()
             possible = True
             try:
@@ -257,6 +267,11 @@ def _capture_review(draft, review):
 
 def _save_action(source, operation, node, body, target):
     old_head = source.observed_main_head
+    if source.head is None:
+        if source.container.revision or source.branch != "main" or target != "main" or old_head is not None:
+            raise Rejected("first Windows save must target a new container and main")
+        return Action(operation, source.container.id, "save_node", 0, None, body=body,
+                      name=source.container.name, branch="main", node_id=node)
     if old_head is None:
         if target != source.branch:
             raise Rejected("an existing-branch Windows save must keep its original target")
@@ -275,14 +290,16 @@ def _decode(raw, key, home, record_id, connection):
         value = json.loads(raw)
         info = value["source"]
         s = DraftSource(info["destination"], info["origin"], info["account"], Container(**info["container"]),
-                        info["branch"], Node(**info["head"]), info.get("observed_main_head"))
+                        info["branch"], None if info["head"] is None else Node(**info["head"]), info.get("observed_main_head"))
         plan = Plan.decode(value["plan"].encode("utf-8"))
         (action,), ((cid, leaf),) = plan.actions, plan.placements
         body_id, zone = bytes.fromhex(value["body_file_id"]), value["source_zone"]
         if (not _container(s.container) or cid != key.container or cid != s.container.id
-                or not s.container.revision or not _node(s.head) or not branch_ok(s.branch)
+                or (s.head is None) != (s.container.revision == 0) or not branch_ok(s.branch)
+                or (s.head is None and zone is not None)
+                or (s.head is not None and (not _node(s.head) or s.head.length >= 1 << 63))
                 or _DRAFT.fullmatch(leaf) is None or action.body is None or action.body.length >= 1 << 63
-                or s.head.length >= 1 << 63 or len(body_id) != 16 or not any(body_id) or body_id == record_id
+                or len(body_id) != 16 or not any(body_id) or body_id == record_id
                 or value["submission"] != key.submission
                 or (zone is not None and (type(zone) is not int or zone not in range(5)))
                 or action != _save_action(s, key.operation, action.node_id, action.body, action.branch)
@@ -420,17 +437,19 @@ def _held_windows_body(selection, connection, key):
         home, source, plan, body_id, zone, observe_record, live, _ = selection
         api, h2 = home.api, connection._exchange
         action, body_leaf = plan.actions[0], key.submission + ".zvb"
-        url = source.origin + h2._node_target(key.container, source.head.id, source.head.length, source.head.sha256)
-        if _effective_zone(url) != zone:
-            raise Rejected("the original Windows transfer source policy changed")
-        mark = _remote_mark(url, zone)
+        url = None
+        if source.head is not None:
+            url = source.origin + h2._node_target(key.container, source.head.id, source.head.length, source.head.sha256)
+            if _effective_zone(url) != zone:
+                raise Rejected("the original Windows transfer source policy changed")
+        mark = None if url is None else _remote_mark(url, zone)
         held = keep.enter_context(api.inspected_file(home.handle, body_leaf))
         body_acl = OutputProtection(home.handle)
         sealed = _same_file(home, held, body_leaf, action.body.length, body_id)
 
         def observe(*, policy=False):
             observe_record()
-            if policy and _effective_zone(url) != zone:
+            if policy and url is not None and _effective_zone(url) != zone:
                 raise Rejected("original Windows transfer source policy changed")
             body_acl.check(held)
             if _same_file(home, held, body_leaf, action.body.length, body_id) != sealed:

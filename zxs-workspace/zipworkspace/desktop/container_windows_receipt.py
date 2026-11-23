@@ -22,7 +22,7 @@ class WindowsReceiptUncertain(Uncertain):
 
 def _ticket(key, source, plan):
     action, = plan.actions
-    body = Body(key.container, key.submission, source.branch, source.head.id,
+    body = Body(key.container, key.submission, source.branch, source.head.id if source.head is not None else None,
                 action.body.length, action.body.sha256, action.branch, action.node_id)
     ticket = Ticket(Save(source.container, body, action.branch, action.fork_from_main), key.operation, key.submission, action.base_revision)
     if not valid_ticket(ticket):
