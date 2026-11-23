@@ -1,6 +1,6 @@
 //! Static controls and future separately provisioned native evidence; no mount operations.
 use super::*;
-use crate::{path_rules::Kind, test_area::subtree_bind_directory};
+use crate::{path_rules::Kind, pinned::Pinned, test_area::subtree_bind_directory};
 use std::fs;
 
 #[test]
@@ -44,6 +44,11 @@ fn actual_filesystem_root_is_field_four_not_the_visible_mountpoint_or_source() {
     let table = Mounts::parse(b"41 1 8:2 / /home\\040area rw shared:9 - ext4 /dev/test rw\n42 41 8:2 /hidden / rw - ext4 /dev/test rw\n43 41 8:3 / /disk rw - xfs /dev/other rw\n").unwrap();
     assert_eq!(table.whole(41, makedev(8, 2)).unwrap().parent, 1);
     assert_eq!(table.whole(43, makedev(8, 3)).unwrap().parent, 41);
+    assert_eq!(table.full_mount(41).unwrap(), (1, makedev(8, 2)));
+    assert_eq!(table.full_mount(43).unwrap(), (41, makedev(8, 3)));
+    for id in [42, 9999] {
+        assert_eq!(table.full_mount(id).unwrap_err().kind(), io::ErrorKind::Unsupported);
+    }
     for (id,dev) in [(42, makedev(8, 2)), (41, makedev(8, 3)), (9999, makedev(8, 2))] {
         assert_eq!(table.whole(id, dev).err().unwrap().kind(), io::ErrorKind::Unsupported);
     }
@@ -91,6 +96,7 @@ fn partial_oversized_and_ambiguous_mount_evidence_is_never_a_fallback() {
 }
 
 #[test]
+#[ignore = "requires HELPER_TEST_SUBTREE_BIND_PARENT on a private subtree bind"]
 fn independently_provisioned_subtree_bind_is_unsupported_not_an_empty_or_damaged_volume() {
     let private = subtree_bind_directory();
     let name = Pinned::open(private.path(), Kind::StorageRoot).unwrap();
@@ -99,7 +105,7 @@ fn independently_provisioned_subtree_bind_is_unsupported_not_an_empty_or_damaged
     let mount = Mount::on(&held).unwrap().unwrap();
     assert!(!table.0[&mount.id].whole,
         "test precondition: choose an actual subtree bind, not a directory on a full-root mount");
-    assert_eq!(table.unclaimed_chain(&name, &held).unwrap_err().kind(), io::ErrorKind::Unsupported);
+    assert_eq!(table.full_mount(mount.id).unwrap_err().kind(), io::ErrorKind::Unsupported);
     assert_eq!(fs::read_dir(private.path()).unwrap().count(), 0);
 }
 

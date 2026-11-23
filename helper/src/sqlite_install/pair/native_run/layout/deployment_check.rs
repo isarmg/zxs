@@ -189,10 +189,10 @@ mod tests{
         }
     }
     #[test]
-    fn reattach_command_accepts_no_override_or_apply_operand(){
+    fn retired_deployment_command_rejects_overrides(){
         use std::ffi::OsString;
         let args=|x:&[&str]|x.iter().map(OsString::from).collect::<Vec<_>>();
-        assert!(matches!(crate::parse(args(&["check-deployment"])),Ok(crate::Command::CheckDeployment)));
+        assert!(crate::parse(args(&["check-deployment"])).is_err());
         for forbidden in ["--system","--site","--apply","init","reset"]{
             assert!(crate::parse(args(&["check-deployment",forbidden])).is_err());
         }

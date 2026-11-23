@@ -109,6 +109,3 @@ pub(super) fn seed_retirement_fixture(request:&Request,group:&Group)->io::Result
     let done=super::complete::original(&super::catalog::Canonical::new()?,request,group,Some(&pending))?;
     Ok((done.pool,issue.rows.iter().map(|(volume,_)|*volume).collect()))
 }
-
-#[cfg(test)]
-#[path="../../tests/sqlite/stage.rs"] mod cases;

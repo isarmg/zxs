@@ -2,32 +2,16 @@
 //! Ancestry never searches other paths or recovers a hidden parent. The
 //! separate discovery cut returns only bounded, admitted mountpoint names.
 use crate::pinned::{DiscoveryAdmission, DiscoveryFdInfo, Entity, Mount};
-#[cfg(test)]
-use crate::pinned::{Pinned, invalid, local_data_filesystem};
 const PRODUCT_TOP: &str = "/zxs";
 use linux_raw_sys::general::{BTRFS_SUPER_MAGIC, EXT4_SUPER_MAGIC, F2FS_SUPER_MAGIC, XFS_SUPER_MAGIC};
 use rustix::fs::makedev;
-#[cfg(test)]
-use rustix::{fs::{Mode, OFlags, fgetxattr, openat}, io::Errno};
 use std::{collections::BTreeMap, ffi::OsStr, fs::File, io::{self, Read},
     os::unix::ffi::OsStrExt,path::{Path,PathBuf}};
-#[cfg(test)]
-use std::os::unix::fs::MetadataExt;
 
 const TABLE_BYTES: usize = 4 * 1024 * 1024;
 const TABLE_ROWS: usize = 16_384;
 const DISCOVERY_ROOTS: usize = 64;
 fn unknown(why: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Unsupported, why) }
-
-#[cfg(test)]
-fn no_claim(dir: &File) -> io::Result<()> {
-    let mut v = [0u8; 1];
-    match fgetxattr(dir, c"user.zxs.volume", &mut v[..]) {
-        Err(Errno::NODATA) => Ok(()),
-        Ok(_) | Err(Errno::RANGE) => Err(invalid("selected storage root or its ancestor already has a volume attribute")),
-        Err(e) => Err(e.into()),
-    }
-}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Row { parent: u64, device: u64, whole: bool, devtmpfs: bool, product_root:bool, magic:Option<u32>, namespace_root:bool }
@@ -253,8 +237,6 @@ impl Mounts {
 
 }
 
-// Backward physical ancestry and legacy xattr evidence are only needed for
-// MAINT-1 historical fixtures. The production mount table above is unchanged.
 #[cfg(test)]
 impl Mounts {
     fn whole(&self, id: u64, device: u64) -> io::Result<Row> {
@@ -271,54 +253,6 @@ impl Mounts {
         // it. Neither is positive evidence that the ascent reached its boundary.
         if mount.at_root == Some(true) && row.parent == mount.id { return Ok(()); }
         Err(unknown("kernel did not positively expose the self-parent mount root"))
-    }
-
-    /// Starting with a fresh description of the already checked leaf, walk ..
-    /// only over the exact forward-resolved entities. Unreadable, hidden or
-    /// reparented ancestry is not treated as an unclaimed original.
-    pub(super) fn unclaimed_chain(&self, name: &Pinned, leaf: &File) -> io::Result<Vec<u64>> {
-        self.chain(name, leaf, None).map(|(mounts, _)| mounts)
-    }
-
-    pub(super) fn pending_chain(&self, name: &Pinned, leaf: &File,
-        image: &super::genesis::FreshGenesis<'_>, row: usize) -> io::Result<(Vec<u64>, bool)> {
-        self.chain(name, leaf, Some((image, row)))
-    }
-
-    fn chain(&self, name: &Pinned, leaf: &File, original: Option<(&super::genesis::FreshGenesis<'_>, usize)>)
-        -> io::Result<(Vec<u64>, bool)> {
-        let mut mounts = Vec::with_capacity(name.visible_chain().len());
-        let mut labelled = false;
-        let mut parent_fd: Option<File> = None;
-        let mut child: Option<(Mount, Row)> = None;
-        let mut expected = name.visible_chain().iter().rev().peekable();
-        while let Some(entity) = expected.next() {
-            let dir = parent_fd.as_ref().unwrap_or(leaf);
-            let m = dir.metadata()?;
-            if !m.is_dir() || m.nlink() == 0 || Entity::of(&m)? != *entity {
-                return Err(invalid("selected directory ancestry changed"));
-            }
-            let mount = Mount::on(dir)?.ok_or_else(|| unknown("ancestor has no mount identity"))?;
-            let row = self.whole(mount.id, m.dev())?;
-            if child.is_some_and(|(c,r)|c.id != mount.id && (c.at_root != Some(true) || r.parent != mount.id)){
-                return Err(unknown("cannot verify a mount transition or its covered parent"));
-            }
-            // Unknown/union filesystems, denied xattrs and empty markers do not
-            // count as unclaimed. No enumeration of ancestor contents is needed.
-            local_data_filesystem(dir)?;
-            if let Some((image, row)) = original.filter(|_| mounts.is_empty()) {
-                // Only the selected leaf may already bear its own original label.
-                labelled = super::identity::original_pending_label(dir, image, row)?;
-            } else { no_claim(dir)?; }
-            mounts.push(mount.id);
-            if expected.peek().is_none() {
-                self.require_root_boundary(mount, m.dev())?;
-                break;
-            }
-            child = Some((mount, row));
-            parent_fd = Some(File::from(openat(dir, c"..", OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC, Mode::empty())?));
-        }
-        Ok((mounts, labelled))
     }
 }
 
