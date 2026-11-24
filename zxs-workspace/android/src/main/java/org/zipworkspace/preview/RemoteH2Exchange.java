@@ -67,7 +67,8 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
     private static final Pattern POST = Pattern.compile("/zxs/v1/containers/" + ID + "/branches/(main|" + ID + ")/nodes");
     private static final String CATALOG_PATH = "/zxs/v1/containers";
     private static final Pattern DETAIL = Pattern.compile(CATALOG_PATH + "/" + ID);
-    private static final Pattern MAIN_HISTORY = Pattern.compile(CATALOG_PATH + "/" + ID + "/branches/main/nodes");
+    private static final Pattern BRANCH_HISTORY =
+            Pattern.compile(CATALOG_PATH + "/" + ID + "/branches/(main|" + ID + ")/nodes");
     private static final Pattern SEQUENCE = Pattern.compile("[1-9][0-9]{0,19}");
     private static final Pattern LOGIN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final Pattern DNS = Pattern.compile("[a-z0-9.-]{1,253}");
@@ -182,7 +183,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
         } else {
             String head = headers.get("Zxs-History-Head");
             String next = headers.get("Zxs-History-Next");
-            require(MAIN_HISTORY.matcher(path).matches() && RemoteContainerRead.id(head)
+            require(BRANCH_HISTORY.matcher(path).matches() && RemoteContainerRead.id(head)
                     && (headers.size() == 1 || (headers.size() == 2
                     && RemoteContainerRead.id(next) && !next.equals(head))));
         }

@@ -42,18 +42,19 @@ final class RemoteContainerRead {
     record Item(String container, BigInteger sequence, String name) {}
     record Catalog(List<Item> items, String next) {}
     record Head(String branch, String node) {}
+    record Branches(RemoteSaveJournal.Authority authority, Item owner, List<Head> heads) {}
     record Detail(Item item, List<String> tags, List<Head> heads, String next) {}
     record Revision(String node, String parent, BigInteger sequence, BigInteger length, String sha256) {}
     record History(Selection anchor, List<Revision> nodes, Cursor next) {
         Selection select(int index) {
-            return new Selection(anchor.authority(), anchor.item(), anchor.mainHead(), nodes.get(index));
+            return new Selection(anchor.authority(), anchor.item(), anchor.branch(), anchor.head(), nodes.get(index));
         }
     }
     private record Slice(List<Revision> nodes, String next, BigInteger ceiling) {}
     record Cursor(RemoteSaveJournal.Authority authority, Item item, String head, String next, BigInteger ceiling) {}
 
-    record Selection(RemoteSaveJournal.Authority authority, Item item, String mainHead, Revision revision) {
-        boolean historical() { return !mainHead.equals(revision.node()); }
+    record Selection(RemoteSaveJournal.Authority authority, Item item, String branch, String head, Revision revision) {
+        boolean historical() { return !head.equals(revision.node()); }
 
         boolean differs(ByteBuffer bytes) {
             if (!revision.length().equals(BigInteger.valueOf(bytes.remaining()))) return true;
@@ -72,10 +73,12 @@ final class RemoteContainerRead {
                     && digest.equals(revision.sha256()))) {
                 throw new IllegalArgumentException("no changed bounded body");
             }
-            if (historical() != (newBranch != null)) throw new IllegalArgumentException("exact branch choice is required");
+            if (historical() != (newBranch != null) || (historical() && !"main".equals(branch))) {
+                throw new IllegalArgumentException("exact branch choice is required");
+            }
             RemoteSaveContract.Target target = historical()
                     ? new RemoteSaveContract.HistoricalMain(newBranch, revision.node())
-                    : new RemoteSaveContract.BranchHead("main", revision.node());
+                    : new RemoteSaveContract.BranchHead(branch, revision.node());
             var save = new RemoteSaveContract.Save(item.container(), operation, node, item.sequence(),
                     target, bytes.length, digest);
             return new RemoteSaveJournal.Plan(authority, save);
@@ -112,13 +115,12 @@ final class RemoteContainerRead {
         return new Catalog(List.copyOf(items), next);
     }
 
-    /** Recheck exact selected revision and read a bounded anchored main page. */
-    static Selection selectMain(Reader peer, RemoteSaveJournal.Authority exact, Item selected)
-            throws IOException {
+    /** Read all bounded head pages while preserving the exact catalog selection. */
+    static Branches branches(Reader peer, RemoteSaveJournal.Authority exact, Item selected) throws IOException {
         require(exact.equals(peer.authority()) && id(selected.container()));
         String next = null;
-        String main = null;
         List<String> tags = null;
+        var heads = new ArrayList<Head>();
         String path = ROOT + "/" + selected.container();
         for (int page = 0; page < MAX_HEAD_PAGES; page++) {
             var headers = new HashMap<String, String>();
@@ -130,30 +132,36 @@ final class RemoteContainerRead {
             Detail detail = detail(bytes, next);
             require(selected.equals(detail.item()) && (tags == null || tags.equals(detail.tags())));
             tags = detail.tags();
-            for (Head head : detail.heads()) {
-                if (head.branch().equals("main")) main = head.node();
-            }
+            heads.addAll(detail.heads());
             next = detail.next();
             if (next == null) break;
         }
-        require(next == null && main != null);
-        byte[] history = peer.metadata(path + "/branches/main/nodes", Map.of("Zxs-History-Head", main));
-        require(exact.equals(peer.authority()));
-        var revision = currentRevision(history, main, selected.sequence());
-        return new Selection(exact, selected, main, revision);
+        require(next == null && heads.stream().anyMatch(h -> "main".equals(h.branch())));
+        return new Branches(exact, selected, List.copyOf(heads));
+    }
+
+    static Selection selectBranch(Reader peer, Branches original, Head choice) throws IOException {
+        require(original.authority().equals(peer.authority()) && id(original.owner().container())
+                && choice != null && branch(choice.branch()) && id(choice.node()) && original.heads().contains(choice));
+        String path = ROOT + "/" + original.owner().container() + "/branches/" + choice.branch() + "/nodes";
+        byte[] history = peer.metadata(path, Map.of("Zxs-History-Head", choice.node()));
+        require(original.authority().equals(peer.authority()));
+        var revision = currentRevision(history, choice.node(), original.owner().sequence());
+        return new Selection(original.authority(), original.owner(), choice.branch(), choice.node(), revision);
     }
 
     /** Obtain one exact page of the already selected branch, without changing its head. */
     static History mainHistory(Reader peer, Selection anchor, Cursor after) throws IOException {
-        require(anchor != null && !anchor.historical() && anchor.authority().equals(peer.authority())
-                && id(anchor.item().container()) && id(anchor.mainHead()));
-        String first = anchor.mainHead();
+        require(anchor != null && "main".equals(anchor.branch()) && !anchor.historical()
+                && anchor.authority().equals(peer.authority())
+                && id(anchor.item().container()) && id(anchor.head()));
+        String first = anchor.head();
         BigInteger ceiling = anchor.item().sequence().add(BigInteger.ONE);
         var headers = new HashMap<String, String>();
-        headers.put("Zxs-History-Head", anchor.mainHead());
+        headers.put("Zxs-History-Head", anchor.head());
         if (after != null) {
             require(anchor.authority().equals(after.authority()) && anchor.item().equals(after.item())
-                    && anchor.mainHead().equals(after.head()) && id(after.next()) && !after.next().equals(first)
+                    && anchor.head().equals(after.head()) && id(after.next()) && !after.next().equals(first)
                     && after.ceiling().signum() > 0 && after.ceiling().compareTo(ceiling) < 0);
             first = after.next();
             ceiling = after.ceiling();
@@ -162,10 +170,10 @@ final class RemoteContainerRead {
         String path = ROOT + "/" + anchor.item().container() + "/branches/main/nodes";
         byte[] bytes = peer.metadata(path, Map.copyOf(headers));
         require(anchor.authority().equals(peer.authority()));
-        Slice page = historySlice(bytes, anchor.mainHead(), first, ceiling);
+        Slice page = historySlice(bytes, anchor.head(), first, ceiling);
         if (after == null) require(anchor.revision().equals(page.nodes().get(0)));
         Cursor next = page.next() == null ? null
-                : new Cursor(anchor.authority(), anchor.item(), anchor.mainHead(), page.next(), page.ceiling());
+                : new Cursor(anchor.authority(), anchor.item(), anchor.head(), page.next(), page.ceiling());
         return new History(anchor, page.nodes(), next);
     }
 

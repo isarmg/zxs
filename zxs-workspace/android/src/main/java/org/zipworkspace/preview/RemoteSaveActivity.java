@@ -218,8 +218,8 @@ public final class RemoteSaveActivity extends Activity {
                 .setItems(names, (dialog, index) -> {
                     if (dialog != decision || !owns(exactPeer)) return;
                     readRemote(exactPeer, () ->
-                            RemoteContainerRead.selectMain(exactPeer, exactPeer.authority(), rows.get(index)),
-                            selected -> confirmDownload(exactPeer, selected));
+                            RemoteContainerRead.branches(exactPeer, exactPeer.authority(), rows.get(index)),
+                            branches -> chooseBranch(exactPeer, branches));
                 }).setNegativeButton("取消", null);
         if (page.next() != null) {
             builder.setNeutralButton("下一页", (dialog, which) -> {
@@ -229,16 +229,40 @@ public final class RemoteSaveActivity extends Activity {
         showPeerDialog(builder.create(), exactPeer);
     }
 
+    private void chooseBranch(RemoteH2Exchange exactPeer, RemoteContainerRead.Branches original) {
+        var heads = original.heads();
+        if (heads.size() == 1) {
+            openBranch(exactPeer, original, heads.get(0));
+            return;
+        }
+        String[] labels = new String[heads.size()];
+        for (int index = 0; index < heads.size(); index++) {
+            var head = heads.get(index);
+            labels[index] = head.branch() + "\n" + head.node();
+        }
+        var chooser = new AlertDialog.Builder(this).setTitle("选择原分支")
+                .setItems(labels, (dialog, index) -> {
+                    if (dialog == decision) openBranch(exactPeer, original, heads.get(index));
+                }).setNegativeButton("取消", null).create();
+        showPeerDialog(chooser, exactPeer);
+    }
+
+    private void openBranch(RemoteH2Exchange exactPeer, RemoteContainerRead.Branches original,
+                            RemoteContainerRead.Head choice) {
+        readRemote(exactPeer, () -> RemoteContainerRead.selectBranch(exactPeer, original, choice),
+                selected -> confirmDownload(exactPeer, selected));
+    }
+
     private void confirmDownload(RemoteH2Exchange exactPeer, RemoteContainerRead.Selection choice) {
         var rev = choice.revision();
         boolean supported = rev.length().compareTo(BigInteger.valueOf(PlainText.LIMIT)) <= 0;
         String rule = choice.historical() ? "提交修改会建立新分支，不改 main。"
-                : "提交修改会追加到已选 main 头。";
-        String details = choice.item().name() + "\nmain · " + rev.node() + "\n" + rev.length() + " 字节\n"
+                : "提交修改会追加到已选分支头。";
+        String details = choice.item().name() + "\n" + choice.branch() + " · " + rev.node() + "\n" + rev.length() + " 字节\n"
                 + (supported ? rule : "该文件超过当前全文编辑上限。");
         var builder = new AlertDialog.Builder(this).setTitle("原节点")
                 .setMessage(details).setNegativeButton("取消", null);
-        if (!choice.historical()) {
+        if (!choice.historical() && "main".equals(choice.branch())) {
             builder.setNeutralButton("查看 main 历史", (dialog, which) -> {
                 if (dialog == decision) browseHistory(exactPeer, choice, null);
             });
@@ -262,7 +286,7 @@ public final class RemoteSaveActivity extends Activity {
                     name.setText(choice.item().name());
                     body.setText(content);
                     status.setText((choice.historical() ? "已打开历史节点。提交修改会建立新分支。"
-                            : "已打开原节点。修改后可提交到 main。") + "\n" + rev.node());
+                            : "已打开原节点。修改后可提交到 " + choice.branch() + "。") + "\n" + rev.node());
                     showControls();
                     releasePeer(exactPeer);
                 });

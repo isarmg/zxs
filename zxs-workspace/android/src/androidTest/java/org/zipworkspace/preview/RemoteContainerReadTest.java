@@ -20,6 +20,7 @@ public final class RemoteContainerReadTest {
     private static final String OPERATION = "22".repeat(16);
     private static final String NODE = "33".repeat(16);
     private static final String OTHER = "44".repeat(16);
+    private static final String FORK = "66".repeat(16);
     private static final byte[] BODY = "原字节".getBytes(StandardCharsets.UTF_8);
     private static final String DIGEST = ArchiveIndex.hex(ArchiveIndex.sha256().digest(BODY));
 
@@ -29,7 +30,7 @@ public final class RemoteContainerReadTest {
         var catalog = RemoteContainerRead.catalog(peer, peer.authority, null);
         assertEquals(1, catalog.items().size());
         assertNull(catalog.next());
-        var selection = RemoteContainerRead.selectMain(peer, peer.authority, catalog.items().get(0));
+        var selection = selectMain(peer, catalog.items().get(0));
         assertEquals("Report.txt", selection.item().name());
         assertEquals(NODE, selection.revision().node());
         assertEquals(DIGEST, selection.revision().sha256());
@@ -42,7 +43,7 @@ public final class RemoteContainerReadTest {
     public void editedBodyAppendsOnlyToTheExactSelectedMainHead() throws Exception {
         var peer = new Fake();
         var row = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
-        var selection = RemoteContainerRead.selectMain(peer, peer.authority, row);
+        var selection = selectMain(peer, row);
         assertThrows(IllegalArgumentException.class, () -> selection.changedMain(OPERATION, OTHER, BODY));
         byte[] edited = bytes("修改后的全文");
         assertFalse(selection.differs(ByteBuffer.wrap(BODY)));
@@ -61,7 +62,7 @@ public final class RemoteContainerReadTest {
         var peer = new Fake();
         peer.showHistory = true;
         var original = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
-        var anchor = RemoteContainerRead.selectMain(peer, peer.authority, original);
+        var anchor = selectMain(peer, original);
         var older = RemoteContainerRead.mainHistory(peer, anchor, null).select(1);
         assertFalse(anchor.historical());
         assertTrue(older.historical());
@@ -76,11 +77,34 @@ public final class RemoteContainerReadTest {
     }
 
     @Test
+    public void namedBranchAdvancesItsOwnExactHeadWithoutForking() throws Exception {
+        var peer = new Fake();
+        peer.showBranches = true;
+        var row = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
+        var branches = RemoteContainerRead.branches(peer, peer.authority, row);
+        var choice = new RemoteContainerRead.Head(FORK, OTHER);
+        assertTrue(branches.heads().contains(choice));
+        assertThrows(IOException.class, () -> RemoteContainerRead.selectBranch(peer, branches,
+                new RemoteContainerRead.Head(FORK, NODE)));
+        var selected = RemoteContainerRead.selectBranch(peer, branches, choice);
+        assertFalse(selected.historical());
+        assertThrows(IOException.class, () -> RemoteContainerRead.mainHistory(peer, selected, null));
+        var operation = selected.changedMain(OPERATION, "77".repeat(16), bytes("Edited named branch"));
+        assertEquals(new RemoteSaveContract.BranchHead(FORK, OTHER), operation.save().target());
+    }
+
+    private static RemoteContainerRead.Selection selectMain(Fake peer, RemoteContainerRead.Item row)
+            throws IOException {
+        var branches = RemoteContainerRead.branches(peer, peer.authority, row);
+        return RemoteContainerRead.selectBranch(peer, branches, new RemoteContainerRead.Head("main", NODE));
+    }
+
+    @Test
     public void changedOwnerSequenceCannotSelectOrDownloadAnotherRevision() throws Exception {
         var peer = new Fake();
         var original = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
         peer.move = true;
-        assertThrows(IOException.class, () -> RemoteContainerRead.selectMain(peer, peer.authority, original));
+        assertThrows(IOException.class, () -> selectMain(peer, original));
         assertEquals(2, peer.metadataReads);
         assertEquals(0, peer.bodyReads);
     }
@@ -89,7 +113,7 @@ public final class RemoteContainerReadTest {
     public void sameLengthDifferentBodyDoesNotReachTheEditor() throws Exception {
         var peer = new Fake();
         var original = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
-        var selection = RemoteContainerRead.selectMain(peer, peer.authority, original);
+        var selection = selectMain(peer, original);
         peer.wrongBody = true;
         assertThrows(IOException.class, () -> selection.readExact(peer));
     }
@@ -117,7 +141,7 @@ public final class RemoteContainerReadTest {
     private static final class Fake implements RemoteContainerRead.Reader {
         final RemoteSaveJournal.Authority authority = new RemoteSaveJournal.Authority("55".repeat(32), "alice");
         int metadataReads, bodyReads;
-        boolean move, wrongBody, showHistory;
+        boolean move, wrongBody, showHistory, showBranches;
         @Override public RemoteSaveJournal.Authority authority() { return authority; }
 
         @Override public byte[] metadata(String path, Map<String, String> headers) {
@@ -130,9 +154,15 @@ public final class RemoteContainerReadTest {
             String detail = "/zxs/v1/containers/" + CONTAINER;
             if (path.equals(detail)) {
                 assertEquals(Map.of("Zxs-Detail", "paged", "Zxs-Detail-Sequence", "2"), headers);
+                String named = showBranches ? "{\"branch\":\"" + FORK + "\",\"head\":\"" + OTHER + "\"}," : "";
                 return bytes("{\"container_id\":\"" + CONTAINER + "\",\"sequence\":" + (move ? "3" : "2")
-                        + ",\"name\":\"Report.txt\",\"tags\":[],\"heads\":[{\"branch\":\"main\",\"head\":\""
-                        + NODE + "\"}],\"next_after\":null}");
+                        + ",\"name\":\"Report.txt\",\"tags\":[],\"heads\":[" + named
+                        + "{\"branch\":\"main\",\"head\":\"" + NODE + "\"}],\"next_after\":null}");
+            }
+            if (showBranches && path.equals(detail + "/branches/" + FORK + "/nodes")) {
+                assertEquals(Map.of("Zxs-History-Head", OTHER), headers);
+                return bytes(history().replace(NODE, OTHER).replace("\"original_branch\":\"main\"",
+                        "\"original_branch\":\"" + FORK + "\""));
             }
             assertEquals(detail + "/branches/main/nodes", path);
             assertEquals(Map.of("Zxs-History-Head", NODE), headers);
