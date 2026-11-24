@@ -233,6 +233,44 @@ pub(crate) struct Permit<'owner> {
     expires: Option<Instant>,
 }
 
+/// A live bearer, not a Basic admission or a capability to mutate storage.
+pub(crate) struct BrowsePermit<'owner> {
+    original: Permit<'owner>,
+    expires: Instant,
+}
+
+impl<'owner> Permit<'owner> {
+    pub(crate) fn browse(self) -> Result<BrowsePermit<'owner>, AuthError> {
+        let expires = self.expires.ok_or(AuthError::Invalid)?;
+        Ok(BrowsePermit {
+            original: self,
+            expires,
+        })
+    }
+}
+
+impl BrowsePermit<'_> {
+    pub(crate) fn require(
+        &self,
+        account: &Account,
+        stopping: &dyn Fn() -> bool,
+        now: Instant,
+    ) -> Result<(), AuthError> {
+        let proved = &self.original;
+        if !std::ptr::eq(account, proved.account)
+            || account.pool != proved.pool
+            || account.epoch != proved.epoch
+        {
+            return Err(AuthError::Unavailable);
+        }
+        account.require_open(stopping)?;
+        if now >= self.expires {
+            return Err(AuthError::Invalid);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuthError {
     Invalid,

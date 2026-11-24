@@ -123,7 +123,8 @@ fn no_legacy_auth_or_unauthenticated_metadata_on_the_new_range_path() {
             &|| false,
             &|_, _, _| panic!("no selected node before valid Bearer"),
         )
-        .unwrap();
+        .unwrap()
+        .outcome;
         assert!(matches!(
             answer,
             Outcome::Failed(Problem::BearerUnauthorized)

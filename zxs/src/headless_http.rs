@@ -1,4 +1,5 @@
 //! Strict HTTP/1.1 behind a deployment-managed frontend. No TLS or forwarding policy.
+mod browse;
 mod payload;
 mod reuse;
 #[cfg(test)]
@@ -13,6 +14,7 @@ use crate::{
     headless_auth::{Account, AuthError},
     workspace_protocol::{self, Request},
 };
+use browse::{AccessKind, Reply, bearer_problem};
 use std::{
     io::{self, BufRead, BufReader, Read, Take, Write},
     net::TcpStream,
@@ -259,28 +261,31 @@ pub(crate) fn serve_connection(
             Err(problem) => return write_problem(&mut output, problem),
         };
         let mode = profile(&head);
-        let outcome = match mode {
-            BackendProfile::Login => session_outcome(account, &head, stopping),
+        let reply = match mode {
+            BackendProfile::Login => session_outcome(account, &head, stopping).into(),
             BackendProfile::Legacy | BackendProfile::Bearer => {
-                let Some(outcome) = resource(account, &head, &mut input, mode, stopping, &dispatch)
+                let Some(reply) = resource(account, &head, &mut input, mode, stopping, &dispatch)
                 else {
                     // Preserve the legacy cut: a stop during authentication
                     // closes quietly rather than admitting or reporting new work.
                     return Ok(());
                 };
-                outcome
+                reply
             }
         };
         let eligible = mode != BackendProfile::Legacy
             && served + 1 < MAX_EXCHANGES
             && !stopping()
-            && !matches!(outcome, Outcome::Failed(_))
+            && !matches!(reply.outcome, Outcome::Failed(_))
             && can_reuse(&head);
         if eligible && reuse_slot.is_none() {
             reuse_slot = budget.try_hold();
         }
         let keep = eligible && reuse_slot.is_some();
-        write_outcome(&mut output, outcome, keep)?;
+        if let Err(problem) = reply.before_wire(account, stopping, Instant::now()) {
+            return write_problem(&mut output, problem);
+        }
+        write_outcome(&mut output, reply.outcome, keep)?;
         output.flush()?;
         if !keep {
             return Ok(());
@@ -313,18 +318,18 @@ fn next_head(
     Ok(raw)
 }
 
-fn resource(
-    account: &Account,
+fn resource<'account>(
+    account: &'account Account,
     head: &Head<'_>,
     reader: &mut dyn Read,
     mode: BackendProfile,
     stopping: &dyn Fn() -> bool,
     dispatch: &impl Fn(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
-) -> Option<Outcome> {
+) -> Option<Reply<'account>> {
     let bearer = mode == BackendProfile::Bearer;
     let auth_problem = |error: AuthError| {
-        if bearer && error == AuthError::Invalid {
-            Problem::BearerUnauthorized
+        if bearer {
+            bearer_problem(error)
         } else {
             error.into()
         }
@@ -337,7 +342,7 @@ fn resource(
     let permit = match permit {
         Ok(permit) => permit,
         Err(_) if stopping() => return None,
-        Err(error) => return Some(Outcome::Failed(auth_problem(error))),
+        Err(error) => return Some(Outcome::Failed(auth_problem(error)).into()),
     };
     let frame = if bearer && workspace_protocol::is_payload_target(head.target) {
         workspace_protocol::payload_request(head.method, head.target, &head.fields)
@@ -346,32 +351,39 @@ fn resource(
     };
     let request = match frame {
         Ok(request) => request,
-        Err(workspace_protocol::Rejected::Route) => return Some(Outcome::Failed(Problem::Missing)),
-        Err(_) => return Some(Outcome::Failed(Problem::Malformed)),
+        Err(workspace_protocol::Rejected::Route) => {
+            return Some(Outcome::Failed(Problem::Missing).into());
+        }
+        Err(_) => return Some(Outcome::Failed(Problem::Malformed).into()),
     };
-    if bearer && !matches!(request, Request::Receipt { .. } | Request::NodePayload(_)) {
-        // v1 authorizes exact read-only receipts and the distinct immutable
-        // payload path. All other current R3 routes remain Basic-only.
-        return Some(Outcome::Failed(Problem::Denied));
+    if bearer {
+        match browse::classify(&request, &head.fields) {
+            Ok(AccessKind::ExistingRead) => {}
+            Ok(AccessKind::Metadata) => {
+                return Some(browse::project(
+                    account, permit, request, stopping, dispatch,
+                ));
+            }
+            Err(problem) => return Some(Outcome::Failed(problem).into()),
+        }
     }
     let mut bounded = match body_for(&request, reader) {
         Ok(body) => body,
-        Err(problem) => return Some(Outcome::Failed(problem)),
+        Err(problem) => return Some(Outcome::Failed(problem).into()),
     };
-    Some(
-        match permit.with_admission(account, |live| {
-            // No new work on stop. An already admitted operation can finish and
-            // report its exact receipt if it completed with live authorization.
-            if stopping() {
-                return Outcome::Failed(Problem::Unavailable);
-            }
-            dispatch(request, &mut bounded, live)
-        }) {
-            Ok(result) if matches!(result, Outcome::Failed(_)) || bounded.exhausted() => result,
-            Ok(_) => Outcome::Failed(Problem::Unavailable),
-            Err(error) => Outcome::Failed(auth_problem(error)),
-        },
-    )
+    let outcome = match permit.with_admission(account, |live| {
+        // No new work on stop. An already admitted operation can finish and
+        // report its exact receipt if it completed with live authorization.
+        if stopping() {
+            return Outcome::Failed(Problem::Unavailable);
+        }
+        dispatch(request, &mut bounded, live)
+    }) {
+        Ok(result) if matches!(result, Outcome::Failed(_)) || bounded.exhausted() => result,
+        Ok(_) => Outcome::Failed(Problem::Unavailable),
+        Err(error) => Outcome::Failed(auth_problem(error)),
+    };
+    Some(outcome.into())
 }
 
 #[derive(Clone, Copy, Default)]
