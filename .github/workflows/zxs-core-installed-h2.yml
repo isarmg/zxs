@@ -1,0 +1,22 @@
+name: ZXS installed client HTTPS and CA qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    if: github.repository == 'isarmg/zxs' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: zxs-core/tests/qualification/installed-h2
+      - name: Build pinned products and verify the isolated guest
+        shell: bash
+        run: bash zxs-core/tests/qualification/installed-h2/host.sh
