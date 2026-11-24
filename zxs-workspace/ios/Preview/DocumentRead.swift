@@ -4,6 +4,8 @@ import CryptoKit
 
 // The sole access grant lives only while a foreground selection or its draining read still owns it.
 final class DocumentPresentation: NSObject, NSFilePresenter {
+    enum Role: Equatable { case archive, wholeFile }
+    let role: Role
     let selected: URL
     var presentedItemURL: URL? { selected }
     let presentedItemOperationQueue: OperationQueue = {
@@ -13,11 +15,14 @@ final class DocumentPresentation: NSObject, NSFilePresenter {
     private var valid = true
     private let onLoss: (DocumentPresentation) -> Void
 
-    init(_ url: URL, onLoss: @escaping (DocumentPresentation) -> Void) throws {
-        guard url.isFileURL, DirectoryIndex.safe(url.lastPathComponent),
-              ["zip", "zxs"].contains(url.pathExtension.lowercased()),
-              url.startAccessingSecurityScopedResource() else { throw PreviewError.unavailable }
-        self.selected = url; self.onLoss = onLoss
+    init(_ url: URL, role: Role = .archive, onLoss: @escaping (DocumentPresentation) -> Void) throws {
+        guard url.isFileURL, !url.lastPathComponent.isEmpty else { throw PreviewError.unavailable }
+        if role == .archive {
+            guard DirectoryIndex.safe(url.lastPathComponent), ["zip", "zxs"].contains(url.pathExtension.lowercased())
+            else { throw PreviewError.unavailable }
+        }
+        guard url.startAccessingSecurityScopedResource() else { throw PreviewError.unavailable }
+        self.role = role; self.selected = url; self.onLoss = onLoss
         super.init()
         NSFileCoordinator.addFilePresenter(self)
     }
@@ -72,7 +77,8 @@ final class HeldArchive {
         var s = stat()
         guard fstat(opened, &s) == 0, s.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
               s.st_ino != 0, s.st_dev != 0, s.st_nlink != 0,
-              s.st_size >= 22, s.st_size <= off_t(DirectoryIndex.maxSize)
+              s.st_size >= 0, let size = Int(exactly: s.st_size),
+              scope.role == .wholeFile || (size >= 22 && size <= DirectoryIndex.maxSize)
         else { _ = Darwin.close(opened); throw PreviewError.unavailable }
         self.scope = scope; fd = opened; original = s
     }
@@ -160,9 +166,9 @@ final class DocumentRead {
         lock.lock(); let stop = cancelled; lock.unlock()
         if stop { throw PreviewError.cancelled }
     }
-    func present(_ selected: URL, onLoss: @escaping (DocumentPresentation) -> Void) throws -> DocumentPresentation {
+    func present(_ selected: URL, role: DocumentPresentation.Role = .archive, onLoss: @escaping (DocumentPresentation) -> Void) throws -> DocumentPresentation {
         try check()
-        return try DocumentPresentation(selected, onLoss: onLoss)
+        return try DocumentPresentation(selected, role: role, onLoss: onLoss)
     }
 
     private func coordinated<T>(_ scope: DocumentPresentation,
@@ -191,8 +197,38 @@ final class DocumentRead {
         return try result.get()
     }
 
+    func inspectWholeFile(_ scope: DocumentPresentation) throws -> HeldArchive {
+        guard scope.role == .wholeFile else { throw PreviewError.unavailable }
+        return try coordinated(scope) { name in
+            let exact = try HeldArchive(scope: scope, at: name)
+            try exact.withReads(at: name, check: self.check) { _ in () }
+            return exact
+        }
+    }
+
+    func freezeWholeFile(_ selected: HeldArchive, id: UUID, into store: WholeFileStage) throws -> WholeFileStage.Identity {
+        guard selected.scope.role == .wholeFile else { throw PreviewError.unavailable }
+        let prepared = try coordinated(selected.scope) { name in
+            try selected.withReads(at: name, check: self.check, exactEnd: true) { fill in
+                try store.prepare(id: id, length: selected.size, check: { try self.check(); try selected.scope.check() },
+                    fill: { offset, buffer in
+                        try fill(offset, buffer)
+                        self.didProcess(buffer.count)
+                    },
+                    validate: {
+                        try selected.withReads(at: name, check: self.check, exactEnd: true) { _ in () }
+                    })
+            }
+        }
+        return try store.publish(prepared, check: {
+            try self.check()
+            try selected.checkPreview()
+        })
+    }
+
     func run(_ scope: DocumentPresentation) throws -> Report {
-        try coordinated(scope) { name in
+        guard scope.role == .archive else { throw PreviewError.unavailable }
+        return try coordinated(scope) { name in
             let archive = try HeldArchive(scope: scope, at: name)
             let index = try archive.withReads(at: name, check: self.check) { fill in
                 try DirectoryIndex.read(size: archive.size, check: { try self.check(); try scope.check() }) { off, n in
